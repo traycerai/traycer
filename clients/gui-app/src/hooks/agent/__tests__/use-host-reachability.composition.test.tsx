@@ -1,12 +1,4 @@
-/**
- * Composition coverage for `useHostReachability`: fed REAL entries from
- * `hostListItemToDirectoryEntry` — not synthetic `HostDirectoryEntry`
- * literals — through the REAL `useHostDirectoryList` + the mapper the
- * directory service actually uses. This is the layer the previous round's
- * unit tests (mapper alone, hook alone) never composed, which is exactly how
- * a `connectivity: "unknown"` host with an open E2E session shipped as
- * "unreachable" while both halves stayed green in isolation.
- */
+/** This is the layer the previous round's unit tests (mapper alone, hook alone) never composed, which is exactly how a `connectivity: "unknown"` host with an open E2E session shipped as "unreachable" while both halves stayed green in isolation. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -36,12 +28,7 @@ vi.mock("@/lib/host", () => ({
 
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
 
-// The readiness cache is PUSH now (redesign P4.1): the hook under test
-// subscribes via `subscribeRemoteSessionReadiness` instead of polling, so a
-// test that only flips `readySessionHosts` and waits produces no event and
-// the hook never re-renders. A test-local listener set stands in for the
-// cache's own, and every place the old fake-timer tick used to drive a
-// re-read now fires this instead.
+// The readiness cache is PUSH now (redesign P4.1): the hook under test subscribes via `subscribeRemoteSessionReadiness` instead of polling, so a test that only flips `readySessionHosts` and waits produces no event and the hook never re-renders.
 const readinessListeners = vi.hoisted(() => ({
   value: new Set<() => void>(),
 }));
@@ -75,11 +62,7 @@ function fireReadinessChanged(): void {
 
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
+/** The account axis the wire no longer carries: `hostListItemToDirectoryEntry` stamps it onto every entry at projection time. */
 const PLAN_ALLOWS_REMOTE = true;
 const PLAN_GATED = false;
 
@@ -109,14 +92,10 @@ function listItem(
   };
 }
 
-/**
- * A `lastSeenAt` far enough in the past that an `offline` verdict is past the
- * relay-fuse recovery-dial window - the default for these tests, so the
- * fuse-window pair below has to opt IN to recency explicitly.
- */
+/** A `lastSeenAt` far enough in the past that an `offline` verdict is past the relay-fuse recovery-dial window - the default for these tests, so the fuse-window pair below has to opt IN to recency explicitly. */
 const STALE_LAST_SEEN = "2026-07-03T11:59:50.000Z";
 
-/** Mirrors the directory service's own projection — a REAL mapped entry. */
+/** Mirrors the directory service's own projection - a REAL mapped entry. */
 function directoryEntry(
   hostId: string,
   connectivity: HostConnectivity,
@@ -235,10 +214,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("reports unreachable with unavailability: 'offline' for a free-tier host the cloud says is OFFLINE", async () => {
-    // The fix this split exists for. The wire used to say `local-only` for
-    // every host on an unpaid plan, so this tile rendered upgrade copy written
-    // for a machine that was alive - and the dead-tile banner, failover and
-    // the clone CTA could never fire for a free-tier user at all.
+    // The wire used to say `local-only` for every host on an unpaid plan, so this tile rendered upgrade copy written for a machine that was alive - and the dead-tile banner, failover and the clone CTA could never fire for a free-tier user at all.
     const entry = planGatedEntry(
       "host-plan-gated-dead",
       "offline",
@@ -277,7 +253,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
       expect(result.current.status).not.toBe("checking");
     });
     // Firsthand proof of life beats a cloud verdict reached minutes ago
-    // through a different leg — this is the tab-open gate the review named
+    // through a different leg - this is the tab-open gate the review named
     // directly ("honours a live session as firsthand proof").
     expect(result.current.status).toBe("reachable");
     expect(result.current.unavailability).toBeNull();
@@ -306,11 +282,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     expect(result.current.unavailability).toBe("offline");
   });
 
-  // P1 paired tests (cold review): the same recent `lastSeenAt`, distinguished
-  // ONLY by the recovery dial's outcome. Recency alone (the relay-fuse window)
-  // must never upgrade `offline` for the dead surface - a host that cleanly
-  // detached or crashed a minute ago carries the same recent timestamp as a
-  // lease lapse the fuse is riding out.
+  // Recency alone (the relay-fuse window) must never upgrade `offline` for the dead surface - a host that cleanly detached or crashed a minute ago carries the same recent timestamp as a lease lapse the fuse is riding out.
   it("PAIRED (a): fuse-window offline + recovery dial succeeded (ready session) - reachable", async () => {
     const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
     const entry = directoryEntry(
@@ -335,10 +307,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("PAIRED (b): fuse-window offline, dial not succeeded (no session) - the dead surface still fires", async () => {
-    // Before the P1 correction the fuse window rewrote this `offline` to
-    // `indeterminate` from recency alone, suppressing the dead surface, the
-    // Clone offer, and the terminal-closed behavior for up to four hours on a
-    // genuinely dead host.
+    // Before the P1 correction the fuse window rewrote this `offline` to `indeterminate` from recency alone, suppressing the dead surface, the Clone offer, and the terminal-closed behavior for up to four hours on a genuinely dead host.
     const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
     const entry = directoryEntry(
       "host-fuse-window-dead",
@@ -360,11 +329,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("flips to reachable when a fuse-recovery dial becomes ready with NO directory change", async () => {
-    // The transition the memo used to miss: a recovery dial succeeding
-    // changes NO directory value (the registry row stays `offline` for up to
-    // the lease TTL), so a memo keyed only on directory-query state kept
-    // returning "unreachable" - a dead surface over a working session. The
-    // hook now subscribes to session readiness itself.
+    // The hook now subscribes to session readiness itself.
     const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
     const entry = directoryEntry("host-late-ready", "offline", recentLastSeen);
     directoryRef.value = makeDirectory([entry]).directory;

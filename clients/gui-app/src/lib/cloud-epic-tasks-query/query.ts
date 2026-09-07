@@ -99,12 +99,8 @@ export function cloudEpicTasksFirstPageQueryOptions(
 export function listCloudTasksRequestForHistorySearch(
   search: HistorySearchState,
 ): ListCloudTasksRequest {
-  // Selection order in `search` reflects toggle order, not display order (the
-  // ambient modal state is never re-sorted the way a URL round-trip through
-  // `parseHistorySearch` sorts it). Canonicalize every set-like member here so
-  // two semantically identical filter selections - regardless of the order the
-  // user picked them in - always produce the same request, and therefore the
-  // same query key / accumulated-page identity.
+  // Selection order in `search` reflects toggle order, not display order (the ambient modal state is never re-sorted the way a URL round-trip through `parseHistorySearch` sorts it).
+  // Canonicalize every set-like member here so two semantically identical filter selections - regardless of the order the user picked them in - always produce the same request, and therefore the same query key / accumulated-page identity.
   const repoIdentifiers = sortRepoIdentifiers(
     search.repos.flatMap(parseRepoLabel),
   );

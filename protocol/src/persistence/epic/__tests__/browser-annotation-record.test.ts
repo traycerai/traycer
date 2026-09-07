@@ -144,12 +144,6 @@ describe("live send frame browserAnnotations default", () => {
   });
 });
 
-/**
- * Root cause H: annotation records used to persist `outerHtml` and every raw
- * attribute, which put page content - a filled-in form, a `value=` on an
- * input, a token in a `data-` attribute - into collaborator-readable chat
- * persistence and into the model prompt.
- */
 describe("page markup never survives the capture schema", () => {
   const legacyElement = {
     ...FULL_ANNOTATION.elements[0],

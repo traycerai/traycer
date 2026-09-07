@@ -41,29 +41,15 @@ function zipWeekdays(
   }));
 }
 
-/**
- * GitHub-style activity calendar: one column per week (Sunday-first rows),
- * one tile per day, intensity = the day's metric value quantized to
- * quartiles (`buildUsageActivityCalendar`). Colors come from the
- * `--usage-heat-N` sequential ramp (one hue; light→dark in light mode,
- * dark→bright in dark mode - GitHub's own convention, since "busier" means
- * "further from the surface") scoped under `.usage-chart-root` beside the
- * categorical palette. Hovering a tile states the day's cost and tokens
- * together, whichever metric is coloring it.
- * Tiles are marks, not layout, so their fixed pixel size is fine; the grid
- * itself scrolls horizontally rather than squeezing tiles unreadable.
- */
+/** Tiles are marks, not layout, so their fixed pixel size is fine; the grid itself scrolls horizontally rather
+ * than squeezing tiles unreadable. */
 export function UsageActivityHeatmap(props: {
   readonly calendar: UsageActivityCalendar;
   readonly metric: UsageMetric;
 }): ReactNode {
   const { calendar, metric } = props;
   const scrollerRef = useRef<HTMLDivElement | null>(null);
-  // A year grid is wider than a narrow Settings pane, and a fresh scroller
-  // starts at the OLDEST week - so the current period, the whole point of
-  // opening this, would sit off-screen behind a scrollbar the reader has
-  // to discover. Anchor to the newest week instead. Re-runs when the week
-  // count changes (window/host filter), since that resizes the content.
+  // A year grid is wider than a narrow Settings pane, and a fresh scroller starts at the oldest week.
   const weekCount = calendar.weeks.length;
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -82,10 +68,8 @@ export function UsageActivityHeatmap(props: {
         aria-hidden
         className="w-full overflow-x-auto"
         data-testid="usage-activity-scroller"
-        // On screen this scroller is anchored to the newest weeks and the
-        // rest is behind a scrollbar. A shared image has no scrollbar, so
-        // the export scales the full year down to the region's width
-        // instead of capturing whatever slice happened to be in view.
+        // A shared image has no scrollbar, so the export scales the full year down to the region's width instead of
+        // capturing whatever slice happened to be in view.
         data-usage-export-fit=""
       >
         <div className="flex min-w-max flex-col gap-1">
@@ -125,10 +109,8 @@ function MonthLabelRow(props: {
     monthLabels.map((label) => [label.weekIndex, label.label]),
   );
   return (
-    // Same 12px column rhythm as the tile grid (10px tile + 2px gap), and
-    // the same leading gutter the grid itself sits behind - the 10px
-    // weekday column plus the 6px gap between it and the tiles, i.e. 16px
-    // - so each label lands exactly over its month's first week.
+    // Same 12px column rhythm as the tile grid (10px tile + 2px gap), and the same leading gutter the grid itself
+    // sits behind - the 10px weekday column plus the 6px gap between it and the tiles, i.e. 16px.
     <div className="flex gap-0.5 pl-4 text-ui-xs text-muted-foreground">
       {weeks.map((week, weekIndex) => (
         <span key={week.firstDay} className="w-2.5 shrink-0 overflow-visible">
@@ -154,16 +136,8 @@ function WeekdayLabelColumn(): ReactNode {
   );
 }
 
-/**
- * A tile is a MARK, not a control: it carries no action, and making each
- * of 365 a tab stop turned the calendar into a keyboard trap - the first
- * Tab landed on an off-screen date a year back (the DOM is oldest-first,
- * the scroller is anchored right), yanked the scroll position with it, and
- * reaching the stats below took hundreds more presses. So the grid is
- * hidden from assistive tech entirely and {@link UsageActivityDataTable}
- * carries the same values in a form that is actually navigable. The
- * tooltip stays for pointer users.
- */
+/** A tile is a mark, not a control: it carries no action, and making each of 365 a tab stop turned the calendar
+ * into a keyboard trap. */
 function DayTile(props: {
   readonly cell: UsageActivityCell;
   readonly metric: UsageMetric;
@@ -187,13 +161,7 @@ function DayTile(props: {
   );
 }
 
-/**
- * The hover states BOTH metrics for the day, whichever one is coloring
- * the tiles: the reader comparing two days wants the dollars and the
- * tokens side by side, not a picker round-trip. The selected metric leads
- * so the number that explains the tile's shade is the first one read.
- * A day with no turns says so once rather than listing two zeros.
- */
+/** A day with no turns says so once rather than listing two zeros. */
 function DayTooltipBody(props: {
   readonly cell: UsageActivityCell;
   readonly metric: UsageMetric;
@@ -224,7 +192,6 @@ function DayTooltipBody(props: {
   );
 }
 
-/** "Aug 14, 2026" - a year calendar repeats month names, so the day carries its year. */
 function formatDayWithYear(day: string): string {
   const year = day.split("-").at(0);
   const label = formatDayLabel(day);
@@ -235,18 +202,8 @@ function metricValueOf(cell: UsageActivityCell, metric: UsageMetric): number {
   return metric === "cost" ? cell.costUsd : cell.tokens;
 }
 
-/**
- * What a day reads as under one metric. A day can hold real turns whose
- * cost was never available: under the Cost metric its value is 0, and
- * calling that "No usage" would report work as inactivity. It says how
- * many turns ran and that they are not counted - the same words the
- * headline footnote uses, and never the banned vocabulary (see the
- * pricing artifact's product framing). A day that MIXES priced and
- * unpriced turns shows only its figure - the not-counted note is reserved
- * for a day with nothing priced at all (user ruling: a per-tile caveat on
- * every mixed day is overload; the headline footnote already carries the
- * window-wide count).
- */
+/** A day can hold real turns whose cost was never available: under the Cost metric its value is 0, and calling
+ * that "No usage" would report work as inactivity. */
 function activityValueLabel(
   cell: UsageActivityCell,
   metric: UsageMetric,
@@ -258,15 +215,8 @@ function activityValueLabel(
   return `${String(cell.factCount)} ${turnWord} · not counted`;
 }
 
-/**
- * The calendar's values for anyone not using a pointer: one row per day
- * that saw activity. Days with none are omitted - a year of "No usage"
- * rows is noise, and their absence is itself the information.
- *
- * Metric-independent by construction: it states both columns, exactly as
- * the tooltip does, so the relief channel never depends on which metric
- * happens to be coloring the grid.
- */
+/** Metric-independent by construction: it states both columns, exactly as the tooltip does, so the relief
+ * channel never depends on which metric happens to be coloring the grid. */
 function UsageActivityDataTable(props: {
   readonly calendar: UsageActivityCalendar;
 }): ReactNode {

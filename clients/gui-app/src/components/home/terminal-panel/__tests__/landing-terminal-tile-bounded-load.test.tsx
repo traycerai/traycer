@@ -63,12 +63,8 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-/**
- * S5, the landing panel's terminal mirror of the canvas tiles' bounded
- * pre-bootstrap wait. Same wordless-skeleton-for-both-states defect the
- * canvas terminal tiles had (audit S5), fixed the same way, and asserted the
- * same way: on the rendered SENTENCE, never on the absence of a spinner.
- */
+/** Same wordless-skeleton-for-both-states defect the canvas terminal tiles had (audit S5), fixed the same way,
+ * and asserted the same way: on the rendered sentence, never on the absence of a spinner. */
 describe("<LandingTerminalTile /> S5 bounded pre-bootstrap wait", () => {
   it.each([
     ["checking", "the host"],
@@ -83,11 +79,7 @@ describe("<LandingTerminalTile /> S5 bounded pre-bootstrap wait", () => {
         unavailability: null,
       };
 
-      // Renders the legacy bootstrap directly rather than the `<LandingTerminalTile>`
-      // wrapper: the wrapper's capability switch treats a `null` authorityEntry
-      // as neither "legacy" nor "capable" and falls through to the wordless
-      // `<LandingTerminalWaiting />`, never reaching this suite's subject.
-      // Same pattern as landing-terminal-error-retry.test.tsx.
+      // Renders the legacy bootstrap directly rather than the `<LandingTerminalTile>` wrapper.
       render(
         <LandingTerminalLegacyBootstrap
           landingPageId="landing-1"

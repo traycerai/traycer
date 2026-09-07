@@ -12,16 +12,8 @@ import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { EpicSweepWorktreeRow } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
 import { useSweepSessionStore } from "@/stores/epics/sweep-session-store";
 
-/**
- * The Remove click's own contract: it re-proves before anything destructive,
- * and the proof outlives the dialog rather than being cancelled by it.
- *
- * These cases drive the REAL dialog against a fully-controlled candidates
- * hook, so `prove()` can be resolved, rejected, or held open on cue - the
- * thing `sweep-worktrees-dialog-force-delete.test.tsx` and
- * `sweep-worktrees-dialog-refresh.test.tsx` do not need to do, because none
- * of their cases care about the gap between the click and the proof landing.
- */
+/** The Remove click's own contract: it re-proves before anything destructive, and the proof outlives the dialog
+ * rather than being cancelled by it. */
 
 const HOLDERS: readonly WorktreeBusyHolder[] = [
   {
@@ -37,7 +29,6 @@ const HOLDERS: readonly WorktreeBusyHolder[] = [
   },
 ];
 
-/** A `prove()` held open until the test says so - the gap the cases below are about. */
 function deferredProve(): {
   readonly promise: Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
   readonly resolve: (rows: ReadonlyArray<EpicSweepWorktreeRow>) => void;
@@ -150,11 +141,6 @@ function inUseRow(worktreePath: string, branch: string): EpicSweepWorktreeRow {
   };
 }
 
-/**
- * The pre-proof shape of an in-use row: already flagged `in-use` (so a
- * manual check on it counts as "previously in-use" for reconciliation), but
- * without a settled holder inventory yet.
- */
 function inUseUnknownRow(
   worktreePath: string,
   branch: string,
@@ -236,10 +222,8 @@ describe("SweepWorktreesDialog Remove-click proof", () => {
   });
 
   it("opens review when the proof comes back in-use, and does not mutate", async () => {
-    // Reconciliation keeps a row only when it was ALREADY in-use at click
-    // time (a newly-in-use row is dropped, not reviewed) - so the row starts
-    // in-use with an unresolved holder inventory, and the click is what
-    // resolves it.
+    // Reconciliation keeps a row only when it was already in-use at click time (a newly-in-use row is dropped, not
+    // reviewed) - so the row starts in-use with an unresolved holder inventory, and the click is what resolves it.
     testState.rows = [inUseUnknownRow("/wt/a", "feat-a")];
     renderDialog(["epic-1"]);
     fireEvent.click(screen.getByTestId("sweep-worktrees-checkbox"));
@@ -308,9 +292,8 @@ describe("SweepWorktreesDialog Remove-click proof", () => {
   });
 
   it("never blocks on the dialog: an in-use proof parks a review and toasts after unmount", async () => {
-    // Same pre-condition as the in-use review case above: the row must
-    // already be in-use at click time, or reconciliation drops it instead of
-    // parking it.
+    // Same pre-condition as the in-use review case above: the row must already be in-use at click time, or
+    // reconciliation drops it instead of parking it.
     testState.rows = [inUseUnknownRow("/wt/a", "feat-a")];
     const view = renderDialog(["epic-1"]);
     fireEvent.click(screen.getByTestId("sweep-worktrees-checkbox"));

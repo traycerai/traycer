@@ -99,11 +99,8 @@ export interface PlainTerminalMutationAuthority {
   readonly collection: PlainTerminalCollection | undefined;
 }
 
-/**
- * Shared host-authority mutations. Collection writes stay on the serving-host
- * cache slot captured at mutate start. Owner-host RPCs resolve through the
- * authenticated directory and never fall back to the serving host.
- */
+/** Owner-host RPCs resolve through the authenticated directory and never fall back to the serving host.
+ * Collection writes stay on the serving-host cache slot captured at mutate start. */
 export function usePlainTerminalMutations(args: {
   readonly authority: PlainTerminalMutationAuthority;
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -377,12 +374,7 @@ export function useHostPlainTerminalMutations(
   });
 }
 
-/**
- * The scope must be the one `onMutate` captured, because the barrier was
- * captured from that cache slot. Writing a response scope instead would apply
- * an ordering barrier belonging to a different slot and lose the guarantee for
- * both. The deletion paths capture the same way.
- */
+/** The scope must be the one `onMutate` captured, because the barrier was captured from that cache slot. The deletion paths capture the same way. */
 function writeCanonicalTerminal(
   queryClient: QueryClient,
   args: {

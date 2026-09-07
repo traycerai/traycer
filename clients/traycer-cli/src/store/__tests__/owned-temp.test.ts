@@ -15,10 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let sandboxRoot = "";
 
-// Lets one test force `stat` to fail for a specific path (simulating an
-// unreadable/unverifiable age - the directory vanished, a transient
-// stat error) without needing a flaky real-world reproduction. Every
-// other path proxies straight through to the real implementation.
+// Lets one test force `stat` to fail for a specific path (simulating an unreadable/unverifiable age - the directory vanished, a transient stat error) without needing a flaky real-world reproduction.
+// Every other path proxies straight through to the real implementation.
 const mocks = vi.hoisted(() => ({
   forceStatFailureForPath: null as string | null,
 }));
@@ -207,9 +205,7 @@ describe("createOwnedTempDir / sweepOwnedTempDirs", () => {
           JSON.stringify({
             pid,
             startedAtMs: Date.now() - 10 * 60 * 1000,
-            // A well-formed creation stamp from this platform that is
-            // positively NOT the live process's - the only evidence that
-            // entitles a sweep of a young dir whose pid is alive.
+            // A well-formed creation stamp from this platform that is positively NOT the live process's - the only evidence that entitles a sweep of a young dir whose pid is alive.
             startIdentity: `${readProcessStartIdentity(pid) ?? "linux:boot-a 1"} 0`,
           }),
         );

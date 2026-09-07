@@ -2,15 +2,6 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandRequest } from "../secret-providers/run-command";
 
-/**
- * `runCommand` is the one seam in this directory that drives a REAL
- * `node:child_process` rather than being driven behind a fake
- * `CommandRunner` - every other suite here fakes the runner and never
- * spawns a process. There is no practical way to make a genuinely spawned
- * process's stdout pipe emit `error` from outside the process, so this
- * suite mocks `node:child_process` itself and drives a fake `ChildProcess`
- * directly.
- */
 
 const spawnMock = vi.hoisted(() => vi.fn());
 

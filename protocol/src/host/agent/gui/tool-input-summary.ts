@@ -1,10 +1,3 @@
-/**
- * Synthesizes one-line display summaries from a tool's input/params - the
- * "· <arg>" detail shown next to a tool name in an agent segment header AND the
- * argument surfaced in a sub-agent's progress timeline. Kept here (shared by the
- * GUI segment headers and the host harness converters) so the field-extraction
- * can't drift between the activity view and the progress view.
- */
 
 const SUMMARY_MAX = 80;
 const ELLIPSIS = "…";
@@ -38,10 +31,7 @@ function trim(value: string): string {
 }
 
 /**
- * Collapse a raw string to a single capped display line (the same normalization
- * the tool-arg summaries get), or null when it has no visible content. Use this
- * for progress lines built straight from a free-form field like a shell command,
- * so a multiline or very long value can't break the "concise one-line" contract.
+ * Collapse a raw string to a single capped display line (the same normalization the tool-arg summaries get), or null when it has no visible content.
  */
 export function toSummaryLine(value: string): string | null {
   const singleLine = trim(value);
@@ -95,16 +85,7 @@ function summarizeCommand(record: Record<string, unknown>): string | null {
 }
 
 // The two comment-thread summarizers below outlive their tools on purpose.
-// `traycer_list_comment_threads` / `traycer_set_comment_thread_status` were
-// removed from the agent surface when artifact comment threads became files
-// (`.comments/<threadId>.md`), so no NEW call can reach either entry - but
-// transcripts recorded while the tools existed still hold those tool calls,
-// and `chat-storage-shape-migration.ts` re-derives a block's `inputSummary`
-// from its raw persisted input when it converts an old-shape chat. Dropping
-// the entries would silently degrade those rows to the generic fallback,
-// which yields `null` for a `{updates: [...]}` payload - a historical call
-// rendered with no detail at all. Keep them; they are display-only and cost
-// nothing at runtime.
+// Dropping the entries would silently degrade those rows to the generic fallback, which yields `null` for a `{updates: [...]}` payload - a historical call rendered with no detail at all.
 function summarizeCommentThreadList(
   record: Record<string, unknown>,
 ): string | null {
@@ -239,11 +220,7 @@ function genericSummary(input: unknown): string | null {
   return null;
 }
 
-/**
- * Synthesize a one-line input summary for a tool. Falls back to the generic
- * first-string-field strategy when the tool is not in the registry. Returns
- * null when no usable string can be derived.
- */
+/** Synthesize a one-line input summary for a tool. */
 export function deriveToolInputSummary(
   toolName: string,
   input: unknown,

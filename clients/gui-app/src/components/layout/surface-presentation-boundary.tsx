@@ -21,32 +21,8 @@ const HIDDEN_CONTAINER_STYLE: CSSProperties = {
   pointerEvents: "none",
 };
 
-/**
- * One generic focused-presentation boundary around EVERY top-level `TabSurface`
- * (Epic/Draft/History/Settings), not just the Epic pane. It publishes the pane's
- * `{ visible, focused }` activity to every consumer, plus a per-pane portal
- * container that pane-local kept-mounted portals (comment composer, artifact-
- * link editor, mention/hover popovers) render into.
- *
- * When the pane is unfocused the container is:
- *   - hidden (visibility) so it cannot cover a focused split partner,
- *   - `inert` so its kept-mounted portals cannot be tabbed into or clicked, and
- *   - actively blurred (an already-focused descendant keeps `document.active-
- *     Element` even under `inert`/`visibility:hidden` in Chrome, so keyboard
- *     would otherwise still target it).
- * Portals keep their typed state (no unmount).
- *
- * Modal-family Radix primitives (Dialog/Popover/Select/Dropdown/Context) instead
- * un-present by unmounting their content when unfocused (the only way to drop
- * their document-wide `hideOthers`/scroll-lock reach). That unmount runs Radix's
- * close-autofocus, which would restore focus to the pane's trigger and bounce
- * activation back; `usePaneCloseAutoFocusGuard` reads `data-pane-focused` off
- * this boundary at unmount time and `preventDefault`s the restore.
- *
- * App-global hosts (command palette, global confirms, toasts/banners) live
- * OUTSIDE any pane, read the default-`true` activity, and portal to
- * `document.body` unchanged.
- */
+/** That unmount runs Radix's close-autofocus, which would restore focus to the pane's trigger and bounce
+ * activation back. */
 export function SurfacePresentationBoundary(props: {
   readonly visible: boolean;
   readonly focused: boolean;
@@ -63,14 +39,8 @@ export function SurfacePresentationBoundary(props: {
     [props.visible, props.focused],
   );
 
-  // An already-focused descendant of the portal host keeps DOM focus even after
-  // the host is hidden + made inert (Chrome does not blur on hide/inert), so
-  // keyboard would still target the background pane. Blur it explicitly, without
-  // unmounting (typed draft state survives). The blur runs under
-  // `runPresentationLossBlur` so a blur-as-commit consumer (e.g. the artifact-
-  // link editor) can tell this synthetic relinquish-blur from a real user blur
-  // and NOT commit/close/refocus — otherwise backgrounding would destroy its
-  // in-progress draft.
+  // An already-focused descendant of the portal host keeps DOM focus even after the host is hidden + made inert
+  // (Chrome does not blur on hide/inert), so keyboard would still target the background pane.
   useEffect(() => {
     if (props.focused) return;
     const active = document.activeElement;

@@ -181,13 +181,8 @@ function worktreeMentionAttachmentFromSuggestion(
 }
 
 /**
- * `null` for a tab on ANOTHER host. The serializer renders a tab mention's
- * `tabId` unconditionally (`json-content-serializer.ts:514-519`), so a
- * cross-host pick routed through here would hand the agent a `browser-tab:`
- * token naming a tab it can never attach to. Those picks are attached as
- * snapshot context instead (spec decision #10, see `browser-tab-preview.ts`);
- * this null is the backstop for any other path that reaches a cross-host
- * entry.
+ * `null` for a tab on ANOTHER host.
+ * The serializer renders a tab mention's `tabId` unconditionally (`json-content-serializer.ts:514-519`), so a cross-host pick routed through here would hand the agent a `browser-tab:` token naming a tab it can never attach to.
  */
 function browserTabMentionAttachmentFromSuggestion(
   entry: BrowserTabMentionEntry,

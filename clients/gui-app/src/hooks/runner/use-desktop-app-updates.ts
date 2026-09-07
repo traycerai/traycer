@@ -144,11 +144,7 @@ function sameSnapshot(
     left.currentVersion === right.currentVersion &&
     left.allowPrerelease === right.allowPrerelease &&
     left.latestVersion === right.latestVersion &&
-    // Compared alongside the version it describes. A candidate can keep its
-    // version while its epoch moves - a re-stamped feed document, or the
-    // `update-downloaded` re-read disagreeing with `update-available` - and
-    // dropping that as a duplicate would leave the blocking recovery surface
-    // routing from a generation the updater no longer reports.
+    // A candidate can keep its version while its epoch moves - a re-stamped feed document, or the `update-downloaded` re-read disagreeing with `update-available` - and dropping that as a duplicate would leave the blocking recovery surface routing from a generation the updater no longer reports.
     left.latestCompatibilityEpoch === right.latestCompatibilityEpoch &&
     left.downloadProgress === right.downloadProgress &&
     left.installBlockedReason === right.installBlockedReason &&
@@ -160,13 +156,7 @@ function sameSnapshot(
   );
 }
 
-// `installGuidance` is the one non-primitive snapshot field, so it can't rely
-// on `===` like its siblings - every IPC send structurally clones the object,
-// so a reference comparison would report "changed" on every emit even when
-// the content is identical (spurious re-renders). `command` + `summary` are
-// deterministic given (packageType, downloadedFile, version) in
-// `buildLinuxUpdateGuidance`, so they're a sufficient proxy for full content
-// equality without a recursive deep-equal for the `steps` array.
+// `installGuidance` is the one non-primitive snapshot field, so it can't rely on `===` like its siblings - every IPC send structurally clones the object, so a reference comparison would report "changed" on every emit even when the content is identical (spurious re-renders).
 function sameInstallGuidance(
   left: DesktopAppUpdateSnapshot["installGuidance"],
   right: DesktopAppUpdateSnapshot["installGuidance"],

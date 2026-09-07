@@ -116,11 +116,8 @@ function ProviderSkillsTabBody({
   } = scopeState;
   const canList =
     caps.actionScopes.list.includes(effectiveScope) && listEnabled;
-  // Authoring gates use the selected scope so a project-only create verb does
-  // not appear while viewing Global (and vice versa). The composer still
-  // sends the same scopeTuple as the list — destination copy for project
-  // writes is imperfect when the list is empty (providerRoot unknown); full
-  // project-path preview remains a follow-up.
+  // Authoring gates use the selected scope so a project-only create verb does not appear while viewing Global
+  // (and vice versa).
   const authoring = skillAuthoring(caps, effectiveScope);
 
   const listQuery = useProvidersSkillsList({
@@ -134,9 +131,8 @@ function ProviderSkillsTabBody({
   // Conditional mount: false unmounts the composer and discards the draft.
   const [composerOpen, setComposerOpen] = useState(false);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
-  // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
-  // own (the list is keyed by `source:path`), and the dialog wants the same
-  // frontmatter the row already has rather than re-deriving it.
+  // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its own (the list is keyed by
+  // `source:path`), and the dialog wants the same frontmatter the row already has rather than re-deriving it.
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
   const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(
@@ -168,14 +164,8 @@ function ProviderSkillsTabBody({
   );
   const skillSearchActive = isProviderListSearchActive(searchQuery);
   const isMutating = mutate.isPending;
-  // `canList &&` is load-bearing: a disabled TanStack query stays `isPending`
-  // forever (pending status, idle fetchStatus), so without it a contract whose
-  // skills surface cannot list would sit on the spinner instead of falling
-  // through to the empty state. Hoisted out of JSX because `eslint --fix`
-  // (react/jsx-no-leaked-render) rewrites a logical `&&` inside a JSX attribute
-  // into `cond ? value : null`, which would make this `boolean | null` and fail
-  // `SkillsListBody`'s `listLoading: boolean` prop — same reason
-  // `deleteDialogPending` is hoisted in provider-mcp-tab.tsx.
+  // `canList &&` is load-bearing: a disabled TanStack query stays `isPending` forever (pending status, idle
+  // fetchStatus).
   const listLoading = canList && (listQuery.isLoading || listQuery.isPending);
   const removePending = isRemovePending(isMutating, pendingKey);
   const composerPending = isComposerPending(isMutating, pendingKey);
@@ -201,11 +191,8 @@ function ProviderSkillsTabBody({
   // boolean props to `boolean | null`.
   const canAuthorHere = authoring.canAuthor && !projectNeedsWorkspace;
 
-  // Read off the listing rather than mirrored from host code, so the composer
-  // can name the provider's own skills folder without a second copy of that
-  // table drifting here. Not memoized: `skills` is a fresh array on every
-  // render (`?? []` on an optional query result), so a `useMemo` keyed on it
-  // would recompute every time anyway while implying it does not.
+  // Read off the listing rather than mirrored from host code, so the composer can name the provider's own skills
+  // folder without a second copy of that table drifting here.
   const providerRoot = providerRootFromSkills(skills);
   const canProviderScope = skillProviderScopeVisible({
     effectiveScope,
@@ -292,12 +279,8 @@ function ProviderSkillsTabBody({
     }
   }
 
-  /**
-   * Removal gets its own path rather than reusing `onComposerMutate`: its
-   * success and failure land in different places. Success must close BOTH
-   * dialogs (the open skill no longer exists); failure has to surface inside
-   * the skill dialog, not in a composer that is not even mounted.
-   */
+  /** Success must close both dialogs (the open skill no longer exists); failure has to surface inside the skill
+   * dialog, not in a composer that is not even mounted. */
   async function onUpdate(
     skill: ProviderSkill,
     confirm: boolean,
@@ -355,9 +338,8 @@ function ProviderSkillsTabBody({
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
-        // `name` AND `path`: the host re-lists and matches on both (plus a
-        // realpath containment check) before deleting anything, so sending the
-        // pair the row was rendered from is what lets it refuse a stale one.
+        // `name` and `path`: the host re-lists and matches on both (plus a realpath containment check) before deleting
+        // anything, so sending the pair the row was rendered from is what lets it refuse a stale one.
         mutation: { action: "remove", name: skill.name, path: skill.path },
         suppressToast: true,
       },
@@ -369,9 +351,8 @@ function ProviderSkillsTabBody({
         },
         onError: (err) => {
           setPendingKey(null);
-          // Close the confirmation but keep the skill dialog open: that is
-          // where the error renders, and re-confirming an operation that just
-          // failed is not the next step.
+          // Close the confirmation but keep the skill dialog open: that is where the error renders, and re-confirming an
+          // operation that just failed is not the next step.
           setRemoveTarget(null);
           setDetailError(err.message);
         },
@@ -457,12 +438,8 @@ function ProviderSkillsTabBody({
 
   return (
     <div className="flex flex-col gap-3">
-      {/*
-        Global/project is WHERE the skill files live (host vs workspace). The
-        composer's "Available to" control is a different axis — shared
-        (~/.agents/skills) vs this provider's own folder — and must not look
-        like a second scope picker.
-      */}
+      {/* The composer's "Available to" control is a different axis - shared (~/.agents/skills) vs this provider's own
+         folder - and must not look like a second scope picker. */}
       <div
         className={cn(
           "flex flex-wrap items-center justify-between gap-2",
@@ -560,13 +537,8 @@ function skillAfterEdit(
   return null;
 }
 
-/**
- * Scoped to the remove key so a concurrent create/import spinner never locks
- * the Remove button, and vice versa. A plain function rather than an inline
- * `&&` chain because `eslint --fix` (react/jsx-no-leaked-render) rewrites a
- * logical `&&` inside a JSX attribute into `cond ? value : null`, widening a
- * boolean prop to `boolean | null`.
- */
+/** Scoped to the remove key so a concurrent create/import spinner never locks the Remove button, and vice
+ * versa. */
 function isRemovePending(isMutating: boolean, pendingKey: string | null) {
   return isMutating && pendingKey !== null && pendingKey.startsWith("remove:");
 }
@@ -585,10 +557,7 @@ function isEditPending(isMutating: boolean, pendingKey: string | null) {
   return isMutating && pendingKey !== null && pendingKey.startsWith("edit:");
 }
 
-/**
- * One Add skill button opens the composer import-first
- * (or write-only when import is not advertised). No menu, no Import/New pair.
- */
+/** One Add skill button opens the composer import-first (or write-only when import is not advertised). */
 function SkillEntryButton({
   canAuthor,
   disabled,
@@ -613,12 +582,7 @@ function SkillEntryButton({
   );
 }
 
-/**
- * Multi-select filter over the source badges, sitting beside search. Options
- * are the source types actually present in the list (a provider with no plugin
- * skills gets no dead "Plugin" row); everything starts selected, and
- * deselecting a type hides its rows.
- */
+/** Multi-select filter over the source badges, sitting beside search. */
 function SkillSourceFilterMenu({
   skills,
   hiddenSources,
@@ -671,9 +635,8 @@ function SkillSourceFilterMenu({
           <DropdownMenuCheckboxItem
             key={source}
             checked={!hiddenSources.has(source)}
-            // Keep the menu open across toggles - narrowing to one type means
-            // unchecking two, and a menu that closes per click makes that three
-            // openings.
+            // Keep the menu open across toggles - narrowing to one type means unchecking two, and a menu that closes per
+            // click makes that three openings.
             onSelect={(event) => {
               event.preventDefault();
             }}
@@ -711,9 +674,8 @@ function SkillRemoveConfirm({
         if (!open) onCancel();
       }}
       title="Remove skill"
-      // Names the PATH, not just the skill: removal deletes a directory, and
-      // which of the four skill roots it sits in is the part the name alone
-      // cannot tell you.
+      // Names the PATH, not just the skill: removal deletes a directory, and which of the four skill roots it sits
+      // in is the part the name alone cannot tell you.
       description={removeDescription(target)}
       cascadeSummary={null}
       actionLabel="Remove"
@@ -875,15 +837,8 @@ function SkillsListBody({
   );
 }
 
-/**
- * The empty state teaches the format, because this is the one moment the user
- * is guaranteed to be looking at this tab with nothing else to read.
- *
- * A provider that can neither write nor import says so outright rather than
- * offering an affordance that would fail: some providers only READ skills that
- * something else put on disk, and an empty box with no explanation reads as a
- * broken tab.
- */
+/** A provider that can neither write nor import says so outright rather than offering an affordance that would
+ * fail. */
 function SkillsEmptyState({
   canAuthor,
   disabled,
@@ -928,11 +883,8 @@ function SkillsEmptyState({
   );
 }
 
-/**
- * Annotated rather than bare: the two frontmatter keys are the entire contract
- * between a skill and the agent, and `description` is the one that decides
- * whether the skill is ever loaded.
- */
+/** Annotated rather than bare: the two frontmatter keys are the entire contract between a skill and the agent,
+ * and `description` is the one that decides whether the skill is ever loaded. */
 const EXAMPLE_SKILL_MD = `---
 name: review-pr          # the /command you type
 description: Reviews a   # what the agent matches on
@@ -964,19 +916,13 @@ function SkillRow({
       <button
         type="button"
         onClick={onOpen}
-        // The source belongs IN the name. An `aria-label` replaces every
-        // descendant string, so without it the badge and description below are
-        // not announced at all - and the protocol deliberately allows the same
-        // skill name under `shared`, `provider`, `plugin` and `managed` roots
-        // (rows are keyed `source:path`), which would leave a screen reader
-        // with several buttons all reading "Open deploy".
+        // An `aria-label` replaces every descendant string, so without it the badge and description below are not
+        // announced at all.
         aria-label={skillOpenLabel(skill)}
         className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
-        {/* No leading tile. A skill is a markdown directory; no provider's
-            format carries artwork for one, so anything here would be a glyph
-            we invented rather than the skill's own identity. Plugin rows keep
-            their tile because plugins DO ship icons. */}
+        {/* A skill is a markdown directory; no provider's format carries artwork for one, so anything here would be a
+           glyph we invented rather than the skill's own identity. */}
         <span className="min-w-0 flex-1">
           <span className="block truncate text-ui-sm font-medium text-foreground">
             {skill.name}
@@ -987,9 +933,8 @@ function SkillRow({
             </span>
           ) : null}
         </span>
-        {/* Badges hold one trailing edge across every row - names vary in
-            length, so anchoring status here is what keeps it scannable as a
-            column instead of drifting with each name. */}
+        {/* Badges hold one trailing edge across every row - names vary in length, so anchoring status here is what
+           keeps it scannable as a column instead of drifting with each name. */}
         <span className="flex shrink-0 items-center gap-1.5">
           {skill.conflict === true ? (
             <TooltipWrapper

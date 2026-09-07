@@ -67,9 +67,7 @@ describe("shared client Sentry scrub", () => {
   });
 
   it("reduces a fetch breadcrumb URL that carries a sign-in code in its query", () => {
-    // The mobile link-login flow puts the one-time sign-in code in the query
-    // string (`clients/shared/auth/link-login.ts`), and the browser SDK
-    // records the full fetch URL in a breadcrumb.
+    // The mobile link-login flow puts the one-time sign-in code in the query string (`clients/shared/auth/link-login.ts`), and the browser SDK records the full fetch URL in a breadcrumb.
     const breadcrumb = {
       data: {
         url: "https://authn.test/api/v3/auth/link/status?code=ABCD-1234",

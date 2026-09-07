@@ -1,24 +1,6 @@
 /**
- * Expanded-view rendering for a tool call's input. The collapsed header already
- * shows a one-line summary (`deriveToolInputSummary`); this layer decides what -
- * if anything - the EXPAND should add, and in a human-readable shape rather than
- * a raw JSON dump.
- *
- * Hybrid rule (see `resolveToolInputDetail`): when the header already captures
- * the whole call there is nothing more to show, so the segment stays header-only
- * and non-expandable. When the input carries more than the header (extra flags, a
- * truncated value, multiple fields), the expand shows it as a reconstructed
- * command (`$ grep -n …`) for command-like tools or a clean label/value list for
- * everything else - never `JSON.stringify`.
- *
- * Computed once on the host at block-build time (`agent-runtime-accumulator`)
- * and PERSISTED structured (`ToolCallBlock.inputDetail`); the raw harness input
- * is never stored. Displayed fields are persisted in FULL (no length cap) so the
- * expand renders exactly what the GUI shows. The never-displayed bulk carriers
- * (an `Edit`'s `old_string`/`new_string`, a `Write`'s `content`, an `apply_patch`
- * patch) are DROPPED entirely — those tool calls are suppressed in the GUI in
- * favour of the `file_change` diff card, so persisting their inline source is the
- * exact chat-doc bloat this refactor removes.
+ * Expanded-view rendering for a tool call's input.
+ * Computed once on the host at block-build time (`agent-runtime-accumulator`) and PERSISTED structured (`ToolCallBlock.inputDetail`); the raw harness input is never stored.
  */
 
 import type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -27,27 +9,12 @@ import type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content
 // layer); re-exported here so callers have a single "tool input display" import.
 export type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content-blocks";
 
-// Input keys that carry a whole file body / patch inline (`Edit`/`Write`/
-// `MultiEdit`/`NotebookEdit`/`apply_patch`). The GUI suppresses these tool calls
-// in favour of the `file_change` diff card (`suppressEditToolCalls`), so their
-// content is never displayed — persisting it is the exact chat-doc bloat this
-// refactor removes. Dropped entirely rather than length-capped: a capped preview
-// is still never shown. Every OTHER field is persisted in full (no length cap) so
-// the expand renders exactly what the GUI would show.
+// Input keys that carry a whole file body / patch inline (`Edit`/`Write`/ `MultiEdit`/`NotebookEdit`/`apply_patch`).
+// Dropped entirely rather than length-capped: a capped preview is still never shown.
 const BULK_INPUT_FIELDS = new Set([
   "old_string",
   "new_string",
   "content",
-  // The browser REPL's cell source: whatever the agent typed into a page,
-  // passwords included, so persisting it puts page content into
-  // collaborator-readable chat persistence.
-  //
-  // This set is keyed by field NAME, not by tool, so listing `code` drops the
-  // field from EVERY tool's detail. That is safe because the browser REPL is
-  // the only tool that takes a `code` input today, and nothing reads the
-  // field by name anyway: not `deriveToolInputSummary` below, not
-  // `browser-tools.ts` (which identifies the REPL by tool NAME). The call
-  // still reads from `title` and the header summary.
   "code",
   "edits",
   "patch",
@@ -78,16 +45,10 @@ function normalize(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
-// Escape a value for inclusion inside a double-quoted token: backslashes first
-// (so the escapes we add for quotes aren't themselves re-interpreted), then the
-// quotes.
 function escapeDoubleQuoted(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-// Quote a token for a reconstructed command line only when it isn't already a
-// bare shell-safe word, so simple values stay unquoted while paths/queries with
-// spaces or specials read correctly.
 function quoteArg(value: string): string {
   if (/^[\w./@:=+-]+$/.test(value)) return value;
   return `"${escapeDoubleQuoted(value)}"`;
@@ -105,10 +66,7 @@ function grepContextArgs(record: Record<string, unknown>): string[] {
   ];
 }
 
-// A grep call reconstructed into its CLI form. Recognises Claude's `Grep` shape
-// (`pattern`, `-n`/`-i` booleans, `-A`/`-B`/`-C` numbers, `type`, `glob`, `path`)
-// and the generic `query`/`search` aliases. Tool-specific params with no real
-// flag (e.g. `output_mode`, `head_limit`) are intentionally omitted as noise.
+// A grep call reconstructed into its CLI form.
 function reconstructGrep(record: Record<string, unknown>): string | null {
   const pattern =
     asString(record["pattern"]) ??
@@ -175,11 +133,8 @@ function humanizeFields(record: Record<string, unknown>): Array<{
 }
 
 /**
- * Human-readable rendering of a tool's input, or null when there is no usable
- * input. A `command` kind renders as a `$ …` line; a `fields` kind as a
- * label/value list. Never returns raw JSON. Never-displayed bulk fields (file
- * bodies / patches, see {@link BULK_INPUT_FIELDS}) are dropped; every other field
- * is persisted in full.
+ * Human-readable rendering of a tool's input, or null when there is no usable input.
+ * Never-displayed bulk fields (file bodies / patches, see {@link BULK_INPUT_FIELDS}) are dropped; every other field is persisted in full.
  */
 export function deriveToolInputDetail(
   toolName: string,
@@ -219,15 +174,6 @@ export function deriveToolInputDetail(
   return { kind: "fields", entries };
 }
 
-/**
- * The detail to show in the EXPAND, applying the hybrid rule against an
- * already-derived detail + summary line: returns null when the header summary
- * already conveys the whole input (so the caller renders a header-only,
- * non-expandable segment), and the detail otherwise.
- *
- * Operates on the PERSISTED `inputDetail`/`inputSummary` (computed on the host)
- * rather than re-deriving from raw input, which is no longer stored.
- */
 export function resolveToolInputDetail(
   detail: ToolInputDetail | null,
   headerSummary: string | null,

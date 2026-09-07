@@ -36,15 +36,8 @@ import { commitPlainTerminalDeletion } from "@/lib/terminals/plain-terminal-pres
 
 const VIEWER_USER_ID = "viewer-a";
 
-// The imperative path reads the ACTIVE host id off the runtime binding
-// snapshot, which no provider is mounted to publish in this suite. Left
-// unmocked it is `null` - and a null projection host both switches off
-// `isTileRefRecordLive`'s cross-host arm and disables the cloud-chat list this
-// path consults, so the cloud-known exemption could never be reached. The
-// binding is published here from a real, bound `HostClient` (its messenger is
-// never reached: only `getActiveHostId()` is read), and every chat fixture
-// below carries that same host id - which is what makes these SAME-host cases
-// rather than cross-host ones.
+// The imperative path reads the ACTIVE host id off the runtime binding snapshot, which no provider is mounted to publish in this suite.
+// Left unmocked it is `null` - and a null projection host both switches off `isTileRefRecordLive`'s cross-host arm and disables the cloud-chat list this path consults, so the cloud-known exemption could never be reached.
 interface ActiveHostIdReader {
   getActiveHostId(): string | null;
 }
@@ -56,10 +49,8 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
-    // The app-wide client for a non-React caller (P4.2). The subject reached
-    // it through `getHostBindingSnapshot()?.hostClient` - the SPINE, answering
-    // from the active slot - until the slot was deleted; this is the same
-    // question asked of the effective host's own requester.
+    // The app-wide client for a non-React caller (P4.2).
+    // The subject reached it through `getHostBindingSnapshot()?.hostClient` - the SPINE, answering from the active slot - until the slot was deleted; this is the same question asked of the effective host's own requester.
     getAppHostClientSnapshot: () => boundHostClient.value,
     getHostBindingSnapshot: () =>
       boundHostClient.value === null
@@ -77,9 +68,8 @@ function bindActiveHost(): string {
       requestId: () => "request-1",
       handlers: {},
     }),
-    // Resolves the row the requester below is pinned to. Supplied explicitly
-    // rather than relying on the client's own slot-reading fallback, which is
-    // what `bind()` used to populate here.
+    // Resolves the row the requester below is pinned to.
+    // Supplied explicitly rather than relying on the client's own slot-reading fallback, which is what `bind()` used to populate here.
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
   });
@@ -154,12 +144,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-// Registers a real (no-op-transport) open-Epic session in the module-scoped
-// registry `reopenClosedTilePreview` reads via `getOpenEpicRegistry().peek`,
-// with its projected tree seeded to exactly `liveNodeIds`. Snapshot and chat
-// record-list authority are independent: the shared Epic doc can be current
-// while the host-owned chat registry is still answering after a restart.
-// Tracked and released in `afterEach` so sessions never leak across tests.
+// Registers a real (no-op-transport) open-Epic session in the module-scoped registry `reopenClosedTilePreview` reads via `getOpenEpicRegistry().peek`, with its projected tree seeded to exactly `liveNodeIds`.
 const liveEpicHandles: OpenedStoreForTest[] = [];
 function seedLiveEpicSession(
   epicId: string,
@@ -172,9 +157,7 @@ function seedLiveEpicSession(
   const handle = openStoreForTest({
     epicId: epicId,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -409,11 +392,8 @@ describe("goBack / goForward", () => {
     expect(goSpy).not.toHaveBeenCalled();
   });
 
-  // The branded path steps by a computed OFFSET, because it is the only one
-  // that knows which entries are worth landing on. Pinned as its own case
-  // because the plain path below reaches for `back`/`forward` instead, and a
-  // fallback that leaked into the branded path would skip the eligibility scan
-  // entirely while still looking like it navigated.
+  // The branded path steps by a computed OFFSET, because it is the only one that knows which entries are worth landing on.
+  // Pinned as its own case because the plain path below reaches for `back`/`forward` instead, and a fallback that leaked into the branded path would skip the eligibility scan entirely while still looking like it navigated.
   it("never reaches for back/forward when a controller is present", () => {
     const history = seedPersistentHistory(
       ["/settings/general", "/draft/d1"],
@@ -432,11 +412,8 @@ describe("goBack / goForward", () => {
 });
 
 /**
- * The fallback for a history with no controller brand - the mobile shell,
- * whose Capacitor bundle is not the Electron renderer and so gets a plain
- * browser history. The entries it accumulates are top-level surface
- * activations, which is why a plain step is enough: the eligibility rules the
- * branded path applies are about tiles nested inside a Task.
+ * The fallback for a history with no controller brand - the mobile shell, whose Capacitor bundle is not the Electron renderer and so gets a plain browser history.
+ * The entries it accumulates are top-level surface activations, which is why a plain step is enough: the eligibility rules the branded path applies are about tiles nested inside a Task.
  */
 describe("goBack / goForward — plain history fallback", () => {
   it("steps a plain history back rather than standing down", () => {
@@ -466,9 +443,8 @@ describe("goBack / goForward — plain history fallback", () => {
     expect(trackSpy).not.toHaveBeenCalled();
   });
 
-  // Forward is attempted unconditionally because a plain history cannot say
-  // whether anything is ahead of the cursor. The history moves if there is
-  // somewhere to move; here there is not, and it is a silent no-op.
+  // Forward is attempted unconditionally because a plain history cannot say whether anything is ahead of the cursor.
+  // The history moves if there is somewhere to move; here there is not, and it is a silent no-op.
   it("attempts a forward even at the last entry", () => {
     const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
     const forwardSpy = vi.spyOn(history, "forward");
@@ -667,9 +643,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     goBack({ history });
 
     expect(goSpy).toHaveBeenCalledWith(-1);
-    // Reopened under its ORIGINAL instanceId, into its ORIGINAL pane - the
-    // landing href's exact (paneId, tileInstanceId) resolves directly, no
-    // fresh id and no stale-target URL rewrite needed.
+    // Reopened under its ORIGINAL instanceId, into its ORIGINAL pane - the landing href's exact (paneId, tileInstanceId) resolves directly, no fresh id and no stale-target URL rewrite needed.
     const previewInstanceId = requirePreviewTabId(tabId);
     expect(previewInstanceId).toBe(SPEC_A.instanceId);
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
@@ -750,9 +724,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     store.openTileInTab(tabId, SPEC_A);
     const goneOriginalPaneId = "pane-long-gone";
 
-    // No pane by this id has ever existed in this tab's canvas, but a
-    // preserved payload is present (e.g. seeded directly, or the pane
-    // collapsed away after the tile closed).
+    // No pane by this id has ever existed in this tab's canvas, but a preserved payload is present (e.g. seeded directly, or the pane collapsed away after the tile closed).
     useEpicCanvasStore.setState((state) => ({
       closedTilePayloadsByTabId: {
         ...state.closedTilePayloadsByTabId,
@@ -773,9 +745,8 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
 
     goBack({ history });
 
-    // Falls back to the active pane (the only pane in this canvas) rather
-    // than no-op'ing because the historical pane id doesn't exist. Still
-    // reuses SPEC_B's original instanceId.
+    // Falls back to the active pane (the only pane in this canvas) rather than no-op'ing because the historical pane id doesn't exist.
+    // Still reuses SPEC_B's original instanceId.
     const activePaneId = requirePaneId(tabId);
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
     expect(canvas?.activePaneId).toBe(activePaneId);
@@ -940,9 +911,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
   });
 
   it("drops the cache entry and does not restore when the record was deleted while the tile was closed", () => {
-    // The "close A, THEN delete A while it's closed" escape path: no open
-    // tile exists for the record-sync effect to close, so only restore-time
-    // validation can catch it.
+    // The "close A, THEN delete A while it's closed" escape path: no open tile exists for the record-sync effect to close, so only restore-time validation can catch it.
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("e1", "Task");
     store.openTileInTab(tabId, SPEC_A);
@@ -1004,10 +973,8 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     };
     store.openTileInTab(tabId, ref);
     const paneId = requirePaneId(tabId);
-    // The tombstone lands under the real epic-scoped plain-terminal key, which
-    // is what `rejectClosedPlainTerminalRestore` reads. Its presentation fanout
-    // is key-independent, so the closed payload is seeded AFTER the commit -
-    // otherwise the fanout prunes it first and `goBack` has nothing to reject.
+    // The tombstone lands under the real epic-scoped plain-terminal key, which is what `rejectClosedPlainTerminalRestore` reads.
+    // Its presentation fanout is key-independent, so the closed payload is seeded AFTER the commit - otherwise the fanout prunes it first and `goBack` has nothing to reject.
     expect(
       commitPlainTerminalDeletion({
         queryClient,
@@ -1132,9 +1099,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
 
-    // closeCanvasTab intentionally clears the live pending set, but capture
-    // retains the marker with the cached payload until the create flow
-    // explicitly unmarks it.
+    // closeCanvasTab intentionally clears the live pending set, but capture retains the marker with the cached payload until the create flow explicitly unmarks it.
     expect(
       useEpicCanvasStore.getState().pendingCreateArtifactIds.has(SPEC_A.id),
     ).toBe(false);
@@ -1163,11 +1128,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
   });
 
   it("restores when the live session hasn't loaded its snapshot yet (can't prove the record is gone)", () => {
-    // A freshly (re)acquired handle starts with `snapshotLoaded: false` and
-    // an empty projected tree - that must NOT read as "record confirmed
-    // gone." Seed the session with a tree that (if trusted) would look like
-    // the record is missing, to prove the guard - not an empty tree by
-    // coincidence - is what keeps the restore going through.
+    // A freshly (re)acquired handle starts with `snapshotLoaded: false` and an empty projected tree - that must NOT read as "record confirmed gone." Seed the session with a tree that (if trusted) would look like the record is missing, to prove the guard - not an.
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("e1", "Task");
     store.openTileInTab(tabId, SPEC_A);
@@ -1196,10 +1157,8 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     store.openTileInTab(tabId, SPEC_A);
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
-    // Simulate a successful local delete's optimistic tombstone (see
-    // `markArtifactSelfDeleted` in epic-sidebar.tsx). No live session is
-    // seeded - registry.peek("e1") returns null, simulating the epic's
-    // session having been evicted past the MRU cap.
+    // Simulate a successful local delete's optimistic tombstone (see `markArtifactSelfDeleted` in epic-sidebar.tsx).
+    // No live session is seeded - registry.peek("e1") returns null, simulating the epic's session having been evicted past the MRU cap.
     useEpicCanvasStore.setState((state) => ({
       selfDeletedArtifactIds: new Set([
         ...state.selfDeletedArtifactIds,
@@ -1245,12 +1204,6 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
   });
 
   // ---- Same-host cloud-known exemption (chat-sync-v2 ticket 42) ----------
-  //
-  // A chat can be bound to THIS device's active host and still have no local
-  // record: a leased identity that never adopted its rows. Before this, the
-  // imperative back/forward path answered `isCloudKnown: () => false` for
-  // every id, so restoring such a chat from browser history discarded its
-  // preserved payload and closed the tile instead of substituting.
 
   it("restores a never-adopted same-host chat that the cloud list still knows", () => {
     const hostId = bindActiveHost();
@@ -1317,12 +1270,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
   });
 
   it("judges a same-host chat against the Epic SESSION's host, not the app-wide one that has moved on", () => {
-    // Session handle stamped host A (the chat's host); the app-wide effective
-    // host has moved to B - the state of a re-point that is establishing or
-    // one that failed, when the provider keeps A's handle rendered. Read B
-    // and the chat reads as CROSS-host: the exemption fires and a deleted
-    // record is restored over. Read A (the projection's own host) and this
-    // is the same-host answered-and-absent case one arm up: discard.
+    // Session handle stamped host A (the chat's host); the app-wide effective host has moved to B - the state of a re-point that is establishing or one that failed, when the provider keeps A's handle rendered.
     const hostId = mockLocalHostEntry.hostId;
     const chat = chatRef(hostId);
     const store = useEpicCanvasStore.getState();
@@ -1434,9 +1382,8 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
       snapshotLoaded: true,
       chatRecordListAuthoritative: true,
     });
-    // No `seedCloudChatList`: the slot is empty, so nothing has produced
-    // evidence about this chat. Discarding the payload is permanent; a stale
-    // restore is not, so absence of evidence must not authorize the destroy.
+    // No `seedCloudChatList`: the slot is empty, so nothing has produced evidence about this chat.
+    // Discarding the payload is permanent; a stale restore is not, so absence of evidence must not authorize the destroy.
 
     const landing = nestedHref("e1", tabId, paneId, chat.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
@@ -1448,12 +1395,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
   });
 
   it("restores rather than discards while no active host binding has resolved", () => {
-    // The regression: `readCloudKnownChatIds` used to answer an EMPTY SET (not
-    // null) when the active host id was still null - a boot-order state, not
-    // evidence about the chat - so this path's predicate became
-    // `() => false` and the preserved payload was PERMANENTLY discarded. The
-    // unusable-request arm must read as "no answer" (restore), like the
-    // never-answered case above.
+    // The regression: `readCloudKnownChatIds` used to answer an EMPTY SET (not null) when the active host id was still null - a boot-order state, not evidence about the chat - so this path's predicate became `() => false` and the preserved payload was.
     const chat = chatRef(mockLocalHostEntry.hostId);
     // Signed in, but no `bindActiveHost()`: `getHostBindingSnapshot()` is null.
     useAuthStore.setState({
@@ -1493,9 +1435,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
       snapshotLoaded: true,
       chatRecordListAuthoritative: true,
     });
-    // A cloud row under the artifact's own id, which must buy it nothing:
-    // artifact records live in the SHARED epic doc, so their absence means
-    // deleted no matter what the chat list holds.
+    // A cloud row under the artifact's own id, which must buy it nothing: artifact records live in the SHARED epic doc, so their absence means deleted no matter what the chat list holds.
     seedCloudChatList(hostId, [cloudRow(SPEC_A.id, true)]);
 
     const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);

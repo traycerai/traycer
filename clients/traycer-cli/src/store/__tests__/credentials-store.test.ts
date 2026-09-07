@@ -12,10 +12,8 @@ import {
 } from "../credentials-store";
 import { fakeCredentialsMutationStore } from "../../__tests__/support/credentials-mutation-store";
 
-// Unit-tests the store-backed revalidator's outcome mapping (§7). The locked
-// `rotate` itself (WAL commit, guards, single-spend) is covered in the protocol
-// `credentials-mutation` tests; here we pin how each outcome maps onto the
-// transport `RevalidateOutcome` and how the lease is (or isn't) rotated.
+// Unit-tests the store-backed revalidator's outcome mapping (§7).
+// The locked `rotate` itself (WAL commit, guards, single-spend) is covered in the protocol `credentials-mutation` tests; here we pin how each outcome maps onto the transport `RevalidateOutcome` and how the lease is (or isn't) rotated.
 
 function pair(token: string): StoredCredentials {
   return {
@@ -73,15 +71,13 @@ describe("createStoreBackedRevalidator", () => {
       refreshTokenOverride: null,
       signal: null,
     });
-    // Exactly one rotate per revalidate — the revalidator body never re-spends.
+    // Exactly one rotate per revalidate - the revalidator body never re-spends.
     expect(store.rotate).toHaveBeenCalledTimes(1);
   });
 
   it("forwards a caller-provided abort signal to rotate verbatim", async () => {
-    // A deadline-bounded caller (the host install probe) passes its own
-    // controller's signal so an abandoned rotation cannot keep a drain-to-exit
-    // CLI alive past its bound; a process-lifetime caller passes null instead
-    // (covered above). Pin that the exact signal instance reaches `rotate`.
+    // A deadline-bounded caller (the host install probe) passes its own controller's signal so an abandoned rotation cannot keep a drain-to-exit CLI alive past its bound; a process-lifetime caller passes null instead (covered above).
+    // Pin that the exact signal instance reaches `rotate`.
     const lease = new MutableBearerLease("old-token", "u1");
     const controller = new AbortController();
     const store = storeReturning(async () => ({
@@ -207,12 +203,8 @@ describe("withCommitRetry", () => {
   });
 
   it("an already-aborted signal spends no retry and leaves no pending timer", async () => {
-    // The inter-attempt wait is an ordinary `setTimeout`, and the CLI exits by
-    // draining the event loop (`runner/exit.ts` sets `process.exitCode`), so a
-    // retry that ignores the signal keeps the process at the prompt for up to
-    // the whole retry budget after the command printed its result. Threading
-    // the signal into the OP alone does not fix that - this wrapper's own
-    // timer has to honor it too.
+    // The inter-attempt wait is an ordinary `setTimeout`, and the CLI exits by draining the event loop (`runner/exit.ts` sets `process.exitCode`), so a retry that ignores the signal keeps the process at the prompt for up to the whole retry budget after the command printed its result.
+    // Threading the signal into the OP alone does not fix that - this wrapper's own timer has to honor it too.
     vi.useFakeTimers();
     const controller = new AbortController();
     controller.abort();

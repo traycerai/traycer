@@ -3,32 +3,8 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 /**
- * Per-device unread tracking for epic artifacts, persisted to localStorage so a
- * user's read/unread view survives reloads and app restarts. Collaborators and
- * other devices each keep their own view of what's "new".
- *
- * Two cooperating maps:
- *   - `seedAtByEpic[epicId]`: a per-epic baseline MARKER. Its presence means
- *     "this device has captured this epic's baseline"; the timestamp value is
- *     informational only and is never compared against artifact versions. Until
- *     an epic is seeded, every artifact reads as read - this suppresses the
- *     "sea of blue dots" on the very first navigation to an epic.
- *   - `lastSeenByArtifact[epicId][artifactId]`: the latest `updatedAt` the user
- *     has acknowledged - seeded at baseline for every artifact present on first
- *     open, then advanced by `markRead`. Newer remote edits re-mark the artifact
- *     unread until viewed again.
- *
- * Reliability contract:
- *   - An artifact present at first open is seeded with its concrete version, so
- *     it stays read across restarts and is immune to clock skew between the
- *     host/cloud and this renderer.
- *   - An artifact that appears AFTER the baseline has no `lastSeen` entry, so it
- *     reads as unread without any wall-clock comparison - this is what makes a
- *     newly created artifact reliably show its marker.
- *
- * `markRead` writes the supplied `updatedAt` (not `Date.now()`), so repeated
- * calls with the same artifact version are exact no-ops at the selector
- * boundary - no spurious store mutations during a steady-state view.
+ * Per-device unread tracking for epic artifacts, persisted to localStorage so a user's read/unread
+ * view survives reloads and app restarts.
  */
 interface ArtifactReadState {
   readonly seedAtByEpic: Readonly<Record<string, number>>;
@@ -117,15 +93,8 @@ export const useArtifactReadStateStore = create<ArtifactReadState>()(
 );
 
 /**
- * Pure unread predicate over the read-state snapshot maps. The single source of
- * the rule, shared by the per-node marker hook and any whole-tree pass.
- *
- * An epic with no baseline marker yet reads as fully read (suppress markers
- * until the session seed lands). Once seeded, an artifact is unread iff we have
- * never acknowledged a version at least as new as `updatedAt` - which includes
- * artifacts created after the baseline (no `lastSeen` entry at all). The rule
- * never compares wall clocks, so host/renderer clock skew cannot hide a new
- * artifact's marker.
+ * Pure unread predicate over the read-state snapshot maps. The single source of the rule, shared
+ * by the per-node marker hook and any whole-tree pass.
  */
 export function isArtifactUnread(args: {
   readonly epicId: string;

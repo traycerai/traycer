@@ -1,15 +1,8 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { ServiceController, ServiceLabel } from "../index";
 
-// The second line of defence behind `withRunner`'s relocation
-// (host/cgroup-relocation.ts): every stop-shaped route on `withStopIntent`
-// re-reads `/proc/self/cgroup` and refuses BEFORE `announceStop`, so a
-// refusal leaves no record of a stop that never happened.
-//
-// This file only exercises the guard's placement and its refusal/pass-through
-// behaviour. `stop-intent-decorator.test.ts` already covers the write/clear
-// ordering in full and must not be touched or duplicated here - node:os is
-// pinned to darwin there, so its assertions are untouched by this guard.
+// The second line of defence behind `withRunner`'s relocation (host/cgroup-relocation.ts): every stop-shaped route on `withStopIntent` re-reads `/proc/self/cgroup` and refuses BEFORE `announceStop`, so a refusal leaves no record of a stop that never happened.
+// This file only exercises the guard's placement and its refusal/pass-through behaviour.
 
 const mocks = vi.hoisted(() => ({
   writes: [] as string[],
@@ -81,11 +74,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-// The record transaction is the thing the outer decorator must NOT open when
-// the guard refuses; a spy stands in for it so the ordering is observable.
-// The stand-in still runs the wrapped uninstall, as the real transaction does,
-// so the pass-through control below proves the controller is reached THROUGH
-// it and not around it.
+// The record transaction is the thing the outer decorator must NOT open when the guard refuses; a spy stands in for it so the ordering is observable.
+// The stand-in still runs the wrapped uninstall, as the real transaction does, so the pass-through control below proves the controller is reached THROUGH it and not around it.
 const recordMocks = vi.hoisted(() => ({
   uninstallTransactions: 0,
   registrationTransactions: 0,
@@ -158,12 +148,8 @@ const installOptions = {
 } as const;
 
 describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before the record transaction", () => {
-  // The production composition puts the record decorator OUTSIDE the
-  // stop-intent one, so its transaction would be acquired before the inner
-  // guard ever ran - and a refusal thrown inside the transaction is treated
-  // as an OS uninstall that threw, which marks an intact record stale. The
-  // outer decorator therefore runs the guard itself, ahead of the
-  // transaction; this pins that a refusal opens no transaction at all.
+  // The production composition puts the record decorator OUTSIDE the stop-intent one, so its transaction would be acquired before the inner guard ever ran - and a refusal thrown inside the transaction is treated as an OS uninstall that threw, which marks an intact record stale.
+  // The outer decorator therefore runs the guard itself, ahead of the transaction; this pins that a refusal opens no transaction at all.
   it("uninstall: a guard refusal opens no record transaction and announces nothing", async () => {
     let ran = false;
     const controller = withCliInvocationRecord(
@@ -184,10 +170,7 @@ describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before t
     expect(mocks.writes).toEqual([]);
     expect(ran).toBe(false);
 
-    // Ablation: remove the `await assertNotInsideHostUnit();` from
-    // `withCliInvocationRecord`'s uninstall → this test reddens on
-    // `uninstallTransactions` (1, not 0): the inner guard still refuses, but
-    // only after the transaction stand-in has been entered.
+    // Ablation: remove the `await assertNotInsideHostUnit();` from `withCliInvocationRecord`'s uninstall → this test reddens on `uninstallTransactions` (1, not 0): the inner guard still refuses, but only after the transaction stand-in has been entered.
   });
 
   it("uninstall: outside a host unit the transaction is entered exactly once and the controller runs through it", async () => {
@@ -210,11 +193,7 @@ describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before t
     expect(ran).toBe(true);
   });
 
-  // The install actuator is the fifth guarded route, and the outer guard
-  // matters for it for the mirror-image reason: a throw from `register` inside
-  // `runServiceRegistrationWithInvocationRecord` marks the live record stale
-  // (the OS may describe a half-done registration), which a refusal that
-  // touched nothing must not do to an intact registration.
+  // The install actuator is the fifth guarded route, and the outer guard matters for it for the mirror-image reason: a throw from `register` inside `runServiceRegistrationWithInvocationRecord` marks the live record stale (the OS may describe a half-done registration), which a refusal that touched nothing must not do to an intact registration.
   it("install: a guard refusal opens no registration transaction, announces nothing, and never reaches the controller", async () => {
     let ran = false;
     const controller = withCliInvocationRecord(
@@ -235,10 +214,7 @@ describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before t
     expect(mocks.writes).toEqual([]);
     expect(ran).toBe(false);
 
-    // Ablation: remove the `await assertNotInsideHostUnit();` from
-    // `withCliInvocationRecord`'s install → this test reddens on
-    // `registrationTransactions` (1, not 0): the inner guard still refuses,
-    // but only after the transaction stand-in has been entered.
+    // Ablation: remove the `await assertNotInsideHostUnit();` from `withCliInvocationRecord`'s install → this test reddens on `registrationTransactions` (1, not 0): the inner guard still refuses, but only after the transaction stand-in has been entered.
   });
 
   it("install: outside a host unit the registration transaction is entered exactly once, the controller runs through it, and no intent is written", async () => {
@@ -284,9 +260,7 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(mocks.clears).toEqual([]);
   });
 
-  // Not a stop route, but its Linux failure path is one: `installService`
-  // rolls a failed `enable --now` back with `disable --now` on the unit, which
-  // stops the live host and, from inside the unit, the CLI issuing it.
+  // Not a stop route, but its Linux failure path is one: `installService` rolls a failed `enable --now` back with `disable --now` on the unit, which stops the live host and, from inside the unit, the CLI issuing it.
   it("install: refuses before running the controller, and writes no intent either way", async () => {
     let ran = false;
     const controller = withStopIntent(
@@ -364,11 +338,7 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(mocks.clears).toEqual([]);
   });
 
-  // Positive control: a relocated scope cgroup (`run-*.scope`) is not a host
-  // unit, so the guard resolves and every route proceeds exactly as it did
-  // before this change - `stop-intent-decorator.test.ts` covers the ordering
-  // and withdrawal semantics in full; this is just proof the guard is not
-  // gating every call unconditionally regardless of cgroup content.
+  // Positive control: a relocated scope cgroup (`run-*.scope`) is not a host unit, so the guard resolves and every route proceeds exactly as it did before this change - `stop-intent-decorator.test.ts` covers the ordering and withdrawal semantics in full; this is just proof the guard is not gating every call unconditionally regardless of cgroup content.
   it("proceeds through all five routes when outside a host unit (run-*.scope)", async () => {
     mocks.cgroup = SCOPE_CGROUP;
     let stopRan = false;
@@ -432,10 +402,7 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(mocks.writes).toEqual(["stop", "restart", "uninstall", "restart"]);
   });
 
-  // An unreadable cgroup is a FAILED membership check, not a negative answer,
-  // and it has to refuse on every route for the same reason the host-unit case
-  // does: EACCES leaves us just as likely to be inside the unit, and proceeding
-  // writes intent and then kills the process issuing the stop.
+  // An unreadable cgroup is a FAILED membership check, not a negative answer, and it has to refuse on every route for the same reason the host-unit case does: EACCES leaves us just as likely to be inside the unit, and proceeding writes intent and then kills the process issuing the stop.
   it("refuses on all five routes when the cgroup cannot be read (EACCES)", async () => {
     mocks.cgroup = { errno: "EACCES" };
     let ran = false;
@@ -480,17 +447,11 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(mocks.clears).toEqual([]);
     expect(ran).toBe(false);
 
-    // Ablation: in `readHostUnitCgroup` (host/cgroup-relocation.ts), replace
-    // the `throw cliError(...)` in the catch with `return null` → this test
-    // fails on the first route: the guard resolves, intent is written, and
-    // the stop proceeds from inside a cgroup nobody could rule out.
+    // Ablation: in `readHostUnitCgroup` (host/cgroup-relocation.ts), replace the `throw cliError(...)` in the catch with `return null` → this test fails on the first route: the guard resolves, intent is written, and the stop proceeds from inside a cgroup nobody could rule out.
   });
 
-  // An ABSENT cgroup file says where the process cannot look, not where it is
-  // (Codex on #1755, post-merge: a namespace may hide procfs while the process
-  // is still in whatever cgroup it was born in). Membership is unknown, so
-  // every route refuses before announcing anything - exactly like EACCES
-  // above, with `absent: true` distinguishing the case.
+  // An ABSENT cgroup file says where the process cannot look, not where it is (Codex on #1755, post-merge: a namespace may hide procfs while the process is still in whatever cgroup it was born in).
+  // Membership is unknown, so every route refuses before announcing anything - exactly like EACCES above, with `absent: true` distinguishing the case.
   it("refuses on all five routes when /proc/self/cgroup is absent (ENOENT)", async () => {
     mocks.cgroup = { errno: "ENOENT" };
     let ran = false;
@@ -538,22 +499,9 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(mocks.clears).toEqual([]);
     expect(ran).toBe(false);
 
-    // Ablation: in `readHostUnitCgroup`, add `if (absent) return null;` after
-    // `const absent = isAbsentPath(cause);` → this test fails on the first
-    // route exactly like the EACCES test above, which stays green.
+    // Ablation: in `readHostUnitCgroup`, add `if (absent) return null;` after `const absent = isAbsentPath(cause);` → this test fails on the first route exactly like the EACCES test above, which stays green.
   });
 
-  // Ablation (run once per method, one at a time - five separate ablations):
-  // in `service/index.ts`'s `withStopIntent`, delete the
-  // `await assertNotInsideHostUnit();` line from `stop` → its refusal test
-  // above fails (the write/controller-call assertions flip: writes becomes
-  // ["stop"] and `stopped` becomes true instead of staying at their refused
-  // values). Same recipe for `stopForRestart`, `uninstall`, `restart`, and
-  // `install` (whose `ran` flips to true; it writes nothing either way) -
-  // deleting any one of the five guard calls turns exactly that method's
-  // refusal test red (plus the combined EACCES test, which exercises every
-  // route) while leaving the other four refusal tests green, which is what
-  // proves the guard is wired into each route independently rather than
-  // shared through some common choke point that would fail all five at once.
-  // Run and confirmed for `install`: 2 failed, 10 passed.
+  // Ablation (run once per method, one at a time - five separate ablations): in `service/index.ts`'s `withStopIntent`, delete the `await assertNotInsideHostUnit();` line from `stop` → its refusal test above fails (the write/controller-call assertions flip: writes becomes ["stop"] and `stopped` becomes true instead of staying at their refused values).
+  // Same recipe for `stopForRestart`, `uninstall`, `restart`, and `install` (whose `ran` flips to true; it writes nothing either way) - deleting any one of the five guard calls turns exactly that method's refusal test red (plus the combined EACCES test, which exercises every route) while leaving the other four refusal tests green, which is what proves the guard is wired into each route independently rather than shared through some common choke point that would fail all five at once.
 });

@@ -73,10 +73,7 @@ describe("LogicalStream", () => {
     ]);
   });
 
-  // A logical stream owns no socket - `requestReconnect` (the post-sleep/wake
-  // liveness nudge on `IStreamSession`) is only meaningful if it reaches the
-  // shared session that DOES own one. A silent no-op here would leave a woken
-  // remote host wedged with no reconnect ever scheduled.
+  // A logical stream owns no socket - `requestReconnect` (the post-sleep/wake liveness nudge on `IStreamSession`) is only meaningful if it reaches the shared session that does own one.
   it("forwards requestReconnect to the shared session, and stops once closed", () => {
     const reconnectReasons: string[] = [];
     const stream = createStream([], reconnectReasons);
@@ -114,10 +111,8 @@ describe("LogicalStream", () => {
     ]);
   });
 
-  // The constructor is seeded with a PROVISIONAL client-canonical version
-  // (`RemoteSession.subscribe` opens the stream before the host manifest can be
-  // consulted). Reporting that as negotiated would tell consumers the host
-  // agreed to a version it has never seen - and they parse frames against it.
+  // The constructor is seeded with a provisional client-canonical version (`RemoteSession.subscribe` opens the stream before the host manifest can be consulted).
+  // Reporting that as negotiated would tell consumers the host agreed to a version it has never seen - and they parse frames against it.
   it("reports no negotiated version until the session has opened it", () => {
     const stream = createStream([], []);
     expect(stream.getNegotiatedSchemaVersion()).toBeNull();
@@ -131,9 +126,8 @@ describe("LogicalStream", () => {
     });
   });
 
-  // A negotiated version belongs to the connection that negotiated it. Holding
-  // it across a drop would let a consumer parse the first post-resume frame at
-  // the OLD host incarnation's minor, before the resume has re-established one.
+  // A negotiated version belongs to the connection that negotiated it.
+  // Holding it across a drop would let a consumer parse the first post-resume frame at the old host incarnation's minor, before the resume has re-established one.
   it("drops the negotiated version when the connection goes away", () => {
     const stream = createStream([], []);
     stream.updateSchemaVersion({ major: 1, minor: 4 });

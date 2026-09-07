@@ -5,17 +5,8 @@ import type {
 } from "@traycer/protocol/host/host-status";
 import { deriveHostHealth } from "@/components/settings/host-scope/host-health";
 
-/**
- * `stopped` and `not-installed` are the two health states that name what this
- * machine's own host is doing about itself — being restarted, or being
- * installed — and for a long time nothing could produce them: `useHostScope`
- * passed `undefined` for the installed record, so `deriveStatus` could only
- * answer `running` or nothing, and a stopped local host fell through to its
- * registry connectivity and read "Offline · last seen 3h ago". True about the
- * cloud's answer, useless to someone whose host is sitting right there.
- *
- * Nothing covered `deriveHostHealth` at all, which is how that shipped.
- */
+/** `stopped` and `not-installed` are the two health states that name what this machine's own host is doing
+ * about itself - being restarted, or being installed. */
 
 const NOW_MS = 3 * 60 * 60 * 1000;
 
@@ -39,14 +30,8 @@ function registryItem(connectivity: HostConnectivity): HostListItem {
   };
 }
 
-/**
- * No lease, authority not attached — i.e. the DTO is the only evidence there
- * is. That is deliberately the base for this file: everything below is about
- * the LOCAL-SERVICE and CLOUD-DTO steps of the precedence, which are only
- * reached once the lease step has declined. The lease step's own behaviour
- * (including that these two values must never be read as death) is covered in
- * `host-health-lease.test.ts`.
- */
+/** The lease step's own behaviour (including that these two values must never be read as death) is covered in
+ * `host-health-lease.test.ts`. */
 const BASE = {
   item: registryItem("offline"),
   hasLiveSession: false,
@@ -58,10 +43,8 @@ const BASE = {
 
 describe("deriveHostHealth — the two actionable local states", () => {
   it("says update-required, not Online, for a RUNNING local host whose lease is dead(incompatible)", () => {
-    // The process being right here answers LIVENESS - but incompatibility is
-    // not a liveness claim: the host runs AND this app cannot speak to it.
-    // Reading it as Online hid the one affordance that fixes it (the update
-    // action gates on `update-required`).
+    // The process being right here answers liveness - but incompatibility is not a liveness claim: the host runs
+    // and this app cannot speak to it.
     const health = deriveHostHealth({
       ...BASE,
       isLocalMachine: true,
@@ -145,8 +128,8 @@ describe("deriveHostHealth — the two actionable local states", () => {
   });
 
   it("falls back to the registry while the local snapshot is unresolved", () => {
-    // `undefined` means "not answered yet", which must not be read as
-    // "not installed" — the registry answer is still better than a guess.
+    // `undefined` means "not answered yet", which must not be read as "not installed" - the registry answer is
+    // still better than a guess.
     const health = deriveHostHealth({
       ...BASE,
       isLocalMachine: true,
@@ -177,17 +160,8 @@ describe("deriveHostHealth — the two actionable local states", () => {
 });
 
 describe("deriveHostHealth — connectivity mapping for a remote row", () => {
-  /**
-   * F26. `connectable` is a cloud lease with a 15-minute TTL and nothing in
-   * this app has dialled the machine, so the row states the report rather than
-   * asserting liveness — and, more importantly, draws NO green dot.
-   *
-   * The dot is the part this pins hardest. `deriveHostPresence` has always
-   * carried the invariant "no green dot without live evidence", and its own
-   * `connectable` arm violated it by naming the stale lease as live evidence.
-   * A host that died dirty therefore kept a green Online for up to a quarter of
-   * an hour, extended further by the 60s keep-warm linger.
-   */
+  /** `connectable` is a cloud lease with a 15-minute ttl and nothing in this app has dialled the machine, so the
+   * row states the report rather than asserting liveness - and, more importantly, draws NO green dot. */
   it("maps a never-dialled connectable host to Reported reachable, with NO live dot", () => {
     const health = deriveHostHealth({
       ...BASE,
@@ -201,7 +175,7 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     // The overclaim, in both of its forms.
     expect(health.label).not.toBe("Online");
     expect(health.live).toBe(false);
-    // Not a fault either — nothing is wrong, we simply have not looked.
+    // Not a fault either - nothing is wrong, we simply have not looked.
     expect(health.tone).toBe("idle");
   });
 

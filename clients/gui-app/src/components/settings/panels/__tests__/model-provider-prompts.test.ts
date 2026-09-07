@@ -8,12 +8,8 @@ import {
   visibleModelProviderPrompts,
 } from "@/components/settings/panels/model-provider-prompts";
 
-/**
- * Pure tests for the prompts DSL, deliberately not driven through the dialog.
- * Upstream evaluates nothing here - the renderer is the only thing that decides
- * which fields are on screen - so the rule is the contract, and it is testable
- * without a form.
- */
+/** Upstream evaluates nothing here - the renderer is the only thing that decides which fields are on screen -
+ * so the rule is the contract, and it is testable without a form. */
 const DEPLOYMENT: ModelProviderPrompt = {
   type: "select",
   key: "deploymentType",
@@ -67,10 +63,7 @@ describe("modelProviderPromptConditionSatisfied", () => {
   });
 
   it("fails BOTH operators for an unanswered key", () => {
-    // `neq` against nothing looks like it should pass, and must not: the only
-    // way a key goes unanswered is that it names a prompt this method does not
-    // have or one that is itself hidden, and a field whose precondition never
-    // held is a field we cannot honestly ask for.
+    // `neq` against nothing looks like it should pass, and must not.
     const empty = new Map<string, string>();
     expect(
       modelProviderPromptConditionSatisfied(
@@ -110,10 +103,8 @@ describe("visibleModelProviderPrompts", () => {
   });
 
   it("does not let a HIDDEN prompt's answer reveal a later one", () => {
-    // The form is a CLI prompt loop rendered at once: `region` is never asked
-    // while the deployment is github.com, so the field predicated on its value
-    // must not appear either - even though the answer map still carries the
-    // default it was seeded with.
+    // The form is a CLI prompt loop rendered at once: `region` is never asked while the deployment is github.com,
+    // so the field predicated on its value must not appear either.
     const chained: readonly ModelProviderPrompt[] = [
       DEPLOYMENT,
       {
@@ -164,9 +155,8 @@ describe("unansweredModelProviderPrompts", () => {
 
 describe("modelProviderPromptInputs", () => {
   it("submits only the fields the user was actually shown", () => {
-    // The host rejects any input key the selected method did not ask for, and a
-    // hidden field is exactly that - sending its seeded default would be a
-    // client bug dressed as data.
+    // The host rejects any input key the selected method did not ask for, and a hidden field is exactly that -
+    // sending its seeded default would be a client bug dressed as data.
     const answers = new Map(defaultModelProviderPromptAnswers(PROMPTS));
     answers.set("accountId", "acct-1");
     expect(modelProviderPromptInputs(PROMPTS, answers)).toEqual({
@@ -176,10 +166,8 @@ describe("modelProviderPromptInputs", () => {
   });
 
   it("TRIMS what it sends, matching the answered-check", () => {
-    // The predicate trims before deciding a prompt counts as answered, so
-    // untrimmed values passed the submit gate and reached upstream with their
-    // padding intact - the form said complete and the provider got something
-    // subtly different from what the field displayed.
+    // The predicate trims before deciding a prompt counts as answered, so untrimmed values passed the submit gate
+    // and reached upstream with their padding intact.
     const answers = new Map(defaultModelProviderPromptAnswers(PROMPTS));
     answers.set("accountId", "  acct-123  ");
     expect(modelProviderPromptInputs(PROMPTS, answers).accountId).toBe(

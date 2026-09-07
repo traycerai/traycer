@@ -62,8 +62,7 @@ import {
 
 const VIEWPORT_DEBOUNCE_MS = 200;
 /**
- * Server frames that start a fresh capture, so the ack-tracking sequence resets
- * and the ended plane's stale one cannot linger.
+ * Server frames that start a fresh capture, so the ack-tracking sequence resets and the ended plane's stale one cannot linger.
  */
 const PRESENTED_SEQUENCE_RESET_KINDS: ReadonlySet<
   BrowserScreencastServerFrame["kind"]
@@ -101,17 +100,13 @@ export interface ScreencastImage {
 export interface ScreencastSession {
   readonly refs: ScreencastSessionRefs;
   /**
-   * The last JPEG frame, or `null` when the JPEG plane is not painting -
-   * either none has arrived yet, or the host stopped the cast to attempt
-   * video. Exactly one of this and {@link video}`.active` is ever the tile's
-   * surface; when neither is, the tile shows its connecting loader.
+   * The last JPEG frame, or `null` when the JPEG plane is not painting - either none has arrived yet, or the host stopped the cast to attempt video.
+   * Exactly one of this and {@link video}`.active` is ever the tile's surface; when neither is, the tile shows its connecting loader.
    */
   readonly image: ScreencastImage | null;
   /**
-   * The video plane's display state. `media` is non-null from the inbound
-   * track onwards so the `<video>` can mount and decode; `active` says it has
-   * decoded a frame and is the surface to show. The window in between is the
-   * loader's, never a JPEG frame kept alive underneath (ticket 26).
+   * The video plane's display state.
+   * `media` is non-null from the inbound track onwards so the `<video>` can mount and decode; `active` says it has decoded a frame and is the surface to show.
    */
   readonly video: VideoPlaneView;
   /** The video plane's latest 5s stats sample (ticket 11); `null` off the live round. */
@@ -121,11 +116,8 @@ export interface ScreencastSession {
   readonly frameSize: ScreencastFrameSize | null;
   readonly navState: BrowserNavState;
   /**
-   * This subscription is a `"viewer"`, the tier the host refuses every claim
-   * and every input frame from (`viewer-passive`, H07). A tile reading `true`
-   * must render no arm and no input affordance at all: the alternative is a
-   * control that starts a gesture the host will not finish, which reads as a
-   * broken tab (H12).
+   * This subscription is a `"viewer"`, the tier the host refuses every claim and every input frame from (`viewer-passive`, H07).
+   * A tile reading `true` must render no arm and no input affordance at all: the alternative is a control that starts a gesture the host will not finish, which reads as a broken tab (H12).
    */
   readonly readOnly: boolean;
   /** Non-null only while this tile is visible AND the host has armed input. */
@@ -137,16 +129,13 @@ export interface ScreencastSession {
   readonly releaseForwardedPageKeys: () => void;
   readonly respondToDialog: ScreencastController["respondToDialog"];
   /**
-   * The browser has painted a frame (`<img onLoad>`): latches the presented
-   * sequence that pointer frames carry for host-side hit-test correlation,
-   * and marks the tile lifecycle live. The ack the host gates its next
-   * capture on has already gone out at frame arrival - see
-   * `noteFrameArrived` in the transport effect below.
+   * The browser has painted a frame (`<img onLoad>`): latches the presented sequence that pointer frames carry for host-side hit-test correlation, and marks the tile lifecycle live.
+   * The ack the host gates its next capture on has already gone out at frame arrival - see `noteFrameArrived` in the transport effect below.
    */
   readonly notePresented: (sequence: number) => void;
   /**
-   * Where the agent driving this tab last pointed, or null while nobody is
-   * driving it. Positional only - the overlay owns how long it stays visible.
+   * Where the agent driving this tab last pointed, or null while nobody is driving it.
+   * Positional only - the overlay owns how long it stays visible.
    */
   readonly agentCursor: AgentCursorPosition | null;
   readonly overlayHandlers: ScreencastOverlayHandlers;
@@ -156,9 +145,8 @@ export interface ScreencastSession {
 type ScreencastHostClient = IHostStreamClient<HostStreamRpcRegistry>;
 
 /**
- * A value that only means anything while the client it was produced on is
- * still the tile's. Every interaction slice below is one, so a client swap
- * drops them all with no per-slice reset.
+ * A value that only means anything while the client it was produced on is still the tile's.
+ * Every interaction slice below is one, so a client swap drops them all with no per-slice reset.
  */
 interface ClientScoped<T> {
   readonly client: ScreencastHostClient;
@@ -195,14 +183,7 @@ export interface ScreencastSessionOptions {
   readonly tabId: string;
   readonly visible: boolean;
   /**
-   * Called from the `<video>` attach effect's cleanup, before `srcObject` is
-   * cleared - the element still has its last decoded frame at that point,
-   * whether the teardown is a plane fallback to JPEG, a fresh negotiation
-   * swapping in a new `MediaStream`, or the tile unmounting outright. Passed
-   * the live element plus whether the video plane was the one actually
-   * painting (not merely attached-but-negotiating) at the moment of
-   * teardown - both guards belong with the snapshot write itself, so callers
-   * push both signals through rather than pre-filtering.
+   * Called from the `<video>` attach effect's cleanup, before `srcObject` is cleared - the element still has its last decoded frame at that point, whether the teardown is a plane fallback to JPEG, a fresh negotiation swapping in a new `MediaStream`, or the.
    */
   readonly captureDormantSnapshot: (
     video: HTMLVideoElement,
@@ -211,16 +192,8 @@ export interface ScreencastSessionOptions {
 }
 
 /**
- * The control tier a shell may subscribe at. `"tile"` only where the shell
- * owns a native browser of its own - which is exactly the desktop, since
- * `browserView` is the shell's own "I have a real BrowserView" capability and
- * both the web bundle (no runner host at all) and the mobile shell
- * (`MobileRunnerHost.browserView = null`) answer `null`.
- *
- * Everything else is a `"viewer"`: it watches the tab, and the host refuses
- * its `arm` and its input frames outright (security review root cause G). The
- * declaration is what the host acts on, so a modified client can still claim
- * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
+ * The control tier a shell may subscribe at.
+ * `"tile"` only where the shell owns a native browser of its own - which is exactly the desktop, since `browserView` is the shell's own "I have a real BrowserView" capability and both the web bundle (no runner host at all) and the mobile shell.
  */
 export function screencastRoleForShell(
   runnerHost: Pick<IRunnerHost, "browserView"> | null,
@@ -230,12 +203,8 @@ export function screencastRoleForShell(
 }
 
 /**
- * Headless `browser.screencast` viewer. This hook owns only what a render
- * reads - the frame image, the lifecycle, the armed epoch and the composing
- * flag - plus the transport that feeds them. Everything with its own state
- * machine (arm epochs, input queues, pointer bookkeeping) lives in
- * `createScreencastController`, which is plain TypeScript and testable without
- * React.
+ * Headless `browser.screencast` viewer.
+ * This hook owns only what a render reads - the frame image, the lifecycle, the armed epoch and the composing flag - plus the transport that feeds them.
  */
 export function useScreencastSession(
   options: ScreencastSessionOptions,
@@ -247,46 +216,21 @@ export function useScreencastSession(
   const role = screencastRoleForShell(useRunnerHostOrNull());
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
-  /**
-   * The last geometry the viewport bridge measured, restated whenever the
-   * transport reports `open` below.
-   *
-   * A subscription is re-established (and reconnected) far more often than the
-   * tile is resized, and the bridge only mints on a RESIZE - so an
-   * already-laid-out tile carried no `viewport` frame at all, leaving the host
-   * on the default metrics it falls back to when the last tile closes.
-   *
-   * The restatement has to wait for `open`, not for the subscribe CALL: the
-   * transport drops every client frame while its phase is not `subscribed`
-   * (`WsStreamSession.sendClientFrame`), silently. Anything minted in the same
-   * tick as the subscribe - the bridge's own first measurement, or a
-   * restatement queued at effect entry - is written into that window and lost,
-   * which is exactly what the field showed: a whole session whose only
-   * `viewport_override` records were `last-tile-close` 1280x720 while the tile
-   * had been measuring 1272x800@2 since mount.
-   */
+  /** The last geometry the viewport bridge measured, restated whenever the transport reports `open` below. */
   const lastViewportRef = useRef<ScreencastViewportInput | null>(null);
   /**
-   * The host's smoothed control-plane RTT for this subscription, refreshed by
-   * every `rttProbe`, `null` until the first one lands (ticket 18). One value
-   * feeds all three viewer-side deadlines - the arm buffer inside the
-   * controller, the video plane's first-frame window, and staleness below -
-   * so they can never disagree about how slow this link is.
+   * The host's smoothed control-plane RTT for this subscription, refreshed by every `rttProbe`, `null` until the first one lands (ticket 18).
+   * One value feeds all three viewer-side deadlines - the arm buffer inside the controller, the video plane's first-frame window, and staleness below - so they can never disagree about how slow this link is.
    */
   const controlPlaneRttRef = useRef<number | null>(null);
   const readControlPlaneRttMs = useCallback(
     () => controlPlaneRttRef.current,
     [],
   );
-  // Latest-value refs so the video attach effect (keyed only on
-  // `videoView.media`) can read the current "is video the painting plane"
-  // state and the current callback at cleanup time without re-running - the
-  // effect's own dependency array intentionally does not include either.
+  // Latest-value refs so the video attach effect (keyed only on `videoView.media`) can read the current "is video the painting plane" state and the current callback at cleanup time without re-running - the effect's own dependency array intentionally does not.
   const videoActiveRef = useRef(false);
   /**
-   * The committed client, for the controller's `onControlEngaged` - which
-   * fires from a DOM event, outside the subscription effect that owns the
-   * `client` the frame handlers close over.
+   * The committed client, for the controller's `onControlEngaged` - which fires from a DOM event, outside the subscription effect that owns the `client` the frame handlers close over.
    */
   const clientRef = useRef(client);
   const captureDormantSnapshotRef = useRef(options.captureDormantSnapshot);
@@ -296,29 +240,15 @@ export function useScreencastSession(
   const imageRef = useRef<HTMLImageElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imeInputRef = useRef<HTMLInputElement | null>(null);
-  /**
-   * When this document last became visible, or `null` while it is hidden.
-   *
-   * An occluded window stops presenting frames: `requestVideoFrameCallback`
-   * never fires and images do not paint, so every deadline fed by a PAINT is
-   * measuring the compositor, not the stream. Both planes read this - the
-   * video staleness clock below, and the presented-sequence resync - so a
-   * round is never judged over a window nobody could see, and the clock
-   * restarts from the moment the pixels became observable again rather than
-   * from a frame timestamp that predates the whole hidden stretch.
-   */
+  /** When this document last became visible, or `null` while it is hidden. */
   const visibleSinceRef = useRef<number | null>(null);
   /**
-   * The painted JPEG frame, as a latest-value ref: a new one lands ~25x/s
-   * while the plane runs, and keying the visibility listener on the state
-   * would tear down and re-register it at that rate.
+   * The painted JPEG frame, as a latest-value ref: a new one lands ~25x/s while the plane runs, and keying the visibility listener on the state would tear down and re-register it at that rate.
    */
   const presentedImageRef = useRef<ScreencastImage | null>(null);
   /**
-   * The stats sample and the last time its `framesDecoded` moved - the
-   * DECODE-side half of the video plane's liveness (see
-   * {@link isVideoPlaneStale}). Refs, not state: the staleness timer below is
-   * keyed on the controller and must not be torn down every 5s cadence tick.
+   * The stats sample and the last time its `framesDecoded` moved - the DECODE-side half of the video plane's liveness (see {@link isVideoPlaneStale}).
+   * Refs, not state: the staleness timer below is keyed on the controller and must not be torn down every 5s cadence tick.
    */
   const videoStatsRef = useRef<WebrtcVideoStatsSample | null>(null);
   const decodeProgressRef = useRef<{
@@ -394,9 +324,8 @@ export function useScreencastSession(
     }),
   );
 
-  // No subscription means no plane: the last round's view would otherwise
-  // keep a dead `srcObject` painting and keep reporting video geometry until
-  // the tile subscribes again. Derived rather than reset in the effect.
+  // No subscription means no plane: the last round's view would otherwise keep a dead `srcObject` painting and keep reporting video geometry until the tile subscribes again.
+  // Derived rather than reset in the effect.
   const subscribed = client !== null && visible;
   const planeView = deriveScreencastPlaneView({
     client,
@@ -414,9 +343,7 @@ export function useScreencastSession(
     : null;
 
   /**
-   * Every write into `streamState` goes through here: it re-bases on the
-   * current client first (a stale client's values are dropped, never merged
-   * into the new one's), then applies the caller's fields.
+   * Every write into `streamState` goes through here: it re-bases on the current client first (a stale client's values are dropped, never merged into the new one's), then applies the caller's fields.
    */
   const patchStreamState = useCallback(
     (patch: ScreencastStatePatch) => {
@@ -448,11 +375,8 @@ export function useScreencastSession(
     const isCurrent = (): boolean =>
       stream !== null && streamRef.current === stream;
 
-    // The peer connection lives in the module-scoped registry, keyed host +
-    // session + tab, so it outlives this subscription's remounts and is shared
-    // with the PiP viewer. What is per-subscription is the SIGNALING: the
-    // reply channel is this stream, and the host re-attaches (and re-offers)
-    // on the next subscribe.
+    // The peer connection lives in the module-scoped registry, keyed host + session + tab, so it outlives this subscription's remounts and is shared with the PiP viewer.
+    // What is per-subscription is the SIGNALING: the reply channel is this stream, and the host re-attaches (and re-offers) on the next subscribe.
     const media = acquireBrowserMediaEntry({
       key: { hostId, sessionId, tabId },
       createPeer: createBrowserMediaPeer,
@@ -505,12 +429,7 @@ export function useScreencastSession(
     });
     videoPlaneRef.current = videoPlane;
 
-    // Ticket 15: human input rides the round's DataChannels while both are
-    // open, and reverts to the mux the moment they are not. Two independent
-    // reverts, deliberately - the entry publishes `inputReady: false` on
-    // channel close / round supersede / peer failure, and the controller's
-    // own `captureMode !== "video"` gate covers a plane fallback whose
-    // channels have not closed yet.
+    // Two independent reverts, deliberately - the entry publishes `inputReady: false` on channel close / round supersede / peer failure, and the controller's own `captureMode !== "video"` gate covers a plane fallback whose channels have not closed yet.
     const syncInputTransport = (): void => {
       controller.setInputTransport(
         media.entry.getSnapshot().inputReady
@@ -537,11 +456,7 @@ export function useScreencastSession(
         controller.clearLocalArm(false);
       } else {
         // Restate the measured geometry for THIS round - see `lastViewportRef`.
-        // On `open`, because that is the first moment the transport stops
-        // dropping what it is handed; every earlier attempt (the bridge's own
-        // first measurement included) went into the pre-subscribe window. Also
-        // covers a RECONNECT, which re-opens the same stream without re-running
-        // this effect at all.
+        // On `open`, because that is the first moment the transport stops dropping what it is handed; every earlier attempt (the bridge's own first measurement included) went into the pre-subscribe window.
         const knownViewport = lastViewportRef.current;
         if (knownViewport !== null) {
           send({ kind: "viewport", hasBinaryPayload: false, ...knownViewport });
@@ -567,17 +482,15 @@ export function useScreencastSession(
       if (PRESENTED_SEQUENCE_RESET_KINDS.has(frame.kind)) {
         controller.notePresentedSequence(null);
       }
-      // Ack at arrival, not paint - the host gates its next capture on the
-      // ack, and a tile that waited for paint would outrun what the host is
-      // willing to send. Same split PiP already uses (pip-headless-stream.ts).
+      // Ack at arrival, not paint - the host gates its next capture on the ack, and a tile that waited for paint would outrun what the host is willing to send.
+      // Same split PiP already uses (pip-headless-stream.ts).
       if (frame.kind === "frame") {
         controller.noteFrameArrived(frame.sequence);
       } else if (frame.kind === "viewportEpoch") {
         controller.noteViewportEpoch(frame.epoch);
       } else if (frame.kind === "rttProbe") {
-        // Answered before anything else this frame could imply: the host is
-        // timing this reply, so any work in between would be measured as link
-        // latency. The estimate it carries is the PREVIOUS probe's result.
+        // Answered before anything else this frame could imply: the host is timing this reply, so any work in between would be measured as link latency.
+        // The estimate it carries is the PREVIOUS probe's result.
         controlPlaneRttRef.current = frame.controlPlaneRttMs;
         send({
           kind: "rttProbeAck",
@@ -588,19 +501,12 @@ export function useScreencastSession(
         controller.noteInputAck(frame.armEpoch, frame.lastSeq);
       } else if (frame.kind === "captureMode") {
         controller.setCaptureMode(frame.mode);
-        // The JPEG cast has stopped, so the frame still on screen is the last
-        // one of a plane that is no longer producing: drop it - and with it the
-        // geometry its hit test was measured against - and let the tile show
-        // its connecting loader until a plane actually paints again (ticket
-        // 26). This is the ONLY thing that retires a JPEG frame; a frame
-        // arriving is what puts one up.
+        // The JPEG cast has stopped, so the frame still on screen is the last one of a plane that is no longer producing: drop it - and with it the geometry its hit test was measured against - and let the tile show its connecting loader until a plane actually paints.
         if (frame.mode === "video") {
           patchStreamState({ image: null, frameSize: null });
         }
       } else if (frame.kind === "agentCursor") {
-        // Only the video plane can be looking at a superseded viewport: a
-        // JPEG tile's cursor is decoration over whatever frame it has painted,
-        // and per-frame correlation is a thing input needs, not an overlay.
+        // Only the video plane can be looking at a superseded viewport: a JPEG tile's cursor is decoration over whatever frame it has painted, and per-frame correlation is a thing input needs, not an overlay.
         if (
           shouldAcceptAgentCursorFrame(
             controller.captureMode(),
@@ -703,24 +609,7 @@ export function useScreencastSession(
   }, []);
   useScreencastViewportBridge(viewportRef, visible, profile, sendViewport);
 
-  // Keeps the two dormant-snapshot latest-value refs current after every
-  // commit - a plain PASSIVE effect (not a render-time write, which
-  // `react-hooks/refs` disallows; not a layout effect either). Layout
-  // effects flush synchronously during commit, before any passive effect's
-  // cleanup runs - so on the very commit that flips `videoActive` to false
-  // (plane fallback, visible/client change: both derive from the same
-  // `videoViewState` that also nulls `videoView.media`), a layout-effect
-  // sync would already have overwritten the ref with the new `false` before
-  // the video-attach effect's passive cleanup below reads it, silently
-  // dropping the snapshot on every teardown but a bare unmount. A passive
-  // effect runs its cleanup-then-create in DECLARATION order alongside every
-  // other passive effect in the same commit: this one has no cleanup, so its
-  // create (the ref write) runs after every passive cleanup already fired -
-  // including the video-attach effect's, below - which is what lets that
-  // cleanup still read the value from the render being torn down. General
-  // hazard, not just this hook: any latest-value ref read inside a passive
-  // effect's cleanup must be synced by another PASSIVE effect, never a
-  // layout effect.
+  // Keeps the two dormant-snapshot latest-value refs current after every commit - a plain PASSIVE effect (not a render-time write, which `react-hooks/refs` disallows; not a layout effect either).
   useEffect(() => {
     videoActiveRef.current = videoView.active;
     clientRef.current = client;
@@ -730,11 +619,8 @@ export function useScreencastSession(
   });
 
   /**
-   * The `<video>` half of the video plane. The tile renders the element (with
-   * the same overlay above it as the `<img>`); everything about the media -
-   * attaching it, its geometry, and the decoded-frame liveness that reports
-   * `videoPlaneState: "live"` - is owned here, so both tile variants stay
-   * pure JSX.
+   * The `<video>` half of the video plane.
+   * The tile renders the element (with the same overlay above it as the `<img>`); everything about the media - attaching it, its geometry, and the decoded-frame liveness that reports `videoPlaneState: "live"` - is owned here, so both tile variants stay pure JSX.
    */
   useEffect(() => {
     const element = videoRef.current;
@@ -752,10 +638,7 @@ export function useScreencastSession(
       videoPlaneRef.current?.noteVideoFrame(null);
     };
     let frameHandle: number | null = null;
-    // The metadata argument is the whole glass-to-glass measurement (ticket
-    // 17): `captureTime`/`receiveTime`/`expectedDisplayTime` are the only
-    // client-side view of capture-to-paint there is, and discarding them was
-    // what left `glassToGlassMs` null on every sample.
+    // The metadata argument is the whole glass-to-glass measurement (ticket 17): `captureTime`/`receiveTime`/`expectedDisplayTime` are the only client-side view of capture-to-paint there is, and discarding them was what left `glassToGlassMs` null on every sample.
     const onDecodedFrame: VideoFrameRequestCallback = (_now, metadata) => {
       videoPlaneRef.current?.noteVideoFrame(metadata);
       frameHandle = element.requestVideoFrameCallback(onDecodedFrame);
@@ -773,10 +656,7 @@ export function useScreencastSession(
     noteSize();
     startPlayback(element);
     return () => {
-      // Snapshot before anything else touches the element: `srcObject`
-      // clearing below (and, on a real unmount, DOM removal right after
-      // this cleanup returns) is the deadline - the element still has its
-      // last decoded frame right now.
+      // Snapshot before anything else touches the element: `srcObject` clearing below (and, on a real unmount, DOM removal right after this cleanup returns) is the deadline - the element still has its last decoded frame right now.
       captureDormantSnapshotRef.current(element, videoActiveRef.current);
       if (frameHandle !== null) element.cancelVideoFrameCallback(frameHandle);
       element.removeEventListener("playing", noteFrame);
@@ -789,9 +669,7 @@ export function useScreencastSession(
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      // While the video plane paints, its decoded frames ARE the liveness
-      // signal - the JPEG pump is off, so `lastFrameAt` would freeze at the
-      // last JPEG frame and flip a healthy tile to "stale" (G3).
+      // While the video plane paints, its decoded frames ARE the liveness signal - the JPEG pump is off, so `lastFrameAt` would freeze at the last JPEG frame and flip a healthy tile to "stale" (G3).
       const videoFrameAt = videoPlaneRef.current?.lastVideoFrameAt() ?? null;
       const lastFrameAt = videoFrameAt ?? controller.lastFrameAt();
       if (lastFrameAt === null) return;
@@ -800,18 +678,11 @@ export function useScreencastSession(
         controlPlaneRttRef.current,
       );
       if (videoFrameAt === null) {
-        // JPEG liveness is stamped on ARRIVAL, not on paint, so it means the
-        // same whether or not anyone is looking: no visibility gate belongs
-        // on this branch.
+        // JPEG liveness is stamped on ARRIVAL, not on paint, so it means the same whether or not anyone is looking: no visibility gate belongs on this branch.
         if (Date.now() - lastFrameAt < staleAfterMs) return;
       } else {
-        // A hidden window presents nothing, so `requestVideoFrameCallback`
-        // stops firing on a perfectly healthy track (packets still arriving,
-        // decoder still decoding). Judging that silence tears a live round
-        // down and leaves the viewer on a plane it has to renegotiate; the
-        // clock resumes from the moment the pixels became observable again,
-        // so a stream that really did die is still caught one window after
-        // the return.
+        // A hidden window presents nothing, so `requestVideoFrameCallback` stops firing on a perfectly healthy track (packets still arriving, decoder still decoding).
+        // Judging that silence tears a live round down and leaves the viewer on a plane it has to renegotiate; the clock resumes from the moment the pixels became observable again, so a stream that really did die is still caught one window after the return.
         const visibleSince = visibleSinceRef.current;
         if (visibleSince === null) return;
         const stats = videoStatsRef.current;
@@ -836,10 +707,8 @@ export function useScreencastSession(
         ) {
           return;
         }
-        // A track that connected, painted, then froze is the one failure no
-        // deadline covers (the first-frame one is disarmed by then) and the
-        // registry cannot see. Reporting it is what turns the host's JPEG
-        // pump back on instead of leaving a frozen tile with no plane at all.
+        // A track that connected, painted, then froze is the one failure no deadline covers (the first-frame one is disarmed by then) and the registry cannot see.
+        // Reporting it is what turns the host's JPEG pump back on instead of leaving a frozen tile with no plane at all.
         videoPlaneRef.current?.fail("frames-stopped");
       }
       patchStreamState((base) => ({
@@ -909,26 +778,9 @@ export function useScreencastSession(
     [controller, patchStreamState],
   );
 
-  /**
-   * The visibility seam both planes depend on.
-   *
-   * Going hidden stops the staleness clock above (an unobservable round must
-   * not be torn down). Coming back re-stamps it AND republishes the JPEG
-   * plane's presented sequence, because `<img onLoad>` is the only thing that
-   * ever publishes one and a load that completed while the window was
-   * occluded may never have fired a paint the tile could observe. Without
-   * this the tile returns with `presentedSequence === null`, which is not a
-   * degraded correlation but NO correlation: `buildScreencastPointerFrame`
-   * drops every click and scroll silently, and nothing re-arms it, because a
-   * resting page produces no further frame to load. That is exactly the
-   * post-fallback dead tile - the host still holds the arm, the client simply
-   * never sends. The element has already decoded by the time we read it, so
-   * `complete` is the signal the load event failed to deliver.
-   */
+  /** The visibility seam both planes depend on. */
   useEffect(() => {
-    // Stamped once per hidden->visible edge and left alone while visible: a
-    // re-stamp on every commit would keep pushing the staleness clock forward
-    // and a frozen tile would never be judged at all.
+    // Stamped once per hidden->visible edge and left alone while visible: a re-stamp on every commit would keep pushing the staleness clock forward and a frozen tile would never be judged at all.
     const stamp = (): boolean => {
       if (document.visibilityState !== "visible") {
         visibleSinceRef.current = null;
@@ -971,19 +823,7 @@ export function useScreencastSession(
 }
 
 /**
- * Whether a video round that has painted before has genuinely stopped, judged
- * from the last decode-side evidence rather than from presentation alone.
- *
- * `requestVideoFrameCallback` reports COMPOSITING, and compositing is exactly
- * what is fragile across a hidden->visible edge: a window occluded for minutes
- * returns with the track still decoding and rVFC yet to resume, and calling
- * that dead tore down a healthy round. `framesDecoded` (the 5s stats sample)
- * moves whether or not anything is painted, so it is the honest liveness
- * signal here; presentation is still counted, since it is the fresher of the
- * two while the window is visible.
- *
- * The visibility gate is unchanged: nothing is judged over a window nobody
- * could see, so the clock runs from `visibleSince` at the earliest.
+ * Whether a video round that has painted before has genuinely stopped, judged from the last decode-side evidence rather than from presentation alone.
  */
 export function isVideoPlaneStale(input: {
   readonly videoFrameAt: number;
@@ -1001,11 +841,8 @@ export function isVideoPlaneStale(input: {
 }
 
 /**
- * The render-facing view of both planes: which one is painting, and the
- * lifecycle / geometry / nav state it reports. Pure derivation, pulled out of
- * the hook so its own branching stays readable. `subscribed` is a parameter
- * rather than recomputed here because the caller gates its interaction slices
- * on the same value.
+ * The render-facing view of both planes: which one is painting, and the lifecycle / geometry / nav state it reports.
+ * Pure derivation, pulled out of the hook so its own branching stays readable.
  */
 function deriveScreencastPlaneView(input: {
   readonly client: ScreencastHostClient | null;
@@ -1027,10 +864,8 @@ function deriveScreencastPlaneView(input: {
   const { streamState, subscribed } = input;
   const video = subscribed ? input.videoViewState : NO_VIDEO_VIEW;
   const current = streamState.client === input.client;
-  // A video tile paints no JPEG frame, so `notePresented` never runs and the
-  // liveness the chrome reads has to come from the decoded video frames
-  // instead. Degraded lifecycles still win - `stale` in particular is how a
-  // frozen video track surfaces (G3).
+  // A video tile paints no JPEG frame, so `notePresented` never runs and the liveness the chrome reads has to come from the decoded video frames instead.
+  // Degraded lifecycles still win - `stale` in particular is how a frozen video track surfaces (G3).
   const lifecycle = current ? streamState.lifecycle : "connecting";
   const upgradable =
     lifecycle === "waiting" || lifecycle === "idle" || lifecycle === "live";
@@ -1180,11 +1015,7 @@ function useScreencastViewportBridge(
       }
     });
     observer.observe(element);
-    // The FIRST measurement is not resize churn, so it does not wait out the
-    // debounce: the host starts capturing at subscribe, and 200ms of silence
-    // is 200ms of capture against whatever metrics the tab was left on. A tile
-    // with no layout yet has nothing to state - the observer's own first
-    // callback covers that case.
+    // The FIRST measurement is not resize churn, so it does not wait out the debounce: the host starts capturing at subscribe, and 200ms of silence is 200ms of capture against whatever metrics the tab was left on.
     if (visible && element.clientWidth > 0 && element.clientHeight > 0) {
       push(element.clientWidth, element.clientHeight);
     }
@@ -1196,10 +1027,8 @@ function useScreencastViewportBridge(
 }
 
 /**
- * The arm half of a server frame: what it does to the local arm, and - since
- * a dialog only exists inside one - to the dialog the arm carries. Pulled out
- * of the frame handler so that handler stays a flat dispatch over frame kinds;
- * everything here is one concern, the arm lifecycle.
+ * The arm half of a server frame: what it does to the local arm, and - since a dialog only exists inside one - to the dialog the arm carries.
+ * Pulled out of the frame handler so that handler stays a flat dispatch over frame kinds; everything here is one concern, the arm lifecycle.
  */
 function applyScreencastArmFrame(input: {
   readonly frame: BrowserScreencastServerFrame;
@@ -1213,9 +1042,8 @@ function applyScreencastArmFrame(input: {
     return;
   }
   if (frame.kind === "armed") {
-    // `noteArmed` reports the engagement itself when this arm was a
-    // deliberate one; a pre-arm's `armed` deliberately renders nothing. An
-    // `armed` for any other epoch is a superseded request's, and is dropped.
+    // `noteArmed` reports the engagement itself when this arm was a deliberate one; a pre-arm's `armed` deliberately renders nothing.
+    // An `armed` for any other epoch is a superseded request's, and is dropped.
     if (controller.desiredArmEpoch() === frame.armEpoch) {
       controller.noteArmed(frame.armEpoch);
     }

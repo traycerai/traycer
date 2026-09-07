@@ -4,41 +4,14 @@ import { stat } from "node:fs/promises";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { ParsedMinisignPublicKey } from "./trusted-keys";
 
-// Hard ceiling for the `pure` (non-prehashed) signature algorithm where
-// the whole archive is buffered in memory. Production hosts publish
-// in `prehashed` mode (streaming BLAKE2b) so this only kicks in for the
-// rare test-fixture / legacy archive that ships `Ed` instead of `ED`.
+// Hard ceiling for the `pure` (non-prehashed) signature algorithm where the whole archive is buffered in memory.
+// Production hosts publish in `prehashed` mode (streaming BLAKE2b) so this only kicks in for the rare test-fixture / legacy archive that ships `Ed` instead of `ED`.
 const PURE_ALGORITHM_MAX_BYTES = 500 * 1024 * 1024;
 
-// Minisign signature verification using Node's built-in Ed25519 +
-// BLAKE2b-512 primitives. We deliberately depend on no third-party
-// crypto package - both algorithms ship with Node 24, and shrinking the
-// trust surface is exactly what the registry signature chain is for.
-//
-// Signature file format (text):
-//
-//   untrusted comment: <free text>
-//   <base64: 2-byte algo || 8-byte keyId || 64-byte signature>
-//   trusted comment: <free text>
-//   <base64: 64-byte global signature over (signature || trusted_comment_bytes)>
-//
-// Algorithm tag:
-//   "Ed" = pure Ed25519 (signs the file bytes directly; supported but
-//          unusual for large archives).
-//   "ED" = pre-hashed Ed25519: the file is hashed with BLAKE2b-512 and
-//          the 64-byte digest is the signed message. This is the mode
-//          modern `minisign -S` uses by default and the only mode we
-//          publish host archives in.
-//
-// Global signature: signs `signature_bytes || trusted_comment_utf8` so
-// the trusted comment can't be tampered with independently. The
-// returned `trustedComment` is therefore a safe field to record on the
-// install record / surface to the user.
+// Minisign via Node Ed25519. Trusted keys live in `trusted-keys.ts`; do not accept a key from the manifest.
 
-// SPKI prefix for an Ed25519 public key. Concat with the 32-byte raw
-// key to get a DER blob Node's `createPublicKey({ format: "der" })`
-// will accept. The bytes are the fixed AlgorithmIdentifier + BIT STRING
-// envelope from RFC 8410 §4.
+// SPKI prefix for an Ed25519 public key.
+// Concat with the 32-byte raw key to get a DER blob Node's `createPublicKey({ format: "der" })` will accept.
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 export interface ParsedMinisignSignature {
@@ -150,10 +123,8 @@ export interface VerifyMinisignArchiveResult {
   readonly algorithm: "pure" | "prehashed";
 }
 
-// Verify a detached minisign signature against a local archive on
-// disk. Streams the archive through BLAKE2b-512 so we never load the
-// full file into memory. Fails closed (HOST_VERIFY_FAILED) if either
-// the file or the trusted-comment signature doesn't verify.
+// Verify a detached minisign signature against a local archive on disk.
+// Streams the archive through BLAKE2b-512 so we never load the full file into memory.
 export async function verifyMinisignArchive(
   opts: VerifyMinisignArchiveOptions,
 ): Promise<VerifyMinisignArchiveResult> {
@@ -191,9 +162,8 @@ export async function verifyMinisignArchive(
   if (parsed.algorithm === "prehashed") {
     archiveMessage = await hashFileBlake2b512(opts.archivePath);
   } else {
-    // Pure-Ed25519 verifies against the full archive bytes. Gate the
-    // memory cost with a clear assertion before we buffer - a hostile
-    // multi-GB archive should never silently exhaust the heap.
+    // Pure-Ed25519 verifies against the full archive bytes.
+    // Gate the memory cost with a clear assertion before we buffer - a hostile multi-GB archive should never silently exhaust the heap.
     const archiveStat = await stat(opts.archivePath);
     if (archiveStat.size > PURE_ALGORITHM_MAX_BYTES) {
       throw cliError({

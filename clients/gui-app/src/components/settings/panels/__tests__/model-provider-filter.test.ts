@@ -39,9 +39,8 @@ const BOTH = entry({
     { type: "api", label: "Manually enter API Key", prompts: [] },
   ],
 });
-// An EMPTY method list now means the host offered nothing at all - not the
-// common "advertises nothing upstream" case, which arrives carrying the host's
-// synthesized key method. It belongs in neither bucket.
+// An empty method list now means the host offered nothing at all - not the common "advertises nothing
+// upstream" case, which arrives carrying the host's synthesized key method.
 const NOTHING_OFFERED = entry({
   id: "amazon-bedrock",
   name: "Amazon Bedrock",
@@ -75,11 +74,8 @@ describe("model provider method filter", () => {
   });
 
   it("offers no API-key bucket, because it would be the whole catalog", () => {
-    // The host synthesizes an `api` method for every provider whose
-    // `/provider/auth` advertises nothing, which puts 178 of ~180 rows in that
-    // bucket. A control that costs a click and returns the list you were
-    // already looking at is a dead option, and the two rows it would exclude
-    // are the ones "Browser sign-in" already isolates.
+    // A control that costs a click and returns the list you were already looking at is a dead option, and the two
+    // rows it would exclude are the ones "Browser sign-in" already isolates.
     expect(
       MODEL_PROVIDER_METHOD_FILTER_OPTIONS.map((option) => option.value),
     ).toEqual(["all", "oauth"]);

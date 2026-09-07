@@ -1,12 +1,6 @@
 /**
- * Picks a memorable two-word `<adjective>-<noun>` slug for a default
- * branch name when the Epic / chat title doesn't yield anything
- * meaningful. Lives client-side so the Create-new-worktree input shows
- * the friendly first candidate - `swift-otter` over `k7m9`.
- *
- * Wordlists are embedded (no network / dependency); roughly
- * `ADJECTIVES.length * NOUNS.length` ≈ 1.6k combinations before Git may
- * require a retry-identity-derived random suffix.
+ * Picks a memorable two-word `<adjective>-<noun>` slug for a default branch name when the Epic / chat title doesn't yield anything meaningful.
+ * Lives client-side so the Create-new-worktree input shows the friendly first candidate - `swift-otter` over `k7m9`.
  */
 
 const ADJECTIVES: ReadonlyArray<string> = [

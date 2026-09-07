@@ -6,7 +6,6 @@ import {
   useEpicArtifactRecords,
 } from "@/lib/epic-selectors";
 
-/** One row in an agent-stop surface (the current agent or a sub-agent). */
 export interface AgentRow {
   readonly id: string;
   readonly title: string;
@@ -17,11 +16,7 @@ export interface AgentRow {
 }
 
 export interface AgentStopControls {
-  /**
-   * The addressed agent itself - rendered as the panel's topmost row and
-   * the "Stop all" anchor (Stop all = stop this agent + its subtree). Null
-   * only if its record isn't in the projection (don't render the panel).
-   */
+  /** Null only if its record isn't in the projection (don't render the panel). */
   readonly self: AgentRow | null;
   /** The agent's actively-working descendants, each individually stoppable. */
   readonly descendants: ReadonlyArray<AgentRow>;
@@ -36,16 +31,7 @@ function surfaceOf(type: string): "gui" | "tui" | null {
 }
 
 /**
- * Drives the Active Agents panel (chat) and the TUI tile's sub-agents
- * dropdown with one shape, so both surfaces behave identically: the current
- * agent on top with Stop all, its active descendants beneath.
- *
- * Structure + titles come from the reactive epic tree (instant on spawn); the
- * live activity tier comes from the global activity awareness source
- * (`useEpicAgentActivityTiers`) - push-driven, no polling. Preserving the tier
- * keeps these rows visually aligned with the same agent's sidebar and tab
- * glyphs: active turns spin, while background-only work uses the calm process
- * glyph.
+ * Same shape for Active Agents and the TUI sub-agents dropdown: current agent on top with Stop all, descendants beneath. Tiers come from awareness, not a poll.
  */
 export function useAgentStopControls(input: {
   readonly epicId: string;

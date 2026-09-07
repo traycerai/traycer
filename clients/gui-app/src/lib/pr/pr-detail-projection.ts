@@ -1,7 +1,6 @@
 /**
- * Pure projection helpers over `pr.subscribeDetail`'s heavy sections (checks
- * contexts, chronological activity) for the PR full-view tile. No React, no
- * store access - mirrors `pr-list-projection.ts`'s conventions.
+ * Pure projection helpers over `pr.subscribeDetail`'s heavy sections (checks contexts, chronological activity) for the PR full-view tile.
+ * No React, no store access - mirrors `pr-list-projection.ts`'s conventions.
  */
 import type {
   PrActivityItem,
@@ -21,14 +20,8 @@ export interface PrReviewerRow {
 }
 
 /**
- * Reviewers with their latest state. Activity is chronological, so a later
- * review from the same login wins; a pending re-request in `reviewRequests`
- * then overrides to "requested", since re-requesting retracts the standing
- * verdict and waits for a fresh one.
- *
- * Reconstructed from the ≤20-item activity window, so an older approval can
- * be pushed off-window by newer comments - callers that claim "no reviews"
- * must qualify it against `isTruncated` and `core.reviewDecision`.
+ * Reviewers with their latest state.
+ * Activity is chronological, so a later review from the same login wins; a pending re-request in `reviewRequests` then overrides to "requested", since re-requesting retracts the standing verdict and waits for a fresh one.
  */
 export function prReviewerRows(
   core: PrDetailCore,
@@ -94,10 +87,7 @@ export function prCheckContextDotTone(
 export function formatPrCheckStatusLabel(context: PrCheckContext): string {
   if (context.status === "queued") return "Queued";
   if (context.status === "in_progress") return "Running";
-  // These three never reach a `conclusion` - GitHub reports them as
-  // in-flight states of their own, distinct from "completed" - so falling
-  // through to `formatPrCheckConclusionLabel(null)` would mislabel every one
-  // of them "Unknown" instead of describing what's actually happening.
+  // These three never reach a `conclusion` - GitHub reports them as in-flight states of their own, distinct from "completed" - so falling through to `formatPrCheckConclusionLabel(null)` would mislabel every one of them "Unknown" instead of describing what's.
   if (context.status === "pending") return "Pending";
   if (context.status === "requested") return "Requested";
   if (context.status === "waiting") return "Waiting";

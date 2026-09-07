@@ -57,11 +57,7 @@ export interface TabsStoreState extends PersistedTabsStoreState {
    * from `items`; no reducer treats it as grouping or selection authority.
    */
   readonly stripOrder: ReadonlyArray<TabRef>;
-  /**
-   * Coordinator-only layout application. The transaction finalizer performs
-   * the one repair + flat compatibility projection after all source changes
-   * have settled, so this intentionally leaves `stripOrder` untouched.
-   */
+  /** Coordinator-only layout application. */
   replaceLayoutForTransaction: (layout: PersistedTabStripLayout) => void;
   /** Complete a coordinator transaction with one repair and flat projection. */
   finalizeTransactionLayout: () => void;
@@ -94,13 +90,6 @@ export interface TabsStoreState extends PersistedTabsStoreState {
 
 const TABS_PERSIST_KEY = persistKey(STORE_KEYS.tabs);
 // Hand-maintained, and duplicated verbatim in `desktop-tabs-persistence.ts`.
-// It is NOT derived from `SETTINGS_SECTIONS` because it also has to accept
-// `service`, the retired id that `settings.service.tsx` still redirects, and
-// because a persisted path from an older build is exactly the input this
-// guards. The cost of hand-maintaining it is that a new section can be
-// forgotten here and silently stop being recognised as a settings route -
-// `devices` was, from the day it was added until `app-diagnostics` arrived and
-// the omission was noticed next to it.
 const SETTINGS_PATHS = new Set([
   "agents",
   "app-diagnostics",
@@ -136,11 +125,7 @@ export function setTabsLocalPersistenceEnabled(enabled: boolean): void {
   tabsLocalPersistenceEnabled = enabled;
 }
 
-/**
- * v1 tab payloads only persisted strip order. Their active surface lived in
- * the canvas / landing-draft stores, so the coordinator consumes this one-shot
- * marker after those stores have hydrated and applies the source-backed focus.
- */
+/** v1 tab payloads only persisted strip order. */
 export function consumeLegacyTabsSourceActiveSelection(): boolean {
   const pending = pendingLegacySourceActiveSelection;
   pendingLegacySourceActiveSelection = false;
@@ -185,9 +170,7 @@ function layoutFromState(state: TabsStoreState): PersistedTabStripLayout {
     systemTabs: state.systemTabs,
     activationHistory: state.activationHistory,
   };
-  // Older consumers and existing tests may still seed Zustand directly with
-  // `stripOrder`. Treat such a mismatch as an external v1 compatibility write
-  // and immediately rebuild a flat v2 layout at the next reducer boundary.
+  // Older consumers and existing tests may still seed Zustand directly with `stripOrder`.
   return refsMatch(flattenLayoutRefs(layout), state.stripOrder)
     ? layout
     : state.stripOrder.reduce(createLayoutItem, {
@@ -625,17 +608,8 @@ export const useTabsStore = create<TabsStoreState>()(
 );
 
 /**
- * The store's current state read as a `PersistedTabStripLayout`, for callers
- * that only need to ask the layout helpers a question.
- *
- * One exported reader rather than a literal per call site: these fields ARE
- * the layout contract, so a copy that misses a future field keeps compiling
- * while quietly answering against a shape the store no longer produces.
- *
- * Deliberately the plain projection - `layoutFromState` above additionally
- * rebuilds from a directly-seeded `stripOrder`, and the coordinator's
- * `currentLayout` does the same keyed on transaction depth. Both of those are
- * write-path compatibility concerns; a read-only caller must not inherit them.
+ * The store's current state read as a `PersistedTabStripLayout`, for callers that only need to ask
+ * the layout helpers a question.
  */
 export function readTabStripLayout(): PersistedTabStripLayout {
   const state = useTabsStore.getState();

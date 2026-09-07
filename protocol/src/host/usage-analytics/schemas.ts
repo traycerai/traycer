@@ -1,11 +1,7 @@
 import { z } from "zod";
 
 /**
- * Wire mirror of `@traycerai/common`'s `UsageSummary` shapes (the shared
- * aggregator's output) - `@traycer/protocol` is an OSS package and must not
- * depend on the internal `@traycerai/common` package, so these are
- * independently declared here, the same way `usageAnalyticsIngestFactV1Schema`
- * mirrors the host's fact enums without importing them.
+ * Wire mirror of `@traycerai/common`'s `UsageSummary` shapes (the shared aggregator's output) - `@traycer/protocol` is an OSS package and must not depend on the internal `@traycerai/common` package, so these are.
  */
 
 export const usageSummaryOutcomeSchema = z.enum([
@@ -38,11 +34,7 @@ export const usageSummaryTokenTotalsSchema = z.object({
 });
 
 /**
- * The aggregator's grouping key: a local calendar day in the request's
- * timezone, `YYYY-MM-DD` (what `en-CA` numeric formatting emits). Shaped
- * rather than merely length-bounded because this key is parsed, sorted and
- * decremented as a calendar date on the client - a `"2026-1-1"` would pass
- * a length check and then mis-sort and mis-label.
+ * The aggregator's grouping key: a local calendar day in the request's timezone, `YYYY-MM-DD` (what `en-CA` numeric formatting emits).
  */
 const usageDayKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -105,16 +97,6 @@ export const usageSummaryChatBucketSchema = z.object({
   costProvenance: usageSummaryCostProvenanceSchema,
 });
 
-/**
- * One host's totals within the window - the per-host grouping alongside
- * `chatBuckets`, same shape discipline (identity key + the four "known" sums
- * + weakest-wins provenance).
- *
- * No host NAME rides the wire. A display name is directory state that
- * changes without the fact changing, and only the client holds the directory
- * - so the client joins names by `hostId` and renders a truncated id for one
- * it does not recognize, rather than the host guessing at a name.
- */
 export const usageSummaryHostBucketSchema = z.object({
   /** Matches `usageAnalyticsIngestFactV1Schema.hostId`'s bound, not the 191-char identifier bound. */
   hostId: z.string().min(1).max(36),
@@ -168,24 +150,14 @@ export const usageSummarySchema = z.object({
   buckets: z.array(usageSummaryBucketSchema),
   /** Sorted by `chatId`. Groups BY chat regardless of whether the request filtered to one chat. */
   chatBuckets: z.array(usageSummaryChatBucketSchema),
-  /**
-   * Sorted by `hostId`. Groups BY host regardless of whether the request
-   * filtered to one, exactly like `chatBuckets`. `servedBy: "local"` always
-   * answers with at most a single self-entry - that plane holds only its own
-   * host's facts.
-   */
+  /** Sorted by `hostId`. */
   hostBuckets: z.array(usageSummaryHostBucketSchema),
   distinctEpicCount: nonNegativeIntSchema,
   distinctChatCount: nonNegativeIntSchema,
   outcomeBreakdown: usageSummaryOutcomeBreakdownSchema,
   usageCompletenessBreakdown: usageSummaryCompletenessBreakdownSchema,
   /**
-   * Chat-scoped per-turn drill-down rows - populated only when the request
-   * carried a `chatId` filter (chat-scope-only by design). The cap is part
-   * of the contract, not just host-side policy: `turnRowsTruncated` is how
-   * an over-cap window is meant to be reported, so an uncapped array is a
-   * host bug the wire should catch rather than an unbounded list for the
-   * drill-down to render.
+   * Chat-scoped per-turn drill-down rows - populated only when the request carried a `chatId` filter (chat-scope-only by design).
    */
   turnRows: z.array(usageTurnRowSchema).max(USAGE_TURN_ROWS_MAX).nullable(),
   /** `true` when `turnRows` was capped and older turns were omitted. Always `false` when `turnRows` is `null`. */
@@ -205,29 +177,18 @@ export const hostUsageSummaryRequestSchemaV10 = z
     windowDays: z.number().int().positive(),
     epicId: z.string().min(1).max(191).nullable(),
     /**
-     * Ticket 10 addition - `.optional()` (unlike the original fields above,
-     * which are required-but-nullable) so a client built against the
-     * original v1.0 shape (no chat filter) still validates: the key can be
-     * absent entirely, not merely `null`. Chat implies its epic - not
-     * required alongside `epicId`. Host-side, the chat must belong to the
-     * authenticated caller.
+     * Ticket 10 addition - `.optional()` (unlike the original fields above, which are required-but-nullable) so a client built against the original v1.0 shape (no chat filter) still validates: the key can be absent entirely.
+     * Host-side, the chat must belong to the authenticated caller.
      */
     chatId: z.string().min(1).max(191).nullable().optional(),
     /**
-     * Ticket 10 addition, same `.optional()` compatibility reasoning as
-     * `chatId`. Absent = the original `windowDays`-bounded behavior.
-     * `"epic"` is valid only alongside a non-null `epicId`/`chatId` -
-     * bounded by that epic/chat's own fact span, never a general unbounded
-     * query.
+     * Ticket 10 addition, same `.optional()` compatibility reasoning as `chatId`.
+     * `"epic"` is valid only alongside a non-null `epicId`/`chatId` - bounded by that epic/chat's own fact span, never a general unbounded query.
      */
     window: z.enum(["epic"]).optional(),
     /**
-     * Ticket 13 addition, same `.optional()` compatibility reasoning as
-     * `chatId`. Absent or `null` = every host on the account - the global
-     * dashboard's "All hosts" default. Only ever a NARROWING: the host
-     * resolves the plane and the owner itself, so this cannot widen a read
-     * past the authenticated caller, and on the local plane a host id other
-     * than that host's own simply matches zero facts.
+     * Ticket 13 addition, same `.optional()` compatibility reasoning as `chatId`.
+     * Only ever a NARROWING: the host resolves the plane and the owner itself, so this cannot widen a read past the authenticated caller, and on the local plane a host id other than that host's own simply matches zero facts.
      */
     hostId: z.string().min(1).max(36).nullable().optional(),
   })
@@ -237,10 +198,8 @@ export type HostUsageSummaryRequestV10 = z.infer<
 >;
 
 /**
- * `servedBy` names which bounded reader answered the request - see the
- * replication-and-read-path artifact's "one implementation, two bounded
- * readers". Never a client-side choice: the host resolves the plane from
- * the account's cloud-sync capability.
+ * `servedBy` names which bounded reader answered the request - see the replication-and-read-path artifact's "one implementation, two bounded readers".
+ * Never a client-side choice: the host resolves the plane from the account's cloud-sync capability.
  */
 export const hostUsageSummaryResponseSchemaV10 = z.object({
   servedBy: z.enum(["local", "cloud"]),

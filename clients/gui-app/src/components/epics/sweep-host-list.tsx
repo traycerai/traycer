@@ -15,45 +15,20 @@ import {
 } from "@/components/epics/sweep-host-model";
 import { cn } from "@/lib/utils";
 
-/**
- * Sweep's host list: WHICH machine's worktrees the open dialog is censusing.
- *
- * It is the body of the chip's popover. Every host in the account is a row,
- * flat, in the shared picker's own order - a machine can hold a Task's
- * worktrees with no agent record naming it, so scoping the list would delete
- * the backstop. What a row SAYS is how many of the selected Task(s)' worktrees
- * it holds, asked of the host itself and only while this list is on screen.
- *
- * `intent="pin"` throughout. Choosing here scopes ONE surface's RPCs for the
- * length of one confirmation; it does not rebind the window, and it writes no
- * pin of its own - the next Sweep opens on the surface's host again, because
- * "which host did I sweep last time" is not a preference worth remembering
- * over a destructive action. The intent also carries the plan gate for free: a
- * remote host this plan does not include is non-connectable, so its row is
- * inert exactly as it is in the terminal and workspace pickers, and Sweep
- * cannot become a side door to one.
- *
- * Mounted only while the popover is OPEN (Radix drops the content otherwise),
- * which is what keeps both `useHostOptions`'s liveness cadence and the per-row
- * count reads off every surface that can open a Sweep.
- */
+/** Mounted only while the popover is open (Radix drops the content otherwise), which is what keeps both
+ * `useHostOptions`'s liveness cadence and the per-row count reads off every surface that can open a Sweep. */
 export function SweepHostList(props: {
   readonly rows: readonly SweepHostPickerRow[];
-  /** The Task(s) whose worktrees each row counts. */
   readonly selectedEpicIds: ReadonlySet<string>;
-  /**
-   * The censused host's count, from the dialog's own proof - it is not asked
-   * again. `null` while there is no settled census to count.
-   */
+  /** `null` while there is no settled census to count. */
   readonly currentHostCount: number | null;
   readonly isLoading: boolean;
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
   readonly onPick: (hostId: string) => void;
 }): ReactNode {
-  // This list renders liveness (an offline row is the whole reason a dead host
-  // stays listed), so it opts into the registry's liveness cadence the same way
-  // the workspace picker does - and only for as long as it is on screen.
+  // This list renders liveness (an offline row is the whole reason a dead host stays listed), so it opts into
+  // the registry's liveness cadence the same way the workspace picker does.
   useRegisteredHostsPollLiveness();
   return (
     <div
@@ -155,17 +130,7 @@ function SweepHostOption(props: {
   readonly onPick: (hostId: string) => void;
 }): ReactNode {
   const { row } = props;
-  // Whether this host's client can actually be BUILT, asked per row and by the
-  // same seam the flow resolves the pick through.
-  //
-  // `connectable` is a fact about the DIRECTORY - a dialable endpoint - and it
-  // stays true when the client cannot be built for a reason that has nothing to
-  // do with the route: `buildTransientHostClient` also answers `null` with no
-  // request context or no bound user, which is the whole fleet at once, not one
-  // machine. Judging the row on `connectable` alone therefore left an enabled
-  // row whose every click re-entered the same unresolved pick, silently and
-  // without saying why. Asking here means the refusal lands ON the row that
-  // cannot serve, before a click rather than after it.
+  // Asking here means the refusal lands ON the row that cannot serve, before a click rather than after it.
   const rowClient = useHostClientForHostId(row.host.hostId);
   const surfaceState: HostRowSurfaceState =
     rowClient === null
@@ -174,9 +139,8 @@ function SweepHostOption(props: {
   // The SAME predicate every other picker container asks, so a row that
   // explains why it cannot be picked is also a row that cannot be picked.
   const selectable = isHostOptionSelectable(row.host, "pin", surfaceState);
-  // The censused host is not asked again - the dialog's own proof already
-  // counted it. Every other dialable row is asked once, here, while the
-  // popover is open; an inert row is never asked at all.
+  // The censused host is not asked again - the dialog's own proof already counted it. Every other dialable row
+  // is asked once, here, while the popover is open; an inert row is never asked at all.
   const askedCount = useEpicSweepHostWorktreeCount({
     client: rowClient,
     selectedEpicIds: props.selectedEpicIds,
@@ -203,12 +167,8 @@ function SweepHostOption(props: {
           row.isDefault && "bg-foreground/5",
         )}
       >
-        {/* `updateView` is the shared row's opt-IN badge channel, and Sweep is
-            one of the pickers that deliberately opts out: it holds no observed
-            fleet-update view, and the row's contract forbids fabricating one.
-            An update badge here would also answer a question this step does
-            not ask - which machine holds the worktrees, not which needs
-            updating. */}
+        {/* An update badge here would also answer a question this step does not ask - which machine holds the
+           worktrees, not which needs updating. */}
         <HostOptionRow
           host={row.host}
           picked={row.isDefault}

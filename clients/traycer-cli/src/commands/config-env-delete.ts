@@ -3,9 +3,7 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 import { deleteEnvOverride } from "../store/config-store";
 
 // Runner-aware `traycer config env delete --key KEY` (host-process scope).
-// JSON mode emits a single terminal `result` event; human mode prints
-// `deleted KEY` on success. Deleting an absent key is a `CONFIG_MISSING_KEY`
-// error so callers can disambiguate it from a successful delete.
+// JSON mode emits a single terminal `result` event; human mode prints `deleted KEY` on success.
 export interface ConfigEnvDeleteArgs {
   readonly key: string;
 }

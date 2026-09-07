@@ -6,12 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ProviderProfileLoginFlowCodePaste } from "./use-provider-profile-login-flow";
 
-/**
- * Auto-restart notice, shared verbatim by the add-profile dialog, the
- * Settings reauth panel, and the in-chat banner's waiting step - rendered
- * at the top of the step (visual-flow fixup: it previously sat squeezed
- * between the paste field's label and its input, easy to miss).
- */
 export function CodePasteRestartNotice({
   message,
 }: {
@@ -29,9 +23,8 @@ export function CodePasteRestartNotice({
  *  paste-code UI (code-paste decision log's "Secrecy" row). */
 const MASK_VISIBLE_SUFFIX_LENGTH = 4;
 
-/** Mirrors the CLI's own client-side check (code-paste decision log's
- *  "Client-side validation" row): trimmed text must contain `#` with
- *  non-empty parts on both sides. */
+/** Mirrors the CLI's own client-side check (code-paste decision log's "Client-side validation" row): trimmed
+ * text must contain `#` with non-empty parts on both sides. */
 function isValidPastedCode(code: string): boolean {
   const hashIndex = code.indexOf("#");
   return hashIndex > 0 && hashIndex < code.length - 1;
@@ -42,26 +35,12 @@ function maskCode(code: string): string {
   return "•".repeat(Math.max(code.length - visible.length, 0)) + visible;
 }
 
-// The relay RPC surfaces `HostRpcError`s from the transport/host layer
-// (connection drops, timeouts) - none of that is actionable detail for a
-// user pasting a sign-in code, so one friendly line covers all of it,
-// keeping the surface inline-only per gui-app AGENTS.md's error-mapping rule.
+// Transport errors collapse to one inline line; no toast.
 const SUBMIT_ERROR_MESSAGE =
   "Couldn't send the code to the sign-in process. Try again.";
 
-/**
- * Always-visible paste field rendered inside the shared waiting step when
- * the provider's `codePaste` capability is present.
- *
- * Locking is derived from `codePaste.phase`, which is itself derived from the
- * submit mutation within the active waiting attempt. The field locks and masks
- * while the action owns the attempt, then unlocks if the relay fails so the
- * same code can be retried. `lastSubmittedCode` only records what to mask.
- *
- * The raw code never leaves this component except through
- * `codePaste.submit` - it is not logged and does not appear in the masked
- * display once locked.
- */
+/** The raw code never leaves this component except through `codePaste.submit` - it is not logged and does not
+ * appear in the masked display once locked. */
 export function CodePasteField({
   codePaste,
   disabled,
@@ -78,9 +57,8 @@ export function CodePasteField({
   const [lastSubmittedCode, setLastSubmittedCode] = useState<string | null>(
     null,
   );
-  // Synchronous event guard: mutation state updates on the next render, so a
-  // paste immediately followed by Enter must still be unable to submit twice.
-  // An RPC error explicitly reopens the guard for a retry.
+  // Synchronous event guard: mutation state updates on the next render, so a paste immediately followed by Enter
+  // must still be unable to submit twice.
   const submitStartedRef = useRef(false);
 
   const locked =
@@ -93,19 +71,15 @@ export function CodePasteField({
       ? maskCode(lastSubmittedCode)
       : rawCode;
 
-  // A failed relay reopens the synchronous event gate only after React has
-  // committed the unlocked error state. During the next paste event the stale
-  // error prop may still be visible to event closures, but the ref is set back
-  // to true before any same-tick Enter event can run.
+  // A failed relay reopens the synchronous event gate only after React has committed the unlocked error state.
   useEffect(() => {
     if (codePaste.submitError !== null && !locked) {
       submitStartedRef.current = false;
     }
   }, [codePaste.submitError, locked]);
 
-  // Idempotent under disabled/locked so a stray Enter (or a paste racing an
-  // already-in-flight submit) can never re-submit or resubmit a code that
-  // already went out.
+  // Idempotent under disabled/locked so a stray Enter (or a paste racing an already-in-flight submit) can never
+  // re-submit or resubmit a code that already went out.
   const submit = (code: string): void => {
     if (disabled || locked) return;
     if (submitStartedRef.current) return;

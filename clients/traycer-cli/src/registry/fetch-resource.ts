@@ -4,78 +4,35 @@ import { fileURLToPath } from "node:url";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { hashFileSha256 } from "../installer/sha256";
 
-// Tiny resource fetcher used by the registry client. Supports the two
-// schemes the manifest URLs are allowed to use:
-//
-//   - `https://...` / `http://...` - Node's built-in `fetch`.
-//   - `file://...` - local filesystem reads, used by test fixtures and
-//                    by the smoke-test publishing script which exercises
-//                    the same client against a local staging dir.
-//
-// Failures (network, non-2xx, missing file) surface as
-// REGISTRY_UNAVAILABLE so the caller can decide whether to escalate
-// (explicit CLI command) or swallow (background launch-time check -
-// landed in NP-5/NP-6, contract reserved here).
-//
-// `fetchText` is used for `versions.json` and `.minisig` files (both
-// small). `downloadToFile` streams arbitrarily-large archives to disk
-// with progress callbacks so the install UX can render a live %.
-//
-// Both paths enforce a streaming size cap and abort the underlying
-// fetch the moment the cap is exceeded. This stops a hostile CDN from
-// streaming gigabytes into the user's tmpdir before the post-hoc
-// sha256/size verification has a chance to fail.
+// Registry fetcher. Honor the machine proxy; do not follow redirects off the trusted host.
 
-// Hard cap for `fetchText` payloads (manifests + minisign files). A
-// production versions.json with thousands of entries is well under
-// 1MB, and minisign signature files are <1KB; anything larger is a
-// red flag.
+// Hard cap for `fetchText` payloads (manifests + minisign files).
+// A production versions.json with thousands of entries is well under 1MB, and minisign signature files are <1KB; anything larger is a red flag.
 const FETCH_TEXT_MAX_BYTES = 1024 * 1024;
 
-// Small absolute slack added on top of `expectedSizeBytes` when
-// streaming an archive to disk. Lets implementations append a few
-// trailing bytes (e.g. a final \r\n on the wire) without aborting,
-// while still capping a hostile run-on stream.
+// Small absolute slack added on top of `expectedSizeBytes` when streaming an archive to disk.
+// Lets implementations append a few trailing bytes (e.g. a final \r\n on the wire) without aborting, while still capping a hostile run-on stream.
 const DOWNLOAD_SIZE_SLACK_BYTES = 1024;
 
-// A download can be large, but a healthy connection should still produce a
-// byte regularly. Keeping this well below Desktop's inactivity policy lets the
-// CLI emit a bounded registry failure instead of being SIGKILLed first.
+// A download can be large, but a healthy connection should still produce a byte regularly.
+// Keeping this well below Desktop's inactivity policy lets the CLI emit a bounded registry failure instead of being SIGKILLed first.
 const DOWNLOAD_WATCHDOG_MS = 30_000;
 const FETCH_TEXT_WATCHDOG_MS = 10_000;
-// Unlike an archive, registry text is always small. Cap a whole attempt so a
-// peer that drips one byte just inside the gap watchdog cannot hold the
-// Desktop's progress-inactivity timer forever.
+// Unlike an archive, registry text is always small.
+// Cap a whole attempt so a peer that drips one byte just inside the gap watchdog cannot hold the Desktop's progress-inactivity timer forever.
 const FETCH_TEXT_ATTEMPT_CAP_MS = 20_000;
 const MAX_NETWORK_ATTEMPTS = 4;
 const NETWORK_RETRY_BACKOFF_MS = 750;
 
-// Archive downloads get their own budget, separate from `fetchText`'s
-// small-payload one (traycer#585/#588). On a throttled link the connection
-// is reset every few MB, so a flat 4-attempt cap gives up after ~20MB of a
-// 700MB archive even though every attempt made real progress.
-//
-// What terminates a download is therefore the CONSECUTIVE-STALL count, not
-// the attempt count: an attempt that appended bytes to the partial file
-// resets it, so a reset-prone-but-advancing link keeps going while a
-// genuinely dead endpoint still fails within seconds. `MAX_DOWNLOAD_
-// ATTEMPTS` is only a runaway guard for a peer that dribbles a byte per
-// attempt - it is not the budget that is expected to bind.
+// Archive downloads get their own budget, separate from `fetchText`'s small-payload one (traycer#585/#588).
+// On a throttled link the connection is reset every few MB, so a flat 4-attempt cap gives up after ~20MB of a 700MB archive even though every attempt made real progress.
 const MAX_DOWNLOAD_ATTEMPTS = 200;
 const MAX_DOWNLOAD_STALL_ATTEMPTS = 6;
-// A restart discards every byte on disk, so it is the one event the stall
-// budget cannot police - it resets the yardstick progress is measured
-// against. Bounded separately: a healthy origin restarts a resume at most
-// once or twice (one edge in a CDN ignoring `Range`), while an origin whose
-// entity simply does not match the manifest restarts on every single
-// attempt and must not be allowed to re-transfer the archive indefinitely.
+// A restart discards every byte on disk, so it is the one event the stall budget cannot police - it resets the yardstick progress is measured against.
+// Bounded separately: a healthy origin restarts a resume at most once or twice (one edge in a CDN ignoring `Range`), while an origin whose entity simply does not match the manifest restarts on every single attempt and must not be allowed to re-transfer the archive indefinitely.
 const MAX_DOWNLOAD_RESTARTS = 3;
-// Backoff grows only while the download is STALLED (750ms, 1.5s, 3s, 6s,
-// 12s, capped) - an ISP that resets connections once a data threshold is
-// crossed needs a pause to recover, and hammering it every 750ms just
-// re-enters the same throttling window. An attempt that transferred bytes
-// resets the exponent with it, so an occasional reset on an otherwise
-// healthy link never pays more than the base delay.
+// Backoff grows only while the download is STALLED (750ms, 1.5s, 3s, 6s, 12s, capped) - an ISP that resets connections once a data threshold is crossed needs a pause to recover, and hammering it every 750ms just re-enters the same throttling window.
+// An attempt that transferred bytes resets the exponent with it, so an occasional reset on an otherwise healthy link never pays more than the base delay.
 const DOWNLOAD_RETRY_BACKOFF_CAP_MS = 15_000;
 
 interface DrainableWriter {
@@ -97,14 +54,8 @@ export interface FetchOptions {
 export interface NetworkHeartbeat {
   readonly phase: "attempt" | "watchdog" | "backoff";
   readonly attempt: number;
-  // The ceiling this attempt counter is actually judged against, or `null`
-  // when the counter has no meaningful ceiling to show. `fetchText` reports
-  // a real budget (4 attempts and the payload is abandoned). An archive
-  // download does not: what terminates it is the consecutive-stall count,
-  // while `MAX_DOWNLOAD_ATTEMPTS` is only a runaway guard set far above any
-  // real transfer. Rendering "attempt 41/200" there describes a countdown
-  // that does not exist - the download would survive 200 more resets as
-  // long as each one moved bytes.
+  // The ceiling this attempt counter is actually judged against, or `null` when the counter has no meaningful ceiling to show.
+  // `fetchText` reports a real budget (4 attempts and the payload is abandoned).
   readonly maxAttempts: number | null;
 }
 
@@ -185,9 +136,7 @@ export async function fetchText(
     } catch (err) {
       controller.abort();
       if (isCliError(err)) throw err;
-      // A caller-supplied abort signal is a deliberate cancellation (e.g. the
-      // yank lookup's fail-open watchdog), not a transient network failure:
-      // stop immediately instead of burning the remaining retry budget.
+      // A caller-supplied abort signal is a deliberate cancellation (e.g. the yank lookup's fail-open watchdog), not a transient network failure: stop immediately instead of burning the remaining retry budget.
       if (opts.signal !== null && opts.signal.aborted) {
         throw networkError(url, err);
       }
@@ -260,41 +209,17 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
   let lastError: unknown = null;
   let stalledAttempts = 0;
   let attempt = 1;
-  // The most bytes on disk since the last restart. Progress is judged
-  // against this high-water mark rather than against the attempt's own
-  // starting offset, so re-reading ground the download has already covered
-  // is correctly not progress: without that, an origin whose entity is
-  // shorter than the manifest declares oscillates forever - transfer the
-  // short body (looks like progress), Range past the end, 416, restart,
-  // transfer it again - resetting the stall counter every other attempt and
-  // running the full runaway guard on ~100 complete re-transfers.
-  //
-  // It is reset by a restart, and must be: a restart deletes the partial, so
-  // the mark would otherwise describe bytes that no longer exist and every
-  // subsequent attempt would be measured against a total it cannot reach.
-  // A 700MB resume that meets one Range-ignoring proxy would then give up
-  // inside six attempts while genuinely transferring on every one of them.
-  // `MAX_DOWNLOAD_RESTARTS` is what bounds the oscillation instead.
+  // The most bytes on disk since the last restart.
+  // Progress is judged against this high-water mark rather than against the attempt's own starting offset, so re-reading ground the download has already covered is correctly not progress: without that, an origin whose entity is shorter than the manifest declares oscillates forever - transfer the short body (looks like progress), Range past the end, 416, restart, transfer it again - resetting the stall counter every other attempt and running the full runaway guard on ~100 complete re-transfers.
   let bytesHighWaterMark = await partialSize(opts.destPath);
   let restarts = 0;
   for (; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
-    // No pre-flight restart: a partial file left by a PREVIOUS process is
-    // exactly what we want to resume, and this process has no validator for
-    // it yet. `downloadAttempt` puts the offset on the wire as a Range and
-    // handles every answer the server can give (206 resume, 416 already
-    // complete, 200 range-ignored -> restart), which is what makes the
-    // validator-less resume safe.
+    // No pre-flight restart: a partial file left by a PREVIOUS process is exactly what we want to resume, and this process has no validator for it yet.
+    // `downloadAttempt` puts the offset on the wire as a Range and handles every answer the server can give (206 resume, 416 already complete, 200 range-ignored -> restart), which is what makes the validator-less resume safe.
     const offset = await partialSize(opts.destPath);
     emitHeartbeat(opts.onHeartbeat, "attempt", attempt, null);
-    // Publish the starting point BEFORE the request goes out. A resumed
-    // process otherwise reports nothing until the first byte of the new
-    // attempt lands, so Desktop - whose carry-forward has no prior value in
-    // a fresh process - renders no progress bar at all while a 400MB partial
-    // sits on disk. On a stalling link that silence lasts a watchdog period
-    // per attempt, which is exactly the "it starts over every time" the
-    // resume work is meant to disprove. Emitted on every attempt, not just
-    // resumes, so a `restartFromZero` reports its rewind immediately instead
-    // of holding a stale percentage until the next chunk arrives.
+    // Publish the starting point BEFORE the request goes out.
+    // A resumed process otherwise reports nothing until the first byte of the new attempt lands, so Desktop - whose carry-forward has no prior value in a fresh process - renders no progress bar at all while a 400MB partial sits on disk.
     opts.onProgress({
       downloadedBytes: offset,
       totalBytes: opts.expectedSizeBytes,
@@ -331,11 +256,8 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
     emitHeartbeat(opts.onHeartbeat, "backoff", attempt, null);
     await waitForRetry(downloadRetryBackoffMs(stalledAttempts));
   }
-  // The partial file deliberately SURVIVES an exhausted budget: the next
-  // invocation resumes it from `destPath` (registry/download-cache.ts keeps
-  // that path stable across processes). Only positively-bad bytes get
-  // discarded - a size-cap abort above, or the sha256 mismatch in
-  // `downloadToFile`.
+  // The partial file deliberately SURVIVES an exhausted budget: the next invocation resumes it from `destPath` (registry/download-cache.ts keeps that path stable across processes).
+  // Only positively-bad bytes get discarded - a size-cap abort above, or the sha256 mismatch in `downloadToFile`.
   throw exhaustedNetworkError(
     opts.url,
     lastError,
@@ -344,9 +266,7 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
 }
 
 function downloadRetryBackoffMs(stalledAttempts: number): number {
-  // Zero stalls (the attempt transferred bytes) and the first stall both
-  // pay only the base delay; the exponent starts climbing from the second
-  // consecutive stall.
+  // Zero stalls (the attempt transferred bytes) and the first stall both pay only the base delay; the exponent starts climbing from the second consecutive stall.
   const exponential =
     NETWORK_RETRY_BACKOFF_MS * 2 ** Math.max(0, stalledAttempts - 1);
   return Math.min(exponential, DOWNLOAD_RETRY_BACKOFF_CAP_MS);
@@ -369,12 +289,8 @@ async function downloadAttempt(
   const headers = new Headers();
   if (resuming) {
     headers.set("Range", `bytes=${offset}-`);
-    // `If-Range` only when this process has seen the entity itself. Without
-    // it the server may answer a Range against a DIFFERENT entity than the
-    // partial bytes came from - so the 206 branch below refuses any
-    // Content-Range whose total is not the manifest's declared size, and
-    // the sha256 check in `downloadToFile` is the final backstop for a
-    // replacement entity of identical length.
+    // `If-Range` only when this process has seen the entity itself.
+    // Without it the server may answer a Range against a DIFFERENT entity than the partial bytes came from - so the 206 branch below refuses any Content-Range whose total is not the manifest's declared size, and the sha256 check in `downloadToFile` is the final backstop for a replacement entity of identical length.
     if (state.entityValidator !== null) {
       headers.set("If-Range", state.entityValidator);
     }
@@ -474,19 +390,8 @@ async function downloadAttempt(
       }
       await finishWriter(writer);
       if (downloadedBytes < opts.expectedSizeBytes) {
-        // The body ended early. Most runtimes raise a stream error for a
-        // truncated response, but not all of them do for every truncation
-        // shape - bun's fetch reports some mid-body connection drops as a
-        // clean end-of-stream, and a response without a usable length can
-        // end short on any runtime. Treating "the reader said done" as
-        // proof of a finished transfer is what turned a resumable network
-        // failure into a terminal `HOST_VERIFY_FAILED` on the size check,
-        // burning the partial with it (traycer#585's "downloaded 231 MB of
-        // 721 MB before failure").
-        //
-        // Failing here instead keeps this a plain transfer error: the bytes
-        // that did land stay on disk and the next attempt resumes from
-        // them.
+        // The body ended early.
+        // Most runtimes raise a stream error for a truncated response, but not all of them do for every truncation shape - bun's fetch reports some mid-body connection drops as a clean end-of-stream, and a response without a usable length can end short on any runtime.
         throw new Error(
           `host registry: ${opts.url} ended after ${downloadedBytes} of ${opts.expectedSizeBytes} bytes`,
         );
@@ -582,18 +487,7 @@ async function waitForRetry(delayMs: number): Promise<void> {
   });
 }
 
-/**
- * Build the error for a non-2xx registry response, releasing its body first.
- *
- * The cancel is not tidiness. An un-consumed, un-cancelled body leaves the
- * undici request RUNNING, and the CLI's exit path calls `Agent.close()`, which
- * waits for running requests and has no timeout of its own. A CDN that answers
- * `503` with a partial body and then goes quiet would therefore park the whole
- * process in teardown - the command has already produced its terminal error
- * envelope, so it would look like a hang after a completed run (int#4840).
- *
- * Async for that reason alone; call it as `throw await httpStatusFailure(...)`.
- */
+/** Build the error for a non-2xx registry response, releasing its body first. The cancel is not tidiness. */
 async function httpStatusFailure(
   url: string,
   response: Response,
@@ -651,9 +545,8 @@ async function restartFromZero(
   state: DownloadState,
 ): Promise<void> {
   await discardPartial(path);
-  // A fresh start must not carry a validator from an entity whose partial
-  // bytes have just been discarded. The next successful response captures a
-  // new validator before any later Range request is constructed.
+  // A fresh start must not carry a validator from an entity whose partial bytes have just been discarded.
+  // The next successful response captures a new validator before any later Range request is constructed.
   state.entityValidator = null;
   state.sawFirstSuccessfulResponse = false;
 }
@@ -710,9 +603,8 @@ async function closeWriter(writer: WriteStream): Promise<void> {
       resolve();
     };
     const onError = (): void => {
-      // A writer-side failure cannot be flushed. Destroy it only in that
-      // case; normal retryable network failures must use end() so bytes that
-      // write() already accepted are visible to the next attempt's stat.
+      // A writer-side failure cannot be flushed.
+      // Destroy it only in that case; normal retryable network failures must use end() so bytes that write() already accepted are visible to the next attempt's stat.
       writer.destroy();
     };
     writer.once("close", onClose);
@@ -856,9 +748,8 @@ function oversizeError(url: string, received: number, cap: number): Error {
   });
 }
 
-// Wire a caller-provided AbortSignal so triggering it also aborts the
-// internal controller (which is what cancels in-flight reads). Returns
-// the controller's own signal - that's what we pass into `fetch`.
+// Wire a caller-provided AbortSignal so triggering it also aborts the internal controller (which is what cancels in-flight reads).
+// Returns the controller's own signal - that's what we pass into `fetch`.
 function linkAbortSignals(
   internal: AbortController,
   external: AbortSignal | null,

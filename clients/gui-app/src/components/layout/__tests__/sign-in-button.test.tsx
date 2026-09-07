@@ -197,12 +197,7 @@ function mountSignInButton<H extends IRunnerHost>(
       return authService;
     },
     waitForAuthService: async () => {
-      // `CaptureAuthService`'s effect runs as its own passive-effect flush,
-      // separate from the state update that clears `runtime-fallback` - a
-      // `waitFor` on the fallback disappearing can resolve (via the DOM
-      // MutationObserver microtask) before this sibling effect has committed.
-      // Wait on the capture itself instead of assuming the fallback check
-      // implies it.
+      // Wait on the capture itself instead of assuming the fallback check implies it.
       await waitFor(() => {
         if (authService === null) {
           throw new Error("AuthService was not captured");
@@ -264,11 +259,8 @@ function CaptureAuthService(props: {
   return null;
 }
 
-/**
- * A link code can be handed to the app by the OS at any moment — including
- * ones where this surface does not exist. What happens then is a decision, not
- * a rendering concern, so it is asserted as one.
- */
+/** A link code can be handed to the app by the OS at any moment - including ones where this surface does not
+ * exist. What happens then is a decision, not a rendering concern, so it is asserted as one. */
 describe("routing a link code the OS delivered", () => {
   it("redeems only when signed out", () => {
     expect(decideDeepLinkRouting("signed-out")).toBe("redeem");
@@ -288,10 +280,7 @@ describe("routing a link code the OS delivered", () => {
 });
 
 describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
-  // The immutable Capacitor product flag, never the viewport: a narrow
-  // desktop window is still a desktop, and a desktop offering to scan a QR
-  // from itself is a nonsense affordance (and would mint a `mobile` session
-  // for a non-mobile shell).
+  // The immutable Capacitor product flag, never the viewport.
   let restoreFetch: () => void = () => undefined;
 
   beforeEach(() => {
@@ -309,10 +298,7 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     restoreFetch();
   });
 
-  /**
-   * A code the SYSTEM camera delivered, with the claim under this test's
-   * control. `emitCode` is the OS handing the app a scanned QR.
-   */
+  /** A code the system camera delivered, with the claim under this test's control. */
   function deepLinkHost(): {
     readonly host: IRunnerHost;
     readonly emitCode: (code: string) => void;
@@ -334,9 +320,8 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     });
     return {
       host,
-      // Each call is a distinct arrival, exactly as the shell reports them -
-      // including a repeat of a code already delivered, which is what a
-      // deliberate rescan looks like from here.
+      // Each call is a distinct arrival, exactly as the shell reports them - including a repeat of a code already
+      // delivered, which is what a deliberate rescan looks like from here.
       emitCode: (code: string) => {
         const subscriber = sink.subscriber;
         if (subscriber === null) {
@@ -348,20 +333,14 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     };
   }
 
-  /**
-   * The control's own disabled state, not the attribute's presence: the
-   * property is what the browser consults when the user taps, and the two
-   * diverge for anything that sets `disabled` through the DOM property.
-   */
+  /** The control's own disabled state, not the attribute's presence: the property is what the browser consults
+   * when the user taps, and the two diverge for anything that sets `disabled` through the DOM property. */
   function isDisabled(testId: string): boolean {
     return screen.getByTestId<HTMLButtonElement>(testId).disabled;
   }
 
   it("locks the in-app scan while a camera-launched claim is still outstanding", async () => {
-    // The race the gate closes: the claim POST is in flight, so nothing has
-    // published poll progress yet. A tap on the still-live Scan button would
-    // start a second attempt that SUPERSEDES the camera-launched one, whose
-    // failure then lands under the replacement's wait.
+    // The race the gate closes: the claim POST is in flight, so nothing has published poll progress yet.
     setMobileApp(true);
     const outstanding = installFetch(
       () => new Promise<Response>(() => undefined),
@@ -380,26 +359,21 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     await waitFor(() => {
       expect(isDisabled("link-code-signin-open")).toBe(true);
     });
-    // Every way of starting a SECOND attempt is closed while the claim runs:
-    // the manual-entry link (opening it would offer a form with nothing useful
-    // to type - no approver surface shows a code mid-claim) and the browser
-    // device flow beneath it, whose `signIn()` would supersede the claim.
+    // Every way of starting a second attempt is closed while the claim runs: the manual-entry link (opening it
+    // would offer a form with nothing useful to type.
     expect(isDisabled("link-code-signin-manual")).toBe(true);
     expect(isDisabled("signin-button")).toBe(true);
     expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
-    // Retry is the device flow's escape hatch from a stalled browser round
-    // trip. Offering it here offers to throw away a claim the user's desktop
-    // is prompting them to approve: `signIn()` is re-entrant, so tapping it
-    // would supersede the camera-launched attempt.
+    // Offering it here offers to throw away a claim the user's desktop is prompting them to approve: `signIn` is
+    // re-entrant, so tapping it would supersede the camera-launched attempt.
     expect(screen.queryByTestId("signin-retry-link")).toBeNull();
     outstanding();
     mobile.cleanupClient();
   });
 
   it("locks the compact header's text entry while a camera-launched claim is outstanding", async () => {
-    // The `link` presentation's only control is the line that expands into
-    // the typed-code form; it is the manual-entry link of the compact header
-    // and closes for the same reason.
+    // The `link` presentation's only control is the line that expands into the typed-code form; it is the
+    // manual-entry link of the compact header and closes for the same reason.
     setMobileApp(true);
     const outstanding = installFetch(
       () => new Promise<Response>(() => undefined),
@@ -421,10 +395,8 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   });
 
   it("keeps a superseded camera claim silent under whatever replaced it", async () => {
-    // The claim settles only AFTER a newer attempt has taken the surface. Its
-    // result is `superseded`, not a failure, and must not surface at all - a
-    // discarded attempt's complaint under the successor's progress describes a
-    // request nobody is waiting on.
+    // Its result is `superseded`, not a failure, and must not surface at all - a discarded attempt's complaint
+    // under the successor's progress describes a request nobody is waiting on.
     setMobileApp(true);
     const claimSettles: { resolve: (() => void) | null } = { resolve: null };
     const gated = installFetch(
@@ -461,9 +433,8 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   });
 
   it("claims a rescan of the same code the shell chose to redeliver", async () => {
-    // Scan while signed in (refused with a notice), sign out, rescan the same
-    // still-live QR. The shell judged that second arrival intentional; a guard
-    // here keyed on the code value would silently swallow it.
+    // Scan while signed in (refused with a notice), sign out, rescan the same still-live QR. The shell judged that
+    // second arrival intentional; a guard here keyed on the code value would silently swallow it.
     setMobileApp(true);
     const claimed: string[] = [];
     const observing = installFetch((url) => {
@@ -508,9 +479,6 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   });
 
   it("explains a failed camera claim once, not twice", async () => {
-    // The precise reason and the generic "Sign-in failed - please try again"
-    // used to render together on the same screen; for an expired code the
-    // generic one is advice that cannot work.
     setMobileApp(true);
     const rejected = installFetch(() =>
       Promise.resolve(new Response(null, { status: 401 })),
@@ -553,10 +521,8 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   });
 
   it("speaks the real reason a camera-scanned code failed", async () => {
-    // The deep-link path is where a DEAD code is most likely: one live code
-    // per account means a re-mint kills the QR still on the desktop screen.
-    // "Try again" would be advice that cannot work, so the surface renders the
-    // same precise copy an in-app scan gets.
+    // "Try again" would be advice that cannot work, so the surface renders the same precise copy an in-app scan
+    // gets.
     setMobileApp(true);
     useLinkLoginDeepLinkOutcomeStore.getState().report("invalid-code");
     const mobile = mountSignInButton(buildHost(), "hero");
@@ -568,11 +534,8 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   });
 
   it("shows the claim's match code through manual entry until the desktop decides", async () => {
-    // Composed, not the leaf: the code travels claim response → AuthService
-    // poll progress → subscription → wait block, and every hop is real here;
-    // only the HTTP boundary is scripted. Settled by a rejection so the
-    // whole wait is observed end to end without the token-application
-    // machinery, which is exercised elsewhere.
+    // Composed, not the leaf: the code travels claim response → AuthService poll progress → subscription → wait
+    // block, and every hop is real here; only the HTTP boundary is scripted.
     setMobileApp(true);
     const tokenPolls = { count: 0 };
     const scripted = installFetch((url) => {
@@ -616,9 +579,8 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     });
     fireEvent.click(screen.getByTestId("link-code-signin-submit"));
 
-    // The code is up from the first countdown, with the standing instruction
-    // beside it — an older desktop shows no code, so the instruction never
-    // conditions approval on a match.
+    // The code is up from the first countdown, with the standing instruction beside it - an older desktop shows no
+    // code, so the instruction never conditions approval on a match.
     await waitFor(() => {
       expect(
         screen.getByTestId("link-code-signin-match-code").textContent,
@@ -630,8 +592,8 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
       "If your computer asks, it should show this code.",
     );
 
-    // Still up across a pending poll (the loop republishes progress every
-    // interval), then gone with the decision — nothing retains it.
+    // Still up across a pending poll (the loop republishes progress every interval), then gone with the decision -
+    // nothing retains it.
     await waitFor(
       () => {
         expect(tokenPolls.count).toBeGreaterThanOrEqual(1);
@@ -660,7 +622,7 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     const scan = screen.getByTestId("link-code-signin-open");
     const signIn = screen.getByTestId("signin-button");
     expect(scan.textContent).toContain("Scan QR code");
-    // Scan is the emphasized action and renders ABOVE the device-flow button.
+    // Scan is the emphasized action and renders above the device-flow button.
     expect(
       scan.compareDocumentPosition(signIn) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -729,9 +691,8 @@ describe("<SignInButton />", () => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
     });
 
-    // Drive a device sign-in whose minted token the pre-installed 401 fetch
-    // makes AuthnV3 reject, which must surface AUTH_ERROR_SIGN_IN_FAILED on the
-    // header sign-in surface via the new copy.
+    // Drive a device sign-in whose minted token the pre-installed 401 fetch makes AuthnV3 reject, which must
+    // surface AUTH_ERROR_SIGN_IN_FAILED on the header sign-in surface via the new copy.
     const auth = await result.waitForAuthService();
     await auth.signIn();
     result.host.deviceFlow.emitResult({
@@ -789,10 +750,7 @@ describe("<SignInButton />", () => {
       ).toBe(true);
     });
     const retry = await screen.findByTestId("signin-retry-link");
-    // `signIn()` restarts the device flow and re-opens the verification page, so
-    // a stalled attempt has an immediate escape hatch. Capturing the count
-    // before the retry proves the click drove a fresh start, not just the
-    // initial sign-in.
+    // Capturing the count before the retry proves the click drove a fresh start, not just the initial sign-in.
     const startCallsBeforeRetry = result.host.deviceFlow.startCalls;
     fireEvent.click(retry);
 
@@ -819,10 +777,8 @@ describe("<SignInButton />", () => {
     );
     const result = mountSignInButton(host, "compact");
 
-    // The HostRuntimeProvider auto-starts the AuthService, which calls
-    // validateToken() against the pre-installed 401 fetch; the stored-token
-    // rehydration path must surface AUTH_ERROR_SESSION_EXPIRED as a toast
-    // rather than keeping a persistent inline error beside the sign-in CTA.
+    // The HostRuntimeProvider auto-starts the AuthService, which calls validateToken against the pre-installed 401
+    // fetch.
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(
         "Session expired - sign in again.",
@@ -834,9 +790,8 @@ describe("<SignInButton />", () => {
   });
 
   it("keeps credentials file when a stored session is rejected (UI-only sign-out)", async () => {
-    // Automatic failure paths never destroy the shared credentials file —
-    // only explicit sign-out does (tech plan §5). CLI seeding is gone; the
-    // file is the single store.
+    // Automatic failure paths never destroy the shared credentials file - only explicit sign-out does (tech plan
+    // §5).
     const host = buildHost();
     await host.tokenStore.signIn(
       {
@@ -853,9 +808,8 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    // UI is signed out but the file is kept so a sibling rotation can recover.
-    // No `authnBaseUrl`: the stored session carries only the token pair and
-    // the cached identity - the origin lives on the host's own config.
+    // No `authnBaseUrl`: the stored session carries only the token pair and the cached identity - the origin lives
+    // on the host's own config.
     expect(await host.tokenStore.get()).toEqual({
       token: "revoked-stored-token",
       refreshToken: "revoked-stored-token-refresh",
@@ -917,9 +871,7 @@ describe("<SignInButton />", () => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
     });
 
-    // The single "Sign in" runs the device flow directly - no separate "use a
-    // code" affordance. Drive it through the button so a broken click handler
-    // fails the test.
+    // The single "Sign in" runs the device flow directly - no separate "use a code" affordance.
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {

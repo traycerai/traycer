@@ -48,10 +48,8 @@ vi.mock("../manifest-url", () => ({
   resolveManifestUrl: () => ({ url: manifestUrlMock.url }),
 }));
 
-// `downloadAndVerify` now stages the archive in the download cache under
-// the host home (registry/download-cache.ts) instead of a throwaway
-// `mkdtemp`. Redirect just that directory into the suite's own tmp root so
-// a test run never touches the developer's real ~/.traycer.
+// `downloadAndVerify` now stages the archive in the download cache under the host home (registry/download-cache.ts) instead of a throwaway `mkdtemp`.
+// Redirect just that directory into the suite's own tmp root so a test run never touches the developer's real ~/.traycer.
 vi.mock("../../store/paths", async () => {
   const actual =
     await vi.importActual<typeof import("../../store/paths")>(
@@ -67,11 +65,8 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
-// Smoke-level test that wires the client end-to-end against a fake
-// transport so we can assert manifest parsing, version resolution,
-// yanked refusal, and platform unavailability without spinning up a
-// real network. The minisign + sha256 chain is exercised by
-// `minisign.test.ts`; here we focus on resolution and error mapping.
+// Smoke-level test that wires the client end-to-end against a fake transport so we can assert manifest parsing, version resolution, yanked refusal, and platform unavailability without spinning up a real network.
+// The minisign + sha256 chain is exercised by `minisign.test.ts`; here we focus on resolution and error mapping.
 
 let tmpRoot: string;
 const faultServers: Server[] = [];
@@ -186,12 +181,7 @@ const MANIFEST_DATA = {
 
 const MANIFEST_BODY = JSON.stringify(MANIFEST_DATA);
 
-/**
- * A manifest whose only entry declares a client floor. Kept separate from
- * `MANIFEST_DATA` rather than added to it: `latest` there is load-bearing for
- * most of this file, and a floored entry alongside it would be resolvable only
- * by explicit version - which is not the path an automatic update takes.
- */
+/** A manifest whose only entry declares a client floor. Kept separate from `MANIFEST_DATA` rather than added to it: `latest` there is load-bearing for most of this file, and a floored entry alongside it would be resolvable only by explicit version - which is not the path an automatic update takes. */
 const FLOORED_MANIFEST_BODY = JSON.stringify({
   ...MANIFEST_DATA,
   latest: "9.0.0",
@@ -385,10 +375,8 @@ describe("registry client", () => {
   });
 
   it("keeps a verified archive when only the signature fetch fails", async () => {
-    // The bytes are complete and already sha256-verified against the
-    // manifest; the sub-1KB `.minisig` fetch is what failed, and it gives up
-    // after four attempts. Deleting a 700MB verified archive over that
-    // reproduced the reported never-finishes loop on a throttled link.
+    // The bytes are complete and already sha256-verified against the manifest; the sub-1KB `.minisig` fetch is what failed, and it gives up after four attempts.
+    // Deleting a 700MB verified archive over that reproduced the reported never-finishes loop on a throttled link.
     let archivePath = "";
     const client = await createRegistryClient({
       environment: "production",
@@ -466,11 +454,8 @@ describe("registry client", () => {
   });
 
   it("quotes an attempt ceiling only when one actually binds", async () => {
-    // `fetchText` gives up after 4 attempts, so "attempt 1/4" is a real
-    // countdown. An archive download is bounded by consecutive stalls
-    // instead - its attempt counter has a runaway guard, not a budget, and
-    // quoting "attempt 1/200" would describe a countdown that is not
-    // running.
+    // `fetchText` gives up after 4 attempts, so "attempt 1/4" is a real countdown.
+    // An archive download is bounded by consecutive stalls instead - its attempt counter has a runaway guard, not a budget, and quoting "attempt 1/200" would describe a countdown that is not running.
     const progress: Array<{ stage: string; message: string }> = [];
     const client = await createRegistryClient({
       environment: "production",
@@ -624,10 +609,8 @@ describe("registry client", () => {
     );
   });
 
-  // The client floor, at the seam that matters: `resolveAsset` is the one
-  // place a host version is selected, and BOTH `install` and `download-stage`
-  // come through it. The unit tests above pin the decision; these pin that the
-  // decision is actually asked, and asked before anything is downloaded.
+  // The client floor, at the seam that matters: `resolveAsset` is the one place a host version is selected, and BOTH `install` and `download-stage` come through it.
+  // The unit tests above pin the decision; these pin that the decision is actually asked, and asked before anything is downloaded.
   it("refuses a version whose client floor this CLI is below", async () => {
     vi.stubEnv("TRAYCER_CLI_VERSION", "1.1.8");
     const client = await createRegistryClient({
@@ -663,10 +646,8 @@ describe("registry client", () => {
     vi.unstubAllEnvs();
   });
 
-  // The named dev exemption, exercised through the real path: with no injected
-  // version the CLI reports `0.0.0-local`, which is below every floor by
-  // SemVer. Refusing it would leave a local build unable to install a floored
-  // host at all.
+  // The named dev exemption, exercised through the real path: with no injected version the CLI reports `0.0.0-local`, which is below every floor by SemVer.
+  // Refusing it would leave a local build unable to install a floored host at all.
   it("waives the floor for an unreleased CLI build", async () => {
     const client = await createRegistryClient({
       environment: "production",
@@ -743,10 +724,8 @@ describe("registry client", () => {
       "darwin-arm64",
     );
     let receivedProgress = false;
-    // downloadAndVerify also runs minisign verify against the URL we
-    // never actually serve - we expect it to fail at the signature
-    // step. Catch that and confirm we got the download progress event
-    // first.
+    // downloadAndVerify also runs minisign verify against the URL we never actually serve - we expect it to fail at the signature step.
+    // Catch that and confirm we got the download progress event first.
     try {
       await client.downloadAndVerify(entry, asset, () => {
         receivedProgress = true;

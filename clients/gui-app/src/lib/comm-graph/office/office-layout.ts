@@ -1,36 +1,6 @@
 /**
- * The office floor plan: a pure function of WHO EXISTS, never a stored
- * coordinate.
- *
- * Same discipline as the graph mode's dagre pass - an agent that is created,
- * archived or reparented would strand a persisted desk, so the plan is
- * recomputed from the agent set instead. That makes ORDER the whole design:
- * the set is walked as families, so a lineage reads left to right along a row
- * and a creator sits at the head of the people it created.
- *
- * HOSTS ARE FLOORS. The set is first split by `hostId`, and each group gets its
- * own storey of the same building: its own wall ring, its own cabins, its own
- * lobby, door, reception and clock. Storeys stack downward sharing one wall row
- * between them, and `walkable` never joins two of them - messaging is
- * host-local, so an agent has nowhere to walk to on another floor. A
- * single-host epic therefore renders exactly the building it always did.
- *
- * NESTING IS WALLS. Every root agent gets its own walled CABIN and its whole
- * subtree sits inside it, so "who is in whose room" is readable at a glance
- * rather than inferred from adjacency. A cabin has a `wall-top` cap, the wall
- * face below it that carries the name sign, side walls, and one walkable door
- * in the bottom wall. Cabins tile left to right into bands on the building
- * floor with a corridor between them, and the building itself is the outer
- * wall ring with an aisle inside it, the entrance centred on the bottom wall
- * and the lobby directly inside that.
- *
- * Desks are laid into a fixed SLOT grid, 5 columns by 3 rows each: a two-tile
- * desk with a chair below its left tile, one tile of plant space that only a
- * manager uses, and a full aisle row underneath so characters can always walk
- * between desk rows and reach any chair from below. Every slot is 5 wide
- * whether or not it holds a plant, because a manager-only widening would make a
- * desk's column depend on how many managers precede it - and then promoting one
- * agent would shuffle the whole floor.
+ * Floor plan is a pure function of who exists, never a stored coordinate.
+ * Hosts are floors (`walkable` never joins them); nesting is cabin walls.
  */
 import type {
   OfficeAgentInput,
@@ -54,8 +24,7 @@ import type {
 const SLOT_COLS = 5;
 const SLOT_ROWS = 3;
 /**
- * A cabin grows toward a square so a big family does not become a corridor,
- * capped at four so no single cabin can outrun the building's band width.
+ * A cabin grows toward a square so a big family does not become a corridor, capped at four so no single cabin can outrun the building's band width.
  */
 const CABIN_MIN_SLOTS_PER_ROW = 1;
 const CABIN_MAX_SLOTS_PER_ROW = 4;
@@ -86,10 +55,8 @@ const POD_STYLES: ReadonlyArray<OfficePodStyle> = [
 ];
 
 /**
- * Where a band wraps. The floor is looked at as a whole, so the limit grows
- * with the population rather than with whichever cabin happens to be widest -
- * a fixed limit would either wrap a small epic pointlessly or let a large one
- * run off the side.
+ * Where a band wraps.
+ * The floor is looked at as a whole, so the limit grows with the population rather than with whichever cabin happens to be widest - a fixed limit would either wrap a small epic pointlessly or let a large one run off the side.
  */
 const MIN_BAND_WIDTH_TILES = 24;
 const BAND_WIDTH_PER_SLOT = 6;
@@ -101,13 +68,8 @@ const BUILDING_FIRST_CONTENT_ROW = 3;
 /** Aisle + wall to the right of the last cabin, as a count past its last index. */
 const BUILDING_RIGHT_MARGIN_TILES = 3;
 /**
- * Corridor + lobby + wall below the lowest band. The corridor is not
- * decoration: a cabin in the last band opens its door onto it.
- *
- * The lobby gets a row of its OWN, below that corridor, because the reception
- * counter stands on it - two tiles of furniture across the only walkable row
- * at the bottom of the building would cut the floor in half, and every walk
- * from a desk to reception would tour the whole storey to get around it.
+ * Corridor + lobby + wall below the lowest band.
+ * The corridor is not decoration: a cabin in the last band opens its door onto it.
  */
 const BUILDING_BOTTOM_MARGIN_TILES = 4;
 /** The cap and the wall face under it, at the top of every storey. */
@@ -131,35 +93,8 @@ const CLOCK_COL_OFFSET = 2;
 const STAIRS_TILES = 2;
 
 /**
- * AMENITIES. Every one is a walled room standing in the columns RESERVED to the
- * right of the cabin bands: a wall ring with a single door, its name on its own
- * wall face, and fixtures inside that the errand engine has somewhere to send
- * people. Their footprint is reserved out of the floor's width (see
- * `buildFloors`) rather than fitted into whatever gap the cabins happen to
- * leave, because a room that sometimes exists is a room the errand engine
- * cannot rely on.
- *
- * WHICH rooms exist, and how big each one is, follows the floor's AGENT COUNT.
- * A break room sized for two is a queue for twenty, and a gym on a floor of one
- * is a corridor with a treadmill in it - so the amenities grow with the
- * population instead of being fixed art that only reads right at one size.
- *
- * Every kind shares one row layout, so no room can drift into looking like a
- * different sort of place and the scene can paint any of them with one ring:
- *
- * ```
- *   row + 0   `wall-top` cap (the garden wears a `planter` hedge instead)
- *   row + 1   wall face: the room's name sign, and anything wall-mounted
- *   row + 2   fixtures standing against the back wall
- *   row + 3   the aisle they are used from, and where two agents end up talking
- *   row + 4   free-standing furniture: tables, benches, armchairs
- *   row + 5   the seats under it, and the way to the door
- *   row + 6   the bottom wall, with the door through it
- * ```
- *
- * A kind that needs fewer rows simply ENDS EARLIER rather than being padded to
- * a common height: rooms are stacked into columns, so a row of padding in one
- * of them costs the storey a row of depth for nothing.
+ * AMENITIES.
+ * Every one is a walled room standing in the columns RESERVED to the right of the cabin bands: a wall ring with a single door, its name on its own wall face, and fixtures inside that the errand engine has somewhere to send people.
  */
 const ROOM_FACE_ROW = 1;
 const ROOM_FIXTURE_ROW = 2;
@@ -171,10 +106,8 @@ const FURNISHED_ROOM_ROWS = ROOM_SEAT_ROW + 2;
 /** A room whose fixtures all stand on the back wall: the aisle is its last row. */
 const SHALLOW_ROOM_ROWS = ROOM_AISLE_ROW + 2;
 /**
- * Narrower than this a room reads as a cupboard, so every kind takes it as a
- * floor whatever its own fixtures came to. It is also exactly what the break
- * room has always been, which is what keeps a small epic's storey the one it
- * has always had.
+ * Narrower than this a room reads as a cupboard, so every kind takes it as a floor whatever its own fixtures came to.
+ * It is also exactly what the break room has always been, which is what keeps a small epic's storey the one it has always had.
  */
 const ROOM_MIN_COLS = 10;
 /** The door goes in the bottom wall, two columns short of the right wall. */
@@ -184,9 +117,7 @@ const AREA_SIGN_COL_OFFSET = 4;
 /** One corridor tile between two rooms, stacked or side by side. */
 const ROOM_GAP_TILES = 1;
 /**
- * Interior columns a storey keeps to the LEFT of its amenity columns, both
- * outer walls included: enough that the lobby, the counter and the way out are
- * never squeezed into the last few tiles of a floor that is all break room.
+ * Interior columns a storey keeps to the LEFT of its amenity columns, both outer walls included: enough that the lobby, the counter and the way out are never squeezed into the last few tiles of a floor that is all break room.
  */
 const AMENITY_MIN_LEFT_COLS = 6;
 /** How many agents a floor needs before each optional room appears. */
@@ -204,9 +135,8 @@ const CAFETERIA_TABLE_COL_OFFSET = 1;
 /** Two clear columns between tables, so the seat row can still be walked. */
 const CAFE_TABLE_PITCH_TILES = 4;
 /**
- * The sofas stand against the break room's back wall, past the vending machine,
- * with their seats on the aisle tiles in front. Two tiles wide like the tables,
- * so each seats a pair rather than one lounger.
+ * The sofas stand against the break room's back wall, past the vending machine, with their seats on the aisle tiles in front.
+ * Two tiles wide like the tables, so each seats a pair rather than one lounger.
  */
 const CAFETERIA_SOFA_COL_OFFSET = 7;
 const SOFA_WIDTH_TILES = 2;
@@ -220,13 +150,8 @@ const CAFE_MIN_SOFAS = 1;
 const CAFE_MAX_SOFAS = 3;
 
 /**
- * The game room. The ping-pong table and the arcade cabinet are always there;
- * the rest arrives as the floor fills up, because a foosball table nobody has a
- * second player for is furniture rather than a game.
- *
- * Its table row packs left to right, each piece with a standing column either
- * side of it: those columns ARE the spots, which is what makes two players face
- * each other across the thing they are playing.
+ * The game room.
+ * The ping-pong table and the arcade cabinet are always there; the rest arrives as the floor fills up, because a foosball table nobody has a second player for is furniture rather than a game.
  */
 const GAME_FOOSBALL_MIN_AGENTS = 4;
 const GAME_CHESS_MIN_AGENTS = 8;
@@ -290,10 +215,8 @@ const CORNER_COFFEE_COL_OFFSET = 3;
 const CORNER_COOLER_COL_OFFSET = 5;
 
 /**
- * The waste bin, in the manager desk's own slot: the spare column past the
- * plant, on the desk row. Deliberately NOT the cabin's left aisle column -
- * that column is how a character gets between slot rows, and a bin standing in
- * it would wall a cabin's lower desks off from its door.
+ * The waste bin, in the manager desk's own slot: the spare column past the plant, on the desk row.
+ * Deliberately NOT the cabin's left aisle column - that column is how a character gets between slot rows, and a bin standing in it would wall a cabin's lower desks off from its door.
  */
 const BIN_COL_OFFSET = 3;
 /** The bin's throwing line: the cabin aisle two rows under it, looking up. */
@@ -307,10 +230,8 @@ const MAX_WINDOW_SPOTS = 3;
 // ---- Amenity sizing --------------------------------------------------- //
 
 /**
- * How many of a thing a floor of this size gets: one per `perAgent` heads,
- * never fewer than `low` and never more than `high`. Every amenity count is
- * drawn through this one function so a floor cannot end up with a room that
- * scales on a rule of its own.
+ * How many of a thing a floor of this size gets: one per `perAgent` heads, never fewer than `low` and never more than `high`.
+ * Every amenity count is drawn through this one function so a floor cannot end up with a room that scales on a rule of its own.
  */
 function scaledCount(
   agents: number,
@@ -322,10 +243,8 @@ function scaledCount(
 }
 
 /**
- * The size and contents of one amenity, decided BEFORE anything is placed. The
- * storey's width and depth are reserved from these, and the placement pass
- * reads the same values back - a room that measured itself twice could land
- * outside the wall that was widened for it.
+ * The size and contents of one amenity, decided BEFORE anything is placed.
+ * The storey's width and depth are reserved from these, and the placement pass reads the same values back - a room that measured itself twice could land outside the wall that was widened for it.
  */
 interface AmenitySpecBase {
   readonly kind: OfficeAmenityKind;
@@ -420,9 +339,8 @@ function cafeteriaSpecFor(agents: number): CafeteriaSpec {
 }
 
 /**
- * Where each piece on the game room's table row starts, packed left to right
- * with a standing column either side of every piece. Returned as one shape so
- * the sizing pass and the placement pass can never disagree about the packing.
+ * Where each piece on the game room's table row starts, packed left to right with a standing column either side of every piece.
+ * Returned as one shape so the sizing pass and the placement pass can never disagree about the packing.
  */
 interface GameTableColumns {
   readonly pingpong: number;
@@ -468,10 +386,8 @@ function gameSpecFor(agents: number): GameSpec {
     rows: FURNISHED_ROOM_ROWS,
   };
   const tables = gameTableColumnsOf(sized);
-  // The television is the right-most thing on the wall face and its sofa
-  // stands under it, so the room has to be wide enough for both. Everything
-  // mounted on that wall arrives with a table on the row below, so a room that
-  // has only the cabinet in it is measured on the cabinet.
+  // The television is the right-most thing on the wall face and its sofa stands under it, so the room has to be wide enough for both.
+  // Everything mounted on that wall arrives with a table on the row below, so a room that has only the cabinet in it is measured on the cabinet.
   const lastMounted = sized.chess
     ? GAME_TV_COL_OFFSET + SOFA_WIDTH_TILES - 1
     : GAME_DARTBOARD_COL_OFFSET;
@@ -500,9 +416,7 @@ function napSpecFor(agents: number): NapSpec {
     name: "Nap room",
     bags,
     cols: colsForLastFixture(lastBag),
-    // A clear row under every row of bags, the last of them included: a bag is
-    // walked ONTO, and a row of them backed straight onto the wall would be
-    // reachable only across the bags beside it.
+    // A clear row under every row of bags, the last of them included: a bag is walked ONTO, and a row of them backed straight onto the wall would be reachable only across the bags beside it.
     rows: ROOM_FIXTURE_ROW + bagRows * NAP_BAG_PITCH_TILES + 1,
   };
 }
@@ -594,14 +508,7 @@ function gymSpecFor(agents: number): GymSpec {
   };
 }
 
-/**
- * Which rooms this floor gets, in the order they stack down its columns.
- *
- * The cafeteria, the game room and the library are unconditional: a floor with
- * nowhere to eat, nothing to play and nothing to read is the still office all
- * of this exists to replace. The rest are earned, because a room whose whole
- * point is that several agents use it reads as abandoned on a floor of two.
- */
+/** Which rooms this floor gets, in the order they stack down its columns. */
 function amenitySpecsFor(agents: number): ReadonlyArray<AmenitySpec> {
   const specs: AmenitySpec[] = [cafeteriaSpecFor(agents), gameSpecFor(agents)];
   if (agents >= NAP_MIN_AGENTS) specs.push(napSpecFor(agents));
@@ -633,20 +540,7 @@ function stackedHeight(specs: ReadonlyArray<AmenitySpec>): number {
   return Math.max(0, height - ROOM_GAP_TILES);
 }
 
-/**
- * The shortest column that holds these rooms in at most TWO columns.
- *
- * Two is the cap because past it the building is wider than it is readable, so
- * a storey is DEEPENED to fit its rooms rather than widened again - which costs
- * a small floor some empty corridor along its bottom, and that is the cheaper
- * of the two.
- *
- * Every split of the list into two contiguous runs is tried and the best one
- * wins. Greedy packing at that height can only put MORE rooms in the first
- * column than the winning split did, so whatever is left is a suffix of the
- * split's second run and fits under the same ceiling - which is what makes one
- * measurement here enough for the packer below.
- */
+/** The shortest column that holds these rooms in at most TWO columns. */
 function minColumnHeight(specs: ReadonlyArray<AmenitySpec>): number {
   let best = stackedHeight(specs);
   for (let split = 1; split < specs.length; split += 1) {
@@ -660,16 +554,8 @@ function minColumnHeight(specs: ReadonlyArray<AmenitySpec>): number {
 }
 
 /**
- * Stacks the rooms down the reserved columns, opening a NEW column to the left
- * whenever the next one would run past the storey's last usable row. A column
- * is as wide as its widest room, so a narrow gym does not reserve a break
- * room's width for the whole storey.
- *
- * The FIRST column - the one against the right wall - has its own last row,
- * because the stairwell stands in that corner on a multi-storey building and
- * a room packed down to the corridor would have the stairs cut into its
- * bottom wall. Reserving the rows here is what keeps the two apart; the
- * stairwell is placed later and checks nothing.
+ * Stacks the rooms down the reserved columns, opening a NEW column to the left whenever the next one would run past the storey's last usable row.
+ * A column is as wide as its widest room, so a narrow gym does not reserve a break room's width for the whole storey.
  */
 function packAmenities(
   specs: ReadonlyArray<AmenitySpec>,
@@ -704,26 +590,7 @@ interface Forest {
   >;
 }
 
-/**
- * One agent's subtree, sized as a rectangle.
- *
- * A leaf is one desk slot. An agent with children is a BLOCK: its own slot at
- * the top-left, its children's blocks packed into rows underneath, and enough
- * room around them that the whole thing can be walked. A block whose agent has
- * children becomes a POD when it is placed - drawn with a tinted floor and an
- * outline, so a sub-team reads as a region without the cabin becoming two rooms.
- *
- * Two pieces of slack are what make the packing routable, and neither is
- * decoration:
- *
- * - a GAP ROW after the lead's slot and after every pack row, so the bottom
- *   edge of any child block always touches free floor;
- * - an AISLE COLUMN down the right of every block's interior, so those gap rows
- *   are joined to each other and to the block's own opening.
- *
- * Without them a pod that filled its parent's width would seal off everything
- * below it, and the desks down there would be drawn but unreachable.
- */
+/** One agent's subtree, sized as a rectangle. */
 interface BlockPlan {
   readonly agent: OfficeAgentInput;
   readonly children: ReadonlyArray<BlockPlan>;
@@ -759,9 +626,8 @@ interface FloorBuild {
   /** Row this storey's `wall-top` cap lands on in the finished plan. */
   readonly originRow: number;
   /**
-   * This storey's amenity rooms, already packed into their columns. Carried
-   * rather than recomputed: the width reservation and the placement read the
-   * same answer or a room lands outside the wall that was widened for it.
+   * This storey's amenity rooms, already packed into their columns.
+   * Carried rather than recomputed: the width reservation and the placement read the same answer or a room lands outside the wall that was widened for it.
    */
   readonly amenities: ReadonlyArray<AmenityPlacement>;
 }
@@ -778,8 +644,7 @@ function compareByCreation(
 }
 
 /**
- * An agent whose `parentId` names someone outside the set is a root here - the
- * creator is not on this floor, so there is no cabin to sit inside.
+ * An agent whose `parentId` names someone outside the set is a root here - the creator is not on this floor, so there is no cabin to sit inside.
  */
 function buildForest(agents: ReadonlyArray<OfficeAgentInput>): Forest {
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
@@ -803,13 +668,7 @@ function buildForest(agents: ReadonlyArray<OfficeAgentInput>): Forest {
 }
 
 /**
- * A stable, dependency-free spread over agent ids, for the choices the PLAN
- * makes - which outline a pod wears, which tint it starts on.
- *
- * The same FNV-1a the scene uses for its own per-agent variety, and
- * deliberately a second copy rather than a shared import: the floor plan must
- * not depend on the simulation, and one of the two changing its mixing is not
- * a reason for the other to move every desk.
+ * A stable, dependency-free spread over agent ids, for the choices the PLAN makes - which outline a pod wears, which tint it starts on.
  */
 function hashAgentId(agentId: string): number {
   let hash = 2166136261;
@@ -842,9 +701,8 @@ function packRowsOf(
 }
 
 /**
- * Sizes one agent's subtree from the bottom up. A leaf is a slot; anything else
- * is its own slot plus the rectangle its children pack into, grown toward a
- * square so a large family does not become a corridor.
+ * Sizes one agent's subtree from the bottom up.
+ * A leaf is a slot; anything else is its own slot plus the rectangle its children pack into, grown toward a square so a large family does not become a corridor.
  */
 function blockPlanFor(
   agent: OfficeAgentInput,
@@ -898,14 +756,7 @@ function blockPlanFor(
   };
 }
 
-/**
- * One cabin per root, each holding its whole subtree in depth-first order.
- *
- * Reparenting can leave a cycle in the recorded lineage, which has no root to
- * be reached from. Those agents are claimed afterwards in the same canonical
- * order, each opening its own cabin - an odd floor plan rather than a hang, and
- * still every agent with a desk.
- */
+/** One cabin per root, each holding its whole subtree in depth-first order. */
 function cabinPlans(
   forest: Forest,
   agents: ReadonlyArray<OfficeAgentInput>,
@@ -928,10 +779,8 @@ function cabinPlans(
 }
 
 /**
- * Cabins tile left to right into bands, top-aligned, wrapping when the band
- * would outgrow the floor's width budget. Order is fixed by the plan list, so
- * a later agent joining a family grows that family's cabin without moving any
- * cabin that was already placed before it.
+ * Cabins tile left to right into bands, top-aligned, wrapping when the band would outgrow the floor's width budget.
+ * Order is fixed by the plan list, so a later agent joining a family grows that family's cabin without moving any cabin that was already placed before it.
  */
 function placeCabins(
   plans: ReadonlyArray<CabinPlan>,
@@ -961,14 +810,7 @@ function placeCabins(
   return placed;
 }
 
-/**
- * Agents split into storeys, one per host, in host-id order with the
- * hostless group last.
- *
- * `null` is its OWN group rather than being folded into some arbitrary host:
- * a record that predates host binding is not evidence that it lived on the
- * alphabetically-first machine.
- */
+/** Agents split into storeys, one per host, in host-id order with the hostless group last. */
 function groupByHost(agents: ReadonlyArray<OfficeAgentInput>): ReadonlyArray<{
   readonly hostId: string | null;
   readonly agents: ReadonlyArray<OfficeAgentInput>;
@@ -1025,14 +867,7 @@ function buildFloors(
       contentRight = Math.max(contentRight, cabin.col + cabin.cols - 1);
       contentBottom = Math.max(contentBottom, cabin.row + cabin.rows - 1);
     }
-    // The amenities' footprint is reserved here rather than claimed later: they
-    // stand to the RIGHT of every cabin band, and a room fitted into leftover
-    // space would move whenever a family grew.
-    //
-    // They are not a reward for having enough agents either: a one-agent epic
-    // is exactly where an empty floor reads as broken, so the storey is widened
-    // AND deepened to fit its rooms whatever the cabins came to. Only the
-    // EMPTY-epic room opts out - it has no floor to furnish.
+    // The amenities' footprint is reserved here rather than claimed later: they stand to the RIGHT of every cabin band, and a room fitted into leftover space would move whenever a family grew.
     const specs =
       cabins.length === 0 ? [] : amenitySpecsFor(group.agents.length);
     const localRows =
@@ -1040,16 +875,10 @@ function buildFloors(
         ? EMPTY_ROOM_ROWS
         : Math.max(
             contentBottom + BUILDING_BOTTOM_MARGIN_TILES,
-            // The cap, the wall face, the rooms, and the corridor row the
-            // lowest room's door opens onto - plus the stairwell's rows, which
-            // the first column cannot use, so it still holds what the height
-            // was measured for.
+            // The cap, the wall face, the rooms, and the corridor row the lowest room's door opens onto - plus the stairwell's rows, which the first column cannot use, so it still holds what the height was measured for.
             BUILDING_TOP_WALL_ROWS + minColumnHeight(specs) + 2 + stairsRows,
           );
-    // The lowest room's bottom wall must sit ABOVE the lobby row, or its door
-    // would open onto the storey's outer wall: the last row a room may
-    // occupy is the one over the corridor, which is what the height floor
-    // above was measured for.
+    // The lowest room's bottom wall must sit ABOVE the lobby row, or its door would open onto the storey's outer wall: the last row a room may occupy is the one over the corridor, which is what the height floor above was measured for.
     const lastRoomRow = originRow + localRows - 3;
     const packing = packAmenities(
       specs,
@@ -1080,9 +909,8 @@ function buildFloors(
 }
 
 /**
- * Walls everywhere a storey has one, and nowhere else. Two storeys meet on a
- * SHARED row, which is a wall in both readings - that shared row plus the wall
- * face under it is what makes `walkable` unable to join two floors.
+ * Walls everywhere a storey has one, and nowhere else.
+ * Two storeys meet on a SHARED row, which is a wall in both readings - that shared row plus the wall face under it is what makes `walkable` unable to join two floors.
  */
 function blankWalkableGrid(
   cols: number,
@@ -1130,17 +958,7 @@ function blockCabinWalls(walkable: boolean[][], room: OfficeRoom): void {
   walkable[room.doorTile.row][room.doorTile.col] = true;
 }
 
-/**
- * Standing room at the counter, nearest first.
- *
- * The BELL is at the counter's right end, so the queue forms on that side and
- * only spreads left once the right has run out - somebody waiting for
- * attention stands where the attention is.
- *
- * Only tiles that are actually walkable survive, so a floor whose cabins come
- * down close to the lobby simply offers fewer places to wait rather than
- * queueing people into a wall.
- */
+/** Standing room at the counter, nearest first. */
 function receptionQueueTiles(
   walkable: ReadonlyArray<ReadonlyArray<boolean>>,
   counter: OfficeTilePos,
@@ -1181,9 +999,8 @@ function receptionQueueTiles(
 }
 
 /**
- * The stairwell's top-left tile, or `null` where this floor has no room for
- * one. Blocks the two-by-two footprint as a side effect: a stairwell is not
- * walkable, and it is what keeps `walkable` from joining two floors.
+ * The stairwell's top-left tile, or `null` where this floor has no room for one.
+ * Blocks the two-by-two footprint as a side effect: a stairwell is not walkable, and it is what keeps `walkable` from joining two floors.
  */
 function placeStairwell(args: {
   readonly cols: number;
@@ -1206,10 +1023,8 @@ function placeStairwell(args: {
 // ---- Fitting out a storey -------------------------------------------- //
 
 /**
- * The mutable half of the plan, threaded through every fitting-out pass. Props
- * and walkability move together: nearly everything placed on a floor is a thing
- * you cannot walk through, and keeping the two in one value is what stops a
- * prop from being drawn over a tile agents still route across.
+ * The mutable half of the plan, threaded through every fitting-out pass.
+ * Props and walkability move together: nearly everything placed on a floor is a thing you cannot walk through, and keeping the two in one value is what stops a prop from being drawn over a tile agents still route across.
  */
 interface PlanContext {
   readonly cols: number;
@@ -1251,9 +1066,8 @@ function addBlockingProp(context: PlanContext, prop: OfficeProp): void {
 }
 
 /**
- * Every tile a walker can get to from `start`. One flood per storey answers the
- * question every errand spot has to pass - a spot behind a wall is a spot the
- * scene would send someone to and never see them arrive.
+ * Every tile a walker can get to from `start`.
+ * One flood per storey answers the question every errand spot has to pass - a spot behind a wall is a spot the scene would send someone to and never see them arrive.
  */
 function reachableFrom(
   context: PlanContext,
@@ -1287,11 +1101,8 @@ function reachableFrom(
 }
 
 /**
- * One amenity as PLACED: the spec that sized it, its outer bounds, its single
- * door and the tile its name sign hangs on. Every fixture inside it is derived
- * from the spec and these bounds on demand rather than stored, so the pass that
- * stands the furniture up and the pass that lays the errand spots over it can
- * only ever be reading the same arithmetic.
+ * One amenity as PLACED: the spec that sized it, its outer bounds, its single door and the tile its name sign hangs on.
+ * Every fixture inside it is derived from the spec and these bounds on demand rather than stored, so the pass that stands the furniture up and the pass that lays the errand spots over it can only ever be reading the same arithmetic.
  */
 interface AmenityPlan {
   readonly spec: AmenitySpec;
@@ -1300,23 +1111,15 @@ interface AmenityPlan {
   readonly signTile: OfficeTilePos;
 }
 
-/**
- * The corner fittings a floor with no amenities keeps instead.
- *
- * Reachable only by the EMPTY-epic room now that every furnished storey is
- * widened to fit its rooms. Kept for exactly that case: a room with no agents
- * still wants something in the corner, and it has no cabins to widen around.
- */
+/** The corner fittings a floor with no amenities keeps instead. */
 interface CornerFittings {
   readonly coffeeTile: OfficeTilePos;
   readonly coolerTile: OfficeTilePos | null;
 }
 
 /**
- * Turns a packed placement into real tiles, once the building's final width is
- * known. Rooms hug the RIGHT interior edge, so the offset the packer recorded
- * is measured from there rather than from the storey's own width - a narrow
- * storey in a tall building still lines its rooms up with everyone else's.
+ * Turns a packed placement into real tiles, once the building's final width is known.
+ * Rooms hug the RIGHT interior edge, so the offset the packer recorded is measured from there rather than from the storey's own width - a narrow storey in a tall building still lines its rooms up with everyone else's.
  */
 function planAmenity(placement: AmenityPlacement, cols: number): AmenityPlan {
   const { spec } = placement;
@@ -1456,10 +1259,8 @@ function gymTreadmillTiles(
 }
 
 /**
- * A walled room's own ring and its door, shared by every amenity. Mirrors a
- * cabin's - cap, wall face, sides, one walkable door - so the scene can paint
- * any of them with the same two sprites. The garden's hedge is the same ring;
- * only the sprite the scene reaches for differs.
+ * A walled room's own ring and its door, shared by every amenity.
+ * Mirrors a cabin's - cap, wall face, sides, one walkable door - so the scene can paint any of them with the same two sprites.
  */
 function buildRoomShell(
   context: PlanContext,
@@ -1500,13 +1301,8 @@ function addWideProp(
 }
 
 /**
- * Furniture a character stands or lies ON rather than beside: a sleeping bag,
- * an armchair, a treadmill. Its tile stays WALKABLE, because the errand spot is
- * that same tile - a spot the grid calls solid is a spot the flood cannot
- * reach and `addSpot` refuses outright.
- *
- * Two agents never share one, because the scene claims a spot's tile for as
- * long as its errand lasts.
+ * Furniture a character stands or lies ON rather than beside: a sleeping bag, an armchair, a treadmill.
+ * Its tile stays WALKABLE, because the errand spot is that same tile - a spot the grid calls solid is a spot the flood cannot reach and `addSpot` refuses outright.
  */
 function addOccupiableProp(context: PlanContext, prop: OfficeProp): void {
   context.props.push(prop);
@@ -1549,9 +1345,8 @@ function buildCafeteria(
 }
 
 /**
- * The game room's fittings. The cabinet and the ping-pong table are always
- * there; the foosball table, the dartboard, the chess table and the television
- * arrive with the floor's population.
+ * The game room's fittings.
+ * The cabinet and the ping-pong table are always there; the foosball table, the dartboard, the chess table and the television arrive with the floor's population.
  */
 function buildGameRoom(
   context: PlanContext,
@@ -1667,9 +1462,7 @@ function buildAmenity(context: PlanContext, plan: AmenityPlan): void {
 }
 
 /**
- * What a floor with no room for a cafeteria gets: the machine in the corner it
- * always stood in, and the cooler two columns along so the pair still has an
- * aisle tile each to be used from.
+ * What a floor with no room for a cafeteria gets: the machine in the corner it always stood in, and the cooler two columns along so the pair still has an aisle tile each to be used from.
  */
 function buildCornerFittings(
   context: PlanContext,
@@ -1717,9 +1510,8 @@ interface ErrandSpotRequest {
 }
 
 /**
- * Records one spot, or refuses it. Every refusal is a case that would otherwise
- * become a character standing in a wall, on a desk, or in the queue somebody
- * else is waiting in.
+ * Records one spot, or refuses it.
+ * Every refusal is a case that would otherwise become a character standing in a wall, on a desk, or in the queue somebody else is waiting in.
  */
 function addSpot(
   builder: SpotBuilder,
@@ -1773,9 +1565,8 @@ function addCafeteriaSpots(
       );
     }
   }
-  // One seat per sofa tile, on the aisle in front of it. The facing looks AT
-  // the sofa, as every spot's does; the scene turns whoever sits down back
-  // toward the room, which is the way a person on a sofa actually faces.
+  // One seat per sofa tile, on the aisle in front of it.
+  // The facing looks AT the sofa, as every spot's does; the scene turns whoever sits down back toward the room, which is the way a person on a sofa actually faces.
   for (const sofa of cafeteriaSofaTiles(spec, bounds)) {
     for (let offset = 0; offset < SOFA_WIDTH_TILES; offset += 1) {
       addSpot(builder, "sofa", { col: sofa.col + offset, row: aisleRow }, "up");
@@ -1784,10 +1575,7 @@ function addCafeteriaSpots(
 }
 
 /**
- * The two standing columns either side of a piece on the game room's table row,
- * turned toward EACH OTHER rather than toward the table - the same arrangement
- * the cooler pair uses, and for the same reason: these are the errands that are
- * two people rather than one.
+ * The two standing columns either side of a piece on the game room's table row, turned toward EACH OTHER rather than toward the table - the same arrangement the cooler pair uses, and for the same reason: these are the errands that are two people rather than one.
  */
 function addFacingPair(
   builder: SpotBuilder,
@@ -1859,9 +1647,8 @@ function addGameRoomSpots(
 }
 
 /**
- * A spot ON the fixture itself - the bag you lie on, the chair you read in, the
- * treadmill you walk on. The tile is the furniture, so the facing is where the
- * occupant ends up looking rather than what it is looking at.
+ * A spot ON the fixture itself - the bag you lie on, the chair you read in, the treadmill you walk on.
+ * The tile is the furniture, so the facing is where the occupant ends up looking rather than what it is looking at.
  */
 function addOccupiedSpots(
   builder: SpotBuilder,
@@ -1964,10 +1751,8 @@ function addWallSpots(builder: SpotBuilder, build: FloorBuild): void {
 }
 
 /**
- * Two spots per cabin plant, stacked under it. The near one is where you stand
- * to WATER it, close enough that a can held at the hand reaches the leaves; the
- * far one is the older errand of simply standing and looking at it, moved a row
- * back so the two can never be the same tile.
+ * Two spots per cabin plant, stacked under it.
+ * The near one is where you stand to WATER it, close enough that a can held at the hand reaches the leaves; the far one is the older errand of simply standing and looking at it, moved a row back so the two can never be the same tile.
  */
 function addPlantSpots(builder: SpotBuilder, build: FloorBuild): void {
   const top = build.originRow;
@@ -2007,9 +1792,8 @@ function addBinSpots(builder: SpotBuilder, build: FloorBuild): void {
 }
 
 /**
- * The corridor tile directly outside each cabin's door, looking in. A peek is
- * paid to SOMEBODY ELSE'S room - the scene is what refuses an agent its own
- * doorway, because the plan does not know who is idle.
+ * The corridor tile directly outside each cabin's door, looking in.
+ * A peek is paid to SOMEBODY ELSE'S room - the scene is what refuses an agent its own doorway, because the plan does not know who is idle.
  */
 function addPeekSpots(
   builder: SpotBuilder,
@@ -2026,9 +1810,8 @@ function addPeekSpots(
 }
 
 /**
- * Beside the stairwell, looking at it. Only a stacked building has one, so a
- * single-floor epic simply offers no such spot - which is what makes the errand
- * multi-floor-only without the scene having to count storeys.
+ * Beside the stairwell, looking at it.
+ * Only a stacked building has one, so a single-floor epic simply offers no such spot - which is what makes the errand multi-floor-only without the scene having to count storeys.
  */
 function addStairsSpot(
   builder: SpotBuilder,
@@ -2047,9 +1830,8 @@ function addStairsSpot(
 }
 
 /**
- * A handful of places to simply stand, sampled evenly across the floor's
- * columns. Column-major order is what makes "evenly spaced index" mean "spread
- * left to right" rather than "four tiles of the same corridor".
+ * A handful of places to simply stand, sampled evenly across the floor's columns.
+ * Column-major order is what makes "evenly spaced index" mean "spread left to right" rather than "four tiles of the same corridor".
  */
 function addCorridorSpots(
   builder: SpotBuilder,
@@ -2092,9 +1874,7 @@ function errandSpotsFor(
     spots: [],
     used: new Set<string>(),
     blocked: request.blocked,
-    // Reachability is asked from the LOBBY rather than from each desk: the
-    // corridor that reaches every chair is the same one that reaches the lobby,
-    // so one flood answers for the whole storey.
+    // Reachability is asked from the LOBBY rather than from each desk: the corridor that reaches every chair is the same one that reaches the lobby, so one flood answers for the whole storey.
     reachable: reachableFrom(request.context, request.lobbyTile),
   };
   const corner = request.corner;
@@ -2113,28 +1893,13 @@ function errandSpotsFor(
 
 // ---- Assembly --------------------------------------------------------- //
 
-/**
- * Everything one recursive walk produces: a desk per agent and a pod per agent
- * that has children.
- */
+/** Everything one recursive walk produces: a desk per agent and a pod per agent that has children. */
 interface PlacedBlocks {
   readonly desks: Map<string, OfficeDesk>;
   readonly pods: OfficePod[];
 }
 
-/**
- * Which outline a lead's child pods wear, and which tint they take.
- *
- * STYLE round-robins from a seeded start, so the first three pods under one
- * lead are always three different outlines - with three styles that is the most
- * that can be promised, and promising it for the first two only would be
- * weaker for no gain. It deliberately does NOT exclude the parent's style: with
- * one excluded there would be two left, and three siblings could not all
- * differ.
- *
- * TINT is what keeps nesting legible instead, alternating every level so a pod
- * inside a pod never shares its parent's floor.
- */
+/** Which outline a lead's child pods wear, and which tint they take. */
 function podStyleAt(
   leadId: string,
   depth: number,
@@ -2158,9 +1923,8 @@ interface PlaceBlockRequest {
 }
 
 /**
- * Walks one block into desks and pods. The lead takes the slot at the top-left
- * of its own interior; its children pack into rows underneath, each pod inset by
- * its outline so the ring has a tile of its own to sit on.
+ * Walks one block into desks and pods.
+ * The lead takes the slot at the top-left of its own interior; its children pack into rows underneath, each pod inset by its outline so the ring has a tile of its own to sit on.
  */
 function placeBlock(request: PlaceBlockRequest, out: PlacedBlocks): void {
   const { block, tile, depth, rootId } = request;
@@ -2168,9 +1932,8 @@ function placeBlock(request: PlaceBlockRequest, out: PlacedBlocks): void {
     agentId: block.agent.id,
     deskTile: { col: tile.col, row: tile.row },
     chairTile: { col: tile.col, row: tile.row + 1 },
-    // The cabin's own root, and nobody else: a pod lead heads a region, which
-    // its outline and plate already say. Keyed on the ROOT rather than on the
-    // nesting depth, because a leaf child of the root sits at depth 0 too.
+    // The cabin's own root, and nobody else: a pod lead heads a region, which its outline and plate already say.
+    // Keyed on the ROOT rather than on the nesting depth, because a leaf child of the root sits at depth 0 too.
     manager: block.agent.id === rootId,
   });
   let row = tile.row + SLOT_ROWS + BLOCK_GAP_TILES;
@@ -2288,14 +2051,8 @@ function addManagerPlants(
 }
 
 /**
- * One bin per cabin, in the manager's own slot: the spare column past the
- * plant, on the desk row. Every slot is five wide whether or not it holds a
- * plant, so that column exists in every cabin - and taking it leaves the
- * slot's LAST column free, which is the one a character uses to get between
- * slot rows when the cabin's left aisle is busy.
- *
- * Skipped where the tile is already spoken for, so a bin can never be the
- * thing that walls a desk off from its door.
+ * One bin per cabin, in the manager's own slot: the spare column past the plant, on the desk row.
+ * Every slot is five wide whether or not it holds a plant, so that column exists in every cabin - and taking it leaves the slot's LAST column free, which is the one a character uses to get between slot rows when the cabin's left aisle is busy.
  */
 function addCabinBins(
   context: PlanContext,
@@ -2314,13 +2071,7 @@ function addCabinBins(
 }
 
 /**
- * A pod's outline: the ring of tiles around its interior, blocked so the region
- * reads as bounded, with ONE opening in the bottom edge on the interior's own
- * aisle column - which is the column every gap row inside the pod already runs
- * into, and the tile below it is the parent's gap row.
- *
- * The plate's tile is part of the ring and stays blocked; a plate is furniture
- * on the boundary, not a way in.
+ * A pod's outline: the ring of tiles around its interior, blocked so the region reads as bounded, with ONE opening in the bottom edge on the interior's own aisle column - which is the column every gap row inside the pod already runs into, and the tile below.
  */
 function podOpeningOf(pod: OfficePod): OfficeTilePos {
   return {
@@ -2355,19 +2106,7 @@ function blockPodOutlines(
 }
 
 /**
- * Blocks every surviving pod's outline, after dropping any pod the cabin door
- * cannot reach the inside of - such a pod is emitted as plain slots instead, so
- * its desks stay part of the cabin rather than sitting behind a sealed wall.
- *
- * The packing is built not to produce one: every pod's opening sits on the
- * aisle its own gap rows run into, and the tile beyond it is the parent's gap
- * row. So this is the check that SAYS so rather than a case anyone has seen -
- * and it is worth its cost because the alternative failure is invisible on a
- * small epic and silently strands a whole sub-team on a large one.
- *
- * Each round tests on a COPY of the grid: a ring that has to come back off
- * cannot be un-blocked in place without also un-blocking whatever else shares
- * those tiles.
+ * Blocks every surviving pod's outline, after dropping any pod the cabin door cannot reach the inside of - such a pod is emitted as plain slots instead, so its desks stay part of the cabin rather than sitting behind a sealed wall.
  */
 function resolvePods(context: PlanContext, rooms: OfficeRoom[]): void {
   for (;;) {
@@ -2466,10 +2205,8 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
     lobbyTile,
   );
 
-  // Decorative only: nobody walks between floors, so the stairwell is a
-  // reminder that the building has more than one - never a route. It is FLOOR
-  // rather than furniture, so it carries no prop entry: the scene paints it
-  // with the floor layer, from this top-left tile.
+  // Decorative only: nobody walks between floors, so the stairwell is a reminder that the building has more than one - never a route.
+  // It is FLOOR rather than furniture, so it carries no prop entry: the scene paints it with the floor layer, from this top-left tile.
   const stairsTile = request.multiFloor
     ? placeStairwell({
         cols: context.cols,
@@ -2526,10 +2263,8 @@ function fitFloor(request: FloorFitRequest): OfficeFloor {
 }
 
 /**
- * A name plate on each walled amenity's wall face, mounted exactly where a
- * cabin hangs its own sign. Two tiles along from the room's left wall, which is
- * left of both doors and clear of the menu board the break room already hangs
- * over its coffee machine.
+ * A name plate on each walled amenity's wall face, mounted exactly where a cabin hangs its own sign.
+ * Two tiles along from the room's left wall, which is left of both doors and clear of the menu board the break room already hangs over its coffee machine.
  */
 function areaSignsFor(
   amenities: ReadonlyArray<AmenityPlan>,
@@ -2568,9 +2303,7 @@ export function layoutOffice(
   blockDeskTiles(walkable, desks);
 
   const context: PlanContext = { cols, rows, props: [], walkable };
-  // Outlines first, and with only the walls and the desks standing: a pod is
-  // kept or dropped on whether its cabin can reach INSIDE it, which is a
-  // question about the room's structure rather than about its pot plants.
+  // Outlines first, and with only the walls and the desks standing: a pod is kept or dropped on whether its cabin can reach INSIDE it, which is a question about the room's structure rather than about its pot plants.
   resolvePods(context, rooms);
   // Before the storeys are fitted out, so a cabin's own furniture is already
   // standing when the errand spots are picked over the finished grid.

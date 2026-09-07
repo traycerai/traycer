@@ -1,21 +1,6 @@
 /**
  * Compatibility proofs for the asset stream's 1.1 PDF addition.
- *
- * The 1.1 delta is a single widened enum literal (`application/pdf`) served
- * with `width`/`height: null` on the existing `assetHeader` frame. Each
- * minor registers its OWN server-frame schema so 1.0's released wire schema
- * stays frozen literally (the released-baseline compat gate diffs it), and
- * these tests pin the facts the mixed-version story rests on:
- *
- * 1. Every frame a 1.0 host could emit parses under BOTH minors' schemas
- *    (additivity in the direction old-host -> new-client).
- * 2. A PDF header parses under 1.1 and does NOT parse under 1.0 - which is
- *    why the host resolvers must gate admission and emission on the
- *    negotiated minor rather than trusting clients not to ask. If the
- *    rejection assertions ever start failing, the emission gate has become
- *    dead code and can be removed; until then it is load-bearing.
- * 3. The attachment channels (`epic.readChatAttachment`) stay image-only:
- *    their released response schema reuses the FROZEN 1.0 enum.
+ * The attachment channels (`epic.readChatAttachment`) stay image-only: their released response schema reuses the FROZEN 1.0 enum.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -71,9 +56,7 @@ describe("asset stream 1.1 media-type widening", () => {
   });
 
   it("parses every 1.0-era image header under BOTH minors' schemas", () => {
-    // Old-host -> new-client direction: a not-yet-upgraded host emits
-    // exactly these shapes, and the upgraded client parses with the
-    // widened schema. Nothing a 1.0 host can produce may become invalid.
+    // Old-host -> new-client direction: a not-yet-upgraded host emits exactly these shapes, and the upgraded client parses with the widened schema.
     const svgNullDims = {
       ...pngHeaderFrame,
       mediaType: "image/svg+xml" as const,
@@ -87,9 +70,6 @@ describe("asset stream 1.1 media-type widening", () => {
   });
 
   it("REJECTS a PDF header under the 1.0 frame schema - the emission gate is load-bearing", () => {
-    // This is the REGISTERED 1.0 schema, i.e. exactly what an un-upgraded
-    // client's discriminated-union parse does with a leaked PDF header:
-    // the whole frame fails, not just the field.
     expect(assetStreamServerFrameSchema.safeParse(pdfHeaderFrame).success).toBe(
       false,
     );

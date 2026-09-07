@@ -1,18 +1,3 @@
-/**
- * The two facts 4e's deferred-eviction proxy rests on.
- *
- * At the flip the accountant stays on MAIN and the artifact-room tier moves
- * into the worker, so `tier.demoteColdestUnpinned(overBytes)` — which today is
- * called synchronously mid-reconcile and whose return decrements a running
- * total — becomes a call that cannot be made. The proxy answers
- * `reclaimedBytes: 0`, dispatches an evict request, and the worker's settles
- * reconcile when they arrive.
- *
- * That is only safe because of the two properties pinned here. Both are
- * properties of code 4e does NOT change, which is exactly why they need pins:
- * nothing else would notice them being broken, and the failure would present
- * as a memory leak or a hang rather than as a test.
- */
 import { describe, expect, it } from "vitest";
 import type {
   MemoryAccountant,
@@ -54,9 +39,6 @@ function environmentStub(): RuntimeEnvironment {
 function deferringTier(
   protectedBytes: readonly ProtectedBytes[],
   dispatchTo: MemoryAccountant | null,
-  // Distinct per tier so several epics' tiers can be attached at once - the
-  // book keys its map on this, so a shared key would silently collapse them
-  // into one and make a multi-epic pin unable to fail.
   key: string,
 ): {
   readonly key: string;
@@ -71,15 +53,11 @@ function deferringTier(
     materializedIds: () => [],
     demoteColdestUnpinned(overBytes): HotDocEvictionOutcome {
       calls.push(overBytes);
-      // What the post-flip proxy does: hand the work to the worker and SAY SO,
-      // from inside the evict call, so the reconcile that asked can tell this
-      // apart from a tier that declined.
+      // What the post-flip proxy does: hand the work to the worker and SAY SO, from inside the evict
+      // call, so the reconcile that asked can tell this apart from a tier that declined.
       dispatchTo?.noteEvictionDeferred(BUDGET_PLANE_IDS.hotDocs);
-      // Exactly the proxy's answer: nothing freed HERE, because the freeing
-      // happens in the worker after this returns.
-      // The SAME two facts the real proxy reports: nothing freed here, and
-      // the whole ask accepted for the worker to free. Modelling only the
-      // zero is what let the book double-count the ask across epics.
+      // Exactly the proxy's answer: nothing freed HERE, because the freeing happens in the worker after
+      // this returns.
       return {
         reclaimedBytes: 0,
         deferredBytes: overBytes,
@@ -97,11 +75,8 @@ describe("a tier that frees nothing", () => {
 
     const outcome = book.evict(10_000);
 
-    // The load-bearing assertion. `evict` iterates `tiers.values()` once, so a
-    // tier contributing zero simply advances the iteration - identical to a
-    // tier whose every doc is pinned. If anyone turns this into "retry until
-    // `remaining` is satisfied", a deferring proxy spins forever inside a
-    // synchronous reconcile and the renderer wedges with no error to read.
+    // The load-bearing assertion. `evict` iterates `tiers.values()` once, so a tier contributing zero
+    // simply advances the iteration - identical to a tier whose every doc is pinned.
     expect(tier.calls).toEqual([10_000]);
     expect(outcome.reclaimedBytes).toBe(0);
   });
@@ -109,12 +84,8 @@ describe("a tier that frees nothing", () => {
 
 describe("the protected breakdown a deferring tier reports", () => {
   it("reaches the accountant's snapshot, which is its only observer", () => {
-    // NOT the `protectedLatch`, which was the expected observer and is not one:
-    // `reconcile` sets the latch from `stillOver` alone (`memory-accountant.ts`
-    // :446) and never reads `protectedBytesByKind`. The list is written to
-    // `lastProtectedBytesByKind` and read back only by `usageOf` into
-    // `snapshot()`. Asserting on the latch would have passed with the list
-    // emptied, which is the whole failure mode this pin exists to catch.
+    // NOT the `protectedLatch`, which was the expected observer and is not one: `reconcile` sets the
+    // latch from `stillOver` alone (`memory-accountant.ts` :446) and never reads
     const book = createHotDocBudgetBook();
     book.attach(deferringTier(PROTECTED, null, "book-1"));
     const accountant = createMemoryAccountant({
@@ -142,9 +113,8 @@ describe("the protected breakdown a deferring tier reports", () => {
   });
 
   it("is what distinguishes `everything is pinned` from `there was nothing to free`", () => {
-    // The two answers share `reclaimedBytes: 0` and differ only here, so a
-    // proxy that reports `[]` while the worker's tier is full of leased docs
-    // tells the accountant the plane is over its limit for no reason at all.
+    // The two answers share `reclaimedBytes: 0` and differ only here, so a proxy that reports `[]`
+    // while the worker's tier is full of leased docs tells the accountant the plane is over its limit
     const book = createHotDocBudgetBook();
     book.attach(deferringTier([], null, "book-1"));
     const accountant = createMemoryAccountant({
@@ -174,10 +144,8 @@ describe("the protected breakdown a deferring tier reports", () => {
 
 describe("the split counter", () => {
   it("counts a DISPATCHED eviction as deferred and not as refused", () => {
-    // Before the split both cases incremented `evictionsRefused`, so a plane
-    // whose tier is off-thread trended as "refusing" every breach it in fact
-    // resolved. The two are mutually exclusive by construction: one breach
-    // increments exactly one.
+    // Before the split both cases incremented `evictionsRefused`, so a plane whose tier is off-thread
+    // trended as "refusing" every breach it in fact resolved.
     const book = createHotDocBudgetBook();
     const accountant = createMemoryAccountant({
       environment: environmentStub(),
@@ -206,9 +174,8 @@ describe("the split counter", () => {
   });
 
   it("counts a tier that genuinely declined as refused and not as deferred", () => {
-    // The same zero bytes and the same protected list - the ONLY difference is
-    // that nothing was dispatched. If these two ever report identically, the
-    // split has silently collapsed back into one counter.
+    // The same zero bytes and the same protected list - the ONLY difference is that nothing was
+    // dispatched.
     const book = createHotDocBudgetBook();
     const accountant = createMemoryAccountant({
       environment: environmentStub(),
@@ -239,12 +206,7 @@ describe("the split counter", () => {
 
 describe("several epics' tiers, all deferring", () => {
   it("does not hand the SAME overage to every one of them", () => {
-    // A worker-backed tier answers `reclaimedBytes: 0` for a demotion it has
-    // accepted and dispatched. Subtracting only what was reclaimed left the
-    // running total untouched, so each epic in turn was asked for the whole
-    // overage: five open epics turned a 1 MiB overage into 5 MiB of dispatched
-    // demotion, evicting warm documents nothing needed and paying to re-encode
-    // and rematerialize them on next use.
+    // A worker-backed tier answers `reclaimedBytes: 0` for a demotion it has accepted and dispatched.
     const book = createHotDocBudgetBook();
     const first = deferringTier(PROTECTED, null, "book-1");
     const second = deferringTier(PROTECTED, null, "book-2");
@@ -262,10 +224,7 @@ describe("several epics' tiers, all deferring", () => {
   });
 
   it("still reports ZERO reclaimed - a deferral is a promise, not a recovery", () => {
-    // The control that keeps the fix from being "subtract it and call it
-    // freed". The accountant decides whether the plane is still over from
-    // `reclaimedBytes`; counting dispatched-but-unfreed bytes there would make
-    // it stop asking on the strength of memory that is still resident.
+    // The control that keeps the fix from being "subtract it and call it freed".
     const book = createHotDocBudgetBook();
     book.attach(deferringTier(PROTECTED, null, "book-1"));
     book.attach(deferringTier(PROTECTED, null, "book-2"));
@@ -274,13 +233,7 @@ describe("several epics' tiers, all deferring", () => {
   });
 
   it("rotates which tier is asked first, so a pinned epic cannot starve the others", () => {
-    // The half that makes the fix net-correct rather than a trade. Bounding
-    // the ask means one tier can absorb the whole overage; with a fixed
-    // insertion-ordered walk that would always be the SAME tier, so an epic
-    // whose documents are all pinned would answer every pass, free nothing,
-    // and the epics holding genuinely cold documents would never be reached -
-    // the plane over budget forever. That is worse than the over-eviction:
-    // one wastes work, the other stops reclaiming.
+    // The half that makes the fix net-correct rather than a trade.
     const book = createHotDocBudgetBook();
     const first = deferringTier(PROTECTED, null, "book-1");
     const second = deferringTier(PROTECTED, null, "book-2");

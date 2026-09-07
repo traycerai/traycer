@@ -1,24 +1,20 @@
 /**
- * Framework-free command-palette type definitions. The keybinding
- * module owns keyboard dispatch; this module owns the palette's data
- * shape so sources, the registry, and the dispatcher never import
- * React and stay unit-testable.
+ * Framework-free command-palette type definitions.
+ * The keybinding module owns keyboard dispatch; this module owns the palette's data shape so sources, the registry, and the dispatcher never import React and stay unit-testable.
  */
 import type { ActionId } from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 
 /**
- * Scopes narrow the palette to a subset of items. A leading prefix
- * character in the input (`>`, `#`, `@`, `?` - see `./scopes.ts`)
- * activates a scope; `null` means "show everything".
+ * Scopes narrow the palette to a subset of items.
+ * A leading prefix character in the input (`>`, `#`, `@`, `?` - see `./scopes.ts`) activates a scope; `null` means "show everything".
  */
 export type CommandScope = "actions" | "epics" | "workspaces" | "help";
 
 /**
  * Groups map 1:1 to the visual buckets rendered in the palette list.
- * Source authors pick one of these for every item they emit; the
- * renderer groups results by this field.
+ * Source authors pick one of these for every item they emit; the renderer groups results by this field.
  */
 export type CommandGroupId =
   | "pinned"
@@ -29,17 +25,13 @@ export type CommandGroupId =
   | "epics"
   | "theme"
   | "help"
-  // "open" backs the open-into-target opener categories. These items are only
-  // emitted when the palette is bound to a target group and are rendered by a
-  // dedicated opener root view, not the default group buckets.
+  // "open" backs the open-into-target opener categories.
+  // These items are only emitted when the palette is bound to a target group and are rendered by a dedicated opener root view, not the default group buckets.
   | "open";
 
 /**
- * Runtime context a source sees when asked to emit its items. Built
- * fresh on every palette open / query change so sources stay pure.
- *
- * `focusedComposerKind` is stubbed to `null` in this phase - the
- * composer-scoped source wires it up in ticket 04.
+ * Runtime context a source sees when asked to emit its items.
+ * Built fresh on every palette open / query change so sources stay pure.
  */
 export interface CommandContext {
   readonly pathname: string;
@@ -49,8 +41,7 @@ export interface CommandContext {
   readonly focusedComposerKind: FocusedComposerKind | null;
   /**
    * The opener's bound canvas tile group, or `null` for the global palette.
-   * The "open" source emits its category entries only when this is non-null,
-   * and opener leaves route their open through it.
+   * The "open" source emits its category entries only when this is non-null, and opener leaves route their open through it.
    */
   readonly targetGroupId: string | null;
 }
@@ -58,17 +49,8 @@ export interface CommandContext {
 export type FocusedComposerKind = "landing" | "chat-tile";
 
 /**
- * One selectable row in the palette. Sources emit these; the
- * dispatcher runs them. Any item whose `actionId !== null` routes
- * through `dispatchAction(id, router)` so shortcuts and the palette
- * never get out of sync - the single source of truth for what the
- * action does stays inside `src/lib/keybindings/`.
- *
- * Items whose `subpage !== null` push a new cmdk page onto the
- * palette's internal stack on select; `run` is ignored in that
- * case. Used by the composer source's "Switch model" / "Switch
- * provider" / "Select PC" items so users drill one level into a
- * picker without leaving the palette.
+ * One selectable row in the palette.
+ * Sources emit these; the dispatcher runs them.
  */
 export interface CommandItem {
   readonly id: string;
@@ -82,25 +64,10 @@ export interface CommandItem {
   readonly run: CommandRun;
   readonly subpage: CommandSubpage | null;
   /**
-   * Trailing badge text for an "open existing" row whose resolved host
-   * differs from the active host (e.g. a chat/terminal listed from a
-   * non-active host) - `SubpageView` renders it, everything else ignores it.
-   * Deliberately optional (unlike every other field here) rather than
-   * `string | null` so the ~20 unrelated command sources that build plain
-   * `CommandItem` literals don't need a no-op `hostBadge: null` added.
+   * Trailing badge text for an "open existing" row whose resolved host differs from the active host (e.g. a chat/terminal listed from a non-active host) - `SubpageView` renders it, everything else ignores it.
    */
   readonly hostBadge?: string;
-  /**
-   * Trailing context text, rendered by sub-pages as a badge.
-   *
-   * Two uses, and they are not the same thing. On a NON-ACTIONABLE row it is
-   * the reason ("resolving", "unavailable"), so a workspace that cannot be
-   * opened is not mistaken for a selectable directory — `disabled` is what
-   * makes the row inert, this only says why. On an ACTIONABLE row it is the
-   * qualifier that makes an ambiguous label readable: Settings has two sections
-   * named "Diagnostics", one per scope, and this sub-page renders a flat list
-   * with none of the group headings the sidebar uses to tell them apart.
-   */
+  /** Trailing context text, rendered by sub-pages as a badge. */
   readonly statusBadge?: string;
   /**
    * Prevent selection in cmdk while retaining the row as contextual feedback.
@@ -146,13 +113,7 @@ export interface CommandItem {
 }
 
 /**
- * Named sub-page description - the palette pushes this onto its
- * stack when a subpage-bearing item is selected, then renders only
- * this page's items until the user backs out (Esc pops one level).
- *
- * `useItems` is a hook (same rules as `ReactCommandSource.useItems`)
- * so sub-page content can reactively track store state like the
- * enabled providers list or the currently-selected model.
+ * Named sub-page description - the palette pushes this onto its stack when a subpage-bearing item is selected, then renders only this page's items until the user backs out (Esc pops one level).
  */
 export interface CommandSubpage {
   readonly id: string;
@@ -161,19 +122,14 @@ export interface CommandSubpage {
 }
 
 /**
- * Item handler. Synchronous or asynchronous; the dispatcher awaits
- * the returned promise (if any) before closing the palette and
- * recording the use. Throwing is treated as "the action failed" -
- * dispatch logs + swallows so the palette can't crash the shell.
+ * Item handler.
+ * Synchronous or asynchronous; the dispatcher awaits the returned promise (if any) before closing the palette and recording the use.
  */
 export type CommandRun = (ctx: CommandContext) => void | Promise<void>;
 
 /**
  * A source plugs into the registry by exporting a `CommandSource`.
- * Pure sources are synchronous and framework-free - they cannot
- * call React hooks. Use `ReactCommandSource` when items depend on
- * data only available through a hook (TanStack Query, store
- * subscriptions, etc).
+ * Pure sources are synchronous and framework-free - they cannot call React hooks.
  */
 export interface CommandSource {
   readonly id: string;
@@ -181,10 +137,8 @@ export interface CommandSource {
 }
 
 /**
- * A React-aware source. `useItems` is a hook - follows the rules of
- * hooks, must always be called unconditionally. The registry lists
- * these separately so the palette aggregator can call each hook
- * exactly once per render.
+ * A React-aware source.
+ * `useItems` is a hook - follows the rules of hooks, must always be called unconditionally.
  */
 export interface ReactCommandSource {
   readonly id: string;

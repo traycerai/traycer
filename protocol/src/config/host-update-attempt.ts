@@ -1,40 +1,9 @@
-// The durable host-update attempt record (Host update progress tech plan
-// §1.3) and the pure algebra over it: identity, ordering, phase/execution
-// classification, terminal retention, and the total decode of the raw bytes.
-//
-// Nothing here touches the filesystem or the clock - callers pass `nowIso`
-// / `nowMs` in. That is what lets the whole transition core be exercised
-// without a temp dir or a fake timer.
-//
-// ### Why this lives in `@traycer/protocol/config`
-//
-// `update-attempt.json` is read by three processes in TWO repositories: the
-// CLI and the desktop (through `@traycer-clients/shared/host-update`, which
-// re-exports this module) and `traycer-host`, which cannot import that
-// package at all. It is the same situation - and the same answer - as
-// `./host-stop-intent`, `./installation-records`, and `./credentials`: the
-// shape lives here so both sides resolve one definition instead of two
-// decoders that agree only for as long as someone keeps them in step. The
-// record already grew a field without a schema bump (`recovery`, deliberately,
-// so retained v2 records stay readable); a second decoder that had not learned
-// about it would read a perfectly good record as `corrupt`, which is a
-// fail-closed VERDICT, not a missing detail.
-//
-// ### This module is renderer-safe, and must stay that way
-//
-// It imports nothing from `node:*`. `host/status/contracts.ts` takes an
-// `import type` from here so the wire vocabulary cannot drift from the record
-// vocabulary, and that contracts module is reachable from the RPC registry the
-// renderer imports. Anything needing `node:path` belongs in
-// `./host-update-attempt-paths`; anything needing `node:fs` belongs in
-// `./host-update-attempt-fs`. Same split, same reason, as
-// `./installation-records` vs `./installation`.
+// The durable host-update attempt record (Host update progress tech plan §1.3) and the pure algebra over it: identity, ordering, phase/execution classification, terminal retention, and the total decode of the raw bytes.
+// `host/status/contracts.ts` takes an `import type` from here so the wire vocabulary cannot drift from the record vocabulary, and that contracts module is reachable from the RPC registry the renderer imports.
 
 /**
- * Schema version of the durable record. `2` from the outset, deliberately:
- * v1 is the released coarse `update-progress.json` marker, which this
- * record supersedes rather than extends. A reader that finds any other
- * version fails closed (see `decodeHostUpdateAttempt`); it never rewrites it.
+ * Schema version of the durable record.
+ * A reader that finds any other version fails closed (see `decodeHostUpdateAttempt`); it never rewrites it.
  */
 export const HOST_UPDATE_ATTEMPT_SCHEMA_VERSION = 2;
 
@@ -76,28 +45,12 @@ export const HOST_UPDATE_ATTEMPT_PHASES: readonly HostUpdateAttemptPhase[] = [
 ];
 
 /**
- * How the phase relates to a lock holder - the property recovery actually
- * branches on, which is why it is stored rather than only derived:
- *
- * - `active`   - a segment is executing and SHOULD hold `update-attempt.lock`.
- *                Finding no live holder here is the interrupted case.
- * - `parked`   - the absence of a holder is intentional and expected. A
- *                parked attempt is never "interrupted", however old it is.
- * - `terminal` - the attempt is over. Retained as evidence only.
+ * How the phase relates to a lock holder - the property recovery actually branches on, which is why it is stored rather than only derived
+ * A parked attempt is never "interrupted", however old it is. - `terminal` - the attempt is over.
  */
 export type HostUpdateAttemptExecution = "active" | "parked" | "terminal";
 
-/**
- * What a parked attempt is waiting to do, carried through the segment that
- * resumes it.
- *
- * - `resume-apply` - bytes are NOT yet placed; the disruptive apply was
- *   deferred because the host was busy.
- * - `activate` - bytes ARE already placed (packaged-macOS `apply
- *   --no-service`); only activation may proceed. Re-applying would be
- *   incorrect, which is why the phase graph refuses
- *   `waiting-to-activate -> applying`.
- */
+/** What a parked attempt is waiting to do, carried through the segment that resumes it. */
 export type HostUpdateAttemptContinuation = "resume-apply" | "activate" | null;
 
 export type HostUpdateAttemptProgress = {
@@ -112,15 +65,7 @@ export type HostUpdateAttemptError = {
   readonly phase: string;
 } | null;
 
-/**
- * Durable provenance for a terminal conclusion written by crash recovery.
- *
- * A normal executor reaches `complete` through its verifying segment. Recovery
- * is allowed to terminalize only after independently reconciling durable
- * install evidence with a positively host-home-bound running process. Keeping
- * this compact summary on the record makes that exceptional conclusion
- * auditable without retaining raw paths, pids, or lock tokens.
- */
+/** Durable provenance for a terminal conclusion written by crash recovery. */
 export type HostUpdateAttemptRecovery = {
   readonly recoveredBy: "attempt-executor";
   readonly outcome: "complete" | "failed" | "superseded";
@@ -175,11 +120,7 @@ const TERMINAL_PHASES: ReadonlySet<HostUpdateAttemptPhase> = new Set([
   "superseded",
 ]);
 
-/**
- * The continuation a parked phase MUST carry, and the only one it may.
- * `null` for every phase that is not a park - an active phase may still
- * carry the continuation it is executing (see `continuationLegalFor`).
- */
+/** The continuation a parked phase MUST carry, and the only one it may. */
 const PARK_CONTINUATION: ReadonlyMap<
   HostUpdateAttemptPhase,
   Exclude<HostUpdateAttemptContinuation, null>
@@ -200,11 +141,7 @@ export function isActivePhase(phase: HostUpdateAttemptPhase): boolean {
   return !isParkedPhase(phase) && !isTerminalPhase(phase);
 }
 
-/**
- * The execution class a phase implies. The record stores `execution`
- * explicitly (the projection in §5 carries it), but the mapping is fixed:
- * a record whose stored pair disagrees is corrupt, not a third state.
- */
+/** The execution class a phase implies. */
 export function executionForPhase(
   phase: HostUpdateAttemptPhase,
 ): HostUpdateAttemptExecution {
@@ -222,21 +159,7 @@ export function parkContinuationFor(
 
 /**
  * Whether `continuation` is legal for `phase`.
- *
- * Parked and terminal phases are exact: a park means precisely one pending
- * continuation, and a finished attempt has none. An ACTIVE phase is
- * permissive HERE on purpose - a segment that resumed `waiting-to-activate`
- * keeps `activate` set while it works, so a crash mid-segment still leaves
- * durable evidence of which continuation was in flight rather than
- * flattening it to `null` and making recovery re-derive it from the
- * install tree alone.
- *
- * This is a SHAPE predicate, not the whole rule. It answers "could a record
- * in this phase legally carry this continuation" - it deliberately cannot
- * see the previous record, so it cannot tell a carried continuation from a
- * swapped one. Whether a TRANSITION may change the continuation is decided
- * by `advanceAttempt`, which compares against the current record and
- * refuses any erase or swap while one is in flight.
+ * It answers "could a record in this phase legally carry this continuation" - it deliberately cannot see the previous record, so it cannot tell a carried continuation from a swapped one.
  */
 export function continuationLegalFor(
   phase: HostUpdateAttemptPhase,
@@ -250,19 +173,8 @@ export function continuationLegalFor(
 // ---- Identity and ordering --------------------------------------------------
 
 /**
- * The ordering key, in full. `updatedAt` is NEVER part of it - two clients
- * with skewed clocks must not be able to disagree about which write is
- * newer, and a reader must never win a write by timestamp.
- *
- * - `attemptId` - the logical attempt. Minted once, by the process that
- *   wins creation.
- * - `generation` - the EXECUTION SEGMENT. Bumped exactly once each time a
- *   contender claims the attempt (create = 1, every resume/supersede = +1).
- *   This is the field that rejects a late writer: a process holding
- *   generation N is provably no longer the owner once N+1 exists.
- * - `sequence` - the write counter, monotonic across the WHOLE attempt and
- *   deliberately never reset on a generation bump, so it alone totally
- *   orders every write the attempt ever made.
+ * The ordering key, in full.
+ * `updatedAt` is NEVER part of it - two clients with skewed clocks must not be able to disagree about which write is newer, and a reader must never win a write by timestamp.
  */
 export type HostUpdateAttemptIdentity = {
   readonly attemptId: string;
@@ -292,47 +204,27 @@ export function sameAttemptIdentity(
 }
 
 /**
- * Total order WITHIN one attempt: negative if `a` precedes `b`, positive if
- * it follows, `0` if identical.
- *
- * `null` for two DIFFERENT attempts, which are genuinely incomparable -
- * there is no clock-free fact that orders them, and inventing one (by
- * `startedAt`, say) is how a stale process talks itself into overwriting a
- * newer attempt. Supersession is an explicit, lock-held transition for
- * exactly this reason.
+ * Total order WITHIN one attempt: negative if `a` precedes `b`, positive if it follows, `0` if identical.
  */
 export function compareAttemptOrder(
   a: HostUpdateAttemptIdentity,
   b: HostUpdateAttemptIdentity,
 ): number | null {
   if (a.attemptId !== b.attemptId) return null;
-  // Compared, never subtracted. Subtraction of two counters near
-  // `Number.MAX_SAFE_INTEGER` loses precision and can report `0` - "same
-  // position" - for two genuinely different writes. The decoder rejects
-  // unsafe counters, but this function is reachable with identities from
-  // anywhere, and an ordering primitive must not depend on its callers
-  // having sanitized their inputs.
+  // Compared, never subtracted.
+  // The decoder rejects unsafe counters, but this function is reachable with identities from anywhere, and an ordering primitive must not depend on its callers having sanitized their inputs.
   if (a.generation !== b.generation)
     return a.generation < b.generation ? -1 : 1;
   if (a.sequence !== b.sequence) return a.sequence < b.sequence ? -1 : 1;
   return 0;
 }
 
-/**
- * The largest counter value that may still be incremented. One below
- * `Number.MAX_SAFE_INTEGER`, so `value + 1` is itself still exactly
- * representable.
- */
+/** The largest counter value that may still be incremented. */
 export const MAX_INCREMENTABLE_ATTEMPT_COUNTER = Number.MAX_SAFE_INTEGER - 1;
 
 /**
  * `value + 1`, or `null` when the increment cannot be trusted to advance.
- *
- * At `2^53` (`Number.MAX_SAFE_INTEGER + 1`) ordinary `+ 1` returns the SAME
- * number, so a write would report success while leaving `sequence`
- * unchanged - silently disabling the monotonic ordering that rejects late
- * writers. Every generation/sequence bump goes through here so the
- * exhausted case is a first-class refusal instead of a no-op.
+ * At `2^53` (`Number.MAX_SAFE_INTEGER + 1`) ordinary `+ 1` returns the SAME number, so a write would report success while leaving `sequence` unchanged - silently disabling the monotonic ordering that rejects late writers.
  */
 export function nextAttemptCounter(value: number): number | null {
   if (!Number.isSafeInteger(value)) return null;
@@ -343,20 +235,10 @@ export function nextAttemptCounter(value: number): number | null {
 
 // ---- Terminal retention -----------------------------------------------------
 
-/**
- * How long the latest terminal record is kept (§1.5). Cleanup is
- * best-effort and performed by a lock-holding contender or a maintenance
- * pass; a newer attempt replaces the record before this expires.
- */
+/** How long the latest terminal record is kept (§1.5). */
 export const TERMINAL_ATTEMPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-/**
- * Whether a terminal record has aged past retention.
- *
- * Fails CLOSED - retains - for a non-terminal record, an unparseable stamp,
- * or a future-dated one. Deleting retained evidence is the irreversible
- * direction; keeping a stale terminal record one cycle longer costs a file.
- */
+/** Whether a terminal record has aged past retention. */
 export function isTerminalRetentionExpired(
   record: HostUpdateAttemptRecord,
   nowMs: number,
@@ -368,26 +250,7 @@ export function isTerminalRetentionExpired(
   return nowMs - stampedMs > TERMINAL_ATTEMPT_RETENTION_MS;
 }
 
-// ---- Total decode -----------------------------------------------------------
-//
-// Total decode of `update-attempt.json`. Never throws, and every failure
-// mode is a DISTINCT arm because each one is a different decision for the
-// caller (§1.4): `absent` admits a new attempt, `unsupported-version` and
-// `corrupt` must fail closed and expose a repair action, and `unreadable`
-// is not evidence of anything at all.
-//
-// `DurableBytes` / `DurableRecord` below are declared here rather than
-// imported from the clients' `host-lifecycle` layer - that package is not
-// reachable from `traycer-host`, which is the whole reason this module
-// exists. They are structurally identical to the lifecycle vocabulary, so
-// `@traycer-clients/shared/host-update/decode` keeps re-exporting the
-// LIFECYCLE types verbatim and every existing client caller sees no change
-// at all.
-//
-// The version gate is `schemaVersion` (the tech plan names the field), NOT
-// the lifecycle decoder's `v`/`version`: `targetVersion` already lives in
-// this shape, so a generic gate reaching for `obj.version` would be one
-// rename away from gating on the wrong field.
+// Total decode
 
 /**
  * Input to a durable-record decoder. Callers map fs errors into this shape
@@ -399,9 +262,8 @@ export type DurableBytes =
   | { readonly kind: "bytes"; readonly text: string };
 
 /**
- * Versioned durable on-disk record decode verdict. Total over raw shapes -
- * never returns a shape a caller could read as "absent". Each arm is a
- * distinct planner input.
+ * Versioned durable on-disk record decode verdict.
+ * Total over raw shapes - never returns a shape a caller could read as "absent".
  */
 export type DurableRecord<T> =
   | { readonly kind: "valid"; readonly value: T; readonly version: number }
@@ -464,11 +326,7 @@ function parseAttemptFields(
   if (!isPhase(obj.phase)) return null;
   const phase = obj.phase;
 
-  // The stored execution class must agree with the phase. A disagreement is
-  // corrupt rather than "trust one of them": recovery branches on exactly
-  // this field to decide whether a missing lock holder is intentional, and
-  // guessing which half of a contradiction to believe is how a parked
-  // attempt gets replayed as an interrupted one.
+  // The stored execution class must agree with the phase.
   if (obj.execution !== executionForPhase(phase)) return null;
 
   const continuation = parseContinuation(obj.continuation);
@@ -488,9 +346,8 @@ function parseAttemptFields(
 
   const recovery = parseRecovery(obj.recovery);
   if (recovery === "invalid") return null;
-  // Recovery provenance describes an exceptional terminal conclusion. A
-  // partial/crashed writer must not be able to leave it attached to a live
-  // segment and make that look like a claimed recovery.
+  // Recovery provenance describes an exceptional terminal conclusion.
+  // A partial/crashed writer must not be able to leave it attached to a live segment and make that look like a claimed recovery.
   if (recovery !== undefined && executionForPhase(phase) !== "terminal") {
     return null;
   }
@@ -534,30 +391,15 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-// SAFE integer, not merely integer. `generation`/`sequence` are the ordering
-// key, and every bump is `+ 1`: at `2^53` that addition returns the same
-// number, so a counter above the safe range makes "the sequence advanced"
-// unenforceable and lets a late writer's record compare equal to the one
-// that superseded it. A record carrying such a counter was not written by
-// this code, so rejecting it as corrupt is both safe and honest.
+// SAFE integer, not merely integer.
 function positiveInteger(value: unknown): number | null {
   if (typeof value !== "number") return null;
   if (!Number.isSafeInteger(value) || value < 1) return null;
   return value;
 }
 
-// ---- Required nullable fields ----------------------------------------------
-//
-// `continuation`, `progress`, `completedAt`, and `error` are REQUIRED by the
-// v2 shape, with explicit `null` expressing absence. A missing key is
-// therefore `"invalid"`, not `null`.
-//
-// Normalizing `undefined` to `null` looked harmless and was not: it let a
-// writer claim `schemaVersion: 2` while emitting an arbitrary subset of the
-// contract, and made a partially-written record indistinguishable from a
-// complete one whose optional facts happened to be absent. Both are exactly
-// what the version gate and the fail-closed rule exist to catch. JSON never
-// produces an `undefined` VALUE, so `=== undefined` here means "key absent".
+// Required nullable fields
+// Both are exactly what the version gate and the fail-closed rule exist to catch.
 
 function requiredNullableString(value: unknown): string | null | "invalid" {
   if (value === undefined) return "invalid";
@@ -571,11 +413,7 @@ function requiredNullableFiniteNumber(
   if (value === undefined) return "invalid";
   if (value === null) return null;
   if (typeof value !== "number") return "invalid";
-  // NaN/Infinity survive `typeof value === "number"`. They cannot arrive
-  // through `JSON.parse` (`JSON.stringify(NaN)` emits `null`), so this only
-  // ever fires for a caller that assembled `DurableBytes` some other way -
-  // kept because the decoder's totality claim should not rest on how its
-  // input was produced.
+  // NaN/Infinity survive `typeof value === "number"`.
   return Number.isFinite(value) ? value : "invalid";
 }
 
@@ -616,9 +454,7 @@ function parseError(value: unknown): HostUpdateAttemptError | "invalid" {
 function parseRecovery(
   value: unknown,
 ): HostUpdateAttemptRecovery | undefined | "invalid" {
-  // The field was added without a schema-version bump so retained schema-v2
-  // records written before recovery existed remain readable. Once present it
-  // is deliberately exact rather than best-effort diagnostic JSON.
+  // The field was added without a schema-version bump so retained schema-v2 records written before recovery existed remain readable.
   if (value === undefined) return undefined;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return "invalid";

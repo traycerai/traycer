@@ -136,11 +136,7 @@ describe("useQueuedMessageReorderDnd pointer source", () => {
         makeDragStartEvent(makeActive("queue-3", sourceData)),
       );
     });
-    // Simulate an auto-scrolled list: the collision pass - the same point
-    // that picked `over` - sees the pointer above queue-1's midline (120),
-    // while reconstructing it as activatorEvent.clientY + delta.y (120 + 25
-    // = 145, delta being scroll-adjusted) would land below it and insert
-    // before queue-2 instead.
+    // Simulate an auto-scrolled list: the collision pass - the same point that picked `over` - sees the pointer above queue-1's midline (120), while reconstructing it as activatorEvent.clientY + delta.y (120 + 25 = 145, delta being scroll-adjusted) would land below it and insert before queue-2 instead.
     act(() => {
       hook.result.current.collisionDetection(
         makeCollisionArgs(makeActive("queue-3", sourceData), {

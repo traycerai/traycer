@@ -10,10 +10,7 @@ import {
 import { TeardownDisclosure } from "@/components/worktree/teardown-disclosure";
 import { useTeardownAgentNames } from "@/lib/worktree/teardown-agent-names";
 
-/**
- * Force-delete confirm built on the shared `TeardownDisclosure`. Title and
- * the danger action are delete-flavored; the holder list is not forked.
- */
+/** Force-delete confirm built on the shared `TeardownDisclosure`. */
 export function TeardownForceDeleteDialog(props: {
   readonly open: boolean;
   readonly worktreeLabel: string;

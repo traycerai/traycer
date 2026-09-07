@@ -35,15 +35,13 @@ import {
 } from "../chunking";
 import { runChunkReassemblerConformanceSpec } from "./chunk-reassembler-conformance";
 
-// The conformance spec's home run: the concrete protocol implementation must
-// satisfy its own shared spec (each consumer repo re-runs the same spec
-// against whatever it resolves).
+// The conformance spec's home run: the concrete protocol implementation must satisfy its own shared spec (each consumer repo re-runs the same spec against whatever it resolves).
 runChunkReassemblerConformanceSpec(
   () => new ChunkReassembler(undefined),
   ChunkReassemblyError,
 );
 
-/** `[bodyFlags:u8][jsonLen:u32 BE][jsonBytes][binaryBytes]` — see `chunking.ts`. */
+/** `[bodyFlags:u8][jsonLen:u32 BE][jsonBytes][binaryBytes]` - see `chunking.ts`. */
 const BODY_HEADER_LEN = 5;
 const BODY_FLAG_HAS_BINARY = 0b0000_0001;
 
@@ -162,9 +160,6 @@ describe("ChunkReassembler accumulation cap failing mid-sequence", () => {
     const secondFrame = decodeMuxFrame(encodeMuxFrame(source.nextFrame()));
     expect(() => reassembler.accept(secondFrame)).toThrow(MuxMessageSizeError);
 
-    // The failed sequence's accumulator state was actually removed: a fresh
-    // chunkFirst frame on the SAME streamId is accepted (returns null)
-    // rather than throwing "sequence already in flight".
     const freshFirstFrame = decodeMuxFrame(
       encodeMuxFrame({
         type: MuxFrameType.STREAM_FRAME,
@@ -327,7 +322,6 @@ describe("body compression round-trip (T5)", () => {
   });
 
   it("a body over one 64 KiB chunk, compressed, reassembles byte-identical to the uncompressed path", () => {
-    // Highly compressible, multi-chunk binary content.
     const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3 + 777).fill(0x41);
     const json = { kind: "snapshot", note: "compression round-trip" };
     let seqA = 0;
@@ -424,9 +418,6 @@ describe("body compression round-trip (T5)", () => {
   });
 
   it("a payload under COMPRESSION_MIN_PAYLOAD_BYTES is never compressed, even with compression negotiated", () => {
-    // -10 (not -1): the body carries a 5-byte header alongside the binary, so
-    // the actual FRAME payload is binary.length + 5 - stay comfortably under
-    // the threshold rather than at its edge.
     const binary = new Uint8Array(COMPRESSION_MIN_PAYLOAD_BYTES - 10).fill(
       0x41,
     );
@@ -479,10 +470,7 @@ describe("body compression round-trip (T5)", () => {
 
   describe("decompression bomb guard", () => {
     it("rejects an under-declared compressed bomb before entering fflate's full synchronous inflater", () => {
-      // The header is peer-controlled, so it must not be the only output
-      // bound. `inflateSync(..., { out })` truncates writes but still walks the
-      // entire DEFLATE stream first; a small fixture proves we reject before
-      // paying that unbounded work without putting a gigabyte-scale bomb in CI.
+      // The header is peer-controlled, so it must not be the only output bound.
       const actualPlainLength = 4 * 1024 * 1024;
       const declaredPlainLength = 1;
       const deflated = deflateSync(new Uint8Array(actualPlainLength), {
@@ -517,9 +505,6 @@ describe("body compression round-trip (T5)", () => {
           "compressed frame inflated to more than 1 bytes, declared 1",
         );
         expect(inflateSync).not.toHaveBeenCalled();
-        // An unbounded `Inflate.push(deflated, true)` calls its callback only
-        // after all 4 MiB of output; the forged one-byte declaration permits
-        // only one compressed byte per push before that callback is checked.
         expect(Math.max(...push.mock.calls.map((args) => args[0].length))).toBe(
           1,
         );
@@ -529,12 +514,7 @@ describe("body compression round-trip (T5)", () => {
     });
 
     it("throws MuxFrameDecodeError for a GENUINELY oversized declared plaintext length - a real, validly-deflated payload that would successfully inflate past BULK_CHUNK_SIZE_BYTES if the bound were not checked first", () => {
-      // A real decompression bomb: highly compressible content that deflates
-      // small but declares (and would genuinely inflate to) well over the
-      // per-chunk bound. Using GARBAGE bytes here instead would let this test
-      // pass for the wrong reason (inflate itself throwing on invalid deflate
-      // data), masking a missing length check - it must be real deflate data
-      // that WOULD succeed were the bound not enforced first.
+      // A real decompression bomb: highly compressible content that deflates small but declares (and would genuinely inflate to) well over the per-chunk bound.
       const oversizedPlainLength = BULK_CHUNK_SIZE_BYTES * 4;
       const deflated = deflateSync(
         new Uint8Array(oversizedPlainLength).fill(0),
@@ -588,18 +568,7 @@ describe("body compression round-trip (T5)", () => {
   });
 
   /**
-   * The declared `plainLen` prefix is only a real check if it is compared
-   * against the bytes the inflater ACTUALLY produced. Both directions are
-   * pinned here because they fail differently and only one of them was ever
-   * caught: an over-declaring payload ends short and is rejected on length,
-   * while an under-declaring one silently loses its tail — the inflater drops
-   * the writes that fall past the output buffer and reports a count clamped to
-   * that buffer, so a corrupt body sails through and is DELIVERED.
-   *
-   * A valid encoded body is used as the plaintext rather than loose bytes so
-   * the failure is the one that matters: a truncated body still decodes, so
-   * without this check the receiver hands its dispatcher a message whose binary
-   * section is quietly one byte short of what the sender wrote.
+   * The declared `plainLen` prefix is only a real check if it is compared against the bytes the inflater ACTUALLY produced.
    */
   describe("declared plaintext length vs the ACTUAL inflated size", () => {
     const plainBody = encodeMuxMessageBody(
@@ -646,9 +615,7 @@ describe("body compression round-trip (T5)", () => {
 });
 
 /**
- * H11: `maxMessageBytes` bounds one message on one stream, so the aggregate a
- * peer can hold is that bound times the number of streams it opens. The
- * receiver charges the peer for the sum; this is the number it reads.
+ * H11: `maxMessageBytes` bounds one message on one stream, so the aggregate a peer can hold is that bound times the number of streams it opens.
  */
 describe("ChunkReassembler.retainedBytes", () => {
   function startChunk(streamId: number, length: number): MuxFrame {

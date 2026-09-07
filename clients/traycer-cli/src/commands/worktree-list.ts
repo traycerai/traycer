@@ -18,28 +18,18 @@ import { cliError, CLI_ERROR_CODES, toCliError } from "../runner/errors";
 import { parsePositiveIntegerArg } from "../runner/parse-positive-integer-arg";
 import type { CommandFn } from "../runner/runner";
 
-// A client-side ask, not a guarantee: the host clamps page size by request mode
-// (currently smaller for probed pages, larger for base pages). Over-asking is
-// harmless because the loop trusts `nextCursor` until exhaustion.
+// A client-side ask, not a guarantee: the host clamps page size by request mode (currently smaller for probed pages, larger for base pages).
+// Over-asking is harmless because the loop trusts `nextCursor` until exhaustion.
 const DEFAULT_WORKTREE_LIST_PAGE_LIMIT = 32;
 
-/**
- * One listing row: the raw enriched host entry plus the evidence tier computed
- * by the shared classifier (`classifyWorktreeTier` - the exact function behind
- * the Settings ▸ Worktrees pills, so CLI and GUI can never disagree). `tier` is
- * `null` when `--include-activity` was not passed: the activity probes are what
- * feed the greens, so classifying unprobed entries would misread every worktree
- * as Review. Null mirrors the probe-skipped semantics of the other fields.
- */
+/** One listing row: the raw enriched host entry plus the evidence tier computed by the shared classifier (`classifyWorktreeTier` - the exact function behind the Settings ▸ Worktrees pills, so CLI and GUI can never disagree). `tier` is `null` when `--include-activity` was not passed: the activity probes are what feed the greens, so classifying unprobed entries would misread every worktree as Review. */
 export type WorktreeListRow = WorktreeHostEntryV16 & {
   readonly tier: WorktreeTier | null;
 };
 
 export interface WorktreeListCommandOpts {
-  // `--include-activity`: opt into the host's per-worktree git probes
-  // (`lastActivityAt`, `branchStatus`). Off by default so the listing stays
-  // cheap; the housekeeping skill turns it on to classify staleness. `owners`
-  // and `createdAt` are returned either way.
+  // `--include-activity`: opt into the host's per-worktree git probes (`lastActivityAt`, `branchStatus`).
+  // Off by default so the listing stays cheap; the housekeeping skill turns it on to classify staleness.
   readonly includeActivity: boolean;
   readonly cursor: string | null;
   readonly limit: string | null;
@@ -50,33 +40,7 @@ interface WorktreeListPage {
   readonly nextCursor: string | null;
 }
 
-/**
- * `traycer worktree list` - host-wide listing of every Traycer-managed
- * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost` at
- * the CANONICAL v1.6 contract; the request carries `includeActivity`, so a
- * v1.0 host is bridged up transparently (enriched fields default to empty
- * `owners` / `null` timestamps). Human mode renders a scannable table;
- * `--json` hands the enriched entries to the caller (the skill), each carrying
- * the shared classifier's computed `tier` (null without `--include-activity`).
- *
- * The canonical parse is load-bearing, not tidiness. This read used to decode
- * the v1.4 response, and Zod strips unknown keys, so two facts a current host
- * sends were dropped before anything saw them:
- *
- *   - `gitUnreadable` (v1.6) - git cannot resolve the repository the worktree's
- *     gitlink points at, so its branch and `uncommittedCount` are placeholders.
- *     `classifyWorktreeTier` reads it at rung 1b and returns `review`
- *     specifically so such a row does NOT read as an fs-only cleanup. Stripped,
- *     the row fell through to rung 2 (`!gitRemovable`) and rendered `Orphaned`,
- *     whose whole meaning is "forced cleanup, nothing to lose" - the one
- *     reading the ladder is written to prevent, and the `traycer-housekeeping`
- *     skill takes `tier` verbatim.
- *   - `presence` (v1.5) - never consumed here, but it is part of the `--json`
- *     contract the skill reads.
- *
- * The classifier tolerates the field's absence (older hosts omit it), which is
- * why the loss was silent rather than a parse failure.
- */
+/** Host-wide listing. Do not filter to the cwd worktree. */
 export function buildWorktreeListCommand(
   opts: WorktreeListCommandOpts,
 ): CommandFn {
@@ -205,12 +169,7 @@ const COLUMNS = [
   "PATH",
 ] as const;
 
-/**
- * Render the host-wide worktree listing as a fixed-width column table. Pure so
- * the layout is unit-testable without a host. `lastActivityAt` is `null`
- * whenever `--include-activity` was not passed (the host skips the git probes),
- * so the LAST-ACTIVE cell reads `-` and a trailing hint points at the flag.
- */
+/** Render the host-wide worktree listing as a fixed-width column table. Pure so the layout is unit-testable without a host. */
 export function formatWorktreeListTable(
   worktrees: ReadonlyArray<WorktreeListRow>,
   includeActivity: boolean,
@@ -265,13 +224,7 @@ function formatWorktreeListTailHints(
   return outputLines.join("\n");
 }
 
-/**
- * Format a derived `lastActivityAt` for the table. The host may hand back a
- * seconds- or milliseconds-based epoch (reflog `%ct` is seconds, binding
- * `updatedAt` is JS `Date.now()` ms); normalise a plainly-seconds value up to
- * ms before formatting so a real timestamp never renders as 1970. `null`
- * (probe skipped or no signal) renders as `-`.
- */
+/** Format a derived `lastActivityAt` for the table. The host may hand back a seconds- or milliseconds-based epoch (reflog `%ct` is seconds, binding `updatedAt` is JS `Date.now()` ms); normalise a plainly-seconds value up to ms before formatting so a real timestamp never renders as 1970. */
 function formatLastActive(lastActivityAt: number | null): string {
   if (lastActivityAt === null) return "-";
   const ms = lastActivityAt < 1e12 ? lastActivityAt * 1000 : lastActivityAt;

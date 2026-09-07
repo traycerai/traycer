@@ -15,17 +15,8 @@ import {
   useSessionImportRun,
 } from "@/stores/session-import/session-import-run-store";
 
-/**
- * What the wizard shows once a run is under way, and the summary it leaves
- * behind. Reads the run store rather than props because the same view has to
- * be correct when the wizard is closed and reopened mid-run - the progress it
- * shows is the run's, not this mount's. The HOST is a prop: the wizard resolved
- * it from the binding it submitted on, and reading it again here would be a
- * second answer to "whose run is this".
- *
- * All three states share one centered layout, so the panel does not jump
- * between a centered spinner and a top-aligned report as the run moves on.
- */
+/** Reads the run store rather than props because the same view has to be correct when the wizard is closed and
+ * reopened mid-run - the progress it shows is the run's, not this mount's. */
 export function SessionImportProgress(props: {
   readonly tone: SessionImportTone;
   readonly hostId: string | null;
@@ -48,10 +39,7 @@ export function SessionImportProgress(props: {
   );
 
   if (running) {
-    // `role="status"` (a polite live region by definition) because everything
-    // that moves in this view is text: the count and the session being worked
-    // on. Without it a screen reader is told an import started and then hears
-    // nothing more.
+    // Without it a screen reader is told an import started and then hears nothing more.
     return (
       <div
         role="status"
@@ -72,9 +60,8 @@ export function SessionImportProgress(props: {
           </p>
         ) : null}
         {run.attached ? (
-          // Reached from a second window on the same machine, or by this
-          // window after a reload - so the copy names the machine, not a
-          // window. This window's own Import button is hidden meanwhile.
+          // Reached from a second window on the same machine, or by this window after a reload - so the copy names the
+          // machine, not a window.
           <p
             data-testid="session-import-progress-attached"
             className={cn("max-w-md text-ui-xs", tone.muted)}
@@ -114,9 +101,8 @@ export function SessionImportProgress(props: {
       data-testid="session-import-summary"
       className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-6"
     >
-      {/* `m-auto` rather than `justify-center` on the scroller: a centered
-          flex child that outgrows its box loses its top edge, while auto
-          margins center what fits and scroll what does not. */}
+      {/* `m-auto` rather than `justify-center` on the scroller: a centered flex child that outgrows its box loses its
+         top edge, while auto margins center what fits and scroll what does not. */}
       <div className="m-auto flex w-full max-w-md flex-col items-center gap-4 text-center">
         <div className="flex flex-col gap-1">
           <p className={cn("text-ui-sm font-medium", tone.strong)}>
@@ -147,12 +133,8 @@ export function SessionImportProgress(props: {
   );
 }
 
-/**
- * What did not land, as one line with one toggle: "Not imported: 6 sessions
- * with no messages". The details behind it are sectioned by cause, so a cause
- * is written once as a heading rather than once per row, and the list scrolls
- * inside a bounded height instead of pushing the headline off the panel.
- */
+/** The details behind it are sectioned by cause, so a cause is written once as a heading rather than once per
+ * row, and the list scrolls inside a bounded height instead of pushing the headline off the panel. */
 function NotImported(props: {
   readonly groups: ReadonlyArray<SessionImportFailureGroupView>;
   readonly tone: SessionImportTone;
@@ -182,9 +164,8 @@ function NotImported(props: {
         </button>
       </div>
       {expanded ? (
-        // Capped at roughly a third of the viewport: a long list scrolls here
-        // rather than growing past the headline it explains, and the cap
-        // follows the window instead of a fixed rem.
+        // Capped at roughly a third of the viewport: a long list scrolls here rather than growing past the headline it
+        // explains, and the cap follows the window instead of a fixed rem.
         <div
           data-testid="session-import-failure-details"
           className="flex max-h-[30vh] w-full flex-col gap-3 overflow-y-auto overscroll-contain text-left"

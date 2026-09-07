@@ -35,89 +35,22 @@ import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 
-// `traycer host install [--release <version>]` - registry path (NP-4) /
-// `--from <path>` local-file path (NP-2). There is NO positional argument:
-// bare `install` means latest, and a pin is spelled `--release <version>`
-// (the root `--version` collision is why it isn't `--version`). Recovery
-// text elsewhere in the CLI must use those two spellings - `host install
-// latest` is rejected by Commander as an excess argument.
-//
-// Lifecycle ordering (Tech Plan, Decision 3): stage + verify + extract
-// happen before we touch the OS service. Only once the new bytes are
-// proven good do we stop the running host, swap the install dir, and
-// start/restart the service. If the post-swap start fails the new
-// host stays installed (no rollback) - Doctor surfaces the
-// non-readiness to the operator.
-//
-// `cli-lock` scope (Tech Plan, "Lock-scope restructure"): download,
-// verify, and extract happen into an owner-tokened temp dir OUTSIDE the
-// lock (`stageHostInstallSource`), so a parallel Desktop window or
-// terminal can't be blocked behind a potentially-long download. Only
-// the commit (reconcile -> stop -> swap -> start -> re-reconcile,
-// `commitHostInstallSource`) runs inside the lock.
-//
-// Clean-machine bootstrap (Core Flow 1 / Flow 7): when no OS service is
-// registered yet (`priorState === "not-installed"`), the lifecycle
-// registers + starts the service post-swap so a single
-// `traycer host install` end-to-end stands up the host without
-// needing Desktop or a separate `traycer host service install` step. The
-// `--allow-self-invocation` flag is forwarded to
-// `resolveServiceCliInvocation` so dev / local-file installs that pre-
-// date the packaged CLI (NP-3) can still register a working service.
-//
-// Sign-in pre-flight (client/host token split): the started host reads its
-// owner from the shared credentials file, so installing while signed out
-// stands up a host that denies every connection ("unprovisioned"). Before
-// staging anything, a signed-out interactive run is offered the device-flow
-// sign-in inline; a run that cannot prompt (JSON mode - every Desktop/Doctor
-// shellout - CI, or a non-TTY stdout) warns and continues instead, and so
-// does a declined or failed sign-in. Install-now-login-later stays legal
-// throughout: the host picks up a later `traycer login` within one
-// connection, no reinstall needed, which is why the guard never hard-fails.
-// `--no-service-register` skips the pre-flight entirely - bytes-only,
-// nothing is started, and the actor that later starts the service owns the
-// sign-in question.
-//
-// Post-install credential provisioning: a signed-in install that started a
-// host follows up with a short-lived stream connection carrying the CLI mint
-// flow (`provisionInstalledHostCredential`), so the host comes up holding its
-// own `aud: "host"` credential instead of waiting for the first minting
-// client. Best-effort and deadline-bounded; failures warn.
+// Registry or `--from` install. Runs under cli-lock; busy hosts refuse before the swap.
 export interface HostInstallArgs {
-  // Always a concrete version token - "latest" or a semver. A local
-  // file is signalled by a non-null `fromPath` and supersedes
-  // `versionRequest`. The entrypoint resolves "" / null at the
-  // registration site so command body callers never see ambiguity.
+  // Always a concrete version token - "latest" or a semver.
+  // A local file is signalled by a non-null `fromPath` and supersedes `versionRequest`.
   readonly versionRequest: string;
   readonly fromPath: string | null;
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
-  // Install the host bytes only; leave OS-service registration to the
-  // host (mirrors `host ensure`'s flag) - the packaged-macOS pin path,
-  // where Desktop owns registration via SMAppService. A null-runtime
-  // archive simply lands as `activationUnknown` debt. Truly bytes-only:
-  // no stop, no register/rewrite, no start, even when a service is
-  // already registered - `createServiceInstallLifecycle`'s `bootstrap:
-  // null` still rewrites and re-loads an EXISTING registration post-
-  // swap, which is not what this flag promises.
+  // Install the host bytes only; leave OS-service registration to the host (mirrors `host ensure`'s flag) - the packaged-macOS pin path, where Desktop owns registration via SMAppService.
+  // A null-runtime archive simply lands as `activationUnknown` debt.
   readonly noServiceRegister: boolean;
-  // Hidden, internal - the CLI-owned pin gate. After acquiring the
-  // lock (download/extract already done outside it), immediately
-  // before the service stop, probe `assertHostNotBusy`; busy ->
-  // `E_HOST_BUSY` with the extracted temp scrubbed. A pin is an
-  // explicit one-shot: Defer abandons it, retry re-downloads - there
-  // is no durable deferred-pin state the way there is for a staged
-  // update.
+  // Hidden, internal - the CLI-owned pin gate.
+  // After acquiring the lock (download/extract already done outside it), immediately before the service stop, probe `assertHostNotBusy`; busy -> `E_HOST_BUSY` with the extracted temp scrubbed.
   readonly ifIdle: boolean;
-  // Install even when the host has work in progress: threaded into the
-  // service lifecycle so the pre-swap stop skips the cooperative
-  // shutdown claim and kills the host process, exactly like
-  // `host stop --force`. Without it a busy host denies the claim and
-  // the install aborts with `E_HOST_BUSY` - which used to have no
-  // supported escape short of `host stop --force` + reinstall.
-  // Mutually exclusive with `ifIdle` (one refuses on busy work, the
-  // other kills it). Inert on the bytes-only path (`noServiceRegister`):
-  // that path performs no stop for force to escalate.
+  // Install even when the host has work in progress: threaded into the service lifecycle so the pre-swap stop skips the cooperative shutdown claim and kills the host process, exactly like `host stop --force`.
+  // Without it a busy host denies the claim and the install aborts with `E_HOST_BUSY` - which used to have no supported escape short of `host stop --force` + reinstall.
   readonly force: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
@@ -168,13 +101,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             versionRequest: args.versionRequest,
           };
 
-    // `--no-service-register` must be truly bytes-only: no stop, no
-    // register/rewrite, no start - even when a service is already
-    // registered. `createServiceInstallLifecycle`'s `bootstrap: null`
-    // does not satisfy that (it still rewrites and re-loads an EXISTING
-    // registration post-swap), so this skips the service lifecycle
-    // entirely and uses the same bytes-only shape `host ensure` uses
-    // for `registerService: false`.
+    // `--no-service-register` must be truly bytes-only: no stop, no register/rewrite, no start - even when a service is already registered.
+    // `createServiceInstallLifecycle`'s `bootstrap: null` does not satisfy that (it still rewrites and re-loads an EXISTING registration post-swap), so this skips the service lifecycle entirely and uses the same bytes-only shape `host ensure` uses for `registerService: false`.
     const handle: ServiceInstallLifecycleHandle | null = args.noServiceRegister
       ? null
       : createServiceInstallLifecycle({
@@ -214,9 +142,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       async (capability) => {
         const verify = (): Promise<void> =>
           requireCliUpdateMutationCapability(capability, contenderOptions);
-        // The outer attempt capability intentionally spans staging. This
-        // preserves the existing no-download-under-cli-lock rule while
-        // refusing active/corrupt attempt state before the first byte.
+        // The outer attempt capability intentionally spans staging.
+        // This preserves the existing no-download-under-cli-lock rule while refusing active/corrupt attempt state before the first byte.
         const staged = await stageHostInstallSource({
           environment: ctx.runtime.environment,
           source,
@@ -265,19 +192,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       hasPostSwapError: handle !== null && handle.state.postSwapError !== null,
     });
 
-    // Post-install credential provisioning: leave the just-started host
-    // holding its own `aud: "host"` credential rather than waiting for the
-    // first minting client to happen to connect. Only where it can help:
-    //   - the service lifecycle actually started/restarted a host
-    //     (`postSwapAction`), cleanly - a host that failed its post-swap
-    //     start has nothing to dial;
-    //   - the pre-flight left us signed in (the mint spends the bearer).
-    // Deliberately NOT gated on output mode - `--json` is the automation
-    // surface that most needs a credentialed host, and a Desktop shellout
-    // racing the GUI's own mint resolves inside the probe (a superseded mint
-    // verifies the winner's credential rather than failing).
-    // Best-effort throughout: any failure is a warning, never a failed
-    // install - an unprovisioned host self-heals on the next minting client.
+    // Post-install credential provisioning: leave the just-started host holding its own `aud: "host"` credential rather than waiting for the first minting client to happen to connect.
+    // Only where it can help: - the service lifecycle actually started/restarted a host (`postSwapAction`), cleanly - a host that failed its post-swap start has nothing to dial; - the pre-flight left us signed in (the mint spends the bearer).
     const credentialProvision = await maybeProvisionCredential(
       ctx,
       handle !== null && handle.state.postSwapError === null
@@ -298,9 +214,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     if (handle !== null && handle.state.postSwapError !== null) {
       human = `${human}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`;
     }
-    // Restate the unauthenticated warning on the terminal line - the
-    // pre-flight's copy printed before a potentially long download and
-    // may have scrolled away.
+    // Restate the unauthenticated warning on the terminal line - the pre-flight's copy printed before a potentially long download and may have scrolled away.
     if (authPreflight.state === "unauthenticated") {
       human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
     }

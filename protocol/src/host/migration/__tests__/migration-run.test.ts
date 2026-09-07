@@ -5,12 +5,7 @@ import {
   migrationRunV10,
 } from "@traycer/protocol/host/migration/run";
 
-/**
- * `migration.run@1.0` frame fixtures.
- *
- * Covers every frame kind the contract declares. All frames are JSON-only
- * - `hasBinaryPayload` is pinned to the `false` literal everywhere.
- */
+/** `migration.run@1.0` frame fixtures. */
 
 describe("migration.run@1.0 server frames", () => {
   it("parses a started frame", () => {

@@ -1,10 +1,6 @@
 /**
  * The agent click-through, resolved from a selected id.
- *
- * Both renderings of the communication graph open the SAME panel on the same
- * data, so the resolution (id -> agent, merged array -> that agent's slice) and
- * the sender-side "open this agent" link live here once. A second copy would be
- * free to drift into showing an agent a different set of its own rows.
+ * Both renderings of the communication graph open the SAME panel on the same data, so the resolution (id -> agent, merged array -> that agent's slice) and the sender-side "open this agent" link live here once.
  */
 import { useMemo } from "react";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";

@@ -29,11 +29,8 @@ import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open
 import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
 
-// A file-change body lazy-fetches its before/after by hash and renders a themed
-// diff. Stub both so an expanded one renders synchronously, without a
-// HostRuntimeProvider or a ThemeProvider - the same pair
-// `file-change-group-segment.test.tsx` uses, and the only reason the promote
-// assertions below can reach a file-change row at all.
+// A file-change body lazy-fetches its before/after by hash and renders a themed diff.
+// Stub both so an expanded one renders synchronously, without a HostRuntimeProvider or a ThemeProvider - the same pair `file-change-group-segment.test.tsx` uses, and the only reason the promote assertions below can reach a file-change row at all.
 vi.mock("@/components/diff/diff-content-primitive", () => ({
   DiffContentFrame: (props: { readonly children: ReactNode }) => (
     <div data-testid="inline-diff-frame">{props.children}</div>
@@ -41,10 +38,8 @@ vi.mock("@/components/diff/diff-content-primitive", () => ({
   DiffContentPrimitive: () => <div data-testid="inline-diff" />,
 }));
 
-// The transcript renders inside a chat TILE, so its file-change rows resolve
-// the snapshot store on the TAB's host (D15). The query itself is mocked just
-// below, so `null` is enough here - what matters is that the seam exists and is
-// this one, not the app-wide read it replaced.
+// The transcript renders inside a chat TILE, so its file-change rows resolve the snapshot store on the TAB's host (D15).
+// The query itself is mocked just below, so `null` is enough here - what matters is that the seam exists and is this one, not the app-wide read it replaced.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -172,10 +167,8 @@ describe("<ActivityGroupSegment />", () => {
       expect(label.closest("[data-find-skip]")).toBeNull();
       expect(label.closest("button")).not.toBeNull();
 
-      // The live elapsed timer is ephemeral chrome the summary projection never
-      // indexes. Without the data-find-skip wrapper, a query on the elapsed
-      // digits would paint inside the anchor (count 1, paint 2); the skip keeps
-      // paint == count.
+      // The live elapsed timer is ephemeral chrome the summary projection never indexes.
+      // Without the data-find-skip wrapper, a query on the elapsed digits would paint inside the anchor (count 1, paint 2); the skip keeps paint == count.
       expect(screen.getByText("5s").closest("[data-find-skip]")).not.toBeNull();
     } finally {
       vi.useRealTimers();
@@ -230,9 +223,8 @@ describe("<ActivityGroupSegment /> live window", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
 
-    // Still exactly one: the window is exiting (and empty) while
-    // CollapsibleContent now owns the row. Two copies would double-count in
-    // find and paint a highlight the projection never counted.
+    // Still exactly one: the window is exiting (and empty) while CollapsibleContent now owns the row.
+    // Two copies would double-count in find and paint a highlight the projection never counted.
     expect(screen.getAllByText("echo hi")).toHaveLength(1);
   });
 
@@ -248,16 +240,14 @@ describe("<ActivityGroupSegment /> live window", () => {
       );
       expect(screen.getByTestId("activity-live-window")).toBeTruthy();
 
-      // The turn ends.
       rerender(
         <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
           <ActivityGroupSegment group={GROUP} />
         </ChatExpansionTestProviders>,
       );
 
-      // Still in the DOM, but marked closed - the grid row is transitioning to
-      // 0fr. Unmounting here instead would snap the height and reproduce the
-      // exact jump this design removes.
+      // Still in the DOM, but marked closed - the grid row is transitioning to 0fr.
+      // Unmounting here instead would snap the height and reproduce the exact jump this design removes.
       const exiting = screen.getByTestId("activity-live-window");
       expect(exiting.dataset.shown).toBe("false");
       expect(screen.getByRole("button", { name: /echo hi/ })).toBeTruthy();
@@ -272,17 +262,12 @@ describe("<ActivityGroupSegment /> live window", () => {
     }
   });
 
-  // A group's SOLE reasoning block renders unheaded: the group header's
-  // thinking clause IS that block's label, so a nested header repeated the
-  // same word one line lower, and kept repeating it ("Thought for 2s" over
-  // "Thought for 2s") long after the streaming ended.
+  // A group's SOLE reasoning block renders unheaded: the group header's thinking clause IS that block's label, so a nested header repeated the same word one line lower, and kept repeating it ("Thought for 2s" over "Thought for 2s") long after the streaming ended.
   it("renders a group's sole reasoning block with no visible header, so the label appears once", () => {
     renderActivityGroup(SOLE_REASONING_GROUP);
 
-    // Nothing VISIBLE repeats the group's label. The one control in here is
-    // `sr-only`: dropping the header outright dropped the block's only button,
-    // and its body is a deliberately non-interactive div, so a pointer could
-    // still click the trace and a keyboard had nothing to reach at all.
+    // Nothing VISIBLE repeats the group's label.
+    // The one control in here is `sr-only`: dropping the header outright dropped the block's only button, and its body is a deliberately non-interactive div, so a pointer could still click the trace and a keyboard had nothing to reach at all.
     const scroller = screen.getByTestId("activity-live-window-scroller");
     const controls = scroller.querySelectorAll("button");
     expect(controls).toHaveLength(1);
@@ -290,10 +275,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     // It promotes rather than discloses, so it must not claim otherwise - the
     // same call `PromotingSegmentRow` makes.
     expect(controls[0].getAttribute("aria-expanded")).toBeNull();
-    // And because it has no `aria-expanded` AND sits beside the group's own
-    // trigger carrying the SAME label, its name has to say what it does. On the
-    // bare label a screen reader hears "Thinking, button" twice, identically,
-    // with nothing to choose between them.
+    // And because it has no `aria-expanded` AND sits beside the group's own trigger carrying the SAME label, its name has to say what it does.
+    // On the bare label a screen reader hears "Thinking, button" twice, identically, with nothing to choose between them.
     expect(controls[0].getAttribute("aria-label")).toBe(
       "Thinking - open in the full activity view",
     );
@@ -311,10 +294,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     ).toBeNull();
   });
 
-  // The regression that made the narrower rule necessary. Keyed on the
-  // reasoning COUNT alone, this shape was headerless too - and its group header
-  // reads "Thinking, ran 1 command", which is NOT the block's label, so the
-  // trace rendered as a titled-by-nothing paragraph sitting between tool rows.
+  // The regression that made the narrower rule necessary.
+  // Keyed on the reasoning COUNT alone, this shape was headerless too - and its group header reads "Thinking, ran 1 command", which is NOT the block's label, so the trace rendered as a titled-by-nothing paragraph sitting between tool rows.
   it("keeps the reasoning header when the group holds anything else", () => {
     renderActivityGroup({
       ...SOLE_REASONING_GROUP,
@@ -351,9 +332,7 @@ describe("<ActivityGroupSegment /> live window", () => {
       summary: "Thought for 3s, ran 1 command",
     });
 
-    // The still-streaming block's own header is back; the group summary now
-    // reads the accumulated total instead, so the two no longer say the same
-    // thing at all.
+    // The still-streaming block's own header is back; the group summary now reads the accumulated total instead, so the two no longer say the same thing at all.
     expect(screen.getByRole("button", { name: "Thinking" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Thought for 3s" })).toBeTruthy();
     for (const segmentId of ["reasoning-1", "reasoning-2"]) {
@@ -367,9 +346,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     }
   });
 
-  // The window caps the height and follows the tail itself. A `ReasoningTail`
-  // in here would be a second `overflow-y-auto` inside the first: two scroll
-  // positions, two tail pins, two stacked top masks over the same lines.
+  // The window caps the height and follows the tail itself.
+  // A `ReasoningTail` in here would be a second `overflow-y-auto` inside the first: two scroll positions, two tail pins, two stacked top masks over the same lines.
   it("drops the reasoning child's own scroller inside the window, and keeps it outside", () => {
     renderActivityGroup({
       ...SOLE_REASONING_GROUP,
@@ -387,16 +365,10 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(screen.getByTestId("reasoning-tail")).toBeTruthy();
   });
 
-  // The headerless flag is derived from the group's SHAPE and flips the moment
-  // a second reasoning block joins the run. What that flip must NOT do is leave
-  // the trace expanded: a headerless block shows its body because there is
-  // nowhere else to put it, not because the reader opened it, and treating that
-  // as a disclosure left the first thought of every run permanently unfolded
-  // under a header whose chevron claimed it was open.
+  // The headerless flag is derived from the group's SHAPE and flips the moment a second reasoning block joins the run.
+  // What that flip must NOT do is leave the trace expanded: a headerless block shows its body because there is nowhere else to put it, not because the reader opened it, and treating that as a disclosure left the first thought of every run permanently unfolded under a header whose chevron claimed it was open.
   it("collapses an unopened reasoning body once a second block gives it a header", () => {
-    // COMPLETED, deliberately. The body is also gated on `isStreaming`, so a
-    // still-streaming block would keep its body on that alone and hide the
-    // behaviour entirely.
+    // COMPLETED, deliberately. The body is also gated on `isStreaming`, so a still-streaming block would keep its body on that alone and hide the behaviour entirely.
     const completedReasoning: ReasoningSegment = {
       ...REASONING_SEGMENT,
       isStreaming: false,
@@ -467,9 +439,8 @@ describe("<ActivityGroupSegment /> live window", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Thinking/ }));
 
-    // The command row keeps its own header and the anchor the projection
-    // indexes. (The sole reasoning block is unheaded by design and is covered
-    // above; every OTHER child kind is unaffected.)
+    // The command row keeps its own header and the anchor the projection indexes.
+    // (The sole reasoning block is unheaded by design and is covered above; every OTHER child kind is unaffected.)
     const childUnitId = chatFindActivityGroupChildHeaderUnitId(
       SOLE_REASONING_GROUP.id,
       COMMAND_SEGMENT.id,
@@ -479,10 +450,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     ).not.toBeNull();
   });
 
-  // The window is four line-heights tall, so a row expanded in place is clipped
-  // to roughly one line and shoves its siblings out of the box. The click
-  // leaves the window instead: the group opens and the row comes back in the
-  // full-height body, already unfolded.
+  // The window is four line-heights tall, so a row expanded in place is clipped to roughly one line and shoves its siblings out of the box.
+  // The click leaves the window instead: the group opens and the row comes back in the full-height body, already unfolded.
   it("promotes a live-window row into the open group instead of expanding it in place", () => {
     renderActivityGroup({
       ...GROUP,
@@ -507,24 +476,15 @@ describe("<ActivityGroupSegment /> live window", () => {
       "false",
     );
 
-    // And the row came back UNFOLDED. Command, file-change and approval rows
-    // keep open state in local `useState` rather than the id-keyed store tool
-    // and subagent rows use, so the clicked copy takes its own state with it
-    // when the window unmounts - the replacement has to be seeded explicitly or
-    // the promote delivers an open group and nothing else.
-    //
-    // Asserting on the command text does not show this: `echo hi` is in the
-    // header, which renders open or closed, so that assertion passed for a row
-    // that promoted and stayed shut. The panel label lives in the body only.
+    // Command, file-change and approval rows keep open state in local `useState` rather than the id-keyed store tool and subagent rows use, so the clicked copy takes its own state with it when the window unmounts - the replacement has to be seeded explicitly or the promote delivers an open group and nothing else.
+    // Asserting on the command text does not show this: `echo hi` is in the header, which renders open or closed, so that assertion passed for a row that promoted and stayed shut.
     const trigger = screen.getByRole("button", { name: /echo hi/ });
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Command")).toBeTruthy();
   });
 
-  // Every child kind whose open state is LOCAL, not store-backed, needs the
-  // same seeding - and each is its own component with its own `useState`, so
-  // covering one proves nothing about the others. Reverting the seed on
-  // file-change and approval left every suite green until these existed.
+  // Every child kind whose open state is LOCAL, not store-backed, needs the same seeding - and each is its own component with its own `useState`, so covering one proves nothing about the others.
+  // Reverting the seed on file-change and approval left every suite green until these existed.
   it.each([
     [
       "file change",
@@ -583,16 +543,7 @@ describe("<ActivityGroupSegment /> live window", () => {
     },
   );
 
-  // The reveal focuses the row's OWN trigger, marked explicitly. Taking the
-  // first button in document order instead lands on whatever the content
-  // happens to contain first - for a reasoning trace with a fenced code block
-  // that is its "Copy code" button, so the reader is dropped on a control they
-  // never asked for, inside the body rather than on the row.
-  // A revealed headerless block whose trace contains a fenced code block was
-  // where focus went wrong: it rendered no trigger of its own, so the first
-  // button inside it was the code block's Copy control. Two things fixed that -
-  // the block now KEEPS a hidden control through its own disclosure, so there is
-  // a trigger to land on, and the reveal targets that trigger explicitly.
+  // Taking the first button in document order instead lands on whatever the content happens to contain first - for a reasoning trace with a fenced code block that is its "Copy code" button, so the reader is dropped on a control they never asked for, inside the body rather than on the row.
   it("focuses the revealed row's own trigger, not a control inside its body", () => {
     renderActivityGroup({
       ...SOLE_REASONING_GROUP,
@@ -612,9 +563,8 @@ describe("<ActivityGroupSegment /> live window", () => {
 
     const focused = document.activeElement as HTMLElement;
     expect(focused.getAttribute("data-activity-row-trigger")).not.toBeNull();
-    // The promote seeded it expanded, so the control's job now is to collapse -
-    // and its name has to say so. It read "show the full reasoning" while
-    // reporting `aria-expanded="true"`, which described the opposite action.
+    // The promote seeded it expanded, so the control's job now is to collapse - and its name has to say so.
+    // It read "show the full reasoning" while reporting `aria-expanded="true"`, which described the opposite action.
     expect(focused.getAttribute("aria-label")).toBe(
       "Thinking - collapse to the preview",
     );
@@ -634,26 +584,15 @@ describe("<ActivityGroupSegment /> live window", () => {
     );
     fireEvent.click(row as HTMLButtonElement);
 
-    // The button that was clicked no longer exists. Leaving focus where it fell
-    // returns a keyboard user to the top of the transcript, having just asked
-    // to be taken to one specific row.
+    // The button that was clicked no longer exists.
+    // Leaving focus where it fell returns a keyboard user to the top of the transcript, having just asked to be taken to one specific row.
     expect(document.activeElement).not.toBe(document.body);
     expect(screen.getByRole("button", { name: /echo hi/ })).toBe(
       document.activeElement,
     );
   });
 
-  // A run loses a member when a command backgrounds, when a question tool's
-  // interview lands, and - upstream of the timeline builder entirely - when
-  // `buildAssistantSegments` suppresses a subagent spawn tool. The group id is
-  // derived from the first segment, so the list shrinks under an unchanged id on
-  // a component that stays mounted. The headerless rule is a pure function of
-  // the shape, so it would flip back to true here and, because a headerless body
-  // always shows, unfold a completed trace nobody opened: #597 inverted.
-  //
-  // The header therefore latches on this component's own history. No model flag,
-  // because the removals that matter happen in three places and one of them runs
-  // before the model is built.
+  // The headerless rule is a pure function of the shape, so it would flip back to true here and, because a headerless body always shows, unfold a completed trace nobody opened: #597 inverted.
   const COMPLETED_REASONING: ReasoningSegment = {
     ...REASONING_SEGMENT,
     isStreaming: false,
@@ -700,10 +639,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(screen.queryByText("Weighing the two approaches")).toBeNull();
   });
 
-  // The other half of the latch, and the reason it cannot live on the model. A
-  // snapshot flag cannot tell "shrank under the reader" from "arrived this
-  // shape", so it kept the duplicate header on any message that merely STARTS
-  // with a backgrounded command - reinstating the exact defect the rule removes.
+  // The other half of the latch, and the reason it cannot live on the model.
+  // A snapshot flag cannot tell "shrank under the reader" from "arrived this shape", so it kept the duplicate header on any message that merely STARTS with a backgrounded command - reinstating the exact defect the rule removes.
   it("renders unheaded when a one-block group is the first thing it ever sees", () => {
     renderActivityGroup(SHRUNK_GROUP);
 
@@ -717,11 +654,7 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
   });
 
-  // "Was headed" is not "had two segments". A settled, collapsed group renders
-  // NO children - the live window is gone and `CollapsibleContent` unmounts its
-  // subtree - so a shrink that happens before the reader ever opens it showed
-  // them nothing. Latching on shape alone put a second `Thought for 2s` under
-  // the first the moment they did open it.
+  // "Was headed" is not "had two segments".
   it("does not latch a header the reader never saw, when the shrink precedes the first open", () => {
     const { rerender } = render(
       <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
@@ -744,13 +677,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
   });
 
-  // The gap between "shown" and "on screen". `LiveActivityWindow` keeps its rows
-  // in the DOM for the whole 300ms exit, so when a group settles in the SAME
-  // update that adds a second segment, `shown` is already false while the newly
-  // headed reasoning row is still visible. A latch gated on `shown` records
-  // nothing for that window, and the next shrink strips a header the reader saw
-  // - the defect the latch exists to prevent, coming back through its one blind
-  // spot. Gating on the window's mounted state closes it.
+  // The gap between "shown" and "on screen".
+  // `LiveActivityWindow` keeps its rows in the DOM for the whole 300ms exit, so when a group settles in the SAME update that adds a second segment, `shown` is already false while the newly headed reasoning row is still visible.
   it("latches a header shown only during the live window's exit animation", () => {
     vi.useFakeTimers();
     try {
@@ -770,9 +698,8 @@ describe("<ActivityGroupSegment /> live window", () => {
         </ChatExpansionTestProviders>,
       );
 
-      // The child header really is on screen during the exit. Without this the
-      // test would pass for a window that had already torn its rows down, and
-      // prove nothing about the gap.
+      // The child header really is on screen during the exit.
+      // Without this the test would pass for a window that had already torn its rows down, and prove nothing about the gap.
       expect(screen.getByText("echo hi")).toBeTruthy();
 
       act(() => {
@@ -795,16 +722,7 @@ describe("<ActivityGroupSegment /> live window", () => {
     }
   });
 
-  // The group's id is derived from its FIRST member, so removing that member
-  // RENAMES the group. `[command, reasoning]` whose command is promoted out
-  // becomes `[reasoning]` under a different id - and a latch keyed by group id
-  // is orphaned by precisely the move it exists to survive, dropping the header
-  // and unfolding the trace. Keying by segment id is what makes it hold, because
-  // segment ids do not move.
-  //
-  // Note this is the mirror of the shrink case above, which only ever exercised
-  // `[reasoning, X] -> [reasoning]`, where reasoning leads and the id happens
-  // not to change.
+  // Keying by segment id is what makes it hold, because segment ids do not move.
   it("keeps the reasoning header when the group's FIRST member leaves and renames it", () => {
     const leadingCommandGroup: ActivityGroupModel = {
       ...TWO_CHILD_GROUP,
@@ -844,11 +762,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(screen.queryByText("Weighing the two approaches")).toBeNull();
   });
 
-  // A latch that can be evicted is not a latch. Sharing `openIds`' 256-entry
-  // FIFO meant the 257th mark erased the oldest, so a long transcript would drop
-  // the header on its earliest groups and unfold their traces on the next
-  // remount - the same defect, just past a threshold nobody would hit while
-  // testing.
+  // A latch that can be evicted is not a latch.
+  // Sharing `openIds`' 256-entry FIFO meant the 257th mark erased the oldest, so a long transcript would drop the header on its earliest groups and unfold their traces on the next remount - the same defect, just past a threshold nobody would hit while testing.
   it("keeps a header latched past the open-id cap", () => {
     const store = createActivityGroupOpenStore(null);
     const mount = (group: ActivityGroupModel) => (
@@ -877,9 +792,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(screen.queryByText("Weighing the two approaches")).toBeNull();
   });
 
-  // "Showed a nested reasoning header" is not "showed children". A group with no
-  // reasoning in it never renders one, so marking it is meaningless - and while
-  // the set was capped, it was unrelated activity spending a real latch's budget.
+  // "Showed a nested reasoning header" is not "showed children".
+  // A group with no reasoning in it never renders one, so marking it is meaningless - and while the set was capped, it was unrelated activity spending a real latch's budget.
   it("does not mark a group that has no reasoning header to show", () => {
     const store = createActivityGroupOpenStore(null);
     render(
@@ -899,17 +813,11 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(store.getState().headedIds.size).toBe(0);
   });
 
-  // The latch outlives the component for the same reason the open state does:
-  // chat tiles fully remount on a tab switch, and LegendList unmounts rows that
-  // scroll away. Held in component state it died with the mount, so the header
-  // vanished and the trace unfolded on the next remount - the same discontinuity
-  // one step later. `ChatExpansionTestProviders` keeps the same store instance,
-  // which is exactly what a tab remount does.
+  // The latch outlives the component for the same reason the open state does: chat tiles fully remount on a tab switch, and LegendList unmounts rows that scroll away.
+  // Held in component state it died with the mount, so the header vanished and the trace unfolded on the next remount - the same discontinuity one step later.
   it("keeps the preserved header across a remount of the still-open group", () => {
-    // The SAME store across both mounts - which is precisely what a tab switch
-    // does (the registry hands the tile back its existing store, decision #17).
-    // `ChatExpansionTestProviders` passes `store={null}` and would hand out a
-    // fresh one, hiding the whole defect.
+    // The SAME store across both mounts - which is precisely what a tab switch does (the registry hands the tile back its existing store, decision #17).
+    // `ChatExpansionTestProviders` passes `store={null}` and would hand out a fresh one, hiding the whole defect.
     const store = createActivityGroupOpenStore(null);
     const mount = (group: ActivityGroupModel) => (
       <ChatOpenStoreScopeProvider value="activity-group-remount-tile">
@@ -936,10 +844,8 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(screen.queryByText("Weighing the two approaches")).toBeNull();
   });
 
-  // The latched header is deliberately NOT a find anchor: the projection is
-  // rebuilt from the model and sees only the shape, so it emits no unit here.
-  // Anchors follow the projection, the visible header follows the latch - which
-  // leaves an un-indexed header, never an unpaintable match.
+  // The latched header is deliberately NOT a find anchor: the projection is rebuilt from the model and sees only the shape, so it emits no unit here.
+  // Anchors follow the projection, the visible header follows the latch - which leaves an un-indexed header, never an unpaintable match.
   it("does not anchor find on a header the projection no longer indexes", () => {
     const { rerender } = render(
       <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">

@@ -5,15 +5,7 @@ import {
 } from "@/lib/terminals/terminal-key-sequences";
 
 /**
- * One-shot sticky-modifier latch for the mobile terminal key bar
- * (Termux-style: tap Ctrl, it lights up, the NEXT key gets the modifier).
- *
- * Module singleton rather than component state because the latch must combine
- * with characters typed on the phone's soft keyboard, which surface inside the
- * xterm engine's `onData` path (`terminal-tile-xterm.tsx`) - outside the bar's
- * React tree. A singleton is sufficient: the mobile view shows exactly one
- * terminal, and only the bar ever sets a latch, so desktop input always takes
- * the empty-latch fast path.
+ * One-shot sticky-modifier latch for the mobile terminal key bar (Termux-style: tap Ctrl, it lights up, the NEXT key gets the modifier).
  */
 
 type TerminalKeyBarModifierKey = "ctrl" | "alt" | "shift";
@@ -61,22 +53,8 @@ export function consumeTerminalKeyBarModifiers(): TerminalKeyBarModifiers {
 }
 
 /**
- * Applies a pending latch to input produced by typing (the xterm `onData`
- * path). No latch -> input passes through untouched (the desktop / common
- * case). With a latch, a single typed character is transformed (Ctrl+`c` ->
- * `\x03`) and the latch is consumed.
- *
- * Multi-character chunks pass through WITHOUT consuming: `onData` is not only
- * typing - the engine synthesizes reports on this path (focus-in `\x1b[I`
- * under DECSET 1004, mouse-tracking sequences), and IME compositions / pastes
- * also arrive as chunks. None of those are the keystroke the user latched
- * for, and dropping the latch on them would be silent (tap Ctrl, tap the
- * terminal to raise the keyboard -> focus report eats the Ctrl). Leaving it
- * armed is visible: the bar still shows the key lit.
- *
- * Bar keys are NOT routed here: the bar consumes the latch itself before
- * injecting via `term.input`, so by the time that injection re-enters
- * `onData` the latch is already empty.
+ * Applies a pending latch to input produced by typing (the xterm `onData` path).
+ * No latch -> input passes through untouched (the desktop / common case).
  */
 export function applyTerminalKeyBarLatchToTypedInput(data: string): string {
   if (!latched.ctrl && !latched.alt && !latched.shift) return data;

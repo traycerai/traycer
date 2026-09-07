@@ -9,13 +9,9 @@ import {
   isTerminalizationObservationHealthy,
 } from "../cutover-telemetry";
 
-// Direct unit suite for the Ticket 07 §4.2 shadow/telemetry gates.
-
 describe("gate readings — no samples is not a passing grade", () => {
   it("zero observations reads as insufficient-data, NOT a healthy ratio", () => {
-    // The failure this exists to prevent: `0 / 0` rendering as "0 failures"
-    // and certifying a fleet the gate never observed. An unknown that reads as
-    // a pass is the fabrication class this epic keeps finding.
+    // The failure this exists to prevent: `0 / 0` rendering as "0 failures" and certifying a fleet the gate never observed.
     expect(evaluateGate({ total: 0, healthy: 0 }, 1)).toEqual({
       kind: "insufficient-data",
       total: 0,
@@ -30,9 +26,7 @@ describe("gate readings — no samples is not a passing grade", () => {
   });
 
   it("a perfect but tiny sample does NOT clear a threshold", () => {
-    // Load-bearing pairing: `healthy === total` would make any ratio-only
-    // check pass. The sample size is what stops one lucky host from
-    // certifying the fleet.
+    // Load-bearing pairing: `healthy === total` would make any ratio-only check pass.
     const reading = evaluateGate({ total: 1, healthy: 1 }, 10);
     expect(gateClears(reading, 1)).toBe(false);
   });
@@ -63,9 +57,7 @@ describe("per-gate observation shaping", () => {
     ["decoded-in-flight", false],
     ["undecodable", false],
   ] as const)("gate 2 — journal %s is healthy=%s", (observation, healthy) => {
-    // In-flight-at-boot is unhealthy even though failing closed on it is
-    // CORRECT behaviour: the gate measures how often the veto fires, not
-    // whether firing is right.
+    // In-flight-at-boot is unhealthy even though failing closed on it is correct behaviour: the gate measures how often the veto fires, not whether firing is right.
     expect(isJournalObservationHealthy(observation)).toBe(healthy);
   });
 
@@ -77,10 +69,7 @@ describe("per-gate observation shaping", () => {
         attemptPhase: null,
       }),
     ).toBe(true);
-    // A marker DURING a live attempt is the lock-blind actor this gate exists
-    // to count - and it is the same judgement the fence aborts on. If these
-    // two ever disagreed, the fleet metric would read clear while attempts
-    // were being aborted in the field.
+    // A marker during a live attempt is the lock-blind actor this gate exists to count - and it is the same judgement the fence aborts on.
     expect(
       isLegacyMarkerObservationHealthy({
         legacyMarkerPresent: true,
@@ -100,9 +89,7 @@ describe("per-gate observation shaping", () => {
     ["not-consumed", false],
     ["consumed-twice", false],
   ] as const)("gate 4 — adoption %s is healthy=%s", (observation, healthy) => {
-    // Both failures matter and neither outranks the other: nobody consuming
-    // means the producer half is unreachable; two consumers means the one-shot
-    // property broke.
+    // Both failures matter and neither outranks the other: nobody consuming means the producer half is unreachable; two consumers means the one-shot property broke.
     expect(isAdoptionObservationHealthy(observation)).toBe(healthy);
   });
 
@@ -114,18 +101,13 @@ describe("per-gate observation shaping", () => {
     ["restarting", false],
     ["waiting-to-activate", false],
   ] as const)("gate 5 — phase %s is terminal=%s", (phase, healthy) => {
-    // Terminal means REACHED AN END, not "succeeded" - `failed` and
-    // `superseded` are healthy for this gate because the class being measured
-    // is stuck-forever, not unsuccessful.
+    // Terminal means reached AN end, not "succeeded" - `failed` and `superseded` are healthy for this gate because the class being measured is stuck-forever, not unsuccessful.
     expect(isTerminalizationObservationHealthy(phase)).toBe(healthy);
   });
 });
 
-// F3 calibration controls (Ticket 07 fix round). The reviewer's exact probe
-// was `{total: 10, healthy: 11}` reading `ratio: 1.1` and CLEARING a 0.99
-// gate — an aggregation defect certifying a cutover on bad data. `malformed`
-// exists to make that impossible: a defective sample must never reach the
-// ratio arm `gateClears` compares against.
+// The reviewer's exact probe was `{total: 10, healthy: 11}` reading `ratio: 1.1` and clearing a 0.99 gate - an aggregation defect certifying a cutover on bad data.
+// `malformed` exists to make that impossible: a defective sample must never reach the ratio arm `gateClears` compares against.
 describe("gate readings — malformed samples never clear, at any threshold", () => {
   it("the reviewer's exact probe — {total: 10, healthy: 11} is malformed, not a 110% pass", () => {
     const reading = evaluateGate({ total: 10, healthy: 11 }, 1);
@@ -133,7 +115,7 @@ describe("gate readings — malformed samples never clear, at any threshold", ()
       kind: "malformed",
       defect: "healthy-exceeds-total",
     });
-    // THE POINT: a defect must clear NOTHING, including a threshold of 0 —
+    // the point: a defect must clear nothing, including a threshold of 0 -
     // the exact case that let `ratio: 1.1` slip through as a pass before.
     for (const threshold of [0, 0.01, 0.5, 0.99, 1]) {
       expect(gateClears(reading, threshold)).toBe(false);

@@ -62,13 +62,8 @@ function replaceBlock(
 }
 
 /**
- * The canonical-settlement fields of a brand-new interview block, at their
- * "nothing has happened yet" values.
- *
- * Written once here so every construction site in this file starts from the
- * same baseline - a missed field would type-check as an incomplete block only
- * where the schema demands it, and would silently diverge in the shapes the
- * reducer reads.
+ * The canonical-settlement fields of a brand-new interview block, at their "nothing has happened yet" values.
+ * Written once here so every construction site in this file starts from the same baseline - a missed field would type-check as an incomplete block only where the schema demands it, and would silently diverge in the.
  */
 function emptyInterviewBlockFacts(): Pick<
   InterviewBlock,
@@ -95,31 +90,7 @@ function emptyInterviewBlockFacts(): Pick<
 
 /**
  * A replay-safe settlement id for a RUNTIME-originated settlement.
- *
- * ARCHITECTURAL CONSTRAINT, stated rather than papered over: the runtime
- * interview events carry NO identity of their own.
- * `InterviewResolvedEvent`/`InterviewErroredEvent` are `{ blockId, timestamp,
- * parentBlockId, type }` plus their payload - there is no event id to key
- * settlement on. So this derives one from everything that does identify the
- * event, and the derivation has a known collision: two DISTINCT runtime events
- * of the same kind, for the same block, in the same millisecond produce the
- * same id, and the reducer reads the second as a replay of the first.
- *
- * That collision is contained rather than fixed, and deliberately not hidden
- * behind a random id. A random id would make every replay - hydration,
- * reconciliation, a reconnect re-delivering the same event - look like a NEW
- * settlement, which is a permanent correctness bug traded for a
- * same-millisecond edge case. The containment is the reducer's authority
- * rules: a colliding second event cannot install its own answers over a
- * canonical winner in any case (see `applyInterviewSettlement`'s payload
- * gating), so the observable loss is limited to a distinct diagnostic code
- * that lands in the same millisecond as its twin.
- *
- * The real fix is an id on the event itself, which is a change to the
- * runtime-event contract (a new `chat.subscribe` minor and an adapter
- * obligation), not something this function can invent. Until then, a
- * host-originated settlement supplies its own durable id and never comes here
- * - which is the path every user-visible settlement actually takes.
+ * Until then, a host-originated settlement supplies its own durable id and never comes here - which is the path every user-visible settlement actually takes.
  */
 function runtimeSettlementId(
   event: InterviewResolvedEvent | InterviewErroredEvent,
@@ -133,10 +104,7 @@ function applyRuntimeInterviewSettlement(
   settlement: InterviewSettlement,
 ): ContentBlock[] {
   const existing = findBlockOfType(blocks, event.blockId, "interview");
-  // A settlement can arrive for a block this accumulator never saw requested
-  // (a resumed session, a detached interview whose request block was trimmed).
-  // Reducing against a synthetic empty block keeps that path on the same rules
-  // as every other, instead of a second hand-written block literal.
+  // A settlement can arrive for a block this accumulator never saw requested (a resumed session, a detached interview whose request block was trimmed).
   const base: InterviewBlock = existing ?? {
     ...emptyInterviewBlockFacts(),
     type: "interview",
@@ -163,13 +131,7 @@ function applyRuntimeInterviewSettlement(
     : replaceBlock(blocks, event.blockId, updated);
 }
 
-/**
- * Resolve the owner (parent) block id for a block being created or updated.
- * Prefer the event's own `parentBlockId`; fall back to any value the existing
- * block already carries so a later lifecycle event (e.g. `file_change.completed`
- * arriving with the parent after a parent-less `file_change.started`) can adopt
- * it without dropping it. Absent on both ⇒ top-level (null).
- */
+/** Resolve the owner (parent) block id for a block being created or updated. */
 function resolveParentBlockId(
   event: { parentBlockId?: string | null },
   existing: { parentBlockId?: string | null } | undefined,
@@ -178,18 +140,10 @@ function resolveParentBlockId(
   return existing?.parentBlockId ?? null;
 }
 
-// Terminal status applied to an ACTION block (tool_call / command / file_change
-// / subagent) that was still "streaming" when the turn ended. A normal finish
-// completes it; a user Stop interrupts it; a steer-restart supersedes it.
-// `text`/`reasoning` are content (a partial thought is not a failed action) and
-// are always finalized as "completed".
+// Terminal status applied to an ACTION block (tool_call / command / file_change / subagent) that was still "streaming" when the turn ended.
 export type FinalizedActionStatus = "completed" | "interrupted" | "superseded";
 
-// THE single rule for how a turn's terminal outcome maps to the status its
-// still-open action blocks adopt. Every layer that has to finalize in-flight
-// blocks (this accumulator, the host's `finishActiveTurn` belt, the GUI
-// materialization net) routes through here so they can never diverge: a clean
-// finish completes, a steer-restart supersedes, anything else interrupts.
+// THE single rule for how a turn's terminal outcome maps to the status its still-open action blocks adopt.
 export function resolveFinalizedActionStatus(
   terminalKind: "completed" | "stopped" | "interrupted",
   isSteerRestart: boolean,
@@ -221,19 +175,8 @@ export function finalizeStatusForTerminalEvent(
   );
 }
 
-// Force-finalize blocks still "streaming" when a turn ends (completed / stopped
-// / interrupted). A finished turn leaves nothing in flight, so any block whose
-// terminal event was never delivered - e.g. a sub-agent or an in-progress file
-// edit when the user hits Stop - would otherwise render "in progress" forever.
-// Covers tool_call, command, file_change, subagent, text, reasoning, … but NOT
-// `approval`/`interview`: those are resolved out-of-band (by user input or the
-// host's abandon-cleanup, which emits their own terminal events) rather than
-// by the turn ending, and their pending UI is driven by separate streams.
-// Force-completing a pending interview here would flip it to "completed" for a
-// frame before its `interview.errored` cleanup lands.
-//
-// `actionStatus` is applied to action blocks (tool_call/command/file_change/
-// subagent); text/reasoning are always "completed".
+// Force-finalize blocks still "streaming" when a turn ends (completed / stopped / interrupted).
+// A finished turn leaves nothing in flight, so any block whose terminal event was never delivered - e.g. a sub-agent or an in-progress file edit when the user hits Stop - would otherwise render "in progress" forever.
 export function finalizeStreamingActionBlocks(
   blocks: ContentBlock[],
   timestamp: number,
@@ -248,10 +191,7 @@ export function finalizeStreamingActionBlocks(
       block.type !== "interview"
     ) {
       hasUpdates = true;
-      // For tool_call/command, keep the start timestamp stable. Tool calls also
-      // carry immutable `startedAt`; `timestamp` advances only when their own
-      // terminal event arrives, which lets background command cards derive a
-      // post-completion duration.
+      // For tool_call/command, keep the start timestamp stable.
       if (block.type === "tool_call" || block.type === "command") {
         return { ...block, status: actionStatus };
       }
@@ -260,11 +200,8 @@ export function finalizeStreamingActionBlocks(
       if (block.type === "file_change" || block.type === "subagent") {
         return { ...block, status: actionStatus, timestamp };
       }
-      // A plan left streaming at turn end never received an explicit
-      // plan.completed. Flip its block status to completed AND promote
-      // planStatus out of "drafting" to the terminal "ready" - otherwise the
-      // card shows a frozen "Drafting" spinner forever. Keep the start
-      // timestamp (plans carry no live elapsed anchor).
+      // A plan left streaming at turn end never received an explicit plan.completed.
+      // Flip its block status to completed AND promote planStatus out of "drafting" to the terminal "ready" - otherwise the card shows a frozen "Drafting" spinner forever.
       if (block.type === "plan") {
         return {
           ...block,
@@ -273,14 +210,8 @@ export function finalizeStreamingActionBlocks(
             block.planStatus === "drafting" ? "ready" : block.planStatus,
         };
       }
-      // A compaction still in flight at turn end never reported a boundary, so
-      // it folded nothing. The content fallthrough below would mark it
-      // "completed" and the bar would claim a result it never produced - the
-      // silent version of a failed compaction, with no error line to contradict
-      // it. Compaction is not an action block, so `interrupted`/`superseded` are
-      // not in its schema; `errored` is the honest terminal state. No harness
-      // leaves a compaction running across a turn end (each yields its own
-      // terminal event first), so this only ever fires on a genuine cut-short.
+      // A compaction still in flight at turn end never reported a boundary, so it folded nothing.
+      // The content fallthrough below would mark it "completed" and the bar would claim a result it never produced - the silent version of a failed compaction, with no error line to contradict it.
       if (block.type === "compaction") {
         return {
           ...block,
@@ -289,9 +220,7 @@ export function finalizeStreamingActionBlocks(
           timestamp,
         };
       }
-      // text/reasoning are content, not actions: a partial thought/sentence is
-      // not a failure. Always "completed", with `timestamp` advanced to turn-end
-      // so a derived duration ("Thought for Xs") spans first delta → turn end.
+      // text/reasoning are content, not actions: a partial thought/sentence is not a failure.
       return { ...block, status: "completed" as const, timestamp };
     }
 
@@ -301,15 +230,8 @@ export function finalizeStreamingActionBlocks(
   return hasUpdates ? finalizedBlocks : blocks;
 }
 
-// Option B (backgrounded work): restore any subagent block, or any background-
-// marked tool_call/command block, that `finalizeStreamingActionBlocks` just
-// finalized but was "streaming" before, to its pre-finalize (streaming) state.
-// Detached work still streaming at a CLEAN turn end outlives the turn that
-// spawned it, so its card must keep reading "running" until its OWN completion
-// finalizes it (the host's detached execution). Turn-scoped action blocks
-// (unmarked tool_call/command, file_change) stay finalized. Only applied on
-// `turn.completed` - a stopped/interrupted turn DOES finalize still-running
-// detached work.
+// Option B (backgrounded work): restore any subagent block, or any background- marked tool_call/command block, that `finalizeStreamingActionBlocks` just finalized but was "streaming" before, to its pre-finalize.
+// Detached work still streaming at a CLEAN turn end outlives the turn that spawned it, so its card must keep reading "running" until its OWN completion finalizes it (the host's detached execution).
 export function reopenStreamingSubagentBlocks(
   before: ContentBlock[],
   finalized: ContentBlock[],
@@ -383,11 +305,8 @@ function nullableNumber(value: number | undefined): number | null {
   return value ?? null;
 }
 
-// Precomputed, capped display fields for a tool/approval input. The raw harness
-// input is never persisted (for Edit/Write/apply_patch it is the full file body,
-// the dominant chat-doc bloat); the host stores only the summary line + expand
-// body the GUI renders. Computed here, the single block-build chokepoint, so the
-// live broadcast and the persisted row carry identical fields.
+// Precomputed, capped display fields for a tool/approval input.
+// The raw harness input is never persisted (for Edit/Write/apply_patch it is the full file body, the dominant chat-doc bloat); the host stores only the summary line + expand body the GUI renders.
 function toolInputDisplay(
   toolName: string,
   input: unknown,
@@ -398,9 +317,6 @@ function toolInputDisplay(
   };
 }
 
-// Task-todo tools (TaskCreate / TaskUpdate / …) carry their todo item(s) in the
-// call input; parsed here so the GUI's pinned-todo stack reads structured items
-// instead of the (no-longer-persisted) raw input. Null for every other tool.
 function taskTodoItemsFromInput(
   toolName: string,
   input: unknown,
@@ -409,11 +325,6 @@ function taskTodoItemsFromInput(
   return parseTaskTodoToolPayloads({ toolName, payloads: [input] });
 }
 
-// One construction point for a freshly-opened sub-agent block, shared by the
-// `subagent.started` open and the `progress`/`completed` orphan fallbacks (a
-// block created when its `started` was dropped or arrived out of order), and
-// by the `workflow.*` triple's dual-write onto this same block shape. Keeps
-// the block shape - and the `type` discriminant - defined once.
 function makeSubAgentBlock(fields: {
   blockId: string;
   status: "streaming" | "completed" | "errored";
@@ -443,9 +354,6 @@ function isNewSubagentRun(
   );
 }
 
-// Appends a new workflow activity entry, skipping a consecutive duplicate
-// (the same aggregate `task_progress` line can re-arrive on repeated polls
-// with no new milestone) so the persisted timeline reads as distinct steps.
 function appendWorkflowActivity(
   activity: WorkflowActivityEntry[],
   entry: WorkflowActivityEntry | null,
@@ -479,12 +387,7 @@ function nullableMetadata(
   return value ?? null;
 }
 
-// Sticky-OR with a third "not yet known" state: only an explicit `true` ever
-// changes the marker. `existing: null` ("unknown so far") and an `incoming`
-// that doesn't confirm either way leave it `null`, rather than collapsing to a
-// committed `false` - a later event (the SDK's own retroactive confirmation,
-// or simply more of the streamed input parsing) can still resolve it to
-// `true`, but nothing ever downgrades a `true` once set.
+// Sticky-OR with a third "not yet known" state: only an explicit `true` ever changes the marker.
 function mergeBackgroundTaskMarker(
   existing: boolean | null,
   incoming: boolean | undefined,
@@ -713,9 +616,6 @@ export function accumulateEvent(
     case "usage.updated":
       return blocks;
 
-    // Updates the message-level `imageResolutions` record, not a content
-    // block - out of scope for this block-only reducer (ticket 04 owns the
-    // message-level accumulator that applies it).
     case "image_resolution.updated":
       return blocks;
 
@@ -731,9 +631,7 @@ export function accumulateEvent(
           messageId: event.messageId,
           content: event.content,
           mode: event.mode,
-          // Provenance, so the block can stand in for the steered user row if
-          // that row is ever missing (the two are not equally durable). `null`
-          // from a pre-field host keeps the old "render as a user row" fallback.
+          // Provenance, so the block can stand in for the steered user row if that row is ever missing (the two are not equally durable).
           sender: event.sender,
         },
       ];
@@ -744,11 +642,7 @@ export function accumulateEvent(
         event.timestamp,
         finalizeStatusForTerminalEvent(event),
       );
-      // Keep still-streaming detached work (backgrounded subagent/tool card)
-      // "running" ONLY on a CLEAN completion. A degraded ending
-      // (`event.reason` set - e.g. max_tokens, refusal) is a real termination:
-      // the host does NOT keep the query alive for it, so detached work will not
-      // continue. Finalize its card here rather than leaving a lying "running".
+      // Keep still-streaming detached work (backgrounded subagent/tool card) "running" ONLY on a CLEAN completion.
       return event.reason === undefined
         ? reopenStreamingSubagentBlocks(blocks, finalized)
         : finalized;
@@ -790,12 +684,7 @@ export function accumulateEvent(
       return finalizeBlock(blocks, event.blockId, "text", event.timestamp);
 
     case "provider_notice.upsert": {
-      // Upserts a compatibility-safe `text` block (see
-      // `persistence/epic/content-blocks.ts`'s `providerNotice` field) rather
-      // than a distinct block type. A repeat for the same `blockId` REPLACES
-      // the rendered fields and fallback text - not append-only like
-      // `text.delta` - so a later `showBufferingUi` update or terminal
-      // completion overwrites the prior rendering in place.
+      // Upserts a compatibility-safe `text` block (see `persistence/epic/content-blocks.ts`'s `providerNotice` field) rather than a distinct block type.
       const providerNotice: ProviderNoticeMetadata = {
         harnessId: event.harnessId,
         noticeKind: event.noticeKind,
@@ -924,9 +813,7 @@ export function accumulateEvent(
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
           // The shell this call created, known only now that it has returned.
-          // Kept if a later event does not re-send it, exactly like
-          // `agentMessageSend`: re-completing a block must not erase identity
-          // the first completion established.
+          // Kept if a later event does not re-send it, exactly like `agentMessageSend`: re-completing a block must not erase identity the first completion established.
           managedCommand: event.managedCommand ?? existing.managedCommand,
           backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
@@ -935,9 +822,6 @@ export function accumulateEvent(
             existing.backgroundTask,
             event.backgroundTask,
           ),
-          // Stamped explicitly in both completion branches (see the
-          // no-existing-block branch below) so a persisted block always
-          // carries the same shape the live broadcast did.
           imageResults:
             event.imageResults.length > 0
               ? event.imageResults
@@ -1019,12 +903,7 @@ export function accumulateEvent(
     }
 
     case "tool_call.progress": {
-      // Replace-latest: stamp the most recent progress line onto the owning
-      // tool_call block. Deliberately does NOT advance `timestamp`; while the
-      // block streams, timestamp still matches immutable `startedAt`, and once
-      // finalized timestamp becomes the completion time for duration derivation.
-      // Progress for a tool_call that doesn't exist (or a block of another
-      // type) is meaningless - drop it.
+      // Replace-latest: stamp the most recent progress line onto the owning tool_call block.
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (!existing) return blocks;
       return replaceBlock(blocks, event.blockId, {
@@ -1400,20 +1279,10 @@ export function accumulateEvent(
     case "interview.requested": {
       const existing = findBlockOfType(blocks, event.blockId, "interview");
       if (existing) {
-        // A late or duplicate request never reopens a settled interview. Its
-        // answer or Skip may already have reached a provider, so re-arming the
-        // pending gate would ask the user to answer something the agent has
-        // already consumed. Only the explicit pending-fork transform may clear
-        // terminal facts (`clearInterviewSettlement`) and synthesize a fresh
-        // request. The predicate is the shared union rule, so this agrees with
-        // host hydration and notification reconciliation by construction.
+        // A late or duplicate request never reopens a settled interview.
         if (isInterviewBlockSettled(existing)) {
-          // A settlement can be observed before its request (resume/replay or
-          // transport reordering), producing a terminal synthetic block with
-          // no framing. A late request must never REOPEN or rewrite that fact,
-          // but it is authoritative framing evidence. Fill only fields that
-          // are still absent, preserving terminal timestamp and every
-          // settlement-owned field byte-for-value.
+          // A settlement can be observed before its request (resume/replay or transport reordering), producing a terminal synthetic block with no framing.
+          // A late request must never REOPEN or rewrite that fact, but it is authoritative framing evidence.
           const enriched = {
             ...existing,
             toolName: existing.toolName ?? event.toolName,
@@ -1465,19 +1334,11 @@ export function accumulateEvent(
       ];
     }
 
-    // Both settlement arms below route through the shared protocol reducer
-    // rather than switching on status/answers/error themselves. That is what
-    // makes an adapter's late cleanup, a duplicate resolution and a replayed
-    // event behave identically here and in the host - and it is where the
-    // OpenCode empty-second-resolution protection now lives (as the reducer's
-    // "non-empty beats empty" rule), rather than as a local special case.
+    // Both settlement arms below route through the shared protocol reducer rather than switching on status/answers/error themselves.
     case "interview.resolved": {
       return applyRuntimeInterviewSettlement(blocks, event, {
         settlementId: runtimeSettlementId(event),
         outcome: "answered",
-        // Normalized at the boundary: an adapter can emit an answer with no
-        // `selection` key at all, and the reducer's `changed` detection reads
-        // an absent key as different from an explicit null.
         answers: event.answers.map((answer) => ({
           ...answer,
           selection: answer.selection ?? null,
@@ -1499,10 +1360,7 @@ export function accumulateEvent(
         draftAnswers: [],
         reason: event.error,
         source: "runtime",
-        // Content-free, id-deduplicated, and recorded SEPARATELY from the
-        // user-visible reason. When this settlement loses - an adapter
-        // reporting failure after an accepted Skip - the code is retained
-        // while `outcome`/`error` stay exactly what the user experienced.
+        // Content-free, id-deduplicated, and recorded SEPARATELY from the user-visible reason.
         diagnostic: {
           diagnosticId: runtimeSettlementId(event),
           code: "runtime.interview_errored",
@@ -1541,9 +1399,6 @@ export function accumulateEvent(
           ...existing,
           status: "completed",
           timestamp: event.timestamp,
-          // `file_change.completed` may carry the owning subagent even when the
-          // earlier `file_change.started` (emitted from the permission callback)
-          // could not - adopt it so the finished card nests correctly.
           parentBlockId: resolveParentBlockId(event, existing),
           diffSource: event.diffSource,
           beforeHash: event.beforeHash,
@@ -1574,9 +1429,7 @@ export function accumulateEvent(
     }
 
     case "artifact_operation": {
-      // A single terminal event - upsert one block keyed by `blockId`. A
-      // re-emit (e.g. a late create-id resolution replacing an earlier emit
-      // for the same action+index) overwrites in place rather than duplicating.
+      // A single terminal event - upsert one block keyed by `blockId`.
       const existing = findBlockOfType(
         blocks,
         event.blockId,
@@ -1621,11 +1474,6 @@ export function accumulateEvent(
     }
 
     case "command.started": {
-      // A harness that discovers backgrounding only after the card is open
-      // (Codex promotes at the parent turn's end) re-emits this event to stamp
-      // the marker, so an existing block is updated in place - appending would
-      // duplicate the card. The open block's `timestamp` is its elapsed anchor
-      // and its `status` may already be terminal, so neither is touched here.
       const existing = findBlockOfType(blocks, event.blockId, "command");
       if (existing) {
         return replaceBlock(blocks, event.blockId, {
@@ -1692,10 +1540,7 @@ export function accumulateEvent(
     }
 
     case "subagent.started": {
-      // A sub-agent's name can be re-emitted after its block opens: Codex never
-      // pushes the agent nickname, so the adapter fetches it asynchronously and
-      // re-emits `subagent.started` once it resolves. Update the open block's
-      // name/task in place rather than appending a duplicate card.
+      // A sub-agent's name can be re-emitted after its block opens: Codex never pushes the agent nickname, so the adapter fetches it asynchronously and re-emits `subagent.started` once it resolves.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
         if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
@@ -1720,11 +1565,7 @@ export function accumulateEvent(
           agentType: event.agentType ?? existing.agentType,
           task: nullableString(event.task) ?? existing.task,
           parentBlockId: resolveParentBlockId(event, existing),
-          // Advance `timestamp` only while still streaming. Codex re-emits
-          // `subagent.started` (async nickname fetch) which can land AFTER the
-          // sub-agent already completed; bumping a terminal block's timestamp
-          // would push its completion anchor forward and inflate the card's
-          // derived duration. `startedAt` is preserved via `...existing`.
+          // Advance `timestamp` only while still streaming.
           timestamp:
             existing.status === "streaming"
               ? event.timestamp
@@ -1790,9 +1631,7 @@ export function accumulateEvent(
 
     case "subagent.completed": {
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
-      // `outcome` is defaulted "completed" on the wire (see agent-runtime.ts),
-      // so an old emitter that never sets it reproduces today's shipped
-      // behavior exactly. Only "failed"/"stopped" diverge from "completed".
+      // `outcome` is defaulted "completed" on the wire (see agent-runtime.ts), so an old emitter that never sets it reproduces today's shipped behavior exactly.
       const status: "completed" | "errored" =
         event.outcome === "completed" ? "completed" : "errored";
       const stopped = event.outcome === "stopped";
@@ -1815,9 +1654,7 @@ export function accumulateEvent(
           stopped,
           timestamp: event.timestamp,
           parentBlockId: resolveParentBlockId(event, undefined),
-          // No `started` was seen, so the spawn time is unknown. Leave it null
-          // (rather than the completion time) so the card shows no duration
-          // instead of a misleading "0s" total.
+          // No `started` was seen, so the spawn time is unknown.
           startedAt: null,
           name: null,
           agentType: null,
@@ -1831,9 +1668,7 @@ export function accumulateEvent(
     }
 
     case "workflow.started": {
-      // Mirrors `subagent.started`: update the open card in place on a
-      // re-emit (never clearing `parentBlockId`/`spawnToolCallId`), otherwise
-      // open a fresh dual-written subagent block.
+      // Mirrors `subagent.started`: update the open card in place on a re-emit (never clearing `parentBlockId`/`spawnToolCallId`), otherwise open a fresh dual-written subagent block.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
         if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
@@ -1854,9 +1689,6 @@ export function accumulateEvent(
           });
         }
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(event.name);
-        // A re-emit's `intent` is a required key but not necessarily a
-        // meaningful one - only a genuine non-null value overwrites, mirroring
-        // the preserve-on-omit policy every other re-emittable field here uses.
         const intent = event.intent ?? meta.intent;
         return replaceBlock(blocks, event.blockId, {
           ...existing,
@@ -1976,9 +1808,7 @@ export function accumulateEvent(
           stopped,
           timestamp: event.timestamp,
           parentBlockId: resolveParentBlockId(event, undefined),
-          // No `started` was seen, so the spawn time is unknown. Leave it null
-          // (rather than the completion time) so the card shows no duration
-          // instead of a misleading "0s" total.
+          // No `started` was seen, so the spawn time is unknown.
           startedAt: null,
           name: null,
           agentType: null,

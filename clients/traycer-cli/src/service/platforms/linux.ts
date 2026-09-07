@@ -24,20 +24,11 @@ import type {
   UninstallServiceOptions,
 } from "../index";
 
-// Linux service controller - systemd-user. The unit's ExecStart points
-// at the per-user CLI binary with `host start` (the slot is baked into
-// the CLI build) so an in-place host install never needs a unit-file
-// rewrite.
-//
-// `loginctl enable-linger` is best-effort. The Tech Plan accepts a
-// silent skip if polkit would prompt - Doctor surfaces the missing
-// linger as a warning so the user can enable it later.
+// Linux service controller - systemd-user.
+// The unit's ExecStart points at the per-user CLI binary with `host start` (the slot is baked into the CLI build) so an in-place host install never needs a unit-file rewrite.
 
-// The pluggable runner seam is live on Linux too: `null` selects the real
-// `runCommand`, tests inject a fake to drive the install/uninstall flows
-// (preflight, rollback-on-failure) without a systemd instance. Same factory
-// signature as macOS/Windows
-// (`createMacos|Linux|WindowsController(runner: ProcessRunner | null)`).
+// The pluggable runner seam is live on Linux too: `null` selects the real `runCommand`, tests inject a fake to drive the install/uninstall flows (preflight, rollback-on-failure) without a systemd instance.
+// Same factory signature as macOS/Windows (`createMacos|Linux|WindowsController(runner: ProcessRunner | null)`).
 export function createLinuxController(
   runner: ProcessRunner | null,
 ): ServiceController {
@@ -54,11 +45,8 @@ export function createLinuxController(
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
-    // There is no Desktop/SMAppService split on Linux, so the restart halves
-    // are exactly the stop and start the command already performed - the
-    // named seam only exists so `host restart` has one shape on every
-    // platform. `forcedRecycle` is never set: `stopService` is a real
-    // systemd stop, so the unit is genuinely down before the start.
+    // There is no Desktop/SMAppService split on Linux, so the restart halves are exactly the stop and start the command already performed - the named seam only exists so `host restart` has one shape on every platform.
+    // `forcedRecycle` is never set: `stopService` is a real systemd stop, so the unit is genuinely down before the start.
     stopForRestart: async (label, options) => {
       await stopService(label, run, options.force, "restart");
       return { forcedRecycle: false };
@@ -73,23 +61,10 @@ export function createLinuxController(
   };
 }
 
-// Pluggable runner shape kept consistent with macOS so the three
-// controllers expose the same factory signature, even when Linux
-// doesn't currently use the seam.
+// Pluggable runner shape kept consistent with macOS so the three controllers expose the same factory signature, even when Linux doesn't currently use the seam.
 export type ProcessRunner = typeof runCommand;
 
-/**
- * Proves the user systemd instance is reachable BEFORE anything is written.
- *
- * `systemctl --user` needs a per-user service manager on a session bus, and
- * that is exactly what does not exist on a WSL distro without systemd
- * enabled, in a `sudo su <user>` shell, or over SSH to a box whose logind
- * never started a user manager. The previous order wrote the unit file
- * first and then let `daemon-reload` throw a raw `ProcessRunError`: an
- * orphan unit file left behind, and a stack trace naming neither systemd
- * nor WSL. Failing here fails with nothing installed and an error that
- * says what to do.
- */
+/** Proves the user systemd instance is reachable BEFORE anything is written. `systemctl --user` needs a per-user service manager on a session bus, and that is exactly what does not exist on a WSL distro without systemd enabled, in a `sudo su <user>` shell, or over SSH to a box whose logind never started a user manager. */
 async function assertSystemdUserReachable(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -150,17 +125,8 @@ async function installService(
     );
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
-    // Roll the write back: a unit file systemd was never told about (or
-    // refused to enable) must not outlive the failed install - it would sit
-    // in ~/.config/systemd/user as an orphan that a later daemon-reload
-    // silently registers. All cleanup steps are best-effort; the error the
-    // operator sees is the install failure, not the rollback's.
-    //
-    // `enable --now` is enable-then-start as two separate steps: a start
-    // failure after a successful enable leaves the enablement symlinks in
-    // place (systemd does not roll them back), so `disable` must run BEFORE
-    // the manifest is removed - otherwise the surviving symlinks point at a
-    // unit file that no longer exists.
+    // Roll the write back: a unit file systemd was never told about (or refused to enable) must not outlive the failed install - it would sit in ~/.config/systemd/user as an orphan that a later daemon-reload silently registers.
+    // All cleanup steps are best-effort; the error the operator sees is the install failure, not the rollback's.
     await run(
       "systemctl",
       ["--user", "disable", "--now", unitName(options.label)],
@@ -230,10 +196,7 @@ async function uninstallService(
     timeoutMs: 10_000,
     tolerateNonZeroExit: true,
   });
-  // A unit that ended up `failed` (e.g. it restart-looped before this
-  // uninstall) leaves a failed entry in the user manager even after its
-  // file is gone; clear it so `systemctl --user list-units` and
-  // `is-system-running` stop reporting a service that no longer exists.
+  // A unit that ended up `failed` (e.g. it restart-looped before this uninstall) leaves a failed entry in the user manager even after its file is gone; clear it so `systemctl --user list-units` and `is-system-running` stop reporting a service that no longer exists.
   await run("systemctl", ["--user", "reset-failed", unitName(options.label)], {
     env: undefined,
     cwd: undefined,
@@ -274,23 +237,12 @@ async function stopService(
     tolerateNonZeroExit: true,
   });
   if (!force) return;
-  // `--force` promises the host is DOWN when this returns, and the plain
-  // stop above cannot promise that: the runner caps the subprocess at 15s
-  // while the unit (no TimeoutStopSec) inherits systemd's 90s default, so a
-  // host that survives SIGTERM outlives the subprocess and a bare return
-  // would report a stop that has not happened. Confirm through systemd's own
-  // unit state - never a pid, so a recycled pid.json entry cannot misdirect
-  // this - and escalate with `systemctl kill -s SIGKILL`, which signals the
-  // unit's OWN cgroup.
+  // `--force` promises the host is DOWN when this returns, and the plain stop above cannot promise that: the runner caps the subprocess at 15s while the unit (no TimeoutStopSec) inherits systemd's 90s default, so a host that survives SIGTERM outlives the subprocess and a bare return would report a stop that has not happened.
+  // Confirm through systemd's own unit state - never a pid, so a recycled pid.json entry cannot misdirect this - and escalate with `systemctl kill -s SIGKILL`, which signals the unit's OWN cgroup.
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGTERM_GRACE_MS)) {
     await cancelScheduledAutoRestart(label, run);
-    // Re-confirm AFTER the cancel. The settle just observed can be a crash
-    // (`failed`) whose Restart=on-failure relaunch already fired - the
-    // cancel then races or tears down that replacement, and its runner
-    // failures and timeouts are deliberately swallowed, so the cancel
-    // itself vouches for nothing. Only a fresh positive read may. An
-    // unconfirmed cancel falls through to the SIGKILL escalation instead of
-    // reporting a stop it cannot prove.
+    // Re-confirm AFTER the cancel.
+    // The settle just observed can be a crash (`failed`) whose Restart=on-failure relaunch already fired - the cancel then races or tears down that replacement, and its runner failures and timeouts are deliberately swallowed, so the cancel itself vouches for nothing.
     if (await waitForUnitInactive(label, run, FORCE_STOP_CONFIRM_GRACE_MS)) {
       await finishForcedStopForPublishedHost(label, operation);
       return;
@@ -306,13 +258,8 @@ async function stopService(
       tolerateNonZeroExit: true,
     },
   );
-  // Cancel BEFORE polling: if the plain stop above never registered a stop
-  // job (a transient user-bus failure is swallowed by tolerateNonZeroExit),
-  // the SIGKILL lands outside any stop request and `Restart=on-failure`
-  // schedules a relaunch in RestartSec - the unit would sit in
-  // activating(auto-restart) and the poll below would time out over a host
-  // that IS down. The renewed stop both cancels that schedule and lets the
-  // state settle at inactive/failed.
+  // Cancel BEFORE polling: if the plain stop above never registered a stop job (a transient user-bus failure is swallowed by tolerateNonZeroExit), the SIGKILL lands outside any stop request and `Restart=on-failure` schedules a relaunch in RestartSec - the unit would sit in activating(auto-restart) and the poll below would time out over a host that IS down.
+  // The renewed stop both cancels that schedule and lets the state settle at inactive/failed.
   await cancelScheduledAutoRestart(label, run);
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGKILL_GRACE_MS)) {
     await finishForcedStopForPublishedHost(label, operation);
@@ -326,15 +273,8 @@ async function stopService(
   });
 }
 
-// A settled unit state is not yet proof that NOTHING is scheduled: the unit
-// can settle at `failed` because the host CRASHED during the grace rather
-// than exiting from our stop request, and `Restart=on-failure` then has a
-// relaunch scheduled for RestartSec later - reporting success and purging
-// pid.json right before systemd resurrects the host. `systemctl stop` on a
-// unit in auto-restart cancels the scheduled relaunch, and is a no-op on a
-// unit that is genuinely down, so issuing it after (or around) every
-// confirmation is pure insurance. Best-effort: the confirmation itself is
-// the poll's job, not this call's.
+// A settled unit state is not yet proof that NOTHING is scheduled: the unit can settle at `failed` because the host CRASHED during the grace rather than exiting from our stop request, and `Restart=on-failure` then has a relaunch scheduled for RestartSec later - reporting success and purging pid.json right before systemd resurrects the host.
+// `systemctl stop` on a unit in auto-restart cancels the scheduled relaunch, and is a no-op on a unit that is genuinely down, so issuing it after (or around) every confirmation is pure insurance.
 async function cancelScheduledAutoRestart(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -352,24 +292,8 @@ async function cancelScheduledAutoRestart(
   }
 }
 
-// The confirmed-down unit is only HALF of what `--force` promises: pid.json
-// can name a live host running OUTSIDE the unit (started manually, or
-// orphaned by a corrupted teardown), and `is-active` says nothing about it.
-// Silently succeeding would leave that host serving - and a
-// `restart --force` would then start the unit BESIDE it, manufacturing the
-// dual-host state the rest of this codebase actively fights. Finish with
-// the same child-kill engine the macOS force paths use: it re-reads
-// pid.json, identity-gates every signal, SIGTERM→SIGKILLs a live occupant,
-// and purges the record only on an exact instance match - so the Linux
-// contract becomes the macOS contract, "unit down AND published host down,
-// or a loud failure".
-//
-// Outcome mapping differs from the macOS ENTRY paths on `no-metadata`
-// deliberately: there the child engine is the whole stop, so nothing-to-kill
-// is a failure ("a booting host may not have published yet"); here the unit
-// teardown already ran with positive confirmation, and an absent record is
-// the NORMAL trace of a host that exited gracefully and unlinked its own
-// file - success, nothing further to finish.
+// The confirmed-down unit is only HALF of what `--force` promises: pid.json can name a live host running OUTSIDE the unit (started manually, or orphaned by a corrupted teardown), and `is-active` says nothing about it.
+// Silently succeeding would leave that host serving - and a `restart --force` would then start the unit BESIDE it, manufacturing the dual-host state the rest of this codebase actively fights.
 async function finishForcedStopForPublishedHost(
   label: ServiceLabel,
   operation: "stop" | "restart",
@@ -397,29 +321,16 @@ async function finishForcedStopForPublishedHost(
   }
 }
 
-// Mirrors the macOS force-stop grace: the host's own force-exit watchdog
-// bounds a graceful SIGTERM shutdown, so waiting any less would escalate
-// over a host that is draining exactly as designed.
+// Mirrors the macOS force-stop grace: the host's own force-exit watchdog bounds a graceful SIGTERM shutdown, so waiting any less would escalate over a host that is draining exactly as designed.
 const FORCE_STOP_SIGTERM_GRACE_MS =
   SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
 const FORCE_STOP_SIGKILL_GRACE_MS = 10_000;
-// Post-cancel re-confirmation window. The cancel's own subprocess blocks up
-// to 15s tearing down any replacement it caught mid-start, so by the time
-// this poll begins a torn-down unit has usually settled; one that has not
-// falls through to the SIGKILL escalation.
+// Post-cancel re-confirmation window.
+// The cancel's own subprocess blocks up to 15s tearing down any replacement it caught mid-start, so by the time this poll begins a torn-down unit has usually settled; one that has not falls through to the SIGKILL escalation.
 const FORCE_STOP_CONFIRM_GRACE_MS = 10_000;
 const FORCE_STOP_POLL_MS = 500;
 
-/**
- * Polls `systemctl is-active` until the unit POSITIVELY reports a settled
- * state (`inactive`/`failed`/`unknown` on stdout) or the deadline passes.
- * Only a recognized state is evidence: `is-active` reports settled states
- * through a nonzero exit WITH the state on stdout, but a probe that cannot
- * reach the user manager at all ("Failed to connect to bus") also exits
- * nonzero - printing nothing - and says nothing about the unit. Anything
- * unrecognized reads as NOT settled, so the caller escalates or fails
- * loudly rather than reporting a stop it could not confirm.
- */
+/** Polls `systemctl is-active` until the unit POSITIVELY reports a settled state (`inactive`/`failed`/`unknown` on stdout) or the deadline passes. Only a recognized state is evidence: `is-active` reports settled states through a nonzero exit WITH the state on stdout, but a probe that cannot reach the user manager at all ("Failed to connect to bus") also exits nonzero - printing nothing - and says nothing about the unit. */
 async function waitForUnitInactive(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -453,17 +364,8 @@ async function probeUnitSettled(
     return false;
   }
   const state = result.stdout.trim();
-  // POSITIVE confirmation only. An exclusion list ("not active, not
-  // activating, ...") would also match an EMPTY answer - which is what a
-  // probe that could not reach the systemd user manager produces
-  // (`tolerateNonZeroExit` resolves it: nonzero exit, error on stderr,
-  // nothing on stdout) - and would report a stop this command never
-  // confirmed. `inactive`/`failed` are systemd's settled states; `unknown`
-  // is older systemctl's answer for a unit that is not loaded at all.
-  // Everything else - including `activating` (something is bringing the
-  // unit UP), `deactivating`, and any unrecognized or empty answer - reads
-  // as not settled, and the caller keeps waiting, escalates, or fails
-  // loudly.
+  // POSITIVE confirmation only.
+  // An exclusion list ("not active, not activating, ...") would also match an EMPTY answer - which is what a probe that could not reach the systemd user manager produces (`tolerateNonZeroExit` resolves it: nonzero exit, error on stderr, nothing on stdout) - and would report a stop this command never confirmed.
   return state === "inactive" || state === "failed" || state === "unknown";
 }
 
@@ -541,11 +443,8 @@ function buildUnit(options: BuildUnitOptions): string {
     options.cli.command,
     ...options.cli.args,
   ];
-  // systemd treats `%` as a specifier introducer and `;`/`\n`/`\t` as
-  // line/argument separators inside an Exec= value. Reject any token
-  // containing those rather than emit a unit file systemd parses
-  // incorrectly - surface as SERVICE_INSTALL_FAILED with the offending
-  // token so the operator can rename / relocate the binary.
+  // systemd treats `%` as a specifier introducer and `;`/`\n`/`\t` as line/argument separators inside an Exec= value.
+  // Reject any token containing those rather than emit a unit file systemd parses incorrectly - surface as SERVICE_INSTALL_FAILED with the offending token so the operator can rename / relocate the binary.
   const forbidden = /[%;\n\t]/;
   const offending = programArgs.find((arg) => forbidden.test(arg));
   if (offending !== undefined) {
@@ -556,30 +455,17 @@ function buildUnit(options: BuildUnitOptions): string {
       exitCode: 1,
     });
   }
-  // systemd ExecStart - quote each token so paths with spaces don't
-  // break the unit file; backslash-escape inner quotes per the systemd
-  // unit-file spec.
+  // systemd ExecStart - quote each token so paths with spaces don't break the unit file; backslash-escape inner quotes per the systemd unit-file spec.
   const execStart = programArgs
     .map((arg) => `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
     .join(" ");
-  // A definition can outlive the CLI it points at (the CLI package removed
-  // while the unit stays enabled). Without the condition, every login then
-  // exec's a missing $0, `Restart=on-failure` loops it into a `failed` unit
-  // on every boot, and `systemctl --user is-system-running` degrades. With
-  // it, systemd skips the start as "condition not met" - inert and visible
-  // in `systemctl --user status`, not failing. A skipped condition does not
-  // trigger Restart=, and a later `systemctl start` (the reinstall path)
-  // re-evaluates it fresh. Conditions require absolute paths; the CLI
-  // command always is one in production (guarded here for the self-invoke
-  // fallback).
+  // A definition can outlive the CLI it points at (the CLI package removed while the unit stays enabled).
+  // Without the condition, every login then exec's a missing $0, `Restart=on-failure` loops it into a `failed` unit on every boot, and `systemctl --user is-system-running` degrades.
   const condition = isAbsolute(options.cli.command)
     ? `ConditionFileIsExecutable=${options.cli.command}\n`
     : "";
-  // SyslogIdentifier: journald names a stream after the FIRST executable of
-  // the Exec line - /bin/sh - and the stream is opened before the wrapper
-  // exec's the CLI, so without this every supervisor line lands in the
-  // journal as `sh[pid]`. The label id keys the lines to the exact
-  // service instance (`journalctl --user -t ai.traycer.host`).
+  // SyslogIdentifier: journald names a stream after the FIRST executable of the Exec line - /bin/sh - and the stream is opened before the wrapper exec's the CLI, so without this every supervisor line lands in the journal as `sh[pid]`.
+  // The label id keys the lines to the exact service instance (`journalctl --user -t ai.traycer.host`).
   return `[Unit]
 Description=${options.label.displayName}
 After=default.target

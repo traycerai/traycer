@@ -5,14 +5,7 @@ import { useAuthService } from "@/lib/host";
 import { authSessionExpiredToast } from "@/lib/toast/channels";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * Global auth lifecycle bridge for stored-session or refresh-token expiry.
- *
- * `AuthService` owns the state transition and keeps `lastError` as the durable
- * boundary signal. This bridge consumes only the signed-out + session-expired
- * state, emits the replacement-semantics toast once, then clears the transient
- * error so display surfaces do not carry stale inline copy.
- */
+/** Signed-out + session-expired: toast once, then clear lastError so surfaces do not keep stale inline copy. */
 export function AuthSessionExpiredToastBridge(): null {
   const auth = useAuthService();
   const status = useAuthStore((state) => state.status);

@@ -10,12 +10,6 @@ import { log } from "./logger";
 
 const DEFAULT_LANGUAGES: string[] = ["en-US"];
 
-/**
- * Enable Chromium's built-in spell checker for any editable input in the
- * renderer. The languages list seeds the loaded dictionaries - users can
- * still add more via the OS spell-check API, but the defaults cover the
- * majority of our user base. Hunspell dictionaries are downloaded lazily.
- */
 export function enableSpellCheck(): void {
   const target = session.defaultSession;
   target.setSpellCheckerEnabled(true);
@@ -23,13 +17,6 @@ export function enableSpellCheck(): void {
   log.debug("[spell-check] enabled", { languages: DEFAULT_LANGUAGES });
 }
 
-/**
- * Installs a native context menu on the given webContents with spell-check
- * suggestions plus the standard editable-area actions. Without this hook
- * the spell-check red underline shows but the user can't access the
- * suggestions - Electron does not provide a default context menu for
- * editable text.
- */
 export function installContextMenu(webContents: WebContents): void {
   webContents.on("context-menu", (_event, params) => {
     const menu = new Menu();

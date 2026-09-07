@@ -11,31 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
-// Genuine two-process regression coverage for `host install`'s `cli-lock`
-// wiring (Host Update Layer Redesign Tech Plan, "Lock-scope restructure",
-// Verification: "Pin gate: `host install <v> --if-idle` busy ->
-// `E_HOST_BUSY` before any service stop, temp scrubbed, install intact;
-// plain install stays unconditional; probe runs after lock acquisition
-// (agent starting during the lock wait is caught - two-process test)").
-// An in-process `Promise.allSettled`-style test can't reproduce a real
-// cross-process TOCTOU window - only actual OS-level file contention (via
-// `store/__tests__/fixtures/cli-lock-worker.ts`, the same worker
-// `cli-lock.test.ts`/`host-restart-lock.test.ts` use) can be trusted to
-// exercise:
-//
-//   1. `stageHostInstallSource` runs to completion WITHOUT waiting on the
-//      lock at all (the extract happens outside `cli-lock`), while
-//      `commitHostInstallSource` genuinely BLOCKS behind a foreign holder
-//      (e.g. an in-progress `host apply`) and only proceeds once it
-//      releases;
-//   2. `--if-idle`'s busy probe runs strictly AFTER lock acquisition, so
-//      an agent that starts busy WHILE install is still waiting behind a
-//      foreign holder is still caught, discarding the staged temp and
-//      never reaching commit.
-//
-// The installer's own extract/download machinery is mocked out (as in
-// host-install.test.ts) so this suite stays focused on lock-gating, not
-// re-testing installer/__tests__/install.test.ts's commit-phase coverage.
+// Two-process regression for `host install`'s cli-lock: a waiter must not enter the swap.
 
 const mocks = vi.hoisted(() => ({
   stageCalls: [] as string[],
@@ -94,10 +70,8 @@ vi.mock("../../installer", () => ({
   },
 }));
 
-// The contender-aware facade imports the commit edge from the concrete
-// installer module. Keep this lock-wiring suite on the same fake boundary as
-// the package-barrel mock above so valid staged bytes cannot reach the real
-// host install.
+// The contender-aware facade imports the commit edge from the concrete installer module.
+// Keep this lock-wiring suite on the same fake boundary as the package-barrel mock above so valid staged bytes cannot reach the real host install.
 vi.mock("../../installer/install", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../installer/install")>();
@@ -151,15 +125,8 @@ vi.mock("../../host/busy-check", () => ({
   },
 }));
 
-// `process.env.HOME`/`USERPROFILE` mutation alone is not trustworthy under
-// `bun --bun`, which can honor its own startup home independently of a
-// runtime env mutation - the exact root cause of a prior incident where a
-// test's real `os.homedir()` resolved to the operator's actual home,
-// pointing `cliLockPath` at the REAL `~/.traycer/cli/.lock` and sending
-// genuine lock contention/break traffic at a live production CLI/host
-// (see commit 96fc9f47). Mocking `node:os.homedir()` directly makes the
-// sandbox authoritative regardless of Bun's own caching behavior; the env
-// mutation below is kept too since some code path may still read it.
+// `process.env.HOME`/`USERPROFILE` mutation alone is not trustworthy under `bun --bun`, which can honor its own startup home independently of a runtime env mutation - the exact root cause of a prior incident where a test's real `os.homedir()` resolved to the operator's actual home, pointing `cliLockPath` at the REAL `~/.traycer/cli/.lock` and sending genuine lock contention/break traffic at a live production CLI/host (see commit 96fc9f47).
+// Mocking `node:os.homedir()` directly makes the sandbox authoritative regardless of Bun's own caching behavior; the env mutation below is kept too since some code path may still read it.
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -188,9 +155,7 @@ function waitForFile(path: string): Promise<void> {
   });
 }
 
-// See host-restart-lock.test.ts's identical helper: the "exit" listener
-// must be registered immediately, not lazily - the worker can legitimately
-// exit within milliseconds of the release barrier.
+// See host-restart-lock.test.ts's identical helper: the "exit" listener must be registered immediately, not lazily - the worker can legitimately exit within milliseconds of the release barrier.
 function spawnLockWorker(
   workerScript: string,
   env: Record<string, string>,
@@ -225,9 +190,7 @@ describe.skipIf(process.platform === "win32")(
       osHome.current = workHome;
       process.env.HOME = workHome;
       process.env.USERPROFILE = workHome;
-      // `store/paths` captures `homedir()` once at module load - drop the
-      // module cache so the dynamic imports below see this test's own
-      // tmp HOME (the mocked `node:os.homedir()` above, not the real one).
+      // `store/paths` captures `homedir()` once at module load - drop the module cache so the dynamic imports below see this test's own tmp HOME (the mocked `node:os.homedir()` above, not the real one).
       vi.resetModules();
       mocks.stageCalls = [];
       mocks.commitCalls = [];
@@ -337,10 +300,7 @@ describe.skipIf(process.platform === "win32")(
 
         await waitForCallCount(() => mocks.stageCalls.length, 1);
 
-        // The host was idle when this install was requested, but an agent
-        // starts (host goes busy) WHILE install is still genuinely blocked
-        // waiting for the foreign holder to release - a pre-wait probe
-        // would have missed this.
+        // The host was idle when this install was requested, but an agent starts (host goes busy) WHILE install is still genuinely blocked waiting for the foreign holder to release - a pre-wait probe would have missed this.
         await new Promise((resolve) => setTimeout(resolve, 100));
         mocks.busyOverride = "busy";
 

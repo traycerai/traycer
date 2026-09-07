@@ -49,20 +49,7 @@ export function UnsyncedCloseDialog(props: UnsyncedCloseDialogProps) {
       <DialogContent
         data-testid="epic-tab-unsynced-dialog"
         onOpenAutoFocus={(event) => {
-          // A destructive confirmation must not open focused on its
-          // destructive control. Radix's `FocusScope` focuses the first
-          // tabbable descendant, and this footer's DOM order puts the
-          // destructive "Close anyway" first, which is what puts the safe
-          // action rightmost on `sm:` per the layout convention. Measured in
-          // `scripts/destructive-dialog-focus-browser.mjs`:
-          //
-          //   FOCUS_ON_OPEN = epic-tab-unsynced-discard
-          //   TAB_ORDER     = discard > wait > close-x
-          //
-          // Focus is moved rather than the footer reordered - reordering would
-          // trade a keyboard hazard for a visual-convention break. Fails safe:
-          // with nothing to focus, Radix's own default runs rather than being
-          // prevented and stranding focus outside the trap.
+          // A destructive confirmation must not open focused on its destructive control.
           const safe = keepOpenRef.current;
           if (safe === null) return;
           event.preventDefault();

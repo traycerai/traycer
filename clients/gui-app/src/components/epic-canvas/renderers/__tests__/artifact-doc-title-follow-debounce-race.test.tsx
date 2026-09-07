@@ -1,20 +1,6 @@
 /**
- * Regression pin for the debounced-rename race in `flushPersist`
- * (`use-artifact-doc-title-follow.ts`).
- *
- * `use-artifact-doc-title-follow.test.ts` covers only the pure reducer
- * (`nextTitleFollow` / `leadingDocTitle`) - the HOOK itself, which owns the
- * 800ms debounce and the RPC dispatch, had zero coverage. That is exactly why
- * a PR could remove the flush-time re-validation guard without any test
- * turning red: a sidebar/remote rename landing inside the debounce window
- * was silently clobbered by the stale, already-scheduled RPC.
- *
- * This file renders the HOOK (not the reducer) over a REAL Tiptap `Editor`,
- * with `vi.useFakeTimers()` driving the 800ms window, and mocks only the
- * hook's three external dependencies: the open-epic handle (a fake store
- * whose `artifacts` slice this file mutates between ticks), the rename
- * mutation (`useEpicRenameArtifact`), and the canvas store's
- * `renameArtifactInTab` selector.
+ * `use-artifact-doc-title-follow.test.ts` covers only the pure reducer (`nextTitleFollow` / `leadingDocTitle`) - the HOOK itself, which owns the 800ms debounce and the RPC dispatch, had zero coverage.
+ * That is exactly why a PR could remove the flush-time re-validation guard without any test turning red: a sidebar/remote rename landing inside the debounce window was silently clobbered by the stale, already-scheduled RPC.
  */
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -176,10 +162,7 @@ describe("useArtifactDocTitleFollow - flushPersist re-validates before sending",
       title: "A",
     });
 
-    // The successful RPC round-trip's local echo - exactly what
-    // `renameArtifactInTab` plus the doc's own live rename would leave
-    // behind - so the next edit is read against "A", not the create-flow
-    // default.
+    // The successful RPC round-trip's local echo - exactly what `renameArtifactInTab` plus the doc's own live rename would leave behind - so the next edit is read against "A", not the create-flow default.
     setArtifact({ title: "A" });
 
     act(() => {
@@ -212,9 +195,7 @@ describe("useArtifactDocTitleFollow - flushPersist re-validates before sending",
     await act(() => vi.advanceTimersByTimeAsync(800));
 
     expect(mocks.mutateAsync).toHaveBeenCalledTimes(1);
-    // No optimistic write - the store never moved off the create-flow
-    // default, since the removed guard was the only thing that would have
-    // written it and this hook never did that itself.
+    // No optimistic write - the store never moved off the create-flow default, since the removed guard was the only thing that would have written it and this hook never did that itself.
     expect(mocks.artifactsState.byId[ARTIFACT_ID].title).toBe(DEFAULT_TITLE);
 
     mocks.mutateAsync.mockResolvedValue({ updated: true });

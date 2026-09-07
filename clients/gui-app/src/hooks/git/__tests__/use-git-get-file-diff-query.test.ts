@@ -20,17 +20,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useGitGetFileDiffQuery } from "../use-git-get-file-diff-query";
 
-// The client is an ARGUMENT now, not an ambient read. The hook used to call
-// `useHostClient()` while taking `hostId` separately and asserting in a comment
-// that the two were "correlated 1:1" - they were not, which is the D15 defect
-// `routesToThePassedClient` below pins. There is deliberately NO `@/lib/host`
-// mock left in this file: an app-wide read reintroduced here has nothing to
-// answer it.
-//
-// Real clients over mock messengers rather than chained `as unknown as`
-// assertions - the repo's lint forbids those in tests as much as in production,
-// and a stub would also hide the day this hook starts calling something it
-// lacks.
+// Client is an argument, not `useHostClient()`. No `@/lib/host` mock: an app-wide read reintroduced here has nothing to answer it.
 function buildClient(args: {
   readonly entry: typeof mockLocalHostEntry;
   readonly onFileDiff: (
@@ -250,11 +240,7 @@ describe("useGitGetFileDiffQuery", () => {
     ]);
   });
 
-  // The D15 arm. `hostId` names the TILE's host and `client` must be the one
-  // that addresses it; the hook used to read `useHostClient()` here, so a tile
-  // bound to A kept its A-shaped query key while the request went to whichever
-  // host the app was pointed at. Two real clients, and the app-wide one must
-  // stay untouched.
+  // `hostId` names the TILE's host and `client` must be the one that addresses it; the hook used to read `useHostClient()` here, so a tile bound to A kept its A-shaped query key while the request went to whichever host the app was pointed at.
   it("routes the request to the PASSED client, never an app-wide one", async () => {
     const { result } = renderHook(
       () =>

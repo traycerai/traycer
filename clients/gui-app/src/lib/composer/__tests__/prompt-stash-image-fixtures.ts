@@ -90,7 +90,6 @@ export function singleFrameGifBytesOfSize(
 /**
  * Structurally valid two-frame (animated) GIF of exact `byteLength`.
  * Prefix + GCE + frame1 + GCE + frame2 (padded) + trailer.
- * Production treats frameCount > 1 as verbatim animation.
  */
 export function twoFrameGifBytesOfSize(
   byteLength: number,
@@ -244,9 +243,8 @@ export function animatedWebpBytesOfSize(
 }
 
 /**
- * Genuine multi-frame GIF that still passes structural frame counting, but
- * with a deliberately corrupt LZW minimum-code size so a real decoder rejects
- * the payload. Used with a rejecting codec mock in preparation regressions.
+ * Genuine multi-frame GIF that still passes structural frame counting, but with a deliberately corrupt LZW minimum-code size so a real decoder rejects the payload.
+ * Used with a rejecting codec mock in preparation regressions.
  */
 export function structurallyAnimatedGifWithCorruptLzw(
   byteLength: number,
@@ -259,8 +257,7 @@ export function structurallyAnimatedGifWithCorruptLzw(
 }
 
 /**
- * Animated WebP that still passes the chunk/animation parser, but with
- * zeroed ANMF frame payload so a real decoder rejects the codec stream.
+ * Animated WebP that still passes the chunk/animation parser, but with zeroed ANMF frame payload so a real decoder rejects the codec stream.
  */
 export function structurallyAnimatedWebpWithCorruptFrames(
   byteLength: number,
@@ -287,8 +284,7 @@ export function encodedJpegBytesOfSize(
 }
 
 /**
- * Given a raster sub-block region length (including the terminating 0),
- * return the pure data-byte count D such that D + blockHeaders + 1 = region.
+ * Given a raster sub-block region length (including the terminating 0), return the pure data-byte count D such that D + blockHeaders + 1 = region.
  */
 function rasterDataLengthForRegion(region: number): number {
   if (region === 1) return 0;

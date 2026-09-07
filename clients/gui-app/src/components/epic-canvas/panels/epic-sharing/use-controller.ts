@@ -116,12 +116,7 @@ export function useEpicSharingPanelController(
   const canInvitePeople = currentRole === "owner" || currentRole === "editor";
   const shareableTeams = useEpicShareableTeams();
 
-  // The Epic SESSION's client, and the mutations below moved with it: the
-  // list must agree with the host the grant/revoke/role writes land on, and
-  // both now name the host projecting this panel's Epic. This used to be the
-  // app-wide client, with a note that rebinding "would have to move the
-  // mutation hooks" - it did, and they are moved
-  // (`use-epic-collaborator-mutations.ts`, `use-epic-send-queued-invites`).
+  // The Epic SESSION's client, and the mutations below moved with it: the list must agree with the host the grant/revoke/role writes land on, and both now name the host projecting this panel's Epic.
   const collaboratorsHostClient = useEpicSessionHostClient();
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
     client: collaboratorsHostClient,

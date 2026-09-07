@@ -16,15 +16,7 @@ import {
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 
-/**
- * `sessionImport.*@1.0` frame fixtures, modelled on `migration-run.test.ts`.
- *
- * Covers every frame kind and every arm of the three discriminated unions the
- * wizard renders off - group location, candidate state, and import outcome -
- * because each arm is a different row treatment, and an arm that silently
- * stopped parsing would show up as a missing row rather than an error. All
- * frames are JSON-only: `hasBinaryPayload` is pinned to the `false` literal.
- */
+/** `sessionImport.*@1.0` frame fixtures, modelled on `migration-run.test.ts`. */
 
 const importableCandidate = {
   harness: "claude",
@@ -221,9 +213,7 @@ describe("sessionImport.scan@1.0 server frames", () => {
   });
 
   it("rejects an unreadable candidate blaming work only a run does", () => {
-    // A scan never binds a workspace and never creates a chat, so a candidate
-    // naming either is a host bug. Rejecting the frame is what keeps it from
-    // reaching the wizard as a row it has no treatment for.
+    // A scan never binds a workspace and never creates a chat, so a candidate naming either is a host bug.
     const runOnly = ["workspace_bind_failed", "creation_failed"] as const;
 
     for (const reason of runOnly) {
@@ -609,9 +599,7 @@ describe("sessionImport.status@1.0", () => {
 });
 
 /**
- * Registry membership, asserted the way `resources-subscribe.test.ts` does it:
- * a contract that parses correctly but is not REACHABLE from the registry is a
- * feature the wire cannot carry, and nothing else in the suite would notice.
+ * Registry membership, asserted the way `resources-subscribe.test.ts` does it: a contract that parses correctly but is not REACHABLE from the registry is a feature the wire cannot carry, and nothing else in the suite.
  */
 describe("sessionImport.* registry membership", () => {
   it("registers both stream methods at minor 0 with a per-method degrade", () => {

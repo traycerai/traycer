@@ -13,11 +13,8 @@ export type RespondLinkLoginOutcome =
   | "gone"
   | "failed";
 
-/**
- * The Link mobile app panel's approve/reject decision on a claimed code.
- * Outcomes are returned rather than thrown — the panel reconciles
- * `already-decided`/`gone` against its own state machine inline.
- */
+/** The Link mobile app panel's approve/reject decision on a claimed code.
+ * Outcomes are returned rather than thrown - the panel reconciles `already-decided`/`gone` against its own state machine inline. */
 export function useRespondLinkLoginMutation(): UseMutationResult<
   RespondLinkLoginOutcome,
   Error,

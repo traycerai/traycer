@@ -112,13 +112,7 @@ describe("useAuthFetchUserSessions", () => {
       await Promise.resolve();
     });
 
-    // Switching identity leaves A's query with no observer. Because the query
-    // function consumes the signal, TanStack cancels-and-reverts that read
-    // instead of letting it settle, so A's late response is discarded outright
-    // rather than parked in A's cache. Stronger than the by-key isolation this
-    // case was originally written for: the answer nobody asked for is gone, and
-    // a later switch back to A refetches instead of showing a pre-switch
-    // snapshot.
+    // Because the query function consumes the signal, TanStack cancels-and-reverts that read instead of letting it settle, so A's late response is discarded outright rather than parked in A's cache.
     expect(accountASignal.aborted).toBe(true);
     expect(
       queryClient.getQueryData(authQueryKeys.userSessions(auth, "account-a")),
@@ -132,10 +126,7 @@ describe("useAuthFetchUserSessions", () => {
   });
 
   it("aborts the signal it handed the in-flight read when a revoke invalidates the query", async () => {
-    // The revoke mutations invalidate this exact key on success. The read that
-    // was already in flight is abandoned by that invalidation, and
-    // `fetchUserSessions` needs to hear about it: its repair path spends a
-    // single-use refresh rotation that must not run for a discarded answer.
+    // The read that was already in flight is abandoned by that invalidation, and `fetchUserSessions` needs to hear about it: its repair path spends a single-use refresh rotation that must not run for a discarded answer.
     let resolveInFlight: (value: ListUserSessionsResponse) => void = () => {};
     fetchUserSessions
       // The panel is already showing sessions...

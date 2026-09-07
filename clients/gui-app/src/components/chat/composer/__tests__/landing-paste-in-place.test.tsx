@@ -1,11 +1,4 @@
-/**
- * Round-4 landing paste: in-place pending b64 nodes (no anchors).
- *
- * Covers the review findings that the strip+anchor design could not fix cleanly:
- * mixed-content order, non-collapsed selection placement, image-only rapid pastes,
- * and failed ingest (remove node + toast + reconcile). Fake only idb-keyval;
- * putImage / rewrite-by-id run for real.
- */
+/** Covers the review findings that the strip+anchor design could not fix cleanly: mixed-content order, non-collapsed selection placement, image-only rapid pastes, and failed ingest (remove node + toast + reconcile). Fake only idb-keyval; putImage / rewrite-by-id run for real. */
 import { fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
@@ -160,7 +153,7 @@ describe("landing paste in-place pending nodes", () => {
       mixedContent(bytesToBase64(bytes1), bytesToBase64(bytes2)),
     );
 
-    // Synchronous insert: A, image1, B, image2 — positions fixed, still b64.
+    // Synchronous insert: A, image1, B, image2 - positions fixed, still b64.
     expect(paragraphInlineKinds(editor)).toEqual([
       "text",
       "image",
@@ -177,7 +170,7 @@ describe("landing paste in-place pending nodes", () => {
     expect(pending[0]?.id).not.toBe(pending[1]?.id);
     const positionsBefore = pending.map((image) => image.pos);
 
-    // Release IDB writes out of order (image2 first) — order must not change.
+    // Release IDB writes out of order (image2 first) - order must not change.
     await waitFor(() => {
       expect(setGates.has(hash2)).toBe(true);
       expect(setGates.has(hash1)).toBe(true);
@@ -295,9 +288,8 @@ describe("landing paste in-place pending nodes", () => {
     expect(imageMarkNames(editor)).toEqual([["bold"]]);
   });
 
-  // Finding 2: non-collapsed selection — image-leading paste lands at paste START.
-  // Use raw HTML (open slice) so the paste merges inline into the paragraph,
-  // matching a mid-paragraph native copy of an image atom + trailing text.
+  // Finding 2: non-collapsed selection - image-leading paste lands at paste START.
+  // Use raw HTML (open slice) so the paste merges inline into the paragraph, matching a mid-paragraph native copy of an image atom + trailing text.
   it("image-leading paste over a non-collapsed selection places the image at the selection start", async () => {
     const jobs: Array<Promise<void>> = [];
     const bytes = bytesOf([9, 9, 9]);
@@ -435,10 +427,7 @@ describe("landing paste in-place pending nodes", () => {
   });
 });
 
-/**
- * Landing-shaped ingest: validate, mint id, start background putImage +
- * rewrite-by-id (mirrors landing-composer startPendingImageIngest).
- */
+/** Landing-shaped ingest: validate, mint id, start background putImage + rewrite-by-id (mirrors landing-composer startPendingImageIngest). */
 function makeLandingIngest(
   editor: Editor,
   jobs: Array<Promise<void>>,

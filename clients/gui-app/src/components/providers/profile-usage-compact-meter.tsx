@@ -5,12 +5,8 @@ import {
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 
-/**
- * Shared compact usage meter (model picker rows, composer rate-limit
- * warning). Shows the most constrained captured window only - it never
- * infers health from missing data, so `not_checked`/`unavailable` render as
- * an empty track.
- */
+/** Shows the most constrained captured window only - it never infers health from missing data, so
+ * `not_checked`/`unavailable` render as an empty track. */
 export function ProfileUsageCompactMeter({
   entry,
 }: {

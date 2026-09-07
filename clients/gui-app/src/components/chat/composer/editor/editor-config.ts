@@ -28,12 +28,7 @@ import { ChatCopySerializer } from "./extensions/chat-copy-serializer";
 
 export interface BuildComposerExtensionsArgs {
   readonly pickerStore: ComposerPickerStore;
-  /**
-   * Live placeholder source. Read through a stable getter (not a static string)
-   * so the chat composer can swap the placeholder - e.g. to a mid-turn steer
-   * hint - without rebuilding the Tiptap editor (which is created once). The
-   * owner pokes a no-op transaction on change so the decoration re-reads it.
-   */
+  /** Read through a stable getter (not a static string) so the chat composer can swap the placeholder - e.g. to a mid-turn steer hint - without rebuilding the Tiptap editor (which is created once). */
   readonly getPlaceholder: () => string;
   readonly onSubmit: {
     readonly current: (source: ChatComposerSubmitSource) => void;
@@ -47,12 +42,8 @@ export interface BuildComposerExtensionsArgs {
     | null;
 }
 
-// Blockquote is button-only (T5): the composer schema stays blockquote-valid
-// (so quoted drafts and edited sent messages round-trip) but grants none of
-// the extension's default authoring affordances - no `> ` wrapping input rule,
-// no Cmd-Shift-B toggle. `addCommands` (setBlockquote/toggleBlockquote/
-// unsetBlockquote) is left untouched; `unsetBlockquote` backs the composer's
-// own narrow Backspace-unwrap keymap.
+// Blockquote is button-only (T5): the composer schema stays blockquote-valid (so quoted drafts and edited sent messages round-trip) but grants none of the extension's default authoring affordances - no `> ` wrapping input rule, no Cmd-Shift-B toggle.
+// `addCommands` (setBlockquote/toggleBlockquote/ unsetBlockquote) is left untouched; `unsetBlockquote` backs the composer's own narrow Backspace-unwrap keymap.
 const ComposerBlockquote = Blockquote.extend({
   addInputRules() {
     return [];
@@ -76,12 +67,7 @@ export function buildComposerExtensions(
     }),
     ComposerBlockquote,
     ComposerSourcedQuote,
-    // One private `marked` per editor. Without it the extension registers
-    // this editor's tokenizers into the module-level `marked` singleton and
-    // never removes them, which pinned every composer ever mounted (and the
-    // chat-messages render scope behind its callbacks) for the life of the
-    // window - see `createIsolatedMarked`. This function runs once per editor,
-    // so the instance is per editor.
+    // Without it the extension registers this editor's tokenizers into the module-level `marked` singleton and never removes them, which pinned every composer ever mounted (and the chat-messages render scope behind its callbacks) for the life of the window - see `createIsolatedMarked`.
     Markdown.configure({ marked: createIsolatedMarked() }),
     Link.configure({
       openOnClick: false,
@@ -89,9 +75,8 @@ export function buildComposerExtensions(
       linkOnPaste: true,
     }),
     Placeholder.configure({
-      // An empty code block is still an empty editor to Tiptap. Returning the
-      // composer hint there makes it render as monospaced code inside the new
-      // block; placeholders belong only on ordinary prompt paragraphs.
+      // An empty code block is still an empty editor to Tiptap.
+      // Returning the composer hint there makes it render as monospaced code inside the new block; placeholders belong only on ordinary prompt paragraphs.
       placeholder: ({ node }) =>
         node.type.name === "paragraph" ? args.getPlaceholder() : "",
       includeChildren: false,

@@ -1,22 +1,5 @@
-// Warm-open persistence for the worktrees panel.
-//
-// The TanStack Query cache is renderer-memory only, so every app launch used
-// to open Settings ▸ Worktrees fully cold: no rows until the base listing RPC
-// returned, then each row sat at "Checking…" until its per-path probe
-// resolved, and the tier-filtered counts churned while the list re-converged.
-// This module persists two last-known snapshots to localStorage - one per
-// host each - so the next launch can seed the cache and paint instantly while
-// live truth revalidates behind it:
-//
-//   - the ACTIVITY snapshot: the fully-warm per-path enrichment entries
-//     (chips and all), restored by `worktrees-enrichment.ts`;
-//   - the LISTING snapshot: the base listing rows in listing order, restored
-//     by `worktrees-listing-query.ts` so the row list itself paints before
-//     the first listing RPC lands.
-//
-// STORAGE layer only: reading/writing/pruning snapshots. Cache seeding lives
-// with the hooks that own each query-key layout - keeping the import
-// direction one-way (enrichment/listing → persistence, never back).
+// Cache seeding lives with the hooks that own each query-key layout - keeping the import direction one-way
+// (enrichment/listing → persistence, never back).
 
 import { z } from "zod";
 import {
@@ -31,19 +14,15 @@ import {
 import { appLogger, describeLogError } from "@/lib/logger";
 
 export const WORKTREE_ACTIVITY_CACHE_VERSION = 1;
-// A snapshot is only a warm-open hint; one this old is likelier to mislead
-// (branches move, PRs merge, worktrees get deleted) than to help, so it is
-// dropped unread and the next open is simply cold.
+// A snapshot is only a warm-open hint; one this old is likelier to mislead (branches move, PRs merge,
+// worktrees get deleted) than to help, so it is dropped unread and the next open is simply cold.
 export const WORKTREE_ACTIVITY_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
-// Bounds the localStorage footprint (a serialized entry is roughly a
-// kilobyte): fleets larger than this persist their first N listing-order
-// rows and the tail opens cold.
+// Bounds the localStorage footprint (a serialized entry is roughly a kilobyte): fleets larger than this
+// persist their first N listing-order rows and the tail opens cold.
 export const WORKTREE_ACTIVITY_CACHE_MAX_ENTRIES = 1_000;
 
-// Persisted entries round-trip through the protocol's own zod schema: a
-// snapshot whose shape no longer parses (older app, protocol evolution,
-// corrupt disk state) is discarded wholesale - a cold open, never a
-// malformed seed.
+// Persisted entries round-trip through the protocol's own zod schema: a snapshot whose shape no longer parses
+// (older app, protocol evolution, corrupt disk state) is discarded wholesale.
 const persistedWorktreeHostEntrySchema = worktreeHostEntrySchemaV12.extend({
   // Snapshots written before listAllForHost@1.4 had no freshness marker.
   // Restore them fail-closed as unresolved until a live host response lands.
@@ -62,9 +41,8 @@ export interface WorktreeActivitySnapshot {
   readonly entries: readonly WorktreeHostEntryV14[];
 }
 
-// Only fully-warm entries are worth seeding: `prState === null` on any leg
-// means "not yet probed" - restoring it would render the same "Checking…"
-// state a cold open shows, then consume a revalidation probe anyway.
+// Only fully-warm entries are worth seeding: `prState === null` on any leg means "not yet probed" - restoring
+// it would render the same "Checking…" state a cold open shows, then consume a revalidation probe anyway.
 function worktreeEntryIsWarm(entry: WorktreeHostEntryV14): boolean {
   return (
     entry.prState !== null &&
@@ -72,15 +50,8 @@ function worktreeEntryIsWarm(entry: WorktreeHostEntryV14): boolean {
   );
 }
 
-/**
- * Whether the host has actually derived this row's git facts.
- * `resolvedAt === null` is the `unresolvedRow` SENTINEL a cold host answers
- * with - unknown branch, `gitRemovable: false`, no owners - which the panel
- * renders as "detached HEAD" / "Waiting for host verification…".
- *
- * Distinct from {@link worktreeEntryIsWarm}, which is about the (later) `gh`
- * PR probe: a row can be fully resolved with its PR fact still warming.
- */
+/** Distinct from worktreeEntryIsWarm, which is about the (later) `gh` PR probe: a row can be fully resolved
+ * with its PR fact still warming. */
 function worktreeEntryIsResolved(entry: WorktreeHostEntryV14): boolean {
   return entry.resolvedAt !== null;
 }
@@ -96,11 +67,8 @@ function parseSnapshot(raw: string): WorktreeActivitySnapshot | null {
   }
 }
 
-/**
- * The last run's snapshot under `key`, or `null` when there is none, it no
- * longer parses, or it aged past {@link WORKTREE_ACTIVITY_CACHE_MAX_AGE_MS}
- * (unusable snapshots are removed on the spot).
- */
+/** The last run's snapshot under `key`, or `null` when there is none, it no longer parses, or it aged past
+ * WORKTREE_ACTIVITY_CACHE_MAX_AGE_MS (unusable snapshots are removed on the spot). */
 function readSnapshotAt(
   key: string,
   now: number,
@@ -122,12 +90,8 @@ function readSnapshotAt(
 // next launch". Logged once, not per debounced write.
 let persistWriteFailureLogged = false;
 
-/**
- * Writes `entries` as the snapshot under `key`, capped at
- * {@link WORKTREE_ACTIVITY_CACHE_MAX_ENTRIES}. An EMPTY result never writes -
- * an early fold (nothing enriched / no rows listed yet) must not clobber the
- * previous run's still-useful snapshot.
- */
+/** An empty result never writes - an early fold (nothing enriched / no rows listed yet) must not clobber the
+ * previous run's still-useful snapshot. */
 function writeSnapshotAt(
   key: string,
   entries: readonly WorktreeHostEntryV14[],
@@ -152,10 +116,8 @@ function writeSnapshotAt(
   }
 }
 
-/**
- * The last run's activity snapshot for `hostId`, or `null` when there is
- * none, it no longer parses, or it aged out.
- */
+/** The last run's activity snapshot for `hostId`, or `null` when there is none, it no longer parses, or it aged
+ * out. */
 export function readWorktreeActivitySnapshot(
   hostId: string,
   now: number,
@@ -163,11 +125,7 @@ export function readWorktreeActivitySnapshot(
   return readSnapshotAt(worktreeActivityCacheKey(hostId), now);
 }
 
-/**
- * Writes the activity snapshot for `hostId`: the warm entries of the
- * currently listed paths, in listing order. Filtering by `worktreePaths`
- * drops deleted worktrees on the first write after they leave the listing.
- */
+/** Filtering by `worktreePaths` drops deleted worktrees on the first write after they leave the listing. */
 export function persistWorktreeActivitySnapshot(args: {
   readonly hostId: string;
   readonly worktreePaths: readonly string[];
@@ -181,10 +139,8 @@ export function persistWorktreeActivitySnapshot(args: {
   writeSnapshotAt(worktreeActivityCacheKey(args.hostId), entries, args.now);
 }
 
-/**
- * The last run's base-listing snapshot for `hostId`, or `null` when there is
- * none, it no longer parses, or it aged out.
- */
+/** The last run's base-listing snapshot for `hostId`, or `null` when there is none, it no longer parses, or it
+ * aged out. */
 export function readWorktreeListingSnapshot(
   hostId: string,
   now: number,
@@ -192,19 +148,8 @@ export function readWorktreeListingSnapshot(
   return readSnapshotAt(worktreeListingCacheKey(hostId), now);
 }
 
-/**
- * Writes the base-listing snapshot for `hostId`, in listing order. The caller
- * only persists COMPLETE listings (all pages landed), so a restored row list is
- * never a silently-truncated prefix.
- *
- * Membership comes from the incoming listing - a row absent there is proven
- * gone and drops - but an UNRESOLVED incoming row never overwrites a resolved
- * one already on disk. The base listing is deliberately non-spawning, so
- * against a cold host it answers entirely in `unresolvedRow` sentinels; writing
- * those through replaced a good snapshot with a fleet of "detached HEAD" rows
- * that then restored on the next launch. Resolved data is only ever replaced by
- * resolved data.
- */
+/** The caller only persists complete listings (all pages landed), so a restored row list is never a
+ * silently-truncated prefix. */
 export function persistWorktreeListingSnapshot(args: {
   readonly hostId: string;
   readonly entries: readonly WorktreeHostEntryV14[];
@@ -227,13 +172,7 @@ export function persistWorktreeListingSnapshot(args: {
   writeSnapshotAt(key, entries, args.now);
 }
 
-/**
- * Drops every host's snapshot - across BOTH the activity and listing
- * namespaces - that no longer parses or aged past
- * {@link WORKTREE_ACTIVITY_CACHE_MAX_AGE_MS}, so hosts that stopped being
- * opened don't hold their last fleet in localStorage forever. Run once per
- * app session (alongside the first restore), not per write.
- */
+/** Drops every host's snapshot - across both the activity and listing namespaces. */
 export function pruneWorktreeSnapshots(now: number): void {
   // The `:` boundary mirrors `wipe.ts`: only these stores' namespaces.
   const prefixes = [

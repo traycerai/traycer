@@ -196,9 +196,8 @@ describe("rankRootSearchEntries", () => {
     ]);
   });
 
-  // A PR/issue row carries its identity in `labelPrefix` and its TITLE in
-  // `label`, because the two truncate differently. Tiering on `label` alone
-  // put the row a query names exactly in the bottom tier.
+  // A PR/issue row carries its identity in `labelPrefix` and its TITLE in `label`, because the two truncate differently.
+  // Tiering on `label` alone put the row a query names exactly in the bottom tier.
   it("ranks an exact GitHub reference above a title that merely contains it", () => {
     const candidates = [
       candidate("artifacts", { id: "a1", label: "#4917 postmortem draft" }),
@@ -213,9 +212,8 @@ describe("rankRootSearchEntries", () => {
   });
 
   it("still ranks a GitHub row by its title when the query is a title", () => {
-    // The control. The fix must not buy the reference case by demoting the
-    // title case - which is what tiering on `labelPrefix + label` joined
-    // together would have done, since that no longer STARTS with the title.
+    // The control.
+    // The fix must not buy the reference case by demoting the title case - which is what tiering on `labelPrefix + label` joined together would have done, since that no longer STARTS with the title.
     const candidates = [
       candidate("artifacts", { id: "a1", label: "Notes about stopping" }),
       githubCandidate({
@@ -228,10 +226,8 @@ describe("rankRootSearchEntries", () => {
     expect(rankedLabels(candidates, "stop")[0]).toBe("Stop the busy-loop");
   });
 
-  // The repository-qualified reference form. `labelPrefix` is only `#123`, so
-  // the identity a qualified query names lives in `description` - tiering
-  // without it put the exact row in the bottom tier, below any row whose label
-  // merely starts with those characters.
+  // The repository-qualified reference form.
+  // `labelPrefix` is only `#123`, so the identity a qualified query names lives in `description` - tiering without it put the exact row in the bottom tier, below any row whose label merely starts with those characters.
   it("ranks a repository-qualified reference above a label that starts with it", () => {
     const candidates = [
       candidate("artifacts", {
@@ -270,10 +266,7 @@ describe("rankRootSearchEntries", () => {
 
 describe("search-only text", () => {
   it("counts a row matched only through its search-only text", () => {
-    // The author's login lives in no rendered segment, so before
-    // `entry.searchText` joined the Fuse keys this row was appended without
-    // counting - and `matchedCount: 0` let the settled zero-match dismissal
-    // close the picker over a row it was showing.
+    // The author's login lives in no rendered segment, so before `entry.searchText` joined the Fuse keys this row was appended without counting - and `matchedCount: 0` let the settled zero-match dismissal close the picker over a row it was showing.
     const ranked = rankRootSearchEntries(
       [
         githubCandidate({
@@ -291,9 +284,7 @@ describe("search-only text", () => {
   });
 
   it("appends without counting when no field carries the match", () => {
-    // The control: the same row minus its search-only text stays VISIBLE
-    // (unmatched rows are appended, never dropped) but does not gate the
-    // dismissal - the distinction `matchedCount` exists to draw.
+    // The control: the same row minus its search-only text stays VISIBLE (unmatched rows are appended, never dropped) but does not gate the dismissal - the distinction `matchedCount` exists to draw.
     const ranked = rankRootSearchEntries(
       [
         githubCandidate({

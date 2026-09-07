@@ -16,20 +16,7 @@ import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
 import { registerHostControllerStatusBroadcast } from "../host-controller-status-broadcast";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 
-// `refreshRegistryUpdateState` is the launch-time host registry
-// probe (Flow 6). It owns the 24h cache the tray + Settings + banner
-// all read from. Behaviour we pin here:
-//
-//   - Fresh successful cache (< 24h) short-circuits without hitting the CLI.
-//   - Stale cache (>= 24h) re-probes through the CLI.
-//   - Failed cache entries re-probe on the next launch so repo/tag migrations
-//     don't leave Settings showing stale 404s for the full TTL.
-//   - `force: true` always re-probes.
-//   - Registry failures are non-blocking: the cache file still
-//     gets written with `reachable: false` so Settings can render the
-//     `Last checked: failed` chip and the banner stays silent.
-//   - Update availability is derived from installed != latest only
-//     when both are present and reachable.
+// - Failed cache entries re-probe on the next launch so repo/tag migrations don't leave Settings showing stale 404s for the full TTL.
 
 vi.mock("electron", () => ({
   app: {
@@ -219,14 +206,6 @@ function deferred<T>(): {
   return { promise, resolve: resolveValue };
 }
 
-// Fixup B1: `refreshRegistryUpdateState` now takes an explicit
-// `IpcHostController` - `updateAvailable` is projected from its
-// `getStatus().updateReady` (bytes actually staged), not derived from the
-// registry probe's raw installed/latest comparison anymore, and a
-// successful fresh probe now triggers `stageLatest()` in the background.
-// This file is about the CACHE/PROBE mechanics, not the controller's own
-// staging decision (that's `host-controller.test.ts`'s job) - `updateReady`
-// is just a fixed, test-controlled input here.
 function fakeHostController(updateReady: boolean): IpcHostController & {
   readonly stageLatestCalls: number[];
   setUpdateReady(updateReady: boolean): void;
@@ -349,16 +328,6 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.installedVersion).toBe("1.4.1");
   });
 
-  // Renderer surfaces cutover (Host Update Layer Redesign): the in-process
-  // `onHostRegistryUpdateStateChange` listener this pair exercised was the
-  // push side-channel for the old registry-only `HostRegistryUpdateState`
-  // model and has been retired along with it - `host-management-ipc.ts` no
-  // longer exports it. Every renderer surface now reads the canonical
-  // two-lane `HostControllerStatus` from `host-controller-status-broadcast.ts`
-  // instead, which re-reads `hostController.getStatus()` fresh on every tick
-  // rather than replaying a captured value, so "does a refresh notify
-  // listeners" and "does a throwing listener still let refresh succeed" no
-  // longer have a production analogue to test.
 
   it("re-probes when force is true even with a fresh cache", async () => {
     const probeSpy = vi
@@ -456,10 +425,6 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.latestVersion).toBe("1.4.3");
   });
 
-  // Ticket: host-update-race-conditions - the periodic/resume re-check
-  // (desktop-startup.ts) passes a much shorter `maxAgeMs` than the default
-  // 24h TTL so a long-running session (or a machine waking from sleep)
-  // notices a new release without requiring a relaunch or a manual click.
   it("maxAgeMs overrides the default 24h TTL - a 2h-old cache re-probes under a 1h threshold", async () => {
     const probeSpy = vi
       .fn()
@@ -597,16 +562,6 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.errorMessage).toContain("registry unreachable");
   });
 
-  // Fixup B1: `updateAvailable` is now a pure projection of
-  // `HostController.getStatus().updateReady` (bytes actually staged) - the
-  // registry probe's own installed/latest comparison (still exercised via
-  // `latestVersion`/`installedVersion` above, and via `compareHostVersions`'s
-  // own dedicated suite in `clients/shared/host-version/`) no longer feeds
-  // `updateAvailable` at all. These two cases prove real decoupling, not
-  // just "usually agrees with the old comparison": a registry-detected
-  // update with nothing staged yet reads as unavailable (quiet-until-ready,
-  // Tech Plan D3), and a case the OLD comparison would have called
-  // "up to date" reads as available once bytes are actually staged.
   it("does not advertise an update the registry detected but nothing has staged yet (quiet-until-ready)", async () => {
     const probeSpy = vi.fn();
     vi.doMock("../../cli/traycer-cli", () => ({
@@ -683,10 +638,8 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.errorMessage).toBeNull();
   });
 
-  // Fixup B1: successful registry refreshes never called `stageLatest()` -
-  // there was no production caller of it at all. A long session would
-  // advertise "Update host" (under the old registry-only detection) while
-  // never background-downloading the bytes that advertisement implied.
+  // Fixup B1: successful registry refreshes never called `stageLatest()` - there was no production caller of it at all.
+  // A long session would advertise "Update host" (under the old registry-only detection) while never background-downloading the bytes that advertisement implied.
   it("stages the eligible update in the background on a successful fresh probe, but not on a cache hit", async () => {
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: vi
@@ -720,18 +673,6 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(freshProbeController.stageLatestCalls).toHaveLength(1);
   });
 
-  // Renderer surfaces cutover: P6 and F10 exercised `onHostRegistryUpdateStateChange`
-  // republishing `updateReady` once a fire-and-forget background `stageLatest()`
-  // completed, and guarded against an older, slower stage's completion
-  // clobbering a newer one's published state. That listener is retired (see
-  // the comment above "re-probes when force is true even with a fresh
-  // cache"). The staleness guard F10 exercised now lives one layer down, in
-  // `HostController.stageLatest()`'s own in-flight coalescing
-  // (`stageLatestInFlight`/`stageLatestPending`) - see
-  // "P10: concurrent stageLatest calls share the production reconcile and
-  // download" in `host-controller.test.ts`, which pins exactly this
-  // concurrent-call ordering guarantee at the source instead of at a
-  // since-deleted IPC-layer push.
 
   it("does not stage anything after a failed registry probe", async () => {
     vi.doMock("../../cli/traycer-cli", () => ({
@@ -755,12 +696,6 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
   });
 });
 
-// Ticket 398e84f4 - Desktop host registry update cache must be
-// environment-scoped so a dev launch does not project prod cache state
-// (and vice-versa). `installedVersion` in the cache is derived from
-// the active environment's install record, so any cross-environment reuse
-// would mis-report "installed" / "update available" on Settings →
-// Host and the tray.
 describe("refreshRegistryUpdateState - environment-scoped cache", () => {
   it("prod launch reads only the prod-scoped cache file", async () => {
     const probeSpy = vi.fn();
@@ -989,15 +924,8 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     expect(persisted.reachable).toBe(false);
   });
 
-  // Fixup B5: dev runs are per-worktree ("Dev run slots") - every other
-  // piece of dev state (install dir, pid file, CLI home) is already scoped
-  // under `dev-runs/<slot>/` so concurrent worktrees never collide. This
-  // cache was keyed on environment alone, so two dev worktrees running
-  // `make dev-desktop` at once (each with its own install/`DEV_DESKTOP_SLOT`)
-  // shared one `registry-update-cache-dev.json` and could overwrite each
-  // other's cached state. Two module instances stand in for two concurrent
-  // desktop processes, one per slot, exactly as two real `make dev-desktop`
-  // runs would never share a Node module registry either.
+  // Fixup B5: dev runs are per-worktree ("Dev run slots").
+  // Two module instances stand in for two concurrent desktop processes, one per slot, exactly as two real `make dev-desktop` runs would never share a Node module registry either.
   it("keeps registry caches for two concurrent dev slots separate", async () => {
     const originalSlot = process.env[DEV_DESKTOP_SLOT_ENV];
     try {

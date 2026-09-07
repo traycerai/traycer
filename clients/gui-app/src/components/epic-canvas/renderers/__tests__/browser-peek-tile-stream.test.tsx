@@ -263,11 +263,6 @@ describe("BrowserPeekTile", () => {
   });
 
   it("reads a native-handoff complete frame as a handoff spinner, not a dead cast", () => {
-    // `completeMeans="native-handoff"`: this client is the one placing the
-    // native tab, so the host's `complete` frame (browser-screencast-plane.ts's
-    // `subscribeScreencast`) means "attached, going native" - pins existing
-    // behavior for the electron-capable client (browser-session-tile.tsx's
-    // `browserPeekCompleteMeaning`).
     renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -295,12 +290,8 @@ describe("BrowserPeekTile", () => {
   });
 
   it("reads a native-elsewhere complete frame as an honest terminal state, not a handoff spinner", () => {
-    // `completeMeans="native-elsewhere"`: a client with no native window of
-    // its own for the session's host (e.g. a viewer-only client, or an
-    // electron-capable client on a DIFFERENT host than the session's) gets the
-    // same `complete` frame for a tab that will never stream here. It must not
-    // read as "Going native" (nothing is arriving) nor as "Ended" (the tab is
-    // not dead, it is just unreachable from this client).
+    // `completeMeans="native-elsewhere"`: a client with no native window of its own for the session's host (e.g. a viewer-only client, or an electron-capable client on a DIFFERENT host than the session's) gets the same `complete` frame for a tab that will never stream here.
+    // It must not read as "Going native" (nothing is arriving) nor as "Ended" (the tab is not dead, it is just unreachable from this client).
     renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -961,10 +952,7 @@ describe("BrowserPeekTile", () => {
   it("restates the measured viewport once a stream that was still dialing opens", async () => {
     vi.useFakeTimers();
     try {
-      // The field case: the tile is laid out and measured while the transport
-      // is still completing its subscribe handshake, which drops everything it
-      // is handed. Nothing resizes afterwards, so without a restatement at
-      // `open` the host serves the whole round on its last-tile-close defaults.
+      // Nothing resizes afterwards, so without a restatement at `open` the host serves the whole round on its last-tile-close defaults.
       hookState.streamClient = new FakeStreamClient(false);
       renderPeekTile(
         <BrowserPeekTile
@@ -1008,12 +996,6 @@ describe("BrowserPeekTile", () => {
   });
 });
 
-/**
- * Ticket 18's viewer-side half of the RTT probe: the tile answers every
- * `rttProbe` the host sends with exactly one `rttProbeAck` carrying the same
- * `probeId`, and doing so must not disturb any other frame handling on the
- * same subscription.
- */
 describe("BrowserPeekTile rttProbe handling", () => {
   beforeEach(() => {
     hookState.visible = true;

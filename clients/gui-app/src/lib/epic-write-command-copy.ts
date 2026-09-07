@@ -1,27 +1,4 @@
-/**
- * What the UI is allowed to say about ONE outstanding write command, and which
- * actions it may offer.
- *
- * Pure, so the six states can be pinned without rendering anything. The rules
- * it encodes are not stylistic - each state is a different fact about WHERE the
- * write is, and collapsing any two of them tells the user something untrue:
- *
- * - `queued` is accepted locally and NOT sent. Nothing durable holds it, so the
- *   copy must not imply it is saved anywhere.
- * - `sending` is in flight.
- * - `unknown-outcome` is sent with no answer. The queue NEVER auto-retries it
- *   (see `command-overlay.ts`), so it must not read as in-flight - and retry is
- *   the user's decision to take, never one this surface takes for them.
- * - `rejected` is the authority refusing. Terminal.
- * - `superseded` is a remote merge winning. Terminal, and reachable FROM
- *   `committed`, so a record can be superseded after it was committed.
- * - `committed` is HOST-committed, never "saved": a commit is one host's
- *   statement, and a concurrent write from another host can still supersede it.
- *
- * `E_EPIC_READ_ONLY` is pulled out of `rejected` as its own stage. It is a
- * distinct host verdict - the epic cannot be written at all, so retrying is
- * futile rather than merely unlikely - and old hosts never emit it.
- */
+/** What the UI is allowed to say about ONE outstanding write command, and which actions it may offer. */
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 
@@ -42,27 +19,18 @@ export interface EpicWriteCommandPresentation {
   /** Short status, shown beside the change. */
   readonly statusLabel: string;
   /**
-   * The sentence under it. For an authority verdict this is the HOST's own
-   * message, never a client-side paraphrase - `CommandResolution.reason` is
-   * specified as "human-readable, from the authority. Never synthesised
-   * client-side."
+   * The sentence under it.
+   * For an authority verdict this is the HOST's own message, never a client-side paraphrase - `CommandResolution.reason` is specified as "human-readable, from the authority.
    */
   readonly detail: string;
   /**
-   * Whether to OFFER a retry. Never a trigger to take one: an
-   * `unknown-outcome` command may already have been applied, and the whole
-   * reason the queue leaves it alone is that only the user can decide to
-   * re-issue it.
+   * Whether to OFFER a retry.
+   * Never a trigger to take one: an `unknown-outcome` command may already have been applied, and the whole reason the queue leaves it alone is that only the user can decide to re-issue it.
    */
   readonly canRetry: boolean;
   /**
-   * Whether the record can be acknowledged away. Terminal records only - the
-   * queue refuses to discard a pending one, because removing the overlay while
-   * the write is still in flight is a silent rollback wearing a different hat.
-   *
-   * This is the affordance that keeps the sync indicator honest: a terminal
-   * record stays in the queue until the user clears it, so WITHOUT a way to
-   * clear it the indicator could never legitimately go green again.
+   * Whether the record can be acknowledged away.
+   * Terminal records only - the queue refuses to discard a pending one, because removing the overlay while the write is still in flight is a silent rollback wearing a different hat.
    */
   readonly canDiscard: boolean;
 }
@@ -88,10 +56,7 @@ export function describeEpicWriteCommandIntent(
 export function presentEpicWriteCommand(
   command: CommandRecord<EpicWriteCommandIntent>,
 ): EpicWriteCommandPresentation {
-  // Delivery is read BEFORE state: an `unknown-outcome` command is still
-  // `pending`, and reporting it as pending is exactly the over-claim this
-  // stage exists to prevent - nothing is in flight and nothing will be
-  // without the user.
+  // Delivery is read BEFORE state: an `unknown-outcome` command is still `pending`, and reporting it as pending is exactly the over-claim this stage exists to prevent - nothing is in flight and nothing will be without the user.
   if (command.delivery === "unknown-outcome") {
     return {
       stage: "unknown-outcome",
@@ -137,10 +102,8 @@ export function presentEpicWriteCommand(
 }
 
 /**
- * `hostId` names the machine that committed it, and the copy says so. A commit
- * is host-committed, not epic-global: shared epics have several participants
- * whose hosts write the same epic, so UX language must never imply the change
- * is durable everywhere.
+ * `hostId` names the machine that committed it, and the copy says so.
+ * A commit is host-committed, not epic-global: shared epics have several participants whose hosts write the same epic, so UX language must never imply the change is durable everywhere.
  */
 function presentCommitted(
   resolution: CommandRecord<EpicWriteCommandIntent>["resolution"],

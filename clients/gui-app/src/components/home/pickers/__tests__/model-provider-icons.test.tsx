@@ -2,13 +2,9 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ModelProviderMark } from "@/components/home/pickers/model-provider-icons";
 
-/**
- * The bug class these guard against is upstream's, not a hypothetical: their
- * generated name list drifted from their generated sprite, so `llmgateway`
- * passed the "do we have it" check and then rendered nothing at all.
- */
+/** The bug class these guard against is upstream's, not a hypothetical: their generated name list drifted from
+ * their generated sprite, so `llmgateway` passed the "do we have it" check and then rendered nothing at all. */
 
-/** The mark actually chosen for a row: the id itself, or `"generic"`. */
 function markFor(id: string, configDeclaredCustom: boolean): string {
   const { container, unmount } = render(
     <ModelProviderMark id={id} configDeclaredCustom={configDeclaredCustom} />,
@@ -54,9 +50,8 @@ describe("model provider icons", () => {
   });
 
   it("covers the plan and region variants the catalog actually ships", () => {
-    // Checked against the real `models.dev` catalog (183 ids), not guessed: the
-    // coding-plan and region suffixes are a large share of the tail, and each
-    // one is a separate row a user sees.
+    // Checked against the real `models.dev` catalog (183 ids), not guessed: the coding-plan and region suffixes
+    // are a large share of the tail, and each one is a separate row a user sees.
     for (const id of [
       "togetherai",
       "zhipuai",
@@ -89,11 +84,8 @@ describe("model provider icons", () => {
   });
 
   it("refuses a brand mark to a DECLARED row, even under a mapped id", () => {
-    // `isConfigDeclaredCustom` judges a block by its `npm` and model map, never
-    // its key - so a hand-written `provider.openai` block pointing at a private
-    // endpoint is a legal custom declaration under a mapped id. Painting
-    // OpenAI's mark on it is the impersonation the neutral fallback exists to
-    // prevent, arriving through the one door the id cannot close.
+    // `isConfigDeclaredCustom` judges a block by its `npm` and model map, never its key - so a hand-written
+    // `provider.openai` block pointing at a private endpoint is a legal custom declaration under a mapped id.
     expect(markFor("openai", true)).toBe("generic");
     expect(markFor("anthropic", true)).toBe("generic");
     // And an ordinary row under the same id keeps its brand.
@@ -101,11 +93,8 @@ describe("model provider icons", () => {
   });
 
   it("never MAPS a provider onto the fallback glyph", () => {
-    // The fallback is sparkles, matching what users already read as "no logo"
-    // in OpenCode - and the invariant that keeps it honest is that no real
-    // provider is mapped to it. Upstream's sparkles IS Synthetic's logo, which
-    // is why their unknown-provider case and that company's row are the same
-    // picture; here these ids simply have no mark, and say so.
+    // The fallback is sparkles, matching what users already read as "no logo" in OpenCode - and the invariant that
+    // keeps it honest is that no real provider is mapped to it.
     for (const id of ["synthetic", "chutes", "requesty", "wandb"]) {
       expect(markFor(id, false)).toBe("generic");
     }

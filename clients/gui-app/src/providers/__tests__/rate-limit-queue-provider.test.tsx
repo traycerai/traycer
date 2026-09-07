@@ -39,12 +39,8 @@ vi.mock("@/lib/host", () => ({
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => mocks.client,
 }));
-// Normalizes each fixture with the defaults a real `ConfiguredRateLimitProvider`
-// always carries (`profiles`, `fetchEligibility`), so most existing test bodies
-// below - written against the pre-profile-aware polling scheduler - keep
-// passing unchanged: an empty `profiles` array + ambient-eligible is exactly
-// the single-ambient-candidate shape `selectBackgroundRateLimitTargets`
-// resolves a profile-less provider to.
+// Default empty profiles + ambient-eligible: the single-ambient shape
+// selectBackgroundRateLimitTargets resolves a profile-less provider to.
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
@@ -56,11 +52,8 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
       },
     })),
 }));
-// Only the HOOK is stubbed (its real implementation depends on the epic
-// canvas store, chat session registry, etc., none of which is mounted here).
-// `resolveRateLimitProfileId` stays real: `background-rate-limit-targets.ts`
-// imports it directly to resolve each provider's selected profile id, and a
-// bare mock here would drop that export out from under it.
+// Stub only the hook. Keep resolveRateLimitProfileId real; background-rate-limit-targets
+// imports it directly.
 vi.mock(
   "@/hooks/rate-limits/use-rate-limit-profile-selection",
   async (importOriginal) => {
@@ -319,12 +312,8 @@ describe("<RateLimitQueueProvider />", () => {
   });
 });
 
-// Background target selection over MANAGED PROFILES: each polling window
-// walks `selectBackgroundRateLimitTargets` (selected-stale-first, then
-// oldest, budget-capped) rather than one ambient pull per provider. See
-// `background-rate-limit-targets.test.ts` for the selection function's own
-// unit coverage; this suite proves the provider actually wires the live
-// configured-providers + profile-selection snapshot into it on every window.
+// Each poll window walks selectBackgroundRateLimitTargets over live
+// configured-providers + profile-selection, not one ambient pull per provider.
 describe("<RateLimitQueueProvider /> background profile polling", () => {
   beforeEach(() => {
     vi.useFakeTimers();

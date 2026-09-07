@@ -37,25 +37,7 @@ import type { DesktopSupportBridge } from "@/lib/windows/types";
 const PANEL_DESCRIPTION =
   "Logging and memory capture for the Traycer app itself - this window, whichever host it points at. The level defaults to Info; raise it to Debug when capturing a problem for support, then set it back.";
 
-/**
- * Diagnostics for the APP, in the one place there is only ever one of it.
- *
- * Everything here describes this desktop window: its own log verbosity, its own
- * log file, its own heap. None of it varies with the sidebar's host picker, and
- * that is the whole reason this page exists. All three used to render on the
- * host-scoped Diagnostics page, which meant a person with four hosts saw four
- * copies of one App log level select, four Capture heap snapshot buttons and
- * four Desktop Log entries — each pair of them writing the same single value,
- * and none of them belonging to the host named at the top of the screen.
- *
- * The rule the sidebar encodes is "if it varies by host it sits under the
- * picker" (see `settings-sections.ts`). These three never did.
- *
- * No `HostScopeGate` and no `useHostScope`: there is nothing here a host could
- * be too old for, unreachable for, or answer differently about. The page's only
- * capability question is whether it is running inside the desktop shell at all,
- * asked twice — once per bridge — so a shell missing one still gets the other.
- */
+/** Diagnostics for the app, in the one place there is only ever one of it. These three never did. */
 export function AppDiagnosticsSettingsPanel(): ReactNode {
   const compact = useSettingsDensity() === "compact";
   const desktopControl = useDesktopLogLevelControl();
@@ -108,13 +90,8 @@ export function AppDiagnosticsSettingsPanel(): ReactNode {
   );
 }
 
-/**
- * This app's own log file, from the local support bridge.
- *
- * Reveal rather than Copy path, unlike every host-owned entry:
- * `shell.showItemInFolder` opens a path on THIS machine, which is exactly what
- * this file is.
- */
+/** Reveal rather than Copy path, unlike every host-owned entry: `shell.showItemInFolder` opens a path on this
+ * machine, which is exactly what this file is. */
 function DesktopAppLogEntry(props: {
   readonly support: DesktopSupportBridge;
 }): ReactNode {
@@ -125,49 +102,28 @@ function DesktopAppLogEntry(props: {
   if (listQuery.isError) {
     return <LogInfoLine>Couldn&apos;t load log details.</LogInfoLine>;
   }
-  // The snapshot answered without the entry it has always carried. Stated
-  // rather than rendered as an empty card, which reads as "still loading"
-  // forever.
+  // The snapshot answered without the entry it has always carried. Stated rather than rendered as an empty card,
+  // which reads as "still loading" forever.
   if (entry === null) return <LogInfoLine>No app log file found.</LogInfoLine>;
   return <BridgeLogEntry entry={entry} support={props.support} />;
 }
 
-/**
- * One serialization scope for BOTH memory diagnostics - see the `scope` note
- * below for why `scope` and not `mutationKey`.
- *
- * They share it because they contend for the same renderer isolate, not merely
- * for the same button. A heap capture freezes that isolate for as long as the
- * walk takes (tens of seconds on the long-lived sessions worth capturing),
- * which is longer than `JS_HEAP_MEASURE_TIMEOUT_MS`; a measurement started
- * underneath one would have its protocol reads stall behind the freeze and
- * report a measurement failure for a window that is perfectly measurable a
- * moment later. Queuing the second action is the honest answer.
- */
+/** A heap capture freezes that isolate for as long as the walk takes (tens of seconds on the long-lived
+ * sessions worth capturing), which is longer than `JS_HEAP_MEASURE_TIMEOUT_MS`. */
 const MEMORY_DIAGNOSTICS_MUTATION_SCOPE = "runner-memory-diagnostics";
 
-/**
- * On-demand heap capture for memory reports. The renderer freezes while V8
- * walks the heap and the file runs to gigabytes on exactly the long-lived
- * sessions worth capturing, so this is a deliberate button rather than
- * anything automatic - and the warning is stated up front, not after the fact.
- * The resulting path is shown for copying rather than revealed in the file
- * manager: no reveal capability is exposed for arbitrary paths.
- */
+/** On-demand heap capture for memory reports. */
 function MemoryDiagnosticsGroup(): ReactNode {
   const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
-  // The two capabilities are gated independently, like every other pair of
-  // desktop bridges on this page: a shell that carries one and not the other
-  // still gets the one it has.
+  // The two capabilities are gated independently, like every other pair of desktop bridges on this page: a shell
+  // that carries one and not the other still gets the one it has.
   const jsHeapAvailable = useMemo(() => getDesktopJsHeapBridge() !== null, []);
   const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
 
   const captureMutation = useMutation({
     mutationKey: runnerMutationKeys.captureHeapSnapshot(),
-    // `scope` is what actually serializes mutations in TanStack Query -
-    // `mutationKey` alone does not. Without it the only thing standing
-    // between a double-click and two concurrent multi-gigabyte heap walks
-    // is the `disabled` prop, which cannot help a second mounted panel.
+    // Without it the only thing standing between a double-click and two concurrent multi-gigabyte heap walks is
+    // the `disabled` prop, which cannot help a second mounted panel.
     scope: { id: MEMORY_DIAGNOSTICS_MUTATION_SCOPE },
     mutationFn: (): Promise<string | null> =>
       bridge === null ? Promise.resolve(null) : bridge.takeHeapSnapshot(),
@@ -178,9 +134,8 @@ function MemoryDiagnosticsGroup(): ReactNode {
       }
     },
     onError: (error) => {
-      // Clear the previous run's path. Leaving it rendered under a failure
-      // toast offers a Copy button for a file this capture never wrote -
-      // the user pastes it into a report as the snapshot they just took.
+      // Leaving it rendered under a failure toast offers a Copy button for a file this capture never wrote - the
+      // user pastes it into a report as the snapshot they just took.
       setSnapshotPath(null);
       toastFromRunnerError(error, "Couldn't capture a heap snapshot");
     },
@@ -265,11 +220,8 @@ interface JsHeapTotals {
   readonly backingStorageBytes: number | null;
 }
 
-/**
- * Column totals. The two out-of-heap columns stay `null` until some isolate
- * reports one, so a build whose protocol omits those experimental fields shows
- * an empty column rather than a confident zero.
- */
+/** The two out-of-heap columns stay `null` until some isolate reports one, so a build whose protocol omits
+ * those experimental fields shows an empty column rather than a confident zero. */
 function sumJsHeapIsolates(
   isolates: ReadonlyArray<DesktopJsHeapIsolate>,
 ): JsHeapTotals {
@@ -295,15 +247,7 @@ function formatOptionalMemoryBytes(value: number | null): string {
   return value === null ? "—" : formatMemoryBytes(value);
 }
 
-/**
- * The per-isolate companion to the heap snapshot. A snapshot walks the page's
- * own V8 isolate and nothing else; the renderer also runs one isolate per
- * dedicated worker (an epic runtime per live epic session, the diff
- * highlighter pool), and a window whose snapshot explains a fraction of its
- * footprint is usually carrying the rest there. This readout is cheap - a few
- * protocol round trips, no freeze - and lists every isolate with what it holds,
- * so the snapshot can be read against the number it was missing.
- */
+/** A snapshot walks the page's own V8 isolate and nothing else. */
 function JsHeapReadout(): ReactNode {
   const bridge = useMemo(() => getDesktopJsHeapBridge(), []);
   const [breakdown, setBreakdown] = useState<DesktopJsHeapBreakdown | null>(
@@ -312,10 +256,8 @@ function JsHeapReadout(): ReactNode {
 
   const measureMutation = useMutation({
     mutationKey: runnerMutationKeys.measureJsHeaps(),
-    // Serialized for the same reason the heap capture is: the measurement
-    // attaches `webContents.debugger`, and a second call while the first holds
-    // the attachment is refused in main (`isAttached()`), which would read as
-    // a failure toast and clear a readout that was fine.
+    // Serialized for the same reason the heap capture is: the measurement attaches `webContents.debugger`, and a
+    // second call while the first holds the attachment is refused in main (`isAttached`).
     scope: { id: MEMORY_DIAGNOSTICS_MUTATION_SCOPE },
     mutationFn: (): Promise<DesktopJsHeapBreakdown | null> =>
       bridge === null ? Promise.resolve(null) : bridge.measureJsHeaps(),

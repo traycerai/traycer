@@ -1,14 +1,6 @@
 import type { RuntimeContext } from "./runtime";
 
-/**
- * ANSI colour for human-facing output. Resolution is per call, never at
- * module load: the runner's `--json` mode force-disables colour even on a
- * TTY, because a caller that mixes machine-readable and human output must
- * never find escape codes in a payload. `NO_COLOR` and a stream that is not a
- * terminal suppress colour as well. The stream is a parameter because a
- * command's prose can go to stdout while its prompts and transient lines go
- * to stderr, and only the stream being written to knows whether it is a TTY.
- */
+/** ANSI colour for human-facing output. Resolution is per call, never at module load: the runner's `--json` mode force-disables colour even on a TTY, because a caller that mixes machine-readable and human output must never find escape codes in a payload. */
 export function shouldUseColor(
   runtime: Pick<RuntimeContext, "json">,
   stream: { readonly isTTY: boolean | undefined },

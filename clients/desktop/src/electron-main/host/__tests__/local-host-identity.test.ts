@@ -76,10 +76,6 @@ describe("classifyLocalHostIdentity", () => {
   });
 
   it("returns unverifiable when the enrollment record exists but cannot answer, without consulting pid", async () => {
-    // Discriminator: collapsing this to null (the old fence) would allow
-    // the write; consulting pid would name host-from-pid. The record
-    // existing proves enrollment machinery, so an unreadable one is the
-    // re-enrollment window.
     mkdirSync(workDir, { recursive: true });
     writeFileSync(files().identityEnrollmentFile, "{not-json");
     writePid("host-from-pid");

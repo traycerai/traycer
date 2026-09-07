@@ -74,9 +74,7 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
     [activeFilePath, files],
   );
 
-  // Reveal once per focused file (and once on mount): scrollIntoView is a
-  // no-op when the row is already visible, so clicking a visible row never
-  // shifts the list under the cursor.
+  // Reveal once per focused file (and once on mount): scrollIntoView is a no-op when the row is already visible, so clicking a visible row never shifts the list under the cursor.
   const lastRevealedPathRef = useRef<string | null>(null);
   useEffect(() => {
     if (activeFilePath === null) return;

@@ -45,31 +45,12 @@ export function createA2AOpenStore(
   }));
 }
 
-// Ticket 5: the SAME tile instance still fully remounts - evicted past its
-// pane's chat retention cap, evicted with its owning top-level surface, or
-// losing and regaining hosted eligibility. It no longer remounts on every
-// inner tab switch (decision #17 was reversed by pane chat retention - see
-// `stores/epics/canvas/retained-pane-chats.ts`). A close is NOT one of these:
-// it evicts this entry outright, and a reopen mints a fresh `tileInstanceId`,
-// so nothing here is expected to survive it. Retaining the same store instance
-// across a same-instance remount (instead of always creating a fresh one) is
-// what makes expanded A2A send/received cards survive it. Keyed
-// by tile instance id, at module scope so it outlives the React tree; evicted
-// only when a tab permanently closes (see the canvas store's tile-removal
-// subscriber in `stores/epics/canvas/store.ts`), never on a mere remount.
+// the SAME tile instance still fully remounts - evicted past its pane's chat retention
+// cap, evicted with its owning top-level surface, or losing and regaining hosted eligibility.
 const a2aOpenStoreRegistry = new Map<string, StoreApi<A2AOpenState>>();
 
-// Ticket 15 (decision #29): durable chat-key mirror of a tab-key store's
-// open ids - survives the tab-key store being evicted on close, so a
-// reopened chat's A2A cards start expanded again. Last-writer-wins across
-// multiple open views of the same chat.
-//
-// Ticket 15 review round 3: promoted explicitly from the canvas close
-// sweep's choke point (store.ts), not mirrored continuously and not owned
-// by a per-component unmount - the sweep can read this registry directly
-// whether or not the owning component ever mounted (an inactive/
-// never-rendered tab has no unmount to hook), so it is the one place that
-// correctly covers both an active AND an inactive view's close.
+// durable chat-key mirror of a tab-key store's open ids - survives the
+// tab-key store being evicted on close, so a reopened chat's A2A cards start expanded again.
 const durableA2AOpenCache = createChatDurableCache<A2AOpenSnapshot>(200);
 
 export function getOrCreateA2AOpenStore(
@@ -90,12 +71,8 @@ export function evictA2AOpenStores(
 }
 
 /**
- * Ticket 15 review round 3: promotes this tab's CURRENT state to durable -
- * called from the canvas close sweep for every removed chat tile, BEFORE
- * `evictA2AOpenStores` drops the registry entry. A no-op if no store was
- * ever created for this tab (never mounted) - nothing of this session's to
- * promote, and there is nothing else to accidentally clobber either (a
- * store is only ever created seeded from whatever durable already held).
+ * promotes this tab's CURRENT state to durable - called from the canvas close sweep for every
+ * removed chat tile, BEFORE `evictA2AOpenStores` drops the registry entry.
  */
 export function promoteA2AOpenStoreToDurable(
   identity: ChatTabPersistenceIdentity,

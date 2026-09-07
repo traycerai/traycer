@@ -1,14 +1,5 @@
 /**
- * Builds a `themeVariables` object for Mermaid by sampling the live Tailwind
- * CSS variables from `:root`. We use `theme: "base"` and override the
- * variables that matter for diagram chrome (primary accent, text, lines,
- * backgrounds). The mapping is intentionally small - Mermaid exposes many
- * more variables, but the defaults derived from these five are consistent
- * enough to blend with the surrounding prose.
- *
- * Called both on the initial lazy boot of the mermaid module and again
- * whenever `html.dark` toggles so the palette follows system / user theme
- * without a page reload.
+ * Sample :root Tailwind vars into a small Mermaid themeVariables set; re-run when html.dark toggles.
  */
 
 import { resolveCssColor } from "@/lib/css-color";
@@ -23,9 +14,7 @@ export interface MermaidPaletteSample {
 }
 
 /**
- * Read the editor palette from the document root. Defaults mirror the
- * shadcn light-theme values so server-rendered snapshots or jsdom tests
- * without CSS still get a sensible diagram.
+ * Read :root palette. Defaults match shadcn light so jsdom/SSR still diagram.
  */
 export function readMermaidPalette(doc: Document): MermaidPaletteSample {
   return {
@@ -38,13 +27,7 @@ export function readMermaidPalette(doc: Document): MermaidPaletteSample {
   };
 }
 
-/**
- * Maps the workspace palette onto the subset of Mermaid theme variables
- * that actually render. `primaryColor` is the fill of nodes; `lineColor`
- * controls edges; `textColor` is used for labels. Sequence / class / ER /
- * gantt diagrams each have their own keys, but without overriding them
- * mermaid falls back to `primaryColor` + `textColor` which is what we want.
- */
+/** Map workspace palette onto primaryColor/lineColor/textColor. Other diagram keys fall back to those. */
 export function buildMermaidThemeVariables(
   palette: MermaidPaletteSample,
 ): Record<string, string> {

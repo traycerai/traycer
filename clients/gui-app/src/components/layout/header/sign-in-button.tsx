@@ -18,25 +18,13 @@ export interface SignInButtonProps {
   readonly layout: SignInLayout;
 }
 
-/**
- * The action set below the error/progress area. The mobile app's hero
- * sign-in leads with the scan-to-link path: a full-width primary "Scan QR
- * code" with the browser device flow as a same-width secondary beneath it,
- * and manual code entry as a tertiary link inside the CTA block.
- * Product-gated, not capability-gated: typing the code is the same flow
- * where the camera is absent (simulator) or denied. Everywhere else the
- * device flow stays primary, with the link-code entry as a quiet extra line
- * on the mobile app's compact header only.
- */
+/** Product-gated, not capability-gated: typing the code is the same flow where the camera is absent (simulator)
+ * or denied. */
 function SignInActions(props: {
   readonly isHero: boolean;
   readonly isSigningIn: boolean;
-  /**
-   * Whether the running attempt is one `signIn()` may replace. A link claim is
-   * not: `signIn()` is re-entrant and its `beginAttempt()` discards whatever
-   * is in flight, so offering Retry mid-claim offers to throw away a request
-   * the user's desktop is prompting them to approve.
-   */
+  /** A link claim is not: `signIn` is re-entrant and its `beginAttempt` discards whatever is in flight, so
+   * offering Retry mid-claim offers to throw away a request the user's desktop is prompting them to approve. */
   readonly canRetry: boolean;
   readonly deviceProgress: DeviceFlowProgress | null;
 }) {
@@ -79,23 +67,8 @@ function SignInActions(props: {
   );
 }
 
-/**
- * Header sign-in surface. Routes through the GUI-owned `AuthService` so the
- * sign-in flow uses the runner-host browser bridge - never a direct
- * `runnerHost.openExternalLink` call from UI code.
- *
- * The signed-out surface presents the sign-in affordances, which funnel into
- * `AuthService.signIn()` (the OAuth 2.0 Device Authorization Grant) or, on
- * the mobile app, `AuthService.signInWithLinkCode()` (the confirm-gated QR
- * link). The browser opens to the device-approval page and the in-flight
- * code + "waiting for approval" progress render inline (never a silent
- * spinner).
- *
- * Interactive sign-in failures render a visible failure message next to the
- * button so the user has a stable retry CTA. Stored-session expiry is handled
- * by the auth toast bridge, because it is global auth lifecycle state rather
- * than button-local presentation.
- */
+/** Routes through the GUI-owned `AuthService` so the sign-in flow uses the runner-host browser bridge - never a
+ * direct `runnerHost.openExternalLink` call from UI code. */
 export function SignInButton(props: SignInButtonProps) {
   const auth = useAuthService();
   const status = useAuthStore((state) => state.status);
@@ -117,9 +90,8 @@ export function SignInButton(props: SignInButtonProps) {
         "flex",
         isHero && "w-full flex-col gap-3",
         !isHero && "gap-2",
-        // Compact mode sits in the header's non-wrapping controls row. While the
-        // device panel is showing, stack full-width so the verification URL and
-        // buttons wrap cleanly instead of being pushed off-screen.
+        // While the device panel is showing, stack full-width so the verification URL and buttons wrap cleanly instead
+        // of being pushed off-screen.
         !isHero && deviceProgress !== null && "w-full flex-col",
         !isHero && deviceProgress === null && "items-center",
       )}

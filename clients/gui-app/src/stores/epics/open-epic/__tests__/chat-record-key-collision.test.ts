@@ -1,34 +1,3 @@
-/**
- * Regression pin for `recordKey`'s composite-key join
- * (`runtime/chat-record-table.ts`).
- *
- * The row map inside `createChatRecordTable` (via the shared
- * `createRecordTable`) is keyed by `recordKey(ownerUserId, chatId)`, which
- * used to join the two components on ASCII code point 31 (the "Unit
- * Separator" control character) rather than the length-prefixed
- * `sessionKeyOf` it is now. Nothing on the wire stops an id from containing
- * that separator itself (the wire schemas are bare `z.string()`), so a
- * separator join is non-injective: putting the separator INSIDE one
- * component of a pair, at a different offset than the other pair uses, still
- * concatenates to the identical character sequence even though the two pairs
- * share no piece. Under the row map's own admission logic
- * (`createRecordTable.applySnapshot`), the SECOND row then silently
- * overwrites the first's map slot before either ever reaches the published
- * slice, so the first chat disappears from the sidebar exactly as if it
- * never existed - no error, no removal frame, nothing to explain it.
- *
- * There is currently no test file for `chat-record-table.ts` at all. The
- * `record()` fixture below mirrors `chat-records-union.test.ts`'s builder of
- * the same name; `getCurrentUserId: () => null` is that same file's
- * "nobody signed in" convention, under which `isOwnedRecordVisibleToUser`
- * short-circuits to visible-to-everyone so both colliding owners can be
- * observed side by side.
- *
- * IMPORTANT: the separator is built with `String.fromCharCode`, never typed
- * as a source-level escape or pasted as a raw control byte - either of those
- * risks landing an actual control byte in this file (git then flips it to
- * binary).
- */
 import { describe, expect, it } from "vitest";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
@@ -69,15 +38,8 @@ function record(
 const UNIT_SEPARATOR = String.fromCharCode(31);
 
 /**
- * The colliding pair under the OLD separator join: the separator sits
- * INSIDE one component of each pair, at a different offset, so the two
- * composites concatenate to the identical character sequence even though no
- * piece is shared between them.
- *
- *   (OWNER_A, CHAT_ID_A) -> "a"  + SEP + "b" + SEP + "c"
- *   (OWNER_B, CHAT_ID_B) -> "a" + SEP + "b"  + SEP + "c"
- *
- * Both produce the same six-character-plus-separators sequence.
+ * (OWNER_A, CHAT_ID_A) -> "a" + SEP + "b" + SEP + "c" (OWNER_B, CHAT_ID_B) -> "a" + SEP + "b" +
+ * SEP + "c" Both produce the same six-character-plus-separators sequence.
  */
 const CHAT_ID_A = `b${UNIT_SEPARATOR}c`;
 const OWNER_A = "a";
@@ -114,9 +76,7 @@ describe("createChatRecordTable - recordKey collision resistance", () => {
       throw new Error("expected a publication from the first snapshot");
     }
 
-    // BOTH rows survive ingest. Under the old join, row B silently replaced
-    // row A inside the table's own row map before either reached this slice,
-    // so `allIds` would carry only one of the two chat ids.
+    // BOTH rows survive ingest.
     expect(publication.chatRecords.allIds.slice().sort()).toEqual(
       [CHAT_ID_A, CHAT_ID_B].sort(),
     );
@@ -187,10 +147,6 @@ describe("createChatRecordTable - recordKey collision resistance", () => {
 
     const afterB = table.beginPendingCreation(pendingB);
     if (afterB === null) {
-      // Under the old join, `pendingCreations.has(key)` already reads TRUE
-      // for pendingB's key (it collides with pendingA's), so registration is
-      // refused outright - the second chat the user just created never even
-      // gets a stand-in.
       throw new Error(
         "expected a publication registering pendingB - registration was refused, which means its key collided with pendingA's",
       );
@@ -209,12 +165,8 @@ describe("createChatRecordTable - recordKey collision resistance", () => {
 });
 
 /**
- * The SECOND way a bare `chatId` is mistaken for a record identity, on the
- * same table and with no separator trickery needed: a delta that carries no
- * home reads the held home off the PUBLISHED slice, which is keyed by bare
- * `chatId` and filtered to the viewer. Two owners holding one host-minted
- * chat id is enough - and unlike the join collision above, this one does not
- * need a control byte in an id, only two accounts and a boot window.
+ * The SECOND way a bare `chatId` is mistaken for a record identity, on the same table and with no
+ * separator trickery needed: a delta that carries no home reads the held home off the PUBLISHED
  */
 describe("createChatRecordTable - a delta reads the home of its OWN row", () => {
   it("does not inherit a same-id chat's home from a different owner", () => {
@@ -222,10 +174,8 @@ describe("createChatRecordTable - a delta reads the home of its OWN row", () => 
     const DOC_OWNER = "owner-doc";
     const REGISTRY_OWNER = "owner-registry";
 
-    // The viewer moves during the test, which is the whole point: the window
-    // in which the slice is holding the STRANGER's row is precisely the
-    // null-viewer boot window, and the row whose home was corrupted is only
-    // observable once the viewer settles onto its owner.
+    // The viewer moves during the test, which is the whole point: the window in which the slice is
+    // holding the STRANGER's row is precisely the null-viewer boot window, and the row whose home was
     let viewer: string | null = null;
     const table = createChatRecordTable({
       getCurrentUserId: () => viewer,
@@ -233,9 +183,7 @@ describe("createChatRecordTable - a delta reads the home of its OWN row", () => 
       now: () => 0,
     });
 
-    // One `@1.1` answer stating both homes. The registry-homed row is ingested
-    // FIRST so the doc-homed one wins the bare-id slot in the published slice
-    // (`chatRecordsSlice` writes `byId[chatId]` per row, last row wins).
+    // One `@1.1` answer stating both homes.
     const seeded = table.applyRecords(
       [
         record({
@@ -258,14 +206,12 @@ describe("createChatRecordTable - a delta reads the home of its OWN row", () => 
     if (seeded === null) {
       throw new Error("expected a publication from the first answer");
     }
-    // Precondition, not the assertion under test: the slice's single slot for
-    // this id is the STRANGER's row. Without this the delta below would read
-    // its own row by accident and the test would pass either way.
+    // Precondition, not the assertion under test: the slice's single slot for this id is the
+    // STRANGER's row.
     expect(seeded.chatRecords.byId[SHARED_ID].docResident).toBe(true);
 
-    // A `host.chatRecords.subscribe` delta for the REGISTRY-homed owner. It
-    // states nothing about the home, so the table must carry that owner's own
-    // last stated home forward.
+    // A `host.chatRecords.subscribe` delta for the REGISTRY-homed owner. It states nothing about the
+    // home, so the table must carry that owner's own last stated home forward.
     const delta: ChatRecordDelta = {
       kind: "upsert",
       epicId: EPIC_ID,
@@ -278,9 +224,8 @@ describe("createChatRecordTable - a delta reads the home of its OWN row", () => 
     };
     table.applyDelta(delta);
 
-    // The viewer settles. The doc-homed stranger drops out of the slice and
-    // the registry-homed row takes the slot, so its carried home is finally
-    // observable.
+    // The viewer settles. The doc-homed stranger drops out of the slice and the registry-homed row
+    // takes the slot, so its carried home is finally observable.
     viewer = REGISTRY_OWNER;
     const afterSignIn = table.beginPendingCreation({
       chatId: "chat-unrelated",
@@ -295,10 +240,7 @@ describe("createChatRecordTable - a delta reads the home of its OWN row", () => 
 
     const settled = afterSignIn.chatRecords.byId[SHARED_ID];
     expect(settled.title).toBe("Registry-homed, renamed");
-    // THE REDDENING ASSERTION. Reading the home off the published slice
-    // handed this delta the doc-homed stranger's `true`, so a registry-homed
-    // chat comes back claiming a home it does not have and its rename is
-    // routed to a writer that cannot address it.
+    // THE REDDENING ASSERTION.
     expect(settled.docResident).toBe(false);
   });
 });

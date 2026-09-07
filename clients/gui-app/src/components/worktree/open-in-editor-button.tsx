@@ -36,30 +36,18 @@ export interface OpenInEditorButtonProps {
     readonly workspacePath: string;
     readonly hostId: string;
   } | null;
-  /**
-   * The panel's OWN client (its surface pin's resolved client, or the tab's),
-   * never the app-wide one: `editor.openPaths` resolves the path on the host
-   * the request is SENT to, and an Epic-scoped panel's `openTarget` names its
-   * own surface pin, not whatever the app-wide effective host happens to be.
-   * See {@link useEditorOpenForClient}.
-   */
+  /** The panel's own client (its surface pin's resolved client, or the tab's), never the app-wide one. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
 }
 
 export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   const runnerHost = useRunnerHost();
   const { openTarget } = props;
-  // The opener dispatches on the PANEL'S OWN client now (`hostClient`), so the
-  // gate is no longer "does the target match the app-wide effective host" -
-  // it is local-only for a different reason: the editor URL-scheme launch
-  // itself only works on THIS machine, so the target's own host (whichever
-  // one the panel is pinned to) must be the local one, not merely dialable.
   // Called unconditionally, before the early return below, per Rules of Hooks.
   const openTargetHostId = openTarget?.hostId ?? null;
   const openTargetHostEntry = useHostDirectoryEntry(openTargetHostId);
-  // Finder rides the same RPC but has its own, stricter gate (local host AND a
-  // Mac AND a host that negotiated `editor.openPaths` 1.2). Called
-  // unconditionally for the same Rules-of-Hooks reason as the lookup above.
+  // Finder rides the same RPC but has its own, stricter gate (local host and a Mac and a host that negotiated
+  // `editor.openPaths` 1.2). Called unconditionally for the same Rules-of-Hooks reason as the lookup above.
   const finderAvailable = useFinderOpenAvailability(openTargetHostId);
   const offerableEditors = useOfferableEditors(openTargetHostId);
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
@@ -91,11 +79,8 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
       openTargetHostEntry.kind === "mock");
   const hostMatches = openTarget !== null && openTargetHostIsLocal;
 
-  // Hide editors whose URL-scheme handler is not registered on the host's
-  // machine (i.e. not installed) so a user is never offered one that fails to
-  // launch. While the probe is in flight (`null`) show the full catalog rather
-  // than flashing an empty list. The primary half opens the user's default
-  // editor when available, otherwise the first available one.
+  // Hide editors whose URL-scheme handler is not registered on the host's machine (i.e. not installed) so a user
+  // is never offered one that fails to launch.
   const availableEditorIds = availability.data ?? null;
   const { targets, noTargetsAvailable, primaryTargetId } = resolveOpenMenuState(
     {
@@ -186,11 +171,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   );
 }
 
-/**
- * The primary half swaps its editor glyph for the pending indicator; the icon
- * arrives already rendered so this stays agnostic about which icon family it
- * was handed (an editor icon, or the generic fallback when no editor resolved).
- */
+/** The primary half swaps its editor glyph for the pending indicator. */
 function PrimaryButtonGlyph(props: {
   readonly openingEditor: boolean;
   readonly icon: ReactNode;
@@ -214,9 +195,8 @@ interface EditorChooserMenuItemsProps {
   readonly onCopyPath: () => void;
 }
 
-// The launching items swap their leading icon for the spinner and keep their
-// label, so a disabled item reads as work in progress. Copy path is untouched:
-// it reaches no host and never disables.
+// The launching items swap their leading icon for the spinner and keep their label, so a disabled item reads
+// as work in progress. Copy path is untouched: it reaches no host and never disables.
 function EditorChooserMenuItems(props: EditorChooserMenuItemsProps) {
   const { targets, openingEditor } = props;
   return (

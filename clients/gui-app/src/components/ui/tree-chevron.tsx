@@ -22,11 +22,7 @@ export function TreeChevron(props: TreeChevronProps) {
   );
 }
 
-/**
- * Reserves the chevron's horizontal slot for childless rows so a node's icon
- * sits at the same x as its siblings regardless of whether it has a chevron.
- * Mirrors {@link TreeChevron}'s box geometry exactly so the column can't drift.
- */
+/** Mirrors TreeChevron's box geometry exactly so the column can't drift. */
 export function TreeChevronSpacer() {
   return (
     <span aria-hidden="true" className="-mx-0.5 inline-flex size-3 shrink-0" />

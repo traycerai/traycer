@@ -23,14 +23,8 @@ import {
 } from "react";
 
 const MIN_POOL = 2;
-/**
- * Three, down from six. Every pool worker is a full highlighter isolate
- * (Oniguruma WASM engine, both themes, every grammar it has ever been asked
- * for), so the pool's size is a memory figure first and a throughput figure
- * second. Three workers keep a multi-file diff rendering in parallel; six
- * bought little beyond that on a desktop that rarely has more than a handful
- * of diffs visible at once, and cost a highlighter isolate each.
- */
+/** Three workers keep a multi-file diff rendering in parallel; six bought little beyond that on a desktop that
+ * rarely has more than a handful of diffs visible at once, and cost a highlighter isolate each. */
 const MAX_POOL = 3;
 
 function computePoolSize(): number {
@@ -43,19 +37,8 @@ export interface DiffWorkerPoolProviderProps {
   readonly children: ReactNode;
 }
 
-/**
- * Provides `@pierre/diffs`' worker pool to the tree WITHOUT building it at
- * mount. The pool is created on the first `requestDiffWorkerPool()` (see
- * `lib/diff/diff-worker-pool-demand.ts` for why), and this provider is what
- * knows the recipe: the pool size, the worker factory Vite must see literally,
- * and the theme the highlighter should start with.
- *
- * Renders the library's own context (`WorkerPoolContext`) rather than its
- * `WorkerPoolContextProvider`, because that provider constructs the pool in a
- * `useState` initializer - there is no way to hand it a pool later. Every
- * `@pierre/diffs` React component reads this same context, so they see the
- * pool the moment it exists.
- */
+/** Renders the library's own context (`WorkerPoolContext`) rather than its `WorkerPoolContextProvider`, because
+ * that provider constructs the pool in a `useState` initializer - there is no way to hand it a pool later. */
 export function DiffWorkerPoolProvider(
   props: DiffWorkerPoolProviderProps,
 ): ReactNode {
@@ -69,20 +52,15 @@ export function DiffWorkerPoolProvider(
     getDiffWorkerPool,
   );
 
-  // The theme the pool is SEEDED with is whichever is current when it is
-  // built, which can be long after this provider mounted. A ref, so the
-  // creator registered below reads the live value without the theme becoming
-  // a dependency of the registration - re-registering on a theme change would
-  // unregister the live pool. `ThemeSync` keeps the pool current after that.
+  // A ref, so the creator registered below reads the live value without the theme becoming a dependency of the
+  // registration - re-registering on a theme change would unregister the live pool.
   const themeRef = useRef(currentTheme);
   useLayoutEffect(() => {
     themeRef.current = currentTheme;
   }, [currentTheme]);
 
-  // Layout effect, not effect: a diff surface mounted in this same commit
-  // requests the pool from its own effect, and effects run child-first. The
-  // creator has to be registered before that request lands or the request
-  // reads "unavailable" and the surface takes the main-thread path.
+  // The creator has to be registered before that request lands or the request reads "unavailable" and the
+  // surface takes the main-thread path.
   useLayoutEffect(() => {
     const creator = () =>
       getOrCreateWorkerPoolSingleton({
@@ -111,9 +89,8 @@ export function DiffWorkerPoolProvider(
 }
 
 function ThemeSync(): ReactNode {
-  // Defensive: in tests that mount without <ThemeProvider> (e.g. app-shell
-  // bridge tests), the context is null. Skip the sync; production always has
-  // ThemeProvider above this.
+  // Defensive: in tests that mount without <ThemeProvider> (e.g. app-shell bridge tests), the context is null.
+  // Skip the sync; production always has ThemeProvider above this.
   const themeContext = use(ResolvedThemeContext);
   const pool = use(WorkerPoolContext);
   const resolvedTheme = themeContext?.resolvedTheme;

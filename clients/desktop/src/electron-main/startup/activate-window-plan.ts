@@ -1,17 +1,5 @@
 import type { RestorableWindowEntry } from "../windows/desktop-state-store";
 
-/**
- * What `app.on("activate")` should do when there is no live window to focus.
- *
- * On macOS a red-light close of the last window keeps the app alive but leaves
- * no window. Previously `activate` (dock click / re-open) minted a BLANK window,
- * discarding the tabs/canvas/drafts the user had open. Now that those closes
- * preserve the per-window restore snapshot (see
- * `shouldPreserveClosedWindowSnapshot`), `activate` restores the preserved
- * window(s) instead - reusing each window's original id so its preserved
- * snapshot rebinds, exactly mirroring startup reconciliation. If nothing is
- * restorable, fall back to a blank window.
- */
 export type ActivateWithoutLiveWindowPlan =
   | {
       readonly kind: "restore";

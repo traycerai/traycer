@@ -53,7 +53,6 @@ export type RecordedTransportEvidence =
       readonly expiresAt: number | null;
     };
 
-/** Recording {@link TransportEvidenceReporter} for producer-suite tests. */
 export class RecordingTransportEvidence implements TransportEvidenceReporter {
   readonly events: RecordedTransportEvidence[] = [];
 

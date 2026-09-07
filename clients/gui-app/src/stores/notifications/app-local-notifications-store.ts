@@ -29,11 +29,7 @@ type TerminalNotificationTarget = Extract<
 
 export const APP_LOCAL_NOTIFICATIONS_ROW_CAP = 200;
 
-/**
- * Completion observations are causal guards, not feed rows. Keep enough per
- * host to cover the whole local notification window plus churn between
- * snapshots, while explicit host retention frames remove ids sooner.
- */
+/** Completion observations are causal guards, not feed rows. */
 export const APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST =
   APP_LOCAL_COMPLETION_RECEIPT_CAP_PER_HOST;
 
@@ -41,10 +37,8 @@ export const APP_LOCAL_OBSERVED_COMPLETION_GLOBAL_CAP =
   APP_LOCAL_COMPLETION_RECEIPT_GLOBAL_CAP;
 
 /**
- * How long a read cause-keyed entry stays acknowledged before a recurrence
- * of the same cause flips it back to unread. Caps badge churn from a
- * high-frequency failure at one unread-flip per window while still
- * re-surfacing a problem the user acknowledged but that keeps happening.
+ * How long a read cause-keyed entry stays acknowledged before a recurrence of the same cause flips
+ * it back to unread.
  */
 export const APP_LOCAL_RESURFACE_COOLDOWN_MS = 5 * 60_000;
 
@@ -57,9 +51,8 @@ export type AppLocalNotificationKind =
 export interface AppLocalNotificationInput {
   readonly id: string;
   /**
-   * Host that produced this renderer-local failure. Legacy and host-agnostic
-   * rows omit it; those rows must never be consumed by a host completion
-   * because their lineage cannot be proven.
+   * Host that produced this renderer-local failure. Legacy and host-agnostic rows omit it; those
+   * rows must never be consumed by a host completion because their lineage cannot be proven.
    */
   readonly originHostId?: string | null;
   readonly updatedAt: number;
@@ -73,11 +66,8 @@ export interface AppLocalNotificationInput {
 
 export interface AppLocalNotificationEntry extends AppLocalNotificationInput {
   /**
-   * `null` means this row still needs a renderer display. A matching timestamp
-   * is the row-local projection of the separate monotonic display receipt.
-   * Legacy persisted rows have no field and therefore read as `undefined`;
-   * they predate receipts and are treated as already displayed so an upgrade
-   * cannot replay an unread backlog.
+   * `null` means this row still needs a renderer display. A matching timestamp is the row-local
+   * projection of the separate monotonic display receipt.
    */
   readonly displayedUpdatedAt: number | null | undefined;
 }
@@ -221,10 +211,8 @@ type AppLocalNotificationsPersistedState = Pick<
 >;
 
 /**
- * v1 -> v2 migration. Workspace failures now live in the host-owned durable
- * feed, so retaining their old localStorage rows would duplicate the migrated
- * notification after upgrade. Rebuild the persisted projection while dropping
- * only that retired kind; malformed legacy rows are discarded defensively.
+ * v1 -> v2 migration. Workspace failures now live in the host-owned durable feed, so retaining
+ * their old localStorage rows would duplicate the migrated notification after upgrade.
  */
 export function migrateAppLocalNotificationsPersistedState(
   persisted: unknown,
@@ -422,15 +410,8 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
-        // For cause-keyed entries (recurring host errors): replaces the
-        // existing row so the single entry carries the latest occurrence -
-        // fresh timestamp, latest detail - instead of either stacking
-        // duplicates or (like `upsert`) silently dropping every recurrence
-        // after the first, which a persisted store would otherwise do
-        // forever. A recurrence flips the row back to unread only when the
-        // user's read-acknowledgement is older than the resurface cooldown;
-        // a cause firing every few seconds must not re-light the badge as
-        // fast as it fires.
+        // For cause-keyed entries (recurring host errors): replaces the existing row so the single entry
+        // carries the latest occurrence - fresh timestamp, latest detail - instead of either stacking
         upsertReplacing: (entry) => {
           if (get().activeUserId === null) return;
           set((state) => {
@@ -471,12 +452,8 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
-        // Fatal stream closures are cause-keyed so repeated renders of the
-        // same active failure stay one row. A genuinely recurring closure,
-        // however, must become unread even when a completion or the user read
-        // the prior occurrence. Preserve the display receipt only while the
-        // existing occurrence is still unread; replacing a read occurrence is
-        // a new notification that should be displayed again.
+        // Fatal stream closures are cause-keyed so repeated renders of the same active failure stay one
+        // row.
         upsertRecurringFailure: (entry) => {
           if (get().activeUserId === null) return;
           set((state) => {
@@ -858,10 +835,8 @@ export function emitTerminalCrashedNotification(input: {
 }): void {
   const isRecoveryExhausted = input.cause === "recovery-exhausted";
   useAppLocalNotificationsStore.getState().upsert({
-    // Deaths must not key only on `instanceId`: app-local upsert is
-    // first-write-wins, while a terminal-agent can die more than once over its
-    // lifetime. UUIDs make two independent death observations distinct even if
-    // they occur in the same millisecond.
+    // Deaths must not key only on `instanceId`: app-local upsert is first-write-wins, while a
+    // terminal-agent can die more than once over its lifetime.
     id: `terminal.crashed:${input.instanceId}:${uuidv4()}`,
     originHostId: input.hostId,
     updatedAt: Date.now(),

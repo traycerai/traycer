@@ -39,18 +39,12 @@ const mocks = vi.hoisted(() => ({
     | "install"
     | "none",
   lifecyclePostSwapError: null as string | null,
-  // `vi.mock` factories are hoisted above this file's own top-level `let
-  // sandboxRoot` - a direct reference there hits a TDZ `ReferenceError`,
-  // so the live sandbox value has to live in this hoisted object instead.
+  // `vi.mock` factories are hoisted above this file's own top-level `let sandboxRoot` - a direct reference there hits a TDZ `ReferenceError`, so the live sandbox value has to live in this hoisted object instead.
   sandboxHome: "",
 }));
 
-// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
-// load - any export the `store/paths` mock below leaves un-overridden
-// would otherwise resolve against the REAL production `~/.traycer`, not
-// this sandbox. `homedir` redirects `vi.importActual`'s fresh module
-// evaluation to the sandbox (falling back to the real tmpdir, never the
-// real home, before the first `beforeEach` has set `sandboxRoot`).
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module load - any export the `store/paths` mock below leaves un-overridden would otherwise resolve against the REAL production `~/.traycer`, not this sandbox.
+// `homedir` redirects `vi.importActual`'s fresh module evaluation to the sandbox (falling back to the real tmpdir, never the real home, before the first `beforeEach` has set `sandboxRoot`).
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return {
@@ -330,9 +324,7 @@ describe("applyHost", () => {
     });
 
     expect(result).toEqual({ outcome: "no-op", installedVersion: "2.0.0" });
-    // Reconcile (applyHost's own first step) deletes a stale-or-equal
-    // stage BEFORE applyHost ever reads it - there is no separate "staged
-    // but not newer" outcome left to preserve a stage for.
+    // Reconcile (applyHost's own first step) deletes a stale-or-equal stage BEFORE applyHost ever reads it - there is no separate "staged but not newer" outcome left to preserve a stage for.
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
   });
 
@@ -396,10 +388,7 @@ describe("applyHost", () => {
     });
 
     expect(result.outcome).toBe("applied");
-    // `--force` is not just the busy-check bypass above - it also has to
-    // reach the service lifecycle's pre-swap stop (service/install-
-    // lifecycle.ts's `beforeSwap`), or a busy Desktop-managed host would
-    // still deny the cooperative shutdown claim and abort anyway.
+    // `--force` is not just the busy-check bypass above - it also has to reach the service lifecycle's pre-swap stop (service/install- lifecycle.ts's `beforeSwap`), or a busy Desktop-managed host would still deny the cooperative shutdown claim and abort anyway.
     expect(mocks.lifecycleCalls).toEqual([{ bootstrap: null, force: true }]);
   });
 
@@ -556,19 +545,12 @@ describe("applyHost", () => {
     );
   });
 
-  // Finding 10 (ticket-2 review round 1): `stage-reconcile.test.ts` already
-  // pins these two crash-boundary recoveries by calling `reconcileHostStage`
-  // directly - that proves the helper's own logic, but not that `applyHost`
-  // (the actual command entry point, which owns calling reconcile as its
-  // first step before touching anything else) genuinely wires it in and
-  // completes normally afterward. These two mirror those fixtures exactly,
-  // driven through `applyHost` end-to-end instead.
+  // Finding 10 (ticket-2 review round 1): `stage-reconcile.test.ts` already pins these two crash-boundary recoveries by calling `reconcileHostStage` directly - that proves the helper's own logic, but not that `applyHost` (the actual command entry point, which owns calling reconcile as its first step before touching anything else) genuinely wires it in and completes normally afterward.
+  // These two mirror those fixtures exactly, driven through `applyHost` end-to-end instead.
   it("recovers install/ from a target-missing install.old-* aside via its own pre-reconcile, then applies normally (crash window: a prior rename-aside never followed by its commit)", async () => {
     await writeInstall("1.0.0", {});
     await writeStaged("2.0.0", {});
-    // Simulate the crash window between a PRIOR operation's rename-aside
-    // and its commit (installer/install.ts's atomicSwap pattern): install/
-    // was moved aside and never renamed back in.
+    // Simulate the crash window between a PRIOR operation's rename-aside and its commit (installer/install.ts's atomicSwap pattern): install/ was moved aside and never renamed back in.
     const asideDir = `${installDirFor(ENV)}.old-${Date.now()}`;
     renameSync(installDirFor(ENV), asideDir);
     expect(existsSync(installDirFor(ENV))).toBe(false);
@@ -581,10 +563,7 @@ describe("applyHost", () => {
       onProgress: () => {},
     });
 
-    // Pre-reconcile recovered install/ from the aside BEFORE applyHost's
-    // own "no install record" check, busy check, or commit ever ran - had
-    // it not, this would have thrown E_HOST_NOT_INSTALLED instead of
-    // completing the apply.
+    // Pre-reconcile recovered install/ from the aside BEFORE applyHost's own "no install record" check, busy check, or commit ever ran - had it not, this would have thrown E_HOST_NOT_INSTALLED instead of completing the apply.
     expect(result.outcome).toBe("applied");
     if (result.outcome === "applied") {
       expect(result.record.version).toBe("2.0.0");
@@ -600,12 +579,8 @@ describe("applyHost", () => {
     // apply/install left its own trash aside behind uncleaned.
     const staleTrash = `${installDirFor(ENV)}.old-${Date.now() - 1000}`;
     mkdirSync(staleTrash, { recursive: true });
-    // Busy: applyHost throws AFTER its pre-reconcile step but BEFORE
-    // commit (`commitInstallFromSource`'s own `atomicSwap` - which
-    // ALSO unconditionally sweeps `install.old-*` on entry - never runs
-    // at all). Trash being gone here can only be pre-reconcile's own
-    // doing, not commit's redundant sweep riding along with a
-    // successful apply.
+    // Busy: applyHost throws AFTER its pre-reconcile step but BEFORE commit (`commitInstallFromSource`'s own `atomicSwap` - which ALSO unconditionally sweeps `install.old-*` on entry - never runs at all).
+    // Trash being gone here can only be pre-reconcile's own doing, not commit's redundant sweep riding along with a successful apply.
     mocks.busyOverride = "busy";
 
     await expect(

@@ -30,11 +30,8 @@ vi.mock("@/lib/host/runtime", () => {
     return globalClientRef.value;
   };
   return {
-    // A requester re-minted per `requesterEpoch`, which is what production
-    // `useHostClient()` hands back whenever the effective host moves. The hook
-    // under test must take its auth base from the BINDING's client (the stable
-    // spine) instead - with the requester in its build effect's deps, every
-    // Activate/failover tore down and re-dialed unrelated stream clients.
+    // A requester re-minted per `requesterEpoch`, which is what production `useHostClient()` hands back whenever the effective host moves.
+    // The hook under test must take its auth base from the BINDING's client (the stable spine) instead - with the requester in its build effect's deps, every Activate/failover tore down and re-dialed unrelated stream clients.
     useHostClient: () => {
       if (globalClientRef.requesterFor !== globalClientRef.requesterEpoch) {
         globalClientRef.requester = spine().createRequesterForHostId(null);
@@ -134,15 +131,7 @@ describe("useHostStreamClientFor", () => {
   });
 
   it("does not rebuild when the app-wide requester is re-minted (an effective-host move)", () => {
-    // `useHostClient()` returns a requester pinned to the effective host and
-    // re-minted when that host moves. This hook needs only the transport
-    // identity - request context, user id, bearer rotation - which every
-    // requester binds to the same underlying client, so it reads the
-    // BINDING's client. With the requester in the build effect's deps, an
-    // Activate or failover tore down and re-dialed every stream this hook
-    // owns, including ones bound to hosts the move never touched, and the
-    // notifications provider read its local stream's fresh instance as a
-    // respawn and wiped its replica.
+    // With the requester in the build effect's deps, an Activate or failover tore down and re-dialed every stream this hook owns, including ones bound to hosts the move never touched, and the notifications provider read its local stream's fresh instance as a respawn and wiped its replica.
     globalClientRef.value = buildGlobalClient(true);
     const { result, rerender } = renderHook(
       ({ target }) => useHostStreamClientFor(target, null),
@@ -229,11 +218,7 @@ describe("useHostStreamClientFor", () => {
   });
 
   it("keeps the same stream client across a byte-identical directory re-emit (benign onLocalHostChange churn)", () => {
-    // Regression for the silent chat-freeze: every `onLocalHostChange`
-    // rebuilds `localEntry` and (on desktop) crosses the IPC bridge as a fresh
-    // object, so even an unchanged host arrives as a NEW entry reference.
-    // The memo must key on transport VALUE, not entry identity, or it tears the
-    // socket down and the chat session is left holding a closed WsStreamClient.
+    // The memo must key on transport VALUE, not entry identity, or it tears the socket down and the chat session is left holding a closed WsStreamClient.
     const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
     globalClientRef.value = buildGlobalClient(true);
     const { result, rerender } = renderHook(
@@ -251,10 +236,7 @@ describe("useHostStreamClientFor", () => {
   });
 
   it("does not rebuild when the request context object rotates for the same user", () => {
-    // Credential-lease rotation swaps the `RequestContext` object but keeps the
-    // same user. The live `bearer` closure re-reads the new token on the next
-    // (re)connect, so the client must NOT be rebuilt - rebuilding would close
-    // the active chat socket on every token refresh.
+    // The live `bearer` closure re-reads the new token on the next (re)connect, so the client must NOT be rebuilt - rebuilding would close the active chat socket on every token refresh.
     const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
     const globalClient = buildGlobalClient(true);
     globalClientRef.value = globalClient;

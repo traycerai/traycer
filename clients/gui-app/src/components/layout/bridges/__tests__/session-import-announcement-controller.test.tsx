@@ -96,9 +96,8 @@ function readinessController(
   return {
     readinessFor: () => readiness,
     defaultHostPresentation: READINESS_STUB_PRESENTATION,
-    // Post-latch: the app has been ready at least once this window, so a
-    // narrator-owned kind (loading-host) suppresses the toast behind its
-    // dead-pointer-events overlay rather than blocking the app from mounting.
+    // Post-latch: the app has been ready at least once this window, so a narrator-owned kind (loading-host)
+    // suppresses the toast behind its dead-pointer-events overlay rather than blocking the app from mounting.
     hasBeenDefaultHostReady: true,
   };
 }
@@ -251,10 +250,7 @@ describe("<SessionImportAnnouncementController />", () => {
   });
 
   it("holds while support is still unknown, then shows once negotiated, without claiming early", () => {
-    // Before the handshake `available` already reads true (unknown is not
-    // unsupported), which is exactly the window a permanent claim must not
-    // fire in: against an older host the toast would be dismissed a render
-    // later and the install would never be announced to again.
+    // Before the handshake `available` already reads true (unknown is not unsupported).
     scanSupportMock.value = "unknown";
     const { rerender } = render(<SessionImportAnnouncementController />);
 
@@ -274,9 +270,8 @@ describe("<SessionImportAnnouncementController />", () => {
     expect(toastMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("session-import-dialog")).toBeNull();
 
-    // The toast body renders outside the controller's tree (sonner owns
-    // it), so it is mounted beside the controller here; its button reaches
-    // the controller through the closure it was created with.
+    // The toast body renders outside the controller's tree (sonner owns it), so it is mounted beside the
+    // controller here; its button reaches the controller through the closure it was created with.
     render(<>{lastToastContent()}</>);
     fireEvent.click(screen.getByRole("button", { name: "Import work…" }));
 
@@ -356,10 +351,7 @@ describe("<SessionImportAnnouncementController />", () => {
     );
     expect(toastMock).toHaveBeenCalledTimes(1);
 
-    // The narrator and a stream drop are transient - a toast under a dialog
-    // is inert rather than wrong, and a reconnect brings the host back. They
-    // must not take the toast down the way sign-out and the tour do, since
-    // the claim is permanent.
+    // They must not take the toast down the way sign-out and the tour do, since the claim is permanent.
     harness.rerenderReadiness(LOADING_HOST_READINESS);
     streamLiveMock.value = false;
     harness.rerenderReadiness(LOADING_HOST_READINESS);

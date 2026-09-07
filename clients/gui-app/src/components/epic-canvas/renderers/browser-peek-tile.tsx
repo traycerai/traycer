@@ -47,10 +47,7 @@ import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
 
 /**
- * `touch-none`: the controller translates a finger drag into wheel frames
- * itself, and it can only see the moves the browser does not consume for its
- * own panning and pinch-zoom. Touch-action governs touch and pen alone, so a
- * mouse is unaffected.
+ * `touch-none`: the controller translates a finger drag into wheel frames itself, and it can only see the moves the browser does not consume for its own panning and pinch-zoom.
  */
 const SCREENCAST_SURFACE_CLASS =
   "absolute inset-0 h-full w-full cursor-default touch-none overflow-hidden bg-background p-0 text-left outline-none";
@@ -70,18 +67,8 @@ export type BrowserPeekNode = Pick<
 };
 
 /**
- * What the host's `complete` frame means for this tile. The host answers it for
- * every Electron-placed tab (`browser-screencast-plane.ts`'s
- * `subscribeScreencast`), because such a tab has no viewer plane there - so the
- * frame alone cannot say whether pixels are about to appear somewhere else on
- * this screen or will never appear here at all.
- *
- * - `ended` - an ordinary cast that stopped.
- * - `native-handoff` - this client is the one placing the native tab, so its
- *   own window is a beat away from showing the page.
- * - `native-elsewhere` - the tab is live in the desktop app on that host and no
- *   surface here can ever show it. Terminal, and said as such rather than
- *   dressed as a handoff that is not coming.
+ * The host answers it for every Electron-placed tab (`browser-screencast-plane.ts`'s `subscribeScreencast`), because such a tab has no viewer plane there - so the frame alone cannot say whether pixels are about to appear somewhere else on this screen or will never appear here at all. - `ended` - an ordinary cast that stopped. - `native-handoff` - this client is the one placing the native tab, so its own window is a beat away from showing the page. - `native-elsewhere` - the tab is live in the desktop app on that host and no surface here can ever show it.
+ * Terminal, and said as such rather than dressed as a handoff that is not coming.
  */
 export type BrowserPeekCompleteMeaning =
   | "ended"
@@ -97,13 +84,8 @@ interface BrowserPeekTileProps {
 }
 
 /**
- * The streamed browser viewer, for both pointer grades (decision #13).
- *
- * The transport, arm/epoch protocol, viewport bridge and nav-state derivation
- * are device-agnostic, and so is the input path: the controller translates a
- * finger into scroll and tap frames itself, keyed off `pointerType`. What
- * `useCoarsePointer()` picks is the chrome and the dialog containers a finger
- * can actually reach.
+ * The transport, arm/epoch protocol, viewport bridge and nav-state derivation are device-agnostic, and so is the input path: the controller translates a finger into scroll and tap frames itself, keyed off `pointerType`.
+ * What `useCoarsePointer()` picks is the chrome and the dialog containers a finger can actually reach.
  */
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const { epicId, node } = props;
@@ -173,9 +155,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     profile: sessionProfile,
     navState,
     initialUrl: node.initialUrl,
-    // A `viewer` subscription is refused every nav frame too (H07's
-    // `viewer-passive` list is the whole client-frame set), so the toolbar
-    // reads as the read-only chrome it is instead of silently dropping clicks.
+    // A `viewer` subscription is refused every nav frame too (H07's `viewer-passive` list is the whole client-frame set), so the toolbar reads as the read-only chrome it is instead of silently dropping clicks.
     disabled: readOnly || client === null,
     onNavigateUrl: (url) => {
       session.requestNav({ kind: "navigate", url });
@@ -274,10 +254,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
 }
 
 /**
- * The pixels and everything that reaches them. A `viewer` subscription gets
- * the pixels alone (H12): the host refuses its every claim and input frame,
- * so an overlay button and an IME input here would be controls that start a
- * gesture nothing finishes - which is what reads as a broken tab.
+ * A `viewer` subscription gets the pixels alone (H12): the host refuses its every claim and input frame, so an overlay button and an IME input here would be controls that start a gesture nothing finishes - which is what reads as a broken tab.
  */
 function ScreencastPeekSurface(props: {
   readonly session: ScreencastSession;
@@ -400,11 +377,7 @@ function ScreencastPeekChromeBar(props: {
 }
 
 /**
- * One dialog body, two containers: a bottom sheet where a finger has to reach
- * the buttons, the tile-local `<dialog>` otherwise. A backdrop dismiss has no
- * button to read intent from - an alert has only one action (OK), so the
- * dismiss is that; confirm/prompt read it as Cancel, exactly as Escape does
- * for `window.confirm()`/`window.prompt()` on a real page.
+ * A backdrop dismiss has no button to read intent from - an alert has only one action (OK), so the dismiss is that; confirm/prompt read it as Cancel, exactly as Escape does for `window.confirm()`/`window.prompt()` on a real page.
  */
 function BrowserDialogOverlay(props: {
   readonly dialog: ScreencastDialog;
@@ -544,10 +517,7 @@ function browserPeekStatus(
     };
   }
   if (lifecycle === "complete") {
-    // An Electron wake's `complete` frame means "attached, going native", not
-    // a dead cast (`browser-screencast-plane.ts`'s `subscribeScreencast`) -
-    // WifiOff/"Ended" would read as a failure at the exact moment the tab is
-    // succeeding.
+    // An Electron wake's `complete` frame means "attached, going native", not a dead cast (`browser-screencast-plane.ts`'s `subscribeScreencast`) - WifiOff/"Ended" would read as a failure at the exact moment the tab is succeeding.
     if (completeMeans === "native-handoff") {
       return {
         label: "Going native",
@@ -556,9 +526,7 @@ function browserPeekStatus(
         Icon: Radio,
       };
     }
-    // The same frame, read from a client with no native window of its own to
-    // hand off to. Nothing is in flight and nothing will arrive, so it says so
-    // rather than spinning on a handoff that is happening on another machine.
+    // Nothing is in flight and nothing will arrive, so it says so rather than spinning on a handoff that is happening on another machine.
     if (completeMeans === "native-elsewhere") {
       return {
         label: "Open natively",

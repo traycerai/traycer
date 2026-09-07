@@ -15,33 +15,13 @@ import { dirname } from "node:path";
 import { errorCode } from "./credentials-fs";
 
 /**
- * Cross-process advisory lock for credentials-file mutations (`credentials.lock`
- * beside the credentials file), shared by the desktop main process, the CLI,
- * and the migration path. It exists so that any operation which can spend a
- * single-use refresh token runs strictly serialized: **at most one process ever
- * spends a given refresh token** (credentials-file token-store tech plan, §2).
- * Reads never take the lock.
- *
- * Acquisition is atomic *and* fully-populated: a temp file carrying the whole
- * fingerprint is written first, then hard-`link`ed into place (which fails with
- * EEXIST if the lock already exists). There is never a moment where the lock
- * file exists but is empty or half-written - so any unparseable lock is genuine
- * corruption, handled by an age-based orphan sweep rather than a short
- * open()->write() grace.
- *
- * Takeover happens **only for a provably-dead holder**: the recorded pid is
- * absent, or its queryable OS start-time fingerprint no longer matches (the pid
- * was recycled onto an unrelated process). A live-but-suspended holder, or one
- * whose start time cannot be queried, is never broken - the contender waits
- * (`lock-busy`) and retries. A private nonce alone cannot detect pid reuse,
- * which is why the fingerprint is part of the record.
+ * Cross-process advisory lock for credentials-file mutations (`credentials.lock` beside the credentials file), shared by the desktop main process, the CLI, and the migration path.
+ * A private nonce alone cannot detect pid reuse, which is why the fingerprint is part of the record.
  */
 export interface CredentialsLockHandle {
   readonly path: string;
   readonly nonce: string;
-  // Owner-checked unlink: only removes the lock if it still carries this
-  // handle's nonce+pid, so a lock re-acquired by someone else after a (false)
-  // takeover is never deleted out from under them. Idempotent.
+  // Owner-checked unlink: only removes the lock if it still carries this handle's nonce+pid, so a lock re-acquired by someone else after a (false) takeover is never deleted out from under them.
   release(): Promise<void>;
 }
 
@@ -72,25 +52,16 @@ interface LockContent {
 
 const MIN_POLL_MS = 25;
 
-// Release must not leak a live self-owned lock on a transient unlink failure
-// (a Windows sharing violation / AV hold); a few bounded retries before giving
-// up and leaving it for a later release() to retry.
+// Release must not leak a live self-owned lock on a transient unlink failure (a Windows sharing violation / AV hold); a few bounded retries before giving up and leaving it for a later release() to retry.
 const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_MS = 15;
 
-// A parseable lock is only ever created fully-populated (temp+link), so an
-// unparseable lock is real corruption or foreign tampering - never our own
-// mid-write state. Break it only once it has aged well past any legitimate hold
-// (which is bounded by one ~10s in-lock refresh attempt).
+// A parseable lock is only ever created fully-populated (temp+link), so an unparseable lock is real corruption or foreign tampering - never our own mid-write state.
 const ORPHAN_LOCK_GRACE_MS = 60_000;
 
 /**
- * Acquire the lock, waiting up to `waitMs`. Resolves `{ acquired: false }` on a
- * live/uncertain holder that never frees it in time or on abort - the caller
- * maps that to the `lock-busy` outcome and retries; the access token in hand
- * stays valid meanwhile, so nothing is lost by waiting. Throws only on an
- * unexpected I/O error (e.g. EACCES on the directory), which the store surfaces
- * as "unavailable".
+ * Acquire the lock, waiting up to `waitMs`.
+ * Resolves `{ acquired: false }` on a live/uncertain holder that never frees it in time or on abort - the caller maps that to the `lock-busy` outcome and retries; the access token in hand stays valid meanwhile, so.
  */
 export async function acquireCredentialsLock(
   opts: AcquireCredentialsLockOptions,
@@ -117,10 +88,7 @@ export async function acquireCredentialsLock(
       // Vanished between our EEXIST and this read - retry immediately.
       continue;
     }
-    // Only a clean removal warrants an immediate retry; a contended or failed
-    // break falls through to the bounded wait so a lock we cannot remove (e.g. a
-    // denied unlink) times out to lock-busy instead of hot-looping past the
-    // deadline (which, with `signal: null`, would hang startup).
+    // Only a clean removal warrants an immediate retry; a contended or failed break falls through to the bounded wait so a lock we cannot remove (e.g. a denied unlink) times out to lock-busy instead of hot-looping past the.
     if (holder.kind === "parsed") {
       if (holderProvablyDead(holder.content.pid, holder.content.pidStartTime)) {
         if ((await breakStaleLock(opts.lockPath, holder.raw)) === "removed") {
@@ -155,13 +123,8 @@ export async function withCredentialsLock<T>(
 }
 
 /**
- * Pure takeover decision, separated so it is exhaustively testable without
- * mocking the OS. A holder is provably dead when its pid is gone (`alive:
- * false`), or when its current start-time fingerprint no longer matches the
- * recorded one (pid recycled). When liveness is uncertain - the fingerprint is
- * unqueryable on this platform (`currentFingerprint: null`) or the record
- * predates fingerprints (`recordedFingerprint: null`) - the holder is assumed
- * **live** and never broken.
+ * Pure takeover decision, separated so it is exhaustively testable without mocking the OS.
+ * When liveness is uncertain - the fingerprint is unqueryable on this platform (`currentFingerprint: null`) or the record predates fingerprints (`recordedFingerprint: null`) - the holder is assumed **live** and never.
  */
 export function isHolderProvablyDead(args: {
   readonly alive: boolean;
@@ -180,9 +143,6 @@ function holderProvablyDead(
   pid: number,
   recordedFingerprint: string | null,
 ): boolean {
-  // Probe liveness first and short-circuit: a gone pid (the common crash
-  // takeover) needs no fingerprint query, which on non-Linux POSIX would spawn
-  // `ps` for a result the decision ignores.
   if (!isProcessAlive(pid)) return true;
   return isHolderProvablyDead({
     alive: true,
@@ -228,29 +188,6 @@ async function readLock(lockPath: string): Promise<ReadLockResult> {
     : { kind: "parsed", raw, content };
 }
 
-/**
- * Break a lock we judged stale. Two layers guard against removing a *live* lock
- * that replaced the stale one since we read it:
- *   1. Re-read `lockPath` and bail unless it still holds the exact bytes we
- *      judged stale. This closes the wide window - our liveness probe shells out
- *      to `ps` (several ms) - in which a competitor could break the stale lock
- *      and link its own fresh one in the gap.
- *   2. The removal is an atomic `rename` aside, making the rename the takeover
- *      arbiter: only one contender can move a given lock instance away (the rest
- *      get ENOENT), which closes the compare-then-unlink race where two breakers
- *      each delete the other's freshly-linked lock and end up dual-held.
- *
- * Residual (documented in the disposition spec alongside M3): if the entry is
- * replaced in the far tighter window *between* the re-read and the rename, the
- * rename moves a fresh lock aside and the best-effort `link`-back restore can
- * fail if the slot was re-taken - dropping a live entry. It is bounded exactly
- * like M3 (single-use rotating tokens make the duplicate spend server-rejected
- * and self-healing), not a durable dual-owner.
- *
- * Returns whether the stale lock was actually removed, so the caller can bound
- * its wait on a break that could not complete rather than hot-looping. Exported
- * for deterministic takeover tests.
- */
 export async function breakStaleLock(
   lockPath: string,
   staleRaw: string,
@@ -268,10 +205,7 @@ export async function breakStaleLock(
   try {
     await rename(lockPath, grave);
   } catch {
-    // Another contender already moved it (ENOENT), or the removal was denied
-    // (EPERM/EACCES/EBUSY - e.g. a Windows sharing violation). Neither throw nor
-    // hot-loop: report contended so the caller falls through to the bounded wait
-    // and eventually times out to lock-busy.
+    // Another contender already moved it (ENOENT), or the removal was denied (EPERM/EACCES/EBUSY - e.g. a Windows sharing violation).
     return "contended";
   }
   let moved: string | null;
@@ -322,9 +256,6 @@ function makeHandle(
             released = true;
             return;
           }
-          // Transient (Windows sharing violation / AV): back off and retry so a
-          // live self-owned lock is not leaked for the process lifetime, which
-          // would wedge this process's own later mutations against its own pid.
           if (attempt < RELEASE_ATTEMPTS - 1) {
             await sleepAbortable(RELEASE_RETRY_MS, null);
           }
@@ -367,12 +298,8 @@ async function lockFileAgeMs(lockPath: string): Promise<number | null> {
   }
 }
 
-// Cross-platform process-liveness probe: POSIX `process.kill(pid, 0)` (EPERM =>
-// alive, ESRCH => gone); Windows `tasklist`. Mirrors the CLI's shared
-// `isProcessAlive` (protocol cannot import upward into the CLI, and this variant
-// also feeds the start-time fingerprint below). Exported for the mutation
-// store's spent-base marker, which reuses the lock's exact holder-liveness
-// semantics for its own owner records.
+// Cross-platform process-liveness probe: POSIX `process.kill(pid, 0)` (EPERM => alive, ESRCH => gone); Windows `tasklist`.
+// Mirrors the CLI's shared `isProcessAlive` (protocol cannot import upward into the CLI, and this variant also feeds the start-time fingerprint below).
 export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (process.platform === "win32") {
@@ -411,11 +338,8 @@ export function ownPidStartFingerprint(): string | null {
 }
 
 /**
- * A stable per-process start-time fingerprint, or `null` when it cannot be
- * determined (unsupported platform or query failure). Linux reads
- * `/proc/<pid>/stat`; other POSIX shells out to `ps -o lstart=`. A `null`
- * result means "cannot prove dead" upstream, never "dead". Exported so the
- * timezone-invariance of the fingerprint can be tested directly.
+ * A stable per-process start-time fingerprint, or `null` when it cannot be determined (unsupported platform or query failure).
+ * A `null` result means "cannot prove dead" upstream, never "dead".
  */
 export function queryPidStartFingerprint(pid: number): string | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
@@ -427,9 +351,7 @@ export function queryPidStartFingerprint(pid: number): string | null {
 function linuxStartTime(pid: number): string | null {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    // Fields: `pid (comm) state ppid ... starttime(22) ...`. `comm` may contain
-    // spaces and parens, so split from after the LAST ')': the remainder starts
-    // at field 3 (state), making starttime (field 22) index 19.
+    // Fields: `pid (comm) state ppid ... starttime(22) ...`.
     const close = stat.lastIndexOf(")");
     if (close < 0) return null;
     const fields = stat
@@ -450,11 +372,8 @@ function psLstart(pid: number): string | null {
     const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       timeout: 3000,
-      // `lstart` is rendered in the caller's timezone/locale; force a fixed one
-      // so the same live PID fingerprints identically across processes. A
-      // desktop holder in local time and a `TZ=UTC` CLI contender must not
-      // disagree and mistake a live holder for a recycled PID - that would break
-      // a live lock and let both spend the same refresh token.
+      // `lstart` is rendered in the caller's timezone/locale; force a fixed one so the same live PID fingerprints identically across processes.
+      // A desktop holder in local time and a `TZ=UTC` CLI contender must not disagree and mistake a live holder for a recycled PID - that would break a live lock and let both spend the same refresh token.
       env: { ...process.env, TZ: "UTC", LC_ALL: "C", LC_TIME: "C" },
     });
     const trimmed = out.trim();

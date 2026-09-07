@@ -32,62 +32,34 @@ type ScriptReviewSaveState = "idle" | "saving" | "saved";
 
 const SCRIPT_REVIEW_SAVED_CLOSE_MS = 650;
 
-/**
- * The agreed setup/teardown editor surface, shared by Settings ▸ Worktrees and
- * the composer's Environment footer. It owns presentation + the save-feedback
- * animation only - it persists NOTHING. Each caller wires `onSave` to its own
- * behavior (Settings stashes the reviewed scripts for its delete flow; the
- * composer stages them onto the worktree intent or writes them via
- * `setRepoScripts`). The dialog is always-open while mounted; the caller mounts
- * it conditionally and reacts to `onOpenChange(false)`.
- */
+/** It owns presentation + the save-feedback animation only - it persists nothing. The dialog is always-open
+ * while mounted; the caller mounts it conditionally and reacts to `onOpenChange(false)`. */
 export function ScriptsReviewDialog(props: {
   readonly title: string;
   readonly description: string;
-  // `null` together to omit the path block entirely - the "Worktree
-  // environment" dialog drops it for a staged new-branch target, since the
-  // branch name it would show is now redundant with Branch naming's own
-  // effective-branch preview (core-flows/worktree-environment-layered-settings).
+  // `null` together to omit the path block entirely.
   readonly pathLabel: string | null;
   readonly pathValue: string | null;
   readonly scriptSeed: RepoScriptsSeed | null;
-  // `true` while the seed is still being fetched (e.g. reading a source branch's
-  // committed scripts). The fields are replaced by a spinner so the editor never
-  // flashes a stale seed before the real one resolves; the caller remounts (via
-  // `key`) with the resolved seed once it lands.
+  // The fields are replaced by a spinner so the editor never flashes a stale seed before the real one resolves;
+  // the caller remounts (via `key`) with the resolved seed once it lands.
   readonly seedPending: boolean;
   // A non-blocking warning rendered above the fields (e.g. the source-branch
   // scripts read failed, so the editor starts blank). `null` when there's none.
   readonly errorNote: string | null;
-  // Explanatory caption for the scripts section (e.g. where this save
-  // targets) - relocated here from the old top-level `description` so that
-  // prop can carry the dialog-wide framing text instead. `null` for callers
-  // that don't need it.
+  // `null` for callers that don't need it.
   readonly scriptsNote: string | null;
   readonly inUseNote: string | null;
-  // Visually separate "Branch naming" section (the Environment dialog's
-  // layered branch-prefix setting), rendered BELOW the scripts section once
-  // this is non-null - scripts stay first in the information hierarchy.
-  // When present, the scripts block also gains a "Setup & teardown scripts"
-  // eyebrow. `null` for callers that never show it (e.g. the Settings ▸
-  // Worktrees delete-review flow, which reuses this same presentational shell
-  // as a single, unlabeled section).
+  // `null` for callers that never show it (e.g. the Settings ▸ Worktrees delete-review flow, which reuses this
+  // same presentational shell as a single, unlabeled section).
   readonly repositoryDefaultsSlot: ReactNode | null;
   readonly testId: string;
-  // Footer action label (idle state only - a successful save always shows
-  // "Saved" regardless). Callers name what they're persisting: "Save scripts"
-  // for the Worktree environment dialog, "Save" for the Settings delete-review
-  // flow (unchanged from its prior hardcoded text).
+  // Footer action label (idle state only - a successful save always shows "Saved" regardless).
   readonly saveLabel: string;
-  // Returns a promise that resolves when the save actually succeeded and rejects
-  // when it failed, so the dialog only shows "Saved"/closes on real success
-  // (a synchronous caller returns an already-resolved promise).
+  // Returns a promise that resolves when the save actually succeeded and rejects when it failed, so the dialog
+  // only shows "Saved"/closes on real success (a synchronous caller returns an already-resolved promise).
   readonly onSave: (scripts: WorktreeEntryScripts) => Promise<unknown>;
-  // Radix's `DialogContent` calls this on Escape BEFORE it dismisses the
-  // dialog; call `event.preventDefault()` to keep the dialog open (e.g. a
-  // nested editor inside `repositoryDefaultsSlot` wants to consume Escape as
-  // its own "cancel" instead). A no-op (`() => {}`) preserves plain
-  // Escape-closes-the-dialog behavior.
+  // Radix's `DialogContent` calls this on Escape before it dismisses the dialog.
   readonly onEscapeKeyDown: (event: KeyboardEvent) => void;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
@@ -137,9 +109,7 @@ export function ScriptsReviewDialog(props: {
     const payload = repoScriptsRequestPayload(scripts);
     clearSaveTimers();
     setSaveState("saving");
-    // Drive the confirmation off the real save outcome: "Saved" + auto-close on
-    // success only; a failed save (the caller surfaces its own error toast)
-    // returns to idle so the user can retry instead of seeing a false success.
+    // Drive the confirmation off the real save outcome: "Saved" + auto-close on success only.
     void props.onSave(payload).then(
       () => {
         if (!mountedRef.current) return;

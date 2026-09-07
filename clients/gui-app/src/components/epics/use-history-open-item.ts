@@ -8,30 +8,13 @@ import {
 } from "@/lib/tab-navigation";
 
 export interface HistoryOpenItemArgs {
-  /**
-   * Called immediately before normal row navigation. The system-tab modal uses
-   * this to close its overlay in the same interaction.
-   */
+  /** Called immediately before normal row navigation. */
   readonly onSelectEpic: ((epicId: string) => void) | null;
-  /**
-   * Replaces normal navigation when the list is embedded in a destination
-   * picker. The complete item is provided so callers can preserve the distinct
-   * Epic and legacy Phase activation paths.
-   */
+  /** The complete item is provided so callers can preserve the distinct Epic and legacy Phase activation paths. */
   readonly onOpenItem: ((item: HistoryItem) => void) | null;
 }
 
-/**
- * What "open this task" means, for every list that renders history rows.
- *
- * Shared because the two activation paths are not interchangeable and the
- * difference is invisible at the call site. A Phase can only be opened through
- * its migration route, which a plain canvas tab cannot carry, so it goes
- * through the canonical activation boundary that snapshots first and restores
- * the prior tab if the navigation is rejected. An Epic goes through the command
- * action, which threads the row's title into tab creation so a cold-open canvas
- * skeleton renders the real title rather than "Untitled task".
- */
+/** A Phase can only be opened through its migration route, which a plain canvas tab cannot carry. */
 export function useHistoryOpenItem(
   args: HistoryOpenItemArgs,
 ): (item: HistoryItem) => void {

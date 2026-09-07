@@ -64,11 +64,7 @@ const mocks = vi.hoisted(
   }),
 );
 
-/**
- * The DISPATCHED-but-unheard shape: our response budget elapsed while the host
- * kept running the probe. `fatalDetails: null` is what separates it from a
- * TERMINAL pre-dispatch failure, which shares this class.
- */
+/** The dispatched-but-unheard shape: our response budget elapsed while the host kept running the probe. */
 function stillRunningRead(): HostTransportFailureError {
   return new HostTransportFailureError({
     code: "RPC_ERROR",
@@ -79,9 +75,8 @@ function stillRunningRead(): HostTransportFailureError {
   });
 }
 
-// A fresh, cold-start envelope wrapping a single response - matches what the
-// production `mapResponseToProviderRateLimitEnvelope` wrapper would produce
-// for a provider's first successful pull.
+// A fresh, cold-start envelope wrapping a single response - matches what the production
+// `mapResponseToProviderRateLimitEnvelope` wrapper would produce for a provider's first successful pull.
 function envelope(data: ProviderRateLimits): ProviderRateLimitEnvelope {
   return envelopeFromRateLimits(data, Date.now());
 }
@@ -178,9 +173,8 @@ const CODEX_SPEND_LIMIT_RESETS_AT = Date.now() + 5 * 24 * 60 * 60 * 1000;
 const CODEX_RATE_LIMITS: ProviderRateLimits = {
   provider: "codex",
   available: true,
-  // Real Codex `PlanType` values are lowercase tokens ("plus"), but the
-  // settings card no longer shows it - the provider auth badge above
-  // already does.
+  // Real Codex `PlanType` values are lowercase tokens ("plus"), but the settings card no longer shows it - the
+  // provider auth badge above already does.
   planType: "plus",
   limitId: null,
   limitName: null,
@@ -301,9 +295,8 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("renders nothing (not an eternal spinner) while pending but not fetching", () => {
-    // A query that's `enabled: false` (e.g. an unreachable host) stays
-    // `isPending: true` forever without ever fetching - the card must not
-    // show a permanent loading spinner for that state.
+    // A query that's `enabled: false` (e.g. an unreachable host) stays `isPending: true` forever without ever
+    // fetching - the card must not show a permanent loading spinner for that state.
     mocks.isPending = true;
     mocks.isFetching = false;
     render(
@@ -459,10 +452,7 @@ describe("ProviderRateLimitForProvider", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
   });
 
-  // A read we merely stopped waiting for is not a failed refresh: the host is
-  // still running the probe and the queue has a delayed collection scheduled,
-  // so the card keeps its reading undimmed rather than reporting a failure that
-  // is about to resolve itself.
+  // A read we merely stopped waiting for is not a failed refresh.
   it("does NOT report a refresh failure while the delayed collection is still coming", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isError = true;
@@ -481,10 +471,8 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.queryByText(/refresh failed/)).toBeNull();
   });
 
-  // ...but that reasoning expires. The queue allows ONE delayed collection; if
-  // that also comes back unheard nothing is scheduled to collect the answer, so
-  // continuing to hide it would leave this card vouching for a stale reading
-  // with nothing coming to correct it.
+  // The queue allows one delayed collection; if that also comes back unheard nothing is scheduled to collect the
+  // answer.
   it("reports the failure once the follow-up budget is spent, with the SAME error", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isError = true;
@@ -625,19 +613,16 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    // Scoped to the spend-limit row's own container: the current-session
-    // window above it also renders a reset line, so an unscoped query would
-    // match two elements.
+    // Scoped to the spend-limit row's own container: the current-session window above it also renders a reset
+    // line, so an unscoped query would match two elements.
     const spendLimitRow = screen
       .getByText("Spend limit")
       .closest("div.flex.flex-col.gap-1");
     expect(spendLimitRow).not.toBeNull();
     const spendLimitScope = within(spendLimitRow as HTMLElement);
     expect(spendLimitScope.getByText("42.00 / 100.00")).toBeTruthy();
-    // Regression: `CodexSpendControlRow` used to hardcode `weekly={false}`,
-    // always forcing a relative countdown regardless of the real reset time.
-    // `CODEX_SPEND_LIMIT_RESETS_AT` is 5 days out, so the reset line now
-    // correctly reads as an absolute calendar date/time, not "Resets in ...".
+    // `CODEX_SPEND_LIMIT_RESETS_AT` is 5 days out, so the reset line now correctly reads as an absolute calendar
+    // date/time, not "Resets in...".
     expect(
       spendLimitScope.getByText(
         `Resets ${formatResetFullDateTime(CODEX_SPEND_LIMIT_RESETS_AT)}`,
@@ -769,12 +754,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("DISABLES the refresh button once this card's queued target is already forced", () => {
-    // The Settings card renders no "Queued…" label, so its spinner is the only
-    // feedback a waiting user gets. `RefreshIconButton` caps its own spinner at
-    // 10s, so a manual refresh stuck behind another target's probe would show
-    // an idle, clickable button while the request was still pending - for up to
-    // the lane's full response budget. Once forced there is nothing left for a
-    // further click to promote, so pending is the honest state.
+    // The Settings card renders no "Queued…" label, so its spinner is the only feedback a waiting user gets.
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isFetching = false;
     mocks.targetPhase = "queued";
@@ -794,10 +774,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("leaves the refresh button live when this target is NOT in the queue, however busy the lane is", () => {
-    // The card's control is gated by its own target only. It previously read
-    // the lane-wide draining flag, so a background sweep of an unrelated
-    // provider left this button disabled - and, because the trigger also
-    // no-ops while disabled, unclickable for that sweep's full duration.
+    // The card's control is gated by its own target only.
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isFetching = false;
     mocks.targetPhase = null;

@@ -6,29 +6,13 @@ import { dh } from "./primitives";
 import { SymmetricState } from "./symmetric-state";
 import type { NoiseKeyPair, NoiseRole } from "./types";
 
-/**
- * The NK message pattern (Noise spec §7.5):
- *
- *   NK:
- *     <- s          (pre-message: initiator already holds the responder static)
- *     ...
- *     -> e, es      (message 0, written by the initiator)
- *     <- e, ee      (message 1, written by the responder)
- *
- * The responder's static key authenticates the host; the initiator is anonymous
- * at the Noise layer (it carries no static key) and authenticates in-channel
- * later with a bearer — that in-channel step is out of scope here.
- */
+/** The NK message pattern (Noise spec §7.5): */
 const NK_MESSAGE_PATTERNS: readonly (readonly string[])[] = [
   ["e", "es"],
   ["e", "ee"],
 ];
 
-/**
- * Fully-explicit handshake configuration. Nothing is optional or defaulted: the
- * factory helpers in `index.ts` fill the production values (random ephemeral),
- * and tests pass fixed ephemerals to reproduce official vectors.
- */
+/** Fully-explicit handshake configuration. */
 export interface NoiseHandshakeConfig {
   readonly role: NoiseRole;
   /** Noise prologue mixed into `h` before the first message (may be empty). */
@@ -66,10 +50,7 @@ export class NoiseHandshakeState {
   }
 
   /**
-   * Initialize an NK handshake: hash the prologue, then apply the `<- s`
-   * pre-message by mixing the responder's static public key into the transcript
-   * (both parties know it — the responder from its own key pair, the initiator
-   * from the registry).
+   * Initialize an NK handshake: hash the prologue, then apply the `<- s` pre-message by mixing the responder's static public key into the transcript (both parties know it - the responder from its own key pair, the.
    */
   static async create(
     config: NoiseHandshakeConfig,
@@ -187,9 +168,7 @@ export class NoiseHandshakeState {
       this.role === "initiator"
         ? { send: c1, receive: c2 }
         : { send: c2, receive: c1 };
-    // Forward secrecy: the ephemeral private is no longer needed once the
-    // transport keys are derived, so zero it (transport keys are wiped via
-    // NoiseSession.wipe). The long-lived static key is deliberately left intact.
+    // Forward secrecy: the ephemeral private is no longer needed once the transport keys are derived, so zero it (transport keys are wiped via NoiseSession.wipe).
     this.e.privateKey.fill(0);
   }
 

@@ -38,10 +38,7 @@ interface TerminalQuoteOverlayProps {
 }
 
 /**
- * Quoting targets the open Task's chats, so a terminal outside one has nowhere
- * to send a selection. Gate on the session rather than assuming it: the epic
- * canvas always has one, but the same pane chrome backs terminals that do not
- * (the landing panel), and those should get no affordance rather than a crash.
+ * Gate on the session rather than assuming it: the epic canvas always has one, but the same pane chrome backs terminals that do not (the landing panel), and those should get no affordance rather than a crash.
  */
 export function TerminalQuoteOverlay(props: TerminalQuoteOverlayProps) {
   const handle = useMaybeOpenEpicHandle();
@@ -50,19 +47,8 @@ export function TerminalQuoteOverlay(props: TerminalQuoteOverlayProps) {
 }
 
 /**
- * Watches this pane for a selection, and owns the quote actions.
- *
- * The one thing deliberately NOT here is the Task's chat list: that lives in
- * the child below, which only mounts once there IS a selection. A Task can have
- * many terminal tiles open at once and a chat record's `updatedAt` bumps on
- * every streaming tick, so subscribing each idle tile to the chat slice would
- * re-render every one of them several times a second to decide nothing.
- *
- * The actions stay HERE, above the selection, because quoting into a new chat
- * outlives the selection that started it: it waits for the host's create to
- * land in the projection before opening the tile, and that wait is cancelled
- * when its owner unmounts. Owned by the child, dismissing the control - which
- * every action does - would cancel the open it just asked for.
+ * The one thing deliberately NOT here is the Task's chat list: that lives in the child below, which only mounts once there IS a selection.
+ * The actions stay HERE, above the selection, because quoting into a new chat outlives the selection that started it: it waits for the host's create to land in the projection before opening the tile, and that wait is cancelled when its owner unmounts.
  */
 function TerminalQuoteOverlayLive(props: TerminalQuoteOverlayProps) {
   const [menuOpen, setMenuOpen] = useState(false);

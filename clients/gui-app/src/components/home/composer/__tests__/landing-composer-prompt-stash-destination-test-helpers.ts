@@ -1,6 +1,4 @@
-/**
- * Shared fixtures for landing composer prompt-stash destination split suites.
- */
+/** Shared fixtures for landing composer prompt-stash destination split suites. */
 import type { StoreApi } from "zustand/vanilla";
 import { renderHook } from "@testing-library/react";
 import { vi } from "vitest";
@@ -112,7 +110,6 @@ export function requireDefined<T>(
   return value;
 }
 
-/** In-memory stash blobs for `readPromptStashRestoreBlobs` spy. */
 export const stashBlobs = new Map<string, PromptStashRestoreBlob>();
 
 export async function seedStashImage(
@@ -127,7 +124,6 @@ export async function seedStashImage(
   return hash;
 }
 
-/** Drive the real production landing destination hook. */
 export function renderLandingDestination(args: {
   readonly stashIdentity: string;
   readonly draftId: string | null;
@@ -144,7 +140,6 @@ export function renderLandingDestination(args: {
   );
 }
 
-/** Drive materialize → importAndInsert → release like the restore hook. */
 export async function restoreThroughLanding(
   dest: PromptStashDestinationAdapter,
   identity: PromptStashDestinationIdentity,

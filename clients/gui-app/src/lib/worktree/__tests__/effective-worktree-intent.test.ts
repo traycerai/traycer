@@ -72,9 +72,8 @@ describe("effectiveWorktreeIntent", () => {
   });
 
   it("synthesizes a local entry AND stamps it primary for a non-git folder with no staged entry - the finding-1 regression", () => {
-    // Two folders seeded: a git folder (auto-staged as a worktree entry) and
-    // a non-git folder (never auto-staged - non-git folders can't fork a
-    // worktree). "Set as primary" switches to the NON-GIT folder.
+    // Two folders seeded: a git folder (auto-staged as a worktree entry) and a non-git folder (never auto-staged - non-git folders can't fork a worktree).
+    // "Set as primary" switches to the NON-GIT folder.
     const ws = workspace({
       folders: [GIT_FOLDER, NON_GIT_FOLDER],
       // The user just switched primary to the non-git folder.

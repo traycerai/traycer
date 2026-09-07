@@ -32,8 +32,7 @@ function render(ui: ReactNode) {
   );
 }
 
-// The host precomputes these from the raw harness input (no longer persisted)
-// at the accumulator chokepoint; the component renders the precomputed fields.
+// The host precomputes these from the raw harness input (no longer persisted) at the accumulator chokepoint; the component renders the precomputed fields.
 // Compute them here so the tests exercise the real summary/detail behavior.
 function inputProps(toolName: string, input: unknown) {
   return {
@@ -345,9 +344,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Prefix Receiver" }));
 
-    // The header link names the EPIC and asks for a deliberate, de-duped open;
-    // it carries no mouse event of its own (the shared `AgentHeaderLink` also
-    // fires on Enter/Space), so the modifier triple is absent by construction.
+    // The header link names the EPIC and asks for a deliberate, de-duped open; it carries no mouse event of its own (the shared `AgentHeaderLink` also fires on Enter/Space), so the modifier triple is absent by construction.
     expect(tileNavigationMocks.openTile).toHaveBeenCalledWith({
       node: expect.objectContaining({
         id: PREFIX_RECEIVER_ID,
@@ -630,9 +627,7 @@ describe("<ToolSegment /> input rendering", () => {
   });
 
   it("shows a neutral stopped badge from the authoritative `stopped` field, not the destructive error badge", () => {
-    // `status: "errored"` with `stopped: true` is how the host now reports an
-    // explicit stop (deadline-killed Monitor, user-stopped command) - no
-    // reliance on sniffing the error string.
+    // `status: "errored"` with `stopped: true` is how the host now reports an explicit stop (deadline-killed Monitor, user-stopped command) - no reliance on sniffing the error string.
     render(
       <ToolSegment
         headerFindUnitId={null}
@@ -733,16 +728,8 @@ describe("<ToolSegment /> streaming heartbeat", () => {
       />,
     );
 
-    // The progress line keeps its own line under the row - it is a sentence
-    // that changes as the tool works, so it wants the width. The elapsed
-    // counter does NOT: it rides the header row, left of the status badge, the
-    // way the standalone card has always shown it. Both used to share that
-    // second line, which gave a progress-less tool (every command, most tools)
-    // a whole row holding nothing but a number.
-    // Anchored to the row TRIGGER, not to `parentElement`: the contract is
-    // "the counter shares the header row", and one more wrapper around the tool
-    // name would silently retarget a parent-walk at that wrapper and fail here
-    // for a reason that has nothing to do with placement.
+    // The elapsed counter does NOT: it rides the header row, left of the status badge, the way the standalone card has always shown it.
+    // Anchored to the row TRIGGER, not to `parentElement`: the contract is "the counter shares the header row", and one more wrapper around the tool name would silently retarget a parent-walk at that wrapper and fail here for a reason that has nothing to do with placement.
     const headerRow = screen
       .getByText("mcp__fetch")
       .closest("[data-row-header]");
@@ -790,19 +777,14 @@ describe("<ToolSegment /> streaming heartbeat", () => {
       .closest("[data-row-header]");
     expect(headerRow).not.toBeNull();
     expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
-    // And the footer element is ABSENT, not merely empty. Asserting only on the
-    // counter's position left a mutation that rendered the footer with an empty
-    // progress string undetected - an invisible second row that still costs the
-    // padding, which is the defect this whole change removes.
+    // And the footer element is ABSENT, not merely empty.
+    // Asserting only on the counter's position left a mutation that rendered the footer with an empty progress string undetected - an invisible second row that still costs the padding, which is the defect this whole change removes.
     expect(screen.queryByTestId("segment-row-footer")).toBeNull();
   });
 
   it("omits the heartbeat once the call completes", () => {
-    // Pinned for a second reason than the tests above: on a real clock this
-    // one passes VACUOUSLY. `queryByText("0s")` also returns null when a
-    // counter is rendered and the clock has ticked to "1s", so a regression
-    // that kept the heartbeat alive would go unseen. Pin the clock so "0s" is
-    // what a surviving counter would say, and match any counter besides.
+    // `queryByText("0s")` also returns null when a counter is rendered and the clock has ticked to "1s", so a regression that kept the heartbeat alive would go unseen.
+    // Pin the clock so "0s" is what a surviving counter would say, and match any counter besides.
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const startedAt = 10_000;

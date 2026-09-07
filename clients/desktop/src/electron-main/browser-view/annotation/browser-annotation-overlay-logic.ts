@@ -114,10 +114,6 @@ function centerOf(rect: BrowserAnnotationCssRect): { x: number; y: number } {
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 }
 
-/**
- * Containment: the candidate's center is inside the region AND a majority
- * of the candidate's area is inside the region.
- */
 function isContainedInRegion(
   candidate: BrowserAnnotationCssRect,
   region: BrowserAnnotationCssRect,
@@ -139,11 +135,6 @@ function isVisibleRegionCandidate(input: {
   return input.bounds.width >= 2 && input.bounds.height >= 2;
 }
 
-/**
- * When a parent and its descendants all qualify, keep the parent
- * (a card, not fifteen fragments). Equivalent to dropping any
- * candidate that has a selected ancestor.
- */
 function collapseCompleteDescendantSets(
   candidates: readonly RegionCandidate[],
 ): RegionCandidate[] {
@@ -166,11 +157,6 @@ function sortSmallestFirst(
   });
 }
 
-/**
- * Visible candidates -> containment -> include already-marked
- * representatives -> collapse complete descendant sets to parent ->
- * drop already-marked -> smallest-first -> bundle-wide element cap.
- */
 export function resolveRegionSelection(input: {
   readonly candidates: readonly RegionCandidate[];
   readonly region: BrowserAnnotationCssRect;
@@ -217,9 +203,7 @@ function mergeCandidatesById(
   return [...byId.values()];
 }
 
-/**
- * Newest-first bounding-box hit-test over the one ordered stack.
- */
+/** Newest-first bounding-box hit-test over the one ordered stack. */
 export function eraseNewestAtPoint(
   marks: readonly OverlayMarkModel[],
   x: number,
@@ -360,9 +344,7 @@ export function strokeBoundsFromPoints(
   };
 }
 
-/**
- * Closed SVG path for a perfect-freehand outline polygon.
- */
+/** Closed SVG path for a perfect-freehand outline polygon. */
 export function svgPathFromPolygon(
   points: readonly (readonly [number, number])[],
 ): string {

@@ -62,10 +62,8 @@ describe("publishElectronTabBinding surface serialization", () => {
       surfaceInput("binding-1"),
     );
 
-    // A second `tabBound` for the SAME tab, with no removal in between. While
-    // the chain lived in the publishing closure this republished binding
-    // started its own, so the old lease's detach could interleave with the new
-    // attach - which main refuses, leaving the tile blank.
+    // A second `tabBound` for the SAME tab, with no removal in between.
+    // While the chain lived in the publishing closure this republished binding started its own, so the old lease's detach could interleave with the new attach - which main refuses, leaving the tile blank.
     publishElectronTabBinding(owner, bridge, CAPABILITY);
     const second = publishedBinding(CAPABILITY).bindSurface(
       surfaceInput("binding-2"),
@@ -82,12 +80,7 @@ describe("publishElectronTabBinding surface serialization", () => {
   });
 
   it("re-attaches a still-live tab after a stream retirement republishes it", async () => {
-    // RULE: retiring this renderer's bindings on a non-live transition tells
-    // MAIN nothing - the native tab survives with the old `bindingId` still
-    // attached, and main refuses a second attach while it does. So the chain
-    // has to survive the retirement and detach the old surface first. Dropping
-    // it started a fresh chain that attached against a surface main had not
-    // released, and the tile came back blank.
+    // RULE: retiring this renderer's bindings on a non-live transition tells MAIN nothing - the native tab survives with the old `bindingId` still attached, and main refuses a second attach while it does.
     const capability: BrowserViewNativeTabCapability = {
       ...CAPABILITY,
       tabId: "tab-retired",
@@ -121,9 +114,7 @@ describe("publishElectronTabBinding surface serialization", () => {
   });
 
   it("starts a clean chain after a genuine tab release", async () => {
-    // The counterpart: `tabReleased` means main already dropped the native
-    // entry, so the recorded surface names nothing and a later incarnation of
-    // the same tab must not open by detaching it.
+    // The counterpart: `tabReleased` means main already dropped the native entry, so the recorded surface names nothing and a later incarnation of the same tab must not open by detaching it.
     const capability: BrowserViewNativeTabCapability = {
       ...CAPABILITY,
       tabId: "tab-released",

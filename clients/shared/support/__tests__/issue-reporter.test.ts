@@ -7,9 +7,6 @@ import { buildGitHubIssueUrl, type PublicIssueDraft } from "../issue-reporter";
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_PATH = join(THIS_DIR, "../issue-reporter.ts");
 
-// Every field pre-built and pre-scrubbed, exactly as `support:buildPublicDraft`
-// (Electron main, ticket 09 / ticket 07's type-to-template routing) would
-// hand it over the IPC boundary.
 const bugDraft: PublicIssueDraft = {
   template: "bug_report.yml",
   title: "chat.subscribe - RPC_ERROR: Sending a message hangs",
@@ -113,9 +110,7 @@ describe("buildGitHubIssueUrl", () => {
     expect(params.get("what-happened")).toBe("x".repeat(20_000));
   });
 
-  // Ticket 09 guardrail (critique C1): the renderer emitting public text is
-  // the anti-pattern this ticket exists to kill. A grep-level check is the
-  // tripwire since TypeScript alone can't enforce "contains no logic".
+  // A grep-level check is the tripwire since TypeScript alone can't enforce "contains no logic".
   it("contains no body/title composition or truncation logic", () => {
     const source = readFileSync(SOURCE_PATH, "utf8");
     for (const bannedIdentifier of [

@@ -11,17 +11,8 @@ import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-di
 const NO_VISIBLE_DRIVERS: readonly BrowserTabDriver[] = [];
 
 /**
- * Delays the driven-by glyph in both directions (see
- * `browser-driver-coalescing.ts`), except when the drivers change WITHIN the
- * chat set already on screen - that is the same agent still working, so it
- * shows through immediately.
- *
- * The immediate half runs during render (React's documented "storing
- * information from previous renders" pattern, so no cascading setState in an
- * effect); the effect owns only the pending timer. `useEffectEvent` is what
- * keeps `drivenBy`/`visible` out of the dependency array without mirroring
- * either into a ref: the effect re-runs on the driver signatures alone and
- * still reads the committed values.
+ * The immediate half runs during render (React's documented "storing information from previous renders" pattern, so no cascading setState in an effect); the effect owns only the pending timer.
+ * `useEffectEvent` is what keeps `drivenBy`/`visible` out of the dependency array without mirroring either into a ref: the effect re-runs on the driver signatures alone and still reads the committed values.
  */
 export function useCoalescedBrowserTabDrivers(
   drivenBy: readonly BrowserTabDriver[],

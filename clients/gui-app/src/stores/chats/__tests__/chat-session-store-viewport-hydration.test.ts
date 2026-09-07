@@ -49,16 +49,7 @@ interface ViewportHarness {
   /** How many `resnapshot` requests the client has sent. */
   resnapshotCount(): number;
   callbacks(): ChatStreamCallbacks;
-  /**
-   * The id of the request a `range` frame would be answering right now.
-   *
-   * Throws when nothing is outstanding, and that is the point rather than
-   * defensive noise: the host sends a `range` for exactly one reason - to
-   * answer a `loadRange` - so a test injecting one without having asked is
-   * modelling a frame the wire cannot produce. The store discards such a
-   * response (see `rangeResponseIsStale`), so a harness that let it through
-   * would be asserting against a code path no host can reach.
-   */
+  /** The id of the request a `range` frame would be answering right now. */
   lastRangeRequestId(): string;
 }
 
@@ -259,9 +250,10 @@ function rangeWithMessages(
   };
 }
 
-/** The legacy (pre-windowed) `chat.subscribe` snapshot shape - the whole
- * transcript rides inline on `snapshot.chat.messages`/`events`, with no
- * `tail`/`rowCount`/`derived`. */
+/**
+ * The legacy (pre-windowed) `chat.subscribe` snapshot shape - the whole transcript rides inline on
+ * `snapshot.chat.messages`/`events`, with no `tail`/`rowCount`/`derived`.
+ */
 function legacySnapshot(
   messages: readonly Message[],
 ): Parameters<ChatStreamCallbacks["onSnapshot"]>[0] {
@@ -305,14 +297,7 @@ function legacySnapshot(
   };
 }
 
-/**
- * The skeleton entry the host publishes for `row-<ordinal>`.
- *
- * The row id is derived from the ordinal so a delta and a `range` response
- * built by these helpers agree on identity - which is what makes the
- * out-of-order tests below about STALENESS rather than about the row-id check
- * that already exists.
- */
+/** The skeleton entry the host publishes for `row-<ordinal>`. */
 function skeletonEntry(ordinal: number): RowSkeletonEntry {
   return {
     rowId: `row-${ordinal}`,
@@ -378,7 +363,6 @@ function accumulatedChanges(
   };
 }
 
-/** A skeleton chunk covering `[fromOrdinal, toOrdinal)`. */
 function skeletonChunk(
   fromOrdinal: number,
   toOrdinal: number,
@@ -400,15 +384,7 @@ function skeletonChunk(
   };
 }
 
-/**
- * An aux-only rebroadcast: same epoch, same rows, a HELD index revision.
- *
- * This is what a queue change or an approval produces - the host re-sends the
- * snapshot against an unchanged skeleton and streams nothing. `indexRevision`
- * is the discriminator (`null` would be the host announcing a rebuild), and it
- * matches what the client already holds, because a revision that ran AHEAD is a
- * different frame entirely: it means deltas were lost and the window voids.
- */
+/** An aux-only rebroadcast: same epoch, same rows, a HELD index revision. */
 function auxRebroadcast(input: {
   readonly rowCount: number;
   readonly tailFromOrdinal: number;
@@ -422,9 +398,8 @@ function auxRebroadcast(input: {
 }
 
 /**
- * A skeleton whose ordinals 10-12 are ONE steered turn: two assistant slices
- * with the steer bubble between them. Every other ordinal stays an ordinary
- * user row, so the turn has a real boundary on both sides.
+ * A skeleton whose ordinals 10-12 are ONE steered turn: two assistant slices with the steer bubble
+ * between them.
  */
 const TURN_ROW_IDS: ReadonlyMap<number, string> = new Map([
   [10, "assistant:t-9:part:0"],
@@ -518,18 +493,8 @@ describe("chat session viewport hydration", () => {
   });
 
   /**
-   * Two `toOrdinal`s with two meanings, and the store is where they meet.
-   *
-   * `OrdinalRange.toOrdinal` (the viewport report, the planner, the gaps) is
-   * EXCLUSIVE. `ChatLoadRangeRequest.toOrdinal` (the wire, and the
-   * `sliceTranscriptRange` that serves it) is INCLUSIVE at both ends. Passing
-   * the planner's value straight through asks for one row more than the plan
-   * on every single request - which at a gap boundary is the first row of the
-   * span already held, so it also drags a body the client did not need across
-   * the wire.
-   *
-   * Asserted as an exact width rather than as `toOrdinal: 19`, because that is
-   * the property that matters and it survives the numbers changing.
+   * Two `toOrdinal`s with two meanings, and the store is where they meet. `OrdinalRange.toOrdinal`
+   * (the viewport report, the planner, the gaps) is EXCLUSIVE.
    */
   it("converts the planner's exclusive bound to the wire's inclusive one", () => {
     const harness = createViewportHarness();
@@ -571,9 +536,7 @@ describe("chat session viewport hydration", () => {
       harness.handle.store.getState().reportVisibleTranscriptRange(report);
       harness.callbacks().onRange(range(harness, 10, 15));
 
-      // The response clears the old in-flight request and immediately plans
-      // the still-visible remainder. Re-reporting that same range is then
-      // deduplicated against the new request.
+      // Re-reporting that same range is then deduplicated against the new request.
       expect(harness.rangeRequests).toHaveLength(2);
       expect(harness.rangeRequests[1]).toMatchObject({
         fromOrdinal: 15,
@@ -633,9 +596,8 @@ describe("chat session viewport hydration: review fixes", () => {
         toOrdinal: 5,
       });
 
-      // A single row whose serialized body alone exceeds the whole window
-      // budget - a legal host response (the range read always serves the
-      // first requested row whatever it costs).
+      // A single row whose serialized body alone exceeds the whole window budget - a legal host response
+      // (the range read always serves the first requested row whatever it costs).
       harness
         .callbacks()
         .onRange(
@@ -652,10 +614,8 @@ describe("chat session viewport hydration: review fixes", () => {
         true,
       );
 
-      // The plan is now satisfied - no new (or repeated) range request
-      // follows, even though the span the reader is looking at alone blows
-      // the byte budget. A re-request here would be the evict-loop this
-      // fix exists to prevent.
+      // The plan is now satisfied - no new (or repeated) range request follows, even though the span the
+      // reader is looking at alone blows the byte budget.
       expect(harness.rangeRequests).toHaveLength(1);
     } finally {
       harness.handle.dispose();
@@ -663,17 +623,8 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("seats an answer that arrived after its request timed out", () => {
-    // The failure this pins is a LOOP, not a dropped frame, so the assertion
-    // has to bound the retries rather than check one response.
-    //
-    // A range response is deliberately unbounded for a single folded row (see
-    // `read-range.ts`) and rides the relay's BULK lane, so taking longer than
-    // the client's deadline is an ordinary slow answer. When the timeout
-    // released the slot AND forgot the request, that answer was rejected on
-    // arrival for having an untracked id - and its replacement re-armed the
-    // same deadline, so a link that is merely slow discarded every answer it
-    // ever produced and minted one more request per discard. The gap never
-    // hydrated and nothing in the store noticed.
+    // The failure this pins is a LOOP, not a dropped frame, so the assertion has to bound the retries
+    // rather than check one response.
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -698,9 +649,8 @@ describe("chat session viewport hydration: review fixes", () => {
         .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 18 });
       expect(harness.rangeRequests).toHaveLength(2);
 
-      // And the loop is closed at the other end too: letting the second
-      // request's own deadline elapse re-asks nothing, because the rows it
-      // covered are no longer a gap.
+      // And the loop is closed at the other end too: letting the second request's own deadline elapse
+      // re-asks nothing, because the rows it covered are no longer a gap.
       vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
       expect(harness.rangeRequests).toHaveLength(2);
     } finally {
@@ -710,12 +660,7 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("discards a late answer whose rows a reindex invalidated", () => {
-    // The other side of the same change. Keeping a timed-out request eligible
-    // must not make it eligible unconditionally: supersession is tracked per
-    // REQUEST, so a frame that invalidates the rows in the air still has to
-    // reject the answer when it lands - otherwise the fix for the loop would
-    // seat a body frozen at a previous revision, which is the hazard the
-    // request ledger exists to prevent in the first place.
+    // The other side of the same change.
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -742,23 +687,12 @@ describe("chat session viewport hydration: review fixes", () => {
 
       harness.callbacks().onRange(rangeAnswering(slowRequestId, 10, 20));
 
-      // Asserted on the WINDOW, because the two request-count assertions that
-      // used to stand here could not fail. `rangeRequests.length` is compared
-      // against a number read from that same growing array, and the follow-up
-      // was satisfied by the `reindexed` frame's own resnapshot whether or not
-      // the late answer was seated.
-      //
-      // What actually has to hold is that nothing was seated: the superseded
-      // body must not be holding these rows, so the span is still a gap.
+      // `rangeRequests.length` is compared against a number read from that same growing array, and the
+      // follow-up was satisfied by the `reindexed` frame's own resnapshot whether or not the late answer
       const window = harness.handle.store.getState().transcriptWindow;
       expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
-      // Recovery is the resnapshot the reindex already asked for, and it is
-      // asserted rather than assumed. Note what must NOT be asserted here: a
-      // further `reportVisibleTranscriptRange` mints nothing, because the
-      // resnapshot latch suppresses a duplicate while one is outstanding. A
-      // "it asks again" assertion would therefore have to be written loosely
-      // enough to pass on traffic the reindex itself produced - which is how
-      // the two assertions this replaced came to be unfalsifiable.
+      // Recovery is the resnapshot the reindex already asked for, and it is asserted rather than
+      // assumed.
       expect(harness.handle.store.getState().transcriptWindow.invalidated).toBe(
         true,
       );
@@ -770,11 +704,7 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("restreams when a skeleton stops before its final chunk", () => {
-    // The class: a chunked delivery closes its loop only when the final chunk
-    // ARRIVES. `applySkeletonChunk` reads completeness off `chunk.isFinal`, so
-    // losing exactly the last frame leaves `skeletonComplete` false forever -
-    // and the module's own comment says what that is worth: "`skeletonComplete`
-    // merely goes false, which requests no repair."
+    // The class: a chunked delivery closes its loop only when the final chunk ARRIVES.
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -785,9 +715,8 @@ describe("chat session viewport hydration: review fixes", () => {
       harness.callbacks().onSkeletonChunk(skeletonChunk(0, 10, false));
       harness.callbacks().onSkeletonChunk(skeletonChunk(10, 20, false));
 
-      // Still within the idle window: a stream that is merely slow must not be
-      // torn down and re-sent, which is the whole reason this is an IDLE
-      // timeout re-armed per chunk rather than one deadline for the stream.
+      // Still within the idle window: a stream that is merely slow must not be torn down and re-sent,
+      // which is the whole reason this is an IDLE timeout re-armed per chunk rather than one deadline
       vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS - 1);
       expect(harness.resnapshotCount()).toBe(before);
 
@@ -800,10 +729,7 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("stops restreaming a skeleton that keeps stalling", () => {
-    // The bound. A resnapshot restarts the very stream whose stall triggered
-    // it, so without a cap a link that keeps dropping the last frame gets an
-    // unbounded restream loop - the same shape as the range-request loop this
-    // store shipped once, and the reason that fix needed a bounding test too.
+    // The bound.
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -849,16 +775,8 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("restreams when the SOLE skeleton chunk is the one that is lost", () => {
-    // The hole an earlier receipt gate left, and the reason the watchdog now
-    // reads the snapshot's totals instead. That gate only monitored a stream
-    // which had delivered something, so it saw a stream that stopped part way
-    // and was blind to one that never started - losing the whole skeleton was
-    // invisible while losing its last frame was caught.
-    //
-    // "No chunk" is unambiguous evidence of loss rather than of a chat with
-    // nothing to send: `chunkRowSkeleton` yields one empty final chunk for an
-    // EMPTY skeleton precisely so the two are distinguishable, and the host
-    // streams it behind every bootstrap snapshot.
+    // The hole an earlier receipt gate left, and the reason the watchdog now reads the snapshot's
+    // totals instead.
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -877,10 +795,6 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("restreams when the summary stream's first chunk never arrives", () => {
-    // The same hole on the other stream, and it did not need the summaries to
-    // be unlucky on their own: under a receipt gate the summaries were watched
-    // only once a summary chunk had landed, so a skeleton that completed
-    // perfectly left a summary stream that lost its opening chunk unmonitored.
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -908,21 +822,7 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("retries a summary resnapshot that was dropped, and still stops at the cap", () => {
-    // The recovery had a hole exactly where it was needed: when the resnapshot
-    // ITSELF is dropped. Its timeout releases the dedup latch and calls
-    // `requestPlannedHydration`, which retries only what it can see in the
-    // transcript - an invalidated window, or a visible gap. A summary-only
-    // stall is neither: that transcript is valid and fully hydrated here, so
-    // the planner asks for nothing.
-    //
-    // Meanwhile the watchdog timer that started the recovery has fired and
-    // cleared itself, and it is re-armed only by delivery progress or a
-    // snapshot - neither of which is coming, since a dropped resnapshot is the
-    // premise. So the retry budget read as unspent while nothing would ever
-    // spend it, and the file list stayed short for the life of the connection.
-    //
-    // Both halves are pinned here deliberately: a retry loop whose bound is
-    // untested is the failure mode this store has shipped before.
+    // The recovery had a hole exactly where it was needed: when the resnapshot ITSELF is dropped.
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -942,9 +842,7 @@ describe("chat session viewport hydration: review fixes", () => {
       vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
       expect(harness.resnapshotCount()).toBe(before + 1);
 
-      // Nothing answers it. Each round is the request's own deadline expiring,
-      // then the re-armed watchdog reaching its own - and the loop must run
-      // past the cap to prove the cap is what stops it, not the arithmetic.
+      // Nothing answers it.
       for (
         let round = 0;
         round < MAX_WATCHDOG_RESTREAMS_PER_EPOCH + 3;
@@ -964,9 +862,8 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("stops retrying once the resnapshot is answered", () => {
-    // The other direction, so the re-arm cannot become a timer that outlives
-    // its reason: a snapshot that completes the delivery disarms the watchdog
-    // through the same `readCompleteness` check every other arm site uses.
+    // The other direction, so the re-arm cannot become a timer that outlives its reason: a snapshot
+    // that completes the delivery disarms the watchdog through the same `readCompleteness` check every
     vi.useFakeTimers();
     const harness = createViewportHarness();
     try {
@@ -1012,11 +909,8 @@ describe("chat session viewport hydration: review fixes", () => {
         "legacy-1",
       ]);
 
-      // A straggler windowed frame for the abandoned epoch must be ignored
-      // outright - it must not touch `messages` or rebuild windowed state.
-      // Named explicitly rather than through `range`: the point is that the
-      // `!windowedLine` guard drops this before request identity is even
-      // consulted, and the downgraded session has nothing outstanding to name.
+      // A straggler windowed frame for the abandoned epoch must be ignored outright - it must not touch
+      // `messages` or rebuild windowed state.
       harness.callbacks().onRange(rangeAnswering("straggler", 10, 15));
 
       const finalState = harness.handle.store.getState();
@@ -1033,12 +927,8 @@ describe("chat session viewport hydration: review fixes", () => {
   it("ignores a straggling accumulated-change chunk after the downgrade", () => {
     const harness = createViewportHarness();
     try {
-      // The snapshot must PROMISE the summary the chunk delivers - but not
-      // because the count gates publication. A final chunk publishes at any
-      // count. What a count of 0 would change is the WATCHDOG:
-      // `chunkedDeliveryIncomplete` measures the published length against
-      // `accumulatedFileChangeCount`, so 0-against-1 keeps it armed and its
-      // fire adds a `resnapshot` this test's own count would then include.
+      // The snapshot must PROMISE the summary the chunk delivers - but not because the count gates
+      // publication. A final chunk publishes at any count.
       const base = snapshot({
         rowCount: 40,
         tailFromOrdinal: 20,
@@ -1060,10 +950,8 @@ describe("chat session viewport hydration: review fixes", () => {
         harness.handle.store.getState().accumulatedFileChangeSummaries,
       ).toEqual([]);
 
-      // The legacy line's authoritative set is `accumulatedFileChanges`, and
-      // the downgrade cleared these once. Nothing clears them a second time,
-      // so a chunk seated here would leave the panel serving rows from the
-      // abandoned windowed epoch for the life of the session.
+      // The legacy line's authoritative set is `accumulatedFileChanges`, and the downgrade cleared these
+      // once.
       harness.callbacks().onAccumulatedChanges(accumulatedChanges("b.ts"));
 
       expect(
@@ -1075,11 +963,8 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("applies the byte budget when a snapshot seats a new tail", () => {
-    // Codex P1 (#1459): `insertSpan` has exactly two callers - the snapshot
-    // tail and a range response - and only the range path ran the budget. A
-    // reader who hydrates scrollback and then stops scrolling still receives a
-    // snapshot per completed turn, so the cache grew across snapshots with
-    // nothing ever enforcing TRANSCRIPT_WINDOW_MAX_BYTES.
+    // Codex P1 (#1459): `insertSpan` has exactly two callers - the snapshot tail and a range response
+    // - and only the range path ran the budget.
     const harness = createViewportHarness();
     try {
       hydrateTail(harness);
@@ -1142,11 +1027,8 @@ describe("chat session viewport hydration: review fixes", () => {
       harness.handle.store
         .getState()
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 15 });
-      // A plain user row's id IS its message's id in production
-      // (`row-projection.ts`), which is what lets the warmth bump below find a
-      // record to touch - `range()`'s shared `rangeAnswering` fixture names
-      // only one message ("m-<fromOrdinal>") for a five-row response, so it is
-      // not representative here and this test builds its own instead.
+      // A plain user row's id IS its message's id in production (`row-projection.ts`), which is what
+      // lets the warmth bump below find a record to touch - `range()`'s shared `rangeAnswering` fixture
       harness
         .callbacks()
         .onRange(
@@ -1196,10 +1078,8 @@ describe("chat session viewport hydration: review fixes", () => {
 });
 
 /**
- * A `range` answer is the one frame on this line that can be reordered behind
- * the deltas that invalidate it: an oversized response goes to the relay's
- * BULK lane while `indexChanged` stays INTERACTIVE. These pin what the client
- * does when that happens.
+ * A `range` answer is the one frame on this line that can be reordered behind the deltas that
+ * invalidate it: an oversized response goes to the relay's BULK lane while `indexChanged` stays
  */
 describe("chat session viewport hydration: a range answered out of order", () => {
   it("discards an answer an `updated` staled while it was in flight", () => {
@@ -1211,11 +1091,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
       expect(harness.rangeRequests).toHaveLength(1);
 
-      // The interactive delta overtakes the bulk answer. Its row id is
-      // UNCHANGED, which is not incidental - `diffRowSkeleton` emits a
-      // `reindexed` for a row id that moved, so an `updated` always keeps both
-      // the epoch and the id. Neither of `applyRangeResponse`'s checks can see
-      // this; only the in-flight bookkeeping can.
+      // The interactive delta overtakes the bulk answer.
       harness.callbacks().onIndexChanged(
         indexChanged({
           epoch: 1,
@@ -1247,9 +1123,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
         .getState()
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
 
-      // Ordinal 5 is neither held nor requested, so this answer is still
-      // current. Discarding on ANY update would make an active turn - which
-      // updates its streaming row constantly - starve every scrollback fetch.
+      // Ordinal 5 is neither held nor requested, so this answer is still current.
       harness.callbacks().onIndexChanged(
         indexChanged({
           epoch: 1,
@@ -1284,18 +1158,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
 
       harness.callbacks().onRange(rangeAnswering(firstRequestId, 10, 20));
 
-      // Seated. This assertion used to read `false`, on the rationale that the
-      // client "stopped tracking what happened to ordinals 10-19 the moment it
-      // replaced the request" - and that was true while one slot held both the
-      // dedup key and the staleness record.
-      //
-      // It is not true now: supersession is recorded per REQUEST, and
-      // `supersedeInFlightHydration` marks every outstanding one, so the
-      // client can still say whether these rows went stale. Nothing did, so
-      // the bodies are current and already paid for on the wire - dropping
-      // them would buy a round trip and nothing else. `discards a late answer
-      // whose rows a reindex invalidated` is the case where the record earns
-      // its keep and the answer IS dropped.
+      // Seated.
       const window = harness.handle.store.getState().transcriptWindow;
       expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
     } finally {
@@ -1304,13 +1167,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
   });
 
   it("discards an answer carrying the records of a SIBLING row the frame rewrote", () => {
-    // The ordinals a request asked for are not the rows its answer can be stale
-    // in. A range serves a row from its TURN's shared records, so an answer for
-    // slice 0 carries the same message record slice 1 renders from - and an
-    // `updated` naming only slice 1 leaves an ordinal-keyed intersection empty.
-    //
-    // Seating it covers slice 0 with pre-update records while slice 1, which
-    // need never be visible, is the only row anything would re-ask for.
+    // The ordinals a request asked for are not the rows its answer can be stale in.
     const harness = createViewportHarness();
     try {
       hydrateTail(harness);
@@ -1352,9 +1209,8 @@ describe("chat session viewport hydration: a range answered out of order", () =>
           ]),
         );
 
-      // Asserted on the WINDOW, not on a request count: the failure this pins
-      // is a body that seats and then renders forever, and a count says
-      // nothing about which bodies are held.
+      // Asserted on the WINDOW, not on a request count: the failure this pins is a body that seats and
+      // then renders forever, and a count says nothing about which bodies are held.
       const window = harness.handle.store.getState().transcriptWindow;
       expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
     } finally {
@@ -1363,10 +1219,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
   });
 
   it("still seats an answer when the rewritten row shares no turn with it", () => {
-    // The bound. Widening to the turn must not become "discard whatever is in
-    // flight": a rewritten user row elsewhere in the transcript shares no
-    // records with this answer, and dropping it would cost a round trip per
-    // unrelated edit.
+    // The bound.
     const harness = createViewportHarness();
     try {
       hydrateTail(harness);
@@ -1416,10 +1269,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
 
       harness.callbacks().onRange(rangeAnswering(firstRequestId, 10, 20));
 
-      // The replacement is still on the wire. Forgetting it here re-issues the
-      // same ask under a new id, whose answer then finds the slot mismatched
-      // again - one new request per answer, forever, with the gap never
-      // hydrating. The re-plan must dedupe against the request still tracked.
+      // The replacement is still on the wire.
       expect(harness.rangeRequests).toHaveLength(2);
 
       // And the replacement still answers normally afterwards.
@@ -1433,14 +1283,8 @@ describe("chat session viewport hydration: a range answered out of order", () =>
 });
 
 /**
- * The other half of the same rule the ledger already follows.
- *
- * An aux-only rebroadcast is not a connection reset, so it must leave BOTH
- * records of an outstanding request alone. Keeping the ledger while releasing
- * the dedup slot is the shape that reads as conservative and destroys the
- * answer: the released slot permits a re-plan of a range that is still being
- * answered, and the requests that re-plan mints push the original's ledger
- * entry out of a capped map.
+ * The other half of the same rule the ledger already follows. An aux-only rebroadcast is not a
+ * connection reset, so it must leave BOTH records of an outstanding request alone.
  */
 describe("chat session viewport hydration: aux rebroadcasts while a range is in flight", () => {
   const AUX_FRAMES = MAX_OUTSTANDING_HYDRATION_REQUESTS + 1;
@@ -1455,9 +1299,6 @@ describe("chat session viewport hydration: aux rebroadcasts while a range is in 
       expect(harness.rangeRequests).toHaveLength(1);
       const inFlightRequestId = harness.lastRangeRequestId();
 
-      // A steady drip of queue changes and approvals while the answer is still
-      // travelling - on the BULK lane, which is where a megabyte of bodies goes
-      // and where it can be overtaken by every one of these.
       for (let frame = 0; frame < AUX_FRAMES; frame += 1) {
         harness.callbacks().onWindowedSnapshot(
           auxRebroadcast({
@@ -1492,10 +1333,8 @@ describe("chat session viewport hydration: aux rebroadcasts while a range is in 
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
       expect(harness.rangeRequests).toHaveLength(1);
 
-      // A reconnect: a fresh subscriber holds no index, which reaches the
-      // client as `indexRevision: null`. The request really did die with the
-      // previous connection, and the epoch survives one - so a slot kept here
-      // would suppress the identical re-plan forever and strand the gap.
+      // A reconnect: a fresh subscriber holds no index, which reaches the client as `indexRevision:
+      // null`.
       harness.callbacks().onWindowedSnapshot(
         snapshot({
           rowCount: 40,
@@ -1515,15 +1354,6 @@ describe("chat session viewport hydration: aux rebroadcasts while a range is in 
   });
 });
 
-/**
- * The recovery ledger's rebuild boundary: an accepted rebuild announcement
- * subsumes every open range entry at once, and the answer to a
- * pre-boundary request must never seat - it is indistinguishable from a
- * post-boundary slice of current state, because the host slices at answer
- * time. Rejecting it by REQUEST ID (never by content) is the only thing that
- * can tell the two apart, and the planner that re-derives the same gap under
- * a fresh id is what proves the obligation was carried rather than dropped.
- */
 describe("chat session viewport hydration: the rebuild boundary subsumes in-flight ranges", () => {
   it("discards the pre-boundary answer for the old request id, but seats the replanned one", () => {
     const harness = createViewportHarness();
@@ -1535,11 +1365,8 @@ describe("chat session viewport hydration: the rebuild boundary subsumes in-flig
       expect(harness.rangeRequests).toHaveLength(1);
       const oldRequestId = harness.lastRangeRequestId();
 
-      // An accepted rebuild announcement at the SAME epoch - `snapshot()`
-      // always frames `indexRevision: null`, the boundary's discriminator,
-      // not a new epoch. It subsumes every open range entry, and the planner
-      // (never gated on the boundary) immediately re-derives the same gap
-      // under a fresh id.
+      // An accepted rebuild announcement at the SAME epoch - `snapshot()` always frames `indexRevision:
+      // null`, the boundary's discriminator, not a new epoch.
       harness.callbacks().onWindowedSnapshot(
         snapshot({
           rowCount: 40,
@@ -1551,19 +1378,16 @@ describe("chat session viewport hydration: the rebuild boundary subsumes in-flig
       const newRequestId = harness.lastRangeRequestId();
       expect(newRequestId).not.toBe(oldRequestId);
 
-      // The OLD request's answer lands. A pre-boundary-framed answer is
-      // indistinguishable from a post-boundary slice of current state by
-      // CONTENT alone, so only the id absent from the ledger says so - it
-      // must not seat, whatever rows it claims to carry.
+      // A pre-boundary-framed answer is indistinguishable from a post-boundary slice of current state by
+      // CONTENT alone, so only the id absent from the ledger says so - it must not seat, whatever rows
       harness.callbacks().onRange(rangeAnswering(oldRequestId, 10, 20));
       expect(
         harness.handle.store
           .getState()
           .transcriptWindow.spans.some((span) => span.fromOrdinal === 10),
       ).toBe(false);
-      // Discarding it does not mint a THIRD request: the replanned one is
-      // still tracked as in flight, so the re-plan the discard triggers
-      // dedupes against it.
+      // Discarding it does not mint a THIRD request: the replanned one is still tracked as in flight, so
+      // the re-plan the discard triggers dedupes against it.
       expect(harness.rangeRequests).toHaveLength(2);
 
       // The NEW (post-boundary) request's own answer seats normally.
@@ -1579,10 +1403,6 @@ describe("chat session viewport hydration: the rebuild boundary subsumes in-flig
   });
 
   it("keeps planning gaps in the delivered prefix while the rebuild's skeleton is still incomplete", () => {
-    // The boundary opens a `skeleton-completion` entry to carry the subsumed
-    // obligations to a guaranteed close, but the planner must NOT be gated on
-    // that entry - gating it would strand the delivered prefix behind a close
-    // that never comes if the stream stalls into abandonment.
     const harness = createViewportHarness();
     try {
       hydrateTail(harness);
@@ -1630,26 +1450,15 @@ describe("chat session viewport hydration: the rebuild boundary subsumes in-flig
   });
 });
 
-/**
- * The ledger's outstanding-request cap: binding it is a SUPERSEDE-AND-REPLAN,
- * never silent trust. The evicted oldest entries are replaced by one NEW
- * wider request covering their rows; a response to an evicted id is discarded
- * exactly as any unrecorded response is, and only the wider request's own
- * accepted answer closes its entry.
- */
+/** The ledger's outstanding-request cap: binding it is a SUPERSEDE-AND-REPLAN, never silent trust. */
 describe("chat session viewport hydration: the outstanding-request cap supersedes and replans", () => {
   it("replaces evicted entries with one wider request, discards their late answers, and seats the wider one", () => {
     const harness = createViewportHarness();
     try {
       hydrateTail(harness);
 
-      // Mint MAX_OUTSTANDING_HYDRATION_REQUESTS + 1 distinct one-row range
-      // requests, one per report - each targets an ordinal nothing has
-      // fetched yet, so every call plans a fresh id. The ledger keeps every
-      // entry even though only the latest holds the in-flight dedup slot (see
-      // `requestPlannedHydration`'s own doc: "a differently-planned request
-      // does not make the earlier answer wrong, only unawaited"), so the
-      // LAST report is what binds the cap.
+      // Mint MAX_OUTSTANDING_HYDRATION_REQUESTS + 1 distinct one-row range requests, one per report -
+      // each targets an ordinal nothing has fetched yet, so every call plans a fresh id.
       for (
         let ordinal = 0;
         ordinal <= MAX_OUTSTANDING_HYDRATION_REQUESTS;
@@ -1675,18 +1484,16 @@ describe("chat session viewport hydration: the outstanding-request cap supersede
       expect(replacement.requestId).not.toBe(evictedRequestId);
       expect(replacement.requestId).not.toBe(secondEvictedRequestId);
 
-      // A response to an evicted id is discarded outright - its ledger entry
-      // is gone, so nothing recorded what happened to those ordinals while it
-      // was in the air.
+      // A response to an evicted id is discarded outright - its ledger entry is gone, so nothing
+      // recorded what happened to those ordinals while it was in the air.
       harness.callbacks().onRange(rangeAnswering(evictedRequestId, 0, 1));
       expect(
         harness.handle.store
           .getState()
           .transcriptWindow.spans.some((span) => span.fromOrdinal === 0),
       ).toBe(false);
-      // No new request was minted for it: the wider replacement already
-      // carries the obligation, and the re-plan the discard triggers dedupes
-      // against whatever currently holds the in-flight slot.
+      // No new request was minted for it: the wider replacement already carries the obligation, and the
+      // re-plan the discard triggers dedupes against whatever currently holds the in-flight slot.
       expect(harness.rangeRequests).toHaveLength(ordinaryCount + 1);
 
       // The wider replacement's own answer seats normally.
@@ -1718,9 +1525,8 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
       );
       expect(harness.resnapshotCount()).toBe(1);
 
-      // Invalidation is sticky until a snapshot clears it, and every windowed
-      // callback ends in the same planner - so without a latch each of these
-      // sends another full-snapshot request.
+      // Invalidation is sticky until a snapshot clears it, and every windowed callback ends in the same
+      // planner - so without a latch each of these sends another full-snapshot request.
       harness.callbacks().onSkeletonChunk({
         kind: "skeletonChunk",
         hasBinaryPayload: false,
@@ -1781,20 +1587,6 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
   });
 
   it("a refused same-epoch straggler snapshot does not fire the authority boundary", () => {
-    // The boundary (`clearInFlightHydration` + `recovery.authorityBoundary` +
-    // `imageWitnesses.invalidateAll()`) used to be gated only on the FRAME's
-    // own claim (`indexRevision === null || rebased || window.invalidated`),
-    // never on whether the fold actually ACCEPTED the frame. A same-epoch
-    // straggler - a concrete `indexRevision` BEHIND what this client already
-    // holds - is refused by `applyWindowedSnapshot` outright
-    // (`classifySnapshotRevision` returns "straggler", and the fold returns
-    // its input window BY IDENTITY). But with that window still `invalidated`
-    // from the void below, the old ungated check read `window.invalidated` as
-    // true and fired the boundary anyway - closing the open resnapshot dedup
-    // entry for a frame that moved nothing. The very next planned-hydration
-    // pass (this handler's own trailing `requestPlannedHydration()`, or any
-    // later replan) then found the entry gone and sent a redundant
-    // `requestResnapshot` - one per straggler.
     const harness = createViewportHarness();
     try {
       hydrateTail(harness);
@@ -1808,13 +1600,8 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
       );
       expect(harness.resnapshotCount()).toBe(1);
 
-      // A void arms `indexRevisionRebuilding` for one frame's exemption from
-      // the revision-direction rules (the counter behind the NEXT frame may
-      // not be the counter this window holds). An ordinary follow-up delta
-      // spends that exemption and advances the held revision to 2, without
-      // touching `invalidated` - exactly "asks once per abandoned epoch"
-      // above's second frame - so the straggler below is judged against a
-      // revision the direction rules actually compare.
+      // A void arms `indexRevisionRebuilding` for one frame's exemption from the revision-direction
+      // rules (the counter behind the NEXT frame may not be the counter this window holds).
       harness.callbacks().onIndexChanged(
         indexChanged({
           epoch: 2,
@@ -1855,8 +1642,4 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
     }
   });
 
-  // The control half - an ACCEPTED rebuild announcement (same epoch,
-  // `indexRevision: null`) DOES close the entry, so a later void sends a
-  // fresh `requestResnapshot` - is already pinned above by "re-arms once a
-  // snapshot answers".
 });

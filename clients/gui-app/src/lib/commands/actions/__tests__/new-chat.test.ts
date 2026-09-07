@@ -79,10 +79,7 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
   getOpenEpicRegistry: registryMock.getOpenEpicRegistry,
 }));
 
-// The toast module LEAF `new-chat.ts` calls directly - not the `sonner`
-// barrel underneath it, which would also catch every other toast call this
-// module graph might make and make the assertion below say less than it
-// looks like it does.
+// The toast module LEAF `new-chat.ts` calls directly - not the `sonner` barrel underneath it, which would also catch every other toast call this module graph might make and make the assertion below say less than it looks like it does.
 const reportableWarningToast = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableWarningToast,
@@ -425,10 +422,8 @@ describe("new chat command actions", () => {
     });
 
     it("surfaces a warning toast when the 30s wait actually expires", () => {
-      // The fallback used to expire silently - "clicked Fork, nothing
-      // happened for a minute" with nothing in the UI to explain it. Ablation:
-      // drop the `reportChatProjectionWaitExpired` call from the timeout arm
-      // and this assertion is the only thing that would catch the regression.
+      // The fallback used to expire silently - "clicked Fork, nothing happened for a minute" with nothing in the UI to explain it.
+      // Ablation: drop the `reportChatProjectionWaitExpired` call from the timeout arm and this assertion is the only thing that would catch the regression.
       seedActiveGroup();
 
       openCreatedChatWhenProjected({
@@ -446,10 +441,7 @@ describe("new chat command actions", () => {
       expect(reportableWarningToast).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ id: "chat-projection-wait-expired" }),
-        // A concrete field rather than a nested `expect.any(String)`: the
-        // matcher is typed `any`, so asserting the SHAPE of the report context
-        // here would be an unsafe assignment the lint rules reject - and this
-        // pins the reportable arm harder anyway.
+        // A concrete field rather than a nested `expect.any(String)`: the matcher is typed `any`, so asserting the SHAPE of the report context here would be an unsafe assignment the lint rules reject - and this pins the reportable arm harder anyway.
         expect.objectContaining({ source: "Chat" }),
       );
     });
@@ -473,9 +465,7 @@ describe("new chat command actions", () => {
     });
 
     it("stays silent when the caller cancels instead of letting the wait expire", () => {
-      // Caller-driven cancellation (unmount, a superseding open) is not a
-      // failure and must not be reported as one - only a genuine timeout
-      // toasts.
+      // Caller-driven cancellation (unmount, a superseding open) is not a failure and must not be reported as one - only a genuine timeout toasts.
       seedActiveGroup();
 
       const cancel = openCreatedChatWhenProjected({

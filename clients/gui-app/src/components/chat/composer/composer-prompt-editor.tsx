@@ -72,20 +72,9 @@ function incarnationForEditor(editor: Editor): ComposerEditorIncarnation {
 }
 
 export interface ComposerPromptEditorHandle {
-  /**
-   * Whether the async Tiptap editor behind this handle exists yet. The handle
-   * itself is created on first commit - before `useEditor` (with
-   * `immediatelyRender: false`) has produced an editor - and every method
-   * below silently no-ops until then. Callers that must not lose a write
-   * (the draft-reset bridge) check this instead of treating a non-null handle
-   * as "ready".
-   */
+  /** The handle itself is created on first commit - before `useEditor` (with `immediatelyRender: false`) has produced an editor - and every method below silently no-ops until then. Callers that must not lose a write (the draft-reset bridge) check this instead of treating a non-null handle as "ready". */
   readonly isReady: () => boolean;
-  /**
-   * Identity of the actual Tiptap editor behind this capability facade.
-   * Stable across facade replacement; changes only when the editor is
-   * genuinely recreated. Returns `null` while the editor is not ready.
-   */
+  /** Stable across facade replacement; changes only when the editor is genuinely recreated. Returns `null` while the editor is not ready. */
   readonly getEditorIncarnation: () => ComposerEditorIncarnation | null;
   readonly focus: () => void;
   readonly focusAtEnd: () => void;
@@ -93,23 +82,12 @@ export interface ComposerPromptEditorHandle {
   readonly getJSON: () => JsonContent;
   readonly isEmpty: () => boolean;
   readonly clear: () => void;
-  /**
-   * Replace the document and notify the owner via the normal `onDocumentChange`
-   * signal (a real editor-level document mutation). The landing and new-
-   * conversation prompt-stash destinations use this path; chat records its
-   * canonical replacement first and then uses {@link syncContent}.
-   */
+  /** Replace the document and notify the owner via the normal `onDocumentChange` signal (a real editor-level document mutation). The landing and new- conversation prompt-stash destinations use this path; chat records its canonical replacement first and then uses {@link syncContent}. */
   readonly setContent: (
     content: JsonContent,
     selection: { readonly from: number; readonly to: number } | null,
   ) => void;
-  /**
-   * Replace the document WITHOUT emitting `onDocumentChange` - for an owner
-   * that already recorded this exact replacement against its own canonical
-   * store (e.g. the chat draft store's resetEpoch bridge) before pushing it
-   * into the live editor to match. An echoed `onDocumentChange` here would
-   * double-count one external replacement as two document mutations.
-   */
+  /** Replace the document WITHOUT emitting `onDocumentChange` - for an owner that already recorded this exact replacement against its own canonical store (e.g. the chat draft store's resetEpoch bridge) before pushing it into the live editor to match. An echoed `onDocumentChange` here would double-count one external replacement as two document mutations. */
   readonly syncContent: (
     content: JsonContent,
     selection: { readonly from: number; readonly to: number } | null,
@@ -119,40 +97,17 @@ export interface ComposerPromptEditorHandle {
   ) => void;
   /** Insert an existing @-mention attachment at the preserved caret. */
   readonly insertMentionAttachment: (mention: MentionAttachment) => boolean;
-  /**
-   * Starts a path-insertion job anchored to the current caret. The returned
-   * one-shot `commit` maps that position through intervening editor changes
-   * and returns `false` if the editor was destroyed before resolution.
-   */
+  /** Starts a path-insertion job anchored to the current caret. The returned one-shot `commit` maps that position through intervening editor changes and returns `false` if the editor was destroyed before resolution. */
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
-  /**
-   * Flip a pending base64 image node (located by `id`) to its stored content
-   * hash IN PLACE, preserving its document position. A landing paste inserts
-   * image nodes in order carrying `b64content`; each node's background
-   * hash+store job calls this to convert it to `{hash}` once bytes are durable.
-   * Returns the command's result: `false` when no node with that id exists (the
-   * user removed the pending node before the write settled, or the editor is
-   * gone) so the caller can reclaim the now-unrooted bytes.
-   */
+  /** Flip a pending base64 image node (located by `id`) to its stored content hash IN PLACE, preserving its document position. A landing paste inserts image nodes in order carrying `b64content`; each node's background hash+store job calls this to convert it to `{hash}` once bytes are durable. */
   readonly rewriteImageAttachmentHashById: (
     id: string,
     hash: string,
   ) => boolean;
-  /**
-   * Insert a finalized dictation segment at the caret (with a trailing space
-   * so consecutive segments don't run together). Focuses first so the
-   * insertion lands at the live cursor and the caret advances past it -
-   * sequential segments append cleanly.
-   */
+  /** Insert a finalized dictation segment at the caret (with a trailing space so consecutive segments don't run together). Focuses first so the insertion lands at the live cursor and the caret advances past it - sequential segments append cleanly. */
   readonly insertDictatedText: (text: string) => void;
-  /**
-   * Fully exit whichever `@`/`/` suggestion picker is currently open (clearing
-   * the plugin's active range/decoration and closing the picker menu), and
-   * report whether one was open. Lets a surrounding surface (e.g. a dialog)
-   * treat Escape as "close the picker" without the editor's own keydown - see
-   * the New Conversation modal, where Radix would otherwise swallow the Escape.
-   */
+  /** Fully exit whichever `@`/`/` suggestion picker is currently open (clearing the plugin's active range/decoration and closing the picker menu), and report whether one was open. Lets a surrounding surface (e.g. a dialog) treat Escape as "close the picker" without the editor's own keydown - see the New Conversation modal, where Radix would otherwise swallow the Escape. */
   readonly dismissActiveSuggestion: () => boolean;
 }
 
@@ -170,31 +125,18 @@ export interface ComposerPromptEditorProps {
   readonly disabled: boolean;
   readonly slashProviderId: GuiHarnessId;
   readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
-  /**
-   * Landing-only: validates a paste's inline-base64 images + starts their
-   * in-place background ingest jobs, returning a verdict per image. `null` on
-   * chat surfaces, where base64 nodes are inserted verbatim. See
-   * `ChatPasteHandlerDeps`.
-   */
+  /** Landing-only: validates a paste's inline-base64 images + starts their in-place background ingest jobs, returning a verdict per image. `null` on chat surfaces, where base64 nodes are inserted verbatim. */
   readonly ingestPastedComposerImages:
     | ((
         images: ReadonlyArray<PastedComposerImage>,
       ) => ReadonlyArray<PastedComposerImageOutcome>)
     | null;
-  /**
-   * A real document mutation (Tiptap's own `docChanged`-gated `update` event -
-   * typing, pasting, an image insert/remove, or a programmatic `setContent`).
-   * Never fired for a caret-only move; see `onSelectionChange`.
-   */
+  /** A real document mutation (Tiptap's own `docChanged`-gated `update` event - typing, pasting, an image insert/remove, or a programmatic `setContent`). Never fired for a caret-only move; see `onSelectionChange`. */
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { readonly from: number; readonly to: number },
   ) => void;
-  /**
-   * Caret/selection moved with no document mutation. Deliberately carries no
-   * `content` - a selection-only event must never serialize the document (it
-   * can carry multi-megabyte inline images), so this never calls `getJSON()`.
-   */
+  /** Caret/selection moved with no document mutation. Deliberately carries no `content` - a selection-only event must never serialize the document (it can carry multi-megabyte inline images), so this never calls `getJSON()`. */
   readonly onSelectionChange: (selection: {
     readonly from: number;
     readonly to: number;
@@ -206,12 +148,7 @@ export interface ComposerPromptEditorProps {
   readonly onKeyDown: KeyboardEventHandler<HTMLElement> | undefined;
   readonly onFocus: () => void;
   readonly onBlur: () => void;
-  /**
-   * Fired (once per editor instance) when the async Tiptap editor is created
-   * and the handle's methods stop no-oping. Ref mutations are invisible to the
-   * owner's render cycle, so owners that must react to readiness (the
-   * draft-reset bridge's handle-ready catch-up) take this explicit signal.
-   */
+  /** Fired (once per editor instance) when the async Tiptap editor is created and the handle's methods stop no-oping. Ref mutations are invisible to the owner's render cycle, so owners that must react to readiness (the draft-reset bridge's handle-ready catch-up) take this explicit signal. */
   readonly onEditorReady: (() => void) | null;
   readonly ref?: Ref<ComposerPromptEditorHandle>;
 }
@@ -239,11 +176,7 @@ function usePastedImageBytesPresenceGetter(
   return useCallback(() => latest.current, []);
 }
 
-// Stable getter for the live placeholder, mirroring the presence-getter above.
-// The Tiptap Placeholder decoration closes over this once (extensions build
-// once) and re-reads it on each transaction, so a changing placeholder never
-// rebuilds the editor. The layout effect lands the new value before the owner's
-// no-op-transaction poke fires.
+// The Tiptap Placeholder decoration closes over this once (extensions build once) and re-reads it on each transaction, so a changing placeholder never rebuilds the editor.
 function usePlaceholderGetter(placeholder: string): () => string {
   const latest = useRef(placeholder);
   useLayoutEffect(() => {
@@ -298,13 +231,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   } = props;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
-  // Tiptap's `useEditor` extension chain is built once (`buildComposerExtensions`
-  // is memoized with empty editor deps). The plugin closure inside calls
-  // `onSubmit`/`onDocumentChange`/`onSelectionChange` long after extensions
-  // were registered, so we feed it via refs that always point at the latest
-  // prop. This is a *legitimate* latest-value-ref usage (closure into a static
-  // external library plugin) - do not "fix" it by adding the callbacks to the
-  // editor deps; that would rebuild Tiptap on every keystroke.
+  // This is a *legitimate* latest-value-ref usage (closure into a static external library plugin) - do not "fix" it by adding the callbacks to the editor deps; that would rebuild Tiptap on every keystroke.
   const normalizedInitial = useMemo(
     () =>
       normalizeComposerContentWithSelection(initialContent, initialSelection),
@@ -330,9 +257,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       onSubmitRef.current(source);
     },
   }));
-  // Live placeholder source. The editor is built once, so a changing placeholder
-  // (e.g. the mid-turn steer hint) flows through this stable getter rather than
-  // rebuilding extensions; an effect below re-reads it via a no-op transaction.
+  // Live placeholder source.
+  // The editor is built once, so a changing placeholder (e.g. the mid-turn steer hint) flows through this stable getter rather than rebuilding extensions; an effect below re-reads it via a no-op transaction.
   const getPlaceholder = usePlaceholderGetter(placeholder);
   const getHasPastedImageBytes =
     usePastedImageBytesPresenceGetter(hasPastedImageBytes);
@@ -367,9 +293,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     {
       extensions,
       content: normalizedInitial.content,
-      // Initial focus is coordinated by the guarded effect below. Tiptap's
-      // intrinsic autofocus runs after its deferred mount and bypasses pane
-      // activation / restored-terminal ownership checks.
+      // Initial focus is coordinated by the guarded effect below.
+      // Tiptap's intrinsic autofocus runs after its deferred mount and bypasses pane activation / restored-terminal ownership checks.
       autofocus: false,
       immediatelyRender: false,
       editable: !disabled,
@@ -377,20 +302,15 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         attributes: editorAttributesObject,
       },
       onUpdate({ editor: updatedEditor }) {
-        // Tiptap only fires `update` when a transaction actually changed the
-        // document (gated internally on `docChanged` plus a structural
-        // doc-equality check) - so every call here is a real mutation, never
-        // a caret-only echo. `getJSON()` is safe precisely because of that
-        // gate, not despite it.
+        // Tiptap only fires `update` when a transaction actually changed the document (gated internally on `docChanged` plus a structural doc-equality check) - so every call here is a real mutation, never a caret-only echo.
+        // `getJSON()` is safe precisely because of that gate, not despite it.
         onDocumentChangeRef.current(updatedEditor.getJSON(), {
           from: updatedEditor.state.selection.from,
           to: updatedEditor.state.selection.to,
         });
       },
       onSelectionUpdate({ editor: updatedEditor }) {
-        // Never call `getJSON()` here - a selection-only event must not
-        // serialize the document, which can carry multi-megabyte inline
-        // images.
+        // Never call `getJSON()` here - a selection-only event must not serialize the document, which can carry multi-megabyte inline images.
         onSelectionChangeRef.current({
           from: updatedEditor.state.selection.from,
           to: updatedEditor.state.selection.to,
@@ -417,11 +337,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   useEffect(() => {
     if (editor === null) return;
-    // Tiptap's `setEditable` emits `update` unconditionally when told to -
-    // bypassing the normal `docChanged` gate entirely - so toggling `disabled`
-    // (e.g. the moment a submission starts) would otherwise fire a phantom
-    // `onDocumentChange` for a document that never changed. Suppress it: this
-    // call carries no content change to report.
+    // Tiptap's `setEditable` emits `update` unconditionally when told to - bypassing the normal `docChanged` gate entirely - so toggling `disabled` (e.g. the moment a submission starts) would otherwise fire a phantom `onDocumentChange` for a document that never changed.
+    // Suppress it: this call carries no content change to report.
     editor.setEditable(!disabled, false);
   }, [editor, disabled]);
 
@@ -445,10 +362,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   useEffect(() => {
     if (editor === null) return;
     if (!isActive) return;
-    // Becoming the active composer is not a user gesture. On the installed
-    // mobile app that alone must not raise the software keyboard; the explicit
-    // focus paths (tapping the composer, restoring a draft, editing a message)
-    // still do.
+    // Becoming the active composer is not a user gesture.
+    // On the installed mobile app that alone must not raise the software keyboard; the explicit focus paths (tapping the composer, restoring a draft, editing a message) still do.
     if (isMobileApp()) return;
     if (editor.isFocused) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
@@ -480,11 +395,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   }, [editor, editorAttributesObject]);
 
   useEffect(() => {
-    // The Placeholder decoration only re-reads the getter on a transaction. Poke
-    // an empty one when the placeholder changes and the editor is showing it
-    // (empty), so a mid-turn steer hint appears without waiting for a keystroke.
-    // Skipped while non-empty to avoid disturbing an in-progress edit / IME.
-    // `usePlaceholderGetter`'s layout effect has already landed the new value.
+    // The Placeholder decoration only re-reads the getter on a transaction.
+    // Poke an empty one when the placeholder changes and the editor is showing it (empty), so a mid-turn steer hint appears without waiting for a keystroke.
     if (editor !== null && editor.isEmpty) {
       editor.view.dispatch(editor.state.tr);
     }
@@ -655,21 +567,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       const trimmed = text.trim();
       if (trimmed.length === 0) return;
       // A trailing space keeps consecutive segments from running together.
-      // Insert as a ProseMirror text node (not a string): `insertContent` parses
-      // a string as editor content, so a transcript containing `<…>` would be
-      // interpreted as markup - a text node is always inserted verbatim.
+      // Insert as a ProseMirror text node (not a string): `insertContent` parses a string as editor content, so a transcript containing `<…>` would be interpreted as markup - a text node is always inserted verbatim.
       const node = { type: "text", text: `${trimmed} ` };
       if (editor.isFocused) {
         // Editor has the caret: insert there so segments append in order.
         editor.chain().focus().insertContent(node).run();
       } else {
-        // Don't steal focus (e.g. user clicked Stop/another field, or a mid-
-        // utterance auto-commit landed) - append at the end of the last text
-        // block. Inserting at `doc.content.size` lands *after* the final
-        // paragraph, so ProseMirror wraps the text in a fresh paragraph and an
-        // empty composer gains a leading blank line before the first segment.
-        // `Selection.atEnd` resolves inside the last textblock, appending
-        // cleanly with no spurious newline.
+        // Don't steal focus (e.g. user clicked Stop/another field, or a mid- utterance auto-commit landed) - append at the end of the last text block.
         const endPos = Selection.atEnd(editor.state.doc).to;
         editor.chain().insertContentAt(endPos, node).run();
       }
@@ -679,11 +583,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const dismissActiveSuggestion = useCallback((): boolean => {
     if (editor === null) return false;
-    // The store's `open` flips with the suggestion plugin's active state (the
-    // render's onStart/onExit drive it), so this gates on a picker actually
-    // showing. Dispatch the suggestion-exit meta to every plugin key; the
-    // active one transitions to "stopped" - clearing its range/decoration and
-    // firing onExit, which closes the menu - and the inactive ones ignore it.
+    // The store's `open` flips with the suggestion plugin's active state (the render's onStart/onExit drive it), so this gates on a picker actually showing.
+    // Dispatch the suggestion-exit meta to every plugin key; the active one transitions to "stopped" - clearing its range/decoration and firing onExit, which closes the menu - and the inactive ones ignore it.
     if (!pickerStore.getState().open) return false;
     editor.view.dispatch(
       editor.state.tr
@@ -773,10 +674,8 @@ function editorAttributes(
     "aria-placeholder": placeholder,
     role: "textbox",
     "aria-multiline": "true",
-    // Explicit opt-in to native spell-check. Without this attribute,
-    // some ProseMirror/TipTap defaults render `spellcheck="false"` on
-    // the contenteditable, which suppresses Chromium's red underline +
-    // the desktop shell's right-click suggestions menu.
+    // Explicit opt-in to native spell-check.
+    // Without this attribute, some ProseMirror/TipTap defaults render `spellcheck="false"` on the contenteditable, which suppresses Chromium's red underline + the desktop shell's right-click suggestions menu.
     spellcheck: "true",
   };
 }

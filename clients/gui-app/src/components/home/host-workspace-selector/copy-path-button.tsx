@@ -2,15 +2,8 @@ import { Check, Copy } from "lucide-react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-/**
- * Copies the path a chat/terminal actually runs from (the adopted worktree
- * path, or the folder itself for local). Shared by the click-open folder rows
- * (`FolderRow`) and the workspace hover preview (`WorkspaceFolderHoverList`).
- *
- * Icon-only control: it carries a >=3:1 default-state cue (WCAG 2.2 non-text
- * contrast) via `text-muted-foreground` with no opacity attenuation, not just
- * on hover/focus.
- */
+/** Icon-only control: it carries a >=3:1 default-state cue (WCAG 2.2 non-text contrast) via
+ * `text-muted-foreground` with no opacity attenuation, not just on hover/focus. */
 export function CopyPathButton(props: {
   readonly path: string;
   readonly testId: string;

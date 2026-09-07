@@ -10,13 +10,8 @@ import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 
-// Production PATH discovery must walk EVERY `traycer` on PATH, not just the
-// first executable with that name. The name is squattable - oss #872 saw an
-// AppImage manager expose the desktop app itself as `traycer` - and a
-// squatter sitting ahead of a real CLI must not hide it (nor make discovery
-// report "nothing anywhere" while a usable CLI is still further down PATH).
-//
-// POSIX-only: the fixtures are `#!/bin/sh` scripts.
+// Production PATH discovery must walk EVERY `traycer` on PATH, not just the first executable with that name.
+// The name is squattable - oss #872 saw an AppImage manager expose the desktop app itself as `traycer`.
 
 let work: string;
 let homeDir: string;
@@ -26,10 +21,6 @@ function cliName(): string {
   return process.platform === "win32" ? "traycer.exe" : "traycer";
 }
 
-// A `traycer` on PATH whose `--version` answer decides whether discovery may
-// adopt it. `answersVersion: false` reproduces the #872 imposter shape: exit
-// 0, console noise, no version - indistinguishable from a real CLI by name
-// or exit code alone.
 function writePathCli(dir: string, answersVersion: boolean): string {
   const path = join(dir, cliName());
   mkdirSync(dirname(path), { recursive: true });

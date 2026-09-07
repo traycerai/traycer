@@ -116,15 +116,8 @@ function historyItem(overrides: {
   };
 }
 
-/**
- * Returns the Testing Library container, which is a direct child of the
- * document body and therefore stands in for "the rest of the app" when the
- * modal containment tests below check what got sealed off.
- *
- * `LazyMotion` is what the installed-app branch's panel needs to exist at all:
- * it is a lazily-featured motion element, and without the feature bundle in
- * context it renders with no drag and no transform.
- */
+/** `LazyMotion` is what the installed-app branch's panel needs to exist at all: it is a lazily-featured motion
+ * element, and without the feature bundle in context it renders with no drag and no transform. */
 function renderDrawer(): HTMLElement {
   const { container } = render(
     <LazyMotion features={domMax}>
@@ -164,10 +157,7 @@ describe("MobileNavDrawer", () => {
   });
 
   describe("platform branch", () => {
-    // Distinguished by markers neither branch sets by hand: the Sheet path
-    // carries the shadcn primitive's own `data-slot`, and the installed-app
-    // path carries none because nothing wraps its panel. Proof the branch
-    // really swapped surfaces rather than only a class name.
+    // Proof the branch really swapped surfaces rather than only a class name.
     it("renders the motion-owned surface when installed as the mobile app", async () => {
       setMobileApp(true);
       renderDrawer();
@@ -177,9 +167,8 @@ describe("MobileNavDrawer", () => {
       expect(drawer.getAttribute("role")).toBe("dialog");
       expect(drawer.hasAttribute("data-slot")).toBe(false);
       expect(drawer.hasAttribute("data-vaul-drawer")).toBe(false);
-      // The layer sits directly under the body rather than inside the app
-      // tree, which is the arrangement that lets the containment inert
-      // everything beside it without inerting the drawer too.
+      // The layer sits directly under the body rather than inside the app tree, which is the arrangement that lets
+      // the containment inert everything beside it without inerting the drawer too.
       expect(screen.getByTestId("mobile-nav-drawer-layer").parentElement).toBe(
         document.body,
       );
@@ -195,10 +184,8 @@ describe("MobileNavDrawer", () => {
       expect(screen.queryByTestId("mobile-nav-drawer-layer")).toBeNull();
     });
 
-    // The panel outlives the open state because the drag engine can only start
-    // a gesture against a component that has already subscribed - so a closed
-    // drawer is a mounted one, parked off screen. `inert` is what keeps that
-    // from becoming a menu a keyboard user can tab into while it is invisible.
+    // The panel outlives the open state because the drag engine can only start a gesture against a component that
+    // has already subscribed - so a closed drawer is a mounted one, parked off screen.
     it("keeps the panel mounted but sealed off while the drawer is closed", async () => {
       setMobileApp(true);
       useMobileNavStore.setState({ open: false });
@@ -211,11 +198,8 @@ describe("MobileNavDrawer", () => {
       expect(drawer.getAttribute("aria-modal")).toBe("false");
     });
 
-    // Visual state and semantic state are decoupled: the transform is
-    // continuous and the modality is a boolean that flips only at a settled
-    // endpoint. This pins the semantic half - a half-dragged panel may still
-    // spring back, and assistive technology has no mid-drag state to be told
-    // about.
+    // Visual state and semantic state are decoupled: the transform is continuous and the modality is a boolean
+    // that flips only at a settled endpoint.
     it("takes on modal semantics only while the drawer is open", async () => {
       setMobileApp(true);
       renderDrawer();
@@ -227,10 +211,7 @@ describe("MobileNavDrawer", () => {
       expect(drawer.getAttribute("aria-modal")).toBe("true");
     });
 
-    // The rest of the document goes inert for as long as the drawer is modal,
-    // which is one attribute standing in for a focus trap, a scroll lock and an
-    // aria-hidden sweep. Prior state is restored on the way out rather than
-    // blanket-cleared.
+    // Prior state is restored on the way out rather than blanket-cleared.
     it("seals the rest of the document off while open, and gives it back", async () => {
       setMobileApp(true);
       const container = renderDrawer();
@@ -246,10 +227,7 @@ describe("MobileNavDrawer", () => {
       });
     });
 
-    // Focus entry is explicit here rather than a primitive's default: the
-    // panel is focused at the settled-open endpoint, so a keyboard or
-    // switch-control user lands inside the menu instead of being stranded on
-    // an obscured trigger behind it.
+    // Focus entry is explicit here rather than a primitive's default.
     it("moves focus into the drawer content when opened as the installed app", async () => {
       setMobileApp(true);
       renderDrawer();
@@ -272,17 +250,11 @@ describe("MobileNavDrawer", () => {
     });
   });
 
-  /**
-   * The settle is what separates "asked for" from "true", so these need a panel
-   * with somewhere to travel. jsdom lays nothing out and reports `offsetWidth`
-   * 0, which collapses both endpoints onto the same coordinate and makes every
-   * request reconcile instantly - the one case that cannot show the gap. A
-   * stubbed width gives the panel 300px to cross.
-   */
+  /** jsdom lays nothing out and reports `offsetWidth` 0, which collapses both endpoints onto the same coordinate
+   * and makes every request reconcile instantly - the one case that cannot show the gap. */
   describe("settled state versus requested state", () => {
-    // jsdom defines `offsetWidth` on the prototype itself, so the stub has to
-    // put the real descriptor back rather than delete it - dropping it would
-    // leave every later test in this file reading `undefined` for a width.
+    // jsdom defines `offsetWidth` on the prototype itself, so the stub has to put the real descriptor back rather
+    // than delete it - dropping it would leave every later test in this file reading `undefined` for a width.
     const nativeOffsetWidth = Object.getOwnPropertyDescriptor(
       HTMLElement.prototype,
       "offsetWidth",
@@ -308,9 +280,8 @@ describe("MobileNavDrawer", () => {
       );
     });
 
-    // The bug this pins: keying modality off the request means a hamburger tap
-    // announces a dialog and traps focus into a panel that is still off screen,
-    // and a close hands the app back while the drawer is still covering it.
+    // The bug this pins: keying modality off the request means a hamburger tap announces a dialog and traps focus
+    // into a panel that is still off screen, and a close hands the app back while the drawer is still covering it.
     it("does not take on modal semantics the moment the drawer is requested", async () => {
       const container = renderDrawer();
       const drawer = await screen.findByTestId("mobile-nav-drawer");
@@ -324,8 +295,7 @@ describe("MobileNavDrawer", () => {
       expect(container.inert).toBeFalsy();
     });
 
-    // An interrupted settle decides nothing. Whatever overtook it - here a
-    // second request - owns the outcome, so the semantics must still be sitting
+    // Whatever overtook it - here a second request - owns the outcome, so the semantics must still be sitting
     // where they started rather than half-way through a flip.
     it("flips nothing when a settle is overtaken before it arrives", async () => {
       const container = renderDrawer();
@@ -343,18 +313,8 @@ describe("MobileNavDrawer", () => {
       expect(container.inert).toBeFalsy();
     });
 
-    // Deferring the flip must not be the same thing as dropping it, so this
-    // pins that the request left a settle RUNNING rather than going nowhere.
-    // `inert` is the tell: a closed panel is inert only once it is also at
-    // rest, so an open request that armed nothing would show up here as an
-    // inert panel rather than a travelling one.
-    //
-    // Arrival itself is asserted where it can be observed without an animation
-    // clock - the sibling describe, whose panel has no width to cross, so both
-    // endpoints are the same coordinate and the same reconcile path runs
-    // synchronously. Waiting on a real spring here would bind the test to
-    // whether the frame loop advances under faked timers, which says nothing
-    // about the drawer.
+    // Deferring the flip must not be the same thing as dropping it, so this pins that the request left a settle
+    // running rather than going nowhere.
     it("arms a settle rather than dropping the request", async () => {
       renderDrawer();
       const drawer = await screen.findByTestId("mobile-nav-drawer");
@@ -370,24 +330,15 @@ describe("MobileNavDrawer", () => {
     });
   });
 
-  /**
-   * The entries into the drag that this file can reach without a real
-   * compositor: the document-level close recognizer, whose listeners are plain
-   * DOM ones, and the scrim, whose pointer handling replaced a click handler.
-   * jsdom lays nothing out, so what is asserted here is the handoff and its
-   * side effects - the tracking itself only exists on a device.
-   */
+  /** jsdom lays nothing out, so what is asserted here is the handoff and its side effects - the tracking itself
+   * only exists on a device. */
   describe("gesture entry points", () => {
     beforeEach(() => {
       setMobileApp(true);
     });
 
-    /**
-     * Builds the events the recognizer reads. jsdom ships no usable
-     * `PointerEvent` constructor, so this is a plain `Event` wearing the fields
-     * the listeners actually touch, matching the approach in the shell-gesture
-     * suite.
-     */
+    /** jsdom ships no usable `PointerEvent` constructor, so this is a plain `Event` wearing the fields the
+     * listeners actually touch, matching the approach in the shell-gesture suite. */
     function dispatchPointer(
       type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
       options: {
@@ -395,9 +346,8 @@ describe("MobileNavDrawer", () => {
         readonly clientY: number;
         readonly target: EventTarget;
         readonly timeStamp: number;
-        // Explicit rather than assumed: the helper under test binds itself to
-        // the pointer that armed it, so a test that could not name a second
-        // finger could not reach that boundary at all.
+        // Explicit rather than assumed: the helper under test binds itself to the pointer that armed it, so a test
+        // that could not name a second finger could not reach that boundary at all.
         readonly pointerId: number;
         readonly isPrimary: boolean;
       },
@@ -428,12 +378,8 @@ describe("MobileNavDrawer", () => {
       });
     }
 
-    // The hamburger is the only way in. A rightward drag from the screen's
-    // leading edge belongs to whatever surface is underneath it - a chat
-    // timeline, the canvas, a terminal - and the drawer must take no part of
-    // it: the panel stays parked, the store stays shut, and a focused field
-    // keeps its caret rather than being blurred by a gesture that opened
-    // nothing.
+    // A rightward drag from the screen's leading edge belongs to whatever surface is underneath it - a chat
+    // timeline, the canvas, a terminal.
     it("leaves the drawer shut on a rightward drag from the screen edge", async () => {
       useMobileNavStore.setState({ open: false });
       renderDrawer();
@@ -474,15 +420,7 @@ describe("MobileNavDrawer", () => {
       ).toBe(true);
     });
 
-    /**
-     * The release cannot ask the drag engine whether the pointer moved. Moves
-     * are batched to the next frame and the pending one is cancelled the
-     * instant the pointer lifts, so a gesture that begins and ends inside a
-     * single frame reports nothing at all - indistinguishable, from the
-     * engine's side, from a press that never travelled. These two pin the
-     * coordinates being tracked independently, which is the only thing that
-     * tells the cases apart.
-     */
+    /** The release cannot ask the drag engine whether the pointer moved. */
     it("does not close on a press that travelled but outran the drag engine", async () => {
       renderDrawer();
       const scrim = await screen.findByTestId("mobile-nav-drawer-scrim");
@@ -542,9 +480,7 @@ describe("MobileNavDrawer", () => {
       expect(useMobileNavStore.getState().open).toBe(true);
     });
 
-    // The helper is bound to the pointer that armed it. A second finger is
-    // somebody else's gesture: its release says nothing about this one, and the
-    // hand that started the drag is still on the glass when it lands.
+    // The helper is bound to the pointer that armed it.
     it("ignores a second finger lifting while the arming pointer is still down", async () => {
       renderDrawer();
       const scrim = await screen.findByTestId("mobile-nav-drawer-scrim");
@@ -582,10 +518,8 @@ describe("MobileNavDrawer", () => {
       expect(useMobileNavStore.getState().open).toBe(false);
     });
 
-    // Tap and drag enter through the same pointerdown on the scrim, so only the
-    // release can tell them apart: a pointer that never travelled is a tap to
-    // close. Dismissal rides that release rather than a click, which would
-    // otherwise fire a second time after every drag ending on the scrim.
+    // Dismissal rides that release rather than a click, which would otherwise fire a second time after every drag
+    // ending on the scrim.
     it("closes on a scrim press that never travels", async () => {
       renderDrawer();
       const scrim = await screen.findByTestId("mobile-nav-drawer-scrim");
@@ -645,9 +579,8 @@ describe("MobileNavDrawer", () => {
         await screen.findByTestId("mobile-nav-manage-subscription"),
       );
 
-      // `resolvePlatformBaseUrl` takes the origin of the shell's own
-      // `signInUrl`, so this tracks whatever deployment is configured rather
-      // than rewriting a hostname label.
+      // `resolvePlatformBaseUrl` takes the origin of the shell's own `signInUrl`, so this tracks whatever deployment
+      // is configured rather than rewriting a hostname label.
       expect(openLink).toHaveBeenCalledExactlyOnceWith(
         "https://platform.test",
         "account",
@@ -699,9 +632,8 @@ describe("MobileNavDrawer", () => {
       expect(useMobileNavStore.getState().open).toBe(true);
     });
 
-    // Notifications live in the header now (`MobileNotificationsButton`), so
-    // an unresolved profile simply drops the whole account block, actions
-    // included.
+    // Notifications live in the header now (`MobileNotificationsButton`), so an unresolved profile simply drops
+    // the whole account block, actions included.
     it("drops the account block when no profile has resolved", async () => {
       useAuthStore.setState({ profile: null });
       renderDrawer();

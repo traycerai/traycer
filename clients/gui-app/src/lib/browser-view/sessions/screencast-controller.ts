@@ -35,10 +35,8 @@ import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
 const WHEEL_LINE_HEIGHT_PX = 16;
 
 /**
- * Finger travel that commits a touch press to a scroll instead of a tap. Wider
- * than the arm buffer's click slop, which measures a mouse holding still: a
- * finger never does, so a threshold tight enough for a cursor would turn every
- * tap into a one-pixel scroll.
+ * Finger travel that commits a touch press to a scroll instead of a tap.
+ * Wider than the arm buffer's click slop, which measures a mouse holding still: a finger never does, so a threshold tight enough for a cursor would turn every tap into a one-pixel scroll.
  */
 const TOUCH_SCROLL_SLOP_PX = 8;
 
@@ -62,8 +60,8 @@ export interface ScreencastOverlayHandlers {
   /** Hover pre-arms, so the click that follows costs no arm round trip. */
   readonly onPointerEnter: () => void;
   /**
-   * Releases a hover pre-arm's host-side claim. A deliberate gesture arm is
-   * left alone: the pointer leaving the tile is not a release of control.
+   * Releases a hover pre-arm's host-side claim.
+   * A deliberate gesture arm is left alone: the pointer leaving the tile is not a release of control.
    */
   readonly onPointerLeave: () => void;
   readonly onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -88,16 +86,13 @@ export interface ScreencastImeHandlers {
 }
 
 /**
- * The four moments the controller has to tell React about. Everything else it
- * owns outright - the epochs, the queues, the pointer bookkeeping - is state no
- * render ever reads, which is why it does not live in the hook.
+ * The four moments the controller has to tell React about.
+ * Everything else it owns outright - the epochs, the queues, the pointer bookkeeping - is state no render ever reads, which is why it does not live in the hook.
  */
 export interface ScreencastControllerListeners {
   /**
-   * The viewer took CONTROL of this tab - a press, a nav, focus in the IME -
-   * as opposed to merely holding the host-side claim a hover pre-arm raised.
-   * Everything a render shows about being in control hangs off this, not off
-   * the arm epoch, which a pre-arm also owns.
+   * The viewer took CONTROL of this tab - a press, a nav, focus in the IME - as opposed to merely holding the host-side claim a hover pre-arm raised.
+   * Everything a render shows about being in control hangs off this, not off the arm epoch, which a pre-arm also owns.
    */
   readonly onControlEngaged: (armEpoch: number) => void;
   /** Local arm torn down: React must drop armed / dialog / composing state. */
@@ -107,10 +102,7 @@ export interface ScreencastControllerListeners {
 }
 
 /**
- * Ticket 15's input transport: the video plane's DataChannels, as one
- * function. `false` means the channel could not take the frame, and the
- * controller re-sends it on the mux - which is what keeps every discrete frame
- * on exactly one transport across a switchover.
+ * `false` means the channel could not take the frame, and the controller re-sends it on the mux - which is what keeps every discrete frame on exactly one transport across a switchover.
  */
 export type ScreencastInputTransport = (
   label: BrowserInputChannelLabel,
@@ -130,28 +122,21 @@ export interface ScreencastController {
   /** Latches the sequence the browser has actually painted (`<img onLoad>`); JPEG-plane pointer frames carry this for host-side hit-test correlation. */
   readonly notePresentedSequence: (sequence: number | null) => void;
   /**
-   * Latches the host's viewport epoch, the video plane's correlation token -
-   * a video tile paints no `castSequence`, so this is what its pointer frames
-   * carry. `null` while no epoch is confirmed, which withholds input exactly
-   * as an unpainted JPEG tile does.
+   * Latches the host's viewport epoch, the video plane's correlation token - a video tile paints no `castSequence`, so this is what its pointer frames carry.
+   * `null` while no epoch is confirmed, which withholds input exactly as an unpainted JPEG tile does.
    */
   readonly noteViewportEpoch: (epoch: number | null) => void;
   /** The latched viewport epoch, for callers judging a frame against it. */
   readonly viewportEpoch: () => number | null;
   /**
-   * Which plane's token the tile is correlating against. The host announces
-   * it (`captureMode` frame); nothing else about the mode lives here.
+   * Which plane's token the tile is correlating against.
+   * The host announces it (`captureMode` frame); nothing else about the mode lives here.
    */
   readonly setCaptureMode: (mode: BrowserScreencastCaptureMode) => void;
   readonly captureMode: () => BrowserScreencastCaptureMode;
   /**
-   * The DataChannel sink for human input, or `null` for mux-only. Only the
-   * high-frequency input frames ever look at it; arm/disarm, nav, dialog,
-   * viewport, ack and videoPlaneState stay on the mux unconditionally.
-   *
-   * A transport is adopted only once the mux holds nothing this arm epoch -
-   * see the reordering hazard on `adoptPendingTransport`. `null` takes effect
-   * immediately.
+   * The DataChannel sink for human input, or `null` for mux-only.
+   * Only the high-frequency input frames ever look at it; arm/disarm, nav, dialog, viewport, ack and videoPlaneState stay on the mux unconditionally.
    */
   readonly setInputTransport: (
     transport: ScreencastInputTransport | null,
@@ -162,24 +147,19 @@ export interface ScreencastController {
   readonly startArmEpoch: () => number;
   readonly noteArmed: (armEpoch: number) => void;
   /**
-   * The host refused a pre-arm (another viewer is driving). Latches hover
-   * pre-arm off for the rest of this transport's life so a pointer crossing a
-   * contested tile cannot storm the mux; an explicit click still arms, which
-   * steals, exactly as it did before pre-arm existed.
+   * The host refused a pre-arm (another viewer is driving).
+   * Latches hover pre-arm off for the rest of this transport's life so a pointer crossing a contested tile cannot storm the mux; an explicit click still arms, which steals, exactly as it did before pre-arm existed.
    */
   readonly notePreArmDenied: () => void;
   /**
-   * How far the host has consumed this epoch's input sequence. Once it covers
-   * the last frame this client put on the mux, a pending DataChannel transport
-   * is promoted immediately - the mux cannot reorder against it any more.
+   * How far the host has consumed this epoch's input sequence.
+   * Once it covers the last frame this client put on the mux, a pending DataChannel transport is promoted immediately - the mux cannot reorder against it any more.
    */
   readonly noteInputAck: (armEpoch: number, lastSeq: number) => void;
   readonly disarm: () => void;
   readonly clearLocalArm: (notifyHost: boolean) => void;
   /**
-   * Refs-and-host half of a disarm, with no React notification: the visibility
-   * teardown needs the host told immediately while the render that can no
-   * longer route input commits afterwards.
+   * Refs-and-host half of a disarm, with no React notification: the visibility teardown needs the host told immediately while the render that can no longer route input commits afterwards.
    */
   readonly detachLocalArm: () => void;
   readonly requestNav: (input: ScreencastNavInput) => void;
@@ -208,9 +188,8 @@ interface ActiveTouch {
   readonly startX: number;
   readonly startY: number;
   /**
-   * The frame that was on screen when the finger LANDED. A click means "this
-   * point of what I was looking at", and what the user was looking at is the
-   * frame under the press - not whatever has repainted by the time they lift.
+   * The frame that was on screen when the finger LANDED.
+   * A click means "this point of what I was looking at", and what the user was looking at is the frame under the press - not whatever has repainted by the time they lift.
    */
   readonly downSequence: number | null;
   lastX: number;
@@ -219,17 +198,8 @@ interface ActiveTouch {
 }
 
 /**
- * A touch gesture completed while the host had not yet answered the arm
- * request. They are held in ONE ordered queue rather than in per-kind slots,
- * because the finger's order is the only order the page can be replayed in: a
- * tap belongs before the swipe that followed it and after the swipe that
- * preceded it, and no rule about kinds can recover that.
- *
- * The queue is also why touch does not use the arm buffer. That buffer holds
- * exactly one gesture and drops it when a second `up` lands outside the first
- * `down`'s slop - correct for a mouse, where a press and a release bracket one
- * click, and destructive for touch, where two taps in the window are two
- * gestures and forcing them through one pen annihilated both.
+ * A touch gesture completed while the host had not yet answered the arm request.
+ * They are held in ONE ordered queue rather than in per-kind slots, because the finger's order is the only order the page can be replayed in: a tap belongs before the swipe that followed it and after the swipe that preceded it, and no rule about kinds can.
  */
 type PendingTouchGesture =
   | {
@@ -245,28 +215,20 @@ type PendingTouchGesture =
     };
 
 /**
- * The non-React half of a screencast tile: the arm/disarm epoch protocol, the
- * input queues and their encoding dispatch, pointer capture, click counting,
- * rAF move coalescing and every `ScreencastInputFrame` emission. It reads the
- * tile's DOM refs directly and talks to the transport through `sendFrame`, so
- * the hook above it only has to own the handful of values a render actually
- * displays.
+ * The non-React half of a screencast tile: the arm/disarm epoch protocol, the input queues and their encoding dispatch, pointer capture, click counting, rAF move coalescing and every `ScreencastInputFrame` emission.
  */
 export function createScreencastController(options: {
   readonly refs: ScreencastSessionRefs;
   readonly sendFrame: (frame: BrowserScreencastClientFrame) => void;
   readonly listeners: ScreencastControllerListeners;
   /**
-   * The host's measured control-plane RTT for this subscription, or `null`
-   * before any `rttProbe` has landed. Only the arm buffer's timeout reads it
-   * (ticket 18), and only when a press is buffered.
+   * The host's measured control-plane RTT for this subscription, or `null` before any `rttProbe` has landed.
+   * Only the arm buffer's timeout reads it (ticket 18), and only when a press is buffered.
    */
   readonly readControlPlaneRttMs: () => number | null;
   /**
-   * Whether the video plane has DECODED a frame - not merely attached a
-   * track. The `<video>` is in the tree from `ontrack`, blank, while the tile
-   * shows its connecting loader; a pointer normalized against that element
-   * would be aimed at pixels nobody can see.
+   * Whether the video plane has DECODED a frame - not merely attached a track.
+   * The `<video>` is in the tree from `ontrack`, blank, while the tile shows its connecting loader; a pointer normalized against that element would be aimed at pixels nobody can see.
    */
   readonly readVideoPainting: () => boolean;
 }): ScreencastController {
@@ -289,25 +251,20 @@ export function createScreencastController(options: {
   let inputTransport: ScreencastInputTransport | null = null;
   let pendingInputTransport: ScreencastInputTransport | null = null;
   /**
-   * The sequence of the last input frame this epoch put on the MUX, or `null`
-   * when the mux is known to be drained. Promotion to the DataChannels is
-   * gated on it: while a mux frame is unaccounted for, a channel frame could
-   * overtake it and be stale-rejected ahead of it.
+   * The sequence of the last input frame this epoch put on the MUX, or `null` when the mux is known to be drained.
+   * Promotion to the DataChannels is gated on it: while a mux frame is unaccounted for, a channel frame could overtake it and be stale-rejected ahead of it.
    */
   let lastMuxInputSeq: number | null = null;
   /** Whether the arm request in flight is a speculative (hover) one. */
   let pendingArmIsPreArm = false;
   /**
-   * Deliberate control, as opposed to the bare host-side claim a hover
-   * pre-arm holds. A pre-armed tile owns the epoch (so the click that follows
-   * costs no round trip) but drives nothing: no ring, no badge, no pointer
-   * moves into the remote page against whatever agent is working there.
+   * Deliberate control, as opposed to the bare host-side claim a hover pre-arm holds.
+   * A pre-armed tile owns the epoch (so the click that follows costs no round trip) but drives nothing: no ring, no badge, no pointer moves into the remote page against whatever agent is working there.
    */
   let gestureArmed = false;
   /**
-   * Deliberate: once refused, hovering stops re-probing a contested tile for
-   * the rest of this transport's life. A click still arms - and steals - so
-   * the cost of being wrong (the owner released meanwhile) is one click.
+   * Deliberate: once refused, hovering stops re-probing a contested tile for the rest of this transport's life.
+   * A click still arms - and steals - so the cost of being wrong (the owner released meanwhile) is one click.
    */
   let preArmDenied = false;
   let lastFrameAt: number | null = null;
@@ -328,22 +285,15 @@ export function createScreencastController(options: {
   const claimedLocalCodes = new Set<string>();
 
   /**
-   * The element a pointer's coordinates are normalized against: whichever
-   * plane is PAINTING, since exactly one ever is (ticket 26) and both are
-   * `object-contain` inside the same overlay button. `null` for the whole
-   * loader window - a mounted-but-blank `<video>` is not a surface - and a
-   * pointer frame built against nothing is dropped rather than misaimed.
+   * The element a pointer's coordinates are normalized against: whichever plane is PAINTING, since exactly one ever is (ticket 26) and both are `object-contain` inside the same overlay button.
    */
   const paintSurface = (): HTMLElement | null =>
     (readVideoPainting() ? refs.videoRef.current : null) ??
     refs.imageRef.current;
 
   /**
-   * The one place the display plane decides anything on this side: which token
-   * the pointer frames (and the arm buffer) correlate against. `captureMode`
-   * is the host telling us whether a JPEG frame is coming at all - `video`
-   * covers the whole time its cast is stopped, live track or not - so the
-   * epoch is the only token that exists in that window.
+   * The one place the display plane decides anything on this side: which token the pointer frames (and the arm buffer) correlate against.
+   * `captureMode` is the host telling us whether a JPEG frame is coming at all - `video` covers the whole time its cast is stopped, live track or not - so the epoch is the only token that exists in that window.
    */
   const correlationToken = (): number | null =>
     captureMode === "video" ? viewportEpoch : presentedSequence;
@@ -393,13 +343,7 @@ export function createScreencastController(options: {
   };
 
   /**
-   * Adopt a pending transport as soon as the mux holds nothing this epoch -
-   * at the arm itself (the host resets its `lastSeq` there, so nothing can
-   * reorder against the channel), or later, when a host `inputAck` says the
-   * mux has drained. The two transports have no ordering between them and the
-   * mux runs seconds behind the channel, so a frame still in flight there
-   * would arrive after - and be stale-rejected against - the first channel
-   * frame that overtook it: a press left on the mux turns a drag into a hover.
+   * Adopt a pending transport as soon as the mux holds nothing this epoch - at the arm itself (the host resets its `lastSeq` there, so nothing can reorder against the channel), or later, when a host `inputAck` says the mux has drained.
    */
   const adoptPendingTransport = (): void => {
     if (pendingInputTransport === null || lastMuxInputSeq !== null) return;
@@ -417,11 +361,8 @@ export function createScreencastController(options: {
     }
   };
 
-  // Budget: keys + wheel + clicks share the host's 120/s control window
-  // (`BROWSER_CONTROL_MAX_FRAMES_PER_WINDOW`, browser-screencast-control.ts).
-  // Coalescing every tick into at most one send per animation frame caps each
-  // continuous stream at ~60/s, leaving headroom for keyboard bursts and
-  // clicks sharing the same budget.
+  // Budget: keys + wheel + clicks share the host's 120/s control window (`BROWSER_CONTROL_MAX_FRAMES_PER_WINDOW`, browser-screencast-control.ts).
+  // Coalescing every tick into at most one send per animation frame caps each continuous stream at ~60/s, leaving headroom for keyboard bursts and clicks sharing the same budget.
   const moveInput = rafCoalescer((_pending, next) => next, sendInput);
   const wheelInput = rafCoalescer(
     (pending, next) => ({
@@ -493,9 +434,8 @@ export function createScreencastController(options: {
   };
 
   /**
-   * Promote the claim this tile already holds into control. A pre-armed tile
-   * is already armed at the host, so there is no frame to send and nothing to
-   * wait for - only the render (and the move forwarding) to catch up.
+   * Promote the claim this tile already holds into control.
+   * A pre-armed tile is already armed at the host, so there is no frame to send and nothing to wait for - only the render (and the move forwarding) to catch up.
    */
   const engageControl = (): void => {
     if (gestureArmed) return;
@@ -511,12 +451,8 @@ export function createScreencastController(options: {
   };
 
   /**
-   * The arm a deliberate gesture needs - a press, or a nav from the toolbar:
-   * a real one. A speculative claim still in flight is REPLACED rather than
-   * waited on, because it may be refused, and the gesture is itself the
-   * authorization to take control from whoever holds it. The refusal for the
-   * superseded epoch is ignored on arrival (neither the desired nor the active
-   * epoch matches it any more).
+   * The arm a deliberate gesture needs - a press, or a nav from the toolbar: a real one.
+   * A speculative claim still in flight is REPLACED rather than waited on, because it may be refused, and the gesture is itself the authorization to take control from whoever holds it.
    */
   const armForGesture = (): void => {
     if (activeArmEpoch !== null) {
@@ -554,27 +490,15 @@ export function createScreencastController(options: {
   };
 
   /**
-   * The gestures a finger completed while the arm request was in flight,
-   * replayed in the order they were made now that there is an epoch to stamp
-   * them with. Without this the whole first interaction with a freshly-opened
-   * tile is lost: arming is a round trip, and on a relay it easily outlasts a
-   * swipe or a tap.
-   *
-   * A stale TAP is dropped rather than sent. Its coordinates were normalized
-   * against the frame that was on screen when the finger landed, so replaying
-   * it against a frame that has since repainted clicks whatever moved into
-   * that spot - the same refusal the arm buffer applies to a mouse click. A
-   * wheel keeps no such promise: it carries a delta, and scrolling by it is
-   * right whatever the page has repainted underneath.
+   * The gestures a finger completed while the arm request was in flight, replayed in the order they were made now that there is an epoch to stamp them with.
+   * Without this the whole first interaction with a freshly-opened tile is lost: arming is a round trip, and on a relay it easily outlasts a swipe or a tap.
    */
   const flushPendingTouchGestures = (): void => {
     const queued = pendingTouchGestures;
     pendingTouchGestures = [];
     if (activeArmEpoch === null) return;
-    // A multi-click chain describes what the PAGE received. Discarding a stale
-    // tap breaks it, so nothing after the discard may claim to continue it -
-    // neither the taps still in this queue, whose counts were stamped when they
-    // were made, nor the next tap the finger produces.
+    // A multi-click chain describes what the PAGE received.
+    // Discarding a stale tap breaks it, so nothing after the discard may claim to continue it - neither the taps still in this queue, whose counts were stamped when they were made, nor the next tap the finger produces.
     let chainBroken = false;
     for (const gesture of queued) {
       if (gesture.kind === "wheel") {
@@ -679,10 +603,7 @@ export function createScreencastController(options: {
   };
 
   /**
-   * The overlay button by ref, NOT `event.currentTarget`: a touch tap is
-   * replayed out of the tile's gesture buffer at pointerup, by which time
-   * React has nulled `currentTarget` on the stored down event - and it is the
-   * same node either way, since the ref and these handlers sit on one button.
+   * The overlay button by ref, NOT `event.currentTarget`: a touch tap is replayed out of the tile's gesture buffer at pointerup, by which time React has nulled `currentTarget` on the stored down event - and it is the same node either way, since the ref and.
    */
   const capturePointer = (
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -814,11 +735,8 @@ export function createScreencastController(options: {
   };
 
   /**
-   * A touch pointer as the encoder wants to see it. The DOM event reports a
-   * finger as `button 0 / buttons 1` for its whole life, which is right for the
-   * synthesized click and wrong for the synthesized wheel - a wheel carrying a
-   * held left button reads on the page as a button-down drag, which is the
-   * text selection this translation exists to avoid.
+   * A touch pointer as the encoder wants to see it.
+   * The DOM event reports a finger as `button 0 / buttons 1` for its whole life, which is right for the synthesized click and wrong for the synthesized wheel - a wheel carrying a held left button reads on the page as a button-down drag, which is the text.
    */
   const touchPointerLike = (
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -854,9 +772,7 @@ export function createScreencastController(options: {
     event: ReactPointerEvent<HTMLButtonElement>,
   ): void => {
     event.preventDefault();
-    // A second finger is a pinch or a stray palm, neither of which this
-    // translation represents; leaving the first one in charge keeps the
-    // in-flight scroll coherent instead of tearing between two origins.
+    // A second finger is a pinch or a stray palm, neither of which this translation represents; leaving the first one in charge keeps the in-flight scroll coherent instead of tearing between two origins.
     if (activeTouch !== null) return;
     capturePointer(event);
     activeTouch = {
@@ -874,10 +790,8 @@ export function createScreencastController(options: {
   };
 
   /**
-   * One finger-travel segment, as the page should receive it: inverted, because
-   * the page follows the finger, and in client pixels - the same unit
-   * `handleWheel` converts its own into. Shared by the move handler and the
-   * release, which has its own final segment to account for.
+   * One finger-travel segment, as the page should receive it: inverted, because the page follows the finger, and in client pixels - the same unit `handleWheel` converts its own into.
+   * Shared by the move handler and the release, which has its own final segment to account for.
    */
   const translateTouchScroll = (
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -886,9 +800,8 @@ export function createScreencastController(options: {
   ): void => {
     if (deltaX === 0 && deltaY === 0) return;
     if (activeArmEpoch === null) {
-      // Queued rather than dropped, and replayed by `noteArmed`. Consecutive
-      // moves fold into one wheel entry; a tap in between ends the run, so the
-      // scroll either side of it stays on its own side.
+      // Queued rather than dropped, and replayed by `noteArmed`.
+      // Consecutive moves fold into one wheel entry; a tap in between ends the run, so the scroll either side of it stays on its own side.
       const last = pendingTouchGestures.at(-1);
       const carried = last?.kind === "wheel" ? last : null;
       const next: PendingTouchGesture = {
@@ -944,11 +857,8 @@ export function createScreencastController(options: {
     if (touch === null || touch.pointerId !== event.pointerId) return;
     activeTouch = null;
     releaseCapturedPointer();
-    // The release carries its own displacement. A flick can cross the slop
-    // between the last `pointermove` and the `pointerup` - browsers coalesce
-    // moves, and a fast one may report almost none - so judging the gesture on
-    // `scrolling` alone would call that a tap, click where the finger LANDED,
-    // and raise the keyboard over what the user meant as a scroll.
+    // The release carries its own displacement.
+    // A flick can cross the slop between the last `pointermove` and the `pointerup` - browsers coalesce moves, and a fast one may report almost none - so judging the gesture on `scrolling` alone would call that a tap, click where the finger LANDED, and raise the.
     const scrolled =
       touch.scrolling || travelExceedsSlop(touch, event.clientX, event.clientY);
     if (scrolled) {
@@ -961,18 +871,11 @@ export function createScreencastController(options: {
       );
       return;
     }
-    // Built from where the finger LANDED and stamped with the frame that was
-    // presented then. Building from the pointer-up event instead would aim the
-    // click at the current frame, so a repaint between press and release would
-    // click whatever moved under the finger - and the stale-frame check below
-    // would wave it through, because it would be comparing the new frame
-    // against itself.
+    // Built from where the finger LANDED and stamped with the frame that was presented then.
+    // Building from the pointer-up event instead would aim the click at the current frame, so a repaint between press and release would click whatever moved under the finger - and the stale-frame check below would wave it through, because it would be comparing.
     const downSequence = touch.downSequence;
-    // Refused, not merely stamped. A tap belongs to the frame it was made
-    // against; once that frame is gone the coordinates describe content that
-    // has been replaced, and BOTH delivery paths must say so. Sending it here
-    // while the queued path rejects the identical situation would make the
-    // answer depend on how busy the host happened to be.
+    // Refused, not merely stamped.
+    // A tap belongs to the frame it was made against; once that frame is gone the coordinates describe content that has been replaced, and BOTH delivery paths must say so.
     if (downSequence === null || downSequence !== correlationToken()) {
       // The page receives no click, so the multi-click chain it would have
       // continued does not exist.
@@ -994,21 +897,13 @@ export function createScreencastController(options: {
       deltaY: 0,
     });
     if (pressed === null || released === null) {
-      // `buildPointerFrame` advances the multi-click counter for a `down`
-      // before it can fail to normalize, so a tap that dies here has still
-      // been counted. Same invariant as the stale-frame branch above: no
-      // click reached the page, so there is no chain to continue.
+      // `buildPointerFrame` advances the multi-click counter for a `down` before it can fail to normalize, so a tap that dies here has still been counted.
+      // Same invariant as the stale-frame branch above: no click reached the page, so there is no chain to continue.
       pointerClickCount = null;
       return;
     }
-    // A tap is a click, and a click is where typing goes - so the hidden IME
-    // input takes focus, raising the phone's keyboard. It happens HERE, after
-    // the tap has survived every check: focusing before them raises the
-    // keyboard over a gesture that is then discarded, leaving it covering the
-    // screen for a tap the page never received. Still inside the pointer-up
-    // handler, so it is still the user gesture iOS requires. Nothing has to
-    // undo it: only a deliberate release disarms, so focus leaving the IME
-    // input later costs the tile nothing.
+    // A tap is a click, and a click is where typing goes - so the hidden IME input takes focus, raising the phone's keyboard.
+    // It happens HERE, after the tap has survived every check: focusing before them raises the keyboard over a gesture that is then discarded, leaving it covering the screen for a tap the page never received.
     refs.imeInputRef.current?.focus();
     if (activeArmEpoch !== null) {
       sendDiscretePointer(pressed);
@@ -1023,9 +918,8 @@ export function createScreencastController(options: {
   const onTouchPointerCancel = (
     event: ReactPointerEvent<HTMLButtonElement>,
   ): void => {
-    // Only the finger that owns the gesture may end it. An ignored second
-    // touch cancels routinely - the browser reclaims it - and tearing down on
-    // that would strand the primary finger's scroll mid-drag.
+    // Only the finger that owns the gesture may end it.
+    // An ignored second touch cancels routinely - the browser reclaims it - and tearing down on that would strand the primary finger's scroll mid-drag.
     const touch = activeTouch;
     if (touch === null || touch.pointerId !== event.pointerId) return;
     activeTouch = null;
@@ -1112,14 +1006,10 @@ export function createScreencastController(options: {
     setCaptureMode: (mode) => {
       if (mode === captureMode) return;
       captureMode = mode;
-      // The two planes' tokens are different number spaces, so a gesture
-      // buffered under the old one must not be matched against the new one:
-      // a press held at `castSequence` 37 would replay against epoch 37.
+      // The two planes' tokens are different number spaces, so a gesture buffered under the old one must not be matched against the new one: a press held at `castSequence` 37 would replay against epoch 37.
       armBuffer.drop();
-      // The finger's side of the same hazard: a queued tap carries the old
-      // plane's token, and so does the finger still down. The scroll it may
-      // still be making is token-free and keeps going; only the tap it could
-      // end with is refused, by the `null` both delivery paths reject.
+      // The finger's side of the same hazard: a queued tap carries the old plane's token, and so does the finger still down.
+      // The scroll it may still be making is token-free and keeps going; only the tap it could end with is refused, by the `null` both delivery paths reject.
       pendingTouchGestures = [];
       pointerClickCount = null;
       if (activeTouch !== null) {
@@ -1234,17 +1124,12 @@ export function createScreencastController(options: {
         refs.imeInputRef.current?.focus();
       },
       onPointerEnter: preArm,
-      // A speculative claim the pointer merely raised is released the moment
-      // it leaves; a deliberate gesture arm is not, so control survives the
-      // pointer wandering off the tile.
+      // A speculative claim the pointer merely raised is released the moment it leaves; a deliberate gesture arm is not, so control survives the pointer wandering off the tile.
       onPointerLeave: () => {
         if (!gestureArmed) detachLocalArm();
       },
-      // A finger is translated before it reaches the pointer path: forwarded
-      // verbatim it becomes a mouse drag, which on the remote page selects
-      // text rather than scrolling. Every other pointer type - mouse, pen,
-      // and the synthetic pointers a test drives - takes the branch below
-      // unchanged.
+      // A finger is translated before it reaches the pointer path: forwarded verbatim it becomes a mouse drag, which on the remote page selects text rather than scrolling.
+      // Every other pointer type - mouse, pen, and the synthetic pointers a test drives - takes the branch below unchanged.
       onPointerDown: (event) => {
         if (event.pointerType === "touch") {
           onTouchPointerDown(event);
@@ -1318,9 +1203,7 @@ interface RafCoalescer {
 }
 
 /**
- * At most one emission per animation frame, with `merge` deciding what several
- * ticks inside one frame add up to: the latest position for moves, the summed
- * deltas for wheels.
+ * At most one emission per animation frame, with `merge` deciding what several ticks inside one frame add up to: the latest position for moves, the summed deltas for wheels.
  */
 function rafCoalescer(
   merge: (
@@ -1362,10 +1245,8 @@ function rafCoalescer(
 }
 
 /**
- * Which channel a frame belongs on, or `null` for the mux. Moves and wheels
- * are droppable, so they take the unordered lossy channel; everything a page
- * would mis-handle out of order or missing takes the reliable one. Nav frames
- * ride `sendInput` too and are control - they stay on the mux.
+ * Which channel a frame belongs on, or `null` for the mux.
+ * Moves and wheels are droppable, so they take the unordered lossy channel; everything a page would mis-handle out of order or missing takes the reliable one.
  */
 function inputTransportLabel(
   frame: ScreencastInputFrame,

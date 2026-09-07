@@ -185,11 +185,6 @@ function emitArmed(stream: FakeStreamSession): void {
   });
 }
 
-/**
- * The phone's own arm path: the press itself asks for control, and nothing has
- * touched the hidden IME input yet - which is what lets these tests observe
- * whether the gesture ends up focusing it.
- */
 function armViaTouchDown(
   stream: FakeStreamSession,
   clientX: number,
@@ -328,9 +323,7 @@ describe("BrowserPeekTile touch translation", () => {
     const stream = renderTile();
     const button = overlayButton();
 
-    // Swipe, then tap, both inside the arm round trip. The page has to see them
-    // in the finger's order: a tap replayed first would land on whatever was
-    // under it BEFORE the scroll moved the page.
+    // The page has to see them in the finger's order: a tap replayed first would land on whatever was under it BEFORE the scroll moved the page.
     fireEvent.pointerDown(
       button,
       touchInit({ clientX: 400, clientY: 400, buttons: 1 }),
@@ -444,10 +437,7 @@ describe("BrowserPeekTile touch translation", () => {
       touchInit({ clientX: 300, clientY: 300, buttons: 0 }),
     );
 
-    // A new frame paints before the host answers the arm. The tap's
-    // coordinates were normalized against the OLD frame, so replaying it now
-    // would click whatever moved into that spot; a scroll delta is still
-    // right whatever repainted underneath.
+    // A new frame paints before the host answers the arm.
     paintNextFrame(stream, 8);
     emitArmed(stream);
 
@@ -460,10 +450,8 @@ describe("BrowserPeekTile touch translation", () => {
     const stream = renderTile();
     const button = overlayButton();
 
-    // Tap 1 is queued against frame 7, then frame 8 paints, so tap 1 is stale
-    // and never reaches the page. Tap 2, nearby and inside the multi-click
-    // window, must therefore land as a FIRST click - the page saw no first
-    // click to continue.
+    // Tap 1 is queued against frame 7, then frame 8 paints, so tap 1 is stale and never reaches the page.
+    // Tap 2, nearby and inside the multi-click window, must therefore land as a FIRST click - the page saw no first click to continue.
     const tapAt = (x: number, y: number): void => {
       fireEvent.pointerDown(
         button,
@@ -504,14 +492,11 @@ describe("BrowserPeekTile touch translation", () => {
       touchInit({ clientX: 400, clientY: 300, buttons: 0 }),
     );
 
-    // Nothing is sent. The armed path used to deliver here while the queued
-    // path refused the identical situation, which made the answer depend on
-    // whether the host had answered the arm yet.
+    // Nothing is sent.
+    // The armed path used to deliver here while the queued path refused the identical situation, which made the answer depend on whether the host had answered the arm yet.
     expect(pointerFrames(stream, "down")).toHaveLength(0);
     expect(pointerFrames(stream, "up")).toHaveLength(0);
-    // And no keyboard: focusing the hidden input before the tap was validated
-    // left the phone's keyboard covering the screen for a click the page never
-    // received.
+    // And no keyboard: focusing the hidden input before the tap was validated left the phone's keyboard covering the screen for a click the page never received.
     expect(document.activeElement).not.toBe(imeInput());
   });
 

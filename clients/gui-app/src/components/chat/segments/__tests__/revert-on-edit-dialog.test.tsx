@@ -88,13 +88,7 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
   });
 });
 
-/**
- * A windowed transcript whose history below the edit point is not hydrated
- * cannot count the artifacts in scope. The opt-out still has to appear: it
- * defaults to CHECKED, so hiding it would revert artifacts with nothing on
- * screen saying so - and the host reverts the true scope regardless of what
- * this side could see.
- */
+/** A windowed transcript whose history below the edit point is not hydrated cannot count the artifacts in scope. The opt-out still has to appear: it defaults to CHECKED, so hiding it would revert artifacts with nothing on screen saying so - and the host reverts the true scope regardless of what this side could see. */
 describe("<RevertOnEditDialog /> uncountable artifact scope", () => {
   afterEach(() => {
     cleanup();

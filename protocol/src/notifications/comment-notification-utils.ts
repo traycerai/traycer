@@ -1,10 +1,6 @@
 import type { JsonContent } from "../common/registry";
 
-/**
- * Extracts unique user IDs from mention nodes in Tiptap JSONContent.
- * Uses a targeted walk because the main tiptap-editor-parser does not
- * handle ContextType.User mentions.
- */
+/** Extracts unique user IDs from mention nodes in Tiptap JSONContent. */
 export function extractUserMentionIds(content: JsonContent): string[] {
   const userIds = new Set<string>();
 

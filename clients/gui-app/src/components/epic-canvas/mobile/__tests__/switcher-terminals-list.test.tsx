@@ -19,13 +19,7 @@ import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identi
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
-/**
- * The phone Terminals category over the SHARED panel layer, against the real
- * canvas store: what a phone lists, and what a tap binds a tile to, are the two
- * things that drifted while this surface read `terminal.list` on its own, so
- * both are exercised end to end here. Only host transport, the plain-terminal
- * authority and the sibling create row are faked.
- */
+/** Only host transport, the plain-terminal authority and the sibling create row are faked. */
 
 const EPIC_ID = "epic-1";
 const HOST_A = "host-a";
@@ -41,12 +35,6 @@ Object.defineProperty(globalThis.navigator, "clipboard", {
 });
 
 interface DurableCollectionHolder {
-  /**
-   * `undefined`, not null, for an absent catalog: that is what the real
-   * authority hands back (it is `query.data`), and `useEpicTerminalsPanel`
-   * tests it with `=== undefined`. A null here quietly skips the
-   * capable-but-unhydrated loading branch.
-   */
   value: PlainTerminalCollection | undefined;
 }
 interface ListedSessionsHolder {
@@ -62,10 +50,7 @@ interface AuthorityHolder {
   capability: "unknown" | "legacy" | "capable";
   canMutate: boolean;
   /**
-   * Panel-wide, exactly like the real thing: one mutation observer serves every
-   * row, so a rename in flight on ANY row reads as pending on all of them.
-   * Modelled as real state rather than a hardcoded `false`, which would make a
-   * "refused while pending" assertion vacuous.
+   * Modelled as real state rather than a hardcoded `false`, which would make a "refused while pending" assertion vacuous.
    */
   renamePending: boolean;
 }
@@ -119,11 +104,7 @@ vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
   useResolvePlainTerminalOwnerHostClient: () => () => ({ request: vi.fn() }),
 }));
 vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
-  // Models the real contract rather than a convenient shape. `use-host-query`
-  // disables the query while the client is null, and a DISABLED TanStack v5
-  // query reports `isPending: true` with `isFetching: false` and no data - the
-  // exact combination that decides whether this surface shows a spinner or
-  // claims the epic has no terminals.
+  // Models the real contract rather than a convenient shape.
   useTerminalList: () =>
     hostClient.value === null
       ? {
@@ -549,9 +530,7 @@ describe("<SwitcherTerminalsList /> rows", () => {
       target: { value: "Typed title" },
     });
 
-    // Rename availability drops while the dialog is already up. The pending
-    // flag is PANEL-wide - one mutation observer serves every row - so this is
-    // another row's rename going in flight, which this dialog cannot see.
+    // The pending flag is PANEL-wide - one mutation observer serves every row - so this is another row's rename going in flight, which this dialog cannot see.
     authority.renamePending = true;
     view.rerender(
       wrapper(
@@ -585,10 +564,7 @@ describe("<SwitcherTerminalsList /> states", () => {
   });
 
   it("waits while a capable host's durable catalog has not hydrated yet", () => {
-    // The list query has answered; the projection stream has not. The panel
-    // keys this branch on `collection === undefined`, so an absent catalog has
-    // to be modelled as undefined - a null would read as "hydrated and empty"
-    // and show the empty state before the catalog ever arrived.
+    // The panel keys this branch on `collection === undefined`, so an absent catalog has to be modelled as undefined - a null would read as "hydrated and empty" and show the empty state before the catalog ever arrived.
     durableCollection.value = undefined;
     renderList(openEpicTab());
     expect(screen.getByTestId("switcher-terminal-loading")).toBeTruthy();
@@ -597,9 +573,7 @@ describe("<SwitcherTerminalsList /> states", () => {
   });
 
   it("surfaces a load failure with the host's message and a retry", () => {
-    // Hydrated catalog: the panel checks loading before error, and a capable
-    // host with no catalog yet is still loading, so an unhydrated fixture here
-    // would assert the spinner rather than the failure.
+    // Hydrated catalog: the panel checks loading before error, and a capable host with no catalog yet is still loading, so an unhydrated fixture here would assert the spinner rather than the failure.
     durableCollection.value = completeFleet([]);
     listQuery.isError = true;
     listQuery.errorMessage = "host unreachable";
@@ -621,17 +595,8 @@ describe("<SwitcherTerminalsList /> states", () => {
   });
 
   it("waits, rather than reporting no terminals, while the Epic session's host client is still null", () => {
-    // The defect this pins: on a phone a live terminal read as "No terminals
-    // yet." because the list rendered rows or nothing, consulting no query
-    // state. `useEpicSessionHostClient` is null until the Y.Doc session handle
-    // is established, which disables the query - so this window is the app's
-    // normal startup, not an edge case.
     hostClient.value = null;
-    // A settled catalog, so the ONLY thing that can decide loading here is the
-    // list query's pending state. A disabled query is `isPending` but NOT
-    // `isLoading` (that needs `isFetching` too), so swapping the panel to
-    // `list.isLoading` would fall straight through to the empty state - which
-    // is exactly the regression this asserts against.
+    // A settled catalog, so the ONLY thing that can decide loading here is the list query's pending state.
     durableCollection.value = completeFleet([]);
     renderList(openEpicTab());
 

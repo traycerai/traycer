@@ -6,12 +6,7 @@ import { formatClockDuration } from "@/lib/format-duration";
 const ELAPSED_CLASS =
   "shrink-0 tabular-nums text-ui-xs text-muted-foreground/60";
 
-/**
- * Live-ticking elapsed since `startedAt`, floored to whole seconds. The 1s tick
- * lives in this leaf so only this span re-renders, not the surrounding card.
- * Mounted only while the work is in flight (the caller unmounts it on finish),
- * which is exactly when the interval should run.
- */
+/** The 1s tick lives in this leaf so only this span re-renders, not the surrounding card. */
 export function LiveElapsed({ startedAt }: { startedAt: number }) {
   const elapsedSeconds = useElapsedSeconds(startedAt, 0, null);
   return (
@@ -19,13 +14,7 @@ export function LiveElapsed({ startedAt }: { startedAt: number }) {
   );
 }
 
-/**
- * Elapsed time for an action surface: ticks live from `startedAt` while running,
- * then shows the static total once finished. The static value FLOORS (matching
- * the live tick, so the number settles instead of jumping +1 at completion) and
- * clamps to >= 1s so a sub-second run never reads "0s". Renders nothing when the
- * anchor/duration is unknown (e.g. blocks persisted before the field existed).
- */
+/** The static value FLOORS (matching the live tick, so the number settles instead of jumping +1 at completion) and clamps to >= 1s so a sub-second run never reads "0s". */
 export function ElapsedTime(props: {
   startedAt: number | null;
   durationMs: number | null;

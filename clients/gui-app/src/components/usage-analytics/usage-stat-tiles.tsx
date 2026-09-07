@@ -5,13 +5,7 @@ import { cn } from "@/lib/utils";
 
 export interface UsageStatTilesProps {
   readonly tiles: UsageStatTilesData;
-  /**
-   * `full` - the Settings dashboard's five tiles in the responsive
-   * `sm:`/`lg:` grid. `curated` - four tiles (drops Uncached input, the
-   * most inside-baseball of the five) in a fixed 2x2, sized for the epic
-   * usage dialog's hero zone where the headline and harness split carry
-   * the rest of the story.
-   */
+  /** `full` - the Settings dashboard's five tiles in the responsive `sm:`/`lg:` grid. */
   readonly variant: "full" | "curated";
 }
 
@@ -25,13 +19,8 @@ function formatTokens(value: number): string {
   return TOKEN_FORMAT.format(value);
 }
 
-/**
- * Stat tiles: processed tokens, cached input, uncached input (`full`
- * only), output, cache savings. Every secondary line is conditional on a
- * real, non-null figure from `usage-stat-tiles.ts` - never an implied zero
- * for a signal a harness simply did not report (the ticket's binding
- * honesty rule).
- */
+/** Every secondary line is conditional on a real, non-null figure from `usage-stat-tiles.ts` - never an implied
+ * zero for a signal a harness simply did not report (the ticket's binding honesty rule). */
 export function UsageStatTiles(props: UsageStatTilesProps): ReactNode {
   const { tiles, variant } = props;
   return (

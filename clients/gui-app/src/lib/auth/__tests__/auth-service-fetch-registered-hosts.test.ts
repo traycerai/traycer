@@ -1,11 +1,5 @@
 /**
- * `AuthService.fetchRegisteredHosts()` in-flight coalescing — two independent
- * callers reach `GET /api/v3/hosts` (the globally-mounted `HostDirectoryService`
- * poll and the Settings liveness query), and their triggers genuinely coincide
- * (a window regaining focus fires both at once). This pins the coalescing
- * itself: callers that arrive together share ONE request; a caller that
- * arrives after it settles gets a real fetch; a rejected request does not pin
- * a poisoned promise for later callers.
+ * `AuthService.fetchRegisteredHosts()` in-flight coalescing - two independent callers reach `GET /api/v3/hosts` (the globally-mounted `HostDirectoryService` poll and the Settings liveness query), and their triggers genuinely coincide (a window regaining.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -190,9 +184,7 @@ describe("AuthService.fetchRegisteredHosts — in-flight coalescing", () => {
     expect(hostsCalls).toBe(1);
 
     await service.fetchRegisteredHosts(service.currentAuthEra());
-    // A call after the first settled is a genuinely new read, not served from
-    // a memo — `directory.refresh()` on picker-open is a correctness path
-    // that must be current at that instant.
+    // A call after the first settled is a genuinely new read, not served from a memo - `directory.refresh()` on picker-open is a correctness path that must be current at that instant.
     expect(hostsCalls).toBe(2);
   });
 
@@ -213,10 +205,7 @@ describe("AuthService.fetchRegisteredHosts — in-flight coalescing", () => {
       return Promise.resolve(new Response(null, { status: 500 }));
     });
 
-    // `fetchRegisteredHostsViaHttp` collapses a thrown/rejected `fetch` into a
-    // `network-error` outcome, which `performFetchRegisteredHosts` turns back
-    // into a thrown `Error` for this caller — but the in-flight slot must
-    // still clear once that rejection settles, not stay pinned to it.
+    // `fetchRegisteredHostsViaHttp` collapses a thrown/rejected `fetch` into a `network-error` outcome, which `performFetchRegisteredHosts` turns back into a thrown `Error` for this caller - but the in-flight slot must still clear once that rejection settles.
     await expect(
       service.fetchRegisteredHosts(service.currentAuthEra()),
     ).rejects.toThrow("Couldn't reach Traycer to load your hosts.");
@@ -262,17 +251,7 @@ describe("AuthService.fetchRegisteredHosts — in-flight coalescing", () => {
   });
 });
 
-/**
- * The boundary the same-bearer tests above cannot see: coalescing across an
- * AUTH IDENTITY change.
- *
- * The memo used to be a single unkeyed promise, and one `AuthService` outlives
- * an account switch. So signing out of A and into B while A's request was in
- * flight served B the answer to A's question — another account's host names,
- * ids and public keys rendered as B's own, until some later refresh happened
- * to correct it. Every test in the suite above passed throughout, because they
- * all ask about one identity.
- */
+/** The boundary the same-bearer tests above cannot see: coalescing across an AUTH IDENTITY change. */
 describe("AuthService.fetchRegisteredHosts — identity boundary", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -349,12 +328,8 @@ describe("AuthService.fetchRegisteredHosts — identity boundary", () => {
     const callA = service.fetchRegisteredHosts(service.currentAuthEra());
     expect(bearersSeen).toEqual(["Bearer token-a"]);
 
-    // The user signs into B in the same app lifetime — same `AuthService`.
-    // Awaited to the point where the service has actually adopted B's bearer:
-    // the reconcile validates the inbound token before switching, and a caller
-    // that races that window is asking a question the service cannot yet
-    // answer as B. What this test is about is what happens AFTER the switch,
-    // with A's request still outstanding.
+    // The user signs into B in the same app lifetime - same `AuthService`.
+    // Awaited to the point where the service has actually adopted B's bearer: the reconcile validates the inbound token before switching, and a caller that races that window is asking a question the service cannot yet answer as B.
     await host.tokenStore.signIn(
       { token: "token-b", refreshToken: "token-b-refresh" },
       { id: "user-b", email: "b@example.com", name: "User B" },
@@ -378,7 +353,7 @@ describe("AuthService.fetchRegisteredHosts — identity boundary", () => {
     const resultA = await callA;
     expect(resultA?.hosts.map((entry) => entry.hostId)).toEqual(["host-of-a"]);
 
-    // And the slot A's `finally` sees is B's, not its own — a third caller
+    // And the slot A's `finally` sees is B's, not its own - a third caller
     // still gets a real read rather than a cleared-then-stale memo.
     await service.fetchRegisteredHosts(service.currentAuthEra());
     expect(bearersSeen).toEqual([

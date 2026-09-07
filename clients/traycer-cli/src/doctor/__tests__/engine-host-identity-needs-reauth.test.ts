@@ -3,34 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * The SECOND needs-reauth marker, and the one doctor could not see.
- *
- * `<host home>/auth/needs-reauth.json` (already probed) says the host's own
- * delegated credential was burned and a connected owner client has to mint a
- * replacement. `<identity home>/identity/needs-reauth.json` says something
- * else entirely: the host's coordination identity paused after a credential
- * refresh was rejected, and it un-pauses on its own the moment a user bearer
- * newer than the marker lands in the shared CLI credentials file - i.e. when
- * somebody signs in again here. Same filename, different plane, opposite
- * repair. A report that folds them together sends half its readers to a fix
- * that cannot work.
- *
- * The harder half is what this probe is NOT allowed to conclude. A host
- * resolves its identity home as `devIdentityHomeOverride ?? <host home>`, and
- * the override is installed inside the host process by the dev identity pool
- * walk - not in a file, not in an env var this CLI is spawned with. So on an
- * ELIGIBLE machine, "no marker in the default identity home" means this probe
- * looked somewhere the host may not be, and an ENOENT-is-clean answer there
- * would report a stranded dev-pool host as healthy. That is the environment
- * the original incident was filed from.
- *
- * "Eligible" is load-bearing in both directions, which is why the scope rows
- * below run on a `dev` fixture and one row deliberately runs on production:
- * the host's own walk is `not-applicable` outside a dev build, so a production
- * doctor is definitive about the default identity home even on a developer's
- * machine that carries a pool.
- */
+/** Identity-plane needs-reauth marker is not the auth-plane marker; doctor must read both. */
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 const osHome = vi.hoisted(() => ({ current: "" }));
@@ -48,11 +21,7 @@ const IDENTITY_DIR_CODE = "HOST_IDENTITY_DIR_INACCESSIBLE";
 const UNVERIFIED_CODE = "HOST_IDENTITY_HOME_UNVERIFIED";
 const CREDENTIAL_CODE = "HOST_CREDENTIAL_NEEDS_REAUTH";
 
-/**
- * A `make dev-desktop` run slot, for the two rows that exercise one. Chosen so
- * `sanitizeDevDesktopSlot` maps it to itself, which is what lets the fixture
- * spell the resulting paths literally instead of re-deriving them.
- */
+/** A `make dev-desktop` run slot, for the two rows that exercise one. Chosen so `sanitizeDevDesktopSlot` maps it to itself, which is what lets the fixture spell the resulting paths literally instead of re-deriving them. */
 const DEV_RUN_SLOT = "doctor-run-slot";
 
 let workHome: string;
@@ -62,11 +31,8 @@ beforeEach(() => {
   osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
-  // A dev-desktop slot moves `hostHomeDir("dev")` to `host/dev-runs/<slot>`
-  // and takes the fixture's paths with it. Most rows here are about the plain
-  // dev home, so the variable is cleared rather than left to whatever launched
-  // the test runner; the two rows that DO exercise a slot set it themselves
-  // and are named for it.
+  // A dev-desktop slot moves `hostHomeDir("dev")` to `host/dev-runs/<slot>` and takes the fixture's paths with it.
+  // Most rows here are about the plain dev home, so the variable is cleared rather than left to whatever launched the test runner; the two rows that DO exercise a slot set it themselves and are named for it.
   delete process.env.DEV_DESKTOP_SLOT;
   vi.resetModules();
 });
@@ -91,11 +57,7 @@ function restoreEnv(name: string, original: string | undefined): void {
   }
 }
 
-/**
- * A host whose every OTHER probe reads healthy, so the identity plane is the
- * only thing these rows are looking at. No pid metadata, so no host process is
- * alive - the arm that says the authoritative check could not run at all.
- */
+/** A host whose every OTHER probe reads healthy, so the identity plane is the only thing these rows are looking at. No pid metadata, so no host process is alive - the arm that says the authoritative check could not run at all. */
 function stageHostNotRunning(environment: string): void {
   stageInstalledHost(environment);
   vi.doMock("../../host/pid-metadata", () => ({
@@ -104,14 +66,7 @@ function stageHostNotRunning(environment: string): void {
   stageServiceState("stopped");
 }
 
-/**
- * The same machine with a LIVE host process, staged the way
- * `engine-layer0-degraded` stages one: a real pid.json read by the real
- * reader, carrying this process's own pid so `isProcessAlive` agrees. The
- * endpoint deliberately points at a port nothing listens on - reachability is
- * not what the identity probe keys on, and the unreachable-endpoint issue that
- * follows is asserted around rather than suppressed.
- */
+/** The same machine with a LIVE host process, staged the way `engine-layer0-degraded` stages one: a real pid.json read by the real reader, carrying this process's own pid so `isProcessAlive` agrees. The endpoint deliberately points at a port nothing listens on - reachability is not what the identity probe keys on, and the unreachable-endpoint issue that follows is asserted around rather than suppressed. */
 function stageHostRunning(environment: string): void {
   stageInstalledHost(environment);
   const hostRoot = hostHomeFor(environment);
@@ -178,11 +133,7 @@ function hostHomeFor(environment: string): string {
   return environment === "production" ? base : join(base, environment);
 }
 
-/**
- * `~/.traycer/host/dev-runs/<slot>` - what `hostHomeDir("dev")` resolves to
- * INSTEAD of the plain dev home while `DEV_DESKTOP_SLOT` is set, and therefore
- * what {@link identityDir}'s slot-less spelling deliberately does not cover.
- */
+/** `~/.traycer/host/dev-runs/<slot>` - what `hostHomeDir("dev")` resolves to INSTEAD of the plain dev home while `DEV_DESKTOP_SLOT` is set, and therefore what {@link identityDir}'s slot-less spelling deliberately does not cover. */
 function devRunHomeFor(slot: string): string {
   return join(workHome, ".traycer", "host", "dev-runs", slot);
 }
@@ -202,11 +153,7 @@ function authDir(environment: string): string {
   return join(hostHomeFor(environment), "auth");
 }
 
-/**
- * `~/.traycer/host/dev/identities` - one per machine, and deliberately NOT
- * environment-scoped: the pool always sits at the plain `dev` home, which is
- * why a production doctor can see it and must still ignore it.
- */
+/** `~/.traycer/host/dev/identities` - one per machine, and deliberately NOT environment-scoped: the pool always sits at the plain `dev` home, which is */
 function devIdentityPoolRoot(): string {
   return join(workHome, ".traycer", "host", "dev", "identities");
 }
@@ -235,10 +182,7 @@ function writeCredentialMarker(environment: string, marker: unknown): void {
   );
 }
 
-/**
- * A dev identity pool with one identity seated in it - the machine shape that
- * makes an overridden identity home possible at all.
- */
+/** A dev identity pool with one identity seated in it - the machine shape that makes an overridden identity home possible at all. */
 function stageDevIdentityPool(name: string): void {
   mkdirSync(join(devIdentityPoolRoot(), name), { recursive: true });
 }
@@ -290,11 +234,8 @@ describe("runDoctor host identity needs-reauth", () => {
   });
 
   it("names the recovery that applies to THIS plane, and rules out the other one", async () => {
-    // The whole reason this is a separate issue. Signing in again IS the
-    // repair here - the pause watches the CLI login file for a bearer issued
-    // after the marker - and it is precisely what does NOT repair a burned
-    // delegated credential. Asserted rather than left to prose because the
-    // message is the entire recovery path a reader gets.
+    // The whole reason this is a separate issue.
+    // Signing in again IS the repair here - the pause watches the CLI login file for a bearer issued after the marker - and it is precisely what does NOT repair a burned delegated credential.
     stageHostNotRunning("production");
     writeIdentityMarker("production", {
       version: 1,
@@ -356,9 +297,8 @@ describe("runDoctor host identity needs-reauth", () => {
   });
 
   it("still reports a present-but-malformed marker, with unknown diagnostics", async () => {
-    // Present is the verdict; the contents are diagnostics. Tolerating a
-    // truncated or hand-edited marker means "do not crash", not "report
-    // clean".
+    // Present is the verdict; the contents are diagnostics.
+    // Tolerating a truncated or hand-edited marker means "do not crash", not "report clean".
     stageHostNotRunning("production");
     mkdirSync(identityDir("production"), { recursive: true });
     writeFileSync(
@@ -379,10 +319,7 @@ describe("runDoctor host identity needs-reauth", () => {
   });
 
   it("reads the identity marker's OWN field names, not the auth marker's", async () => {
-    // The two markers do not agree on their field names - `since` here,
-    // `recordedAt` there - so a shared parser would silently report `unknown`
-    // for whichever plane it was not written for, on a marker that is
-    // perfectly readable.
+    // The two markers do not agree on their field names - `since` here, `recordedAt` there - so a shared parser would silently report `unknown` for whichever plane it was not written for, on a marker that is perfectly readable.
     stageHostNotRunning("production");
     writeIdentityMarker("production", {
       version: 1,
@@ -399,11 +336,8 @@ describe("runDoctor host identity needs-reauth", () => {
   });
 
   it("still reports the pause when the directory is fine and only the MARKER is unreadable", async () => {
-    // A non-ENOENT read failure over a perfectly searchable directory is a
-    // marker we cannot rule out - non-clean, and distinct from the
-    // dir-inaccessible answer below. Reproduced with a DIRECTORY standing
-    // where the marker file belongs, so the read fails non-ENOENT without
-    // chmod (which root and some CI filesystems ignore).
+    // A non-ENOENT read failure over a perfectly searchable directory is a marker we cannot rule out - non-clean, and distinct from the dir-inaccessible answer below.
+    // Reproduced with a DIRECTORY standing where the marker file belongs, so the read fails non-ENOENT without chmod (which root and some CI filesystems ignore).
     stageHostNotRunning("production");
     mkdirSync(join(identityDir("production"), "needs-reauth.json"), {
       recursive: true,
@@ -423,18 +357,8 @@ describe("runDoctor host identity needs-reauth", () => {
   });
 
   it("reads the marker from the dev-desktop RUN home when a slot is set", async () => {
-    // The first half of the one asymmetry in this feature. The marker path
-    // resolves through `hostHomeDir`, so a `make dev-desktop` run moves it to
-    // `host/dev-runs/<slot>/identity` - while the pool root the scope caption
-    // reads stays at the plain `host/dev/identities` (pinned by the sibling
-    // row in the scope suite). The plain dev home is written here too, with a
-    // DIFFERENT reason: it is another run's tree, so a marker-path resolution
-    // that lost its slot-awareness would find that one and be caught by the
-    // reason rather than merely by the absence of an issue.
-    //
-    // The slot is set here and nowhere else; the suite's `afterEach` restores
-    // the launching environment's value and `beforeEach` clears it, so it
-    // cannot reach a sibling row even if this one throws.
+    // The first half of the one asymmetry in this feature.
+    // The marker path resolves through `hostHomeDir`, so a `make dev-desktop` run moves it to `host/dev-runs/<slot>/identity` - while the pool root the scope caption reads stays at the plain `host/dev/identities` (pinned by the sibling row in the scope suite).
     process.env.DEV_DESKTOP_SLOT = DEV_RUN_SLOT;
     stageHostNotRunning("dev");
     stageDevIdentityPool("machine");
@@ -467,28 +391,10 @@ describe("runDoctor host identity needs-reauth", () => {
   });
 });
 
-/**
- * The scope caption, and why silence is not always available here.
- *
- * The caption is owed only to a host that could ACTUALLY have taken a pool
- * identity, and two independent negatives rule that out. Either one alone is
- * enough to make the absence just read the whole answer:
- *
- *   1. the environment is not `dev` - the host's own walk opens with
- *      `config.environment !== "dev" -> not-applicable`, so a production host
- *      always falls back to its own host home; and
- *   2. there is no pool - nothing has been seated under the pool root, so
- *      there is no other identity home to have taken.
- *
- * Both directions are the same failure wearing different clothes: captioning
- * an ineligible host is permanent false noise, and staying silent for an
- * eligible one reports a stranded host clean. These rows pin both.
- */
+/** The scope caption, and why silence is not always available here. The caption is owed only to a host that could ACTUALLY have taken a pool identity, and two independent negatives rule that out. */
 describe("runDoctor identity-home scope", () => {
   it("stays silent on a dev machine with no identity pool", async () => {
-    // Eligible environment, but nothing to be uncertain about: with no pool,
-    // no host here can hold an overridden identity home, so the default one is
-    // the only one and this probe just answered for it.
+    // Eligible environment, but nothing to be uncertain about: with no pool, no host here can hold an overridden identity home, so the default one is the only one and this probe just answered for it.
     stageHostNotRunning("dev");
 
     const issues = await runDoctorFor("dev");
@@ -499,9 +405,8 @@ describe("runDoctor identity-home scope", () => {
   });
 
   it("stays silent when the pool root exists but is empty", async () => {
-    // The directory outlives the identities in it. A pool holding nothing
-    // cannot have given a host an identity home, so it proves nothing and must
-    // not manufacture a caption.
+    // The directory outlives the identities in it.
+    // A pool holding nothing cannot have given a host an identity home, so it proves nothing and must not manufacture a caption.
     stageHostNotRunning("dev");
     mkdirSync(devIdentityPoolRoot(), { recursive: true });
 
@@ -511,12 +416,8 @@ describe("runDoctor identity-home scope", () => {
   });
 
   it("stays silent for a PRODUCTION doctor even when the machine carries a dev pool", async () => {
-    // The regression this gate's second half exists for. One developer's
-    // internal `make dev-desktop` pool sits in the same `~/.traycer` tree as
-    // their production host - but a production host's pool walk is
-    // `not-applicable` before it looks at anything, so it always falls back to
-    // its own host home. Captioning here would tell every such machine,
-    // forever, that a home it definitively answered for was not verified.
+    // The regression this gate's second half exists for.
+    // One developer's internal `make dev-desktop` pool sits in the same `~/.traycer` tree as their production host - but a production host's pool walk is `not-applicable` before it looks at anything, so it always falls back to its own host home.
     stageHostNotRunning("production");
     stageDevIdentityPool("machine");
 
@@ -559,9 +460,8 @@ describe("runDoctor identity-home scope", () => {
   });
 
   it("defers to the running host's own answer when one is up", async () => {
-    // The acceptance case, positive half. The authority exists and only it
-    // resolves the live identity home, so the caption points the reader at it
-    // rather than at a location this probe already knows may be the wrong one.
+    // The acceptance case, positive half.
+    // The authority exists and only it resolves the live identity home, so the caption points the reader at it rather than at a location this probe already knows may be the wrong one.
     stageHostRunning("dev");
     stageDevIdentityPool("aux-0");
 
@@ -577,13 +477,8 @@ describe("runDoctor identity-home scope", () => {
   });
 
   it("captions rather than falls silent when the pool root cannot be read at all", async () => {
-    // The fail-safe direction, and the one a later cleanup is most likely to
-    // soften: this gate decides whether the CLI may stay QUIET, so "I could
-    // not tell whether a pool exists" must never resolve to quiet. Reproduced
-    // with a regular FILE standing where the pool root belongs, so `readdir`
-    // fails ENOTDIR - non-ENOENT, exactly as it does on an unreadable
-    // directory, and unlike chmod it cannot be ignored by root or by a
-    // permission-flattening CI filesystem.
+    // The fail-safe direction, and the one a later cleanup is most likely to soften: this gate decides whether the CLI may stay QUIET, so "I could not tell whether a pool exists" must never resolve to quiet.
+    // Reproduced with a regular FILE standing where the pool root belongs, so `readdir` fails ENOTDIR - non-ENOENT, exactly as it does on an unreadable directory, and unlike chmod it cannot be ignored by root or by a permission-flattening CI filesystem.
     stageHostNotRunning("dev");
     mkdirSync(join(workHome, ".traycer", "host", "dev"), { recursive: true });
     writeFileSync(devIdentityPoolRoot(), "not a directory");
@@ -596,20 +491,8 @@ describe("runDoctor identity-home scope", () => {
   });
 
   it("still finds the machine-wide pool from inside a dev-desktop run slot", async () => {
-    // The second half of the asymmetry, and the half nothing else pins. The
-    // two paths this row spans resolve through DIFFERENT rules on purpose:
-    // `hostIdentityNeedsReauthPath` follows `hostHomeDir` into
-    // `host/dev-runs/<slot>/identity`, while `hostDevIdentityPoolRoot` is
-    // fixed at `host/dev/identities` because the pool is one per MACHINE, not
-    // one per run. Routing the pool root through `hostHomeDir` too - the
-    // tidying this deliberate split invites - would send it looking inside
-    // this run's own tree, find nothing, and drop the caption: a stranded
-    // dev-pool host reported clean, which is the exact regression the caption
-    // exists to prevent. Asserted through the issue's own details so it is
-    // production's resolution being pinned, not the fixture's.
-    //
-    // Slot handling as in the marker row above: set here only, cleared and
-    // restored by the suite's hooks.
+    // The second half of the asymmetry, and the half nothing else pins.
+    // The two paths this row spans resolve through DIFFERENT rules on purpose: `hostIdentityNeedsReauthPath` follows `hostHomeDir` into `host/dev-runs/<slot>/identity`, while `hostDevIdentityPoolRoot` is fixed at `host/dev/identities` because the pool is one per MACHINE, not one per run.
     process.env.DEV_DESKTOP_SLOT = DEV_RUN_SLOT;
     stageHostNotRunning("dev");
     stageDevIdentityPool("machine");
@@ -637,9 +520,7 @@ describe("runDoctor identity-home scope", () => {
   });
 
   it("reports the marker it DID find even on an eligible pool machine, rather than only the caption", async () => {
-    // A marker in the default identity home is real evidence and is not
-    // downgraded by the pool's existence; the scope statement rides along in
-    // the message instead.
+    // A marker in the default identity home is real evidence and is not downgraded by the pool's existence; the scope statement rides along in the message instead.
     stageHostNotRunning("dev");
     stageDevIdentityPool("machine");
     writeIdentityMarker("dev", {
@@ -658,20 +539,10 @@ describe("runDoctor identity-home scope", () => {
   });
 });
 
-/**
- * The third answer, on the identity plane: doctor could not look.
- *
- * Kept apart from both the assertion and the scope caption, because an issue
- * that names a repair must name the one that applies - "I could not read this
- * directory" is a filesystem permission, not a paused identity and not a
- * question about which home the host took.
- */
+/** The third answer, on the identity plane: doctor could not look. Kept apart from both the assertion and the scope caption, because an issue that names a repair must name the one that applies - "I could not read this directory" is a filesystem permission, not a paused identity and not a question about which home the host took. */
 describe("runDoctor when the host identity directory cannot be inspected", () => {
   it("does NOT claim the identity is paused, and does not report clean either", async () => {
-    // A regular FILE where the identity directory belongs: reads under it fail
-    // ENOTDIR - non-ENOENT, exactly as they do inside an unsearchable
-    // directory - and unlike chmod it cannot be ignored by root or by a
-    // permission-flattening CI filesystem.
+    // A regular FILE where the identity directory belongs: reads under it fail ENOTDIR - non-ENOENT, exactly as they do inside an unsearchable directory - and unlike chmod it cannot be ignored by root or by a permission-flattening CI filesystem.
     stageHostNotRunning("production");
     mkdirSync(join(workHome, ".traycer", "host"), { recursive: true });
     writeFileSync(identityDir("production"), "not a directory");
@@ -693,10 +564,8 @@ describe("runDoctor when the host identity directory cannot be inspected", () =>
   });
 
   it("answers for the directory even where the caption would not apply", async () => {
-    // "Could not look" is not an eligibility question. The environment gate
-    // suppresses the SCOPE caption on production; it must not suppress a real
-    // filesystem fault, which is why the two are separate codes reached by
-    // separate paths.
+    // "Could not look" is not an eligibility question.
+    // The environment gate suppresses the SCOPE caption on production; it must not suppress a real filesystem fault, which is why the two are separate codes reached by separate paths.
     stageHostNotRunning("dev");
     mkdirSync(join(workHome, ".traycer", "host", "dev"), { recursive: true });
     writeFileSync(identityDir("dev"), "not a directory");
@@ -708,9 +577,8 @@ describe("runDoctor when the host identity directory cannot be inspected", () =>
   });
 
   it("leaves the AUTH plane's verdict untouched", async () => {
-    // The planes share a filename and nothing else. An identity directory that
-    // cannot be read says nothing about the delegated credential, and the
-    // auth-plane probe must go on answering for itself.
+    // The planes share a filename and nothing else.
+    // An identity directory that cannot be read says nothing about the delegated credential, and the auth-plane probe must go on answering for itself.
     stageHostNotRunning("production");
     mkdirSync(join(workHome, ".traycer", "host"), { recursive: true });
     writeFileSync(identityDir("production"), "not a directory");

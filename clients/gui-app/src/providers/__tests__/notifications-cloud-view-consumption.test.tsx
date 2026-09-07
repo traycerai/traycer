@@ -12,17 +12,7 @@ import type {
 } from "@traycer/protocol/host/notifications/contracts";
 
 /**
- * Visit-to-clear in cloud mode.
- *
- * Real canvas store (the presence source), real merged actions (the real
- * fan-out and its convergence guard), real cloud store, and a real
- * `HostClient` over `MockHostMessenger` - so "how many mark-read requests did
- * this actually issue?" is counted at the transport, which is the only place
- * a storm would be visible.
- *
- * The relay stream is not opened: snapshots are handed to the store through
- * `applySnapshot`, the same entry point the stream's snapshot frame calls.
- * Frame plumbing is covered by `notifications-session-provider.test.tsx`.
+ * Visit-to-clear in cloud mode. Count mark-read requests at the transport. Snapshots via `applySnapshot`; the relay stream is not opened.
  */
 
 interface HostState {
@@ -59,19 +49,14 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: () => feedSupport.value,
 }));
 
-// Per G8 the provider binds to the LOCAL host, so these two hooks replace
-// `useAddressableHostId` + `useWsStreamClient`. No stream client: in cloud
-// mode the provider opens no local stream anyway, and the two consumption
-// triggers are deliberately independent of the relay.
+// Bind the local host. Cloud mode opens no local stream; consumption is
+// independent of the relay.
 vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
   useReactiveLocalHostEntry: () => mockLocalHostEntry,
 }));
 
-// The fixture used to say "which host" by binding one into the client's slot.
-// P4.2 deleted the slot, so the app-wide host is the SELECTION layer's answer
-// and a fixture that never seeds it resolves a requester addressing no host -
-// which fails as a silent no-op (rows that never get marked read), not as a
-// missing method.
+// Seed the selection layer. An unseeded fixture addresses no host and fails
+// as a silent no-op (rows never marked read).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => mockLocalHostEntry.hostId,
 }));
@@ -322,13 +307,7 @@ function focusEpic(epicId: string): void {
   });
 }
 
-/**
- * jsdom reports `document.hasFocus()` as `false` for the whole run, so the
- * focus half of the presence signal can never be true on its own here - the
- * suite would pass for the wrong reason (nothing focused, nothing consumed).
- * Stub the browser boundary and drive it explicitly, which also makes the
- * blurred-window case assertable.
- */
+/** jsdom hasFocus is always false; stub it or the suite passes because nothing is focused. Also makes the blurred-window case assertable. */
 function setWindowFocused(focused: boolean): void {
   vi.spyOn(document, "hasFocus").mockReturnValue(focused);
   act(() => {
@@ -685,21 +664,9 @@ describe("cloud-mode view consumption", () => {
   });
 });
 
-/**
- * Retrying is safe by construction (set-once, min-merged markers), so these
- * pin the PACING rather than any suppression: one request in flight, growing
- * gaps between failures, and a clean stop once the server accepts.
- *
- * `Math.random` is stubbed so the jitter window is deterministic; the clock is
- * faked so a five-minute cap does not mean a five-minute test.
- */
+/** Pin pacing: one in flight, growing gaps, stop on accept. Stub Math.random and fake the clock. */
 describe("cloud-mode view-consumption teardown", () => {
-  /**
-   * The retry timer re-arms on every failure, so a persistently failing server
-   * keeps a chain of timers alive. Unmount reaches none of the relay-session
-   * reset sites, so the driver has to be stopped there explicitly - otherwise
-   * these timers fire host RPCs through a torn-down mutation client.
-   */
+  /** Unmount does not reset relay-session retries; stop the driver or timers fire RPCs through a torn-down mutation client. */
   it("issues no further requests after the provider unmounts", async () => {
     vi.useFakeTimers();
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -951,13 +918,7 @@ describe("cloud-mode view-consumption retries", () => {
 });
 
 describe("local-mode view consumption", () => {
-  /**
-   * Local mode still consumes through host presence frames and the v1 entity
-   * RPC - covered end to end (stream frames included) in
-   * `notifications-session-provider.test.tsx`. What matters here is the
-   * regression this change could introduce: the locally-read focus signal is
-   * cloud-only, and must not start a second consumption path in local mode.
-   */
+  /** Locally-read focus is cloud-only; must not start a second consumption path in local mode. */
   it("never fans out cloud mark-reads, however the focus moves", async () => {
     feedSupport.value = "unsupported";
     renderProvider();

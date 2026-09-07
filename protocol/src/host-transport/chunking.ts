@@ -1,12 +1,4 @@
-// SYNCHRONOUS BY REQUIREMENT, not by preference - do not swap in an async
-// codec (`CompressionStream`, `node:zlib`'s callback/stream forms, a worker).
-// `ChunkReassembler.accept` inflates inline, and an `await` on that path would
-// release the turn mid-ingest, letting frames for other streams interleave
-// between a chunk and its successor. The per-stream `seq`-adjacency guard
-// would then fire on our own scheduling rather than on relay reordering,
-// turning a healthy channel into `ChunkSequenceMismatchError`s. fflate is here
-// specifically because it is sync and isomorphic; native zlib is faster but
-// Node-only, and this module runs in the browser too.
+// SYNCHRONOUS BY REQUIREMENT, not by preference - do not swap in an async codec (`CompressionStream`, `node:zlib`'s callback/stream forms, a worker).
 import { deflateSync, Inflate } from "fflate";
 import {
   MAX_MUX_MESSAGE_BYTES,
@@ -21,116 +13,27 @@ import {
   type QosClassValue,
 } from "./mux";
 
-/**
- * Whole-body chunking + reassembly for the client⇄host mux — the ONE shared
- * implementation both peers run (it replaced the two hand-mirrored
- * `chunker.ts` copies, whose "binary-section-only" chunking left any JSON
- * over ~1 MiB unsendable).
- *
- * Every logical message — all frame types, control frames included — encodes
- * to one opaque body:
- *
- *   [bodyFlags:u8][jsonLen:u32 BE][jsonBytes][binaryBytes]
- *
- * and rides the wire as 1..N frames whose binary sections concatenate back to
- * that body. A message whose body fits {@link BULK_CHUNK_SIZE_BYTES} is a
- * single unchunked frame; a larger one is split into ≤64 KiB chunk frames
- * (`CHUNKED`, `CHUNK_FIRST` on the first, `CHUNK_LAST` on the last). Frames
- * carry NO json section of their own — `MuxFrame.json` is always null on this
- * path, and the logical json/binary split lives in `bodyFlags` bit 0
- * (HAS_BINARY) + `jsonLen`. The single-frame case exercises exactly the same
- * encode/decode path as a 1,600-frame transfer, so small-message coverage
- * covers the large-transfer logic.
- *
- * Sending is pull-based: a message enters its session's scheduler as ONE
- * {@link OutboundChunkSource} occupying one queue slot, and frames
- * materialize (drawing their per-stream `seq`) only when the scheduler pulls
- * — eager per-frame queueing at 100 MB would trip the scheduler's own
- * queue-depth/queued-bytes health guards and evict the session for the crime
- * of carrying a large message.
- *
- * The per-stream `seq`-adjacency guard survives unchanged: `seq` is
- * AEAD-authenticated inside the Noise ciphertext, so a broken progression is
- * trustworthy evidence of relay reordering even though the channel itself is
- * healthy. `ChunkSequenceMismatchError` stays a distinguishable subclass so
- * session dispatchers can route ordering corruption to per-stream recovery
- * instead of tearing down the session.
- *
- * COMPRESSION is applied PER FRAME rather than per body, and the choice was
- * measured rather than assumed. On three real epic Y.Doc snapshots
- * (33.96 / 32.96 / 64.30 MB), compressing the whole body before chunking
- * reached 3.96× and per-64 KiB-frame compression reached 3.64× — 92% of the
- * ratio — but whole-body cost ~350 ms of SYNCHRONOUS work at enqueue, on a
- * pump shared by every session, while the per-frame variant spreads the same
- * work at ~0.3 ms per pull. Per-frame also keeps each frame independently
- * decodable, so the flag is a genuine per-frame property, a sequence may mix
- * compressed and uncompressed frames, and reassembly needs no new state.
- *
- * Compression is INVISIBLE above this module: `nextFrame` compresses on the
- * way out and `accept` inflates on the way in, so every size, bound and
- * accounting figure either side of it remains stated in plaintext bytes.
- */
 
 /** Max bytes of body per chunk frame (well under the frame plaintext cap). */
 export const BULK_CHUNK_SIZE_BYTES = 64 * 1024;
 
-/**
- * Bodies STRICTLY larger than this ride BULK-class frames regardless of their
- * stream's method class, putting large transfers under credit flow control
- * and letting interactive traffic preempt mid-transfer. Bodies between one
- * chunk and this bound chunk at their stream's own class, uncredited.
- */
 export const BULK_QOS_BODY_THRESHOLD_BYTES = 1024 * 1024;
 
-/**
- * Sender-side pacing budget for chunked transfers, per session — deliberately
- * under the relay's per-session sliding-window caps (`workers/relay-do`:
- * 8 MiB/s, 500 frames/s), which it enforces on opaque ciphertext with a
- * session kill. Credits alone permit a 512-frame (32 MiB) burst, far over
- * that budget, so the schedulers meter chunk-frame dequeues with a token
- * bucket built from these constants. The burst capacities bound how much can
- * land inside any relay-side 1 s window to burst + rate — 7 MiB / 439
- * frames, under both caps — so no phase alignment of the two windows can
- * overshoot. Unchunked (single-frame) messages stay unpaced; their bytes
- * still drain the bucket so combined traffic respects the budget.
- */
 export const CHUNK_PACE_BYTES_PER_SEC = 6 * 1024 * 1024;
 export const CHUNK_PACE_FRAMES_PER_SEC = 375;
 export const CHUNK_PACE_BURST_BYTES = 1024 * 1024;
 export const CHUNK_PACE_BURST_FRAMES = 64;
 
-/**
- * A frame payload smaller than this is never compressed. Below roughly this
- * size DEFLATE's own block overhead eats the gain, and everything under it on
- * this transport is latency-shaped rather than bandwidth-shaped — keystrokes,
- * credit grants, subscribe frames — where spending even a fraction of a
- * millisecond per frame buys nothing a user can perceive.
- */
+/** A frame payload smaller than this is never compressed. */
 export const COMPRESSION_MIN_PAYLOAD_BYTES = 4096;
 
-/**
- * DEFLATE level for outbound frame payloads. Measured on three real epic Y.Doc
- * snapshots (33.96 / 32.96 / 64.30 MB): level 1 reaches 3.64× at ~0.3 ms per
- * 64 KiB frame, level 6 reaches 3.89× at roughly twice the CPU. The transfer
- * is the bottleneck this exists to relieve and the sender is a shared fan-out
- * pump serving every session, so the cheaper level is the right trade — the
- * remaining 7% of ratio is not worth doubling a cost that every OTHER session
- * waits behind.
- */
+/** DEFLATE level for outbound frame payloads. */
 const COMPRESSION_LEVEL = 1;
 
-// A DEFLATE stream can expand by roughly this factor. It sizes each input push
-// so `Inflate`'s synchronous callback can reject a lie about the plaintext
-// length before one push performs material work beyond the receive bound.
+// A DEFLATE stream can expand by roughly this factor.
 const DEFLATE_MAX_EXPANSION_RATIO = 1032;
 
-/**
- * A compressed payload is `[plainLen:u32 BE][deflate bytes]`. The length
- * prefix is not redundant with the reassembler's own accounting: it is what
- * lets the receiver allocate the exact output buffer AND reject a
- * decompression bomb BEFORE inflating, rather than discovering the expansion
- * by performing it. Four bytes on a ~16 KiB compressed frame is ~0.02%.
- */
+/** A compressed payload is `[plainLen:u32 BE][deflate bytes]`. */
 const COMPRESSED_PAYLOAD_HEADER_LEN = 4;
 
 const BODY_HEADER_LEN = 5;
@@ -139,7 +42,6 @@ const BODY_FLAG_HAS_BINARY = 0b0000_0001;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
-/** One logical outbound message, before body encoding. */
 export interface OutboundMessage {
   readonly type: MuxFrameTypeValue;
   readonly streamId: number;
@@ -148,16 +50,7 @@ export interface OutboundMessage {
   readonly binary: Uint8Array | null;
 }
 
-/**
- * Encodes one logical message into its wire body.
- *
- * Sender-side size enforcement is honest about the platform: V8's max string
- * length sits 24 bytes UNDER {@link MAX_MUX_MESSAGE_BYTES}, so an oversized
- * JSON payload surfaces as `JSON.stringify` throwing `RangeError` here — it
- * cannot be pre-checked "before encoding". The byte check that follows covers
- * the binary-heavy path. Callers route both errors to the same per-stream
- * fatal handling.
- */
+/** Encodes one logical message into its wire body. */
 export function encodeMuxMessageBody(
   json: Record<string, unknown> | null,
   binary: Uint8Array | null,
@@ -188,12 +81,8 @@ export interface DecodedMessageBody {
 }
 
 /**
- * Decodes one reassembled body back into its logical json/binary halves. The
- * binary half is a VIEW into `body`, not a copy — at transfer scale a copy
- * doubles peak receive memory. Bodies are authored by the peer inside the
- * AEAD, so a malformed one is a peer bug, not line noise: it throws
- * `MuxFrameDecodeError` and gets the same connection-level fail-closed
- * handling a malformed frame does.
+ * Decodes one reassembled body back into its logical json/binary halves.
+ * Bodies are authored by the peer inside the AEAD, so a malformed one is a peer bug, not line noise: it throws `MuxFrameDecodeError` and gets the same connection-level fail-closed handling a malformed frame does.
  */
 export function decodeMuxMessageBody(body: Uint8Array): DecodedMessageBody {
   if (body.length < BODY_HEADER_LEN) {
@@ -250,14 +139,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Compresses one frame payload, or returns `null` when the frame should ride
- * uncompressed. Deliberately returns `null` rather than the input whenever
- * DEFLATE fails to shrink the payload: already-compressed content (assets,
- * images, a body that happens to be incompressible) then costs one wasted
- * pass and zero wire bytes, instead of paying a permanent tax to carry a
- * length prefix and a flag around data that got no smaller.
- */
+/** Compresses one frame payload, or returns `null` when the frame should ride uncompressed. */
 function compressFramePayload(plain: Uint8Array): Uint8Array | null {
   if (plain.length < COMPRESSION_MIN_PAYLOAD_BYTES) {
     return null;
@@ -275,34 +157,7 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
 
 /**
  * Inflates one `MuxFlags.COMPRESSED` frame payload.
- *
- * The declared plaintext length is checked against
- * {@link BULK_CHUNK_SIZE_BYTES} before a single byte is inflated, which is the
- * decompression-bomb guard: DEFLATE's maximum expansion is ~1032:1, so an
- * unbounded inflate of one legal 64 KiB frame could allocate ~66 MB, and a
- * sender that meant well never produces a payload over one chunk anyway
- * (`nextFrame` slices at exactly that bound). A peer claiming otherwise is
- * malformed, and it is rejected the same fail-closed way every other
- * structural violation on this path is.
- *
- * "Fail closed" here means the STREAM, not the session. The
- * `MuxFrameDecodeError` this throws is routed per-stream by
- * `RemoteSession.failStreamOnInboundError`, alongside `ChunkReassemblyError`:
- * by the time it can be thrown the frame header has already decoded and the
- * fault is attributable to one stream, and this function holds no state
- * between frames for a bad payload to poison. Dropping the session instead
- * would turn any deterministic mis-encode of one frame in a large transfer
- * into a reconnect loop — reconnect, re-request the same body, fail again —
- * which is the outcome the per-stream routing exists to prevent.
- *
- * The output buffer is deliberately allocated ONE BYTE LARGER than the
- * declared length. The synchronous `Inflate` callback is fed bounded slices
- * of the compressed source and stops the decoder as soon as its actual output
- * would pass the declared length. That preserves the old three-way sentinel
- * post-condition without letting `inflateSync(..., { out })` walk an attacker
- * supplied gigabyte of output merely to discover the extra byte: exact output
- * is accepted, a short expansion reports its count, and an over-expansion is
- * represented by the spare byte as `more than plainLength`.
+ * "Fail closed" here means the STREAM, not the session.
  */
 function inflateFramePayload(payload: Uint8Array): Uint8Array {
   if (payload.length < COMPRESSED_PAYLOAD_HEADER_LEN) {
@@ -335,9 +190,8 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
   const compressed = payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN);
   try {
     for (let offset = 0; offset < compressed.length;) {
-      // `Inflate` calls ondata after each push, not each decoded symbol. Keep
-      // one push's possible expansion inside the remaining output budget so a
-      // forged small prefix cannot turn into a renderer-thread-sized inflate.
+      // `Inflate` calls ondata after each push, not each decoded symbol.
+      // Keep one push's possible expansion inside the remaining output budget so a forged small prefix cannot turn into a renderer-thread-sized inflate.
       const inputLength = Math.max(
         1,
         Math.floor((plainLength - written) / DEFLATE_MAX_EXPANSION_RATIO),
@@ -351,9 +205,7 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
     }
   } catch (error) {
     if (error === outputLimitExceeded) {
-      // The spare byte is the old, deliberate representation for an output
-      // that exceeded the declared length. The post-condition below keeps its
-      // wording and accepted exact-length case unchanged.
+      // The spare byte is the old, deliberate representation for an output that exceeded the declared length.
       written = plainLength + 1;
     } else {
       throw new MuxFrameDecodeError(
@@ -362,9 +214,7 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
     }
   }
   if (written !== plainLength) {
-    // "more than" rather than a count: the spare byte proves the payload
-    // over-expanded without measuring by how much, and inventing a figure the
-    // buffer never held would be worse than naming the direction.
+    // "more than" rather than a count: the spare byte proves the payload over-expanded without measuring by how much, and inventing a figure the buffer never held would be worse than naming the direction.
     const actual =
       written > plainLength ? `more than ${plainLength}` : `${written}`;
     throw new MuxFrameDecodeError(
@@ -375,11 +225,8 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
 }
 
 /**
- * One queued logical message + a cursor: the scheduler's pull-based unit of
- * outbound work. Frames materialize one at a time via {@link nextFrame},
- * drawing their per-stream `seq` at pull time so interleaving with other
- * same-session messages can never allocate seqs out of send order. Chunk
- * frames reference subarray VIEWS of the encoded body, never copies.
+ * One queued logical message + a cursor: the scheduler's pull-based unit of outbound work.
+ * Chunk frames reference subarray VIEWS of the encoded body, never copies.
  */
 export class OutboundChunkSource {
   readonly type: MuxFrameTypeValue;
@@ -393,9 +240,7 @@ export class OutboundChunkSource {
   readonly chunked: boolean;
   readonly totalBodyBytes: number;
   /**
-   * Invoked exactly once, when the final frame is pulled — the transfer-time
-   * telemetry hook for oversized bodies. Assigned after construction by the
-   * owning session; `null` when nobody is watching.
+   * Invoked exactly once, when the final frame is pulled - the transfer-time telemetry hook for oversized bodies.
    */
   onDrained: (() => void) | null = null;
 
@@ -405,12 +250,7 @@ export class OutboundChunkSource {
   private offset = 0;
 
   /**
-   * `compress` is the SESSION's negotiated answer, not a per-message opinion:
-   * pass `true` only when the peer advertised
-   * `SESSION_CAPABILITY_BODY_COMPRESSION`. A peer that did not cannot tell a
-   * compressed frame from a corrupt one — `decodeMuxFrame` ignores flag bits
-   * it does not know — so it would append DEFLATE bytes to its accumulator and
-   * fail much later, at body decode, on a channel that is perfectly healthy.
+   * `compress` is the SESSION's negotiated answer, not a per-message opinion: pass `true` only when the peer advertised `SESSION_CAPABILITY_BODY_COMPRESSION`.
    */
   constructor(
     message: OutboundMessage,
@@ -439,17 +279,8 @@ export class OutboundChunkSource {
   }
 
   /**
-   * PLAINTEXT wire size (header + payload) of the next frame this source would
-   * emit — deliberately NOT the post-compression size, which is unknowable
-   * until the frame is materialized.
-   *
-   * Every consumer of this number is a bound that compression can only make
-   * safer, and keeping it plaintext keeps them all honest by the same
-   * argument: the pacer over-charges (so the relay's per-session byte cap is
-   * respected with more margin than before, never less), and the scheduler's
-   * queued-byte accounting adds and subtracts the SAME plaintext figure, so it
-   * still balances to zero. Reporting a compressed size here would break the
-   * second property silently — the guard bytes would never fully drain.
+   * PLAINTEXT wire size (header + payload) of the next frame this source would emit - deliberately NOT the post-compression size, which is unknowable until the frame is materialized.
+   * Reporting a compressed size here would break the second property silently - the guard bytes would never fully drain.
    */
   get nextFrameByteSize(): number {
     return (
@@ -507,10 +338,7 @@ export class ChunkReassemblyError extends Error {
 }
 
 /**
- * Thrown specifically when the per-stream `seq` progression breaks (a relay
- * reordered or spliced mux frames). Distinguished from other
- * `ChunkReassemblyError`s so a dispatcher can tell ordering corruption from
- * structural malformation; both recover per-stream.
+ * Thrown specifically when the per-stream `seq` progression breaks (a relay reordered or spliced mux frames).
  */
 export class ChunkSequenceMismatchError extends ChunkReassemblyError {
   constructor(message: string) {
@@ -527,15 +355,6 @@ interface StreamAccumulator {
   nextSeq: number;
 }
 
-/**
- * Per-stream chunk reassembler. `accept` returns a `ReassembledMessage` once
- * a message is complete (an unchunked frame, or the final chunk of a
- * sequence), or `null` while a chunked message is still in flight.
- *
- * The total-size bound is enforced AS THE SEQUENCE ACCUMULATES — the point of
- * {@link MAX_MUX_MESSAGE_BYTES} is to stop allocating, not to describe the
- * allocation afterwards.
- */
 export class ChunkReassembler {
   private readonly accumulators = new Map<number, StreamAccumulator>();
   private readonly maxMessageBytes: number;
@@ -560,11 +379,6 @@ export class ChunkReassembler {
     }
 
     // Inflate ONCE, here, before any accumulation decision reads a length.
-    // Everything downstream — the per-message size bound, the accumulator's
-    // running total, the reassembled body handed to `decodeMuxMessageBody` —
-    // is then stated in plaintext bytes exactly as it was before compression
-    // existed, so compression stays invisible above this line and the memory
-    // bound keeps bounding the memory that is actually allocated.
     const payload = frame.compressed
       ? inflateFramePayload(frame.binary)
       : frame.binary;
@@ -576,10 +390,6 @@ export class ChunkReassembler {
           frame.type === MuxFrameType.FATAL ||
           frame.type === MuxFrameType.CLOSE
         ) {
-          // Stream teardown preempts the stream's own in-flight transfer:
-          // the sender cancels a queued/partially-sent message when it fails
-          // or closes the stream, so its FATAL/CLOSE legitimately arrives
-          // mid-sequence. Abandon the partial body and deliver the verdict.
           this.accumulators.delete(frame.streamId);
           return this.complete(frame.type, frame.streamId, payload);
         }
@@ -659,22 +469,12 @@ export class ChunkReassembler {
     this.accumulators.delete(streamId);
   }
 
-  /** Number of streams with an in-flight (incomplete) chunk reassembly — observability hook (R-2, `r2-host-stream-tombstone`) used to assert no orphan accumulator survives a tombstoned stream. */
+  /** Number of streams with an in-flight (incomplete) chunk reassembly - observability hook (R-2, `r2-host-stream-tombstone`) used to assert no orphan accumulator survives a tombstoned stream. */
   get pendingStreamCount(): number {
     return this.accumulators.size;
   }
 
-  /**
-   * Plaintext bytes held across every in-flight reassembly on this peer.
-   *
-   * {@link MAX_MUX_MESSAGE_BYTES} bounds ONE message on ONE stream, which
-   * leaves the aggregate as large as the peer has streams. A receiver that
-   * charges a peer for its whole reassembly footprint reads it here
-   * (browser-security-hardening H11). Summed on demand over the accumulator
-   * map rather than tracked incrementally: the map is itself capped by the
-   * receiver, and a running total is a second copy of the truth that every
-   * deletion path has to remember to decrement.
-   */
+  /** Plaintext bytes held across every in-flight reassembly on this peer. */
   get retainedBytes(): number {
     let total = 0;
     for (const accumulator of this.accumulators.values()) {
@@ -711,28 +511,13 @@ function concat(slices: Uint8Array[], totalLength: number): Uint8Array {
   return out;
 }
 
-/**
- * The `seq` that must follow `seq` on the same stream, wrapping at 2^32.
- *
- * Exported because the RECEIVER needs the identical successor rule outside a
- * chunk sequence too: the host sequences a stream's unchunked frames against
- * it (browser-security-hardening H11), and two spellings of "the next seq"
- * would disagree exactly at the wrap.
- */
+/** The `seq` that must follow `seq` on the same stream, wrapping at 2^32. */
 export function nextSeqValue(seq: number): number {
   return (seq + 1) % 2 ** 32;
 }
 
 /**
- * Token bucket pacing a session's outbound frames to
- * {@link CHUNK_PACE_BYTES_PER_SEC} / {@link CHUNK_PACE_FRAMES_PER_SEC}.
- * `tryConsume` gates EVERY frame — chunked and single-frame alike — because
- * the relay's per-session budget is enforced on raw frames with no class
- * distinction: an unpaced single-frame burst (live terminal output, chat
- * deltas) over the relay window gets the whole session killed, so "never
- * delay interactive" must mean "delay only by bucket refill (clock-bound,
- * ms-scale), never by the peer". Burst capacity covers any single frame, so
- * a `tryConsume(false)` is always transient. Injectable clock for tests.
+ * Token bucket pacing a session's outbound frames to {@link CHUNK_PACE_BYTES_PER_SEC} / {@link CHUNK_PACE_FRAMES_PER_SEC}.
  */
 export class ChunkPacer {
   private readonly now: () => number;

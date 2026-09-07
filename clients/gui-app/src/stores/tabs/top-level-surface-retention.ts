@@ -3,33 +3,13 @@ import {
   getRetentionProfile,
 } from "@/stores/replica-memory/retention-profile";
 
-/**
- * The global top-level-surface MRU/retention policy, shared by
- * `TopLevelTabHost`'s keep-alive layer and Ticket 21 slice 2's stable
- * tile-surface-host membership mirror (`tile-surface-membership.ts`).
- *
- * Pure recency + cap algorithm over kind-qualified `TabRef` keys (the
- * `"<kind>:<id>"` format shared with `tabRefKey` in `stores/tabs/layout.ts`),
- * applying ONE global cap across every top-level tab kind (epic, draft,
- * history, settings) - never a per-kind cap. Callers own deriving
- * `availableKeys`/`activeKeys` from their own reactive inputs and persisting
- * `recency` between calls.
- */
-/**
- * The DESKTOP cap, kept as a named constant for the suites that count against
- * it. The live value is the active retention profile's, read per recompute
- * (`retainedTopLevelSurfaceKeys`), so the phone runs a smaller window without
- * a platform branch here.
- */
+/** Desktop cap, kept as a named constant for the suites that count against it. */
 export const MAX_RETAINED_TOP_LEVEL_SURFACES =
   DESKTOP_RETENTION_PROFILE.retainedTopLevelSurfaces;
 
 /**
- * Advances the recency order: every currently active key moves to the
- * front, preserving the relative order of everything else. Idempotent for
- * repeated calls with the same `activeKeys` against its own prior output -
- * callers may call this unconditionally on every recompute rather than
- * gating on an active-set-changed comparison.
+ * Advances the recency order: every currently active key moves to the front, preserving the
+ * relative order of everything else.
  */
 export function advanceTopLevelSurfaceRecency(
   activeKeys: ReadonlyArray<string>,

@@ -1,9 +1,5 @@
-// Versioned native-notification activation envelope. Native display paths
-// (native OS notifications, not in-app Sonner toasts, which already hold the
-// row object) wrap the route payload with feed correlation and origin-host
-// context so a click can be acknowledged against the right row and guarded
-// against a stale/switched host, without leaking any of that identity into
-// analytics or logs.
+// Versioned native-notification activation envelope.
+// Native display paths (native OS notifications, not in-app Sonner toasts, which already hold the row object) wrap the route payload with feed correlation and origin-host context so a click can be acknowledged against the right row and guarded against a.
 
 import {
   parseNotificationPayload,
@@ -52,14 +48,9 @@ export function buildNotificationActivationEnvelope(input: {
   };
 }
 
-/** Feed identity travels as a delimited string everywhere else in the
- * renderer (`merged-notifications.ts`'s `hostFeedId`/`appLocalFeedId`/
- * `globalFeedId`, `cloud-notifications-store.ts`'s `cloudNotificationFeedId`);
- * this reconstructs the same shape from an envelope's structured feed field
- * without importing the store layer. The cloud feed id is scoped to
- * `notificationId` alone (server-owned identity) - `originHostId` is not
- * part of it; it stays on the envelope for the focus-bridge's separate
- * origin-availability guard. */
+/**
+ * Feed identity travels as a delimited string everywhere else in the renderer (`merged-notifications.ts`'s `hostFeedId`/`appLocalFeedId`/ `globalFeedId`, `cloud-notifications-store.ts`'s `cloudNotificationFeedId`); this reconstructs the same shape from an.
+ */
 export function feedIdFromEnvelopeFeed(
   feed: NotificationActivationEnvelopeFeed,
 ): string {
@@ -122,9 +113,8 @@ function parseEnvelopeV1(
 }
 
 function parseChimeEventType(value: unknown): NotificationChimeEventType {
-  // The short-lived per-event chime schema called this lane
-  // `collaboration`. Preserve in-flight native notification envelopes created
-  // by that version while exposing only the broader `info` identity now.
+  // The short-lived per-event chime schema called this lane `collaboration`.
+  // Preserve in-flight native notification envelopes created by that version while exposing only the broader `info` identity now.
   if (value === "collaboration") return "info";
   if (
     value === "needs_action" ||
@@ -140,11 +130,8 @@ function parseChimeEventType(value: unknown): NotificationChimeEventType {
 }
 
 /**
- * Parses a native-notification click payload. Accepts the versioned V1
- * envelope first (route + feed correlation + nullable origin host), falls
- * back to a legacy raw route payload with no feed identity, and reports
- * `unknown` for anything unrecognized so the caller can fall back to opening
- * the center rather than silently dropping the click.
+ * Parses a native-notification click payload.
+ * Accepts the versioned V1 envelope first (route + feed correlation + nullable origin host), falls back to a legacy raw route payload with no feed identity, and reports `unknown` for anything unrecognized so the caller can fall back to opening the center.
  */
 export function parseNotificationActivationPayload(
   value: unknown,

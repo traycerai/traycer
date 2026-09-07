@@ -69,9 +69,8 @@ const SVG_SANITIZE_CONFIG = {
 } satisfies Config;
 
 /**
- * Converts generated markup from trusted libraries into React elements while
- * stripping active content. Use only for markup we generate locally, such as
- * Shiki-highlighted code, Mermaid SVG, and bundled icon SVG.
+ * Converts generated markup from trusted libraries into React elements while stripping active content.
+ * Use only for markup we generate locally, such as Shiki-highlighted code, Mermaid SVG, and bundled icon SVG.
  */
 export function trustedMarkupToReactNodes(
   markup: string,

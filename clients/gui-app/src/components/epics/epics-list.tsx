@@ -1,11 +1,5 @@
-/**
- * `/epics` route screen - canonical surface for browsing every epic, plus
- * legacy phases that still need to open through the Epic view.
- *
- * Thin wrapper around `<EpicsListPanel variant="page" />`; the same panel
- * renders embedded on the home page (`variant="embedded"`) so home and
- * `/epics` stay in lockstep.
- */
+/** Thin wrapper around `<EpicsListPanel variant="page" />`; the same panel renders embedded on the home page
+ * (`variant="embedded"`) so home and `/epics` stay in lockstep. */
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
 import type { HistorySearchState } from "@/lib/history-search";
 

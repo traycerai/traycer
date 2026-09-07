@@ -5,29 +5,8 @@ import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/
 import type { CredentialsMigrationOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 /**
- * The one-time legacy→file credentials migration state machine (tech plan §6).
- *
- * The renderer reads + decrypts the legacy per-window localStorage token pair
- * (`L`) and hands it here (in main), where this drives it against the shared
- * credentials file (`F`) using the §2 mutation store. It is deliberately a pure
- * function over an injected store + `/user` probe so it can be exercised with a
- * scripted store in isolation.
- *
- * Governing shape (the reason it is small): **migration only reconciles L into F
- * and never deletes F.** The resulting session is always established afterwards
- * by `AuthService.start()`'s normal file rehydrate — which itself revives a
- * stale-access F through the locked `rotate`. So `terminal-dead`/`identity-unknown`
- * do not themselves sign the user out; they drop an unusable legacy remnant and
- * defer to `start()`, which signs out only when F too cannot be revived.
- *
- * Invariants (from §6):
- *   1. Probes outside the lock are strictly non-spending (access-only). Every
- *      spend runs inside a locked commit step, so every pre-spend failure
- *      (network / lock-busy / abort) leaves L unspent → `retryable`.
- *   2. No first-write without a validated identity: identity comes from the
- *      non-spending `/user` probe of L, before the spend.
- *   3. `terminal-dead` requires an explicit refresh `rejected` from the locked
- *      spend; every network outcome on either leg → `retryable`.
+ * Governing shape (the reason it is small): migration only reconciles L into F and never deletes F. The resulting session is always established afterwards by `AuthService.start()`'s.
+ * So `terminal-dead`/`identity-unknown` do not themselves sign the user out.
  */
 
 // The structural slice of the §2 mutation store this machine drives. A subset of
@@ -162,7 +141,7 @@ export async function runLegacyCredentialsMigration(
   }
 
   // Attempts exhausted with no terminal decision: nothing was spent past a
-  // committed step (those returned already), so L is intact — retry next launch.
+  // committed step (those returned already), so L is intact  -  retry next launch.
   return "retryable";
 }
 
@@ -185,10 +164,6 @@ async function migrateOntoAbsentFile(args: {
   // present-but-invalid F, so this only truly signs out an absent F).
   if (lProbe.kind !== "valid") return "identity-unknown";
 
-  // L has no spendable refresh — empty slot, or a step-3 attempt already had it
-  // explicitly rejected before F was deleted under us. Spending it is a
-  // guaranteed rejection (and a 5xx answer would loop `retryable` re-burning it
-  // every launch), so treat L as terminal without the doomed remote call.
   if (legacyRefreshDead) return "terminal-dead";
 
   const result = await store.migrateFirstWrite({
@@ -249,15 +224,7 @@ async function reconcileLiveFile(args: {
     return { kind: "outcome", outcome: "file-wins" };
   }
 
-  // Spend L's refresh ONLY when L is a PROVEN same-user candidate: its access
-  // probe came back `valid` AND its id matches F (the different-user case already
-  // returned file-wins above). When L's identity is UNKNOWABLE (access expired),
-  // spending it would rotate F's live session onto a refresh token whose owner we
-  // cannot verify — a cross-user family that `rotate` then stamps with F's
-  // identity, splitting the file the host owner-gate trusts. F is already valid,
-  // so we fall straight to its own token instead (mirrors step 4's refusal to
-  // spend an unidentified L). `legacyRefreshDead` (empty / already-rejected L)
-  // likewise forces the F-own token.
+  // When L's identity is UNKNOWABLE (access expired), spending it would rotate F's live session onto a refresh token whose owner we cannot verify.
   const spendLegacy = !legacyRefreshDead && lProbe.kind === "valid";
   const result = await store.rotate({
     expectedUserId: file.user.id,
@@ -279,7 +246,7 @@ async function reconcileLiveFile(args: {
         return { kind: "legacy-dead-retry" };
       }
       // F's own refresh is also dead (or L was never a spendable candidate), but
-      // F's access is still valid — the file session stands on the pair it holds.
+      // F's access is still valid  -  the file session stands on the pair it holds.
       return { kind: "outcome", outcome: "fallback-file-validated" };
     case "refresh-network":
     case "lock-busy":

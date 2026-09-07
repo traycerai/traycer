@@ -30,11 +30,6 @@ import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dial
 import type { UsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
 import { getEChartsMockInstances } from "../../../../../__tests__/test-browser-apis";
 
-/**
- * How many per-day points the mounted trend chart was actually given -
- * read from the option the mocked ECharts instance received, the area
- * chart's equivalent of counting the old per-day bar columns.
- */
 function chartDayCount(): number {
   const option = getEChartsMockInstances().at(-1)?.options.at(-1);
   if (option === undefined) throw new Error("no ECharts option captured");
@@ -46,11 +41,7 @@ function chartDayCount(): number {
 }
 
 /**
- * The mounted trend chart's series names, in the last captured ECharts
- * option's series order - reads the same "last mocked instance, last
- * captured option" seam as {@link chartDayCount}, so a `chartGroupBy` switch
- * (which remounts the chart via its `key` prop) is picked up by re-reading
- * the newest mock instance rather than the original one.
+ * The mounted trend chart's series names, in the last captured ECharts option's series order - reads the same "last mocked instance, last captured option" seam as {@link chartDayCount}, so a `chartGroupBy` switch (which remounts the chart via its `key` prop) is picked up by re-reading the newest mock instance rather than the original one.
  */
 function chartSeriesNames(): readonly string[] {
   const option = getEChartsMockInstances().at(-1)?.options.at(-1);
@@ -99,10 +90,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTreeNode: (id: string) => ({ title: `Chat ${id}` }),
 }));
 
-// html-to-image's `toBlob` rasterises via a canvas that jsdom can't back -
-// the hook's own capture step is stubbed here so these tests exercise the
-// dialog's wiring (which node it resolves, what it hands off) rather than
-// real rasterisation.
+// html-to-image's `toBlob` rasterises via a canvas that jsdom can't back - the hook's own capture step is stubbed here so these tests exercise the dialog's wiring (which node it resolves, what it hands off) rather than real rasterisation.
 vi.mock("@/lib/usage-analytics/usage-export-image", () => ({
   USAGE_EXPORT_REGION_SELECTOR: "[data-usage-export-region]",
   captureUsageExportImageBlob: mocks.captureUsageExportImageBlob,
@@ -158,9 +146,6 @@ function usageSummaryResponse(): UsageSummaryResponse {
       window: {
         timezone: "UTC",
         windowDays: 30,
-        // A real 30-day window whose last included day is the bucket's own
-        // `2026-08-09` - `endAtExclusive` is the first instant OUTSIDE it,
-        // which is what the chart's x-axis is anchored on.
         startAtInclusive: Date.parse("2026-07-11T00:00:00Z"),
         endAtExclusive: Date.parse("2026-08-10T00:00:00Z"),
       },
@@ -238,11 +223,8 @@ function usageSummaryResponse(): UsageSummaryResponse {
 }
 
 /**
- * `usageSummaryResponse()` plus a second same-day bucket from a different
- * harness/model, so the chart has something to actually regroup: switching
- * `chartGroupBy` folds the same two buckets by a different key and the
- * series names must change with it. `totals.factCount` tracks the bucket
- * count rather than staying pinned at the base fixture's `1`.
+ * `usageSummaryResponse()` plus a second same-day bucket from a different harness/model, so the chart has something to actually regroup: switching `chartGroupBy` folds the same two buckets by a different key and the series names must change with it.
+ * `totals.factCount` tracks the bucket count rather than staying pinned at the base fixture's `1`.
  */
 function usageSummaryResponseWithTwoBuckets(): UsageSummaryResponse {
   const base = usageSummaryResponse();
@@ -383,9 +365,7 @@ describe("<EpicUsageDialog />", () => {
     await waitFor(() => {
       expect(chartSeriesNames()).toEqual(["claude-sonnet-5", "gpt-5.6-sol"]);
     });
-    // The harness split keeps its own harness-keyed scale: with the chart's
-    // key space now models, a single shared scale would drop every split
-    // row to the "Other" fallback token.
+    // The harness split keeps its own harness-keyed scale: with the chart's key space now models, a single shared scale would drop every split row to the "Other" fallback token.
     const dot = screen
       .getByTestId("usage-harness-split-row-claude")
       .querySelector("span");
@@ -443,9 +423,7 @@ describe("<EpicUsageDialog />", () => {
       const base = usageSummaryResponse();
       return {
         ...base,
-        // A local read speaks for THIS machine only, so its zero is not the
-        // account's zero. The loaded branch carries that qualification on
-        // the cost figure; routing to the empty state must not drop it.
+        // The loaded branch carries that qualification on the cost figure; routing to the empty state must not drop it.
         servedBy: "local",
         summary: {
           ...base.summary,
@@ -489,23 +467,16 @@ describe("<EpicUsageDialog />", () => {
   it("renders the layout skeleton inside the constant frame while loading", async () => {
     renderDialog(usageSummaryResponse);
 
-    // Synchronously after mount the query has not resolved: the body shows
-    // the layout-mirroring skeleton, never a spinner line, while the frame
-    // (window picker, footer) is already in place around it.
+    // Synchronously after mount the query has not resolved: the body shows the layout-mirroring skeleton, never a spinner line, while the frame (window picker, footer) is already in place around it.
     expect(screen.getByTestId("usage-dialog-skeleton")).toBeTruthy();
-    // The skeleton blocks are `aria-hidden`, so the state carries its name
-    // in an sr-only status instead - visually a skeleton, audibly still
-    // "Loading usage…", which the spinner line it replaced used to say.
+    // The skeleton blocks are `aria-hidden`, so the state carries its name in an sr-only status instead - visually a skeleton, audibly still "Loading usage…", which the spinner line it replaced used to say.
     const status = screen.getByRole("status");
     expect(status.getAttribute("data-testid")).toBe("usage-dialog-skeleton");
     expect(screen.getByText("Loading usage…").className).toContain("sr-only");
     expect(screen.getByTestId("usage-window-7")).toBeTruthy();
     expect(screen.getByTestId("epic-usage-view-full-dashboard")).toBeTruthy();
 
-    // Every block must override the primitive's `bg-muted`: preset themes
-    // define `--muted` identical to `--popover` (the dialog surface), which
-    // made the whole skeleton render invisibly. A foreground-alpha fill is
-    // the surface-independent guarantee.
+    // Every block must override the primitive's `bg-muted`: preset themes define `--muted` identical to `--popover` (the dialog surface), which made the whole skeleton render invisibly.
     const blocks = status.querySelectorAll('[data-slot="skeleton"]');
     expect(blocks.length).toBeGreaterThan(0);
     for (const block of blocks) {
@@ -521,9 +492,7 @@ describe("<EpicUsageDialog />", () => {
     renderDialog(usageSummaryResponse);
     await screen.findByTestId("usage-cost-figure");
 
-    // jsdom can't exercise container queries or viewport variants - the
-    // structure and classes ARE the testable contract here; rendering-level
-    // verification is the manual pass.
+    // jsdom can't exercise container queries or viewport variants - the structure and classes ARE the testable contract here; rendering-level verification is the manual pass.
     const content = screen.getByTestId("epic-usage-dialog");
     expect(content.className).toContain("h-[min(88dvh,46rem)]");
     expect(content.className).toContain("sm:max-w-3xl");
@@ -635,9 +604,7 @@ describe("<EpicUsageDialog />", () => {
 
     await user.click(screen.getByTestId("epic-usage-copy-image"));
 
-    // The clipboard call is what has to happen inside the click's user
-    // activation, so it must already have been made while the capture it was
-    // handed is still pending - not after the blob lands.
+    // The clipboard call is what has to happen inside the click's user activation, so it must already have been made while the capture it was handed is still pending - not after the blob lands.
     expect(mocks.copyImageBlobPromiseToClipboard).toHaveBeenCalledTimes(1);
     const [captured] = mocks.copyImageBlobPromiseToClipboard.mock.calls[0];
     resolveCapture(blob);
@@ -665,9 +632,7 @@ describe("<EpicUsageDialog />", () => {
       screen.getByRole<HTMLButtonElement>("button", { name: "Copy image" }),
     );
 
-    // A capture is a full-region rasterisation, so the two legs share one
-    // mutation: while the copy runs, DOWNLOAD is disabled too - not just the
-    // button that was pressed.
+    // A capture is a full-region rasterisation, so the two legs share one mutation: while the copy runs, DOWNLOAD is disabled too - not just the button that was pressed.
     const downloadButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Download image",
     });

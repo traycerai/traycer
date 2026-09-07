@@ -1,31 +1,5 @@
-/**
- * Regression cover for the drop-commit rendered-position discontinuity.
- *
- * WHAT THE FIRST VERSION OF THIS FILE GOT WRONG. It rendered ONE item, in ONE
- * direction, and asserted that its rendered position was continuous. It passed
- * against a build where the re-base reached only a single element per commit -
- * because the element it sampled was the one being reached. A five-run
- * both-direction probe then found a visible tab departing 134.11px, three times
- * out of three, in the other direction.
- *
- * That is this project's recurring defect arriving in a TEST rather than an
- * instrument: a check whose outcome is identical across the distinction it
- * exists to make. "Rendered position is continuous for the item I looked at"
- * cannot separate "every moved item was corrected" from "one was, and I sampled
- * it".
- *
- * So the assertions here are over the WHOLE strip: every item whose baseline
- * moved must be re-based, and every item's composite rendered position must be
- * preserved - in both directions, with unequal widths, including the hidden
- * dragged tab. Opacity and direction are never inputs to the rule, so they are
- * never inputs to the test either.
- *
- * The numbers a per-frame probe recorded against the defective build:
- *
- *   pre-fix          360.52px and 351.50px departure
- *   partial fix, A   134.11px x3   (re-base landed on the hidden dragged tab)
- *   partial fix, B     0.33px      (re-base landed on the visible neighbour)
- */
+/** That is this project's recurring defect arriving in a test rather than an instrument: a check whose outcome
+ * is identical across the distinction it exists to make. */
 import { useLayoutEffect, useRef } from "react";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -39,10 +13,8 @@ import {
 import { HEADER_STRIP_SCROLL_TEST_ID } from "../header-strip-geometry";
 import { useHeaderTabDisplacement } from "../use-header-tab-displacement";
 
-/**
- * Unequal widths on purpose: a fixture of equal tabs cannot tell a correct
- * per-element delta from one element's delta applied to every element.
- */
+/** Unequal widths on purpose: a fixture of equal tabs cannot tell a correct per-element delta from one
+ * element's delta applied to every element. */
 const WIDTHS: Record<string, number> = { a: 180.8, b: 400.4, c: 180.8 };
 
 /** Slot of each item, keyed by id. jsdom performs no layout, so this IS layout. */
@@ -98,18 +70,11 @@ interface ItemState {
   readonly offsetX: number;
   /** Carried only to prove it is NOT an input to the correction. */
   readonly opacity: number;
-  /**
-   * `false` renders a strip item that never registers - the shape
-   * `SplitTabItem` had, which made the widest item in the strip exempt from
-   * every commit while reading as present.
-   */
+  /** `false` renders a strip item that never registers - the shape `SplitTabItem` had, which made the widest item
+   * in the strip exempt from every commit while reading as present. */
   readonly registered: boolean;
-  /**
-   * Swapping this replaces the item's DOM node while KEEPING the component
-   * instance - the only way to reproduce same-instance node churn. Changing the
-   * React key instead remounts, which builds a fresh registry entry and so
-   * cannot exercise a stale one.
-   */
+  /** Changing the React key instead remounts, which builds a fresh registry entry and so cannot exercise a stale
+   * one. */
   readonly tag: "div" | "span";
 }
 
@@ -156,7 +121,6 @@ function UnregisteredStripItem(props: { readonly item: ItemState }) {
   );
 }
 
-/** Mirrors the strip container: the re-base runs on the parent boundary. */
 function Strip(props: {
   readonly items: readonly ItemState[];
   readonly nodeEpoch: number;
@@ -165,9 +129,8 @@ function Strip(props: {
     report = runHeaderStripCommitHandoff();
   });
   return (
-    // The pass walks the DOM scoped to the strip container, so the harness has
-    // to be that container - which is also what lets an UNREGISTERED item be
-    // seen at all.
+    // The pass walks the DOM scoped to the strip container, so the harness has to be that container - which is
+    // also what lets an unregistered item be seen at all.
     <div data-testid={HEADER_STRIP_SCROLL_TEST_ID}>
       {props.items.map((item) =>
         item.registered ? (
@@ -195,13 +158,8 @@ afterEach(() => {
   report = { rebased: [], moved: [], uncorrected: [] };
 });
 
-/**
- * Drive a commit from `order` to `nextOrder`.
- *
- * Pre-commit each item is displaced so it ALREADY renders at its final slot -
- * the settled state the probe captured. A correct commit therefore moves
- * nothing at all, which is a sharper assertion than "moves a little".
- */
+/** Pre-commit each item is displaced so it already renders at its final slot - the settled state the probe
+ * captured. */
 function driveCommit(input: {
   readonly order: readonly string[];
   readonly nextOrder: readonly string[];
@@ -254,8 +212,6 @@ function driveCommit(input: {
 
 describe("header strip commit handoff", () => {
   it("direction A - every moved item keeps its rendered position", () => {
-    // The direction the partial fix failed 3/3. `a` is the dragged tab and is
-    // hidden; the re-base used to land on it and leave the visible tabs stale.
     const { before, after } = driveCommit({
       order: ["a", "b", "c"],
       nextOrder: ["b", "c", "a"],
@@ -362,10 +318,7 @@ describe("header strip commit handoff", () => {
   });
 
   it("reports a strip item that is on screen but never registers", () => {
-    // The split-group class of bug, reproduced. `b` is the widest item and
-    // renders its own frame without registering, so it CANNOT be re-based. The
-    // requirement is not that it be corrected - it is that it never passes
-    // unnoticed, because silence is what let this ship.
+    // `b` is the widest item and renders its own frame without registering, so it cannot be re-based.
     const { before, after } = driveCommit({
       order: ["a", "b", "c"],
       nextOrder: ["b", "c", "a"],
@@ -382,11 +335,8 @@ describe("header strip commit handoff", () => {
   });
 
   it("keeps correcting an item whose DOM node is replaced in place", () => {
-    // Registry identity has to survive node churn WITHOUT a remount. Keyed by
-    // the node captured at mount, a replaced element leaves a detached key
-    // whose `offsetLeft` reads 0 forever - the item stays registered and is
-    // exempt from every later commit. Swapping the element TYPE replaces the
-    // node while keeping the component instance, which a key change cannot do.
+    // Swapping the element type replaces the node while keeping the component instance, which a key change cannot
+    // do.
     const mk = (
       order: readonly string[],
       offsets: Record<string, number>,
@@ -441,9 +391,8 @@ describe("header strip commit handoff", () => {
   });
 
   it("reproduces the observed defect from the probe's own numbers", () => {
-    // The model, stated as arithmetic against the pre-fix trace: slot 613.75
-    // with transform -400.45 renders at 213.30, and the stale transform -351.50
-    // against the new slot 213.30 renders at -138.20.
+    // The model, stated as arithmetic against the pre-fix trace: slot 613.75 with transform -400.45 renders at
+    // 213.30, and the stale transform -351.50 against the new slot 213.30 renders at -138.20.
     expect(613.75 + -400.45).toBeCloseTo(213.3, 2);
     expect(213.3 + -351.5).toBeCloseTo(-138.2, 2);
     // And the correction that makes it continuous is zero, not merely small.

@@ -9,22 +9,8 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 const GIT_BINDINGS_RETRY_TIMEOUT_MS = 10_000;
 
 /**
- * Shown when the worktree-bindings read FAILED and the host ANSWERED - an
- * authorization refusal, an unsupported method, an internal error on the far
- * side. The machine is reachable; the operation is not.
- *
- * It is separate from {@link GitHostUnreachable} on purpose. That screen says
- * "can't reach <host>" and offers to re-dial or move off the pin, which are the
- * remedies for a machine that never answered and are the wrong ones here: the
- * host is right there, and the reason it gave is the only thing that can point
- * at a fix. Collapsing both into "can't reach" would repeat, one layer up, the
- * exact defect this panel's empty states were fixed for - naming a remedy the
- * user cannot act on and hiding the one fact that mattered.
- *
- * There is deliberately no "Use active host" here. Switching machines is not
- * indicated by an answered failure, and the host picker in the header is
- * reachable in this state anyway, so the affordance exists without this screen
- * asserting it is the fix.
+ * That screen says "can't reach <host>" and offers to re-dial or move off the pin, which are the remedies for a machine that never answered and are the wrong ones here: the host is right there, and the reason it gave is the only thing that can point at a fix.
+ * Collapsing both into "can't reach" would repeat, one layer up, the exact defect this panel's empty states were fixed for - naming a remedy the user cannot act on and hiding the one fact that mattered.
  */
 export function GitBindingsUnreadable(props: {
   /** The host's own message. The only thing here that can point at a cause. */

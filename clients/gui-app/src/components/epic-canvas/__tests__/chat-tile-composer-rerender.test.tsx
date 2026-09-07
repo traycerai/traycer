@@ -1,14 +1,6 @@
 /**
- * Composer render-count regression: the composer subtree must NOT re-render when
- * only the per-token, message-derived dock inputs (`todo` / `restoreContext`)
- * change. Those flow to `ChatLowerDock` (which SHOULD re-render every streaming
- * token); the composer's inputs are all non-streaming, so the `ChatComposerRegion`
- * memo boundary should skip. This test proves the boundary holds and is not
- * frozen (it still re-renders when a real composer input changes).
- *
- * The composer-relevant props are held as stable references here exactly as the
- * real view-model memoizes them; only `todo` / `restoreContext` change between
- * simulated tokens.
+ * Composer render-count regression: the composer subtree must NOT re-render when only the per-token, message-derived dock inputs (`todo` / `restoreContext`) change.
+ * This test proves the boundary holds and is not frozen (it still re-renders when a real composer input changes).
  */
 import {
   act,
@@ -217,9 +209,7 @@ function restoreContext(): ChatRestoreContextValue {
     revertFileChanges: () => null,
   };
 }
-// `todo` stays non-null so `pinnedStackVisible` (and the composer layout) is
-// stable while it churns; any composer re-render is then attributable to the
-// memo boundary, not a layout change.
+// `todo` stays non-null so `pinnedStackVisible` (and the composer layout) is stable while it churns; any composer re-render is then attributable to the memo boundary, not a layout change.
 function todoSnapshot(id: string): PinnedTodoSnapshot {
   return { id, items: [] };
 }
@@ -265,9 +255,7 @@ describe("composer isolation from per-token dock churn", () => {
     );
     expect(composerRenderCount).toBe(1);
 
-    // Simulate 5 streaming tokens: each swaps the dock's message-derived inputs
-    // (new `todo` + `restoreContext` identities); every composer-relevant prop
-    // keeps its reference.
+    // Simulate 5 streaming tokens: each swaps the dock's message-derived inputs (new `todo` + `restoreContext` identities); every composer-relevant prop keeps its reference.
     for (let token = 1; token <= 5; token += 1) {
       rerender(<ChatLowerInteractionSurfaces {...props(TURN_IDLE, token)} />);
     }

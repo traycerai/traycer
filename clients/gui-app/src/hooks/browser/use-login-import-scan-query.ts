@@ -9,15 +9,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import { browserQueryKeys } from "@/lib/query-keys";
 
-/**
- * What one source holds: sites, counts, and what stands in the way. Metadata
- * only on the desktop side - no keystore is opened - so the Choose-sites step
- * can render before any prompt has fired.
- *
- * `retry: false` is load-bearing rather than tidy: Safari's scan can be
- * refused by macOS until Full Disk Access is granted, and a retry there is a
- * second refusal the user did not ask for, not a recovery.
- */
+/** `retry: false` is load-bearing rather than tidy: Safari's scan can be refused by macOS until Full Disk Access is granted, and a retry there is a second refusal the user did not ask for, not a recovery. */
 function loginImportScanQueryOptions(
   browserView: BrowserViewBridge | null,
   sourceId: string | null,

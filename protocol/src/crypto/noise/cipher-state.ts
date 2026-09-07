@@ -7,32 +7,7 @@ import {
   importAesGcmKey,
 } from "./primitives";
 
-/**
- * Noise CipherState: an AEAD key paired with a 64-bit nonce counter.
- *
- * There are two ways to drive it, and the split is deliberate:
- *
- *  - **Stateful** (`encryptWithAd` / `decryptWithAd`): the private `nonce`
- *    counter is the source of truth. Used by the handshake, which is strictly
- *    sequential (each message fully awaits before the next), so there is no
- *    concurrency on these methods.
- *  - **Stateless** (`sealWithNonce` / `openWithNonce`): the caller supplies the
- *    nonce and the internal counter is never read or written. This is what the
- *    transport session uses, because a session multiplexes N mux streams and
- *    therefore issues concurrent seals/opens; routing those through the shared
- *    `nonce` field would race and reuse a (key, nonce) pair (T8-F1). The session
- *    reserves each counter synchronously and passes it in here.
- *
- * Nonce discipline (security-gate bar #3): every seal uses a distinct nonce
- * (the stateful path advances by one per message; the stateless path trusts the
- * caller's monotonic reservation); the reserved `MAX_NONCE` is refused rather
- * than wrapped, so a (key, nonce) pair is never reused; and a failed open never
- * advances the stateful counter.
- *
- * The AES-GCM CryptoKey is imported once and cached as a promise (so concurrent
- * stateless callers share a single import); the raw key bytes are retained only
- * for `rekey()` and are dropped by `wipe()`.
- */
+/** Noise CipherState: an AEAD key paired with a 64-bit nonce counter. */
 export class CipherState {
   private key: Uint8Array | null;
   private keyPromise: Promise<CryptoKey> | null = null;
@@ -58,11 +33,7 @@ export class CipherState {
     return this.nonce;
   }
 
-  /**
-   * Force the stateful counter to `nonce` (the spec's SetNonce). Not used on the
-   * concurrent transport path — that path is stateless. The `MAX_NONCE` ceiling
-   * is still enforced at use time.
-   */
+  /** Force the stateful counter to `nonce` (the spec's SetNonce). */
   setNonce(nonce: bigint): void {
     if (nonce < 0n) {
       throw new NoiseNonceError("nonce must be non-negative");
@@ -83,9 +54,8 @@ export class CipherState {
   // --- Stateless AEAD (caller owns the nonce; safe under concurrency) --------
 
   /**
-   * Seal `plaintext` under an explicit, caller-reserved `nonce`. Does not touch
-   * the internal counter, so concurrent callers with distinct reserved nonces
-   * never collide.
+   * Seal `plaintext` under an explicit, caller-reserved `nonce`.
+   * Does not touch the internal counter, so concurrent callers with distinct reserved nonces never collide.
    */
   async sealWithNonce(
     nonce: bigint,
@@ -102,11 +72,7 @@ export class CipherState {
     );
   }
 
-  /**
-   * Open `ciphertext` under an explicit `nonce`. Does not touch the internal
-   * counter. WebCrypto's generic DOMException on a bad tag is converted to a
-   * typed NoiseDecryptError.
-   */
+  /** Open `ciphertext` under an explicit `nonce`. */
   async openWithNonce(
     nonce: bigint,
     associatedData: Uint8Array,
@@ -127,9 +93,8 @@ export class CipherState {
   // --- Stateful AEAD (internal counter; sequential handshake use) ------------
 
   /**
-   * Encrypt-with-associated-data using the internal counter. With no key set
-   * (pre-`es` handshake stage) this is the identity function. The counter is
-   * reserved synchronously *before* the await, so it is never observed twice.
+   * Encrypt-with-associated-data using the internal counter.
+   * With no key set (pre-`es` handshake stage) this is the identity function.
    */
   async encryptWithAd(
     associatedData: Uint8Array,
@@ -142,11 +107,7 @@ export class CipherState {
     return this.sealWithNonce(nonce, associatedData, plaintext);
   }
 
-  /**
-   * Decrypt-with-associated-data using the internal counter. On authentication
-   * failure the counter is left untouched (the spec's "n is not incremented"
-   * rule). With no key set this is the identity function.
-   */
+  /** Decrypt-with-associated-data using the internal counter. */
   async decryptWithAd(
     associatedData: Uint8Array,
     ciphertext: Uint8Array,
@@ -178,9 +139,7 @@ export class CipherState {
   }
 
   /**
-   * Noise Rekey: k = REKEY(k), where for AES-GCM REKEY(k) is the first 32 bytes
-   * of ENCRYPT(k, 2^64-1, empty-ad, 32 zero bytes). The nonce is intentionally
-   * NOT reset — Rekey ratchets the key without rewinding the counter.
+   * Noise Rekey: k = REKEY(k), where for AES-GCM REKEY(k) is the first 32 bytes of ENCRYPT(k, 2^64-1, empty-ad, 32 zero bytes).
    */
   async rekey(): Promise<void> {
     if (this.key === null) {

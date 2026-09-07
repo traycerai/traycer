@@ -56,15 +56,7 @@ function bootstrap(protocolVersion: number): {
   };
 }
 
-/**
- * A core with the fail-closed no-core answers, overridable per test.
- *
- * One helper rather than a literal per test, and that is the point:
- * `EpicRuntimeWorkerCore` MIRRORS the protocol's call kinds, so it grows every
- * time a call is added — and five separate literals meant five separate
- * compile errors the moment `body/*` landed. A single construction site turns
- * the next such addition into one failure in one place.
- */
+/** A core with the fail-closed no-core answers, overridable per test. */
 function stubCore(
   overrides: Partial<EpicRuntimeWorkerCore>,
 ): EpicRuntimeWorkerCore {
@@ -112,11 +104,8 @@ describe("startEpicRuntimeWorkerHost", () => {
   });
 
   it("refuses the PREVIOUS protocol version, naming both numbers", () => {
-    // The real skew, not a synthetic one: a stale worker chunk surviving an HMR
-    // reload speaks the version before this one. That case was UNGUARDED until
-    // this round - the constant did not move when 2c replaced the event
-    // vocabulary, so both sides read `1`, the handshake matched, and the stale
-    // worker answered `ready` and then ignored every stream frame it was sent.
+    // The real skew, not a synthetic one: a stale worker chunk surviving an HMR reload speaks the
+    // version before this one.
     const { pair, main, host } = createFixture();
 
     main.emit(bootstrap(RUNTIME_BRIDGE_PROTOCOL_VERSION - 1), []);
@@ -125,9 +114,8 @@ describe("startEpicRuntimeWorkerHost", () => {
     const fatal = events.filter((event) => event.kind === "fatal");
     expect(fatal).toHaveLength(1);
     expect(events.filter((event) => event.kind === "ready")).toHaveLength(0);
-    // Both numbers, so a reader of the log knows which side is stale.
-    // The filter already narrows to the fatal arm, so re-testing `kind` was a
-    // literal-vs-literal comparison that could not fail.
+    // Both numbers, so a reader of the log knows which side is stale. The filter already narrows to
+    // the fatal arm, so re-testing `kind` was a literal-vs-literal comparison that could not fail.
     const message = fatal[0].message;
     expect(message).toContain(String(RUNTIME_BRIDGE_PROTOCOL_VERSION - 1));
     expect(message).toContain(String(RUNTIME_BRIDGE_PROTOCOL_VERSION));
@@ -168,12 +156,7 @@ describe("startEpicRuntimeWorkerHost", () => {
       stubCore({ readAttachmentBytes: () => Promise.resolve(partialView) }),
     );
 
-    // Asserted on what the CALLER receives, not on the frame in transit. The
-    // frame is the same evidence either way, but a caller that gets a
-    // rejection where it should get bytes is the failure a frame-level
-    // assertion cannot see - and this test was briefly written that way,
-    // because the response parser used `instanceof Uint8Array` and jsdom
-    // hands the clone back from Node's realm.
+    // Asserted on what the CALLER receives, not on the frame in transit.
     const answer = await main.call("attachment/read", { hash: "hash" }, []);
     expect(answer.bytes).not.toBeNull();
     expect(answer.bytes === null ? [] : [...answer.bytes]).toEqual([2, 3, 4]);

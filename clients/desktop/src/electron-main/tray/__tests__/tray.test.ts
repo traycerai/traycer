@@ -34,14 +34,6 @@ interface CapturedMenuItemLike {
   registerAccelerator?: boolean;
 }
 
-/**
- * The tray asset resolver is the load-bearing piece for the visibility
- * fix: a regression here re-introduces the invisible-tray failure mode that
- * shipped while `new Tray(nativeImage.createEmpty())` was in place. We test
- * the pure helper directly (no Electron runtime) and assert that the
- * dev-mode resolved path actually exists on disk so a missing or renamed
- * asset trips the test instead of slipping into a packaged build.
- */
 
 // `electron` and `electron-log` have no Node-side implementation. The tray
 // module reads `process.platform` / `process.resourcesPath` at call-time
@@ -121,10 +113,6 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// `resolveTrayDir` keys off the deploy slot (`config.isDevBuild`), not
-// `app.isPackaged`. These tests point `process.resourcesPath` at the
-// workspace `resources/`, so pin the dev predicate false to take the
-// shipped `<resources>/tray` branch.
 vi.mock("../../../config", async (importActual) => {
   const actual = await importActual<typeof import("../../../config")>();
   return { ...actual, isDevBuild: false };
@@ -189,10 +177,6 @@ describe("resolveTrayIconPath", () => {
   });
 
   it("resolves to a real PNG on disk for every supported platform when pointed at the workspace tray dir", () => {
-    // The dev orchestrator sets `TRAYCER_DESKTOP_TRAY_DIR` to the
-    // workspace's `resources/tray/`. Assert that the staged PNGs exist
-    // alongside this source tree - exactly what the helper resolves at
-    // runtime when the override is set.
     const trayDir = join(REPO_DESKTOP_ROOT, "resources", "tray");
     const platforms: NodeJS.Platform[] = ["darwin", "win32", "linux"];
     for (const platform of platforms) {
@@ -200,7 +184,7 @@ describe("resolveTrayIconPath", () => {
       expect(existsSync(asset.path), `expected ${asset.path} to exist`).toBe(
         true,
       );
-      // Read once and assert against the buffer — reading a directory would
+      // Read once and assert against the buffer  -  reading a directory would
       // throw, so this also covers the "is a regular file" expectation without
       // a separate stat() that could race the read.
       const contents = readFileSync(asset.path);
@@ -281,10 +265,6 @@ describe("DesktopTrayController menu structure", () => {
     mockAppState.appPath = REPO_DESKTOP_ROOT;
     mockMenuState.lastBuiltMenu = null;
     trayInstances.length = 0;
-    // The controller resolves the tray directory from `<resources>/tray`
-    // (the config mock pins `isDevBuild` false → shipped branch). Point
-    // `process.resourcesPath` at the workspace `resources/` so the icon-load
-    // preflight in `loadTrayIconImage` finds the real PNG on disk.
     Object.defineProperty(process, "resourcesPath", {
       configurable: true,
       value: join(REPO_DESKTOP_ROOT, "resources"),
@@ -622,8 +602,6 @@ describe("DesktopTrayController menu structure", () => {
     }
     const staleClick = staleUpdateRow.click;
 
-    // Presentation rebuilds to B (and a new menu template). The open menu's
-    // old item callback must still pin A.
     controller.setPresentation({
       authStatus: "signed-in",
       account: { name: null, email: "user@example.com" },
@@ -646,11 +624,8 @@ describe("DesktopTrayController menu structure", () => {
     expect(commands[0]?.hostUpdateVersion).not.toBe("1.6.0-rc.1");
   });
 
-  // Decision 9: the "Open Traycer" item is display-only for the summon
-  // chord - `registerAccelerator: false` means the OS never binds it from
-  // the menu, only the global-shortcuts registry does. Deleting either the
-  // `accelerator` assignment or the `registerAccelerator: false` line from
-  // `rebuildMenu()` must fail this test, not just checking the method exists.
+  // Decision 9: the "Open Traycer" item is display-only for the summon chord.
+  // Deleting either the `accelerator` assignment or the `registerAccelerator: false` line from `rebuildMenu()` must fail this test, not just checking the method exists.
   it("shows the live summon accelerator on Open Traycer as display-only, and none when disabled", () => {
     const controller = new DesktopTrayController(makeWindow(), trayImage(), {
       onEpicSelected: null,

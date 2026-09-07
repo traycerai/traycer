@@ -6,15 +6,7 @@ import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-// `terminal-tile.tsx` and `tui-agent-tile.tsx` both drive automatic recovery
-// off the SAME condition: `if (status === "lost" || status === "reaped")
-// onSessionLost()`. This test pins that contract for the TUI agent tile - a
-// handle that dead-ends at lifecycle status "reaped" (the host confirmed via
-// TERMINAL_NOT_FOUND that this handle's PTY is gone - NOT the
-// `exitReason: "reaped"` idle-reap-and-revive path the sibling
-// `terminal-agent-tile-reaped-revive` test pins) must drive the same
-// recovery callback as "lost". Mocks mirror that sibling test's minimal
-// scaffolding (no real canvas-store tab/pane fixture needed).
+// This test pins that contract for the TUI agent tile - a handle that dead-ends at lifecycle status "reaped" (the host confirmed via TERMINAL_NOT_FOUND that this handle's PTY is gone - NOT the `exitReason: "reaped"` idle-reap-and-revive path the sibling `terminal-agent-tile-reaped-revive` test pins) must drive the same recovery callback as "lost".
 
 const closeCanvasTab = vi.fn();
 

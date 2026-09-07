@@ -26,11 +26,7 @@ import {
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { type RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 
-/**
- * The two windows a glyph bar can stand for, in fixed draw order: a provider's
- * 5-hour window and its Weekly window. Also the per-bar disambiguator in the
- * React key, since a single provider can own *both* bars (see below).
- */
+/** The two windows a glyph bar can stand for, in fixed draw order: a provider's 5-hour window and its Weekly window. */
 export type HeaderRateLimitWindowLabel = "5h" | "Weekly";
 
 export interface HeaderRateLimitBar {
@@ -42,13 +38,7 @@ export interface HeaderRateLimitBar {
   readonly degraded: boolean;
 }
 
-/**
- * The only providers that ever occupy a glyph slot, in fixed draw order (codex
- * before claude-code, matching `PROVIDER_ID_ORDER`). OpenRouter and Kilo Code
- * are popover-only and never contribute a header bar. Both of these are the
- * `ephemeralProcess` fetch lane, so the glyph needs a single
- * `useHostQueriesWithResponseMap` call and no `httpFetch` plumbing at all.
- */
+/** OpenRouter and Kilo Code are popover-only and never contribute a header bar. */
 const GLYPH_PROVIDER_IDS = ["codex", "claude-code"] as const;
 
 type GlyphProviderId = (typeof GLYPH_PROVIDER_IDS)[number];
@@ -66,7 +56,6 @@ interface GlyphProviderReading {
   readonly degraded: boolean;
 }
 
-/** The 5h window a glyph provider reports (Codex `primary`, Claude `fiveHour`). */
 function fiveHourWindow(
   rateLimits: ProviderRateLimits | null,
 ): ProviderRateLimitWindow | null {
@@ -76,11 +65,7 @@ function fiveHourWindow(
       return rateLimits.primary;
     case "claude-code":
       return rateLimits.fiveHour;
-    // OpenRouter/Kilo Code/Grok/Hugging Face/OpenCode/Cursor are never queried
-    // for a glyph slot (grok and cursor stay out of `GLYPH_PROVIDER_IDS` - a
-    // monthly billing cycle isn't a short rolling window, and the credit
-    // providers report money rather than a window at all); kept for
-    // exhaustiveness over the union.
+    // OpenRouter/Kilo Code/Grok/Hugging Face/OpenCode/Cursor are never queried for a glyph slot (grok and cursor stay out of `GLYPH_PROVIDER_IDS` - a monthly billing cycle isn't a short rolling window, and the credit providers report money rather than a window at all); kept for exhaustiveness over the union.
     case "openrouter":
     case "kilocode":
     case "grok":
@@ -91,7 +76,6 @@ function fiveHourWindow(
   }
 }
 
-/** The Weekly window a glyph provider reports (Codex `secondary`, Claude `sevenDay`). */
 function weeklyWindow(
   rateLimits: ProviderRateLimits | null,
 ): ProviderRateLimitWindow | null {
@@ -136,20 +120,7 @@ function buildPair(
 }
 
 /**
- * The glyph's two bars, or `[]` when it can't populate *both* slots:
- *
- * - Both providers configured: bar 1 is Codex's 5h window, bar 2 is Claude
- *   Code's 5h window (glyph order).
- * - Exactly one configured: that provider fills both slots with its 5h and
- *   Weekly windows.
- *
- * Partial-load policy: this returns bars only when it can fill BOTH slots;
- * anything short of that (a provider still cold, or a window the provider
- * doesn't report) collapses to `[]`, and the icon then shows its neutral 2-bar
- * placeholder. The glyph is a single fixed 2-bar unit (the CodexBar pre-filled
- * look), so it flips atomically from placeholder to fully-populated rather than
- * ever rendering a half-real / half-neutral mix - simpler and less ambiguous
- * than padding a lone real bar with a placeholder-shaped one.
+ * Return bars only when both slots can be filled; anything short collapses to `[]` so the glyph never mixes a real bar with a placeholder.
  */
 function selectGlyphBars(
   readings: ReadonlyArray<GlyphProviderReading>,
@@ -191,35 +162,8 @@ function selectGlyphBars(
   return [];
 }
 
-/**
- * The header glyph's bar data: a fixed two-bar summary scoped to Codex and
- * Claude Code only. When both are configured the glyph shows each provider's 5h
- * window (codex first); when only one is configured that provider fills both
- * bars with its 5h and Weekly windows. OpenRouter/Kilo Code/Hugging Face/OpenCode
- * never appear here
- * (popover-only). See `selectGlyphBars` for the exact selection and the
- * partial-load policy; a return of `[]` means "render the neutral placeholder".
- *
- * Mounting `useHostQueriesWithResponseMap` here drives the initial
- * fetch-on-mount for the two glyph providers (both `ephemeralProcess`); the
- * serial queue only bounds their *subsequent* background/turn/manual
- * triggers. Because this hook no longer queries the `httpFetch` lane,
- * OpenRouter/Kilo Code/Hugging Face/OpenCode are fetched lazily on popover / Settings
- * open rather
- * than pre-fetched at app-shell mount - which is fine, since nothing at the
- * shell level displays their usage.
- *
- * Uses the envelope-aware `useHostQueriesWithResponseMap` (not the plain
- * `useHostQueries`) so this passive observer's declared cache shape agrees
- * with what `ephemeral-fetch-queue.ts` actually writes for these keys
- * (`ProviderRateLimitEnvelope`) - both providers here are always
- * `ephemeralProcess`, so this observer stays disabled and never issues its
- * own fetch, but the TData type still has to match reality.
- *
- * A provider still cold (no data yet) contributes nothing - callers render the
- * neutral/placeholder glyph while this returns `[]`, never a loading state, so
- * the icon never gates header render on a fetch.
- */
+/** [] is the neutral placeholder, never a loading gate.
+ * Observe ProviderRateLimitEnvelope via useHostQueriesWithResponseMap; this observer stays disabled and does not fetch. */
 export function useHeaderRateLimitBars(
   profileSelection: RateLimitProfileSelection,
 ): ReadonlyArray<HeaderRateLimitBar> {
@@ -255,14 +199,7 @@ export function useHeaderRateLimitBars(
       ];
     });
 
-  // `useHostQueriesWithResponseMap` applies one shared `options` object to
-  // every request in the batch, so it's only safe to reuse a single glyph
-  // provider's options if every glyph provider actually resolves to the same
-  // ones (true today: both are `ephemeralProcess`, never `httpFetch`).
-  // Verified here - rather than just trusted from `GLYPH_PROVIDER_IDS`'s own
-  // comment - so a future glyph provider on a different lane falls back to
-  // `null` (TanStack's defaults) instead of silently borrowing an unrelated
-  // provider's polling participation.
+  // `useHostQueriesWithResponseMap` applies one shared `options` object to every request in the batch, so it's only safe to reuse a single glyph provider's options if every glyph provider actually resolves to the same ones (true today: both are `ephemeralProcess`, never `httpFetch`).
   const glyphOptions = glyphProviders.map(
     (target) =>
       providerRateLimitQueryOptions(

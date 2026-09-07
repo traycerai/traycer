@@ -32,22 +32,8 @@ const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
 
 const READ_FAILED = "Couldn't read this phone's notification setting.";
 
-/**
- * The OS push permission of the phone this renderer runs on. It belongs under
- * Application → Notifications because it never varies with the selected host.
- *
- * It exists because the OS remembers a refusal forever - the app asks once,
- * and after a "Don't Allow" no amount of relaunching can re-prompt. Without
- * this row nothing in Traycer says so, and the only repair (the OS Settings
- * app) is undiscoverable. On every shell without OS push - desktop, dev web,
- * tests - `pushPermission` is `null` and this renders nothing at all, so the
- * panel is byte-identical there.
- *
- * The group is titled "This phone", never "This device": in this GUI "device"
- * is the UI word for a HOST (Settings → Devices lists hosts), so "This device"
- * would read as one more host-scoped setting - the exact confusion the row is
- * here to end.
- */
+/** It exists because the OS remembers a refusal forever - the app asks once, and after a "Don't Allow" no
+ * amount of relaunching can re-prompt. */
 export function PushPermissionSection(): ReactNode {
   const { pushPermission } = useRunnerHost();
   const query = usePushPermissionQuery();
@@ -158,12 +144,7 @@ function PushPermissionAction(props: {
   );
 }
 
-/**
- * A last-known state outranks a failed REFETCH. The row's job is to report the
- * OS switch, and a stale-but-real answer with its working button beats
- * replacing both with an apology; the error copy is for the case that has
- * nothing to show, which is the first read failing.
- */
+/** A last-known state outranks a failed refetch. */
 function pushPermissionView(query: PushPermissionQuery): PushPermissionView {
   if (query.data !== undefined) return { kind: query.data };
   if (query.error !== null) {

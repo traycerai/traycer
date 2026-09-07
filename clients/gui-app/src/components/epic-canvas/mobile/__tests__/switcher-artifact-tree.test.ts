@@ -17,9 +17,7 @@ function record(id: string, parentId: string | null): EpicTreeRecord {
 }
 
 /**
- * The nested result flattened to `[id, depth]` in render order. Depth is
- * counted by this walk rather than read off the value under test, so a builder
- * that nested wrongly cannot report itself as correct.
+ * Depth is counted by this walk rather than read off the value under test, so a builder that nested wrongly cannot report itself as correct.
  */
 function shape(
   records: ReadonlyArray<EpicTreeRecord>,
@@ -54,9 +52,7 @@ describe("buildSwitcherArtifactTree", () => {
   });
 
   it("keeps the slice's order between siblings and between roots", () => {
-    // The slice arrives in the epic's sort order, so nesting may regroup it but
-    // must not re-sort it: `b` before `a` here, and `b`'s children in the order
-    // the slice listed them.
+    // The slice arrives in the epic's sort order, so nesting may regroup it but must not re-sort it: `b` before `a` here, and `b`'s children in the order the slice listed them.
     expect(
       shape([
         record("b", null),
@@ -88,10 +84,6 @@ describe("buildSwitcherArtifactTree", () => {
   });
 
   it("emits records that no root reaches rather than dropping them", () => {
-    // A parent cycle: neither record descends from a root, so the root walk
-    // reaches neither. The first is adopted as a root afterwards and the cycle
-    // breaks at it, so both are listed - the position is arbitrary, the
-    // presence is not.
     expect(shape([record("x", "y"), record("y", "x")])).toEqual([
       ["x", 0],
       ["y", 1],

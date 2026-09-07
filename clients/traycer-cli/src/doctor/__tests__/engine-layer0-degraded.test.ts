@@ -3,25 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * `traycer host doctor` is the only structured surface where a support
- * engineer can learn that a running host started **without** the Layer 0
- * single-writer guarantee.
- *
- * The host degrades and keeps serving on purpose: refusing to start would
- * trade a rare two-hosts-one-data-dir corruption for a routine outage. What it
- * must not do is fall silent, and every other channel it has is ephemeral —
- * the framed status pipe has no reader on an ordinary production start, and
- * the `[host] layer0-degraded` stderr line is one line at the top of a log
- * whose diagnostic tail is 200 lines and whose support attachment is 500. So
- * the host writes the verdict into pid.json and doctor reads it back.
- *
- * These rows go through the **real** `readHostPidMetadata` against a real
- * pid.json on disk, whose contents match what
- * `traycer-host/src/transport/rpc/pid-metadata.ts` writes (pinned on that side
- * by its own key-shape test). Mocking the reader would have proved only that
- * the engine can format an object this file made up.
- */
+/** `traycer host doctor` is the only structured surface where a support engineer can learn that a running host started **without** the Layer 0 single-writer guarantee. The host degrades and keeps serving on purpose: refusing to start would trade a rare two-hosts-one-data-dir corruption for a routine outage. */
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 const osHome = vi.hoisted(() => ({ current: "" }));
@@ -61,12 +43,7 @@ afterEach(() => {
   vi.doUnmock("../../service");
 });
 
-/**
- * The exact document the host publishes. `pid` is this process so the engine
- * sees a live host — the degraded record only matters for a host that is
- * actually running, and doctor deliberately ignores the field on stale
- * metadata (it would describe a process that is already gone).
- */
+/** The exact document the host publishes. `pid` is this process so the engine sees a live host - the degraded record only matters for a host that is actually running, and doctor deliberately ignores the field on stale metadata (it would describe a process that is already gone). */
 function writePidJson(layer0: unknown, layer0Slot: unknown): void {
   const hostRoot = join(workHome, ".traycer", "host");
   mkdirSync(hostRoot, { recursive: true });
@@ -83,9 +60,7 @@ function writePidJson(layer0: unknown, layer0Slot: unknown): void {
         startedAt: "2026-07-27T00:00:00.000Z",
         processStartTimeMs: 1_700_000_000_000,
         layer0,
-        // `JSON.stringify` omits an `undefined` value, so the default call
-        // writes a record with no such key at all - which is exactly what
-        // every host that predates ticket 38, and every non-pool host, writes.
+        // `JSON.stringify` omits an `undefined` value, so the default call writes a record with no such key at all - which is exactly what every host that predates ticket 38, and every non-pool host, writes.
         layer0Slot,
       },
       null,
@@ -171,9 +146,7 @@ describe("runDoctor Layer 0 guarantee reporting", () => {
     );
 
     expect(issue).toBeDefined();
-    // Warning, not error: nothing is broken, and promoting it would flip the
-    // exit code of `traycer host doctor` for every user whose home is on a
-    // network filesystem.
+    // Warning, not error: nothing is broken, and promoting it would flip the exit code of `traycer host doctor` for every user whose home is on a network filesystem.
     expect(issue?.severity).toBe("warning");
     // The cause is the actionable half - "the host is degraded" without it
     // tells an investigator nothing they can act on.
@@ -233,16 +206,7 @@ describe("runDoctor Layer 0 guarantee reporting", () => {
     ).toBeDefined();
   });
 
-  /**
-   * chat-sync-v2 ticket 38. A dev identity-pool host takes TWO Layer 0 locks -
-   * slot home and identity home - and until ticket 38 only the identity one
-   * reached pid.json. Not by picking the wrong record of two: the slot outcome
-   * was DISCARDED before any record existed, because `main-bootstrap` only
-   * announces it on the arm where that lock PREVENTS startup, and that arm
-   * returns. So this exact combination - identity `acquired`, slot `degraded` -
-   * published a clean `acquired` and doctor answered "guaranteed" to the one
-   * question the record exists for.
-   */
+  /** chat-sync-v2 ticket 38. A dev identity-pool host takes TWO Layer 0 locks - slot home and identity home - and until ticket 38 only the identity one reached pid.json. */
   it("reports a degraded SLOT home even when the identity home was acquired", async () => {
     stageQuietEnvironment();
     writePidJson(
@@ -347,11 +311,7 @@ describe("runDoctor Layer 0 guarantee reporting", () => {
     ).toBeDefined();
   });
 
-  /**
-   * Version skew in the other direction: a host newer than this CLI. Silence
-   * would be the same defect the field exists to remove, so an unfamiliar
-   * status reports "cannot confirm" rather than nothing.
-   */
+  /** Version skew in the other direction: a host newer than this CLI. Silence would be the same defect the field exists to remove, so an unfamiliar status reports "cannot confirm" rather than nothing. */
   it("reports a status this CLI does not recognise rather than falling silent", async () => {
     stageQuietEnvironment();
     writePidJson({ status: "quarantined", attemptId: "host-4242" }, undefined);

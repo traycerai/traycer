@@ -192,10 +192,8 @@ describe("buildTerminalListCommand", () => {
   });
 
   it("parses a v2.3 terminal.list payload without stripping lifecycleOwner", () => {
-    // The v1.4-equivalent regression for this method: a stale v2.2 schema
-    // strips the additive `lifecycleOwner` field silently (Zod discards
-    // unknown keys). The canonical v2.3 parse must keep it, even though the
-    // CLI's own row shape does not currently surface it downstream.
+    // The v1.4-equivalent regression for this method: a stale v2.2 schema strips the additive `lifecycleOwner` field silently (Zod discards unknown keys).
+    // The canonical v2.3 parse must keep it, even though the CLI's own row shape does not currently surface it downstream.
     const wireSession = session({ lifecycleOwner: "manager" });
     const parsed = listTerminalsResponseSchemaV23.parse({
       sessions: [wireSession],

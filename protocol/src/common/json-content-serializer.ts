@@ -20,29 +20,14 @@ export enum ContextType {
   Chat = "chat",
   /**
    * A referenceable Agent that uses the Terminal interface.
-   *
-   * Additive sibling of `Chat`, NOT a replacement: `Chat` is a released token
-   * carried by persisted mentions and must keep its value. Agent is the durable
-   * entity and Chat/Terminal are its interfaces, so both members serialize to
-   * the same interface-agnostic `@agent:` reference form for the coding agent -
-   * referring to an Agent means the same thing either way (Core Flows, Flow 3).
+   * Additive sibling of `Chat`, NOT a replacement: `Chat` is a released token carried by persisted mentions and must keep its value.
    */
   TerminalAgent = "terminal-agent",
-  /**
-   * A plain interactive terminal - a shell a person or an agent is working
-   * in, not an Agent. Distinct from `TerminalAgent` for exactly that reason:
-   * `TerminalAgent` names an Agent reached through the terminal interface and
-   * projects as `@agent:`, while this names the terminal itself, which a
-   * coding agent can only READ (`traycer_read_terminal` / `traycer terminal
-   * output`) and never talk to.
-   */
+  /** A plain interactive terminal - a shell a person or an agent is working in, not an Agent. */
   Terminal = "terminal",
   /**
-   * A browser tab the coding agent can read (title/URL/page contents) but not
-   * drive - a reference by identity, not a control surface. Mirrors `Terminal`
-   * exactly: display title plus the durable `tabId` the runtime resolves it
-   * with, and no `TerminalAgent`-style interface duality since a browser tab
-   * is never itself an Agent.
+   * A browser tab the coding agent can read (title/URL/page contents) but not drive - a reference by identity, not a control surface.
+   * Mirrors `Terminal` exactly: display title plus the durable `tabId` the runtime resolves it with, and no `TerminalAgent`-style interface duality since a browser tab is never itself an Agent.
    */
   BrowserTab = "browser-tab",
   Execution = "execution",
@@ -67,9 +52,7 @@ interface SerializerContext {
   listDepth: number;
   orderedListIndex: number;
   inListItem: boolean;
-  // True while rendering the content of a GFM table cell: inline text is
-  // escaped per text node, mark-aware, so a literal `|` cannot split the cell
-  // (see `escapeTableCellText` / `escapeTableCellCode`).
+  // True while rendering the content of a GFM table cell: inline text is escaped per text node, mark-aware, so a literal `|` cannot split the cell (see `escapeTableCellText` / `escapeTableCellCode`).
   inTableCell: boolean;
 }
 
@@ -136,10 +119,7 @@ function markDelimiters(mark: {
   }
 }
 
-// Maps a node's marks to the delimiters the serializer can render, keeping
-// the stored order except `code`, which is forced innermost: markdown
-// renders formatting delimiters inside inline code literally, so the
-// backticks must hug the text.
+// Maps a node's marks to the delimiters the serializer can render, keeping the stored order except `code`, which is forced innermost: markdown renders formatting delimiters inside inline code literally, so the backticks.
 function renderableMarks(
   marks: JsonContent["marks"] | undefined,
 ): RenderableMark[] {
@@ -163,9 +143,7 @@ function renderableMarks(
 
 interface TextRunEscaping {
   text: (text: string, marks: RenderableMark[]) => string;
-  // Applied to every mark delimiter. The only delimiter carrying variable
-  // content is a link's `](href)`; the fixed ones (`**`, `` ` ``, `~~`, `[`)
-  // contain nothing a cell escape touches, so this is a no-op for them.
+  // Applied to every mark delimiter.
   delimiter: (delimiter: string) => string;
 }
 
@@ -174,26 +152,12 @@ const noEscaping: TextRunEscaping = {
   delimiter: (delimiter) => delimiter,
 };
 
-// GFM table cells escape a literal `|` as `\|`. The parser (marked's
-// `splitCells`) decides whether a pipe is escaped by the PARITY of the
-// backslashes in front of it, then strips exactly one backslash from each
-// `\|`. Outside inline code that is the ordinary CommonMark escape: doubling
-// every backslash keeps a literal `\` literal and guarantees the `\|` we add
-// is read as escaped even after a trailing `\`.
+// GFM table cells escape a literal `|` as `\|`.
 function escapeTableCellText(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }
 
-// Inside inline code CommonMark processes no escapes, so a doubled backslash
-// comes back doubled and doubles AGAIN on the next md → doc → md pass. Every
-// agent write to an artifact is such a pass; three regex backslashes in one
-// table row grew to 3 × 2^21 characters in ~40 appends and blocked the host's
-// event loop inside the markdown lexer for good. Code text therefore keeps
-// its backslashes and escapes only the pipe. When the pipe follows an ODD run
-// of backslashes one more is added so the parity still reads "escaped" and
-// the cell cannot split: GFM has no encoding for a literal `\|` inside code,
-// so that one case is lossy by design, but it converges after a single pass
-// instead of growing (pinned by `json-content-serializer-tables.test.ts`).
+// Inside inline code CommonMark processes no escapes, so a doubled backslash comes back doubled and doubles AGAIN on the next md → doc → md pass.
 function escapeTableCellCode(text: string): string {
   return text.replace(
     /\|/g,
@@ -210,17 +174,11 @@ const tableCellEscaping: TextRunEscaping = {
     marks.some((mark) => mark.type === "code")
       ? escapeTableCellCode(text)
       : escapeTableCellText(text),
-  // A link destination is parsed with CommonMark escapes (and marked strips
-  // the `\|`), so the plain-text escape round-trips it exactly as the whole
-  // cell used to.
+  // A link destination is parsed with CommonMark escapes (and marked strips the `\|`), so the plain-text escape round-trips it exactly as the whole cell used to.
   delimiter: escapeTableCellText,
 };
 
-// Node types whose serializer renders its inline content through
-// `serializeChildren` and therefore escapes it per text node while
-// `inTableCell` is set. Anything else that lands in a cell (mention, image,
-// hard break, unknown nodes) is escaped as a rendered whole, exactly as the
-// entire cell used to be.
+// Node types whose serializer renders its inline content through `serializeChildren` and therefore escapes it per text node while `inTableCell` is set.
 const TABLE_CELL_CONTAINER_TYPES: ReadonlySet<string> = new Set([
   "paragraph",
   "heading",
@@ -231,28 +189,7 @@ const TABLE_CELL_CONTAINER_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Exported for the composer's recovery seam, which quotes a dead send's text
- * back to its author and is held to PARITY with this serializer: the marks a
- * resend would carry have to be the marks the recovery copy shows. It reuses
- * this rather than imitating it because the run discipline below is the
- * subtle part, and a second implementation would drift from it silently.
- *
- * Serializes a run of consecutive inline text nodes, emitting mark
- * delimiters only where the mark set changes between nodes. Wrapping each
- * node independently corrupts continuous marks that contain nested marks:
- * `**bold `code` bold**` splits into three text nodes and would serialize
- * as `**bold **` + `` **`code`** `` + `** bold**`, whose doubled `****`
- * runs re-parse as literal asterisks.
- *
- * A mark stays open across a boundary when it is still present in the next
- * node's mark set, regardless of its position there: ProseMirror stores
- * marks sorted by schema rank, so `[italic]` followed by `[bold, italic]`
- * is a continuous italic span gaining bold, not an italic/bold swap.
- *
- * Newly opened marks nest by continuation length - a mark that spans more
- * of the remaining run opens first (outermost). Without this, `_**b** i_`
- * would open bold outside italic (schema-rank order), and bold ending
- * after "b" would force italic closed and reopened, doubling delimiters.
+ * Serialize consecutive inline text nodes, emitting mark delimiters only where the mark set changes. Nest newly opened marks by remaining continuation length.
  */
 export function serializeTextRun(nodes: JsonContent[]): string {
   return serializeTextRunWith(nodes, noEscaping);
@@ -269,15 +206,6 @@ function sameMarkKeys(a: RenderableMark[], b: RenderableMark[]): boolean {
   return a.every((mark) => keys.has(mark.key));
 }
 
-// Adjacent text nodes carrying the same renderable marks are one continuous
-// span in the output - nothing closes or opens between them under the
-// boundary rules in `serializeTextRunWith` - so they are joined here and
-// escaped as ONE string. For the plain-text cell escape that changes nothing
-// (it is context-free per character), but the inline-code pipe escape reads
-// the backslash PARITY in front of the pipe, and a mark that renders nothing
-// (a thread anchor) can split one code span between a trailing `\` and a
-// leading `|`. Escaped on its own the second node sees no backslash, emits
-// `\|`, and the parser reads `a\\|b` as an even run and splits the cell.
 function coalesceTextSegments(nodes: JsonContent[]): TextSegment[] {
   const segments: TextSegment[] = [];
   for (const node of nodes) {
@@ -293,9 +221,6 @@ function coalesceTextSegments(nodes: JsonContent[]): TextSegment[] {
   return segments;
 }
 
-// `escaping.text` sees each segment's text together with its renderable
-// marks, so a table cell can escape plain text and code text differently
-// (see `tableCellEscaping`); `escaping.delimiter` sees each mark delimiter.
 function serializeTextRunWith(
   nodes: JsonContent[],
   escaping: TextRunEscaping,
@@ -332,9 +257,7 @@ function serializeTextRunWith(
     while (keep < open.length && nextKeys.has(open[keep].key)) {
       keep++;
     }
-    // Inline code renders nested delimiters literally, so nothing may open
-    // inside a kept code mark - close it and reopen it innermost instead.
-    // A kept code mark is always at the top of the stack (code sorts last).
+    // Inline code renders nested delimiters literally, so nothing may open inside a kept code mark - close it and reopen it innermost instead.
     const keptKeys = new Set(open.slice(0, keep).map((mark) => mark.key));
     const hasNewMarks = marks.some((mark) => !keptKeys.has(mark.key));
     if (hasNewMarks && keep > 0 && open[keep - 1].type === "code") {
@@ -430,10 +353,7 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
       const reference = `${org}/${repo}#${issue}`;
-      // Same default-host rule as the LLM form below: github.com is what an
-      // unqualified reference already means, while an enterprise reference
-      // with the same coordinates is a different thing and must not read
-      // identically to the human this string is for.
+      // Same default-host rule as the LLM form below: github.com is what an unqualified reference already means, while an enterprise reference with the same coordinates is a different thing and must not read identically to the.
       if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
         return `${attrs.githubHost}/${reference}`;
       }
@@ -455,11 +375,7 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const name = attrs.commandName || attrs.label || "";
       return `workflow:${name}`;
     }
-    // Agent is the durable entity a human reads here; Chat and Terminal are
-    // only the interfaces used to reach one. Both arms therefore project as
-    // `agent:` - prefixing by interface (`chat:` / `terminal-agent:`) would
-    // render the two as sibling entity types, which is the model this replaces.
-    // The enum values stay `chat` / `terminal-agent`; only the projection moved.
+    // Agent is the durable entity a human reads here; Chat and Terminal are only the interfaces used to reach one.
     case ContextType.Chat:
     case ContextType.TerminalAgent: {
       const title = attrs.label || attrs.id || "";
@@ -486,19 +402,14 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
   }
 }
 
-// Narrow `Record<string, unknown>` mention attrs to the typed mention
-// shape at the boundary. The TipTap document schema is open
-// (`attrs: Record<string, unknown>`) but mention nodes always carry a
-// `MentionAttrs`-shaped payload by upstream validation.
+// Narrow `Record<string, unknown>` mention attrs to the typed mention shape at the boundary.
 function asMentionAttrs(
   attrs: Record<string, unknown> | undefined,
 ): Partial<MentionAttrs> {
   return (attrs ?? {}) as Partial<MentionAttrs>;
 }
 
-// Reads a string-typed attribute from a JsonContent `attrs` bag. Returns
-// the empty string when missing or non-string so atom serializers can omit
-// malformed values without special-casing each call site.
+// Reads a string-typed attribute from a JsonContent `attrs` bag.
 function readStringAttr(
   attrs: Record<string, unknown> | undefined,
   key: string,
@@ -563,18 +474,8 @@ function formatMentionForLLMQuery(
           ? "github-pr"
           : "github-issue";
       const reference = `@${prefix}:${org}/${repo}#${issue}`;
-      // `url` is still optional on the node, so the suffix is only appended
-      // when there is one. Emitting `[url=]` for a node that predates the
-      // attribute - or for any caller that omits it - turns a reference that
-      // used to serialize cleanly into malformed metadata, and hands the agent
-      // an empty fallback instead of no fallback.
+      // `url` is still optional on the node, so the suffix is only appended when there is one.
       if (attrs.url) return `${reference} [url=${attrs.url}]`;
-      // Without a URL, the host is the only thing that can disambiguate an
-      // enterprise reference: `org/repo#123` on ghe.example.com is a different
-      // artifact from the same coordinates on github.com, and the node keeps
-      // `githubHost` even when no `url` was ever set. github.com stays bare -
-      // it is the default every unqualified reference already means, and
-      // qualifying it would churn every serialization that was fine.
       if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
         return `${reference} [host=${attrs.githubHost}]`;
       }
@@ -602,12 +503,7 @@ function formatMentionForLLMQuery(
       const cmdName = attrs.commandName || "";
       return cmdName ? `workflow:${wfId}/${cmdName}` : `workflow:${wfId}`;
     }
-    // Both Agent interfaces share this arm deliberately. "Refer to Agent B"
-    // must mean the same thing to the coding agent whether B uses the Chat or
-    // the Terminal interface, so both emit the interface-agnostic `@agent:`
-    // marker plus the durable id the agent needs for `traycer_send_message` /
-    // `traycer_get_transcript`. Falling through to `default:` dropped the id
-    // entirely and handed the runtime a bare title.
+    // Both Agent interfaces share this arm deliberately.
     case ContextType.Chat:
     case ContextType.TerminalAgent: {
       const agentId = attrs.id || "";
@@ -616,10 +512,8 @@ function formatMentionForLLMQuery(
         ? `@agent:${title} [agentId is unavailable]`
         : `@agent:${title} [agentId=${agentId}]`;
     }
-    // Mirrors the agent arm above: a human-readable title so the reference
-    // reads as the user wrote it, plus the durable id the read tools address
-    // (`traycer_read_terminal`, `traycer terminal output`). Without the id the
-    // runtime is handed a bare title it cannot resolve.
+    // Mirrors the agent arm above: a human-readable title so the reference reads as the user wrote it, plus the durable id the read tools address (`traycer_read_terminal`, `traycer terminal output`).
+    // Without the id the runtime is handed a bare title it cannot resolve.
     case ContextType.Terminal: {
       const terminalId = attrs.terminalId || attrs.id || "";
       const title = attrs.label || "untitled";
@@ -627,9 +521,6 @@ function formatMentionForLLMQuery(
         ? `@terminal:${title} [terminalId is unavailable]`
         : `@terminal:${title} [terminalId=${terminalId}]`;
     }
-    // Mirrors the terminal arm above exactly: a browser tab is readable but
-    // not addressable as an Agent, so it gets the same title+id shape rather
-    // than the `@agent:` projection.
     case ContextType.BrowserTab: {
       const tabId = attrs.tabId || attrs.id || "";
       const title = attrs.label || "untitled";
@@ -685,9 +576,8 @@ function formatMentionForUser(
     return `@${name}`;
   }
 
-  // GitHub references carry their durable URL in the LLM form and are never
-  // materialized against this host. Unlike file/artifact references, a stale
-  // validation result must not append `[NOT FOUND]` to either kind of chip.
+  // GitHub references carry their durable URL in the LLM form and are never materialized against this host.
+  // Unlike file/artifact references, a stale validation result must not append `[NOT FOUND]` to either kind of chip.
   if (
     attrs.contextType === ContextType.GithubIssue ||
     attrs.contextType === ContextType.GithubPullRequest
@@ -699,9 +589,7 @@ function formatMentionForUser(
     return `\`${formatted}\``;
   }
 
-  // Use shared formatting for all other types. `contextType` is
-  // guaranteed by upstream validation; default to empty so the helper
-  // falls through to its `default` branch on malformed inputs.
+  // Use shared formatting for all other types.
   const formatted = formatMentionForDisplayQuery({
     ...attrs,
     contextType: attrs.contextType ?? "",
@@ -946,9 +834,7 @@ function serializeTable(node: JsonContent, ctx: SerializerContext): string {
         if (cell.type === "tableHeader") {
           isHeader = true;
         }
-        // Escaping happens per text node under `inTableCell` (mark-aware, see
-        // `escapeTableCellRun`) - never on the rendered cell string, which
-        // cannot tell code text from plain text.
+        // Escaping happens per text node under `inTableCell` (mark-aware, see `escapeTableCellRun`) - never on the rendered cell string, which cannot tell code text from plain text.
         cells.push(
           serializeChildren(cell.content, { ...ctx, inTableCell: true }),
         );
@@ -982,9 +868,6 @@ function serializeChildren(
 ): string {
   if (!content) return "";
 
-  // Consecutive text nodes serialize as one run so mark delimiters land only
-  // where the mark set actually changes; non-text inline nodes (mention,
-  // hardBreak, …) end the run and close any open marks.
   const parts: string[] = [];
   let textRun: JsonContent[] = [];
   const escaping = ctx.inTableCell ? tableCellEscaping : noEscaping;

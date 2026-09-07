@@ -10,17 +10,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 export const BROWSER_SAVED_LOGIN_SITES_METHOD = "browser.savedLoginSites";
 
 /**
- * Which sites this surface's host still holds saved logins for (spec section
- * 7.3). Names and last-seen times only - the host never puts a cookie value on
- * this path, so nothing here can leak one.
- *
- * Scoped to the SURFACE's host, like every other host read in Settings: the
- * store is per host, and each keeps its own key and its own slice.
- *
- * `browser.savedLoginSites` is an optional (non-floor) method, so the query is
- * gated on the host having advertised it. A host that has not is not a host
- * with no saved logins - the group renders without the list rather than
- * claiming an empty jar.
+ * Names and last-seen only; no cookie values. Gated on advertised `browser.savedLoginSites` - a host without the method is not an empty jar.
  */
 export function useBrowserSavedLoginSitesQuery(args: {
   readonly enabled: boolean;

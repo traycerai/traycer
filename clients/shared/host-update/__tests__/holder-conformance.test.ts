@@ -1,22 +1,6 @@
 /**
- * Writer-driven holder conformance (design §1.5, the drift guard for the
- * whole lock-holder projection). This is deliberately NOT a hand-written
- * fixture: it acquires a REAL `update-attempt.lock` through the production
- * acquisition path, reads back the bytes that path actually wrote, feeds
- * them through `parseAttemptLockHolder`, and asserts field-for-field
- * agreement with the `LockMetadata` the lock handle exposes. A rename in the
- * lock format then fails THIS test, instead of silently degrading every
- * reader (host included) to permanent `indeterminate`.
- *
- * Cold-review F6: the identity/start-time assertions must be non-vacuous.
- * `null === null` proves nothing about a parser that read a misspelled or
- * removed key, so the identity case below forces a deterministic non-null
- * value (the writer records `process.pid`'s own stamp, and the test process
- * is by definition alive) rather than accepting whatever the platform probe
- * happened to return. Supplemental liveness (`supervisedProcessGroupId`,
- * `retainOnPublisherDeath`) is driven through the real rebind path so drift
- * in either key is caught too, including the plain-vs-supplemental branch
- * those fields select.
+ * Writer-driven holder conformance (design §1.5, the drift guard for the whole lock-holder projection).
+ * A rename in the lock format then fails this test, instead of silently degrading every reader (host included) to permanent `indeterminate`.
  */
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -76,13 +60,11 @@ describe("parseAttemptLockHolder vs the real writer's LockMetadata", () => {
     const metadata = acquired.handle.metadata;
 
     // Field-for-field agreement with the LockMetadata the writer's own
-    // handle exposes — not a fixture's idea of what it should have written.
+    // handle exposes - not a fixture's idea of what it should have written.
     expect(holder.pid).toBe(metadata.pid);
     expect(holder.token).toBe(metadata.token);
 
-    // `supervisedProcessGroupId: undefined` on the writer's metadata maps to
-    // `null` on the reader's projection — absence stated as a fact, not
-    // omitted as a key.
+    // `supervisedProcessGroupId: undefined` on the writer's metadata maps to `null` on the reader's projection - absence stated as a fact, not omitted as a key.
     expect(metadata.supervisedProcessGroupId).toBeUndefined();
     expect(holder.supervisedProcessGroupId).toBeNull();
 
@@ -109,10 +91,8 @@ describe("parseAttemptLockHolder vs the real writer's LockMetadata", () => {
     handles.push(acquired.handle);
 
     const metadata = acquired.handle.metadata;
-    // The writer stamped THIS process — the one running the test — so a
-    // failure here means the platform's own start-identity probe could not
-    // read its own creation stamp. That is the one case the design calls a
-    // supported outcome; every other outcome must be exact.
+    // The writer stamped this process - the one running the test - so a failure here means the platform's own start-identity probe could not read its own creation stamp.
+    // That is the one case the design calls a supported outcome; every other outcome must be exact.
     if (
       metadata.processStartIdentity === null ||
       metadata.processStartedAtMs === null
@@ -126,10 +106,7 @@ describe("parseAttemptLockHolder vs the real writer's LockMetadata", () => {
     expect(holder).not.toBeNull();
     if (holder === null) return;
 
-    // Non-vacuous: both sides are guaranteed non-null past the skip guard
-    // above, so this is an exact string/number comparison, not
-    // `null === null`. A parser reading a misspelled or removed key would
-    // fail here.
+    // Non-vacuous: both sides are guaranteed non-null past the skip guard above, so this is an exact string/number comparison, not `null === null`.
     expect(typeof holder.processStartIdentity).toBe("string");
     expect(holder.processStartIdentity).toBe(metadata.processStartIdentity);
     expect(typeof holder.processStartedAtMs).toBe("number");
@@ -162,11 +139,8 @@ describe("parseAttemptLockHolder vs the real writer's LockMetadata", () => {
     const dir = await freshDir();
     let capturedHolder: AttemptLockHolder | null = null;
 
-    // Drives the REAL rebind path a supervisor uses to publish supplemental
-    // liveness, rather than hand-writing a lock file with these keys. A
-    // rename of either key in the writer breaks this test instead of
-    // silently degrading every reader to the conservative supplemental arm
-    // (or worse, the wrong one).
+    // Drives the real rebind path a supervisor uses to publish supplemental liveness, rather than hand-writing a lock file with these keys.
+    // A rename of either key in the writer breaks this test instead of silently degrading every reader to the conservative supplemental arm (or worse, the wrong one).
     const outcome = await withUpdateContender(
       {
         hostHomeDir: dir,
@@ -177,9 +151,7 @@ describe("parseAttemptLockHolder vs the real writer's LockMetadata", () => {
       },
       async (capability) => {
         await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {
-          // The test process's own pid is a stand-in "detached group" id —
-          // valid shape-wise (a positive safe integer), which is all the
-          // parser or the plain-vs-supplemental branch inspects.
+          // The test process's own pid is a stand-in "detached group" id - valid shape-wise (a positive safe integer), which is all the parser or the plain-vs-supplemental branch inspects.
           supervisedProcessGroupId: process.pid,
           retainOnPublisherDeath: true,
         });
@@ -195,10 +167,7 @@ describe("parseAttemptLockHolder vs the real writer's LockMetadata", () => {
     const holder: AttemptLockHolder = capturedHolder;
     expect(holder.supervisedProcessGroupId).toBe(process.pid);
     expect(holder.retainOnPublisherDeath).toBe(true);
-    // The populated branch must flip the plain-vs-supplemental decision —
-    // this is the arm that routes a projection to `indeterminate` instead
-    // of judging liveness by the publisher's identity alone. An unprotected
-    // key here would silently change interruption decisions.
+    // The populated branch must flip the plain-vs-supplemental decision - this is the arm that routes a projection to `indeterminate` instead of judging liveness by the publisher's identity alone.
     expect(attemptHolderUsesPlainIdentityProbe(holder)).toBe(false);
   });
 

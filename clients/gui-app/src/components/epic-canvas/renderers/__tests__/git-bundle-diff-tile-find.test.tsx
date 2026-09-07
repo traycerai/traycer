@@ -66,19 +66,8 @@ const state = vi.hoisted(() => ({
   } satisfies GitGetFileDiffResponse,
 }));
 
-// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
-// to, so `git.subscribeStatus` cannot ride the window's effective host while
-// carrying the tile's host id as a param. `null` is that hook's FOLLOWING
-// answer, so the tile falls back to the ambient binding this suite supplies -
-// which is what every assertion here is about. Which transport a host resolves
-// to is a different question with its own suite:
-// `use-surface-host-stream-binding.test.tsx`.
-// The hook returns the value to PROVIDE: the ambient binding while following
-// (this suite's), the pin's own once built, null while pending. Following here.
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
+// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND to, so `git.subscribeStatus` cannot ride the window's effective host while carrying the tile's host id as a param.
+// These tiles resolve the user's default open target, which asks whether the tile's host is the LOCAL one before it may offer Finder.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -167,10 +156,6 @@ vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
   }),
 }));
 
-// The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
-// mocked hook ignores the client it is handed; what this repoint pins is that
-// the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpenForClient: () => ({
     mutate: vi.fn(),
@@ -221,11 +206,6 @@ describe("<GitDiffTile /> bundle find", () => {
     epicSessionHandle = openStoreForTest({
       epicId: EPIC_ID,
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
       factories: {
         streamClientFactory: fakeStreamClientFactory,
         laneSelection: null,

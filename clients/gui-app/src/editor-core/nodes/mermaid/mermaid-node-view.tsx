@@ -28,10 +28,7 @@ import {
 } from "./mermaid-service";
 import { useMermaidPngDownload } from "./use-mermaid-png-download";
 
-/**
- * Code editor is loaded on first open - CodeMirror adds ~150 kB gzip so
- * holding it off the initial artifact render keeps the first paint fast.
- */
+/** Code editor is loaded on first open - CodeMirror adds ~150 kB gzip so holding it off the initial artifact render keeps the first paint fast. */
 const MermaidCodeEditor = lazy(() =>
   import("./mermaid-code-editor").then((mod) => ({
     default: mod.MermaidCodeEditor,
@@ -54,10 +51,8 @@ export function MermaidNodeView(props: NodeViewProps) {
 
   const editable = editor.isEditable;
 
-  // Auto-open the editor when the node mounts empty - promoted from a
-  // bare ` ```mermaid ``` ` fence the user clearly wants to author. The
-  // lazy initializer runs exactly once at mount so no effect-driven
-  // setState is needed.
+  // Auto-open when mounting empty (promoted from a bare mermaid fence).
+  // Lazy initializer once at mount; no effect-driven setState.
   const [editing, setEditing] = useState<boolean>(
     () => editable && rawCode.trim().length === 0,
   );

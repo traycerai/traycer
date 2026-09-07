@@ -124,11 +124,7 @@ class FakePolicySession {
     },
   };
 
-  /**
-   * The `Session["cookies"]` slice the primary-profile delta observer
-   * subscribes to. An empty jar that never fires: these suites are about
-   * session policy, not deltas - the observer only has to find the seam.
-   */
+  /** An empty jar that never fires: these suites are about session policy, not deltas - the observer only has to find the seam. */
   readonly cookies = {
     get: (_filter: { readonly domain: string }): Promise<Cookie[]> =>
       Promise.resolve([]),

@@ -4,12 +4,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
-/**
- * The host's recently-opened workspaces, for the remote folder picker's
- * shortcut row (`workspace.prepareFolders` v1.1 `listRecentWorkspaces`).
- *
- * Constant params, so the object is hoisted rather than memoized.
- */
+/** Constant params, so the object is hoisted rather than memoized. */
 export const LIST_RECENT_WORKSPACES_PARAMS: WorkspacePrepareFoldersRequestV12 =
   {
     operation: "listRecentWorkspaces",
@@ -27,16 +22,7 @@ export function recentWorkspacesQueryKey(hostId: string | null) {
 }
 
 /**
- * Recents are a CONVENIENCE on top of browsing, never a precondition for it.
- * Against a v1.0 host this operation fails closed with
- * `HostRpcError(code: "DOWNGRADE_UNSUPPORTED")` - the picker simply renders no
- * shortcut row and browsing continues to work, so callers must not surface
- * this error. `retry: false` keeps a host that cannot answer from being asked
- * repeatedly.
- *
- * The client is the REQUESTER's (tab-bound where the pick started), matching
- * `useWorkspaceBrowseFolders` - the recents shown must belong to the same
- * machine the picked path is sent to.
+ * Recents fail closed with `DOWNGRADE_UNSUPPORTED` on v1.0; do not surface that error and do not retry. Client is the requester's, matching browse.
  */
 export function useWorkspaceListRecentWorkspaces(args: {
   readonly client: HostClient<HostRpcRegistry> | null;

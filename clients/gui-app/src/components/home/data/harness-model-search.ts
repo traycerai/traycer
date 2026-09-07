@@ -23,35 +23,17 @@ export interface HarnessModelRow {
   readonly harnessId: ProviderId;
   readonly harnessLabel: string;
   readonly label: string;
-  /**
-   * Primary text shown when browsing within a provider (no search query). For
-   * grouped harnesses this drops the prefix `label` may carry, because the
-   * provider/vendor is rendered as a group header instead (`Perplexity: Sonar` →
-   * `Sonar` under a `Perplexity` header). Equal to `label` for ungrouped
-   * harnesses and in search mode.
-   */
+  /** For grouped harnesses this drops the prefix `label` may carry, because the provider/vendor is rendered as a
+   * group header instead (`Perplexity: Sonar` → `Sonar` under a `Perplexity` header). */
   readonly browseLabel: string;
-  /**
-   * Stable group id this row groups under in browse mode - the host's declared
-   * provider/vendor for grouped harnesses (OpenCode, OpenRouter, Hugging Face).
-   * Section
-   * boundaries key off this, NOT the display label, so two groups that happen to
-   * share a name don't collapse into one. `null` for ungrouped harnesses.
-   */
+  /** Section boundaries key off this, not the display label, so two groups that happen to share a name don't
+   * collapse into one. */
   readonly providerGroupId: string | null;
-  /**
-   * Display text for the group header (the provider's name, or its id when the
-   * name is missing). `null` when `providerGroupId` is `null`.
-   */
+  /** Display text for the group header (the provider's name, or its id when the name is missing). */
   readonly providerGroupLabel: string | null;
   readonly capacityLabel: string | null;
-  /**
-   * Human-readable sunset notice when the host's catalog flags this model as
-   * deprecated (currently only the Traycer harness does). `null` for every
-   * actively-recommended model, including every non-Traycer harness (the
-   * field is optional on the wire - see `deprecationNotice` on
-   * `GuiAgentModelOption`).
-   */
+  /** Human-readable sunset notice when the host's catalog flags this model as deprecated (currently only the
+   * Traycer harness does). */
   readonly deprecationNotice: string | null;
   readonly model: ModelOption;
   readonly searchLabel: string;
@@ -87,13 +69,8 @@ export function buildHarnessModelRows(
   harness: HarnessOption,
   models: ReadonlyArray<ModelOption>,
 ): ReadonlyArray<HarnessModelRow> {
-  // When the host declares per-model groups (OpenCode by provider, OpenRouter by
-  // vendor, Hugging Face by org), order by group so contiguous runs line up
-  // with the group headers
-  // the picker renders. Reorder only when EVERY model is annotated: a partially
-  // annotated list (a transitional/skewed host that tags only some models) keeps
-  // host order rather than floating the unannotated models to the top. Ungrouped
-  // harnesses keep host order too - the first model is preferred and stays first.
+  // Reorder only when every model is annotated: a partially annotated list (a transitional/skewed host that tags
+  // only some models) keeps host order rather than floating the unannotated models to the top.
   const isGrouped =
     models.length > 0 &&
     models.every(
@@ -128,12 +105,8 @@ export function filterModelRows(
   return searchIndex.search(trimmed).map((result) => result.item);
 }
 
-/**
- * Turns relevance-ranked rows into explicit provider sections. Section order is
- * ranked by each provider's best match, and rows inside a section keep their
- * Fuse order. This is a display policy for grouped providers, not a generic
- * search helper.
- */
+/** Section order is ranked by each provider's best match, and rows inside a section keep their Fuse order. This
+ * is a display policy for grouped providers, not a generic search helper. */
 export function sectionModelRowsByProviderRank(
   rows: ReadonlyArray<HarnessModelRow>,
 ): ReadonlyArray<HarnessModelRowSection> {
@@ -179,10 +152,7 @@ export function selectedModelRowId(
   // Empty slug is the transient "unresolved / catalog loading" marker - point
   // the highlight at the first (preferred) model for this provider.
   if (selection.modelSlug.length === 0) return providerRows.at(0)?.id ?? "";
-  // Read-only (which row is highlighted), so an ambiguous alias may resolve to
-  // the first tied row. Resolving through the shared helper is what keeps a
-  // canonical id persisted before the catalog decorated its row from showing
-  // an empty highlight over a picker that clearly lists the model.
+  // Read-only (which row is highlighted), so an ambiguous alias may resolve to the first tied row.
   const model = readableModelMatch(
     resolveModelBySlug(
       providerRows.map((row) => row.model),
@@ -200,11 +170,8 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
   const openCodeProviderId = modelMetadataString(
     model.metadata.openCodeProviderId,
   );
-  // Group by the stable group id whenever the host declares one in the model
-  // list (OpenCode by upstream provider, OpenRouter by vendor prefix, Hugging
-  // Face by `<org>` id prefix) - the
-  // renderer is harness-agnostic. Fall back to the id as header text when the
-  // label is missing so such models still group rather than scattering.
+  // Group by the stable group id whenever the host declares one in the model list (OpenCode by upstream
+  // provider, OpenRouter by vendor prefix, Hugging Face by `<org>` id prefix).
   const providerGroupId =
     openCodeProviderId.length > 0 ? openCodeProviderId : null;
   const providerGroupLabel = openCodeGroupLabel(
@@ -238,12 +205,8 @@ function rowId(harnessId: ProviderId, value: string): string {
   return `${harnessId}:${value}`;
 }
 
-/**
- * Orders grouped models by group label, then group id, then model name - so the
- * picker's contiguous runs align with the (id-keyed) group headers. Sorting by
- * id within an equal label keeps two same-named groups as distinct adjacent
- * sections instead of interleaving them.
- */
+/** Sorting by id within an equal label keeps two same-named groups as distinct adjacent sections instead of
+ * interleaving them. */
 function sortByProviderGroup(
   models: ReadonlyArray<ModelOption>,
 ): ReadonlyArray<ModelOption> {

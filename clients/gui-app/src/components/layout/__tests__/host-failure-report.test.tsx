@@ -6,15 +6,10 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { isReportIssueDraftContext } from "@/lib/report-issue-draft-context";
 import type { HostStatusSnapshot } from "@/lib/host/compatibility-state";
 
-/** `ReportIssueActionProps` is module-private; borrow its shape structurally. */
 type ReportIssueActionProps = ComponentProps<typeof ReportIssueAction>;
 
-/**
- * `EMPTY_DEFAULT_HOST_PRESENTATION` is module-private, so this fixture rebuilds
- * the same shape rather than importing it. Only `compatibility.hostStatus`
- * (and `.status`) vary across the cases below; everything else stays at a
- * neutral default matching that private fixture's values.
- */
+/** `EMPTY_DEFAULT_HOST_PRESENTATION` is module-private, so this fixture rebuilds the same shape rather than
+ * importing it. */
 function neutralPresentation(): DefaultHostReadinessPresentation {
   return {
     targetKind: "unknown",
@@ -43,12 +38,8 @@ function neutralPresentation(): DefaultHostReadinessPresentation {
   };
 }
 
-/**
- * `hostFailureReportIssueAction` builds a `<ReportIssueAction>` element
- * directly (`React.createElement`, via JSX) rather than rendering one, so its
- * pre-filled `message` is readable straight off the returned element's props —
- * no render, no provider tree, no mocking `ReportIssueAction` itself.
- */
+/** `hostFailureReportIssueAction` builds a `<ReportIssueAction>` element directly (`React.createElement`, via
+ * JSX) rather than rendering one. */
 function reportedMessage(
   presentation: DefaultHostReadinessPresentation,
 ): string {
@@ -93,13 +84,7 @@ function compatiblePresentation(
 }
 
 describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#860 health line)", () => {
-  // The regression this line exists to prevent: a fabricated `0` used to read
-  // as "busy 0 sessions" for a host that never reported a count at all. The
-  // upgrade path now yields `null` instead (see `hostStatusUpgradeV10ToV11`),
-  // and this is the ONE place a person reads the difference — a pre-filled bug
-  // report. A test asserting the same rendered string for both cases would
-  // pass even if `count ?? 0` crept back in; these assert genuinely different
-  // observable text.
+  // A test asserting the same rendered string for both cases would pass even if `count ??
   it("says only 'busy' — no count, and never the literal word 'null' — when the host reported no count", () => {
     const message = reportedMessage(
       compatiblePresentation({
@@ -207,16 +192,8 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
 });
 
 describe("hostFailureReportIssueAction — the compat verdict word", () => {
-  // Found by a SURVIVED kill probe (P3.2 R6): with `compatibilityPresentation`
-  // mutated to report every failed probe as `compatible`, all six tests above
-  // stayed green. They vary `hostStatus` and never the verdict - so the health
-  // line's whole reason-for-existing, telling triage WHY the probe failed, had
-  // no cover at all.
-  //
-  // It matters most now: the compat verdict no longer reaches a user through
-  // any surface (D13 - it is a lease input), so this diagnostic line is the
-  // only place a wrong verdict would ever show up, and it shows up in the bug
-  // report someone files about something else entirely.
+  // They vary `hostStatus` and never the verdict - so the health line's whole reason-for-existing, telling
+  // triage why the probe failed, had no cover at all.
   const verdictCases = [
     {
       name: "a probe that never reached the host reads `unreachable`, never `rejected`",

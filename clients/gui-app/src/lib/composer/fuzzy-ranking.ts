@@ -8,10 +8,8 @@ export interface ScoredFuzzyMatch<T> {
 }
 
 /**
- * The composer menus (`@` root search, slash commands) share one matching
- * tolerance: position-independent matches anywhere in a field, cut off at the
- * same fuzziness. Keeping the options here means a query feels equally strict
- * no matter which trigger opened the menu.
+ * The composer menus (`@` root search, slash commands) share one matching tolerance: position-independent matches anywhere in a field, cut off at the same fuzziness.
+ * Keeping the options here means a query feels equally strict no matter which trigger opened the menu.
  */
 const BASE_FUSE_OPTIONS = {
   includeScore: true,
@@ -20,21 +18,11 @@ const BASE_FUSE_OPTIONS = {
 } as const;
 
 /**
- * Runs one Fuse pass over `items` and returns matches best-first (Fuse scores
- * are 0 = perfect, 1 = worst). Ties fall back to the input index, so equal
- * scores preserve the caller's ordering and a re-render can never reshuffle
- * rows. `adjustScore` lets a caller re-weight a match by what produced it
- * (e.g. per-provider boosts); pass null to rank on the raw score.
+ * Runs one Fuse pass over `items` and returns matches best-first (Fuse scores are 0 = perfect, 1 = worst).
+ * Ties fall back to the input index, so equal scores preserve the caller's ordering and a re-render can never reshuffle rows.
  */
 /**
- * Re-sorts fuzzy matches into literal-hit tiers on the row's primary text
- * (command name, mention label): prefix, then substring, then everything
- * else (fuzzy or secondary-field matches). The shared Fuse pass runs with
- * `ignoreLocation` — needed so deep path segments still match — which erases
- * the prefix advantage, and a short query weak-matches most rows, clustering
- * scores into noise. A user typing into a completion menu expects literal
- * name hits first. `toSorted` is stable, so score/input order carries
- * through within a tier, keeping typo tolerance inside each tier.
+ * Re-sorts fuzzy matches into literal-hit tiers on the row's primary text (command name, mention label): prefix, then substring, then everything else (fuzzy or secondary-field matches).
  */
 export function resortByNameTier<T>(
   matches: ReadonlyArray<ScoredFuzzyMatch<T>>,

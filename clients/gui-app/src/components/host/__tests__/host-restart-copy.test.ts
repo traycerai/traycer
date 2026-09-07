@@ -256,10 +256,7 @@ describe("busyRestartVerdictSentence", () => {
     );
   });
 
-  // The original bug: a busy verdict with count 0 must NOT render "0
-  // sessions are still working" - a count-zero, blockers-null (or all-false)
-  // verdict has nothing nameable, so the sentence falls back to naming the
-  // host rather than fabricating a subject.
+  // The original bug: a busy verdict with count 0 must not render "0 sessions are still working".
   it("falls back to the host-level sentence for a zero count with blockers null", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 0,

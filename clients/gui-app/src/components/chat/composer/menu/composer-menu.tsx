@@ -59,11 +59,8 @@ const SLASH_MENU_COPY = {
 };
 const LOAD_FAILED_LABEL = "Couldn't load commands";
 
-// Open-time preference only: how much room a side needs before it is worth
-// opening into. The rendered menu routinely exceeds this - a full roster of
-// files or terminals grows the list to its `max-h` viewport cap - and that is
-// fine, because `flip()` re-picks the side and `shift()` keeps it on screen
-// once the real height is known. Nothing here bounds the menu.
+// Open-time preference only: how much room a side needs before it is worth opening into.
+// The rendered menu routinely exceeds this - a full roster of files or terminals grows the list to its `max-h` viewport cap - and that is fine, because `flip()` re-picks the side and `shift()` keeps it on screen once the real height is known.
 const MENU_HEIGHT_ESTIMATE = 280;
 
 type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
@@ -219,10 +216,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   );
 
   const chrome = kind === "mention" ? stepChrome : null;
-  // Focus goes back to the EDITOR, never to the popover's trigger: the caret
-  // lives in the composer and Radix's default restore would strand it in the
-  // menu chrome. `dismiss`/`commit` are already how this layer reaches the
-  // editor, so the picker's own commit path owns the handle.
+  // Focus goes back to the EDITOR, never to the popover's trigger: the caret lives in the composer and Radix's default restore would strand it in the menu chrome.
+  // `dismiss`/`commit` are already how this layer reaches the editor, so the picker's own commit path owns the handle.
   const returnFocusToEditor = useCallback(
     (resumeText: string | null) => {
       pickerStore.getState().focusEditor?.(resumeText);
@@ -230,10 +225,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     [pickerStore],
   );
 
-  // MentionPreviewPanel does its own pre-paint scrollIntoView for rows that
-  // have a preview (see its layout effect), but it early-returns before
-  // that when there's no preview - this passive effect is what still
-  // scrolls the active row into view for those.
+  // MentionPreviewPanel does its own pre-paint scrollIntoView for rows that have a preview (see its layout effect), but it early-returns before that when there's no preview - this passive effect is what still scrolls the active row into view for those.
   useEffect(() => {
     const list = listRef.current;
     if (list === null) return;
@@ -287,20 +279,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   );
   const isolateOutsideScroll = dialogContentShard !== null;
 
-  // The menu portals to `document.body`, so it lives OUTSIDE the Radix modal
-  // Dialog's scroll-lock subtree (the Dialog's `react-remove-scroll` node and
-  // its `contentRef` shard). That lock installs a document-level, non-passive
-  // wheel/touch listener that `preventDefault()`s any scroll whose target is
-  // neither the lock node nor a shard - so without intervention this list can't
-  // scroll while the new-conversation modal is open. Giving the menu its own
-  // lock pushes it to the top of react-remove-scroll's `lockStack` while open,
-  // so its own overflow region is honored and the Dialog's lock is suspended -
-  // the same way nested Radix modal popovers coexist with a modal Dialog.
-  // When opened from inside a Dialog, the Dialog content is registered as a
-  // shard so modal scroll containment still applies outside both the menu and
-  // the modal content. Inline composers keep `noIsolation`, preserving their
-  // background/page scroll behavior. `removeScrollBar={false}` avoids
-  // re-managing the scrollbar the Dialog already owns.
+  // That lock installs a document-level, non-passive wheel/touch listener that `preventDefault()`s any scroll whose target is neither the lock node nor a shard - so without intervention this list can't scroll while the new-conversation modal is open.
   const menu = (
     <RemoveScroll
       ref={floatingRef}
@@ -315,19 +294,12 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         role="presentation"
         data-slot="composer-menu"
         // top-0/left-0 so floating-ui's translate3d is the source of truth.
-        // Width fits content (w-max) so short menus stay compact and long command
-        // names render in full, with a comfortable floor (min-w) and a
-        // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
-        // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
+        // Width fits content (w-max) so short menus stay compact and long command names render in full, with a comfortable floor (min-w) and a viewport-aware ceiling (max-w) past which items truncate. floating-ui's shift() keeps the grown menu on-screen.
         className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
         <div
-          // The marker Shift+Tab's explicit focus move targets (see
-          // `focusMentionStepChrome` in suggestion-render.ts): the chrome's
-          // buttons live in this portal AFTER the editor in DOM order, so no
-          // native traversal direction can reach them from the composer.
-          // Present only when a step actually published chrome, so the query
-          // cannot land on a button-less header.
+          // The marker Shift+Tab's explicit focus move targets (see `focusMentionStepChrome` in suggestion-render.ts): the chrome's buttons live in this portal AFTER the editor in DOM order, so no native traversal direction can reach them from the composer.
+          // Present only when a step actually published chrome, so the query cannot land on a button-less header.
           data-mention-step-chrome={chrome === null ? undefined : true}
           className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5"
         >
@@ -355,15 +327,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           ref={listRef}
           id={menuId}
           role="listbox"
-          // The first menu (mention categories, slash commands) stays compact:
-          // tall enough for the full category roster without a scrollbar,
-          // while typed-query results scroll behind the cap. A provider
-          // submenu gets more room than root - several providers (files, the
-          // GitHub sections) fill their 25-row result limit routinely, and a
-          // roster reads better with more of it on screen - and its cap is
-          // viewport-relative per the repo's fluid-sizing rule, so a taller
-          // display shows more of the list instead of scrolling it behind a
-          // fixed ceiling.
+          // The first menu (mention categories, slash commands) stays compact: tall enough for the full category roster without a scrollbar, while typed-query results scroll behind the cap.
+          // A provider submenu gets more room than root - several providers (files, the GitHub sections) fill their 25-row result limit routinely, and a roster reads better with more of it on screen - and its cap is viewport-relative per the repo's fluid-sizing rule, so a taller display shows more of the list instead of scrolling it behind a fixed ceiling.
           className={cn(
             "overflow-y-auto py-1",
             kind === "mention" && step.kind === "provider"
@@ -390,12 +355,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   return (
     <>
       {createPortal(menu, document.body)}
-      {/* Pointer-and-keyboard chrome only. The panel is a SIDE surface - it
-          anchors beside the active row and its fit gate asks "does a side
-          have room?", a question a phone answers no for every row, because
-          the menu already spans the width. Whatever the gate concludes from
-          a phone's measurements, there is no placement that does not cover
-          the list, so the panel simply does not exist below `md`. */}
+      {/* Whatever the gate concludes from a phone's measurements, there is no placement that does not cover the list, so the panel simply does not exist below `md`. */}
       {isMobile ? null : (
         <MentionPreviewPanel
           panelRef={previewPanelRef}
@@ -457,18 +417,12 @@ function renderPickerItem(
       ) : (
         <SlashMenuItem command={item.command} trigger={trigger} />
       ),
-    // One reader for both kinds - the store blocks a disabled row's commit
-    // through this same predicate, and a second hand-written answer here is
-    // how a held mention row rendered as actionable while Enter did nothing.
+    // One reader for both kinds - the store blocks a disabled row's commit through this same predicate, and a second hand-written answer here is how a held mention row rendered as actionable while Enter did nothing.
     disabledReason: pickerItemDisabledReason(item),
   };
 }
 
-/**
- * Inert rows still take the highlight as you arrow past them - skipping them
- * makes the selection look like it teleports - but at a weaker weight so
- * "selected" never reads as "actionable".
- */
+/** Inert rows still take the highlight as you arrow past them - skipping them makes the selection look like it teleports - but at a weaker weight so "selected" never reads as "actionable". */
 function rowHighlightClass(isActive: boolean, disabled: boolean): string {
   if (!isActive) return "hover:bg-accent/40";
   return disabled ? "bg-accent/25" : "bg-accent/60";
@@ -482,12 +436,7 @@ interface ComposerMenuBodyProps {
   readonly showEmptyLabelWithItems: boolean;
   readonly activeIndex: number;
   readonly pickerStore: ComposerPickerStore;
-  /**
-   * A status row appended BELOW the rows - `Searching GitHub…` while busy, or
-   * a plain failure statement. Distinct from `loading`, which means "nothing
-   * to show yet": local results are never blocked on a remote search, so this
-   * covers the wait (or reports the failure) without the list collapsing.
-   */
+  /** A status row appended BELOW the rows - `Searching GitHub…` while busy, or a plain failure statement. Distinct from `loading`, which means "nothing to show yet": local results are never blocked on a remote search, so this covers the wait (or reports the failure) without the list collapsing. */
   readonly appendedStatus: MentionStepChromeStatus | null;
 }
 
@@ -513,9 +462,7 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
     </div>
   );
   if (loading && renderedItems.length === 0) return loadingRow;
-  // A failed catalog load with nothing to show is an error state, not an
-  // empty result - "No matching commands" would misreport a provider failure
-  // as a legitimately empty catalog.
+  // A failed catalog load with nothing to show is an error state, not an empty result - "No matching commands" would misreport a provider failure as a legitimately empty catalog.
   if (loadFailed && renderedItems.length === 0) {
     return (
       <div className="flex items-center justify-between gap-2 px-3 py-2 text-ui-xs text-muted-foreground/80">
@@ -585,10 +532,8 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
       >
         {item.node}
         {item.disabledReason === null ? null : (
-          // `aria-disabled` says a row is unavailable but never why, and the
-          // preview panel that carries the reason is `aria-hidden` and drops
-          // out of view entirely when it cannot fit. Without this the reason
-          // reaches no screen reader at all.
+          // `aria-disabled` says a row is unavailable but never why, and the preview panel that carries the reason is `aria-hidden` and drops out of view entirely when it cannot fit.
+          // Without this the reason reaches no screen reader at all.
           <span className="sr-only">{`Disabled. ${item.disabledReason}`}</span>
         )}
       </div>
@@ -603,11 +548,8 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
     );
   }
   if (showEmptyLabelWithItems) {
-    // `appendedStatus` is non-null while a remote search is in flight OR after
-    // one failed, and "No matching pull requests" is a SETTLED claim - true in
-    // neither state. Rendering both at once told the user nothing matched and
-    // that the search was still running, in that order - so the
-    // honest-but-premature verdict is the one that waits.
+    // `appendedStatus` is non-null while a remote search is in flight OR after one failed, and "No matching pull requests" is a SETTLED claim - true in neither state.
+    // Rendering both at once told the user nothing matched and that the search was still running, in that order - so the honest-but-premature verdict is the one that waits.
     return (
       <>
         {rows}

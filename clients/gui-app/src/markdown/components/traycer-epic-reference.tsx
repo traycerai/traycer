@@ -2,9 +2,7 @@ import { Layers } from "lucide-react";
 import { makeTraycerReference } from "./make-traycer-reference";
 
 /**
- * Migrated `<traycer-epic>` tag - focuses the target epic by its embedded id
- * (no artifact). Carries no node id, so the open handler navigates to the epic
- * and focuses it without opening any tile.
+ * No node id: navigate to the epic and focus it without opening a tile.
  */
 export const TraycerEpicReference = makeTraycerReference({
   icon: <Layers className="size-3.5" aria-hidden />,

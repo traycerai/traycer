@@ -17,20 +17,8 @@ import { cn } from "@/lib/utils";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
- * The Commits tab: the PR's commits as a list of rows that open on GitHub.
- *
- * Every row is a button rather than an `<a>` because the desktop shell owns
- * external navigation - a bare anchor in the renderer would either navigate
- * the app frame or be swallowed.
- *
- * The sha chip beside it COPIES rather than opens: the row already goes to
- * GitHub, so a second control pointing at the same place bought nothing, while
- * the one thing a sha is repeatedly wanted for - pasting it into a terminal -
- * had no affordance at all.
- *
- * `commitUrl` needs the PR's own url to build `{prUrl}/commits/{oid}`. When it
- * is absent (a never-swept or unparseable row) the rows render inert rather
- * than pretending to be clickable.
+ * Every row is a button rather than an `<a>` because the desktop shell owns external navigation - a bare anchor in the renderer would either navigate the app frame or be swallowed.
+ * The sha chip beside it COPIES rather than opens: the row already goes to GitHub, so a second control pointing at the same place bought nothing, while the one thing a sha is repeatedly wanted for - pasting it into a terminal - had no affordance at all.
  */
 export function PrDetailCommits(props: {
   readonly core: PrDetailCore;
@@ -62,11 +50,8 @@ export function PrDetailCommits(props: {
             {totalCount} commit{totalCount === 1 ? "" : "s"}
           </span>
           {props.commits.isTruncated || totalCount > shown.length ? (
-            // `isTruncated` is the contract's own answer; the count comparison
-            // cannot stand in for it. When `totalCount` is null it falls back
-            // to `shown.length`, so the comparison is false on exactly the
-            // truncated-but-uncounted frames - the header would then claim the
-            // list is complete while the footer offers "view all on GitHub".
+            // `isTruncated` is the contract's own answer; the count comparison cannot stand in for it.
+            // When `totalCount` is null it falls back to `shown.length`, so the comparison is false on exactly the truncated-but-uncounted frames - the header would then claim the list is complete while the footer offers "view all on GitHub".
             <span className="shrink-0">Showing the last {shown.length}</span>
           ) : null}
         </div>
@@ -115,9 +100,7 @@ function PrCommitRow(props: {
     [onOpenCommit, url],
   );
 
-  // The chip is a SIBLING of the row button, not a child of it: a button
-  // inside a button is invalid HTML, and the browser will not deliver the
-  // inner click reliably.
+  // The chip is a SIBLING of the row button, not a child of it: a button inside a button is invalid HTML, and the browser will not deliver the inner click reliably.
   return (
     <li
       className="flex min-w-0 items-center transition-colors hover:bg-muted/40"
@@ -159,11 +142,7 @@ function PrCommitRow(props: {
 
 /**
  * Copies the commit's FULL sha, while displaying the short one.
- *
- * The short form is what a reader recognizes; the full form is what `git show`
- * and every other tool actually wants, and abbreviating it on the clipboard
- * would make the button quietly useless for the thing it is for. The chip
- * previously opened GitHub - a second route to where the row already goes.
+ * The short form is what a reader recognizes; the full form is what `git show` and every other tool actually wants, and abbreviating it on the clipboard would make the button quietly useless for the thing it is for.
  */
 function PrCommitShaCopyButton(props: {
   readonly oid: string;

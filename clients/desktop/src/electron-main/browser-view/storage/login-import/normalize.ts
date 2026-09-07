@@ -6,21 +6,7 @@ import {
 } from "../browser-storage-state";
 import type { ImportCookieRow } from "./cookie-rows";
 
-/**
- * From a reader's row to a cookie the durable jar will accept, through the
- * same validators the seed path runs (`readCookieDomain`, `readCookiePath`),
- * so nothing the import writes is a shape a later capture would refuse.
- *
- * Split in two because the scan and the import need different halves:
- * {@link classifyImportCookie} decides from metadata alone whether a row is
- * importable and which site it belongs to, and {@link normalizeImportCookie}
- * adds the value once one exists. The scan runs the first over every row and
- * the import runs both, so the site list and the write agree by construction.
- *
- * Per row, never per source: one IDN domain the URL parser rewrites, or one
- * `__Host-` cookie that breaks its own prefix rule, costs that cookie and is
- * counted, not the site beside it.
- */
+/** Per row, never per source: one IDN domain the URL parser rewrites, or one `__Host-` cookie that breaks its own prefix rule, costs that cookie and is counted, not the site beside. */
 
 export interface ImportCookieScope {
   /** Registrable domain (eTLD+1): the row of the dialog this cookie sits under. */
@@ -38,18 +24,6 @@ export interface NormalizedImportCookie {
 const HOST_PREFIX = "__Host-";
 const SECURE_PREFIX = "__Secure-";
 
-/**
- * How long an imported SESSION cookie is kept, as seconds from the import.
- *
- * A session cookie (`expires: -1`) is one the source browser keeps for as
- * long as it runs - and, with session restore, across its own restarts. Set
- * into Electron's jar without an expiry it is dropped at quit, so a login
- * that rides on one (many SSO sessions do) would be gone the first time
- * Traycer restarts, while the Done step had called it saved on this machine.
- * It is given a bounded expiry instead: still the site's session to end,
- * still shorter than a source browser that restores its session, and long
- * enough that "saved" is true.
- */
 export const IMPORTED_SESSION_COOKIE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 export function classifyImportCookie(

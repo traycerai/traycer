@@ -8,19 +8,8 @@ import type { ChatTranscriptJumpTarget } from "@/stores/chats/chat-transcript-ju
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 
 /**
- * Where a cross-tile jump LANDS, and who is able to say.
- *
- * Split out of `chat-tile.tsx` rather than exported from it: the tile is a
- * component module, so anything else it exports breaks fast refresh (and the
- * lint rule that guards it). These are pure decisions over a jump target, a
- * window and the rendered models, which is also what makes them testable
- * without the 100 KB tile behind them.
- *
- * The two questions are deliberately separate. {@link hostLocatorForJumpTarget}
- * decides whether to ASK the host, and answering `null` there means "this
- * client can place the row itself" - a request sent anyway is a round trip
- * whose answer is discarded. {@link coldJumpOrdinal} decides where the row IS,
- * and reads the host's answer only where its own reads have nothing.
+ * Split out of `chat-tile.tsx` rather than exported from it: the tile is a component module, so anything else it exports breaks fast refresh (and the lint rule that guards it).
+ * These are pure decisions over a jump target, a window and the rendered models, which is also what makes them testable without the 100 KB tile behind them.
  */
 
 type BackgroundBlockSearchNode =
@@ -77,18 +66,8 @@ export function messageIdForBlock(
 }
 
 /**
- * Resolve a durable protocol message id to the row id used by the rendered
- * transcript. User rows keep their protocol id, while assistant records are
- * projected into turn-keyed rows (`assistant:<turnId>`) and retain the
- * protocol id only as `persistentMessageId`. Terminal notifications point at
- * that durable id, so an id-only lookup silently waits forever for a row that
- * can never exist.
- *
- * Prefer an exact rendered id. When projection split one assistant turn into
- * several rows, choose the trailing matching slice: completion and failure
- * notifications describe the terminal edge of that persisted assistant
- * record, and the completion marker is stamped on the final assistant slice
- * in the current transcript projection.
+ * User rows keep their protocol id, while assistant records are projected into turn-keyed rows (`assistant:<turnId>`) and retain the protocol id only as `persistentMessageId`.
+ * Terminal notifications point at that durable id, so an id-only lookup silently waits forever for a row that can never exist.
  */
 export function messageIdForTranscriptTarget(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -105,13 +84,7 @@ export function messageIdForTranscriptTarget(
 }
 
 /**
- * Resolves a `sent-message` transcript jump: the message holding this chat's
- * own "Sent message" card for one A2A exchange. Matched on receiver + the
- * VERBATIM text because those are the only identifiers the send block and the
- * comm-event row durably share - the sender's block id never reaches the
- * host's capture (origin refs are receiver-side). When the same text went to
- * the same receiver more than once, the send whose start time is nearest the
- * event's capture time wins; both clocks are the same host's.
+ * Matched on receiver + the VERBATIM text because those are the only identifiers the send block and the comm-event row durably share - the sender's block id never reaches the host's capture (origin refs are receiver-side).
  */
 export function sentMessageAnchorId(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -156,14 +129,7 @@ export function sentMessageAnchorId(
 }
 
 /**
- * The ordinal a cold jump target sits at. `null` means "nothing to ask for":
- * the legacy line, or a host-locatable target whose answer has not landed.
- *
- * Module scope rather than a closure over `hostLocatedOrdinal`, which is why
- * that value is a parameter. A function declared in the render body is a new
- * identity every render, so the effect that calls it would have to carry it as
- * a dependency and would re-run on every frame - on the hot path this is
- * deliberately not on.
+ * Module scope rather than a closure over `hostLocatedOrdinal`, which is why that value is a parameter.
  */
 export function coldJumpOrdinal(
   transcriptWindow: TranscriptWindow | null,
@@ -176,11 +142,7 @@ export function coldJumpOrdinal(
     case "block":
     case "sent-message":
       return hostLocatedOrdinal;
-    // A message id is a row id for a USER record only. An assistant record is
-    // projected into turn-keyed rows and keeps its durable id off the skeleton
-    // entirely, so the skeleton read misses and the host is the only answer -
-    // and it is asked only when this read has already missed, so the fallback
-    // costs a cold user row nothing.
+    // An assistant record is projected into turn-keyed rows and keeps its durable id off the skeleton entirely, so the skeleton read misses and the host is the only answer - and it is asked only when this read has already missed, so the fallback costs a cold user row nothing.
     case "message":
       return (
         skeletonOrdinalOf(transcriptWindow, target.messageId) ??
@@ -191,9 +153,7 @@ export function coldJumpOrdinal(
         transcriptWindow,
         chatTranscriptEventRowId(target.eventId),
       );
-    // Ordinal 0 of the WHOLE transcript. The skeleton is whole-chat, so its
-    // first entry names the real first row rather than the top of the
-    // hydrated tail.
+    // The skeleton is whole-chat, so its first entry names the real first row rather than the top of the hydrated tail.
     case "first-message":
       return transcriptWindow.skeleton[0] === undefined ? null : 0;
     case "end":
@@ -212,21 +172,7 @@ function skeletonOrdinalOf(
 }
 
 /**
- * The locator to ask the host for, or `null` when this client can place the row
- * itself.
- *
- * The gate is "every read this client has has already missed", never "this kind
- * usually needs the host" - a request sent while the answer is derivable is a
- * round trip whose result is discarded, and on the windowed line that is the
- * common case for two of the three kinds.
- *
- * Scoped to the windowed line: with `transcriptWindow === null` the client
- * holds the whole transcript, so an unmatched anchor genuinely is absent and
- * there is nothing for the host to find that the client has not already looked
- * at.
- *
- * Module scope for the same reason {@link coldJumpOrdinal} is, and so the
- * decision can be tested without the tile.
+ * Module scope for the same reason {@link coldJumpOrdinal} is, and so the decision can be tested without the tile.
  */
 export function hostLocatorForJumpTarget(input: {
   readonly target: ChatTranscriptJumpTarget;
@@ -251,13 +197,7 @@ export function hostLocatorForJumpTarget(input: {
       : null;
   }
   if (target.kind === "message") {
-    // BOTH client reads have to miss before the host is worth asking, and they
-    // miss for different reasons. The skeleton read covers a cold USER row,
-    // whose row id IS its message id - the common case, and one no round trip
-    // should be spent on. The rendered read covers a HYDRATED assistant row,
-    // which carries the durable id as `persistentMessageId`. What is left over
-    // is exactly the case the host exists for here: an assistant record whose
-    // turn-keyed rows are cold.
+    // BOTH client reads have to miss before the host is worth asking, and they miss for different reasons.
     const placeable =
       skeletonOrdinalOf(transcriptWindow, target.messageId) !== null ||
       messageIdForTranscriptTarget(messages, target.messageId) !== null;

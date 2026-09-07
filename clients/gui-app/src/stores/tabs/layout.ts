@@ -495,11 +495,7 @@ export function reorderStripItem(
   };
 }
 
-/**
- * Deterministically repairs every persisted-layout invariant. Call at
- * hydration and after each transaction commit; the reducer entry points are
- * deliberately pure so a coordinator can preflight them without a store.
- */
+/** Deterministically repairs every persisted-layout invariant. */
 export function repairLayout(
   layout: PersistedTabStripLayout,
   isKnownTabKind: IsKnownTabKind,

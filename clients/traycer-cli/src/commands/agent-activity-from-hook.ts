@@ -39,56 +39,7 @@ interface HookActivityIdentity {
   readonly observedHarnessSessionId: string | null;
 }
 
-/**
- * `traycer agent activity-from-hook` - invoked by provider TUI lifecycle
- * hooks. It reports provider-native turn start/stop edges to the host.
- *
- * The `stop` edge still rides `agent.tui.recordActivity`. The `start` edge
- * (the `UserPromptSubmit` hook chain) is the roles-snapshot-delivery pull
- * point FOR ENVELOPE-CONSUMING PROVIDERS ONLY (Claude, and Codex via its
- * Claude-compatible hook runner): it calls `agent.tui.promptSubmitted@1.0`
- * instead, an optional unary method that does both jobs in one round trip -
- * it records the same activity edge `recordActivity` would have, then runs
- * the host's roles-digest-cursor check. A non-null `pendingPromptContext` in
- * the response is emitted on stdout as the `UserPromptSubmit`
- * `additionalContext` envelope (`{"hookSpecificOutput":{"hookEventName":
- * "UserPromptSubmit","additionalContext":"..."}}`), which the provider
- * appends to the outgoing prompt; `null` (nothing to deliver) means no
- * stdout at all.
- *
- * Every OTHER provider's `start` edge stays on plain `recordActivity`: the
- * response contract lets the host advance its roles cursor when it returns
- * pending context, so calling `promptSubmitted` from a hook whose stdout is
- * NOT injected into the prompt (OpenCode's in-process plugin consumes no
- * hook stdout) would acknowledge a snapshot the model never receives -
- * a silent permanent delivery loss, not a degrade.
- *
- * `promptSubmitted` is registered with `degrade: { kind: "unsupported" }`
- * (a brand-new method, not a new minor of `recordActivity`): against a host
- * that doesn't advertise it, the shared transport never sends the request -
- * it fails locally with `HostRpcError({ code: "E_HOST_UNSUPPORTED" })`,
- * which `toAgentCliError` maps to `CliError({ code:
- * CLI_ERROR_CODES.HOST_UNSUPPORTED })`. That specific code degrades silently
- * to a plain `recordActivity` `start` call carrying the identical payload -
- * today's semantics, unnoticed by the user. Every other error (a genuine
- * host `RPC_ERROR`, auth failure, etc.) still surfaces.
- *
- * It also piggybacks the live provider session id (stamped on the hook's
- * stdin payload) as `observedHarnessSessionId` so the host can resync the
- * stored `harnessSessionId` when the live session drifts under the user
- * (Claude implicitly re-ids on Esc-Esc rewind, `/clear`, fork-after-`/btw`;
- * OpenCode re-ids when the user switches/forks sessions inside the TUI).
- * Stdin is read only where a resumable id is actually piped: every Claude
- * hook, and OpenCode's env-identified form (the per-TUI plugin instance omits
- * `--harness-session-id` for root sessions and pipes the id instead - its
- * session-id-keyed form never pipes a payload, and the host would refuse a
- * resync from it anyway). A missing/slow/garbage payload yields `null` and
- * never fails the hook.
- *
- * Like the title hook command, this is intentionally quiet on the `stop`
- * edge and on every benign miss: hooks can fire outside Traycer-managed
- * sessions, and their stdout may be surfaced back into the provider TUI.
- */
+/** Hook stdin is untrusted provider JSON. Never treat its agent id as a host id. */
 export function buildAgentActivityFromHookCommand(opts: {
   readonly provider: string;
   readonly event: string;
@@ -113,9 +64,7 @@ export function buildAgentActivityFromHookCommand(opts: {
       return noop("missing-context");
     }
 
-    // Read stdin only where a resumable `session_id` is actually piped (see
-    // the command doc); skipping elsewhere avoids blocking on a stream the
-    // caller never writes to (Codex `notify`, OpenCode session-id-keyed form).
+    // Read stdin only where a resumable `session_id` is actually piped (see the command doc); skipping elsewhere avoids blocking on a stream the caller never writes to (Codex `notify`, OpenCode session-id-keyed form).
     const observedHarnessSessionId =
       parsedHarness.data === "claude" ||
       (parsedHarness.data === "opencode" && harnessSessionId === null)
@@ -130,12 +79,8 @@ export function buildAgentActivityFromHookCommand(opts: {
       observedHarnessSessionId,
     };
 
-    // Only providers whose hook runner injects this command's stdout into
-    // the outgoing prompt may take the promptSubmitted pull path - the host
-    // advances its roles cursor when it hands back pending context, so a
-    // provider that discards stdout (OpenCode's in-process plugin) would
-    // silently strand the snapshot as "delivered". Those stay on the plain
-    // activity edge.
+    // Only providers whose hook runner injects this command's stdout into the outgoing prompt may take the promptSubmitted pull path - the host advances its roles cursor when it hands back pending context, so a provider that discards stdout (OpenCode's in-process plugin) would silently strand the snapshot as "delivered".
+    // Those stay on the plain activity edge.
     const consumesPromptEnvelope =
       identity.harnessId === "claude" || identity.harnessId === "codex";
 

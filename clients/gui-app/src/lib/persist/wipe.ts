@@ -1,24 +1,4 @@
 // Destructive "wipe all gui-app persisted state" utility.
-//
-// Bridge-agnostic by design: it takes the host `clear` RPC as a parameter so it
-// is unit-testable without React context. The caller (the settings panel / a
-// later ticket) resolves the desktop bridge, capability-probes the host `clear`
-// RPC, and passes it in. The util only orchestrates the destructive sequence:
-//
-//   1. Drain + clear           — first drain any pending debounced projection
-//      push (so the unload-time flush can't resurrect the snapshot we're about
-//      to clear), then run the authoritative host `clear` RPC. On a shell
-//      without the RPC the drain IS the degraded fallback; in web mode the
-//      caller passes `null` and the flush no-ops.
-//   2. Blanket-prefix sweep    — remove every `traycer-gui-app:`-prefixed key
-//      from BOTH localStorage and sessionStorage. Auth (`traycer.`) and any
-//      non-`traycer-gui-app:` key survive.
-//   3. Drop renderer dbs       — delete every per-window IndexedDB partition
-//      for pasted image bytes and file-edit recovery drafts, plus the
-//      app-global prompt-stash database, so wiped state doesn't leak stash or
-//      draft bytes. Enumeration is Chromium-only; absent → no-op.
-//   4. Reload last             — re-hydrate from the now-cleared storage / host
-//      state without racing a pending write.
 
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
@@ -29,16 +9,11 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 import { PROMPT_STASH_DB_NAME } from "@/lib/composer/prompt-stash-repository";
 import { publishPromptStashReset } from "@/lib/composer/prompt-stash-channel";
 
-// The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
-// also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
-// keeps the sweep to exactly the `traycer-gui-app:` namespace.
+// The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would also sweep a hypothetical `traycer-gui-appX:foo` key.
+// Anchoring on the colon keeps the sweep to exactly the `traycer-gui-app:` namespace.
 const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 
-// Landing-image IndexedDB databases are named
-// `traycer-gui-app:<partition>:landing-images` (one per runtime partition —
-// `landingImagePartition()` in `lib/composer/landing-image-store.ts`). The
-// suffix below pins the db namespace so the wipe only drops image partitions,
-// never any other future `traycer-gui-app:`-prefixed db.
+// Landing-image IndexedDB databases are named `traycer-gui-app:<partition>:landing-images` (one per runtime partition - `landingImagePartition()` in `lib/composer/landing-image-store.ts`).
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";
 const PROMPT_STASH_DB_SUFFIX = ":prompt-stash";
 const RENDERER_DB_SUFFIXES = [
@@ -63,13 +38,8 @@ function sweepStorage(storage: Storage): number {
   return keysToRemove.length;
 }
 
-// Wrap `indexedDB.deleteDatabase` (an async `IDBOpenDBRequest`) in a promise
-// that settles on `onsuccess`/`onerror`/`onblocked`. `onblocked` fires when an
-// open connection still holds the db; we resolve (not reject) so one stuck
-// partition can't abort the rest of the wipe or the reload — the reload below
-// tears down every connection anyway. `onerror` rejects to surface a genuine
-// deletion failure; the sole caller treats deletion as best-effort (catches per
-// db) so an erroring partition still can't abort the reload.
+// Wrap `indexedDB.deleteDatabase` (an async `IDBOpenDBRequest`) in a promise that settles on `onsuccess`/`onerror`/`onblocked`.
+// `onblocked` fires when an open connection still holds the db; we resolve (not reject) so one stuck partition can't abort the rest of the wipe or the reload - the reload below tears down every connection anyway.
 function deleteDatabaseAwaitable(
   factory: IDBFactory,
   name: string,
@@ -83,21 +53,13 @@ function deleteDatabaseAwaitable(
   });
 }
 
-// Read `indexedDB` through `globalThis` so a runtime where it is undeclared
-// (e.g. a node test env) yields `undefined` instead of a `ReferenceError`. The
-// annotated return type is load-bearing: the DOM lib declares `indexedDB`
-// non-nullable, so without it TS would narrow the value and flag the guard's
-// optional chain as unnecessary — but a non-Chromium / node runtime really can
-// lack it.
+// Read `indexedDB` through `globalThis` so a runtime where it is undeclared (e.g. a node test env) yields `undefined` instead of a `ReferenceError`.
+// The annotated return type is load-bearing: the DOM lib declares `indexedDB` non-nullable, so without it TS would narrow the value and flag the guard's optional chain as unnecessary - but a non-Chromium / node runtime really can lack it.
 function indexedDBFactory(): IDBFactory | undefined {
   return globalThis.indexedDB;
 }
 
-// Renderer db partition names (landing-image, file-edit-recovery) are
-// per-window/runtime and only discoverable through enumeration;
-// `indexedDB.databases()` is Chromium-only, so on an engine without it those
-// names simply can't be found - an accepted leak (the bytes are re-pasteable
-// or re-derivable from disk), not a wipe failure.
+// Renderer db partition names (landing-image, file-edit-recovery) are per-window/runtime and only discoverable through enumeration; `indexedDB.databases()` is Chromium-only, so on an engine without it those names simply can't be found - an accepted leak (the.
 async function enumeratedRendererDatabaseNames(
   factory: IDBFactory,
 ): Promise<readonly string[]> {
@@ -124,12 +86,7 @@ async function enumeratedRendererDatabaseNames(
     );
 }
 
-// Drop every landing-image and file-edit-recovery partition this run can
-// enumerate, plus the prompt-stash database unconditionally by its exact,
-// fixed name - unlike the per-window partitions, the stash has exactly one
-// name known ahead of time, so its deletion never depends on `databases()`
-// support. `indexedDB` itself absent (e.g. a non-browser runtime) still
-// no-ops the whole thing so the wipe reaches the reload.
+// Drop every landing-image and file-edit-recovery partition this run can enumerate, plus the prompt-stash database unconditionally by its exact, fixed name - unlike the per-window partitions, the stash has exactly one name known ahead of time, so its.
 async function deleteRendererDatabases(): Promise<boolean> {
   const factory = indexedDBFactory();
   if (factory === undefined) {
@@ -141,13 +98,7 @@ async function deleteRendererDatabases(): Promise<boolean> {
   const enumerated = await enumeratedRendererDatabaseNames(factory);
   const names = new Set(enumerated);
   names.add(PROMPT_STASH_DB_NAME);
-  // Best-effort per partition: a single db whose delete errors must not abort
-  // the rest of the wipe or - critically - the reload (step 4), which is the
-  // real recovery and tears down every connection anyway. The bytes are
-  // re-pasteable (landing), recoverable from disk (file-edit), or already
-  // gone from the user's perspective (stash, whose entries the localStorage
-  // sweep never touched but whose db this same step is the only thing that
-  // reclaims).
+  // Best-effort per partition: a single db whose delete errors must not abort the rest of the wipe or - critically - the reload (step 4), which is the real recovery and tears down every connection anyway.
   let failedCount = 0;
   let promptStashDeleted = true;
   await Promise.all(
@@ -174,10 +125,6 @@ export async function clearAllPersistedStores(args: {
   appLogger.info("[persist] clearing local GUI state", {
     hasHostClear: args.hostClear !== null,
   });
-  // 1. Drain any pending debounced projection push FIRST. This flushes it to
-  //    the host and clears `pendingPatch`, so the beforeunload/pagehide flush
-  //    fired during the reload below can't re-push pre-wipe state and re-create
-  //    the snapshot we're about to clear.
   await flushActiveDesktopPerWindowProjection();
   await drainDesktopTabsPersistence().catch((error: unknown) => {
     // The wipe continues either way, but this is the only signal that the
@@ -186,9 +133,8 @@ export async function clearAllPersistedStores(args: {
       error: describeLogError(error),
     });
   });
-  // Then the authoritative host clear when the RPC exists. On a shell without
-  // it (older preload) the drain above is the degraded fallback; in web mode
-  // `hostClear` is null and there is nothing host-side to clear.
+  // Then the authoritative host clear when the RPC exists.
+  // On a shell without it (older preload) the drain above is the degraded fallback; in web mode `hostClear` is null and there is nothing host-side to clear.
   if (args.hostClear !== null) {
     try {
       await args.hostClear();
@@ -202,13 +148,8 @@ export async function clearAllPersistedStores(args: {
     appLogger.info("[persist] host-side state clear unavailable", {});
   }
 
-  // Stop edit timers before deleting their journal (step 3 below). Deferred
-  // until after the failure-prone host clear above: if `hostClear` rejects,
-  // this function aborts before ever reaching here, so the still-mounted
-  // file-editor hooks keep pointing at live (not disposed) runtimes and
-  // in-place editing keeps working without a manual reload. The retired
-  // runtimes still cannot recreate a recovery entry from the reload's
-  // pagehide handler, since this remains ordered before the journal delete.
+  // Stop edit timers before deleting their journal (step 3 below).
+  // Deferred until after the failure-prone host clear above: if `hostClear` rejects, this function aborts before ever reaching here, so the still-mounted file-editor hooks keep pointing at live (not disposed) runtimes and in-place editing keeps working without.
   await fileEditRuntimeRegistry.teardown();
 
   // 2. Blanket-prefix sweep across BOTH storages.
@@ -219,10 +160,6 @@ export async function clearAllPersistedStores(args: {
     sessionStorageCount,
   });
 
-  // 3. Drop every renderer-owned IndexedDB partition.
-  //    The localStorage sweep above already removed the draft keys that point
-  //    at some of these bytes; this reclaims the bytes themselves so nothing
-  //    leaks past the wipe.
   const promptStashDeleted = await deleteRendererDatabases();
   if (promptStashDeleted) publishPromptStashReset();
 

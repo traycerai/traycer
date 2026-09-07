@@ -1,8 +1,4 @@
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
-/**
- * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
- * with expansion, rename, delete, and drag-drop behaviors.
- */
 import { useDraggable } from "@dnd-kit/core";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
@@ -304,16 +300,7 @@ interface ChatTreePanelBodyProps {
 type TreeFilterFn = (type: string | null | undefined) => boolean;
 
 /**
- * Epic-level viewer (read-only) role for the chat panel. Resolved once in
- * `ChatTreePanelBody` and read directly by the leaf status chip, rather than
- * drilled through four row layers or re-subscribed per row via
- * `useEpicPermissionRole()`. A row's OWN chat session access overrides it when
- * that chat is open.
- *
- * This saves the per-row subscription for the TRAILING chip only. The leading
- * `ChatProgressIcon` is deliberately status-aware, and it re-subscribes per row
- * through its own `useEpicPermissionRole()` call - a known, accepted cost of
- * keeping that icon, not an oversight this context still eliminates.
+ * Resolved once in `ChatTreePanelBody` and read directly by the leaf status chip, rather than drilled through four row layers or re-subscribed per row via `useEpicPermissionRole()`.
  */
 const SidebarViewerContext = createContext<boolean>(false);
 
@@ -326,8 +313,7 @@ interface SidebarChatSharingValue {
 const EMPTY_OWN_CLOUD_CHATS: ReadonlyMap<string, CloudChatSummary> = new Map();
 
 /**
- * Per-chat sharing facts that are identical for every row (capability, the
- * fold of local ids onto cloud rows, whether this task has an audience).
+ * Per-chat sharing facts that are identical for every row (capability, the fold of local ids onto cloud rows, whether this task has an audience).
  * Resolved once in `ChatTreePanelBody` and read by the rows.
  */
 const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
@@ -364,18 +350,8 @@ function archiveEmptyStateCopy(
 }
 
 /**
- * One shared urgency ladder for a collapsed parent's icon slot: the parent's
- * own status tier and the hidden descendants' highest tier are ranked on it,
- * and the higher one owns the slot (ties go to the parent, so solid always
- * beats muted). Mirrors the order `NotificationIndicatorIcon` resolves a
- * single chat's simultaneous states.
- *
- * `running` (an agent turn) outranks `background` (a `run_in_background` task
- * / subagent / Monitor / scheduled wakeup keeping a session non-idle while the
- * agent itself is idle), matching the turn-over-background precedence the
- * per-chat indicator already uses. Both still outrank `done`, so any live work
- * beats a finished-but-unread one. A terminal failure is deliberately the
- * lowest notable tier: Done remains the stronger task-level signal.
+ * One shared urgency ladder for a collapsed parent's icon slot: the parent's own status tier and the hidden descendants' highest tier are ranked on it, and the higher one owns the slot (ties go to the parent, so solid always beats muted).
+ * Mirrors the order `NotificationIndicatorIcon` resolves a single chat's simultaneous states.
  */
 const CHAT_STATUS_RANKS: Record<ChatDescendantStatusKind, number> = {
   failure: 8,
@@ -401,10 +377,7 @@ const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
 ];
 
 /**
- * Rollup over a collapsed parent's hidden chat descendants: the
- * highest-priority kind plus per-tier counts (each descendant is counted once,
- * under its own highest tier) so the icon's tooltip can break the aggregate
- * down instead of hiding it behind one glyph.
+ * Rollup over a collapsed parent's hidden chat descendants: the highest-priority kind plus per-tier counts (each descendant is counted once, under its own highest tier) so the icon's tooltip can break the aggregate down instead of hiding it behind one glyph.
  */
 interface ChatDescendantStatusRollup {
   readonly kind: ChatDescendantStatusKind;
@@ -421,13 +394,8 @@ interface ChatDescendantStatusRollup {
 const EMPTY_CHAT_DESCENDANT_IDS: ReadonlyArray<string> = [];
 
 /**
- * Collects the chat / terminal-agent descendants of `nodeId` so a collapsed
- * parent can roll their statuses up without mounting the child rows. Mirrors
- * the artifact tree's `collectDescendantArtifactEntries`: filter-hidden
- * subtrees are skipped along with their children (the rollup must never point
- * at a row the user cannot reach by expanding) and the walk is cycle-guarded
- * via `visited`. Chats and terminal-agents are collected alike - both are
- * chat-scoped notification entities carrying an activity tier.
+ * Collects the chat / terminal-agent descendants of `nodeId` so a collapsed parent can roll their statuses up without mounting the child rows.
+ * Mirrors the artifact tree's `collectDescendantArtifactEntries`: filter-hidden subtrees are skipped along with their children (the rollup must never point at a row the user cannot reach by expanding) and the walk is cycle-guarded via `visited`.
  */
 function collectDescendantChatIds(
   nodeId: string,
@@ -462,17 +430,7 @@ function collectDescendantChatIds(
 }
 
 /**
- * Rollup over a collapsed parent's hidden chat descendants, or `null` when
- * there are none or none has a notable status. Each descendant is classified
- * once, under its own highest tier - the per-chat attention precedence goes
- * through the shared `attentionTone`, so failure > interview > approval lives
- * in exactly one place. Terminal-agent descendants are classified the same
- * way: their `agent.stopped` notifications are chat-scoped to the agent id,
- * so they carry real indicator entries alongside their activity tier. Only
- * mounted inside `ChatRowLeadingIconWithNestedRollup` (rendered solely for
- * collapsed parents), so leaves and expanded rows carry none of these
- * subscriptions; the shallow-compared flat result lets Zustand bail re-renders
- * whose rollup did not change.
+ * Only mounted inside `ChatRowLeadingIconWithNestedRollup` (rendered solely for collapsed parents), so leaves and expanded rows carry none of these subscriptions; the shallow-compared flat result lets Zustand bail re-renders whose rollup did not change.
  */
 function useChatDescendantStatus(args: {
   readonly epicId: string;
@@ -480,16 +438,8 @@ function useChatDescendantStatus(args: {
 }): ChatDescendantStatusRollup | null {
   const { epicId, nodeId } = args;
   const visibleIds = useSidebarVisibleIds();
-  // Subscribed to this row's descendant IDS, not to the whole `tree` slice.
-  // The slice re-mints on any record change (the host stamps `updatedAt` per
-  // body write and `TreeNode` carries it), and this hook runs once per chat
-  // row, so reading the slice re-rendered every row on every stamp. The ids are
-  // strings, so a shallow compare bails exactly when this row's descendant set
-  // is unchanged - which a stamp never alters.
-  //
-  // `useShallow` is required, not decorative: a deriving selector returns a
-  // fresh array each call, so without it `useSyncExternalStore` sees a change
-  // on every notification and loops. See `epic-sidebar-filter.ts`.
+  // The ids are strings, so a shallow compare bails exactly when this row's descendant set is unchanged - which a stamp never alters.
+  // `useShallow` is required, not decorative: a deriving selector returns a fresh array each call, so without it `useSyncExternalStore` sees a change on every notification and loops.
   const descendants = useEpicStore(
     useShallow((state: OpenEpicState) =>
       collectDescendantChatIds(nodeId, state.tree, visibleIds),
@@ -557,16 +507,8 @@ function usePanelRootIds(
     if (panelId === "artifacts") {
       return [];
     }
-    // Roots = chats/terminal-agents that have no parent in the rendered tree,
-    // read off the projector's `rootIds` so chats and terminal-agents
-    // interleave by the chosen sort key instead of grouping by type -
-    // consistent with how nested children render off `childrenByParent`.
-    // Iterating the record list instead would surface the projector's slice
-    // order (all chats, then all terminal-agents) and drop the sort. Child
-    // agents (spawned via `agent.create`, which sets the new agent's
-    // `parentId` to its sender) are nested through `useChildIds` off
-    // `childrenByParent` and are absent from `rootIds`, so they correctly
-    // never appear here.
+    // Roots = chats/terminal-agents that have no parent in the rendered tree, read off the projector's `rootIds` so chats and terminal-agents interleave by the chosen sort key instead of grouping by type - consistent with how nested children render off `childrenByParent`.
+    // Child agents (spawned via `agent.create`, which sets the new agent's `parentId` to its sender) are nested through `useChildIds` off `childrenByParent` and are absent from `rootIds`, so they correctly never appear here.
     return sidebarTreeRootIds({
       tree,
       treeFilter: CHATS_TREE_FILTER,
@@ -577,10 +519,7 @@ function usePanelRootIds(
 
 /**
  * Whether a cloud row survives the archive filter.
- *
- * The row carries its own `isArchived`, so this is the same question the local
- * tree answers from `archiveHiddenIds` - just asked of a row that is not in the
- * tree to be hidden from.
+ * The row carries its own `isArchived`, so this is the same question the local tree answers from `archiveHiddenIds` - just asked of a row that is not in the tree to be hidden from.
  */
 function cloudRowMatchesArchiveVisibility(
   chat: CloudChatSummary,
@@ -594,12 +533,7 @@ function cloudRowMatchesArchiveVisibility(
 
 /**
  * Whether a cloud row survives the origin filter.
- *
- * Every cloud row is a GUI chat - the cloud list carries chats, and a terminal
- * agent is not one - so a TUI-origin filter excludes all of them and any other
- * state includes all of them. It takes no row argument for that reason; the
- * signature stays row-shaped at the call site so a future origin that IS
- * expressible per row has an obvious place to go.
+ * Every cloud row is a GUI chat - the cloud list carries chats, and a terminal agent is not one - so a TUI-origin filter excludes all of them and any other state includes all of them.
  */
 function cloudRowMatchesOriginFilter(filter: ChatFilter): boolean {
   return filter.origin !== CHAT_ORIGIN.Tui;
@@ -612,9 +546,7 @@ function cloudRowMatchesOwnershipFilter(
   return matchesChatOwnershipFilter(chat.isOwnedByViewer, filter.ownership);
 }
 
-// Panel body composes sort/filter/expansion/selection/pending-create hooks in
-// a stable order; child row complexity is isolated below.
-// eslint-disable-next-line complexity
+// eslint-disable-next-line complexity -- panel body composes sort/filter/expansion/selection/pending-create hooks in a stable order
 export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const { epicId, tabId } = props;
   const shouldReduceMotion = useReducedMotion() === true;
@@ -629,22 +561,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const tree = useEpicTreeIndex();
   const revealRequest = useSidebarNodeRevealRequest(tabId);
   const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
-  // Bulk selection owns the header outright (`PanelGroupSectionHeader` returns
-  // the selection actions before it ever considers the search row), so while
-  // selection mode is on there is no search input to type into, to read a query
-  // back from, or to press Escape in. Treating search as INACTIVE for that whole
-  // window is what keeps an already-open query from silently narrowing the very
-  // rows the user is trying to select, with no visible control to undo it.
+  // Bulk selection owns the header outright (`PanelGroupSectionHeader` returns the selection actions before it ever considers the search row), so while selection mode is on there is no search input to type into, to read a query back from, or to press Escape in.
+  // Treating search as INACTIVE for that whole window is what keeps an already-open query from silently narrowing the very rows the user is trying to select, with no visible control to undo it.
   const bulkSelection = useMaybeSidebarBulkSelection();
   const selectionMode = bulkSelection?.selectionMode === true;
-  // Fuzzy title search is a SECOND narrowing layered on the filters, not a
-  // replacement for the tree. Reading the query as "" while search is closed
-  // keeps a half-typed query from narrowing a tree with no visible search box.
+  // Fuzzy title search is a SECOND narrowing layered on the filters, not a replacement for the tree.
+  // Reading the query as "" while search is closed keeps a half-typed query from narrowing a tree with no visible search box.
   const searchOpen = usePanelHeaderSearchOpen(tabId, panelId);
   const rawSearchQuery = usePanelHeaderSearchQuery(tabId, panelId);
-  // A mounting surface may own the query instead - see `ChatTreeSurface`. It
-  // then owns the input too, so this panel's open/closed state says nothing
-  // about whether a query is live and must not gate it.
+  // It then owns the input too, so this panel's open/closed state says nothing about whether a query is live and must not gate it.
   const surfaceSearchQuery = useChatTreeSurface()?.searchQuery ?? null;
   const panelSearchQuery = searchOpen && !selectionMode ? rawSearchQuery : "";
   const searchQuery = surfaceSearchQuery ?? panelSearchQuery;
@@ -658,9 +583,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [searchQuery, tree],
   );
-  // Intersect the two narrowings as MATCHES, then expand ancestors once. Doing
-  // it the other way round lets a path-only ancestor of one narrowing satisfy
-  // the other's predicate - see `intersectMatchIds`.
+  // Doing it the other way round lets a path-only ancestor of one narrowing satisfy the other's predicate - see `intersectMatchIds`.
   const narrowedMatchIds = useMemo(
     () => intersectMatchIds(filterMatchIds, searchMatchIds),
     [filterMatchIds, searchMatchIds],
@@ -669,10 +592,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => expandMatchesToVisibleIds(narrowedMatchIds, tree.nodeById),
     [narrowedMatchIds, tree],
   );
-  // Reveal is a transient visibility exception. It must be able to surface the
-  // requested local row through the user's current narrowing without mutating
-  // their search or filter state; once the row scrolls into view, the request
-  // is consumed and the usual projection resumes.
+  // Reveal is a transient visibility exception.
+  // It must be able to surface the requested local row through the user's current narrowing without mutating their search or filter state; once the row scrolls into view, the request is consumed and the usual projection resumes.
   const revealVisibleIds = useMemo(() => {
     if (
       revealRequest === null ||
@@ -694,14 +615,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => expandMatchesToVisibleIds(filterMatchIds, tree.nodeById),
     [filterMatchIds, tree],
   );
-  // Type-to-filter: a bare printable key anywhere in the focused tree enters
-  // search mode seeded with that character, so the keystroke that started the
-  // search is not swallowed by the focus handoff to the header input.
-  //
-  // Subscribed imperatively rather than via `onKeyDown` for the same reason the
-  // artifact panel does it: a JSX key handler on this region would oblige it to
-  // claim an interactive role it does not have (the tree inside owns
-  // `role="tree"`).
+  // Subscribed imperatively rather than via `onKeyDown` for the same reason the artifact panel does it: a JSX key handler on this region would oblige it to claim an interactive role it does not have (the tree inside owns `role="tree"`).
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
   const treeRegionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -710,10 +624,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     // Selection mode: the keystroke would open a search whose input the header
     // has no room to render.
     if (searchOpen || selectionMode) return;
-    // A surface owning the query owns the input too, and this writes the PANEL
-    // store - which that surface never renders. Installing it there would
-    // swallow the keystroke and file it somewhere invisible, leaving stale
-    // state for the desktop panel to open with later.
+    // A surface owning the query owns the input too, and this writes the PANEL store - which that surface never renders.
     if (surfaceSearchQuery !== null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (isTypeToFilterEditableTarget(event.target)) return;
@@ -732,15 +643,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     surfaceSearchQuery,
   ]);
   const archiveVisibility = useChatArchiveVisibility(epicId);
-  // The filter's own value, for the cloud rows. The local tree consumes it as
-  // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
-  // tree, so it answers both axes directly.
+  // The filter's own value, for the cloud rows.
+  // The local tree consumes it as the id set `useChatVisibleIds` expands it into; a cloud row is not in the tree, so it answers both axes directly.
   const chatFilter = useChatFilter(epicId);
   const canArchive = useChatArchiveSupported();
   const canSetVisibility = useCloudChatVisibilitySupported();
-  // Epic-session-bound like every other sharing fact in this tree: the
-  // shared-with-task glyph must reflect the tab's owning host, not whichever
-  // host the app is active on.
+  // Epic-session-bound like every other sharing fact in this tree: the shared-with-task glyph must reflect the tab's owning host, not whichever host the app is active on.
   const sessionHostClient = useEpicSessionHostClient();
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
     client: sessionHostClient,
@@ -753,10 +661,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [allRootIds, revealVisibleIds],
   );
 
-  // Indicators must be fetched BEFORE archive hiding is applied. Archived
-  // rows carrying attention/unread state are an explicit visibility exception;
-  // querying only the already-visible rows would make that exception circular
-  // and the activity impossible to discover.
+  // Indicators must be fetched BEFORE archive hiding is applied.
+  // Archived rows carrying attention/unread state are an explicit visibility exception; querying only the already-visible rows would make that exception circular and the activity impossible to discover.
   const indicatorChatIds = useMemo(
     () =>
       Object.keys(tree.nodeById)
@@ -800,12 +706,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     );
   }, [baseArchiveHiddenIds, revealRequest, tree]);
 
-  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
-  // the interface/ownership filter result and feeds the "no matches" empty
-  // state and forced expansion; `rootIds` additionally drops archived roots
-  // and is what actually renders. Collapsing them would make an all-archived
-  // tree show the filter-empty state instead of the archived one, blaming a
-  // filter that is not hiding anything.
+  // Collapsing them would make an all-archived tree show the filter-empty state instead of the archived one, blaming a filter that is not hiding anything.
   const rootIds = useMemo(
     () =>
       archiveHiddenIds.size === 0
@@ -820,16 +721,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
   const localChatIds = useEpicChatIds();
-  // The task's chats on hosts this device cannot reach, folded against the
-  // local tree by PUBLICATION identity and interleaved into one recency-sorted
-  // list. There is no "other devices" section: a chat's host is a property of
-  // the chat, and a lock on the row says what its state is. The cloud read is
-  // a byte pipe any reachable host can serve, so it rides the Epic SESSION's
-  // client - the one host known to be serving this tree - rather than the
-  // app-wide one, which for the whole of a re-point in flight names a machine
-  // that may not be answering. (Every reader of this list in the canvas -
-  // `tab-group-view`, the route sync, the chat tile's dead-tile banner -
-  // resolves the same client, so the TanStack cache is shared, not split.)
+  // The task's chats on hosts this device cannot reach, folded against the local tree by PUBLICATION identity and interleaved into one recency-sorted list.
+  // The cloud read is a byte pipe any reachable host can serve, so it rides the Epic SESSION's client - the one host known to be serving this tree - rather than the app-wide one, which for the whole of a re-point in flight names a machine that may not be answering. (Every reader of this list in the canvas - `tab-group-view`, the route sync, the chat tile's dead-tile banner - resolves the same client, so the TanStack cache is shared, not split.)
   const cloudChats = useCloudChatList({
     client: sessionHostClient,
     taskId: epicId,
@@ -852,10 +745,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [cloudChats.data, localChatIds, publicationTargets.data],
   );
-  // The sharing/activity fold uses the same session-host reads as the rendered
-  // cloud list above. The redirect map is host-local (only the epic's host
-  // knows C1→C2), so one shared pair of observers is both sufficient and the
-  // only identity-safe source for local-row cloud facts.
+  // The redirect map is host-local (only the epic's host knows C1→C2), so one shared pair of observers is both sufficient and the only identity-safe source for local-row cloud facts.
   const ownCloudChatByLocalId = useMemo(
     () =>
       indexOwnCloudChatsByLocalId({
@@ -875,19 +765,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     }),
     [canSetVisibility, hasCollaborators, ownCloudChatByLocalId],
   );
-  // The sidebar's own filters apply to cloud rows too. They were reaching only
-  // the local tree, so an "Unarchived only" list still drew archived remote
-  // chats (and "Archived only" drew unarchived ones), and a TUI-origin filter
-  // left every cloud row in place - each row carries the fact the filter asks
-  // about, so showing it anyway is the list contradicting its own filter chips.
-  //
-  // No attention-reveal exception, unlike the local side's `alwaysVisibleIds`:
-  // that exists so a row whose activity THIS device tracks cannot be archived
-  // into invisibility, and a cloud row's indicators belong to its owner.
-  //
-  // Search narrows them for the same reason: a cloud row is an agent in this
-  // task's list, so a query that hides every local non-match while leaving
-  // remote rows in place would be the list contradicting its own search box.
+  // They were reaching only the local tree, so an "Unarchived only" list still drew archived remote chats (and "Archived only" drew unarchived ones), and a TUI-origin filter left every cloud row in place - each row carries the fact the filter asks about, so showing it anyway is the list contradicting its own filter chips.
+  // No attention-reveal exception, unlike the local side's `alwaysVisibleIds`: that exists so a row whose activity THIS device tracks cannot be archived into invisibility, and a cloud row's indicators belong to its owner.
   const filterMatchingCloudChats = useMemo(
     () =>
       filterCloudChatsBySearch(
@@ -924,11 +803,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const isDisconnected = connectionStatus === "closed";
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
-  // Read-only (viewer) indication is epic-level, so it is resolved ONCE here
-  // and threaded down as a boolean rather than re-subscribing every row to
-  // `useEpicPermissionRole()`. `viewer` specifically - a null (not-yet-known)
-  // role must not flash the lock. The status-aware leading `ChatProgressIcon`
-  // still makes that per-row subscription itself; see `SidebarViewerContext`.
+  // Read-only (viewer) indication is epic-level, so it is resolved ONCE here and threaded down as a boolean rather than re-subscribing every row to `useEpicPermissionRole()`.
+  // `viewer` specifically - a null (not-yet-known) role must not flash the lock.
   const isViewer = permissionRole === "viewer";
   const localRootPending = useLocalRootCreatePending(epicId, panelId);
   const acknowledgedRootPending = useAcknowledgedRootCreatePending(
@@ -962,9 +838,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     : EMPTY_PENDING_LIST;
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  // Filter-, search-, and reveal-only: see `combineSidebarVisibleIds`. Archive
-  // hiding must never reach here. A nested target forces its parent open for the
-  // same reason a filter match does.
+  // Archive hiding must never reach here.
   const forcedExpandedIds = useMemo(
     () =>
       mergeForcedExpanded(
@@ -1021,11 +895,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
     [expandedIds, toggleExpanded, ensureExpanded],
   );
-  // Same hygiene fix as the artifact panel: `tree` is a direct input, so this
-  // recomputed per record change and handed the effect below a fresh array.
-  // The store write was already a no-op (`setSelectableSidebarIds` guards with
-  // `sameStringArray`), so nothing re-rendered - the effect just fired for
-  // nothing. Comparing the answer stops it firing.
+  // Same hygiene fix as the artifact panel: `tree` is a direct input, so this recomputed per record change and handed the effect below a fresh array.
+  // The store write was already a no-op (`setSelectableSidebarIds` guards with `sameStringArray`), so nothing re-rendered - the effect just fired for nothing.
   const selectableIds = useEpicStore(
     useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
@@ -1057,9 +928,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     renderedAcknowledgedRootPending !== null ||
     renderedPreAckRootCreates.length > 0 ||
     renderedPendingRootCreates.length > 0;
-  // Local-tree emptiness AND no cloud row surviving the interface/ownership
-  // filters. Asking the local tree alone would announce "no matches" over a
-  // matching remote row still rendered on screen.
+  // Local-tree emptiness AND no cloud row surviving the interface/ownership filters.
+  // Asking the local tree alone would announce "no matches" over a matching remote row still rendered on screen.
   const filteredTreeEmpty =
     isFilteredTreeEmpty({
       visibleIds: narrowedVisibleIds,
@@ -1069,9 +939,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       preAckRootCreates: renderedPreAckRootCreates,
       visiblePendingRootCreates: renderedPendingRootCreates,
     }) && filterMatchingCloudChats.length === 0;
-  // One list: local roots and unreachable-host rows, interleaved. Nested local
-  // children still render under their parents through `ChatNode`; only ROOTS
-  // take part in the interleave, and a cloud row is always a leaf.
+  // Nested local children still render under their parents through `ChatNode`; only ROOTS take part in the interleave, and a cloud row is always a leaf.
   const listEntries = useMemo(
     () =>
       mergeChatListEntries({
@@ -1082,11 +950,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [rootIds, tree.nodeById, visibleCloudChats, comparator],
   );
-  // What the live region announces. Counted from the MATCHES, not `listEntries`:
-  // that list holds only local roots (nested matches render recursively beneath
-  // them, so two siblings under one parent would announce as one) and it counts
-  // path-only ancestors that matched nothing. Archive-hidden matches are
-  // excluded because they are not on screen to be counted.
+  // Counted from the MATCHES, not `listEntries`: that list holds only local roots (nested matches render recursively beneath them, so two siblings under one parent would announce as one) and it counts path-only ancestors that matched nothing.
   const searchResultCount = useMemo(() => {
     if (narrowedMatchIds === null) return 0;
     let localMatches = 0;
@@ -1095,27 +959,16 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     }
     return localMatches + visibleCloudChats.length;
   }, [narrowedMatchIds, archiveHiddenIds, visibleCloudChats]);
-  // "No agents yet" is now a statement about the TASK rather than this device,
-  // so a task whose only agents live on an unreachable host is not empty - it
-  // is a list of locked rows. That is the whole restoration.
-  //
-  // Gated on the list having ANSWERED as well: an in-flight list looks exactly
-  // like a task with no remote agents, so without this the panel claims "No
-  // agents yet." for a moment and then fills with rows - see
-  // `isCloudChatListSettled` for why the query's own predicate is the one to
-  // ask. Pre-filter on purpose: this arm means the task HAS nothing, so a row
-  // the user's own filter is hiding still counts as something.
+  // "No agents yet" is now a statement about the TASK rather than this device, so a task whose only agents live on an unreachable host is not empty - it is a list of locked rows.
+  // Gated on the list having ANSWERED as well: an in-flight list looks exactly like a task with no remote agents, so without this the panel claims "No agents yet." for a moment and then fills with rows - see `isCloudChatListSettled` for why the query's own predicate is the one to ask.
   const showEmptyState =
     filterVisibleIds === null &&
     allRootIds.length === 0 &&
     unfoldedCloudChats.length === 0 &&
     isCloudChatListSettled(cloudChats) &&
     !hasPendingRootRows;
-  // Rows exist and survive the interface/ownership filters, yet archiving hid
-  // every one of them. Distinct from both other arms: the tree is neither empty
-  // nor filtered down to nothing, and the user needs to be told where the rows
-  // went. Cloud rows count on both sides of that sentence, or an all-archived
-  // remote list would fall through to "No agents yet."
+  // Rows exist and survive the interface/ownership filters, yet archiving hid every one of them.
+  // Distinct from both other arms: the tree is neither empty nor filtered down to nothing, and the user needs to be told where the rows went.
   const archiveHidEverything =
     !hasPendingRootRows &&
     rootIds.length === 0 &&
@@ -1137,9 +990,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       />
     );
   } else if (filteredTreeEmpty && searchActive) {
-    // Search is the narrowing the user is actively driving, so it owns the
-    // empty state even when a filter is also on - blaming the filter chips for
-    // a query that matches nothing would send them to the wrong control.
+    // Search is the narrowing the user is actively driving, so it owns the empty state even when a filter is also on - blaming the filter chips for a query that matches nothing would send them to the wrong control.
     panelContent = (
       <SidebarPanelEmptyState
         icon={SearchX}
@@ -1191,11 +1042,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
               aria-label="Epic agents tree"
               className="space-y-0.5"
             >
-              {/* Clearing an archived row's last notification indicator removes
-              its visibility exception. Keep the tree branch mounted through
-              that final-row exit before revealing the archived empty state.
-              Rows come from the UNIFIED list (chat-sync-v2): local tree nodes
-              and cloud-only rows interleave under one comparator. */}
+              {/* Clearing an archived row's last notification indicator removes its visibility exception. Keep the tree branch mounted through that final-row exit before revealing the archived empty state. */}
               <AnimatePresence initial={false}>
                 {listEntries.map((entry) =>
                   entry.kind === "local" ? (
@@ -1348,21 +1195,7 @@ interface ChatNodeProps {
 }
 
 /**
- * The parts of a chat row's tree node that the row RENDERS.
- *
- * Same narrowing as the artifact row, and in the same class for the same
- * reason - which is an ARM behaviour, not a code shape. `CHAT_TREE_KEYS` omits
- * `updatedAt`, so on the doc arm's incremental path a chat's activity never
- * rebuilds the tree and the whole-node read costs nothing. On every FULL
- * projection - which is what the lane arm runs on its record-update paths -
- * `projectTreeSlice` takes each node's `updatedAt` from the record, so activity
- * DOES re-mint this node, and reading the whole thing re-renders the row (and
- * its unmemoized chrome) for a field it does not display.
- *
- * The displayed last-activity time is NOT this: it comes from
- * `useEpicNodeUpdatedAt`, a per-node scalar off the records projection, and it
- * re-renders the row exactly when the time it shows changes. That is correct
- * and stays.
+ * `CHAT_TREE_KEYS` omits `updatedAt`, so on the doc arm's incremental path a chat's activity never rebuilds the tree and the whole-node read costs nothing.
  */
 interface ChatRowNodeFacts {
   readonly type: EpicTreeNodeType;
@@ -1435,24 +1268,8 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // The cascade-delete summary, subscribed to its ANSWER rather than to the
-  // record list it is computed from.
-  //
-  // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
-  // ANY record in the epic changes - a body write, a chat token, a timestamp
-  // stamp - so every one of these rows re-rendered on every one of those, for a
-  // count that almost never moves. Measured on the field's shape (40 rows, 12
-  // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
-  // defence, because this is the row's OWN subscription rather than a prop.
-  //
-  // The tree walk is the same counts by a different route: `childrenByParent`
-  // and `nodeById` are the normalised structure this sidebar already renders, so
-  // it agrees with what the user sees. `useShallow` is required rather than
-  // decorative - the selector returns a fresh object per call, and without it
-  // `useSyncExternalStore` sees a change on every notification and loops.
-  //
-  // The artifact row was moved to exactly this in `d1cb1b3a`; this row is the
-  // same defect in the second copy of it.
+  // The cascade-delete summary, subscribed to its ANSWER rather than to the record list it is computed from.
+  // `useEpicArtifactRecords()` hands back an array whose identity moves whenever ANY record in the epic changes - a body write, a chat token, a timestamp stamp - so every one of these rows re-rendered on every one of those, for a count that almost never moves.
   const cascadeCounts = useEpicStore(
     useShallow((state: OpenEpicState) =>
       computeDescendantCountsFromTree(state.tree, nodeId),
@@ -1464,10 +1281,8 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const showChildren = hasChildren && expanded;
   const artifactType = node?.type ?? "chat";
   const nodeName = node?.title ?? "";
-  // Trailing slot content at rest: a muted relative last-activity time, which
-  // the archive/menu controls replace on hover. Read from the PROJECTION, not
-  // `node.updatedAt` - the tree node is a lagging copy (see the selector's
-  // doc), and using it made this row disagree with the hover card.
+  // Trailing slot content at rest: a muted relative last-activity time, which the archive/menu controls replace on hover.
+  // Read from the PROJECTION, not `node.updatedAt` - the tree node is a lagging copy (see the selector's doc), and using it made this row disagree with the hover card.
   const recordUpdatedAt = useEpicNodeUpdatedAt(nodeId);
   const sharing = useContext(SidebarChatSharingContext);
   const cloudChat = sharing.ownCloudChatByLocalId.get(nodeId) ?? null;
@@ -1527,19 +1342,8 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     [archiveSupported, isArchived, archivePending, toggleArchive],
   );
 
-  // The tab must bind to the chat's OWNER host, not whichever host happens to
-  // be active: a connected peer host's chat reaches this tree through the
-  // shared projection, and binding it to the active host would open a tab
-  // that asks the wrong machine for the transcript. Downstream already
-  // honors the ref's hostId (`renderTile` wraps each ref in its own
-  // `TabHostProvider`), so the owner id is all that was missing. The FALLBACK
-  // for a row that carries no owner is the Epic SESSION's host - the host
-  // that projected the row - never the app-wide one, which during a re-point
-  // is a different machine from the one this tree is showing.
-  // Own-host rows read the chat store's real activity timestamp. A row owned
-  // elsewhere is a metadata replica, so its matching cloud publication head
-  // supplies the content clock instead. Terminal agents have no cloud content
-  // plane and keep their record timestamp.
+  // The tab must bind to the chat's OWNER host, not whichever host happens to be active: a connected peer host's chat reaches this tree through the shared projection, and binding it to the active host would open a tab that asks the wrong machine for the transcript.
+  // The FALLBACK for a row that carries no owner is the Epic SESSION's host - the host that projected the row - never the app-wide one, which during a re-point is a different machine from the one this tree is showing.
   const updatedAt = localTreeNodeLastActiveAt({
     isChat: artifactType === "chat",
     recordUpdatedAt,
@@ -1551,12 +1355,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // The host that SERVES a published copy's read (the owner is unreachable by
   // construction there) - the session's, for the reason above.
   const readingHostId = sessionHostId ?? UNKNOWN_HOST_PLACEHOLDER;
-  // Same rule the cloud rows follow (user ruling: offline hosts show as
-  // readonly with a locked composer): a CHAT row whose owner host is
-  // unreachable opens the published copy, not a live tab that dials a dead
-  // host into a banner. Falls back to the live ref when the identity triple
-  // cannot be built (no owner user on the record) - a click always opens
-  // something.
+  // Falls back to the live ref when the identity triple cannot be built (no owner user on the record) - a click always opens something.
   const ownerReachability = useHostReachability(
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
@@ -1642,18 +1441,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     [nodeId, toggleExpanded],
   );
 
-  // Chat rows only - the hook returns `"registry-rpc"` for every other kind,
-  // so a terminal agent or artifact in this same row component is untouched.
-  // Read HERE rather than in the shell body because `startRename` needs it:
-  // an unadopted chat's title must never become editable in the first place.
+  // Read HERE rather than in the shell body because `startRename` needs it: an unadopted chat's title must never become editable in the first place.
   const writeRoute = useChatWriteRoute(artifactType === "chat", nodeId);
 
   const startRename = useCallback(() => {
     if (!canMutate) return;
-    // The menu entry that calls this is already disabled, so this is the
-    // keyboard and double-click path. Refusing to ENTER edit mode is the
-    // point: the user is told before they type, not after - a commit-time
-    // refusal would silently discard what they wrote.
+    // Refusing to ENTER edit mode is the point: the user is told before they type, not after - a commit-time refusal would silently discard what they wrote.
     if (writeRoute === "unavailable") return;
     setRenameValue(nodeName);
     setIsRenaming(true);
@@ -1663,9 +1456,8 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     }, 0);
   }, [canMutate, nodeName, setIsRenaming, setRenameValue, writeRoute]);
 
-  // ASYNC: the doc write's verdict and the rename-stamp check are both round
-  // trips now. Callers fire-and-forget it, and a function returning
-  // `Promise<void>` is assignable to one returning `void`.
+  // ASYNC: the doc write's verdict and the rename-stamp check are both round trips now.
+  // Callers fire-and-forget it, and a function returning `Promise<void>` is assignable to one returning `void`.
   const commitRename = useCallback(async () => {
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
@@ -1676,34 +1468,23 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setIsRenaming(false);
       return;
     }
-    // Settle the editor on COMMIT, not on the ack — same contract as the
-    // artifact tree and as `useInlineRename`, which both tab strips rename
-    // through. The overlay below is the feedback; a failure toasts and rolls
-    // back. This also closes a real hole in the arms that follow: the
-    // no-RPC-arm `else` retired the stamp and left the input open forever,
-    // because the only `setIsRenaming(false)` lived in the success callback.
+    // Settle the editor on COMMIT, not on the ack - same contract as the artifact tree and as `useInlineRename`, which both tab strips rename through.
+    // The overlay below is the feedback; a failure toasts and rolls back.
     setIsRenaming(false);
-    // DOC-RESIDENT terminal agents keep the direct doc write - see the same
-    // branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a
-    // row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`),
-    // so the overlay path would only ever roll back.
+    // DOC-RESIDENT terminal agents keep the direct doc write - see the same branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`), so the overlay path would only ever roll back.
     if (artifactType === "terminal-agent") {
       const agents = epicHandle.store.getState().tuiAgents.byId;
       if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
-        // AWAITED: the replica is on the worker thread, so the doc write's
-        // verdict is a round trip. A promise here is truthy, so the branch
-        // would be taken even for a write that failed.
+        // AWAITED: the replica is on the worker thread, so the doc write's verdict is a round trip.
+        // A promise here is truthy, so the branch would be taken even for a write that failed.
         if (await epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
           renameArtifactInTab(tabId, nodeId, trimmed);
         }
         return;
       }
     }
-    // The optimistic overlay, in place of the `renameArtifact` doc write this
-    // used to do. That write no-opped for every registry-backed row — which
-    // post chats-off-YJS is most of this tree — so these renames had no local
-    // feedback at all. Rationale and the promise-carried retire contract live
-    // in `use-rename-canvas-tab.ts`, which this mirrors.
+    // That write no-opped for every registry-backed row - which post chats-off-YJS is most of this tree - so these renames had no local feedback at all.
+    // Rationale and the promise-carried retire contract live in `use-rename-canvas-tab.ts`, which this mirrors.
     const requestId = await epicHandle.store
       .getState()
       .beginRenameMutation(nodeId, trimmed);
@@ -1715,12 +1496,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     };
     const landed = async (): Promise<void> => {
       await retire("landed");
-      // The tab snapshot only on settlement - it is a persisted fallback with
-      // no rollback path, so a speculative write would preserve a rejected
-      // title across restarts - and only while this is still the LATEST
-      // stamped rename for the node: settles are unordered, and an older ack
-      // landing last must not overwrite the newer snapshot. See
-      // `use-rename-canvas-tab.ts`.
+      // The tab snapshot only on settlement - it is a persisted fallback with no rollback path, so a speculative write would preserve a rejected title across restarts - and only while this is still the LATEST stamped rename for the node: settles are unordered, and an older ack landing last must not overwrite the newer snapshot.
       if (
         requestId === null ||
         (await epicHandle.store
@@ -1750,10 +1526,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         "terminal-agent rename settlement",
       );
     } else {
-      // No RPC arm for this kind - nothing can ack it, so a lingering stamp
-      // would never land; drop it outright. Detached because the retire is a
-      // round trip now and there is nothing here that waits on it - which is
-      // also why its rejection needs a terminal handler of its own.
+      // No RPC arm for this kind - nothing can ack it, so a lingering stamp would never land; drop it outright.
       settleDetachedEpicMutation(
         retire("failed"),
         "sidebar tree",
@@ -1799,9 +1572,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   };
 
   const confirmDelete = () => {
-    // Detached: the delete is a round trip now. The surface below reacts to
-    // the PROJECTION, not to this promise, so nothing here waits on it - and
-    // nothing here would otherwise hear it fail.
+    // The surface below reacts to the PROJECTION, not to this promise, so nothing here waits on it - and nothing here would otherwise hear it fail.
     settleDetachedEpicMutation(
       epicHandle.store.getState().deleteArtifact(nodeId),
       "sidebar tree",
@@ -1877,10 +1648,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       renameInputRef={renameInputRef}
       renameValue={renameValue}
       onRenameValueChange={setRenameValue}
-      // Wrapped rather than passed through: the prop is declared void-returning
-      // and `commitRename` is a round trip now. Detaching states that nothing
-      // here waits on it, which is what the caller already assumed; settling it
-      // is what keeps a failure off the unhandled channel.
+      // Wrapped rather than passed through: the prop is declared void-returning and `commitRename` is a round trip now.
       onCommitRename={() => {
         settleDetachedEpicMutation(
           commitRename(),
@@ -1914,9 +1682,9 @@ interface ChatNodeShellProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly nodeId: string;
-  /** Resolved once in the row and threaded down, so the menu entries, the
-   *  archive hover button and `startRename` cannot disagree about whether this
-   *  row's registry-backed mutations may be sent. */
+  /**
+   * Resolved once in the row and threaded down, so the menu entries, the archive hover button and `startRename` cannot disagree about whether this row's registry-backed mutations may be sent.
+   */
   readonly writeRoute: ChatWriteRoute;
   /** The row's OWN owner host, resolved once in `ChatNode` and threaded down
    *  so the leading icon and the archive affordances read the same session. */
@@ -1969,17 +1737,8 @@ const CHAT_ROW_ARCHIVE_ABSENT: ChatRowArchiveDecision = Object.freeze({
 });
 
 /**
- * Hookless dispatcher. Its only job is to keep `useChatRowOwnStatusKind` -
- * which costs an indicator read, an awareness read, a session-handle lookup and
- * two store subscriptions PER ROW - off every row whose host cannot archive
- * anyway. Hooks cannot be called conditionally, so the condition has to be a
- * component boundary.
- *
- * This matters most exactly when the feature is newest: until the host RPC
- * ships, NO host advertises the method, so without this split every row in
- * every sidebar would pay for a status resolution that is then discarded. It
- * also preserves T1's constraint that the open-chat session read is "paid by
- * those few rows rather than by every row".
+ * Its only job is to keep `useChatRowOwnStatusKind` - which costs an indicator read, an awareness read, a session-handle lookup and two store subscriptions PER ROW - off every row whose host cannot archive anyway.
+ * Hooks cannot be called conditionally, so the condition has to be a component boundary.
  */
 function ChatNodeShell(props: ChatNodeShellProps) {
   if (props.archive.supported) return <ChatNodeShellArchivable {...props} />;
@@ -1988,9 +1747,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
 
 /** The archive-capable arm: resolves the row's status kind, then renders. */
 function ChatNodeShellArchivable(props: ChatNodeShellProps) {
-  // Resolved once per row and used by both archive affordances, so the hover
-  // button and the menu entry can never disagree about whether this row is
-  // busy. Same lattice the leading status icon renders from.
+  // Resolved once per row and used by both archive affordances, so the hover button and the menu entry can never disagree about whether this row is busy.
   const status = useChatRowOwnStatusKind({
     epicId: props.epicId,
     nodeId: props.nodeId,
@@ -2060,33 +1817,24 @@ function ChatNodeShellBody(
     onToggleSelection,
   } = props;
 
-  // "New child agent" opens the shared New Conversation modal seeded with this
-  // row as the parent - the same action the standalone hover "+" used to
-  // trigger, now consolidated into the row menu (right-click + ⋯) so there is a
-  // single hover affordance. It preserves the modal's remembered interface,
-  // matching the top-level new-agent trigger.
+  // "New child agent" opens the shared New Conversation modal seeded with this row as the parent - the same action the standalone hover "+" used to trigger, now consolidated into the row menu (right-click + ⋯) so there is a single hover affordance.
+  // It preserves the modal's remembered interface, matching the top-level new-agent trigger.
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
   const childCreateSurface = useChatTreeSurface();
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
-    // Same dismiss the tap path makes, and for the same reason root create
-    // already makes it: the modal opens over the surface, and without this the
-    // sheet is still there when the modal closes. Root and child create must
-    // answer this identically - an asymmetry here is a divergence, not a
-    // feature.
+    // Same dismiss the tap path makes, and for the same reason root create already makes it: the modal opens over the surface, and without this the sheet is still there when the modal closes.
+    // Root and child create must answer this identically - an asymmetry here is a divergence, not a feature.
     if (childCreateSurface !== null) childCreateSurface.onRowActivated();
     openNewConversationModal({
       epicId,
       tabId,
       placement: null,
       parentId: nodeId,
-      // Names no host, exactly like the panel's own `+`: the modal resolves
-      // this Epic's placement memory (last created chat's host, else the
-      // session's host) with the picker live. The PARENT row's owner host is
-      // deliberately not passed - naming it would freeze the picker (§55) and
-      // a child is not required to live on its parent's machine.
+      // Names no host, exactly like the panel's own `+`: the modal resolves this Epic's placement memory (last created chat's host, else the session's host) with the picker live.
+      // The PARENT row's owner host is deliberately not passed - naming it would freeze the picker (§55) and a child is not required to live on its parent's machine.
       hostId: null,
     });
   }, [
@@ -2099,12 +1847,8 @@ function ChatNodeShellBody(
   ]);
   const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
   const { writeRoute } = props;
-  // The hover button is the SECOND dispatcher of `epic.setChatArchived`, so
-  // gating only the menu entry would leave a one-click path to an RPC naming
-  // no registry row. It is withdrawn rather than disabled, which is this
-  // file's existing rule for it - see `chatRowArchiveState`: the button is a
-  // pointer shortcut that may only appear on an otherwise-quiet row, and "the
-  // entry, not the button, carries the explanation".
+  // The hover button is the SECOND dispatcher of `epic.setChatArchived`, so gating only the menu entry would leave a one-click path to an RPC naming no registry row.
+  // It is withdrawn rather than disabled, which is this file's existing rule for it - see `chatRowArchiveState`: the button is a pointer shortcut that may only appear on an otherwise-quiet row, and "the entry, not the button, carries the explanation".
   const decision: ChatRowArchiveDecision =
     writeRoute === "unavailable" && props.decision.showButton
       ? { ...props.decision, showButton: false }
@@ -2246,26 +1990,11 @@ function NodeChevron(props: NodeChevronProps) {
   if (surface === null) {
     return <TreeChevron expanded={expanded} onToggle={onToggle} />;
   }
-  // Desktop's chevron is an 11.25px glyph INSIDE the row button, which is fine
-  // for a cursor and not for a thumb: a near-miss lands on the row instead, and
-  // on a surface that closes itself on activation that miss dismisses the sheet
-  // rather than merely doing nothing. So the hit box grows and the glyph does
-  // not - an absolutely-positioned pseudo takes no space in flow, so the column
-  // stays desktop's exact width and the density ruling is untouched. `onToggle`
-  // moves to this wrapper so one handler owns the whole enlarged box; it
-  // already stops propagation, which is what keeps the row from opening.
+  // Desktop's chevron is an 11.25px glyph INSIDE the row button, which is fine for a cursor and not for a thumb: a near-miss lands on the row instead, and on a surface that closes itself on activation that miss dismisses the sheet rather than merely doing nothing.
   return (
     <span
-      // Same `aria-hidden` the glyph inside already carries: this wrapper adds
-      // hit area and nothing else, so exposing a second nameless control would
-      // be noise rather than access.
-      //
-      // It does NOT claim keyboard reachability. Expansion in this tree is
-      // pointer-only on BOTH form factors - desktop binds no ArrowRight/Left
-      // and neither does the row button - so a keyboard-only user cannot open
-      // a collapsed branch here. That gap is desktop's and predates this
-      // mount; what the mount changed is that a phone now inherits it, where
-      // the flat list it replaced had listed every descendant outright.
+      // Same `aria-hidden` the glyph inside already carries: this wrapper adds hit area and nothing else, so exposing a second nameless control would be noise rather than access.
+      // It does NOT claim keyboard reachability.
       aria-hidden="true"
       onClick={onToggle}
       className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"
@@ -2356,25 +2085,13 @@ function SidebarRowCheckbox(props: {
 }
 
 /**
- * Fixed-size slot the leading icon renders into, so every row's text column
- * starts at the same x regardless of which variant (chat glyph, harness brand
- * + terminal subscript, spinner, bot) fills it. Sized to the widest variant -
- * `SidebarAgentHarnessIcon`, whose subscript overhangs the 14px brand mark.
- *
- * The slot is only a WIDTH reservation: it carries no vertical alignment of
- * its own. Centering across the two-line card is the outer row's job
- * (`items-center`), which is why the slot must not grow to the card's height.
+ * The slot is only a WIDTH reservation: it carries no vertical alignment of its own.
+ * Centering across the two-line card is the outer row's job (`items-center`), which is why the slot must not grow to the card's height.
  */
 function ChatRowLeadingIconSlot(props: { readonly children: ReactNode }) {
   return (
-    // NOT `aria-hidden`. This slot was hidden while a trailing status chip
-    // existed, because the two announced the same state and a read-only row
-    // said "Read-only agent" twice. The row now carries no trailing chip, so
-    // this icon is the row's ONLY status surface (`ChatProgressIcon` for chats,
-    // the spinner / rollup for agents) - hiding it would drop running,
-    // approval, failure, and read-only from the a11y tree entirely rather than
-    // de-duplicating them. The status elements inside own their own
-    // `role="status"` and accessible names; nothing here is focusable.
+    // This slot was hidden while a trailing status chip existed, because the two announced the same state and a read-only row said "Read-only agent" twice.
+    // The row now carries no trailing chip, so this icon is the row's ONLY status surface (`ChatProgressIcon` for chats, the spinner / rollup for agents) - hiding it would drop running, approval, failure, and read-only from the a11y tree entirely rather than de-duplicating them.
     <span className="inline-flex h-3.5 w-[1.125rem] shrink-0 items-center">
       {props.children}
     </span>
@@ -2382,11 +2099,7 @@ function ChatRowLeadingIconSlot(props: { readonly children: ReactNode }) {
 }
 
 /**
- * Leading icon for a sidebar row - the row's single status surface now that no
- * trailing chip exists. A COLLAPSED PARENT resolves its hidden descendants'
- * rollup here too: that rollup used to live in the trailing slot, and dropping
- * the slot without rehoming it would leave a failure inside a collapsed subtree
- * with nowhere to surface.
+ * A COLLAPSED PARENT resolves its hidden descendants' rollup here too: that rollup used to live in the trailing slot, and dropping the slot without rehoming it would leave a failure inside a collapsed subtree with nowhere to surface.
  */
 function ChatRowLeadingIcon(props: {
   readonly epicId: string;
@@ -2419,12 +2132,8 @@ function ChatRowLeadingIcon(props: {
 }
 
 /**
- * Leading slot for a collapsed parent. Merges the parent's own status with the
- * hidden descendants' rollup on the shared ladder: the more urgent one owns the
- * slot, ties go to the parent - so a hidden failure can never sit invisible
- * behind a parent that is merely running. When the parent's own status wins it
- * renders the same icon a leaf row shows. Mounted only for collapsed parents,
- * so rows without a rollup carry none of these subscriptions.
+ * Merges the parent's own status with the hidden descendants' rollup on the shared ladder: the more urgent one owns the slot, ties go to the parent - so a hidden failure can never sit invisible behind a parent that is merely running.
+ * Mounted only for collapsed parents, so rows without a rollup carry none of these subscriptions.
  */
 const ChatRowLeadingIconWithNestedRollup = memo(
   function ChatRowLeadingIconWithNestedRollup(props: {
@@ -2444,9 +2153,7 @@ const ChatRowLeadingIconWithNestedRollup = memo(
     );
     if (rollup !== null) {
       const selfTier = activityTiers.get(props.nodeId);
-      // Chat and terminal-agent parents rank alike: a TUI agent's
-      // `agent.stopped` notifications are chat-scoped to its id, so its
-      // indicator entry is as real as a chat's.
+      // Chat and terminal-agent parents rank alike: a TUI agent's `agent.stopped` notifications are chat-scoped to its id, so its indicator entry is as real as a chat's.
       const selfRank = chatSelfStatusRank(selfIndicator, selfTier);
       if (CHAT_STATUS_RANKS[rollup.kind] > selfRank) {
         return <NestedChatStatusIcon nodeId={props.nodeId} rollup={rollup} />;
@@ -2464,30 +2171,21 @@ const ChatRowLeadingIconWithNestedRollup = memo(
 );
 
 /**
- * A row's OWN identity/status glyph, ignoring any descendants. Chat rows get
- * the status-aware chat glyph, TUI rows the harness brand, and any other node
- * kind its static registry glyph.
+ * A row's OWN identity/status glyph, ignoring any descendants.
+ * Chat rows get the status-aware chat glyph, TUI rows the harness brand, and any other node kind its static registry glyph.
  */
 function ChatRowOwnLeadingIcon(props: {
   readonly epicId: string;
   readonly nodeId: string;
   /**
-   * The row's OWN owner host, read off its projection row rather than from a
-   * tab binding: a sidebar row is not inside any `TabHostProvider`, and the
-   * tree deliberately lists chats owned by connected PEER hosts alongside
-   * this machine's. `chatId` is host-minted, so without the row's own host the
-   * status read could land on a same-id chat living on a different machine.
+   * The row's OWN owner host, read off its projection row rather than from a tab binding: a sidebar row is not inside any `TabHostProvider`, and the tree deliberately lists chats owned by connected PEER hosts alongside this machine's.
+   * `chatId` is host-minted, so without the row's own host the status read could land on a same-id chat living on a different machine.
    */
   readonly ownerHostId: string | null;
   readonly artifactType: EpicNodeKind;
 }) {
   if (props.artifactType === "chat") {
-    // No idle-slot override: `ChatProgressIcon` falls back to the plain chat
-    // glyph (per-type icon color included) and stays authoritative for
-    // read-only, activity, approval, failure, and completion states. Chat rows
-    // deliberately do NOT wear the harness brand - a column of multi-colored
-    // provider marks reads as noise; the harness is surfaced in the row's
-    // tooltip, header, and composer instead.
+    // Chat rows deliberately do NOT wear the harness brand - a column of multi-colored provider marks reads as noise; the harness is surfaced in the row's tooltip, header, and composer instead.
     return (
       <ChatProgressIcon
         epicId={props.epicId}
@@ -2513,13 +2211,7 @@ function ChatRowOwnLeadingIcon(props: {
 }
 
 /**
- * Terminal-agent (TUI) sidebar icon: the sidebar's idle glyph (harness brand
- * mark, generic bot as fallback) over the shared
- * {@link TerminalAgentProgressIcon} status mapping, which is what makes
- * notification status outrank live activity and splits the running arm into
- * turn vs background. Only the idle glyph and the icon-color display are the
- * sidebar's own; every other surface listing agents renders a different idle
- * glyph over that same mapping rather than re-deriving one.
+ * Only the idle glyph and the icon-color display are the sidebar's own; every other surface listing agents renders a different idle glyph over that same mapping rather than re-deriving one.
  */
 function SidebarTerminalAgentProgressIcon(props: {
   readonly epicId: string;
@@ -2528,10 +2220,7 @@ function SidebarTerminalAgentProgressIcon(props: {
 }) {
   const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
   const icon = useNodeIconDisplay("terminal-agent");
-  // The underlying harness's brand mark (Claude, Codex, …) so the row reads
-  // as the tool driving the agent. Brand marks keep their own colors and
-  // intentionally don't follow the per-type icon-color customization; the
-  // generic bot glyph is the fallback for unresolved/legacy records.
+  // Brand marks keep their own colors and intentionally don't follow the per-type icon-color customization; the generic bot glyph is the fallback for unresolved/legacy records.
   const idleIcon =
     harnessId !== null ? (
       <SidebarAgentHarnessIcon nodeId={props.nodeId} harnessId={harnessId} />
@@ -2552,10 +2241,7 @@ function SidebarTerminalAgentProgressIcon(props: {
 }
 
 /**
- * TUI-agent harness identity with a terminal surface mark. The brand mark is a
- * TUI-only affordance - GUI chat rows keep the plain chat glyph - so the bare
- * terminal glyph rides along without a background, keeping the harness mark
- * visible beneath it.
+ * The brand mark is a TUI-only affordance - GUI chat rows keep the plain chat glyph - so the bare terminal glyph rides along without a background, keeping the harness mark visible beneath it.
  */
 function SidebarAgentHarnessIcon(props: {
   readonly nodeId: string;
@@ -2671,9 +2357,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     nodeName,
     nodeId,
   } = props;
-  // Scaffold parity with the display row: the same chevron spacer and leading
-  // icon sit centered beside a column whose single line is the rename input, so
-  // nothing shifts horizontally or vertically between viewing and renaming.
+  // Scaffold parity with the display row: the same chevron spacer and leading icon sit centered beside a column whose single line is the rename input, so nothing shifts horizontally or vertically between viewing and renaming.
   return (
     <div
       data-sidebar-node-id={nodeId}
@@ -2688,9 +2372,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     >
       <TreeChevronSpacer />
       <ChatRowLeadingIconSlot>
-        {/* Deliberately the OWN-status variant, not the rollup-aware one: the
-            pre-refactor rename row rendered a non-rollup icon slot, so renaming
-            keeps showing this row's own status rather than a descendant's. */}
+        {/* Deliberately the OWN-status variant, not the rollup-aware one: the pre-refactor rename row rendered a non-rollup icon slot, so renaming keeps showing this row's own status rather than a descendant's. */}
         <ChatRowOwnLeadingIcon
           epicId={epicId}
           nodeId={nodeId}
@@ -2736,11 +2418,6 @@ interface ChatRowButtonProps {
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
   readonly isArchived: boolean;
-  /**
-   * Whether the row must reserve hover pad-right for a SECOND trailing control
-   * (the archive button) beside the "..." trigger, so the title truncates
-   * clear of both instead of running underneath.
-   */
   readonly reserveArchiveSlot: boolean;
   readonly showSharedIndicator: boolean;
 }
@@ -2752,11 +2429,7 @@ interface ChatRowButtonProps {
 const ARCHIVED_ROW_CLASS = "opacity-55";
 
 /**
- * The row button's accessible name. Its explicit `aria-label` replaces the
- * subtree as the name, so every state a glyph inside the row shows visually
- * (archived prefix, offline lock) has to be restated here or a keyboard /
- * screen-reader user never receives it - the lock's tooltip is hover-or-focus
- * on a trigger that is not focusable.
+ * Its explicit `aria-label` replaces the subtree as the name, so every state a glyph inside the row shows visually (archived prefix, offline lock) has to be restated here or a keyboard / screen-reader user never receives it - the lock's tooltip is hover-or-focus on a trigger that is not focusable.
  */
 function chatRowAriaLabel(input: {
   readonly nodeName: string;
@@ -2783,23 +2456,8 @@ function chatRowAriaLabel(input: {
 }
 
 /**
- * The lock a row shows when its owner host is unreachable, and WHAT IT
- * PROMISES - which is not the same promise for the two record kinds.
- *
- * A CHAT has a published copy: its transcript was replicated to the cloud, so
- * an unreachable owner still leaves something to read, and the row says so
- * (`published-copy`). That is a real, distinct access tier.
- *
- * A TERMINAL AGENT has no such tier and cannot have one. Its content is a live
- * PTY and its resume metadata is host-local state that never crosses the cloud
- * metadata projection - so there is nothing published to fall back to, and
- * borrowing the chat copy here would promise a read the click cannot deliver.
- * The honest word is UNAVAILABLE: the agent is intact, on its own machine, and
- * comes back when that machine does (`unavailable`).
- *
- * Carrying the promise on the lock rather than deriving it at each of the two
- * render sites is what stops the tooltip and the accessible name from telling
- * a reader two different stories about the same row.
+ * A TERMINAL AGENT has no such tier and cannot have one.
+ * Its content is a live PTY and its resume metadata is host-local state that never crosses the cloud metadata projection - so there is nothing published to fall back to, and borrowing the chat copy here would promise a read the click cannot deliver.
  */
 type OfflineRowLock = {
   readonly hostLabel: string;
@@ -2832,15 +2490,7 @@ function AgentRoleBadgesForOwner(props: {
 }
 
 /**
- * The row's own class list, lifted out of {@link ChatRowButton} so its five
- * state modifiers stop counting against that component's complexity ceiling.
- * Pure and unchanged - same operands, same order.
- *
- * `min-h-7` is a FLOOR, not a height: the row is a horizontal flex - chevron,
- * leading icon, then the text column - and `items-center` centers the short
- * children against whatever height the column takes. Kept as a floor rather
- * than a fixed height so a row whose title wraps, or which regains a second
- * line, grows instead of clipping.
+ * Kept as a floor rather than a fixed height so a row whose title wraps, or which regains a second line, grows instead of clipping.
  */
 function chatRowClassName(state: {
   readonly isDragging: boolean;
@@ -2898,12 +2548,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // it: the drag payload names the host the dropped tile binds to.
   const sessionHostId = useEpicSessionHostId();
   const sourceHostId = ownerHostId ?? sessionHostId;
-  // Same lock the cloud rows carry, driven by the same signal: a CHAT row
-  // whose owner host is unreachable is readonly here (its click opens the
-  // published copy), and the row must say so before the click. State, not
-  // provenance - reachable-owner rows stay lock-free whatever host they
-  // live on. The SAME predicate `ChatNode` builds the click's ref from, so
-  // the lock can never promise a published copy the click will not open.
+  // Same lock the cloud rows carry, driven by the same signal: a CHAT row whose owner host is unreachable is readonly here (its click opens the published copy), and the row must say so before the click.
+  // The SAME predicate `ChatNode` builds the click's ref from, so the lock can never promise a published copy the click will not open.
   const ownerReachability = useHostReachability(
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
@@ -2923,11 +2569,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         access: "published-copy",
       };
     }
-    // The terminal-agent sibling. It needs no owner-user check where the chat
-    // predicate does: that check exists because the published read is keyed by
-    // `(task, owner, chat)` and an incomplete identity could not address one.
-    // There is no published read here, so the only thing the row has to be
-    // able to name is the machine it lives on.
+    // There is no published read here, so the only thing the row has to be able to name is the machine it lives on.
     if (artifactType !== "terminal-agent") return null;
     if (ownerHostId === null || !ownerIsUnreachable) return null;
     return { hostLabel: ownerReachability.hostLabel, access: "unavailable" };
@@ -3120,10 +2762,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
               <Lock
                 className="size-3 shrink-0 text-muted-foreground"
                 data-testid={`epic-sidebar-tree-lock-${nodeId}`}
-                // Decoration: the row button's explicit `aria-label` REPLACES
-                // its subtree as the accessible name, so a label here could
-                // never reach assistive technology - the offline state rides
-                // the row's own name instead (see `chatRowAriaLabel`).
+                // Decoration: the row button's explicit `aria-label` REPLACES its subtree as the accessible name, so a label here could never reach assistive technology - the offline state rides the row's own name instead (see `chatRowAriaLabel`).
                 aria-hidden
               />
             </TooltipWrapper>
@@ -3141,11 +2780,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
               className={undefined}
             />
           )}
-          {/* Completes the control SWAP: while the archive button is mounted,
-              revealing the controls removes the idle-time slot from layout so
-              the title can use every pixel before the reserved action strip.
-              Scoped to this trailing span only - the leading icon sits outside
-              it, so the swap never blanks the row's status glyph. */}
+          {/* Completes the control SWAP: while the archive button is mounted, revealing the controls removes the idle-time slot from layout so the title can use every pixel before the reserved action strip. Scoped to this trailing span only - the leading icon sits outside it, so the swap never blanks the row's status glyph. */}
           <span
             className={cn(
               "flex-none",
@@ -3169,9 +2804,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
       nodeName={nodeName}
       hostId={ownerHostId}
       // THE SAME verdict the offline lock above reads, from the same call.
-      // Two subscriptions on one host id could momentarily disagree, and this
-      // row would then show a lock while its hover promised live worktree
-      // metadata from the machine that lock says is gone.
+      // Two subscriptions on one host id could momentarily disagree, and this row would then show a lock while its hover promised live worktree metadata from the machine that lock says is gone.
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
@@ -3197,11 +2830,7 @@ function ArchivedTitlePrefix(): ReactNode {
   );
 }
 
-/**
- * The row's trailing last-activity time, on the shared compact ladder
- * (`now` / `10m` / `4h` / `1d` / `1w` / short date). Isolated in its own leaf
- * so the shared 60s clock tick repaints this span rather than the whole row.
- */
+/** Isolated in its own leaf so the shared 60s clock tick repaints this span rather than the whole row. */
 function ChatRowIdleTime(props: { readonly updatedAt: number }): ReactNode {
   const relative = useCompactRelativeTime(props.updatedAt);
   return (
@@ -3214,9 +2843,7 @@ function ChatRowIdleTime(props: { readonly updatedAt: number }): ReactNode {
   );
 }
 
-// Glyph and color come from the shared notification tones so the nested
-// variant cannot drift from the per-row icon; "running" stays local because
-// it is an activity tier, not a notification state.
+// Glyph and color come from the shared notification tones so the nested variant cannot drift from the per-row icon; "running" stays local because it is an activity tier, not a notification state.
 const CHAT_DESCENDANT_STATUS_TONES: Record<
   Exclude<ChatDescendantStatusKind, "running" | "background">,
   IndicatorTone
@@ -3232,11 +2859,7 @@ const CHAT_DESCENDANT_STATUS_TONES: Record<
 };
 
 /**
- * The parent's own tier on the shared ladder. `selfTier` is the host-published
- * activity tier from epic awareness - the same authority the per-row icon
- * falls back to for an unopened chat, now carrying the turn/background split
- * so a parent doing only background work cannot outrank a descendant that is
- * genuinely mid-turn.
+ * `selfTier` is the host-published activity tier from epic awareness - the same authority the per-row icon falls back to for an unopened chat, now carrying the turn/background split so a parent doing only background work cannot outrank a descendant that is genuinely mid-turn.
  */
 function chatSelfStatusRank(
   state: NotificationIndicatorState,
@@ -3287,10 +2910,8 @@ function nestedChatStatusSummary(rollup: ChatDescendantStatusRollup): string {
 }
 
 /**
- * The muted variant of the status icon: same glyph, same slot, reduced
- * opacity - the artifact tree's solid-vs-translucent "self vs descendant"
- * convention applied to chat status. The tooltip carries the full nested
- * breakdown, since one glyph can stand for several children.
+ * The muted variant of the status icon: same glyph, same slot, reduced opacity - the artifact tree's solid-vs-translucent "self vs descendant" convention applied to chat status.
+ * The tooltip carries the full nested breakdown, since one glyph can stand for several children.
  */
 function NestedChatStatusIcon(props: {
   readonly nodeId: string;
@@ -3353,18 +2974,8 @@ type ChatOwnStatusKind =
   | "idle";
 
 /**
- * The precedence lattice, reused unchanged from the per-row notification icon
- * (`NotificationIndicatorIcon`): attention tone (failure > fork > interview >
- * approval) > running turn > background > unread-done > terminal failure > default. Terminal-agent
- * rows resolve through the same lattice - their `agent.stopped` notifications
- * are chat-scoped to the agent id, so `state` is populated for them too; only
- * the read-only arm stays chat-only.
- *
- * `read-only` sits in the DEFAULT slot, not above it - the pre-refactor icon
- * rendered the lock as `NotificationIndicatorIcon`'s `defaultIcon`, i.e. only
- * once no tone, no running state and no unread completion claimed the slot. So
- * a viewer still sees "Needs attention" / "Working" on a row that has them, and
- * the lock only replaces the idle relative time.
+ * Terminal-agent rows resolve through the same lattice - their `agent.stopped` notifications are chat-scoped to the agent id, so `state` is populated for them too; only the read-only arm stays chat-only.
+ * `read-only` sits in the DEFAULT slot, not above it - the pre-refactor icon rendered the lock as `NotificationIndicatorIcon`'s `defaultIcon`, i.e. only once no tone, no running state and no unread completion claimed the slot.
  */
 function chatOwnStatusKind(
   state: NotificationIndicatorState,
@@ -3385,18 +2996,7 @@ function chatOwnStatusKind(
 }
 
 /**
- * A row's resolved status: the folded lattice kind the icon renders from, PLUS
- * the raw running tier it was folded out of.
- *
- * Both are carried because `chatOwnStatusKind` is lossy in a way that matters
- * here. Its attention arms (`failure` / `interview` / `approval`) return BEFORE
- * it ever tests `running`, so a chat that is genuinely mid-turn while blocked on
- * a tool approval folds to `"approval"` and its turn becomes invisible to any
- * consumer reading `kind` alone. That is correct for the ICON - one glyph, and
- * "needs you" outranks "working" - but it is wrong for an availability gate:
- * a pending approval is raised from INSIDE a running turn, so it is the single
- * most likely moment for a human to be looking at the row and reaching for
- * Archive.
+ * Its attention arms (`failure` / `interview` / `approval`) return BEFORE it ever tests `running`, so a chat that is genuinely mid-turn while blocked on a tool approval folds to `"approval"` and its turn becomes invisible to any consumer reading `kind` alone.
  */
 interface ChatRowStatus {
   readonly kind: ChatOwnStatusKind;
@@ -3404,9 +3004,7 @@ interface ChatRowStatus {
 }
 
 /**
- * The row's archive menu state, or `null` on a host that lacks
- * `epic.setChatArchived` - in which case the entry is absent from both menus
- * rather than present-but-disabled.
+ * The row's archive menu state, or `null` on a host that lacks `epic.setChatArchived` - in which case the entry is absent from both menus rather than present-but-disabled.
  */
 interface ChatRowArchiveEntry {
   readonly isArchived: boolean;
@@ -3416,14 +3014,8 @@ interface ChatRowArchiveEntry {
 }
 
 /**
- * A row's archive INPUTS, grouped because they are one concept and always
- * travel together: whether the host can archive at all, whether this row
- * already is, whether a toggle is in flight, and how to toggle it. Passing
- * them as four loose props made the row's prop list four booleans wider for
- * one feature.
- *
- * Distinct from {@link ChatRowArchiveDecision}, which is what the row renders
- * from once those inputs plus the resolved status kind have been folded.
+ * A row's archive INPUTS, grouped because they are one concept and always travel together: whether the host can archive at all, whether this row already is, whether a toggle is in flight, and how to toggle it.
+ * Passing them as four loose props made the row's prop list four booleans wider for one feature.
  */
 interface ChatRowArchiveInputs {
   readonly supported: boolean;
@@ -3438,99 +3030,24 @@ interface ChatRowArchiveDecision {
 }
 
 /**
- * Copy for a refused archive, matched to the tier so the row explains the
- * ACTUAL reason - "working" and "has background items running" are different
- * things to wait on, and a single generic string would misdescribe one of them.
- *
- * This tooltip is the ONLY message these rows get. The entry is soft-disabled,
- * which prevents `onSelect`, so the host's own refusal - and the toast that
- * rewrites it into user-facing copy - never fire from here. Advice that is
- * wrong in this string is wrong with nothing behind it to correct it.
- *
- * So the background arm must not say "stop it". Every stop affordance routes
- * into `ChatSession.stopActiveTurn()`, which early-returns when no turn is
- * running, so an agent held only by a detached subagent, a workflow or a
- * scheduled wake cannot be stopped into an archivable state - the user would
- * press Stop, see nothing change, and be told the same thing again. It names
- * the per-item controls in the chat instead, which is the affordance that
- * actually clears them.
- *
- * The host's `archiveBlockedMessage` splits on exactly this distinction and
- * keeps its two arms disjoint under test; this is the same split one surface
- * earlier, where the user actually is.
+ * This tooltip is the ONLY message these rows get.
+ * The entry is soft-disabled, which prevents `onSelect`, so the host's own refusal - and the toast that rewrites it into user-facing copy - never fire from here.
  */
 function archiveBlockedReason(
-  // Excludes the idle tier rather than trusting the caller's `running !== false`
-  // guard. Without it a future caller could pass an idle row and silently get
-  // the background-items copy, which describes a state that is not blocked at
-  // all - a wrong explanation, not a missing one.
+  // Excludes the idle tier rather than trusting the caller's `running !== false` guard.
+  // Without it a future caller could pass an idle row and silently get the background-items copy, which describes a state that is not blocked at all - a wrong explanation, not a missing one.
   running: Exclude<IndicatorRunningKind, false>,
 ): string {
   if (running === "turn") {
-    // Hedged, because this tier is NOT "a turn is running". `chatActivityIndicator`
-    // deliberately maps a detached subagent or workflow fleet outliving its turn
-    // into `"turn"` - it is the agent working, so it earns the busy spinner
-    // rather than the muted background glyph - while `resolvedTurnStatus`
-    // reports no active turn for that same state, precisely so a Stop-turn
-    // affordance does not surface. Promising a stop here would contradict that
-    // and send the user after an action the host early-returns from.
+    // `chatActivityIndicator` deliberately maps a detached subagent or workflow fleet outliving its turn into `"turn"` - it is the agent working, so it earns the busy spinner rather than the muted background glyph - while `resolvedTurnStatus` reports no active turn for that same state, precisely so a Stop-turn affordance does not surface.
     return "Can't archive while this agent is working. Stopping it ends a turn, but not a detached subagent or workflow. Wait for it to go idle, or stop it, then archive.";
   }
   return "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.";
 }
 
 /**
- * Both archive affordances for a row, decided together. Only called for rows
- * whose host supports the method.
- *
- * They are deliberately gated differently, and the MENU entry is the surface
- * that must always work: present on every row, and merely SOFT-disabled while
- * the row is busy (`aria-disabled`, not Radix's `disabled`) so it stays in the
- * arrow-key order and can still announce its reason - see `softDisabledProps`
- * in `sidebar-row-menu-items`. The hover BUTTON is a pointer shortcut that
- * TAKES OVER the trailing status slot, so it may only appear when that slot is
- * showing the idle time and nothing else.
- *
- * The two therefore DO diverge, by design rather than by accident: on a busy
- * row - archived or not - the button is hidden while the entry remains. That
- * is why the entry, not the button, carries the explanation.
- *
- * That last condition is stricter than "my own status is idle", which is why
- * `hasChildren`/`expanded` are inputs. A COLLAPSED PARENT's leading slot renders
- * `ChatRowLeadingIconWithNestedRollup`, which may show a muted rollup glyph
- * standing in for a hidden descendant that needs attention - the only signal
- * those descendants have. Showing the button there would blank the trailing
- * time on hover while that glyph stands for a failure, and offer to archive the
- * whole subtree, failure included. The shell cannot
- * tell which way the rollup resolved without duplicating its subscription, so
- * every collapsed parent is excluded; the menu entry stays the archive path for
- * those rows.
- *
- * Busy is read off `status.running`, NOT off the folded `status.kind`. Folding
- * loses exactly the case this gate exists for - see {@link ChatRowStatus} - so
- * gating on `kind === "working" | "background"` left Archive ENABLED on any
- * running chat that also had a pending approval or interview, which is most of
- * them at the moment a human is looking. The host refuses such an archive
- * anyway; matching it here is what keeps the affordance honest instead of
- * offering an action that will only come back as a toast.
- *
- * "Busy" here means everything the host counts, which includes a chat owning a
- * running shell - not just an in-flight turn. Narrowing this read to exclude
- * shells is what once left Archive offered on a chat the host would bounce, so
- * it must stay whatever {@link chatActivityIndicator} reports.
- *
- * That "the host refuses it anyway" backstop holds only for an agent on the
- * host this RPC goes to. `AgentActivityTracker` is host-LOCAL, while this
- * predicate unions every host's awareness entry, so for a row running on
- * another host the UI gate is the only one that fires on busy-ness. The host
- * refuses those outright (`TARGET_NOT_LOCAL`) rather than guessing, so the
- * failure mode is an explanatory toast, not a bad archive - but the row is
- * still offered, which is a known gap.
- *
- * UNARCHIVING is never gated on busy - the host allows it, and an archived row
- * can be working (an inbound message auto-unarchives and wakes it, so the flag
- * and the run legitimately overlap). Only `archivePending` disables that
- * direction, to stop a double-submit.
+ * Only called for rows whose host supports the method.
+ * They are deliberately gated differently, and the MENU entry is the surface that must always work: present on every row, and merely SOFT-disabled while the row is busy (`aria-disabled`, not Radix's `disabled`) so it stays in the arrow-key order and can still announce its reason - see `softDisabledProps` in `sidebar-row-menu-items`.
  */
 function chatRowArchiveState(args: {
   readonly canMutate: boolean;
@@ -3542,10 +3059,7 @@ function chatRowArchiveState(args: {
   readonly hasChildren: boolean;
   readonly expanded: boolean;
 }): ChatRowArchiveDecision {
-  // The tier that BLOCKS, or `false` for none. Carrying the narrowed value
-  // rather than a separate boolean is what lets `archiveBlockedReason` refuse
-  // the idle tier by type: a bare `blocksArchive` flag proves nothing to the
-  // compiler about `status.running` at the call below.
+  // Carrying the narrowed value rather than a separate boolean is what lets `archiveBlockedReason` refuse the idle tier by type: a bare `blocksArchive` flag proves nothing to the compiler about `status.running` at the call below.
   const blockingRun: IndicatorRunningKind = args.isArchived
     ? false
     : args.status.running;
@@ -3571,14 +3085,7 @@ interface ChatRowMenuEntriesProps {
   readonly nodeId: string;
   readonly canMutate: boolean;
   /**
-   * Whether this row's registry-backed mutations can be sent on this
-   * connection. `"unavailable"` disables Rename / Archive / Delete - the three
-   * that reach `ChatRegistryWriter` - with {@link CHAT_NOT_ADOPTED_COPY}.
-   *
-   * Never a doc write: on a host with a record plane the doc is not the
-   * authority, so a local edit loses to record-wins on the next answer and the
-   * affordance reads as working while changing nothing. "Not yet" is a thing
-   * the UI can say. Always `"registry-rpc"` for a non-chat row.
+   * Never a doc write: on a host with a record plane the doc is not the authority, so a local edit loses to record-wins on the next answer and the affordance reads as working while changing nothing. "Not yet" is a thing the UI can say.
    */
   readonly writeRoute: ChatWriteRoute;
   readonly archiveEntry: ChatRowArchiveEntry | null;
@@ -3591,12 +3098,8 @@ interface ChatRowMenuEntriesProps {
 }
 
 /**
- * The disabled-tooltip for a registry-backed entry, or `null` when it is not
- * this gate that is blocking.
- *
- * `!canMutate` greys out the whole menu at once, so a per-entry tooltip there
- * would be noise - the same rule {@link archiveMenuEntries} already follows for
- * its busy arm.
+ * The disabled-tooltip for a registry-backed entry, or `null` when it is not this gate that is blocking.
+ * `!canMutate` greys out the whole menu at once, so a per-entry tooltip there would be noise - the same rule {@link archiveMenuEntries} already follows for its busy arm.
  */
 function chatWriteBlockedTooltip(
   props: ChatRowMenuEntriesProps,
@@ -3606,11 +3109,8 @@ function chatWriteBlockedTooltip(
 }
 
 /**
- * The Archive / Unarchive entry, or nothing at all. Kept as a spreadable list
- * so `chatRowMenuEntries` stays one flat literal - the ⋯ and right-click menus
- * both render from it, so a single definition covers both surfaces.
- *
- * The label is the ACTION, not the state: an archived row offers "Unarchive".
+ * The Archive / Unarchive entry, or nothing at all.
+ * Kept as a spreadable list so `chatRowMenuEntries` stays one flat literal - the ⋯ and right-click menus both render from it, so a single definition covers both surfaces.
  */
 function archiveMenuEntries(
   props: ChatRowMenuEntriesProps,
@@ -3631,10 +3131,8 @@ function archiveMenuEntries(
         !props.canMutate ||
         archiveEntry.disabled ||
         props.writeRoute === "unavailable",
-      // Only the busy arm explains itself. `!canMutate` greys out every entry
-      // in the menu at once, so a per-entry tooltip there would be noise. The
-      // unadopted arm outranks busy: a row the writer cannot address stays
-      // unaddressable however idle it goes.
+      // Only the busy arm explains itself.
+      // The unadopted arm outranks busy: a row the writer cannot address stays unaddressable however idle it goes.
       disabledTooltip:
         chatWriteBlockedTooltip(props) ??
         (props.canMutate ? archiveEntry.disabledTooltip : null),
@@ -3649,12 +3147,8 @@ function archiveMenuEntries(
 }
 
 /**
- * The Share with task / Make private entry, or nothing at all. Same spread
- * shape as {@link archiveMenuEntries} so both the ⋯ and right-click menus
- * pick it up from one definition.
- *
- * The label is the ACTION, not the state: a task-visible row offers
- * "Make private".
+ * The Share with task / Make private entry, or nothing at all.
+ * Same spread shape as {@link archiveMenuEntries} so both the ⋯ and right-click menus pick it up from one definition.
  */
 function sharingMenuEntries(
   props: ChatRowMenuEntriesProps,
@@ -3783,28 +3277,15 @@ function chatRowMenuEntries(
 }
 
 /**
- * The row's resolved own status kind for the archive affordances, which must
- * appear only on an idle row and stay disabled while one is working.
- *
- * Resolves through the same `chatOwnStatusKind` lattice the leading status icon
- * renders from, so the two can never disagree, but reads an open chat's session
- * through `useSyncExternalStore` rather than the icon's parent/child split.
- * A hook cannot use that split - `useStore` can't be called conditionally on a
- * nullable handle - and the snapshots here are deliberately PRIMITIVES, so this
- * re-renders its caller only when the kind actually flips rather than on every
- * queue or background-item tick of an open chat.
- *
- * Same authority order as the icon: an open chat's session tri-state wins,
- * epic awareness backfills the subscription-gap window and covers unopened
- * rows, and a session's own access snapshot overrides the epic-level viewer
- * role.
+ * The row's resolved own status kind for the archive affordances, which must appear only on an idle row and stay disabled while one is working.
+ * Resolves through the same `chatOwnStatusKind` lattice the leading status icon renders from, so the two can never disagree, but reads an open chat's session through `useSyncExternalStore` rather than the icon's parent/child split.
  */
 function useChatRowOwnStatusKind(args: {
   readonly epicId: string;
   readonly nodeId: string;
-  /** The row's OWN owner host - same rule and same reason as
-   *  {@link ChatRowOwnLeadingIcon}'s, so the archive affordances and the
-   *  leading icon resolve the SAME session and cannot disagree. */
+  /**
+   * The row's OWN owner host - same rule and same reason as {@link ChatRowOwnLeadingIcon}'s, so the archive affordances and the leading icon resolve the SAME session and cannot disagree.
+   */
   readonly ownerHostId: string | null;
   readonly artifactType: EpicNodeKind;
 }): ChatRowStatus {
@@ -3861,14 +3342,7 @@ function useChatRowOwnStatusKind(args: {
 }
 
 /**
- * Hover-revealed Archive / Unarchive control, a SIBLING of the row rather than
- * a child of it: the row is itself a `<button>`, so a nested `<button>` would
- * be invalid HTML and unreachable by keyboard. It sits beside the "..." trigger
- * in the same absolutely-positioned control strip, which is why the row
- * reserves pad-right for two controls while this is mounted.
- *
- * Idle rows expose the shortcut; a pending menu action also keeps it visible.
- * Archiving is reversible and needs no confirmation dialog.
+ * Hover-revealed Archive / Unarchive control, a SIBLING of the row rather than a child of it: the row is itself a `<button>`, so a nested `<button>` would be invalid HTML and unreachable by keyboard.
  */
 function ChatRowArchiveButton(props: {
   readonly nodeId: string;

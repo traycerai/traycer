@@ -34,30 +34,8 @@ interface TrayBusyState {
   readonly message: string;
 }
 
-/**
- * NP-6: listens for host-scoped tray commands forwarded from the
- * Electron main process and dispatches them against the renderer:
- *   - openSettingsHost → navigate to /settings/host.
- *   - restartHost      → hand off to `LocalHostRestartFlow`: confirm, then
- *                          attempt the claim-gated cooperative restart, and
- *                          only offer the forced bridge respawn when the
- *                          host refuses (busy) or cannot answer.
- *   - openLogs           → navigate to /settings/host (logs surface lives
- *                          inside the host panel) and open the legacy logs
- *                          dialog as a redundant entry point.
- *   - installUpdate      → confirm with the user (preview the version that
- *                          will be installed), then submit `applyStaged` (a
- *                          ready update) or `activateInstalled` (activation
- *                          debt only) - whichever the canonical two-lane
- *                          status is currently offering (update-over-debt
- *                          priority) - with toast feedback. A busy outcome
- *                          opens the shared Force/Defer dialog; any other
- *                          non-`"ok"` outcome (incl. exhausted lock-retry) is
- *                          this surface's own deferred-lock notification.
- *
- * Shells without a tray expose `hostTray: null` and this listener
- * is a no-op.
- */
+/** restartHost → hand off to `LocalHostRestartFlow`: confirm, then attempt the claim-gated cooperative restart,
+ * and only offer the forced bridge respawn when the host refuses (busy) or cannot answer. */
 export function HostTrayCommandListener() {
   const runnerHost = useRunnerHost();
   const navigate = useNavigate();
@@ -179,9 +157,8 @@ export function HostTrayCommandListener() {
             source: "system_tray",
             command: "restart_host",
           });
-          // Potentially destructive: hand off to the shared restart flow,
-          // which confirms, tries the cooperative claim-gated restart, and
-          // reserves the forced respawn for an explicit choice.
+          // Potentially destructive: hand off to the shared restart flow, which confirms, tries the cooperative
+          // claim-gated restart, and reserves the forced respawn for an explicit choice.
           setPendingRestart(true);
           return;
         case "openLogs":
@@ -189,9 +166,8 @@ export function HostTrayCommandListener() {
             source: "system_tray",
             command: "open_logs",
           });
-          // Logs surface lives inside Settings → Host; navigate there and
-          // also open the legacy logs dialog so the user gets the fastest
-          // path to the tail regardless of which surface they prefer.
+          // Logs surface lives inside Settings → Host; navigate there and also open the legacy logs dialog so the user
+          // gets the fastest path to the tail regardless of which surface they prefer.
           activateTabIntent(
             navigate,
             resolveSettingsTabIntent({
@@ -207,9 +183,7 @@ export function HostTrayCommandListener() {
             source: "system_tray",
             command: "install_host_update",
           });
-          // Destructive: installing an update restarts the host and kills
-          // PTYs / in-flight RPC sessions. Preview the version that will be
-          // installed before executing.
+          // Preview the version that will be installed before executing.
           setPendingInstallVersion(command.version);
           return;
       }
@@ -243,9 +217,8 @@ export function HostTrayCommandListener() {
           applyStagedMutation.isPending || activateInstalledMutation.isPending
         }
         onConfirm={() => {
-          // Update-over-debt priority: the same live status the banner/menu
-          // derive their "Update to X" affordance from decides which intent
-          // this confirm submits.
+          // Update-over-debt priority: the same live status the banner/menu derive their "Update to X" affordance from
+          // decides which intent this confirm submits.
           if (status?.updateReady === true) {
             runApply(false);
           } else if (

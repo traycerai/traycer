@@ -16,12 +16,7 @@ import {
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 
-// `useTerminalSessionHandle`'s own module state (the process-wide registry) is
-// exercised for real below - only its collaborators are mocked, so the
-// rotation drives the REAL `authenticatedOwnerIdentityKey` computation, not a
-// test-seam override (`__setTerminalStreamClientFactoryForTests` collapses
-// BOTH `transportKey` and `ownerIdentityKey` to one hardcoded string,
-// structurally unable to prove this discriminator).
+// `useTerminalSessionHandle`'s own module state (the process-wide registry) is exercised for real below - only its collaborators are mocked, so the rotation drives the REAL `authenticatedOwnerIdentityKey` computation, not a test-seam override.
 const hostEntryRef = vi.hoisted((): { value: HostDirectoryEntry | null } => ({
   value: null,
 }));
@@ -41,12 +36,7 @@ vi.mock("@/lib/host", () => ({
   },
 }));
 
-// The real `useDurableStreamTransportFactory` returns a referentially-STABLE
-// opener (a `useCallback` with an empty dep array) - the acquire effect below
-// depends on it, so a mock returning a FRESH closure on every render would
-// re-run that effect every commit and loop forever. `stableOpenTransport` is
-// defined once, here, and indirects through the mutable ref so tests can still
-// swap behavior per-case.
+// The real `useDurableStreamTransportFactory` returns a referentially-STABLE opener (a `useCallback` with an empty dep array) - the acquire effect below depends on it, so a mock returning a FRESH closure on every render would re-run that effect every commit.
 const openTransportRef = vi.hoisted(
   (): { fn: ((hostId: string) => DurableStreamTransport) | null } => ({
     fn: null,
@@ -214,14 +204,7 @@ describe("useTerminalSessionHandle owner identity (R-1)", () => {
           cols: 80,
           rows: 24,
           reattachMode: "fresh",
-          // `terminal-agent`, not `terminal`: `TerminalSessionRegistry` only
-          // keeps a lease-free entry WARM for a `terminal-agent` kind
-          // (`shouldKeepLeaseFree`) - a plain `terminal` is always torn down
-          // and rebuilt on the effect's own release/reacquire cleanup cycle
-          // regardless of `ownerIdentityKey`, which would make this test pass
-          // even with the fix reverted (confirmed: see negative control).
-          // Only the warm path actually exercises the `existingOwnerIdentityKey`
-          // comparison this discriminator depends on.
+          // `terminal-agent`, not `terminal`: `TerminalSessionRegistry` only keeps a lease-free entry WARM for a `terminal-agent` kind (`shouldKeepLeaseFree`) - a plain `terminal` is always torn down and rebuilt on the effect's own release/reacquire cleanup cycle.
           kind: "terminal-agent",
           enabled: true,
         }),
@@ -238,11 +221,8 @@ describe("useTerminalSessionHandle owner identity (R-1)", () => {
     expect(tracked.records()).toHaveLength(1);
     expect(tracked.records()[0].closeCount).toBe(0);
 
-    // Same hostId/epicId/sessionId/instanceId, same signed-in user, same
-    // websocketUrl/version/status - ONLY the remote host's public key rotates
-    // (re-enrollment / corruption recovery). `args.hostId` never changes here
-    // (a terminal tab is bound for life), so a pass proves `ownerIdentityKey`
-    // alone forces the `forceRelease` + reacquire.
+    // Same hostId/epicId/sessionId/instanceId, same signed-in user, same websocketUrl/version/status - ONLY the remote host's public key rotates (re-enrollment / corruption recovery).
+    // `args.hostId` never changes here (a terminal tab is bound for life), so a pass proves `ownerIdentityKey` alone forces the `forceRelease` + reacquire.
     hostEntryRef.value = remoteTarget("pubkey-b");
     rerender();
 
@@ -250,10 +230,7 @@ describe("useTerminalSessionHandle owner identity (R-1)", () => {
       expect(result.current).not.toBe(firstHandle);
     });
 
-    // Effect cleanup releases the lease first (keep-warm retags cache and
-    // reopens subscribe — a new transport), then the remounted effect sees
-    // the owner-identity mismatch, force-releases, and acquires a fresh
-    // presentation stream.
+    // Effect cleanup releases the lease first (keep-warm retags cache and reopens subscribe - a new transport), then the remounted effect sees the owner-identity mismatch, force-releases, and acquires a fresh presentation stream.
     expect(tracked.records()).toHaveLength(3);
     expect(tracked.records()[0].closeCount).toBe(1);
     expect(tracked.records()[1].closeCount).toBe(1);
@@ -300,10 +277,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
     const firstHandle = result.current;
     if (firstHandle === null) throw new Error("expected initial handle");
 
-    // A transient transport drop (not a definitive TERMINAL_NOT_FOUND) maps
-    // to the recoverable "lost" status; a terminal-agent's lease-free entry
-    // is deliberately kept warm through it (the host PTY may still be
-    // running) - see `TerminalSessionRegistry`'s own coverage of this.
+    // A transient transport drop (not a definitive TERMINAL_NOT_FOUND) maps to the recoverable "lost" status; a terminal-agent's lease-free entry is deliberately kept warm through it (the host PTY may still be running) - see `TerminalSessionRegistry`'s own.
     act(() => {
       firstHandle.store.setState({ status: "lost" });
     });
@@ -316,8 +290,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
     });
 
     // Re-enabling re-runs the acquire effect against that SAME instance id.
-    // Without the acquire-time guard this would silently resurrect the dead
-    // "lost" handle instead of building a fresh one.
+    // Without the acquire-time guard this would silently resurrect the dead "lost" handle instead of building a fresh one.
     rerender(true);
     await waitFor(() => {
       expect(result.current).not.toBeNull();
@@ -354,17 +327,12 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
     const firstHandle = first.result.current;
     if (firstHandle === null) throw new Error("expected initial handle");
 
-    // The host confirms via TERMINAL_NOT_FOUND that the PTY addressed by this
-    // handle is gone, while the first consumer is still mounted/leased -
-    // the registry entry itself is untouched until that consumer's own
-    // recovery effect gets around to releasing it.
+    // The host confirms via TERMINAL_NOT_FOUND that the PTY addressed by this handle is gone, while the first consumer is still mounted/leased - the registry entry itself is untouched until that consumer's own recovery effect gets around to releasing it.
     act(() => {
       firstHandle.store.setState({ status: "reaped" });
     });
 
-    // A second acquisition of the SAME instance id (its owner racing a
-    // remount against the still-mounted first consumer) must not adopt the
-    // confirmed-dead handle - it force-releases and builds fresh instead.
+    // A second acquisition of the SAME instance id (its owner racing a remount against the still-mounted first consumer) must not adopt the confirmed-dead handle - it force-releases and builds fresh instead.
     const second = renderHook(() => useTerminalSessionHandle(sharedArgs), {
       wrapper,
     });

@@ -49,7 +49,6 @@ export interface WorktreeBranchPickerProps {
   readonly emptyLabel: string;
   readonly align: "start" | "center" | "end";
   readonly side: "top" | "right" | "bottom" | "left";
-  /** Seeds the picker open on mount (no trigger click needed). */
   readonly defaultOpen: boolean;
   readonly contentClassName: string | undefined;
   readonly portalContainer: HTMLElement | null;

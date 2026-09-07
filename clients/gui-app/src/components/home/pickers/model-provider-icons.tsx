@@ -59,76 +59,19 @@ import XiaomiMiMoMono from "@lobehub/icons/es/XiaomiMiMo/components/Mono";
 import ZhipuMono from "@lobehub/icons/es/Zhipu/components/Mono";
 import ZenMuxMono from "@lobehub/icons/es/ZenMux/components/Mono";
 
-/**
- * Brand marks for the UPSTREAM model providers a harness can call - the
- * `models.dev` catalog behind OpenCode's `/provider` list, ~180 ids.
- *
- * Same source as `harness-icons.tsx` (`@lobehub/icons`, MIT, per-leaf imports so
- * unused brands tree-shake) and the same legal footing: a mark used to identify
- * the thing it names is nominative fair use, which is what a provider picker is.
- *
- * HAND-OWNED, deliberately. Upstream fetches `models.dev/logos/{id}.svg` at
- * build time and compiles a sprite, which buys them coverage and costs them two
- * bugs we are not copying:
- *
- *  1. That endpoint answers 200 for ANY id, serving a generic sparkles glyph -
- *     so their build cannot tell a hit from a miss, and 14 of their 98 sprite
- *     entries are the fallback wearing a real provider's name. Ours resolves to
- *     {@link GenericModelProviderIcon}, which wears the same familiar sparkles
- *     but is attached to no provider at all - see the invariant on it.
- *  2. Their generated name list is not derived from the generated sprite, so
- *     `llmgateway` is declared, absent, and renders as nothing at all - an
- *     invisible icon rather than a fallback. That specific drift is impossible
- *     here for two different reasons, and it is worth being precise about
- *     which does what: a key MISSING from the map below simply falls back
- *     (correct, and the expected fate of most of the catalog), while a
- *     reference to a component that does not exist fails to compile. Neither
- *     is a coverage guarantee - nothing here promises an id has a mark - but
- *     between them there is no state where a mark is claimed and nothing
- *     renders.
- *
- * Coverage is 84 of the catalog's 183 ids, checked against the real
- * `models.dev` payload rather than guessed - every key below is an id the
- * catalog actually ships, so none of them is a mark that can never match. The
- * remaining tail falls back, which is the honest outcome: `@lobehub/icons` has
- * no mark for those, and inventing one would be the impersonation bug in a
- * different coat.
- */
+/** Coverage is 84 of the catalog's 183 ids, checked against the real `models.dev` payload rather than guessed -
+ * every key below is an id the catalog actually ships, so none of them is a mark that can never match. */
 export type ModelProviderIcon = (
   props: SVGProps<SVGSVGElement>,
 ) => ReactElement;
 
-/**
- * The fallback, and the one icon here that is NOT a brand.
- *
- * Sparkles, deliberately: it is the mark users already read as "provider we
- * have no logo for" from OpenCode, and matching that visual language is worth
- * more than picking a different neutral glyph for its own sake.
- *
- * The bug it must not inherit is a DIFFERENT thing wearing the same pixels.
- * Upstream serves this glyph from `logos/{id}.svg` for any id they lack, and it
- * is also Synthetic's real logo - so on their surface an unknown provider is
- * indistinguishable from that company's row, and 14 named providers render as
- * Synthetic. Here it is a pure glyph from the app's own icon set with no
- * provider attached, so it means exactly one thing: no mark for this row.
- *
- * INVARIANT: nothing in {@link MODEL_PROVIDER_ICONS} may resolve to sparkles or
- * a lookalike. The moment a real provider is MAPPED to this glyph, "no mark"
- * and "that company's mark" collapse into each other again - which is upstream's
- * bug, not their asset pipeline's.
- */
+/** The bug it must not inherit is a different thing wearing the same pixels. */
 export const GenericModelProviderIcon: ModelProviderIcon = (props) => (
   <Sparkles {...props} />
 );
 
-/**
- * models.dev provider id → brand mark.
- *
- * Keys are catalog ids verbatim (`amazon-bedrock`, `google-vertex-anthropic`),
- * because that is what the host sends. Several ids are plan or region variants
- * of one brand and map to the same mark - `alibaba-coding-plan` is Alibaba's
- * billing arrangement, not a different company.
- */
+/** Several ids are plan or region variants of one brand and map to the same mark - `alibaba-coding-plan` is
+ * Alibaba's billing arrangement, not a different company. */
 const MODEL_PROVIDER_ICONS: Readonly<Record<string, ModelProviderIcon>> = {
   "302ai": (props) => <Ai302Mono {...props} />,
   aihubmix: (props) => <AiHubMixMono {...props} />,
@@ -154,8 +97,8 @@ const MODEL_PROVIDER_ICONS: Readonly<Record<string, ModelProviderIcon>> = {
   "github-copilot": (props) => <GithubCopilotMono {...props} />,
   google: (props) => <GoogleMono {...props} />,
   "google-vertex": (props) => <VertexAIMono {...props} />,
-  // Anthropic's models SERVED THROUGH Vertex. The row names the gateway, and
-  // the gateway is what the credential belongs to.
+  // Anthropic's models served through Vertex. The row names the gateway, and the gateway is what the credential
+  // belongs to.
   "google-vertex-anthropic": (props) => <VertexAIMono {...props} />,
   groq: (props) => <GroqMono {...props} />,
   huggingface: (props) => <HuggingFaceMono {...props} />,
@@ -191,9 +134,8 @@ const MODEL_PROVIDER_ICONS: Readonly<Record<string, ModelProviderIcon>> = {
   vercel: (props) => <VercelMono {...props} />,
   xai: (props) => <XAIMono {...props} />,
   zai: (props) => <ZAIMono {...props} />,
-  // Z.AI's plan variant folds to Z.AI's own mark. It pointed at Zhipu's, which
-  // is the parent company rather than the brand this row names - and it broke
-  // the rule stated above it, where every plan variant wears its parent's mark.
+  // It pointed at Zhipu's, which is the parent company rather than the brand this row names - and it broke the
+  // rule stated above it, where every plan variant wears its parent's mark.
   "zai-coding-plan": (props) => <ZAIMono {...props} />,
   "cline-pass": (props) => <ClineMono {...props} />,
   kilo: (props) => <KiloCodeMono {...props} />,
@@ -221,24 +163,7 @@ const MODEL_PROVIDER_ICONS: Readonly<Record<string, ModelProviderIcon>> = {
   zenmux: (props) => <ZenMuxMono {...props} />,
 };
 
-/**
- * The mark for a row - a brand's, or the neutral one.
- *
- * A COMPONENT rather than a `getIcon(id)` helper the caller renders: resolving
- * a component into a local and rendering `<Icon />` creates a component during
- * render, which remounts the subtree whenever the identity changes and is what
- * `react-hooks`'s rule against it is for. `createElement` off a stable map
- * sidesteps that entirely.
- *
- * NEVER renders nothing. An unknown id, an id we have no mark for, and a custom
- * provider the user declared all get the same neutral glyph - a row with a
- * blank where every sibling has an icon reads as a rendering failure, which is
- * exactly the shape of upstream's `llmgateway` bug.
- *
- * `data-model-provider-icon` names which mark was chosen (the id, or
- * `"generic"`), so a test can tell a brand from the fallback without reaching
- * for component identity.
- */
+/** A component rather than a `getIcon(id)` helper the caller renders. */
 type MarkProps = SVGProps<SVGSVGElement> & {
   readonly "data-model-provider-icon": string;
 };
@@ -246,17 +171,7 @@ type MarkProps = SVGProps<SVGSVGElement> & {
 export function ModelProviderMark(
   props: {
     readonly id: string;
-    /**
-     * This row is a provider the USER declared, whatever its id.
-     *
-     * Not derivable from the id, and that is the whole point: upstream's
-     * `T(id)` judges a block by its `npm` and model map, never its key, so a
-     * hand-written `provider.openai` block with an OpenAI-compatible endpoint
-     * is a legal custom declaration under a mapped id. Without this the row
-     * paints OpenAI's real mark on someone's private gateway - the exact
-     * impersonation the neutral fallback exists to prevent, arriving through
-     * the one door the id could not close.
-     */
+    /** Not derivable from the id, and that is the whole point. */
     readonly configDeclaredCustom: boolean;
   } & SVGProps<SVGSVGElement>,
 ): ReactElement {
@@ -264,9 +179,8 @@ export function ModelProviderMark(
   const known =
     !configDeclaredCustom && Object.hasOwn(MODEL_PROVIDER_ICONS, id);
   const icon = known ? MODEL_PROVIDER_ICONS[id] : GenericModelProviderIcon;
-  // Assigned to a typed const first: an object LITERAL at the call site would
-  // trip excess-property checking against the icon's `SVGProps`, and the data
-  // attribute is the whole point of this indirection.
+  // Assigned to a typed const first: an object literal at the call site would trip excess-property checking
+  // against the icon's `SVGProps`, and the data attribute is the whole point of this indirection.
   const iconProps: MarkProps = {
     ...rest,
     "data-model-provider-icon": known ? id : "generic",

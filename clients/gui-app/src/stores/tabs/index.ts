@@ -1,16 +1,6 @@
 /**
- * Generic tab strip store. Owns the canonical strip order across all
- * tab kinds (epic, draft, history, settings). Per-kind data lives in
- * the relevant source store; system tabs (history/settings) are
- * stored here as singletons.
- *
- * Renderers should consume `useHeaderTabs()` from `./use-header-tabs`
- * and look up per-kind behavior via the registry.
- *
- * Reconciliation install: owned by `WindowsBridgeProvider`. The
- * provider sets the hydration gate's ready-promise before triggering
- * `installTabsStoreReconciliation()` so async snapshot arrival cannot
- * scramble the persisted strip order on cold start.
+ * Generic tab strip store. Owns the canonical strip order across all tab kinds (epic, draft,
+ * history, settings).
  */
 
 export { useTabsStore } from "@/stores/tabs/store";

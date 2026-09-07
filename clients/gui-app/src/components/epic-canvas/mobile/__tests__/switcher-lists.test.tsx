@@ -27,11 +27,6 @@ interface FixtureRecord {
   readonly status: number | null;
   readonly hostId: string;
 }
-/**
- * The whole ref, not just its `type`. The ref's `hostId` is what the opened
- * tile BINDS TO for life, so it is the field most worth asserting - and a
- * fixture that dropped it is why a wrong-host ref went unnoticed here.
- */
 interface ActivateRef {
   readonly id: string;
   readonly type: string;
@@ -134,14 +129,7 @@ vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
     holder.activeId === id,
   findOpenArtifactInTab: () => null,
 }));
-// The artifact search RPC needs a QueryClient this suite has no reason to
-// provide; the request logic is covered where it lives. Keep the real status
-// message so any surface wording stays under test.
-//
-// `useEpicStore` is deliberately NOT mocked: this suite now renders inside a
-// real `EpicSessionContext`, so the artifact map the list filters against is
-// the genuine projection. Stubbing it here would answer a question the harness
-// already answers, and answer it differently.
+// `useEpicStore` is deliberately NOT mocked: this suite now renders inside a real `EpicSessionContext`, so the artifact map the list filters against is the genuine projection.
 vi.mock(
   "@/components/epic-canvas/sidebar/use-artifact-search-results",
   async (importOriginal) => ({
@@ -187,9 +175,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => vi.fn(),
 }));
-// The agents list owns the indicator subscription its rows read through
-// context; record what it asks for so the wiring is asserted rather than
-// assumed, and answer from the holder.
+// The agents list owns the indicator subscription its rows read through context; record what it asks for so the wiring is asserted rather than assumed, and answer from the holder.
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => "host-A",
 }));
@@ -201,11 +187,6 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
     return holder.indicators;
   },
 }));
-// Each category list renders its own create row/menu (Agents: New chat,
-// Terminals: New terminal, Artifacts: a "+" kind menu); stub all three to
-// markers so their own wiring (composer mode, the terminal picker dialog, the
-// artifact-kind dropdown) doesn't need to mount here - this file exercises
-// each list's editor gating and row positioning in isolation.
 vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
   SwitcherNewChatAction: () => (
     <button type="button" data-testid="switcher-new-chat" />
@@ -240,10 +221,7 @@ function artifactFixture(
 }
 
 /**
- * Each rendered artifact row as `[id, depth]`, in DOM order - the two halves of
- * "this list draws a tree". Depth is read off the row's own marker rather than
- * measured: a pixel assertion would pass for any indent scale, including one
- * that had drifted away from the sidebar's.
+ * Depth is read off the row's own marker rather than measured: a pixel assertion would pass for any indent scale, including one that had drifted away from the sidebar's.
  */
 function renderedArtifactNesting(): ReadonlyArray<readonly [string, string]> {
   return screen
@@ -289,13 +267,8 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 /**
- * `SwitcherRowActions` (each row's "…" menu) calls `useSwitcherRename`, which
- * now reads a real session handle for the optimistic overlay
- * (`beginRenameMutation` / `retirePendingMutation`) rather than firing bare
- * RPCs - so every render in this suite needs `<EpicSessionContext.Provider>`
- * around it, not just the tests that exercise a rename. No test here commits
- * an edit through the menu, so an empty doc is enough for the session to
- * mount without throwing.
+ * `SwitcherRowActions` (each row's "…" menu) calls `useSwitcherRename`, which now reads a real session handle for the optimistic overlay (`beginRenameMutation` / `retirePendingMutation`) rather than firing bare RPCs - so every render in this suite needs `<EpicSessionContext.Provider>` around it, not just the tests that exercise a rename.
+ * No test here commits an edit through the menu, so an empty doc is enough for the session to mount without throwing.
  */
 function newSessionHandle(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
@@ -313,11 +286,6 @@ function newSessionHandle(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-1",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -341,13 +309,6 @@ function SessionWrapper(props: { readonly children: ReactNode }): ReactElement {
   );
 }
 
-/**
- * The one shared fix: every render in this file goes through the provider.
- * Uses RTL's `wrapper` option (not a hand-nested element) specifically so it
- * survives `view.rerender(...)` below - a bare nested element would have the
- * wrapper swapped OUT the moment a test re-renders with an unwrapped element,
- * since `rerender` diffs against whatever the root element WAS.
- */
 function render(ui: ReactElement): RenderResult {
   return rtlRender(ui, { wrapper: SessionWrapper });
 }
@@ -397,18 +358,15 @@ describe("<SwitcherArtifactsList />", () => {
     expect(screen.queryByTestId("switcher-artifact-row-chat-1")).toBeNull();
     const row = screen.getByTestId("switcher-artifact-row-tk-1");
     expect(row.textContent).toContain("Ticket One");
-    // The status dot is a decorative (`aria-hidden`) touch-surface affordance
-    // with no title/aria-label - status color is the only signal, mirroring
-    // the desktop `STATUS_DOT_CLASSES` palette.
+    // The status dot is a decorative (`aria-hidden`) touch-surface affordance with no title/aria-label - status color is the only signal, mirroring the desktop `STATUS_DOT_CLASSES` palette.
     const statusDot = row.querySelector(".rounded-full");
     expect(statusDot).not.toBeNull();
     expect(statusDot?.className).toContain(STATUS_DOT_CLASSES[1]);
   });
 
   it("nests a child artifact under its parent", () => {
-    // Seeded youngest-first, so the epic's default recency sort would list
-    // these in exactly the reverse order. Nesting has to regroup them for the
-    // assertion to hold - which is the claim.
+    // Seeded youngest-first, so the epic's default recency sort would list these in exactly the reverse order.
+    // Nesting has to regroup them for the assertion to hold - which is the claim.
     holder.records = [
       artifactFixture("st-1", null, "Story", "story"),
       artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
@@ -423,10 +381,7 @@ describe("<SwitcherArtifactsList />", () => {
   });
 
   it("exposes the nesting to assistive technology, not just to the eye", () => {
-    // Indentation is a sighted cue only. Without the tree roles a screen
-    // reader is handed a flat run of buttons and told nothing about what
-    // contains what - so the structure is asserted through the roles the
-    // desktop artifact tree also carries, with level coming from the nesting.
+    // Without the tree roles a screen reader is handed a flat run of buttons and told nothing about what contains what - so the structure is asserted through the roles the desktop artifact tree also carries, with level coming from the nesting.
     holder.records = [
       artifactFixture("st-1", null, "Story", "story"),
       artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
@@ -452,9 +407,8 @@ describe("<SwitcherArtifactsList />", () => {
       "true",
       "false",
     ]);
-    // Branches carry their expansion state; the leaf carries none, because an
-    // absent `aria-expanded` is what tells a screen reader it IS a leaf. A
-    // `false` here would announce the leaf as a collapsed branch hiding rows.
+    // Branches carry their expansion state; the leaf carries none, because an absent `aria-expanded` is what tells a screen reader it IS a leaf.
+    // A `false` here would announce the leaf as a collapsed branch hiding rows.
     expect(items.map((i) => i.getAttribute("aria-expanded"))).toEqual([
       "true",
       "true",
@@ -492,9 +446,8 @@ describe("<SwitcherArtifactsList />", () => {
   });
 
   it("lists an artifact whose parent this category excludes as a root", () => {
-    // An artifact parented to a chat. The chat is not an artifact row, so
-    // there is nothing on screen to indent under - and hiding the ticket to
-    // preserve the tree would lose a row the user owns.
+    // An artifact parented to a chat.
+    // The chat is not an artifact row, so there is nothing on screen to indent under - and hiding the ticket to preserve the tree would lose a row the user owns.
     holder.records = [
       artifactFixture("chat-1", null, "Agent", "chat"),
       artifactFixture("tk-1", "chat-1", "Ticket under agent", "ticket"),
@@ -543,8 +496,6 @@ describe("<SwitcherArtifactsList />", () => {
       response: { results: [], outcome: "ready", truncated: false },
     };
     render(<SwitcherArtifactsList {...PROPS} />);
-    // The host's ranking, un-indented: `tk-2` is `st-1`'s child in the tree and
-    // is still drawn above it at depth 0, because a ranking is not a tree.
     expect(renderedArtifactNesting()).toEqual([
       ["tk-2", "0"],
       ["st-1", "0"],

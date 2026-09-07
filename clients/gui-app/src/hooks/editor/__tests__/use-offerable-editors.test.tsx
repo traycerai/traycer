@@ -1,12 +1,4 @@
-/**
- * `useOfferableEditors` narrows the protocol's `EDITORS` registry to the ids
- * a host's negotiated `editor.openPaths` minor can actually accept on the
- * wire. This suite drives the REAL hook and mocks only its input, the host
- * handshake (`useHostMethodSchemaVersion`) - never the hook's own filtering
- * logic. It asserts against the real `EDITORS` registry rather than a
- * hand-copied id list, so the suite keeps tracking the registry (and any
- * future minor's addition) instead of silently going stale next to it.
- */
+/** This suite drives the REAL hook and mocks only its input, the host handshake (`useHostMethodSchemaVersion`) - never the hook's own filtering logic. */
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";

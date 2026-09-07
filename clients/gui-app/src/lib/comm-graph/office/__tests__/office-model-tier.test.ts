@@ -62,11 +62,8 @@ const CASES: ReadonlyArray<TierCase> = [
 ];
 
 /**
- * A name heuristic gets to be wrong about an unfamiliar model; what it must
- * not do is disagree with itself. The table is the contract, and the
- * both-lists rows are the ones that would otherwise drift: a name carrying its
- * family AND its size resolves by SIZE, because a mini is a mini whatever it
- * is a mini of.
+ * A name heuristic gets to be wrong about an unfamiliar model; what it must not do is disagree with itself.
+ * The table is the contract, and the both-lists rows are the ones that would otherwise drift: a name carrying its family AND its size resolves by SIZE, because a mini is a mini whatever it is a mini of.
  */
 describe("officeModelTier", () => {
   for (const entry of CASES) {
@@ -76,10 +73,8 @@ describe("officeModelTier", () => {
   }
 
   /**
-   * Names deliberately absent from the table above. Asking the table's own
-   * inputs what the tiers are proves nothing - the answers were asserted one
-   * by one already - so the closed set is checked against names the heuristic
-   * has no rule for, which is where an unexpected answer could come from.
+   * Names deliberately absent from the table above.
+   * Asking the table's own inputs what the tiers are proves nothing - the answers were asserted one by one already - so the closed set is checked against names the heuristic has no rule for, which is where an unexpected answer could come from.
    */
   it("never answers anything outside the three tiers", () => {
     const strangers: ReadonlyArray<string> = [

@@ -26,10 +26,7 @@ function traycerEnvOverrideListQueryOptions(traycerCli: ITraycerCli | null) {
   });
 }
 
-/**
- * Reads all env overrides through `traycer config env list`. Powers the
- * env table in Settings → Shell & environment.
- */
+/** Reads all env overrides through `traycer config env list`. */
 export function useRunnerTraycerEnvOverrideListQuery(): UseQueryResult<
   readonly TraycerEnvOverride[]
 > {

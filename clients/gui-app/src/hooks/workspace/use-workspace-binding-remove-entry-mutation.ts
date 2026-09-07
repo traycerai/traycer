@@ -36,13 +36,6 @@ export function useWorkspaceBindingRemoveEntryForClient(
   });
 }
 
-/**
- * Workspace paths with an in-flight `workspaceBinding.removeEntry` for the given
- * owner. Tracks every pending removal (not just the most recent), so each
- * folder row reflects its own pending state when removals overlap - reading
- * `mutation.variables` off the single shared mutation would only ever match the
- * last-clicked row, re-enabling the others mid-flight.
- */
 export function usePendingRemoveBindingEntryPaths(owner: {
   readonly epicId: string;
   readonly ownerId: string;

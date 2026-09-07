@@ -5,29 +5,7 @@ import {
 } from "./composer-mention-attrs";
 
 /**
- * The plain-text projection of composer content - what a document READS as once
- * its atoms are spelled out: `@mentions` as their resolved paths, `/commands`
- * as their canonical names, quotes prefixed the way markdown quotes them, and
- * attachments as nothing at all.
- *
- * This is the projection behind a sent message's `contentText`, a draft tab's
- * label, and the chat minimap's preview - so it is also the projection the
- * host's transcript row skeleton has to run
- * ({@link ../persistence/chat-transcript/build-skeleton}'s
- * `TranscriptPreviewProjection`). It lives in `common/` for that reason: it is
- * a projection OF `JsonContent`, sitting beside `json-content-serializer.ts`,
- * which is the other one - and deliberately not under
- * `persistence/chat-transcript/`, since a draft tab's label is not a transcript
- * concern and most of its callers never touch a transcript at all.
- *
- * It is the same code the GUI has always run, not a second implementation of
- * it. `clients/gui-app/src/lib/composer/tiptap-json-content.ts` re-exports
- * everything here under its original names, so every GUI import path is
- * unchanged and there is nothing for a host copy to drift from. The two
- * projections differ in what they are FOR and must not be conflated:
- * `jsonContentToMarkdown` produces the markdown an agent reads, with validation
- * markers and `@agent:` reference forms; this produces the text a human reads
- * back.
+ * Plain-text projection of composer content (human-readable). Do not conflate with `jsonContentToMarkdown`, which is what an agent reads.
  */
 
 export function extractPlainTextFromComposerJSONContent(
@@ -36,15 +14,7 @@ export function extractPlainTextFromComposerJSONContent(
   return extractPlainTextFromComposerNodes(content.content ?? []);
 }
 
-/**
- * The same projection over a bare node LIST rather than a document.
- *
- * Exported for the composer's leading-token scan, which asks whether the
- * siblings AFTER a candidate `/command` leave its token terminated. That
- * question is decided by what the remainder projects to, and answering it per
- * node type kept getting it wrong in a new way each time - so the scan
- * delegates to this rather than to a hand-written mirror of it.
- */
+/** The same projection over a bare node LIST rather than a document. */
 export function extractPlainTextFromComposerNodes(
   content: ReadonlyArray<JsonContent>,
 ): string {
@@ -80,13 +50,6 @@ function blockquotePlainText(node: JsonContent): string {
   return quotePrefixLines(text);
 }
 
-/**
- * The single markdown-quote prefix rule for every plain-text projection of a
- * blockquote (submit `contentText` here, composer copy in the GUI's
- * `composer-clipboard.ts`). Blank lines become a bare `>` so the quote stays
- * one contiguous block. Child serialization legitimately differs per caller;
- * only this prefixing rule is shared.
- */
 export function quotePrefixLines(text: string): string {
   return text
     .split("\n")
@@ -96,11 +59,7 @@ export function quotePrefixLines(text: string): string {
 
 /**
  * What a mention chip projects to: `@` plus the path its attributes RESOLVE to.
- *
- * Goes through the full attribute decode rather than reading `attrs.path`,
- * because the two are not the same string - see `composer-mention-attrs.ts`.
- * A node whose attributes cannot be decoded into a reference at all projects to
- * nothing, so a broken chip contributes no text instead of a broken one.
+ * A node whose attributes cannot be decoded into a reference at all projects to nothing, so a broken chip contributes no text instead of a broken one.
  */
 export function mentionPlainTextFromAttrs(
   attrs: Record<string, unknown> | undefined,
@@ -120,22 +79,7 @@ export function slashCommandPlainTextFromAttrs(
   return `/${name}`;
 }
 
-/**
- * What the chip reads on screen, which is not always what it serializes to.
- *
- * A chip written with `$` - picked from the popover, pasted, or spliced out of a
- * next-step prompt - keeps that character in its label so both the live composer
- * and the sent message show back what was written, while
- * {@link slashCommandPlainTextFromAttrs} still emits the canonical `/name` the
- * provider and the round-trip parser expect. Skills reach the host through
- * `skillInvocations`, keyed off the node's `kind` rather than this text, so the
- * trigger stays a purely local affordance.
- *
- * Travels with its plain-text sibling rather than staying beside the node view
- * that draws it: both read the name off the same attributes with the same
- * `commandName` / `name` / `id` fallback, and splitting them would leave that
- * fallback restated in two places.
- */
+/** What the chip reads on screen, which is not always what it serializes to. */
 export function slashCommandLabelFromAttrs(
   attrs: Record<string, unknown> | undefined,
 ): string {

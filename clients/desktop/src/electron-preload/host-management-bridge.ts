@@ -37,14 +37,7 @@ import type {
 } from "../ipc-contracts/host-management-types";
 
 /**
- * Browser-safe surface for the host gate, update banner, Settings → Host,
- * and the Doctor failure card. Query commands resolve once with the CLI's
- * final NDJSON `result` data payload; mutation intents resolve a
- * `MutationOutcome` (the mutation lane never rejects - "wait-never-reject",
- * Host Update Layer Redesign Tech Plan). Live status (both lanes) is
- * consumed via `getHostControllerStatus` + the desktop-only
- * `hostControllerStatus` push bridge (see `desktop-runner-host.ts`).
- *
+ * Query commands resolve once with the CLI's final NDJSON `result` data payload.
  * The renderer never spawns the CLI directly; this bridge is the only seam.
  */
 export interface HostManagementBridgeSurface {
@@ -89,7 +82,7 @@ export interface HostManagementBridgeSurface {
     input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
-  // Maintenance-RPC projections for the GUI's local fallback — protocol
+  // Maintenance-RPC projections for the GUI's local fallback  -  protocol
   // response shapes, classified in main (see `host-management-ipc.ts`).
   maintenanceUpdateCheck(
     input: HostAvailableVersionsInput & { readonly expectedHostId: string },
@@ -254,11 +247,6 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
   };
 }
 
-/**
- * Push subscription for the two-lane `HostControllerStatus`. Desktop-only
- * (mirrors the `hostRegistryUpdates`/`hostOperationStatus` duck-typed
- * bridges it replaces) - not part of the cross-shell `IHostManagement`.
- */
 export interface HostControllerStatusBridgeSurface {
   onChange(handler: (status: HostControllerStatus) => void): {
     dispose: () => void;
@@ -299,11 +287,6 @@ function isHostControllerStatus(value: unknown): value is HostControllerStatus {
   );
 }
 
-/**
- * Subscribes to tray-side host commands forwarded from main.
- * Renderer wires this to the Doctor / Settings router so a tray click
- * deep-links into the right surface.
- */
 export interface HostTrayBridgeSurface {
   onCommand(handler: (command: HostTrayCommand) => void): {
     dispose: () => void;

@@ -3,19 +3,7 @@ import { useEditorOpenPathsSupportsV11 } from "@/hooks/editor/use-editor-open-pa
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 
 /**
- * The `editor.openPaths` target for a PDF surface's Open Externally action.
- *
- * PDFs are the format the settled design routes to the OS default
- * application (`"system"`, added in editor.openPaths 1.1) instead of the
- * user's code editor - an editor shows a binary-file notice for a PDF,
- * while images and text render fine there and deliberately keep the
- * editor target.
- *
- * `"system"` is emission-gated on the negotiated version: a 1.0 host's
- * request schema hard-rejects the literal, so an old host gets today's
- * exact behavior (the default editor) instead - never a failed RPC. The
- * unknown state (`null` before the first handshake) also falls back, the
- * same fails-closed reading every optional-capability gate uses.
+ * PDFs emit `"system"` only when `editor.openPaths` >= 1.1. A 1.0 host or unknown handshake falls back to the default editor rather than a rejected RPC.
  */
 export function usePdfOpenExternallyTarget(
   hostId: string | null,

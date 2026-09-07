@@ -64,19 +64,12 @@ const PANEL_DESCRIPTION =
 const SAVED_FLASH_MS = 1600;
 type ShellSaveTarget = "program" | "flags";
 
-// WSL is the one shell selection where the choice silently diverges from what
-// agents see: agent chats stay Windows processes, so tools installed inside
-// WSL never reach them. Every other family behaves as users expect
-// (PowerShell / Git Bash profiles are read into the agent env), so only WSL
-// earns a caption (Windows hosts only) - one quiet line under the picker, with
-// the WSLg remedy behind a hover card instead of inline prose.
+// Wsl is the one shell selection where the choice silently diverges from what agents see: agent chats stay
+// Windows processes, so tools installed inside wsl never reach them.
 const WSL_INSTALL_DOCS_URL = "https://docs.traycer.ai/install#windows-via-wsl";
 
-/**
- * The WSL install docs anchor. `href` stays for anchor semantics; the click
- * goes through `openLink` because the app owns every URL egress (A6) and a
- * bare `target="_blank"` would bypass the setting entirely.
- */
+/** `href` stays for anchor semantics; the click goes through `openLink` because the app owns every URL egress
+ * (A6) and a bare `target="_blank"` would bypass the setting entirely. */
 function WslInstallDocsLink(props: {
   readonly className: string;
   readonly ariaLabel: string | undefined;
@@ -98,17 +91,12 @@ function WslInstallDocsLink(props: {
   );
 }
 
-/** Final path segment of the resolved shell, used to name its flags. */
 function programName(path: string): string {
   const segments = path.split(/[\\/]/);
   return segments[segments.length - 1] || path;
 }
 
-/**
- * Whether the visible flags differ from the selected program's family default.
- * Thanks to the store's canonicalisation, this is exactly "a stored deviation
- * exists", and it drives the "Restore default flags" affordance.
- */
+/** Whether the visible flags differ from the selected program's family default. */
 function flagsDeviateFromDefault(
   path: string,
   args: readonly string[],
@@ -120,49 +108,25 @@ function flagsDeviateFromDefault(
   );
 }
 
-/**
- * The method every `config.shell.*` write travels beside. The whole family
- * lands in one host release, so one representative answers "can this host be
- * configured from here at all?" for the page.
- */
+/** The method every `config.shell.*` write travels beside. */
 const SHELL_CONFIG_GATE_METHOD = "config.shell.get";
 
-/**
- * Shell + host environment for the SELECTED host, over that host's own config
- * RPC — local and remote alike, one code path.
- *
- * The single exception is deliberate and lives in `localConfigFallbackReason`:
- * when the host being configured is THIS computer's and its process cannot
- * answer — stopped, or running a version that predates these methods — the
- * local CLI bridge answers instead, against the same on-disk store the host
- * loads, under a notice that says which. Both are states in which the RPC-only
- * page would go dark exactly when someone needs it: one while debugging a host
- * that will not start, the other for the whole window in which the app has
- * updated and the host it manages has not. Two paths, stated rather than hidden.
- *
- * A REMOTE host in either state gets the notice, not the bridge — there is no
- * local truth about it to fall back to.
- */
+/** The single exception is deliberate and lives in `localConfigFallbackReason`: when the host being configured
+ * is this computer's and its process cannot answer - stopped, or running a version that predates these */
 export function ShellSettingsPanel() {
   const scope = useHostScope();
-  // Hoisted above the branch, because the branch itself depends on it. The
-  // nullable form is load-bearing: `false` is a host that HANDSHAKED without
-  // the methods, while `null` is "no handshake yet" — and the panel's own first
-  // RPC is what produces one. Treating `null` as absent would divert a capable
-  // host onto the bridge permanently, before its RPC path was ever tried.
+  // Treating `null` as absent would divert a capable host onto the bridge permanently, before its RPC path was
+  // ever tried.
   const supported = useHostMethodSupport(
     scope.hostId,
     SHELL_CONFIG_GATE_METHOD,
   );
-  // Also before the branch — hooks may not be conditional. Null for every scope
-  // that is not an explicit, resolved pick.
+  // Also before the branch - hooks may not be conditional. Null for every scope that is not an explicit,
+  // resolved pick.
   const scopedBinding = useScopedHostBinding(scope);
   const fallbackReason = localConfigFallbackReason(scope.host, supported);
-  // Both `false` outcomes below — the bridge fallback and the remote capability
-  // notice — park every host read this page owns, which would also park the
-  // handshake that overturns the verdict. The probe is what keeps the answer
-  // refutable; `scope.client` (never the ambient one) so it asks the host this
-  // page is actually showing.
+  // The probe is what keeps the answer refutable; `scope.client` (never the ambient one) so it asks the host
+  // this page is actually showing.
   useHostCapabilityProbe({
     client: scope.client,
     stale: supported === false,
@@ -195,9 +159,8 @@ export function ShellSettingsPanel() {
       </HostScopeGate>
     </SettingsPanelShell>
   );
-  // Only a genuinely resolved override re-provides the runtime; `following`
-  // already points at this host, and the non-ready states have no client at
-  // all and fall to the gate above.
+  // Only a genuinely resolved override re-provides the runtime; `following` already points at this host, and the
+  // non-ready states have no client at all and fall to the gate above.
   if (scopedBinding === null) return inner;
   return (
     <HostRuntimeContext.Provider value={scopedBinding}>
@@ -206,20 +169,16 @@ export function ShellSettingsPanel() {
   );
 }
 
-/**
- * Everything that talks to the scoped host, mounted only once the gate has
- * proven there is a client behind the host name.
- */
+/** Everything that talks to the scoped host, mounted only once the gate has proven there is a client behind the
+ * host name. */
 function ShellSettingsPanelOverRpc(props: {
   readonly scope: HostScope;
-  /** Resolved by the panel above, which branches on it. `null` = not yet known. */
   readonly supported: boolean | null;
 }) {
   const { scope, supported } = props;
   const runnerHost = useRunnerHost();
-  // A native file dialog can only name paths on THIS machine, so it is offered
-  // only when this machine is the one being configured. Every other target
-  // degrades to the picker's typed-path field, which works everywhere.
+  // A native file dialog can only name paths on this machine, so it is offered only when this machine is the one
+  // being configured.
   const pickProgramFile =
     scope.host?.isLocalMachine === true
       ? (runnerHost.traycerCli?.pickShellProgramFile ?? null)
@@ -229,8 +188,8 @@ function ShellSettingsPanelOverRpc(props: {
     pickProgramFile,
   });
 
-  // Only a REMOTE host reaches this: a local one with the same answer took the
-  // bridge fallback above, where there is a local store that describes it.
+  // Only a remote host reaches this: a local one with the same answer took the bridge fallback above, where
+  // there is a local store that describes it.
   if (supported === false) {
     return (
       <HostConfigUnsupportedNotice
@@ -242,10 +201,8 @@ function ShellSettingsPanelOverRpc(props: {
   return <ShellSettingsPanelBody controller={controller} notice={null} />;
 }
 
-/**
- * This computer's host, unable to answer for itself: the CLI bridge reads the
- * same on-disk store the host will load.
- */
+/** This computer's host, unable to answer for itself: the CLI bridge reads the same on-disk store the host will
+ * load. */
 function ShellSettingsPanelOverLocalStore(props: {
   readonly hostName: string;
   readonly reason: LocalConfigFallbackReason;
@@ -295,13 +252,10 @@ function ShellSettingsPanelOverBridge(props: {
   );
 }
 
-/**
- * The editor itself, identical for both transports — see `ShellConfigController`
- * for why that identity is the point.
- */
+/** The editor itself, identical for both transports - see `ShellConfigController` for why that identity is the
+ * point. */
 function ShellSettingsPanelBody(props: {
   readonly controller: ShellConfigController;
-  /** Rendered above the cards; the stopped-local banner, or nothing. */
   readonly notice: ReactNode;
 }) {
   const { controller } = props;
@@ -396,9 +350,8 @@ function ShellSettingsPanelBody(props: {
     beginShellSave("program");
     controller.removeShell(path, shellSaveCallbacks("program"));
   };
-  // Picking "System default" clears only the selection, returning to the login
-  // shell; remembered shells and their flags are kept (the login shell's own
-  // flags are inherited).
+  // Picking "System default" clears only the selection, returning to the login shell; remembered shells and
+  // their flags are kept (the login shell's own flags are inherited).
   const onUseSystemDefault = (): void => {
     if (shellPending) return;
     beginShellSave("program");
@@ -420,8 +373,8 @@ function ShellSettingsPanelBody(props: {
       shellSaveCallbacks("flags"),
     );
   };
-  // Restore the SELECTED shell's flags to its family default, keeping the shell
-  // remembered. Works in the synthesised state too (reverting the login shell).
+  // Restore the selected shell's flags to its family default, keeping the shell remembered. Works in the
+  // synthesised state too (reverting the login shell).
   const onRevertFlags = (): void => {
     if (config === undefined || shellPending) return;
     beginShellSave("flags");
@@ -438,13 +391,7 @@ function ShellSettingsPanelBody(props: {
       controller.setEnv({ key: newKey, value }, envSaveCallbacks);
       return;
     }
-    // ONE call, not a set whose per-`mutate` `onSuccess` fires the delete.
-    // Chained here, the delete sat on the far side of an unmount boundary
-    // TanStack does not cross: close Settings or switch host while the set is
-    // in flight and the observer is gone, so the old key was never dropped and
-    // the rename left two live variables. The controller owns the sequencing
-    // now - create first, then drop, so a failed delete still leaves a
-    // harmless duplicate rather than a lost value.
+    // Chained here, the delete sat on the far side of an unmount boundary TanStack does not cross.
     controller.renameEnv({ oldKey, newKey, value }, envSaveCallbacks);
   };
   const onEnvDelete = (key: string): void => {
@@ -490,14 +437,8 @@ function ShellSettingsPanelBody(props: {
   );
 }
 
-/**
- * What the shell card shows when there is no config to show.
- *
- * A failed read is not a slow one, and these queries do not retry: without the
- * error arm a remote host that drops mid-read leaves the card skeletoning
- * forever, with no error text and no way back. Extracted rather than inlined so
- * the third state does not push `TerminalShellGroup` past the complexity ceiling.
- */
+/** A failed read is not a slow one, and these queries do not retry: without the error arm a remote host that
+ * drops mid-read leaves the card skeletoning forever, with no error text and no way back. */
 function ShellConfigUnavailable(props: {
   readonly compact: boolean;
   readonly configError: HostRpcError | null;
@@ -691,15 +632,8 @@ function TerminalShellGroup(props: {
   );
 }
 
-/**
- * The WSL boundary in one quiet line: the setting changes terminal tabs, but
- * the host and agent chats stay Windows processes. The full explanation and
- * the primary remedy (the Linux Traycer app running through WSLg) live
- * in the hover card - reachable because `HoverCard`'s close grace lets the
- * pointer travel into the card's link. The hover card is pointer-only, so the
- * Info glyph is itself a focusable anchor to the install page - keyboard
- * users reach the remedy without a mouse.
- */
+/** The full explanation and the primary remedy (the Linux Traycer app running through WSLg) live in the hover
+ * card - reachable because `HoverCard`'s close grace lets the pointer travel into the card's link. */
 function WslAgentCaption() {
   return (
     <HoverCard>
@@ -739,26 +673,13 @@ function WslAgentCaption() {
 
 type WslHealthValue = NonNullable<ConfigDetectedShell["wslHealth"]>;
 
-/** Which caption (if any) belongs under the picker; see {@link resolveWslCaption}. */
 type WslCaption =
   | { readonly kind: "unavailable"; readonly health: WslHealthValue }
   | { readonly kind: "scoping" }
   | null;
 
-/**
- * The one caption slot under a WSL shell pick, in priority order.
- *
- * The configured shell can already BE a broken WSL (picked before it broke, or
- * set via the CLI), which outranks the quiet scoping note: terminals failing to
- * start is not a trade-off to mention, it is the thing to fix.
- *
- * That arm keys off `wslHealth` and NOTHING else. The annotation is computed on
- * the machine being configured and only ever set for a Windows `wsl.exe`, so it
- * stays truthful when a macOS or Linux GUI configures a remote Windows host -
- * where `isWindows()`, which reads the RENDERER's platform, would wrongly say
- * "not Windows" and hide the warning. The scoping note has no host-side signal
- * of its own, so it keeps the renderer-platform gate it shipped with.
- */
+/** The configured shell can already BE a broken wsl (picked before it broke, or set via the CLI), which
+ * outranks the quiet scoping note. */
 function resolveWslCaption(
   config: ShellConfigSnapshot | undefined,
   shells: readonly ConfigDetectedShell[],
@@ -784,14 +705,8 @@ function WslCaptionSlot(props: { readonly caption: WslCaption }) {
   return <WslAgentCaption />;
 }
 
-/**
- * The caption when the CONFIGURED shell is a WSL that cannot host a terminal:
- * a new tab would spawn wsl.exe, which prints usage text (the installer stub)
- * or "no distributions" and exits immediately - the user experiences terminals
- * that never start. Red, not amber: this is not a trade-off note like
- * `WslAgentCaption`, it is "your terminals are broken until you act", and the
- * hover card carries the one command that fixes it.
- */
+/** The caption when the configured shell is a wsl that cannot host a terminal: a new tab would spawn wsl.exe,
+ * which prints usage text (the installer stub) or "no distributions" and exits immediately. */
 function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
   const notInstalled = props.health === "not-installed";
   return (

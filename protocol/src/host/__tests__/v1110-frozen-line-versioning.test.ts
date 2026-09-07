@@ -1,14 +1,5 @@
 /**
- * Both-direction bridge coverage for the lines `host-v1.1.10` froze without
- * the fields that had been riding them (`epic.createTuiAgent@1.0` without
- * `forkSourceHarnessSessionId`, `providers.list@4.0/5.0/6.0` requests without
- * `native` - the release cherry-pick dropped the commits that added them).
- *
- * Drives the real registries through the same traversal helpers the host
- * handler (`upgradeRequestToVersion` / `downgradeResponseAcrossMajors`) and
- * the client transport (zod-strip on the older minor's request schema,
- * `downgradeRequestAcrossMajors`) execute at runtime, so a transform that
- * drops or leaks one of these fields fails here, not against a released peer.
+ * Both-direction bridge coverage for the lines `host-v1.1.10` froze without the fields that had been riding them (`epic.createTuiAgent@1.0` without `forkSourceHarnessSessionId`, `providers.list@4.0/5.0/6.0` requests.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -100,17 +91,7 @@ describe("epic.createTuiAgent 1.0 <-> 1.1", () => {
 
 const releasedProvidersRequest = { forceAuthRefresh: true };
 
-// v7.0 is the newest line and the only one whose request models `native`, so
-// it cannot share the pre-v7.0 schema or the pre-v7.0 expectations. Majors 1-6
-// are the ones with peers in the field; v7.0 has none yet (no non-RC tag
-// carries a major-7 contract), which is why nothing downgrades INTO it and the
-// strip loop stops at 6.
-//
-// Its request is read here through the LIVE `providersListRequestSchema`,
-// which is what the v7.0 contract binds: v7.0 is the head line, and the head
-// tracks live. It briefly read an inactive `providersListRequestSchemaV70`
-// pin instead, back when a v8.0 sat above it; collapsing that unreleased major
-// into v7.0 made the live schema the contract again.
+// v7.0 is the newest line and the only one whose request models `native`, so it cannot share the pre-v7.0 schema or the pre-v7.0 expectations.
 const RELEASED_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6] as const;
 const ALL_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6, 7] as const;
 
@@ -130,16 +111,11 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
         { major: 7, minor: 0 },
         parsed,
       );
-      // Same expectation at every major, reached two different ways: below
-      // v7.0 the v6→v7 bridge FILLS `native: null`; at v7.0 the request
-      // already models it and the field's own default supplies it.
       expect(canonical, `major ${major}`).toEqual({
         forceAuthRefresh: true,
         native: null,
       });
-      // Asserted against the schema the registered `providers.list` v7.0
-      // contract actually binds, so this is what a real peer negotiating v7.0
-      // decodes against.
+      // Asserted against the schema the registered `providers.list` v7.0 contract actually binds, so this is what a real peer negotiating v7.0 decodes against.
       expect(() => providersListRequestSchema.parse(canonical)).not.toThrow();
     }
   });
@@ -171,21 +147,8 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
     }
   });
 
-  // One payload per arm of the frozen v7.0 query union, keyed BY DISCRIMINANT
-  // so the type system owns the coverage: `Record<NativeListQuery["kind"],
-  // …>` does not compile until every arm has an entry, so a sixth arm added to
-  // the union fails here rather than quietly going untested.
-  //
-  // The arms are not interchangeable, which is the point. `mcp`/`plugins`/
-  // `skills` carry only the scope tuple, but `mcpDiscover` adds
-  // `serverName`/`forceRefresh` and `pluginIcon` adds `pluginId`/`theme` - a
-  // downgrade that reshaped the union could drop those and still look correct
-  // against an `mcp`-only assertion.
+  // One payload per arm of the frozen v7.0 query union, keyed BY DISCRIMINANT so the type system owns the coverage: `Record<NativeListQuery["kind"], …>` does not compile until every arm has an entry, so a sixth arm added.
   const HEAD_QUERY_CASES: {
-    // Mapped over the discriminant with `Extract`, not `Record<kind, union>`:
-    // the latter accepts ANY arm under ANY key, so a payload filed under the
-    // wrong `kind` would type-check and quietly test one arm twice while
-    // reporting the other's name.
     [K in NativeListQuery["kind"]]: Extract<NativeListQuery, { kind: K }>;
   } = {
     mcp: {
@@ -229,9 +192,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   it.each(Object.entries(HEAD_QUERY_CASES))(
     "the v7.0 request schema round-trips a %s native query losslessly",
     (_kind, native) => {
-      // NOT a bridge test. This is the schema the registered v7.0 contract
-      // decodes requests through, so what has to hold is that it carries every
-      // `native` arm losslessly; an arm it mangles mangles real traffic.
+      // NOT a bridge test.
       const canonical = providersListRequestSchema.parse({
         forceAuthRefresh: true,
         native,
@@ -239,10 +200,6 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       const pinned = providersListRequestSchema.safeParse(canonical);
       expect(pinned.success).toBe(true);
       if (!pinned.success) return;
-      // Deep-equal against the ORIGINAL payload, not merely "it parsed": a
-      // dropped `serverName` would fail a reparse (it is required), but a
-      // dropped or defaulted `forceRefresh` would not - and the pin has to be
-      // lossless, not just valid.
       expect(pinned.data.native).toEqual(native);
     },
   );

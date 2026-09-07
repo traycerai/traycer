@@ -1,16 +1,6 @@
 /**
  * Released-peer compatibility gate CLI.
- *
- *   bun run protocol/scripts/compat/check-protocol-compat.ts \
- *     --mine /tmp/surfaces/working-tree.json \
- *     --baseline host-v1.1.4=/tmp/surfaces/host-v1.1.4.json \
- *     --baseline cli-v1.1.4=/tmp/surfaces/cli-v1.1.4.json
- *
- * Each `--baseline` is `<label>=<surface.json path>` dumped from an immutable
- * released tag by `dump-protocol-surface.ts`. Exits non-zero when any baseline
- * has a blocking finding (a divergence with no reviewed entry in
- * `compat-exceptions.json`). Only ever runs in the working tree - baselines
- * are data, so old tags never need this file.
+ * Only ever runs in the working tree - baselines are data, so old tags never need this file.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -119,9 +109,6 @@ if (json) {
   process.stdout.write(
     `${JSON.stringify({ results: perBaseline }, null, 2)}\n`,
   );
-  // Setting exitCode (rather than calling exit()) lets the process end
-  // naturally once stdout has actually flushed - exit() can truncate a
-  // pending write when stdout is a pipe, as it is in CI.
   process.exitCode = perBaseline.some((result) => result.blocking.length > 0)
     ? 1
     : 0;

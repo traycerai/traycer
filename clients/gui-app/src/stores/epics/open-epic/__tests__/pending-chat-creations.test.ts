@@ -1,10 +1,3 @@
-/**
- * Pure-function unit tests for `pending-chat-creations.ts` - the union that
- * folds a client's in-flight chat creations into the record slice. The
- * store-integrated behavior (poll survival, real-row handover, retraction,
- * user switch) lives in `chat-records-union.test.ts`'s "pending chat
- * creations" describe block, next to the record-row equivalents it mirrors.
- */
 import { describe, expect, it } from "vitest";
 import {
   chatProjectionFromPendingCreation,
@@ -94,9 +87,6 @@ describe("chatProjectionFromPendingCreation", () => {
       userId: "user-a",
       hostId: "h",
       isTitleEditedByUser: false,
-      // A creation THIS client made through `epic.createChat`, which writes the
-      // registry - so the stand-in is store-homed by construction and keeps its
-      // rename affordance in exactly the create-then-rename window.
       docResident: false,
       settings: null,
       archivedAt: null,
@@ -117,9 +107,6 @@ describe("unionPendingChatCreations", () => {
       [retained({ pending: pendingCreation({ chatId: "chat-1" }) })],
       null,
     );
-    // Ablation: drop the `Object.hasOwn(records.byId, chatId)` skip and this
-    // returns a freshly merged object instead - same content, new identity,
-    // which would cost every downstream consumer a re-render for nothing.
     expect(result).toBe(records);
   });
 
@@ -178,9 +165,8 @@ describe("unionPendingChatCreations", () => {
   });
 
   it("never emits two entries for the same chat id across multiple pending rows", () => {
-    // Not reachable through the store today (the registry is keyed so at
-    // most one retained row exists per chat), but the union's own dedupe
-    // guard against a duplicate id in `retained` is exercised directly here.
+    // Not reachable through the store today (the registry is keyed so at most one retained row exists
+    // per chat), but the union's own dedupe guard against a duplicate id in `retained` is exercised
     const records = chatsSlice([]);
     const result = unionPendingChatCreations(
       records,

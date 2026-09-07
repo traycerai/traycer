@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Queue-driven rename stub: each entry is the error code the next call
-// throws; an exhausted queue means the call succeeds. Keeps the tests
-// independent of real filesystem lock behavior, which cannot be produced
-// deterministically cross-platform.
+// Queue-driven rename stub: each entry is the error code the next call throws; an exhausted queue means the call succeeds.
+// Keeps the tests independent of real filesystem lock behavior, which cannot be produced deterministically cross-platform.
 const mocks = vi.hoisted(() => ({
   failureCodes: [] as string[],
   renameCalls: 0,
@@ -76,9 +74,7 @@ describe("renameWithRetryPlan", () => {
       }),
     ).rejects.toMatchObject({ code: "EBUSY" });
 
-    // One initial attempt + one per schedule entry, with onRetry before
-    // each retry but NOT after the final failure - there is no attempt
-    // left for it to help.
+    // One initial attempt + one per schedule entry, with onRetry before each retry but NOT after the final failure - there is no attempt left for it to help.
     expect(mocks.renameCalls).toBe(3);
     expect(onRetry).toHaveBeenCalledTimes(2);
   });
@@ -101,10 +97,8 @@ describe("renameWithRetryPlan", () => {
   });
 
   it("stops retrying once the wall-clock ceiling is exceeded, even with schedule entries left", async () => {
-    // A slow hook, not slow delays, is what blows the budget in the
-    // field: the Windows re-kill can spend tens of seconds per pass. The
-    // 60ms hook against a 20ms ceiling means the second failure lands
-    // over budget while two schedule entries remain unused.
+    // A slow hook, not slow delays, is what blows the budget in the field: the Windows re-kill can spend tens of seconds per pass.
+    // The 60ms hook against a 20ms ceiling means the second failure lands over budget while two schedule entries remain unused.
     mocks.failureCodes = ["EBUSY", "EBUSY", "EBUSY", "EBUSY"];
     const onRetry = vi.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 60));

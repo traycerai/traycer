@@ -1,29 +1,9 @@
-/**
- * The office's art, written as ASCII pixel maps.
- *
- * One character per pixel, `.` transparent, every other letter a color key.
- * Two disjoint key spaces meet here:
- *
- * - FIXED keys resolve through `officePalette(theme)`, so one map renders in
- *   both themes without a second copy.
- * - CHARACTER keys (`S s H h T t P E`) are substituted per agent from its
- *   `OfficeAppearance`, which is why a character map is drawn bald and gets its
- *   hair from a separate overlay: four hair styles times four facings times six
- *   poses would otherwise be ninety-six hand-drawn maps.
- *
- * `O` belongs to both: it is the 1px outline every character and every piece of
- * furniture carries so the silhouette survives a light floor and a dark one.
- * Floor tiles deliberately have none - an outlined tile grid reads as a cage.
- */
+/** The office's art, written as ASCII pixel maps. */
 
 /** Rows of equal length, top to bottom. */
 export type SpriteMap = ReadonlyArray<string>;
 
 // ---- Character bodies ------------------------------------------------ //
-//
-// A body is drawn in two halves that compose: a head (rows 0-10) chosen by
-// facing, and a torso (rows 11-19) chosen by facing and pose. `left` is never
-// authored - the rasterizer mirrors `right`.
 
 const EMPTY_ROW = "................";
 
@@ -239,11 +219,6 @@ const TORSO_SIDE_WALK2: SpriteMap = [
 ];
 
 // ---- Seated ---------------------------------------------------------- //
-//
-// Seated maps are whole bodies, not head-plus-torso: the desk hides the legs,
-// so the head sits one row lower and the silhouette ends at the chair. The
-// three poses differ only in which row carries the hands, which is what makes
-// alternating `type1`/`type2` read as typing.
 
 const SEATED_SIT: SpriteMap = [
   EMPTY_ROW,
@@ -387,12 +362,6 @@ export function officeSeatedMap(pose: "sit" | "type1" | "type2"): SpriteMap {
 }
 
 // ---- Hair ------------------------------------------------------------ //
-//
-// A hair map is an overlay: `.` leaves the bald body showing. Every style is
-// authored for all three base facings, because a silhouette that only reads
-// from the front is useless on a floor where most agents are seated with their
-// back to the viewer. The seated poses reuse the `up` maps shifted one row
-// down, which is exactly how much lower the seated head sits.
 
 const HAIR_DOWN_SHORT: SpriteMap = [
   EMPTY_ROW,

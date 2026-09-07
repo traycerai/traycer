@@ -1,11 +1,4 @@
-/**
- * React binding for the active PiP's remote-host inventory.
- *
- * The caller supplies only the distinct non-canvas hosts named by the current
- * and pending PiP targets. A directory change retries a target that was not
- * registered when first requested; an open durable transport reconnects
- * itself thereafter. There is no timer and no epic-wide host scan.
- */
+/** React binding for the active PiP's remote-host inventory. */
 import { useEffect, useRef, useState } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { useHostDirectory } from "@/lib/host";

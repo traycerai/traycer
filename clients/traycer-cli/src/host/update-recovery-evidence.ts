@@ -26,23 +26,13 @@ import {
   type HostPidMetadata,
 } from "./pid-metadata";
 
-/**
- * A lock-scoped recovery observation plus opaque fingerprints used to prove
- * that the decisive install/stage/running facts did not change before the
- * recover write. The durable record intentionally receives only `evidence`;
- * paths, pids, hashes, and generation identifiers remain process-local.
- */
+/** A lock-scoped recovery observation plus opaque fingerprints used to prove that the decisive install/stage/running facts did not change before the recover write. The durable record intentionally receives only `evidence`; paths, pids, hashes, and generation identifiers remain process-local. */
 export interface AttemptRecoveryEvidenceObservation {
   readonly evidence: AttemptRecoveryEvidence;
   readonly fingerprint: string;
 }
 
-/**
- * Collect recovery evidence under an already-held attempt capability. This
- * compatibility helper exposes only the pure algebra's facts; executor code
- * must use `observeAttemptRecoveryEvidence` so it can compare the decisive
- * proof again at the final recover-write boundary.
- */
+/** Collect recovery evidence under an already-held attempt capability. This compatibility helper exposes only the pure algebra's facts; executor code must use `observeAttemptRecoveryEvidence` so it can compare the decisive proof again at the final recover-write boundary. */
 export async function readAttemptRecoveryEvidence(
   environment: Environment,
   canonicalHostHomeDir: string,
@@ -52,11 +42,7 @@ export async function readAttemptRecoveryEvidence(
   ).evidence;
 }
 
-/**
- * Read an attested install generation/placed-byte proof and an authenticated,
- * healthy exact-version host proof. Any missing attestation or inconsistent
- * snapshot is unreadable—not a weaker version of verified evidence.
- */
+/** Read an attested install generation/placed-byte proof and an authenticated, healthy exact-version host proof. Any missing attestation or inconsistent snapshot is unreadable-not a weaker version of verified evidence. */
 export async function observeAttemptRecoveryEvidence(
   environment: Environment,
   canonicalHostHomeDir: string,
@@ -131,9 +117,8 @@ async function readInstalledObservation(
   ) {
     return unreadableArtifact();
   }
-  // `install.json` is materialized in the promoted tree with the signed
-  // artifact's generation. The executable's stable digest ties that durable
-  // generation to exactly the bytes observed for this recovery decision.
+  // `install.json` is materialized in the promoted tree with the signed artifact's generation.
+  // The executable's stable digest ties that durable generation to exactly the bytes observed for this recovery decision.
   return {
     evidence: { kind: "verified", version: record.version },
     fingerprint: JSON.stringify({
@@ -328,22 +313,7 @@ async function placedFileFingerprint(
   }
 }
 
-/**
- * As with the durable attempt record reader, zero inode/device values are not
- * positive same-object evidence on Windows. Recovery would rather refuse than
- * attest bytes through a descriptor it cannot bind to the canonical pathname.
- *
- * SUPPORTED-FILESYSTEM POLICY, stated explicitly: the host install tree lives
- * under the user's home, and the filesystems that can host it on supported
- * platforms (NTFS/ReFS on Windows, the POSIX filesystems elsewhere) all
- * report non-zero file IDs through libuv, so this guard never fires there. A
- * filesystem that reports zero (FAT-family media, some network redirectors)
- * is deliberately REJECTED rather than given a weaker fallback: recovery
- * yields "unreadable", cannot mint "verified", and the attempt parks for an
- * ordinary re-install instead of attesting bytes it cannot positively bind.
- * That trade — no silent recovery on an identity-less filesystem — is the
- * point of the guard, not a gap in it.
- */
+/** As with the durable attempt record reader, zero inode/device values are not positive same-object evidence on Windows. Recovery would rather refuse than attest bytes through a descriptor it cannot bind to the canonical pathname. */
 function sameRegularFileIdentity(
   a: Pick<Stats, "dev" | "ino">,
   b: Pick<Stats, "dev" | "ino">,

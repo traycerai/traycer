@@ -19,17 +19,7 @@ export interface WireframeFullscreenDialogProps {
 }
 
 /**
- * Fullscreen preview of a wireframe block. Mirrors the inline preview but
- * gives the iframe the full viewport width - useful for wider layouts
- * where the artifact tile cramps the rendered HTML. Copy HTML lives in
- * the header so the user can grab the source without leaving the dialog.
- *
- * The default `DialogContent` ships with `sm:max-w-sm` (24rem) and a
- * built-in absolute close button at `top-2 right-2`. Both fight us here:
- * we want a viewport-filling shell, and the close button collides with
- * the inline Copy HTML action. We override `sm:max-w-none` to win the
- * responsive merge and pass `showCloseButton={false}` so we can lay out
- * the close + copy controls together inside the header.
+ * Fullscreen wireframe preview. Override `sm:max-w-none` and `showCloseButton={false}` so close + copy live in the header.
  */
 export function WireframeFullscreenDialog(
   props: WireframeFullscreenDialogProps,

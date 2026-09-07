@@ -12,10 +12,8 @@ export function deriveTitleSourceFromSessionTitle(
 }
 
 /**
- * The one definition of what a terminal session is CALLED on screen. Every
- * surface that lists terminals (the Task's Terminals panel, the @-mention
- * picker, the canvas tile ref) reads it from here, so a shell never shows up
- * under two different names depending on where you looked.
+ * The one definition of what a terminal session is CALLED on screen.
+ * Every surface that lists terminals (the Task's Terminals panel, the @-mention picker, the canvas tile ref) reads it from here, so a shell never shows up under two different names depending on where you looked.
  */
 export function terminalSessionLabel(
   session:

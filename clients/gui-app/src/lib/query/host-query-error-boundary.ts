@@ -3,9 +3,8 @@ import { isHostRequestControlFlowError } from "@traycer-clients/shared/host-clie
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 /**
- * Normalizes GUI host-RPC query failures while preserving coordinator control
- * flow as TanStack cancellation. This is intentionally GUI-owned: it is the
- * only layer that may depend on both the coordinator error and TanStack.
+ * Normalizes GUI host-RPC query failures while preserving coordinator control flow as TanStack cancellation.
+ * This is intentionally GUI-owned: it is the only layer that may depend on both the coordinator error and TanStack.
  */
 export async function withHostQueryErrorBoundary<T>(
   method: string,

@@ -9,20 +9,10 @@ import type {
 } from "@/lib/composer/mentions";
 import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
 
-/**
- * The section's refresh button drives BOTH reads behind the list.
- *
- * The visible rows are the catalog's merged with the live search's, and the
- * chrome's notice and banner can come from either. Wired to the catalog alone,
- * "Refresh pull requests" completed without touching a typed query's rows or
- * the search's own `gh-unavailable` status - so pressing Refresh *because* the
- * section reported GitHub was unreachable left that report standing.
- */
+/** The section's refresh button drives BOTH reads behind the list. The visible rows are the catalog's merged with the live search's, and the chrome's notice and banner can come from either. */
 
-// Every array and callback here is HOISTED and stable. A fresh `[]` per render
-// re-arms the row-publication effect, whose store write re-renders, which mints
-// another `[]` - an update loop authored entirely by the harness. Same for the
-// two refresh callbacks, which feed the `useCallback` the button hangs off.
+// Every array and callback here is HOISTED and stable.
+// A fresh `[]` per render re-arms the row-publication effect, whose store write re-renders, which mints another `[]` - an update loop authored entirely by the harness.
 const stable = vi.hoisted(() => {
   const counts = { catalog: 0, search: 0 };
   return {
@@ -149,10 +139,8 @@ describe("useGithubMentionSections refresh", () => {
   });
 
   it("still refreshes both with no query typed", async () => {
-    // The search observer is disabled here and no-ops internally, so the
-    // section does not need to know which reads are live - it asks both, and
-    // each decides. Pinning that keeps the button from growing a condition
-    // that silently skips the search in the case it is most needed.
+    // The search observer is disabled here and no-ops internally, so the section does not need to know which reads are live - it asks both, and each decides.
+    // Pinning that keeps the button from growing a condition that silently skips the search in the case it is most needed.
     const { result } = renderSections("");
 
     await refreshOf(result.current.chrome)();
@@ -162,11 +150,8 @@ describe("useGithubMentionSections refresh", () => {
   });
 
   it("publishes no chrome once the host stops supporting the methods", () => {
-    // Method support is reactive: an app-wide composer can rebind to an older
-    // host, or the bound host can re-handshake after an in-place downgrade,
-    // while a GitHub step is still open. The reads go quiet on their own, but
-    // the chrome carries a refresh button that calls `mention.githubCatalog`
-    // directly - it has to go with them.
+    // Method support is reactive: an app-wide composer can rebind to an older host, or the bound host can re-handshake after an in-place downgrade, while a GitHub step is still open.
+    // The reads go quiet on their own, but the chrome carries a refresh button that calls `mention.githubCatalog` directly - it has to go with them.
     support.github = false;
 
     const { result } = renderSections("auth");
@@ -175,9 +160,7 @@ describe("useGithubMentionSections refresh", () => {
   });
 
   it("publishes no chrome once the last folder is detached", () => {
-    // An empty scope is a WIRE error rather than a quiet no-op: the request
-    // schema requires `workspacePaths.min(1)`, so a surviving refresh button
-    // fails validation instead of returning nothing.
+    // An empty scope is a WIRE error rather than a quiet no-op: the request schema requires `workspacePaths.min(1)`, so a surviving refresh button fails validation instead of returning nothing.
     const { result } = renderWithRoots("auth", []);
 
     expect(result.current.chrome).toBeNull();

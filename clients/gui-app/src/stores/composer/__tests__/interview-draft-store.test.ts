@@ -281,8 +281,6 @@ describe("interview draft store", () => {
     rehydrateInterviewDraftsFromStorage();
 
     // Pollution would put a draft-shaped own property on every plain object.
-    // `Object.prototype` always exposes `__proto__` as a language accessor, so
-    // we probe a fresh object instead of asserting on the prototype key name.
     const probe: Record<string, unknown> = {};
     expect(Object.hasOwn(probe, "__proto__")).toBe(false);
     expect(probe["__proto__"]).not.toEqual(draft);

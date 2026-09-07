@@ -90,11 +90,8 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
   );
   const [scale, setScale] = useState(1);
 
-  // Callback ref measures the wrapper synchronously when React attaches it.
-  // Setting state from a ref callback bypasses the fire-before-init race
-  // we hit with useLayoutEffect: by gating TransformWrapper on
-  // `containerSize !== null`, the library mounts already knowing the right
-  // initial transform - no flash, no imperative setTransform.
+  // Callback ref measures on attach. Gate TransformWrapper on containerSize
+  // so it mounts with the right transform; useLayoutEffect raced init.
   const setContainerEl = useCallback((el: HTMLElement | null) => {
     containerRef.current = el;
     if (el === null) return;
@@ -236,10 +233,8 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
           >
             <div
               onDoubleClick={handleDoubleClick}
-              // Lock the slot to the SVG's natural viewBox dimensions so
-              // mermaid's own `width="100%"` does not collapse to the
-              // browser's 300x150 default inside the library's
-              // `width: fit-content` content wrapper.
+              // Lock to viewBox size so mermaid width="100%" does not collapse
+              // to the browser's 300x150 default.
               style={{
                 width: `${intrinsic.width}px`,
                 height: `${intrinsic.height}px`,

@@ -2,13 +2,8 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { setEnvOverride } from "../store/config-store";
 
-// Runner-aware `traycer config env set --key KEY --value VAL`. Sets a
-// host-process env override (harness-scoped env now lives per-provider in
-// the host's provider-overrides, set over the `providers.*` RPC). JSON mode
-// emits exactly one terminal `result` event. Human mode prints `KEY=VAL` on
-// stdout. Validation regex failures throw `CONFIG_INVALID_VALUE` so scripts
-// can branch on a stable code instead of parsing the human "invalid key"
-// message.
+// Runner-aware `traycer config env set --key KEY --value VAL`.
+// Sets a host-process env override (harness-scoped env now lives per-provider in the host's provider-overrides, set over the `providers.*` RPC).
 export interface ConfigEnvSetArgs {
   readonly key: string;
   readonly value: string;

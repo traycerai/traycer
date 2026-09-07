@@ -1,24 +1,12 @@
 /**
  * The narrow bearer seam the host transport depends on.
- *
- * The WS clients (`WsRpcClient`, `WsStreamClient`) only need a bearer token for
- * the `open` frame - the host derives identity from the token itself. They do
- * NOT need a full `RequestContext`. Narrowing the dependency to this interface
- * lets every client supply a bearer "similarly": the renderer passes its
- * `RequestContext.credentials` (a `CredentialLease`, which satisfies this shape
- * structurally), and the CLI passes a `MutableBearerLease` over the token it
- * read from `~/.traycer/cli/credentials` - without fabricating an
- * `AuthenticatedUser`.
+ * The WS clients (`WsRpcClient`, `WsStreamClient`) only need a bearer token for the `open` frame - the host derives identity from the token itself.
  */
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 
 /**
  * Read side of the bearer seam used by the transport open frame.
- *
- * `identity.userId` is consumed only for diagnostics (the empty-token error
- * message) and the same-user rotation guard; the transport never reads the rest
- * of an identity. `getBearerToken()` throws when no bearer is available (e.g. a
- * released credential lease), which the transport maps to a pre-dial failure.
+ * `identity.userId` is consumed only for diagnostics (the empty-token error message) and the same-user rotation guard; the transport never reads the rest of an identity.
  */
 export interface OpenFrameBearerSource {
   getBearerToken(): string;
@@ -26,17 +14,13 @@ export interface OpenFrameBearerSource {
 }
 
 /**
- * Injectable source for the active bearer, read by the transport per request /
- * reconnect. `null` means "no bearer available" - the transport fails before
- * dialing rather than sending an empty `open` frame.
+ * Injectable source for the active bearer, read by the transport per request / reconnect.
+ * `null` means "no bearer available" - the transport fails before dialing rather than sending an empty `open` frame.
  */
 export type BearerSourceProvider = () => OpenFrameBearerSource | null;
 
 /**
- * Mutable counterpart used by the refresh path: the active bearer can be rotated
- * in place (same user) so the next `open` frame reads the rotated value without
- * rebuilding the client. The renderer's `CredentialLease.rotateBearerToken(...)`
- * plays this role on its side; the CLI uses `MutableBearerLease`.
+ * Mutable counterpart used by the refresh path: the active bearer can be rotated in place (same user) so the next `open` frame reads the rotated value without rebuilding the client.
  */
 export interface BearerLease extends OpenFrameBearerSource {
   rotate(token: string): void;
@@ -44,16 +28,7 @@ export interface BearerLease extends OpenFrameBearerSource {
 
 /**
  * Minimal `BearerLease` for clients that hold a plain bearer string (the CLI).
- * Holds the token and a fixed `userId`; `rotate` swaps the token in place so a
- * shared transport client reading `() => lease` picks up the refreshed value on
- * its next request / reconnect.
- *
- * Honors the `OpenFrameBearerSource` contract that `getBearerToken()` THROWS
- * when no bearer is available: an empty token represents "no bearer" and raises
- * `CredentialLeaseReleasedError`, the same signal the renderer's `CredentialLease`
- * raises and the transport's `extractBearerForOpenFrame` already catches. So a
- * lease that is rotated to an empty value fails closed (pre-dial) rather than
- * sending `open { token: "" }`.
+ * So a lease that is rotated to an empty value fails closed (pre-dial) rather than sending `open { token: "" }`.
  */
 export class MutableBearerLease implements BearerLease {
   readonly identity: { readonly userId: string };
@@ -79,16 +54,8 @@ export class MutableBearerLease implements BearerLease {
 }
 
 /**
- * Reads a lease's current bearer, mapping the "no bearer" throw
- * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so
- * callers can treat it as "signed out, nothing to do".
- *
- * Lives here rather than in either command that needs it: `monitor` and
- * `worktree-delete` both feed this into the CLI's host-credential mint flow,
- * and two copies of a fail-closed auth predicate are exactly the thing that
- * drifts. Only the signed-out signal maps to `null`; any other lease failure is
- * a real bug and is rethrown rather than being masked as a benign signed-out
- * state.
+ * Reads a lease's current bearer, mapping the "no bearer" throw (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so callers can treat it as "signed out, nothing to do".
+ * Only the signed-out signal maps to `null`; any other lease failure is a real bug and is rethrown rather than being masked as a benign signed-out state.
  */
 export function readLeaseBearer(lease: BearerLease): string | null {
   try {

@@ -6,18 +6,8 @@ import type {
 import { dirnameOfPath } from "@/lib/path";
 
 /**
- * Rebuilds file/folder @-mention suggestions from a `workspace.searchPaths`
- * result. The scoped RPC deliberately does NOT return a host-absolute path as
- * authority; the renderer reconstructs the mention's fields from the root it
- * already holds (and already authorized by selecting it) plus the host-returned
- * relative path. The reconstruction mirrors the host's legacy
- * `workspace.mentionFiles`/`mentionFolders` suggestion shape so downstream
- * mention rendering, preview, and serialization are identical whichever RPC
- * produced the entry.
- *
- * `root` is the caller's known workspace/worktree root (never widened from the
- * RPC result). `relPath` is host-canonical POSIX. The absolute path is a
- * display/serialization target, not new authority.
+ * Rebuilds file/folder @-mention suggestions from a `workspace.searchPaths` result.
+ * The scoped RPC deliberately does NOT return a host-absolute path as authority; the renderer reconstructs the mention's fields from the root it already holds (and already authorized by selecting it) plus the host-returned relative path.
  */
 
 export function fileSuggestionFromSearchResult(
@@ -75,9 +65,7 @@ function mentionDescription(relPath: string): string {
   return dir === "" ? "" : dir;
 }
 
-// Strip any leading slash and reject parent-traversal segments defensively -
-// the host already jails the relative path, so this only guards against a
-// malformed payload; it never fabricates authority.
+// Strip any leading slash and reject parent-traversal segments defensively - the host already jails the relative path, so this only guards against a malformed payload; it never fabricates authority.
 function normalizeRel(rawRelPath: string): string {
   const trimmed = rawRelPath.replace(/^\/+/, "").replace(/\/+$/, "");
   const safe = trimmed
@@ -88,10 +76,8 @@ function normalizeRel(rawRelPath: string): string {
 }
 
 /**
- * Joins a POSIX relative path onto a host root, honoring the root's separator
- * convention so the absolute path resolves on the host the agent runs on. The
- * relative path is host-provided and jailed (see {@link normalizeRel}), so the
- * result always stays within `root`.
+ * Joins a POSIX relative path onto a host root, honoring the root's separator convention so the absolute path resolves on the host the agent runs on.
+ * The relative path is host-provided and jailed (see {@link normalizeRel}), so the result always stays within `root`.
  */
 export function joinWithinRoot(root: string, posixRelPath: string): string {
   const rel = normalizeRel(posixRelPath);

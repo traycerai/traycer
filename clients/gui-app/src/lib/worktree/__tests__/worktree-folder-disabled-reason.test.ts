@@ -7,11 +7,8 @@ import {
 } from "@/lib/worktree/worktree-folder-disabled-reason";
 
 /**
- * WHICH state a row is in is `clients/shared`'s ladder, tested exhaustively in
- * `clients/shared/worktree/__tests__/worktree-row-state.test.ts`. What is tested
- * here is the GUI's half: that each state renders with the tone and the
- * disabled/pending flags the pickers rely on, and — the part that is easy to
- * get wrong — that `disabled` tracks usability rather than badge visibility.
+ * WHICH state a row is in is `clients/shared`'s ladder, tested exhaustively in `clients/shared/worktree/__tests__/worktree-row-state.test.ts`.
+ * What is tested here is the GUI's half: that each state renders with the tone and the disabled/pending flags the pickers rely on, and - the part that is easy to get wrong - that `disabled` tracks usability rather than badge visibility.
  */
 function row(
   overrides: Partial<WorktreeBindingSelectorRowV12>,
@@ -85,9 +82,7 @@ describe("worktreeFolderRowBadge", () => {
       expect(badge?.label).toBe(label);
       expect(badge?.tone).toBe(tone);
       expect(badge?.pending).toBe(pending);
-      // The invariant the whole ladder exists to protect: a worktree whose
-      // setup script failed is still a directory an agent can work in, so the
-      // badge informs without taking the row away.
+      // The invariant the whole ladder exists to protect: a worktree whose setup script failed is still a directory an agent can work in, so the badge informs without taking the row away.
       expect(badge?.disabled).toBe(false);
     },
   );
@@ -127,9 +122,7 @@ describe("formatWorktreeFolderDisabledReason", () => {
   });
 
   it("is null for a row that is merely mid-setup", () => {
-    // Both call sites render this as "Workspace unavailable: <reason>", so a
-    // setup state leaking through here would tell the user a usable worktree
-    // is gone.
+    // Both call sites render this as "Workspace unavailable: <reason>", so a setup state leaking through here would tell the user a usable worktree is gone.
     expect(
       formatWorktreeFolderDisabledReason(row({ setupState: "failed" })),
     ).toBeNull();

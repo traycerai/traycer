@@ -13,14 +13,8 @@ import type {
   HostNotificationSeverity,
 } from "@traycer/protocol/host/notifications/contracts";
 
-/**
- * Shared presentation metadata for the notification status tiers. Both the
- * per-row `NotificationIndicatorIcon` and the chat tree's descendant-status
- * rollup badge derive their glyph and color from these, so the two surfaces
- * cannot drift apart. `attentionTone` also encodes the high-attention tier
- * precedence (non-terminal failure > fork > interview > approval); the running,
- * unread-done, and terminal-failure tiers slot in below it at each consumer.
- */
+/** Both the per-row `NotificationIndicatorIcon` and the chat tree's descendant-status rollup badge derive their
+ * glyph and color from these, so the two surfaces cannot drift apart. */
 export type NotificationStatusKind =
   | "failure"
   | "fork"
@@ -37,12 +31,8 @@ export interface IndicatorTone {
   readonly Icon: LucideIcon;
 }
 
-/**
- * Source of truth for agent-work status presentation. Chat rows, canvas tabs,
- * descendant rollups, and notification-center rows all resolve through this
- * registry, so adding a future surface cannot silently invent another glyph
- * or color for the same state.
- */
+/** Chat rows, canvas tabs, descendant rollups, and notification-center rows all resolve through this registry,
+ * so adding a future surface cannot silently invent another glyph or color for the same state. */
 export const NOTIFICATION_STATUS_TONES: Readonly<
   Record<NotificationStatusKind, IndicatorTone>
 > = {
@@ -62,10 +52,7 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
   },
   fork: {
     testId: "fork",
-    // States the temporary condition, and nothing else. The dialog and the
-    // resolve RPC this copy used to point at are gone: the host submits the
-    // deterministic decision itself and files a notification afterwards, so
-    // there is no choice for a user to go looking for.
+    // States the temporary condition, and nothing else.
     title: "Chat publishing paused while a fork is resolved",
     className: "text-warning-foreground",
     Icon: GitFork,
@@ -112,12 +99,7 @@ export const RESOLVED_INTERVIEW_TONE =
 export const RESOLVED_APPROVAL_TONE =
   NOTIFICATION_STATUS_TONES["approval-resolved"];
 
-/**
- * An unread failure on a NON-terminal agent - the one reading that outranks
- * every other flag. A terminal agent's failure is history the feed still
- * carries, and a newer running turn is allowed to own the row. The derived
- * field is preferred; the two raw flags reproduce it where a state predates it.
- */
+/** The derived field is preferred; the two raw flags reproduce it where a state predates it. */
 export function hasUnreadNonTerminalFailure(
   state: NotificationIndicatorState,
 ): boolean {
@@ -154,12 +136,8 @@ interface NotificationFeedToneInput {
   readonly agentSurface?: AgentNotificationSurface | null;
 }
 
-/** Resolve a durable feed event onto the same semantic status vocabulary used
- * by live chat surfaces. A prompt's kind and disposition are independent:
- * resolution changes its tooltip without replacing its approval/question
- * glyph or color with the generic completion presentation. Informational
- * events have no agent-work tone and stay on the notification center's neutral
- * fallback. */
+/** A prompt's kind and disposition are independent: resolution changes its tooltip without replacing its
+ * approval/question glyph or color with the generic completion presentation. */
 export function notificationFeedTone(
   input: NotificationFeedToneInput,
 ): IndicatorTone | null {

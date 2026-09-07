@@ -1,17 +1,4 @@
-/**
- * Content-agnostic N-ary split tree for the epic canvas.
- *
- * The tree knows NOTHING about tile refs - panes hold opaque tab
- * `instanceId` strings; the payloads live in `EpicCanvasState.tilesByInstanceId`
- * (see `types.ts`). Group sizes are likewise decoupled into a
- * `sizesByGroupId` map (normalized fractions per group, summing to ~1) so a
- * ratio drag never produces a new tree object.
- *
- * Every op is pure and structurally shared: only the nodes on the path from
- * the root to the touched node are copied; untouched sibling subtrees keep
- * reference identity. Renderers rely on this for render short-circuiting,
- * and tests assert it.
- */
+/** Content-agnostic N-ary split tree for the epic canvas. */
 import { MAX_TREE_DEPTH, MIN_SPLIT_SIZE } from "./tile-tree-constants";
 
 export type SplitDirection = "horizontal" | "vertical";
@@ -20,10 +7,8 @@ export type SplitDirection = "horizontal" | "vertical";
 export type EdgeDropPosition = "left" | "right" | "top" | "bottom";
 
 /**
- * Leaf of the split tree - a VS Code-style tab group. `tabInstanceIds` are
- * per-tab identities (NOT content ids); `activeTabId` / `previewTabId`
- * reference entries of `tabInstanceIds`. An empty pane is valid only at the
- * root, where it acts as a drop zone.
+ * Leaf of the split tree - a VS Code-style tab group. `tabInstanceIds` are per-tab identities (NOT
+ * content ids); `activeTabId` / `previewTabId` reference entries of `tabInstanceIds`.
  */
 export interface TilePane {
   readonly kind: "pane";
@@ -35,10 +20,8 @@ export interface TilePane {
 }
 
 /**
- * N-ary split container. `direction: "horizontal"` lays children out in a
- * row (left→right); `"vertical"` in a column (top→bottom). Children count
- * is always >= 2 after normalization - a single-child group is promoted.
- * Sizes are NOT stored here; see `sizesByGroupId`.
+ * N-ary split container. `direction: "horizontal"` lays children out in a row (left→right);
+ * `"vertical"` in a column (top→bottom).
  */
 export interface TileGroup {
   readonly kind: "group";
@@ -49,11 +32,7 @@ export interface TileGroup {
 
 export type TileLayoutNode = TilePane | TileGroup;
 
-/**
- * Normalized child fractions per group id. Kept out of the tree on purpose.
- * Values are `| undefined` per the codebase convention for Records with
- * missing keys (no `noUncheckedIndexedAccess`).
- */
+/** Normalized child fractions per group id. Kept out of the tree on purpose. */
 export type SizesByGroupId = Readonly<
   Record<string, ReadonlyArray<number> | undefined>
 >;
@@ -65,9 +44,8 @@ export interface TileTreeState {
   readonly sizesByGroupId: SizesByGroupId;
 }
 
-// ---------------------------------------------------------------------------
-// Sizes math (ported from the reference implementation)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Sizes math (ported
+// from the reference implementation)
 
 /**
  * Coerce `sizes` to exactly `count` positive fractions summing to 1. Invalid
@@ -91,9 +69,8 @@ export function normalizeSizes(
 }
 
 /**
- * Normalize and then enforce {@link MIN_SPLIT_SIZE} per entry, redistributing
- * the locked remainder proportionally across the entries still above the
- * floor. Falls back to even sizes when the floor cannot be satisfied.
+ * Normalize and then enforce {@link MIN_SPLIT_SIZE} per entry, redistributing the locked remainder
+ * proportionally across the entries still above the floor.
  */
 export function clampNormalizedSizes(
   sizes: ReadonlyArray<number>,
@@ -165,9 +142,6 @@ export function sizesForGroup(
   return evenSizes(group.children.length);
 }
 
-// ---------------------------------------------------------------------------
-// Lookup
-// ---------------------------------------------------------------------------
 
 export function findPanePath(
   node: TileLayoutNode,
@@ -199,11 +173,8 @@ export function findPaneById(
 }
 
 /**
- * The tab a pane actually shows: `activeTabId` when it names a live tab,
- * otherwise the pane's first tab (matching `TabGroupView`'s inline fallback).
- * Shared by the renderer and, from Ticket 21 slice 2 on, host membership -
- * the two must agree or a chat the renderer paints can go unhosted. Returns
- * `null` for an empty pane.
+ * The tab a pane actually shows: `activeTabId` when it names a live tab, otherwise the pane's
+ * first tab (matching `TabGroupView`'s inline fallback).
  */
 export function resolveActivePaneTab(
   activeTabId: string | null,
@@ -262,14 +233,10 @@ export function collectGroupIds(
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Structural mutation
-// ---------------------------------------------------------------------------
 
 /**
- * Replace the node at `path` via `updater`. Returns the same root reference
- * when the updater returns the node unchanged - callers can identity-compare
- * for cheap no-op detection. Only the path to the touched node is copied.
+ * Replace the node at `path` via `updater`. Returns the same root reference when the updater
+ * returns the node unchanged - callers can identity-compare for cheap no-op detection.
  */
 export function replaceNodeAtPath(
   root: TileLayoutNode,
@@ -322,10 +289,8 @@ export interface RemovePaneResult {
 }
 
 /**
- * Remove pane `paneId` from the tree. The parent group's sizes entry shrinks
- * with it; a parent left with a single child is dissolved (the child is
- * promoted into its slot). Removing the root pane yields `root: null`.
- * Returns `null` when the pane does not exist.
+ * Remove pane `paneId` from the tree. The parent group's sizes entry shrinks with it; a parent
+ * left with a single child is dissolved (the child is promoted into its slot).
  */
 export function removePaneFromTree(
   state: TileTreeState,
@@ -381,17 +346,6 @@ export function removePaneFromTree(
   };
 }
 
-/**
- * Ticket 20: read-only mirror of {@link removePaneFromTree}'s single-survivor
- * dissolve branch - if removing `paneId` would leave its parent group with
- * exactly one remaining child, that child is promoted into the parent's slot
- * and every pane in ITS subtree gets a new React ancestor (a dissolve whose
- * promoted subtree holds more than one pane remounts every one of them, not
- * just the direct sibling). Returns the active-tab instanceId of every pane
- * in the promoted subtree - the tiles a caller must flush a pre-mutation
- * viewport handoff for - or `[]` when no dissolve would occur (the parent
- * has other children, or `paneId` is the root).
- */
 export function paneRemovalDissolveHandoffTargets(
   root: TileLayoutNode | null,
   paneId: string,
@@ -424,19 +378,7 @@ export interface InsertPaneAtEdgeResult {
   readonly sizesByGroupId: SizesByGroupId;
 }
 
-/**
- * Insert `newPane` beside `targetPaneId` on the side given by `position`.
- *
- * When the target's parent group already runs in the drop direction, the new
- * pane is spliced into that group (the target's fraction is halved between
- * the two) - the tree stays flat and no nodes are recreated outside the
- * parent's path. Otherwise the target pane is wrapped in a fresh group of
- * two with even sizes.
- *
- * Returns `null` when the target is missing or when wrapping would exceed
- * {@link MAX_TREE_DEPTH} (merges never deepen the tree and are always
- * allowed).
- */
+/** Insert `newPane` beside `targetPaneId` on the side given by `position`. */
 export function insertPaneAtEdge(
   args: InsertPaneAtEdgeArgs,
 ): InsertPaneAtEdgeResult | null {
@@ -478,9 +420,8 @@ export function insertPaneAtEdge(
     };
   }
 
-  // Wrapping deepens the target's subtree by one level. `targetPath.length`
-  // counts ancestor groups, the wrap adds one, and the target subtree's own
-  // depth sits below that.
+  // Wrapping deepens the target's subtree by one level. `targetPath.length` counts ancestor groups,
+  // the wrap adds one, and the target subtree's own depth sits below that.
   const targetNode = getNodeAtPath(state.root, targetPath);
   if (targetPath.length + 1 + getTreeDepth(targetNode) > MAX_TREE_DEPTH) {
     return null;

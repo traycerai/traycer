@@ -586,9 +586,8 @@ describe("merged notifications feed", () => {
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     });
 
-    // A payload kind from a NEWER host: unknown here, so the row renders
-    // generically with no deep-link - it must never vanish or crash
-    // presentation.
+    // A payload kind from a NEWER host: unknown here, so the row renders generically with no deep-link
+    // - it must never vanish or crash presentation.
     const futureShape: HostNotificationEntry = {
       ...base,
       id: "notification-future",

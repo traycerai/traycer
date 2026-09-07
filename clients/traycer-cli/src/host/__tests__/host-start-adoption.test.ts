@@ -281,10 +281,7 @@ describe("host-start parent adoption", () => {
     },
   );
 
-  // A chmod-0 file only actually denies reads for a non-root, non-Windows
-  // process: Windows `fs` permission bits do not gate readability the same
-  // way, and root bypasses the DAC check entirely, so this reliably reaches
-  // the intended "unreadable" path only under a normal POSIX, non-root user.
+  // A chmod-0 file only actually denies reads for a non-root, non-Windows process: Windows `fs` permission bits do not gate readability the same way, and root bypasses the DAC check entirely, so this reliably reaches the intended "unreadable" path only under a normal POSIX, non-root user.
   const cannotDenyReads =
     process.platform === "win32" ||
     (typeof process.getuid === "function" && process.getuid() === 0);
@@ -330,9 +327,8 @@ describe("host-start parent adoption", () => {
           serviceLabel,
         );
 
-        // Capture each target before the first await. The second invocation
-        // models a concurrent supervisor for another host; it must not claim
-        // the proof written for the intended host.
+        // Capture each target before the first await.
+        // The second invocation models a concurrent supervisor for another host; it must not claim the proof written for the intended host.
         const nonce = await readAdoptionNonce(hostHomeDir);
         const intended = consumeHostStartAdoption(
           "production",
@@ -511,18 +507,8 @@ describe("host-start parent adoption", () => {
 });
 
 describe("consumeHostStartAdoption — the nonce-less path applies the age bound", () => {
-  // Codex #1. The refutation first, because it changes what the fix is: the
-  // reported cause ("a proof is not removed when validation returns false
-  // after publisher death") does NOT hold — the labelled path's `!parentLive`
-  // branch calls `abandon()`, which removes the claimed proof.
-  //
-  // The real hole is narrower and is here: `HOST_START_ADOPTION_MAX_AGE_MS` is
-  // applied on the claimed-candidate check and in `readHostStartAdoptionNonce`,
-  // and was NOT applied on the nonce-less refusal path. A publisher that dies
-  // between publish and consume leaves a proof behind; the labelled path erases
-  // an expired one on its next attempt, but a bare `host start` never takes
-  // that path — so a standalone crash-loop is refused on every iteration by a
-  // grant nobody can still use.
+  // Codex #1.
+  // The refutation first, because it changes what the fix is: the reported cause ("a proof is not removed when validation returns false after publisher death") does NOT hold - the labelled path's `!parentLive` branch calls `abandon()`, which removes the claimed proof.
   it("an EXPIRED proof no longer refuses a standalone start", async () => {
     const hostHomeDir = await freshHome();
     const serviceLabel = "ai.traycer.host.agent";
@@ -561,10 +547,8 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
   });
 
   it("a FRESH proof still refuses a standalone start — the fail-closed arm is intact", async () => {
-    // The paired direction. The age bound must not become a way to bypass the
-    // grant: an outstanding, still-valid proof is reserved for the
-    // service-labelled child, and letting a bare start through would recreate
-    // the parent-lock/child-lock cycle the proof exists to avoid.
+    // The paired direction.
+    // The age bound must not become a way to bypass the grant: an outstanding, still-valid proof is reserved for the service-labelled child, and letting a bare start through would recreate the parent-lock/child-lock cycle the proof exists to avoid.
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;
     await withUpdateContender(
@@ -590,13 +574,8 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
     });
   });
 
-  // Production change B: `adoptionGrantExpired` became SYMMETRIC
-  // (`Math.abs(now - issuedAtMs) > MAX_AGE`). Every test above only ever
-  // ages a proof into the PAST, which the old asymmetric predicate already
-  // handled — it does not exercise the actual fix. A FUTURE-dated
-  // `issuedAtMs` (a backwards clock step, or a corrupted publisher stamp)
-  // must read as expired too, exactly like a stale one, rather than reading
-  // as an outstanding grant forever.
+  // Production change B: `adoptionGrantExpired` became SYMMETRIC (`Math.abs(now - issuedAtMs) > MAX_AGE`).
+  // Every test above only ever ages a proof into the PAST, which the old asymmetric predicate already handled - it does not exercise the actual fix.
   it("a FUTURE-dated proof is ALSO treated as expired on the standalone path — the symmetric bound", async () => {
     const hostHomeDir = await freshHome();
     const serviceLabel = "ai.traycer.host.agent";
@@ -636,13 +615,8 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
 });
 
 describe("readHostStartAdoptionNonce — production change B: the symmetric age bound", () => {
-  // Not previously covered by this suite at all - every existing assertion
-  // on this reader lived only in the doc-comment cross-references inside
-  // the two describe blocks below. `readHostStartAdoptionNonce` is the
-  // reader that steers a launch onto the labelled, nonce-less consume path
-  // once a proof expires (see that block's doc comment), so its own
-  // expiry behavior needs direct coverage, not just an inference from its
-  // downstream effect.
+  // Not previously covered by this suite at all - every existing assertion on this reader lived only in the doc-comment cross-references inside the two describe blocks below.
+  // `readHostStartAdoptionNonce` is the reader that steers a launch onto the labelled, nonce-less consume path once a proof expires (see that block's doc comment), so its own expiry behavior needs direct coverage, not just an inference from its downstream effect.
   it("returns null for a future-dated proof, exactly as it already does for a past-dated one", async () => {
     const hostHomeDir = await freshHome();
     const serviceLabel = "ai.traycer.host.agent";
@@ -663,10 +637,8 @@ describe("readHostStartAdoptionNonce — production change B: the symmetric age 
           serviceLabel,
         );
 
-        // Control, run INSIDE the contender's callback: the final step of
-        // `readHostStartAdoptionNonce` re-validates the parent capability is
-        // still live, which is only true while `withUpdateContender` still
-        // holds it. A fresh proof yields the real nonce.
+        // Control, run INSIDE the contender's callback: the final step of `readHostStartAdoptionNonce` re-validates the parent capability is still live, which is only true while `withUpdateContender` still holds it.
+        // A fresh proof yields the real nonce.
         await expect(
           readHostStartAdoptionNonce("production", serviceLabel),
         ).resolves.toEqual(expect.any(String));
@@ -679,9 +651,7 @@ describe("readHostStartAdoptionNonce — production change B: the symmetric age 
           JSON.stringify({ ...proof, issuedAtMs: Date.now() + 10 * 60_000 }),
           "utf8",
         );
-        // Expiry short-circuits before the parent-capability re-check, so
-        // this arm's `null` is provably about the age bound, not about
-        // capability having lapsed.
+        // Expiry short-circuits before the parent-capability re-check, so this arm's `null` is provably about the age bound, not about capability having lapsed.
         await expect(
           readHostStartAdoptionNonce("production", serviceLabel),
         ).resolves.toBeNull();
@@ -691,20 +661,8 @@ describe("readHostStartAdoptionNonce — production change B: the symmetric age 
 });
 
 describe("consumeHostStartAdoption — the LABELLED path applies the age bound too", () => {
-  // Codex round 3. The follow-up to the block above, and a class member the
-  // first fix missed: the age bound went onto the nonce-less STANDALONE path
-  // while the labelled path was left without it. The comment written there even
-  // enumerated the readers that already had the bound, and the labelled consume
-  // path — a third reader — was not among them and was not checked.
-  //
-  // Expiry is what steers a launch onto this path, which is why the gap is
-  // reachable rather than theoretical. `readHostStartAdoptionNonce` applies the
-  // age bound, so an expired proof makes `host adoption-nonce` yield nothing,
-  // and the emitted launcher re-execs `host start --service-label <label>` with
-  // no `--adoption-nonce` at all. That arrives here as (labelled, nonce=null)
-  // against a pending read that is still "valid", because `readPendingAdoption`
-  // does no age filtering — and the nonce check refused it, on every
-  // service-manager retry, with no path to the post-claim expiry check.
+  // Codex round 3.
+  // The follow-up to the block above, and a class member the first fix missed: the age bound went onto the nonce-less STANDALONE path while the labelled path was left without it.
   const LABEL = "ai.traycer.host.agent";
 
   async function publishThenAge(ageMs: number, label: string): Promise<string> {
@@ -724,9 +682,7 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
     );
     if (ageMs > 0) {
       const path = join(hostHomeDir, ".host-start-adoption.json");
-      // Age the REAL proof rather than hand-rolling one, so every other field
-      // stays exactly what the publisher wrote — a fabricated proof could trip
-      // an earlier guard and pass this test for the wrong reason.
+      // Age the REAL proof rather than hand-rolling one, so every other field stays exactly what the publisher wrote - a fabricated proof could trip an earlier guard and pass this test for the wrong reason.
       const proof = JSON.parse(await readFile(path, "utf8")) as {
         issuedAtMs: number;
       };
@@ -748,10 +704,7 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
   });
 
   it("an EXPIRED proof bound to a DIFFERENT label also admits, not refuses", async () => {
-    // Why the bound is ordered ahead of the label-binding check: an expired
-    // proof left by some other label would otherwise wedge THIS launcher with
-    // "bound to a different service label" on every retry, which is the same
-    // indefinite refusal wearing a different reason string.
+    // proof left by some other label would otherwise wedge THIS launcher with "bound to a different service label" on every retry, which is the same indefinite refusal wearing a different reason string.
     await publishThenAge(120_000, "ai.traycer.host.other");
 
     expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
@@ -760,11 +713,8 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
   });
 
   it("a FRESH proof still refuses a labelled start with NO nonce — the capability discipline is intact", async () => {
-    // The load-bearing negative. The age bound must not become a way to launch
-    // without presenting the nonce: while the grant is still live, a labelled
-    // start that cannot produce the nonce is exactly the case the proof exists
-    // to refuse. If this ever goes green alongside the first test, the fix has
-    // turned into a nonce bypass.
+    // The load-bearing negative.
+    // The age bound must not become a way to launch without presenting the nonce: while the grant is still live, a labelled start that cannot produce the nonce is exactly the case the proof exists to refuse.
     await publishThenAge(0, LABEL);
 
     expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
@@ -775,9 +725,7 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
   });
 
   it("a FRESH proof bound to a different label still refuses — the label check is not skipped", async () => {
-    // The other negative direction: moving the age bound ahead of the
-    // label-binding check must not stop that check from firing for proofs that
-    // are still live.
+    // The other negative direction: moving the age bound ahead of the label-binding check must not stop that check from firing for proofs that are still live.
     await publishThenAge(0, "ai.traycer.host.other");
 
     expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
@@ -786,14 +734,10 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
     });
   });
 
-  // Production change B: the symmetric bound. `publishThenAge` computes
-  // `issuedAtMs: Date.now() - ageMs`, so a NEGATIVE `ageMs` lands the proof
-  // in the future - reused rather than duplicated, so a future-dated fixture
-  // is guaranteed to differ from the past-dated ones above only in sign.
+  // Production change B: the symmetric bound.
+  // `publishThenAge` computes `issuedAtMs: Date.now() - ageMs`, so a NEGATIVE `ageMs` lands the proof in the future - reused rather than duplicated, so a future-dated fixture is guaranteed to differ from the past-dated ones above only in sign.
   it("a FUTURE-dated proof also admits on the labelled, nonce-less path — not just a past-dated one", async () => {
-    // `publishThenAge` only rewrites `issuedAtMs` for `ageMs > 0` (it is a
-    // past-dating helper), so a future date needs its own write rather than
-    // a negative `ageMs` reuse.
+    // `publishThenAge` only rewrites `issuedAtMs` for `ageMs > 0` (it is a past-dating helper), so a future date needs its own write rather than a negative `ageMs` reuse.
     const hostHomeDir = await publishThenAge(0, LABEL);
     const path = join(hostHomeDir, ".host-start-adoption.json");
     const proof = JSON.parse(await readFile(path, "utf8")) as {

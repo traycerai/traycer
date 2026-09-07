@@ -13,20 +13,7 @@ import { PrDetailFilesChanged } from "@/components/epic-canvas/pr/pr-detail-sect
 import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-github-link";
 
 /**
- * The Files tab: the changed-file list, plus the one control that opens the
- * PR's actual diff.
- *
- * The diff is a TILE, not a section here - the same shape as Git Diff's
- * "open bundle" button. Inline, a full patch competes with the PR header, tab
- * strip and context card for width and cannot be split beside the
- * conversation it is about; as a tile it takes the pane, drags to a split, and
- * keeps its own collapse state.
- *
- * The list stays as the tab's content because it is the part that is ALWAYS
- * available: it comes from the `pr.subscribeDetail` sweep, whereas the diff
- * needs a local checkout of this PR. A reader on a teammate's PR still gets
- * the file list; the button simply reports that there is nothing local to
- * open once the tile says so.
+ * Inline, a full patch competes with the PR header, tab strip and context card for width and cannot be split beside the conversation it is about; as a tile it takes the pane, drags to a split, and keeps its own collapse state.
  */
 export function PrDetailFilesTab(props: {
   readonly core: PrDetailCore;
@@ -63,12 +50,7 @@ export function PrDetailFilesTab(props: {
 }
 
 /**
- * Opens (or refocuses) this PR's diff tile.
- *
- * Never disabled on "does this PR have a local checkout?" - that answer costs a
- * host round-trip, and a button that silently disables itself is
- * indistinguishable from one that is broken. The tile says so plainly instead,
- * with a reason and a link to GitHub.
+ * Never disabled on "does this PR have a local checkout?" - that answer costs a host round-trip, and a button that silently disables itself is indistinguishable from one that is broken.
  */
 function PrOpenDiffButton(props: {
   readonly core: PrDetailCore;
@@ -121,9 +103,8 @@ function PrOpenDiffButton(props: {
 }
 
 /**
- * The footer's "View it on GitHub instead" link. See
- * {@link PrExternalGitHubLink} for why every GitHub anchor on these surfaces
- * goes through the RunnerHost bridge.
+ * The footer's "View it on GitHub instead" link.
+ * See {@link PrExternalGitHubLink} for why every GitHub anchor on these surfaces goes through the RunnerHost bridge.
  */
 function PrFilesGitHubFooterLink(props: { readonly href: string }): ReactNode {
   return (

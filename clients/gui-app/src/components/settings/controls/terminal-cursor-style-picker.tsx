@@ -7,10 +7,8 @@ interface TerminalCursorStylePickerProps {
   onChange: (next: TerminalCursorStyle) => void;
 }
 
-// iTerm2 shows the cursor shape itself as each choice rather than a word, which
-// reads instantly and needs no translation. Each option renders a mini
-// terminal cell drawing the actual glyph. Block sits in the middle so the two
-// thin shapes flank it symmetrically.
+// iTerm2 shows the cursor shape itself as each choice rather than a word, which reads instantly and needs no
+// translation. Block sits in the middle so the two thin shapes flank it symmetrically.
 const STYLES: ReadonlyArray<{ id: TerminalCursorStyle; label: string }> = [
   { id: "bar", label: "Bar" },
   { id: "block", label: "Block" },

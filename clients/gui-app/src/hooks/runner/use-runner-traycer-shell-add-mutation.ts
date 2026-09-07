@@ -7,13 +7,8 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
-/**
- * Remembers a program in the shell picker's list and selects it
- * (`traycer config shell add`). The backend re-validates the path is absolute
- * and executable, so callers should gate on the probe first. On success,
- * invalidates both the shell config (the new selection) and the shell list (the
- * newly-remembered row).
- */
+/** The backend re-validates the path is absolute and executable, so callers should gate on the probe first.
+ * On success, invalidates both the shell config (the new selection) and the shell list (the newly-remembered row). */
 export function useRunnerTraycerShellConfigAddMutation(): UseMutationResult<
   void,
   Error,

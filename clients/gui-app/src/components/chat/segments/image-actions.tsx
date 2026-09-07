@@ -16,28 +16,16 @@ export interface ImageRemoteOpen {
 export function ImageActions(props: {
   readonly pendingAction: ImageAction | null;
   readonly canCopy: boolean;
-  /**
-   * Whether this shell hands files to an OS chooser, in which case sharing and
-   * downloading are two different acts and both are offered. Ignored beside a
-   * remote image, whose control is Open-in-browser rather than any save.
-   */
+  /** Whether this shell hands files to an OS chooser, in which case sharing and downloading are two different acts and both are offered. Ignored beside a remote image, whose control is Open-in-browser rather than any save. */
   readonly canShare: boolean;
-  /**
-   * Whether a Download can be honoured at all. False on a shell that hands
-   * everything to a chooser and owns no direct write (Android 10), where the
-   * control would route back into the share sheet it is meant to be distinct
-   * from.
-   */
+  /** Whether a Download can be honoured at all. False on a shell that hands everything to a chooser and owns no direct write (Android 10), where the control would route back into the share sheet it is meant to be distinct from. */
   readonly canDownload: boolean;
   readonly remote: ImageRemoteOpen | null;
   readonly onCopy: () => void;
   readonly onShare: () => void;
   readonly onDownload: () => void;
 }): ReactNode {
-  // The trailing slot: Open-in-browser for a remote image (no save capability
-  // gates it), Download for a local one - and nothing at all where the shell
-  // is chooser-only, since a Download there would route back into the share
-  // sheet it is meant to be distinct from.
+  // The trailing slot: Open-in-browser for a remote image (no save capability gates it), Download for a local one - and nothing at all where the shell is chooser-only, since a Download there would route back into the share sheet it is meant to be distinct from.
   let saveOrOpen: ReactNode = null;
   if (props.remote !== null) {
     saveOrOpen = (

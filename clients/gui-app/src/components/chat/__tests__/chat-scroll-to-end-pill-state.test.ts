@@ -69,8 +69,7 @@ describe("resolveScrollToEndPillState", () => {
 
   it("prioritizes turnRunning over unseenCompletion (streaming wins)", () => {
     // Source order: hidden -> turnRunning -> unseenCompletion -> plain.
-    // A turn still streaming after a prior unseen completion must not
-    // collapse to "New reply" - the live stream is the more urgent signal.
+    // A turn still streaming after a prior unseen completion must not collapse to "New reply" - the live stream is the more urgent signal.
     expect(
       resolve({
         visible: true,

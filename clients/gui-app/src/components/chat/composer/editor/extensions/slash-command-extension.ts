@@ -62,12 +62,7 @@ export const ChatSlashCommandNode = TiptapNode.create({
 
 const slashLeadingGuardKey = new PluginKey("composer-slash-leading-guard");
 
-/**
- * Stable key for the `/` command suggestion plugin. Exported (and pinned via the
- * Suggestion config below) so code outside the editor can imperatively exit an
- * open suggestion by dispatching `setMeta(slashSuggestionPluginKey, { exit: true })`
- * - see the editor's `dismissActiveSuggestion` handle.
- */
+/** Stable key for the `/` command suggestion plugin. Exported (and pinned via the Suggestion config below) so code outside the editor can imperatively exit an open suggestion by dispatching `setMeta(slashSuggestionPluginKey, { exit: true })` - see the editor's `dismissActiveSuggestion` handle. */
 export const slashSuggestionPluginKey = new PluginKey(
   "composer-slash-suggestion",
 );
@@ -77,10 +72,7 @@ export const skillSuggestionPluginKey = new PluginKey(
   "composer-skill-suggestion",
 );
 
-/**
- * Character that opened a picker, recorded on the chip it inserts. Shared with
- * the picker store, which echoes it back in the menu rows.
- */
+/** Character that opened a picker, recorded on the chip it inserts. Shared with the picker store, which echoes it back in the menu rows. */
 export type SlashCommandTrigger = ComposerSlashTrigger;
 
 function slashLeadingGuardPlugin(): Plugin {
@@ -112,17 +104,7 @@ function collectIllegalSlashPositions(state: EditorState): number[] {
   return positions;
 }
 
-/**
- * Whether a chip already in the document is one the composer could have
- * produced.
- *
- * The guard runs over persisted content too - pasted, restored from a draft, or
- * carried in by an edited message - so it cannot assume the picker built every
- * node it sees. The rule is about position, not the trigger: a skill is legal
- * anywhere, and a native command only at the leading position the provider will
- * actually parse. Both triggers offer the same catalog, so neither narrows what
- * a chip is allowed to be.
- */
+/** The guard runs over persisted content too - pasted, restored from a draft, or carried in by an edited message - so it cannot assume the picker built every node it sees. The rule is about position, not the trigger: a skill is legal anywhere, and a native command only at the leading position the provider will actually parse. */
 function isLegalSlashChip(
   doc: ProseMirrorNode,
   node: ProseMirrorNode,
@@ -172,12 +154,7 @@ export function createSlashSuggestionExtension(
   });
 }
 
-/**
- * Scope follows the caret, not the trigger: both `/` and `$` open the whole
- * catalog at the start of the prompt and skills past it. `$` is a second way
- * into the same list, not a narrower one - rendering a skill in the form a
- * given provider expects (Codex wants `$name`) is the harness layer's job.
- */
+/** Scope follows the caret, not the trigger: both `/` and `$` open the whole catalog at the start of the prompt and skills past it. `$` is a second way into the same list, not a narrower one - rendering a skill in the form a given provider expects (Codex wants `$name`) is the harness layer's job. */
 function slashScopeForRange(context: {
   editor: { state: EditorState };
   range: { from: number; to: number };
@@ -258,21 +235,7 @@ function leadingTokenBeforePosition(
   return leadingTokenInRange(doc, $pos.before(1), clampedPos);
 }
 
-/**
- * First real token across the document's first `blockCount` top-level blocks.
- *
- * A block that contributes no prompt text is skipped, whether it holds
- * whitespace or only attachments: `plainTextFromNodes` serializes both to the
- * empty string and drops the block outright, so the command really does reach
- * the provider at the start of the prompt. Classifying by what the parser sees
- * rather than by document shape is also what keeps an attachment consistent
- * with itself - the same image one line up used to disable native commands
- * while an image beside the caret did not.
- *
- * "Contributes no prompt text" is a question for the serializer, not for how
- * empty the block looks: a blockquote holding nothing but a hard break still
- * emits `>`, so `isQuoteLeadingWrapper` stops it from being skipped here.
- */
+/** Classifying by what the parser sees rather than by document shape is also what keeps an attachment consistent with itself - the same image one line up used to disable native commands while an image beside the caret did not. */
 function firstTokenInBlocks(
   doc: ProseMirrorNode,
   blockCount: number,
@@ -318,14 +281,7 @@ function leadingTokenInRange(
   return token;
 }
 
-/**
- * The slice of a text node that actually lies inside `[from, to)`.
- *
- * Only that slice may decide whether the run is blank: when the user types
- * `   /`, the trigger character shares one text node with the spaces before
- * it, so testing the node's whole text would report non-blank and classify a
- * genuinely leading command as inline.
- */
+/** The slice of a text node that actually lies inside `[from, to)`. Only that slice may decide whether the run is blank: when the user types ` /`, the trigger character shares one text node with the spaces before it, so testing the node's whole text would report non-blank and classify a genuinely leading command as inline. */
 function textWithinRange(
   node: ProseMirrorNode,
   pos: number,
@@ -338,33 +294,19 @@ function textWithinRange(
   return end > start ? text.slice(start, end) : "";
 }
 
-/**
- * A blockquote is content however empty it looks, so it is never descended
- * into. `quotePrefixLines` emits a bare `>` for a blank line, so a quote always
- * puts a character in front of whatever follows - and the prefix precedes the
- * caret from inside the quote too, which is why one rule here covers both an
- * earlier quote block and a caret sitting within one. Descending would let a
- * hard-break-only quote read as trimmable whitespace and classify the command
- * after it as leading, when the provider actually receives `>\n>\n/plan`.
- */
+/** A blockquote is content however empty it looks, so it is never descended into. Descending would let a hard-break-only quote read as trimmable whitespace and classify the command after it as leading, when the provider actually receives `>\n>\n/plan`. */
 function isQuoteLeadingWrapper(node: ProseMirrorNode): boolean {
   return node.type.name === "blockquote";
 }
 
-/**
- * Attachments are not serialized into the prompt text, so they never form the
- * token a command would be measured against inside a block.
- */
+/** Attachments are not serialized into the prompt text, so they never form the token a command would be measured against inside a block. */
 function isIgnoredLeadingLeaf(node: ProseMirrorNode): boolean {
   return (
     node.type.name === "attachmentGroup" || node.type.name === "imageAttachment"
   );
 }
 
-/**
- * A hard break serializes to a bare newline, which `trim()` strips - so like
- * whitespace text it is not content a command can follow.
- */
+/** A hard break serializes to a bare newline, which `trim()` strips - so like whitespace text it is not content a command can follow. */
 function isWhitespaceLeadingLeaf(node: ProseMirrorNode): boolean {
   return node.type.name === "hardBreak";
 }

@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// `applyEnvOverrides` must match keys case-insensitively on win32 (where the
-// process env is case-insensitive and the PATH key is spelled `Path`, not
-// `PATH`) while staying case-sensitive on POSIX. The platform is the only OS
-// input this behavior depends on, so - exactly like `detect-shells.test.ts` -
-// we mock `os.platform()` to exercise both branches honestly from one runner.
+// `applyEnvOverrides` must match keys case-insensitively on win32 (where the process env is case-insensitive and the PATH key is spelled `Path`, not `PATH`) while staying case-sensitive on POSIX.
 const world = vi.hoisted(() => ({ platform: "linux" as NodeJS.Platform }));
 vi.mock("node:os", async (importActual) => {
   const actual = await importActual<typeof import("node:os")>();
@@ -55,9 +51,7 @@ describe("applyEnvOverrides - win32 key matching (case-insensitive)", () => {
   });
 
   it("replaces an existing `Path` value in place when overriding `PATH`", () => {
-    // The real key on Windows is `Path`; a Settings->Shell override keyed
-    // `PATH` must update THAT value, not add a second colliding key. The
-    // original key's casing is preserved (replace in place).
+    // The real key on Windows is `Path`; a Settings->Shell override keyed `PATH` must update THAT value, not add a second colliding key.
     const result = applyEnvOverrides({ Path: "orig" }, { PATH: "new" });
     expect(pathKeys(result)).toEqual(["Path"]);
     expect(result).toEqual({ Path: "new" });

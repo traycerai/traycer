@@ -32,10 +32,6 @@ interface BrowserViewWindowAttachmentOptions {
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
 
-/**
- * Owns which host window a guest is bound to, and the per-window listeners
- * that notice that window's own renderer reloading or crashing.
- */
 export class BrowserViewWindowAttachment {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
@@ -57,14 +53,6 @@ export class BrowserViewWindowAttachment {
     this.closeEntry = options.closeEntry;
   }
 
-  /**
-   * The host window itself (not any browser tile's own `webContents`) can
-   * reload or crash - a vite HMR full reload in dev, a renderer crash in
-   * production. When that happens every tile attached to this window keeps
-   * `desiredVisible: true` in this (main-process, reload-surviving) manager
-   * until the new renderer re-registers it. One listener per window, attached
-   * lazily the first time an entry attaches to it.
-   */
   ensureResetListener(windowId: string): void {
     if (this.hostWindowResetListenersByWindowId.has(windowId)) return;
     const window = this.getWindow(windowId);
@@ -106,11 +94,7 @@ export class BrowserViewWindowAttachment {
     this.hostWindowResetListenersByWindowId.delete(windowId);
   }
 
-  /**
-   * Re-runs window binding for every guest after the set of host windows
-   * changed. A capturing unbound tab does not need a compositor lease: the
-   * renderer guest stays in the persistent DOM host.
-   */
+  /** Re-runs window binding for every guest after the set of host windows changed. */
   reconcileBoundWindows(): void {
     for (const entry of Array.from(this.entries.guestValues())) {
       const surface = entry.surface;
@@ -130,14 +114,6 @@ export class BrowserViewWindowAttachment {
     }
   }
 
-  /**
-   * A guest whose tile or window is gone stops being viewed - and SAYS so.
-   *
-   * `viewed` on `electronTabState` is read straight off `desiredVisible`, and a
-   * silent hide left the host believing a tab was still on the user's screen
-   * for the rest of the session. Emitted only on the edge, because this runs
-   * over every entry on every visibility reconcile.
-   */
   private markDetached(entry: BrowserViewEntry): void {
     const wasVisible = entry.desiredVisible;
     entry.desiredVisible = false;

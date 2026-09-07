@@ -14,13 +14,8 @@ import {
 import { validateAuthTokenIdentityAccessOnly } from "../../../../shared/auth/auth-validation";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
-// `traycer login` (interactive device flow) migrated to §7: after the device
-// poll mints a pair, validate it ACCESS-ONLY (no refresh — a minted token that
-// fails is a genuine rejection) and persist through the locked store's `signIn`.
-// Mock only the device-flow transport + the access probe + the store helpers
-// (`runWithCliStore`/`withCommitRetry`, which call `createCliCredentialsStore`
-// intra-module) + node `spawn` (so the best-effort browser open never launches a
-// real browser). Keep the pure identity projection real.
+// `traycer login` (interactive device flow) migrated to §7: after the device poll mints a pair, validate it ACCESS-ONLY (no refresh - a minted token that fails is a genuine rejection) and persist through the locked store's `signIn`.
+// Mock only the device-flow transport + the access probe + the store helpers (`runWithCliStore`/`withCommitRetry`, which call `createCliCredentialsStore` intra-module) + node `spawn` (so the best-effort browser open never launches a real browser).
 const { fakeStore, signInMock } = vi.hoisted(() => {
   const signInMock = vi.fn();
   return {
@@ -162,9 +157,7 @@ describe("runDeviceAuthFlow", () => {
       email: "ada@traycer.ai",
       name: "Ada",
     });
-    // `signIn` is unconditional (clears any tombstone) — an interactive sign-in
-    // always carries a fresh refresh token, so it never asks the locked store
-    // to preserve the on-disk one.
+    // `signIn` is unconditional (clears any tombstone) - an interactive sign-in always carries a fresh refresh token, so it never asks the locked store to preserve the on-disk one.
     expect(signInMock.mock.calls[0][1]).toBe(false);
     expect(signInMock.mock.calls[0][2]).toBeNull();
     expect(result).toEqual({
@@ -194,7 +187,7 @@ describe("runDeviceAuthFlow", () => {
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).code).toBe(CLI_ERROR_CODES.AUTH_REJECTED);
     // A minted-but-rejected token is a genuine rejection, not an expiry to spend
-    // past — no refresh, no store write.
+    // past - no refresh, no store write.
     expect(signInMock).not.toHaveBeenCalled();
   });
 

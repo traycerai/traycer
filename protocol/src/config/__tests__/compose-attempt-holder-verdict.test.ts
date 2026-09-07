@@ -1,14 +1,6 @@
 /**
- * Cold-review F1 re-review minimum: `composeAttemptHolderVerdict`'s full
- * tri-state-liveness × identity-comparison cross product.
- *
- * The defect this guards: an indeterminate OS probe (`EIO`, an unexpected
- * errno, a probe that could not run) must never become positive death
- * evidence. Only `dead` (POSITIVE proof — `ESRCH` and nothing else) may
- * short-circuit to `"dead"`. An `indeterminate` liveness still consults the
- * independent identity comparison, because a matching creation stamp is
- * positive evidence of life even when the liveness probe itself could not
- * answer — the epic's "indeterminate counts as alive" invariant.
+ * Cold-review F1 re-review minimum: `composeAttemptHolderVerdict`'s full tri-state-liveness × identity-comparison cross product.
+ * The defect this guards: an indeterminate OS probe (`EIO`, an unexpected errno, a probe that could not run) must never become positive death evidence.
  */
 import { describe, expect, it } from "vitest";
 import { composeAttemptHolderVerdict } from "../host-update-attempt-liveness";
@@ -59,10 +51,8 @@ describe("composeAttemptHolderVerdict — tri-state liveness × identity cross p
   });
 
   it("indeterminate liveness + matching identity -> alive-same — the 'indeterminate counts as alive' invariant", () => {
-    // The load-bearing case: the liveness probe itself could not answer
-    // (EIO, an unexpected errno), but the independent identity read still
-    // positively confirms the SAME process. That must read as alive, not
-    // as unknown and never as dead.
+    // The load-bearing case: the liveness probe itself could not answer (EIO, an unexpected errno), but the independent identity read still positively confirms the SAME process.
+    // That must read as alive, not as unknown and never as dead.
     expect(
       composeAttemptHolderVerdict(
         "indeterminate",

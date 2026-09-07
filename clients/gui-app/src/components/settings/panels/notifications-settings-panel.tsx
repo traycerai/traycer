@@ -85,18 +85,7 @@ const LEAVE_SECRET_UNCHANGED: HostNotificationsSecretWrite = {
   kind: "leaveUnchanged",
 };
 
-/**
- * The route / modal entry point.
- *
- * Notification policy and hooks are stored BY THE HOST, so this panel was
- * always host-scoped — it just never said which host, and silently configured
- * whichever one happened to be active under a heading that read "Current
- * host". It was the worst of the invisible bindings: a person could toggle
- * severities all evening and never learn that the bell they were watching
- * belonged to a different host. It now reads the one Settings host scope, and
- * the sidebar that owns that scope names the host and says so explicitly when
- * it is not the one this window's bell reads from.
- */
+/** Notification policy and hooks are stored BY the host, so this panel was always host-scoped. */
 export function NotificationsSettingsPanel() {
   const scope = useHostScope();
   return (
@@ -127,7 +116,6 @@ export function NotificationsSettingsPanelForClient(props: {
 }
 
 function NotificationsSettingsPanelContent(props: {
-  /** `null` when the caller supplied a client directly and owns the gating. */
   readonly scope: HostScope | null;
   readonly configQuery: UseQueryResult<NotificationConfig, HostRpcError>;
   readonly setConfig: NotificationSetConfigMutation;
@@ -145,9 +133,8 @@ function NotificationsSettingsPanelContent(props: {
       )}
     >
       <SettingsGroup
-        // Was "In-app notifications · Current host" — a title whose only
-        // qualifier was the one fact the screen refused to resolve. The sidebar
-        // names the host now, so the title is free to name the setting.
+        // Was "In-app notifications · Current host" - a title whose only qualifier was the one fact the screen refused
+        // to resolve.
         title="In-app notifications"
         tone="default"
         dataTestId="notifications-severity-policy"
@@ -156,18 +143,8 @@ function NotificationsSettingsPanelContent(props: {
         {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
       </SettingsGroup>
       <div className="min-h-0 flex-1">
-        {/* Keyed by host. The editor below holds an open hook draft and an
-            armed pending-delete, and a save rebuilds the host's ENTIRE hooks
-            file from the list it is looking at. Those two pieces of state
-            belong to one machine, but nothing here unmounts when the scope
-            moves: switching to a host whose hooks are already cached kept the
-            draft and the armed delete on screen while every mutation prop
-            re-pointed at the new client, so confirming wrote the new host's
-            file using an intent armed against the old one — copying a hook
-            across machines, or deleting whichever hook happened to share the
-            id. Changing hosts has to DESTROY that state, not re-point it.
-            Same guarantee, and the same reasoning, as the key on
-            `HostRegistryUpdates`. */}
+        {/* The editor below holds an open hook draft and an armed pending-delete, and a save rebuilds the host's entire
+           hooks file from the list it is looking at. */}
         <NotificationHooksSection
           key={scope?.hostId}
           statusQuery={props.hooksStatusQuery}
@@ -184,9 +161,7 @@ function NotificationsSettingsPanelContent(props: {
       description="What this host surfaces, and what its automation receives."
       fillHeight
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
-      // The header named the scoped host until the sidebar started doing it a
-      // row away and permanently. Two statements of one fact is how the old
-      // surface got confusing; this is the one place it was still true.
+      // The header named the scoped host until the sidebar started doing it a row away and permanently.
       headerAction={undefined}
     >
       {scope === null ? (

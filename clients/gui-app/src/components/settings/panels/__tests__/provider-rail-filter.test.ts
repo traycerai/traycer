@@ -83,9 +83,8 @@ describe("filterProviderRail", () => {
   });
 
   it("matches every provider carrying the substring, Codex included", () => {
-    // "Codex" contains "code" as surely as "OpenCode" does; a rule that only
-    // caught the compound names would be a prefix/word rule pretending to be a
-    // substring one.
+    // "Codex" contains "code" as surely as "OpenCode" does; a rule that only caught the compound names would be a
+    // prefix/word rule pretending to be a substring one.
     expect(idsFor(view({ query: "code" }))).toEqual([
       "codex",
       "claude-code",
@@ -99,9 +98,8 @@ describe("filterProviderRail", () => {
   });
 
   it("matches the words the rail RENDERS for Traycer, not the protocol name", () => {
-    // `providerDisplayName` overrides this one provider to "Traycer Inference".
-    // Searching the protocol's `PROVIDER_DISPLAY_NAMES` instead would leave the
-    // second word visible in the rail and unsearchable.
+    // Searching the protocol's `PROVIDER_DISPLAY_NAMES` instead would leave the second word visible in the rail
+    // and unsearchable.
     expect(idsFor(view({ query: "inference" }))).toEqual(["traycer"]);
   });
 
@@ -133,9 +131,7 @@ describe("filterProviderRail", () => {
   });
 
   it("preserves the caller's order rather than ranking matches", () => {
-    // Alphabetically this would lead with "claude-code"; it leads with "codex"
-    // because the input order is kept. The rail re-sorts by provider order
-    // anyway, so a relevance rank here would be discarded and would only make
+    // The rail re-sorts by provider order anyway, so a relevance rank here would be discarded and would only make
     // the two orders disagree.
     expect(idsFor(view({ query: "cod" }))).toEqual([
       "codex",

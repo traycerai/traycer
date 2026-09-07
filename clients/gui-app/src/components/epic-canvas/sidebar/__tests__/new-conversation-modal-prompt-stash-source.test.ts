@@ -1,12 +1,3 @@
-/**
- * New-conversation modal prompt-stash CAS against the real modal draft
- * store. Uses production `useNewConversationPromptStashSource` — especially
- * the non-nuclear clear fallback (content + selection only;
- * settings/composerMode/workspace untouched).
- *
- * Also covers Ticket 1 source-lifetime: a delayed stash save must not clear
- * a reopened modal patch after close/reopen with an equal numeric revision.
- */
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -298,10 +289,7 @@ describe("new-conversation modal prompt-stash source CAS", () => {
   });
 
   it("delayed save survives close/reopen with an equal numeric revision (retiredRef)", async () => {
-    // Modal close deletes the patch entirely (`clearDraft`). Reopen seeds a
-    // fresh patch whose revision restarts at 1 for the first real setContent —
-    // equal to the capture token's revision. Without retiredRef, the retired
-    // hook's clearIfUnchanged would match that ABA pair and wipe the reopen.
+    // Without retiredRef, the retired hook's clearIfUnchanged would match that ABA pair and wipe the reopen.
     let resolveSave: (() => void) | undefined;
     storeMocks.save.mockImplementationOnce(
       () =>
@@ -352,7 +340,7 @@ describe("new-conversation modal prompt-stash source CAS", () => {
     expect(reopenedPatch?.content).toEqual(reopened);
 
     // Remount a fresh hook instance for the reopened modal (does not own the
-    // in-flight save — that belongs to the retired instance).
+    // in-flight save - that belongs to the retired instance).
     const reopenEditorRef: { current: ComposerPromptEditorHandle | null } = {
       current: makeEditorHandle({ ready: true }),
     };

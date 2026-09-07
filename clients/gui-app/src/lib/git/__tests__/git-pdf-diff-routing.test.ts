@@ -34,9 +34,7 @@ describe("gitRoutesToPdfDiffCards", () => {
   });
 
   it("keeps the text diff when a PDF was renamed into a readable file", () => {
-    // `old.pdf -> new.txt` with `isBinary: false` has a real source diff on
-    // the surviving side; a summary card about a file that is no longer a PDF
-    // would discard it.
+    // `old.pdf -> new.txt` with `isBinary: false` has a real source diff on the surviving side; a summary card about a file that is no longer a PDF would discard it.
     expect(
       gitRoutesToPdfDiffCards(
         file({
@@ -68,9 +66,7 @@ describe("gitRoutesToPdfDiffCards", () => {
   });
 
   it("yields to image routing on a rename straddling both allowlists", () => {
-    // `a.png -> b.pdf` matches both routers; the tile checks image routing
-    // FIRST, so this pins that such a file is still an image-diff candidate
-    // (the pdf router also matching is fine - it is never reached).
+    // `a.png -> b.pdf` matches both routers; the tile checks image routing FIRST, so this pins that such a file is still an image-diff candidate (the pdf router also matching is fine - it is never reached).
     const straddling = file({
       path: "docs/report.pdf",
       previousPath: "images/logo.png",

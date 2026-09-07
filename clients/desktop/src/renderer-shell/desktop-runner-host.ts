@@ -160,11 +160,6 @@ import type {
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
-/**
- * Shape of the `window.runnerHost` object installed by the Electron preload
- * bridge. The preload hands back plain structured-clone-safe values, so the
- * shape here matches the preload bridge output exactly.
- */
 export interface DesktopPreloadBridge {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
@@ -272,11 +267,6 @@ export interface DesktopPreloadBridge {
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
-  /**
-   * The preload-built client of the main-process selection authority. It
-   * already carries this load's engine-issued `attachSeq` and its own
-   * buffering, so the renderer only has to attach and subscribe.
-   */
   selectionAuthority: SelectionAuthorityClient;
   refreshSelectionFleet: () => Promise<void>;
 }
@@ -294,12 +284,6 @@ export interface DesktopFileDropsBridge {
   openSavedFile(path: string): Promise<void>;
 }
 
-/**
- * Preload-exposed host-management surface. Mirrors `IHostManagement`
- * exactly so `DesktopRunnerHost` can hand it through without re-wrapping
- * every method. The desktop preload composes this via
- * `buildHostManagementBridge()`.
- */
 export interface DesktopHostManagementBridge {
   getHostControllerStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
@@ -648,18 +632,8 @@ export interface DesktopRunnerHostOptions {
 }
 
 /**
- * Concrete `IRunnerHost` for the Electron desktop shell.
- *
- * Constructed synchronously in the renderer entry as a closure over
- * `window.runnerHost` (installed by `src/preload/index.ts`). All async
- * methods forward straight through to the bridge; subscriptions are
- * normalised to shared `Disposable`s so `gui-app` consumes a platform-neutral
- * contract.
- *
- * `signInUrl` is pre-composed by the caller with
- * `redirect_uri=traycer://auth/callback` so `gui-app` treats it as an opaque,
- * browser-safe URL. `authnBaseUrl` is resolved in preload from the Electron
- * process environment, so it is already a plain string when we read it here.
+ * Constructed synchronously in the renderer entry as a closure over `window.runnerHost` (installed by `src/preload/index.ts`).
+ * `signInUrl` is pre-composed by the caller with `redirect_uri=traycer://auth/callback` so `gui-app` treats it as an opaque, browser-safe URL.
  */
 export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
@@ -725,10 +699,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;
-    // Passed straight through: the client instance, its issued attach
-    // generation and its buffering all belong to the preload load, so
-    // re-wrapping it here could only add a second identity for the same
-    // generation.
     this.selectionAuthority = options.bridge.selectionAuthority;
     this.refreshSelectionFleet = options.bridge.refreshSelectionFleet;
     this.zoom = {
@@ -773,11 +743,6 @@ export class DesktopRunnerHost implements IRunnerHost {
       },
     };
 
-    // Credentials-file token store (tech plan §3): the auth token store now
-    // round-trips through Electron main - it is the single machine-local
-    // credentials file owned by `FileTokenStore` (lock + WAL), shared with the
-    // CLI and read by the host, reached here over IPC. The old renderer-local
-    // encrypted-localStorage token slots are retired (their migration is §6).
     this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
@@ -918,10 +883,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.refreshSelectionFleet();
   }
 
-  /**
-   * Desktop OWNS the registry cadence, so this is never null here: main runs
-   * one `GET /api/v3/hosts` for the whole app and fans the rows out (P4.1/F22).
-   */
+  /** Desktop OWNS the registry cadence, so this is never null here: main runs one `GET /api/v3/hosts` for the whole app and fans the rows out (P4.1/F22). */
   onRegisteredHostsChange(
     handler: (push: RegisteredHostsChange) => void,
   ): Disposable | null {
@@ -993,18 +955,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
     signal: AbortSignal,
   ): Promise<MintLinkLoginCodeFetchResult> {
-    // Runs in the renderer rather than behind the preload bridge, and that is
-    // fine in a PACKAGED build too: authn allows the renderer's own origin
-    // unconditionally, not just in dev. `registerPlugins` unions the env
-    // allowlist with `corsOrigins(...)`, which always contains
-    // `DESKTOP_RENDERER_ORIGIN` = `app://renderer` — the privileged scheme
-    // Electron serves the packaged GUI from. The dev Vite origin arrives
-    // through the same union's `desktopDevOrigin`.
-    //
-    // The bridge is what `listUserSessions` needs for a different reason: it
-    // handles retained step-up credentials, which must not cross into the
-    // renderer. Nothing here touches those, so there is no second reason to
-    // pay for a main-process hop.
+    // The bridge is what `listUserSessions` needs for a different reason: it handles retained step-up credentials, which must not cross into the renderer.
     return mintLinkLoginCodeViaHttp(this.authnBaseUrl, bearerToken, signal);
   }
   linkLoginStatus(
@@ -1121,16 +1072,8 @@ export class DesktopRunnerHost implements IRunnerHost {
 }
 
 /**
- * Runs `start()` and settles as soon as `signal` aborts, without waiting for
- * the request it began.
- *
- * An `AbortSignal` is not cloneable across the context bridge, so the request
- * itself lives in Electron main and cannot be cancelled from the renderer; it
- * stays bounded by the fetcher's own 10s timeout and its reply is dropped. That
- * is an acceptable amount of waste for an idempotent GET - what is NOT
- * acceptable is the caller continuing. `AuthService.fetchUserSessions()` can
- * follow a list with a repair that spends a single-use refresh rotation, so
- * cancellation has to reach it promptly rather than 10s later.
+ * An `AbortSignal` is not cloneable across the context bridge, so the request itself lives in Electron main and cannot be cancelled from the renderer.
+ * That is an acceptable amount of waste for an idempotent GET - what is NOT acceptable is the caller continuing.
  */
 function settleOnAbort<T>(
   start: () => Promise<T>,
@@ -1158,13 +1101,8 @@ function toDisposable(subscription: { dispose: () => void }): Disposable {
 }
 
 /**
- * Whether a dropped file's resolved path points at an OS-ephemeral staging
- * location rather than a durable file. macOS writes drag-promised files (the
- * screenshot thumbnail, and other promise-backed drags) under
- * `…/T/TemporaryItems/…`, frequently via a `screencaptureui_*` directory, and
- * reclaims them shortly after the drag completes. Such a path is invalid by the
- * time a host-side terminal program reads it, so the caller materializes the
- * File's bytes into a stable copy instead of pasting this path.
+ * macOS writes drag-promised files (the screenshot thumbnail, and other promise-backed drags) under `…/T/TemporaryItems/…`, frequently via a `screencaptureui_*` directory, and.
+ * Such a path is invalid by the time a host-side terminal program reads it, so the caller materializes the File's bytes into a stable copy instead of pasting this path.
  */
 function isEphemeralDropPath(filePath: string): boolean {
   return (
@@ -1173,14 +1111,7 @@ function isEphemeralDropPath(filePath: string): boolean {
   );
 }
 
-/**
- * The desktop's `IFileSaveHost`, over the same preload surface the drop
- * helpers use. The sandboxed renderer cannot write through the File System
- * Access API (`createWritable()` throws `NotAllowedError`), so the bytes go to
- * the main process, which shows a native save dialog and writes them there;
- * the dialog is also what makes this the one shell that learns an absolute
- * path, and therefore the one that can re-open the file afterwards.
- */
+/** The sandboxed renderer cannot write through the File System Access API (`createWritable()` throws `NotAllowedError`), so the bytes go to the main process, which shows a native. */
 function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
   return {
     saveFile: (request) => bridge.saveFile(request),
@@ -1202,13 +1133,6 @@ function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {
       const resolved = await Promise.all(
         files.map(async (file) => {
           const existingPath = bridge.getPathForFile(file);
-          // A stable on-disk path (Finder drag) is pasted as-is so the agent
-          // sees the user's real file. But macOS stages drag-promised files -
-          // notably the floating screenshot thumbnail - under an ephemeral
-          // `…/TemporaryItems/…screencaptureui_…` path that the OS reclaims
-          // moments after the drag. Pasting that path lets the terminal program
-          // read it only after it is gone. Since the drop carries the File's
-          // bytes, materialize them into a durable temp copy instead.
           if (existingPath.length > 0 && !isEphemeralDropPath(existingPath)) {
             return existingPath;
           }

@@ -13,10 +13,8 @@ import {
   startSessionImportRun,
 } from "@/components/session-import/session-import-run-handle";
 
-/**
- * A stub satisfying `IHostStreamClient` honestly rather than casting - the
- * handle only carries this through to the controller, it never calls it.
- */
+/** A stub satisfying `IHostStreamClient` honestly rather than casting - the handle only carries this through to
+ * the controller, it never calls it. */
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => {
@@ -46,16 +44,8 @@ const BINDING: StreamRuntimeBinding = {
   retain: null,
 };
 
-/**
- * The tour renders through `RootSurface`'s standalone branch - `StandaloneShell`
- * + `OnboardingPage` - and never through `AppShell`. While the run controller
- * was mounted inside `AppShell`, the onboarding act's Import button called a
- * handle nobody had registered, so the import silently never started.
- *
- * The mount now sits above the router, where no component can render it in
- * isolation, so the topology is asserted against the two files that decide it
- * and the handle is exercised at both ends.
- */
+/** While the run controller was mounted inside `AppShell`, the onboarding act's Import button called a handle
+ * nobody had registered, so the import silently never started. */
 const SRC_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",

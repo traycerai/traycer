@@ -8,10 +8,8 @@ import { recordSetupTerminal } from "@/stores/worktree/setup-terminals";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
- * Ref fields a caller may set on the tile it is opening. Applied on the OPEN
- * path only: an already-open tile keeps the ref it was opened with and is
- * merely activated, which is the honest behaviour - a tile's origin is a fact
- * about the session behind it, not about who focused it.
+ * Ref fields a caller may set on the tile it is opening.
+ * Applied on the OPEN path only: an already-open tile keeps the ref it was opened with and is merely activated, which is the honest behaviour - a tile's origin is a fact about the session behind it, not about who focused it.
  */
 export interface EpicTerminalRefOverrides {
   readonly name: string;
@@ -19,9 +17,7 @@ export interface EpicTerminalRefOverrides {
   readonly originProviderId: EpicTerminalRef["originProviderId"];
 }
 
-// Calling with `null` is a no-op so callers can pass through whatever id
-// the latest setup event carried (or didn't, for missing-metadata frames)
-// without branching at every call site.
+// Calling with `null` is a no-op so callers can pass through whatever id the latest setup event carried (or didn't, for missing-metadata frames) without branching at every call site.
 export function useFocusEpicTerminalSession(
   viewTabId: string,
 ): (
@@ -43,11 +39,8 @@ export function useFocusEpicTerminalSession(
           sessionId: terminalSessionId,
         });
       }
-      // `dedupe` focuses a session already on this canvas; only a genuinely
-      // new one is opened. This is a committed user open/focus, so the nested
-      // route search must become the new focus authority - otherwise route
-      // sync re-applies the stale target and the tab opens without ever
-      // becoming visible.
+      // `dedupe` focuses a session already on this canvas; only a genuinely new one is opened.
+      // This is a committed user open/focus, so the nested route search must become the new focus authority - otherwise route sync re-applies the stale target and the tab opens without ever becoming visible.
       openTile(
         tileIntent(
           {

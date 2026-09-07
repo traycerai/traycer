@@ -149,10 +149,6 @@ describe("reconcileGlobalShortcuts", () => {
       newAccelerator,
       expect.any(Function),
     );
-    // Amended decision 7 (acquire before release): the new accelerator is
-    // registered while the old one is still held, and the old is only
-    // released after - never the reverse, which would leave a window with
-    // no working chord at all if the new registration were then refused.
     const unregisterOrder = electron.unregister.mock.invocationCallOrder[0];
     const registerOrder = electron.register.mock.invocationCallOrder[0];
     expect(registerOrder).toBeLessThan(unregisterOrder);
@@ -251,13 +247,6 @@ describe("applyGlobalShortcutIntent (transactional rebind)", () => {
     expect(preferences.get("summon")).toEqual(DEFAULT_INTENT);
   });
 
-  // Review P1: only disk writes were serialized, so a rejected window-1
-  // rebind and an accepted window-2 rebind could interleave their trial and
-  // rollback reads. Amended decision 7 moves the ENTIRE transaction (trial,
-  // persist-or-revert, fan-out) onto one queue. This reproduces the
-  // reviewer's mermaid scenario: window 1's rebind is refused by the OS,
-  // window 2's rebind is accepted with its persistence write deliberately
-  // held open, both fired without awaiting either first.
   it("serializes end to end: window 2's OS registration never starts until window 1's rejected transaction fully settles", async () => {
     const shortcuts = await import("../shortcuts");
     await shortcuts.reconcileGlobalShortcuts({});
@@ -339,18 +328,6 @@ describe("applyGlobalShortcutIntent (transactional rebind)", () => {
     });
   });
 
-  // Review P3 blind spot: the prior concurrency test above made the FIRST
-  // operation the rejected, non-persisting one and held only the SECOND
-  // (accepted) operation's persistence open. That leaves a real hole -
-  // moving just the persistence call outside `withGlobalShortcutsQueue`
-  // would still pass it, since nothing there proves an ACCEPTED
-  // transaction's OWN persistence write is inside the queue. This test
-  // flips the roles: op1 is accepted (OS grants it) with its persistence
-  // write held open, and while that write is still pending, op2 fires. If
-  // the queue only serialized the disk write path shallowly (or somehow let
-  // a second transaction's trial reconcile slip in during op1's held-open
-  // write), op2's `globalShortcut.register` would fire before op1's
-  // persistence settles.
   it("holds an accepted transaction's own persistence write inside the queue: a second transaction cannot attempt OS registration until it releases", async () => {
     const shortcuts = await import("../shortcuts");
     await shortcuts.reconcileGlobalShortcuts({});
@@ -424,11 +401,6 @@ describe("applyGlobalShortcutIntent (transactional rebind)", () => {
     expect(shortcuts.getRegisteredAccelerator("summon")).toBe(op2Accelerator);
   });
 
-  // P2's "failed rollback can strand the user" scenario, at its actual edge:
-  // if nothing has ever been registered yet (fresh startup, no prior
-  // reconcile), a rejected trial's "revert to previous" is not a no-op - it
-  // has no already-held accelerator to just leave alone, so it must attempt
-  // a real registration too, which can also be refused.
   it("never persists and reports rejected when both the trial and the revert-to-previous registration are refused", async () => {
     const shortcuts = await import("../shortcuts");
     electron.register.mockReturnValue(false);
@@ -448,13 +420,6 @@ describe("applyGlobalShortcutIntent (transactional rebind)", () => {
 });
 
 describe("MRU resolver wiring (decision 10)", () => {
-  // `createMruWindowProxy` (desktop-startup.ts) is module-private, so this
-  // rebuilds the identical shape it hands to `initGlobalShortcutsRegistry`:
-  // a `focus()` that delegates to `WindowRegistry.focusMru()` rather than
-  // targeting a fixed window. What's under test is real - the registered
-  // `globalShortcut.register` callback (`DEFINITIONS[0].run`, captured from
-  // the mock) actually resolving through a real `WindowRegistry` and
-  // focusing whichever window is currently most-recently-used.
   class FakeRegistryWindow implements RegistryManagedWindow {
     readonly webContents: { readonly id: number };
     private readonly listeners = new Map<string, Set<() => void>>();

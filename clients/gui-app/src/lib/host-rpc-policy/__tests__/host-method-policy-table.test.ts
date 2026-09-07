@@ -106,9 +106,8 @@ describe("host method poll policy table", () => {
   });
 
   it("declares the two chat-sharing writes as independent fifo queues", () => {
-    // fifo is per (method, params). These two methods never share a
-    // coordinator queue; cross-surface ordering is the client-side
-    // one-in-flight gate, not this table.
+    // fifo is per (method, params).
+    // These two methods never share a coordinator queue; cross-surface ordering is the client-side one-in-flight gate, not this table.
     expect(HOST_METHOD_POLL_TABLE["epic.setCloudChatVisibility"].mode).toBe(
       "fifo",
     );
@@ -131,14 +130,8 @@ describe("host method poll policy table", () => {
     ).toBe("fifo");
   });
 
-  // fifo here is not the usual "it is a write, so serialize it". The
-  // coordinator keys queues by [hostId, userId, method, params], so two
-  // Delivers naming different subsets are already distinct jobs and `latest`
-  // would leave them alone - but the common press names no subset at all, and
-  // two of THOSE are byte-identical params on one queue. Under `latest` the
-  // second would coalesce into the first and vanish, while releasing a hold
-  // advances a DURABLE delivery cursor: the human is left looking at a list
-  // that may or may not still be held, with no way to tell which.
+  // fifo here is not the usual "it is a write, so serialize it".
+  // The coordinator keys queues by [hostId, userId, method, params], so two Delivers naming different subsets are already distinct jobs and `latest` would leave them alone - but the common press names no subset at all, and two of THOSE are byte-identical.
   it("keeps deliverHeld on fifo, including the whole-chat press that names no ids", () => {
     expect(HOST_METHOD_POLL_TABLE["managedCommand.deliverHeld"].mode).toBe(
       "fifo",
@@ -150,9 +143,7 @@ describe("host method poll policy table", () => {
         commandIds: null,
       }),
     ).toBe("fifo");
-    // A mutation, and the held set a poll would watch for arrives unprompted
-    // on `chat.subscribe` - so polling it would be a second, slower source of
-    // truth for something already pushed.
+    // A mutation, and the held set a poll would watch for arrives unprompted on `chat.subscribe` - so polling it would be a second, slower source of truth for something already pushed.
     const neverPolled: null =
       HOST_METHOD_POLL_TABLE["managedCommand.deliverHeld"].poll;
     expect(neverPolled).toBeNull();
@@ -186,18 +177,13 @@ describe("host method poll policy table", () => {
     expect(intervalMs).toBe(15 * 60 * 1_000);
   });
 
-  // `host.status` used to be un-polled entirely. It is now opted in
-  // (`poll: { kind: "fixed", intervalMs: 10_000 }`) for one caller: the
-  // Overview's drain affordance, whose `liveBusySessionCount` must stay a LIVE
-  // reading under the query's 30s `staleTime` — see `host-overview-rpc.ts` and
-  // `liveBusySessionCount` in `my-hosts-model.ts`.
+  // `host.status` used to be un-polled entirely.
+  // It is now opted in (`poll: { kind: "fixed", intervalMs: 10_000 }`) for one caller: the Overview's drain affordance, whose `liveBusySessionCount` must stay a LIVE reading under the query's 30s `staleTime` - see `host-overview-rpc.ts` and.
   it("polls host.status on a fixed 10s cadence, comfortably under its query's staleTime", () => {
     const policy = HOST_METHOD_POLL_TABLE["host.status"].poll;
     const intervalMs: number = policy.intervalMs;
     expect(intervalMs).toBe(10_000);
-    // The interval must stay strictly under the 30s `staleTime` that demotes a
-    // retained `liveBusySessionCount` to `null` — inverting the two would make
-    // a healthy query flicker between live and unknown on every tick.
+    // The interval must stay strictly under the 30s `staleTime` that demotes a retained `liveBusySessionCount` to `null` - inverting the two would make a healthy query flicker between live and unknown on every tick.
     expect(intervalMs).toBeLessThan(30_000);
   });
 
@@ -221,10 +207,7 @@ describe("host method poll policy table", () => {
     const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
 
     expect(policy.classify(undefined)).toBe(false);
-    // Ahead of the probe lane, and the fixture proves the ordering rather than
-    // the arm: both conditions hold at once here, which is the ordinary first
-    // boot (shell probe running, packs converging). Classified as `pending` a
-    // download's progress would decay to a 30-second refresh.
+    // Ahead of the probe lane, and the fixture proves the ordering rather than the arm: both conditions hold at once here, which is the ordinary first boot (shell probe running, packs converging).
     expect(
       policy.classify({
         providers: [
@@ -239,9 +222,8 @@ describe("host method poll policy table", () => {
         ],
       }),
     ).toBe(PROVIDERS_INSTALLING_POLL_LANE);
-    // ...and it is the DOWNLOADING arm specifically, not "a managed pack
-    // exists". A settled pack must fall straight through to steady, or every
-    // host with a registry would poll `providers.list` every 5s forever.
+    // ...and it is the DOWNLOADING arm specifically, not "a managed pack exists".
+    // A settled pack must fall straight through to steady, or every host with a registry would poll `providers.list` every 5s forever.
     expect(
       policy.classify({
         providers: [
@@ -285,9 +267,8 @@ describe("host method poll policy table", () => {
     expect(policy.classify({ providers: [] })).toBe(PROVIDERS_STEADY_POLL_LANE);
   });
 
-  // Integration seam: non-blocking installPackVersion leaves only the
-  // user-lane version row as downloading while the automatic slot stays
-  // settled. Classifying that as steady freezes the progress bar at 15 min.
+  // Integration seam: non-blocking installPackVersion leaves only the user-lane version row as downloading while the automatic slot stays settled.
+  // Classifying that as steady freezes the progress bar at 15 min.
   it("selects the installing lane when only a user-lane version row is downloading", () => {
     const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
     expect(
@@ -299,7 +280,7 @@ describe("host method poll policy table", () => {
             availabilityPending: false,
             candidates: [],
             profiles: [],
-            // Automatic lane settled — the case the old classifier missed.
+            // Automatic lane settled - the case the old classifier missed.
             managedInstallState: { status: "installed", version: "1.0.0" },
             managedVersions: {
               autoDownload: true,
@@ -361,12 +342,7 @@ describe("host method poll policy table", () => {
     ).toBe(PROVIDERS_INSTALLING_POLL_LANE);
   });
 
-  // Not cosmetic, and the reason it is asserted as a bound rather than as two
-  // magic numbers: `providers.list` is the ONLY source of managed-install
-  // progress, and the host reports `downloading` at a full fraction for the
-  // whole extract-and-verify phase. At the pending lane's 30s ceiling - let
-  // alone steady's 15 minutes - a finished-looking bar sits frozen on screen
-  // for exactly the stretch where a user concludes the install is hung.
+  // Not cosmetic, and the reason it is asserted as a bound rather than as two magic numbers: `providers.list` is the ONLY source of managed-install progress, and the host reports `downloading` at a full fraction for the whole extract-and-verify phase.
   it("keeps the installing lane fast enough to animate a progress bar", () => {
     expect(PROVIDERS_INSTALLING_POLL_LANE.maxDelayMs).toBeLessThanOrEqual(
       5 * 1_000,
@@ -376,10 +352,8 @@ describe("host method poll policy table", () => {
     );
   });
 
-  // P7. Before this lane an `error` cell fell straight to `providers.steady`,
-  // so a wifi blip the host recovered from in a minute left "Setup failed" on
-  // screen for up to fifteen - and post-cutover that is a user who cannot run
-  // the turn that would have refreshed the list.
+  // P7.
+  // Before this lane an `error` cell fell straight to `providers.steady`, so a wifi blip the host recovered from in a minute left "Setup failed" on screen for up to fifteen - and post-cutover that is a user who cannot run the turn that would have refreshed the.
   describe("the providers retry-scheduled lane", () => {
     const NOW_MS = 1_800_000_000_000;
 
@@ -417,11 +391,8 @@ describe("host method poll policy table", () => {
       );
     });
 
-    // The half that a bare `retryAtMs > now` check would get wrong. Nothing on
-    // the host fires AT `retryAtMs` - it is a backoff memo, and the attempt
-    // rides on the next kick - so the transition lands after eligibility, not
-    // at it. Dropping to steady the instant the deadline passes would miss
-    // exactly the window the lane was added for.
+    // The half that a bare `retryAtMs > now` check would get wrong.
+    // Nothing on the host fires AT `retryAtMs` - it is a backoff memo, and the attempt rides on the next kick - so the transition lands after eligibility, not at it.
     it("keeps watching through the grace window after eligibility arrives", () => {
       expect(
         classifyAt(
@@ -431,18 +402,16 @@ describe("host method poll policy table", () => {
       ).toBe(PROVIDERS_RETRY_SCHEDULED_POLL_LANE);
     });
 
-    // ...and the bound is real. A cell whose retry came due long ago is not
-    // about to heal; it is waiting for a kick nobody scheduled, and the kick's
-    // own arrival refreshes the list anyway.
+    // ...and the bound is real.
+    // A cell whose retry came due long ago is not about to heal; it is waiting for a kick nobody scheduled, and the kick's own arrival refreshes the list anyway.
     it("stops watching once the grace window closes", () => {
       expect(
         classifyAt(NOW_MS, NOW_MS - PROVIDERS_RETRY_OBSERVATION_GRACE_MS),
       ).toBe(PROVIDERS_STEADY_POLL_LANE);
     });
 
-    // `unrepairable` and the deliberately un-memoed failures report
-    // `retryAtMs: null`. Watching them would poll forever for a transition the
-    // host has already said will never come.
+    // `unrepairable` and the deliberately un-memoed failures report `retryAtMs: null`.
+    // Watching them would poll forever for a transition the host has already said will never come.
     it("leaves a terminal failure on the steady lane", () => {
       expect(classifyAt(NOW_MS, null)).toBe(PROVIDERS_STEADY_POLL_LANE);
     });
@@ -510,9 +479,7 @@ describe("host method poll policy table", () => {
       ).toBe(PROVIDERS_RETRY_SCHEDULED_POLL_LANE);
     });
 
-    // The whole point of the lane, stated as a bound rather than as the two
-    // numbers: it has to be faster than the lane it replaces, or it is a new
-    // id doing nothing.
+    // The whole point of the lane, stated as a bound rather than as the two numbers: it has to be faster than the lane it replaces, or it is a new id doing nothing.
     it("is faster than the steady lane it takes the cell off", () => {
       expect(PROVIDERS_RETRY_SCHEDULED_POLL_LANE.maxDelayMs).toBeLessThan(
         PROVIDERS_STEADY_POLL_LANE.initialDelayMs,
@@ -688,12 +655,7 @@ describe("host method poll policy table", () => {
   });
 });
 
-// The defect that mattered: without reading `definitive` first, a
-// permanently halted publication reports `published: false` - byte for byte
-// what a chat mid-first-sweep reports - so the client re-asks every 30s
-// forever while telling the user to wait. See chat-publication-definitive.ts
-// and epic.chatPublicationState's own doc for the wire contract this
-// classifier depends on.
+// See chat-publication-definitive.ts and epic.chatPublicationState's own doc for the wire contract this classifier depends on.
 describe("epic.chatPublicationState poll lane terminates on `definitive`", () => {
   const policy = HOST_METHOD_POLL_TABLE["epic.chatPublicationState"].poll;
 
@@ -716,8 +678,6 @@ describe("epic.chatPublicationState poll lane terminates on `definitive`", () =>
 
   it("stops polling once `definitive` names a reason, for every reason including one this build does not recognise", () => {
     // Same base fixture (published: false) that would otherwise poll forever
-    // - only `definitive` varies across the four cases, isolating it as the
-    // cause of the lane dropping rather than some other field.
     for (const definitive of [
       "chat-deleted",
       "lineage-superseded",
@@ -735,12 +695,8 @@ describe("epic.chatPublicationState poll lane terminates on `definitive`", () =>
   });
 
   it("does NOT stop polling when `definitive` is merely absent - a pre-field host", () => {
-    // A host built before `definitive` negotiates the same method version,
-    // so its response takes the un-parsed same-version path and the field
-    // genuinely arrives missing at runtime. Reading that absence as
-    // terminal would mark every older host permanently halted - the same
-    // hang inverted. This is the same fixture as the polling case above
-    // with the key omitted entirely rather than set to null.
+    // A host built before `definitive` negotiates the same method version, so its response takes the un-parsed same-version path and the field genuinely arrives missing at runtime.
+    // Reading that absence as terminal would mark every older host permanently halted - the same hang inverted.
     expect(policy.classify({ published: false, boundaryCovered: null })).toBe(
       CHAT_PUBLICATION_WAIT_POLL_LANE,
     );

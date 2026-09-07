@@ -5,14 +5,8 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import { createWorktreeRetryIdentity } from "@/lib/worktree/worktree-retry-identity";
 
-/**
- * Updates the setup/teardown `scripts` override on the staged `worktree` entry
- * for `workspacePath`, preserving its branch selection. The Environment chip
- * uses this so an environment edit rides the worktree intent (and reaches the
- * new worktree at create) without touching the source checkout. A no-op (same
- * reference returned) when the folder has no staged `worktree` entry - a
- * `local` / `import` folder has no worktree to attach scripts to.
- */
+/** The Environment chip uses this so an environment edit rides the worktree intent (and reaches the new
+ * worktree at create) without touching the source checkout. */
 export function setWorktreeIntentEntryScripts(
   intent: WorktreeIntent | null,
   workspacePath: string,
@@ -33,16 +27,8 @@ export function setWorktreeIntentEntryScripts(
   };
 }
 
-/**
- * Updates the `name` of a staged `worktree` entry's `type: "new"` branch
- * selection for `workspacePath`, preserving everything else (source,
- * `carryUncommittedChanges`, scripts). A no-op (same reference returned) when
- * the folder has no staged `worktree` entry, or its branch selection isn't
- * `"new"` - there is no generated name to replace for an `"existing"` checkout.
- * Used by the Environment dialog's repository-defaults section to offer
- * regenerating THIS picker's proposed branch name after a repo prefix save,
- * without touching any other staged intent.
- */
+/** Used by the Environment dialog's repository-defaults section to offer regenerating this picker's proposed
+ * branch name after a repo prefix save, without touching any other staged intent. */
 export function setWorktreeIntentEntryBranchName(
   intent: WorktreeIntent | null,
   workspacePath: string,
@@ -113,20 +99,7 @@ export function mergeWorktreeIntentEntry(
   return { entries: [...normalizedOthers, next] };
 }
 
-/**
- * Re-marks every staged entry's `isPrimary` bit to match `primaryPath` -
- * the target entry (if staged) flips true, every other staged entry flips
- * false. Entries are otherwise untouched (never removed, reordered, or
- * recreated - scripts and branch selections survive intact), and a call that
- * changes nothing returns the SAME reference so callers can skip a write.
- * Used when the explicit primary switches, so a staged intent set from
- * BEFORE the switch never sends a stale `isPrimary` to another consumer.
- *
- * This is a STAGING-time fixup, not the launch boundary: it can only restamp
- * entries that already exist, so promoting a folder with no staged entry (a
- * non-git folder is never auto-staged) leaves the intent with zero primaries
- * until `effectiveWorktreeIntent` canonicalizes it at launch.
- */
+/** This is a staging-time fixup, not the launch boundary. */
 export function restampWorktreeIntentPrimary(
   intent: WorktreeIntent | null,
   primaryPath: string,

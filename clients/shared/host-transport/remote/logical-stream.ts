@@ -11,22 +11,10 @@ import type {
 import type { QosClassValue } from "@traycer/protocol/host-transport/mux";
 
 /**
- * A single logical subscribe stream multiplexed over the shared session — the
- * mux-backed counterpart to a local `WsStreamClient` `StreamSession`, exposing
- * the identical `IStreamSession` surface so the typed wrappers
- * (`TerminalStreamClient`, …) run byte-for-byte unchanged (transport-seam spike).
- *
- * Unlike the local session it owns NO socket, timers, or reconnect loop — those
- * live once at the `RemoteSession` and fan out to every stream (shared fate: one
- * drop reconnects ALL streams). This object is only the per-stream frame surface
- * plus its status projection.
- *
- * Fire-and-forget parity: `sendClientFrame` while the session is not ready drops
- * the frame on the floor (Y.js CRDT / the terminal action protocol reconcile
- * above the transport), exactly like the local `IStreamSession` contract.
+ * Unlike the local session it owns NO socket, timers, or reconnect loop - those live once at the `RemoteSession` and fan out to every stream (shared fate: one drop reconnects all streams).
+ * This object is only the per-stream frame surface plus its status projection.
  */
 
-/** The session-side operations a logical stream needs (implemented by `RemoteSession`). */
 export interface LogicalStreamPort {
   /** Enqueues a stream frame (envelope + optional binary) for this stream. */
   sendStreamFrame(
@@ -36,13 +24,7 @@ export interface LogicalStreamPort {
   ): void;
   /** Sends a logical close intent for this stream, then forgets it. */
   closeStream(streamId: number, reason: string): void;
-  /**
-   * Asks the SHARED session to drop its socket and re-dial through its own
-   * backoff state machine. Per-stream by API (`IStreamSession.requestReconnect`)
-   * but session-wide in effect - shared fate means one stream's request
-   * reconnects every stream on this host, which is exactly what the caller
-   * (a post-sleep/wake liveness nudge) wants.
-   */
+  /** Asks the shared session to drop its socket and re-dial through its own backoff state machine. */
   requestSessionReconnect(reason: string): void;
 }
 
@@ -60,9 +42,7 @@ export interface LogicalStreamInit {
 
 export class LogicalStream implements IStreamSession {
   /**
-   * Mutable via {@link adoptStreamIdForReopen} only: a retryable per-stream
-   * FATAL tombstones the current id on BOTH peers (R-2), so the session
-   * re-keys the stream to a fresh id before re-opening it.
+   * Mutable via {@link adoptStreamIdForReopen} only: a retryable per-stream fatal tombstones the current id on both peers (R-2), so the session re-keys the stream to a fresh id before re-opening it.
    */
   private currentStreamId: number;
   readonly method: string;
@@ -71,14 +51,7 @@ export class LogicalStream implements IStreamSession {
   private schemaVersion: SchemaVersion;
   readonly requiredSchemaVersion: SchemaVersion | null;
   /**
-   * Whether `schemaVersion` has survived a real negotiation against the host
-   * manifest, as opposed to the PROVISIONAL client-canonical value the
-   * constructor is seeded with (`RemoteSession.subscribe` opens the stream
-   * before the host's manifest can be consulted).
-   *
-   * `getNegotiatedSchemaVersion` is gated on this: reporting the provisional
-   * value would claim a version the host never agreed to, which is precisely
-   * the "guessed high" failure the consumers of that value parse against.
+   * `getNegotiatedSchemaVersion` is gated on this: reporting the provisional value would claim a version the host never agreed to, which is precisely the "guessed high" failure the consumers of that value parse against.
    */
   private negotiated = false;
   private readonly port: LogicalStreamPort;
@@ -126,22 +99,14 @@ export class LogicalStream implements IStreamSession {
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
-    // `RemoteSession` may synchronously reject a new optional stream while a
-    // ready session checks its manifest. The subscription returns only after
-    // that check, so consumers necessarily install their handler after the
-    // terminal transition. Replay it once so they can fail over instead of
-    // remaining permanently pending.
+    // `RemoteSession` may synchronously reject a new optional stream while a ready session checks its manifest.
+    // The subscription returns only after that check, so consumers necessarily install their handler after the terminal transition.
     if (this.status === "closed") {
       handler(this.status, this.statusReason);
     }
   }
 
-  /**
-   * `IStreamSession.requestReconnect`. This object owns no socket or backoff
-   * loop, so it forwards to the shared `RemoteSession` (see
-   * `LogicalStreamPort.requestSessionReconnect`). No-op once disposed, matching
-   * the local session's "already closed" contract.
-   */
+  /** `IStreamSession.requestReconnect`. */
   requestReconnect(): void {
     if (this.disposed) {
       return;
@@ -161,13 +126,8 @@ export class LogicalStream implements IStreamSession {
   // ---- Session-driven hooks --------------------------------------------- //
 
   /**
-   * Adopts a fresh wire id for a retryable re-open. The FATAL that made the
-   * re-open necessary tombstoned the old id on BOTH sides (R-2 /
-   * `r2-host-stream-tombstone`): the host drops every later frame for a
-   * terminal id at ingest - a SUBSCRIBE included - so a re-open under the old
-   * id can never be answered on the connection that carried the verdict. The
-   * session owns allocation and its own map re-keying; this hook only moves
-   * the stream's outbound addressing with it.
+   * Adopts a fresh wire id for a retryable re-open.
+   * The session owns allocation and its own map re-keying; this hook only moves the stream's outbound addressing with it.
    */
   adoptStreamIdForReopen(streamId: number): void {
     this.currentStreamId = streamId;
@@ -184,12 +144,7 @@ export class LogicalStream implements IStreamSession {
     this.negotiated = true;
   }
 
-  /**
-   * `IStreamSession.getNegotiatedSchemaVersion`. `null` until the session has
-   * actually opened this stream against the host manifest, and `null` again
-   * from the moment the connection drops - mirroring the local
-   * `StreamSession`, which clears its own value in `resetForReconnect`.
-   */
+  /** `IStreamSession.getNegotiatedSchemaVersion`. */
   getNegotiatedSchemaVersion(): SchemaVersion | null {
     return this.negotiated ? this.schemaVersion : null;
   }
@@ -227,9 +182,8 @@ export class LogicalStream implements IStreamSession {
       this.disposed = true;
     }
     if (status !== "open") {
-      // The negotiated version belongs to the connection that negotiated it. A
-      // resume re-runs `openSubscription`, which re-establishes it; until then
-      // this stream has no agreed version, exactly as before its first open.
+      // The negotiated version belongs to the connection that negotiated it.
+      // A resume re-runs `openSubscription`, which re-establishes it; until then this stream has no agreed version, exactly as before its first open.
       this.negotiated = false;
     }
     this.transition(status, reason);

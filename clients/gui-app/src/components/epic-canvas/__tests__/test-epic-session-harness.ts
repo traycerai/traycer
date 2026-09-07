@@ -52,9 +52,9 @@ function makeMeta(
 }
 
 export interface TestEpicHarness {
-  /** Forward `seed` (a `(donor: Y.Doc) => void`) so the helper can also
-   * be used purely for layout-only sidebar tests that read no doc data.
-   * Pass `null` for both args to install with no seed and editor role. */
+  /**
+   * Forward `seed` (a `(donor: Y.Doc) => void`) so the helper can also be used purely for layout-only sidebar tests that read no doc data.
+   */
   readonly install: (
     seed: ((doc: Y.Doc) => void) | null,
     permissionRole: PermissionRole | null,
@@ -63,15 +63,7 @@ export interface TestEpicHarness {
 }
 
 /**
- * Test seam: install a deterministic in-memory stream client factory that
- * fires a single snapshot frame with the seeded Y.Doc immediately when
- * the provider first acquires its handle, so any consumer hook reading
- * the per-Epic store state observes `snapshotLoaded === true` from the
- * first render.
- *
- * Call `install()` in `beforeEach` BEFORE rendering, and `teardown()` in
- * `afterEach` to clear the factory + dispose the registry so subsequent
- * tests start from a clean slate.
+ * Call `install()` in `beforeEach` BEFORE rendering, and `teardown()` in `afterEach` to clear the factory + dispose the registry so subsequent tests start from a clean slate.
  */
 export function createEpicSessionTestHarness(epicId: string): TestEpicHarness {
   let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
@@ -80,18 +72,8 @@ export function createEpicSessionTestHarness(epicId: string): TestEpicHarness {
       seed: ((doc: Y.Doc) => void) | null,
       permissionRole: PermissionRole | null,
     ) => {
-      // THE WORKER SEAM, not the stream one. A stream factory built here
-      // lives on MAIN and cannot cross `postMessage` to a runtime that lives in
-      // the worker, which is why the stream override was deleted. What a suite
-      // supplies now is the worker's whole composition, built over its factory
-      // - the same construction `openStoreForTest` uses, through the one shared
-      // helper.
+      // A stream factory built here lives on MAIN and cannot cross `postMessage` to a runtime that lives in the worker, which is why the stream override was deleted.
       previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
-      // A FRESH helper per spawn. One instance owns one bridge pair and one
-      // composition, so a shared one would hand two sessions the same runtime
-      // - and would hand a re-acquired session a pipe its predecessor's
-      // `terminate()` already severed. Constructing per call is also what the
-      // deleted stream override did: the provider called it once per session.
       const buildWorker = (): RuntimeWorkerLike =>
         createInProcessEpicRuntimeWorker({
           streamClientFactory: (_factoryEpicId, callbacks) => {
@@ -101,11 +83,7 @@ export function createEpicSessionTestHarness(epicId: string): TestEpicHarness {
               seed(donor);
             }
             const snapshot = Y.encodeStateAsUpdate(donor);
-            // Fire connection + snapshot via setTimeout(0) so the per-Epic
-            // store's `create()` has fully returned before the callbacks
-            // touch state - calling them synchronously inside the factory
-            // would race the initial-state construction. Tests await one
-            // act() tick after render to flush this.
+            // Fire connection + snapshot via setTimeout(0) so the per-Epic store's `create()` has fully returned before the callbacks touch state - calling them synchronously inside the factory would race the initial-state construction.
             setTimeout(() => {
               stream.callbacks.onConnectionStatus("open", null);
               stream.callbacks.onSnapshot(
@@ -138,11 +116,8 @@ export function createEpicSessionTestHarness(epicId: string): TestEpicHarness {
       __setEpicRuntimeWorkerFactoryForTests(buildWorker);
     },
     teardown: () => {
-      // RESTORED to whatever was installed before, which for every jsdom suite
-      // is the setup file's coreless worker. `null` would mean "use the
-      // production constructor" - the one form jsdom cannot execute - so a
-      // teardown that nulled this would break the next test in the file rather
-      // than reset it.
+      // RESTORED to whatever was installed before, which for every jsdom suite is the setup file's coreless worker.
+      // `null` would mean "use the production constructor" - the one form jsdom cannot execute - so a teardown that nulled this would break the next test in the file rather than reset it.
       __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
       previousWorkerFactory = null;
       __getOpenEpicRegistryForTests().disposeAll();

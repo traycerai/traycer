@@ -23,12 +23,7 @@ import {
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 
-// `useChatSessionHandle`'s own module state (the process-wide registry) is
-// exercised for real below - only its collaborators are mocked, so the
-// rotation drives the REAL `authenticatedOwnerIdentityKey` computation, not
-// the `__setChatStreamClientFactoryForTests` test seam (which collapses BOTH
-// `transportKey` and `ownerIdentityKey` to one hardcoded string, structurally
-// unable to prove this discriminator - see `chat-tile.test.tsx`).
+// `useChatSessionHandle`'s own module state (the process-wide registry) is exercised for real below - only its collaborators are mocked, so the rotation drives the REAL `authenticatedOwnerIdentityKey` computation, not the.
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
@@ -40,12 +35,8 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => hostEntryRef.value,
 }));
 
-// `hostTransportKey` (reached through `authenticatedHostStreamKey`, exercised
-// for real below) asks this for live-session evidence. Unmocked, no test in
-// this file ever registers a real remote session, so it would always answer
-// `false` - fine for the "no ready session" direction, but unable to prove
-// the "a ready session survives a confirmed refusal" direction the single
-// transport-survival rule also requires.
+// `hostTransportKey` (reached through `authenticatedHostStreamKey`, exercised for real below) asks this for live-session evidence.
+// Unmocked, no test in this file ever registers a real remote session, so it would always answer `false` - fine for the "no ready session" direction, but unable to prove the "a ready session survives a confirmed refusal" direction the single.
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
 vi.mock(
   "@traycer-clients/shared/host-transport/remote/index",
@@ -78,13 +69,7 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => authServiceStub,
 }));
 
-// The real `useDurableStreamTransportFactory` returns a referentially-STABLE
-// opener (a `useCallback` with an empty dep array) - the acquire effect below
-// depends on it, so a mock returning a FRESH closure on every render would
-// re-run that effect every commit and loop forever (confirmed while building
-// the sibling terminal-registry rotation test). `stableOpenTransport` is
-// defined once, here, and indirects through the mutable ref so tests can
-// still swap behavior per-case.
+// The real `useDurableStreamTransportFactory` returns a referentially-STABLE opener (a `useCallback` with an empty dep array) - the acquire effect below depends on it, so a mock returning a FRESH closure on every render would re-run that effect every commit.
 const openTransportRef = vi.hoisted(
   (): { fn: ((hostId: string) => DurableStreamTransport) | null } => ({
     fn: null,
@@ -107,9 +92,8 @@ import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry` stamps it onto every entry at projection time.
+ * These fixtures describe an entitled account unless a case says otherwise.
  */
 const PLAN_ALLOWS_REMOTE = true;
 
@@ -272,11 +256,8 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     expect(tracked.records()).toHaveLength(1);
     expect(tracked.records()[0].closeCount).toBe(0);
 
-    // Same chatId/epicId/hostId, same signed-in user, same
-    // websocketUrl/version/status - ONLY the remote host's public key rotates
-    // (re-enrollment / corruption recovery). A pass proves `ownerIdentityKey`
-    // alone (folded into `chatSessionScopeKey`) forces the registry's own
-    // scope-key mismatch teardown, not a coincident host/user churn.
+    // Same chatId/epicId/hostId, same signed-in user, same websocketUrl/version/status - ONLY the remote host's public key rotates (re-enrollment / corruption recovery).
+    // A pass proves `ownerIdentityKey` alone (folded into `chatSessionScopeKey`) forces the registry's own scope-key mismatch teardown, not a coincident host/user churn.
     hostEntryRef.value = remoteTarget("pubkey-b");
     rerender();
 
@@ -290,22 +271,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
   });
 });
 
-/**
- * The P0's actual user-visible failure, composed end to end.
- *
- * The isolated tests all passed while this was broken, which is the point of
- * putting it here: the mapper collapsed `unknown` into a non-dialable entry,
- * `hostTransportKey` refused anything non-dialable, THIS registry released the
- * handle on the changed key, and `chat-tile` rendered `ChatTileLoading`
- * forever — while `useHostReachability` one layer up had just decided the same
- * host was reachable. Every layer was individually defensible.
- *
- * So the entry is built by the REAL mapper from a REAL registry row, and the
- * only thing that changes between the two renders is the cloud's connectivity
- * verdict. A synthetic literal would not do: it carries no `remoteStatus`, so
- * `hostUnavailability` falls to "offline" and the case under test cannot be
- * reached.
- */
+/** The P0's actual user-visible failure, composed end to end. */
 describe("a live chat session survives a degraded liveness read", () => {
   afterEach(() => {
     cleanup();
@@ -368,10 +334,7 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("unknown");
     rerender();
 
-    // Flush effects and microtasks before asserting survival: release is
-    // asynchronous (the release test above needs `waitFor`), so a synchronous
-    // read here would stay green even if a regression released the handle one
-    // microtask after the rerender.
+    // Flush effects and microtasks before asserting survival: release is asynchronous (the release test above needs `waitFor`), so a synchronous read here would stay green even if a regression released the handle one microtask after the rerender.
     await act(async () => {
       await Promise.resolve();
     });
@@ -382,10 +345,8 @@ describe("a live chat session survives a degraded liveness read", () => {
   });
 
   it("still releases the handle when the cloud CONFIRMS the host is offline, and no ready session is open", async () => {
-    // The other direction, so the test above cannot pass by the registry
-    // having simply stopped reacting to the directory at all. `readySessionHosts`
-    // is empty (default) here - see the counterpart below for the same
-    // transition WITH a ready session open, which must survive instead.
+    // The other direction, so the test above cannot pass by the registry having simply stopped reacting to the directory at all.
+    // `readySessionHosts` is empty (default) here - see the counterpart below for the same transition WITH a ready session open, which must survive instead.
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -411,21 +372,15 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("offline");
     rerender();
 
-    // The handle is released. The transport itself is not asserted here: the
-    // registry lingers it deliberately, so a close count is a statement about
-    // the eviction timer rather than about this decision.
+    // The handle is released.
+    // The transport itself is not asserted here: the registry lingers it deliberately, so a close count is a statement about the eviction timer rather than about this decision.
     await waitFor(() => {
       expect(result.current).toBeNull();
     });
   });
 
   it("keeps the handle when the cloud CONFIRMS the host is offline but a ready session is open", async () => {
-    // The single transport-survival rule, from the registry's side: a ready
-    // live session keeps the transport alive under ANY verdict, including a
-    // confirmed `offline` refusal - confirmed refusals gate NEW dials only.
-    // Without this the registry released the very handle the session was
-    // still using (`use-host-reachability.test.tsx` pins the hook's side of
-    // the same rule).
+    // The single transport-survival rule, from the registry's side: a ready live session keeps the transport alive under ANY verdict, including a confirmed `offline` refusal - confirmed refusals gate NEW dials only.
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -453,10 +408,7 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("offline");
     rerender();
 
-    // Flush effects and microtasks before asserting survival: release is
-    // asynchronous (the release test above needs `waitFor`), so a synchronous
-    // read here would stay green even if a regression released the handle one
-    // microtask after the rerender.
+    // Flush effects and microtasks before asserting survival: release is asynchronous (the release test above needs `waitFor`), so a synchronous read here would stay green even if a regression released the handle one microtask after the rerender.
     await act(async () => {
       await Promise.resolve();
     });

@@ -29,11 +29,7 @@ type ProseMirrorDocLike = {
 
 const THREAD_ANCHOR_MARK_NAME = "threadAnchor";
 
-/**
- * Walk a ProseMirror doc once and collect the document position of every
- * `threadAnchor` mark. Earliest position wins when a thread spans multiple
- * text nodes.
- */
+/** Walk a ProseMirror doc once and collect the document position of every `threadAnchor` mark. */
 export function scanThreadAnchorsFromDoc(
   doc: ProseMirrorDocLike,
 ): AnchorPositionMap {

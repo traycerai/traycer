@@ -10,21 +10,7 @@ import { capturePersistedAgentError } from "@/lib/report-issue-error-capture";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
-/**
- * The remedy for an env-credential auth failure, next to the row that names it.
- *
- * The message says which variable authenticated the turn; this is where the user
- * goes to stop it. The destination is the provider's **Env** tab, where an
- * explicit "Unset" row for that variable drops it from the harness spawn without
- * touching the user's shell - the one fix that actually works, and the one no
- * amount of re-signing-in could substitute for.
- *
- * The deep link rides the existing providers-focus intent (the same mechanism
- * the re-auth banner and the "Add API key" CTA use), so this adds no navigation
- * plumbing of its own. Without a known harness the intent is skipped and the
- * user lands on the Providers section root rather than an arbitrary provider's
- * settings - a shorter trip to the right place beats a confident wrong one.
- */
+/** Without a known harness the intent is skipped and the user lands on the Providers section root rather than an arbitrary provider's settings - a shorter trip to the right place beats a confident wrong one. */
 function EnvCredentialSettingsAction({
   harnessId,
 }: {
@@ -58,9 +44,8 @@ interface ErrorSegmentProps {
   harnessId: GuiHarnessId | null;
 }
 
-// Static error row. Auth errors (`code: "auth"`) render here like any other
-// error - the durable transcript row is what keeps a headless (A2A-triggered)
-// auth failure visible after the composer's re-auth banner clears.
+// Static error row.
+// Auth errors (`code: "auth"`) render here like any other error - the durable transcript row is what keeps a headless (A2A-triggered) auth failure visible after the composer's re-auth banner clears.
 export function ErrorSegment({
   code,
   findUnitId,
@@ -68,23 +53,8 @@ export function ErrorSegment({
   recoverable,
   harnessId,
 }: ErrorSegmentProps) {
-  // Built at CLICK time, never at render. This row is durable transcript: it
-  // mounts whenever the chat is opened, which is one or more commits BEFORE
-  // `SupportContextRegistryBridge`'s effects publish that chat's own
-  // id/harness/model (chat state arrives through a store subscription, so it
-  // trails a route change by two commits). Both `buildReportIssueDraftContext`
-  // and `capturePersistedAgentError` snapshot that registry, and the harness
-  // id doubles as the fingerprint's `causalProvider` - so building at render
-  // would file the report under the PREVIOUSLY open chat and cluster it under
-  // the wrong provider. Report time is the only moment the registry is known
-  // to describe this row's chat. Deferring also keeps the draft honest when
-  // the runtime accumulator replaces a same-blockId error under a MOUNTED row
-  // (blockId is this row's React key) - the click reads today's props.
-  //
-  // The real message/code reach ONLY the private diagnostics branch - the
-  // public prefill stays null-bodied because both fields are host/harness-
-  // supplied free text and the public context does no redaction (see the
-  // hostile transcript-code test).
+  // Built at CLICK time, never at render.
+  // Both `buildReportIssueDraftContext` and `capturePersistedAgentError` snapshot that registry, and the harness id doubles as the fingerprint's `causalProvider` - so building at render would file the report under the PREVIOUSLY open chat and cluster it under the wrong provider.
   const buildReportContext = useCallback(
     () =>
       buildReportIssueDraftContext(

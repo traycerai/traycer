@@ -96,19 +96,13 @@ function exit(exitCode: number): TerminalExitFrame {
   };
 }
 
-// A snapshot from a host that negotiated ack-credit support. The renderer
-// gates sending `ack` frames on having seen this confirmed at least once
-// (see `ackCreditSupported` in `terminal-session-store.ts`), so ack-credit
-// tests must send one before exercising the accounting.
+// A snapshot from a host that negotiated ack-credit support.
 function snapshotWithAckCredit(scrollback: string): TerminalSnapshotFrame {
   return { ...snapshot(scrollback), ackCreditSupported: true };
 }
 
 // `onSnapshot`/`onData` take the content as a second, separate argument (see
-// `TerminalStreamCallbacks`'s doc comment) so a `@1.2` binary connection can
-// pass a `Uint8Array` instead of reading it off the frame. These test frame
-// builders still carry the content inline for readability, so route through
-// these to derive the second argument automatically.
+// `TerminalStreamCallbacks`'s doc comment) so a `@1.2` binary connection can pass a `Uint8Array`
 function emitSnapshot(
   callbacks: TerminalStreamCallbacks,
   frame: TerminalSnapshotFrame,
@@ -521,11 +515,7 @@ describe("createTerminalSessionStore", () => {
     emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
     harness.sendAction.mockClear();
 
-    // Stream drops -> "lost". A container resize landing now (pane relayout
-    // while disconnected) must be remembered, not dropped: the xterm engine
-    // records every report in its own dedupe before the store sees it, so a
-    // drop here is never re-offered and the session stays latched at the
-    // pre-disconnect grid after the reconnect.
+    // Stream drops -> "lost".
     harness.callbacks().onConnectionStatus("closed", null);
     expect(harness.handle.store.getState().status).toBe("lost");
     const actionId = harness.handle.store.getState().requestResize(132, 40);
@@ -672,11 +662,8 @@ describe("createTerminalSessionStore", () => {
     const harness = createHarness();
 
     emitSnapshot(harness.callbacks(), snapshot(""));
-    // The host's setup-terminal reap kills a session its canvas tile is
-    // actively subscribed to: `handlePtyExit` broadcasts a `sessionUpdated`
-    // frame carrying the reason, then a reasonless `exit` frame. The store
-    // must keep the reason across both, or the tile reports the reap as
-    // "exited unexpectedly".
+    // The host's setup-terminal reap kills a session its canvas tile is actively subscribed to:
+    // `handlePtyExit` broadcasts a `sessionUpdated` frame carrying the reason, then a reasonless
     harness.callbacks().onSessionUpdated({
       kind: "sessionUpdated",
       hasBinaryPayload: false,
@@ -740,9 +727,8 @@ describe("createTerminalSessionStore", () => {
     it("never sends an ack frame until a snapshot confirms ack-credit support", () => {
       const harness = createHarness();
       harness.callbacks().onConnectionStatus("open", null);
-      // Old-host-style snapshot: no `ackCreditSupported` field at all, so
-      // the renderer must never send an `ack` frame - a `1.0` host's frame
-      // schema can't parse "ack" and would just log malformed-frame warnings.
+      // Old-host-style snapshot: no `ackCreditSupported` field at all, so the renderer must never send
+      // an `ack` frame - a `1.0` host's frame schema can't parse "ack" and would just log
       emitSnapshot(harness.callbacks(), snapshot(""));
       const writes: TerminalWrite[] = [];
       harness.handle.store.getState().setWriter((write) => {
@@ -869,17 +855,14 @@ describe("createTerminalSessionStore", () => {
         emitData(harness.callbacks(), data("stale chunk"));
         const staleWrite = writes.filter((write) => write.kind === "live")[0];
 
-        // Reconnect: the host mints a fresh subscriber with unackedBytes
-        // reset to 0, and its own snapshot re-confirms ack-credit support -
-        // isolating this test to the generation check, not the capability
-        // gate, as the reason the stale callback is ignored.
+        // Reconnect: the host mints a fresh subscriber with unackedBytes reset to 0, and its own snapshot
+        // re-confirms ack-credit support - isolating this test to the generation check, not the capability
         harness.callbacks().onConnectionStatus("reconnecting", null);
         harness.callbacks().onConnectionStatus("open", null);
         emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
 
-        // The stale write's parse-completion callback finally fires late,
-        // after the reconnect - it must not start a new coalescing window
-        // or ever be acked against the fresh subscriber.
+        // The stale write's parse-completion callback finally fires late, after the reconnect - it must
+        // not start a new coalescing window or ever be acked against the fresh subscriber.
         staleWrite.onAckable();
         vi.advanceTimersByTime(1000);
 

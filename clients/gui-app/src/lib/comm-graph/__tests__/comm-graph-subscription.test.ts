@@ -126,9 +126,8 @@ describe("CommGraphSubscriptionManager", () => {
     manager.setHostIds(["host-a", "host-b"]);
 
     opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 100 })], 1);
-    // Host B hands over its whole history LATE, and its rows sort ABOVE
-    // everything host A holds. Against a single merged high-water mark this
-    // reads as a burst of activity; against host B's own boundary it is history.
+    // Host B hands over its whole history LATE, and its rows sort ABOVE everything host A holds.
+    // Against a single merged high-water mark this reads as a burst of activity; against host B's own boundary it is history.
     opened[1].handlers.onSnapshot(
       [
         makeEvent({ id: 1, timestamp: 300 }),
@@ -174,10 +173,8 @@ describe("CommGraphSubscriptionManager", () => {
   });
 
   it("classes capped-snapshot overflow as history, not arrivals", () => {
-    // The snapshot is BOUNDED: on a large backlog it is a prefix of the gap
-    // and the remainder legally arrives as `event` frames. The wire headId -
-    // the log's head at handoff - is what keeps that day-old overflow from
-    // pulsing as live traffic.
+    // The snapshot is BOUNDED: on a large backlog it is a prefix of the gap and the remainder legally arrives as `event` frames.
+    // The wire headId - the log's head at handoff - is what keeps that day-old overflow from pulsing as live traffic.
     const { opened, opener } = createFakeOpener();
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
@@ -362,9 +359,7 @@ describe("CommGraphSubscriptionManager", () => {
   });
 
   it("mutes a host that keeps failing to dial instead of spinning on reconnecting", () => {
-    // A host with no dialable endpoint (removed / offline) only ever cycles
-    // connecting → reconnecting, so without a bounded reporting rule its agents
-    // would read "Reconnecting…" forever and never reach the muted state.
+    // A host with no dialable endpoint (removed / offline) only ever cycles connecting → reconnecting, so without a bounded reporting rule its agents would read "Reconnecting…" forever and never reach the muted state.
     const { opened, opener } = createFakeOpener();
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
@@ -451,9 +446,8 @@ describe("CommGraphSubscriptionManager", () => {
   });
 
   it("sorts an older row that arrives as an event frame into place", () => {
-    // `snapshot` is a BOUNDED initial batch, not a completeness claim: overflow
-    // rows and reconnect gap-fills arrive as `event` frames and can predate
-    // what we already hold. Frame kind is transport batching only.
+    // `snapshot` is a BOUNDED initial batch, not a completeness claim: overflow rows and reconnect gap-fills arrive as `event` frames and can predate what we already hold.
+    // Frame kind is transport batching only.
     const { opened, opener } = createFakeOpener();
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
@@ -516,10 +510,8 @@ describe("CommGraphSubscriptionManager", () => {
 });
 
 /**
- * Every dial and every close in this manager is nonthrowing by construction:
- * `open` is reachable only through the contained wrapper, and `closeEntry`
- * contains its own disposer. These pin the two paths that used to bypass that -
- * the stream STATUS CALLBACK's resume dial, and the teardown loops.
+ * Every dial and every close in this manager is nonthrowing by construction: `open` is reachable only through the contained wrapper, and `closeEntry` contains its own disposer.
+ * These pin the two paths that used to bypass that - the stream STATUS CALLBACK's resume dial, and the teardown loops.
  */
 describe("CommGraphSubscriptionManager failure containment", () => {
   it("contains a throwing resume dial from the stream status callback", () => {

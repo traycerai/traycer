@@ -5,14 +5,8 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
 
 /**
- * Resolves holder `ownerRef`s to the live chat / terminal-agent titles the
- * GUI already shows in the tab strip. Open epic sessions are the source;
- * unnamed owners stay absent so the formatter falls back to "This agent"
- * instead of a hold-kind label.
- *
- * Subscribes to the registry AND each open epic's session store so a rename
- * under an open dialog updates the actor row. `registry.size()` alone misses
- * title changes in an already-open epic.
+ * Resolves holder `ownerRef`s to the live chat / terminal-agent titles the GUI already shows in the tab strip.
+ * Open epic sessions are the source; unnamed owners stay absent so the formatter falls back to "This agent" instead of a hold-kind label.
  */
 export function useTeardownAgentNames(
   holders: readonly WorktreeBusyHolder[],

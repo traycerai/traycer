@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -135,9 +133,7 @@ function renderPanel(): void {
   );
 }
 
-// ---------------------------------------------------------------------------
-// B. Sticky updates degrade — the whole region retires
-// ---------------------------------------------------------------------------
+// B.
 
 describe("<HostSettingsPanel /> Overview updates region — sticky vs transient degrade", () => {
   it("check-side cli-unavailable retires the WHOLE region, Check-now included", async () => {
@@ -166,12 +162,8 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
   });
 
   it("install-side cli-unavailable retires the region too — Check-now disappears with it", async () => {
-    // The check TRACKS the install's discovery. Discovering the refusal kicks
-    // an immediate re-check whose fresh answer owns recovery, so a fixture
-    // whose check kept answering ok would model an impossible host — install
-    // and check shell the same CLI — and that re-check's ok would then
-    // LEGITIMATELY un-retire the region, turning this pin into a race on
-    // whether the assertion or the refetch settles first.
+    // Discovering the refusal kicks an immediate re-check whose fresh answer owns recovery, so a fixture whose
+    // check kept answering ok would model an impossible host - install and check shell the same CLI.
     let cliGone = false;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -285,9 +277,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
   });
 });
 
-// ---------------------------------------------------------------------------
-// C. Labeled-host no-op rename
-// ---------------------------------------------------------------------------
+// C.
 
 describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched draft is not dirty", () => {
   it("an untouched draft issues no write, and typing the systemName stores an override rather than clearing", async () => {
@@ -308,23 +298,15 @@ describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched d
     const input = await screen.findByTestId<HTMLInputElement>(
       "host-overview-name-input",
     );
-    // Seeded with the LABEL (`effectiveName`), not the systemName — a
-    // `TRAYCER_HOST_LABEL` host has no override, so the draft opens on the
-    // label the host is actually showing.
+    // Seeded with the label (`effectiveName`), not the systemName - a `TRAYCER_HOST_LABEL` host has no override,
+    // so the draft opens on the label the host is actually showing.
     expect(input.value).toBe("Build Box");
 
-    // COMMITTING AN UNTOUCHED DRAFT WRITES NOTHING. This is what the disabled
-    // Save button used to assert, and it survived the editor becoming an inline
-    // input — it is now enforced twice over, by `useInlineRename` skipping an
-    // unchanged commit and by `submitRename`'s own no-op guard. Worth keeping
-    // because the write is not harmless: storing the current effective name as
-    // an explicit `customName` FREEZES a label that would otherwise keep
-    // tracking the host.
+    // Worth keeping because the write is not harmless: storing the current effective name as an explicit
+    // `customName` freezes a label that would otherwise keep tracking the host.
     fireEvent.keyDown(input, { key: "Enter" });
-    // The absence must not be read in the same tick it was created: the write
-    // path runs through a mutation, so a regressed guard's `host.identity.set`
-    // reaches the fixture a task later. Settle the editor close, then flush a
-    // full macrotask so a queued write would have LANDED before the zero-read.
+    // The absence must not be read in the same tick it was created: the write path runs through a mutation, so a
+    // regressed guard's `host.identity.set` reaches the fixture a task later.
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-name-input")).toBeNull();
     });
@@ -344,10 +326,8 @@ describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched d
     expect(fixture.identity().customName).toBe("Studio Two");
     expect(fixture.identity().effectiveName).toBe("Studio Two");
 
-    // The pin: typing the machine's own SYSTEM name must not be treated as
-    // "clear the override" the way the local CLI-bridge rule treats it — the
-    // host owns the label, and `customNameFromIdentityDraft` stores it as a
-    // real override instead.
+    // The pin: typing the machine's own system name must not be treated as "clear the override" the way the local
+    // CLI-bridge rule treats it - the host owns the label.
     fireEvent.click(await waitForButton("Edit name"));
     const reopened = await screen.findByTestId<HTMLInputElement>(
       "host-overview-name-input",
@@ -361,9 +341,7 @@ describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched d
   });
 });
 
-// ---------------------------------------------------------------------------
-// D. Arm-time capture pins — the four RPCs the mutations suite left uncovered
-// ---------------------------------------------------------------------------
+// Arm-time capture pins - the four RPCs the mutations suite left uncovered
 
 describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs", () => {
   it("host.doctor: a scope move mid-flight does not redirect the request to the new host", async () => {
@@ -426,7 +404,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     await screen.findByText("Running Doctor…");
 
-    // Move the scope to another host WHILE the request is still parked.
+    // Move the scope to another host while the request is still parked.
     hostBindingMock.current = { hostClient: fixtureB.client };
     scopeOverrides.current = scopeFrom("host-b", fixtureB);
     view.rerender(makeUi());
@@ -442,19 +420,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     expect(otherHostCalls).toBe(0);
   });
 
-  // Rewritten when `host.update.check` became a QUERY that fires on mount.
-  //
-  // The old pin was `otherHostCalls === 0` — no second call at all — which only
-  // held because the check was imperative and nothing but a click could start
-  // one. Under an automatic read, host-b asking for itself is the FEATURE, so
-  // that assertion would now fail for the right reason, and asserting it still
-  // would pin the page shut against the change it was rewritten for.
-  //
-  // What survives is the invariant the arm-time capture actually protects: one
-  // host's answer must never be displayed under another host's name. The two
-  // fixtures return DIFFERENT versions so the rendered sentence names which host
-  // answered, and host-a's parked reply is released LAST, after the page has
-  // already moved on.
+  // What survives is the invariant the arm-time capture actually protects: one host's answer must never be
+  // displayed under another host's name.
   it("host.update.check: a late answer never lands on the host the page moved to", async () => {
     let releaseCheck: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
@@ -519,7 +486,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     scopeOverrides.current = scopeFrom("host-b", fixtureB);
     view.rerender(makeUi());
 
-    // host-b asks for ITSELF, which is the whole point of an automatic check.
+    // host-b asks for itself, which is the whole point of an automatic check.
     await waitFor(() => {
       expect(otherHostCalls).toBe(1);
     });
@@ -712,13 +679,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
       expect(armedHostCalls).toBe(1);
     });
     expect(otherHostCalls).toBe(0);
-    // No DOM assertion beyond this: `HostSettingsPanelInner` is keyed by
-    // `scope.hostId` (clone-not-migrate), so the scope move above already
-    // unmounted the tree that armed this request — the same reason the
-    // `host.restart` and `host.identity.set` pins in
-    // `host-overview-mutations.test.tsx` stop at their call counters instead
-    // of asserting on post-move UI. What matters, and what the counters
-    // above prove, is that the already-in-flight request stayed bound to the
+    // What matters, and what the counters above prove, is that the already-in-flight request stayed bound to the
     // client it was armed against and never reached host-b's handler.
   });
 });

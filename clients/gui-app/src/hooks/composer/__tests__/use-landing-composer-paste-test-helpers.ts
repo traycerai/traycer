@@ -1,7 +1,4 @@
-/**
- * Shared fixtures for the useLandingComposerPaste split suites.
- * Mock mechanics (vi.mock, hoisted maps) stay in each test module.
- */
+/** Shared fixtures for the useLandingComposerPaste split suites. */
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";

@@ -500,10 +500,7 @@ describe("<TileFindBar />", () => {
       // The debounce window is still open: no search has fired yet.
       expect(adapter.searchInputs).toHaveLength(0);
 
-      // The desktop menu Find Next path goes through the store
-      // (advanceActiveOwner -> next), bypassing the bar's own handleNavigate. The
-      // bar-registered flush must run the pending search now (revealing the first
-      // match) and skip advancing the prior query's stale matches.
+      // The bar-registered flush must run the pending search now (revealing the first match) and skip advancing the prior query's stale matches.
       act(() => {
         useTileFindStore.getState().advanceActiveOwner(1);
       });

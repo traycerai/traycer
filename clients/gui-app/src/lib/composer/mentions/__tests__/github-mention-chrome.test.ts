@@ -52,11 +52,7 @@ function baseInput(
 
 describe("githubMentionChromeFor — gh-unavailable notice suppression", () => {
   it("suppresses the ⓘ even when a notice is supplied, and raises the banner", () => {
-    // Safety property: host is contracted to send notice:null on this status,
-    // but a host that breaks the contract must still degrade to one honest
-    // message — not a pause countdown that never resolves. Passing a real
-    // notice here is load-bearing: catalogNotice:null would still pass if the
-    // suppression line were deleted.
+    // Safety property: host is contracted to send notice:null on this status, but a host that breaks the contract must still degrade to one honest message - not a pause countdown that never resolves.
     const chrome = githubMentionChromeFor(
       baseInput({
         section: "issues",
@@ -74,10 +70,8 @@ describe("githubMentionChromeFor — gh-unavailable notice suppression", () => {
   });
 
   /**
-   * The SEARCH is the read that can discover this first. The catalog read is
-   * cache-only, so a host whose `gh` disappeared after the last sweep still
-   * answers it happily - and building the banner from the catalog alone left
-   * the typed search returning nothing with no explanation on screen.
+   * The SEARCH is the read that can discover this first.
+   * The catalog read is cache-only, so a host whose `gh` disappeared after the last sweep still answers it happily - and building the banner from the catalog alone left the typed search returning nothing with no explanation on screen.
    */
   it("raises the banner when only the live search reports gh-unavailable", () => {
     const chrome = githubMentionChromeFor(
@@ -221,9 +215,7 @@ describe("githubMentionChromeFor — refresh, searching, and leash", () => {
 
 describe("githubMentionChromeFor — errored appended status", () => {
   it("appends the errored row when the read failed outright and nothing is searching", () => {
-    // A rejection carries no response, so none of the answered chrome can
-    // move on it - the appended row is the only honest report that the ask
-    // died, and it must show whenever the section is not mid-retry.
+    // A rejection carries no response, so none of the answered chrome can move on it - the appended row is the only honest report that the ask died, and it must show whenever the section is not mid-retry.
     const chrome = githubMentionChromeFor(
       baseInput({ errored: true, searching: false }),
     );
@@ -234,9 +226,7 @@ describe("githubMentionChromeFor — errored appended status", () => {
   });
 
   it("lets a fresh search supersede the old failure", () => {
-    // Retries keep `searching` true for as long as they run, so the row that
-    // shows while a retry is in flight must be the searching row - a new ask
-    // supersedes the old one, and a spinning row must never claim `busy: false`.
+    // Retries keep `searching` true for as long as they run, so the row that shows while a retry is in flight must be the searching row - a new ask supersedes the old one, and a spinning row must never claim `busy: false`.
     const chrome = githubMentionChromeFor(
       baseInput({ errored: true, searching: true }),
     );
@@ -247,9 +237,7 @@ describe("githubMentionChromeFor — errored appended status", () => {
   });
 
   it("appends nothing once neither searching nor errored is true", () => {
-    // The control: `errored: false` (the default `baseInput` already carries)
-    // must not itself grow a row - only `searching` or a real `errored: true`
-    // do.
+    // The control: `errored: false` (the default `baseInput` already carries) must not itself grow a row - only `searching` or a real `errored: true` do.
     const chrome = githubMentionChromeFor(
       baseInput({ errored: false, searching: false }),
     );

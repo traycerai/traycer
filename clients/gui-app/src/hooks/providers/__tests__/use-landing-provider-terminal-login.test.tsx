@@ -167,11 +167,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     expect(landingTerminalLayoutFor(state, otherLandingPageId).panelOpen).toBe(
       true,
     );
-    // Exactly one page recorded a layout, and it is the one `start()` named -
-    // the id genuinely comes from the call-time argument rather than some
-    // hook-bound default. (Read on the KEYED layouts: with no anchor mounted
-    // the page-less recovery also opens every page that has none, so a
-    // resolved `panelOpen` cannot tell the two apart.)
+    // Exactly one page recorded a layout, and it is the one `start()` named - the id genuinely comes from the call-time argument rather than some hook-bound default.
     expect(Object.keys(state.layoutsByLandingPageId)).toEqual([
       otherLandingPageId,
     ]);
@@ -370,10 +366,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     const { wrapper } = makeWrapper();
     const { result } = renderStarter(wrapper, null);
 
-    // Two presses on one instance before the first answers - a double click
-    // ahead of the `isPending` re-render. `onSuccess` is mutation-level and
-    // closes over the hook, so a page read back from a ref there would name
-    // the SECOND press for both.
+    // Two presses on one instance before the first answers - a double click ahead of the `isPending` re-render.
     act(() => {
       result.current.start("draft-first");
       result.current.start("draft-second");

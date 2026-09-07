@@ -7,9 +7,7 @@ import {
 } from "../transition/probe";
 
 // T6 spawn-probe verification: frame->marker mapping exhaustiveness (incl.
-// os-error) and marker correlation/attestation/indeterminate, against the
-// real `transition/probe.ts` (landed after this suite's first draft — see
-// the T6 test-authoring report for the earlier proposal these superseded).
+// os-error) and marker correlation/attestation/indeterminate, against the real `transition/probe.ts` (landed after this suite's first draft - see the T6 test-authoring report for the earlier proposal these superseded).
 
 const ALL_LAYER0_FRAMES: readonly Layer0Frame[] = [
   { attemptId: "attempt-acquired", layer0: "acquired" },
@@ -38,10 +36,8 @@ const ALL_LAYER0_FRAMES: readonly Layer0Frame[] = [
     cause: "fs-unsupported",
     evidence: "known-network filesystem 'nfs'; lock is best-effort",
   },
-  // Every cause the host can attach to a degraded start. There is no
-  // `layer0: "unavailable"` arm here because the host has none: the union is
-  // imported from `@traycer/protocol` now, so writing one would not compile
-  // rather than sitting in a fixture list pretending to be covered.
+  // Every cause the host can attach to a degraded start.
+  // There is no `layer0: "unavailable"` arm here because the host has none: the union is imported from `@traycer/protocol` now, so writing one would not compile rather than sitting in a fixture list pretending to be covered.
   {
     attemptId: "attempt-degraded-addon",
     layer0: "degraded",
@@ -304,11 +300,6 @@ describe("interpretProbeMarker — correlation, attestation, and never-evict ind
   });
 
   it("fast-decline race (R5-1): readiness is still 'not-ready' by the time the reconciler looks, but the correlated+attested lock-declined marker is accepted regardless — the reconciler never re-samples launchd", () => {
-    // The whole point of producer-side attestation is that it must validate
-    // even when the reconciler is scheduled long after the short-lived probe
-    // supervisor has already exited (readiness never reaches "ready" via
-    // this path at all — lock-declined does not go through the readiness
-    // rungs).
     const verdict = interpretProbeMarker({
       marker: marker({
         attestation: {

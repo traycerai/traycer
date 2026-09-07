@@ -24,10 +24,8 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 
 describe("fileChangeBlockSchema backward-compat", () => {
   it("parses a pre-compaction file_change block (no hashes/counts) via defaults", () => {
-    // A block persisted before the payload-compaction change: it carries the
-    // old inline beforeContent/afterContent (now unknown keys, stripped) and
-    // lacks beforeHash/afterHash/additions/deletions. It must parse cleanly -
-    // a hard ZodError here would break agent.getTranscript for the whole chat.
+    // A block persisted before the payload-compaction change: it carries the old inline beforeContent/afterContent (now unknown keys, stripped) and lacks beforeHash/afterHash/additions/deletions.
+    // It must parse cleanly - a hard ZodError here would break agent.getTranscript for the whole chat.
     const legacy = {
       type: "file_change",
       blockId: "blk-legacy",
@@ -53,10 +51,8 @@ describe("fileChangeBlockSchema backward-compat", () => {
   });
 
   it("parses a pre-refactor tool_call block (raw input, no summary/detail) via defaults", () => {
-    // A block persisted before the structured-input refactor: it carries the
-    // old inline `input` (now an unknown key, stripped) and lacks
-    // inputSummary/inputDetail/taskTodoItems. It must parse cleanly - a hard
-    // ZodError here would break agent.getTranscript for the whole chat.
+    // A block persisted before the structured-input refactor: it carries the old inline `input` (now an unknown key, stripped) and lacks inputSummary/inputDetail/taskTodoItems.
+    // It must parse cleanly - a hard ZodError here would break agent.getTranscript for the whole chat.
     const legacy = {
       type: "tool_call",
       blockId: "tc-legacy",
@@ -281,9 +277,6 @@ describe("toolCallManagedCommandSchema (started/restarted union)", () => {
   };
 
   it("parses a legacy identity-only managedCommand (pre-restart-correlation) as a started event with cwd:null", () => {
-    // Every block stamped before restarts were correlated carries only the
-    // identity fields - the union's started member defaults `event` and
-    // `cwd` so this old shape still parses instead of failing the block.
     const block = contentBlockSchema.parse({
       ...baseToolCall,
       managedCommand: {
@@ -339,9 +332,7 @@ describe("toolCallManagedCommandSchema (started/restarted union)", () => {
     });
     expect(block.managedCommand).toEqual(restarted);
 
-    // Through the full contentBlockSchema union too - the restarted member is
-    // tried FIRST precisely so a shape carrying its own required `event`
-    // literal is never reinterpreted as a defaulted started shape.
+    // Through the full contentBlockSchema union too - the restarted member is tried FIRST precisely so a shape carrying its own required `event` literal is never reinterpreted as a defaulted started shape.
     const viaContentBlock = contentBlockSchema.parse({
       ...baseToolCall,
       managedCommand: restarted,
@@ -445,13 +436,8 @@ describe("subAgentBlockSchema workflowMeta (no new persisted block type)", () =>
   });
 
   it("old-reader compat: a pre-workflowMeta subAgentBlockSchema parses a workflowMeta-bearing block, stripping the unknown key (plan invariant 6)", () => {
-    // Field-for-field copy of `subAgentBlockSchema` as it existed before
-    // `workflowMeta` was added - stands in for a released host's baked schema.
-    // Persisted bytes must stay readable by any released host (tech plan
-    // §2.2 / critique finding 1: no new block `type`, only an
-    // additive/defaulted field on the existing `subagent` block). A hard
-    // ZodError here would make a chat containing a workflow run entirely
-    // unreadable on an older host, not just degraded.
+    // Field-for-field copy of `subAgentBlockSchema` as it existed before `workflowMeta` was added - stands in for a released host's baked schema.
+    // Persisted bytes must stay readable by any released host (tech plan §2.2 / critique finding 1: no new block `type`, only an additive/defaulted field on the existing `subagent` block).
     const preWorkflowMetaSubAgentBlockSchema = z.object({
       blockId: z.string(),
       status: z.enum([
@@ -495,12 +481,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   };
 
   it("decodes a raw pre-wakeTriggers stored block (v1.1.3 data, NO schema parse) without throwing", () => {
-    // The host's storage hot path (`decodeStoredBlock` in
-    // `chat-message-collections.ts`) calls this function on raw Yjs JSON
-    // WITHOUT a schema parse, so `.default([])` never runs: every
-    // autonomous_resume block written before the wakeTriggers key existed
-    // lacks it entirely. Regression: this exact shape crashed every chat
-    // open with "Cannot read properties of undefined (reading 'length')".
+    // The host's storage hot path (`decodeStoredBlock` in `chat-message-collections.ts`) calls this function on raw Yjs JSON WITHOUT a schema parse, so `.default([])` never runs: every autonomous_resume block written before.
+    // Regression: this exact shape crashed every chat open with "Cannot read properties of undefined (reading 'length')".
     const rawV113Stored = {
       ...baseFields,
       triggers: [
@@ -538,10 +520,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   });
 
   it("round-trips a live trigger through the storage codec", () => {
-    // `live` says the producing command was STILL RUNNING when the digest was
-    // rendered - the one thing the `status` enum cannot express. It has to
-    // survive the encode/decode the storage path puts every block through, or
-    // the divider would silently revert to claiming the command finished.
+    // `live` says the producing command was STILL RUNNING when the digest was rendered - the one thing the `status` enum cannot express.
+    // It has to survive the encode/decode the storage path puts every block through, or the divider would silently revert to claiming the command finished.
     const stored = {
       ...baseFields,
       triggers: [
@@ -643,9 +623,6 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   });
 
   it("v1.1.3 hosts would strip the unknown wakeTriggers key and still parse (empty-marker degradation)", () => {
-    // Simulates the OLD closed enum (no "wakeup") plus the absence of the
-    // wakeTriggers key entirely - what a v1.1.3 `chatSchema.safeParse` sees
-    // once new-host writes have gone through `encodeAutonomousResumeBlock`.
     const oldEnumTriggerSchema = z.object({
       kind: z.enum(["command", "monitor", "subagent"]),
       title: z.string(),
@@ -791,11 +768,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   });
 
   it("importing hostStreamRpcRegistry succeeds and both JSON-schema IO modes generate without throwing", () => {
-    // Regression guard for the actual bug this codec fixes: a plain
-    // `.transform()` here would make `hostStreamRpcRegistry`'s module-load-time
-    // validation throw "Transforms cannot be represented in JSON Schema" the
-    // moment any `chat.subscribe` contract (which embeds `chatSchema`, which
-    // embeds this block) gets its fields JSON-schema-serialized.
+    // Regression guard for the actual bug this codec fixes: a plain `.transform()` here would make `hostStreamRpcRegistry`'s module-load-time validation throw "Transforms cannot be represented in JSON Schema" the moment any.
     expect(Object.keys(hostStreamRpcRegistry)).toContain("chat.subscribe");
     expect(() => z.toJSONSchema(contentBlockSchema)).not.toThrow();
     expect(() =>
@@ -907,11 +880,8 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
   });
 
   it("old-reader compat: a pre-providerNotice textBlockSchema parses a providerNotice-bearing block, stripping the unknown key", () => {
-    // Field-for-field copy of `textBlockSchema` as it existed before
-    // `providerNotice` was added - stands in for a released host's baked
-    // schema. A provider-notice text block must stay readable by any
-    // released host as plain assistant text (tech plan: compatibility-safe
-    // persisted shape, no new `ContentBlock.type`).
+    // Field-for-field copy of `textBlockSchema` as it existed before `providerNotice` was added - stands in for a released host's baked schema.
+    // A provider-notice text block must stay readable by any released host as plain assistant text (tech plan: compatibility-safe persisted shape, no new `ContentBlock.type`).
     const preProviderNoticeTextBlockSchema = z.object({
       blockId: z.string(),
       status: z.enum(["streaming", "completed", "errored"]),
@@ -957,11 +927,8 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
   });
 
   it("keeps harness_message off every released line: the pre-Reasonix freeze rejects it", () => {
-    // `contentBlockSchemaPreImage` / `PreSettlement` are bound to the released
-    // `chat.subscribe@1.0`-`1.6` lines and the epic `2.0` record. A released
-    // peer strict-decodes the kind, so the freeze must reject the value rather
-    // than strip it - the host's frame projection is what keeps it from ever
-    // being sent (`chat-frame-projection.ts`).
+    // `contentBlockSchemaPreImage` / `PreSettlement` are bound to the released `chat.subscribe@1.0`-`1.6` lines and the epic `2.0` record.
+    // A released peer strict-decodes the kind, so the freeze must reject the value rather than strip it - the host's frame projection is what keeps it from ever being sent (`chat-frame-projection.ts`).
     expect(
       contentBlockSchemaPreImage.safeParse(harnessMessageBlock).success,
     ).toBe(false);
@@ -990,9 +957,7 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
   });
 
   it("rejects a raw/nested provider payload shape outside the normalized metadata union", () => {
-    // The generated Codex payload shape (raw threadId/turnId/verifications
-    // envelope) must never be accepted as-is - only the normalized,
-    // per-notice-kind facts are allowed.
+    // The generated Codex payload shape (raw threadId/turnId/verifications envelope) must never be accepted as-is - only the normalized, per-notice-kind facts are allowed.
     const result = providerNoticeMetadataSchema.safeParse({
       harnessId: "codex",
       noticeKind: "model_verification",

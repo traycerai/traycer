@@ -1,14 +1,6 @@
 /**
- * The renderer's `RuntimeEnvironment` — the one place in the epic runtime that
- * is allowed to know `window` and `appLogger` exist.
- *
- * Everything below this file reaches for timers, microtasks, the clock and the
- * log through the injected environment, never through a global. That is not
- * testing hygiene: the runtime is scheduled to move into a dedicated Web Worker
- * per renderer window, where `window` and the GUI's `appLogger` do not exist,
- * and a `window.setTimeout` compiles today and throws the moment a worker entry
- * imports it — surfacing as a blank pane rather than as a build error. This
- * module is the piece that gets REPLACED at that boundary; nothing else has to.
+ * The renderer's `RuntimeEnvironment` - the one place in the epic runtime that is allowed to know
+ * `window` and `appLogger` exist.
  */
 import type {
   RuntimeEnvironment,
@@ -17,13 +9,7 @@ import type {
 } from "@traycer-clients/shared/replica-runtime";
 import { appLogger } from "@/lib/logger";
 
-/**
- * The renderer environment.
- *
- * `window.setTimeout` rather than the bare global on purpose: jsdom and the
- * suite's fake timers both patch the `window`-bound pair, and the existing
- * artifact-room cooldown tests depend on that binding.
- */
+/** The renderer environment. */
 export function createRendererRuntimeEnvironment(): RuntimeEnvironment {
   return {
     clock: {

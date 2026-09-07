@@ -1,9 +1,3 @@
-/**
- * Direct unit pins for the pure identity-invariant module: no store, no
- * React - just `canvasByTabId` snapshots and epicId resolvers. The store
- * integration pins (real actions, real desktop-projection ingress) live in
- * `store-tile-identity-invariant.test.ts`.
- */
 import {
   afterEach,
   beforeEach,

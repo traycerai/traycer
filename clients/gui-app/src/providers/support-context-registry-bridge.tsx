@@ -39,11 +39,7 @@ function isProviderId(value: string): value is ProviderId {
   return Object.hasOwn(PROVIDER_DISPLAY_NAMES, value);
 }
 
-/**
- * Maps a chat/terminal-agent's harness id to the `providers.list` id it runs
- * on. TUI harness ids (`claude`, `codex`, ...) differ from their provider id
- * (`claude-code`, ...); GUI ACP harness ids already equal their provider id.
- */
+/** TUI harness ids (claude, codex) differ from provider ids (claude-code). GUI ACP harness ids already equal provider ids. */
 function resolveProviderId(harnessId: string): ProviderId | null {
   if (isTuiHarnessId(harnessId))
     return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
@@ -52,16 +48,7 @@ function resolveProviderId(harnessId: string): ProviderId | null {
 }
 
 /**
- * Reads the current route template directly off the router INSTANCE
- * (`router.state`/`router.subscribe`) rather than via `useRouterState`, which
- * requires a `<RouterProvider>` ancestor context. This bridge is mounted
- * above `RouterProvider` in the tree (`TraycerAuthenticatedRuntime`, a sibling
- * of the deeply-nested `TraycerAppRuntimeSurface` that renders
- * `<RouterProvider>`), so no such context exists there - `useRouterState`
- * throws `Cannot read properties of null (reading 'isServer')` in that
- * position. Taking the live router as a prop and reading it imperatively
- * (the same pattern `HistoryPruneProvider` already uses) works regardless of
- * where in the tree this is mounted.
+ * Read the route template off the router instance, not `useRouterState`. This bridge is mounted above `RouterProvider`.
  */
 function useRouteTemplate(router: AppRouter): string | null {
   const subscribe = useCallback(
@@ -104,12 +91,7 @@ function harnessContextsEqual(
   );
 }
 
-/**
- * Resolves harness/model/profile for the active tile via the module-scoped
- * open-epic session registry (`getOpenEpicRegistry`) rather than
- * `useOpenEpicHandle`'s React context, since this bridge is mounted once,
- * globally, above any specific epic's provider tree.
- */
+/** Read harness/model/profile from getOpenEpicRegistry, not useOpenEpicHandle: this bridge mounts above any epic provider tree. */
 function resolveActiveHarnessContext(
   handle: OpenEpicStoreHandle | null,
   artifactRef: EpicCanvasTileRef,
@@ -148,15 +130,7 @@ function resolveActiveHarnessContext(
   return EMPTY_ACTIVE_HARNESS_CONTEXT;
 }
 
-/**
- * Writes last-known session state into the module-level support-context
- * registry (critique D5). Mounted once inside `TraycerAuthenticatedRuntime`,
- * ABOVE nothing crash-relevant - `ReportIssueDialogHost` (which reads the
- * registry at report-open) is mounted above `RootErrorBoundary`, so a crash
- * that unmounts this bridge must not take the last-observed state with it;
- * that is exactly what the module-scoped registry store guarantees and a
- * React context would not.
- */
+/** Module-level registry, not React context: a crash that unmounts this bridge must not drop last-observed state ReportIssueDialogHost still reads. */
 export interface SupportContextRegistryBridgeProps {
   /** The live app router - read imperatively, never via `useRouterState`. */
   readonly router: AppRouter;
@@ -177,10 +151,8 @@ export function SupportContextRegistryBridge(
   const [subscribedHarnessContext, setSubscribedHarnessContext] = useState(
     EMPTY_ACTIVE_HARNESS_CONTEXT,
   );
-  // Derived at render time rather than reset via effect: with no active
-  // epic/artifact there is nothing to subscribe to, so this branch needs no
-  // effect at all - only the subscribed branch below is a genuine
-  // external-system subscription.
+  // No active epic/artifact: derive at render, no effect. Only the
+  // subscribed branch is an external subscription.
   const activeHarnessContext =
     epicId === null || artifactRef === null
       ? EMPTY_ACTIVE_HARNESS_CONTEXT

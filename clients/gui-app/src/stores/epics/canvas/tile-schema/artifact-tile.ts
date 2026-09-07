@@ -1,9 +1,6 @@
 /**
- * Schema for artifact-backed (`EpicArtifactRef`) and renderer-local
- * terminal (`EpicTerminalRef`) / file-preview (`WorkspaceFileRef`) tiles -
- * together `EpicNodeRef`. The schema objects differ only in
- * `isRecordBacked`: chat / agents / collab docs are Y.Doc-backed;
- * terminal / workspace-file are not.
+ * Schema for artifact-backed (`EpicArtifactRef`) and renderer-local terminal (`EpicTerminalRef`) /
+ * file-preview (`WorkspaceFileRef`) tiles - together `EpicNodeRef`.
  */
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
@@ -38,11 +35,8 @@ function isDesktopJsonValue(value: unknown): value is DesktopJsonValue {
   return isRecord(value) && Object.values(value).every(isDesktopJsonValue);
 }
 
-// `undefined` for every ref written before this field existed, and for every
-// ordinary shell tile - both read as "the tile owns this session". Only the
-// exact `"provider-login"` marker suppresses the tile's own `terminal.create`.
-// `"setup"` skips durable import but may still recreate as an ordinary shell.
-// An unrecognized future value degrades to the safe, existing behaviour.
+// `undefined` for every ref written before this field existed, and for every ordinary shell tile -
+// both read as "the tile owns this session".
 function parseTerminalLifecycleOwner(
   value: unknown,
 ): EpicTerminalRef["lifecycleOwner"] {
@@ -80,9 +74,6 @@ function parseTerminalOrigin(value: unknown): EpicTerminalRef["origin"] {
   return undefined;
 }
 
-// Only meaningful alongside `origin: "provider-login"`; an id the current
-// build does not recognize reads as absent, which degrades to "cannot offer a
-// retry" rather than calling the RPC with a provider that does not exist.
 function parseTerminalOriginProviderId(
   value: unknown,
 ): EpicTerminalRef["originProviderId"] {
@@ -154,9 +145,7 @@ function parseEpicTerminalNodeRef(
       ...terminalProvenanceFields(value),
     };
   }
-  // Only a genuinely absent discriminator is legacy import evidence. A future
-  // authority remains presentation-only and round-trips its raw marker so the
-  // current client cannot accidentally claim or rewrite its terminal.
+  // Only a genuinely absent discriminator is legacy import evidence.
   const compatibleFallback =
     parseLegacyTerminalEvidence(value) ??
     parseLegacyTerminalEvidence(value.legacyFallback);
@@ -256,9 +245,8 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
         name: node.name,
         hostId: node.hostId,
         authority: "host",
-        // Rollback-only compatibility projection. Released clients require a
-        // non-empty top-level cwd and read titleSource from this flat shape.
-        // Capable clients never treat either field as semantic authority.
+        // Rollback-only compatibility projection. Released clients require a non-empty top-level cwd and
+        // read titleSource from this flat shape.
         titleSource: node.legacyFallback.titleSource,
         cwd: node.legacyFallback.cwd,
         legacyFallback: {
@@ -301,10 +289,8 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
       titleSource: node.titleSource,
       hostId: node.hostId,
       cwd: node.cwd,
-      // Persistence reconstructs a ref field by field and drops anything the
-      // serializer does not name, so omitting this here would silently turn
-      // every sign-in tile back into a plain shell tile across a reload - the
-      // exact failure the marker exists to prevent.
+      // Persistence reconstructs a ref field by field and drops anything the serializer does not name,
+      // so omitting this here would silently turn every sign-in tile back into a plain shell tile across
       ...serializeTerminalProvenance(node),
     };
   }

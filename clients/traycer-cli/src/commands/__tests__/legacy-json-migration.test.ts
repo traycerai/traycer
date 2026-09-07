@@ -12,21 +12,8 @@ import {
 } from "vitest";
 import { config } from "../../config";
 
-// Native Packaging legacy-JSON migration
-// (ticket:e86b8372-…/a9fa5e4c-…). The previously plain-JSON commands -
-// whoami, config shell get, config env list, config env get - now go
-// through the shared NDJSON runner. The contract is:
-//
-//   1. JSON mode emits exactly one terminal `result` event on stdout
-//      (no free-form text, no `console.log` shapes).
-//   2. The terminal event carries either `status: "ok"` + `data` or
-//      `status: "error"` + `error.{code, message, details}`.
-//   3. The runner owns process.exit - command bodies must not call
-//      process.exit themselves.
-//
-// We invoke `runCommand(...)` directly so the test boundary matches
-// what the entry-point wires up via `withRunner`, capturing stdout
-// to assert the envelope shape.
+// Native Packaging legacy-JSON migration (ticket:e86b8372-…/a9fa5e4c-…).
+// The previously plain-JSON commands - whoami, config shell get, config env list, config env get - now go through the shared NDJSON runner.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -53,11 +40,8 @@ beforeEach(() => {
   process.env.USERPROFILE = workHome;
   stdoutChunks = [];
   stderrChunks = [];
-  // `write`'s completion callback is load-bearing, not decoration: the
-  // runner awaits it (via `flushStdio`) before `process.exit` so a terminal
-  // NDJSON line larger than the 64 KiB pipe buffer is not truncated on the
-  // way to Desktop. A stub that swallows the callback would leave that
-  // flush waiting on a write that never reports completion, so invoke it.
+  // `write`'s completion callback is load-bearing, not decoration: the runner awaits it (via `flushStdio`) before `process.exit` so a terminal NDJSON line larger than the 64 KiB pipe buffer is not truncated on the way to Desktop.
+  // A stub that swallows the callback would leave that flush waiting on a write that never reports completion, so invoke it.
   stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
     callback: (() => void) | undefined,
@@ -96,10 +80,8 @@ afterEach(() => {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
   rmSync(workHome, { recursive: true, force: true });
-  // The runner now signals failure by SETTING `process.exitCode` rather than
-  // calling `process.exit`, so a test driving a failing command leaves it set
-  // on this very process. Left behind, vitest exits non-zero with every test
-  // green - a red suite with nothing to point at.
+  // The runner now signals failure by SETTING `process.exitCode` rather than calling `process.exit`, so a test driving a failing command leaves it set on this very process.
+  // Left behind, vitest exits non-zero with every test green - a red suite with nothing to point at.
   process.exitCode = undefined;
   stdoutSpy.mockRestore();
   stderrSpy.mockRestore();
@@ -122,10 +104,8 @@ function joined(chunks: readonly string[]): string {
 async function runAndCapture(
   fn: () => Promise<void>,
 ): Promise<ParsedRunnerOutput> {
-  // The runner records its code on `process.exitCode` and lets the loop drain
-  // instead of calling `process.exit` (see runner/exit.ts). Snapshot and
-  // RESTORE it around the run: a leaked non-zero value would otherwise make
-  // the vitest process itself exit non-zero with every test green.
+  // The runner records its code on `process.exitCode` and lets the loop drain instead of calling `process.exit` (see runner/exit.ts).
+  // Snapshot and RESTORE it around the run: a leaked non-zero value would otherwise make the vitest process itself exit non-zero with every test green.
   const priorExitCode = process.exitCode;
   process.exitCode = undefined;
   try {
@@ -133,12 +113,8 @@ async function runAndCapture(
   } catch (err) {
     process.exitCode = priorExitCode;
     if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-      // Deliberately fatal rather than translated. This harness USED to report
-      // the thrown code as the run's exit code, which meant every
-      // `expect(out.exitCode)` below passed under either implementation - so
-      // none of them was evidence for int#4840's drain fix. Reaching
-      // `process.exit` is now the failure, because on win32 that is the
-      // teardown abort coming back.
+      // Deliberately fatal rather than translated.
+      // This harness USED to report the thrown code as the run's exit code, which meant every `expect(out.exitCode)` below passed under either implementation - so none of them was evidence for int#4840's drain fix.
       throw new Error(
         `${err.message.replace("__test_exit_", "process.exit(")}) was called: the runner must record process.exitCode and let the loop drain, never exit abruptly`,
       );
@@ -151,10 +127,7 @@ async function runAndCapture(
   const stdoutLines = stdout.split("\n").filter((l) => l.length > 0);
   const envelopes: Record<string, unknown>[] = [];
   for (const line of stdoutLines) {
-    // Be tolerant of human-mode runs that intentionally emit free-form
-    // text; the JSON-mode assertions below explicitly require every
-    // line to be JSON, so a runtime parse error there means a real
-    // contract violation, not a test wiring issue.
+    // Be tolerant of human-mode runs that intentionally emit free-form text; the JSON-mode assertions below explicitly require every line to be JSON, so a runtime parse error there means a real contract violation, not a test wiring issue.
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -247,11 +220,8 @@ describe("whoami runner migration", () => {
         credentialUpdate: "none",
       },
     });
-    // `savedAt` is deliberately absent from validating mode: it is only
-    // unambiguous when it comes from a file this command actually read
-    // (`superseded` means the returned credentials are a sibling's pair with
-    // its own stamp). Pin the absence so a future change cannot quietly
-    // reintroduce an ambiguous field.
+    // `savedAt` is deliberately absent from validating mode: it is only unambiguous when it comes from a file this command actually read (`superseded` means the returned credentials are a sibling's pair with its own stamp).
+    // Pin the absence so a future change cannot quietly reintroduce an ambiguous field.
     const data = (out.terminal?.data ?? {}) as Record<string, unknown>;
     expect(data).not.toHaveProperty("savedAt");
     // No free-form stdout other than NDJSON.
@@ -275,9 +245,7 @@ describe("whoami runner migration", () => {
       const { whoamiCommand } = await import("../whoami");
 
       const jsonOut = await runJsonCommand(whoamiCommand);
-      // Every credentialUpdate value, including the two "-unconfirmed" ones,
-      // is still exit 0: the identity question WAS answered, truthfully - the
-      // warning is advisory, not a failure.
+      // Every credentialUpdate value, including the two "-unconfirmed" ones, is still exit 0: the identity question WAS answered, truthfully - the warning is advisory, not a failure.
       expect(jsonOut.exitCode).toBe(0);
       expect(jsonOut.terminal).toMatchObject({
         status: "ok",
@@ -340,11 +308,8 @@ describe("whoami runner migration", () => {
     });
   });
 
-  // A rejection can arrive AFTER a spend (first rotate attempt loses its
-  // commit, a concurrent logout/account switch turns the retry into
-  // deleted/tombstoned/user-mismatch). Reporting "none" there would tell an
-  // auditing caller this invocation touched nothing, when it consumed the
-  // refresh token.
+  // A rejection can arrive AFTER a spend (first rotate attempt loses its commit, a concurrent logout/account switch turns the retry into deleted/tombstoned/user-mismatch).
+  // Reporting "none" there would tell an auditing caller this invocation touched nothing, when it consumed the refresh token.
   it("reports the spend on a rejection that followed one, in data and on the human line", async () => {
     vi.doMock("../../auth/validate", () => ({
       validateStoredCredentials: async () => ({
@@ -393,9 +358,7 @@ describe("whoami runner migration", () => {
     expect(error.details).toMatchObject({
       credentialUpdate: "token-rotation-unconfirmed",
     });
-    // The message must NOT assert a spend: `refresh-network` means the request
-    // may never have reached the server, which is the whole reason the effect
-    // is "unconfirmed" rather than a definite rotation.
+    // The message must NOT assert a spend: `refresh-network` means the request may never have reached the server, which is the whole reason the effect is "unconfirmed" rather than a definite rotation.
     expect(String(error.message)).not.toContain("was spent");
     expect(String(error.message)).toContain("may or may not have gone through");
   });
@@ -631,13 +594,8 @@ describe("config shell get runner migration", () => {
 });
 
 describe("cli mark-source upgrade-lockout prevention", () => {
-  // The split between PM-only `cli mark-source` and user-facing
-  // `cli re-anchor` exists to prevent a footgun: passing `--source
-  // homebrew` on a manually installed binary would route every
-  // future `cli upgrade` through `brew upgrade traycer`, which
-  // doesn't know about the install. The test asserts the rejection so
-  // a future refactor that re-introduces `manual` here regresses
-  // loudly instead of silently.
+  // The split between PM-only `cli mark-source` and user-facing `cli re-anchor` exists to prevent a footgun: passing `--source homebrew` on a manually installed binary would route every future `cli upgrade` through `brew upgrade traycer`, which doesn't know about the install.
+  // The test asserts the rejection so a future refactor that re-introduces `manual` here regresses loudly instead of silently.
   it("rejects --source manual with E_INVALID_ARGUMENT and surfaces the re-anchor hint", async () => {
     const { buildCliMarkSourceCommand } = await import("../cli-mark-source");
     const cmd = buildCliMarkSourceCommand({

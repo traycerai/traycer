@@ -1,24 +1,4 @@
-/**
- * Time-cursor model for the communication graph.
- *
- * The canvas renders AS OF a cursor and the on-canvas transport owns that
- * cursor. Both read the SAME merged event array (`CommGraphSnapshot.events`) -
- * there is no second data path and nothing here mutates, reorders, or collapses
- * a row.
- *
- * THE CURSOR IS AN EVENT'S SORT KEY, NOT AN ARRAY INDEX. An index would look
- * simpler, but rows can legally land in the MIDDLE of the merged array: an
- * `event` frame carries snapshot overflow and reconnect gap-fill as well as
- * genuinely new rows (frame kind carries no activity semantics - see the
- * contract), and a second host's frames interleave by timestamp. An index would
- * silently slide onto a different row when that happens; the `(timestamp,
- * hostId, id)` key names one row for good and reuses the array's own total
- * order (`compareCommGraphEvents`).
- *
- * `null` is LIVE: the cursor tracks the newest row as rows arrive. Live and
- * playback are the same projection - one cursor moves by itself, the other is
- * held - so nothing here reads a clock either.
- */
+/** Time-cursor model for the communication graph. */
 import {
   commGraphEventDirection,
   compareCommGraphSortKeys,
@@ -27,9 +7,7 @@ import {
 import { commGraphPairId } from "@/lib/comm-graph/comm-graph-model";
 
 /**
- * A cursor is the full sort key of the row it sits on, so it stays comparable
- * against the merged array under `compareCommGraphEvents` even when rows are
- * inserted before it.
+ * A cursor is the full sort key of the row it sits on, so it stays comparable against the merged array under `compareCommGraphEvents` even when rows are inserted before it.
  */
 export interface CommGraphTimeCursor {
   readonly timestamp: number;
@@ -73,8 +51,7 @@ export function commGraphCursorMatchesEvent(
 }
 
 /**
- * Compared through the SAME comparator the merged array is sorted by, so a
- * prefix taken here is always exactly a prefix of what the list displays.
+ * Compared through the SAME comparator the merged array is sorted by, so a prefix taken here is always exactly a prefix of what the list displays.
  */
 function compareEventToCursor(
   event: CommGraphEvent,
@@ -83,14 +60,7 @@ function compareEventToCursor(
   return compareCommGraphSortKeys(event, cursor);
 }
 
-/**
- * The prefix of `events` at or before `cursor` - the graph "as of t".
- *
- * Binary search + `slice` rather than `filter`: a chatty epic's array runs to
- * tens of thousands of rows and playback re-derives this on every step.
- * `events` is already sorted by `compareCommGraphEvents`, which is the same
- * order this searches in.
- */
+/** The prefix of `events` at or before `cursor` - the graph "as of t". */
 export function commGraphEventsAsOfCursor(
   events: ReadonlyArray<CommGraphEvent>,
   cursor: CommGraphTimeCursor | null,
@@ -102,12 +72,8 @@ export function commGraphEventsAsOfCursor(
 }
 
 /**
- * Index of the first row strictly AFTER `cursor` in an array sorted by
- * `compareCommGraphEvents` (`events.length` when no such row exists). THE one
- * upper-bound search: the as-of slice, the playback "next" step, and the
- * transport's cursor index all step through this - the rationale above (tens
- * of thousands of rows, re-derived every playback tick) applies to each of
- * them equally, so none may fall back to a linear scan or fork its own copy.
+ * Index of the first row strictly AFTER `cursor` in an array sorted by `compareCommGraphEvents` (`events.length` when no such row exists).
+ * THE one upper-bound search: the as-of slice, the playback "next" step, and the transport's cursor index all step through this - the rationale above (tens of thousands of rows, re-derived every playback tick) applies to each of them equally, so none may.
  */
 export function commGraphUpperBoundIndex(
   events: ReadonlyArray<CommGraphEvent>,
@@ -124,9 +90,8 @@ export function commGraphUpperBoundIndex(
 }
 
 /**
- * The first captured creation row for each agent. The timeline array is already
- * in its canonical total order, so keeping the first row makes the map an exact
- * event-position boundary even when multiple rows share a millisecond.
+ * The first captured creation row for each agent.
+ * The timeline array is already in its canonical total order, so keeping the first row makes the map an exact event-position boundary even when multiple rows share a millisecond.
  */
 export function commGraphCreationCursorByAgentId(
   events: ReadonlyArray<CommGraphEvent>,
@@ -145,13 +110,8 @@ export function commGraphCreationCursorByAgentId(
 }
 
 /**
- * Agent ids that exist as of the cursor. A captured `agent_created` row is the
- * authoritative reveal boundary because the cursor names an ordered event, not
- * merely a millisecond. Older histories may have no such row, so those agents
- * retain the `createdAt` fallback instead of disappearing from playback.
- *
- * Only the RENDERED set is narrowed; the layout keeps working from the full
- * agent list so positions do not jump around as playback reveals nodes.
+ * Agent ids that exist as of the cursor.
+ * A captured `agent_created` row is the authoritative reveal boundary because the cursor names an ordered event, not merely a millisecond.
  */
 export function commGraphAgentIdsAsOfCursor(
   agents: ReadonlyArray<{ readonly id: string; readonly createdAt: number }>,
@@ -181,13 +141,7 @@ export function commGraphEventTouchesAgent(
   return event.senderAgentId === agentId || event.receiverAgentId === agentId;
 }
 
-/**
- * The next row strictly after `cursor`, or null at the end.
- *
- * There is no filtered variant any more: the log is A2A-only and the density
- * controls are gone with the sidebar panel, so playback steps through exactly
- * the array the canvas projects. One list, one order, nothing to disagree about.
- */
+/** The next row strictly after `cursor`, or null at the end. */
 export function nextCommGraphTimelineEvent(
   events: ReadonlyArray<CommGraphEvent>,
   cursor: CommGraphTimeCursor | null,
@@ -197,24 +151,7 @@ export function nextCommGraphTimelineEvent(
   return events[commGraphUpperBoundIndex(events, cursor)] ?? null;
 }
 
-/**
- * What the cursor event lights up on the canvas.
- *
- * `inReplyTo` is what separates "asked" from "answered": a row that answers an
- * earlier `responseId` pulses as a reply, anything else as a request. Notices
- * get their own pulse - they are the broker giving up, not a message.
- *
- * AN EDGE PULSE TRAVELS, so it names its own direction with `fromAgentId` /
- * `toAgentId` rather than a flag. The drawn edge is undirected and its endpoint
- * order is canonical (sorted), so "reversed" would only be meaningful next to
- * that edge's own source/target - the consumer compares ids and decides. A reply
- * therefore travels back along the same edge its request came down.
- *
- * A row whose other endpoint is outside the node set (a half-edge to an agent
- * this epic does not project) has no drawable edge, so it falls back to pulsing
- * whichever endpoint IS on the canvas rather than showing nothing. That is the
- * only node pulse there is.
- */
+/** What the cursor event lights up on the canvas. */
 export type CommGraphPulseKind = "request" | "reply" | "notice" | "created";
 
 export type CommGraphPulse =
@@ -228,7 +165,7 @@ export type CommGraphPulse =
   | {
       readonly kind: "agent";
       readonly agentId: string;
-      /** Who sent the message — may differ from `agentId` on half-edges. */
+      /** Who sent the message - may differ from `agentId` on half-edges. */
       readonly senderAgentId: string;
     };
 
@@ -254,8 +191,7 @@ export function commGraphPulseForEvent(
     return {
       kind: "edge",
       // The canvas edge is per unordered PAIR, so the pulse addresses the pair.
-      // Direction still lives in from/to ids; it just no longer needs a
-      // directed edge to land on.
+      // Direction still lives in from/to ids; it just no longer needs a directed edge to land on.
       edgeId: commGraphPairId(sender, receiver),
       pulseKind: a2aPulseKind(event),
       fromAgentId: sender,

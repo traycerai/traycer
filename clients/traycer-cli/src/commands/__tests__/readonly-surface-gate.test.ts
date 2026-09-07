@@ -3,29 +3,17 @@ import type { Command } from "commander";
 import type { CommandContext, CommandFn } from "../../runner/runner";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
-// This suite proves the CLI-019 capability boundary itself - not the wiring
-// underneath it. Every command listed in `READONLY_REFUSED_COMMANDS` must be
-// refused with E_FORBIDDEN *before* its body runs when driven end-to-end
-// through the real program under `TRAYCER_AGENT_CLI_SURFACE=readonly`, and
-// must NOT be refused on the full surface. The table is iterated directly
-// (not copied into a parallel literal here) so a new gated entry without a
-// working gate fails this suite rather than silently shipping unguarded.
+// This suite proves the CLI-019 capability boundary itself - not the wiring underneath it.
+// Every command listed in `READONLY_REFUSED_COMMANDS` must be refused with E_FORBIDDEN *before* its body runs when driven end-to-end through the real program under `TRAYCER_AGENT_CLI_SURFACE=readonly`, and must NOT be refused on the full surface.
 
-// Hoisted so the mock factory below can reference it, and so every `it` can
-// assert on call counts (not just the thrown error) - proof the gate ran
-// BEFORE the command body did anything, not merely that the body failed for
-// some other reason downstream.
+// Hoisted so the mock factory below can reference it, and so every `it` can assert on call counts (not just the thrown error) - proof the gate ran BEFORE the command body did anything, not merely that the body failed for some other reason downstream.
 const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(async () => null),
 }));
 
 vi.mock("../../internal/host-auth", () => ({
-  // Every gated command (and every read command exercised here) bottoms out
-  // in `callHostRpc`/`resolveHostAuth` (or, for `worktree delete`, calls
-  // `resolveHostAuth` directly) before it does anything else. Forcing "not
-  // signed in" here is the single deepest-dependency mock that stops every
-  // command short of a real network call, while still producing a distinct,
-  // non-FORBIDDEN error on the full surface that proves the body was reached.
+  // Every gated command (and every read command exercised here) bottoms out in `callHostRpc`/`resolveHostAuth` (or, for `worktree delete`, calls `resolveHostAuth` directly) before it does anything else.
+  // Forcing "not signed in" here is the single deepest-dependency mock that stops every command short of a real network call, while still producing a distinct, non-FORBIDDEN error on the full surface that proves the body was reached.
   resolveHostAuth: mocks.resolveHostAuthMock,
 }));
 
@@ -75,18 +63,8 @@ import {
   resolveAgentCliSurface,
 } from "../../agent-surface";
 
-// Fixture values for the agent/epic context the `agent *` commands resolve
-// from env when their own `--agent-id`/`epicId` opts are omitted (see
-// `resolveEpicId`/`resolveSenderAgentId` in `internal/agent-context.ts`).
-// Pinned here rather than inherited from the ambient environment: this suite
-// runs inside a live Traycer agent session, which already has
-// `TRAYCER_AGENT_ID`/`TRAYCER_EPIC_ID` set - so without this override, a
-// command reaching "resolve context from env" would silently succeed here
-// and then throw "no context" in CI (or any shell without those vars),
-// short-circuiting BEFORE `resolveHostAuth` and invalidating the
-// `toHaveBeenCalled()` assertions below for the wrong reason. Pinning fixed
-// values makes the suite's outcome independent of what happens to be running
-// it.
+// Fixture values for the agent/epic context the `agent *` commands resolve from env when their own `--agent-id`/`epicId` opts are omitted (see `resolveEpicId`/`resolveSenderAgentId` in `internal/agent-context.ts`).
+// Pinned here rather than inherited from the ambient environment: this suite runs inside a live Traycer agent session, which already has `TRAYCER_AGENT_ID`/`TRAYCER_EPIC_ID` set - so without this override, a command reaching "resolve context from env" would silently succeed here and then throw "no context" in CI (or any shell without those vars), short-circuiting BEFORE `resolveHostAuth` and invalidating the `toHaveBeenCalled()` assertions below for the wrong reason.
 const FIXTURE_AGENT_ID = "agent-fixture";
 const FIXTURE_EPIC_ID = "epic-fixture";
 
@@ -96,19 +74,8 @@ const ENV_VARS_UNDER_TEST = [
   "TRAYCER_EPIC_ID",
 ] as const;
 
-// `await`s `run()` itself (rather than returning it from inside try/finally)
-// so the env restoration in `finally` cannot race ahead of `run`'s own
-// internal awaits - `run` drives a real `program.parseAsync(...)`, whose
-// action dispatch is not guaranteed to complete synchronously, so restoring
-// the env on the tick after the *call* to `run()` (rather than after it
-// actually settles) could hand the in-flight command a clean environment
-// mid-flight.
-//
-// `envValue` is the literal `TRAYCER_AGENT_CLI_SURFACE` value to set
-// (`undefined` unsets it entirely) rather than a closed `"readonly" | "full"`
-// union, so this same helper can drive the fail-closed matrix below with
-// arbitrary/unrecognised values (e.g. `"restricted"`) without a second
-// save/restore implementation.
+// `await`s `run()` itself (rather than returning it from inside try/finally) so the env restoration in `finally` cannot race ahead of `run`'s own internal awaits - `run` drives a real `program.parseAsync(...)`, whose action dispatch is not guaranteed to complete synchronously, so restoring the env on the tick after the *call* to `run()` (rather than after it actually settles) could hand the in-flight command a clean environment mid-flight.
+// `envValue` is the literal `TRAYCER_AGENT_CLI_SURFACE` value to set (`undefined` unsets it entirely) rather than a closed `"readonly" | "full"` union, so this same helper can drive the fail-closed matrix below with arbitrary/unrecognised values (e.g.
 async function withEnvSurface<T>(
   envValue: string | undefined,
   run: () => Promise<T> | T,
@@ -174,12 +141,8 @@ async function parseAndCapture(
   }
 }
 
-// Extra argv tokens (Commander options, not the command path itself) needed
-// so `program.parseAsync` reaches the action for every gated command. Every
-// key in `READONLY_REFUSED_COMMANDS` must have an entry here or the suite
-// fails loudly below - this is deliberately kept separate from the policy
-// table itself, since it encodes "what does Commander require to parse", not
-// "what is refused".
+// Extra argv tokens (Commander options, not the command path itself) needed so `program.parseAsync` reaches the action for every gated command.
+// Every key in `READONLY_REFUSED_COMMANDS` must have an entry here or the suite fails loudly below - this is deliberately kept separate from the policy table itself, since it encodes "what does Commander require to parse", not "what is refused".
 const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   "agent create": [],
   "agent fork": ["--agent-id", "agent-1"],
@@ -197,10 +160,7 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   "agent archive": ["--agent-id", "agent-1"],
   "agent send": ["--to", "agent-1", "--message", "hi"],
   "agent role claim": ["--role", "role-1", "--scope", "scope-1"],
-  // `claimId` is validated as a UUID by the protocol request schema before
-  // any transport (see agent-role.ts) - an arbitrary string never reaches
-  // `callHostRpc`/`resolveHostAuth` at all, which would fail the full-surface
-  // "reaches the body" assertion below for the wrong reason.
+  // `claimId` is validated as a UUID by the protocol request schema before any transport (see agent-role.ts) - an arbitrary string never reaches `callHostRpc`/`resolveHostAuth` at all, which would fail the full-surface "reaches the body" assertion below for the wrong reason.
   "agent role relinquish": [
     "--claim-id",
     "11111111-1111-4111-8111-111111111111",
@@ -208,9 +168,7 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   "worktree delete": ["--path", "/tmp/some-worktree"],
 };
 
-// Reads that stay runnable on the readonly surface: hidden from `--help`
-// (a WIDER set than the capability boundary - see `agent-surface.ts`) but
-// never refused at runtime.
+// Reads that stay runnable on the readonly surface: hidden from `--help` (a WIDER set than the capability boundary - see `agent-surface.ts`) but never refused at runtime.
 const UNGATED_READS: ReadonlyArray<{
   readonly path: readonly string[];
   readonly args: readonly string[];
@@ -252,9 +210,7 @@ describe("readonly-surface gate: refuses every table entry before the body runs"
         const argv = [...commandPath.split(" "), ...REQUIRED_ARGS[commandPath]];
         const thrown = await parseAndCapture(program, argv);
         expect(thrown).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
-        // The load-bearing assertion: the command body's own deepest
-        // dependency was never reached, so the refusal happened ahead of it
-        // rather than merely producing the same-looking error downstream.
+        // The load-bearing assertion: the command body's own deepest dependency was never reached, so the refusal happened ahead of it rather than merely producing the same-looking error downstream.
         expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
       });
     });
@@ -264,11 +220,8 @@ describe("readonly-surface gate: refuses every table entry before the body runs"
         const program = buildProgramWithAgentRoles(true);
         const argv = [...commandPath.split(" "), ...REQUIRED_ARGS[commandPath]];
         const thrown = await parseAndCapture(program, argv);
-        // Every gated command bottoms out in the mocked `resolveHostAuth`
-        // returning null, which throws AUTH_NO_CREDENTIALS - proof the body
-        // was reached rather than refused. Assert on "not E_FORBIDDEN" (per
-        // the task) rather than the exact code, so this stays robust to
-        // which specific downstream error a given command surfaces first.
+        // Every gated command bottoms out in the mocked `resolveHostAuth` returning null, which throws AUTH_NO_CREDENTIALS - proof the body was reached rather than refused.
+        // Assert on "not E_FORBIDDEN" (per the task) rather than the exact code, so this stays robust to which specific downstream error a given command surfaces first.
         expect(thrown).not.toBeNull();
         expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
         // Positive proof: the body actually ran far enough to call its
@@ -289,9 +242,7 @@ describe("readonly-surface gate: hidden-but-ungated reads stay runnable", () => 
         // not refused by the capability gate.
         expect(thrown).not.toBeNull();
         expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
-        // Positive proof it reached the body, same as the full-surface case
-        // above - these reads must stay runnable under readonly, not merely
-        // fail with a code that happens not to be FORBIDDEN.
+        // Positive proof it reached the body, same as the full-surface case above - these reads must stay runnable under readonly, not merely fail with a code that happens not to be FORBIDDEN.
         expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
       });
     });
@@ -304,11 +255,7 @@ describe("readonly-surface gate: traycer monitor is deliberately not gated", () 
   });
 
   it("assertCommandAllowedOnSurface does not refuse 'monitor' on the readonly surface", () => {
-    // Pins the decision in MONITOR_SURFACE_NOTE (CLI-021): monitor bypasses
-    // `withRunner` entirely (so this gate never runs for it in practice), but
-    // this asserts the same outcome directly against the policy function so a
-    // future flip - adding "monitor" to the table without also routing it
-    // through the runner - is caught here rather than only in production.
+    // Pins the decision in MONITOR_SURFACE_NOTE (CLI-021): monitor bypasses `withRunner` entirely (so this gate never runs for it in practice), but this asserts the same outcome directly against the policy function so a future flip - adding "monitor" to the table without also routing it through the runner - is caught here rather than only in production.
     expect(() =>
       assertCommandAllowedOnSurface("monitor", "readonly"),
     ).not.toThrow();
@@ -326,15 +273,8 @@ describe("readonly-surface gate: traycer monitor is deliberately not gated", () 
 });
 
 describe("resolveAgentCliSurface: fails closed on any unrecognised value", () => {
-  // Fail-closed, not fail-open. The prior implementation was
-  // `declared === "readonly" ? "readonly" : "full"` - so a host spelling
-  // drift, different casing, or a surface name a newer host knows and this
-  // CLI does not would silently resolve to "full" and the whole restriction
-  // would evaporate with nothing signalling it. Only the two spellings that
-  // actually mean "unrestricted" - absent/empty, and the explicit "full" -
-  // resolve to full; every other string, however plausible-looking, is
-  // treated as a request to restrict: an unknown value must never quietly
-  // re-open the mutating surface.
+  // Fail-closed, not fail-open.
+  // The prior implementation was `declared === "readonly" ?
   it.each([
     [undefined, "full"],
     ["", "full"],

@@ -25,25 +25,11 @@ interface QuoteSelectionPopoverProps {
   /** The scrollable transcript container: the popover is clipped to its bounds
    *  and rides the visible portion of a selection that scrolls past its start. */
   readonly boundaryRef: RefObject<HTMLElement | null>;
-  /** Composer/queue dock height overlaying the bottom of `boundaryRef`'s
-   *  region (decision #3, #13, M3) - passed as a value, not read from the
-   *  DOM, so the clamp recomputes when the dock resizes while the popover is
-   *  already open even though that doesn't resize the boundary element itself. */
+  /** Composer/queue dock height overlaying the bottom of `boundaryRef`'s region (decision #3, #13, M3) - passed as a value, not read from the DOM, so the clamp recomputes when the dock resizes while the popover is already open even though that doesn't resize the boundary element itself. */
   readonly bottomOverlayInsetPx: number;
 }
 
-/**
- * The floating quote affordance above a validated selection. Deliberately a
- * MINIMAL non-modal portal: no `<dialog>`, no autofocus, no focus trap, no
- * focus restoration. Only the positioning idiom of `FloatingDraftPopover` is
- * reused (Floating UI `computePosition` + `autoUpdate`).
- *
- * Focus contract: mounting this must not change `document.activeElement`, and
- * the button's `mousedown` `preventDefault` keeps it from taking focus or
- * collapsing the selection. The composer focusing on quote (via
- * `appendQuoteToDraft` -> `replaceDraft(null)` -> `focus("end")`) is the only
- * focus mutation in the feature.
- */
+/** Focus contract: mounting this must not change `document.activeElement`, and the button's `mousedown` `preventDefault` keeps it from taking focus or collapsing the selection. */
 export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
   const { taskId, snapshot, onDismiss, boundaryRef, bottomOverlayInsetPx } =
     props;
@@ -60,27 +46,20 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     // visible selected line so the button rides the visible portion.
     let currentAnchor = range.getBoundingClientRect();
     const virtualReference = {
-      // `contextElement` lets autoUpdate treat the transcript scroller (an
-      // overflow ancestor of the root) as a scroll source, so scrolling the
-      // transcript - not only the window - repositions the popover.
+      // `contextElement` lets autoUpdate treat the transcript scroller (an overflow ancestor of the root) as a scroll source, so scrolling the transcript - not only the window - repositions the popover.
       contextElement: snapshot.root,
       getBoundingClientRect: () => currentAnchor,
     };
 
     const reposition = (): void => {
-      // Anchor guard: the transcript is memoized + virtualized + streaming, so
-      // the range's nodes can be replaced or unmounted while the popover is
-      // open. Dismiss instead of repositioning to a garbage/corner position.
-      // Liveness guard: while the setting was off no `selectionchange` listener
-      // ran, so a snapshot can outlive its selection (off -> collapse -> on).
+      // Anchor guard: the transcript is memoized + virtualized + streaming, so the range's nodes can be replaced or unmounted while the popover is open.
+      // Dismiss instead of repositioning to a garbage/corner position.
       if (!isRangeAnchored(range) || !isSelectionLiveInRoot(snapshot.root)) {
         onDismiss();
         return;
       }
       const container = boundaryRef.current;
-      // Clamped, not the raw element: the composer/queue dock overlays the
-      // bottom of this region without shrinking its box (decision #3, #13,
-      // M3) - the raw rect's bottom edge extends behind the opaque dock.
+      // Clamped, not the raw element: the composer/queue dock overlays the bottom of this region without shrinking its box (decision #3, #13, M3) - the raw rect's bottom edge extends behind the opaque dock.
       const clampedContainerRect =
         container === null
           ? null
@@ -143,20 +122,14 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     <div
       ref={floatingRef}
       data-slot="quote-selection-popover"
-      // No entrance animation: `animate-in` runs the `enter` keyframe, whose
-      // only `from` frame drives `transform` to the element's underlying value.
-      // Since positioning here IS a `transform` (Floating UI, set below), the
-      // keyframe animated the button diagonally from the `top-0 left-0` corner
-      // to the anchor. The app's other floating popovers (FloatingDraftPopover,
-      // MentionPreviewPanel) position with transform and add no entrance
-      // animation for the same reason; match them.
+      // No entrance animation: `animate-in` runs the `enter` keyframe, whose only `from` frame drives `transform` to the element's underlying value.
+      // Since positioning here IS a `transform` (Floating UI, set below), the keyframe animated the button diagonally from the `top-0 left-0` corner to the anchor.
       className="absolute top-0 left-0 z-50 rounded-md border border-border bg-popover p-0.5 text-popover-foreground shadow-lg"
     >
       <button
         type="button"
-        // preventDefault keeps focus off the button and stops the browser from
-        // collapsing the selection before the click fires; the quote action
-        // runs on click. Its visible "Quote" label is the accessible name.
+        // preventDefault keeps focus off the button and stops the browser from collapsing the selection before the click fires; the quote action runs on click.
+        // Its visible "Quote" label is the accessible name.
         onMouseDown={(event) => event.preventDefault()}
         onClick={handleQuote}
         className={cn(
@@ -182,9 +155,8 @@ function isRangeAnchored(range: Range): boolean {
   return rect.width > 0 || rect.height > 0;
 }
 
-// The live selection must still be non-collapsed and start inside the quotable
-// root the snapshot came from. Comparing the start (not the end) tolerates the
-// triple-click clamp, whose end intentionally sits past the root.
+// The live selection must still be non-collapsed and start inside the quotable root the snapshot came from.
+// Comparing the start (not the end) tolerates the triple-click clamp, whose end intentionally sits past the root.
 function isSelectionLiveInRoot(root: Element): boolean {
   const selection = window.getSelection();
   if (

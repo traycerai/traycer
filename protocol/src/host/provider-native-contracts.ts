@@ -1,9 +1,4 @@
-/**
- * Payload-only module for provider-native MCP / plugins / skills settings.
- * RPC contracts for these verbs were folded onto released carriers
- * (`providers.list@3.1`, `providers.setEnabled@2.1`, login family minors).
- * Re-export the carrier payload schemas from here for host/gui consumers.
- */
+/** `providers.list@3.1` - Payload-only module for provider-native MCP / plugins / skills settings. */
 export {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,

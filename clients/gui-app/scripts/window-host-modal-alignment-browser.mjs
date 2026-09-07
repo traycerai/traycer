@@ -1,16 +1,4 @@
-// Geometric regression for the window host modal's local-bootstrap body: does
-// every element in the card sit on ONE left edge, or does the details toggle
-// centre itself in an otherwise left-aligned surface?
-//
-// Driven in real Chrome because the claim is about resolved box positions.
-// jsdom has no layout engine, so `self-center` there is a substring of a class
-// attribute and nothing else - the only jsdom-visible form of this assertion
-// pins the fix's spelling rather than its effect.
-//
-// Every figure printed and compared is in CSS pixels at deviceScaleFactor 1.
-//
-// Structure copied from `toast-over-modal-hittest.mjs` (vite + headless Chrome
-// over CDP).
+// Geometric regression: does every element in the local-bootstrap card sit on one left edge? Figures are CSS pixels at deviceScaleFactor 1.
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, rm } from "node:fs/promises";
@@ -21,22 +9,10 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-/**
- * Tolerance for "these two left edges are the same edge", in CSS px.
- *
- * Not a fudge factor for a near miss: subpixel layout and fractional rects mean
- * two boxes on the identical edge can differ in the third decimal, while the
- * defect under test displaces the toggle by roughly a third of the card's width.
- * Anything in between is a real disagreement and must fail.
- */
+/** Subpixel identical edges can differ in the third decimal; the defect is about a third of the card width. Anything in between must fail. */
 const EDGE_TOLERANCE_PX = 1;
 
-/**
- * How far apart the planted control must read for the comparator to be trusted,
- * in CSS px. Deliberately well above the tolerance: the control exists to prove
- * the comparator can see a centred control at all, so a marginal reading there
- * would leave the same doubt it was built to remove.
- */
+/** Planted-control separation must sit well above the edge-match tolerance so a marginal reading cannot pass the comparator. */
 const PLANTED_MIN_OFFSET_PX = 16;
 
 const projectRoot = path.resolve(
@@ -146,10 +122,8 @@ try {
   // mid-transform is a position the user never sees.
   await evaluate(client, `new Promise((r) => setTimeout(r, 600))`);
 
-  // The heading is located by its TEXT, not by a testid it does not have and
-  // not by its utility classes: the copy comes from the shared progress table,
-  // and a class-based selector would silently resolve to nothing the moment the
-  // styling is touched - a null rect that reads as agreement.
+  // Locate the heading by text. A class selector would go null on a style
+  // change and read as agreement.
   const readEdges = `(() => {
     const modal = document.querySelector('[data-testid="window-host-modal"]');
     const byTestId = (id) => document.querySelector('[data-testid="' + id + '"]');
@@ -171,10 +145,8 @@ try {
         justifyContent: getComputedStyle(el).justifyContent,
       };
     };
-    // The type ramp, for the "one event, two headings" claim. Read as COMPUTED
-    // values rather than class names: the finding is about what the eye receives,
-    // and two different utility strings can resolve to the same pixel size and
-    // the same colour.
+    // Read computed type, not class names. Two utilities can resolve to the
+    // same size and colour.
     const type = (name, el) => {
       if (el === null || el === undefined) return { name, present: false };
       const s = getComputedStyle(el);
@@ -198,11 +170,8 @@ try {
       heading: edge(heading),
       progressBar: edge(byTestId('local-host-download-progress')),
       toggle: edge(byTestId('local-host-loading-toggle-details')),
-      // The LABEL, not the button box. The disclosure's column stretches its
-      // items, so the toggle's box is full width and its left edge sits on the
-      // card's edge no matter where the label is drawn - a box-only comparator
-      // reports a content-centred control as aligned. This is the edge a user
-      // actually reads.
+      // Measure the label, not the stretched full-width box (its left edge
+      // sits on the card regardless of where the label is).
       toggleLabel: (() => {
         const el = byTestId('local-host-loading-toggle-details');
         return edge(el === null ? null : el.querySelector('span'));
@@ -267,10 +236,7 @@ try {
   await evaluate(client, `new Promise((r) => setTimeout(r, 400))`);
   const open = await evaluate(client, readEdges);
 
-  // SECOND LOAD: the disclosure's other tail state. Same slot, and until now
-  // measured by nothing - the fixture always supplied a tail, so the `<pre>` was
-  // the only branch ever rendered. A fresh navigation rather than a mutated
-  // snapshot, so the empty state is produced the way the component produces it.
+  // Second load: empty tail via a fresh navigation, not a mutated snapshot.
   await client.send("Page.navigate", { url: `${pageUrl}?tail=empty` });
   await waitFor(
     client,
@@ -299,25 +265,14 @@ try {
     a !== null && b !== null && Math.abs(a.left - b.left) <= EDGE_TOLERANCE_PX;
   const painted = (e) => e !== null && e.width > 0 && e.height > 0;
 
-  // PC0 - the harness renders with Tailwind at all. A fixture whose utilities
-  // never compile lays every box out as an unstyled block, which puts every
-  // left edge on the same line and passes the alignment assertions for the one
-  // reason that invalidates them. This harness has shipped that exact defect
-  // before.
+  // PC0: Tailwind actually compiled. Unstyled blocks share one left edge and
+  // would pass alignment for the reason that invalidates it.
   check("PC0_tailwind_utilities_compiled", closed.tailwindCompiled === true, {
     plantedColumnDisplay: closed.tailwindCompiled ? "flex" : "NOT flex",
   });
 
-  // PC1 - existence before absence. Every member of the alignment set is on
-  // screen with a real box, so an "edges agree" verdict cannot be two nulls.
-  //
-  // NAMED FOR ITS ARM, deliberately. This member set is the cold-start body's -
-  // spinner, stage, progress bar - so this check REQUIRES that arm
-  // and would fail rather than measure if pointed at the ∅ body, which renders
-  // the attempt panel and the disclosure and nothing else. That makes the whole
-  // script a cold-start instrument, and the name has to say so: an arm-agnostic
-  // name on an arm-specific check is how a figure gets quoted about a card it
-  // was never taken from.
+  // PC1: every alignment member has a real box so "edges agree" cannot be two
+  // nulls. Cold-start body only.
   const members = {
     title: closed.title,
     description: closed.description,
@@ -354,11 +309,8 @@ try {
     },
   );
 
-  // PC2b - the OTHER defect form. A control that centres only its content keeps
-  // a full-width box whose left edge is still on the card's edge, so the
-  // box-measuring version of this comparator called it aligned. Found by reading
-  // the first run's numbers rather than by a failure, which is the point of
-  // printing them.
+  // PC2b: content-centred control keeps a full-width box; measuring the box
+  // would call it aligned.
   const plantedInnerOffset =
     closed.plantedHeading === null || closed.plantedInnerLabel === null
       ? null
@@ -444,11 +396,8 @@ try {
     { closed: closed.toggleControls, open: open.toggleControls },
   );
 
-  // A5 - one event, ONE heading. The dialog title is the card's only row that is
-  // both the title's colour AND at heading weight; every other row differs on at
-  // least one of the two. Stated as "no OTHER row matches the title" rather than
-  // "the stage is muted", so it cannot be satisfied by demoting the stage while
-  // some third row is promoted into the gap.
+  // A5: no other row matches the title's colour and heading weight. Demoting
+  // the stage while promoting a third row must fail.
   const ramp = closed.typeRamp.filter((row) => row.present);
   const titleRow = ramp.find((row) => row.name === "dialogTitle") ?? null;
   const rivals =
@@ -480,17 +429,8 @@ try {
     missingOrZero: rampMissing,
   });
 
-  // PC4 - WHAT THIS HARNESS CANNOT SEE, asserted rather than admitted in prose.
-  //
-  // A left edge of 368 does not prove `justify-center` is gone. `self-start`
-  // shrink-wraps the toggle, and a shrink-wrapped box has nothing for
-  // `justify-center` to centre the label within - so the masking combination
-  // renders at the same 368 px as the real fix. One rendered variant of this card
-  // looked fixed for exactly that reason while still carrying the class.
-  //
-  // Written as the full truth table rather than the two interesting rows: a
-  // battery only pins the rows it enumerates, and "the label moved" versus "the
-  // label did not move" is only meaningful with both polarities present.
+  // PC4: a matching left edge does not prove justify-center is gone; self-start
+  // shrink-wraps so both polarities must be enumerated.
   const probeToggleClass = async (extra) =>
     evaluate(
       client,
@@ -550,11 +490,8 @@ try {
     },
   );
 
-  // THIRD LOAD, reported rather than asserted: what the card does at a stage
-  // TRANSITION, now that `percent` blanks instead of inheriting 100. The whole
-  // download-progress block unmounts, so everything below it moves. Whether that
-  // is acceptable - or whether an indeterminate bar beats none - is a copy-table
-  // decision, so this measures the magnitude and does not rule on it.
+  // Stage transition: percent blanks, progress unmounts, everything below
+  // moves. Measure the magnitude; do not rule on it.
   await client.send("Page.navigate", { url: `${pageUrl}?progress=none` });
   await waitFor(
     client,
@@ -607,14 +544,8 @@ try {
      })()`,
   );
 
-  // A7 - THE STAGE TRANSITION DOES NOT MOVE THE CARD. Asserted as EQUALITY of the
-  // two measured heights, not as "an indeterminate bar renders": the claim is
-  // "does not jump", and only the heights can say that. No unit test can - jsdom
+  // A7: stage transition must not move the card. Assert height equality; jsdom
   // has no layout engine.
-  //
-  // Before the bar held the space, this measured 366 vs 318: a 48px collapse, and
-  // because the modal is centred with `-translate-y-1/2`, BOTH edges moved 24px
-  // and the whole dialog re-centred mid-install.
   check(
     "A7_a_stage_transition_does_not_change_the_card_height",
     closed.modal !== null &&
@@ -665,14 +596,8 @@ try {
     },
   );
 
-  // A6 - the empty-tail placeholder obeys the same contract as the `<pre>` it
-  // alternates with. It was `text-center`: the last leaf overriding the body's
-  // one-alignment root, in the branch nothing measured, and the EXPECTED branch
-  // on the arm where the host never reported ready.
-  //
-  // Positive control built in: the placeholder must actually be the thing on
-  // screen (`present`) and the `<pre>` must be absent, or "the placeholder is
-  // left-aligned" is a claim about a node this load never rendered.
+  // A6: empty-tail placeholder must match the pre it alternates with. Placeholder
+  // present and pre absent, or the claim is about a node this load never rendered.
   check(
     "A6_empty_tail_placeholder_matches_the_pre_it_alternates_with",
     emptyTailOpen.emptyTail !== null &&

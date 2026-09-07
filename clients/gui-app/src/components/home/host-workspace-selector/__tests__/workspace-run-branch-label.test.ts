@@ -121,9 +121,7 @@ describe("locationSelectionChanges — existing → new worktree is a real switc
   };
 
   it("treats New worktree as a change from an adopted (import) worktree", () => {
-    // The bug: import is `mode: "worktree"`, so a coarse `nextMode === mode`
-    // guard made this a no-op. The kind differs (import → worktree), so it must
-    // register as a change.
+    // The kind differs (import → worktree), so it must register as a change.
     expect(locationSelectionChanges("worktree", importIntent, "worktree")).toBe(
       true,
     );

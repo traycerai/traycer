@@ -64,9 +64,7 @@ beforeEach(() => {
 
 describe("commGraphOpenerItem", () => {
   it("opens ONE graph however many times it is invoked", () => {
-    // The graph's content id is derived from the epic, so a second
-    // non-deduped instance would share it - and therefore share the persisted
-    // viewport, making a pan of one tab move the other.
+    // The graph's content id is derived from the epic, so a second non-deduped instance would share it - and therefore share the persisted viewport, making a pan of one tab move the other.
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab(EPIC_ID, "Epic");
     store.openTileInTab(tabId, SPEC_A);
@@ -103,9 +101,7 @@ describe("commGraphOpenerItem", () => {
     invokeCommGraphOpener(ctx(tabId, otherPaneId));
 
     expect(commGraphTabInstanceIds(tabId)).toHaveLength(1);
-    // Focused, not merely deduped: the graph's OWN pane becomes the active
-    // pane and the graph instance is that pane's active tab - a regression
-    // that leaves focus in the empty second pane must fail here.
+    // Focused, not merely deduped: the graph's OWN pane becomes the active pane and the graph instance is that pane's active tab - a regression that leaves focus in the empty second pane must fail here.
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
     expect(canvas?.activePaneId).toBe(firstPaneId);
     const graphInstanceId = commGraphTabInstanceIds(tabId)[0];

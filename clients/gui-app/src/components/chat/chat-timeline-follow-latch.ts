@@ -8,9 +8,7 @@ import {
 } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 
-/** Matches the library's own strict-edge tolerance (`EDGE_POSITION_EPSILON`
- *  in `@legendapp/list`), so "at the strict bottom" means the same thing on
- *  both sides. */
+/** Matches the library's own strict-edge tolerance (`EDGE_POSITION_EPSILON` in `@legendapp/list`), so "at the strict bottom" means the same thing on both sides. */
 export const CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX = 1;
 
 export interface ChatTimelineScrollGeometry {
@@ -19,13 +17,7 @@ export interface ChatTimelineScrollGeometry {
   readonly clientHeight: number;
 }
 
-/**
- * A `display:none` (or not-yet-laid-out) pane reports `scrollTop=
- * scrollHeight=clientHeight=0`. That is UNKNOWN geometry, never a confirmed
- * edge - treating it as "at the bottom" would let a restored free-reading
- * position get silently overwritten the moment the pane becomes visible
- * again (fixup review P1 finding 3).
- */
+/** A `display:none` (or not-yet-laid-out) pane reports `scrollTop= scrollHeight=clientHeight=0`. That is UNKNOWN geometry, never a confirmed edge - treating it as "at the bottom" would let a restored free-reading position get silently overwritten the moment the pane becomes visible again (fixup review P1 finding 3). */
 export function isChatTimelineGeometryMeasurable(
   geometry: ChatTimelineScrollGeometry,
 ): boolean {
@@ -42,13 +34,7 @@ export function isChatTimelineAtStrictBottom(
 }
 
 export interface ChatTimelineFollowLatch {
-  /**
-   * Reconciles fresh strict-bottom geometry, otherwise re-issues
-   * `list.scrollToEnd()` iff the latch currently grants permission. Call this
-   * from every real LegendList maintain trigger (data change, item resize,
-   * footer/header resize, viewport resize, content-inset change) - never from
-   * a component's render body.
-   */
+  /** Reconciles fresh strict-bottom geometry, otherwise re-issues `list.scrollToEnd()` iff the latch currently grants permission. Call this from every real LegendList maintain trigger (data change, item resize, footer/header resize, viewport resize, content-inset change) - never from a component's render body. */
   readonly followEndIfPermitted: () => void;
   /** Explicit controller transition (pill click / navigation fallback). */
   readonly setFollowIntent: (isFollowing: boolean) => void;
@@ -104,9 +90,7 @@ type ArmedReaderDeparture =
   | { readonly source: "owned-navigation" }
   | null;
 
-/** One immediate issue plus four measured reissues, each after two frames.
- *  Exhaustion ends only the current correction burst; reader intent is never
- *  inferred from a layout operation failing to settle inside this window. */
+/** One immediate issue plus four measured reissues, each after two frames. Exhaustion ends only the current correction burst; reader intent is never inferred from a layout operation failing to settle inside this window. */
 export const CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS = 5;
 
 interface ChatTimelineFollowLatchOptions {
@@ -135,66 +119,7 @@ function canReaderGestureMove(
   return geometry.scrollHeight - geometry.clientHeight - geometry.scrollTop > 0;
 }
 
-/**
- * Fixup (fix-detached-streaming-yank/callback-synchronous-follow): replaces
- * the rejected render-gated `maintainScrollAtEnd` design entirely.
- *
- * The installed `@legendapp/list` source shows every one of its own
- * `doMaintainScrollAtEnd` call sites (data change, item-layout, footer-
- * layout, viewport-layout) gates on `state.props.maintainScrollAtEnd` being
- * truthy, then reads a CACHED `isWithinMaintainScrollAtEndThreshold` signal
- * that only the library's own (rAF-coalesced) scroll processing refreshes -
- * never a fresh geometry read. A previous fix tried to keep the library's
- * own `maintainScrollAtEnd` and gate the PROP value by a React-render-time
- * check; review rejected it for three independent reasons: (1) item-size,
- * footer-size, and viewport-layout measurement all call
- * `doMaintainScrollAtEnd` directly, with no intervening `ChatTimeline`
- * render to re-evaluate a render-gated prop; (2) a numeric "did scrollTop
- * decrease since some remembered baseline" heuristic is not sound bottom
- * ownership - a reader can detach, drift downward without ever reaching the
- * edge, and still read as "following" against a stale baseline; (3) mutating
- * a ref inside a `useSyncExternalStore` snapshot is impure and can retain
- * state from an abandoned/retried render.
- *
- * This version disables the library's own `maintainScrollAtEnd` UNCONDITIONALLY
- * (chat-timeline.tsx never passes it at all) - since every one of the library's
- * own call sites already no-ops when that prop is falsy, this makes
- * `doMaintainScrollAtEnd` categorically unreachable from ANY of those four
- * triggers, independent of render timing or cache freshness. Bottom-follow is
- * reimplemented here instead, owned entirely by the app:
- *
- * - `permissionRef` is the single live follow authority. Native and LegendList
- *   scroll delivery both route through the same fresh DOM geometry observer.
- *   A non-bottom report revokes permission only when publishing reader input
- *   armed it; layout-owned scroll reports retain the current intent. While a
- *   movable gesture or owned free navigation is armed, maintain callbacks
- *   cannot create a correction that races and masks its pending scroll.
- *   `initialScrollAtEnd` seeds the ref once and never resets it.
- * - An app-owned correction carries a generation and reader-gesture token.
- *   Its intermediate non-bottom scroll reports cannot revoke permission;
- *   validation reissues after two-frame measurement windows with a bounded
- *   retry budget. Wheel/touch/key/pointer intent cancels ownership before its
- *   scroll report. A movable publishing gesture also supersedes any pending
- *   LegendList `scrollToEnd` at the live offset so a queued end command cannot
- *   restore the tail before that report. Scroll direction during an owned
- *   correction is never used as reader-intent evidence because MVCP,
- *   ResizeObserver delivery, browser clamping, and content-inset compensation
- *   can all move `scrollTop` in the opposite direction without reader input.
- * - `followEndIfPermitted` is the one automatic path that turns permission
- *   into an actual scroll. Explicit go-live navigation declares its own
- *   ownership through the same latch and uses the same fresh-DOM authority.
- *   Every real maintain trigger funnels through `followEndIfPermitted` - see
- *   `chat-timeline.tsx`'s wiring.
- * - Both the listener and the observer skip unmeasurable geometry
- *   (`clientHeight === 0`, e.g. a `display:none` pane) rather than treating it
- *   as a confirmed edge - the permission ref is simply left as whatever it
- *   last legitimately was.
- *
- * Nothing here reads or writes `permissionRef` during render - the ref is
- * only ever touched inside an event handler (`scroll`/`ResizeObserver`
- * callback) or an effect, so there is no "which speculative render committed
- * this write" ambiguity for React to retry or abandon.
- */
+/** The installed `@legendapp/list` source shows every one of its own `doMaintainScrollAtEnd` call sites (data change, item-layout, footer- layout, viewport-layout) gates on `state.props.maintainScrollAtEnd` being truthy, then reads a CACHED `isWithinMaintainScrollAtEndThreshold` signal that only the library's own (rAF-coalesced) scroll processing refreshes - never a fresh geometry read. A previous fix tried to keep the library's own `maintainScrollAtEnd` and gate the PROP value by a React-render-time check; review rejected it for three independent reasons: (1) item-size, footer-size, and viewport-layout measurement all call `doMaintainScrollAtEnd` directly, with no intervening `ChatTimeline` render to re-evaluate a render-gated prop; (2) a numeric "did scrollTop decrease since some remembered baseline" heuristic is not sound bottom ownership - a reader can detach, drift downward without ever reaching the edge, and still read as "following" against a stale baseline; (3) mutating a ref inside a `useSyncExternalStore` snapshot is impure and can retain state from an abandoned/retried render. */
 export function useChatTimelineFollowLatch(
   listRef: RefObject<LegendListRef | null>,
   initialScrollAtEnd: boolean,
@@ -238,11 +163,8 @@ export function useChatTimelineFollowLatch(
   const supersedePendingEndCorrection = useCallback(
     (offset: number): void => {
       if (pendingEndCorrectionScrollRef.current === null) return;
-      // LegendList queues scrollToEnd behind data/layout readiness and
-      // invalidates that command only when a newer imperative scroll starts.
-      // Clearing retry bookkeeping is not enough: bump the library token with
-      // the reader's live offset so a stale end command cannot restore the
-      // tail after this gesture has already moved scrollTop.
+      // LegendList queues scrollToEnd behind data/layout readiness and invalidates that command only when a newer imperative scroll starts.
+      // Clearing retry bookkeeping is not enough: bump the library token with the reader's live offset so a stale end command cannot restore the tail after this gesture has already moved scrollTop.
       pendingEndCorrectionScrollRef.current = null;
       void listRef.current?.scrollToOffset({
         offset,
@@ -255,13 +177,8 @@ export function useChatTimelineFollowLatch(
   const setFollowIntent = useCallback(
     (isFollowing: boolean): void => {
       if (!isFollowing) cancelActiveCorrection();
-      // Disarm only on an actual intent TRANSITION. An owned free navigation
-      // (minimap/find/deep-link) arms departure while the viewport is still
-      // latched at the bottom; an animated jump's first smooth-scroll frame
-      // can report geometry still inside the strict-bottom epsilon, and that
-      // report must not consume the armed flag - otherwise every subsequent
-      // (genuinely departing) report reads as layout-owned and the latch
-      // yanks the jump straight back to the tail.
+      // Disarm only on an actual intent TRANSITION.
+      // An owned free navigation (minimap/find/deep-link) arms departure while the viewport is still latched at the bottom; an animated jump's first smooth-scroll frame can report geometry still inside the strict-bottom epsilon, and that report must not consume the armed flag - otherwise every subsequent (genuinely departing) report reads as layout-owned and the latch yanks the jump straight back to the tail.
       if (permissionRef.current === isFollowing) return;
       armedReaderDepartureRef.current = null;
       permissionRef.current = isFollowing;
@@ -284,9 +201,8 @@ export function useChatTimelineFollowLatch(
         ? {
             source: "gesture",
             direction: intent.direction,
-            // Unknown/hidden geometry cannot safely prove a no-op. When it is
-            // measurable, an edge-directed gesture that cannot move must not
-            // strand follow if no native scroll event is emitted.
+            // Unknown/hidden geometry cannot safely prove a no-op.
+            // When it is measurable, an edge-directed gesture that cannot move must not strand follow if no native scroll event is emitted.
             blocksAutomaticCorrection,
           }
         : null;
@@ -366,11 +282,8 @@ export function useChatTimelineFollowLatch(
         if (
           correction.attempts >= CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS
         ) {
-          // LegendList may still be settling a deferred web shrink, MVCP
-          // adjustment, streaming row resize, or content-inset change. A
-          // bounded correction is a CPU-safety mechanism, not evidence that
-          // the reader left the tail. Retain permission; the final layout
-          // callback (or the next stream mutation) will start a fresh burst.
+          // LegendList may still be settling a deferred web shrink, MVCP adjustment, streaming row resize, or content-inset change.
+          // A bounded correction is a CPU-safety mechanism, not evidence that the reader left the tail.
           cancelActiveCorrection();
           return;
         }
@@ -439,14 +352,8 @@ export function useChatTimelineFollowLatch(
         armedDeparture?.source === "gesture" &&
         (!armedDeparture.blocksAutomaticCorrection || isNativeScrollReport)
       ) {
-        // Only issue-time geometry that proved this gesture cannot move can
-        // release on a maintenance observation. A movable wheel/touch gesture
-        // can still be awaiting its native scroll report, so treating unchanged
-        // geometry as a no-op would let a subsequent maintain correction mask
-        // the reader's departure. Once a native report confirms it remained at
-        // the strict edge, though, release the arm so later streaming can follow.
-        // Owned navigation deliberately survives: an animated free jump may
-        // report a sub-epsilon first frame before it genuinely leaves the edge.
+        // Only issue-time geometry that proved this gesture cannot move can release on a maintenance observation.
+        // A movable wheel/touch gesture can still be awaiting its native scroll report, so treating unchanged geometry as a no-op would let a subsequent maintain correction mask the reader's departure.
         armedReaderDepartureRef.current = null;
       }
       const isSuppressed = isCorrectionSuppressed?.() === true;
@@ -515,10 +422,8 @@ export function useChatTimelineFollowLatch(
       setFollowIntent(false);
       return;
     }
-    // A non-bottom scroll report with no publishing reader input is layout-
-    // owned (MVCP, deferred row measurement, browser clamp, or inset
-    // compensation). Preserve intent and immediately correct; waiting for a
-    // separate maintain callback can leave the DOM parked away from the tail.
+    // A non-bottom scroll report with no publishing reader input is layout- owned (MVCP, deferred row measurement, browser clamp, or inset compensation).
+    // Preserve intent and immediately correct; waiting for a separate maintain callback can leave the DOM parked away from the tail.
     if (isCorrectionSuppressed?.() === true) return;
     const list = listRef.current;
     if (list) startEndCorrection(list, node);
@@ -540,19 +445,12 @@ export function useChatTimelineFollowLatch(
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
     if (isChatTimelineAtStrictBottom(geometry)) {
       if (isCorrectionSuppressed?.() === true) {
-        // A partial hydration restore may be temporarily clamped to its own
-        // short snapshot's end. Maintenance is not reader evidence and must
-        // not resolve that pending transaction; only a live scroll report can
-        // validate its frozen target through `reconcileStrictBottom`.
+        // A partial hydration restore may be temporarily clamped to its own short snapshot's end.
+        // Maintenance is not reader evidence and must not resolve that pending transaction; only a live scroll report can validate its frozen target through `reconcileStrictBottom`.
         cancelActiveCorrection();
         return;
       }
-      // Maintenance can be the only observable boundary after a collapsing
-      // row or end-inset change passively clamps the DOM to the strict edge.
-      // Reconcile before consulting permission so a stale false latch cannot
-      // leave a jump pill visible when there is no useful bottom to reach.
-      // This performs no imperative navigation, preserving destructive-clamp
-      // behavior while allowing subsequent streaming growth to stay latched.
+      // Reconcile before consulting permission so a stale false latch cannot leave a jump pill visible when there is no useful bottom to reach.
       reconcileStrictBottom(false);
       return;
     }
@@ -563,9 +461,8 @@ export function useChatTimelineFollowLatch(
       armedDeparture?.source === "owned-navigation" ||
       armedDeparture?.blocksAutomaticCorrection === true
     ) {
-      // Reader/free-navigation intent was published before its native scroll
-      // report. Starting a correction here would inherit that gesture's
-      // generation and then mask the departure as correction-owned.
+      // Reader/free-navigation intent was published before its native scroll report.
+      // Starting a correction here would inherit that gesture's generation and then mask the departure as correction-owned.
       return;
     }
 
@@ -578,9 +475,8 @@ export function useChatTimelineFollowLatch(
     startEndCorrection,
   ]);
 
-  // The empty state does not mount LegendList. Re-resolve when the rendered
-  // timeline crosses that boundary so the first row attaches the listener,
-  // and returning to empty cleans it up.
+  // The empty state does not mount LegendList.
+  // Re-resolve when the rendered timeline crosses that boundary so the first row attaches the listener, and returning to empty cleans it up.
   useLayoutEffect(() => {
     const current = listRef.current?.getScrollableNode() ?? null;
     setScrollNode((previous) => (previous === current ? previous : current));
@@ -632,17 +528,13 @@ export function useChatTimelineFollowLatch(
           isChatTimelineGeometryMeasurable(liveGeometry) &&
           !isChatTimelineAtStrictBottom(liveGeometry)
         ) {
-          // A scrollbar drag can update live scrollTop before main-thread
-          // pressure allows its coalesced native scroll event through. Publish
-          // the already-visible departure now, while its arm is intact, so an
-          // intervening ResizeObserver cannot classify it as layout-owned and
-          // yank the viewport back to the tail.
+          // A scrollbar drag can update live scrollTop before main-thread pressure allows its coalesced native scroll event through.
+          // Publish the already-visible departure now, while its arm is intact, so an intervening ResizeObserver cannot classify it as layout-owned and yank the viewport back to the tail.
           observeLiveGeometry();
           return;
         }
-        // A click/release whose live geometry stayed at the strict edge was a
-        // no-op and may emit no scroll event. Release only that preflight so a
-        // later stream mutation can continue following normally.
+        // A click/release whose live geometry stayed at the strict edge was a no-op and may emit no scroll event.
+        // Release only that preflight so a later stream mutation can continue following normally.
         armedReaderDepartureRef.current = null;
       }
     };
@@ -657,10 +549,8 @@ export function useChatTimelineFollowLatch(
     node.addEventListener("pointercancel", completePointerPreflight, {
       passive: true,
     });
-    // Viewport-layout trigger (divider drag / pane resize): fires with no
-    // ChatTimeline render at all. Like every maintain trigger, it may heal a
-    // stale false latch only when fresh geometry is already at the strict
-    // edge; non-bottom geometry still preserves a detached reader's position.
+    // Viewport-layout trigger (divider drag / pane resize): fires with no ChatTimeline render at all.
+    // Like every maintain trigger, it may heal a stale false latch only when fresh geometry is already at the strict edge; non-bottom geometry still preserves a detached reader's position.
     const resizeObserver = new ResizeObserver(() => {
       followEndIfPermitted();
     });

@@ -1,16 +1,4 @@
-/**
- * Display-layer projection of the raw comm-graph event array.
- *
- * Everything here is DERIVED and disposable: the merged event array stays raw
- * and uncollapsed (it is also what the timeline consumes, unaggregated), and
- * these helpers fold it into what a canvas can actually draw. Aggregation lives
- * on this side of the line deliberately - the canvas would be unreadable with
- * one edge per message, but the record must not be rewritten to achieve that.
- *
- * Every function takes the event array as an argument, so a future time cursor
- * only has to pass a prefix (`events.filter(e => e.timestamp <= t)`) to get the
- * graph as of `t`; nothing here reads "now".
- */
+/** Display-layer projection of the raw comm-graph event array. */
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 
@@ -20,63 +8,28 @@ export interface CommGraphAgentNode {
   readonly id: string;
   readonly kind: CommGraphAgentKind;
   readonly name: string;
-  /**
-   * Host the agent lives on; decides which subscription covers its edges.
-   *
-   * `null` for a LEGACY chat record written before chats carried `hostId`.
-   * That stays unresolved on purpose: the only "live" answer available is the
-   * app's currently-active host, which is reactive global state - reading it
-   * here would move the node (and tear down / re-open that host's
-   * subscription, discarding its events and cursor) every time the user
-   * switches hosts elsewhere in the app. An unattributed node rendered as
-   * "host unknown" is honest; a node that flaps with a global selection is
-   * not.
-   */
+  /** Host the agent lives on; decides which subscription covers its edges. */
   readonly hostId: string | null;
   /**
-   * Creator, when known. A LAYOUT CONSTRAINT ONLY - lineage is never drawn as
-   * an edge: it is mutable via reparent and already visualized by the sidebar,
-   * so drawing it would duplicate the tree and imply a message that never
-   * happened.
+   * Creator, when known.
+   * A LAYOUT CONSTRAINT ONLY - lineage is never drawn as an edge: it is mutable via reparent and already visualized by the sidebar, so drawing it would duplicate the tree and imply a message that never happened.
    */
   readonly parentId: string | null;
   /**
-   * The harness running this agent - a terminal agent's own brand, or a GUI
-   * chat's persisted run setting. `null` when the record carries none, which
-   * for a chat means it has never been given run settings.
-   *
-   * Widened past the terminal-only set deliberately: this is a fact about the
-   * agent, not about the surface it happens to run on, and the office draws it
-   * for both kinds. The node graph's icon does NOT read this - it resolves
-   * through `EpicNodeTabIcon` by node id - so populating it for chats changes
-   * nothing there.
+   * The harness running this agent - a terminal agent's own brand, or a GUI chat's persisted run setting.
+   * `null` when the record carries none, which for a chat means it has never been given run settings.
    */
   readonly harnessId: GuiHarnessId | null;
   /** The model slug the record carries, when it has one. Shown on hover only. */
   readonly model: string | null;
   /** Archived agents are ALWAYS shown, styled muted - the graph is historical. */
   readonly archived: boolean;
-  /**
-   * WHEN the record was archived, or `null` while live.
-   *
-   * Carried alongside the boolean rather than replacing it: the graph asks
-   * "is this archived?" and the office asks "was it archived AS OF the
-   * cursor?", and a timeline that can be scrubbed back before the archival
-   * cannot answer the second from the first.
-   */
+  /** WHEN the record was archived, or `null` while live. */
   readonly archivedAt: number | null;
   readonly createdAt: number;
 }
 
-/**
- * One edge per UNORDERED pair {A, B}.
- *
- * Two directed edges between the same agents draw as two curves that cross and
- * fight each other; at three or four conversing agents the canvas becomes
- * unreadable spaghetti and the shape of the conversation - who is talking to
- * whom at all - is lost. Direction is not lost with it: it moves to the
- * click-through, which lists both directions interleaved and labels every row.
- */
+/** One edge per UNORDERED pair {A, B}. */
 export interface CommGraphAggregatedEdge {
   /** Order-independent pair id - see `commGraphPairId`. */
   readonly id: string;
@@ -84,23 +37,20 @@ export interface CommGraphAggregatedEdge {
   readonly agentAId: string;
   readonly agentBId: string;
   /**
-   * True when EITHER direction has an unanswered `expectReply` send. Derived
-   * purely from the log - the live broker is never consulted.
+   * True when EITHER direction has an unanswered `expectReply` send.
+   * Derived purely from the log - the live broker is never consulted.
    */
   readonly hasOpenThread: boolean;
   /**
-   * The contributing rows across BOTH directions, in the merged array's order,
-   * for the click-through. Interleaved chronologically by construction: the
-   * input array is already sorted, so one pass preserves it.
+   * The contributing rows across BOTH directions, in the merged array's order, for the click-through.
+   * Interleaved chronologically by construction: the input array is already sorted, so one pass preserves it.
    */
   readonly events: ReadonlyArray<CommGraphEvent>;
 }
 
 /**
- * The canvas edge id: order-independent, so a row in either direction lands on
- * the same edge. Sorted rather than "first seen wins" so the id is a pure
- * function of the pair and cannot depend on which message happened to arrive
- * first.
+ * The canvas edge id: order-independent, so a row in either direction lands on the same edge.
+ * Sorted rather than "first seen wins" so the id is a pure function of the pair and cannot depend on which message happened to arrive first.
  */
 export function commGraphPairId(
   agentOneId: string,
@@ -111,35 +61,12 @@ export function commGraphPairId(
     : `${agentTwoId}<->${agentOneId}`;
 }
 
-/**
- * Thread key: `responseId` scoped to its HOST.
- *
- * Response ids are host-local, so two hosts can hand out the same one for
- * unrelated threads. Scoping the key here is also what makes the row-id
- * ordering below sound: ids are monotonic PER HOST and meaningless across
- * hosts, so they may only ever be compared inside one of these buckets.
- */
+/** Thread key: `responseId` scoped to its HOST. */
 function threadKey(hostId: string, responseId: string): string {
   return `${hostId} ${responseId}`;
 }
 
-/**
- * Thread key to the latest reply seen on it.
- *
- * Host-local rows use their monotonic row id as causal order. Cloud rows use
- * their canonical `(ingestVersion, eventId)` cursor instead: a restored host
- * can reuse an origin row id, while cloud ingestion remains append-only. The
- * wall clock is never causal order: a request, its reply and a re-opening
- * request routinely land in the same millisecond, and clocks can step backward.
- *
- * The merged array's DISPLAY sort is a separate concern and stays
- * `(timestamp, hostId, id)`: it orders unrelated events across hosts, where ids
- * genuinely are not comparable.
- *
- * A `responseId` is reused across a directed pair, so a thread can be answered,
- * reopened, and answered again; tracking the LATEST reply rather than mere
- * existence is what keeps a re-opened thread showing as open.
- */
+/** Thread key to the latest reply seen on it. */
 function compareThreadCausalOrder(
   left: CommGraphEvent,
   right: CommGraphEvent,
@@ -185,15 +112,7 @@ function isOpenRequest(
   return compareThreadCausalOrder(reply, event) < 0;
 }
 
-/**
- * The `expectReply` sends that still have no reply on their thread.
- *
- * Exactly the openness rule `hasOpenThread` reports below, exposed as ROWS
- * rather than as a flag on a pair. A consumer that needs the WAITING SENDER
- * cannot recover direction from an undirected edge, and a second hand-rolled
- * pass over thread causality would drift from this one the first time the
- * ordering rules move - so there is one implementation and two views of it.
- */
+/** The `expectReply` sends that still have no reply on their thread. */
 export function openCommGraphRequests(
   events: ReadonlyArray<CommGraphEvent>,
 ): ReadonlyArray<CommGraphEvent> {
@@ -208,14 +127,7 @@ interface MutablePairEntry {
   readonly events: CommGraphEvent[];
 }
 
-/**
- * Fold A2A rows into one edge per UNORDERED pair.
- *
- * Rows whose endpoints are not both in `agentIds` are skipped: the canvas draws
- * agents from the epic's projection, so an edge to an id with no node has
- * nothing to attach to. That is a rendering limit, not a filter on the record -
- * the event array itself keeps every row.
- */
+/** Fold A2A rows into one edge per UNORDERED pair. */
 export function aggregateCommGraphEdges(
   events: ReadonlyArray<CommGraphEvent>,
   agentIds: ReadonlySet<string>,
@@ -238,9 +150,7 @@ export function aggregateCommGraphEdges(
       events: [],
     };
     if (existing === undefined) byPair.set(id, entry);
-    // The canvas dashes the pair when EITHER direction is waiting - the edge
-    // says "this conversation has an unanswered ask", and which way it points is
-    // the detail view's job (it labels every row).
+    // The canvas dashes the pair when EITHER direction is waiting - the edge says "this conversation has an unanswered ask", and which way it points is the detail view's job (it labels every row).
     if (isOpenRequest(event, latestReply)) entry.hasOpenThread = true;
     entry.events.push(event);
   }

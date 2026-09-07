@@ -51,7 +51,6 @@ type OpenCodeRateLimits = Extract<
 
 const NOW = Date.now();
 
-/** Same calendar formatting Grok's billing-period range uses (local TZ). */
 function formatGrokPeriodDate(epochMs: number): string {
   return new Date(epochMs).toLocaleDateString(undefined, {
     month: "short",
@@ -109,9 +108,8 @@ describe("CodexRateLimitView (extended fields)", () => {
   });
 
   it("never renders the plan/tier label itself - the header popover owns that chip", () => {
-    // `resolveProviderPlanLabel` (provider-rate-limit-content.test.ts) covers the
-    // planType -> "Pro 5x" mapping; the popover header's own test coverage
-    // (rate-limit-popover.test.tsx) covers the chip actually rendering.
+    // `resolveProviderPlanLabel` (provider-rate-limit-content.test.ts) covers the planType -> "Pro 5x" mapping;
+    // the popover header's own test coverage (rate-limit-popover.test.tsx) covers the chip actually rendering.
     render(<CodexRateLimitView data={codex} variant="popover-detail" />);
     expect(screen.queryByText("Pro 5x")).toBeNull();
   });
@@ -365,11 +363,8 @@ describe("CodexRateLimitView (extended fields)", () => {
   });
 
   it("draws every popover window track with a foreground-opacity fill so an empty bar stays visible", () => {
-    // Regression (Issue 3): several dark presets set --muted == --popover, so
-    // a `bg-muted` track vanished at 0% fill. The track now fills with
-    // `bg-foreground/15` instead, which contrasts against any background
-    // regardless of theme - a 0%-used window must still show a visible,
-    // empty track, with no border needed to keep it that way.
+    // The track now fills with `bg-foreground/15` instead, which contrasts against any background regardless of
+    // theme - a 0%-used window must still show a visible, empty track, with no border needed to keep it that way.
     const { container } = render(
       <CodexRateLimitView
         data={{
@@ -400,9 +395,7 @@ describe("CodexRateLimitView (extended fields)", () => {
   });
 
   it("shows a relative countdown for a short popover window", () => {
-    // Fixup C #1: the popover reverts to the same relative-for-short /
-    // exact-for-weekly split as the Settings card. `primary` is a 5h window, so
-    // it reads as a relative countdown ("Resets in 4h 7m"), not an absolute date.
+    // `primary` is a 5h window, so it reads as a relative countdown ("Resets in 4h 7m"), not an absolute date.
     render(
       <CodexRateLimitView
         data={{ ...codex, secondary: null, extraWindows: [] }}
@@ -414,9 +407,8 @@ describe("CodexRateLimitView (extended fields)", () => {
   });
 
   it("shows an absolute calendar date and time for a weekly popover window", () => {
-    // The weekly (10080-min) `secondary` window keeps the absolute reset line
-    // with its full date, since "Resets in 3d" is too coarse and a weekday
-    // alone is ambiguous.
+    // The weekly (10080-min) `secondary` window keeps the absolute reset line with its full date, since "Resets in
+    // 3d" is too coarse and a weekday alone is ambiguous.
     render(
       <CodexRateLimitView
         data={{ ...codex, primary: null, extraWindows: [] }}
@@ -432,9 +424,8 @@ describe("CodexRateLimitView (extended fields)", () => {
   });
 
   it("condenses the popover Overview to only the 5h/Weekly windows (credits dropped)", () => {
-    // Item 3 feedback: Overview drops Credits too, along with per-model
-    // extraWindows, the reset-credits block, and the plan label; it keeps only
-    // the primary/secondary windows.
+    // Item 3 feedback: Overview drops Credits too, along with per-model extraWindows, the reset-credits block, and
+    // the plan label; it keeps only the primary/secondary windows.
     render(
       <CodexRateLimitView
         data={{
@@ -460,14 +451,8 @@ describe("CodexRateLimitView (extended fields)", () => {
 
 describe("ClaudeRateLimitView", () => {
   it("shows an absolute calendar date and time for a far per-model reset, even though modelScoped carries no durationMinutes", () => {
-    // Regression: `modelScoped` entries never carry a `durationMinutes` (the
-    // SDK's per-model usage has no separate duration field), so a
-    // duration-based "is this weekly-scale" check always fell back to the
-    // relative countdown for these rows, no matter how far away the real
-    // reset was ("Fable" usage showed "Resets in 3d" instead of a precise
-    // date/time). The reset-format decision is now based on the real
-    // `resetsAt` delta instead, so a 3-day-out per-model reset gets the same
-    // absolute treatment a weekly window does.
+    // Regression: `modelScoped` entries never carry a `durationMinutes` (the SDK's per-model usage has no separate
+    // duration field).
     const claude: ClaudeRateLimits = {
       provider: "claude-code",
       available: true,
@@ -497,9 +482,8 @@ describe("ClaudeRateLimitView", () => {
   });
 
   it("sets the model-scoped rows off with a divider, not a 'Per-model' heading", () => {
-    // Same header-less group treatment CodexRateLimitView gives its per-model
-    // (Spark) extraWindows: the rows' own display names already say which
-    // model each is, so the group gets a hairline divider instead of a label.
+    // Same header-less group treatment CodexRateLimitView gives its per-model (Spark) extraWindows: the rows' own
+    // display names already say which model each is, so the group gets a hairline divider instead of a label.
     const claude: ClaudeRateLimits = {
       provider: "claude-code",
       available: true,
@@ -824,10 +808,8 @@ describe("GrokRateLimitView", () => {
   });
 
   it("suppresses the fallback Plan row on popover-detail (the header owns the tier chip), keeping the billing period", () => {
-    // In the single-provider popover tab the header already renders the tier as
-    // a chip (resolveProviderPlanLabel), so the body's Plan row would duplicate
-    // it - same reason Codex/Claude keep the tier out of their card bodies. The
-    // billing-period row, which the chip doesn't carry, still shows.
+    // In the single-provider popover tab the header already renders the tier as a chip (resolveProviderPlanLabel),
+    // so the body's Plan row would duplicate it - same reason Codex/Claude keep the tier out of their card bodies.
     render(
       <GrokRateLimitView data={grokPeriodLess} variant="popover-detail" />,
     );
@@ -1242,15 +1224,8 @@ describe("CursorRateLimitView", () => {
   };
 
   it("pairs the Overview's dollars with their own included-usage meter", () => {
-    // Live-account regression, second round: the bucket bars are each
-    // measured against their own unpublished (bonus-inflated) limit, while
-    // the dollars describe Cursor's BLENDED $400 purchased pool (~81%
-    // consumed on the same payload). A bare "$74.63 left of $400" under bars
-    // reading 6% / 40% presented as a broken calculation even though
-    // `remaining` is Cursor's own server-computed field - and dropping the
-    // rows was the wrong fix (the money is the actionable number). The
-    // dollars stay, carried by a credit meter whose fill shares their
-    // denominator, so the row explains itself.
+    // Live-account regression, second round: the bucket bars are each measured against their own unpublished
+    // (bonus-inflated) limit.
     render(<CursorRateLimitView data={cursor} variant="popover-overview" />);
     expect(screen.getByText("Cursor Models")).toBeTruthy();
     expect(screen.getByText("6% used")).toBeTruthy();
@@ -1279,12 +1254,7 @@ describe("CursorRateLimitView", () => {
   });
 
   it("shows overflow honestly once spend runs past the purchased allowance", () => {
-    // Past $400 the account is on Cursor's bonus grant - nothing is limited
-    // and nothing is billed, so the meter must NOT dress this up as a limit
-    // event: fill pins at 100% in the amber running-low tone (red stays
-    // reserved for the bucket bars, the actual gates), the detail keeps the
-    // REAL spend, "left" clamps at $0.00 instead of going negative, and the
-    // bonus spend gets its own row.
+    // Past $400 the account is on Cursor's bonus grant.
     const { container } = render(
       <CursorRateLimitView
         data={{

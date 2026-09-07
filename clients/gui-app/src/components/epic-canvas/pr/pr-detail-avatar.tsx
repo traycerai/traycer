@@ -4,16 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 
 /**
- * A GitHub actor's avatar for the PR detail surfaces. Falls back to the
- * login's initial when the actor is unknown or the avatar image is absent
- * or fails to load (e.g. blocked remote images) - radix swaps in the
- * fallback on load error, so a broken URL degrades to the initial too.
- *
- * `isolate` bounds the primitive's `after:mix-blend-*` border to the avatar's
- * own opaque circle. Without it every avatar's blend makes the surrounding
- * scroll contents its compositing backdrop, and a timeline full of avatars
- * inside one tall scroller blows Chromium's tile memory budget ("tile memory
- * limits exceeded" spam + undrawn content after scrolling).
+ * Without it every avatar's blend makes the surrounding scroll contents its compositing backdrop, and a timeline full of avatars inside one tall scroller blows Chromium's tile memory budget ("tile memory limits exceeded" spam + undrawn content after scrolling).
  */
 export function PrActorAvatar(props: {
   readonly actor: PrActor | null;

@@ -28,11 +28,6 @@ export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
 export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
 const BROWSER_VIEW_ISOLATED_PARTITION_PREFIX = "traycer-isolated-";
 
-/**
- * Which jar a browser guest gets. `primary` is the one shared identity (user
- * tabs, agent Electron tabs, popups); `isolated` is a per-session throwaway
- * partition that shares cookies with nothing and dies with the session.
- */
 export type BrowserSessionProfile = "primary" | "isolated";
 
 export interface BrowserSessionProfileRequest {
@@ -174,11 +169,6 @@ const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
 
 const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
 const browserWebContentsIds = new Set<number>();
-/**
- * Exact webview guests whose non-`about:blank` requests stay cancelled until
- * main finishes policy/seed/CDP. One process set; each session policy installs
- * the same `onBeforeRequest` listener once.
- */
 const gatedGuestWebContentsIds = new Set<number>();
 const BLANK_GUEST_REQUEST_URL = "about:blank";
 const browserDownloadListeners = new Set<
@@ -193,12 +183,7 @@ const pendingCertificateErrorsById = new Map<
   BrowserSessionPendingCertificateError
 >();
 
-/**
- * Sessions are memoised per partition name, not globally: toggling saved logins
- * mid-process moves new guests between the persistent and ephemeral partitions,
- * and each partition needs the hardening installed exactly once.
- * `session.defaultSession` is never touched here - the app shell owns it.
- */
+/** `session.defaultSession` is never touched here - the app shell owns it. */
 const sessionsByPartition = new Map<string, Session>();
 const browserCookieDeltaListeners = new Set<
   (delta: BrowserPrimaryProfileDelta) => void
@@ -214,24 +199,7 @@ export function ensureBrowserViewSession(
   );
 }
 
-/**
- * A plain desktop Chrome User-Agent for guest partitions, carrying NO
- * `Electron/<ver>` token and NO Traycer product token - exactly the shape a
- * real Chrome sends. Guests are browser tabs, and providers (Google's
- * `disallowed_useragent`, others) refuse sign-in for any UA containing
- * "Electron", which broke OAuth completing inside a guest/popup. The Chrome
- * version tracks the runtime; the platform token is the standard per-OS string
- * a real Chrome reports (macOS reports Intel even on Apple Silicon, matching
- * Chrome). Traycer's own host/renderer comms keep their branded UA via
- * `configureUserAgent()` on the default session.
- *
- * Guests get this clean UA too, but not via a session-level `setUserAgent`
- * call here: guest partition sessions are never the default session, so with
- * no explicit session UA they fall through to `app.userAgentFallback`, which
- * `configureUserAgent()` sets to this same value. That one lever covers both
- * guests and their popups (popups share the opener's partition session) -
- * exported for `configureUserAgent()` to consume.
- */
+/** Guests get this clean UA too, but not via a session-level `setUserAgent` call here: guest partition sessions are never the default session, so with no explicit session UA they. */
 export function guestBrowserUserAgent(): string {
   const platformToken = guestBrowserPlatformToken();
   return `Mozilla/5.0 (${platformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
@@ -256,15 +224,6 @@ export function ensureBrowserViewSessionForPartition(
   return browserSession;
 }
 
-/**
- * Cookie deltas come from the durable `primary` jar and nowhere else: the
- * ephemeral jar's logins are gone at quit, and an isolated partition shares
- * nothing by construction (spec §6.1).
- *
- * This runs on the FIRST materialization of that partition, not at app start:
- * the observer's startup grace window is therefore anchored to the user's
- * first browser tile of the run. See `attach()` for what that costs.
- */
 function observePrimaryProfileCookieChanges(
   partition: string,
   browserSession: Session,
@@ -280,22 +239,13 @@ function observePrimaryProfileCookieChanges(
     now: () => Date.now(),
     monotonicNow: () => performance.now(),
     coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
-    // The handler is synchronous, so the promise cannot be awaited here. It
-    // is not dropped work: the transfer is in memory the moment the call
-    // returns, the file write behind it is queued on the ledger's own write
-    // chain, and a failure to reach disk is warned about there rather than
-    // rejecting into nothing.
+    // The handler is synchronous, so the promise cannot be awaited here.
     onLocalCookieWrite: (key) => void releaseHeadlessOriginCookieKeys([key]),
   });
   observer.attach();
   primaryCookieObserver = observer;
 }
 
-/**
- * Every coalesced cookie delta from the durable `primary` jar. The IPC layer
- * fans these out to the renderer, which forwards them to the host as
- * `primaryProfileDelta`.
- */
 export function onBrowserPrimaryProfileDelta(
   listener: (delta: BrowserPrimaryProfileDelta) => void,
 ): () => void {
@@ -305,19 +255,6 @@ export function onBrowserPrimaryProfileDelta(
   };
 }
 
-/**
- * Runs a deliberate whole-jar change without it echoing back to the host as a
- * delta: ticket 08's "forget all browser logins". A `clearStorageData()` fires
- * a removal for every cookie there is, and those deltas would reach the host
- * after it had already shredded the slice - re-creating an entry for the
- * identity just forgotten.
- *
- * The whole jar is the only granularity this comes in. A per-domain form
- * existed for the host-driven evict, which universal-sign-in ticket 08 retired
- * along with the frame that drove it; the local "clear cookies for this site"
- * deliberately does NOT suppress, because its removals are exactly the delta
- * that tells the host the slice is empty.
- */
 export async function suppressAllBrowserPrimaryProfileDeltas<T>(
   action: () => Promise<T>,
 ): Promise<T> {
@@ -326,16 +263,8 @@ export async function suppressAllBrowserPrimaryProfileDeltas<T>(
 }
 
 /**
- * The observed-sign-in applier is about to write these keys into the DURABLE
- * jar (universal-sign-in ticket 08). Their insert events belong to the
- * applier, not to this machine's browsing, so the observer must not read them
- * as the desktop taking the key back.
- *
- * A no-op when that jar has never been materialised this run - there is no
- * observer, and therefore no insert to attribute either way. The applier never
- * calls this for a write bound for the ephemeral jar: that jar is watched by
- * nobody, and marking keys on the durable observer would make it miss a local
- * write there.
+ * The observed-sign-in applier is about to write these keys into the DURABLE jar (universal-sign-in ticket 08). Their insert events belong to the applier, not to this machine's.
+ * A no-op when that jar has never been materialised this run - there is no observer, and therefore no insert to attribute either way.
  */
 export function noteBrowserPrimaryProfileAppliedKeys(
   keys: readonly BrowserCookieKey[],
@@ -361,19 +290,10 @@ export function createBrowserViewWebPreferences(
   };
 }
 
-/**
- * The single place that decides whether a guest gets a durable jar. `primary`
- * is durable unless the user turned saved logins off on this machine.
- */
 export function partitionForProfile(
   profile: BrowserSessionProfile,
   sessionId: string,
 ): string {
-  // No `persist:` prefix, and the session id in the name: the jar lives in
-  // memory only, is shared by nothing else, and is cleared outright when the
-  // session's last tab goes away (spec §6.1, decision #24). The saved-logins
-  // pref is deliberately not consulted - an isolated session is ephemeral
-  // whether or not the user saves logins.
   if (profile === "isolated") {
     return `${BROWSER_VIEW_ISOLATED_PARTITION_PREFIX}${sessionId}`;
   }
@@ -382,11 +302,6 @@ export function partitionForProfile(
     : BROWSER_VIEW_EPHEMERAL_PARTITION;
 }
 
-/**
- * Drops a partition's jar and its memoised session. Only an isolated session's
- * partition is ever released: the shared `primary` jars outlive every guest,
- * and clearing one would sign the user out of the whole app.
- */
 export async function releaseBrowserViewSession(
   partition: string,
 ): Promise<void> {
@@ -452,10 +367,6 @@ function installBrowserViewSessionPolicy(
   });
 }
 
-/**
- * Cancel this guest's non-`about:blank` requests until the disposer runs.
- * Called once for each guest birth; the returned disposer is idempotent.
- */
 export function gateBrowserViewGuestRequests(
   webContentsId: number,
 ): () => void {
@@ -557,11 +468,6 @@ export function handleBrowserViewCertificateError(
   return false;
 }
 
-/**
- * The app-shell owns Electron's `certificate-error` event; this tells it
- * which webContents are native browser tiles and where their rejected certs
- * go, so `app/cert-trust` never has to reach into browser-view.
- */
 setBrowserCertificateErrorHandler({
   owns: (webContentsId) => isBrowserViewWebContents({ id: webContentsId }),
   report: (input) => {

@@ -1,13 +1,3 @@
-/**
- * Render-count regression tests using the React Profiler API.
- *
- * Asserts the projector's identity contract end-to-end: editing one
- * artifact must NOT cause a component subscribed to a sibling artifact
- * (or to an unrelated slice such as the connection pill) to re-render.
- *
- * These tests are the safety net for the "Y update -> targeted slice
- * patch -> no cross-component churn" claim that justifies the refactor.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { act, cleanup, render } from "@testing-library/react";
@@ -69,11 +59,7 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-render-counts",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,

@@ -104,9 +104,8 @@ function createChatHandle(
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
-      // The windowed line's two client calls. Inert here - this fixture never
-      // delivers a windowed snapshot, so nothing plans a hydration - but the
-      // handle is a whole surface and a partial one would not type.
+      // Inert here - this fixture never delivers a windowed snapshot, so nothing plans a hydration - but the handle
+      // is a whole surface and a partial one would not type.
       requestTranscriptRange: () => undefined,
       requestResnapshot: () => undefined,
       close: () => undefined,

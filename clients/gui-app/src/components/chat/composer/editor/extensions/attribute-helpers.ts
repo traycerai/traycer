@@ -56,9 +56,8 @@ export const MENTION_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   // below for GitHub; the browser-tab arm reuses it for the tab's address.
   "tabId",
   "sessionId",
-  // GitHub PR/issue references. These names are the protocol serializer's
-  // (`MentionAttrs`), not local ones: `formatMentionForLLMQuery` reads them off
-  // the submitted node by name to build `@github-pr:org/repo#N [url=…]`.
+  // GitHub PR/issue references.
+  // These names are the protocol serializer's (`MentionAttrs`), not local ones: `formatMentionForLLMQuery` reads them off the submitted node by name to build `@github-pr:org/repo#N [url=…]`.
   "githubHost",
   "organizationLogin",
   "repositoryName",
@@ -84,9 +83,8 @@ export const IMAGE_ATTACHMENT_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   "id",
   "fileName",
   "b64content",
-  // Content hash of a persisted image. Editing an already-sent message loads its
-  // hash-only node back into the editor; carrying `hash` through the schema lets
-  // it round-trip to the host instead of being stripped (and the image lost).
+  // Content hash of a persisted image.
+  // Editing an already-sent message loads its hash-only node back into the editor; carrying `hash` through the schema lets it round-trip to the host instead of being stripped (and the image lost).
   "hash",
   "mimeType",
   "size",

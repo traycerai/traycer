@@ -7,18 +7,10 @@ interface ComposerToolbarLeftProps {
   onAttachImages: (files: ReadonlyArray<File>) => void;
   permission: PermissionMode;
   onPermissionChange: (next: PermissionMode) => void;
-  /**
-   * Permission modes the active harness honors. Forwarded straight to
-   * `PermissionsPicker`; `null` while the harness catalog is still loading
-   * (every option stays enabled until the host reports back).
-   */
+  /** Forwarded straight to `PermissionsPicker`; `null` while the harness catalog is still loading (every option
+   * stays enabled until the host reports back). */
   supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
-  /**
-   * Display label of the active harness (e.g. "Cursor"). Threaded into the
-   * picker's "Not supported by <name>" copy for disabled options. `null` while
-   * the harness catalog is still loading, in which case the picker falls back
-   * to "this provider".
-   */
+  /** `null` while the harness catalog is still loading, in which case the picker falls back to "this provider". */
   harnessLabel: string | null;
   showNextTurnPermissionNote: boolean;
   settingsLocked: boolean;

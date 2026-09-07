@@ -1,13 +1,3 @@
-/**
- * Pure applier tests for `pending-metadata-overlay.ts`, against the
- * `landed`-flag contract (row-wins is unconditional for any authoritative
- * move that isn't an ACKED local target; a landed-only chain stays alive
- * until the host visibly catches up to its LAST landed target).
- *
- * Mutations are constructed by hand and folded over hand-built slices, so
- * these tests pin the anchoring/row-wins/dead-chain rules in isolation from
- * everything that stamps a mutation.
- */
 import { describe, expect, it } from "vitest";
 import {
   applyPendingOverlayToArtifacts,
@@ -124,9 +114,8 @@ function makeTuiAgentsSlice(
 }
 
 /**
- * `landed` is REQUIRED (no default params) - every call site states the
- * mutation's ack status explicitly, since that is exactly the axis the new
- * contract's anchoring rule pivots on.
+ * `landed` is REQUIRED (no default params) - every call site states the mutation's ack status
+ * explicitly, since that is exactly the axis the new contract's anchoring rule pivots on.
  */
 function rename(args: {
   readonly requestId: string;
@@ -226,9 +215,8 @@ describe("applyPendingOverlayToArtifacts", () => {
 
   it("row-wins is UNCONDITIONAL for a peer writing the same value as an in-flight (un-landed) local target - it is not yet ACKED", () => {
     const artifacts = makeArtifactsSlice([
-      // A peer happens to write the exact same value our un-acked rename
-      // asked for. Since OUR request has not landed, this must still read
-      // as row-wins, not as "our value landed".
+      // A peer happens to write the exact same value our un-acked rename asked for. Since OUR request
+      // has not landed, this must still read as row-wins, not as "our value landed".
       makeArtifactProjection("a", "B", null),
     ]);
     const overlay = overlayOf(
@@ -273,9 +261,8 @@ describe("applyPendingOverlayToArtifacts", () => {
         .title,
     ).toBe("B");
 
-    // Step 2: OUR ack for r1 lands (r1.landed = true). The SAME authoritative
-    // value "B" is now a landed target, which anchors the chain, so the
-    // still-pending r2 re-applies.
+    // Step 2: OUR ack for r1 lands (r1.landed = true). The SAME authoritative value "B" is now a
+    // landed target, which anchors the chain, so the still-pending r2 re-applies.
     const overlayAfterAck = overlayOf(
       rename({
         requestId: "r1",
@@ -356,9 +343,6 @@ describe("applyPendingOverlayToArtifacts", () => {
   it("landed-only chain, authoritative equals an INTERMEDIATE landed target (not baseline, not last): dead, row-wins on the intermediate value", () => {
     const artifacts = makeArtifactsSlice([
       // Host caught up to the FIRST ack ("B") but not yet the second ("C").
-      // With NOTHING left in flight, landed-only anchoring is baseline
-      // ALONE - "our intermediate echo" and "a peer wrote that value after
-      // us" are indistinguishable, so this is treated as supersession.
       makeArtifactProjection("a", "B", null),
     ]);
     const overlay = overlayOf(
@@ -723,10 +707,6 @@ describe("collectDeadPendingMutations", () => {
 
   it("does NOT report a landed-only chain still sitting at its ORIGINAL baseline (not yet caught up at all)", () => {
     const state = authoritativeState({
-      // Landed-only anchoring is baseline ALONE - an intermediate landed
-      // target ("B") would now be treated as supersession (see the applier
-      // test), so "still alive" is only observable while the row hasn't
-      // moved from its pre-chain value at all.
       artifacts: makeArtifactsSlice([
         makeArtifactProjection("a", "Original", null),
       ]),
@@ -817,10 +797,8 @@ describe("collectDeadPendingMutations", () => {
 
   it("SUPERSESSION IS TERMINAL: reports a chain with an un-landed entry once the row moves off-anchor - the un-acked entry's later retire finds nothing", () => {
     const state = authoritativeState({
-      // The row already equals the pending entry's OWN target - but since
-      // that entry has not landed (no ack), value equality does not anchor
-      // it: an un-acked row this row-wins produces the same string a peer
-      // could have written coincidentally, and the chain is dead either way.
+      // The row already equals the pending entry's OWN target - but since that entry has not landed (no
+      // ack), value equality does not anchor it: an un-acked row this row-wins produces the same string
       artifacts: makeArtifactsSlice([makeArtifactProjection("a", "B", null)]),
     });
     const overlay = overlayOf(

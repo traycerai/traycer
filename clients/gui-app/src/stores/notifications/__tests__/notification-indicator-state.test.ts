@@ -114,9 +114,6 @@ describe("notification indicator state", () => {
   });
 });
 
-/** The cloud predicates mirror the host's `indicatorState` SQL, so these pin
- * prompt aggregation, terminal chronology, and the entity join against that
- * source rather than against the shape of the code under them. */
 describe("cloud notification indicator derivation", () => {
   function wrap(
     entryId: string,
@@ -172,10 +169,6 @@ describe("cloud notification indicator derivation", () => {
     });
   }
 
-  /** The payload is inert for indicator derivation (only kind, severity and
-   * the markers are read), but it is still shaped the way its entry kind's
-   * producer shapes it, so the fixture is not a misleading example of a
-   * legal-looking pairing production never emits. */
   function prompt(
     entryId: string,
     kind: "approval.requested" | "interview.requested",

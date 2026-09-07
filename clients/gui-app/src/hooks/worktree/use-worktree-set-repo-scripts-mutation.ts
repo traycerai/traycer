@@ -15,25 +15,13 @@ export interface SetRepoScriptsMutationContext {
   readonly hostId: string | null;
 }
 
-// Scripts ride pre-epic workspace summaries and the host worktrees list
-// (`WorktreeHostEntry.scripts`, which the Environment footer prefills an
-// existing worktree from), so a save must refresh both so the next read
-// reflects the edit.
+// Scripts ride pre-epic workspace summaries and the host worktrees list (`WorktreeHostEntry.scripts`, which the Environment footer prefills an existing worktree from), so a save must refresh both so the next read reflects the edit.
 const SET_REPO_SCRIPTS_INVALIDATIONS: ReadonlyArray<
   keyof HostRpcRegistry & string
 > = ["worktree.listByWorkspacePaths", "worktree.listAllForHost"];
 
 /**
- * Persists per-repo setup/teardown scripts to `<repoRoot>/.traycer/environment.json`
- * on an EXPLICIT host client (built via `useHostClientFor` /
- * `useTabHostClient` / the active-host binding). The Environment chip passes
- * `epicId: ""` pre-epic - the host resolver is authn-only for the empty epic
- * and editor-gated for a real one - so the same call shape works on the landing
- * page and in an epic.
- *
- * A `null` client makes the mutation a rejecting no-op, matching the other
- * `*For` worktree hooks - `useHostMutation`'s own `client === null` guard
- * covers it.
+ * Persist repo scripts on the explicit bound client. `epicId: ""` is authn-only so the same call works pre-epic. Null client is a rejecting no-op.
  */
 export function useWorktreeSetRepoScriptsFor(
   client: HostClient<HostRpcRegistry> | null,

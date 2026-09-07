@@ -117,9 +117,7 @@ describe("collectCanvasWideRetainedChatMembership (layer 1, pure)", () => {
   });
 
   it("excludes a background chat the pane has never activated", () => {
-    // Retention is driven by `activationHistory`, so a tab that has only ever
-    // sat in the strip (a restored canvas, a background open) earns no slot
-    // until it is actually visited.
+    // Retention is driven by `activationHistory`, so a tab that has only ever sat in the strip (a restored canvas, a background open) earns no slot until it is actually visited.
     const canvas: EpicCanvasState = {
       root: {
         ...pane("p1", ["chat-front", "chat-back"]),
@@ -140,9 +138,7 @@ describe("collectCanvasWideRetainedChatMembership (layer 1, pure)", () => {
   });
 
   it("retains a deselected chat the pane recently had active", () => {
-    // The churn fix: `chat-back` was the front tab a moment ago, so its
-    // surface stays a member and returning to it is a visibility toggle
-    // rather than an unmount plus a re-converging scroll restore.
+    // The churn fix: `chat-back` was the front tab a moment ago, so its surface stays a member and returning to it is a visibility toggle rather than an unmount plus a re-converging scroll restore.
     const canvas: EpicCanvasState = {
       root: {
         ...pane("p1", ["chat-front", "chat-back"]),
@@ -187,15 +183,8 @@ describe("collectCanvasWideRetainedChatMembership (layer 1, pure)", () => {
   });
 
   it("cold review F1: an ineligible chat must not shift the window, stranding a member with no slot", () => {
-    // The window is capped and selection skips-and-keeps-filling, so applying
-    // eligibility DURING selection would make membership and the pane's
-    // rendered set two SHIFTED windows rather than a subset and a superset.
-    // Here `chat-a` is active but ineligible (a published-copy takeover
-    // reports it through the deletion registry). The pane renders the
-    // kind-only window [chat-a, chat-b]; membership must therefore be a
-    // SUBSET of that - never [chat-b, chat-c], which would leave `chat-c` a
-    // member whose slot nothing renders, its hosted body stranded mounted on
-    // a disconnected anchor holding a session lease.
+    // The window is capped and selection skips-and-keeps-filling, so applying eligibility DURING selection would make membership and the pane's rendered set two SHIFTED windows rather than a subset and a superset.
+    // The pane renders the kind-only window [chat-a, chat-b]; membership must therefore be a SUBSET of that - never [chat-b, chat-c], which would leave `chat-c` a member whose slot nothing renders, its hosted body stranded mounted on a disconnected anchor holding a session lease.
     reportChatRemoteDeletionState("chat-a", true);
     const instanceIds = ["chat-a", "chat-b", "chat-c"];
     const canvas: EpicCanvasState = {
@@ -669,7 +658,6 @@ describe("tile surface membership - live store integration", () => {
       }
       const panes = collectPanes(afterSplit.root);
       expect(panes.length).toBe(2);
-      // chat-2 is now its own pane's active tab → also a member.
       expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
       expect(getTileSurfaceMembership().has("chat-2")).toBe(true);
 
@@ -726,7 +714,6 @@ describe("tile surface membership - live store integration", () => {
       id: "tab-1",
     });
 
-    // First create a real second pane via edge split, then move chat-1 onto it.
     useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
       sourcePaneId: "p1",
       tabId: "chat-2",
@@ -766,18 +753,13 @@ describe("tile surface membership - live store integration", () => {
 
     const afterMove = useEpicCanvasStore.getState().canvasByTabId["tab-1"];
     if (afterMove === undefined) throw new Error("expected canvas after move");
-    // chat-1 left its only-tab pane → that pane dissolved; chat-1 should still
-    // be a member wherever it landed.
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
     expect(samples.length).toBeGreaterThan(0);
     expect(samples.every((sampledMember) => sampledMember)).toBe(true);
   });
 
   it("add-background: openTileInBackgroundTab does not touch active-chat membership", () => {
-    // Correction vs brief: `openTileInPane` always activates the new tab
-    // (and would deselect the prior active chat under decision #17). The
-    // real "add background without switching active tab" store action is
-    // `openTileInBackgroundTab`.
+    // The real "add background without switching active tab" store action is `openTileInBackgroundTab`.
     useEpicCanvasStore.setState({
       tabsById: {
         "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
@@ -910,9 +892,6 @@ describe("design-review F1: global MRU cap spans every top-level kind, not just 
     }
     seedSingleTabStrip(allRefs, epicNewRef);
 
-    // Real global cap-5 recency: epic-old, draft-1..4, epic-new is 6 distinct
-    // activations - epic-old (least recently active) must be evicted, and
-    // its chat must leave membership with it.
     expect(getTileSurfaceMembership().has("chat-old")).toBe(false);
     expect(getTileSurfaceMembership().has("chat-new")).toBe(true);
   });
@@ -940,10 +919,6 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
       });
       expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
-      // Mirrors what `TileSurfaceSlot` does once mounted for a real hosted
-      // chat - a published environment is the thing that would otherwise
-      // linger as a second, orphaned owner alongside the inline
-      // `DeletedArtifactBody` (design-review slice-4 finding 2).
       publishTileSurfaceEnvironment(
         buildSyntheticTileSurfaceEnvironment("chat-1", {
           placement: {

@@ -17,9 +17,8 @@ const ARTIFACT_ID = "spec-1";
 const THREAD_ID = "thread-1";
 const QUOTED_TEXT = "the sentence this thread hangs off";
 
-// The popover reads the thread payload from the cache only (`enabled: false`),
-// so the query is stood in for rather than driven through a host: what is under
-// test is which GESTURE reaches which surface.
+// The popover reads the thread payload from the cache only (`enabled: false`), so the query is stood in for
+// rather than driven through a host: what is under test is which gesture reaches which surface.
 const threads: { value: ReadonlyArray<CommentThreadWire> } = { value: [] };
 vi.mock("@/hooks/comments/use-epic-comment-threads", () => ({
   useEpicCommentThreadsForClient: () => ({ data: { threads: threads.value } }),
@@ -53,12 +52,8 @@ function threadFixtureWith(
 const editors: Editor[] = [];
 const elements: HTMLElement[] = [];
 
-/**
- * A live editor with one `threadAnchor`-shaped span in its document DOM. The
- * span is appended directly because the component's whole bridge to ProseMirror
- * is a delegated listener on `editor.view.dom` plus a `[data-thread-id]`
- * `closest()` walk - the mark's own rendering is not what is under test.
- */
+/** The span is appended directly because the component's whole bridge to ProseMirror is a delegated listener on
+ * `editor.view.dom` plus a `[data-thread-id]` `closest` walk. */
 function makeEditorWithAnchor(): { editor: Editor; anchor: HTMLElement } {
   const element = document.createElement("div");
   document.body.appendChild(element);
@@ -76,12 +71,7 @@ function makeEditorWithAnchor(): { editor: Editor; anchor: HTMLElement } {
   return { editor, anchor };
 }
 
-/**
- * The overlap case: a thread anchor sitting ON a link. `ThreadAnchor` sets
- * `excludes: ""`, so commenting on linked text produces exactly this, and the
- * artifact link layer listens for `click` on the same editor root - so a tap
- * here is a tap both surfaces can see.
- */
+/** The overlap case: a thread anchor sitting ON a link. */
 function makeEditorWithLinkedAnchor(): {
   editor: Editor;
   anchor: HTMLElement;
@@ -149,12 +139,8 @@ describe("<ThreadAnchorHoverPopover /> touch", () => {
   });
 
   it("yields a tap on a commented LINK to the link", () => {
-    // Both surfaces listen for `click` on the same editor root, so without an
-    // explicit rule the tap runs both: comments open and the link routes, and
-    // for an internal link the tile underneath changes - taking the very thread
-    // the tap was meant to reveal with it. The link wins because it is the only
-    // one of the two with no other route on a phone; the thread is still listed
-    // in the comments panel.
+    // The link wins because it is the only one of the two with no other route on a phone; the thread is still
+    // listed in the comments panel.
     const { editor, anchor } = makeEditorWithLinkedAnchor();
     const onActivateThread = vi.fn();
     renderPopover(editor, onActivateThread, null);
@@ -166,9 +152,8 @@ describe("<ThreadAnchorHoverPopover /> touch", () => {
   });
 
   it("offers no dwell preview to a touch pointer", () => {
-    // A touch `pointerout` lands immediately after `pointerup`, so a pending
-    // show would be cancelled before it ever fired - and there is no hover state
-    // to reach the preview from either.
+    // A touch `pointerout` lands immediately after `pointerup`, so a pending show would be cancelled before it
+    // ever fired - and there is no hover state to reach the preview from either.
     const { editor, anchor } = makeEditorWithAnchor();
     renderPopover(editor, vi.fn(), null);
 
@@ -197,9 +182,8 @@ describe("<ThreadAnchorHoverPopover /> mouse", () => {
   });
 
   it("leaves a click on the anchor to the editor, so the caret still lands", () => {
-    // The preview is the desktop route to a thread; activating on the click too
-    // would open the panel every time the user placed a caret in a commented
-    // sentence.
+    // The preview is the desktop route to a thread; activating on the click too would open the panel every time
+    // the user placed a caret in a commented sentence.
     const { editor, anchor } = makeEditorWithAnchor();
     const onActivateThread = vi.fn();
     renderPopover(editor, onActivateThread, null);
@@ -211,11 +195,8 @@ describe("<ThreadAnchorHoverPopover /> mouse", () => {
   });
 });
 
-// The popover's own query is `enabled: false` - a cache-only read - so before
-// the lane arm existed the preview showed nothing until some other surface had
-// already populated that exact query cache key. These pin the lane as the
-// source that closes that cold-cache hole, per `resolveArtifactCommentThreads`
-// (`use-lane-comment-threads.ts`).
+// The popover's own query is `enabled: false` - a cache-only read - so before the lane arm existed the preview
+// showed nothing until some other surface had already populated that exact query cache key.
 describe("<ThreadAnchorHoverPopover /> state-lane threads", () => {
   it("shows the preview from lane rows when the query cache holds nothing for this artifact", () => {
     threads.value = [];

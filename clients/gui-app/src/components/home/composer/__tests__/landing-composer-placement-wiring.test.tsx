@@ -10,17 +10,8 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 
-/**
- * F4, wiring half: the landing composer must hand its actions the FROZEN
- * submit target, not the mutable read one.
- *
- * `useComposerPlacement` freezing the client is worthless if the composer
- * passes the other target - and that swap is a one-word edit with no type
- * error, because both fields are `LandingPlacementTarget`. Nothing else in the
- * suite notices it: every single-RPC path behaves identically, and only a
- * derivation move between two awaits of the terminal chain tells them apart.
- * So the wiring itself is what gets pinned here.
- */
+/** , wiring half: the landing composer must hand its actions the frozen submit target, not the mutable read
+ * one. */
 
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
@@ -55,16 +46,8 @@ const STAGED_INTENT: WorktreeIntent = {
   ],
 };
 
-// The composer's mutable READ target, for the §54-notice suite below: the
-// `useComposerPlacement` mock reads this on every call, so mutating it and
-// forcing a re-render is how a test presents a DIFFERENT resolved host to an
-// already-mounted composer. A plain top-level `let` (not `vi.hoisted`, unlike
-// `testState`) because it is assigned from `READ_TARGET`, itself a `const`
-// declared below the imports - referencing it from a `vi.hoisted` factory
-// (which runs hoisted above every other module-level statement) would hit the
-// TDZ. Safe here because `vi.mock` factories are only ever CALLED lazily, at
-// the point React first invokes the mocked hook - long after this module's
-// top-level code, including this assignment, has finished running.
+// Safe here because `vi.mock` factories are only ever called lazily, at the point React first invokes the
+// mocked hook - long after this module's top-level code, including this assignment, has finished running.
 let landingTarget: LandingPlacementTarget = READ_TARGET;
 
 const testState = vi.hoisted(() => ({
@@ -78,36 +61,19 @@ const testState = vi.hoisted(() => ({
   runPendingImageJob: null as
     | ((job: (signal: AbortSignal) => Promise<void>) => void)
     | null,
-  /** The target `useLandingComposerActions` was actually constructed with. */
   actionsTarget: null as { readonly hostLabel: string } | null,
-  // G4 fixture: `ComposerPlacement.followsEffective` as `useComposerPlacement`
-  // would compute it. Set per test - `true` for a following composer
-  // (including a DEPOSED pin, which still reads `isPinned: true`), `false`
-  // for a genuinely pinned one.
+  // G4 fixture: `ComposerPlacement.followsEffective` as `useComposerPlacement` would compute it.
   composerFollowsEffective: true,
-  // `pin.isPinned` varies INDEPENDENTLY of `followsEffective` - a deposed pin
-  // is the case where both are `true` at once (the pin survives death;
-  // `honoredSelection` going null is what makes it follow). Fixed `true` by
-  // default so the deposed-pin arm below is the realistic shape, not a case
-  // `isPinned` would never actually take.
+  // Fixed `true` by default so the deposed-pin arm below is the realistic shape, not a case `isPinned` would
+  // never actually take.
   composerIsPinned: true,
-  /**
-   * The §54 refusal `useLandingComposerActions().submit` hands back - `null`
-   * for a create that goes through, `{message}` for a submit-time refusal.
-   * Real refusal DERIVATION (`resolveLandingPlacement`) has its own unit
-   * suite; this file only needs to pin that the composer's `hostNotice` slot
-   * reacts correctly to whatever `actions.submit` returns.
-   */
+  /** The §54 refusal `useLandingComposerActions.submit` hands back - `null` for a create that goes through,
+   * `{message}` for a submit-time refusal. */
   submitRefusal: null as { readonly message: string } | null,
 }));
 
-// `.clear`/`.migrateKeyForAllHosts` are the only members the G4 effect and
-// the create path touch (`.getState()` only, never the reactive hook), so a
-// bare `getState()` stub is a complete fixture for this module.
-// `readStagedWorktreeIntent` is a plain named export (not read off
-// `.getState()`), so it is mocked as its own top-level export here - the
-// component imports it directly to decide whether the G4 move actually reset
-// anything before it toasts.
+// `.clear`/`.migrateKeyForAllHosts` are the only members the G4 effect and the create path touch (`.getState`
+// only, never the reactive hook), so a bare `getState` stub is a complete fixture for this module.
 const stagingStoreMocks = vi.hoisted(() => ({
   clear: vi.fn(),
   migrateKeyForAllHosts: vi.fn(),
@@ -142,15 +108,13 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
-      // Drives `handleDocumentChange` so a §54-notice test can make
-      // `hasSubmittableContent` true without a real editor mount - the same
-      // seam `landing-composer-submit-gate.test.tsx` uses.
+      // Drives `handleDocumentChange` so a §54-notice test can make `hasSubmittableContent` true without a real
+      // editor mount - the same seam `landing-composer-submit-gate.test.tsx` uses.
       testState.snapshot = () => {
         props.onDocumentChange(DIRTY_CONTENT, { from: 1, to: 1 });
       };
-      // Renders `topBanner` for real (unlike every other prop here) so the
-      // G4 tests below can assert on `ComposerHostNotice`'s actual DOM output
-      // instead of reaching into component-internal state.
+      // Renders `topBanner` for real (unlike every other prop here) so the G4 tests below can assert on
+      // `ComposerHostNotice`'s actual DOM output instead of reaching into component-internal state.
       return React.createElement("div", null, props.topBanner);
     },
   };
@@ -165,9 +129,8 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
       isPinned: testState.composerIsPinned,
       latchOnFirstUse: () => undefined,
     },
-    // Read fresh on every call (not captured once) so a test can mutate
-    // `landingTarget` and force a re-render to present a different resolved
-    // host to an already-mounted composer - see the §54-notice suite below.
+    // Read fresh on every call (not captured once) so a test can mutate `landingTarget` and force a re-render to
+    // present a different resolved host to an already-mounted composer - see the §54-notice suite below.
     target: landingTarget,
     submitTarget: SUBMIT_TARGET,
     hostLabelFor: () => "Studio Mac",
@@ -199,9 +162,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
     createDraft: vi.fn(() => "draft-for-test"),
-    // handleSnapshot's unbound-create branch now calls createDraftWithId
-    // (reusing a pre-minted pendingCreateId when present) rather than
-    // createDraft directly.
+    // handleSnapshot's unbound-create branch now calls createDraftWithId (reusing a pre-minted pendingCreateId
+    // when present) rather than createDraft directly.
     createDraftWithId: vi.fn(() => "draft-for-test"),
     restoreDraftWorkspaceForHost: vi.fn(),
     setDraftContent: vi.fn(),
@@ -219,10 +181,8 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
   const state = {
     globalLastRunSettings: null,
     setGlobalRunSettings: vi.fn(),
-    // The imperative draft-mint path (`handleDocumentChange`) reads this
-    // directly off `getState()`, not through the selector hook below - the
-    // §54-notice suite exercises that path (it types content), which
-    // `landing-composer-submit-gate.test.tsx` already required this for.
+    // The imperative draft-mint path (`handleDocumentChange`) reads this directly off `getState`, not through the
+    // selector hook below.
     getGlobalRunSettings: () => null,
   };
   const selectGlobalLastRunSettings = () => null;
@@ -321,10 +281,7 @@ vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
-  // Same treatment as `use-composer-dictation` above: a host-backed readiness
-  // hook stubbed to its "nothing to report" answer so these gate tests stay
-  // about the gate they name. `blocked: false` is also the hook's real
-  // fail-open answer before `providers.list` resolves.
+  // `blocked: false` is also the hook's real fail-open answer before `providers.list` resolves.
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
@@ -361,7 +318,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => null,
 }));
 vi.mock(
@@ -437,11 +394,7 @@ describe("landing composer placement wiring", () => {
 
 describe("landing composer G4 re-point", () => {
   it("clears staged intent and toasts for a DEPOSED pin (isPinned true, honoredSelection null) when intent was staged", () => {
-    // A deposed pin still reads `pin.isPinned: true` (the pin itself is never
-    // cleared by death - only `honoredSelection` goes null), but the
-    // composer's resolved host has fallen back to `effective`, so it IS
-    // following and a derivation move DOES re-point it. Gating G4 on
-    // `isPinned` instead of `followsEffective` would wrongly suppress this.
+    // A deposed pin still reads `pin.isPinned: true` (the pin itself is never cleared by death.
     testState.composerFollowsEffective = true;
     stagingStoreMocks.readStagedWorktreeIntent.mockReturnValue(STAGED_INTENT);
     render(
@@ -516,12 +469,7 @@ describe("landing composer G4 re-point", () => {
   });
 });
 
-// Codex review finding: a §54 refusal names the placement it refused, so ANY
-// change of the RESOLVED host retires it - a derivation move, or the picker
-// writing a new pin. Real refusal DERIVATION has its own unit suite
-// (`resolveLandingPlacement`); this only pins that the composer's own
-// `hostNotice` slot reacts to a resolved-host change, whatever produced the
-// refusal it is currently showing.
+// Real refusal derivation has its own unit suite (`resolveLandingPlacement`).
 describe("landing composer clears a refused §54 notice on host change", () => {
   it("clears the notice once the resolved host moves, even to a placement that is itself usable", () => {
     landingTarget = {
@@ -560,9 +508,8 @@ describe("landing composer clears a refused §54 notice on host change", () => {
       "Build Box is not reachable.",
     );
 
-    // The resolved host moves to a DIFFERENT, itself-usable placement - the
-    // point is that the notice clears on the move alone, not on whether the
-    // new placement would also refuse.
+    // The resolved host moves to a different, itself-usable placement - the point is that the notice clears on the
+    // move alone, not on whether the new placement would also refuse.
     landingTarget = {
       resolvedHostId: "host-c",
       client: null,
@@ -585,12 +532,8 @@ describe("landing composer clears a refused §54 notice on host change", () => {
   });
 
   it("P2 FIX - does not resurrect it on the way back: a sticky pin's A -> B -> A round trip leaves the refusal retired", () => {
-    // A pin is a preference, not a binding: a surface whose pinned host dies
-    // auto-follows and RETURNS when the host is usable again, so A -> B -> A
-    // is an ordinary Tuesday rather than a corner case. Holding the refusal
-    // beside the host it was raised for and rendering it whenever they match
-    // would make that return re-open a stale alert with no submit in between -
-    // hiding the notice instead of retiring it.
+    // Holding the refusal beside the host it was raised for and rendering it whenever they match would make that
+    // return re-open a stale alert with no submit in between - hiding the notice instead of retiring it.
     landingTarget = {
       resolvedHostId: "host-b",
       client: null,
@@ -647,9 +590,7 @@ describe("landing composer clears a refused §54 notice on host change", () => {
     resolveTo("host-c", "Home Mac");
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
 
-    // ...and then comes back, which is what the pin's stickiness is FOR. The
-    // refusal was retired on the first move, so there is nothing left to
-    // resurrect.
+    // ...and then comes back, which is what the pin's stickiness is for.
     resolveTo("host-b", "Build Box");
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });

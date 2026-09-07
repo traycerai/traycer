@@ -11,11 +11,7 @@ interface DeleteEnvOverrideInput {
   readonly key: string;
 }
 
-/**
- * Removes a single env override row. The next host bootstrap will no
- * longer set that variable (and so the user's shell-resolved value, if
- * any, takes effect again).
- */
+/** Removes a single env override row. */
 export function useRunnerTraycerEnvOverrideDeleteMutation(): UseMutationResult<
   void,
   Error,

@@ -70,11 +70,8 @@ interface ToolSegmentProps {
   // Terminal outcome when the turn ended mid-call (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
   endState: SegmentEndState;
-  // True when `status === "errored"` was an explicit stop (deadline-killed
-  // Monitor, user-stopped command) rather than a genuine failure. Authoritative
-  // signal from the host; `isStoppedToolError` below still sniffs the legacy
-  // `"stopped: ..."` error-string convention as a fallback for blocks persisted
-  // before this field existed.
+  // True when `status === "errored"` was an explicit stop (deadline-killed Monitor, user-stopped command) rather than a genuine failure.
+  // Authoritative signal from the host; `isStoppedToolError` below still sniffs the legacy `"stopped: ..."` error-string convention as a fallback for blocks persisted before this field existed.
   stopped: boolean;
   // Latest harness progress line for an in-flight call (null when none).
   progress: string | null;
@@ -190,9 +187,7 @@ function ToolStateBadge({ label }: { readonly label: string }) {
   );
 }
 
-// Authoritative `stopped` field takes precedence; the legacy `"stopped: ..."`
-// error-string prefix is a fallback for blocks persisted before the field
-// existed (it parses as `stopped: false` via the schema default).
+// Authoritative `stopped` field takes precedence; the legacy `"stopped: ..."` error-string prefix is a fallback for blocks persisted before the field existed (it parses as `stopped: false` via the schema default).
 function isStoppedToolError(stopped: boolean, error: string | null): boolean {
   if (stopped) return true;
   return error !== null && error.toLowerCase().startsWith("stopped:");
@@ -233,17 +228,13 @@ function resolveToolHeaderElapsed(props: {
   readonly startedAt: number;
   readonly variant: ToolSegmentProps["variant"];
 }): ToolHeaderElapsed {
-  // A RUNNING row shows its elapsed inline, like the card always has. It used
-  // to be pushed into the streaming footer, which put the number on a second
-  // line under the header and read as a separate entry in the group.
+  // A RUNNING row shows its elapsed inline, like the card always has.
+  // It used to be pushed into the streaming footer, which put the number on a second line under the header and read as a separate entry in the group.
   if (props.isStreaming) {
     return { kind: "live", startedAt: props.startedAt };
   }
-  // A SETTLED row shows no total - unchanged, not newly dropped: the elapsed
-  // only ever appeared while streaming, because it lived in the streaming
-  // footer. Note the group header above does NOT make up for it; its summary
-  // counts commands and files and carries a duration only for thinking. This is
-  // a deliberate density call for a list of finished rows, not a deferral.
+  // Note the group header above does NOT make up for it; its summary counts commands and files and carries a duration only for thinking.
+  // This is a deliberate density call for a list of finished rows, not a deferral.
   if (props.variant !== "card") return { kind: "hidden" };
   if (props.durationMs !== null) {
     return { kind: "static", durationMs: props.durationMs };
@@ -257,9 +248,8 @@ function renderToolStreamingFooter(props: {
   readonly stackedHeader: boolean;
 }): ReactNode {
   if (!props.isStreaming || props.stackedHeader) return null;
-  // Nothing to say, no second line. The footer carries only the progress line
-  // now that the elapsed counter lives in the header, so a tool that reports no
-  // progress (every command, and most tools) renders no footer at all.
+  // Nothing to say, no second line.
+  // The footer carries only the progress line now that the elapsed counter lives in the header, so a tool that reports no progress (every command, and most tools) renders no footer at all.
   const { progress } = props;
   if (progress === null || progress.length === 0) return null;
   return <StreamingActivityFooter progress={progress} />;
@@ -283,13 +273,8 @@ export function ToolSegment(props: ToolSegmentProps) {
   if (props.agentMessageSend !== null) {
     return <A2ASendToolSegment {...props} send={props.agentMessageSend} />;
   }
-  // A shell is not a tool call that finished - it is an object that outlives
-  // the turn - so the call site renders it as one, live status and all. Keyed
-  // off the stamped payload rather than the tool name: the name alone would
-  // also match a call from a host too old to correlate, which has no shell to
-  // point at and belongs in the generic row. A restart is the other kind of
-  // stamped call: not the shell's live card but the immutable record of one
-  // relaunch, at the place in the transcript where it happened.
+  // A shell is not a tool call that finished - it is an object that outlives the turn - so the call site renders it as one, live status and all.
+  // Keyed off the stamped payload rather than the tool name: the name alone would also match a call from a host too old to correlate, which has no shell to point at and belongs in the generic row.
   if (props.managedCommand !== null) {
     if (props.managedCommand.event === "restarted") {
       return (
@@ -314,12 +299,7 @@ export function ToolSegment(props: ToolSegmentProps) {
   return <GenericToolSegment {...props} />;
 }
 
-/**
- * The command a `traycer_run_shell` call asked for, off the block's own input.
- * `deriveToolInputDetail` short-circuits on the `command` field for this tool,
- * so the detail is always the `command` kind when the input was captured at
- * all - anything else is a block from before that, and has no command to show.
- */
+/** The command a `traycer_run_shell` call asked for, off the block's own input. `deriveToolInputDetail` short-circuits on the `command` field for this tool, so the detail is always the `command` kind when the input was captured at all - anything else is a block from before that, and has no command to show. */
 function runShellCommand(detail: ToolInputDetail | null): string | null {
   if (detail === null || detail.kind !== "command") return null;
   return detail.command;
@@ -388,10 +368,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
     />
   );
 
-  // Hybrid input rendering: null when the header summary already captures the
-  // whole call (segment stays header-only, non-expandable); otherwise a
-  // humanized command/fields view - never a raw JSON dump. Operates on the
-  // precomputed detail rather than re-deriving from raw input (no longer stored).
+  // Hybrid input rendering: null when the header summary already captures the whole call (segment stays header-only, non-expandable); otherwise a humanized command/fields view - never a raw JSON dump.
+  // Operates on the precomputed detail rather than re-deriving from raw input (no longer stored).
   const expandDetail = resolveToolInputDetail(inputDetail, summary);
   const expandable =
     expandDetail !== null || hasError || hasBackgroundOutput(backgroundOutput);
@@ -407,10 +385,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
   ) : null;
 
   if (variant === "row") {
-    // The streaming footer is the progress LINE only - the elapsed counter went
-    // to the header row. It sits beneath the row via SegmentRow's `footer` slot,
-    // visible whether or not the group is expanded, and is absent entirely when
-    // the tool reports no progress.
+    // The streaming footer is the progress LINE only - the elapsed counter went to the header row.
+    // It sits beneath the row via SegmentRow's `footer` slot, visible whether or not the group is expanded, and is absent entirely when the tool reports no progress.
     return (
       <SegmentRow
         headerAction={null}
@@ -513,10 +489,8 @@ function GenericToolHeader(props: GenericToolHeaderProps) {
   );
 }
 
-// `data-find-skip`: the counter now sits INSIDE the row's find anchor, and it is
-// ephemeral chrome the projection never indexes. Without the skip a find query
-// on the digits would paint a highlight inside an anchor that counted no match,
-// so paint and count would disagree.
+// `data-find-skip`: the counter now sits INSIDE the row's find anchor, and it is ephemeral chrome the projection never indexes.
+// Without the skip a find query on the digits would paint a highlight inside an anchor that counted no match, so paint and count would disagree.
 function ToolHeaderElapsedLabel(props: {
   readonly elapsed: ToolHeaderElapsed;
 }) {
@@ -592,10 +566,8 @@ function ToolSegmentBody(props: ToolSegmentBodyProps) {
   );
 }
 
-// A backgrounded MCP call's captured output is the tool's result payload, not
-// shell output. When the tail parses as a JSON object/array, re-indent it so
-// the panel shows structure instead of a single wrapped line; anything else
-// (plain text, or a tail truncated mid-document) renders verbatim.
+// A backgrounded MCP call's captured output is the tool's result payload, not shell output.
+// When the tail parses as a JSON object/array, re-indent it so the panel shows structure instead of a single wrapped line; anything else (plain text, or a tail truncated mid-document) renders verbatim.
 function mcpResultDisplayContent(stdout: string): string {
   const trimmed = stdout.trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return stdout;
@@ -705,9 +677,7 @@ function A2ASendToolSegment(
   };
 
   const receiver = (
-    // flex-wrap lets the badge drop to a second line on narrow (mobile)
-    // widths; the name group truncates last, so the receiver stays visible
-    // and tappable instead of collapsing to "to agent …".
+    // flex-wrap lets the badge drop to a second line on narrow (mobile) widths; the name group truncates last, so the receiver stays visible and tappable instead of collapsing to "to agent …".
     <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
       <span className="flex min-w-0 items-center gap-1">
         <span className="shrink-0 text-muted-foreground">to agent</span>

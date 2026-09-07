@@ -20,40 +20,20 @@ import type {
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
 
-/**
- * Detected shells barely change; the picker always accepts a typed path. The
- * list stays never-stale, but every panel visit refetches (`refetchOnMount:
- * "always"` below) because one thing on it CAN change mid-session: the
- * `wslHealth` annotation, which flips when the user installs WSL and comes
- * back. The explicit "re-detect" control covers changes while the panel is
- * already open.
- */
+/** The list stays never-stale, but every panel visit refetches (`refetchOnMount: "always"` below) because one
+ * thing on it can change mid-session. */
 const SHELL_LIST_STALE_MS = Number.POSITIVE_INFINITY;
 
-/**
- * The Shell panel over the selected host's own config RPC.
- *
- * Mounted inside the scope gate, so `useHostClient()` is the SCOPED host's
- * client (the panel re-provides `HostRuntimeContext` for an explicit pick and
- * leaves the ambient binding alone while following the active host). Local and
- * remote hosts run this identical path.
- *
- * Every write invalidates by METHOD scope for the host captured when the
- * mutation was armed (`useHostScopedMutationForClient`), so a host switch
- * mid-flight refreshes the host that was actually written rather than whichever
- * one the picker has landed on by the time the response arrives.
- */
+/** Every write invalidates by method scope for the host captured when the mutation was armed
+ * (`useHostScopedMutationForClient`). */
 export function useRpcShellConfigController(props: {
   /** `true` while the panel may talk to the host; `false` parks every read. */
   readonly enabled: boolean;
   /** Native file dialog, non-null only when the target machine is this one. */
   readonly pickProgramFile: (() => Promise<string | null>) | null;
 }): ShellConfigController {
-  // The BINDING rather than `useHostClient()`: this reads the same context the
-  // panel re-provides for an explicit pick, but answers `null` instead of
-  // throwing when there is no host runtime at all. Every read below is already
-  // null-gated, so a shell with no runtime renders the page inert rather than
-  // crashing it.
+  // The binding rather than `useHostClient`: this reads the same context the panel re-provides for an explicit
+  // pick, but answers `null` instead of throwing when there is no host runtime at all.
   const client = useHostBinding()?.hostClient ?? null;
   const hostId = client?.getActiveHostId() ?? null;
 
@@ -130,9 +110,7 @@ export function useRpcShellConfigController(props: {
     invalidateMethods: ["config.env.list"],
   });
 
-  // Both writes inside ONE `mutationFn`, so there is no observer boundary
-  // between them to lose the second half at. The host id is captured in
-  // `onMutate` and used for the invalidation, matching every other write here.
+  // The host id is captured in `onMutate` and used for the invalidation, matching every other write here.
   const envRenameMutation = useMutation<
     void,
     HostRpcError,
@@ -161,9 +139,8 @@ export function useRpcShellConfigController(props: {
       await client.request("config.env.delete", { key: rename.oldKey });
     },
     onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-    // SETTLED, not success - the same two-write staleness the bridge twin has:
-    // a set that lands followed by a delete that rejects leaves both keys on
-    // the host with the editor showing the pre-rename list.
+    // Settled, not success - the same two-write staleness the bridge twin has: a set that lands followed by a
+    // delete that rejects leaves both keys on the host with the editor showing the pre-rename list.
     onSettled: (_data, _error, _variables, context) => {
       const hostId = context?.hostId ?? null;
       if (hostId === null) return;
@@ -232,12 +209,7 @@ export function useRpcShellConfigController(props: {
   };
 }
 
-/**
- * Rejects rather than resolving a fabricated answer when there is no client:
- * the picker's status line reads "not found on this machine" for a `false`
- * probe, and inventing one would tell the user their path is broken when in
- * fact nothing asked.
- */
+/** Rejects rather than resolving a fabricated answer when there is no client. */
 function probeShellPath(
   client: HostClient<HostRpcRegistry> | null,
   path: string,
@@ -246,9 +218,7 @@ function probeShellPath(
   if (client === null) {
     return Promise.reject(new Error("No host client to probe the shell path"));
   }
-  // `requestWithSignal`, not `request` - the latter hardcodes `undefined` and
-  // the probe is exactly the read TanStack cancels most: a new keystroke, a
-  // closed popover, or a host swap retires the query while its RPC is still
-  // outstanding.
+  // `requestWithSignal`, not `request` - the latter hardcodes `undefined` and the probe is exactly the read
+  // TanStack cancels most.
   return client.requestWithSignal("config.shell.probe", { path }, signal);
 }

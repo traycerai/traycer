@@ -5,12 +5,6 @@ import {
 } from "./update-contender";
 import { retireCompetingCliRegistrationWithAttempt } from "./update-mutation";
 
-/**
- * Named admission for the launch-time competing-registration repair. It is
- * maintenance, not an executor: absence/terminal v2 evidence preserves the
- * old repair, while every nonterminal or unreadable record is returned to
- * startup without touching the CLI LaunchAgent manifest.
- */
 export async function retireCompetingCliRegistrationWithContender(options: {
   readonly hostHomeDir: string;
   readonly lockPath: string;

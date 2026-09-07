@@ -1,17 +1,5 @@
-/**
- * Unmocked integration coverage for the P0-2 native-click replay guard.
- *
- * The focused `notification-focus-bridge.test.tsx` mocks
- * `useNotificationActivation` entirely, which is exactly what hid the
- * bug: `activate`'s identity is not guaranteed stable across renders
- * (host binding changes, etc.), so the effect can re-run while the
- * still-resident `notificationEvent` remains in the store - without the
- * processed-event ref it would redispatch indefinitely.
- *
- * This file mounts the REAL activation hook against a real HostClient so
- * a genuine activate -> onResult path runs, then forces unrelated
- * re-renders to prove the guard holds.
- */
+/** The focused `notification-focus-bridge.test.tsx` mocks `useNotificationActivation` entirely, which is
+ * exactly what hid the bug. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -72,16 +60,7 @@ vi.mock("@/lib/host", async (importActual) => {
   };
 });
 
-// The bridge reads `useEffectiveHostId()` now (redesign P1.2) - the
-// authority's derived effective host, not the directory's active-host
-// hook - so that is the seam this fixture drives.
-//
-// The mock stays for the RENDER-time read, and `setEffectiveHost` below seeds
-// the STORE the same value: the notification activation guard reads the
-// pointer live at check time (it is the only way to observe a mid-route
-// move), and a fixture that fed only the hook would leave the guard comparing
-// a seeded before against an unseeded after - reporting a host move on every
-// activation.
+// The mock stays for the render-time read, and `setEffectiveHost` below seeds the store the same value.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => activeHostIdRef.value,
 }));
@@ -154,11 +133,8 @@ function createTestQueryClient(): QueryClient {
   });
 }
 
-/**
- * Forces the bridge (and its parent) to re-render without changing the
- * notification-events store, so an effect dependency identity change is the
- * only way a second dispatch could happen.
- */
+/** Forces the bridge (and its parent) to re-render without changing the notification-events store, so an effect
+ * dependency identity change is the only way a second dispatch could happen. */
 function BridgeHarness(props: { readonly tick: number }): ReactNode {
   return (
     <>
@@ -226,8 +202,8 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     client = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
-      // The SPINE, kept unpinned - `useNotificationActivationWithNavigate`
-      // derives its own requester off this via `createRequesterForHostId`.
+      // The spine, kept unpinned - `useNotificationActivationWithNavigate` derives its own requester off this via
+      // `createRequesterForHostId`.
       findHostById: (hostId) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger,
@@ -261,9 +237,8 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     });
     useNotificationEventsStore.getState().clear();
     useNotificationsPopoverStore.getState().setOpen(false);
-    // The activation path issues mark-read only from a correlated store row
-    // (a stale/absent row must route without mutating) - seed the rows the
-    // replay clicks reference, like the sibling suite does.
+    // The activation path issues mark-read only from a correlated store row (a stale/absent row must route without
+    // mutating) - seed the rows the replay clicks reference, like the sibling suite does.
     __resetHostNotificationsStoreForTests();
     useHostNotificationsStore.getState().applySnapshot({
       attention: { entries: [], nextCursor: null },

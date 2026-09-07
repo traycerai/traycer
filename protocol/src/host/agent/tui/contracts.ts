@@ -39,9 +39,7 @@ export const agentTuiPrepareLaunchV10 = defineRpcContract({
 });
 
 /**
- * `agent.tui.prepareLaunch@1.1` - adds the request-side
- * `forkSourceTuiAgentId` (stable fork-source identity). The response is
- * unchanged from v1.0. See the schema note in `unary-schemas.ts`.
+ * `agent.tui.prepareLaunch@1.1` - adds the request-side `forkSourceTuiAgentId` (stable fork-source identity).
  */
 export const agentTuiPrepareLaunchV11 = defineRpcContract({
   method: "agent.tui.prepareLaunch",
@@ -50,12 +48,7 @@ export const agentTuiPrepareLaunchV11 = defineRpcContract({
   responseSchema: prepareTuiLaunchResponseSchema,
 });
 
-// A v1.0 request carries no fork-source agent id, so the resolver falls back
-// to the strict-scan source lookup - upgrading fills the field with that
-// same `null`. The response is byte-identical, so its upgrade is the
-// identity. A v1.1 peer projects onto a v1.0 host by re-parsing through the
-// (non-strict) v1.0 request schema, which strips `forkSourceTuiAgentId` on
-// the wire - so no downgrade path is needed for the same-major minor.
+// A v1.0 request carries no fork-source agent id, so the resolver falls back to the strict-scan source lookup - upgrading fills the field with that same `null`.
 export const agentTuiPrepareLaunchUpgradeV10ToV11 = defineUpgradePath<
   typeof agentTuiPrepareLaunchV10,
   typeof agentTuiPrepareLaunchV11
@@ -70,12 +63,8 @@ export const agentTuiPrepareLaunchUpgradeV10ToV11 = defineUpgradePath<
 });
 
 /**
- * Optional (non-floor) capability: read-only cross-profile fork-admission
- * preflight (tech plan governing mechanism 2). Registered with a
- * `degrade: unsupported` strategy in `registry.ts` so an old host that lacks
- * it fails only this call - it must never enter the released floor, which
- * would be handshake-fatal for existing peers. See the schema doc in
- * `unary-schemas.ts`.
+ * Optional (non-floor) capability: read-only cross-profile fork-admission preflight (tech plan governing mechanism 2).
+ * Registered with a `degrade: unsupported` strategy in `registry.ts` so an old host that lacks it fails only this call - it must never enter the released floor, which would be handshake-fatal for existing peers.
  */
 export const agentTuiValidateForkProfileV10 = defineRpcContract({
   method: "agent.tui.validateForkProfile",
@@ -106,10 +95,7 @@ export const agentTuiRecordActivityV10 = defineRpcContract({
 });
 
 /**
- * `agent.tui.recordActivity@1.1` - adds the request-side
- * `observedHarnessSessionId` (Claude TUI session-id resync) and the pure
- * `event: "resync"` edge. The response is unchanged from v1.0. See the schema
- * note in `unary-schemas.ts`.
+ * `agent.tui.recordActivity@1.1` - adds the request-side `observedHarnessSessionId` (Claude TUI session-id resync) and the pure `event: "resync"` edge.
  */
 export const agentTuiRecordActivityV11 = defineRpcContract({
   method: "agent.tui.recordActivity",
@@ -118,12 +104,7 @@ export const agentTuiRecordActivityV11 = defineRpcContract({
   responseSchema: recordTuiAgentActivityResponseSchema,
 });
 
-// A v1.0 request carries no observed id (nothing to resync) and only the
-// `start`/`stop` edges, both of which are a subset of the v1.1 event set. The
-// response is byte-identical, so its upgrade is the identity. A v1.1 peer
-// projects onto a v1.0 host by re-parsing through the (non-strict) v1.0 request
-// schema, which strips `observedHarnessSessionId` on the wire - so no downgrade
-// path is needed for the same-major minor.
+// A v1.0 request carries no observed id (nothing to resync) and only the `start`/`stop` edges, both of which are a subset of the v1.1 event set.
 export const agentTuiRecordActivityUpgradeV10ToV11 = defineUpgradePath<
   typeof agentTuiRecordActivityV10,
   typeof agentTuiRecordActivityV11
@@ -138,13 +119,7 @@ export const agentTuiRecordActivityUpgradeV10ToV11 = defineUpgradePath<
 });
 
 /**
- * Optional (non-floor) capability: the `UserPromptSubmit` hook's combined
- * activity-edge + roles-digest-pull call (roles-snapshot-delivery pull point
- * 1). Registered with a `degrade: unsupported` strategy in `registry.ts` so
- * an old host that lacks it fails only this call and the CLI hook falls back
- * to plain `recordActivity` - it must never enter the released floor, which
- * would be handshake-fatal for existing peers. See the schema doc in
- * `unary-schemas.ts`.
+ * Optional (non-floor) capability: the `UserPromptSubmit` hook's combined activity-edge + roles-digest-pull call (roles-snapshot-delivery pull point 1).
  */
 export const agentTuiPromptSubmittedV10 = defineRpcContract({
   method: "agent.tui.promptSubmitted",
@@ -160,10 +135,7 @@ export const agentTuiPromptSubmittedV11 = defineRpcContract({
   responseSchema: tuiAgentPromptSubmittedResponseSchema,
 });
 
-// A v1.0 request carries no workspace intent, so the upgrade fills `null`
-// (binding-as-stored). The response is byte-identical. A v1.1 peer projects
-// onto a v1.0 host by re-parsing through the (non-strict) v1.0 request
-// schema, which strips `worktreeIntent` on the wire.
+// A v1.0 request carries no workspace intent, so the upgrade fills `null` (binding-as-stored).
 export const agentTuiPromptSubmittedUpgradeV10ToV11 = defineUpgradePath<
   typeof agentTuiPromptSubmittedV10,
   typeof agentTuiPromptSubmittedV11

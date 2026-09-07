@@ -65,30 +65,11 @@ import {
 
 /**
  * Model Providers wire contract.
- *
- * The load-bearing claim this file exists to hold: the `modelProviders` tab id
- * can only reach a decoder that knows it.
- *
- * Two facts make that true, and both are asserted below rather than assumed.
- * v7.0 is the LIVE line and is unreleased, so the member is mirrored onto it -
- * there is no peer in the field that negotiated v7.0 without it. And no
- * `providers.list` line below v7.0 models `nativeCapabilities` in any form, so
- * every older major drops the whole capability object rather than meeting a
- * tab id it cannot parse.
- *
- * The second fact is what makes the first safe, and it is worth stating why:
- * `supportedTabs` is an array of a CLOSED enum nested inside
- * `nativeCapabilities`, which `providerCliStateSchema` decodes through one
- * `.catch(DEFAULT)`. A member an older decoder could not read would not
- * degrade to "tab ignored" - it would take MCP, Plugins and Skills down with
- * it. No such decoder exists today; the day one does, a projection is owed,
- * and the enum-equality test below is what asks for it.
+ * And no `providers.list` line below v7.0 models `nativeCapabilities` in any form, so every older major drops the whole capability object rather than meeting a tab id it cannot parse.
  */
 
 /**
- * Peel `.nullable()` / `.default()` / `.catch()` wrappers off a field schema to
- * reach the schema object underneath, so a test can assert WHICH schema a
- * frozen line is wired to rather than only how it behaves.
+ * Peel `.nullable()` / `.default()` / `.catch()` wrappers off a field schema to reach the schema object underneath, so a test can assert WHICH schema a frozen line is wired to rather than only how it behaves.
  */
 function unwrapSchema(schema: z.ZodType): z.ZodType {
   let current: z.ZodType = schema;
@@ -98,9 +79,6 @@ function unwrapSchema(schema: z.ZodType): z.ZodType {
     current instanceof z.ZodDefault ||
     current instanceof z.ZodCatch
   ) {
-    // `.unwrap()` is typed against zod's internal base, so narrow rather than
-    // cast - the point of using the public accessor was to stop reaching into
-    // `def`, not to trade one escape hatch for another.
     const inner: unknown = current.unwrap();
     if (!(inner instanceof z.ZodType)) return current;
     current = inner;
@@ -200,9 +178,8 @@ const liveResponse = providersListResponseSchema.parse({
 
 describe("modelProviders tab id and capability block", () => {
   it("is on the live tab enum and NOT on the v7.0 pre-image one", () => {
-    // The tab rides the head line, which v7.0 now binds directly. Anything
-    // reading through the pre-image receives `supportedTabs` via the
-    // projection, never the raw member.
+    // The tab rides the head line, which v7.0 now binds directly.
+    // Anything reading through the pre-image receives `supportedTabs` via the projection, never the raw member.
     expect(providerSettingsTabSchema.safeParse("modelProviders").success).toBe(
       true,
     );
@@ -212,10 +189,8 @@ describe("modelProviders tab id and capability block", () => {
   });
 
   it("requires the capability key rather than tolerating an absent one", () => {
-    // Required-and-nullable, like its mcp/plugins/skills siblings. An absent
-    // key would fail the whole capability object on a v7.0 client, which the
-    // state-level `.catch()` then serves as the empty default - so a producer
-    // that forgets the fill must fail here, loudly, not in the field.
+    // Required-and-nullable, like its mcp/plugins/skills siblings.
+    // An absent key would fail the whole capability object on a v7.0 client, which the state-level `.catch()` then serves as the empty default - so a producer that forgets the fill must fail here, loudly, not in the field.
     expect(
       providerNativeCapabilitiesSchema.safeParse({
         supportedTabs: ["general"],
@@ -268,15 +243,7 @@ describe("the tab id can only reach a decoder that knows it", () => {
     );
   });
 
-  // A companion test used to drive the 8.0 -> 7.0 hop here, proving the tab
-  // was PROJECTED away for a v7.0 peer rather than reparsed (the frozen tab
-  // enum rejects a whole `supportedTabs` array over one unknown member, and
-  // the state's `.catch()` then serves the empty default - costing that peer
-  // MCP, Plugins and Skills over one tab id). Collapsing the unreleased v8.0
-  // into v7.0 left no peer below the head that models a capability object at
-  // all, so there is no hop that projection can run on. The projection helper
-  // itself is still covered directly by "projects a full live descriptor
-  // without losing a sibling capability" below.
+  // A companion test used to drive the 8.0 -> 7.0 hop here, proving the tab was PROJECTED away for a v7.0 peer rather than reparsed (the frozen tab enum rejects a whole `supportedTabs` array over one unknown member, and.
 
   it("drops the whole capability object for a v6.0 client, tab and all", () => {
     // v6.0 models no capability object, so the reparse takes the entire
@@ -314,9 +281,6 @@ describe("providers.list head line -> every older major", () => {
   it.each([1, 2, 3, 4, 5, 6] as const)(
     "7.0 -> v%i.0 is registered, succeeds, and reparses through that line's frozen schema",
     (targetMajor) => {
-      // Every major gets a DIRECT path (the registry composes nothing), so a
-      // missing key here is not a degraded response - it is no response that
-      // peer can decode at all.
       expect(
         hostRpcRegistry["providers.list"][7].downgradePathsFromLatest[
           targetMajor as 1 | 2 | 3 | 4 | 5 | 6
@@ -338,9 +302,8 @@ describe("providers.list head line -> every older major", () => {
   );
 
   it("still delivers both providers to a v6.0 client, minus nativeCapabilities", () => {
-    // The tab transition must not cost an older client a provider ROW. The
-    // frozen sub-v7.0 lines never modeled `nativeCapabilities` at all, so they
-    // drop it wholesale and the ids survive untouched.
+    // The tab transition must not cost an older client a provider ROW.
+    // The frozen sub-v7.0 lines never modeled `nativeCapabilities` at all, so they drop it wholesale and the ids survive untouched.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
       8,
@@ -360,16 +323,8 @@ describe("providers.list head line -> every older major", () => {
 
 describe("providers.list every older major -> the head line", () => {
   it("invents the whole capability object on the v6 -> v7 hop, modelProviders included", () => {
-    // v6.0 models no capability object at all, so this hop invents the whole
-    // thing: the v7-era default first, then `modelProviders` on top. The two
-    // fills used to sit on separate hops (v6 -> v7 and v7 -> v8); collapsing
-    // the unreleased v8.0 into v7.0 merged them, and this is the guard that
-    // the second one survived the merge.
-    //
-    // A missing key and an explicit null are what a consumer gate has to tell
-    // apart, so `modelProviders` must be an OWN key. `upgradeResponseToVersion`
-    // chains bridges by cast with no re-parse, so the fill has to be real, not
-    // a schema default that never runs - which is what the final parse checks.
+    // v6.0 models no capability object at all, so this hop invents the whole thing: the v7-era default first, then `modelProviders` on top.
+    // A missing key and an explicit null are what a consumer gate has to tell apart, so `modelProviders` must be an OWN key.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 6, minor: 0 },
@@ -426,10 +381,7 @@ describe("the four Model Providers methods are optional capabilities", () => {
   it.each(METHODS)(
     "%s is registered at 1.0, degrades unsupported, and stays off the released floor",
     (method) => {
-      // A brand-new method NAME is handshake-fatal against a released peer
-      // unless it rides the optional-capability channel. `unsupported` is what
-      // turns "this host is too old" into a per-call answer with upgrade
-      // guidance instead of a dead connection.
+      // A brand-new method NAME is handshake-fatal against a released peer unless it rides the optional-capability channel.
       const entry = hostRpcRegistry[method];
       expect(entry).toBeDefined();
       expect(entry.degrade).toEqual({ kind: "unsupported" });
@@ -471,9 +423,7 @@ describe("prompts DSL wire schema", () => {
   });
 
   it("requires the nullable keys rather than accepting an absent one", () => {
-    // Required-and-nullable: upstream marks these optional, and the host
-    // adapts. An omitted key here would mean an unmapped SDK field passes as
-    // "not applicable" without anyone deciding that.
+    // Required-and-nullable: upstream marks these optional, and the host adapts.
     expect(
       modelProviderPromptSchema.safeParse({
         type: "text",
@@ -545,9 +495,7 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("reports an externally-sourced credential as read-only, never as storable", () => {
-    // `env`/`config` describe a credential living outside anything this tab
-    // can write. The row can still say `connected`, and it is `canDisconnect`
-    // - not the source string - a renderer gates its disconnect affordance on.
+    // `env`/`config` describe a credential living outside anything this tab can write.
     const entry = modelProviderEntrySchema.parse({
       id: "openai",
       name: "OpenAI",
@@ -564,9 +512,7 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("splits Config from Custom with configDeclaredCustom, which source cannot", () => {
-    // Both rows are `source: "config"`. Upstream shows one as "Config" and the
-    // other as "Custom", and the difference is not recoverable from `source`
-    // alone - which is the whole reason this flag is on the wire.
+    // Both rows are `source: "config"`.
     const plainConfig = modelProviderEntrySchema.parse({
       id: "openai",
       name: "OpenAI",
@@ -600,10 +546,7 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("keeps a disconnected custom provider visible as a custom row", () => {
-    // The round trip's resting state: created, then disconnected. The block is
-    // still declared, so the row is still editable and still badges as Custom
-    // - `connected: false` with `configDeclaredCustom: true` says exactly that
-    // without a separate "disabled" field.
+    // The round trip's resting state: created, then disconnected.
     const entry = modelProviderEntrySchema.parse({
       id: "my-endpoint",
       name: "My Endpoint",
@@ -625,11 +568,7 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("ties custom values to the flag in BOTH directions", () => {
-    // One fact in two fields, so the wire refuses to let them disagree. Each
-    // direction fails differently: a row claiming custom with no values gives
-    // Edit nothing to prefill - the blank-overwrite this field exists to
-    // prevent - while values without the flag offer an Edit the host will
-    // refuse, or accept and quietly convert a provider nobody declared.
+    // One fact in two fields, so the wire refuses to let them disagree.
     const base = {
       id: "my-endpoint",
       name: "My Endpoint",
@@ -668,11 +607,7 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("reports a hand-broken declaration instead of vanishing the row", () => {
-    // Read side is looser than the write side on purpose. `opencode.json` is
-    // hand-editable, so a declared base URL can be malformed - and refusing to
-    // report it would fail the row's parse and remove the one provider whose
-    // declaration needs fixing, taking Edit (the only surface that could fix
-    // it) with it. `createCustom`/`updateCustom` still reject the same value.
+    // Read side is looser than the write side on purpose.
     const entry = modelProviderEntrySchema.parse({
       id: "my-endpoint",
       name: "My Endpoint",
@@ -697,10 +632,8 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("never echoes the credential back on a row", () => {
-    // `custom` mirrors the write shape field for field EXCEPT `key`. The
-    // credential is write-only here, so Edit reopens with an empty key field
-    // and leaving it empty must not clear a stored one - a rule the host keeps
-    // because the wire simply cannot carry the secret back.
+    // `custom` mirrors the write shape field for field EXCEPT `key`.
+    // The credential is write-only here, so Edit reopens with an empty key field and leaving it empty must not clear a stored one - a rule the host keeps because the wire simply cannot carry the secret back.
     const entry = modelProviderEntrySchema.parse({
       id: "my-endpoint",
       name: "My Endpoint",
@@ -786,12 +719,6 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("can say connected-but-not-removable, which is why the two flags are separate", () => {
-    // The autoload-`custom` residual, and the case that makes
-    // `hasStoredCredential` and `canDisconnect` genuinely different questions
-    // rather than two names for `source === "api"`. A provider autoloaded by a
-    // plugin has nothing in the auth store to delete, so `auth.remove` is a
-    // no-op and the row stays connected afterwards - a disconnect button there
-    // is a click that reports success and changes nothing.
     const entry = modelProviderEntrySchema.parse({
       id: "some-loader-provider",
       name: "Loader Provider",
@@ -809,10 +736,7 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("can also say custom-and-removable - the source does not decide either flag", () => {
-    // Same source, both flags true: a `custom` row whose credential the host
-    // CAN remove. If `source` decided the flags, one of these two rows would
-    // be unrepresentable, and a renderer that read the source instead of the
-    // flags would get exactly one of them wrong.
+    // Same source, both flags true: a `custom` row whose credential the host CAN remove.
     const entry = modelProviderEntrySchema.parse({
       id: "some-loader-provider",
       name: "Loader Provider",
@@ -828,9 +752,8 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("accepts a null source both disconnected AND connected, and rejects an unmodeled one", () => {
-    // `null` is not "unauthenticated". It carries two cases a reader must not
-    // collapse: not connected, or connected through an origin this closed enum
-    // cannot name.
+    // `null` is not "unauthenticated".
+    // It carries two cases a reader must not collapse: not connected, or connected through an origin this closed enum cannot name.
     const base = {
       id: "groq",
       name: "Groq",
@@ -847,9 +770,6 @@ describe("providers.listModelProviders payloads", () => {
         connected: false,
       }).success,
     ).toBe(true);
-    // The fail-soft case: upstream reports a source value newer than this
-    // enum, so the origin goes unnamed - but the provider is serving requests
-    // right now, and reporting it as disconnected would hide a working row.
     expect(
       modelProviderEntrySchema.safeParse({
         ...base,
@@ -857,9 +777,7 @@ describe("providers.listModelProviders payloads", () => {
         connected: true,
       }).success,
     ).toBe(true);
-    // The enum itself stays closed: an unrecognized value is normalized to
-    // null by the HOST, never carried through as a string a client would have
-    // to guess at.
+    // The enum itself stays closed: an unrecognized value is normalized to null by the HOST, never carried through as a string a client would have to guess at.
     expect(
       modelProviderEntrySchema.safeParse({
         ...base,
@@ -932,10 +850,7 @@ describe("providers.listModelProviders payloads", () => {
 
 describe("providers.modelProviderAuth actions", () => {
   it("accepts a plain-key connect with no advertised method, for ANY provider", () => {
-    // `methodIndex: null` means "the client chose no advertised method". The
-    // host serves it with the generic API-key method upstream synthesizes when
-    // `/provider/auth` offers none - so this path is legal for every provider,
-    // not only the ones whose env member the host could resolve.
+    // `methodIndex: null` means "the client chose no advertised method".
     const parsed = modelProviderAuthActionSchema.parse({
       action: "connect",
       modelProviderId: "anthropic",
@@ -951,20 +866,16 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("carries the credential VALUE and nothing that names it", () => {
-    // The shape this surface settled on after auditing upstream: `key` is the
-    // pasted secret (upstream's `ApiAuth.key`), `inputs` are prompt answers
-    // (its `metadata`). No env-var NAME is on this wire: the name the value
-    // ends up stored under is never asked for, so there is nothing for a
-    // client to guess at or get wrong.
+    // The shape this surface settled on after auditing upstream: `key` is the pasted secret (upstream's `ApiAuth.key`), `inputs` are prompt answers (its `metadata`).
+    // No env-var NAME is on this wire: the name the value ends up stored under is never asked for, so there is nothing for a client to guess at or get wrong.
     const parsed = modelProviderAuthActionSchema.parse({
       action: "connect",
       modelProviderId: "azure",
       methodIndex: 0,
       key: "sk-secret",
       inputs: { resourceName: "my-resource" },
-      // Present in the INPUT on purpose: asserting the parse drops a key the
-      // payload never carried proves nothing. A client still sending the old
-      // field must have it stripped, not passed through.
+      // Present in the INPUT on purpose: asserting the parse drops a key the payload never carried proves nothing.
+      // A client still sending the old field must have it stripped, not passed through.
       credentialKey: "AZURE_API_KEY",
     });
     expect(parsed.action).toBe("connect");
@@ -999,10 +910,7 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("takes the same declarable fields for create and update", () => {
-    // Upstream's dialog is one form either way, so the block's own fields come
-    // from one shared shape; this pins that they cannot drift apart. The id is
-    // the one field the arms differ on - see the naming/addressing split
-    // below.
+    // Upstream's dialog is one form either way, so the block's own fields come from one shared shape; this pins that they cannot drift apart.
     const fields = {
       modelProviderId: "my-endpoint",
       name: "My Endpoint",
@@ -1018,9 +926,7 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("carries no npm field - the host writes the only value that works", () => {
-    // `T(id)` only recognizes `@ai-sdk/openai-compatible`, so any other value
-    // would declare a block this tab could never edit again. An unknown key is
-    // stripped by the parse rather than honoured.
+    // `T(id)` only recognizes `@ai-sdk/openai-compatible`, so any other value would declare a block this tab could never edit again.
     const parsed = modelProviderAuthActionSchema.parse({
       action: "createCustom",
       modelProviderId: "my-endpoint",
@@ -1059,9 +965,7 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("requires a name on every model", () => {
-    // A blank name renders as an unlabelled row in every model picker in the
-    // app - worse than refusing it, and a shape upstream's own dialog cannot
-    // produce either.
+    // A blank name renders as an unlabelled row in every model picker in the app - worse than refusing it, and a shape upstream's own dialog cannot produce either.
     for (const models of [
       [{ id: "gpt-4o", name: "" }],
       [{ id: "gpt-4o" }],
@@ -1099,8 +1003,6 @@ describe("providers.modelProviderAuth actions", () => {
 
   it("constrains a NEW provider id but never an existing one", () => {
     // The rule is about NAMING, so it binds exactly where a name is chosen.
-    // Everywhere else the id is a fact already on disk - and a rule applied
-    // there does not prevent a bad name, it strands a real provider.
     const base = {
       name: "My Endpoint",
       baseUrl: "https://api.example.com/v1",
@@ -1130,10 +1032,7 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("lets updateCustom address a block the naming rule would reject", () => {
-    // Update is the one verb that could rename a block, so a naming rule
-    // applied here would strand exactly the ids that need renaming.
-    // `My.Gateway` is the hand-written `opencode.json` case; `wafer.ai` is a
-    // catalog id nobody chose at all.
+    // Update is the one verb that could rename a block, so a naming rule applied here would strand exactly the ids that need renaming.
     const base = {
       name: "My Endpoint",
       baseUrl: "https://api.example.com/v1",
@@ -1204,9 +1103,8 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("accepts the base URLs upstream's dialog accepts, prefix rule and all", () => {
-    // Their check is a `http(s)://` PREFIX test, not a URL parse. Adopting the
-    // rule means adopting its edges: a value their app takes must not be a
-    // Traycer-only failure the user cannot explain.
+    // Their check is a `http(s)://` PREFIX test, not a URL parse.
+    // Adopting the rule means adopting its edges: a value their app takes must not be a Traycer-only failure the user cannot explain.
     const base = {
       action: "createCustom" as const,
       modelProviderId: "my-endpoint",
@@ -1242,12 +1140,7 @@ describe("providers.modelProviderAuth actions", () => {
   }
 
   it("keeps omitted, cleared and replaced env declarations distinct", () => {
-    // Three states, and the gap between the first two is the reason this field
-    // is nullable while `headers` is defaulted. Deleting the block's `env` key
-    // server-side needs an explicit null, so "clear" has to be sendable - but
-    // if ABSENT also meant clear, every client that simply does not populate
-    // the field would submit a silent wipe. An update changing the display
-    // name would delete how the provider reads its key.
+    // Three states, and the gap between the first two is the reason this field is nullable while `headers` is defaulted.
     const base = {
       action: "createCustom" as const,
       modelProviderId: "my-endpoint",
@@ -1272,10 +1165,7 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("still gives headers one spelling of none, because it has no clear state", () => {
-    // A header set is fully described by what the form submits, so omitted and
-    // empty mean the same thing and nothing is destroyed by treating them
-    // alike. Removal is refused rather than expressed, which is why the
-    // three-state shape would buy nothing here.
+    // A header set is fully described by what the form submits, so omitted and empty mean the same thing and nothing is destroyed by treating them alike.
     const base = {
       action: "createCustom" as const,
       modelProviderId: "my-endpoint",
@@ -1300,9 +1190,7 @@ describe("providers.modelProviderAuth actions", () => {
       models: [{ id: "gpt-4o", name: "GPT-4o" }],
       headers: [{ key: "X-Org", value: "acme" }],
       key: "sk-secret",
-      // The `{env:VAR}` syntax is parsed client-side; the wire carries names,
-      // so the syntax stays a presentation detail of whichever client offers
-      // it and the host is never handed a template to re-parse.
+      // The `{env:VAR}` syntax is parsed client-side; the wire carries names, so the syntax stays a presentation detail of whichever client offers it and the host is never handed a template to re-parse.
       env: ["MY_ENDPOINT_KEY"],
     });
     expect(parsed.action).toBe("createCustom");
@@ -1333,9 +1221,6 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("rejects a custom provider with no models", () => {
-    // Not tidiness: upstream's `T(id)` requires a non-empty model map, so a
-    // block declared with none would fail the very predicate that decides
-    // whether the row is editable - created, then immediately unreachable.
     expect(
       modelProviderAuthActionSchema.safeParse({
         action: "createCustom",
@@ -1348,9 +1233,6 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("has no removeCustom arm - removing a custom provider IS disconnecting it", () => {
-    // Two verbs would have let a client delete the declaration while leaving
-    // the provider enabled: one state, reachable two ways, with nothing to
-    // clean up the difference.
     expect(
       modelProviderAuthActionSchema.safeParse({
         action: "removeCustom",
@@ -1366,9 +1248,7 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("has no separate disabled-providers toggle either", () => {
-    // Disabling is what disconnect DOES for a row with no credential to
-    // remove. A toggle beside it would be a second spelling of the same
-    // intention, and the two could disagree.
+    // Disabling is what disconnect DOES for a row with no credential to remove.
     expect(
       modelProviderAuthActionSchema.safeParse({
         action: "setDisabled",
@@ -1396,9 +1276,6 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("keys prompt answers by prompt key, so one cannot be answered twice", () => {
-    // A map, not a list of `{key, value}` pairs: a duplicate key is not a
-    // state anything downstream can act on, and this makes it unrepresentable
-    // rather than merely wrong.
     const parsed = modelProviderAuthActionSchema.parse({
       action: "startOauth",
       modelProviderId: "anthropic",
@@ -1430,9 +1307,6 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("addresses submitCode by attempt id, not by provider alone", () => {
-    // Attempts are single-flight per (providerId, modelProviderId) and a new
-    // one supersedes the pending one, so a code for a superseded attempt has
-    // to be discardable rather than applied to whatever is pending now.
     expect(
       modelProviderAuthActionSchema.safeParse({
         action: "submitCode",
@@ -1509,9 +1383,6 @@ describe("model provider auth results", () => {
     expect(
       modelProviderAuthResultSchema.safeParse({ kind: "cancelled" }).success,
     ).toBe(false);
-    // `pendingInstruction` has no counterpart here: upstream carries its
-    // instruction text on the authorization response, so an instruction-only
-    // arm is one nothing could ever emit.
     expect(
       modelProviderAuthResultSchema.safeParse({
         kind: "pendingInstruction",
@@ -1550,9 +1421,6 @@ describe("await / cancel attempt addressing", () => {
   });
 
   it("separates 'was something torn down' from 'what is the state now'", () => {
-    // Cancelling an attempt that already completed, expired or was superseded
-    // is `cancelled: false` with a perfectly normal result - and cancel is
-    // best-effort LOCAL either way: upstream has no OAuth-cancel endpoint.
     const response = providersCancelModelProviderAuthResponseSchema.parse({
       cancelled: false,
       result: { kind: "done" },
@@ -1563,11 +1431,7 @@ describe("await / cancel attempt addressing", () => {
 });
 
 describe("attempt lifecycle is encodable end to end", () => {
-  // The plan settles these outcomes; the wire has to be able to SAY them. The
-  // shared native-config enum could not - it has no member for a superseded or
-  // expired attempt - so a host would have had to overload `external_drift` or
-  // invent silence. Each case below is one settled outcome and the client
-  // action it implies.
+  // The plan settles these outcomes; the wire has to be able to SAY them.
   const OUTCOMES = [
     {
       name: "a stale attempt id is discarded, not answered with the live attempt's status",
@@ -1648,9 +1512,7 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("refuses attempt errors on the LIST result - they are impossible there", () => {
-    // Listing the catalog has no attempt to supersede, no code to reject and
-    // no prompt answers to validate. A wide enum shared by both contexts would
-    // type-check every one of these and leave the impossibility to a comment.
+    // Listing the catalog has no attempt to supersede, no code to reject and no prompt answers to validate.
     for (const code of [
       "attempt_not_found",
       "attempt_superseded",
@@ -1672,9 +1534,7 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("refuses capability_unavailable on the AUTH error arm - that is the unsupported arm", () => {
-    // The auth result already answers "not offered here" structurally. A code
-    // saying the same thing is a second spelling, and consumers end up
-    // handling one of the two.
+    // The auth result already answers "not offered here" structurally.
     expect(
       providersModelProviderAuthResponseSchema.safeParse({
         result: {
@@ -1739,10 +1599,8 @@ describe("attempt lifecycle is encodable end to end", () => {
     }
   });
 
-  // EMPTY, and kept empty rather than removed. It is the seam a deliberate
-  // overlap between the two vocabularies has to pass through: an overlap that
-  // must be written down here stays intentional, while deleting the mechanism
-  // would let the next accidental one read as approved.
+  // EMPTY, and kept empty rather than removed.
+  // It is the seam a deliberate overlap between the two vocabularies has to pass through: an overlap that must be written down here stays intentional, while deleting the mechanism would let the next accidental one read as.
   const DELIBERATELY_SHARED_CODES: readonly string[] = [];
 
   it("shares exactly the codes it means to with the native vocabulary", () => {
@@ -1757,10 +1615,8 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("keeps every other code out of the shared native vocabulary", () => {
-    // Not a style preference: `providerNativeErrorCodeSchema` rides RELEASED
-    // carriers, so it cannot be widened, and its other members describe
-    // config-file EDITS. A model-provider code leaking into it (or vice versa)
-    // would mean one of the two enums grew where it must not.
+    // Not a style preference: `providerNativeErrorCodeSchema` rides RELEASED carriers, so it cannot be widened, and its other members describe config-file EDITS.
+    // A model-provider code leaking into it (or vice versa) would mean one of the two enums grew where it must not.
     const ours = [
       ...modelProviderListErrorCodeSchema.options,
       ...modelProviderAuthErrorCodeSchema.options,
@@ -1786,13 +1642,8 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("cannot say config_unreadable, because nothing here can observe it", () => {
-    // Every config read and write goes through the managed server, so a config
-    // the server cannot parse is a server that never boots: there is no GET or
-    // PATCH left to fail, and the condition can only arrive as a failed lease.
-    //
-    // A code no producer can emit is worse than a missing one - it gets
-    // handled, weighed, and never reached. Rejected on both arms so it cannot
-    // drift in.
+    // Every config read and write goes through the managed server, so a config the server cannot parse is a server that never boots: there is no GET or PATCH left to fail, and the condition can only arrive as a failed lease.
+    // Rejected on both arms so it cannot drift in.
     expect(
       modelProvidersListResultSchema.safeParse({
         ok: false,
@@ -1843,10 +1694,8 @@ describe("attempt lifecycle is encodable end to end", () => {
 });
 
 describe("the v7.0 capability freeze around the model-provider surface", () => {
-  // Hand-frozen copies that still deep-equal their live counterparts. Green
-  // today; red the day a live subtree grows past the frozen line - and the
-  // answer to red is main's freeze rule: keep the copy frozen and extend the
-  // v8->v7 projection/bridge to say what a v7.0 peer sees instead.
+  // Hand-frozen copies that still deep-equal their live counterparts.
+  // Green today; red the day a live subtree grows past the frozen line - and the answer to red is main's freeze rule: keep the copy frozen and extend the v8->v7 projection/bridge to say what a v7.0 peer sees instead.
   const PAIRS = [
     [
       "mcp capabilities",
@@ -1887,10 +1736,7 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
   });
 
   it("frozen tabs = live tabs minus modelProviders, exactly", () => {
-    // Pins BOTH directions of the projection's premise: the frozen enum has
-    // no member the live one lacks, and `modelProviders` is the only member
-    // the live one adds. A second live-only tab would land here first, as a
-    // prompt to extend the projection's coverage tests.
+    // Pins BOTH directions of the projection's premise: the frozen enum has no member the live one lacks, and `modelProviders` is the only member the live one adds.
     expect([...providerSettingsTabSchema.options].sort()).toEqual(
       [
         ...providerSettingsTabSchemaV70Preimage.options,
@@ -1928,14 +1774,8 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
 });
 
 describe("no downgrade hop fails a whole response over one unsupported provider", () => {
-  // The class the v7 -> v6 hop belongs to. `z.array` fails WHOLE on one bad
-  // element, so a frozen line's id enum rejecting a newer provider does not
-  // drop that provider - it throws the entire `providers.list` response for
-  // that peer, taking every healthy provider with it.
-  //
-  // Reachable the instant `huggingface` joined the live id enum.
-  // Asserted across EVERY hop rather than the one that was wrong, because the
-  // next provider id will arrive the same way this one did.
+  // The class the v7 -> v6 hop belongs to.
+  // `z.array` fails WHOLE on one bad element, so a frozen line's id enum rejecting a newer provider does not drop that provider - it throws the entire `providers.list` response for that peer, taking every healthy provider.
   const FROZEN_RESPONSES = {
     1: providersListResponseSchemaV10,
     2: providersListResponseSchemaV20,

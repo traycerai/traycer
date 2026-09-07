@@ -1,22 +1,6 @@
 /**
- * Pure actions over `EpicCanvasState` (the N-ary split tree + decoupled tile
- * payloads). Every action:
- *
- * - is immutable with structural sharing (untouched sibling subtrees keep
- *   reference identity),
- * - returns the SAME state reference for no-ops so the store can skip the
- *   write entirely,
- * - keeps `tilesByInstanceId` in lockstep with tree membership (every
- *   instanceId reachable from `root` has exactly one payload entry, and
- *   nothing else does),
- * - keeps `sizesByGroupId` pruned to live group ids.
- *
- * Vocabulary (see `tile-tree.ts`): a **pane** is the leaf tab group, a
- * **group** is a split container. Pane-addressed APIs take `paneId`;
- * only the sizes map (`resizeSplit`) addresses a group.
- *
- * Tab identity recap (see `types.ts`): structural ops key on a tab's
- * `instanceId`; dedup and rename key on the payload's content `id`.
+ * Pure actions over `EpicCanvasState` (the N-ary split tree + decoupled tile payloads). Every
+ * action:
  */
 import { v4 as uuidv4 } from "uuid";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
@@ -65,9 +49,6 @@ import { createEmptyCanvas } from "./canvas-state";
 import { makeBlankTileRef } from "./tile-schema/blank-tile";
 import type { PaneTileOpenOptions } from "@/lib/canvas/tile-open/intent";
 
-// ---------------------------------------------------------------------------
-// Pane / tile helpers
-// ---------------------------------------------------------------------------
 
 function createEmptyPane(): TilePane {
   return {
@@ -155,9 +136,6 @@ function recordPaneActivation(pane: TilePane, tabId: string): TilePane {
   return { ...pane, activeTabId: tabId, activationHistory };
 }
 
-// ---------------------------------------------------------------------------
-// Lookup
-// ---------------------------------------------------------------------------
 
 function activeGitFileDiffTileOfPane(
   state: EpicCanvasState,
@@ -173,11 +151,8 @@ function activeGitFileDiffTileOfPane(
 }
 
 /**
- * The single-file git-diff tile the user is "looking at" on the canvas:
- * the focused pane's active tab when it is a file diff tile, otherwise
- * the unique pane whose active tab is a file diff tile. Two or more
- * candidate panes are ambiguous and resolve to null - the git panel
- * shows no active row rather than guessing.
+ * The single-file git-diff tile the user is "looking at" on the canvas: the focused pane's active
+ * tab when it is a file diff tile, otherwise the unique pane whose active tab is a file diff tile.
  */
 export function findActiveGitFileDiffTile(
   canvas: EpicCanvasState,
@@ -205,16 +180,7 @@ export interface PaneTabLocation {
   readonly ref: EpicCanvasTileRef;
 }
 
-/**
- * Locate an open tab by content id. Every tile kind carries a deterministic
- * content `id` (artifact uuid, workspace-file path hash, git-diff payload
- * hash), so dedup is plain id equality across all kinds. Used by global
- * dedup - opening content already present anywhere focuses that tab instead
- * of cloning.
- *
- * For a host-bound kind, prefer {@link findPaneTabForRef}: ids minted by a
- * host (a chat, a shell) are unique per host, not globally.
- */
+/** Locate an open tab by content id. */
 export function findPaneTabByContentId(
   state: EpicCanvasState,
   contentId: string,
@@ -233,10 +199,8 @@ export function findPaneTabByContentId(
 
 /** The bound host of a tile kind that has one; null for the rest. */
 /**
- * The identity a tab is deduped and looked up by: content id plus bound host,
- * for the kinds that have one. Deliberately structural - callers that hold a
- * ref-in-progress (a sidebar row about to open one) match on the same rule as
- * callers holding a finished `EpicCanvasTileRef`.
+ * The identity a tab is deduped and looked up by: content id plus bound host, for the kinds that
+ * have one.
  */
 export interface TileIdentity {
   readonly id: string;
@@ -248,14 +212,8 @@ function tileHostId(ref: TileIdentity): string | null {
 }
 
 /**
- * The dedup lookup an opener uses, holding the whole ref rather than an id
- * alone: same content id AND same bound host.
- *
- * Host-minted ids are unique per host, not globally - a cross-host clone
- * carries the source's chat and shell ids verbatim - so id equality alone
- * would let a door on host B focus host A's open tab and quietly hand back a
- * window bound to the wrong machine. Kinds with no host (artifacts, diffs)
- * compare null to null and dedup exactly as before.
+ * The dedup lookup an opener uses, holding the whole ref rather than an id alone: same content id
+ * AND same bound host.
  */
 export function findPaneTabForRef(
   state: EpicCanvasState,
@@ -284,9 +242,6 @@ function activePaneOrFirst(state: EpicCanvasState): TilePane | null {
   return findPaneById(state.root, firstPaneId(state.root));
 }
 
-// ---------------------------------------------------------------------------
-// Pane-local tab list edits
-// ---------------------------------------------------------------------------
 
 interface InsertTabResult {
   readonly pane: TilePane;
@@ -294,12 +249,7 @@ interface InsertTabResult {
   readonly removedPreviewInstanceId: string | null;
 }
 
-/**
- * Insert `instanceId` into `pane` at `index`, becoming the active tab. If
- * `preview` is true the inserted tab also becomes the pane's preview tab,
- * evicting any existing preview tab entirely (the caller must GC its
- * payload).
- */
+/** Insert `instanceId` into `pane` at `index`, becoming the active tab. */
 function insertTabInstance(
   pane: TilePane,
   instanceId: string,
@@ -344,11 +294,7 @@ function selectSyntheticFallback(
   ];
 }
 
-/**
- * Remove the tab at `index` and prune history only. If the removed tab was
- * active, the active tab is cleared; callers that need source/close fallback
- * must opt into `removeTabAtIndexWithSyntheticFallback`.
- */
+/** Remove the tab at `index` and prune history only. */
 function removeTabAtIndexPruneOnly(
   pane: TilePane,
   index: number,
@@ -379,9 +325,8 @@ function removeTabAtIndexPruneOnly(
 }
 
 /**
- * Remove the tab at `index` and, only when that tab was active, choose the
- * replacement synthetically from pruned history first and position second.
- * The fallback is not recorded as a committed activation.
+ * Remove the tab at `index` and, only when that tab was active, choose the replacement
+ * synthetically from pruned history first and position second.
  */
 function removeTabAtIndexWithSyntheticFallback(
   pane: TilePane,
@@ -420,9 +365,6 @@ function resolveActiveTabInstance(
   return { instanceId: pane.tabInstanceIds[index], index };
 }
 
-// ---------------------------------------------------------------------------
-// Seed / clone
-// ---------------------------------------------------------------------------
 
 function seedRootPane(
   node: EpicCanvasTileRef,
@@ -445,10 +387,8 @@ export function createSingleTileCanvas(
 }
 
 /**
- * Deep-clone a canvas with fresh pane/group ids AND fresh per-tab
- * `instanceId`s so cloned canvases never share a tab identity (content `id`
- * is preserved). `activePaneId` and `sizesByGroupId` are remapped through
- * the same id maps.
+ * Deep-clone a canvas with fresh pane/group ids AND fresh per-tab `instanceId`s so cloned canvases
+ * never share a tab identity (content `id` is preserved).
  */
 export function cloneEpicCanvasState(state: EpicCanvasState): EpicCanvasState {
   if (state.root === null) return createEmptyCanvas();
@@ -508,26 +448,10 @@ export function cloneEpicCanvasState(state: EpicCanvasState): EpicCanvasState {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Open
-// ---------------------------------------------------------------------------
 
 /**
- * Open a tile in the canvas. Global dedup: if the content is already open in
- * any pane, focus that tab. Otherwise insert into the active pane. Seeds a
- * root pane when the canvas is empty.
- *
- * `preview` controls the VS Code-style single-click semantics:
- *
- * - `preview: false` (permanent open): the new tab is a regular pinned tab.
- *   Re-opening a tab that is currently the pane's preview promotes it to
- *   permanent (clears `previewTabId`).
- * - `preview: true`: the new tab becomes the pane's preview tab, replacing
- *   (and GC-ing the payload of) any existing preview tab in the destination
- *   pane. Focusing an already-open tab never demotes it to preview.
- *
- * No-op (same reference) when the tab is already active in the already
- * focused pane and no preview promotion applies.
+ * Open a tile in the canvas. Global dedup: if the content is already open in any pane, focus that
+ * tab.
  */
 export function openTile(
   state: EpicCanvasState,
@@ -552,20 +476,15 @@ export function openTile(
     }
     return { ...state, root, activePaneId: existing.pane.id };
   }
-  // Prefer `preferredPaneId` (e.g. a history entry's original pane) when it
-  // still exists in the tree; otherwise fall back to the active pane, same
-  // as every other caller.
+  // Prefer `preferredPaneId` (e.g. a history entry's original pane) when it still exists in the
+  // tree; otherwise fall back to the active pane, same as every other caller.
   const preferredPane =
     preferredPaneId === null ? null : findPaneById(state.root, preferredPaneId);
   const target = preferredPane ?? activePaneOrFirst(state);
   if (target === null) return state;
 
-  // Fill-in-place: a permanent open while the active tab is a blank "New tab"
-  // replaces that blank at its index rather than stacking a second tab (browser
-  // new-tab semantics; mirrors `openTileInPane`). Without this, opening content
-  // over the placeholder blank an empty epic seeds - e.g. a terminal-agent tile
-  // landing after `EmptyEpicBlankRoot` runs - leaves a phantom "New tab" beside
-  // it. Preview opens keep appending: a hover-preview must not consume a blank.
+  // Fill-in-place: a permanent open while the active tab is a blank "New tab" replaces that blank at
+  // its index rather than stacking a second tab (browser new-tab semantics; mirrors
   const active = preview ? null : resolveActiveTabInstance(target);
   const activeRef =
     active === null
@@ -602,12 +521,7 @@ export function openTile(
   return insertTileInPane(state, target, node, preview);
 }
 
-/**
- * Restore one exact historical tile instance as a preview. Unlike
- * {@link openTile}, this deliberately bypasses content-id dedup: opener paths
- * can create two views of the same content under different instance ids, and
- * history must recreate the specific instance addressed by the landing URL.
- */
+/** Restore one exact historical tile instance as a preview. */
 export function restoreTilePreview(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
@@ -649,14 +563,7 @@ function insertTileInPane(
   };
 }
 
-/**
- * Register a tile as a tab in the active pane WITHOUT changing the active
- * tab/pane. Used to persist a server-created terminal (the worktree setup
- * terminal) as a real saved tab - so it survives a restart like a
- * user-opened terminal - without yanking the user off the chat they are
- * reading. Idempotent: if the tile is already open anywhere, it is left
- * untouched.
- */
+/** Register a tile as a tab in the active pane WITHOUT changing the active tab/pane. */
 export function openTileInBackgroundTab(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
@@ -677,32 +584,7 @@ export function openTileInBackgroundTab(
   };
 }
 
-/**
- * Open `ref` into an explicit `paneId` as a fresh tab instance, bypassing
- * global dedup. Unlike {@link openTile}, this is the opener's path: it
- * never focuses an already-open tab and never falls back to the active pane.
- *
- * - mints a fresh `instanceId` (a second view of the same content `id` is
- *   allowed - the two tabs differ only by `instanceId`),
- * - inserts into the explicit pane (no active-pane resolution),
- * - makes the target pane and the new tab active.
- *
- * `mode` mirrors the three whole-canvas openers so one pane-scoped call
- * covers all of them: `permanent` is a pinned tab, `preview` also claims the
- * pane's preview slot (evicting and GC-ing the previous preview, like
- * `openTile(..., preview: true)`), and `background` only adds membership -
- * `activeTabId` / `activePaneId` are untouched, like
- * {@link openTileInBackgroundTab}.
- *
- * `index` is the strip position; `null` appends.
- *
- * Fill-in-place: when the pane's active tab is a blank "New tab", the picked
- * content replaces it at the same index (browser new-tab semantics). Only for
- * `permanent` + `index: null` - a positioned or preview open never eats a
- * blank.
- *
- * No-op when the canvas is empty or `paneId` does not resolve to a pane.
- */
+/** Open `ref` into an explicit `paneId` as a fresh tab instance, bypassing global dedup. */
 export function openTileInPane(
   state: EpicCanvasState,
   paneId: string,
@@ -735,9 +617,8 @@ export function openTileInPane(
     };
   }
 
-  // Fill-in-place only for an unpositioned permanent open: an explicit index
-  // is a position, and a preview must not consume a blank (same rule as
-  // `openTile`).
+  // Fill-in-place only for an unpositioned permanent open: an explicit index is a position, and a
+  // preview must not consume a blank (same rule as `openTile`).
   const active =
     mode === "permanent" && index === null
       ? resolveActiveTabInstance(target)
@@ -797,12 +678,7 @@ export function openTileInPane(
   };
 }
 
-/**
- * Open a blank "New tab" in `paneId`, made active, with the pane made
- * globally active. Reuse-if-active-is-blank: when the pane's active tab is
- * already blank, just focus it (no stacking) so repeated invocations don't
- * pile up empty tabs.
- */
+/** Open a blank "New tab" in `paneId`, made active, with the pane made globally active. */
 export function openBlankTabInPane(
   state: EpicCanvasState,
   paneId: string,
@@ -845,9 +721,6 @@ export function openBlankTabInPane(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Activation / preview
-// ---------------------------------------------------------------------------
 
 /** Promote the pane's preview tab to permanent (clear `previewTabId`). */
 export function promotePreview(
@@ -862,21 +735,7 @@ export function promotePreview(
   return { ...state, root };
 }
 
-/**
- * Restore a pane's preview slot to `previewTabId`, the inverse of
- * `promotePreview`.
- *
- * Dragging a preview tile promotes it on drag start, so a CANCELLED drag would
- * otherwise leave the promotion behind - a state residual, which is exactly
- * what `Esc restores order and geometry exactly` forbids. Only restores when
- * that tile is still in the pane, so a cancel cannot resurrect a preview for a
- * tab that has since gone.
- *
- * It also refuses when the pane's preview slot has been claimed by a DIFFERENT
- * tile since the drag began - agent activity can open a new preview mid-drag,
- * and restoring over it would evict a preview this gesture never touched.
- * Cancel must undo its own promotion, not the pane's current state.
- */
+/** Restore a pane's preview slot to `previewTabId`, the inverse of `promotePreview`. */
 export function restorePreview(
   state: EpicCanvasState,
   paneId: string,
@@ -925,16 +784,8 @@ export function setActivePane(
   return { ...state, activePaneId: paneId };
 }
 
-// ---------------------------------------------------------------------------
-// Close
-// ---------------------------------------------------------------------------
 
-/**
- * Close the tab `tabId` (an instanceId) from `paneId`. Cascade: if removal
- * empties the pane AND it isn't the root, the pane is removed and its parent
- * group shrinks (dissolving when one child remains). The root pane is
- * preserved as an empty drop zone.
- */
+/** Close the tab `tabId` (an instanceId) from `paneId`. */
 export function closeTab(
   state: EpicCanvasState,
   paneId: string,
@@ -1054,9 +905,8 @@ export function closeAllTabs(
 }
 
 /**
- * Remove a pane entirely. If non-root, the parent group shrinks (dissolving
- * when a single child remains). If root, the pane is replaced with an empty
- * pane so the canvas surface remains a drop target.
+ * Remove a pane entirely. If non-root, the parent group shrinks (dissolving when a single child
+ * remains).
  */
 export function closePane(
   state: EpicCanvasState,
@@ -1093,9 +943,8 @@ export function closePane(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tab strip drops (reorder / move / insert)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Tab strip drops
+// (reorder / move / insert)
 
 type TabStripSource =
   | { kind: "node"; node: EpicCanvasTileRef }
@@ -1205,11 +1054,8 @@ function moveTabAcrossPanes(
 }
 
 /**
- * Insert / move a tab into the destination pane's tab strip at
- * `targetIndex`. Handles both `'node'` (new from sidebar) and `'tab'`
- * (existing tab being moved cross-pane) sources. Node drops preserve
- * single-open-tab semantics by moving an already-open node instead of
- * creating a duplicate or only focusing the existing tab.
+ * Insert / move a tab into the destination pane's tab strip at `targetIndex`. Handles both
+ * `'node'` (new from sidebar) and `'tab'` (existing tab being moved cross-pane) sources.
  */
 export function dropOnTabStrip(
   state: EpicCanvasState,
@@ -1267,9 +1113,6 @@ export function dropOnTabStrip(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Edge splits
-// ---------------------------------------------------------------------------
 
 interface ResolvedSplitSource {
   readonly state: EpicCanvasState;
@@ -1301,12 +1144,8 @@ function resolveSplitSource(
   if (ref === undefined) return null;
   const removed = removeTabAtIndexWithSyntheticFallback(sourcePane, fromIndex);
   const root = replacePane(state.root, source.sourcePaneId, () => removed.pane);
-  // An emptied source pane normally collapses - a tab dragged OUT of a pane
-  // shouldn't leave a hole behind. But when the drop targets that same pane,
-  // collapsing would undo the very split the drop preview just promised (the
-  // sole-tab case: open a Git Diff or Terminal, drag it to the pane edge). Keep
-  // the emptied pane as the split's other half, where it renders the standard
-  // opener - the same shape the "Split group" button produces.
+  // An emptied source pane normally collapses - a tab dragged OUT of a pane shouldn't leave a hole
+  // behind.
   const emptiedSourcePane = removed.pane.tabInstanceIds.length === 0;
   const splitsIntoItself = source.sourcePaneId === targetPaneId;
   return {
@@ -1318,13 +1157,8 @@ function resolveSplitSource(
 }
 
 /**
- * Drop an item on a pane's body edge - splits the pane at that edge with the
- * dragged item populating the new sibling pane. When the pane's parent group
- * already runs in the drop direction the new pane joins that group (the
- * tree stays flat); otherwise the pane is wrapped in a fresh group. The new
- * pane becomes globally active. Both `'node'` and `'tab'` sources are
- * handled; cross-pane tab moves remove from the source first. Drops that
- * would exceed the depth cap are no-ops.
+ * Drop an item on a pane's body edge - splits the pane at that edge with the dragged item
+ * populating the new sibling pane.
  */
 export function splitPaneAtEdge(
   state: EpicCanvasState,
@@ -1380,10 +1214,8 @@ export function splitPaneAtEdge(
 }
 
 /**
- * Split `paneId` along `direction`, placing an empty placeholder pane on the
- * trailing side (right for horizontal, bottom for vertical). The empty pane
- * becomes globally active so a subsequent sidebar click lands there.
- * Depth-capped like every other split.
+ * Split `paneId` along `direction`, placing an empty placeholder pane on the trailing side (right
+ * for horizontal, bottom for vertical).
  */
 export function splitPaneEmpty(
   state: EpicCanvasState,
@@ -1409,9 +1241,6 @@ export function splitPaneEmpty(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Resize
-// ---------------------------------------------------------------------------
 
 function sizesEqual(
   a: ReadonlyArray<number>,
@@ -1433,10 +1262,8 @@ function shellArgsEqual(
 }
 
 /**
- * Commit a group's child fractions (clamped + normalized). Touches ONLY
- * `sizesByGroupId` - the tree object is untouched, so layout subscribers
- * keyed on `root` never re-render for a resize. `groupId` addresses a split
- * container (NOT a pane) - the one place the canvas API takes a group id.
+ * Commit a group's child fractions (clamped + normalized). Touches ONLY `sizesByGroupId` - the
+ * tree object is untouched, so layout subscribers keyed on `root` never re-render for a resize.
  */
 export function resizeSplit(
   state: EpicCanvasState,
@@ -1453,9 +1280,8 @@ export function resizeSplit(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tile payload updates (tree untouched - the decoupling win)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Tile payload updates
+// (tree untouched - the decoupling win)
 
 function updateTilesWhere(
   state: EpicCanvasState,
@@ -1541,12 +1367,8 @@ export function updateBrowserTileViewportPreset(
 }
 
 /**
- * Refresh the persisted `name` snapshot of every terminal tile bound to
- * (hostId, sessionId) after a successful host rename. The snapshot is the
- * restart-recovery fallback only - live rendering reads the host's
- * `terminal.list` rows - so this runs post-success, never optimistically.
- * Matched by content id AND host binding: session ids are only unique per
- * host, so a bare id match could rename another host's tile.
+ * Refresh the persisted `name` snapshot of every terminal tile bound to (hostId, sessionId) after
+ * a successful host rename.
  */
 export function renameTerminalTiles(
   state: EpicCanvasState,
@@ -1604,10 +1426,6 @@ export function adoptHostTerminalProjection(
         terminal.record.manualTitle ?? DEFAULT_TERMINAL_TITLE;
       const titleSource =
         terminal.record.manualTitle === null ? "default" : "manual";
-      // `updateTilesWhere` treats any new object as a change, so an already
-      // adopted ref that matches the projection byte-for-byte would still mint
-      // a new canvas identity on every stream tick - re-rendering every canvas
-      // subscriber and invalidating the persist cache for every tab.
       if (
         isHostEpicTerminalRef(ref) &&
         ref.legacyFallback.name === fallbackName &&
@@ -1645,11 +1463,7 @@ export function adoptHostTerminalProjection(
   );
 }
 
-/**
- * Remove every supported local presentation ref for an authoritative host
- * deletion. Legacy refs are migration evidence, but a deletion/tombstone is
- * conclusive; only unknown future-authority refs remain presentation-only.
- */
+/** Remove every supported local presentation ref for an authoritative host deletion. */
 export function removeTerminalTiles(
   state: EpicCanvasState,
   hostId: string,
@@ -1681,9 +1495,6 @@ export function updateGitDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isGitDiffTileRef(ref),
-    // Re-narrowed here, not just in the predicate: `view` is per-kind now that
-    // the comm-graph tile carries a viewport-shaped one, so a bare spread over
-    // the union would type-check against the wrong kind.
     (ref) => (isGitDiffTileRef(ref) ? { ...ref, view } : ref),
   );
 }
@@ -1700,26 +1511,7 @@ export function updateSnapshotDiffTileView(
   );
 }
 
-/**
- * Rewrite a snapshot-diff tile's PAYLOAD, not its view state.
- *
- * The one payload on these nodes that is not a fact about the request is the
- * segment capture: it records what the source blocks said at open time and is
- * the fallback once those blocks leave the window. Captured mid-stream it
- * freezes a half-written edit into the tile permanently, so it is refreshed
- * once the edit settles - see `settledSnapshotSegmentCapture`, which owns both
- * the settled-enough decision and the "nothing changed" answer.
- *
- * Deliberately narrow. It replaces the whole `diff` payload rather than
- * patching hashes, because the payload is a discriminated union and a partial
- * write would have to re-narrow it at every call site; and it takes an
- * already-decided value rather than a resolver, so the policy stays in one
- * place and this stays a store mutation.
- *
- * Identity-stable when the payload already matches: `updateTilesWhere` reports
- * no change for a returned-as-is ref, so a re-render that recomputes the same
- * capture does not churn the persisted canvas.
- */
+/** Rewrite a snapshot-diff tile's PAYLOAD, not its view state. */
 export function updateSnapshotDiffTilePayload(
   state: EpicCanvasState,
   tileId: string,
@@ -1735,11 +1527,7 @@ export function updateSnapshotDiffTilePayload(
   );
 }
 
-/**
- * Persist a comm-graph tile's viewport. Called on gesture END (React Flow's
- * `onMoveEnd`), never per animation frame - the canvas snapshot is serialized
- * on every write, so a per-frame pan would churn the whole persistence path.
- */
+/** Persist a comm-graph tile's viewport. */
 export function updateCommGraphTileView(
   state: EpicCanvasState,
   tileId: string,
@@ -1799,23 +1587,12 @@ export function updatePrDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isPrDiffTileRef(ref),
-    // Re-narrowed here for the same reason as `updateGitDiffTileView`: `view`
-    // is per-kind now that the comm-graph tile carries a viewport-shaped one,
-    // so a bare spread over the union would type-check against the wrong kind.
+    // Re-narrowed here for the same reason as `updateGitDiffTileView`: `view` is per-kind now that the
+    // comm-graph tile carries a viewport-shaped one, so a bare spread over the union would type-check
     (ref) => (isPrDiffTileRef(ref) ? { ...ref, view } : ref),
   );
 }
 
-/**
- * No `ref.diff.kind` gate, unlike the git and snapshot pairs: a PR diff tile
- * is ALWAYS the multi-file view (there is no single-file PR diff tile), so
- * there is no non-bundle variant to exclude.
- *
- * `fileKey` is a tagged canonical key (`prLocalDiffFileKey`), toggled in the
- * PR tile's own `collapsedFileKeys` - deliberately NOT the shared
- * `toggleCollapsedFilePath`, whose bare-path field the PR tile no longer
- * reads or writes.
- */
 export function togglePrDiffFileCollapsed(
   state: EpicCanvasState,
   tileId: string,

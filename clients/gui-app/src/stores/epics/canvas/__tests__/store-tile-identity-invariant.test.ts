@@ -1,17 +1,3 @@
-/**
- * Store-integration pins for the canvas-store-wide immutable tile identity
- * invariant (Ticket 21 slice 1). `tile-identity-invariant.test.ts` pins the
- * pure detection/policy functions in isolation; this file drives the SAME
- * invariant through the real store wiring: the wrapped internal `set()`
- * (every action below `updateTabCanvas` AND the handful of actions - like
- * `tearOffTabIntoNewHeaderTab` - that write `canvasByTabId` directly),
- * `applyEpicCanvasDesktopProjection`, and the persist `merge` hydration path.
- *
- * `import.meta.env.DEV` is true under Vitest, so every real ingress below
- * throws on a violation (the production fail-closed branch is pinned
- * directly on `enforceTileIdentityInvariant` in the pure-module test - it is
- * not reachable through this store without stubbing Vite's static env).
- */
 import {
   afterEach,
   beforeEach,
@@ -181,10 +167,8 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
     store.openTileInTab(tabId, SPEC_A);
     const otherTabId = store.openEpicTab("epic-2", "Epic Bar");
 
-    // Adversarial input: a caller-constructed node that reuses SPEC_A's
-    // instanceId for a DIFFERENT content id. Nothing in the public action
-    // API mints instanceIds itself - callers always supply them - so this is
-    // exactly the shape a future bug (not today's code) could produce.
+    // Adversarial input: a caller-constructed node that reuses SPEC_A's instanceId for a DIFFERENT
+    // content id.
     const colliding: EpicNodeRef = { ...SPEC_B, instanceId: SPEC_A.instanceId };
 
     expect(() =>
@@ -285,9 +269,8 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
       },
     }));
 
-    // SPEC_A is no longer live, but SPEC_B is. Restoring the tampered
-    // payload is fine for a free instanceId - re-open SPEC_A first so the
-    // restore would repoint a live instanceId.
+    // SPEC_A is no longer live, but SPEC_B is. Restoring the tampered payload is fine for a free
+    // instanceId - re-open SPEC_A first so the restore would repoint a live instanceId.
     useEpicCanvasStore.getState().openTileInTab(tabId, SPEC_A);
     expect(() =>
       useEpicCanvasStore
@@ -347,9 +330,8 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
   });
 
   it("throws when splitPaneWithNode splits with a colliding instanceId", () => {
-    // splitPaneWithTab only relocates an already-live instanceId (tuple
-    // retained); the free-form node path that CAN introduce a colliding
-    // instanceId is splitPaneWithNode.
+    // splitPaneWithTab only relocates an already-live instanceId (tuple retained); the free-form node
+    // path that CAN introduce a colliding instanceId is splitPaneWithNode.
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic Foo");
     store.openTileInTab(tabId, SPEC_A);
@@ -372,10 +354,8 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
   });
 
   it("openTileInPane remints instanceId so a colliding input is not committed", () => {
-    // openTileInPane deliberately mints a fresh instanceId (second view of
-    // the same content is allowed). The input instanceId is ignored, so a
-    // caller-supplied collision never reaches the identity check as a
-    // repoint - pin that the action succeeds and the live seed is untouched.
+    // openTileInPane deliberately mints a fresh instanceId (second view of the same content is
+    // allowed).
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic Foo");
     store.openTileInTab(tabId, SPEC_A);
@@ -408,10 +388,8 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
   });
 
   it("moveTabOnTabStrip and splitPaneWithTab retain tuples (no free-form instanceId mint)", () => {
-    // These actions only relocate an already-live instanceId; they cannot
-    // introduce a colliding free-form node. Pin that the relocates never
-    // throw and the tuple is retained - the adversarial free-form path is
-    // covered by insertNodeOnTabStrip / splitPaneWithNode above.
+    // These actions only relocate an already-live instanceId; they cannot introduce a colliding
+    // free-form node.
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic Foo");
     store.openTileInTab(tabId, SPEC_A);
@@ -451,15 +429,6 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
 });
 
 describe("canvas tile identity invariant: public setState ingress is always strict (no epicId allowance)", () => {
-  // Every generic ingress (closure `set`, this public `setState` wrapper,
-  // desktop projection, persisted hydration) is unconditionally strict - it
-  // has no parameter that could ever let an epicId-only change through.
-  // `resolveTabEpicIdentity` (its own describe block below) is the ONLY
-  // function that changes a tab's epicId, and provenance is enforced by that
-  // function being the sole caller of the module-private raw setter, not by
-  // anything this generic path has to understand. These pins call
-  // `useEpicCanvasStore.setState` directly to prove the generic path rejects
-  // the shape regardless.
   it("rejects a pure epicId-only public setState for a genuine phase-migration tab", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openPhaseMigrationTabWithId(
@@ -547,9 +516,8 @@ describe("canvas tile identity invariant: public setState ingress is always stri
     const beforePhase = requireCanvas(tabId);
     const beforeOther = requireCanvas(otherTabId);
 
-    // A canvas-only repoint: tabsById is untouched, but the instance now
-    // lives under a DIFFERENT tab's canvas - not the sanctioned same-tab
-    // resolution, even though tileKind/contentId/hostId all match.
+    // A canvas-only repoint: tabsById is untouched, but the instance now lives under a DIFFERENT tab's
+    // canvas - not the sanctioned same-tab resolution, even though tileKind/contentId/hostId all
     expect(() =>
       useEpicCanvasStore.setState((state) => {
         const targetCanvas = state.canvasByTabId[otherTabId];
@@ -575,17 +543,8 @@ describe("canvas tile identity invariant: public setState ingress is always stri
 });
 
 describe("canvas tile identity invariant: resolveTabEpicIdentity (the sole authorized epic-resolution path)", () => {
-  // Provenance, not shape, is what authorizes an epicId-only change now -
-  // this is the ONE function permitted to commit one, and it does so by
-  // being the sole caller of the module-private raw setter, not by any
-  // parameter. Both real callers publish success from a POST-commit
-  // `getState()` read-back rather than trusting a return value from this
-  // function (see their own doc comments in tab-command-coordinator.ts) -
-  // their reentrant-race coverage lives in the tab-navigation adversarial and
-  // phase-migration controller suites. These pins exercise
-  // `resolveTabEpicIdentity` itself: the legitimate commit and its own
-  // preconditions, observed through resulting store state (this function
-  // returns void).
+  // Provenance, not shape, is what authorizes an epicId-only change now - this is the ONE function
+  // permitted to commit one, and it does so by being the sole caller of the module-private raw
   let errorSpy: Mock<typeof appLogger.error>;
 
   beforeEach(() => {
@@ -729,10 +688,8 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
   });
 
   it("throws when a projected OPEN tab collides with a HIDDEN (preserved) tab's live instanceId", () => {
-    // closeTab hides a tab without discarding its canvas. Projection only
-    // ships open tabs; preserved hidden canvases stay in memory. A projected
-    // open tab that reuses a hidden tab's instanceId under a different tuple
-    // must still trip the invariant (visible tabs alone look fine).
+    // closeTab hides a tab without discarding its canvas. Projection only ships open tabs; preserved
+    // hidden canvases stay in memory.
     const store = useEpicCanvasStore.getState();
     const visibleTabId = store.openEpicTab("epic-visible", "Visible");
     store.openTileInTab(visibleTabId, SPEC_B);
@@ -792,10 +749,7 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
   });
 
   it("throws when a projection reopens a HIDDEN tab with a repointed canvas (visible tabs stay clean)", () => {
-    // closeTab preserves the tab + canvas. A desktop snapshot can re-list
-    // that tab id among epicTabs with a different payload under the same
-    // instanceId - visible-only data looks fine, but the reopened hidden
-    // tab is the sole source of the violation.
+    // closeTab preserves the tab + canvas.
     const store = useEpicCanvasStore.getState();
     const visibleTabId = store.openEpicTab("epic-visible", "Visible");
     store.openTileInTab(visibleTabId, SPEC_B);
@@ -881,11 +835,8 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
   });
 
   it("throws when a desktop projection changes only a tab's epicId while its canvas stays identical (round-2 adversarial probe)", () => {
-    // Round 1's shape-based allowance let exactly this through: same tab id,
-    // identical canvas/instanceIds, only the projected epicId differs - a
-    // stale or malformed desktop projection producing the same shape as a
-    // legitimate coordinator resolution. Desktop projection has no route to
-    // `resolveTabEpicIdentity`, so this must stay a violation.
+    // Round 1's shape-based allowance let exactly this through: same tab id, identical
+    // canvas/instanceIds, only the projected epicId differs - a stale or malformed desktop projection
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-old", "Epic Old");
     store.openTileInTab(tabId, SPEC_A);
@@ -921,10 +872,8 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
   });
 
   it("fails closed when hydrated localStorage state repoints an instanceId already live in memory", async () => {
-    // zustand's `persist` middleware swallows a `merge` throw internally
-    // (`hydrate()` ends in a `.catch` with no configured `onRehydrateStorage`
-    // rethrow) - `rehydrate()` itself resolves either way. The diagnostic
-    // and the untouched in-memory state are what this pin actually verifies.
+    // zustand's `persist` middleware swallows a `merge` throw internally (`hydrate()` ends in a
+    // `.catch` with no configured `onRehydrateStorage` rethrow) - `rehydrate()` itself resolves either
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic One");
     store.openTileInTab(tabId, SPEC_A);
@@ -983,10 +932,8 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
   });
 
   it("fails closed when a parse/migrate-shaped legacy blob repoints a live instanceId", async () => {
-    // Unlike the same-version pin above (which uses serializeEpicCanvasState),
-    // this blob is a hand-rolled legacy shape: no activationHistory, raw tile
-    // records (not schema-serialized), so sanitize → parseEpicCanvasState
-    // (migrate-canvas) must normalize it before the merge-level check runs.
+    // Unlike the same-version pin above (which uses serializeEpicCanvasState), this blob is a
+    // hand-rolled legacy shape: no activationHistory, raw tile records (not schema-serialized), so
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic One");
     store.openTileInTab(tabId, SPEC_A);
@@ -1036,9 +983,6 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
           },
           artifactTreeByEpicId: {},
         },
-        // Persist version stays 1 (canvas store has no multi-version migrate
-        // fn); the "migration" here is parseEpicCanvasState's total parse /
-        // reconcile path, which is what merge runs before the identity check.
         version: 1,
       }),
     );
@@ -1060,12 +1004,8 @@ describe("canvas tile identity invariant: persisted-migration ingress", () => {
   });
 
   it("completes hydration (hasHydrated + onFinishHydration) even when the merge is rejected", async () => {
-    // zustand's `hydrate()` resets `hasHydrated` to `false` at the start of
-    // every call and only flips it back once `merge()` returns normally and
-    // `set(stateFromStorage, true)` runs. A throwing `merge()` (the old
-    // behavior here) never reaches that point, so consumers gated on
-    // hydration completion - history-prune-provider.tsx,
-    // epic-tab-existence-reconciler.tsx - would hang forever.
+    // zustand's `hydrate()` resets `hasHydrated` to `false` at the start of every call and only flips
+    // it back once `merge()` returns normally and `set(stateFromStorage, true)` runs.
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic One");
     store.openTileInTab(tabId, SPEC_A);

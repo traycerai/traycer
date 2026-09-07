@@ -223,9 +223,8 @@ describe("ComposerPromptEditor render isolation", () => {
     expect(yieldCheckCount).toBe(1);
     expect(document.activeElement).toBe(control);
 
-    // Nested route synchronization can briefly reapply the previous pane and
-    // then this pane again. The same activation intent must cover both active
-    // edges instead of being consumed by the first one.
+    // Nested route synchronization can briefly reapply the previous pane and then this pane again.
+    // The same activation intent must cover both active edges instead of being consumed by the first one.
     view.rerender(renderEditor(false));
     view.rerender(renderEditor(true));
     await act(async () => {
@@ -235,11 +234,8 @@ describe("ComposerPromptEditor render isolation", () => {
     expect(yieldCheckCount).toBe(2);
     expect(document.activeElement).toBe(control);
 
-    // Once the bounded activation intent expires, a landing-surface focus
-    // restoration may already have put the keyboard back in its terminal or
-    // another remembered control before this passive composer effect runs.
-    // The composer must not overwrite focus that is already inside its own
-    // primary-focus scope.
+    // Once the bounded activation intent expires, a landing-surface focus restoration may already have put the keyboard back in its terminal or another remembered control before this passive composer effect runs.
+    // The composer must not overwrite focus that is already inside its own primary-focus scope.
     shouldYield = false;
     view.container.dataset.primaryFocusScope = "true";
     view.rerender(renderEditor(false));

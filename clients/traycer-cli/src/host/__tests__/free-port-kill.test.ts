@@ -23,9 +23,7 @@ const testMutationVerifier = async (): Promise<void> => undefined;
 type SpawnOverride = (command: string, args: readonly string[]) => ChildProcess;
 
 const mocks = vi.hoisted(() => ({
-  // `null` delegates to the real `spawn` so the Finding 7 tests below (which
-  // launch genuine fake-`lsof` scripts off `PATH`) are untouched; only the
-  // "post-kill release verification" describe block sets this.
+  // `null` delegates to the real `spawn` so the Finding 7 tests below (which launch genuine fake-`lsof` scripts off `PATH`) are untouched; only the "post-kill release verification" describe block sets this.
   spawnOverride: null as SpawnOverride | null,
 }));
 
@@ -46,15 +44,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-// Finding 7 (ticket-2 review round 1): the `lsof`/`netstat` ownership
-// probes now run entirely inside `cli-lock`. Before `PORT_PROBE_TIMEOUT_MS`
-// existed, a wedged/hijacked probe binary would hang `execFileAsync`
-// forever - the lock holder stays positively alive, so ticket-1's
-// hardened stale-lock breaking correctly refuses to break it, and every
-// other host mutation wedges until a human kills the process by hand.
-// This forces a REAL TERM-ignoring probe binary (not a mocked error shape)
-// to hang past the bound, proving the SIGKILL escalation rather than merely
-// `execFile`'s soft SIGTERM timeout wiring.
+// Finding 7 (ticket-2 review round 1): the `lsof`/`netstat` ownership probes now run entirely inside `cli-lock`.
+// Before `PORT_PROBE_TIMEOUT_MS` existed, a wedged/hijacked probe binary would hang `execFileAsync` forever - the lock holder stays positively alive, so ticket-1's hardened stale-lock breaking correctly refuses to break it, and every other host mutation wedges until a human kills the process by hand.
 describe.skipIf(process.platform === "win32")(
   "killConflictingPortOwner - bounded probe timeout (Finding 7)",
   () => {
@@ -64,10 +55,8 @@ describe.skipIf(process.platform === "win32")(
 
     beforeEach(() => {
       binDir = mkdtempSync(join(tmpdir(), "traycer-free-port-hang-test-"));
-      // Stands in for the real `lsof` - PATH is prepended with `binDir`
-      // below so the probe resolves to this script instead of the system
-      // binary. It deliberately ignores SIGTERM, so only the hard SIGKILL
-      // escalation can release the CLI lock.
+      // Stands in for the real `lsof` - PATH is prepended with `binDir` below so the probe resolves to this script instead of the system binary.
+      // It deliberately ignores SIGTERM, so only the hard SIGKILL escalation can release the CLI lock.
       fakeLsof = join(binDir, "lsof");
       writeFileSync(
         fakeLsof,
@@ -87,9 +76,7 @@ describe.skipIf(process.platform === "win32")(
       "settles in bounded time with a structured timeout verdict instead of hanging forever",
       async () => {
         const start = Date.now();
-        // `process.pid` (this test process) is guaranteed alive, so the
-        // liveness pre-check passes and the hung `lsof` stand-in is what
-        // actually gets exercised.
+        // `process.pid` (this test process) is guaranteed alive, so the liveness pre-check passes and the hung `lsof` stand-in is what actually gets exercised.
         await expect(
           killConflictingPortOwner({
             pid: process.pid,
@@ -101,9 +88,7 @@ describe.skipIf(process.platform === "win32")(
           details: { probe: "timeout" },
         });
         const elapsedMs = Date.now() - start;
-        // Bounded, not indefinite: the TERM-ignoring fixture proves the
-        // SIGKILL escalation settles the promise shortly after the soft
-        // deadline, instead of waiting for its infinite loop.
+        // Bounded, not indefinite: the TERM-ignoring fixture proves the SIGKILL escalation settles the promise shortly after the soft deadline, instead of waiting for its infinite loop.
         expect(elapsedMs).toBeGreaterThanOrEqual(PORT_PROBE_TIMEOUT_MS);
         expect(elapsedMs).toBeLessThan(PORT_PROBE_TIMEOUT_MS + 3_000);
       },
@@ -134,14 +119,8 @@ describe.skipIf(process.platform === "win32")(
   },
 );
 
-// `verifyPortReleased` is not exported - exercised entirely through the
-// public `killConflictingPortOwner`, which requires a pre-kill ownership
-// check to pass and a SIGTERM to be "delivered" before the verification
-// loop it drives ever runs. `node:child_process.spawn` and `process.kill`
-// are stubbed so the loop's outcome is fully controlled without touching a
-// real process or a real port. Fake timers collapse the 5s verification
-// deadline used by the still-held/unverified cases below to (near-)zero
-// wall-clock time.
+// `verifyPortReleased` is not exported - exercised entirely through the public `killConflictingPortOwner`, which requires a pre-kill ownership check to pass and a SIGTERM to be "delivered" before the verification loop it drives ever runs.
+// `node:child_process.spawn` and `process.kill` are stubbed so the loop's outcome is fully controlled without touching a real process or a real port.
 interface StubProbeChild extends EventEmitter {
   readonly pid: number;
   readonly stdout: EventEmitter;
@@ -160,9 +139,7 @@ function makeStubProbeChild(): StubProbeChild {
   return emitter;
 }
 
-// The ONE place this file bridges `StubProbeChild` to `ChildProcess` (see
-// `host-start.test.ts`'s identical convention) - one reviewed bridge rather
-// than a scattered `as unknown as ChildProcess` at every call site.
+// The ONE place this file bridges `StubProbeChild` to `ChildProcess` (see `host-start.test.ts`'s identical convention) - one reviewed bridge rather than a scattered `as unknown as ChildProcess` at every call site.
 function asChildProcess(child: StubProbeChild): ChildProcess {
   const bridged: unknown = child;
   return bridged as ChildProcess;
@@ -172,9 +149,7 @@ type ProbeResponse =
   | { readonly kind: "close"; readonly stdout: string; readonly code: number }
   | { readonly kind: "error"; readonly err: Record<string, unknown> };
 
-// Fires after `spawn()` returns, so `executePortProbe` has already attached
-// its `stdout`/`close`/`error` listeners synchronously - matching a real
-// child process, whose I/O always arrives after the caller gets the handle.
+// Fires after `spawn()` returns, so `executePortProbe` has already attached its `stdout`/`close`/`error` listeners synchronously - matching a real child process, whose I/O always arrives after the caller gets the handle.
 function scheduleProbeResponse(
   child: StubProbeChild,
   response: ProbeResponse,
@@ -227,9 +202,7 @@ describe.skipIf(process.platform === "win32")(
         scheduleProbeResponse(child, response);
         return asChildProcess(child);
       };
-      // Neither the pre-kill liveness check (`signal: 0`) nor the SIGTERM
-      // delivery should touch a real process - both are asserted through
-      // the result, not through an actual signal.
+      // Neither the pre-kill liveness check (`signal: 0`) nor the SIGTERM delivery should touch a real process - both are asserted through the result, not through an actual signal.
       killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     });
 
@@ -257,9 +230,8 @@ describe.skipIf(process.platform === "win32")(
       expect(result.holderPid).toBeNull();
     });
 
-    // A SINGLE free observation is not a release. It is equally consistent
-    // with a supervised process's respawn gap, and returning on it hands the
-    // caller a restart that races the replacement.
+    // A SINGLE free observation is not a release.
+    // It is equally consistent with a supervised process's respawn gap, and returning on it hands the caller a restart that races the replacement.
     it("does not certify a release from one free sample when the port is retaken", async () => {
       responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
       // The replacement binds immediately after the single free sample.
@@ -280,10 +252,8 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("released: the verdict comes from the port probe, never from process liveness", async () => {
-      // The verifier does not consult `isProcessAlive` at all any more - a
-      // dead pid says nothing about whether the PORT is free, and the module
-      // no longer imports it. Only the probe can produce a release. The
-      // companion test below pins the case those two facts disagree in.
+      // The verifier does not consult `isProcessAlive` at all any more - a dead pid says nothing about whether the PORT is free, and the module no longer imports it.
+      // Only the probe can produce a release.
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = NO_LISTENER;
 
@@ -301,11 +271,8 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("still-held: the target died but a replacement listener took the port", async () => {
-      // The CLI-011 regression that three reviewers caught. A supervised
-      // foreign listener respawning under a NEW pid leaves the conflict fully
-      // intact even though the pid we signalled is gone. Reporting `released` here
-      // would restart the host onto an occupied port and call it a completed
-      // repair - the exact false success this change exists to remove.
+      // The CLI-011 regression that three reviewers caught.
+      // A supervised foreign listener respawning under a NEW pid leaves the conflict fully intact even though the pid we signalled is gone.
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = ownsPort(7777);
 
@@ -324,10 +291,8 @@ describe.skipIf(process.platform === "win32")(
       expect(result.releaseDetail).toContain("7777");
     });
 
-    // The owner exiting between the ownership probe and the SIGTERM is a race
-    // no lock can close, because the process is foreign. Treating the
-    // resulting ESRCH as "still held" named a pid that no longer exists and
-    // told the operator to terminate it, while the port was already free.
+    // The owner exiting between the ownership probe and the SIGTERM is a race no lock can close, because the process is foreign.
+    // Treating the resulting ESRCH as "still held" named a pid that no longer exists and told the operator to terminate it, while the port was already free.
     it("released: the target exits before SIGTERM lands (ESRCH) but the port is free", async () => {
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = NO_LISTENER;
@@ -383,11 +348,8 @@ describe.skipIf(process.platform === "win32")(
       expect(result.holderPid).toBe(TARGET_PID);
     });
 
-    // lsof overloads exit 1 for BOTH "nothing matched" and "an error
-    // occurred", so an exit-1-with-empty-stdout result is only a clean
-    // no-listener signal when stderr is also empty. Certifying a release off
-    // an errored probe is the same false success this verification exists to
-    // prevent - it would just arrive through a probe failure instead.
+    // lsof overloads exit 1 for BOTH "nothing matched" and "an error occurred", so an exit-1-with-empty-stdout result is only a clean no-listener signal when stderr is also empty.
+    // Certifying a release off an errored probe is the same false success this verification exists to prevent - it would just arrive through a probe failure instead.
     it("unverified, never released: lsof exits 1 with empty stdout but writes to stderr", async () => {
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = {
@@ -409,10 +371,7 @@ describe.skipIf(process.platform === "win32")(
     });
 
     // "free, could-not-tell, free" is not two CONSECUTIVE free observations.
-    // The middle sample is exactly where a replacement could have bound and
-    // unbound unseen, so letting it count would convert an intermittent
-    // inability to inspect the port into the stable interval this loop
-    // requires.
+    // The middle sample is exactly where a replacement could have bound and unbound unseen, so letting it count would convert an intermittent inability to inspect the port into the stable interval this loop requires.
     it("does not let an unverified probe bridge two free samples into a release", async () => {
       responseQueue = [
         ownsPort(TARGET_PID),
@@ -420,9 +379,7 @@ describe.skipIf(process.platform === "win32")(
         UNSUPPORTED,
         NO_LISTENER,
       ];
-      // After the bridged pair, the port is taken again - so if the streak had
-      // survived the unverified sample this would already have returned
-      // `released` and never reached here.
+      // After the bridged pair, the port is taken again - so if the streak had survived the unverified sample this would already have returned `released` and never reached here.
       defaultResponse = ownsPort(7777);
 
       const pending = killConflictingPortOwner({

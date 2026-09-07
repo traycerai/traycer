@@ -21,18 +21,7 @@ interface BlockErrorBoundaryState {
 }
 
 /**
- * NodeView-scoped error boundary. A crash in the mermaid renderer or the
- * wireframe iframe observer must not tear down the whole artifact editor
- * - users would lose the floating toolbar and every other block. We render
- * a recoverable fallback panel per-block and expose a retry so the user
- * can recover after fixing the source (e.g. re-opening the edit surface).
- *
- * The fallback is rendered by this component directly - passing a render
- * prop back from the NodeView would force us to define an inline fallback
- * component per render, which confuses React reconciliation (and the
- * `react/no-unstable-nested-components` lint rule). Keeping the fallback
- * shape fixed and driving it through primitive props works just as well
- * for the only two current callers.
+ * NodeView-scoped error boundary. Render the fallback here, not as an inline NodeView child.
  */
 export class BlockErrorBoundary extends Component<
   BlockErrorBoundaryProps,

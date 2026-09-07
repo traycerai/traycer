@@ -1,33 +1,9 @@
-/**
- * Shared `@/components/ui/dropdown-menu` stand-in for the suites that mount the
- * Providers settings panel.
- *
- * Radix's DropdownMenu opens on pointerdown rather than click, which jsdom
- * tests fight; this renders every menu inline and always-open so a row can be
- * selected directly. It lives here rather than being hand-copied into each
- * suite because it is an EXPORT LIST: a component adding one more dropdown
- * primitive breaks every partial copy that renders it, and each copy fails at
- * a different point in the shard matrix. One list, one place to extend.
- *
- * Wire it up by SPREADING the namespace into a plain object:
- *
- * ```ts
- * vi.mock("@/components/ui/dropdown-menu", async () => ({
- *   ...(await import("./dropdown-menu-passthrough-mock")),
- * }));
- * ```
- *
- * Returning the namespace directly (`() => import("...")`) does NOT work and
- * fails silently: a module namespace is frozen, so vitest cannot attach its
- * mock metadata to it. The dropdown itself still renders passthrough, but the
- * file's OTHER `vi.mock` factories stop taking effect - which surfaces as
- * unrelated assertions failing deep in the suite, never as a mocking error.
- */
+/** Radix's DropdownMenu opens on pointerdown rather than click, which jsdom tests fight; this renders every
+ * menu inline and always-open so a row can be selected directly. */
 import type { ReactNode } from "react";
 
-// Declarations rather than `const x = passthrough` aliases: the react-refresh
-// lint rule can only recognize a function declaration as a component, and an
-// aliased const export trips it.
+// Declarations rather than `const x = passthrough` aliases: the react-refresh lint rule can only recognize a
+// function declaration as a component, and an aliased const export trips it.
 export function DropdownMenu(props: {
   readonly children: ReactNode;
 }): ReactNode {
@@ -88,13 +64,8 @@ export function DropdownMenuLabel(props: {
   return <div>{props.children}</div>;
 }
 
-/**
- * The radio pair is deliberately ROLE-FREE. A stand-in claiming
- * `menuitemradio` would owe an `aria-checked` it cannot know - the group's
- * value never reaches the item here - so a test could assert against a checked
- * state this file invented. Selection behaviour belongs against the real Radix
- * menu; see provider-rail-controls.test.
- */
+/** A stand-in claiming `menuitemradio` would owe an `aria-checked` it cannot know - the group's value never
+ * reaches the item here - so a test could assert against a checked state this file invented. */
 export function DropdownMenuRadioGroup(props: {
   readonly children: ReactNode;
 }): ReactNode {

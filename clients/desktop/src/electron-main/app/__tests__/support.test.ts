@@ -62,12 +62,6 @@ const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
 // these tests exercise the service directly, so a fixed key stands in.
 const KEY = "sender-1:1";
 
-/**
- * The `layer0` bytes under test are copied from the real published record
- * (a packaged build's `pid.json`, `evidence` included) rather than invented
- * here - a decoder tested against inputs the host cannot produce proves the
- * assertion, not the contract.
- */
 async function withPidMetadataFile(
   content: unknown,
   run: (layout: HostFsLayout) => Promise<void>,
@@ -173,13 +167,7 @@ describe("DesktopSupportService.getSnapshot layer0", () => {
   });
 });
 
-/**
- * The snapshot alone isn't the point - a support engineer reads the Sentry
- * event, not the IPC payload. These pin the actual `Sentry.captureFeedback`
- * call: the bounded `layer0Status` tag (filterable, never free text) and the
- * full record riding in `contexts.layer0` (unbounded, not indexed) - the two
- * channels a free-text cause/evidence pair must never be split across.
- */
+/** These pin the actual `Sentry.captureFeedback` call: the bounded `layer0Status` tag (filterable, never free text) and the full record riding in `contexts.layer0` (unbounded, not. */
 describe("DesktopSupportService.submitReport layer0 routing", () => {
   beforeEach(() => {
     vi.mocked(Sentry.isInitialized).mockReturnValue(true);
@@ -209,11 +197,6 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
         const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
           .calls[0];
-        // The deep scrubber (ticket 09) runs on `contexts` right before this
-        // call: the absolute path in `evidence` is pseudonymized (host.log
-        // and stack-carried paths are the dominant leak vector this scrubber
-        // exists for), while the rest of the record - status/attemptId/cause,
-        // none of them path-shaped - survives untouched.
         expect(hint?.captureContext).toMatchObject({
           tags: expect.objectContaining({ layer0Status: "degraded" }),
           contexts: {
@@ -248,11 +231,6 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
     });
   });
 
-  /**
-   * The structured `os-error` arm is the reason T1 stops flattening cause to
-   * a string: syscall/code/fsType must arrive intact in `contexts.layer0`,
-   * not as a pre-stringified blob that loses typed filtering later.
-   */
   it("carries a structured os-error layer0 discriminant intact in Sentry contexts.layer0", async () => {
     const osErrorCause = {
       kind: "os-error" as const,
@@ -393,12 +371,6 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
   });
 });
 
-/**
- * Ticket 03 / plan D3: the seek-based jsonl tail window, exercised through
- * the service's public surface (`freezeEvidence` + `readFrozenLogTail`)
- * rather than the private reader functions - what matters is what a
- * consent-panel "view" click or a submitted attachment actually contains.
- */
 describe("DesktopSupportService browser diagnostics jsonl tail window (ticket 03)", () => {
   it("resolves an empty, non-truncated tail when neither browser file exists", async () => {
     await withPidMetadataFile(undefined, async (hostLayout) => {
@@ -560,11 +532,6 @@ describe("DesktopSupportService browser diagnostics jsonl tail window (ticket 03
 
   it("drops the sole line entirely when the window captures only a truncated head record", async () => {
     await withPidMetadataFile(undefined, async (hostLayout) => {
-      // One record with no newline anywhere in the file, comfortably larger
-      // than the 512_000-byte window - the captured window is exactly one
-      // (partial) line. Unconditionally dropping the "head" record (ruling
-      // 4) correctly yields empty output here rather than shipping one
-      // truncated, unparseable line.
       const hugeLine = `{"seq":1,"pad":"${"x".repeat(700_000)}"}`;
       await writeFile(hostLayout.browserTraceFile, hugeLine, "utf8");
 
@@ -578,12 +545,6 @@ describe("DesktopSupportService browser diagnostics jsonl tail window (ticket 03
   });
 });
 
-/**
- * Ticket 03 / plan D3: absence of `browser-trace.jsonl` is the normal
- * production state, so the manifest must filter on existence (unlike
- * `desktop`/`host`, always listed) and neither `revealLog` nor `tailLog` may
- * ever fabricate a browser file the host did not write.
- */
 describe("DesktopSupportService browser diagnostics existence handling (ticket 03)", () => {
   it("omits both browser entries from the snapshot manifest when neither file exists", async () => {
     await withPidMetadataFile(undefined, async (hostLayout) => {

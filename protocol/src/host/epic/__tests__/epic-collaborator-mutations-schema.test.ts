@@ -10,11 +10,6 @@ import {
   listEpicCollaboratorsResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 
-/**
- * Verifies that the three collaborator mutation contracts in hostRpcRegistry
- * use the correct canonical schemas and that grant/batchUpdate/revokeCollaborator
- * response schemas are the same instance as listEpicCollaboratorsResponseSchema.
- */
 describe("epic collaborator mutation schemas", () => {
   it("epic.grantAccess uses grantEpicAccessRequestSchema", () => {
     const contract =

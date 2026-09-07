@@ -1,10 +1,6 @@
 import type { OsScript } from "@traycer/protocol/host/index";
 
-/**
- * Pure helpers + types for the per-OS setup/teardown script form, shared by
- * worktree creation surfaces. The form UI lives in `repo-scripts-fields.tsx`;
- * this file is JSX-free so it can also be imported by non-component code.
- */
+/** Pure helpers + types for the per-OS setup/teardown script form, shared by worktree creation surfaces. */
 
 export type OsForm = {
   readonly default: string;
@@ -50,7 +46,6 @@ function osFormToScript(form: OsForm): OsScript {
   };
 }
 
-/** Seeds a form value from persisted or request-ready repo scripts. */
 export function repoScriptsValueFromScripts(
   scripts: RepoScriptsSeed | null,
 ): RepoScriptsValue {
@@ -60,7 +55,6 @@ export function repoScriptsValueFromScripts(
   };
 }
 
-/** Converts a form value into the `worktree.setRepoScripts` request payload. */
 export function repoScriptsRequestPayload(value: RepoScriptsValue): {
   readonly setup: OsScript;
   readonly teardown: OsScript;

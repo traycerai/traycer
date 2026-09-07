@@ -1,9 +1,5 @@
 /**
- * Escape hatch for the composer deadlock: the host reports a pending interview,
- * the transcript renders no answer card for it (the block is settled or
- * missing), and every send is rejected with `DETACHED_INTERVIEW_PENDING`. The
- * only way out from inside the chat is dismissing the stuck block, so these
- * pin that the affordance appears and actually dispatches local `interviewSkip`.
+ * The only way out from inside the chat is dismissing the stuck block, so these pin that the affordance appears and actually dispatches local `interviewSkip`.
  */
 import {
   cleanup,

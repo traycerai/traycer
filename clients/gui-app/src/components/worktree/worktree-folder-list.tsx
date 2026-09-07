@@ -21,30 +21,20 @@ import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { cn } from "@/lib/utils";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 
-/**
- * Searchable "Workspaces" list over an epic's worktree bindings, shared by every
- * surface that picks a worktree (git diff panel, terminal creation, file
- * tree). Rows are rendered in the order given - callers own sorting and the
- * per-row filesystem path (`secondaryLabel`).
- */
+/** Searchable "Workspaces" list over an epic's worktree bindings, shared by every surface that picks a worktree
+ * (git diff panel, terminal creation, file tree). */
 export interface WorktreeFolderListProps {
   readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
   readonly selectedRow: WorktreeBindingSelectorRowV12 | null;
   readonly secondaryLabel: (row: WorktreeBindingSelectorRowV12) => string;
-  /**
-   * Status badge for a row. `disabled` independently controls selection, so a
-   * failed setup can remain visible without blocking its usable directory.
-   */
+  /** `disabled` independently controls selection, so a failed setup can remain visible without blocking its
+   * usable directory. */
   readonly rowBadge: (
     row: WorktreeBindingSelectorRowV12,
   ) => WorktreeFolderRowBadge | null;
   readonly onSelect: (row: WorktreeBindingSelectorRowV12) => void;
-  /**
-   * Focus the search input when the list mounts. Because the list mounts only
-   * after the bindings query resolves, this grabs focus even when the list
-   * appears *after* the popover opens. cmdk then owns arrow-key navigation and
-   * Enter-to-select while focus stays in the input.
-   */
+  /** Because the list mounts only after the bindings query resolves, this grabs focus even when the list appears
+   * *after* the popover opens. */
   readonly autoFocusSearch: boolean;
   /** Shown when `rows` is empty. Callers own the copy since "no rows" means something different per surface (e.g. no worktrees at all vs. no directories in this epic). */
   readonly emptyMessage: string;
@@ -64,9 +54,8 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
     });
   }, [selectedRowKey]);
 
-  // Imperative focus (not the `autoFocus` JSX prop, which jsx-a11y forbids) on
-  // mount. Since the list only mounts once bindings resolve, this also focuses
-  // the input when the list appears *after* the popover opens.
+  // Imperative focus (not the `autoFocus` JSX prop, which jsx-a11y forbids) on mount. Since the list only mounts
+  // once bindings resolve, this also focuses the input when the list appears *after* the popover opens.
   const { autoFocusSearch } = props;
   useEffect(() => {
     if (!autoFocusSearch) return;
@@ -120,13 +109,8 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                       className="min-w-0 flex-1"
                     >
                       <div className="truncate font-medium">{label}</div>
-                      {/* `pointer-events-auto` re-opens the one hole this row
-                        needs. A disabled CommandItem takes
-                        `pointer-events-none` for the whole row, and a
-                        `checking`/`missing` worktree - still visible, and the
-                        row whose location someone most wants to read - would
-                        otherwise have no reachable trigger. Selection stays
-                        shut: `onSelect` returns early while disabled. */}
+                      {/* A disabled CommandItem takes `pointer-events-none` for the whole row, and a `checking`/`missing` worktree -
+                         still visible, and the row whose location someone most wants to read. */}
                       <FilePathReveal content={secondary} side="bottom">
                         <StartTruncatedText className="pointer-events-auto block min-w-0 text-ui-xs text-muted-foreground">
                           {secondary}

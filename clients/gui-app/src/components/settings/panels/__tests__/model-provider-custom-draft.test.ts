@@ -14,22 +14,14 @@ import {
   type CustomProviderModelRow,
 } from "@/components/settings/panels/model-provider-custom-draft";
 
-/**
- * These assert OPENCODE's rules, mirrored from its own custom-provider form.
- * Where one looks lax, the note says why: mirroring a validation rule means
- * adopting its edges too, and a stricter check would refuse inputs their app
- * accepts.
- */
+/** Where one looks lax, the note says why: mirroring a validation rule means adopting its edges too, and a
+ * stricter check would refuse inputs their app accepts. */
 
-/** Declaring a new provider: the minting rules apply. */
 const CREATE = { takenIds: [], disabledIds: [], existing: false };
 /** A value that came off an existing row: only the hazard rule applies. */
 const EXISTING = { takenIds: [], disabledIds: [], existing: true };
 
-/**
- * A row TYPED in this session: removable, and its key still the form's to
- * judge. The stored counterpart is locked - see the `stored rows` block.
- */
+/** The stored counterpart is locked - see the `stored rows` block. */
 function typedModel(
   row: string,
   id: string,
@@ -75,10 +67,8 @@ describe("provider id", () => {
   });
 
   it("names the hazard as a hazard, on both paths", () => {
-    // The pattern would reject `__proto__` on the minting path anyway, but the
-    // hazard is checked FIRST so it reports itself rather than being filed as a
-    // style violation - the same message the user sees if it ever arrives on a
-    // row.
+    // The pattern would reject `__proto__` on the minting path anyway, but the hazard is checked first so it
+    // reports itself rather than being filed as a style violation.
     expect(
       validateCustomProviderDraft(draft({ providerId: "__proto__" }), CREATE)
         .providerId,
@@ -294,11 +284,8 @@ describe("editing an existing declaration", () => {
   });
 
   it("keeps EVERY env fallback across an untouched Edit", () => {
-    // One field cannot show two references, and rendering `env[0]` alone meant
-    // saving an untouched form silently dropped `env[1]`. Untouched now says so
-    // in the wire's own word - `null`, leave the declaration alone - rather than
-    // resending an array this form only half understands. `[]` would CLEAR it,
-    // which is the bug this distinction exists to make unspellable by accident.
+    // One field cannot show two references, and rendering `env[0]` alone meant saving an untouched form silently
+    // dropped `env[1]`.
     const two = { ...values, env: ["KEY_A", "KEY_B"] };
     const draft = customProviderDraftFrom(two);
     expect(draft.apiKey).toBe("");
@@ -312,10 +299,7 @@ describe("editing an existing declaration", () => {
   });
 
   it("CLEARS the fallbacks when a restored reference is deleted", () => {
-    // The other half of the same distinction: an edited-to-empty field is an
-    // instruction, not an absence. A single reference is the only case the
-    // field can show, so it is the only case a user can delete by hand - and
-    // when they do, `[]` says exactly that.
+    // The other half of the same distinction: an edited-to-empty field is an instruction, not an absence.
     const one = { ...values, env: ["OPENAI_KEY"] };
     const cleared = {
       ...customProviderDraftFrom(one),
@@ -378,11 +362,8 @@ describe("editing an existing declaration", () => {
   });
 
   it("does not judge a STORED key, but still judges what sits beside it", () => {
-    // Same reasoning as an existing provider id: the value came off a
-    // hand-editable file rather than out of this form, and the field is
-    // read-only - so a complaint there is one the user cannot act on, and it
-    // would strand the only surface that can repair the rest of the row. The
-    // display name is editable, so its complaint stays.
+    // Same reasoning as an existing provider id: the value came off a hand-editable file rather than out of this
+    // form, and the field is read-only.
     const broken = {
       ...customProviderDraftFrom(values),
       models: [{ row: "m1", id: "", name: "", locked: true }],
@@ -460,18 +441,15 @@ describe("re-enable eligibility", () => {
   });
 
   it("judges the row's REAL headers, not a blank set", () => {
-    // Re-enable submits `updateCustom` with the row's own headers, so viability
-    // has to be decided about that payload. Judging a blank header list judged
-    // a different write than the one that would go out.
+    // Judging a blank header list judged a different write than the one that would go out.
     expect(
       canReenableCustomProvider({
         ...values,
         headers: [{ key: "X-Org", value: "acme" }],
       }),
     ).toBe(true);
-    // Two header names differing only in case collapse when written, so our
-    // write path refuses them - and re-enable must refuse them too rather than
-    // sending a payload it would reject from the form.
+    // Two header names differing only in case collapse when written, so our write path refuses them - and
+    // re-enable must refuse them too rather than sending a payload it would reject from the form.
     expect(
       canReenableCustomProvider({
         ...values,

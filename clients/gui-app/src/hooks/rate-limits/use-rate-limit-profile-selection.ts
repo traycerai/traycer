@@ -19,14 +19,7 @@ import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 export interface ActiveChatTarget {
   readonly epicId: string;
   readonly chatId: string;
-  /**
-   * The focused tile's OWN bound host. The header sits outside every
-   * `TabHostProvider`, so it cannot call `useTabHostId()`; it resolves the
-   * focused tile's ref instead, and the ref carries the host that tile is
-   * bound to for life. That is the host whose chat session the header must
-   * read - not the app-wide active host, which can be a different machine
-   * entirely while a peer-host tile holds focus.
-   */
+  /** The header sits outside every `TabHostProvider`, so it cannot call `useTabHostId()`; it resolves the focused tile's ref instead, and the ref carries the host that tile is bound to for life. */
   readonly hostId: string;
 }
 
@@ -37,11 +30,7 @@ export interface RateLimitProfileSelection {
   >;
 }
 
-/**
- * Resolve the focused chat tile from the active header tab + active canvas
- * pane. A chat open elsewhere in the canvas is intentionally ignored: only
- * the pane carrying global focus controls the header's "current" identity.
- */
+/** Resolve the focused chat tile from the active header tab + active canvas pane. */
 export function selectActiveChatTarget(
   state: Pick<EpicCanvasStore, "activeTabId" | "tabsById" | "canvasByTabId">,
 ): ActiveChatTarget | null {
@@ -57,14 +46,7 @@ export function selectActiveChatTarget(
   return { epicId: tab.epicId, chatId: tile.id, hostId: tile.hostId };
 }
 
-/**
- * One reactive snapshot shared by both header rate-limit surfaces.
- *
- * The focused chat's live `currentComposerSettings` is authoritative for its
- * harness. Other harnesses (and every harness when no chat pane is focused)
- * use persisted per-harness profile memory. Cross-harness
- * `globalLastRunSettings` is deliberately absent from this flow.
- */
+/** Cross-harness `globalLastRunSettings` is deliberately absent from this flow. */
 export function useRateLimitProfileSelection(): RateLimitProfileSelection {
   const activeChatTarget = useEpicCanvasStore(
     useShallow(selectActiveChatTarget),
@@ -78,10 +60,7 @@ export function useRateLimitProfileSelection(): RateLimitProfileSelection {
   const subscribeToComposerSettings = useCallback(
     (listener: () => void) => {
       if (handle === null) return () => undefined;
-      // Chat stores update at token-stream frequency. Keep this header bridge
-      // subscribed to the store lifetime, but notify React only when the one
-      // selected slice changes; block deltas, usage, approvals, and run-state
-      // churn never schedule a header render.
+      // Keep this header bridge subscribed to the store lifetime, but notify React only when the one selected slice changes; block deltas, usage, approvals, and run-state churn never schedule a header render.
       return handle.store.subscribe((state, previousState) => {
         if (
           state.currentComposerSettings ===
@@ -103,10 +82,7 @@ export function useRateLimitProfileSelection(): RateLimitProfileSelection {
     getComposerSettings,
     () => null,
   );
-  // The header surfaces describe the window's EFFECTIVE host's providers
-  // (selection model: window-global consumers follow effective), so the
-  // per-harness profile memory reads that host's bucket. The focused chat's
-  // own settings (above) stay authoritative for its harness either way.
+  // The header surfaces describe the window's EFFECTIVE host's providers (selection model: window-global consumers follow effective), so the per-harness profile memory reads that host's bucket.
   const activeHostId = useEffectiveHostId();
   const lastProfileByHarness = useComposerHarnessMemoryStore(
     useShallow((state) => selectLastProfileByHarness(state, activeHostId)),
@@ -114,11 +90,7 @@ export function useRateLimitProfileSelection(): RateLimitProfileSelection {
   return { activeChatSettings, lastProfileByHarness };
 }
 
-/**
- * Profile id for one configured provider's rate-limit query and Active badge.
- * A removed/stale managed id cannot address this provider anymore, so it
- * degrades to the ambient profile instead of issuing a query for a dead id.
- */
+/** A removed/stale managed id cannot address this provider anymore, so it degrades to the ambient profile instead of issuing a query for a dead id. */
 export function resolveRateLimitProfileId(
   selection: RateLimitProfileSelection,
   providerId: RateLimitProviderId,

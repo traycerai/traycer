@@ -24,9 +24,7 @@ import { claimBareKey } from "@/lib/keybindings/bare-key-owner";
 import { WorkspaceFolderSummaryControl } from "../workspace-folder-summary-control";
 import type { WorkspaceRunItem } from "../workspace-run-item";
 
-// The rows' host-wide uncommitted query and the branch form's `listBranches`
-// read. Neither is under test here - the refresh contract is exercised
-// through the injected `refresh` object.
+// The rows' host-wide uncommitted query and the branch form's `listBranches` read.
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: undefined, isLoading: false }),
 }));
@@ -84,10 +82,8 @@ const ITEM: WorkspaceRunItem = {
 };
 
 afterEach(cleanup);
-// Unconditional, because the in-test `vi.useRealTimers()` below is NOT
-// reached when an assertion before it throws - and fake timers left installed
-// leak into every later test in the file, which then fails for a reason that
-// has nothing to do with what it is testing.
+// Unconditional, because the in-test `vi.useRealTimers` below is not reached when an assertion before it
+// throws.
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -103,9 +99,8 @@ describe("folder-mapping refresh affordance", () => {
     expect(fixture.refresh).not.toHaveBeenCalled();
     await fixture.openPicker();
 
-    // The label the user is looking at lives on the COLLAPSED chip, outside
-    // the only surface that can correct it. Waiting for a button press inside
-    // the popover would mean the user must already know the value is wrong.
+    // The label the user is looking at lives on the collapsed chip, outside the only surface that can correct it.
+    // Waiting for a button press inside the popover would mean the user must already know the value is wrong.
     expect(fixture.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -126,9 +121,8 @@ describe("folder-mapping refresh affordance", () => {
   });
 
   it("leaves R alone while the caret is in the new-worktree branch name", async () => {
-    // The reason this guard exists and the owner hover card's `R` has none:
-    // that card is pointer-anchored over a row and holds no input, while this
-    // popover's branch form is a text field the user types branch names into.
+    // The reason this guard exists and the owner hover card's `R` has none: that card is pointer-anchored over a
+    // row and holds no input, while this popover's branch form is a text field the user types branch names into.
     const fixture = renderControl({
       checkedAt: null,
       wired: true,
@@ -190,9 +184,8 @@ describe("folder-mapping refresh affordance", () => {
   });
 
   it("reports the HOST's derive time, not the moment the response arrived", async () => {
-    // Mid-bucket, not on a boundary: the label reads off a shared clock
-    // sampled on a 60s tick, so an exactly-3-minute age lands either side of
-    // the floor depending on where in the tick the test runs.
+    // Mid-bucket, not on a boundary: the label reads off a shared clock sampled on a 60s tick, so an
+    // exactly-3-minute age lands either side of the floor depending on where in the tick the test runs.
     const fixture = renderControl({
       checkedAt: Date.now() - 3.5 * 60_000,
       wired: true,
@@ -207,10 +200,8 @@ describe("folder-mapping refresh affordance", () => {
   });
 
   it("labels the footer stamp as a workspace snapshot, not a fresh GitHub check", async () => {
-    // Same host-derived `resolvedAt` claim as the hover card's
-    // `OwnerMetadataCheckedAtText`, which already reads
-    // "Workspace snapshot · {relative}" - "Checked" implies a freshness this
-    // TTL-cached value never had.
+    // Same host-derived `resolvedAt` claim as the hover card's `OwnerMetadataCheckedAtText`, which already reads
+    // "Workspace snapshot · {relative}" - "Checked" implies a freshness this ttl-cached value never had.
     const fixture = renderControl({
       checkedAt: Date.now() - 3.5 * 60_000,
       wired: true,
@@ -235,9 +226,8 @@ describe("folder-mapping refresh affordance", () => {
     const scrollRegion = screen.getByTestId("workspace-folder-scroll-region");
     const footer = screen.getByTestId("workspace-refresh-footer");
 
-    // The sidebar owner card keeps its refresh row outside the metadata scroll
-    // region. The folder picker follows the same structure so the footer does
-    // not need negative margins or sticky offsets inside a padded scroller.
+    // The folder picker follows the same structure so the footer does not need negative margins or sticky offsets
+    // inside a padded scroller.
     expect(popover.className).toContain("overflow-hidden");
     expect(popover.className).toContain("p-0");
     expect(scrollRegion.className).toContain("overflow-y-auto");
@@ -263,11 +253,8 @@ describe("folder-mapping refresh affordance", () => {
   });
 
   it("stays quiet on open when the surface has no host to ask", async () => {
-    // The production shape for an unreachable bound host: a refresh object is
-    // present (so the footer renders) but `canRefresh` is false. The hook only
-    // no-ops an EMPTY path list, so an ungated open would reject into
-    // "Couldn't refresh folder details" - an error toast the user never asked
-    // for, beside a Refresh button correctly rendered disabled.
+    // The hook only no-ops an empty path list, so an ungated open would reject into "Couldn't refresh folder
+    // details" - an error toast the user never asked for, beside a Refresh button correctly rendered disabled.
     const fixture = renderControl({
       checkedAt: null,
       wired: true,
@@ -288,10 +275,8 @@ describe("folder-mapping refresh affordance", () => {
     await fixture.openPicker();
     await fixture.settle();
 
-    // A pane-aware `PopoverContent` unmounts its portal when the sibling pane
-    // takes focus, while deliberately leaving this controlled root OPEN so it
-    // re-presents on refocus. An open-only gate would therefore keep a live
-    // window-level listener for a picker that is no longer on screen.
+    // An open-only gate would therefore keep a live window-level listener for a picker that is no longer on
+    // screen.
     fixture.setPaneFocused(false);
     await waitFor(() => {
       expect(screen.queryByTestId("home-workspace-rows-popover")).toBeNull();
@@ -303,9 +288,8 @@ describe("folder-mapping refresh affordance", () => {
       }),
     ).toBe(0);
 
-    // Positive control: refocusing re-presents the same open picker and R is
-    // its own again, so the assertion above is about ownership and not about
-    // the popover having been torn down for good.
+    // Positive control: refocusing re-presents the same open picker and R is its own again, so the assertion above
+    // is about ownership and not about the popover having been torn down for good.
     fixture.setPaneFocused(true);
     await screen.findByTestId("home-workspace-rows-popover");
     await fixture.settle();
@@ -382,7 +366,7 @@ describe("folder-mapping refresh affordance", () => {
         refreshGeneration: generation,
       };
       view.rerender(tree());
-      // Never settles — models a hung host across attempts.
+      // Never settles - models a hung host across attempts.
       await new Promise<void>(() => undefined);
     });
     const state: { current: WorktreeWorkspacesRefresh } = {
@@ -439,8 +423,8 @@ describe("folder-mapping refresh affordance", () => {
     const retry = screen.getByTestId("workspace-folders-refresh-retry");
     fireEvent.click(retry);
     expect(refresh).toHaveBeenCalled();
-    // Fresh attempt is Checking… again — previous attempt's expired timer
-    // must not suppress the spinner on the next generation.
+    // Fresh attempt is Checking… again - previous attempt's expired timer must not suppress the spinner on the
+    // next generation.
     expect(screen.getByText("Checking…")).toBeTruthy();
     expect(screen.queryByTestId("workspace-folders-verify-failed")).toBeNull();
 
@@ -454,12 +438,8 @@ describe("folder-mapping refresh affordance", () => {
   });
 
   it("does not steal R back from a newer overlay just because its own refresh finished", async () => {
-    // `claimBareKey` is last-claim-wins, so re-claiming is a priority change,
-    // not a no-op. The picker's key handler closes over `useRefreshSpinner`'s
-    // `trigger`, whose identity moves every time `refreshing` toggles - so an
-    // effect that depends on it re-claims when a refresh merely COMPLETES, and
-    // this picker would silently take the key back from an owner hover card
-    // the user opened over it in the meantime.
+    // The picker's key handler closes over `useRefreshSpinner`'s `trigger`, whose identity moves every time
+    // `refreshing` toggles.
     const fixture = renderControl({
       checkedAt: null,
       wired: true,
@@ -471,14 +451,11 @@ describe("folder-mapping refresh affordance", () => {
     // A newer overlay opens on top and takes the key.
     const newer = vi.fn();
     const releaseNewer = claimBareKey("r", newer);
-    // Registered BEFORE the assertions below, not after: `claimBareKey` owns a
-    // module-level stack and a window listener, so a failing assertion would
-    // otherwise leave this claim on top for every later test in the file.
+    // Registered before the assertions below, not after: `claimBareKey` owns a module-level stack and a window
+    // listener, so a failing assertion would otherwise leave this claim on top for every later test in the file.
     onTestFinished(releaseNewer);
 
-    // The picker's own refresh runs to completion - through the button, since
-    // `R` is no longer its to press. `refreshing` goes true and back to false,
-    // which is the identity change under test.
+    // The picker's own refresh runs to completion - through the button, since `R` is no longer its to press.
     fireEvent.click(refreshButton());
     await fixture.settle();
 
@@ -490,13 +467,8 @@ describe("folder-mapping refresh affordance", () => {
   });
 });
 
-/**
- * The Refresh affordance, by role and accessible name.
- *
- * Narrowed with `instanceof` rather than asserted: it makes the native
- * `disabled` property readable, and it is itself worth asserting - a refresh
- * "button" that is not a `<button>` would take neither Enter nor Space.
- */
+/** Narrowed with `instanceof` rather than asserted: it makes the native `disabled` property readable, and it is
+ * itself worth asserting - a refresh "button" that is not a `<button>` would take neither Enter nor Space. */
 function refreshButton(): HTMLButtonElement {
   const element = screen.getByRole("button", {
     name: "Refresh folder details",
@@ -512,13 +484,11 @@ interface RefreshFixture {
   readonly openPicker: () => Promise<void>;
   readonly settle: () => Promise<void>;
   readonly refreshesDuring: (act: () => void) => number;
-  /** Flips the surrounding split pane's focus, as a sibling pane taking it would. */
   readonly setPaneFocused: (focused: boolean) => void;
 }
 
 function renderControl(over: {
   readonly checkedAt: number | null;
-  /** `false` renders the surface with no refresh affordance at all. */
   readonly wired: boolean;
   /** Production passes a refresh object even when its host client is null. */
   readonly canRefresh: boolean;
@@ -573,11 +543,8 @@ function renderControl(over: {
       fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
       await screen.findByTestId("home-workspace-rows-popover");
     },
-    // `useRefreshSpinner` holds the spinner up for a visible minimum after the
-    // refresh resolves, and swallows a trigger while it is up. Every "a second
-    // refresh fires / does not fire" assertion below is only meaningful once
-    // that window has closed - otherwise the spinner, not the guard under
-    // test, would be what suppressed the call.
+    // Every "a second refresh fires / does not fire" assertion below is only meaningful once that window has
+    // closed - otherwise the spinner, not the guard under test, would be what suppressed the call.
     settle: async () => {
       await waitFor(() => {
         if (refreshButton().disabled) {
@@ -585,9 +552,8 @@ function renderControl(over: {
         }
       });
     },
-    // A DELTA, not an absolute count: every `R` assertion below is about what
-    // one keystroke does, and pinning the total would make each of them fail
-    // for the unrelated reason that the open-intent refresh had changed.
+    // A delta, not an absolute count: every `R` assertion below is about what one keystroke does, and pinning the
+    // total would make each of them fail for the unrelated reason that the open-intent refresh had changed.
     refreshesDuring: (act) => {
       const before = refresh.mock.calls.length;
       act();

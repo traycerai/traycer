@@ -1419,9 +1419,7 @@ describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
   });
 
   it("strips inReplyTo from every sender path for a 1.3 (pre-inReplyTo) peer", () => {
-    // The whole point of the frozen 1.0–1.3 lines: an older peer strict-parses
-    // a frame the live host built and the unmodeled key drops out, rather than
-    // rejecting the frame.
+    // The whole point of the frozen 1.0-1.3 lines: an older peer strict-parses a frame the live host built and the unmodeled key drops out, rather than rejecting the frame.
     const parsed = chatSubscribeV13.serverFrameSchema.parse(snapshotFrame);
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
     const [, message] = parsed.snapshot.chat.messages;
@@ -1505,11 +1503,7 @@ describe("chat.subscribe@1.6 (managed-command queue items)", () => {
     expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
   });
 
-  // The load-bearing compat guarantee: every payload a ≤1.4 host ever wrote
-  // carries no `kind`, and the defaulted prompt discriminant must adopt them
-  // with no migration. This is why the union is a plain `z.union` (a
-  // `z.discriminatedUnion` rejects a missing discriminant even when the
-  // literal is defaulted) with the managed-command arm listed first.
+  // The load-bearing compat guarantee: every payload a ≤1.4 host ever wrote carries no `kind`, and the defaulted prompt discriminant must adopt them with no migration.
   it("parses a legacy kind-less queued item as a prompt item", () => {
     const parsed = chatQueuedItemSchema.parse(legacyKindlessItem);
 
@@ -1589,9 +1583,7 @@ describe("chat.subscribe@1.6 (managed-command queue items)", () => {
     });
   });
 
-  // The frozen 1.4 line must not be able to absorb the new variant - this is
-  // what forces the host's per-minor frame projection to exist rather than
-  // relying on zod stripping unknown keys.
+  // The frozen 1.4 line must not be able to absorb the new variant - this is what forces the host's per-minor frame projection to exist rather than relying on zod stripping unknown keys.
   it("cannot parse a managed-command item on the frozen 1.4 line", () => {
     expect(
       chatSubscribeV14.serverFrameSchema.safeParse(
@@ -1685,11 +1677,6 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
       snapshotFrameWithManagedCommands([shell]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
-    // `toMatchObject`, not `toEqual`: 1.6 binds the LIVE managed-command shape
-    // since the unreleased 1.7 collapsed into it, so the details widening
-    // (`command`/`cwd`/`cadence`) arrives with its defaults on top of the
-    // fields this fixture states. It was `toEqual` while 1.6 was pinned to
-    // `managedCommandSchemaPreImage`, which modelled none of the three.
     expect(parsed.snapshot.managedCommands).toMatchObject([shell]);
     expect(parsed.snapshot.managedCommands[0]).toHaveProperty("command");
     expect(parsed.snapshot.managedCommands[0]).toHaveProperty("cwd");
@@ -1738,9 +1725,7 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
     expect(parsed.managedCommands).toMatchObject([shell]);
   });
 
-  // The frame and the field arrive together or not at all - a 1.5 peer has no
-  // variant for it, so the host must never send one (see the host's
-  // `projectManagedCommandsForPreV16`).
+  // The frame and the field arrive together or not at all - a 1.5 peer has no variant for it, so the host must never send one (see the host's `projectManagedCommandsForPreV16`).
   it("is not a frame a 1.5 peer can parse", () => {
     expect(
       chatSubscribeV15.serverFrameSchema.safeParse(managedCommandsChangedFrame)
@@ -1751,8 +1736,7 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
 
 describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
   // Pre-1.5 active turn shape: no sameTurnSteeringSupported field at all.
-  // A 1.5 client parsing frames from a 1.4 host (or persisted pre-field state)
-  // must still accept the carrier and default the capability to false.
+  // A 1.5 client parsing frames from a 1.4 host (or persisted pre-field state) must still accept the carrier and default the capability to false.
   const preV15ActiveTurn = {
     turnId: "turn-1",
     status: "running" as const,
@@ -1841,12 +1825,7 @@ describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
 });
 
 // ─── chat.subscribe@1.6 image generation + rendering ───────────────────────
-//
-// Live image shapes land on the head line only. Every earlier minor is pinned
-// to a pre-image freeze so additive image fields cannot leak onto a released
-// wire line (the bug this ticket closed). The head was 1.7 until the release
-// collapsed it into 1.6 - neither minor had ever been negotiated, so the freeze
-// separating them protected no peer.
+// Every earlier minor is pinned to a pre-image freeze so additive image fields cannot leak onto a released wire line (the bug this ticket closed).
 describe("chat.subscribe@1.6 (image generation)", () => {
   const imageHashA = "a".repeat(64);
   const imageHashB = "b".repeat(64);
@@ -2241,11 +2220,8 @@ describe("chat.subscribe@1.6 (image generation)", () => {
   it("binds the LIVE line (1.7) to the live chat schema, with 1.6 now pinned", () => {
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
 
-    // The inverse of what this asserted while a 1.7 sat above a pre-image-
-    // pinned 1.6. Collapsing that unreleased minor made 1.6 the live line, so
-    // an image-bearing chat must now arrive INTACT rather than stripped -
-    // stripping is what a frozen line does, and 1.6 has no peer to be frozen
-    // against. The lines below it stay pinned because they DO have peers.
+    // The inverse of what this asserted while a 1.7 sat above a pre-image- pinned 1.6.
+    // Collapsing that unreleased minor made 1.6 the live line, so an image-bearing chat must now arrive INTACT rather than stripped - stripping is what a frozen line does, and 1.6 has no peer to be frozen against.
     const parsed = chatSubscribeV17.serverFrameSchema.parse(
       snapshotFrameWithChat(chatWithImages),
     );
@@ -2273,9 +2249,6 @@ describe("chat.subscribe registry membership", () => {
   it("registers chat.subscribe major 1 latestMinor 8 as chatSubscribeV18", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
-    // Registering `8` IS the switch to the windowed line: a stream minor
-    // negotiates to the highest the peers share, so this line flipping to `8`
-    // is the moment `1.8`-capable peers start exchanging windowed frames.
     expect(entry[1].latestMinor).toBe(8);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
@@ -2380,12 +2353,7 @@ describe("chat.subscribe Reasonix anchor versioning", () => {
   });
 });
 
-// The anchor freezes above cover `user_message.anchor_resolved` only. A harness
-// id also reaches a released server frame through the runtime session/plan
-// events, the active turn, and every settings tuple (queue items + the chat
-// record). Each of those is an independent path to the same break: a newer host
-// projecting `"reasonix"` onto a negotiated minor whose installed client has a
-// strict enum without it.
+// The anchor freezes above cover `user_message.anchor_resolved` only.
 describe("chat.subscribe Reasonix released-frame freezes", () => {
   const RELEASED_CONTRACTS = [
     ["1.0", chatSubscribeV10],
@@ -2585,9 +2553,8 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     },
   );
 
-  // The freezes above must narrow ONLY the harness enum. If a released line
-  // stopped accepting the harnesses it already ships with, the same freeze that
-  // fixes Reasonix would break every existing client instead.
+  // The freezes above must narrow ONLY the harness enum.
+  // If a released line stopped accepting the harnesses it already ships with, the same freeze that fixes Reasonix would break every existing client instead.
   it.each(RELEASED_CONTRACTS)(
     "still accepts a pre-Reasonix harness on released %s frames",
     (_version, contract) => {
@@ -2652,9 +2619,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     });
   });
 
-  // Every NEWLY frozen harness-bearing path gets its own runtime negative, so a
-  // future edit to any single leaf fails here rather than only in the
-  // structural compat gate. Each frame names `reasonix` in exactly one place.
+  // Every NEWLY frozen harness-bearing path gets its own runtime negative, so a future edit to any single leaf fails here rather than only in the structural compat gate.
   const agentSender = (harnessId: string) => ({
     type: "agent" as const,
     harnessId,
@@ -2868,9 +2833,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
         }),
     ],
     [
-      // `provider_notice.upsert` arrived on 1.3, so 1.1/1.2 reject it outright
-      // and have no meaningful `claude` control - the negative still holds
-      // there, trivially.
+      // `provider_notice.upsert` arrived on 1.3, so 1.1/1.2 reject it outright and have no meaningful `claude` control - the negative still holds there, trivially.
       "blockDelta provider_notice.upsert",
       (h: string) =>
         blockDelta({
@@ -2964,9 +2927,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
   });
 
   it("keeps `1.6` registered and bound to its own frozen contract", () => {
-    // `1.6` shipped in `host-v1.2.0-rc.1`, so it must stay negotiable AND stop
-    // following the live schemas. It used to BE the live line; the assertion
-    // that matters now is that the two contracts are distinct objects.
+    // `1.6` shipped in `host-v1.2.0-rc.1`, so it must stay negotiable AND stop following the live schemas.
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });

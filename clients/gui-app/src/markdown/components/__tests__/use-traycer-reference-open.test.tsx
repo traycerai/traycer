@@ -76,11 +76,8 @@ describe("useTraycerReferenceOpenHandler", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open reference" }));
 
-    // A revert to the raw canvas preview call would still mutate the store, but
-    // it would bypass this route-aware boundary spy.
-    // A click on a reference is a SINGLE gesture on the epic, de-duped, with
-    // the click's modifier triple attached: preview-vs-permanent is then the
-    // resolver's call, not this hook's.
+    // Click is one de-duped gesture with the modifier triple. Preview vs
+    // permanent is the resolver's call, not this hook's.
     expect(testState.openTile).toHaveBeenCalledWith({
       node: testState.testRef,
       target: { epicId: "epic-1" },

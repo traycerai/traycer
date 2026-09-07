@@ -42,16 +42,7 @@ import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-fi
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
 
-/**
- * Lifecycle state of a single workspace's worktree setup, projected from the
- * persisted `setup.*` chat events (T2 owns the derivation; this component only
- * renders).
- *
- * Two in-flight states: `creating` (the host's `git worktree add` is running
- * - the "Creating worktree" step spins, "Setting up" is pending) then
- * `setting-up` (the setup script runs - "Creating worktree" done, "Setting up"
- * spins).
- */
+/** Lifecycle state of a single workspace's worktree setup, projected from the persisted `setup.*` chat events (T2 owns the derivation; this component only renders). Two in-flight states: `creating` (the host's `git worktree add` is running - the "Creating worktree" step spins, "Setting up" is pending) then `setting-up` (the setup script runs - "Creating worktree" done, "Setting up" spins). */
 export type SetupWorkspaceState =
   | "creating"
   | "setting-up"
@@ -68,42 +59,18 @@ export interface SetupCardWorkspace {
   readonly state: SetupWorkspaceState;
   /** Exit code for a `failed` workspace; `null` otherwise / when unknown. */
   readonly setupExitCode: number | null;
-  /**
-   * Deterministic setup-terminal session id. `null` when no terminal was ever
-   * linked (no "Open terminal" affordance); a non-null id whose session is no
-   * longer live renders the action disabled as "session ended".
-   */
+  /** Deterministic setup-terminal session id. `null` when no terminal was ever linked (no "Open terminal" affordance); a non-null id whose session is no longer live renders the action disabled as "session ended". */
   readonly terminalSessionId: string | null;
-  /**
-   * Absolute path of the created worktree and its branch, surfaced in the
-   * expanded view so the user knows WHERE and WHAT was created. Carried in the
-   * `setup.*` event metadata; `null` for events emitted before this was added
-   * or when the entry has no branch (detached).
-   */
+  /** Absolute path of the created worktree and its branch, surfaced in the expanded view so the user knows WHERE and WHAT was created. Carried in the `setup.*` event metadata; `null` for events emitted before this was added or when the entry has no branch (detached). */
   readonly worktreePath: string | null;
   readonly branch: string | null;
-  /**
-   * Failure reason from the failing `setup.*` event (a provision failure's
-   * git error). `null` for non-failed states and for script failures, which
-   * surface the exit code + terminal output instead.
-   */
+  /** Failure reason from the failing `setup.*` event (a provision failure's git error). `null` for non-failed states and for script failures, which surface the exit code + terminal output instead. */
   readonly errorMessage: string | null;
-  /**
-   * Non-null only for a provision failure (`git worktree add` never ran or
-   * failed): the exact folder intent the failed create attempted. Retry
-   * re-provisions from it via `worktree.create` - `worktree.retrySetup` only
-   * re-runs setup scripts and rejects an entry with no worktree.
-   */
+  /** Non-null only for a provision failure (`git worktree add` never ran or failed): the exact folder intent the failed create attempted. Retry re-provisions from it via `worktree.create` - `worktree.retrySetup` only re-runs setup scripts and rejects an entry with no worktree. */
   readonly retryFolderIntent: WorktreeFolderIntent | null;
 }
 
-/**
- * Per-lifecycle rollup. `epicId` scopes the terminal-liveness query;
- * `ownerId` / `ownerKind` route the retry mutation; `state` is the
- * consolidated state across every workspace (resolves to `ready` only when
- * all workspaces are ready, and reflects the most severe in-flight/terminal
- * state otherwise).
- */
+/** Per-lifecycle rollup. `epicId` scopes the terminal-liveness query; `ownerId` / `ownerKind` route the retry mutation; `state` is the consolidated state across every workspace (resolves to `ready` only when all workspaces are ready, and reflects the most severe in-flight/terminal state otherwise). */
 export interface SetupCardAggregate {
   readonly epicId: string;
   readonly ownerId: string;
@@ -111,19 +78,7 @@ export interface SetupCardAggregate {
   readonly state: SetupWorkspaceState;
 }
 
-/**
- * The full view-model the setup card consumes - the contract T2 produces by
- * grouping `setup.*` events per `workspacePath` and taking the latest state.
- * `createdAt` is the earliest setup event's wall-clock ms; it seeds the live
- * elapsed counter (placement is pinned by the renderer, not sorted on it).
- *
- * `isActive` mirrors `SetupCardRow.isActive`: it is true only for the live
- * (still-open) lifecycle window. A historical window can be stranded at
- * `setting-up` (the worktree vanished mid-setup; the host emits no terminal
- * setup event), so the live affordances - the ticking elapsed counter and the
- * animated "setting up" icon - must key off `isActive && setting-up`, NOT the
- * state alone, or a dead card would spin forever.
- */
+/** A historical window can be stranded at `setting-up` (the worktree vanished mid-setup; the host emits no terminal setup event), so the live affordances - the ticking elapsed counter and the animated "setting up" icon - must key off `isActive && setting-up`, NOT the state alone, or a dead card would spin forever. */
 export interface SetupCardViewModel {
   readonly aggregate: SetupCardAggregate;
   readonly workspaces: ReadonlyArray<SetupCardWorkspace>;
@@ -135,21 +90,7 @@ export interface SetupCardViewModel {
 // no action at all (no terminal was ever linked).
 type TerminalLiveness = "live" | "ended" | "none";
 
-/**
- * Compact, compaction-style setup line. Collapsed it is a single hairline-ruled
- * row (icon + phase + branch + elapsed); it always expands to a dropdown - the
- * two setup steps (Creating worktree / Setting up worktree, the latter with the
- * Open-terminal action) for a single repo, or a per-workspace row for multi.
- * Auto-expands on failure so Retry is one glance away. Pinned above the first
- * user message by the renderer; see `rendered-messages.ts`.
- *
- * `variant` selects the presentation without changing any of the setup logic:
- *  - `"card"` (chat transcript): the full-width, hairline-ruled line that
- *    expands INLINE, pushing the messages below it.
- *  - `"inline"` (terminal-agent status bar): a compact right-aligned trigger
- *    whose detail opens as a downward Popover OVERLAY, so expanding it never
- *    reflows the terminal session beneath the bar.
- */
+/** `variant` selects the presentation without changing any of the setup logic: - `"card"` (chat transcript): the full-width, hairline-ruled line that expands INLINE, pushing the messages below it. - `"inline"` (terminal-agent status bar): a compact right-aligned trigger whose detail opens as a downward Popover OVERLAY, so expanding it never reflows the terminal session beneath the bar. */
 export function SetupCardSegment(props: {
   readonly model: SetupCardViewModel;
   readonly viewTabId: string;
@@ -158,10 +99,8 @@ export function SetupCardSegment(props: {
   const { model, viewTabId, variant } = props;
   const { aggregate, workspaces, createdAt, isActive } = model;
 
-  // Open terminal, liveness, and Retry must all address the SAME host the tab
-  // is bound to (it can differ from the app-wide active host). Resolve one
-  // tab-scoped client and feed it to the liveness query and the retry mutation;
-  // `useFocusEpicTerminalSession` already scopes to the tab host.
+  // Open terminal, liveness, and Retry must all address the SAME host the tab is bound to (it can differ from the app-wide active host).
+  // Resolve one tab-scoped client and feed it to the liveness query and the retry mutation; `useFocusEpicTerminalSession` already scopes to the tab host.
   const focusTerminal = useFocusEpicTerminalSession(viewTabId);
   const tabClient = useTabHostClient();
   const retrySetup = useWorktreeRetrySetupFor(tabClient);
@@ -174,10 +113,7 @@ export function SetupCardSegment(props: {
   const liveSessionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const session of terminalList.data?.sessions ?? []) {
-      // `isVisibleRawTerminalSession` is the shared "session is openable"
-      // rule; reuse it so the card's liveness can't drift from the
-      // sidebar/bootstrap definition (it includes a completed setup terminal
-      // the host retains so its output stays reachable).
+      // `isVisibleRawTerminalSession` is the shared "session is openable" rule; reuse it so the card's liveness can't drift from the sidebar/bootstrap definition (it includes a completed setup terminal the host retains so its output stays reachable).
       if (isVisibleRawTerminalSession(session)) ids.add(session.sessionId);
     }
     return ids;
@@ -193,11 +129,7 @@ export function SetupCardSegment(props: {
   };
 
   const handleRetry = (workspace: SetupCardWorkspace): void => {
-    // A provision failure has no worktree to re-run setup inside -
-    // `worktree.retrySetup` would reject it ("entry has no worktree"). Retry
-    // it by re-provisioning from the exact intent the failing event carried.
-    // Script failures keep the in-place `retrySetup` path: the worktree
-    // exists and only its setup script needs to re-run.
+    // A provision failure has no worktree to re-run setup inside - `worktree.retrySetup` would reject it ("entry has no worktree").
     if (workspace.retryFolderIntent !== null) {
       worktreeCreate.mutate(
         {
@@ -207,10 +139,8 @@ export function SetupCardSegment(props: {
           entries: worktreeCreateEntries([workspace.retryFolderIntent]),
         },
         {
-          // A failed entry does NOT reject the RPC - it rides `perEntry` on a
-          // successful response, so the hook's `onError` toast never sees it.
-          // Surface it here; the host separately appends a fresh
-          // `setup.failed` event that refreshes this card's reason.
+          // A failed entry does NOT reject the RPC - it rides `perEntry` on a successful response, so the hook's `onError` toast never sees it.
+          // Surface it here; the host separately appends a fresh `setup.failed` event that refreshes this card's reason.
           onSuccess: (response) => {
             const failed = response.perEntry.find(
               (entry) =>
@@ -249,15 +179,11 @@ export function SetupCardSegment(props: {
   if (workspaces.length === 0) return null;
 
   const multi = workspaces.length > 1;
-  // Retry routes through `tabClient`; while it's null (tab directory entry not
-  // yet resolved) it would no-op + toast, so it doesn't render. Open terminal
-  // goes through the focus path, not `tabClient`, so it stays ungated.
+  // Retry routes through `tabClient`; while it's null (tab directory entry not yet resolved) it would no-op + toast, so it doesn't render.
+  // Open terminal goes through the focus path, not `tabClient`, so it stays ungated.
   const tabReady = tabClient !== null;
-  // Live == this is the open lifecycle window AND a workspace is still in
-  // flight (`creating` git-add OR `setting-up` script) - NOT the rolled-up
-  // `aggregate.state` (which ranks `failed` above the in-flight states, hiding
-  // the timer while a sibling repo is still running). A stranded historical
-  // window (active=false) shows no live affordances.
+  // Live == this is the open lifecycle window AND a workspace is still in flight (`creating` git-add OR `setting-up` script) - NOT the rolled-up `aggregate.state` (which ranks `failed` above the in-flight states, hiding the timer while a sibling repo is still running).
+  // A stranded historical window (active=false) shows no live affordances.
   const isLive =
     isActive &&
     workspaces.some(
@@ -327,8 +253,7 @@ export function SetupCardSegment(props: {
 
   const workspaceDetail = multi ? (
     // One block per worktree (branch · path header + create/setup steps).
-    // Capped to ~2 blocks tall and scrolls beyond, so many linked repos don't
-    // grow the surface unbounded.
+    // Capped to ~2 blocks tall and scrolls beyond, so many linked repos don't grow the surface unbounded.
     <div
       data-testid="setup-card-workspaces"
       className="flex max-h-[min(45vh,13rem)] flex-col divide-y divide-border/50 overflow-y-auto pr-1"
@@ -421,12 +346,8 @@ interface SharedHandlers {
   readonly active: boolean;
 }
 
-// One worktree's setup block: a "branch - path" header (where + what was
-// created) above the two-step "create + setup" view - "Creating worktree"
-// (spins while `git worktree add` runs, then a done check) and "Setting up
-// worktree" (the script phase, carrying the Open-terminal / Retry actions;
-// Cancel is intentionally omitted). Rendered once for a single repo and once
-// per workspace (in the scroll list) for multi-repo, so the view is identical.
+// One worktree's setup block: a "branch - path" header (where + what was created) above the two-step "create + setup" view - "Creating worktree" (spins while `git worktree add` runs, then a done check) and "Setting up worktree" (the script phase, carrying the Open-terminal / Retry actions; Cancel is intentionally omitted).
+// Rendered once for a single repo and once per workspace (in the scroll list) for multi-repo, so the view is identical.
 function WorkspaceSetupDetail(
   props: SharedHandlers & { readonly entry: SetupCardWorkspace },
 ) {
@@ -595,9 +516,8 @@ function OpenTerminalButton(props: {
 }) {
   if (props.liveness === "none") return null;
   if (props.liveness === "ended") {
-    // "session ended" reads as a tooltip on the disabled button rather than
-    // an appended label. A disabled button emits no pointer events, so the
-    // tooltip trigger sits on an enabled wrapper span around it.
+    // "session ended" reads as a tooltip on the disabled button rather than an appended label.
+    // A disabled button emits no pointer events, so the tooltip trigger sits on an enabled wrapper span around it.
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -666,13 +586,7 @@ function isProvisionFailure(entry: SetupCardWorkspace): boolean {
   return entry.state === "failed" && entry.retryFolderIntent !== null;
 }
 
-/**
- * The block header: "branch - worktree path" (what + where was created), muted.
- * The path truncates from the START (leaf stays visible) like every other path
- * in the app, with the full path on hover via `FilePathTooltip`. Falls back to
- * the precomputed label when neither branch nor path is known (setup events
- * emitted before this metadata was added).
- */
+/** The block header: "branch - worktree path" (what + where was created), muted. The path truncates from the START (leaf stays visible) like every other path in the app, with the full path on hover via `FilePathTooltip`. */
 function WorktreeLocation(props: {
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -721,12 +635,7 @@ function WorktreeLocation(props: {
   );
 }
 
-/**
- * Lightweight inline status glyph for the compact line + step / per-workspace
- * rows (no filled circle - the compaction aesthetic is quiet). A live
- * `setting-up` window spins; a stranded historical one (active=false) shows a
- * static muted dot so a dead card never animates.
- */
+/** Lightweight inline status glyph for the compact line + step / per-workspace rows (no filled circle - the compaction aesthetic is quiet). A live `setting-up` window spins; a stranded historical one (active=false) shows a static muted dot so a dead card never animates. */
 function StatusIcon(props: {
   readonly state: SetupWorkspaceState;
   readonly active: boolean;

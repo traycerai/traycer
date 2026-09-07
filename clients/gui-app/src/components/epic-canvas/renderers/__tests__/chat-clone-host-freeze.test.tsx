@@ -3,14 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 
 /**
- * F5: the dead-tile Clone must target the host resolved when the button was
- * pressed, and must bind its create mutation to that host BEFORE the async
- * settings resolution the clone runs.
- *
- * `cloneChatOnHostSwitch` awaits `resolveSettingsForClone` before it creates,
- * so there is a real window in which the app-wide selection can move. Reading
- * the target inside the click handler (and creating through the app-wide
- * mutation) makes that window load-bearing; resolving at render closes it.
+ * F5: the dead-tile Clone must target the host resolved when the button was pressed, and must bind its create mutation to that host BEFORE the async settings resolution the clone runs.
+ * `cloneChatOnHostSwitch` awaits `resolveSettingsForClone` before it creates, so there is a real window in which the app-wide selection can move.
  */
 
 /** Annotated, not asserted, so a test can present `null`. */

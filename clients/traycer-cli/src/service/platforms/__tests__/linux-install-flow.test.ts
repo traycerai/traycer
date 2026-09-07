@@ -17,13 +17,8 @@ import { ProcessRunError, type RunResult } from "../../process-runner";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { fileExists } from "../../install-binary";
 
-// `stop --force`'s confirmed-settle branches finish with the SAME
-// child-kill engine the macOS force paths use (`forceStopHostProcess`) -
-// the local purge helper is gone, along with its own pid.json read/verdict
-// gating. Stub the engine exactly the way `macos.test.ts` already stubs
-// this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only
-// `forceStopHostProcess` from this module, so that is the only export this
-// suite needs to supply).
+// `stop --force`'s confirmed-settle branches finish with the SAME child-kill engine the macOS force paths use (`forceStopHostProcess`) - the local purge helper is gone, along with its own pid.json read/verdict gating.
+// Stub the engine exactly the way `macos.test.ts` already stubs this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only `forceStopHostProcess` from this module, so that is the only export this suite needs to supply).
 const MOCKS = vi.hoisted(() => ({
   forceStopHostProcess: vi.fn(),
 }));
@@ -31,25 +26,9 @@ vi.mock("../desktop-agent-shutdown", () => ({
   forceStopHostProcess: MOCKS.forceStopHostProcess,
 }));
 
-/**
- * The systemd install FLOW - as opposed to the emitted artifact, which
- * `linux.test.ts` executes. Three defects fixed together, each pinned here:
- *
- *   1. no preflight: on a box with no reachable user manager (WSL with
- *      systemd disabled, `sudo su`, headless SSH) the old flow wrote the
- *      unit file FIRST and then threw a raw ProcessRunError out of
- *      `daemon-reload` - residue plus an error naming neither systemd nor
- *      WSL;
- *   2. no rollback: a failed daemon-reload/enable left the just-written
- *      unit file behind as an orphan;
- *   3. no reset-failed on uninstall: a unit that had restart-looped into
- *      `failed` kept its failed entry in the user manager after its file
- *      was deleted.
- */
+/** The systemd install FLOW - as opposed to the emitted artifact, which `linux.test.ts` executes. Three defects fixed together, each pinned here: 1. no preflight: on a box with no reachable user manager (WSL with systemd disabled, `sudo su`, headless SSH) the old flow wrote the unit file FIRST and then threw a raw ProcessRunError out of `daemon-reload` - residue plus an error naming neither systemd nor WSL; 2. no rollback: a failed daemon-reload/enable left the just-written unit file behind as an orphan; 3. no reset-failed on uninstall: a unit that had restart-looped into `failed` kept its failed entry in the user manager after its file was deleted. */
 
-// Same isolation as macos.test.ts: `serviceManifestPath` resolves under the
-// real home dir, and this suite exercises real writes/removals of the
-// manifest, so redirect it to a private temp dir.
+// Same isolation as macos.test.ts: `serviceManifestPath` resolves under the real home dir, and this suite exercises real writes/removals of the manifest, so redirect it to a private temp dir.
 const TEST_UNIT_DIR = mkdtempSync(
   join(tmpdir(), "traycer-linux-service-test-"),
 );
@@ -157,9 +136,7 @@ describe("linux service install flow", () => {
       message: expect.stringContaining("unit file was removed"),
     });
     expect(await fileExists(unitFile())).toBe(false);
-    // The rollback's own daemon-reload runs too (best-effort, tolerated),
-    // so systemd is told about the removal even though the initial reload
-    // is what failed.
+    // The rollback's own daemon-reload runs too (best-effort, tolerated), so systemd is told about the removal even though the initial reload is what failed.
     expect(calls.map(verbOf)).toEqual([
       "show-environment",
       "daemon-reload",
@@ -177,11 +154,8 @@ describe("linux service install flow", () => {
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     });
     expect(await fileExists(unitFile())).toBe(false);
-    // `disable --now` runs BEFORE the manifest is removed: `enable --now`
-    // failing on the start half still leaves the enablement symlinks in
-    // place, and removing the unit file first would leave them dangling.
-    // The rollback daemon-reload runs last, so systemd forgets the removed
-    // unit rather than holding a loaded orphan.
+    // `disable --now` runs BEFORE the manifest is removed: `enable --now` failing on the start half still leaves the enablement symlinks in place, and removing the unit file first would leave them dangling.
+    // The rollback daemon-reload runs last, so systemd forgets the removed unit rather than holding a loaded orphan.
     expect(calls.map(verbOf)).toEqual([
       "show-environment",
       "daemon-reload",
@@ -251,25 +225,13 @@ describe("linux service install flow", () => {
   });
 });
 
-// `stop --force`: a plain `systemctl stop` cannot promise the host is DOWN
-// when it returns (the runner caps the subprocess at 15s; the unit inherits
-// systemd's 90s default TimeoutStopSec), so force confirms through the
-// unit's OWN state - `systemctl is-active`, never a pid - and escalates to
-// `systemctl kill --signal=SIGKILL` when the plain stop does not settle it
-// in time. Graces mirror the macOS/desktop-agent force-stop margins
-// (~32s SIGTERM, 10s SIGKILL), so these poll through fake timers exactly
-// the way `macos.test.ts` / `desktop-agent-shutdown.test.ts` already do for
-// the identical wait shape.
+// `stop --force`: a plain `systemctl stop` cannot promise the host is DOWN when it returns (the runner caps the subprocess at 15s; the unit inherits systemd's 90s default TimeoutStopSec), so force confirms through the unit's OWN state - `systemctl is-active`, never a pid - and escalates to `systemctl kill --signal=SIGKILL` when the plain stop does not settle it in time.
+// Graces mirror the macOS/desktop-agent force-stop margins (~32s SIGTERM, 10s SIGKILL), so these poll through fake timers exactly the way `macos.test.ts` / `desktop-agent-shutdown.test.ts` already do for the identical wait shape.
 describe("linux service stop --force", () => {
   beforeEach(() => {
     MOCKS.forceStopHostProcess.mockReset();
-    // Default outcome: no-metadata, which is SUCCESS on this finisher (the
-    // unit teardown already ran with positive confirmation, and an absent
-    // record is the normal trace of a host that exited gracefully and
-    // unlinked its own file - unlike the macOS ENTRY paths, where
-    // no-metadata is a failure). Every pre-existing force-success test below
-    // keeps passing through the finisher unchanged without staging its own
-    // outcome; tests targeting outcome mapping specifically override this.
+    // Default outcome: no-metadata, which is SUCCESS on this finisher (the unit teardown already ran with positive confirmation, and an absent record is the normal trace of a host that exited gracefully and unlinked its own file - unlike the macOS ENTRY paths, where no-metadata is a failure).
+    // Every pre-existing force-success test below keeps passing through the finisher unchanged without staging its own outcome; tests targeting outcome mapping specifically override this.
     MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
   });
 
@@ -289,13 +251,8 @@ describe("linux service stop --force", () => {
 
     await createLinuxController(runner).stop(label, { force: true });
 
-    // The first is-active probe settles immediately - no poll wait, no
-    // kill, ever. A settled state alone is not proof nothing is scheduled
-    // (the unit can settle at `failed` from a CRASH mid-grace, with
-    // Restart=on-failure still queuing a relaunch) - the trailing `stop`
-    // cancels it, and a FRESH is-active re-confirms before the purge (the
-    // cancel's own failures/timeouts are swallowed, so only a positive
-    // re-read vouches).
+    // The first is-active probe settles immediately - no poll wait, no kill, ever.
+    // A settled state alone is not proof nothing is scheduled (the unit can settle at `failed` from a CRASH mid-grace, with Restart=on-failure still queuing a relaunch) - the trailing `stop` cancels it, and a FRESH is-active re-confirms before the purge (the cancel's own failures/timeouts are swallowed, so only a positive re-read vouches).
     expect(calls.map(verbOf)).toEqual([
       "stop",
       "is-active",
@@ -307,9 +264,7 @@ describe("linux service stop --force", () => {
       "stop",
       "ai.traycer.host.dev.service",
     ]);
-    // A CONFIRMED inactive unit hands off to the child-kill engine, which
-    // finishes the stop (and its own instance-matched purge) on the
-    // published host's behalf.
+    // A CONFIRMED inactive unit hands off to the child-kill engine, which finishes the stop (and its own instance-matched purge) on the published host's behalf.
     expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
   });
 
@@ -334,9 +289,7 @@ describe("linux service stop --force", () => {
     const pending = createLinuxController(runner).stop(label, {
       force: true,
     });
-    // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus
-    // slack for the final poll - the same margin the macOS/desktop-agent
-    // force-stop SIGTERM grace uses for the identical wait shape.
+    // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus slack for the final poll - the same margin the macOS/desktop-agent force-stop SIGTERM grace uses for the identical wait shape.
     await vi.advanceTimersByTimeAsync(40_000);
 
     await expect(pending).resolves.toBeUndefined();
@@ -350,11 +303,7 @@ describe("linux service stop --force", () => {
       "--signal=SIGKILL",
       "ai.traycer.host.dev.service",
     ]);
-    // Shape: [stop, is-active...(active, never settling), kill, stop,
-    // is-active...(settles)] - the initial stop, the SIGTERM-grace poll
-    // that never settles, the SIGKILL, a renewed `stop` issued BEFORE the
-    // second poll (cancels a relaunch a crash-during-grace may have
-    // scheduled), and the SIGKILL-grace poll that settles.
+    // Shape: [stop, is-active...(active, never settling), kill, stop, is-active...(settles)] - the initial stop, the SIGTERM-grace poll that never settles, the SIGKILL, a renewed `stop` issued BEFORE the second poll (cancels a relaunch a crash-during-grace may have scheduled), and the SIGKILL-grace poll that settles.
     const verbs = calls.map(verbOf);
     expect(verbs[0]).toBe("stop");
     const killIndex = verbs.indexOf("kill");
@@ -395,10 +344,7 @@ describe("linux service stop --force", () => {
       return ok();
     };
 
-    // Attach the rejection matcher BEFORE advancing timers - the promise
-    // settles mid-advance, and asserting after would risk an unhandled
-    // rejection between settling and the `await` below (same discipline
-    // `macos.test.ts`'s CLI-owned stop-timeout test uses).
+    // Attach the rejection matcher BEFORE advancing timers - the promise settles mid-advance, and asserting after would risk an unhandled rejection between settling and the `await` below (same discipline `macos.test.ts`'s CLI-owned stop-timeout test uses).
     const stopping = createLinuxController(runner).stop(label, {
       force: true,
     });
@@ -410,9 +356,7 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     await assertion;
-    // The post-kill cancel `stop` still fires on the still-active failure
-    // path too - it runs unconditionally right after the kill, before the
-    // (here, never-settling) second poll.
+    // The post-kill cancel `stop` still fires on the still-active failure path too - it runs unconditionally right after the kill, before the (here, never-settling) second poll.
     const verbs = calls.map(verbOf);
     const killIndex = verbs.indexOf("kill");
     expect(killIndex).toBeGreaterThan(0);
@@ -477,9 +421,7 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     await assertion;
-    // The post-kill cancel `stop` is unaffected by the probe always
-    // throwing - it is a different command, and cancelScheduledAutoRestart
-    // has its own try/catch regardless.
+    // The post-kill cancel `stop` is unaffected by the probe always throwing - it is a different command, and cancelScheduledAutoRestart has its own try/catch regardless.
     const verbs = calls.map(verbOf);
     const killIndex = verbs.indexOf("kill");
     expect(killIndex).toBeGreaterThan(0);
@@ -487,13 +429,8 @@ describe("linux service stop --force", () => {
     expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
   });
 
-  // Codex's exact scenario: `tolerateNonZeroExit: true` means a probe that
-  // could not reach the systemd user manager RESOLVES (never throws) with
-  // an empty stdout and a nonzero exit - the OLD exclusion-list logic
-  // (`state !== "active" && state !== "activating" && ...`) treated that
-  // empty string as settled, reporting a stop it never confirmed. The
-  // positive-list rewrite closes it: nothing but a recognized settled
-  // state counts.
+  // Codex's exact scenario: `tolerateNonZeroExit: true` means a probe that could not reach the systemd user manager RESOLVES (never throws) with an empty stdout and a nonzero exit - the OLD exclusion-list logic (`state !== "active" && state !== "activating" && ...`) treated that empty string as settled, reporting a stop it never confirmed.
+  // The positive-list rewrite closes it: nothing but a recognized settled state counts.
   it("empty stdout with a nonzero, tolerated exit (bus unreachable) reads as NOT settled - escalates, still empty - SERVICE_CONTROL_FAILED", async () => {
     vi.useFakeTimers();
     const calls: RecordedCall[] = [];
@@ -527,11 +464,7 @@ describe("linux service stop --force", () => {
   });
 
   it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels+RE-CONFIRMS any scheduled auto-restart before purging", async () => {
-    // 'failed' is exactly the state a CRASH mid-grace settles at (as
-    // opposed to a clean exit from our stop request) - Restart=on-failure
-    // may have a relaunch scheduled, which is precisely why the cancel runs
-    // even on this "already settled" path, and why a fresh re-confirm runs
-    // after it rather than trusting the cancel itself.
+    // 'failed' is exactly the state a CRASH mid-grace settles at (as opposed to a clean exit from our stop request) - Restart=on-failure may have a relaunch scheduled, which is precisely why the cancel runs even on this "already settled" path, and why a fresh re-confirm runs after it rather than trusting the cancel itself.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -585,13 +518,8 @@ describe("linux service stop --force", () => {
     expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
   });
 
-  // Branch-1 re-confirmation: the FIRST settle (right after the plain stop)
-  // can itself be a crash - `failed` - whose Restart=on-failure replacement
-  // is already coming back up by the time the cancel runs. The cancel's own
-  // failures/timeouts are swallowed, so it proves nothing; only a FRESH
-  // positive re-read after it does. An unconfirmed re-read falls through to
-  // the ordinary SIGKILL escalation rather than reporting a stop that was
-  // never actually proven.
+  // Branch-1 re-confirmation: the FIRST settle (right after the plain stop) can itself be a crash - `failed` - whose Restart=on-failure replacement is already coming back up by the time the cancel runs.
+  // The cancel's own failures/timeouts are swallowed, so it proves nothing; only a FRESH positive re-read after it does.
   describe("post-cancel re-confirmation (branch-1 settle can be a crash whose replacement is already restarting)", () => {
     it("first settle is 'failed' (a crash), the post-cancel re-confirm sees 'activating' (the replacement) through the whole confirm grace, falls through to SIGKILL, which then settles for a successful stop", async () => {
       vi.useFakeTimers();
@@ -611,9 +539,8 @@ describe("linux service stop --force", () => {
         if (command === "systemctl" && args[1] === "is-active") {
           if (killIssued)
             return { stdout: "inactive", stderr: "", exitCode: 3 };
-          // Before the cancel (stopCount is still 1, from the initial plain
-          // stop only): settle immediately at 'failed' - the crash. After
-          // the cancel (stopCount is 2): the replacement is coming back up.
+          // Before the cancel (stopCount is still 1, from the initial plain stop only): settle immediately at 'failed' - the crash.
+          // After the cancel (stopCount is 2): the replacement is coming back up.
           return stopCount >= 2
             ? { stdout: "activating", stderr: "", exitCode: 3 }
             : { stdout: "failed", stderr: "", exitCode: 3 };
@@ -624,16 +551,12 @@ describe("linux service stop --force", () => {
       const pending = createLinuxController(runner).stop(label, {
         force: true,
       });
-      // The SIGTERM-grace settle and the post-kill SIGKILL-grace settle are
-      // both immediate (first poll) - only the 10s confirm grace needs
-      // advancing, plus slack.
+      // The SIGTERM-grace settle and the post-kill SIGKILL-grace settle are both immediate (first poll) - only the 10s confirm grace needs advancing, plus slack.
       await vi.advanceTimersByTimeAsync(15_000);
 
       await expect(pending).resolves.toBeUndefined();
       const verbs = calls.map(verbOf);
-      // stop, is-active(failed, settled on the first probe), stop(cancel),
-      // is-active...(activating, never settles through the confirm grace),
-      // kill, stop(cancel again), is-active(inactive, settles).
+      // stop, is-active(failed, settled on the first probe), stop(cancel), is-active...(activating, never settles through the confirm grace), kill, stop(cancel again), is-active(inactive, settles).
       expect(verbs[0]).toBe("stop");
       expect(verbs[1]).toBe("is-active");
       expect(verbs[2]).toBe("stop");
@@ -657,9 +580,7 @@ describe("linux service stop --force", () => {
           return ok();
         }
         if (command === "systemctl" && args[1] === "is-active") {
-          // Settles once, right at the very first probe (the crash) - then
-          // never again, through both the post-cancel re-confirm AND the
-          // post-kill SIGKILL grace.
+          // Settles once, right at the very first probe (the crash) - then never again, through both the post-cancel re-confirm AND the post-kill SIGKILL grace.
           return stopCount === 1
             ? { stdout: "failed", stderr: "", exitCode: 3 }
             : { stdout: "activating", stderr: "", exitCode: 3 };
@@ -684,14 +605,8 @@ describe("linux service stop --force", () => {
     });
   });
 
-  // Outcome mapping: once the unit is CONFIRMED down,
-  // `finishForcedStopForPublishedHost` hands off to the SAME child-kill
-  // engine the macOS force paths use (`forceStopHostProcess`, mocked here
-  // exactly the way `macos.test.ts` mocks it). A confirmed-down unit is
-  // only HALF of what `--force` promises - a live host running OUTSIDE the
-  // unit (started manually, or orphaned by a corrupted teardown) still gets
-  // SIGTERM->SIGKILLed by the engine, and the engine's own instance-matched
-  // purge replaces the local gate entirely.
+  // Outcome mapping: once the unit is CONFIRMED down, `finishForcedStopForPublishedHost` hands off to the SAME child-kill engine the macOS force paths use (`forceStopHostProcess`, mocked here exactly the way `macos.test.ts` mocks it).
+  // A confirmed-down unit is only HALF of what `--force` promises - a live host running OUTSIDE the unit (started manually, or orphaned by a corrupted teardown) still gets SIGTERM->SIGKILLed by the engine, and the engine's own instance-matched purge replaces the local gate entirely.
   describe("forced-stop finisher: outcome mapping through forceStopHostProcess", () => {
     function settledRunner(): ProcessRunner {
       return async (command, args) => {

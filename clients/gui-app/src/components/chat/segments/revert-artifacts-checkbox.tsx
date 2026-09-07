@@ -1,18 +1,6 @@
 import { Checkbox } from "@/components/ui/checkbox";
 
-/**
- * Checked-by-default opt-out shown in every bulk revert confirmation when the
- * scope includes artifacts: "Also revert N artifacts". Unchecking excludes the
- * artifact changes from the revert (files still revert). Renders nothing when
- * there are no artifacts in scope.
- *
- * `count: null` is "there may be artifacts and this side cannot count them" -
- * a windowed transcript whose history below the revert point is not hydrated.
- * It renders the opt-out WITHOUT a number, which is the only honest pair of
- * choices available: hiding it would revert artifacts with no opt-out shown
- * (the checkbox defaults to checked), and printing a number derived from the
- * hydrated slice would state an under-count as a measurement.
- */
+/** `count: null` is "there may be artifacts and this side cannot count them" - a windowed transcript whose history below the revert point is not hydrated. It renders the opt-out WITHOUT a number, which is the only honest pair of choices available: hiding it would revert artifacts with no opt-out shown (the checkbox defaults to checked), and printing a number derived from the hydrated slice would state an under-count as a measurement. */
 export function RevertArtifactsCheckbox(props: {
   readonly count: number | null;
   readonly checked: boolean;

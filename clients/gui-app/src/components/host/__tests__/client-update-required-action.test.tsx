@@ -31,24 +31,7 @@ vi.mock("@/lib/runner-error-toast", () => ({
   toastFromRunnerError: mocks.toastFromRunnerError,
 }));
 
-/**
- * The remedy on the blocking "Update Traycer to continue" surface.
- *
- * THE PROPERTY UNDER TEST IS "NEVER A DEAD END". This action is the only thing
- * a user can act on once a host has refused their client at its epoch gate:
- * Update host cannot help (the host is the newer leg by construction), Retry
- * reaches the same verdict, and there is nothing to reset. So every arm has to
- * lead somewhere that can produce a newer build.
- *
- * The awkward arm is `idle`. The desktop DOES auto-check at launch
- * (`installAutoUpdater` -> `checkForUpdatesNow(…, "automatic")`), but that
- * check is gated on `canCheckForUpdates` and happens exactly once, while this
- * surface is reachable hours later - a host can activate a floor, or the user
- * can point at a different host, long after launch. Sending someone to
- * download by hand while their own updater could have delivered the build is
- * the gap these specs close, and re-asking an updater that already answered is
- * the loop they refuse to open.
- */
+/** The property under test is "never a dead end". */
 
 afterEach(() => {
   cleanup();
@@ -56,26 +39,14 @@ afterEach(() => {
   setMobileAppPlatform(null);
 });
 
-/**
- * Lets every already-queued microtask settle.
- *
- * The negative specs below assert something did NOT happen, which is only
- * meaningful once the read that would have triggered it has resolved - a bare
- * `await Promise.resolve()` returns before the bridge's own promise chain runs
- * and would pass against a genuinely broken hook.
- */
+/** The negative specs below assert something did not happen, which is only meaningful once the read that would
+ * have triggered it has resolved. */
 async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
 }
 
-/**
- * The host's structured requirement.
- *
- * Current hosts always send `minimumKnownClientAppVersion` / `upgradeChannel`
- * as null and stamp `hostReleaseChannel` with their own line. Sufficiency is
- * compared as epochs, never as versions: `null` on the candidate is
- * insufficient, not a free pass.
- */
+/** Sufficiency is compared as epochs, never as versions: `null` on the candidate is insufficient, not a free
+ * pass. */
 function requirement(
   overrides: Partial<ClientCompatibilityRequirement>,
 ): ClientCompatibilityRequirement {
@@ -118,18 +89,12 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   );
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
-  // Annotated with the full change type. Inference from this default narrows
-  // `outcome` to the literal `"changed"`, which then rejects a
-  // `mockResolvedValue` for `refused-update-pending` - the macOS standing
-  // refusal, which is exactly the case worth testing.
+  // Annotated with the full change type.
   readonly setAllowPrerelease = vi.fn(
     (): Promise<DesktopAppUpdateChannelChange> =>
       Promise.resolve({ outcome: "changed", snapshot: this.snapshot }),
   );
   // Annotated with the full plan type rather than inferred from this default.
-  // Inference narrows `route` to the literal `"manual"`, which then rejects
-  // every `mockResolvedValue` for the other three routes - the exact cases
-  // these tests exist to cover.
   readonly resolveCompatRecovery = vi.fn(
     (): Promise<DesktopCompatRecoveryPlan> =>
       Promise.resolve({
@@ -149,13 +114,8 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
 
   constructor(public snapshot: DesktopAppUpdateSnapshot) {}
 
-  /**
-   * Delivers the snapshot to the store immediately on subscribe.
-   *
-   * The real bridge pushes from the main process; without this the store would
-   * only ever hold what its async `getSnapshot()` prime returned, and a spec
-   * asserting on RENDERED state would be racing that promise.
-   */
+  /** The real bridge pushes from the main process; without this the store would only ever hold what its async
+   * `getSnapshot` prime returned, and a spec asserting on rendered state would be racing that promise. */
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
     dispose(): void;
   } {
@@ -175,23 +135,8 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   }
 }
 
-/**
- * Attaches the bridge to the CONSTRUCTED host, rather than cloning it.
- *
- * A `Object.create(proto) + Object.assign` clone copies field VALUES but not
- * the closures the constructor built over `this`. `MockRunnerHost` builds an
- * in-process selection authority in its constructor whose `ensureReady`
- * callback captures the original instance, so a clone shares one authority
- * that reads and mutates a DIFFERENT object's local-host state. Nothing in
- * this file drives that authority today, which is exactly why it is worth
- * removing now: the next spec added here would inherit a helper that hands
- * back a half-wired host and no failure that points at the helper.
- *
- * `appUpdates` is not on `IRunnerHost` - `resolveDesktopAppUpdatesBridge`
- * reads it with `Reflect.get` - so assigning it onto the instance is how the
- * capability is expressed, and `Object.assign` returns an intersection that is
- * already assignable to `IRunnerHost` (no cast needed).
- */
+/** Attaches the bridge to the constructed host, rather than cloning it. A `Object.create(proto) +
+ * Object.assign` clone copies field values but not the closures the constructor built over `this`. */
 function makeHost(appUpdates: DesktopAppUpdatesBridge | null): IRunnerHost {
   const host = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
@@ -236,15 +181,8 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
   });
 
   it("does NOT re-ask an updater that already answered", async () => {
-    // `lastCheckedAt` set means the launch check ran. "up-to-date" and "error"
-    // are real answers; re-asking them on every mount would turn a blocking
-    // dialog into a poller.
-    //
-    // Note this asserts against the BRIDGE's snapshot, not the rendered one:
-    // `useDesktopAppUpdates` primes asynchronously, so at first render the
-    // rendered snapshot is still the module default (idle / never checked).
-    // A hook that decided from THAT would call here, which is the bug this
-    // spec is written to catch.
+    // Note this asserts against the bridge's snapshot, not the rendered one: `useDesktopAppUpdates` primes
+    // asynchronously, so at first render the rendered snapshot is still the module default (idle / never checked).
     const bridge = new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
@@ -278,13 +216,8 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
   });
 
   it("shows a pending state for a MANUAL check in flight, not the manual link", async () => {
-    // The reachable case is a check started from the header while this dialog
-    // is open. It is NOT the check this surface starts: `checkForUpdatesNow`
-    // publishes `status: "checking"` only for `intent === "manual"`, so the
-    // self-started automatic one leaves the snapshot `idle` and the manual
-    // link stays up for its duration. Rendering "Get the latest Traycer" under
-    // a running check would tell someone to download by hand a second before
-    // their own updater answers.
+    // Rendering "Get the latest Traycer" under a running check would tell someone to download by hand a second
+    // before their own updater answers.
     const bridge = new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
       status: "checking",
@@ -318,10 +251,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
 
 describe("<ClientUpdateRequiredAction /> manual fallback", () => {
   it("points BOTH channels at the releases page", () => {
-    // The stable arm used to point at an unverified marketing URL that exists
-    // nowhere else in either repository - a dead link in the one place a user
-    // has no other route. GitHub Releases lists prereleases alongside stable,
-    // so one first-party destination serves both.
+    // GitHub Releases lists prereleases alongside stable, so one first-party destination serves both.
     expect(traycerInfo.releasesPage).toBe(
       "https://github.com/traycerai/traycer/releases",
     );
@@ -369,21 +299,7 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
 });
 
 describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
-  /**
-   * THE CACHED UPDATE IS NOT AUTOMATICALLY THE REMEDY.
-   *
-   * Compared as epochs, never as versions. A `1.9.0` hotfix branched off a
-   * pre-epoch line is newer by every SemVer comparison and still does not
-   * clear a floor of 2 - Fable's channel-scoped invariant in test form: a
-   * stable `desktop-v*` below an RC-only floor is still the RC resolver's
-   * newest candidate, and only its own `compatibilityEpoch` refuses it.
-   *
-   * `null` IS INSUFFICIENT. The predecessor read `minimumKnownClientAppVersion
-   * === null` as "the host named no minimum, so anything satisfies it" - a
-   * catastrophic reading now that epoch-only policy leaves that field
-   * permanently null. Here `null` means the candidate's generation could not
-   * be established.
-   */
+  /** Compared as epochs, never as versions. */
   function bridgeWith(
     status: "available" | "ready" | "downloading",
     latestCompatibilityEpoch: number | null,
@@ -401,8 +317,8 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   }
 
   it("a null epoch on a READY snapshot must not render the install affordance", async () => {
-    // THE INVERTED ARM, asserted directly rather than via a recovery route:
-    // `status: "ready"` used to be enough to offer "Restart to update".
+    // The inverted arm, asserted directly rather than via a recovery route: `status: "ready"` used to be enough to
+    // offer "Restart to update".
     const bridge = bridgeWith("ready", null, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction requirement={requirement({})} />,
@@ -504,22 +420,10 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
 });
 
 describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a build", () => {
-  /**
-   * A cached build - stale or not - is a state this surface CANNOT ask past.
-   *
-   * `checkForUpdatesNow` returns the current snapshot before any feed query
-   * while the status is `available` / `ready` / `downloading`, for every
-   * intent, so a request here would be a no-op IPC and a test asserting it
-   * would only prove the bridge recorded the call. These specs pin the
-   * restraint instead: the render gate sends the user to the releases page,
-   * and nothing pretends the updater could have been coaxed into helping.
-   */
+  /** A cached build - stale or not - is a state this surface cannot ask past. */
   it("does NOT ask when the updater is holding an INSUFFICIENT build either", async () => {
-    // The tempting case, and the one that must stay restrained: the cached
-    // 1.2.0 cannot clear a floor of 1.3.0, so it looks like a re-check is one
-    // request from the answer. Main would return this same snapshot without
-    // touching the feed, so the request buys nothing - the releases link the
-    // render gate falls through to IS the recovery.
+    // The tempting case, and the one that must stay restrained: the cached 1.2.0 cannot clear a floor of 1.3.0, so
+    // it looks like a re-check is one request from the answer.
     const bridge = new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
       status: "available",
@@ -602,11 +506,8 @@ describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a bu
 });
 
 describe("<ClientUpdateRequiredAction /> hostReleaseChannel routing", () => {
-  /**
-   * Interpreted HERE, once, and passed to main as a verdict. Assert on the
-   * argument the bridge received so there is never a second place that could
-   * decide an unrecognized channel means RC.
-   */
+  /** Assert on the argument the bridge received so there is never a second place that could decide an
+   * unrecognized channel means RC. */
   function idleBridge(): FakeAppUpdatesBridge {
     return new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
@@ -675,10 +576,8 @@ describe("<ClientUpdateRequiredAction /> enable-rc arm", () => {
       />,
       bridge,
     );
-    // Role query, not a test id: this is an interactive control, and its
-    // ACCESSIBLE NAME is the thing the user reads before consenting to a
-    // channel change. Asserting on the name is what pins that the build is
-    // actually named in the offer.
+    // Role query, not a test id: this is an interactive control, and its accessible name is the thing the user
+    // reads before consenting to a channel change.
     const rcButton = await screen.findByRole("button", {
       name: /Enable RC updates and get 1\.2\.0-rc\.4/u,
     });
@@ -721,17 +620,8 @@ describe("<ClientUpdateRequiredAction /> enable-rc arm", () => {
   });
 
   it("re-resolves the plan when a check lands an insufficient candidate after mount", async () => {
-    // THE SIDE-EFFECT REGRESSION, not a caching nicety. The plan is cached at
-    // `staleTime: Infinity`, and resolving one is what discards an insufficient
-    // staged artifact, disarms quit-time install, and produces the macOS
-    // staged-update warning.
-    //
-    // Opening sequence: the dialog mounts while the mount-triggered check is
-    // still in flight, so the first plan resolves against NOTHING held. The
-    // check then lands an INSUFFICIENT candidate. `candidateSufficient` is
-    // still false and `allowPrerelease` has not moved - so without the held
-    // candidate's status in the key, main is never asked again and every one of
-    // those side effects is silently skipped.
+    // `candidateSufficient` is still false and `allowPrerelease` has not moved - so without the held candidate's
+    // status in the key, main is never asked again and every one of those side effects is silently skipped.
     const bridge = new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
@@ -761,10 +651,8 @@ describe("<ClientUpdateRequiredAction /> enable-rc arm", () => {
   });
 
   it("a refused opt-in invalidates the plan and re-resolves to the honest next step", async () => {
-    // Main can answer refused-update-pending if a download started between
-    // the probe and the click, or (macOS) an artifact reached native staging
-    // in that window. Asking again is the correct response; reporting a
-    // failure is not.
+    // Main can answer refused-update-pending if a download started between the probe and the click, or (macOS) an
+    // artifact reached native staging in that window.
     const snapshot: DesktopAppUpdateSnapshot = {
       ...IDLE_SNAPSHOT,
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
@@ -839,10 +727,7 @@ describe("<ClientUpdateRequiredAction /> restart-to-clear-staged arm", () => {
 
 describe("<ClientUpdateRequiredAction /> mobile shell", () => {
   it("names the iOS stores instead of the releases page button", () => {
-    // No desktop arm above applies without an updater bridge, so a mobile
-    // build always falls through to here - and the releases page is a
-    // desktop remedy a phone cannot act on. The copy must name the shell's
-    // own update channel, not a generic "update" a tester cannot locate.
+    // The copy must name the shell's own update channel, not a generic "update" a tester cannot locate.
     setMobileApp(true);
     setMobileAppPlatform("ios");
     renderAction(

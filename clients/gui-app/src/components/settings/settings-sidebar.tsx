@@ -35,11 +35,8 @@ export type SettingsSidebarMode =
       readonly onSelect: (section: SettingsSectionId) => void;
     };
 
-/**
- * "rail" is the desktop two-pane nav column; "mobile-list" is the same
- * sections rendered as a full-width drill-down list (the `/settings` index on
- * phones).
- */
+/** "rail" is the desktop two-pane nav column; "mobile-list" is the same sections rendered as a full-width
+ * drill-down list (the `/settings` index on phones). */
 export type SettingsSidebarVariant = "rail" | "mobile-list";
 
 export interface SettingsSidebarProps {
@@ -47,36 +44,16 @@ export interface SettingsSidebarProps {
   readonly variant: SettingsSidebarVariant;
 }
 
-/**
- * The sidebar carries the scope model.
- *
- * Application and Account come first — short, fixed, never re-shaped — and the
- * host group goes last, headed by ONE picker with its scoped sections beneath.
- * The picker is deliberately NOT a level of navigation: Providers already
- * spends the app's nesting budget on a rail plus a tab bar, so a host tier
- * here would have made the deepest page four levels down. See
- * `settings-sections.ts` for the grouping itself.
- */
+/** Application and Account come first - short, fixed, never re-shaped - and the host group goes last, headed by
+ * one picker with its scoped sections beneath. */
 export function SettingsSidebar(props: SettingsSidebarProps) {
   const scope = useHostScope();
-  // The OFFERED list, and the same one the leader digits index: a row's `index`
-  // below is what `singleDigitLeaderDigitFor` badges it with, and
-  // `switchToSettingsSection` walks this list to resolve that digit back to a
-  // section.
+  // The offered list, and the same one the leader digits index.
   const sections = visibleSettingsSections();
-  // The host picker below shows a live dot and a health word per row, so this
-  // is a liveness surface and opts into the registry poll. It is also the ONE
-  // place in Settings that has to: the picker is mounted for as long as any
-  // settings panel is, so a per-panel opt-in would poll on exactly the same
-  // schedule while being fifteen times easier to get wrong. Panels that merely
-  // read `useHostScope` for names — Shell, Worktrees, Providers — do not, which
-  // is the point: reading the list no longer implies polling it.
+  // Panels that merely read `useHostScope` for names - Shell, Worktrees, Providers - do not, which is the point:
+  // reading the list no longer implies polling it.
   useRegisteredHostsPollLiveness();
-  // No row is dimmed by host kind any more. Shell and Diagnostics used to be,
-  // because both read the on-disk config store through the local CLI bridge and
-  // could only ever describe this computer; `config.*` / `diagnostics.*` made
-  // them work for whichever host the picker names, so a dimmed row would now be
-  // discouraging a click that lands on a working page.
+  // No row is dimmed by host kind any more.
   return (
     <aside
       className={cn(
@@ -96,10 +73,8 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           <div
             className={cn(
               "flex flex-col gap-0.5",
-              // Indent alone: these sections are not siblings of the host row,
-              // they are its contents, and stepping them in says so without
-              // drawing anything. A guide line said the same thing louder and
-              // put a second vertical edge next to the rail's own border.
+              // Indent alone: these sections are not siblings of the host row, they are its contents, and stepping them in
+              // says so without drawing anything.
               group.id === "host" && "ml-4",
             )}
           >
@@ -121,23 +96,17 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   );
 }
 
-/**
- * The scope control, between the "Host" heading and the sections it governs —
- * the one position that reads as "everything below belongs to this".
- */
+/** The scope control, between the "Host" heading and the sections it governs - the one position that reads as
+ * "everything below belongs to this". */
 function SettingsSidebarHostPicker(props: {
-  // Resolved once by the sidebar above — the composition behind `useHostScope`
-  // is six hooks deep, and this component would run all of it a second time
-  // in the same render pass.
+  // Resolved once by the sidebar above - the composition behind `useHostScope` is six hooks deep, and this
+  // component would run all of it a second time in the same render pass.
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
-  // THE one surface that badges update state (settled product decision: fleet
-  // update state lives in Settings). The resolver reads only hosts that already
-  // have a borrowable session, so opening this list causes no connection and
-  // improves no badge by dialling — every other host simply projects `unknown`
-  // and shows nothing.
+  // The resolver reads only hosts that already have a borrowable session, so opening this list causes no
+  // connection and improves no badge by dialling - every other host simply projects `unknown` and shows nothing.
   const updateViewForHost = useFleetUpdateViews(
     useMemo(() => scope.hosts.map((host) => host.hostId), [scope.hosts]),
   );
@@ -166,15 +135,8 @@ function SettingsSidebarHostPicker(props: {
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
       />
-      {/* Said at rest, not on discovery: sections describing a host that is
-          NOT the app's active one is the single most confusing state this
-          surface can be in, so it never waits to be noticed.
-
-          "Active host", not "this window runs on": `activeHost` is the
-          app-wide EFFECTIVE host, and after a failover or an explicit pick
-          that can be a machine across the room - a developer on their laptop
-          read "this window runs on <their iMac>" as a claim about the
-          computer in front of them. */}
+      {/* Said at rest, not on discovery: sections describing a host that is not the app's active one is the single
+         most confusing state this surface can be in, so it never waits to be noticed. */}
       {scope.host === null || scope.isViewingActive ? null : (
         <p
           className="px-1 text-[0.6875rem] leading-snug text-muted-foreground/80"
@@ -191,10 +153,8 @@ function SettingsSidebarHostPicker(props: {
   );
 }
 
-/**
- * Whether `pathname` is this section's route, matching on whole path segments
- * rather than by prefix, so no section id can ever light up another's row.
- */
+/** Whether `pathname` is this section's route, matching on whole path segments rather than by prefix, so no
+ * section id can ever light up another's row. */
 function isSectionPathname(
   pathname: string,
   sectionId: SettingsSectionId,
@@ -203,14 +163,8 @@ function isSectionPathname(
   return pathname === base || pathname.startsWith(`${base}/`);
 }
 
-/**
- * The tier boundary, drawn edge to edge.
- *
- * It bleeds past the rail's padding (`-mx-4`) so it reads as a division OF the
- * rail rather than a box drawn inside it — which is also why the host picker
- * below carries no border of its own: one of them has to be the boundary, and
- * a rule costs nothing to scan past.
- */
+/** It bleeds past the rail's padding (`-mx-4`) so it reads as a division OF the rail rather than a box drawn
+ * inside it - which is also why the host picker below carries no border of its own. */
 function SettingsSidebarGroupRule(): ReactNode {
   return <div aria-hidden className="-mx-4 my-3 border-t border-border/60" />;
 }
@@ -309,11 +263,8 @@ function SettingsSidebarRouteItem(props: {
   const Icon = section.icon;
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const active = isSectionPathname(pathname, section.id);
-  // The rail replaces: its sections are peers on one screen, and back should
-  // leave settings, not replay every section clicked. The mobile list pushes:
-  // there a section is a full-screen drill-down BELOW the list, and a replace
-  // would make back-swipe skip the list and land on whatever preceded
-  // settings entirely.
+  // The mobile list pushes: there a section is a full-screen drill-down below the list, and a replace would make
+  // back-swipe skip the list and land on whatever preceded settings entirely.
   return (
     <Link
       to={`/settings/${section.id}`}

@@ -105,9 +105,7 @@ describe("quote selection - stale snapshot across the setting toggle", () => {
     // Mutate the selection while disabled (no selectionchange listener runs).
     window.getSelection()?.removeAllRanges();
 
-    // Toggle back ON: the snapshot is stale, so the popover must NOT reappear.
-    // rerender flushes the popover's layout-effect reposition, whose liveness
-    // guard dismisses synchronously before paint.
+    // Toggle back ON: the snapshot is stale, so the popover must NOT reappear. rerender flushes the popover's layout-effect reposition, whose liveness guard dismisses synchronously before paint.
     rerender(<QuoteHarness enabled />);
     expect(quoteButton()).toBeNull();
   });

@@ -1,16 +1,6 @@
 import { StreamLanguage, type StreamParser } from "@codemirror/language";
 
-/**
- * Tiny StreamLanguage for Mermaid source. Highlights the diagram
- * declaration keywords, edge operators, and bracket-delimited labels so
- * the in-editor source has some visual structure without pulling in a
- * full grammar (~200 kB for `mermaid-parser`). Everything else falls
- * through as plain text.
- *
- * Good enough for the common case - users editing an existing diagram.
- * A malformed snippet still highlights nicely, and parse errors surface
- * on commit via the error panel rather than inline squiggles.
- */
+/** Tiny StreamLanguage for declaration keywords, edges, and bracket labels; no mermaid-parser grammar. */
 const KEYWORDS = new Set([
   "graph",
   "flowchart",

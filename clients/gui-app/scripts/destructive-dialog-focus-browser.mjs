@@ -1,14 +1,5 @@
-// Browser regression for the quit intercept's Cancel path: after Cancel, is the
-// window actually usable again?
-//
-// jsdom cannot answer that - it has no hit testing, so a click reaches a node
-// whether or not a real user could reach it, and the best a jsdom fixture can do
-// is assert Radix released its `body { pointer-events: none }` lock, which is a
-// proxy. This clicks a button behind the modal in a real layout engine.
-//
-// Structure follows `diff-edit-browser-regression.mjs` (vite + headless Chrome
-// over CDP); both are wired into `scripts/run-tests.ts` behind
-// RUN_DIFF_EDIT_BROWSER_REGRESSION, which CI sets for this package.
+// Real-layout focus regression: jsdom has no hit testing, so a click reaching
+// a node does not prove a user could reach it.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
@@ -116,12 +107,8 @@ try {
     client,
     `Array.from(document.querySelector('[data-testid="epic-tab-unsynced-dialog"]').querySelectorAll("button")).map((b) => b.getAttribute("data-testid") ?? "close-x").join(" > ")`,
   );
-  // The measured baseline this pins, from before the fix:
-  //   FOCUS_ON_OPEN = epic-tab-unsynced-discard | text=Close anyway
-  //   TAB_ORDER     = epic-tab-unsynced-discard > epic-tab-unsynced-wait > close-x
-  // A destructive confirmation must not open focused on its destructive
-  // control: this one is reached by closing a tab, which people do constantly,
-  // and its destructive answer discards unsynced work.
+  // Must not open focused on the destructive control; this dialog is reached
+  // by closing a tab and its destructive answer discards unsynced work.
   assert.match(
     focused,
     /^epic-tab-unsynced-wait/,
@@ -135,10 +122,8 @@ try {
   process.exitCode = 1;
 } finally {
   client?.close();
-  // `terminateProcessTree` replaces the old `chrome.kill("SIGKILL")` plus a
-  // 300ms sleep: it takes down the whole process GROUP and verifies it is
-  // gone, so the profile below is removed from under a browser that is
-  // provably finished writing rather than one that has probably stopped.
+  // terminateProcessTree kills the group and verifies it is gone before rm
+  // of the profile.
   if (chrome !== undefined) {
     await terminateProcessTree(chrome);
   }

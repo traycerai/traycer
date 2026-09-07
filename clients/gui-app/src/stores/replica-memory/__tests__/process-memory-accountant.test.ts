@@ -1,7 +1,6 @@
 /**
- * LOW-13: the process runtime is injected, not welded to the renderer
- * environment. Tests reset the singleton so one store cannot walk another's
- * `set()`.
+ * LOW-13: the process runtime is injected, not welded to the renderer environment. Tests reset the
+ * singleton so one store cannot walk another's `set()`.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime";

@@ -1,8 +1,6 @@
 /**
- * Copy-on-write Set helpers. Each returns the original reference when the
- * operation would be a no-op, so callers relying on `Object.is` equality
- * (React state, Zustand bailouts, TreeView's `onItemsChange`) skip updates
- * cleanly.
+ * Copy-on-write Set helpers.
+ * Each returns the original reference when the operation would be a no-op, so callers relying on `Object.is` equality (React state, Zustand bailouts, TreeView's `onItemsChange`) skip updates cleanly.
  */
 
 export function withMemberAdded<T>(

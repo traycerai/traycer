@@ -19,26 +19,15 @@ import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
 
 /**
  * Minimal host-directory surface the shared runtime depends on.
- *
- * The concrete `HostDirectoryService` lives in `gui-app`; it composes the
- * runner-host's local-host snapshot with the stubbed remote fetcher (see
- * `remote-fetcher.ts`) and owns selection state. Shared code only needs the
- * read/observe subset below.
+ * Shared code only needs the read/observe subset below.
  */
 export interface IHostDirectoryService {
   list(): Promise<readonly HostDirectoryEntry[]>;
   findById(hostId: string): HostDirectoryEntry | null;
   refresh(): Promise<readonly HostDirectoryEntry[]>;
-  /**
-   * Refresh on behalf of an explicitly named {@link AuthEra}. The
-   * context-change path uses this rather than `refresh()`: an era assembled
-   * from ambient accessors inside an emission is a mix of state that has
-   * already moved and state that has not, and the implementation needs the
-   * SAME era for its memo key, its commit stamp, its destructive fence and
-   * the credential its fetch runs under.
-   */
+  /** Refresh on behalf of an explicitly named {@link AuthEra}. */
   refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]>;
-  /** Drop any in-flight refresh — used when the credential rotates. */
+  /** Drop any in-flight refresh - used when the credential rotates. */
   invalidateInFlightRefresh(): void;
 }
 
@@ -46,28 +35,14 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly runnerHost: IRunnerHost;
   readonly registry: Registry;
   readonly messenger: IHostMessenger<Registry>;
-  /**
-   * Client `RequestContextProvider` boundary. The runtime threads
-   * `provider.current()` into `HostClient` on `start()` and rebinds on
-   * every `provider.onChange(...)` emission (sign-in, sign-out, cross-user
-   * transition). Same-user credential rotation does NOT emit through the
-   * provider - the lease is mutated in place - so the host-scoped cache
-   * survives token refreshes intact.
-   */
+  /** Client `RequestContextProvider` boundary. */
   readonly requestContextProvider: RequestContextProvider;
   readonly directory: IHostDirectoryService;
   readonly invalidator: IHostQueryInvalidator;
   readonly schedulingPolicy: RpcSchedulingPolicy<Registry>;
   /**
-   * The window's connection-registry wiring (connection-registry §1), or
-   * `null` for a shell that runs without one (the standalone/test path).
-   *
-   * REQUIRED rather than optional on purpose. The registry carries the
-   * per-host "row changed" signal that replaces the active slot's change
-   * event, so a shell that forgets to wire it produces windows whose pinned
-   * consumers never re-read when a host's row lands - a silent staleness
-   * bug, not a crash. A required field turns "did you wire it" into a
-   * compile error at every shell, which is the only census that cannot rot.
+   * The window's connection-registry wiring (connection-registry §1), or `null` for a shell that runs without one (the standalone/test path).
+   * Required rather than optional on purpose.
    */
   readonly connectionRegistry: HostConnectionRegistrySource | null;
   /**
@@ -79,24 +54,6 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly requestCoordinator: HostRequestCoordinator<Registry> | null;
 }
 
-/**
- * Shared orchestrator consumed by desktop, mobile, and browser-preview shells.
- *
- * `HostRuntime`:
- * 1. Builds a `HostClient<Registry>` around the messenger the shell built
- *    (shells pick their transport: `WsRpcClient` on desktop/mobile,
- *    `MockHostMessenger` under dev/preview).
- * 2. On `start()`, applies the current `RequestContext` and current host
- *    selection, then subscribes to context, selection, and local-host
- *    transitions. Each signal maps to a `HostClient` call so the
- *    TanStack query cache invalidates coherently on every identity change.
- * 3. Releases all subscriptions on `dispose()`.
- *
- * The runtime does not own transport construction: it receives the messenger
- * from its caller. That keeps the shared module free of `globalThis.fetch`
- * coupling and lets tests drive the full lifecycle with an in-memory
- * `MockHostMessenger`.
- */
 export class HostRuntime<Registry extends VersionedRpcRegistry> {
   readonly hostClient: HostClient<Registry>;
   readonly requestContextProvider: RequestContextProvider;
@@ -142,12 +99,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     });
   }
 
-  /**
-   * Wires context / directory / local-host signals into `hostClient`.
-   *
-   * Safe to call multiple times: subsequent calls are no-ops. Callers that
-   * need to rewire must `dispose()` and build a fresh runtime.
-   */
+  /** Wires context / directory / local-host signals into `hostClient`. */
   start(): void {
     if (this.disposed) {
       throw new Error("HostRuntime cannot be started after dispose().");
@@ -157,13 +109,8 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     }
     this.started = true;
 
-    // BEFORE anything else reads it, so a consumer that subscribes during the
-    // opening commit sees the registry already answering off the live
-    // directory rather than the empty answers an uninstalled source gives.
-    // This used to be sequenced "before the first bind"; there is no bind, and
-    // the registry is now the ONLY thing that tells a pinned consumer its row
-    // arrived, which makes the ordering more load-bearing than it was, not
-    // less.
+    // Before anything else reads it, so a consumer that subscribes during the opening commit sees the registry already answering off the live directory rather than the empty answers an uninstalled source gives.
+    // This used to be sequenced "before the first bind"; there is no bind, and the registry is now the only thing that tells a pinned consumer its row arrived, which makes the ordering more load-bearing than it was, not less.
     if (this.connectionRegistry !== null) {
       installHostConnectionRegistrySource(this.connectionRegistry);
     }
@@ -173,30 +120,16 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.contextUnsubscribe = this.requestContextProvider.onChange(
       (ctx, era) => {
         this.hostClient.setRequestContext(ctx);
-        // The era comes FROM the emission and is passed through untouched -
-        // not rebuilt here out of `ctx` plus a generation read, and not left
-        // for the directory to read off its own accessors. Those accessors
-        // answer for a transition that may not have finished landing: this is
-        // the one refresh whose entire job is to load the INCOMING account,
-        // and every previous attempt to key it ambiently picked up one field
-        // from after the switch and another from before it.
-        // On sign-out the era's identity is `null`, which is exactly right:
-        // `null` IS the incoming identity, and stamping it is what lets the
-        // signed-out clear commit instead of being discarded as stale.
+        // The era comes from the emission and is passed through untouched - not rebuilt here out of `ctx` plus a generation read, and not left for the directory to read off its own accessors.
+        // On sign-out the era's identity is `null`, which is exactly right: `null` IS the incoming identity, and stamping it is what lets the signed-out clear commit instead of being discarded as stale.
         void this.directory.refreshForEra(era);
       },
     );
 
-    // Same-user token refresh rotates the lease in place (silent on `onChange`);
-    // forward it so stream transports can push the fresh credential onto open
-    // connections without a reconnect.
+    // Same-user token refresh rotates the lease in place (silent on `onChange`); forward it so stream transports can push the fresh credential onto open connections without a reconnect.
     this.bearerRotationUnsubscribe =
       this.requestContextProvider.onBearerRotated(() => {
-        // A rotation is invisible to a user-id fence — same account, new
-        // credential — so the in-flight refresh is dropped here rather than
-        // joined. The pending request carries the OLD bearer, and if it comes
-        // back 401 its `signed-out` outcome would clear a directory the new
-        // credential had just legitimately filled.
+        // A rotation is invisible to a user-id fence - same account, new credential - so the in-flight refresh is dropped here rather than joined.
         this.directory.invalidateInFlightRefresh();
         this.hostClient.notifyBearerRotated();
       });

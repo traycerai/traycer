@@ -8,15 +8,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import type { HomeWorkspaceSource } from "./use-home-workspace-source";
 
-/**
- * Opens the host's folder picker and adds the chosen folders to the ACTIVE
- * workspace representation (landing draft / modal / seed / global) through
- * `HomeWorkspaceSource`. Shared by the workspace picker's "Add folder" and the
- * landing terminal panel's empty state, so a folder picked from either surface
- * lands in the same place and resolves the same primary.
- *
- * Resolves `true` when at least one folder was added, `false` on cancel.
- */
+/** Opens the host's folder picker and adds the chosen folders to the active workspace representation (landing
+ * draft / modal / seed / global) through `HomeWorkspaceSource`. */
 export function usePickAndAddWorkspaceFolders(
   client: HostClient<HostRpcRegistry> | null,
   workspaceSource: HomeWorkspaceSource,
@@ -25,8 +18,8 @@ export function usePickAndAddWorkspaceFolders(
   return useCallback(async (): Promise<boolean> => {
     const result = await folderActions.pickAndPrepareFolders(true);
     if (result === null) return false;
-    // Stamp with dispatch-time hostId from the prepare result — never re-read
-    // the mutable client after the await (B6 host-switch race).
+    // Stamp with dispatch-time hostId from the prepare result - never re-read the mutable client after the await
+    // (B6 host-switch race).
     const folders = result.folders.map((folder) =>
       preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
     );
@@ -35,12 +28,8 @@ export function usePickAndAddWorkspaceFolders(
   }, [folderActions, workspaceSource]);
 }
 
-/**
- * Locate recovery for an absent row: open the host folder picker and REPLACE
- * the dead path with whatever the user picked. A cancelled picker changes
- * nothing. Required by remote-repo-resolution D2 — re-pointing is the action
- * that unblocks readiness; add-only left the absent entry blocking forever.
- */
+/** Required by remote-repo-resolution - re-pointing is the action that unblocks readiness; add-only left the
+ * absent entry blocking forever. */
 export function useLocateAndReplaceWorkspaceFolder(
   client: HostClient<HostRpcRegistry> | null,
   workspaceSource: HomeWorkspaceSource,
@@ -63,11 +52,7 @@ export function useLocateAndReplaceWorkspaceFolder(
   );
 }
 
-/**
- * Pure replace step used by Locate tests and the hook: given a successful pick
- * result, drop the absent path then add the prepared folders. Cancelled picks
- * never reach here (the hook returns false before calling).
- */
+/** Cancelled picks never reach here (the hook returns false before calling). */
 export function replaceAbsentWorkspaceFolder(args: {
   readonly workspaceSource: Pick<
     HomeWorkspaceSource,

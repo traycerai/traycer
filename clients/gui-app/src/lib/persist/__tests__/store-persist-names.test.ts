@@ -29,19 +29,8 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 
-// Call-site regression guard for the full persist-name chain:
-//   catalog leaf (keys.ts) → STORE_KEYS[camelName] → the store's persist call.
-// Each expected name below is a HAND-WRITTEN literal, NOT derived from the
-// builders or STORE_KEYS — deriving it would make the test circular and unable
-// to catch a divergence. A wrong leaf, a typo'd STORE_KEYS access, or a store
-// that stops routing through the catalog must fail HERE.
-//
-// The six scoped singletons (composer-run-settings, composer-harness-memory,
-// worktree-intent-memory, worktree-intent-staging, epic-canvas,
-// app-local-notifications) are constructed
-// at module load in their initial `anon` bucket; the persist lifecycle bridges
-// retarget them at runtime. The construction-time name asserted here is
-// therefore the `anon` one.
+// Call-site regression guard for the full persist-name chain: catalog leaf (keys.ts) → STORE_KEYS[camelName] → the store's persist call.
+// Each expected name below is a HAND-WRITTEN literal, NOT derived from the builders or STORE_KEYS - deriving it would make the test circular and unable to catch a divergence.
 
 // The persist middleware's `getOptions()` returns a `Partial<PersistOptions>`,
 // so `name` is structurally optional here even though every store configures it.
@@ -65,11 +54,8 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     useComposerDraftStore,
     "traycer-gui-app:composer-drafts",
   ],
-  // NOTE: useInterviewDraftStore is intentionally absent. It no longer uses the
-  // zustand `persist` middleware (so it has no `.persist.getOptions().name`): it
-  // persists one localStorage key per (chatId, blockId) via `interviewDraftKey`
-  // for cross-window isolation — the same reason the app-local display-receipt
-  // store is not listed here.
+  // NOTE: useInterviewDraftStore is intentionally absent.
+  // It no longer uses the zustand `persist` middleware (so it has no `.persist.getOptions().name`): it persists one localStorage key per (chatId, blockId) via `interviewDraftKey` for cross-window isolation - the same reason the app-local display-receipt store.
   [
     "useArtifactReadStateStore",
     useArtifactReadStateStore,

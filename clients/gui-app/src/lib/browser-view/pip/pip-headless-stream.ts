@@ -12,9 +12,8 @@ interface PipHeadlessStreamHandle {
 }
 
 /**
- * Same transport as the peek tile, without visibility registration, input
- * arming, or tile-open resume. A mirror has nothing to wait for, so it acks
- * on arrival rather than after paint.
+ * Same transport as the peek tile, without visibility registration, input arming, or tile-open resume.
+ * A mirror has nothing to wait for, so it acks on arrival rather than after paint.
  */
 export function openPipHeadlessStream(input: {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
@@ -41,9 +40,7 @@ export function openPipHeadlessStream(input: {
     role: "pip",
     callbacks: {
       onServerFrame: (frame, jpegBytes) => {
-        // Answered before anything else: the host times this reply, so any
-        // work in between is measured as link latency - and a mirror that
-        // never answers reads as a dead link.
+        // Answered before anything else: the host times this reply, so any work in between is measured as link latency - and a mirror that never answers reads as a dead link.
         if (frame.kind === "rttProbe") {
           stream.sendClientFrame({
             kind: "rttProbeAck",

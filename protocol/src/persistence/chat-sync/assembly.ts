@@ -20,63 +20,12 @@ import {
 import type { ChatSyncPayloadVersion } from "@traycer/protocol/persistence/chat-sync/version";
 
 /**
- * The reader half of the chat-sync contract: how a cloud renderer or a clone
- * target turns a head into a chat it may act on.
- *
- * The order is the contract:
- *
- * 1. gate on the HEAD, before any part is fetched;
- * 2. fetch every part IN PARALLEL, hashing each as it arrives;
- * 3. verify each part's length and digest against the address the head gave;
- * 4. parse each through the forward-compatible shard reader schema;
- * 5. cross-check each shard against the head that named it;
- * 6. assemble IN HEAD ORDER - never in completion order;
- * 7. only then promote.
- *
- * Step 1 is enforced structurally rather than by discipline: the fetch port is
- * a CALLBACK this module invokes, so on a refusal there is no call to forget to
- * skip. A caller physically cannot spend the egress on a chat it was not
- * allowed to read.
- *
- * **Parallel fetch, ordered assembly.** Parts are immutable and independently
- * verifiable, so there is nothing to serialize: a p99 chat is ~165 parts, and
- * fetching them one at a time would pay 165 round trips for no property the
- * per-part digest does not already give. The two concerns are kept apart on
- * purpose - completion order is a network accident, and the head's list is the
- * only thing that says what the transcript IS. The property test pins that:
- * the same head with parts completing in any order assembles to the same chat.
- *
- * **Failing closed, and failing promptly.** A part whose bytes do not hash to
- * the address the head named ends the read. It is not skipped, not rendered as
- * a gap, and not retried here - a chat assembled from parts one of which was
- * substituted is not a degraded chat, it is a different one. And the read ends
- * as soon as that is KNOWN: it does not wait for siblings that have not
- * settled, so one stalled request cannot stretch an already-decided outcome out
- * to its timeout. With a p99 chat's fan-out that difference is the whole
- * latency budget.
- *
- * Environment-agnostic on purpose. The GUI's host reads through its cloud data
- * client, cloud-ui streams through its own server, a test fetches from a map.
- * All three differ only in the fetch port, so all three run the same pipeline
- * and cannot drift on which check happens when.
+ * The reader half of the chat-sync contract: how a cloud renderer or a clone target turns a head into a chat it may act on.
+ * A caller physically cannot spend the egress on a chat it was not allowed to read.
  */
 
 // ---- Fetching ----------------------------------------------------------- //
 
-/**
- * Bytes a caller has brought down for one part, described by what the head
- * promises about them.
- *
- * `sha256` and `byteLength` are computed by the FETCHER, incrementally, as the
- * bytes arrive - not read back off a finished buffer. That is what lets a
- * clone path spool a part to disk and still content-address it without holding
- * it in memory, and it is why this type carries the digest rather than the
- * bytes.
- *
- * `readText` is separate and lazy so a part that FAILS verification is
- * discarded without ever being parsed - substituted bytes should cost a hash
- * comparison, not a `JSON.parse` of attacker-chosen input.
- */
 export type StagedChatPart = {
   readonly byteLength: number;
   /** Lowercase hex SHA-256 of the staged bytes, computed while staging. */
@@ -92,12 +41,7 @@ export type ChatPartRequest = {
   readonly part: ChatHeadPart;
 };
 
-/**
- * Brings one part into staging. Invoked ONLY after the gate admits the head,
- * which is what makes "no egress on a refused chat" structural. Called
- * concurrently for every part; a caller that needs a concurrency ceiling
- * imposes it inside its own port.
- */
+/** Brings one part into staging. */
 export type ChatPartFetcher = (
   request: ChatPartRequest,
 ) => Promise<StagedChatPart>;
@@ -116,11 +60,7 @@ export type ChatAssemblyIntegrityReason =
   /** A parsed shard contradicts the head that named it. */
   | "head-mismatch";
 
-/**
- * The chat a head describes, once every part it names has been verified and
- * assembled. Shaped like a record rather than like a head so nothing
- * downstream has to know a chat arrived in pieces.
- */
+/** The chat a head describes, once every part it names has been verified and assembled. */
 export type AssembledChat = {
   readonly schemaVersion: ChatSyncPayloadVersion;
   /** Lineage of the head this was assembled from. `null` for a first head. */
@@ -151,20 +91,14 @@ export type ChatAssemblyResult =
        */
       readonly message: string;
       /**
-       * The detail a human needs to diagnose this: the digests that disagreed,
-       * the parser's complaint, the chat id that did not line up.
-       *
-       * HOST-INTERNAL. Log it, never wire it. A part's `sha256` is an object
-       * coordinate the read APIs deliberately withhold from readers, and a
-       * corruption message is a silly place to hand it back.
+       * The detail a human needs to diagnose this: the digests that disagreed, the parser's complaint, the chat id that did not line up.
        */
       readonly diagnostic: string;
     };
 
 /**
- * Renderer-safe phrasing for each integrity failure. Fixed strings rather than
- * interpolated ones, so a coordinate cannot be added to a user-visible message
- * by accident: there is nowhere in these to put one.
+ * Renderer-safe phrasing for each integrity failure.
+ * Fixed strings rather than interpolated ones, so a coordinate cannot be added to a user-visible message by accident: there is nowhere in these to put one.
  */
 export const CHAT_ASSEMBLY_CORRUPTION_MESSAGES: Readonly<
   Record<ChatAssemblyIntegrityReason, string>
@@ -203,19 +137,7 @@ export type AssembleChatOptions = {
 
 /**
  * Gate, fetch in parallel, verify, parse, cross-check, assemble in head order.
- *
- * Returns a result rather than throwing for every outcome a healthy system
- * really produces: a refusal is a UX state ("this chat needs a newer app"), and
- * an integrity failure is a diagnosable condition a caller reports against a
- * specific `(chat, part)`. Errors from the FETCHER itself - a dead socket, a
- * 403 - propagate unchanged: those are the caller's transport failures, and
- * flattening them into this union would lose the distinction between "the cloud
- * is unreachable" and "the cloud handed us the wrong bytes".
- *
- * Note what is NOT checked here: whether the reader can render every block. It
- * cannot, by design - that is what the passthrough is for, and a chat full of
- * variants this build has never heard of is a successful assembly (see
- * `presentation.ts` for how those surface).
+ * It cannot, by design - that is what the passthrough is for, and a chat full of variants this build has never heard of is a successful assembly (see `presentation.ts` for how those surface).
  */
 export async function assembleChat(
   options: AssembleChatOptions,
@@ -249,21 +171,6 @@ export async function assembleChat(
         ]),
   ];
 
-  // Every part is fetched and verified concurrently, and the read ends as soon
-  // as ANY part is known to have failed - it does not wait on siblings that
-  // have not settled. `Promise.all` is what gives that: it rejects on the first
-  // rejection, and it installs handlers on every input, so a sibling that
-  // rejects later is still observed rather than surfacing as an unhandled
-  // rejection. (`allSettled` was the earlier construction and was wrong on
-  // liveness: one stalled request became the latency bound for every outcome,
-  // including a transport failure already known.)
-  //
-  // What determinism survives: `failures` collects every integrity failure
-  // recorded up to the moment the read ends, and the HEAD-earliest of those is
-  // what surfaces. So a publication whose bad parts fail together reports the
-  // same one every time; one whose parts fail at genuinely different times
-  // reports the earliest among those known when the first failure landed. That
-  // is a diagnostic-quality property, not a contract a caller may lean on.
   const failures = new Map<number, ChatAssemblyResult>();
   const verified: {
     readonly index: number;
@@ -300,11 +207,7 @@ export async function assembleChat(
   return { status: "ok", chat: assembleFromShards(head, requests, shards) };
 }
 
-/**
- * Sentinel for "a part failed integrity checks". Thrown rather than returned so
- * `Promise.all` ends the read at once; distinguishable from a transport error
- * by identity, with no class or `instanceof` needed.
- */
+/** Sentinel for "a part failed integrity checks". */
 const PART_FAILED = Symbol("chat-part-failed");
 
 function earliestFailure(
@@ -327,14 +230,6 @@ function earliestFailure(
   return earliest.failure;
 }
 
-/**
- * The post-fetch half for ONE part, exposed on its own for a caller that owns
- * its download (a clone path that spools to disk and then promotes) and for
- * tests that want to drive a specific corruption without a transport.
- *
- * Length before digest deliberately: a truncated transfer is the common case,
- * and naming it as such is more actionable than "the hash did not match".
- */
 export async function verifyStagedChatPart(
   staged: StagedChatPart,
   request: ChatPartRequest,
@@ -359,12 +254,7 @@ export async function verifyStagedChatPart(
     );
   }
 
-  // Decoding is part of "can these verified bytes be read", not part of the
-  // transport. A reader whose `readText` is fatal on invalid UTF-8 rejects
-  // here, and letting that rejection escape would classify an immutable,
-  // digest-valid shard as a transient fetch failure - so the caller retries
-  // forever against bytes that can never parse. Same outcome as unparseable
-  // JSON, because it is the same fact one layer down.
+  // Decoding is part of "can these verified bytes be read", not part of the transport.
   let text: string;
   try {
     text = await staged.readText();
@@ -385,11 +275,7 @@ export async function verifyStagedChatPart(
     );
   }
 
-  // The forward-compatible READER schema, not the registered writer one. The
-  // gate admits every same-major publication whatever its minor - that is what
-  // makes the passthrough reachable at all - so parsing with the pinned writer
-  // schema would reject a genuine 1.1 shard the instant it arrived, and the
-  // end-to-end promise could never fire.
+  // The forward-compatible READER schema, not the registered writer one.
   const parsed = chatShardReaderSchema.safeParse(payload);
   if (!parsed.success) {
     return corrupt(
@@ -405,15 +291,7 @@ export async function verifyStagedChatPart(
   return { record };
 }
 
-/**
- * The head <-> payload cross-check, run after the digest and before assembly.
- *
- * Content addressing already proves the BYTES are the ones the head named; this
- * proves the bytes MEAN what the head assumed. The two failures are different:
- * a hash mismatch says the transfer was wrong, and this says the publication is
- * internally inconsistent - a part from another chat, or a part filed under the
- * wrong section.
- */
+/** The head <-> payload cross-check, run after the digest and before assembly. */
 function describeShardMismatch(
   shard: ChatShardRecord,
   request: ChatPartRequest,
@@ -437,13 +315,7 @@ function describeShardMismatch(
     return `Chat ${request.section} part ${request.index} claims ${shard.schemaVersion.major}.${shard.schemaVersion.minor} but the head claims ${head.schemaVersion.major}.${head.schemaVersion.minor}`;
   }
 
-  // The 1.1 cut-plan claims, checked against the parsed shard in hand. Content
-  // addressing proved these are the bytes the head named; this proves the
-  // head's MEMBERSHIP claims describe them - a count or boundary id that
-  // disagrees is a publication contradicting itself, and reading on would
-  // hand callers a plan the shard does not implement. (A publisher extending
-  // such a head independently re-verifies every claim against its own op log
-  // before reuse; this is the read/restore-time detection of the same lie.)
+  // The 1.1 cut-plan claims, checked against the parsed shard in hand.
   const claim = request.part;
   if (claim.recordCount !== undefined && request.section !== "host-private") {
     const records: readonly { readonly raw: JsonObject }[] =
@@ -467,11 +339,7 @@ function describeShardMismatch(
   return null;
 }
 
-/**
- * Head order, not fetch order. `requests` and `shards` are index-aligned by
- * construction above, and `requests` was built by walking the head's own lists,
- * so concatenating in index order IS the head's order.
- */
+/** Head order, not fetch order. */
 function assembleFromShards(
   head: ChatHeadRecord,
   requests: readonly ChatPartRequest[],
@@ -495,9 +363,6 @@ function assembleFromShards(
     }
   }
 
-  // One of the two is non-null by the head's own refinement, and the shard's
-  // refinement guarantees a `host-private` part carries an envelope - so this
-  // fallback is unreachable rather than a silent default.
   const hostPrivate = head.hostPrivate ?? graduatedHostPrivate;
   if (hostPrivate === null) {
     throw new Error(

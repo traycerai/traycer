@@ -3,17 +3,8 @@ import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
- * Every external GitHub anchor on the PR surfaces, in one place.
- *
- * Routed through {@link useOpenLinkWithPending} rather than left as a bare
- * `target="_blank"` link: a plain anchor opens a second, unmanaged browser
- * surface instead of honouring the user's `github` link setting (A1). The
- * `href` stays for anchor semantics (copy link, hover preview, middle-click
- * intent); `target`/`rel` go, because the click never navigates natively.
- *
- * A click landing while the OS handoff is still in flight is dropped, and the
- * anchor reports `aria-disabled` meanwhile: each call fires a fresh bridge
- * request, so a double click would otherwise open the browser twice (R10).
+ * Routed through {@link useOpenLinkWithPending} rather than left as a bare `target="_blank"` link: a plain anchor opens a second, unmanaged browser surface instead of honouring the user's `github` link setting (A1).
+ * The `href` stays for anchor semantics (copy link, hover preview, middle-click intent); `target`/`rel` go, because the click never navigates natively.
  */
 export function PrExternalGitHubLink(props: {
   readonly href: string;

@@ -1,22 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Raised in review of oss#1019. The two halves of the int#4840 fix combine
-// into a way to report a failed run as successful:
-//
-//   1. the CLI drains instead of calling `process.exit`, so a command
-//      interrupted by an unhandled rejection KEEPS RUNNING and can still
-//      return an `ok` result;
-//   2. exit-code arbitration is monotonic, so the fatal `1` survives;
-//   3. Desktop's `streamTraycerCli` now trusts a terminal `ok` OVER the
-//      non-zero exit code.
-//
-// Together: a process-fatal failure during `host install` would emit `ok`,
-// exit 1, and Desktop would report the install as successful.
-//
-// Fixed CLI-side rather than by narrowing Desktop's condition. Desktop cannot
-// tell a teardown abort from a fatal handler without guessing from exit codes
-// and stderr text - which is exactly the inference `sawTerminalOk` replaced.
-// The CLI knows, so the CLI must not make the claim.
+// Raised in review of oss#1019.
+// The two halves of the int#4840 fix combine into a way to report a failed run as successful: 1. the CLI drains instead of calling `process.exit`, so a command interrupted by an unhandled rejection KEEPS RUNNING and can still return an `ok` result; 2. exit-code arbitration is monotonic, so the fatal `1` survives; 3.
 
 const stdoutChunks: string[] = [];
 

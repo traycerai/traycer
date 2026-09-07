@@ -16,10 +16,7 @@ export interface NotificationCenterGeometryLock {
 
 export interface NotificationCenterGeometryInput {
   readonly open: boolean;
-  /** Whether the host summary is still unknown at the moment the shell is
-   * measured - gates the cold-open height floor. Captured once per open via
-   * a ref; a summary that lands later in the same session does not retract
-   * the floor already applied. */
+  /** Captured once per open via a ref; a summary that lands later in the same session does not retract the floor already applied. */
   readonly isColdOpen: boolean;
 }
 
@@ -28,14 +25,7 @@ export interface NotificationCenterGeometryResult {
   readonly style: CSSProperties;
 }
 
-/** Radix Popper renders its floating wrapper at this exact inline transform
- * until `isPositioned` flips true (see `@radix-ui/react-popper`'s Content):
- * off-screen during the measuring phase, restored to the real computed
- * `floatingStyles.transform` once placed. `onPlaced` mirrors this same
- * signal but its type is deliberately omitted from Popover's public
- * `Content` props (`Omit<PopperContentProps, 'onPlaced'>`), so this module
- * watches the wrapper's own `style` mutations instead of fighting that
- * type - both approaches gate on the identical internal state. */
+/** `onPlaced` mirrors this same signal but its type is deliberately omitted from Popover's public `Content` props (`Omit<PopperContentProps, 'onPlaced'>`), so this module watches the wrapper's own `style` mutations instead of fighting that type - both approaches gate on the identical internal state. */
 const POPPER_NOT_PLACED_TRANSFORM = "translate(0, -200%)";
 const POPPER_WRAPPER_SELECTOR = "[data-radix-popper-content-wrapper]";
 
@@ -55,10 +45,7 @@ export interface NotificationCenterGeometryCaps {
   readonly heightCapPx: number;
 }
 
-/** Pure viewport-driven cap computation - `min(90vw, 34rem, radix-available-
- * width)` for width and `min(70dvh, 38rem, radix-available-height)` for
- * height. Exported so tests can exercise the cap/floor arithmetic without a
- * real browser layout. */
+/** Exported so tests can exercise the cap/floor arithmetic without a real browser layout. */
 export function computeNotificationCenterGeometryCaps(input: {
   readonly viewportWidthPx: number;
   readonly viewportHeightPx: number;
@@ -153,33 +140,17 @@ function readCurrentCaps(
 }
 
 /**
- * Owns the T04 stable-shell geometry lifecycle: a one-time pre-paint
- * measurement gated on Radix's actual placement (never a bounding-rect
- * viewport heuristic - the Popper measuring-phase sentinel can read as
- * in-viewport under a transformed ancestor), frozen for the open session,
- * and a shrink-only re-clamp on viewport changes. Once locked, no content
- * update re-enters the measurement path - the placement watcher
- * short-circuits on every call after the first successful measurement, and
- * the shrink path only ever narrows the existing lock.
+ * One pre-paint measure gated on Radix placement, frozen for the open session, shrink-only on viewport change. After lock, content updates do not re-measure.
  */
 export function useNotificationCenterGeometry(
   input: NotificationCenterGeometryInput,
 ): NotificationCenterGeometryResult {
   const shellRef = useRef<HTMLDivElement>(null);
   const [lock, setLock] = useState<NotificationCenterGeometryLock | null>(null);
-  // Snapshot `input.isColdOpen` the instant `open` flips true, in state
-  // rather than a ref (`react-hooks/refs` forbids ref writes during render).
-  // The placement effect below only re-subscribes on `open`/this value
-  // changing, and this value itself only changes at the open transition, so
-  // the effect always closes over the state as of the transition - never a
-  // later value the host summary's arrival could push in before placement
-  // resolves.
+  // Snapshot `input.isColdOpen` the instant `open` flips true, in state rather than a ref (`react-hooks/refs` forbids ref writes during render).
+  // The placement effect below only re-subscribes on `open`/this value changing, and this value itself only changes at the open transition, so the effect always closes over the state as of the transition - never a later value the host summary's arrival could push in before placement resolves.
   const [coldOpenAtOpen, setColdOpenAtOpen] = useState(input.isColdOpen);
-  // Reset the lock the moment `open` flips to false, without a dedicated
-  // effect: React's "adjust state during render" recipe re-runs this
-  // component synchronously with the corrected state before committing, so
-  // the reset lands in the same render as the `open` transition rather than
-  // a follow-up effect pass.
+  // Reset the lock the moment `open` flips to false, without a dedicated effect: React's "adjust state during render" recipe re-runs this component synchronously with the corrected state before committing, so the reset lands in the same render as the `open` transition rather than a follow-up effect pass.
   const [wasOpen, setWasOpen] = useState(input.open);
   if (input.open !== wasOpen) {
     setWasOpen(input.open);
@@ -220,10 +191,7 @@ export function useNotificationCenterGeometry(
 
     function handlePlacementMutation(): void {
       if (wrapper === null || !isPopperWrapperPlaced(wrapper)) return;
-      // MutationObserver runs as a microtask outside React's commit call
-      // stack. Force this later placement update into the same pre-paint
-      // window; the synchronous layout-effect attempt above uses plain state
-      // because React is already committing there.
+      // MutationObserver runs as a microtask outside React's commit call stack.
       flushSync(() => {
         setLock(nextLock);
       });

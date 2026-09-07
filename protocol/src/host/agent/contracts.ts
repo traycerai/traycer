@@ -48,16 +48,6 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 
 // ─── Agent-to-agent unary surface ─────────────────────────────────────────
-//
-// `agent.create` mints a child agent (gui chat or tui agent) on behalf of
-// the sender; `agent.list` enumerates every agent record this host's epic
-// Y.Doc can see (cross-host entries included as read-only rows);
-// `agent.sendMessage` is the fire-and-forget hand-off path (no streaming -
-// any reply travels back as a separate `agent.sendMessage`);
-// `agent.getTranscript` flattens an agent's conversation into XML-tagged
-// text; and `agent.stop` halts an agent (and optionally its delegated
-// subtree). Schema docs in `agent/shared.ts` are the authority on the field
-// semantics.
 
 export const agentCreateV10 = defineRpcContract({
   method: "agent.create",
@@ -81,11 +71,7 @@ export const agentCreateV30 = defineRpcContract({
 });
 
 /**
- * A v1.0 caller's nullable `profileId` maps onto the new selection model at
- * the boundary the multi-profile decision log calls compatibility-only:
- * `null` is legacy sender inheritance (`inherit_sender`), a non-null string
- * is an explicit managed-profile pin. The response shape is unchanged
- * (same warnings list), so its upgrade is the identity.
+ * A v1.0 caller's nullable `profileId` maps onto the new selection model at the boundary the multi-profile decision log calls compatibility-only: `null` is legacy sender inheritance (`inherit_sender`), a non-null string.
  */
 export const agentCreateUpgradeV10ToV20 = defineUpgradePath<
   typeof agentCreateV10,
@@ -107,23 +93,8 @@ export const agentCreateUpgradeV10ToV20 = defineUpgradePath<
 });
 
 /**
- * Projects the frozen v2.0 request back onto the frozen v1.0 wire for an old
- * host.
- * Explicit managed and compatibility-only inherited profile selections have a
- * v1.0-representable shape (a profile-id string, or `profileId: null` meaning
- * sender inheritance). `ambient` and `last_used` fail because v1.0 cannot
- * represent their profile semantics.
- *
- * Batch-1 review correction: the original plan treated explicit `ambient` as
- * downgrade-compatible (also projecting to `profileId: null`), but frozen
- * v1.0 already gives `null` a fixed meaning - sender inheritance for a
- * same-surface/same-harness child. Silently reusing `null` for an explicit
- * ambient choice could route the new agent onto the sender's managed
- * account instead of the ambient login the caller actually asked for. Nor
- * does the legacy `"ambient"` sentinel string help: v1.0 may persist it as a
- * literal profile id, violating the runtime/persistence normalization
- * invariant (see the profile-awareness decision log's "Old-host creation
- * downgrade" row).
+ * Projects the frozen v2.0 request back onto the frozen v1.0 wire for an old host.
+ * `ambient` and `last_used` fail because v1.0 cannot represent their profile semantics.
  */
 export const agentCreateDowngradeV20ToV10 = defineDowngradePath<
   typeof agentCreateV20,
@@ -167,11 +138,7 @@ export const agentCreateDowngradeV20ToV10 = defineDowngradePath<
   downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
-/**
- * Released v2 callers did not carry a permission choice. Upgrade them with the
- * compatibility-only `null` sentinel so the host preserves a GUI sender's mode
- * (and applies the intentional full-access default for TUI->GUI creation).
- */
+/** Released v2 callers did not carry a permission choice. */
 export const agentCreateUpgradeV20ToV30 = defineUpgradePath<
   typeof agentCreateV20,
   typeof agentCreateV30
@@ -326,9 +293,6 @@ export const agentListUpgradeV1ToV2 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
-  // A v1.0 response without ACP GUI harness agents is a valid v2.0 response
-  // (they are purely additive), and the request shape is identical - both
-  // upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -366,9 +330,7 @@ export const agentListUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  // A v2.0 response without Amp agents is a valid v3.0 response (purely
-  // additive), and the request shape is identical - both upgrades are
-  // identity.
+  // A v2.0 response without Amp agents is a valid v3.0 response (purely additive), and the request shape is identical - both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -426,9 +388,7 @@ export const agentListUpgradeV3ToV4 = defineUpgradePath<
 >({
   from: { major: 3, minor: 0 },
   to: { major: 4, minor: 0 },
-  // A v3.0 response without Devin/Pi agents is a valid v4.0 response (purely
-  // additive), and the request shape is identical - both upgrades are
-  // identity.
+  // A v3.0 response without Devin/Pi agents is a valid v4.0 response (purely additive), and the request shape is identical - both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -493,9 +453,7 @@ export const agentListV50 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  // Frozen: the v1.1.8 tags shipped this line, so it must serve the v5.0
-  // harness id set rather than the live one. Before that release it pointed at
-  // the canonical schema, which is exactly how `omp` first tried to ride v5.0.
+  // Frozen: the v1.1.8 tags shipped this line, so it must serve the v5.0 harness id set rather than the live one.
   responseSchema: listAgentsResponseSchemaV50,
 });
 
@@ -505,9 +463,7 @@ export const agentListUpgradeV4ToV5 = defineUpgradePath<
 >({
   from: { major: 4, minor: 0 },
   to: { major: 5, minor: 0 },
-  // A v4.0 response without Hermes agents is a valid v5.0 response (purely
-  // additive), and the request shape is identical - both upgrades are
-  // identity.
+  // A v4.0 response without Hermes agents is a valid v5.0 response (purely additive), and the request shape is identical - both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -592,10 +548,7 @@ export const agentListV60 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 6, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  // Frozen: the v1.1.9 tags shipped this line, so it must serve the v6.0
-  // harness id set rather than the live one. Before that release it pointed at
-  // the canonical schema - the same defect that let `omp` first try to ride
-  // v5.0, one line later.
+  // Frozen: the v1.1.9 tags shipped this line, so it must serve the v6.0 harness id set rather than the live one.
   responseSchema: listAgentsResponseSchemaV60,
 });
 
@@ -605,9 +558,7 @@ export const agentListUpgradeV5ToV6 = defineUpgradePath<
 >({
   from: { major: 5, minor: 0 },
   to: { major: 6, minor: 0 },
-  // A v5.0 response without omp agents is a valid v6.0 response (purely
-  // additive), and the request shape is identical - both upgrades are
-  // identity.
+  // A v5.0 response without omp agents is a valid v6.0 response (purely additive), and the request shape is identical - both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -712,10 +663,7 @@ export const agentListV70 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 7, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  // Frozen: the v1.2.0 tags shipped this line, so it must serve the v7.0
-  // harness id set rather than the live one. Before that release it pointed at
-  // the canonical schema - the same defect that let `omp` first try to ride
-  // v5.0 and `huggingface` v6.0, one line later each time.
+  // Frozen: the v1.2.0 tags shipped this line, so it must serve the v7.0 harness id set rather than the live one.
   responseSchema: listAgentsResponseSchemaV70,
 });
 
@@ -725,12 +673,8 @@ export const agentListUpgradeV6ToV7 = defineUpgradePath<
 >({
   from: { major: 6, minor: 0 },
   to: { major: 7, minor: 0 },
-  // The request shape is identical. Parsing the response through the v7 schema
-  // default-fills `runConfig: null` on every released v6 row. Parses through
-  // the FROZEN v7.0 shape, not the live one: the target of this hop is
-  // `agentListV70`, and a hop that parses through a schema wider than its own
-  // target is how a fill silently starts producing values the target line
-  // cannot carry.
+  // The request shape is identical.
+  // Parses through the FROZEN v7.0 shape, not the live one: the target of this hop is `agentListV70`, and a hop that parses through a schema wider than its own target is how a fill silently starts producing values the.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => listAgentsResponseSchemaV70.parse(response),
 });
@@ -864,9 +808,7 @@ export const agentListUpgradeV7ToV8 = defineUpgradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 8, minor: 0 },
-  // The request shape is identical, and a v7.0 response without Reasonix
-  // agents is a valid v8.0 response (purely additive) - both upgrades are
-  // identity.
+  // The request shape is identical, and a v7.0 response without Reasonix agents is a valid v8.0 response (purely additive) - both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1029,9 +971,7 @@ export const agentStopV10 = defineRpcContract({
 });
 
 /**
- * Brand-new v1.0 method - an old host simply lacks it, so a caller gets
- * per-call "host too old, upgrade" guidance instead of a fatal handshake
- * mismatch (see `degrade: { kind: "unsupported" }` in `registry.ts`).
+ * Brand-new v1.0 method - an old host simply lacks it, so a caller gets per-call "host too old, upgrade" guidance instead of a fatal handshake mismatch (see `degrade: { kind: "unsupported" }` in `registry.ts`).
  */
 export const agentForkV10 = defineRpcContract({
   method: "agent.fork",

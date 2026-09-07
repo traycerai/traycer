@@ -31,19 +31,7 @@ import {
 const MESSAGE_ROW_SELECTOR = "[data-message-id]";
 const LARGE_MESSAGE_COUNT = 400;
 
-/**
- * Review round 1, finding 2: counts ROW-BOUNDARY renders - i.e. how many
- * times `ChatTimelineRow` re-entered this child boundary - NOT executions of
- * the real memoized `ChatMessageImpl` body. This wrapper is intentionally
- * un-memoized, so it always re-runs (and increments the counter) whenever
- * its parent `ChatTimelineRow` re-renders; the wrapped `actual.ChatMessage`
- * (still the real `memo(ChatMessageImpl)`) could in principle still bail
- * internally even when this wrapper re-runs. That's the right granularity
- * for pinning the context-propagation/external-store fanout bug (a
- * `ChatTimelineRow`-level defect), but it does NOT prove anything about
- * `ChatMessageImpl`'s own render cost - see the `getMessageActions`-based
- * assertions elsewhere in this file for independent row-boundary evidence.
- */
+/** This wrapper is intentionally un-memoized, so it always re-runs (and increments the counter) whenever its parent `ChatTimelineRow` re-renders; the wrapped `actual.ChatMessage` (still the real `memo(ChatMessageImpl)`) could in principle still bail internally even when this wrapper re-runs. That's the right granularity for pinning the context-propagation/external-store fanout bug (a `ChatTimelineRow`-level defect), but it does NOT prove anything about `ChatMessageImpl`'s own render cost - see the `getMessageActions`-based assertions elsewhere in this file for independent row-boundary evidence. */
 const renderCounts = new Map<string, number>();
 
 vi.mock("@/components/chat/chat-message", async (importOriginal) => {
@@ -96,11 +84,7 @@ function mountedMessageRows(container: HTMLElement): NodeListOf<Element> {
   return container.querySelectorAll(MESSAGE_ROW_SELECTOR);
 }
 
-/** Ticket 23 panel-resize tests: a distinct-position rect, overriding the
- *  shared `installLegendListViewportMetrics()` shim's uniform (0,0)-origin
- *  stub on a specific element so visible vs. off-screen rows are
- *  distinguishable (see `chat-timeline-panel-resize-snapshot.test.ts` for
- *  the same rationale on the pure module). */
+/** a distinct-position rect, overriding the shared `installLegendListViewportMetrics()` shim's uniform (0,0)-origin stub on a specific element so visible vs. off-screen rows are distinguishable (see `chat-timeline-panel-resize-snapshot.test.ts` for the same rationale on the pure module). */
 function rectOf(top: number, height: number): DOMRect {
   return {
     top,
@@ -197,9 +181,7 @@ function renderTimeline(options: RenderTimelineOptions) {
   };
 }
 
-/** Render counts (from the `ChatMessage` probe above) for every id in
- *  `messages`, snapshotted as a plain map so two snapshots can be diffed by
- *  value without aliasing the live `renderCounts` map. */
+/** Render counts (from the `ChatMessage` probe above) for every id in `messages`, snapshotted as a plain map so two snapshots can be diffed by value without aliasing the live `renderCounts` map. */
 function snapshotRenderCounts(
   messages: ReadonlyArray<ChatMessageModel>,
 ): Map<string, number> {
@@ -303,9 +285,8 @@ describe("ChatTimeline", () => {
     const userRenderCountBefore = renderCounts.get("message-2") ?? 0;
     const streamingRenderCountBefore = renderCounts.get("message-3") ?? 0;
 
-    // Simulate a store rebuild: new array, new objects; only the streaming
-    // message's content differs. Structural sharing + memo should keep
-    // earlier rows from remounting / re-rendering.
+    // Simulate a store rebuild: new array, new objects; only the streaming message's content differs.
+    // Structural sharing + memo should keep earlier rows from remounting / re-rendering.
     const nextMessages: ReadonlyArray<ChatMessageModel> = [
       { ...baseMessages[0] },
       { ...baseMessages[1] },
@@ -436,19 +417,8 @@ describe("ChatTimeline", () => {
     expect(screen.getByLabelText("Edit message")).not.toBeNull();
   });
 
-  // Ticket 17 (chat-messages.tsx review round 2, finding 2 residual):
-  // establishes the LIBRARY-LEVEL contract the fix depends on - a row's
-  // real measured size CAN change under the SAME `data` array with NO
-  // scroll event at all (an activity-group disclosure collapsing/expanding
-  // is exactly this shape: that open/closed state lives outside `messages`,
-  // so LegendList sees no data change and jsdom's `MockResizeObserver` never
-  // fires on its own). `setItemSize` is the ref-exposed imperative path
-  // production would only reach via a real ResizeObserver (a no-op in this
-  // test environment) - calling it directly here still runs through
-  // LegendList's own `applyItemSize`/`onItemSizeChanged` pipeline for real,
-  // which is the part `chat-messages.tsx`'s `onTimelineItemSizeChanged` (not
-  // exercised by this file - `ChatMessages` does not expose `chatTimelineRef`
-  // to tests) depends on being reachable at all.
+  // establishes the LIBRARY-LEVEL contract the fix depends on - a row's real measured size CAN change under the SAME `data` array with NO scroll event at all (an activity-group disclosure collapsing/expanding is exactly this shape: that open/closed state lives outside `messages`, so LegendList sees no data change and jsdom's `MockResizeObserver` never fires on its own).
+  // `setItemSize` is the ref-exposed imperative path production would only reach via a real ResizeObserver (a no-op in this test environment) - calling it directly here still runs through LegendList's own `applyItemSize`/`onItemSizeChanged` pipeline for real, which is the part `chat-messages.tsx`'s `onTimelineItemSizeChanged` (not exercised by this file - `ChatMessages` does not expose `chatTimelineRef` to tests) depends on being reachable at all.
   it("onItemSizeChanged fires for a real size delta on an already-measured row, with no scroll and no data change", async () => {
     const messages: ChatMessageModel[] = [
       makeMessage(0, "user"),
@@ -472,9 +442,8 @@ describe("ChatTimeline", () => {
   });
 
   it("keeps Legend List as the sole scroll owner on the app-wide compact scrollbar theme", () => {
-    // Chat previously set data-native-scrollbar to opt out of index.css's
-    // 4px transparent-track theme. That left the OS gutter overlapping the
-    // absolute lower composer; the transcript now uses the global theme.
+    // Chat previously set data-native-scrollbar to opt out of index.css's 4px transparent-track theme.
+    // That left the OS gutter overlapping the absolute lower composer; the transcript now uses the global theme.
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
     const { getByTestId } = renderTimeline({
       messages,
@@ -512,14 +481,8 @@ describe("ChatTimeline", () => {
     expect(spacerClasses(container)).toEqual(["h-3 sm:h-4", "h-3 sm:h-4"]);
   });
 
-  // Ticket 24 (painted-chat lifecycle audit, finding 5): the shared row
-  // context previously carried `navigationHighlightedMessageId` directly, so
-  // React's context propagation re-rendered EVERY mounted row - bypassing
-  // each row's own `memo` bailout entirely (see the render-count probe's own
-  // doc comment above for exactly what "renders" measures here: row-
-  // boundary commits, not `ChatMessageImpl` body executions specifically).
-  // Pin: moving the highlight renders only the old and new highlighted
-  // rows; clearing it renders only the previously highlighted row.
+  // the shared row context previously carried `navigationHighlightedMessageId` directly, so React's context propagation re-rendered EVERY mounted row - bypassing each row's own `memo` bailout entirely (see the render-count probe's own doc comment above for exactly what "renders" measures here: row- boundary commits, not `ChatMessageImpl` body executions specifically).
+  // Pin: moving the highlight renders only the old and new highlighted rows; clearing it renders only the previously highlighted row.
   it("isolates navigation-highlight changes to only the affected rows", async () => {
     const messageCount = 8;
     const messages = makeMessages(messageCount);
@@ -576,20 +539,7 @@ describe("ChatTimeline", () => {
     );
   }
 
-  /**
-   * Review round 1, finding 1: owns messages/highlight as REAL React state
-   * (mirroring how chat-messages.tsx drives `ChatTimeline`) and exposes the
-   * raw setters, so timing-sensitive tests can trigger updates WITHOUT going
-   * through Testing Library's `rerender` - `rerender`'s internal `act()`
-   * (confirmed empirically, including with `IS_REACT_ACT_ENVIRONMENT`
-   * disabled and with `flushSync`) fully settles BOTH `useLayoutEffect` AND
-   * `useEffect` synchronously in this React version, which hides the exact
-   * regression finding 1 covers. Calling the exposed setters directly, with
-   * the act-environment flag OFF (see `withActEnvironmentDisabled`), lets a
-   * PLAIN state update go through React's ordinary (non-test) scheduling,
-   * where a passive effect's flush is a real, separately-scheduled task
-   * instead of something `act()` eagerly drains for you.
-   */
+  /** Calling the exposed setters directly, with the act-environment flag OFF (see `withActEnvironmentDisabled`), lets a PLAIN state update go through React's ordinary (non-test) scheduling, where a passive effect's flush is a real, separately-scheduled task instead of something `act()` eagerly drains for you. */
   function HighlightTimingHarness({
     initialMessages,
     initialHighlight,
@@ -608,9 +558,7 @@ describe("ChatTimeline", () => {
 
     useEffect(() => {
       onExposeSetters({ setMessages, setHighlight });
-      // Setter identities from useState never change - registering once is
-      // enough, and re-running on every render would re-expose (harmlessly)
-      // identical functions anyway.
+      // Setter identities from useState never change - registering once is enough, and re-running on every render would re-expose (harmlessly) identical functions anyway.
     }, [onExposeSetters]);
 
     return (
@@ -634,9 +582,7 @@ describe("ChatTimeline", () => {
     readonly setHighlight: (id: string | null) => void;
   }
 
-  /** Runs `fn` with React's act-environment detection OFF, so a plain state
-   *  update inside `fn` is scheduled the way it would be in production, not
-   *  the eagerly-flushed way `act()` schedules it for test determinism. */
+  /** Runs `fn` with React's act-environment detection OFF, so a plain state update inside `fn` is scheduled the way it would be in production, not the eagerly-flushed way `act()` schedules it for test determinism. */
   async function withActEnvironmentDisabled(
     fn: () => Promise<void>,
   ): Promise<void> {
@@ -652,30 +598,13 @@ describe("ChatTimeline", () => {
     }
   }
 
-  /** One virtual browser turn - the queued macrotask plus the following
-   *  animation frame. This is the exact window where a
-   *  `useLayoutEffect`-published store settles (verified against a toy
-   *  two-component external-store harness) but a `useEffect`-published one
-   *  has not yet, when act-environment is off. Keep this outside `act`: the
-   *  finding deliberately exercises React's normal asynchronous scheduling. */
+  /** One virtual browser turn - the queued macrotask plus the following animation frame. This is the exact window where a `useLayoutEffect`-published store settles (verified against a toy two-component external-store harness) but a `useEffect`-published one has not yet, when act-environment is off. */
   async function tickOneMacrotask(): Promise<void> {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(16);
   }
 
-  // Finding 1's "row mounting in the stale window" sub-case was investigated
-  // specifically for a row that mounts because `messages` GROWS (a new
-  // message arrives) in the same update as a highlight change. Empirically
-  // (verified with fine-grained per-tick polling, both against this fix and
-  // against a reverted `useEffect` mutation), LegendList's OWN settling work
-  // for a newly-added data item takes at least one macrotask regardless of
-  // which effect type publishes the highlight - by the time the new row's
-  // component renders for the first time, the store has already settled
-  // either way, so that specific construction cannot discriminate the two
-  // implementations in this component. The setter-direction pin below
-  // exercises the same underlying mechanism (a real, non-`rerender`-routed
-  // update publishing a NEW highlight id) on already-mounted rows, which the
-  // clear-direction pin right after it confirms DOES discriminate.
+  // Empirically (verified with fine-grained per-tick polling, both against this fix and against a reverted `useEffect` mutation), LegendList's OWN settling work for a newly-added data item takes at least one macrotask regardless of which effect type publishes the highlight - by the time the new row's component renders for the first time, the store has already settled either way, so that specific construction cannot discriminate the two implementations in this component.
   it("(finding 1) setting a highlight via a real update settles within one macrotask - no stale un-highlighted paint", async () => {
     const messages = makeMessages(3);
     let setters: HighlightTimingSetters | null = null;
@@ -972,20 +901,16 @@ describe("ChatTimeline", () => {
       return counts;
     }
 
-    // Mount settled: every row has been rendered at least once through the
-    // shared-context path (getMessageActions is invoked from ChatTimelineRow
-    // during render). Snapshot those counts before the highlight-only prop
-    // change so we can prove unrelated rows do not re-enter that path.
+    // Mount settled: every row has been rendered at least once through the shared-context path (getMessageActions is invoked from ChatTimelineRow during render).
+    // Snapshot those counts before the highlight-only prop change so we can prove unrelated rows do not re-enter that path.
     const baselineCalls = callCountByMessageId();
     for (const message of messages) {
       expect(baselineCalls.get(message.id) ?? 0).toBeGreaterThan(0);
     }
     getMessageActions.mockClear();
 
-    // Same messages array reference; only the highlight prop changes. The
-    // ChatTimelineRowCtx object must stay identity-stable (store is
-    // useState-stable), so non-highlighted rows must not re-render and
-    // therefore must not re-invoke getMessageActions.
+    // Same messages array reference; only the highlight prop changes.
+    // The ChatTimelineRowCtx object must stay identity-stable (store is useState-stable), so non-highlighted rows must not re-render and therefore must not re-invoke getMessageActions.
     rerenderMessages(messages, "message-3");
     await flushFrame();
 
@@ -1034,9 +959,7 @@ describe("ChatTimeline", () => {
 
     expect(mountedMessageRows(container).length).toBe(0);
     expect(() => {
-      // After unmount the store is unreachable from React; this only asserts
-      // the unmount itself left the test environment intact for subsequent
-      // mounts (covered by later tests / afterEach cleanup).
+      // After unmount the store is unreachable from React; this only asserts the unmount itself left the test environment intact for subsequent mounts (covered by later tests / afterEach cleanup).
       renderTimeline({
         messages,
         navigationHighlightedMessageId: "message-0",
@@ -1181,9 +1104,7 @@ describe("ChatTimeline", () => {
       row.getBoundingClientRect = () => rectOf(0, 100);
 
       const stop = beginPanelResizeInteraction(1, () => undefined);
-      // Only ONE capture ran for the currently-mounted timeline - the first
-      // (unmounted) instance's participant was unregistered, not left
-      // dangling to double-mark or throw against detached DOM.
+      // Only ONE capture ran for the currently-mounted timeline - the first (unmounted) instance's participant was unregistered, not left dangling to double-mark or throw against detached DOM.
       expect(row.getAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe("true");
       stop();
     });
@@ -1201,20 +1122,12 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
   });
 
   it("pins maintainScrollAtEndThreshold=0, MVCP maintenance, and the library's own maintainScrollAtEnd permanently disabled", async () => {
-    // Fixup (callback-synchronous-follow): the library's own
-    // `maintainScrollAtEnd` is NEVER passed at all anymore - not even
-    // conditionally - since every one of its call sites (data/item/footer/
-    // layout) already no-ops when this prop is falsy. Bottom-follow is
-    // reimplemented in `chat-timeline-follow-latch.ts` and driven
-    // imperatively; see that module's own real-LegendList integration
-    // coverage for the actual follow/detach behavior this enables.
+    // Bottom-follow is reimplemented in `chat-timeline-follow-latch.ts` and driven imperatively; see that module's own real-LegendList integration coverage for the actual follow/detach behavior this enables.
     renderTimeline({ messages: makeMessages(6) });
     await settleLegendList();
     expect(legendListPolicyProps.last).not.toBeNull();
     expect(legendListPolicyProps.last?.maintainScrollAtEndThreshold).toBe(0);
-    // MVCP's size channel is unconditional; the data channel rides the key
-    // sequence and is off for a settled transcript - see the prop's own
-    // comment, and the two cases below for each arm.
+    // MVCP's size channel is unconditional; the data channel rides the key sequence and is off for a settled transcript - see the prop's own comment, and the two cases below for each arm.
     expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
       data: false,
       size: true,

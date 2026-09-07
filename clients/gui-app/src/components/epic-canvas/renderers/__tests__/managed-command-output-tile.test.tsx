@@ -23,20 +23,12 @@ import {
 } from "@/stores/settings/settings-store";
 import type { StreamMethodSupportSource } from "@/lib/host/stream-runtime-context";
 
-/**
- * The output window (`UI.md` §4): one interleaved timeline with timestamps,
- * opened at the tail, following live output until the human scrolls away, and
- * replaced by a single terminal notice once the command it watches is gone.
- */
 
 const reachability = vi.hoisted<{ value: string }>(() => ({
   value: "reachable",
 }));
 
-// Two hosts, deliberately: the app's DEFAULT host (whichever tab happens to
-// be active) and the host THIS tile is bound to, which a tab keeps for life
-// and which can be a different machine on a different version. The tile must
-// read only the second one.
+// The tile must read only the second one.
 const defaultHostSupport = vi.hoisted<{ value: StreamMethodSupport }>(() => ({
   value: "supported",
 }));
@@ -92,17 +84,13 @@ vi.mock(
 );
 
 /**
- * The value an answered configure write derived for this command (null: none
- * newer than the stream). The details row must read the SAME derivation the
- * switch beside it does, or the two disagree until the stream catches up.
+ * The details row must read the SAME derivation the switch beside it does, or the two disagree until the stream catches up.
  */
 const derivedRelaunch: { value: boolean | null } = { value: null };
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
-  // The app-default reader. Every test below exercises the bound-host path
-  // instead; a test that read THIS value would prove nothing about the tile,
-  // which must never consult it.
+  // Every test below exercises the bound-host path instead; a test that read THIS value would prove nothing about the tile, which must never consult it.
   useStreamMethodSupport: () => defaultHostSupport.value,
   // Faithful to the real `useStreamMethodSupportFor`: a null client (no
   // session yet) answers null, otherwise the client's own negotiated support.
@@ -113,11 +101,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSchemaVersion: () => null,
 }));
 
-// The socket is the boundary: the stub stream factory below stands in for the
-// whole transport, so this opener is never reached.
-//
-// Hoisted to ONE instance so it is referentially stable across renders, as the
-// real hook is — see `lib/registries/__tests__/chat-session-registry.test.ts`.
+// The socket is the boundary: the stub stream factory below stands in for the whole transport, so this opener is never reached.
 const refuseDurableTransport = vi.hoisted(() => () => {
   throw new Error("no durable transport in tests");
 });
@@ -179,10 +163,8 @@ let sentFrames: ManagedCommandSubscribeOutputClientFrame[];
 let restoreLayoutGeometry: () => void;
 
 /**
- * `factoryCalls` lets a Retry test prove a fresh stream was actually opened
- * rather than the old one quietly resuming. `emit` always answers the LATEST
- * callbacks, so a stale reference captured before a retry is never what a
- * later `emit()` call reaches.
+ * `factoryCalls` lets a Retry test prove a fresh stream was actually opened rather than the old one quietly resuming.
+ * `emit` always answers the LATEST callbacks, so a stale reference captured before a retry is never what a later `emit()` call reaches.
  */
 function installOutputStub(): {
   readonly emit: () => ManagedCommandOutputStreamCallbacks;
@@ -302,11 +284,7 @@ const STREAM_FAILED: FatalErrorDetails = {
   upgradeGuidance: null,
 };
 
-/**
- * jsdom has no layout, so the scroll geometry a follow-mode decision reads has
- * to be stated outright. `scrollHeight` is installed as a getter over a box the
- * test owns so individual interactions can change the viewport geometry.
- */
+/** jsdom has no layout, so the scroll geometry a follow-mode decision reads has to be stated outright. */
 function setScrollGeometry(
   element: HTMLElement,
   geometry: { scrollTop: number; scrollHeight: number; clientHeight: number },
@@ -334,9 +312,7 @@ function rowChannels(): string[] {
 }
 
 beforeEach(() => {
-  // TanStack Virtual reads offset geometry synchronously when the scroll
-  // element attaches. jsdom's permanent 0x0 default would otherwise describe
-  // a genuinely invisible viewport and correctly produce no virtual rows.
+  // TanStack Virtual reads offset geometry synchronously when the scroll element attaches. jsdom's permanent 0x0 default would otherwise describe a genuinely invisible viewport and correctly produce no virtual rows.
   const heightSpy = vi
     .spyOn(HTMLElement.prototype, "offsetHeight", "get")
     .mockImplementation(function (this: HTMLElement) {
@@ -364,11 +340,6 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -429,10 +400,7 @@ describe("managed-command output window", () => {
     // tinted and a lifecycle record can be set apart without re-parsing text.
     expect(rowChannels()).toEqual(["lifecycle", "stdout", "stderr"]);
     expect(screen.getByText("warning: slow build")).not.toBeNull();
-    // Timestamps are on by default (§4) and carry seconds - a 3am restart is
-    // matched against other logs by time of day, not by minute. Asserted by
-    // shape rather than by a literal, which would move with the runner's
-    // locale and time zone.
+    // Asserted by shape rather than by a literal, which would move with the runner's locale and time zone.
     expect(
       screen.getAllByTestId(/^managed-command-output-time-/)[0].textContent,
     ).toMatch(/\d{1,2}:\d{2}:\d{2}/);
@@ -455,9 +423,7 @@ describe("managed-command output window", () => {
     expect(mountedRows.length).toBeGreaterThan(0);
     expect(mountedRows.length).toBeLessThan(100);
     expect(virtualizerConfig.useFlushSync).toBe(false);
-    // A fresh window first reaches an estimated tail. End anchoring is what
-    // keeps it there when wrapped rows are measured and enlarge the document;
-    // without this option the viewport can settle in the middle of the log.
+    // End anchoring is what keeps it there when wrapped rows are measured and enlarge the document; without this option the viewport can settle in the middle of the log.
     expect(virtualizerConfig.anchorTo).toBe("end");
   });
 
@@ -492,9 +458,7 @@ describe("managed-command output window", () => {
 
     fireEvent.click(screen.getByTestId("managed-command-output-details"));
 
-    // The log spans every run of this shell, so these describe the shell as it
-    // stands now rather than whatever produced the lines being read - which is
-    // exactly why the transcript's start card freezes its own copy instead.
+    // The log spans every run of this shell, so these describe the shell as it stands now rather than whatever produced the lines being read - which is exactly why the transcript's start card freezes its own copy instead.
     expect(
       screen.getByTestId("managed-command-output-details-command").textContent,
     ).toBe("tail -f deploy.log");
@@ -514,10 +478,8 @@ describe("managed-command output window", () => {
   });
 
   it("shows the relaunch value an answered write derived, not the stale streamed one", () => {
-    // A configure write answered "on" before the stream carried its status
-    // frame (or while the stream is down). The switch beside the popover
-    // already shows "Relaunches"; the row must agree rather than read the
-    // stale prop.
+    // A configure write answered "on" before the stream carried its status frame (or while the stream is down).
+    // The switch beside the popover already shows "Relaunches"; the row must agree rather than read the stale prop.
     derivedRelaunch.value = true;
     try {
       const stub = installOutputStub();
@@ -592,9 +554,8 @@ describe("managed-command output window", () => {
     expect(
       screen.getByTestId(`managed-command-delete-${COMMAND.id}`),
     ).toBeTruthy();
-    // Clearance is vertical, not a reserved lane: every line gets the full
-    // width of the pane, and the log begins below the cluster so nothing sits
-    // under it at rest. What scrolls up passes behind the scrim instead.
+    // Clearance is vertical, not a reserved lane: every line gets the full width of the pane, and the log begins below the cluster so nothing sits under it at rest.
+    // What scrolls up passes behind the scrim instead.
     expect(view.getAttribute("class")).not.toContain("pr-[min(30%,12rem)]");
     expect(view.getAttribute("class")).toContain("pt-9.5");
     expect(screen.getByTestId("managed-command-output-scrim")).not.toBeNull();
@@ -739,9 +700,7 @@ describe("managed-command output window", () => {
       stub.emit().onDeleted();
     });
 
-    // Whatever this window had read is not the history any more - the host
-    // just destroyed that, and a ghost of it would contradict the deleted-
-    // shell model everywhere else.
+    // Whatever this window had read is not the history any more - the host just destroyed that, and a ghost of it would contradict the deleted- shell model everywhere else.
     expect(screen.queryByText("last words")).toBeNull();
     expect(screen.queryByRole("log")).toBeNull();
   });
@@ -798,9 +757,7 @@ describe("managed-command output window", () => {
     const banner = screen.getByTestId("managed-command-output-availability");
     expect(banner.getAttribute("data-availability")).toBe("stale");
     expect(screen.getByText("Reconnecting…")).not.toBeNull();
-    // The lines already read stay readable while the socket is down, and the
-    // shell's own controls stay in reach - a broken transport is not a claim
-    // about the shell.
+    // The lines already read stay readable while the socket is down, and the shell's own controls stay in reach - a broken transport is not a claim about the shell.
     expect(screen.getByText("watching src/")).not.toBeNull();
     expect(
       screen.getByTestId(`managed-command-stop-${COMMAND_ID}`),
@@ -837,9 +794,7 @@ describe("managed-command output window", () => {
   });
 
   it("reads the bound host's capability, never the app's default host", () => {
-    // The app default claims full support; only the BOUND host - the one
-    // this tab is actually pinned to - says otherwise, and that is the
-    // reading that must win.
+    // The app default claims full support; only the BOUND host - the one this tab is actually pinned to - says otherwise, and that is the reading that must win.
     defaultHostSupport.value = "supported";
     boundHostSupport.value = "unsupported";
     installOutputStub();
@@ -920,9 +875,7 @@ describe("managed-command output window", () => {
     // Retry tears the old store down and opens a brand new stream - not a
     // reconnect on the one that just failed.
     expect(stub.factoryCalls()).toBe(2);
-    // The fresh stream has no snapshot yet, so the window is back to its
-    // centred connecting panel - not a banner over the failed stream's lines,
-    // which are gone with it.
+    // The fresh stream has no snapshot yet, so the window is back to its centred connecting panel - not a banner over the failed stream's lines, which are gone with it.
     const reopened = screen.getByTestId("managed-command-output-availability");
     expect(reopened.getAttribute("data-availability")).toBe("bootstrapping");
     expect(reopened.getAttribute("data-phase")).toBe("connecting");
@@ -942,9 +895,7 @@ describe("managed-command output window", () => {
     // nothing to keep in view yet, and a top strip reads as chrome.
     expect(screen.queryByRole("log")).toBeNull();
     expect(screen.getByText("Connecting…")).not.toBeNull();
-    // The panel announces itself: queried by its live-region role, not by a
-    // test hook. (`status` is not a name-from-content role, so the visible
-    // copy is asserted separately rather than as an accessible name.)
+    // The panel announces itself: queried by its live-region role, not by a test hook. (`status` is not a name-from-content role, so the visible copy is asserted separately rather than as an accessible name.)
     const connecting = screen.getByRole("status");
     expect(connecting.getAttribute("data-availability")).toBe("bootstrapping");
     expect(connecting.getAttribute("data-phase")).toBe("connecting");
@@ -1026,11 +977,5 @@ describe("managed-command output window", () => {
     expect(sentFrames).toHaveLength(1);
   });
 
-  // S5's property - `checking` and `host-starting` render a WORDED,
-  // phase-named, bounded wait rather than a bare endless spinner - is owned
-  // by the availability notice since the #1149 merge, and is pinned above by
-  // "names the host-directory wait by phase" / "names the host-process wait
-  // the same way the chat's own banner does". `TileHostLoadState` covers the
-  // reachable host's LOAD window (the cases earlier in this file), below the
-  // availability gate.
+    // S5's property - `checking` and `host-starting` render a WORDED, phase-named, bounded wait rather than a bare endless spinner - is owned by the availability notice since the #1149 merge, and is pinned above by "names the host-directory wait by phase" / "names the host-process wait the same way the chat's own banner does".
 });

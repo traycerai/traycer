@@ -16,12 +16,7 @@ interface StartTerminalSessionMutationContext {
   readonly hostId: string | null;
 }
 
-/**
- * Prepares a terminal-agent launch via the host-side adapter. New agents
- * pass `harnessSessionId: null`; reopened agents pass their persisted id
- * back so the adapter can rebuild any dynamic launch state needed for the
- * same logical session.
- */
+/** Prepares a terminal-agent launch via the host-side adapter. */
 export function useAgentStartTerminalSession(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<

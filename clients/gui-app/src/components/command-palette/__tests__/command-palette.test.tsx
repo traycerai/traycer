@@ -100,9 +100,8 @@ describe("<CommandPalette />", () => {
       useCommandPaletteStore.getState().setOpen(true);
     });
     expect(await screen.findByTestId("command-palette-list")).not.toBeNull();
-    // Nav source always emits Open App Settings on a
-    // non-`/settings` route; assert it renders as a smoke test
-    // that sources are wired.
+    // Nav source always emits Open App Settings on a non-`/settings` route; assert it renders as a smoke test that
+    // sources are wired.
     expect(await screen.findByText("Open App Settings")).not.toBeNull();
   });
 

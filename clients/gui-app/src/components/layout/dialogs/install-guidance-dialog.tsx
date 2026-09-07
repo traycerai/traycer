@@ -16,12 +16,8 @@ export interface InstallGuidanceDialogProps {
   readonly guidance: DesktopAppUpdateGuidance;
 }
 
-/**
- * Shown instead of the restart-to-install gesture when the running install
- * can't apply the downloaded update automatically (Linux deb/rpm on WSL, or an
- * install the package manager doesn't own at this path) - the update is already
- * downloaded, so this is a "run one command" hand-off, not a dead end.
- */
+/** Shown instead of the restart-to-install gesture when the running install can't apply the downloaded update
+ * automatically (Linux deb/rpm on wsl, or an install the package manager doesn't own at this path). */
 export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
   const { open, onOpenChange, guidance } = props;
   const openLink = useOpenLink();

@@ -1,19 +1,4 @@
-// The shared headless-Chrome launcher for the browser regression drivers:
-// all four CI-gated scripts (see `run-tests.ts`) plus `toast-over-modal-
-// hittest.mjs`. The two manual instruments (`window-host-modal-alignment-
-// browser.mjs`, `host-boot-family-gallery-browser.mjs`) still carry their own
-// standalone launchers.
-//
-// Each driver used to carry its own copy of "find Chrome, spawn it, wait for
-// DevTools", and the copies drifted: only one of them honoured `CHROME_BIN`,
-// only one retried a cold start, and the rest killed the browser PID alone
-// and left its renderers and crashpad handlers behind. The hardening below
-// was written for `diff-edit-browser-regression.mjs` (OSS #1552) after a CI
-// runner had to reap exactly that orphan pile; it lives here so a fix lands
-// once instead of five times.
-//
-// Consumers own everything downstream of the DevTools endpoint (CDP client,
-// fixtures, assertions) - this module owns only the process.
+// Shared headless-Chrome launcher for the CI-gated browser drivers. This module owns only the process; consumers own everything downstream of DevTools.
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, rm } from "node:fs/promises";
@@ -21,12 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-/**
- * Resolves a Chrome/Chromium executable, preferring `CHROME_BIN`.
- *
- * `purpose` names the caller in the failure message, which is the only thing
- * that differs between drivers.
- */
+/** Resolve Chrome/Chromium, preferring CHROME_BIN. purpose names the caller in the failure message. */
 export async function findChrome(purpose) {
   const candidates = [
     process.env.CHROME_BIN,
@@ -51,30 +31,7 @@ export async function findChrome(purpose) {
   );
 }
 
-/**
- * Launches headless Chrome and waits for its DevTools endpoint, retrying the
- * whole spawn on timeout.
- *
- * A cold CI runner has been observed to take Chrome past the 30s DevTools
- * deadline outright (its FIRST stderr line arrived 21s after spawn), and a
- * single flat deadline makes that a hard failure. A retry only helps when it
- * starts clean, so each attempt gets a fresh profile directory, and a
- * timed-out attempt's whole process GROUP is terminated and verified gone
- * (see `terminateProcessTree`) and its profile removed before the next
- * spawn - otherwise the retry inherits a locked profile plus the previous
- * attempt's crashpad children, which is exactly the orphan pile the runner
- * had to reap. `detached: true` is what makes that possible: it puts Chrome
- * at the head of its own process group, so renderers and crashpad handlers
- * are addressable together as one negative-PGID signal instead of only the
- * browser PID.
- *
- * The debugging port is `0` and the real endpoint is read back off Chrome's
- * stderr: a port picked in advance is only free until Chrome gets round to
- * binding it, and on a retry it is still held by the attempt that just died.
- *
- * `profilePrefix` is the `mkdtemp` prefix for this driver's profile
- * directories, so a stray temp dir names the driver that leaked it.
- */
+/** Launch headless Chrome and wait for DevTools, retrying the whole spawn on timeout. Each attempt gets a fresh profile; terminate the timed-out process group first. Port is `0`; read the endpoint from stderr. */
 export async function launchChromeWithDevTools(chromePath, profilePrefix) {
   const chromeEnv = { ...process.env };
   delete chromeEnv.DBUS_SESSION_BUS_ADDRESS;
@@ -144,16 +101,7 @@ export async function launchChromeWithDevTools(chromePath, profilePrefix) {
 }
 
 /**
- * Terminates a detached child's whole process TREE, with a bounded wait.
- *
- * The child is spawned `detached`, so it leads its own process group and its
- * descendants (Chrome's renderers and crashpad handlers, which survive a
- * plain parent kill - the CI runner had to reap exactly that pile) are all
- * addressable as one negative-PGID signal. SIGTERM first (Chrome ignores it
- * during early startup), a 2s grace, then SIGKILL to the group, then a
- * BOUNDED verification that no group member remains. A tree that somehow
- * survives SIGKILL fails loudly rather than letting a retry - or the final
- * cleanup - proceed over a half-dead tree.
+ * Kill a detached child's process group: SIGTERM, 2s grace, SIGKILL, then fail if any member remains.
  */
 export async function terminateProcessTree(child) {
   const groupId = child.pid;

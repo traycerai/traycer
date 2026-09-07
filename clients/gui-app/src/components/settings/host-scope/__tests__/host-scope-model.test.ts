@@ -14,26 +14,12 @@ import {
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
+/** The account axis the wire no longer carries: `hostListItemToDirectoryEntry` stamps it onto every entry at
+ * projection time. These fixtures describe an entitled account unless a case says otherwise. */
 const PLAN_ALLOWS_REMOTE = true;
 const PLAN_GATED = false;
 
-/**
- * `connectable` is the model's answer to "can this row be administered", and
- * every downstream decision leans on it: the scope's status machine, whether a
- * transient client is built, and whether the Add-host dialog announces a
- * machine as ready to run agents.
- *
- * It therefore has to agree with the layer that actually opens the socket. The
- * repository's canonical rule lives in `dialableHostEndpoint` /
- * `hostTransportKey`, and the case that separates them is a directory entry
- * that still carries a `websocketUrl` while its status has gone
- * `unavailable` — a stale address left behind by a host that went away.
- */
+/** The repository's canonical rule lives in `dialableHostEndpoint` / `hostTransportKey`. */
 
 function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   return {
@@ -103,10 +89,8 @@ describe("buildHostScopeOptions connectable", () => {
   });
 
   it("refuses an unavailable entry even when it still carries a URL", () => {
-    // The regression: URL-only said yes here, so the scope reached `ready` and
-    // mounted host-RPC panels against a machine nothing could dial. The client
-    // builder does not re-check status, so nothing downstream would have
-    // caught it.
+    // The regression: URL-only said yes here, so the scope reached `ready` and mounted host-RPC panels against a
+    // machine nothing could dial.
     expect(
       connectableFor(entry({ transportDialability: "not-dialable" })),
     ).toBe(false);
@@ -146,8 +130,8 @@ describe("buildHostScopeOptions connectable", () => {
   });
 
   it("does not let the remote plan gate touch this machine", () => {
-    // The gate is about the relay, so a local host must stay administrable on
-    // any plan — otherwise a free-plan user loses their own recovery surface.
+    // The gate is about the relay, so a local host must stay administrable on any plan - otherwise a free-plan
+    // user loses their own recovery surface.
     expect(
       buildOne({
         entry: entry({ hostId: "host-a", kind: "local" }),
@@ -159,10 +143,7 @@ describe("buildHostScopeOptions connectable", () => {
 });
 
 describe("buildHostScopeOptions planRestricted", () => {
-  // `connectable: false` alone erased WHY, and consumers rendered a billing
-  // limit as "unreachable" — sending people debugging their network when the
-  // remedy is an upgrade. `planRestricted` is true exactly when the plan gate
-  // is the ONLY thing costing the route.
+  // `planRestricted` is true exactly when the plan gate is the only thing costing the route.
   it("does not synthesize a plan restriction from client subscription state", () => {
     const option = buildOne({
       entry: entry({ kind: "remote" }),
@@ -235,15 +216,7 @@ describe("buildHostScopeOptions planRestricted", () => {
 });
 
 describe("buildHostScopeOptions planRestricted — composed against a real plan-gated mapped entry", () => {
-  // `entry()` above and `buildOne`'s hard-coded `hasLiveSession: () => false`
-  // are exactly what hid the original bug: a synthetic literal has no
-  // `remoteStatus`, so `hostUnavailability` falls straight to its
-  // non-remote-entry branch (`"offline"`) no matter what `status` says, and
-  // the ENTRY half of `isPlanRestrictedRoute` — a `planAllowsRemote: false`
-  // stamp ⇒ `"plan-restricted"` — never gets exercised at all. This composes
-  // the REAL mapper output instead, and varies `hasLiveSession` (irrelevant to
-  // this particular derivation, but varying it is what the review asked for
-  // and it costs nothing to prove it stays irrelevant here).
+  // `entry` above and `buildOne`'s hard-coded `hasLiveSession: => false` are exactly what hid the original bug.
   function realPlanGatedEntry(): HostDirectoryEntry {
     return hostListItemToDirectoryEntry(
       {
@@ -255,8 +228,7 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
         createdAt: "2026-01-01T00:00:00Z",
         updatePolicy: "manual",
         status: {
-          // ALIVE on the wire — the plan, not the machine, is the reason there
-          // is no route.
+          // Alive on the wire - the plan, not the machine, is the reason there is no route.
           connectivity: "connectable",
           viewerReachability: "unknown",
           clientCloud: "ok",
@@ -271,12 +243,8 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
   }
 
   it("is planRestricted even with the account's OWN render-time plan gate off — the entry's stamped plan is sufficient on its own", () => {
-    // This is the case `isAdministrableRoute`/`isPlanRestrictedRoute`'s old
-    // The row is not connectable because the mapper marked the entry
-    // not-dialable from the plan stamped at FETCH time regardless of the
-    // render-time flag. Requiring `status === "available"` (the old body) can
-    // never be true for this entry, so a free-tier user's own host used to
-    // fall through to generic "unreachable" with no upgrade path.
+    // This is the case `isAdministrableRoute`/`isPlanRestrictedRoute`'s old The row is not connectable because the
+    // mapper marked the entry not-dialable from the plan stamped at fetch time regardless of the render-time flag.
     const [option] = buildHostScopeOptions({
       leases: [],
       authorityAttached: false,
@@ -310,10 +278,7 @@ describe("buildHostScopeOptions planRestricted — composed against a real plan-
   });
 
   it("is NOT planRestricted for a plan-gated host the cloud reports OFFLINE — that row is unreachable, not unpaid", () => {
-    // Dead is dead. The remedy for a switched-off machine is not an upgrade,
-    // so the row must not carry the billing word — and under the old wire it
-    // always did, because every host on an unpaid plan arrived as
-    // `local-only` whatever it was doing.
+    // The remedy for a switched-off machine is not an upgrade, so the row must not carry the billing word.
     const offlineOnAGatedPlan = hostListItemToDirectoryEntry(
       {
         hostId: "host-a",
@@ -437,12 +402,8 @@ describe("resolveScopedHost", () => {
   }
 
   it("withholds the vanished verdict when a host list failed", () => {
-    // The fix-induced regression. Counting a rejection as "settled" is right
-    // for leaving `connecting`, but wrong as evidence of ABSENCE: a directory
-    // failure hides every directory-only host, so the pinned host is missing
-    // from the union for a reason that has nothing to do with it. Claiming
-    // `vanished` here tells someone their machine is no longer registered on
-    // the strength of a request that never came back.
+    // Claiming `vanished` here tells someone their machine is no longer registered on the strength of a request
+    // that never came back.
     expect(
       resolve({
         hosts: [ACTIVE],
@@ -454,9 +415,8 @@ describe("resolveScopedHost", () => {
   });
 
   it("still names a host that genuinely left a healthy list", () => {
-    // The counterweight: suppressing the verdict on failure must not suppress
-    // it when both lists answered cleanly, or deregistering a host would go
-    // unreported and the surface would sit blank.
+    // The counterweight: suppressing the verdict on failure must not suppress it when both lists answered cleanly,
+    // or deregistering a host would go unreported and the surface would sit blank.
     expect(
       resolve({
         hosts: [ACTIVE],
@@ -479,10 +439,8 @@ describe("resolveScopedHost", () => {
   });
 
   it("never silently retargets a failed pick at the active host", () => {
-    // The whole reason this resolution exists: a pick that cannot be honoured
-    // resolves to NOTHING. Falling through to the active host would aim an
-    // administration surface — and any destructive dialog on it — at a machine
-    // the user never chose.
+    // Falling through to the active host would aim an administration surface - and any destructive dialog on it -
+    // at a machine the user never chose.
     for (const listsFailed of [true, false]) {
       expect(
         resolve({
@@ -509,9 +467,8 @@ describe("resolveScopedHost", () => {
 
 describe("transientClientEntry", () => {
   it("withholds the entry for a non-connectable host, URL or not", () => {
-    // Panels read `scope.client` before their gate renders, so withholding an
-    // unavailable or plan-restricted row here prevents them mounting a client
-    // for a target the scope has already ruled not administrable.
+    // Panels read `scope.client` before their gate renders, so withholding an unavailable or plan-restricted row
+    // here prevents them mounting a client for a target the scope has already ruled not administrable.
     const host = hostScopeOptionFixture({
       hostId: "host-a",
       connectable: false,
@@ -546,16 +503,8 @@ describe("transientClientEntry", () => {
 
 describe("buildHostScopeOptions name resolution", () => {
   it("prefers the registry name for THIS MACHINE too, with no local exception", () => {
-    // The local-machine special case is gone, and this pins its absence.
-    //
-    // It existed because a rename wrote a local file the registry never learned
-    // about — the registry name went stale for good, so the fresher directory
-    // label was the only honest answer for this computer. The heartbeat now
-    // publishes the host's `effectiveName` and authn writes it to
-    // `displayName`, so the registry is kept fresh for every host and the two
-    // sources agree. Re-adding the exception would reintroduce a way for them
-    // not to, and this list is the UNREACHABLE-host answer: a reachable host is
-    // named by `host.identity.get` at the panel, one layer up.
+    // It existed because a rename wrote a local file the registry never learned about - the registry name went
+    // stale for good, so the fresher directory label was the only honest answer for this computer.
     expect(
       buildOne({
         entry: entry({ hostId: "host-a", kind: "local", label: "Old Label" }),
@@ -588,9 +537,8 @@ describe("buildHostScopeOptions name resolution", () => {
   });
 
   it("falls back to the registry name for a local host that is down", () => {
-    // While the local host is stopped the directory carries the registry
-    // twin's label, so the local branch resolves to the registry name rather
-    // than to nothing.
+    // While the local host is stopped the directory carries the registry twin's label, so the local branch
+    // resolves to the registry name rather than to nothing.
     expect(
       buildOne({
         entry: entry({ hostId: "host-a", kind: "local", label: "" }),
@@ -602,11 +550,8 @@ describe("buildHostScopeOptions name resolution", () => {
 });
 
 describe("buildHostScopeOptions settingUp", () => {
-  // M5's host-scope narration. The mutation lane belongs to the LOCAL host
-  // controller, so it says nothing about any other machine — a fleet-wide
-  // "setting up" would tell a user their colleague's laptop was mid-install.
-  // Derived here rather than read per row: a runner-host read inside the row
-  // component sits below the boundary every picker suite mocks.
+  // Derived here rather than read per row: a runner-host read inside the row component sits below the boundary
+  // every picker suite mocks.
   it("marks only THIS machine's row while the local mutation lane is busy", () => {
     const options = buildHostScopeOptions({
       leases: [],
@@ -649,18 +594,8 @@ describe("buildHostScopeOptions settingUp", () => {
 });
 
 describe("buildHostScopeOptions health — leases are looked up PER HOST", () => {
-  /**
-   * The P12 pin, at the layer that does the lookup.
-   *
-   * Sealed probe P12 degraded `useHostLease`'s `find(hostId)` to `leases[0]`
-   * and SURVIVED, because every suite seeded exactly one lease — so a
-   * wrong-host answer and a right one produced identical output. The builder
-   * does the same lookup for every row, so it inherits the same blind spot
-   * unless a test arranges two hosts whose verdicts DIFFER.
-   *
-   * Both directions are asserted. Checking only the first row would pass under
-   * `leases[0]`; checking only the second would pass under `leases[1]`.
-   */
+  /** Checking only the first row would pass under `leases[0]`; checking only the second would pass under
+   * `leases[1]`. */
   it("gives each row its own lease, not the first one in the array", () => {
     const options = buildHostScopeOptions({
       leases: [
@@ -685,19 +620,14 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
     const b = options.find((o) => o.hostId === "host-b");
     expect(a?.health.state).toBe("online");
     expect(b?.health.state).toBe("local-only");
-    // The words a person reads, not just the internal states — and the pair
-    // that months of "offline" wrongly collapsed into one.
+    // The words a person reads, not just the internal states - and the pair that months of "offline" wrongly
+    // collapsed into one.
     expect(a?.health.label).toBe("Online");
     expect(b?.health.label).toBe("Local only");
   });
 
-  /**
-   * The fail-closed guard, at the builder rather than at the derivation.
-   *
-   * Before the authority attaches, EVERY host has no lease. If that read as
-   * evidence, opening Settings during bootstrap would show an account's whole
-   * fleet as dead — including in the picker a person would use to fix it.
-   */
+  /** The fail-closed guard, at the builder rather than at the derivation. Before the authority attaches, every
+   * host has no lease. */
   it("does not manufacture a verdict for any row while the authority is unattached", () => {
     const options = buildHostScopeOptions({
       leases: [],

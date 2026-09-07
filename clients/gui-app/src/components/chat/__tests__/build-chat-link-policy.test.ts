@@ -143,10 +143,7 @@ let disposed = false;
 let clickToken = 0;
 const openTile = vi.fn();
 
-/**
- * The intent every chat link open produces (C4): a single-click gesture into
- * the chat's own tab, with placement left to the setting.
- */
+/** The intent every chat link open produces (C4): a single-click gesture into the chat's own tab, with placement left to the setting. */
 function chatLinkIntent(node: unknown): unknown {
   return {
     node,
@@ -178,10 +175,7 @@ function createHostClient(requestId: string): HostClient<HostRpcRegistry> {
   return spine.createRequester(mockLocalHostEntry);
 }
 
-// Distinct client identities so a test
-// can assert WHICH client a call actually received - `client` (bound to the
-// active/default host) and `workspaceClient` (bound to the chat tab's own
-// host) must never be interchangeable.
+// Distinct client identities so a test can assert WHICH client a call actually received - `client` (bound to the active/default host) and `workspaceClient` (bound to the chat tab's own host) must never be interchangeable.
 const DEFAULT_CLIENT = createHostClient("default-client");
 const WORKSPACE_CLIENT = createHostClient("workspace-client");
 
@@ -251,12 +245,7 @@ beforeEach(() => {
   mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
     { id: "content-1", workspacePath: "/repo", filePath: "src/app.ts" },
   ]);
-  // `null` (no structural candidates) is the default so EXISTING absolute-path
-  // tests, written against the old deterministic longest-prefix match, keep
-  // exercising that same `openChatWorkspaceFilePreview` fallback (via
-  // `workspaceFileRefFromLinkPath`/`workspaceFileRefFromAbsoluteFilePath`)
-  // rather than the new probe-race; tests exercising the race set their own
-  // candidates explicitly.
+  // `null` (no structural candidates) is the default so EXISTING absolute-path tests, written against the old deterministic longest-prefix match, keep exercising that same `openChatWorkspaceFilePreview` fallback (via `workspaceFileRefFromLinkPath`/`workspaceFileRefFromAbsoluteFilePath`) rather than the new probe-race; tests exercising the race set their own candidates explicitly.
   mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReset();
   mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue(null);
   mocks.fetchWorkspaceFileExists.mockReset();
@@ -309,9 +298,7 @@ describe("buildChatLinkPolicy", () => {
         hostId: CHAT_HOST_ID,
         workspacePath: "/repo",
         filePath: "src/app.ts",
-        // Bound to the CHAT TAB's own host, not the app-wide default client -
-        // a tab pinned to a different host than the active one must probe ITS
-        // OWN filesystem, not whatever host `client` happens to be connected to.
+        // Bound to the CHAT TAB's own host, not the app-wide default client - a tab pinned to a different host than the active one must probe ITS OWN filesystem, not whatever host `client` happens to be connected to.
         client: WORKSPACE_CLIENT,
       }),
     );
@@ -325,9 +312,7 @@ describe("buildChatLinkPolicy", () => {
   });
 
   it("probes the tab-scoped workspace client even when it differs from the app-wide default host client", async () => {
-    // A chat tab bound to a DIFFERENT host than the app's active one: the
-    // existence probe must still go through `workspaceClient`, never `client`
-    // (which is bound to `activeHostId`, a different physical host here).
+    // A chat tab bound to a DIFFERENT host than the app's active one: the existence probe must still go through `workspaceClient`, never `client` (which is bound to `activeHostId`, a different physical host here).
     const run = buildChatLinkPolicy(
       makeDeps({ hostId: CHAT_HOST_ID, activeHostId: ACTIVE_HOST_ID }),
     );
@@ -467,10 +452,7 @@ describe("buildChatLinkPolicy", () => {
   });
 
   it("opens a directory-shaped relative href by probing its canonical index.md candidate", async () => {
-    // A trailing-separator href resolves to the directory's `index.md`, not a
-    // rejection - `candidateWorkspaceFileRefsForRelativeLinkPath` builds that
-    // candidate itself (see workspace-file-link-ref.test.ts); this level only
-    // verifies the policy probes and opens whatever candidate it returns.
+    // A trailing-separator href resolves to the directory's `index.md`, not a rejection - `candidateWorkspaceFileRefsForRelativeLinkPath` builds that candidate itself (see workspace-file-link-ref.test.ts); this level only verifies the policy probes and opens whatever candidate it returns.
     mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
       {
         id: "dir-index-content",
@@ -612,9 +594,7 @@ describe("buildChatLinkPolicy", () => {
   });
 
   it("drops the rejected artifact fallback when a newer click has superseded it", async () => {
-    // First click's resolve is held open so a newer click can supersede it
-    // before it rejects; the second resolves to an artifact (opening via the
-    // projection waiter, not `openTile`).
+    // First click's resolve is held open so a newer click can supersede it before it rejects; the second resolves to an artifact (opening via the projection waiter, not `openTile`).
     let rejectFirstClick: (reason: Error) => void = () => undefined;
     const firstResolve = new Promise<ResolveArtifactByPathResult>(
       (_resolve, reject) => {
@@ -626,8 +606,8 @@ describe("buildChatLinkPolicy", () => {
       .mockResolvedValueOnce({ artifactId: "artifact-newer", kind: "spec" });
     const run = buildChatLinkPolicy(makeDeps({}));
 
-    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle); // token 1
-    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle); // token 2 supersedes
+    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
+    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
     await flush();
 
     // The slow first click now rejects: its catch must NOT open a fallback
@@ -692,9 +672,7 @@ describe("buildChatLinkPolicy", () => {
     expect(pendingCancel).toBe(cancelPriorWait);
     expect(cancelPriorWait).not.toHaveBeenCalled();
 
-    // A newer plain-file click supersedes it: the prior wait is cancelled
-    // (silently — the mock cancel fires no fallback) and the pending handle is
-    // cleared, so the prior artifact never opens over the new file.
+    // A newer plain-file click supersedes it: the prior wait is cancelled (silently - the mock cancel fires no fallback) and the pending handle is cleared, so the prior artifact never opens over the new file.
     expect(run(fileLink({ path: "src/app.ts" }), lifecycle)).toBe(true);
     expect(cancelPriorWait).toHaveBeenCalledTimes(1);
     expect(pendingCancel).toBeNull();
@@ -727,8 +705,8 @@ describe("buildChatLinkPolicy", () => {
       .mockReturnValueOnce(secondResolve);
     const run = buildChatLinkPolicy(makeDeps({}));
 
-    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle); // token 1
-    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle); // token 2
+    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
+    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
 
     // The newer click resolves first and installs its wait...
     settleSecondClick({ artifactId: "artifact-newer", kind: "spec" });
@@ -748,10 +726,7 @@ describe("buildChatLinkPolicy", () => {
   });
 
   it("opens a non-artifact out-of-root absolute path via a synthesized workspace ref", async () => {
-    // No structural candidate (default mock): falls to the deterministic
-    // fallback, where in-root resolution misses (out-of-root) and the
-    // absolute-file fallback supplies the synthesized ref so the file still
-    // opens (D1/D2).
+    // No structural candidate (default mock): falls to the deterministic fallback, where in-root resolution misses (out-of-root) and the absolute-file fallback supplies the synthesized ref so the file still opens (D1/D2).
     mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
     mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue({
       id: "abs-content",
@@ -869,11 +844,7 @@ describe("buildChatLinkPolicy", () => {
       dirIndexRef,
     ]);
     mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
-    // The fallback re-derives the direct ref via `openChatWorkspaceFilePreview`
-    // (the same pre-existing synchronous path the no-candidates/no-client
-    // branches already use) rather than reusing the race's own candidate
-    // object, so this must resolve to the SAME ref the mocked candidate list
-    // above used for its direct (non-index.md) entry.
+    // The fallback re-derives the direct ref via `openChatWorkspaceFilePreview` (the same pre-existing synchronous path the no-candidates/no-client branches already use) rather than reusing the race's own candidate object, so this must resolve to the SAME ref the mocked candidate list above used for its direct (non-index.md) entry.
     mocks.workspaceFileRefFromLinkPath.mockReturnValue(directRef);
     const run = buildChatLinkPolicy(makeDeps({}));
 
@@ -1041,9 +1012,7 @@ describe("buildChatLinkPolicy", () => {
   });
 
   it("keeps the artifact-null fallback a no-op with out-of-root synthesis disabled (D5)", async () => {
-    // The artifact resolves to null and its out-of-root `index.md` misses the
-    // in-root resolver; with synthesis gated off on the artifact fallback, the
-    // absolute helper must NOT be consulted and nothing opens (CL-1 no-op).
+    // The artifact resolves to null and its out-of-root `index.md` misses the in-root resolver; with synthesis gated off on the artifact fallback, the absolute helper must NOT be consulted and nothing opens (CL-1 no-op).
     mocks.resolveArtifactByPath.mockResolvedValue(null);
     mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
     const run = buildChatLinkPolicy(makeDeps({}));

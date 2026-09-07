@@ -127,19 +127,8 @@ import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
 import { writeStderr, writeStdout } from "./runner/std-write";
 
-// Helper: register a runner-aware action handler. The runner owns
-// process termination, so anything composed via `withRunner` participates in
-// the shared NDJSON envelope (--json) and global flag handling
-// (--quiet, --no-progress, --no-bootstrap).
-//
-// Commander hands action handlers `(...positionalArgs, options, command)`
-// - one entry per declared `.argument(...)` (with `undefined` for an
-// optional positional that wasn't supplied), then the local opts bag,
-// then the Command. We strip the trailing two and forward the rest as
-// the typed positional slice. Optional positionals stay as their
-// original `undefined`/string token so call sites can guard with
-// `typeof args[i] === "string"` instead of distinguishing
-// "missing" from "empty".
+// Helper: register a runner-aware action handler.
+// The runner owns process termination, so anything composed via `withRunner` participates in the shared NDJSON envelope (--json) and global flag handling (--quiet, --no-progress, --no-bootstrap).
 export function extractActionPositionals(
   actionArgs: ReadonlyArray<unknown>,
 ): ReadonlyArray<string | undefined> {
@@ -169,21 +158,7 @@ function expectRequiredPositional(
   });
 }
 
-/**
- * `--attempt-adoption <nonce>` - the child half of Ticket 05's adoption
- * protocol (Ruling 1).
- *
- * Hidden, because no human runs it: the only thing that passes it is a
- * packaged-macOS executor that already holds `update-attempt.lock` and is
- * spawning this command as one step INSIDE its own segment. Without it the
- * child would contend for a lock its own parent holds, wait out the timeout,
- * and fail the segment that spawned it.
- *
- * A nonce names a proof file; the parent's lock token never travels on argv,
- * which `ps` exposes. Absent, expired, or unusable all fall back to ordinary
- * acquisition, so every solo invocation behaves exactly as it did before this
- * option existed.
- */
+/** `--attempt-adoption <nonce>` - the child half of Ticket 05's adoption protocol (Ruling 1). Hidden, because no human runs it: the only thing that passes it is a packaged-macOS executor that already holds `update-attempt.lock` and is spawning this command as one step INSIDE its own segment. */
 function attemptAdoptionOption(): Option {
   return new Option(
     "--attempt-adoption <nonce>",
@@ -201,12 +176,7 @@ function parsePortArg(value: string): number | null {
   return parsed !== null && parsed <= 65_535 ? parsed : null;
 }
 
-/**
- * The invoked command's path under the root program, space-joined
- * (`agent role claim`). Built from Commander's own parent chain rather than the
- * argv the user typed, so an alias or an abbreviated path still resolves to the
- * canonical name the capability table is keyed by.
- */
+/** The invoked command's path under the root program, space-joined (`agent role claim`). Built from Commander's own parent chain rather than the argv the user typed, so an alias or an abbreviated path still resolves to the canonical name the capability table is keyed by. */
 export function commanderCommandPath(command: CommanderCommand): string {
   const segments: string[] = [];
   let cursor: CommanderCommand | null = command;
@@ -227,36 +197,14 @@ function withRunner(
   ) => CommandFn,
 ): CommanderCommand {
   return addRunnerFlags(cmd).action(async (...actionArgs: unknown[]) => {
-    // First, before anything else this action does. On a relocated run the
-    // parent is holding fd 3 open waiting to learn whether a CLI exists in the
-    // new scope at all; until this byte is written, every failure here is
-    // indistinguishable from `systemd-run` failing to start us. A no-op on an
-    // ordinary run. See host/cgroup-relocation.ts.
+    // First, before anything else this action does.
+    // On a relocated run the parent is holding fd 3 open waiting to learn whether a CLI exists in the new scope at all; until this byte is written, every failure here is indistinguishable from `systemd-run` failing to start us.
     acknowledgeRelocationEntry();
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const positionals = extractActionPositionals(actionArgs);
     const optsBag = command.optsWithGlobals() as Record<string, unknown>;
     const commandPath = commanderCommandPath(command);
-    // THE capability check for every runner-backed command (CLI-019).
-    //
-    // It runs here, once, rather than in each mutating handler: hiding a
-    // command on the readonly surface is presentation only - Commander still
-    // runs the action when the subcommand is typed explicitly - and a
-    // per-handler guard is a check every new command has to remember. Keyed by
-    // command path off `READONLY_REFUSED_COMMANDS`, so no Commander route to a
-    // gated action skips it.
-    //
-    // A rail, not an authorization boundary: the surface is a variable in the
-    // caller's own environment, so this constrains a cooperative caller, not
-    // one that clears it. See `AgentCliSurface` in `agent-surface.ts`.
-    //
-    // The surface is read at invocation (not at registration) so it reflects
-    // the environment this process was actually launched with, and the check
-    // is wrapped INSIDE the CommandFn so a refusal renders through the runner's
-    // normal error path: NDJSON envelope under `--json`, stderr otherwise, and
-    // a non-zero exit either way. Building `fn` lazily keeps the refusal ahead
-    // of any argument parsing the builder does, so a readonly session is told
-    // it may not do this rather than which flag it also got wrong.
+    // Readonly-surface gate, once, inside the CommandFn. Hiding a command is presentation only; Commander still runs an explicit subcommand.
     const guarded: CommandFn = async (ctx) => {
       assertCommandAllowedOnSurface(
         commandPath,
@@ -265,35 +213,20 @@ function withRunner(
       return build(optsBag, positionals)(ctx);
     };
     const flags = extractRunnerFlags(optsBag);
-    // Linux: a command that is about to stop the host runs in a transient
-    // scope of its own, because on this platform it would otherwise be killed
-    // by the stop it issues (see host/cgroup-relocation.ts).
-    //
-    // Here, once, for the same reason the capability check above is: BEFORE the
-    // command body, which is where every CLI lock, update-contender claim,
-    // dispatch ACK and progress marker is taken. The relocated child must own
-    // all of them, and the parent - which is about to die with the host's
-    // cgroup - must own none. Building `fn` lazily keeps argument parsing
-    // behind this point too, so nothing the command does has happened yet.
+    // Linux: a command that is about to stop the host runs in a transient scope of its own, because on this platform it would otherwise be killed by the stop it issues (see host/cgroup-relocation.ts).
+    // Here, once, for the same reason the capability check above is: BEFORE the command body, which is where every CLI lock, update-contender claim, dispatch ACK and progress marker is taken.
     let relocation: CgroupRelocation;
     try {
-      // Keyed by command path AND the parsed options: `host uninstall` without
-      // `--all`, and the bytes-only forms of install/ensure/apply, never reach
-      // a stop, so relocating them would only expose them to its failure modes.
+      // Keyed by command path AND the parsed options: `host uninstall` without `--all`, and the bytes-only forms of install/ensure/apply, never reach a stop, so relocating them would only expose them to its failure modes.
       relocation = await relocateOutOfHostCgroupIfNeeded(commandPath, optsBag);
     } catch (error) {
-      // Rendered through the runner's normal error path rather than thrown from
-      // the action: an error escaping Commander lands in the entry's generic
-      // handler, which reports E_UNEXPECTED and loses the code the host and
-      // Desktop switch on.
+      // Rendered through the runner's normal error path rather than thrown from the action: an error escaping Commander lands in the entry's generic handler, which reports E_UNEXPECTED and loses the code the host and Desktop switch on.
       await runCommand(() => Promise.reject(error), flags);
       return;
     }
     if (relocation.kind === "completed") {
-      // The child ran the command and owned the output stream through inherited
-      // stdio. This process adds nothing to it - under `--json` writing a
-      // second terminal envelope would corrupt the child's NDJSON - and exits
-      // with the child's code through the runner's own terminator.
+      // The child ran the command and owned the output stream through inherited stdio.
+      // This process adds nothing to it - under `--json` writing a second terminal envelope would corrupt the child's NDJSON - and exits with the child's code through the runner's own terminator.
       await finishAndExit(relocation.exitCode);
       return;
     }
@@ -301,89 +234,44 @@ function withRunner(
   });
 }
 
-/**
- * Pure check used by the script-entry guard to decide whether the
- * current `process.argv[1]` looks like a Traycer CLI entrypoint we
- * should auto-invoke. Lives at module scope (and is exported) so unit
- * tests can pin the matrix without spawning a subprocess.
- *
- * Matches:
- *  - the tsx dev path → `<repo>/clients/traycer-cli/src/index.ts`
- *  - the compiled SEA binary on POSIX → `<resourcesPath>/cli/traycer`
- *  - the compiled SEA binary on Windows → `<resourcesPath>\cli\traycer.exe`
- *
- * Returns `false` for `undefined`, empty strings, and unrelated paths
- * (so `import { buildProgram }` from a test never auto-parses argv).
- */
+/** Pure check used by the script-entry guard to decide whether the current `process.argv[1]` looks like a Traycer CLI entrypoint we should auto-invoke. Lives at module scope (and is exported) so unit tests can pin the matrix without spawning a subprocess. */
 export function isTraycerCliEntrypoint(argv1: string | undefined): boolean {
   if (typeof argv1 !== "string" || argv1.length === 0) return false;
   return /(?:^|[\\/])(?:index\.ts|traycer(?:\.exe)?)$/i.test(argv1);
 }
 
-// Both live in the leaf `cli-version.ts` so `registry/` can read the running
-// CLI's version without importing this module (which builds the whole program
-// and would close a cycle). Re-exported here because this is where every
-// existing caller and test looks for them.
+// Both live in the leaf `cli-version.ts` so `registry/` can read the running CLI's version without importing this module (which builds the whole program and would close a cycle).
+// Re-exported here because this is where every existing caller and test looks for them.
 export { LOCAL_CLI_VERSION, resolveCliVersion } from "./cli-version";
 
-// The surface type, its resolver, and the readonly capability table live in
-// the leaf `agent-surface.ts` so a command can import the policy without
-// importing this module (which builds the whole program and would close a
-// cycle). Re-exported here because this is where existing callers look.
+// The surface type, its resolver, and the readonly capability table live in the leaf `agent-surface.ts` so a command can import the policy without importing this module (which builds the whole program and would close a cycle).
+// Re-exported here because this is where existing callers look.
 export {
   READONLY_REFUSED_COMMANDS,
   resolveAgentCliSurface,
   type AgentCliSurface,
 } from "./agent-surface";
 
-// Construct the full commander program. Exported as a builder so tests
-// can assert command registration (subject of the
-// "Register native-packaging CLI commands in Traycer CLI entrypoint"
-// follow-up bug) without spawning a subprocess. The script-mode call at
-// the bottom of this file is the only place that invokes parseAsync.
+// Construct the full commander program.
+// Exported as a builder so tests can assert command registration (subject of the "Register native-packaging CLI commands in Traycer CLI entrypoint" follow-up bug) without spawning a subprocess.
 export function buildProgram(): Command {
   return buildProgramWithAgentRoles(readFeatureSettingsSync().agentRoles);
 }
 
-// Upkeep, never a gate: a command must run whatever the slot's state is, so
-// every outcome here is logged and swallowed. `stageWellKnownCliBinary`
-// reports filesystem trouble as a `failed` OUTCOME rather than throwing, so
-// that case needs its own branch - logging it as a success would hide the
-// one situation where the service really is pinned to stale bytes.
-//
-// Returns whether the binary THIS process is executing is the one that was
-// just replaced. On POSIX a rename leaves the running image on its old
-// inode, so such a process keeps running the previous version's code no
-// matter what now sits at the path it was launched from - see the caller for
-// why that matters for the supervised entry specifically.
+// Upkeep, never a gate: a command must run whatever the slot's state is, so every outcome here is logged and swallowed.
+// `stageWellKnownCliBinary` reports filesystem trouble as a `failed` OUTCOME rather than throwing, so that case needs its own branch - logging it as a success would hide the one situation where the service really is pinned to stale bytes.
 async function refreshCliSlotBeforeCommand(
   supervised: boolean,
 ): Promise<boolean> {
   const logger = createCliLogger(config.environment);
   try {
     // Asked BEFORE the refresh, and the ordering is the entire point.
-    //
-    // Afterwards the question cannot be answered at all in the case that
-    // matters most. A slot left as a SYMLINK by an older Desktop resolves to
-    // some other binary A, and `process.execPath` reports A because Node
-    // resolves symlinks when it reports the running executable. The refresh
-    // then replaces that link with a real copy - which is exactly what it
-    // should do - and a comparison made after the fact sees A's path against
-    // a freshly written file and concludes this process was not the one
-    // replaced. It was. The supervisor would go on running A until something
-    // restarted the service, which is the stale-supervisor failure this whole
-    // change exists to end, reached through the fix for it.
-    //
-    // Before the refresh both sides still resolve to A, so they match.
-    //
-    // Only the supervised entry acts on the answer, so only it pays for the
-    // two `realpath` calls; every other command skips them entirely.
+    // Afterwards the question cannot be answered at all in the case that matters most.
     const launchedFromSlot = supervised
       ? await isRunningFromWellKnownSlot(config.environment)
       : false;
     // The supervised entry waits for the lock; an ordinary command does not.
-    // See `refreshWellKnownSlotForSupervisedStart` for why the cost of losing
-    // this race is not symmetric between the two.
+    // See `refreshWellKnownSlotForSupervisedStart` for why the cost of losing this race is not symmetric between the two.
     const refreshed = await (supervised
       ? refreshWellKnownSlotForSupervisedStart(config.environment)
       : refreshWellKnownSlotIfStale(config.environment));
@@ -398,13 +286,8 @@ async function refreshCliSlotBeforeCommand(
       return false;
     }
     if (refreshed.staged === "deferred-busy") {
-      // Logged rather than swallowed, and logged loudest for the supervised
-      // entry: this is the one state where a long-lived host process is about
-      // to run bytes nobody verified, so when that turns up in a report the
-      // reason should already be in the log rather than inferred. Proceeding
-      // is still correct - a supervisor that cannot start because another
-      // process holds a lock is a worse outcome than one running last week's
-      // CLI, and the next command or restart repairs it.
+      // Logged rather than swallowed, and logged loudest for the supervised entry: this is the one state where a long-lived host process is about to run bytes nobody verified, so when that turns up in a report the reason should already be in the log rather than inferred.
+      // Proceeding is still correct - a supervisor that cannot start because another process holds a lock is a worse outcome than one running last week's CLI, and the next command or restart repairs it.
       logger.warn(
         "CLI well-known slot refresh deferred - the CLI lock is held",
         {
@@ -419,22 +302,11 @@ async function refreshCliSlotBeforeCommand(
       environment: config.environment,
       staged: refreshed.staged,
     });
-    // Only `staged` publishes a replacement; `already-well-known` and
-    // `not-applicable` leave the running binary exactly where it was. The
-    // supervision gate is already inside `launchedFromSlot` - hard-wired
-    // false for non-supervised runs above - so this return is the ONLY
-    // encoding of "only host start restarts"; do not re-add a supervised
-    // check at the call site.
+    // Only `staged` publishes a replacement; `already-well-known` and `not-applicable` leave the running binary exactly where it was.
+    // The supervision gate is already inside `launchedFromSlot` - hard-wired false for non-supervised runs above - so this return is the ONLY encoding of "only host start restarts"; do not re-add a supervised check at the call site.
     if (refreshed.staged !== "staged" || !launchedFromSlot) return false;
-    // `staged` alone is not licence to exit for a relaunch. Staging is
-    // allowed to lose two best-effort writes (the mtime mirror and the
-    // `.source.json` record), and on a volume that persistently loses both
-    // the relaunched process would find the slot unprovably fresh, stage
-    // again, and exit again - a supervisor restart loop copying ~100 MB per
-    // lap with the host never up. Asking the planner "would you copy again
-    // right now?" is the terminating condition: only a NO makes the restart
-    // safe, and a YES means the durable state cannot express freshness, so
-    // this process must keep running its stale-but-working bytes instead.
+    // `staged` alone is not licence to exit for a relaunch.
+    // Staging is allowed to lose two best-effort writes (the mtime mirror and the `.source.json` record), and on a volume that persistently loses both the relaunched process would find the slot unprovably fresh, stage again, and exit again - a supervisor restart loop copying ~100 MB per lap with the host never up.
     const converged = await wellKnownSlotRefreshHasConverged(
       config.environment,
     );
@@ -465,15 +337,8 @@ interface ArgvCommandPath {
   readonly commandPath: readonly string[];
 }
 
-// Which command an argv selects: positional tokens ahead of any `--`, with
-// option tokens dropped. `commandOffset` is 2 for a Node-style argv, or
-// whatever `commandOffsetFor` reports for a commander `ParseOptions`.
-//
-// Single-sourced deliberately. Both callers decide WHICH COMMAND an argv
-// names, and they have to agree: if the rule drifted, the restart guard and
-// the `host update --version` rewrite would disagree about what
-// `traycer host start` is, and only one of them would be right. A comment
-// asking two copies to stay identical is not a mechanism - this is.
+// Which command an argv selects: positional tokens ahead of any `--`, with option tokens dropped.
+// `commandOffset` is 2 for a Node-style argv, or whatever `commandOffsetFor` reports for a commander `ParseOptions`.
 function argvCommandPath(
   argv: readonly string[],
   commandOffset: number,
@@ -490,10 +355,7 @@ function argvCommandPath(
 }
 
 // Whether this argv selects the long-lived supervised entry, `host start`.
-//
-// Against a Node-style argv (offset 2), which is what the script entry below
-// always passes. Exported for the same reason `isTraycerCliEntrypoint` is: so
-// the matrix can be pinned by unit test rather than by spawning a subprocess.
+// Against a Node-style argv (offset 2), which is what the script entry below always passes.
 export function argvSelectsSupervisedHostStart(
   argv: readonly string[],
 ): boolean {
@@ -501,9 +363,8 @@ export function argvSelectsSupervisedHostStart(
   return commandPath[0] === "host" && commandPath[1] === "start";
 }
 
-// Sysexits' EX_TEMPFAIL: "try again later". Chosen over 1 so an operator
-// reading the supervisor's log can tell a deliberate restart-me exit from a
-// genuine startup failure, and so `Restart=on-failure` units still restart.
+// Sysexits' EX_TEMPFAIL: "try again later".
+// Chosen over 1 so an operator reading the supervisor's log can tell a deliberate restart-me exit from a genuine startup failure, and so `Restart=on-failure` units still restart.
 const EXIT_RESTART_INTO_REFRESHED_SLOT = 75;
 
 export function buildProgramWithAgentRoles(
@@ -511,11 +372,8 @@ export function buildProgramWithAgentRoles(
 ): Command {
   const program = new Command();
   const cliVersion = resolveCliVersion(readonlyEnv());
-  // Commander resolves the root's built-in `--version` before any child
-  // option. `installHostUpdateVersionParser` below rewrites only the exact
-  // `host update --version X` spelling to that command's registered
-  // `--release` option, preserving the root's established version output and
-  // every other command's normal positional/global-option parsing.
+  // Commander resolves the root's built-in `--version` before any child option.
+  // `installHostUpdateVersionParser` below rewrites only the exact `host update --version X` spelling to that command's registered `--release` option, preserving the root's established version output and every other command's normal positional/global-option parsing.
   program
     .name("traycer")
     .description(
@@ -523,33 +381,18 @@ export function buildProgramWithAgentRoles(
     )
     .version(cliVersion);
 
-  // Global runner flags so `traycer --json <subcommand>` works even when
-  // the subcommand declares its own copy. Commander merges globals via
-  // `optsWithGlobals()` which is what the runner-aware action handlers
-  // rely on.
+  // Global runner flags so `traycer --json <subcommand>` works even when the subcommand declares its own copy.
+  // Commander merges globals via `optsWithGlobals()` which is what the runner-aware action handlers rely on.
   addRunnerFlags(program);
   registerCommands(program, agentRolesEnabled);
-  // Route commander's own parse failures (missing required option, unknown
-  // option/command) through the runner's error contract so `--json`
-  // consumers get a structured `result/error` envelope instead of a bare
-  // stderr line. `exitOverride` makes commander throw a `CommanderError`
-  // (caught at the script entry) rather than calling `process.exit`
-  // itself; the `writeErr` override suppresses commander's free-form
-  // stderr in `--json` mode (the entry emits the NDJSON event instead), and
-  // the `writeOut` override buffers help/version text under `--json` so the
-  // entry can wrap it in a single `result/ok` envelope instead of leaking
-  // raw prose onto an NDJSON stream.
+  // Route commander's own parse failures (missing required option, unknown option/command) through the runner's error contract so `--json` consumers get a structured `result/error` envelope instead of a bare stderr line.
+  // `exitOverride` makes commander throw a `CommanderError` (caught at the script entry) rather than calling `process.exit` itself; the `writeErr` override suppresses commander's free-form stderr in `--json` mode (the entry emits the NDJSON event instead), and the `writeOut` override buffers help/version text under `--json` so the entry can wrap it in a single `result/ok` envelope instead of leaking raw prose onto an NDJSON stream.
   applyRunnerErrorRouting(program);
   installHostUpdateVersionParser(program);
   return program;
 }
 
-/**
- * Confine Commander’s root `--version` collision workaround to the one
- * compatibility spelling that needs a version argument. This intentionally
- * leaves `host --json status`, `config --quiet env list`, and all unrelated
- * option placement under Commander’s unmodified parsing rules.
- */
+/** Confine Commander’s root `--version` collision workaround to the one compatibility spelling that needs a version argument. This intentionally leaves `host --json status`, `config --quiet env list`, and all unrelated option placement under Commander’s unmodified parsing rules. */
 function installHostUpdateVersionParser(program: Command): void {
   const parseAsync = program.parseAsync.bind(program);
   program.parseAsync = (...args: unknown[]) => {
@@ -557,9 +400,7 @@ function installHostUpdateVersionParser(program: Command): void {
     const options = args[1];
     const parseOptions = isParseOptions(options) ? options : null;
     if (!Array.isArray(argv)) {
-      // Forward the options even with no argv: Commander reads `from` to decide
-      // how to interpret `process.argv`, so dropping it here silently reparses
-      // under different rules than the caller asked for.
+      // Forward the options even with no argv: Commander reads `from` to decide how to interpret `process.argv`, so dropping it here silently reparses under different rules than the caller asked for.
       return parseOptions === null
         ? parseAsync()
         : parseAsync(undefined, parseOptions);
@@ -571,24 +412,14 @@ function installHostUpdateVersionParser(program: Command): void {
   };
 }
 
-/**
- * Where the COMMAND tokens start, per Commander's own `from` contract rather
- * than a guess.
- *
- * Comparing `argv[0]`/`argv[1]` against `process.argv` was the guess, and it is
- * wrong for any caller that supplies its own Node-style prefix: the offset came
- * out 0, the command path then read as [<exec>, <script>, "host", …], the
- * `host update` check failed, and `--version` fell through to root - printing
- * the CLI version instead of selecting a host version.
- */
+/** Where the COMMAND tokens start, per Commander's own `from` contract rather than a guess. Comparing `argv[0]`/`argv[1]` against `process.argv` was the guess, and it is wrong for any caller that supplies its own Node-style prefix: the offset came out 0, the command path then read as [<exec>, <script>, "host", …], the `host update` check failed, and `--version` fell through to root - printing the CLI version instead of selecting a host version. */
 function commandOffsetFor(options: ParseOptions | null): number {
   switch (options?.from ?? "node") {
     case "user":
       return 0;
     case "electron":
       // Commander's own rule: a packaged Electron app has no script argument.
-      // `defaultApp` is injected by Electron and absent from Node's `Process`,
-      // so it is read reflectively rather than cast onto the type.
+      // `defaultApp` is injected by Electron and absent from Node's `Process`, so it is read reflectively rather than cast onto the type.
       return Reflect.get(process, "defaultApp") === true ? 2 : 1;
     default:
       return 2;
@@ -632,11 +463,8 @@ function isParseOptions(value: unknown): value is ParseOptions {
   return from === "node" || from === "user" || from === "electron";
 }
 
-// Commander stdout (help/version) captured under `--json` so the entry catch
-// can emit it as a structured envelope. Empty in human mode (text streams
-// straight through). Module-scoped because the `writeOut` override and the
-// entry catch live in different scopes; this process runs one command then
-// exits.
+// Commander stdout (help/version) captured under `--json` so the entry catch can emit it as a structured envelope.
+// Empty in human mode (text streams straight through).
 let commanderStdoutBuffer = "";
 
 function applyRunnerErrorRouting(root: Command): void {
@@ -656,13 +484,8 @@ function applyRunnerErrorRouting(root: Command): void {
   route(root);
 }
 
-// True when the user passed the global `--json` flag. We can't reuse the
-// runner's parsed flag here because this runs on a *parse failure* (or inside
-// commander's own output hooks, before the action). We replicate the one rule
-// that matters: a token that is the *value* of a value-taking option (e.g.
-// `--message --json`) is not the flag. Collecting the value-taking flags from
-// the real command tree keeps this faithful to the actual schema instead of a
-// naive `argv.includes("--json")`, which mistook such a value for the flag.
+// True when the user passed the global `--json` flag.
+// We can't reuse the runner's parsed flag here because this runs on a *parse failure* (or inside commander's own output hooks, before the action).
 let valueOptionFlagsCache: Set<string> | null = null;
 function argvRequestsJson(root: Command): boolean {
   if (valueOptionFlagsCache === null) {
@@ -674,9 +497,8 @@ function argvRequestsJson(root: Command): boolean {
     const token = args[i];
     if (token === "--") break;
     if (token === "--json" || token.startsWith("--json=")) return true;
-    // Skip the value of a `--opt <value>` so a following `--json` consumed as
-    // that value is not mistaken for the flag. The `--opt=value` form is a
-    // single token, so it needs no skip.
+    // Skip the value of a `--opt <value>` so a following `--json` consumed as that value is not mistaken for the flag.
+    // The `--opt=value` form is a single token, so it needs no skip.
     if (valueFlags.has(token)) i += 1;
   }
   return false;
@@ -697,10 +519,8 @@ function collectValueOptionFlags(root: Command): Set<string> {
   return flags;
 }
 
-// Thin orchestrator: each child registrar owns one logical command
-// group and returns void after wiring its commands onto `program`. Keep
-// this split when adding new commands - the body of `registerCommands`
-// stays a single page of declarative registrations.
+// Thin orchestrator: each child registrar owns one logical command group and returns void after wiring its commands onto `program`.
+// Keep this split when adding new commands - the body of `registerCommands` stays a single page of declarative registrations.
 function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerAuthCommands(program);
   registerHostCommands(program);
@@ -719,11 +539,8 @@ function registerAuthCommands(program: Command): void {
     program
       .command("login")
       .description("Sign in to Traycer via your browser")
-      // Hidden per the house convention for `"Internal:"` options: the payload
-      // is produced by a sign-in elsewhere and piped on stdin, so there is
-      // nothing a person at a terminal can usefully type here. Its contract is
-      // pinned by `commands/__tests__/login-token.test.ts` rather than by help
-      // text. It stays reachable - hiding is presentation, not removal.
+      // Hidden per the house convention for `"Internal:"` options: the payload is produced by a sign-in elsewhere and piped on stdin, so there is nothing a person at a terminal can usefully type here.
+      // Its contract is pinned by `commands/__tests__/login-token.test.ts` rather than by help text.
       .addOption(
         new Option(
           "--token <token>",
@@ -736,13 +553,8 @@ function registerAuthCommands(program: Command): void {
       }),
   );
 
-  // `logout` and `whoami` both do more than their verbs suggest, and the
-  // one-line description is the wrong place to say so - it is also the root
-  // help's command list, where a paragraph per command destroys the scan. The
-  // description names the full outcome in one line; the detail (what is
-  // deleted, what is spent, what a partial result means) goes in the leaf's
-  // `--help` body, which is where someone asking "what will this do to my
-  // machine" is already looking.
+  // `logout` and `whoami` both do more than their verbs suggest, and the one-line description is the wrong place to say so - it is also the root help's command list, where a paragraph per command destroys the scan.
+  // The description names the full outcome in one line; the detail (what is deleted, what is spent, what a partial result means) goes in the leaf's `--help` body, which is where someone asking "what will this do to my machine" is already looking.
   withRunner(
     program
       .command("logout")
@@ -833,10 +645,8 @@ function registerAuthCommands(program: Command): void {
         "--no-qr",
         "Print only the typeable code (for terminals that mangle block glyphs)",
       )
-      // The command's whole middle is a wait, and the one-line description
-      // read like a fire-and-forget print. Approval - not the scan - is what
-      // signs the phone in, so the terminal is part of the flow until it
-      // answers.
+      // The command's whole middle is a wait, and the one-line description read like a fire-and-forget print.
+      // Approval - not the scan - is what signs the phone in, so the terminal is part of the flow until it answers.
       .addHelpText(
         "after",
         [
@@ -862,32 +672,15 @@ function registerAuthCommands(program: Command): void {
 }
 
 function registerHostCommands(program: Command): void {
-  // Names what the group actually spans, because the children differ enormously
-  // in consequence: reads (status, logs, available) sit beside commands that
-  // download and swap bytes, register an OS service, or kill a running host.
+  // Names what the group actually spans, because the children differ enormously in consequence: reads (status, logs, available) sit beside commands that download and swap bytes, register an OS service, or kill a running host.
   const host = program
     .command("host")
     .description(
       "Install, run, update, and troubleshoot the Traycer host on this machine",
     );
 
-  // `host start` is the long-running supervisor invoked by service
-  // manifests (launchd / systemd-user / Windows Scheduled Task) as
-  // `traycer host start`. The deploy slot is baked into the build via
-  // `config.environment` - there is no flag to pass. It does NOT go through
-  // `withRunner`/`runCommand` - it owns its own spawn lifecycle and must
-  // not switch to the shared NDJSON runner. We still call `addRunnerFlags(...)`
-  // so commander accepts the shared globals (`--json`, `--quiet`, …) when
-  // they appear AFTER `host start`.
-  //
-  // It stays a FOREGROUND supervisor, and the description says so rather than
-  // hiding the command. Every service definition already on a machine
-  // executes this exact command path, and the CLI slot it points at is
-  // replaced independently of the definition - so "start in the background
-  // and return" cannot become the meaning of bare `host start` without a
-  // migration invariant that does not exist yet. `host service start` is the
-  // background action; this is the supervisor, and the foreground console
-  // below is what stops an interactive invocation from looking hung.
+  // `host start` is the long-running supervisor invoked by service manifests (launchd / systemd-user / Windows Scheduled Task) as `traycer host start`.
+  // The deploy slot is baked into the build via `config.environment` - there is no flag to pass.
   addRunnerFlags(
     host
       .command("start")
@@ -898,16 +691,8 @@ function registerHostCommands(program: Command): void {
         "--cwd <path>",
         "Working directory for the host (defaults to the install directory)",
       )
-      // Identity binding for journal-authorised reclaim probes. Existing
-      // registrations remain valid without these options; a probe requires
-      // all three and otherwise produces no correlated marker.
-      //
-      // Hidden per the house convention for `"Internal:"` options - and
-      // deliberately so: the emitted service definitions gate on
-      // `host capabilities --has service-label`, never on help text, so
-      // hiding these cannot silently disable the identity binding. Adding
-      // `.hideHelp()` here IS the regression this decoupling exists to
-      // survive; see host/capabilities.ts.
+      // Identity binding for journal-authorised reclaim probes.
+      // Existing registrations remain valid without these options; a probe requires all three and otherwise produces no correlated marker.
       .addOption(
         new Option(
           "--service-label <label>",
@@ -956,12 +741,8 @@ function registerHostCommands(program: Command): void {
         ].join("\n"),
       ),
   ).action(async (...actionArgs: unknown[]) => {
-    // `optsWithGlobals()` rather than the local opts bag, for the same reason
-    // `host capabilities` uses it: `--json` / `--quiet` are also declared
-    // globally by `addRunnerFlags(program)`, and commander binds a token that
-    // appears BEFORE the command path to the root option, leaving the
-    // subcommand's copy unset. This command owns its own lifecycle instead of
-    // going through the runner, so nothing else resolves them for it.
+    // `optsWithGlobals()` rather than the local opts bag, for the same reason `host capabilities` uses it: `--json` / `--quiet` are also declared globally by `addRunnerFlags(program)`, and commander binds a token that appears BEFORE the command path to the root option, leaving the subcommand's copy unset.
+    // This command owns its own lifecycle instead of going through the runner, so nothing else resolves them for it.
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const opts = command.optsWithGlobals() as Record<string, unknown>;
     const logger = createCliLogger(config.environment);
@@ -974,10 +755,8 @@ function registerHostCommands(program: Command): void {
     const adoptionNonce =
       typeof opts.adoptionNonce === "string" ? opts.adoptionNonce : null;
     const mode = resolveForegroundStartMode({
-      // Any identity flag means a registered service definition produced this
-      // invocation. Positive evidence, checked before any inference about the
-      // terminal - a service manager must never have the host log duplicated
-      // into its own stdout.
+      // Any identity flag means a registered service definition produced this invocation.
+      // Positive evidence, checked before any inference about the terminal - a service manager must never have the host log duplicated into its own stdout.
       serviceManaged:
         serviceLabel !== null ||
         transitionId !== null ||
@@ -995,10 +774,8 @@ function registerHostCommands(program: Command): void {
       hasCwdOverride: typeof opts.cwd === "string",
       foregroundMode: mode,
     });
-    // Opened BEFORE `runHostStart`, which is the point: the first thing that
-    // command does is a chain of awaits (probe authority, incumbent check,
-    // target resolution, download-free but not instant) and then a spawn it
-    // waits on forever. The banner has to precede all of it.
+    // Opened BEFORE `runHostStart`, which is the point: the first thing that command does is a chain of awaits (probe authority, incumbent check, target resolution, download-free but not instant) and then a spawn it waits on forever.
+    // The banner has to precede all of it.
     const foreground = openForegroundConsole(
       { environment: config.environment, mode },
       {},
@@ -1014,12 +791,8 @@ function registerHostCommands(program: Command): void {
           probeNonce,
         }),
         {
-          // The supervisor's exit is deliberately a bare synchronous
-          // `process.exit` (see runner/exit.ts on why it does not route
-          // through `finishAndExit`). Closing here keeps that property while
-          // making sure the last log lines before shutdown - the ones a person
-          // watching a Ctrl-C most wants - are drained synchronously rather
-          // than lost with the pending poll.
+          // The supervisor's exit is deliberately a bare synchronous `process.exit` (see runner/exit.ts on why it does not route through `finishAndExit`).
+          // Closing here keeps that property while making sure the last log lines before shutdown - the ones a person watching a Ctrl-C most wants - are drained synchronously rather than lost with the pending poll.
           exit: (code) => {
             foreground.close();
             process.exit(code);
@@ -1027,17 +800,13 @@ function registerHostCommands(program: Command): void {
         },
       );
     } finally {
-      // Unreached on the ordinary path (the `exit` above ends the process),
-      // and that is exactly why it is here: `runHostStart` can also leave by
-      // THROWING, and a mirror left polling would hold the event loop open
-      // while the entry's own terminator tries to end the process.
+      // Unreached on the ordinary path (the `exit` above ends the process), and that is exactly why it is here: `runHostStart` can also leave by THROWING, and a mirror left polling would hold the event loop open while the entry's own terminator tries to end the process.
       foreground.close();
     }
   });
 
-  // The service wrapper obtains this opaque value immediately before it execs
-  // `host start`. It is raw stdout by design: launchd/systemd/VBScript use it
-  // as an argv capability, not a runner envelope.
+  // The service wrapper obtains this opaque value immediately before it execs `host start`.
+  // It is raw stdout by design: launchd/systemd/VBScript use it as an argv capability, not a runner envelope.
   host
     .command("adoption-nonce", { hidden: true })
     .requiredOption("--service-label <label>", "Internal: owning service label")
@@ -1053,18 +822,12 @@ function registerHostCommands(program: Command): void {
       writeStdout(`${nonce}\n`);
     });
 
-  // The capability contract emitted service definitions probe before they
-  // pass an argument their (possibly N-1) CLI slot may not understand. NOT
-  // routed through `withRunner`: the output is a machine contract read by a
-  // `/bin/sh` script and a VBScript launcher, so it must stay raw stdout +
-  // exit code rather than the NDJSON envelope. Pure and side-effect free -
-  // see host/capabilities.ts.
+  // The capability contract emitted service definitions probe before they pass an argument their (possibly N-1) CLI slot may not understand.
+  // NOT routed through `withRunner`: the output is a machine contract read by a `/bin/sh` script and a VBScript launcher, so it must stay raw stdout + exit code rather than the NDJSON envelope.
   host
     .command("capabilities")
-    // Says out loud that `--json` means something different here. Every other
-    // command's `--json` is the runner's NDJSON event stream; this one prints a
-    // single JSON document, because its readers are a /bin/sh script and a
-    // VBScript launcher rather than an event consumer.
+    // Says out loud that `--json` means something different here.
+    // Every other command's `--json` is the runner's NDJSON event stream; this one prints a single JSON document, because its readers are a /bin/sh script and a VBScript launcher rather than an event consumer.
     .description(
       "Print the capability tokens this CLI supports. Raw output for scripts: plain text or a single JSON document plus an exit code, not the NDJSON event stream other commands emit with --json.",
     )
@@ -1074,9 +837,7 @@ function registerHostCommands(program: Command): void {
       "Exit 0 when this CLI supports <capability>, non-zero otherwise",
     )
     .action((...actionArgs: unknown[]) => {
-      // `optsWithGlobals()` rather than the local opts bag: `--json` is also
-      // declared globally by `addRunnerFlags(program)`, and commander binds
-      // the token to the root option, leaving the subcommand's copy unset.
+      // `optsWithGlobals()` rather than the local opts bag: `--json` is also declared globally by `addRunnerFlags(program)`, and commander binds the token to the root option, leaving the subcommand's copy unset.
       const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
       const opts = command.optsWithGlobals() as Record<string, unknown>;
       const response = runHostCapabilities(
@@ -1090,10 +851,8 @@ function registerHostCommands(program: Command): void {
       process.exitCode = response.exitCode;
     });
 
-  // Deliberately not routed through the normal runner: this process keeps
-  // its attempt + CLI locks live while the internal root scripts issue a
-  // versioned stdin/stdout protocol. Any older CLI lacks both this command
-  // and the advertised capability token, so scripts fail closed.
+  // Deliberately not routed through the normal runner: this process keeps its attempt + CLI locks live while the internal root scripts issue a versioned stdin/stdout protocol.
+  // Any older CLI lacks both this command and the advertised capability token, so scripts fail closed.
   host
     .command("maintenance-lease", { hidden: true })
     .requiredOption(
@@ -1106,20 +865,8 @@ function registerHostCommands(program: Command): void {
     )
     .requiredOption("--service-uid <uid>", "Internal: target GUI service uid")
     .action(async (opts) => {
-      // Deliberately NOT relocated out of the host's cgroup on Linux, unlike
-      // every other route that reaches a host stop (host/cgroup-relocation.ts).
-      // The script that spawns this lease is in the same cgroup as the lease:
-      // started from a Traycer-hosted terminal, the two land inside the host
-      // unit together, and the stop the lease would perform kills the script
-      // mid-maintenance whether or not the lease itself survives it. Moving
-      // the lease alone would also turn the script's direct child into a
-      // waiting wrapper, so its cancellation (TERM/KILL to that child, exit as
-      // death evidence) would no longer prove the lease holder is gone. The
-      // second-line guard in `withStopIntent` therefore refuses the action,
-      // the refusal travels to the script as the protocol's own `refused`
-      // frame ("run this from a shell outside the Traycer host"), and the
-      // lease releases with nothing touched - which is the outcome a caller
-      // that cannot outlive the stop should get.
+      // Deliberately NOT relocated out of the host's cgroup on Linux, unlike every other route that reaches a host stop (host/cgroup-relocation.ts).
+      // The script that spawns this lease is in the same cgroup as the lease: started from a Traycer-hosted terminal, the two land inside the host unit together, and the stop the lease would perform kills the script mid-maintenance whether or not the lease itself survives it.
       const admission =
         opts.admission === "desktop-activation-maintenance" ||
         opts.admission === "uninstall-maintenance"
@@ -1189,24 +936,12 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("restart")
-      // The CLI-upgrade clause is not padding: a restart is where a pending
-      // self-upgrade is finalised (`upgrade/finalize-helper.ts`), so this host
-      // command can replace the `traycer` binary itself. Someone restarting the
-      // host to clear a hang deserves to know that before their CLI version
-      // changes under them.
-      //
-      // "attempts"/"may" rather than "completes", because the finalize is
-      // explicitly non-fatal: a missing staged binary, a still-locked binary on
-      // a read-only install, or a Windows helper that only gets SCHEDULED all
-      // return exit 0 with the pending upgrade retained. Promising completion
-      // would be the same false-status defect this PR removes elsewhere; the
-      // human result already reports which of those actually happened.
+      // The CLI-upgrade clause is not padding: a restart is where a pending self-upgrade is finalised (`upgrade/finalize-helper.ts`), so this host command can replace the `traycer` binary itself.
+      // Someone restarting the host to clear a hang deserves to know that before their CLI version changes under them.
       .description(
         "Restart the host service. If a CLI self-upgrade is waiting to be applied, this also attempts to finalize it, which may replace the 'traycer' binary.",
       )
-      // Hidden: the CLI-owned activation mode (desktop controller's
-      // idle-gated restart cycle), not a user-facing switch - see
-      // commands/host-restart.ts.
+      // Hidden: the CLI-owned activation mode (desktop controller's idle-gated restart cycle), not a user-facing switch - see commands/host-restart.ts.
       .addOption(
         new Option(
           "--if-idle",
@@ -1255,11 +990,8 @@ function registerHostCommands(program: Command): void {
       .description(
         "Install a host version from the registry (defaults to latest), or a local archive with --from, then register the OS service and start the host. Prompts for browser sign-in first when you are signed out and the terminal can ask, and provisions the started host's credential (best effort). Use --no-service-register for bytes only.",
       )
-      // Keep the published installer spelling stable. `host update` registers
-      // the same `--release` option and additionally accepts `--version` as a
-      // compatibility alias, because the host's cloud/RPC spawners already use
-      // that exact contract; the entrypoint rewrites only that command path
-      // before Commander handles the argv.
+      // Keep the published installer spelling stable.
+      // `host update` registers the same `--release` option and additionally accepts `--version` as a compatibility alias, because the host's cloud/RPC spawners already use that exact contract; the entrypoint rewrites only that command path before Commander handles the argv.
       .option(
         "--release <version>",
         "Registry version to install (defaults to 'latest'). Mutually exclusive with --from.",
@@ -1321,11 +1053,8 @@ function registerHostCommands(program: Command): void {
           ? opts.release
           : null;
       const fromPath = typeof opts.from === "string" ? opts.from : null;
-      // The --release/--from mutual-exclusion check must run INSIDE the
-      // returned CommandFn so the runner catches it (CliError → NDJSON
-      // error envelope). Throwing in this build callback escapes
-      // runCommand's try/catch and dumps a raw stack trace with no
-      // envelope under --json.
+      // The --release/--from mutual-exclusion check must run INSIDE the returned CommandFn so the runner catches it (CliError → NDJSON error envelope).
+      // Throwing in this build callback escapes runCommand's try/catch and dumps a raw stack trace with no envelope under --json.
       return async (ctx) => {
         if (explicitVersion !== null && fromPath !== null) {
           throw cliError({
@@ -1339,9 +1068,7 @@ function registerHostCommands(program: Command): void {
         return buildHostInstallCommand({
           attemptAdoption: attemptAdoptionNonce(opts),
           // Registry path defaults to "latest" when neither flag is set.
-          // For --from installs the value is unused (the archive supplies
-          // the version), but the underlying command contract still wants
-          // a concrete token - pass "latest" as the safe placeholder.
+          // For --from installs the value is unused (the archive supplies the version), but the underlying command contract still wants a concrete token - pass "latest" as the safe placeholder.
           versionRequest: explicitVersion ?? "latest",
           fromPath,
           // commander's `--no-linger` materialises as `linger: false`.
@@ -1363,10 +1090,8 @@ function registerHostCommands(program: Command): void {
       .description(
         "Make sure the host is installed, registered as a service, and running - installing or starting it if needed. Safe to run repeatedly.",
       )
-      // Same `--release`/`--from` shape as `install` (see the comment on
-      // `install` for why `--release` is used instead of `--version`).
-      // Unlike `install`, `ensure` defaults to the host archive packaged
-      // beside the CLI when present, falling back to the registry.
+      // Same `--release`/`--from` shape as `install` (see the comment on `install` for why `--release` is used instead of `--version`).
+      // Unlike `install`, `ensure` defaults to the host archive packaged beside the CLI when present, falling back to the registry.
       .option(
         "--release <version>",
         "Registry version to ensure (defaults to 'latest'/packaged). Mutually exclusive with --from.",
@@ -1441,9 +1166,7 @@ function registerHostCommands(program: Command): void {
           "Internal: expected staged archive handoff identity",
         ).hideHelp(),
       )
-      // Hidden: the desktop-owned packaged-macOS path, which drives its own
-      // locked SMAppService activation cycle after this non-disruptive
-      // bytes-only apply - see commands/host-apply.ts.
+      // Hidden: the desktop-owned packaged-macOS path, which drives its own locked SMAppService activation cycle after this non-disruptive bytes-only apply - see commands/host-apply.ts.
       .addOption(
         new Option(
           "--no-service",
@@ -1495,9 +1218,7 @@ function registerHostCommands(program: Command): void {
       .requiredOption("--generation <n>", "Expected attempt generation")
       .requiredOption("--sequence <n>", "Expected attempt sequence")
       .requiredOption("--target-version <version>", "Expected target version"),
-    // Validation lives INSIDE the returned command so the refusal flows
-    // through the runner's CliError handling (typed code + exit path) instead
-    // of escaping the factory and reaching the entrypoint as UNEXPECTED.
+    // Validation lives INSIDE the returned command so the refusal flows through the runner's CliError handling (typed code + exit path) instead of escaping the factory and reaching the entrypoint as UNEXPECTED.
     (opts) => (ctx) => {
       const generation = parsePositiveIntegerArg(String(opts.generation));
       const sequence = parsePositiveIntegerArg(String(opts.sequence));
@@ -1600,21 +1321,13 @@ function registerHostCommands(program: Command): void {
         "Update the installed host to a registry version (defaults to latest); when an update is applied it also checks that a host is answering afterwards",
       )
       // A REAL registered option, spelled like `host install` / `host ensure`.
-      // The version target used to exist only as free-form help text backed by
-      // a hidden parse flag, so it was invisible to schema introspection and
-      // produced errors naming an internal spelling. `--version <version>`
-      // stays supported as the published compatibility syntax: the entrypoint
-      // rewrites that one token, on this one command path, to `--release`
-      // before Commander parses - see `rewriteHostUpdateVersion`. It cannot be
-      // registered directly, because Commander resolves the root's built-in
-      // `--version` before any child option.
+      // The version target used to exist only as free-form help text backed by a hidden parse flag, so it was invisible to schema introspection and produced errors naming an internal spelling.
       .option(
         "--release <version>",
         "Registry version to update to (defaults to the latest compatible release)",
       )
-      // Host maintenance probes `host update --help` for this literal before
-      // dispatching a downgrade. Keep the option visible: it is the capability
-      // contract for hosts paired with an independently installed CLI.
+      // Host maintenance probes `host update --help` for this literal before dispatching a downgrade.
+      // Keep the option visible: it is the capability contract for hosts paired with an independently installed CLI.
       .option(
         "--allow-downgrade",
         "Allow an explicitly selected --release to replace a newer installed host",
@@ -1623,9 +1336,8 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
-      // Hidden: the host resolver's dispatch-ACK correlation nonce (Ticket 07
-      // §5.2.8). A nonce and never a token - it grants nothing, which is why
-      // argv is a legitimate carrier. Not a user-facing switch.
+      // Hidden: the host resolver's dispatch-ACK correlation nonce (Ticket 07 §5.2.8).
+      // A nonce and never a token - it grants nothing, which is why argv is a legitimate carrier.
       .addOption(
         new Option(
           "--ack-nonce <nonce>",
@@ -1659,12 +1371,7 @@ function registerHostCommands(program: Command): void {
       const release = typeof opts.release === "string" ? opts.release : null;
       return async (ctx) => {
         // An EXPLICIT empty target is a mistake, not a request for latest.
-        // `--version=`, `--release=` and an unset shell variable
-        // (`--release "$PIN"`) all arrive here as "", and treating that as
-        // "resolve latest" would silently update a machine the caller meant
-        // to pin. The hidden-flag version of this option passed "" through to
-        // SemVer validation, which rejected it; keep that refusal, with a
-        // message that names the flag.
+        // `--version=`, `--release=` and an unset shell variable (`--release "$PIN"`) all arrive here as "", and treating that as "resolve latest" would silently update a machine the caller meant to pin.
         if (release !== null && release.length === 0) {
           throw cliError({
             code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -1691,9 +1398,7 @@ function registerHostCommands(program: Command): void {
         "Stage a host version without touching the running host (defaults to latest); promotes only when strictly newer, or replaces any stage for an explicit version",
       )
       .argument("[version]", "Registry version to stage (defaults to 'latest')")
-      // Hidden: this is the controller's contract (desktop main's
-      // `stageLatest`), not a user-facing switch - see
-      // `commands/host-download.ts`.
+      // Hidden: this is the controller's contract (desktop main's `stageLatest`), not a user-facing switch - see `commands/host-download.ts`.
       .addOption(
         new Option(
           "--automatic",
@@ -1702,10 +1407,8 @@ function registerHostCommands(program: Command): void {
       ),
     (opts, args) => {
       const versionArg = typeof args[0] === "string" ? args[0] : null;
-      // "latest" is not a registry version - it's the same request as
-      // omitting the positional entirely. Normalizing it here (rather
-      // than downstream) keeps `versionRequest === null` the CLI-wide
-      // contract for "resolve the manifest's latest pointer".
+      // "latest" is not a registry version - it's the same request as omitting the positional entirely.
+      // Normalizing it here (rather than downstream) keeps `versionRequest === null` the CLI-wide contract for "resolve the manifest's latest pointer".
       const requestedLatest = versionArg === "latest";
       return buildHostDownloadCommand({
         versionRequest: requestedLatest ? null : versionArg,
@@ -1778,18 +1481,8 @@ function registerHostCommands(program: Command): void {
         "--no-include-pre-releases",
         "Exclude prerelease host versions even when the installed host is a release candidate",
       ),
-    // Three states, and commander gives all three: `--include-…` yields true,
-    // `--no-include-…` yields false, and NEITHER leaves the option unset,
-    // which becomes the `null` the command derives from.
-    //
-    // That third state rests on commander declining to install a default when
-    // a command declares both forms - a library rule, not something this file
-    // states. It has moved across majors (on 9.5.0, a `--no-` declared FIRST
-    // installs an implicit `true`; on the 15.x this package resolves, neither
-    // order does), and if it ever moves back, "neither flag" silently starts
-    // including release candidates on every host. Keep the positive flag
-    // declared first, and see `host-available-entrypoint.test.ts`, which pins
-    // all three parsed values so a dependency bump cannot change this quietly.
+    // Three states, and commander gives all three: `--include-…` yields true, `--no-include-…` yields false, and NEITHER leaves the option unset, which becomes the `null` the command derives from.
+    // That third state rests on commander declining to install a default when a command declares both forms - a library rule, not something this file states.
     (opts) =>
       buildHostAvailableCommand({
         includePreReleases:
@@ -1830,10 +1523,8 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      // Public, unlike its kill-only sibling below: `host doctor` prints this
-      // exact command line - PID and port filled in - as the fix for a port
-      // conflict, so a user is asked to type it. A command the CLI tells
-      // people to run has to be in the CLI's own help.
+      // Public, unlike its kill-only sibling below: `host doctor` prints this exact command line - PID and port filled in - as the fix for a port conflict, so a user is asked to type it.
+      // A command the CLI tells people to run has to be in the CLI's own help.
       .command("free-port-and-restart")
       .description(
         "Kill the process holding the host's port, then restart the host - the fix 'traycer host doctor' prints for a port conflict. Pass --pid and --port together; the PID is re-checked against the port and nothing is killed if it no longer owns it. With neither flag this only restarts the host.",
@@ -1877,18 +1568,8 @@ function registerHostCommands(program: Command): void {
           exitCode: 1,
         });
       }
-      // The both-or-neither rule lives in the HANDLER
-      // (`buildHostFreePortAndRestartCommand`), not here. #1505 and #1506
-      // fixed the same `--port`-without-`--pid` hole independently and agreed
-      // to keep one: the handler's, because it also covers direct callers of
-      // `buildHostFreePortAndRestartCommand` rather than only the Commander
-      // path, and because it sits next to the `--pid`-alone guard that was
-      // always there. The registration-level copy is deleted here rather than
-      // left as harmless duplication - two guards for one rule drift, and the
-      // messages had already diverged.
-      //
-      // The `--pid <pid>` / `--port <port>` help above still states the rule,
-      // which is where a reader looks for it.
+      // The both-or-neither rule lives in the HANDLER (`buildHostFreePortAndRestartCommand`), not here. #1505 and #1506 fixed the same `--port`-without-`--pid` hole independently and agreed to keep one: the handler's, because it also covers direct callers of `buildHostFreePortAndRestartCommand` rather than only the Commander path, and because it sits next to the `--pid`-alone guard that was always there.
+      // The registration-level copy is deleted here rather than left as harmless duplication - two guards for one rule drift, and the messages had already diverged.
       return buildHostFreePortAndRestartCommand({
         pid,
         port,
@@ -1899,11 +1580,8 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      // Stays hidden where `free-port-and-restart` above went public, and the
-      // difference is who is asked to run it: nothing prints this spelling for
-      // a person to type. It is the half-repair Desktop's host controller
-      // drives when it owns the restart itself, and leaving the port freed but
-      // the host down is not an outcome to hand a user.
+      // Stays hidden where `free-port-and-restart` above went public, and the difference is who is asked to run it: nothing prints this spelling for a person to type.
+      // It is the half-repair Desktop's host controller drives when it owns the restart itself, and leaving the port freed but the host down is not an outcome to hand a user.
       .command("free-port", { hidden: true })
       .description(
         "Internal: terminate a foreign PID holding the host port WITHOUT restarting the host. Machine contract for Desktop's host controller; people use 'traycer host free-port-and-restart'.",
@@ -2012,10 +1690,7 @@ export function hostStartOptionsFromCommand(input: {
 }
 
 function registerServiceCommands(host: Command): void {
-  // "status" belongs in the summary because it is a third of this group, and
-  // "starts/stops it" because registering or deregistering is never only a
-  // bookkeeping edit - the OS starts the host on install and stops it on
-  // uninstall.
+  // "status" belongs in the summary because it is a third of this group, and "starts/stops it" because registering or deregistering is never only a bookkeeping edit - the OS starts the host on install and stops it on uninstall.
   const service = host.command("service").description(
     // Keeps CLI-005's user-goal phrasing from main and adds the `start`
     // action this branch introduces, which main's copy predates.
@@ -2050,11 +1725,8 @@ function registerServiceCommands(host: Command): void {
       }),
   );
 
-  // The public background start, and the answer to "why does `host start`
-  // never return?". `host start` is the foreground supervisor every
-  // registered service definition executes and cannot change meaning without
-  // breaking definitions already on machines, so the missing action is added
-  // beside the other service verbs instead - see commands/service-start.ts.
+  // The public background start, and the answer to "why does `host start` never return?".
+  // `host start` is the foreground supervisor every registered service definition executes and cannot change meaning without breaking definitions already on machines, so the missing action is added beside the other service verbs instead - see commands/service-start.ts.
   withRunner(
     service
       .command("start")
@@ -2085,10 +1757,8 @@ function registerServiceCommands(host: Command): void {
 
 function registerCliCommands(program: Command): void {
   const cli = program.command("cli").description(
-    // CLI-005 (#1505) rewrote this parent in user language; CLI-016 needs
-    // the ownership boundary stated here too, since `cli upgrade` refuses
-    // package-manager installs outright. Keep both: their sentence leads,
-    // in their register, and the refusal follows it.
+    // CLI-005 (#1505) rewrote this parent in user language; CLI-016 needs the ownership boundary stated here too, since `cli upgrade` refuses package-manager installs outright.
+    // Keep both: their sentence leads, in their register, and the refusal follows it.
     "Update the 'traycer' command itself, or point it at a binary you installed by hand. " +
       "Installs from Homebrew, npm, winget, Scoop, apt or rpm are updated with that package manager instead.",
   );
@@ -2103,9 +1773,7 @@ function registerCliCommands(program: Command): void {
           "refused with their manager's upgrade command, so package ownership stays intact. " +
           "Requires a recorded install - if none exists (for example after moving the binary by hand), run " +
           "'traycer cli re-anchor --binary-path <path> --installed-version <version>' first. " +
-          // Says "the running host is using it" rather than naming the
-          // supervisor: #1505's CLI-005 pass bans implementation vocabulary
-          // from rendered help, and its full-help test enforces that.
+          // Says "the running host is using it" rather than naming the supervisor: #1505's CLI-005 pass bans implementation vocabulary from rendered help, and its full-help test enforces that.
           "When the file is in use - usually because the host is running from it - the new binary is staged and " +
           "finalized on a later 'traycer host restart'; a restart retries the swap rather than guaranteeing it, and any staged " +
           "upgrade that is still outstanding is reported by 'traycer host doctor'.",
@@ -2139,10 +1807,8 @@ function registerCliCommands(program: Command): void {
         "--binary-path <path>",
         "Absolute path to the installed CLI binary",
       )
-      // Package-manager hooks retain their published `--installed-version`
-      // spelling; `host update` is the one compatibility path which takes a
-      // direct `--version` pin. Package-manager hooks must pass
-      // `--installed-version` (see scripts/native-packaging/publish-cli-package-managers.cjs).
+      // Package-manager hooks retain their published `--installed-version` spelling; `host update` is the one compatibility path which takes a direct `--version` pin.
+      // Package-manager hooks must pass `--installed-version` (see scripts/native-packaging/publish-cli-package-managers.cjs).
       .requiredOption(
         "--installed-version <version>",
         "Version reported by the installer",
@@ -2224,12 +1890,8 @@ function registerConfigCommands(program: Command): void {
       ),
     () => configShellListCommand,
   );
-  // `config shell set` takes a variadic `[shellArgs...]` positional that
-  // commander passes as a single array as the first action argument.
-  // `withRunner`'s positional extractor coerces non-string entries to
-  // `undefined`, so we wire this command directly through
-  // `addRunnerFlags` + `runCommand`. The runner still owns process
-  // termination and the NDJSON envelope.
+  // `config shell set` takes a variadic `[shellArgs...]` positional that commander passes as a single array as the first action argument.
+  // `withRunner`'s positional extractor coerces non-string entries to `undefined`, so we wire this command directly through `addRunnerFlags` + `runCommand`.
   addRunnerFlags(
     shell
       .command("set")
@@ -2383,10 +2045,8 @@ function registerConfigCommands(program: Command): void {
   );
 }
 
-// Inter-agent communication surface. Every Traycer-launched session
-// carries `TRAYCER_AGENT_ID` / `TRAYCER_EPIC_ID` in its environment, so an
-// agent typically runs these with no flags; the host bearer comes from
-// the stored credentials (`traycer login`).
+// Inter-agent communication surface.
+// Every Traycer-launched session carries `TRAYCER_AGENT_ID` / `TRAYCER_EPIC_ID` in its environment, so an agent typically runs these with no flags; the host bearer comes from the stored credentials (`traycer login`).
 function collectRepeatedOption(
   value: string,
   previous: readonly string[],
@@ -2409,9 +2069,7 @@ function registerWorkspaceCommands(program: Command): void {
   );
 }
 
-// Read-only by construction: there is no command here that writes to a
-// terminal, so the group needs no capability gate the way `worktree delete`
-// does.
+// Read-only by construction: there is no command here that writes to a terminal, so the group needs no capability gate the way `worktree delete` does.
 function registerTerminalCommands(program: Command): void {
   const terminal = program
     .command("terminal")
@@ -2498,13 +2156,8 @@ function registerCommentsCommands(program: Command): void {
 }
 
 function registerWorktreeCommands(program: Command): void {
-  // `worktree delete` mutates on-disk state, so it is a capability boundary in
-  // the readonly agent surface: hidden from help (like `agent create`) AND
-  // refused at runtime, because Commander's `hidden` flag still runs the action
-  // when the subcommand is typed explicitly. The refusal is the shared one -
-  // `worktree delete` is a `READONLY_REFUSED_COMMANDS` entry that `withRunner`
-  // enforces - so only the hiding is decided here. `worktree list` is a read
-  // and stays available in both surfaces.
+  // `worktree delete` mutates on-disk state, so it is a capability boundary in the readonly agent surface: hidden from help (like `agent create`) AND refused at runtime, because Commander's `hidden` flag still runs the action when the subcommand is typed explicitly.
+  // The refusal is the shared one - `worktree delete` is a `READONLY_REFUSED_COMMANDS` entry that `withRunner` enforces - so only the hiding is decided here.
   const deleteHidden = {
     hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
   };
@@ -2591,12 +2244,8 @@ function registerAgentCommands(
   program: Command,
   agentRolesEnabled: boolean,
 ): void {
-  // Presentation only, and a WIDER set than the capability boundary: the
-  // readonly surface hides the whole agent-to-agent surface, reads included, so
-  // a session that cannot act is not offered the vocabulary to try. What a
-  // readonly session may not RUN is decided by `READONLY_REFUSED_COMMANDS` and
-  // enforced in `withRunner`, so the hidden reads below stay runnable and the
-  // hidden mutations are refused whether or not they were ever listed.
+  // Presentation only, and a WIDER set than the capability boundary: the readonly surface hides the whole agent-to-agent surface, reads included, so a session that cannot act is not offered the vocabulary to try.
+  // What a readonly session may not RUN is decided by `READONLY_REFUSED_COMMANDS` and enforced in `withRunner`, so the hidden reads below stay runnable and the hidden mutations are refused whether or not they were ever listed.
   const readonlyHidden = {
     hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
   };
@@ -2609,9 +2258,7 @@ function registerAgentCommands(
   // act on the one profile the caller names - so `--profile` is required there.
   const profileRequiredHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'.";
-  // Fork's own omission default is 'inherit' (continue the SOURCE agent's
-  // profile byte-for-byte) - distinct from create's last-used preference
-  // lookup, so this cannot reuse `profileHelp`'s wording.
+  // Fork's own omission default is 'inherit' (continue the SOURCE agent's profile byte-for-byte) - distinct from create's last-used preference lookup, so this cannot reuse `profileHelp`'s wording.
   const forkProfileHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program
@@ -3072,10 +2719,8 @@ function registerAgentCommands(
       .description(
         "Submit a TUI agent turn lifecycle event from a provider hook.",
       )
-      // Codex's `notify` (the only turn-end edge it exposes) invokes this as the
-      // `stop` program and appends its `agent-turn-complete` JSON as a trailing
-      // argv. The stop edge is keyed entirely on the bound agent env, so that
-      // payload is ignored - tolerate it instead of erroring on the extra arg.
+      // Codex's `notify` (the only turn-end edge it exposes) invokes this as the `stop` program and appends its `agent-turn-complete` JSON as a trailing argv.
+      // The stop edge is keyed entirely on the bound agent env, so that payload is ignored - tolerate it instead of erroring on the extra arg.
       .allowExcessArguments(true)
       .requiredOption(
         "--provider <provider>",
@@ -3148,25 +2793,8 @@ function registerAgentCommands(
   );
 }
 
-// `monitor` is the long-running inbox subscriber the Claude Code plugin
-// spawns. Like `host start` it owns its own lifecycle and does NOT go
-// through the shared NDJSON runner - `addRunnerFlags` is applied only so
-// the shared globals still parse if present.
-//
-// Because it bypasses the runner, it also bypasses the readonly capability
-// check `withRunner` applies - and it is absent from
-// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
-// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
-// reach: this is a registered command an agent can type, with its own
-// `--agent-id`, so leaving it open does leave a mutation reachable. It is
-// granted because refusing it would break inbox delivery for any session the
-// host spawns a monitor for, and would buy little against a caller who can
-// clear the surface variable anyway. It stays hidden on the readonly surface,
-// as before.
-//
-// It is not read-only, and the description now says so: printing a message
-// durably acknowledges it, and the process maintains this machine's stored
-// credentials for as long as it runs.
+// `monitor` is the long-running inbox subscriber the Claude Code plugin spawns.
+// Like `host start` it owns its own lifecycle and does NOT go through the shared NDJSON runner - `addRunnerFlags` is applied only so the shared globals still parse if present.
 function registerMonitorCommand(program: Command): void {
   addRunnerFlags(
     program
@@ -3209,13 +2837,8 @@ function registerMonitorCommand(program: Command): void {
   });
 }
 
-// Script entry. Skipped when this module is imported (e.g. by the
-// command-registration smoke test) so `buildProgram()` consumers don't
-// trigger `parseAsync` against `process.argv`. The check matches
-// argv[1] against this file's basename which is robust across both the
-// tsx dev path and a bundled `bun --compile` binary where argv[1] is
-// the CLI invocation itself - including the Windows `traycer.exe`
-// suffix produced by `bun build --compile --target=bun-windows-x64`.
+// Script entry.
+// Skipped when this module is imported (e.g. by the command-registration smoke test) so `buildProgram()` consumers don't trigger `parseAsync` against `process.argv`.
 const entryArgv = typeof process !== "undefined" ? process.argv[1] : undefined;
 if (isTraycerCliEntrypoint(entryArgv)) {
   const entryLogger = createCliLogger(config.environment);
@@ -3225,77 +2848,22 @@ if (isTraycerCliEntrypoint(entryArgv)) {
     environment: config.environment,
     argvLength: process.argv.length,
   });
-  // Keep the well-known CLI slot pointing at the anchored binary, BEFORE
-  // commander parses anything.
-  //
-  // The slot is what the host daemon shells and what registered services
-  // launch, but the only code that re-stages it sits on service REGISTRATION
-  // paths. A channel whose upgrade replaces the executable without
-  // re-registering - winget, whose portable manifest cannot run a
-  // post-install hook at all - would otherwise leave both running the
-  // previous version indefinitely, up to a protocol-incompatible one, no
-  // matter how much the user exercises the CLI in between.
-  //
-  // Here rather than in a `preAction` hook, which was the earlier placement
-  // and had a hole exactly where this cohort steps: commander resolves
-  // `--version` and `--help` during option handling and exits before any
-  // hook runs, and `traycer --version` is precisely what someone runs to
-  // confirm a winget upgrade landed. The real executable would report the
-  // new version while the slot stayed on the old one - and a command
-  // launched FROM that stale slot cannot repair it, because with no manifest
-  // the slot is its own authority. Running before `parseAsync` covers every
-  // invocation, informational exits included.
-  //
-  // Affordable there because the refresh self-guards: an interpreter run
-  // (dev, tests) returns before touching the filesystem, and an unchanged
-  // install costs a small manifest read and two stats. Awaited rather than
-  // fired and forgotten - a copy racing process exit would be interrupted on
-  // every short command and never complete.
-  // Straight-line awaits inside ONE async function, not a floating promise
-  // chain: the sequencing IS the point (nothing may parse until the slot is
-  // settled), and a `void ...then()` spelling of the same order has already
-  // been misread once as parsing racing the refresh. Not top-level await,
-  // although the source is ESM - the npm distribution bundles this entry to
-  // CJS, where TLA cannot compile. So exactly one `void` remains, on the
-  // whole entry: the `catch` below is terminal for every expected failure,
-  // and `installProcessFailureHandlers` above is the backstop for anything
-  // that escapes it.
+  // Refresh the well-known CLI slot before Commander runs, so packaged startups cannot serve a stale slot.
   const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
   const runEntry = async (): Promise<void> => {
     try {
       const replacedRunningBinary =
         await refreshCliSlotBeforeCommand(supervisedStart);
-      // The refresh repaired the slot for everything that launches from it
-      // NEXT, but this process is still executing the bytes it started with:
-      // a rename leaves the running image on its old inode. For a short
-      // command that is harmless - it finishes in a moment. For `host start`
-      // it is not, because that process is the long-lived service, and
-      // nothing would replace it until the next restart, which may be weeks.
-      //
-      // So exit and let the supervisor start us again, now from the repaired
-      // slot. Exiting cannot loop: the very next run finds the slot already
-      // mirroring its source and refreshes nothing, so `replacedRunningBinary`
-      // is false and this branch is not reached again. Deliberately not a
-      // re-exec - proxying a supervised process would put this CLI between
-      // the service manager and the host for the life of the service, and
-      // signal delivery for graceful shutdown is not worth re-implementing to
-      // save one restart.
-      // No `&& supervisedStart` here on purpose: `refreshCliSlotBeforeCommand`
-      // can only return true for a supervised start (its launched-from-slot
-      // answer is hard-wired false otherwise), and a second copy of that gate
-      // would be a second place for the rule to drift.
+      // The refresh repaired the slot for everything that launches from it NEXT, but this process is still executing the bytes it started with: a rename leaves the running image on its old inode.
+      // For a short command that is harmless - it finishes in a moment.
       if (replacedRunningBinary) {
         entryLogger.warn("CLI restarting into the refreshed well-known slot", {
           environment: config.environment,
           execPath: process.execPath,
           exitCode: EXIT_RESTART_INTO_REFRESHED_SLOT,
         });
-        // One line to stderr, because a human can be on this path too: a
-        // hand-typed `traycer host start` from the slot is indistinguishable
-        // from a supervised launch by argv, and without this the command
-        // exits 75 with an empty terminal - the only trace a log file the
-        // operator has no reason to open. A supervisor's log captures the
-        // line harmlessly.
+        // One line to stderr, because a human can be on this path too: a hand-typed `traycer host start` from the slot is indistinguishable from a supervised launch by argv, and without this the command exits 75 with an empty terminal - the only trace a log file the operator has no reason to open.
+        // A supervisor's log captures the line harmlessly.
         writeStderr(
           "traycer: the CLI was refreshed to a newer build; restarting host start from the updated binary. If you ran this by hand, run 'traycer host start' again.\n",
         );
@@ -3305,11 +2873,8 @@ if (isTraycerCliEntrypoint(entryArgv)) {
     } catch (err) {
       if (err instanceof CommanderError) {
         const jsonMode = argvRequestsJson(program);
-        // Help (`--help`) and version (`--version`) flow through exitOverride
-        // with exitCode 0. In human mode commander already streamed the text
-        // to stdout; in --json mode that text was buffered (see the `write`
-        // override) so we wrap it in a single `result/ok` envelope rather than
-        // leaking raw prose onto an NDJSON stream.
+        // Help (`--help`) and version (`--version`) flow through exitOverride with exitCode 0.
+        // In human mode commander already streamed the text to stdout; in --json mode that text was buffered (see the `write` override) so we wrap it in a single `result/ok` envelope rather than leaking raw prose onto an NDJSON stream.
         if (err.exitCode === 0) {
           entryLogger.debug("Commander handled informational exit", {
             json: jsonMode,
@@ -3329,10 +2894,8 @@ if (isTraycerCliEntrypoint(entryArgv)) {
           // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
           await finishAndExit(0);
         } else {
-          // Parse failure. In --json mode emit the runner's NDJSON error
-          // envelope so downstream consumers see a coded `result/error`;
-          // in human mode commander already wrote the message to stderr
-          // (via the configureOutput passthrough above).
+          // Parse failure.
+          // In --json mode emit the runner's NDJSON error envelope so downstream consumers see a coded `result/error`; in human mode commander already wrote the message to stderr (via the configureOutput passthrough above).
           entryLogger.warn("Commander parse failed", {
             json: jsonMode,
             commanderCode: err.code,
@@ -3344,9 +2907,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
               status: "error",
               error: {
                 code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-                // Commander prefixes its messages with "error: "; strip it so
-                // the envelope's `message` is clean (the `error` wrapper and
-                // `code` already convey severity).
+                // Commander prefixes its messages with "error: "; strip it so the envelope's `message` is clean (the `error` wrapper and `code` already convey severity).
                 message: err.message.replace(/^error:\s*/i, ""),
                 details: { commanderCode: err.code },
               },
@@ -3412,10 +2973,8 @@ function exitAfterUnhandledFailure(
     return;
   }
   fatalExitInProgress = true;
-  // Tell the runner the PROCESS has failed. Draining leaves an interrupted
-  // command running, and a command that goes on to succeed must not emit a
-  // terminal `ok` for a process that is already doomed - Desktop now trusts
-  // that envelope over the exit code. See runner.ts and exit.ts.
+  // Tell the runner the PROCESS has failed.
+  // Draining leaves an interrupted command running, and a command that goes on to succeed must not emit a terminal `ok` for a process that is already doomed - Desktop now trusts that envelope over the exit code.
   markProcessFatal();
   const error = errorFromUnknown(cause);
   logger.error(message, { exitCode: 1 }, error);
@@ -3423,10 +2982,7 @@ function exitAfterUnhandledFailure(
   writeStderr(
     `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
   );
-  // Routed through the same terminator as every other exit. This is the one
-  // path where an abrupt teardown could be argued for - the process is already
-  // in an unknown state - but that is exactly the state the win32 abort fires
-  // in, and `finishAndExit`'s watchdog bounds how long a wedged handle can
-  // hold it. See exit.ts.
+  // Routed through the same terminator as every other exit.
+  // This is the one path where an abrupt teardown could be argued for - the process is already in an unknown state - but that is exactly the state the win32 abort fires in, and `finishAndExit`'s watchdog bounds how long a wedged handle can hold it.
   void finishAndExit(1);
 }

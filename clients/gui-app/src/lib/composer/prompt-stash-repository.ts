@@ -1,7 +1,4 @@
-// The specific `keys` submodule, not the `@/lib/persist` barrel: the barrel
-// re-exports `lib/persist/wipe.ts`, which imports `PROMPT_STASH_DB_NAME` from
-// this module to delete the stash database by exact name - importing the
-// barrel here would close that cycle.
+// The specific `keys` submodule, not the `@/lib/persist` barrel: the barrel re-exports `lib/persist/wipe.ts`, which imports `PROMPT_STASH_DB_NAME` from this module to delete the stash database by exact name - importing the barrel here would close that cycle.
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
 
 import {
@@ -48,17 +45,14 @@ export class PromptStashCorruptBlobError extends Error {
 
 export const PROMPT_STASH_DB_NAME = `${PERSIST_PREFIX}:prompt-stash`;
 /**
- * Actual physical blob budget, derived from `blobs` store contents inside
- * every save transaction (never a maintained counter). Exactly 64 MiB is
- * allowed; anything above is rejected with no eviction and no mutation.
+ * Actual physical blob budget, derived from `blobs` store contents inside every save transaction (never a maintained counter).
+ * Exactly 64 MiB is allowed; anything above is rejected with no eviction and no mutation.
  */
 export const PROMPT_STASH_BUDGET_BYTES = 64 * 1024 * 1024;
 
 const PROMPT_STASH_DB_VERSION = 2;
-// idb-keyval's single dev-only keyval store, created under this name by the
-// pre-v2 implementation. It never shipped in a release - this feature only
-// ever existed on developer machines before this schema replaced it - so the
-// upgrade drops it outright instead of migrating.
+// idb-keyval's single dev-only keyval store, created under this name by the pre-v2 implementation.
+// It never shipped in a release - this feature only ever existed on developer machines before this schema replaced it - so the upgrade drops it outright instead of migrating.
 const DEV_STORE_NAME = "stash";
 const ENTRIES_STORE = "entries";
 const BLOBS_STORE = "blobs";
@@ -66,13 +60,8 @@ const META_STORE = "meta";
 const META_KEY = "state";
 let dbPromise: Promise<IDBDatabase> | null = null;
 
-// The DOM lib declares `indexedDB` non-nullable, so checking its result for
-// `undefined` in the SAME scope as this reference gets flagged as always-
-// false. Returning it through its own function crosses a call boundary,
-// so the wider return type annotation - not the lib's narrower one - is
-// what `indexedDBFactory` below sees, matching `lib/persist/wipe.ts`'s
-// identical `indexedDBFactory` guard for a runtime that really can lack it
-// (e.g. a test environment without an IndexedDB polyfill).
+// The DOM lib declares `indexedDB` non-nullable, so checking its result for `undefined` in the SAME scope as this reference gets flagged as always- false.
+// Returning it through its own function crosses a call boundary, so the wider return type annotation - not the lib's narrower one - is what `indexedDBFactory` below sees, matching `lib/persist/wipe.ts`'s identical `indexedDBFactory` guard for a runtime that.
 function rawIndexedDBFactory(): IDBFactory | undefined {
   return globalThis.indexedDB;
 }
@@ -115,12 +104,7 @@ function openDb(): Promise<IDBDatabase> {
         return;
       }
       settled = true;
-      // Lets a `deleteDatabase` call from this or another window (see
-      // `lib/persist/wipe.ts`) proceed instead of sitting in `onblocked`
-      // behind a connection this module never explicitly closes. Also
-      // re-arms the cache: the closed handle is unusable, so a LATER
-      // `openDb()` call must open a fresh connection rather than keep
-      // returning this now-resolved-but-closed one forever.
+      // Lets a `deleteDatabase` call from this or another window (see `lib/persist/wipe.ts`) proceed instead of sitting in `onblocked` behind a connection this module never explicitly closes.
       db.onversionchange = () => {
         db.close();
         dbPromise = null;
@@ -141,9 +125,7 @@ function openDb(): Promise<IDBDatabase> {
     request.onerror = () => {
       if (settled) return;
       settled = true;
-      // Re-arm on failure too: caching a rejected promise would make every
-      // later operation reject forever, even after a transient open error
-      // (e.g. a momentary quota/permission issue) has since cleared.
+      // Re-arm on failure too: caching a rejected promise would make every later operation reject forever, even after a transient open error (e.g. a momentary quota/permission issue) has since cleared.
       dbPromise = null;
       reject(
         request.error ?? new Error("Could not open the prompt stash database."),
@@ -167,13 +149,7 @@ function iterateCursor(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => {
-      // A synchronous throw from `visit` (e.g. touching a corrupt stored
-      // record) happens inside a DOM event handler, not inside this
-      // Promise's executor - left uncaught, it would neither resolve nor
-      // reject this promise, leaving the caller's `await` (and the whole
-      // save/delete transaction) pending forever. Catching it here
-      // settles the promise deterministically so `runTransaction` can abort
-      // and propagate the real error instead.
+      // A synchronous throw from `visit` (e.g. touching a corrupt stored record) happens inside a DOM event handler, not inside this Promise's executor - left uncaught, it would neither resolve nor reject this promise, leaving the caller's `await` (and the whole.
       try {
         const cursor = request.result;
         if (cursor === null) {
@@ -202,12 +178,8 @@ function transactionDone(tx: IDBTransaction): Promise<void> {
 }
 
 /**
- * Runs `work` as the sole body of one transaction over `storeNames`. Every
- * request/cursor `work` issues must be awaited through `requestToPromise` /
- * `iterateCursor` (never an unrelated promise) so the transaction never idles
- * past a commit-eligible microtask boundary. A thrown error aborts the
- * transaction explicitly (rolling back every write already queued) and
- * propagates the original error, not IndexedDB's generic abort error.
+ * Runs `work` as the sole body of one transaction over `storeNames`.
+ * Every request/cursor `work` issues must be awaited through `requestToPromise` / `iterateCursor` (never an unrelated promise) so the transaction never idles past a commit-eligible microtask boundary.
  */
 async function runTransaction<T>(
   storeNames: readonly string[],
@@ -253,14 +225,7 @@ async function bumpRevision(metaStore: IDBObjectStore): Promise<number> {
 }
 
 /**
- * One readonly transaction: every raw entry record plus every current blob
- * KEY (not bytes - `getAllKeys` never transfers blob content) so an entry
- * whose `blobHashes` reference something absent from the store surfaces as
- * unavailable immediately, without a byte read. Byte-level corruption
- * (wrong runtime type, size/hash/MIME mismatch) is only checked lazily, on
- * an actual restore attempt (`readPromptStashRestoreBlobs`) - validating
- * every stored byte on every load would cost the full budget's worth of I/O
- * on every hydrate for a check restore already performs.
+ * One readonly transaction: every raw entry record plus every current blob KEY (not bytes - `getAllKeys` never transfers blob content) so an entry whose `blobHashes` reference something absent from the store surfaces as unavailable immediately, without a.
  */
 export function loadPromptStashSnapshot(): Promise<PromptStashManifest> {
   return runTransaction(
@@ -287,11 +252,7 @@ export function loadPromptStashSnapshot(): Promise<PromptStashManifest> {
 }
 
 /**
- * One readwrite transaction: reads existing entries/blobs, reclaims blobs no
- * longer referenced once this entry replaces any prior entry of the same id,
- * derives physical usage from what survives that cleanup, rejects above
- * budget with no mutation at all, then writes only the blobs missing from
- * the store plus the entry and bumped revision atomically.
+ * One readwrite transaction: reads existing entries/blobs, reclaims blobs no longer referenced once this entry replaces any prior entry of the same id, derives physical usage from what survives that cleanup, rejects above budget with no mutation at all, then.
  */
 export function savePromptStashSnapshot(
   snapshot: PromptStashSnapshot,
@@ -304,12 +265,8 @@ export function savePromptStashSnapshot(
       const blobsStore = tx.objectStore(BLOBS_STORE);
       const metaStore = tx.objectStore(META_STORE);
 
-      // Tolerant of a corrupt sibling record: a malformed field on an
-      // UNRELATED existing entry must never abort this save. Its
-      // best-effort `blobHashes` still protects whatever blobs it can
-      // identify; a record this repository can't even parse an id from
-      // contributes nothing to `referenced` and is dropped (nothing to
-      // display or delete by).
+      // Tolerant of a corrupt sibling record: a malformed field on an UNRELATED existing entry must never abort this save.
+      // Its best-effort `blobHashes` still protects whatever blobs it can identify; a record this repository can't even parse an id from contributes nothing to `referenced` and is dropped (nothing to display or delete by).
       const rawEntries = await requestToPromise<unknown[]>(
         entriesStore.getAll(),
       );
@@ -324,21 +281,12 @@ export function savePromptStashSnapshot(
         for (const hash of info.blobHashes) referenced.add(hash);
       }
 
-      // The current snapshot's own bytes are always authoritative for any
-      // hash it references - never whatever happens to already be stored
-      // there. A save cannot verify an existing record's content against
-      // its key without hashing inside the transaction, so a typed
-      // Uint8Array record with the wrong bytes under a colliding/reused
-      // key would otherwise look "already present" and silently shadow
-      // the snapshot's correct bytes forever.
+      // The current snapshot's own bytes are always authoritative for any hash it references - never whatever happens to already be stored there.
+      // A save cannot verify an existing record's content against its key without hashing inside the transaction, so a typed Uint8Array record with the wrong bytes under a colliding/reused key would otherwise look "already present" and silently shadow the.
       const ownBlobHashes = new Set<string>(snapshot.entry.blobHashes);
 
-      // Reclaim orphans and derive kept usage in the same pass, BEFORE
-      // admitting any new blob - usage is always summed from what the
-      // store actually holds, never a maintained counter. Sum the actual
-      // stored byte view's length, not the `byteLength` metadata field -
-      // that field is redundant, cached data that could drift from the
-      // real bytes and would otherwise weaken the physical-byte budget.
+      // Reclaim orphans and derive kept usage in the same pass, BEFORE admitting any new blob - usage is always summed from what the store actually holds, never a maintained counter.
+      // Sum the actual stored byte view's length, not the `byteLength` metadata field - that field is redundant, cached data that could drift from the real bytes and would otherwise weaken the physical-byte budget.
       let keptBytes = 0;
       const existingBlobHashes = new Set<string>();
       await iterateCursor(blobsStore.openCursor(), (cursor) => {
@@ -349,21 +297,11 @@ export function savePromptStashSnapshot(
         }
         if (ownBlobHashes.has(record.hash)) {
           // The snapshot itself supplies this hash's canonical bytes below
-          // - delete whatever is here now (malformed, or a well-typed
-          // record whose content happens to be wrong under this key) so
-          // the insertion pass unconditionally repairs it with verified
-          // bytes, counted exactly once as incoming. A sibling that also
-          // references this hash benefits from the same repair.
           cursor.delete();
           return;
         }
-        // A malformed retained blob (e.g. `null`/a plain array in `bytes`,
-        // from corruption) must be runtime-validated before it feeds
-        // arithmetic, and must never be left in place uncounted: doing so
-        // would let it occupy real storage outside the physical budget
-        // forever. Deleting a sibling-only malformed record here is safe -
-        // that sibling's row/restore already surfaces as
-        // unavailable/missing without this blob.
+        // A malformed retained blob (e.g.
+        // `null`/a plain array in `bytes`, from corruption) must be runtime-validated before it feeds arithmetic, and must never be left in place uncounted: doing so would let it occupy real storage outside the physical budget forever.
         if (!isUint8ArrayBytes(record.bytes)) {
           cursor.delete();
           return;
@@ -416,10 +354,7 @@ export function savePromptStashSnapshot(
 }
 
 /**
- * One readwrite transaction: deletes the entry (a missing id is a successful
- * no-op that touches nothing), derives the remaining live references, and
- * reclaims every blob no longer referenced, bumping revision only when an
- * entry actually changed.
+ * One readwrite transaction: deletes the entry (a missing id is a successful no-op that touches nothing), derives the remaining live references, and reclaims every blob no longer referenced, bumping revision only when an entry actually changed.
  */
 export function deletePromptStashEntry(
   entryId: string,
@@ -440,10 +375,8 @@ export function deletePromptStashEntry(
         .filter((info): info is RawStashRecordInfo => info !== null);
       const remainingInfos = infos.filter((info) => info.id !== entryId);
       if (remainingInfos.length === infos.length) {
-        // No identifiable record matched `entryId` - a missing entry is a
-        // successful no-op (also covers "a peer window already deleted
-        // it"), never an error. Delete-by-id works uniformly for a
-        // corrupt/unavailable row too, since identity only needs `id`.
+        // No identifiable record matched `entryId` - a missing entry is a successful no-op (also covers "a peer window already deleted it"), never an error.
+        // Delete-by-id works uniformly for a corrupt/unavailable row too, since identity only needs `id`.
         const revision = await currentRevision(metaStore);
         const presentBlobHashes = new Set(
           await requestToPromise<string[]>(blobsStore.getAllKeys()),
@@ -480,14 +413,7 @@ export function deletePromptStashEntry(
 }
 
 /**
- * One readonly transaction reading every requested blob as a consistent
- * snapshot: bytes already resolved here stay valid in memory even if another
- * window deletes the entry (and reclaims these blobs) immediately after this
- * resolves. `"missing"` if any requested hash isn't in the store; `"corrupt"`
- * if every hash resolved but at least one fails byte-level validation
- * (runtime type, measured length, canonical MIME, SHA-256 agreement) -
- * matches restore's all-or-nothing contract either way, only the reported
- * reason differs.
+ * One readonly transaction reading every requested blob as a consistent snapshot: bytes already resolved here stay valid in memory even if another window deletes the entry (and reclaims these blobs) immediately after this resolves.
  */
 export async function readPromptStashRestoreBlobs(
   blobHashes: readonly string[],
@@ -510,14 +436,7 @@ export async function readPromptStashRestoreBlobs(
     },
   );
   if (records === null) return { status: "missing" };
-  // Validation runs AFTER the transaction resolves, deliberately: SHA-256
-  // digesting is async across potentially several microtask/macrotask
-  // boundaries, and `runTransaction`'s contract requires every request
-  // inside `work` to be awaited without idling past a commit-eligible
-  // boundary. The bytes read above are already a consistent in-memory
-  // snapshot - valid even if another window deletes the entry immediately
-  // after - so validating them outside the transaction changes nothing
-  // about that guarantee.
+  // Validation runs AFTER the transaction resolves, deliberately: SHA-256 digesting is async across potentially several microtask/macrotask boundaries, and `runTransaction`'s contract requires every request inside `work` to be awaited without idling past a.
   const blobs = new Map<string, PromptStashRestoreBlob>();
   for (const [hash, record] of records) {
     if (!(await isValidStashBlobRecord(hash, record))) {

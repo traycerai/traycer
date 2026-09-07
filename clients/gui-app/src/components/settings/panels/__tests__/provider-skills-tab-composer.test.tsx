@@ -14,9 +14,8 @@ const skillMocks = vi.hoisted(() => ({
   inspectScopes: [] as string[],
 }));
 
-// Entry-button suite never switches scope; stub shared hook so F5 workspace
-// resolution does not require a QueryClient. Dynamic import: `vi.mock` is
-// hoisted above static imports.
+// Entry-button suite never switches scope; stub shared hook so workspace resolution does not require a
+// QueryClient.
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
   const { GLOBAL_ONLY_NATIVE_SCOPE } =
     await import("@/components/settings/panels/__tests__/provider-native-scope-test-mocks");
@@ -43,9 +42,8 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   }),
 }));
 
-// Not exercised in this suite (no row is ever opened), but statically
-// imported by the tab through `ProviderSkillDetailDialog`, so it needs a
-// well-shaped mock the same way `provider-skills-tab-detail.test.tsx` does.
+// Not exercised in this suite (no row is ever opened), but statically imported by the tab through
+// `ProviderSkillDetailDialog`.
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: (
     _client: unknown,
@@ -105,8 +103,8 @@ function renderTab(): void {
   render(<ProviderSkillsTab state={skillsState()} />);
 }
 
-// A non-empty list so the header Add skill is the only one on the page —
-// the empty state renders its own copy of the same label.
+// A non-empty list so the header Add skill is the only one on the page - the empty state renders its own copy
+// of the same label.
 const SOME_SKILL: ProviderSkill = {
   name: "find-skills",
   description: "Helps users discover and install agent skills.",

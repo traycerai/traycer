@@ -62,10 +62,8 @@ function resolveShortcutProfiles(
   );
 }
 
-/** A row's ⌘⇧-digit shortcut hint - `digit` drives the row's test id,
- *  `label` is the displayed chord text. Keeping both explicit (rather than
- *  deriving the digit from `label`) keeps this component free of any
- *  keybinding-formatting knowledge. */
+/** Keeping both explicit (rather than deriving the digit from `label`) keeps this component free of any
+ * keybinding-formatting knowledge. */
 export interface ProfileDropdownShortcutHint {
   readonly digit: string;
   readonly label: string;
@@ -87,24 +85,18 @@ interface ProfileDropdownProps {
   readonly onCreateProfile: (() => void) | null;
   readonly createProfileDisabled: boolean;
   readonly createProfileDisabledReason: string | undefined;
-  /** Per-row shortcut hint, or a function that always returns `null` to opt
-   *  out entirely. The picker wrapper supplies live ⌘⇧-digit hints (it's
-   *  live-dispatchable there); Settings passes an always-null function -
-   *  ⌘⇧-digit isn't wired to that surface. This component renders whatever
-   *  it's given and owns no keybinding-formatting policy itself. */
+  /** Per-row shortcut hint, or a function that always returns `null` to opt out entirely. */
   readonly shortcutHintForIndex: (
     index: number,
   ) => ProfileDropdownShortcutHint | null;
   readonly profileEnablementPending:
     | ((profileId: string | null) => boolean)
     | null;
-  /** Portal target for nested surfaces. The model picker passes its popover
-   *  node so dropdown outside-click handling does not dismiss the whole picker;
-   *  Settings passes null to keep the default document-level portal. */
+  /** The model picker passes its popover node so dropdown outside-click handling does not dismiss the whole
+   * picker; Settings passes null to keep the default document-level portal. */
   readonly contentContainer: HTMLElement | null;
-  /** Non-null overrides Radix's default close-focus-return-to-trigger, e.g. so
-   *  the picker can send focus back to its search input instead. Null keeps
-   *  the default (Settings has no outer surface to defer to). */
+  /** Non-null overrides Radix's default close-focus-return-to-trigger, e.g. so the picker can send focus back to
+   * its search input instead. Null keeps the default (Settings has no outer surface to defer to). */
   readonly onCloseAutoFocus: (() => void) | null;
   /** Picker-only cached usage presentation. Settings passes `null`, which
    *  preserves the identity-only rows and mounts no usage observers/sidecar. */
@@ -112,24 +104,16 @@ interface ProfileDropdownProps {
   /** Settings passes controls and may select disabled rows for maintenance.
    *  Run-target pickers pass null, so disabled rows remain unselectable. */
   readonly eligibilityControls: ProfileDropdownEligibilityControls | null;
-  /** Per-row admission override keyed by `profileCommitId` (the TUI continue-
-   *  under-another-profile dialog's bulk fork-admission preflight). `null`
-   *  for every other caller - no row is overridden, matching today's
-   *  behavior exactly. */
+  /** Per-row admission override keyed by `profileCommitId` (the TUI continue- under-another-profile dialog's bulk
+   * fork-admission preflight). */
   readonly admissionByProfileId: ReadonlyMap<
     string | null,
     ProfileRowAdmission
   > | null;
 }
 
-/**
- * Shared profile switcher (multi-profile UX overhaul, 2026-07-09 wireframe):
- * one compact dropdown reused by the model picker (replacing the old chip
- * strip) and Settings' profile-scoped provider section. Closed: accent dot +
- * active profile name + chevron. Open: one row per profile (dot + name +
- * status suffix for signed-out/unavailable + optional shortcut hint), then a
- * separator and a final "Create new profile" row.
- */
+/** Shared profile switcher (multi-profile UX overhaul, 2026-07-09 wireframe): one compact dropdown reused by
+ * the model picker (replacing the old chip strip) and Settings' profile-scoped provider section. */
 export function ProfileDropdown(props: ProfileDropdownProps) {
   const {
     providerLabel,
@@ -264,10 +248,8 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
         }}
         onKeyDown={(event) => {
-          // Item-level navigation/selection runs before the event bubbles to
-          // content. At content, Radix calls this handler before its own later
-          // composed callback; stopPropagation blocks enclosing React handlers
-          // without cancelling either same-target continuation.
+          // At content, Radix calls this handler before its own later composed callback; stopPropagation blocks
+          // enclosing React handlers without cancelling either same-target continuation.
           if (PROFILE_DROPDOWN_KEYS.has(event.key)) event.stopPropagation();
           if (
             usagePresentation === null ||
@@ -315,9 +297,8 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               sideOffset={undefined}
               align={undefined}
             >
-              {/* `flex w-full`, not `inline-flex`: the guard becomes the menu
-                  content's layout child, and a shrink-to-fit one would narrow
-                  the row to its text. */}
+              {/* `flex w-full`, not `inline-flex`: the guard becomes the menu content's layout child, and a shrink-to-fit one
+                 would narrow the row to its text. */}
               <span className="flex w-full">
                 <DropdownMenuItem
                   disabled={createProfileDisabled}
@@ -607,9 +588,7 @@ function ProfileEnablementSwitch(props: {
       sideOffset={6}
       align={undefined}
     >
-      {/* Keep Tooltip's `data-state` on this neutral wrapper. Putting its
-          trigger directly on Switch overwrites Switch's own checked state,
-          which removes the checked track fill. */}
+      {/* Keep Tooltip's `data-state` on this neutral wrapper. */}
       <span className={cn("inline-flex shrink-0", props.className)}>
         <Switch
           aria-label={`Allow agents to use ${props.label}`}
@@ -716,9 +695,7 @@ function computeProfileRowState(input: {
   };
 }
 
-/** Wraps a disabled-with-reason row in a tooltip; passes an admitted (or
- *  reasonless) row through unchanged. Split out of the row `.map()` purely to
- *  keep that callback's branch count down. */
+/** Split out of the row `.map` purely to keep that callback's branch count down. */
 function admissionTooltipRow(
   admission: ProfileRowAdmission | null,
   row: ReactNode,
@@ -749,9 +726,8 @@ function TerminalProfileBadge() {
   );
 }
 
-/** Restates the visual `TerminalProfileBadge` for aria-labels - both the
- *  trigger and the rows carry aria-labels that replace their text content, so
- *  the badge is invisible to AT without this suffix. */
+/** Restates the visual `TerminalProfileBadge` for aria-labels - both the trigger and the rows carry aria-labels
+ * that replace their text content, so the badge is invisible to AT without this suffix. */
 function terminalBadgeSuffix(profile: ProviderProfile): string {
   return profile.kind === "ambient" ? ", Terminal" : "";
 }
@@ -762,11 +738,8 @@ function profileRowAccessibleLabel(input: {
   readonly selected: boolean;
   readonly statusSuffix: string | null;
   readonly usageEntry: ProfileDropdownUsageEntry | undefined;
-  /** The row's admission-disabled reason (`ProfileRowAdmission.reason`), when
-   *  set. Radix skips a disabled item during roving-focus arrow navigation,
-   *  so the tooltip that also renders this text is hover-only for keyboard/AT
-   *  users - folding it into the accessible name is what makes the reason
-   *  perceivable to them at all. */
+  /** Radix skips a disabled item during roving-focus arrow navigation, so the tooltip that also renders this text
+   * is hover-only for keyboard/AT users. */
   readonly admissionReason: string | null;
   readonly enabled: boolean;
 }): string {

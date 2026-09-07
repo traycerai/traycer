@@ -1,25 +1,6 @@
 /**
- * The OFFICE rendering of the communication graph: a pixel-art floor on a
- * single `<canvas>`, where every agent is a character at a desk and every A2A
- * message is an envelope flying desk to desk.
- *
- * SAME PROJECTION AS THE NODE GRAPH. This component takes the identical props:
- * the epic's full agent set, the agents that exist as of the cursor, the merged
- * as-of event array, and what the cursor row pulses. Nothing here reads a clock
- * to decide WHAT to show - only how far along an animation of it has got. So a
- * replayed floor and a live one cannot disagree, and neither can the two modes.
- *
- * THREE COORDINATE SPACES, kept apart on purpose:
- *
- * - SPRITE space - integer pixels at 1x, what the scene and the sprites speak.
- * - SCREEN space - CSS pixels inside this component's box. The camera maps
- *   sprite to screen (`screen = sprite * zoom + offset`), and labels are drawn
- *   here so text stays crisp instead of being magnified into mush.
- * - DEVICE space - screen times `devicePixelRatio`, the canvas bitmap.
- *
- * The camera lives in a ref, not in React state: it is read by the animation
- * frame and written by pointer handlers, so routing it through a render would
- * re-render the tree at 60Hz to move numbers nothing else reads.
+ * Nothing here reads a clock to decide WHAT to show - only how far along an animation of it has got.
+ * So a replayed floor and a live one cannot disagree, and neither can the two modes.
  */
 import {
   useCallback,
@@ -120,9 +101,8 @@ import {
 } from "@/lib/comm-graph/office/office-types";
 
 /**
- * Screen pixels per sprite pixel. The floor is drawn at integer-ish scales so
- * the pixel art stays square; the bounds are what keeps a one-agent room from
- * filling the tile with a single desk and a fifty-agent floor from vanishing.
+ * Screen pixels per sprite pixel.
+ * The floor is drawn at integer-ish scales so the pixel art stays square; the bounds are what keeps a one-agent room from filling the tile with a single desk and a fifty-agent floor from vanishing.
  */
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 8;
@@ -173,9 +153,7 @@ type OfficeSelectedDetail =
   | { readonly kind: "pair"; readonly edgeId: string };
 
 /**
- * The hovered character and where its card should sit, in container-relative
- * screen pixels. Recomputed on pointer move rather than per frame: the camera
- * does not move under a stationary pointer, and a drag clears the hover.
+ * Recomputed on pointer move rather than per frame: the camera does not move under a stationary pointer, and a drag clears the hover.
  */
 interface OfficeHoverTarget {
   readonly agentId: string;
@@ -184,14 +162,8 @@ interface OfficeHoverTarget {
 }
 
 /**
- * What the open hover card was measured against, so the frame loop can tell
- * when that measurement has stopped being true without a pointer event.
- *
- * The card's screen rect is computed on a pointermove and never again, but the
- * thing it points at keeps moving: the character walks off to lunch, or an
- * auto-pan slides the whole floor under a stationary cursor. Either leaves the
- * trigger anchored over empty floor. Both are a change in exactly these five
- * numbers, which is what makes them the thing to remember.
+ * What the open hover card was measured against, so the frame loop can tell when that measurement has stopped being true without a pointer event.
+ * The card's screen rect is computed on a pointermove and never again, but the thing it points at keeps moving: the character walks off to lunch, or an auto-pan slides the whole floor under a stationary cursor.
  */
 interface HoverAnchor {
   readonly agentId: string;
@@ -208,7 +180,6 @@ function sameRect(a: OfficeRect, b: OfficeRect): boolean {
   );
 }
 
-/** Whether the hovered box is still exactly where the card was measured. */
 function hoverAnchorHolds(
   anchor: HoverAnchor,
   regions: ReadonlyArray<OfficeHitRegion>,
@@ -239,9 +210,8 @@ interface CameraPan {
 }
 
 /**
- * Where the camera should end up, without saying when. Requested by handlers
- * and by the find adapter; turned into a {@link CameraPan} by the frame loop,
- * which is the only place that has a frame clock to start one against.
+ * Where the camera should end up, without saying when.
+ * Requested by handlers and by the find adapter; turned into a {@link CameraPan} by the frame loop, which is the only place that has a frame clock to start one against.
  */
 interface PanRequest {
   readonly focus: OfficePoint;
@@ -273,14 +243,7 @@ function panToward(args: {
 }
 
 /**
- * The canvas's imperative state: everything the animation frame, the pointer
- * handlers and the Find adapter all touch, in one mutable object created once.
- *
- * Deliberately NOT a pile of refs. A ref may not be read or written during
- * render, and the Find adapter is built in a memo - so handing it refs would
- * be exactly the render-phase access that rule forbids. A plain object held in
- * state has the same lifetime and none of that hazard; the fields below are
- * written only from effects and handlers.
+ * A plain object held in state has the same lifetime and none of that hazard; the fields below are written only from effects and handlers.
  */
 interface OfficeRuntime {
   readonly getCamera: () => OfficeCamera;
@@ -290,33 +253,20 @@ interface OfficeRuntime {
   readonly getHitRegions: () => ReadonlyArray<OfficeHitRegion>;
   readonly setHitRegions: (next: ReadonlyArray<OfficeHitRegion>) => void;
   /**
-   * The envelopes drawn on the last frame.
-   *
-   * A pointer move is answered from these rather than by asking the scene,
-   * which would rebuild the whole overlay to find out - once per pointermove,
-   * which is once per mouse event. What the person is pointing at is what they
-   * can SEE, so the frame they are looking at is the right thing to ask.
+   * A pointer move is answered from these rather than by asking the scene, which would rebuild the whole overlay to find out - once per pointermove, which is once per mouse event.
    */
   readonly getEnvelopeRegions: () => ReadonlyArray<OfficeEnvelopeHitRegion>;
   readonly setEnvelopeRegions: (
     next: ReadonlyArray<OfficeEnvelopeHitRegion>,
   ) => void;
   /**
-   * Whether a frame has ever been drawn.
-   *
-   * Distinguishes "the last frame had no envelopes" - the common case, and the
-   * one the cache exists to answer without work - from "there has been no
-   * frame", where the cached list is empty because nothing has filled it. An
-   * empty list alone cannot tell those apart, and treating the second as the
-   * first would drop a click on a floor that has not painted yet.
+   * Distinguishes "the last frame had no envelopes" - the common case, and the one the cache exists to answer without work - from "there has been no frame", where the cached list is empty because nothing has filled it.
+   * An empty list alone cannot tell those apart, and treating the second as the first would drop a click on a floor that has not painted yet.
    */
   readonly hasDrawnFrame: () => boolean;
   /**
    * Asks the frame loop to paint the next frame unconditionally.
-   *
-   * Routed through the runtime because the gate lives inside the loop's effect
-   * and the sizing callback does not - and the sizing callback is precisely
-   * what erases the pixels the skip is counting on.
+   * Routed through the runtime because the gate lives inside the loop's effect and the sizing callback does not - and the sizing callback is precisely what erases the pixels the skip is counting on.
    */
   readonly invalidateFrame: () => void;
   readonly onInvalidateFrame: (listener: () => void) => void;
@@ -338,9 +288,7 @@ interface OfficeRuntime {
   readonly enableAutoPan: () => void;
   readonly isAutoFitEnabled: () => boolean;
   /**
-   * A person took the camera: stop following the action until the next Play,
-   * stop re-fitting for good, and abandon any move in flight rather than
-   * fighting it. A find gesture counts - it is the user aiming the camera.
+   * A person took the camera: stop following the action until the next Play, stop re-fitting for good, and abandon any move in flight rather than fighting it.
    */
   readonly takeManualControl: () => void;
   /**
@@ -354,10 +302,7 @@ interface OfficeRuntime {
   readonly getHostNames: () => ReadonlyMap<string, string>;
   readonly setHostNames: (next: ReadonlyMap<string, string>) => void;
   /**
-   * Agent display names for the name tags. Mirrored here rather than closed
-   * over by the frame loop: a rename is the ONE agent change the scene does
-   * not treat as a new floor, and tearing the loop down for it would repaint
-   * the whole static layer to change one label.
+   * Mirrored here rather than closed over by the frame loop: a rename is the ONE agent change the scene does not treat as a new floor, and tearing the loop down for it would repaint the whole static layer to change one label.
    */
   readonly getNameById: () => ReadonlyMap<string, string>;
   readonly setNameById: (next: ReadonlyMap<string, string>) => void;
@@ -411,11 +356,7 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     },
     hasDrawnFrame: () => drawnFrame,
     getSearchMatchIds: () => searchMatchIds,
-    // The match outlines and the hovered name tag are painted by the frame,
-    // and on a still floor the idle skip refuses every frame - so a change to
-    // either has to ask for one, or Find would report no matches over a floor
-    // still wearing the last query's outlines. Only a CHANGE asks: a pointer
-    // resting on one agent reports it on every move.
+    // Only a CHANGE asks: a pointer resting on one agent reports it on every move.
     setSearchMatchIds: (next) => {
       if (next === searchMatchIds) return;
       searchMatchIds = next;
@@ -513,8 +454,7 @@ function easeInOut(t: number): number {
 
 /**
  * The largest listed zoom at which the whole floor fits with padding, centered.
- * Falls back to the smallest step when nothing fits: an overflowing floor the
- * user can zoom out of beats a blank one.
+ * Falls back to the smallest step when nothing fits: an overflowing floor the user can zoom out of beats a blank one.
  */
 function fitCamera(floor: OfficeSize, viewport: ScreenSize): OfficeCamera {
   const availableWidth = Math.max(1, viewport.width - FIT_PADDING * 2);
@@ -596,12 +536,8 @@ function hitRegionFor(
 }
 
 /**
- * Screen-space text with a one-pixel backing behind it.
- *
- * The floor's own colors are arbitrary (a character's shirt may land on the
- * foreground color), so a name is outlined rather than trusted to contrast
- * with whatever it happens to sit on. The backing's colour is the CALLER's,
- * because it has to contrast with the text rather than with the floor.
+ * The floor's own colors are arbitrary (a character's shirt may land on the foreground color), so a name is outlined rather than trusted to contrast with whatever it happens to sit on.
+ * The backing's colour is the CALLER's, because it has to contrast with the text rather than with the floor.
  */
 const LABEL_BACKING_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0],
@@ -654,20 +590,14 @@ interface DrawFrameArgs {
   readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
   /**
-   * The floor, already painted in sprite space. `null` where no offscreen
-   * surface could be made, in which case the floor is drawn tile by tile as it
-   * always was - the fast path is an optimization, never a requirement.
+   * `null` where no offscreen surface could be made, in which case the floor is drawn tile by tile as it always was - the fast path is an optimization, never a requirement.
    */
   readonly staticFloor: HTMLCanvasElement | null;
 }
 
 /**
  * A harness logo on a desk nameplate, CENTER anchored.
- *
- * The chip behind it is load-bearing, not decoration: the plate sits on wood,
- * and a brand mark drawn straight onto it can lose its own outline against a
- * grain of a similar value. Drawn whether or not the logo has rasterized yet,
- * so the plate does not visibly pop when an async decode lands.
+ * The chip behind it is load-bearing, not decoration: the plate sits on wood, and a brand mark drawn straight onto it can lose its own outline against a grain of a similar value.
  */
 function drawHarnessLogo(
   ctx: CanvasRenderingContext2D,
@@ -697,9 +627,7 @@ function drawHarnessLogo(
     );
   }
   ctx.fill();
-  // `null` while the logo rasterizes - the chip alone is the placeholder. The
-  // decode asks for the frame that first shows the mark (`onOfficeLogoReady`),
-  // which a still floor would otherwise never draw.
+  // The decode asks for the frame that first shows the mark (`onOfficeLogoReady`), which a still floor would otherwise never draw.
   const logo = officeHarnessLogo(drawable.harnessId);
   if (logo !== null) {
     ctx.drawImage(logo, drawable.x - half, drawable.y - half);
@@ -708,11 +636,8 @@ function drawHarnessLogo(
 }
 
 /**
- * Hands over a clock face, in LOCAL time.
- *
  * Drawn rather than sprited because a sprite would need one frame per minute.
- * Twelve-hour geometry: the hour hand carries the minutes too, so it sits
- * between hours rather than jumping across them.
+ * Twelve-hour geometry: the hour hand carries the minutes too, so it sits between hours rather than jumping across them.
  */
 function drawClockHands(
   ctx: CanvasRenderingContext2D,
@@ -750,10 +675,7 @@ function drawEnvelope(
   shadowColor: string,
 ): void {
   const size = officeSpriteSize({ name: "envelope" });
-  // `y` already carries the scene's arc lift, so ADDING the same term back
-  // recovers the straight sender-to-receiver line - where the envelope's
-  // shadow belongs. Height is the only depth cue a flat floor has, and the
-  // shadow shrinking as the arc peaks is what reads as height.
+  // Height is the only depth cue a flat floor has, and the shadow shrinking as the arc peaks is what reads as height.
   const arcFraction = 4 * drawable.progress * (1 - drawable.progress);
   const groundY = drawable.y + ENVELOPE_ARC_LIFT * arcFraction;
   const radiusX = (size.width / 2) * (1 - 0.3 * arcFraction);
@@ -775,9 +697,8 @@ function drawEnvelope(
 }
 
 /**
- * Where a sprite's (x, y) sits on its own box. The scene anchors the layers
- * differently on purpose - a floor tile is placed, a bubble is HUNG over the
- * head it belongs to - so the anchor travels with the layer, not the sprite.
+ * Where a sprite's (x, y) sits on its own box.
+ * The scene anchors the layers differently on purpose - a floor tile is placed, a bubble is HUNG over the head it belongs to - so the anchor travels with the layer, not the sprite.
  */
 type SpriteAnchor = "top-left" | "bottom-center";
 
@@ -806,9 +727,7 @@ function drawAnchoredSprite(
 }
 
 /**
- * A floor's name over its stairwell. Only drawn when the building has more
- * than one floor: with a single host the building IS the epic, and a sign over
- * it would label the obvious.
+ * Only drawn when the building has more than one floor: with a single host the building IS the epic, and a sign over it would label the obvious.
  */
 function drawFloorSigns(args: {
   readonly ctx: CanvasRenderingContext2D;
@@ -839,14 +758,7 @@ function drawFloorSigns(args: {
 }
 
 /**
- * A room's name on a wall plate.
- *
- * SIGNAGE, not a name tag - and the distinction is the point. Cabin, area and
- * pod names used to be drawn in the same face as an agent's name, so a reader
- * counted "Cafeteria" as another person standing in the room. Uppercase,
- * tracked out, and set on a plate, it reads as a fixture instead. The plate is
- * also its own backing, so the four-offset outline the name tags use would
- * only muddy it.
+ * The plate is also its own backing, so the four-offset outline the name tags use would only muddy it.
  */
 function drawSignPlate(
   ctx: CanvasRenderingContext2D,
@@ -885,11 +797,7 @@ function drawSignPlate(
 
 /**
  * The agent a name tag belongs to, or `null` when it belongs to no character.
- *
- * The scene emits a tag directly under its character and gives neither an id,
- * so they are matched by GEOMETRY: same horizontal centre, and the tag's
- * baseline within one tile below the character's feet. An empty desk's own
- * plate label matches nothing - correctly, since a desk is not away.
+ * The scene emits a tag directly under its character and gives neither an id, so they are matched by GEOMETRY: same horizontal centre, and the tag's baseline within one tile below the character's feet.
  */
 function nameTagOwner(
   label: OfficeLabelDrawable,
@@ -905,25 +813,14 @@ function nameTagOwner(
 }
 
 /**
- * Agents whose character is not on its own chair tile - walking, on an errand,
- * queueing, playing.
- *
- * Derived from the character hit region rather than from any scene internal:
- * a region's bottom edge sits exactly on the bottom of the tile the character
- * stands on, so the tile falls out of the rect with no offset to keep in step.
+ * Derived from the character hit region rather than from any scene internal: a region's bottom edge sits exactly on the bottom of the tile the character stands on, so the tile falls out of the rect with no offset to keep in step.
  */
 type OfficeLabelDrawable = Extract<OfficeDrawable, { kind: "label" }>;
 type OfficeClockDrawable = Extract<OfficeDrawable, { kind: "clock" }>;
 
 /**
- * Per-frame scratch, module-scoped and reused.
- *
- * Every allocation in the draw path is paid thirty times a second for as long
- * as an office is open, and these three collections are pure intermediates:
- * nothing outside `drawOfficeFrame` ever holds one, and each is fully
- * overwritten before it is read. Module scope rather than per-canvas because
- * the draw is synchronous and re-entrant only through itself, so two mounted
- * offices cannot be inside it at once.
+ * Every allocation in the draw path is paid thirty times a second for as long as an office is open, and these three collections are pure intermediates: nothing outside `drawOfficeFrame` ever holds one, and each is fully overwritten before it is read.
+ * Module scope rather than per-canvas because the draw is synchronous and re-entrant only through itself, so two mounted offices cannot be inside it at once.
  */
 const labelScratch: OfficeLabelDrawable[] = [];
 const clockScratch: OfficeClockDrawable[] = [];
@@ -954,11 +851,7 @@ const LABEL_BACKINGS: Readonly<
 
 /**
  * Measured text widths, by string.
- *
- * `measureText` shapes the run and allocates a `TextMetrics` for every tag on
- * every frame, and an agent's name does not change width between two frames.
- * The font is a module constant, so the text alone is the whole key. Bounded
- * because a long session can meet a lot of names.
+ * `measureText` shapes the run and allocates a `TextMetrics` for every tag on every frame, and an agent's name does not change width between two frames.
  */
 const MEASURE_CACHE_LIMIT = 512;
 const measuredWidths = new Map<string, number>();
@@ -985,17 +878,14 @@ interface DrawLayerArgs {
   readonly labels: OfficeLabelDrawable[];
   readonly clocks: OfficeClockDrawable[];
   /**
-   * `skip` for the floor when its sprites are already on screen from the
-   * static layer. Everything that layer does NOT bake still comes through
-   * here, so the blitted floor and the drawn one contain the same things.
+   * `skip` for the floor when its sprites are already on screen from the static layer.
+   * Everything that layer does NOT bake still comes through here, so the blitted floor and the drawn one contain the same things.
    */
   readonly sprites: "draw" | "skip";
 }
 
 /**
- * Draws one layer of the frame, setting aside the drawables that belong to a
- * later pass. A function rather than a loop over an array of layer descriptors
- * - four object literals a frame to say what four call sites already say.
+ * A function rather than a loop over an array of layer descriptors - four object literals a frame to say what four call sites already say.
  */
 function drawDrawableLayer(args: DrawLayerArgs): void {
   const { anchor, clocks, ctx, drawables, labels, palette, sprites, theme } =
@@ -1041,10 +931,7 @@ function drawStaticFloor(
 const awayScratch = new Set<string>();
 
 /**
- * The pair edge of the envelope under a point, topmost first.
- *
- * The scene can answer this too, but only by rebuilding its whole overlay to
- * do it - and the regions it would rebuild are the ones already drawn.
+ * The scene can answer this too, but only by rebuilding its whole overlay to do it - and the regions it would rebuild are the ones already drawn.
  */
 function envelopeEdgeAt(
   regions: ReadonlyArray<OfficeEnvelopeHitRegion>,
@@ -1066,11 +953,7 @@ function envelopeEdgeAt(
 }
 
 /**
- * The envelope under a point, from the last drawn frame where there is one.
- *
- * Falling back to the scene rebuilds its entire overlay to answer, which is
- * why it happens once at most: before the first frame. After that the drawn
- * regions ARE the answer, and they are what the person is pointing at.
+ * Falling back to the scene rebuilds its entire overlay to answer, which is why it happens once at most: before the first frame.
  */
 function envelopeEdgeFor(
   runtime: OfficeRuntime,
@@ -1122,13 +1005,8 @@ function drawSignLabels(
 }
 
 /**
- * Agent name tags, thinned and de-overlapped.
- *
- * An agent AWAY from its desk keeps its tag only while hovered: a walking
- * character is already where the eye is, and its tag is what collides with
- * everyone else's the moment a group gathers. What survives that is then
- * placed by {@link layoutNameTags}, which moves or drops a tag rather than
- * letting two print through each other.
+ * An agent AWAY from its desk keeps its tag only while hovered: a walking character is already where the eye is, and its tag is what collides with everyone else's the moment a group gathers.
+ * What survives that is then placed by {@link layoutNameTags}, which moves or drops a tag rather than letting two print through each other.
  */
 function drawNameTags(args: {
   readonly ctx: CanvasRenderingContext2D;
@@ -1196,11 +1074,8 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     viewport,
   } = args;
   const palette = officePalette(theme);
-  // The backing exists to separate glyphs from whatever they sit on, so it has
-  // to contrast with the TEXT. A fixed dark backing did that for the dark
-  // theme's light text and smeared the light theme's dark text into a bold
-  // blur. `bright` is the exception in both themes: it is the cabin sign's
-  // tone, light by definition, so it keeps the dark backing either way.
+  // The backing exists to separate glyphs from whatever they sit on, so it has to contrast with the TEXT.
+  // A fixed dark backing did that for the dark theme's light text and smeared the light theme's dark text into a bold blur.
   const labelBackings = LABEL_BACKINGS[theme];
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1218,11 +1093,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   );
   ctx.imageSmoothingEnabled = false;
 
-  // Labels are collected rather than drawn inline: they belong to screen space,
-  // and switching the transform per label would cost more than one pass.
-  // Collected into SCRATCH buffers reused across frames - a fresh array per
-  // layer per frame is garbage the collector has to walk thirty times a
-  // second, and nothing outside this function ever sees them.
+  // Labels are collected rather than drawn inline: they belong to screen space, and switching the transform per label would cost more than one pass.
   const labels = resetScratch(labelScratch);
   // Collected so the hands land ON TOP of the face sprite regardless of which
   // layer the scene emitted the clock in.
@@ -1241,9 +1112,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     drawDrawableLayer({ ...layer, drawables: frame.floor, anchor: "top-left" });
   } else {
     ctx.drawImage(staticFloor, 0, 0);
-    // The layer baked the sprites and nothing else, so the rest of the floor
-    // takes the ordinary path - otherwise a label on the floor would appear
-    // only on hosts that could not make an offscreen surface.
+    // The layer baked the sprites and nothing else, so the rest of the floor takes the ordinary path - otherwise a label on the floor would appear only on hosts that could not make an offscreen surface.
     drawDrawableLayer({
       ...layer,
       drawables: frame.floor,
@@ -1263,10 +1132,8 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
 
   for (const clock of clocks) drawClockHands(ctx, clock, palette.ink);
 
-  // Back to screen space for text: a name magnified by the camera would be a
-  // blur at zoom 4 and unreadable at zoom 0.5. The palette owns these colors
-  // rather than `--foreground`, because they have to contrast with the ROOM,
-  // which is the palette's own background and not the app's.
+  // Back to screen space for text: a name magnified by the camera would be a blur at zoom 4 and unreadable at zoom 0.5.
+  // The palette owns these colors rather than `--foreground`, because they have to contrast with the ROOM, which is the palette's own background and not the app's.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   drawSignLabels(ctx, labels, camera, palette);
@@ -1320,9 +1187,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
 }
 
 /**
- * `prefers-reduced-motion`, live. The scene applies state changes instantly
- * under it - no walking, no flight - so the preference has to be able to change
- * mid-session rather than being sampled once at mount.
+ * The scene applies state changes instantly under it - no walking, no flight - so the preference has to be able to change mid-session rather than being sampled once at mount.
  */
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
@@ -1367,14 +1232,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [runtime] = useState(() => createOfficeRuntime(view));
-  // A tile the user has never framed keeps fitting itself, so a floor that
-  // GROWS - agents arriving after the first frame, which is the normal case -
-  // is framed as the room it became rather than as the empty one it started
-  // as. The first pan, zoom or explicit fit ends that for good.
-  //
-  // The VIEWPORT is part of what was fitted, not only the floor: a tile that
-  // shrinks or grows around an unchanged floor needs framing again just as
-  // much as a floor that grew inside an unchanged tile.
+  // A tile the user has never framed keeps fitting itself, so a floor that GROWS - agents arriving after the first frame, which is the normal case - is framed as the room it became rather than as the empty one it started as.
+  // The VIEWPORT is part of what was fitted, not only the floor: a tile that shrinks or grows around an unchanged floor needs framing again just as much as a floor that grew inside an unchanged tile.
   const fittedRef = useRef<{
     readonly floor: OfficeSize;
     readonly viewport: ScreenSize;
@@ -1391,9 +1250,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const wasPlayingRef = useRef(playing);
   const autoPannedKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<number | null>(null);
-  // ONE detail surface at a time, the same rule the node graph follows:
-  // opening a character replaces an open thread and vice versa, so the floor
-  // never has two competing explanations beside it.
+  // ONE detail surface at a time, the same rule the node graph follows: opening a character replaces an open thread and vice versa, so the floor never has two competing explanations beside it.
   const [selectedDetail, setSelectedDetail] =
     useState<OfficeSelectedDetail | null>(null);
   const selectedAgentId =
@@ -1403,9 +1260,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const setSelectedAgentId = useCallback((agentId: string | null) => {
     setSelectedDetail(agentId === null ? null : { kind: "agent", agentId });
   }, []);
-  // What the pointer is over, in container-relative screen pixels. State
-  // rather than a ref because the card is React, and it only moves when the
-  // hover target changes - not every frame.
+  // State rather than a ref because the card is React, and it only moves when the hover target changes - not every frame.
   const [hoverCard, setHoverCard] = useState<OfficeHoverTarget | null>(null);
 
   const { resolvedTheme } = useResolvedTheme();
@@ -1416,9 +1271,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const activityTiers = useEpicAgentActivityTiers();
   const reducedMotion = usePrefersReducedMotion();
 
-  // ONE scene per epic, kept across renders: it owns walk paths, envelope
-  // flights and typing phase, all of which are continuous state that a
-  // re-created scene would restart on every unrelated prop change.
+  // ONE scene per epic, kept across renders: it owns walk paths, envelope flights and typing phase, all of which are continuous state that a re-created scene would restart on every unrelated prop change.
   const sceneRef = useRef<{
     readonly epicId: string;
     readonly scene: OfficeScene;
@@ -1461,14 +1314,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [agents],
   );
 
-  // The "!" bubble's source. Read for every agent in one store subscription
-  // (the same shape the sidebar's descendant rollup uses) rather than one hook
-  // per character: a floor can hold dozens, and each would otherwise be its own
-  // subscription re-running on every unrelated notification.
+  // Read for every agent in one store subscription (the same shape the sidebar's descendant rollup uses) rather than one hook per character: a floor can hold dozens, and each would otherwise be its own subscription re-running on every unrelated notification.
   const indicators = useContext(NotificationIndicatorsContext);
-  // ONE subscription for both signals. They are read from the same indicator
-  // state and split by the SAME rule `attentionTone` applies internally, so a
-  // crashed screen and a "!" bubble can never disagree about one agent.
+  // They are read from the same indicator state and split by the SAME rule `attentionTone` applies internally, so a crashed screen and a "!" bubble can never disagree about one agent.
   const flaggedIdList = useAppLocalNotificationsStore(
     useShallow((state): ReadonlyArray<string> =>
       agents.flatMap((agent) => {
@@ -1535,10 +1383,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // transport shortens the flight instead of queueing them up behind it.
       stepMs: BASE_STEP_MS / speed,
       cursorMs,
-      // A PLACEHOLDER while live: reading a clock during render is impure, so
-      // the sync effect below stamps the real time and the frame loop advances
-      // it once a second. During replay the cursor's own time is the answer
-      // and never ticks.
+      // During replay the cursor's own time is the answer and never ticks.
       clockMs: cursorMs ?? 0,
       openRequestsByReceiver,
       playing,
@@ -1582,15 +1427,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         : sceneInput;
     runtime.setSceneInput(stamped);
     readScene().sync(stamped);
-    // Not every change to the input moves anything. A paused seek that answers
-    // an open request takes an envelope off a desk and starts no walk, and
-    // within the same minute the idle skip would leave the pile painted.
+    // Not every change to the input moves anything.
+    // A paused seek that answers an open request takes an envelope off a desk and starts no walk, and within the same minute the idle skip would leave the pile painted.
     runtime.invalidateFrame();
   }, [readScene, runtime, sceneInput]);
 
-  // Pressing Play is an explicit request to follow the action again. Pause
-  // leaves the current choice alone; only the next false -> true transition
-  // re-arms after a person has taken manual control of the camera.
+  // Pause leaves the current choice alone; only the next false -> true transition re-arms after a person has taken manual control of the camera.
   useEffect(() => {
     if (playing && !wasPlayingRef.current) runtime.enableAutoPan();
     wasPlayingRef.current = playing;
@@ -1688,9 +1530,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (canvas.width === width && canvas.height === height) return;
     canvas.width = width;
     canvas.height = height;
-    // Assigning either dimension CLEARS the bitmap, which is exactly the thing
-    // the idle skip assumes is still there. Without this a resize of a still
-    // floor leaves the tile blank until something happens to move.
+    // Without this a resize of a still floor leaves the tile blank until something happens to move.
     runtime.invalidateFrame();
   }, [runtime]);
 
@@ -1700,10 +1540,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     applyCanvasSize();
     const observer = new ResizeObserver(applyCanvasSize);
     observer.observe(container);
-    // A DEVICE PIXEL RATIO change is invisible to the observer: dragging the
-    // window from a 1x display to a 2x one leaves every CSS dimension exactly
-    // as it was, so nothing resizes and the bitmap stays at half the density
-    // the screen now has - a permanently blurry floor.
+    // A DEVICE PIXEL RATIO change is invisible to the observer: dragging the window from a 1x display to a 2x one leaves every CSS dimension exactly as it was, so nothing resizes and the bitmap stays at half the density the screen now has - a permanently blurry floor.
     window.addEventListener("resize", applyCanvasSize);
     return () => {
       observer.disconnect();
@@ -1711,9 +1548,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     };
   }, [applyCanvasSize]);
 
-  // Mirrored into the runtime rather than read from props inside the frame
-  // loop: the loop is created once and must see the latest values without
-  // being torn down and restarted on every playback step.
+  // Mirrored into the runtime rather than read from props inside the frame loop: the loop is created once and must see the latest values without being torn down and restarted on every playback step.
   useEffect(() => {
     runtime.setPlayback(pulseKey, playing);
   }, [playing, pulseKey, runtime]);
@@ -1728,9 +1563,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
     let raf = 0;
     let last = performance.now();
-    // Seeded from the DOM rather than assumed: the observer's first callback
-    // is asynchronous, and a tile opened in the foreground should not wait a
-    // frame for it.
+    // Seeded from the DOM rather than assumed: the observer's first callback is asynchronous, and a tile opened in the foreground should not wait a frame for it.
     let canvasIsVisible = isElementVisible(canvas);
     let lastClockSecond = -1;
     let pausedAt: number | null = null;
@@ -1745,10 +1578,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       gate.invalidate();
     });
 
-    // A wall clock only has to be right to the minute, but it must not be
-    // right only at mount. Re-syncing the SAME input with a fresh `clockMs`
-    // is what advances it: `sync` is idempotent and guarded by the pulse key,
-    // so re-supplying a row replays nothing.
+    // A wall clock only has to be right to the minute, but it must not be right only at mount.
     const advanceLiveClock = (): void => {
       const input = runtime.getSceneInput();
       if (input === null || input.cursorMs !== null) return;
@@ -1758,16 +1588,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       lastClockSecond = second;
       const stamped = { ...input, clockMs: now };
       readScene().sync(stamped);
-      // Stored back, not merely synced: the idle skip reads the clock off the
-      // runtime to decide whether the minute turned over, and a stamp only the
-      // scene knows about leaves it comparing the mount-time value forever.
+      // Stored back, not merely synced: the idle skip reads the clock off the runtime to decide whether the minute turned over, and a stamp only the scene knows about leaves it comparing the mount-time value forever.
       runtime.setSceneInput(stamped);
     };
 
-    // Re-fit an unframed tile whenever the floor's size OR the tile's changes -
-    // agents arriving after the first frame is the normal case, and the room
-    // they land in is the one worth framing; a resized tile is the same floor
-    // seen through a different window, and the old framing crops it.
+    // Re-fit an unframed tile whenever the floor's size OR the tile's changes - agents arriving after the first frame is the normal case, and the room they land in is the one worth framing; a resized tile is the same floor seen through a different window, and the old framing crops it.
     const applyAutoFit = (floor: OfficeSize, viewport: ScreenSize): void => {
       const fitted = fittedRef.current;
       if (!runtime.isAutoFitEnabled()) return;
@@ -1805,10 +1630,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       runtime.requestPan({ focus, zoom: null });
     };
 
-    // The frame clock is the only clock here: a pan is REQUESTED without a
-    // start time and gets one from whichever frame picks it up, so a request
-    // made while the tile was hidden animates when it comes back rather than
-    // arriving already finished.
+    // The frame clock is the only clock here: a pan is REQUESTED without a start time and gets one from whichever frame picks it up, so a request made while the tile was hidden animates when it comes back rather than arriving already finished.
     const advanceCamera = (now: number, viewport: ScreenSize): void => {
       const camera = runtime.getCamera();
       const requested = runtime.takePanRequest();
@@ -1828,9 +1650,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     };
 
     const step = (now: number): void => {
-      // The SIM runs in real time; only the DRAWING is capped, and the whole
-      // accumulated slice is what it is ticked with - that is what keeps a
-      // walk taking as long as it would at any frame rate.
+      // The SIM runs in real time; only the DRAWING is capped, and the whole accumulated slice is what it is ticked with - that is what keeps a walk taking as long as it would at any frame rate.
       const elapsed = gate.elapsed(now - last);
       last = now;
       if (elapsed === null) {
@@ -1840,11 +1660,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       advanceLiveClock();
       const scene = readScene();
       scene.tick(elapsed);
-      // A DPR change does not resize anything in CSS pixels, so no resize
-      // event is guaranteed to arrive - a browser zoom on a secondary display
-      // moves it silently. Checked BEFORE the idle skip: resizing the bitmap
-      // is what invalidates the gate, and a still floor would otherwise never
-      // reach the check. The compare is two property reads a frame.
+      // Checked BEFORE the idle skip: resizing the bitmap is what invalidates the gate, and a still floor would otherwise never reach the check.
       if ((window.devicePixelRatio || 1) !== appliedDprRef.current) {
         applyCanvasSize();
       }
@@ -1870,13 +1686,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       applyAutoFit(frame.size, viewport);
       requestPlaybackPan(frame.focus, viewport);
       advanceCamera(now, viewport);
-      // The hover card's rect was measured on the last pointermove, and what
-      // it points at can move without the pointer moving at all: the cursor
-      // scrubs to a time before that agent existed, the agent walks off to
-      // the cafeteria, or an auto-pan slides the floor under the cursor.
-      // Holding the card open would leave it anchored to empty floor. Checked
-      // AFTER the camera has moved for this frame, so a pan is caught on the
-      // frame it happens rather than the one after.
+      // The hover card's rect was measured on the last pointermove, and what it points at can move without the pointer moving at all: the cursor scrubs to a time before that agent existed, the agent walks off to the cafeteria, or an auto-pan slides the floor under the cursor.
+      // Checked AFTER the camera has moved for this frame, so a pan is caught on the frame it happens rather than the one after.
       const anchor = hoverAnchorRef.current;
       if (
         anchor !== null &&
@@ -1939,11 +1750,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       raf = 0;
       pausedAt = Date.now();
     };
-    // TWO ways to be invisible, and the floor has to answer to both. A hidden
-    // DOCUMENT is the browser's own signal. A hidden TILE is not: an unselected
-    // Traycer tab keeps its tiles mounted under `display:none`, so without the
-    // observer this loop draws sixty frames a second into a canvas nobody can
-    // see. The tile itself stays mounted either way - only the loop pauses.
+    // A hidden TILE is not: an unselected Traycer tab keeps its tiles mounted under `display:none`, so without the observer this loop draws sixty frames a second into a canvas nobody can see.
+    // The tile itself stays mounted either way - only the loop pauses.
     const onVisibility = (): void => {
       if (document.hidden) stop();
       else start();
@@ -1984,18 +1792,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [runtime],
   );
 
-  // Shared by the canvas and the hover trigger that sits over a character: a
-  // press that starts on the trigger is still a press on the floor. The
-  // pointer is captured by the CANVAS whichever element took the press, so
-  // the move and the release reach the canvas handlers - and a click, if the
-  // press never moved, is resolved there by the same hit test as any other.
+  // The pointer is captured by the CANVAS whichever element took the press, so the move and the release reach the canvas handlers - and a click, if the press never moved, is resolved there by the same hit test as any other.
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       const canvas = canvasRef.current;
       if (canvas === null) return;
-      // Manual control is claimed when the drag actually MOVES, not here. A
-      // plain click on an agent is not a statement about the camera, and
-      // taking control on every press disabled auto-fit for the session.
+      // Manual control is claimed when the drag actually MOVES, not here.
+      // A plain click on an agent is not a statement about the camera, and taking control on every press disabled auto-fit for the session.
       const camera = runtime.getCamera();
       dragRef.current = {
         pointerId: event.pointerId,
@@ -2075,11 +1878,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   const handlePointerLeave = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      // The hover card's trigger is a transparent element laid OVER the canvas,
-      // so opening it moves the pointer from the canvas onto the trigger
-      // without the pointer having moved at all. That fires `pointerleave`
-      // here, and clearing the hover on it closed the card the instant it
-      // opened. A leave into our own container is not leaving the floor.
+      // The hover card's trigger is a transparent element laid OVER the canvas, so opening it moves the pointer from the canvas onto the trigger without the pointer having moved at all.
       const related = event.relatedTarget;
       const container = containerRef.current;
       if (
@@ -2116,10 +1915,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         setSelectedDetail({ kind: "pair", edgeId });
         return;
       }
-      // Answered from the last PAINTED frame, like the hover and the envelope
-      // above: the scene has ticked since, and on a floor with walkers the two
-      // can name different agents for the same pixels. The live scene is only
-      // the fallback before a first frame exists.
+      // The live scene is only the fallback before a first frame exists.
       const agentId = runtime.hasDrawnFrame()
         ? (hitRegionFor(runtime.getHitRegions(), point)?.agentId ?? null)
         : scene.hitTest(point);
@@ -2128,9 +1924,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [persistView, readScene, runtime, setSelectedAgentId, toSpritePoint],
   );
 
-  // A cancelled gesture is not a click: the browser took the pointer (a touch
-  // became a scroll, a window lost focus mid-press), and the coordinates it
-  // reports are wherever that happened, not somewhere the person chose.
+  // A cancelled gesture is not a click: the browser took the pointer (a touch became a scroll, a window lost focus mid-press), and the coordinates it reports are wherever that happened, not somewhere the person chose.
   const handlePointerCancel = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const drag = dragRef.current;
@@ -2144,11 +1938,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [persistView],
   );
 
-  // A native listener, because a passive React `onWheel` cannot call
-  // `preventDefault` - and without it the epic canvas scrolls under the floor.
-  // On the CONTAINER rather than the canvas: the hover trigger is a sibling
-  // element over a character, and a wheel that lands on it is still a wheel
-  // over the floor.
+  // A native listener, because a passive React `onWheel` cannot call `preventDefault` - and without it the epic canvas scrolls under the floor.
+  // On the CONTAINER rather than the canvas: the hover trigger is a sibling element over a character, and a wheel that lands on it is still a wheel over the floor.
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
@@ -2172,10 +1963,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [agentIds, agents],
   );
 
-  // The same aggregation the node graph draws its edges from. The office draws
-  // no edges, but an envelope click opens a PAIR thread, and that thread is
-  // this pair's folded history - resolved here so both modes open the identical
-  // panel on the identical rows.
+  // The same aggregation the node graph draws its edges from.
+  // The office draws no edges, but an envelope click opens a PAIR thread, and that thread is this pair's folded history - resolved here so both modes open the identical panel on the identical rows.
   const aggregated = useMemo(
     () => aggregateCommGraphEdges(events, agentIds),
     [agentIds, events],
@@ -2185,18 +1974,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       ? null
       : (aggregated.find((edge) => edge.id === selectedEdgeId) ?? null);
 
-  // Resolved against the VISIBLE set, not every agent the epic ever had: the
-  // floor is drawn as of the cursor, and finding a card's subject among agents
-  // that are not on it is how the card outlives the character it describes.
+  // Resolved against the VISIBLE set, not every agent the epic ever had: the floor is drawn as of the cursor, and finding a card's subject among agents that are not on it is how the card outlives the character it describes.
   const hoveredAgent =
     hoverCard === null
       ? null
       : (visibleAgents.find((agent) => agent.id === hoverCard.agentId) ?? null);
 
-  // The tile's Find surface, on the same adapter contract the node graph
-  // registers. It is registered by whichever renderer is mounted, so search is
-  // never silently absent in one mode; the office answers the same four
-  // renderer calls in its own coordinate space.
+  // It is registered by whichever renderer is mounted, so search is never silently absent in one mode; the office answers the same four renderer calls in its own coordinate space.
   useEffect(() => {
     runtime.setAgents(visibleAgents);
   }, [runtime, visibleAgents]);
@@ -2267,11 +2051,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full touch-none"
-          // The camera gestures live on the CANVAS, never on the wrapper. The
-          // wrapper is also the parent of every overlay control, and a
-          // pointerdown there took pointer capture - which retargets the
-          // following `click` to the capturing element, so the mode toggle's
-          // own button never saw its click at all.
+          // The camera gestures live on the CANVAS, never on the wrapper.
+          // The wrapper is also the parent of every overlay control, and a pointerdown there took pointer capture - which retargets the following `click` to the capturing element, so the mode toggle's own button never saw its click at all.
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -2302,11 +2083,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           />
         )}
         <OfficeLegend />
-        {/*
-          The keyboard and assistive-tech route to every character on the floor,
-          and the only handle a test has on a canvas. Same select handler as the
-          pointer, so the two cannot open different things.
-        */}
+        {/* The keyboard and assistive-tech route to every character on the floor, and the only handle a test has on a canvas. Same select handler as the pointer, so the two cannot open different things. */}
         <ul className="sr-only">
           {visibleAgents.map((agent) => (
             <li key={agent.id}>

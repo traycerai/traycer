@@ -26,12 +26,6 @@ vi.mock("../../../app/logger", () => ({
   describeLogError: (error: unknown) => String(error),
 }));
 
-/**
- * One jar that answers both halves of the clear: the removal API the routine
- * drives, and the `changed` stream the observer listens to. They are the same
- * object in Electron, and the echo this ticket has to prevent only exists
- * because they are - a fake that split them could not show the echo at all.
- */
 class FakeClearSiteSession implements BrowserSiteClearSession {
   private readonly jar: Cookie[] = [];
   private listener: CookieChangeListener | null = null;
@@ -100,11 +94,7 @@ const SITE_JAR: readonly Cookie[] = [
 
 const noOrigins = (): readonly string[] => [];
 
-/**
- * A cookie this shell cannot represent, and not a contrived one: the domain
- * check rejects any host the URL parser rewrites, and an IDN domain punycodes
- * there. Chromium will hand one over for any site the user visits.
- */
+/** A cookie this shell cannot represent, and not a contrived one: the domain check rejects any host the URL parser rewrites, and an IDN domain punycodes there. */
 const IDN_COOKIE = makeCookie({
   name: "exämple",
   domain: "exämple.example.com",
@@ -145,11 +135,6 @@ describe("clearBrowserSite", () => {
       "https://app.example.com",
     ]);
 
-    // The unrepresentable cookie has no URL to remove it by, so it stays - but
-    // it does not abort the clear: every other cookie of the site is gone, the
-    // localStorage pass still ran, and the removals that were issued are
-    // durable. Before this, one such cookie left the site half signed out with
-    // its removals unflushed.
     expect(session.names()).toEqual(["exämple", "lookalike", "other-site"]);
     expect(session.clearedStorage).toEqual([
       { origin: "https://app.example.com", storages: ["localstorage"] },
@@ -259,12 +244,6 @@ describe("clearBrowserSiteLocalStorage", () => {
   });
 });
 
-/**
- * The coordinator holding one origin of the cleared site and one of another
- * site in EACH tier: the live tier this run observed, and the retained tier
- * carried over from the host's seed. A fixture with a single tier could not
- * tell a half-fix from a fix, since a capture merges both.
- */
 async function coordinatorWithBothTiers(
   captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]>,
 ): Promise<BrowserPrimaryProfileSnapshotCoordinator> {
@@ -379,10 +358,7 @@ describe("clearBrowserSite against an in-flight observation", () => {
 
     await coordinator.capture();
 
-    // The cleared site's read landed after the prune and was dropped: keeping
-    // it would re-upload the localStorage the user just cleared and re-seed it
-    // into a recreated tile. The OTHER site's read is untouched - which is what
-    // separates this from bumping the jar-wide era.
+    // The cleared site's read landed after the prune and was dropped: keeping it would re-upload the localStorage the user just cleared and re-seed it into a recreated tile.
     expect(
       captured.map((origins) => origins.map((entry) => entry.origin)),
     ).toEqual([["https://app.example.org"]]);
@@ -393,14 +369,6 @@ describe("clearBrowserSite against an in-flight observation", () => {
 });
 
 describe("clearBrowserSite delta behaviour", () => {
-  /**
-   * Attached, then stepped past the observer's startup grace window: inside it
-   * no removal is witnessed at all (universal-sign-in decision 7), and a clear
-   * is a steady-state action. A clear that DOES fall inside the window still
-   * reaches the host - `recordForgottenBrowserSite` bumps the forget ledger
-   * before the jar is touched and the digest is what prunes the host's store
-   * (ticket 04) - it just does not reach it through `removedKeys`.
-   */
   function attachObserver(
     session: FakeClearSiteSession,
     deltas: BrowserPrimaryProfileDelta[],
@@ -437,15 +405,6 @@ describe("clearBrowserSite delta behaviour", () => {
       expect(delta.domain).toBe("example.com");
       // The complete picture of the scope: nothing left.
       expect(delta.cookies).toEqual([]);
-      // And the removals are NAMED, which is the half that actually does the
-      // work now (ticket 14). `example.com` is typically unwatermarked - known
-      // to the host only through a whole-jar capture - and an observed empty
-      // picture may not bury an unwatermarked domain. So an empty `cookies`
-      // alone would tombstone nothing and "clear cookies for this site" would
-      // silently do nothing to the store; it is `removedKeys` that buries.
-      // Derived through the capture routine rather than spelled out, for the
-      // same reason the observer's own byte-identity test does: a removal only
-      // matches a stored key if the two normalise identically.
       const byName = (
         left: { readonly name: string },
         right: { readonly name: string },

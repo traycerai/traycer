@@ -2,19 +2,8 @@ import type { ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 
 /**
- * Stable identifiers for every keyboard-bindable action in the app. Adding
- * a new action: append to `ACTION_IDS`, define metadata in
- * `ACTION_META`, and wire the handler in `dispatch.ts` (or register at
- * runtime via `registerDynamicActionHandler` from a context-aware bridge).
- *
- * Action `kind`:
- *  - `"chord"`: bound to a full chord like `mod+shift+h`. One binding
- *    triggers one handler.
- *  - `"digit"`: bound to a modifier-only chord like `mod`. At runtime the
- *    dispatcher pairs the held modifier with a concurrently-pressed digit
- *    (0..9) and calls a single handler that receives the digit. Used by
- *    `epic.switch.byDigit` (multi-digit header tab numbers) and scoped
- *    single-digit actions such as `tab.switch.byDigit`.
+ * Stable identifiers for every keyboard-bindable action in the app.
+ * Adding a new action: append to `ACTION_IDS`, define metadata in `ACTION_META`, and wire the handler in `dispatch.ts` (or register at runtime via `registerDynamicActionHandler` from a context-aware bridge).
  */
 export const ACTION_IDS = [
   "epic.switch.byDigit",
@@ -78,10 +67,8 @@ export type ActionKind = "chord" | "digit";
 export type TerminalPolicy = "app" | "shell";
 
 /**
- * An action's default chord. A bare string (or `null` for "unbound") is the
- * same on every platform. A `{ mac, other }` pair declares per-platform
- * defaults, resolved through `resolveActionDefaultChord` - used when a chord
- * must differ by OS (e.g. ⌃⌥M on macOS vs an AltGr-safe Alt+Shift+M elsewhere).
+ * An action's default chord.
+ * A bare string (or `null` for "unbound") is the same on every platform.
  */
 export type ActionDefaultChord =
   | ChordString
@@ -97,11 +84,8 @@ export interface ActionMeta {
   readonly defaultChord: ActionDefaultChord;
   readonly secondaryChord: ActionDefaultChord | undefined;
   /**
-   * When a terminal is focused on Windows/Linux, only mark default Ctrl chords
-   * as "shell" if @xterm/xterm's evaluateKeyboardEvent actually emits PTY
-   * bytes. Plain Ctrl covers A-Z, space, 3-8, /, [, \, and ]; Ctrl+Alt letters
-   * and space use xterm's Escape-prefixed Alt path. Other Ctrl chords must stay
-   * app-owned or the key becomes a terminal no-op.
+   * When a terminal is focused on Windows/Linux, only mark default Ctrl chords as "shell" if @xterm/xterm's evaluateKeyboardEvent actually emits PTY bytes.
+   * Plain Ctrl covers A-Z, space, 3-8, /, [, \, and ]; Ctrl+Alt letters and space use xterm's Escape-prefixed Alt path.
    */
   readonly terminalPolicy: TerminalPolicy;
   readonly secondaryTerminalPolicy: TerminalPolicy | undefined;
@@ -494,9 +478,8 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     description: "Open the global Resource Monitor.",
     category: "app",
     kind: "chord",
-    // Chromium's task-manager shortcut on Windows/Linux; kept on macOS for
-    // cross-platform consistency. Clearing the binding lets Shift+Esc pass
-    // through to a focused terminal.
+    // Chromium's task-manager shortcut on Windows/Linux; kept on macOS for cross-platform consistency.
+    // Clearing the binding lets Shift+Esc pass through to a focused terminal.
     defaultChord: "shift+escape",
     secondaryChord: undefined,
     terminalPolicy: "app",
@@ -520,11 +503,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
       "Open the notification center, then use Up/Down to move between notifications. Pressing the chord again closes it.",
     category: "app",
     kind: "chord",
-    // ⌘⇧B - B for the bell, in the same ⌘⇧ family as the other global panel
-    // openers (⌘⇧U usage limits). ⌘N is "New task" and ⌘⇧N is the desktop
-    // File → New Window accelerator (menu-builder.ts), which the main process
-    // consumes before the renderer ever sees the keystroke - so any chord
-    // here must also avoid the native menu's accelerators, not just this map.
+    // ⌘⇧B - B for the bell, in the same ⌘⇧ family as the other global panel openers (⌘⇧U usage limits). ⌘N is "New task" and ⌘⇧N is the desktop File → New Window accelerator (menu-builder.ts), which the main process consumes before the renderer ever sees the.
     defaultChord: "mod+shift+b",
     secondaryChord: undefined,
     terminalPolicy: "app",
@@ -654,10 +633,8 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
       "Dictate into the composer. Tap to start, tap again to stop; or hold to talk and release to stop. Speech is transcribed on-device.",
     category: "app",
     kind: "chord",
-    // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
-    // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight), ⌘⇧V
-    // (split group vertically). The desktop global summon shortcut is checked
-    // live by conflict detection rather than hand-avoided here.
+    // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight), ⌘⇧V (split group vertically).
+    // The desktop global summon shortcut is checked live by conflict detection rather than hand-avoided here.
     defaultChord: "ctrl+shift+m",
     secondaryChord: undefined,
     terminalPolicy: "app",
@@ -682,9 +659,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
       "Open or close the model picker for the composer you're editing. Default ⌃⌥M on macOS; Alt+Shift+M on Windows/Linux (Alt+Shift dodges the Ctrl+Alt=AltGr trap).",
     category: "app",
     kind: "chord",
-    // Per-platform: ⌃⌥M keeps Control distinct from ⌘ on macOS (so it matches
-    // via the Control-aware encoder), while Alt+Shift+M avoids the Windows/Linux
-    // Ctrl+Alt=AltGr conflict and doesn't collide with dictation's ⌃⇧M.
+    // Per-platform: ⌃⌥M keeps Control distinct from ⌘ on macOS (so it matches via the Control-aware encoder), while Alt+Shift+M avoids the Windows/Linux Ctrl+Alt=AltGr conflict and doesn't collide with dictation's ⌃⇧M.
     defaultChord: { mac: "ctrl+alt+m", other: "alt+shift+m" },
     secondaryChord: undefined,
     terminalPolicy: "app",

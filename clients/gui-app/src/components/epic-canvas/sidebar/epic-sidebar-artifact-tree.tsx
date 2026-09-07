@@ -1,8 +1,4 @@
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
-/**
- * Artifact tree body for the sidebar. Renders specs, tickets, stories, and
- * their child artifacts with full tree navigation and management.
- */
 import { useDraggable } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -220,31 +216,7 @@ interface ArtifactDescendantEntry {
 function usePanelRootIds(
   comparator: NodeComparator | null,
 ): ReadonlyArray<string> {
-  // Filter roots by the TREE node's type, not the projected artifact records.
-  // `useEpicArtifactRecords()` rebuilds a fresh record array (and fresh record
-  // objects) on every store tick, so during chat streaming the active chat's
-  // record changes identity each token and `liveRecords` churns - which used to
-  // recompute this memo, churn `rootIds` -> `expandedIds` -> the `expansion`
-  // controller, and re-render every memoized `ArtifactNode`. Its `nodeById[id]
-  // .type` is the same value space this `treeFilter` already uses for CHILD
-  // nodes (`usePanelChildIds`), so the result is identical.
-  //
-  // ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
-  //
-  // That earlier fix read `useEpicTreeIndex()` and derived in a `useMemo`, on
-  // the stated premise that "the tree index does NOT change on chat tokens".
-  // True for chat tokens - and false for body writes, which move `updatedAt`,
-  // which `TreeNode` carries. So the memo recomputed on every body write, and
-  // `.filter()` ALWAYS allocates, which walked the chain the comment above
-  // describes all the way to re-rendering every memoized row. The guard rail
-  // was correct; it was keyed on something that had started to move.
-  //
-  // Comparing the ANSWER shallowly closes it at the source: the root id list is
-  // what actually has to change before anything downstream should move, and it
-  // does not move when one row's `updatedAt` is stamped. `useRootIds()`'s own
-  // subscription is already identity-stable (`stabilizeTree` preserves
-  // `rootIds` when the id set is unchanged, `epic-projector.ts:1449-1451`); the
-  // allocation this removes was this hook's own filter.
+  // Comparing the ANSWER shallowly closes it at the source: the root id list is what actually has to change before anything downstream should move, and it does not move when one row's `updatedAt` is stamped.
   return useEpicStore(
     useShallow((state: OpenEpicState): ReadonlyArray<string> => {
       const nodeById = state.tree.nodeById;
@@ -260,18 +232,7 @@ function usePanelRootIds(
   );
 }
 
-/**
- * Visible-id set for an active artifact filter (status / kind / read): the
- * filter's matches, expanded to include ancestors so a matched ticket nested
- * under a spec stays reachable in the rendered tree. `null` when no filter is
- * active.
- *
- * The two halves are separate because only the first is about the FILTER. The
- * ancestor pass is what a tree owes its own render path - a flat surface
- * filtering the same epic wants the matches and nothing else - so the match
- * producer lives in `epic-sidebar-panel-filters` and is shared, while the
- * expansion stays here with the tree that needs it.
- */
+/** The two halves are separate because only the first is about the FILTER. */
 function useArtifactVisibleIds(epicId: string): ReadonlySet<string> | null {
   const matchIds = useArtifactFilterMatchIds(epicId);
   const tree = useEpicTreeIndex();
@@ -285,12 +246,8 @@ function useArtifactVisibleIds(epicId: string): ReadonlySet<string> | null {
 }
 
 /**
- * Collect the artifact-kind descendants of `nodeId` (id + version) so a
- * collapsed parent can roll up "contains unread artifacts" without mounting its
- * children. When a filter is active (`visibleIds !== null`), descendants hidden
- * by the filter are skipped along with their subtree - the rollup must never
- * point at a child the user cannot reach by expanding. Cycle-guarded via
- * `visited`.
+ * Collect the artifact-kind descendants of `nodeId` (id + version) so a collapsed parent can roll up "contains unread artifacts" without mounting its children.
+ * When a filter is active (`visibleIds !== null`), descendants hidden by the filter are skipped along with their subtree - the rollup must never point at a child the user cannot reach by expanding.
  */
 function collectDescendantArtifactEntries(
   nodeId: string,
@@ -326,18 +283,9 @@ function collectDescendantArtifactEntries(
 }
 
 /**
- * Per-node unread marker variant, subscribed narrowly so marking one artifact
- * read re-renders only the affected row and its collapsed ancestors - never the
- * whole tree. The read-state selector returns a scalar variant, so Zustand
- * bails the render for any node whose variant did not flip. Returns:
- *   - "self": this artifact itself has unread changes.
- *   - "descendant": this collapsed parent hides unread artifacts.
- *   - null: nothing to show (non-artifact row, or expanded parent with no self
- *     unread).
- * This mirrors the per-entity `useIsActive...` pattern instead of threading a
- * tab-wide map through the recursive node tree.
+ * Per-node unread marker variant, subscribed narrowly so marking one artifact read re-renders only the affected row and its collapsed ancestors - never the whole tree.
+ * This mirrors the per-entity `useIsActive...` pattern instead of threading a tab-wide map through the recursive node tree.
  */
-/** The read-state fields the variant is computed from. */
 interface ArtifactReadStateFacts {
   readonly seedAtByEpic: Readonly<Record<string, number>>;
   readonly lastSeenByArtifact: Readonly<
@@ -360,9 +308,8 @@ function computeArtifactUnreadMarkerVariant(args: {
 }): ArtifactUnreadMarkerVariant | null {
   const { epicId, nodeId, isArtifactKind, expanded, tree, readState } = args;
   if (!isArtifactKind) return null;
-  // Read `updatedAt` HERE rather than taking it as an argument. Taking it meant
-  // the caller had to subscribe to the whole node to supply it, so every body
-  // write re-rendered the row to recompute a variant that almost never flips.
+  // Read `updatedAt` HERE rather than taking it as an argument.
+  // Taking it meant the caller had to subscribe to the whole node to supply it, so every body write re-rendered the row to recompute a variant that almost never flips.
   const selfUpdatedAt = Object.hasOwn(tree.nodeById, nodeId)
     ? tree.nodeById[nodeId].updatedAt
     : 0;
@@ -399,12 +346,7 @@ function computeArtifactUnreadMarkerVariant(args: {
 }
 
 /**
- * The parts of a row's tree node that the row RENDERS. Deliberately not the
- * whole `TreeNode`: that carries `updatedAt`, which the host stamps on every
- * body write, so `useEpicTreeNode` handed the row a new object ~4/s and
- * re-rendered it (and its whole unmemoized chrome subtree) for a field it does
- * not display. The unread marker still tracks `updatedAt` - it reads it itself,
- * and returns a variant rather than the timestamp.
+ * The unread marker still tracks `updatedAt` - it reads it itself, and returns a variant rather than the timestamp.
  */
 interface ArtifactRowNodeFacts {
   readonly type: EpicTreeNodeType;
@@ -430,23 +372,7 @@ function useArtifactUnreadMarkerVariant(args: {
   const { epicId, nodeId, isArtifactKind, expanded } = args;
   const visibleIds = useSidebarVisibleIds();
   const epicStoreHandle = useOpenEpicHandle();
-  // ## Two subscriptions, one answer
-  //
-  // The variant is a function of BOTH stores - the tree (an artifact's
-  // `updatedAt`) and the read state (when it was last seen) - so subscribing to
-  // one and reading the other non-reactively would go stale on changes to the
-  // other. Subscribing to a raw input from either (the node, or `updatedAt`)
-  // would re-render the row on every body write, which is the whole defect.
-  //
-  // So both stores are subscribed, and BOTH selectors return the ANSWER: each
-  // reads its own store reactively and the other via `getState()` at selection
-  // time, which is current because the selector re-runs on its own store's
-  // change and on every render. Zustand bails a subscriber whose selector
-  // output is unchanged, so the row re-renders only when the variant actually
-  // flips - not on the ~4/s stamps that leave it alone.
-  //
-  // The two values are equal by construction (same pure function, same two
-  // stores); `??` simply consumes both.
+  // Zustand bails a subscriber whose selector output is unchanged, so the row re-renders only when the variant actually flips - not on the ~4/s stamps that leave it alone.
   const byTree = useEpicStore((state: OpenEpicState) =>
     computeArtifactUnreadMarkerVariant({
       epicId,
@@ -491,9 +417,7 @@ export function ArtifactReadLifecycleBridge(props: {
   const snapshotLoaded = useEpicStore((s) => s.snapshotLoaded);
   const artifacts = useEpicStore((s) => s.artifacts);
   const activeArtifactId = useActiveEpicArtifactId(tabId);
-  // Only real artifacts may clear unread state. `useActiveEpicArtifactId` can
-  // return any active tile id (chat/terminal too); `byId` already excludes
-  // those, and the kind guard keeps the invariant explicit if ids ever unify.
+  // Only real artifacts may clear unread state.
   const activeArtifact = useEpicStore((s) => {
     if (activeArtifactId === null) return null;
     if (!Object.hasOwn(s.artifacts.byId, activeArtifactId)) return null;
@@ -503,9 +427,8 @@ export function ArtifactReadLifecycleBridge(props: {
 
   useEffect(() => {
     if (!snapshotLoaded) return;
-    // Seed exactly once per epic per device. The store action is itself
-    // idempotent, but checking the guard here avoids rebuilding the full seed
-    // array (O(artifacts)) on every later projection for the epic's lifetime.
+    // Seed exactly once per epic per device.
+    // The store action is itself idempotent, but checking the guard here avoids rebuilding the full seed array (O(artifacts)) on every later projection for the epic's lifetime.
     if (
       Object.hasOwn(useArtifactReadStateStore.getState().seedAtByEpic, epicId)
     ) {
@@ -526,9 +449,7 @@ export function ArtifactReadLifecycleBridge(props: {
   return null;
 }
 
-// Panel body composes sort/filter/expansion/selection/pending-create hooks in
-// a stable order; child row complexity is isolated below.
-// eslint-disable-next-line complexity
+// eslint-disable-next-line complexity -- panel body composes sort/filter/expansion/selection/pending-create hooks in a stable order
 export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   const { epicId, tabId } = props;
   const panelId: RootCreatePanelId = "artifacts";
@@ -561,9 +482,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     () => applyVisibleFilter(allRootIds, visibleIds),
     [allRootIds, visibleIds],
   );
-  // No whole-slice read left in this component: with the three derivations
-  // below subscribed to their own answers, the panel itself no longer
-  // re-renders on a record change either.
+  // No whole-slice read left in this component: with the three derivations below subscribed to their own answers, the panel itself no longer re-renders on a record change either.
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -650,14 +569,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     [expandedIds, toggleExpanded, ensureExpanded],
   );
   const bulkSelection = useMaybeSidebarBulkSelection();
-  // Hygiene, not part of the memo-churn chain: `tree` is a direct input, so
-  // this recomputed on every record change and handed the effect below a fresh
-  // array each time. That never reached a row - `setSelectableSidebarIds`
-  // equality-guards with `sameStringArray` and returns the same state object,
-  // so the write was already a no-op - but the effect still fired ~4/s for
-  // nothing. Comparing the answer stops that at the source. The walk itself
-  // still runs per notification; `useShallow` bails the subscriber, not the
-  // recompute.
+  // That never reached a row - `setSelectableSidebarIds` equality-guards with `sameStringArray` and returns the same state object, so the write was already a no-op - but the effect still fired ~4/s for nothing.
   const selectableIds = useEpicStore(
     useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
@@ -812,9 +724,7 @@ interface ArtifactNodeProps {
   onToggleSelection: (id: string) => void;
 }
 
-// Tree node renders many independent artifact states (kind / selection /
-// expand / drag / status); branches are independent, not reducible nesting.
-// eslint-disable-next-line complexity
+// eslint-disable-next-line complexity -- independent artifact states (kind / selection / expand / drag / status), not reducible nesting
 const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const {
     epicId,
@@ -853,25 +763,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
 
   const [pendingChildName, setPendingChildName] = useState<string | null>(null);
   const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
-  // Read only what this node needs from the tree projection, NOT the full
-  // `useEpicArtifactRecords()` array: that array gets a new identity whenever
-  // ANY record changes (e.g. the active chat streaming a token), which used to
-  // re-render every memoized node. `status` is a per-id scalar.
-  //
-  // This used to read the whole `tree` slice, on the premise - stated here in
-  // as many words - that "the tree index is stable while streaming". True of
-  // chat tokens, which never touch an artifact node. It was falsified silently
-  // by body writes: the host stamps the artifact's `updatedAt` per write batch
-  // and `TreeNode` carries that field, so the slice re-minted ~4 times a second
-  // and every row re-rendered with it. The optimization outlived its premise.
-  //
-  // `memo` on this component is not a defence and never was - it blocks a
-  // re-render pushed down by a parent, not one this component's own
-  // subscription triggers. So the reads below subscribe to their ANSWERS.
-  //
-  // `useShallow` is required, not decorative: a deriving selector returns a
-  // fresh object each call, so without it `useSyncExternalStore` sees a change
-  // on every notification and loops. See `epic-sidebar-filter.ts`.
+  // Read only what this node needs from the tree projection, NOT the full `useEpicArtifactRecords()` array: that array gets a new identity whenever ANY record changes (e.g. the active chat streaming a token), which used to re-render every memoized node.
+  // True of chat tokens, which never touch an artifact node.
   const cascadeCounts = useEpicStore(
     useShallow((state: OpenEpicState) =>
       computeDescendantCountsFromTree(state.tree, nodeId),
@@ -897,13 +790,9 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   )
     ? artifactType
     : null;
-  // Every artifact row can parent a child artifact (any kind ⊃ any kind), so
-  // the "+" shows on every row the user can edit - no per-kind gate. See the
-  // tech plan "Create affordance" section (decision 11).
+  // Every artifact row can parent a child artifact (any kind ⊃ any kind), so the "+" shows on every row the user can edit - no per-kind gate.
   const showAdd = canEdit;
-  // Per-node boolean subscription: re-renders this node only when ITS active
-  // state flips, instead of receiving the tab-wide `activeArtifactId` (which
-  // re-rendered the whole tree on every selection).
+  // Per-node boolean subscription: re-renders this node only when ITS active state flips, instead of receiving the tab-wide `activeArtifactId` (which re-rendered the whole tree on every selection).
   const isActive = useIsActiveEpicArtifact(tabId, nodeId);
   const isArtifactKind = isEpicArtifactKind(artifactType);
   // Per-node read-state subscription (mirrors `useIsActiveEpicArtifact`): only
@@ -930,16 +819,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
-  // Mount the delete dialog on FIRST open and keep it mounted thereafter,
-  // rather than rendering it for every row unconditionally.
-  //
-  // Radix already keeps the dialog CONTENT unmounted while closed, but
-  // `ConfirmDestructiveDialog` itself still ran on every row render - forty
-  // rows' worth, during bursts nobody clicked, and ~105ms of self time in the
-  // burst profile. The latch is what makes gating safe: unmounting the moment
-  // `open` goes false would tear the dialog out from under Radix's exit
-  // transition. Rows never asked to delete anything - all of them, during a
-  // burst or a cold open - never pay for it.
+  // Mount the delete dialog on FIRST open and keep it mounted thereafter, rather than rendering it for every row unconditionally.
+  // Rows never asked to delete anything - all of them, during a burst or a cold open - never pay for it.
   const [deleteDialogEverOpened, setDeleteDialogEverOpened] = useState(false);
   const changeConfirmDeleteOpen = useCallback((open: boolean) => {
     if (open) setDeleteDialogEverOpened(true);
@@ -947,12 +828,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   }, []);
   const deletePending = deleteArtifact.isPending;
 
-  // The Epic SESSION's host, not the app-wide pointer: this tree projects the
-  // session's artifacts, and the refs built below stamp a tile with this id
-  // for life (`hostId` on the ref) and name the fallback host a created child
-  // is opened against. Read app-wide, an A-bound Epic that stays rendered
-  // through an A→B re-point (establishing, or failed) opened A's artifacts
-  // against B. `null` only outside a session, where this row never renders.
+  // `null` only outside a session, where this row never renders.
   const activeHostId = useEpicSessionHostId() ?? "unknown-host";
 
   const openProjectedChildInTab = useCallback(
@@ -1103,22 +979,9 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       setIsRenaming(false);
       return;
     }
-    // Settle the editor on COMMIT, not on the ack. The overlay stamped below
-    // IS the feedback, and `useInlineRename` — the shared state machine both
-    // tab strips rename through — already calls `setIsEditing(false)` before
-    // its `onCommit`. Holding the input open for the round trip made this row
-    // the one surface where a rename did not feel instant: every other surface
-    // bound to the node repainted from the overlay while the row the cursor
-    // was in sat there for the whole RPC (~1.2 s against a local host, and
-    // unbounded against a slow one).
-    //
-    // Failure is not silent: the mutation hook toasts (`Couldn't rename
-    // artifact.`) and `retire("failed")` rolls the overlay back to the old
-    // title, so the row reverts under a toast rather than never leaving edit
-    // mode. Deliberately NOT re-opening the editor on failure — that would
-    // steal focus seconds later, wherever the user had moved on to.
+    // The overlay stamped below IS the feedback, and `useInlineRename` - the shared state machine both tab strips rename through - already calls `setIsEditing(false)` before its `onCommit`.
+    // Failure is not silent: the mutation hook toasts (`Couldn't rename artifact.`) and `retire("failed")` rolls the overlay back to the old title, so the row reverts under a toast rather than never leaving edit mode.
     setIsRenaming(false);
-    // The command queue owns the optimistic overlay and its terminal record.
     void renameArtifact
       .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
       .then(
@@ -1180,11 +1043,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  // Cascade counts feed only the delete-confirm dialog, computed from the
-  // canonical tree structure rather than the churning record list. Subscribed
-  // at the top of this component rather than derived here, because a hook
-  // cannot live below the two early returns above - see the note at the
-  // subscription for why it stopped reading the whole slice.
+  // Cascade counts feed only the delete-confirm dialog, computed from the canonical tree structure rather than the churning record list.
+  // Subscribed at the top of this component rather than derived here, because a hook cannot live below the two early returns above - see the note at the subscription for why it stopped reading the whole slice.
   const cascadeSummary = formatCascadeSummary(cascadeCounts);
 
   const showStatusDot = computeArtifactNodeStatusDot(artifactType, statusValue);
@@ -2036,12 +1896,8 @@ function useArtifactRowMenuEntries(
   const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const exportPending = exportArtifacts.isPending;
   const exportMutate = exportArtifacts.mutate;
-  // Built once per input change rather than on every row render. This runs for
-  // every row and allocates six entry objects plus their icons and closures;
-  // it was ~74ms of self time in a burst profile back when a stamp re-rendered
-  // all forty rows. Nothing downstream is memoized, so a stable array skips no
-  // render on its own - this is purely the allocation, and it is why this
-  // lands as hygiene rather than as part of the churn fix.
+  // Built once per input change rather than on every row render.
+  // Nothing downstream is memoized, so a stable array skips no render on its own - this is purely the allocation, and it is why this lands as hygiene rather than as part of the churn fix.
   return useMemo(() => {
     const exportOne = (format: "markdown" | "pdf"): void => {
       exportMutate({

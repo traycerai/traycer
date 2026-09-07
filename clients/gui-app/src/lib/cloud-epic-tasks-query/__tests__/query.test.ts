@@ -51,12 +51,7 @@ describe("listCloudTasksRequestForHistorySearch", () => {
   });
 
   it("canonicalizes reverse-order repository and workspace selections to the same request and query key", () => {
-    // Mirrors ambient modal state (`withToggledValue` / `withToggledWorkspace`),
-    // which preserves toggle order rather than sorting - unlike
-    // `parseHistorySearch`, which sorts on every URL round-trip and would mask
-    // this. Selecting z/repo then a/repo (and the matching workspaces) must
-    // produce the identical request/query key as selecting them in display
-    // order, so the two identical filters share one cache identity.
+    // Mirrors ambient modal state (`withToggledValue` / `withToggledWorkspace`), which preserves toggle order rather than sorting - unlike `parseHistorySearch`, which sorts on every URL round-trip and would mask this.
     const forwardOrder: HistorySearchState = {
       ...DEFAULT_HISTORY_SEARCH,
       repos: ["a/repo", "z/repo"],
@@ -84,9 +79,7 @@ describe("listCloudTasksRequestForHistorySearch", () => {
       cloudEpicTasksQueryKey("host-1", "user-1", forwardRequest),
     );
 
-    // Prove the two orders actually resolve to one TanStack Query cache entry
-    // (not just deep-equal key arrays): settle rows under the forward-order
-    // key, then read them back through the reverse-order key.
+    // Prove the two orders actually resolve to one TanStack Query cache entry (not just deep-equal key arrays): settle rows under the forward-order key, then read them back through the reverse-order key.
     const queryClient = new QueryClient();
     const settledPage: ListTasksResponse = { tasks: [], hasMore: false };
     queryClient.setQueryData(

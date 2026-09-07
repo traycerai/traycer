@@ -1,25 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { File } from "@pierre/diffs";
 
-/**
- * Real, unmocked `@pierre/diffs@1.3.1` proof for RESUME12's root cause: the
- * RESUME9 fix bumped `file.cacheKey`'s generation only on an `editing`
- * transition, so a purely read-only tile - `editing` never true, content
- * changing only via a reactivation refetch (`workspace-file-tile.tsx`'s
- * inactive->active `query.refetch()`) - kept the SAME cacheKey across a
- * content shrink and hit the exact same `FileRenderer.processFileResult`
- * ("Line doesnt exist") throw that RESUME9 fixed for the editing case.
- *
- * This proves the general library contract from
- * `workspace-empty-file-cachekey-console-regression.test.ts` also applies
- * with no `Editor` ever attached: a stable explicit `cacheKey` makes
- * `FileRenderer.isLineCacheForFile` skip comparing `contents` altogether, so
- * a later render under the same key with fewer lines reuses the stale
- * line-split. `WorkspaceFileRenderer`'s fix is to omit `cacheKey` entirely
- * while `editing` is false, letting the library fall back to its own
- * `lineCache.file === file && lineCache.sourceContents === file.contents`
- * comparison, which correctly rebuilds on every real content change.
- */
+/** Real, unmocked `@pierre/diffs@1.3.1` proof for RESUME12's root cause: the RESUME9 fix bumped
+ * `file.cacheKey`'s generation only on an `editing` transition, so a purely read-only tile. */
 const originalGetContextDescriptor = Object.getOwnPropertyDescriptor(
   HTMLCanvasElement.prototype,
   "getContext",
@@ -84,9 +67,8 @@ describe("@pierre/diffs cacheKey contract: a read-only content shrink under a SA
       });
       await settle(50);
 
-      // A reactivation refetch resolves with far fewer lines than the
-      // cached split (an external truncation, or the file simply being
-      // shorter than what this tab last saw before it went inactive).
+      // A reactivation refetch resolves with far fewer lines than the cached split (an external truncation, or the
+      // file simply being shorter than what this tab last saw before it went inactive).
       instance.render({
         file: {
           name: "src/index.ts",

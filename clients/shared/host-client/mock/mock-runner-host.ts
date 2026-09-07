@@ -103,27 +103,19 @@ export interface MockRunnerHostOptions {
   readonly hosts: readonly HostDirectoryEntry[];
   readonly workspaceFolderPickerPaths: readonly string[] | undefined;
   /**
-   * Mirrors `IRunnerHost.hasLocalHost`. Pass `undefined` to fall back to
-   * `true` (desktop-flavoured); mobile-flavoured tests pass `false` to opt
-   * out of the signed-in local-host gate and exercise `<MobileHostGate />`.
+   * Mirrors `IRunnerHost.hasLocalHost`.
+   * Pass `undefined` to fall back to `true` (desktop-flavoured); mobile-flavoured tests pass `false` to opt out of the signed-in local-host gate and exercise `<MobileHostGate />`.
    */
   readonly hasLocalHost: boolean | undefined;
   /**
-   * In-memory `traycerCli` surface. Pass `null` to match mobile/web shells
-   * that do not bundle the CLI; pass `undefined` for the same effect to keep
-   * call sites terse. Tests that exercise the bootstrap-status failure card
-   * or the Shell & environment settings page pass an instance preloaded with
-   * deterministic state.
+   * In-memory `traycerCli` surface.
+   * Pass `null` to match mobile/web shells that do not bundle the CLI; pass `undefined` for the same effect to keep call sites terse.
    */
   readonly traycerCli: ITraycerCli | null | undefined;
   readonly hostManagement?: IHostManagement | null;
   /**
-   * Mirrors `IRunnerHost.getLastKnownLocalHostId()` - the durable host id read
-   * from pid metadata, which still answers while the host is down. Omit it and
-   * the mock derives the id from `localHost`, which is what a machine with a
-   * running host reports. Set it explicitly (usually alongside
-   * `localHost: null`) to model the case the real bridge exists for: a host
-   * that has published metadata before but is not reachable right now.
+   * Mirrors `IRunnerHost.getLastKnownLocalHostId()` - the durable host id read from pid metadata, which still answers while the host is down.
+   * Set it explicitly (usually alongside `localHost: null`) to model the case the real bridge exists for: a host that has published metadata before but is not reachable right now.
    */
   readonly lastKnownLocalHostId?: string | null;
 }
@@ -136,28 +128,18 @@ interface RetainedStepUpCredential {
   readonly expiresAtMs: number;
 }
 
-/** Ordered flag-list equality, for the mock's family-default canonicalisation. */
 function sameFlags(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
 }
 
 /**
  * In-memory `IRunnerHost` used by `gui-app` dev/preview and shared tests.
- *
- * Mirrors the composite surface real desktop and mobile runners hand to
- * `<TraycerApp />` so shared tests and dev shells can exercise the full
- * runtime without a native host attached. All capabilities are always
- * present; capabilities the concrete shell would not implement (tray on
- * mobile, notifications on web preview) install no-op handlers that never
- * fire, matching the production invariant.
+ * Mirrors the composite surface real desktop and mobile runners hand to `<TraycerApp />` so shared tests and dev shells can exercise the full runtime without a native host attached.
  */
 export class MockRunnerHost implements IRunnerHost {
   readonly browserView = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
-  // Fixed test-only value: no test constructs a real remote transport against
-  // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
-  // instead), so this never needs to vary per test the way `authnBaseUrl` does.
   readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
   // Browser-tab flavoured, like `fileSave` below: a tab's own clipboard takes
@@ -184,10 +166,7 @@ export class MockRunnerHost implements IRunnerHost {
     (change: TokenStoreChange) => void
   >();
   private tokenStoreRevision = 0;
-  // Mirrors the real store authority's quarantine: a token whose conditional
-  // delete was requested but has not landed is never served by `get` and
-  // never advertised present by the change fan-out. Tests inject
-  // `tokenStoreConditionalDeleteError` to make the delete fail.
+  // Mirrors the real store authority's quarantine: a token whose conditional delete was requested but has not landed is never served by `get` and never advertised present by the change fan-out.
   readonly tokenStoreQuarantinedTokens = new Set<string>();
   tokenStoreConditionalDeleteError: Error | null = null;
 
@@ -209,11 +188,8 @@ export class MockRunnerHost implements IRunnerHost {
   /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
   private readonly explicitLastKnownLocalHostId: string | null | undefined;
   /**
-   * The in-window selection authority (D16 browser/dev binding) and the two
-   * ports that drive it. They are fields rather than constructor locals so a
-   * dev shell or test can move the fleet (`setHosts`) and the identity
-   * (`setSelectionIdentity`) and watch the authority react exactly as it
-   * would on desktop.
+   * The in-window selection authority (D16 browser/dev binding) and the two ports that drive it.
+   * They are fields rather than constructor locals so a dev shell or test can move the fleet (`setHosts`) and the identity (`setSelectionIdentity`) and watch the authority react exactly as it would on desktop.
    */
   readonly selectionFleet = new InMemoryHostFleetSource({
     revision: 0,
@@ -229,25 +205,10 @@ export class MockRunnerHost implements IRunnerHost {
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
   /**
-   * The authority runs IN-WINDOW here, so membership changes reach it through
-   * the fleet source directly and there is no stale main-process copy to
-   * invalidate (F6's gap is a consequence of the process split, not of the
-   * design). Republishing the current snapshot keeps the call meaningful
-   * rather than making it a lie: a caller that says "membership changed" still
-   * gets one atomic fleet transaction out of it.
+   * Republishing the current snapshot keeps the call meaningful rather than making it a lie: a caller that says "membership changed" still gets one atomic fleet transaction out of it.
    */
   /**
-   * `null`: this shell owns no registry cadence, so a consumer keeps its own
-   * timer - the same answer the browser/dev topology gives, and the reason the
-   * capability is nullable rather than assumed.
-   *
-   * The handler parameter is declared even though this implementation ignores
-   * it, and that is not decoration: dropping it makes the MEMBER's type
-   * `() => Disposable | null`, which no longer accepts a handler-taking
-   * function, so a test that installs a pushing shell on the instance - the
-   * only way to exercise the push path against this mock - fails to type-check
-   * at the assignment. Matching the interface's arity keeps the substitution
-   * legal.
+   * `null`: this shell owns no registry cadence, so a consumer keeps its own timer - the same answer the browser/dev topology gives, and the reason the capability is nullable rather than assumed.
    */
   onRegisteredHostsChange(
     handler: (push: RegisteredHostsChange) => void,
@@ -288,9 +249,7 @@ export class MockRunnerHost implements IRunnerHost {
     },
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
-  // No native save surface to stand in for: this shell runs in a browser tab,
-  // where gui-app's own File System Access / `<a download>` legs are already
-  // the real answer.
+  // No native save surface to stand in for: this shell runs in a browser tab, where gui-app's own File System Access / `<a download>` legs are already the real answer.
   readonly fileSave: null = null;
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;
@@ -304,15 +263,13 @@ export class MockRunnerHost implements IRunnerHost {
 
   /**
    * Test/dev counter - how many times `beginAuthAttempt()` has been invoked.
-   * Exposed so tests can assert ordering relative to `openExternalLink(...)`
-   * without leaking implementation details of the boundary signal.
+   * Exposed so tests can assert ordering relative to `openExternalLink(...)` without leaking implementation details of the boundary signal.
    */
   beginAuthAttemptCalls = 0;
 
   /**
-   * Test/dev counter - how many times `requestHostRespawn()` has been
-   * invoked. Mirrors `beginAuthAttemptCalls` so tests can assert the host
-   * Retry UX drove a respawn request without touching a real lifecycle.
+   * Test/dev counter - how many times `requestHostRespawn()` has been invoked.
+   * Mirrors `beginAuthAttemptCalls` so tests can assert the host Retry UX drove a respawn request without touching a real lifecycle.
    */
   requestHostRespawnCalls = 0;
 
@@ -322,42 +279,16 @@ export class MockRunnerHost implements IRunnerHost {
     this.localHost = options.localHost;
     this.explicitLastKnownLocalHostId = options.lastKnownLocalHostId;
     this.hosts = options.hosts;
-    // Browser/dev topology (D16): the SAME authority engine mounted in the
-    // single window behind the in-process adapter. Nothing about the rules
-    // changes here - one reporter, the engine's own allocator, the same
-    // claim and atomic-inventory semantics - which is what keeps the two
-    // bindings from drifting.
+    // Browser/dev topology (D16): the same authority engine mounted in the single window behind the in-process adapter.
+    // Nothing about the rules changes here - one reporter, the engine's own allocator, the same claim and atomic-inventory semantics - which is what keeps the two bindings from drifting.
     this.selectionAuthorityMount = createInProcessSelectionAuthority({
       fleet: this.selectionFleet,
       identity: this.selectionIdentity,
-      // MIRRORS `createDesktopLocalHostEnsurePort`. When this shell has host
-      // management, D14's ensure goes where the real one goes - through
-      // `convergeReady` - because that call IS the observable event. A mock
-      // that answered `ok` directly satisfied the engine while leaving the
-      // provisioning invisible to anything watching the controller, so a test
-      // asserting "the authority started the host" could not see it happen
-      // even when it did.
-      //
-      // With no management there is no controller to ask, and the answer is
-      // read off the FIXTURE rather than being a constant: a mock built WITH a
-      // `localHost` snapshot is modelling a shell whose host is already
-      // running, so the ensure has nothing to do. Refusing there used to be
-      // invisible, because the engine only asked when the local lease was
-      // already `dead`; once P1.3's F3(b) ruling let derivation ask for a
-      // NEVER-DIALED local host too, the constant refusal fired on every such
-      // mock at boot, drove the local lease to `dead` for the retry cooldown
-      // (registry §5's ∅ made real), and left `effectiveHostId` null - so the
-      // window unbound its host client and every gate/compat surface in the
-      // gui-app suite hung on a probe that could no longer run. `localHost ===
-      // null` is the only shape that genuinely cannot provision.
+      // Mirrors `createDesktopLocalHostEnsurePort`.
+      // `localHost === null` is the only shape that genuinely cannot provision.
       localHostEnsure: {
-        // THE DEFERRAL IS LOAD-BEARING, not style. This authority is being
-        // constructed right here, and its constructor derives immediately -
-        // which calls `ensureReady()` SYNCHRONOUSLY, before the assignment of
-        // `this.hostManagement` further down this same constructor has run.
-        // An inline read would see `undefined` on the very first ensure, which
-        // is the cold-start one that matters most. One microtask puts the read
-        // after the constructor completes.
+        // The deferral IS load-bearing, not style.
+        // One microtask puts the read after the constructor completes.
         ensureReady: () =>
           Promise.resolve().then(() => this.ensureLocalHostReady()),
       },
@@ -388,16 +319,14 @@ export class MockRunnerHost implements IRunnerHost {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult> {
-    // Access-only (§3): the mock mirrors the desktop IPC, which no longer
-    // refreshes on a failed lookup — the spend routes through `tokenStore.rotate`.
+  // Access-only (§3): the mock mirrors the desktop IPC, which no longer
+    // refreshes on a failed lookup - the spend routes through `tokenStore.rotate`.
     return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
   }
 
   /**
-   * D14's local ensure for this shell - see the port's own note at the
-   * authority mount for why it is deferred and why the no-management answer
-   * reads the fixture. Kept as a method rather than a closure so that
-   * ordering constraint has one place to be explained.
+   * D14's local ensure for this shell - see the port's own note at the authority mount for why it is deferred and why the no-management answer reads the fixture.
+   * Kept as a method rather than a closure so that ordering constraint has one place to be explained.
    */
   private async ensureLocalHostReady(): Promise<
     { ok: true } | { ok: false; reason: string; deferred: boolean }
@@ -414,9 +343,7 @@ export class MockRunnerHost implements IRunnerHost {
     }
     const outcome = await management.convergeReady(false);
     if (outcome.kind === "ok") return { ok: true };
-    // Mirrors `createDesktopLocalHostEnsurePort`: a busy lane and a busy host
-    // are deferrals (nothing dead-worthy was learned); everything else ran
-    // and concluded.
+    // Mirrors `createDesktopLocalHostEnsurePort`: a busy lane and a busy host are deferrals (nothing dead-worthy was learned); everything else ran and concluded.
     return {
       ok: false,
       reason: outcome.kind,
@@ -434,9 +361,7 @@ export class MockRunnerHost implements IRunnerHost {
     bearerToken: string,
     signal: AbortSignal,
   ): Promise<ListUserSessionsFetchResult> {
-    // Same no-CORS-boundary parity as `listRegisteredHosts` above. Owning the
-    // request in-process, it can hand the caller's signal straight to `fetch`
-    // and abort the real request.
+    // Same no-cors-boundary parity as `listRegisteredHosts` above.
     return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken, signal);
   }
 
@@ -453,10 +378,6 @@ export class MockRunnerHost implements IRunnerHost {
       stepUpToken ?? bearerToken,
       familyId,
     );
-    // Parity with the desktop main-process handler (`auth-ipc.ts`): a
-    // step-up-required verdict on a retained credential means the server just
-    // rejected it, so holding it would make the next revoke re-send a
-    // credential known to be dead and re-prompt in a loop.
     if (result.kind === "step-up-required" && useStepUpCredential) {
       this.retainedStepUpCredential = null;
     }
@@ -650,12 +571,8 @@ export class MockRunnerHost implements IRunnerHost {
       readonly userId: string;
       readonly token: string;
     }): Promise<TokenRotateResult> => {
-      // In-memory analogue of the locked rotate: the same guards, then a real
-      // (test-faked) refresh HTTP call — no file, no lock. Lets gui-app tests
-      // drive every rotate outcome by stubbing `fetch` on the authn base URL.
-      // Quarantine-filtered like the real authority's mutation view: a pair
-      // whose conditional delete is pending can never be returned as
-      // `superseded` nor refreshed into a successor.
+      // In-memory analogue of the locked rotate: the same guards, then a real (test-faked) refresh HTTP call - no file, no lock.
+      // Quarantine-filtered like the real authority's mutation view: a pair whose conditional delete is pending can never be returned as `superseded` nor refreshed into a successor.
       const raw = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
       const stored =
         raw !== null && this.tokenStoreQuarantinedTokens.has(raw.token)
@@ -700,10 +617,6 @@ export class MockRunnerHost implements IRunnerHost {
     deleteIfToken: async (
       expectedToken: string,
     ): Promise<"deleted" | "kept"> => {
-      // In-memory analogue of the store-authority conditional delete: the
-      // compare and delete are synchronous over the map, hence atomic — and
-      // the token is QUARANTINED before the attempt, so a failed delete
-      // leaves it suppressed for every reader until a retry lands.
       this.tokenStoreQuarantinedTokens.add(expectedToken);
       if (this.tokenStoreConditionalDeleteError !== null) {
         throw this.tokenStoreConditionalDeleteError;
@@ -729,11 +642,7 @@ export class MockRunnerHost implements IRunnerHost {
     migrateLegacyCredentials: async (
       legacy: StoredAuthTokens,
     ): Promise<CredentialsMigrationOutcome> => {
-      // In-memory analogue of the §6 migration (no lock/WAL; real, test-faked
-      // probe + refresh HTTP). Faithful on the branches gui-app renderer tests
-      // need — a present file wins, an absent file adopts the spent legacy pair;
-      // the deep re-entry / rotate-fallback branching is covered against the
-      // real store in the desktop suite.
+      // In-memory analogue of the §6 migration (no lock/wal; real, test-faked probe + refresh HTTP).
       const existing = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
       if (existing !== null) {
         return "file-wins";
@@ -767,13 +676,7 @@ export class MockRunnerHost implements IRunnerHost {
 
   /**
    * Fan out a revisioned `TokenStoreChange` from the current in-memory map.
-   * Tests call this after mutating `tokenStoreEntries` to simulate an external
-   * write/delete that the owned watcher would have observed.
-   *
-   * Self-writes from signIn/rotate/delete schedule the notify on a microtask so
-   * the AuthService apply path can finish first (mirrors production: the FS
-   * watcher fires after the write returns, with a debounce). That keeps the
-   * same-bearer reconcile no-op honest instead of racing applyLiveRotateOutcome.
+   * Tests call this after mutating `tokenStoreEntries` to simulate an external write/delete that the owned watcher would have observed.
    */
   notifyTokenStoreChanged(): void {
     this.tokenStoreRevision += 1;
@@ -825,12 +728,7 @@ export class MockRunnerHost implements IRunnerHost {
         feedSource,
         foregroundAppLocal,
       });
-      // Recording the request is not presenting it: this shell has no native
-      // notification capability (see the class doc - notifications are a
-      // no-op on web preview), so nothing is shown or relayed and the caller
-      // owns the fallback cue. Claiming `presented` here would suppress that
-      // cue and leave a blurred dev/preview window with an unseen toast and
-      // nothing else.
+      // Claiming `presented` here would suppress that cue and leave a blurred dev/preview window with an unseen toast and nothing else.
       return "undeliverable";
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
@@ -902,9 +800,7 @@ export class MockRunnerHost implements IRunnerHost {
   // ---- Test/dev helpers (not part of IRunnerHost) ---------------------- //
 
   /**
-   * Fires the payload-free browser-return signal to every `onAuthCallback`
-   * subscriber, modelling the shell delivering the `traycer://` deep link when
-   * the user comes back from the device-approval tab.
+   * Fires the payload-free browser-return signal to every `onAuthCallback` subscriber, modelling the shell delivering the `traycer://` deep link when the user comes back from the device-approval tab.
    */
   emitAuthCallback(): void {
     for (const handler of this.authCallbackHandlers) {
@@ -941,19 +837,7 @@ export class MockRunnerHost implements IRunnerHost {
 
   /**
    * Republishes the authority's fleet from the mock's directory state.
-   *
-   * Only identity and membership cross: the directory entries carry a
-   * dialability verdict, and projecting it here would hand the authority a
-   * cloud-shaped liveness signal that invariant 5 forbids it to hold. The
-   * `mock` kind counts as remote - it is not this machine's own host.
-   *
-   * The local host is always a member once known, even when it is absent
-   * from `this.hosts` (the mock's separate multi-host directory list): on
-   * desktop the local machine reports its own fleet membership directly, not
-   * through the registered-hosts directory, so a caller that only sets
-   * `localHost`/`hosts: []` to boot a single-host suite must still get a
-   * real local candidate rather than an empty fleet the authority can never
-   * derive an effective host from.
+   * Only identity and membership cross: the directory entries carry a dialability verdict, and projecting it here would hand the authority a cloud-shaped liveness signal that invariant 5 forbids it to hold.
    */
   private publishSelectionFleet(): void {
     const localHostId = this.getLocalHostIdForSelection();
@@ -994,10 +878,8 @@ export class MockRunnerHost implements IRunnerHost {
 }
 
 /**
- * In-memory `ITrayState`. Always present so `gui-app` never branches on
- * capability. `setEpics` / `setIndicator` record the last value for test
- * assertions, and `emitEpicSelected` is a test/dev helper so shared and
- * gui-app tests can drive a tray click through the mocked surface.
+ * In-memory `ITrayState`.
+ * Always present so `gui-app` never branches on capability.
  */
 export class MockTrayState implements ITrayState {
   epics: readonly TrayEpic[] = [];
@@ -1031,11 +913,8 @@ export class MockTrayState implements ITrayState {
 }
 
 /**
- * In-memory `ITraycerCli` for tests and dev shells. Mirrors what the real
- * desktop CLI surfaces: a host-status snapshot, an effective shell config,
- * and a flat env-override map. Mutations replace the in-memory state in-place
- * - no subprocess, no SQLite - so tests can preload deterministic responses
- * and assert renderer behaviour without standing up a host.
+ * In-memory `ITraycerCli` for tests and dev shells.
+ * Mutations replace the in-memory state in-place - no subprocess, no SQLite - so tests can preload deterministic responses and assert renderer behaviour without standing up a host.
  */
 export class MockTraycerCli implements ITraycerCli {
   hostStatusSnapshot: TraycerHostStatusSnapshot = {
@@ -1051,11 +930,7 @@ export class MockTraycerCli implements ITraycerCli {
     synthesised: true,
   };
   envOverrides: TraycerEnvOverride[] = [];
-  /**
-   * Remembered/customised launch specs, mirroring the store's `shell.entries`.
-   * Mutated by `shellConfigAdd`/`Remove`/`Set`; drives the "added" rows and the
-   * per-shell flags a pick materialises.
-   */
+  /** Remembered/customised launch specs, mirroring the store's `shell.entries`. */
   shellEntries: { path: string; args: readonly string[] | null }[] = [];
   detectedShells: readonly TraycerDetectedShell[] = [
     {
@@ -1114,9 +989,7 @@ export class MockTraycerCli implements ITraycerCli {
 
   async shellConfigSet(input: TraycerShellConfigSetInput): Promise<void> {
     if (input.args !== null) {
-      // Flag customisation: upsert the entry for the effective shell. While on
-      // the system default (no explicit selection), keep `synthesised` so the
-      // System default row stays checked and the login shell inherits the entry.
+      // Flag customisation: upsert the entry for the effective shell.
       const inAutoState = input.path === null && this.shellConfig.synthesised;
       const effectivePath = input.path ?? this.shellConfig.path;
       this.upsertEntry(effectivePath, input.args);
@@ -1241,11 +1114,6 @@ export class MockTraycerCli implements ITraycerCli {
   }
 }
 
-/**
- * Default `/device/authorize` response handed back by `MockDeviceFlowHost`.
- * `user_code` is the plan's grouped Crockford shape; the URIs/timings are
- * representative so progress/expiry UI and timeout scoping can be exercised.
- */
 const MOCK_DEVICE_AUTHORIZATION: DeviceFlowAuthorization = {
   userCode: "ABCDE-FGHIJ",
   verificationUri: "https://app.traycer.ai/device",
@@ -1256,11 +1124,8 @@ const MOCK_DEVICE_AUTHORIZATION: DeviceFlowAuthorization = {
 };
 
 /**
- * In-memory `IDeviceFlowHost`. `start()` hands back a `MockDeviceFlowSession`
- * carrying `nextAuthorization`; set `nextAuthorization = null` to simulate an
- * authorize failure (the real shell returns `null` on network/5xx). Tests drive
- * the terminal outcome with `emitResult(...)` and assert supersede behaviour via
- * `lastSession.cancelled`.
+ * In-memory `IDeviceFlowHost`.
+ * Tests drive the terminal outcome with `emitResult(...)` and assert supersede behaviour via `lastSession.cancelled`.
  */
 export class MockDeviceFlowHost implements IDeviceFlowHost {
   startCalls = 0;
@@ -1294,9 +1159,7 @@ export class MockDeviceFlowSession implements DeviceFlowSession {
   cancelled = false;
   /** Test counter: how many times the browser-return nudge poked this poll. */
   pollNowCalls = 0;
-  // The terminal result is cached for the session's lifetime so every
-  // subscriber - late or repeat - replays it, matching the
-  // `DeviceFlowSession.onResult` contract (the desktop preload caches likewise).
+  // The terminal result is cached for the session's lifetime so every subscriber - late or repeat - replays it, matching the `DeviceFlowSession.onResult` contract (the desktop preload caches likewise).
   private settledResult: DeviceFlowResult | null = null;
   private readonly handlers = new Set<(result: DeviceFlowResult) => void>();
 
@@ -1309,9 +1172,7 @@ export class MockDeviceFlowSession implements DeviceFlowSession {
   }
 
   onResult(handler: (result: DeviceFlowResult) => void): Disposable {
-    // Replay the settled result to a subscription that arrives after the
-    // attempt has already concluded (cached, not consumed - a second
-    // subscriber still sees it).
+    // Replay the settled result to a subscription that arrives after the attempt has already concluded (cached, not consumed - a second subscriber still sees it).
     if (this.settledResult !== null) {
       handler(this.settledResult);
       return { dispose: () => undefined };

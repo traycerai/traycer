@@ -75,12 +75,7 @@ function persistSnapshot(
 const HOST_ID = "host-a";
 const EPIC_ID = "epic-1";
 
-/**
- * A CURRENT-version (v2) blob, so the live per-host buckets are populated
- * rather than the migration-only legacy fallback that `persistSnapshot`
- * exercises. Account scoping has to hold for the fields that actually carry
- * settings today, not just the frozen v1 ones.
- */
+/** v2 blob so live per-host buckets populate. Account scoping must hold for current fields, not only frozen v1. */
 function persistHostBucketSnapshot(
   bucketIdentity: string,
   hostId: string,

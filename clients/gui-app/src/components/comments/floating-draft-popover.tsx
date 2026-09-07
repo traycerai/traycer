@@ -34,10 +34,8 @@ import { CommentComposer } from "./comment-composer";
 
 export interface FloatingDraftPopoverProps {
   readonly epicId: string;
-  /** The host serving the TILE this draft was opened over - passed down by
-   *  `collab-tile-body.tsx` from `useTabHostClient()`. The thread must be
-   *  created on the host that serves the artifact being annotated, not on
-   *  whichever one the app is currently pointed at (D15). */
+  /** The thread must be created on the host that serves the artifact being annotated, not on whichever one the
+   * app is currently pointed at. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
@@ -50,21 +48,8 @@ export interface FloatingDraftPopoverProps {
   readonly onCreated: (threadId: string) => void;
 }
 
-/**
- * Selection-anchored floating draft surface.
- *
- * Lifecycle is store-driven: when `useDraftRange(epicId)` returns a non-null
- * range the popover renders, hosts a `<CommentComposer>`, and on submit fires
- * `epic.createCommentThread`. After the host ack we paint the
- * `threadAnchor` mark over the saved range, clear the draft, and bubble the
- * new threadId up so the sidebar can switch into comments view.
- *
- * Positioning uses `@floating-ui/dom`'s virtual reference pattern: the
- * editor's `coordsAtPos` produces the bounding rect, and `autoUpdate` keeps
- * the popover pinned while the user types or scrolls. Pointer-down on the
- * editor outside the saved range cancels the draft (with a confirm prompt
- * if the composer has content).
- */
+/** After the host ack we paint the `threadAnchor` mark over the saved range, clear the draft, and bubble the
+ * new threadId up so the sidebar can switch into comments view. */
 export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
   const {
     epicId,
@@ -85,14 +70,11 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
   const createThread = useCreateCommentThreadForClient(hostClient);
   const floatingRef = useRef<HTMLDialogElement | null>(null);
   const isDirtyRef = useRef(false);
-  // Render into the pane's portal host so this kept-mounted composer (its typed
-  // draft survives focus changes) is hidden with the pane instead of covering a
-  // focused split partner. `null` outside a pane falls back to `document.body`.
+  // Render into the pane's portal host so this kept-mounted composer (its typed draft survives focus changes) is
+  // hidden with the pane instead of covering a focused split partner.
   const paneContainer = usePanePortalContainer();
-  // The kept-mounted draft stays MOUNTED while its pane is a background split
-  // member, so its global (window, capture-phase) Escape listener must be gated
-  // on pane focus — otherwise Escape typed in the focused partner would dismiss
-  // this hidden draft.
+  // The kept-mounted draft stays mounted while its pane is a background split member, so its global (window,
+  // capture-phase) Escape listener must be gated on pane focus.
   const paneFocused = usePaneFocused();
 
   const dismiss = useCallback(
@@ -135,15 +117,11 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     };
     reposition();
     return autoUpdate(virtualReference, floating, reposition);
-    // `paneContainer` is a dependency: when the portal host settles (initially
-    // null → the pane container), createPortal remounts the floating node, so
-    // the positioning effect must re-run to bind `autoUpdate` to the live node
-    // instead of the detached first-mount node.
+    // `paneContainer` is a dependency: when the portal host settles (initially null → the pane container),
+    // createPortal remounts the floating node.
   }, [editor, ownedDraft, paneContainer]);
 
-  // Esc cancels (with dirty-confirm) at the document level so the editor
-  // doesn't have to forward keystrokes. The Tiptap editor's own Escape
-  // handler already lets unhandled keys bubble.
+  // The Tiptap editor's own Escape handler already lets unhandled keys bubble.
   useEffect(() => {
     if (!draftActive || !paneFocused) return;
     window.addEventListener("keydown", handleDocumentKeyDown, {
@@ -156,13 +134,8 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     };
   }, [draftActive, paneFocused]);
 
-  // Re-map the saved draft range through every editor transaction so local
-  // and remote edits keep the from/to offsets aligned with the original
-  // text. Without this, submitting after any intervening edit would write
-  // the threadAnchor mark over the wrong characters (or fail outright when
-  // the offsets fall outside the doc). When the entire range collapses
-  // (the quoted text was deleted) we drop the draft so the user notices
-  // and re-selects.
+  // Without this, submitting after any intervening edit would write the threadAnchor mark over the wrong
+  // characters (or fail outright when the offsets fall outside the doc).
   useEffect(() => {
     if (!draftActive) return;
     const handleTransaction = (props: { transaction: Transaction }) => {
@@ -255,12 +228,8 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
   );
 }
 
-/**
- * Compute a screen-space DOMRect spanning the editor's `from`→`to` range so
- * Floating UI can anchor against the live selection without a real DOM ref.
- * Falls back to the editor wrapper's box if the positions aren't currently
- * paintable (e.g. the range was destroyed by a remote edit).
- */
+/** Compute a screen-space DOMRect spanning the editor's `from`→`to` range so Floating UI can anchor against the
+ * live selection without a real DOM ref. */
 function coordsRectFor(editor: Editor, from: number, to: number): DOMRect {
   try {
     const start = editor.view.coordsAtPos(from);

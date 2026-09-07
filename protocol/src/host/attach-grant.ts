@@ -1,13 +1,5 @@
 import { z } from "zod";
 
-/**
- * Client-side mirror of `POST /api/v3/hosts/:hostId/attach-grant`'s response
- * (Architecture §4b, R4-A5; ticket T9) — see `authn-v3/.../hosts/_hostId/
- * attach-grant/index.ts` for the source of truth.
- *
- * Deliberately snake_case: this mirrors the wire shape verbatim (exactly what
- * authn-v3 serializes), not a camelCase DTO.
- */
 export interface AttachGrantResponse {
   /** The signed attach-grant JWS presented to the relay's `/attach`. */
   grant: string;

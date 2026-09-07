@@ -22,15 +22,8 @@ export interface TextShimmerProps {
   spread?: number;
 }
 
-/**
- * Text with a highlight band sweeping across it while a step is live (a
- * streaming reasoning title, an active activity group). The band is the
- * element's own background clipped to the glyphs; the sweep is an inline
- * `background-position` written from the shared status animation clock - see
- * `status-animation-clock.ts` for why this is neither a CSS animation nor a
- * motion `animate` loop (both cost a main-thread style recalc per display
- * frame for as long as the step is live).
- */
+/** Text with a highlight band sweeping across it while a step is live (a streaming reasoning title, an active
+ * activity group). */
 const ShimmerComponent = (props: TextShimmerProps) => {
   const { children, className } = props;
   const duration = props.duration ?? 2;
@@ -50,11 +43,7 @@ const ShimmerComponent = (props: TextShimmerProps) => {
   }, []);
   useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
 
-  // A callback ref rather than the ref object itself: the tag is a union of
-  // intrinsic elements, and a `RefObject<HTMLElement>` is not assignable to
-  // any one of their `ref` props while a callback taking `HTMLElement` is.
-  // When `as` swaps the element, the clock's next tick writes the new one -
-  // `useStatusAnimation` re-reads the ref on every tick.
+  // A callback ref rather than the ref object itself.
   const attachRef = useCallback((element: HTMLElement | null) => {
     ref.current = element;
   }, []);

@@ -1,12 +1,6 @@
 /**
  * The option sets and label text behind the Agents / Artifacts view menus.
- *
- * Everything here is data or a pure string builder, kept apart from the menu
- * components so the sidebar's nested desktop menu and the mobile switcher's
- * flat one offer the same choices in the same order and describe the resulting
- * view with the same words. A surface that reworded a summary - or listed its
- * facet values in a different order - would be describing a different view than
- * the one the shared store actually holds.
+ * Everything here is data or a pure string builder, kept apart from the menu components so the sidebar's nested desktop menu and the mobile switcher's flat one offer the same choices in the same order and describe the resulting view with the same words.
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
@@ -112,10 +106,8 @@ export const ARTIFACT_READ_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * Summary for a multi-select facet: the single choice when there is one, a
- * count once there are several. Spelling out three or four labels would push
- * the summary past the width a menu row can show, and a truncated list reads as
- * if the hidden entries were not selected.
+ * Summary for a multi-select facet: the single choice when there is one, a count once there are several.
+ * Spelling out three or four labels would push the summary past the width a menu row can show, and a truncated list reads as if the hidden entries were not selected.
  */
 export function selectedSummary(labels: readonly string[]): string {
   if (labels.length === 0) return "All";
@@ -131,18 +123,8 @@ export function sortSummary(sort: SortMode): string {
 }
 
 /**
- * Accessible name for the view-menu trigger. The count badge is `aria-hidden`
- * decoration, and the ordering and visibility have no badge at all, so
- * everything the view is currently doing has to be said here - otherwise a
- * screen reader hears "Filter agents" no matter how narrowed, reordered, or
- * reversed the list is.
- *
- * Each detail names its VALUE, never just that it changed: a direction the
- * label omits leaves ascending and descending indistinguishable, and a bare
- * "visibility changed" tells the user something is hidden without saying what,
- * which is the one thing they would act on. `visibilityLabel` is `null` for a
- * panel showing its default visibility, and for a surface with no visibility
- * control at all.
+ * The count badge is `aria-hidden` decoration, and the ordering and visibility have no badge at all, so everything the view is currently doing has to be said here - otherwise a screen reader hears "Filter agents" no matter how narrowed, reordered, or reversed the list is.
+ * Each detail names its VALUE, never just that it changed: a direction the label omits leaves ascending and descending indistinguishable, and a bare "visibility changed" tells the user something is hidden without saying what, which is the one thing they would act on.
  */
 export function viewTriggerLabel(args: {
   readonly base: string;

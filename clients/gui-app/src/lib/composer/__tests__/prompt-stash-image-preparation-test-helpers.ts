@@ -100,8 +100,7 @@ export function emptyMockCodecOptions(): MockCodecOptions {
 
 /**
  * Narrows the mock supportsWebP option to a concrete codec probe.
- * Control-flow narrowing on the union property is done via a local so TS
- * never builds `Promise<boolean | (() => Promise<boolean>)>`.
+ * Control-flow narrowing on the union property is done via a local so TS never builds `Promise<boolean | (() => Promise<boolean>)>`.
  */
 export function resolveSupportsWebPImpl(
   option: boolean | (() => Promise<boolean>) | undefined,

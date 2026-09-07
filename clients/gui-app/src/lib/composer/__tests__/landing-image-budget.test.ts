@@ -1,8 +1,5 @@
 /**
- * Canonical suite for `landing-image-budget.ts`: live-root skip, hash-aware
- * in-flight ledger, anonymous (hash-null) paste slots, opaque reservation
- * release, and measured-byte capacity math. Real draft store + runtime registry;
- * only sonner is mocked for toast side effects.
+ * Canonical suite for `landing-image-budget.ts`: live-root skip, hash-aware in-flight ledger, anonymous (hash-null) paste slots, opaque reservation release, and measured-byte capacity math.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -213,9 +210,7 @@ describe("reserveLandingImageBudget", () => {
       reserveLandingImageBudget("d1", [{ hash: h, bytes }]),
       "second",
     );
-    // Still charged after re-reserve: near-cap sibling of remaining room fails
-    // only if first was not released - here second holds bytes alone so a
-    // different near-cap hash of budget - bytes + 1 must fail if charged.
+    // Still charged after re-reserve: near-cap sibling of remaining room fails only if first was not released - here second holds bytes alone so a different near-cap hash of budget - bytes + 1 must fail if charged.
     const leftover = LANDING_IMAGE_BUDGET_BYTES - bytes;
     expect(
       reserveLandingImageBudget("d2", [
@@ -320,9 +315,7 @@ describe("reserveLandingImageBudget", () => {
     // live (0.6) + paste (0.6) > 1.0 → reject.
     expect(pasteLike).toBeNull();
 
-    // Two concurrent hash-null reservations with identical byte counts never
-    // share a ledger slot: each half of remaining headroom succeeds once,
-    // twice over-caps.
+    // Two concurrent hash-null reservations with identical byte counts never share a ledger slot: each half of remaining headroom succeeds once, twice over-caps.
     const remaining = LANDING_IMAGE_BUDGET_BYTES - liveBytes;
     const halfRemaining = Math.floor(remaining / 2);
     const firstAnon = requireDefined(
@@ -551,11 +544,8 @@ describe("reserveLandingImageBudget", () => {
 });
 
 /**
- * Isolation: importing ONLY `landing-image-budget.ts` (never the draft store
- * or GC) must be safe. No root source is registered, so draft-derived reads
- * are empty/zero; admission still works against that zero baseline. Intentionally
- * does NOT mock `idb-keyval` - if this import starts needing that mock, budget
- * has re-acquired a transitive GC/storage dependency.
+ * Isolation: importing ONLY `landing-image-budget.ts` (never the draft store or GC) must be safe.
+ * No root source is registered, so draft-derived reads are empty/zero; admission still works against that zero baseline.
  */
 describe("landing-image-budget module isolation", () => {
   it("imports alone: empty roots, zero-baseline reserve, no store/GC side effects", async () => {

@@ -1,14 +1,6 @@
 /**
  * The agents-only communication graph canvas.
- *
- * Agents are nodes, aggregated A2A exchanges are edges. Lineage is a layout
- * constraint rather than a drawn edge - see `comm-graph-layout.ts`.
- *
- * The graph is rendered AS OF THE EPIC'S TIME CURSOR: it receives the event
- * prefix up to the cursor, the set of agents that existed by then, and which
- * element the cursor event should pulse. Nothing below reads a clock - "now" is
- * just the cursor being live. The transport that MOVES the cursor is docked at
- * the bottom of this canvas.
+ * Lineage is a layout constraint rather than a drawn edge - see `comm-graph-layout.ts`.
  */
 import {
   useCallback,
@@ -134,9 +126,7 @@ export interface CommGraphCanvasProps {
   readonly epicId: string;
   readonly tileInstanceId: string;
   /**
-   * EVERY agent in the epic. The layout runs over the full set on purpose:
-   * positions stay put while playback reveals nodes, instead of the whole graph
-   * re-flowing on each step.
+   * The layout runs over the full set on purpose: positions stay put while playback reveals nodes, instead of the whole graph re-flowing on each step.
    */
   readonly agents: ReadonlyArray<CommGraphAgentNode>;
   /**
@@ -149,33 +139,21 @@ export interface CommGraphCanvasProps {
   readonly hosts: ReadonlyArray<CommGraphHostState>;
   /** Every source has delivered its initial bounded history. */
   readonly initialHistoryCaughtUp: boolean;
-  /** Whether the detached timeline cursor is currently advancing. */
   readonly playing: boolean;
   /** What the cursor event lights up, or null when it lights up nothing. */
   readonly pulse: CommGraphPulse | null;
   /**
    * Stable identity of the ROW behind `pulse` (`commGraphEventKey`), or null.
-   *
-   * The pulse itself is a derived value with no identity, so two consecutive
-   * rows between the same pair are indistinguishable from one row re-supplied.
-   * The office renderer spawns an envelope per key change and needs to tell
-   * those apart; the node graph re-renders either way and ignores this.
+   * The pulse itself is a derived value with no identity, so two consecutive rows between the same pair are indistinguishable from one row re-supplied.
    */
   readonly pulseKey: string | null;
   /**
-   * The office/graph switch, floated over the canvas AREA by each renderer.
-   *
-   * The tile owns the control (it owns the view state it writes) but cannot
-   * position it: a detail panel is the canvas's own sibling, so a toggle
-   * anchored to the tile would sit on top of that panel's close button
-   * whenever one is open.
+   * The tile owns the control (it owns the view state it writes) but cannot position it: a detail panel is the canvas's own sibling, so a toggle anchored to the tile would sit on top of that panel's close button whenever one is open.
    */
   readonly modeToggle: ReactNode;
   readonly view: CommGraphTileViewState;
   readonly onViewChange: (view: CommGraphTileViewState) => void;
-  /** Whether this row's owning cloud origin can currently open endpoints. */
   readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
-  /** Whether a detail row can be opened at its source. */
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -188,10 +166,7 @@ export interface CommGraphCanvasProps {
 }
 
 /**
- * A node with no resolvable host has no subscription behind it at all - a
- * legacy chat record that predates `Chat.hostId`. That is deliberately kept
- * distinct from "the host exists but we cannot reach it", because the reasons
- * and the remedies differ.
+ * That is deliberately kept distinct from "the host exists but we cannot reach it", because the reasons and the remedies differ.
  */
 /** Flattens the travel resolution into the edge's two data fields. */
 function travelData(travel: CommGraphEdgeTravel | null): {
@@ -216,9 +191,8 @@ function pulseSenderAgentId(pulse: CommGraphPulse | null): string | null {
 }
 
 export function CommGraphCanvas(props: CommGraphCanvasProps) {
-  // ReactFlow must create its own provider from the computed nodes below. An
-  // empty outer provider would make it reuse a store initialized before those
-  // nodes exist, so the first fit-to-view would have no graph to frame.
+  // ReactFlow must create its own provider from the computed nodes below.
+  // An empty outer provider would make it reuse a store initialized before those nodes exist, so the first fit-to-view would have no graph to frame.
   return <CommGraphCanvasBody {...props} />;
 }
 
@@ -282,9 +256,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     () => aggregateCommGraphEdges(events, agentIds),
     [agentIds, events],
   );
-  // Layout takes the PAIR edges too, so dagre pulls conversing agents together
-  // instead of ranking them by lineage alone. Still over the full agent set, so
-  // revealing a node during playback does not re-flow the ones already placed.
+  // Layout takes the PAIR edges too, so dagre pulls conversing agents together instead of ranking them by lineage alone.
   const positions = useMemo(
     () => layoutCommGraphNodes(agents, aggregated),
     [aggregated, agents],
@@ -308,9 +280,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     );
   }, []);
 
-  // Idempotent by identity, because an agent has TWO live click paths that both
-  // legitimately fire (see `onNodeClick` below): re-selecting what is already
-  // open must be a genuine no-op, not a second render of the same panel.
+  // Idempotent by identity, because an agent has TWO live click paths that both legitimately fire (see `onNodeClick` below): re-selecting what is already open must be a genuine no-op, not a second render of the same panel.
   const handleSelectAgent = useCallback((agentId: string) => {
     setSelectedDetail((current) =>
       current?.kind === "agent" && current.agentId === agentId
@@ -343,9 +313,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           id: agent.id,
           type: COMM_GRAPH_AGENT_NODE_TYPE,
           position: positions.get(agent.id) ?? { x: 0, y: 0 },
-          // Flow-space dimensions, so the node box matches what the layout
-          // reserved. Supplying them up front also lets edges route before the
-          // first ResizeObserver measurement lands.
+          // Supplying them up front also lets edges route before the first ResizeObserver measurement lands.
           width: COMM_GRAPH_NODE_WIDTH,
           height: COMM_GRAPH_NODE_HEIGHT,
           draggable: false,
@@ -361,9 +329,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
             searchHighlightNonce: searchHighlight.agentIds.has(agent.id)
               ? searchHighlight.requestId
               : 0,
-            // The ONLY node pulse left: a message whose counterpart is not on
-            // this canvas has no edge to travel along, so the endpoint that IS
-            // here lights up instead of the exchange vanishing.
+            // The ONLY node pulse left: a message whose counterpart is not on this canvas has no edge to travel along, so the endpoint that IS here lights up instead of the exchange vanishing.
             pulsing: agent.id === pulsingAgentId,
             onSelect: handleSelectAgent,
           },
@@ -381,9 +347,8 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     ],
   );
 
-  // Find is registered once per tile instance. The adapter reads live nodes and
-  // viewport controls through an imperative runtime, so a playback step does
-  // not tear down the active find session or reset its query.
+  // Find is registered once per tile instance.
+  // The adapter reads live nodes and viewport controls through an imperative runtime, so a playback step does not tear down the active find session or reset its query.
   useEffect(() => {
     findRuntime.updateNodes(nodes);
   }, [findRuntime, nodes]);
@@ -451,9 +416,8 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
 
   const edges = useMemo<ReadonlyArray<CommGraphFlowEdge>>(
     () =>
-      // ONE edge per unordered pair, and no `markerEnd`: the edge is
-      // undirected. `source`/`target` are React Flow's routing endpoints only -
-      // they carry the pair's canonical order, not a direction.
+      // ONE edge per unordered pair, and no `markerEnd`: the edge is undirected.
+      // `source`/`target` are React Flow's routing endpoints only - they carry the pair's canonical order, not a direction.
       aggregated.map((edge) => ({
         id: edge.id,
         source: edge.agentAId,
@@ -472,9 +436,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     [aggregated, edgeInteraction, handleSelectEdge, travelFor],
   );
 
-  // Pressing Play is an explicit request to follow the action again. Pause
-  // leaves the current choice alone; only the next false -> true transition
-  // re-arms after a person has taken manual control of the canvas.
+  // Pause leaves the current choice alone; only the next false -> true transition re-arms after a person has taken manual control of the canvas.
   useEffect(() => {
     if (playing && !wasPlayingRef.current) {
       findRuntime.enablePlaybackAutoPan();
@@ -518,8 +480,8 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       sender.position.y + COMM_GRAPH_NODE_HEIGHT / 2,
       { zoom: viewport.zoom, duration: COMM_GRAPH_AUTO_PAN_MS },
     );
-    // `pulse` is intentionally a dependency even when two consecutive rows
-    // share a sender: every cursor step gets its own visibility decision.
+  // `pulse` is intentionally a dependency even when two consecutive rows
+  // share a sender: every cursor step gets its own visibility decision.
   }, [findRuntime, flowInstance, nodes, playing, pulse, senderAgentId]);
 
   const selectedEdge =
@@ -569,50 +531,24 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           // The tile's view carries a `mode` React Flow has no use for, so the
           // viewport is handed over as its own three fields.
           defaultViewport={{ x: view.x, y: view.y, zoom: view.zoom }}
-          // A neutral schema viewport means this graph has never been framed by
-          // the user. Let React Flow derive its first viewport from every node;
-          // a persisted pan/zoom still restores exactly as the user left it.
+          // A neutral schema viewport means this graph has never been framed by the user.
           fitView={isDefaultCommGraphView(view)}
           minZoom={COMM_GRAPH_MIN_ZOOM}
           onInit={setFlowInstance}
           onMoveStart={handleMoveStart}
           onMoveEnd={handleMoveEnd}
-          // REQUIRED, and not merely as a tidier click path. React Flow's
-          // `NodeWrapper` computes
-          //   hasPointerEvents = isSelectable || isDraggable || onClick || …
-          // and writes `pointerEvents: 'none'` on `.react-flow__node` when it is
-          // false. With `elementsSelectable={false}` and `draggable: false` and
-          // no `onNodeClick`, every node was pointer-inert in a real browser -
-          // the node's own <button> never saw a click at all. jsdom does not
-          // implement CSS pointer-events, so `fireEvent.click` on that button
-          // passed the whole time. Deleting this prop silently breaks the
-          // feature again; the node-wrapper test is what guards it.
+          // With `elementsSelectable={false}` and `draggable: false` and no `onNodeClick`, every node was pointer-inert in a real browser - the node's own <button> never saw a click at all. jsdom does not implement CSS pointer-events, so `fireEvent.click` on that button passed the whole time.
+          // Deleting this prop silently breaks the feature again; the node-wrapper test is what guards it.
           onNodeClick={handleNodeClick}
-          // REQUIRED, like `onNodeClick`: without it every edge <g> is
-          // pointer-inert - see `commGraphEdgeInteraction`, which builds this
-          // and the per-edge half together for that reason.
+          // REQUIRED, like `onNodeClick`: without it every edge <g> is pointer-inert - see `commGraphEdgeInteraction`, which builds this and the per-edge half together for that reason.
           onEdgeClick={onEdgeClick}
           nodesDraggable={false}
           nodesConnectable={false}
-          // The node wrapper would otherwise take `tabIndex=0` and be a DEAD tab
-          // stop: its keydown handler only drives React Flow's own selection,
-          // which `elementsSelectable={false}` already rules out, so every agent
-          // would cost two Tabs to reach - one for a wrapper that does nothing,
-          // one for the real button inside it. Turning this off drops the
-          // wrapper's `tabIndex`, `onKeyDown`, `onFocus` and `group` role and
-          // leaves our own <button> as the single focus target. It cannot
-          // re-inert the node: `hasPointerEvents` is a function of `onClick`,
-          // not of `isFocusable`.
-          //
-          // `edgesFocusable` stays ON deliberately: an edge has no inner
-          // control, so its wrapper is the only keyboard route to the pair
-          // panel, and it earns the stop by carrying a real key handler.
+          // The node wrapper would otherwise take `tabIndex=0` and be a DEAD tab stop: its keydown handler only drives React Flow's own selection, which `elementsSelectable={false}` already rules out, so every agent would cost two Tabs to reach - one for a wrapper that does nothing, one for the real button inside it.
+          // It cannot re-inert the node: `hasPointerEvents` is a function of `onClick`, not of `isFocusable`.
           nodesFocusable={false}
-          // Kept OFF deliberately, and it does not gate the click: React Flow
-          // gates only its INTERNAL selection (`handleNodeClick`) on
-          // `isSelectable`, then calls the user's `onClick(event, node)`
-          // unconditionally. So we get clicks without selection outlines or
-          // box-select.
+          // Kept OFF deliberately, and it does not gate the click: React Flow gates only its INTERNAL selection (`handleNodeClick`) on `isSelectable`, then calls the user's `onClick(event, node)` unconditionally.
+          // So we get clicks without selection outlines or box-select.
           elementsSelectable={false}
           proOptions={PRO_OPTIONS}
           colorMode={resolvedTheme}

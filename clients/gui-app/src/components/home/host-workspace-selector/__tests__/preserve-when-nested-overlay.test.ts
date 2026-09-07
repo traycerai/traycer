@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { preserveWhenNestedOverlay } from "../preserve-when-nested-overlay";
 
-/**
- * Runs the handler as a real listener so the dispatched event carries a `target`
- * and `preventDefault()` takes effect during dispatch. Returns whether the
- * popover would be PRESERVED (default prevented) or allowed to dismiss.
- */
+/** Runs the handler as a real listener so the dispatched event carries a `target` and `preventDefault` takes
+ * effect during dispatch. */
 function interactOutside(
   target: Element,
   contentEl: HTMLElement | null,

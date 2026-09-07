@@ -1,6 +1,4 @@
-/**
- * Landing prompt-stash destination - identity/acceptance.
- */
+/** Landing prompt-stash destination - identity/acceptance. */
 import { cleanup } from "@testing-library/react";
 import { createStore } from "zustand/vanilla";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

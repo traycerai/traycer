@@ -27,33 +27,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import { LOGIN_IMPORT_BROWSER_LABELS } from "@traycer-clients/shared/platform/browser-view";
 
-/**
- * The login import, headless: three steps, each backed by one bridge call, with
- * no window of its own. Two surfaces dress it - Settings › Browser › Saved
- * logins › "Import logins from another browser" puts it in a dialog, and the
- * tour's login-import act puts it on a solo stage - and both render THIS, so
- * a step, an explainer or a count fixed here is fixed on both, and the dialog
- * suite keeps covering the tour.
- *
- * 1. **Pick** a browser profile or a cookie file. Listing prompts for
- *    nothing.
- * 2. **Choose sites.** The scan is metadata-only on the desktop, so this step
- *    renders before any OS prompt has fired - and it is where the flow says
- *    which prompt the Import click will raise, and what cannot be imported
- *    and why (Google's device-bound sessions, Windows' app-bound cookies,
- *    cookies scoped to embedded contexts).
- * 3. **Done.** Honest counts from the desktop, and how far the jar main
- *    pushed afterwards actually reached: the hosts that ACKED it, never
- *    "saved", because a host acks a jar it may still decide to drop.
- *
- * Every failure arrives as a result value with a closed reason, and each
- * reason has one explainer the user can act on. Nothing here retries on its
- * own: a retry after a denied Keychain prompt is a second prompt.
- *
- * The surface supplies the FRAME - what a step's header, title, description
- * and footer render as - because the dialog's are Radix parts that throw
- * outside a `Dialog`, and the tour has no dialog to put them in.
- */
+/** Choose sites. The scan is metadata-only on the desktop, so this step renders before any OS prompt has fired. */
 
 const FrameContext = createContext<ImportLoginsFrame>(
   PLAIN_IMPORT_LOGINS_FRAME,
@@ -64,11 +38,8 @@ type ImportStep =
   | {
       readonly kind: "choose";
       readonly source: LoginImportSource;
-      /**
-       * The choice a blocked import was made with, restored when the user
-       * retries from Done: a retry after a denied Keychain prompt must not
-       * come back with every site ticked again. `null` on the first visit.
-       */
+      /** The choice a blocked import was made with, restored when the user retries from Done: a retry after a denied
+       * Keychain prompt must not come back with every site ticked again. */
       readonly previousChoice: ImportChoice | null;
     }
   | {
@@ -78,24 +49,18 @@ type ImportStep =
       readonly result: LoginImportOutcome;
     };
 
-/**
- * What Done can show. A `cancelled` result - the desktop's own confirmation
- * declined - is not an outcome: the Choose step simply stays as it was.
- */
+/** A `cancelled` result - the desktop's own confirmation declined - is not an outcome: the Choose step simply
+ * stays as it was. */
 type LoginImportOutcome = Exclude<LoginImportResult, { status: "cancelled" }>;
 
 const BROWSER_LABELS = LOGIN_IMPORT_BROWSER_LABELS;
 
 export function ImportLoginsFlow(props: {
   readonly browserView: BrowserViewBridge;
-  /** Whether the Pick step may list sources yet (a closed dialog may not). */
   readonly enabled: boolean;
   readonly frame: ImportLoginsFrame;
-  /**
-   * Where Done's Close / Done button leads, or `null` for a surface with
-   * nowhere to go (the tour, whose own Continue is the way on). Leaving is
-   * also a reset: the next visit starts at Pick.
-   */
+  /** Where Done's Close / Done button leads, or `null` for a surface with nowhere to go (the tour, whose own
+   * Continue is the way on). */
   readonly onFinished: (() => void) | null;
 }): ReactNode {
   const [step, setStep] = useState<ImportStep>({ kind: "pick" });
@@ -291,11 +256,8 @@ interface LoginImportSourceGroup {
   readonly sources: readonly LoginImportSource[];
 }
 
-/**
- * One section per browser, in the order the browsers first appear in the
- * (most-recently-used-first) list: the browser whose profile was used last
- * heads the list, and its profiles keep their own recency order under it.
- */
+/** One section per browser, in the order the browsers first appear in the (most-recently-used-first) list: the
+ * browser whose profile was used last heads the list, and its profiles keep their own recency order under it. */
 function groupSourcesByBrowser(
   sources: readonly LoginImportSource[],
 ): readonly LoginImportSourceGroup[] {
@@ -324,9 +286,7 @@ function ChooseStep(props: {
     browserView: props.browserView,
     sourceId: props.source.id,
   });
-  // A scan that could not read the source, whether the desktop said so with
-  // a reason or the IPC itself failed. Either way the checklist is replaced
-  // by an explainer and the footer offers Back and Try again.
+  // A scan that could not read the source, whether the desktop said so with a reason or the IPC itself failed.
   const blocked =
     scan.isError || (scan.isSuccess && scan.data.blocked !== null);
   const renderScan = (): ReactNode => {
@@ -396,12 +356,8 @@ function ChooseStep(props: {
   );
 }
 
-/**
- * What the Import button hands up: the ticked domains, the Google opt-in, and
- * the token of the scan they were ticked from - so the desktop checks the
- * request against the list THIS window showed, not a later scan of the same
- * source another window took.
- */
+/** What the Import button hands up: the ticked domains, the Google opt-in, and the token of the scan they were
+ * ticked from. */
 interface ImportChoice {
   readonly scanId: string;
   readonly domains: readonly string[];
@@ -418,19 +374,13 @@ function SiteChecklist(props: {
 }): ReactNode {
   const Frame = use(FrameContext);
   const [filter, setFilter] = useState("");
-  // Unticked rather than ticked: every site starts selected, so the state
-  // is the exceptions and a fresh scan never has to be copied into it. A
-  // retry from a blocked import starts from that import's choice instead,
-  // so the sites the user excluded stay excluded.
+  // Unticked rather than ticked: every site starts selected, so the state is the exceptions and a fresh scan
+  // never has to be copied into it.
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(() =>
     untickedFor(props.scan, props.previousChoice),
   );
-  // Off by default and never remembered past this flow: Google binds its
-  // sessions to the device, so an imported one can end on its own. Turning
-  // this on moves the Google rows from the disabled tail into the checklist,
-  // ticked like any other site, and the request carries the opt-in so the
-  // desktop honours them; turning it off again drops them from the count and
-  // the request. A retry keeps the opt-in the blocked import was made with.
+  // Off by default and never remembered past this flow: Google binds its sessions to the device, so an imported
+  // one can end on its own. A retry keeps the opt-in the blocked import was made with.
   const [includeDeviceBound, setIncludeDeviceBound] = useState(
     props.previousChoice !== null && props.previousChoice.includeDeviceBound,
   );
@@ -622,15 +572,7 @@ function SiteChecklist(props: {
   );
 }
 
-/**
- * The Google opt-in (decision: off by default, never remembered). The
- * exclusion is the safe default because Google binds its sessions to the
- * device with a key the import cannot copy, so a transplanted session can end
- * at Google's next check. The toggle exists because that check is not yet
- * universal and a user who knows the trade-off may prefer minutes of a
- * working Gmail to signing in again; the warning names what they are
- * accepting, in the same breath as the switch.
- */
+/** Google opt-in, off by default and never remembered: the import cannot copy the device-bound session key. */
 function DeviceBoundOptIn(props: {
   readonly enabled: boolean;
   readonly pending: boolean;

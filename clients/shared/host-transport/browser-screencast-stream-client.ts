@@ -15,13 +15,8 @@ import type { IHostStreamClient } from "./host-stream-client";
 
 export interface BrowserScreencastStreamCallbacks {
   /**
-   * `jpegBytes` is the paired binary WS frame for a `frame` kind and null for
-   * every text kind. Delivered as a separate parameter for the same reason
-   * `TerminalStreamClient` does it: the payload arrives out-of-band, not as a
-   * field on the envelope.
-   *
-   * Acking is deliberately the consumer's job - the host gates the next frame
-   * on it, and a tile acks after paint while a PiP mirror acks on arrival.
+   * `jpegBytes` is the paired binary WS frame for a `frame` kind and null for every text kind.
+   * Acking is deliberately the consumer's job - the host gates the next frame on it, and a tile acks after paint while a PiP mirror acks on arrival.
    */
   readonly onServerFrame: (
     frame: BrowserScreencastServerFrame,
@@ -39,17 +34,6 @@ export type BrowserScreencastStreamClientOptions =
     readonly callbacks: BrowserScreencastStreamCallbacks;
   };
 
-/**
- * Typed wrapper over one `browser.screencast` subscription - an
- * epic-authorized, tab-addressed media stream for a single viewer.
- *
- * `browser.screencast` serves a single minor (`@1.0`) - when the first
- * additive minor lands, the per-session schema selection belongs in
- * `handleServerFrame`, keyed off `session.getNegotiatedSchemaVersion()` the
- * way `TerminalStreamClient` does it. Every viewer opens its own session, so
- * parsing at a sibling viewer's minor is exactly the skew that placing the
- * parse here exists to prevent.
- */
 export class BrowserScreencastStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: BrowserScreencastStreamCallbacks;

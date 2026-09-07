@@ -102,11 +102,8 @@ describe("removeDeletedEpicsFromCloudTaskCaches", () => {
   });
 
   it("keeps the chat-host facet group when deleting, decrementing its counts", () => {
-    // The group's PRESENCE is a sentinel: `useHistoryQuery` reads a missing
-    // `chatHosts` as proof the server never applied the host filter and
-    // withholds every row. Rebuilding facets without it would strand a
-    // host-filtered list in "can't filter by host here" - permanently, since
-    // these entries never refetch on their own.
+    // The group's PRESENCE is a sentinel: `useHistoryQuery` reads a missing `chatHosts` as proof the server never applied the host filter and withholds every row.
+    // Rebuilding facets without it would strand a host-filtered list in "can't filter by host here" - permanently, since these entries never refetch on their own.
     const queryClient = new QueryClient();
     const key = cloudEpicTasksQueryKey(
       "host-a",

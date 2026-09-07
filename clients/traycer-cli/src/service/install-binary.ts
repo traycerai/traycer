@@ -14,9 +14,8 @@ export async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-// Atomically copy `source` to `destination` via a `<destination>.next`
-// staging file + rename. Used by the installer to swap in the host
-// binary without ever leaving a half-written executable on disk.
+// Atomically copy `source` to `destination` via a `<destination>.next` staging file + rename.
+// Used by the installer to swap in the host binary without ever leaving a half-written executable on disk.
 export async function installBinaryAtomically(options: {
   readonly source: string;
   readonly destination: string;

@@ -44,21 +44,8 @@ interface PrDiffTileProps {
 }
 
 /**
- * The PR's diff as a full canvas tile - the same shell, toolbar and
- * collapsible per-file sections as the Git Diff bundle tile, over a
- * `base...head` range read from the local checkout instead of the working
- * tree.
- *
- * It exists as a TILE rather than as a section inside the PR view for the
- * reason every other full diff does: a diff wants the whole pane. Inline, it
- * competed with the PR's own header, tab strip and context card for width, and
- * could not be split beside the conversation it is about. As a tile it drags
- * to a split, persists its collapse state, and is reachable from the tab strip
- * like any other diff.
- *
- * Gates on the tile's BOUND host only, like `PrDetailTile` and unlike
- * `GitDiffTile`: both of its data sources resolve through the bound host's own
- * client, so an app-active-host mismatch is not a reason to blank the tile.
+ * The PR's diff as a full canvas tile - the same shell, toolbar and collapsible per-file sections as the Git Diff bundle tile, over a `base...head` range read from the local checkout instead of the working tree.
+ * It exists as a TILE rather than as a section inside the PR view for the reason every other full diff does: a diff wants the whole pane.
  */
 export function PrDiffTile(props: PrDiffTileProps): ReactNode {
   const tabHostId = useTabHostId();
@@ -84,11 +71,8 @@ export function PrDiffTile(props: PrDiffTileProps): ReactNode {
 }
 
 /**
- * What the toolbar/header need to know about whichever range resolved.
- * `fileKeys` are canonical file keys (`prLocalDiffFileKey`), NOT display
- * paths: the toolbar's collapse-all writes them into the tile's
- * `collapsedFileKeys`, so they must be the same identity the rows and the
- * find session key by. The header only ever counts them.
+ * `fileKeys` are canonical file keys (`prLocalDiffFileKey`), NOT display paths: the toolbar's collapse-all writes them into the tile's `collapsedFileKeys`, so they must be the same identity the rows and the find session key by.
+ * The header only ever counts them.
  */
 interface PrDiffRangeMeta {
   readonly resolvedBaseRef: string;
@@ -103,19 +87,11 @@ interface PrLocalDiffTileData {
   readonly monolithQuery: UseQueryResult<PrGetLocalDiffResponse, HostRpcError>;
   readonly summaryUnsupported: boolean;
   /**
-   * The summary response the tile may ACT on - `null` whenever the summary
-   * query's latest answer was `E_HOST_UNSUPPORTED`, even though TanStack
-   * retains the previously-successful `data` beside that error. Without this
-   * suppression a mid-session host DOWNGRADE would leave a populated tile in
-   * split mode forever: the stale summary keeps rendering, every section
-   * keeps calling the now-missing per-file method, and the monolith fallback
-   * is fetched but never read.
+   * Without this suppression a mid-session host DOWNGRADE would leave a populated tile in split mode forever: the stale summary keeps rendering, every section keeps calling the now-missing per-file method, and the monolith fallback is fetched but never read.
    */
   readonly summaryData: PrGetLocalDiffSummaryResponseV11 | null;
   /**
-   * The monolith response the tile may ACT on - `null` outside fallback
-   * mode. Gated HERE beside `summaryData`'s suppression so the two halves
-   * of the one mode rule cannot diverge.
+   * Gated HERE beside `summaryData`'s suppression so the two halves of the one mode rule cannot diverge.
    */
   readonly monolithData: PrGetLocalDiffResponse | null;
   readonly range: PrDiffRangeMeta | null;
@@ -123,11 +99,7 @@ interface PrLocalDiffTileData {
 }
 
 /**
- * The tile's two-stage data source. Call-and-degrade: the summary call IS the
- * feature detection - on a host that predates the split methods it fails
- * `E_HOST_UNSUPPORTED` (the negotiated-manifest registry can't answer from
- * render on a fresh tile; see the hook's note), and only then does the tile
- * pay for the whole-PR monolith.
+ * Call-and-degrade: the summary call IS the feature detection - on a host that predates the split methods it fails `E_HOST_UNSUPPORTED` (the negotiated-manifest registry can't answer from render on a fresh tile; see the hook's note), and only then does the tile pay for the whole-PR monolith.
  */
 function usePrLocalDiffTileData(args: {
   readonly target: PrLocalDiffTarget | null;
@@ -163,11 +135,7 @@ function usePrLocalDiffTileData(args: {
 }
 
 /**
- * The per-file entries an invalidation may refetch: an `unavailable` answer
- * (a statement about mutable repo state) or an errored query. A
- * `kind: "diff"` entry is OID-immutable - refetching it can only return the
- * same bytes - so a broad invalidation would reissue every visible patch for
- * nothing.
+ * A `kind: "diff"` entry is OID-immutable - refetching it can only return the same bytes - so a broad invalidation would reissue every visible patch for nothing.
  */
 function isMutableFileDiffEntry(query: Query): boolean {
   if (query.state.status === "error") return true;
@@ -190,10 +158,7 @@ function summaryRangeKey(
 
 /**
  * The toolbar's collapse-all model, or `null` before any range resolved.
- * The membership check is the same canonical-key comparison the row chevron
- * and the find session make - the third of the three collapse gates. The
- * toolbar's `filePaths` slot carries the keys OPAQUELY (it never reads
- * them, only writes the list back wholesale).
+ * The toolbar's `filePaths` slot carries the keys OPAQUELY (it never reads them, only writes the list back wholesale).
  */
 function collapseAllFor(
   range: PrDiffRangeMeta | null,
@@ -223,9 +188,7 @@ function resolvedRangeMeta(
   if (summaryUnsupported && monolith?.kind === "diff") {
     return {
       resolvedBaseRef: monolith.resolvedBaseRef,
-      // Monolith files carry no sidecars (a 1.0-only host), so every key is
-      // the clean-path form - the same normalization the body's mode seam
-      // applies.
+      // Monolith files carry no sidecars (a 1.0-only host), so every key is the clean-path form - the same normalization the body's mode seam applies.
       fileKeys: monolith.files.map((file) =>
         prLocalDiffPathKey(file.path, null),
       ),
@@ -246,9 +209,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     (state) => state.updatePrDiffTileViewInTab,
   );
 
-  // The range is re-derived from the detail stream rather than frozen into the
-  // tile: a tile reopened after a force-push must diff what the PR IS, not
-  // replay a range that no longer exists.
+  // The range is re-derived from the detail stream rather than frozen into the tile: a tile reopened after a force-push must diff what the PR IS, not replay a range that no longer exists.
   const subscription = usePrDetailSubscription({
     epicId: props.epicId,
     githubHost: node.githubHost,
@@ -258,11 +219,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     enabled: props.isActive,
   });
   const core = subscription.data?.core ?? null;
-  // Memoized for IDENTITY, not cost: `invalidateFileDiffs` and through it
-  // `handleRangeDrift` and the sections' drift-report effects all key on
-  // this object. Rebuilt per render, every summary fetch-state flip would
-  // mint new callbacks and re-arm those effects - which is exactly the
-  // re-entry loop a failed drift recovery must not have.
+  // Rebuilt per render, every summary fetch-state flip would mint new callbacks and re-arm those effects - which is exactly the re-entry loop a failed drift recovery must not have.
   const { epicId } = props;
   const target = useMemo(
     () => (core === null ? null : prLocalDiffTarget(core, epicId)),
@@ -282,10 +239,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     enabled: props.isActive,
   });
 
-  // "Clear the MUTABLE per-file answers under this PR's checkout" - the
-  // refresh and drift-recovery escape hatch for cached `unavailable`/errored
-  // file entries. Filtered by {@link isMutableFileDiffEntry} so it never
-  // re-fans-out every visible OID-immutable patch.
+  // Filtered by {@link isMutableFileDiffEntry} so it never re-fans-out every visible OID-immutable patch.
   const invalidateFileDiffs = useCallback((): void => {
     if (target === null) return;
     void queryClient.invalidateQueries({
@@ -301,10 +255,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     });
   }, [queryClient, tabHostId, target]);
 
-  // The shared toolbar's `collapsedFilePaths` slot is OPAQUE strings it only
-  // round-trips; for the PR tile those strings are canonical file keys, and
-  // the patch handler maps them back into the tile's own `collapsedFileKeys`
-  // field (never the legacy bare-path field - see `PrDiffTileViewState`).
+  // The shared toolbar's `collapsedFilePaths` slot is OPAQUE strings it only round-trips; for the PR tile those strings are canonical file keys, and the patch handler maps them back into the tile's own `collapsedFileKeys` field (never the legacy bare-path field - see `PrDiffTileViewState`).
   const toolbarView = useMemo<DiffTabToolbarView>(
     () => ({
       ...preferences,
@@ -330,13 +281,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
   const { refetch: refetchSummary } = summaryQuery;
   const { refetch: refetchMonolith } = monolithQuery;
   const handleRefresh = useCallback((): void => {
-    // The summary is the tile's spine: refetching it re-resolves the range,
-    // and new OIDs re-key every per-file query on their own. Same-OID
-    // refreshes additionally invalidate the MUTABLE per-file entries
-    // (unavailable/errored - the answers that describe repo state a refresh
-    // exists to re-read), sequenced after the summary settles so the
-    // re-asks never race the range resolution. In fallback mode the monolith
-    // is the spine instead.
+    // Same-OID refreshes additionally invalidate the MUTABLE per-file entries (unavailable/errored - the answers that describe repo state a refresh exists to re-read), sequenced after the summary settles so the re-asks never race the range resolution.
     if (summaryUnsupported) {
       void refetchMonolith();
       return;
@@ -351,27 +296,11 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     summaryUnsupported,
   ]);
 
-  // Bounded range-drift recovery: when a per-file call reports the checkout
-  // no longer has the summary's OIDs, refetch the summary ONCE per named
-  // range. The ref (not state) is deliberate - a burst of sections reporting
-  // the same dead range must collapse into one refetch, and a range that
-  // keeps dying must not loop. Two outcomes need explicit handling on top of
-  // that: a FAILED refetch releases the token (a transient failure must not
-  // spend the range's one recovery), and a refetch that resolves the SAME
-  // OIDs invalidates the per-file scope, because the sections' cached
-  // `unavailable` answers would otherwise sit un-rekeyed forever.
+  // The ref (not state) is deliberate - a burst of sections reporting the same dead range must collapse into one refetch, and a range that keeps dying must not loop.
+  // Two outcomes need explicit handling on top of that: a FAILED refetch releases the token (a transient failure must not spend the range's one recovery), and a refetch that resolves the SAME OIDs invalidates the per-file scope, because the sections' cached `unavailable` answers would otherwise sit un-rekeyed forever.
   const recoveredRangeRef = useRef<string | null>(null);
-  // The token bounds one continuous EPISODE of a range, not the range's OID
-  // pair forever: leaving A for B and force-pushing back to A serves A's
-  // still-cached summary and per-file answers, and a spent token from A's
-  // first episode would silently suppress the new episode's one recovery.
-  // `episodeRangeRef` names the episode the token belongs to. It is opened in
-  // TWO places because of effect ordering: the returning range's remounted
-  // sections report drift from their own effects, which run BEFORE this
-  // component's - so the handler opens an unseen episode lazily (voiding a
-  // previous episode's spent token), and the effect below records
-  // report-free range changes so an excursion the sections never reported
-  // still closes the old episode.
+  // The token bounds one continuous EPISODE of a range, not the range's OID pair forever: leaving A for B and force-pushing back to A serves A's still-cached summary and per-file answers, and a spent token from A's first episode would silently suppress the new episode's one recovery.
+  // It is opened in TWO places because of effect ordering: the returning range's remounted sections report drift from their own effects, which run BEFORE this component's - so the handler opens an unseen episode lazily (voiding a previous episode's spent token), and the effect below records report-free range changes so an excursion the sections never reported still closes the old episode.
   const episodeRangeRef = useRef<string | null>(null);
   const rangeKey = summaryRangeKey(summaryData);
   const handleRangeDrift = useCallback((): void => {
@@ -411,9 +340,8 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
           collapseAll={collapseAll}
           refreshing={summaryQuery.isFetching || monolithQuery.isFetching}
           onRefresh={handleRefresh}
-          // No editor-open row: a PR diff spans many files and the range's
-          // endpoints are commits, so there is no single path to hand an
-          // editor. The per-file sections keep their own affordances.
+          // No editor-open row: a PR diff spans many files and the range's endpoints are commits, so there is no single path to hand an editor.
+          // The per-file sections keep their own affordances.
           openFile={null}
         />
       }
@@ -445,10 +373,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
 }
 
 /**
- * Shell title lines. Before the range resolves, both lines fall back to the
- * PR's coordinates - the one identity that is known from the tile ref alone,
- * so a tile rendered from persisted state never flashes an empty header while
- * the detail stream connects.
+ * Before the range resolves, both lines fall back to the PR's coordinates - the one identity that is known from the tile ref alone, so a tile rendered from persisted state never flashes an empty header while the detail stream connects.
  */
 function prDiffTileHeader(
   node: PrDiffTileRef,

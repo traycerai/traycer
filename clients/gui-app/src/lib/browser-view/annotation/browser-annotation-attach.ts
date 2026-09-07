@@ -9,8 +9,7 @@ type AttachBrowserAnnotationResult =
   | { readonly status: "store-failed" };
 
 /**
- * Store crop bytes in the existing hash-backed composer image store, mint the
- * record (hash + filename only), and append it to the target chat's draft.
+ * Store crop bytes in the existing hash-backed composer image store, mint the record (hash + filename only), and append it to the target chat's draft.
  * A card is never created without its crop.
  */
 export async function attachBrowserAnnotation(input: {

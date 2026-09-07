@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 
-// Mock the projection-debounce module so `flushActiveDesktopPerWindowProjection`
-// is observable; the real implementation would no-op without an active bridge,
-// but the spy lets us assert the `hostClear === null` fallback path.
+// Mock the projection-debounce module so `flushActiveDesktopPerWindowProjection` is observable; the real implementation would no-op without an active bridge, but the spy lets us assert the `hostClear === null` fallback path.
 const flushActiveDesktopPerWindowProjection = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
@@ -58,9 +56,7 @@ function snapshotKeys(storage: Storage): string[] {
   return keys.sort();
 }
 
-// Seed both storages with: real persisted keys (on the `:` boundary), an auth
-// key (`traycer.` prefix), an unrelated key, and the tricky `traycer-gui-appX:`
-// key that must survive because it is NOT on the `traycer-gui-app:` boundary.
+// Seed both storages with: real persisted keys (on the `:` boundary), an auth key (`traycer.` prefix), an unrelated key, and the tricky `traycer-gui-appX:` key that must survive because it is NOT on the `traycer-gui-app:` boundary.
 const LOCAL_SEED: Record<string, string> = {
   "traycer-gui-app:settings": "{}",
   "traycer-gui-app:composer-run-settings:anon": "{}",
@@ -121,9 +117,7 @@ beforeEach(() => {
     value: sessionStorageMock,
   });
 
-  // jsdom's `window.location.reload` is "Not implemented" and throws; replace
-  // the whole `location` object with a spy-backed clone so the reload call is
-  // observable and lint-clean (no `as any` cast of the native method).
+  // jsdom's `window.location.reload` is "Not implemented" and throws; replace the whole `location` object with a spy-backed clone so the reload call is observable and lint-clean (no `as any` cast of the native method).
   reloadSpy = vi.fn();
   Object.defineProperty(window, "location", {
     configurable: true,
@@ -281,9 +275,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     "unrelated-app-db",
   ];
 
-  // Install an `indexedDB` whose `deleteDatabase` records the name and returns a
-  // request that auto-fires `onsuccess` on the next microtask (after the caller
-  // has assigned its handlers), so the awaited deletion resolves.
+  // Install an `indexedDB` whose `deleteDatabase` records the name and returns a request that auto-fires `onsuccess` on the next microtask (after the caller has assigned its handlers), so the awaited deletion resolves.
   function installIndexedDB(args: {
     databases: () => Promise<{ name: string | undefined }[]>;
   }): { deleted: string[] } {

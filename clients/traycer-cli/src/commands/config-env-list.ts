@@ -1,11 +1,8 @@
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { listEnvOverrides } from "../store/config-store";
 
-// Runner-aware `traycer config env list` (host-process scope). JSON mode
-// emits a single terminal `result` NDJSON event whose `data` is an array of
-// `{ key, value }` entries. `value: null` means the variable is explicitly
-// unset at launch/spawn time. Harness-scoped env now lives per-provider in the
-// host's provider-overrides (Settings → Providers), not here.
+// Runner-aware `traycer config env list` (host-process scope).
+// JSON mode emits a single terminal `result` NDJSON event whose `data` is an array of `{ key, value }` entries.
 export function buildConfigEnvListCommand(): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const entries = Object.entries(await listEnvOverrides())

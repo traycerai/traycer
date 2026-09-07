@@ -27,8 +27,7 @@ import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 
 /**
- * The `saveFile` member of a faked `IFileSaveHost`: callable exactly as the
- * contract declares it, plus the one mock member these tests read back.
+ * The `saveFile` member of a faked `IFileSaveHost`: callable exactly as the contract declares it, plus the one mock member these tests read back.
  */
 interface SaveFileMock {
   (request: FileSaveRequest): Promise<SavedFileLocation | null>;
@@ -38,9 +37,8 @@ interface SaveFileMock {
 }
 
 /**
- * A shell with a native save route. `openSavedFile` is what separates the two
- * kinds of it: a desktop dialog reports a path and can re-open it, a share
- * sheet reports neither.
+ * A shell with a native save route.
+ * `openSavedFile` is what separates the two kinds of it: a desktop dialog reports a path and can re-open it, a share sheet reports neither.
  */
 function fileSaveHost(
   saveFile: SaveFileMock,
@@ -63,9 +61,7 @@ interface ToastAction {
 }
 
 /**
- * Narrows a captured `toast.success` options argument down to the
- * `{ action: { label, onClick } }` shape `toastSavedFile` builds for
- * runtimes that can re-open the saved file.
+ * Narrows a captured `toast.success` options argument down to the `{ action: { label, onClick } }` shape `toastSavedFile` builds for runtimes that can re-open the saved file.
  */
 function isActionToast(
   options: ExternalToast | undefined,
@@ -138,9 +134,8 @@ describe("toastSavedFile", () => {
     });
 
     it("says the file was SHARED where the sheet was the route", () => {
-      // The bytes a share sheet is handed live in the app's cache container,
-      // so nothing was saved anywhere the user keeps files. Claiming otherwise
-      // is a plain untruth, and it is the verb the user reads.
+      // The bytes a share sheet is handed live in the app's cache container, so nothing was saved anywhere the user keeps files.
+      // Claiming otherwise is a plain untruth, and it is the verb the user reads.
       const host = fileSaveHost(resolvingSaveFile(null), null);
 
       toastSavedFile({ name: "a.md", path: null }, vi.fn(), host, "share");
@@ -175,11 +170,7 @@ describe("saveBlobToDisk", () => {
     );
 
     expect(result).toEqual({ name: "d.png", path: "/tmp/d.png" });
-    // Assert the concrete fields via `objectContaining` and the byte payload
-    // separately: nesting `expect.any(ArrayBuffer)` as a property value in a
-    // plain object literal here is an unsafe assignment (the matcher is
-    // typed `any`, the property is typed `ArrayBuffer`) that the lint rules
-    // reject.
+    // Assert the concrete fields via `objectContaining` and the byte payload separately: nesting `expect.any(ArrayBuffer)` as a property value in a plain object literal here is an unsafe assignment (the matcher is typed `any`, the property is typed.
     expect(saveFile).toHaveBeenCalledWith(
       expect.objectContaining({ name: "d.png", type: "image/png" }),
     );

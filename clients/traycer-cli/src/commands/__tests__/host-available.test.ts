@@ -6,16 +6,8 @@ import type {
   RegistryClient,
 } from "../../registry";
 
-// Fixup A1 (Host Update Layer Redesign, ticket "Desktop main:
-// HostController" cold review): `HostController.parseAvailableSnapshot`
-// expected a flat `{latest, versions[].platformAsset}` shape while the real
-// `traycer host available --json` envelope (below) nests assets under
-// `manifest.versions[].platforms[platformKey]` - every desktop-side test
-// fixture used the same wrong shape, so 34/34 green validated the bug.
-// This suite runs the REAL command (registry client mocked, everything
-// else genuine) and pins a mirror of desktop's FIXED parser against its
-// actual `result.data` output, so a future wire-shape drift fails here
-// first.
+// Fixup A1 (Host Update Layer Redesign, ticket "Desktop main: HostController" cold review): `HostController.parseAvailableSnapshot` expected a flat `{latest, versions[].platformAsset}` shape while the real `traycer host available --json` envelope (below) nests assets under `manifest.versions[].platforms[platformKey]` - every desktop-side test fixture used the same wrong shape, so 34/34 green validated the bug.
+// This suite runs the REAL command (registry client mocked, everything else genuine) and pins a mirror of desktop's FIXED parser against its actual `result.data` output, so a future wire-shape drift fails here first.
 const mocks = vi.hoisted(() => ({
   fetchManifestMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
@@ -30,17 +22,12 @@ vi.mock("../../registry", async (importOriginal) => {
       resolveAsset: vi.fn(),
       downloadAndVerify: vi.fn(),
     }),
-    // Pin the platform key so this suite's assertions (keyed off
-    // `darwin-arm64` fixtures below) are deterministic regardless of the
-    // machine actually running the test.
+    // Pin the platform key so this suite's assertions (keyed off `darwin-arm64` fixtures below) are deterministic regardless of the machine actually running the test.
     currentHostPlatformKey: () => "darwin-arm64",
   };
 });
 
-// The derived default is the one thing this command reads off local disk, so
-// the install record is mocked rather than materialized: these cases are about
-// what the CLI CONCLUDES from a version string (and from a read that fails),
-// not about `install.json` parsing, which `manifest/host-install` owns.
+// The derived default is the one thing this command reads off local disk, so the install record is mocked rather than materialized: these cases are about what the CLI CONCLUDES from a version string (and from a read that fails), not about `install.json` parsing, which `manifest/host-install` owns.
 vi.mock("../../manifest/host-install", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../manifest/host-install")>();
@@ -96,10 +83,8 @@ function createManifest(versions: readonly string[]): HostVersionsManifest {
 
 describe("buildHostAvailableListing", () => {
   it("marks a version above this CLI's floor unavailable, with the floor in the reason", () => {
-    // The registry client rejects a floored target only at download time,
-    // AFTER the RPC answered accepted - so the LISTING must carry the floor,
-    // or the GUI advertises installs that can only terminate as floor
-    // failures. Same evaluator as the client, so the two cannot disagree.
+    // The registry client rejects a floored target only at download time, AFTER the RPC answered accepted - so the LISTING must carry the floor, or the GUI advertises installs that can only terminate as floor failures.
+    // Same evaluator as the client, so the two cannot disagree.
     const floored = {
       ...createEntry("1.2.0"),
       requiredCliVersion: "10.0.0",
@@ -207,12 +192,7 @@ function fakeCtx(): CommandContext {
   };
 }
 
-// Exact mirror of the FIXED `parseAvailableSnapshot` in
-// `clients/desktop/src/electron-main/host/host-controller.ts` - kept
-// duplicated (not imported) since Desktop must not depend on
-// `clients/traycer-cli/` internals at runtime; this copy exists solely to
-// pin the contract from the CLI side, matching the
-// `projectInstallResultLikeDesktop` pattern in `host-update.test.ts`.
+// Exact mirror of the FIXED `parseAvailableSnapshot` in `clients/desktop/src/electron-main/host/host-controller.ts` - kept duplicated (not imported) since Desktop must not depend on `clients/traycer-cli/` internals at runtime; this copy exists solely to pin the contract from the CLI side, matching the `projectInstallResultLikeDesktop` pattern in `host-update.test.ts`.
 function isPlainObjectLikeDesktop(
   value: unknown,
 ): value is Record<string, unknown> {
@@ -255,10 +235,8 @@ function parseAvailableSnapshotLikeDesktop(raw: unknown): {
   return { latest: manifest.latest, versions };
 }
 
-// The catalog default is derived, not stored, and the CLI is the only process
-// that can derive it - it is the one that can read this environment's install
-// record. These cases pin all four provenances plus the fail-closed rule that
-// keeps a corrupt record from breaking the listing.
+// The catalog default is derived, not stored, and the CLI is the only process that can derive it - it is the one that can read this environment's install record.
+// These cases pin all four provenances plus the fail-closed rule that keeps a corrupt record from breaking the listing.
 describe("resolveIncludePreReleases", () => {
   it("honours an explicit include regardless of what is installed", () => {
     expect(
@@ -270,9 +248,7 @@ describe("resolveIncludePreReleases", () => {
   });
 
   it("honours an explicit exclude even on an RC host - the whole point of the negative flag", () => {
-    // Without a negative flag an RC host could never be shown a stable-only
-    // catalog: its derived default includes RCs, and "unchecked" would be
-    // indistinguishable from "never touched".
+    // Without a negative flag an RC host could never be shown a stable-only catalog: its derived default includes RCs, and "unchecked" would be indistinguishable from "never touched".
     expect(
       resolveIncludePreReleases({
         override: false,
@@ -291,9 +267,7 @@ describe("resolveIncludePreReleases", () => {
   });
 
   it("derives stable-default for every non-canonical installed version", () => {
-    // Canonical `X.Y.Z-rc.N` is the ONLY prerelease shape that activates
-    // implicit following; everything else - including a version that merely
-    // contains a hyphen - fails closed to the stable catalog.
+    // Canonical `X.Y.Z-rc.N` is the ONLY prerelease shape that activates implicit following; everything else - including a version that merely contains a hyphen - fails closed to the stable catalog.
     for (const installedHostVersion of [
       "1.2.0",
       "2.0.0-beta.1",
@@ -386,10 +360,8 @@ describe("buildHostAvailableCommand's derived catalog default", () => {
   });
 
   it("still lists the registry when the install record is corrupt", async () => {
-    // A corrupt `install.json` is exactly when someone needs to see which
-    // versions exist. `readHostInstallRecord` throws rather than overwrite a
-    // suspect record - right for the install path, wrong for a listing - so
-    // this must fail closed to stable-default, not propagate.
+    // A corrupt `install.json` is exactly when someone needs to see which versions exist.
+    // `readHostInstallRecord` throws rather than overwrite a suspect record - right for the install path, wrong for a listing - so this must fail closed to stable-default, not propagate.
     mocks.fetchManifestMock.mockResolvedValue(
       createManifest(["2.0.0-rc.2", "1.2.0"]),
     );
@@ -507,17 +479,8 @@ describe("buildHostAvailableCommand's real data envelope against desktop's parse
   });
 });
 
-// The registry manifest carries an asset per supported platform on every
-// version entry, but nothing downstream of this command can use an asset for
-// a platform it is not running on - both consumers do a single-key lookup and
-// discard the rest. `host available` therefore emits only the running
-// platform's asset, which cut the payload 3.2x (70,331 -> 21,689 bytes across
-// 31 real versions). This payload is ONE unsplittable JSON line, so its width
-// is a standing liability: it is what carried it past the 64 KiB pipe buffer
-// (see runner/std-write.ts).
-//
-// The fixtures above are single-platform, so they cannot observe scoping at
-// all - these use a genuinely multi-platform manifest.
+// The registry manifest carries an asset per supported platform on every version entry, but nothing downstream of this command can use an asset for a platform it is not running on - both consumers do a single-key lookup and discard the rest.
+// `host available` therefore emits only the running platform's asset, which cut the payload 3.2x (70,331 -> 21,689 bytes across 31 real versions).
 const OTHER_PLATFORM_ASSET: HostPlatformAsset = {
   ...AVAILABLE_ASSET,
   url: "https://github.com/traycerai/traycer/releases/download/host-v1.2.0/traycer-host-linux-x64.tar.gz",
@@ -582,9 +545,7 @@ describe("buildHostAvailableListing platform scoping", () => {
       cliVersion: "9.9.9",
     });
 
-    // Dropped assets must not drop the VERSION - callers distinguish
-    // "exists but not for you" (rendered, tagged no-asset) from "does not
-    // exist at all".
+    // Dropped assets must not drop the VERSION - callers distinguish "exists but not for you" (rendered, tagged no-asset) from "does not exist at all".
     expect(listing.manifest.versions.map((e) => e.version)).toEqual(["1.2.0"]);
     expect(listing.manifest.versions[0].platforms).toEqual({});
     expect(listing.human).toContain("no-asset");

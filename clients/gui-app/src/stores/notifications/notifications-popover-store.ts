@@ -8,18 +8,16 @@ import {
 
 interface NotificationsPopoverState {
   readonly open: boolean;
-  /** One-open-cycle banner set when a native click's origin host no longer
-   * matches the active host: the center opens instead of routing/
-   * acknowledging/switching. `originUnavailableHostLabel` carries the
-   * resolved host label when the directory has one, `null` when it doesn't -
-   * distinct from `originUnavailable` itself being `false` (banner not
-   * shown at all). Cleared on every subsequent open/close transition. */
+  /**
+   * One-open-cycle banner set when a native click's origin host no longer matches the active host:
+   * the center opens instead of routing/ acknowledging/switching.
+   */
   readonly originUnavailable: boolean;
   readonly originUnavailableHostLabel: string | null;
-  /** Recent-only filters, persisted: the center reopens the way the user
-   * last filtered it, across opens and relaunches, on every shell. Never
-   * applied to Attention. `resetFilters` remains the explicit way back to
-   * the default view. */
+  /**
+   * Recent-only filters, persisted: the center reopens the way the user last filtered it, across
+   * opens and relaunches, on every shell. Never applied to Attention.
+   */
   readonly unreadOnly: boolean;
   readonly categories: ReadonlySet<NotificationCategory>;
   readonly setOpen: (next: boolean) => void;
@@ -28,9 +26,10 @@ interface NotificationsPopoverState {
   readonly openWithOriginUnavailable: (hostLabel: string | null) => void;
   readonly setUnreadOnly: (next: boolean) => void;
   readonly toggleCategory: (category: NotificationCategory) => void;
-  /** Explicit "reset filters" affordance for the filter-empty state, and -
-   * now that the filters persist - the only way the view returns to its
-   * default; opening the center never resets them. */
+  /**
+   * Explicit "reset filters" affordance for the filter-empty state, and - now that the filters
+   * persist - the only way the view returns to its default; opening the center never resets them.
+   */
   readonly resetFilters: () => void;
 }
 
@@ -47,11 +46,8 @@ function isNotificationCategory(value: unknown): value is NotificationCategory {
 }
 
 /**
- * Restores the persisted filter slice, defaulting any missing or malformed
- * field rather than rejecting the record wholesale. Unknown category strings
- * (a removed category from an older build) are dropped; an explicitly empty
- * persisted set is honored - the filter-empty state owns its own recovery
- * affordance (`resetFilters`).
+ * Restores the persisted filter slice, defaulting any missing or malformed field rather than
+ * rejecting the record wholesale.
  */
 function restorePersistedFilters(persisted: unknown): {
   readonly unreadOnly: boolean;
@@ -115,10 +111,8 @@ export const useNotificationsPopoverStore = create<NotificationsPopoverState>()(
     {
       ...basePersistOptions(NOTIFICATIONS_FILTER_PERSIST_KEY),
       storage: createJSONStorage(() => localStorage),
-      // A `Set` does not survive JSON, so the persisted record carries the
-      // categories as an array; `merge` rebuilds the Set (validating each
-      // entry) on rehydrate. Only the filter slice persists - open-cycle
-      // state and actions come from the initializer.
+      // A `Set` does not survive JSON, so the persisted record carries the categories as an array;
+      // `merge` rebuilds the Set (validating each entry) on rehydrate.
       partialize: (state) => ({
         unreadOnly: state.unreadOnly,
         categories: [...state.categories],

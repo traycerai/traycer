@@ -1,28 +1,7 @@
-/**
- * Pure parsers for the per-window state shapes in `window-types.ts`. They
- * live with the contracts (no electron imports) so the IPC boundary
- * (`electron-main/ipc/ipc-parsers.ts`) and the disk persistence layer
- * (`electron-main/windows/desktop-state-store.ts`) validate snapshots with
- * the same code instead of drifting copies.
- */
 import type { JsonValue, PerWindowLandingDraft } from "./window-types";
 
 const MAX_JSON_VALUE_DEPTH = 64;
 
-/**
- * Separates the two reasons a value can fail to parse, because they call for
- * opposite handling inside an object.
- *
- * `undefined` means "not representable as JSON" (`undefined`, a function, a
- * non-finite number). `JSON.stringify` omits such a property, so dropping it
- * keeps a round-tripped snapshot equal to what the sender meant.
- *
- * `DEPTH_EXCEEDED` means the value was well-formed but too deep to walk. That
- * one must fail the WHOLE value: dropping the property instead would let a
- * silently truncated `tabStripLayout` be acknowledged and persisted as if it
- * were the layout the renderer sent. Callers store `null` on a parse failure,
- * which is recoverable; a partial layout is not.
- */
 const DEPTH_EXCEEDED = Symbol("json-depth-exceeded");
 
 type ParsedJsonValue = JsonValue | undefined | typeof DEPTH_EXCEEDED;
@@ -108,7 +87,7 @@ export function parseLandingDraft(
   }
   // T6: a landing draft now carries rich `content` (the editor JSON). Require
   // a non-null object `content`; a legacy prompt-only entry has no `content`
-  // and is dropped — intended (no back-compat; dev feature).
+  // and is dropped  -  intended (no back-compat; dev feature).
   const content = parseJsonValue(obj.content);
   if (
     content === undefined ||

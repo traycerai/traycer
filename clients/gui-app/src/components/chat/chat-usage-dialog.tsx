@@ -41,29 +41,12 @@ type UsageSummaryQueryResult = UseQueryResult<
 
 const FILLER_WINDOW_DAYS = 30;
 
-/**
- * Ticket 12's chat cost line: mounted ONCE (not per-tab), driven by
- * `useChatUsageDialogStore` - the tab strip's "Usage" context-menu item
- * writes a target there instead of threading dialog-open state through the
- * strip's own already-large prop chain. Always the chat's FULL lifetime
- * (`window: "epic"` bounded by `chatId`, per the wire's own naming for "the
- * epic/chat's own fact span") - a chat's cost line is "how much has this
- * chat cost", not a rolling window, so there is no window picker here.
- *
- * Same fixed-frame system as `EpicUsageDialog` (decision 5a: same width,
- * shorter height - the turn drilldown table is the one consumer that
- * benefits from the width). No footer: the chat scope has no Settings
- * destination.
- */
+/** Always the chat's FULL lifetime (`window: "epic"` bounded by `chatId`, per the wire's own naming for "the epic/chat's own fact span") - a chat's cost line is "how much has this chat cost", not a rolling window, so there is no window picker here. */
 export function ChatUsageDialog(): ReactNode {
   const target = useChatUsageDialogStore((s) => s.target);
   const close = useChatUsageDialogStore((s) => s.close);
   const client = useHostClientForHostId(target?.hostId ?? null);
-  // A stable, harmless placeholder request while `target` is null - never
-  // actually sent, since `enabled` (below) is `false` in that state; this
-  // just keeps `useUsageSummaryForClient` fed a real request object
-  // unconditionally, matching every other call site's "real args, gate
-  // through `enabled`" shape rather than nulling an argument.
+  // A stable, harmless placeholder request while `target` is null - never actually sent, since `enabled` (below) is `false` in that state; this just keeps `useUsageSummaryForClient` fed a real request object unconditionally, matching every other call site's "real args, gate through `enabled`" shape rather than nulling an argument.
   const request = useMemo(
     () =>
       buildUsageSummaryRequest({
@@ -162,10 +145,7 @@ function ChatUsageDialogContent(props: {
       </UsageDialogEmpty>
     );
   }
-  // Gate on the array the drilldown actually renders, not on `factCount`:
-  // `turnRows` is nullable on the wire, so a host that answers with facts
-  // but no per-turn rows would otherwise offer a "Show 0 turns" toggle onto
-  // an empty body.
+  // Gate on the array the drilldown actually renders, not on `factCount`: `turnRows` is nullable on the wire, so a host that answers with facts but no per-turn rows would otherwise offer a "Show 0 turns" toggle onto an empty body.
   const turnRows = summary.turnRows ?? [];
   const hasTurnRows = turnRows.length > 0;
 

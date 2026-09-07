@@ -27,16 +27,8 @@ interface TerminalQuoteControlProps {
 }
 
 /**
- * The floating action over a terminal selection: one button that asks where
- * the selection is going, and a panel that answers it.
- *
- * Reads as a sibling of the transcript's quote popover and the composer's
- * `@`-picker - same popover surface, same quiet chrome, same micro-type
- * section headings - because it is the same kind of action in a different
- * place. Deliberately not a split button: a primary target guessed from focus
- * history is right often enough to be tempting and wrong often enough to send
- * a selection somewhere the user was not looking, and the recovery for that is
- * worse than one extra click.
+ * The floating action over a terminal selection: one button that asks where the selection is going, and a panel that answers it.
+ * Reads as a sibling of the transcript's quote popover and the composer's `@`-picker - same popover surface, same quiet chrome, same micro-type section headings - because it is the same kind of action in a different place.
  */
 export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
   const openTargets = props.targets.filter((target) => target.isOpen);
@@ -52,21 +44,14 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
         "absolute z-20",
         props.anchor.placement === "above" && "-translate-y-full",
       )}
-      // Both offsets and the width cap come from the anchor: it is the one
-      // place that knows where the selection starts and how much pane is left
-      // beside it (see `terminalSelectionAnchor`).
+      // Both offsets and the width cap come from the anchor: it is the one place that knows where the selection starts and how much pane is left beside it (see `terminalSelectionAnchor`).
       style={{
         top: props.anchor.top,
         left: props.anchor.left,
         maxWidth: props.anchor.maxWidth,
       }}
     >
-      {/*
-        Non-modal: a modal Radix menu writes overflow/padding onto <body>
-        for its scroll lock, and a layout change that reaches this pane
-        refits the terminal - which makes xterm drop the very selection the
-        menu was opened to act on. Nothing here needs the modal behaviour.
-      */}
+      {/* Non-modal: a modal Radix menu writes overflow/padding onto <body> for its scroll lock, and a layout change that reaches this pane refits the terminal - which makes xterm drop the very selection the menu was opened to act on. Nothing here needs the modal behaviour. */}
       <DropdownMenu
         modal={false}
         open={props.menuOpen}
@@ -91,12 +76,7 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
             />
           </button>
         </DropdownMenuTrigger>
-        {/*
-          Three bands: an empty header slot a filter would drop into, the
-          scrolling roster, and a pinned "New chat". The column is what keeps
-          that last one reachable - the roster shrinks when the pane is short,
-          rather than pushing the action out of view.
-        */}
+        {/* The column is what keeps that last one reachable - the roster shrinks when the pane is short, rather than pushing the action out of view. */}
         <DropdownMenuContent
           align="start"
           className="flex w-max min-w-[min(90vw,14rem)] max-w-[min(90vw,20rem)] flex-col overflow-y-hidden"
@@ -139,14 +119,8 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
 }
 
 /**
- * One chat in the roster, with the one thing that can disqualify it.
- *
- * A chat on another host is shown disabled rather than hidden, because the
- * user can see it in the sidebar and would otherwise be left wondering where
- * it went. Radix's own `disabled` does the dimming, the pointer block AND the
- * keyboard skip, so the row is unreachable by every route at once. The reason
- * replaces "Last used" on such a row: why it cannot be picked is the only
- * thing worth the space.
+ * A chat on another host is shown disabled rather than hidden, because the user can see it in the sidebar and would otherwise be left wondering where it went.
+ * The reason replaces "Last used" on such a row: why it cannot be picked is the only thing worth the space.
  */
 function ChatTargetItem(props: {
   readonly target: TerminalQuoteChatTarget;

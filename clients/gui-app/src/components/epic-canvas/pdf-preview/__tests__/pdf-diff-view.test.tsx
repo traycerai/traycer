@@ -1,10 +1,3 @@
-/**
- * The compact PDF diff block (diff-surface redesign, 2026-09-03): one
- * centered summary - path, status · size - with a single Open action that
- * opens the CURRENT version as a workspace file tile (latest-only by
- * decision; deleted files therefore have no open affordance). No modal, no
- * Open Externally, no fetching from the block itself.
- */
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { GitFileStatus } from "@traycer/protocol/host";
@@ -23,9 +16,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
 
-// The block opens through the one tile resolver, so that is what the test
-// stands in for - placement, grouping, dedupe and the route write are its
-// job, not this component's.
+// The block opens through the one tile resolver, so that is what the test stands in for - placement, grouping, dedupe and the route write are its job, not this component's.
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: state.openTile }),
 }));
@@ -142,9 +133,6 @@ describe("PdfDiffView", () => {
     expect(screen.getByText("from docs/old-report.pdf")).toBeTruthy();
   });
 
-  // A copy is shaped exactly like a rename here - two live sides and a
-  // distinct `previousPath` - so inferring the label from the paths called
-  // it "Renamed" and told the reader a file that is still on disk had moved.
   // Git's own status is the only thing that separates the two.
   it("labels a copied PDF Copied, keeping its source path", () => {
     renderView({ previousPath: "docs/template.pdf", status: "copied" });

@@ -2,8 +2,7 @@ import { describe, it, expect } from "vitest";
 import { ReplayWindow } from "../replay-window";
 
 /**
- * Security-gate bar #3 (sliding-window half): monotonic-ish acceptance with
- * out-of-order tolerance, and hard rejection of replays and too-old counters.
+ * Security-gate bar #3 (sliding-window half): monotonic-ish acceptance with out-of-order tolerance, and hard rejection of replays and too-old counters.
  * `check` must be a pure predicate; only `commit` advances state.
  */
 describe("ReplayWindow", () => {

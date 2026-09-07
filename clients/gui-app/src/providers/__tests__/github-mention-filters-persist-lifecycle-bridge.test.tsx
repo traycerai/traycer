@@ -7,15 +7,7 @@ import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-fi
 import type { GithubMentionFilter } from "@/lib/composer/mentions/github-mention-rows";
 import { githubMentionFiltersKey } from "@/lib/persist";
 
-/**
- * Mirrors ComposerRunSettingsPersistLifecycleBridge's own test harness
- * (`composer-run-settings-persist-lifecycle-bridge.test.tsx`), adapted to the
- * mention-filter store. The behavior under test is privacy, not just
- * plumbing: a repository selection names a GitHub host, owner and repo -
- * private coordinates for a private repository - so the bridge must wipe
- * them on sign-out rather than leaving them readable to the next account on
- * this profile.
- */
+/** Wipe GitHub host/owner/repo selection on sign-out; the next account on this profile must not read them. */
 
 const ALICE_REPOSITORY: GithubMentionRepository = {
   githubHost: "github.com",

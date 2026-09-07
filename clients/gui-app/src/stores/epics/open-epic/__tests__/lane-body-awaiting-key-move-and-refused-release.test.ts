@@ -1,34 +1,3 @@
-/**
- * Two awaiting-body defects in `runtime/worker/artifact-body-lease-bridge.ts`,
- * both reachable only on the `@1` arm and both invisible to the resident path
- * that already handles them.
- *
- * 1. **The doc key can MOVE while a body is awaiting.** On `@1` a doc key is
- *    the ROOM id (`artifactBodyDocKey` reads it off the records plane), and the
- *    legacy root projection can reassign an artifact to a different room while
- *    its initial materialization is still waiting for a seed.
- *    `startAwaitingRetry` installed under the key it CAPTURED rather than the
- *    one the answer returned, so `getArtifactFragment` read the new key and
- *    found nothing - a mounted editor that stays blank - while the worker kept
- *    the new room's demand, observer and subscription behind an accounting
- *    entry nothing would ever release.
- *
- * 2. **An awaiting release can be REFUSED.** The last awaiting holder can
- *    unmount after the worker has materialized the room into a pinned state (a
- *    collaborator being present is enough), and `body/release` then honestly
- *    answers `{ released: false, reason: "pinned" }`. The fulfillment handler
- *    ignored that verdict, having already deleted the main-side awaiting entry,
- *    so nothing retried when the pin cleared. The resident path has always
- *    re-armed on a refusal; this was the one arm that did not.
- *
- * Driven over the same `createFakeBridgePair` primitives as
- * `lane-body-retry-rejection-unlatches.test.ts` next door, for the same reason:
- * this is the level at which a specific worker answer can be scripted while the
- * bridge stays alive for later calls.
- *
- * `DOC_KEY` / `MOVED_DOC_KEY` are both different from `ARTIFACT_ID` - the
- * `@1`-arm shape - so a key mix-up cannot hide behind two strings being equal.
- */
 import { describe, expect, it } from "vitest";
 import { stubMainCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-main-call-handlers";
 import { createMainBridgeEndpoint } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
@@ -85,25 +54,14 @@ function createFakeScheduler(): FakeScheduler {
   };
 }
 
-/**
- * What the worker should answer for one `body/materialize`.
- *
- * `grantedAt` names the key the ANSWER carries, which is the whole point of
- * the first pin: it is not required to equal the key the caller is holding.
- */
+/** What the worker should answer for one `body/materialize`. */
 type MaterializeAnswer =
   | { readonly kind: "awaiting"; readonly docKey: string }
   | { readonly kind: "granted"; readonly docKey: string };
 
 /**
- * How the worker should answer one key's `body/release`.
- *
- * Four answers rather than a boolean, because they are not four flavours of
- * the same thing. `pinned` is retryable - the pin clears and the demand can
- * then be dropped. `not-held` is TERMINAL: the far side has nothing, so there
- * is nothing left to reclaim. `reject` is neither - it is a live worker whose
- * handler faulted, which is the case the rejection arm used to read as a
- * teardown.
+ * How the worker should answer one key's `body/release`. Four answers rather than a boolean,
+ * because they are not four flavours of the same thing.
  */
 type ReleaseBehavior = "ok" | "pinned" | "not-held" | "reject" | "hang";
 
@@ -129,9 +87,8 @@ function createScriptedWorker(
       const docKey = call.request.docKey;
       releasedKeys.push(docKey);
       const behavior = releaseBehavior.get(docKey) ?? "ok";
-      // Never answers, so the call is still outstanding when the bridge is
-      // disposed - which is the only way to observe `BridgeDisposedError`
-      // reaching a rejection arm.
+      // Never answers, so the call is still outstanding when the bridge is disposed - which is the only
+      // way to observe `BridgeDisposedError` reaching a rejection arm.
       if (behavior === "hang") return;
       if (behavior === "reject") {
         pair.worker.post(
@@ -285,24 +242,15 @@ describe("an awaiting body whose doc key MOVES before its seed arrives", () => {
     leases.retryAwaitingBodies(() => true);
     await flushMicrotasks();
 
-    // The holder still holds the closure it was handed at acquire time, over
-    // `DOC_KEY`. A captured string cannot be re-pointed, which is why the
-    // redirect exists at all.
+    // The holder still holds the closure it was handed at acquire time, over `DOC_KEY`. A captured
+    // string cannot be re-pointed, which is why the redirect exists at all.
     grant.release();
     // The last lease drops, so the doc enters its linger; firing it posts the
     // lifecycle end.
     expect(timers.fireAll()).toBeGreaterThan(0);
     await flushMicrotasks();
 
-    // THE REDDENING ASSERTION, in both directions. Under the re-key bug the
-    // entry lives under `DOC_KEY`, so the release settles a room the worker was
-    // never asked about and the NEW room's demand, observer and subscription
-    // stay held for the session. `DOC_KEY` leading it is the other half: the
-    // retry re-materializes by `artifactId`, so the worker resolved the moved
-    // room and took a SECOND awaiting demand - and once the redirect exists,
-    // every release this side issues targets the new key, leaving the old
-    // entry held with nothing able to reach it. It comes off when the move is
-    // adopted, which is why it is first.
+    // THE REDDENING ASSERTION, in both directions.
     expect(worker.releasedKeys).toEqual([DOC_KEY, MOVED_DOC_KEY]);
   });
 });
@@ -339,11 +287,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
   });
 
   it("asks again when the release call REJECTS on a live worker", async () => {
-    // A rejection is not a teardown. `serve()` turns a worker-handler fault
-    // into an error reply and a malformed reply fails parsing, and both
-    // surface as a rejected call on a worker that is still very much alive -
-    // so no respawn happens, and this side is the only thing that will ever
-    // ask again.
+    // A rejection is not a teardown.
     const { leases, worker, timers } = setup([
       { kind: "awaiting", docKey: DOC_KEY },
     ]);
@@ -357,10 +301,8 @@ describe("an awaiting body whose release the worker REFUSES", () => {
     await flushMicrotasks();
     expect(worker.releasedKeys).toEqual([DOC_KEY]);
 
-    // THE REDDENING ASSERTION. The first version of this arm swallowed, on the
-    // reasoning that nothing on this side holds a doc so nothing can be
-    // stranded - which answered the wrong half. Bytes are not what an awaiting
-    // release reclaims; the WORKER's demand, observer and subscription are.
+    // THE REDDENING ASSERTION. The first version of this arm swallowed, on the reasoning that nothing
+    // on this side holds a doc so nothing can be stranded - which answered the wrong half.
     expect(timers.liveCount()).toBe(1);
 
     worker.releaseBehavior.delete(DOC_KEY);
@@ -371,11 +313,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
   });
 
   it("stops asking when the worker answers not-held, which is terminal", async () => {
-    // The other half of the same fix, and it points the opposite way. A
-    // respawned worker starts with no demand and an epoch advance leaves
-    // `core === null`; both answer `not-held`, and there is then nothing left
-    // to reclaim. Retrying that is a 60-second spin for the life of the
-    // session - the very failure this retry exists to prevent, inverted.
+    // The other half of the same fix, and it points the opposite way.
     const { leases, worker, timers } = setup([
       { kind: "awaiting", docKey: DOC_KEY },
     ]);
@@ -395,14 +333,7 @@ describe("an awaiting body whose release the worker REFUSES", () => {
   });
 
   it("stops asking when the bridge itself was DISPOSED - the one rejection that is terminal", async () => {
-    // The teardown race the live-rejection retry opened. `store.ts` calls
-    // `flushLingering()` - which cancels every armed timer - and then
-    // `runtime.dispose()`, which rejects the calls flush had just posted. Those
-    // rejections land on a LATER microtask, so an unconditional re-arm
-    // re-populates the map teardown had just emptied. The timer then calls a
-    // disposed bridge, which rejects IMMEDIATELY, which re-arms again: an
-    // unbounded loop retaining the closed epic's bridge state for the life of
-    // the tab.
+    // The teardown race the live-rejection retry opened.
     const { leases, worker, timers, disposeBridge } = setup([
       { kind: "awaiting", docKey: DOC_KEY },
     ]);
@@ -428,10 +359,8 @@ describe("an awaiting body whose release the worker REFUSES", () => {
   });
 
   it("stops asking once a holder re-acquires inside the window", async () => {
-    // The control that keeps the retry from becoming a leak of its own: a
-    // re-acquired body's demand is legitimately held again, and its own
-    // release will post when it unmounts. Posting from the timer as well
-    // would drop a body someone is using.
+    // The control that keeps the retry from becoming a leak of its own: a re-acquired body's demand is
+    // legitimately held again, and its own release will post when it unmounts.
     const { leases, worker, timers } = setup([
       { kind: "awaiting", docKey: DOC_KEY },
       { kind: "awaiting", docKey: DOC_KEY },

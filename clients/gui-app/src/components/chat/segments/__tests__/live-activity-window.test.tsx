@@ -4,12 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LiveActivityWindow } from "@/components/chat/segments/live-activity-window";
 import { LIVE_ACTIVITY_WINDOW_EXIT_MS } from "@/components/chat/segments/live-activity-window-mount";
 
-/**
- * jsdom does no layout, so `scrollHeight`/`clientHeight` are 0 and the window
- * would never look overflowing. Stub the pair for the duration of one test so
- * the tail-pin and the measured overflow flag are exercised against a geometry
- * that actually overflows.
- */
+/** jsdom does no layout, so `scrollHeight`/`clientHeight` are 0 and the window would never look overflowing. Stub the pair for the duration of one test so the tail-pin and the measured overflow flag are exercised against a geometry that actually overflows. */
 function withStubbedGeometry(
   geometry: { readonly scrollHeight: number; readonly clientHeight: number },
   run: () => void,
@@ -120,14 +115,7 @@ describe("<LiveActivityWindow />", () => {
     });
   });
 
-  // The transcript listens for `wheel` NATIVELY, on the LegendList scroll node,
-  // and `chatWheelShouldCancelLiveFollow` returns true for every upward delta -
-  // so any wheel that reaches it drops the reader into free-scrolling with a
-  // jump-to-latest pill. `overscroll-behavior: contain` does not help: it stops
-  // scroll CHAINING, not event propagation. Only stopping the event does.
-  //
-  // These assert against a listener on an ANCESTOR, which is what the transcript
-  // actually is. A className assertion cannot fail for a behavioural reason.
+  // `overscroll-behavior: contain` does not help: it stops scroll CHAINING, not event propagation. A className assertion cannot fail for a behavioural reason.
   it("stops a wheel gesture from reaching the transcript while it can scroll", () => {
     withStubbedGeometry({ scrollHeight: 400, clientHeight: 100 }, () => {
       const reachedTranscript: WheelEvent[] = [];
@@ -175,9 +163,8 @@ describe("<LiveActivityWindow />", () => {
             new WheelEvent("wheel", { bubbles: true, deltaY: -50 }),
           );
 
-        // A window with nothing hidden cannot consume the gesture. Swallowing
-        // it would leave the reader unable to scroll the transcript at all
-        // while the pointer happens to sit over a one-row window.
+        // A window with nothing hidden cannot consume the gesture.
+        // Swallowing it would leave the reader unable to scroll the transcript at all while the pointer happens to sit over a one-row window.
         expect(reachedTranscript).toHaveLength(1);
       } finally {
         document.removeEventListener("wheel", listener);
@@ -186,8 +173,7 @@ describe("<LiveActivityWindow />", () => {
   });
 
   // The transcript ALSO cancels live-follow from a plain React `onPointerDown`.
-  // That one is synthetic, so unlike the wheel it is stopped by React's own
-  // propagation - but it still has to be stopped.
+  // That one is synthetic, so unlike the wheel it is stopped by React's own propagation - but it still has to be stopped.
   it("stops a pointer press from reaching the transcript's React handler", () => {
     const reachedTranscript: string[] = [];
     render(
@@ -210,11 +196,8 @@ describe("<LiveActivityWindow />", () => {
     expect(reachedTranscript).toHaveLength(0);
   });
 
-  // `pinnedRef` lives on the component, which outlives the scroller: the window
-  // stays mounted for the whole run and only returns null between folds. So a
-  // pin suspended by scrolling up would survive into the NEXT scroller - one
-  // that starts at `scrollTop = 0` - and the window would sit frozen on the
-  // oldest rows while the run streamed on.
+  // `pinnedRef` lives on the component, which outlives the scroller: the window stays mounted for the whole run and only returns null between folds.
+  // So a pin suspended by scrolling up would survive into the NEXT scroller - one that starts at `scrollTop = 0` - and the window would sit frozen on the oldest rows while the run streamed on.
   it("re-pins when a fold replaces the scroller, so reopening resumes at the tail", () => {
     withStubbedGeometry({ scrollHeight: 400, clientHeight: 100 }, () => {
       const { rerender } = render(

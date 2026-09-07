@@ -34,13 +34,7 @@ function namesAndReasons(
   return items.map((item) => [item.id, item.disabledReason ?? null]);
 }
 
-/**
- * This projection takes a scope, not a trigger, so nothing here can distinguish
- * `/` from `$` - they reach it through the same argument. The rule that scope
- * follows the caret rather than the trigger lives in `slashScopeForRange`, and
- * is covered end to end by "scopes a mid-paragraph $ the same way as /" and
- * "offers the whole catalog when $ starts the prompt" in composer-slash-flow.
- */
+/** This projection takes a scope, not a trigger, so nothing here can distinguish `/` from `$` - they reach it through the same argument. The rule that scope follows the caret rather than the trigger lives in `slashScopeForRange`, and is covered end to end by "scopes a mid-paragraph $ the same way as /" and "offers the whole catalog when $ starts the prompt" in composer-slash-flow. */
 describe("slashItemsForScope", () => {
   it("leaves everything selectable at the start of the prompt", () => {
     expect(namesAndReasons(slashItemsForScope(CATALOG, "all"))).toEqual([

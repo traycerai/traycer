@@ -47,20 +47,7 @@ import {
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 /**
- * `epic.state.subscribe@1.0` / `epic.status.subscribe@1.0` /
- * `artifact.subscribe@1.0` / the two lane unaries / `epic.listChatRecords@1.1`.
- *
- * These five methods retire the monolithic `epic.subscribe` by splitting it
- * into one lane per data CLASS - see the retirement note at the foot of
- * `epic/subscribe.ts` and the module docs on each lane file for the WHY. This
- * file exists to pin the invariants those docs state, so a later edit to any
- * one lane cannot silently regress the property that justified splitting it
- * out in the first place: the empty-delta guard that stops a lane position
- * being consumed for nothing, the text/binary split that is the whole reason
- * two of the three lanes exist, the closed enums that force a widening
- * contributor through a new minor instead of a silent addition, and the fact
- * that the released `epic.subscribe@1` line these lanes replace was left
- * completely untouched by the split.
+ * `epic.state.subscribe@1.0` / `epic.status.subscribe@1.0` / `artifact.subscribe@1.0` / the two lane unaries / `epic.listChatRecords@1.1`.
  */
 
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
@@ -497,10 +484,7 @@ describe("epic.state.subscribe@1.0", () => {
   });
 
   it("a tombstone does not gate absorption on revision ordering - a lower-revision tombstone is a valid frame beside a higher-revision upsert for the same row", () => {
-    // The wire only carries the number; the reconciler's absorbing-removal
-    // semantics (rule 2 in `epicLaneRowRevisionSchema`'s doc comment) are what
-    // makes this pair meaningful, not a schema-level ordering check. The
-    // schema's job here is only to prove it does NOT reject this shape.
+    // The wire only carries the number; the reconciler's absorbing-removal semantics (rule 2 in `epicLaneRowRevisionSchema`'s doc comment) are what makes this pair meaningful, not a schema-level ordering check.
     const upsertAtRevisionFive = { ...specArtifactFixture, revision: 5 };
     const tombstoneAtRevisionTwo = {
       ...deletedSpecArtifactFixture,
@@ -598,12 +582,8 @@ describe("epic.state.subscribe@1.0", () => {
   });
 
   it("the completeness sweep: every transition frame kind is readable off a lead frame (snapshot or resumed), and every cited field actually exists there", () => {
-    // Mirrors the completeness sweep built for the status lane. This lane now
-    // has the same shape of contract: `resumed` and `snapshot` are the lead
-    // frames a client can attach to at any point, and every transition kind
-    // (`delta`, `trustChanged`) must be readable off one of them without a
-    // replay. Adding a transition kind without extending this map fails this
-    // test until someone decides where its current state lives.
+    // Mirrors the completeness sweep built for the status lane.
+    // This lane now has the same shape of contract: `resumed` and `snapshot` are the lead frames a client can attach to at any point, and every transition kind (`delta`, `trustChanged`) must be readable off one of them.
     const kindToLeadFrameFields: Readonly<
       Record<
         string,
@@ -629,9 +609,7 @@ describe("epic.state.subscribe@1.0", () => {
     const allKinds = epicStateSubscribeServerFrameSchemaV10.options.map(
       (option) => option.shape.kind.value,
     );
-    // `snapshot` and `resumed` are the lead frames themselves; `pong` is exempt
-    // for the same reason it is on the status lane - it carries no session
-    // state at all.
+    // `snapshot` and `resumed` are the lead frames themselves; `pong` is exempt for the same reason it is on the status lane - it carries no session state at all.
     const transitionKinds = allKinds.filter(
       (kind) => kind !== "snapshot" && kind !== "resumed" && kind !== "pong",
     );
@@ -678,11 +656,8 @@ describe("epic.status.subscribe@1.0", () => {
     deletion: { state: "none" as const },
   };
 
-  // The pre-open control basis (see the module doc): the host must be able to
-  // emit a truthful snapshot before the epic room is open, during a migration.
-  // `permissionRole` and `cloudSyncStatus` already have truthful pre-open
-  // values; `dirty` and `deletion` are the two fields that needed an explicit
-  // not-established representation to stay honest in that state.
+  // The pre-open control basis (see the module doc): the host must be able to emit a truthful snapshot before the epic room is open, during a migration.
+  // `permissionRole` and `cloudSyncStatus` already have truthful pre-open values; `dirty` and `deletion` are the two fields that needed an explicit not-established representation to stay honest in that state.
   const preOpenSnapshotBasis = {
     authorityEpoch: "epoch-1",
     securityEpoch: 0,
@@ -1012,9 +987,7 @@ describe("epic.status.subscribe@1.0", () => {
 
   it("the completeness sweep: every non-snapshot, non-pong frame kind has a snapshot projection, and every projected field actually exists on the snapshot", () => {
     // Mirrors the module doc's frame-kind -> snapshot-projection table verbatim.
-    // Adding a frame kind without extending this map fails this test, which is
-    // the point: cursor-less-by-design is only honest if the snapshot stays
-    // complete, and this is what keeps that from silently rotting.
+    // Adding a frame kind without extending this map fails this test, which is the point: cursor-less-by-design is only honest if the snapshot stays complete, and this is what keeps that from silently rotting.
     const kindToSnapshotFields: Readonly<Record<string, readonly string[]>> = {
       permissionChanged: ["securityEpoch", "permissionRole"],
       cloudSyncStatus: ["cloudSyncStatus"],
@@ -1341,9 +1314,7 @@ describe("lane unaries", () => {
       unresolvedRepos: [],
     };
 
-    // The same fixture must parse against BOTH the frozen earlyMeta frame's
-    // payload schema and the new response's `context` field, so a future
-    // divergence between them fails here rather than in the field.
+    // The same fixture must parse against BOTH the frozen earlyMeta frame's payload schema and the new response's `context` field, so a future divergence between them fails here rather than in the field.
     expect(earlyMetaEpicSchema.safeParse(context).success).toBe(true);
 
     const response = epicGetWorkspaceContextV10.responseSchema.safeParse({

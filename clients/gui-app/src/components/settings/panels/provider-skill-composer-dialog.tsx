@@ -34,22 +34,12 @@ import {
   type SkillComposerStep,
 } from "./provider-skill-composer-model";
 
-/**
- * The one surface for getting a skill onto disk.
- *
- * Opens import-first when import is advertised: a smart source field, then
- * either a direct install (one candidate) or a picker. "or write one from
- * scratch" swaps to the authoring form. There is no Write/Import tab strip.
- *
- * Mounted only while open (the caller renders it conditionally), which keeps
- * the draft state's lifetime equal to the dialog's: closing it is what discards
- * a draft, and there is no stale half-filled form waiting behind the button.
- */
+/** Mounted only while open (the caller renders it conditionally), which keeps the draft state's lifetime equal
+ * to the dialog's. */
 export function ProviderSkillComposerDialog(props: {
   readonly providerLabel: string;
   readonly authoring: SkillAuthoring;
   readonly listScope: ProviderNativeScope;
-  /** The provider's own skills root, when the listing has revealed it. */
   readonly providerRoot: string | null;
   readonly canProviderScope: boolean;
   readonly pending: boolean;

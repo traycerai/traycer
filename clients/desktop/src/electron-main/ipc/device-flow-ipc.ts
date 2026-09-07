@@ -10,18 +10,6 @@ import {
 } from "../auth/device-flow-controller";
 import { PROTOCOL_SCHEME } from "../auth/deep-link";
 
-/**
- * Wires the renderer-facing device-flow IPC to the main-process
- * `DeviceFlowController`. `deviceFlowStart` authorizes + starts the poll loop
- * and returns the authorization; the terminal outcome is pushed on
- * `deviceFlowResult` keyed by `attemptId`. `deviceFlowPollNow` nudges the loop
- * to poll immediately (the browser-return deep link). `deviceFlowCancel` aborts
- * the loop.
- *
- * The poll loop is owned by the window that started it: when that window's
- * `webContents` is destroyed we cancel the attempt, so closing a window mid
- * device-flow never leaks a 10-minute poll (Finding 9).
- */
 export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
   // The registered scheme (environment- and slot-specific) rides the
   // verification URL so the browser's return deep link reopens THIS build,
@@ -30,20 +18,12 @@ export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
     bridge.options.authnBaseUrl,
     PROTOCOL_SCHEME,
   );
-  // Tracks each started attempt's owner-window listener cleanup so EVERY
-  // terminal path removes it exactly once: `deviceFlowCancel`, `disposeAll`, and
-  // a thrown `controller.start()` would otherwise leave stale `destroyed`
-  // listeners accumulating across repeated cancelled sign-ins.
   const cleanupByAttemptId = new Map<string, () => void>();
 
   bridge.handleInvoke(RunnerHostInvoke.deviceFlowStart, async (event) => {
     const windowId = bridge.resolveSenderWindowId(event);
     const sender = event.sender;
-    // Watch the owner window for the WHOLE attempt lifecycle, not just after
-    // `start()` resolves: a window closed mid-`/device/authorize` would
-    // otherwise leave the poll loop running once the attempt id lands. The
-    // listener is removed on the terminal result (and on a failed start) so
-    // repeated sign-ins don't accumulate stale `destroyed` listeners.
+    // The listener is removed on the terminal result (and on a failed start) so repeated sign-ins don't accumulate stale `destroyed` listeners.
     let startedAttemptId: string | null = null;
     let senderDestroyed = false;
     const onSenderDestroyed = (): void => {

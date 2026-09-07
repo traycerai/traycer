@@ -1,12 +1,4 @@
-/**
- * Persisted width of the communication-graph detail panel.
- *
- * One px width shared by every comm-graph tile, the same bargain the epic
- * sidebar strikes (`left-panel-store`): the panel is one surface wherever it
- * appears, so its width is a user layout preference, not per-tile view
- * chrome. The resize handle additionally caps the live drag at half the tile
- * so the canvas always keeps space; the render-time `max-w-[50%]` mirrors it.
- */
+/** Persisted width of the communication-graph detail panel. */
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";

@@ -22,12 +22,7 @@ import {
   managedCommandSubscribeOutputServerFrameSchemaV10,
 } from "@traycer/protocol/host/managed-command/subscribe";
 
-/**
- * `managedCommand.*@1.0` contract fixtures + registry membership.
- *
- * Only the output window is a stream of its own. The SET of a chat's commands
- * rides `chat.subscribe` and is covered by that contract's suite.
- */
+/** `managedCommand.*@1.0` contract fixtures + registry membership. */
 
 const RUNNING_COMMAND = {
   id: "cmd-deploy",
@@ -119,9 +114,6 @@ describe("managedCommand.subscribeOutput@1.0 frames", () => {
   });
 
   it("accepts a fieldless resnapshot request - the viewer's ask for a fresh live tail after detaching", () => {
-    // No `requestId`: unlike `loadOlder`, a resnapshot is answered with the
-    // same `snapshot` frame a reconnect produces, which the client already
-    // treats as a full reset regardless of which request produced it.
     const parsed = managedCommandSubscribeOutputClientFrameSchema.parse({
       kind: "resnapshot",
       hasBinaryPayload: false,
@@ -154,9 +146,7 @@ describe("managedCommand stream registry membership", () => {
   });
 
   it("stays off the released floor", () => {
-    // Brand-new methods: an older host simply lacks them, which is a per-call
-    // absence rather than a handshake failure. Adding one to the floor would
-    // claim every shipped host serves it.
+    // Brand-new methods: an older host simply lacks them, which is a per-call absence rather than a handshake failure.
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
       "managedCommand.subscribeOutput",
     );
@@ -187,9 +177,6 @@ describe("managedCommand stream registry membership", () => {
   });
 
   it("opens start/stop at 1.1 for the relaunch flag and keeps 1.0 on the shipped response", () => {
-    // cli-v1.2.0 shipped `start@1.0` / `stop@1.0` returning the command
-    // without `relaunchOnHostRestart`; the released gate treats growth of a
-    // shipped host→client shape as breaking, so the flag rides `1.1`.
     for (const method of [
       "managedCommand.start",
       "managedCommand.stop",
@@ -251,11 +238,6 @@ describe("managedCommand stream registry membership", () => {
   });
 
   it("defaults relaunchOnHostRestart to TRUE on a command an older host sends without it", () => {
-    // Only a host predating the flag omits it, and such a host respawns
-    // EVERY command that was running when it went down - so the truthful
-    // default is the legacy behaviour, not the new host's off-by-default.
-    // Reading it as `false` would show "stays down" for exactly the shells
-    // that loop (Codex P1 on #1656).
     const parsed = managedCommandSchema.parse({
       id: "cmd-1",
       monitoring: false,

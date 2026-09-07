@@ -16,14 +16,7 @@ import { readStdinJson } from "../internal/hook-stdin";
 import { CliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
-/**
- * Provider hook payloads we accept on stdin. Each provider hands us a
- * different shape; we extract the first user prompt only and never log it.
- *
- *   - `claude` / `codex`: top-level `prompt` string.
- *   - `opencode`: text concatenated from `output.parts[*].text` (only
- *     entries with `type: "text"` and a non-empty `text` contribute).
- */
+/** Provider hook payloads we accept on stdin. Each provider hands us a different shape; we extract the first user prompt only and never log it. - `claude` / `codex`: top-level `prompt` string. - `opencode`: text concatenated from `output.parts[*].text` (only entries with `type: "text"` and a non-empty `text` contribute). */
 const claudeOrCodexHookSchema = z.looseObject({ prompt: z.string() });
 
 const opencodeTextPartSchema = z.looseObject({
@@ -45,28 +38,7 @@ type NoopReason =
   | "unknown-provider"
   | "host-unreachable";
 
-/**
- * `traycer agent title-from-hook --provider <provider>` - invoked by a
- * provider hook (Claude, Codex, OpenCode) on the user's first prompt.
- * Reads the hook JSON from stdin, extracts the prompt, and asks the
- * host to schedule a title for the bound `tuiAgentId` via
- * `agent.tui.generateTitle@1.0`.
- *
- * The command is intentionally lenient: missing `TRAYCER_EPIC_ID` /
- * `TRAYCER_AGENT_ID`, an empty prompt, an unparsable JSON payload, a
- * stdin timeout, an unknown provider, or a host-not-running condition
- * all exit cleanly (exit 0) with `accepted: false` and no stderr noise.
- * The hook fires unconditionally (e.g. when claude is launched standalone
- * outside Traycer), so any benign condition must be a silent no-op.
- * Genuine errors (auth rejection, schema mismatches once the host
- * answers, etc.) still surface.
- *
- * Harness id is derived from the `--provider` arg (claude → "claude",
- * codex → "codex", opencode → "opencode"). The host resolver
- * cross-checks this against the persisted `tuiAgent.harnessId`, so a
- * mismatched hook (e.g. a stale Claude hook firing against a Codex
- * agent) is rejected server-side.
- */
+/** Hook stdin is untrusted provider JSON. Never interpolate the title into a path. */
 export function buildAgentTitleFromHookCommand(opts: {
   readonly provider: string;
   readonly epicId: string | null;
@@ -107,9 +79,8 @@ export function buildAgentTitleFromHookCommand(opts: {
       promptText: truncated,
     });
 
-    // Treat host-not-running as a benign condition - the hook fires
-    // unconditionally and the host may simply not be installed/up. All
-    // other RPC errors (auth, etc.) still surface.
+    // Treat host-not-running as a benign condition - the hook fires unconditionally and the host may simply not be installed/up.
+    // All other RPC errors (auth, etc.) still surface.
     const rpcResult = await toAgentCliError(
       callHostRpcFastFail("agent.tui.generateTitle", request),
     ).catch((err: unknown) => {
@@ -130,9 +101,7 @@ export function buildAgentTitleFromHookCommand(opts: {
       generateTuiAgentTitleResponseSchema,
       rpcResult,
     );
-    // No `human` line: a `UserPromptSubmit` hook's stdout is surfaced
-    // back into the codex / claude TUI as "hook context", and leaking
-    // "title scheduled" into the user's chat history would be noise.
+    // No `human` line: a `UserPromptSubmit` hook's stdout is surfaced back into the codex / claude TUI as "hook context", and leaking "title scheduled" into the user's chat history would be noise.
     return {
       data: { accepted, reason: null },
       human: null,

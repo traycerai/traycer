@@ -20,15 +20,11 @@ import {
 } from "../epic-status-lane-adapter";
 
 /**
- * `epic.status.subscribe@1.0` adapter - control-lane decode, the false-clean
- * dirty guard, snapshot emission order, replacement signalling (migration
- * completion vs a bare epoch change), and the security-epoch fold.
- *
- * Every server frame is built by `.parse()`-ing through the real wire schema
- * and narrowing on `kind`, never hand-typed.
+ * `epic.status.subscribe@1.0` adapter - control-lane decode, the false-clean dirty guard, snapshot emission order, replacement signalling (migration completion vs a bare epoch change), and the security-epoch fold.
+ * Every server frame is built by `.parse()`-ing through the real wire schema and narrowing on `kind`, never hand-typed.
  */
 
-// ─── Frame builders (parsed through the real schema) ───────────────────────
+ // ─── Frame builders (parsed through the real schema) ───────────────────────
 
 interface SnapshotOverrides {
   readonly authorityEpoch?: string;
@@ -279,13 +275,6 @@ function replacementReasons(log: readonly LogEntry[]): string[] {
     .map((entry) => entry.reason);
 }
 
-/**
- * The full log, unfiltered, as one ordered token per entry - `emit:<kind>` or
- * `requestReplacement:<reason>`. `emittedEvents` and `replacementReasons`
- * above each filter to one channel, which is exactly what throws away the
- * ORDER between a replacement request and the emits around it - the fact the
- * snapshot-emission-order test below exists to pin.
- */
 function timeline(log: readonly LogEntry[]): string[] {
   return log.map((entry) => {
     switch (entry.channel) {
@@ -394,17 +383,8 @@ describe("createEpicStatusLaneAdapter - snapshot emission order", () => {
     );
 
     expect(emittedEvents(log).map((event) => event.kind)).toEqual([
-      // FIRST, and it is not one more flattened fact. Flattening a snapshot
-      // into ordinary events drops the fact that a snapshot happened at all,
-      // and that fact is not recoverable downstream - a lane delta and a lane
-      // snapshot arrive as the same event kinds. The legacy arm never had to
-      // say it separately because ONE function landed the snapshot and adopted
-      // its role; this lane has no such function, and without this event the
-      // open cycle's freshness latch is never set, so every write on the lane
-      // arm is refused before dispatch for the life of the session.
-      //
-      // Before the CONTENTS because it is what makes this cycle's answer
-      // authoritative and they are that answer's contents.
+      // First, and it is not one more flattened fact.
+      // Before the contents because it is what makes this cycle's answer authoritative and they are that answer's contents.
       "control-snapshot-complete",
       "permission-changed",
       "cloud-sync-status",
@@ -716,14 +696,12 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
       snapshotFrame({ authorityEpoch: "epoch-2", securityEpoch: 999 }),
     );
 
-    // Only the authority-epoch-changed replacement fires; the huge
-    // securityEpoch on the epoch-2 snapshot is the FIRST observation under
-    // the new epoch and must not fire a second, security-epoch request.
+    // Only the authority-epoch-changed replacement fires; the huge securityEpoch on the epoch-2 snapshot is the first observation under the new epoch and must not fire a second, security-epoch request.
     expect(replacementReasons(log)).toEqual(["authority-epoch-changed"]);
   });
 });
 
-// ─── Replacement request lands BEFORE the snapshot's own emits ─────────────
+// ─── Replacement request lands before the snapshot's own emits ─────────────
 
 describe("createEpicStatusLaneAdapter - security-epoch replacement lands before the snapshot's own emits", () => {
   it("an unchanged authority epoch with a higher securityEpoch requests the replacement BEFORE control-snapshot-complete and permission-changed", () => {
@@ -739,7 +717,7 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 1 }),
     );
 
-    // Same authority epoch, a strictly higher securityEpoch - the ONLY thing
+    // Same authority epoch, a strictly higher securityEpoch - the only thing
     // that changed is what `foldSecurityEpoch` folds.
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 2 }),
@@ -750,16 +728,10 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
       "emit:control-snapshot-complete",
       "emit:permission-changed",
       "emit:cloud-sync-status",
-      // The second snapshot: the replacement request FIRST...
+      // The second snapshot: the replacement request first...
       "requestReplacement:security-epoch-changed",
-      // ...and only then the snapshot's own emits. `requestReplacement` is
-      // synchronous and RESETS the runtime, so anything already emitted
-      // above it is erased. Before the fix, `foldSecurityEpoch` ran AFTER
-      // these next two emits, so the request landed HERE instead - clearing
-      // the very role and freshness gate they had just established, with
-      // nothing below to re-emit either. Writes were then refused for the
-      // rest of the session, until some later status snapshot happened to
-      // arrive.
+      // ...and only then the snapshot's own emits.
+      // Before the fix, `foldSecurityEpoch` ran after these next two emits, so the request landed here instead - clearing the very role and freshness gate they had just established, with nothing below to re-emit either.
       "emit:control-snapshot-complete",
       "emit:permission-changed",
       "emit:cloud-sync-status",
@@ -780,11 +752,7 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 1 }),
     );
 
-    // The transition an upgrade produces: same authority epoch, a strictly
-    // higher security epoch, and NO accompanying snapshot. That last part is
-    // what makes this the worse half of the bug the sibling above pins - there,
-    // the next status snapshot re-established the erased role; here the socket
-    // stays open owing nothing further, so nothing ever re-emits it.
+    // The transition an upgrade produces: same authority epoch, a strictly higher security epoch, and NO accompanying snapshot.
     latest().callbacks.onTransition(
       permissionChangedFrame("epoch-1", 2, "editor"),
     );
@@ -793,12 +761,9 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
       "emit:control-snapshot-complete",
       "emit:permission-changed",
       "emit:cloud-sync-status",
-      // The request FIRST...
+      // The request first...
       "requestReplacement:security-epoch-changed",
-      // ...and the role only after it. Reversed - which is how this path
-      // shipped - the reset erases `currentRole` and the control-freshness
-      // latch that this emit had just set, and every write is refused for the
-      // life of the session.
+      // ...and the role only after it.
       "emit:permission-changed",
     ]);
   });

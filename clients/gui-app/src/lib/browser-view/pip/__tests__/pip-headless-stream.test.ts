@@ -159,11 +159,8 @@ describe("openPipHeadlessStream", () => {
   });
 
   it("answers an rttProbe and does not forward it as a frame", () => {
-    // M54: the host TIMES this reply, and a mirror that never answers reads as
-    // a dead link. Mutation: moving the `rttProbe` arm below `input.onFrame`,
-    // or dropping its `return` - the probe then either takes the consumer's
-    // latency on its measurement, or reaches a consumer that has no arm for
-    // it and gets acked as a pixel frame.
+    // M54: the host TIMES this reply, and a mirror that never answers reads as a dead link.
+    // Mutation: moving the `rttProbe` arm below `input.onFrame`, or dropping its `return` - the probe then either takes the consumer's latency on its measurement, or reaches a consumer that has no arm for it and gets acked as a pixel frame.
     const harness = createScreencastClientHarness();
     const received: BrowserScreencastServerFrame[] = [];
 

@@ -1,20 +1,5 @@
 /**
- * Shared vocabulary of the communication graph's OFFICE view: the pixel-art
- * floor where every agent is a character at a desk and every A2A message is an
- * envelope flying between desks.
- *
- * Three modules meet here and must not import each other's internals:
- *
- * - `office-pixel-art.ts` / `office-appearance.ts` DRAW: sprite maps, palettes,
- *   rasterization, deterministic per-agent looks.
- * - `office-layout.ts` / `office-scene.ts` SIMULATE: desk assignment, walking,
- *   sitting, typing, bubbles, envelopes. Pure; no DOM, no canvas, no clock.
- * - `comm-graph-office-canvas.tsx` PRESENTS: owns the `<canvas>`, the
- *   animation frame loop, the camera, hit-testing and the React wiring.
- *
- * Everything below is SPRITE SPACE: integer pixels at 1x, where one floor tile
- * is `OFFICE_TILE` px square. The canvas applies the camera (pan + zoom) on top
- * and never leaks screen pixels back into the scene.
+ * Shared vocabulary of the communication graph's OFFICE view: the pixel-art floor where every agent is a character at a desk and every A2A message is an envelope flying between desks.
  */
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
 import type { CommGraphAgentKind } from "@/lib/comm-graph/comm-graph-model";
@@ -33,11 +18,6 @@ export type OfficeTheme = "light" | "dark";
 
 export type OfficeFacing = "down" | "up" | "left" | "right";
 
-/**
- * - `stand` / `walk1` / `walk2` - on foot, any facing.
- * - `sit` - seated at the desk, facing `up` (back to the viewer, screen ahead).
- * - `type1` / `type2` - seated and typing, alternated by the scene.
- */
 export type OfficeCharacterPose =
   | "stand"
   | "walk1"
@@ -47,9 +27,8 @@ export type OfficeCharacterPose =
   | "type2";
 
 /**
- * A character's look. Every value is a CSS hex color except `hairStyle`, which
- * indexes the sprite map variants. Derived deterministically from the agent id
- * so the same agent looks the same across sessions, windows and devices.
+ * A character's look.
+ * Every value is a CSS hex color except `hairStyle`, which indexes the sprite map variants.
  */
 export interface OfficeAppearance {
   readonly skin: string;
@@ -175,8 +154,8 @@ export type OfficeSpriteName =
   | "sparkle";
 
 /**
- * Names one rasterized sprite. `facing`, `pose` and `appearance` only apply to
- * `character`; `tint` (a hex color) only to `envelope` and `sparkle`.
+ * Names one rasterized sprite.
+ * `facing`, `pose` and `appearance` only apply to `character`; `tint` (a hex color) only to `envelope` and `sparkle`.
  */
 export interface OfficeSpriteRef {
   readonly name: OfficeSpriteName;
@@ -234,8 +213,8 @@ export interface OfficeProp {
 }
 
 /**
- * One walled cabin per root agent (an agent with no parent on the floor). Its
- * whole subtree sits inside, so nesting reads as "who is in whose room".
+ * One walled cabin per root agent (an agent with no parent on the floor).
+ * Its whole subtree sits inside, so nesting reads as "who is in whose room".
  */
 export interface OfficeRoom {
   readonly rootAgentId: string;
@@ -248,17 +227,15 @@ export interface OfficeRoom {
   /** Left tile of the two-tile sign on the cabin's top wall. */
   readonly signTile: OfficeTilePos;
   /**
-   * Nested sub-teams inside this cabin, one per agent that has children,
-   * recursively. Depth 1 is a direct child of the root; a pod's bounds always
-   * lie inside its parent pod's (or the cabin's) interior.
+   * Nested sub-teams inside this cabin, one per agent that has children, recursively.
+   * Depth 1 is a direct child of the root; a pod's bounds always lie inside its parent pod's (or the cabin's) interior.
    */
   readonly pods: ReadonlyArray<OfficePod>;
 }
 
 /**
- * A sub-team's region inside a cabin: its lead's desk at the top-left, the
- * lead's descendants packed inside. Drawn as tinted floor with a glass
- * outline and a name plate, not walls, so the cabin stays one room.
+ * A sub-team's region inside a cabin: its lead's desk at the top-left, the lead's descendants packed inside.
+ * Drawn as tinted floor with a glass outline and a name plate, not walls, so the cabin stays one room.
  */
 export interface OfficePod {
   readonly leadAgentId: string;
@@ -270,9 +247,8 @@ export interface OfficePod {
   /** Where the name plate sits: the pod's top-left OUTLINE tile, outside `bounds`. */
   readonly plateTile: OfficeTilePos;
   /**
-   * How the outline is drawn. Chosen by the layout from the lead's id hash
-   * and depth so neighbouring pods differ and nested ones never match their
-   * parent.
+   * How the outline is drawn.
+   * Chosen by the layout from the lead's id hash and depth so neighbouring pods differ and nested ones never match their parent.
    */
   readonly style: OfficePodStyle;
   /** Floor tint family; also never the same as the parent's. */
@@ -282,10 +258,8 @@ export interface OfficePod {
 export type OfficePodStyle = "glass" | "planters" | "shelves";
 
 /**
- * One building floor per host. A single-host epic has exactly one floor and
- * draws no stairwell or floor sign; several hosts stack floors vertically,
- * each with its own lobby, door and reception. Agents never cross floors:
- * messaging is host-local, so there is nothing to walk between.
+ * One building floor per host.
+ * A single-host epic has exactly one floor and draws no stairwell or floor sign; several hosts stack floors vertically, each with its own lobby, door and reception.
  */
 export interface OfficeFloor {
   /** `null` groups agents whose record predates host binding. */
@@ -297,8 +271,8 @@ export interface OfficeFloor {
   /** Left tile of the two-tile reception counter in this floor's lobby. */
   readonly receptionTile: OfficeTilePos;
   /**
-   * Standing spots in front of reception, nearest first. Agents that need a
-   * person queue here in arrival order.
+   * Standing spots in front of reception, nearest first.
+   * Agents that need a person queue here in arrival order.
    */
   readonly receptionQueueTiles: ReadonlyArray<OfficeTilePos>;
   /** Wall tile carrying this floor's clock. */
@@ -306,33 +280,28 @@ export interface OfficeFloor {
   /** Top-left of the two-by-two stairwell, or `null` on a single-floor building. */
   readonly stairsTile: OfficeTilePos | null;
   /**
-   * Where an idle agent may wander to on this floor. Each spot is a WALKABLE
-   * tile beside the thing it names, with the facing that looks at it. The
-   * scene picks among them deterministically; spots are never desks, doors,
-   * or queue tiles.
+   * Where an idle agent may wander to on this floor.
+   * Each spot is a WALKABLE tile beside the thing it names, with the facing that looks at it.
    */
   readonly errandSpots: ReadonlyArray<OfficeErrandSpot>;
   /**
-   * The floor's cafeteria: a walled break room holding the coffee machine,
-   * water cooler, vending machine, menu board and tables. Outer bounds
-   * including its walls; `null` only when the floor is too small to hold one.
+   * The floor's cafeteria: a walled break room holding the coffee machine, water cooler, vending machine, menu board and tables.
+   * Outer bounds including its walls; `null` only when the floor is too small to hold one.
    */
   readonly cafeteria: OfficeTileRect | null;
   /**
-   * The floor's game room: a walled room beside the cafeteria with a
-   * ping-pong table and an arcade cabinet. Outer bounds including walls.
+   * The floor's game room: a walled room beside the cafeteria with a ping-pong table and an arcade cabinet.
+   * Outer bounds including walls.
    */
   readonly gameRoom: OfficeTileRect | null;
   /**
-   * Named areas on this floor, each with the left tile of a two-tile `sign`
-   * on the area's top wall and the text drawn over it ("Cafeteria",
-   * "Game room"). Cabins carry their own sign in `OfficeRoom`.
+   * Named areas on this floor, each with the left tile of a two-tile `sign` on the area's top wall and the text drawn over it ("Cafeteria", "Game room").
+   * Cabins carry their own sign in `OfficeRoom`.
    */
   readonly areaSigns: ReadonlyArray<OfficeAreaSign>;
   /**
-   * Every amenity room on this floor, including the cafeteria and game room
-   * (which stay mirrored in their own fields). Which rooms exist and how big
-   * they are follows the floor's agent count.
+   * Every amenity room on this floor, including the cafeteria and game room (which stay mirrored in their own fields).
+   * Which rooms exist and how big they are follows the floor's agent count.
    */
   readonly amenities: ReadonlyArray<OfficeAmenity>;
 }
@@ -408,9 +377,8 @@ export interface OfficeErrandSpot {
 }
 
 /**
- * The floor plan for one epic. Pure function of the agent set, recomputed when
- * the set changes and never persisted: a desk is a function of who exists, not
- * a stored coordinate.
+ * The floor plan for one epic.
+ * Pure function of the agent set, recomputed when the set changes and never persisted: a desk is a function of who exists, not a stored coordinate.
  */
 export interface OfficeLayout {
   readonly cols: number;
@@ -434,8 +402,8 @@ export interface OfficeLayout {
 // ---- Scene inputs --------------------------------------------------- //
 
 /**
- * Coarse size class of the agent's model, derived client-side from the model
- * name. Decides the desk's screen: laptop, single monitor, or dual wide.
+ * Coarse size class of the agent's model, derived client-side from the model name.
+ * Decides the desk's screen: laptop, single monitor, or dual wide.
  */
 export type OfficeModelTier = "small" | "medium" | "large";
 
@@ -458,19 +426,7 @@ export interface OfficeAgentInput {
   readonly appearance: OfficeAppearance;
 }
 
-/**
- * What the character is doing, in precedence order (highest first):
- *
- * - `failure` - an unread failure notification; the screen has crashed.
- * - `attention` - a person is needed (interview / approval pending).
- * - `awaiting` - sent an `expectReply` request that has no reply yet.
- * - `working` - in an active turn.
- * - `archived` - archived record; seated but ghosted, monitor off. Outranks
- *   the quiet states because an archived agent has nothing left to do, but
- *   yields to anything the data says is still happening to it.
- * - `background` - background work only.
- * - `idle` - seated, nothing to do.
- */
+/** What the character is doing, in precedence order (highest first): */
 export type OfficeAgentStatus =
   | "failure"
   | "attention"
@@ -487,25 +443,23 @@ export interface OfficeSceneInput {
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   /**
-   * The timeline's pulse and a stable identity for the row behind it
-   * (`commGraphEventKey`). The scene reacts to the KEY changing, so the same
-   * pulse object re-supplied across frames spawns nothing new.
+   * The timeline's pulse and a stable identity for the row behind it (`commGraphEventKey`).
+   * The scene reacts to the KEY changing, so the same pulse object re-supplied across frames spawns nothing new.
    */
   readonly pulse: CommGraphPulse | null;
   readonly pulseKey: string | null;
   /** Milliseconds one playback step lasts at the current speed; envelopes fit inside it. */
   readonly stepMs: number;
   /**
-   * The cursor row's capture time, or `null` while live. Decides which agents
-   * count as archived AS OF the floor being shown; live compares against now.
+   * The cursor row's capture time, or `null` while live.
+   * Decides which agents count as archived AS OF the floor being shown; live compares against now.
    */
   readonly cursorMs: number | null;
   /** What the wall clock shows: the cursor time during replay, local time while live. */
   readonly clockMs: number;
   /**
-   * Unanswered `expectReply` requests per RECEIVER, as of the cursor. Drawn as
-   * an envelope pile on that agent's desk. Derived from the same event array
-   * the graph reads; absent agents count as zero.
+   * Unanswered `expectReply` requests per RECEIVER, as of the cursor.
+   * Drawn as an envelope pile on that agent's desk.
    */
   readonly openRequestsByReceiver: ReadonlyMap<string, number>;
   readonly playing: boolean;
@@ -552,9 +506,8 @@ export type OfficeDrawable =
     }
   | {
       /**
-       * A harness logo, drawn by the renderer from the app's own icon set at
-       * 12x12 sprite pixels, CENTER anchored. The scene places it; the scene
-       * never sees the icon.
+       * A harness logo, drawn by the renderer from the app's own icon set at 12x12 sprite pixels, CENTER anchored.
+       * The scene places it; the scene never sees the icon.
        */
       readonly kind: "logo";
       readonly harnessId: GuiHarnessId;
@@ -578,18 +531,13 @@ export interface OfficeEnvelopeHitRegion {
 export const OFFICE_LOGO_SIZE = 12;
 
 /**
- * One rendered frame. Layers are drawn in order; `actors` is already sorted by
- * baseline (`y`) so a character lower on the floor overlaps one above it.
+ * One rendered frame.
+ * Layers are drawn in order; `actors` is already sorted by baseline (`y`) so a character lower on the floor overlaps one above it.
  */
 export interface OfficeFrame {
   readonly size: OfficeSize;
   /**
-   * Changes only when `floor` does, so a renderer can cache what it drew from
-   * it instead of re-drawing thousands of identical tiles every frame.
-   *
-   * The floor is a pure function of the LAYOUT - walls, pod tints, stairwells
-   * and rugs - and the layout is rebuilt only when the set of agents changes.
-   * Everything that moves is in `actors` or `overlay`.
+   * Changes only when `floor` does, so a renderer can cache what it drew from it instead of re-drawing thousands of identical tiles every frame.
    */
   readonly staticVersion: number;
   readonly floor: ReadonlyArray<OfficeDrawable>;
@@ -600,8 +548,7 @@ export interface OfficeFrame {
   /** In-flight envelopes, in draw order; checked BEFORE `hitRegions` so a message over a desk wins. */
   readonly envelopeHitRegions: ReadonlyArray<OfficeEnvelopeHitRegion>;
   /**
-   * Where the camera should look while playback is following the action: the
-   * sender of the pulsing row, or `null` when nothing is in flight.
+   * Where the camera should look while playback is following the action: the sender of the pulsing row, or `null` when nothing is in flight.
    */
   readonly focus: OfficePoint | null;
 }

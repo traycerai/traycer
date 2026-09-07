@@ -20,13 +20,8 @@ import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser
 import type { BrowserViewGuestMountRequested } from "@traycer-clients/shared/platform/browser-view";
 
 /**
- * jsdom can observe wrapper/webview node identity, attributes,
- * subscriptions, and which activate handler fired. It cannot prove
- * Chromium compositing, CSS anchor geometry (`anchor()` / `anchor-size()`
- * values are dropped by the parser), overlay stacking, hidden painting,
- * real Electron `<webview>` identity, `webContentsId`, `inert` subtrees,
- * or Electron focus retention. `position-anchor` and `position: fixed`
- * are asserted because jsdom stores those declarations.
+ * jsdom can observe wrapper/webview node identity, attributes, subscriptions, and which activate handler fired.
+ * It cannot prove Chromium compositing, CSS anchor geometry (`anchor()` / `anchor-size()` values are dropped by the parser), overlay stacking, hidden painting, real Electron `<webview>` identity, `webContentsId`, `inert` subtrees, or Electron focus retention.
  */
 const HOST_TEST_ID = "persistent-browser-guest-host";
 const REGISTRATION_A = "reg-a";
@@ -128,8 +123,8 @@ function dispatchFocus(target: HTMLElement): void {
 }
 
 /**
- * Host stop no longer wipes placements. Track every owner this file
- * publishes so a later test cannot inherit a live record.
+ * Host stop no longer wipes placements.
+ * Track every owner this file publishes so a later test cannot inherit a live record.
  */
 const ownedPlacements: Array<{
   readonly owner: symbol;

@@ -5,10 +5,8 @@ import {
 } from "../host/update-contender";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
-// Desktop's download lane invokes this only after a successful registry
-// eligibility probe establishes that a staged release was withdrawn. It is
-// intentionally separate from normal reconcile, which may restore old
-// crash-recovery asides.
+// Desktop's download lane invokes this only after a successful registry eligibility probe establishes that a staged release was withdrawn.
+// It is intentionally separate from normal reconcile, which may restore old crash-recovery asides.
 export function buildHostPurgeStageCommand(args: {
   readonly expectedStageFingerprint: string | null;
 }): CommandFn {

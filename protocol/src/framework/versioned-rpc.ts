@@ -1,8 +1,4 @@
-// Versioning note: the per-method `{ major, minor }` schema versions defined
-// through this registry are the *handshake contract* the client<->host
-// negotiation runs against at runtime. They are distinct from the npm semver in
-// `package.json`, which only governs distribution (which built copy of the
-// contract a consumer depends on). Do not conflate the two. See README.md.
+// Versioning note: the per-method `{ major, minor }` schema versions defined through this registry are the *handshake contract* the client<->host negotiation runs against at runtime.
 import { z } from "zod";
 import {
   toUnknownKeyTree,
@@ -72,16 +68,7 @@ export type {
   VersionedRpcRegistry,
 } from "./versioned-rpc-types";
 
-/**
- * Public authoring and traversal helpers for versioned RPC registries.
- *
- * Typical flow:
- * 1. Define contracts with `defineRpcContract()`.
- * 2. Define transforms with `defineUpgradePath()` and `defineDowngradePath()`.
- * 3. Build static registries with `defineVersionedRpcRegistry()`, or validate
- *    dynamic registries with `validateVersionedRpcRegistry()`.
- * 4. Use traversal helpers only with validated registries.
- */
+/** Public authoring and traversal helpers for versioned RPC registries. */
 
 /**
  * Preserves literal method and version information for downstream registry typing.
@@ -136,12 +123,7 @@ export function defineFallbackMethodDegrade<
   return degrade;
 }
 
-/**
- * Preferred authoring path for registries declared in source code.
- *
- * It applies compile-time validation to object literals, then runs the runtime
- * validator so widened or indirectly assembled values still fail with readable errors.
- */
+/** Preferred authoring path for registries declared in source code. */
 export function defineVersionedRpcRegistry<
   const Registry extends UncheckedVersionedRpcRegistry,
 >(
@@ -173,31 +155,7 @@ export function defineFloorAwareVersionedRpcRegistry(
 }
 
 /**
- * Promotes a raw registry to the validated brand after checking every invariant
- * the framework cares about in a single pass:
- *
- * 1. Structural:
- *    - `latestMinor` points at an installed and highest minor within each line
- *    - contracts match their method and major/minor slots
- *    - each non-initial installed version defines an upgrade from the previous
- *      installed version
- *    - direct downgrades originate at the latest installed version of the source
- *      major and target the latest installed version of an older major
- * 2. Zod-schema-level:
- *    - minors within a major line are additive under projection-feasibility
- *      semantics at ANY depth: fields, enum values, and union variants may be
- *      added (including inside nested objects and union arms), and a field
- *      may widen into a union that retains an additively-compatible variant
- *      of its old form; no minor may remove or incompatibly replace anything
- *      an earlier minor in the same line had, nested or not (see
- *      `findAdditivityViolation`)
- *    - major bumps carry at least one breaking change on the latest minor of
- *      each side (a removed field or a changed field schema); purely additive
- *      bumps should ship as a minor
- *
- * Use this when the registry comes from a dynamic boundary such as parsed JSON,
- * tests that intentionally exercise invalid states, or code paths outside the
- * compiler's view.
+ * Promotes a raw registry to the validated brand after checking every invariant the framework cares about in a single pass:
  */
 export function validateVersionedRpcRegistry<
   Registry extends UncheckedVersionedRpcRegistry,
@@ -232,10 +190,7 @@ export function validateVersionedRpcRegistry<
         const entry = line.versions[minor];
         const contract = entry.contract;
 
-        // The compatibility loop below starts at the SECOND installed minor,
-        // so an annotation on the first one is never reached - it could sit
-        // in the registry forever as an unverifiable governance claim about
-        // growth that has no predecessor to grow over.
+        // The compatibility loop below starts at the SECOND installed minor, so an annotation on the first one is never reached - it could sit in the registry forever as an unverifiable governance claim about growth that has no.
         if (
           entry.responseGrowthProjectionGated === true &&
           minor === minorKeys[0]
@@ -341,9 +296,7 @@ export function validateVersionedRpcRegistry<
     }
   }
 
-  // Second pass: Zod-schema-level compatibility. Kept separate so the error
-  // surface of the first pass stays strictly structural - callers can rely on
-  // structural messages landing before any JSON Schema complaint.
+  // Second pass: Zod-schema-level compatibility.
   assertSchemaCompatibility(registry);
 }
 
@@ -471,9 +424,6 @@ function assertSchemaCompatibility(
         const previous = schemas[method][major][previousMinor];
         const current = schemas[method][major][currentMinor];
 
-        // Requests stay lenient on value growth: only a caller that opts
-        // into a new capability on its own call hits the projection
-        // refusal, which is the designed DOWNGRADE_UNSUPPORTED arm.
         const previousRequestInput = toUnknownKeyTree(
           line.versions[previousMinor].contract.requestSchema,
         );
@@ -499,10 +449,6 @@ function assertSchemaCompatibility(
           );
         }
 
-        // Responses are strict on value growth unless the minor declares
-        // its growth emission-gated: response values are typically decided
-        // by shared state, so a new value would poison every old peer's
-        // projection with no opt-out.
         const responseGrowthGated =
           line.versions[currentMinor].responseGrowthProjectionGated === true;
         const strictResponseViolation = findAdditivityViolation(
@@ -512,11 +458,7 @@ function assertSchemaCompatibility(
           previousResponseInput,
           currentResponseInput,
         );
-        // The annotation is a reviewed claim about the EMITTER, so it must
-        // never outlive the growth it was granted for: a minor that carries
-        // it without growth (or whose growth is later removed) would keep
-        // the response lane silently lenient for every future edit to that
-        // same minor. Require it to be load-bearing.
+        // The annotation is a reviewed claim about the EMITTER, so it must never outlive the growth it was granted for: a minor that carries it without growth (or whose growth is later removed) would keep the response lane.
         if (responseGrowthGated && strictResponseViolation === null) {
           throw new Error(
             `Minor ${major}.${currentMinor} for method '${method}' declares \`responseGrowthProjectionGated\` but its response has no value growth or union-arm replacement over ${major}.${previousMinor}; remove the annotation`,
@@ -602,9 +544,6 @@ function assertSchemaCompatibility(
 
 // ---- Zod-aware registry helpers ---------------------------------------- //
 
-// Fingerprint types and structural-diff helpers come from the shared
-// `json-schema-fingerprint` module so RPC and record frameworks stay
-// in lock-step on what counts as a breaking change.
 
 export type {
   AnyOfJsonSchema,
@@ -626,14 +565,7 @@ export type RegistryJsonSchemas = Readonly<
   >
 >;
 
-/**
- * Converts every installed contract's request and response Zod schemas
- * to normalized fingerprints. Throws when a schema is none of the
- * shapes the framework supports (object / enum / anyOf / array).
- *
- * Accepts the unchecked registry shape so callers can introspect
- * schemas before (or without) running `validateVersionedRpcRegistry()`.
- */
+/** Converts every installed contract's request and response Zod schemas to normalized fingerprints. */
 export function toJsonSchemas(
   registry: UncheckedVersionedRpcRegistry,
 ): RegistryJsonSchemas {
@@ -712,12 +644,7 @@ export function getLatestContract<
   return line.versions[line.latestMinor].contract;
 }
 
-/**
- * Walks the installed version chain from `fromVersion` to `toVersion`.
- *
- * Every non-initial installed version carries its upgrade path from the previous
- * installed version, so cross-major and same-major upgrades share one traversal.
- */
+/** Walks the installed version chain from `fromVersion` to `toVersion`. */
 export function upgradeRequestToVersion<
   Registry extends MethodVersionRegistry,
   const FromVersion extends InstalledSchemaVersion<Registry>,
@@ -877,11 +804,8 @@ function upgradeResponseToVersionInternal<
 }
 
 /**
- * Uses a direct downgrade bridge from the latest installed version of `fromMajor`
- * to the latest installed version of `toMajor`.
- *
- * Downgrades are intentionally not chained through intermediate majors. Callers
- * must author any direct compatibility bridge they want to support.
+ * Uses a direct downgrade bridge from the latest installed version of `fromMajor` to the latest installed version of `toMajor`.
+ * Callers must author any direct compatibility bridge they want to support.
  */
 export function downgradeRequestAcrossMajors<
   Registry extends MethodVersionRegistry,
@@ -894,11 +818,7 @@ export function downgradeRequestAcrossMajors<
   request: RequestOf<LatestMajorContract<Registry, FromMajor>>,
 ): DowngradeResult<RequestOf<LatestMajorContract<Registry, ToMajor>>> {
   if (Number(fromMajor) === Number(toMajor)) {
-    // Re-parse the request against the target major's request schema
-    // so the narrowing happens at runtime via zod rather than through
-    // a chained type assertion. With `fromMajor === toMajor` the source
-    // and target schemas resolve to the same instance, so the parse is
-    // an identity check that produces the type the caller expects.
+    // Re-parse the request against the target major's request schema so the narrowing happens at runtime via zod rather than through a chained type assertion.
     const targetLine = getMajorLine(registry, toMajor);
     const targetContract = targetLine.versions[targetLine.latestMinor].contract;
     type ToRequest = RequestOf<LatestMajorContract<Registry, ToMajor>>;

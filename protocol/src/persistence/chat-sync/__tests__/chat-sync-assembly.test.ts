@@ -26,14 +26,7 @@ import {
   type PublishedChat,
 } from "./__fixtures__/published-chat";
 
-/**
- * Assembly: gate, fetch in parallel, verify each part, assemble in HEAD order.
- *
- * The two properties this suite exists for are the two the layout actually
- * rests on - the transcript is the head's list, not the network's completion
- * order; and a part that does not hash to the address the head named ends the
- * read rather than being skipped, retried or rendered as a gap.
- */
+/** Assembly: gate, fetch in parallel, verify each part, assemble in HEAD order. */
 
 const READER = CHAT_SYNC_READER_VERSION;
 
@@ -51,13 +44,7 @@ function permutations(count: number): number[][] {
 }
 
 /**
- * Serves the published parts, but settles them in `order` (indices into the
- * head's own part list) rather than in call order.
- *
- * Every fetch is held until all of them have been STARTED - so the caller
- * really is fetching in parallel - and then released one at a time in `order`.
- * `completed` records what actually happened, so a test can assert the harness
- * did reorder anything at all rather than trusting that it did.
+ * Serves the published parts, but settles them in `order` (indices into the head's own part list) rather than in call order.
  */
 function fetchInCompletionOrder(
   published: PublishedChat,
@@ -204,14 +191,9 @@ describe("chat assembly is ordered by the head, not by the fetch", () => {
       if (result.status !== "ok") {
         throw new Error(`order ${order.join(",")} failed to assemble`);
       }
-      // Non-vacuity: assert the harness really did settle the parts out of head
-      // order, so a permutation that quietly degraded to "in order" cannot pass
-      // this test while guarding nothing.
+      // Non-vacuity: assert the harness really did settle the parts out of head order, so a permutation that quietly degraded to "in order" cannot pass this test while guarding nothing.
       expect(harness.completed).toEqual([...order]);
       expect(result.chat).toEqual(expected.chat);
-      // Stated absolutely as well as relatively: "every order agrees" is also
-      // satisfiable by a reader that assembles the same WRONG transcript every
-      // time, so pin what the head actually says.
       expect(result.chat.messages.map((message) => message.variant)).toEqual([
         "user",
         "assistant",
@@ -243,9 +225,7 @@ describe("chat assembly is ordered by the head, not by the fetch", () => {
   });
 
   it("concatenates message cohorts in head order even when the head reorders them", async () => {
-    // The head is the only thing that says what the transcript IS, so swapping
-    // the cohort order in the head must swap the transcript - not the fetch
-    // order, and not the cohorts' own content.
+    // The head is the only thing that says what the transcript IS, so swapping the cohort order in the head must swap the transcript - not the fetch order, and not the cohorts' own content.
     const [first, second] = published.head.messageShards;
     const swapped: ChatHeadRecord = {
       ...published.head,
@@ -359,10 +339,7 @@ describe("chat assembly fails closed", () => {
   });
 
   it("refuses a verified part whose bytes do not decode as text", async () => {
-    // The renderer's `readText` is a FATAL `TextDecoder`, so a digest-valid
-    // shard holding invalid UTF-8 rejects instead of returning a string. That
-    // is a property of the stored bytes, not of the transfer: escaping as a
-    // rejection would tell the caller to retry an immutable object forever.
+    // The renderer's `readText` is a FATAL `TextDecoder`, so a digest-valid shard holding invalid UTF-8 rejects instead of returning a string.
     const bytes = published.bytesByPart.get(
       published.head.messageShards[0].sha256,
     );
@@ -413,12 +390,7 @@ describe("chat assembly fails closed", () => {
   });
 
   it("refuses a shard whose membership claims contradict its records", async () => {
-    // The bytes really are the ones the head named - content addressing
-    // passes - but the head's 1.1 cut-plan claims describe a different
-    // partition. Reading on would hand callers a plan the shard does not
-    // implement; a publisher extending the head independently re-verifies
-    // every claim against its own op log, so this is the read/restore-time
-    // detection of the same lie.
+    // The bytes really are the ones the head named - content addressing passes - but the head's 1.1 cut-plan claims describe a different partition.
     const honest = published.head.messageShards[0];
     const lies = [
       { ...honest, recordCount: (honest.recordCount ?? 0) + 1 },
@@ -467,16 +439,6 @@ describe("chat assembly fails closed", () => {
   });
 
   it("refuses an empty graduated section - the impossible graduation", async () => {
-    // The exact shape the review reproduced: a head whose events have
-    // graduated, a non-empty `eventShards` list, and a correctly hashed
-    // `section: "events"` shard whose `events` array is empty. Every integrity
-    // check passes - the bytes really are the ones the head named - so nothing
-    // but the shard schema can catch it, and before the fixup it assembled as
-    // `{status: "ok"}` with an empty event log.
-    //
-    // Forged through `publishRawShard`: the registered schema now refuses to
-    // build one, which is the fix, but a buggy writer can still upload the
-    // bytes.
     const empty = publishRawShard({
       schemaVersion: { major: 1, minor: 0 },
       chatId: CHAT_ID,
@@ -533,10 +495,6 @@ describe("chat assembly fails closed", () => {
   });
 
   it("reports the HEAD-earliest failure when several parts fail together", async () => {
-    // Both parts are bad and both settle in the same pass, so the failure the
-    // caller sees is decided by the head's order rather than by the network's.
-    // (That determinism only extends to failures already known when the read
-    // ends - see the note in `assembly.ts`.)
     const tampered: ChatHeadRecord = {
       ...published.head,
       messageShards: published.head.messageShards.map((part) => ({
@@ -573,14 +531,7 @@ describe("chat assembly fails closed", () => {
 
 /**
  * A known failure must not wait on a sibling that has not settled.
- *
- * With a p99 chat's fan-out this is the whole latency budget: under the earlier
- * `allSettled` construction one stalled request became the bound for EVERY
- * outcome, including a transport failure the assembler already knew about.
- *
- * Both tests race the read against a macrotask. A never-settling fetch means
- * the assertion can only pass by ending the read without it, so a regression
- * here times the suite out rather than passing quietly.
+ * A never-settling fetch means the assertion can only pass by ending the read without it, so a regression here times the suite out rather than passing quietly.
  */
 describe("chat assembly does not wait on unsettled siblings", () => {
   const published = publishChat({
@@ -641,9 +592,8 @@ describe("chat assembly does not wait on unsettled siblings", () => {
   });
 
   it("still waits for every part when none of them fails", async () => {
-    // The complement: prompt FAILURE must not have become prompt SUCCESS. A
-    // reader that stopped waiting for healthy parts would assemble a truncated
-    // chat, which is the exact failure the fail-closed rule exists to prevent.
+    // The complement: prompt FAILURE must not have become prompt SUCCESS.
+    // A reader that stopped waiting for healthy parts would assemble a truncated chat, which is the exact failure the fail-closed rule exists to prevent.
     let releaseLast: (staged: StagedChatPart) => void = () => {};
     const read = assembleChat({
       head: published.head,

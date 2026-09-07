@@ -39,10 +39,6 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-// The one fork this file exercises: a coarse pointer picks the compact chrome
-// and the sheet-shaped dialog inside the single tile. Touch INPUT is not a
-// fork - the controller translates a finger on any pointer grade, and
-// `browser-peek-tile-touch.test.tsx` covers it.
 vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
   useCoarsePointer: () => true,
 }));
@@ -141,11 +137,7 @@ function presentLiveFrame(
 }
 
 /**
- * Focusing the overlay button re-focuses the hidden IME input (same relay the
- * desktop tile uses), which arms - identical handshake for both viewers, so
- * this mirrors `browser-peek-tile-chrome.test.tsx`'s `armPeekTile` rather
- * than simulating a tap for it (a tap before the arm epoch exists is
- * buffered pending a matching up, so it would not resolve here anyway).
+ * Focusing the overlay button re-focuses the hidden IME input (same relay the desktop tile uses), which arms - identical handshake for both viewers, so this mirrors `browser-peek-tile-chrome.test.tsx`'s `armPeekTile` rather than simulating a tap for it (a tap before the arm epoch exists is buffered pending a matching up, so it would not resolve here anyway).
  */
 function armPeekTile(stream: FakeStreamSession): void {
   fireEvent.focus(overlayButton());

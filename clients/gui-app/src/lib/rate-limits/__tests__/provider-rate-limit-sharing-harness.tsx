@@ -1,15 +1,5 @@
 /**
- * Shared wiring for the two "does a cache-level refresh trigger flip a
- * mounted observer's isFetching" integration tests (the ephemeral queue's
- * `enqueueRateLimitFetch` and the httpFetch lane's `invalidateQueries`).
- * Not a `.test` file - vitest only collects `*.test.ts(x)`.
- *
- * Builds the production QueryClient configuration (`createAppQueryClient` -
- * the global staleTime default changes fetch semantics, see that factory's
- * doc comment) around a real `HostClient` + `MockHostMessenger` whose
- * `host.getRateLimitUsage` handler resolves the FIRST call immediately (the
- * observer's initial mount fetch) and blocks every later call until the test
- * releases it via `resolvePendingResponse`.
+ * Shared wiring for the two "does a cache-level refresh trigger flip a mounted observer's isFetching" integration tests (the ephemeral queue's `enqueueRateLimitFetch` and the httpFetch lane's `invalidateQueries`).
  */
 import type { ReactNode } from "react";
 import type { QueryClient } from "@tanstack/react-query";

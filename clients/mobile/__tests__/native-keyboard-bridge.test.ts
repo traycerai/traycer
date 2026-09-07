@@ -1,19 +1,6 @@
 /**
  * Native keyboard bridge properties.
- *
- * The Keyboard plugin is faked at the package boundary and gui-app's state
- * setter is mocked, so these drive the four plugin events directly and read
- * back the two things the bridge publishes: the `--keyboard-inset` custom
- * property the shell's safe-height tokens subtract, and gui-app's
- * open/transitioning state.
- *
- * The central claim is the one the shipped bug broke - the inset returns to 0
- * whenever the keyboard is closed, in every event order iOS delivers. A
- * programmatic dismissal (`use-drag-to-dismiss-keyboard` blurs the field, which
- * is how every dismissal in this app happens) makes iOS send the hide pair in
- * reverse, and while the reset lived in the `keyboardWillHide` handler the
- * stale-event guard there skipped it - stranding the whole `h-safe-dvh` shell
- * a keyboard's height short of the screen.
+ * The central claim is the one the shipped bug broke - the inset returns to 0 whenever the keyboard is closed, in every event order iOS delivers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginListenerHandle } from "@capacitor/core";
@@ -31,7 +18,6 @@ type HideEvent = "keyboardWillHide" | "keyboardDidHide";
 
 const KEYBOARD_PX = 336;
 
-/** Records the bridge's listeners so a test can deliver events in any order. */
 class FakeKeyboard {
   private readonly listeners = new Map<
     ShowEvent | HideEvent,
@@ -165,9 +151,6 @@ describe("startNativeKeyboardBridge", () => {
     plugin.hide("keyboardWillHide");
 
     // The show's own did- event, arriving after the hide superseded it.
-    // Honouring it would cancel the close watchdog and republish the old
-    // height, and with no didHide behind it the inset would stay there - the
-    // same stranding this module exists to prevent, mirrored onto the show side.
     plugin.show("keyboardDidShow", KEYBOARD_PX);
     vi.advanceTimersByTime(700);
 

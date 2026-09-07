@@ -39,19 +39,8 @@ interface SweepCandidatesPayload {
   readonly holdersByPath: ReadonlyMap<string, PathHolderInventory>;
 }
 
-/**
- * Why a row is not default-checked (or not checkable at all). `shared` and
- * `not-landed` rows stay CHECKABLE - the user may consciously sweep them -
- * while `checking` (facts unverified) rows are disabled. `in-use` rows
- * stay checkable-unchecked: selecting them is a deliberate stop-and-sweep.
- */
 export type EpicSweepRowNote = "shared" | "in-use" | "checking" | "not-landed";
 
-/**
- * One task-owned worktree in the Sweep dialog. EVERY worktree the Task owns
- * is listed (Settings-grade detail rides on `entry`); only the proven-safe
- * subset starts checked.
- */
 export interface EpicSweepWorktreeRow {
   readonly entry: WorktreeHostEntryV14;
   readonly tier: WorktreeTier;
@@ -60,17 +49,9 @@ export interface EpicSweepWorktreeRow {
   /** Disabled rows can never be swept from this dialog. */
   readonly disabled: boolean;
   readonly note: EpicSweepRowNote | null;
-  /**
-   * T2 holder inventory from `worktree.listHolders`. Empty for idle rows
-   * and for the unknown fallback (unsupported host / failed read /
-   * inUse-with-empty race).
-   */
+  /** T2 holder inventory from `worktree.listHolders`. */
   readonly holders: readonly WorktreeBusyHolder[];
-  /**
-   * `none` for idle rows. In-use rows start `loading` (not selectable)
-   * until listHolders resolves or degrades to `unknown`. Loading is
-   * never treated as empty.
-   */
+  /** Loading is never treated as empty. */
   readonly holdersStatus: "none" | "loading" | "ready" | "unknown";
 }
 
@@ -85,68 +66,15 @@ export interface EpicSweepWorktreeCandidatesResult {
   readonly checkedAt: number | null;
   /** The selected host is ready for another forced proof. */
   readonly canRefresh: boolean;
-  /**
-   * Re-runs the same bounded, forced proof used when the dialog opens and
-   * resolves with the freshly classified rows (not a stale render closure).
-   */
+  /** Re-runs the same bounded, forced proof used when the dialog opens and resolves with the freshly classified rows (not a stale render closure). */
   readonly refresh: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
-  /**
-   * The proof a Remove click runs before anything destructive. Same fetch as
-   * `refresh`, but through the query CACHE rather than this hook's observer,
-   * so it joins a refresh already in flight and keeps running after the
-   * dialog unmounts - the flow never holds the user in a modal for it.
-   */
+  /** Same fetch as `refresh`, but through the query CACHE rather than this hook's observer, so it joins a refresh already in flight and keeps running after the dialog unmounts - the flow never holds the user in a modal for it. */
   readonly prove: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
 }
 
 const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
 
-/**
- * Derives the Sweep rows for one Task from an ACT-TIME proof, not the cached
- * listing. The host serves resolved rows indefinitely with `forceRefresh:
- * false` (steady-state liveness is manual-refresh-owned), so a worktree that
- * was clean+Landed when last probed but was edited from an external terminal
- * since would still read "proven safe" from cache — and `worktree.deleteByPath`
- * force-removes a dirty tree (its busy-check only covers Traycer-registered
- * owners). The dialog therefore re-proves before offering: a cheap un-probed
- * walk finds the Task's paths, then ONE selection-mode `listAllForHost` with
- * `activityPaths` = those paths and `forceRefresh: true` re-derives the disk
- * facts (uncommitted count, branch) and merge proofs — bounded by the Task's
- * worktree count, never the fleet.
- *
- * Takes the SELECTED SET of Tasks, not one Task, so History's multi-select can
- * sweep in bulk. The returned rows are the amalgamation - every worktree owned
- * by any selected Task, listed once - and "shared" is judged against the whole
- * selection: a worktree owned by two Tasks is only shared while at least one of
- * its owners is unselected, so selecting both satisfies the constraint and the
- * row becomes an ordinary candidate.
- *
- * EVERY owned worktree is returned, classified: green + exclusive + not busy
- * rows default-checked, everything else unchecked with its reason (still
- * checkable except unverified rows; in-use is checkable-unchecked), so the
- * dialog shows the full worktree picture rather than a silently pre-filtered
- * subset.
- *
- * Known residual: PR facts are read non-blocking on the host, so the first
- * forced probe after an EXTERNAL merge can still serve the stale `open` fact
- * while the background `gh` re-probe lands — a just-landed row then starts
- * unchecked until the user refreshes or reopens the dialog. Staleness here
- * only ever under-claims, never false-greens.
- *
- * Cached enrichment rows are presentation-only while that proof is in flight:
- * they let the dialog paint immediately on first open and retain its previous
- * snapshot on re-open, but the caller must keep selection and Sweep disabled
- * until `isPending` and `isError` are both false. Pass `null` (or an empty
- * selection) while the dialog is closed to disable the query. The host-side
- * busy-check on `worktree.deleteByPath` remains the authoritative backstop.
- */
-/**
- * Sweep-candidate rows against a caller-resolved client. The proof (and the
- * sweep it authorises, whose host id is frozen from it) is per HOST: the
- * Epics list passes the app-wide client; the Epic panel's sweep action
- * passes the Epic session's, so an Epic projected from host A is never
- * offered - or swept of - host B's worktrees.
- */
+/** Act-time proof on this client's host, not a cached listing. Stale PR facts only under-claim, never false-green. */
 export function useEpicSweepWorktreeCandidatesForClient(
   client: HostClient<HostRpcRegistry> | null,
   epicIds: ReadonlyArray<string> | null,
@@ -243,12 +171,7 @@ export function useEpicSweepWorktreeCandidatesForClient(
   };
 }
 
-/**
- * The ONE place the candidates query's identity and fetch are written, so the
- * hook's observer and the click-time proof (`proveSweepCandidates`) can never
- * drift onto different keys - which is what lets the proof join a refresh
- * already in flight instead of racing it.
- */
+/** The ONE place the candidates query's identity and fetch are written, so the hook's observer and the click-time proof (`proveSweepCandidates`) can never drift onto different keys - which is what lets the proof join a refresh already in flight instead of racing it. */
 function sweepCandidatesQueryOptions(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
@@ -316,15 +239,7 @@ async function fetchSweepCandidatesPayload(
 }
 
 /**
- * The forced proof a Remove click runs, against the query CACHE.
- *
- * `fetchQuery` at `staleTime: 0` always fetches, and de-duplicates onto a
- * fetch already in flight for the same key - so a click during a refresh
- * waits for that refresh rather than starting a second walk. It also runs
- * with no observer at all, which is what lets the dialog be closed, or the
- * surface it sits on be left, while the proof is still answering. Failures
- * are toasted here (the caller's chain has no component to toast from) and
- * rethrown so the chain stops.
+ * `fetchQuery` at `staleTime: 0` de-dupes onto an in-flight refresh and runs with no observer, so the dialog can close while the proof answers. Toast and rethrow failures here.
  */
 async function proveSweepCandidates(input: {
   readonly queryClient: QueryClient;
@@ -371,12 +286,7 @@ function classifyOwnedSweepRows(
   );
 }
 
-/**
- * Folds the already-mounted task provenance queries into a first-paint
- * snapshot for Sweep. The dedicated forced-proof key intentionally sits
- * outside this method scope, so reading the cache is the bridge between the
- * attention/event enrichment leg and the act-time safety check.
- */
+/** Folds the already-mounted task provenance queries into a first-paint snapshot for Sweep. */
 function cachedTaskWorktrees(
   queryClient: QueryClient,
   hostId: string,

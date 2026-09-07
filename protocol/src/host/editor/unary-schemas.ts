@@ -3,12 +3,7 @@ import { z } from "zod";
 type EditorDefinition = {
   readonly id: string;
   readonly label: string;
-  /**
-   * URL-scheme handler the editor registers automatically on install (e.g.
-   * `vscode://`). Opening `<scheme>://file/<absolute-path>` through the OS
-   * opener launches the editor without depending on its (opt-in) shell CLI
-   * being installed on the host's PATH.
-   */
+  /** URL-scheme handler the editor registers automatically on install (e.g. */
   readonly urlScheme: string;
 };
 
@@ -32,9 +27,7 @@ export function isEditorId(value: unknown): value is EditorId {
 }
 
 /**
- * The 1.0 `editorId` enum, spelled out as literals: `EDITORS` is a live
- * registry that grows and a versioned request schema may not. `satisfies`
- * keeps every id here a real registry entry.
+ * The 1.0 `editorId` enum, spelled out as literals: `EDITORS` is a live registry that grows and a versioned request schema may not.
  */
 const V10_EDITOR_IDS = [
   "vscode",
@@ -52,19 +45,8 @@ export const openPathsRequestSchema = z.object({
 });
 
 /**
- * Accepted from 1.1: every `EDITORS` id, plus two targets that are
- * deliberately not registry entries - they have no URL scheme and must never
- * appear in the default-editor picker, which iterates `EDITORS`:
- *
- * - `"system"` opens a path with the OS default application instead of an
- *   editor deep link - the target for formats an editor renders poorly (PDFs).
- * - `"finder"` shows a path in the host's file manager: a directory opens as a
- *   window, a file is revealed selected inside its parent. macOS only; the
- *   host rejects it on any other platform.
- *
- * A client emits one of these, or an `EDITORS` id outside the frozen 1.0 set,
- * only once the handshake negotiated `editor.openPaths >= 1.1` - and
- * `"finder"` only when that host is the local Mac.
+ * Accepted from 1.1: every `EDITORS` id, plus two targets that are deliberately not registry entries - they have no URL scheme and must never appear in the default-editor picker, which iterates `EDITORS`
+ * A client emits one of these, or an `EDITORS` id outside the frozen 1.0 set, only once the handshake negotiated `editor.openPaths >= 1.1` - and `"finder"` only when that host is the local Mac.
  */
 export const openPathsTargetSchema = editorIdSchema
   .or(z.literal("system"))

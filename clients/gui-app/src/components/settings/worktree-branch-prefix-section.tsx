@@ -26,68 +26,34 @@ export function WorktreeBranchPrefixSection(): ReactNode {
   const setWorktreeBranchPrefix = useSettingsStore(
     (s) => s.setWorktreeBranchPrefix,
   );
-  // The draft is the single source of truth while editing - initialized from
-  // the store only on mount, and never re-derived from it mid-edit (autosave
-  // writing back to `saved` must never echo into the draft mid-typing: no
-  // cursor jumps, no reverted characters). It's adopted from `saved` below
-  // only once there is no local edit in flight, so an idle external write
-  // (another window, rehydration, a reset triggered elsewhere) still reaches
-  // this field instead of leaving it stuck on a stale value. A committed
-  // draft is normalized to the trimmed saved value by that same adoption
-  // (rather than kept raw) - comparing raw draft text against the trimmed
-  // store value can never converge otherwise.
+  // A committed draft is normalized to the trimmed saved value by that same adoption (rather than kept raw) -
+  // comparing raw draft text against the trimmed store value can never converge otherwise.
   const [draft, setDraft] = useState(saved);
   const [error, setError] = useState<string | null>(null);
-  // True from the first keystroke of an edit until it resolves (a debounce
-  // commits, blur/Enter flushes, or reset runs) - tracked explicitly rather
-  // than inferred from string equality, since a trimmed commit means the
-  // draft and the store can permanently differ by whitespace alone. A
-  // pending debounce timer only ever exists while this is true (both are
-  // set together in `onChange` and cleared together on commit/reset), so it
-  // alone is enough to gate adoption below.
+  // A pending debounce timer only ever exists while this is true (both are set together in `onChange` and
+  // cleared together on commit/reset), so it alone is enough to gate adoption below.
   const [hasLocalEdit, setHasLocalEdit] = useState(false);
-  // Transient post-save confirmation (Flow 4: spinner while saving, a brief
-  // check on success, then quiet chrome) - no permanently reserved status
-  // line. Set for the current user's own resolved edits/reset; an adopted
-  // EXTERNAL write clears it below (in the render-phase adoption block)
-  // rather than letting it linger over a value it never described - unless
-  // the adoption is just the same commit's own whitespace-trim convergence,
-  // which must keep flashing (see `lastFlashedValue`).
+  // Set for the current user's own resolved edits/reset; an adopted external write clears it below (in the
+  // render-phase adoption block) rather than letting it linger over a value it never described.
   const [justSaved, setJustSaved] = useState(false);
-  // The value most recently passed to `flashSaved` - lets the render-phase
-  // adoption block (below) tell apart its OWN commit's normalization
-  // convergence (adopted value === what was just flashed - keep the flash)
-  // from a later, genuinely external write arriving while that flash is
-  // still showing (adopted value differs - clear it). State, not a ref: the
-  // render-phase adoption block below reads it while rendering, and refs
-  // can't be read during render.
+  // State, not a ref: the render-phase adoption block below reads it while rendering, and refs can't be read
+  // during render.
   const [lastFlashedValue, setLastFlashedValue] = useState<string | null>(null);
   const draftRef = useRef(draft);
-  // `commitIfValid` is a fresh closure every render, but the debounce timer
-  // below is scheduled once (in `onChange`) and keeps calling that same
-  // stale closure - so reading the `hasLocalEdit` state variable inside it
-  // would always see the value from the render before the edit started
-  // (before `setHasLocalEdit(true)` had taken effect), never the current
-  // one. Mirrored directly at every write site instead, so the debounce
-  // path sees the same up-to-date value the blur/reset paths do.
+  // `commitIfValid` is a fresh closure every render, but the debounce timer below is scheduled once (in
+  // `onChange`) and keeps calling that same stale closure.
   const hasLocalEditRef = useRef(false);
   const debounceRef = useRef<number | null>(null);
   const savedFlashRef = useRef<number | null>(null);
-  // A fresh example suffix per mount, held stable while typing so only the
-  // prefix part of the live example changes (Flow 4: "the draft remains
-  // stable while they edit" applies to the example too - a suffix that
-  // re-rolled on every keystroke would be distracting noise, not signal).
+  // A fresh example suffix per mount, held stable while typing so only the prefix part of the live example
+  // changes (Flow 4: "the draft remains stable while they edit" applies to the example too.
   const [previewSuffix] = useState(() => pickFriendlyBranchSuffix());
   const errorId = useId();
-  // Reset unmounts once the draft returns to the default (see `showReset`
-  // below) - focus the adjacent Input so it doesn't silently drop to
-  // `<body>` (mirrors `host-settings-summary-card.tsx`'s focus-restoration
-  // convention for a control that disappears after the action it triggers).
+  // Reset unmounts once the draft returns to the default (see `showReset` below).
   const prefixInputRef = useRef<HTMLInputElement>(null);
 
-  // Adjusted during render (React's documented way to sync state off a
-  // changing external value) rather than in an Effect, so there's no extra
-  // render/flash between the store update and the field reflecting it.
+  // Adjusted during render (React's documented way to sync state off a changing external value) rather than in
+  // an Effect, so there's no extra render/flash between the store update and the field reflecting it.
   if (!hasLocalEdit && saved !== draft) {
     setDraft(saved);
     setError(null);
@@ -96,9 +62,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
     }
   }
 
-  // Refs can't be written during render (see above) - mirror `draft` into
-  // `draftRef` here so the debounce timeout and the unmount cleanup below
-  // always read the latest value without a stale closure.
+  // Refs can't be written during render (see above) - mirror `draft` into `draftRef` here so the debounce
+  // timeout and the unmount cleanup below always read the latest value without a stale closure.
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
@@ -110,10 +75,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
       }
       if (debounceRef.current === null) return;
       window.clearTimeout(debounceRef.current);
-      // React doesn't guarantee a blur before unmount (Escape, a
-      // programmatic panel switch). Persist a still-pending valid draft
-      // directly through the store - the component is gone, so this must
-      // not call any local state setters.
+      // Persist a still-pending valid draft directly through the store - the component is gone, so this must not
+      // call any local state setters.
       const trimmed = draftRef.current.trim();
       if (worktreeBranchPrefixError(trimmed) !== null) return;
       if (trimmed !== useSettingsStore.getState().worktreeBranchPrefix) {
@@ -144,9 +107,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
     }, SAVED_FLASH_MS);
   };
 
-  // Reads the store imperatively (not the reactive `saved` closed over at
-  // schedule time) so a debounce that fires after an external change - the
-  // reset button, a rehydrate - still compares against the current value.
+  // Reads the store imperatively (not the reactive `saved` closed over at schedule time) so a debounce that
+  // fires after an external change - the reset button, a rehydrate - still compares against the current value.
   const commitIfValid = (value: string): void => {
     const trimmed = value.trim();
     const validationError = worktreeBranchPrefixError(trimmed);
@@ -154,11 +116,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
       setError(validationError);
       return;
     }
-    // Captured before clearing: a normalization-only resolution (the
-    // trimmed draft already equals the store, e.g. re-typing whitespace
-    // around an unchanged value) still resolves a real pending edit and
-    // must flash success - but an already-clean field's flush (blur with no
-    // edit at all) must stay quiet.
+    // Captured before clearing: a normalization-only resolution (the trimmed draft already equals the store, e.g.
+    // re-typing whitespace around an unchanged value) still resolves a real pending edit and must flash success.
     const hadLocalEdit = hasLocalEditRef.current;
     setError(null);
     setHasLocalEdit(false);
@@ -174,10 +133,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
     commitIfValid(draftRef.current);
   };
 
-  // Driven by the ACTIVE DRAFT (not `saved`) so Reset stays available to
-  // cancel a pending or invalid in-progress edit even when nothing has been
-  // committed yet (saved is still the default) - otherwise a draft like
-  // "-wip/" has no way back to the default short of manually clearing it.
+  // Driven by the active draft (not `saved`) so Reset stays available to cancel a pending or invalid in-progress
+  // edit even when nothing has been committed yet (saved is still the default).
   const showReset = draft !== DEFAULT_WORKTREE_BRANCH_PREFIX;
   const previewPrefix = draft.trim();
   const previewBranch =
@@ -199,28 +156,16 @@ export function WorktreeBranchPrefixSection(): ReactNode {
               Default branch prefix
             </span>
           </div>
-          {/* One line beside the input from `md` up; below it the row is a
-              stack and the sentence is free to use as many lines as it needs.
-              Scoped as `md:truncate` rather than an override of `truncate`,
-              so which rule wins never depends on utility source order. */}
+          {/* Scoped as `md:truncate` rather than an override of `truncate`, so which rule wins never depends on utility
+             source order. */}
           <p className="mt-0.5 text-ui-xs text-muted-foreground md:truncate">
             New branches start like{" "}
             <span className="font-medium text-foreground">{previewBranch}</span>{" "}
             unless a repository sets its own prefix in Environment
           </p>
         </div>
-        {/* Below `md` this cluster has wrapped onto a line of its own, so it
-            spans that line and the input flexes into it rather than keeping
-            its desktop width with dead space beside it.
-
-            Source order is the only order, at every width. The reset slot
-            leads, so the field is inset by the width the slot reserves - that
-            reservation is what stops the input jumping when the button appears
-            mid-edit, and it is a fixed, quiet inset rather than a gap that
-            opens and closes under the caret. Reordering the two below `md`
-            would close the inset and break focus order instead: the slot holds
-            a labelled button, so the eye would reach the field first while the
-            keyboard and a screen reader still reached Reset first. */}
+        {/* Below `md` this cluster has wrapped onto a line of its own, so it spans that line and the input flexes into
+           it rather than keeping its desktop width with dead space beside it. */}
         <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5 max-md:w-full">
           <div className="flex size-7 shrink-0 items-center justify-center">
             {showReset ? (
@@ -244,8 +189,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
                     hasLocalEditRef.current = false;
                     setWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
                     flashSaved(DEFAULT_WORKTREE_BRANCH_PREFIX);
-                    // The button itself unmounts once `showReset` goes false
-                    // (draft is now the default) - move focus to the
+                    // The button itself unmounts once `showReset` goes false (draft is now the default) - move focus to the
                     // still-mounted Input rather than let it drop to <body>.
                     prefixInputRef.current?.focus();
                   }}
@@ -310,12 +254,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
   );
 }
 
-// Visually hidden, screen-reader-only counterpart to the icon-only visual
-// indicator above (which stays `aria-hidden`) - the approved design has no
-// permanently reserved visual status text, but a saving/saved transition
-// still needs to reach assistive tech. Mirrors the `sr-only` +
-// `role="status"` + `aria-live="polite"` convention already used for
-// `PrimaryChangeLiveRegion` in this same feature area.
+// Visually hidden, screen-reader-only counterpart to the icon-only visual indicator above (which stays
+// `aria-hidden`).
 function WorktreeBranchPrefixLiveStatus(props: {
   readonly saving: boolean;
   readonly justSaved: boolean;

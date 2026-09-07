@@ -14,7 +14,6 @@ export interface ProfileDropdownUsageEntry {
   readonly fetchEligible: boolean;
   readonly refreshStatus: ProfileUsageRefreshStatus;
   readonly refresh: () => Promise<void>;
-  /** Non-forced automatic check - see `ProfileUsageComparisonEntry`. */
   readonly ensureFresh: () => Promise<void>;
 }
 
@@ -23,12 +22,8 @@ export interface ProfileDropdownUsagePresentation {
   readonly entries: ReadonlyMap<string | null, ProfileDropdownUsageEntry>;
 }
 
-/**
- * The comparison hook observes a process-wide queue, so its `queued` state is
- * only evidence that some ephemeral refresh is waiting. The picker adds the
- * local interaction fact that this specific profile initiated a refresh before
- * exposing that state to the sidecar.
- */
+/** The comparison hook observes a process-wide queue, so its `queued` state is only evidence that some
+ * ephemeral refresh is waiting. */
 export function scopeProfileUsageRefreshStatus(
   observedStatus: ProfileUsageRefreshStatus,
   refreshPending: boolean,
@@ -70,12 +65,8 @@ function envelopeFromDetail(
   }
 }
 
-/**
- * Adapts T2's cache/refresh state to T1's canonical picker projection. The
- * adapter deliberately carries no independent percentage or severity rules:
- * live-window selection, most-constrained choice, and semantic classification
- * all remain owned by `projectProfileUsage`.
- */
+/** The adapter deliberately carries no independent percentage or severity rules: live-window selection,
+ * most-constrained choice, and semantic classification all remain owned by `projectProfileUsage`. */
 export function projectComparisonEntry(
   entry: ProfileUsageComparisonEntry,
   now: number,

@@ -1,36 +1,6 @@
 /**
- * Project markdown down to the prose a reader would actually see, for one-line
- * previews and snippets.
- *
- * A clamped preview that shows `## Heading` or `[docs](https://…/very/long)` is
- * showing the reader the source, not the message - the markers eat the budget
- * and the URL can consume the whole line. `formatSingleLine` cannot help: it
- * only folds whitespace, so it faithfully preserves every `#`, backtick and
- * bracket.
- *
- * SO THIS IS A PARSE, not a regex strip. The same `marked` lexer the renderer
- * uses decides what is emphasis and what is a literal asterisk, which fences are
- * code and which text is inside a link label - a pattern-based stripper gets all
- * of those wrong on exactly the inputs agents produce.
- *
- * WHAT SURVIVES: heading text without its `#`, emphasis and link LABELS without
- * markers or URLs, inline-code text, image alt text, list items, table cells.
- * Prose, labels and alt text also get their HTML character references decoded,
- * so a preview and its own expansion agree on what the message says.
- * WHAT DOES NOT: fenced code bodies (a `mermaid` fence becomes `Diagram`, any
- * other fence `Code`, because a preview of graph syntax tells the reader
- * nothing), and raw HTML, which is dropped entirely.
- *
- * This is a LOSSY, one-way projection for display only. Never feed the result
- * back into a renderer, and never key a decision on it - the collapse predicate
- * deliberately measures the ORIGINAL source, because that is what expanding
- * actually reveals.
- *
- * The walk is over `unknown` rather than `marked`'s `Token` union on purpose.
- * That union includes a `Generic` member carrying an `[index: string]: any`
- * signature, so narrowing on `type` still leaves every field `any` - the types
- * would look precise while checking nothing. Reading each field through a
- * validating accessor is honest about what the lexer actually guarantees.
+ * Lossy markdown-to-prose for one-line previews.
+ * Never feed the result back into a renderer or key a decision on it.
  */
 import { marked } from "marked";
 
@@ -41,16 +11,8 @@ const MERMAID_LABEL = "Diagram";
 const CODE_LABEL = "Code";
 
 /**
- * HTML character references survive the lexer: a `text` token for `R&amp;D`
- * carries `R&amp;D`, not `R&D`. The expanded body decodes them (react-markdown
- * does it downstream), so without this a preview and its own expansion disagree
- * about what the message says.
- *
- * A SMALL TABLE, deliberately. `marked` exports no unescape helper and the repo
- * has no entity decoder to reuse - only an encoder in `composer-clipboard` - and
- * the alternative, round-tripping through `innerHTML`, turns a display helper
- * into an HTML sink. An unknown name is left exactly as written rather than
- * guessed at or dropped.
+ * HTML character references survive the lexer: a `text` token for `R&amp;D` carries `R&amp;D`, not `R&D`.
+ * The expanded body decodes them (react-markdown does it downstream), so without this a preview and its own expansion disagree about what the message says.
  */
 const NAMED_CHARACTER_REFERENCES: Readonly<Record<string, string | undefined>> =
   {
@@ -73,9 +35,8 @@ const CHARACTER_REFERENCE =
   /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]*));/g;
 
 /**
- * ONE pass over the string, not a chain of replaces. `&amp;lt;` must decode to
- * the literal text `&lt;` - decoding `&amp;` first and then re-scanning would
- * turn it into `<`, silently rewriting what the author wrote.
+ * ONE pass over the string, not a chain of replaces.
+ * `&amp;lt;` must decode to the literal text `&lt;` - decoding `&amp;` first and then re-scanning would turn it into `<`, silently rewriting what the author wrote.
  */
 function decodeCharacterReferences(text: string): string {
   if (!text.includes("&")) return text;
@@ -113,13 +74,7 @@ function codePointText(code: number, fallback: string): string {
   return String.fromCodePoint(code);
 }
 
-/**
- * Projection is pure in its input, and the same text is re-projected constantly
- * - every row re-renders on any cursor move, and a virtualized list re-mounts
- * rows as it scrolls, so a `useMemo` in the row would miss most of the reuse.
- * Bounded because an epic's log is unbounded; oldest-first eviction is enough
- * for a cache whose whole job is to survive a scroll.
- */
+/** Projection is pure in its input, and the same text is re-projected constantly */
 const CACHE_LIMIT = 500;
 const cache = new Map<string, string>();
 
@@ -146,9 +101,7 @@ function readString(node: unknown, key: string): string {
 }
 
 /**
- * The return annotation is load-bearing: `Array.isArray` narrows `unknown` to
- * `any[]`, so without a declared `ReadonlyArray<unknown>` here the `any` escapes
- * into every caller's inferred type.
+ * The return annotation is load-bearing: `Array.isArray` narrows `unknown` to `any[]`, so without a declared `ReadonlyArray<unknown>` here the `any` escapes into every caller's inferred type.
  */
 function toList(value: unknown): ReadonlyArray<unknown> {
   return Array.isArray(value) ? value : [];
@@ -194,9 +147,8 @@ function blockText(token: unknown): string {
 }
 
 /**
- * A fence is summarised, never previewed. `mermaid` earns its own word because
- * the panel renders it as a diagram when expanded, so "Code" would misdescribe
- * what is behind the fold.
+ * A fence is summarised, never previewed.
+ * `mermaid` earns its own word because the panel renders it as a diagram when expanded, so "Code" would misdescribe what is behind the fold.
  */
 function codeLabel(token: unknown): string {
   const lang = readString(token, "lang").trim().toLowerCase();
@@ -233,9 +185,8 @@ function inlineTokenText(token: unknown): string {
     case "em":
     case "del":
       return inlineText(readList(token, "tokens"));
-    // LITERAL, both of them. CommonMark treats a character reference inside a
-    // code span as text, so `` `&amp;` `` really does read `&amp;` - and an
-    // `escape` token's text is already the resolved character.
+    // LITERAL, both of them.
+    // CommonMark treats a character reference inside a code span as text, so `` `&amp;` `` really does read `&amp;` - and an `escape` token's text is already the resolved character.
     case "codespan":
     case "escape":
       return readString(token, "text");
@@ -252,8 +203,7 @@ function inlineTokenText(token: unknown): string {
 }
 
 /**
- * A `text` token carries children only when it contains inline markup; when it
- * does, they are the authority, because `text` itself is the unparsed source.
+ * A `text` token carries children only when it contains inline markup; when it does, they are the authority, because `text` itself is the unparsed source.
  */
 function textOrChildren(token: unknown): string {
   const children = readList(token, "tokens");

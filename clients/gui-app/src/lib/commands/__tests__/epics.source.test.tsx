@@ -240,10 +240,8 @@ describe("epicsSource", () => {
   });
 
   it("keeps a row history matched only by its worktree path visible", () => {
-    // A Traycer worktree directory is not the branch name - it carries a hash
-    // suffix - so this query reaches the row through `worktreePaths` alone.
-    // Without that keyword the task is fetched by the local arm and then
-    // hidden by cmdk.
+    // A Traycer worktree directory is not the branch name - it carries a hash suffix - so this query reaches the row through `worktreePaths` alone.
+    // Without that keyword the task is fetched by the local arm and then hidden by cmdk.
     const row = historyItem({
       epicId: "epic-path-row",
       title: "Some unrelated title",

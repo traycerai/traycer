@@ -23,11 +23,7 @@ import {
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
-/**
- * Openable node kinds in v1. Subset of `EpicNodeKind` - the sidebar may
- * expose other kinds (e.g. "workspace") as grouping nodes, but only
- * these resolve to a tab in the canvas.
- */
+/** Openable node kinds in v1. Subset of `EpicNodeKind` - the sidebar may expose other kinds (e.g. */
 export type OpenableEpicNodeKind = Extract<
   EpicNodeKind,
   "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review"
@@ -42,11 +38,7 @@ export const isOpenableEpicNodeKind = makeLiteralGuard<OpenableEpicNodeKind>({
   review: true,
 });
 
-/**
- * Openable kinds whose tab content is backed by a Y.Doc artifact record.
- * Terminals are the exception: a terminal tab is a renderer-local PTY
- * session, so it carries its own ref shape (`EpicTerminalRef`).
- */
+/** Openable kinds whose tab content is backed by a Y.Doc artifact record. */
 export type RecordBackedEpicNodeKind = Exclude<
   OpenableEpicNodeKind,
   "terminal"
@@ -63,9 +55,8 @@ export const isRecordBackedEpicNodeKind =
   });
 
 /**
- * Per-epic remembered PiP position and size. Persisted with the canvas
- * store so geometry survives GUI relaunch; everything else about the PiP
- * is in-memory and resets.
+ * Per-epic remembered PiP position and size. Persisted with the canvas store so geometry survives
+ * GUI relaunch; everything else about the PiP is in-memory and resets.
  */
 export interface EpicPipGeometry {
   readonly anchorX: number;
@@ -80,21 +71,8 @@ export type OpenableCanvasTabKind = OpenableEpicNodeKind | WorkspaceFileTabKind;
 export type TerminalTitleSource = "default" | "manual";
 
 /**
- * Reference to a record-backed epic artifact as it lives inside a tab.
- * Stored as a flat shape (not a full record) so canvas state stays stable
- * when the underlying Y.Doc projection evolves. Renderer-local terminal and
- * browser tabs use their own ref shapes instead.
- *
- * `hostId` is the host (== device) the artifact lives on. Per
- * CLAUDE.md, chat/terminal artifacts are bound to a host for life;
- * binding is set at open time and survives serialization. Tiles read it
- * via `useTabHostId()` instead of the reactive global.
- *
- * `instanceId` is the per-tab identity (a fresh uuid minted when the tab
- * is opened), decoupled from the content `id`. Tab identity - active /
- * preview selection, React keys, DnD, close / move - keys on
- * `instanceId`; dedup and rename stay keyed on the content `id`. Two tabs
- * may share an `id` (same content) while holding distinct `instanceId`s.
+ * Record-backed epic artifact in a tab. Bound to `hostId` for life (read via `useTabHostId()`).
+ * `instanceId` is per-tab identity; content `id` is for dedup/rename.
  */
 export interface EpicArtifactRef {
   readonly id: string;
@@ -103,9 +81,8 @@ export interface EpicArtifactRef {
   readonly name: string;
   readonly hostId: string;
   /**
-   * Optimistic terminal-agent placeholders can render the provider brand before
-   * the durable tui-agent record projects. The persisted record remains the
-   * authority once available.
+   * Optimistic terminal-agent placeholders can render the provider brand before the durable
+   * tui-agent record projects. The persisted record remains the authority once available.
    */
   readonly pendingTuiHarnessId?: TuiHarnessId;
 }
@@ -125,42 +102,13 @@ interface EpicTerminalRefBase {
   /** Local presentation fallback only; the capable host owns semantic title. */
   readonly name: string;
   readonly hostId: string;
-  /**
-   * Who created the session behind this tile. Absent (the overwhelming
-   * majority) and `"shell"` both mean the ordinary case: the tile owns the
-   * session and may `terminal.create` it if the host has no record - that is
-   * how a restart or a reopened epic gets its shell back.
-   *
-   * `"provider-login"` means the HOST created it, for a provider sign-in. That
-   * tile must never create: re-creating the id would spawn a bare shell with
-   * none of the provider's spawn env, so the user would face a prompt that
-   * cannot sign them in and no error saying why. It renders a retry affordance
-   * that re-runs the RPC instead.
-   *
-   * `"setup"` means the HOST created it for worktree setup. It is not an
-   * import candidate (import would persist the setup command as durable
-   * launch evidence). Unlike provider-login it may still recreate as an
-   * ordinary shell on the legacy tile path.
-   *
-   * Optional rather than required: making it required would force every
-   * existing terminal-ref construction site to state `origin: "shell"` for no
-   * behavioural gain, and absent already means the same thing.
-   */
+  /** Who created the session behind this tile. */
   readonly origin?: "shell" | "provider-login" | "setup";
-  /**
-   * Which provider's sign-in this terminal was opened for. Meaningful only
-   * alongside `origin: "provider-login"`, and required for the retry
-   * affordance to work at all: restarting a sign-in means calling
-   * `providers.startTerminalLogin` again, and only the tile knows which
-   * provider it is standing in for.
-   */
+  /** Which provider's sign-in this terminal was opened for. */
   readonly originProviderId?: ProviderId;
   /**
-   * Host-authoritative lifetime owner from `terminal.list@2.3`. `manager`
-   * means this presentation must stay on the live-session path and never
-   * enter `terminal.plain.importLegacy`. `registry` is a durable/plain
-   * shadow. Absent on pre-v2.3 persisted tiles and on refs that did not
-   * come from an updated-host list.
+   * Host-authoritative lifetime owner from `terminal.list@2.3`. `manager` means this presentation
+   * must stay on the live-session path and never enter `terminal.plain.importLegacy`.
    */
   readonly lifecycleOwner?: "registry" | "manager";
 }
@@ -185,10 +133,8 @@ export interface LegacyEpicTerminalRef extends EpicTerminalRefBase {
 }
 
 /**
- * Canonical local presentation pointer. Layout, order, selection and
- * `instanceId` remain renderer-local; terminal semantics resolve through the
- * lifetime `(hostId, id)` binding. `legacyFallback` is retained solely so a
- * downgraded host can keep the released behavior during the rollout window.
+ * Canonical local presentation pointer. Layout, order, selection and `instanceId` remain
+ * renderer-local; terminal semantics resolve through the lifetime `(hostId, id)` binding.
  */
 export interface HostEpicTerminalRef extends EpicTerminalRefBase {
   readonly authority: "host";
@@ -199,13 +145,7 @@ export interface HostEpicTerminalRef extends EpicTerminalRefBase {
   readonly cwd?: undefined;
 }
 
-/**
- * Presentation-only fallback for an authority discriminator this client does
- * not understand yet. `rawAuthority` is persisted verbatim so a downgrade or
- * later upgrade does not erase the future owner's marker. Current clients may
- * render the local presentation, but must never treat the rollback fields as
- * semantic import/bootstrap/mutation evidence.
- */
+/** Presentation-only fallback for an authority discriminator this client does not understand yet. */
 export interface UnsupportedEpicTerminalRef extends EpicTerminalRefBase {
   readonly authority: "unsupported";
   readonly rawAuthority: DesktopJsonValue;
@@ -250,13 +190,7 @@ export function isImportExemptEpicTerminalOrigin(
   return origin === "provider-login" || origin === "setup";
 }
 
-/**
- * Import exemption for one presentation. Wire `lifecycleOwner` is the
- * authority when present: a manager row stays manager-owned even with an
- * empty origin cache, and a registry row still imports even if a stale
- * setup/provider-login cache would otherwise mark it exempt. Absent
- * lifecycleOwner falls back to origin enrichment for pre-v2.3 tiles.
- */
+/** Import exemption for one presentation. */
 export function isImportExemptEpicTerminalRef(ref: EpicTerminalRef): boolean {
   if (ref.lifecycleOwner === "manager") return true;
   if (ref.lifecycleOwner === "registry") return false;
@@ -311,13 +245,7 @@ export function makeOpenableNodeRef(args: {
 }
 
 /**
- * Renderer-local file preview tab. The file is not an epic artifact, but the
- * tab still binds to the host that produced the tree at open time - per
- * CLAUDE.md, "tabs are bound to a host for life". Without the binding,
- * persisted tabs would silently re-resolve against the current default host
- * after a host swap or reload and may show wrong content / 404. `hostId`
- * (== `deviceId`) is the host the file lives on; `workspacePath` and
- * `filePath` are local to that host.
+ * Renderer-local file preview tab, bound to the host that produced the tree at open time.
  */
 export interface WorkspaceFileRef {
   readonly id: string;
@@ -338,15 +266,8 @@ export interface GitDiffTileViewState {
 }
 
 /**
- * The PR diff tile's OWN persisted view state, structurally separate from
- * {@link GitDiffTileViewState} on purpose. Entries are tagged canonical file
- * keys (`prLocalDiffFileKey`: `b:<token>` / `p:<path>`), not bare paths - and
- * the field is a DIFFERENT field, not a reinterpretation of
- * `collapsedFilePaths`, because no value-level rule can tell a legacy bare
- * entry for a file literally named `p:foo` apart from the tagged key of
- * `foo`. The PR tile's codec reads only this field and ignores any legacy
- * `collapsedFilePaths` in a stored record: a one-time collapse-state reset
- * for PR diff tiles, in exchange for keys that cannot alias.
+ * The PR diff tile's OWN persisted view state, structurally separate from {@link
+ * GitDiffTileViewState} on purpose.
  */
 export interface PrDiffTileViewState {
   readonly collapsedFileKeys: ReadonlyArray<string>;
@@ -370,43 +291,11 @@ export interface GitDiffRepositoryContext {
   readonly repositoryLabel: string;
 }
 
-/**
- * Snapshot diff payloads address a chat file-edit by reference (not by copying
- * content): the renderer re-reads the agent's `beforeContent`/`afterContent`
- * live from the chat session by `chatId`. Addressing modes:
- *
- * - `snapshot-segment`: one inline tool-call edit, keyed by explicit source
- *   block ids. A merged row carries every source block id, so resolution never
- *   depends on display-id encoding.
- * - `snapshot-cumulative`: the chat-level cumulative (first snapshot ->
- *   current) for a file, keyed by `filePath` - matches the accumulated-changes
- *   panel.
- * - `snapshot-cumulative-bundle`: the current accumulated-changes panel as one
- *   multi-file diff tile, keyed by the file paths that were listed when opened.
- * - `snapshot-hash`: a diff addressed directly by a before/after content-hash
- *   pair, independent of any `file_change` block. Used by artifact `index.md`
- *   edits, which carry their hashes on the `artifact_operation` block (artifacts
- *   have no `file_change` block), so the card / change row can open the same
- *   merged diff full-screen in the canvas.
- */
 export interface SnapshotSegmentDiffTilePayload {
   readonly kind: "snapshot-segment";
   readonly chatId: string;
   readonly sourceBlockIds: SnapshotSourceBlockIds;
   readonly filePath: string;
-  /**
-   * The endpoints the source blocks had when the tile was opened - the FALLBACK
-   * for when re-reading those blocks from the chat session no longer finds
-   * them, which on a windowed transcript is the ordinary state of any row old
-   * enough to have been evicted.
-   *
-   * Not part of the tile's identity (that stays `chatId` + `sourceBlockIds`),
-   * so two opens of the same edit still dedupe to one tile whatever their
-   * captured endpoints say.
-   *
-   * `null` for a tile persisted before this field existed. Those degrade
-   * exactly as every segment tile did: block lookup or nothing.
-   */
   readonly beforeHash: string | null;
   readonly afterHash: string | null;
 }
@@ -463,17 +352,7 @@ export interface SnapshotDiffTileRef {
   readonly view: GitDiffTileViewState;
 }
 
-/**
- * Read-only window on one managed command's log timeline.
- *
- * A pointer, not a copy: `id` IS the command id (so opening the same command
- * twice focuses the one window, via the canvas's content-id dedup) and
- * `hostId` is the host that owns it. Description, status and the notify flag
- * are deliberately absent - they are live state the owning chat's stream
- * answers, and a window restored days later must not render a description the
- * agent renamed or a status the shell left. `name` is the generic fallback
- * the tab strip shows only until the stream answers.
- */
+/** Read-only window on one managed command's log timeline. */
 export interface ManagedCommandOutputTileRef {
   readonly id: string;
   readonly instanceId: string;
@@ -482,25 +361,7 @@ export interface ManagedCommandOutputTileRef {
   readonly hostId: string;
 }
 
-/**
- * Persisted view state of a comm-graph tile: the canvas viewport and which
- * renderer draws it.
- *
- * Node positions are deliberately NOT persisted - the graph is auto-laid-out
- * from the epic's live agent set on every data change, so a stored position
- * would go stale the moment an agent is created, archived, or reparented.
- * Zoom/pan is the user's own framing of that layout and is worth keeping.
- *
- * `mode` picks between the two renderings of the SAME projection: the React
- * Flow node graph and the pixel-art office floor. Both read one cursor, one
- * event array and one agent set, so switching cannot show two different
- * stories. There is ONE viewport for both, not one per mode - and because the
- * fields mean flow units in `graph` and sprite pixels in `office`, a framing
- * chosen in one mode says nothing about the other. So switching mode RESETS
- * the viewport to the neutral one, which is what each renderer reads as "fit
- * yourself"; carrying the numbers over would open the incoming mode
- * off-screen while still counting as user-framed.
- */
+/** Persisted view state of a comm-graph tile: the canvas viewport and which renderer draws it. */
 export interface CommGraphTileViewState {
   readonly x: number;
   readonly y: number;
@@ -508,21 +369,7 @@ export interface CommGraphTileViewState {
   readonly mode: "graph" | "office";
 }
 
-/**
- * The per-epic communication graph tile.
- *
- * Non-record-backed (there is no Y.Doc artifact behind it) with a COMPUTED,
- * epic-scoped id, following the `git-diff` precedent: reopening the graph for
- * the same epic dedups onto the same tile rather than stacking duplicates.
- *
- * NO HOST BINDING. Every other tile kind is bound to one `hostId` for life
- * because its content lives on exactly one host. The communication graph is the
- * exception: an epic's agents can live on several hosts, each holding its own
- * disjoint slice of the event log, so the tile opens one subscription PER host
- * and merges them. `hostId` is therefore the same inert placeholder the blank
- * tile carries (the field is structural - `renderTile` wraps every tile in a
- * `TabHostProvider`) and the tile body must never read `useTabHostId()`.
- */
+/** The per-epic communication graph tile. */
 export interface CommGraphTileRef {
   readonly id: string;
   readonly instanceId: string;
@@ -533,28 +380,7 @@ export interface CommGraphTileRef {
   readonly view: CommGraphTileViewState;
 }
 
-/**
- * A chat rendered from the last copy its owning host published.
- *
- * ## The identity is the cloud row, not the chat id
- *
- * `chatId` is host-minted and is NOT unique under a task - two hosts can mint
- * the same one, and after a fork they demonstrably do. So this ref carries the
- * whole `(taskId, ownerUserId, chatId)` triple the cloud read is addressed by,
- * and `id` is derived from all three. That is what lets a published copy and a
- * live session sharing a chat id both be open in one tab: `findOpenArtifactInTab`
- * matches on `id` alone, so two rows that differ only in owning host would
- * otherwise resolve to each other's tile.
- *
- * ## `hostId` is the READING host, not the owner
- *
- * The cloud read is a byte pipe: any host the device can reach serves it, which
- * is precisely what makes an offline owner readable at all. So this binds the
- * tab's own host like every other tile - the tab-host-for-life rule is
- * untouched - and `ownerHostId` is carried separately as the thing the locked
- * composer names. Opening this is not "opening a chat on another host"; nothing
- * here is bound to the owner.
- */
+/** A chat rendered from the last copy its owning host published. */
 export interface PublishedChatTileRef {
   readonly id: string;
   readonly instanceId: string;
@@ -570,10 +396,8 @@ export interface PublishedChatTileRef {
 }
 
 /**
- * A blank tab. A real strip tab (titled "New tab", closable) whose body renders
- * the inline opener; picking content replaces it in place. `hostId` is a
- * placeholder - the opener binds the real default host at create time, and
- * the blank body never reads a per-tab host.
+ * A blank tab. A real strip tab (titled "New tab", closable) whose body renders the inline opener;
+ * picking content replaces it in place.
  */
 export interface BlankTileRef {
   readonly id: string;
@@ -583,17 +407,7 @@ export interface BlankTileRef {
   readonly hostId: string;
 }
 
-/**
- * GitHub-style PR full-view tile. Pure ref, `isRecordBacked: false` (same
- * family as `GitDiffTileRef`/`SnapshotDiffTileRef`) - the heavy PR fact is
- * fetched live over `pr.subscribeDetail`, never stored in the tile itself.
- * `githubHost`/`owner`/`repo`/`prNumber` are the PR's base coordinates (only
- * fully-identified rows are tile-able, per the panel's unknown-base rule).
- * `epicId` is deliberately NOT part of the ref: it is resolved from canvas
- * context (`TileRenderArgs.epicId`) at subscribe time, since the ref is a
- * pure GitHub-coordinate identity that must dedupe/reopen the same tile
- * regardless of which epic's panel opened it.
- */
+/** GitHub-style PR full-view tile. */
 export interface PrDetailTileRef {
   readonly id: string;
   readonly instanceId: string;
@@ -607,16 +421,8 @@ export interface PrDetailTileRef {
 }
 
 /**
- * The PR's own diff, as a full canvas tile - the same shape as
- * {@link PrDetailTileRef} plus the diff view state, because it is the same
- * identity viewed a different way.
- *
- * Deliberately a PURE PR-coordinate ref: no `runningDir`, no base/head OIDs,
- * no ref names. All of those are re-derived from `pr.subscribeDetail` at
- * render time, so a tile reopened a week later diffs the PR as it is NOW
- * rather than replaying a range that has since been rebased away. It also
- * means the host - not the client - stays the only thing that ever turns a
- * `linkGroupKey` into a directory.
+ * The PR's own diff, as a full canvas tile - the same shape as {@link PrDetailTileRef} plus the
+ * diff view state, because it is the same identity viewed a different way.
  */
 export interface PrDiffTileRef {
   readonly id: string;
@@ -721,21 +527,7 @@ export type {
   SizesByGroupId,
 } from "./tile-tree";
 
-/**
- * Per-epic canvas snapshot over the N-ary split tree (see `tile-tree.ts`).
- *
- * - `root === null` means empty-shell: the canvas surface acts as a single
- *   drop zone seeding a root pane on first drop.
- * - `activePaneId` is the globally-focused pane id; sidebar opens land
- *   here, the active tab inside it gets the top accent indicator.
- * - `tilesByInstanceId` holds every open tab's payload, keyed by the tab's
- *   `instanceId`. The tree itself stores only instanceIds, so tile metadata
- *   churn (rename, diff view state) never produces a new tree object and
- *   layout subscribers don't re-render for it. Invariant: the key set
- *   exactly matches the instanceIds reachable from `root`.
- * - `sizesByGroupId` holds each group's normalized child fractions, kept
- *   out of the tree so a ratio drag commits without touching `root`.
- */
+/** Per-epic canvas snapshot over the N-ary split tree (see `tile-tree.ts`). */
 export type TilesByInstanceId = Readonly<
   Record<string, EpicCanvasTileRef | undefined>
 >;
@@ -748,12 +540,8 @@ export interface EpicCanvasState {
 }
 
 /**
- * Consolidated header-tab record for an Epic view. `tabId` is the header-tab
- * identity; `epicId` points at the shared Y.Doc-backed Epic data. The canvas
- * snapshot is stored OUT of this record (in the store's `canvasByTabId` map,
- * keyed by `tabId`) so that canvas mutations don't churn this record's identity
- * - header-strip / command-palette consumers that read only tab metadata must
- * not re-render on every tile open/switch.
+ * Consolidated header-tab record for an Epic view. `tabId` is the header-tab identity; `epicId`
+ * points at the shared Y.Doc-backed Epic data.
  */
 export interface EpicViewTab {
   readonly tabId: string;

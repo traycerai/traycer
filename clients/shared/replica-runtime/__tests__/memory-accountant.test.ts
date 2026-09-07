@@ -1,12 +1,4 @@
-/**
- * Behavioural coverage for `createMemoryAccountant`.
- *
- * The cases that a naive implementation is most likely to get wrong:
- * settle replaces rather than adds; reclaiming zero latches
- * `"over-protected"` and a second reconcile must NOT retry the hook;
- * pressure is computed from holders after the hook returns, not from the
- * hook's claimed `reclaimedBytes`.
- */
+/** Behavioural coverage for `createMemoryAccountant`. */
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnvironment } from "../runtime-environment";
 import {
@@ -175,9 +167,7 @@ describe("createMemoryAccountant", () => {
       }),
     );
     accountant.settle("p", "h", 150);
-    // The hook is responsible for actually dropping data AND settling. This
-    // test's hook claims 30 reclaimed but does not settle, so the holders
-    // still read 150 and pressure latches over-protected.
+    // The hook is responsible for actually dropping data and settling.
     const pressure = accountant.reconcile("p");
     expect(evict).toHaveBeenCalledTimes(1);
     expect(evict).toHaveBeenCalledWith(50);

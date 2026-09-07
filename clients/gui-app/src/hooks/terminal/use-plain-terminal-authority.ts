@@ -129,15 +129,7 @@ function pushHostEpicPresentationId(args: {
   }
 }
 
-/**
- * Change token for the retained-tombstone sweep, not a general presentation
- * signature. The sweep can only ever act on a tombstoned id, so the token
- * ignores every other ref - and short-circuits entirely while no tombstone is
- * retained, which is the steady state. That keeps this out of the hot path:
- * a Zustand selector runs on every store commit, including the pane-focus,
- * layout and tile-state commits that have nothing to do with terminals, and
- * every mounted authority in the cohort pays for it.
- */
+/** Change token for the retained-tombstone sweep, not a general presentation signature. */
 function epicTombstonePresentationTokenForHost(
   tombstonedIdentities: ReadonlySet<string>,
   state: Pick<EpicCanvasStore, "canvasByTabId" | "closedTilePayloadsByTabId">,
@@ -191,11 +183,7 @@ function landingTombstonePresentationTokenForHost(
     .join("|");
 }
 
-/**
- * Scope-level retained-tombstone ingress. Observes live and closed
- * presentation independently of mutation readiness so a reconnecting client
- * still sweeps a late closed-only epic payload.
- */
+/** Scope-level retained-tombstone ingress. */
 function useRetainedPlainTerminalTombstoneReconciliation(args: {
   readonly hostId: string;
   readonly queryKey: QueryKey;
@@ -498,10 +486,8 @@ export function usePlainTerminalAuthority(args: {
     };
   }, [args.hostId, args.streamClient, scopeKey, transportKey]);
 
-  // Capability gates initial establishment. Once established, registry
-  // support/version churn in the same incarnation cannot replace the session.
-  // A genuine incarnation change may retry even when the client's local
-  // support registry still contains the prior incarnation's incompatibility.
+  // Once established, registry support/version churn in the same incarnation cannot replace the session.
+  // A genuine incarnation change may retry even when the client's local support registry still contains the prior incarnation's incompatibility.
   useEffect(() => {
     const streamClient = args.streamClient;
     const active = activeStreamRef.current;

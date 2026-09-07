@@ -28,9 +28,7 @@ vi.mock("@/components/epic-canvas/mobile/use-switcher-create-artifact", () => ({
     isPending: false,
   }),
 }));
-// The dialog shell pulls the desktop host/folder picker body (heavy: host
-// queries, workspace search); stub it so this suite targets the row's own
-// wiring - whether it renders `open`, and that launching reaches `onLaunched`.
+// The dialog shell pulls the desktop host/folder picker body (heavy: host queries, workspace search); stub it so this suite targets the row's own wiring - whether it renders `open`, and that launching reaches `onLaunched`.
 vi.mock("@/components/epic-canvas/mobile/mobile-new-terminal-dialog", () => ({
   MobileNewTerminalDialog: (props: {
     readonly open: boolean;

@@ -22,19 +22,7 @@ export interface KillTerminalMutationContext {
 }
 
 /**
- * Kills a terminal session on an EXPLICIT host client rather than the
- * app-wide active host. The client must already be bound to its host (built
- * via `useHostClientFor` / `useTabHostClient`); its `getActiveHostId()` is
- * captured in `onMutate` so the post-success `terminal.list` invalidation lands
- * on that host's scope even if the app-wide host swaps mid-flight.
- *
- * A `null` client (directory not resolved / signed out) makes the mutation a
- * rejecting no-op - callers gate the affordance on a resolved client + a live
- * session, matching `useHostQuery`'s null-client behavior.
- *
- * Every caller passes the client of the host that OWNS the session (a tile's
- * or the Epic session's); the app-wide convenience wrapper that used to
- * sit beside this hook had no caller left and was removed (PR #1243).
+ * Kill on the explicit bound client. Capture `getActiveHostId()` in `onMutate` so `terminal.list` invalidation survives an app-wide host swap. Null client is a rejecting no-op.
  */
 export function useTerminalKillFor(
   client: HostClient<HostRpcRegistry> | null,

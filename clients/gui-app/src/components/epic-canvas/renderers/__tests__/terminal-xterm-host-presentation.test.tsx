@@ -53,9 +53,8 @@ type MockTerminalInstance = {
 const xtermMocks = vi.hoisted(() => ({
   terminals: [] as MockTerminalInstance[],
   canvasAddons: [] as MockCanvasAddonInstance[],
-  // Which renderer the engine currently has. The canvas addon sets it on
-  // activate and clears it on dispose, exactly as xterm's render service swaps
-  // renderers, and the fit addon below measures through it.
+  // Which renderer the engine currently has.
+  // The canvas addon sets it on activate and clears it on dispose, exactly as xterm's render service swaps renderers, and the fit addon below measures through it.
   canvasRendererInstalled: false,
   // CSS px available to the grid. Only a REAL box change should ever move the
   // reported grid.
@@ -65,11 +64,7 @@ const xtermMocks = vi.hoisted(() => ({
   failNextActivationAfterInstall: false,
 }));
 
-// xterm's two renderers do not round the cell the same way: canvas takes
-// `floor(charWidth * dpr)` and DOM keeps the fraction, so an 8.4 CSS px glyph
-// at DPR 2 measures 8 CSS px under canvas and 8.4 under DOM. In an 800 px box
-// that is 100 columns versus 95 - the divergence that lets a renderer swap
-// alone re-report the grid.
+// xterm's two renderers do not round the cell the same way: canvas takes `floor(charWidth * dpr)` and DOM keeps the fraction, so an 8.4 CSS px glyph at DPR 2 measures 8 CSS px under canvas and 8.4 under DOM.
 const CANVAS_CELL_WIDTH_PX = 8;
 const DOM_CELL_WIDTH_PX = 8.4;
 
@@ -218,10 +213,6 @@ vi.mock("@xterm/addon-search", () => ({
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class MockFitAddon {
     proposeDimensions(): { readonly cols: number; readonly rows: number } {
-      // Renderer-DEPENDENT, like the real one: `proposeDimensions` divides the
-      // box by `renderService.dimensions.css.cell.width`, which belongs to
-      // whichever renderer is installed. A fixed proposal here would let the
-      // engine's dedupe hide a renderer-driven re-report.
       return { cols: proposedColsForCurrentRenderer(), rows: 24 };
     }
 
@@ -254,9 +245,7 @@ vi.mock("@xterm/addon-canvas", () => ({
     }
 
     activate(_terminal: unknown): void {
-      // Order matches the real addon: the renderer is installed BEFORE the
-      // disposable that would restore the DOM one is registered, so a throw
-      // here leaves canvas state behind for the caller's catch to clean up.
+      // Order matches the real addon: the renderer is installed BEFORE the disposable that would restore the DOM one is registered, so a throw here leaves canvas state behind for the caller's catch to clean up.
       xtermMocks.canvasRendererInstalled = true;
       if (xtermMocks.failNextActivationAfterInstall) {
         xtermMocks.failNextActivationAfterInstall = false;
@@ -285,11 +274,7 @@ function HostUnderVisibility(props: {
           hostId="host-1"
           tileKind="terminal"
           instanceId={props.instanceId}
-          // The host's effective grid is what the box measures under the canvas
-          // renderer, i.e. the engine's own first report echoed back. Pinning a
-          // grid the box never proposes would leave the engine permanently
-          // latched, and its re-report self-heal would fire inside these tests
-          // for reasons that have nothing to do with presentation.
+          // Pinning a grid the box never proposes would leave the engine permanently latched, and its re-report self-heal would fire inside these tests for reasons that have nothing to do with presentation.
           effectiveCols={100}
           effectiveRows={24}
           onUserInput={vi.fn()}
@@ -441,19 +426,12 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
   });
 
   it("a kept-alive engine released while presented drops its canvas but keeps the engine", () => {
-    // Invariant 2, the RELEASE half. "Unpresented" covers a host that
-    // unmounted while presented, not only one whose tile was hidden - and that
-    // is the case this whole change exists for: a terminal that was viewed and
-    // then left, whose engine the registry deliberately keeps alive. It is
-    // also the only test that pins the host passing its presented state to
-    // `releaseXtermHost`: hand it `false` and the count is stranded at 1, so
-    // no grace is ever armed and the canvas outlives the tile forever.
+    // Invariant 2, the RELEASE half. "Unpresented" covers a host that unmounted while presented, not only one whose tile was hidden - and that is the case this whole change exists for: a terminal that was viewed and then left, whose engine the registry deliberately keeps alive.
+    // It is also the only test that pins the host passing its presented state to `releaseXtermHost`: hand it `false` and the count is stranded at 1, so no grace is ever armed and the canvas outlives the tile forever.
     vi.useFakeTimers();
     const instanceId = "released-keep-alive-instance";
     const registry = __getTerminalSessionRegistryForTests();
-    // A live session handle is what makes `releaseXtermHost` KEEP the engine,
-    // so the disposal below is provably the renderer controller's doing and
-    // not the engine teardown incidentally taking the canvas with it.
+    // A live session handle is what makes `releaseXtermHost` KEEP the engine, so the disposal below is provably the renderer controller's doing and not the engine teardown incidentally taking the canvas with it.
     registry.acquire(
       instanceId,
       () => createLiveSessionHandle(`${instanceId}-session`),
@@ -498,14 +476,7 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
 
   it("a renderer swap never reports a grid to the host, but a real resize still does", () => {
     // Invariant 7: No host round-trip.
-    //
-    // The fit here is renderer-DEPENDENT on purpose. Disposing the canvas
-    // addon hands the render service back to xterm's DOM renderer, which
-    // measures a wider cell, so an unchanged box proposes 95 columns instead of
-    // 100. Reporting that would drag the host's `min()` down for every attached
-    // client and back up on the next present - two spurious PTY resizes per
-    // hide/show. A fixed 80x24 proposal cannot see this: the engine's dedupe
-    // swallows it.
+    // Disposing the canvas addon hands the render service back to xterm's DOM renderer, which measures a wider cell, so an unchanged box proposes 95 columns instead of 100.
     vi.useFakeTimers();
     const instanceId = "no-round-trip-instance";
     const onContainerResize = vi.fn();
@@ -572,9 +543,7 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
     // last reported, so the round trip closes with nothing sent either way.
     expect(onContainerResize).toHaveBeenCalledTimes(0);
 
-    // The gate is not "never report": a genuine box change while presented
-    // still reaches the host, which is what proves the zeros above are a
-    // suppressed renderer swap and not a dead code path.
+    // The gate is not "never report": a genuine box change while presented still reaches the host, which is what proves the zeros above are a suppressed renderer swap and not a dead code path.
     xtermMocks.availableWidthPx = 400;
     act(() => {
       entry.controls.fitToContainer();
@@ -585,13 +554,8 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
   });
 
   it("observes the restored canvas from a later layout effect, before passive effects run", () => {
-    // Invariant 1, the before-paint half. Reading the controller after
-    // `rerender` returns cannot tell a layout effect from a passive one - both
-    // have flushed by then. A sibling declared AFTER the host records the
-    // controller from its OWN layout effect and again from its passive effect;
-    // React runs every layout effect in the commit before any passive effect,
-    // so a canvas visible to the first observation can only have been restored
-    // by a layout effect.
+    // Reading the controller after `rerender` returns cannot tell a layout effect from a passive one - both have flushed by then.
+    // A sibling declared AFTER the host records the controller from its OWN layout effect and again from its passive effect; React runs every layout effect in the commit before any passive effect, so a canvas visible to the first observation can only have been restored by a layout effect.
     vi.useFakeTimers();
     const instanceId = "layout-ordering-instance";
     const seen: Array<{ readonly phase: string; readonly hasCanvas: boolean }> =
@@ -655,10 +619,7 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
   });
 
   it("disposes a canvas addon whose activation throws after installing its renderer", () => {
-    // Finding 3: `loadAddon` is not transactional. `AddonManager` stores the
-    // addon before activating it, and activation installs the renderer before
-    // registering the disposable that would restore xterm's DOM one, so the
-    // engine's catch is the only thing that can hand back what was built.
+    // `AddonManager` stores the addon before activating it, and activation installs the renderer before registering the disposable that would restore xterm's DOM one, so the engine's catch is the only thing that can hand back what was built.
     xtermMocks.failNextActivationAfterInstall = true;
     const instanceId = "activation-failure-instance";
 

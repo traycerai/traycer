@@ -11,11 +11,7 @@ import type { BrowserTabMentionAttachment } from "@/lib/composer/types";
 const TILE_HOST_ID = "host-remote";
 const CANVAS_HOST_ID = "host-canvas";
 
-/**
- * Two coordinators, one per host, exactly as an epic with a remote-host chat
- * tile now holds (`renderTile`'s `BrowserSessionsHostBoundary` plus the
- * canvas's ambient provider).
- */
+/** Two coordinators, one per host, exactly as an epic with a remote-host chat tile now holds (`renderTile`'s `BrowserSessionsHostBoundary` plus the canvas's ambient provider). */
 const registryHarness = vi.hoisted(() => ({
   sessions: [] as BrowserSessionInfo[],
 }));
@@ -81,12 +77,7 @@ function mention(seed: {
   };
 }
 
-/**
- * The AMBIENT context a remote-host chat tile sees: the TILE host's stream
- * only. It is the negative control - it knows `session-tile` and has never
- * heard of `session-canvas`, so a chip that resolved the canvas tab from its
- * surroundings could not render below it.
- */
+/** The AMBIENT context a remote-host chat tile sees: the TILE host's stream only. It is the negative control - it knows `session-tile` and has never heard of `session-canvas`, so a chip that resolved the canvas tab from its surroundings could not render below it. */
 function tileHostSessionsState(): BrowserSessionsState {
   return {
     hostId: TILE_HOST_ID,
@@ -149,11 +140,8 @@ describe("browser-tab mention chip inside a remote-host chat tile", () => {
     );
 
     expect(screen.getByText("Tile host page")).toBeTruthy();
-    // The one the ambient (tile-host) context above cannot answer: it resolves
-    // only because the chip reads every coordinator, not its surroundings.
-    // Mutation: pointing the chip at `useBrowserSessionsContext()` instead of
-    // `browserSessionAcrossCoordinators` - without this provider that swap
-    // would still pass, since an empty context answers nothing either way.
+    // The one the ambient (tile-host) context above cannot answer: it resolves only because the chip reads every coordinator, not its surroundings.
+    // Mutation: pointing the chip at `useBrowserSessionsContext()` instead of `browserSessionAcrossCoordinators` - without this provider that swap would still pass, since an empty context answers nothing either way.
     expect(screen.getByText("Canvas host page")).toBeTruthy();
     expect(screen.queryByText("captured label")).toBeNull();
   });

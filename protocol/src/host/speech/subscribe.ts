@@ -1,18 +1,4 @@
-/**
- * `speech.dictate@1.0` - on-device dictation.
- *
- * The renderer opens one subscription per dictation session, streams PCM16
- * mono audio as `audio` client frames (raw bytes ride the paired binary WS
- * frame), and on `flush` receives a final `transcript` frame followed by
- * `flushed`. The host buffers the whole utterance and decodes it with an
- * offline transducer (Sherpa ONNX, in a worker thread); nothing leaves the
- * device. Utterances are segmented client-side (mic start/stop), so there is no
- * server-side VAD.
- *
- * Mirrors `terminal.subscribe`'s frame conventions: every text frame declares
- * `hasBinaryPayload: false`; the single binary-carrying client frame (`audio`)
- * declares `hasBinaryPayload: true`.
- */
+/** `speech.dictate@1.0` - on-device dictation. */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 
@@ -23,10 +9,8 @@ const textFrameFields = {
 export const speechDictateOpenRequestSchema = z.object({
   // BCP-47-ish language hint or "auto". Single-language models may ignore it.
   language: z.string(),
-  // Sample rate (Hz) of the PCM the client streams - the renderer's actual
-  // AudioContext rate, which the browser may pin to the hardware rate (e.g.
-  // 48000) regardless of the requested 16000. The host resamples to the
-  // model's rate, so the client must report the true capture rate here.
+  // Sample rate (Hz) of the PCM the client streams - the renderer's actual AudioContext rate, which the browser may pin to the hardware rate (e.g.
+  // The host resamples to the model's rate, so the client must report the true capture rate here.
   sampleRate: z.number().int().positive(),
 });
 export type SpeechDictateOpenRequest = z.infer<
@@ -46,9 +30,7 @@ export const speechDictateServerFrameSchema = z.discriminatedUnion("kind", [
     text: z.string(),
     isFinal: z.boolean(),
   }),
-  // Sent after a `flush`/`stop` once the host has finished transcribing all
-  // buffered audio - the client waits for this before closing so a slow decode
-  // never drops the final transcript.
+  // Sent after a `flush`/`stop` once the host has finished transcribing all buffered audio - the client waits for this before closing so a slow decode never drops the final transcript.
   z.object({
     kind: z.literal("flushed"),
     ...textFrameFields,
@@ -71,9 +53,7 @@ export const speechDictateClientFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("audio"),
     hasBinaryPayload: z.literal(true),
   }),
-  // Finalize the utterance (user pressed stop / released push-to-talk): the
-  // host transcribes the buffered audio and replies `flushed`. The renderer
-  // then closes the socket, which ends the session (onClose).
+  // Finalize the utterance (user pressed stop / released push-to-talk): the host transcribes the buffered audio and replies `flushed`.
   z.object({
     kind: z.literal("flush"),
     ...textFrameFields,

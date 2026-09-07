@@ -1,13 +1,5 @@
 /**
- * `PdfPreviewToolbar`'s three-tier contract (pdf-preview-toolbar.tsx): the
- * outline, fit-width, rotate and search controls (plus the separator ahead
- * of search) fold away under `@max-lg`, replaced by the "More actions" menu
- * that carries the same actions under the same labels - so a narrow split
- * pane never loses a control the wide layout offers. Under the narrowest
- * `@max-sm` tier, the inline zoom controls (and their separator) fold away
- * too, while page nav and the surface's own actions stay inline - the menu
- * lists Zoom in / Zoom out unconditionally so they are reachable at every
- * width.
+ * `PdfPreviewToolbar`'s three-tier contract (pdf-preview-toolbar.tsx): the outline, fit-width, rotate and search controls (plus the separator ahead of search) fold away under `@max-lg`, replaced by the "More actions" menu that carries the same actions under the same labels - so a narrow split pane never loses a control the wide layout offers.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";

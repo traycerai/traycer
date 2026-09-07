@@ -360,9 +360,8 @@ describe("per-host isolation", () => {
   });
 
   it("drops a cross-stamped row instead of filing it under the target host", () => {
-    // The picker stamps each row with its DISPATCH-time host; a host switch
-    // landing between the pick and this call is the race that produces a
-    // mismatch. Host B's path must not become a row in host A's bucket.
+    // The picker stamps each row with its DISPATCH-time host; a host switch landing between the pick
+    // and this call is the race that produces a mismatch.
     const evicted = useWorkspaceFoldersStore
       .getState()
       .addResolvedFolders(HOST_A, [
@@ -464,10 +463,8 @@ describe("persist merge (v2 payload validation)", () => {
   });
 
   it("drops rows whose stamp disagrees with the bucket they are filed under", async () => {
-    // A malformed/hand-edited v2 payload: host A's bucket carries a row
-    // stamped for host B and one with no stamp at all. Rehydration must not
-    // surface either through host A - a bucket only ever holds its own host's
-    // paths, however the payload got that way.
+    // A malformed/hand-edited v2 payload: host A's bucket carries a row stamped for host B and one
+    // with no stamp at all.
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({

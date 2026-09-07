@@ -38,9 +38,7 @@ import {
   terminalSubscribeV16,
 } from "@traycer/protocol/host/terminal/subscribe";
 
-// Terminal sessions live entirely in the host's memory; these contracts
-// expose the unary lifecycle (create/kill/list). The actual byte stream is
-// carried by `terminal.subscribe` co-located in `./subscribe.ts`.
+// Terminal sessions live entirely in the host's memory; these contracts expose the unary lifecycle (create/kill/list).
 export const terminalCreateV10 = defineRpcContract({
   method: "terminal.create",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -48,15 +46,7 @@ export const terminalCreateV10 = defineRpcContract({
   responseSchema: createTerminalResponseSchema,
 });
 
-// `scope: { kind: "independent" }` requests a landing-scope (epic-less)
-// session - the feature gate. `scope` replacing `epicId` is a breaking
-// change to the request shape (the unary framework's minor-additivity
-// checker rejects a field rename within a minor line - see
-// `terminalScopeSchema`'s comment in `unary-schemas.ts`), so this rides a
-// new major, mirroring the `providers.list@2.0` precedent (registry.ts
-// ~585-690): `terminalCreateUpgradeV10ToV20` bridges an old peer up to
-// canonical, `terminalCreateDowngradeV20ToV10` bridges canonical back down
-// for an old peer.
+// `providers.list@2.0` - `scope: { kind: "independent" }` requests a landing-scope (epic-less) session - the feature gate.
 export const terminalCreateV20 = defineRpcContract({
   method: "terminal.create",
   schemaVersion: { major: 2, minor: 0 } as const,
@@ -64,11 +54,6 @@ export const terminalCreateV20 = defineRpcContract({
   responseSchema: createTerminalResponseSchemaV20,
 });
 
-// A v1.0 peer's plain `epicId` string is always epic-scoped, so it folds
-// into `{ kind: "epic", epicId }` on both the request and the response's
-// echoed session info. The newer side runs this when bridging a v1.0 peer
-// up to canonical (host: inbound v1.0 request; client: inbound v1.0
-// response).
 export const terminalCreateUpgradeV10ToV20 = defineUpgradePath<
   typeof terminalCreateV10,
   typeof terminalCreateV20
@@ -85,11 +70,6 @@ export const terminalCreateUpgradeV10ToV20 = defineUpgradePath<
   },
 });
 
-// `kind: "epic"` folds back to a plain `epicId` string for a v1.0 peer;
-// `kind: "independent"` has no v1.0 representation - that absence, surfaced
-// as a structured `DOWNGRADE_UNSUPPORTED` result, IS the feature gate
-// (mirrors `unsupportedProviderStateDowngrade`/`downgradeProviderStateForV10`
-// in `registry.ts`).
 function downgradeTerminalScopeForV10(
   scope: TerminalScope,
 ): DowngradeResult<string> {
@@ -134,12 +114,7 @@ export const terminalCreateDowngradeV20ToV10 = defineDowngradePath<
   },
 });
 
-// Additive request-side `themeHint` (spawning client's resolved terminal
-// appearance, for host-side OSC 10/11 replies); request otherwise unchanged,
-// response identical to `@2.0`. Same minor-line pattern as
-// `agent.tui.prepareLaunch@1.1`: a v2.1 peer projects onto a v2.0 host by
-// re-parsing through the (non-strict) v2.0 request schema, which strips
-// `themeHint` on the wire - so no same-major downgrade path is needed.
+// `agent.tui.prepareLaunch@1.1` - Additive request-side `themeHint` (spawning client's resolved terminal appearance, for host-side OSC 10/11 replies); request otherwise unchanged, response identical to `@2.0`.
 export const terminalCreateV21 = defineRpcContract({
   method: "terminal.create",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -147,9 +122,7 @@ export const terminalCreateV21 = defineRpcContract({
   responseSchema: createTerminalResponseSchemaV20,
 });
 
-// A v2.0 request carries no spawner theme, so the upgrade fills the "no hint"
-// default and the host answers OSC 10/11 with its fixed dark fallback. The
-// response is byte-identical, so its upgrade is the identity.
+// A v2.0 request carries no spawner theme, so the upgrade fills the "no hint" default and the host answers OSC 10/11 with its fixed dark fallback.
 export const terminalCreateUpgradeV20ToV21 = defineUpgradePath<
   typeof terminalCreateV20,
   typeof terminalCreateV21
@@ -160,10 +133,8 @@ export const terminalCreateUpgradeV20ToV21 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Major 2's latest bridge to v1.0. Strip `themeHint` - a v1.0 host predates
-// host-side OSC replies entirely, so dropping the hint loses nothing - then
-// apply the frozen scope-to-epic fold, keeping the independent-scope failure
-// gate.
+// Major 2's latest bridge to v1.0.
+// Strip `themeHint` - a v1.0 host predates host-side OSC replies entirely, so dropping the hint loses nothing - then apply the frozen scope-to-epic fold, keeping the independent-scope failure gate.
 export const terminalCreateDowngradeV21ToV10 = defineDowngradePath<
   typeof terminalCreateV21,
   typeof terminalCreateV10
@@ -192,9 +163,8 @@ export const terminalListV10 = defineRpcContract({
   responseSchema: listTerminalsResponseSchema,
 });
 
-// `scope: { kind: "independent" }` lists landing-scope (epic-less) sessions
-// instead of an epic's. See `terminalCreateV20`'s comment for the
-// major-bump rationale. Frozen released shape - do not edit in place.
+// `scope: { kind: "independent" }` lists landing-scope (epic-less) sessions instead of an epic's.
+// Frozen released shape - do not edit in place.
 export const terminalListV20 = defineRpcContract({
   method: "terminal.list",
   schemaVersion: { major: 2, minor: 0 } as const,
@@ -261,10 +231,8 @@ export const terminalListUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
-// A v2.1 host cannot observe live directory changes. Use its launch `cwd` as
-// `currentCwd`, which is the same fallback a current host starts with before
-// seeing a cwd OSC sequence. The frozen v2.1 schema allowed an empty `cwd`, so
-// v2.2 accepts that compatibility value and clients treat it as unavailable.
+// A v2.1 host cannot observe live directory changes.
+// The frozen v2.1 schema allowed an empty `cwd`, so v2.2 accepts that compatibility value and clients treat it as unavailable.
 export const terminalListUpgradeV21ToV22 = defineUpgradePath<
   typeof terminalListV21,
   typeof terminalListV22
@@ -299,9 +267,7 @@ export const terminalListUpgradeV22ToV23 = defineUpgradePath<
   }),
 });
 
-// Bridges from v2.1 (major 2's latest) down to the frozen v1.0 - not from
-// v2.0, since v2.1 supersedes it as major 2's latest. Strips `homeCwd` by
-// projecting only sessions, and keeps the independent-scope failure gate.
+// Bridges from v2.1 (major 2's latest) down to the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's latest.
 export const terminalListDowngradeV21ToV10 = defineDowngradePath<
   typeof terminalListV21,
   typeof terminalListV10
@@ -317,9 +283,6 @@ export const terminalListDowngradeV21ToV10 = defineDowngradePath<
     const downgraded = response.sessions.map(
       downgradeTerminalSessionInfoForV10,
     );
-    // A single un-representable session fails the whole response: a v1.0 peer's
-    // session shape has no field that can carry an independent-scope terminal,
-    // so there is no partial list worth sending.
     const failure = downgraded.find(
       (result): result is { ok: false; error: RpcErrorDetails } => !result.ok,
     );
@@ -405,9 +368,7 @@ export const terminalListDowngradeV23ToV10 = defineDowngradePath<
     }),
 });
 
-// Brand-new method - an older host simply lacks it, so the registry puts it
-// on the `degrade: unsupported` channel rather than the released floor. No
-// downgrade path exists or is needed: there is no earlier line to bridge to.
+// Brand-new method - an older host simply lacks it, so the registry puts it on the `degrade: unsupported` channel rather than the released floor.
 export const terminalReadOutputV10 = defineRpcContract({
   method: "terminal.readOutput",
   schemaVersion: { major: 1, minor: 0 } as const,

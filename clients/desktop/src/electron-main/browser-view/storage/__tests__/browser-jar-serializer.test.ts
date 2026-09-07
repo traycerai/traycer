@@ -5,13 +5,6 @@ import {
   BrowserJarSerializer,
 } from "../browser-jar-serializer";
 
-/**
- * The barrier's liveness escape (browser-security-hardening H11). Ordering
- * itself is settlement-driven and needs no clock; this pins the one case a
- * settlement fact cannot cover - a Chromium call inside "forget all browser
- * logins" that never comes back - and the invariant that the gate opens
- * anyway.
- */
 describe("BrowserJarSerializer whole-jar barrier", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -91,10 +84,7 @@ describe("BrowserJarSerializer whole-jar barrier", () => {
     ).resolves.toBe("after");
   });
 
-  // Pins that expiry aborts the action's signal BEFORE the gate opens (so
-  // queued domain work never races an action that is still writing), and
-  // that a caller-provided timeout shorter than BARRIER_ACTION_TIMEOUT_MS is
-  // honoured rather than the module constant.
+  // Pins that expiry aborts the action's signal BEFORE the gate opens (so queued domain work never races an action that is still writing), and that a caller-provided timeout shorter.
   it("aborts the action's signal before opening the gate when the barrier expires", async () => {
     const serializer = new BrowserJarSerializer();
     const events: string[] = [];
@@ -189,8 +179,6 @@ describe("BrowserJarSerializer whole-jar barrier", () => {
       domainRan = true;
     });
 
-    // B's own timer fires and it gives up, but A is still holding the jar -
-    // the domain work behind B must not slip in front of A.
     await vi.advanceTimersByTimeAsync(shortTimeoutMs);
     await rejectionB;
     expect(domainRan).toBe(false);
@@ -203,11 +191,6 @@ describe("BrowserJarSerializer whole-jar barrier", () => {
     expect(domainRan).toBe(true);
   });
 
-  // Pins BARRIER_SETTLE_GRACE_MS (browser-security-hardening H11 follow-up):
-  // an expiry aborts the signal at once, but a COOPERATIVE action that is
-  // still running when the timer fires keeps the gate closed until it
-  // actually settles - never until the timer alone says so - and its own
-  // settlement is what answers the caller.
   it("keeps the gate closed after expiry until the running action settles", async () => {
     const serializer = new BrowserJarSerializer();
     let releaseAction = (): void => undefined;
@@ -270,12 +253,7 @@ describe("BrowserJarSerializer whole-jar barrier", () => {
   });
 });
 
-/**
- * `readBehindBarrier` shares the same accounting as `runOnDomain`: the gate
- * is captured and the read registered in `inFlight` synchronously, so a
- * barrier requested after the read waits behind it, and a barrier requested
- * before the read is the gate the read waits on.
- */
+/** `readBehindBarrier` shares the same accounting as `runOnDomain`: the gate is captured and the read registered in `inFlight` synchronously, so a barrier requested after the read. */
 describe("BrowserJarSerializer.readBehindBarrier", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -326,10 +304,6 @@ describe("BrowserJarSerializer.readBehindBarrier", () => {
     // before this would invoke a stale no-op and never release the barrier.
     await vi.advanceTimersByTimeAsync(0);
 
-    // Controlled so the read has visibly started (past the gate) but not
-    // settled, which is what B's `ahead` actually waits on - a read that
-    // resolves immediately would settle in the same microtask flush as B's
-    // own wait for the gate, and the ordering claim would go unverified.
     let readStarted = false;
     let releaseRead = (): void => undefined;
     const read = serializer.readBehindBarrier(

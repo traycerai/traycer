@@ -13,46 +13,21 @@ import { parseRetryAfterSeconds } from "./device-auth";
 import { composeRequestAbort } from "./request-abort";
 
 /**
- * Link-login ("link mobile app") HTTP client for the confirm-gated flow: the
- * desktop mints and approves; the phone claims and polls with the private
- * secret its claim returned. Zero DI, ambient `fetch` only — runs in the
- * browser shell, the Electron renderer, and the Capacitor WebView
- * identically, like the device-flow client.
+ * Link-login ("link mobile app") HTTP client for the confirm-gated flow: the desktop mints and approves; the phone claims and polls with the private secret its claim returned.
  */
 
 const LINK_LOGIN_FETCH_TIMEOUT_MS = 10_000;
 
 /**
  * QR payload format.
- *
- * The QR encodes `https://<platform-base>/link?code=<XXXXX-XXXXX>`: an
- * ordinary https URL, which is what makes an arbitrary OS camera app offer to
- * open it. On a phone with the app installed the associated-domains
- * entitlement turns that into a universal link and the app is handed the URL
- * directly; everywhere else — a desktop browser, a phone without the app, a
- * camera that only offers "open in browser" — the same URL lands on the
- * platform's `/link` page, which is the whole reason the payload is a real
- * web address rather than a private scheme.
- *
- * The platform base is CALLER-SUPPLIED, never baked: the surfaces that mint a
- * code (the desktop panel, the CLI, the web portal) each already know which
- * deploy they are talking to, and a constant here would silently point a dev
- * build's QR at production.
- *
- * The superseded `traycer://link-login?code=` form is still PARSED. Codes
- * live about a minute, so no old QR outlives a deploy by much — but the
- * in-app scanner, cached screenshots and any payload already in flight must
- * not break, and keeping the branch costs one comparison. The bare code is
- * accepted too, on the manual-entry path, with the device flow's
- * normalization (case, dashes, the I/L→1 and O→0 visual folds).
+ * The superseded `traycer://link-login?code=` form is still parsed.
  */
 const LINK_LOGIN_QR_SCHEME = "traycer:";
 const LINK_LOGIN_QR_HOST = "link-login";
 const LINK_LOGIN_HTTPS_SCHEME = "https:";
-/** The platform's landing route, and the QR's path in the https form. */
 const LINK_LOGIN_LINK_PATH = "/link";
 // The public code's canonical shape: 10 Crockford base32 chars (no I/L/O/U),
-// matched AFTER normalization.
+// matched after normalization.
 const NORMALIZED_CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{10}$/;
 
 export type MintLinkLoginCodeFetchResult =
@@ -60,7 +35,7 @@ export type MintLinkLoginCodeFetchResult =
   | { readonly kind: "unauthorized" }
   /**
    * A claim on the caller's chain is awaiting the human decision (409):
-   * benign — the surface should show/await the claim state, not an error.
+   * benign - the surface should show/await the claim state, not an error.
    */
   | { readonly kind: "claim-pending" }
   /** The caller's credential carries no session family (400): terminal. */
@@ -73,9 +48,7 @@ export type ClaimLinkLoginCodeFetchResult =
       readonly secret: string;
       readonly pollIntervalSeconds: number;
       /**
-       * The claim's match code, for the phone to show while it waits; `null`
-       * from a server that predates it, in which case the desktop's prompt
-       * is showing no code either.
+       * The claim's match code, for the phone to show while it waits; `null` from a server that predates it, in which case the desktop's prompt is showing no code either.
        */
       readonly matchCode: string | null;
     }
@@ -111,10 +84,6 @@ function authnApiUrl(authnBaseUrl: string, path: string): string {
   ).toString();
 }
 
-/**
- * Client-side mirror of the server's user_code normalization: uppercase,
- * dashes/whitespace stripped, `I`/`L` → `1`, `O` → `0`.
- */
 export function normalizeLinkLoginCodeInput(raw: string): string {
   return raw
     .toUpperCase()
@@ -136,16 +105,7 @@ export function buildLinkLoginQrPayload(
 
 /**
  * Whether this URL is a link-login payload, in either encoding.
- *
- * The https form's HOST IS NOT CONSTRAINED, and deliberately so: every deploy
- * has its own platform host and dev builds point at yet another, so a host
- * allowlist here would be a second copy of the deploy table that goes stale
- * silently. It costs nothing, because this function only EXTRACTS a code —
- * the claim is always POSTed to the shell's own `authnBaseUrl`, so a host
- * chosen by whoever printed the QR cannot redirect where the code is sent.
- * What is left is that a valid code can be lifted out of a URL Traycer did not
- * print, which is exactly what the typed-code path has always allowed and what
- * the server's uniform rejection of unknown codes answers.
+ * It costs nothing, because this function only extracts a code - the claim is always POSTed to the shell's own `authnBaseUrl`, so a host chosen by whoever printed the QR cannot redirect where the code is sent.
  */
 function linkLoginPayloadCode(url: URL): string | null {
   if (url.protocol === LINK_LOGIN_QR_SCHEME) {
@@ -159,9 +119,7 @@ function linkLoginPayloadCode(url: URL): string | null {
     }
     return url.searchParams.get("code");
   }
-  // `https:` only — an `http:` payload would be a downgrade no camera needs to
-  // be offered, and the universal link the entitlement claims is https by
-  // definition.
+  // `https:` only - an `http:` payload would be a downgrade no camera needs to be offered, and the universal link the entitlement claims is https by definition.
   if (url.protocol !== LINK_LOGIN_HTTPS_SCHEME) {
     return null;
   }
@@ -172,15 +130,8 @@ function linkLoginPayloadCode(url: URL): string | null {
 }
 
 /**
- * Extracts a public link code from scanned, deep-linked or pasted text: the
- * https QR payload, the superseded `traycer://` payload, or the typed code
- * itself (any dash/case variation the normalization accepts). Returns the
- * NORMALIZED code, or `null` when the text carries no plausible code — never
- * a guess.
- *
- * `null` is an ordinary answer here, not a failure: every URL the OS hands the
- * app arrives through this function, including the payload-free
- * `traycer://auth/callback` return link, and those must fall out silently.
+ * Extracts a public link code from scanned, deep-linked or pasted text: the https QR payload, the superseded `traycer://` payload, or the typed code itself (any dash/case variation the normalization accepts).
+ * Returns the normalized code, or `null` when the text carries no plausible code - never a guess.
  */
 export function parseLinkLoginInput(text: string): string | null {
   const trimmed = text.trim();
@@ -220,9 +171,8 @@ const CLAIMANT_DEVICE_KINDS: ReadonlyMap<string, string> = new Map([
 const CLAIMANT_DEVICE_NAME_MAX = 40;
 
 /**
- * C0 and C1 control characters, DEL included. A self-reported name carrying
- * one is not a name: it is a terminal control sequence aimed at the CLI's
- * approval prompt, and it buckets to a family like any other unusable value.
+ * C0 and C1 control characters, del included.
+ * A self-reported name carrying one is not a name: it is a terminal control sequence aimed at the CLI's approval prompt, and it buckets to a family like any other unusable value.
  */
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
@@ -235,18 +185,8 @@ function hasControlCharacter(value: string): boolean {
 }
 
 /**
- * What the claimant is, as a bare noun phrase: "iPhone", "Pixel 8",
- * "Android device", "device". For labels and separators ("· iPhone ·") where
- * an article would read wrong. Descriptive, not authenticated — the real trust
- * anchor is "you minted this code and someone just scanned it".
- *
- * Three shapes arrive here. A bare family ("iPhone") is what iOS reports,
- * since Apple exposes no marketing-name API. A self-reported model name
- * ("Pixel 8") is short and UA-free, and reads best verbatim. A browser or
- * CFNetwork User-Agent is long and structured, and is only good for a family
- * bucket. The kinds live in a Map rather than an object so a claimant naming
- * itself "constructor" or "__proto__" is a proper name, never an inherited
- * property.
+ * What the claimant is, as a bare noun phrase: "iPhone", "Pixel 8", "Android device", "device".
+ * A browser or CFNetwork User-Agent is long and structured, and is only good for a family bucket.
  */
 export function claimantDeviceName(userAgent: string | null): string {
   const value = userAgent ?? "";
@@ -276,9 +216,7 @@ export function claimantDeviceName(userAgent: string | null): string {
 }
 
 /**
- * `claimantDeviceName` for running prose: a generic kind carries its article
- * ("an iPhone", "a device") so it slots into "Approve sign-in from ___?",
- * while a proper name ("Pixel 8") reads better bare and stays so.
+ * `claimantDeviceName` for running prose: a generic kind carries its article ("an iPhone", "a device") so it slots into "Approve sign-in from ___?", while a proper name ("Pixel 8") reads better bare and stays so.
  */
 export function claimantDeviceLabel(userAgent: string | null): string {
   const name = claimantDeviceName(userAgent);
@@ -323,7 +261,6 @@ async function parseOk<T>(
   return parsed.success ? parsed.data : null;
 }
 
-/** Mints a public link code under the caller's bearer. */
 export async function mintLinkLoginCodeViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
@@ -358,26 +295,19 @@ export async function mintLinkLoginCodeViaHttp(
 }
 
 /**
- * Declares that this client understands a `matchCode` in the response. The
- * response schemas are strict, so the server sends the field only to callers
- * that ask for it — an older client keeps parsing today's exact shape.
+ * Declares that this client understands a `matchCode` in the response.
+ * The response schemas are strict, so the server sends the field only to callers that ask for it - an older client keeps parsing today's exact shape.
  */
 const ACCEPT_MATCH_CODE = { acceptMatchCode: true } as const;
 
 /**
- * The phone attaches itself to a scanned/typed code. First scan wins and
- * ONLY that response carries the polling secret; claiming grants nothing
- * else. A 401 means the code is unknown, expired, or already
- * claimed/decided; the server deliberately does not say which.
+ * The phone attaches itself to a scanned/typed code.
+ * First scan wins and only that response carries the polling secret; claiming grants nothing else.
  */
 export async function claimLinkLoginCodeViaHttp(
   authnBaseUrl: string,
   code: string,
-  // Self-reported device description for the approver's prompt (typically
-  // `navigator.userAgent`). Carried in the body because a native HTTP layer
-  // (CapacitorHttp) replaces the transport User-Agent with a generic
-  // CFNetwork one, stripping the device signal the prompt labels. `null`
-  // sends nothing and the server falls back to the transport header.
+  // Self-reported device description for the approver's prompt (typically `navigator.userAgent`).
   deviceHint: string | null,
 ): Promise<ClaimLinkLoginCodeFetchResult> {
   const response = await postJson(
@@ -412,11 +342,7 @@ export async function claimLinkLoginCodeViaHttp(
       };
 }
 
-/**
- * One result poll BY SECRET after a claim. Non-terminal states mirror the
- * device flow's token endpoint: 428 pending, 429 pacing; 400 is the
- * desktop's explicit rejection.
- */
+/** One result poll BY secret after a claim. */
 export async function linkLoginTokenViaHttp(
   authnBaseUrl: string,
   secret: string,
@@ -435,12 +361,7 @@ export async function linkLoginTokenViaHttp(
     return { kind: "authorization-pending" };
   }
   if (response.status === 429) {
-    // The endpoint's request budget and the engine's paced `slow_down` both
-    // land here; the caller just waits. An ABSENT or unparseable header must
-    // come back as `null`, never as a number: `null` is what makes the poll
-    // loop fall back to the interval it was advertised, whereas a zero is a
-    // valid instruction to retry at once — and a client that retries at once
-    // on a 429 hammers the budget it just exhausted.
+    // The endpoint's request budget and the engine's paced `slow_down` both land here; the caller just waits.
     return {
       kind: "slow-down",
       retryAfterSeconds: parseRetryAfterSeconds(
@@ -470,7 +391,6 @@ export async function linkLoginTokenViaHttp(
     : { kind: "authorized", response: parsed };
 }
 
-/** The minting desktop's view of its own code (bearer, owner-only). */
 export async function linkLoginStatusViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
@@ -481,9 +401,7 @@ export async function linkLoginStatusViaHttp(
     authnBaseUrl,
     "api/v3/auth/link/status",
     bearerToken,
-    // `acceptClaimExpiry` declares the same understanding for the claim's
-    // deadline as `acceptMatchCode` does for the code: strict schemas, so the
-    // server sends each field only to callers that asked.
+    // `acceptClaimExpiry` declares the same understanding for the claim's deadline as `acceptMatchCode` does for the code: strict schemas, so the server sends each field only to callers that asked.
     { code, ...ACCEPT_MATCH_CODE, acceptClaimExpiry: true },
     signal,
   );
@@ -505,7 +423,6 @@ export async function linkLoginStatusViaHttp(
     : { kind: "ok", response: parsed };
 }
 
-/** The desktop's decision on its own claimed code (bearer, owner-only). */
 export async function respondLinkLoginViaHttp(
   authnBaseUrl: string,
   bearerToken: string,

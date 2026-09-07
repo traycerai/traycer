@@ -1,9 +1,3 @@
-/**
- * Electron's window-open details carry no user-activation flag, so main keeps
- * its own browser-process input timeline instead of trusting anything the page
- * can synthesize. A native popup (OAuth/GSI sign-in) is allowed only when a
- * real input landed on the opener within {@link BROWSER_VIEW_POPUP_GESTURE_WINDOW_MS}.
- */
 const ACTIVATING_INPUT_TYPES: ReadonlySet<string> = new Set([
   "mouseDown",
   "mouseUp",
@@ -28,11 +22,7 @@ interface GesturePopupWebContents {
 export interface BrowserViewPopupGesture {
   /** Single-use: one observed click cannot be replayed into a second popup. */
   consume(): boolean;
-  /**
-   * Non-consuming check for a recent gesture. Used by the external-scheme
-   * hand-off, where a real click authorizes the safe fast-path launch but must
-   * NOT steal the click a concurrent popup open still needs to consume.
-   */
+  /** Used by the external-scheme hand-off, where a real click authorizes the safe fast-path launch but must NOT steal the click a concurrent popup open still needs to consume. */
   peek(): boolean;
   dispose(): void;
 }

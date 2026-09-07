@@ -1,24 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `host update` is the composite (Host Update Layer Redesign Tech Plan,
-// "New/changed commands" > `host update`, D6): stage whatever `latest`
-// requires via `downloadAndStageHost` (reusing an existing stage, or
-// zero fetch beyond the manifest when already at latest), then promote
-// it via `applyHost`. Busy: the stage stays intact and the command
-// re-throws `E_HOST_BUSY` with the staged version attached to `details`.
-//
-// The command's `data` payload is a deliberate LEGACY-COMPAT projection,
-// not the raw composite internals: Desktop's `host-management-ipc.ts`
-// still runs `host update`'s stdout through `projectInstallResult`,
-// which reads a flat shape (`version`, `installedAt`, `executablePath`,
-// `source`, `archiveSha256`, `signatureKeyId`, `sizeBytes`,
-// `previousVersion`, `serviceLifecycle`) and silently degrades any
-// missing field to a fallback ("" / 0 / "none") rather than throwing -
-// see `host-update.ts`'s module comment. The tests below replicate
-// `projectInstallResult`'s exact field reads (not just spot-check a
-// couple of fields) so a shape regression here fails loudly instead of
-// silently degrading Desktop's update UI. Remove only when Desktop's
-// `host update` invocation is deleted (post ticket-4 cleanup).
+// `host update` is the composite (Host Update Layer Redesign Tech Plan, "New/changed commands" > `host update`, D6): stage whatever `latest` requires via `downloadAndStageHost` (reusing an existing stage, or zero fetch beyond the manifest when already at latest), then promote it via `applyHost`.
+// Busy: the stage stays intact and the command re-throws `E_HOST_BUSY` with the staged version attached to `details`.
 
 const mocks = vi.hoisted(() => ({
   downloadAndStageHostMock: vi.fn(),
@@ -26,17 +9,10 @@ const mocks = vi.hoisted(() => ({
   installHostDowngradeMock: vi.fn(),
   readHostStagedRecordMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
-  // Cross-mock ordering timeline for the Finding 8 test below (ticket-2
-  // review round 1) - a SHARED array `withCliLock` and
-  // `readHostStagedRecord` both push into, so a single assertion can pin
-  // whether the staged-record read genuinely happened BEFORE lock-exit
-  // (inside the same lock span the busy decision was made under) rather
-  // than after it.
+  // Cross-mock ordering timeline for the Finding 8 test below (ticket-2 review round 1) - a SHARED array `withCliLock` and `readHostStagedRecord` both push into, so a single assertion can pin whether the staged-record read genuinely happened BEFORE lock-exit (inside the same lock span the busy decision was made under) rather than after it.
   callOrder: [] as string[],
-  // Remote Host Support T16: the CLI writes `update-progress.json` so the
-  // daemon can fold in-flight/failed update state into `host.status@1.1`.
-  // Mocked so this suite never touches the real marker file or opens a real
-  // TCP probe against a host that isn't running.
+  // Remote Host Support T16: the CLI writes `update-progress.json` so the daemon can fold in-flight/failed update state into `host.status@1.1`.
+  // Mocked so this suite never touches the real marker file or opens a real TCP probe against a host that isn't running.
   writeUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
   readUpdateProgressMarkerMock: vi.fn(),
@@ -100,11 +76,7 @@ vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: mocks.downloadAndStageHostMock,
 }));
 
-// SAFETY, not convenience: `readActivationState` reads the REAL
-// `~/.traycer/host/pid.json` (the CLI's home is `homedir()`-derived and not
-// overridable), and with `readHostInstallRecord` mocked to a version the
-// developer's live host is not running, an unmocked read would classify the
-// developer's own host as activation debt and RESTART it from a unit test.
+// SAFETY, not convenience: `readActivationState` reads the REAL `~/.traycer/host/pid.json` (the CLI's home is `homedir()`-derived and not overridable), and with `readHostInstallRecord` mocked to a version the developer's live host is not running, an unmocked read would classify the developer's own host as activation debt and RESTART it from a unit test.
 // Every test file that invokes `buildHostUpdateCommand` carries this mock.
 vi.mock("../../host/pid-metadata", () => ({
   readHostPidMetadata: mocks.readHostPidMetadataMock,
@@ -324,10 +296,8 @@ function fakeCtx(): CommandContext {
   };
 }
 
-// No running host by default: the activation-debt probe finds nothing and
-// every existing short-circuit test keeps its no-op contract. Tests that
-// exercise activation opt in with an explicit pid record. Re-armed per test
-// because `resetAllMocks` wipes return values.
+// No running host by default: the activation-debt probe finds nothing and every existing short-circuit test keeps its no-op contract.
+// Tests that exercise activation opt in with an explicit pid record.
 function armActivationDefaults(): void {
   mocks.readUpdateProgressMarkerMock.mockResolvedValue(null);
   mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue("cleared");
@@ -345,9 +315,8 @@ function armActivationDefaults(): void {
 
 describe("buildHostUpdateCommand composite", () => {
   beforeEach(() => {
-    // The post-apply health probe gates success, so every apply-path test
-    // needs a verdict. `resetAllMocks` below wipes return values, so the
-    // healthy default is re-established per test rather than once.
+    // The post-apply health probe gates success, so every apply-path test needs a verdict.
+    // `resetAllMocks` below wipes return values, so the healthy default is re-established per test rather than once.
     mocks.probeHostHealthMock.mockResolvedValue({
       healthy: true,
       detail: "ok",
@@ -501,9 +470,7 @@ describe("buildHostUpdateCommand composite", () => {
       expect.objectContaining({ state: "updating", targetVersion: "1.2.0" }),
     );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    // The clear is CONDITIONAL on the marker still being the one this
-    // invocation wrote - a third updater's `updating`, written before it
-    // waits for the lock, must survive this command's exit.
+    // The clear is CONDITIONAL on the marker still being the one this invocation wrote - a third updater's `updating`, written before it waits for the lock, must survive this command's exit.
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -785,10 +752,7 @@ describe("buildHostUpdateCommand composite", () => {
       details: { stagedVersion: "2.0.0" },
     });
 
-    // The read happens strictly BETWEEN lock-enter and lock-exit - the
-    // exact coherence guarantee Finding 8 requires (a read after
-    // lock-exit could observe a stage a different, now-unblocked actor
-    // already mutated).
+    // The read happens strictly BETWEEN lock-enter and lock-exit - the exact coherence guarantee Finding 8 requires (a read after lock-exit could observe a stage a different, now-unblocked actor already mutated).
     expect(mocks.callOrder).toEqual(["lock-enter", "read-staged", "lock-exit"]);
   });
 
@@ -840,12 +804,8 @@ describe("buildHostUpdateCommand composite", () => {
   });
 });
 
-// Remote Host Support T16. The daemon has no view of this process, so the
-// `update-progress.json` marker is the ONLY way a remote client learns that an
-// update is in flight or that it failed. These pin that the marker is written
-// before the apply half runs and terminated on every exit path - a silently
-// missing marker leaves a remote client reporting a permanently "updating"
-// (or permanently idle) host.
+// Remote Host Support T16.
+// The daemon has no view of this process, so the `update-progress.json` marker is the ONLY way a remote client learns that an update is in flight or that it failed.
 describe("buildHostUpdateCommand update-progress marker (T16)", () => {
   beforeEach(() => {
     mocks.probeHostHealthMock.mockResolvedValue({
@@ -881,9 +841,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       "production",
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
     );
-    // The clear is CONDITIONAL on the marker still being the one this
-    // invocation wrote - a third updater's `updating`, written before it
-    // waits for the lock, must survive this command's exit.
+    // The clear is CONDITIONAL on the marker still being the one this invocation wrote - a third updater's `updating`, written before it waits for the lock, must survive this command's exit.
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -1000,12 +958,8 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
   });
 });
 
-// `detectActivationDebt` (Ticket: activation debt owed by `host update` when
-// the install record is ahead of the running host - see the module's own
-// comment on `ActivationDebt`). These exercise the SHORT-CIRCUIT
-// (`installed-up-to-date`) leg only, which is exactly where a stale running
-// process would otherwise be silently left behind: `downloadAndStageHost`
-// already says nothing needs staging, so activation is the only work left.
+// `detectActivationDebt` (Ticket: activation debt owed by `host update` when the install record is ahead of the running host - see the module's own comment on `ActivationDebt`).
+// These exercise the SHORT-CIRCUIT (`installed-up-to-date`) leg only, which is exactly where a stale running process would otherwise be silently left behind: `downloadAndStageHost` already says nothing needs staging, so activation is the only work left.
 describe("buildHostUpdateCommand — activation debt (installed-up-to-date short-circuit)", () => {
   beforeEach(() => {
     mocks.probeHostHealthMock.mockResolvedValue({
@@ -1082,9 +1036,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       1,
     );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    // The clear is CONDITIONAL on the marker still being the one this
-    // invocation wrote - a third updater's `updating`, written before it
-    // waits for the lock, must survive this command's exit.
+    // The clear is CONDITIONAL on the marker still being the one this invocation wrote - a third updater's `updating`, written before it waits for the lock, must survive this command's exit.
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -1106,11 +1058,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("debt cleared while waiting for the contender lock: no restart, projected as the no-op", async () => {
-    // First read (outside the lock): the host runs 1.0.0 behind a 2.0.0
-    // record. Second read (under the lock): another actor - Desktop's
-    // parked-registration fallback runs `host restart` on this very host -
-    // has already brought 2.0.0 up. Restarting again would cost the fresh
-    // host its connections and report a transition this command did not make.
+    // First read (outside the lock): the host runs 1.0.0 behind a 2.0.0 record.
+    // Second read (under the lock): another actor - Desktop's parked-registration fallback runs `host restart` on this very host - has already brought 2.0.0 up.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock
@@ -1133,11 +1082,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("debt cleared under the lock while the health probe would FAIL: no probe, no failed marker, the updating marker is cleared, exit 0", async () => {
-    // The marker was written pre-lock because work was owed then; the work
-    // was paid by another actor under the lock. Probing a host this command
-    // never touched, and stamping the no-op `failed` on a miss, would report
-    // a failure for an update that did not happen. The stale `updating`
-    // marker still has to go.
+    // The marker was written pre-lock because work was owed then; the work was paid by another actor under the lock.
+    // Probing a host this command never touched, and stamping the no-op `failed` on a miss, would report a failure for an update that did not happen.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock
@@ -1161,9 +1107,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       "production",
       expect.objectContaining({ state: "updating" }),
     );
-    // The clear is CONDITIONAL on the marker still being the one this
-    // invocation wrote - a third updater's `updating`, written before it
-    // waits for the lock, must survive this command's exit.
+    // The clear is CONDITIONAL on the marker still being the one this invocation wrote - a third updater's `updating`, written before it waits for the lock, must survive this command's exit.
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -1217,9 +1161,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
         exitCode: 1,
       }),
     );
-    // By the time the failure is stamped, a third updater has already
-    // landed its own `updating` at the live path - the compare-and-swap
-    // reports "changed" and leaves it alone rather than stamping over it.
+    // By the time the failure is stamped, a third updater has already landed its own `updating` at the live path - the compare-and-swap reports "changed" and leaves it alone rather than stamping over it.
     mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
       "changed",
     );
@@ -1232,9 +1174,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       })(fakeCtx()),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
 
-    // Our own `updating` was written once; no unconditional `failed` write
-    // ever happens - the failure goes through the compare-and-swap instead,
-    // and a "changed" answer means it never landed.
+    // Our own `updating` was written once; no unconditional `failed` write ever happens - the failure goes through the compare-and-swap instead, and a "changed" answer means it never landed.
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
     const written = mocks.writeUpdateProgressMarkerMock.mock
       .calls[0][1] as HostUpdateProgress;
@@ -1249,9 +1189,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("the install record moves while waiting for the lock: the restart activates the record as read UNDER the lock and the marker is re-pointed at it", async () => {
-    // Pre-lock the record says 2.0.0 (marker target 2.0.0). Another contender
-    // installs 2.1.0 before this command is admitted. The under-lock read is
-    // what gets activated and what a `failed` stamp would have to name.
+    // Pre-lock the record says 2.0.0 (marker target 2.0.0).
+    // Another contender installs 2.1.0 before this command is admitted.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock
       .mockResolvedValueOnce(sampleRecord("2.0.0"))
@@ -1265,10 +1204,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    // The pre-lock `updating:2.0.0` is written once, unconditionally. The
-    // re-point under the lock is ownership-aware: it goes through the
-    // compare-and-swap against that same pre-lock marker, never a second
-    // unconditional write.
+    // The pre-lock `updating:2.0.0` is written once, unconditionally.
+    // The re-point under the lock is ownership-aware: it goes through the compare-and-swap against that same pre-lock marker, never a second unconditional write.
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
     const written = mocks.writeUpdateProgressMarkerMock.mock
       .calls[0][1] as HostUpdateProgress;
@@ -1283,9 +1220,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     );
     expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    // The compare-and-swap reports "replaced" by default, so the marker this
-    // run tracks follows the re-pointed record - the final clear targets the
-    // MOVED version, not the stale pre-lock one.
+    // The compare-and-swap reports "replaced" by default, so the marker this run tracks follows the re-pointed record - the final clear targets the MOVED version, not the stale pre-lock one.
     const repointed = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock
       .calls[0][2] as HostUpdateProgress;
     expect(
@@ -1298,12 +1233,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("the record moved under the lock but the marker is no longer ours: the re-point is refused, and the final clear still targets the ORIGINAL marker", async () => {
-    // Same setup as the re-point test above, but the compare-and-swap reports
-    // the pre-lock marker no longer matches what is on disk (a newer updater
-    // owns it now). The activation still proceeds - the debt clears either
-    // way - but the progress marker this run tracks must stay pinned to the
-    // ORIGINAL pre-lock record rather than following a re-point that never
-    // actually landed.
+    // Same setup as the re-point test above, but the compare-and-swap reports the pre-lock marker no longer matches what is on disk (a newer updater owns it now).
+    // The activation still proceeds - the debt clears either way - but the progress marker this run tracks must stay pinned to the ORIGINAL pre-lock record rather than following a re-point that never actually landed.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock
       .mockResolvedValueOnce(sampleRecord("2.0.0"))
@@ -1331,18 +1262,13 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       written,
       expect.objectContaining({ state: "updating", targetVersion: "2.1.0" }),
     );
-    // Activation still proceeds: a refused re-point does not block the
-    // restart, it only leaves the progress marker pointed at the stale
-    // record.
+    // Activation still proceeds: a refused re-point does not block the restart, it only leaves the progress marker pointed at the stale record.
     expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
     expect(mocks.relaunchHostAfterRestartWithAttemptMock).toHaveBeenCalledTimes(
       1,
     );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    // The final clear is CONDITIONAL on `writtenMarker`, which never moved
-    // off the original pre-lock record because the swap reported "changed" -
-    // it must target that original marker, never a record naming the moved
-    // 2.1.0 version.
+    // The final clear is CONDITIONAL on `writtenMarker`, which never moved off the original pre-lock record because the swap reported "changed" - it must target that original marker, never a record naming the moved 2.1.0 version.
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
     ).toHaveBeenCalledWith("production", written);
@@ -1352,11 +1278,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("the running host VANISHES under the lock (pid gone, not replaced): relaunched through the stop → relaunch pair, busy gate not asked, health probed, reported as the update", async () => {
-    // Pre-lock: 1.0.0 serving behind a 2.0.0 record. Under the lock: no pid
-    // metadata at all - the old host exited, crashed, or is mid-relaunch and
-    // has not republished. That is not cleared debt; reporting the no-op
-    // would skip the probe, clear the marker and exit 0 over a host that may
-    // never come back.
+    // Pre-lock: 1.0.0 serving behind a 2.0.0 record.
+    // Under the lock: no pid metadata at all - the old host exited, crashed, or is mid-relaunch and has not republished.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock
@@ -1376,9 +1299,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       1,
     );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    // The clear is CONDITIONAL on the marker still being the one this
-    // invocation wrote - a third updater's `updating`, written before it
-    // waits for the lock, must survive this command's exit.
+    // The clear is CONDITIONAL on the marker still being the one this invocation wrote - a third updater's `updating`, written before it waits for the lock, must survive this command's exit.
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -1393,10 +1314,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("no work owed and the running host is OBSERVED at the installed version: a stale `failed` marker is cleared", async () => {
-    // A prior update's health probe timed out on a host that finished
-    // starting a moment later; the marker still says `failed` and every
-    // @1.3 host renders it. The retry has nothing to do, so this is the only
-    // place that can reconcile it - and only against an observed match.
+    // A prior update's health probe timed out on a host that finished starting a moment later; the marker still says `failed` and every place that can reconcile it - and only against an observed match.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
@@ -1417,9 +1335,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
-    // CONDITIONAL on the marker still being the `failed` record that was
-    // read - never the unconditional delete, which would erase a live
-    // `updating` another updater wrote in between.
+    // CONDITIONAL on the marker still being the `failed` record that was read - never the unconditional delete, which would erase a live `updating` another updater wrote in between.
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -1432,10 +1348,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
 
   it("pid.json names a RECYCLED pid (identity verdict `mismatch`): not a live host - no debt, no restart, and a `failed` marker is NOT cleared", async () => {
     // The pid survived a crash and the OS handed it to an unrelated process.
-    // Bare liveness would call that occupant the host: with the recorded
-    // 1.0.0 that reads as debt (and the busy gate then fails against a stale
-    // endpoint); with a matching version it would clear a `failed` marker
-    // over no host at all. The published identity verdict rules it out.
+    // Bare liveness would call that occupant the host: with the recorded 1.0.0 that reads as debt (and the busy gate then fails against a stale endpoint); with a matching version it would clear a `failed` marker over no host at all.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
@@ -1531,9 +1444,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("debt cleared under the lock on a BUSY host: still the no-op - the busy gate is never consulted and no failed marker is written", async () => {
-    // The host that came up on the committed bytes while this command
-    // waited is already doing work. It owes nothing, so its busyness is not
-    // a reason to fail the command: the debt decision runs before the gate.
+    // The host that came up on the committed bytes while this command waited is already doing work.
+    // It owes nothing, so its busyness is not a reason to fail the command: the debt decision runs before the gate.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock
@@ -1646,10 +1558,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
-    // `--force` reaches the stop half, not only the busy pre-check: a busy
-    // Desktop-managed host denies the cooperative stand-down claim, and
-    // `host update --force` promises to force-stop it - the recovery case
-    // this path exists for.
+    // `--force` reaches the stop half, not only the busy pre-check: a busy Desktop-managed host denies the cooperative stand-down claim, and `host update --force` promises to force-stop it - the recovery case this path exists for.
     expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
     expect(mocks.stopHostForRestartWithAttemptMock.mock.calls[0][4]).toEqual({
       force: true,
@@ -1660,10 +1569,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("the record carries a runtime stamp: debt is decided by runtime-stamp EQUALITY, not by SemVer on the catalog version", async () => {
-    // An older CLI installing a newer archive records the archive's own
-    // runtime version beside the catalog version it was asked for. The host
-    // publishes the RUNTIME version in pid.json, so comparing it against the
-    // catalog version would restart a correctly activated host forever.
+    // An older CLI installing a newer archive records the archive's own runtime version beside the catalog version it was asked for.
+    // The host publishes the RUNTIME version in pid.json, so comparing it against the catalog version would restart a correctly activated host forever.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue({
       ...sampleRecord("2.0.0"),
@@ -1709,10 +1616,8 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
   });
 
   it("a non-SemVer runtime stamp (staging.<epoch>.<sha>) that MATCHES the running host: activated, not foreign - the stale failed marker is cleared and nothing restarts", async () => {
-    // A staging host publishes `staging.<epoch>.<sha>` in both pid.json and
-    // the install record's runtimeVersion. That stamp is not SemVer, but
-    // equality still decides - no isValidHostVersion guard applies once the
-    // record carries a runtime stamp.
+    // A staging host publishes `staging.<epoch>.<sha>` in both pid.json and the install record's runtimeVersion.
+    // That stamp is not SemVer, but equality still decides - no isValidHostVersion guard applies once the record carries a runtime stamp.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue({
       ...sampleRecord("2.0.0"),
@@ -1738,9 +1643,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
-    // CONDITIONAL on the marker still being the `failed` record that was
-    // read - never the unconditional delete, which would erase a live
-    // `updating` another updater wrote in between.
+    // CONDITIONAL on the marker still being the `failed` record that was read - never the unconditional delete, which would erase a live `updating` another updater wrote in between.
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,

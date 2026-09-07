@@ -34,15 +34,8 @@ import {
 } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 
 /**
- * The global `MockResizeObserver` installed by `test-browser-apis.ts` is a
- * total no-op - it never invokes its callback, so a rect change after the
- * initial synchronous registration apply (see
- * `tile-surface-geometry-coordinator.ts`'s "direct-flush" contract) has no
- * way to reach an already-mounted record without this. Installing a
- * controllable replacement at MODULE LOAD TIME (before any test body runs,
- * matching `tile-surface-geometry-coordinator.test.ts`'s own technique) lets
- * the geometry-retention-while-hidden suite below fire real RO callbacks on
- * demand to simulate a slot's rect changing after mount.
+ * The global `MockResizeObserver` installed by `test-browser-apis.ts` is a total no-op - it never invokes its callback, so a rect change after the initial synchronous registration apply (see `tile-surface-geometry-coordinator.ts`'s "direct-flush" contract) has no way to reach an already-mounted record without this.
+ * Installing a controllable replacement at MODULE LOAD TIME (before any test body runs, matching `tile-surface-geometry-coordinator.test.ts`'s own technique) lets the geometry-retention-while-hidden suite below fire real RO callbacks on demand to simulate a slot's rect changing after mount.
  */
 class ControllableResizeObserver implements ResizeObserver {
   readonly callback: ResizeObserverCallback;
@@ -200,7 +193,6 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Real edge split: chat-1 moves into its own pane, right of p1.
     act(() => {
       useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
         sourcePaneId: "p1",
@@ -226,12 +218,6 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Wrap (design-review F3 - the old test's same-direction split
-    // flattened 2->3 siblings instead of wrapping): a genuinely
-    // PERPENDICULAR split ("bottom" against the root's "horizontal" group)
-    // around chat-1's OWN pane. chat-3 rides along purely as the wrap
-    // partner and is dissolved back out below; the tracked instance
-    // (chat-1) never changes pane and never remounts.
     act(() => {
       useEpicCanvasStore
         .getState()
@@ -256,9 +242,6 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     }
     const wrapParent = getNodeAtPath(wrapRoot, wrapPath.slice(0, -1));
     if (wrapParent.kind !== "group") throw new Error("expected a group");
-    // The wrap genuinely nests chat-1's pane under a FRESH group, distinct
-    // from the original root group - proof this is a real wrap, not a flat
-    // same-direction insertion.
     expect(wrapParent.id).not.toBe(rootGroupId);
     expect(wrapParent.direction).toBe("vertical");
     expect(wrapParent.children).toHaveLength(2);
@@ -270,10 +253,6 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Dissolve: closing chat-3's pane (the wrap group's other child) leaves
-    // the wrap group with exactly one survivor, which the tree promotes
-    // back into the ORIGINAL group's slot - a genuine one-child-group
-    // promotion, not the old test's flat 3-to-2 sibling removal.
     const chat3Pane = collectPanes(afterWrap.root).find((p) =>
       p.tabInstanceIds.includes("chat-3"),
     );
@@ -297,7 +276,6 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Cross-pane move via the real action: merge chat-1 back into p1.
     act(() => {
       useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
         sourcePaneId: chat1PaneId,
@@ -309,9 +287,6 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Header tear-off: real coordinator transaction, source/destination
-    // strips split across two stores. chat-1's own pane dissolved back
-    // into p1 above, so p1 is the sole remaining pane.
     act(() => {
       tabCommandCoordinator.createSourceRefAtStripIndex(0, () => {
         const newTabId = useEpicCanvasStore
@@ -392,9 +367,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
       });
     }
 
-    // Selecting the sibling tab retains chat-1: its record survives, its body
-    // is never unmounted, and it only stops being PRESENTED. This is what
-    // stops the transcript re-converging on the way back.
+    // This is what stops the transcript re-converging on the way back.
     setPaneRoot(["chat-1", "term-1"], "term-1", ["term-1", "chat-1"]);
     expect(
       screen.getByTestId("synthetic-tile-surface-body-chat-1"),
@@ -416,9 +389,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.unmountCount("chat-1")).toBe(1);
 
     setPaneRoot(["chat-1", "term-1"], "chat-1", ["chat-1", "term-1"]);
-    // Membership re-includes chat-1, but the registry has no unregister API -
-    // it already deleted the record on loss (F2). No body without a fresh
-    // publish: this is the dormant state, not an automatic remount.
+    // No body without a fresh publish: this is the dormant state, not an automatic remount.
     expect(
       screen.queryByTestId("synthetic-tile-surface-body-chat-1"),
     ).toBeNull();
@@ -477,9 +448,7 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
       );
     });
     const record = screen.getByTestId("stable-tile-surface-record-chat-1");
-    // No ancestor (including the plane root) carries aria-hidden="true" -
-    // an aria-hidden ancestor overrides a descendant's own attribute, which
-    // is exactly the F1 defect: the plane used to shroud every record.
+    // No ancestor (including the plane root) carries aria-hidden="true" - an aria-hidden ancestor overrides a descendant's own attribute, which is exactly the F1 defect: the plane used to shroud every record.
     expect(record.closest('[aria-hidden="true"]')).toBeNull();
     expect(record.getAttribute("aria-hidden")).toBe("false");
     expect(record.hasAttribute("inert")).toBe(false);
@@ -500,19 +469,13 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
     const record = screen.getByTestId("stable-tile-surface-record-chat-1");
     expect(record.getAttribute("aria-hidden")).toBe("true");
     expect(record.hasAttribute("inert")).toBe(true);
-    // The F1 gap: aria-hidden/inert alone do not stop painting - only real
-    // non-paint rules do. Opacity also flushes independently composited child
-    // layers that Electron can otherwise retain after visibility changes.
+    // The F1 gap: aria-hidden/inert alone do not stop painting - only real non-paint rules do.
+    // Opacity also flushes independently composited child layers that Electron can otherwise retain after visibility changes.
     expect(record.classList.contains("invisible")).toBe(true);
     expect(record.classList.contains("opacity-0")).toBe(true);
   });
 
   it("a retained-but-deselected record is aria-hidden, inert, AND non-painted even though its top level is visible", () => {
-    // Retention keeps a chat's record alive while another tab holds the
-    // pane's foreground. Every record of a pane is positioned on that same
-    // pane rect, so a retained one that kept painting would sit exactly on
-    // top of the selected chat - `topLevelVisible` alone can no longer answer
-    // "is this painting".
     seedOneChat();
     render(<StableTileSurfaceHost renderRecordBody={() => null} />);
     act(() => {
@@ -729,14 +692,8 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
     const slot = document.createElement("div");
     document.body.appendChild(slot);
 
-    // Attribute/identity-keyed rect stub, installed BEFORE render: the host
-    // element does not exist yet, so it cannot be stubbed by reference the
-    // way `slot` can - `data-testid="stable-tile-surface-host"` is a static
-    // JSX attribute already present on the node by the time its callback
-    // ref fires, so matching on it works regardless of which of StrictMode's
-    // two constructed instances ends up live. Every other element falls back
-    // to the zero rect jsdom already reports by default, so there is no need
-    // to preserve or re-invoke the original implementation.
+    // Attribute/identity-keyed rect stub, installed BEFORE render: the host element does not exist yet, so it cannot be stubbed by reference the way `slot` can - `data-testid="stable-tile-surface-host"` is a static JSX attribute already present on the node by the time its callback ref fires, so matching on it works regardless of which of StrictMode's two constructed instances ends up live.
+    // Every other element falls back to the zero rect jsdom already reports by default, so there is no need to preserve or re-invoke the original implementation.
     const originalDescriptor = Object.getOwnPropertyDescriptor(
       Element.prototype,
       "getBoundingClientRect",
@@ -892,10 +849,7 @@ describe("StableTileSurfaceHost geometry retention while hidden (confirmed scrol
     });
 
     act(() => {
-      // Simulates the hidden pane's slot collapsing under a display:none
-      // ancestor and reporting a 0x0 rect at a different position - exactly
-      // what a shared ResizeObserver batch delivers for every currently
-      // registered slot, not only the one that actually moved.
+      // Simulates the hidden pane's slot collapsing under a display:none ancestor and reporting a 0x0 rect at a different position - exactly what a shared ResizeObserver batch delivers for every currently registered slot, not only the one that actually moved.
       stubElementRect(slot, { left: 999, top: 999, width: 0, height: 0 });
       triggerResizeObserverCallbacks();
     });

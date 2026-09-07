@@ -1,20 +1,6 @@
 /**
- * The office floor's agent hover: THE shared agent card, not a lookalike.
- *
- * The floor is one `<canvas>`, so there is no per-agent element for a tooltip
- * to attach to. This renders exactly one transparent trigger over the hovered
- * character's screen rect and hands it to `AgentHoverTooltip` - the same
- * component the sidebar rows and the graph nodes use, reading the same
- * selectors. An agent therefore cannot describe itself one way in the
- * navigator and another on the floor, which is the whole point: the office
- * previously showed a name and a status word where the sidebar showed the
- * harness, model, worktree, branch and PR.
- *
- * The trigger also carries the CLICK, so a pointer that lands on a character
- * selects it whether or not the tooltip is open. A PRESS is handed back to
- * the floor through `onPointerDown`: the canvas below never sees it
- * otherwise, because this element is over it, and a drag or a wheel that
- * happens to start on a character must still pan and zoom the floor.
+ * An agent therefore cannot describe itself one way in the navigator and another on the floor, which is the whole point: the office previously showed a name and a status word where the sidebar showed the harness, model, worktree, branch and PR.
+ * A PRESS is handed back to the floor through `onPointerDown`: the canvas below never sees it otherwise, because this element is over it, and a drag or a wheel that happens to start on a character must still pan and zoom the floor.
  */
 import type { PointerEvent as ReactPointerEvent, ReactElement } from "react";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
@@ -52,9 +38,7 @@ export function OfficeAgentHover(props: OfficeAgentHoverProps) {
     onSelect,
     screenRect,
   } = props;
-  // Resolved exactly as the graph node resolves them, from the node id alone -
-  // see `comm-graph-agent-node.tsx`. Nothing about the hover is passed in from
-  // the canvas, so the office cannot feed the card a different truth.
+  // Nothing about the hover is passed in from the canvas, so the office cannot feed the card a different truth.
   const hoverHostId = useEpicNodeHostId(agentId);
   const hoverHostReachability = useHostReachability(
     hoverHostId ?? UNKNOWN_HOST_PLACEHOLDER,

@@ -28,11 +28,7 @@ import {
 } from "@/lib/cloud-epic-tasks-query";
 import { uiQueryKeys } from "@/lib/query-keys";
 
-/**
- * Variables for the next-page mutation. `identity`/`generation` are captured
- * when the fetch starts so the store can drop the response if a refresh reset
- * the identity meanwhile; `request`/`cursor` build the `epic.listTasks` body.
- */
+/** `identity`/`generation` are captured when the fetch starts so the store can drop the response if a refresh reset the identity meanwhile; `request`/`cursor` build the `epic.listTasks` body. */
 interface NextPageVariables {
   readonly identity: string;
   readonly generation: number;
@@ -100,11 +96,7 @@ export function useCloudEpicTasksQuery(
             ) {
               return previousData;
             }
-            // No usable state on *this* observer (e.g. it just mounted fresh,
-            // as a promoted History tab does in place of the modal's
-            // observer). Fall back to the last page that settled anywhere
-            // for this host/user, so rows already known to be current don't
-            // disappear across that remount.
+            // No usable state on *this* observer (e.g.
             return queryClient.getQueryData<ListTasksResponse>(
               cloudEpicTasksLastKnownQueryKey(hostId, userId),
             );
@@ -115,11 +107,7 @@ export function useCloudEpicTasksQuery(
   const queryRefetch = query.refetch;
   const isPlaceholderData = query.isPlaceholderData;
 
-  // Record settled (non-placeholder) first pages as the shared last-known
-  // fallback read above. Written from every observer that settles real data
-  // for this host/user, regardless of which request produced it - the same
-  // scope `hasSameCloudTasksPlaceholderIdentity` already treats as
-  // placeholder-eligible.
+  // Written from every observer that settles real data for this host/user, regardless of which request produced it - the same scope `hasSameCloudTasksPlaceholderIdentity` already treats as placeholder-eligible.
   useEffect(() => {
     if (hostId === null || userId === null) return;
     if (queryData === undefined || isPlaceholderData) return;
@@ -129,11 +117,8 @@ export function useCloudEpicTasksQuery(
     );
   }, [hostId, userId, queryClient, queryData, isPlaceholderData]);
 
-  // Identity (host | user | request scope) keys the accumulated "Show more"
-  // pages in the ambient store. Holding them there (instead of this hook's own
-  // state) lets loaded pages survive the host surface unmounting/remounting -
-  // e.g. closing and reopening the History overlay - and a scope change simply
-  // selects that scope's own pages rather than discarding them.
+  // Holding them there (instead of this hook's own state) lets loaded pages survive the host surface unmounting/remounting - e.g.
+  // closing and reopening the History overlay - and a scope change simply selects that scope's own pages rather than discarding them.
   const identity = `${hostId ?? ""}|${userId ?? ""}|${JSON.stringify(effectiveRequest)}`;
   const extraPages = useCloudEpicTasksPagesStore(
     (state) => state.pagesByIdentity[identity] ?? EMPTY_PAGES,
@@ -143,11 +128,7 @@ export function useCloudEpicTasksQuery(
     (state) => state.resetIdentity,
   );
 
-  // Next-page fetching flows through TanStack Query (host RPC must, per
-  // gui-app/AGENTS.md) so retries/errors are handled by Query rather than a
-  // hand-rolled promise + Zustand loading flag. `onSuccess` tags the page with
-  // the generation captured at mutate time; the store rejects it if a refresh
-  // bumped the generation in between.
+  // Next-page fetch through Query. `onSuccess` tags the page with the mutate-time generation.
   const nextPageMutation = useHostMutation<
     HostRpcRegistry,
     "epic.listTasks",
@@ -169,10 +150,7 @@ export function useCloudEpicTasksQuery(
       },
     },
   });
-  // Scope the in-flight flag to THIS identity: the mutation is hook-wide, so a
-  // "Show more" still resolving for a previous host/user/request scope must not
-  // block pagination once the scope changes (the late response still appends to
-  // its own identity's bucket via onSuccess).
+  // Scope the in-flight flag to THIS identity: the mutation is hook-wide, so a "Show more" still resolving for a previous host/user/request scope must not block pagination once the scope changes (the late response still appends to its own identity's bucket via onSuccess).
   const isFetchingNextPage =
     nextPageMutation.isPending &&
     nextPageMutation.variables.identity === identity;
@@ -180,11 +158,7 @@ export function useCloudEpicTasksQuery(
 
   const tasks = useMemo<readonly ListTaskLight[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;
-    // Dedupe by task id, first occurrence wins (the first page outranks the
-    // tails): a personal pin moves a row across server page boundaries, so
-    // after a pin lands, a refetched first page or a still-in-flight tail
-    // can both carry a row the other already has. A task with no id (neither
-    // epic nor phase) is always retained.
+    // Dedupe by task id, first occurrence wins (the first page outranks the tails): a personal pin moves a row across server page boundaries, so after a pin lands, a refetched first page or a still-in-flight tail can both carry a row the other already has.
     const seenTaskIds = new Set<string>();
     return [queryData, ...extraPages]
       .flatMap((page) => page.tasks)
@@ -210,10 +184,7 @@ export function useCloudEpicTasksQuery(
 
   const fetchNextPage = useCallback(() => {
     if (lastNextCursor === null || isFetchingNextPage) return;
-    // Register the identity before capturing its generation: a scope reset
-    // landing while this very first tail request for the identity is still
-    // in flight must have an entry to advance, or the stale response's
-    // captured generation would still match on arrival.
+    // Register the identity before capturing its generation: a scope reset landing while this very first tail request for the identity is still in flight must have an entry to advance, or the stale response's captured generation would still match on arrival.
     registerCloudEpicTasksPageIdentity(identity);
     mutateNextPage({
       identity,
@@ -273,13 +244,8 @@ function resolveCloudTasksUserId(
   return requestContextUserId;
 }
 
-/**
- * Cache discriminator keyed by the authenticated identity from the live
- * `RequestContext` metadata, NOT the raw bearer string. The bearer is a
- * persistence-boundary concern and must not leak into TanStack query
- * keys; the `userId` from `contextMetadata` is the canonical authority
- * for "who this cache belongs to".
- */
+/** Cache discriminator keyed by the authenticated identity from the live `RequestContext` metadata, NOT the raw bearer string.
+ * The bearer is a persistence-boundary concern and must not leak into TanStack query keys; the `userId` from `contextMetadata` is the canonical authority for "who this cache belongs to". */
 function useAuthIdentity(): {
   readonly status: AuthStatus;
   readonly userId: string | null;

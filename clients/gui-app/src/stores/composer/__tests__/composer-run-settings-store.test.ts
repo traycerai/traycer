@@ -9,9 +9,8 @@ import { composerRunSettingsKey } from "@/lib/persist";
 
 const STORAGE_KEY = composerRunSettingsKey(null);
 
-// Two distinct hosts so a test can prove a read/write on one never leaks
-// into the other, and that a host with no entry of its own falls through to
-// the frozen `legacy*` fields.
+// Two distinct hosts so a test can prove a read/write on one never leaks into the other, and that
+// a host with no entry of its own falls through to the frozen `legacy*` fields.
 const HOST_A = "host-a";
 const HOST_B = "host-b";
 
@@ -189,10 +188,7 @@ describe("composer run settings store", () => {
   });
 
   it("caps each host's epics independently - a second host never evicts the first's", () => {
-    // Host A is filled to exactly the cap, then host B is written to. A flat
-    // cap over the (epic, host) map would start evicting host A's oldest epic
-    // on B's very first write, so merely enrolling a machine would shrink
-    // every other machine's memory.
+    // Host A is filled to exactly the cap, then host B is written to.
     for (let index = 0; index < COMPOSER_RUN_SETTINGS_EPIC_CAP; index += 1) {
       useComposerRunSettingsStore
         .getState()

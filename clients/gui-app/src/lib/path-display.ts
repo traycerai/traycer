@@ -1,11 +1,4 @@
-/**
- * Path presentation helpers for folder listings.
- *
- * The identity of a folder row is its LEAF; the prefix is noise that repeats
- * on every row. These helpers turn a set of absolute host paths into the two
- * things a list needs: one shared base to state once, and a short remainder
- * per row.
- */
+/** Path presentation helpers for folder listings. */
 
 /** The separator a path already uses (a POSIX absolute path always wins). */
 export function separatorOf(path: string): string {
@@ -14,18 +7,13 @@ export function separatorOf(path: string): string {
 }
 
 /**
- * Paths here are HOST-native, not client-native: a Windows host writes
- * `C:\Users\alice` and a POSIX host writes `/Users/alice`, so both
- * separators are accepted everywhere and a path is echoed back in the one it
- * already uses. Nothing has to be CONVERTED - Windows accepts `/` too.
+ * Paths here are HOST-native, not client-native: a Windows host writes `C:\Users\alice` and a POSIX host writes `/Users/alice`, so both separators are accepted everywhere and a path is echoed back in the one it already uses.
  */
 const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
 
 /**
  * `\\server\share` - the shortest thing on a UNC path that is still a root.
- * Windows accepts forward slashes here too (`//server/share`), so both lead-in
- * separators count; a genuine POSIX path virtually never starts with a doubled
- * slash, and POSIX itself leaves that prefix implementation-defined.
+ * Windows accepts forward slashes here too (`//server/share`), so both lead-in separators count; a genuine POSIX path virtually never starts with a doubled slash, and POSIX itself leaves that prefix implementation-defined.
  */
 const WINDOWS_UNC_ROOT = /^[\\/]{2}[^\\/]+[\\/][^\\/]+/;
 
@@ -40,9 +28,7 @@ export function isAbsolutePath(path: string): boolean {
 
 /**
  * `\` counts as a separator only once the path is known to be Windows-native.
- * On a POSIX host a backslash is an ordinary filename character, so a folder
- * genuinely named `foo\bar` must not be split at it - `/srv/foo\bar` browses
- * `/srv` filtered by `foo\bar`, never `/srv/foo` filtered by `bar`.
+ * On a POSIX host a backslash is an ordinary filename character, so a folder genuinely named `foo\bar` must not be split at it - `/srv/foo\bar` browses `/srv` filtered by `foo\bar`, never `/srv/foo` filtered by `bar`.
  */
 export function lastSeparatorIndex(path: string): number {
   if (path.startsWith("/") && !WINDOWS_UNC_ROOT.test(path)) {
@@ -52,9 +38,8 @@ export function lastSeparatorIndex(path: string): number {
 }
 
 /**
- * Length of the leading run that navigation may never chop into: `/`, `C:\`,
- * or `\\server\share`. Without it, going up from `C:\Users` would land on
- * `C:` - a drive-relative path, not a folder - instead of stopping at `C:\`.
+ * Length of the leading run that navigation may never chop into: `/`, `C:\`, or `\\server\share`.
+ * Without it, going up from `C:\Users` would land on `C:` - a drive-relative path, not a folder - instead of stopping at `C:\`.
  */
 export function rootLengthOf(path: string): number {
   const unc = WINDOWS_UNC_ROOT.exec(path);
@@ -64,13 +49,8 @@ export function rootLengthOf(path: string): number {
 }
 
 /**
- * Path segments below the root, in order. Empty for a bare root.
- *
- * `\` counts as a separator only once the path is known to be Windows-native.
- * On a POSIX host a backslash is an ordinary filename character, so a folder
- * genuinely named `foo\bar` is ONE segment — splitting it would let
- * `commonBasePath` report a shared base (`/srv/foo/bar`) that names no
- * directory on that machine.
+ * Path segments below the root, in order.
+ * Empty for a bare root.
  */
 export function segmentsOf(path: string): ReadonlyArray<string> {
   const rest = path.slice(rootLengthOf(path));
@@ -78,23 +58,13 @@ export function segmentsOf(path: string): ReadonlyArray<string> {
   return rest.split(separators).filter((segment) => segment !== "");
 }
 
-/** The last segment — the name the row is really about. */
+/** The last segment - the name the row is really about. */
 export function leafOf(path: string): string {
   const segments = segmentsOf(path);
   return segments.at(-1) ?? path;
 }
 
-/**
- * Longest directory every path sits under, or null when stripping it would
- * buy nothing.
- *
- * Deliberately refuses three degenerate cases, because each produces a header
- * that costs a line and communicates nothing:
- *
- * - fewer than two paths (a single row has no *shared* anything);
- * - a base at the filesystem root (`/` is not news);
- * - a base that is one of the paths itself (that row's remainder is empty).
- */
+/** Longest directory every path sits under, or null when stripping it would buy nothing. */
 export function commonBasePath(paths: ReadonlyArray<string>): string | null {
   if (paths.length < 2) return null;
   const first = paths[0];
@@ -117,9 +87,7 @@ export function commonBasePath(paths: ReadonlyArray<string>): string | null {
   // show; keep one segment back so every row still has a name.
   if (shared >= shortest) shared = shortest - 1;
   if (shared <= 0) return null;
-  // A UNC root (`\\\\server\\share`) carries no trailing separator, unlike `/`
-  // and `C:\\`, so joining segments straight onto it would fuse the share name
-  // to the first segment.
+  // A UNC root (`\\\\server\\share`) carries no trailing separator, unlike `/` and `C:\\`, so joining segments straight onto it would fuse the share name to the first segment.
   const prefix = root.endsWith(separator) ? root : root + separator;
   return prefix + reference.slice(0, shared).join(separator);
 }

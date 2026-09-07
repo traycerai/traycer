@@ -51,12 +51,7 @@ interface BrowserViewProvisioningOptions {
   readonly emitStatus: (entry: BrowserViewEntry) => void;
 }
 
-/**
- * Birth of a host-owned Electron guest: allocating the view, establishing its
- * first CDP target, seeding storage, and settling the lifecycle promise the
- * host waits on. Everything here talks to `NativeBrowserViewLifecycle`, the
- * debug session and the entry - never to a caller's tile.
- */
+/** Everything here talks to `NativeBrowserViewLifecycle`, the debug session and the entry - never to a caller's tile. */
 export class BrowserViewProvisioning {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly windows: BrowserViewWindowAttachment;
@@ -85,11 +80,6 @@ export class BrowserViewProvisioning {
     url: string,
   ) => Promise<void>;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
-  /**
-   * Occupies a guest key for the whole async mint so a same-window second
-   * ensure joins the in-flight incarnation. A later ensure from a different
-   * window supersedes that mint instead of inheriting its guest.
-   */
   private readonly inFlightEnsures = new Map<string, InFlightEnsure>();
 
   constructor(options: BrowserViewProvisioningOptions) {
@@ -267,10 +257,7 @@ export class BrowserViewProvisioning {
     );
   }
 
-  /**
-   * Runs the initial navigation once the host accepts a provisioned tab, then
-   * drops the storage seed script so it cannot replay on later navigations.
-   */
+  /** Runs the initial navigation once the host accepts a provisioned tab, then drops the storage seed script so it cannot replay on later navigations. */
   async navigateAccepted(entry: BrowserViewEntry): Promise<void> {
     const debugSession = this.debugSessions.ensure(entry);
     try {
@@ -361,10 +348,6 @@ export class BrowserViewProvisioning {
     input: BrowserViewEnsureTab,
     startedAt: number,
   ): Promise<void> {
-    // The renderer creates the guest at about:blank, but Page CDP does not
-    // accept commands until the first document target has loaded. This
-    // internal navigation establishes that target before storage seeding; it
-    // is deliberately suppressed from browser-session state and history.
     entry.internalNavigation = true;
     try {
       await entry.webContents.loadURL("about:blank");

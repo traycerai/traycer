@@ -12,28 +12,10 @@ import type { WorkspaceRunItem } from "@/components/home/host-workspace-selector
 import { FontPicker } from "@/components/settings/controls/font-picker";
 import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
 
-/**
- * Autofocus gated on the pointer, across the surfaces that open a list with a
- * search field above it.
- *
- * Both arms are pinned for every site because the coarse arm is invisible on
- * every developer's machine: a suite that only asserted "the field is focused"
- * would keep passing after the gate was deleted. The coarse arm also asserts
- * where focus DID land, which is what separates a gate from a regression -
- * declining Radix's open-autofocus without leaving focus somewhere valid takes
- * the surface away from a screen reader.
- *
- * These layers all open from a trigger that survives the open, so leaving
- * focus on that trigger is the correct destination. A dialog raised from a
- * menu that unmounts with it would need focus moved onto its own content
- * instead - see `use-coarse-pointer-open-autofocus.ts`.
- */
+/** Both arms are pinned for every site because the coarse arm is invisible on every developer's machine: a
+ * suite that only asserted "the field is focused" would keep passing after the gate was deleted. */
 
-/**
- * The global test shim answers every media query with `matches: false`, which
- * is the fine-pointer arm. This narrows the coarse-pointer query alone so the
- * rest of the app's queries keep the shim's answer.
- */
+/** This narrows the coarse-pointer query alone so the rest of the app's queries keep the shim's answer. */
 function stubCoarsePointer(coarse: boolean): void {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -112,7 +94,6 @@ function workspaceRunItem(): WorkspaceRunItem {
   };
 }
 
-/** Opens the Location menu's "Existing worktree" submenu and returns its search. */
 async function openExistingWorktreeSearch(): Promise<HTMLElement> {
   render(
     <FolderLocationControl
@@ -138,9 +119,8 @@ describe("existing-worktree submenu search", () => {
   it("focuses the search when a fine pointer is driving", async () => {
     const search = await openExistingWorktreeSearch();
 
-    // The focus is scheduled in a frame, and then re-asserted on blur while
-    // the submenu's own focus restore fights it - so the settled state is what
-    // is worth asserting, not the first tick.
+    // The focus is scheduled in a frame, and then re-asserted on blur while the submenu's own focus restore fights
+    // it - so the settled state is what is worth asserting, not the first tick.
     await waitFor(() => expect(document.activeElement).toBe(search));
   });
 
@@ -149,9 +129,8 @@ describe("existing-worktree submenu search", () => {
     const search = await openExistingWorktreeSearch();
 
     expect(document.activeElement).not.toBe(search);
-    // Radix's own submenu focus lands on a worktree row and, with the
-    // reclaim-on-blur loop standing down alongside the autofocus, stays there.
-    // A row is a valid destination inside the submenu; the body is not.
+    // Radix's own submenu focus lands on a worktree row and, with the reclaim-on-blur loop standing down alongside
+    // the autofocus, stays there.
     expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
     // The scroller holding the worktree rows is a plain layout div with no
     // accessible role of its own, so its test id is the only handle on it.
@@ -164,12 +143,8 @@ describe("existing-worktree submenu search", () => {
 });
 
 describe("settings theme preset picker", () => {
-  /**
-   * `focusTrigger` is the engine difference this hook turns on. Chromium
-   * focuses a button on pointer activation; WebKit does not, and the shipping
-   * mobile shell is a WKWebView. Both are exercised because declining is only
-   * safe in the first case.
-   */
+  /** Chromium focuses a button on pointer activation; WebKit does not, and the shipping mobile shell is a
+   * WKWebView. Both are exercised because declining is only safe in the first case. */
   function openPicker(focusTrigger: boolean): {
     readonly trigger: HTMLElement;
   } {
@@ -199,9 +174,8 @@ describe("settings theme preset picker", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  // The WebKit arm. Declining alone would leave focus on `body`, standing the
-  // popover up with focus outside it - no screen-reader announcement and
-  // nothing for the focus scope to hold. Focus moves onto the content instead.
+  // The WebKit arm. Declining alone would leave focus on `body`, standing the popover up with focus outside it -
+  // no screen-reader announcement and nothing for the focus scope to hold.
   it("moves focus into the popover when the trigger never took it", () => {
     stubCoarsePointer(true);
     openPicker(false);

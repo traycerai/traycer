@@ -90,9 +90,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
   it("renders named sections as h2 headings outside separate bordered cards", () => {
     renderPanel(queryClient);
 
-    // SettingsGroup renders real <h2> labels, not row-shaped bands inside a
-    // single shared card. Each group is its own <section>; the h2 and the
-    // bordered rows-container are siblings.
+    // SettingsGroup renders real <h2> labels, not row-shaped bands inside a single shared card.
     const headings = GROUP_TITLES.map((title) =>
       screen.getByRole("heading", { level: 2, name: title }),
     );
@@ -386,10 +384,8 @@ describe("<AppearanceSettingsPanel /> groups", () => {
   });
 });
 
-/**
- * Decorative TerminalPreview root: locate via the sample "git status" text
- * and its aria-hidden ancestor (same pattern as the placement test).
- */
+/** Decorative TerminalPreview root: locate via the sample "git status" text and its aria-hidden ancestor (same
+ * pattern as the placement test). */
 function terminalPreviewRoot(): HTMLElement {
   const previewPrompt = screen.getByText("git status");
   const previewRoot = previewPrompt.closest('[aria-hidden="true"]');
@@ -399,10 +395,7 @@ function terminalPreviewRoot(): HTMLElement {
   return previewRoot;
 }
 
-/**
- * SettingsRow label for "Theme" (not the group <h2>). The panel has both an
- * h2 "Theme" and a row label "Theme"; filter to the non-heading text node.
- */
+/** SettingsRow label for "Theme" (not the group <h2>). */
 function rowLabel(label: string): HTMLElement {
   const matches = screen.getAllByText(label);
   const row = matches.find((el) => el.tagName !== "H2");

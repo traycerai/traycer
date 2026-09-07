@@ -20,15 +20,6 @@ import {
   type RegistryHarness,
 } from "./browser-sessions-stream-fixture";
 
-/**
- * The jar plane in the main process (browser-security-hardening H10).
- *
- * What these pin is WHICH PROCESS each frame is handled in, so every arm below
- * checks two things at once: that main did the work, and that the renderer was
- * told nothing about it. The renderer's whole view of this stream is the
- * `emit` recorder - if a cookie can reach a renderer at all, it reaches it
- * there.
- */
 
 vi.mock("../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -388,10 +379,6 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(settled).toBe(false);
 
     harness.jar.releaseBarrier();
-    // The bounded-wait promise resolves through an extra microtask hop (it
-    // adopts `readPrimaryProfile()`'s own promise rather than settling with
-    // a plain value), so the ack waiter needs a few more ticks to register
-    // than the frame needs to leave.
     for (let tick = 0; tick < 8; tick += 1) {
       await Promise.resolve();
     }
@@ -456,11 +443,6 @@ describe("the browser.sessions jar plane lives in main", () => {
       // test, not a socket write.
       expect(settled).toBe(false);
 
-      // ONE budget for the whole capture: only the second left of the
-      // original five is what the ack gets, not a fresh
-      // FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS on top of the barrier wait it
-      // just spent four of. Advancing by exactly that remainder is enough to
-      // time the flush out with no ack ever sent.
       await vi.advanceTimersByTimeAsync(1_000);
       await flushed;
       expect(settled).toBe(true);
@@ -1343,10 +1325,6 @@ describe("the browser.sessions jar plane lives in main", () => {
       await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
       expect(await firstPushed).toBe(0);
 
-      // A second capture on the SAME standing id: its frame leaves too, so
-      // there are now two frames outstanding under "standing-1" - the timed
-      // out one (settled, but still queued to absorb its own late ack) and
-      // this live one.
       const secondPushed = registry.capturePrimaryProfileOnEveryHost();
       await Promise.resolve();
       await Promise.resolve();
@@ -1523,10 +1501,7 @@ describe("the browser.sessions jar plane lives in main", () => {
     // took the jar - `sent-no-jar` is not `acked`.
     expect(await firstPushed).toBe(0);
 
-    // A second capture on the SAME standing id, this time with a healthy jar
-    // read: its own ack must satisfy its own slot - proving the first
-    // frame's ack did not spuriously satisfy this next slot in the
-    // ack-in-send-order sequence.
+    // A second capture on the SAME standing id, this time with a healthy jar read: its own ack must satisfy its own slot.
     const secondPushed = registry.capturePrimaryProfileOnEveryHost();
     await Promise.resolve();
     await Promise.resolve();
@@ -1560,13 +1535,6 @@ describe("the browser.sessions jar plane lives in main", () => {
       null,
     );
 
-    // Two callers overlapping on the SAME stream - a login import's push
-    // beside the quit-path flush. The final capture is deliberately NOT
-    // routed through `capturePrimaryProfileNow`'s in-flight/trailing lane
-    // (the import's own push takes that lane from inside its barrier, and a
-    // final capture queued ahead of it there would have the push wait on the
-    // capture that waits on the push) - so both read the jar and send their
-    // own frame independently, quoting the one standing id.
     const pushed = registry.capturePrimaryProfileOnEveryHost();
     const flushed = registry.captureFinalPrimaryProfiles("window-1");
     await Promise.resolve();
@@ -1612,11 +1580,7 @@ describe("the browser.sessions jar plane lives in main", () => {
       null,
     );
 
-    // Three back-to-back callers on the same stream, all arriving while the
-    // first capture is still in flight. The second and third must share ONE
-    // trailing capture rather than each minting their own - a burst of
-    // overlapping callers costs two frames total on this stream, never one
-    // per caller.
+    // The second and third must share ONE trailing capture rather than each minting their own.
     const first = registry.capturePrimaryProfileOnEveryHost();
     const second = registry.capturePrimaryProfileOnEveryHost();
     const third = registry.capturePrimaryProfileOnEveryHost();
@@ -1840,10 +1804,6 @@ describe("the browser.sessions jar plane lives in main", () => {
       tabId: "tab-1",
     });
 
-    // A preview is a screenshot of a signed-in page and `openTab` is one IPC
-    // away, so a guest THIS desktop owns is photographed only while it is on
-    // screen - otherwise a renderer could open the user's mail and read it
-    // back with nothing appearing on the display.
     expect(session.framesOfKind("captureTabPreview")).toHaveLength(0);
     expect(vi.mocked(log.warn).mock.calls).toHaveLength(1);
 

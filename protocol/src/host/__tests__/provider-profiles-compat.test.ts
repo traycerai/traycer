@@ -19,10 +19,7 @@ import {
   providersListResponseSchemaV30,
   providersSetEnabledRequestSchemaV21,
 } from "@traycer/protocol/host/provider-schemas";
-// Importing from the registry runs `defineVersionedRpcRegistry` (full
-// structural + schema-compatibility validation) at module load, so this
-// import alone asserts the new `providers.startLogin@1.1` /
-// `providers.setEnabled@2.1` lines and their bridges are well-formed.
+// Importing from the registry runs `defineVersionedRpcRegistry` (full structural + schema-compatibility validation) at module load, so this import alone asserts the new `providers.startLogin@1.1` /.
 import {
   providersAwaitLoginDowngradeV21ToV10,
   providersSetEnabledDowngradeV2ToV1,
@@ -36,11 +33,7 @@ import {
 import { claudeTuiAgentSchema } from "@traycer/protocol/persistence/epic/tui-agents";
 
 /**
- * Multi-profile protocol ticket coverage: every additive field parses old
- * (pre-profile) persisted shapes with `profileId`/`labelSnapshot`/
- * `accountUuid` defaulting to null, and every downgrade bridge that targets a
- * frozen/strict pre-profile wire shape strips the new fields instead of
- * failing the parse.
+ * Multi-profile protocol ticket coverage: every additive field parses old (pre-profile) persisted shapes with `profileId`/`labelSnapshot`/ `accountUuid` defaulting to null, and every downgrade bridge that targets a.
  */
 
 function providerState(providerId: string) {
@@ -181,9 +174,6 @@ describe("ProviderCliState.profiles[] downgrade to v1.0", () => {
 
     const downgraded = downgradeProviderCliStateToV10(state);
     expect(downgraded).not.toBeNull();
-    // `providerCliStateSchemaV10` is a strict object - re-parsing the
-    // downgraded value proves no profile/identity data survived (a strict
-    // parse would reject any leftover unknown key).
     expect(providerCliStateSchemaV10.safeParse(downgraded).success).toBe(true);
     expect(downgraded).not.toHaveProperty("profiles");
     expect(JSON.stringify(downgraded)).not.toContain("alice@example.com");
@@ -242,10 +232,7 @@ describe("ProviderCliState.profiles[] downgrade to v1.0", () => {
           },
           identity: null,
           usageUpdatedAt: null,
-          // A newer host's severity vocabulary grew a value this client's
-          // frozen enum doesn't know - the whole field must degrade to null
-          // (profile-level fallback) instead of wiping the profile via the
-          // array-level `.catch([])` on `profiles`.
+          // A newer host's severity vocabulary grew a value this client's frozen enum doesn't know - the whole field must degrade to null (profile-level fallback) instead of wiping the profile via the array-level `.catch([])` on.
           rateLimitLimitedScopes: [{ family: "Fable", severity: "soft_limit" }],
         },
       ],
@@ -271,9 +258,7 @@ describe("ProviderCliState.profiles[] downgrade to v1.0", () => {
           },
           identity: null,
           usageUpdatedAt: null,
-          // A newer host's palette grew a color this client's frozen enum
-          // doesn't know about - the array-level `.catch([])` on `profiles`
-          // would otherwise silently wipe every profile for this provider.
+          // A newer host's palette grew a color this client's frozen enum doesn't know about - the array-level `.catch([])` on `profiles` would otherwise silently wipe every profile for this provider.
           reusedTombstone: { label: "Old Work", accentColor: "#ffffff" },
         },
       ],
@@ -317,22 +302,13 @@ const stateWithProfile = providerCliStateSchema.parse({
 
 describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
   it("providerCliStateSchemaV20 drops an unmodeled profiles key on parse", () => {
-    // Regression guard for the leak this frozen schema used to have: it was
-    // defined via `.extend()` on the live (growing) schema, so it silently
-    // inherited `profiles` instead of staying pinned to what v2.0 shipped.
+    // Regression guard for the leak this frozen schema used to have: it was defined via `.extend()` on the live (growing) schema, so it silently inherited `profiles` instead of staying pinned to what v2.0 shipped.
     const parsed = providerCliStateSchemaV20.parse(stateWithProfile);
     expect(parsed).not.toHaveProperty("profiles");
   });
 
   it("downgradeProviderCliStateListToV20 never leaks profile identity to a v2.0 caller", () => {
-    // Latest major carries profiles[]; the path from latest → v2.0 must strip
-    // them. The major is spelled out because `downgradeResponseAcrossMajors`
-    // resolves it at the type level, so it cannot be read off the registry at
-    // runtime - it has to be bumped by hand every time a new major opens
-    // (v5.0 and v6.0 were each frozen by a release; v7.0 is the newest line
-    // and is not released yet). The latest major also carries
-    // `nativeCapabilities` and `native`, which this downgrade strips alongside
-    // `profiles`.
+    // Latest major carries profiles[]; the path from latest → v2.0 must strip them.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
       8,
@@ -345,9 +321,6 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
     expect(downgraded.value.providers[0]).not.toHaveProperty("profiles");
-    // Belt-and-suspenders: prove the email itself (both the live identity
-    // and the ambient-drift notice's previous email) is gone from the wire
-    // value, not just hidden behind the schema's field list.
     const serialized = JSON.stringify(downgraded.value);
     expect(serialized).not.toContain("work@example.com");
     expect(serialized).not.toContain("alice@example.com");
@@ -357,18 +330,14 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
 
 describe("providers.list v3.0 line predates profiles[]", () => {
   it("providerCliStateSchemaV30 drops an unmodeled profiles key on parse", () => {
-    // The v3.0 line shipped without profiles - the frozen shape must stay
-    // pinned to what released v3.0 hosts actually send, not inherit the
-    // field the live shape grew mid-line.
+    // The v3.0 line shipped without profiles - the frozen shape must stay pinned to what released v3.0 hosts actually send, not inherit the field the live shape grew mid-line.
     const parsed = providerCliStateSchemaV30.parse(stateWithProfile);
     expect(parsed).not.toHaveProperty("profiles");
   });
 
   it("upgrades a pre-profiles v3.0 response to v4.0 with profiles: []", () => {
-    // Released-host crash regression: a v3.0 host (e.g. host 1.1.6) sends
-    // providers without any `profiles` key. The 3.0 -> 4.0 upgrade must hand
-    // the caller providers matching the live contract - `profiles: []`, never
-    // undefined (the GUI reads `provider.profiles.some(...)` unconditionally).
+    // Released-host crash regression: a v3.0 host (e.g. host 1.1.6) sends providers without any `profiles` key.
+    // The 3.0 -> 4.0 upgrade must hand the caller providers matching the live contract - `profiles: []`, never undefined (the GUI reads `provider.profiles.some(...)` unconditionally).
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 3, minor: 0 },
@@ -414,10 +383,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
 
 describe("provider.* mutation major-2 lines predate profiles[]", () => {
   it("providerMutationCliStateSchemaV20 drops an unmodeled profiles key on parse", () => {
-    // The released 2.0 mutation responses reused the live state and silently
-    // gained `profiles` - the frozen shape must stay pinned to what released
-    // 2.0 hosts actually send (and what host-side projection onto 2.0 may
-    // put on the wire).
+    // The released 2.0 mutation responses reused the live state and silently gained `profiles` - the frozen shape must stay pinned to what released 2.0 hosts actually send (and what host-side projection onto 2.0 may put on.
     const parsed = providerMutationCliStateSchemaV20.parse(stateWithProfile);
     expect(parsed).not.toHaveProperty("profiles");
   });
@@ -638,12 +604,7 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
 });
 
 describe("acknowledgeAmbientDrift profileAction (rides the unreleased @2.1)", () => {
-  // No frozen-@2.1 rejection case and no @2.1->@2.2 upgrade case here on
-  // purpose: `acknowledgeAmbientDrift` widened the SAME unreleased `@2.1`
-  // union the other profileActions ride (the released surface, host-v1.0.0,
-  // negotiates `providers.setEnabled@2.0`), so there is no older @2.x peer
-  // schema to freeze against - the @2.0/@1.0 cases above already cover every
-  // released-peer path.
+  // `providers.setEnabled@2.0` - No frozen-@2.1 rejection case and no @2.1->@2.2 upgrade case here on purpose: `acknowledgeAmbientDrift` widened the SAME unreleased `@2.1` union the other profileActions ride (the released.
   it("the @2.1 request schema accepts acknowledgeAmbientDrift with no profileId", () => {
     expect(
       providersSetEnabledRequestSchemaV21.safeParse({

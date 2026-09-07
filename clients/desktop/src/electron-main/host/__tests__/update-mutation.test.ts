@@ -24,28 +24,6 @@ vi.mock("../../app/host-login-item", () => ({
   retireCompetingCliRegistrationAtLaunchGuarded: loginItemMocks.retire,
 }));
 
-// Seam for the tombstone-flush findings (2 + 6): only `open()`/`rm()` calls
-// whose path contains `.stop-intent.` are intercepted, and only while
-// `tombstoneHook.behavior` is set - every other `open`/`rm`/`rename`/`mkdir`
-// call in this file (including the real fixture setup below) passes
-// straight through to the real `node:fs/promises`.
-//
-// `close` deliberately awaits the most recent `sync()` promise before
-// resolving, mirroring Node's documented `FileHandle.close()` contract (it
-// waits for pending operations on the handle). That coupling is what makes
-// the ablation for finding 2 meaningful: with the fix, the deadline arm
-// detaches the close (`void handle.close()`), so nothing here is ever
-// awaited by the production code and the wrapper's `close` promise is left
-// pending harmlessly; if the deadline arm were changed back to `await
-// handle.close()`, this wrapper's `close` would transitively await the
-// never-settling `sync()` below, hanging exactly as the real filesystem
-// contract would.
-//
-// `log` and `lastClosePromise` exist so a test can make POSITIVE
-// observations (an event actually happened, in a known order, on a promise
-// it can directly await) instead of an absence claim ("nothing bad
-// happened") - an absence claim would pass just as green if the seam were
-// never reached at all.
 const tombstoneHook = vi.hoisted(() => ({
   behavior: null as null | (() => Promise<void>),
   log: [] as string[],
@@ -130,11 +108,6 @@ async function freshHome(): Promise<string> {
   return join(root, "host-home");
 }
 
-/**
- * `withMintedAdoption` needs a full `HostFsLayout`, not just a `hostHomeDir`
- * string — mirrors the sibling `update-mutation-capability-edges.test.ts`
- * fixture.
- */
 function freshLayout(): Promise<HostFsLayout> {
   return freshHostFsLayout(roots, "desktop-minted-adoption-test-");
 }
@@ -449,19 +422,6 @@ describe("withMintedAdoption", () => {
   });
 });
 
-// Findings 2 + 6 (revalidation round): `publishRestartTombstoneWithAttempt`'s
-// flush deadline raced `handle.sync()` against a timer, but the enclosing
-// `finally` then did `await handle.close()` on every arm - and
-// `FileHandle.close()` waits for pending operations on that handle, so a
-// stuck `fsync` was still transitively awaited inside `close()`. The
-// deadline changed WHICH promise was awaited, not how long the segment was
-// held: exactly the stuck-updating class this epic exists to remove,
-// rebuilt inside the removal. The same arm also returned past the outer
-// `catch` that cleans up `temp`, leaking a `.stop-intent.<pid>.<time>.tmp`
-// on every flush failure.
-//
-// These two tests exercise both defects together because they share one
-// root cause and one fix (detach the close, do the arm's own cleanup).
 describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)", () => {
   async function runWithCapability<T>(
     layout: HostFsLayout,
@@ -487,12 +447,7 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
     return captured as T;
   }
 
-  // Real timers, not faked: the deadline races real `open`/`mkdir`/`writeFile`
-  // I/O against a real 5s `setTimeout`, and `vi.advanceTimersByTimeAsync`
-  // cannot be trusted to interleave correctly against that real I/O (a first
-  // attempt using fake timers here raced ahead of the deadline's own
-  // `setTimeout` being armed and hung for the full Vitest test timeout
-  // instead). A slightly extended per-test timeout absorbs the real 5s wait.
+  // Real timers, not faked: the deadline races real `open`/`mkdir`/`writeFile` I/O against a real 5s `setTimeout`, and `vi.advanceTimersByTimeAsync` cannot be trusted to interleave.
   it(
     "bounds the flush wait: a stuck fsync cannot hold the segment forever, and resolves not-published",
     { timeout: 8_000 },
@@ -512,26 +467,7 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
     },
   );
 
-  // Ablated (verification-only, reverted before committing, production
-  // untouched): reverted the deadline arm from `void handle.close()` back to
-  // the pre-fix `await handle.close(); closed = true;`, then re-ran the test
-  // above with its timeout lowered to 3000ms. It failed with Vitest's own
-  // "Test timed out in 3000ms" rather than resolving `not-published` - the
-  // wrapper's `close()` awaited the never-settling `sync()` above exactly as
-  // Node's real `FileHandle.close()` contract would, reproducing the "stuck
-  // in restarting forever" class this fix closes. Reverted immediately
-  // after, diff-confirmed clean, timeout restored to 8000ms.
 
-  // Tightened per the coordinator's revalidation follow-up: the original
-  // draft of this test asserted only absences (no leftover file, no
-  // resurrection) after letting the late sync settle - which passes just as
-  // green if the fake seam is never reached, or if the late settlement never
-  // actually happens. Every assertion below is now a POSITIVE observation:
-  // the fake was genuinely hit (seam proof), `rm` and the detached `close`
-  // are recorded as ordered events (not inferred timing), the late
-  // settlement is directly awaited rather than assumed from elapsed time,
-  // and the final directory state is enumerated rather than checked for one
-  // name's absence.
   it(
     "a late-succeeding fsync settles strictly after temp is unlinked, and the detached close settlement is directly observed",
     { timeout: 8_000 },
@@ -552,24 +488,13 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
         );
         expect(result.kind).toBe("not-published");
 
-        // Seam proof: the production code genuinely reached the fake
-        // `sync()` rather than some real, unobserved fsync. Without this,
-        // every assertion below would be vacuous - it would pass identically
-        // if `publishRestartTombstoneWithAttempt` never called our fake at
-        // all.
+        // Without this, every assertion below would be vacuous - it would pass identically if `publishRestartTombstoneWithAttempt` never called our fake at all.
         expect(syncSeamHit).toBe(true);
 
-        // The deadline-loss arm's own cleanup (finding 6) already ran and
-        // settled by the time the function resolved - it is `await`ed on
-        // that arm, unlike `close()`. Record its position in the event log
-        // before releasing the late sync.
         expect(tombstoneHook.log).toContain("rm-settled");
         const rmIndex = tombstoneHook.log.indexOf("rm-settled");
 
-        // The detached `close()` (`void handle.close()`) was already
-        // invoked synchronously in the same branch that called `rm` -
-        // capture its promise now, before releasing the gate, so its
-        // eventual settlement can be directly awaited rather than assumed.
+        // The detached `close()` (`void handle.close()`) was already invoked synchronously in the same branch that called `rm`.
         expect(tombstoneHook.lastClosePromise).not.toBeNull();
         const closeSettled = tombstoneHook.lastClosePromise;
 
@@ -588,10 +513,6 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
         expect(rmIndex).toBeLessThan(closeIndex);
         expect(tombstoneHook.log).toEqual(["rm-settled", "close-settled"]);
 
-        // Final directory state, enumerated rather than a single absence
-        // check: nothing survives in the layout root, and an unexpected
-        // extra file (which a one-name absence check would miss) fails
-        // loudly here.
         const entries = await readdir(layout.rootDir);
         expect(entries).toEqual([]);
       } finally {
@@ -616,26 +537,8 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
       tombstoneHook.behavior = null;
     }
 
-    // Ablated (verification-only, reverted, production untouched): removed
-    // the `await rm(temp, { force: true }).catch(() => undefined);` line
-    // from the deadline-loss arm. Re-ran this exact test: it went red on
-    // `stopIntentTempFiles(...)` returning a length of 1 instead of 0 - a
-    // real leaked `.stop-intent.<pid>.<time>.tmp`, reproducing exactly what
-    // the reviewer reported. Reverted immediately, diff-confirmed clean.
   });
 
-  // Finding 3 (round-2 revalidation): a boolean `withFlushDeadline` result
-  // collapsed "the disk rejected the write" into the same `false` as "the
-  // deadline expired", so an immediate `EIO`/`ENOSPC` was durably reported to
-  // the terminal attempt record as `restart tombstone flush exceeded 5000ms`
-  // - a fabricated cause pointing an operator at latency/lock contention
-  // instead of the actual disk fault. The fix is `FlushOutcome`, a
-  // discriminated `flushed | rejected{cause} | expired`. Both tests below are
-  // needed together: asserting only "contains the real error text" would
-  // still pass if the string were `EIO ... exceeded 5000ms` (both true at
-  // once), so the rejection case also asserts the ABSENCE of the timeout
-  // vocabulary, and the expiry case is re-proven with the same shape so the
-  // two can't be satisfied by one shared constant string.
   it("a fsync that rejects immediately reports the real disk error, not a fabricated timeout", async () => {
     const layout = await freshLayout();
     tombstoneHook.behavior = () =>
@@ -652,26 +555,12 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
       // Positive: the real cause survives into the diagnostic.
       expect(result.cause).toContain("EIO");
       expect(result.cause).toContain("input/output error");
-      // Negative half, load-bearing on its own: a string containing BOTH the
-      // real error and the timeout vocabulary would pass the assertion
-      // above while still being the bug (a rejection dressed up as a
-      // timeout). This is what actually distinguishes "fixed" from
-      // "half-fixed".
       expect(result.cause).not.toContain("exceeded");
       expect(result.cause).not.toContain("5000ms");
     } finally {
       tombstoneHook.behavior = null;
     }
 
-    // Ablated (verification-only, reverted, production untouched): restored
-    // the pre-fix shape by making `withFlushDeadline` return `false` for
-    // BOTH the rejected and expired arms (collapsing the discriminated
-    // `FlushOutcome` back to a boolean) and having the caller derive the
-    // same fabricated string for every `false`. Re-ran this exact test: it
-    // went red on `result.cause).not.toContain("exceeded")` - the message
-    // read "restart tombstone flush exceeded 5000ms" despite the fsync
-    // having rejected in well under a millisecond, reproducing the reviewer
-    // finding exactly. Reverted immediately, diff-confirmed clean.
   });
 
   it(
@@ -708,13 +597,6 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
     // `null` (then `never` under `?.`) at the `finally` below.
     const dateNowSpy = { current: null as MockInstance<() => number> | null };
     tombstoneHook.behavior = () => {
-      // Simulate the wall clock stepping BACKWARD during the flush: by the
-      // time the freshness re-check reads `Date.now()` again, it is more
-      // than the 5000ms deadline behind `requestedAtMs` - equivalently,
-      // `requestedAtMs` now looks FUTURE-dated from the re-check's point of
-      // view. Symmetric with the ordinary "too old" case: `Math.abs()`
-      // treats both directions identically, so this must go stale exactly
-      // like a clock that stepped forward would.
       dateNowSpy.current = vi
         .spyOn(Date, "now")
         .mockReturnValue(stampedAroundMs - 5_000 - 10_000);

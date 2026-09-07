@@ -16,9 +16,8 @@ interface WorkspaceMarkdownLinkProviderProps {
 }
 
 /**
- * Link policy for markdown rendered inside a workspace-file preview. Relative
- * links resolve beside the markdown file being previewed, not against the
- * process cwd or the app route.
+ * Link policy for markdown rendered inside a workspace-file preview.
+ * Relative links resolve beside the markdown file being previewed, not against the process cwd or the app route.
  */
 export function WorkspaceMarkdownLinkProvider(
   props: WorkspaceMarkdownLinkProviderProps,
@@ -28,11 +27,7 @@ export function WorkspaceMarkdownLinkProvider(
     () => ({
       supersedePendingFileLink: () => undefined,
       openFileLink: (link) => {
-        // Intentional asymmetry: this workspace-file preview surface ignores
-        // the link's `:line`/`:col` target, unlike chat (which records a reveal
-        // request). The plan scopes line targeting to chat; a preview tile just
-        // opens the file at the top. Do not wire the reveal channel here without
-        // revisiting that decision.
+        // Do not wire the reveal channel here without revisiting that decision.
         if (link.isDirectory) return false;
         const ref = workspaceFileRefFromWorkspaceMarkdownLink(
           props.hostId,

@@ -24,9 +24,8 @@ const mocks = vi.hoisted(() => ({
   describeSlotLockHoldersMock: vi.fn(),
 }));
 
-// The externally-managed branch reports an unforeseen repair failure through
-// the real CLI logger, which appends to the invoking user's `~/.traycer` log
-// file. Stub it so the suite stays hermetic and that warning is assertable.
+// The externally-managed branch reports an unforeseen repair failure through the real CLI logger, which appends to the invoking user's `~/.traycer` log file.
+// Stub it so the suite stays hermetic and that warning is assertable.
 vi.mock("../../logger", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logger")>();
   return {
@@ -49,23 +48,15 @@ vi.mock("../cli-binary", () => ({
   resolveServiceCliInvocation: mocks.resolveServiceCliInvocationMock,
 }));
 
-// The update path's no-repoint preservation reads the REAL registered
-// LaunchAgent plist under the invoking user's home on darwin - stub it so
-// the suite never depends on (or leaks) the developer's actual host
-// registration.
+// The update path's no-repoint preservation reads the REAL registered LaunchAgent plist under the invoking user's home on darwin - stub it so the suite never depends on (or leaks) the developer's actual host registration.
 vi.mock("../platforms/macos", () => ({
   readRegisteredCliInvocation: mocks.readRegisteredCliInvocationMock,
 }));
 
-// The Windows swap-lock recovery functions shell out to schtasks /
-// powershell / taskkill - stub the module so the wiring tests can assert
-// the lifecycle hands the label through without touching the OS.
+// The Windows swap-lock recovery functions shell out to schtasks / powershell / taskkill - stub the module so the wiring tests can assert the lifecycle hands the label through without touching the OS.
 vi.mock("../platforms/windows", async () => {
-  // The REAL clock helper, re-exported through the mock: the wiring test
-  // below asserts by identity that this exact function reaches the platform
-  // seam, and separately that it reads in the unit the kill loop compares
-  // against. A reimplementation here would let both pass for a helper that
-  // drifted.
+  // The REAL clock helper, re-exported through the mock: the wiring test below asserts by identity that this exact function reaches the platform seam, and separately that it reads in the unit the kill loop compares against.
+  // A reimplementation here would let both pass for a helper that drifted.
   const actual = await vi.importActual<typeof import("../platforms/windows")>(
     "../platforms/windows",
   );
@@ -76,10 +67,8 @@ vi.mock("../platforms/windows", async () => {
   };
 });
 
-// Deliberately NOT mocked: `../cli-invocation-shape`. The self-naming
-// predicate under test in the preserve-path suite below must run for real -
-// mocking it would make those tests assert nothing about the actual
-// drop/preserve decision.
+// Deliberately NOT mocked: `../cli-invocation-shape`.
+// The self-naming predicate under test in the preserve-path suite below must run for real - mocking it would make those tests assert nothing about the actual drop/preserve decision.
 
 const label: ServiceLabel = {
   id: "ai.traycer.host",
@@ -100,9 +89,7 @@ interface ControllerHarness {
   readonly start: Mock<() => Promise<void>>;
   readonly restart: Mock<() => Promise<void>>;
   readonly stop: Mock<() => Promise<void>>;
-  // The kickstart -k half of the post-swap externally-managed relaunch -
-  // surfaced separately from `start` so tests can assert which of the two
-  // kickstart routes the lifecycle actually took.
+  // The kickstart -k half of the post-swap externally-managed relaunch - surfaced separately from `start` so tests can assert which of the two kickstart routes the lifecycle actually took.
   readonly relaunchAfterRestart: Mock<() => Promise<void>>;
   readonly retireCompetingRegistration: Mock<
     () => Promise<CompetingRegistrationRetirement>
@@ -182,12 +169,8 @@ async function runLifecycle(
   return { state: handle.state, harness };
 }
 
-// Async-capable counterpart to the sync `withPlatform` helper further down
-// this file (scoped to the "swap-lock recovery wiring" describe block,
-// unchanged). The preserve-path tests below need `process.platform` pinned
-// across `await`s spanning `beforeSwap`/`afterSwap` - `it.runIf(process
-// .platform === "darwin")` would silently never run on Linux CI, which is
-// exactly the gap this stub closes.
+// Async-capable counterpart to the sync `withPlatform` helper further down this file (scoped to the "swap-lock recovery wiring" describe block, unchanged).
+// The preserve-path tests below need `process.platform` pinned across `await`s spanning `beforeSwap`/`afterSwap` - `it.runIf(process .platform === "darwin")` would silently never run on Linux CI, which is exactly the gap this stub closes.
 async function withPlatformAsync<T>(
   platform: string,
   run: () => Promise<T>,
@@ -293,9 +276,8 @@ describe("service install lifecycle re-registration", () => {
     await expect(runningHandle.lifecycle.beforeSwap()).rejects.toBe(lost);
     expect(running.stop).not.toHaveBeenCalled();
 
-    // A Desktop-managed host gets a post-swap competing-registration repair
-    // and kickstart. The second verifier call flips lost, so neither raw
-    // retire nor raw start/relaunch may run.
+    // A Desktop-managed host gets a post-swap competing-registration repair and kickstart.
+    // The second verifier call flips lost, so neither raw retire nor raw start/relaunch may run.
     const externallyManaged = makeController("externally-managed");
     mocks.createServiceControllerMock.mockReturnValue(
       externallyManaged.controller,
@@ -361,9 +343,8 @@ describe("service install lifecycle re-registration", () => {
   });
 
   it("host update re-registers with self-invocation CLI when no manifest is available", async () => {
-    // Brew/manual: resolveServiceCliInvocation falls back to the running
-    // process (process.execPath + entry argv). Lifecycle must still reload
-    // the definition via install — not leave the service stopped-with-success.
+    // Brew/manual: resolveServiceCliInvocation falls back to the running process (process.execPath + entry argv).
+    // Lifecycle must still reload the definition via install - not leave the service stopped-with-success.
     const selfInvocationCli = {
       command: process.execPath,
       args: ["/path/to/traycer-cli/entry.js"],
@@ -391,15 +372,8 @@ describe("service install lifecycle re-registration", () => {
   });
 
   it("leaves an externally-managed (SMAppService-owned) REGISTRATION untouched while cooperatively cycling the host on macOS", async () => {
-    // Desktop owns this label. Any manifest rewrite / bootstrap from the
-    // CLI would either corrupt the BTM registration or run into
-    // installService's SMAppService refusal - that half is unchanged. What
-    // changed: on macOS the host PROCESS is now stopped through its own
-    // lifecycle RPCs before the swap (an honest install, instead of
-    // printing "stopping service" and swapping under the live host) and
-    // kickstarted back on the new bytes after - via `relaunchAfterRestart`
-    // (kickstart -k semantics), since the pre-swap stop RESOLVED and proved
-    // the host child gone.
+    // Desktop owns this label.
+    // Any manifest rewrite / bootstrap from the CLI would either corrupt the BTM registration or run into installService's SMAppService refusal - that half is unchanged.
     const { state, harness } = await runLifecycle(
       "externally-managed",
       bootstrap,
@@ -413,9 +387,8 @@ describe("service install lifecycle re-registration", () => {
     expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
     if (process.platform === "darwin") {
       expect(harness.stop).toHaveBeenCalledTimes(1);
-      // Not asserting `harness.start` counts here - `relaunchAfterRestart`'s
-      // mock internally calls `start()` too, so a count on `start` conflates
-      // the two routes. `relaunchAfterRestart` is the one that matters.
+      // Not asserting `harness.start` counts here - `relaunchAfterRestart`'s mock internally calls `start()` too, so a count on `start` conflates the two routes.
+      // `relaunchAfterRestart` is the one that matters.
       expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
       expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
         forcedRecycle: true,
@@ -435,10 +408,7 @@ describe("service install lifecycle re-registration", () => {
   it.runIf(process.platform === "darwin")(
     "force-stops the Desktop-managed host when force is set",
     async () => {
-      // `--force` threads into the pre-swap `controller.stop` on the
-      // externally-managed path exactly like every other stop route: the
-      // caller's stated consent to kill in-flight work, not an implicit
-      // side effect of installing.
+      // `--force` threads into the pre-swap `controller.stop` on the externally-managed path exactly like every other stop route: the caller's stated consent to kill in-flight work, not an implicit side effect of installing.
       const { harness } = await runLifecycle(
         "externally-managed",
         bootstrap,
@@ -460,9 +430,7 @@ describe("service install lifecycle re-registration", () => {
   it.runIf(process.platform === "darwin")(
     "aborts the swap when the Desktop-managed host denies the shutdown claim (busy)",
     async () => {
-      // Never swap the install dir out from under live work: a busy denial
-      // from the cooperative stop is a user-visible refusal, not a
-      // degradation to swap-anyway.
+      // Never swap the install dir out from under live work: a busy denial from the cooperative stop is a user-visible refusal, not a degradation to swap-anyway.
       const harness = makeController("externally-managed");
       harness.stop.mockRejectedValue(
         new CliError({
@@ -490,15 +458,8 @@ describe("service install lifecycle re-registration", () => {
   it.runIf(process.platform === "darwin")(
     "kickstarts the agent post-swap with a plain start (not relaunchAfterRestart) when the cooperative stop is unreachable",
     async () => {
-      // A host too broken to answer its own RPC must not make the install
-      // refuse - that is the lockout shape this epic exists to end. The
-      // swap proceeds exactly as it did before the cooperative era and the
-      // degradation is logged. The machine is no longer left alone
-      // post-swap, though: a plain kickstart starts a genuinely stopped job
-      // and is a silent no-op at the launchd layer on one that is still
-      // live (never `relaunchAfterRestart`'s forced recycle - the stop
-      // never proved the host child dead, so recycling could kill live
-      // work).
+      // A host too broken to answer its own RPC must not make the install refuse - that is the lockout shape this epic exists to end.
+      // The swap proceeds exactly as it did before the cooperative era and the degradation is logged.
       const harness = makeController("externally-managed");
       harness.stop.mockRejectedValue(
         new CliError({
@@ -529,14 +490,8 @@ describe("service install lifecycle re-registration", () => {
   it.runIf(process.platform === "darwin")(
     "starts the agent post-swap even when the host was already stopped (stop --force then install must not leave the machine hostless)",
     async () => {
-      // Field scenario: a prior `host stop --force` purges pid.json, so the
-      // pre-swap stop here throws no-endpoint rather than resolving - the
-      // same degraded path as an unreachable RPC, just a different cause.
-      // The OLD (gated) post-swap logic skipped the kickstart whenever
-      // `stoppedBeforeSwap` was false, which left a completed install, a
-      // printed "starting service", and no host running until someone ran
-      // `host restart` by hand. The unconditional post-swap kickstart
-      // exists to close exactly this gap.
+      // Field scenario: a prior `host stop --force` purges pid.json, so the pre-swap stop here throws no-endpoint rather than resolving - the same degraded path as an unreachable RPC, just a different cause.
+      // The OLD (gated) post-swap logic skipped the kickstart whenever `stoppedBeforeSwap` was false, which left a completed install, a printed "starting service", and no host running until someone ran `host restart` by hand.
       const harness = makeController("externally-managed");
       harness.stop.mockRejectedValue(
         new CliError({
@@ -567,9 +522,7 @@ describe("service install lifecycle re-registration", () => {
   it.runIf(process.platform === "darwin")(
     "records postSwapError without throwing when the post-swap kickstart itself fails",
     async () => {
-      // The completed install must not be undone by a failing kickstart -
-      // the failure is recorded for the command to surface (and Doctor to
-      // flag), never thrown.
+      // The completed install must not be undone by a failing kickstart - the failure is recorded for the command to surface (and Doctor to flag), never thrown.
       const harness = makeController("externally-managed");
       harness.relaunchAfterRestart.mockRejectedValue(
         new Error("launchctl kickstart -k failed: no such process"),
@@ -588,10 +541,8 @@ describe("service install lifecycle re-registration", () => {
     },
   );
 
-  // The repair half: leaving Desktop's registration alone must NOT mean
-  // leaving a competing CLI-label registration alone. This is the one
-  // routine flow that reaches a machine poisoned during the v1.1.7 window,
-  // and a refusal alone can never clean up what already exists.
+  // The repair half: leaving Desktop's registration alone must NOT mean leaving a competing CLI-label registration alone.
+  // This is the one routine flow that reaches a machine poisoned during the v1.1.7 window, and a refusal alone can never clean up what already exists.
   it("retires a competing CLI registration on the externally-managed path", async () => {
     const { harness } = await runLifecycle(
       "externally-managed",
@@ -602,9 +553,7 @@ describe("service install lifecycle re-registration", () => {
     expect(harness.retireCompetingRegistration).toHaveBeenCalledWith(label);
   });
 
-  // The repair is contractually non-throwing, but the lifecycle must not rely
-  // on that politely holding: an install whose bytes are already swapped in
-  // must never be failed by its own opportunistic cleanup.
+  // The repair is contractually non-throwing, but the lifecycle must not rely on that politely holding: an install whose bytes are already swapped in must never be failed by its own opportunistic cleanup.
   it("does not fail the install when the competing-registration repair throws", async () => {
     const harness = makeController("externally-managed");
     harness.retireCompetingRegistration.mockRejectedValue(
@@ -619,25 +568,19 @@ describe("service install lifecycle re-registration", () => {
     await handle.lifecycle.beforeSwap();
 
     await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
-    // The repair throw never aborts the lifecycle; on macOS the
-    // cooperative stop still gets its kickstart-back (via
-    // `relaunchAfterRestart`, since the stop resolved), elsewhere the
-    // service is left alone.
+    // The repair throw never aborts the lifecycle; on macOS the cooperative stop still gets its kickstart-back (via `relaunchAfterRestart`, since the stop resolved), elsewhere the service is left alone.
     expect(handle.state.postSwapAction).toBe(
       process.platform === "darwin" ? "start" : "none",
     );
     if (process.platform === "darwin") {
       expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
     }
-    // Caught, but never silent. Every failure the repair anticipates is
-    // logged at its own seam, so the only way into that catch is an
-    // unforeseen throw - exactly the case that escaped the logging.
+    // Caught, but never silent.
+    // Every failure the repair anticipates is logged at its own seam, so the only way into that catch is an unforeseen throw - exactly the case that escaped the logging.
     expect(mocks.cliLoggerWarnMock).toHaveBeenCalled();
   });
 
-  // Every other prior state either registers the CLI label itself or
-  // deliberately leaves the service alone; there is no Desktop-owned agent
-  // to defer to, so a competing registration cannot exist to repair.
+  // Every other prior state either registers the CLI label itself or deliberately leaves the service alone; there is no Desktop-owned agent to defer to, so a competing registration cannot exist to repair.
   it.each(["running", "stopped", "not-installed"] as const)(
     "does not attempt a competing-registration repair from prior state %s",
     async (priorState) => {
@@ -650,9 +593,7 @@ describe("service install lifecycle re-registration", () => {
   it.skipIf(process.platform !== "darwin")(
     "host update preserves the registered plist's CLI invocation instead of repointing to freshly resolved binaries",
     async () => {
-      // Brew/manual cohort: a stale staged ~/.traycer/cli binary would win
-      // normal resolution, silently repointing the plist away from the brew
-      // binary the registration actually invokes.
+      // Brew/manual cohort: a stale staged ~/.traycer/cli binary would win normal resolution, silently repointing the plist away from the brew binary the registration actually invokes.
       const registered = { command: "/opt/homebrew/bin/traycer", args: [] };
       mocks.readRegisteredCliInvocationMock.mockResolvedValue(registered);
       mocks.resolveServiceCliInvocationMock.mockResolvedValue({
@@ -674,15 +615,11 @@ describe("service install lifecycle re-registration", () => {
     },
   );
 
-  // Preserve-path coverage for the self-naming drop (isSelfNamingCliInvocation
-  // is NOT mocked in this suite - see the module comment near the top of this
-  // file). Platform is stubbed rather than `it.runIf`-gated so this actually
-  // runs on Linux CI, not just real darwin hosts.
+  // Preserve-path coverage for the self-naming drop (isSelfNamingCliInvocation is NOT mocked in this suite - see the module comment near the top of this file).
+  // Platform is stubbed rather than `it.runIf`-gated so this actually runs on Linux CI, not just real darwin hosts.
   it("drops a registered self-naming invocation instead of preserving it, re-resolving via resolveServiceCliInvocation", async () => {
-    // The pre-fix packaged fallback registered `<SEA> traycer host start` -
-    // a shape that can never launch (`error: unknown command 'traycer'`).
-    // `isSelfNamingCliInvocation` recognizes this, so host update must fall
-    // through to normal resolution rather than preserving a broken unit.
+    // The pre-fix packaged fallback registered `<SEA> traycer host start` - a shape that can never launch (`error: unknown command 'traycer'`).
+    // `isSelfNamingCliInvocation` recognizes this, so host update must fall through to normal resolution rather than preserving a broken unit.
     const brokenSelfNaming = {
       command: "/usr/local/bin/traycer",
       args: ["traycer"],
@@ -731,9 +668,7 @@ describe("service install lifecycle re-registration", () => {
   });
 
   it("manifest-based existing-registration reload still uses install, not kickstart", async () => {
-    // Explicit bootstrap (host install / orchestrator) with a staged CLI
-    // path: existing registration must rewrite+reload via install, never
-    // plain start/restart of a cached definition.
+    // Explicit bootstrap (host install / orchestrator) with a staged CLI path: existing registration must rewrite+reload via install, never plain start/restart of a cached definition.
     const manifestCli = {
       command: "/Users/example/.traycer/cli/bin/traycer",
       args: [] as string[],
@@ -841,14 +776,8 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
     expect(lease.cancel).toHaveBeenCalledTimes(1);
   });
 
-  // A rejecting `cancel()` must never replace the actuator error being
-  // reported: `finally { await lease?.cancel().catch(() => undefined); }`
-  // exists so a cleanup failure can never swap itself in for the real
-  // failure. `postSwapError` only ever carries an Error's `.message` (this
-  // branch never rethrows the raw object for a non-authority error), so
-  // `toBe` here pins the surfaced string to exactly `startError.message` -
-  // never the cancel error's message - which is the only identity check
-  // reachable through the public `createServiceInstallLifecycle` seam.
+  // A rejecting `cancel()` must never replace the actuator error being reported: `finally { await lease?.cancel().catch(() => undefined); }` exists so a cleanup failure can never swap itself in for the real failure.
+  // `postSwapError` only ever carries an Error's `.message` (this branch never rethrows the raw object for a non-authority error), so `toBe` here pins the surfaced string to exactly `startError.message` - never the cancel error's message - which is the only identity check reachable through the public `createServiceInstallLifecycle` seam.
   it("surfaces the start error, not a rejecting lease cancel, when both fail", async () => {
     const startError = new Error("os-failed");
     const cancelError = new Error("cancel blew up");
@@ -881,9 +810,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
     expect(lease.cancel).toHaveBeenCalledTimes(1);
   });
 
-  // Companion to the failing-start case above: a successful install with a
-  // rejecting `cancel()` must not turn a completed install into a reported
-  // failure either.
+  // Companion to the failing-start case above: a successful install with a rejecting `cancel()` must not turn a completed install into a reported failure either.
   it("does not fail the install when a successful lease's cancel rejects", async () => {
     const lease = {
       waitForSpawn: vi.fn(async () => undefined),
@@ -1000,9 +927,7 @@ describe("swap-lock recovery wiring", () => {
     });
 
     for (const recovery of recoveries) {
-      // A null here is exactly the quiet regression this test exists to
-      // catch: the installer would silently run without re-kill or
-      // holder diagnostics on the only platform that needs them.
+      // A null here is exactly the quiet regression this test exists to catch: the installer would silently run without re-kill or holder diagnostics on the only platform that needs them.
       expect(recovery).not.toBeNull();
       if (recovery === null) throw new Error("unreachable");
       await recovery.killLingeringProcesses();
@@ -1013,13 +938,8 @@ describe("swap-lock recovery wiring", () => {
       await expect(recovery.describeLockHolders()).resolves.toEqual(holders);
     }
     expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledTimes(2);
-    // The clock is a required dependency, not an ambient one: the kill loop
-    // bounds its cross-round victim memory with it, and a caller that forgot to
-    // pass one would fail at the call rather than quietly reading a global.
-    // Asserted by IDENTITY (the real `epochMicrosNow`, re-exported through the
-    // mock above) and by UNIT: the loop compares this clock against creation
-    // times the scan projects in epoch microseconds, so a clock in
-    // milliseconds would put every victim's window a thousand times too early.
+    // The clock is a required dependency, not an ambient one: the kill loop bounds its cross-round victim memory with it, and a caller that forgot to pass one would fail at the call rather than quietly reading a global.
+    // Asserted by IDENTITY (the real `epochMicrosNow`, re-exported through the mock above) and by UNIT: the loop compares this clock against creation times the scan projects in epoch microseconds, so a clock in milliseconds would put every victim's window a thousand times too early.
     expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledWith(
       label,
       null,

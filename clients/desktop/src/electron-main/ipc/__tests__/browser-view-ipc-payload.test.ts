@@ -4,12 +4,7 @@ import {
   parseReservedChords,
 } from "../browser-view-ipc-payload";
 
-/**
- * The guest-focused input policy arrives from the renderer, which may be newer
- * than this build. One unrecognized row must cost that row and nothing else -
- * dropping the array would leave every reserved chord unclaimed, so Cmd+W
- * would silently go back to closing the app's task tab.
- */
+/** One unrecognized row must cost that row and nothing else. */
 describe("parseReservedChords", () => {
   it("keeps the rows it understands when one is from a newer renderer", () => {
     const parsed = parseReservedChords({
@@ -31,12 +26,7 @@ describe("parseReservedChords", () => {
   });
 });
 
-/**
- * `includeDeviceBound` is required, not optional: a renderer built against an
- * older protocol that omits it must be treated as malformed - the run handler
- * answers a blocked result rather than silently defaulting the opt-in either
- * way.
- */
+/** `includeDeviceBound` is required, not optional: a renderer built against an older protocol that omits it must be treated as malformed. */
 describe("browserViewIpcPayload.loginImportRun", () => {
   it("accepts a well-formed request with includeDeviceBound present", () => {
     const parsed = browserViewIpcPayload.loginImportRun.safeParse({

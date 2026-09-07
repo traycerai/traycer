@@ -1,18 +1,4 @@
-/**
- * Local root-doc updates produced while the renderer↔host transport is down.
- *
- * Re-homed from three closure `let`s and four closures. The logic is unchanged
- * down to the latch; what moved is ownership, so the queue can be handed to a
- * replica that survives a transport detach instead of living beside the socket
- * that dropped.
- *
- * Collapsed with `Y.mergeUpdates` once it grows past either threshold below.
- * The merge is lossless, and a merged update is bounded by the document's own
- * size rather than by how many edits produced it - so a long offline stretch
- * costs O(doc) instead of O(edits). Nothing is ever dropped: the queue is the
- * in-memory propagation path for edits the host has not seen, and discarding it
- * would lose user work that the reconnect reconcile is only a backstop for.
- */
+/** Local root-doc updates produced while the renderer↔host transport is down. */
 import * as Y from "yjs";
 
 const UNSYNCED_COLLAPSE_BYTES = 4 * 1024 * 1024;
@@ -37,15 +23,8 @@ export function createUnsyncedRootQueue(): UnsyncedRootQueue {
    */
   let ops = 0;
   /**
-   * Bytes appended since the last collapse.
-   *
-   * The collapse trigger MUST be measured against this rather than against the
-   * queue's total size. A merged buffer is frequently larger than the
-   * threshold all by itself, so a total-size trigger never falls back below
-   * the line once it is crossed: every subsequent push would see a
-   * two-element, over-threshold queue and re-merge the entire buffer, turning
-   * an occasional O(doc) collapse into an O(doc) merge on every single edit.
-   * Resetting this to zero after each merge is what makes the trigger latch.
+   * Bytes appended since the last collapse. The collapse trigger MUST be measured against this
+   * rather than against the queue's total size.
    */
   let bytesSinceCollapse = 0;
 

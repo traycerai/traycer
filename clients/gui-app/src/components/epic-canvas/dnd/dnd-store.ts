@@ -1,12 +1,6 @@
 /**
- * Ephemeral drag state for the single root DndContext. Non-persisted by
- * design: every field is gesture-scoped and cleared on drag end/cancel.
- *
- * The root provider (`root-dnd-provider.tsx`) is the ONLY writer; it holds
- * zero React state so preview ticks never re-render the provider subtree.
- * Consumers subscribe through the narrow per-target selector hooks below so
- * a preview tick re-renders only the hovered pane/strip, never the whole
- * canvas.
+ * The root provider (`root-dnd-provider.tsx`) is the ONLY writer; it holds zero React state so preview ticks never re-render the provider subtree.
+ * Consumers subscribe through the narrow per-target selector hooks below so a preview tick re-renders only the hovered pane/strip, never the whole canvas.
  */
 import { create } from "zustand";
 import type {
@@ -155,14 +149,7 @@ function headerStripDragStateEqual(
   );
 }
 
-/**
- * Whether every gesture-scoped field is already at rest.
- *
- * `dragEnded` fires on paths that may have written nothing, and re-setting a
- * store that is already idle would publish a new object and re-render every
- * narrow subscriber for nothing. Extracted so adding a gesture field is one
- * line here rather than another branch inside the action.
- */
+/** Extracted so adding a gesture field is one line here rather than another branch inside the action. */
 function isDragStateIdle(state: EpicDndState): boolean {
   return (
     state.activeSource === null &&
@@ -201,12 +188,8 @@ interface EpicDndState {
    */
   readonly headerStripDropIndex: number | null;
   /**
-   * Header-tab reorder/merge state from the strip geometry model. Header drags
-   * resolve their insertion index from pointer geometry rather than droppable
-   * hit-testing (see `header-strip-drag-model.ts`), so this - not
-   * `headerStripDropIndex` - is what the strip renders a provisional order
-   * from. `headerStripDropIndex` stays for canvas tear-off onto the strip,
-   * which has no source slot and so cannot oscillate.
+   * Header drags resolve their insertion index from pointer geometry rather than droppable hit-testing (see `header-strip-drag-model.ts`), so this - not `headerStripDropIndex` - is what the strip renders a provisional order from.
+   * `headerStripDropIndex` stays for canvas tear-off onto the strip, which has no source slot and so cannot oscillate.
    */
   readonly headerStripDragState: StripDragState | null;
   /**
@@ -215,22 +198,16 @@ interface EpicDndState {
    */
   readonly headerStripSourceWidth: number | null;
   /**
-   * Per-item x displacement for the HEADER strip while a header drag is in
-   * flight. The header renders an explicit transform from this rather than a
-   * provisional CSS `order` + layout projection, exactly as the tile strip
-   * does - an absent id means that item sits at x 0.
+   * The header renders an explicit transform from this rather than a provisional CSS `order` + layout projection, exactly as the tile strip does - an absent id means that item sits at x 0.
    */
   readonly headerStripOffsets: ReadonlyMap<string, number>;
   /**
-   * Per-tile x displacement while a tile drag is in flight, keyed by group then
-   * tile id. Tile strips render an explicit transform from this rather than a
-   * provisional CSS `order`; an absent group means every tile sits at x 0.
+   * Tile strips render an explicit transform from this rather than a provisional CSS `order`; an absent group means every tile sits at x 0.
    */
   readonly tileStripOffsets: ReadonlyMap<string, ReadonlyMap<string, number>>;
   /**
-   * Measured width of the dragged tile, so its overlay is the tile at its own
-   * size rather than a differently-shaped chip. Tile widths are content-sized
-   * and genuinely unequal, so this cannot be a constant.
+   * Measured width of the dragged tile, so its overlay is the tile at its own size rather than a differently-shaped chip.
+   * Tile widths are content-sized and genuinely unequal, so this cannot be a constant.
    */
   readonly tileSourceWidth: number | null;
   /**
@@ -239,11 +216,8 @@ interface EpicDndState {
    */
   readonly topLevelStripPairPreview: TopLevelStripPairPreview | null;
   /**
-   * Sidebar reparent preview (gesture-scoped, mutually exclusive with the
-   * canvas `dropPreview`). `reparentTargetNodeId` is the hovered VALID row
-   * target (new parent); `reparentRootPanelId` is the hovered VALID panel
-   * empty-space (un-nest to root). Both null unless a `sidebar-node` is over a
-   * sidebar target whose `canReparent` pre-flight passed.
+   * Sidebar reparent preview (gesture-scoped, mutually exclusive with the canvas `dropPreview`).
+   * `reparentTargetNodeId` is the hovered VALID row target (new parent); `reparentRootPanelId` is the hovered VALID panel empty-space (un-nest to root).
    */
   readonly reparentTargetNodeId: string | null;
   readonly reparentTargetViewTabId: string | null;
@@ -270,9 +244,7 @@ interface EpicDndState {
   readonly topLevelStripPairPreviewChanged: (
     preview: TopLevelStripPairPreview | null,
   ) => void;
-  // Every field is required: the preview lands verbatim in `reparent*` state,
-  // which is `string | null`. An omitted key reads as `undefined` and would
-  // store a third value the readers below never compare against.
+  // An omitted key reads as `undefined` and would store a third value the readers below never compare against.
   readonly sidebarReparentPreviewChanged: (preview: {
     readonly targetNodeId: string | null;
     readonly targetViewTabId: string | null;
@@ -426,9 +398,8 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   },
 }));
 
-// ── Narrow selector hooks ───────────────────────────────────────────────────
-// One hook per consumer surface so a preview tick re-renders ONLY the
-// hovered target. Do not subscribe to the whole store from components.
+// ── Narrow selector hooks ─────────────────────────────────────────────────── One hook per consumer surface so a preview tick re-renders ONLY the hovered target.
+// Do not subscribe to the whole store from components.
 
 /** Canvas interaction shield: any typed canvas/rail drag locks the canvas. */
 export function useEpicDndInteractionLocked(): boolean {
@@ -441,11 +412,7 @@ function isCanvasOpenableSource(
   return source !== null && EPIC_CANVAS_DND_SOURCE_TYPES.includes(source.kind);
 }
 
-/**
- * True while a canvas-openable source (tab / sidebar node / terminal /
- * git-diff tile / workspace file) is being dragged. Pane drop zones mount
- * only then.
- */
+/** Pane drop zones mount only then. */
 export function useEpicDndCanvasDragActive(): boolean {
   return useEpicDndStore((s) => isCanvasOpenableSource(s.activeSource));
 }
@@ -506,9 +473,8 @@ export function useHeaderStripDragState(): StripDragState | null {
 }
 
 /**
- * For the one strip tab a pair-into-split drop would combine with: the side of
- * the pair the DRAGGED tab would take (its approach side). Null for every
- * other tab.
+ * For the one strip tab a pair-into-split drop would combine with: the side of the pair the DRAGGED tab would take (its approach side).
+ * Null for every other tab.
  */
 export function useTopLevelStripPairPreview(
   refKind: string,
@@ -530,9 +496,7 @@ type LeftPanelRailDropPreview = Extract<
 >;
 
 /**
- * Rail-facing drop preview (icon before/after/combine + rail-end) for the
- * sidebar rail. Narrowed so canvas-side preview ticks (pane bodies, tab
- * strips, header strip) never re-render the rail.
+ * Narrowed so canvas-side preview ticks (pane bodies, tab strips, header strip) never re-render the rail.
  */
 export function useLeftPanelRailDropPreview(
   viewTabId: string,
@@ -549,10 +513,7 @@ export function useLeftPanelRailDropPreview(
 }
 
 /**
- * Active panel-section extraction drag (a section header dragged out of a
- * sidebar group), used by the rail to render its boundary drop-slot chip.
- * Null for rail-origin drags and every non-rail source; re-renders on drag
- * start/end only - never on preview ticks.
+ * Null for rail-origin drags and every non-rail source; re-renders on drag start/end only - never on preview ticks.
  */
 export function useLeftPanelSectionDragSource(
   viewTabId: string,
@@ -567,9 +528,7 @@ export function useLeftPanelSectionDragSource(
 }
 
 /**
- * True while THIS sidebar row is the active valid reparent drop target. Each
- * row subscribes by its own `nodeId`, so a reparent-preview tick re-renders
- * only the hovered row (and the one it just left), never the whole tree.
+ * Each row subscribes by its own `nodeId`, so a reparent-preview tick re-renders only the hovered row (and the one it just left), never the whole tree.
  */
 export function useSidebarReparentTargetActive(
   viewTabId: string,

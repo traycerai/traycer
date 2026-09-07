@@ -683,10 +683,8 @@ describe("leader digit dispatch (global scope)", () => {
   });
 
   it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {
-    // F4 (closure): the section leader was pathname-owned. With the empty side
-    // of a [Settings | empty] split focused, routeBackingSide keeps the URL on
-    // /settings, but Settings does NOT own focus - an Alt-digit section command
-    // must no-op instead of stealing focus back to Settings.
+    // Empty side of a Settings split: Alt-digit must no-op, not steal focus
+    // back to Settings.
     useTabsStore.setState({
       version: 2,
       items: [
@@ -740,12 +738,8 @@ function seedEpicTabs(): void {
   }));
 }
 
-// Builds the lightweight `KeybindingRouterSource` `<KeybindingProvider>`
-// itself takes (distinct from the `KeybindingRouter` seam `dispatchAction`
-// takes above) - just enough for `routerAdapterFor` to read a pathname and
-// hand off a no-op `navigate`. Digit-chord tab switches update
-// `useEpicCanvasStore` directly (see the `dispatchAction`/`fireDigit` tests
-// above), so a real TanStack router isn't needed to observe them.
+// Lightweight KeybindingRouterSource: pathname + no-op navigate. Digit chords
+// write useEpicCanvasStore directly; no real TanStack router.
 function buildProviderRouterSource(
   initialPathname: string,
 ): KeybindingRouterSource {
@@ -760,11 +754,8 @@ function buildProviderRouterSource(
   };
 }
 
-// Renders the real `<KeybindingProvider>` (so its actual window `keydown`
-// capture-phase listener is live) and appends a Diffs-shaped boundary -
-// `data-diffs-editor-boundary` wrapping a contenteditable node - directly
-// under `document.body`. Returns the contenteditable so tests can dispatch
-// real, DOM-composed keydown events at it.
+// Real KeybindingProvider plus a Diffs contenteditable on document.body.
+// Dispatch real DOM keydown at the returned node.
 function renderDiffsBoundaryProvider(initialPathname: string): HTMLElement {
   const router = buildProviderRouterSource(initialPathname);
   render(createElement(KeybindingProvider, { router, children: null }));
@@ -818,12 +809,8 @@ function seedManyEpicTabs(count: number): ReadonlyArray<string> {
   return tabIds;
 }
 
-// Finding: `isDiffsEditorEvent(event)` used to short-circuit `handleKeyDown`
-// unconditionally, so a modified chord (⌘1, a reserved shortcut, ...) typed
-// while focus sat inside a Diffs editor boundary never reached
-// `resolveReservedAction`/`matchDigitAction` at all - even though it was
-// never meant to type a character into the editor. The fix only bypasses to
-// the editor for BARE (unmodified) typing.
+// isDiffsEditorEvent only bypasses for bare typing; modified chords still
+// reach resolveReservedAction / matchDigitAction.
 describe("<KeybindingProvider /> inside a Diffs editor boundary", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -895,10 +882,8 @@ describe("<KeybindingProvider /> inside a Diffs editor boundary", () => {
   });
 
   it("does not let entering the editor mid-chord break a multi-digit sequence typed entirely inside it", () => {
-    // Guards the narrower fix over the naive "always reset the pending digit
-    // sequence when isDiffsEditorEvent is true" reading: that would wipe the
-    // sequence armed by the FIRST digit before the second digit (also fired
-    // with focus inside the boundary) ever got to extend it.
+    // Do not reset the pending digit sequence on isDiffsEditorEvent; the
+    // second digit still needs to extend it.
     __resetTabNavigationControllerForTesting();
     const tabIds = seedManyEpicTabs(12);
     const editor = renderDiffsBoundaryProvider("/epics/m1");

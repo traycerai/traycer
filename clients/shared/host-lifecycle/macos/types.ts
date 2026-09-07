@@ -11,7 +11,7 @@ import type { AttemptReadiness, HostPidMetadata } from "../shared/host-process";
 import type { CliSlotValidity } from "../shared/cli-slot";
 import type { Reachability } from "../shared/reachability";
 
-/** macOS annex IndeterminateCause — keep platform-local, do not flatten. */
+/** macOS annex IndeterminateCause - keep platform-local, do not flatten. */
 export type IndeterminateCause =
   | "command-failed"
   | "timeout"

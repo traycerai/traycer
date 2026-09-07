@@ -1,11 +1,4 @@
-/**
- * Tests for the shared device-flow client (`device-auth.ts`).
- *
- * The load-bearing requirement (tech plan v2, Finding 10): every wire status
- * from `POST /device/token` maps to its own explicit variant and NONE collapse
- * into a single `network-error` / `rejected`. This suite pins that mapping
- * status-by-status, the `/device/authorize` parsing, and the backoff helper.
- */
+/** Tests for the shared device-flow client (`device-auth.ts`). */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applySlowDown,
@@ -325,9 +318,7 @@ describe("pollDeviceToken - HTTP status to variant mapping", () => {
 });
 
 describe("cancellation and timeout", () => {
-  // A fetch that never resolves on its own and only rejects when its `signal`
-  // aborts (mirroring the real abortable fetch), so we can prove a caller abort
-  // or per-request timeout collapses to the retryable `network-error`.
+  // A fetch that never resolves on its own and only rejects when its `signal` aborts (mirroring the real abortable fetch), so we can prove a caller abort or per-request timeout collapses to the retryable `network-error`.
   function installHangingFetch(): void {
     globalThis.fetch = ((
       _input: RequestInfo | URL,

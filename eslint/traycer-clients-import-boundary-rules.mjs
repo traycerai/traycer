@@ -1,11 +1,5 @@
 /**
- * Import surface for `clients/*` workspaces: same-package relatives,
- * `@traycer-clients/*`, `@traycer/protocol/*` (and TS path aliases to those),
- * or third-party packages. Blocks other monorepo scopes such as
- * `packages/common` (`@traycerai/*`) and non-protocol `@traycer/*` paths.
- *
- * Wire via `@typescript-eslint/no-restricted-imports`:
- * `["error", traycerClientsImportBoundaryRestrictions]`.
+ * Import surface for `clients/*` workspaces: same-package relatives, `@traycer-clients/*`, `@traycer/protocol/*` (and TS path aliases to those), or third-party packages.
  */
 import { protocolBoundaryRestrictions } from "./protocol-boundary-rules.mjs";
 

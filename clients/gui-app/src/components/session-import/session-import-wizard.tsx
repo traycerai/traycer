@@ -57,43 +57,24 @@ export interface SessionImportSecondaryAction {
   readonly onSelect: () => void;
 }
 
-/**
- * The one import surface, used by the onboarding act and the Settings dialog
- * alike (spec D3). It hands the user's selection to the app-wide run
- * controller rather than owning the run itself - which is what lets it be
- * closed mid-import.
- *
- * The scan is the caller's (`useSessionImportScan`), because the two surfaces
- * start it at different moments: the dialog when it opens, the tour when it
- * begins - several acts before this wizard is on screen (D13, revised).
- *
- * Both surfaces submit through the wizard's own Import button. The tour used
- * to submit through its Continue instead, which imported the default selection
- * without an explicit ask; an import now starts only when Import is pressed.
- */
+/** It hands the user's selection to the app-wide run controller rather than owning the run itself - which is
+ * what lets it be closed mid-import. */
 export function SessionImportWizard(props: {
   readonly surface: SessionImportSurface;
   readonly scan: SessionImportScanHandle;
-  /** Called once a run has been submitted, so the caller can move on. */
   readonly onImportStarted: () => void;
   readonly secondaryAction: SessionImportSecondaryAction | null;
 }) {
   const { surface, scan, onImportStarted, secondaryAction } = props;
   const tone = sessionImportTone(surface);
-  // The run this wizard shows and starts is the one on the host it renders
-  // under - transport and host name off the same binding, which is also what
-  // the submission is aimed at.
+  // The run this wizard shows and starts is the one on the host it renders under - transport and host name off
+  // the same binding, which is also what the submission is aimed at.
   const streamBinding = useStreamRuntimeBinding();
   const hostId = streamBinding?.hostId ?? null;
   const runStatus = useSessionImportRun(hostId).status;
   const runIdle = runStatus === "idle";
-  // Meeting the wizard on any surface - the tour act, the Settings dialog,
-  // the release toast's own dialog - is the announcement: the id is consumed
-  // on mount so the toast never follows for a user who has already opened
-  // the feature, whether or not they imported anything. Only reaching the
-  // wizard counts; skipping the tour before its act does not, so a skipper
-  // still gets the toast (unlike `login-import`, which the tour's finish
-  // consumes unconditionally).
+  // Only reaching the wizard counts; skipping the tour before its act does not, so a skipper still gets the
+  // toast (unlike `login-import`, which the tour's finish consumes unconditionally).
   const consumeAnnouncement = useFeatureAnnouncementsStore(
     (state) => state.consume,
   );
@@ -101,12 +82,8 @@ export function SessionImportWizard(props: {
     consumeAnnouncement("session-import");
   }, [consumeAnnouncement]);
 
-  // Opening the wizard retires a FINISHED run's summary, so a second visit
-  // scans afresh instead of re-reading last time's result. It does not re-run
-  // while this wizard is open on one host: a run that finishes here still
-  // shows its summary, because that summary is what the user is waiting for.
-  // A host change is a fresh opening onto a different machine, so the same
-  // retirement applies to it.
+  // Opening the wizard retires a finished run's summary, so a second visit scans afresh instead of re-reading
+  // last time's result.
   useEffect(() => {
     if (hostId === null) return;
     const store = useSessionImportRunStore.getState();
@@ -118,9 +95,8 @@ export function SessionImportWizard(props: {
 
   const { state, dispatch } = scan;
   const view = useMemo(() => buildSessionImportView(state), [state]);
-  // The master checkbox reads the VISIBLE slice: it heads the list exactly as
-  // the search and pills have narrowed it, so what it shows and what it moves
-  // are the same rows the user is looking at.
+  // The master checkbox reads the visible slice: it heads the list exactly as the search and pills have narrowed
+  // it, so what it shows and what it moves are the same rows the user is looking at.
   const visibleSelection = selectionStateFor(
     view.visibleSelectionKeys.length,
     view.visibleSelectedCount,
@@ -189,10 +165,8 @@ export function SessionImportWizard(props: {
                 selected: visibleSelection !== "all",
               })
             }
-            // The transparent side borders mirror the cards' own border, so
-            // this box heads exactly the column the folder checkboxes below
-            // sit on - which is also what makes its reach legible: it rules
-            // the rows under it, as the search and pills have narrowed them.
+            // The transparent side borders mirror the cards' own border, so this box heads exactly the column the folder
+            // checkboxes below sit on - which is also what makes its reach legible.
             className={cn(
               "flex shrink-0 items-center rounded-md border-x border-transparent px-2.5 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
               view.visibleSelectionKeys.length > 0 && tone.rowHover,
@@ -299,10 +273,7 @@ export function SessionImportWizard(props: {
   );
 }
 
-/**
- * The pinned header: search over everything, the scan-window picker, one pill
- * per provider the scan covers.
- */
+/** The pinned header: search over everything, the scan-window picker, one pill per provider the scan covers. */
 function SessionImportFilters(props: {
   readonly tone: SessionImportTone;
   readonly query: string;
@@ -370,18 +341,11 @@ function SessionImportFilters(props: {
   );
 }
 
-/**
- * The one silhouette the whole scope row wears, so the window picker and the
- * provider pills are measurably the same object - same height, radius, padding
- * and type size - rather than two controls that merely resemble each other.
- */
+/** The one silhouette the whole scope row wears, so the window picker and the provider pills are measurably the
+ * same object - same height, radius, padding and type size. */
 const SCOPE_PILL_SHAPE = "h-6 gap-1.5 rounded-full border px-2.5 text-ui-xs";
 
-/**
- * How far back the scan looks. Picking a value IS the scan: the hook watches
- * this half of the state and starts a fresh, host-bounded scan for it - there
- * is deliberately no separate "rescan" button to pair with it.
- */
+/** How far back the scan looks. */
 function ScanWindowSelect(props: {
   readonly tone: SessionImportTone;
   readonly scanWindow: SessionImportScanWindow;
@@ -400,12 +364,8 @@ function ScanWindowSelect(props: {
         if (option !== undefined) onChange(option.window);
       }}
     >
-      {/* Dressed as one of the pills beside it: the whole control row is the
-          scan's scope, and a lone square box in a row of rounds reads as a
-          different kind of thing. The primitive's own chrome fights that - it
-          pins its height behind the size variant, fills itself in dark mode,
-          and carries no hover - so each of those is squared with the pills
-          explicitly here. */}
+      {/* Dressed as one of the pills beside it: the whole control row is the scan's scope, and a lone square box in a
+         row of rounds reads as a different kind of thing. */}
       <SelectTrigger
         aria-label="How far back to look"
         data-testid="session-import-scan-window"
@@ -434,10 +394,7 @@ function ScanWindowSelect(props: {
   );
 }
 
-/**
- * The pinned footer: just the actions that end the conversation. The selection
- * count and the master checkbox live at the head of the list they describe.
- */
+/** The pinned footer: just the actions that end the conversation. */
 function SessionImportFooter(props: {
   readonly tone: SessionImportTone;
   readonly view: SessionImportWizardView;
@@ -484,9 +441,7 @@ function ProviderPill(props: {
   readonly onToggle: (harness: GuiHarnessId) => void;
 }) {
   const { provider, pending, tone, onToggle } = props;
-  // No number while the scan could still change it - a mid-scan zero means
-  // "not yet", not "nothing". Once the scan settles, 0 is the honest answer;
-  // the old "—" placeholder read as a minus control inside a clickable pill.
+  // No number while the scan could still change it - a mid-scan zero means "not yet", not "nothing".
   const count = pillCountLabel(provider.count, pending);
   return (
     <button
@@ -514,16 +469,8 @@ function ProviderPill(props: {
   );
 }
 
-/**
- * How many repos the submission actually brings over.
- *
- * Every other number on the event describes the import, so this one has to as
- * well. `state.groups.length` counts the SCAN instead - folders the user
- * cleared outright, and folders that only ever held unreadable or
- * already-imported rows - which would read as "imported 3 sessions across 40
- * repos". The selections are the source of truth rather than `state.selected`,
- * so this cannot drift from whatever the submission decided to send.
- */
+/** The selections are the source of truth rather than `state.selected`, so this cannot drift from whatever the
+ * submission decided to send. */
 function pillCountLabel(count: number, pending: boolean): string | null {
   if (count > 0) return count.toLocaleString();
   return pending ? null : "0";
@@ -564,12 +511,7 @@ function emptyMessage(
   return "No work from the providers you picked.";
 }
 
-/**
- * What the wizard shows while a run owns the screen: the live progress or
- * the summary it leaves behind, over the same action row the list phase ends
- * in, so the wizard's footer stays where the hand already knows it - the
- * surface's own exit on the left, this wizard's next step on the right.
- */
+/** What the wizard shows while a run owns the screen. */
 function SessionImportRunView(props: {
   readonly tone: SessionImportTone;
   readonly hostId: string | null;
@@ -594,13 +536,8 @@ function SessionImportRunView(props: {
             </Button>
           ) : null}
           {runFinished && hostId !== null ? (
-            // The way back to the list without leaving the wizard. The
-            // summary holds until this is pressed - it is what the user
-            // waited for, and a screen that rewrites itself on a timer would
-            // pull it away mid-read. Retiring the run is all it takes: the
-            // scan is paused only while a run is in flight and resumes on
-            // idle, so the folder list comes back freshly read, with what
-            // just landed now marked as already imported.
+            // The way back to the list without leaving the wizard. The summary holds until this is pressed - it is what
+            // the user waited for, and a screen that rewrites itself on a timer would pull it away mid-read.
             <Button
               type="button"
               variant="outline"

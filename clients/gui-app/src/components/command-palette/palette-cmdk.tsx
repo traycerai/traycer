@@ -1,10 +1,5 @@
-/**
- * Shared cmdk list views used by BOTH the modal command palette
- * (`command-palette-shell.tsx`) and the inline in-pane opener
- * (`components/epic-canvas/canvas/pane-opener.tsx`): the sub-page view and the
- * opener root view. Non-component helpers (filter, row value, controller hook)
- * live in `palette-cmdk-controller.ts`.
- */
+/** Shared cmdk list views used by both the modal command palette (`command-palette-shell.tsx`) and the inline
+ * in-pane opener (`components/epic-canvas/canvas/pane-opener.tsx`). */
 import {
   Fragment,
   useEffect,
@@ -43,13 +38,8 @@ import type {
   CommandSubpage,
 } from "@/lib/commands/types";
 
-/**
- * Renders a sub-page row label. File/diff openers use the workspace-relative
- * path as the label (so duplicate basenames like a dozen `index.ts` are
- * distinguishable); we dim the directory and keep the basename at full
- * emphasis. Labels without a separator (every other sub-page) render plain, so
- * this is a no-op for them.
- */
+/** File/diff openers use the workspace-relative path as the label (so duplicate basenames like a dozen
+ * `index.ts` are distinguishable); we dim the directory and keep the basename at full emphasis. */
 function SubpageItemLabel({ label }: { label: string }) {
   const slash = label.lastIndexOf("/");
   if (slash === -1) {
@@ -164,9 +154,8 @@ function AgentSubpageRows(props: {
   readonly items: ReadonlyArray<CommandItemShape>;
   readonly onSelect: (item: CommandItemShape) => void;
 }) {
-  // Expansion belongs to this picker instance. It deliberately does not use
-  // the sidebar expansion store: collapsing here must not rearrange the user's
-  // persistent left-panel tree (and vice versa).
+  // Expansion belongs to this picker instance. It deliberately does not use the sidebar expansion store:
+  // collapsing here must not rearrange the user's persistent left-panel tree (and vice versa).
   const [userExpandedIds, setUserExpandedIds] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
@@ -702,7 +691,6 @@ interface OpenerRootViewProps {
   readonly onSelect: (item: CommandItemShape) => void;
 }
 
-/** The full "Agents → New agent (Chat)" trail a deep row represents. */
 function deepRowName(
   path: ReadonlyArray<string>,
   label: string,
@@ -713,13 +701,8 @@ function deepRowName(
     : [...path, label, statusBadge].join(" → ");
 }
 
-/**
- * Deep-row label: the sub-page path dimmed ("Agents → "), then the leaf label
- * through `SubpageItemLabel` so file-path labels keep their directory dimming.
- * The row carries an explicit `aria-label` (see `deepRowName`) because the
- * separators here are split across elements and styled with a flex `gap` - the
- * name computed from text content alone would run them together.
- */
+/** Deep-row label: the sub-page path dimmed ("Agents → "), then the leaf label through `SubpageItemLabel` so
+ * file-path labels keep their directory dimming. */
 function DeepPathLabel(props: {
   readonly path: ReadonlyArray<string>;
   readonly label: string;
@@ -735,11 +718,8 @@ function DeepPathLabel(props: {
   );
 }
 
-/**
- * Depth bound for the deep view's recursion. The opener's own sub-pages bottom
- * out at level 3 (category → workspace → file); the cap only exists so a future
- * self-referential sub-page can't recurse the renderer to a hang.
- */
+/** The opener's own sub-pages bottom out at level 3 (category → workspace → file); the cap only exists so a
+ * future self-referential sub-page can't recurse the renderer to a hang. */
 const OPENER_DEEP_MAX_DEPTH = 4;
 
 interface OpenerDeepRowsProps {
@@ -749,12 +729,7 @@ interface OpenerDeepRowsProps {
   readonly onSelect: (item: CommandItemShape) => void;
 }
 
-/**
- * One sub-page's rows for the deep view, recursing into nested sub-pages.
- * Recursion is per-component (one `useItems` hook call each), so a dynamic
- * number of nested sub-pages stays rules-of-hooks safe. The path segments are
- * appended to the row's keywords so combined queries like "agents new" match.
- */
+/** One sub-page's rows for the deep view, recursing into nested sub-pages. */
 function OpenerDeepRows(props: OpenerDeepRowsProps) {
   const { subpage, ctx, path, onSelect } = props;
   const items = subpage.useItems(ctx);
@@ -805,13 +780,7 @@ interface OpenerDeepViewProps {
   readonly onSelect: (item: CommandItemShape) => void;
 }
 
-/**
- * Flattened deep matches for the opener root: every sub-page leaf, any number
- * of levels down, rendered with its full category path so a root query like
- * "create" surfaces "Agents → New agent (Chat)" without drilling in. Mounted
- * only while a query is typed (the empty-query root shows categories alone);
- * cmdk's filter owns which rows actually show.
- */
+/** Flattened deep matches for the opener root: every sub-page leaf, any number of levels down. */
 export function OpenerDeepView(props: OpenerDeepViewProps) {
   const { items, ctx, onSelect } = props;
   const categories = items.filter(
@@ -833,10 +802,7 @@ export function OpenerDeepView(props: OpenerDeepViewProps) {
   );
 }
 
-/**
- * Opener root: the category entries (each pushes a sub-page). Used by the
- * in-pane opener; the modal palette's global root lives in the shell.
- */
+/** Opener root: the category entries (each pushes a sub-page). */
 export function OpenerRootView(props: OpenerRootViewProps) {
   const { items, onSelect } = props;
   return (

@@ -16,30 +16,20 @@ const HOST_START_ADOPTION_FILENAME = ".host-start-adoption.json";
 const HOST_START_ADOPTION_MAX_AGE_MS = 60_000;
 
 // The ONE grant-expiry predicate, shared by every reader of `issuedAtMs`.
-//
-// Symmetric on purpose: `now - issuedAtMs > MAX_AGE` alone never fires for a
-// FUTURE-dated timestamp (the difference is negative), so a proof written
-// after a backwards clock step - or with a corrupted `issuedAtMs` - would
-// read as an outstanding grant until the wall clock caught up, refusing
-// every launch for that whole window. A publisher and consumer live on the
-// same machine within the same minute, so any timestamp more than the grant
-// window AWAY from now, in either direction, is not a grant anyone can
-// still use.
+// Symmetric on purpose: `now - issuedAtMs > MAX_AGE` alone never fires for a FUTURE-dated timestamp (the difference is negative), so a proof written after a backwards clock step - or with a corrupted `issuedAtMs` - would read as an outstanding grant until the wall clock caught up, refusing every launch for that whole window.
 function adoptionGrantExpired(issuedAtMs: number): boolean {
   return Math.abs(Date.now() - issuedAtMs) > HOST_START_ADOPTION_MAX_AGE_MS;
 }
 const HOST_START_ADOPTION_ACK_WAIT_MS = 30_000;
 const HOST_START_ADOPTION_POLL_MS = 25;
 
-// Test-only synchronization point for the exact read-then-claim race.  The
-// production path leaves it null; exposing a timer-based race would make this
-// one-shot-authority regression flaky instead of proving the atomic outcome.
+// Test-only synchronization point for the exact read-then-claim race.
+// The production path leaves it null; exposing a timer-based race would make this one-shot-authority regression flaky instead of proving the atomic outcome.
 let beforeHostStartAdoptionClaimHookForTest: (() => Promise<void>) | null =
   null;
 
-// Runs directly before the no-follow adoption read.  The durable reader
-// performs the descriptor validation itself; this seam merely makes a
-// replacement-at-open regression deterministic rather than timing-sensitive.
+// Runs directly before the no-follow adoption read.
+// The durable reader performs the descriptor validation itself; this seam merely makes a replacement-at-open regression deterministic rather than timing-sensitive.
 let beforeHostStartAdoptionReadHookForTest: (() => Promise<void>) | null = null;
 
 export function __setBeforeHostStartAdoptionClaimHookForTest(
@@ -74,23 +64,14 @@ type HostStartAdoptionAcknowledgement = {
 };
 
 export interface HostStartAdoptionLease {
-  /**
-   * Keeps the parent attempt capability held through the exact supervisor's
-   * synchronous target resolution and `spawn()`. A service manager returning
-   * from kickstart/enable is not sufficient evidence of that edge.
-   */
+  /** Keeps the parent attempt capability held through the exact supervisor's synchronous target resolution and `spawn()`. A service manager returning from kickstart/enable is not sufficient evidence of that edge. */
   waitForSpawn(): Promise<void>;
   /** Remove an unclaimed proof after the service edge fails or times out. */
   cancel(): Promise<void>;
 }
 
 export interface HostStartAdoptionGrant {
-  /**
-   * Called only after the supervisor has synchronously spawned its selected
-   * target. It repeats the parent-holder check before acknowledging, so a
-   * parent release between claim and spawn kills the unadmitted child rather
-   * than turning a point-in-time proof into authority.
-   */
+  /** Called only after the supervisor has synchronously spawned its selected target. It repeats the parent-holder check before acknowledging, so a parent release between claim and spawn kills the unadmitted child rather than turning a point-in-time proof into authority. */
   acknowledgeSpawn(): Promise<boolean>;
   abandon(): Promise<void>;
 }
@@ -116,13 +97,7 @@ function acknowledgementPath(home: string, nonce: string): string {
   return join(resolve(home), `.host-start-adoption.${nonce}.ack`);
 }
 
-/**
- * Publish a nonce-bound, one-supervisor grant. The caller MUST await the
- * returned lease after the OS start/restart action; doing so preserves the
- * parent's live attempt capability until the named child has acknowledged its
- * synchronous spawn. A completed service-controller call alone is not an
- * admission lease.
- */
+/** Publish a nonce-bound, one-supervisor grant. The caller MUST await the returned lease after the OS start/restart action; doing so preserves the parent's live attempt capability until the named child has acknowledged its synchronous spawn. */
 export async function publishHostStartAdoption(
   capability: UpdateMutationCapability,
   options: WithCliUpdateContenderOptions,
@@ -180,22 +155,15 @@ export async function publishHostStartAdoption(
       throw new Error("host-start supervisor did not acknowledge its spawn");
     },
     cancel: async (): Promise<void> => {
-      // Do not delete a later service edge's proof if this holder happens to
-      // issue launches serially across an async controller boundary. The
-      // nonce is the lease identity; the fixed discovery path is not.
+      // Do not delete a later service edge's proof if this holder happens to issue launches serially across an async controller boundary.
+      // The nonce is the lease identity; the fixed discovery path is not.
       await removeAdoptionIfNonce(path, nonce);
       await rm(acknowledgement, { force: true }).catch(() => undefined);
     },
   };
 }
 
-/**
- * Atomically claim the one grant intended for the service-manager launch.
- * Returning a grant rather than a boolean is essential: the caller must hold
- * it through its target resolution and spawn, then acknowledge under a fresh
- * parent-holder check. A claimed/invalid proof never falls back to a new
- * admission in this invocation.
- */
+/** Atomically claim the one grant intended for the service-manager launch. Returning a grant rather than a boolean is essential: the caller must hold it through its target resolution and spawn, then acknowledge under a fresh parent-holder check. */
 export async function consumeHostStartAdoption(
   environment: Environment,
   serviceLabel: string | null,
@@ -203,34 +171,16 @@ export async function consumeHostStartAdoption(
 ): Promise<HostStartAdoptionConsumeResult> {
   const home = hostHomeDir(environment);
   const path = adoptionPath(home);
-  // A proof is for the service-manager child alone. A hand-run host start,
-  // a crash-loop invocation, or an N-1 manifest has no current service-label
-  // capability and cannot steal the pending grant for a service child. If a
-  // proof is outstanding, do not fall through to a fresh admission either:
-  // that would recreate the parent-lock/child-lock cycle the proof exists to
-  // avoid. Only a genuinely absent proof permits standalone admission.
+  // A proof is for the service-manager child alone.
+  // A hand-run host start, a crash-loop invocation, or an N-1 manifest has no current service-label capability and cannot steal the pending grant for a service child.
   if (serviceLabel === null || serviceLabel.length === 0) {
     const pending = await readPendingAdoption(path);
     if (pending.kind === "absent") return { kind: "absent" };
     if (pending.kind === "unreadable") {
       return { kind: "error", reason: "host-start adoption could not be read" };
     }
-    // An EXPIRED proof is not an outstanding grant, and must not refuse a
-    // standalone start forever.
-    //
-    // The age bound is applied on the other two paths that read this file (the
-    // claimed-candidate check below, and `readHostStartAdoptionNonce`) and was
-    // missing here. That gap is reachable: a publisher that dies between
-    // publishing and consuming leaves the proof behind, and while the labelled
-    // path erases an expired one on its next attempt, a bare `host start`
-    // never takes that path — so a crash-loop with no service label is refused
-    // on every iteration, indefinitely, by a grant nobody can still use.
-    //
-    // Treated as ABSENT rather than removed here on purpose. This caller holds
-    // no service-label capability, and `removeAdoptionIfNonce`'s comment states
-    // the discipline: a read-then-remove by a party without the nonce lets an
-    // old lease erase a NEWER publisher's proof. Expiry is enough to unblock
-    // admission; erasing is the labelled path's job, which already does it.
+    // An EXPIRED proof is not an outstanding grant, and must not refuse a standalone start forever.
+    // The age bound is applied on the other two paths that read this file (the claimed-candidate check below, and `readHostStartAdoptionNonce`) and was missing here.
     if (
       pending.kind === "valid" &&
       adoptionGrantExpired(pending.file.issuedAtMs)
@@ -252,33 +202,7 @@ export async function consumeHostStartAdoption(
   if (pending.kind === "malformed") {
     return { kind: "refused", reason: "host-start adoption is malformed" };
   }
-  // An EXPIRED proof is not an outstanding grant on THIS path either, and the
-  // age bound has to be applied BEFORE the label and nonce checks below.
-  //
-  // The standalone branch above got this bound first, and the comment there
-  // named the other two readers that already had it — without noticing that
-  // the labelled consume path is a THIRD reader that did not. The gap is not
-  // theoretical, because expiry is exactly what steers a launch onto it:
-  // `readHostStartAdoptionNonce` applies the age bound and returns null for an
-  // expired proof, so `host adoption-nonce` yields nothing and the generated
-  // launcher re-execs `host start --service-label <label>` with NO
-  // `--adoption-nonce` (see the emitted launcher in
-  // desktop/scripts/prepack/inject-host-launch-agent.cjs). That lands here with
-  // `expectedNonce === null` against a pending read that is still "valid" —
-  // `readPendingAdoption` deliberately does no age filtering — so the nonce
-  // check below refuses it. Nothing on this path reaches the post-claim expiry
-  // check, which sits after the claim the nonce check never lets us make, so
-  // the refusal repeats on every service-manager retry, forever, on the
-  // authority of a grant nobody can still use.
-  //
-  // Ordered ahead of the label-binding check on purpose: an expired proof bound
-  // to a DIFFERENT label would otherwise wedge that launcher the same way, for
-  // the same reason. Expiry is not a routing question.
-  //
-  // Treated as ABSENT rather than removed, for the reason `removeAdoptionIfNonce`
-  // documents: a read-then-remove by a party that has not matched the nonce lets
-  // a stale reader erase a NEWER publisher's proof. Expiry is enough to unblock
-  // admission; erasing stays the job of the paths that hold the nonce.
+  // An expired proof is not an outstanding grant. Do not wait for a lease that has already ended.
   if (
     pending.kind === "valid" &&
     adoptionGrantExpired(pending.file.issuedAtMs)
@@ -291,12 +215,8 @@ export async function consumeHostStartAdoption(
       reason: "host-start adoption is bound to a different service label",
     };
   }
-  // A visible v2 proof is an exact launch grant, never merely routing by
-  // service label.  An old labelled wrapper, a manual labelled start, or a
-  // concurrent same-label launcher must not be able to consume a proof meant
-  // for the nonce-bearing service-manager child.  When no proof exists an
-  // older wrapper reaches ordinary canonical admission below; it simply
-  // cannot adopt a live parent's authority.
+  // A visible v2 proof is an exact launch grant, never merely routing by service label.
+  // An old labelled wrapper, a manual labelled start, or a concurrent same-label launcher must not be able to consume a proof meant for the nonce-bearing service-manager child.
   if (
     pending.kind === "valid" &&
     (expectedNonce === null ||
@@ -309,10 +229,8 @@ export async function consumeHostStartAdoption(
         "host-start adoption nonce did not match the pending service launch",
     };
   }
-  // This bit is intentionally retained across the rename. A claimant that
-  // observed a concrete proof cannot reinterpret a competing claimant's
-  // successful atomic rename as no proof and enter ordinary admission. The
-  // proof is a one-shot exact-launch capability, not a best-effort hint.
+  // This bit is intentionally retained across the rename.
+  // A claimant that observed a concrete proof cannot reinterpret a competing claimant's successful atomic rename as no proof and enter ordinary admission.
   const observedPendingProof = pending.kind === "valid";
   if (beforeHostStartAdoptionClaimHookForTest !== null) {
     await beforeHostStartAdoptionClaimHookForTest();
@@ -340,9 +258,8 @@ export async function consumeHostStartAdoption(
   const restoreClaimForBoundService = async (): Promise<void> => {
     if (!claimed) return;
     claimed = false;
-    // A different labelled service may have raced a new proof into the fixed
-    // discovery path. Restore only if it is still vacant; otherwise discard
-    // this private old claim, never the current proof.
+    // A different labelled service may have raced a new proof into the fixed discovery path.
+    // Restore only if it is still vacant; otherwise discard this private old claim, never the current proof.
     await restoreClaimToVacantPath(claimedCandidate, path);
   };
   try {
@@ -423,12 +340,7 @@ export async function consumeHostStartAdoption(
   }
 }
 
-/**
- * Read the opaque launch nonce for an installed service wrapper. This is not
- * an adoption operation: it cannot mint, consume, or validate a capability.
- * The caller must still present the returned nonce to the atomic consumer,
- * which repeats the parent-holder check after the actual child spawn.
- */
+/** Read the opaque launch nonce for an installed service wrapper. This is not an adoption operation: it cannot mint, consume, or validate a capability. */
 export async function readHostStartAdoptionNonce(
   environment: Environment,
   serviceLabel: string,
@@ -503,18 +415,13 @@ async function removeAdoptionIfNonce(
     await rm(claimed, { force: true }).catch(() => undefined);
     return;
   }
-  // A different publisher won the shared discovery name. Preserve its proof
-  // if nobody has since supplied another one; otherwise discard only our
-  // private cleanup claim, never the current canonical name.
+  // A different publisher won the shared discovery name.
+  // Preserve its proof if nobody has since supplied another one; otherwise discard only our private cleanup claim, never the current canonical name.
   await restoreClaimToVacantPath(claimed, path);
 }
 
-// Put a privately-named claim back at the fixed discovery path ONLY if that
-// path is still vacant. `rename` cannot express vacancy — it replaces an
-// existing destination on POSIX and on Windows alike, which would let an old
-// claim erase a newer publisher's proof. An exclusive hard `link` fails with
-// EEXIST when the name is occupied, so the proof that was raced in survives;
-// the private claim name is removed in either outcome.
+// Put a privately-named claim back at the fixed discovery path ONLY if that path is still vacant.
+// `rename` cannot express vacancy - it replaces an existing destination on POSIX and on Windows alike, which would let an old claim erase a newer publisher's proof.
 async function restoreClaimToVacantPath(
   claimed: string,
   path: string,

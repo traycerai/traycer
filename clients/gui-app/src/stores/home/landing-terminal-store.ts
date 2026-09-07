@@ -14,12 +14,7 @@ export const MAX_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.72;
 
 export type LandingTerminalTitleSource = "default" | "manual";
 
-/**
- * The layout key for a start page whose draft has no id yet. Every writer of
- * a per-page layout (the panel, the gesture provider, the draft surface, a
- * picker-started sign-in) must key the same way or the panel a gesture opened
- * is not the panel the user sees.
- */
+/** The layout key for a start page whose draft has no id yet. */
 export const UNBOUND_LANDING_PAGE_ID = "unbound-landing-page";
 
 export const LANDING_TERMINAL_SOURCE_STORE_VERSION = 1;
@@ -31,26 +26,15 @@ export interface LandingTerminalTabRef {
   readonly cwd: string;
   readonly name: string;
   readonly titleSource: LandingTerminalTitleSource;
-  /**
-   * True only after a capable host acknowledged this logical terminal. The
-   * legacy cwd/name/title fields remain downgrade evidence, never semantic
-   * authority while this bit is set and a capable host projection is fresh.
-   */
+  /** True only after a capable host acknowledged this logical terminal. */
   readonly hostAuthorityAcknowledged?: boolean;
   /** A genuinely-new terminal awaiting `terminal.plain.create`. */
   readonly pendingCreate?: boolean;
   /** Schema version attached to legacy import evidence. */
   readonly sourceStoreVersion?: number;
   /**
-   * `"provider-login"` means the HOST created this session, for a provider
-   * sign-in (`providers.startTerminalLogin` with an independent scope). Such a
-   * tab never creates: the session carries the provider's spawn env, and a
-   * `terminal.plain.create` or legacy `terminal.create` under its id would
-   * spawn a bare shell that looks like the sign-in terminal and cannot sign
-   * anyone in. It is also import-exempt - a manager-owned session is not
-   * legacy evidence for `terminal.plain.importLegacy` - and it survives its
-   * session's exit so the user can restart the sign-in from where it ended.
-   * Absent for every terminal this panel created itself.
+   * `"provider-login"` means the HOST created this session, for a provider sign-in
+   * (`providers.startTerminalLogin` with an independent scope).
    */
   readonly origin?: "provider-login";
   /** The provider the sign-in was for; only meaningful with `origin`. */
@@ -63,27 +47,8 @@ export function isProviderLoginLandingTab(tab: LandingTerminalTabRef): boolean {
 }
 
 /**
- * A kill that is still owed for a session whose tab is already gone.
- *
- * The provenance fields exist because the drain cannot otherwise tell an absent
- * plain projection apart from a dead session. Absence is proof of death for
- * exactly one shape of tombstone - a session a capable host had ALREADY
- * acknowledged as a plain terminal - and reading it that way for any other
- * shape leaks the PTY the tombstone was written to kill:
- *
- * - a `terminal.plain.create` still in flight has no projection YET, and the
- *   session id is the one the CLIENT supplied to `create`, so the terminal that
- *   lands afterwards is precisely the one this tombstone names;
- * - a legacy session has no plain projection EVER, and a host is frequently
- *   offline because it is upgrading - so the drain meets it as `capable`.
- *
- * Both fields are copied off the closing TAB rather than read from the live
- * authority. They are facts about this session's history; the authority only
- * reports what its host can do right now, and by the time the drain runs that
- * host may be negotiating a different protocol than the session was closed
- * under. The capability at the moment of the gesture is deliberately NOT
- * recorded: every routing decision below turns out to rest on these two, and an
- * unread field in a persisted schema is one every future build must keep.
+ * A kill that is still owed for a session whose tab is already gone. The provenance fields exist
+ * because the drain cannot otherwise tell an absent plain projection apart from a dead session.
  */
 export interface LandingTerminalPendingKill {
   readonly hostId: string;
@@ -95,21 +60,8 @@ export interface LandingTerminalPendingKill {
 }
 
 /**
- * Whether this session's absence from its host's own listing proves it is dead.
- *
- * True for exactly one shape of tombstone: a session a capable host had ALREADY
- * acknowledged. That host published it once, so its disappearance is the host
- * saying it is gone. For anything else absence is the host saying NOTHING - a
- * create still in flight has not been listed yet, and a legacy session is not in
- * a plain projection to begin with.
- *
- * Lives here rather than beside any one caller because three separate drains ask
- * this question - the recovery bridge, and both arms of landing-terminal
- * reconciliation - and answering it differently in any of them reopens the leak.
- *
- * `pendingCreate` is checked as well as acknowledgement even though
- * `hostAcknowledgedTab` clears one while setting the other: the pair arrives
- * from persisted JSON, where nothing enforces that invariant.
+ * Whether this session's absence from its host's own listing proves it is dead. True for exactly
+ * one shape of tombstone: a session a capable host had ALREADY acknowledged.
  */
 export function absentListingProvesDeath(
   pending: LandingTerminalPendingKill,
@@ -142,49 +94,21 @@ export interface LandingTerminalStoreState {
   readonly fallbackLayout: LandingTerminalLayout | null;
   readonly pendingKills: ReadonlyArray<LandingTerminalPendingKill>;
   /**
-   * The tab a programmatic panel open was made to SHOW, or `null`. Not
-   * persisted: it describes one open transition in this window.
-   *
-   * The panel reads a closed-to-open transition as the user's opening gesture
-   * and settles it by re-targeting the launch cwd - reuse a terminal already
-   * running there, else spawn one and focus it. An open made to reveal a tab
-   * that already exists (a host-created sign-in terminal, whose display-only
-   * `"~"` cwd matches no launch cwd) is not that gesture: settling it would
-   * spawn a bare shell and put it in front of the tab the open was for. The
-   * panel consumes this on its next open transition to tell the two apart.
+   * The tab a programmatic panel open was made to SHOW, or `null`. Not persisted: it describes one
+   * open transition in this window.
    */
   readonly panelReveal: string | null;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
   /**
-   * Opens the panel to SHOW `instanceId` on each of `landingPageIds`, and
-   * with `everyPage` on EVERY start page as well: each page that has recorded
-   * a layout of its own, and through the fallback every page that has not.
-   * Records `panelReveal` so the panel does not settle the open as a gesture.
-   *
-   * The one caller is the sign-in open. `everyPage` is for a start page
-   * discarded while `providers.startTerminalLogin` was in flight with no
-   * other pane mounted, so no id names a surface the user can see this on.
-   * Whichever start page mounts NEXT then shows the panel, which is where the
-   * tab (tabs are shared across pages) already is. Both halves of that form
-   * are needed: `landingTerminalLayoutFor` gives a page's own layout
-   * precedence over the fallback, so a page that once closed its panel would
-   * ignore a fallback-only write and hide the terminal behind the very layout
-   * it recorded.
-   *
-   * Bounded by the same rule that retires layouts generally:
-   * `collapseLayoutsForEmptyTerminalSet` closes every one of them once the
-   * last tab is gone, so this cannot outlive the terminal it was written for.
+   * Opens the panel to SHOW `instanceId` on each of `landingPageIds`, and with `everyPage` on EVERY
+   * start page as well: each page that has recorded a layout of its own, and through the fallback
    */
   readonly revealPanel: (reveal: {
     readonly landingPageIds: ReadonlyArray<string>;
     readonly everyPage: boolean;
     readonly instanceId: string;
   }) => void;
-  /**
-   * Retires `panelReveal`. The panel calls it on every open or collapse
-   * transition and on a page switch, so a reveal that never saw its
-   * transition (the panel was already open) cannot suppress a later gesture.
-   */
+  /** Retires `panelReveal`. */
   readonly clearPanelReveal: () => void;
   readonly setPanelWidthFraction: (
     landingPageId: string,
@@ -200,10 +124,8 @@ export interface LandingTerminalStoreState {
   /** Refreshes a derived title without overwriting a user rename. */
   readonly syncDefaultTitle: (instanceId: string, name: string) => void;
   /**
-   * Atomically tombstones then removes a user-closed tab.
-   *
-   * The tombstone's provenance is copied off the tab being closed, so no caller
-   * has to supply it and no call site can get it wrong.
+   * Atomically tombstones then removes a user-closed tab. The tombstone's provenance is copied off
+   * the tab being closed, so no caller has to supply it and no call site can get it wrong.
    */
   readonly closeTab: (
     landingPageId: string,
@@ -303,11 +225,8 @@ export function parseLandingTerminalTabRef(
   };
 }
 
-// The origin marker is what keeps a sign-in tab from creating a bare shell
-// under the host's session id, so a persisted one is read back strictly: a
-// marker without a recognizable provider still marks the tab (the tile then
-// shows the ended state without a restart button, exactly as the epic tile
-// does for a ref written before the provider was recorded).
+// The origin marker is what keeps a sign-in tab from creating a bare shell under the host's
+// session id, so a persisted one is read back strictly: a marker without a recognizable provider
 function parseProviderLoginOrigin(
   value: Record<string, unknown>,
 ): Pick<LandingTerminalTabRef, "origin" | "originProviderId"> {
@@ -513,13 +432,7 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
             tab.instanceId === instanceId ? { ...tab, sessionId } : tab,
           ),
         })),
-      // Matched on instance + host only. The canonical terminal a capable host
-      // returns for `importLegacy` ("existing"/"imported") may carry a
-      // DIFFERENT terminalId than the legacy evidence we sent - the response
-      // contract permits it - and rekeying that pointer is exactly what
-      // `hostAcknowledgedTab` is for. Also demanding the ids already match
-      // dropped the acknowledgement, left the tab unacknowledged beside a
-      // freshly adopted canonical duplicate, and re-imported on the next pass.
+      // Matched on instance + host only.
       adoptHostTerminal: (instanceId, terminal) =>
         set((state) => ({
           tabs: state.tabs.map((tab) =>
@@ -628,10 +541,8 @@ function updateLandingTerminalLayout(
 }
 
 /**
- * Tabs are shared across landing pages. Once none remain, no page can keep an
- * open terminal surface: that would display a permanently empty panel whose
- * prior opening gesture cannot settle. This is intentionally narrower than a
- * user collapse, width adjustment, or fullscreen toggle, which remain scoped.
+ * Tabs are shared across landing pages. Once none remain, no page can keep an open terminal
+ * surface: that would display a permanently empty panel whose prior opening gesture cannot settle.
  */
 function collapseLayoutsForEmptyTerminalSet(
   state: Pick<
@@ -734,24 +645,6 @@ function parsePendingKills(
     if (seen.has(key)) return [];
     seen.add(key);
     // Back-compat, and the two fields are conservative in OPPOSITE directions.
-    //
-    // `hostAuthorityAcknowledged` is conservative at `false`: it withholds the
-    // clear-on-absent-projection shortcut and routes the record through
-    // `terminal.kill`, which reports "already gone" as data instead of
-    // rejecting.
-    //
-    // `pendingCreate` is conservative at `TRUE`. It is what buys the reprieve on
-    // a `killed: false` answer, so defaulting it to `false` would resolve the
-    // uncertainty in the leaking direction: a record persisted by an older build
-    // while its `terminal.plain.create` was still in flight would be cleared by
-    // the first "already gone" answer after the update, and the create landing
-    // afterwards would leave a live PTY with nothing owed against it.
-    //
-    // So ABSENCE of the field means "possibly pending" while an explicit
-    // `false` is believed. Costing a genuinely dead legacy record the answer
-    // budget (~4.25 minutes of the host saying "no such session") is the safe
-    // side of that trade, and it terminates because the budget is bounded -
-    // which is precisely what makes preserving the uncertainty affordable here.
     return [
       {
         hostId: entry.hostId,

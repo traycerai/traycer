@@ -101,14 +101,14 @@ describe("T9 split interactions", () => {
       source,
       target: fill,
     });
-    // The slot must belong to the ACTIVE item.
+    // The slot must belong to the active item.
     expect(
       resolveValidatedTopLevelTabDrop(header, fill, {
         ...fillLayout,
         activeItemId: "source-item",
       }),
     ).toBeNull();
-    // A structurally locked SOURCE cannot fill a slot.
+    // A structurally locked source cannot fill a slot.
     const unregister = registerTabStructuralLockPredicate(
       (ref) => ref.kind === source.kind && ref.id === source.id,
     );

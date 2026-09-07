@@ -30,11 +30,6 @@ import {
   rewriteLockLivenessIfToken,
 } from "../../host-lock/cross-process-lock";
 
-// F-round coverage (CodeRabbit): `rewriteLockLivenessIfToken`'s temp-file
-// rename is the ONLY `rename()` call anywhere in `cross-process-lock.ts`, so
-// wrapping it here is a surgical seam - the default implementation always
-// delegates to the real `rename`, and only the one test below overrides it
-// for a single call.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return { ...actual, rename: vi.fn(actual.rename) };
@@ -142,14 +137,8 @@ async function runLockReadWorker(
   });
 }
 
-// Confirms the worker process has actually terminated by polling kernel
-// liveness (`kill(pid, 0)`) rather than the child's `"exit"` event. This
-// sandbox's process tree reaps deeply-nested grandchildren (a `bun`
-// subprocess spawned from inside a `vitest` pool worker) before Node's own
-// `waitpid` gets to it, so `"exit"` never fires even though the process is
-// confirmed gone - a sandbox artifact, not a lock-protocol behavior under
-// test. The barrier files already prove the worker's critical section ran
-// correctly; this only confirms cleanup, so it never gates a lock assertion.
+// Confirms the worker process has actually terminated by polling kernel liveness (`kill(pid, 0)`) rather than the child's `"exit"` event.
+// The barrier files already prove the worker's critical section ran correctly; this only confirms cleanup, so it never gates a lock assertion.
 async function waitForProcessDeath(
   pid: number,
   maxWaitMs: number,
@@ -181,7 +170,7 @@ describe("acquireUpdateAttemptLock - genuine cross-process contention", () => {
       token: string;
     };
 
-    // This test process is the SECOND contender - a genuine other process
+    // This test process is the second contender - a genuine other process
     // (the worker) is holding the lock right now.
     const outcome = await acquireUpdateAttemptLock({
       hostHomeDir: dir,
@@ -327,15 +316,7 @@ describe("lock-path special entries and missing-flag fallback", () => {
 
 describe("cross-process-lock direct coverage - parseLockMetadata / rewriteLockLivenessIfToken", () => {
   afterEach(async () => {
-    // `mockClear()` only drops call history - it RETAINS a queued
-    // `mockRejectedValueOnce` implementation, and `rewriteLockLivenessIfToken`
-    // can return before ever calling `rename()` (arbitration busy, lock
-    // absent, token mismatch), so the queued rejection would leak into
-    // whichever `rename()` call happens next, in a later, unrelated test.
-    // `mockReset()` drops the queued implementation too, but it also wipes
-    // this vi.fn's default (real-delegating) implementation, so it must be
-    // restored explicitly for later tests in this file to still get genuine
-    // renames.
+    // `mockReset()` drops the queued implementation too, but it also wipes this vi.fn's default (real-delegating) implementation, so it must be restored explicitly for later tests in this file to still get genuine renames.
     const actual =
       await vi.importActual<typeof import("node:fs/promises")>(
         "node:fs/promises",
@@ -347,10 +328,7 @@ describe("cross-process-lock direct coverage - parseLockMetadata / rewriteLockLi
   it("drops a recorded supervisedProcessGroupId of 1 rather than treating group 1 (init's) as a live supervised actuator", async () => {
     const dir = await freshDir();
     const lockPath = updateAttemptLockPath(dir);
-    // Hand-authored, mirroring exactly what a pre-hardening writer (or a
-    // corrupt/adversarial value) could put on disk - `parseLockMetadata` is
-    // private, so `readLockHolder` is the public surface this drop is
-    // observable through.
+    // Hand-authored, mirroring exactly what a pre-hardening writer (or a corrupt/adversarial value) could put on disk - `parseLockMetadata` is private, so `readLockHolder` is the public surface this drop is observable through.
     await writeFile(
       lockPath,
       JSON.stringify({
@@ -368,12 +346,8 @@ describe("cross-process-lock direct coverage - parseLockMetadata / rewriteLockLi
     const holder = await readLockHolder(lockPath);
     expect(holder.kind).toBe("held");
     if (holder.kind !== "held") return;
-    // `process.kill(-1, 0)` asks "can I signal ANY process", which is true
-    // on every running machine - a recorded group of 1 would otherwise
-    // classify any machine's holder as live forever. No supervised actuator
-    // can legitimately lead process group 1 (init's), so the parser drops
-    // the field entirely rather than passing it through to the liveness
-    // probe.
+    // `process.kill(-1, 0)` asks "can I signal any process", which is true on every running machine - a recorded group of 1 would otherwise classify any machine's holder as live forever.
+    // No supervised actuator can legitimately lead process group 1 (init's), so the parser drops the field entirely rather than passing it through to the liveness probe.
     expect(holder.holder.supervisedProcessGroupId).toBeUndefined();
   });
 
@@ -393,11 +367,6 @@ describe("cross-process-lock direct coverage - parseLockMetadata / rewriteLockLi
     expect(token).not.toBeNull();
     if (token === null) return;
 
-    // `rename()` is the ONLY `rename` call anywhere in
-    // `cross-process-lock.ts` (see the module-scope `vi.mock` above), so
-    // this fails exactly the rename this function performs after its
-    // temp-file open/writeFile/sync succeed - not the break-lock
-    // acquisition or the canonical-lock read that precede it.
     vi.mocked(nodeRename).mockRejectedValueOnce(
       Object.assign(new Error("simulated rename failure"), {
         code: "EACCES",
@@ -552,9 +521,7 @@ describe("probeAttemptHolder", () => {
     const firstEvidence = await probeAttemptHolder({
       hostHomeDir: dir,
       nowMs: 1_000,
-      // A generous TTL - if the cache were keyed on path alone, the second
-      // probe below (well inside this window) would wrongly reuse this
-      // verdict's token.
+      // A generous ttl - if the cache were keyed on path alone, the second probe below (well inside this window) would wrongly reuse this verdict's token.
       cacheTtlMs: 60_000,
     });
     expect(firstEvidence.kind).toBe("holder-live");
@@ -593,9 +560,7 @@ describe("probeAttemptHolder", () => {
     const barrierDir = join(dir, "barrier");
     await mkdir(barrierDir);
 
-    // A genuine, separate OS process holds the lock, so the fingerprint
-    // (pid | token | start identity) is real and stable - the lock file is
-    // never rewritten below, so it never changes.
+    // A genuine, separate OS process holds the lock, so the fingerprint (pid | token | start identity) is real and stable - the lock file is never rewritten below, so it never changes.
     const worker = spawnLockWorker(dir, barrierDir, 15_000);
     await waitForFile(join(barrierDir, "held"), 30_000);
 
@@ -606,22 +571,13 @@ describe("probeAttemptHolder", () => {
     });
     expect(liveEvidence.kind).toBe("holder-live");
 
-    // Kill the worker directly (not the release handshake), so the lock
-    // file - and therefore the fingerprint - is UNCHANGED: this isolates the
-    // elapsed-time floor from the fingerprint-mismatch path already covered
-    // above. The holder is now genuinely dead while the cached verdict still
-    // says "holder-live".
+    // Kill the worker directly (not the release handshake), so the lock file - and therefore the fingerprint - is unchanged: this isolates the elapsed-time floor from the fingerprint-mismatch path already covered above.
     if (worker.pid !== undefined) {
       process.kill(worker.pid, "SIGKILL");
       await waitForProcessDeath(worker.pid, 30_000);
     }
 
-    // A backward clock step: nowMs is EARLIER than the cached atMs (10_000),
-    // even though the fingerprint still matches and cacheTtlMs is generous.
-    // Pre-fix, `elapsedMs = -1` satisfied the strict `-1 < 60_000` and served
-    // the stale "holder-live" verdict for a process that is now provably
-    // dead. Fixed, a negative elapsed is a cache miss and the re-probe below
-    // observes the real, dead state.
+    // A backward clock step: nowMs is earlier than the cached atMs (10_000), even though the fingerprint still matches and cacheTtlMs is generous.
     const staleWindowEvidence = await probeAttemptHolder({
       hostHomeDir: dir,
       nowMs: 9_999,
@@ -650,13 +606,7 @@ describe("probeAttemptHolder", () => {
       await waitForProcessDeath(worker.pid, 30_000);
     }
 
-    // `cacheTtlMs: 0` is the value `verifyAdoptedCapability` passes so every
-    // mutation re-probes its parent - the exact case the fix's comment
-    // calls out. Pre-fix, a backward step made `elapsedMs` negative, and a
-    // negative number satisfies `elapsedMs < 0` even though `0` is meant to
-    // disable caching outright; the stale "holder-live" verdict would have
-    // been served for a dead holder under a `cacheTtlMs` that promises no
-    // caching at all.
+    // `cacheTtlMs: 0` is the value `verifyAdoptedCapability` passes so every mutation re-probes its parent - the exact case the fix's comment calls out.
     const staleWindowEvidence = await probeAttemptHolder({
       hostHomeDir: dir,
       nowMs: 9_999,
@@ -863,10 +813,6 @@ describe("acquireAttemptMutationLease", () => {
     outcome.lease.release();
   });
 
-  // The release-overlap protection this lease exists to provide: `release()`
-  // must not let the lock disappear while a lease is still outstanding, so a
-  // fresh contender can never acquire while an old mutation is still able to
-  // reach its rename/unlink.
   it("release() waits for an outstanding mutation lease before the lock disappears", async () => {
     const dir = await freshDir();
     const lockPath = updateAttemptLockPath(dir);

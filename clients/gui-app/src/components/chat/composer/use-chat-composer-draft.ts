@@ -68,20 +68,8 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     [args.taskId, setSelectionInStore],
   );
 
-  // `resetEpoch` bumps (queue-edit restore, failed-send restore, a quote
-  // appended from elsewhere) can land while the editor is still constructing:
-  // the handle exists from the owner's first commit but its methods no-op
-  // until Tiptap's async `useEditor` resolves, so applying "into" it would
-  // silently swallow the reset. `isReady()` blocks that, and `editorReadyTick`
-  // (the owner's re-render signal for `onEditorReady`) re-runs the effect for
-  // the pending-epoch catch-up once the editor truly exists.
-  // `appliedResetEpochRef` keeps the apply idempotent per epoch; it stamps the
-  // LIVE epoch read alongside the content so a bump that lands between render
-  // and effect flush is not re-applied (which would re-fire `focus("end")`).
-  // `syncContent` (not `setContent`) pushes the store's already-recorded
-  // content into the editor WITHOUT re-emitting `onDocumentChange` - the store
-  // bumped `revision` itself when it recorded this replacement, so an echoed
-  // document-change here would double-count the one edit.
+  // `resetEpoch` bumps (queue-edit restore, failed-send restore, a quote appended from elsewhere) can land while the editor is still constructing: the handle exists from the owner's first commit but its methods no-op until Tiptap's async `useEditor` resolves, so applying "into" it would silently swallow the reset.
+  // `appliedResetEpochRef` keeps the apply idempotent per epoch; it stamps the LIVE epoch read alongside the content so a bump that lands between render and effect flush is not re-applied (which would re-fire `focus("end")`).
   const appliedResetEpochRef = useRef(draftResetEpoch);
   useEffect(() => {
     if (draftResetEpoch === appliedResetEpochRef.current) return;

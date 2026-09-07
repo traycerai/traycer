@@ -46,22 +46,7 @@ interface AmbientDriftGate {
   readonly dismiss: () => void;
 }
 
-/**
- * Owns the "Terminal account changed" send-time confirmation (multi-profile
- * ambient-drift feature): a profile-less (ambient) send whose terminal
- * account just changed identity is held back once per drift `key` until the
- * user explicitly continues or dismisses.
- *
- * Acknowledgment has two layers: a local `useState` that applies instantly
- * (and is what `guardSubmit` actually gates on - it must never wait on a
- * round trip), plus a best-effort `providers.setEnabled` RPC
- * (`acknowledgeAmbientDrift`) that durably clears the notice host-side so it
- * does not resurface after this composer remounts or `providers.list`
- * refetches. The RPC is fire-and-forget: Continue submits immediately
- * without awaiting it, and a failure (including an older host that doesn't
- * yet support the `@2.2` `profileAction` variant) never blocks or reverts
- * the local acknowledgment.
- */
+/** Acknowledgment has two layers: a local `useState` that applies instantly (and is what `guardSubmit` actually gates on - it must never wait on a round trip), plus a best-effort `providers.setEnabled` RPC (`acknowledgeAmbientDrift`) that durably clears the notice host-side so it does not resurface after this composer remounts or `providers.list` refetches. The RPC is fire-and-forget: Continue submits immediately without awaiting it, and a failure (including an older host that doesn't yet support the `@2.2` `profileAction` variant) never blocks or reverts the local acknowledgment. */
 export function useAmbientDriftGate(
   hostClient: HostClient<HostRpcRegistry> | null,
   state: ProviderCliState | null,

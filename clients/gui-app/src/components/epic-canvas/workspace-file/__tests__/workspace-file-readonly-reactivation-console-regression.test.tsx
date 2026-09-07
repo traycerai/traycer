@@ -13,18 +13,8 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 }));
 
 /**
- * Real, unmocked `@pierre/diffs@1.3.1` regression for RESUME12, exercised
- * through the actual `WorkspaceFileRenderer` rendering pipeline (library-level
- * proof in `workspace-readonly-cachekey-console-regression.test.ts`).
- *
- * A purely read-only tile - `editing` never true - whose `content` prop
- * changes because a reactivation refetch resolved (`workspace-file-tile.tsx`'s
- * inactive->active `query.refetch()`), not because anything was typed. Before
- * the RESUME12 fix, `WorkspaceFileRenderer` kept a stable `file.cacheKey`
- * whenever `editing` was false just as much as when it was true (the RESUME9
- * fix only bumped the generation on an `editing` transition), so this content
- * change hit the same stale line-cache defect RESUME9 fixed for the editing
- * case. The fix omits `cacheKey` entirely while `editing` is false.
+ * A purely read-only tile - `editing` never true - whose `content` prop changes because a reactivation refetch resolved (`workspace-file-tile.tsx`'s inactive->active `query.refetch()`), not because anything was typed.
+ * Before the RESUME12 fix, `WorkspaceFileRenderer` kept a stable `file.cacheKey` whenever `editing` was false just as much as when it was true (the RESUME9 fix only bumped the generation on an `editing` transition), so this content change hit the same stale line-cache defect RESUME9 fixed for the editing case.
  */
 const originalGetContextDescriptor = Object.getOwnPropertyDescriptor(
   HTMLCanvasElement.prototype,
@@ -108,9 +98,8 @@ describe("read-only workspace file: reactivation refetch changes content while e
       const rendered = render(<ReadOnlyFileHarness content={FIVE_LINES} />);
       await settle(50);
 
-      // The reactivation refetch resolves with far fewer lines - matches an
-      // external truncation, or simply a shorter file than this tab last saw
-      // before going inactive. `editing` is never touched by this rerender.
+      // The reactivation refetch resolves with far fewer lines - matches an external truncation, or simply a shorter file than this tab last saw before going inactive.
+      // `editing` is never touched by this rerender.
       rendered.rerender(<ReadOnlyFileHarness content="line one" />);
       await settle(100);
 

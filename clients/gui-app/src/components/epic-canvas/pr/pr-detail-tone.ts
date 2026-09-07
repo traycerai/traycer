@@ -1,19 +1,4 @@
-/**
- * The PR full view's one state palette, in THEME TOKENS.
- *
- * The GitHub-clone version hardcoded `bg-green-600` / `bg-red-600` /
- * `bg-purple-600` / `bg-amber-500` across the header, merge box, checks list
- * and files list. Those are fixed Tailwind ramps: they ignore the nine theme
- * presets (dracula, catppuccin, tokyo-night, gruvbox, vercel, github, …),
- * each of which already redefines `--success` / `--warning` / `--destructive`
- * for its own surfaces. A view that opts out of them is the only thing in the
- * app whose "green" is a different green.
- *
- * `-foreground` variants are the contrast-checked pair meant to sit ON a
- * surface as text or as a meaning-carrying glyph; the bare token is the fill.
- * See `worktree-pr-state-palette.ts` for the same lesson learned the hard way
- * on the PR state pill.
- */
+/** A view that opts out of them is the only thing in the app whose "green" is a different green. */
 import type {
   PrDetailCore,
   PrReviewDecision,
@@ -73,10 +58,8 @@ export function prChecksTone(counts: PrCheckCounts): PrChecksDotTone {
   if (counts.total === 0) return "none";
   if (counts.failing > 0) return "fail";
   if (counts.pending > 0) return "pending";
-  // `total` counts contexts the three buckets don't (skipped, neutral,
-  // cancelled), so reaching here with `passed === 0` means every check settled
-  // to something none of them names. Claiming "ok" would report a green run
-  // that nothing actually passed. Matches `prChecksSummary`.
+  // `total` counts contexts the three buckets don't (skipped, neutral, cancelled), so reaching here with `passed === 0` means every check settled to something none of them names.
+  // Claiming "ok" would report a green run that nothing actually passed.
   if (counts.passed === 0) return "none";
   return "ok";
 }
@@ -90,9 +73,8 @@ export function prReviewDecisionTone(
 }
 
 /**
- * Tone for one submitted review. `commented` and `dismissed` are deliberately
- * toneless: neither carries a verdict, and colouring them would make a
- * drive-by remark read as an outcome.
+ * Tone for one submitted review.
+ * `commented` and `dismissed` are deliberately toneless: neither carries a verdict, and colouring them would make a drive-by remark read as an outcome.
  */
 export function prReviewStateTone(state: PrReviewState): PrChecksDotTone {
   if (state === "approved") return "ok";

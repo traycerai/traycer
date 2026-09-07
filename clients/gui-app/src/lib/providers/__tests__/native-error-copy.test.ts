@@ -19,10 +19,8 @@ describe("nativeErrorMessage", () => {
   });
 });
 
-// The MCP/plugins/skills panels render `error.message` directly, so the copy
-// map is only reachable if the error CARRIES it. Building the message from
-// `detail ?? code` put the raw enum member on screen and made every string in
-// that map dead on the list path.
+// The MCP/plugins/skills panels render `error.message` directly, so the copy map is only reachable if the error CARRIES it.
+// Building the message from `detail ?? code` put the raw enum member on screen and made every string in that map dead on the list path.
 describe("ProviderNativeRpcError message", () => {
   it("uses the friendly copy when the host sends no detail", () => {
     const err = new ProviderNativeRpcError({

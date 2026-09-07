@@ -57,13 +57,8 @@ const reconnectEngine = createHostReconnectEngine();
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
-/**
- * `createRequesterForHostId` is not optional decoration: production resolves
- * the app-wide host through the spine's id-pinned requester (redesign P4.2),
- * so a stub without it takes the subject down at first render rather than
- * failing an assertion. One host per fixture means the requester IS the
- * client, which is what makes the self-return honest here.
- */
+/** `createRequesterForHostId` is not optional decoration: production resolves the app-wide host through the
+ * spine's id-pinned requester. */
 interface StubHostClient {
   readonly request: typeof hostRequestMock;
   readonly getActiveHostId: () => string | null;
@@ -333,18 +328,11 @@ function createRunnerHost(): MockRunnerHost {
   });
 }
 
-/** Coordinates clearly outside a typical shell placement (see mockShellRect). */
 const OUTSIDE_SHELL_COORDS = { clientX: 10, clientY: 10, button: 0 } as const;
-/** Coordinates inside mockShellRect - used for the hit-test-collapse shape. */
 const INSIDE_SHELL_COORDS = { clientX: 300, clientY: 200, button: 0 } as const;
 
-/**
- * PopoverContent's onPointerDownOutside coordinate guard compares
- * clientX/Y against shellRef.getBoundingClientRect(). In jsdom both the
- * default event coords and the shell rect are often 0, which the guard
- * treats as "inside" and preventDefaults - so truly-outside tests must
- * pin a non-zero shell rect and click outside it.
- */
+/** In jsdom both the default event coords and the shell rect are often 0, which the guard treats as "inside"
+ * and preventDefaults - so truly-outside tests must pin a non-zero shell rect and click outside it. */
 function mockShellRect(): () => void {
   const shell = screen.getByTestId("notifications-popover");
   const spy = vi.spyOn(shell, "getBoundingClientRect").mockReturnValue({
@@ -376,20 +364,8 @@ function fireFullClick(
   fireEvent.click(target, coords);
 }
 
-/**
- * Full outside click on an underlying page control for the bleed-through
- * repro. Snapshots the modal body pointer lock *before* the gesture, then
- * runs pointerdown/up/click so Radix can dismiss.
- *
- * jsdom's fireEvent ignores CSS `pointer-events` and will invoke React
- * onClick even while the lock is active (and a modal menu often lifts the
- * lock on pointerdown before the trailing click). A real browser would not
- * activate a control that was inert when the gesture started - so when the
- * lock was present at start we clear the spy afterward to report the
- * browser-faithful activation count. Under `modal={false}` there is no lock
- * at start, the spy keeps its call, and the bleed-through assertion fails
- * (discrimination - verified locally against a temporary modal={false} patch).
- */
+/** jsdom's fireEvent ignores CSS `pointer-events` and will invoke React onClick even while the lock is active
+ * (and a modal menu often lifts the lock on pointerdown before the trailing click). */
 function fireBleedCheckedOutsideClick(
   underlying: HTMLElement,
   onUnderlyingClick: { mockClear: () => void },
@@ -409,11 +385,8 @@ function fireBleedCheckedOutsideClick(
 function mountBell(options: {
   readonly onUnderlyingClick: (() => void) | undefined;
 }): void {
-  // Same shell as notifications-bell.test.tsx: no router. Nested-dismissal
-  // only needs the real Popover + DropdownMenu layering; settings navigation
-  // is not exercised here (useRouter may warn if the overflow item is opened).
-  // Optional underlying page control reproduces the review's bleed-through
-  // repro (click reaches a non-popover button while a nested menu is open).
+  // Nested-dismissal only needs the real Popover + DropdownMenu layering; settings navigation is not exercised
+  // here (useRouter may warn if the overflow item is opened).
   render(
     <QueryClientProvider client={createTestQueryClient()}>
       <RunnerHostProvider runnerHost={createRunnerHost()}>
@@ -436,10 +409,8 @@ function mountBell(options: {
   );
 }
 
-/**
- * jsdom reports scrollWidth/clientWidth as 0. Stub the title span's metrics so
- * `useIsTextTruncated` can take a real overflow path without layout.
- */
+/** jsdom reports scrollWidth/clientWidth as 0. Stub the title span's metrics so `useIsTextTruncated` can take a
+ * real overflow path without layout. */
 function stubTitleTruncation(truncated: boolean): () => void {
   Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
     configurable: true,
@@ -558,9 +529,8 @@ describe("notification desktop-pass design corrections", () => {
       expect(within(read).queryByTestId("notification-unread-rail")).toBeNull();
       expect(screen.queryByTestId("notification-unread-dot")).toBeNull();
 
-      // Permanent edge inset + relative positioning so the absolute rail never
-      // shifts the icon/title stack between read and unread. pl-6/pr-4 are the
-      // edge-to-edge divider content paddings (old section inset + rail gutter).
+      // Permanent edge inset + relative positioning so the absolute rail never shifts the icon/title stack between
+      // read and unread.
       expect(unread.className.split(/\s+/)).toEqual(
         expect.arrayContaining(["relative", "pl-6", "pr-4"]),
       );
@@ -688,7 +658,6 @@ describe("notification desktop-pass design corrections", () => {
 
     it("hides mark-read and acknowledge once read for both row shapes", async () => {
       useAppLocalNotificationsStore.getState().activateIdentity("user-a");
-      // Non-navigable already-read (the regression: used to show disabled CheckCheck).
       useAppLocalNotificationsStore.getState().upsert({
         id: "local-read",
         updatedAt: 80,
@@ -1053,11 +1022,8 @@ describe("notification desktop-pass design corrections", () => {
   });
 
   describe("nested dismissal (real Radix filter menu inside the bell popover)", () => {
-    // The only nested DropdownMenu left in the center is the filter menu
-    // (overflow was replaced by a direct settings gear). Modal menus keep
-    // the body pointer lock; PopoverContent's onFocusOutside preventDefault
-    // plus onPointerDownOutside coordinate guard keep inside-shell clicks
-    // from dismissing the whole flyout.
+    // Modal menus keep the body pointer lock; PopoverContent's onFocusOutside preventDefault plus
+    // onPointerDownOutside coordinate guard keep inside-shell clicks from dismissing the whole flyout.
 
     async function openCenter(input: {
       readonly onUnderlyingClick: (() => void) | undefined;
@@ -1084,12 +1050,8 @@ describe("notification desktop-pass design corrections", () => {
     }
 
     it("closes the filter menu on an inside-popover outside-menu click without closing the center", async () => {
-      // jsdom note: this fires pointerdown directly on the subtitle element,
-      // so it does NOT exercise the real-browser hit-test collapse to <html>
-      // under the modal pointer lock (body pointer-events:none). That defect
-      // class is covered by the live CDP harness against Chromium; this test
-      // only covers the ordinary "still-open menu, inside click closes menu
-      // only" path and the ref-driven decision wiring, not hit-testing.
+      // jsdom note: this fires pointerdown directly on the subtitle element, so it does not exercise the
+      // real-browser hit-test collapse to <html> under the modal pointer lock (body pointer-events:none).
       const onUnderlyingClick = vi.fn();
       await openCenter({ onUnderlyingClick });
       await openFilterMenu();
@@ -1138,11 +1100,8 @@ describe("notification desktop-pass design corrections", () => {
     });
 
     it("does not synthetic-Escape the popover when the filter menu already closed itself first", async () => {
-      // Regression for the deferred onPointerDownOutside ordering P0: when
-      // the menu's own outside handler closes it before the popover guard
-      // runs, nestedMenuOpenRef is already false and the guard must NOT
-      // dispatch Escape (which would hit the popover as the new topmost
-      // layer and close it too).
+      // Regression for the deferred onPointerDownOutside ordering P0: when the menu's own outside handler closes it
+      // before the popover guard runs.
       await openCenter({ onUnderlyingClick: undefined });
       await openFilterMenu();
 
@@ -1164,9 +1123,8 @@ describe("notification desktop-pass design corrections", () => {
 
       const restoreShell = mockShellRect();
       const dispatchSpy = vi.spyOn(document, "dispatchEvent");
-      // Inside-shell coordinates + target outside PopoverContent DOM so
-      // onPointerDownOutside fires; isInsideShell true, but menu ref is
-      // false → preventDefault only, no synthetic Escape.
+      // Inside-shell coordinates + target outside PopoverContent DOM so onPointerDownOutside fires; isInsideShell
+      // true, but menu ref is false → preventDefault only, no synthetic Escape.
       fireEvent.pointerDown(document.body, INSIDE_SHELL_COORDS);
       fireEvent.pointerUp(document.body, INSIDE_SHELL_COORDS);
       fireEvent.click(document.body, INSIDE_SHELL_COORDS);
@@ -1202,12 +1160,8 @@ describe("notification desktop-pass design corrections", () => {
     });
 
     it("closes everything in one physical outside click (both layers dismiss on pointerdown)", async () => {
-      // Under Radix dismissable-layer 1.1.16 the nested modal menu is the only
-      // layer that receives the outside pointerdown while its lock is active.
-      // Production adaptation: the menu reports coordinates before releasing
-      // the lock; the popover closes itself immediately when those coords are
-      // truly outside the shell. One physical outside gesture still closes
-      // everything - both layers on pointerdown, not menu-then-trailing-click.
+      // Under Radix dismissable-layer 1.1.16 the nested modal menu is the only layer that receives the outside
+      // pointerdown while its lock is active.
       await openCenter({ onUnderlyingClick: undefined });
       await openFilterMenu();
       const restoreShell = mockShellRect();

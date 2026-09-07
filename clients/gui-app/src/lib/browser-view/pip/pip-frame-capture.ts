@@ -41,13 +41,8 @@ interface OwnedPipFrame {
 }
 
 /**
- * The non-pixel state PiP's own subscription carries: the geometry the agent
- * cursor is normalized against, and the cursor itself. Both are scoped to the
- * selection they arrived for, exactly as the frame is.
- *
- * No epoch gating, unlike the tile: `shouldAcceptAgentCursorFrame` only
- * rejects while the SUBSCRIBER's capture mode is `video`, and PiP's never is -
- * it does not negotiate, so the host keeps casting JPEG to it (ticket 12).
+ * The non-pixel state PiP's own subscription carries: the geometry the agent cursor is normalized against, and the cursor itself.
+ * Both are scoped to the selection they arrived for, exactly as the frame is.
  */
 interface PipFrameMeta {
   readonly selectionId: string;
@@ -56,9 +51,7 @@ interface PipFrameMeta {
 }
 
 /**
- * A patch over {@link PipFrameMeta}: exactly one field is non-null per frame,
- * and the cursor's id is minted here (the overlay restarts its linger on a new
- * id) rather than by a counter of its own.
+ * A patch over {@link PipFrameMeta}: exactly one field is non-null per frame, and the cursor's id is minted here (the overlay restarts its linger on a new id) rather than by a counter of its own.
  */
 interface PipMetaPatch {
   readonly frameSize: ScreencastFrameSize | null;
@@ -99,10 +92,8 @@ export function usePipOwnedFrame(
   );
   const [meta, setMeta] = useState<PipFrameMeta | null>(null);
 
-  // One arm for both transports. Every value below is render-stable (the
-  // binding comes from the Electron-tab directory store, the client from the
-  // stream-client cache), so this is the real capture identity rather than a
-  // string proxy for it.
+  // One arm for both transports.
+  // Every value below is render-stable (the binding comes from the Electron-tab directory store, the client from the stream-client cache), so this is the real capture identity rather than a string proxy for it.
   useEffect(() => {
     if (!enabled || selectionId === null) return;
     const onUrl = (src: string): void => {
@@ -161,9 +152,7 @@ export function usePipOwnedFrame(
     tabId,
   ]);
 
-  // Deliberately unmemoized: the consumer is one un-memoized component, so a
-  // fresh object costs nothing and `useMemo` would only add a dependency list
-  // to keep honest.
+  // Deliberately unmemoized: the consumer is one un-memoized component, so a fresh object costs nothing and `useMemo` would only add a dependency list to keep honest.
   const scoped = meta?.selectionId === displayedSelectionId ? meta : null;
   return {
     src: frameSrcFor(owned, displayedSelectionId),

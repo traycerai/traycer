@@ -313,8 +313,7 @@ describe("useChatComposerSubmit browser annotations", () => {
 
   it("reports the missing-image failure when the crop read REJECTS", async () => {
     // An IndexedDB open/transaction failure is a rejection, not `undefined`.
-    // Unhandled, it abandoned the submit with no toast at all - the composer
-    // just stopped sending with nothing on screen to act on.
+    // Unhandled, it abandoned the submit with no toast at all - the composer just stopped sending with nothing on screen to act on.
     const taskId = "chat-ann-idb-throws";
     useComposerDraftStore
       .getState()
@@ -408,10 +407,8 @@ describe("useChatComposerSubmit browser annotations", () => {
     act(() => {
       result.current.submitDraft("enter");
     });
-    // One character typed during the IndexedDB read moves both the editor
-    // document and the draft `revision`. The send must still go out - and it
-    // must carry what the user is looking at, since acceptance clears the
-    // editor.
+    // One character typed during the IndexedDB read moves both the editor document and the draft `revision`.
+    // The send must still go out - and it must carry what the user is looking at, since acceptance clears the editor.
     act(() => {
       editor.setJSON(TYPED_DOC);
       useComposerDraftStore
@@ -458,9 +455,7 @@ describe("useChatComposerSubmit browser annotations", () => {
     act(() => {
       result.current.submitDraft("enter");
     });
-    // Attached while the IndexedDB read is in flight. `clearDraft` on
-    // acceptance wipes it, so a send built from the pre-async capture would
-    // drop it silently.
+    // Attached while the IndexedDB read is in flight. `clearDraft` on acceptance wipes it, so a send built from the pre-async capture would drop it silently.
     act(() => {
       useComposerDraftStore.getState().addBrowserAnnotation(taskId, late);
     });

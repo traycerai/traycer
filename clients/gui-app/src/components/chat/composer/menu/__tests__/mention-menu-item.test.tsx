@@ -83,9 +83,8 @@ describe("MentionMenuItem", () => {
   });
 
   it("resamples the time when a ranked reorder puts a different Agent in the row", () => {
-    // The menu keys rows by index, so a query change while the picker stays
-    // open reuses this component instance for a different Agent. The frozen
-    // label must follow the entry, not the row position.
+    // The menu keys rows by index, so a query change while the picker stays open reuses this component instance for a different Agent.
+    // The frozen label must follow the entry, not the row position.
     const { container, rerender } = render(
       <MentionMenuItem
         entry={entryWithId("chat:epic-1:agent-a", Date.now() - 5 * HOUR_MS)}

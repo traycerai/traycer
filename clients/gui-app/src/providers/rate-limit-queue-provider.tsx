@@ -16,42 +16,10 @@ import {
 } from "@/lib/rate-limits/background-rate-limit-targets";
 import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
 
-/**
- * Background poll cadence for the `ephemeralProcess` lane (codex, claude-code),
- * matching the `httpFetch` lane's table-owned fixed cadence so both lanes
- * settle to the same background freshness regardless of fetch cost class. The serial
- * queue's five-minute freshness floor, turn-completion enqueues, and manual refresh
- * all keep data fresher between ticks. Defined in `rate-limit-timing.ts`
- * (shared with `ephemeral-fetch-queue.ts`'s cool-down) and re-exported here so
- * existing importers of this module are unaffected.
- */
+/** ephemeralProcess poll cadence, matching httpFetch's table-owned tick. Defined in rate-limit-timing.ts; re-exported for existing importers. */
 export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
 
-/**
- * The long-lived app-shell owner of the rate-limit data layer (no rendered
- * output). It owns the following for the lifetime of the window:
- *
- * 1. Binds the `ephemeralProcess` serial queue to the default host
- *    (`configureRateLimitQueue`), re-binding on host/client swap and unbinding
- *    on host loss so a stale client can't service an enqueue.
- * 2. Drives the single shared interval timer for the `ephemeralProcess` lane.
- *    Each window chooses at most three authenticated targets: selected stale
- *    profiles first, then the oldest persisted readings. Targets enqueue
- *    separately so the queue staggers subprocess work rather than fanning out.
- * 3. Keeps OpenCode's HTTP-lane turn refresh mounted even while its popover and
- *    Settings surfaces are closed.
- *
- * The timer PAUSES on `document.visibilityState === "hidden"` (window truly
- * minimized/backgrounded) and resumes when the window is shown again - matching
- * the same visibility signal TanStack's `focusManager` uses for the httpFetch
- * lane's `refetchIntervalInBackground: false`. It deliberately does NOT key off
- * window focus (`blur` / `document.hasFocus()`): the core scenario this feature
- * exists for is glancing at the icon while Traycer sits visible-but-unfocused on
- * a second monitor, and pausing on mere focus-loss would break exactly that.
- *
- * `httpFetch` providers are intentionally absent here - their observers opt
- * into table-owned polling and never enter this queue.
- */
+/** App-shell owner of the `ephemeralProcess` queue and timer. Pause on `visibilityState === "hidden"`, not window focus. `httpFetch` observers poll themselves and never enter this queue. */
 export function RateLimitQueueProvider(): null {
   const hostId = useAddressableHostId();
   const client = useHostClient();
@@ -64,20 +32,7 @@ export function RateLimitQueueProvider(): null {
     configuredProviders.some(({ providerId }) => providerId === "opencode"),
   );
 
-  // Bind the queue to the default host. Re-runs on host/client swap; the
-  // cleanup + `null` branch clears the binding on host loss (`hostId` flips to
-  // `null`). `hostId` is bound into the queue at configure time (not passed per
-  // enqueue) so a queued fetch can't be reassigned to a different host
-  // mid-flight. `useHostClient()` is non-null once the runtime is mounted, so
-  // only host presence needs gating here.
-  //
-  // A queued item can outlive a host switch, so the client it captures must
-  // stay aimed where it was enqueued - otherwise an item enqueued for host A
-  // fetches B and writes the answer under A's cache key, showing one machine's
-  // usage on another's row. That guarantee is `useHostClient()`'s own: it
-  // resolves a requester PINNED to the host it named (redesign D17 / P2.1), so
-  // a call already in flight completes against the outgoing host and this
-  // effect simply re-binds with a fresh client when the effective host moves.
+  // Bind the queue to the default host. `hostId` is bound at configure time so a queued fetch cannot be reassigned mid-flight. `useHostClient()` is pinned to the named host.
   useEffect(() => {
     if (hostId === null) {
       configureRateLimitQueue(null);
@@ -123,10 +78,8 @@ export function RateLimitQueueProvider(): null {
     enqueuePollingWindow();
   }, [hostId, membershipKey]);
 
-  // The single shared interval timer, gated on host presence and paused while
-  // the window is hidden. Initial per-provider data still populates through the
-  // immediate effect above and per-surface queue enqueue-on-mount; this timer
-  // only does the periodic background refresh.
+  // Shared interval for background refresh. Paused while hidden. Initial
+  // data comes from the immediate effect and enqueue-on-mount.
   useEffect(() => {
     if (hostId === null) return;
     let intervalHandle: number | null = null;

@@ -54,12 +54,8 @@ interface HookProps {
 }
 
 /**
- * The pane's `activationHistory` is real store state, so the driver below
- * maintains it exactly as the store does rather than letting each test
- * hand-author one: `recordPaneActivation` unshifts the newly activated tab
- * (dropping its earlier entry), and `reconcileCanvasInvariants` prunes
- * anything no longer open. Chat retention reads that history, so a test that
- * faked it would be asserting against a shape production never produces.
+ * The pane's `activationHistory` is real store state, so the driver below maintains it exactly as the store does rather than letting each test hand-author one: `recordPaneActivation` unshifts the newly activated tab (dropping its earlier entry), and `reconcileCanvasInvariants` prunes anything no longer open.
+ * Chat retention reads that history, so a test that faked it would be asserting against a shape production never produces.
  */
 function renderMounted(initial: HookProps) {
   let activationHistory: ReadonlyArray<string> = [];
@@ -342,17 +338,8 @@ describe("useMountedPaneTabs", () => {
   });
 
   it("keeps retained chats in a hidden pane, where the spec LRU collapses", () => {
-    // Retention deliberately does NOT collapse with pane visibility. This is a
-    // TRADEOFF, not a constraint - membership COULD observe pane visibility
-    // (`computeRetainedTopLevelRefKeys` already derives the same active-ref set
-    // `TopLevelTabHost` turns into `usePaneVisible()`). Collapsing is refused
-    // because the retained chat would be dropped while hidden and have to
-    // rebuild on the way back. Moving BOTH layers together would remount it
-    // hidden on top-level return, so it can often converge before it is ever
-    // selected - the exposure is a quick first switch, not every return. Still
-    // a reintroduced churn risk for no benefit here. If you are here to revisit
-    // that call (the module doc prices it in unreclaimable `chat.subscribe`
-    // sockets), this is the test that pins it, and membership must move with it.
+    // Retention deliberately does NOT collapse with pane visibility.
+    // This is a TRADEOFF, not a constraint - membership COULD observe pane visibility (`computeRetainedTopLevelRefKeys` already derives the same active-ref set `TopLevelTabHost` turns into `usePaneVisible()`).
     const tabs = [chatTab(1), chatTab(2), specTab(1), specTab(2)];
     const { result, rerender } = renderMounted({
       activeTabId: "inst-spec-1",

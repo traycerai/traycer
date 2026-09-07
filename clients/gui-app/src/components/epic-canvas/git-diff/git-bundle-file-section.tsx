@@ -147,18 +147,8 @@ interface BundleFileSectionBodyProps {
 
 function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
-  // `.svg` is never `isBinary` to git (image-preview decision log, decision
-  // #5) but still has no searchable diff text once it routes to the image
-  // view, so it shares the same "binary" find-coverage state as a true
-  // binary image - see `gitImageDiffRouting` for the routing decision
-  // itself, shared with the single-file diff tile.
   const { routeToImageDiff } = gitImageDiffRouting(props.file);
-  // Same decision as the single-file tile: by extension, image routing
-  // winning a straddling rename. No host-version gate - `git.streamFileAsset`
-  // is a stream method, absent from the unary manifest the negotiated-version
-  // registry records, so such a gate can never positively know a host is
-  // old; the opened tile's own stream negotiation is the authority, and an
-  // old host's refusal degrades there to the shared placeholder.
+  // No host-version gate - `git.streamFileAsset` is a stream method, absent from the unary manifest the negotiated-version registry records, so such a gate can never positively know a host is old; the opened tile's own stream negotiation is the authority, and an old host's refusal degrades there to the shared placeholder.
   const routeToPdfCards =
     !routeToImageDiff && gitRoutesToPdfDiffCards(props.file);
   useEffect(() => {
@@ -178,11 +168,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   if (routeToImageDiff) {
     const sides = gitImageDiffSides(props.file);
     const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
-    // `ImageDiffView` owns its own bounded height in `compact` mode (Codex
-    // re-review, #3773048701 / #3773298843) - it needs both sides' decoded
-    // dimensions to size itself snugly, which only it has access to (this
-    // bundle row never fetches the asset itself), so there is no wrapper
-    // height to apply here.
+    // `ImageDiffView` owns its own bounded height in `compact` mode (Codex re-review, #3773048701 / #3773298843) - it needs both sides' decoded dimensions to size itself snugly, which only it has access to (this bundle row never fetches the asset itself), so there is no wrapper height to apply here.
     return (
       <ImageDiffView
         key={revisionKey}
@@ -202,9 +188,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   }
   if (routeToPdfCards) {
     const sides = gitImageDiffSides(props.file);
-    // Same compact block as the single-file tile - the bundle row composes
-    // the rich per-type views (the image branch above is the precedent), it
-    // does not fall back to a poorer rendering.
+    // Same compact block as the single-file tile - the bundle row composes the rich per-type views (the image branch above is the precedent), it does not fall back to a poorer rendering.
     return (
       <PdfDiffView
         hostId={props.node.hostId}
@@ -286,12 +270,7 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
     queryEnabled: true,
     resumeDetachedDraft: true,
   });
-  // A mounted section showing NO content - pending for a key with no data
-  // yet (a "Load Full" re-ask), or an error - drops the patch it registered
-  // before: past "Load Full" the truncated bytes will never render again, so
-  // leaving them indexed would have find match text that is not in the DOM
-  // and park navigation on a skeleton or the error block. Retention is for
-  // UNMOUNTED rows only (see `unregisterLoadedPatch`).
+  // A mounted section showing NO content - pending for a key with no data yet (a "Load Full" re-ask), or an error - drops the patch it registered before: past "Load Full" the truncated bytes will never render again, so leaving them indexed would have find match text that is not in the DOM and park navigation on a skeleton or the error block.
   useEffect(() => {
     if (!displayedDiffPending) return;
     bundleFindRegistration.unregisterLoadedPatch(props.bundleFindFileId);

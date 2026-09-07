@@ -7,18 +7,7 @@ import type { MentionFlowStep } from "@/lib/composer/mentions";
 import { DEFAULT_PULL_REQUEST_MENTION_FILTER } from "@/lib/composer/mentions/github-mention-rows";
 import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
 
-/**
- * A repository selection is only DISPLAYABLE before the scope resolves, never
- * sendable.
- *
- * `filter` deliberately keeps a stored selection through an unresolved scope so
- * a cold open does not blank the radios for a paint. That is right for the
- * chrome, which shows it, and wrong for the search, which spends a request on
- * it: a selection is non-default, so `wanted` is satisfied with NO query typed,
- * and the roots changing under an open section is on its own enough to search
- * GitHub qualified by a repository that may have just left the scope - and to
- * offer the rows that come back as insertable.
- */
+/** A repository selection is only DISPLAYABLE before the scope resolves, never sendable. `filter` deliberately keeps a stored selection through an unresolved scope so a cold open does not blank the radios for a paint. */
 
 const searchCalls = vi.hoisted(() => ({ enabled: [] as boolean[] }));
 
@@ -105,7 +94,6 @@ function renderSections() {
   );
 }
 
-/** Whether the search was asked to run on any render of this mount. */
 function searchWasEnabled(): boolean {
   return searchCalls.enabled.some((enabled) => enabled);
 }
@@ -158,9 +146,7 @@ describe("useGithubMentionSections search gate", () => {
   });
 
   it("does not delay an unfiltered section's search on the unresolved scope", () => {
-    // The other control, and the reason the gate is not simply `scopeResolved`:
-    // with nothing selected there is no unvalidated qualifier to leak, so the
-    // common cold open must still search the moment the user types.
+    // The other control, and the reason the gate is not simply `scopeResolved`: with nothing selected there is no unvalidated qualifier to leak, so the common cold open must still search the moment the user types.
     renderSections();
 
     expect(searchWasEnabled()).toBe(true);

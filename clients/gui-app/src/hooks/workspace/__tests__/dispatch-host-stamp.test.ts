@@ -49,14 +49,7 @@ const PREPARED: PreparedWorkspaceFolder = {
 };
 
 /**
- * Contract of the two pure mappers `pickAndPrepareFolders` stamps results
- * through: each takes the host id as an argument and applies it verbatim to
- * every folder, adding no host lookup of its own.
- *
- * The B6 race lives in the caller, which captures the host at dispatch and
- * re-checks `hostStillBound` after both awaits before returning. The
- * integration cases below drive that caller; these pure cases keep the
- * stamping contract independently explicit.
+ * Mappers take host id as an argument and stamp it verbatim. The B6 race lives in the caller, which captures at dispatch and re-checks after both awaits.
  */
 describe("prepared-folder host stamping (pure mappers)", () => {
   it("applies the given host id to every folder it stamps", () => {

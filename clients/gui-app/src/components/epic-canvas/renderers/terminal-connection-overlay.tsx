@@ -6,22 +6,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { TerminalConnectionOverlayState } from "./terminal-connection-overlay-state";
 
 /**
- * Overlay surfaced over a terminal/TUI tile whose live stream is no longer
- * connected. Without it a dropped session reads as a live terminal - the stale
- * frame stays painted and xterm's local cursor keeps blinking, so the user types
- * into a dead PTY with no feedback. The overlay covers the grid (so input lands
- * on it, not the dead terminal) and names the state.
- *
- * - `reconnecting` - the transport dropped and is re-dialing; transient, the
- *   session is expected back on its own.
- * - `recovering` - the session was found gone and is being respawned-and-resumed
- *   automatically (see `useTerminalSessionRecovery`).
- * - `lost` - automatic recovery gave up (the respawn kept failing); offer a
- *   manual retry ("reattachable" - the session may still exist, Architecture §8).
- * Keystrokes are already blocked from the dead PTY at the store
- * (`writeInput` returns null while `status` is `"lost"`/`"reaped"` or the
- * connection is not open), so the overlay does not steal focus; it covers
- * the grid and announces the state as a live region.
+ * Without it a dropped session reads as a live terminal - the stale frame stays painted and xterm's local cursor keeps blinking, so the user types into a dead PTY with no feedback.
  */
 export interface TerminalConnectionOverlayProps {
   readonly state: TerminalConnectionOverlayState;

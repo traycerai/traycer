@@ -10,43 +10,7 @@ import { chatSyncSchemaSurfaceBaseline } from "./__fixtures__/chat-sync-schema-s
 
 /**
  * Frozen surface of the registered `chat-head` / `chat-shard` contract.
- *
- * These records leave the machine that wrote them. Their readers - cloud
- * renderers, clone targets, the backfill job - ship on their own cadences, so a
- * change here reaches shipped code that cannot be redeployed alongside it. That
- * is a stronger constraint than the epic record's, which is why the guard exists
- * BEFORE the records have any writers.
- *
- * Both surfaces are frozen, for both records:
- *
- * - `storage` comes from the explicit WIRE projections, NOT from the registered
- *   schemas' own input surfaces. Both records capture unmodeled keys through
- *   `z.preprocess`, and `z.toJSONSchema` reports a preprocess's inner
- *   (post-capture) schema in both IO modes: that surface requires the internal
- *   `residual` key and marks every captured child optional, so freezing it would
- *   assert the opposite of the truth. The projections are built from the same
- *   shape maps. Preserved variants (message / block / event) and the opaque
- *   host-private payload still render as `{}`, because what they accept really
- *   is "any JSON" - their schemas are predicate checks that hand back the value
- *   unchanged, which is what keeps an own `__proto__` key from being rebuilt
- *   away.
- * - `domain` (default/output) describes the parsed value exposed to readers.
- *   This is the substantial half - it is where drift in the interpreted
- *   message / block / event shapes lands.
- *
- * A frozen schema can be frozen and wrong, so the storage projections also
- * carry semantic assertions below: each must accept a real wire record, reject
- * a truncated one, and never mention `residual`.
- *
- * This test fails on ANY drift, including a compatible additive change. The
- * failure is a review gate, not an assertion that all drift is breaking.
- * Classify the change using `src/persistence/COMPATIBILITY.md`; then either
- * regenerate the baseline for a compatible same-major change or introduce the
- * required version/migration path for a breaking change.
- *
- * Regenerate the reviewable baseline with:
- *   bun run protocol/scripts/snapshot-chat-sync-schema-surface.ts > \
- *     protocol/src/persistence/chat-sync/__tests__/__fixtures__/chat-sync-schema-surface.ts
+ * Their readers - cloud renderers, clone targets, the backfill job - ship on their own cadences, so a change here reaches shipped code that cannot be redeployed alongside it.
  */
 describe("registered chat-sync persistence surface is frozen", () => {
   const chatHeadSchema = getRecordSchema(
@@ -86,11 +50,7 @@ describe("registered chat-sync persistence surface is frozen", () => {
   });
 });
 
-/**
- * A frozen surface can be frozen and wrong. These assertions pin what the
- * storage projections MEAN, so a projection that drifts away from the wire
- * fails here rather than sitting green in the fixture.
- */
+/** A frozen surface can be frozen and wrong. */
 describe("chat-sync storage projections describe the wire", () => {
   const wireHead: JsonObject = {
     schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
@@ -124,10 +84,8 @@ describe("chat-sync storage projections describe the wire", () => {
     hostPrivateShard: null,
   };
 
-  // Non-empty on purpose: a shard IS a cohort, so the registered schema rejects
-  // an empty selected section (see `refineChatShardSection`). The storage
-  // PROJECTION cannot express that - a refinement has no JSON-Schema form - so
-  // this record has to satisfy both to prove the two describe the same wire.
+  // Non-empty on purpose: a shard IS a cohort, so the registered schema rejects an empty selected section (see `refineChatShardSection`).
+  // The storage PROJECTION cannot express that - a refinement has no JSON-Schema form - so this record has to satisfy both to prove the two describe the same wire.
   const wireShard: JsonObject = {
     schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
     chatId: "chat-1",

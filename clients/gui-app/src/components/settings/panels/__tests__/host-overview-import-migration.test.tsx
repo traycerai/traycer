@@ -19,9 +19,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
 
-// The scoped TRANSPORT, stubbed at the hook the panel re-provides from. The
-// real one dials a transient socket; every assertion here is about which
-// binding reaches the rows, not about how it was built.
+// The scoped transport, stubbed at the hook the panel re-provides from.
 const scopedStreamMock = vi.hoisted((): { current: unknown } => ({
   current: null,
 }));
@@ -77,18 +75,8 @@ import {
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
-/**
- * Data & migration moved off General and onto the Overview of the host it
- * acts on, because both rows move ONE MACHINE'S local data and General names no
- * machine.
- *
- * The rows ride the STREAM transport, not the unary one, so this suite's real
- * subject is the second re-provision `HostSettingsPanel` now performs: the
- * binding the rows read has to be the PICKED host's, and the run handle has to
- * receive that same object. The scope here is an explicit non-following pick
- * (host-b) with the ambient window on host-a, which is the only arrangement
- * where a wrong answer is visible at all.
- */
+/** The scope here is an explicit non-following pick (host-b) with the ambient window on host-a, which is the
+ * only arrangement where a wrong answer is visible at all. */
 
 const PICKED_HOST = "host-b";
 const AMBIENT_HOST = "host-a";
@@ -117,11 +105,7 @@ const runningState: MigrationRunState = {
   finalSuccess: null,
 };
 
-/**
- * A stream binding standing in for a resolved scoped transport. Nothing calls
- * through the client: what every assertion below turns on is WHICH host the
- * binding names and whether that exact object reaches the run handle.
- */
+/** A stream binding standing in for a resolved scoped transport. */
 function fakeStreamBinding(input: {
   readonly hostId: string;
   readonly scanSupport: StreamMethodSupport;
@@ -161,7 +145,6 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-/** Ambient window on host-a, Overview explicitly picked to host-b. */
 function arrangePickedHost(): void {
   const ambient = buildOverviewHostFixture({
     hostId: AMBIENT_HOST,

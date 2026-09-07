@@ -50,10 +50,7 @@ function buildYMap(data: object): Y.Map<unknown> {
 }
 
 /**
- * Y.Map cannot be read in detached state (before being attached to a Y.Doc),
- * so callers that use createTypedMap(...) and then iterate keys/get values
- * will observe empty reads. We keep a detached mirror and fall back to it
- * until the map is attached.
+ * Y.Map cannot be read in detached state (before being attached to a Y.Doc), so callers that use createTypedMap(...) and then iterate keys/get values will observe empty reads.
  */
 function addDetachedReadFallbacks(
   map: Y.Map<unknown>,
@@ -70,9 +67,7 @@ function addDetachedReadFallbacks(
 
   const isAttached = () => map.doc !== null && map.doc !== undefined;
 
-  // Shadow Y.Map's reader/writer methods with own-properties that fall back
-  // to `detachedEntries` until the map is attached. `Object.assign` installs
-  // the overrides without casting away Y.Map's method types.
+  // Shadow Y.Map's reader/writer methods with own-properties that fall back to `detachedEntries` until the map is attached.
   Object.assign(map, {
     get: (key: string) =>
       isAttached() ? originalGet(key) : detachedEntries.get(key),
@@ -137,10 +132,7 @@ function toDetachedJSONValue(value: unknown): unknown {
   }
 
   if (value instanceof Y.Array) {
-    // `_prelimContent` (entries held while detached) is yjs-internal AND
-    // declared private on `Y.Array`, so it can't be reached by intersecting
-    // the public type. Read it through an explicit `unknown` intermediate (a
-    // typed binding, not an `as unknown` assertion) then a single cast.
+    // `_prelimContent` (entries held while detached) is yjs-internal AND declared private on `Y.Array`, so it can't be reached by intersecting the public type.
     const arrayUnknown: unknown = value;
     const maybeDetachedArray = arrayUnknown as {
       doc?: Y.Doc | null;

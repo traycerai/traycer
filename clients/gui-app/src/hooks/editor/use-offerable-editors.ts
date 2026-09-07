@@ -6,15 +6,7 @@ import { useEditorOpenPathsSupportsV11 } from "@/hooks/editor/use-editor-open-pa
 const POST_V10_EDITOR_IDS: ReadonlySet<string> = new Set(["vscodium"]);
 
 /**
- * The editors a menu may OFFER for `hostId` - `EDITORS` narrowed to the ids
- * that host's negotiated minor can carry.
- *
- * Distinct from `useEditorAvailability`, which answers whether an editor is
- * INSTALLED on this machine. A menu needs both, and neither implies the other.
- *
- * Offering is the enforcement point: an id absent from every menu is never
- * emitted, and a stored default that falls out of this catalog is handled by
- * `resolveEditorState` / `resolveEffectiveDefaultEditor`.
+ * Ids this host's negotiated minor can carry. Distinct from installed-on-this-machine (`useEditorAvailability`); neither implies the other.
  */
 export function useOfferableEditors(
   hostId: string | null,

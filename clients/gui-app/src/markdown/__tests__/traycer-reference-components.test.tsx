@@ -72,11 +72,8 @@ vi.mock("@/lib/epic-selectors", () => ({
     epicNodeRefForNodeId(state, nodeId, fallback),
 }));
 
-// The chip imports the canvas store and `@dnd-kit/core` at its module top, so
-// these spies must exist before those (hoisted) `vi.mock` factories run.
-// `vi.hoisted` guarantees that ordering; `resolveTabIdForEpic` is the pure,
-// non-side-effecting resolver the chip reads for its `viewTabId` (constraint
-// C1), returning a tab id for the open epic and `null` otherwise.
+// Hoist spies: the chip imports the canvas store and dnd-kit at module top.
+// resolveTabIdForEpic returns the open epic's tab id or null.
 const {
   openTile,
   resolveTargetTabForEpic,
@@ -86,18 +83,12 @@ const {
 } = vi.hoisted(() => ({
   openTile: vi.fn(),
   resolveTargetTabForEpic: vi.fn(() => "tab-for-open-epic"),
-  // The global/MRU resolver the chip must NOT consult. It resolves a DIFFERENT
-  // tab ("tab-focused-partner") than the chip's owning `useEpicViewTabId`
-  // context ("tab-for-open-epic"), modelling a same-Epic split with a different
-  // pane focused. The drag tests assert the payload carries the owner and that
-  // this spy is never called, so a regression to MRU resolution goes red.
+  // MRU resolver must not be consulted. It would resolve a different split
+  // pane; the payload must carry the owner tab.
   resolveTabIdForEpic: vi.fn((epicId: string) =>
     epicId === "epic-open" ? "tab-focused-partner" : null,
   ),
-  // Capture every `useDraggable` call so tests can assert the emitted payload
-  // and the `disabled` gate without wiring a DndContext + pointer simulation.
-  // Only a drag-eligible (same-epic spec/ticket) chip mounts the draggable
-  // child, so a non-eligible chip leaves this spy uncalled.
+  // Spy useDraggable. A non-eligible chip must leave it uncalled.
   useDraggableSpy:
     vi.fn<(args: { id: string; disabled: boolean; data: unknown }) => void>(),
   // Captures the node the chip hands to dnd-kit's `setNodeRef`, so a test can
@@ -178,14 +169,7 @@ import { TraycerEpicReference } from "@/markdown/components/traycer-epic-referen
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
-/**
- * Naming the effective host is part of building an app-wide host fixture
- * (P2.1's sweep convention). These references resolve through
- * `useCanvasHostId()` -> `useEffectiveHostId()` -> the selection authority
- * store, so the STORE is the seam that must carry the host. Seeding it here
- * rather than mocking the hook keeps the fixture indifferent to which hook
- * the component reaches for next.
- */
+/** Seed the selection-authority store, not a hook mock: references resolve through useCanvasHostId -> useEffectiveHostId. */
 function setEffectiveHostId(hostId: string | null): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,

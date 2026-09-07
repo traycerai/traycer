@@ -149,10 +149,7 @@ import {
 } from "./use-new-conversation-prompt-stash-adapters";
 
 /**
- * Isolated subscriber for the live draft content. The editor rewrites content
- * on every keystroke; keeping that subscription here (rather than in
- * `NewConversationModalBody`) means only the attachment strip re-renders while
- * typing - the toolbar / workspace controls / editor wrapper stay put.
+ * The editor rewrites content on every keystroke; keeping that subscription here (rather than in `NewConversationModalBody`) means only the attachment strip re-renders while typing - the toolbar / workspace controls / editor wrapper stay put.
  */
 function NewConversationModalAttachmentStrip(props: {
   readonly epicId: string;
@@ -190,11 +187,8 @@ interface NewConversationModalActionProps {
 }
 
 /**
- * The single "+" trigger for the New Conversation modal, shared by the chats
- * panel header (top-level) and each chat row (child). The modal opens with its
- * remembered draft mode, falling back to the latest conversation's interface
- * when there is no draft, so a terminal-agent launch carries forward just like
- * a chat launch. The modal's own switcher remains the one way to change modes.
+ * The single "+" trigger for the New Conversation modal, shared by the chats panel header (top-level) and each chat row (child).
+ * The modal opens with its remembered draft mode, falling back to the latest conversation's interface when there is no draft, so a terminal-agent launch carries forward just like a chat launch.
  */
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
@@ -209,17 +203,12 @@ export function NewConversationModalAction(
       tabId,
       placement: null,
       parentId,
-      // Names no host: the modal resolves its own per-EPIC placement (this
-      // Epic's last created chat's host, else the host the Epic is served
-      // from - `useEpicConversationPlacement`), with the picker live. Naming
-      // one here would freeze the picker (§55) for a trigger that has no
-      // machine in mind.
+      // Names no host: the modal resolves its own per-EPIC placement (this Epic's last created chat's host, else the host the Epic is served from - `useEpicConversationPlacement`), with the picker live.
+      // Naming one here would freeze the picker (§55) for a trigger that has no machine in mind.
       hostId: null,
     });
   }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
-  // Activation while aria-disabled stays blocked via `handleOpen`'s early
-  // return; see `disabled-presentation.ts` for why native `disabled` can't
-  // carry the tooltip.
+  // Activation while aria-disabled stays blocked via `handleOpen`'s early return; see `disabled-presentation.ts` for why native `disabled` can't carry the tooltip.
   const { ariaDisabled, nativeDisabled } = resolveDisabledPresentation(
     props.disabled,
     props.disabledTooltip,
@@ -261,11 +250,8 @@ export function NewConversationModalAction(
 }
 
 /**
- * Per-tab host for the shared New Conversation modal. Mounted inside the epic
- * route (so the modal's permission/connection gating and per-epic draft store
- * resolve to this epic). Renders the modal whenever the open-request store
- * targets this epic + tab; every creation trigger - sidebar `+`, in-pane
- * PaneOpener, ⌘K palette - funnels through that one request.
+ * Per-tab host for the shared New Conversation modal.
+ * Mounted inside the epic route (so the modal's permission/connection gating and per-epic draft store resolve to this epic).
  */
 export function NewConversationModalHost(props: {
   readonly epicId: string;
@@ -277,10 +263,8 @@ export function NewConversationModalHost(props: {
     request !== null &&
     request.epicId === props.epicId &&
     request.tabId === props.tabId;
-  // This host only mounts for the active tab. If it unmounts (the user switches
-  // to another epic tab) while it still owns the open request, clear it -
-  // otherwise the global request lingers with no live host to dismiss it and
-  // the modal re-pops when the user returns to this tab.
+  // This host only mounts for the active tab.
+  // If it unmounts (the user switches to another epic tab) while it still owns the open request, clear it - otherwise the global request lingers with no live host to dismiss it and the modal re-pops when the user returns to this tab.
   useEffect(() => {
     return () => {
       const current = useNewConversationModalOpenStore.getState().request;
@@ -317,36 +301,17 @@ function NewConversationModalDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
-  // Opt this modal out of the keybinding provider's dialog block so the nested
-  // model picker's ⌘/⌥ leader-digit shortcuts and hints fire while it's open
-  // (see `isAnyDialogOpen` in keybinding-provider.tsx). The modal owns no leader
-  // shortcuts itself, so an absorber scope claims both leaders while open -
-  // closed-picker leader digits are swallowed here instead of switching the
-  // tabs behind the modal, and the picker's own scope layers on top when open.
+  // The modal owns no leader shortcuts itself, so an absorber scope claims both leaders while open - closed-picker leader digits are swallowed here instead of switching the tabs behind the modal, and the picker's own scope layers on top when open.
   useLeaderScopeAbsorber(props.open, LEADER_SCOPE_NEW_CONVERSATION_MODAL);
-  // The composer's @/slash picker (see `ComposerMenu`) is a plain portalled
-  // floating menu, not a Radix dismissable layer, so Radix can't coordinate
-  // Escape with it. Radix's escape listener runs first (document, capture) and
-  // dismisses the dialog; preventing that needs `preventDefault`, but that also
-  // suppresses ProseMirror's keydown (it ignores defaultPrevented events), so
-  // the picker's own Escape-close never fires. The body publishes an imperative
-  // dismiss here: while a picker is open we close it ourselves and preventDefault
-  // (first Escape closes only the picker); once it's closed the call returns
-  // false and Escape falls through to dismiss the dialog (second Escape).
+  // The composer's @/slash picker (see `ComposerMenu`) is a plain portalled floating menu, not a Radix dismissable layer, so Radix can't coordinate Escape with it.
+  // Radix's escape listener runs first (document, capture) and dismisses the dialog; preventing that needs `preventDefault`, but that also suppresses ProseMirror's keydown (it ignores defaultPrevented events), so the picker's own Escape-close never fires.
   const dismissPickerRef = useRef<(() => boolean) | null>(null);
-  // The workspace controls' nested Branch/Location popovers portal to
-  // `document.body` by default, landing as a DOM sibling of this dialog - the
-  // dialog's scroll-lock then swallows wheel input over their scrollable
-  // lists even though the lists themselves scroll fine (see
-  // `DialogOverlayBoundaryContext`). Publishing this dialog's own content node
-  // lets those nested overlays portal inside it instead, so the lock
-  // recognizes their content as its own.
+  // The workspace controls' nested Branch/Location popovers portal to `document.body` by default, landing as a DOM sibling of this dialog - the dialog's scroll-lock then swallows wheel input over their scrollable lists even though the lists themselves scroll fine (see `DialogOverlayBoundaryContext`).
+  // Publishing this dialog's own content node lets those nested overlays portal inside it instead, so the lock recognizes their content as its own.
   const [overlayBoundaryEl, setOverlayBoundaryEl] =
     useState<HTMLElement | null>(null);
-  // The composer picker store outlives the body's focus-driven unmount. A fresh
-  // store is minted each time the modal opens, so a reopened modal starts clean,
-  // while it survives focus toggles within one open session (this dialog stays
-  // mounted throughout).
+  // The composer picker store outlives the body's focus-driven unmount.
+  // A fresh store is minted each time the modal opens, so a reopened modal starts clean, while it survives focus toggles within one open session (this dialog stays mounted throughout).
   const [transientSession, setTransientSession] = useState<
     NewConversationTransientState & { readonly open: boolean }
   >(() => ({
@@ -368,23 +333,13 @@ function NewConversationModalDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         ref={setOverlayBoundaryEl}
-        // Capped to the band `top-safe-center-y` centres it in - that token and
-        // `--spacing-safe-dvh` measure the same region, so the two agree by
-        // construction - less a 1rem gutter at each end. Without a cap the card
-        // grew with the draft and, being `-translate-y-1/2`, spilled off BOTH
-        // edges of the screen with nothing to scroll: on a phone the first
-        // typed lines simply left the box. The scroll lives on the body
-        // wrapper below rather than here, because the workspace controls'
-        // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
-        // and an overflow container that is also their containing block - this
-        // one is, it carries a transform - would clip them.
+        // Without a cap the card grew with the draft and, being `-translate-y-1/2`, spilled off BOTH edges of the screen with nothing to scroll: on a phone the first typed lines simply left the box.
+        // The scroll lives on the body wrapper below rather than here, because the workspace controls' popovers portal into THIS node (see `DialogOverlayBoundaryContext`) and an overflow container that is also their containing block - this one is, it carries a transform - would clip them.
         className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
-        // Same portal rule as the worktree pickers: the host switcher's list
-        // mounts outside this dialog, so a click in it reads as an interaction
-        // from outside. Dismissing on that would throw away the form someone is
-        // in the middle of filling, for the crime of choosing a host in it.
+        // Same portal rule as the worktree pickers: the host switcher's list mounts outside this dialog, so a click in it reads as an interaction from outside.
+        // Dismissing on that would throw away the form someone is in the middle of filling, for the crime of choosing a host in it.
         onInteractOutside={(event) => {
           if (isHostSwitcherListInteraction(event.target)) {
             event.preventDefault();
@@ -474,13 +429,8 @@ export function NewConversationModalBody(props: {
   const isDisconnected = connectionStatus === "closed";
   const canMutate = isEditableRole(permissionRole) && !isDisconnected;
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  // The picker store is lifted onto the always-mounted dialog so it survives
-  // this body's focus-driven unmount (see the transient context); the hook falls
-  // back to a local store when rendered outside the dialog.
+  // The picker store is lifted onto the always-mounted dialog so it survives this body's focus-driven unmount (see the transient context); the hook falls back to a local store when rendered outside the dialog.
   const { pickerStore } = useNewConversationTransient();
-  // Bridge the editor's imperative picker dismiss up to the dialog's Escape
-  // handler (see `NewConversationModalDialog`). Returns true when a picker was
-  // open and got closed, so the dialog keeps itself open for that Escape.
   // Cleared on unmount so a stale closure can never block dismissing the dialog.
   useEffect(() => {
     dismissPickerRef.current = () =>
@@ -489,26 +439,8 @@ export function NewConversationModalBody(props: {
       dismissPickerRef.current = null;
     };
   }, [dismissPickerRef]);
-  // Every host-derived surface below - workspace seed and controls, profile
-  // validation, picker items, and both create paths - hangs off this one
-  // client, so a pinned request cannot leave some of them on the active host
-  // and the rest on the pinned one.
-  //
-  // A request that names no host is a PLACEMENT composer with the same chip
-  // and picker as the landing one, resolved for THIS EPIC (user ruling
-  // 2026-08-18): `pin(epic) ?? the Epic session's host ?? effective`, where
-  // the per-Epic pin is this Epic's "last created chat's host" - written by
-  // the picker and RE-RECORDED on every create below (`recordPlacement`), the
-  // way the model picker's memory is. So a new agent in this Epic opens on
-  // the host the last one was created on, or - before any - on the host the
-  // Epic is served from. Resolving the window's landing pin instead (what
-  // this used to share) answered "where did the landing chip last point",
-  // which is not a fact about this Epic. A request that DOES name a host
-  // keeps it, with the picker inert (§55).
-  //
-  // Same placement UNIT as the landing composer: the READ client for this
-  // body's queries, the host-FROZEN client every create below is sent on, and
-  // the submit-time refusal all come out of one hook.
+  // Every host-derived surface below - workspace seed and controls, profile validation, picker items, and both create paths - hangs off this one client, so a pinned request cannot leave some of them on the active host and the rest on the pinned one.
+  // So a new agent in this Epic opens on the host the last one was created on, or - before any - on the host the Epic is served from.
   const sessionHostId = useEpicSessionHostId();
   const composerPlacement = useEpicConversationPlacement({
     epicId,
@@ -520,11 +452,7 @@ export function NewConversationModalBody(props: {
   const submitTarget = composerPlacement.submitTarget;
   const composerFollowsEffective = composerPlacement.followsEffective;
   const hostLabelFor = composerPlacement.hostLabelFor;
-  // "Last created chat's host": every create in this modal writes the Epic's
-  // placement memory with the host it resolved, at SUBMIT (beside the settings
-  // memory) rather than on the create's success - the model picker's memory
-  // is written the same way. A caller-named host is recorded too: the rule is
-  // the last CREATED chat's host, whoever named it.
+  // "Last created chat's host": every create in this modal writes the Epic's placement memory with the host it resolved, at SUBMIT (beside the settings memory) rather than on the create's success - the model picker's memory is written the same way.
   const recordPlacement = composerPlacement.pin.setSelection;
   const latestWorkspaceSeed = useModalWorkspaceSeed({
     epicId,
@@ -537,12 +465,8 @@ export function NewConversationModalBody(props: {
     resolvedHostId,
     latestWorkspaceSeed,
   );
-  // Subscribe to the NON-content draft fields only. `content` is rewritten on
-  // every keystroke (see `handleDocumentChange`); subscribing to the whole
-  // patch here would re-render the entire modal body per character. Live
-  // content is routed to an isolated subscriber
-  // (`NewConversationModalAttachmentStrip`) plus a boolean submit gate,
-  // mirroring the landing composer's isolation.
+  // Subscribe to the NON-content draft fields only.
+  // `content` is rewritten on every keystroke (see `handleDocumentChange`); subscribing to the whole patch here would re-render the entire modal body per character.
   const draftFields = useNewConversationModalStore(
     useShallow((state) => {
       const patch = state.draftPatchesByEpicId[epicId];
@@ -612,16 +536,7 @@ export function NewConversationModalBody(props: {
     },
     [epicId, setSettings],
   );
-  // `draftSettings` can fall back to `runSettingsSeed`/`latestSettingsSeed`
-  // (see `useNewConversationModalSeed`), neither of which is host-scoped or
-  // kept in sync with live profile removals - validated against the host this
-  // modal creates on (`hostClient`: the pinned host, else the active one) via
-  // the same machinery `useComposerToolbarStore` runs for every composer
-  // surface. Never authoritative: this modal has no reauth gate of its own,
-  // so a genuinely-removed profile must be corrected to ambient here rather
-  // than silently submitted as the new chat/agent's initial settings. The
-  // catalog reads through that same client, so a pinned modal offers the
-  // pinned host's harnesses/models, not the active host's.
+  // Never authoritative: this modal has no reauth gate of its own, so a genuinely-removed profile must be corrected to ambient here rather than silently submitted as the new chat/agent's initial settings.
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(draftSettings, hostClient),
@@ -668,9 +583,7 @@ export function NewConversationModalBody(props: {
     localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
   });
 
-  // Creates bind to the SUBMIT client: host-frozen for the resolved host, so a
-  // derivation move between two awaits in the terminal chain cannot re-point
-  // later RPCs. Reads above stay on the mutable read client on purpose.
+  // Creates bind to the SUBMIT client: host-frozen for the resolved host, so a derivation move between two awaits in the terminal chain cannot re-point later RPCs.
   const createChat = useEpicCreateChatForHostClient(submitTarget.client);
   const terminalAgentCreate = useCreateTuiAgentForClient(
     submitTarget.client,
@@ -714,10 +627,7 @@ export function NewConversationModalBody(props: {
   const readPromptStashImage = useCallback(
     async (hash: string) => {
       if (hasPastedImageBytes?.(hash) !== true) return null;
-      // Capture deliberately survives composer unmount, so this read is not
-      // coupled to component-lifecycle cancellation. `.fetch` directly: this
-      // one-shot read bypasses `imageBlobCache`, so it wants the byte source
-      // rather than the cache subject bundled with it.
+      // `.fetch` directly: this one-shot read bypasses `imageBlobCache`, so it wants the byte source rather than the cache subject bundled with it.
       const read = await fetchEpicImage.fetch(
         hash,
         new AbortController().signal,
@@ -737,12 +647,7 @@ export function NewConversationModalBody(props: {
     editorRef,
   });
   const promptStash = usePromptStash({
-    // Registered for the modal's whole open lifetime, not just chat mode:
-    // unregistering on every chat<->terminal toggle would hand the top of
-    // the stack back to whatever composer sits beneath this modal (see
-    // `active-prompt-stash-registry.ts`), letting Cmd+S mutate a hidden
-    // draft. `disabled` below suppresses the action itself while the modal
-    // owns no stashable content, without giving up ownership of the slot.
+    // `disabled` below suppresses the action itself while the modal owns no stashable content, without giving up ownership of the slot.
     active: true,
     disabled: promptStashDisabled({
       isSubmitting,
@@ -758,15 +663,8 @@ export function NewConversationModalBody(props: {
     editorRef,
     isActive: chatComposerActive,
   });
-  // The workspace picker browses the host the chat will be CREATED on - the
-  // placement's resolved host, whichever tier answered (a caller-named host,
-  // the Epic's pin, the session's host, or effective). Keying this on the raw
-  // request field would leave every unnamed request on the app-wide host while
-  // the create went to the Epic's: the user could pick a folder that does not
-  // exist over there, and the latest-workspace seed below would be skipped.
-  // Only a CALLER-NAMED host is fixed. An ordinary new-chat request owns its
-  // placement, so the selected scope keeps the picker live and records a pick
-  // in this Epic's last-created-host memory rather than moving the window.
+  // Only a CALLER-NAMED host is fixed.
+  // An ordinary new-chat request owns its placement, so the selected scope keeps the picker live and records a pick in this Epic's last-created-host memory rather than moving the window.
   const workspaceHostScope: HostWorkspaceControlsHostScope =
     modalWorkspaceHostScope({
       resolvedHostId,
@@ -795,30 +693,19 @@ export function NewConversationModalBody(props: {
     />
   );
   const header = <NewConversationModalHeader switcher={switcher} />;
-  // §54 refusal copy, as on the landing composer. The G4 re-point used to
-  // share this slot; it narrates as a toast now, and only when it actually
-  // reset staged intent.
+  // The G4 re-point used to share this slot; it narrates as a toast now, and only when it actually reset staged intent.
   const {
     notice: hostNotice,
     raise: raiseHostNotice,
     dismiss: dismissHostNotice,
   } = useComposerHostNotice(resolvedHostId);
-  // G4: this modal FOLLOWS the effective host only when nothing else answered
-  // its placement - no named host, no per-Epic pin in force, no session host
-  // in force - and only then does a derivation move re-point it. Its staged
-  // worktree/branch intent names refs on the machine the user picked them on
-  // and must not travel; the §51 folder set stays, per the orchestrator's
-  // ruling on the landing row. A modal resting on its pin or on the Epic's
-  // host is not moved by the derivation and must not narrate a move (D6).
-  // A move that reset nothing stays silent: the switch itself is
-  // `toastSelectionSwitched`'s to tell.
+  // G4: this modal FOLLOWS the effective host only when nothing else answered its placement - no named host, no per-Epic pin in force, no session host in force - and only then does a derivation move re-point it.
+  // Its staged worktree/branch intent names refs on the machine the user picked them on and must not travel; the §51 folder set stays, per the orchestrator's ruling on the landing row.
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
       if (!composerFollowsEffective) return;
-      // Asked at `clearForAllHosts`'s breadth, not the resolved bucket's: this
-      // modal's slot can hold an intent staged while it was pinned elsewhere,
-      // and the clear below deletes that too. A narrower check would report
-      // "nothing staged" for a choice the user just lost.
+      // Asked at `clearForAllHosts`'s breadth, not the resolved bucket's: this modal's slot can hold an intent staged while it was pinned elsewhere, and the clear below deletes that too.
+      // A narrower check would report "nothing staged" for a choice the user just lost.
       const hadStagedIntent = anyHostHasStagedWorktreeIntent(stagingKey);
       clearStagedIntent(stagingKey);
       if (hadStagedIntent) {
@@ -857,23 +744,13 @@ export function NewConversationModalBody(props: {
     // Global, single-selection billing context captured at create time; it
     // rides as a sibling of the per-chat settings on the initial message.
     const accountContext = useAccountContextStore.getState().accountContext;
-    // Selection model §54, and the ORDERING is the point: re-validate the
-    // placement BEFORE any persistent write, because `cleanupAfterSubmit`
-    // below clears the draft and closes the modal synchronously, well before
-    // the create can fail. An existence check (`getActiveHostId() !== null`)
-    // was not enough - it passes for a pinned host that has gone offline, and
-    // for a following client that has moved off the host the chip is
-    // rendering. A refusal here leaves the draft, its staged workspace and the
-    // modal exactly as the user left them, with the reason inline.
+    // Selection model §54, and the ORDERING is the point: re-validate the placement BEFORE any persistent write, because `cleanupAfterSubmit` below clears the draft and closes the modal synchronously, well before the create can fail.
     const placementVerdict = resolveLandingPlacement(submitTarget);
     if (placementVerdict.kind === "refused") {
       raiseHostNotice({ kind: "refused", message: placementVerdict.message });
       return;
     }
-    // No render-vs-live drift check needed here (main's #1231 added one for
-    // the reactive-active-host shape): the staged key and this create both
-    // derive from the SAME captured submitTarget, and the verdict REFUSES
-    // rather than migrates when its frozen client no longer addresses it.
+    // No render-vs-live drift check needed here (main's #1231 added one for the reactive-active-host shape): the staged key and this create both derive from the SAME captured submitTarget, and the verdict REFUSES rather than migrates when its frozen client no longer addresses it.
     const activeHostId = placementVerdict.hostId;
     recordPlacement(activeHostId);
     const content = buildSubmittedChatJSONContent(
@@ -884,10 +761,8 @@ export function NewConversationModalBody(props: {
     const messageId = uuidv4();
     const clientActionId = uuidv4();
     const now = Date.now();
-    // Remember these settings as the epic's (and global) last-run so the next
-    // new-chat carries them forward, mirroring the chat-tile composer's
-    // on-send write. Keyed by the host the chat is actually created on
-    // (`activeHostId`: the pinned host, else the active one resolved above).
+    // Remember these settings as the epic's (and global) last-run so the next new-chat carries them forward, mirroring the chat-tile composer's on-send write.
+    // Keyed by the host the chat is actually created on (`activeHostId`: the pinned host, else the active one resolved above).
     setGlobalRunSettings(activeHostId, settings, now);
     setEpicRunSettings(epicId, activeHostId, settings, now);
     const profile = useAuthStore.getState().profile;
@@ -927,30 +802,12 @@ export function NewConversationModalBody(props: {
     if (initialMessage !== null) {
       useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
     }
-    // `mutateAsync` + a promise chain, NOT `mutate`'s per-call callbacks, for
-    // the reason `use-epic-route-synchronization.ts` records for the sidebar's
-    // delete: TanStack Query v5 gates `mutateOptions` on the observer still
-    // having listeners, and `cleanupAfterSubmit()` below closes this modal
-    // SYNCHRONOUSLY - the dialog renders its body behind `props.open`, so the
-    // component holding this mutation is gone before any answer arrives. Both
-    // callbacks were therefore dead code, and the failure one is what took the
-    // eager-opened tab back down: without `markFailed` the handoff stayed
-    // non-terminal, `pendingCreateArtifactIds` kept the tile exempt from the
-    // record sweep, and a create the host had DEFINITIVELY rejected left an
-    // "Untitled agent" tab that spun for 15s and then told the user "that host
-    // hasn't answered" - about a host that had answered, with a refusal. Only
-    // `useInitialChatHandoff`'s 60s orphan deadline eventually cleared it, a
-    // backstop written for a host that says NOTHING.
-    //
-    // The landing composer already submits this way (`use-landing-composer-
-    // actions.ts`), and for the same reason: a surface that closes itself on
-    // submit cannot own its own completion through the observer.
+    // `mutateAsync` + a promise chain, NOT `mutate`'s per-call callbacks, for the reason `use-epic-route-synchronization.ts` records for the sidebar's delete: TanStack Query v5 gates `mutateOptions` on the observer still having listeners, and `cleanupAfterSubmit()` below closes this modal SYNCHRONOUSLY - the dialog renders its body behind `props.open`, so the component holding this mutation is gone before any answer arrives.
+    // The landing composer already submits this way (`use-landing-composer- actions.ts`), and for the same reason: a surface that closes itself on submit cannot own its own completion through the observer.
     void createChat
       .mutateAsync({
         epicId,
-        // The host the modal resolved its own client for, checked non-null
-        // just above - the machine the user picked, not the app-wide active
-        // one (they diverge for a row-scoped child create).
+        // The host the modal resolved its own client for, checked non-null just above - the machine the user picked, not the app-wide active one (they diverge for a row-scoped child create).
         hostId: activeHostId,
         parentId,
         title: "",
@@ -972,12 +829,7 @@ export function NewConversationModalBody(props: {
       })
       .catch(() => {
         useEpicCanvasStore.getState().clearChatTitlePending(chatId);
-        // `markFailedByAction`, not `markFailed`: the handoff key is
-        // {user, epic} only, so a SECOND create in this epic replaces the
-        // entry while the first is still in flight - and now that this arm
-        // actually runs, an unguarded `markFailed` would close the second
-        // agent's tab when the first one's rejection landed. The by-action
-        // variant fails only the handoff still carrying these exact ids.
+        // The by-action variant fails only the handoff still carrying these exact ids.
         useInitialChatHandoffStore
           .getState()
           .markFailedByAction(
@@ -1013,10 +865,7 @@ export function NewConversationModalBody(props: {
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
-      // Same §54 gate as `handleSubmit`, and for the same ordering reason:
-      // `cleanupAfterSubmit` runs before the async create, so a placement that
-      // cannot be created on must be refused here or the draft is gone before
-      // anything reports the failure.
+      // Same §54 gate as `handleSubmit`, and for the same ordering reason: `cleanupAfterSubmit` runs before the async create, so a placement that cannot be created on must be refused here or the draft is gone before anything reports the failure.
       const placementVerdict = resolveLandingPlacement(submitTarget);
       if (placementVerdict.kind === "refused") {
         raiseHostNotice({ kind: "refused", message: placementVerdict.message });
@@ -1111,11 +960,7 @@ export function NewConversationModalBody(props: {
       topBanner={
         <ComposerHostNotice notice={hostNotice} onDismiss={dismissHostNotice} />
       }
-      // Same rule as the landing composer's row (`landing-composer.tsx`): six
-      // pills do not fit a phone-width row, so below `md` the agent-mode pill
-      // moves into the options sheet behind the permission pill. This modal
-      // used to opt out and render the desktop row at any width, which made
-      // one composer look like two depending on where it was opened from.
+      // Same rule as the landing composer's row (`landing-composer.tsx`): six pills do not fit a phone-width row, so below `md` the agent-mode pill moves into the options sheet behind the permission pill.
       toolbarLayout={isMobile ? "collapsed" : "full"}
       stashControl={
         <PromptStashControl
@@ -1137,16 +982,10 @@ export function NewConversationModalBody(props: {
       hasPastedImageBytes={hasPastedImageBytes}
       ingestPastedComposerImages={null}
       onEditorReady={null}
-      // No terminal surface: a sign-in terminal tile is bound to the TAB's
-      // host, while this composer creates on a placement-resolved host that
-      // may be another machine, and this modal sits above the canvas the tile
-      // would open on. The picker's setup CTA shows its steps and names the
-      // chat picker instead.
+      // No terminal surface: a sign-in terminal tile is bound to the TAB's host, while this composer creates on a placement-resolved host that may be another machine, and this modal sits above the canvas the tile would open on.
+      // The picker's setup CTA shows its steps and names the chat picker instead.
       terminalLoginSurface={null}
-      // The pinned host, else this composer's surface-pin resolution - the
-      // same id `hostClient` above resolves, so the toolbar's and terminal
-      // launcher's pickers offer this host's harnesses/models/profiles and
-      // create profiles on it.
+      // The pinned host, else this composer's surface-pin resolution - the same id `hostClient` above resolves, so the toolbar's and terminal launcher's pickers offer this host's harnesses/models/profiles and create profiles on it.
       hostId={resolvedHostId}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
@@ -1158,40 +997,25 @@ export function NewConversationModalBody(props: {
 
 /**
  * Workspace seed that drives the modal's workspace controls + submit intent.
- * For a child (per-row `+`, `parentId !== null`) it inherits the PARENT's
- * binding so the child lands in the parent's worktree. The parent may be a chat
- * OR a terminal agent (both live in the chats tree), so its real owner kind
- * drives the binding lookup. Read on the active host (the modal always creates
- * there); an unbound/remote parent falls back to an empty workspace the user can
- * adjust via the controls. For a top-level chat it uses the latest-conversation
- * seed.
+ * For a child (per-row `+`, `parentId !== null`) it inherits the PARENT's binding so the child lands in the parent's worktree.
  */
 function useModalWorkspaceSeed(args: {
   readonly epicId: string;
   readonly parentId: string | null;
-  // The placement's RESOLVED host - the host `hostClient` actually speaks to
-  // and the chat is created on, whichever tier answered. Both seeds below key
-  // on it: the parent's pending intent is staged under its CONCRETE host, and
-  // the latest-conversation seed is read from (and about) that same host.
-  // Neither reads the nullable request field any more - an unnamed request
-  // used to skip the latest seed and read the intent slot for the app-wide
-  // host while the create went to the Epic's.
+  // The placement's RESOLVED host - the host `hostClient` actually speaks to and the chat is created on, whichever tier answered.
+  // Both seeds below key on it: the parent's pending intent is staged under its CONCRETE host, and the latest-conversation seed is read from (and about) that same host.
   readonly resolvedHostId: string | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
 }): LatestConversationWorkspaceSeed | null {
   const { epicId, parentId, resolvedHostId, hostClient } = args;
-  // Only read the latest-conversation seed for a top-level chat; a child must
-  // never inherit an unrelated conversation's worktree (see below), so skip the
-  // binding read entirely when adding a child. Read from (and about) the
-  // resolved host, matching the create and the picker; `null` only while no
-  // host has resolved at all.
+  // Only read the latest-conversation seed for a top-level chat; a child must never inherit an unrelated conversation's worktree (see below), so skip the binding read entirely when adding a child.
+  // Read from (and about) the resolved host, matching the create and the picker; `null` only while no host has resolved at all.
   const latestConversationSeed = useLatestConversationWorkspaceSeed(
     parentId === null ? epicId : null,
     resolvedHostId === null ? null : { hostId: resolvedHostId, hostClient },
   );
-  // The parent can be a chat or a terminal agent; read its real kind so the
-  // binding lookup matches. Defaulting to "chat" would miss a terminal-agent
-  // parent's binding and seed the child from the wrong/empty workspace.
+  // The parent can be a chat or a terminal agent; read its real kind so the binding lookup matches.
+  // Defaulting to "chat" would miss a terminal-agent parent's binding and seed the child from the wrong/empty workspace.
   const parentOwnerKind = useEpicNodeOwnerKind(parentId ?? "");
   const parentWorkspaceFolders = useEpicNodeWorkspaceFolders(parentId ?? "");
   const parentInheritance = useOwnerWorkspaceInheritanceSeed({
@@ -1206,10 +1030,8 @@ function useModalWorkspaceSeed(args: {
   return useMemo<LatestConversationWorkspaceSeed | null>(() => {
     // Top-level: seed from the latest conversation.
     if (parentId === null) return latestConversationSeed;
-    // Child: inherit ONLY from the parent's binding. When that resolves empty
-    // (an unbound parent) return null so the modal falls back to the
-    // empty/global workspace the user can adjust - never the latest-conversation
-    // seed, which would drop the child into an unrelated worktree.
+    // Child: inherit ONLY from the parent's binding.
+    // When that resolves empty (an unbound parent) return null so the modal falls back to the empty/global workspace the user can adjust - never the latest-conversation seed, which would drop the child into an unrelated worktree.
     if (parentInheritance.seed === null) return null;
     return {
       ...parentInheritance.seed,
@@ -1231,10 +1053,7 @@ function useNewConversationModalSeed(
 ): NewConversationModalSeed {
   const latestSettingsSeed = useLatestConversationSettingsSeed();
   const globalWorkspace = useGlobalWorkspaceSnapshot(hostId);
-  // Carry forward the last settings used on this epic ON THIS HOST (the
-  // chat-tile composer writes `setEpicRunSettings` on send), then the same
-  // host's cross-epic last-run, then the projected latest-conversation
-  // settings as a final fallback.
+  // Carry forward the last settings used on this epic ON THIS HOST (the chat-tile composer writes `setEpicRunSettings` on send), then the same host's cross-epic last-run, then the projected latest-conversation settings as a final fallback.
   const runSettingsSeed = useComposerRunSettingsStore(
     useShallow((state) => ({
       epicRunSettings:
@@ -1289,10 +1108,7 @@ function useLatestConversationSettingsSeed(): {
     }
     const agent = projection.tuiAgents.byId[latest.id];
     if (agent.harnessId === null) {
-      // Nothing to seed FROM. A cross-host replica whose cloud row predates
-      // `runSettingsSummary` cannot say what it runs, and a composer seeded
-      // with a guessed harness would create the next agent under it. Fall back
-      // to the same "no memory yet" answer an epic with no prior agent gives.
+      // A cross-host replica whose cloud row predates `runSettingsSummary` cannot say what it runs, and a composer seeded with a guessed harness would create the next agent under it.
       return { settings: null, composerMode: fallbackComposerMode };
     }
     return {
@@ -1334,11 +1150,7 @@ function useGlobalWorkspaceSnapshot(
 }
 
 /**
- * `usePromptStash`'s `disabled` flag stays true for the modal's whole
- * terminal-mode span, not just while a save/paste is in flight - see the
- * call site's comment on why `active` no longer tracks `chatComposerActive`.
- * Extracted (rather than inlined at the call site) to keep
- * `NewConversationModalBody` under the complexity lint threshold.
+ * Extracted (rather than inlined at the call site) to keep `NewConversationModalBody` under the complexity lint threshold.
  */
 function promptStashDisabled(args: {
   readonly isSubmitting: boolean;

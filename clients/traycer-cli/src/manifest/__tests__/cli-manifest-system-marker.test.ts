@@ -3,32 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Native Packaging system-marker fallback. On Linux, the .deb / .rpm
-// post-install scripts drop /var/lib/traycer/source.{apt,rpm} so the
-// CLI knows the binary is package-manager-owned even before the
-// per-user manifest at ~/.traycer/cli/manifest.json has been written.
-//
-// Two domain rules pinned here:
-//   1. Only the **prod** environment honours the system marker - a dev-
-//      environment CLI on a host that also has a prod apt install present
-//      must NOT synthesize a manifest with `source: "apt"` for the
-//      dev environment (the marker was written by the prod packaging).
-//   2. The fallback is Linux-only; macOS/Windows reads always return
-//      null when no per-user manifest exists.
+// Native Packaging system-marker fallback.
+// On Linux, the .deb / .rpm post-install scripts drop /var/lib/traycer/source.{apt,rpm} so the CLI knows the binary is package-manager-owned even before the per-user manifest at ~/.traycer/cli/manifest.json has been written.
 
 let sandboxRoot = "";
 
-// Pin every environment-aware path helper at a sandbox under tmpdir so the
-// reader probes the test workspace rather than the real ~/.traycer.
-// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
-// load - any export this mock leaves un-overridden would otherwise resolve
-// against the REAL production `~/.traycer`, not this sandbox. Redirect the
-// `os` boundary itself so `vi.importActual`'s fresh module evaluation picks
-// up the sandbox (falling back to the real tmpdir, never the real home,
-// before the first `beforeEach` has set `sandboxRoot`).
-// `vi.mock` factories are hoisted above this file's own top-level `let
-// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
-// live value has to live in `vi.hoisted` instead.
+// Pin every environment-aware path helper at a sandbox under tmpdir so the reader probes the test workspace rather than the real ~/.traycer.
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module load - any export this mock leaves un-overridden would otherwise resolve against the REAL production `~/.traycer`, not this sandbox.
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -98,10 +79,8 @@ describe("readCliManifest - system-marker fallback (Linux .deb / .rpm)", () => {
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
-  // The fallback path itself is Linux-only - Darwin/Windows return
-  // null without touching the filesystem. We assert the platform-skip
-  // branch by short-circuiting `process.platform` for the duration of
-  // the test rather than relying on the host runner's OS.
+  // The fallback path itself is Linux-only - Darwin/Windows return null without touching the filesystem.
+  // We assert the platform-skip branch by short-circuiting `process.platform` for the duration of the test rather than relying on the host runner's OS.
   function withPlatform<T>(
     platform: NodeJS.Platform,
     fn: () => Promise<T>,
@@ -128,9 +107,7 @@ describe("readCliManifest - system-marker fallback (Linux .deb / .rpm)", () => {
     expect(result?.binaryPath).toBe("/usr/bin/traycer");
     expect(result?.version).toBe("1.5.0");
     expect(result?.pendingUpgrade).toBeNull();
-    // The synthesised manifest uses the epoch installedAt because we
-    // don't know when the package install happened; downstream
-    // consumers shouldn't treat it as a fresh-install timestamp.
+    // The synthesised manifest uses the epoch installedAt because we don't know when the package install happened; downstream consumers shouldn't treat it as a fresh-install timestamp.
     expect(result?.installedAt).toBe(new Date(0).toISOString());
   });
 
@@ -147,10 +124,8 @@ describe("readCliManifest - system-marker fallback (Linux .deb / .rpm)", () => {
   });
 
   it("Linux + dev environment + apt marker present: returns null (environment-aware gate)", async () => {
-    // The system marker is written by the prod packaging only. A
-    // dev-environment read must NOT inherit the prod apt source - that
-    // would mis-attribute the dev install to dpkg/rpm and lock the
-    // user out of `cli upgrade --environment dev`.
+    // The system marker is written by the prod packaging only.
+    // A dev-environment read must NOT inherit the prod apt source - that would mis-attribute the dev install to dpkg/rpm and lock the user out of `cli upgrade --environment dev`.
     writeSystemMarker(markerDir, "apt", {
       binaryPath: "/usr/bin/traycer",
       version: "1.5.0",
@@ -241,9 +216,8 @@ describe("readCliManifest - system-marker fallback (Linux .deb / .rpm)", () => {
   });
 
   it("Per-user manifest takes precedence over the system marker on prod", async () => {
-    // When the user's manifest file IS present, the system marker is
-    // never consulted - the in-home manifest is authoritative for
-    // version/source. Seed both and assert the in-home wins.
+    // When the user's manifest file IS present, the system marker is never consulted - the in-home manifest is authoritative for version/source.
+    // Seed both and assert the in-home wins.
     writeSystemMarker(markerDir, "apt", {
       binaryPath: "/usr/bin/traycer",
       version: "0.0.1-apt",

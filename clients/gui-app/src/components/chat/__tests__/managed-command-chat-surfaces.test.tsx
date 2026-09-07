@@ -25,13 +25,7 @@ import type {
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-/**
- * The chat's own managed-command surfaces: the chip and the resume divider are
- * doors into the output window, both naming the Shell entity, and the
- * Background panel lists what this chat has running right now. (The Shells
- * menu that used to sit beside the composer is gone - the transcript's start
- * cards and the output window carry what it did.)
- */
+/** The chat's own managed-command surfaces: the chip and the resume divider are doors into the output window, both naming the Shell entity, and the Background panel lists what this chat has running right now. (The Shells menu that used to sit beside the composer is gone - the transcript's start cards and the output window carry what it did.) */
 
 const streamSupport = vi.hoisted<{ value: string }>(() => ({
   value: "supported",
@@ -43,30 +37,12 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSchemaVersion: () => null,
 }));
 
-// The one faked boundary: the lifecycle RPCs behind a managed row's hover
-// actions. Everything the surfaces do with them - which rows offer them, what
-// they are called with - is real. The aggregated stop-all has its own suite
-// over a real host client.
+// The one faked boundary: the lifecycle RPCs behind a managed row's hover actions.
+// Everything the surfaces do with them - which rows offer them, what they are called with - is real.
 const stopMutate = vi.fn();
 const stopAllMutate = vi.fn();
 const deliverHeldMutate = vi.fn();
-/**
- * The two pending reads are separate flags on purpose, and driving them from
- * one was a hole rather than a shortcut.
- *
- * A mutation result's `isPending` is PER-OBSERVER, so the same chat open in two
- * tiles leaves the second tile's button live while the first tile's call is in
- * flight - which for a null-ids Deliver is not a narrower duplicate but the
- * identical whole-chat action re-sent. The shared `useIsMutating` read is what
- * closes that, and it is the only one a panel may consult. While one flag drove
- * both, a component that switched to the local `isPending` - the exact
- * regression the shared hook exists to prevent - kept every test green.
- *
- * The `*OwnFlight` flags therefore stay false in the gate tests below: a panel
- * that reads them fails, which is the point. (In production the shared read is
- * a superset - `useIsMutating` counts this observer's own mutation too - so
- * own-true/shared-false is a state only a test can produce.)
- */
+/** The two pending reads are separate flags on purpose, and driving them from one was a hole rather than a shortcut. A mutation result's `isPending` is PER-OBSERVER, so the same chat open in two tiles leaves the second tile's button live while the first tile's call is in flight - which for a null-ids Deliver is not a narrower duplicate but the identical whole-chat action re-sent. */
 const stopAllOwnFlight = { isPending: false };
 const stopAllSharedFlight = { isPending: false };
 const deliverHeldOwnFlight = { isPending: false };
@@ -175,12 +151,7 @@ function trigger(
   };
 }
 
-/**
- * The commands ride each chat's own stream now, so a suite that needs two
- * chats' menus needs two sessions. Created on first use so a test that never
- * mentions a chat leaves it without one - which is also the "no session yet"
- * state the surfaces must survive.
- */
+/** The commands ride each chat's own stream now, so a suite that needs two chats' menus needs two sessions. Created on first use so a test that never mentions a chat leaves it without one - which is also the "no session yet" state the surfaces must survive. */
 const chatSessions = new Map<string, ManagedCommandChatSessionStub>();
 
 function chatSession(chatId: string): ManagedCommandChatSessionStub {
@@ -250,11 +221,8 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -388,9 +356,7 @@ describe("resume divider", () => {
   });
 
   it("keeps the harness Monitor name for a kind-only trigger, and offers it no door", () => {
-    // No `managedCommand` block means this is not a Traycer shell - kind-only
-    // "monitor" triggers are produced live by Claude Code's own Monitor tool,
-    // which keeps its real name.
+    // No `managedCommand` block means this is not a Traycer shell - kind-only "monitor" triggers are produced live by Claude Code's own Monitor tool, which keeps its real name.
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[trigger({ status: "failed", managedCommand: null })]}
@@ -563,9 +529,7 @@ describe("running commands in the Background panel", () => {
     // background kinds; the title names the entity by its monitor state.
     expect(row.querySelector("[data-monitor-icon='off']")).not.toBeNull();
     expect(row.textContent).toContain("Shell · deploy watcher");
-    // The pill slot is EMPTY on a shell row, whatever the flag says: the
-    // title's own noun is what carries it, so a pill would be a second fact
-    // and is none.
+    // The pill slot is EMPTY on a shell row, whatever the flag says: the title's own noun is what carries it, so a pill would be a second fact and is none.
     expect(within(row).queryByText("Shell")).toBeNull();
     expect(within(row).queryByText("Monitoring")).toBeNull();
     // ...and the glyph doesn't announce it either, or the row would read the
@@ -633,9 +597,8 @@ describe("running commands in the Background panel", () => {
     expect(
       screen.getByTestId("managed-command-stop-mine-running"),
     ).not.toBeNull();
-    // Delete destroys the shell's whole output history. It belongs to the
-    // chat's Shells menu and the output window, where a shell is a durable
-    // object - not to a row that exists only while the process does.
+    // Delete destroys the shell's whole output history.
+    // It belongs to the chat's Shells menu and the output window, where a shell is a durable object - not to a row that exists only while the process does.
     expect(
       screen.queryByTestId("managed-command-delete-mine-running"),
     ).toBeNull();
@@ -687,11 +650,8 @@ describe("running commands in the Background panel", () => {
 
     fireEvent.click(screen.getByTestId("background-stop-all"));
 
-    // The harness stop-all cannot reach host-supervised commands, so those go
-    // through their own stop alongside it - one button, two mechanisms. The
-    // managed half is ONE call over the whole set, not one per row: a host
-    // that has gone away fails them all for the same reason, and per-row
-    // mutations reported that reason once per row.
+    // The harness stop-all cannot reach host-supervised commands, so those go through their own stop alongside it - one button, two mechanisms.
+    // The managed half is ONE call over the whole set, not one per row: a host that has gone away fails them all for the same reason, and per-row mutations reported that reason once per row.
     expect(panel.onStopAll).toHaveBeenCalledTimes(1);
     expect(stopAllMutate).toHaveBeenCalledTimes(1);
     expect(stopAllMutate).toHaveBeenCalledWith({
@@ -710,9 +670,7 @@ describe("running commands in the Background panel", () => {
     });
     expandPanel();
 
-    // Re-enabling as soon as one half finished let a second press resubmit
-    // the finished half while the other was still running - one button, one
-    // in-flight state.
+    // Re-enabling as soon as one half finished let a second press resubmit the finished half while the other was still running - one button, one in-flight state.
     const stopAllButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Stop all",
     });
@@ -746,9 +704,8 @@ describe("running commands in the Background panel", () => {
     });
     expandPanel();
 
-    // Stopping a managed command is an RPC to its host; the chat's own stream
-    // has no part in it. Gating it on `canAct` left a reconnecting chat with
-    // no way to stop a runaway monitor from anywhere in the panel.
+    // Stopping a managed command is an RPC to its host; the chat's own stream has no part in it.
+    // Gating it on `canAct` left a reconnecting chat with no way to stop a runaway monitor from anywhere in the panel.
     expect(screen.getByTestId("managed-command-stop-m1")).not.toBeNull();
     // The harness row's stop DOES ride the chat stream, so it stays gated.
     expect(
@@ -756,10 +713,7 @@ describe("running commands in the Background panel", () => {
         .disabled,
     ).toBe(true);
 
-    // And the aggregate follows the same split: the button stays live for the
-    // managed half, and a press skips the unreachable harness half rather
-    // than dying with it - a reconnect is exactly when a runaway shell
-    // needs the one-click stop.
+    // And the aggregate follows the same split: the button stays live for the managed half, and a press skips the unreachable harness half rather than dying with it - a reconnect is exactly when a runaway shell needs the one-click stop.
     const stopAllButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Stop all",
     });
@@ -859,9 +813,7 @@ describe("held shells in the Background panel", () => {
 
     fireEvent.click(screen.getByTestId("background-deliver-held"));
 
-    // A hold installed between render and click must not be silently
-    // skipped - Deliver means "everything you are holding for me", not "the
-    // ids this panel happened to show".
+    // A hold installed between render and click must not be silently skipped - Deliver means "everything you are holding for me", not "the ids this panel happened to show".
     expect(deliverHeldMutate).toHaveBeenCalledTimes(1);
     expect(deliverHeldMutate).toHaveBeenCalledWith({
       hostId: "host-1",
@@ -904,10 +856,8 @@ describe("held shells in the Background panel", () => {
     ).toBeTruthy();
   });
 
-  // The host filters holds by no status, and a running shell keeps its hold
-  // until it next prints - so a watcher that went quiet before the Stop is in
-  // BOTH lists. Rendered whole, it appeared twice: a "Held" row and a live row
-  // with a running timer, under a header that called it one running shell.
+  // The host filters holds by no status, and a running shell keeps its hold until it next prints - so a watcher that went quiet before the Stop is in BOTH lists.
+  // Rendered whole, it appeared twice: a "Held" row and a live row with a running timer, under a header that called it one running shell.
   it("renders a held-and-running shell once, as held", () => {
     renderPanel();
     act(() => {
@@ -926,9 +876,7 @@ describe("held shells in the Background panel", () => {
     expect(
       screen.queryByTestId("managed-command-background-row-quiet-watcher"),
     ).toBeNull();
-    // Held does not imply stopped: the glyph follows the LIVE state, so a
-    // held shell that is still running wears the running row's monitor glyph,
-    // not the pause glyph a finished one gets.
+    // Held does not imply stopped: the glyph follows the LIVE state, so a held shell that is still running wears the running row's monitor glyph, not the pause glyph a finished one gets.
     expect(heldRow.querySelector("[data-monitor-icon]")).not.toBeNull();
     // The shell that is only running keeps its ordinary row.
     expect(
@@ -961,9 +909,7 @@ describe("held shells in the Background panel", () => {
     });
     expandPanel();
 
-    // Held does not imply finished, and this row is the only place the shell
-    // appears - dropping the stop here would be the panel's one lost
-    // capability for a process that is still burning cycles.
+    // Held does not imply finished, and this row is the only place the shell appears - dropping the stop here would be the panel's one lost capability for a process that is still burning cycles.
     fireEvent.click(screen.getByTestId("managed-command-stop-quiet-watcher"));
     expect(stopMutate).toHaveBeenCalledWith({
       hostId: "host-1",
@@ -1002,9 +948,7 @@ describe("held shells in the Background panel", () => {
       setHeldUpdates([held({ commandId: "cmd-1" })], CHAT_ID);
     });
 
-    // The host refuses a viewer's Deliver, so a live button here could only
-    // ever produce an error toast - the same rule the managed rows' Stop
-    // already follows.
+    // The host refuses a viewer's Deliver, so a live button here could only ever produce an error toast - the same rule the managed rows' Stop already follows.
     const deliverButton = screen.getByTestId<HTMLButtonElement>(
       "background-deliver-held",
     );

@@ -65,12 +65,6 @@ function parseIntents(value: unknown): GlobalShortcutIntents {
   ) as GlobalShortcutIntents;
 }
 
-// Structural validation (the zod schema) only confirms `chord` is a string or
-// null - it says nothing about whether that string is a canonical chord. A
-// persisted value like `"mod+"` or an unsupported key would otherwise reach
-// `reconcile()` and Electron unchanged. Coercion here is semantic: resolve an
-// invalid chord to `null` ("use the definition's default"), keeping the rest
-// of the intent (`enabled`) as persisted.
 function sanitizeChord(intent: GlobalShortcutIntent): GlobalShortcutIntent {
   if (intent.chord !== null && !isValidChordString(intent.chord)) {
     return { enabled: intent.enabled, chord: null };
@@ -87,12 +81,7 @@ function getStore() {
   return store;
 }
 
-/**
- * Loads the persisted global-shortcut intent before the registry's first
- * `reconcile()` call. A corrupt or missing file resolves every id to its
- * default intent (enabled, definition default chord) rather than blocking
- * startup - matching `hydrateUpdatePreferences`'s default-safe contract.
- */
+/** Loads the persisted global-shortcut intent before the registry's first `reconcile()` call. */
 export function hydrateGlobalShortcutIntents(): Promise<GlobalShortcutIntents> {
   if (hydration !== null) return hydration;
   hydration = getStore()
@@ -110,12 +99,7 @@ export function getGlobalShortcutIntent(
   return intents[id];
 }
 
-/**
- * Persists a durably-accepted intent change. Callers must only invoke this
- * after the registry's `reconcile()` has already confirmed the OS accepted
- * the corresponding chord - this module has no opinion on OS registration,
- * only on making an already-accepted intent survive a restart.
- */
+/** Callers must only invoke this after the registry's `reconcile()` has already confirmed the OS accepted the corresponding chord. */
 export function setGlobalShortcutIntent(
   id: GlobalShortcutId,
   intent: GlobalShortcutIntent,

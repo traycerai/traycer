@@ -26,27 +26,17 @@ interface PushPermissionDouble {
   };
   /** Move the OS's answer without telling the GUI - as the OS itself does. */
   readonly setState: (next: PushPermissionState) => void;
-  /** The host's "this MAY have changed, re-read it" edge. */
   readonly fireChange: () => void;
-  /** Lets a deferred `openSettings()` finish, ending the pending state. */
   readonly resolveOpenSettings: () => void;
 }
 
-/**
- * Stands in for the phone's `IPushPermissionHost`. It behaves like the OS in
- * the one way that matters here: `onChange` carries no state, so a subscriber
- * only learns the new value by asking again.
- */
+/** It behaves like the OS in the one way that matters here: `onChange` carries no state, so a subscriber only
+ * learns the new value by asking again. */
 function createPushPermissionDouble(options: {
   readonly initial: PushPermissionState;
-  /** State `request()` resolves with, i.e. what the OS prompt returned. */
   readonly requestResolvesWith: PushPermissionState;
   readonly getRejectsWith: string | null;
-  /**
-   * Hold `openSettings()` unresolved until `resolveOpenSettings()`. Jumping to
-   * the OS Settings app is the slowest thing this row does, so it is where the
-   * pending UX actually shows up.
-   */
+  /** Hold `openSettings` unresolved until `resolveOpenSettings`. */
   readonly deferOpenSettings: boolean;
 }): PushPermissionDouble {
   const calls = { get: 0, request: 0, openSettings: 0 };
@@ -254,9 +244,7 @@ describe("<PushPermissionSection />", () => {
   });
 
   it("follows a permission changed outside the app, with nothing tapped here", async () => {
-    // The whole point of Fix B's `onChange`: the person leaves for the OS
-    // Settings app, flips the switch, and comes back. Nothing in this GUI was
-    // touched, and the row must not still say the app is muted.
+    // Nothing in this GUI was touched, and the row must not still say the app is muted.
     const permission = doubleFor("denied");
     renderSection(permission.host);
 
@@ -276,12 +264,7 @@ describe("<PushPermissionSection />", () => {
   });
 
   it("re-reads the OS on every mount, never serving a cached permission", async () => {
-    // Built on the REAL app query client: its 60s `staleTime` is the whole
-    // point. The `onChange` subscription is disposed while this row is
-    // unmounted, so nothing invalidates in between - leave a person to change
-    // the switch in the OS Settings app between two visits to Notifications
-    // and a cached answer would show them "Off · Open Settings" on a phone
-    // where push is already on.
+    // Built on the real app query client: its 60s `staleTime` is the whole point.
     const permission = doubleFor("denied");
     const queryClient = createAppQueryClient();
 
@@ -316,8 +299,7 @@ describe("<PushPermissionSection />", () => {
       await screen.findByRole("button", { name: "Open Settings" }),
     );
 
-    // Pending UX per AGENTS.md: disabled, the SAME label (never "Opening…"),
-    // and an inline spinner - so the button is still findable by its name.
+    // Pending: disabled, same label, inline spinner.
     await waitFor(() => {
       expect(
         screen

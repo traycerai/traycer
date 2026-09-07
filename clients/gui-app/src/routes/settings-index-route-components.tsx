@@ -2,11 +2,7 @@ import { Navigate } from "@tanstack/react-router";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 
-/**
- * On phones, `/settings` is the drill-down entry: a full-screen list of
- * sections (SettingsLayout renders no rail there). On wider screens the rail
- * already shows every section, so the index redirects to General as before.
- */
+/** Phones: /settings is the drill-down list. Wider: redirect to General; the rail already shows every section. */
 export function SettingsIndexRedirect() {
   const isMobile = useIsMobileViewport();
   if (isMobile) {

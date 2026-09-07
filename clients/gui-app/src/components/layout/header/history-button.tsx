@@ -11,12 +11,7 @@ import { cn } from "@/lib/utils";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
-/**
- * Header trigger that opens (or focuses) the History tab. Click =
- * `ensureHistoryTab` (singleton in the tabs store) + `navigate` to the
- * remembered or default path. Active styling matches the History tab
- * descriptor's `matchesPath`.
- */
+/** Header trigger that opens (or focuses) the History tab. */
 export function HistoryButton() {
   const { openHistory } = useSystemTabModalActions();
   const historyOverlayActive = useSystemOverlayActive("history");

@@ -17,11 +17,7 @@ import type { Environment } from "../runner/environment";
 import type { ProgressInfo } from "../runner/output";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 
-/**
- * Explicit rollback uses the install primitive, whose private verified source
- * survives independently of the monotonic background-update stage. Keep the
- * update command's progress marker and health check around this operation.
- */
+/** Explicit rollback uses the install primitive, whose private verified source survives independently of the monotonic background-update stage. Keep the update command's progress marker and health check around this operation. */
 export async function installHostDowngrade(input: {
   readonly environment: Environment;
   readonly version: string;

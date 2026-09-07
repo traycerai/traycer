@@ -39,10 +39,6 @@ export interface ResolvedTargetRoute {
   readonly sessionId: string | null;
 }
 
-/**
- * What the frame topology needs from the debug session that owns the
- * attachment: a way to send, and the generation the routes are valid against.
- */
 export interface BrowserFrameRoutesPort {
   /** The attachment the routes dispatch through. */
   readonly browserDebugger: () => BrowserViewDebugger;
@@ -67,10 +63,6 @@ export interface BrowserFrameRoutesPort {
   readonly attachmentEnded: () => Promise<void>;
 }
 
-/**
- * OOPIF topology: which frame lives in which target, and the child debugger
- * sessions attached to the out-of-process ones.
- */
 export class BrowserFrameRoutes {
   private readonly port: BrowserFrameRoutesPort;
   private readonly childSessionByTargetId = new Map<string, ChildSession>();
@@ -365,11 +357,6 @@ export class BrowserFrameRoutes {
     );
   }
 
-  /**
-   * The decision a recorded route already answers: an attached child target,
-   * the root, or a same-process parent to inherit. Null means only target
-   * discovery can decide, and this same check runs again once it lands.
-   */
   private routeAfterRefresh(
     frameId: string,
     route: FrameRoute,

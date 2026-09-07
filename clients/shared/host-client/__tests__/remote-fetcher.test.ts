@@ -23,10 +23,8 @@ import {
 const AUTHN = "https://authn.example.test";
 
 /**
- * The era an ambient caller passes. This fetcher holds no era of its own to
- * compare against (see `createRemoteHostFetcher` — the desktop composition
- * checks the era inside `AuthService`, where the bearer lives), so the value
- * only has to be well-formed.
+ * The era an ambient caller passes.
+ * This fetcher holds no era of its own to compare against (see `createRemoteHostFetcher` - the desktop composition checks the era inside `AuthService`, where the bearer lives), so the value only has to be well-formed.
  */
 const AMBIENT_ERA: AuthEra = { identity: "user-1", credentialGeneration: 1 };
 
@@ -122,7 +120,7 @@ describe("fetchRegisteredHostsViaHttp", () => {
   });
 
   it("fails closed on a contract-violating 2xx body", async () => {
-    // `connectivity` is not a valid enum member — the mirror's schema rejects.
+  // `connectivity` is not a valid enum member - the mirror's schema rejects.
     const bad = {
       hosts: [
         {
@@ -177,9 +175,7 @@ describe("hostListItemToDirectoryEntry", () => {
       PLAN_ALLOWS_REMOTE,
     );
     expect(entry.transportDialability).toBe("not-dialable");
-    // `websocketUrl` is the relay's fixed attach endpoint, carried through
-    // regardless of dialability — production rejects this entry as
-    // unconnectable via `hostUnavailability`, not via the URL.
+    // `websocketUrl` is the relay's fixed attach endpoint, carried through regardless of dialability - production rejects this entry as unconnectable via `hostUnavailability`, not via the URL.
     expect(entry.websocketUrl).toBe(RELAY_BASE_URL);
   });
 
@@ -275,14 +271,6 @@ describe("createRemoteHostFetcher", () => {
   });
 });
 
-// F7 fuse-vs-lease reconciliation, corrected by the cold review's P1: a recent
-// `lastSeenAt` on an `offline` verdict is NOT evidence the relay leg is still
-// attached - a host that cleanly detached or crashed one minute ago has exactly
-// the same recent timestamp. Recency therefore buys exactly one thing, the
-// recovery DIAL (`isConfirmedTransportRefusal` stays false inside the fuse
-// window), while the death semantic (`hostUnavailability` /
-// `isConfirmedHostDeath`) stays authoritative `offline` unless the dial
-// actually succeeds (a ready live session).
 const NOW = Date.parse("2026-01-01T00:00:00.000Z");
 
 function offlineStatus(lastSeenAt: string | null): HostStatusDTO {
@@ -326,10 +314,7 @@ describe("isWithinRelayFuseGrace", () => {
   });
 
   it("is true for offline + lastSeenAt slightly AHEAD of now (client clock lagging the cloud stamp)", () => {
-    // `lastSeenAt` is cloud-stamped, so a client clock a few seconds behind
-    // the server legitimately reads a just-seen host as "seen in the future".
-    // Refusing that outright would deny the recovery dial to exactly the
-    // freshest candidates.
+    // `lastSeenAt` is cloud-stamped, so a client clock a few seconds behind the server legitimately reads a just-seen host as "seen in the future".
     expect(
       isWithinRelayFuseGrace(
         offlineStatus(new Date(NOW + 60_000).toISOString()),
@@ -339,9 +324,7 @@ describe("isWithinRelayFuseGrace", () => {
   });
 
   it("is false for offline + lastSeenAt implausibly far in the future (corrupt anchor, not skew)", () => {
-    // Beyond plausible clock skew a future timestamp is corrupt data, and a
-    // negative age would otherwise hold the dial window open for as long as
-    // it takes the clock to catch up to it.
+    // Beyond plausible clock skew a future timestamp is corrupt data, and a negative age would otherwise hold the dial window open for as long as it takes the clock to catch up to it.
     expect(
       isWithinRelayFuseGrace(
         offlineStatus(
@@ -412,11 +395,6 @@ describe("hasRecentHostCheckIn", () => {
   });
 });
 
-// The rest of this block builds entries through the real
-// `hostListItemToDirectoryEntry` constructor (matching the "real mapped
-// connectivity" style above), controlling grace via `lastSeenAt` relative to
-// the real clock rather than a fixed `NOW` (the projection reads `Date.now()`
-// internally).
 const FUSE_GRACE_LAST_SEEN = new Date(Date.now() - 60_000).toISOString();
 const GENUINE_OFFLINE_LAST_SEEN = new Date(
   Date.now() - 5 * 60 * 60 * 1000,
@@ -489,11 +467,8 @@ describe("isConfirmedHostDeath - fuse grace never exempts; only dial success doe
   });
 
   it("PAIRED (b): same recent lastSeenAt, no leg / dial not succeeded - confirmed death", () => {
-    // A host that cleanly detached or crashed one minute ago is
-    // observationally identical to a lease lapse at this layer. With no
-    // session evidence the death gate must fire, or failover, the dead
-    // surface, and the notification-action refusal are all suppressed for up
-    // to four hours on a genuinely dead host.
+    // A host that cleanly detached or crashed one minute ago is observationally identical to a lease lapse at this layer.
+    // With no session evidence the death gate must fire, or failover, the dead surface, and the notification-action refusal are all suppressed for up to four hours on a genuinely dead host.
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
@@ -532,10 +507,8 @@ describe("isConfirmedTransportRefusal - F7 (recovery dial attempted during fuse 
   });
 
   it("dial permission and death verdict DIVERGE for the same fuse-grace entry: dial attempted, death confirmed", () => {
-    // The split the P1 fix rests on: the same entry, with no session
-    // evidence, may be dialed (cheap, recoverable) while every destructive
-    // consumer still reads it as dead (honest). Recency must never leak from
-    // the first question into the second.
+    // The split the P1 fix rests on: the same entry, with no session evidence, may be dialed (cheap, recoverable) while every destructive consumer still reads it as dead (honest).
+    // Recency must never leak from the first question into the second.
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
@@ -546,12 +519,8 @@ describe("isConfirmedTransportRefusal - F7 (recovery dial attempted during fuse 
   });
 });
 
-// -----------------------------------------------------------------------------
-// The four-state (six-cell) matrix: pure liveness on the wire × the account's
-// plan, combined at projection time. This is the whole contract of the
-// connectivity/plan split, so it is asserted as one table rather than as
-// scattered cases — a cell that changes should change here, visibly.
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- The four-state (six-cell) matrix: pure liveness on the wire × the account's plan, combined at projection time.
+// This is the whole contract of the connectivity/plan split, so it is asserted as one table rather than as scattered cases - a cell that changes should change here, visibly.
 
 type MatrixRow = {
   readonly planAllowsRemote: boolean;
@@ -665,9 +634,7 @@ describe("the plan gate and the death gates", () => {
   }
 
   it("an unpaid account's stale OFFLINE host is confirmed death", () => {
-    // Under `local-only` this host reported a plan word, `hostUnavailability`
-    // read `plan-restricted`, and failover / re-homing / the clone CTA /
-    // "permanently closed" were all silently disabled by a billing state.
+    // Under `local-only` this host reported a plan word, `hostUnavailability` read `plan-restricted`, and failover / re-homing / the clone cta / "permanently closed" were all silently disabled by a billing state.
     const entry = hostListItemToDirectoryEntry(
       gatedItem("offline", GENUINE_OFFLINE_LAST_SEEN),
       RELAY_BASE_URL,
@@ -769,9 +736,7 @@ describe("createRemoteHostFetcher - the plan axis", () => {
       expect(paid.entries[0].transportDialability).toBe("dialable");
     }
 
-    // A downgrade between polls: the SAME registry row projects differently,
-    // which is what makes the directory re-emit and the row stop being
-    // selectable without any wire change.
+    // A downgrade between polls: the same registry row projects differently, which is what makes the directory re-emit and the row stop being selectable without any wire change.
     planAllowsRemote = false;
     const downgraded = await fetcher(AMBIENT_ERA);
     expect(downgraded.kind).toBe("hosts");

@@ -8,16 +8,7 @@ import {
 } from "@/components/epic-canvas/pierre-tree-theme";
 
 /**
- * `@pierre/trees` paints `--trees-bg` on its list container, on every row and
- * on the sticky-header overlay, so that value has to be the surface the tree is
- * mounted on. It used to be the literal `var(--background)`, which is the
- * desktop sidebar's surface and therefore invisible there - and a visible slab
- * of the wrong colour anywhere else, which is what the mobile switcher sheet
- * (`bg-popover`) showed.
- *
- * Both halves are asserted because each one alone is satisfiable by a wrong
- * value: the indirection without the fallback would change desktop, and the
- * fallback without the indirection would leave the sheet broken.
+ * Both halves are asserted because each one alone is satisfiable by a wrong value: the indirection without the fallback would change desktop, and the fallback without the indirection would leave the sheet broken.
  */
 describe("Pierre file-tree theme surface", () => {
   // The overrides are CSS custom properties, which `CSSProperties` has no index

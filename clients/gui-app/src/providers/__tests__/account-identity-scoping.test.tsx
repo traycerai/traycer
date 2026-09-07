@@ -5,26 +5,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { surfaceHostSelectionKey } from "@/lib/persist";
 
-/**
- * Codex #1243 T-60, and the nine sibling bridges the invariant census found
- * alongside it.
- *
- * Persisted per-account state is scoped by the identity
- * `useAuthIdentityTransition` watches. That identity used to be the EMAIL,
- * which reads like an identity and is not one: two canonical accounts can
- * present the same address. For that pair `prior !== next` is false, so no
- * `userSwitched` fires, no store is retargeted or reset, and the incoming
- * account inherits the outgoing account's state - here, host pins, which are
- * account-scoped ids naming machines the new fleet has never contained.
- *
- * WHY THE EXISTING BRIDGE TESTS COULD NOT CATCH THIS: every one of them seeds
- * auth with `userId: email` (see the sibling files in this directory), so the
- * two values are the same string and no assertion can tell which one the code
- * read. The defect lives precisely in the gap between them, so an arm that
- * closes the gap is the only kind that can fail. This file therefore seeds
- * DIFFERENT userIds behind ONE email, which is the real-world shape and the
- * one no existing fixture produces.
- */
+/** Per-account persist is scoped by `userId`, not email: two accounts can share an address. Seed different userIds behind one email; sibling fixtures set `userId: email` and cannot see the gap. */
 
 const SHARED_EMAIL = "shared@example.com";
 const ALICE_USER_ID = "user-alice";
@@ -106,13 +87,8 @@ describe("persisted account scoping keys on the canonical user id", () => {
   });
 
   it("does NOT adopt an email-keyed bucket: this store never shipped keyed on the email", async () => {
-    // Unlike the composer / worktree / canvas bridges (whose suites carry the
-    // adopt-and-retire arm), surface-host-selection was ADDED in this release
-    // and has no email-keyed predecessor on any install. A blob under the
-    // email key is therefore not this account's state - it is whatever some
-    // other writer left there - and adopting it would be a mechanism with no
-    // producer that hands one account's pins to whichever account signs in
-    // next under the same address.
+    // surface-host-selection has no email-keyed predecessor. Adopting an email
+    // blob would hand another account's pins to whoever signs in next.
     const emailKey = surfaceHostSelectionKey(SHARED_EMAIL);
     const nextKey = surfaceHostSelectionKey(ALICE_USER_ID);
     persistPins(emailKey, "tab-1", "host-not-mine");
@@ -137,10 +113,8 @@ describe("persisted account scoping keys on the canonical user id", () => {
   });
 
   it("never lets the legacy bucket overwrite an account's own newer state", async () => {
-    // The control for the adoption above. Once an account has written under
-    // its canonical key, a stale email-keyed blob must not be able to come
-    // back and replace it - which is what an unguarded adopt would do on every
-    // sign-in.
+    // After writing under the canonical key, a stale email blob must not
+    // replace it on the next sign-in.
     const legacyKey = surfaceHostSelectionKey(SHARED_EMAIL);
     const nextKey = surfaceHostSelectionKey(ALICE_USER_ID);
     persistPins(legacyKey, "tab-1", "host-stale");

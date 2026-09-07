@@ -11,9 +11,6 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownShortcutHint } from "../profile-dropdown";
 import { profileCommitId } from "../provider-profile-model";
 
-// Render the Radix dropdown menu inline + always-open so tests can assert /
-// click its rows without fighting pointer-open semantics in jsdom (mirrors
-// the established mock in worktrees-settings-panel.test / folder-controls.test).
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
@@ -129,10 +126,8 @@ const PERSONAL_DISABLED = profile(
   false,
 );
 
-// A caller-injected hint stub, decoupled from the picker's real digit-mapping
-// (see `harness-model-picker-shortcut-hint.test.ts` for that) - this file
-// tests only the CONTRACT: `ProfileDropdown` calls the injected function per
-// row and renders whatever it returns, owning no keybinding policy itself.
+// A caller-injected hint stub, decoupled from the picker's real digit-mapping (see
+// `harness-model-picker-shortcut-hint.test.ts` for that).
 function stubShortcutHintForIndex(
   index: number,
 ): ProfileDropdownShortcutHint | null {
@@ -677,12 +672,8 @@ describe("<ProfileDropdown />", () => {
     expect(onCreateProfile).not.toHaveBeenCalled();
   });
 
-  // Digit-mapping/capping specifics (the shared platform helper, the single-
-  // digit limit, the index-9-shows-"0" quirk) are the PICKER's policy now,
-  // not this component's - see `harness-model-picker-shortcut-hint.test.ts`.
-  // This file only verifies the contract: render whatever the caller's
-  // `shortcutHintForIndex` returns, per row, and nothing when it returns
-  // `null` - `ProfileDropdown` itself owns no keybinding-formatting logic.
+  // This file only verifies the contract: render whatever the caller's `shortcutHintForIndex` returns, per row,
+  // and nothing when it returns `null` - `ProfileDropdown` itself owns no keybinding-formatting logic.
   it("renders each injected shortcut hint in the native Kbd component", () => {
     renderDropdown(baseDropdownInput({}));
 

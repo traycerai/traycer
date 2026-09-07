@@ -7,10 +7,8 @@ import {
 } from "../release-line";
 
 /**
- * The whole updater rests on this predicate answering "no" for everything that
- * is not one of our release candidates. A false positive does not merely
- * mislabel a version - it silently enrols that install into automatic updates
- * it never asked for, so the negative table is the load-bearing half.
+ * The whole updater rests on this predicate answering "no" for everything that is not one of our release candidates.
+ * A false positive does not merely mislabel a version - it silently enrols that install into automatic updates it never asked for, so the negative table is the load-bearing half.
  */
 describe("isCanonicalReleaseCandidate", () => {
   it("accepts canonical X.Y.Z-rc.N", () => {
@@ -61,19 +59,14 @@ describe("isCanonicalReleaseCandidate", () => {
   });
 
   it("scopes an RC to the line its core names", () => {
-    // Asserted through the public surface: `2.3.4-rc.7` shares a line with the
-    // `2.3.4` core and with nothing else, while `2.3.4-beta.7` has no line to
-    // share at all.
+    // Asserted through the public surface: `2.3.4-rc.7` shares a line with the `2.3.4` core and with nothing else, while `2.3.4-beta.7` has no line to share at all.
     expect(isSameReleaseLine("2.3.4-rc.7", "2.3.4")).toBe(true);
     expect(isSameReleaseLine("2.3.4-rc.7", "2.3.5")).toBe(false);
     expect(isSameReleaseLine("2.3.4-beta.7", "2.3.4")).toBe(false);
   });
 });
 
-// Line membership itself is module-private (`hostReleaseLine`): callers ask
-// these two questions, never "what line is this". Both halves of the rule are
-// pinned here through them - which versions DO share a line, and which shapes
-// have no line to share despite carrying the same core.
+// Line membership itself is module-private (`hostReleaseLine`): callers ask these two questions, never "what line is this".
 describe("release-line membership", () => {
   it("gives a canonical RC and its stable the same line", () => {
     expect(isSameReleaseLine("2.0.0-rc.1", "2.0.0")).toBe(true);
@@ -82,10 +75,7 @@ describe("release-line membership", () => {
   });
 
   it("refuses a line for a non-canonical prerelease that shares the core", () => {
-    // `2.0.0-beta.1` does have core `2.0.0`. Treating that as the 2.0.0 line
-    // would let the beta follow the line's RCs and stable, which is exactly
-    // what the canonical predicate exists to prevent - so it matches neither
-    // the line's stable nor the line's other members.
+    // `2.0.0-beta.1` does have core `2.0.0`.
     for (const version of [
       "2.0.0-beta.1",
       "2.0.0-rc.01",
@@ -126,13 +116,7 @@ describe("isSameReleaseLine", () => {
   });
 });
 
-/**
- * The CATALOG predicate, and the one two processes must agree on to the letter:
- * the CLI filters `host available` rows with it, and Desktop's `HostController`
- * predicts that filter with it to decide whether a staged build would still
- * appear in the default listing. Disagreement is not cosmetic - a staged build
- * whose row goes missing reads as yanked and is purged.
- */
+/** Disagreement is not cosmetic - a staged build whose row goes missing reads as yanked and is purged. */
 describe("isPreReleaseVersion", () => {
   it("accepts every pre-release shape, not just canonical RCs", () => {
     for (const version of [

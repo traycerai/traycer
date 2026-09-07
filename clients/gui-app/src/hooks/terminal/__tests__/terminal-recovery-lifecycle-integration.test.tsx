@@ -27,25 +27,7 @@ import {
 } from "@/hooks/terminal/use-terminal-session-recovery";
 import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 
-/**
- * Integrated regression coverage for the reaped/lost-handle recovery cycle:
- * the REAL `useTerminalSessionRecovery` + the REAL module-singleton
- * `TerminalSessionRegistry` (via the REAL `useTerminalSessionHandle`) + a
- * REAL `QueryClient` driving REAL `terminal.list` / `terminal.create` TanStack
- * hooks. Only the host RPC boundary (a `MockHostMessenger`-backed `HostClient`)
- * and the terminal stream boundary (`__setTerminalStreamClientFactoryForTests`)
- * are faked - the same seam the unit-level registry/hook tests in this suite
- * already fake, just wired through the real production hooks together instead
- * of individually.
- *
- * This is deliberately NOT `useTerminalTileBootstrap` reused wholesale (that
- * hook additionally owns measure-grid timing and the lazy xterm engine, which
- * would drag in a much larger, less focused fixture) - `BootstrapSubtree`
- * below reproduces only its recovery-relevant contract: `terminal.list`
- * decides `reattachMode` ("live" if the host still lists the session
- * running, "fresh" otherwise, dispatching `terminal.create` first), keyed by
- * `recoverNonce` exactly as the real tile bodies key their bootstrap subtree.
- */
+/** Real recovery + registry + QueryClient. Fake only RPC and the stream factory. Key bootstrap on recoverNonce. */
 
 const hostEntryRef = vi.hoisted((): { value: HostDirectoryEntry | null } => ({
   value: null,
@@ -334,10 +316,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
       expect(firstHandle.store.getState().reattachMode).toBe("live");
       expect(fixture.createCallCount()).toBe(0);
 
-      // The host confirms via TERMINAL_NOT_FOUND that THIS handle's PTY
-      // incarnation is gone, but the host still lists the session running
-      // under the same id (e.g. the host restarted and restored it) -
-      // `terminal.list` keeps reporting it for the whole test.
+      // The host confirms via TERMINAL_NOT_FOUND that THIS handle's PTY incarnation is gone, but the host still lists the session running under the same id (e.g.
       act(() => {
         firstHandle.store.setState({ status: "reaped" });
       });
@@ -389,11 +368,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
       const firstHandle = requireHandle(latestHandle);
       expect(firstHandle.store.getState().reattachMode).toBe("live");
 
-      // The transport drops (recoverable "lost", not a confirmed reap) AND
-      // the host has genuinely lost the session by the time recovery
-      // re-lists - the bootstrap must create a fresh PTY under the same
-      // desired id rather than getting stuck waiting for a session that will
-      // never come back as "running".
+      // The transport drops (recoverable "lost", not a confirmed reap) AND the host has genuinely lost the session by the time recovery re-lists - the bootstrap must create a fresh PTY under the same desired id rather than getting stuck waiting for a session that will never come back as "running".
       fixture.setSessionStillRunning(false);
       act(() => {
         firstHandle.store.setState({ status: "lost" });

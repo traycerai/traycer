@@ -2,7 +2,6 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import type { ISystemBackHost } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 
-/** The App plugin's `backButton` payload; the WebView's own page history. */
 export interface BackButtonEvent {
   readonly canGoBack: boolean;
 }
@@ -21,16 +20,7 @@ export interface SystemBackPluginSlice {
 
 /**
  * `IRunnerHost.systemBack` on Android.
- *
- * Registering ANY `backButton` listener is what takes the press away from the
- * plugin's default handling, which on this app is nothing at all: the GUI
- * keeps its history in its own in-memory stack, so the WebView's page history
- * the default consults is always a single entry. `canGoBack` on the event
- * describes that same page history and is deliberately not forwarded - the
- * GUI answers "is there anything behind" from its own stack.
- *
- * Android-only by construction: the entry point builds this on that platform
- * alone. iOS raises no such event and `minimizeApp` is unimplemented there.
+ * Android-only by construction: the entry point builds this on that platform alone.
  */
 export class MobileSystemBack implements ISystemBackHost {
   constructor(private readonly plugin: SystemBackPluginSlice) {}
@@ -40,9 +30,7 @@ export class MobileSystemBack implements ISystemBackHost {
     let handle: PluginListenerHandle | null = null;
     void this.plugin
       .addListener("backButton", () => {
-        // The attach is asynchronous, so a listener can be live for a press
-        // that lands after its subscription was disposed but before the
-        // removal below caught up.
+        // The attach is asynchronous, so a listener can be live for a press that lands after its subscription was disposed but before the removal below caught up.
         if (!disposed) handler();
       })
       .then((attached) => {

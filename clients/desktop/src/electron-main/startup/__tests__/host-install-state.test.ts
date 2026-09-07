@@ -52,11 +52,7 @@ describe("readHostInstalledForBootstrap", () => {
   });
 
   it("falls back to true when the status read rejects", async () => {
-    // The safer of the two wrong answers: `true` preserves the historical
-    // wait, so an unreadable install record cannot silently strip a legitimate
-    // readiness wait - and its HOST_NOT_READY signal - from a host that is
-    // installed and merely slow. Being wrong this way costs a slow launch;
-    // being wrong the other way loses a real failure report.
+    // The safer of the two wrong answers: `true` preserves the historical wait, so an unreadable install record cannot silently strip a legitimate readiness wait.
     const getStatus = vi.fn(() => Promise.reject(new Error("EACCES")));
     await expect(readHostInstalledForBootstrap({ getStatus })).resolves.toBe(
       true,
@@ -64,11 +60,6 @@ describe("readHostInstalledForBootstrap", () => {
   });
 });
 
-// The boot seam itself. `runDeferredBackground` is replaced wholesale by the
-// startup test hooks, so without these the wiring is the one part nothing
-// covers: hard-coding `hostInstalled: true` at the seam, or dropping the
-// status read, would restore the full 60s regression with every other test
-// still green.
 describe("bootstrapHostWithInstallState", () => {
   it("bootstraps with hostInstalled false when nothing is installed", async () => {
     const bootstrap = vi.fn(() => Promise.resolve());

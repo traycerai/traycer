@@ -295,9 +295,8 @@ describe("agent fork", () => {
     expect(result.human).toContain("terminal fork");
   });
 
-  // `null` is the ambient provider login, not the absence of a profile
-  // (`forkAgentResponseSchema`). Reporting it as "(none)" misread a fork that
-  // inherited or selected ambient as having no profile at all (PR #1077 review).
+  // `null` is the ambient provider login, not the absence of a profile (`forkAgentResponseSchema`).
+  // Reporting it as "(none)" misread a fork that inherited or selected ambient as having no profile at all (PR #1077 review).
   it("reports a null effectiveProfileId as ambient, not as no profile", async () => {
     rpcMock.mockResolvedValue({
       ...forkResponse,

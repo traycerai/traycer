@@ -62,23 +62,18 @@ interface SubagentSegmentProps {
   // Terminal outcome when the turn ended mid-run (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
   endState: SegmentEndState;
-  // True when `status === "errored"` was an explicit stop rather than a
-  // genuine failure - mirrors ToolSegment.stopped. Drives the same neutral
-  // "stopped" badge in place of any destructive error treatment.
+  // True when `status === "errored"` was an explicit stop rather than a genuine failure - mirrors ToolSegment.stopped.
+  // Drives the same neutral "stopped" badge in place of any destructive error treatment.
   stopped: boolean;
   // Immutable spawn time for the live elapsed heartbeat (null when unknown).
   startedAt: number | null;
   // Total run duration once finished; null while streaming / when unknown.
   durationMs: number | null;
-  // Rich fleet data when this card is a workflow run's dual-written card
-  // (§2.2) - null for an ordinary agent. Drives the dedicated workflow
-  // rendering (header live line, Intent, Activity timeline, Result totals)
-  // instead of the plain agent layout.
+  // Rich fleet data when this card is a workflow run's dual-written card (§2.2) - null for an ordinary agent.
+  // Drives the dedicated workflow rendering (header live line, Intent, Activity timeline, Result totals) instead of the plain agent layout.
   workflowMeta: WorkflowMeta | null;
-  // This agent's own nested children (tool calls, file changes, commands, AND
-  // further nested agents), keyed by `parentId`. Only the `subagent`-kind
-  // entries render, as the "Sub-agents" section - recursion is bounded only
-  // by actual spawn depth.
+  // This agent's own nested children (tool calls, file changes, commands, AND further nested agents), keyed by `parentId`.
+  // Only the `subagent`-kind entries render, as the "Sub-agents" section - recursion is bounded only by actual spawn depth.
   nested: ReadonlyArray<SubagentChildSegment>;
   variant: "card" | "row" | "promoted";
 }
@@ -91,9 +86,7 @@ type CompactSubagentSegmentProps = Omit<
 };
 
 export function SubagentSegment(props: SubagentSegmentProps) {
-  // Both child variants take the same props minus `variant`; spread the rest so
-  // a new card field only needs adding to the interface, not to two hand-kept
-  // forwarding lists.
+  // Both child variants take the same props minus `variant`; spread the rest so a new card field only needs adding to the interface, not to two hand-kept forwarding lists.
   const { variant, workflowMeta, ...rest } = props;
   if (workflowMeta !== null) {
     return (
@@ -531,15 +524,7 @@ function SubagentDetails(props: SubagentDetailsProps) {
   );
 }
 
-/**
- * The "Sub-agents" section (Flow 1): nested agent CHILDREN only - the rest of
- * `nested` (tool/file_change/command) exists purely for spawn-tool-call
- * suppression and isn't separately rendered here, matching how a top-level
- * agent's own tool activity was never itemized either. Each nested agent
- * renders as a `row`-variant card and recurses through the SAME component, so
- * depth beyond one level falls out of this section rendering for free - the
- * indentation (`border-l` + `pl-3`) accumulates once per level.
- */
+/** The "Sub-agents" section (Flow 1): nested agent CHILDREN only - the rest of `nested` (tool/file_change/command) exists purely for spawn-tool-call suppression and isn't separately rendered here, matching how a top-level agent's own tool activity was never itemized either. Each nested agent renders as a `row`-variant card and recurses through the SAME component, so depth beyond one level falls out of this section rendering for free - the indentation (`border-l` + `pl-3`) accumulates once per level. */
 function SubagentChildrenSection(props: {
   readonly nested: ReadonlyArray<SubagentChildSegment>;
 }) {
@@ -581,12 +566,7 @@ function SubagentChildrenSection(props: {
   );
 }
 
-/**
- * Provider notices (Codex model reroute / safety verification / buffering,
- * etc.) that arrived on THIS subagent's thread - unlike the tool/file_change/
- * command entries in `nested`, these DO render as visible rows, right where
- * the notice actually happened for this sub-agent.
- */
+/** Provider notices (Codex model reroute / safety verification / buffering, etc.) that arrived on THIS subagent's thread - unlike the tool/file_change/ command entries in `nested`, these DO render as visible rows, right where the notice actually happened for this sub-agent. */
 function SubagentChildProviderNotices(props: {
   readonly nested: ReadonlyArray<SubagentChildSegment>;
 }) {
@@ -713,13 +693,7 @@ interface WorkflowCardSegmentProps extends Omit<
   readonly variant: "card" | "row";
 }
 
-/**
- * The dedicated workflow card (Flow 2) - rendered whenever a subagent block
- * carries `workflowMeta`, never as a separate segment/block-type branch. It
- * reuses the same segment-card primitives and open-store as an ordinary agent
- * card (a workflow IS a subagent block underneath), but replaces Task/Progress
- * with Intent/Activity and appends totals to the Result.
- */
+/** The dedicated workflow card (Flow 2) - rendered whenever a subagent block carries `workflowMeta`, never as a separate segment/block-type branch. It reuses the same segment-card primitives and open-store as an ordinary agent card (a workflow IS a subagent block underneath), but replaces Task/Progress with Intent/Activity and appends totals to the Result. */
 function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
   const {
     id,
@@ -755,9 +729,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
 
   const displayName = cleanSubagentNotificationText(name) ?? "Workflow";
   const liveLine = workflowLiveLine(workflowMeta);
-  // Collapsed line prefers the result once available, mirroring the plain
-  // agent card; while running it carries the fleet's aggregate story instead
-  // of a raw progress line (workflows have none - see workflowLiveLine).
+  // Collapsed line prefers the result once available, mirroring the plain agent card; while running it carries the fleet's aggregate story instead of a raw progress line (workflows have none - see workflowLiveLine).
   const summary = result ?? liveLine ?? (isStreaming ? "Starting…" : null);
 
   const header = (
@@ -897,14 +869,7 @@ function latestActivityText(
   return activity.filter((entry) => entry.kind === kind).at(-1)?.text ?? null;
 }
 
-/**
- * The workflow card's live line (header + panel row): current phase, the most
- * recently active fleet-agent label, and finished/started counts. Derived
- * from the activity log itself, not a dedicated phase/activeLabel field -
- * those live only on the ephemeral BackgroundItem (panel row); the persisted
- * workflowMeta carries just the activity log + aggregate counts (§2.2), so
- * "current phase" / "current label" are the latest entry of each kind.
- */
+/** The workflow card's live line (header + panel row): current phase, the most recently active fleet-agent label, and finished/started counts. Derived from the activity log itself, not a dedicated phase/activeLabel field - those live only on the ephemeral BackgroundItem (panel row); the persisted workflowMeta carries just the activity log + aggregate counts (§2.2), so "current phase" / "current label" are the latest entry of each kind. */
 function workflowLiveLine(meta: WorkflowMeta): string | null {
   const phase = latestActivityText(meta.activity, "phase");
   const label = latestActivityText(meta.activity, "label");
@@ -925,12 +890,7 @@ interface WorkflowActivityTimelineProps {
   readonly isStreaming: boolean;
 }
 
-/**
- * Reads as "what the fleet has been doing", not a per-agent ledger: phase
- * transitions render as bold milestones, interleaved with the rotating
- * agent-label sightings in muted text - the newest entry gets the live spinner
- * while the run is still going.
- */
+/** Reads as "what the fleet has been doing", not a per-agent ledger: phase transitions render as bold milestones, interleaved with the rotating agent-label sightings in muted text - the newest entry gets the live spinner while the run is still going. */
 function WorkflowActivityTimeline(props: WorkflowActivityTimelineProps) {
   const { activity, isStreaming } = props;
   if (activity.length === 0) {
@@ -989,10 +949,7 @@ interface WorkflowActivityRow extends WorkflowActivityEntry {
   readonly key: string;
 }
 
-// Activity entries carry no stable id and can legitimately repeat (a label
-// sighted again later, non-consecutively) - key on content + nth-occurrence,
-// mirroring the same pattern `adjacentDedupedProgressItems` uses for progress
-// lines, so React reconciles in place instead of by array index.
+// Activity entries carry no stable id and can legitimately repeat (a label sighted again later, non-consecutively) - key on content + nth-occurrence, mirroring the same pattern `adjacentDedupedProgressItems` uses for progress lines, so React reconciles in place instead of by array index.
 function workflowActivityRows(
   activity: ReadonlyArray<WorkflowActivityEntry>,
 ): ReadonlyArray<WorkflowActivityRow> {
@@ -1019,11 +976,7 @@ function formatWorkflowTokens(value: number): string {
   return value.toLocaleString();
 }
 
-/**
- * Totals line under the Result panel once the run has settled: agents run,
- * tokens, and total duration (Flow 2, point 3). Omits whichever pieces the
- * host never populated instead of showing a placeholder.
- */
+/** Totals line under the Result panel once the run has settled: agents run, tokens, and total duration (Flow 2, point 3). Omits whichever pieces the host never populated instead of showing a placeholder. */
 function WorkflowResultTotals(props: {
   readonly workflowMeta: WorkflowMeta;
   readonly durationMs: number | null;

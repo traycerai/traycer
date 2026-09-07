@@ -17,19 +17,12 @@ interface ResolvedApprovalSegmentProps {
   decision: ApprovalDecision;
   variant: "card" | "row";
   headerFindUnitId: string | null;
-  // Seeds the disclosure at mount, once. Open state is local here, so the copy
-  // of this row inside the bounded live activity window cannot hand its own
-  // over: a click there promotes, and this is how the copy that replaces it
-  // knows it was the row asked for.
+  // Seeds the disclosure at mount, once.
+  // Open state is local here, so the copy of this row inside the bounded live activity window cannot hand its own over: a click there promotes, and this is how the copy that replaces it knows it was the row asked for.
   initiallyOpen: boolean;
 }
 
-/**
- * Inline-history view of an approval that has already been resolved. Pending
- * approvals are routed to `ComposerSlotApprovalQueue`; the inline path is
- * resolved-only by construction (see `isSuppressedForComposerSlot` and
- * `isWorkStep`), so this component does not accept Approve/Deny callbacks.
- */
+/** Inline-history view of an approval that has already been resolved. Pending approvals are routed to `ComposerSlotApprovalQueue`; the inline path is resolved-only by construction (see `isSuppressedForComposerSlot` and `isWorkStep`), so this component does not accept Approve/Deny callbacks. */
 export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
   const {
     toolName,

@@ -1,18 +1,12 @@
-// Shared subagent display helpers consumed by BOTH the subagent renderer
-// (`subagent-segment.tsx`) and the chat search projection (`chat-find.ts`).
-// Keeping a single source means what the projection indexes can't drift from
-// what the card actually renders (the previous duplication did exactly that).
+// Shared subagent display helpers consumed by BOTH the subagent renderer (`subagent-segment.tsx`) and the chat search projection (`chat-find.ts`).
+// Keeping a single source means what the projection indexes can't drift from what the card actually renders (the previous duplication did exactly that).
 
 export interface ProgressUpdateItem {
   readonly key: string;
   readonly text: string;
 }
 
-/**
- * Strip Traycer task-notification wrapper markup from a subagent name / type /
- * task string, returning the human-readable inner text (or null when empty).
- * Plain strings pass through trimmed.
- */
+/** Strip Traycer task-notification wrapper markup from a subagent name / type / task string, returning the human-readable inner text (or null when empty). Plain strings pass through trimmed. */
 export function cleanSubagentNotificationText(
   input: string | null,
 ): string | null {
@@ -32,11 +26,7 @@ export function cleanSubagentNotificationText(
   return cleaned.length > 0 ? cleaned : null;
 }
 
-/**
- * Collapse runs of adjacent identical progress lines into one item, mirroring
- * exactly what the rendered progress list shows. Each surviving line gets a
- * stable key (content hash + nth-occurrence) so React reconciles in place.
- */
+/** Collapse runs of adjacent identical progress lines into one item, mirroring exactly what the rendered progress list shows. Each surviving line gets a stable key (content hash + nth-occurrence) so React reconciles in place. */
 export function adjacentDedupedProgressItems(
   progressUpdates: ReadonlyArray<string>,
 ): ReadonlyArray<ProgressUpdateItem> {

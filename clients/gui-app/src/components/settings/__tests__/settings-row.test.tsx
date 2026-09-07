@@ -9,10 +9,7 @@ describe("SettingsRow", () => {
   });
 
   it("keeps a wrapped control end-aligned below the label", () => {
-    // jsdom does no layout, so this asserts the CONTRACT rather than a measured
-    // stack: a half-row label floor makes wide controls wrap, while ml-auto
-    // keeps the wrapped control pinned to the trailing edge instead of falling
-    // under the label at the leading edge.
+    // jsdom does no layout, so this asserts the contract rather than a measured stack.
     render(
       <SettingsRow
         label="Artifact icon colors"
@@ -44,11 +41,8 @@ describe("SettingsRow", () => {
     if (controlWrapper === null) {
       throw new Error("expected SettingsRow control wrapper");
     }
-    // Shrink contract: the wrapper caps its own box (max-w-full) AND forces
-    // every direct child to respect that cap via [&>*]:max-w-full. A parent
-    // max-width alone never shrinks a child's explicit width (e.g. w-80) -
-    // only clips/overflows - so the child-targeting selector is required.
-    // shrink-0 alone would still overflow a narrower row on the wrapped line.
+    // A parent max-width alone never shrinks a child's explicit width (e.g. w-80) - only clips/overflows - so the
+    // child-targeting selector is required.
     expect(controlWrapper.className).toContain("max-w-full");
     expect(controlWrapper.className).toContain("[&>*]:max-w-full");
     expect(controlWrapper.className).toContain("shrink-0");
@@ -64,11 +58,8 @@ describe("SettingsRow", () => {
   });
 
   it("clamps a wider-than-row control with max-w-full on SettingsRow's control wrapper", () => {
-    // Regression for the pre-fix bug: a w-80 control (the real offender shape
-    // used by the artifact-icon-colors picker) kept overflowing after wrap when
-    // only shrink-0 was present. The clamp lives on SettingsRow's own wrapper
-    // (max-w-full + [&>*]:max-w-full) - the child keeps its fixed-width class
-    // in markup; the wrapper forces max-width:100% onto that child via CSS.
+    // Regression for the pre-fix bug: a w-80 control (the real offender shape used by the artifact-icon-colors
+    // picker) kept overflowing after wrap when only shrink-0 was present.
     render(
       <SettingsRow
         label="Wide control row"
@@ -98,18 +89,8 @@ describe("SettingsRow", () => {
   });
 
   it("floors the label below md so a wide control takes its own line", () => {
-    // SETTINGS_ROW_STACK is the shared narrow-width half of this geometry. Flex
-    // line-breaking reads an item's basis clamped by its own min-width, so
-    // raising the label's floor to 70% below md is what decides which controls
-    // stack: anything wider than the remaining third is pushed onto a line of
-    // its own BEFORE any shrinking happens, while a switch-sized control still
-    // fits beside the label - which is where a settings toggle belongs.
-    //
-    // Every responsive override it contributes carries a max-md: variant - bar
-    // the flex-wrap the mechanism acts through, which this row already
-    // declares - so it only ever LAYERS ONTO the desktop rules asserted above;
-    // it must never remove ml-auto/justify-end, which are what keep the
-    // control trailing-aligned.
+    // Every responsive override it contributes carries a max-md: variant - bar the flex-wrap the mechanism acts
+    // through, which this row already declares.
     render(
       <SettingsRow
         label="Some label"
@@ -146,10 +127,8 @@ describe("SettingsRow", () => {
   });
 
   it("hands its description's id to a control that asks for one", () => {
-    // The description is the row's real second line of copy, so the control
-    // should be DESCRIBED by it rather than leaving a screen reader with a
-    // bare label. The context is the whole mechanism - `control` stays a
-    // plain ReactNode, so no existing call site changes shape.
+    // The description is the row's real second line of copy, so the control should be described by it rather than
+    // leaving a screen reader with a bare label.
     render(
       <SettingsRow
         label="Open new tiles"
@@ -186,7 +165,6 @@ describe("SettingsRow", () => {
   });
 });
 
-/** Stands in for a real settings control that opts into the description. */
 function DescribedControl(props: { readonly children: string }) {
   return (
     <button type="button" aria-describedby={useSettingsRowDescriptionId()}>

@@ -212,9 +212,7 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
 
-    // The host never answered, so this must not be filed as a file-read
-    // failure: that is what sent one field report's triage looking for an fs
-    // error that never happened.
+    // The host never answered, so this must not be filed as a file-read failure: that is what sent one field report's triage looking for an fs error that never happened.
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
       title: "Workspace file preview failed to load from the host",
       message:

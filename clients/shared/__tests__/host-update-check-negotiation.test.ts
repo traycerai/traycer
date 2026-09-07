@@ -7,17 +7,8 @@ import {
 } from "../host-transport/ws-rpc-client";
 
 /**
- * Two-sided negotiation for `host.update.check`, through the REAL transport
- * helpers rather than the schemas alone.
- *
- * This is the case the v1.1 wire shape was chosen for. Within one major there
- * is no request-downgrade bridge, so a v1.1 client talking to an already
- * shipped v1.0 host projects its params by PARSING them with the v1.0 request
- * schema. Any tri-state encoding whose third state is a VALUE the v1.0 schema
- * refuses (an explicit `null`, say) turns every default catalog load against
- * an old host into `DOWNGRADE_UNSUPPORTED`. Encoding it as an absent key makes
- * that same load arrive as v1.0's stable-only default, which is what the
- * rollout promises.
+ * Two-sided negotiation for `host.update.check`, through the real transport helpers rather than the schemas alone.
+ * Encoding it as an absent key makes that same load arrive as v1.0's stable-only default, which is what the rollout promises.
  */
 const REGISTRY = hostRpcRegistry["host.update.check"];
 const CLIENT_V11 = { major: 1, minor: 1 } as const;

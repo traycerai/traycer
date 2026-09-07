@@ -142,10 +142,7 @@ describe("provider resource fuzzy filters", () => {
   });
 
   it("returns the same tool object so non-search fields stay intact", () => {
-    // Filtering is a FILTER, not a projection: stripping fields that the
-    // matcher never reads (enabled, denySources, …) used to leave the tools
-    // grid without a toggle. Identity of the match is the contract that keeps
-    // those fields reachable after a search.
+    // Identity of the match is the contract that keeps those fields reachable after a search.
     const hit = filterProviderMcpTools(TOOLS, "search_code");
     expect(hit).toHaveLength(1);
     expect(hit[0]).toBe(TOOLS[0]);

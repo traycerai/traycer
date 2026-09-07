@@ -1,24 +1,6 @@
 /**
- * Timeline row → its source, opened in the epic.
- *
- * Two steps, always in this order: open (or focus) the owning agent's tile via
- * `openTile`, then - only for a GUI anchor - park a transcript jump the
- * chat tile picks up. The jump is parked rather than called because the target
- * tile may not be mounted yet at the moment of the click.
- *
- * WHAT EACH ORIGIN KIND DOES:
- *
- * - `gui_block` / `gui_message` → open the owning chat and scroll its
- *   transcript to the anchored block / delivered message.
- * - `tui_session` → open the terminal agent. That IS the whole behavior; a
- *   terminal has no in-transcript anchor to scroll to.
- * - `origin: null` → open the owning agent's tile, no scroll, NO ERROR. This is
- *   a common and legitimate shape (some TUI rows carry no anchor at all), not a
- *   failure.
- *
- * The one case with nothing to do is a row whose agent this epic does not
- * project at all (a half-edge to an agent outside the epic): there is no tile
- * to open, so the row simply carries no jump affordance.
+ * Two steps, always in this order: open (or focus) the owning agent's tile via `openTile`, then - only for a GUI anchor - park a transcript jump the chat tile picks up.
+ * The jump is parked rather than called because the target tile may not be mounted yet at the moment of the click.
  */
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -42,46 +24,28 @@ import {
 } from "@/lib/comm-graph/comm-graph-jump";
 
 export interface CommGraphJump {
-  /** Whether this event's owning host is currently reachable. */
   readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly jump: (event: CommGraphEvent) => void;
   /**
-   * SENDER-side jump: open the sending chat scrolled to its own "Sent
-   * message" card. No captured anchor exists for that side (origin refs are
-   * receiver-side; the sender's block id never reaches the host), so the
-   * target is resolved by the chat tile AT JUMP TIME from the block's
-   * `agentMessageSend` enrichment - receiver + verbatim text, which both the
-   * block and the comm-event row durably carry. Available only for message
-   * rows whose sender is a projected GUI chat: a terminal sender has no
-   * transcript to resolve against, and a notice was never "sent" by anyone.
+   * No captured anchor exists for that side (origin refs are receiver-side; the sender's block id never reaches the host), so the target is resolved by the chat tile AT JUMP TIME from the block's `agentMessageSend` enrichment - receiver + verbatim text, which both the block and the comm-event row durably carry.
+   * Available only for message rows whose sender is a projected GUI chat: a terminal sender has no transcript to resolve against, and a notice was never "sent" by anyone.
    */
   readonly canJumpToSender: (event: CommGraphEvent) => boolean;
   readonly jumpToSender: (event: CommGraphEvent) => void;
   /**
-   * Created-row jump: open the created agent scrolled to the START of its
-   * transcript - the one deterministic landing a creation has (for an
-   * A2A-created child, the first message IS its task). Available only when
-   * the created agent is a projected GUI chat; a terminal child has no
-   * transcript, so its endpoint degrades to a plain tile open.
+   * Available only when the created agent is a projected GUI chat; a terminal child has no transcript, so its endpoint degrades to a plain tile open.
    */
   readonly canJumpToCreated: (event: CommGraphEvent) => boolean;
   readonly jumpToCreated: (event: CommGraphEvent) => void;
   /**
-   * Opens an agent's own tile - the detail panel's header affordance, and the
-   * degrade for every endpoint with no anchor of its own. A notice row's IDLE
-   * agent is deliberately only ever this: the broker OBSERVED it going quiet,
-   * so nothing in its transcript is the notice, and its tail is whatever it
-   * happens to be doing now rather than the row that was clicked.
+   * A notice row's IDLE agent is deliberately only ever this: the broker OBSERVED it going quiet, so nothing in its transcript is the notice, and its tail is whatever it happens to be doing now rather than the row that was clicked.
    */
   readonly openAgent: (agent: CommGraphAgentNode) => void;
 }
 
 /**
- * A LEGACY chat record that predates `Chat.hostId` has no host to bind to. It
- * opens against the same placeholder the tile itself uses rather than borrowing
- * the app's active host - guessing would silently point the tab at whichever
- * host happened to be selected.
+ * It opens against the same placeholder the tile itself uses rather than borrowing the app's active host - guessing would silently point the tab at whichever host happened to be selected.
  */
 function openableRefForAgent(agent: CommGraphAgentNode): EpicArtifactRef {
   return makeOpenableNodeRef({
@@ -133,12 +97,8 @@ export function useCommGraphJump(
     }
     return Array.from(hostIds).sort();
   }, [agents, events]);
-  // Dialability now depends on the pull-only session cache, so the directory
-  // subscription alone cannot see a session dying or appearing under an
-  // `offline`/plan-restricted origin. This second subscription re-renders on a
-  // readiness flip; the snapshot read below then re-runs with the new answer,
-  // so jump affordances follow the route's real state instead of freezing at
-  // whatever was true on the last directory emit.
+  // Dialability now depends on the pull-only session cache, so the directory subscription alone cannot see a session dying or appearing under an `offline`/plan-restricted origin.
+  // This second subscription re-renders on a readiness flip; the snapshot read below then re-runs with the new answer, so jump affordances follow the route's real state instead of freezing at whatever was true on the last directory emit.
   const hasReadySessionFor = useRemoteSessionsPollReadiness(relevantHostIds);
   const getDirectorySnapshot = useCallback(() => {
     return relevantHostIds

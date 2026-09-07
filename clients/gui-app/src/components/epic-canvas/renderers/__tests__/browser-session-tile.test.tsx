@@ -19,18 +19,11 @@ const harness = vi.hoisted(() => ({
   items: [] as BrowserSessionInfo[],
   lifecycle: "live",
   inventoryReady: true,
-  // Defaults to the Electron-capable client these cases were written for: a
-  // desktop co-located with the tile's host. A viewer-only client sets it
-  // false, and then never reaches the native or rebind branches at all.
+  // A viewer-only client sets it false, and then never reaches the native or rebind branches at all.
   canMaterializeElectron: true,
   closeCanvasTile: vi.fn(),
 }));
 
-/**
- * Cross-host fence bookkeeping (ticket 13): who each seam was actually
- * called for, so a test can prove the tile bound to the TILE's own
- * `node.hostId` rather than the canvas host.
- */
 const hostBindingHarness = vi.hoisted(() => ({
   reachabilityHostIds: [] as string[],
   electronBindingCalls: [] as Array<{
@@ -317,11 +310,8 @@ describe("BrowserSessionTile lifecycle projection", () => {
   });
 
   it("takes the viewer branch for a non-capable client on a ready electron session, never the rebind alert", () => {
-    // A viewer-only client (no co-located browserView, or a browserView bound
-    // to a different host than the session's) can never place a native tab
-    // for this session. `kind === "electron"` + `binding === null` alone would
-    // fall into `BrowserTabRebindWait`, which waits on a desktop-side
-    // re-publish that structurally cannot come for this client.
+    // A viewer-only client (no co-located browserView, or a browserView bound to a different host than the session's) can never place a native tab for this session.
+    // `kind === "electron"` + `binding === null` alone would fall into `BrowserTabRebindWait`, which waits on a desktop-side re-publish that structurally cannot come for this client.
     harness.canMaterializeElectron = false;
     harness.items = [session("ready", "electron")];
 
@@ -330,9 +320,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
     expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
       "tab-1",
     );
-    // The non-capable client's own view of the same `complete` frame: this
-    // tab is live in the desktop's window on that host, unreachable from
-    // here - never the "my own tab is arriving" handoff spinner.
+    // The non-capable client's own view of the same `complete` frame: this tab is live in the desktop's window on that host, unreachable from here - never the "my own tab is arriving" handoff spinner.
     expect(
       screen.getByTestId("headless-browser-tab").dataset.completeMeans,
     ).toBe("native-elsewhere");
@@ -342,11 +330,8 @@ describe("BrowserSessionTile lifecycle projection", () => {
   });
 
   it("takes the viewer branch for a non-capable client even once the reconnect wait would have expired", () => {
-    // Same non-capable client, but proving the bounded-wait/rebind-timeout
-    // machinery never engages at all for it - not merely that it starts in the
-    // viewer branch. An electron-capable client (default harness) reaches the
-    // timeout alert at this point (see "bounds the reconnect wait..." above);
-    // this client must not.
+    // Same non-capable client, but proving the bounded-wait/rebind-timeout machinery never engages at all for it - not merely that it starts in the viewer branch.
+    // An electron-capable client (default harness) reaches the timeout alert at this point (see "bounds the reconnect wait..." above); this client must not.
     vi.useFakeTimers();
     try {
       harness.canMaterializeElectron = false;
@@ -372,10 +357,6 @@ describe("BrowserSessionTile lifecycle projection", () => {
   });
 
   it("keeps the electron-capable default meaningful: the same session still reaches the reconnect wait and rebind alert", () => {
-    // Pins that the harness's `canMaterializeElectron: true` default (used by
-    // every other case in this suite) is not accidentally masking the branch
-    // this file exists to cover - the capable path still resolves to the
-    // native-binding-reconnect machinery, not the viewer branch.
     harness.items = [session("ready", "electron")];
 
     renderTile();
@@ -385,11 +366,8 @@ describe("BrowserSessionTile lifecycle projection", () => {
   });
 
   it("takes the wake path for a dormant tab of an Electron session", () => {
-    // `materialize` provisions only the tab it was asked for, so a live
-    // Electron session routinely publishes dormant siblings. A sibling that
-    // fell into the bare null-binding branch had no way back: the reconnect
-    // spinner subscribes to nothing, and the screencast subscription behind
-    // the peek tile is the only thing that reaches `ensureTabAttached`.
+    // `materialize` provisions only the tab it was asked for, so a live Electron session routinely publishes dormant siblings.
+    // A sibling that fell into the bare null-binding branch had no way back: the reconnect spinner subscribes to nothing, and the screencast subscription behind the peek tile is the only thing that reaches `ensureTabAttached`.
     harness.items = [session("dormant", "electron")];
 
     renderTile();
@@ -398,9 +376,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
       screen.getByRole("button", { name: "Browser screencast controls" })
         .dataset.tab,
     ).toBe("tab-1");
-    // The capable client's own wake/peek path: the desktop is about to
-    // publish a native binding for this tab, so the frame reads as a
-    // handoff in progress, not an unreachable native tab.
+    // The capable client's own wake/peek path: the desktop is about to publish a native binding for this tab, so the frame reads as a handoff in progress, not an unreachable native tab.
     expect(
       screen.getByRole("button", { name: "Browser screencast controls" })
         .dataset.completeMeans,
@@ -451,10 +427,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
   });
 
   it("returns to the actionable error state once the bounded wake window itself expires with no binding", () => {
-    // The wake request is bounded, not latched: a reader who clicked "Reopen
-    // tab" and never got a binding back must land on the same actionable
-    // error state the original reconnect wait offers, not spin on the peek
-    // tile forever.
+    // The wake request is bounded, not latched: a reader who clicked "Reopen tab" and never got a binding back must land on the same actionable error state the original reconnect wait offers, not spin on the peek tile forever.
     vi.useFakeTimers();
     try {
       harness.items = [session("ready", "electron")];
@@ -515,10 +488,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
       );
       expect(screen.getByTestId("managed-electron-tab")).toBeTruthy();
 
-      // A later, transient reconnect: the binding drops again well after the
-      // original wake window would have elapsed. The stale request is inert
-      // by then, so this lands on the same actionable alert a fresh expiry
-      // produces - never stuck spinning, and never a phantom headless tab.
+      // The stale request is inert by then, so this lands on the same actionable alert a fresh expiry produces - never stuck spinning, and never a phantom headless tab.
       act(() => {
         vi.advanceTimersByTime(10_000);
       });
@@ -715,11 +685,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
   });
 
   it("binds the boundary, reachability, and the electron binding lookup to the tile's OWN hostId, not the canvas host", () => {
-    // The canvas host (`useCanvasHostId`, mocked above) is always
-    // "host-test". This node names a different host - the first case in
-    // this suite where a browser tile's hostId diverges from the canvas
-    // it's rendered on. Every per-host seam the tile touches must key off
-    // `node.hostId`, never the canvas host it happens to be pinned inside.
+    // Every per-host seam the tile touches must key off `node.hostId`, never the canvas host it happens to be pinned inside.
     const remoteNode: BrowserSessionTileRef = {
       ...NODE,
       hostId: "host-remote",

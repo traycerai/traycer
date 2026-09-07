@@ -37,9 +37,8 @@ const attachmentMocks = vi.hoisted(() => {
   );
   return {
     fetch,
-    // Built ONCE, not per call. These stand in for hooks that memoize, and
-    // the blob-url effect takes the fetcher as a dependency - a factory
-    // returning a fresh object each render re-runs that effect forever.
+    // Built ONCE, not per call.
+    // These stand in for hooks that memoize, and the blob-url effect takes the fetcher as a dependency - a factory returning a fresh object each render re-runs that effect forever.
     epicFetcher: { scopeKey: "test-epic-scope", fetch },
     chatFetcher: { scopeKey: "test-chat-scope", fetch },
     hasBytes: vi.fn(() => true),
@@ -302,10 +301,7 @@ describe("<UserMessageBody /> agent messages", () => {
     );
 
     const actionChip = screen.getByLabelText("Copy message").parentElement;
-    // The group-scoped focus reveal is fine-pointer-only (the coarse-pointer
-    // "…" menu trigger lives inside the same group and must not summon the
-    // chip when Radix restores focus to it); the chip's own focus-within
-    // reveal stays unscoped for hardware-keyboard access on any device.
+    // The group-scoped focus reveal is fine-pointer-only (the coarse-pointer "…" menu trigger lives inside the same group and must not summon the chip when Radix restores focus to it); the chip's own focus-within reveal stays unscoped for hardware-keyboard access on any device.
     expect(actionChip?.className).toContain(
       "pointer-fine:group-focus-within/user-message:opacity-100",
     );
@@ -555,9 +551,8 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(display?.className).not.toContain("max-w-[85%]");
   });
 
-  // The sent message is the only place the user sees the chip after submitting,
-  // so it reads back as what was written - matching the live composer's node
-  // view. The node still serializes to `/name` for the host either way.
+  // The sent message is the only place the user sees the chip after submitting, so it reads back as what was written - matching the live composer's node view.
+  // The node still serializes to `/name` for the host either way.
   it("renders a $-triggered chip as $name in a sent message", () => {
     render(
       <UserMessageBody
@@ -965,11 +960,8 @@ describe("<UserMessageBody /> agent messages", () => {
     }
   });
 
-  // The copy path resolves bytes through the CHAT attachment reader
-  // (`useChatAttachmentByteReader`), not through a synchronous doc-map presence
-  // pre-check: chat image bytes live on the chat plane now, so presence is not
-  // answerable without a round trip and the reader's own timeout is what keeps
-  // a Cmd+C from hanging. These two tests pin that mechanism.
+  // The copy path resolves bytes through the CHAT attachment reader (`useChatAttachmentByteReader`), not through a synchronous doc-map presence pre-check: chat image bytes live on the chat plane now, so presence is not answerable without a round trip and the reader's own timeout is what keeps a Cmd+C from hanging.
+  // These two tests pin that mechanism.
   it("re-inlines hash-only image bytes as b64content on copy when the chat reader resolves them", async () => {
     const imageBytes = new Uint8Array([10, 20, 30]);
     const imageHash = "resolved-image-hash";

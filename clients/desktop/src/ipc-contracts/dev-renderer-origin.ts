@@ -1,9 +1,3 @@
-/**
- * Dev renderer URL/origin resolution for the main process
- * (`electron-main/app/security.ts`, `electron-main/windows/window-factory.ts`).
- * Kept free of `electron`/`node:*` imports so preload-side bundles could pull
- * it in as well if one ever needs the dev origin again.
- */
 
 export const TRAYCER_DESKTOP_DEV_URL_ENV = "TRAYCER_DESKTOP_DEV_URL";
 export const DEFAULT_DEV_RENDERER_URL = "http://localhost:5173";

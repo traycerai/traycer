@@ -61,9 +61,6 @@ describe("deriveSpecDeadlineMs", () => {
   it("clamps the measured rtt at MAX_CONTROL_PLANE_RTT_MS", () => {
     const spec = { floorMs: 0, roundTrips: 2 };
 
-    // Anchored to the arithmetic, not to the other call: comparing the two
-    // derivations alone passes just as well with no clamp at all, since both
-    // sides would move together.
     expect(deriveSpecDeadlineMs(spec, 60_000)).toBe(
       2 * MAX_CONTROL_PLANE_RTT_MS,
     );
@@ -80,9 +77,6 @@ describe("deriveSpecDeadlineMs", () => {
     expect(deriveSpecDeadlineMs(spec, 0)).toBe(8_000);
     expect(deriveSpecDeadlineMs(spec, -500)).toBe(8_000);
     expect(deriveSpecDeadlineMs(spec, -100_000)).toBe(8_000);
-    // With variance in play the clamp is observable rather than absorbed by
-    // `Math.max(floorMs, ...)`: unclamped this reads -500 + 400 = -100 and
-    // collapses to the floor, so the variance term buys nothing.
     expect(
       deriveRttDeadlineMs({
         floorMs: 0,
@@ -95,9 +89,6 @@ describe("deriveSpecDeadlineMs", () => {
   });
 
   it("floors a negative variance at 0 and rounds a fractional product", () => {
-    // Mutation: dropping `Math.max(varianceMs, 0)` (a negative variance would
-    // SHORTEN a liveness window below the measurement it is protecting), or
-    // dropping `Math.round` (a fractional millisecond deadline).
     expect(
       deriveRttDeadlineMs({
         floorMs: 0,

@@ -1,13 +1,4 @@
-/**
- * What the FLOOR knows about an agent that the shared card does not: the
- * posture it is drawn in, and the size class its desk is drawn at.
- *
- * Appended under `AgentHoverTooltip`'s own content rather than replacing any
- * of it. The harness and model are deliberately absent here even though the
- * office carries them: the shared card resolves those from the host, which is
- * the authority, and repeating a second-hand copy beside it is exactly how the
- * two would come to disagree.
- */
+/** Appended under `AgentHoverTooltip`'s own content rather than replacing any of it. */
 import type {
   OfficeAgentStatus,
   OfficeModelTier,

@@ -1,8 +1,6 @@
 /**
- * Stack of prompt-stash actions owned by active composer surfaces. Overlay
- * composers register after the surface beneath them, then hand control back
- * when they close. This avoids the dead-shortcut window a single-slot registry
- * creates when its winning registration unmounts.
+ * Stack of prompt-stash actions owned by active composer surfaces.
+ * Overlay composers register after the surface beneath them, then hand control back when they close.
  */
 type PromptStashAction = () => void;
 

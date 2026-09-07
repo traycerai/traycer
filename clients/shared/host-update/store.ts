@@ -4,24 +4,13 @@ import { mkdir, open, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { renameWithWindowsRetry } from "@traycer/protocol/config/credentials-fs";
-// The READ side of this record moved to `@traycer/protocol/config`, so
-// `traycer-host` can project it into `host.status` without importing this
-// package (see `./record` for the full reasoning). What stayed here is
-// everything that WRITES - which is also what makes the host structurally
-// incapable of writing: it imports a module with no writer in it.
-//
-// `classifyPath` and `errorCode` come back across that boundary because the
-// write paths below use them too, and a symlink classifier duplicated between
-// the reader and the writer of one file is how the two stop agreeing about
-// what a symlink at the record path means.
+// The read side of this record moved to `@traycer/protocol/config`, so `traycer-host` can project it into `host.status` without importing this package (see `./record` for the full reasoning).
 import {
   classifyPath,
   errorCode,
   readUpdateAttemptRecordAtPath as readRecordAtPath,
 } from "@traycer/protocol/config/host-update-attempt-fs";
-// The writer's exact-byte round-trip runs its own output back through the
-// canonical decoder before the bytes are allowed anywhere near disk, so it
-// still needs the decoder itself - through `./decode`, which re-exports it.
+// The writer's exact-byte round-trip runs its own output back through the canonical decoder before the bytes are allowed anywhere near disk, so it still needs the decoder itself - through `./decode`, which re-exports it.
 import { decodeHostUpdateAttempt, type HostUpdateAttemptRead } from "./decode";
 import {
   acquireAttemptMutationLease,
@@ -58,49 +47,13 @@ import {
 } from "./transition";
 
 // Filesystem side of `update-attempt.json` (§1.4).
-//
-// ============================================================================
-// THERE IS NO RAW WRITE OR DELETE IN THIS MODULE'S PUBLIC SURFACE.
-// ============================================================================
-//
-// `writeRecordAtomic` and `removeRecordFile` below are module-private and
-// stay that way. The only public ways to change the canonical record are
-// `commitAttemptMutation` / `pruneTerminalAttemptRecord`; the direct-module
-// executor-only channel is separately restricted by the architecture gate.
-// Every path takes a lock handle this module's sibling issued and, before
-// touching anything:
-//
-//   1. verify the handle is genuine, unreleased, and STILL owns the lock
-//      token on disk;
-//   2. re-read canonical state from disk - never trusting the caller's copy;
-//   3. check the caller's expected attempt/generation/sequence against what
-//      was just read;
-//   4. require the new record to be strictly ordered after it.
-//
-// An exported raw write is not a smaller version of this - it is the whole
-// defect. A callback that closes over a record and runs after its segment
-// released the lock will happily overwrite generation N+1 with its cached
-// generation N, or delete a live attempt outright, and the identity checks in
-// `advanceAttempt` cannot see it because they only compare two objects the
-// caller supplied. The check has to happen at the point of the write, against
-// disk, under a proven-live claim.
-//
-// Reads stay total and lock-free: a status projection must be able to read
-// without contending, and must never be able to write.
+// ============================================================================ there IS NO raw write OR delete IN this module'S public surface.
 
-/** 0600. The record names an in-flight update; no other local account reads it. */
 const RECORD_MODE = 0o600;
 /** 0700 on creation only - `mkdir` mode never touches an existing directory. */
 const HOME_MODE = 0o700;
 
-// ---- The read side, re-exported ---------------------------------------------
-//
-// These are the SAME function objects the protocol module defines, not
-// wrappers around them. That matters for the three test seams: they toggle
-// module-private state (the Windows missing-flag override, the swap-at-open
-// hook), so a wrapper would give this package a second copy of that state and
-// a test setting it here would leave the real reader untouched - passing while
-// proving nothing.
+// ---- The read side, re-exported --------------------------------------------- These are the same function objects the protocol module defines, not wrappers around them.
 export {
   __sameRecordFileIdentityForTest,
   __setBeforeRecordOpenHookForTest,
@@ -111,12 +64,8 @@ export {
 export type { RegularFileNoFollowRead } from "@traycer/protocol/config/host-update-attempt-fs";
 
 /**
- * Raised only after a successful `rename`, when the parent-directory sync
- * that would make that rename survive a crash could not be completed for a
- * reason this platform does not positively classify as "unsupported".
- *
- * The bytes are very likely in place. What is missing is the guarantee, so
- * the caller must not begin a side effect on the strength of them.
+ * Raised only after a successful `rename`, when the parent-directory sync that would make that rename survive a crash could not be completed for a reason this platform does not positively classify as "unsupported".
+ * What is missing is the guarantee, so the caller must not begin a side effect on the strength of them.
  */
 export class AttemptRecordDurabilityError extends Error {
   readonly path: string;
@@ -132,10 +81,7 @@ export class AttemptRecordDurabilityError extends Error {
   }
 }
 
-// Mutation barriers are test-only scheduling seams. They are deliberately
-// immediately adjacent to the irreversible rename/unlink operations so the
-// release-overlap regression proves the capability lease, not merely a
-// preflight check.
+// Mutation barriers are test-only scheduling seams.
 let beforeRecordRenameHook: (() => Promise<void>) | null = null;
 let beforeRecordRemoveHook: (() => Promise<void>) | null = null;
 
@@ -167,9 +113,7 @@ async function writeRecordAtomic(
   const dir = dirname(recordPath);
   await mkdir(dir, { recursive: true, mode: HOME_MODE });
 
-  // `rename` does not follow a destination symlink, so the write itself is
-  // safe either way. Refusing is still right: a link at this path is an
-  // anomaly worth surfacing, not something to silently overwrite.
+  // `rename` does not follow a destination symlink, so the write itself is safe either way.
   const existing = await classifyPath(recordPath);
   if (existing.kind === "symlink")
     return { kind: "refused", reason: "symlink" };
@@ -177,11 +121,8 @@ async function writeRecordAtomic(
     return { kind: "refused", reason: "not-a-regular-file" };
   }
 
-  // Same-directory unique temp created with `wx` (so a pre-planted temp path
-  // can never be followed or clobbered) at 0600 -> write -> fsync the file ->
-  // rename. The file sync is what makes the rename meaningful: without it the
-  // rename can be durable while the bytes it points at are not, which is
-  // precisely the torn record §1.4 requires to fail closed.
+  // Same-directory unique temp created with `wx` (so a pre-planted temp path can never be followed or clobbered) at 0600 -> write -> fsync the file -> rename.
+  // The file sync is what makes the rename meaningful: without it the rename can be durable while the bytes it points at are not, which is precisely the torn record §1.4 requires to fail closed.
   const tmp = `${recordPath}.${randomUUID()}.tmp`;
   try {
     const handle = await open(tmp, "wx", RECORD_MODE);
@@ -201,26 +142,16 @@ async function writeRecordAtomic(
   return { kind: "written" };
 }
 
-// Directory-sync error codes that positively mean "this platform or
-// filesystem does not support fsync on a directory" - the only cases it is
-// honest to ignore.
-//
-// Everything else - EIO above all - is a REAL durability failure and is
-// propagated. Swallowing it reported a durable claim on a rename whose
-// directory entry a crash can still lose, resurrecting the previous attempt
-// underneath a caller that has already started downloading.
+// Directory-sync error codes that positively mean "this platform or filesystem does not support fsync on a directory" - the only cases it is honest to ignore.
+// Swallowing it reported a durable claim on a rename whose directory entry a crash can still lose, resurrecting the previous attempt underneath a caller that has already started downloading.
 const UNSUPPORTED_DIR_FSYNC_CODES: ReadonlySet<string> = new Set([
   "EINVAL",
   "ENOTSUP",
   "EOPNOTSUPP",
 ]);
 
-// Test seam: replaces the real directory open+fsync. A genuine EIO on a
-// directory cannot be provoked from a test, and the behaviour that matters -
-// which failures are ignorable and which must surface as
-// `durability-unverified` - is exactly the part worth proving. The hook
-// throws an errno-shaped error and the real classification below runs on it
-// unchanged. Never set in production.
+// Test seam: replaces the real directory open+fsync.
+// A genuine eio on a directory cannot be provoked from a test, and the behaviour that matters - which failures are ignorable and which must surface as `durability-unverified` - is exactly the part worth proving.
 type DirectorySyncStage = "open" | "sync";
 
 let directorySyncHook:
@@ -241,9 +172,7 @@ async function syncDirectory(dir: string, recordPath: string): Promise<void> {
     try {
       await directorySyncHook(dir, "open");
     } catch (err) {
-      // A directory OPEN failure (including EACCES/EPERM) cannot establish
-      // anything about fsync support. The rename has happened but is not
-      // durably verified.
+      // A directory open failure (including eacces/eperm) cannot establish anything about fsync support.
       throw new AttemptRecordDurabilityError(
         recordPath,
         errorCode(err) ?? String(err),
@@ -290,15 +219,11 @@ async function removeRecordFile(recordPath: string): Promise<boolean> {
   }
 }
 
-// ---- Canonical, intent-bound mutation --------------------------------------
+ // ---- Canonical, intent-bound mutation --------------------------------------
 
 /**
- * The only legal mutations of the canonical record. The caller supplies an
- * intent, never a next record: under the handle lease this module re-reads
- * the canonical bytes and asks the pure transition algebra to derive the
- * exact output. That makes an A -> B replacement, a counter jump, and a
- * trigger/target rewrite structurally unrepresentable at the persistence
- * boundary.
+ * The only legal mutations of the canonical record.
+ * The caller supplies an intent, never a next record: under the handle lease this module re-reads the canonical bytes and asks the pure transition algebra to derive the exact output.
  */
 export type AttemptMutationIntent =
   | { readonly kind: "create"; readonly request: AttemptClaimRequest }
@@ -307,9 +232,8 @@ export type AttemptMutationIntent =
       readonly kind: "supersede";
       readonly request: AttemptClaimRequest;
       /**
-       * Present only when recovery decided a target change applies. The
-       * resulting terminal write still travels through this one canonical
-       * supersede intent and its shared transition primitive.
+       * Present only when recovery decided a target change applies.
+       * The resulting terminal write still travels through this one canonical supersede intent and its shared transition primitive.
        */
       readonly recovery?: AttemptRecoveryRequest;
     }
@@ -320,11 +244,10 @@ export type AttemptMutationIntent =
     }
   | { readonly kind: "recover"; readonly recovery: AttemptRecoveryRequest };
 
-/**
- * Intent surface available to ordinary holders of a public attempt lock.
- * Recovery is deliberately excluded: its evidence is only meaningful after
- * the executor has observed it under its inner CLI lock.
- */
+  /**
+   * Intent surface available to ordinary holders of a public attempt lock.
+   * Recovery is deliberately excluded: its evidence is only meaningful after the executor has observed it under its inner CLI lock.
+   */
 type AdvanceMutationIntent = Extract<
   AttemptMutationIntent,
   { readonly kind: "advance" }
@@ -366,10 +289,8 @@ export type AttemptMutationRejection =
   | "lock-indeterminate"
   | "record-path-refused"
   | "record-fail-closed"
-  // The TypeScript surface is not a trust boundary. A JS/plugin caller can
-  // still hand us an empty id, an invented action, or an object whose JSON
-  // view differs from the values the transition evaluated. Those inputs are
-  // refused before they can reach the temp file.
+  // The TypeScript surface is not a trust boundary.
+  // Those inputs are refused before they can reach the temp file.
   | "intent-invalid"
   | "intent-not-legal";
 
@@ -396,9 +317,8 @@ export interface CommitAttemptMutationOptions {
 }
 
 /**
- * Direct-module-only recovery channel. It is intentionally absent from the
- * host-update barrel; the contender boundary admits only the executor-owned
- * CLI recovery bridge to this operation.
+ * Direct-module-only recovery channel.
+ * It is intentionally absent from the host-update barrel; the contender boundary admits only the executor-owned CLI recovery bridge to this operation.
  */
 export interface CommitExecutorOnlyAttemptMutationOptions {
   readonly handle: UpdateAttemptLockHandle;
@@ -446,10 +366,7 @@ function nullableFiniteNumber(value: unknown): number | null | "invalid" {
     : "invalid";
 }
 
-// Caller objects are not written directly. Apart from avoiding a caller's
-// `toJSON`, this gives the transition a one-time primitive snapshot: a Proxy
-// that changes its shape during serialization cannot make the committed
-// bytes differ from the decision that authorized them.
+// Caller objects are not written directly.
 function isSerializableInputObject(
   value: unknown,
 ): value is Record<string, unknown> {
@@ -461,10 +378,8 @@ function isSerializableInputObject(
   );
 }
 
-// Read a descriptor, not `source[key]`: accessors are executable caller
-// code and a Proxy can return a different value on its later serialization
-// access. A descriptor snapshot gives the writer an owned primitive value or
-// rejects the input before any disk mutation.
+// Read a descriptor, not `source[key]`: accessors are executable caller code and a Proxy can return a different value on its later serialization access.
+// A descriptor snapshot gives the writer an owned primitive value or rejects the input before any disk mutation.
 function dataProperty(
   source: Record<string, unknown>,
   key: string,
@@ -660,10 +575,8 @@ function normalizeRecoveryRequest(
 }
 
 function normalizeMutationIntent(value: unknown): AttemptMutationIntent | null {
-  // A plugin can hand this public boundary a Proxy whose `has`/`get` trap
-  // throws. That is malformed input, not a reason for the writer to throw
-  // halfway through an authority check. All source-object inspection stays
-  // inside this catch; the returned intent contains only copied primitives.
+  // A plugin can hand this public boundary a Proxy whose `has`/`get` trap throws.
+  // That is malformed input, not a reason for the writer to throw halfway through an authority check.
   try {
     return normalizeMutationIntentUnchecked(value);
   } catch {
@@ -742,9 +655,7 @@ function sameRecovery(
   );
 }
 
-// Do not reduce this to a JSON-string comparison. We need to compare the
-// transition's semantic value to the decoder's canonical value, not merely
-// prove that a second serializer happens to emit the same representation.
+// Do not reduce this to a JSON-string comparison.
 function sameRecord(
   a: HostUpdateAttemptRecord,
   b: HostUpdateAttemptRecord,
@@ -788,18 +699,14 @@ function encodeValidatedRecord(
 }
 
 /**
- * Commit one transition-derived record to the handle's canonical
- * `update-attempt.json`. A parked-target change remains deliberately two
- * writes: commit `supersede`, then make a separate `create` claim over the
- * terminal evidence. A crash between them therefore cannot erase the old
- * target's durable outcome.
+ * Commit one transition-derived record to the handle's canonical `update-attempt.json`.
+ * A parked-target change remains deliberately two writes: commit `supersede`, then make a separate `create` claim over the terminal evidence.
  */
 export async function commitAttemptMutation(
   options: CommitAttemptMutationOptions,
 ): Promise<AttemptCommitOutcome> {
-  // Types disappear at the JavaScript boundary. Reject a structural recovery
-  // object here too, so public-barrel callers cannot bypass the recovery
-  // evidence owner with `as` casts, plugins, or plain JavaScript.
+  // Types disappear at the JavaScript boundary.
+  // Reject a structural recovery object here too, so public-barrel callers cannot bypass the recovery evidence owner with `as` casts, plugins, or plain JavaScript.
   const normalized = normalizeMutationIntent(options.intent);
   if (normalized === null) return rejectedWithoutRead("intent-invalid");
   if (isExecutorOnlyMutationIntent(normalized)) {
@@ -811,12 +718,7 @@ export async function commitAttemptMutation(
   });
 }
 
-/**
- * Direct-module executor-only mutation channel. Its importer boundary is
- * enforced by the contender architecture gate, while the executor facade
- * supplies the live capability and evidence ownership for recoveries,
- * recovery-derived supersedes, and exact terminal completion.
- */
+/** Direct-module executor-only mutation channel. */
 export async function commitExecutorOnlyAttemptMutation(
   options: CommitExecutorOnlyAttemptMutationOptions,
 ): Promise<AttemptCommitOutcome> {
@@ -856,18 +758,14 @@ async function commitAttemptMutationInternal(options: {
     if (next === null) {
       return { kind: "rejected", reason: "intent-not-legal", canonical };
     }
-    // Serialize once, then make the decoder validate THOSE exact bytes before
-    // the rename. The bytes subsequently fsynced and renamed are therefore
-    // exactly the record the transition authorized, not a second invocation
-    // of a caller-controlled serializer.
+    // Serialize once, then make the decoder validate those exact bytes before the rename.
+    // The bytes subsequently fsynced and renamed are therefore exactly the record the transition authorized, not a second invocation of a caller-controlled serializer.
     const encoded = encodeValidatedRecord(next);
     if (encoded === null) {
       return { kind: "rejected", reason: "intent-invalid", canonical };
     }
 
-    // The lease prevents our release from removing this lock after this check
-    // but before rename. A stale-break by another process is still detected
-    // here by token ownership, so both independent authority failures close.
+    // The lease prevents our release from removing this lock after this check but before rename.
     const postOwnership = await ownershipRejection(options.handle);
     if (postOwnership !== null) {
       return { kind: "rejected", reason: postOwnership, canonical };
@@ -884,12 +782,7 @@ async function commitAttemptMutationInternal(options: {
           canonical: await readRecordAtPath(lease.recordPath),
         };
       }
-      // Every other throw out of `writeRecordAtomic` (mkdir, temp open/write/
-      // fsync, the rename itself) happened BEFORE a durable rename could
-      // land, so the canonical record is unchanged — but the callers of
-      // `deps.commit` await an outcome and switch on `kind`; a raw rejection
-      // here would bypass their activation-result handling entirely. Fold it
-      // into the same conservative arm: do not proceed, evidence attached.
+      // Fold it into the same conservative arm: do not proceed, evidence attached.
       return {
         kind: "durability-unverified",
         cause: `record-write-failed:${errorCode(err) ?? String(err)}`,
@@ -901,10 +794,8 @@ async function commitAttemptMutationInternal(options: {
     }
     const reread = await readRecordAtPath(lease.recordPath);
     if (reread.kind !== "valid" || !sameRecord(encoded.record, reread.value)) {
-      // The rename completed, but returning success would authorize a caller
-      // to act on a record we cannot positively prove is the exact canonical
-      // value just validated. This is the same operational posture as an
-      // unverifiable directory sync: preserve the evidence, do not proceed.
+      // The rename completed, but returning success would authorize a caller to act on a record we cannot positively prove is the exact canonical value just validated.
+      // This is the same operational posture as an unverifiable directory sync: preserve the evidence, do not proceed.
       return {
         kind: "durability-unverified",
         cause: "post-write-roundtrip-mismatch",
@@ -1005,10 +896,8 @@ function recomputeIntent(
     const decision = decideAttemptRecovery({
       current: canonical.value,
       request: intent.recovery,
-      // The handle was freshly ownership-checked immediately before this
-      // canonical read. `acquireUpdateAttemptLock` grants it only after a
-      // positive no-live-holder outcome; an indeterminate prior holder never
-      // reaches this mutation path.
+      // The handle was freshly ownership-checked immediately before this canonical read.
+      // `acquireUpdateAttemptLock` grants it only after a positive no-live-holder outcome; an indeterminate prior holder never reaches this mutation path.
       holder: { kind: "recovery-lock-held" },
     });
     return decision.kind === "refuse" || decision.kind === "supersede"

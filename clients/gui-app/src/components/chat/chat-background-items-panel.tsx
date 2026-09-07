@@ -146,10 +146,8 @@ function itemScheduledFor(item: BackgroundItem): number | null {
   return item.kind === "wakeup" ? item.scheduledFor : null;
 }
 
-// The workflow row's aggregate story - current phase, the most recently
-// active fleet-agent label, and finished/started counts - matching what the
-// transcript's workflow card shows in its own live line (Flow 2). Any piece
-// the host hasn't populated yet is omitted rather than shown as a placeholder.
+// The workflow row's aggregate story - current phase, the most recently active fleet-agent label, and finished/started counts - matching what the transcript's workflow card shows in its own live line (Flow 2).
+// Any piece the host hasn't populated yet is omitted rather than shown as a placeholder.
 function workflowRowSummary(
   item: Extract<BackgroundItem, { kind: "workflow" }>,
 ): string | null {
@@ -207,12 +205,7 @@ function backgroundItemDisplayTitle(item: BackgroundItem): string {
   return item.title;
 }
 
-/**
- * The disabled-stop tooltip for a command whose provider build has no
- * per-command stop lever. Built entirely from the wire data (provider label +
- * version floor) so this file never learns a provider version - see the
- * `individualStopUnavailable` field's protocol doc.
- */
+/** The disabled-stop tooltip for a command whose provider build has no per-command stop lever. Built entirely from the wire data (provider label + version floor) so this file never learns a provider version - see the `individualStopUnavailable` field's protocol doc. */
 function individualStopUnavailableLabel(item: BackgroundItem): string | null {
   if (item.kind !== "command" || item.individualStopUnavailable === null) {
     return null;
@@ -261,10 +254,8 @@ function BackgroundStopButton(props: {
   );
 }
 
-// Collapse the host list to one row per task id. The host broadcasts a
-// running-only list and removes an item atomically at its terminal, so this is
-// a defensive guard: a transient duplicate (same `taskId`) must not render two
-// rows with the same React key or two stop affordances for one task.
+// Collapse the host list to one row per task id.
+// The host broadcasts a running-only list and removes an item atomically at its terminal, so this is a defensive guard: a transient duplicate (same `taskId`) must not render two rows with the same React key or two stop affordances for one task.
 function dedupeByTaskId(
   items: ReadonlyArray<BackgroundItem>,
 ): ReadonlyArray<BackgroundItem> {
@@ -402,23 +393,7 @@ function treeHasRunningTask(node: BackgroundTreeNode): boolean {
   return node.children.some((child) => treeHasRunningTask(child));
 }
 
-/**
- * What "Background" actually holds, counted the way the rows below render.
- * Managed commands join the running total rather than standing apart: "Stop
- * all" reaches them, and the rows below say which is which.
- *
- * Held shells get their own part instead of joining that total, and NOT because
- * nothing is running - a shell can be held and still running. It is because the
- * panel renders such a shell ONCE, as held, so counting it as running would
- * name a row that is not on screen. Every number here counts a group of rows a
- * person can see, which is the only version of this summary that stays true
- * however the two sets overlap.
- *
- * That does leave the running total narrower than "Stop all"'s reach, which
- * still covers every running shell including a held one. A superset is the safe
- * direction: the button never leaves a process alive that the header implied it
- * would stop.
- */
+/** It is because the panel renders such a shell ONCE, as held, so counting it as running would name a row that is not on screen. A superset is the safe direction: the button never leaves a process alive that the header implied it would stop. */
 function backgroundHeaderSummary(input: {
   readonly runningCount: number;
   readonly heldCount: number;
@@ -437,31 +412,7 @@ function backgroundHeaderSummary(input: {
   return parts.length === 0 ? "0 running" : parts.join(" · ");
 }
 
-/**
- * One shell whose last output a committed Stop fence is holding back.
- *
- * Rendered without the running rows' drag handle or elapsed timer: what this
- * row is about is a hold, not a process making progress, and a live timer
- * beside the word "Held" reads as a contradiction. What it has instead is a
- * door onto the output, so a person can see what is being held before
- * deciding to take it.
- *
- * The hold clears on its own the next time the chat wakes (any message or
- * resume), or when the shell prints again; Deliver is the way to hand it over
- * NOW, without sending anything. The tooltip says so, because "Held" alone
- * told nobody what would happen next.
- *
- * It carries the stop slot anyway, because held does NOT imply finished. The
- * host filters holds by nothing, and a running shell keeps its hold until it
- * next prints - so a watcher that went quiet before a Stop is held and alive at
- * once. That is also why the glyph follows the LIVE state: a held shell that
- * is still running shows the same monitor/play glyph as a running row, and
- * only a shell that has actually stopped shows the pause glyph. This row is
- * the only place that shell appears, so dropping the stop here would be the
- * panel's one lost capability. `ManagedCommandStopAction` self-gates on the
- * live status, so a genuinely finished shell renders no button and the common
- * case is unchanged.
- */
+/** Rendered without the running rows' drag handle or elapsed timer: what this row is about is a hold, not a process making progress, and a live timer beside the word "Held" reads as a contradiction. It carries the stop slot anyway, because held does NOT imply finished. */
 function HeldManagedCommandRow(props: {
   readonly held: HeldManagedCommandUpdate;
   /** The live record when this shell is ALSO still running; null otherwise. */
@@ -528,32 +479,7 @@ function HeldManagedCommandRow(props: {
   );
 }
 
-/**
- * A running shell as an ordinary row of this list, in the same grammar as a
- * harness background row beside it - glyph, title, live elapsed, hover stop.
- * To a human these are the same thing: work running behind the chat. The radar
- * / play glyphs are what keep a host-supervised shell apart from the harness's
- * own "Monitor" kind - more so now that a watching shell's title says Monitor
- * too, since no copy tells those two apart.
- *
- * The pill slot stays EMPTY on a shell row. A harness row spends it on a kind
- * because its rows differ in kind; a shell row's one distinguishing state -
- * the monitor flag - is carried by the title's own noun ("Monitor · deploy
- * watcher" vs "Shell · db migration"), so a pill saying it again would be a
- * second fact and is none. The noun and the glyph both swap live under a row
- * that stays put, which is how the flag flipping reads as news.
- *
- * Stop and nothing else. This is a "running right now" surface, so a row here
- * is a passing status rather than a durable object; deleting a shell - which
- * destroys its whole output history - belongs to the output window, where
- * the shell itself is the subject.
- *
- * The row drags out onto the canvas, on the same payload the transcript
- * cards' doors use, so the canvas needs to know nothing about where the gesture
- * started. Clicking still opens the window wherever the door puts it; dragging
- * is how a person says WHERE, and having to find the same shell in a second
- * menu to place it deliberately was the only reason to go there.
- */
+/** A harness row spends it on a kind because its rows differ in kind; a shell row's one distinguishing state - the monitor flag - is carried by the title's own noun ("Monitor · deploy watcher" vs "Shell · db migration"), so a pill saying it again would be a second fact and is none. This is a "running right now" surface, so a row here is a passing status rather than a durable object; deleting a shell - which destroys its whole output history - belongs to the output window, where the shell itself is the subject. */
 function ManagedCommandRow(props: {
   readonly command: ManagedCommand;
   readonly epicId: string;
@@ -577,10 +503,8 @@ function ManagedCommandRow(props: {
     }),
     [epicId, viewTabId, tile],
   );
-  // The same chat can be open in two tiles of one view, so the command id alone
-  // would register duplicate draggables and let a gesture bind to the other
-  // copy's node. The occurrence key keeps ids unique per mounted row; the drop
-  // reads the payload, never the id.
+  // The same chat can be open in two tiles of one view, so the command id alone would register duplicate draggables and let a gesture bind to the other copy's node.
+  // The occurrence key keeps ids unique per mounted row; the drop reads the payload, never the id.
   const occurrenceId = useId();
   const dragDisabled = useDragSourceDisabled();
   const { listeners, setNodeRef, isDragging } = useDraggable({
@@ -802,28 +726,19 @@ export function BackgroundItemsPanel(props: {
   const [open, setOpen] = useState(false);
   const [committedRememberedByTaskId, setCommittedRememberedByTaskId] =
     useState<ReadonlyMap<string, RememberedBackgroundNode>>(() => new Map());
-  // A harness background item is stopped over the chat's own stream, so it
-  // needs that stream open. A managed command is stopped by an RPC to its
-  // host, which a reconnecting chat has no bearing on - gating it on `canAct`
-  // too left a reconnecting chat with no way to stop a runaway shell.
+  // A harness background item is stopped over the chat's own stream, so it needs that stream open.
+  // A managed command is stopped by an RPC to its host, which a reconnecting chat has no bearing on - gating it on `canAct` too left a reconnecting chat with no way to stop a runaway shell.
   const stoppable = props.canAct && !props.readOnly;
   const managedStoppable = !props.readOnly;
-  // Deliver takes `managedStoppable`'s rule and not `stoppable`'s, for the
-  // reason written above it: it is an RPC to the shell's own host, so a
-  // reconnecting chat stream has no bearing on it. A viewer is a different
-  // matter - the host refuses their Deliver, so offering it could only ever
-  // produce an error toast.
+  // Deliver takes `managedStoppable`'s rule and not `stoppable`'s, for the reason written above it: it is an RPC to the shell's own host, so a reconnecting chat stream has no bearing on it.
+  // A viewer is a different matter - the host refuses their Deliver, so offering it could only ever produce an error toast.
   const managedDeliverable = !props.readOnly;
   const items = useMemo(() => dedupeByTaskId(props.items), [props.items]);
   const rememberedByTaskId = useMemo(
     () => buildRememberedBackgroundNodes(items, committedRememberedByTaskId),
     [items, committedRememberedByTaskId],
   );
-  // Adjust state during render (React-endorsed pattern for "remember the
-  // latest derived value once inputs settle") instead of an effect: an
-  // effect-based setState here would cascade an extra commit/paint on every
-  // items change, whereas this conditional update resolves within the same
-  // render pass before anything is painted.
+  // Adjust state during render (React-endorsed pattern for "remember the latest derived value once inputs settle") instead of an effect: an effect-based setState here would cascade an extra commit/paint on every items change, whereas this conditional update resolves within the same render pass before anything is painted.
   const [previousItemsForRemembering, setPreviousItemsForRemembering] =
     useState<typeof items | null>(null);
   if (items !== previousItemsForRemembering) {
@@ -839,9 +754,8 @@ export function BackgroundItemsPanel(props: {
     (item) => item.kind === "wakeup",
   ).length;
   const hostId = useTabHostId();
-  // Read from the same store the rows below read, so the header can never
-  // claim a count the list does not show. Scoped to the TAB's bound host,
-  // which is the host this panel's chat session was opened under.
+  // Read from the same store the rows below read, so the header can never claim a count the list does not show.
+  // Scoped to the TAB's bound host, which is the host this panel's chat session was opened under.
   const managedCommands = useRunningManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,
@@ -852,15 +766,7 @@ export function BackgroundItemsPanel(props: {
     chatId: props.chatId,
     hostId,
   });
-  // The two lists OVERLAP, which is the one thing about them that is easy to
-  // get wrong. `managedCommands` is what is running now and a hold usually
-  // outlives the process, so most held shells are absent from it - but the host
-  // filters holds by no status at all, and a running shell keeps its hold until
-  // it next prints. A watcher that went quiet before the Stop is therefore in
-  // both, and rendering the lists whole put it on screen twice: a "Held" row
-  // and a live row with a running timer, over a header that said one shell was
-  // running. Held wins the row - it is the state a person has to act on, and
-  // the only one of the two that will never clear itself.
+  // Held wins the row - it is the state a person has to act on, and the only one of the two that will never clear itself.
   const heldCommandIds = useMemo(
     () => new Set(heldManagedCommands.map((held) => held.commandId)),
     [heldManagedCommands],
@@ -884,30 +790,14 @@ export function BackgroundItemsPanel(props: {
   );
   const openManagedCommand = useManagedCommandDoor();
   const stopAllManagedCommands = useManagedCommandStopAll(props.chatId);
-  // Cross-instance: the same chat can be open in two tiles, and each panel
-  // owns its own mutation observer - the shared read is what keeps the second
-  // tile's button dead while the first tile's batch runs.
+  // Cross-instance: the same chat can be open in two tiles, and each panel owns its own mutation observer - the shared read is what keeps the second tile's button dead while the first tile's batch runs.
   const stopAllManagedPending = useManagedCommandStopAllIsPending(props.chatId);
-  // "Stop all" means every row the panel is showing, and its two halves ride
-  // different channels: the harness half needs the chat stream open, the
-  // managed half is an RPC to the host that a reconnecting chat has no bearing
-  // on. Each half is offered and sent on its own capability - gating the
-  // button on the harness half alone left it dead during a reconnect, which is
-  // exactly when a runaway shell most needs the one-click stop.
-  //
-  // The managed half is the whole running set, NOT the subset rendered as
-  // running: a shell that is held and still running renders as a held row, and
-  // leaving it out here would be a "Stop all" that knowingly left a process
-  // alive. That is why the header's running total is a floor on this button's
-  // reach rather than an equality - see `backgroundHeaderSummary`.
+  // The managed half is the whole running set, NOT the subset rendered as running: a shell that is held and still running renders as a held row, and leaving it out here would be a "Stop all" that knowingly left a process alive.
+  // That is why the header's running total is a floor on this button's reach rather than an equality - see `backgroundHeaderSummary`.
   const harnessStopAllReady = stoppable && !props.stopAllPending;
   const managedStopAllReady =
     managedStoppable && managedCommands.length > 0 && !stopAllManagedPending;
-  // The version gate, read off the items themselves: any command the host
-  // flagged as not individually stoppable turns "Stop all" into the
-  // session-scoped escalation, which asks first - the click would otherwise
-  // do more than the label says (kill the provider session, and a live turn
-  // with it).
+  // The version gate, read off the items themselves: any command the host flagged as not individually stoppable turns "Stop all" into the session-scoped escalation, which asks first - the click would otherwise do more than the label says (kill the provider session, and a live turn with it).
   const sessionStopEscalation = useMemo(() => {
     for (const item of items) {
       if (item.kind === "command" && item.individualStopUnavailable !== null) {
@@ -917,9 +807,8 @@ export function BackgroundItemsPanel(props: {
     return null;
   }, [items]);
   const [confirmingSessionStop, setConfirmingSessionStop] = useState(false);
-  // One button, one rule: live while there is something it can do, dead while
-  // anything it started is still in flight. Re-enabling as soon as one half
-  // finished let a second press resubmit the finished half mid-flight.
+  // One button, one rule: live while there is something it can do, dead while anything it started is still in flight.
+  // Re-enabling as soon as one half finished let a second press resubmit the finished half mid-flight.
   const stopAllDisabled =
     (!harnessStopAllReady && !managedStopAllReady) ||
     props.stopAllPending ||
@@ -942,22 +831,14 @@ export function BackgroundItemsPanel(props: {
     stopAllManaged();
   };
   const confirmSessionStop = () => {
-    // The session kill covers every harness item (they share the provider
-    // process); the managed shells ride their own host RPC, exactly as a
-    // plain Stop all would send it. A null send means the stream can no
-    // longer act (disconnected, or access revoked after the dialog opened) -
-    // keep the dialog open and leave the managed shells alone rather than
-    // half-executing a confirmation that silently did nothing to the gated
-    // command.
+    // The session kill covers every harness item (they share the provider process); the managed shells ride their own host RPC, exactly as a plain Stop all would send it.
+    // A null send means the stream can no longer act (disconnected, or access revoked after the dialog opened) - keep the dialog open and leave the managed shells alone rather than half-executing a confirmation that silently did nothing to the gated command.
     if (props.onStopSession() === null) return;
     setConfirmingSessionStop(false);
     stopAllManaged();
   };
-  // Count every affected row, not just root tree groups - a parent command
-  // with running children would otherwise understate the dialog's blast
-  // radius. Wakeup rows are excluded: host-owned wakes survive a session
-  // stop (the handler never touches them), so counting them would be a
-  // false promise.
+  // Count every affected row, not just root tree groups - a parent command with running children would otherwise understate the dialog's blast radius.
+  // Wakeup rows are excluded: host-owned wakes survive a session stop (the handler never touches them), so counting them would be a false promise.
   const panelItemCount =
     items.filter((item) => item.kind !== "wakeup").length +
     managedCommands.length;
@@ -1017,10 +898,7 @@ export function BackgroundItemsPanel(props: {
                   disabled={!managedDeliverable || deliverHeldPending}
                   data-testid="background-deliver-held"
                   onClick={() => {
-                    // Null, not the rendered ids: Deliver means "everything you
-                    // are holding for me", and naming the ids this panel happens
-                    // to show would silently skip a hold installed between
-                    // render and click.
+                    // Null, not the rendered ids: Deliver means "everything you are holding for me", and naming the ids this panel happens to show would silently skip a hold installed between render and click.
                     deliverHeld.mutate({
                       hostId,
                       epicId: props.epicId,
@@ -1137,11 +1015,7 @@ function SessionStopConfirmDialog(props: {
   );
 }
 
-/**
- * The escalation dialog's body, assembled from wire data so the panel never
- * hardcodes a provider or version. Sentence order is the agreed copy: the
- * limitation, the blast radius, the turn (only when one is live).
- */
+/** The escalation dialog's body, assembled from wire data so the panel never hardcodes a provider or version. Sentence order is the agreed copy: the limitation, the blast radius, the turn (only when one is live). */
 function sessionStopDialogDescription(input: {
   readonly providerLabel: string;
   readonly itemCount: number;

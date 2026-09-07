@@ -1,13 +1,3 @@
-/**
- * End-to-end §6 legacy→file migration tests, driving the real
- * `FileTokenStore.migrateLegacyCredentials` against a real temp-dir credentials
- * file (real lock/WAL, real access-only probe + refresh helpers). `fetch` is the
- * only faked boundary: `/api/v3/user` answers the identity probe and
- * `/api/v3/auth/refresh` answers the spend, keyed on the request's bearer /
- * refresh token so a single handler drives every branch.
- *
- * Spec: credentials-file token-store tech plan §6.
- */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -496,7 +486,7 @@ describe("FileTokenStore.migrateLegacyCredentials (real fs + lock/WAL)", () => {
     });
 
     expect(outcome).toBe("fallback-file-validated");
-    // L's refresh token — whose owner cannot be verified — is never spent; F is
+    // L's refresh token  -  whose owner cannot be verified  -  is never spent; F is
     // rotated on its own token instead, so no foreign family lands under F's id.
     expect(spent).toEqual(["F-refresh"]);
     const onDisk = await readCredentialsFile(credentialsPath());

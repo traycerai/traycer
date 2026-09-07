@@ -20,10 +20,8 @@ export function providerDisplayName(providerId: ProviderId): string {
   return PROVIDER_DISPLAY_NAMES[providerId];
 }
 
-/**
- * "Shared by OpenCode, Traycer, OpenRouter" — the other providers on this
- * pack, excluding the row the user opened from (already on `sharedWithProviders`).
- */
+/** "Shared by OpenCode, Traycer, OpenRouter" - the other providers on this pack, excluding the row the user
+ * opened from (already on `sharedWithProviders`). */
 export function formatSharedWithProvidersLine(
   sharedWithProviders: readonly ProviderId[],
 ): string | null {
@@ -40,14 +38,8 @@ export type VersionDownloadEligibility =
   | { readonly allowed: true }
   | { readonly allowed: false; readonly reason: string };
 
-/**
- * Download is offered only for versions the host can still fetch and that are
- * not already on disk in a usable/downloading form. Yanked / below-floor /
- * host-ineligible / uncertified are never downloadable.
- *
- * Error rows share the Retry allow-list: non-retryable errors must not be
- * relabelled as an enabled Download (finding 1).
- */
+/** Yanked / below-floor / host-ineligible / uncertified are never downloadable. Error rows share the Retry
+ * allow-list: non-retryable errors must not be relabelled as an enabled Download (finding 1). */
 export function versionDownloadEligibility(
   version: ProviderPackVersion,
 ): VersionDownloadEligibility {
@@ -88,7 +80,7 @@ export function versionDownloadEligibility(
           reason: "Install failed permanently on this machine",
         };
       }
-      // quarantined / corrupt / unverified — still may re-fetch once cleared.
+      // quarantined / corrupt / unverified - still may re-fetch once cleared.
       return { allowed: true };
     case "absent":
       return { allowed: true };
@@ -105,11 +97,7 @@ export function versionDownloadEligibility(
   }
 }
 
-/**
- * Whether the row should show any install-fetch button (Download or Retry).
- * Single composition point so the panel cannot re-offer a forbidden retry as
- * Download.
- */
+/** Single composition point so the panel cannot re-offer a forbidden retry as Download. */
 export function versionShowsInstallFetchAction(
   version: ProviderPackVersion,
 ): boolean {
@@ -139,13 +127,8 @@ export type VersionUseEligibility =
   | { readonly allowed: true }
   | { readonly allowed: false; readonly reason: string };
 
-/**
- * Use is disabled for the current version, for rows not installed yet, and
- * for the signed positive refusals (`below-security-floor` /
- * `host-ineligible`). Nothing else gates it — a below-baseline version that
- * certifies eligible is selectable (D1 as revised 2026-08-12), and yanked /
- * uncertified installed copies remain selectable under D8.
- */
+/** Nothing else gates it - a below-baseline version that certifies eligible is selectable, and yanked /
+ * uncertified installed copies remain selectable under. */
 export function versionUseEligibility(
   version: ProviderPackVersion,
 ): VersionUseEligibility {
@@ -171,17 +154,8 @@ export type VersionDeleteEligibility =
   | { readonly allowed: true }
   | { readonly allowed: false; readonly reason: string };
 
-/**
- * Delete is never offered for the current version ("switch first"), for a
- * version with nothing on disk, or for a quarantined one.
- *
- * The quarantine arm mirrors a positive host rule rather than guessing: the
- * remove RPC reserves a quarantined directory as evidence of a failed
- * verification and answers `quarantine-reserved`. Offering the button anyway
- * means offering an action solely to refuse it, and the row already has a
- * better place to say why. The host stays the authority - a stale client can
- * still ask, and still gets the typed refusal.
- */
+/** Delete is never offered for the current version ("switch first"), for a version with nothing on disk, or for
+ * a quarantined one. */
 export function versionDeleteEligibility(
   version: ProviderPackVersion,
 ): VersionDeleteEligibility {
@@ -208,21 +182,7 @@ export function versionDeleteEligibility(
   return { allowed: true };
 }
 
-/**
- * Whether the row shows a Delete control at all — enabled, or disabled with a
- * reason.
- *
- * The test is "does this version have bytes on disk", which is exactly when
- * asking to delete it is a meaningful request. A row with nothing on disk gets
- * no control: there is nothing to remove and nothing to explain. A row that HAS
- * bytes but may not drop them — the current version, a quarantined copy — gets
- * a disabled one carrying {@link versionDeleteEligibility}'s reason.
- *
- * The panel used to hardcode the `current` arm beside `del.allowed` and had no
- * arm for anything else, so the quarantine sentence this module computes was
- * unreachable: a quarantined row rendered no Delete and no reason, which is the
- * one state where "why can't I remove this?" actually needs answering.
- */
+/** Whether the row shows a Delete control at all - enabled, or disabled with a reason. */
 export function versionShowsDeleteAction(
   version: ProviderPackVersion,
 ): boolean {
@@ -232,49 +192,15 @@ export function versionShowsDeleteAction(
   );
 }
 
-/**
- * The ONE chip a version row may wear, or none.
- *
- * The row used to stack up to three (`Recommended` + `Current` + a
- * certification badge) beside a meta line that repeated two of them, so the
- * list read as a wall of labels rather than a list of versions. One chip, by
- * priority; everything else was moved to the row's hover card, and then
- * deleted with it.
- *
- * `uncertified` has come BACK, quietly. It was dropped on the argument that
- * "no longer published" is informational — the copy stays installed and stays
- * usable — and that it was the loudest thing on an otherwise healthy row. The
- * first half of that was wrong: it is the only state on this surface that
- * decides whether DELETING a version can be undone, because an unpublished
- * one cannot be fetched again. That is worth a chip on a row whose delete
- * button is one click from armed. The second half was right, and is answered
- * by TONE rather than by silence — `unpublished` is the one chip that renders
- * muted (see `chipVariant`), so it reads as a footnote and not as damage.
- *
- * Priority is by consequence: what you are RUNNING, then what you cannot use,
- * then what you cannot get back, then what we merely suggest. `uncertified`
- * therefore outranks `recommended` — a version can be both, and of the two
- * only one of them changes what happens when you press delete.
- *
- * On a `current` row the chip is `Current` and the unpublished state goes
- * unsaid. That costs nothing: delete is disabled for the current version, so
- * the reversibility the chip exists to warn about is not in question there.
- */
+/** The first half of that was wrong: it is the only state on this surface that decides whether deleting a
+ * version can be undone, because an unpublished one cannot be fetched again. */
 export type VersionRowChip = {
   readonly label: string;
   readonly tone: "current" | "blocked" | "unpublished" | "recommended";
 };
 
-/**
- * Whether the signed certification BLOCKS this version, as opposed to merely
- * annotating it.
- *
- * One predicate, two consumers: the row's blocked chip and the row's dimming.
- * They were two copies of the same three-member test, so a fourth blocking
- * certification would have given a row its chip and not its dimming, or the
- * reverse. `uncertified` is deliberately not a member - an installed copy the
- * channel stopped listing stays usable (D8).
- */
+/** They were two copies of the same three-member test, so a fourth blocking certification would have given a
+ * row its chip and not its dimming, or the reverse. */
 export function isBlockingCertification(
   certification: ProviderPackVersionCertification,
 ): boolean {
@@ -294,10 +220,8 @@ export function versionRowChip(
     if (label !== null) return { label, tone: "blocked" };
   }
   if (version.certification === "uncertified") {
-    // Shorter than `certificationBadgeLabel`'s "No longer published": a chip
-    // sits inline beside the version it annotates, where three words crowd the
-    // number. The longer sentence is still what the WITHDRAWN family says,
-    // because those are refusals and deserve the room.
+    // The longer sentence is still what the withdrawn family says, because those are refusals and deserve the
+    // room.
     return { label: "Unpublished", tone: "unpublished" };
   }
   if (version.recommended) return { label: "Recommended", tone: "recommended" };
@@ -332,7 +256,7 @@ export function unusableReasonLabel(
     case "corrupt":
       return "Installed copy is corrupt";
     case "unverified":
-      // Indeterminate — must not read as damage.
+      // Indeterminate - must not read as damage.
       return "Could not verify this install (not necessarily damaged)";
   }
 }
@@ -360,40 +284,8 @@ export function installErrorReasonLabel(
   }
 }
 
-/**
- * The one sentence a row owes about its OWN health, or null when it is fine.
- *
- * This exists because deleting the hover card deleted the only place a broken
- * row said what was wrong with it. That was fine for the card's other content
- * — `Installed`, the size, `pairs with this Traycer release` all restated
- * things the row already showed — but NOT for these two states, which nothing
- * else on the row can express:
- *
- *  - a `condemned` install offers no Download (correctly — it cannot be
- *    repaired) and no Use, so without a sentence it is a version with a delete
- *    button and no explanation of why it has nothing else;
- *  - an `error` row offers `Retry` only when the reason is retryable, so the
- *    non-retryable half is silent for the same reason;
- *  - an `unverified` install offers Download instead of Use, which without a
- *    sentence just looks like an installed version whose Use button is missing.
- *
- * Healthy rows return null and stay a number, a chip and their controls — the
- * point of the redesign. Trouble is the exception that earns a line, and it
- * earns an INLINE one rather than a hover card, because a state you have to go
- * hunting for is a state most people never learn about.
- *
- * `quarantined` is deliberately included even though its bytes are intact: the
- * disabled Delete's tooltip says the same thing, and a tooltip is not where a
- * row should first admit it is being held.
- *
- * The CURRENT row is the one other place a blocking fact has nowhere to go.
- * `versionRowChip` gives `Current` the chip slot unconditionally — the version
- * in use has to be identifiable before anything else — so a current version
- * that is later withdrawn, dropped below the security floor, or outgrown by
- * this Traycer release shows `Current`, dims, and says nothing. The hover card
- * used to carry that sentence; this line does now. Non-current blocked rows
- * already wear the certification as their chip, so they get no second copy.
- */
+/** That was fine for the card's other content - `Installed`, the size, `pairs with this Traycer release` all
+ * restated things the row already showed. */
 export function versionTroubleLine(
   version: ProviderPackVersion,
 ): string | null {
@@ -401,9 +293,8 @@ export function versionTroubleLine(
     return unusableReasonLabel(version.installState.reason);
   }
   if (version.installState.status === "error") {
-    // The typed reason ONLY. `installState.message` is documented as the
-    // underlying operator-facing detail and can carry raw filesystem or
-    // network text; it must never reach this surface.
+    // `installState.message` is documented as the underlying operator-facing detail and can carry raw filesystem
+    // or network text; it must never reach this surface.
     return installErrorReasonLabel(version.installState.reason);
   }
   if (version.current && isBlockingCertification(version.certification)) {
@@ -419,7 +310,7 @@ export function certificationMetaLine(
     case "yanked":
       return "Withdrawn by publisher";
     case "uncertified":
-      // Do not claim "still usable" — install-state is a separate axis (finding 7).
+      // Do not claim "still usable" - install-state is a separate axis (finding 7).
       return "No longer published · remains on disk";
     case "below-security-floor":
       return "Below the publisher's security minimum";
@@ -430,14 +321,8 @@ export function certificationMetaLine(
   }
 }
 
-/**
- * Error reasons the version-manager Retry button may fire for. Allow-list.
- *
- * Typed on the protocol union rather than `string`: a `ReadonlySet<string>`
- * accepts a member the wire no longer has, and the miss is silent - the button
- * simply stops appearing for a reason it should serve. The union makes a
- * renamed or removed reason a compile error here.
- */
+/** Typed on the protocol union rather than `string`: a `ReadonlySet<string>` accepts a member the wire no
+ * longer has, and the miss is silent - the button simply stops appearing for a reason it should serve. */
 const VERSION_MANAGER_RETRYABLE_ERROR_REASONS: ReadonlySet<ProviderManagedInstallErrorReason> =
   new Set<ProviderManagedInstallErrorReason>([
     "disk-full",
@@ -468,16 +353,13 @@ export function removeResultUserMessage(
     case "quarantine-reserved":
       return result.detail ?? "Held by quarantine after a failed verification";
     case "deferred-locked":
-      // Not a failure — queued for boot GC.
+      // Not a failure - queued for boot GC.
       return result.detail ?? "Removes when no longer in use";
   }
 }
 
-/**
- * Primary user copy for a typed install-pack-version refusal.
- * Exhaustive over the protocol enum — hard policy must not read as "try again
- * later." `detail` is operator-facing only; never the primary sentence.
- */
+/** Exhaustive over the protocol enum - hard policy must not read as "try again later." `detail` is
+ * operator-facing only; never the primary sentence. */
 export function installPackVersionRefusalMessage(
   code: Extract<ProvidersInstallPackVersionResult, { ok: false }>["code"],
 ): string {
@@ -497,13 +379,7 @@ export function installPackVersionRefusalMessage(
   }
 }
 
-/**
- * Primary user copy for a typed use-pack-version (Use / pin) refusal.
- * Exhaustive over the protocol enum. Hard policy codes must not invite retry
- * or say "withdrawn" (yanked/uncertified installed copies remain selectable
- * under D8 — these two refusals are signed positive ineligibility only).
- * `detail` is operator-facing only.
- */
+/** Hard policy codes must not invite retry or say "withdrawn". */
 export function packVersionUseRefusalMessage(
   code: Extract<ProvidersUsePackVersionResult, { ok: false }>["code"],
 ): string {
@@ -523,34 +399,8 @@ export type PackDiscoveryCheckNotice = {
   readonly message: string;
 };
 
-/**
- * What the footer says about a completed check, from the wire outcome.
- *
- * `moved` is deliberately NEUTRAL. It means this host's target knowledge
- * changed, which the host also reports for the first population of a
- * never-derived pack and for a sibling host's pin move on a head identical to
- * the one already running - so "found a new version" would be a claim this
- * value cannot support. The `updateAvailable` banner and the version rows,
- * refetched from `providers.list` on success, are the only things on this
- * surface that say a newer version exists.
- *
- * `unchanged` is NEUTRAL for the mirror-image reason, and this is the one that
- * is easy to get wrong twice. It means the registry's head did not move - NOT
- * that nothing newer exists. A pack pinned to an older version has
- * `updateAvailable` populated and its head perfectly still, so "Up to date."
- * would render directly under a visible banner naming the version you do not
- * have. `unchanged` is also what a never-published pack reads as. So the copy
- * reports what the CHECK did and lets the banner speak for the versions; do
- * not "improve" it back into a verdict about being current.
- *
- * The two failures are not interchangeable and do not share a sentence.
- * `unreachable` leaves knowledge in place, so it invites a retry; `unusable`
- * means the answer could not be trusted and the pack's update knowledge was
- * CLEARED, which the copy has to admit rather than hide behind "try again".
- *
- * Exhaustive over the protocol enum, like every sibling here: a new member
- * leaves the function with no ending return and fails the type-check.
- */
+/** It means this host's target knowledge changed, which the host also reports for the first population of a
+ * never-derived pack and for a sibling host's pin move on a head identical to the one already running. */
 export function packDiscoveryCheckOutcomeNotice(
   outcome: ProviderPackRefreshOutcome,
 ): PackDiscoveryCheckNotice {
@@ -573,15 +423,8 @@ export function packDiscoveryCheckOutcomeNotice(
   }
 }
 
-/**
- * Primary user copy for a typed refresh-pack-discovery refusal.
- *
- * Exhaustive over the protocol enum. Neither code invites a retry, because
- * neither clears on its own: `discovery-unavailable` is a property of the host
- * (no discovery machinery to run), and `pack-disabled` names an action the user
- * has to take first. `detail` is operator-facing only, same rule as every other
- * typed refusal in this file.
- */
+/** Neither code invites a retry, because neither clears on its own: `discovery-unavailable` is a property of
+ * the host (no discovery machinery to run), and `pack-disabled` names an action the user has to take first. */
 export function refreshPackDiscoveryRefusalMessage(
   code: Extract<ProvidersRefreshPackDiscoveryResult, { ok: false }>["code"],
 ): string {
@@ -593,11 +436,7 @@ export function refreshPackDiscoveryRefusalMessage(
   }
 }
 
-/**
- * Whether the update-available banner may offer Download for this version.
- * Fail closed when the durable head version is not in `available` (offline /
- * expired knowledge): a missing row is not permission to download.
- */
+/** Whether the update-available banner may offer Download for this version. */
 export function updateBannerDownloadEligibility(
   available: readonly ProviderPackVersion[],
   version: string,
@@ -620,11 +459,7 @@ export function findRecommendedVersion(
   return recommended?.version ?? null;
 }
 
-/**
- * Newest-first SemVer order via the shared host-version authority.
- * Equal precedence (incl. build-metadata-only differences) ties break by
- * version string for a stable UI order.
- */
+/** Equal-precedence versions, including build-metadata-only differences, tie-break by version string. */
 export function comparePackVersionsDescending(
   left: string,
   right: string,
@@ -659,17 +494,8 @@ function certificationBlockReason(
   return certificationMetaLine(certification) ?? "Not usable";
 }
 
-/**
- * Why the version manager is not on screen, in the user's terms.
- *
- * Total over the wire enum plus the one client-side cause the host cannot
- * report (a host too old to have the RPCs at all). The panel used to render
- * nothing for every one of these, which reads as "this feature does not exist"
- * rather than "it cannot run right now".
- *
- * Each line says whether waiting will help, because that is the only decision
- * the reader actually has.
- */
+/** Total over the wire enum plus the one client-side cause the host cannot report (a host too old to have the
+ * RPCs at all). */
 export function managedVersionsUnavailableMessage(
   cause: ProviderManagedVersionsUnavailableCause,
 ): string {
@@ -691,24 +517,7 @@ export type ProviderManagedVersionsUnavailableCause =
   | "host-unsupported"
   | ProviderManagedVersionsUnavailable["reason"];
 
-/**
- * Why the managed install failed, for the CLI row's warning affordance.
- *
- * DELIBERATELY NOT the row's headline. When this fires the provider is still
- * runnable - the resolver fell through to the bundled or PATH binary and the
- * row's Active chip names it - so the failure is a footnote to a working
- * state, not the state itself. Leading with it is what made a healthy row read
- * as broken.
- *
- * Names the version because "Install failed" alone cannot be acted on: the
- * common cause is a pinned version the registry has no artifact for, and
- * seeing WHICH version is the difference between "retry" and "this pin was
- * never published".
- *
- * Each line ends by saying whether a retry can help, since that is the only
- * decision available here - and for four of these reasons the honest answer is
- * no, which the old shared copy could not express.
- */
+/** Deliberately not the row's headline. */
 export function managedInstallFailureMessage(
   reason: ProviderManagedInstallErrorReason,
   version: string | null,

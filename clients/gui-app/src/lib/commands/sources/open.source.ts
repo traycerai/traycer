@@ -1,13 +1,6 @@
 /**
- * "Open into target" source. Emits the opener's category entries ONLY when the
- * palette is bound to a target group (`ctx.targetGroupId !== null`); the global
- * palette never sees them. Each category pushes a sub-page (reusing the shell's
- * sub-page stack); its leaves open into the bound target group via
- * `openTileIntoTargetGroup` (Decision 2/3 of the pane-opener tech plan).
- *
- * T5 fills Agents / Terminals / Artifacts (live projection + pinned
- * creation leaves, default-host bound). T6 fills Files / Diff (two-step
- * workspace → file).
+ * "Open into target" source.
+ * Emits the opener's category entries ONLY when the palette is bound to a target group (`ctx.targetGroupId !== null`); the global palette never sees them.
  */
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import { useBrowserOpenerItems } from "@/lib/commands/sources/open/browser-subpage";
@@ -33,10 +26,8 @@ interface OpenerCategory {
 
 const OPENER_CATEGORIES: ReadonlyArray<OpenerCategory> = [
   {
-    // ONE Agent category. Chat and Terminal are interfaces within it, not peer
-    // collections - splitting them here restated an interface as an entity.
-    // `chat`/`chats`/`tui` stay as keywords so users who learned the old
-    // vocabulary still land here: the label moves, discoverability does not.
+    // ONE Agent category.
+    // Chat and Terminal are interfaces within it, not peer collections - splitting them here restated an interface as an entity.
     id: "agents",
     title: "Agents",
     keywords: ["agent", "agents", "chat", "chats", "tui", "terminal"],

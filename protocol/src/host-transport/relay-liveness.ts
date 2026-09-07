@@ -1,34 +1,5 @@
 /**
- * Path-RTT estimation for the relay keepalive, shared by both legs of the
- * relay socket (the host's uplink and the client's session socket).
- *
- * ## Why the liveness deadline cannot be a constant
- *
- * `relay-ping`/`relay-pong` is the only round trip either leg has, and the
- * missed-pong deadline sized against it was a fixed number of milliseconds.
- * That number is an assumption about the path, and a relayed control plane
- * breaks it: a jittery link (measured p95 100ms / p99 523ms over a DERP hop)
- * plus a multi-second stall on either end reads exactly like a dead socket to
- * a fixed detector, and the teardown costs the whole session a reattach
- * (F11: ~20 `relay-missed-pongs` teardowns in 10.5h, none of them a dead
- * path).
- *
- * ## Shape
- *
- * Only the per-socket SAMPLING state lives here - the ping/pong run and its
- * Karn ambiguity, so both legs keep nothing but three calls. The arithmetic is
- * {@link deriveRttDeadlineMs}, shared with the screencast control plane rather
- * than re-derived: the relay simply passes the variance term that plane leaves
- * at zero, because THIS deadline is a liveness verdict rather than a budget and
- * has to cover the path's jitter tail.
- *
- * Deliberately its OWN estimator instance per socket - a relay leg and a
- * per-subscriber screencast subscription do not share a path, a lifetime, or
- * a sample rate.
- *
- * `deadlineMs` FLOORS on the constant it replaces, so measurement can only
- * ever lengthen a window. A fast path behaves exactly as it did before this
- * module existed; only a genuinely slow or jittery one gets more room.
+ * Path-RTT estimation for the relay keepalive, shared by both legs of the relay socket (the host's uplink and the client's session socket).
  */
 import { deriveRttDeadlineMs } from "./rtt-deadlines";
 
@@ -37,10 +8,7 @@ const RTT_ALPHA = 1 / 8;
 const RTT_VAR_BETA = 1 / 4;
 
 /**
- * A sample above this is not a path measurement - it is a suspended runtime,
- * an event-loop stall, or a pong answered out of a queue it sat in for
- * minutes. Clamped rather than discarded, so an awful path stays measurable
- * while every derived deadline is bounded by construction.
+ * A sample above this is not a path measurement - it is a suspended runtime, an event-loop stall, or a pong answered out of a queue it sat in for minutes.
  */
 export const MAX_RELAY_PATH_RTT_MS = 10_000;
 
@@ -55,13 +23,7 @@ export type RelayPathEstimator = {
   readonly notePingSent: (now: number) => void;
   /** Closes the run, sampling it only when exactly one ping was outstanding. */
   readonly notePongReceived: (now: number) => void;
-  /**
-   * Retires the open run WITHOUT sampling it, and marks the next one
-   * ambiguous. The wake probe's ping is the caller: its round trip carries the
-   * runtime's own resume cost and would report the path as far worse than it
-   * is, and a scheduled ping still outstanding across the suspend would
-   * otherwise be credited with the whole sleep.
-   */
+  /** Retires the open run WITHOUT sampling it, and marks the next one ambiguous. */
   readonly retireRun: () => void;
   /**
    * `max(floorMs, 3 x (srtt + 4 x rttvar))`. Returns `floorMs` unchanged until
@@ -79,13 +41,7 @@ export function createRelayPathEstimator(): RelayPathEstimator {
    */
   let pingSentAt: number | null = null;
   /**
-   * Karn's algorithm (RFC 6298 §3): once a second ping goes out with the
-   * first still unanswered, the next `relay-pong` cannot be attributed to
-   * either of them, so that exchange measures nothing. Without this, a pong
-   * answering the LAST of three pings would record the whole run as one round
-   * trip - and since the estimate only ever LENGTHENS the deadline, the
-   * inflation would relax the very detector that was supposed to catch the
-   * silence.
+   * Karn's algorithm (RFC 6298 §3): once a second ping goes out with the first still unanswered, the next `relay-pong` cannot be attributed to either of them, so that exchange measures nothing.
    */
   let pingAmbiguous = false;
 

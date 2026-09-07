@@ -3,9 +3,8 @@ import { TILE_KIND_PR_DETAIL } from "@/stores/epics/canvas/tile-kinds";
 import type { PrDetailTileRef } from "@/stores/epics/canvas/types";
 
 /**
- * Deterministic tile id derived from the host + PR base coordinates - mirrors
- * `gitDiffTileId`. Two "Open full view" clicks for the same PR resolve to the
- * same id, so canvas dedup is plain id equality (no separate identity check).
+ * Deterministic tile id derived from the host + PR base coordinates - mirrors `gitDiffTileId`.
+ * Two "Open full view" clicks for the same PR resolve to the same id, so canvas dedup is plain id equality (no separate identity check).
  */
 export function prDetailTileId(args: {
   readonly hostId: string;

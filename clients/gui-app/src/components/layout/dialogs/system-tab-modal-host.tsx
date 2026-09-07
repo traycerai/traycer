@@ -14,19 +14,8 @@ import {
 } from "@/stores/tabs/system-overlay-registry";
 import { LEADER_SCOPE_SETTINGS } from "@/lib/keybindings/leader-scope";
 
-/**
- * Global host for the system-tab modal (Settings / History). Reads
- * its open state from the root overlay search params via the modal
- * hook, drives a single `<Dialog>`, and renders the kind-specific
- * content. Mounted in `__root.tsx` next to `<DesktopDialogHost />`.
- *
- * The modal's content shell is intentionally identical to the
- * tab-mounted variant (same `bg-background`, same sidebar/panel
- * chrome) - the only thing the modal adds is a thin title bar with
- * Pop-out + Close, plus the centered floating frame. Switching
- * between the modal and the tab presentation should feel like the
- * same surface, just framed differently.
- */
+/** The modal's content shell is intentionally identical to the tab-mounted variant (same `bg-background`, same
+ * sidebar/panel chrome). */
 export function SystemTabModalHost(): ReactNode {
   const modal = useSystemTabModalController();
   useSystemTabModalRefreshGuard();
@@ -73,14 +62,10 @@ function SystemTabModalSurface(props: SystemTabModalSurfaceProps): ReactNode {
     <PromotableModalFrame
       icon={<Icon className="size-4 text-muted-foreground" />}
       title={meta.label}
-      // Full-screen sheet below md: the centered 80% box leaves the History
-      // list unusably narrow on phones. Pure CSS (not a JS viewport check) so
-      // an open modal reflows correctly when the window crosses 768px.
+      // Pure CSS (not a JS viewport check) so an open modal reflows correctly when the window crosses 768px.
       contentClassName="h-[80vh] w-[80vw] max-w-[min(95vw,80rem)] max-md:h-safe-dvh max-md:w-safe-dvw max-md:max-w-none max-md:rounded-none"
-      // The touch-target scope re-applies the coarse-pointer hit-slop rules
-      // (home-touch-targets.css) inside this portal - the modal body renders
-      // the same list chrome as the home page but portals outside the
-      // `[data-home-touch-scope]` subtree HomePage sets.
+      // The touch-target scope re-applies the coarse-pointer hit-slop rules (home-touch-targets.css) inside this
+      // portal.
       dataAttributes={{
         "data-leader-scope": LEADER_SCOPE_SETTINGS,
         "data-home-touch-scope": "",

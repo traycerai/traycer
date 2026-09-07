@@ -1,16 +1,6 @@
 /**
  * `sessionImport.status@1.0` - the unary read of import state.
- *
- * Exists because the run outlives the socket that started it (see `run.ts`):
- * a Settings pane that opens after the wizard was closed, or after a restart,
- * needs to know whether something is still in flight WITHOUT subscribing to
- * `sessionImport.run` and thereby attaching to - or worse, starting - a run.
- * So this is the only safe "is anything happening" question, and the surface
- * that renders the in-flight state (D15) polls it.
- *
- * `lastCompleted` is what the Settings entry shows once nothing is running -
- * the summary from the most recent run this host performed. It is null on a
- * host that has never imported.
+ * It is null on a host that has never imported.
  */
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
@@ -31,9 +21,6 @@ export const sessionImportStatusResponseSchema = z.object({
     .nullable(),
   lastCompleted: z
     .object({
-      // Which run the summary is of, so a client that watched a run can tell
-      // "this is the run I just saw finish" from "an older one, and mine is
-      // still going somewhere I am not attached to".
       runId: z.string().min(1),
       counts: sessionImportRunCountsSchema,
       at: z.number(),

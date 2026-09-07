@@ -10,11 +10,7 @@ import type {
 } from "@traycer/protocol/host/notifications/contracts";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 
-// Drive the epic-selector reads the icon (and the shared status mapping it now
-// routes through) depends on. `tui` non-null + type "terminal-agent" reaches
-// the TUI badge branch; `tier` is the awareness tier the desktop chat tree
-// reads, so setting it here is what proves the switcher shares that source
-// rather than the coarser working-id set it used to read.
+// `tui` non-null + type "terminal-agent" reaches the TUI badge branch; `tier` is the awareness tier the desktop chat tree reads, so setting it here is what proves the switcher shares that source rather than the coarser working-id set it used to read.
 const state = vi.hoisted(
   (): {
     tier: AgentActivityTier | null;
@@ -38,9 +34,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     state.tier === null
       ? new Map<string, AgentActivityTier>()
       : new Map<string, AgentActivityTier>([["n1", state.tier]]),
-  // ChatProgressIcon reads the REGISTERED (registry-keyed, non-throwing)
-  // selectors rather than the ambient ones, so a whole-module mock has to
-  // answer those too - same data, addressed by epic id instead of by context.
+  // ChatProgressIcon reads the REGISTERED (registry-keyed, non-throwing) selectors rather than the ambient ones, so a whole-module mock has to answer those too - same data, addressed by epic id instead of by context.
   useRegisteredEpicAgentActivityTiers: () =>
     state.tier === null
       ? new Map<string, AgentActivityTier>()
@@ -72,9 +66,7 @@ function chatIndicators(
 }
 
 /**
- * A per-origin response, the shape a real host read carries
- * (`scopeIndicatorsToOrigin`). Only the row that names `originHostId` as its
- * own host reads the flags; every other host sees the empty response.
+ * Only the row that names `originHostId` as its own host reads the flags; every other host sees the empty response.
  */
 function chatIndicatorsForOrigin(
   originHostId: string,
@@ -175,11 +167,6 @@ describe("<SwitcherAgentIcon /> live status", () => {
 });
 
 describe("<SwitcherAgentIcon /> matches the desktop mapping", () => {
-  // Desktop precedence (`NotificationIndicatorIcon`): attention tones first
-  // (failure > fork > interview > approval), then the running tiers, then
-  // unread-done. The switcher renders through that same component, so these
-  // assert the shared vocabulary reaches the mobile rows at all - each state
-  // previously rendered as a plain harness mark.
   const TONE_CASES: ReadonlyArray<{
     readonly name: string;
     readonly flags: Partial<HostNotificationsIndicatorState>;
@@ -228,9 +215,7 @@ describe("<SwitcherAgentIcon /> matches the desktop mapping", () => {
   });
 
   it("lets a newer running turn own the glyph over a historical failure, which surfaces once the run ends", () => {
-    // A chat-scoped host failure is terminal chronology: the running turn owns
-    // the glyph while the failure stays in the feed (the desktop mapping since
-    // notification history was split from current agent state).
+    // A chat-scoped host failure is terminal chronology: the running turn owns the glyph while the failure stays in the feed (the desktop mapping since notification history was split from current agent state).
     state.tier = "turn";
     render(
       renderIcon("terminal-agent", chatIndicators({ unreadFailure: true })),
@@ -262,10 +247,8 @@ describe("<SwitcherAgentIcon /> matches the desktop mapping", () => {
 });
 
 describe("<SwitcherAgentIcon /> owner-host scoping", () => {
-  // A chat row must name its OWN owner host, off the projection. The list's
-  // `useEpicArtifactRecords()` row resolves legacy null ownership to a session
-  // fallback, so the icon deliberately reads the projection rather than the
-  // openable record.
+  // A chat row must name its OWN owner host, off the projection.
+  // The list's `useEpicArtifactRecords()` row resolves legacy null ownership to a session fallback, so the icon deliberately reads the projection rather than the openable record.
   it("reads status under the chat's own host, not the active one", () => {
     state.ownerHostId = "host-A";
     state.gui = "claude";

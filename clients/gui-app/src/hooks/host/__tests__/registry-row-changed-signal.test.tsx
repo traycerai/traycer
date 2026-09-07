@@ -22,35 +22,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
 
-/**
- * THE P4.2 HANDOFF INSTRUMENT (redesign P4.1), now discharged.
- *
- * P4.2 deletes `HostClient.bind()` and the active slot. The only thing that
- * told a React consumer pinned by host id to look again when its row landed
- * was that slot's change event, so the deletion was safe only if a
- * replacement signal already carried it. This file is where that claim was
- * measured rather than asserted, and the measurement came out: the registry
- * carries it.
- *
- * IT USED TO HOLD A SECOND CASE, and its deletion is part of the same commit
- * that removed the arm it measured. `slot event only` reproduced the PRE-P4.1
- * world - no registry source installed, so the registry arm was inert by
- * construction and the landed row could only reach the consumer through
- * `bind()`. That case's entire subject was the slot event. Once
- * `useReactiveHostReadiness` stopped subscribing to `client.onChange` there
- * was no honest version of it left: kept as-is it fails, and any rewrite that
- * makes it pass is asserting something else while wearing its name. Deleted
- * rather than kept green, because a test whose subject no longer exists is
- * the vacuity class this epic keeps paying for.
- *
- * What remains is the assertion the deletion was allowed on - the row lands,
- * the directory emits, `bind()` is never called, and the consumer re-reads
- * off the registry alone - plus the render-suppression pin that keeps the
- * coarse arm's unconditional wake from churning the tree. The pair that made
- * the original flip readable is now history: it lives in the execution log
- * and in P4.1's K15 result, not in a case that can no longer fail for the
- * reason it was written for.
- */
+/** Row landing re-reads off the registry alone; bind() is never called. */
 
 const pingV10 = defineRpcContract({
   method: "host.ping",
@@ -85,10 +57,7 @@ const BOOTING_LATE_HOST: HostDirectoryEntry = {
   websocketUrl: null,
 };
 
-/**
- * A fully-formed REMOTE row, because the additive case below turns on a field
- * only a remote entry carries. Its public key is what R-1 rotates.
- */
+/** A fully-formed REMOTE row, because the additive case below turns on a field only a remote entry carries. */
 const ROTATING_HOST_ID = "rotating-host";
 const rotatingHost = (publicKey: string): RemoteHostDirectoryEntry => ({
   hostId: ROTATING_HOST_ID,
@@ -129,10 +98,7 @@ class LateArrivingDirectory {
 
   findById(hostId: string): HostDirectoryEntry | null {
     const found = this.entries.find((entry) => entry.hostId === hostId);
-    // A FRESH object per read, like production: the local row is rebuilt per
-    // snapshot and crosses the IPC bridge as a new object. A registry that
-    // compared by reference would report a change on every emit and this
-    // suite would pass for the wrong reason.
+    // A FRESH object per read, like production: the local row is rebuilt per snapshot and crosses the IPC bridge as a new object.
     return found === undefined ? null : { ...found };
   }
 
@@ -152,11 +118,7 @@ class LateArrivingDirectory {
     this.emit();
   }
 
-  /**
-   * A directory emit that changes NOTHING about any row - the benign churn
-   * production produces constantly (a respawn-in-place whose only delta is a
-   * pid the entry does not carry).
-   */
+  /** A directory emit that changes NOTHING about any row - the benign churn production produces constantly (a respawn-in-place whose only delta is a pid the entry does not carry). */
   emitUnchanged(): void {
     this.emit();
   }
@@ -287,11 +249,7 @@ describe("the registry's row-changed signal (P4.2 handoff)", () => {
     expect(result.current.hostId).toBe(LATE_HOST_ID);
     const rendersAfterMount = renders;
 
-    // The coarse arm deliberately WAKES on every source emit (a consumer that
-    // cannot name its host must be woken by rows it has never seen). What
-    // stops that from churning the tree is the value-compared snapshot, and
-    // this is where that is pinned: `findById` hands back a fresh object
-    // every read, so a reference-compared snapshot would re-render here.
+    // The coarse arm deliberately WAKES on every source emit (a consumer that cannot name its host must be woken by rows it has never seen).
     act(() => {
       directory.emitUnchanged();
     });
@@ -299,20 +257,7 @@ describe("the registry's row-changed signal (P4.2 handoff)", () => {
   });
 
   /**
-   * THE SECOND PROJECTION, and the reason this case is additive rather than a
-   * duplicate: the two cases above drive `useReactiveHostReadiness`. All three
-   * projections that lost their `client.onChange` arm in P4.2 ride the SAME
-   * coarse subscription (`subscribeAnyHostRowChanged`), so what distinguishes
-   * this case is not the arm - it is the projection reading off it and the
-   * stimulus that moves it. One projection being carried is not evidence that
-   * another is: they compose different snapshots from different fields.
-   *
-   * The stimulus is R-1: a same-`hostId` public-key rotation
-   * (re-enrollment / corruption recovery). It is worth pinning HERE
-   * specifically because P4.2 deleted the only case that covered it - the
-   * client-layer test asserted `bind()` re-binding a rotated entry, and that
-   * mechanism is gone. A rotation is now an ordinary row change and this is
-   * the arm that has to carry it; nothing else asserts that it does.
+   * Same-`hostId` public-key rotation is a row change; this projection (not just `useReactiveHostReadiness`) must carry it.
    */
   it("re-projects the owner identity on an R-1 public-key rotation, through the COARSE arm", () => {
     const directory = new LateArrivingDirectory();

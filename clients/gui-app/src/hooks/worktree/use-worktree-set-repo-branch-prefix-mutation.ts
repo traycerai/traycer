@@ -14,25 +14,13 @@ export interface SetRepoBranchPrefixMutationContext {
   readonly hostId: string | null;
 }
 
-// The override rides the pre-epic and epic-scoped workspace summaries
-// (`WorktreeWorkspaceSummary.repoBranchPrefix`), so a save must refresh that
-// scope for the next read to reflect the edit - mirrors
-// `use-worktree-set-repo-scripts-mutation.ts`'s invalidation for the sibling
-// concern.
+// The override rides the pre-epic and epic-scoped workspace summaries (`WorktreeWorkspaceSummary.repoBranchPrefix`), so a save must refresh that scope for the next read to reflect the edit - mirrors `use-worktree-set-repo-scripts-mutation.ts`'s invalidation for the sibling concern.
 const SET_REPO_BRANCH_PREFIX_INVALIDATIONS: ReadonlyArray<
   keyof HostRpcRegistry & string
 > = ["worktree.listByWorkspacePaths"];
 
 /**
- * Persists (or clears) the repository's worktree branch-prefix override to
- * `<repoRoot>/.traycer/environment.json` on an EXPLICIT host client, mirroring
- * `useWorktreeSetRepoScriptsFor`'s shape exactly: same `epicId`/`workspacePath`
- * authn/target contract, same `null`-client no-op guard via `useHostMutation`.
- *
- * `worktree.setRepoBranchPrefix` is registered off the released floor with
- * `degrade: { kind: "unsupported" }` - callers should gate the affordance with
- * `useHostSupportsMethod` before offering the edit; this hook's `onError`
- * still surfaces `E_HOST_UNSUPPORTED` via the normal toast as a backstop.
+ * Same `epicId`/`workspacePath` contract as `useWorktreeSetRepoScriptsFor`. Callers gate with `useHostSupportsMethod`; `onError` still toasts `E_HOST_UNSUPPORTED`.
  */
 export function useWorktreeSetRepoBranchPrefixFor(
   client: HostClient<HostRpcRegistry> | null,

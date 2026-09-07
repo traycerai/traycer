@@ -10,11 +10,6 @@ import {
   type LoginImportDiscoveryEnvironment,
 } from "../sources";
 
-/**
- * Every fixture tree lives under a fresh temp dir per test, and every mtime
- * is set explicitly with `utimes` - the ordering assertions would be a coin
- * flip against wall-clock write speed otherwise.
- */
 
 let root: string;
 
@@ -131,10 +126,6 @@ describe("discoverLoginImportSources: chromium", () => {
   });
 
   it("does not look for Aside or Helium on Windows or Linux", async () => {
-    // Each platform gets a Chrome jar at its real root, so a run that finds
-    // Chrome and not the candidates below proves discovery walked the tree
-    // and skipped them, rather than finding nothing at all. The candidate
-    // roots are where a Chromium fork conventionally lands on each OS.
     const local = join(root, "AppData", "Local");
     const config = join(root, ".config");
     const candidates: Record<"win32" | "linux", readonly string[]> = {
@@ -286,10 +277,7 @@ describe("discoverLoginImportSources: chromium", () => {
     );
     await mkdir(join(chromeRoot, "Default"), { recursive: true });
     await writeFileAt(join(chromeRoot, "Default", "Cookies"), "a", T1);
-    // The key a pre-fix reader would have joined straight onto the User Data
-    // dir, escaping it two levels up. A real jar sits there so the assertion
-    // below proves discovery never reached it, not merely that nothing was
-    // there to find.
+    // A real jar sits there so the assertion below proves discovery never reached it, not merely that nothing was there to find.
     const traversalTarget = join(
       root,
       "Library",

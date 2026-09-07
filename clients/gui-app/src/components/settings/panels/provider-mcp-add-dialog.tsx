@@ -134,8 +134,7 @@ function computeEffectiveRemoteTransportType(
   return remoteTransports[0] ?? "http";
 }
 
-/** N1: prefill non-secret stdio env-var NAMES from the masked read; values
- * always start empty/masked. */
+/** N1: prefill non-secret stdio env-var names from the masked read; values always start empty/masked. */
 function envRowsFromServer(
   server: ProviderMcpServer | null,
   makeRow: (name: string, index: number) => SecretRow,
@@ -163,8 +162,8 @@ function remoteAuthFromServer(
   return server.transport.auth;
 }
 
-/** N1: prefill the non-secret header NAME from the masked read; only the
- * first row is recoverable — the read model masks additional header rows. */
+/** N1: prefill the non-secret header name from the masked read; only the first row is recoverable - the read
+ * model masks additional header rows. */
 function headerRowsFromAuth(auth: ProviderMcpAuthRead | null): SecretRow[] {
   if (auth !== null && auth.type === "header") {
     return [{ id: 0, name: auth.name, value: "" }];
@@ -304,9 +303,8 @@ export function ProviderMcpAddDialog(props: {
     if (!next) {
       form.reset();
       setFormError(null);
-      // M8: clear the TanStack mutation cache immediately on close so a
-      // submitted secret (header/env value) doesn't linger in
-      // `mutate.variables` after the user is done with the dialog.
+      // : clear the TanStack mutation cache immediately on close so a submitted secret (header/env value) doesn't
+      // linger in `mutate.variables` after the user is done with the dialog.
       mutate.reset();
     }
     onOpenChange(next);
@@ -926,13 +924,8 @@ function PillChip(props: {
   );
 }
 
-/**
- * Shared per-row masked KEY/value editor for both the remote header editor
- * and the stdio env-var editor. `allowMultiple` is capability-driven for
- * headers (only genuinely repeatable-header providers get "Add header") and
- * always true for stdio env (a config-file env map has no per-provider row
- * limit).
- */
+/** `allowMultiple` is capability-driven for headers (only genuinely repeatable-header providers get "Add
+ * header") and always true for stdio env (a config-file env map has no per-provider row limit). */
 function SecretRowsEditor(props: {
   readonly idPrefix: string;
   readonly groupLabel: string;
@@ -1096,7 +1089,7 @@ function buildRemoteAuth(
     if (varName.length === 0) return "invalid-env-name";
     return { type: "env", name: varName, value: "" };
   }
-  // header — every non-blank row serializes (not just the first).
+  // header - every non-blank row serializes (not just the first).
   const touched = fields.headerRows.filter(
     (r) => r.name.trim().length > 0 || r.value.length > 0,
   );

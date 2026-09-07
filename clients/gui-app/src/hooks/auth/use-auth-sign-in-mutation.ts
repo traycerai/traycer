@@ -9,10 +9,7 @@ export function useAuthSignInMutation() {
   return useMutation({
     mutationKey: authMutationKeys.signIn(),
     mutationFn: () => auth.signIn(),
-    // Only `sign_in_started` belongs to the gesture. `signIn()` resolves once
-    // the device flow is LAUNCHED (and swallows launch failures), so the
-    // terminal succeeded/failed events are emitted by AuthService when the
-    // OAuth result actually lands.
+    // Only `sign_in_started` belongs to the gesture.
     onMutate: () => {
       Analytics.getInstance().track(AnalyticsEvent.SignInStarted, {
         source: "direct_ui",

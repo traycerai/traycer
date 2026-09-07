@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { cn } from "@/lib/utils";
 
-// Regression: the custom `--text-*` typography tokens must be registered
-// with tailwind-merge as font sizes. Before that, `text-ui-sm` was
-// classified as a text COLOR and silently dropped whenever a real color
-// joined the same merge - e.g. the git panel's active row gained
-// `text-accent-foreground` and lost its font size, rendering bigger than
-// its siblings.
+// Regression: the custom `--text-*` typography tokens must be registered with tailwind-merge as font sizes.
+// Before that, `text-ui-sm` was classified as a text COLOR and silently dropped whenever a real color joined the same merge - e.g. the git panel's active row gained `text-accent-foreground` and lost its font size, rendering bigger than its siblings.
 describe("cn custom font-size tokens", () => {
   it("keeps a custom font size alongside a text color", () => {
     expect(cn("text-ui-sm", "text-accent-foreground")).toBe(

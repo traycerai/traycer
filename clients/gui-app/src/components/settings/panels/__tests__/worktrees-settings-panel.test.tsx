@@ -50,16 +50,8 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
-// The delete is a stream: mock the wrapper so a test can drive server frames
-// (started / phase / output / complete / failed) and assert the modal + cache
-// behaviour without a real socket.
-//
-// Tests drive PER-TARGET callbacks even though the current host path opens one
-// batch command: the mock adapts the command's path-tagged callbacks into the
-// per-target shape and synthesizes the terminal `command.complete` once every
-// target has settled, exactly as the host does. That keeps these tests about
-// what the panel shows, not about which wire shape carried it - and the same
-// shims serve the older-host fallback, which really is per-target.
+// The delete is a stream: mock the wrapper so a test can drive server frames (started / phase / output /
+// complete / failed) and assert the modal + cache behaviour without a real socket.
 const streamMock = vi.hoisted(() => ({
   callbacks: null as WorktreeDeleteStreamCallbacks | null,
   callbacksByPath: new Map<string, WorktreeDeleteStreamCallbacks>(),
@@ -68,17 +60,10 @@ const streamMock = vi.hoisted(() => ({
   throwForPaths: new Set<string>(),
   /** Paths whose command must report "this host has no such method". */
   unsupportedForPaths: new Set<string>(),
-  /**
-   * The last command's RAW callbacks. Tests use these to play a re-attached
-   * observer: the host does not replay per-target frames, so `onCommandComplete`
-   * can legitimately arrive for targets whose own frames were never delivered.
-   */
+  /** Tests use these to play a re-attached observer: the host does not replay per-target frames, so
+   * `onCommandComplete` can legitimately arrive for targets whose own frames were never delivered. */
   commandCallbacks: null as WorktreeDeleteBatchStreamCallbacks | null,
-  /**
-   * Paths opened through the RELEASED per-target client only. `paths` records
-   * both wires, so this is what distinguishes "the older-host fallback ran a
-   * stream for this path" from "a command covered it".
-   */
+  /** Paths opened through the released per-target client only. */
   legacyPaths: [] as string[],
   closeCount: 0,
   commandCount: 0,
@@ -125,9 +110,6 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
   openOrFocusEpicIntent: tabNavigationMock.openOrFocusEpicIntent,
 }));
 
-// Render the Radix dropdown menus inline + always-open so tests can assert /
-// click the Select and Sort menu items without fighting pointer-open semantics
-// in jsdom (mirrors the established mock in folder-controls.test).
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
@@ -303,9 +285,7 @@ vi.mock(
   }),
 );
 
-// A real `WsStreamClient` whose factory throws if dialled - the mocked stream
-// wrapper above never calls `.subscribe`, so it is only a non-null token that
-// lets `useWorktreeDeleteRun` proceed past its `streamClient === null` gate.
+// A real `WsStreamClient` whose factory throws if dialled.
 function stubStreamClient(): WsStreamClient<HostStreamRpcRegistry> {
   return new WsStreamClient<HostStreamRpcRegistry>({
     clientIdentity: TEST_CLIENT_IDENTITY,
@@ -456,9 +436,8 @@ afterEach(() => {
   restoreOffsetHeight = null;
 });
 
-// Treat every passed worktree as already-enriched (its base entry IS its enriched
-// entry) - the default the behavioural tests want, so tiers classify immediately.
-// Tests that exercise the pending/lazy path pass their own partial overlay.
+// Treat every passed worktree as already-enriched (its base entry IS its enriched entry) - the default the
+// behavioural tests want, so tiers classify immediately.
 function fullyEnriched(
   worktrees: readonly WorktreeHostEntryV16[],
 ): ReadonlyMap<string, WorktreeHostEntryV16> {
@@ -650,9 +629,8 @@ describe("useWorktreeListing", () => {
         ["/wt/a", "/wt/b"],
       );
     });
-    // Every page of the automatic listing sends `forceRefresh: false`: a poll
-    // must serve the host's TTL-cached view, never force a disk recompute.
-    // Only the toolbar's Refresh sends `true`.
+    // Every page of the automatic listing sends `forceRefresh: false`: a poll must serve the host's ttl-cached
+    // view, never force a disk recompute. Only the toolbar's Refresh sends `true`.
     expect(requests).toEqual([
       {
         includeActivity: false,
@@ -671,10 +649,8 @@ describe("useWorktreeListing", () => {
     ]);
   });
 
-  // The 5-minute host-side TTL rests on "staleness between polls is acceptable
-  // BECAUSE manual refresh is the freshness path", so the refresh MUST send
-  // `forceRefresh: true` - and the fresh data must land in the SAME cache entry
-  // the view already reads, not a forked `forceRefresh: true` key.
+  // The 5-minute host-side ttl rests on "staleness between polls is acceptable because manual refresh is the
+  // freshness path", so the refresh must send `forceRefresh: true`.
   it("sends forceRefresh: true for a manual refresh and lands it in the same cache entry", async () => {
     const stale = entry({ worktreePath: "/wt/a", branch: "stale" });
     const fresh = entry({ worktreePath: "/wt/a", branch: "fresh" });
@@ -1004,25 +980,21 @@ describe("WorktreesList delete flow", () => {
       taskTitlesByEpicId: undefined,
     });
 
-    // Display keeps the restored tier - warm-open value is not sacrificed:
-    // the row shows its "Landed" pill, never the pending spinner. (The tier
-    // filter menu also says "Landed", hence getAllByText.)
+    // Display keeps the restored tier - warm-open value is not sacrificed: the row shows its "Landed" pill, never
+    // the pending spinner.
     expect(screen.getAllByText("Landed").length).toBeGreaterThan(0);
     expect(
       screen.queryByTestId("worktree-tier-pill-pending-spinner"),
     ).toBeNull();
-    // But the delete affordance reads the DELETE-scoped state: seeded =
-    // still-checking, so the row action is disabled with the checking copy.
+    // But the delete affordance reads the DELETE-scoped state: seeded = still-checking, so the row action is
+    // disabled with the checking copy.
     const gatedButton = screen.getByRole("button", {
       name: /status is still being checked/i,
     });
     expect(gatedButton.hasAttribute("disabled")).toBe(true);
 
-    // Once the live probe replaces the seed (the path leaves `seededPaths`),
-    // the same row becomes deletable through the normal confirmation. Drive
-    // that as a prop update on the LIVE tree rather than a remount: the row's
-    // memo comparator is what has to notice the change, and a fresh mount
-    // would sidestep it entirely.
+    // Drive that as a prop update on the live tree rather than a remount: the row's memo comparator is what has to
+    // notice the change, and a fresh mount would sidestep it entirely.
     rendered.rerender(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
@@ -1070,10 +1042,7 @@ describe("WorktreesList delete flow", () => {
 
     fireEvent.click(screen.getByTestId("worktrees-select-all"));
 
-    // A seeded row counts as still-checking for the selection action bar:
-    // bulk delete is blocked with the checking notice (same rule as a row
-    // whose probe genuinely hasn't landed), so no confirmation can open that
-    // would trust the seeded entry.
+    // A seeded row counts as still-checking for the selection action bar.
     screen.getByText("1 selected worktree is still checking status");
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     expect(screen.queryByText("Delete 2 worktrees?")).toBeNull();
@@ -1147,10 +1116,7 @@ describe("WorktreesList delete flow", () => {
       screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
     );
 
-    // Selecting the first row must not insert a new bar ABOVE the list: the
-    // scroll region keeps its position, and the contextual action bar that
-    // appears is an out-of-flow overlay inside the SAME wrapper, not a
-    // preceding sibling that would push the list down.
+    // Selecting the first row must not insert a new bar above the list.
     expect(scrollRegion.previousElementSibling).toBeNull();
     const actionBar = screen.getByTestId("worktrees-selection-action-bar");
     expect(actionBar.parentElement).toBe(wrapper);
@@ -1221,9 +1187,8 @@ describe("WorktreesList delete flow", () => {
       screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
     );
 
-    // jsdom reports a zero-height action bar (no real layout), so the
-    // clearance mechanism falls back to its seeded minimum rather than
-    // collapsing to zero - the same floor the old fixed `pb-16` provided.
+    // jsdom reports a zero-height action bar (no real layout), so the clearance mechanism falls back to its seeded
+    // minimum rather than collapsing to zero - the same floor the old fixed `pb-16` provided.
     expect(scrollRegion.style.paddingBottom).toBe("64px");
 
     fireEvent.click(screen.getByTestId("worktrees-clear-selection-inline"));
@@ -1238,9 +1203,8 @@ describe("WorktreesList delete flow", () => {
       screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
     );
     const actionBar = screen.getByTestId("worktrees-selection-action-bar");
-    // Simulate the bar wrapping to two lines (narrow width, or the
-    // `Checking` notice pushing it taller) by measuring taller than the
-    // seeded minimum clearance.
+    // Simulate the bar wrapping to two lines (narrow width, or the `Checking` notice pushing it taller) by
+    // measuring taller than the seeded minimum clearance.
     Object.defineProperty(actionBar, "getBoundingClientRect", {
       configurable: true,
       value: () => ({
@@ -1256,17 +1220,15 @@ describe("WorktreesList delete flow", () => {
       }),
     });
 
-    // Force a re-render of the same mounted action bar (no unmount, so the
-    // mocked node and its override survive) so the height observer's
-    // snapshot is re-read against the taller measurement.
+    // Force a re-render of the same mounted action bar (no unmount, so the mocked node and its override survive)
+    // so the height observer's snapshot is re-read against the taller measurement.
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Select worktree feat-dirty" }),
     );
 
     const scrollRegion = screen.getByTestId("worktrees-virtual-scroll");
-    // 96px measured height + the bar's own gap/offset clearance (32px),
-    // clearly exceeding the 64px seeded minimum - proving the clearance
-    // tracks the bar's real rendered height rather than a hard-coded value.
+    // 96px measured height + the bar's own gap/offset clearance (32px), clearly exceeding the 64px seeded minimum
+    // - proving the clearance tracks the bar's real rendered height rather than a hard-coded value.
     expect(scrollRegion.style.paddingBottom).toBe("128px");
   });
 
@@ -1704,9 +1666,8 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    // Every selected target rides ONE command: the host schedules them (two at
-    // a time, host-wide), so the renderer no longer meters the fan-out and no
-    // longer decides which two go first.
+    // Every selected target rides one command: the host schedules them (two at a time, host-wide), so the renderer
+    // no longer meters the fan-out and no longer decides which two go first.
     expect(streamMock.commandCount).toBe(1);
     expect(streamMock.paths).toEqual([
       "/wt/clean",
@@ -1795,9 +1756,8 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    // The whole selection is one command, so a transport that cannot even be
-    // opened fails all of it - and, being a batch, says so in the progress
-    // strip rather than popping a modal over rows the user selected together.
+    // The whole selection is one command, so a transport that cannot even be opened fails all of it - and, being a
+    // batch, says so in the progress strip rather than popping a modal over rows the user selected together.
     expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
     screen.getByText("0/4 deleted, 4 failed");
   });
@@ -1828,9 +1788,8 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    // The command was attempted and rejected before the host was asked to
-    // delete anything, so no target ran under it - the fallback then meters
-    // the per-target streams two at a time, client-side, as before.
+    // The command was attempted and rejected before the host was asked to delete anything, so no target ran under
+    // it - the fallback then meters the per-target streams two at a time, client-side, as before.
     expect(streamMock.commandCount).toBe(1);
     expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
     screen.getByText("0/3 deleted");
@@ -1864,9 +1823,8 @@ describe("WorktreesList delete flow", () => {
       2,
     );
 
-    // The socket dropped, `/wt/dirty` settled host-side while nobody was
-    // listening, and the re-attached observer receives only the aggregate -
-    // the host never replays per-target frames.
+    // The socket dropped, `/wt/dirty` settled host-side while nobody was listening, and the re-attached observer
+    // receives only the aggregate - the host never replays per-target frames.
     act(() => {
       streamMock.commandCallbacks?.onCommandComplete({
         requestedCount: 2,
@@ -1875,10 +1833,8 @@ describe("WorktreesList delete flow", () => {
       });
     });
 
-    // The stranded row settles rather than spinning forever, and it settles
-    // honestly: the client cannot know that target's outcome, so it points at
-    // the refreshed list instead of inventing one. (The remaining spinner is
-    // the confirmed-deleted row, which the refreshed list prunes.)
+    // The stranded row settles rather than spinning forever, and it settles honestly: the client cannot know that
+    // target's outcome, so it points at the refreshed list instead of inventing one.
     expect(screen.getAllByTestId("worktree-row-deleting-spinner")).toHaveLength(
       1,
     );
@@ -1895,8 +1851,8 @@ describe("WorktreesList delete flow", () => {
     expect(streamMock.commandCount).toBe(1);
     expect(streamMock.legacyPaths).toEqual([]);
 
-    // `/wt/clean` settles under the ORIGINAL command and releases its
-    // reservation, so the user can act on that path again.
+    // `/wt/clean` settles under the original command and releases its reservation, so the user can act on that
+    // path again.
     act(() => {
       callbacksFor("/wt/clean").onFailed("busy", undefined, undefined);
     });
@@ -1909,17 +1865,13 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(streamMock.commandCount).toBe(2);
 
-    // Only now does the FIRST command discover it is talking to a host without
-    // the batch method - the replacement-host case, where the observe session's
-    // compatibility check is what reports it.
+    // Only now does the first command discover it is talking to a host without the batch method - the
+    // replacement-host case, where the observe session's compatibility check is what reports it.
     act(() => {
       firstCommand?.onUnsupported();
     });
 
-    // The fallback runs the one target that never settled. `/wt/clean` is not
-    // re-queued: its stale entry would otherwise find the NEW command's queued
-    // record and start a second, uncoordinated per-target stream for a run it
-    // has nothing to do with.
+    // The fallback runs the one target that never settled.
     expect(streamMock.legacyPaths).toEqual(["/wt/dirty"]);
   });
 
@@ -1942,9 +1894,8 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
     const command = streamMock.commandCallbacks;
 
-    // A replacement host can make the reattached observer learn that the
-    // batch method disappeared after it already received both target frames,
-    // but before it receives the aggregate command frame.
+    // A replacement host can make the reattached observer learn that the batch method disappeared after it already
+    // received both target frames, but before it receives the aggregate command frame.
     act(() => {
       command?.onTargetComplete("/wt/clean", true);
       command?.onTargetComplete("/wt/dirty", true);
@@ -2007,9 +1958,8 @@ describe("WorktreesList delete flow", () => {
       callbacksFor("/wt/api-clean").onFailed("busy", undefined, undefined);
     });
 
-    // All three failed, so all three are selectable and deletable again - a
-    // reservation that outlived its run would make them permanently
-    // un-deletable for the rest of the session.
+    // All three failed, so all three are selectable and deletable again - a reservation that outlived its run
+    // would make them permanently un-deletable for the rest of the session.
     fireEvent.click(screen.getByTestId("worktree-delete-progress-dismiss"));
     streamMock.paths = [];
     streamMock.callbacksByPath.clear();
@@ -2807,7 +2757,7 @@ describe("WorktreesList confirm-time re-check", () => {
     );
     expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
 
-    // Header selects all visible SELECTABLE rows; the in-use row is excluded.
+    // Header selects all visible selectable rows; the in-use row is excluded.
     fireEvent.click(selectAll);
     expect(screen.getByText("2 selected")).not.toBeNull();
     expect(selectAll.getAttribute("aria-checked")).toBe("true");
@@ -2881,9 +2831,8 @@ describe("WorktreesList confirm-time re-check", () => {
 
     expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
 
-    // On a later refresh /wt/c is selectable again. If the dropped path had
-    // lingered in the selection it would show selected; the prune keeps it
-    // unselected, so it reads as a fresh pick.
+    // If the dropped path had lingered in the selection it would show selected; the prune keeps it unselected, so
+    // it reads as a fresh pick.
     rendered.rerender(renderWith(queryClient, [merged("/wt/c", "feat-c")]));
     const cCheckbox = screen.getByRole("checkbox", {
       name: "Select worktree feat-c",
@@ -2917,10 +2866,8 @@ describe("WorktreesList confirm-time re-check", () => {
         entry({
           worktreePath: "/wt/squash-merged",
           branch: "feat-squash-merged",
-          // A squash merge creates a new default-branch commit that isn't a
-          // literal ancestor of these commits, so mergedIntoDefault stays
-          // false and ahead stays >0 — but the GitHub-proven merge fact
-          // (prState/mergedHeadShaMatches) means the work already landed.
+          // A squash merge creates a new default-branch commit that isn't a literal ancestor of these commits, so
+          // mergedIntoDefault stays false and ahead stays >0.
           branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
           prState: "merged",
           mergedHeadShaMatches: true,
@@ -3466,9 +3413,8 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
-    // The base row is painted immediately (branch name visible), but the tier is
-    // not classified yet - the pill reads "Checking…" (data-tier="pending"),
-    // never a base-only tier that would flip once the probes land.
+    // The base row is painted immediately (branch name visible), but the tier is not classified yet - the pill
+    // reads "Checking…" (data-tier="pending"), never a base-only tier that would flip once the probes land.
     screen.getByText("feat-merged");
     const tiers = screen
       .getAllByTestId("worktree-tier-pill")
@@ -3791,8 +3737,6 @@ describe("WorktreesList v1.2 signals", () => {
       expect.arrayContaining(["merged", "at-base-commit", "unreferenced"]),
     );
     // Three proven-green tiers never collapse into one generic "Safe" label.
-    // Scoped to the pills themselves - the (always-open, per test mock) tier
-    // filter menu also lists these same three labels as menu items.
     const labels = pills.map((pill) => pill.textContent);
     expect(labels).toContain("Landed");
     expect(labels).toContain("At base commit");
@@ -3819,9 +3763,8 @@ describe("WorktreesList v1.2 signals", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: [reviewRow, orphanRow, unknownRow],
-      // Review + Orphaned are enriched (ready); Unknown is left out of the
-      // overlay and named in `erroredPaths`, so it settles to a static Unknown
-      // pill rather than an infinite Checking spinner.
+      // Review + Orphaned are enriched (ready); Unknown is left out of the overlay and named in `erroredPaths`, so
+      // it settles to a static Unknown pill rather than an infinite Checking spinner.
       enrichedByPath: new Map([
         [reviewRow.worktreePath, reviewRow],
         [orphanRow.worktreePath, orphanRow],
@@ -3896,9 +3839,8 @@ describe("WorktreesList v1.2 signals", () => {
     expect(pendingPill.className).not.toContain("emerald");
     expect(unknownPill.className).not.toContain("emerald");
 
-    // Both read as visibly unresolved (dashed border), distinct from every
-    // resolved tier pill's solid border - and each still carries its own
-    // accessible text label, never color alone.
+    // Both read as visibly unresolved (dashed border), distinct from every resolved tier pill's solid border - and
+    // each still carries its own accessible text label, never color alone.
     expect(pendingPill.className).toContain("border-dashed");
     expect(unknownPill.className).toContain("border-dashed");
     expect(mergedPill.className).not.toContain("border-dashed");
@@ -3937,18 +3879,16 @@ describe("WorktreesList v1.2 signals", () => {
     const tierPill = screen.getByTestId("worktree-tier-pill");
     const rollup = screen.getByTestId("task-merge-rollup");
 
-    // The rollup carries no icon and no Badge chrome (border/background) - it
-    // cannot be mistaken for the row's own loud worktree-tier signal, which
-    // keeps its icon and colored border.
+    // The rollup carries no icon and no Badge chrome (border/background) - it cannot be mistaken for the row's own
+    // loud worktree-tier signal, which keeps its icon and colored border.
     expect(rollup.querySelector("svg")).toBeNull();
     expect(rollup.className).not.toContain("border");
     expect(rollup.className).not.toContain("bg-emerald");
     expect(rollup.className).not.toContain("bg-amber");
     expect(tierPill.querySelector("svg")).not.toBeNull();
 
-    // Wording scopes it to the Task, distinct from the row's own tier label -
-    // both happen to say "Merged" for different subjects, so the prefix is
-    // what keeps them from reading as the same claim.
+    // Wording scopes it to the Task, distinct from the row's own tier label - both happen to say "Merged" for
+    // different subjects, so the prefix is what keeps them from reading as the same claim.
     expect(rollup.textContent).toBe("Task Merged");
     expect(tierPill.textContent).not.toBe(rollup.textContent);
   });
@@ -4079,9 +4019,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
         name: "Delete worktree (status is still being checked)",
       }),
     ).toHaveLength(2);
-    // Every tier pill is the neutral pending state - NOT a base-only tier that
-    // would flip once the probes land. A base-only classify would call /wt/b
-    // "Review"; it must not, while pending.
+    // Every tier pill is the neutral pending state - not a base-only tier that would flip once the probes land. A
+    // base-only classify would call /wt/b "Review"; it must not, while pending.
     const tiers = screen
       .getAllByTestId("worktree-tier-pill")
       .map((pill) => pill.getAttribute("data-tier"));
@@ -4325,7 +4264,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     render(
       listElement({
         worktrees: [erroredRow],
-        // Not enriched, but its per-path query SETTLED to an error.
+        // Not enriched, but its per-path query settled to an error.
         enrichedByPath: new Map(),
         erroredPaths: new Set([erroredRow.worktreePath]),
         onVisiblePathsChange: undefined,
@@ -4620,11 +4559,7 @@ describe("WorktreesList status-aware delete safety", () => {
     toastMock.messages = [];
   });
 
-  // Returns the tree directly (no intermediate wrapper component, unlike
-  // `renderList`'s locally-scoped `Wrapper`) so a later `.rerender(...)` call
-  // with this same helper keeps the SAME root element type across renders -
-  // required for React to preserve component state (selection,
-  // `pendingDeleteTargets`) instead of remounting the whole subtree.
+  // Returns the tree directly (no intermediate wrapper component.
   function statusAwareElement(args: {
     readonly queryClient: QueryClient;
     readonly worktrees: readonly WorktreeHostEntryV16[];
@@ -4776,9 +4711,8 @@ describe("WorktreesList status-aware delete safety", () => {
   });
 
   it("names a gitUnreadable row as unreadable in the bulk summary, never as a detached HEAD", () => {
-    // The host reports `branch: null` / `uncommittedCount: 0` for a worktree it
-    // could not read, so handing the row to the loss sub-classifier would make
-    // the confirmation claim "1 detached HEAD" - a git state nobody observed.
+    // The host reports `branch: null` / `uncommittedCount: 0` for a worktree it could not read, so handing the row
+    // to the loss sub-classifier would make the confirmation claim "1 detached HEAD".
     const unreadable = {
       ...entry({
         worktreePath: "/wt/unreadable",
@@ -4815,9 +4749,7 @@ describe("WorktreesList status-aware delete safety", () => {
   });
 
   it("gives a mid-delete row no select description, never an in-use claim", () => {
-    // A backgrounded delete makes the row unselectable with NO disabled reason
-    // (it is neither in-use nor checking). A default would announce "In use by
-    // an active agent" to assistive tech for a row nobody is using.
+    // A default would announce "In use by an active agent" to assistive tech for a row nobody is using.
     renderDefault();
     confirmDelete("feat-dirty");
     act(() => {
@@ -4927,11 +4859,8 @@ describe("WorktreesList status-aware delete safety", () => {
     );
     screen.getByText("Delete worktree?");
 
-    // A refresh re-arms the row's enrichment while the confirmation is open -
-    // it regresses from ready back to Checking. The only pending target
-    // dropped to zero eligible rows, so the confirmation - which can no
-    // longer be trusted - closes, the drop is named, and the stale intent is
-    // cleared (not just visually hidden).
+    // The only pending target dropped to zero eligible rows, so the confirmation - which can no longer be trusted
+    // - closes, the drop is named, and the stale intent is cleared (not just visually hidden).
     rendered.rerender(
       statusAwareElement({
         queryClient,
@@ -4945,8 +4874,7 @@ describe("WorktreesList status-aware delete safety", () => {
     expect(streamMock.paths).toEqual([]);
     expect(toastMock.messages.join("\n")).toContain("still checking status");
 
-    // The row later settles back to ready. Since the stale intent was already
-    // cleared (not merely hidden), the old confirmation must NOT silently
+    // Since the stale intent was already cleared (not merely hidden), the old confirmation must not silently
     // reopen without the user choosing Delete again.
     rendered.rerender(
       statusAwareElement({
@@ -4982,9 +4910,8 @@ describe("WorktreesList status-aware delete safety", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 2 worktrees?");
 
-    // Both selected rows regress to Checking while the bulk confirmation is
-    // open - every pending target drops, unlike the mixed-drop case where a
-    // sibling stays eligible.
+    // Both selected rows regress to Checking while the bulk confirmation is open - every pending target drops,
+    // unlike the mixed-drop case where a sibling stays eligible.
     rendered.rerender(
       statusAwareElement({
         queryClient,
@@ -5103,10 +5030,7 @@ describe("WorktreesList PR-number search", () => {
     cleanup();
   });
 
-  // The BASE listing exactly as the host serves it: `prNumber` pinned to null on
-  // every row (see `worktree-setup-orchestrator`'s base shape). PR facts do not
-  // exist here - they only arrive on the enrichment overlay below. Building the
-  // fixture this way is what makes the un-enriched cases honest.
+  // PR facts do not exist here - they only arrive on the enrichment overlay below.
   const PR_BASE: readonly WorktreeHostEntryV16[] = [
     entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
     entry({ worktreePath: "/wt/sub-pr", branch: "feat-sub-pr" }),
@@ -5206,8 +5130,8 @@ describe("WorktreesList PR-number search", () => {
       enrichedByPath: enrichedExcept([]),
       erroredPaths: undefined,
     });
-    // The PR index is a UNION with the text haystack, never a replacement: a
-    // non-PR query must keep behaving exactly as it did before.
+    // The PR index is a union with the text haystack, never a replacement: a non-PR query must keep behaving
+    // exactly as it did before.
     search("feat-no-pr");
     expect(visibleBranches()).toEqual(["feat-no-pr"]);
     search("acme/app");
@@ -5219,10 +5143,8 @@ describe("WorktreesList PR-number search", () => {
   });
 
   it("reads 'still checking' - not 'no matches' - while the PR row is un-enriched", () => {
-    // `/wt/super-pr` is held back from the overlay, so its base row still carries
-    // `prNumber: null`. It genuinely cannot match `4360` yet - but claiming "no
-    // matches" would be a lie, because the worktree being looked for is right
-    // there, one probe away.
+    // It genuinely cannot match `4360` yet - but claiming "no matches" would be a lie, because the worktree being
+    // looked for is right there, one probe away.
     renderPrList({
       enrichedByPath: enrichedExcept(["/wt/super-pr"]),
       erroredPaths: undefined,
@@ -5286,9 +5208,8 @@ describe("WorktreesList PR-number search", () => {
   });
 
   it("does not hold the 'still checking' notice open for an errored row", () => {
-    // An errored row is un-enriched too, but its probe SETTLED - it will never
-    // learn its PR number. Counting it would pin the spinner on forever, so the
-    // empty state has to fall through to the plain no-match copy.
+    // An errored row is un-enriched too, but its probe settled - it will never learn its PR number. Counting it
+    // would pin the spinner on forever, so the empty state has to fall through to the plain no-match copy.
     renderPrList({
       enrichedByPath: enrichedExcept(["/wt/super-pr"]),
       erroredPaths: new Set(["/wt/super-pr"]),

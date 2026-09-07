@@ -42,11 +42,7 @@ import {
 } from "../push-registration";
 
 /**
- * OS push exists only inside the native shells - the dev web entry has no
- * push plugin, so `pushRegistrationTarget` returns `null` for it and the
- * runner host's click sink stays the familiar no-op. The per-platform
- * `(platform, environment)` rule, including why Android is always
- * `production`, lives with that function.
+ * OS push exists only inside the native shells - the dev web entry has no push plugin, so `pushRegistrationTarget` returns `null` for it and the runner host's click sink stays the familiar no-op.
  */
 function buildPushRegistration(
   authnBaseUrl: string,
@@ -69,17 +65,6 @@ function buildPushRegistration(
   });
 }
 
-/**
- * How the Settings row's "Open Settings" button leaves the app, or `null` on
- * the dev web entry, which has no OS page to open (and no push permission to
- * repair - `pushRegistration` is `null` there too, so the row never renders).
- *
- * Both platforms land on the app's NOTIFICATION screen, one tap from the
- * switch: `AppNotification` resolves iOS 15.4+'s notification-settings URL and
- * falls back to the app page (`UIApplication.openSettingsURLString`, the one
- * screen Apple supports opening) below that, where Notifications is one row
- * down anyway.
- */
 function buildOpenPushSettings(): (() => Promise<void>) | null {
   const platform = Capacitor.getPlatform();
   if (platform === "ios") {
@@ -99,11 +84,7 @@ function buildOpenPushSettings(): (() => Promise<void>) | null {
 
 const config = __TRAYCER_MOBILE_CONFIG__;
 
-// The baked dev host captures the port as of Vite startup, which goes stale
-// whenever the dev host restarts; the dev-server endpoint re-reads the host's
-// pid.json per request, so each directory refresh gets the live port.
-// BROWSER-TESTING SCAFFOLDING (dev entry only): a shipped build carries no
-// `devHost` and uses real remote-host discovery instead (see below).
+// The baked dev host captures the port as of Vite startup, which goes stale whenever the dev host restarts; the dev-server endpoint re-reads the host's pid.json per request, so each directory refresh gets the live port.
 function buildDevHostFetcher(
   devHost: TraycerMobileDevHost,
 ): () => Promise<RemoteHostFetchOutcome> {
@@ -141,123 +122,75 @@ function buildDevHostFetcher(
         ],
       };
     } catch {
-      // The baked entry, not `failed`: this scaffolding's whole point is that
-      // the dev host is reachable at a known port even when the pid re-read
-      // misses.
+      // The baked entry, not `failed`: this scaffolding's whole point is that the dev host is reachable at a known port even when the pid re-read misses.
       return bakedHost;
     }
   };
 }
 
-// `null` hands discovery to gui-app's default fetcher — the registry list
-// (`GET /api/v3/hosts` through `MobileRunnerHost.listRegisteredHosts`)
-// projected into relay-backed `remote` entries. The same production path the
-// desktop shell is on.
+// `null` hands discovery to gui-app's default fetcher - the registry list (`get /api/v3/hosts` through `MobileRunnerHost.listRegisteredHosts`) projected into relay-backed `remote` entries.
 const devHostFetch: (() => Promise<RemoteHostFetchOutcome>) | null =
   config.devHost === null ? null : buildDevHostFetcher(config.devHost);
 const remoteFetcher: RemoteHostFetcher | null =
   devHostFetch === null ? null : () => devHostFetch();
 
 function bootstrap(): void {
-  // Crash reporting comes up before anything that can fail, so a bootstrap
-  // error below is the first thing it sees rather than the one it misses.
-  // Synchronous and touching no OS capability, so it sits safely above the
-  // once-only deep-link read further down - that ordering rule is about
-  // nothing CONSUMING the launch URL first, and `init` reads nothing of the
-  // kind. A `null` here (no DSN baked - every local build) leaves reporting
-  // off and gui-app's own `isInitialized()` gate false, exactly as before.
+  // Crash reporting comes up before anything that can fail, so a bootstrap error below is the first thing it sees rather than the one it misses.
+  // Synchronous and touching no OS capability, so it sits safely above the once-only deep-link read further down - that ordering rule is about nothing consuming the launch URL first, and `init` reads nothing of the kind.
   const sentryOptions = sentryInitOptions(config);
   if (sentryOptions !== null) {
     initSentry(sentryOptions);
   }
   document.documentElement.classList.add("traycer-mobile-client");
-  // PRODUCT flag, not layout: unlocks mobile-app-only UX policy such as the
-  // single-composer draft model and the link-code sign-in entry. See gui-app's
-  // `src/lib/mobile-app.ts` for how this differs from the viewport signal.
-  // Platform-derived, not unconditional: this same bundle is ALSO the dev
-  // stack's browser surface (`make dev-gui-app` serves it as the "gui-app"
-  // stream), and a browser tab is not the installed mobile app — it must not
-  // inherit phone-only affordances like "Scan from desktop", which on the
-  // desktop side of that loop is a nonsense offer.
+  // Product flag, not layout: unlocks mobile-app-only UX policy such as the single-composer draft model and the link-code sign-in entry.
   setMobileApp(Capacitor.isNativePlatform());
-  // MEMORY, not product: the installed app runs under iOS's 2 GB WebContent
-  // ceiling, so it keeps fewer hidden tabs mounted and fewer epic / chat /
-  // terminal sessions warm than the desktop does. Gated on the same native
-  // check: the dev browser tab has a desktop's memory and gets the desktop
-  // numbers. Read lazily by every registry, so ordering against their
-  // module evaluation does not matter.
+  // Memory, not product: the installed app runs under iOS's 2 GB WebContent ceiling, so it keeps fewer hidden tabs mounted and fewer epic / chat / terminal sessions warm than the desktop does.
   setRetentionProfile(
     Capacitor.isNativePlatform()
       ? MOBILE_RETENTION_PROFILE
       : DESKTOP_RETENTION_PROFILE,
   );
-  // The shell's platform, for copy that must name the right update channel
-  // (TestFlight / the App Store vs Google Play). Gated on the same native
-  // check as the flag above: the dev browser tab reports platform "web" and
-  // stays `null`, which gui-app answers with store-neutral copy.
+  // The shell's platform, for copy that must name the right update channel (TestFlight / the App Store vs Google Play).
   const nativePlatform = Capacitor.getPlatform();
   setMobileAppPlatform(
     nativePlatform === "ios" || nativePlatform === "android"
       ? nativePlatform
       : null,
   );
-  // Native-only: the Keyboard plugin has no web implementation, and the dev
-  // browser tab's overlay keyboard is already covered by gui-app's
-  // visualViewport fallback. Started before render so the first keyboard
-  // event after mount is never missed. Only iOS overlays the keyboard
-  // (`resize: none`), so only there does the bridge own `--keyboard-inset`;
-  // Android resizes its own webview and `100dvh` already tracks it.
+  // Native-only: the Keyboard plugin has no web implementation, and the dev browser tab's overlay keyboard is already covered by gui-app's visualViewport fallback.
+  // Started before render so the first keyboard event after mount is never missed.
   if (Capacitor.isNativePlatform()) {
     startNativeKeyboardBridge({
       plugin: Keyboard,
       drivesInset: nativePlatform === "ios",
     });
   }
-  // APNs addressing follows code signing, not the backend set: staging and
-  // production both ship distribution-signed (TestFlight / App Store rewrite
-  // `aps-environment` to "production" at export), so only `dev` - the one
-  // debug-signed path - registers against the sandbox gateway. A staging
-  // bundle built locally in Xcode is debug-signed and mismatches; use the
-  // dev loop for local work.
+  // A staging bundle built locally in Xcode is debug-signed and mismatches; use the dev loop for local work.
   const pushRegistration = buildPushRegistration(
     config.authnBaseUrl,
     config.environment === "dev",
   );
-  // Started FIRST, before anything else in bootstrap: a QR scanned by the
-  // system camera launches this app, and that launch URL is readable exactly
-  // once. Native-only for the same reason as the scheme registration below -
-  // a browser tab is never opened by the OS with a `traycer://` or
-  // universal-link URL, and has no plugin to read one from.
+  // Started first, before anything else in bootstrap: a QR scanned by the system camera launches this app, and that launch URL is readable exactly once.
+  // Native-only for the same reason as the scheme registration below - a browser tab is never opened by the OS with a `traycer://` or universal-link URL, and has no plugin to read one from.
   const linkLoginDeepLinks = Capacitor.isNativePlatform()
     ? new MobileLinkLoginDeepLinks(App)
     : null;
   linkLoginDeepLinks?.start();
-  // Everything above stays SYNCHRONOUS, and the deep-link read above stays
-  // first: a QR scanned by the system camera makes the launch URL readable
-  // exactly once, so nothing may await before it. Only the remainder - which
-  // needs a capability the OS has to be asked for - moves behind an await.
-  // `void`, because a bootstrap failure has nowhere to be reported to.
+  // Everything above stays synchronous, and the deep-link read above stays first: a QR scanned by the system camera makes the launch URL readable exactly once, so nothing may await before it.
+  // Only the remainder - which needs a capability the OS has to be asked for - moves behind an await.
   void mount({ pushRegistration, linkLoginDeepLinks });
 }
 
 /**
  * The rest of bootstrap, after the one thing the OS must be asked.
- *
- * `supportsDirectDownload()` is a plugin call, so the host cannot be built in
- * the same tick as the synchronous setup above. The ordering that matters is
- * unchanged: `pushRegistration.start` still runs after the host exists and
- * still before the first render, so a cold-start notification tap is captured
- * before the GUI mounts. What moved is that BOTH now happen one microtask
- * later than they used to, and on Android after a bounded device probe.
+ * `supportsDirectDownload()` is a plugin call, so the host cannot be built in the same tick as the synchronous setup above.
  */
 async function mount(input: {
   readonly pushRegistration: MobilePushRegistration | null;
   readonly linkLoginDeepLinks: MobileLinkLoginDeepLinks | null;
 }): Promise<void> {
   const { pushRegistration, linkLoginDeepLinks } = input;
-  // Asked once, before the host exists, because `IFileSaveHost.downloadFile`
-  // is read synchronously at render time - a capability that resolved later
-  // would leave a Download control on screen that the shell cannot honour.
+  // Asked once, before the host exists, because `IFileSaveHost.downloadFile` is read synchronously at render time - a capability that resolved later would leave a Download control on screen that the shell cannot honour.
   const directDownloads = await supportsDirectDownload();
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
@@ -266,15 +199,10 @@ async function mount(input: {
     relayBaseUrl: config.relayBaseUrl,
     pushRegistration,
     openPushSettings: buildOpenPushSettings(),
-    // The scheme registration ships with the NATIVE shell (Info.plist /
-    // AndroidManifest; the iOS staging release lane re-stamps its own), and
-    // the baked config names that same scheme. Platform still decides whether
-    // ANY scheme exists: the dev web entry registers nothing and must not
-    // name a scheme some other installed app would answer.
+    // The scheme registration ships with the native shell (Info.plist / AndroidManifest; the iOS staging release lane re-stamps its own), and the baked config names that same scheme.
+    // Platform still decides whether any scheme exists: the dev web entry registers nothing and must not name a scheme some other installed app would answer.
     returnScheme: Capacitor.isNativePlatform() ? config.returnScheme : null,
-    // The selection authority's fleet rides the same dev-slot source the
-    // directory's fetcher uses, so a loopback dev host (never registered in
-    // the cloud) is still a derivation candidate. `null` = registry list.
+    // The selection authority's fleet rides the same dev-slot source the directory's fetcher uses, so a loopback dev host (never registered in the cloud) is still a derivation candidate.
     fleetHostIds:
       devHostFetch === null
         ? null
@@ -284,9 +212,7 @@ async function mount(input: {
               ? outcome.entries.map((entry) => entry.hostId)
               : null;
           },
-    // `@capacitor/barcode-scanner` has no web implementation, so the camera
-    // capability exists only on a native install; the browser entry keeps the
-    // manual code-entry path alone.
+    // `@capacitor/barcode-scanner` has no web implementation, so the camera capability exists only on a native install; the browser entry keeps the manual code-entry path alone.
     linkCodeScanner: Capacitor.isNativePlatform()
       ? new MobileLinkCodeScanner()
       : null,
@@ -296,35 +222,17 @@ async function mount(input: {
       ? new MobileDeviceDescriber()
       : null,
     linkLoginDeepLinks,
-    // Native-only, like the two above: the share sheet is the OS surface a
-    // phone user saves through, and neither plugin has a web implementation
-    // worth preferring over the browser save APIs gui-app already falls back
-    // to in a tab.
     fileSave: Capacitor.isNativePlatform()
       ? new MobileFileSave(directDownloads)
       : null,
-    // The one place this difference is allowed to be named. WKWebView honours
-    // an image clipboard write; Android's WebView RESOLVES it having written
-    // nothing, because Chromium reaches the Android clipboard for an image
-    // through an embedder-supplied image file provider and that embedder
-    // installs none. Nothing rejects, so gui-app cannot learn this by trying -
-    // it reads the capability instead, and simply does not offer a Copy that
-    // would report a success the clipboard never received. The dev web entry
-    // is a real browser tab, where the write works.
+    // The one place this difference is allowed to be named.
+    // Nothing rejects, so gui-app cannot learn this by trying - it reads the capability instead, and simply does not offer a Copy that would report a success the clipboard never received.
     canCopyImages: Capacitor.getPlatform() !== "android",
-    // The other place a platform is named. Android is the one shell whose OS
-    // raises a back request - the hardware key and the system back gesture,
-    // which the OS takes before the WebView sees a touch, so the GUI's own
-    // edge swipe never fires there. iOS has neither, and its edge swipe IS
-    // that recognizer; the dev web entry has the browser's own back.
+    // The other place a platform is named.
+    // Android is the one shell whose OS raises a back request - the hardware key and the system back gesture, which the OS takes before the WebView sees a touch, so the gui's own edge swipe never fires there.
     systemBack:
       Capacitor.getPlatform() === "android" ? new MobileSystemBack(App) : null,
   });
-  // After the host exists: registration follows the token store (sign-in,
-  // app start while signed in, sign-out) and the host's resume edge (a
-  // permission granted later in the OS Settings app), and the plugin
-  // listeners attach now so a cold-start tap is captured before the GUI
-  // mounts.
   pushRegistration?.start(host.tokenStore, host);
   const container = document.getElementById("root");
   if (container === null) {

@@ -9,26 +9,12 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
- * Hard invariant for the partial CloudData → protocol migration:
- *
- *   latest hostRpcRegistry["epic.listTasks"] contract
- *
- * must wire the canonical `listTasks*` schema instances exported from
- * `unary-schemas` - not merely equal shapes. Referential equality
- * (Object.is / `toBe`) catches an accidental future redefinition: if someone
- * re-declares `listTasksRequestSchema` locally, the structural test would
- * still pass, but this one will fail.
- *
- * The cloud-side (`cloudDataRpcRegistry["task.list"]`) reuse of these same
- * instances is guaranteed by construction - the cloud registry imports them
- * directly from `@traycer/protocol/host/epic/unary-schemas` - and is
- * covered on the consumer side, so protocol's own tests stay within the
- * protocol package.
+ * Hard invariant for the partial CloudData → protocol migration
+ * must wire the canonical `listTasks*` schema instances exported from `unary-schemas` - not merely equal shapes.
  */
 describe("epic.listTasks instance identity", () => {
-  // The LATEST minor - bump alongside `latestMinor` in the registry. This
-  // test exists to catch a latest contract that drifted off the canonical
-  // instances, so it must track latest rather than a fixed minor.
+  // The LATEST minor - bump alongside `latestMinor` in the registry.
+  // This test exists to catch a latest contract that drifted off the canonical instances, so it must track latest rather than a fixed minor.
   const hostContract =
     hostRpcRegistry["epic.listTasks"][1].versions[3].contract;
 
@@ -144,9 +130,7 @@ describe("epic.listTasks instance identity", () => {
     });
   });
   it("keeps chatHostIds on latest rows and drops it from the frozen pre-1.3 row", () => {
-    // zod STRIPS unknown keys, so a response schema that kept the pre-1.3 row
-    // would discard `chatHostIds` from every row with nothing failing - the
-    // field would just never arrive. Parse, don't typecheck, to catch that.
+    // zod STRIPS unknown keys, so a response schema that kept the pre-1.3 row would discard `chatHostIds` from every row with nothing failing - the field would just never arrive.
     const row = {
       epic: null,
       phase: null,

@@ -4,18 +4,6 @@ import type { PendingLoginItemRevisionMonitorHostController } from "../pending-l
 import type { MutationOutcome } from "../host-controller-types";
 import type { ConvergeReadyOk } from "../host-controller-types";
 
-// Ticket: HostController two-lane scheduler cutover. This monitor used to
-// own the pending-LaunchAgent-revision fast path's own guards (marker check,
-// reachability, idle probe) and hand off to `host-ensure-ipc.ts`'s
-// `runEnsureHost` in-flight slot. All of that now lives inside
-// `HostController.applyPendingLoginItemRevisionIfIdle()` - a single,
-// self-locking controller method - so this monitor is a thin timer wrapper:
-// it owns only the poll interval, the failure budget, and stopping once the
-// controller reports the refresh quarantined for the session. See
-// `host-controller.test.ts` for the actual refresh-cycle behavior (busy
-// skip, requires-approval quarantine, desktop-lock mutual exclusion with a
-// concurrent `convergeReady`) and `pending-login-item-revision-monitor.ts`'s
-// module doc comment for the full mechanism this closes the gap for.
 
 const SERVICE_VERSION = "1.2.3";
 const INTERVAL_MS = 1_000;

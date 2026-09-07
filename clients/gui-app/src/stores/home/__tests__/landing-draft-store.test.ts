@@ -26,8 +26,6 @@ function textContent(text: string): JsonContent {
 }
 
 // Inbound desktop projections carry `content` as opaque `DesktopJsonValue`.
-// Mirror `textContent` in that shape so a fixture draft passes the doc-shape
-// guard and restores to the same `JsonContent` the assertions expect.
 function desktopTextContent(text: string): DesktopJsonValue {
   if (text.length === 0) {
     return { type: "doc", content: [{ type: "paragraph" }] };
@@ -38,10 +36,8 @@ function desktopTextContent(text: string): DesktopJsonValue {
   };
 }
 
-// `lastTouchedAt` is stamped with `Date.now()` (and excluded from draft
-// equality), so assert every other field exactly while only checking the
-// timestamp is a number - substituting the live value keeps `toEqual` strict on
-// the deterministic fields without an `expect.any` `any`-typed literal.
+// `lastTouchedAt` is stamped with `Date.now()` (and excluded from draft equality), so assert every
+// other field exactly while only checking the timestamp is a number - substituting the live value
 function expectLandingDraftsMatch(
   expected: ReadonlyArray<Omit<LandingDraftTab, "lastTouchedAt">>,
 ): void {
@@ -76,14 +72,8 @@ import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
-// `readCurrentLandingDraftWorkspaceSnapshot` resolves the app-wide host
-// imperatively via `activeHostIdOrNull()` (see landing-draft-store.ts), which
-// reads the selection authority's projection. No provider is mounted in this
-// suite, so the store is SEEDED below rather than the reader stubbed: the
-// spine accessor this used to mock now answers `null` for every host by
-// design (P4.2/D17 deleted the active slot), so a stub of it would have gone
-// on passing while the production read resolved nothing. Seeding what the
-// reader actually asks about keeps this suite able to catch that.
+// `readCurrentLandingDraftWorkspaceSnapshot` resolves the app-wide host imperatively via
+// `activeHostIdOrNull()` (see landing-draft-store.ts), which reads the selection authority's
 
 const HOST_A = "host-a";
 
@@ -619,9 +609,8 @@ describe("useLandingDraftStore", () => {
 
     const workspace = useLandingDraftStore.getState().drafts[0].workspace;
     expect(workspace.folders).toHaveLength(50);
-    // Primary resolves to the first folder (nothing was explicitly marked
-    // primary yet) and the cap trim must preserve it even though it is the
-    // OLDEST entry - the eviction trims the oldest SECONDARIES instead.
+    // Primary resolves to the first folder (nothing was explicitly marked primary yet) and the cap
+    // trim must preserve it even though it is the OLDEST entry - the eviction trims the oldest
     expect(workspace.primaryPath).toBe("/tmp/workspace-0");
     expect(workspace.folders[0]).toBe("/tmp/workspace-0");
     expect(workspace.folders.at(-1)).toBe("/tmp/workspace-54");
@@ -844,11 +833,8 @@ describe("useLandingDraftStore", () => {
   });
 
   it("keeps a blank-named epic tab but rejects structurally-malformed ones while applying a window projection", () => {
-    // A blank `name` is now legitimate: epics/agents are created untitled and
-    // the display layer derives the shown title. Identity is `id` + `epicId`,
-    // so a blank-named tab with both present is a real untitled tab and must
-    // survive the projection round-trip. Only entries missing `id`/`epicId` are
-    // structurally malformed and dropped.
+    // A blank `name` is now legitimate: epics/agents are created untitled and the display layer
+    // derives the shown title.
     const snapshot = emptyWindowSnapshot({
       epicTabs: [
         { id: "untitled-tab", epicId: "epic-untitled", name: "" },
@@ -999,9 +985,8 @@ describe("useLandingDraftStore", () => {
   });
 
   it("round-trips rich content (including a hash-only image) through the desktop projection", () => {
-    // T6: outbound projection -> inbound parse must preserve the full editor
-    // JSON by value. A hash-only image node and the selection survive intact;
-    // nothing is downgraded to plain text.
+    // T6: outbound projection -> inbound parse must preserve the full editor JSON by value. A
+    // hash-only image node and the selection survive intact; nothing is downgraded to plain text.
     const imageContent: JsonContent = {
       type: "doc",
       content: [
@@ -1064,9 +1049,8 @@ describe("useLandingDraftStore", () => {
   });
 
   it("drops an inbound draft whose doc `content` is not an array (malformed)", () => {
-    // A corrupted snapshot: doc-typed but `content` is not an array. The inbound
-    // guard must reject it, not let `draftTabName` walk a non-array and throw at
-    // tab-strip render.
+    // A corrupted snapshot: doc-typed but `content` is not an array. The inbound guard must reject it,
+    // not let `draftTabName` walk a non-array and throw at tab-strip render.
     const snapshot = emptyWindowSnapshot({
       epicTabs: [],
       activeTabId: null,
@@ -1153,11 +1137,8 @@ describe("useLandingDraftStore", () => {
     expect(parsed.state?.drafts?.[0]?.settings).toBeNull();
   });
 
-  // Mechanism A (round 5): the strip lives at the two SERIALIZATION seams — the
-  // localStorage `partialize` and the desktop projection — NOT in
-  // `setDraftContent`. The in-memory draft is canonical and keeps a paste's
-  // still-pending b64 node so a keyed remount / in-session navigate-back can
-  // re-ingest it; only the serialized forms are guaranteed base64-free.
+  // Mechanism A (round 5): the strip lives at the two SERIALIZATION seams - the localStorage
+  // `partialize` and the desktop projection - NOT in `setDraftContent`.
   describe("base64 image nodes strip only at the serialization seams", () => {
     const mixedPendingContent: JsonContent = {
       type: "doc",
@@ -1219,7 +1200,7 @@ describe("useLandingDraftStore", () => {
       useLandingDraftStore
         .getState()
         .setDraftContent(id, mixedPendingContent, null);
-      // Verbatim — this is the content the keyed remount reads back and the
+      // Verbatim - this is the content the keyed remount reads back and the
       // mount-time re-entry re-ingests.
       expect(
         useLandingDraftStore.getState().drafts.find((d) => d.id === id)
@@ -1318,10 +1299,7 @@ describe("useLandingDraftStore", () => {
 
   describe("draft-move image adoption", () => {
     it("adopts for a draft whenever it FIRST appears, not only on the first projection, and once per draft", () => {
-      // The regression this pins: adoption gated on "is this the first
-      // projection". Subscription order vs the seeded snapshot is an ordering
-      // fact, not an invariant - an empty snapshot arriving first must not
-      // permanently skip a moved draft that lands on the next one.
+      // The regression this pins: adoption gated on "is this the first projection".
       const adopt = vi
         .spyOn(landingImageMove, "adoptDraftImageHandoff")
         .mockImplementation(() => Promise.resolve());
@@ -1391,11 +1369,8 @@ describe("useLandingDraftStore", () => {
 
   describe("[B1] empty-inbound clobber guard", () => {
     it("preserves non-empty in-memory drafts on empty inbound and re-projects outbound", () => {
-      // Stub the GC gates (no call-through): this suite has no idb-keyval mock,
-      // and the assertion is about whether the guard fires them, not the sweep.
-      // [B1-P2] mount→readiness is covered with the real GC in
-      // landing-image-gc.test.ts `[B1+B2]` (spyOn cannot intercept same-module
-      // internal calls from markLandingEditorMounted → markLandingDraftsReady).
+      // Stub the GC gates (no call-through): this suite has no idb-keyval mock, and the assertion is
+      // about whether the guard fires them, not the sweep.
       const markReady = vi
         .spyOn(landingImageGc, "markLandingDraftsReady")
         .mockImplementation(() => undefined);

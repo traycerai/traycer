@@ -173,10 +173,8 @@ describe("useRateLimitPopoverStore", () => {
     expect(useRateLimitPopoverStore.getState().scopedHostId).toBeNull();
   });
 
-  // A host id is opaque to this store, so the only thing rehydration can
-  // check is "a non-empty string someone could have picked"
-  // (`persistedScopedHostId`). Anything else drops to `null` rather than
-  // handing a garbage value on to `resolveScopedHost`.
+  // A host id is opaque to this store, so the only thing rehydration can check is "a non-empty
+  // string someone could have picked" (`persistedScopedHostId`).
   it.each([
     ["a number", 42],
     ["an empty string", ""],

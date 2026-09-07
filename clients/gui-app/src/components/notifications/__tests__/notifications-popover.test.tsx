@@ -67,24 +67,16 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
+/** The account axis the wire no longer carries: `hostListItemToDirectoryEntry` stamps it onto every entry at
+ * projection time. These fixtures describe an entitled account unless a case says otherwise. */
 const PLAN_ALLOWS_REMOTE = true;
 
 const reconnectEngine = createHostReconnectEngine();
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
-/**
- * `createRequesterForHostId` is not optional decoration: production resolves
- * the app-wide host through the spine's id-pinned requester (redesign P4.2),
- * so a stub without it takes the subject down at first render rather than
- * failing an assertion. One host per fixture means the requester IS the
- * client, which is what makes the self-return honest here.
- */
+/** `createRequesterForHostId` is not optional decoration: production resolves the app-wide host through the
+ * spine's id-pinned requester. */
 interface StubHostClient {
   readonly request: typeof hostRequestMock;
   readonly getActiveHostId: () => string | null;
@@ -147,14 +139,8 @@ vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedMode.value,
 }));
 
-/**
- * Controllable ready-session evidence, the same seam
- * `use-host-reachability.composition.test.tsx` uses. `originRefusal` asks the
- * shared `isConfirmedTransportRefusal` gate, whose ready-session override must
- * keep an approval actionable when this client holds a live session to a
- * cloud-`offline` origin. Partial (spread-actual) so every other export stays
- * real.
- */
+/** `originRefusal` asks the shared `isConfirmedTransportRefusal` gate, whose ready-session override must keep
+ * an approval actionable when this client holds a live session to a cloud-`offline` origin. */
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
 
 vi.mock(
@@ -226,9 +212,8 @@ function PopoverShell(props: { readonly onNavigate: () => void }): ReactNode {
 }
 
 function buildRouterWithCapture(target: TargetCapture, onNavigate: () => void) {
-  // Keep the center mounted across in-app navigation the way the real app
-  // shell does: routeNotification may change the route while the center is
-  // still open; the shell itself must stay mounted until onNavigate closes it.
+  // Keep the center mounted across in-app navigation the way the real app shell does: routeNotification may
+  // change the route while the center is still open.
   const rootRoute = createRootRoute({
     component: () => (
       <>
@@ -442,11 +427,8 @@ function cloudDone(
   };
 }
 
-/**
- * A REAL projected remote origin entry (the directory service's own mapper),
- * cloud-`offline` with the given `lastSeenAt` deciding the relay-fuse
- * recovery-dial window at projection time.
- */
+/** A real projected remote origin entry (the directory service's own mapper), cloud-`offline` with the given
+ * `lastSeenAt` deciding the relay-fuse recovery-dial window at projection time. */
 function offlineRemoteOrigin(
   hostId: string,
   lastSeenAt: string,
@@ -474,7 +456,6 @@ function offlineRemoteOrigin(
   );
 }
 
-/** A `lastSeenAt` far past the relay-fuse cap - no recovery-dial window. */
 const STALE_ORIGIN_LAST_SEEN = "2026-07-03T11:59:50.000Z";
 
 function cloudApproval(
@@ -493,7 +474,6 @@ function cloudApproval(
   };
 }
 
-/** Routes origin lookups at the given remote entry, local lookups as usual. */
 function bindOriginDirectory(origin: RemoteHostDirectoryEntry): void {
   directoryRef.value = {
     findById: (hostId) => {
@@ -596,10 +576,8 @@ function bindHostClient(): void {
   };
 }
 
-/** Faithful DISCONNECT: runtime binding retained (`client !== null`) while
- * the active host id is null on both the reactive signal and
- * `client.getActiveHostId()`, and the exact summary goes unknown. Call after
- * `applyHostSnapshot` so `byId` rows stay rendered. */
+/** Faithful disconnect: runtime binding retained (`client !== null`) while the active host id is null on both
+ * the reactive signal and `client.getActiveHostId`, and the exact summary goes unknown. */
 function simulateHostDisconnect(): void {
   activeHostIdRef.value = null;
   // The requester answers `null` too - a disconnect is the client addressing
@@ -646,9 +624,8 @@ function defaultHostRequest(method: string): Promise<unknown> {
 }
 
 function activateButtonFor(row: HTMLElement): HTMLButtonElement {
-  // Role query scoped to the row (testing guideline): the navigable body is
-  // the row's first button in document order; the trailing mark-read tick is
-  // its later sibling, never nested inside it.
+  // Role query scoped to the row (testing guideline): the navigable body is the row's first button in document
+  // order; the trailing mark-read tick is its later sibling, never nested inside it.
   const button = within(row).getAllByRole("button")[0];
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error("activate button not found");
@@ -892,13 +869,7 @@ describe("NotificationsPopover", () => {
   });
 
   it("keeps an approval actionable when its cloud-offline origin has a READY live session in this client", async () => {
-    // The registry says `offline` (stale lastSeenAt - not even a fuse
-    // window), but THIS client holds a ready E2E session to the origin:
-    // firsthand proof the route works, which `isConfirmedTransportRefusal`
-    // lets outrank the cloud verdict everywhere else (`useHostReachability`,
-    // `dialableHostEndpoint` - the exact gate activation dials through).
-    // Reading the raw verdict here instead removed the activation button
-    // from a route that works.
+    // Reading the raw verdict here instead removed the activation button from a route that works.
     notificationFeedMode.value = "cloud";
     bindHostClient();
     const origin = offlineRemoteOrigin(
@@ -934,9 +905,8 @@ describe("NotificationsPopover", () => {
   });
 
   it("still refuses the same cloud-offline origin when NO ready session exists", async () => {
-    // The counterpart leg: absent firsthand session evidence (and past the
-    // relay-fuse window), the confirmed `offline` refusal still disables the
-    // action - guards against the override making every origin look alive.
+    // The counterpart leg: absent firsthand session evidence (and past the relay-fuse window), the confirmed
+    // `offline` refusal still disables the action - guards against the override making every origin look alive.
     notificationFeedMode.value = "cloud";
     bindHostClient();
     const origin = offlineRemoteOrigin(
@@ -970,11 +940,8 @@ describe("NotificationsPopover", () => {
   });
 
   it("keeps a fuse-window offline origin actionable (the recovery dial the activation path would attempt)", async () => {
-    // Inside the relay-fuse window `isConfirmedTransportRefusal` permits the
-    // recovery dial, so `dialableHostEndpoint` routes the activation; a row
-    // that greyed itself out from the raw verdict refused an action the
-    // transport would have attempted (and which fails recoverably if the
-    // host really is dead).
+    // Inside the relay-fuse window `isConfirmedTransportRefusal` permits the recovery dial, so
+    // `dialableHostEndpoint` routes the activation.
     notificationFeedMode.value = "cloud";
     bindHostClient();
     const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
@@ -1405,10 +1372,8 @@ describe("NotificationsPopover", () => {
     expect(row.className).not.toMatch(/bg-accent\/55|bg-muted\/35/);
     expect(row.className.split(/\s+/)).toEqual(
       expect.arrayContaining([
-        // Foreground-alpha, not `bg-muted/70`: these rows render on the
-        // notifications popover, whose surface IS `--muted`'s value in every
-        // preset dark theme, so a muted tint left the hover/focus states
-        // invisible there.
+        // Foreground-alpha, not `bg-muted/70`: these rows render on the notifications popover, whose surface IS
+        // `--muted`'s value in every preset dark theme, so a muted tint left the hover/focus states invisible there.
         "hover:bg-foreground/6",
         "has-[:focus-visible]:bg-foreground/6",
         "py-2.5",
@@ -1474,9 +1439,7 @@ describe("NotificationsPopover", () => {
         useAppLocalNotificationsStore.getState().byId["local-1"].readAt,
       ).toBeTypeOf("number");
     });
-    // Once read, the trailing acknowledge control is unmounted entirely
-    // (no disabled dead CheckCheck button). Re-query the live row — a
-    // lifecycle move out of Attention can remount the entry.
+    // Once read, the trailing acknowledge control is unmounted entirely (no disabled dead CheckCheck button).
     await waitFor(() => {
       const live = screen
         .queryAllByTestId("notification-entry")

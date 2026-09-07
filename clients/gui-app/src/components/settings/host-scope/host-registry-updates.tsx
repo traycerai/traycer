@@ -12,33 +12,11 @@ import {
   deriveUpdatePill,
 } from "@/components/settings/panels/my-hosts-model";
 
-/**
- * The auto-update policy switch.
- *
- * Now inside the Advanced disclosure, apart from the drain gate below, and the
- * split is about urgency rather than topic. This is a preference someone sets
- * once and forgets, so it belongs with the other settings a person opens
- * Advanced to find; "Apply now — ends N sessions" appears only while an update is
- * genuinely blocked on open sessions, and hiding THAT behind a collapsed
- * disclosure would bury the one control here with a deadline on it.
- *
- * Works without a live session on purpose: the policy is stored in the
- * account's host registry and the host reads it on its next check-in, which is
- * what keeps an offline host's Overview useful instead of blank.
- *
- * The DRAIN half is the exception, and it is deliberate. "Waiting for N
- * sessions" and "Apply now — ends N sessions" name a count and then destroy
- * that many sessions, so the count has to come from a live read of the host
- * (`liveBusySessionCount`) rather than from the registry row beside it. It used
- * to come from the cloud DTO, where it could be a lease-interval stale; a host
- * with no live source now shows no drain state at all, which is the only
- * honest answer and — since ending sessions needs a reachable host anyway — not
- * a capability anyone loses.
- */
+/** Works without a live session on purpose: the policy is stored in the account's host registry and the host
+ * reads it on its next check-in, which is what keeps an offline host's Overview useful instead of blank. */
 export function HostAutoUpdateRow(props: {
   readonly item: HostListItem;
   readonly mutation: UpdateHostVersionPolicyMutation;
-  /** Row chrome is the caller's, since the two rows now sit in different boxes. */
   readonly className: string;
 }): ReactNode {
   const { item, mutation } = props;
@@ -67,26 +45,8 @@ export function HostAutoUpdateRow(props: {
       />
       <div className="min-w-0 flex-1">
         <p className="text-ui-sm text-foreground">Auto-update</p>
-        {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
-              saying "Installs new versions when no sessions are running."
-              locally — which was fiction. The pin is applied by the HOST's own
-              update reconciler, reading the coordination snapshot its check-in
-              populates (`update-reconciler.ts` — no locality branch anywhere in
-              it). The local machine's CLI controller is a different mechanism
-              entirely: it backs the MANUAL apply button, not this policy. The
-              fork therefore described a path that does not exist, omitted the
-              latency that does, and — because the two variants render the same
-              component — made the Overview visibly differ for local and remote
-              hosts on a page whose whole premise is that it does not.
-
-              The stated latency is an UPPER bound, and deliberately so. It used
-              to read "~20s", the cadence of the host→cloud heartbeat that fed
-              the snapshot; that heartbeat is gone and the ~10-minute token
-              refresh carries the same fields now. A host with a live session
-              picks it up in seconds instead (the room nudge), but a person
-              cannot tell from this row which case they are in, so the copy
-              promises the slower one and lets the faster one be a pleasant
-              surprise. */}
+        {/* The fork therefore described a path that does not exist, omitted the latency that does, and - because the
+           two variants render the same component. */}
         <p className="text-ui-xs text-muted-foreground">
           Applied on this host&apos;s next check-in — within ~10 minutes, and
           only when no sessions are running.
@@ -104,41 +64,19 @@ export function HostAutoUpdateRow(props: {
   );
 }
 
-/**
- * "Apply now — ends N sessions", and NOTHING when no update is waiting on
- * sessions.
- *
- * Rendering nothing is the common case by a wide margin, which is exactly why
- * this is a separate component: a row that is usually absent should not decide
- * the layout of the row that is always present.
- */
+/** "Apply now - ends N sessions", and nothing when no update is waiting on sessions. */
 export function HostUpdateDrainGateRow(props: {
   readonly item: HostListItem;
   readonly mutation: UpdateHostVersionPolicyMutation;
-  /**
-   * Open work blocking the drain, from `host.status` over the live
-   * connection. `null` when this client has no live read of the host — NOT
-   * zero.
-   *
-   * The DISPLAY read. It drives the labels and nothing else.
-   */
+  /** Open work blocking the drain, from `host.status` over the live connection. */
   readonly liveBusySessionCount: number | null;
-  /**
-   * Typed split of that total, or `null` when the host did not say. Names
-   * kinds on the button when present; count copy is retained otherwise.
-   */
+  /** Names kinds on the button when present; count copy is retained otherwise. */
   readonly liveBusyBreakdown: HostBusyBreakdown | null;
-  /**
-   * The same count from a SETTLED read — nothing in flight, not aged out.
-   * Drives the drain force's arm/confirm path, which needs a number it can
-   * stand behind rather than one that is merely the best available.
-   */
+  /** Drives the drain force's arm/confirm path, which needs a number it can stand behind rather than one that is
+   * merely the best available. */
   readonly settledBusySessionCount: number | null;
-  /**
-   * The settled typed split, or `null` when the host did not say / the read
-   * is not settled. Captured on arm with the count so a same-total category
-   * swap (2 agents → 2 terminals) is a moved promise, not a confirm.
-   */
+  /** Captured on arm with the count so a same-total category swap (2 agents → 2 terminals) is a moved promise,
+   * not a confirm. */
   readonly settledBusyBreakdown: HostBusyBreakdown | null;
 }): ReactNode {
   const { item, mutation } = props;
@@ -165,72 +103,31 @@ export function HostUpdateDrainGateRow(props: {
   );
 }
 
-/**
- * "Apply now — ends N sessions" (the drain-gate force): bypasses waiting for
- * open sessions on the CURRENTLY pending update. This is destructive (it ends
- * N open terminal/agent sessions), so it always requires an explicit
- * confirmation through the same `ConfirmDestructiveDialog` this codebase uses
- * for other disruptive host actions — never a casual one-click.
- */
+/** This is destructive (it ends N open terminal/agent sessions), so it always requires an explicit confirmation
+ * through the same `ConfirmDestructiveDialog` this codebase uses for other disruptive host actions. */
 function ApplyNowControl(props: {
   readonly hostId: string;
   readonly label: string;
   readonly mutation: UpdateHostVersionPolicyMutation;
-  /**
-   * The count this control may stand behind: `null` unless the `host.status`
-   * read is settled. Deliberately NOT the count in `label` — the label may
-   * render a retained number through a refetch, and arming a force from a
-   * number that is merely retained is the whole failure this split closes.
-   */
+  /** Deliberately not the count in `label` - the label may render a retained number through a refetch, and arming
+   * a force from a number that is merely retained is the whole failure this split closes. */
   readonly settledBusySessionCount: number | null;
-  /**
-   * The settled split captured with the count. A same-total category swap is
-   * a moved promise: arming "ends 2 agents" must not confirm after those
-   * agents finish and two terminals start. `null` is unknown, not a zero
-   * object — a read that becomes null is lost, not idle-by-kind.
-   */
+  /** The settled split captured with the count. A same-total category swap is a moved promise: arming "ends 2
+   * agents" must not confirm after those agents finish and two terminals start. */
   readonly settledBusyBreakdown: HostBusyBreakdown | null;
 }): ReactNode {
   const { hostId, label, mutation } = props;
-  // The TARGET is captured when the dialog is armed, not read when it is
-  // confirmed.
-  //
-  // Only `open` used to live here while `hostId` and `mutation` arrived as
-  // props that rebind on every render. Anything that moved the scoped host
-  // while this dialog stood open — a switcher pick, or the active host
-  // changing from another window — slid a new host underneath it, and
-  // confirming then ended the sessions of a host the dialog never named. The
-  // copy says "this host"; this is what makes that true.
+  // The target is captured when the dialog is armed, not read when it is confirmed.
   const [armedHostId, setArmedHostId] = useState<string | null>(null);
-  // The COUNT and the BREAKDOWN are captured with the target, for the same
-  // reason and against a sharper failure. This dialog names work and then
-  // destroys it, and it can stand open while that work moves underneath it
-  // — a different number, or the same number of a different kind. Confirming
-  // then ends a quantity or a category nobody was shown. Re-checking at
-  // confirm time against what was ARMED is what makes "ends 2 agents" a
-  // promise rather than an estimate.
-  //
-  // Both ways the number can move now reach this guard, and the `null` arm is
-  // the one that changed. A changed count (2 → 3) always did.
-  //
-  // A LOST count used to be unreachable here: `deriveUpdateAffordance` nulls
-  // `applyNowLabel` the moment the DISPLAY read goes away, and
-  // `HostRegistryUpdates` gates this whole control on that label, so losing the
-  // source unmounted the trigger and any open dialog with it. That is still
-  // true of a genuinely lost read. It is NOT true of the case this control now
-  // reads instead: a settled count is also lost for the duration of every
-  // refetch, while the label keeps rendering the retained number and this stays
-  // mounted. So the `null` arms below are live, load-bearing, and the reason
-  // this component takes a different snapshot from the one on its own button.
+  // Re-checking at confirm time against what was armed is what makes "ends 2 agents" a promise rather than an
+  // estimate.
   const [armedCount, setArmedCount] = useState<number | null>(null);
   const [armedBreakdown, setArmedBreakdown] =
     useState<HostBusyBreakdown | null>(null);
   const open = armedHostId !== null;
   const targetMoved = armedHostId !== null && armedHostId !== hostId;
-  // `null` covers "the live source is gone", "it never reported", and "a
-  // replacement read is in flight" — the same answer in all three: we cannot
-  // currently stand behind the number. A lost breakdown is the same: null is
-  // not a zero object.
+  // `null` covers "the live source is gone", "it never reported", and "a replacement read is in flight" - the
+  // same answer in all three: we cannot currently stand behind the number.
   const countMoved =
     open &&
     (props.settledBusySessionCount === null ||
@@ -250,11 +147,7 @@ function ApplyNowControl(props: {
           setArmedCount(props.settledBusySessionCount);
           setArmedBreakdown(props.settledBusyBreakdown);
         }}
-        // Arming is refused, not merely refused at confirm time, while the
-        // count is unsettled. The dialog would open naming a number it would
-        // then decline to act on, which is a worse experience than a briefly
-        // inert button — and the window is one host RPC over an already-open
-        // connection.
+        // Arming is refused, not merely refused at confirm time, while the count is unsettled.
         disabled={mutation.isPending || props.settledBusySessionCount === null}
         data-testid={`host-apply-now-trigger-${hostId}`}
       >
@@ -280,10 +173,7 @@ function ApplyNowControl(props: {
         actionLabel="Apply now"
         isPending={mutation.isPending}
         onConfirm={() => {
-          // Refuse rather than retarget. A destructive action whose subject,
-          // magnitude, or KIND changed after it was armed has no safe
-          // interpretation: the person agreed to end named work on a named
-          // host, and we no longer have that.
+          // Refuse rather than retarget.
           if (refuse) return;
           mutation.mutate(
             { updatePolicy: undefined, desiredVersion: undefined, force: true },
@@ -295,23 +185,7 @@ function ApplyNowControl(props: {
   );
 }
 
-/**
- * What the confirmation says, given what may have shifted while it stood open.
- *
- * Both refusals are stated as a REASON plus a next step rather than a disabled
- * button, because the person already decided to do this and deserves to know
- * why it did not happen. The count case is the subtler one: nothing looks
- * broken, the number on the button simply stopped being something we can
- * stand behind.
- *
- * Which is why the "cannot see it" branch keys off `currentCount`, not
- * `armedCount`. Those two used to be the same question, back when losing the
- * read unmounted the whole control — the only way to reach the refusal was for
- * a number to have moved to another number. Now a refetch withdraws the count
- * without withdrawing the control, so the dialog can be armed at 2 and then be
- * unable to see anything; branching on `armedCount` there produced "it is no
- * longer 2" about a number that had not changed at all.
- */
+/** Which is why the "cannot see it" branch keys off `currentCount`, not `armedCount`. */
 function describeApplyNowConfirmation(input: {
   readonly targetMoved: boolean;
   readonly countMoved: boolean;

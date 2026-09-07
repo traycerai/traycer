@@ -28,22 +28,9 @@ import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 interface ContextUsageChipProps {
-  /**
-   * Latest assistant-turn token usage, or `null` if no completed turn has
-   * carried a usage rollup yet. The chip hides when this is `null`, when
-   * `usage.contextWindow` is missing, or when the computed remaining
-   * percent isn't a finite number.
-   */
+  /** Latest assistant-turn token usage, or `null` if no completed turn has carried a usage rollup yet. The chip hides when this is `null`, when `usage.contextWindow` is missing, or when the computed remaining percent isn't a finite number. */
   readonly usage: TokenUsage | null;
-  /**
-   * Runs the harness's own compaction. `null` when this session can't be
-   * compacted on demand - either the harness has no compaction at all
-   * (amp, droid, cursor) or it only ever compacts automatically (copilot,
-   * which exposes no manual command). The affordance is then absent rather
-   * than disabled: a greyed-out control reads as "temporarily unavailable"
-   * when the truth is "this harness can't do this", the same fail-closed rule
-   * the chip itself follows when a harness reports no context window.
-   */
+  /** `null` when this session can't be compacted on demand - either the harness has no compaction at all (amp, droid, cursor) or it only ever compacts automatically (copilot, which exposes no manual command). The affordance is then absent rather than disabled: a greyed-out control reads as "temporarily unavailable" when the truth is "this harness can't do this", the same fail-closed rule the chip itself follows when a harness reports no context window. */
   readonly onCompact: (() => void) | null;
 }
 
@@ -84,13 +71,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
 
   if (usage === null) return null;
   const effective = computeEffectiveContextUsage(usage);
-  // The chip ONLY renders when we can compute a reliable percent from the
-  // harness's real SDK data (`contextTokens` + `contextWindow` both
-  // sourced from the SDK, no hardcoded fallbacks). For harnesses where
-  // either signal is missing - Cursor today, since its SDK exposes no
-  // public context-window surface - the chip stays hidden. Raw token
-  // counts on their own would mislead without a denominator, so we don't
-  // show them.
+  // Raw token counts on their own would mislead without a denominator, so we don't show them.
   if (effective === null) return null;
   const percent = effective.percentLeft;
   const meterStyle = contextUsageMeterStyle(percent);
@@ -150,9 +131,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
             <span
               aria-hidden
               data-testid="context-usage-meter"
-              // muted-fill-ok: the meter is in the PopoverTrigger, not the
-              // content, and its own inner disc below is bg-canvas - the one
-              // surface --muted never collapses with
+              // muted-fill-ok: the meter is in the PopoverTrigger, not the content, and its own inner disc below is bg-canvas - the one surface --muted never collapses with
               className="hidden size-5 rounded-full bg-[conic-gradient(currentColor_var(--context-usage-percent),var(--muted)_0)] p-[3px] @max-[28rem]:inline-flex"
               style={meterStyle}
             >
@@ -193,15 +172,7 @@ interface CompactActionProps {
   readonly onCompact: () => void;
 }
 
-/**
- * Triggers the harness's own compaction from the context surface - the one
- * place that already reports how much window is left, so the remedy sits with
- * the reading that motivates it. Never starts a turn mid-flight: while one is
- * running this queues `/compact` ahead of the rest of the queue, and only runs
- * it outright when there is nothing to wait for. `self-center` because the
- * pinned strip lays its usage figures out on a shared text baseline, which a
- * button box would otherwise be dragged onto.
- */
+/** Never starts a turn mid-flight: while one is running this queues `/compact` ahead of the rest of the queue, and only runs it outright when there is nothing to wait for. `self-center` because the pinned strip lays its usage figures out on a shared text baseline, which a button box would otherwise be dragged onto. */
 function CompactAction({ onCompact }: CompactActionProps) {
   return (
     <TooltipWrapper

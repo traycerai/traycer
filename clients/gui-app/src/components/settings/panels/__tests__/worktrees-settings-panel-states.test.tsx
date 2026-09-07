@@ -23,17 +23,8 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
-// `WorktreesSettingsPanel` sits above `WorktreesList` (covered exhaustively by
-// `worktrees-settings-panel.test.tsx`) and owns the host-scoped states from
-// core flows "Enter And Orient" / "Host And Connectivity States": no host
-// selected, checking reachability, offline, not signed in, loading, error,
-// and empty. None of those states are reachable through `WorktreesList`
-// directly (it is only ever mounted once a host is reachable and signed in),
-// so this file mocks the host-scoped hooks `WorktreesSettingsPanel` composes
-// and drives each state independently. The base listing itself
-// (`useWorktreeListing`) is exercised for real against a `HostClient` bound to
-// a `MockHostMessenger`, so pending/error/empty/success states go through the
-// real paginated `worktree.listAllForHost` query instead of a hook mock.
+// The base listing itself (`useWorktreeListing`) is exercised for real against a `HostClient` bound to a
+// `MockHostMessenger`.
 const state = vi.hoisted(() => ({
   activeHostId: null as string | null,
   hosts: [] as HostDirectoryEntry[],
@@ -66,9 +57,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => state.reachability,
 }));
 
-// The panel now takes its host from the ONE sidebar picker rather than its own
-// dropdown, so the scope hook is what drives these states. Derived from the
-// same `state` the other host mocks use, so each test still sets one field.
+// The panel now takes its host from the one sidebar picker rather than its own dropdown, so the scope hook is
+// what drives these states.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -130,12 +120,7 @@ function host(
   };
 }
 
-/**
- * Builds a real, bound `HostClient` around a single-method mock handler for
- * `worktree.listAllForHost`, so `useWorktreeListing`'s real `useInfiniteQuery`
- * + `useReactiveHostReadiness` machinery drives the panel's pending / error /
- * empty / success states instead of a hook-level mock.
- */
+/** Builds a real, bound `HostClient` around a single-method mock handler for `worktree.listAllForHost`. */
 function clientWithHandler(
   handler: MockHandlerMap<HostRpcRegistry>["worktree.listAllForHost"],
 ): HostClient<HostRpcRegistry> {
@@ -166,8 +151,8 @@ function renderPanel(): { readonly rerender: () => void } {
       <TooltipProvider>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
-  // A FRESH element per (re)render — a referentially identical element lets
-  // React bail out of the subtree without re-reading the mutated mocks.
+  // A fresh element per (re)render - a referentially identical element lets React bail out of the subtree
+  // without re-reading the mutated mocks.
   const makeUi = () => (
     <Wrapper>
       <WorktreesSettingsPanel />
@@ -218,11 +203,7 @@ afterEach(() => {
   });
 });
 
-/**
- * The panel is inventory-only: no branch-prefix strip, in any host state.
- * The global default moved to General settings; a per-repository override
- * lives in that repo's Environment dialog.
- */
+/** The panel is inventory-only: no branch-prefix strip, in any host state. */
 function assertBranchPrefixStripAbsent(): void {
   expect(screen.queryByText("New worktrees")).toBeNull();
   expect(screen.queryByText("Existing worktrees")).toBeNull();
@@ -239,12 +220,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
 
     renderPanel();
 
-    // Was "Select a host to manage its worktrees." — a flattened non-answer
-    // this panel produced for every unresolved scope, including a host that
-    // had just been deregistered out from under the user, and which offered
-    // nothing to act on. `HostScopeGate` owns those states now: it names the
-    // host, distinguishes deregistered from unroutable, and carries the way
-    // back to the active host.
+    // Was "Select a host to manage its worktrees.".
     expect(
       screen.queryByText("Select a host to manage its worktrees."),
     ).toBeNull();
@@ -371,9 +347,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
 
     renderPanel();
 
-    // Wait for the partial-listing banner specifically - not an unscoped
-    // role="status", which also matches the always-mounted
-    // WorktreeBranchPrefixLiveStatus region (empty when idle).
+    // Wait for the partial-listing banner specifically - not an unscoped role="status", which also matches the
+    // always-mounted WorktreeBranchPrefixLiveStatus region (empty when idle).
     await waitFor(() => {
       screen.getByText(/Some worktrees could not be loaded/);
     });
@@ -398,12 +373,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
   });
 
   it("never leaves the partial-listing Retry actionable over the outage notice", async () => {
-    // Pins the user-visible claim, not the mechanism. Today the banner
-    // cannot outlive the disconnect at all (no client ⇒ the listing data and
-    // `isPartial` drop with it), so this passes via absence; if the listing
-    // cache ever learns to survive a client loss, the banner's place inside
-    // the gate makes this pass via concealment instead. Either way no host
-    // RPC Retry stays clickable above the unreachable notice.
+    // Pins the user-visible claim, not the mechanism.
     state.hosts = [host({ hostId: "host-a" })];
     state.activeHostId = "host-a";
     const cleanWorktree = {
@@ -519,10 +489,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     await waitFor(() => {
       screen.getByText("feat-clean");
     });
-    // The toolbar neither picks the host nor names it: both belong to the
-    // sidebar. Asserted on the host LABEL rather than on a testid - checking
-    // that a testid which exists nowhere is absent proves nothing, while the
-    // label is what actually reappears if a readout is ever restored here.
+    // Asserted on the host label rather than on a testid - checking that a testid which exists nowhere is absent
+    // proves nothing, while the label is what actually reappears if a readout is ever restored here.
     expect(screen.queryByTestId("worktrees-host-select")).toBeNull();
     expect(
       screen.queryByText(state.reachability.hostLabel, {

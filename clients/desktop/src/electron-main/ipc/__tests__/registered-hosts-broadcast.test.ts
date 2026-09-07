@@ -18,22 +18,11 @@ const silentLog: AuthorityLog = {
   warn: () => undefined,
 };
 
-/**
- * A never-changing identity - this module's cadence half only ever calls
- * `fleet.refresh()`, which is stubbed out below in every test, so nothing
- * here needs to model a real identity transition.
- */
 const identity: AuthorityIdentitySource = {
   current: () => ({ identityKey: null, generation: 0 }),
   onChanged: () => ({ dispose: () => undefined }),
 };
 
-/**
- * Minimal `IpcHostLifecycle` double. `DesktopHostFleetSource`'s constructor
- * calls `host.on("change", ...)` (and `dispose()` calls `host.off(...)`), so
- * this needs the full structural shape - but every method is a no-op because
- * nothing in this suite ever drives a local-host change.
- */
 const host: IpcHostLifecycle = {
   getSnapshot: () => null,
   on: () => undefined,
@@ -49,14 +38,7 @@ const host: IpcHostLifecycle = {
   getRecentLogTail: async () => null,
 };
 
-/**
- * `registerRegisteredHostsBroadcast`'s cadence half only ever calls
- * `fleet.refresh()` (see the module's own doc comment - it deliberately does
- * NOT fetch). `DesktopHostFleetSource` is a concrete class with private
- * members, so it cannot be faked structurally the way the bridge below is -
- * a real instance is constructed, then `refresh()` is stubbed per test with
- * `vi.spyOn` so nothing here ever reaches the network fetcher.
- */
+/** `DesktopHostFleetSource` is a concrete class with private members, so it cannot be faked structurally the way the bridge below is. */
 function buildFleet(): DesktopHostFleetSource {
   return new DesktopHostFleetSource({
     authnBaseUrl: "http://localhost:5005",
@@ -123,14 +105,6 @@ describe("registerRegisteredHostsBroadcast", () => {
 });
 
 describe("createRegisteredHostsPublisher", () => {
-  // `RegisteredHostsBroadcastBridge` is declared with ONLY `fanOut` +
-  // `disposeFns` (see the module under test) - there is no per-window send
-  // method on this surface for the publisher to reach for instead, so the
-  // strongest claim provable AT THIS LAYER is that the publisher's entire
-  // observable effect is one `fanOut` call with the exact payload. Whether
-  // `fanOut` itself actually reaches every window is a property of
-  // `RunnerIpcBridge.fanOut`'s own implementation, which lives outside this
-  // module and is not exercised here.
   it("fans out the exact push on the registeredHostsChange channel through bridge.fanOut - the app-wide broadcast primitive", () => {
     const fanOut = vi.fn();
     const bridge: RegisteredHostsBroadcastBridge = {

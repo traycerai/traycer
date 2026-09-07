@@ -1,17 +1,5 @@
 /**
- * Product-policy contract: the installed mobile app offers no dictation.
- *
- * Dictation is host-executed - the mic audio is streamed to the app-wide host,
- * which transcribes it. Desktop's app-wide host is the local machine, so
- * "audio never leaves your machine" holds; the mobile app has no local host, so
- * it cannot hold. The gate therefore keys on the BUILD, and this file asserts
- * both sides of it: nothing about dictation reaches the mobile UI (mic button,
- * preparing indicator, hotkey, or even the host RPC), and the desktop build is
- * untouched.
- *
- * Everything below the composer hook runs real - the availability hook, the
- * hotkey singleton and the keybinding store included. Only the recorder (mic +
- * host stream) and the host RPC transport are faked.
+ * Installed mobile app offers no dictation (gate is the build). Only the recorder and host RPC are faked; the rest of the composer hook is real.
  */
 import type { RefObject } from "react";
 import { cleanup, renderHook } from "@testing-library/react";

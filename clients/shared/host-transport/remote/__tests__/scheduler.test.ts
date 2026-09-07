@@ -19,7 +19,6 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** A single-frame message on `streamId` at `qos` (body far under one chunk). */
 function messageSource(
   streamId: number,
   qos: QosClassValue,
@@ -39,13 +38,7 @@ function messageSource(
 }
 
 /**
- * A genuinely multi-frame (chunked) message: `chunkMultiplier` chunks' worth
- * of filler bytes, comfortably over `BULK_CHUNK_SIZE_BYTES` so
- * `source.chunked === true` and `nextFrame()` must be called more than once
- * to drain it. Callers derive the exact frame count from
- * `Math.ceil(source.totalBodyBytes / BULK_CHUNK_SIZE_BYTES)` rather than
- * assuming `chunkMultiplier` - JSON encoding overhead pushes the body a
- * little past the requested multiple.
+ * Callers derive the exact frame count from `Math.ceil(source.totalBodyBytes / BULK_CHUNK_SIZE_BYTES)` rather than assuming `chunkMultiplier` - JSON encoding overhead pushes the body a little past the requested multiple.
  */
 function chunkedSource(
   streamId: number,
@@ -262,31 +255,17 @@ describe("PriorityScheduler", () => {
         onWriteError: (error) => {
           throw error instanceof Error ? error : new Error(String(error));
         },
-        // `first` below is ~5 MiB, well over `BULK_QOS_BODY_THRESHOLD_BYTES`
-        // (1 MiB), so `OutboundChunkSource` overrides its effective qos to
-        // BULK regardless of the requested class - it needs enough bulk
-        // credits to actually drain, or `ChunkPacer` would never get a chance
-        // to pace-block it at all.
         initialBulkCredits: 1000,
         now: () => Date.now(),
       });
 
       const streamA = 100;
       const streamB = 200;
-      // Both messages on stream A share ONE seq generator (as a real
-      // per-stream sequence does): `seq` is drawn at `nextFrame()` time, i.e.
-      // exactly when the scheduler pulls that frame.
+      // Both messages on stream A share one seq generator (as a real per-stream sequence does): `seq` is drawn at `nextFrame()` time, i.e. exactly when the scheduler pulls that frame.
       let seqA = 0;
       const nextSeqA = (): number => seqA++;
 
-      // A transfer well past the pacer's burst (CHUNK_PACE_BURST_BYTES = 1
-      // MiB / CHUNK_PACE_BURST_FRAMES = 64 frames): 80 chunks of
-      // BULK_CHUNK_SIZE_BYTES (~5 MiB, ~81 frames) guarantees
-      // `ChunkPacer.tryConsume` starts returning false mid-transfer, so this
-      // test actually drives the `blockedStreams` guard inside
-      // `pullFromQueue` (the WITHIN-one-queue same-stream ordering guard) -
-      // not just `blockedByOtherQueue`. A first source of only a handful of
-      // frames never exhausts the burst and leaves `blockedStreams` untested.
+      // A first source of only a handful of frames never exhausts the burst and leaves `blockedStreams` untested.
       const first = new OutboundChunkSource(
         {
           type: MuxFrameType.STREAM_FRAME,
@@ -308,9 +287,7 @@ describe("PriorityScheduler", () => {
       expect(totalFramesFirst).toBeGreaterThan(CHUNK_PACE_BURST_FRAMES);
 
       scheduler.enqueue(first);
-      // Drain everything the pacer's burst allows in one synchronous pass; no
-      // real time elapses under fake timers, so this stops deterministically
-      // exactly at the burst boundary with the transfer still mid-flight.
+      // Drain everything the pacer's burst allows in one synchronous pass; no real time elapses under fake timers, so this stops deterministically exactly at the burst boundary with the transfer still mid-flight.
       await vi.advanceTimersByTimeAsync(0);
       expect(first.done).toBe(false);
       const drainedInBurst = written.filter(
@@ -319,18 +296,7 @@ describe("PriorityScheduler", () => {
       expect(drainedInBurst).toBeGreaterThan(0);
       expect(drainedInBurst).toBeLessThan(totalFramesFirst);
 
-      // WHILE stream A is still pace-blocked mid-transfer: a same-stream
-      // follow-up (single-frame, so `chunked === false` on the wire - a
-      // reliable provenance marker distinguishing it from `first`'s frames,
-      // since the pull-order `seq` alone is monotonic regardless of which
-      // source produced a frame) and an unrelated stream's frame.
-      // `first`'s ~5 MiB body is auto-upclassed to BULK by
-      // `OutboundChunkSource` (bodies over `BULK_QOS_BODY_THRESHOLD_BYTES`
-      // ride BULK regardless of the requested class - see chunking.ts), so
-      // `second` must be explicitly BULK too: only messages sharing the SAME
-      // class queue exercise `blockedStreams` (the within-queue guard). If
-      // `second` stayed INTERACTIVE it would sit in the OTHER class queue and
-      // only `blockedByOtherQueue` (already covered elsewhere) would apply.
+      // If `second` stayed interactive it would sit in the other class queue and only `blockedByOtherQueue` (already covered elsewhere) would apply.
       const second = new OutboundChunkSource(
         {
           type: MuxFrameType.STREAM_FRAME,
@@ -365,10 +331,6 @@ describe("PriorityScheduler", () => {
       const secondFrames = streamAWritten.filter((w) => !w.chunked);
       expect(firstFrames).toHaveLength(totalFramesFirst);
       expect(secondFrames).toHaveLength(1);
-      // Per-stream FIFO WITHIN ONE QUEUE: every one of `first`'s frames lands
-      // before `second`'s single frame - the invariant `blockedStreams`
-      // guards (deleting that guard lets `second` - unchunked, never paced -
-      // jump ahead the moment `first` is skipped for pacing in the same scan).
       const lastFirstIndex = written.reduce(
         (last, w, i) => (w.streamId === streamA && w.chunked ? i : last),
         -1,
@@ -415,9 +377,7 @@ describe("PriorityScheduler", () => {
     expect(written).toHaveLength(0);
     expect(scheduler.availableCredits()).toBe(0);
 
-    // Grant fewer credits than the full transfer needs - exactly that many
-    // frames flow (one credit spent per FRAME, not per message), and the
-    // transfer stalls again partway through.
+    // Grant fewer credits than the full transfer needs - exactly that many frames flow (one credit spent per frame, not per message), and the transfer stalls again partway through.
     const partial = Math.min(3, totalFrames - 1);
     scheduler.grantCredits(partial);
     await flush();
@@ -447,14 +407,6 @@ describe("PriorityScheduler", () => {
         now: () => Date.now(),
       });
 
-      // A burst of single-frame INTERACTIVE messages, well past the pacer's
-      // frame burst (`CHUNK_PACE_BURST_FRAMES` = 64) - INTERACTIVE is never
-      // credit-gated, so nothing but the pacer can explain a stop short of
-      // `CHUNK_PACE_BURST_FRAMES`. This is the regression pin for "every
-      // frame - not just chunked ones - now consults the pacer": deleting
-      // the `tryConsume` call for unchunked frames in `pullFromQueue` would
-      // let every one of these 100 frames drain in this same synchronous
-      // pass instead of stopping at exactly 64.
       const total = CHUNK_PACE_BURST_FRAMES + 36;
       for (let i = 0; i < total; i += 1) {
         scheduler.enqueue(messageSource(1, QosClass.INTERACTIVE));

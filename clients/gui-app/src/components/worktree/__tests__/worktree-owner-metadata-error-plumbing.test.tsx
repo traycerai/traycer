@@ -9,13 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
 
-/**
- * Unlike `worktree-owner-metadata-hover-gate.test.tsx`, this file leaves the
- * real `OwnerWorkspaceMetadataContent` in place - it is specifically about
- * whether the tooltip combines `useWorktreeOwnerMetadata`'s and
- * `useOwnerListPrReferences`'s error signals into the ONE `error` prop that
- * component renders from, not about hover/gate mechanics.
- */
+/** Unlike `worktree-owner-metadata-hover-gate.test.tsx`, this file leaves the real
+ * `OwnerWorkspaceMetadataContent` in place. */
 vi.mock("@/components/worktree/worktree-owner-settings-header", () => ({
   WorktreeOwnerSettingsHeader: () => <span data-testid="settings-header" />,
 }));
@@ -140,11 +135,6 @@ describe("WorktreeOwnerMetadataTooltip error plumbing", () => {
   });
 
   it("shows the inline error when only the PR subscription errors, even though the workspace metadata read found nothing", () => {
-    // Regression: the tooltip used to pass ONLY `metadata.error` into
-    // `OwnerWorkspaceMetadataContent`'s `error` prop, so an owner with no
-    // workspace and a FAILED PR subscription silently rendered "No workspace
-    // linked" - a definitive claim about the owner - instead of surfacing
-    // that a read had actually failed.
     ownerPrResult.current = { ...baseOwnerPrResult(), error: true };
 
     openTooltip();

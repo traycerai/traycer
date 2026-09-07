@@ -15,24 +15,8 @@ import {
 } from "@/components/worktree/worktree-pr-state-palette";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
-/**
- * Icon-only PR references for a sidebar chat row's second line: one glyph +
- * `#number` per detected PR, colored by state.
- *
- * **Why a `role="link"` span and not the pill's `<a>`.** This renders INSIDE
- * the sidebar row, which is a `<button>` in its display variant and a `<label>`
- * in selection mode. A real `<a href>` inside a button is invalid HTML, and
- * inside the label it would fight the checkbox for activation. The same shape
- * the chat segments already use for this exact bind (`artifact-change-row.tsx`:
- * a `role`+`tabIndex` span, because its row header is likewise already a
- * button) applies here: an ARIA link that owns its own click and Enter/Space
- * activation and stops both from reaching the row.
- *
- * It stays in the tab order (`tabIndex={0}`) rather than going pointer-only.
- * That does add a stop per PR to tree traversal, but the alternative - a bare
- * `<span onClick>` - would reach the same nesting depth while silently
- * excluding keyboard users from an affordance pointer users have.
- */
+/** That does add a stop per PR to tree traversal, but the alternative - a bare `<span onClick>` - would reach
+ * the same nesting depth while silently excluding keyboard users from an affordance pointer users have. */
 export function WorktreePrStateIcons(props: {
   readonly references: readonly WorktreePrReference[];
   readonly testId: string;
@@ -57,10 +41,7 @@ function WorktreePrStateIcon(props: {
   const url = props.reference.url;
   const openOnClick = useCallback(
     (event: MouseEvent<HTMLSpanElement>): void => {
-      // `stopPropagation` keeps the row's onClick from opening the chat;
-      // `preventDefault` keeps the selection-mode `<label>` from toggling its
-      // checkbox, which is a browser default on any descendant click rather
-      // than a bubbled handler.
+      // `stopPropagation` keeps the row's onClick from opening the chat.
       event.stopPropagation();
       event.preventDefault();
       void openLink(url, "github", event);

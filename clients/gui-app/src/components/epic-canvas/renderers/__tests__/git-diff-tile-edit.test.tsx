@@ -80,19 +80,8 @@ const preloadState = vi.hoisted(() => ({
 
 const editorOpenState = vi.hoisted(() => ({ mutate: vi.fn() }));
 
-// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
-// to, so `git.subscribeStatus` cannot ride the window's effective host while
-// carrying the tile's host id as a param. `null` is that hook's FOLLOWING
-// answer, so the tile falls back to the ambient binding this suite supplies -
-// which is what every assertion here is about. Which transport a host resolves
-// to is a different question with its own suite:
-// `use-surface-host-stream-binding.test.tsx`.
-// The hook returns the value to PROVIDE: the ambient binding while following
-// (this suite's), the pin's own once built, null while pending. Following here.
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
+// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND to, so `git.subscribeStatus` cannot ride the window's effective host while carrying the tile's host id as a param.
+// These tiles resolve the user's default open target, which asks whether the tile's host is the LOCAL one before it may offer Finder.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -183,10 +172,6 @@ vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
   }),
 }));
 
-// The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
-// mocked hook ignores the client it is handed; what this repoint pins is that
-// the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpenForClient: () => ({
     mutate: editorOpenState.mutate,
@@ -573,19 +558,14 @@ describe("<GitDiffTile /> editing", () => {
     try {
       await act(async () => {
         rendered.rerender(tileElement(NODE, true));
-        // Flush the failed refetch's own microtask chain (real Promise
-        // scheduling, independent of the fake macrotask/timer queue) so
-        // `scheduleRetry` runs and arms the backoff timer.
+        // Flush the failed refetch's own microtask chain (real Promise scheduling, independent of the fake macrotask/timer queue) so `scheduleRetry` runs and arms the backoff timer.
         await Promise.resolve();
         await Promise.resolve();
       });
       expect(state.refetchContents).toHaveBeenCalledTimes(2);
       expect(screen.queryByText("Worktree changed")).toBeNull();
 
-      // A render alone - the same trigger the old, unbounded retry relied on
-      // - must NOT retry while the backoff timer is still pending, or a
-      // persistently unreachable host would be hit on every render with no
-      // delay at all.
+      // A render alone - the same trigger the old, unbounded retry relied on - must NOT retry while the backoff timer is still pending, or a persistently unreachable host would be hit on every render with no delay at all.
       act(() => {
         rendered.rerender(tileElement(NODE, true));
       });
@@ -648,9 +628,7 @@ describe("<GitDiffTile /> editing", () => {
       });
       expect(state.refetchContents).toHaveBeenCalledTimes(3);
 
-      // The rest of the doubled delay elapses and the host has reconnected
-      // (the default mock's success path resumes) - drift is still detected
-      // once the check finally gets through.
+      // The rest of the doubled delay elapses and the host has reconnected (the default mock's success path resumes) - drift is still detected once the check finally gets through.
       state.worktreeContent = "const external = true;\n";
       await act(async () => {
         await vi.advanceTimersByTimeAsync(DRIFT_RETRY_BASE_DELAY_MS);
@@ -675,9 +653,7 @@ describe("<GitDiffTile /> editing", () => {
     const editorBeforeRollover = screen.getByTestId("git-diff-editor-surface");
     const mountsBeforeRollover = diffSurfaceState.mountCount;
     const unmountsBeforeRollover = diffSurfaceState.unmountCount;
-    // Stable oldFile/newFile identity is what DiffContentPrimitive keys its
-    // hydration memo on - a new object per render would re-derive the diff
-    // and reintroduce the partial-diff attach bug.
+    // Stable oldFile/newFile identity is what DiffContentPrimitive keys its hydration memo on - a new object per render would re-derive the diff and reintroduce the partial-diff attach bug.
     const initialNewFile = diffSurfaceState.editableNewFiles[0];
 
     fireEvent.click(screen.getByRole("button", { name: "Type draft" }));
@@ -844,11 +820,7 @@ describe("<GitDiffTile /> editing", () => {
     state.refetchContents.mockImplementation(() => driftPromise);
     state.worktreeOid = "worktree-2";
 
-    // Two rerenders while the drift check is still pending on the SAME stale
-    // comparison identity. The mocked query result (like TanStack Query's
-    // real one) is a fresh object every render, so without a synchronous
-    // per-identity guard each rerender would start another overlapping
-    // `git.getFileContents` refetch instead of joining the first attempt.
+    // The mocked query result (like TanStack Query's real one) is a fresh object every render, so without a synchronous per-identity guard each rerender would start another overlapping `git.getFileContents` refetch instead of joining the first attempt.
     rendered.rerender(tileElement(NODE, true));
     rendered.rerender(tileElement(NODE, true));
     await Promise.resolve();
@@ -908,18 +880,13 @@ describe("<GitDiffTile /> editing", () => {
     });
     renderTile(untrackedNode, true);
 
-    // `isEmptyFile` reaches FileDiffContent before any click - it must be
-    // known while still read-only, to decide whether to show the
-    // empty-origin affordance at all.
+    // `isEmptyFile` reaches FileDiffContent before any click - it must be known while still read-only, to decide whether to show the empty-origin affordance at all.
     await waitFor(() => {
       expect(diffSurfaceState.lastIsEmptyFile).toBe(true);
     });
     expect(screen.queryByRole("button", { name: "Change draft" })).toBeNull();
 
-    // No line/token exists to click for an empty file - activation goes
-    // through `activateEmptyOrigin` instead of a diff line/token click, but
-    // must land on the exact same real hydration -> ownership -> editSession
-    // pipeline (`begin` in `git-diff-editing.tsx`) as a normal code click.
+    // No line/token exists to click for an empty file - activation goes through `activateEmptyOrigin` instead of a diff line/token click, but must land on the exact same real hydration -> ownership -> editSession pipeline (`begin` in `git-diff-editing.tsx`) as a normal code click.
     fireEvent.click(screen.getByRole("button", { name: "Click empty origin" }));
     expect(state.refetchContents).toHaveBeenCalledTimes(1);
 
@@ -981,11 +948,7 @@ function renderTileInRemountingPane(node: GitDiffTileRef): RenderResult {
   );
 }
 
-// Reuses the QueryClient created by `renderTile` so `rendered.rerender(...)`
-// calls below replace only the tile's props, not the cache-owning provider -
-// production keeps one client for the tile's lifetime, and a fresh client per
-// call would silently stop these rerender assertions from exercising cache
-// continuity.
+// Reuses the QueryClient created by `renderTile` so `rendered.rerender(...)` calls below replace only the tile's props, not the cache-owning provider - production keeps one client for the tile's lifetime, and a fresh client per call would silently stop these rerender assertions from exercising cache continuity.
 function tileElement(node: GitDiffTileRef, isActive: boolean): ReactNode {
   const queryClient = activeQueryClient;
   if (queryClient === null) throw new Error("Render the tile first.");

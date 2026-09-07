@@ -122,20 +122,7 @@ describe("useSurfaceHostSelectionStore", () => {
     expect(composerSurfaceKey(null)).toBe("composer\u001fbrowser");
   });
 
-  /**
-   * TWO WINDOWS, ONE STORED MAP.
-   *
-   * Every window runs its own instance of this store and persists the WHOLE
-   * `selections` map to one account-scoped key, so the second writer used to
-   * erase the first writer's newer pin - visible only after that window
-   * reloaded and its surface silently followed `effective` instead of the host
-   * the user picked. Per-window surface keys do not help: distinct keys still
-   * share one stored object.
-   *
-   * The other window is simulated by writing storage DIRECTLY, which is
-   * exactly what it is from this instance's point of view: a change to the
-   * shared key that this instance never saw.
-   */
+  /** TWO WINDOWS, ONE STORED MAP. */
   it("preserves a pin another window wrote after this instance hydrated", async () => {
     useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, "host-b");
     await flushPersist();
@@ -161,12 +148,7 @@ describe("useSurfaceHostSelectionStore", () => {
     });
   });
 
-  /**
-   * The direction a plain union would break, and the reason the merge is
-   * three-way. Unpin is expressed as ABSENCE, so a writer that only ever
-   * merged keys IN would resurrect every pin the user just cleared - trading a
-   * lost write for a pin that cannot be removed.
-   */
+  /** The direction a plain union would break, and the reason the merge is three-way. */
   it("still applies this window's own unpin through the merge", async () => {
     useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, "host-b");
     await flushPersist();
@@ -189,19 +171,8 @@ describe("useSurfaceHostSelectionStore", () => {
   });
 
   /**
-   * The MIRROR of the lost-write bug, and the one a "spread my whole map over
-   * theirs" merge creates while fixing it.
-   *
-   * Two windows hydrate pin `x`. Window B unpins it - an explicit
-   * return-to-following - and persists the deletion. Window A still carries `x`
-   * in memory, having never touched it. Any unrelated write from A then
-   * republished `x`, and it also survived a deletion loop keyed on absence
-   * because `x` was still present in A's map. So ordinary activity in another
-   * window silently undid the user's choice.
-   *
-   * The rule that fixes it: a key equal in this instance's base and its current
-   * map was not touched between those two writes, so this instance has no
-   * opinion about it and storage stands - including storage's absence.
+   * The MIRROR of the lost-write bug, and the one a "spread my whole map over theirs" merge creates
+   * while fixing it. Two windows hydrate pin `x`.
    */
   it("does not resurrect a pin another window deleted", async () => {
     // Both windows know `x` and this instance knows an unrelated key.

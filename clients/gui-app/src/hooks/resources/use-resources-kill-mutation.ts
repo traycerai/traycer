@@ -21,22 +21,11 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 export interface ResourcesKillVariables {
   /** The host owning the process tree(s) - the resource row's `owner.hostId`. */
   readonly hostId: string;
-  /**
-   * Root pids to kill; each is terminated together with its entire descendant
-   * tree. An owner row passes all of its `rootPids`; a process row passes one
-   * `pid`. The host validates every pid against its live tracked set before
-   * signalling, so stray/stale pids are dropped rather than trusted.
-   */
+  /** The host validates every pid against its live tracked set before signalling, so stray/stale pids are dropped rather than trusted. */
   readonly pids: readonly number[];
 }
 
-/**
- * Host-routed `resources.kill` mutation for the resource monitor. Destructive,
- * so it pins a transient client to the row's own `hostId` (never the app
- * default) - a host switch mid-flight can't redirect the kill. The live
- * `resources.subscribe` stream reflects the processes disappearing, so there is
- * nothing to invalidate on success.
- */
+/** Destructive, so it pins a transient client to the row's own `hostId` (never the app default) - a host switch mid-flight can't redirect the kill. */
 export function useResourcesKill(): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "resources.kill">,
   HostRpcError,

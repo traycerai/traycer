@@ -1,14 +1,6 @@
 /**
- * The bridge, driven end to end through both REAL endpoints.
- *
- * Nothing here mocks an endpoint or a frame. `createFakeBridgePair` supplies
- * the pipe and only the pipe - it structured-clones every frame with the
- * sender's transfer list, so what these tests exercise is the production
- * correlation, the production validators and the production failure paths
- * against a real serialization boundary.
- *
- * A suite that stubbed `createMainBridgeEndpoint` would relocate every
- * invariant below into the stub.
+ * The bridge, driven end to end through both real endpoints.
+ * A suite that stubbed `createMainBridgeEndpoint` would relocate every invariant below into the stub.
  */
 import { stubMainCallHandlers } from "../test-support/stub-main-call-handlers";
 import { describe, expect, it, vi } from "vitest";
@@ -65,7 +57,7 @@ describe("bridge call correlation", () => {
     const second = main.call("attachment/read", { hash: "b" }, NO_TRANSFER);
     expect(gates).toHaveLength(2);
 
-    // Answer the SECOND call first. A bridge that paired replies with calls
+    // Answer the second call first. A bridge that paired replies with calls
     // positionally, or held one slot, would hand "b" to the first awaiter.
     gates[1]?.({
       value: { bytes: Uint8Array.from([2]) },
@@ -81,16 +73,8 @@ describe("bridge call correlation", () => {
   });
 
   it("does not lose a reply a transport delivers inside the call itself", async () => {
-    // The registration-before-post ordering, driven by the only thing that can
-    // reach it: a transport that answers DURING `post`.
-    //
-    // Pairing this endpoint with `createWorkerBridgeEndpoint` cannot test it -
-    // that endpoint dispatches through an async `serve`, so its reply is always
-    // at least a microtask late and the ordering is unobservable. `call` is
-    // public over an arbitrary `BridgeTransport` though, and a same-tick
-    // responder is a legal one; against it, a pending table written after the
-    // post finds no entry, drops the reply as stale, and the promise never
-    // settles at all.
+    // The registration-before-post ordering, driven by the only thing that can reach it: a transport that answers during `post`.
+    // Pairing this endpoint with `createWorkerBridgeEndpoint` cannot test it - that endpoint dispatches through an async `serve`, so its reply is always at least a microtask late and the ordering is unobservable.
     const listeners = new Set<(message: unknown) => void>();
     const syncResponder: BridgeTransport = {
       post(message): void {
@@ -146,10 +130,6 @@ describe("bridge call correlation", () => {
   });
 
   it("rejects rather than hands back a reply shaped like another call's", async () => {
-    // Answered off the pipe rather than through a handler: the handler map is
-    // typed, so a lying handler would need an assertion to write, and the
-    // thing under test is what the MAIN endpoint does with a foreign payload -
-    // which is what a stale worker chunk actually sends.
     const pair = createFakeBridgePair("queued");
     const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
@@ -159,11 +139,7 @@ describe("bridge call correlation", () => {
       isMainToWorkerFrame(sent) && sent.frame === "call" ? sent.callId : -1;
     expect(callId).toBeGreaterThan(0);
 
-    // The expectation is attached BEFORE the flush that causes the rejection.
-    // Attaching it afterwards leaves the promise unhandled across a macrotask
-    // boundary, which Node reports as an unhandled rejection and then, once the
-    // handler arrives, as a `PromiseRejectionHandledWarning` - a red run for a
-    // test that is passing.
+    // The expectation is attached before the flush that causes the rejection.
     const rejected = expect(pending).rejects.toBeInstanceOf(
       BridgeResponseMismatchError,
     );
@@ -226,9 +202,7 @@ describe("bridge byte transfer", () => {
     );
 
     expect([...(answer.bytes ?? [])]).toEqual([7, 7, 7]);
-    // The list reached the post rather than being dropped somewhere in the
-    // endpoint - a transfer that silently degrades to a copy is invisible in
-    // the payload and is the whole cost this boundary exists to avoid.
+    // The list reached the post rather than being dropped somewhere in the endpoint - a transfer that silently degrades to a copy is invisible in the payload and is the whole cost this boundary exists to avoid.
     const reply = pair.fromWorker.at(-1);
     expect(reply?.transferCount).toBe(1);
     expect(reply?.transferredByteLengths).toEqual([3]);
@@ -251,10 +225,8 @@ describe("the body calls, with nothing behind them", () => {
     createWorkerBridgeEndpoint(pair.worker, stubRuntimeWorkerCallHandlers({}));
     const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
-    // `accepted: false` is what keeps the main thread's live doc alive. An
-    // unowned `true` here tells it to drop a document whose bytes were never
-    // written, which is the one failure the acknowledged demote exists to
-    // rule out.
+    // `accepted: false` is what keeps the main thread's live doc alive.
+    // An unowned `true` here tells it to drop a document whose bytes were never written, which is the one failure the acknowledged demote exists to rule out.
     await expect(
       main.call(
         "body/demote",
@@ -266,10 +238,7 @@ describe("the body calls, with nothing behind them", () => {
         },
         NO_TRANSFER,
       ),
-      // `reason` is a REQUIRED field of the demote response and the stub has
-      // answered `"not-held"` since the pinned-refusal ruling; this assertion
-      // was never moved with it. `toEqual` is exact on extra keys, so the pin
-      // has been red since that commit - production was right the whole time.
+      // `reason` is a required field of the demote response and the stub has answered `"not-held"` since the pinned-refusal ruling; this assertion was never moved with it.
     ).resolves.toEqual({
       accepted: false,
       settledBytes: 0,
@@ -290,10 +259,7 @@ describe("the body calls, with nothing behind them", () => {
       docGuid: null,
       seedMode: "full",
       hostStateVector: null,
-      // Same staleness as the demote pin above: peer presence started riding
-      // the materialize response in `f49810ed` and the stub carries it, so the
-      // not-held arm answers an empty list rather than omitting the field.
-      // Empty, not absent - there is no body here, so there is nobody in it.
+      // Same staleness as the demote pin above: peer presence started riding the materialize response in `f49810ed` and the stub carries it, so the not-held arm answers an empty list rather than omitting the field.
       awarenessFrames: [],
     });
   });

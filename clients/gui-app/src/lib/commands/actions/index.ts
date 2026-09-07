@@ -1,10 +1,4 @@
-/**
- * Docs: see ./README.md
- *
- * Barrel for canonical palette action functions. Every command
- * source's `run` handler imports from here instead of reaching
- * into stores directly.
- */
+/** Docs: see ./README.md */
 export { openNewEpic, openNewEpicIntent } from "./new-epic";
 export { duplicateEpicTab } from "./duplicate-tab";
 export {

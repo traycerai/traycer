@@ -21,13 +21,7 @@ import type {
   LoginImportSource,
 } from "@traycer-clients/shared/platform/browser-view";
 
-/**
- * Settings › Browser › Saved logins › "Import logins from another browser".
- * Drives the three-step dialog against a bridge subclass so each step's
- * bridge call (list / scan / import) is asserted at its own seam. The push to
- * the hosts is main's and rides back on the import result, so what is asserted
- * here is that the Done step reports the `notifiedHosts` it was handed.
- */
+/** Settings › Browser › Saved logins › "Import logins from another browser". */
 
 const openFullDiskAccessMocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
@@ -50,13 +44,10 @@ class TestBridge extends FakeBrowserViewBridge {
     notifiedHosts: 0,
   };
   readonly importCalls: LoginImportRequest[] = [];
-  /**
-   * When true, `importLogins` never settles on its own - the test settles it
-   * later via `releaseImport`, so it can assert the pending UI first.
-   */
+  /** When true, `importLogins` never settles on its own - the test settles it later via `releaseImport`, so it
+   * can assert the pending UI first. */
   deferImport = false;
   releaseImport: (() => void) | null = null;
-  /** Answers to successive `pickLoginImportFile()` calls, in order. */
   pickResults: Array<LoginImportSource | null> = [];
   private pickLoginImportFileCalls = 0;
 
@@ -141,7 +132,6 @@ async function pickSource(name: RegExp | string): Promise<void> {
   fireEvent.click(button);
 }
 
-/** The Choose step's confirm, by the label the user reads: "Import N sites". */
 const IMPORT_CONFIRM_NAME = /^Import \d+ sites?$/u;
 
 function importConfirmButton(): HTMLButtonElement {
@@ -491,18 +481,15 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     const notes = await screen.findAllByRole("note");
     expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
 
-    // source-changed is the guard that fires when a chosen site's rows
-    // changed under the user between the scan and the Import click; its
-    // explainer has to say the import is safe to retry, not just that
-    // something went wrong.
+    // source-changed is the guard that fires when a chosen site's rows changed under the user between the scan and
+    // the Import click; its explainer has to say the import is safe to retry, not just that something went wrong.
     if (reason === "source-changed") {
       const explainerText = notes.map((note) => note.textContent).join(" ");
       expect(explainerText).toContain("try again to read the profile afresh");
     }
 
-    // profile-too-large is the desktop's own size guard on the profile's
-    // cookie database (distinct from file-too-large, a picked file), so its
-    // explainer has to name the database rather than reuse the file copy.
+    // profile-too-large is the desktop's own size guard on the profile's cookie database (distinct from
+    // file-too-large, a picked file), so its explainer has to name the database rather than reuse the file copy.
     if (reason === "profile-too-large") {
       const explainerText = notes.map((note) => note.textContent).join(" ");
       expect(explainerText).toContain(
@@ -608,10 +595,8 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     await waitFor(() => {
       expect(bridge.importCalls).toHaveLength(1);
     });
-    // The mutation's `isPending` flip re-renders the Choose step, and the
-    // bridge object itself is part of the scan query's key - waiting for
-    // "Select all" to be findable (rather than reading the DOM synchronously)
-    // rides past that re-render instead of racing it.
+    // The mutation's `isPending` flip re-renders the Choose step, and the bridge object itself is part of the scan
+    // query's key.
     expect(
       (
         await screen.findByRole<HTMLButtonElement>("button", {
@@ -1017,9 +1002,8 @@ describe("<ImportLoginsDialog /> import", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await screen.findByText("example.com");
-    // `previousChoice.includeDeviceBound` restores the opt-in exactly as the
-    // blocked import was made with it - the retry does not fall back to the
-    // off-by-default state.
+    // `previousChoice.includeDeviceBound` restores the opt-in exactly as the blocked import was made with it - the
+    // retry does not fall back to the off-by-default state.
     expect(
       screen
         .getByRole("switch", { name: "Import Google logins anyway" })

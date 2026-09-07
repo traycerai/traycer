@@ -13,15 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartStop } from "../../service";
 import type { ServiceLabel } from "../../service/label";
 
-// `host restart` is the controlled supervisor restart that owns the
-// pending CLI upgrade finalize step. Between `controller.stop()` and
-// `controller.start()` the live CLI binary's lock is released, so the
-// command attempts the staged-binary swap in that window.
-//
-// We exercise the split-out helper `restartWithPendingCliUpgradeFinalize`
-// with a controller stub so the test doesn't depend on a real OS
-// service manager. The CLI manifest is written under a tmp HOME so
-// the manifest read/write paths exercise the real on-disk format.
+// `host restart` is the controlled supervisor restart that owns the pending CLI upgrade finalize step.
+// Between `controller.stop()` and `controller.start()` the live CLI binary's lock is released, so the command attempts the staged-binary swap in that window.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -79,9 +72,8 @@ afterEach(() => {
 
 interface StubCalls {
   readonly calls: string[];
-  // What `relaunchAfterRestart` actually received. Recorded because the whole
-  // point of splitting restart into halves is that the stop's verdict reaches
-  // the relaunch - a stub that discards the argument cannot show that.
+  // What `relaunchAfterRestart` actually received.
+  // Recorded because the whole point of splitting restart into halves is that the stop's verdict reaches the relaunch - a stub that discards the argument cannot show that.
   relaunchStop: RestartStop | null;
 }
 
@@ -97,10 +89,8 @@ interface StubController {
   stop: () => Promise<void>;
   start: () => Promise<void>;
   restart: () => Promise<void>;
-  // Parameters mirrored from the real `ServiceController`, not elided to
-  // `()`. A zero-arg stub type is the same erasure as the duplicated call
-  // tokens: it makes the argument the halves exist to carry invisible to
-  // both the compiler and the assertions.
+  // Parameters mirrored from the real `ServiceController`, not elided to `()`.
+  // A zero-arg stub type is the same erasure as the duplicated call tokens: it makes the argument the halves exist to carry invisible to both the compiler and the assertions.
   stopForRestart: (label: ServiceLabel) => Promise<RestartStop>;
   relaunchAfterRestart: (
     label: ServiceLabel,
@@ -128,12 +118,7 @@ function makeStubController(calls: StubCalls): StubController {
       calls.calls.push("restart");
     },
     // DISTINCT tokens, deliberately.
-    //
-    // These used to push "stop"/"start" - the same tokens as the plain
-    // primitives - so every `toEqual(["stop", "start"])` below passed
-    // identically whether `host restart` used the cooperative halves this
-    // changeset introduces or fell back to the old `stop()` + `start()` path.
-    // The suite could not observe the distinction it exists to protect.
+    // These used to push "stop"/"start" - the same tokens as the plain primitives - so every `toEqual(["stop", "start"])` below passed identically whether `host restart` used the cooperative halves this changeset introduces or fell back to the old `stop()` + `start()` path.
     stopForRestart: async () => {
       calls.calls.push("stopForRestart");
       return { forcedRecycle: false };
@@ -191,12 +176,8 @@ interface RestartArgsBaseline {
   readonly writeImpl: (path: string, body: string) => void;
 }
 
-// Most existing tests don't care about helper scheduling - they
-// exercise the POSIX path where finalize either succeeds or surfaces
-// a manifest-state outcome and the helper isn't invoked. The default
-// platform is "linux" so the Windows helper branch stays inert; the
-// spawn/write stubs throw if accidentally invoked so a regression
-// would be caught.
+// Most existing tests don't care about helper scheduling - they exercise the POSIX path where finalize either succeeds or surfaces a manifest-state outcome and the helper isn't invoked.
+// The default platform is "linux" so the Windows helper branch stays inert; the spawn/write stubs throw if accidentally invoked so a regression would be caught.
 function defaultArgs(controller: StubController): RestartArgsBaseline {
   return {
     environment: "production",
@@ -254,9 +235,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
 
     expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
-    // The halves exist so the stop's verdict reaches the relaunch — macOS
-    // needs `forcedRecycle` to decide how to bring the job back. Asserting the
-    // call order alone would pass against a relaunch that ignored it.
+    // The halves exist so the stop's verdict reaches the relaunch - macOS needs `forcedRecycle` to decide how to bring the job back.
+    // Asserting the call order alone would pass against a relaunch that ignored it.
     expect(calls.relaunchStop).toEqual({ forcedRecycle: false });
     expect(result.finalize.status).toBe("finalised");
     if (result.finalize.status === "finalised") {
@@ -351,10 +331,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   });
 
   it("returns no-manifest when CLI has never been installed and still cycles the service", async () => {
-    // Fresh machine: no CLI install manifest on disk. The restart
-    // command must still cycle the host service - supervisor users
-    // depend on `host restart` even before any CLI upgrade has
-    // happened.
+    // Fresh machine: no CLI install manifest on disk.
+    // The restart command must still cycle the host service - supervisor users depend on `host restart` even before any CLI upgrade has happened.
     const calls: StubCalls = { calls: [], relaunchStop: null };
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
@@ -370,13 +348,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   });
 
   it("on Windows still-locked, schedules a detached helper, skips controller.start(), and writes the helper script", async () => {
-    // Locked Windows case: the in-process renameSync fails with EACCES
-    // (we simulate by stripping write perm on the parent dir, which is
-    // how the helper test on POSIX exercises tryReplaceLiveBinary's
-    // "locked" branch). The helper must be scheduled, the service
-    // start must be deferred to the helper, and the helper script body
-    // must contain the parent pid + live binary path so a real
-    // PowerShell invocation would do the right thing.
+    // Locked Windows case: the in-process renameSync fails with EACCES (we simulate by stripping write perm on the parent dir, which is how the helper test on POSIX exercises tryReplaceLiveBinary's "locked" branch).
+    // The helper must be scheduled, the service start must be deferred to the helper, and the helper script body must contain the parent pid + live binary path so a real PowerShell invocation would do the right thing.
     if (process.platform === "win32") return; // chmod-based simulation not portable to Windows
     if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses 0o555
 
@@ -434,9 +407,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       expect(script).toContain("$ParentPid = 4242");
       expect(script).toContain(liveBinaryPath);
       expect(script).toContain(stagedBinaryPath);
-      // Binary swap + service start hand off to the staged binary's own
-      // hidden `cli finalize-upgrade` command (see finalize-helper.ts's
-      // module doc comment) rather than this script doing them inline.
+      // Binary swap + service start hand off to the staged binary's own hidden `cli finalize-upgrade` command (see finalize-helper.ts's module doc comment) rather than this script doing them inline.
       expect(script).toContain("$StagedBinary cli finalize-upgrade");
     } finally {
       chmodSync(lockedDir, 0o755);
@@ -444,11 +415,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   });
 
   it("on POSIX still-locked, leaves pendingUpgrade visible and does NOT schedule the helper", async () => {
-    // POSIX still-locked is a genuine read-only-install case, not a
-    // current-process-holds-binary case. There is no benefit to a
-    // detached helper there - the next CLI run can retry once the
-    // operator fixes the install dir. Doctor still surfaces
-    // pendingUpgrade.
+    // POSIX still-locked is a genuine read-only-install case, not a current-process-holds-binary case.
+    // There is no benefit to a detached helper there - the next CLI run can retry once the operator fixes the install dir.
     if (process.platform === "win32") return;
     if (typeof process.getuid === "function" && process.getuid() === 0) return;
 
@@ -493,11 +461,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   });
 
   it("applies a prior helper's post-finalize marker (swapped) before cycling the service, clearing pendingUpgrade", async () => {
-    // Simulates a Windows machine where the helper from a previous
-    // `host restart` invocation succeeded after the CLI exited.
-    // The marker file is on disk; this restart cycle reads it,
-    // clears pendingUpgrade in the manifest, then proceeds with the
-    // standard stop/start cycle.
+    // Simulates a Windows machine where the helper from a previous `host restart` invocation succeeded after the CLI exited.
+    // The marker file is on disk; this restart cycle reads it, clears pendingUpgrade in the manifest, then proceeds with the standard stop/start cycle.
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
@@ -549,11 +514,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   });
 
   it("applies a prior helper's swap-failed marker, consumes the marker, and surfaces the error message", async () => {
-    // The previous helper attempt failed during the move. The marker
-    // reconcile records the error and consumes the marker so we don't
-    // re-apply it next cycle. (Whether the subsequent in-process
-    // finalize succeeds depends on the install dir's writability;
-    // either way the marker reconcile contract is independent.)
+    // The previous helper attempt failed during the move.
+    // The marker reconcile records the error and consumes the marker so we don't re-apply it next cycle.
     if (process.platform === "win32") return;
     if (typeof process.getuid === "function" && process.getuid() === 0) return;
 
@@ -585,10 +547,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
 
     const { chmodSync } = await import("node:fs");
-    // Strip parent-dir write so the in-process finalize also returns
-    // still-locked. That's the realistic shape for a swap-failed
-    // marker: the underlying lock is still in place and the next
-    // retry should keep pendingUpgrade visible.
+    // Strip parent-dir write so the in-process finalize also returns still-locked.
+    // That's the realistic shape for a swap-failed marker: the underlying lock is still in place and the next retry should keep pendingUpgrade visible.
     chmodSync(lockedDir, 0o555);
 
     try {
@@ -607,9 +567,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       }
       expect(existsSync(markerPath)).toBe(false);
       const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
-      // The marker reconcile alone does not clear pendingUpgrade on a
-      // swap-failed outcome; the in-process finalize also failed
-      // (locked dir), so pendingUpgrade survives.
+      // The marker reconcile alone does not clear pendingUpgrade on a swap-failed outcome; the in-process finalize also failed (locked dir), so pendingUpgrade survives.
       expect(reread.pendingUpgrade).not.toBeNull();
       expect(reread.pendingUpgrade.version).toBe("1.5.0");
     } finally {

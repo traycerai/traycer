@@ -48,12 +48,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
 
-// `EpicSessionProvider` opens its own durable transport via this factory, and
-// UNCONDITIONALLY now: the stream-factory override that used to short-circuit
-// before `openTransport` ran is gone, so a stub that threw here - which was
-// this file's shape, safe only because it was never reached - would now fail
-// every test. The fake supplies "no socket in tests" at the opener instead.
-// What this suite drives the session's stream with is the WORKER factory.
+// `EpicSessionProvider` opens its own durable transport via this factory, and UNCONDITIONALLY now: the stream-factory override that used to short-circuit before `openTransport` ran is gone, so a stub that threw here - which was this file's shape, safe only because it was never reached - would now fail every test.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -146,32 +141,19 @@ function buildSnapshot(title: string): Uint8Array {
 }
 
 /**
- * What was installed before this suite's worker, so `afterEach` can put it
- * back. NEVER `null`: the jsdom setup file installs a coreless worker for every
- * suite, and `null` means "use the production constructor" - the one form
- * (`new Worker(new URL(...))`) jsdom cannot execute.
+ * What was installed before this suite's worker, so `afterEach` can put it back.
+ * NEVER `null`: the jsdom setup file installs a coreless worker for every suite, and `null` means "use the production constructor" - the one form (`new Worker(new URL(...))`) jsdom cannot execute.
  */
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 
 /**
- * The suite's stream, one seam over.
- *
- * The factory itself is unchanged - the same callbacks, the same `closeCount`.
- * What changed is where it is installed: a stream factory built on MAIN cannot
- * cross `postMessage` to a runtime that lives in the worker, so it is supplied
- * to the worker's own composition instead, through the shared in-process helper
- * `openStoreForTest` also uses.
+ * What changed is where it is installed: a stream factory built on MAIN cannot cross `postMessage` to a runtime that lives in the worker, so it is supplied to the worker's own composition instead, through the shared in-process helper `openStoreForTest` also uses.
  */
 function installControlledFactory(): {
   readonly streams: () => ReadonlyArray<ControlledStream>;
 } {
   const streams: ControlledStream[] = [];
   previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
-  // A FRESH helper per spawn. One instance owns one bridge pair and one
-  // composition, so a shared one would hand two sessions the same runtime -
-  // and would hand a re-acquired session a pipe its predecessor's
-  // `terminate()` already severed. Constructing per call is also what the
-  // deleted stream override did: the provider called it once per session.
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
       streamClientFactory: (_epicId, callbacks) => {
@@ -211,17 +193,6 @@ function renderShell(queryClient: QueryClient) {
   );
 }
 
-/**
- * `EpicSessionProvider` provides its OWN `EpicSessionPresentationContext`
- * value internally, wrapped around its children (between the real
- * `EpicSessionContext.Provider` and whatever is passed in) - so overriding
- * the presentation for a test means re-providing the context BETWEEN the
- * provider and `EpicShell`, not around the provider itself: the nearer
- * provider to the consumer wins. This keeps `EpicSessionContext` (and
- * therefore `useMaybeOpenEpicHandle()`) driven by the real provider/registry
- * machinery - a genuine session handle - while letting the test dictate the
- * `failed` / `ready` shape `EpicShell` reads via `use(...)`.
- */
 function renderShellWithPresentation(
   queryClient: QueryClient,
   presentation: EpicSessionPresentation,
@@ -252,16 +223,7 @@ function buildPresentation(state: {
 }
 
 /**
- * `data-session-ready` on the shell root is computed from
- * `useMaybeOpenEpicHandle() !== null` directly in `EpicShell`, ABOVE and
- * OUTSIDE `EpicSessionGate` - so it flips to `"true"` in the exact same
- * commit that the gate resolves to its children arm, regardless of which
- * component that arm goes on to render. That independence is deliberate:
- * `epic-connection-pill` (the readiness signal the pre-existing tests in this
- * file use) only renders from INSIDE `EpicShellSessionBody`, which is exactly
- * the component the `failed`-presentation defect swapped out - so gating on
- * the pill there would time out on the very regression this suite exists to
- * catch, never reaching the canvas-survival assertion at all.
+ * That independence is deliberate: `epic-connection-pill` (the readiness signal the pre-existing tests in this file use) only renders from INSIDE `EpicShellSessionBody`, which is exactly the component the `failed`-presentation defect swapped out - so gating on the pill there would time out on the very regression this suite exists to catch, never reaching the canvas-survival assertion at all.
  */
 async function waitForSessionReady(): Promise<void> {
   await waitFor(() => {
@@ -346,11 +308,8 @@ describe("<EpicShell />", () => {
 
     renderShell(queryClient);
 
-    // The session handle publishes on a MICROTASK - `EpicSessionProvider` must
-    // not hand it to consumers inside the commit that acquired it - so the pill
-    // arrives one tick after render rather than synchronously. The title
-    // content, gated on a snapshot that never comes, must never arrive at all;
-    // asserting its absence AFTER the pill settles is the stronger order.
+    // The session handle publishes on a MICROTASK - `EpicSessionProvider` must not hand it to consumers inside the commit that acquired it - so the pill arrives one tick after render rather than synchronously.
+    // The title content, gated on a snapshot that never comes, must never arrive at all; asserting its absence AFTER the pill settles is the stronger order.
     await waitFor(() => {
       expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
     });
@@ -417,9 +376,8 @@ describe("<EpicShell />", () => {
 
     controlled.streams()[0].callbacks.onPermissionChanged(null);
 
-    // The shell does not swap in a banner/pill on revoke anymore -
-    // EpicAccessCoordinator (mounted app-level, not in this isolated test)
-    // force-closes the tab instead. The body keeps rendering until then.
+    // The shell does not swap in a banner/pill on revoke anymore - EpicAccessCoordinator (mounted app-level, not in this isolated test) force-closes the tab instead.
+    // The body keeps rendering until then.
     await waitFor(() => {
       expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
     });
@@ -430,16 +388,7 @@ describe("<EpicShell />", () => {
   });
 
   describe("EpicSessionGate resolved arm: `failed` presentation over a live session", () => {
-    // The two arms below cover the two shapes `kind: "failed"` arrives in -
-    // a null `targetHostId` (the ∅-host arm) and a named one (the
-    // establishing-deadline arm). Which condition in `epic-session-provider.tsx`
-    // produces which is NOT this suite's concern - established there, by
-    // reading `presentGap` and the `deadline` callback in the acquire effect.
-    // This suite only asserts on what `EpicShell` RENDERS for each shape, and
-    // both shapes must render identically: neither trigger disposes the
-    // current session (see the doc comment at `EpicShell`'s `EpicSessionGate`
-    // call site), so the gate stays resolved through both and the body below
-    // still has a session to render.
+    // This suite only asserts on what `EpicShell` RENDERS for each shape, and both shapes must render identically: neither trigger disposes the current session (see the doc comment at `EpicShell`'s `EpicSessionGate` call site), so the gate stays resolved through both and the body below still has a session to render.
 
     it("positive control: a `ready` presentation renders the canvas with no failure card - proves the harness reaches the gate's resolved arm and can render a canvas at all", async () => {
       installControlledFactory();
@@ -462,10 +411,7 @@ describe("<EpicShell />", () => {
         }),
       );
 
-      // Proves the harness actually reaches the gate's resolved arm and can
-      // render a canvas at all - without this, the survival assertions in
-      // the two arms below could be passing against a tree that never had a
-      // canvas to begin with.
+      // Proves the harness actually reaches the gate's resolved arm and can render a canvas at all - without this, the survival assertions in the two arms below could be passing against a tree that never had a canvas to begin with.
       await waitForSessionReady();
 
       expect(screen.queryByTestId("tile-canvas-stub")).not.toBeNull();
@@ -497,11 +443,7 @@ describe("<EpicShell />", () => {
 
       await waitForSessionReady();
 
-      // THE FINDING: the canvas survived the failure. Asserting only that the
-      // failure card is shown (below) is precisely the trap this arm exists
-      // to avoid - that assertion alone passes on the unfixed tree, which
-      // rendered `EpicRepointFailure` INSTEAD OF the session body and
-      // unmounted `TileCanvas` (and every tile with it) in the process.
+      // Asserting only that the failure card is shown (below) is precisely the trap this arm exists to avoid - that assertion alone passes on the unfixed tree, which rendered `EpicRepointFailure` INSTEAD OF the session body and unmounted `TileCanvas` (and every tile with it) in the process.
       const canvasSurvivedTheFailure = screen.queryByTestId("tile-canvas-stub");
       expect(canvasSurvivedTheFailure).not.toBeNull();
 
@@ -540,9 +482,7 @@ describe("<EpicShell />", () => {
 
       await waitForSessionReady();
 
-      // THE FINDING, same as the ∅-host arm above: the canvas survived the
-      // failure even though this trigger names a target host (a re-point that
-      // was merely slow - nothing is necessarily wrong with the session).
+      // THE FINDING, same as the ∅-host arm above: the canvas survived the failure even though this trigger names a target host (a re-point that was merely slow - nothing is necessarily wrong with the session).
       const canvasSurvivedTheFailure = screen.queryByTestId("tile-canvas-stub");
       expect(canvasSurvivedTheFailure).not.toBeNull();
 

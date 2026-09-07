@@ -76,9 +76,7 @@ beforeEach(() => {
 });
 
 describe("openEpicInNewWindow", () => {
-  // The "epic already open in THIS window" case is handled upstream by the move
-  // flow (see use-history-open-in-new-window), so this helper only covers an
-  // epic open elsewhere or open nowhere.
+  // The "epic already open in THIS window" case is handled upstream by the move flow (see use-history-open-in-new-window), so this helper only covers an epic open elsewhere or open nowhere.
   it("focuses the owning window when the epic is open (mounted) in another window", async () => {
     const { bridge, calls } = makeBridge({
       windowId: "window-a",
@@ -109,10 +107,8 @@ describe("openEpicInNewWindow", () => {
   });
 
   it("ignores the current window's own ownership entry and opens a new window", async () => {
-    // A phase that resolved in-place is mounted in THIS window and so holds an
-    // ownership entry keyed by its epicId. Phase rows always route here (never
-    // through the move flow), so the scan must exclude the current window or it
-    // would self-focus instead of opening a new window.
+    // A phase that resolved in-place is mounted in THIS window and so holds an ownership entry keyed by its epicId.
+    // Phase rows always route here (never through the move flow), so the scan must exclude the current window or it would self-focus instead of opening a new window.
     const { bridge, calls } = makeBridge({
       windowId: "window-a",
       owned: [

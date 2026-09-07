@@ -31,17 +31,7 @@ import {
 import { managedCommandMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
-/**
- * The three human capabilities over a managed command (`UI.md` §2): start,
- * stop, delete. There is deliberately no create or edit - authoring is the
- * agent's job.
- *
- * Each pins a transient client to the command's OWN host rather than the app
- * default, the way `resources.kill` does: these act on a specific process on a
- * specific machine, and a host switch mid-flight must not redirect them. The
- * list stream pushes the resulting state to every subscriber, so there is
- * nothing to invalidate on success.
- */
+/** Pin to the command's own host. No create/edit. List stream is the success path; do not invalidate. */
 export interface ManagedCommandLifecycleVariables {
   readonly hostId: string;
   readonly epicId: string;
@@ -53,16 +43,7 @@ type LifecycleMethod =
   | "managedCommand.stop"
   | "managedCommand.delete";
 
-/**
- * Resolve the per-command host client from an already-looked-up directory
- * entry. Both "no such host in the directory" and "that host is not reachable"
- * collapse to `null` here, because every caller answers them the same way: the
- * `hostClientUnavailableError` rejection, named for its own method.
- *
- * Takes the ENTRY rather than the directory so this stays a plain function.
- * `useHostClientFor` is the render-time equivalent and is a hook, so it cannot
- * be called from inside a `mutationFn`.
- */
+/** Plain function for mutationFn. Missing or undialable entry is null (hostClientUnavailableError). */
 function transientClientForEntry(
   defaultClient: HostClient<HostRpcRegistry>,
   entry: HostDirectoryEntry | null,
@@ -148,12 +129,7 @@ export interface ManagedCommandStopAllVariables {
   readonly commandIds: readonly string[];
 }
 
-/**
- * Whether ANY Stop all batch is in flight, across every mounted panel. A
- * mutation result's own `isPending` is per-observer, and the same chat can be
- * open in two canvas tiles - a second tile's button must go dead the moment
- * the first tile's batch starts, or it re-submits the same command ids.
- */
+/** A mutation result's own `isPending` is per-observer, and the same chat can be open in two canvas tiles - a second tile's button must go dead the moment the first tile's batch starts, or it re-submits the same command ids. */
 export function useManagedCommandStopAllIsPending(chatId: string): boolean {
   return (
     useIsMutating({ mutationKey: managedCommandMutationKeys.stopAll(chatId) }) >
@@ -161,16 +137,7 @@ export function useManagedCommandStopAllIsPending(chatId: string): boolean {
   );
 }
 
-/**
- * Several commands stopped as ONE action, for a "Stop all" that has to reach
- * host-supervised commands alongside the harness's own background work.
- *
- * Fanning {@link useManagedCommandStop} out instead judged each stop on its
- * own, so the usual cause of a failure here - a host that went away - put one
- * identical toast on screen per row. This sends every stop, waits for all of
- * them, and says the outcome once. Its pending flag covers the whole span, so
- * the button a caller disables on it cannot re-send the set mid-flight.
- */
+/** Stop the set as one action; one toast, one pending flag. Do not fan out per-row stops. */
 export function useManagedCommandStopAll(
   chatId: string,
 ): UseMutationResult<void, Error, ManagedCommandStopAllVariables> {
@@ -204,12 +171,7 @@ export function useManagedCommandStopAll(
           outcome.status === "rejected",
       );
       if (rejections.length === 0) return;
-      // A batch that failed WHOLESALE almost always failed for one systemic
-      // reason (revoked access, host gone, method unsupported). Throw the
-      // typed error so the standard host-error policy - recoverable-
-      // unauthorized suppression, upgrade/reconnect guidance, dedup - applies
-      // exactly as it does on the per-row path. A partial failure has mixed
-      // causes, so the honest summary there is the count.
+      // A batch that failed WHOLESALE almost always failed for one systemic reason (revoked access, host gone, method unsupported).
       const representative: unknown = rejections[0].reason;
       if (
         rejections.length === outcomes.length &&
@@ -235,18 +197,11 @@ export interface ManagedCommandConfigureVariables extends ManagedCommandLifecycl
   readonly relaunchOnHostRestart: boolean;
 }
 
-/** The command a configure hook serializes its writes for. */
 export interface ManagedCommandConfigureTarget {
   readonly hostId: string;
   readonly commandId: string;
 }
 
-/**
- * The mutation scope that serializes configure writes to ONE command. Every
- * hook instance for the same command - the list row, the output window header,
- * a second canvas tile - shares it, so their writes run one at a time in the
- * order they were pressed.
- */
 export function managedCommandConfigureScopeId(
   target: ManagedCommandConfigureTarget,
 ): string {
@@ -257,15 +212,7 @@ export function managedCommandConfigureScopeId(
   ]);
 }
 
-/**
- * Whether a configure write for this command is in flight from ANY surface.
- * A mutation result's `isPending` is per-observer, and the same command is
- * rendered in the list row and the output window header at once: with only
- * the pressing surface disabled, the other still shows the OLD streamed value
- * and a press there computes the same inverse again - two identical writes,
- * not the on-then-off the person meant. Every surface reads this and stays
- * disabled until the first write has answered and the stream has caught up.
- */
+/** A mutation result's `isPending` is per-observer, and the same command is rendered in the list row and the output window header at once: with only the pressing surface disabled, the other still shows the OLD streamed value and a press there computes the same inverse again - two identical writes, not the on-then-off the person meant. */
 export function useManagedCommandConfigureIsPending(
   target: ManagedCommandConfigureTarget,
 ): boolean {
@@ -279,16 +226,7 @@ export function useManagedCommandConfigureIsPending(
   );
 }
 
-/**
- * The relaunch value a surface should SHOW and INVERT for this command: the
- * streamed record's, unless a configure write for the command has already
- * answered with a newer record. Between a write resolving and the chat stream
- * carrying the resulting `managedCommandsChanged`, the streamed value is
- * stale; a surface deriving its next press from it would send the same
- * inverse again. The mutation cache holds every surface's settled writes, so
- * this reads the newest one there and lets `updatedAtMs` decide - a later
- * stream record (any change bumps it) wins again the moment it lands.
- */
+/** Prefer a newer configure mutation cache over the stream until updatedAtMs advances. */
 export function useManagedCommandRelaunchOnHostRestart(
   target: ManagedCommandConfigureTarget,
   streamed: ManagedCommand,
@@ -309,10 +247,7 @@ export function useManagedCommandRelaunchOnHostRestart(
       order: mutation.mutationId,
     }),
   });
-  // Newest by the host's `updatedAtMs`, and among writes that landed in the
-  // same millisecond - two quick presses can - by press order, which is the
-  // order the scope delivered them to the host in. Without the tie-break the
-  // first of an on-then-off pair would keep winning.
+  // Without the tie-break the first of an on-then-off pair would keep winning.
   let newest: { command: ManagedCommand; order: number } | null = null;
   for (const entry of settled) {
     const parsed = managedCommandControlResponseSchema.safeParse(entry.data);
@@ -327,36 +262,14 @@ export function useManagedCommandRelaunchOnHostRestart(
       newest = candidate;
     }
   }
-  // The stream wins on EQUAL stamps too. The gap this hook closes is a stream
-  // record strictly OLDER than the answered write (the host bumps
-  // `updatedAtMs` on every live change, so the stale record always is). An
-  // equal stamp means the stream has caught up with this write, or with a
-  // write by another client in the same millisecond - which is causally newer
-  // and not in this cache, so no local order could rank it. Settled-state
-  // precedence on equality would show that obsolete value indefinitely.
+  // The stream wins on EQUAL stamps too.
   if (newest === null || newest.command.updatedAtMs <= streamed.updatedAtMs) {
     return streamed.relaunchOnHostRestart;
   }
   return newest.command.relaunchOnHostRestart;
 }
 
-/**
- * The one setting a person edits on a command: whether a host restart brings
- * it back. Pinned to the command's own host like the lifecycle three, and for
- * the same reason - the row lives on one machine. Not routed through
- * {@link useManagedCommandLifecycleMutation} only because its variables carry
- * the value being set, which that helper's shared shape does not.
- *
- * Writes to one command are SERIALIZED here, through the mutation scope, and
- * not left to the request coordinator's `fifo` lane: that coordinator keys its
- * queues by the full params, and the value being set is part of them, so an
- * "on" and an "off" for the same command are two independent queues that can
- * reach the host in either order. A toggle pressed twice would then settle on
- * whichever request the host happened to serve last. The scope is keyed by
- * `(hostId, commandId)`, so the second press waits for the first to answer.
- * The scope orders writes; {@link useManagedCommandConfigureIsPending} is what
- * keeps a second surface from issuing a duplicate one in the meantime.
- */
+/** Serialize configure writes by (hostId, commandId). fifo lanes keyed on params would reorder on/off. */
 export function useManagedCommandConfigure(
   target: ManagedCommandConfigureTarget,
 ): UseMutationResult<
@@ -414,23 +327,7 @@ export function useManagedCommandDelete(): UseMutationResult<
   );
 }
 
-/**
- * The Deliver outcome, as copy.
- *
- * Read in the order the response schema mandates, and `unattributed` FIRST for
- * a reason that is not stylistic: a non-empty one means the host proved NOTHING
- * about this chat, so `released` and `held` are empty because nothing was
- * determined rather than because nothing was there. Reporting it as a shell
- * count - or letting the empty `held` beside it read as "nothing is held" -
- * tells a person their holds are gone when every one of them still stands.
- *
- * The host's `message` is rendered verbatim as the toast's description wherever
- * a single failure is the whole story, because it is the ONLY field that
- * distinguishes the two remedies `retryable: false` covers: a delivery row a
- * newer build wrote (upgrade this host) and a boot record that failed to load
- * (restart it). Copy composed from the boolean alone can only name both and
- * settle neither, which is what "Restarting or updating it may help" was.
- */
+/** Read unattributed first: empty held/released then means undetermined, not empty. Render the host message verbatim. */
 function reportDeliverHeldOutcome(
   response: ResponseOfMethod<HostRpcRegistry, "managedCommand.deliverHeld">,
 ): void {
@@ -442,12 +339,7 @@ function reportDeliverHeldOutcome(
   reportUnresolvedDeliverHolds(response.unresolved);
 }
 
-/**
- * A failure that belongs to the CALL. Never phrased as a count of shells: one
- * of these is produced whether the chat holds one shell or four, so any number
- * here would be a number of internal proof arms rather than of anything a
- * person can see.
- */
+/** Never phrased as a count of shells: one of these is produced whether the chat holds one shell or four, so any number here would be a number of internal proof arms rather than of anything a person can see. */
 function reportUnattributedDeliverFailure(
   failures: readonly ManagedCommandHeldReleaseUnattributed[],
 ): void {
@@ -463,13 +355,7 @@ function reportUnattributedDeliverFailure(
   toast.warning("Nothing was delivered. Try again in a moment.", detail);
 }
 
-/**
- * The per-command split. `unresolved.length` is a true shell count, so it is
- * safe to render as one - but only within a group that shares a remedy. The
- * mixed case used to count the permanent failures into "N shells are still
- * held. Try again in a moment.", which told a person to retry the very shells
- * where retrying can never work; it reports the split instead.
- */
+/** Try again in a moment.", which told a person to retry the very shells where retrying can never work; it reports the split instead. */
 function reportUnresolvedDeliverHolds(
   failures: readonly ManagedCommandHeldReleaseFailure[],
 ): void {
@@ -513,12 +399,7 @@ export interface ManagedCommandDeliverHeldVariables {
   readonly commandIds: readonly string[] | null;
 }
 
-/**
- * Whether a Deliver is in flight for this chat, across every mounted panel -
- * the same shared-pending read `Stop all` needs, and for a stronger reason: a
- * null-ids Deliver names no commands, so a second tile re-sending it is not a
- * duplicate of a narrower request but the identical whole-chat action.
- */
+/** Whether a Deliver is in flight for this chat, across every mounted panel - the same shared-pending read `Stop all` needs, and for a stronger reason: a null-ids Deliver names no commands, so a second tile re-sending it is not a duplicate of a narrower request but the identical whole-chat action. */
 export function useManagedCommandDeliverHeldIsPending(chatId: string): boolean {
   return (
     useIsMutating({
@@ -527,20 +408,7 @@ export function useManagedCommandDeliverHeldIsPending(chatId: string): boolean {
   );
 }
 
-/**
- * Releases the holds a committed Stop fence left on this chat's shells.
- *
- * Unlike the lifecycle three this does NOT go through
- * {@link useManagedCommandLifecycleMutation}: those are keyed by a single
- * `commandId` and answer with a command, while Deliver is chat-scoped and
- * answers with a per-command split. It still pins a transient client to the
- * command's OWN host for the same reason they do - a hold belongs to a
- * specific host process, and a host switch mid-flight must not redirect it.
- *
- * A partial failure is a RESOLVED response carrying `unresolved`, not a
- * rejection, so the success path has to report it. Rejecting is reserved for
- * the call failing outright.
- */
+/** Pin to the command's own host. Partial failure is a resolved response with unresolved, not a rejection. */
 export function useManagedCommandDeliverHeld(
   chatId: string,
 ): UseMutationResult<

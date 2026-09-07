@@ -4,14 +4,8 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useOpenManagedCommandOutput } from "@/lib/managed-commands/use-open-managed-command-output";
 
 /**
- * The door as a chat-side surface can use it. A chip and a resume divider sit
- * deep inside a chat transcript with neither the epic id nor the host in hand,
- * but both are already in scope as context: the tile's `TabHostProvider` names
- * the host the chat is bound to, and the epic session names the epic.
- *
- * Returns `null` when either is missing (a transcript rendered outside a tile),
- * so the surface renders its plain marker rather than a button that would open
- * nothing.
+ * The door as a chat-side surface can use it.
+ * A chip and a resume divider sit deep inside a chat transcript with neither the epic id nor the host in hand, but both are already in scope as context: the tile's `TabHostProvider` names the host the chat is bound to, and the epic session names the epic.
  */
 export function useManagedCommandDoor(): ((commandId: string) => void) | null {
   const hostId = use(TabHostContext);

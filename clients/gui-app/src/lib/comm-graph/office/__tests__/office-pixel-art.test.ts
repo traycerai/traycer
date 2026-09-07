@@ -19,10 +19,8 @@ import type {
 } from "@/lib/comm-graph/office/office-types";
 
 /**
- * Every sprite the union names. Written as a record rather than an array so the
- * compiler rejects a name added to `OfficeSpriteName` and forgotten here - which
- * is the failure this file exists to catch, since the map registry is a
- * hand-maintained list and an unregistered map is simply never asserted on.
+ * Every sprite the union names.
+ * Written as a record rather than an array so the compiler rejects a name added to `OfficeSpriteName` and forgotten here - which is the failure this file exists to catch, since the map registry is a hand-maintained list and an unregistered map is simply.
  */
 const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   character: true,
@@ -188,11 +186,8 @@ describe("sprite maps", () => {
     }
   });
 
-  // The scene swaps a monitor's two lit frames while an agent works. Differing
-  // screen rows are what reads as scrolling code; a differing BEZEL would read
-  // as the whole monitor twitching, which is why the chassis rows are pinned.
-  // One contract, so one test - the wide monitor obeys it for the same reason
-  // the standard one does.
+  // The scene swaps a monitor's two lit frames while an agent works.
+  // Differing screen rows are what reads as scrolling code; a differing BEZEL would read as the whole monitor twitching, which is why the chassis rows are pinned.
   it.each([
     ["monitor-on", "monitor-on-b"],
     ["monitor-wide-on", "monitor-wide-on-b"],
@@ -213,9 +208,8 @@ describe("sprite maps", () => {
   );
 
   it("declares the sizes the scene positions the new fixtures by", () => {
-    // The rectangularity test above only proves a map AGREES with its declared
-    // size; both can be wrong together. These are the numbers the scene's
-    // offsets are computed against, so they are pinned independently.
+    // The rectangularity test above only proves a map AGREES with its declared size; both can be wrong together.
+    // These are the numbers the scene's offsets are computed against, so they are pinned independently.
     const expected: ReadonlyArray<readonly [OfficeSpriteName, number, number]> =
       [
         ["monitor-small-on", 12, 9],
@@ -243,10 +237,8 @@ describe("sprite maps", () => {
   });
 
   it("stands the cafeteria's two floor fixtures a full tile above their tile", () => {
-    // The scene lifts a prop by its overhang so its FOOT lands on its tile. The
-    // cooler and the vending machine are the two cafeteria fixtures that stand
-    // on the floor rather than hanging on a wall, so both are authored at the
-    // coffee machine's height - a shorter one would float.
+    // The scene lifts a prop by its overhang so its FOOT lands on its tile.
+    // The cooler and the vending machine are the two cafeteria fixtures that stand on the floor rather than hanging on a wall, so both are authored at the coffee machine's height - a shorter one would float.
     for (const name of ["water-cooler", "vending"] as const) {
       expect(officeSpriteSize({ name }), name).toEqual(
         officeSpriteSize({ name: "coffee-machine" }),
@@ -272,9 +264,8 @@ describe("sprite maps", () => {
   });
 
   it("covers the whole desk with the dust sheet", () => {
-    // The scene draws the sheet at the desk's TOP-LEFT and expects the desk to
-    // stop being readable. A sheet smaller than the desk, or one with a hole in
-    // it, would leave the archived desk showing through.
+    // The scene draws the sheet at the desk's TOP-LEFT and expects the desk to stop being readable.
+    // A sheet smaller than the desk, or one with a hole in it, would leave the archived desk showing through.
     expect(officeSpriteSize({ name: "dust-sheet" })).toEqual(
       officeSpriteSize({ name: "desk" }),
     );
@@ -376,14 +367,7 @@ describe("officePalette", () => {
   });
 });
 
-/**
- * Installs a `getContext` stub and returns its undo.
- *
- * The undo REMOVES the property when there was no own descriptor to put back,
- * rather than redefining it as `undefined`: a host with no `getContext` at all
- * would otherwise be left with a permanent stub, and every later suite in the
- * file would run against it.
- */
+/** Installs a `getContext` stub and returns its undo. */
 function stubGetContext(factory: () => unknown): () => void {
   const original = Object.getOwnPropertyDescriptor(
     HTMLCanvasElement.prototype,
@@ -417,9 +401,7 @@ function recordingContext(drawn: { count: number }): unknown {
 
 describe("drawOfficeSprite", () => {
   it("draws nothing when the host cannot rasterize a surface", () => {
-    // The suite's own `getContext` returns null, which is the jsdom case the
-    // guard exists for: the sprite has no surface to blit, so the call must
-    // leave the caller's context untouched rather than blitting nothing.
+    // The suite's own `getContext` returns null, which is the jsdom case the guard exists for: the sprite has no surface to blit, so the call must leave the caller's context untouched rather than blitting nothing.
     clearOfficeSpriteCache();
     const drawn = { count: 0 };
     const restore = stubGetContext(() => recordingContext(drawn));
@@ -474,9 +456,8 @@ function shirtColor(index: number): string {
 
 describe("officeSpriteSurface", () => {
   it("holds the cache to its cap however many agents are drawn", () => {
-    // The key carries an agent's APPEARANCE, so without a cap the cache grows
-    // by one entry per pose per agent ever seen - across every epic, for as
-    // long as the tab lives. Twice the cap of distinct sprites is asked for.
+    // The key carries an agent's APPEARANCE, so without a cap the cache grows by one entry per pose per agent ever seen - across every epic, for as long as the tab lives.
+    // Twice the cap of distinct sprites is asked for.
     clearOfficeSpriteCache();
     for (let i = 0; i < OFFICE_SPRITE_CACHE_LIMIT * 2; i += 1) {
       officeSpriteSurface(
@@ -494,15 +475,8 @@ describe("officeSpriteSurface", () => {
   });
 
   it("evicts the least recently drawn sprite, not the first one drawn", () => {
-    // A floor redraws the same few hundred sprites every frame. Evicting by
-    // insertion order alone would throw away the floor tile the next frame
-    // needs while keeping a sprite nobody has asked for since the tab opened.
-    //
-    // Surfaces are stubbed into existence here for one reason: a cached
-    // surface is the SAME OBJECT on a hit and a new one on a miss, and with
-    // jsdom's null surfaces there is nothing to tell the two apart - the cache
-    // size is identical either way, since evicting anything keeps it at the
-    // cap. Identity is the only honest discriminator.
+    // A floor redraws the same few hundred sprites every frame.
+    // Evicting by insertion order alone would throw away the floor tile the next frame needs while keeping a sprite nobody has asked for since the tab opened.
     clearOfficeSpriteCache();
     const drawn = { count: 0 };
     const restore = stubGetContext(() => recordingContext(drawn));

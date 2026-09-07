@@ -1,16 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// CLI audit CLI-012: `host start`'s foreground console must give an
-// interactive user terminal feedback BEFORE the command does anything that
-// can block (probe authority, incumbent check, target resolution, spawn) -
-// and it must stay entirely silent for every caller that is not a person
-// watching a terminal, so a service manager's own stdout or an NDJSON
-// consumer's stream never gets the host log duplicated into it.
-//
-// Driven through the registered command (`buildProgram()` + `parseAsync`),
-// with `runHostStart` and the tail follower stubbed so no real spawn/poll
-// ever happens - matches `cli-entrypoint-registration.test.ts`'s convention
-// for exercising the real commander wiring in-process.
+// CLI audit CLI-012: `host start`'s foreground console must give an interactive user terminal feedback BEFORE the command does anything that can block (probe authority, incumbent check, target resolution, spawn) - and it must stay entirely silent for every caller that is not a person watching a terminal, so a service manager's own stdout or an NDJSON consumer's stream never gets the host log duplicated into it.
+// Driven through the registered command (`buildProgram()` + `parseAsync`), with `runHostStart` and the tail follower stubbed so no real spawn/poll ever happens - matches `cli-entrypoint-registration.test.ts`'s convention for exercising the real commander wiring in-process.
 
 const mocks = vi.hoisted(() => ({
   order: [] as string[],
@@ -91,16 +82,12 @@ describe("host start - foreground console wiring", () => {
     program.exitOverride();
     await program.parseAsync(["host", "start"], { from: "user" });
 
-    // No tail is ever started: there is no mirroring mode. Writing log volume
-    // from the supervisor's own event loop blocks on a TTY and can stop Ctrl-C
-    // reaching the host.
+    // No tail is ever started: there is no mirroring mode.
+    // Writing log volume from the supervisor's own event loop blocks on a TTY and can stop Ctrl-C reaching the host.
     expect(mocks.startTailCalls).toHaveLength(0);
     const runHostStartIndex = mocks.order.indexOf("runHostStart-called");
     expect(runHostStartIndex).toBeGreaterThan(0);
-    // Everything before the mocked runHostStart call is the console's own
-    // synchronous output - the real command's first await (probe authority,
-    // incumbent check, target resolution, spawn) lives inside runHostStart,
-    // so the banner strictly precedes all of it.
+    // Everything before the mocked runHostStart call is the console's own synchronous output - the real command's first await (probe authority, incumbent check, target resolution, spawn) lives inside runHostStart, so the banner strictly precedes all of it.
     const beforeRunHostStart = mocks.order.slice(0, runHostStartIndex);
     const banner = beforeRunHostStart
       .filter((entry) => entry.startsWith("write:"))
@@ -113,9 +100,7 @@ describe("host start - foreground console wiring", () => {
   });
 
   it("a service-manager invocation produces no banner and starts no tail", async () => {
-    // TTY true on purpose: serviceManaged must win over interactivity, per
-    // resolveForegroundStartMode's ordering (foreground-console.test.ts pins
-    // the pure decision; this pins it end-to-end through the real command).
+    // TTY true on purpose: serviceManaged must win over interactivity, per resolveForegroundStartMode's ordering (foreground-console.test.ts pins the pure decision; this pins it end-to-end through the real command).
     setIsTty(true);
 
     const program = buildProgram();

@@ -28,7 +28,6 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 const hostScopeMocks: {
   client: HostClient<HostRpcRegistry> | null;
   hostId: string | null;
-  /** `null` uses the fixture's default (`following`). */
   status: HostScope["status"] | null;
 } = vi.hoisted(() => ({
   client: null,
@@ -36,10 +35,8 @@ const hostScopeMocks: {
   status: null,
 }));
 
-// Panels depend on the host SCOPE, not on the six hooks it composes, so this
-// mocks at that boundary rather than re-mocking the scope's internals. The
-// host OPTION is built from the mock's hostId so `scope.host.hostId` — the
-// gate's remount key — tracks it, not just `scope.hostId`.
+// Panels depend on the host scope, not on the six hooks it composes, so this mocks at that boundary rather
+// than re-mocking the scope's internals.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -568,10 +565,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(screen.getByDisplayValue("Pager")).toBeTruthy();
   });
 
-  // The flip tests render the SCOPE-BOUND panel, not the ForClient variant
-  // the shared harness uses: `NotificationsSettingsPanelForClient` passes
-  // `scope={null}` (its caller owns the gating), so it never mounts the
-  // `HostScopeGate` whose hidden-`<Activity>` preservation is under test.
+  // The flip tests render the scope-bound panel, not the ForClient variant the shared harness uses.
   function renderScopedPanel(): {
     readonly client: HostClient<HostRpcRegistry>;
     readonly rerender: () => void;
@@ -601,9 +595,8 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
         mutations: { retry: false },
       },
     });
-    // A FRESH element per (re)render: with a referentially identical element
-    // React bails out of the whole subtree and never re-reads the mutated
-    // scope mock, so the flip under test silently would not happen.
+    // A fresh element per (re)render: with a referentially identical element React bails out of the whole subtree
+    // and never re-reads the mutated scope mock, so the flip under test silently would not happen.
     const makeUi = () => (
       <Providers queryClient={queryClient}>
         <NotificationsSettingsPanel />
@@ -619,10 +612,8 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
   }
 
   it("preserves a typed hook draft across a transient same-host disconnect", async () => {
-    // The gate holds this section in a hidden `<Activity>` while its host is
-    // unreachable. For a TRANSIENT same-host loss (restart, sleep, relay
-    // blip) the returning panel must still hold the typed draft — destruction
-    // is only correct for a real host switch, covered by the next test.
+    // For a transient same-host loss (restart, sleep, relay blip) the returning panel must still hold the typed
+    // draft - destruction is only correct for a real host switch, covered by the next test.
     const view = renderScopedPanel();
     await screen.findByTestId("notification-hooks-empty-state");
     const manager = screen.getByTestId("notification-hooks-manager");
@@ -636,9 +627,8 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
       target: { value: "Typed mid-disconnect" },
     });
 
-    // The host drops out: same host, no client. The gate reports the outage
-    // instead of the section, and the open dialog — portaled DOM included —
-    // is concealed rather than destroyed, so nothing invisible is actionable.
+    // The gate reports the outage instead of the section, and the open dialog - portaled DOM included - is
+    // concealed rather than destroyed, so nothing invisible is actionable.
     hostScopeMocks.client = null;
     hostScopeMocks.status = "unreachable";
     view.rerender();
@@ -657,9 +647,8 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
   });
 
   it("destroys an open draft when the scope moves to a different host", async () => {
-    // A draft is armed against one machine's hooks file. The preservation
-    // that survives a same-host blip must not follow the user to another
-    // host: the host-keyed remount destroys it.
+    // The preservation that survives a same-host blip must not follow the user to another host: the host-keyed
+    // remount destroys it.
     const view = renderScopedPanel();
     await screen.findByTestId("notification-hooks-empty-state");
     const manager = screen.getByTestId("notification-hooks-manager");
@@ -876,13 +865,8 @@ function renderNotificationsSettingsWithDeferredRefetch(): {
   };
 }
 
-/**
- * The hooks editor holds an open draft and an armed pending-delete, and a save
- * rebuilds the host's ENTIRE hooks file from the list on screen. Nothing here
- * unmounts when the scope moves to another host, so without a key that state
- * outlived the machine it was armed against while every mutation prop
- * re-pointed at the new client.
- */
+/** Nothing here unmounts when the scope moves to another host, so without a key that state outlived the machine
+ * it was armed against while every mutation prop re-pointed at the new client. */
 describe("<NotificationsSettingsPanel /> host scope changes", () => {
   afterEach(() => {
     cleanup();
@@ -934,11 +918,7 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
       expect(screen.getByText("Delete hook?")).toBeDefined();
     });
 
-    // Move the scope to another machine. The client and its cached data stay
-    // put, which is precisely the case that used to leave this armed: the
-    // confirm stayed on screen while the save mutation re-pointed at the new
-    // host, so confirming rewrote host-b's whole hooks file to delete a hook
-    // chosen on host-a.
+    // Move the scope to another machine.
     hostScopeMocks.hostId = "host-b";
     rerender(<NotificationsSettingsPanel />);
 

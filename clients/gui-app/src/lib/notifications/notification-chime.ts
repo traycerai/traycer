@@ -524,9 +524,8 @@ export function prepareNotificationChimeAudio(): void {
 
 export function installNotificationChimeAudioWarmup(): () => void {
   if (typeof window === "undefined") return () => undefined;
-  // Construct early so the browser can bring up its audio backend before the
-  // first notification. If autoplay policy suspends it, the listeners below
-  // resume it inside the next trusted user gesture.
+  // Construct early so the browser can bring up its audio backend before the first notification.
+  // If autoplay policy suspends it, the listeners below resume it inside the next trusted user gesture.
   prepareNotificationChimeAudio();
 
   const removeListeners = (): void => {

@@ -1,10 +1,5 @@
 /**
- * Resolution of chat markdown file-link paths into `WorkspaceFileRef`s.
- *
- * The markdown anchor hands `workspaceFileRefFromLinkPath` whatever the model
- * emitted; it must resolve that against the chat's working directories so the
- * link opens the right in-app workspace file tab, and decline (return null)
- * when it can't tell which workspace a path belongs to.
+ * The markdown anchor hands `workspaceFileRefFromLinkPath` whatever the model emitted; it must resolve that against the chat's working directories so the link opens the right in-app workspace file tab, and decline (return null) when it can't tell which workspace a path belongs to.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -79,9 +74,7 @@ describe("workspaceFileRefFromLinkPath", () => {
   });
 
   it("does not fold POSIX root casing", () => {
-    // POSIX paths are case-sensitive, so a link differing only in case from the
-    // root is NOT under it; with no out-of-root synthesis (CL-1) it declines.
-    // (If casing were folded it would resolve under "/Users/me/Repo" instead.)
+    // POSIX paths are case-sensitive, so a link differing only in case from the root is NOT under it; with no out-of-root synthesis (CL-1) it declines. (If casing were folded it would resolve under "/Users/me/Repo" instead.)
     const ref = workspaceFileRefFromLinkPath(
       HOST,
       ["/Users/me/Repo"],
@@ -91,9 +84,7 @@ describe("workspaceFileRefFromLinkPath", () => {
   });
 
   it("returns null for an absolute path outside every root", () => {
-    // CL-1: an absolute path no bound root contains is declined, not modelled
-    // as a synthesized { dirname, basename } workspace (which would let the
-    // renderer read arbitrary out-of-root files).
+    // CL-1: an absolute path no bound root contains is declined, not modelled as a synthesized { dirname, basename } workspace (which would let the renderer read arbitrary out-of-root files).
     expect(
       workspaceFileRefFromLinkPath(HOST, ["/repo"], "/etc/hosts"),
     ).toBeNull();

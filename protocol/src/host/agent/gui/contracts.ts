@@ -43,19 +43,7 @@ import {
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
 
-// `agent.gui.listHarnesses` always returns the full catalog, so unguarded new
-// harness ids would reach every caller. v1.0 is frozen without the ACP GUI
-// harnesses; v2.0 carries them and is frozen without Amp; v3.0 carries Amp and
-// is frozen without Devin/Pi; v4.0 carries Devin/Pi and is frozen without
-// Hermes; v5.0 carries Hermes and is frozen without omp; v6.0 carries omp and
-// is frozen without Hugging Face; v7.0 carries Hugging Face and is frozen
-// without `authStatus`; v7.1 carries it.
-// Bridges drop ids an older caller can't decode.
-//
-// v7.1 is a MINOR, not a new major: `authStatus` is one additive optional row
-// field, and `versioned-rpc.ts` rejects a major bump that isn't a breaking
-// change. The v7 -> older downgrades therefore start at 7.1 (the line's latest
-// minor), which the registry validator enforces.
+// `agent.gui.listHarnesses` always returns the full catalog, so unguarded new harness ids would reach every caller. v1.0 is frozen without the ACP GUI harnesses; v2.0 carries them and is frozen without Amp; v3.0 carries.
 export const agentGuiListHarnessesV10 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -76,9 +64,8 @@ export const agentGuiListHarnessesUpgradeV1ToV2 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
-  // Request shape is identical. The frozen 2.0 row adds `availabilityPending`
-  // (#147) over the frozen 1.0 row; a 1.0 host predates the background
-  // availability probe, so every row it returns is already settled.
+  // Request shape is identical.
+  // The frozen 2.0 row adds `availabilityPending` (#147) over the frozen 1.0 row; a 1.0 host predates the background availability probe, so every row it returns is already settled.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     harnesses: response.harnesses.map((harness) => ({
@@ -101,9 +88,8 @@ export const agentGuiListHarnessesUpgradeV20ToV21 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 2, minor: 1 },
-  // 2.1 adds `enabled` (#178) over the frozen released 2.0 row. A host that
-  // never shipped the flag only lists harnesses it considers usable, so the
-  // pre-feature reading is enabled for every row it returns.
+  // 2.1 adds `enabled` (#178) over the frozen released 2.0 row.
+  // A host that never shipped the flag only lists harnesses it considers usable, so the pre-feature reading is enabled for every row it returns.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     harnesses: response.harnesses.map((harness) => ({
@@ -113,9 +99,7 @@ export const agentGuiListHarnessesUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
-// Bridges from v2.1 (the latest installed version of major 2's line) down to
-// the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's
-// latest.
+// Bridges from v2.1 (the latest installed version of major 2's line) down to the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's latest.
 export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
   typeof agentGuiListHarnessesV21,
   typeof agentGuiListHarnessesV10
@@ -123,9 +107,8 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
   from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop post-v1.0 GUI harnesses so a v1.0 client's strict decode never sees
-  // them. The re-parse also yields the precise v1.0 type without an assertion
-  // (and strips the post-1.0 row fields the frozen 1.0 shape never had).
+  // Drop post-v1.0 GUI harnesses so a v1.0 client's strict decode never sees them.
+  // The re-parse also yields the precise v1.0 type without an assertion (and strips the post-1.0 row fields the frozen 1.0 shape never had).
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
@@ -149,10 +132,8 @@ export const agentGuiListHarnessesUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 3, minor: 0 },
-  // Request shape is identical; a 2.1 response without Amp is a valid v3.0
-  // response (purely additive), so both upgrades are identity. Anchored at
-  // 2.1 (major 2's latest installed minor) so the cross-major chain runs
-  // 2.0 → 2.1 → 3.0 and the 2.1 `enabled` fill is never skipped.
+  // Request shape is identical; a 2.1 response without Amp is a valid v3.0 response (purely additive), so both upgrades are identity.
+  // Anchored at 2.1 (major 2's latest installed minor) so the cross-major chain runs 2.0 → 2.1 → 3.0 and the 2.1 `enabled` fill is never skipped.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -274,11 +255,7 @@ export const agentGuiListHarnessesV50 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  // Frozen: the v1.1.8 tags shipped this line, so it must serve the v5.0 id
-  // set rather than the live one. Before that release it pointed at the
-  // canonical schema, which is exactly how `omp` first tried to ride v5.0.
-  // The REQUEST stays live: it is a client→host slot, so widening the harness
-  // enum a caller may send is not a released-peer break.
+  // Frozen: the v1.1.8 tags shipped this line, so it must serve the v5.0 id set rather than the live one.
   responseSchema: listGuiHarnessesResponseSchemaV50,
 });
 
@@ -372,12 +349,7 @@ export const agentGuiListHarnessesV60 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 6, minor: 0 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  // Frozen: the v1.1.9 tags shipped this line, so it must serve the v6.0 id
-  // set rather than the live one. Before that release it pointed at the
-  // canonical schema, which is exactly how `omp` first tried to ride v5.0 -
-  // the same defect, one line later. The REQUEST stays live: it is a
-  // client→host slot, so widening the harness enum a caller may send is not a
-  // released-peer break.
+  // Frozen: the v1.1.9 tags shipped this line, so it must serve the v6.0 id set rather than the live one.
   responseSchema: listGuiHarnessesResponseSchemaV60,
 });
 
@@ -489,11 +461,7 @@ export const agentGuiListHarnessesV70 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 7, minor: 0 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  // Frozen: `cli-v1.2.0-rc.1` / `host-v1.2.0-rc.1` shipped this line, so it
-  // must serve the row shape those peers negotiate rather than the live one,
-  // which v7.1 grew with `authStatus`. Until v7.1 opened it
-  // pointed at the canonical schema, which is how the released 2.1-6.0 rows
-  // ended up tracking the live body too - see `guiHarnessOptionBaseShapeV70`.
+  // Frozen: `cli-v1.2.0-rc.1` / `host-v1.2.0-rc.1` shipped this line, so it must serve the row shape those peers negotiate rather than the live one, which v7.1 grew with `authStatus`.
   responseSchema: listGuiHarnessesResponseSchemaV70,
 });
 
@@ -513,12 +481,7 @@ export const agentGuiListHarnessesV71 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 7, minor: 1 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  // Frozen at the v7.0 ID SET, not the live one - see
-  // `listGuiHarnessesResponseSchemaV71`'s comment. 7.0 is released, and a minor
-  // may not grow a response enum over its predecessor, so no minor of major 7
-  // can carry a harness id 7.0 lacks. The REQUEST stays live: it is a
-  // client->host slot, so widening the harness enum a caller may send is not a
-  // released-peer break.
+  // Frozen at the v7.0 ID SET, not the live one - see `listGuiHarnessesResponseSchemaV71`'s comment.
   responseSchema: listGuiHarnessesResponseSchemaV71,
 });
 
@@ -548,9 +511,8 @@ export const agentGuiListHarnessesDowngradeV8ToV7 = defineDowngradePath<
   from: { major: 8, minor: 0 },
   to: { major: 7, minor: 1 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Reasonix so an already-shipped major-7 client's strict decode never
-  // sees it. Lands on 7.1, major 7's latest installed minor; a frozen-7.0
-  // caller's own contract parse then strips the 7.1-only `authStatus` key.
+  // Drop Reasonix so an already-shipped major-7 client's strict decode never sees it.
+  // Lands on 7.1, major 7's latest installed minor; a frozen-7.0 caller's own contract parse then strips the 7.1-only `authStatus` key.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV71.parse({
@@ -679,11 +641,7 @@ export const agentGuiListHarnessesUpgradeV70ToV71 = defineUpgradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 7, minor: 1 },
-  // 7.1 adds `authStatus` over the frozen 7.0 row. Nothing is filled: it is
-  // `.optional()` precisely so "this host reports no auth verdict on the
-  // catalog row" stays distinguishable from any concrete value, and a v7.0
-  // host IS such a host. Filling it would fabricate a verdict the client then
-  // trusts over its own `providers.list` fallback.
+  // 7.1 adds `authStatus` over the frozen 7.0 row.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

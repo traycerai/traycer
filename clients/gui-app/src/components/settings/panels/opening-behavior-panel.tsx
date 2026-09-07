@@ -31,19 +31,8 @@ import {
   type TilePlacementSettings,
 } from "@/stores/settings/settings-store";
 
-/**
- * Settings > Opening behavior: the one page that answers "where does the thing
- * I just clicked end up". Two groups - links (which surface a URL opens on)
- * and tile placement (this pane, a split, or picture-in-picture, plus what a
- * host-opened browser tab does, which is a placement question wearing another
- * name) - so the page reads as two questions rather than three.
- *
- * Every control is a plain enum select over the settings store. The modifier
- * keys that override a choice per click get ONE platform-aware legend under
- * the groups instead of a clause in each row's copy: none of them is
- * configurable, so repeating them per row spends description space that the
- * row's own scope needs.
- */
+/** Two groups - links (which surface a URL opens on) and tile placement (this pane, a split, or
+ * picture-in-picture, plus what a host-opened browser tab does. */
 
 const LINK_OPEN_MODE_LABELS: Record<LinkOpenMode, string> = {
   "in-app": "In Traycer",
@@ -53,7 +42,6 @@ const LINK_OPEN_DEFAULT_LABELS: Record<LinkOpenSettings["default"], string> = {
   ...LINK_OPEN_MODE_LABELS,
   "per-kind": "Per link type",
 };
-/** Named for where the tile LANDS, not for the container it becomes. */
 const TILE_PLACEMENT_LABELS: Record<TilePlacement, string> = {
   tab: "In this pane",
   split: "In a new split",
@@ -77,12 +65,8 @@ const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacing, string> = {
 
 const TRIGGER_CLASS = "w-[min(60vw,12rem)]";
 
-/**
- * A single-tile viewport has nowhere to put a split or a floating tile, so
- * every placement choice on this page collapses to "here". Said as the row's
- * DESCRIPTION rather than the amber hint: nothing is wrong, and nothing was
- * overridden - the window is simply narrow.
- */
+/** Said as the row's description rather than the amber hint: nothing is wrong, and nothing was overridden - the
+ * window is simply narrow. */
 const SINGLE_TILE_VIEWPORT_NOTE =
   "Narrow windows show one tile at a time, so everything opens in this pane.";
 
@@ -297,22 +281,14 @@ function LinkKindRow(props: {
   );
 }
 
-/**
- * One `Select` over a string-union setting: the labels record supplies both
- * the options and their order, and the union's own store guard narrows what
- * Radix hands back. Moved here from `browser-settings-section.tsx` with the
- * controls it served.
- */
+/** One `Select` over a string-union setting: the labels record supplies both the options and their order, and
+ * the union's own store guard narrows what Radix hands back. */
 function EnumSelect<T extends string>(props: {
-  /**
-   * Options and their order. Each caller declares its own constant as
-   * `Record<Union, string>`, so member coverage is checked there.
-   */
+  /** Options and their order. */
   readonly labels: Readonly<Record<string, string>>;
   readonly value: T;
   readonly isValue: (value: string) => value is T;
   readonly onValueChange: (value: T) => void;
-  /** Verbatim the row's visible label - a spoken name that matches what is read. */
   readonly ariaLabel: string;
 }): ReactNode {
   // The row's description, spoken after the name instead of being lost.

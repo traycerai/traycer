@@ -22,20 +22,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 
-/**
- * D4 (durability audit), end-to-end for `chat-fork-dialog.tsx`: "Fork dialog
- * seeded from a chat whose profile is now tombstoned: falls back to ambient
- * for the new selection; no crash."
- *
- * A cold reviewer flagged the FIRST version of this fix: the seed-resolution
- * hook originally read `providers.list` from the app-wide ACTIVE host
- * instead of the host the fork's `createChat` call actually targets. The
- * dialog now resolves that host through `useHostClientForHostId(selectedHostId)`
- * (seeded to the tab host) and creates via `useEpicCreateChatForHostClient`.
- * `useHostQuery` here is keyed by the EXACT `client` reference it's called
- * with, so the selected-host tests below prove the dialog reads from that
- * host's client and never a decoy "active host" client.
- */
+/** `useHostQuery` here is keyed by the EXACT `client` reference it's called with, so the selected-host tests below prove the dialog reads from that host's client and never a decoy "active host" client. */
 
 const dialogMocks = vi.hoisted(() => ({
   createMutate:
@@ -60,9 +47,8 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     isSuccess: false,
     status: "idle",
   }),
-  // The dialog creates on the SELECTED host's client. The factory must accept
-  // that argument: a whole-module mock that only exported the tab-scoped
-  // wrapper dropped this export and crashed every case below.
+  // The dialog creates on the SELECTED host's client.
+  // The factory must accept that argument: a whole-module mock that only exported the tab-scoped wrapper dropped this export and crashed every case below.
   useEpicCreateChatForHostClient: (client: object | null) => {
     dialogMocks.lastCreateClient = client;
     return {
@@ -222,9 +208,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     findHostById: (id) => (id === entry.hostId ? entry : null),
-    // `useHostQuery` is mocked wholesale below, so this messenger's handlers
-    // are never actually invoked - this just needs to be a real, distinct
-    // `HostClient` instance to key `dialogMocks.providersByClient` by.
+    // `useHostQuery` is mocked wholesale below, so this messenger's handlers are never actually invoked - this just needs to be a real, distinct `HostClient` instance to key `dialogMocks.providersByClient` by.
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `req-${hostId}`,
@@ -234,16 +218,8 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
   return spine.createRequester(entry);
 }
 
-// The tab's own host client (`useHostClientForHostId("tab-host-id")`'s
-// mocked result) - the client the default same-host fork's `createChat`
-// call and the seeded-profile validation are supposed to read from.
-//
-// Bound to the SAME id it is registered under. `submit` sends
-// `selectedHostClient.getActiveHostId()` as the request's `hostId`, and
-// `useEpicCreateChatForHostClient`'s preflight rejects the create when that
-// disagrees with the selected host - so a client bound to anything else stands
-// in for a state production refuses to reach, and only the mocked mutation
-// hides it.
+// The tab's own host client (`useHostClientForHostId("tab-host-id")`'s mocked result) - the client the default same-host fork's `createChat` call and the seeded-profile validation are supposed to read from.
+// Bound to the SAME id it is registered under.
 const TAB_HOST_CLIENT = buildHostClient("tab-host-id");
 // A decoy standing in for "the app-wide active host" - something the dialog
 // must NEVER read profiles from. Never returned by any mocked hook below.
@@ -330,10 +306,8 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
       workspace: { folders: [], folderInfoByPath: {}, primaryPath: null },
       intent: null,
     },
-    // A plain fork, matching `forkAtAssistantMessage`'s non-"ab-worktree"
-    // branch: no worktree pre-selection override, no re-opened interviews.
-    // This file's tombstoned-profile scenarios are orthogonal to fork-mode
-    // presentation, so any mode would do here - "plain" is the simplest.
+    // A plain fork, matching `forkAtAssistantMessage`'s non-"ab-worktree" branch: no worktree pre-selection override, no re-opened interviews.
+    // This file's tombstoned-profile scenarios are orthogonal to fork-mode presentation, so any mode would do here - "plain" is the simplest.
     seedIntentOverride: null,
     carriedInterviews: "settled",
     forkMode: "plain",
@@ -430,8 +404,8 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
           assistantMessageId: "assistant-message-1",
           interviewBlockId: "question-tool:interview",
           carriedInterviews: "settled",
-          // This client does not know the source owner. `null` is the safe
-          // value — inventing the current user would be trusted by the host.
+          // This client does not know the source owner.
+          // `null` is the safe value - inventing the current user would be trusted by the host.
           sourceOwnerUserId: null,
         },
       }),
@@ -634,9 +608,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
   });
 
   it("holds the seeded profileId verbatim while the tab host's providers.list hasn't loaded yet (unsettled)", async () => {
-    // No entry registered for TAB_HOST_CLIENT at all - the `useHostQuery`
-    // mock returns `data: undefined`, the genuine "still loading" signal
-    // `resolveSeededProfileId`'s `settled` param must gate on.
+    // No entry registered for TAB_HOST_CLIENT at all - the `useHostQuery` mock returns `data: undefined`, the genuine "still loading" signal `resolveSeededProfileId`'s `settled` param must gate on.
     renderDialog(forkTarget("work-uuid"));
 
     await submitFork();
@@ -646,12 +618,8 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
   });
 
   it("ticket 07: resolves the seeded profileId to ambient once the tab host SETTLES on an empty profiles[] (old host, or flag-off/unsupported provider)", async () => {
-    // The tab's host HAS responded - just with no profiles for this
-    // provider (an old host upgraded to `profiles: []`, or a new host with
-    // the flag off / an unsupported provider). Per the protocol-schema-
-    // contract-compat review's Major finding, preserving the pin here would
-    // silently run the account on ambient while the UI/artifact still
-    // claimed the managed profile - this must clear it instead.
+    // The tab's host HAS responded - just with no profiles for this provider (an old host upgraded to `profiles: []`, or a new host with the flag off / an unsupported provider).
+    // Per the protocol-schema- contract-compat review's Major finding, preserving the pin here would silently run the account on ambient while the UI/artifact still claimed the managed profile - this must clear it instead.
     dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [claudeState([])]);
     renderDialog(forkTarget("work-uuid"));
 
@@ -669,9 +637,8 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
           profile("work-uuid", "managed", "Work"),
         ]),
       ]);
-      // A decoy "active host" claims the profile doesn't exist there. If the
-      // dialog ever silently fell back to an app-wide active-host client
-      // instead of the selected host's client, this would wrongly null the profile.
+      // A decoy "active host" claims the profile doesn't exist there.
+      // If the dialog ever silently fell back to an app-wide active-host client instead of the selected host's client, this would wrongly null the profile.
       dialogMocks.providersByClient.set(DECOY_ACTIVE_HOST_CLIENT, [
         claudeState([profile("ambient", "ambient", "Terminal account")]),
       ]);
@@ -687,9 +654,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
       dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [
         claudeState([profile("ambient", "ambient", "Terminal account")]),
       ]);
-      // The decoy "active host" still has it alive. If the dialog ever
-      // silently fell back to an app-wide active-host client, this would
-      // wrongly preserve a dead id.
+      // The decoy "active host" still has it alive. If the dialog ever silently fell back to an app-wide active-host client, this would wrongly preserve a dead id.
       dialogMocks.providersByClient.set(DECOY_ACTIVE_HOST_CLIENT, [
         claudeState([
           profile("ambient", "ambient", "Terminal account"),

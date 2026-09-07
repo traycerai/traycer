@@ -19,18 +19,11 @@ import {
   type WorkspaceRunItem,
 } from "./workspace-run-item";
 
-/**
- * One compact single-line folder row using the parent grid's shared columns:
- * primary pin / folder / location / branch / actions. A filled pin marks the
- * primary folder; every other row keeps the same outline-pin slot. Actions are
- * always visible in a muted tone, brightening on hover/focus.
- */
+/** Actions are always visible in a muted tone, brightening on hover/focus. */
 export function FolderRow(props: {
   readonly item: WorkspaceRunItem;
   readonly onEditEnvironment: (workspacePath: string) => void;
-  /** Host-wide uncommitted counts keyed by worktree path. */
   readonly uncommittedByPath: ReadonlyMap<string, number>;
-  /** Collision boundary for nested popovers (in-epic rows live in a popover). */
   readonly boundaryEl: HTMLElement | null;
   readonly readOnly: boolean;
   readonly moveToRecent: boolean;
@@ -53,10 +46,7 @@ export function FolderRow(props: {
           className="size-3.5 shrink-0 text-muted-foreground/70"
           aria-hidden
         />
-        {/* Scoped to the NAME, not the whole chip. The chip also holds the
-              missing-folder warning and the copy-path button, each with its own
-              tooltip - a chip-wide trigger meant hovering either one could
-              surface the path tooltip alongside theirs. */}
+        {/* Scoped to the name, not the whole chip. */}
         <TooltipWrapper
           label={item.displayPath}
           side="top"
@@ -81,10 +71,8 @@ export function FolderRow(props: {
             />
           </TooltipWrapper>
         ) : null}
-        {/* Only when a NEW branch is actually the row's active choice - an
-            import/local row never uses the generated proposal this warns
-            about, so it would be noise there. Creation stays unblocked;
-            this only makes the already-applied fallback visible. */}
+        {/* Only when a new branch is actually the row's active choice - an import/local row never uses the generated
+           proposal this warns about, so it would be noise there. */}
         {item.branchPrefixWarning !== null &&
         folderLocationValue(item) === "worktree" ? (
           <TooltipWrapper
@@ -130,10 +118,8 @@ export function FolderRow(props: {
   );
 }
 
-/**
- * Columns after folder identity. Edge states span the location and branch
- * tracks while preserving the final action column.
- */
+/** Columns after folder identity. Edge states span the location and branch tracks while preserving the final
+ * action column. */
 function FolderRowBody(props: {
   readonly item: WorkspaceRunItem;
   readonly readOnly: boolean;
@@ -144,11 +130,8 @@ function FolderRowBody(props: {
 }) {
   const { item } = props;
 
-  // Folder not available on the selected host (`presence: "absent"`, or no
-  // summary after the listing settled). The row still offers both recoveries
-  // — locate it on this host, or remove it — because an unresolved folder
-  // otherwise blocks send (see `deriveResolvedWorkspaceAvailability`) with no
-  // way out. `branchLabel` carries "Not available on <host label>".
+  // The row still offers both recoveries - locate it on this host, or remove it - because an unresolved folder
+  // otherwise blocks send (see `deriveResolvedWorkspaceAvailability`) with no way out.
   if (item.unresolved) {
     return (
       <>
@@ -296,7 +279,6 @@ function PrimaryPinControl(props: {
   );
 }
 
-/** The ⚙ button — opens the setup/teardown scripts modal in every mode. */
 function EnvironmentButton(props: {
   readonly item: WorkspaceRunItem;
   readonly onEdit: (workspacePath: string) => void;
@@ -325,19 +307,12 @@ function EnvironmentButton(props: {
   );
 }
 
-/**
- * The outline-pin action that switches primary to this row's folder.
- * Rendered in the first column for a non-primary row on a surface with
- * `canChangePrimary` (the primary row shows the filled status pin instead).
- * Always visible in the muted row-action tone (never hover-revealed or
- * `display: none`), so it stays discoverable and keyboard/screen-reader
- * reachable.
- */
+/** Always visible in the muted row-action tone (never hover-revealed or `display: none`), so it stays
+ * discoverable and keyboard/screen-reader reachable. */
 function MakePrimaryButton(props: { readonly item: WorkspaceRunItem }) {
   const { item } = props;
-  // ONE tooltip, not one per concern: when the pin is disabled the reason is
-  // strictly more informative than restating the action, and rendering both
-  // put two tooltips on a single trigger.
+  // One tooltip, not one per concern: when the pin is disabled the reason is strictly more informative than
+  // restating the action, and rendering both put two tooltips on a single trigger.
   const label =
     item.makePrimaryDisabled && item.makePrimaryDisabledReason !== null
       ? item.makePrimaryDisabledReason
@@ -373,10 +348,8 @@ function RemoveFolderButton(props: {
   ) : (
     <Trash2 className="size-3.5" />
   );
-  // Always rendered AND always visible (even for a single folder). The
-  // active-owner guard is the per-item `removeDisabled` (with a tooltip), not
-  // a hidden button — so the delete option is always discoverable. There is no
-  // last-folder guard: removing the only folder rebinds the owner folderless.
+  // The active-owner guard is the per-item `removeDisabled` (with a tooltip), not a hidden button - so the
+  // delete option is always discoverable.
   const button = (
     <button
       type="button"

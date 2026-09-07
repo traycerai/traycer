@@ -1,19 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeLayer0Record } from "../pid-metadata";
 
-/**
- * The bytes under test are the ones the host really writes.
- *
- * `traycer-host/src/lifecycle/layer0-startup-record.ts` builds the record and
- * `buildHostPidMetadata` embeds it verbatim, so these fixtures are copied from
- * that shape rather than invented here — a decoder tested against inputs the
- * writer cannot produce proves the assertion and not the contract.
- *
- * The field exists because every other channel the host has for "I started
- * without the single-writer guarantee" is ephemeral: the framed status pipe
- * usually has no reader, and the stderr line scrolls out of the log tail the
- * support attachment captures. Dropping it here would restore that silence.
- */
+/** The bytes under test are the ones the host really writes. `traycer-host/src/lifecycle/layer0-startup-record.ts` builds the record and `buildHostPidMetadata` embeds it verbatim, so these fixtures are copied from that shape rather than invented here - a decoder tested against inputs the writer cannot produce proves the assertion and not the contract. */
 describe("decodeLayer0Record", () => {
   it("decodes the acquired record the host publishes", () => {
     expect(
@@ -37,11 +25,7 @@ describe("decodeLayer0Record", () => {
     });
   });
 
-  /**
-   * The host's `os-error` cause is an object. Rendering it rather than
-   * dropping it keeps the syscall and errno — the two facts that separate
-   * "this filesystem cannot do it" from "this user cannot" — in the report.
-   */
+  /** The host's `os-error` cause is an object. Rendering it rather than dropping it keeps the syscall and errno - the two facts that separate "this filesystem cannot do it" from "this user cannot" - in the report. */
   it("renders the structured os-error cause instead of discarding it", () => {
     const decoded = decodeLayer0Record({
       status: "degraded",
@@ -66,17 +50,13 @@ describe("decodeLayer0Record", () => {
     });
   });
 
-  /** Absence is "not recorded" — every pid.json older than the field. */
+  /** Absence is "not recorded" - every pid.json older than the field. */
   it("reads an absent record as null rather than as healthy", () => {
     expect(decodeLayer0Record(undefined)).toBeNull();
     expect(decodeLayer0Record(null)).toBeNull();
   });
 
-  /**
-   * A CLI older than its host must say "I cannot confirm the guarantee", not
-   * fall silent. Collapsing an unknown status to `null` would reintroduce
-   * exactly the silence this field removes.
-   */
+  /** A CLI older than its host must say "I cannot confirm the guarantee", not fall silent. Collapsing an unknown status to `null` would reintroduce exactly the silence this field removes. */
   it("reports an unfamiliar status as unrecognized, never as absent", () => {
     expect(
       decodeLayer0Record({ status: "quarantined", attemptId: "h" }),
@@ -90,11 +70,7 @@ describe("decodeLayer0Record", () => {
     });
   });
 
-  /**
-   * A well-known status with no attempt id is not a usable record: the attempt
-   * id is what ties the verdict to one start. It must not silently pass as
-   * acquired.
-   */
+  /** A well-known status with no attempt id is not a usable record: the attempt id is what ties the verdict to one start. It must not silently pass as acquired. */
   it("does not accept an acquired record with no attempt id", () => {
     expect(decodeLayer0Record({ status: "acquired" })?.status).toBe(
       "unrecognized",

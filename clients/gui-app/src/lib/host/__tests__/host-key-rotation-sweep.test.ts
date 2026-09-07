@@ -20,12 +20,8 @@ import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-clie
 import { buildHostKeyRotationSweep } from "@/lib/host/host-key-rotation-sweep";
 
 /**
- * (A) THE UNIT PIN. `buildHostKeyRotationSweep` (read its header first - the
- * contract and its stated limits live there) turns one directory emit into
- * "which REMOTE hosts rotated their public key under the same id" and hands
- * those ids to `sweepHostScope`. These cases drive the closure directly with
- * a bare recorder so each rule is isolated from `HostClient` entirely; (B)
- * below is what proves the closure wired to a REAL client behaves.
+ * (A) THE UNIT PIN.
+ * `buildHostKeyRotationSweep` (read its header first - the contract and its stated limits live there) turns one directory emit into "which REMOTE hosts rotated their public key under the same id" and hands those ids to `sweepHostScope`.
  */
 
 /** A remote row with a chosen `publicKey`, built from the shared fixture. */
@@ -152,12 +148,8 @@ describe("buildHostKeyRotationSweep", () => {
 });
 
 /**
- * (B) THE NO-ANNOUNCE PIN, against a REAL `HostClient`. R-1's sweep runs
- * through `invalidateHostScopeUnannounced`
- * (`host-client.test.ts`'s "un-strands a host's scope without announcing a
- * change" pins that method generically); this proves the SWEEP itself, wired
- * end to end, produces exactly that shape - one unannounced invalidation, no
- * change event - and nothing more.
+ * (B) THE NO-ANNOUNCE PIN, against a REAL `HostClient`.
+ * R-1's sweep runs through `invalidateHostScopeUnannounced` (`host-client.test.ts`'s "un-strands a host's scope without announcing a change" pins that method generically); this proves the SWEEP itself, wired end to end, produces exactly that shape - one.
  */
 
 const pingV10 = defineRpcContract({
@@ -218,10 +210,7 @@ function buildRealHostClient(): {
 }
 
 /**
- * Host-scope sweeps are coalesced per host per microtask tick
- * (`HostClient.deliverHostScopeSweep`), so the invalidation/change-event
- * decision lands one microtask after the reporting call - see
- * `host-client.test.ts`'s identically-named helper.
+ * Host-scope sweeps are coalesced per host per microtask tick (`HostClient.deliverHostScopeSweep`), so the invalidation/change-event decision lands one microtask after the reporting call - see `host-client.test.ts`'s identically-named helper.
  */
 async function flushAvailabilityCoalescing(): Promise<void> {
   await Promise.resolve();
@@ -245,17 +234,8 @@ describe("buildHostKeyRotationSweep wired to a real HostClient", () => {
 
     expect(invalidator.calls).toEqual([mockRemoteHostEntry.hostId]);
     expect(invalidator.options).toEqual([{ refetchActive: true }]);
-    // THE CLAIM: a rotation swept ALONE in its microtask tick must produce
-    // zero change events. A reason-scoped consumer (an `availability-recovered`
-    // subscriber) would otherwise be woken for an event that never happened -
-    // nothing recovered availability here, a scope was merely invalidated.
-    //
-    // This does NOT claim a rotation sweep coalesced with a GENUINE
-    // availability report stays silent - it would announce there, correctly,
-    // because the availability caller asked and its announcement is true.
-    // That composition is `host-client.test.ts`'s "coalesces same-tick
-    // availability reports..." case, at the `HostClient` layer generically;
-    // this file's subject is the sweep alone.
+    // THE CLAIM: a rotation swept ALONE in its microtask tick must produce zero change events.
+    // A reason-scoped consumer (an `availability-recovered` subscriber) would otherwise be woken for an event that never happened - nothing recovered availability here, a scope was merely invalidated.
     expect(events).toEqual([]);
   });
 });

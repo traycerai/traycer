@@ -18,17 +18,7 @@ export interface PrQuoteTargetSelection {
 }
 
 /**
- * Every chat and terminal agent in the epic, most recently active first, plus
- * the one this PR currently sends to.
- *
- * The default pick is the PR's own OWNER when it resolves - the chat whose
- * worktree binding produced this branch is overwhelmingly the right place to
- * send a finding about it - and otherwise the most recently active chat. An
- * explicit choice always wins, and is remembered per PR.
- *
- * A stored id that no longer resolves (chat deleted) falls back to the default
- * rather than pinning a dead target, which is why the store keeps a bare id
- * instead of a resolved target object.
+ * Default pick is the PR owner chat when it resolves, else most recently active. A stored id that no longer resolves falls back rather than pinning a dead target.
  */
 export function usePrQuoteTargets(args: {
   readonly viewKey: string;

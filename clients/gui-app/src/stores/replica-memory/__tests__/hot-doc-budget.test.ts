@@ -1,9 +1,3 @@
-/**
- * HIGH-2 / MEDIUM-4 / MEDIUM-7: a REAL artifact-room tier with a non-null
- * budget sink. Bytes govern below the count cap of 32; pinned rooms report
- * `leased` and are never demoted; evictionEffectiveness is read through
- * collectReplicaMemoryTelemetry against a real eviction.
- */
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import * as Y from "yjs";
 import type {
@@ -417,9 +411,7 @@ describe("hot-doc byte budget with a real tier", () => {
 
     expect(harness.tier.peek("room-pinned")).not.toBeNull();
     expect(harness.demote).toHaveBeenCalled();
-    // Asserted rather than guarded: the index type is not nullable, so the old
-    // `=== undefined` branch was unreachable and proved nothing. This says the
-    // same thing where it can actually fail.
+    // This says the same thing where it can actually fail.
     expect(harness.demoteOutcomes.length).toBeGreaterThan(0);
     const outcome = harness.demoteOutcomes[harness.demoteOutcomes.length - 1];
     expect(

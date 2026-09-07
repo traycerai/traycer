@@ -67,11 +67,7 @@ export const NO_UPDATE_EXECUTOR_FAULTS: UpdateExecutorFaults = {
   async hit(): Promise<void> {},
 };
 
-/**
- * The three privileged CLI executor authorities are deliberately colocated
- * with their sole consumer. They are module-private, so no trusted bridge can
- * re-export, alias, wrap, or otherwise launder them to another caller.
- */
+/** The three privileged CLI executor authorities are deliberately colocated with their sole consumer. They are module-private, so no trusted bridge can re-export, alias, wrap, or otherwise launder them to another caller. */
 async function withCliAttemptExecutorCompletion<T>(
   options: WithCliAttemptExecutorOptions,
   run: (
@@ -162,19 +158,11 @@ function unwrapExecutorContenderOutcome<T>(
   }
 }
 
-/**
- * The execution callback gets this lexical operation, not a completion
- * observation or proof. It captures the claimed identity and re-observes the
- * installed/running target itself immediately before the sole terminal write.
- */
+/** The execution callback gets this lexical operation, not a completion observation or proof. It captures the claimed identity and re-observes the installed/running target itself immediately before the sole terminal write. */
 export type CompleteExecutorSegment = () => Promise<AttemptCommitOutcome>;
 
 export interface RunAttemptExecutorClaimOptions {
-  /**
-   * The CLI derives the rollout decision itself from this installed platform.
-   * A caller cannot pass a pre-built `eligible` verdict to opt around the
-   * shadow fence.
-   */
+  /** The CLI derives the rollout decision itself from this installed platform. A caller cannot pass a pre-built `eligible` verdict to opt around the shadow fence. */
   readonly platform: HostInstallPlatform;
   readonly contender: WithCliAttemptExecutorOptions;
   readonly request: ExecutorClaimRequest;
@@ -210,12 +198,7 @@ export type ExecutorClaimOutcome =
       readonly observed: HostUpdateAttemptRecord | null;
     };
 
-/**
- * The raw terminal write stays module-private. Its only caller is the local
- * verifier below, which has just bound a healthy host.status response to the
- * current pid record and installed-byte generation while holding the live
- * executor capability. No caller may hand this function a testimonial object.
- */
+/** The raw terminal write stays module-private. Its only caller is the local verifier below, which has just bound a healthy host.status response to the current pid record and installed-byte generation while holding the live executor capability. */
 async function completeAttemptExecutorSegment(
   capability: UpdateMutationCapability,
   options: WithCliAttemptExecutorOptions,
@@ -231,12 +214,8 @@ async function completeAttemptExecutorSegment(
   }) => Promise<AttemptCommitOutcome>,
 ): Promise<AttemptCommitOutcome> {
   const home = options.hostHomeDir ?? hostHomeDir(options.environment);
-  // The final phase/identity read, live process proof, sealing and durable
-  // write all run inside the caller's short inner CLI lock. The claim fixes
-  // the attempt generation, but its sequence is necessarily stale after the
-  // legal preparing/applying/restarting/verifying writes. Derive the exact
-  // current verifying identity here; no caller-owned snapshot crosses this
-  // boundary.
+  // The final phase/identity read, live process proof, sealing and durable write all run inside the caller's short inner CLI lock.
+  // The claim fixes the attempt generation, but its sequence is necessarily stale after the legal preparing/applying/restarting/verifying writes.
   const canonical = await readUpdateAttemptRecord(home);
   if (
     canonical.kind !== "valid" ||
@@ -286,32 +265,8 @@ export type ExecutorSegmentOutcome<T> =
     }
   | Exclude<ExecutorClaimOutcome, { readonly kind: "claimed" }>;
 
-/**
- * Claim, positively acknowledge, and execute one executor segment while the
- * exact outer capability remains held. This is the only API that hands a
- * capability to execution work. There is deliberately no claim-only API, so
- * a returned identity can never be misused as a transferable post-lock lease.
- */
-/**
- * Does the canonical record name a live continuation this executor owns?
- *
- * The CLI half of Ticket 07 Finding 2, and deliberately the same shape as
- * Desktop's `hasAdoptedActivationContinuation` - the cohort gate stops NEW
- * attempts and must never abandon an ADOPTED one.
- *
- * Broader than Desktop's on exactly one axis, because the two executors own
- * different work: Desktop performs `activate` and nothing else, while this
- * executor owns every continuation the vocabulary has (`resume-apply` and
- * `activate`). So "a continuation this build owns" is any non-null
- * continuation on a live record.
- *
- * Consumes the canonical `isTerminalPhase` rather than listing phase names,
- * for the reason round 2 of Ticket 05 established: a second copy of that
- * classification is a bug with a plausible comment attached.
- *
- * An absent or unreadable record answers `false` and routes to the gate - the
- * fail-closed direction. Nothing is adopted, so refusing strands nothing.
- */
+/** Claim, positively acknowledge, and execute one executor segment while the exact outer capability remains held. This is the only API that hands a capability to execution work. */
+/** True when the canonical record names a live continuation this executor owns. Fail closed on an unreadable record. */
 async function hasAdoptedContinuation(home: string): Promise<boolean> {
   const record = await readUpdateAttemptRecord(home);
   return (
@@ -332,11 +287,8 @@ export async function runAttemptExecutorSegment<T>(
     complete: CompleteExecutorSegment,
   ) => Promise<T>,
 ): Promise<ExecutorSegmentOutcome<T>> {
-  // Ticket 07 Finding 2 (CLI half). This gate is production-reachable today
-  // through `host update-verify`, which Desktop dispatches after every
-  // packaged-mac restart: `update-verify` -> `runLocalAttemptExecutorSegment`
-  // -> here. Refusing an ADOPTED continuation on that path would abandon the
-  // very attempt the verification exists to conclude.
+  // Ticket 07 Finding 2 (CLI half).
+  // This gate is production-reachable today through `host update-verify`, which Desktop dispatches after every packaged-mac restart: `update-verify` -> `runLocalAttemptExecutorSegment` -> here.
   if (
     !(await hasAdoptedContinuation(
       options.contender.hostHomeDir ??
@@ -352,9 +304,8 @@ export async function runAttemptExecutorSegment<T>(
     async (capability, _context, completion) => {
       const claim = await claimUnderExecutorCapability(capability, options);
       if (claim.kind !== "claimed") return claim;
-      // This is the private positive acknowledgement boundary. If it throws,
-      // the capability releases without an actuator; dispatch reconciles the
-      // durable record instead of treating spawn as accepted.
+      // This is the private positive acknowledgement boundary.
+      // If it throws, the capability releases without an actuator; dispatch reconciles the durable record instead of treating spawn as accepted.
       await acknowledge(claim);
       await options.faults.hit("after-private-ack-before-action");
       let active = true;
@@ -434,9 +385,8 @@ async function claimUnderExecutorCapability(
     );
   }
   if (decision.kind === "attach") {
-    // An acquired canonical handle cannot truthfully attach to another
-    // holder. Keep this defensive arm so a future lock implementation
-    // cannot accidentally turn it into a work acceptance.
+    // An acquired canonical handle cannot truthfully attach to another holder.
+    // Keep this defensive arm so a future lock implementation cannot accidentally turn it into a work acceptance.
     return {
       kind: "rejected",
       reason: "unexpected-live-holder",
@@ -499,8 +449,7 @@ async function recoverInterruptedAttempt(
   );
   await options.faults.hit("after-recovery-evidence-before-write");
   // The final observation and recover write share the short inner CLI lock.
-  // A stale initial snapshot is advisory: a post-hook install or host flap
-  // never becomes a terminal conclusion after this boundary.
+  // A stale initial snapshot is advisory: a post-hook install or host flap never becomes a terminal conclusion after this boundary.
   const outcome = await withCliExecutorRecoveryEvidence(
     capability,
     options.contender,
@@ -576,44 +525,13 @@ async function recoverInterruptedAttempt(
     case "terminalize-failed":
       return terminalized(committed.record, "failed");
     case "supersede":
-      // Preserve the core's two durable facts. A crash after the recovery
-      // terminalization leaves the old attempt safely superseded; only this
-      // next call may mint the requested replacement.
+      // Preserve the core's two durable facts.
+      // A crash after the recovery terminalization leaves the old attempt safely superseded; only this next call may mint the requested replacement.
       return createAfterSupersede(capability, options, request);
   }
 }
 
-/**
- * Hand a recovered ACTIVATION continuation back as a PARKED record, before
- * this segment releases its claim.
- *
- * ## The loop this closes (Ticket 07, orphan-recovery ruling)
- *
- * Recovery reconciles an orphaned attempt by resuming it, which lands an
- * ACTIVE `preparing/activate` record. The verify route's execute callback does
- * no activation work - activation belongs to Desktop - so the segment then
- * releases and leaves that record active-and-unheld. That is precisely the
- * shape `decideAttemptClaim` refuses as `requires-recovery`, so the next
- * Force-restart recovers it into the same state again: a stranding LOOP, not a
- * stranding that recovery resolves.
- *
- * Parking it converts the orphan into a legally claimable park before the lock
- * is dropped, so Desktop's ordinary activation segment can resume it with no
- * recovery evidence of its own - which is the property that matters, because a
- * Desktop-minted recovery evidence would be the structural forgery T3 closed.
- *
- * ## Why this is not a new transition
- *
- * `preparing/activate -> waiting-to-activate` is already legal and already
- * named: `continuationPhaseOrderRejected` admits it as `reparkedActivation`
- * ("an already-resumed `activate` segment may re-park from `preparing` when
- * its final drain defers"). This performs that same edge under the capability
- * the recovery write just used - no new writer, no widened authority.
- *
- * `resume-apply` is deliberately untouched: its park is a different phase with
- * different preconditions, and it has no caller in this route. Guessing one
- * here would be inventing a continuation contract.
- */
+/** Hand a recovered activation continuation back as parked before this executor can take a new attempt. */
 async function parkResumedActivation(
   capability: UpdateMutationCapability,
   options: RunAttemptExecutorClaimOptions,
@@ -639,8 +557,7 @@ async function parkResumedActivation(
     },
   );
   // A refused park leaves the recovered record exactly as recovery wrote it.
-  // Reporting the failure beats reporting a park that did not happen: the
-  // caller must not be told to resume an identity that is not parked.
+  // Reporting the failure beats reporting a park that did not happen: the caller must not be told to resume an identity that is not parked.
   if (parked.kind !== "committed") return rejectedCommit(parked, recovered);
   return acknowledgedClaim(parked.record, "activate");
 }
@@ -694,9 +611,8 @@ async function commitSupersedeThenCreate(
   if (committed.kind !== "committed")
     return rejectedCommit(committed, expected);
   await options.faults.hit("after-claim-write-before-ack");
-  // The second write is intentionally a normal core `create`; do not fold it
-  // into recovery or a synthetic transition. A crash above leaves the old
-  // record durably superseded, which is the exact two-write invariant.
+  // The second write is intentionally a normal core `create`; do not fold it into recovery or a synthetic transition.
+  // A crash above leaves the old record durably superseded, which is the exact two-write invariant.
   return createAfterSupersede(capability, options, request);
 }
 
@@ -784,26 +700,7 @@ export interface SpawnedAttemptExecutor {
   waitForExit(): Promise<void>;
 }
 
-/**
- * Transport for admitting a NEW attempt, and nothing else.
- *
- * The absences here are the contract, not an oversight. This shape carries no
- * `request`, no `expected`, no `attemptId`, no `continuation`, and no
- * `hostHomeDir` — because dispatch never continues an existing attempt and so
- * has no business naming one. Continuations route
- * `host update-verify` -> `runLocalAttemptExecutorSegment`, where the claim is
- * resolved against the canonical record under the lock.
- *
- * A future field that implies a continuation must FAIL the architecture gate
- * and force a design review rather than be "validated" inside dispatch. The
- * type and the architecture boundary ARE the fail-closed mechanism; there is
- * deliberately no runtime arm rejecting such a field, because a runtime check
- * would imply the field is expected to occur.
- *
- * `platform` is a rollout INPUT, never a caller-built verdict — dispatch
- * derives the cohort decision itself so a caller cannot hand in an `eligible`
- * object and opt around the fence.
- */
+/** Transport for admitting a new attempt only. A continuation field must fail the architecture gate, not be validated inside dispatch. */
 export interface DispatchAttemptExecutorOptions {
   /** CLI-owned rollout input; `dispatch` derives the verdict internally. */
   readonly platform: HostInstallPlatform;
@@ -845,40 +742,11 @@ export type DispatchAttemptExecutorOutcome =
       readonly canonical: HostUpdateAttemptRecord | null;
     };
 
-/**
- * A parent reports accepted only after a private matching acknowledgement of
- * the child's durable claim. Spawn success, a missing ACK, and a bad nonce
- * all reconcile the canonical record once; none retries dispatch.
- */
+/** A parent reports accepted only after a private matching acknowledgement of the child's durable claim. Spawn success, a missing ACK, and a bad nonce all reconcile the canonical record once; none retries dispatch. */
 export async function dispatchAttemptExecutor(
   options: DispatchAttemptExecutorOptions,
 ): Promise<DispatchAttemptExecutorOutcome> {
-  // This gate is UNCONDITIONAL, and that is the ruled design rather than an
-  // omission (Ticket 07, attempt-core ruling on the Finding-2 dispatch gate).
-  //
-  // Dispatch is **admission-only new-attempt transport**. "Stop admitting new
-  // attempts" applies exactly here - before any spawn, before any
-  // reconciliation - so an admission actor refusing admission IS the ruled
-  // semantics, not a violation of them. There is no adopted continuation for
-  // this gate to abandon, because continuations never arrive through dispatch:
-  // they route `host update-verify` -> `runLocalAttemptExecutorSegment`, and
-  // the SEGMENT's gate is the one scoped to skip for an adopted continuation.
-  //
-  // Two resolutions were considered and rejected, and the reasons generalize:
-  //
-  //  - Reading the adoption question from a caller-supplied field is
-  //    authority-from-testimonial, the same forgeable shape as trusting
-  //    `request.expected` instead of the record.
-  //  - Consulting `reconcile()` here duplicates policy into an intentionally
-  //    INERT path, and breaks the certified invariant that a disabled dispatch
-  //    performs zero spawn, reconcile, timeout-wait, child-waiter and fault
-  //    calls. That invariant is load-bearing: it is what makes the shipped
-  //    shadow fence observably do nothing.
-  //
-  // The segment-level scoped gate is DEFENSE IN DEPTH beneath this one. It
-  // never justifies relaxing this fence - a continuation reaching dispatch at
-  // all would mean the routing invariant broke, and the correct response is to
-  // fix the routing, not to teach dispatch to accept continuations.
+  // This gate is unconditional: dispatch never continues an existing attempt and must not name one.
   if (decideUpdateExecutorCohort(options.platform).kind !== "eligible") {
     return { kind: "disabled" };
   }

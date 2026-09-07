@@ -1,16 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `buildHostUpdateVerifyCommand` is deliberately thin (see host-update-verify.ts's
-// module comment) - the executor-facing claim lives entirely in
-// `host/update-verify.ts` (covered exhaustively by
-// `host/__tests__/update-verify.test.ts`, which drives the REAL executor
-// machinery). This file's only job is the wrapper: does it forward
-// ctx.runtime.environment + args to `verifyHostUpdateAttempt`, and does it
-// build the right `CommandResult` (data / human / exitCode) from whatever
-// report comes back. Mocking `verifyHostUpdateAttempt` here (while keeping
-// the real `humanForVerifyReport`) is the correct boundary for that - this
-// suite is not re-proving the executor arms, only the plumbing on top of
-// them.
+// `buildHostUpdateVerifyCommand` is deliberately thin (see host-update-verify.ts's module comment) - the executor-facing claim lives entirely in `host/update-verify.ts` (covered exhaustively by `host/__tests__/update-verify.test.ts`, which drives the REAL executor machinery).
+// This file's only job is the wrapper: does it forward ctx.runtime.environment + args to `verifyHostUpdateAttempt`, and does it build the right `CommandResult` (data / human / exitCode) from whatever report comes back.
 const mocks = vi.hoisted(() => ({ verify: vi.fn() }));
 vi.mock("../../host/update-verify", async () => {
   const actual = await vi.importActual<
@@ -61,9 +52,7 @@ const args: HostUpdateVerifyArgs = {
   targetVersion: "1.2.3",
 };
 
-// One representative of each of the four `HostUpdateVerifyReport` arms - the
-// same four the underlying executor's `ExecutorSegmentOutcome` collapses
-// onto in `host/update-verify.ts`'s `reportFor`.
+// One representative of each of the four `HostUpdateVerifyReport` arms - the same four the underlying executor's `ExecutorSegmentOutcome` collapses onto in `host/update-verify.ts`'s `reportFor`.
 const reports: readonly [string, HostUpdateVerifyReport][] = [
   [
     "resumed",
@@ -92,11 +81,8 @@ describe("buildHostUpdateVerifyCommand", () => {
   });
 
   it.each(reports)(
-    // The source comment is explicit about WHY: a non-zero exit would let a
-    // status-only reader conflate `failed` (a real terminal verdict) with
-    // `indeterminate` (no verdict at all). Pinned per-arm, not just for the
-    // happy path, since that is exactly the distinction a single
-    // happy-path-only test would miss.
+    // The source comment is explicit about WHY: a non-zero exit would let a status-only reader conflate `failed` (a real terminal verdict) with `indeterminate` (no verdict at all).
+    // Pinned per-arm, not just for the happy path, since that is exactly the distinction a single happy-path-only test would miss.
     "exitCode stays 0 for the %s arm - a non-zero exit would let a status-only reader conflate failed with indeterminate",
     async (_name, report) => {
       mocks.verify.mockResolvedValue(report);

@@ -1,21 +1,5 @@
-/**
- * Regression coverage for traycerai/traycer#466 (and the click half of #446):
- * a label-only tooltip swallowing clicks meant for whatever it covers.
- *
- * `TooltipContent`'s `pointer-events-none` is not enough on its own - Radix
- * Popper renders that content inside a same-size positioning wrapper that keeps
- * `pointer-events: auto`, and THAT wrapper won hit-testing. In the workspace
- * folder picker (28px rows, `side="top"` tooltips) it landed on the row above,
- * so clicking that row did nothing. The fix is one rule in `index.css`.
- *
- * jsdom has no layout and cannot hit-test, so the two halves are pinned
- * separately and joined by construction: the CSS rule is read out of
- * `index.css`, and its selector - the exact string, not a copy - is then
- * matched against the wrapper a real Radix tooltip renders. Deleting the rule
- * fails the first half; Radix changing its DOM shape (an extra wrapper level,
- * a renamed attribute) fails the second. The end-to-end proof that the click
- * reaches the covered control needs a real browser and lives outside vitest.
- */
+/** jsdom has no layout and cannot hit-test, so the two halves are pinned separately and joined by construction:
+ * the CSS rule is read out of `index.css`, and its selector - the exact string, not a copy. */
 import "../../../../__tests__/test-browser-apis";
 
 import { readFileSync } from "node:fs";
@@ -30,7 +14,6 @@ const INDEX_CSS = readFileSync(
   "utf8",
 );
 
-/** The `pointer-events: none` rule guarding tooltip wrappers, as authored. */
 function tooltipWrapperRule(): { selector: string; body: string } | null {
   for (const match of INDEX_CSS.matchAll(
     /([^{}]*\[data-radix-popper-content-wrapper\][^{}]*)\{([^}]*)\}/g,
@@ -77,9 +60,8 @@ describe("tooltip hit-testing", () => {
     expect(wrapper?.hasAttribute("data-radix-popper-content-wrapper")).toBe(
       true,
     );
-    // The rule as authored, applied to the DOM as rendered. jsdom will not
-    // compute `pointer-events` from a stylesheet we never load, but it does
-    // answer whether the selector selects this node.
+    // jsdom will not compute `pointer-events` from a stylesheet we never load, but it does answer whether the
+    // selector selects this node.
     const selector = tooltipWrapperRule()?.selector ?? "";
     expect(wrapper?.matches(selector)).toBe(true);
   });

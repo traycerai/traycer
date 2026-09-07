@@ -1,8 +1,7 @@
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 
 /**
- * Unit separator: no id in this feature may contain it, so a composite key
- * can never be forged by a value that happens to embed the separator.
+ * Unit separator: no id in this feature may contain it, so a composite key can never be forged by a value that happens to embed the separator.
  */
 const KEY_SEPARATOR = "\u001f";
 
@@ -20,9 +19,8 @@ export function browserViewTileKeyId(key: BrowserViewTileKey): string {
 }
 
 /**
- * Whether two tile keys name the same mounted surface. The one comparator, so
- * a field added to `BrowserViewTileKey` cannot be forgotten by a subscriber
- * that hand-rolled its own field-by-field equality.
+ * Whether two tile keys name the same mounted surface.
+ * The one comparator, so a field added to `BrowserViewTileKey` cannot be forgotten by a subscriber that hand-rolled its own field-by-field equality.
  */
 export function isSameBrowserViewTile(
   a: BrowserViewTileKey,

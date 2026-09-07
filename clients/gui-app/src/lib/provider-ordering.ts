@@ -74,21 +74,7 @@ export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =
   }));
 
 /**
- * `ORDERED_PROVIDERS` split into two groups - effectively enabled first, the
- * rest after - each keeping its `ORDERED_PROVIDERS` relative order.
- *
- * Under auto-enablement a fresh install lights up only the providers the user
- * actually has accounts for, so a flat list buries them among a dozen-plus
- * rows they have never heard of. This is a REORDER, not a filter: every
- * provider stays on screen and reachable, which is what keeps "sign in to
- * enable this one" a real offer rather than a hidden feature.
- *
- * Order within each group comes from the source array, so the result is a
- * pure function of `isEnabled` - two renders with the same enablement produce
- * the same list, and a provider only moves when its own enablement changes.
- * That matters here specifically: this list is on screen while boot derivation
- * and pack convergence are still settling, so a comparator that could reorder
- * on equal input would visibly churn.
+ * `ORDERED_PROVIDERS` split into two groups - effectively enabled first, the rest after - each keeping its `ORDERED_PROVIDERS` relative order.
  */
 export function orderProvidersByEnablement(
   isEnabled: (providerId: ProviderId) => boolean,
@@ -111,16 +97,8 @@ export function providerIdToGuiHarnessId(providerId: ProviderId): GuiHarnessId {
 }
 
 /**
- * Total harness -> provider projection: every `GuiHarnessId` maps to its
- * `ProviderId` in `ORDERED_PROVIDERS`, `traycer` included. Use this for
- * surfaces that reason about a provider's usage/profile data regardless of
- * whether it has an external CLI login - e.g. the rate-limit profile picker
- * and the add-profile flow, both of which show Traycer Inference's own
- * profiles/usage even though it has no CLI to authenticate.
- *
- * For surfaces that gate on provider-CLI login specifically (reauth, seed
- * validation, cross-host clone continuity), use `providerCliIdForHarness`
- * instead - it excludes `traycer`, which has no provider-CLI concept at all.
+ * Total harness -> provider projection: every `GuiHarnessId` maps to its `ProviderId` in `ORDERED_PROVIDERS`, `traycer` included.
+ * Use this for surfaces that reason about a provider's usage/profile data regardless of whether it has an external CLI login - e.g. the rate-limit profile picker and the add-profile flow, both of which show Traycer Inference's own profiles/usage even though.
  */
 export function guiHarnessIdToProviderId(
   harnessId: GuiHarnessId,
@@ -132,25 +110,15 @@ export function guiHarnessIdToProviderId(
 }
 
 /**
- * Harness ids with no provider-CLI login concept at all - kept as an
- * explicit, single-membership set (rather than a second hand-maintained
- * table) so adding a future CLI-less harness is a visible, deliberate edit
- * here instead of a silent divergence between two mappers. Currently only
- * `traycer` (Traycer's own inference, not an external CLI a user
- * authenticates).
+ * Harness ids with no provider-CLI login concept at all - kept as an explicit, single-membership set (rather than a second hand-maintained table) so adding a future CLI-less harness is a visible, deliberate edit here instead of a silent divergence between.
  */
 const HARNESS_IDS_WITHOUT_PROVIDER_CLI: ReadonlySet<GuiHarnessId> = new Set([
   "traycer",
 ]);
 
 /**
- * Provider-CLI-scoped projection of `guiHarnessIdToProviderId`: identical
- * except it returns `null` for `HARNESS_IDS_WITHOUT_PROVIDER_CLI` members.
- * Use this for surfaces that gate on, seed, or migrate a provider-CLI login/
- * managed profile - the reauth gate, seeded-profile validation, cross-host
- * chat clone, and tombstoned-profile lookup all fall through to "nothing to
- * check" for a harness with no CLI login, rather than misreading
- * `guiHarnessIdToProviderId`'s `"traycer"` as a loggable-in provider.
+ * Provider-CLI-scoped projection of `guiHarnessIdToProviderId`: identical except it returns `null` for `HARNESS_IDS_WITHOUT_PROVIDER_CLI` members.
+ * Use this for surfaces that gate on, seed, or migrate a provider-CLI login/ managed profile - the reauth gate, seeded-profile validation, cross-host chat clone, and tombstoned-profile lookup all fall through to "nothing to check" for a harness with no CLI.
  */
 export function providerCliIdForHarness(
   harnessId: GuiHarnessId,

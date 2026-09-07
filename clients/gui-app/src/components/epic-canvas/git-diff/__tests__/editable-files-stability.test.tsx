@@ -1,14 +1,3 @@
-/**
- * Independent coverage for the `editableFiles` memo in `useGitDiffEditing`.
- *
- * `DiffContentPrimitive` keys its synchronous hydration on the identity of
- * `editSession.oldFile` / `editSession.newFile`. If either got a new object on
- * every draft store update, the primitive would re-derive a fresh
- * `FileDiffMetadata` every keystroke - not the original partial-swap bug, but
- * still a destructive re-attach. This suite drives the real hook (host queries
- * mocked) and asserts the exported `editableFiles` references stay stable
- * across draft updates.
- */
 import {
   afterEach,
   beforeEach,
@@ -249,9 +238,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
     expect(initial.oldFile?.contents).toBe("const value = 0;\n");
     expect(initial.newFile.contents).toBe("const value = 1;\n");
 
-    // Simulate keystrokes: the editor's onChange path writes the draft store.
-    // editableFiles must keep the same object identities so DiffContentPrimitive
-    // does not re-run hydrateFileDiffForEdit on every character.
+    // Simulate keystrokes: the editor's onChange path writes the draft store. editableFiles must keep the same object identities so DiffContentPrimitive does not re-run hydrateFileDiffForEdit on every character.
     const draftOnce = {
       name: "src/app.ts",
       contents: "const value = 12;\n",
@@ -293,11 +280,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
       "const value = 1;\n",
     );
 
-    // A re-render for reasons unrelated to a real hydration change - a
-    // discarded render, React re-invoking the component body - must not
-    // read the store a second time and produce a different object: the
-    // `hydration` identity this cycle is keyed on has not changed, so the
-    // captured seed must stay exactly as it was.
+    // A re-render for reasons unrelated to a real hydration change - a discarded render, React re-invoking the component body - must not read the store a second time and produce a different object: the `hydration` identity this cycle is keyed on has not changed, so the captured seed must stay exactly as it was.
     act(() => {
       rerender();
     });
@@ -636,10 +619,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
       await Promise.resolve();
     });
 
-    // Strict Mode double-invokes the component body on every render, giving
-    // the render-phase capture two chances per commit to read the store -
-    // both must land on the same seed, not one from before and one from
-    // after the keystroke.
+    // Strict Mode double-invokes the component body on every render, giving the render-phase capture two chances per commit to read the store - both must land on the same seed, not one from before and one from after the keystroke.
     expect(result.current.editableFiles).toBe(initial);
     expect(result.current.editableFiles?.newFile.contents).toBe(
       "const value = 1;\n",
@@ -651,12 +631,6 @@ describe("useGitDiffEditing editableFiles stability", () => {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
 
-    // Simulates reactivating a runtime that survived an external reset while
-    // it held an unsaved draft - e.g. a recovered draft whose disk baseline
-    // no longer matches (`FileEditRuntime.restore` sets `status: "conflict"`
-    // in exactly this case). The draft has trailing lines the FRESH patch's
-    // hunks know nothing about, matching the real "trailing context
-    // mismatch" crash this seed-capture bug produced.
     const identity = {
       userId: null,
       hostId: "host-A",
@@ -729,10 +703,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
       expect(result.current.editableFiles).not.toBeNull();
     });
 
-    // The structural diff model must use the FRESH content (matching
-    // `hydration.pinnedDiff`'s hunks), never the conflicting retained draft -
-    // pairing fresh hunks with the draft's extra trailing lines is exactly
-    // what crashed the Diffs renderer.
+    // The structural diff model must use the FRESH content (matching `hydration.pinnedDiff`'s hunks), never the conflicting retained draft - pairing fresh hunks with the draft's extra trailing lines is exactly what crashed the Diffs renderer.
     expect(result.current.editableFiles?.newFile.contents).toBe(
       state.worktreeContent,
     );

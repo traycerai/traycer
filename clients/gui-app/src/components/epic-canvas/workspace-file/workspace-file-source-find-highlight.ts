@@ -1,19 +1,5 @@
 /**
- * Source-preview text-range painting for workspace-file find.
- *
- * The markdown-preview path drives `FindEngine`, which *searches* the rendered
- * DOM itself. Source preview can't reuse that: Shiki splits a line into many
- * token `<span>`s, so a match that straddles a token boundary lives across
- * several text nodes and a per-text-node `indexOf` would miss it. The source
- * adapter therefore searches the raw file string and produces absolute
- * character offsets; this module maps those offsets back onto the rendered DOM
- * and paints them with the same CSS Custom Highlight API so multiple matches on
- * one line are individually visible and the active one stands out.
- *
- * A regular source container can be mapped with a flat text-node walk. Diffs
- * renders each source line as a sibling grid row inside its shadow root, so
- * that path inserts a virtual newline between `[data-line-index]` rows while
- * building the same raw-file offset map.
+ * Source preview can't reuse that: Shiki splits a line into many token `<span>`s, so a match that straddles a token boundary lives across several text nodes and a per-text-node `indexOf` would miss it.
  */
 
 const FIND_HIGHLIGHT_NAME_PREFIX = "traycer-source-find-match";
@@ -112,9 +98,7 @@ function collectLineSeparatedTextSpans(
         ? { spans: [], endOffset: offset }
         : collectFlatTextSpans(line, offset);
     spans.push(...collected.spans);
-    // Diffs renders source lines as sibling grid rows rather than placing a
-    // newline text node between them. Account for that virtual separator so
-    // raw-file offsets still map to the right token nodes.
+    // Diffs renders source lines as sibling grid rows rather than placing a newline text node between them.
     offset = collected.endOffset + 1;
   }
   return spans;
@@ -140,11 +124,7 @@ function collectFlatTextSpans(
   return { spans, endOffset: offset };
 }
 
-// Resolves an absolute character position to a (text node, in-node offset)
-// pair. Positions at a node boundary resolve to the end of the earlier node,
-// which is the same DOM point as the start of the next - fine for both range
-// endpoints. Positions past the end clamp to the final node so a slightly
-// short last text node (e.g. a trailing-newline quirk) never throws.
+// Positions past the end clamp to the final node so a slightly short last text node (e.g. a trailing-newline quirk) never throws.
 function resolvePoint(
   spans: readonly TextNodeSpan[],
   position: number,
@@ -195,10 +175,8 @@ export function clearSourceFindHighlights(root: HTMLElement): void {
 }
 
 /**
- * Paints every match span under the code container, with the active span in
- * the stronger `*-active` highlight so navigation between same-line matches is
- * visible. No-ops (clearing any prior paint) when the Custom Highlight API is
- * unavailable so unsupported browsers fall back to the gutter line marker.
+ * Paints every match span under the code container, with the active span in the stronger `*-active` highlight so navigation between same-line matches is visible.
+ * No-ops (clearing any prior paint) when the Custom Highlight API is unavailable so unsupported browsers fall back to the gutter line marker.
  */
 export function paintSourceFindHighlights(args: {
   readonly root: HTMLElement;

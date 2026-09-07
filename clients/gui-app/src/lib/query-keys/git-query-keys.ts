@@ -1,7 +1,6 @@
 /**
  * Query key builders for Git host RPC methods.
- * All keys are prefixed with hostQueryKeys.scope(hostId) to enable
- * broad invalidation by host scope, per ADR-0006.
+ * All keys are prefixed with hostQueryKeys.scope(hostId) to enable broad invalidation by host scope, per ADR-0006.
  */
 
 import type { GitStage } from "@traycer/protocol/host";
@@ -38,15 +37,8 @@ export const gitQueryKeys = {
     ] as const,
 
   /**
-   * Query key for the submodule-aware nested snapshot (parent changeset +
-   * `submodules[]`) - the RICH slot. A distinct slot from `listChangedFiles`
-   * so a minor-0 `subscribeStatus` frame (which feeds the v1.0 slot) never
-   * clobbers the richer nested snapshot. Ownership is exclusive per the
-   * negotiated stream version: minor >= 1 frames write it (stream-generation
-   * guarded); otherwise the unary query + dirty timer own it. Manual refresh
-   * is an explicit generation-aware `fetchQuery({ staleTime: 0 })`
-   * (`use-git-submodule-snapshot-refresh.ts`) - NEVER `invalidateQueries`,
-   * which cannot refetch the query while stream ownership keeps it disabled.
+   * Query key for the submodule-aware nested snapshot (parent changeset + `submodules[]`) - the RICH slot.
+   * A distinct slot from `listChangedFiles` so a minor-0 `subscribeStatus` frame (which feeds the v1.0 slot) never clobbers the richer nested snapshot.
    */
   listChangedFilesWithSubmodules: (
     hostId: string | null,
@@ -64,12 +56,6 @@ export const gitQueryKeys = {
   /**
    * Query key for git.getFileDiff RPC.
    * Scope: single host, single file, with all diff parameters.
-   * Parameters include running directory, file path, previous path, stage, and OIDs for cache invalidation.
-   *
-   * `runningDir` is the owning repo root (the parent worktree for ordinary files,
-   * the submodule `repoRoot` for a submodule's own files), so a submodule's own
-   * working-tree diff can never collide with the parent's - the diff is plain
-   * stage-based, run against whichever repo root `runningDir` names.
    */
   // eslint-disable-next-line max-params -- All parameters are semantically distinct and required for cache identity.
   fileDiff: (
@@ -99,17 +85,12 @@ export const gitQueryKeys = {
       byteBudget,
     ] as const,
 
-  /**
-   * Prefix for `fileDiff` queries under a (host, runningDir) scope. Used to
-   * narrow `invalidateQueries({ predicate })` without reaching into the key
-   * array shape at call sites.
-   */
+  /** Prefix for `fileDiff` queries under a (host, runningDir) scope. */
   fileDiffPrefix: (hostId: string | null, runningDir: string) =>
     [...hostQueryKeys.scope(hostId), "git", "fileDiff", runningDir] as const,
 
   /**
-   * Predicate matching `fileDiff` queries under a (host, runningDir) scope,
-   * optionally narrowed to a set of file paths.
+   * Predicate matching `fileDiff` queries under a (host, runningDir) scope, optionally narrowed to a set of file paths.
    */
   matchFileDiff(
     queryKey: ReadonlyArray<unknown>,
@@ -128,8 +109,7 @@ export const gitQueryKeys = {
   },
 
   /**
-   * Matches Git capability probes across both the legacy custom key and the
-   * generic host RPC key used by `useGitCapabilitiesQuery`.
+   * Matches Git capability probes across both the legacy custom key and the generic host RPC key used by `useGitCapabilitiesQuery`.
    */
   matchGitCapabilitiesQuery(queryKey: ReadonlyArray<unknown>): boolean {
     return queryKey.some(

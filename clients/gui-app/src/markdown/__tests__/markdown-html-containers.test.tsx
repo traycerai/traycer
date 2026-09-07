@@ -3,17 +3,7 @@ import { lexMarkdownBlocks } from "@tailmark/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { TraycerMarkdown } from "@/markdown/traycer-markdown";
 
-/**
- * Raw-HTML block containers written around markdown - GitHub's
- * `<details><summary>` disclosure above all - must render as ONE block.
- *
- * CommonMark ends a raw-HTML block at the first blank line, so `marked` emits
- * the opening tag, the body and the closing tag as separate top-level tokens.
- * `TraycerMarkdown` (via Tailmark) renders every block through its own
- * `react-markdown` pipeline, so unmerged tokens leave the body as a SIBLING of
- * the `<details>` element - which is why the disclosure toggle appeared to do
- * nothing on PR descriptions and comments. Merge lives in `@tailmark/core`.
- */
+/** CommonMark splits raw-HTML containers at blank lines; unmerged tokens leave details body as a sibling. Merge lives in @tailmark/core. */
 
 function renderMarkdown(content: string) {
   return render(

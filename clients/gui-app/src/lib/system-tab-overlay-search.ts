@@ -1,19 +1,8 @@
 import { z } from "zod";
 
 /**
- * Root-level search-param schema that drives the system-tab modal
- * (Settings / History). Reflected in the URL so refresh and
- * back/forward restore *which* overlay is open. The high-frequency
- * per-overlay state lives in stores, not the URL, so changing it never
- * re-renders the page behind the modal:
- *   - history search/filter/sort -> `useHistorySearchStore`
- *   - settings active section     -> `useSettingsSectionStore`
- *
- * Every key is optional so navigation call sites that don't care
- * about overlay state can omit them; the schema strips unknowns (so a
- * stale `overlaySection` from an old URL is dropped automatically) and
- * rejects anything mistyped, leaving downstream consumers a clean
- * `SystemTabOverlaySearch` value.
+ * Root-level search-param schema that drives the system-tab modal (Settings / History).
+ * Reflected in the URL so refresh and back/forward restore *which* overlay is open.
  */
 export const systemTabOverlaySearchSchema = z
   .object({
@@ -29,10 +18,8 @@ export type SystemTabOverlaySearch = z.infer<
 type SystemOverlayParamKey = "settingsOverlay" | "historyOverlay";
 
 /**
- * Root search keys that mark an overlay open. Presence of a key in a stored
- * href's search ⟺ that overlay is active (the schema only ever sets a key to
- * `true`, and `withOverlayCleared` removes it). Single source of truth for the
- * overlay param names.
+ * Root search keys that mark an overlay open.
+ * Presence of a key in a stored href's search ⟺ that overlay is active (the schema only ever sets a key to `true`, and `withOverlayCleared` removes it).
  */
 export const SYSTEM_OVERLAY_PARAM_KEYS: ReadonlyArray<SystemOverlayParamKey> = [
   "settingsOverlay",
@@ -58,10 +45,8 @@ export function parseSystemTabOverlayView(raw: unknown): SystemTabOverlayView {
 }
 
 /**
- * Search-merge helper. Returns prev with overlay keys removed -
- * keeps unrelated params intact while clearing the modal state.
- * Generic over the caller's prev shape so TanStack's typed
- * `ParamsReducerFn` is preserved end-to-end.
+ * Search-merge helper.
+ * Returns prev with overlay keys removed - keeps unrelated params intact while clearing the modal state.
  */
 export function withOverlayCleared<TPrev extends SystemTabOverlaySearch>(
   prev: TPrev,

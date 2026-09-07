@@ -51,10 +51,7 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
   const remoteUrl = /^https:/i.test(props.src) ? props.src : null;
-  // Three facts, all required: the bytes must be local, the media type must be
-  // one the clipboard takes, and the SHELL must actually reach the system
-  // clipboard with an image - Android's WebView resolves that write having
-  // written nothing.
+  // Three facts, all required: the bytes must be local, the media type must be one the clipboard takes, and the SHELL must actually reach the system clipboard with an image - Android's WebView resolves that write having written nothing.
   const canCopyOnShell = useCanCopyImages();
   const canCopy =
     remoteUrl === null &&
@@ -111,9 +108,7 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
             {props.children}
           </button>
         </DialogTrigger>
-        {/* Hover is the disclosure on a fine pointer; a coarse pointer has no
-            hover state to reach it with, so the same bar is simply present
-            there - the app's standing answer for hover-gated chrome. */}
+        {/* Hover is the disclosure on a fine pointer; a coarse pointer has no hover state to reach it with, so the same bar is simply present there - the app's standing answer for hover-gated chrome. */}
         <div
           role="presentation"
           className="pointer-events-none absolute right-2 top-2 z-10 opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 @max-[8rem]:bottom-1 @max-[8rem]:left-1 @max-[8rem]:right-auto @max-[8rem]:top-auto @max-[8rem]:pointer-events-auto @max-[8rem]:opacity-100 motion-reduce:transition-none"
@@ -129,20 +124,15 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem,var(--safe-area-width))] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem,var(--safe-area-width))]"
         showCloseButton
         ref={contentRef}
-        // Focus the dialog itself, not the first action button, whose tooltip
-        // pops open on that focus. Radix skips its own focus move once this is
-        // prevented, so the dialog has to take focus explicitly or it would be
-        // left outside the modal, on the trigger Radix hides from screen readers.
+        // Focus the dialog itself, not the first action button, whose tooltip pops open on that focus.
+        // Radix skips its own focus move once this is prevented, so the dialog has to take focus explicitly or it would be left outside the modal, on the trigger Radix hides from screen readers.
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           contentRef.current?.focus();
         }}
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {/* The minimum reserves room for the absolutely positioned action
-            bar, so no image aspect ratio can collapse the wrapper and clip
-            the actions under overflow-hidden; the 90vh clamp keeps the floor
-            inside the wrapper's own max height. */}
+        {/* The minimum reserves room for the absolutely positioned action bar, so no image aspect ratio can collapse the wrapper and clip the actions under overflow-hidden; the 90vh clamp keeps the floor inside the wrapper's own max height. */}
         <div className="relative flex max-h-[90vh] min-h-[min(6rem,90vh)] w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
           {props.mediaType === "image/svg+xml" ? (
             <div className="h-[min(88vh,52rem)] w-full">

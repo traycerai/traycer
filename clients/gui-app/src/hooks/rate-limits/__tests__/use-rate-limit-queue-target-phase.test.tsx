@@ -1,12 +1,4 @@
-/**
- * `useRateLimitQueueTargetPhase` is a thin `useSyncExternalStore` wrapper
- * around the queue's own target registry (`getRateLimitQueueTargetPhase` /
- * `subscribeRateLimitQueueTargets`, exercised directly in
- * `ephemeral-fetch-queue.test.ts`). This suite proves the WIRING: the hook
- * re-renders as the real registry transitions through queued -> fetching ->
- * cleared, reads the exact host/provider/profile key it was given, and
- * degrades to `null` with no host scope instead of throwing.
- */
+/** This suite proves the WIRING: the hook re-renders as the real registry transitions through queued -> fetching -> cleared, reads the exact host/provider/profile key it was given, and degrades to `null` with no host scope instead of throwing. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
@@ -170,15 +162,7 @@ describe("useRateLimitQueueTargetPhase", () => {
   });
 });
 
-/**
- * The fold memoizes its target list on a serialized key. These pin that the
- * key preserves target IDENTITY for ids a delimiter join would corrupt: a
- * profile id is a free-form string off the provider, so `""` must stay
- * distinct from `null` (follow the default profile) and an id may contain any
- * character - including whatever would otherwise separate the pairs. Getting
- * this wrong reads the WRONG queue entry, so a control reports idle while its
- * real target is mid-subprocess: the exact failure this hook exists to stop.
- */
+/** These pin that the key preserves target IDENTITY for ids a delimiter join would corrupt: a profile id is a free-form string off the provider, so `""` must stay distinct from `null` (follow the default profile) and an id may contain any character - including whatever would otherwise separate the pairs. */
 describe("useAnyRateLimitQueueTargetFetching target identity", () => {
   beforeEach(() => {
     __resetRateLimitQueueForTests();

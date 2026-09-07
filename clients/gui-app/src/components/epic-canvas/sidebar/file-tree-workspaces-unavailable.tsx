@@ -8,21 +8,8 @@ import type { BindingsFailure } from "@/lib/worktree/bindings-failure";
 const FILE_TREE_RETRY_TIMEOUT_MS = 10_000;
 
 /**
- * Shown when the file-tree panel's worktree-bindings read FAILED, in place of
- * the "No workspace linked." empty state.
- *
- * That empty state is right for a host that answered and has nothing bound,
- * and wrong for one that could not be asked: it reads as a fact about the
- * agent ("you have not linked a workspace") when the truth is a fact about the
- * connection, and it offers no way back. This panel resolves no workspace
- * roots from a host that cannot answer, so a pinned host going offline landed
- * there - and host-scoped queries disable every automatic recovery route, so
- * nothing re-dialed on its own.
- *
- * It mirrors the git-diff panel's pair of failure states rather than sharing
- * them, because the copy and the test ids belong to this panel; what the two
- * DO share is {@link BindingsFailure}, so they can never disagree about which
- * failure a given error is.
+ * This panel resolves no workspace roots from a host that cannot answer, so a pinned host going offline landed there - and host-scoped queries disable every automatic recovery route, so nothing re-dialed on its own.
+ * It mirrors the git-diff panel's pair of failure states rather than sharing them, because the copy and the test ids belong to this panel; what the two DO share is {@link BindingsFailure}, so they can never disagree about which failure a given error is.
  */
 export function FileTreeWorkspacesUnavailable(props: {
   readonly failure: BindingsFailure;

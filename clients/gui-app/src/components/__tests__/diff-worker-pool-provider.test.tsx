@@ -39,10 +39,7 @@ const workerPoolMocks = vi.hoisted(() => ({
   terminateWorkerPoolSingleton: vi.fn<() => void>(),
 }));
 
-// A real React context, not a stub of one - every `@pierre/diffs` component
-// reads the pool through this exact context object, so the provider under
-// test and this file's own consumer probe must share the identical instance
-// the library exports.
+// A real React context, not a stub of one.
 vi.mock("@pierre/diffs/react", () => {
   const context = createContext(undefined);
   return {

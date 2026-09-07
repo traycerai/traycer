@@ -3,10 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Doctor used to CANCEL a crash marker whenever a later `starting` marker
-// existed - which erased the evidence on the exact auto-respawn path that
-// recovered the host. It now keeps the crash and downgrades severity to
-// "recovered by restart".
+// Doctor used to CANCEL a crash marker whenever a later `starting` marker existed - which erased the evidence on the exact auto-respawn path that recovered the host.
+// It now keeps the crash and downgrades severity to "recovered by restart".
 
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {

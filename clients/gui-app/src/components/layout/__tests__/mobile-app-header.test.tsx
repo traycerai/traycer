@@ -24,10 +24,7 @@ import type { SystemTabs } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
-// The real rate-limit / resource-monitor controls pull host + stream
-// providers; stub them to their accessible trigger so the header renders in
-// this minimal harness while the switch on the resource-monitor toggle stays
-// observable.
+// The real rate-limit / resource-monitor controls pull host + stream providers.
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <button type="button" aria-label="Usage limits" />,
 }));
@@ -42,12 +39,7 @@ vi.mock("@/components/notifications/mobile-notifications-button", () => ({
   ),
 }));
 
-// On the epic route the title slot renders `MobileEpicHeaderTitle`, which
-// pulls a host mutation (`useEpicUpdateTitle`) and the registered-epic
-// permission role. Neither host runtime nor a registered epic exist in this
-// bare harness, so stub both.
-// `mobile-app-header-cold-restore.test.tsx` drives these registry accessors for
-// real; here they are stubbed so the surface-resolution cases stay readable.
+// Neither host runtime nor a registered epic exist in this bare harness, so stub both.
 const headerTitleState = vi.hoisted(() => ({
   role: "owner",
   liveTitle: null as string | null,
@@ -105,9 +97,6 @@ function renderAt(path: string) {
     routeTree,
     history: createMemoryHistory({ initialEntries: [path] }),
   });
-  // `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
-  // success arm's cloud-cache patch; the mocked mutation hook used to hide
-  // that dependency.
   render(
     <QueryClientProvider client={new QueryClient()}>
       <RouterProvider router={router} />
@@ -115,14 +104,7 @@ function renderAt(path: string) {
   );
 }
 
-/**
- * Focuses one tab in the layout the header reads.
- *
- * The layout is what a restored session actually restores - so every titled
- * case here seeds it, INCLUDING the ones that also put the router on the
- * matching route. A case that only set the route would be testing a state the
- * phone never reaches.
- */
+/** A case that only set the route would be testing a state the phone never reaches. */
 function focusTab(ref: TabRef, systemTabs: SystemTabs): void {
   const itemId = tabItemId(ref);
   useTabsStore.setState({
@@ -222,9 +204,8 @@ describe("MobileAppHeader", () => {
     );
   });
 
-  // Same cold-restore path as the epic case below: the system tabs are restored
-  // into the layout while the router is still on the landing route it booted
-  // at, so neither surface has a route to be titled from.
+  // Same cold-restore path as the epic case below: the system tabs are restored into the layout while the router
+  // is still on the landing route it booted at, so neither surface has a route to be titled from.
   it("titles the History and Settings surfaces restored under the landing route", async () => {
     presentHistoryTab();
     renderAt("/");
@@ -275,11 +256,8 @@ describe("MobileAppHeader", () => {
     );
   });
 
-  // The phone shell has no route persistence: its WebView boots at `/` and the
-  // restored epic tab is painted from the tab layout alone, with the router
-  // still on the landing route. The header has to name that tab anyway - this
-  // is the cold-restore path, and seeding the epic ROUTE here (as a suite that
-  // renders at `/epics/e1/t1` does) would hide the whole failure.
+  // The header has to name that tab anyway - this is the cold-restore path, and seeding the epic route here (as
+  // a suite that renders at `/epics/e1/t1` does) would hide the whole failure.
   it("titles the epic surface restored under the landing route", async () => {
     presentEpicTab("t1", "e1", "Wire up billing");
     renderAt("/");
@@ -350,9 +328,7 @@ describe("MobileAppHeader", () => {
     ).not.toBeNull();
   });
 
-  // The registry outlives presentation on purpose: surfaces stay registered
-  // while merely retained. What keeps their controls out of another surface's
-  // header is resolution, so these two pin the header end of it.
+  // The registry outlives presentation on purpose: surfaces stay registered while merely retained.
   it("shows no registered actions on the History and Settings surfaces", async () => {
     useMobileHeaderStore
       .getState()
@@ -376,9 +352,8 @@ describe("MobileAppHeader", () => {
     ).toBeNull();
   });
 
-  // The return leg of a launch round-trip: the same start page is presented
-  // again and its long-lived registration simply resolves - no surface had to
-  // observe the switch and re-publish.
+  // The return leg of a launch round-trip: the same start page is presented again and its long-lived
+  // registration simply resolves - no surface had to observe the switch and re-publish.
   it("shows the landing terminal entry again when its start page returns", async () => {
     useMobileHeaderStore
       .getState()

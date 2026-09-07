@@ -39,8 +39,8 @@ function renderSection(input: {
 
 describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
   it("states native-config-only scope applies to native config/MCP, not chat turns", () => {
-    // Cursor is the production carrier of this scope, but the copy must be
-    // driven by the descriptor — not by providerId === "cursor".
+    // Cursor is the production carrier of this scope, but the copy must be driven by the descriptor - not by
+    // providerId === "cursor".
     renderSection({
       providerId: "cursor",
       envOverrideScope: "native-config-only",

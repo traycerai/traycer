@@ -11,14 +11,6 @@ import type { RuntimeEnvironment, RuntimeTimer } from "../runtime-environment";
 
 type Intent = { readonly value: string };
 
-/**
- * Scheduled callbacks the queue is waiting on, controllable by the test.
- *
- * The old fake dropped every `schedule` on the floor, which was invisible
- * until the queue gained a self-scheduled re-drive: a timer nothing can fire
- * makes the "never wakes" bug and the fix indistinguishable, so a pin written
- * against it would be green either way.
- */
 type FakeTimers = {
   /** Delays requested, in order, including ones later cancelled. */
   readonly requested: number[];
@@ -272,14 +264,7 @@ describe("createCommandQueue", () => {
   });
 
   it("re-drives a queued failure that asked for a timer, and unblocks the writes stuck behind it", async () => {
-    // The wedge: a `queued` command sits in `blockedUntilRetry`, and `pump`
-    // refuses to look past the FIFO head - so the head blocks every later
-    // write too. That is fine for a failure a reconnect is OWED for, because
-    // `retryPending()` fires on the events that resolve those. It is not fine
-    // for a refusal the transport ANSWERED over a stream that stays open
-    // (`E_IDEMPOTENCY_CACHE_SATURATED`): no reconnect is owed, no snapshot
-    // lands, and the command waits for the life of the session with no Retry
-    // affordance on it or on anything behind it.
+    // The wedge: a `queued` command sits in `blockedUntilRetry`, and `pump` refuses to look past the FIFO head - so the head blocks every later write too.
     const timers = makeFakeTimers();
     const sent: string[] = [];
     let attempts = 0;
@@ -312,14 +297,14 @@ describe("createCommandQueue", () => {
     }
     await settleQueueMicrotasks();
 
-    // Nothing has gone out beyond the refused attempt, and BOTH commands are
+    // Nothing has gone out beyond the refused attempt, and both commands are
     // still pending - the second one purely because the first is in the way.
     expect(sent).toEqual([]);
     expect(queue.pending().map((record) => record.intent.value)).toEqual([
       "head",
       "behind",
     ]);
-    // THE REDDENING ASSERTION. With no self-timer nothing is armed here, and
+    // the reddening assertion. With no self-timer nothing is armed here, and
     // no external event is owed that would arm one.
     expect(timers.requested).toEqual([2_000]);
 
@@ -373,22 +358,7 @@ describe("createCommandQueue", () => {
   });
 
   it("retires a BOUNDED failure that also self-times, on its own timer, instead of re-driving it past the replay window", async () => {
-    // The combination this file had never seen. Until the write path's
-    // exhausted unary dial, `boundedRetry` and `retryAfterMs` were disjoint:
-    // every self-timing failure was `boundedRetry: false`, so the replay
-    // deadline was only ever consulted where it was written, in `retryPending`.
-    //
-    // A failure that is BOTH walks its own timer, and a deadline enforced only
-    // on the drain's path is no deadline at all for it: the command re-drives
-    // itself every backoff for as long as the host keeps refusing, straight
-    // past the dedupe retention its key depends on, and executes a second time
-    // on a host that has forgotten the first. That is precisely the outcome
-    // `COMMAND_AUTO_RETRY_WINDOW_MS` exists to prevent, arrived at by the one
-    // route that was not checking it.
-    //
-    // Ablate `releaseQueuedCommand` back to a bare
-    // `blockedUntilRetry.delete(commandId)` on the timer path and `attempts`
-    // climbs past 2 while `delivery` stays `"queued"`.
+    // The combination this file had never seen.
     const timers = makeFakeTimers();
     let now = 123;
     let attempts = 0;
@@ -419,9 +389,8 @@ describe("createCommandQueue", () => {
     await settleQueueMicrotasks();
     expect(attempts).toBe(1);
 
-    // Inside the window: the timer re-drives, which is the whole point of
-    // giving this failure one. Asserted so the pin cannot pass by disabling
-    // the self-retry it is meant to bound.
+    // Inside the window: the timer re-drives, which is the whole point of giving this failure one.
+    // Asserted so the pin cannot pass by disabling the self-retry it is meant to bound.
     now += COMMAND_AUTO_RETRY_WINDOW_MS - 1;
     expect(timers.fireAll()).toBe(1);
     await settleQueueMicrotasks();
@@ -446,11 +415,7 @@ describe("createCommandQueue", () => {
   });
 
   it("a queued failure that asked for NO timer still waits for an external drain", async () => {
-    // The control, and the reason the field is `number | null` rather than a
-    // constant applied to every queued failure: a dead transport's recovery is
-    // an event `retryPending()` already fires on, and a self-timer there would
-    // only race it. This is the pre-existing contract, asserted so the new
-    // path cannot quietly become the only path.
+    // This is the pre-existing contract, asserted so the new path cannot quietly become the only path.
     const timers = makeFakeTimers();
     let attempts = 0;
     const queue = makeQueue({

@@ -19,16 +19,12 @@ vi.mock(
   }),
 );
 
-// Both exports, not just the hook this component calls: a factory that lists
-// only what today's importer uses answers `undefined` for the rest, and the
-// next importer of this module gets a silent no-op instead of a failure.
+// Both exports, not just the hook this component calls: a factory that lists only what today's importer uses answers `undefined` for the rest, and the next importer of this module gets a silent no-op instead of a failure.
 vi.mock("@/hooks/chats/use-epic-chat-records", () => ({
   useEpicSyncChatRecords: useEpicSyncChatRecordsMock,
   invalidateEpicChatRecords: () => undefined,
 }));
-// The terminal-agent twin of the record sync above: same subtree, same
-// reason to stub it - it reaches the session host client, which this
-// harness does not provide.
+// The terminal-agent twin of the record sync above: same subtree, same reason to stub it - it reaches the session host client, which this harness does not provide.
 vi.mock("@/hooks/chats/use-epic-tui-agent-records", () => ({
   useEpicSyncTuiAgentRecords: () => undefined,
   invalidateEpicTuiAgentRecords: () => undefined,
@@ -100,9 +96,7 @@ describe("<EpicRouteSessionBody />", () => {
     expect(screen.getByTestId("epic-shell").dataset.active).toBe("false");
     expect(useInitialChatHandoffMock).toHaveBeenCalledWith("epic-a", "tab-a");
     expect(useEpicRouteSynchronizationMock).not.toHaveBeenCalled();
-    // Session-scoped, NOT route-active-scoped: the chat record channel backs
-    // the sidebar tree and every open tile of a background epic, which would
-    // lose their swept chats again if it stopped while another tab is in front.
+    // Session-scoped, NOT route-active-scoped: the chat record channel backs the sidebar tree and every open tile of a background epic, which would lose their swept chats again if it stopped while another tab is in front.
     expect(useEpicSyncChatRecordsMock).toHaveBeenCalledWith("epic-a");
     expect(screen.queryByTestId("epic-migration-modal")).toBeNull();
   });

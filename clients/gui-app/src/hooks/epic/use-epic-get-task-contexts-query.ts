@@ -11,14 +11,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
 /**
- * Presentation-only stale window for the title/context readers of
- * `epic.getTaskContexts`. These callers render a Task title next to an id;
- * nothing they show is destructive and nothing they show is time-critical, so
- * a fetch per mount buys nothing. Deliberately much longer than the existence
- * reconciler's window (`epic-tab-existence-reconciler.tsx`), which is the one
- * consumer whose freshness has consequences. A rename still lands promptly:
- * the epic's own Y.Doc drives every surface that shows a live title, and this
- * batch only backfills ids no cloud-tasks page has cached.
+ * Long stale window for title/context readers. Live titles come from the epic Y.Doc; this batch only backfills uncached ids.
  */
 export const TASK_CONTEXT_TITLE_STALE_TIME_MS = 5 * 60_000;
 
@@ -28,14 +21,8 @@ export interface EpicTaskContexts {
   readonly error: Error | null;
 }
 
-/**
- * Resolves task ids to their cloud `ListTaskLight` contexts via cap-sized
- * `epic.getTaskContexts` batches. Only `found` rows enter the map; absence and
- * unknown outcomes stay unavailable to this presentation-only caller. Cache identity is
- * scoped by `userId` because permission-dependent responses must not leak
- * across account switches; the hook stays disabled until a user is known.
- * An older host without the method degrades to an empty map, not an error.
- */
+/** An older host without the method degrades to an empty map, not an error.
+ * Cache identity is scoped by `userId` because permission-dependent responses must not leak across account switches; the hook stays disabled until a user is known. */
 export function useEpicGetTaskContexts(
   taskIds: readonly string[],
   userId: string | null,

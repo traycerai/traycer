@@ -15,14 +15,7 @@ import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-cat
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * A refresh rejection belongs to the host that ISSUED it.
- *
- * `clients/gui-app/AGENTS.md` states the rule for both outcomes - capture
- * `hostId` in `onMutate`, use it in `onSuccess` AND `onError` - and only the
- * success half was wired. An app-wide composer rebinds while a manual refresh
- * is in flight, TanStack hands the pending mutation the LATEST render's
- * callbacks, and the departed host's rejection toasts over the session the
- * user has already moved to.
+ * A refresh rejection belongs to the host that issued it. Capture `hostId` in `onMutate` for both success and error.
  */
 
 const request = vi.fn();
@@ -40,10 +33,7 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   }),
 }));
 
-// Spread the real module rather than replacing it. `host-error-toast` exports
-// four functions, and a factory naming only this one leaves the other three
-// `undefined` for every module in the graph that imports them - which fails as
-// a render crash somewhere unrelated, not as a missing mock.
+// Spread the real module rather than replacing it.
 vi.mock("@/lib/host-error-toast", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/host-error-toast")>();
@@ -60,11 +50,7 @@ const client = Object.assign({} as HostClient<HostRpcRegistry>, {
   requestWithSignal: request,
 });
 
-// `Wrapper` is a COMPONENT, so a bare `new QueryClient(...)` in its body mints
-// a fresh one on every render - four per test here, measured - and each one
-// publishes an empty cache and an empty mutation cache through the provider.
-// Held in state instead, so the client is the one thing in this harness that
-// does not change while the scope and the bound host do.
+// Held in state instead, so the client is the one thing in this harness that does not change while the scope and the bound host do.
 function Wrapper(props: { readonly children: ReactNode }): ReactNode {
   const [queryClient] = useState(
     () =>
@@ -117,16 +103,7 @@ function renderCatalog() {
 }
 
 /**
- * Answers the cache-only READ immediately and holds only the manual refresh
- * open, so the host can change while that one request is in flight. Both go
- * through the same `client.request`, and a stub that cannot tell them apart
- * leaves the mutation waiting on the read's promise.
- *
- * `issued` is what the caller must await before rejecting. `mutateAsync` does
- * not reach `mutationFn` synchronously, so rejecting straight after the call
- * hits nothing and the test hangs on a promise no one can settle - and
- * `reject` THROWS in that case rather than no-op'ing, so a harness that gets
- * the ordering wrong fails as a harness bug instead of as a timeout.
+ * Answer the cache-only read immediately and hold only the manual refresh. `reject` throws if nothing is in flight so a harness ordering bug is not a timeout.
  */
 function pendingManualRefresh(): {
   readonly issued: Promise<void>;
@@ -158,17 +135,7 @@ function pendingManualRefresh(): {
 }
 
 /**
- * One controllable manual refresh per ISSUE ORDER, so two overlapping
- * refreshes - the original and the one that replaces it as the mutation
- * observer's current call - can each be rejected independently. Unlike
- * `pendingManualRefresh` above, this does not overwrite a single `reject`
- * slot on the second call: `index` is assigned in the order `client.request`
- * is actually invoked, and the harness's own scope never varies, so call
- * order is the only thing available to key on.
- *
- * `issued(index)` is created lazily the same way `manualRefreshesByPath`
- * creates its per-path promise in the sibling suite, so the caller can await
- * it whether the mock has already run or not yet.
+ * One controllable reject per issued refresh, keyed by call order so overlapping refreshes can fail independently.
  */
 function sequentialManualRefreshes(): {
   readonly issued: (index: number) => Promise<void>;
@@ -274,14 +241,7 @@ describe("useGithubMentionCatalog manual refresh rejection", () => {
   });
 
   it("toasts a rejection for the request it actually belongs to, even after a newer host's refresh replaced the mutation observer's current call", async () => {
-    // `boundHostIdRef` is what makes this true, not `readiness.hostId` closed
-    // over at render. Host X issues a refresh; the composer rebinds to host Y
-    // and issues its OWN refresh, which becomes the observer's "current"
-    // mutation and freezes X's onError closure holding whichever host was
-    // bound at that moment (Y). The composer then rebinds back to X and X's
-    // ORIGINAL request finally rejects - a render-closure comparison would
-    // still be checking against the frozen Y and wrongly suppress the toast
-    // the now-bound X should see; the ref reads the LIVE bound host instead.
+    // The composer then rebinds back to X and X's ORIGINAL request finally rejects - a render-closure comparison would still be checking against the frozen Y and wrongly suppress the toast the now-bound X should see; the ref reads the LIVE bound host instead.
     const refreshes = sequentialManualRefreshes();
     const { result, rerender } = renderCatalog();
 

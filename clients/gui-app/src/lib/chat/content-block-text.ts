@@ -8,8 +8,7 @@ const WHITESPACE_RE = /\s/;
 
 /**
  * Builds the small assistant-row text projection used by the turn minimap.
- * The message body itself renders from structured segments, so retaining a
- * second, fully joined copy of every block only makes the transcript larger.
+ * The message body itself renders from structured segments, so retaining a second, fully joined copy of every block only makes the transcript larger.
  */
 export function contentBlocksPreview(
   blocks: ReadonlyArray<ContentBlock>,

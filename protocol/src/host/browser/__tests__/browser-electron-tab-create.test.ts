@@ -132,10 +132,6 @@ describe("browser.sessions Electron tab birth", () => {
   });
 
   it("carries no arm for any superseded birth frame", () => {
-    // Asserted on the DISCRIMINATOR, not on a hand-built payload: a
-    // `safeParse` of one made-up body fails for whatever reason comes first,
-    // so it would keep passing even if the arm came back with different
-    // fields. The absent `kind` literal is the actual claim.
     for (const kind of [
       "electronTabRegistered",
       "electronTabRegistrationFailed",

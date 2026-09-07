@@ -6,11 +6,7 @@ export function visibleComposerApprovals(
   return approvals.filter((approval) => approval.kind !== "plan");
 }
 
-// Plan approvals are owned by the inline plan card (its Implement/Reject
-// actions) and are hidden from the generic composer approval queue. They must
-// therefore NOT gate composer submit either - otherwise a plan-only approval
-// becomes an invisible send block. File-edit approvals and non-plan tool
-// approvals still block submit and remain visible in the composer surface.
+// They must therefore NOT gate composer submit either - otherwise a plan-only approval becomes an invisible send block.
 export function composerHasBlockingApprovals(
   pendingApprovals: ReadonlyArray<ChatApprovalState>,
   pendingFileEditApprovalCount: number,

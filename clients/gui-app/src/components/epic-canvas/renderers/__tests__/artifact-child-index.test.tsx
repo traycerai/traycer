@@ -54,9 +54,7 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   }),
 }));
 
-// `importOriginal` so the real `tilePlacement` defaults (and the module's
-// other exports) survive: the click path runs the real `openTile` seam, which
-// reads placement off `useSettingsStore.getState()`.
+// `importOriginal` so the real `tilePlacement` defaults (and the module's other exports) survive: the click path runs the real `openTile` seam, which reads placement off `useSettingsStore.getState()`.
 vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/stores/settings/settings-store")>();
@@ -166,9 +164,7 @@ describe("<ArtifactChildIndex />", () => {
 
     fireEvent.click(row);
 
-    // A revert to a raw canvas `prepareOpenTilePreviewInTabFocusTarget` call
-    // would still mutate the store, but would not hit this route-aware
-    // boundary spy.
+    // A revert to a raw canvas `prepareOpenTilePreviewInTabFocusTarget` call would still mutate the store, but would not hit this route-aware boundary spy.
     expect(navigation.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
         target: { tabId: viewTabId },

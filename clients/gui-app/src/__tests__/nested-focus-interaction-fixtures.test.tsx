@@ -1,30 +1,5 @@
 /**
- * Table-driven integration harness for the nested-focus-opener boundary: a
- * REAL canvas store plus a REAL TanStack router (via
- * `renderNestedFocusFixture`), asserting the ACTUAL
- * `router.state.location.search.focusPaneId` / `focusTileInstanceId` after a
- * genuine DOM interaction on a representative opener affordance. This is the
- * only layer that would still catch the regression class (a leaf calling a
- * raw canvas store action instead of the boundary) even if the ESLint rule
- * and the shared test-mock helper both failed to prevent it - lint and
- * mocked-boundary tests can both pass while the route write silently never
- * happens; only a real router observes that.
- *
- * Coverage table (rows below) plus affordances evaluated and dropped:
- * - Sidebar terminal open (`TerminalsPanelBody` in `epic-terminal-sidebar.tsx`)
- *   - dropped: requires host-RPC (`useTerminalList`) and `SnapshotGate`
- *     plumbing unrelated to the boundary itself. Substituted with the
- *     `useFocusEpicTerminalSession` row below, which exercises the same
- *     open-or-focus-terminal boundary call with a lean `TabHostProvider`
- *     wrapper instead of the full sidebar body's host/query infrastructure.
- * - Snapshot bundle "File" button (`SnapshotBundleDiffTileContent`)
- *   - dropped: requires mocking `react-virtuoso`, the bundle-diff
- *     find-registration hooks, and the diff-content-primitive renderer -
- *     substantial unrelated surface for one more table row. Already covered
- *     end to end by its own dedicated
- *     `snapshot-bundle-diff-file-navigation.test.tsx`.
- *
- * Table breadth can grow later; the harness existing at all is the point.
+ * Nested-focus-opener harness: real canvas store plus real router. Lint and mocked-boundary tests can pass while the route write never happens.
  */
 import type { ReactElement } from "react";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -239,13 +214,7 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
   },
 ];
 
-/**
- * Naming the effective host is part of building an app-wide host fixture
- * (P2.1's sweep convention). The markdown reference chip resolves its host
- * through `useCanvasHostId()` -> `useEffectiveHostId()` -> the selection
- * authority store, so the STORE carries the host here rather than a hook
- * mock, which would strand again on the next plumbing change.
- */
+/** Seed the selection-authority store, not a hook mock: chips resolve through useCanvasHostId -> useEffectiveHostId. */
 function setEffectiveHostId(hostId: string | null): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,

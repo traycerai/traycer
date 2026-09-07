@@ -322,9 +322,7 @@ describe("enqueuePersistChatRunSettings", () => {
       makeRequest("chat-cleanup-race", {}),
     );
     await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
-    // Queue a second write for the SAME chat while the first is still in
-    // flight - it replaces the chains entry with a NEW chain before the
-    // first one settles.
+    // Queue a second write for the SAME chat while the first is still in flight - it replaces the chains entry with a NEW chain before the first one settles.
     enqueuePersistChatRunSettings(
       mutateAsync,
       makeRequest("chat-cleanup-race", {}),

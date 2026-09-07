@@ -5,21 +5,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
-// Genuine two-process regression coverage for `host restart`'s `cli-lock`
-// wiring (Host Update Layer Redesign Tech Plan, "Lifecycle lock
-// coverage" + "host restart --if-idle"). An in-process
-// `Promise.allSettled`-style test can't reproduce a real cross-process
-// TOCTOU window - only actual OS-level file contention (via
-// `store/__tests__/fixtures/cli-lock-worker.ts`, the same worker
-// `cli-lock.test.ts` uses) can be trusted to exercise:
-//
-//   1. a terminal `host restart` genuinely BLOCKS while another actor
-//      (e.g. an in-progress `host apply`) holds the lock, then proceeds
-//      once it releases - never entering that actor's critical section;
-//   2. `--if-idle`'s busy probe runs strictly AFTER lock acquisition, so
-//      an agent that starts busy WHILE restart is still waiting behind
-//      a foreign holder is still caught (a pre-wait probe would have
-//      missed it).
+// Genuine two-process regression coverage for `host restart`'s `cli-lock` wiring (Host Update Layer Redesign Tech Plan, "Lifecycle lock coverage" + "host restart --if-idle").
+// An in-process `Promise.allSettled`-style test can't reproduce a real cross-process TOCTOU window - only actual OS-level file contention (via `store/__tests__/fixtures/cli-lock-worker.ts`, the same worker `cli-lock.test.ts` uses) can be trusted to exercise: 1. a terminal `host restart` genuinely BLOCKS while another actor (e.g. an in-progress `host apply`) holds the lock, then proceeds once it releases - never entering that actor's critical section; 2.
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
@@ -80,9 +67,8 @@ vi.mock("../../host/host-start-adoption", () => ({
   }),
 }));
 
-// The barrier intentionally wraps the real attestation read. Pausing it
-// while a real foreign process waits on cli-lock proves the read has not
-// slipped to after lock release (a passthrough withCliLock mock cannot).
+// The barrier intentionally wraps the real attestation read.
+// Pausing it while a real foreign process waits on cli-lock proves the read has not slipped to after lock release (a passthrough withCliLock mock cannot).
 vi.mock("../../host/attested-install-runtime", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -101,15 +87,8 @@ vi.mock("../../host/attested-install-runtime", async (importOriginal) => {
   };
 });
 
-// `process.env.HOME`/`USERPROFILE` mutation alone is not trustworthy under
-// `bun --bun`, which can honor its own startup home independently of a
-// runtime env mutation - the exact root cause of a prior incident where a
-// test's real `os.homedir()` resolved to the operator's actual home,
-// pointing `cliLockPath` at the REAL `~/.traycer/cli/.lock` and sending
-// genuine lock contention/break traffic at a live production CLI/host
-// (see commit 96fc9f47). Mocking `node:os.homedir()` directly makes the
-// sandbox authoritative regardless of Bun's own caching behavior; the env
-// mutation below is kept too since some code path may still read it.
+// `process.env.HOME`/`USERPROFILE` mutation alone is not trustworthy under `bun --bun`, which can honor its own startup home independently of a runtime env mutation - the exact root cause of a prior incident where a test's real `os.homedir()` resolved to the operator's actual home, pointing `cliLockPath` at the REAL `~/.traycer/cli/.lock` and sending genuine lock contention/break traffic at a live production CLI/host (see commit 96fc9f47).
+// Mocking `node:os.homedir()` directly makes the sandbox authoritative regardless of Bun's own caching behavior; the env mutation below is kept too since some code path may still read it.
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -149,11 +128,7 @@ function deferred(): {
   return { promise, resolve };
 }
 
-// Registers the "exit" listener immediately (returning a promise, not a
-// function to call later) - `child.once("exit", ...)` never replays an
-// event that already fired, and this worker can legitimately exit within
-// milliseconds of the release barrier, well before a caller further down
-// an async chain would get around to attaching a listener.
+// Registers the "exit" listener immediately (returning a promise, not a function to call later) - `child.once("exit", ...)` never replays an event that already fired, and this worker can legitimately exit within milliseconds of the release barrier, well before a caller further down an async chain would get around to attaching a listener.
 function spawnLockWorker(
   workerScript: string,
   env: Record<string, string>,
@@ -188,9 +163,7 @@ describe.skipIf(process.platform === "win32")(
       osHome.current = workHome;
       process.env.HOME = workHome;
       process.env.USERPROFILE = workHome;
-      // `store/paths` captures `homedir()` once at module load - drop the
-      // module cache so the dynamic imports below see this test's own
-      // tmp HOME (the mocked `node:os.homedir()` above, not the real one).
+      // `store/paths` captures `homedir()` once at module load - drop the module cache so the dynamic imports below see this test's own tmp HOME (the mocked `node:os.homedir()` above, not the real one).
       vi.resetModules();
       mocks.controllerCalls = [];
       mocks.busyOverride = null;
@@ -251,9 +224,7 @@ describe.skipIf(process.platform === "win32")(
         ]);
         expect(result.data).toMatchObject({ restarted: true });
       } finally {
-        // Re-written unconditionally (idempotent): if an assertion above
-        // threw before the in-try release, the worker would otherwise hold
-        // the lock until the test timeout.
+        // Re-written unconditionally (idempotent): if an assertion above threw before the in-try release, the worker would otherwise hold the lock until the test timeout.
         writeFileSync(join(holdBarrierDir, "release"), "");
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });
@@ -287,10 +258,7 @@ describe.skipIf(process.platform === "win32")(
         });
         const pending = command(fakeCtx());
 
-        // The host was idle when this restart was requested, but an
-        // agent starts (host goes busy) WHILE restart is still
-        // genuinely blocked waiting for the foreign holder to
-        // release - a pre-wait probe would have missed this.
+        // The host was idle when this restart was requested, but an agent starts (host goes busy) WHILE restart is still genuinely blocked waiting for the foreign holder to release - a pre-wait probe would have missed this.
         await new Promise((resolve) => setTimeout(resolve, 100));
         mocks.busyOverride = "busy";
 
@@ -298,9 +266,7 @@ describe.skipIf(process.platform === "win32")(
         await expect(pending).rejects.toMatchObject({ code: "E_HOST_BUSY" });
         expect(mocks.controllerCalls).toEqual([]);
       } finally {
-        // Re-written unconditionally (idempotent): if an assertion above
-        // threw before the in-try release, the worker would otherwise hold
-        // the lock until the test timeout.
+        // Re-written unconditionally (idempotent): if an assertion above threw before the in-try release, the worker would otherwise hold the lock until the test timeout.
         writeFileSync(join(holdBarrierDir, "release"), "");
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });

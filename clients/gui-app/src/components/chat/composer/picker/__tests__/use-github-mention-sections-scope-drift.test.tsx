@@ -6,16 +6,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { ROOT_MENTION_STEP } from "@/lib/composer/mentions/providers";
 
-/**
- * Rows must not outlive their repository's membership in the scope.
- *
- * The repository set is a property of the freshest RESOLVED answer, but two
- * carriers still keep serving rows written under an OLDER resolution: the
- * sibling section's catalog entry inside its `staleTime`, and a held search
- * response predating the change. When one section's refresh discovers a
- * repository left the scope, the other carrier used to keep showing - and
- * inserting - that repository's references until its own cache expired.
- */
+/** Rows must not outlive their repository's membership in the scope. */
 
 type CatalogResult = {
   rows: ReadonlyArray<GithubMentionRow>;
@@ -26,12 +17,7 @@ type CatalogResult = {
   }>;
   scopeResolved: boolean;
   freshnessAt: number | null;
-  /**
-   * When THIS scope's answer reached the client (TanStack's `dataUpdatedAt`),
-   * or null while unanswered. `preferredScopeAnswer` compares THIS field, not
-   * `freshnessAt`, to decide which section's `repositories` a tie should
-   * believe - see the scenarios below.
-   */
+  /** When THIS scope's answer reached the client (TanStack's `dataUpdatedAt`), or null while unanswered. `preferredScopeAnswer` compares THIS field, not `freshnessAt`, to decide which section's `repositories` a tie should believe - see the scenarios below. */
   answeredAt: number | null;
   sourceStatus: "ok" | "cached" | "gh-unavailable" | "error" | "partial";
   notice: null;
@@ -105,11 +91,8 @@ const searchMock = vi.hoisted(() => {
 });
 
 vi.mock("@/hooks/composer/use-github-mention-search", () => ({
-  // ONE stable object, mutated in place rather than recreated. The real
-  // hook's `rows` is identity-stable across unrelated re-renders; a fresh
-  // array per render would break the `localRows` memo every pass and turn
-  // the render-time held-rows adjuster into an infinite loop - a harness
-  // artifact, not the production behaviour under test.
+  // ONE stable object, mutated in place rather than recreated.
+  // The real hook's `rows` is identity-stable across unrelated re-renders; a fresh array per render would break the `localRows` memo every pass and turn the render-time held-rows adjuster into an infinite loop - a harness artifact, not the production behaviour under test.
   useGithubMentionSearch: () => searchMock.state,
 }));
 
@@ -277,10 +260,8 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("keeps every row when the open section's own answer is the freshest", () => {
-    // The control: arrival recency decides the authority. When the wider
-    // answer is the one that reached the client MOST RECENTLY, its
-    // repositories are the scope, and nothing may be filtered against a
-    // staler, narrower sibling.
+    // The control: arrival recency decides the authority.
+    // When the wider answer is the one that reached the client MOST RECENTLY, its repositories are the scope, and nothing may be filtered against a staler, narrower sibling.
     staleIssuesUnderWiderScope();
     freshPullRequestsUnderNarrowScope();
     catalogMocks.issues.freshnessAt = 3_000;
@@ -294,14 +275,8 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("prefers the open section's own answer when it arrived more recently, even if the sibling's last successful GitHub reach is newer", () => {
-    // The degraded-sweep case: a sweep can re-resolve `repositories` without a
-    // successful GitHub reach, so it advances `answeredAt` (when the answer
-    // reached the client) without advancing `freshnessAt` (the host's last
-    // successful reach). Here the SIBLING has the newer `freshnessAt` but the
-    // OLDER `answeredAt` - `preferredScopeAnswer` must compare arrival time,
-    // not freshness, or the open section's own degraded-but-recent
-    // resolution would lose to a sibling answer that is stale on the clock
-    // that actually decides the tie.
+    // The degraded-sweep case: a sweep can re-resolve `repositories` without a successful GitHub reach, so it advances `answeredAt` (when the answer reached the client) without advancing `freshnessAt` (the host's last successful reach).
+    // Here the SIBLING has the newer `freshnessAt` but the OLDER `answeredAt` - `preferredScopeAnswer` must compare arrival time, not freshness, or the open section's own degraded-but-recent resolution would lose to a sibling answer that is stale on the clock that actually decides the tie.
     catalogMocks.issues.repositories = [KEPT_REPO];
     catalogMocks.issues.scopeResolved = true;
     catalogMocks.issues.freshnessAt = 500;
@@ -318,10 +293,7 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("falls back to the sibling's repositories when IT answered more recently, even with an older freshnessAt", () => {
-    // The control for the case above: swap which side has the newer
-    // `answeredAt` and confirm the sibling wins instead - proving the
-    // assertion above is actually reading `answeredAt`, not a fixed
-    // "the open section always wins" shortcut.
+    // The control for the case above: swap which side has the newer `answeredAt` and confirm the sibling wins instead - proving the assertion above is actually reading `answeredAt`, not a fixed "the open section always wins" shortcut.
     catalogMocks.issues.repositories = [KEPT_REPO];
     catalogMocks.issues.scopeResolved = true;
     catalogMocks.issues.freshnessAt = 5_000;
@@ -338,9 +310,7 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("surfaces a failed catalog read through the result", () => {
-    // The wiring the dismissal verdict depends on: a mocked-away catalog that
-    // errored must reach `result.errored`, or a failed GitHub source reads as
-    // "settled and empty" at root and the picker dismisses over it.
+    // The wiring the dismissal verdict depends on: a mocked-away catalog that errored must reach `result.errored`, or a failed GitHub source reads as "settled and empty" at root and the picker dismisses over it.
     catalogMocks.issues.errored = true;
 
     const { result } = renderRoot("fix");
@@ -349,10 +319,8 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("surfaces a failed live search through the result", () => {
-    // The other lane `errored` folds in: the OPEN section's live search. A
-    // rejected search carries no rows, so without this a failed remote search
-    // reads exactly like "settled, no extra hits", and the zero-match verdict
-    // closes the picker over hits the request never returned.
+    // The other lane `errored` folds in: the OPEN section's live search.
+    // A rejected search carries no rows, so without this a failed remote search reads exactly like "settled, no extra hits", and the zero-match verdict closes the picker over hits the request never returned.
     Object.assign(searchMock.state, { errored: true });
 
     const { result } = renderIssuesSection();
@@ -367,10 +335,8 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("projects the debounce gap as searching, not as a settled answer", () => {
-    // `query` filters the visible rows immediately; the search still holds
-    // the previous debouncedQuery for up to 250ms. Reporting that window as
-    // settled rendered the authoritative "No matching…" before the remote
-    // request had even started.
+    // `query` filters the visible rows immediately; the search still holds the previous debouncedQuery for up to 250ms.
+    // Reporting that window as settled rendered the authoritative "No matching…" before the remote request had even started.
     staleIssuesUnderWiderScope();
 
     const { result } = renderIssuesSectionWithQuery({
@@ -395,9 +361,7 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("hides root hydration behind an empty query", () => {
-    // Root's category list is complete without a query; the cache-only
-    // hydration reads must not put up a Loading row and header spinner for
-    // work that cannot change what is on screen.
+    // Root's category list is complete without a query; the cache-only hydration reads must not put up a Loading row and header spinner for work that cannot change what is on screen.
     catalogMocks.pullRequests.isLoading = true;
     catalogMocks.pullRequests.isChecking = true;
 
@@ -418,19 +382,15 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("withholds root rows while nothing has resolved", () => {
-    // The cold-open case: with neither catalog resolved there is no
-    // authority to serve rows from - root rows must be empty rather than
-    // some carrier filling the gap with a stale answer.
+    // The cold-open case: with neither catalog resolved there is no authority to serve rows from - root rows must be empty rather than some carrier filling the gap with a stale answer.
     const { result } = renderRoot("fix");
 
     expect(result.current.context.issues.rows).toEqual([]);
   });
 
   it("does not serve another scope's placeholder at root", () => {
-    // `isPlaceholder` marks the PREVIOUS scope's answer, held on screen by
-    // `keepPreviousData` while the current scope's read lands. Root offers
-    // rows as insertable mentions, so serving a placeholder there would offer
-    // a repository this scope has not actually resolved.
+    // `isPlaceholder` marks the PREVIOUS scope's answer, held on screen by `keepPreviousData` while the current scope's read lands.
+    // Root offers rows as insertable mentions, so serving a placeholder there would offer a repository this scope has not actually resolved.
     catalogMocks.issues.rows = [KEPT_ISSUE];
     catalogMocks.issues.repositories = [KEPT_REPO];
     catalogMocks.issues.scopeResolved = true;
@@ -442,12 +402,8 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("ranks root rows from the catalog on the render they resolve", () => {
-    // Root rows are a plain `useMemo` off the catalog's own props, with no
-    // publishing effect sitting between a resolving render and these rows -
-    // so the FIRST render already carries them. Recorded per render, not off
-    // `result.current`: `renderHook` is act-wrapped, so by the time it
-    // returns any such effect would already have run, which is exactly the
-    // gap this guards against a future regression reopening.
+    // Root rows are a plain `useMemo` off the catalog's own props, with no publishing effect sitting between a resolving render and these rows - so the FIRST render already carries them.
+    // Recorded per render, not off `result.current`: `renderHook` is act-wrapped, so by the time it returns any such effect would already have run, which is exactly the gap this guards against a future regression reopening.
     catalogMocks.issues.rows = [KEPT_ISSUE];
     catalogMocks.issues.repositories = [KEPT_REPO];
     catalogMocks.issues.scopeResolved = true;

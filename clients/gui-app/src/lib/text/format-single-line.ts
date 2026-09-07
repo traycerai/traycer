@@ -1,16 +1,4 @@
-/**
- * Single-line text formatting, kept free of any rendering dependency.
- *
- * This lived in `lib/utils.ts` beside `cn()`, which imports `clsx` and
- * `tailwind-merge`. That was harmless while every caller was a component, and
- * stopped being harmless when the chat find projection - a pure text pass -
- * became shared code: importing one string helper dragged the whole class-name
- * stack in behind it, and `lib/utils.ts` was one of only two edges keeping the
- * projection's dependency closure from being pure TypeScript.
- *
- * `lib/utils.ts` re-exports both symbols, so existing callers are unaffected
- * and there is exactly one implementation.
- */
+/** Single-line text formatting, kept free of any rendering dependency. */
 
 export interface FormatSingleLineOptions {
   maxLength: number;
@@ -18,8 +6,8 @@ export interface FormatSingleLineOptions {
 }
 
 /**
- * Trim, collapse whitespace, and truncate with an ellipsis. Returns the
- * empty string when the input has no non-whitespace characters.
+ * Trim, collapse whitespace, and truncate with an ellipsis.
+ * Returns the empty string when the input has no non-whitespace characters.
  */
 export function formatSingleLine(
   input: string,

@@ -1,12 +1,5 @@
-/**
- * Landing surface prompt-stash CAS against real draft runtimes
- * (contentRevision) and the unbound Zustand store mirror. Uses the real
- * production hooks (`landingStashIdentity`, `useLandingPromptStashSource`)
- * without mounting the full LandingComposer tree.
- *
- * Also covers Ticket 1 source-lifetime: a delayed stash save must not clear
- * a reopened draft runtime after surface detach (retiredRef + draftId lookup).
- */
+/** Also covers Ticket 1 source-lifetime: a delayed stash save must not clear a reopened draft runtime after
+ * surface detach (retiredRef + draftId lookup). */
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -198,9 +191,8 @@ describe("landing composer prompt-stash source CAS", () => {
 
   it("returns false across unbound→bound promotion (revisions differ; identity also changes)", () => {
     const pendingCreateId = "pending-create-1";
-    // Production handleSnapshot on unbound ALWAYS bumps contentRevision
-    // (no sameJsonContent gate), so the first submittable keystroke leaves
-    // unbound at revision >= 1. Capture against that counter.
+    // Production handleSnapshot on unbound always bumps contentRevision (no sameJsonContent gate), so the first
+    // submittable keystroke leaves unbound at revision >= 1. Capture against that counter.
     const unboundRuntime = createStore<DraftRuntimeState>(() => ({
       content: textDoc("first keystroke seed"),
       selection: null,
@@ -299,7 +291,7 @@ describe("landing composer prompt-stash source CAS", () => {
       );
     const boundRuntime = draftRuntimeRegistry.attach(pendingCreateId);
     if (boundRuntime === null) throw new Error("expected bound runtime");
-    // Fresh bound runtime starts at contentRevision 0 — equal to capture.
+    // Fresh bound runtime starts at contentRevision 0 - equal to capture.
     expect(boundRuntime.store.getState().contentRevision).toBe(sharedRevision);
 
     const boundIdentity = landingStashIdentity(pendingCreateId, null);
@@ -400,20 +392,15 @@ describe("landing composer prompt-stash source CAS", () => {
 
     const cleared = result.current.clearIfUnchanged(snapshot.token);
     expect(cleared).toBe(true);
-    // Fallback path: runtime.setSnapshot(EMPTY, null) — not a silent no-op.
+    // Fallback path: runtime.setSnapshot(empty, null) - not a silent no-op.
     expect(runtime.store.getState().content).toEqual(
       EMPTY_DRAFT_RUNTIME_CONTENT,
     );
   });
 
   it("does not clear a replaced canonical runtime even when its revision equals the captured token", () => {
-    // Isolates the store-identity check in clearIfUnchanged's bound fallback
-    // (not retiredRef / unmount). Same numeric revision as the sibling
-    // "clears via store fallback" test above, but WITH a registry replacement:
-    // a fresh runtime for the same draftId always starts contentRevision at 0,
-    // so a token captured at revision 0 against the OLD store would pass a
-    // revision-only CAS and wipe the new owner unless store identity is
-    // required.
+    // Same numeric revision as the sibling "clears via store fallback" test above, but with a registry
+    // replacement.
     const draftId = "landing-replaced-equal-rev";
     useLandingDraftStore.getState().createDraftWithId(draftId, null);
     useLandingDraftStore
@@ -473,9 +460,7 @@ describe("landing composer prompt-stash source CAS", () => {
     const setSnapshotSpy = vi.spyOn(newRuntime, "setSnapshot");
     const cleared = result.current.clearIfUnchanged(snapshot.token);
 
-    // Store identity fails: canonical is a different generation even though
-    // the numeric revision matches. Contrast: "clears via store fallback"
-    // above is the same numeric-revision shape WITHOUT replacement and still
+    // Contrast: "clears via store fallback" above is the same numeric-revision shape without replacement and still
     // returns true.
     expect(cleared).toBe(false);
     expect(newRuntime.store.getState().content).toEqual(
@@ -566,11 +551,8 @@ describe("landing composer prompt-stash source CAS", () => {
   });
 
   it("delayed save survives surface detach + reopen as a new runtime (retiredRef)", async () => {
-    // Realistic composer unmount: editor goes away first (store-fallback
-    // clear path), then the hook instance retires, then the registry detaches
-    // and a later attach mints a new DraftRuntime for the same draftId.
-    // Without retiredRef, post-save clearIfUnchanged would CAS against the
-    // retired runtimeStore revision, getOrHydrate the NEW owner, and wipe it.
+    // Without retiredRef, post-save clearIfUnchanged would cas against the retired runtimeStore revision,
+    // getOrHydrate the new owner, and wipe it.
     let resolveSave: (() => void) | undefined;
     storeMocks.save.mockImplementationOnce(
       () =>
@@ -640,9 +622,8 @@ describe("landing composer prompt-stash source CAS", () => {
     expect(setSnapshotAfterCapture).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
 
-    // Advance past the projection debounce by flushing the live runtime's
-    // pending write — durable must still hold the newer content, not an
-    // empty flush from a retired clear.
+    // Advance past the projection debounce by flushing the live runtime's pending write - durable must still hold
+    // the newer content, not an empty flush from a retired clear.
     draftRuntimeRegistry.flush(draftId);
     const durable = useLandingDraftStore
       .getState()

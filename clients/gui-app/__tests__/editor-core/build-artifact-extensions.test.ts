@@ -273,11 +273,8 @@ describe("buildArtifactExtensions", () => {
   });
 
   it("pairs the artifact-room doc fragment with artifactRoom awareness - Collaboration binds to the artifact-room doc and CollaborationCaret binds to the same artifactRoom awareness", () => {
-    // Per ticket 4a598302-…/Fix: GUI artifact-room-doc awareness and reconnect-safe
-    // body edits - when the body fragment lives in a artifact-room doc, the
-    // CollaborationCaret extension must consume the SAME artifactRoom's Awareness
-    // instance, not the root Epic awareness. Otherwise per-artifact-room presence
-    // updates would be misrouted onto the root channel.
+    // Body fragment in an artifact-room doc: CollaborationCaret must use that
+    // room's Awareness, not the root Epic's.
     const rootDoc = new Y.Doc();
     const rootAwareness = new Awareness(rootDoc);
     const artifactRoomDoc = new Y.Doc();

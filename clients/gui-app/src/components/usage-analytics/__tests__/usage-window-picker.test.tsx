@@ -7,9 +7,7 @@ afterEach(cleanup);
 
 describe("UsageWindowPicker", () => {
   it("calls onChange with the selected window length", async () => {
-    // Radix's `TabsTrigger` selects on `onMouseDown`, not `onClick` - a bare
-    // `fireEvent.click()` never fires it. `userEvent` synthesizes the full
-    // pointer sequence (mousedown included), matching real interaction.
+    // Radix's `TabsTrigger` selects on `onMouseDown`, not `onClick` - a bare `fireEvent.click` never fires it.
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(

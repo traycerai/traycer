@@ -34,75 +34,8 @@ import {
   type WriteImpl,
 } from "../upgrade/finalize-helper";
 
-// `traycer host restart` - kicks the OS service so the supervisor
-// re-spawns the host. The supervisor itself re-reads the install
-// record at spawn time, so this is also how a freshly-installed
-// host gets picked up after `host install` if the service was
-// already running on the previous binary.
-//
-// Restart is also the moment we get to finalise a pending CLI upgrade.
-// `traycer cli upgrade` stages the new binary and records
-// `pendingUpgrade` when the live binary is locked (Windows: the
-// supervisor process holds the CLI .exe open; cross-platform:
-// read-only install dir). Between `stop` and `start` the supervisor's
-// lock is released, so we attempt the staged-binary swap in that
-// window and then start the service back on the new binary.
-//
-// On Windows the *current CLI process* (the one running this command)
-// is itself executing from the live `.exe`, so even after the
-// supervisor releases its lock, renameSync still fails with EBUSY.
-// For that case we hand off to a detached helper that waits for the
-// CLI process to exit and then completes the swap + service start
-// asynchronously. See upgrade/finalize-helper.ts.
-//
-// A failed in-process finalize is non-fatal: the service is still
-// started, the pending state remains visible in Doctor, and the next
-// restart (or the helper) retries the swap.
-//
-// `cli-lock` coverage (Host Update Layer Redesign Tech Plan, "Lifecycle
-// lock coverage"): a terminal restart must not enter another actor's
-// apply/install/activation critical section and stop/kill the process
-// it just started - the whole marker-reconcile -> stop -> finalize ->
-// start sequence runs inside ONE lock acquisition.
-//
-// `--if-idle` (hidden, internal - the CLI-owned activation mode): after
-// acquiring the lock, probe `assertHostNotBusy` before the disruptive
-// step; busy -> `E_HOST_BUSY`, the lock releases with nothing touched.
-// The only step between the probe and `controller.stop()` is
-// `reconcilePostFinalizeMarker`'s local file read - not the network or
-// long-running work the TOCTOU-floor principle guards against - so the
-// probe runs immediately before this call rather than being threaded
-// into `restartWithPendingCliUpgradeFinalize` itself. Plain `host
-// restart` (no `--if-idle`) skips the probe entirely, keeping today's
-// unconditional semantics for explicit user restarts.
-// `--force` (user-facing): skip the cooperative shutdown claim and kill the
-// host process before relaunching. The user explicitly accepted losing
-// running sessions and in-flight agent work; see `host stop --force` for the
-// mechanics. Mutually exclusive with `--if-idle` - one flag widens the busy
-// gate, the other removes it, and a command carrying both has no coherent
-// intent.
-// `--defer-if-parked` (hidden, internal - the Desktop force-restart path):
-// when the canonical recovery classification says `stop-only`, do NOT stop the
-// service; refuse and report, leaving a running host running.
-//
-// ## Why this is a flag on THIS command rather than a check by the caller
-//
-// The classification and the action it authorizes must happen under ONE
-// acquisition of the contender lock. Desktop previously read the attempt record
-// itself, decided the record was not an active continuation, and only then
-// shelled this command - a snapshot, not a condition on the restart. A new
-// contender can park `preparing/activate` in the window between that read and
-// this command taking the lock, so the caller's "safe to restart" verdict was
-// already stale when it was acted on: the CLI would then classify the NEW
-// record as `stop-only`, stop the service, and report `restarted:false`,
-// leaving the host down with a continuation on disk. That is the stranding the
-// Desktop check existed to prevent, produced by the check itself.
-//
-// Deciding here closes the window by construction, because
-// `contenderContext.recoveryAction` is computed from the record under the same
-// lock that guards the stop/restart below. It also removes the second copy of
-// the policy: which phases are recoverable is `recoveryActionFor`'s call in
-// shared, and no caller re-derives it.
+// Restart runs marker-reconcile -> stop -> pending-CLI-upgrade finalize -> start under one lock.
+// `--defer-if-parked` must classify under that same lock; `--if-idle` probes busy immediately before stop.
 export interface HostRestartArgs {
   readonly ifIdle: boolean;
   readonly force: boolean;
@@ -111,8 +44,7 @@ export interface HostRestartArgs {
 
 export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    // Validated INSIDE the CommandFn so the runner catches it (CliError →
-    // NDJSON error envelope) - same reason as host install's flag check.
+    // Validated inside the CommandFn so the runner catches it (CliError -> NDJSON error envelope).
     if (args.ifIdle && args.force) {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -137,28 +69,15 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           await assertHostNotBusy(ctx.runtime.environment);
         }
         if (contenderContext.recoveryAction === "stop-only") {
-          // Classified from the record under the SAME lock acquisition that
-          // guards the action below, so no contender can change the record
-          // between the decision and its effect.
+          // Classified under the same lock that guards the action below.
           if (args.deferIfParked) {
-            // Refuse without touching the service. For a caller whose whole
-            // purpose is "get this host running", stopping it is strictly
-            // worse than doing nothing: a stop leaves the machine down AND
-            // the continuation parked, which is the state the caller was
-            // trying to escape. Doing nothing leaves a running host running
-            // and a down host no worse, and the parked record stays for the
-            // admitted activation flow either way.
+            // Refuse without touching the service: stopping a parked activate continuation leaves the machine down and the continuation parked.
             return {
               kind: "deferred-for-parked-activation" as const,
               attestation: await attestInstallRuntime(ctx.runtime.environment),
             };
           }
-          // An activate-continuation record proves that packaged-Mac bytes
-          // are waiting for the update executor's explicit activation edge.
-          // Force restart remains a usable recovery control, but relaunching
-          // the generic supervisor here could activate those parked bytes
-          // outside that continuation. Stop the current service safely and
-          // leave the parked record for the admitted activation flow.
+          // Do not relaunch the generic supervisor over parked packaged-Mac bytes; stop safely and leave the parked record.
           await stopHostServiceWithAttempt(
             capability,
             {
@@ -205,10 +124,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
       },
     );
     const restarted = locked.kind === "restarted";
-    // A distinct fact from `restarted:false`. Both mean "no relaunch", but a
-    // safe-stop STOPPED the service and this one deliberately did not touch
-    // it, and a caller that cannot tell them apart cannot tell "your host is
-    // now down" from "your host is still up, activation is pending".
+    // Distinct from `restarted:false`: that path stopped the service; this one left it running.
     const deferredForParkedActivation =
       locked.kind === "deferred-for-parked-activation";
     return {
@@ -246,19 +162,12 @@ interface RestartFinalizeArgs {
 
 export interface RestartFinalizeResult {
   readonly finalize: FinalizePendingCliUpgradeOutcome;
-  // Set when this restart scheduled a detached helper to complete the
-  // swap after the current CLI process exits.
   readonly helper: ScheduleHelperResult | null;
-  // Set when a prior helper attempt left a marker the host-restart
-  // command consumed at the top of this run.
   readonly markerReconcile: ReconcileOutcome | null;
-  // True when the helper takes ownership of starting the service. When
-  // true we deliberately skip the controller.start() call.
+  // When true the helper starts the service; skip controller.start().
   readonly helperOwnsServiceStart: boolean;
 }
 
-// Split out so tests can inject a controller stub + spawn/write stubs
-// without monkey-patching the OS-level helpers.
 export async function restartWithPendingCliUpgradeFinalize(
   args: RestartFinalizeArgs,
   actuators: RestartActuators,
@@ -300,32 +209,18 @@ async function restartWithActuators(
   args: RestartFinalizeArgs,
   actuators: RestartActuators,
 ): Promise<RestartFinalizeResult> {
-  // 1. Apply any marker from a prior helper attempt. This may clear
-  //    pendingUpgrade if the helper succeeded on the last cycle.
   const markerReconcile = await reconcilePostFinalizeMarker({
     environment: args.environment,
   });
 
-  // `stopForRestart`, never `stop`: on a Desktop-managed machine a host whose
-  // RPC endpoint is unreachable (or that outlived its own force-exit
-  // watchdog) makes `stop` throw, and this command would exit before ever
-  // relaunching - the exact broken-host state report 2 asked `host restart`
-  // to repair. The restart half reports that as `forcedRecycle` instead, and
-  // the relaunch below recycles the job rather than no-opping a kickstart
-  // against a process that never left. A busy host still throws.
+  // `stopForRestart`, never `stop`: an unreachable host makes `stop` throw before relaunch. Busy still throws.
   const stop = await actuators.stop();
 
-  // 2. Try the in-process finalize. On POSIX this almost always works
-  //    once the host supervisor releases the binary.
   const finalize = await finalizePendingCliUpgrade({
     environment: args.environment,
   });
 
-  // 3. Windows-specific: if the live binary is still locked after stop
-  //    (because the *current CLI process* holds its own .exe), hand
-  //    the swap off to a detached helper. The helper will start the
-  //    service once the swap completes, so we deliberately do NOT
-  //    call controller.start() here.
+  // If the live binary is still locked after stop (this CLI process holds its own .exe), the helper starts the service; skip controller.start().
   let helper: ScheduleHelperResult | null = null;
   let helperOwnsServiceStart = false;
   if (finalize.status === "still-locked" && args.platform === "win32") {
@@ -343,10 +238,7 @@ async function restartWithActuators(
   }
 
   if (!helperOwnsServiceStart) {
-    // The in-process path can replace the binary successfully and then fail
-    // to update the manifest. Preserve the same `swapped` evidence as the
-    // detached helper so the next restart can reconcile the stale pending
-    // record instead of misclassifying the moved staged file as missing.
+    // Preserve `swapped` evidence after a successful binary replace with a failed manifest update, or the next restart misclassifies the moved staged file as missing.
     if (finalize.status === "manifest-update-failed") {
       let relaunchError: unknown = null;
       try {
@@ -375,9 +267,7 @@ async function restartWithActuators(
       } catch (err) {
         markerWriteError = err;
       }
-      // Preserve lifecycle failure precedence if both operations fail: the
-      // host is still down, which is more urgent than lost reconciliation
-      // evidence. A marker-only failure is still returned to the caller.
+      // Host-down outranks lost reconciliation evidence.
       if (relaunchError !== null) throw relaunchError;
       if (markerWriteError !== null) throw markerWriteError;
     } else {
@@ -416,9 +306,7 @@ function humanForRestart(
     case "staged-binary-missing":
       return `${reconcilePrefix}${base}; cli upgrade staged binary for ${outcome.stagedVersion} missing at ${outcome.stagedBinaryPath} - re-run 'traycer cli upgrade'`;
     case "publish-failed":
-      // The host was relaunched regardless - the restart the user asked
-      // for is not forfeited because a staged CLI swap could not be
-      // published. The live binary is untouched and pending state stands.
+      // Restart is not forfeited because a staged CLI swap could not publish. Live binary untouched; pending state stands.
       return `${reconcilePrefix}${base}; cli upgrade could not publish ${outcome.stagedBinaryPath} over ${outcome.livePath} (${outcome.errorMessage}) - live binary unchanged, pending state retained`;
     case "manifest-update-failed":
       return `${reconcilePrefix}${base}; cli ${outcome.version} was installed, but the CLI manifest update failed (${outcome.errorMessage}) - service relaunched and pending state retained for reconciliation`;
@@ -434,9 +322,7 @@ function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {
     case "applied-swapped":
       return `prior helper finalised cli upgrade ${reconcile.previousVersion} → ${reconcile.version}; `;
     case "applied-swap-failed":
-      // Surface the service-start failure when there was one: the marker
-      // is gone after reconciliation, so this line is the last chance to
-      // say why the host was left down rather than merely un-upgraded.
+      // Marker is gone after reconciliation; this line is the last chance to say the host was left down.
       return reconcile.serviceStartError !== null
         ? `prior helper swap failed (${reconcile.errorMessage}) and could not restart the service (${reconcile.serviceStartError}); `
         : `prior helper swap failed (${reconcile.errorMessage}); `;
@@ -445,10 +331,7 @@ function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {
     case "marker-invalid":
       return `prior helper marker invalid (${reconcile.errorMessage}); `;
     case "stale-marker-discarded":
-      // Named explicitly rather than folded into silence: this is the one
-      // outcome where a marker existed, looked successful, and was
-      // deliberately NOT applied. Someone reading a restart that did not
-      // finalise the upgrade they expected needs to see why.
+      // Marker existed, looked successful, and was deliberately not applied.
       return `discarded a stale helper marker (marker staged=${reconcile.markerStagedBinaryPath} live=${reconcile.markerLivePath} at=${reconcile.markerAttemptedAt}; pending staged=${reconcile.pendingStagedBinaryPath} live=${reconcile.manifestBinaryPath} at=${reconcile.pendingStagedAt}); `;
     case "no-marker":
       return "";

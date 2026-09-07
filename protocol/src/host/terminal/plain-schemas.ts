@@ -1,15 +1,6 @@
 /**
  * Durable plain-terminal wire projections and unary request/response schemas.
- *
- * This is deliberately a separate `terminal.plain.*` family. The released
- * generic `terminal.*` family also carries terminal-agent sessions and cannot
- * be canonicalized into a durable plain-terminal record without inventing
- * host identity and revision data that its old wire shapes never carried.
- *
- * Request objects are strict at every level that accepts client-authored data.
- * In particular, clients cannot supply ownership, an environment, or a
- * resolved shell executable. The host derives those values from the
- * authenticated request and its own configuration.
+ * In particular, clients cannot supply ownership, an environment, or a resolved shell executable.
  */
 import { z } from "zod";
 import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
@@ -43,12 +34,7 @@ export const plainTerminalLaunchSchema = z.strictObject({
 });
 export type PlainTerminalLaunch = z.infer<typeof plainTerminalLaunchSchema>;
 
-/**
- * Durable logical record. `ownerUserId` and internal persistence keys are
- * intentionally absent; authorization comes from the request context.
- * `hostId` is required on every projection; `(hostId, terminalId)` is the
- * fleet identity and is immutable for a terminal's lifetime.
- */
+/** Durable logical record. */
 export const plainTerminalRecordSchema = z.strictObject({
   terminalId: z.string().min(1),
   hostId: z.string().min(1),
@@ -61,11 +47,7 @@ export const plainTerminalRecordSchema = z.strictObject({
 });
 export type PlainTerminalRecord = z.infer<typeof plainTerminalRecordSchema>;
 
-/**
- * Fleet identity for a durable plain terminal. Bare `terminalId` is not a
- * fleet key; collections, lookup maps, and mutation race bookkeeping use
- * `(hostId, terminalId)`.
- */
+/** Fleet identity for a durable plain terminal. */
 export type PlainTerminalFleetIdentity = {
   readonly hostId: string;
   readonly terminalId: string;
@@ -77,11 +59,7 @@ export function plainTerminalFleetIdentity(
   return { hostId: record.hostId, terminalId: record.terminalId };
 }
 
-/**
- * Canonical map key for `(hostId, terminalId)`. JSON-tuple encoding is
- * injective over schema-valid strings, including identifiers that contain
- * NUL or other delimiter bytes.
- */
+/** Canonical map key for `(hostId, terminalId)`. */
 export function plainTerminalFleetIdentityKey(
   identity: PlainTerminalFleetIdentity,
 ): string {
@@ -95,12 +73,7 @@ export type DormantPlainTerminalRuntime = z.infer<
   typeof dormantPlainTerminalRuntimeSchema
 >;
 
-/**
- * The durable record is known, but no fresh owner-host or runtime-presence
- * observation is available. This is deliberately distinct from `dormant`:
- * absence from an unavailable ephemeral plane is not evidence that the PTY
- * is stopped.
- */
+/** The durable record is known, but no fresh owner-host or runtime-presence observation is available. */
 export const unknownPlainTerminalRuntimeSchema = z.strictObject({
   status: z.literal("unknown"),
 });
@@ -109,9 +82,8 @@ export type UnknownPlainTerminalRuntime = z.infer<
 >;
 
 /**
- * Live-only metadata. The logical launch cwd remains on the record while
- * `currentCwd` follows the running shell; a manual title never replaces the
- * independently reported foreground process.
+ * Live-only metadata.
+ * The logical launch cwd remains on the record while `currentCwd` follows the running shell; a manual title never replaces the independently reported foreground process.
  */
 export const runningPlainTerminalRuntimeSchema = z.strictObject({
   status: z.literal("running"),
@@ -290,13 +262,7 @@ function refinePlainTerminalListState(
   }
 }
 
-/**
- * Replacement collection state for `terminal.plain.list@2` and subscribe
- * `state` frames. Coverage distinguishes an authoritative empty fleet from a
- * degraded serving-host-only view and from a complete independent local
- * collection. Host withdrawal is absence from a later replacement state, not
- * a durable tombstone.
- */
+/** Replacement collection state for `terminal.plain.list@2` and subscribe `state` frames. */
 export const plainTerminalListStateSchema = z
   .discriminatedUnion("coverage", [
     completeFleetPlainTerminalListStateSchema,
@@ -351,9 +317,8 @@ export type ClosePlainTerminalRequest = z.infer<
 >;
 
 /**
- * The deletion revision orders a close against stale cached mutation
- * results. Collection streams do not emit durable tombstones for host
- * withdrawal; this revision remains only for explicit lifetime-delete races.
+ * The deletion revision orders a close against stale cached mutation results.
+ * Collection streams do not emit durable tombstones for host withdrawal; this revision remains only for explicit lifetime-delete races.
  */
 export const closePlainTerminalResponseSchema = z.strictObject({
   terminalId: z.string().min(1),

@@ -3,12 +3,8 @@ import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework
 import { routeIncompatibleRecovery } from "../engine";
 import { CLIENT_UPGRADE_HINT_FOR_SOURCE } from "../../host/compat-recovery";
 
-// T7/C2 fixup: Doctor must route a handshake incompatibility to an action that
-// can actually heal the host under the softened production trigger (ordinary
-// launches no longer auto-update). The two gaps the Codex gate caught:
-//   1. a MUTUAL verdict (both stale) must update the host, not just restart.
-//   2. DOWNGRADE_UNSUPPORTED (client newer ⇒ host stale) must update the
-//      host, even though the frame carries no upgradeGuidance.
+// T7/C2 fixup: Doctor must route a handshake incompatibility to an action that can actually heal the host under the softened production trigger (ordinary launches no longer auto-update).
+// The two gaps the Codex gate caught: 1. a MUTUAL verdict (both stale) must update the host, not just restart. 2.
 
 function guidance(
   hostShouldUpgrade: boolean,

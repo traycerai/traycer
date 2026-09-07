@@ -11,12 +11,8 @@ import {
 import type { HotDocEvictionOutcome } from "@/stores/epics/open-epic/runtime/epic-runtime-accounting-port";
 
 /**
- * What the artifact-room tier calls at encode boundaries. One object —
- * `settleCold` is a second method on this sink, not a second sink.
- *
- * `release` uncharges the HOT holder only. `settleCold(id, 0)` uncharges the
- * cold holder (`0` means gone). `chargeProvisional` is the hot-path estimate
- * between encode settles.
+ * What the artifact-room tier calls at encode boundaries. One object - `settleCold` is a second
+ * method on this sink, not a second sink.
  */
 export interface HotDocBudgetSink {
   settle(artifactRoomId: string, bytes: number): void;
@@ -26,12 +22,8 @@ export interface HotDocBudgetSink {
 }
 
 /**
- * One epic's artifact-room tier, as the hot-docs plane sees it.
- *
- * The book never invents an LRU: `demoteColdestUnpinned` is the tier's own
- * eviction (the same walk `enforceHotCap` already uses). `key` is the
- * host-scoped runtime token, so a cross-host re-point cannot detach the
- * winner.
+ * One epic's artifact-room tier, as the hot-docs plane sees it. The book never invents an LRU:
+ * `demoteColdestUnpinned` is the tier's own eviction (the same walk `enforceHotCap` already uses).
  */
 export interface HotDocBudgetTier {
   readonly key: string;
@@ -69,29 +61,12 @@ export function hotDocHolderId(
 export function createHotDocBudgetBook(): HotDocBudgetBook {
   const tiers = new Map<string, HotDocBudgetTier>();
   /**
-   * Where the next `evict` pass starts its walk.
-   *
-   * Needed BECAUSE of the deferred-bytes fix above, not independently of it.
-   * Bounding a pass's total ask means one tier can now absorb the whole
-   * overage, and with a fixed insertion-ordered walk that would always be the
-   * same tier - so an epic whose documents are all pinned would answer every
-   * pass, dispatch a demotion that frees nothing, and the later epics holding
-   * genuinely cold documents would never be reached. The plane would sit over
-   * budget forever, which is a worse failure than the over-eviction being
-   * fixed: that one wasted work, this one stops reclaiming.
-   *
-   * Advanced once per pass rather than per tier, so a single pass still walks
-   * every tier in order and only the STARTING point moves.
+   * Where the next `evict` pass starts its walk. Needed BECAUSE of the deferred-bytes fix above, not
+   * independently of it.
    */
   let nextStartIndex = 0;
 
-  /**
-   * Every attached tier, beginning at the rotating cursor and wrapping.
-   *
-   * A generator so the walk is lazy: the loop below breaks as soon as the ask
-   * is covered, and the common case (one epic, or an overage the first tier
-   * absorbs) touches nothing else.
-   */
+  /** Every attached tier, beginning at the rotating cursor and wrapping. */
   function* tiersFromRotatingStart(): Generator<HotDocBudgetTier> {
     const ordered = [...tiers.values()];
     if (ordered.length === 0) return;
@@ -99,9 +74,8 @@ export function createHotDocBudgetBook(): HotDocBudgetBook {
     // the cursor skip a tier on the NEXT pass.
     const start = nextStartIndex % ordered.length;
     nextStartIndex = (start + 1) % ordered.length;
-    // Rotated in place rather than indexed with a guard: the modulo is always
-    // in range by construction, and a `!== undefined` check on it is dead code
-    // this repo's `no-unnecessary-condition` rejects.
+    // Rotated in place rather than indexed with a guard: the modulo is always in range by
+    // construction, and a `!== undefined` check on it is dead code this repo's
     yield* ordered.slice(start);
     yield* ordered.slice(0, start);
   }
@@ -144,17 +118,6 @@ export function createHotDocBudgetBook(): HotDocBudgetBook {
         const outcome = tier.demoteColdestUnpinned(remaining);
         reclaimed += outcome.reclaimedBytes;
         // DEFERRED BYTES COUNT AGAINST THE ASK, never against the recovery.
-        // A worker-backed tier answers `reclaimedBytes: 0` for a demotion it
-        // has accepted and dispatched, so subtracting only what was reclaimed
-        // left `remaining` at the full overage and handed the same debt to the
-        // next epic - a 1 MiB overage across five open epics dispatched 1 MiB
-        // of demotion five times over, evicting warm documents that were never
-        // needed and paying to re-encode and rematerialize them.
-        //
-        // They are NOT added to `reclaimed`: the outcome this returns is what
-        // the accountant uses to decide whether the plane is still over, and
-        // reporting a promise as a recovery would make it stop asking on the
-        // strength of bytes that have not been freed.
         remaining -= outcome.reclaimedBytes + outcome.deferredBytes;
         for (const entry of outcome.protectedBytesByKind) {
           protectedBytesByKind.set(

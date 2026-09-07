@@ -16,13 +16,7 @@ export type PushPermissionOpenSettingsMutation = UseMutationResult<
   void
 >;
 
-/**
- * Jumps to this app's notification page in the OS Settings app - the only
- * repair once the OS has remembered a refusal. The invalidation on success is
- * a cheap head start, not the mechanism: what the person does on that page
- * happens after this resolves, and the row learns about it from the host's
- * foreground-resume `onChange`.
- */
+/** The invalidation on success is a cheap head start, not the mechanism: what the person does on that page happens after this resolves, and the row learns about it from the host's foreground-resume `onChange`. */
 export function usePushPermissionOpenSettingsMutation(): PushPermissionOpenSettingsMutation {
   const { pushPermission } = useRunnerHost();
   const queryClient = useQueryClient();

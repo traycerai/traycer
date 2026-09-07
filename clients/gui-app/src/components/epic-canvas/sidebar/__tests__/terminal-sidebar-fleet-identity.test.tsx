@@ -317,9 +317,7 @@ describe("terminal sidebar fleet identity consumers", () => {
     fireEvent.click(hostARow);
     fireEvent.click(hostBRow);
 
-    // Double-click on a terminal row is RENAME, so a `single` (preview)
-    // gesture would leave NO gesture that pins the tile: the second row's
-    // preview would evict the first one's.
+    // Double-click on a terminal row is RENAME, so a `single` (preview) gesture would leave NO gesture that pins the tile: the second row's preview would evict the first one's.
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
     expect(Object.keys(canvas?.tilesByInstanceId ?? {})).toHaveLength(2);
   });

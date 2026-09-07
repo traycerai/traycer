@@ -1,27 +1,6 @@
 /**
  * Typed wrapper over the control lane, `epic.status.subscribe@1.0`.
- *
- * ## `subscribe`, not `subscribeWithParamsProvider`
- *
- * This lane has NO resume cursor at `@1.0` and its open request is `{epicId}`
- * and nothing else, so there is nothing a params provider could re-read. The
- * cursor-less model is honest only because the snapshot is COMPLETE: every
- * non-`snapshot` frame kind has a current-state projection on the snapshot, so
- * a client that missed transitions while disconnected converges by reading the
- * next snapshot rather than by replaying them.
- *
- * `authorityEpoch` still rides every frame and is NOT a cursor - it is how the
- * client learns the host's replica was replaced, so it can reconcile this lane
- * against `epic.state.subscribe`, which re-seeds on the same event.
- *
- * ## `migrationFailed` does not close the lane
- *
- * The one lifecycle fact worth restating at the transport seam, because it is
- * the opposite of what a reader expects: a failed migration is emitted INSTEAD
- * of a fatal close, and the lane stays open holding failure as a stable
- * snapshot condition. `epic.retryMigration` reuses this very session, so a
- * consumer that tore the session down on `migrationFailed` would wire the
- * Retry button to a channel that no longer exists.
+ * `authorityEpoch` still rides every frame and is not a cursor - it is how the client learns the host's replica was replaced, so it can reconcile this lane against `epic.state.subscribe`, which re-seeds on the same event.
  */
 import {
   epicStatusSubscribeServerFrameSchemaV10,
@@ -45,13 +24,7 @@ export type EpicStatusSnapshotFrame = StatusServerFrame<"snapshot">;
 
 /**
  * Every non-`snapshot`, non-`pong` frame, as one union.
- *
- * A single `onTransition` callback rather than one callback per kind: the
- * consumer's decode is a `switch` on exactly this discriminant, and eight
- * callbacks would be eight places to forget a kind when the contract grows a
- * minor. The snapshot keeps its own callback because it is not a transition -
- * it is the complete restatement every cycle opens with, and conflating the
- * two is what makes a cursor-less lane lossy.
+ * The snapshot keeps its own callback because it is not a transition - it is the complete restatement every cycle opens with, and conflating the two is what makes a cursor-less lane lossy.
  */
 export type EpicStatusTransitionFrame = Exclude<
   EpicStatusSubscribeServerFrameV10,
@@ -59,11 +32,7 @@ export type EpicStatusTransitionFrame = Exclude<
 >;
 
 export interface EpicStatusStreamCallbacks {
-  /**
-   * The atomic control-lane snapshot. Exactly one per subscribe cycle and the
-   * FIRST frame of that cycle - plus one more each time the authority epoch
-   * changes under a live subscription.
-   */
+  /** The atomic control-lane snapshot. */
   readonly onSnapshot: (frame: EpicStatusSnapshotFrame) => void;
   readonly onTransition: (frame: EpicStatusTransitionFrame) => void;
   readonly onConnectionStatus: (

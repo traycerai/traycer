@@ -1,21 +1,4 @@
-/**
- * Independent regression coverage for the click-to-edit partial-diff attach fix.
- *
- * Unlike `diff-content-primitive.test.tsx` (which mocks `@pierre/diffs`) and
- * unlike `pierre-diffs-partial-diff-hydration.test.ts` (library-only, no React),
- * this suite mounts the real production `DiffContentPrimitive` against the real
- * unmocked `@pierre/diffs@1.3.1` parse/hydrate APIs.
- *
- * The React `<FileDiff>` leaf is instrumented (not replaced with a fake parse
- * pipeline) so we can observe the `FileDiffMetadata` objects the primitive
- * actually hands the library after pre-hydration. Attach is then proven against
- * those same objects via the real `FileDiff`/`Editor` classes: jsdom never
- * paints a `[contenteditable][role=textbox]` node (the highlighter/render path
- * only emits the editor global `<style>` tag here), so attach is asserted the
- * same way the library-level suite does - `Editor.applyEdits` succeeds rather
- * than throwing "Editor is not attached" / "Could not update render cache for
- * partial diff".
- */
+/** Attach is then proven against those same objects via the real `FileDiff`/`Editor` classes. */
 import {
   afterEach,
   beforeAll,
@@ -49,13 +32,8 @@ interface CapturedFileRender {
 }
 const capturedFileRenders: CapturedFileRender[] = [];
 
-/**
- * The worker pool `useWorkerPool()` reads from React context. No provider is
- * ever mounted in this file's render tree, so every existing test's `pool`
- * has always been `undefined` - this mock keeps that default, and lets the
- * two new empty-file-editor tests below control it explicitly, the same
- * store-vs-context seam `use-diff-highlight-ready.test.tsx` drives directly.
- */
+/** No provider is ever mounted in this file's render tree, so every existing test's `pool` has always been
+ * `undefined`. */
 const poolState = vi.hoisted(() => ({
   pool: undefined as WorkerPoolManager | undefined,
 }));
@@ -66,12 +44,8 @@ interface FakeWorkerPoolManager {
   readonly primeDiffHighlightCache: () => Promise<void>;
 }
 
-/**
- * Same seam as `use-diff-highlight-ready.test.tsx`'s fake: a prototype-less
- * object asserted to the class type, with the members the gates actually call
- * assigned onto it (`as unknown as` is lint-forbidden; the real class has
- * ~90 members, too many to overlap with a direct `as`).
- */
+/** Same seam as `use-diff-highlight-ready.test.tsx`'s fake: a prototype-less object asserted to the class type,
+ * with the members the gates actually call assigned onto it (`as unknown as` is lint-forbidden. */
 function fakeWorkerPoolManager(): WorkerPoolManager {
   const fake: FakeWorkerPoolManager = {
     setRenderOptions: () => Promise.resolve(),
@@ -183,10 +157,7 @@ index 1111111..2222222 100644
 +new
 `;
 
-// Same empty-untracked-file shape `git-diff-empty-file-edit.test.ts` proves
-// against the raw library: zero hunks, so `isConfirmedEmptyNewFileDiff`
-// matches and `DiffContentPrimitive` renders `<File>` instead of `<FileDiff>`
-// once an edit session is present.
+// Same empty-untracked-file shape `git-diff-empty-file-edit.test.ts` proves against the raw library.
 const EMPTY_NEW_FILE_PATCH = `diff --git a/empty.txt b/empty.txt
 new file mode 100644
 index 000000000..e69de29bb
@@ -234,11 +205,8 @@ function requireCapturedFileDiff(): FileDiffMetadata {
   return latest;
 }
 
-/**
- * Prove the real library accepts the metadata DiffContentPrimitive produced:
- * non-partial fileDiffs attach and survive a second fully-hydrated object for
- * the same file (the live→pinned swap shape).
- */
+/** Prove the real library accepts the metadata DiffContentPrimitive produced: non-partial fileDiffs attach and
+ * survive a second fully-hydrated object for the same file (the live→pinned swap shape). */
 async function assertLibraryAcceptsHydratedDiff(
   first: FileDiffMetadata,
   second: FileDiffMetadata | null,
@@ -261,13 +229,7 @@ async function assertLibraryAcceptsHydratedDiff(
   container.remove();
 }
 
-/**
- * Prove the real library never attaches for a still-partial diff - the
- * "legitimately missing required side" case: no `contentEditable` surface
- * ever attaches, and applying an edit fails the same way it does for a
- * fresh, never-hydrated diff (`pierre-diffs-partial-diff-hydration.test.ts`'s
- * untracked/new-file case).
- */
+/** Prove the real library never attaches for a still-partial diff. */
 async function assertLibraryRejectsPartialDiff(
   fileDiff: FileDiffMetadata,
 ): Promise<void> {
@@ -330,11 +292,8 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
   });
 
   it("pre-hydrates a change diff so the live→pinned parse swap still attaches", async () => {
-    // Read path: partial metadata from parsePatchFiles. `useDiffsDiffHighlightReady`
-    // primes its cache in an effect for this non-edit render (`enabled` is
-    // true whenever there is no `editSession` yet), so the very first paint
-    // can be `DiffHighlightLoading` with nothing captured yet - wait for the
-    // highlight-ready transition instead of asserting synchronously.
+    // `useDiffsDiffHighlightReady` primes its cache in an effect for this non-edit render (`enabled` is true
+    // whenever there is no `editSession` yet).
     const live = renderPrimitive({
       patch: CHANGE_PATCH,
       cacheScope: "live-oid",
@@ -373,9 +332,6 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
     expect(hydrated.isPartial).toBe(false);
     expect(hydrated.type).toBe("change");
 
-    // A second re-parse with a third cache key + the SAME stable old/new file
-    // object identities (what editableFiles preserves across keystrokes) must
-    // also hand the library a non-partial model that attaches cleanly.
     const stableOld = CHANGE_OLD;
     const stableNew = CHANGE_NEW;
     capturedFileDiffs.length = 0;
@@ -412,9 +368,7 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
         lineNumbers
         indicatorStyle="bars"
         fileHeaders={false}
-        // This is the exact production boundary regression: the host used to
-        // publish zero for every changed file. The parsed/hydrated diff is the
-        // final authority and must keep this non-empty file in-place.
+        // The parsed/hydrated diff is the final authority and must keep this non-empty file in-place.
         isEmptyFile
         editSession={{
           editorOptions: EMPTY_EDITOR_OPTIONS,
@@ -444,9 +398,8 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
     expect(capturedFileDiffs).toHaveLength(1);
     const first = requireCapturedFileDiff();
 
-    // Fresh editorOptions object every render (production builds a new
-    // editSession literal each time) - hydration must key on old/new identity,
-    // not the session wrapper.
+    // Fresh editorOptions object every render (production builds a new editSession literal each time) - hydration
+    // must key on old/new identity, not the session wrapper.
     capturedFileDiffs.length = 0;
     rendered.rerender(
       <DiffContentPrimitive
@@ -483,10 +436,8 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
     expect(capturedFileDiffs).toHaveLength(1);
     const pure = requireCapturedFileDiff();
     expect(pure.type).toBe("rename-pure");
-    // hydratePartialDiff clears isPartial and fills line arrays for pure
-    // renames. The editor still refuses to attach when the patch carries zero
-    // hunks (library behaviour independent of this fix) - so we only pin the
-    // non-partial contract here, not applyEdits.
+    // The editor still refuses to attach when the patch carries zero hunks (library behaviour independent of this
+    // fix) - so we only pin the non-partial contract here, not applyEdits.
     expect(pure.isPartial).toBe(false);
     expect(pure.additionLines.length).toBeGreaterThan(0);
 
@@ -507,13 +458,8 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
   });
 
   it("keeps a change/rename-changed diff partial and read-only when the required old side is missing", async () => {
-    // `hydrateFileDiffForEdit` cannot hydrate a "change"/"rename-changed"
-    // diff without an old side, so it must stay partial - a legitimately
-    // missing required side (e.g. a race between the diff-type computation
-    // and the content fetch) - rather than silently claim a working editor.
-    // The real library never re-attempts hydration for a partial diff once
-    // `edit` is true, so getting this wrong would permanently strand the
-    // editor exactly like the original bug this whole fix closes.
+    // `hydrateFileDiffForEdit` cannot hydrate a "change"/"rename-changed" diff without an old side, so it must
+    // stay partial.
     const change = renderPrimitive({
       patch: CHANGE_PATCH,
       cacheScope: "missing-old-side-change",
@@ -553,11 +499,7 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
   });
 
   it("also pre-hydrates untracked/new diffs via parseDiffFromFile (isPartial false)", async () => {
-    // The library's own loadDiffFiles path never hydrates type==="new"
-    // (canHydrateDiff excludes it). This fix's synchronous path uses
-    // parseDiffFromFile for new/deleted instead, which DOES clear isPartial.
-    // That is a structural improvement over the pre-fix world for untracked
-    // files - documented here rather than treated as out of scope.
+    // The library's own loadDiffFiles path never hydrates type==="new" (canHydrateDiff excludes it).
     renderPrimitive({
       patch: NEW_FILE_PATCH,
       cacheScope: "new-file",
@@ -577,9 +519,7 @@ describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
   });
 
   it("hydrates independent multi-file edit surfaces without cross-talk", async () => {
-    // Bundle view mounts one DiffContentPrimitive per file, each with its own
-    // editSession. Two concurrent primitives must not share metadata identity
-    // or leave either partial.
+    // Two concurrent primitives must not share metadata identity or leave either partial.
     const fileAOld: FileContents = {
       name: "a.ts",
       contents: "a-old\n",
@@ -662,11 +602,8 @@ index 1111111..2222222 100644
   });
 
   it("renders the plain File editor for a confirmed-empty new file once the pool resolves to unavailable (no provider mounted)", async () => {
-    // No creator is ever registered anywhere in this file, so once this
-    // component's own mount asks for the pool, availability settles to
-    // "unavailable" the same way it does for every other test here -
-    // confirmed explicitly, not assumed, since this is the first test to
-    // exercise the emptyFileEditSession branch at all.
+    // No creator is ever registered anywhere in this file, so once this component's own mount asks for the pool,
+    // availability settles to "unavailable" the same way it does for every other test here.
     const rendered = render(
       <DiffContentPrimitive
         patch={EMPTY_NEW_FILE_PATCH}
@@ -698,10 +635,8 @@ index 1111111..2222222 100644
   });
 
   it("holds the empty-file editor behind the highlight loader until the pool reaches React context, then renders File instead", async () => {
-    // The regression fix 3 closes: before it, `<File>` mounted as soon as
-    // `emptyFileEditSession` was non-null, regardless of `highlightReady` -
-    // before the pool ever reached context - and stayed on the main thread
-    // for that editor's whole lifetime. The gate now precedes the branch.
+    // The regression fix 3 closes: before it, `<File>` mounted as soon as `emptyFileEditSession` was non-null,
+    // regardless of `highlightReady` - before the pool ever reached context.
     const manager = fakeWorkerPoolManager();
     registerDiffWorkerPoolCreator(() => manager);
 

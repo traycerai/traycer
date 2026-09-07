@@ -2,17 +2,8 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-// Stamp the release-time values onto `clients/traycer-cli/src/config.ts` for a
-// production build, then `--restore` back to the committed source defaults.
+// Stamp the release-time values onto `clients/traycer-cli/src/config.ts` for a production build, then `--restore` back to the committed source defaults.
 // See ../../scripts/rewrite-config-target.cjs.
-//
-// The OSS build commits its production endpoints AND the host trust root
-// (`hostTrustedPubkeys`) directly in source, so this script no longer rewrites
-// them - `--restore` leaves them untouched. It only stamps the values that
-// genuinely vary per release: `environment`, `version`, `supportedHostVersion`
-// (the exact host this CLI installs by default), and `releaseRepo` (so a
-// forked/relocated build fetches from the repo it publishes to, via
-// RELEASE_REPO).
 const DEFAULT_RELEASE_REPO = "traycerai/traycer";
 
 const path = require("node:path");

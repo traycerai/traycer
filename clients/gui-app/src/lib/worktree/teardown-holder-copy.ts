@@ -3,10 +3,7 @@ import { teardownHolderRowKey } from "@/lib/worktree/owner-teardown-snapshot";
 
 export const UNNAMED_AGENT_FALLBACK = "This agent";
 
-/**
- * Half A `holderId`. Used to group hold records of one actor (rule 7).
- * Absent on a pre-1.2 host.
- */
+/** Half A `holderId`. */
 export function holderIdOf(holder: WorktreeBusyHolder): string | undefined {
   const id = holder.holderId;
   return id !== undefined && id.length > 0 ? id : undefined;

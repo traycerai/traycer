@@ -5,26 +5,8 @@ import {
 import type { ThemePreset } from "@/lib/theme-presets";
 
 /**
- * Imperative owner of the document-element theme attributes (`class`,
- * `data-theme`, `color-scheme`). Subscribes to the settings store and the
- * `matchMedia` listener at module load - outside React - so DOM mutations
- * land **before** React re-renders the component tree.
- *
- * Why this can't be a `useEffect` in `ThemeProvider`: React fires effects
- * during commit, and child effects fire before parent effects. xterm.js
- * captures its palette as a JS object via `getComputedStyle` inside a
- * `useMemo` during render. If `applyVariant` runs in `ThemeProvider`'s
- * effect (parent, last to fire), the child has already read the stale
- * cascade and pushed a stale `ITheme` into `term.options.theme`. The
- * surrounding Tailwind UI never showed this race because Tailwind utilities
- * resolve `var(...)` at paint time against the live cascade - they don't
- * snapshot the value into JS.
- *
- * The applier sidesteps the entire React commit cycle: store update
- * triggers the applier listener synchronously (Zustand calls listeners in
- * subscription order, all before returning from `setState`), DOM is
- * mutated, React's own subscriber then schedules the re-render, children
- * re-render, and `getComputedStyle` reads the freshly-classed DOM.
+ * Imperative owner of the document-element theme attributes (`class`, `data-theme`, `color-scheme`).
+ * Subscribes to the settings store and the `matchMedia` listener at module load - outside React - so DOM mutations land **before** React re-renders the component tree.
  */
 
 export type ResolvedTheme = "light" | "dark";
@@ -69,10 +51,8 @@ function install(): void {
   installed = true;
   if (typeof window === "undefined") return;
 
-  // Initial sync. Zustand's `persist` middleware rehydrates from
-  // localStorage synchronously during store creation, which runs before
-  // this module's import side effects, so `getState()` is already
-  // populated with the user's persisted preference.
+  // Initial sync.
+  // Zustand's `persist` middleware rehydrates from localStorage synchronously during store creation, which runs before this module's import side effects, so `getState()` is already populated with the user's persisted preference.
   applyFromState();
 
   useSettingsStore.subscribe((state, prev) => {
@@ -89,9 +69,7 @@ function install(): void {
       const next = readSystemTheme();
       if (next === systemTheme) return;
       systemTheme = next;
-      // OS pref only affects the resolved value when the user picked
-      // "system"; otherwise the cascade is already correct and a re-emit
-      // would be a no-op for downstream consumers.
+      // OS pref only affects the resolved value when the user picked "system"; otherwise the cascade is already correct and a re-emit would be a no-op for downstream consumers.
       if (useSettingsStore.getState().theme !== "system") return;
       applyFromState();
       notify();
@@ -102,18 +80,16 @@ function install(): void {
 install();
 
 /**
- * `useSyncExternalStore` snapshot. Returns the current resolved
- * light/dark mode without touching the DOM. Stable identity across
- * renders for the same logical state - primitives compare by value.
+ * `useSyncExternalStore` snapshot.
+ * Returns the current resolved light/dark mode without touching the DOM.
  */
 export function getResolvedTheme(): ResolvedTheme {
   return resolve(useSettingsStore.getState().theme, systemTheme);
 }
 
 /**
- * `useSyncExternalStore` subscribe. Listener fires after DOM has been
- * mutated, so any consumer that re-reads `getComputedStyle` in response
- * sees the new cascade.
+ * `useSyncExternalStore` subscribe.
+ * Listener fires after DOM has been mutated, so any consumer that re-reads `getComputedStyle` in response sees the new cascade.
  */
 export function subscribeResolvedTheme(listener: () => void): () => void {
   resolvedListeners.add(listener);

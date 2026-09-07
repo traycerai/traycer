@@ -17,15 +17,7 @@ interface SteerSettingsConflictDialogProps {
   readonly changed: ReadonlyArray<string>;
 }
 
-/**
- * Shown when the owner steers a queued prompt while the live toolbar carries a
- * turn-start-baked change (model / reasoning / service tier / agent mode) that
- * the running turn can't absorb. Confirming ends the current turn and re-sends
- * the prompt under the new settings (the host resumes or forks per harness);
- * Cancel leaves the prompt queued and the turn running. Enter confirms and Esc
- * cancels, keeping the steer flow keyboard-only. No in-dialog pending state -
- * the queue/turn reflects the result.
- */
+/** Shown when the owner steers a queued prompt while the live toolbar carries a turn-start-baked change (model / reasoning / service tier / agent mode) that the running turn can't absorb. */
 export function SteerSettingsConflictDialog(
   props: SteerSettingsConflictDialogProps,
 ) {

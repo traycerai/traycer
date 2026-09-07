@@ -42,12 +42,7 @@ export interface BrowserAnnotationAttachRequest {
   readonly unionRect: BrowserAnnotationCssRect;
 }
 
-/**
- * The full session event vocabulary. `attachRequested` never crosses into the
- * forwarded IPC event (`BrowserAnnotationForwardedSessionEvent`) - it carries
- * marks captured by the CDP-injected guest overlay, which only desktop-main
- * consumes on its way to building the attach payload.
- */
+/** `attachRequested` never crosses into the forwarded IPC event (`BrowserAnnotationForwardedSessionEvent`). */
 export type BrowserAnnotationSessionEvent =
   | BrowserAnnotationForwardedSessionEvent
   | {

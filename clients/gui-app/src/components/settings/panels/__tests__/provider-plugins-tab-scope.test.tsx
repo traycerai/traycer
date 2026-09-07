@@ -22,11 +22,7 @@ import {
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
-/**
- * F5: Plugins tab reuses `useProviderNativeScope` + `McpScopePicker` with
- * locationLabel "Plugins location". List and mutate must stamp the selected
- * scope and workspaceRoot — not hardcode global.
- */
+/** List and mutate must stamp the selected scope and workspaceRoot - not hardcode global. */
 
 const pluginMocks = vi.hoisted(() => ({
   plugins: [] as ProviderPlugin[],

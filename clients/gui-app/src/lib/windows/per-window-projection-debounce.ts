@@ -37,10 +37,8 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
     const attempt = writeChain
       .then(() => target.update(patch))
       .then(() => undefined);
-    // Ordering has to survive a failed projection. A rejected `writeChain` has
-    // no handler, so every later patch would chain off it and be skipped for
-    // the rest of the session. Sequence on a recovered chain and hand the
-    // caller the real attempt so a flush still reports its own failure.
+    // Ordering has to survive a failed projection.
+    // A rejected `writeChain` has no handler, so every later patch would chain off it and be skipped for the rest of the session.
     writeChain = attempt.catch(() => undefined);
     return attempt;
   };

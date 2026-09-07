@@ -6,23 +6,8 @@ import {
 } from "./worktree-intent-staging-store";
 
 /**
- * The LIVE seeded-workspace snapshot (folders + primaryPath) for a
- * not-yet-created seeded picker (chat fork, terminal-agent fork, the
- * terminal-agent launcher) - mirrors `useHomeWorkspaceSource`'s
- * component-local `seededWorkspaceState` into an externally-readable slot,
- * keyed by the SAME `WorktreeStagingKey` the staged intent uses.
- *
- * The picker's `workspaceSeed` prop is a static snapshot from when the
- * dialog opened; edits (add/remove/"Make primary") only ever updated that
- * component-local state, invisible to the dialog's own submit handler -
- * which read `readStagedWorktreeIntent(stagingKey) ?? props.workspaceSeed`
- * directly, missing any edit to a folder that never got a STAGED intent
- * entry (a non-git folder, never auto-seeded). Reading this snapshot at
- * submit closes that gap without ever writing a synthetic staged entry
- * merely to carry the primary flag.
- *
- * Transient (never persisted) - matches the staging store's own scratch
- * slots for these same keys (see `isTransientStagingOwnerId`).
+ * The LIVE seeded-workspace snapshot (folders + primaryPath) for a not-yet-created seeded picker
+ * (chat fork, terminal-agent fork, the terminal-agent launcher) - mirrors
  */
 interface SeededWorkspaceSnapshotStore {
   readonly snapshotByKey: Readonly<
@@ -57,11 +42,7 @@ export const useSeededWorkspaceSnapshotStore =
     resetForTests: () => set({ snapshotByKey: {} }),
   }));
 
-/**
- * The serialized staging keys this store currently holds a snapshot for. A
- * seeded picker writes here on mount even when nothing was staged, so a sweep
- * that enumerated only the intent-staging store would miss those slots.
- */
+/** The serialized staging keys this store currently holds a snapshot for. */
 export function seededWorkspaceSnapshotKeyIds(): readonly string[] {
   return Object.keys(useSeededWorkspaceSnapshotStore.getState().snapshotByKey);
 }

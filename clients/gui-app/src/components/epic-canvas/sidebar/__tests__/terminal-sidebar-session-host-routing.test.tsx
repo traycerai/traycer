@@ -7,20 +7,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 
 /**
- * The terminals panel is a sidebar - a sibling of the canvas, outside every
- * tile `TabHostProvider` - so both of its host reads belong to the Epic
- * SESSION, never to the app-wide effective host. The two disagree for as long
- * as a re-point is establishing (and permanently if it failed), which is
- * exactly when an Epic projected from host A would otherwise list, operate on
- * and open host B's terminals.
- *
- * Every ambient reader the panel used to call is mocked here with a DIFFERENT
- * host than the session's, so the two sources are always distinguishable: a
- * build that reads either one fails on the value, not on an absence. That is
- * the whole design of this fixture - `hostId` threading is not observable, so
- * the assertions are on the two things a wrong host actually produces: the
- * client `terminal.list` is issued on, and the host each opened tile is bound
- * to for life.
+ * The terminals panel is a sidebar - a sibling of the canvas, outside every tile `TabHostProvider` - so both of its host reads belong to the Epic SESSION, never to the app-wide effective host.
+ * The two disagree for as long as a re-point is establishing (and permanently if it failed), which is exactly when an Epic projected from host A would otherwise list, operate on and open host B's terminals.
  */
 const SESSION_ID = "term-1";
 const TAB_ID = "tab-1";
@@ -86,9 +74,7 @@ vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
   },
 }));
 
-// This suite is about the LEGACY unary path (`useTerminalList` above), not
-// the durable stream authority main added alongside it; wholesale-mocked out
-// of scope, same as its sibling terminal-sidebar-durable-projection.test.tsx.
+// This suite is about the LEGACY unary path (`useTerminalList` above), not the durable stream authority main added alongside it; wholesale-mocked out of scope, same as its sibling terminal-sidebar-durable-projection.test.tsx.
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   useHostPlainTerminalAuthority: () => ({
     hostId: SESSION_HOST,
@@ -181,9 +167,7 @@ describe("terminals panel resolves through the Epic session host", () => {
   });
 
   it("a row's kill and rename mutations take the session's client, not the ambient one", () => {
-    // The list moved to the session client in an earlier round; kill and
-    // rename in the same row still rode the app-wide wrappers, so during a
-    // re-point host A's rows killed and renamed host B's sessions.
+    // The list moved to the session client in an earlier round; kill and rename in the same row still rode the app-wide wrappers, so during a re-point host A's rows killed and renamed host B's sessions.
     render(wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />));
 
     expect(mutationClients.kill.length).toBeGreaterThan(0);

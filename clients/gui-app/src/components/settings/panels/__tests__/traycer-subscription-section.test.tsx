@@ -39,9 +39,8 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     authnBaseUrl: "https://authn.traycer.ai",
-    // The platform origin is derived from `signInUrl`; without one this
-    // fixture would silently exercise the production fallback instead of the
-    // deployment it names.
+    // The platform origin is derived from `signInUrl`; without one this fixture would silently exercise the
+    // production fallback instead of the deployment it names.
     signInUrl: "https://platform.traycer.ai/sign-in",
   }),
 }));
@@ -52,9 +51,7 @@ vi.mock("@/hooks/auth/use-refresh-credits-on-traycer-turn", () => ({
   useRefreshCreditsOnTraycerTurn: () => {},
 }));
 
-// Host RPC query + its turn-completion refresh, mounted by RateLimitView. Both
-// need a host client/QueryClient this unit harness doesn't set up, so stub them:
-// the query returns no data (totalTokens === 0 → "unavailable" text).
+// Host RPC query + its turn-completion refresh, mounted by RateLimitView.
 vi.mock("@/hooks/host/use-host-rate-limit-usage-query", () => ({
   useHostRateLimitUsageQuery: () => ({ data: undefined }),
 }));
@@ -170,10 +167,8 @@ describe("TraycerSubscriptionSection", () => {
       screen.getByRole("button", { name: /Manage subscription/ }),
     );
 
-    // `account` is hard-external (A2): billing has no in-app meaning, so the
-    // link setting never applies to it.
-    // The click event travels too (L9): `account` never reclassifies today,
-    // but a dropped event would silently kill modifiers if it ever did.
+    // The click event travels too (L9): `account` never reclassifies today, but a dropped event would silently
+    // kill modifiers if it ever did.
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://platform.traycer.ai",
       "account",

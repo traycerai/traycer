@@ -30,11 +30,7 @@ describe("notification activation envelope", () => {
   });
 
   it("round-trips a parked browser session's route", () => {
-    // The route stored on the envelope is the NORMALIZED payload
-    // (`browserSession`), not the raw host kind (`browser_human_needed`), and
-    // `parseEnvelopeV1` re-parses it on the way back in. Without a parser arm
-    // for the normalized shape the whole envelope is rejected and the click
-    // degrades to opening the center instead of the tile.
+    // The route stored on the envelope is the NORMALIZED payload (`browserSession`), not the raw host kind (`browser_human_needed`), and `parseEnvelopeV1` re-parses it on the way back in.
     const envelope = buildNotificationActivationEnvelope({
       route: {
         kind: "browserSession",

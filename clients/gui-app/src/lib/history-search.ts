@@ -40,10 +40,8 @@ export interface HistorySearchState {
   readonly workspaces: ReadonlyArray<HistoryWorkspaceRef>;
   readonly workspaceMode: HistoryMatchMode;
   /**
-   * Hosts that own chats in the task (`chats.owner_host_id`), NOT the hosts
-   * named by `workspaces` - a workspace is bound at create, a chat host is
-   * where the work actually happens. Raw host ids; display names are resolved
-   * against the host directory at render time.
+   * Hosts that own chats in the task (`chats.owner_host_id`), NOT the hosts named by `workspaces` - a workspace is bound at create, a chat host is where the work actually happens.
+   * Raw host ids; display names are resolved against the host directory at render time.
    */
   readonly chatHosts: ReadonlyArray<string>;
   readonly chatHostMode: HistoryMatchMode;
@@ -98,12 +96,8 @@ const persistedHistorySearchSchema = z.object({
 });
 
 /**
- * Total over unknown persisted shapes. A stored `search` written by a build
- * that predates a field addition (e.g. `chatHosts`, #1303) is missing that
- * field entirely, and zustand's default rehydration merge takes the nested
- * object verbatim - so every reader of the new field would crash on
- * `undefined`. Fill absent fields from defaults instead of trusting the
- * persisted shape to match the current `HistorySearchState`.
+ * Total over unknown persisted shapes.
+ * A stored `search` written by a build that predates a field addition (e.g.
  */
 export function normalizePersistedHistorySearch(
   value: unknown,
@@ -272,10 +266,8 @@ function normalizeRepos(
 function normalizeChatHosts(
   value: string | string[] | undefined,
 ): ReadonlyArray<string> {
-  // Dedupe AFTER trimming. `normalizeArray` dedupes raw values, so
-  // `"host-a"` and `" host-a "` survive it as two entries and then trim into
-  // the same id - which would serialize the same host twice into the URL and
-  // double its contribution to the active-filter count.
+  // Dedupe AFTER trimming.
+  // `normalizeArray` dedupes raw values, so `"host-a"` and `" host-a "` survive it as two entries and then trim into the same id - which would serialize the same host twice into the URL and double its contribution to the active-filter count.
   const hostIds = normalizeArray(value).flatMap((hostId) => {
     const trimmed = hostId.trim();
     return trimmed.length > 0 ? [trimmed] : [];

@@ -15,9 +15,8 @@ import type {
 } from "@/stores/epics/open-epic/types";
 
 /**
- * The artifact row, or `null` once it has been deleted. Both readers below go
- * through this so the enqueue-time follow check and the flush-time re-check
- * observe the record the same way.
+ * The artifact row, or `null` once it has been deleted.
+ * Both readers below go through this so the enqueue-time follow check and the flush-time re-check observe the record the same way.
  */
 function readArtifact(
   artifacts: ArtifactsSlice,
@@ -29,18 +28,13 @@ function readArtifact(
 }
 
 /**
- * Trailing debounce for the authoritative `epic.renameArtifact` persist. The
- * local Y.Doc rename below is applied per doc change so the tab / sidebar
- * title tracks typing live; the RPC only needs to land once the title
- * settles.
+ * The local Y.Doc rename below is applied per doc change so the tab / sidebar title tracks typing live; the RPC only needs to land once the title settles.
  */
 const RENAME_PERSIST_DEBOUNCE_MS = 800;
 
 /**
- * The document's own title: the text of a level-1 heading sitting at the very
- * top of the body, or `null` when the doc doesn't start with one. Mirrors the
- * host's disk-ingest fallback (`parseBody` in epic-file-sync), which reads a
- * leading `# ` line - not a heading further down - as the artifact title.
+ * The document's own title: the text of a level-1 heading sitting at the very top of the body, or `null` when the doc doesn't start with one.
+ * Mirrors the host's disk-ingest fallback (`parseBody` in epic-file-sync), which reads a leading `# ` line - not a heading further down - as the artifact title.
  */
 export function leadingDocTitle(editor: Editor): string | null {
   const first = editor.state.doc.firstChild;
@@ -52,21 +46,8 @@ export function leadingDocTitle(editor: Editor): string | null {
 }
 
 /**
- * Pure decision for one editor update: given the current leading heading text
- * and the accumulated follow state, decide whether the artifact should be
- * renamed and what the tracked "last heading" becomes.
- *
- * The title *follows the doc* while it is empty, still the create-flow default
- * ("New <kind>"), or equal to the last heading text this reducer tracked (i.e.
- * the title was derived from the doc). An explicit rename (sidebar, another
- * client) makes `artifactTitle` diverge from all three, permanently breaking
- * the link so a deliberate title is never clobbered.
- *
- * `lastDocTitle` only ever advances to a NON-NULL heading: clearing the heading
- * (`nextDocTitle === null`) preserves it, so clearing then retyping still reads
- * as "following the doc" and renames again - the bug a naive
- * `lastDocTitle = nextDocTitle` on every update would introduce (the tracked
- * value goes null on clear and never matches `artifactTitle` on retype).
+ * An explicit rename (sidebar, another client) makes `artifactTitle` diverge from all three, permanently breaking the link so a deliberate title is never clobbered.
+ * `lastDocTitle` only ever advances to a NON-NULL heading: clearing the heading (`nextDocTitle === null`) preserves it, so clearing then retyping still reads as "following the doc" and renames again - the bug a naive `lastDocTitle = nextDocTitle` on every update would introduce (the tracked value goes null on clear and never matches `artifactTitle` on retype).
  */
 export function nextTitleFollow(params: {
   readonly nextDocTitle: string | null;
@@ -103,28 +84,8 @@ export function nextTitleFollow(params: {
 }
 
 /**
- * Notion-style title inheritance for hand-created artifacts: while the
- * artifact's title still *follows* the document, editing the doc's leading
- * `# ` heading renames the artifact, so the canvas tab / sidebar / breadcrumb
- * title mirrors what the author typed instead of staying "New spec".
- *
- * The title follows the doc while it is empty, still the create-flow default
- * ("New <kind>"), or equal to the heading's previous value (i.e. it was
- * derived from the doc). An explicit rename (sidebar inline rename, another
- * client) breaks the link: the follow check fails from then on, so a
- * deliberate title is never clobbered by body edits. Deleting the heading
- * keeps the last title - an artifact never renames to empty.
- *
- * Scope guards: only artifact kinds (spec/ticket/story/review), only
- * `createdManually` records (agent-created artifacts have authored titles),
- * and only for editors (the local rename action and the RPC both reject
- * viewers anyway).
- *
- * Write path matches the sidebar rename: local Y.Doc rename (live title
- * everywhere + host stream sync), tab-ref name snapshot, then the
- * authoritative `epic.renameArtifact` RPC debounced behind typing and flushed
- * on unmount. The rename touches only artifact metadata - never the body
- * fragment - so it cannot re-trigger the editor update this hook listens to.
+ * Notion-style title inheritance for hand-created artifacts: while the artifact's title still *follows* the document, editing the doc's leading `# ` heading renames the artifact, so the canvas tab / sidebar / breadcrumb title mirrors what the author typed instead of staying "New spec".
+ * An explicit rename (sidebar inline rename, another client) breaks the link: the follow check fails from then on, so a deliberate title is never clobbered by body edits.
  */
 export function useArtifactDocTitleFollow(params: {
   readonly editor: Editor | null;
@@ -151,14 +112,7 @@ export function useArtifactDocTitleFollow(params: {
 
     /**
      * The last title this hook actually asked the authority for.
-     *
-     * The re-check below needs to tell "the title is where I last put it" from
-     * "somebody else renamed this", and after the optimistic local write was
-     * removed those two are no longer distinguishable from `artifact.title`
-     * alone. Re-running `nextTitleFollow`'s own `titleFollowsDoc` at flush time
-     * does not work either: `lastDocTitle` has already advanced to the newest
-     * heading, so typing "A" then "B" leaves the artifact reading "A" against a
-     * tracked "B" and the check would discard a perfectly ordinary rename.
+     * The re-check below needs to tell "the title is where I last put it" from "somebody else renamed this", and after the optimistic local write was removed those two are no longer distinguishable from `artifact.title` alone.
      */
     let lastRequestedTitle: string | null = null;
 
@@ -167,13 +121,8 @@ export function useArtifactDocTitleFollow(params: {
       const title = pendingPersistTitle;
       pendingPersistTitle = null;
       if (title === null) return;
-      // RE-READ before sending. A sidebar or remote rename can land inside the
-      // 800 ms debounce window, and write commands carry no expected entity
-      // version — so a delayed request executes after the newer explicit rename
-      // and silently overwrites it. This is the guard the optimistic-write
-      // removal took with it: the old `artifact.title !== title` test relied on
-      // this hook having already written the title locally, so keeping it as-is
-      // would now discard EVERY rename rather than only superseded ones.
+      // RE-READ before sending.
+      // A sidebar or remote rename can land inside the 800 ms debounce window, and write commands carry no expected entity version - so a delayed request executes after the newer explicit rename and silently overwrites it.
       const artifact = readArtifact(
         handle.store.getState().artifacts,
         artifactId,
@@ -184,26 +133,19 @@ export function useArtifactDocTitleFollow(params: {
         currentTitle === defaultTitle ||
         currentTitle === lastRequestedTitle;
       if (!stillFollowing) {
-        // Following is broken, which is the documented meaning of an explicit
-        // rename. Abandon the pending value rather than racing it — the
-        // deliberate title wins, exactly as it does at enqueue time.
+        // Abandon the pending value rather than racing it - the deliberate title wins, exactly as it does at enqueue time.
         return;
       }
       const supersededTitle = lastRequestedTitle;
       lastRequestedTitle = title;
-      // Settled, not merely detached - the same terminal handler the other
-      // three rename surfaces use. Both arms below are synchronous today, so
-      // the two-arm form does cover this chain; it stops covering it the
-      // moment either arm grows an `await`, which is precisely how the sibling
-      // surfaces acquired the defect this helper exists for.
+      // Settled, not merely detached - the same terminal handler the other three rename surfaces use.
+      // Both arms below are synchronous today, so the two-arm form does cover this chain; it stops covering it the moment either arm grows an `await`, which is precisely how the sibling surfaces acquired the defect this helper exists for.
       settleDetachedEpicMutation(
         persistRename({ epicId, artifactId, title }).then(
           () => renameArtifactInTab(viewTabId, artifactId, title),
           () => {
-            // The authority never took this title, so the tracker must not claim
-            // it did: the artifact still reads the PREVIOUS title, which the
-            // next flush would then mistake for somebody else's rename and stop
-            // following on. Only roll back if nothing newer has been requested.
+            // The authority never took this title, so the tracker must not claim it did: the artifact still reads the PREVIOUS title, which the next flush would then mistake for somebody else's rename and stop following on.
+            // Only roll back if nothing newer has been requested.
             if (lastRequestedTitle === title) {
               lastRequestedTitle = supersededTitle;
             }

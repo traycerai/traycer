@@ -13,20 +13,14 @@ import {
 import { DEFAULT_MAX_WARM_CHAT_SESSIONS } from "@/stores/chats/session-registry";
 import { MAX_LINGERING_PLAIN_TERMINALS } from "@/stores/terminals/terminal-session-registry";
 
-// Every consumer of the active profile reads `getRetentionProfile()` lazily,
-// so a test that switches it must restore the desktop profile afterward or
-// leak the switch into an unrelated suite sharing this module's singleton.
+// Every consumer of the active profile reads `getRetentionProfile()` lazily, so a test that
+// switches it must restore the desktop profile afterward or leak the switch into an unrelated
 afterEach(() => {
   setRetentionProfile(DESKTOP_RETENTION_PROFILE);
 });
 
 describe("RetentionProfile", () => {
   it("the desktop profile matches every plane's own exported constant", () => {
-    // Each plane still names its own constant (`MAX_RETAINED_TOP_LEVEL_SURFACES`,
-    // `DEFAULT_MAX_LIVE_EPICS`, `DEFAULT_MAX_WARM_CHAT_SESSIONS`,
-    // `MAX_LINGERING_PLAIN_TERMINALS`) for its own suites and doc comments to
-    // cite; those constants are now defined FROM the desktop profile, not the
-    // other way around, so this pins that the binding still agrees.
     expect(DESKTOP_RETENTION_PROFILE.retainedTopLevelSurfaces).toBe(
       MAX_RETAINED_TOP_LEVEL_SURFACES,
     );
@@ -55,12 +49,6 @@ describe("RetentionProfile", () => {
   });
 
   it("keeps the live-epic cap above the retained-surface count on mobile too", () => {
-    // The live-epic cap stays ABOVE the surface-retention window on purpose: a
-    // surface past its retention window drops its DOM but its session stays
-    // warm, so re-entering re-mounts against a live replica instead of a cold
-    // open. Pinning this on mobile too, not just desktop, is the point - a
-    // profile that inverted the two on the tightest budget would silently
-    // defeat the ratio the doc comment on `RetentionProfile` describes.
     expect(MOBILE_RETENTION_PROFILE.maxLiveEpics).toBeGreaterThan(
       MOBILE_RETENTION_PROFILE.retainedTopLevelSurfaces,
     );

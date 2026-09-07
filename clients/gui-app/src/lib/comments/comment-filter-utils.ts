@@ -21,10 +21,7 @@ export function filterThreadsByStatus(
   return threads.filter((t) => t.resolved);
 }
 
-/**
- * Count of unresolved threads, used by the artifact tree to render the
- * per-artifact open-thread badge.
- */
+/** Count of unresolved threads, used by the artifact tree to render the per-artifact open-thread badge. */
 export function countOpenThreads(
   threads: ReadonlyArray<CommentThreadWire>,
 ): number {

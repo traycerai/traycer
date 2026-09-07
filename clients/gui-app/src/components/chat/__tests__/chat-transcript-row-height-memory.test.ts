@@ -17,16 +17,9 @@ function entry(input: {
   };
 }
 
-/**
- * `44 + ceil(8000 / 80) * 22` - the RAW byte model for an 8 KB row. Not what a
- * placeholder shows; it is what the memory fits its scale factor AGAINST.
- */
+/** `44 + ceil(8000 / 80) * 22` - the RAW byte model for an 8 KB row. Not what a placeholder shows; it is what the memory fits its scale factor AGAINST. */
 const RAW_8KB = 2244;
-/**
- * What an 8 KB row is worth before anything in this chat has been measured.
- * Bytes alone do not predict pixels, so with no evidence the answer is the
- * conservative cap rather than the raw model.
- */
+/** What an 8 KB row is worth before anything in this chat has been measured. Bytes alone do not predict pixels, so with no evidence the answer is the conservative cap rather than the raw model. */
 const UNCALIBRATED = 320;
 
 function assistantRows(count: number): RowSkeletonEntry[] {
@@ -178,12 +171,8 @@ describe("chat transcript row height memory", () => {
   });
 
   it("reaches the height tall rows in this chat actually draw", () => {
-    // The live regression this exists for: a seeded transcript whose assistant
-    // rows measure ~8200px sat behind a 3200px placeholder, because the base
-    // estimate was clamped BEFORE the scale factor could be applied to it and
-    // the result was clamped again to the same fixed cap. Both clamps had to
-    // move: calibration cannot recover a signal a clamp already flattened, and
-    // a ceiling below the observed distribution is a guaranteed correction.
+    // The live regression this exists for: a seeded transcript whose assistant rows measure ~8200px sat behind a 3200px placeholder, because the base estimate was clamped BEFORE the scale factor could be applied to it and the result was clamped again to the same fixed cap.
+    // Both clamps had to move: calibration cannot recover a signal a clamp already flattened, and a ceiling below the observed distribution is a guaranteed correction.
     const memory = createChatTranscriptRowHeightMemory();
     const rows = Array.from({ length: 4 }, (_unused, index) =>
       entry({ rowId: `row-${index}`, role: "assistant", byteLength: 409_600 }),
@@ -206,11 +195,8 @@ describe("chat transcript row height memory", () => {
   });
 
   it("separates two roles that carry the same bytes and render 39x apart", () => {
-    // Measured off a real 403-row transcript: user rows averaged 31,612 bytes
-    // and drew 212px (a clamped bubble) while assistant rows averaged 30,902
-    // bytes and drew 8,224px. Any single bytes-to-pixels rule is wrong for one
-    // of them by more than an order of magnitude, which is the whole reason
-    // the scale factor is kept per role.
+    // Measured off a real 403-row transcript: user rows averaged 31,612 bytes and drew 212px (a clamped bubble) while assistant rows averaged 30,902 bytes and drew 8,224px.
+    // Any single bytes-to-pixels rule is wrong for one of them by more than an order of magnitude, which is the whole reason the scale factor is kept per role.
     const memory = createChatTranscriptRowHeightMemory();
     const users = Array.from({ length: 4 }, (_unused, index) =>
       entry({ rowId: `u-${index}`, role: "user", byteLength: 31_612 }),
@@ -338,9 +324,7 @@ describe("chat transcript row height memory", () => {
       });
     }
 
-    // Every row measured 200, so the average is 200 whatever survived eviction
-    // - the assertion is that the running total was decremented with it rather
-    // than left counting rows the table no longer holds.
+    // Every row measured 200, so the average is 200 whatever survived eviction - the assertion is that the running total was decremented with it rather than left counting rows the table no longer holds.
     expect(memory.placeholderHeight(null)).toBe(200);
     // The oldest entries are gone; the newest are still exact.
     expect(
@@ -368,9 +352,8 @@ describe("row height memory across a layout width change", () => {
 
     memory.observeLayoutBasis({ width: 1200, fontSizePx: 16 });
 
-    // Not re-scaled - discarded. A height measured in a narrow tile is not a
-    // better answer than the estimate for the same row in a wide one, so the
-    // fallback is the no-evidence cap rather than the stale exact number.
+    // Not re-scaled - discarded.
+    // A height measured in a narrow tile is not a better answer than the estimate for the same row in a wide one, so the fallback is the no-evidence cap rather than the stale exact number.
     expect(memory.placeholderHeight(row)).toBe(UNCALIBRATED);
   });
 
@@ -392,19 +375,14 @@ describe("row height memory across a layout width change", () => {
 
     memory.observeLayoutBasis({ width: 1200, fontSizePx: 16 });
 
-    // The pooled factor is `sum(measured) / sum(estimated)` over rows measured
-    // at 600px. Keeping it would carry that geometry into every placeholder
-    // drawn before the first row is remeasured - which is precisely the set of
-    // rows this module exists to place.
+    // The pooled factor is `sum(measured) / sum(estimated)` over rows measured at 600px.
+    // Keeping it would carry that geometry into every placeholder drawn before the first row is remeasured - which is precisely the set of rows this module exists to place.
     expect(memory.placeholderHeight(unseen)).toBe(UNCALIBRATED);
   });
 
   it("adopts the first width without discarding what was measured before it", () => {
-    // LegendList measures inside its own layout effect, which runs BEFORE the
-    // one that reports width, so the opening commit's heights are always
-    // recorded against no baseline. Treating that first report as a change
-    // would throw away the tail calibration - the only evidence available
-    // before the reader has scrolled anywhere.
+    // LegendList measures inside its own layout effect, which runs BEFORE the one that reports width, so the opening commit's heights are always recorded against no baseline.
+    // Treating that first report as a change would throw away the tail calibration - the only evidence available before the reader has scrolled anywhere.
     const memory = createChatTranscriptRowHeightMemory();
     const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
     memory.observeSkeleton([row]);
@@ -436,9 +414,8 @@ describe("row height memory across a layout width change", () => {
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
     memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
 
-    // A hidden tab or an unmounted tile measures 0 wide. Adopting that as the
-    // baseline would discard the whole memory, and then discard it again when
-    // the real width came back.
+    // A hidden tab or an unmounted tile measures 0 wide.
+    // Adopting that as the baseline would discard the whole memory, and then discard it again when the real width came back.
     memory.observeLayoutBasis({ width: 0, fontSizePx: 16 });
 
     expect(memory.placeholderHeight(row)).toBe(4100);

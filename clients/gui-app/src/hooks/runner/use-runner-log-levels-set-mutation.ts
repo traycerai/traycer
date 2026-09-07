@@ -17,12 +17,7 @@ interface SetLogLevelInput {
   readonly level: LogLevel;
 }
 
-/**
- * Persists one log threshold through the desktop platform bridge. `set` returns
- * the full new snapshot (response equals state), so it is written straight into
- * the query cache rather than refetched, and the renderer's own threshold is
- * kept in lockstep with the desktop level.
- */
+/** `set` returns the full new snapshot (response equals state), so it is written straight into the query cache rather than refetched, and the renderer's own threshold is kept in lockstep with the desktop level. */
 export function useRunnerLogLevelsSet() {
   const queryClient = useQueryClient();
   return useMutation({

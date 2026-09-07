@@ -1,12 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-/**
- * A service controller has many platform-specific actuator edges. Command
- * facades establish this scope once, while platform code consumes it again
- * immediately before each write, deletion, subprocess, or signal. Legacy
- * callers intentionally run without a scope; they retain the pre-cutover
- * execution path and cannot accidentally receive a stale contender token.
- */
+/** A service controller has many platform-specific actuator edges. Command facades establish this scope once, while platform code consumes it again immediately before each write, deletion, subprocess, or signal. */
 const mutationAuthority = new AsyncLocalStorage<() => Promise<void>>();
 const authorityFailures = new WeakSet<object>();
 
@@ -38,11 +32,8 @@ export async function withServiceMutationAuthority<T>(
     try {
       return await run();
     } catch (cause) {
-      // A composite may fail inside a publisher, retry hook, or platform
-      // controller after its first verifier but before the next explicit
-      // actuator check. Re-probe before surfacing the original error: if the
-      // capability disappeared, callers must park/abort rather than swallow
-      // it as an ordinary post-swap warning and continue a stale sequence.
+      // A composite may fail inside a publisher, retry hook, or platform controller after its first verifier but before the next explicit actuator check.
+      // Re-probe before surfacing the original error: if the capability disappeared, callers must park/abort rather than swallow it as an ordinary post-swap warning and continue a stale sequence.
       await verifyServiceMutationAuthority();
       throw cause;
     }

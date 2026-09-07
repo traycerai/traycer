@@ -8,26 +8,8 @@ export interface SwitcherTreeNode {
 const NO_NODES: ReadonlyArray<SwitcherTreeNode> = Object.freeze([]);
 
 /**
- * Re-arranges an already-ordered record slice into the nested shape the list
- * renders, so depth is the structure itself rather than a number travelling
- * beside it - the same choice the desktop sidebar's tree makes, and what lets
- * both surfaces expose their nesting through `role="group"` rather than
- * asserting it with an attribute.
- *
- * Depth is measured over the records PRESENT in the slice, not over the epic's
- * full tree. A record whose parent the facet filters removed is returned as a
- * root rather than nested under a row that is not on screen, which is what lets
- * this surface keep narrowing by plain membership - no ancestor expansion -
- * now that it draws nesting: a match is still shown, and shown at a depth that
- * describes the list the user is actually looking at.
- *
- * Sibling order is the slice's own order, so whatever the epic's sort decided
- * still decides. Nesting regroups; it never re-sorts.
- *
- * Every input record appears exactly once. A record no root reaches - a parent
- * cycle in a malformed tree - is adopted as a root after the walk rather than
- * dropped, because a row the user cannot see at all is worse than one whose
- * position is arbitrary.
+ * Re-arranges an already-ordered record slice into the nested shape the list renders, so depth is the structure itself rather than a number travelling beside it - the same choice the desktop sidebar's tree makes, and what lets both surfaces expose their nesting through `role="group"` rather than asserting it with an attribute.
+ * A record whose parent the facet filters removed is returned as a root rather than nested under a row that is not on screen, which is what lets this surface keep narrowing by plain membership - no ancestor expansion - now that it draws nesting: a match is still shown, and shown at a depth that describes the list the user is actually looking at.
  */
 export function buildSwitcherArtifactTree(
   records: ReadonlyArray<EpicTreeRecord>,

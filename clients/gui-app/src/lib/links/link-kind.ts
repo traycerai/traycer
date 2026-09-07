@@ -1,10 +1,8 @@
 import type { LinkKindSetting } from "@/stores/settings/settings-store";
 
 /**
- * Where a clicked URL came from (A1, A2). The four `LinkKindSetting` kinds
- * answer to the user's in-app/external setting; the rest are always external -
- * auth flows, provider docs, billing/account pages, and app pages (release
- * notes, report issue, OS deep links) have no in-app meaning.
+ * Where a clicked URL came from (A1, A2).
+ * The four `LinkKindSetting` kinds answer to the user's in-app/external setting; the rest are always external - auth flows, provider docs, billing/account pages, and app pages (release notes, report issue, OS deep links) have no in-app meaning.
  */
 export type LinkKind = LinkKindSetting | "auth" | "docs" | "account" | "app";
 

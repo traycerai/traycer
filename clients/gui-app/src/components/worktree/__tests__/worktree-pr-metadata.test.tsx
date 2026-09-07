@@ -87,7 +87,6 @@ const BINDING: WorktreeBinding = {
   ],
 };
 
-/** An owner running directly in a folder - no managed worktree behind it. */
 const PLAIN_FOLDER_BINDING: WorktreeBinding = {
   entries: [
     {
@@ -214,9 +213,8 @@ describe("worktree PR metadata", () => {
       }),
     ]);
 
-    // The visible label carries no state word - the glyph encodes it. The ARIA
-    // label still spells it out, because the glyph is `aria-hidden` and is
-    // therefore the one thing a screen reader cannot read.
+    // The ARIA label still spells it out, because the glyph is `aria-hidden` and is therefore the one thing a
+    // screen reader cannot read.
     expect(references).toMatchObject([
       {
         label: "#42",
@@ -234,11 +232,8 @@ describe("worktree PR metadata", () => {
   });
 
   it("emits one reference per PR when two of an owner's directories report the same one", () => {
-    // Two distinct running directories of the same repo, both sitting on the
-    // same PR. The reference key is built from the PR number and URL, not the
-    // directory, so before dedup both rows carried an identical `key` - a
-    // duplicate React key wherever they render as a list, and a repeated icon
-    // for a single pull request.
+    // The reference key is built from the PR number and URL, not the directory, so before dedup both rows carried
+    // an identical `key`.
     const references = worktreePrReferences([
       worktree({ worktreePath: "/worktrees/app/feature-login" }),
       worktree({ worktreePath: "/worktrees/app/feature-login-copy" }),
@@ -281,11 +276,8 @@ describe("worktree PR metadata", () => {
   });
 
   it("reads a plain folder's branch off its workspace summary, not the worktree walk", () => {
-    // `worktree.listAllForHost` walks MANAGED WORKTREES, so a folder the owner
-    // runs in directly is never in it, and a workspace entry's own `branch` is
-    // null (that field records the branch a WORKTREE binding was created on).
-    // With only those two sources the row read "No branch" however many times
-    // it was refreshed - no amount of re-deriving turns a null into a branch.
+    // With only those two sources the row read "No branch" however many times it was refreshed - no amount of
+    // re-deriving turns a null into a branch.
     const items = ownerWorkspaceMetadataItems(
       PLAIN_FOLDER_BINDING,
       [],
@@ -302,10 +294,8 @@ describe("worktree PR metadata", () => {
   });
 
   it("prefers the folder's own disk row over the repo's main one", () => {
-    // When the folder the owner runs in is ITSELF a worktree of some other
-    // checkout, the `isMain` row names a different directory on a different
-    // branch. Falling back to it would confidently report the wrong branch,
-    // which is worse than the "No branch" it replaced.
+    // Falling back to it would confidently report the wrong branch, which is worse than the "No branch" it
+    // replaced.
     const items = ownerWorkspaceMetadataItems(
       PLAIN_FOLDER_BINDING,
       [],
@@ -360,9 +350,8 @@ describe("worktree PR metadata", () => {
         "https://github.com/acme/app/pull/42",
       );
       expect(link.className).toContain("inline-flex");
-      // Two glyphs: the leading state icon (the pill's only state signal) and
-      // the trailing external-link affordance, which is mounted at all times
-      // and revealed by opacity so hovering a row of pills cannot reflow it.
+      // Two glyphs: the leading state icon (the pill's only state signal) and the trailing external-link affordance,
+      // which is mounted at all times and revealed by opacity so hovering a row of pills cannot reflow it.
       expect(link.querySelectorAll("svg")).toHaveLength(2);
       const external = link.querySelector(".lucide-external-link");
       expect(external).not.toBeNull();
@@ -457,9 +446,8 @@ describe("worktree PR metadata", () => {
     );
     expect(link.getAttribute("data-pr-state")).toBe("open");
     expect(within(ownerContent).getByText("#42")).toBeTruthy();
-    // jsdom can't reproduce Chromium making an overflowing scroll container an
-    // implicit tab stop - assert the explicit opt-out is present instead
-    // (verified against real Chromium separately; see the ticket notes).
+    // jsdom can't reproduce Chromium making an overflowing scroll container an implicit tab stop - assert the
+    // explicit opt-out is present instead (verified against real Chromium separately; see the ticket notes).
     expect(
       screen
         .getByTestId("owner-workspace-metadata-content")
@@ -496,9 +484,8 @@ describe("worktree PR metadata", () => {
   });
 
   it("sends a meta-click straight to openLink instead of the in-app PR view", () => {
-    // Cmd/Ctrl-click is the platform gesture for "open this where it
-    // actually lives" - it must bypass `openPrInApp` even though one is
-    // wired up, and route through `openLink` instead.
+    // Cmd/Ctrl-click is the platform gesture for "open this where it actually lives" - it must bypass
+    // `openPrInApp` even though one is wired up, and route through `openLink` instead.
     const opened: WorktreePrReference[] = [];
     renderWithProviders(
       <WorktreePrPills
@@ -628,26 +615,20 @@ describe("worktree PR metadata", () => {
           openPrInApp={null}
         />,
       );
-      // The owner preview is a hover-preview card on the normal `bg-popover`
-      // surface (see hover-preview-surface.ts), not the inverted tooltip chip,
-      // so there is exactly one pill palette - no inverse variant to drift.
+      // The owner preview is a hover-preview card on the normal `bg-popover` surface (see hover-preview-surface.ts),
+      // not the inverted tooltip chip, so there is exactly one pill palette - no inverse variant to drift.
       const pill = screen.getByTestId("worktree-context-pr-pill");
       const pillTokens = pill.className.split(/\s+/);
       expect(pillTokens).toContain(bgClass);
-      // The LABEL is plain body text. It carries no state - the word "Open" is
-      // gone from it - so it needs no per-state ramp, and `text-foreground` is
-      // already contrast-checked against every preset by the theme itself.
+      // It carries no state - the word "Open" is gone from it - so it needs no per-state ramp, and `text-foreground`
+      // is already contrast-checked against every preset by the theme itself.
       expect(pillTokens).toContain("text-foreground");
       expect(
         pillTokens.filter((token) => /^text-(green|red|purple)-/.test(token)),
       ).toEqual([]);
 
-      // The GLYPH is where the state went, which makes it a graphical object
-      // required to understand the content: WCAG 1.4.11's 3:1 floor, not the
-      // 4.5:1 body-text one the coloured label used to be held to. It carries
-      // the same `-800`/`-300` tokens the sidebar's icon variant does, from the
-      // shared palette - the ramp did not become moot when the label lost its
-      // colour, it moved.
+      // It carries the same `-800`/`-300` tokens the sidebar's icon variant does, from the shared palette - the ramp
+      // did not become moot when the label lost its colour, it moved.
       const glyphTokens = (
         within(pill)
           .getByTestId("worktree-pr-pill-state-glyph")
@@ -656,10 +637,8 @@ describe("worktree PR metadata", () => {
       expect(glyphTokens).toContain(lightGlyphClass);
       expect(glyphTokens).toContain(darkGlyphClass);
 
-      // Resolve the real ratio per preset: the glyph sits on the pill's own 10%
-      // state tint composited over the card's `--popover`, which several
-      // presets tint away from the default white/near-black (Catppuccin,
-      // Gruvbox, Tokyo Night, Everforest, …).
+      // Resolve the real ratio per preset: the glyph sits on the pill's own 10% state tint composited over the
+      // card's `--popover`, which several presets tint away from the default white/near-black (Catppuccin, Gruvbox.
       const failures: string[] = [];
       for (const [preset, surfaces] of Object.entries(LIGHT_THEME_SURFACES)) {
         const ratio = contrastRatio(
@@ -680,11 +659,8 @@ describe("worktree PR metadata", () => {
   );
 
   it("holds both PR-state surfaces to one palette so neither can drift", () => {
-    // The two variants are separate components (the hover card's tinted pill
-    // and the sidebar row's icon-only span) that had already diverged once: the
-    // icon variant documented itself as carrying "the same validated tokens as
-    // the pill" while the pill had since moved to an unchecked `-600`/`-400`.
-    // They now read the same map, and this fails if either stops.
+    // The two variants are separate components (the hover card's tinted pill and the sidebar row's icon-only span)
+    // that had already diverged once.
     for (const state of ["open", "closed", "merged"] as const) {
       const reference = worktreePrReferences([worktree({ prState: state })])[0];
       renderWithProviders(
@@ -778,10 +754,8 @@ describe("ownerPrReferences", () => {
   });
 
   it("dedupes two owned items that report the same PR url", () => {
-    // Unlike `worktreePrReferences`, dedup here happens across the epic's
-    // PR-list ITEMS directly, not across running directories - two items
-    // pointing at the same url (a superproject row and a since-merged
-    // duplicate sweep, say) must still collapse to one reference.
+    // Unlike `worktreePrReferences`, dedup here happens across the epic's PR-list items directly, not across
+    // running directories.
     const items: readonly PrLightItem[] = [
       prLightItem({ linkGroupKey: "/worktrees/app/feature-login" }),
       prLightItem({ linkGroupKey: "/worktrees/app/feature-login-copy" }),
@@ -807,15 +781,8 @@ describe("ownerPrReferences", () => {
   });
 });
 
-/**
- * The three ways this block can have nothing to show, and why they must not
- * collapse into one message.
- *
- * "No workspace linked" is a CLAIM ABOUT THE OWNER - that it runs nowhere. It
- * was previously printed whenever the binding happened to be null at render
- * time, which made it the answer for two states it has no right to speak for:
- * a read still in flight, and a read that could not be issued at all.
- */
+/** The three ways this block can have nothing to show, and why they must not collapse into one message. "No
+ * workspace linked" is a claim about the owner - that it runs nowhere. */
 describe("owner workspace metadata empty states", () => {
   afterEach(() => {
     cleanup();
@@ -855,9 +822,8 @@ describe("owner workspace metadata empty states", () => {
   });
 
   it("reports an unreachable host instead of spinning forever", () => {
-    // The dead end: with no client the query is gated off, so it holds
-    // TanStack's `pending` status with nothing in flight. A spinner here waits
-    // on an event that never arrives, so this state outranks it.
+    // The dead end: with no client the query is gated off, so it holds TanStack's `pending` status with nothing in
+    // flight. A spinner here waits on an event that never arrives, so this state outranks it.
     renderEmpty({ pending: true, hostUnavailable: true, error: false });
 
     expect(
@@ -868,9 +834,8 @@ describe("owner workspace metadata empty states", () => {
   });
 
   it("keeps showing folders through a refetch rather than flashing a spinner", () => {
-    // The other half of gating on items rather than on `binding === null`: an
-    // owner that HAS folders must not lose them to a loading state every time
-    // the card re-asks the host.
+    // The other half of gating on items rather than on `binding === null`: an owner that has folders must not lose
+    // them to a loading state every time the card re-asks the host.
     renderWithProviders(
       <OwnerWorkspaceMetadataContent
         binding={BINDING}
@@ -897,10 +862,8 @@ describe("owner workspace metadata association references", () => {
   });
 
   it("renders an association reference for a plain-folder owner with no managed worktree", () => {
-    // Association references key off `item.runPath`, not `item.worktree` -
-    // a plain folder's `item.worktree` is always null (the worktree walk
-    // never sees it), which is exactly the case the old
-    // `item.worktree === null ? null : <WorktreePrPills .../>` gate dropped.
+    // Association references key off `item.runPath`, not `item.worktree` - a plain folder's `item.worktree` is
+    // always null (the worktree walk never sees it), which is exactly the case the old `item.worktree === null ?
     renderWithProviders(
       <OwnerWorkspaceMetadataContent
         binding={PLAIN_FOLDER_BINDING}

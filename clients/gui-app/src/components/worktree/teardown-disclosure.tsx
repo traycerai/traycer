@@ -6,11 +6,7 @@ import {
   type FormattedTeardownActor,
 } from "@/lib/worktree/teardown-holder-copy";
 
-/**
- * Compact grouped disclosure for a single-target teardown (rebind commit,
- * Settings force-delete). Actor sentences wrap; hold-kind tags are never
- * shown. Sweep uses {@link TeardownInlineDisclosure} inside each row.
- */
+/** Actor sentences wrap; hold-kind tags are never shown. */
 export function TeardownDisclosure(props: {
   readonly holders: readonly WorktreeBusyHolder[];
   readonly failures?: Readonly<Record<string, string>>;
@@ -50,10 +46,7 @@ export function TeardownDisclosure(props: {
   );
 }
 
-/**
- * Worktree-scoped inline disclosure: heading + wrapping actor sentences,
- * no pooled type tags.
- */
+/** Worktree-scoped inline disclosure: heading + wrapping actor sentences, no pooled type tags. */
 export function TeardownInlineDisclosure(props: {
   readonly holders: readonly WorktreeBusyHolder[];
   readonly heading: string;

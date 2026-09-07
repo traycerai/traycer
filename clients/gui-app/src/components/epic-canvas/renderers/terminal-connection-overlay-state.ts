@@ -7,16 +7,8 @@ export type TerminalConnectionOverlayState =
   | "lost";
 
 /**
- * Resolve which connection overlay (if any) a terminal/TUI tile should show from
- * its session status. `null` means connected/healthy - no overlay. A "lost"
- * session (recoverable - see `TerminalLifecycleStatus`) shows the
- * automatic-recovery spinner until recovery is exhausted, then the manual
- * Reconnect prompt ("reattachable", Architecture §8). "Reaped" is equally
- * terminal for the current handle, but not for the durable terminal identity:
- * the host may already have restored it, so it follows the same bounded
- * recovery path. A running session whose transport is mid-reconnect shows the
- * transient spinner. The initial "creating" window shows nothing (the tile's
- * own loading skeleton covers it).
+ * Resolve which connection overlay (if any) a terminal/TUI tile should show from its session status.
+ * `null` means connected/healthy - no overlay.
  */
 export function resolveTerminalOverlayState(input: {
   readonly status: TerminalLifecycleStatus;

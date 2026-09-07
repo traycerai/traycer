@@ -6,22 +6,8 @@ import {
   hostScopeOptionFixture,
 } from "../host-scope-fixture";
 
-/**
- * Activate is SINGLE-FLIGHT.
- *
- * `makeActive` is fire-and-forget by shape and the button behind it carried no
- * pending state, so a double-click issued two `authority.activate` calls. That
- * write is not cheap and not idempotent by accident: each one validates,
- * persists and re-derives the window's host, and each success fires the app's
- * only `HostSelected` analytics event. Two clicks meant two persists racing to
- * decide the same question and a duplicate event for a preference that landed
- * once.
- *
- * The assertion is the number of WRITES, not whether a button carries a
- * `disabled` attribute. A disabled attribute is what the fix happens to render;
- * the write is what the defect was about, and a future refactor that keeps the
- * attribute while dropping the guard would still be the bug.
- */
+/** That write is not cheap and not idempotent by accident: each one validates, persists and re-derives the
+ * window's host, and each success fires the app's only `HostSelected` analytics event. */
 const activateCalls: string[] = [];
 let resolveActivate: ((result: ActivateResult) => void) | null = null;
 
@@ -48,8 +34,8 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
     }),
 }));
 
-// The scope reads an ambient client only to decide `hasRequestAuthority`; this
-// suite is about the WRITE, so the stub answers "signed in" and nothing else.
+// The scope reads an ambient client only to decide `hasRequestAuthority`; this suite is about the write, so
+// the stub answers "signed in" and nothing else.
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
     getRequestContext: () => ({}),
@@ -97,10 +83,8 @@ describe("Activate is single-flight", () => {
   });
 
   it("refuses a SECOND host while the first is still settling", () => {
-    // The sharper arm: a guard that only de-duplicated the same id would let
-    // two different hosts race to decide the same window's host, and the
-    // loser would be whichever persisted last rather than whichever was
-    // clicked last.
+    // The sharper arm: a guard that only de-duplicated the same id would let two different hosts race to decide
+    // the same window's host.
     const { result } = renderScope();
 
     act(() => {
@@ -112,9 +96,8 @@ describe("Activate is single-flight", () => {
   });
 
   it("accepts the next activate once the first settles", async () => {
-    // The latch must CLEAR, or the fix trades a double-write for a button
-    // that never works again - and an assertion that only ever proves
-    // "exactly one call" would pass for that build too.
+    // The latch must clear, or the fix trades a double-write for a button that never works again - and an
+    // assertion that only ever proves "exactly one call" would pass for that build too.
     const { result } = renderScope();
 
     act(() => {

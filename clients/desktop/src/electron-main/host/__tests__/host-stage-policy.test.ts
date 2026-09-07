@@ -50,10 +50,6 @@ describe("resolveHostChannelMode", () => {
   });
 });
 
-// The catalog predicate itself is owned and table-tested by
-// `@traycer-clients/shared/host-version/release-line` - the same definition the
-// CLI's `filterHostAvailableVersions` consumes, so the two cannot drift. What
-// is tested here is only how this module USES it.
 describe("requiresPreReleaseListing", () => {
   it("asks for the pre-release view in both non-stable modes", () => {
     expect(

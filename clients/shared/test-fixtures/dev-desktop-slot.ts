@@ -1,14 +1,10 @@
 /**
- * Shared `DEV_DESKTOP_SLOT` env-var scoping helper for tests that exercise
- * dev-desktop-slot-aware path/label resolution. Temporarily sets the slot
- * for the duration of `fn`, then restores whatever value (or absence) was
- * there before - so tests never leak the override into a sibling test.
+ * Shared `DEV_DESKTOP_SLOT` env-var scoping helper for tests that exercise dev-desktop-slot-aware path/label resolution.
+ * Temporarily sets the slot for the duration of `fn`, then restores whatever value (or absence) was there before - so tests never leak the override into a sibling test.
  */
 import { DEV_DESKTOP_SLOT_ENV } from "../platform/dev-desktop-slot";
 
-// Sets the slot and returns a restore callback - the one piece of state
-// (previous value, present or not) both the sync and async variants below
-// need to save/set/restore identically.
+// Sets the slot and returns a restore callback - the one piece of state (previous value, present or not) both the sync and async variants below need to save/set/restore identically.
 function setDevDesktopSlotEnv(slot: string): () => void {
   const previous = process.env[DEV_DESKTOP_SLOT_ENV];
   process.env[DEV_DESKTOP_SLOT_ENV] = slot;

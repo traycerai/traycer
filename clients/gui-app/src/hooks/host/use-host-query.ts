@@ -46,10 +46,7 @@ type BaseHostQueryTanstackOptions<TData> = Omit<
   UseQueryOptions<TData, HostRpcError, TData>,
   "queryKey" | "queryFn" | "refetchInterval"
 > & {
-  /**
-   * Condition queries participate in table-owned polling by default. Fixed
-   * queries opt in to their table-owned cadence with `poll: true`.
-   */
+  /** Condition queries participate in table-owned polling by default. */
   readonly poll?: boolean;
 };
 
@@ -69,31 +66,14 @@ export interface UseHostQueryWithResponseMapOptions<
   readonly client: HostRequester<Registry> | null;
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
-  /**
-   * Extra cache identity that is not sent to the host. Use this when the RPC
-   * request addresses a stable resource id but the cached representation must
-   * vary by a newer content identity, such as a blob hash or revision.
-   */
+  /** Use this when the RPC request addresses a stable resource id but the cached representation must vary by a newer content identity, such as a blob hash or revision. */
   readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
-  /**
-   * Pass-through TanStack options (`enabled`, `staleTime`, etc.). Query key
-   * and queryFn are owned by this hook so the invalidation contract holds.
-   */
+  /** Pass-through TanStack options (`enabled`, `staleTime`, etc.). */
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
   /** Captures cache-side ordering state immediately before request dispatch. */
   readonly captureRequestContext?: () => TRequestContext;
   /**
-   * Transforms the raw RPC response into what TanStack caches/returns for
-   * this query. Runs inside the queryFn, so its return value - not the raw
-   * response - is what ends up in the cache. `queryClient`/`queryKey` are
-   * handed in (the exact key this hook computed for this call) so a caller
-   * can fold the fresh response into an accumulator that also reads this
-   * same slot's previous value via `queryClient.getQueryData(queryKey)` -
-   * e.g. the `host.getRateLimitUsage` provider-pull envelope
-   * (`mapResponseToProviderRateLimitEnvelope`), which needs every lane that
-   * writes that key family to agree on the cached shape. `useHostQuery` is
-   * this function with `mapResponse` fixed to the identity; reach for this
-   * only when the cached shape must differ from the raw wire response.
+   * Map the wire response to the cached shape inside queryFn. Reach for this only when the cache must differ from the raw response; `useHostQuery` is the identity.
    */
   readonly mapResponse: (args: {
     readonly response: ResponseOfMethod<Registry, Method>;
@@ -103,11 +83,7 @@ export interface UseHostQueryWithResponseMapOptions<
   }) => TData;
 }
 
-/**
- * `useHostQuery`'s options, derived from `UseHostQueryWithResponseMapOptions`
- * (dropping `mapResponse`, which `useHostQuery` fixes to the identity) so the
- * two option shapes can't drift out of sync.
- */
+/** `useHostQuery`'s options, derived from `UseHostQueryWithResponseMapOptions` (dropping `mapResponse`, which `useHostQuery` fixes to the identity) so the two option shapes can't drift out of sync. */
 export type UseHostQueryOptions<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
@@ -121,14 +97,7 @@ export type UseHostQueryOptions<
 >;
 
 /**
- * Thin typed wrapper over TanStack `useQuery`.
- *
- * Emits a request through the bound `HostClient` every time the active
- * host id changes - `["host", hostId, method, params]` is what
- * `HostClient` invalidates, so the query refetches automatically when the
- * client announces a host/auth/availability transition. When no client is
- * bound (or readiness has not yet settled) the query is disabled to avoid a
- * `HostRpcError` blast.
+ * Key is `["host", hostId, method, params]`, which `HostClient` invalidates on host/auth/availability transitions. Unbound or unreadiness disables the query.
  */
 export function useHostQuery<
   Registry extends HostRpcRegistry,
@@ -146,12 +115,7 @@ export function useHostQuery<
   });
 }
 
-/**
- * `useHostQuery` generalized with a caller-supplied response-to-cache
- * transform. See `UseHostQueryWithResponseMapOptions.mapResponse` for why
- * this exists instead of a plain `select` (which never persists back into
- * the shared cache entry other observers of the same key read).
- */
+/** See `UseHostQueryWithResponseMapOptions.mapResponse` for why this exists instead of a plain `select` (which never persists back into the shared cache entry other observers of the same key read). */
 export function useHostQueryWithResponseMap<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
@@ -283,10 +247,7 @@ export interface UseHostMutationOptions<
   ) => void;
 }
 
-/**
- * Thin typed wrapper over TanStack `useMutation` that dispatches the
- * caller's params straight into `HostClient.request`.
- */
+/** Thin typed wrapper over TanStack `useMutation` that dispatches the caller's params straight into `HostClient.request`. */
 export function useHostMutation<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -331,14 +292,7 @@ export function useHostMutation<
   });
 }
 
-/**
- * `useHostMutation` for long-poll methods whose response is contractually
- * silent until a domain event fires (e.g. `providers.awaitLogin` blocks until
- * the OAuth child terminates): the request runs with the caller's extended
- * response-frame budget instead of the transport's default frame timeout,
- * which would misread that silence as a dead host. Dial and handshake keep
- * the transport defaults, so an unreachable host still fails fast.
- */
+/** `providers.awaitLogin` blocks until the OAuth child terminates): the request runs with the caller's extended response-frame budget instead of the transport's default frame timeout, which would misread that silence as a dead host. */
 export function useHostMutationWithResponseTimeout<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -395,14 +349,7 @@ export function hostClientUnavailableError(method: string): HostRpcError {
 }
 
 /**
- * Wraps a mutation's lifecycle callbacks (`onMutate` / `onSuccess` /
- * `onSettled`) so a throw inside them is normalized to `HostRpcError`.
- * TanStack stores a lifecycle throw in `mutation.state.error`, hands it to
- * `onError`, and rejects `mutateAsync` with it - all surfaces the declared
- * `HostRpcError` generic covers but the mutationFn boundary cannot reach.
- * TanStack awaits every mutation lifecycle callback, so the async wrappers
- * do not change observable ordering. Used by `useHostMutation` and by the
- * bespoke `useMutation` producers that declare a `HostRpcError` generic.
+ * Normalize throws inside mutation lifecycle callbacks to `HostRpcError`. TanStack stores those in `state.error` and `mutateAsync`; the mutationFn boundary cannot reach them.
  */
 export function withHostMutationLifecycleBoundary<TData, TVariables, TContext>(
   method: string,

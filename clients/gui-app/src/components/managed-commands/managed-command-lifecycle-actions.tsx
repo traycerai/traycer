@@ -29,37 +29,16 @@ export interface ManagedCommandLifecycleActionsProps {
   readonly className: string | undefined;
 }
 
-/**
- * Start / stop / delete for one managed command, plus the one setting a person
- * edits on it: whether a host restart brings it back. The whole human
- * capability set, shared by the list row and the output window header.
- *
- * Start appears only where nothing is running (it is idempotent on the host
- * either way, but offering it against a live process would read as a restart
- * it is not). Delete confirms first, and the confirmation names the one thing
- * a viewer cannot get back: the command's entire output history.
- *
- * The relaunch switch is a toggle button rather than a checkbox because it sits
- * in a row of icon buttons and reads as one of them; its pressed state and
- * label carry the value. It is the person's override of what the agent asked
- * for at run time - the case it exists for is a shell the host keeps
- * relaunching that nobody wants relaunched.
- *
- * The switch is offered only when the command's host advertised
- * `managedCommand.configure`: the method is off the released floor, so an
- * older host negotiates it away rather than failing the handshake, and a
- * switch against such a host could only fail. (Its commands still carry the
- * flag - `true`, the legacy behaviour - through the schema default.)
- */
+/** Delete confirms first, and the confirmation names the one thing a viewer cannot get back: the command's
+ * entire output history. */
 export function ManagedCommandLifecycleActions(
   props: ManagedCommandLifecycleActionsProps,
 ) {
   const { command, epicId, hostId } = props;
   const start = useManagedCommandStart();
   const stop = useManagedCommandStop();
-  // The command's chat may be running a Stop all batch that already carries
-  // this command - gating here, at the shared action, covers every surface
-  // that renders a stop (menu row, output window, panel row) with one rule.
+  // The command's chat may be running a Stop all batch that already carries this command - gating here, at the
+  // shared action, covers every surface that renders a stop (menu row, output window, panel row) with one rule.
   const stopAllPending = useManagedCommandStopAllIsPending(command.chatId);
   const configure = useManagedCommandConfigure({
     hostId,
@@ -167,15 +146,7 @@ export function ManagedCommandLifecycleActions(
   );
 }
 
-/**
- * Stop alone, for a surface where a managed command is transient "work running
- * right now" rather than a durable object - today the chat's background strip.
- * Delete destroys the command's entire output history, which is not something
- * to put in a row that exists only while the process does; it belongs to the
- * sidebar and the output window, where the command is the subject rather than a
- * passing status. Nothing else is offered either: Start would be dead code in a
- * list that only ever holds running commands.
- */
+/** Nothing else is offered either: Start would be dead code in a list that only ever holds running commands. */
 export function ManagedCommandStopAction(props: {
   readonly command: ManagedCommand;
   readonly epicId: string;

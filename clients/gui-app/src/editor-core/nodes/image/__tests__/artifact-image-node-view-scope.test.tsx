@@ -1,15 +1,4 @@
-/**
- * That the artifact attachment SCOPE actually reaches the image node view.
- *
- * This is a probe, not a formality. The whole lane-arm byte path hangs on React
- * context crossing into a Tiptap NodeView, which is rendered through a portal
- * created by `ReactNodeViewRenderer` rather than as an ordinary child of the
- * provider. If it does not cross, `useArtifactAttachmentScope()` reads `null`
- * inside the node view, the fetcher silently takes its no-scope branch, and
- * every artifact image on a lane-backed host stays unavailable - with nothing
- * failing anywhere to say so. An inert fix that looks correct in review is the
- * exact failure this file exists to exclude.
- */
+/** NodeView is portalled by ReactNodeViewRenderer; attachment scope must still reach the image fetcher or lane-backed images fail silently. */
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,12 +13,7 @@ import {
   type ArtifactAttachmentScopeValue,
 } from "@/lib/attachments/artifact-attachment-scope-context";
 
-/**
- * The node view's own hook chain, replaced by one that reports what the scope
- * looks like FROM INSIDE the node view. The real `useAttachmentBlobSrc` would
- * resolve bytes; the only question here is what context it can see when it
- * runs, so this stands in its place and renders the answer.
- */
+/** Stand-in for useAttachmentBlobSrc that reports the scope seen inside the node view; the real hook would resolve bytes. */
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useAttachmentBlobSrc: (): {
     status: "unavailable";

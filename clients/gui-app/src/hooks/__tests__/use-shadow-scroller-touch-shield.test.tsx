@@ -2,12 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 
-/**
- * jsdom has no `TouchEvent` constructor, so these dispatch plain `Event`
- * instances named "touchmove" / "touchstart" - the hook only ever reads
- * `stopPropagation()`, never a Touch-specific payload, so a bubbling plain
- * `Event` exercises the same code path.
- */
+/** jsdom has no `TouchEvent` constructor, so these dispatch plain `Event` instances named "touchmove" / "touchstart" - the hook only ever reads `stopPropagation()`, never a Touch-specific payload, so a bubbling plain `Event` exercises the same code path. */
 function dispatchBubbling(target: Element, type: string): void {
   target.dispatchEvent(new Event(type, { bubbles: true }));
 }

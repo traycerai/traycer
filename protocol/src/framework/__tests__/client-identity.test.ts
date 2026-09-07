@@ -26,21 +26,7 @@ import { sessionOpenPayloadSchema } from "@traycer/protocol/host-transport/mux";
 
 /**
  * The wire half of the client-compatibility epoch handshake.
- *
- * Two properties carry the whole backward story, and both are asserted here
- * against RECONSTRUCTED RELEASED SCHEMAS rather than described in prose:
- *
- *  1. A released OLD peer parsing a NEW frame must STRIP the additive field,
- *     not reject the frame. That is what lets a new client talk to a host that
- *     has never heard of identity.
- *  2. A NEW peer parsing an OLD frame must accept the omission, not fail
- *     validation. That is what lets an old client reach the host's deliberate
- *     legacy-epoch verdict instead of an unactionable "malformed frame".
- *
- * The released schemas below are hand-reconstructed from the shapes that
- * shipped before this change. That is a real limitation - they are a model of
- * the released peer, not the released peer - so they are kept minimal and
- * mirror only the members whose presence/absence this test turns on.
+ * A NEW peer parsing an OLD frame must accept the omission, not fail validation.
  */
 
 const RELEASED_MANIFEST = { "host.status": { major: 1, minor: 0 } };
@@ -82,9 +68,8 @@ const REQUIREMENT: ClientCompatibilityRequirement = {
 
 describe("client handshake identity", () => {
   it("is cumulative: the current epoch is above the legacy one", () => {
-    // Not a tautology check. A change that made the current epoch equal the
-    // legacy one would silently make every floor unenforceable, and a change
-    // that made it non-integral would make every client `invalid-epoch`.
+    // Not a tautology check.
+    // A change that made the current epoch equal the legacy one would silently make every floor unenforceable, and a change that made it non-integral would make every client `invalid-epoch`.
     expect(isValidCompatibilityEpoch(CURRENT_CLIENT_COMPATIBILITY_EPOCH)).toBe(
       true,
     );
@@ -111,9 +96,6 @@ describe("client handshake identity", () => {
         appVersion: "1.2.0",
       }),
     ).toEqual({ kind: "desktop", compatibilityEpoch: 2, appVersion: "1.2.0" });
-    // The KEY is absent, not present-and-undefined: zod's only tolerant shape
-    // is `.optional()`, and `JSON.stringify` drops an undefined value anyway -
-    // asserting the key set is what pins that the wire frame has no hole in it.
     const withoutVersion = toClientHandshakeIdentity({
       kind: "cli",
       compatibilityEpoch: 2,
@@ -126,9 +108,7 @@ describe("client handshake identity", () => {
   });
 
   it("leaves epoch VALIDITY to the policy evaluator, not the wire schema", () => {
-    // A non-positive / non-integer epoch must PARSE, so the host can answer
-    // `invalid-epoch` with an actionable remedy instead of killing the frame
-    // as malformed - which is what a `.int().positive()` here would produce.
+    // A non-positive / non-integer epoch must PARSE, so the host can answer `invalid-epoch` with an actionable remedy instead of killing the frame as malformed - which is what a `.int().positive()` here would produce.
     for (const compatibilityEpoch of [0, -3, 2.5]) {
       expect(
         clientHandshakeIdentitySchema.safeParse({ compatibilityEpoch }).success,
@@ -155,20 +135,7 @@ describe("client handshake identity", () => {
 describe("strict SemVer for the diagnostic version", () => {
   /**
    * COVERED HERE BECAUSE OSS CI CANNOT SEE THE PARITY SUITE.
-   *
-   * `isStrictSemVer` is exported protocol surface with two consumers that live
-   * in the internal build repo - the host's baked-policy resolver and the
-   * release stamper - and the suite that pins them against each other
-   * (`scripts/__tests__/client-identity-policy-parity.test.mjs`) is in that
-   * repo too. So an OSS-only change to this function has NO coverage at all
-   * from this side, which is precisely the change most likely to be made by
-   * someone who has never seen the internal half.
-   *
-   * The cases are not a sample of realistic versions: they are the exact
-   * inputs on which a looser grammar differs from this one. `semver.valid`
-   * accepts a leading `v` and surrounding whitespace and returns the CLEANED
-   * form, and a naive `\d+` grammar accepts leading zeros - both of which
-   * shipped once and produced artifacts the host refused at startup.
+   * So an OSS-only change to this function has NO coverage at all from this side, which is precisely the change most likely to be made by someone who has never seen the internal half.
    */
   it.each([
     "1.2.0",
@@ -188,9 +155,6 @@ describe("strict SemVer for the diagnostic version", () => {
     ["a tab", "\t1.2.0"],
     ["an embedded newline", "1.2.0\n"],
   ])("REFUSES %s (%j) - the grammar is anchored", (_label, version) => {
-    // Anchoring is what makes the release stamper and the host agree: a
-    // validator built on `semver.valid` accepts these and returns a cleaned
-    // string, while whatever wrote the RAW value keeps the original.
     expect(isStrictSemVer(version)).toBe(false);
   });
 
@@ -211,10 +175,8 @@ describe("strict SemVer for the diagnostic version", () => {
   );
 
   it("accepts a version exactly at the diagnostic ceiling and refuses one past it", () => {
-    // The ceiling exists because SemVer places NO bound on prerelease
-    // identifiers: `1.0.0-` plus megabytes of `[0-9A-Za-z-]` is a *valid*
-    // version, and this value reaches a host log line, a fatal payload, and
-    // GUI copy. Asserted at the boundary so the number cannot drift silently.
+    // The ceiling exists because SemVer places NO bound on prerelease identifiers: `1.0.0-` plus megabytes of `[0-9A-Za-z-]` is a *valid* version, and this value reaches a host log line, a fatal payload, and GUI copy.
+    // Asserted at the boundary so the number cannot drift silently.
     const atCeiling = `1.0.0-${"a".repeat(MAX_DIAGNOSTIC_APP_VERSION_LENGTH - "1.0.0-".length)}`;
     expect(atCeiling.length).toBe(MAX_DIAGNOSTIC_APP_VERSION_LENGTH);
     expect(isStrictSemVer(atCeiling)).toBe(true);
@@ -228,9 +190,8 @@ describe("strict SemVer for the diagnostic version", () => {
   });
 
   it("exposes the pattern as a string so a non-TypeScript consumer can mirror it", () => {
-    // The internal release scripts are CommonJS and cannot import this module,
-    // so they hold a mirror keyed to this exact string. Anchors asserted
-    // explicitly: dropping either is how the two would silently diverge.
+    // The internal release scripts are CommonJS and cannot import this module, so they hold a mirror keyed to this exact string.
+    // Anchors asserted explicitly: dropping either is how the two would silently diverge.
     expect(STRICT_SEMVER_PATTERN.startsWith("^")).toBe(true);
     expect(STRICT_SEMVER_PATTERN.endsWith("$")).toBe(true);
     expect(new RegExp(STRICT_SEMVER_PATTERN, "u").test("1.2.0-rc.2")).toBe(
@@ -360,11 +321,7 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
       clientShouldUpgrade: true,
       hostShouldUpgrade: false,
     });
-    // The reason has to carry the remedy on its own, contradict the old UI's
-    // hard-coded host-update action, and rule out the destructive recovery.
-    // Generic on purpose: a versioned "install 1.2.0" was only ever true for
-    // one client family, and this sentence reaches desktop, CLI, and anything
-    // later whose version chains have nothing to do with each other.
+    // The reason has to carry the remedy on its own, contradict the old UI's hard-coded host-update action, and rule out the destructive recovery.
     expect(parsed.reason).toContain("Update the Traycer app or CLI");
     expect(parsed.reason).toContain("the latest version");
     expect(parsed.reason).toContain("Updating the host again will not help");
@@ -389,9 +346,8 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
   });
 
   it("still parses the deprecated remedy members when they are null", () => {
-    // Current hosts never populate these. They stay on the wire as REQUIRED
-    // nullable members because a REMOVED key is a parse failure for every
-    // client that already shipped a schema requiring them.
+    // Current hosts never populate these.
+    // They stay on the wire as REQUIRED nullable members because a REMOVED key is a parse failure for every client that already shipped a schema requiring them.
     expect(
       clientCompatibilityRequirementSchema.safeParse({
         ...REQUIREMENT,
@@ -402,11 +358,8 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
   });
 
   it("FAILS to parse a requirement that omits a deprecated member entirely", () => {
-    // Required-nullable, not optional. That is the wire-compat guarantee for
-    // shipped clients: they already handle `null`, they do not handle a
-    // missing key. Dropping either member here would turn an actionable
-    // "update your app" into an unactionable malformed fatal for precisely
-    // the population this mechanism exists to reach.
+    // Required-nullable, not optional.
+    // That is the wire-compat guarantee for shipped clients: they already handle `null`, they do not handle a missing key.
     const withoutVersion: Record<string, unknown> = { ...REQUIREMENT };
     delete withoutVersion["minimumKnownClientAppVersion"];
     expect(
@@ -423,11 +376,7 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
 
 describe("upgradeChannel on the requirement", () => {
   /**
-   * `upgradeChannel` is a deprecated, never-populated wire member kept only
-   * for parse compatibility with already-shipped clients (see the schema's
-   * doc comment). The values are inline literals now, deliberately not a
-   * shared exported constant, so this coverage is expressed directly against
-   * the schema rather than iterated over a removed helper.
+   * `upgradeChannel` is a deprecated, never-populated wire member kept only for parse compatibility with already-shipped clients (see the schema's doc comment).
    */
 
   it.each(["stable", "rc", null] as const)("parses %j", (upgradeChannel) => {
@@ -450,20 +399,7 @@ describe("upgradeChannel on the requirement", () => {
 });
 
 describe("hostReleaseChannel on the requirement", () => {
-  /**
-   * OPTIONAL, OPEN STRING. Both halves of that are load-bearing, and they
-   * protect opposite directions:
-   *
-   *  - Optional/absent-tolerant so a NEW client parsing an OLD host's fatal
-   *    does not reject the whole object over a key that host never sent.
-   *  - Open (not an enum) so a NEW host's future line does not fail the
-   *    whole object in a client that has already shipped. Consumers route
-   *    through `hostReleaseChannelAllowsRcRecovery`, which recognizes `rc`
-   *    and treats everything else as no RC routing.
-   *
-   * Making this a closed union would invert that: every future channel
-   * would become a parse failure for the exact clients that need to recover.
-   */
+  /** OPTIONAL, OPEN STRING. */
 
   it("parses when the key is ABSENT (old host → new client)", () => {
     // REQUIREMENT has never carried this member; that is the old-host shape.
@@ -487,10 +423,8 @@ describe("hostReleaseChannel on the requirement", () => {
   );
 
   it("parses an UNKNOWN string rather than failing the whole object", () => {
-    // THE REASON IT IS NOT AN ENUM. A host bakes this from its own build
-    // config; a future line (`canary`, whatever ships next) must still
-    // reach a shipped client as a well-formed requirement, so that client
-    // can route conservatively instead of treating the fatal as malformed.
+    // THE REASON IT IS NOT AN ENUM.
+    // A host bakes this from its own build config; a future line (`canary`, whatever ships next) must still reach a shipped client as a well-formed requirement, so that client can route conservatively instead of treating the.
     const parsed = clientCompatibilityRequirementSchema.safeParse({
       ...REQUIREMENT,
       hostReleaseChannel: "canary",
@@ -503,11 +437,7 @@ describe("hostReleaseChannel on the requirement", () => {
 
 describe("hostReleaseChannelAllowsRcRecovery", () => {
   /**
-   * The one question this answers, and it is deliberately narrow: only the
-   * exact string `rc` authorizes looking for a remedy on the RC line. Written
-   * as a positive match rather than "not stable" so a future channel, a
-   * source build (`dev`), an absent field, and a typo all refuse RC opt-in
-   * instead of accidentally offering it.
+   * The one question this answers, and it is deliberately narrow: only the exact string `rc` authorizes looking for a remedy on the RC line.
    */
 
   it("is true ONLY for the exact string rc", () => {

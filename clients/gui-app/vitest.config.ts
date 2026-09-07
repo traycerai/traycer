@@ -13,40 +13,17 @@ const MAX_TEST_WORKERS = Math.min(
   2,
   Math.max(1, Math.floor(availableParallelism / 2)),
 );
-// `use-workspace-file-list-subscription` is here for the same reason: its
-// pending flag used to be a render-time read of a module-level registry, which
-// the compiler cached at "no entry yet" forever (the file tree's permanent
-// spinner). Only the compiled hook can regress that way, so only the compiled
-// hook can prove the fix. The `pr.*` shared-subscription trio had the same
-// shape (`registry.get(key)` and `entry.lastEvent` read at render).
+// Compile these hooks: a render-time registry read is cached as "no entry yet"
+// forever. Only the compiled hook can regress or prove the fix.
 const REACT_COMPILER_REGRESSION_FILES =
   /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-pr-(?:list|detail)-subscription)\.(?:ts|tsx)$/;
 
 export default defineConfig({
-  // Run the affected composer boundary through the packaged desktop
-  // renderer's compiler preset. The stash regression was invisible when
-  // tests skipped this pass because the compiler may replace a React
-  // imperative-handle facade during an ordinary editor render. The filter
-  // keeps unrelated GUI tests on their existing fast transform path.
+  // Composer boundary through the desktop compiler preset. The compiler may
+  // replace an imperative-handle facade during an ordinary editor render.
   plugins: [
     react(),
-    // This config is ALSO what the browser regressions serve their fixtures
-    // from - every driver in `scripts/*-browser.mjs` spawns vite with
-    // `--config vitest.config.ts`. Without this plugin, `@import "tailwindcss"`
-    // at `src/index.css:1` compiles to NOTHING (there is no `postcss.config.*`
-    // here, so there is no second compile path), and the fixtures render with
-    // the utility classes present on every element and no rules behind them:
-    // `h-8` measured 24px, `DialogFooter`'s `flex` computed `display: block`,
-    // `bg-primary` computed `rgba(0, 0, 0, 0)`.
-    //
-    // That is a harness that lies in the SAFE direction. A fixture asserting
-    // two nodes share a left edge passes trivially when both are unstyled
-    // blocks at the same content edge, and one asserting a control is "filled"
-    // passes-as-transparent - on the fixed tree and the broken one alike. Any
-    // geometric or colour claim measured without this was vacuous.
-    //
-    // jsdom runs are unaffected: vitest does not process CSS by default, so
-    // this changes what the dev server serves, not what the suite transforms.
+    // Browser regressions spawn vite with this config. Without the Tailwind plugin, utility classes have no rules and geometric/colour claims pass vacuously.
     tailwindcss(),
     babel({
       include: REACT_COMPILER_REGRESSION_FILES,
@@ -88,10 +65,8 @@ export default defineConfig({
     ],
   },
   test: {
-    // Anchored to the package directory so siblings whose names merely
-    // CONTAIN "zod" (`zod-to-json-schema`, `@hookform/resolvers/zod`) are
-    // not dragged in. Full rationale for the workaround itself lives in
-    // `clients/desktop/vitest.shared.ts`.
+    // Anchor to the package directory so siblings whose names contain "zod"
+    // are not dragged in.
     server: { deps: { inline: [/[\\/]node_modules[\\/]zod[\\/]/] } },
     environment: "jsdom",
     setupFiles: ["./__tests__/test-browser-apis.ts"],
@@ -108,11 +83,8 @@ export default defineConfig({
     maxWorkers: MAX_TEST_WORKERS,
     testTimeout: 20_000,
     hookTimeout: 20_000,
-    // Don't let a stray post-teardown async error (a timer/socket/microtask
-    // rejecting after a test finished) fail the whole run with exit 1 and no
-    // failing test - the classic intermittent CI flake. The setup file
-    // (`__tests__/test-browser-apis.ts`) still logs every such error, so we keep
-    // visibility instead of silently swallowing it.
+    // Do not fail the run on post-teardown async errors. test-browser-apis.ts
+    // still logs them.
     dangerouslyIgnoreUnhandledErrors: true,
   },
 });

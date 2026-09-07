@@ -15,12 +15,8 @@ export interface UsageTurnDrilldownProps {
   readonly truncated: boolean;
 }
 
-/**
- * Per-turn drill-down: turn (time) → model → tokens → cost/provenance →
- * outcome, newest first (the wire's own row order). Chat-scope-only by
- * design - the summary only populates `turnRows` when the request carried a
- * `chatId` filter.
- */
+/** Per-turn drill-down: turn (time) → model → tokens → cost/provenance → outcome, newest first (the wire's own
+ * row order). */
 export function UsageTurnDrilldown(props: UsageTurnDrilldownProps): ReactNode {
   if (props.rows.length === 0) {
     return (
@@ -56,11 +52,7 @@ function UsageTurnRowItem(props: { readonly row: UsageTurnRow }): ReactNode {
   const { row } = props;
   const tokens = sumTokenTotals(row.tokens);
   return (
-    // `flex-wrap` plus `min-w-*` (not fixed `w-*`) on the value columns:
-    // this row lives in a `w-[min(92vw,32rem)]` dialog, so on a narrow
-    // window the columns' fixed widths used to add up past the content box
-    // and push values out of sight. Now they keep their aligned widths
-    // while there is room, and the trailing ones wrap onto a second line
+    // Now they keep their aligned widths while there is room, and the trailing ones wrap onto a second line
     // instead of overflowing.
     <li
       className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border/40 px-2 py-1.5 text-ui-xs"

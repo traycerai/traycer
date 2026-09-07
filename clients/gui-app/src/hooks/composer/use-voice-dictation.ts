@@ -1,7 +1,4 @@
-/* eslint-disable @typescript-eslint/no-deprecated -- ScriptProcessorNode is used
-   deliberately to capture PCM without a separate AudioWorklet asset (which would
-   need CSP `script-src` widening for `file://`); migrating to AudioWorklet is a
-   follow-up. */
+/* eslint-disable @typescript-eslint/no-deprecated -- ScriptProcessorNode captures PCM without an AudioWorklet asset that would need CSP `script-src` widening for `file://`. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
@@ -23,13 +20,7 @@ export type VoiceDictationState =
   | "transcribing"
   | "error";
 
-/**
- * Which path aborted a dictation attempt. Passed to `fail()` as a required
- * argument - not derived from the message - so the single log line it writes
- * always names the class, and a new failure path cannot be added without
- * declaring one. Two field reports (oss #945, #1003) were root-caused only by
- * elimination because that line did not exist.
- */
+/** Passed to `fail()` as a required argument - not derived from the message - so the single log line it writes always names the class, and a new failure path cannot be added without declaring one. */
 export type DictationFailureClass =
   // No `navigator` (non-browser environment).
   | "capture_unavailable"
@@ -45,7 +36,6 @@ export type DictationFailureClass =
   | "audio_context_not_running"
   // No host stream client at start - the link was down before we asked.
   | "not_connected"
-  // The host answered with an `error` frame.
   | "host_error_frame"
   // The stream dropped mid-session without us closing it.
   | "connection_lost";
@@ -60,12 +50,7 @@ export interface UseVoiceDictationArgs {
 export interface UseVoiceDictation {
   readonly state: VoiceDictationState;
   readonly errorMessage: string | null;
-  /**
-   * Which path produced {@link errorMessage}, or null when there is no error.
-   * A stable app-defined identifier (never user text), so it is safe to carry
-   * into a public support report - which is the point: the reporter's own
-   * issue then names the failure class instead of leaving triage to infer it.
-   */
+  /** A stable app-defined identifier (never user text), so it is safe to carry into a public support report - which is the point: the reporter's own issue then names the failure class instead of leaving triage to infer it. */
   readonly failureClass: DictationFailureClass | null;
   /** True when the last error was a denied OS microphone permission. */
   readonly permissionDenied: boolean;
@@ -74,11 +59,8 @@ export interface UseVoiceDictation {
   readonly toggle: () => void;
   /** Abort recording and discard the utterance (no transcript). */
   readonly cancel: () => void;
-  /**
-   * The live capture MediaStream while recording (else null), handed to the
-   * waveform visualizer. Stable accessor so the visualizer attaches without
-   * triggering React re-renders.
-   */
+  /** The live capture MediaStream while recording (else null), handed to the waveform visualizer.
+   * Stable accessor so the visualizer attaches without triggering React re-renders. */
   readonly getStream: () => MediaStream | null;
 }
 
@@ -86,18 +68,11 @@ export interface UseVoiceDictation {
 // API requires. (AudioWorklet would be lower-latency; ScriptProcessor avoids a
 // separate worklet asset + CSP `script-src` widening and is adequate for STT.)
 const PROCESSOR_BUFFER_SIZE = 2048;
-// After `flush`, the host transcribes the buffered utterance and replies
-// `flushed`; we close then. This fallback only fires if that reply never
-// arrives (e.g., an unusually long decode) so the UI never hangs in
-// "transcribing".
+// This fallback only fires if that reply never arrives (e.g., an unusually long decode) so the UI never hangs in "transcribing".
 const FINALIZE_FALLBACK_MS = 15000;
 
-/**
- * Splits a rejected `getUserMedia` into the denial the user can act on and
- * every other open failure (no device, device busy, hardware error). Extracted
- * from the acquisition path so classifying the failure does not push that
- * already-branchy async arrow over the complexity ceiling.
- */
+/** Splits a rejected `getUserMedia` into the denial the user can act on and every other open failure (no device, device busy, hardware error).
+ * Extracted from the acquisition path so classifying the failure does not push that already-branchy async arrow over the complexity ceiling. */
 function classifyMicOpenFailure(error: unknown): {
   readonly denied: boolean;
   readonly failureClass: DictationFailureClass;
@@ -128,12 +103,7 @@ function dictationDurationBucket(
   return "over_30s";
 }
 
-/**
- * Drives on-device dictation: captures the mic as PCM16 mono, streams it to the
- * host recognizer over `speech.dictate` (reporting the real capture rate so
- * the host resamples to the model rate), and forwards final transcripts to the
- * caller (which writes them into the composer).
- */
+/** Drives on-device dictation: captures the mic as PCM16 mono, streams it to the host recognizer over `speech.dictate` (reporting the real capture rate so the host resamples to the model rate), and forwards final transcripts to the caller (which writes them into the composer). */
 export function useVoiceDictation(
   args: UseVoiceDictationArgs,
 ): UseVoiceDictation {
@@ -163,11 +133,7 @@ export function useVoiceDictation(
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const speechClientRef = useRef<SpeechStreamClient | null>(null);
   const readyRef = useRef(false);
-  // True once the capture graph is wired and pulling (mic stream + running
-  // context + connected processor). "recording" requires this AND the speech
-  // session's `ready` - either alone would show a live-recording UI that is
-  // not actually capturing (speech ready while the permission prompt is still
-  // up) or not actually transcribing (graph pulling with no session).
+  // True once the capture graph is wired and pulling (mic stream + running context + connected processor).
   const audioGraphReadyRef = useRef(false);
   const pendingChunksRef = useRef<Uint8Array[]>([]);
   // Browser `setTimeout` returns a numeric handle.
@@ -182,9 +148,6 @@ export function useVoiceDictation(
   // When the live recording actually began (onReady), for duration buckets.
   const recordingStartedAtRef = useRef<number | null>(null);
   // Last status the live session reported, or null before any session opened.
-  // Read only by the failure log: it separates "the link was already down" from
-  // "the link dropped under us", which no other signal distinguishes after
-  // teardown has run.
   const lastConnectionStatusRef = useRef<StreamConnectionStatus | null>(null);
 
   const markClosing = useCallback(() => {
@@ -235,10 +198,7 @@ export function useVoiceDictation(
   const fail = useCallback(
     (
       failureClass: DictationFailureClass,
-      // Extra per-path fields for the log line only. Required (not defaulted)
-      // so each call site states what it has; most pass `{}`. Deliberately
-      // separate from `error`, which feeds analytics blocker classification -
-      // enriching the log must not silently reclassify the funnel.
+      // Deliberately separate from `error`, which feeds analytics blocker classification - enriching the log must not silently reclassify the funnel.
       details: AppLogFields,
       message: string,
       error: unknown,
@@ -273,13 +233,8 @@ export function useVoiceDictation(
           blocker: analyticsBlockerFromError(error),
         });
       }
-      // Invalidate capture work still in flight, the way `stop()`/`cancel()`
-      // already do. `startAudioGraph` captures the AudioContext BEFORE awaiting
-      // the permission prompt, so without this bump a failure arriving during
-      // that await tears the context down and the task still resumes on it -
-      // finds it closed, and calls fail() a SECOND time with
-      // `audio_context_not_running`. That generic class would overwrite the
-      // real first cause and become the one the user reports.
+      // Invalidate capture work still in flight, the way `stop()`/`cancel()` already do.
+      // `startAudioGraph` captures the AudioContext BEFORE awaiting the permission prompt, so without this bump a failure arriving during that await tears the context down and the task still resumes on it - finds it closed, and calls fail() a SECOND time with `audio_context_not_running`.
       startGenerationRef.current += 1;
       markClosing();
       teardownAll();
@@ -303,11 +258,7 @@ export function useVoiceDictation(
     setState("idle");
   }, []);
 
-  // The "recording" transition: taken only once BOTH readiness signals are in
-  // for the same live session - the speech session's `ready` (readyRef) and
-  // the wired capture graph (audioGraphReadyRef). Whichever signal lands
-  // second takes the transition; queued pre-ready audio is flushed here so
-  // nothing is sent before the session can accept it.
+  // The "recording" transition: taken only once BOTH readiness signals are in for the same live session - the speech session's `ready` (readyRef) and the wired capture graph (audioGraphReadyRef).
   const tryBeginRecording = useCallback((client: SpeechStreamClient) => {
     if (closingRef.current || speechClientRef.current !== client) return;
     if (!readyRef.current || !audioGraphReadyRef.current) return;
@@ -376,11 +327,7 @@ export function useVoiceDictation(
       }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          // Use the browser's built-in audio processing (noise suppression /
-          // auto-gain / echo cancellation). Noise suppression silences ambient
-          // hiss so the waveform reads flat at rest and the recognizer gets a
-          // clean signal, and AGC normalizes level. (The earlier raw-capture
-          // workaround was for Whisper; Parakeet handles processed audio.)
+          // (The earlier raw-capture workaround was for Whisper; Parakeet handles processed audio.)
           audio: {
             channelCount: 1,
             echoCancellation: true,
@@ -454,18 +401,11 @@ export function useVoiceDictation(
       }
       const source = ctx.createMediaStreamSource(stream);
       sourceNodeRef.current = source;
-      // The waveform visualizer (wavesurfer) taps `mediaStreamRef` itself via
-      // its own AudioContext, so no analyser is needed in this graph.
-      // 1 output channel (left silent - we never write the output buffer) so the
-      // node can legally connect to `destination`; a 0-output node throws on
-      // connect in Chromium.
+      // 1 output channel (left silent - we never write the output buffer) so the node can legally connect to `destination`; a 0-output node throws on connect in Chromium.
       const processor = ctx.createScriptProcessor(PROCESSOR_BUFFER_SIZE, 1, 1);
       processorRef.current = processor;
       processor.onaudioprocess = (event: AudioProcessingEvent) => {
-        // Generation-pinned: teardown nulls `onaudioprocess`, but an audio
-        // task the browser queued before that can still run this closure - it
-        // must not route this session's PCM into a successor session's client
-        // (the refs below are live, not session-scoped).
+        // Generation-pinned: teardown nulls `onaudioprocess`, but an audio task the browser queued before that can still run this closure - it must not route this session's PCM into a successor session's client (the refs below are live, not session-scoped).
         if (generation !== startGenerationRef.current) return;
         const input = event.inputBuffer.getChannelData(0);
         const pcm = floatToPcm16(input);
@@ -495,21 +435,7 @@ export function useVoiceDictation(
 
   const start = useCallback(() => {
     if (state === "recording" || state === "requesting") return;
-    // Clear everything the PREVIOUS attempt left behind FIRST - before any
-    // failure path below can read it or outlive it.
-    //
-    // The refs are only meaningful for the attempt now beginning: a failure
-    // that reports the previous attempt's connection status or a still-growing
-    // time-since-recording is worse than no diagnostic, because it sends triage
-    // after the wrong session. `null` here honestly means "this attempt never
-    // got that far".
-    //
-    // The error state has to clear here too, not after the not-connected branch
-    // below. `permissionDenied` drives the "Open Settings" affordance, so a
-    // denied attempt followed by one with no host would pair a host-link
-    // failure with a microphone remedy - and since the failure class rides the
-    // Report Issue prefill, the filed report would read `not_connected` while
-    // telling the user to grant microphone access.
+    // Clear the previous attempt's refs and error first so a later failure cannot report the last session's diagnostics or pair a host-link miss with a microphone remedy.
     recordingStartedAtRef.current = null;
     lastConnectionStatusRef.current = null;
     setErrorMessage(null);
@@ -541,10 +467,7 @@ export function useVoiceDictation(
     const generation = startGenerationRef.current + 1;
     startGenerationRef.current = generation;
 
-    // Create the capture context up front so we can report its true sample rate
-    // to the host (the browser may pin it to the hardware rate, ignoring the
-    // 16 kHz hint). Fall back to the hardware rate if 16 kHz is unsupported; the
-    // host resamples either way.
+    // Create the capture context up front so we can report its true sample rate to the host (the browser may pin it to the hardware rate, ignoring the 16 kHz hint).
     let ctx: AudioContext;
     try {
       ctx = new AudioContext({ sampleRate: SPEECH_INPUT_SAMPLE_RATE });
@@ -587,19 +510,13 @@ export function useVoiceDictation(
           tryBeginRecording(client);
         },
         onTranscript: (frame) => {
-          // Insert only while THIS client is still the active session - guards
-          // against a late final from a stopped/cancelled session landing in a
-          // newer recording's composer. (Finals after stop, during
-          // "transcribing", are still wanted, so this isn't gated on closing.)
+          // (Finals after stop, during "transcribing", are still wanted, so this isn't gated on closing.)
           if (frame.isFinal && speechClientRef.current === client) {
             handlersRef.current.onText(frame.text);
           }
         },
         onFlushed: () => {
-          // A later attempt (auto-restart, or a stop/start racing this flush)
-          // already superseded this session - ignore its stale resolution,
-          // matching onTranscript's guard. Otherwise this would finalize()
-          // the ACTIVE session out from under it.
+          // A later attempt (auto-restart, or a stop/start racing this flush) already superseded this session - ignore its stale resolution, matching onTranscript's guard.
           if (speechClientRef.current !== client) return;
           // Same gate as the stopped event: a flush of a session that never
           // reached "recording" transcribed nothing worth counting.
@@ -642,10 +559,7 @@ export function useVoiceDictation(
           markClosing();
           fail(
             "connection_lost",
-            // Optional chaining, not a null check: the declared type says
-            // `| null`, but this is a callback the transport invokes - a
-            // caller that omits the argument entirely must not turn a
-            // diagnostic into a crash inside the failure path itself.
+            // Optional chaining, not a null check: the declared type says `| null`, but this is a callback the transport invokes - a caller that omits the argument entirely must not turn a diagnostic into a crash inside the failure path itself.
             { closeReason: reason?.kind ?? "none" },
             "Lost connection to the local host.",
             "Lost connection to the local host.",

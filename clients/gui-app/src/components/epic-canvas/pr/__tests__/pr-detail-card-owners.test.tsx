@@ -10,11 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrDetailCard } from "@/components/epic-canvas/pr/pr-detail-card";
 
 /**
- * The "Chats" section is chrome AROUND the owner badges, so it cannot be gated
- * on the same array they are. A PR keeps naming chats the user deleted
- * (worktree bindings cascade on epic delete, not on chat delete) and the badges
- * drop those - which, gated on the raw array, leaves a bordered heading
- * standing over nothing for exactly the case the dropping exists to clean up.
+ * The "Chats" section is chrome AROUND the owner badges, so it cannot be gated on the same array they are.
  */
 afterEach(cleanup);
 

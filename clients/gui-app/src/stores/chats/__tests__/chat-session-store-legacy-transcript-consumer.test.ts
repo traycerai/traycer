@@ -38,30 +38,8 @@ import {
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * The windowed (`chat.subscribe@1.8`) -> legacy (`chat.subscribe@1.0-1.7`)
- * downgrade, driven through the REAL consumer chain: a fake `IStreamSession`
- * feeds raw wire envelopes to a REAL `ChatStreamClient` - the actual Zod
- * schema parse and frame routing in `chat-stream-client.ts` - which drives
- * the store's REAL callbacks, which drive the REAL
- * `createLegacyChatTranscriptAdapter()` wired in `chat-session-store.ts`.
- * Nothing here calls `callbacks.onSnapshot(...)` directly.
- *
- * The legacy snapshot envelope below is a VERBATIM capture of what a real
- * `ChatSessionManager` puts on the wire for a `1.7` peer - taken from
- * `traycer-host/src/domain/chat/__tests__/chat-windowed-emit.test.ts`
- * ("chat.subscribe: a 1.7 peer and a 1.8 peer share one session" ->
- * `legacySnapshots.at(-1)`), by temporarily writing that test's
- * `lastLegacySnapshot` to disk and copying the JSON here. The capture command
- * was `cd traycer-host && bun run vitest run
- * src/domain/chat/__tests__/chat-windowed-emit.test.ts -t "fans a broadcast
- * out as a FULL snapshot"`. The JSON data was pasted without changing,
- * removing or reordering any field or value; only JSON-to-TypeScript
- * object-literal syntax/formatting differs. The OSS build cannot import
- * `@traycer/host` (internal package) to capture this frame live, so this is a
- * frozen point-in-time capture rather than a live replay - still real host
- * output, not an OSS-side reconstruction. The windowed priming snapshot below
- * has no such source and is a plain schema-shaped fixture; only the downgrade
- * frame carries capture provenance.
+ * The windowed (`chat.subscribe@1.8`) -> legacy (`chat.subscribe@1.0-1.7`) downgrade, driven
+ * through the REAL consumer chain: a fake `IStreamSession` feeds raw wire envelopes to a REAL
  */
 
 // ─── A fake wire session that lets a REAL ChatStreamClient parse real bytes ─
@@ -208,12 +186,8 @@ function createConsumerHarness(): ConsumerHarness {
 }
 
 /**
- * A schema-shaped `chat.subscribe@1.8` snapshot with a non-trivial tail, so
- * the transition test starts from real, non-empty windowed state
- * (`rowCount`, a hydrated tail row, and `derived`). Not a capture - there is
- * no equivalent "single windowed peer" provenance test in the host suite this
- * harness can point at, and none of this object's shape is what the downgrade
- * test is proving.
+ * A schema-shaped `chat.subscribe@1.8` snapshot with a non-trivial tail, so the transition test
+ * starts from real, non-empty windowed state (`rowCount`, a hydrated tail row, and `derived`).
  */
 function windowedSnapshotEnvelope(): StreamFrameEnvelope {
   return {
@@ -323,9 +297,7 @@ function accumulatedChangesEnvelope(): StreamFrameEnvelope {
 
 /**
  * Verbatim capture of `traycer-host/src/domain/chat/__tests__/chat-windowed-emit.test.ts`,
- * describe "chat.subscribe: a 1.7 peer and a 1.8 peer share one session",
- * `legacySnapshots.at(-1)` from a `1.7`-negotiated peer. See the file doc
- * comment above for how it was taken.
+ * describe "chat.subscribe: a 1.7 peer and a 1.8 peer share one session", `legacySnapshots.at(-1)`
  */
 function capturedLegacySnapshotEnvelope(): StreamFrameEnvelope {
   return {
@@ -503,14 +475,7 @@ function capturedLegacySnapshotEnvelope(): StreamFrameEnvelope {
   };
 }
 
-/**
- * A turn SETTLING, carrying a background-item set the snapshot did not have.
- *
- * `runStatus: "idle"` with `activeTurn: null` is the shape
- * `turnSettledFromStatus` reads as "the turn is over" on a host that omits
- * `turnInProgress`, which is the moment the completed turn's real size first
- * exists - streaming growth is under-read on purpose while deltas buffer.
- */
+/** A turn SETTLING, carrying a background-item set the snapshot did not have. */
 function turnSettledWithBackgroundItemsEnvelope(): StreamFrameEnvelope {
   return {
     kind: "turnStateChanged",
@@ -586,9 +551,6 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
       ]);
 
       // The physical stream reconnects and renegotiates onto the older line.
-      // Subscribe to store notifications only AFTER the transport-status
-      // transitions: this assertion is specifically that the data-plane swap
-      // itself publishes one indivisible state.
       harness.session.emitStatus("reconnecting", null);
       harness.session.negotiatedVersion = LEGACY_VERSION;
       harness.session.emitStatus("open", null);
@@ -599,9 +561,8 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
       harness.session.fireServerFrame(capturedLegacySnapshotEnvelope());
       unsubscribe();
 
-      // Every window/derived/aux clear plus the new transcript's publish
-      // land in the SAME `set()` - one downstream re-render, not a beat of
-      // "new transcript, old window still showing" in between.
+      // Every window/derived/aux clear plus the new transcript's publish land in the SAME `set()` - one
+      // downstream re-render, not a beat of "new transcript, old window still showing" in between.
       expect(notifications).toBe(1);
 
       const afterDowngrade = harness.handle.store.getState();
@@ -644,11 +605,8 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
         notifications += 1;
       });
 
-      // Route the envelope through the windowed union deliberately: this makes
-      // the REAL `ChatStreamClient` parse and deliver it, so the assertion is
-      // about the store consumer's abandoned-line latch rather than about a
-      // legacy-schema rejection one layer earlier. T4 owns the independent
-      // retired-stream-generation guard.
+      // Route the envelope through the windowed union deliberately: this makes the REAL
+      // `ChatStreamClient` parse and deliver it, so the assertion is about the store consumer's
       harness.session.negotiatedVersion = WINDOWED_VERSION;
       harness.session.fireServerFrame(strandedRangeEnvelope());
       unsubscribe();
@@ -675,12 +633,6 @@ function sixWholeSetSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
   };
 }
 
-/**
- * The independently-recomputed legacy charge: the two EXPORTED building
- * blocks (`legacyTranscriptResidencyBytes`, `chatWholeSetSliceBytes`) summed
- * here, in the test - not the production module's own private
- * `legacyTranscriptChargeBytes`, which this file cannot import.
- */
 function expectedLegacyChargeBytes(state: ChatSessionState): number {
   return (
     legacyTranscriptResidencyBytes(state.messages, state.events) +
@@ -703,10 +655,8 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
     const memory = getProcessMemoryRuntime();
     const harness = createConsumerHarness();
     try {
-      // Negotiated at the legacy line from the very first frame - `windowedLine`
-      // never becomes true, so this exercises `applyLegacyTranscriptEvent`'s
-      // `!windowedLine` branch (`commitLegacyTranscriptBudget()` at its OWN call
-      // site), not the downgrade branch below.
+      // Negotiated at the legacy line from the very first frame - `windowedLine` never becomes true, so
+      // this exercises `applyLegacyTranscriptEvent`'s `!windowedLine` branch
       harness.session.negotiatedVersion = LEGACY_VERSION;
       harness.session.emitStatus("open", null);
       harness.session.fireServerFrame(capturedLegacySnapshotEnvelope());
@@ -744,12 +694,8 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
       const expectedLegacyBytes = expectedLegacyChargeBytes(state);
 
       const usage = chatWindowsUsage(memory);
-      // A missing legacy settle (the downgrade branch's OWN
-      // `commitLegacyTranscriptBudget()` call, distinct from the steady
-      // branch's) would leave the stale windowed figure standing, which
-      // `toBe(expectedLegacyBytes)` alone could still coincidentally pass if
-      // the two figures happened to collide - proving they differ first is
-      // what rules that out.
+      // A missing legacy settle (the downgrade branch's OWN `commitLegacyTranscriptBudget()` call,
+      // distinct from the steady branch's) would leave the stale windowed figure standing, which
       expect(usage.settledBytes).not.toBe(windowedSettledBytes);
       expect(usage.settledBytes).toBe(expectedLegacyBytes);
       expect(usage.holderCount).toBe(1);
@@ -760,20 +706,16 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
 
   it("a real legacy snapshot that pushes chat-windows over budget settles the sole-copy amount, requests one eviction, reclaims nothing, and latches over-protected", () => {
     const memory = getProcessMemoryRuntime();
-    // An accountant-only primer: settled directly, never attached to
-    // `memory.chatWindows`, so the book's own eviction sweep (which only
-    // visits ATTACHED sessions) can never touch it - it exists purely to push
-    // the plane to exactly the soft limit before the real chat holder adds
-    // anything.
+    // An accountant-only primer: settled directly, never attached to `memory.chatWindows`, so the
+    // book's own eviction sweep (which only visits ATTACHED sessions) can never touch it - it exists
     const primerHolderId = "primer:chat-windows-pressure-path";
     memory.accountant.settle(
       BUDGET_PLANE_IDS.chatWindows,
       primerHolderId,
       CHAT_WINDOWS_SOFT_LIMIT_BYTES,
     );
-    // Cumulative telemetry (evictionsRequested/bytesReclaimed) is process-wide
-    // and never reset between tests, so every assertion on it below reads a
-    // DELTA off this pre-snapshot baseline rather than an absolute value.
+    // Cumulative telemetry (evictionsRequested/bytesReclaimed) is process-wide and never reset between
+    // tests, so every assertion on it below reads a DELTA off this pre-snapshot baseline rather than
     const baseline = chatWindowsUsage(memory);
     const harness = createConsumerHarness();
     try {
@@ -791,30 +733,19 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
       );
       expect(usage.evictionsRequested - baseline.evictionsRequested).toBe(1);
       expect(usage.bytesReclaimed - baseline.bytesReclaimed).toBe(0);
-      // Asserted BEFORE the direct `chatWindows.evict()` probe below: that
-      // probe re-settles the same holder as a side effect, which clears the
-      // accountant's `protectedLatch` outside `accountant.reconcile()` and
-      // would make this read `"over"` (or better) instead of the terminal
-      // state production's own `commitLegacyTranscriptBudget()` -> `reconcile`
-      // actually left the plane in.
+      // Asserted BEFORE the direct `chatWindows.evict()` probe below: that probe re-settles the same
+      // holder as a side effect, which clears the accountant's `protectedLatch` outside
       expect(memory.accountant.pressure(BUDGET_PLANE_IDS.chatWindows)).toBe(
         "over-protected",
       );
 
-      // Diagnostic-only, and deliberately last: call the book's eviction sweep
-      // directly to inspect what it told the accountant, rather than
-      // re-deriving it from private state. The legacy branch's `evict` never
-      // reads `overBytes` (there is no ordinal/range to evict a PART of), so
-      // any positive value drives the same outcome.
+      // Diagnostic-only, and deliberately last: call the book's eviction sweep directly to inspect what
+      // it told the accountant, rather than re-deriving it from private state.
       const transcriptBytes = legacyTranscriptResidencyBytes(
         state.messages,
         state.events,
       );
-      // Deliberately falsify only this holder's ledger while leaving the
-      // resident transcript untouched. The direct eviction probe must
-      // remeasure and restore the whole legacy charge; without the legacy
-      // branch's own `settle`, its zero-reclaimed outcome could otherwise pass
-      // while merely inheriting the correct landing-time charge.
+      // Deliberately falsify only this holder's ledger while leaving the resident transcript untouched.
       memory.accountant.settle(
         BUDGET_PLANE_IDS.chatWindows,
         chatHolderId("host-1", EPIC_ID, CHAT_ID),
@@ -835,18 +766,8 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
   });
 
   it("a turnStateChanged frame re-settles the holder - the growth a completed turn is the first proof of", () => {
-    // `onTurnStateChanged` writes `backgroundItems` (one of the six) and seats
-    // the turn's frozen row, and settled NOTHING. `evictWindowAfterInPlaceGrowth`
-    // is not the re-settle: it returns without touching the accountant whenever
-    // the window is under `TRANSCRIPT_WINDOW_MAX_BYTES`, and immediately on the
-    // legacy line this test drives.
-    //
-    // The turn's COMPLETION is the moment that matters: buffered block deltas
-    // deliberately leave a streaming turn under-read, so the finished turn is
-    // when its real size first exists. A multi-megabyte response followed by no
-    // range and no snapshot stayed charged at the pre-turn figure for as long as
-    // the chat then stayed quiet - which is exactly the growth the process-wide
-    // budget exists to notice.
+    // `onTurnStateChanged` writes `backgroundItems` (one of the six) and seats the turn's frozen row,
+    // and settled NOTHING.
     const memory = getProcessMemoryRuntime();
     const harness = createConsumerHarness();
     try {

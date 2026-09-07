@@ -59,16 +59,8 @@ export function BrowserSessionsHostProvider(props: {
 }
 
 /**
- * Puts a surface on `hostId`'s browser-sessions stream, wrapping only when it
- * needs to: the canvas already provides the canvas host's stream, so re-wrapping
- * for that host would open a second coordinator for the same one.
- *
- * The rule lives here rather than at each call site because three of them had
- * spelled it out separately, and the odd one out resolved its client from a
- * different hook. `useHostClientForHostId` is the one resolution for "which
- * client addresses this host id" - inside a tile it is exactly what
- * `useTabHostClient()` returns, since a tile's `TabHostProvider` is bound to
- * that same ref host.
+ * Puts a surface on `hostId`'s browser-sessions stream, wrapping only when it needs to: the canvas already provides the canvas host's stream, so re-wrapping for that host would open a second coordinator for the same one.
+ * The rule lives here rather than at each call site because three of them had spelled it out separately, and the odd one out resolved its client from a different hook.
  */
 export function BrowserSessionsHostBoundary(props: {
   readonly hostId: string | null;
@@ -89,10 +81,7 @@ export function BrowserSessionsHostBoundary(props: {
   );
 }
 /**
- * Publishes the sessions state through a ref whose identity never changes, so
- * an event-time reader (`useOpenBrowserUrl`) sees the current value without
- * re-rendering on every stream frame. Exported for tests that mount
- * `BrowserSessionsContext.Provider` by hand.
+ * Publishes the sessions state through a ref whose identity never changes, so an event-time reader (`useOpenBrowserUrl`) sees the current value without re-rendering on every stream frame.
  */
 export function BrowserSessionsSnapshotProvider(props: {
   readonly value: BrowserSessionsState | null;

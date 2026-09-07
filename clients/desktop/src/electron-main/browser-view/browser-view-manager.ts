@@ -109,24 +109,10 @@ interface BrowserViewManagerOptions {
     listener: (change: BrowserSessionCertificateErrorChange) => void,
   ) => () => void;
   readonly onWindowChange: (listener: () => void) => () => void;
-  /**
-   * This desktop's local host id, read at navigate time. `file:` is only
-   * honored for a tab whose owning host IS this desktop (co-located); a remote
-   * host's tab is held to the narrower http/https/about:blank set, so a
-   * non-co-located host can never make this machine read a local file.
-   */
   readonly localHostId: () => string | null;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
-  /**
-   * Applies the host's storage seed for one guest. Takes the whole ensure-tab
-   * input rather than just the state, because the write is validated against
-   * the tab's OWN origin and attributed to the host that asked for it.
-   *
-   * Answers the part of the seed the JAR does not hold - the localStorage the
-   * caller may install as a document script - narrowed to what survived that
-   * validation, or `null` when nothing may be seeded at all.
-   */
+  /** Answers the part of the seed the JAR does not hold - the localStorage the caller may install as a document script. */
   readonly seedStorageState: (
     input: BrowserViewEnsureTab,
     webContents: BrowserViewWebContents,
@@ -136,11 +122,6 @@ interface BrowserViewManagerOptions {
     webContents: BrowserViewWebContents,
     profile: BrowserSessionProfile,
   ) => void;
-  /**
-   * Drops an isolated session's partition once its last native tab is gone.
-   * Only ever called with `profile: "isolated"`; the shared jars outlive
-   * every guest.
-   */
   readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
@@ -148,13 +129,6 @@ interface BrowserViewManagerOptions {
   readonly hostPlatform: HostPlatform;
 }
 
-/**
- * Coordinates the browser-view modules: it owns surface binding, the control
- * dispatch the renderer drives, page/debug capture, status emission and
- * teardown. Guest birth lives in `manager/browser-view-provisioning`, host
- * window lifecycle in `manager/browser-view-window-attachment`, and guest
- * event wiring in `manager/browser-view-entry-factory`.
- */
 export class BrowserViewManager {
   private readonly createDevToolsWindow: (
     windowId: string,
@@ -483,14 +457,8 @@ export class BrowserViewManager {
   }
 
   /**
-   * What "clear cookies for this site" would clear for one tile: the
-   * registrable domain of the page it is on. `null` refuses the action, for
-   * the three reasons it must be refused - the tile is gone, it is not on an
-   * http(s) page (there is no site to name), or it is a private session, whose
-   * partition dies with the session and is shared with nothing.
-   *
-   * The site is derived here, from the tile's own URL, and never taken from
-   * the renderer: a domain on the wire would let any window name any site.
+   * `null` refuses the action, for the three reasons it must be refused.
+   * The site is derived here, from the tile's own URL, and never taken from the renderer: a domain on the wire would let any window name any site.
    */
   readClearSiteTarget(
     windowId: string,
@@ -535,11 +503,6 @@ export class BrowserViewManager {
         },
       };
     }
-    // The fourth navigation door, and the quietest: `cdpNavigate` reaches
-    // `Page.navigate` directly, so it bypasses both `navigate()` and
-    // `will-navigate`. The same predicate answers it - a curated command is
-    // still a navigation, and a guest's scheme policy does not depend on who
-    // asked.
     if (
       input.command.kind === "cdpNavigate" &&
       !isAllowedGuestNavigationUrl(input.command.url)
@@ -571,16 +534,6 @@ export class BrowserViewManager {
     this.annotations.dispose();
   }
 
-  /**
-   * Destroys every live `primary` guest so the host revives it on whichever
-   * jar the saved-logins pref names now (it has already flipped before this
-   * runs). Destroying a native guest is the re-placement mechanism: the host
-   * suspends the session to dormant when its Electron route goes away and
-   * re-materializes the same durable tab ids, seeding them from its own
-   * primary-profile store. Guests the host has not accepted yet are left
-   * alone - there is no durable route to revive them with, and the next tile
-   * they open picks the current partition anyway.
-   */
   async recreateNativeTabsOnCurrentPartition(): Promise<readonly string[]> {
     const migrating = Array.from(this.entries.guestValues()).filter(
       (entry) =>
@@ -661,31 +614,10 @@ export class BrowserViewManager {
     entry.surfaceBindingId = null;
     entry.rendererResetPending = false;
     this.windows.detachResetListenerIfUnused(surface.windowId);
-    // LAST, once every field the reading depends on has moved: `viewed` is
-    // read off the entry now (H10), so a detach that emitted nothing would
-    // leave the host believing a tile is still showing this guest. `attachSurface`
-    // emits for the same reason on the way in.
     this.emitStatus(entry);
   }
 
-  /**
-   * The one funnel for every navigation this process asks a guest to perform -
-   * the renderer's `navigate` control action and the initial navigation the
-   * host's accepted tab starts with - so the scheme gate sits here rather than
-   * at either caller. Both callers are host-initiated, so a CO-LOCATED tab (one
-   * whose owning host is this desktop) uses the wider
-   * {@link isAllowedHostInitiatedNavigationUrl} that also permits `file:`; a
-   * page-driven navigation to `file:` still hits the narrower guest guards.
-   *
-   * A tab owned by a REMOTE host is held to {@link isAllowedGuestNavigationUrl}
-   * (http/https/about:blank, no `file:`): remote hosts are headless-only by
-   * protocol, but nothing else stops a remote `createElectronTab`/`navigate`
-   * frame from asking THIS machine to read a local file, so the funnel enforces
-   * it rather than trusting the convention.
-   *
-   * It refuses BEFORE any entry state moves: a blocked target must not leave
-   * the tile reporting `loading` for a page that will never commit.
-   */
+  /** It refuses BEFORE any entry state moves: a blocked target must not leave the tile reporting `loading` for a page that will never commit. */
   private async navigate(entry: BrowserViewEntry, url: string): Promise<void> {
     const localHostId = this.localHostId();
     const coLocated =
@@ -838,19 +770,7 @@ export class BrowserViewManager {
     return null;
   }
 
-  /**
-   * A tile's CDP debugger can detach for reasons outside our control - the
-   * target being destroyed, a renderer crash, or an explicit
-   * `Debugger.detach`. BrowserDebugSession synchronously drops its ready
-   * state; the next native ensure or CDP dispatch reattaches and enables
-   * domains before using the existing incarnation.
-   *
-   * Verified 2026-07-28, live: opening DevTools does NOT trigger this path
-   * on Electron 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
-   * `openDevTools()` coexist there (confirmed via a real `devtools://`
-   * target plus 8s of post-open polling with no detach, twice, independent
-   * tile keys). A user can therefore open DevTools while an agent drives.
-   */
+  /** BrowserDebugSession synchronously drops its ready state; the next native ensure or CDP dispatch reattaches and enables domains before using the existing incarnation. */
   private handleDebugSessionDetached(
     entry: BrowserViewEntry,
     webContentsId: number,
@@ -920,11 +840,6 @@ export class BrowserViewManager {
     for (const listener of this.nativeTabStatusListeners) listener(change);
   }
 
-  /**
-   * Main-side subscription to the same status readings the renderer gets.
-   * Returns its own disposer, so a stream that closes stops hearing without
-   * touching another stream's subscription.
-   */
   onNativeTabStatusChange(
     listener: (change: BrowserViewNativeTabStatusChange) => void,
   ): () => void {
@@ -951,22 +866,9 @@ export class BrowserViewManager {
     return webContents.navigationHistory ?? null;
   }
 
-  /**
-   * Destroys one native guest and nothing else. Closing a native tab is a
-   * RUNTIME event, never a durable one: the host suspends the session to
-   * dormant when its Electron route goes away and re-materializes the same
-   * durable tab ids later, so this path must not report the tab as closed.
-   * Only an explicit user close sends `closeTab` on `browser.sessions`.
-   */
+  /** Closing a native tab is a RUNTIME event, never a durable one: the host suspends the session to dormant when its Electron route goes away and re-materializes the same durable tab. */
   private closeEntry(entry: BrowserViewEntry): Promise<void> {
     if (entry.closePromise !== null) return entry.closePromise;
-    // INVARIANT: `closePromise` is set before any teardown runs. `destroyEntry`
-    // is synchronous through to its first await, so assigning afterwards would
-    // leave `closePromise` null for the whole close - and it is exactly what
-    // `closeEntry`'s idempotence guard, `findExactNativeEntry`'s "skip a
-    // closing entry" check, and provisioning's "chain an ensure behind the
-    // in-flight close" branch all read. None of them may depend on a teardown
-    // step happening to await.
     const settled = Promise.withResolvers<void>();
     entry.closePromise = settled.promise;
     this.destroyEntry(entry).then(settled.resolve, settled.reject);
@@ -1005,11 +907,6 @@ export class BrowserViewManager {
     log.info("[browser-view] view destroy requested", { keyId });
   }
 
-  /**
-   * An isolated session's partition is throwaway by construction, so it dies
-   * with the session's last native tab - not with each tab, because siblings
-   * of the same session share the one partition.
-   */
   private releaseIsolatedSessionStorage(entry: BrowserViewEntry): void {
     if (entry.profile !== "isolated") return;
     const sessionKey = nativeSessionKey(entry.identity.key);
@@ -1033,11 +930,6 @@ export class BrowserViewManager {
   }
 }
 
-/**
- * The three status reads Electron can throw on once a target is going away.
- * One failure means the whole status frame is unreliable, so they share a
- * single guard rather than three nullable levels.
- */
 function readNavigationReadings(webContents: BrowserViewWebContents): {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
@@ -1056,10 +948,6 @@ function readNavigationReadings(webContents: BrowserViewWebContents): {
   }
 }
 
-/**
- * A clear-site scope only means anything for a page: `about:blank`, a devtools
- * URL or a `file://` tile has no site whose logins could be cleared.
- */
 function isHttpBrowserUrl(url: string): boolean {
   try {
     const protocol = new URL(url).protocol;

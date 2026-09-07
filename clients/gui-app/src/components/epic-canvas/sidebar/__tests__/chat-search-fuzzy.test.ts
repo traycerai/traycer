@@ -226,12 +226,8 @@ describe("intersectMatchIds", () => {
     expect(combined === null ? [] : [...combined]).toEqual(["b"]);
   });
 
-  // Regression: intersecting ancestor-EXPANDED sets instead of matches let a
-  // row that satisfied neither predicate survive. A GUI-only filter over a
-  // terminal-agent parent with a GUI-chat child expands to {child, parent};
-  // searching the parent's title expands to {parent}; that intersection is
-  // {parent} - a terminal agent rendered under a GUI-only filter, with the
-  // child that actually matched the filter dropped.
+  // Regression: intersecting ancestor-EXPANDED sets instead of matches let a row that satisfied neither predicate survive.
+  // A GUI-only filter over a terminal-agent parent with a GUI-chat child expands to {child, parent}; searching the parent's title expands to {parent}; that intersection is {parent} - a terminal agent rendered under a GUI-only filter, with the child that actually matched the filter dropped.
   it("does not let a path-only ancestor satisfy the other narrowing", () => {
     const tree = nodeById([
       node({

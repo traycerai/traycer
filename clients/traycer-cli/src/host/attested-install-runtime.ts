@@ -2,12 +2,7 @@ import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/in
 import { readHostInstallRecord } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
 
-/**
- * Install-record facts observed while the caller already owns `cli-lock`.
- * Service-only commands do not write install bytes, but they still need to
- * attest the exact record whose service they just started so Desktop never
- * derives a stamp generation from a stale pre-lock disk read.
- */
+/** Install-record facts observed while the caller already owns `cli-lock`. Service-only commands do not write install bytes, but they still need to attest the exact record whose service they just started so Desktop never derives a stamp generation from a stale pre-lock disk read. */
 export interface AttestedInstallRuntime {
   readonly installGeneration: string | null;
   readonly runtimeVersion: string | null;

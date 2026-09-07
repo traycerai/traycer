@@ -38,9 +38,8 @@ function context(
     github: {
       pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
       issues: EMPTY_GITHUB_SECTION_CONTEXT,
-      // The default fixture is a host that HAS both mention methods, so the
-      // existing cases keep exercising the categories rather than the
-      // unsupported-host gate. The gate has its own cases below.
+      // The default fixture is a host that HAS both mention methods, so the existing cases keep exercising the categories rather than the unsupported-host gate.
+      // The gate has its own cases below.
       supported: true,
       now: 0,
     },
@@ -159,10 +158,8 @@ function navigateEntry(entry: MentionMenuEntry) {
 }
 
 /**
- * Resolve a category by its label rather than its index. Root ordering is a
- * separate assertion in this file; a positional lookup here means inserting a
- * category silently re-points these tests at a different step instead of
- * failing where the ordering actually changed.
+ * Resolve a category by its label rather than its index.
+ * Root ordering is a separate assertion in this file; a positional lookup here means inserting a category silently re-points these tests at a different step instead of failing where the ordering actually changed.
  */
 function entryByLabel(
   entries: ReadonlyArray<MentionMenuEntry>,
@@ -199,12 +196,8 @@ describe("mention provider registry", () => {
   });
 
   /**
-   * `mention.githubCatalog` / `mention.githubSearch` are optional (non-floor)
-   * RPCs, so a host predating them negotiates them away rather than failing
-   * the handshake. Left ungated, both categories stay selectable against such
-   * a host and render permanently empty - the RPC rejects, the rejection is
-   * swallowed into the section's degraded state, and the user is shown a
-   * category that looks broken rather than one that is absent.
+   * `mention.githubCatalog` / `mention.githubSearch` are optional (non-floor) RPCs, so a host predating them negotiates them away rather than failing the handshake.
+   * Left ungated, both categories stay selectable against such a host and render permanently empty - the RPC rejects, the rejection is swallowed into the section's degraded state, and the user is shown a category that looks broken rather than one that is absent.
    */
   it("hides both GitHub categories when the host does not serve the mention methods", () => {
     const entries = mentionProviderRegistry.entries(
@@ -229,9 +222,7 @@ describe("mention provider registry", () => {
     ]);
   });
 
-  // Root search is a SECOND way into the same rows, so a category hidden from
-  // the root menu but still answering flat search would be hidden in name only
-  // - and its reference-resolve row would drill into a step no host can serve.
+  // Root search is a SECOND way into the same rows, so a category hidden from the root menu but still answering flat search would be hidden in name only
   it("contributes no root-search rows when the host does not serve the mention methods", () => {
     const unsupported = context({
       query: "#123",
@@ -243,10 +234,8 @@ describe("mention provider registry", () => {
       },
     });
 
-    // Positive control first. Two absence assertions on their own stay green
-    // if the labels are renamed, or if `entries` stops returning anything at
-    // all for this query - so pin that a SUPPORTED host does produce exactly
-    // the rows whose absence is the claim below.
+    // Positive control first.
+    // Two absence assertions on their own stay green if the labels are renamed, or if `entries` stops returning anything at all for this query - so pin that a SUPPORTED host does produce exactly the rows whose absence is the claim below.
     const supportedLabels = labels(
       mentionProviderRegistry.entries(
         ROOT_MENTION_STEP,
@@ -264,12 +253,8 @@ describe("mention provider registry", () => {
   });
 
   it("counts an author-login root match toward the zero-match verdict", () => {
-    // `githubMentionMatchScore` matches the author's login, so the source
-    // includes this row at root - but no rendered segment carries the login.
-    // The entry's search-only text is what lets the root ranker reproduce
-    // that match; without it the row rode the appended, unmatched tail with
-    // `matchedCount: 0`, and the settled zero-match dismissal closed the
-    // picker over a row it was showing.
+    // `githubMentionMatchScore` matches the author's login, so the source includes this row at root - but no rendered segment carries the login.
+    // The entry's search-only text is what lets the root ranker reproduce that match; without it the row rode the appended, unmatched tail with `matchedCount: 0`, and the settled zero-match dismissal closed the picker over a row it was showing.
     const row: GithubMentionRow = {
       kind: "pull-request",
       githubHost: "github.com",
@@ -312,11 +297,8 @@ describe("mention provider registry", () => {
   });
 
   /**
-   * Held rows are the PREVIOUS filter's answer kept on screen while the new
-   * filter's search runs (see `useHeldRowsDuringSearch` in
-   * `use-github-mention-sections`). They stay visible for continuity but must
-   * not be committable under the funnel's new claim, so the provider marks
-   * their entries inert with the shared, screen-reader-facing reason.
+   * Held rows are the PREVIOUS filter's answer kept on screen while the new filter's search runs (see `useHeldRowsDuringSearch` in `use-github-mention-sections`).
+   * They stay visible for continuity but must not be committable under the funnel's new claim, so the provider marks their entries inert with the shared, screen-reader-facing reason.
    */
   it("marks a held row's entry inert with the shared disabled reason", () => {
     const row: GithubMentionRow = {
@@ -647,9 +629,8 @@ describe("mention provider registry", () => {
       "chat:epic-1:chat-arch",
     ]);
     expect(rows.map((row) => row.archived)).toEqual([false, true]);
-    // Archived rows carry no time: the record clock is bumped by the archive
-    // write itself, so a label would always claim the archive action as
-    // activity. The badge alone marks them.
+    // Archived rows carry no time: the record clock is bumped by the archive write itself, so a label would always claim the archive action as activity.
+    // The badge alone marks them.
     expect(rows.map((row) => row.updatedAt)).toEqual([10, null]);
   });
 
@@ -1408,12 +1389,7 @@ describe("mention preview payloads", () => {
 });
 
 /**
- * `rootEntries` ranks a URL-shaped query through `rootRankingQuery`, which
- * rewrites it to the `owner/repo#123` reference form the row's `description`
- * actually carries - host-prefixed off github.com, folded the same way
- * `referenceMatchesRow` folds a pasted `https://GitHub.com/...` spelling. The
- * raw URL string matches nothing any row carries, so without the rewrite a
- * coincidental fuzzy hit elsewhere could outrank the exact row the URL names.
+ * `rootEntries` ranks a URL-shaped query through `rootRankingQuery`, which rewrites it to the `owner/repo#123` reference form the row's `description` actually carries - host-prefixed off github.com, folded the same way `referenceMatchesRow` folds a pasted.
  */
 describe("pasted-URL root ranking", () => {
   function pullRequestRow(fields: {
@@ -1444,9 +1420,7 @@ describe("pasted-URL root ranking", () => {
   }
 
   /**
-   * A file whose path spells out "github.com" - a coincidental substring
-   * match against the raw pasted URL that could out-rank the exact row if
-   * the ranking query were never rewritten off the URL text.
+   * A file whose path spells out "github.com" - a coincidental substring match against the raw pasted URL that could out-rank the exact row if the ranking query were never rewritten off the URL text.
    */
   function competingFileEntry() {
     return {
@@ -1527,10 +1501,8 @@ describe("pasted-URL root ranking", () => {
   });
 
   it("ranks an enterprise-host row first for a pasted URL on that host", () => {
-    // A non-default host is NOT omitted from the rewritten query, so the row
-    // must actually carry that host segment in its description to still win.
-    // The competing file's path echoes the enterprise host's URL text
-    // itself, so it stays a real competitor for the unrewritten raw URL.
+    // A non-default host is NOT omitted from the rewritten query, so the row must actually carry that host segment in its description to still win.
+    // The competing file's path echoes the enterprise host's URL text itself, so it stays a real competitor for the unrewritten raw URL.
     const row = pullRequestRow({
       githubHost: "ghe.corp",
       owner: "acme",
@@ -1572,9 +1544,7 @@ describe("pasted-URL root ranking", () => {
   });
 
   it("leaves a non-reference prose query's ranking unaffected", () => {
-    // The control: `parseGithubReferenceQuery` returns null for prose, so
-    // `rootRankingQuery` hands the query straight through and ranking works
-    // exactly as it always has - matching on what the row actually says.
+    // The control: `parseGithubReferenceQuery` returns null for prose, so `rootRankingQuery` hands the query straight through and ranking works exactly as it always has - matching on what the row actually says.
     const row = pullRequestRow({
       githubHost: "github.com",
       owner: "acme",
@@ -1608,11 +1578,7 @@ describe("pasted-URL root ranking", () => {
 });
 
 /**
- * The zero-match reference exemption in `use-mention-items.ts` gates on this
- * SAME predicate rather than a hand-written twin - a restated copy is how
- * `@#123` once pinned the picker open over a category that contributes no
- * rows. Direct unit coverage on both terms, independent of the registry
- * plumbing above.
+ * The zero-match reference exemption in `use-mention-items.ts` gates on this SAME predicate rather than a hand-written twin - a restated copy is how `@#123` once pinned the picker open over a category that contributes no rows.
  */
 describe("githubMentionCategoryAvailable", () => {
   it("is available when the host serves the mention methods and there is at least one root", () => {
@@ -1716,9 +1682,8 @@ describe("Browser mention category", () => {
       },
       context({ currentEpicId: "epic-1", browserTabEntries }),
     );
-    // Dormancy is a tiebreak, not an override: it only applies among rows
-    // already equal on match quality and coLocated. With no query, every row
-    // scores 0, so the live tab sorts first despite being far less recent.
+    // Dormancy is a tiebreak, not an override: it only applies among rows already equal on match quality and coLocated.
+    // With no query, every row scores 0, so the live tab sorts first despite being far less recent.
     expect(labels(rows)).toEqual(["Back", "Notes", "Docs"]);
   });
 

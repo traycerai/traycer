@@ -25,19 +25,13 @@ export interface NewConversationModalSeed {
 
 export interface NewConversationModalDraftPatch {
   readonly content: JsonContent | null;
-  // The editor caret, persisted alongside `content` so a focus round-trip that
-  // unmounts + remounts the composer body restores the selection, not just the
-  // prompt bytes (the body reseeds `initialSelection` from here on mount).
+  // The editor caret, persisted alongside `content` so a focus round-trip that unmounts + remounts
+  // the composer body restores the selection, not just the prompt bytes (the body reseeds
   readonly selection: { readonly from: number; readonly to: number } | null;
   readonly settings: ChatRunSettings | null;
   readonly composerMode: ComposerMode | null;
   readonly workspace: LandingDraftWorkspaceSnapshot | null;
-  /**
-   * Bumped on every real `setContent` change. The prompt-stash source adapter
-   * captures this alongside the epicId as a compare-and-swap token: a stash
-   * only clears this draft when the revision it captured still matches, so an
-   * edit made while the stash was durably saving is kept.
-   */
+  /** Bumped on every real `setContent` change. */
   readonly revision: number;
 }
 
@@ -46,9 +40,8 @@ interface NewConversationModalStore {
     Record<string, NewConversationModalDraftPatch | undefined>
   >;
   /**
-   * Records a real document mutation - callers must only invoke this from the
-   * editor boundary's document-change signal (never a selection-only echo),
-   * so every call unconditionally bumps `revision` without comparing content.
+   * Records a real document mutation - callers must only invoke this from the editor boundary's
+   * document-change signal (never a selection-only echo), so every call unconditionally bumps
    */
   readonly setContent: (epicId: string, content: JsonContent) => void;
   readonly setSelection: (
@@ -56,9 +49,8 @@ interface NewConversationModalStore {
     selection: { readonly from: number; readonly to: number },
   ) => void;
   /**
-   * Drops a remembered caret, for a writer that appended to the END of the
-   * draft and wants the composer's `autofocus: "end"` to put the caret after
-   * what it added rather than restoring wherever the user last was.
+   * Drops a remembered caret, for a writer that appended to the END of the draft and wants the
+   * composer's `autofocus: "end"` to put the caret after what it added rather than restoring
    */
   readonly clearSelection: (epicId: string) => void;
   readonly setSettings: (
@@ -66,8 +58,6 @@ interface NewConversationModalStore {
     settings: ChatRunSettings | null,
   ) => void;
   readonly setComposerMode: (epicId: string, mode: ComposerMode) => void;
-  // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
-  // evicted) so callers can unstage any in-flight worktree intent for them.
   readonly addResolvedFolders: (
     epicId: string,
     seedWorkspace: LandingDraftWorkspaceSnapshot,

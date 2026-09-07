@@ -1,16 +1,3 @@
-/**
- * The accounting seam, end to end across the two halves.
- *
- * The worker's port pushes; main's bridge turns the pushes back into calls on
- * the real books. Driving BOTH together is the point - each half in isolation
- * can be right while the pair disagrees about which push means which call, and
- * a settle routed to the wrong member is silent: the plane still moves, just
- * by the wrong amount against the wrong holder.
- *
- * The events are passed by hand rather than over a bridge because what is under
- * test is the mapping, not the transport. `worker-boot-probe.test.ts` is what
- * proves these frames survive a real `postMessage`.
- */
 import { describe, expect, it } from "vitest";
 
 import type { WorkerToMainEvent } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
@@ -120,9 +107,8 @@ describe("the accounting seam", () => {
 
     rooms = ["room-a", "room-b"];
     rootBytes = 2048;
-    // Nothing has been pushed yet, so main still holds the registration
-    // snapshot. This half of the assertion is what makes the other half mean
-    // something.
+    // Nothing has been pushed yet, so main still holds the registration snapshot. This half of the
+    // assertion is what makes the other half mean something.
     expect(source.materializedRoomIds()).toEqual(["room-a"]);
 
     seam.worker.port.settleRootBytes(2048);
@@ -132,11 +118,7 @@ describe("the accounting seam", () => {
   });
 
   it("has the new snapshot in place before the settle can drive a reconcile", () => {
-    // The ordering claim, pinned where it is actually observable. A settle
-    // reconciles its plane, and a reconcile reads the source SYNCHRONOUSLY -
-    // so the read happens DURING the book call, not after it. Asserting the
-    // cache after the call returns cannot tell the two orderings apart, which
-    // is what an earlier version of this suite did.
+    // The ordering claim, pinned where it is actually observable.
     let rooms: readonly string[] = ["room-a"];
     const observed: string[][] = [];
     const books = createRecordingAccountingPort();
@@ -182,10 +164,8 @@ describe("the accounting seam", () => {
     // First reconcile: nothing is known about what is pinned yet, so the
     // breakdown is empty and the request is dispatched.
     const first = source.demoteColdestUnpinned(8192);
-    // `deferredBytes` is the WHOLE ask, and asserted by exact shape rather
-    // than `objectContaining` on purpose: the two zero-ish fields mean
-    // opposite things here - nothing freed, everything accepted - and a
-    // partial matcher would let either of them drift.
+    // `deferredBytes` is the WHOLE ask, and asserted by exact shape rather than `objectContaining` on
+    // purpose: the two zero-ish fields mean opposite things here - nothing freed, everything accepted
     expect(first).toEqual({
       reclaimedBytes: 0,
       deferredBytes: 8192,
@@ -202,16 +182,10 @@ describe("the accounting seam", () => {
     seam.worker.port.settleRootBytes(1024);
 
     // Second reconcile: still zero reclaimed HERE, but now with the reason.
-    // "Everything is pinned" and "there was nothing to free" are the same
-    // number and different facts, and this is the only thing that separates
-    // them.
     const second = source.demoteColdestUnpinned(8192);
     expect(second).toEqual({
       reclaimedBytes: 0,
-      // STILL the whole ask. Learning that the tier is entirely pinned does
-      // not make this dispatch a refusal - the proxy cannot know that when it
-      // answers, and the breakdown beside it is last-known rather than a
-      // verdict on THIS request.
+      // STILL the whole ask.
       deferredBytes: 8192,
       protectedBytesByKind: [{ kind: "visible", bytes: 4096 }],
     });
@@ -255,9 +229,6 @@ describe("the accounting seam", () => {
 
   it("releases the books when main disposes a worker that said nothing", () => {
     // The leak this prevents: a worker that died - crashed, or was terminated
-    // - never sends `accounting/books registered: false`, so without this the
-    // process planes keep a dead runtime attached, answering from a frozen
-    // cache and dispatching demote requests into a bridge nobody is on.
     const seam = createSeam();
     seam.worker.port.registerBooks(createSource({}));
 
@@ -276,9 +247,8 @@ describe("the accounting seam", () => {
     seam.worker.port.unregisterBooks();
     seam.main.dispose();
 
-    // `dispose()` runs on the same teardown as a fatal, and a second
-    // `unregisterBooks` would `release` a book key that may already have been
-    // re-registered by the incoming runtime in a merge window.
+    // `dispose()` runs on the same teardown as a fatal, and a second `unregisterBooks` would `release`
+    // a book key that may already have been re-registered by the incoming runtime in a merge window.
     expect(
       seam.books.calls.filter((call) => call.member === "unregisterBooks"),
     ).toHaveLength(1);

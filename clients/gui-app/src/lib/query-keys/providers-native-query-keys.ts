@@ -99,17 +99,7 @@ export function nativeMcpDiscoverParams(
   };
 }
 
-/**
- * Semantic native query-key family for MCP/plugins/skills list caches.
- *
- * Keys ride the real wire method (`providers.list`) with a `native` query so
- * they never collide with classic catalog reads (`native: null`). The
- * `["providers","native",kind]` segment makes invalidation discoverable and
- * independent of the deleted `providers.mcpList`-style method names.
- *
- * Full shape:
- * `["host", hostId, "providers.list", wireParams, "providers", "native", kind]`
- */
+/** Semantic native query-key family for MCP/plugins/skills list caches. */
 export const providersNativeQueryKeys = {
   /** Prefix shared by every native list/discover cache entry on a host. */
   base: (hostId: string | null): QueryKey => [
@@ -142,12 +132,8 @@ export const providersNativeQueryKeys = {
     "plugins",
   ],
 
-  // `version` rides the KEY but not `nativePluginIconParams` - it is cache
-  // identity, not a request field. The host always serves the newest installed
-  // version, so the request needs only the id; the version is what retires the
-  // previous version's entry, which `staleTime: Infinity` would otherwise
-  // strand. Must stay in step with `useProvidersPluginIcon`'s
-  // `cacheKeyIdentity`, or a key built here would address nothing.
+  // `version` rides the KEY but not `nativePluginIconParams` - it is cache identity, not a request field.
+  // The host always serves the newest installed version, so the request needs only the id; the version is what retires the previous version's entry, which `staleTime: Infinity` would otherwise strand.
   pluginIcon: (
     hostId: string | null,
     params: NativeListScopeParams & {
@@ -167,20 +153,7 @@ export const providersNativeQueryKeys = {
     params.version,
   ],
 
-  /**
-   * Matches EVERY cached icon on one host, whatever plugin, theme or version.
-   *
-   * A predicate rather than a prefix because the discriminating segments sit on
-   * both sides of the request params: `pluginId` and `theme` ride inside them,
-   * and `version` trails after. No prefix covers the family, and a per-plugin
-   * one would still miss the case this exists for.
-   *
-   * Needed because `version` is NULLABLE. For a versioned plugin a reinstall
-   * changes the key and retires the old entry by itself; for one that reports
-   * no version the key is identical across reinstalls, and with
-   * `staleTime: Infinity` and no polling that entry would serve the previous
-   * install's artwork for the rest of the session.
-   */
+  /** Matches EVERY cached icon on one host, whatever plugin, theme or version. */
   isPluginIconKey: (hostId: string | null, key: QueryKey): boolean => {
     const scope = hostQueryKeys.scope(hostId);
     if (key.length < scope.length) return false;

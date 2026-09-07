@@ -1,8 +1,6 @@
 /**
- * Formats a whole-second count as a compact clock duration: "Ns" under a
- * minute, "Nm Xs" under an hour, then "Nh Nm Xs". Shared by the run indicator,
- * the completed-turn footer, and the reasoning "Thought for Xs" label so the
- * format stays in lockstep across the chat surface.
+ * Formats a whole-second count as a compact clock duration: "Ns" under a minute, "Nm Xs" under an hour, then "Nh Nm Xs".
+ * Shared by the run indicator, the completed-turn footer, and the reasoning "Thought for Xs" label so the format stays in lockstep across the chat surface.
  */
 export function formatClockDuration(totalSeconds: number): string {
   if (totalSeconds < 60) return `${totalSeconds}s`;

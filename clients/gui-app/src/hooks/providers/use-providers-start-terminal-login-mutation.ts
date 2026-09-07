@@ -16,28 +16,7 @@ export type StartTerminalLoginMutationResult<Captured> = UseMutationResult<
   { readonly hostId: string | null; readonly captured: Captured }
 >;
 
-/**
- * Asks the host to open (or re-open) a sign-in terminal for a provider whose
- * login cannot run headlessly.
- *
- * Client-scoped only: the terminal is created on, and lives on, a specific
- * host, and the banner that calls this is bound to its tab's host for life.
- * There is deliberately no app-wide-default variant - the app-wide host is
- * never the right answer here.
- *
- * `invalidateMethods` carries `terminal.list` because the host created this
- * PTY outside the renderer's own `terminal.create`: nothing else invalidates
- * that query, it never polls, and it shares a 60 s `staleTime`, so without
- * this the epic's Terminals sidebar stays blind to the session for a minute.
- * Same reason `useSetupTerminalListRefreshDriver` exists for setup terminals.
- *
- * `onSuccess` is required and lands at the MUTATION level, not per-`mutate`:
- * this call makes the host create a PTY, so a caller that unmounts before the
- * response (a canvas tab switch, a host-binding blip) must still get its tile
- * opened. Per-`mutate` callbacks are dropped in exactly that case, which would
- * leave a live sign-in terminal the user can only reach by hunting through the
- * Terminals sidebar.
- */
+/** Client-scoped only; no app-wide wrapper. Invalidate terminal.list. Open the tile from mutation-level onSuccess. */
 export function useProvidersStartTerminalLoginForClient<Captured>(
   client: HostClient<HostRpcRegistry> | null,
   onSuccess: (
@@ -48,11 +27,7 @@ export function useProvidersStartTerminalLoginForClient<Captured>(
     /** Whatever `captureContext` read at send time. */
     captured: Captured,
   ) => void,
-  /**
-   * Per-press state for `onSuccess`, read once per request in press order.
-   * The landing surface needs the start page a press was bound to; the epic
-   * surface has nothing per press and passes `undefined`.
-   */
+  /** Per-press state for `onSuccess`, read once per request in press order. */
   captureContext:
     | ((
         variables: RequestOfMethod<

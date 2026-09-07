@@ -55,8 +55,7 @@ describe("comm-graph cloud subscription registry", () => {
     }
 
     // Releasing the fourth detached manager schedules epic-1 for eviction.
-    // React may already have selected that retained instance during render,
-    // then run the old tree's cleanup before the new tree's acquire effect.
+    // React may already have selected that retained instance during render, then run the old tree's cleanup before the new tree's acquire effect.
     expect(getCommGraphCloudSubscriptionManager("epic-1")).toBe(retained);
     acquireCommGraphCloudSubscription("epic-1", claims[0], opener, ["relay-a"]);
     await Promise.resolve();

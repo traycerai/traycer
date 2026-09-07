@@ -1,15 +1,5 @@
 /**
- * The non-row states of a raw-terminal list - loading, load failure, empty,
- * and a durable create that failed - shared by the desktop left panel and the
- * phone switcher's Terminals category.
- *
- * These carry the surface's answers to "why is this list not showing me a
- * terminal", which is exactly where a re-implemented list drifts: a phone that
- * renders only rows shows "No terminals yet." while the query is still
- * pending, and again when it has failed outright, with no way back. Sharing
- * them means both surfaces say the same true thing, and the phone gets the
- * retry path too. Test ids differ per surface via `testIdPrefix`; the copy and
- * the actions do not.
+ * These carry the surface's answers to "why is this list not showing me a terminal", which is exactly where a re-implemented list drifts: a phone that renders only rows shows "No terminals yet." while the query is still pending, and again when it has failed outright, with no way back.
  */
 import { Terminal as TerminalIcon } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -103,9 +93,7 @@ export function TerminalsEmptyState(props: { readonly testIdPrefix: string }) {
 }
 
 /**
- * A durable create that failed and has no authoritative row to stand for it.
- * Offers the two ways out - try again, or forget it - so a failed launch is
- * never a silently missing terminal.
+ * Offers the two ways out - try again, or forget it - so a failed launch is never a silently missing terminal.
  */
 export function FailedTerminalCreateRow(props: {
   readonly job: EpicTerminalDurableCreateJobView;

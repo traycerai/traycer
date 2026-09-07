@@ -1,22 +1,4 @@
-/**
- * Categorical color assignment for the per-day chart's harness/model
- * breakdown.
- *
- * The generic model scale has sixteen fixed slots, assigned in the order the
- * caller supplies. The harness scale layers semantic brand preferences over
- * the same validated slots, with dedicated anchors for its key identities.
- * `buildUsageSeriesScaleForBuckets` splits the supplied keys deliberately:
- * the keys past the cap are chosen by SPEND (so "Other" is the long tail)
- * while the order of the ones that fit is total-independent (so a series does
- * not change color
- * when a refetch merely reorders magnitudes). Slots 1-8 are the dataviz
- * skill's validated primary hues;
- * 9-16 are their shade/tint cousins (see `usage-analytics-chart.css`), a
- * deliberately weaker ring that only the cheaper series ever land in. Past
- * sixteen distinct keys the tail folds into "Other" rather than generating
- * a seventeenth color - a generated color is indistinguishable from an
- * existing one under CVD and breaks every validated-palette check.
- */
+/** Categorical color assignment for the per-day chart's harness/model breakdown. */
 export const USAGE_SERIES_SLOT_COUNT = 16;
 export const USAGE_SERIES_OTHER_KEY = "__usage_series_other__";
 
@@ -27,14 +9,7 @@ const USAGE_SERIES_SLOTS = Array.from(
 
 /**
  * Preferred categorical slot for every harness currently shipped by Traycer.
- * The first three harnesses below use dedicated semantic tokens instead: they
- * are the identities users recognize most readily, and their colors must not
- * move when another harness enters or leaves the response.
- *
- * For monochrome brands after OpenCode, the preference deliberately chooses a
- * distinct hue. Repeating black/gray would erase categorical separation in a
- * dense legend. The allocator treats these as preferences, not guarantees: if
- * a preferred slot is occupied, it takes the next free validated slot.
+ * The first three harnesses below use dedicated semantic tokens instead: they are the identities users recognize most readily, and their colors must not move when another harness enters or leaves the response.
  */
 const HARNESS_PREFERRED_SLOT: Readonly<Partial<Record<string, number>>> = {
   amp: 8,
@@ -203,10 +178,8 @@ function findAvailableUsageSeriesSlot(
 }
 
 /**
- * Brand-aware variant for harness breakdowns. Fixed semantic colors are
- * allocated first; the remaining harnesses use brand-adjacent preferences
- * without ever sharing a color in the same scale. Model breakdowns must keep
- * using `buildUsageSeriesScale`: a model slug is not a harness identity.
+ * Brand-aware variant for harness breakdowns.
+ * Fixed semantic colors are allocated first; the remaining harnesses use brand-adjacent preferences without ever sharing a color in the same scale.
  */
 export function buildHarnessUsageSeriesScale(
   seriesKeysInSlotOrder: readonly string[],

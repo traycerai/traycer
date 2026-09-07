@@ -6,9 +6,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
 
-// Real Radix DropdownMenu opens on pointerdown; swap only the low-level
-// primitive so the REAL ProfileDropdown / HarnessModelPicker admission wiring
-// still runs. Mirrors harness-model-picker.test.tsx.
+// Real Radix DropdownMenu opens on pointerdown; swap only the low-level primitive so the REAL ProfileDropdown / HarnessModelPicker admission wiring still runs.
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
@@ -154,9 +152,8 @@ vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
   }),
 }));
 
-// useResolvedSeededProfileId still hits useHostQuery directly (not the
-// providers-list-query wrapper). Mirror the same provider list so a managed
-// seed is not tombstoned to ambient mid-test.
+// useResolvedSeededProfileId still hits useHostQuery directly (not the providers-list-query wrapper).
+// Mirror the same provider list so a managed seed is not tombstoned to ambient mid-test.
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
     readonly options: { readonly enabled: boolean } | null;
@@ -375,8 +372,7 @@ const CAPABILITY_LOCK_REASON =
   "Update Traycer host to continue this session under another profile.";
 const WORK_REJECTION_REASON = "some reason";
 // Host bulk preflight message shape for fork-before-first-turn (SOURCE_NOT_READY).
-// The dialog surfaces `verdict.message` on the row verbatim - not the client
-// submit-time copy in tui-fork-profile-rejection.ts.
+// The dialog surfaces `verdict.message` on the row verbatim - not the client submit-time copy in tui-fork-profile-rejection.ts.
 const SOURCE_NOT_READY_REASON =
   "SOURCE_NOT_READY: terminal agent session 'source-session' has no conversation yet - send it a message before forking.";
 
@@ -467,10 +463,6 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
   });
 
   it("disables every real ProfileDropdown row (including the source's own) when bulk verdicts are all SOURCE_NOT_READY", async () => {
-    // Fork-before-first-turn: the host rejects every candidate - including a
-    // same-profile plain continue under the source itself - because Claude has
-    // not yet written the source session transcript. Prove the continue-mode
-    // picker surfaces that on every row (not just non-source targets).
     seedClaudeProviders([
       ambientProfile("Terminal account"),
       managedProfile("work-profile", "Work"),

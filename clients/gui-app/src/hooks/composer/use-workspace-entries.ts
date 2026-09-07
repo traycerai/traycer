@@ -29,10 +29,7 @@ export interface UseWorkspaceEntriesResult {
   error: HostRpcError | null;
 }
 
-// The legacy raw-root fallback re-request for a scoped root whose
-// `workspace.searchPaths` query errored (e.g. an old host that predates the
-// method): a small cap keeps the fallback cheap - it only exists so a scoped
-// failure never drops that root's suggestions.
+// an old host that predates the method): a small cap keeps the fallback cheap - it only exists so a scoped failure never drops that root's suggestions.
 const SEARCH_PATHS_FALLBACK_LIMIT = 25;
 
 type LegacyMentionRequest = Exclude<
@@ -40,14 +37,7 @@ type LegacyMentionRequest = Exclude<
   MentionSearchPathsRequest
 >;
 
-/**
- * Executes the file/folder/git mention requests. Legacy raw-root requests run
- * as before; scoped `workspace.searchPaths` requests (emitted only for
- * Epic-attached roots) run separately and their host-ranked results are
- * reconstructed into the same mention-suggestion shape. If a scoped request
- * errors, that root is re-issued through the legacy RPC so scoping never makes
- * a suggestion disappear.
- */
+/** If a scoped request errors, that root is re-issued through the legacy RPC so scoping never makes a suggestion disappear. */
 export function useWorkspaceEntries(
   params: UseWorkspaceEntriesParams,
 ): UseWorkspaceEntriesResult {
@@ -81,21 +71,13 @@ export function useWorkspaceEntries(
     options: { staleTime: 30_000, placeholderData },
   });
 
-  // Fall back to the legacy RPC for any scoped root the host could not search:
-  // a query error (e.g. an old host that lacks `workspace.searchPaths`, or a
-  // transient failure) OR a typed `root_unavailable` outcome (the root is no
-  // longer authorized/attached/resolvable). Both keep the existing behavior
-  // instead of silently dropping that root's suggestions; a `ready` outcome
-  // (even with zero matches) does NOT fall back.
+  // Both keep the existing behavior instead of silently dropping that root's suggestions; a `ready` outcome (even with zero matches) does NOT fall back.
   const fallbackRequests = useMemo(
     () =>
       searchRequests.flatMap((request, index) => {
         const query = searchQueries[index];
         const data = query.data;
-        // `keepPreviousData` can retain a root_unavailable reply while this
-        // slot has already switched to another Epic/root. Only that reply's
-        // echoed identity may request the legacy fallback; query errors have
-        // no response identity and still always recover through legacy.
+        // `keepPreviousData` can retain a root_unavailable reply while this slot has already switched to another Epic/root.
         const currentRootUnavailable =
           data?.outcome === "root_unavailable" &&
           "root" in data &&

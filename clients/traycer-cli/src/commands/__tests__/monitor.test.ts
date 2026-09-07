@@ -4,10 +4,8 @@ import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { callHostRpc } from "../../internal/host-rpc";
 
-// Drive the monitor's recovery state machine with a mocked WsStreamClient and a
-// mocked revalidator: each `subscribe()` returns a fake session whose
-// onStatusChange/onServerFrame handlers the test invokes to simulate host
-// frames. Protocol/transport coverage lives in the shared ws-stream-client tests.
+// Drive the monitor's recovery state machine with a mocked WsStreamClient and a mocked revalidator: each `subscribe()` returns a fake session whose onStatusChange/onServerFrame handlers the test invokes to simulate host frames.
+// Protocol/transport coverage lives in the shared ws-stream-client tests.
 type FakeSession = {
   statusChange: ((status: string, reason: unknown) => void) | null;
   serverFrame: ((envelope: unknown) => void) | null;
@@ -48,10 +46,8 @@ const {
     sessions.push(session);
     return handle;
   });
-  // Defaults to the latest negotiated minor (@1.3) the monitor itself
-  // targets - every existing test in this file exercises a fully-current
-  // host, so this preserves prior behavior. Mixed-version negotiation is
-  // covered by its own dedicated tests, which override this per-test.
+  // Defaults to the latest negotiated minor (@1.3) the monitor itself targets - every existing test in this file exercises a fully-current host, so this preserves prior behavior.
+  // Mixed-version negotiation is covered by its own dedicated tests, which override this per-test.
   const getMethodSchemaVersionMock = vi.fn(() => ({ major: 1, minor: 3 }));
   return {
     subscribeMock,
@@ -87,10 +83,8 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
   },
 }));
 
-// The monitor's revalidator now comes from the store-backed factory (§7); the
-// recovery state machine under test is agnostic to how the revalidator refreshes,
-// so a mocked `revalidateCurrentContext` drives it exactly as before. The store
-// is a `dispose`-only stub (the monitor disposes it on exit).
+// The monitor's revalidator now comes from the store-backed factory (§7); the recovery state machine under test is agnostic to how the revalidator refreshes, so a mocked `revalidateCurrentContext` drives it exactly as before.
+// The store is a `dispose`-only stub (the monitor disposes it on exit).
 vi.mock("../../store/credentials-store", () => ({
   createCliCredentialsStore: vi.fn(() => ({ dispose: disposeMock })),
   createStoreBackedRevalidator: vi.fn(() => ({
@@ -274,9 +268,8 @@ describe("runMonitor recovery", () => {
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await flush(0);
 
-    // Each cycle: fatal UNAUTHORIZED → rotated → re-subscribe, with no 'open'
-    // in between so the health reset never fires. MAX is 3, so the 4th rotated
-    // refresh trips the guard; drive a couple extra (no-ops once settled).
+    // Each cycle: fatal UNAUTHORIZED → rotated → re-subscribe, with no 'open' in between so the health reset never fires.
+    // MAX is 3, so the 4th rotated refresh trips the guard; drive a couple extra (no-ops once settled).
     for (let i = 0; i < 5; i += 1) {
       sessions[sessions.length - 1].statusChange?.(
         "closed",
@@ -444,10 +437,8 @@ describe("mixed-version inbox message frames", () => {
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await flush(0);
 
-    // The @1.0 wire shape has no `eventId` field at all - parsing this
-    // against the latest (@1.2) schema, which requires it, would fail
-    // outright and silently drop the message. Parsing against the
-    // NEGOTIATED minor must succeed.
+    // The @1.0 wire shape has no `eventId` field at all - parsing this against the latest (@1.2) schema, which requires it, would fail outright and silently drop the message.
+    // Parsing against the NEGOTIATED minor must succeed.
     sessions[0].serverFrame?.({
       kind: "message",
       hasBinaryPayload: false,
@@ -477,10 +468,7 @@ describe("mixed-version inbox message frames", () => {
   });
 
   it("prints a new-host (@1.2-negotiated) message frame and acks only after the stdout write is CONFIRMED", async () => {
-    // Exercises the ack path, which now awaits `writeStdoutForAck`'s own
-    // per-write outcome (see `std-write.ts`) rather than the module-wide
-    // `flushStdio()` chain - so the mock must actually invoke the write's
-    // completion callback, not just return `true`.
+    // Exercises the ack path, which now awaits `writeStdoutForAck`'s own per-write outcome (see `std-write.ts`) rather than the module-wide `flushStdio()` chain - so the mock must actually invoke the write's completion callback, not just return `true`.
     const stdoutSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
@@ -507,12 +495,7 @@ describe("mixed-version inbox message frames", () => {
         eventId: "evt-1",
       },
     });
-    // The write is issued synchronously; `writeStdoutForAck`'s own outcome
-    // promise is now DECOUPLED from any other pending write's completion
-    // (unlike the old `flushStdio()`-gated ack, which wailted on the whole
-    // module-level tail and could be poisoned by an unrelated earlier
-    // write) - so a couple of microtask ticks are enough for both the print
-    // and the ack to land, no fake-timer fallback needed.
+    // The write is issued synchronously; `writeStdoutForAck`'s own outcome promise is now DECOUPLED from any other pending write's completion (unlike the old `flushStdio()`-gated ack, which wailted on the whole module-level tail and could be poisoned by an unrelated earlier write) - so a couple of microtask ticks are enough for both the print and the ack to land, no fake-timer fallback needed.
     await flush(0);
     await flush(0);
 
@@ -634,9 +617,8 @@ describe("mixed-version inbox message frames", () => {
   });
 
   it("does NOT ack a new-host (@1.2-negotiated) message frame when the stdout write errors", async () => {
-    // The exact defect the amended go/no-go review found: an ack must never
-    // fire for text that was never successfully written. Simulates a write
-    // whose completion callback reports an error (e.g. EPIPE).
+    // The exact defect the amended go/no-go review found: an ack must never fire for text that was never successfully written.
+    // Simulates a write whose completion callback reports an error (e.g.
     const stdoutSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
@@ -676,9 +658,7 @@ describe("mixed-version inbox message frames", () => {
   });
 
   it("does NOT ack a new-host (@1.2-negotiated) message frame when the write never confirms (bounded timeout)", async () => {
-    // The write's completion callback is captured but deliberately never
-    // invoked - `writeStdoutForAck` must fall back to its own bounded
-    // timeout and report failure, not treat non-completion as success.
+    // The write's completion callback is captured but deliberately never invoked - `writeStdoutForAck` must fall back to its own bounded timeout and report failure, not treat non-completion as success.
     const stdoutSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation(() => true);

@@ -3,10 +3,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { resolveSeededProfileId } from "../resolve-seeded-profile-id";
 
 /**
- * Ticket 07 (protocol-schema-contract-compat review's Major finding): a
- * settled-empty `profiles[]` (old host, or flag-off/unsupported provider)
- * must be judged "no support here" and clear the pin - distinct from an
- * unsettled query, which must hold the pin verbatim.
+ * A settled-empty `profiles[]` (old host, or flag-off/unsupported provider) must be judged "no support here" and clear the pin - distinct from an unsettled query, which must hold the pin.
  */
 
 function profile(

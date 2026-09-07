@@ -13,19 +13,12 @@ import type {
   ProviderLoginCapability,
 } from "@traycer/protocol/host/provider-schemas";
 
-// The banner shows only for web-login providers; it receives live provider
-// `state` as a prop (from the composer's re-auth gate). Reconnect methods are
-// OAuth (browser login) and/or pasting a fresh credential into an env var. A
-// *rejected* credential never reaches the banner (it surfaces as a generic error
-// row); API-key-only providers (Cursor) have no capability and no banner.
+// A *rejected* credential never reaches the banner (it surfaces as a generic error row); API-key-only providers (Cursor) have no capability and no banner.
 type AwaitLoginVariables = {
   readonly providerId: string;
   readonly profileId: string | null;
 };
-// Mirrors only the fields the ambient flow hook actually reads off
-// `providers.awaitLogin`'s response (`codeRejected`, `state.auth.status`) -
-// not the full `ProviderCliState` schema, since the mocked hook below never
-// goes through real schema parsing.
+// Mirrors only the fields the ambient flow hook actually reads off `providers.awaitLogin`'s response (`codeRejected`, `state.auth.status`) - not the full `ProviderCliState` schema, since the mocked hook below never goes through real schema parsing.
 type AwaitLoginResult = {
   readonly codeRejected: boolean;
   readonly state: { readonly auth: { readonly status: string } } | undefined;
@@ -223,9 +216,7 @@ const CLAUDE_CAP: ProviderLoginCapability = {
   terminalLogin: null,
 };
 
-// Droid has no headless login subcommand (bare `droid` is an interactive TUI
-// that can't browser-OAuth over piped stdio), so it advertises no OAuth args -
-// reauth is the FACTORY_API_KEY paste form only.
+// Droid has no headless login subcommand (bare `droid` is an interactive TUI that can't browser-OAuth over piped stdio), so it advertises no OAuth args - reauth is the FACTORY_API_KEY paste form only.
 const DROID_CAP: ProviderLoginCapability = {
   oauthArgs: null,
   token: { vars: ["FACTORY_API_KEY"] },
@@ -240,9 +231,7 @@ const CODE_PASTE_CLAUDE_CAP: ProviderLoginCapability = {
   terminalLogin: null,
 };
 
-// Copilot's device-code login cannot be driven headlessly, so its capability
-// carries a non-null `terminalLogin` alongside real `oauthArgs` - the banner
-// must offer the terminal button and suppress the (unusable) headless one.
+// Copilot's device-code login cannot be driven headlessly, so its capability carries a non-null `terminalLogin` alongside real `oauthArgs` - the banner must offer the terminal button and suppress the (unusable) headless one.
 const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
   oauthArgs: ["auth", "login"],
   token: null,
@@ -250,11 +239,7 @@ const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
   terminalLogin: {},
 };
 
-// Reasonix is also a terminal-login provider (its own credential wizard, not
-// a device-code sign-in), but it has setup guidance
-// (`provider-setup-guidance.ts`) - the one live entry today - so
-// `TerminalLoginRow` must swap in the guidance's button label and hint
-// instead of the generic "Sign in from a terminal" copy.
+// Reasonix is also a terminal-login provider (its own credential wizard, not a device-code sign-in), but it has setup guidance (`provider-setup-guidance.ts`) - the one live entry today - so `TerminalLoginRow` must swap in the guidance's button label and hint instead of the generic "Sign in from a terminal" copy.
 const REASONIX_CAP: ProviderLoginCapability = {
   oauthArgs: ["setup"],
   token: null,
@@ -262,12 +247,8 @@ const REASONIX_CAP: ProviderLoginCapability = {
   terminalLogin: {},
 };
 
-// The unreachable case this used to model: an old host's payload cannot
-// decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge
-// (`registry.ts`) fills it to `null` on that exact hop. What DOES leave
-// `providerSupportsTerminalLogin` reading "not a terminal-login provider" for
-// a real reason is the provider's whole `loginCapability` being `null`
-// (Cursor, Traycer) - the case below.
+// The unreachable case this used to model: an old host's payload cannot decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge (`registry.ts`) fills it to `null` on that exact hop.
+// What DOES leave `providerSupportsTerminalLogin` reading "not a terminal-login provider" for a real reason is the provider's whole `loginCapability` being `null` (Cursor, Traycer) - the case below.
 
 function copilotState(
   loginCapability: ProviderLoginCapability | null,
@@ -448,10 +429,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 
-  // Row 1 of the terminal-login contract table: the banner is one of three
-  // consumers of `providerSupportsTerminalLogin` - see
-  // `provider-signin-availability.test.ts` for the other two
-  // (`providerSignInUnavailableHint`, `resolveCreateProfileGate`).
+  // Row 1 of the terminal-login contract table: the banner is one of three consumers of `providerSupportsTerminalLogin` - see `provider-signin-availability.test.ts` for the other two (`providerSignInUnavailableHint`, `resolveCreateProfileGate`).
   it("offers 'Sign in from a terminal' instead of the headless OAuth button for a terminal-login provider", () => {
     render(
       <ProviderReauthBanner
@@ -472,10 +450,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
   });
 
-  // Reasonix is a terminal-login provider with its own setup guidance
-  // (`provider-setup-guidance.ts`): the generic "Sign in from a terminal" /
-  // "prints a sign-in code" copy is wrong for its credential-paste wizard, so
-  // `TerminalLoginRow` swaps in the guidance's own label and hint instead.
+  // Reasonix is a terminal-login provider with its own setup guidance (`provider-setup-guidance.ts`): the generic "Sign in from a terminal" / "prints a sign-in code" copy is wrong for its credential-paste wizard, so `TerminalLoginRow` swaps in the guidance's own label and hint instead.
   it("offers 'Set up in terminal' with the API-key hint for a provider with setup guidance (reasonix)", () => {
     render(
       <ProviderReauthBanner
@@ -504,11 +479,8 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByText(/sign-in code/)).toBeNull();
   });
 
-  // The banner resolves its copy through the SAME resolver the picker's setup
-  // CTA uses (`providerTerminalGuidance`), so a launch-the-CLI provider's
-  // in-CLI instruction reaches it. It used to fall back to its own inline copy
-  // of the generic sentences whenever the override table returned null, which
-  // told a Qwen user to read a sign-in code that nothing prints.
+  // The banner resolves its copy through the SAME resolver the picker's setup CTA uses (`providerTerminalGuidance`), so a launch-the-CLI provider's in-CLI instruction reaches it.
+  // It used to fall back to its own inline copy of the generic sentences whenever the override table returned null, which told a Qwen user to read a sign-in code that nothing prints.
   it("shows the in-CLI instruction, not the generic sign-in-code hint, for a launch-the-CLI provider (qwen)", () => {
     render(
       <ProviderReauthBanner
@@ -542,14 +514,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByText(/sign-in code/)).toBeNull();
   });
 
-  // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
-  // Traycer, or any CLI with no OAuth session to reconnect) makes the
-  // helper's optional chain yield `undefined` for `terminalLogin` -
-  // `providerSupportsTerminalLogin` must read that as "not a terminal-login
-  // provider" the same as an explicit `null`. copilotState's own capability
-  // has real `oauthArgs`, so a null capability here also exercises the "no
-  // reconnect method at all" branch rather than the headless button; assert
-  // on the absence of the terminal button, which is Row 2's actual claim.
+  // Row 2: a provider whose whole `loginCapability` is `null` (Cursor, Traycer, or any CLI with no OAuth session to reconnect) makes the helper's optional chain yield `undefined` for `terminalLogin` - `providerSupportsTerminalLogin` must read that as "not a terminal-login provider" the same as an explicit `null`. copilotState's own capability has real `oauthArgs`, so a null capability here also exercises the "no reconnect method at all" branch rather than the headless button; assert on the absence of the terminal button, which is Row 2's actual claim.
   it("shows the pack's preparing state instead of the terminal button while the provider cannot spawn", () => {
     render(
       <ProviderReauthBanner
@@ -567,9 +532,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    // A terminal login spawns the provider's CLI exactly as a turn does, so
-    // a pack with nothing to fall back to gates it the same way - the row
-    // stays (the wait is the thing to show), the button does not.
+    // A terminal login spawns the provider's CLI exactly as a turn does, so a pack with nothing to fall back to gates it the same way - the row stays (the wait is the thing to show), the button does not.
     expect(
       screen.queryByRole("button", { name: /Sign in from a terminal/ }),
     ).toBeNull();
@@ -599,15 +562,8 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeNull();
   });
 
-  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
-  // `terminalLogin` with `oauthArgs: null`: there is no headless command, the
-  // host launches the CLI itself. The banner must offer the terminal button
-  // (never the headless one) - the same answer `providerSupportsTerminalLogin`
-  // and `resolveCreateProfileGate` give, so this surface cannot fall through
-  // to the CLI stub for a provider Traycer can open the CLI for.
-  // Both spellings of "no headless command" are covered: this suite's previous
-  // `[]` case asserted the OPPOSITE (neither button), so leaving it out would
-  // drop that boundary from the suite entirely.
+  // The banner must offer the terminal button (never the headless one) - the same answer `providerSupportsTerminalLogin` and `resolveCreateProfileGate` give, so this surface cannot fall through to the CLI stub for a provider Traycer can open the CLI for.
+  // Both spellings of "no headless command" are covered: this suite's previous `[]` case asserted the OPPOSITE (neither button), so leaving it out would drop that boundary from the suite entirely.
   it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
     "offers the terminal button, not the headless one, when terminalLogin is present and there is no oauthArgs (%o)",
     ({ oauthArgs }) => {
@@ -640,9 +596,7 @@ describe("<ProviderReauthBanner />", () => {
     },
   );
 
-  // Row 3: unlike browser OAuth (a localhost loopback that only a local host
-  // can serve), a device-code terminal login needs no loopback, so it must be
-  // offered on a REMOTE host too.
+  // Row 3: unlike browser OAuth (a localhost loopback that only a local host can serve), a device-code terminal login needs no loopback, so it must be offered on a REMOTE host too.
   it("still offers 'Sign in from a terminal' on a remote host", () => {
     mocks.hostKind = "remote";
     render(
@@ -663,11 +617,7 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeDefined();
   });
 
-  // The other half of the `showTerminalLogin` gate. Every other terminal-login
-  // case here passes a real epic + view tab; this one pins the home-composer
-  // fallback, where there is no canvas to open a terminal into. Dropping the
-  // `epicId !== null && viewTabId !== null` conjunct would draw a button that
-  // fires an RPC the host honours - a live sign-in PTY with no tile.
+  // Dropping the `epicId !== null && viewTabId !== null` conjunct would draw a button that fires an RPC the host honours - a live sign-in PTY with no tile.
   it("falls through to the paste form for a terminal-login provider outside a canvas", () => {
     render(
       <ProviderReauthBanner
@@ -731,9 +681,7 @@ describe("<ProviderReauthBanner />", () => {
     fireEvent.change(input, { target: { value: "  fk-droid-123  " } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    // Droid has an encrypted host-side key store, so the banner persists the key
-    // as that secret (`providers.setApiKey`) — exactly like Settings > Providers —
-    // rather than a plaintext env override.
+    // Droid has an encrypted host-side key store, so the banner persists the key as that secret (`providers.setApiKey`) - exactly like Settings > Providers - rather than a plaintext env override.
     expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
       { providerId: "droid", apiKey: "fk-droid-123" },
       expect.anything(),
@@ -1094,9 +1042,7 @@ describe("<ProviderReauthBanner />", () => {
       awaitOptions.onSuccess({ codeRejected: true, state: undefined });
     });
 
-    // The rejection triggered a fresh `startLogin` call and stayed in the
-    // banner's waiting UI, instead of dropping back to the Authenticate
-    // button or leaving the user with a dead child.
+    // The rejection triggered a fresh `startLogin` call and stayed in the banner's waiting UI, instead of dropping back to the Authenticate button or leaving the user with a dead child.
     expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
     expect(
       screen.getByText(
@@ -1129,9 +1075,7 @@ describe("<ProviderReauthBanner />", () => {
     });
 
     const [, awaitOptions] = latestAwaitLoginCall();
-    // `awaitLogin` resolves not-authenticated first - previously this
-    // reverted straight to the Authenticate button, dropping the later
-    // `noActiveLogin` verdict on the floor instead of restarting.
+    // `awaitLogin` resolves not-authenticated first - previously this reverted straight to the Authenticate button, dropping the later `noActiveLogin` verdict on the floor instead of restarting.
     act(() => {
       awaitOptions.onSuccess({
         codeRejected: false,
@@ -1177,9 +1121,8 @@ describe("<ProviderReauthBanner />", () => {
       submitOptions.onSuccess({ outcome: "noActiveLogin" });
     });
 
-    // `awaitLogin` then resolves - the call went through, but the re-probed
-    // status is still not authenticated. Presence of a completed call is
-    // not success; only an authenticated status is (fixup review finding 2).
+    // `awaitLogin` then resolves - the call went through, but the re-probed status is still not authenticated.
+    // Presence of a completed call is not success; only an authenticated status is (fixup review finding 2).
     const [, awaitOptions] = latestAwaitLoginCall();
     act(() => {
       awaitOptions.onSuccess({
@@ -1259,7 +1202,7 @@ describe("<ProviderReauthBanner />", () => {
     );
   });
 
-  it("shows the Cancel button's pending state per the AGENTS.md recipe (disabled, unchanged label, inline spinner)", () => {
+  it("shows the Cancel button's pending state (disabled, unchanged label, inline spinner)", () => {
     mocks.cancelLoginPending = true;
     mockStartLoginAlwaysSucceeds();
     render(
@@ -1352,8 +1295,6 @@ describe("<ProviderReauthBanner />", () => {
     // Now waiting on the browser loopback; the child must stay alive.
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
 
-    // Teardown (remount/fast-refresh/gate re-render) must NOT kill the child -
-    // doing so drops the loopback port mid-sign-in.
     unmount();
     expect(mocks.cancelLoginMutate).not.toHaveBeenCalled();
 

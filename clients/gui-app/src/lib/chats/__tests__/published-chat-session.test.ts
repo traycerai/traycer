@@ -13,21 +13,7 @@ import {
   type PublishedChatSessionInput,
 } from "@/lib/chats/published-chat-session";
 
-/**
- * The forward-compatibility guarantee, at the granularity it has to hold.
- *
- * The presentation layer preserves an unknown block IN PLACE inside an
- * otherwise ordinary message - that is the whole reason it hands readers `raw`
- * alongside `known`. An adapter that reparses the whole record and drops it on
- * any failure inverts that: a single future block type deletes the known text,
- * file changes and plan sitting beside it. The published copy then silently
- * shows less than the chat contains, which is the one failure the fidelity
- * rules exist to prevent.
- *
- * The fixture below is the shape a cold review reproduced through the real
- * publish -> assemble -> present path: an assistant message carrying
- * [text, file_change, plan, <future type>].
- */
+/** The forward-compatibility guarantee, at the granularity it has to hold. */
 
 function textBlock(blockId: string, text: string): JsonObject {
   return {
@@ -55,11 +41,8 @@ function futureBlock(blockId: string): JsonObject {
 }
 
 /**
- * A `JsonObject`'s values are `JsonValue`, so `String(...)` on one would
- * happily render an object as "[object Object]" and the fixture would assert
- * against that placeholder. Every block below really does carry string ids, so
- * this states it by NARROWING instead of coercing - a fixture that stops
- * carrying one fails here, loudly, rather than silently downstream.
+ * A `JsonObject`'s values are `JsonValue`, so `String(...)` on one would happily render an object as "[object Object]" and the fixture would assert against that placeholder.
+ * Every block below really does carry string ids, so this states it by NARROWING instead of coercing - a fixture that stops carrying one fails here, loudly, rather than silently downstream.
  */
 function jsonString(value: JsonValue | undefined, field: string): string {
   if (typeof value !== "string") {
@@ -86,9 +69,7 @@ function presentedChatWith(blocks: readonly JsonObject[]): PresentedChat {
     },
     blocks: [...blocks],
   };
-  // Built through the real `PresentedChat` type rather than cast into it, so a
-  // change to the presentation contract breaks this fixture instead of letting
-  // it drift into asserting a shape the pipeline no longer produces.
+  // Built through the real `PresentedChat` type rather than cast into it, so a change to the presentation contract breaks this fixture instead of letting it drift into asserting a shape the pipeline no longer produces.
   return {
     messages: [
       {
@@ -196,11 +177,7 @@ describe("convertPublishedChat", () => {
 });
 
 /**
- * `convertReplicaChat`'s rows are raw doc records, not the split
- * head/shard shape `PresentedChat` produces - a doc row's `blocks` sit
- * inline on the message itself, exactly as `readMessages()` reconstructs
- * them. The screening rule is the one `convertPublishedChat` uses, applied
- * to that inline array instead of a parallel presented list.
+ * `convertReplicaChat`'s rows are raw doc records, not the split head/shard shape `PresentedChat` produces - a doc row's `blocks` sit inline on the message itself, exactly as `readMessages()` reconstructs them.
  */
 function replicaAssistantRow(
   blocks: readonly JsonObject[],
@@ -266,12 +243,7 @@ describe("convertReplicaChat", () => {
   });
 
   it("swaps null and non-object block entries for placeholders too, not just unrecognized objects", () => {
-    // `null` and a bare number are the two shapes the block-id fallback in
-    // `rebuildReplicaMessage` exists for - `typeof null === "object"` would
-    // otherwise slip past a naive object check, and a number has no
-    // `blockId` to read at all. Built as a plain row rather than through
-    // `replicaAssistantRow` (typed to `readonly JsonObject[]`) since neither
-    // shape here IS one.
+    // `null` and a bare number are the two shapes the block-id fallback in `rebuildReplicaMessage` exists for - `typeof null === "object"` would otherwise slip past a naive object check, and a number has no `blockId` to read at all.
     const row: Record<string, unknown> = {
       role: "assistant",
       messageId: "m1",
@@ -353,11 +325,7 @@ function publishedInputWith(
 }
 
 /**
- * The same duplicate-retention regression `chat-session-store.test.ts` guards
- * against the live store: `publishedChatSessionState` builds `chat` as a
- * `ChatSessionRecord`, and the published copy is the case that made the
- * duplicate most expensive - the whole transcript arrives materialized, so a
- * second copy doubles the peak of an already-large read.
+ * The same duplicate-retention regression `chat-session-store.test.ts` guards against the live store: `publishedChatSessionState` builds `chat` as a `ChatSessionRecord`, and the published copy is the case that made the duplicate most expensive - the whole.
  */
 describe("publishedChatSessionState", () => {
   it("carries the transcript once: `chat` has no messages/events, and state.messages/state.events keep the full copy", () => {

@@ -1,18 +1,3 @@
-/**
- * Public surface of the versioned message framework.
- *
- * This module is the single source of truth for two parallel contract
- * families:
- *
- * - **RPC contracts** - paired request/response schemas for wire calls
- *   (`defineRpcContract`, `defineVersionedRpcRegistry`, ...).
- * - **Record contracts** - single schemas for stored records
- *   (`defineRecordContract`, `defineVersionedRecordRegistry`, ...).
- *
- * Both families share the same versioning rules (major/minor lines,
- * additive minors, breaking-only majors, direct downgrade bridges). Keep
- * them structurally identical - drift between the two families is a bug.
- */
 
 // ---- Versioned RPC (request/response) ---------------------------------- //
 
@@ -155,10 +140,6 @@ export {
 } from "./versioned-record";
 
 // ---- WebSocket frame protocol + version negotiation ---------------------- //
-//
-// Transport-generic - used by the host RPC + stream surfaces today, and
-// reusable by any future RPC consumer (cloud, relay) that adopts the same
-// versioned-RPC framework.
 
 export type {
   ClientFrame,

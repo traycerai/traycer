@@ -1,7 +1,5 @@
 /**
- * Unit tests for `importPromptStashContentToLanding` — dedup, zero-image
- * short-circuit, measured-budget reservation, sequential put failure/orphan
- * semantics, hash rewrite with fresh ids, and reservation release on failure.
+ * Unit tests for `importPromptStashContentToLanding` - dedup, zero-image short-circuit, measured-budget reservation, sequential put failure/orphan semantics, hash rewrite with fresh ids, and reservation release on failure.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -454,9 +452,7 @@ describe("importPromptStashContentToLanding", () => {
       "rewrite import",
     );
 
-    // Two distinct hashes reserved: a third near-cap different hash that only
-    // fits if those 8 bytes were free would still succeed here (tiny usage),
-    // so prove the reservation object exists and release frees capacity.
+    // Two distinct hashes reserved: a third near-cap different hash that only fits if those 8 bytes were free would still succeed here (tiny usage), so prove the reservation object exists and release frees capacity.
     expect(typeof result.reservation.release).toBe("function");
     const images = collectImageNodes(result.content);
     expect(images).toHaveLength(2);

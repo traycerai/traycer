@@ -162,21 +162,14 @@ describe("formatWorkspaceListTable", () => {
       row({ repoIdentifier: null, branch: null }),
     ]);
     const line = table.split("\n")[1];
-    // Split on runs of 2+ spaces (the column separator) rather than
-    // asserting `toContain("-")` on the whole line - a bare substring check
-    // would also match a hyphen inside the DIRECTORY path or a repo name.
+    // Split on runs of 2+ spaces (the column separator) rather than asserting `toContain("-")` on the whole line - a bare substring check would also match a hyphen inside the DIRECTORY path or a repo name.
     // Column order is REPO, MODE, BRANCH, GIT, STATE, AGENTS, DIRECTORY.
     const cells = line.split(/\s{2,}/);
     expect(cells[0]).toBe("-"); // REPO
     expect(cells[2]).toBe("-"); // BRANCH
   });
 
-  // The default fixture is `mode: "local"`, so a legacy `setup_*`
-  // `disabledReason` never trips the blocking check below (that only
-  // applies to `mode === "worktree" && !isGitRepo`) and falls through to
-  // the setup-lifecycle branch, matching the GUI's
-  // `worktreeFolderRowBadge` labels exactly - "setup_running" now reads
-  // "setting up", not "setup running".
+  // The default fixture is `mode: "local"`, so a legacy `setup_*` `disabledReason` never trips the blocking check below (that only applies to `mode === "worktree" && !isGitRepo`) and falls through to the setup-lifecycle branch, matching the GUI's `worktreeFolderRowBadge` labels exactly - "setup_running" now reads "setting up", not "setup running".
   it.each([
     [null, "ready"],
     ["setup_pending", "setup pending"],
@@ -193,11 +186,7 @@ describe("formatWorkspaceListTable", () => {
     },
   );
 
-  // Regression coverage for the "creation is the selector gate" fix: once a
-  // worktree exists, setup progress/outcomes live in `setupState` with
-  // `disabledReason: null`, so `formatState` must read `setupState` too -
-  // keying on `disabledReason` alone reported a worktree whose setup script
-  // FAILED as plain "ready".
+  // Regression coverage for the "creation is the selector gate" fix: once a worktree exists, setup progress/outcomes live in `setupState` with `disabledReason: null`, so `formatState` must read `setupState` too - keying on `disabledReason` alone reported a worktree whose setup script FAILED as plain "ready".
   it.each([
     ["failed", "setup failed"],
     ["running", "setting up"],
@@ -326,11 +315,7 @@ describe("formatWorkspaceListTable", () => {
         mode: "worktree",
         branch: "feature-x",
         isGitRepo: false,
-        // A worktree row (isGitRepo: false) with a legacy `setup_failed`
-        // REASON is now blocking ("missing on disk") under the production
-        // fix - use the canonical `setupState` spelling instead, which
-        // `hasBlockingWorktreeSelectorReason` never inspects, so this row stays a plain
-        // "setup failed" STATE for the column-alignment check below.
+        // A worktree row (isGitRepo: false) with a legacy `setup_failed` REASON is now blocking ("missing on disk") under the production fix - use the canonical `setupState` spelling instead, which `hasBlockingWorktreeSelectorReason` never inspects, so this row stays a plain "setup failed" STATE for the column-alignment check below.
         disabledReason: null,
         setupState: "failed",
         sources: [],
@@ -339,9 +324,7 @@ describe("formatWorkspaceListTable", () => {
     ]);
     const [header, row1, row2] = table.split("\n");
 
-    // Every non-final column's content begins at the same character offset
-    // on the header line and on every data row - proof the padEnd widths
-    // are computed consistently across the whole column, not per-row.
+    // Every non-final column's content begins at the same character offset on the header line and on every data row - proof the padEnd widths are computed consistently across the whole column, not per-row.
     const modeStart = header.indexOf("MODE");
     expect(row1.indexOf("local")).toBe(modeStart);
     expect(row2.indexOf("worktree")).toBe(modeStart);
@@ -358,11 +341,7 @@ describe("formatWorkspaceListTable", () => {
     expect(row1.indexOf("ready")).toBe(stateStart);
     expect(row2.indexOf("setup failed")).toBe(stateStart);
 
-    // AGENTS is a bare digit ("1"/"0"), so this only isolates the right
-    // column because no earlier cell in either row happens to contain that
-    // digit (no digits in the mode/branch/git/state text, and the chosen
-    // `runningDir` fixtures below are digit-free) - keep it that way rather
-    // than "improving" the fixture with a path that has a stray digit.
+    // AGENTS is a bare digit ("1"/"0"), so this only isolates the right column because no earlier cell in either row happens to contain that digit (no digits in the mode/branch/git/state text, and the chosen `runningDir` fixtures below are digit-free) - keep it that way rather than "improving" the fixture with a path that has a stray digit.
     const agentsStart = header.indexOf("AGENTS");
     expect(row1.indexOf("1")).toBe(agentsStart);
     expect(row2.indexOf("0")).toBe(agentsStart);

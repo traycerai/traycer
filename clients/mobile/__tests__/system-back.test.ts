@@ -1,12 +1,5 @@
 /**
- * The Android back adapter: the OS back request (hardware key or the system
- * back gesture) arrives through the App plugin's `backButton` event, and the
- * shell forwards it as a payload-free signal on `IRunnerHost.systemBack`.
- *
- * The plugin is faked at the package boundary, as everywhere else in this
- * workspace. The claims: a press reaches the subscriber, a disposed
- * subscription hears nothing more (including when disposal races the plugin's
- * asynchronous attach), and `minimize` reaches the plugin's `minimizeApp`.
+ * The Android back adapter: the OS back request (hardware key or the system back gesture) arrives through the App plugin's `backButton` event, and the shell forwards it as a payload-free signal on `IRunnerHost.systemBack`.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { PluginListenerHandle } from "@capacitor/core";
@@ -41,7 +34,6 @@ class FakeAppPlugin implements SystemBackPluginSlice {
   }
 }
 
-/** The plugin attaches asynchronously; let that promise settle. */
 async function settle(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();

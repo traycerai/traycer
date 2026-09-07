@@ -88,9 +88,7 @@ describe("parseKnownHostNotificationPayload", () => {
     ).toMatchObject({ kind: "interview", interviewBlockId: "block-1" });
   });
 
-  // Forward compatibility: a payload written by a NEWER producer with extra
-  // fields must still parse, and the extras must survive the round trip so
-  // an enrichment pass cannot strip data a newer reader relies on.
+  // Forward compatibility: a payload written by a NEWER producer with extra fields must still parse, and the extras must survive the round trip so an enrichment pass cannot strip data a newer reader relies on.
   it("keeps unknown extra fields through parse", () => {
     const parsed = parseKnownHostNotificationPayload({
       ...CHAT_STOPPED,
@@ -191,9 +189,7 @@ describe("deriveHostNotificationStoppedReason", () => {
     expect(deriveHostNotificationStoppedReason(code)).toBe(reason);
   });
 
-  // `policy_refusal` is stamped as a code for the chat error badge and the A2A
-  // errored detail, but deliberately carries NO taxonomy row: the meaningful
-  // part is the raw refusal prose, which never belongs in durable copy.
+  // `policy_refusal` is stamped as a code for the chat error badge and the A2A errored detail, but deliberately carries NO taxonomy row: the meaningful part is the raw refusal prose, which never belongs in durable copy.
   it.each([
     null,
     "MISSING_API_KEY",
@@ -243,9 +239,7 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
     });
   });
 
-  // Cross-kind corruption: a valid payload shape under the WRONG notification
-  // kind is malformed row data and must take the generic/null path instead of
-  // minting contradictory presentation, navigation, or webhook output.
+  // Cross-kind corruption: a valid payload shape under the WRONG notification kind is malformed row data and must take the generic/null path instead of minting contradictory presentation, navigation, or webhook output.
   it("rejects a valid payload shape under a mismatched notification kind", () => {
     expect(
       parseKnownHostNotificationPayloadForKind(

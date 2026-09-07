@@ -13,10 +13,8 @@ export type ImageBlobUrlState =
       readonly status: "ready";
       readonly url: string;
       /**
-       * The type the Blob behind `url` was actually created with - the byte
-       * source's sniffed verdict when it had one, else the `mediaType` passed
-       * in. Anything that branches on format (SVG sanitization) must read this
-       * rather than the caller's own argument; see `ImageBlobResolution`.
+       * The type the Blob behind `url` was actually created with - the byte source's sniffed verdict when it had one, else the `mediaType` passed in.
+       * Anything that branches on format (SVG sanitization) must read this rather than the caller's own argument; see `ImageBlobResolution`.
        */
       readonly mediaType: string;
     };
@@ -27,14 +25,8 @@ export const IMAGE_FETCH_RETRY_MAX_MS = 2_000;
 export const IMAGE_FETCH_MAX_ATTEMPTS = 4;
 
 /**
- * Resolve a chat image's content hash to a shared `blob:` URL, fetching its
- * bytes once via `fetcher` (the tab-scoped host's `attachments.read`). Every
- * component that renders the same hash UNDER THE SAME SUBJECT shares one blob
- * and one cache reference; the URL is released on unmount and revoked once
- * nothing holds it.
- *
- * `fetcher` must be referentially stable (wrap in `useMemo`) so the effect does
- * not re-acquire on every render.
+ * Resolve a chat image's content hash to a shared `blob:` URL, fetching its bytes once via `fetcher` (the tab-scoped host's `attachments.read`).
+ * Every component that renders the same hash UNDER THE SAME SUBJECT shares one blob and one cache reference; the URL is released on unmount and revoked once nothing holds it.
  */
 export function useImageBlobUrl(
   hash: string | null,
@@ -45,15 +37,7 @@ export function useImageBlobUrl(
 }
 
 /**
- * Resolves the same shared blob URL while preserving the difference between a
- * hash that is still within its sync grace window and one that has remained
- * absent long enough to be called unavailable.
- *
- * A pending fetch stays alive after the unavailable transition, so a late Yjs
- * attachment-map update can still resolve it. Rejected acquisitions (for
- * example, an open-epic store being disposed during mount) receive a finite
- * retry budget, then rest in unavailable until a dependency change or remount
- * starts a fresh acquisition.
+ * Resolves the same shared blob URL while preserving the difference between a hash that is still within its sync grace window and one that has remained absent long enough to be called unavailable.
  */
 export function useImageBlobUrlState(
   hash: string | null,
@@ -61,13 +45,8 @@ export function useImageBlobUrlState(
   fetcher: ScopedImageBytesFetcher,
   unavailableAfterMs: number | null,
 ): ImageBlobUrlState {
-  // Keyed by the full cache identity, not the hash. The SUBJECT can change
-  // while the hash stays put - the same image referenced from a second
-  // artifact, or a tile rebound to another host - and a hash-keyed gate would
-  // keep painting the previous subject's resolved blob throughout the new
-  // one's fetch, which is the exact byte-for-byte disclosure the scoped key
-  // above exists to prevent, merely arriving through React state instead of
-  // the cache.
+  // Keyed by the full cache identity, not the hash.
+  // The SUBJECT can change while the hash stays put - the same image referenced from a second artifact, or a tile rebound to another host - and a hash-keyed gate would keep painting the previous subject's resolved blob throughout the new one's fetch, which is.
   const [resolved, setResolved] = useState<{
     identity: string;
     state: ImageBlobUrlState;
@@ -81,11 +60,7 @@ export function useImageBlobUrlState(
     let attemptCount = 0;
     let cancelRetry: (() => void) | null = null;
     let cancelUnavailable: (() => void) | null = null;
-    // Rebound to the LATEST attempt's lease on every `acquire()` call - a
-    // failed attempt's entry is already self-removed by the cache (see
-    // image-blob-cache.ts's poisoned-entry cleanup), so there is never a
-    // stale lease from an earlier attempt worth separately releasing before
-    // overwriting this.
+    // Rebound to the LATEST attempt's lease on every `acquire()` call - a failed attempt's entry is already self-removed by the cache (see image-blob-cache.ts's poisoned-entry cleanup), so there is never a stale lease from an earlier attempt worth separately.
     let releaseLease: (() => void) | null = null;
 
     if (unavailableAfterMs !== null) {
@@ -103,13 +78,8 @@ export function useImageBlobUrlState(
     const acquire = (): void => {
       attemptCount += 1;
       const lease = imageBlobCache.acquire(
-        // The HASH, which is what the RPC is asked for. The subject still
-        // scopes the cache entry - `acquire` serves a resolved or in-flight
-        // entry without running this fetcher, so a bare-hash key would let the
-        // first acquirer's authorization stand in for every later one's - but
-        // it does that by deriving the key from `fetcher.scopeKey` itself.
-        // Passing the scoped identity HERE asked the artifact/chat RPCs for
-        // `["scope","sha256..."]` and no image ever resolved.
+        // The HASH, which is what the RPC is asked for.
+        // The subject still scopes the cache entry - `acquire` serves a resolved or in-flight entry without running this fetcher, so a bare-hash key would let the first acquirer's authorization stand in for every later one's - but it does that by deriving the key.
         hash,
         mediaType,
         fetcher,
@@ -164,9 +134,7 @@ export function useImageBlobUrlState(
     };
   }, [hash, identity, mediaType, fetcher, unavailableAfterMs]);
 
-  // Only surface state that belongs to the current hash AND subject, so either
-  // changing shows loading (not the previous image) until the new blob
-  // resolves.
+  // Only surface state that belongs to the current hash AND subject, so either changing shows loading (not the previous image) until the new blob resolves.
   return resolved !== null && resolved.identity === identity
     ? resolved.state
     : { status: "loading", url: null };

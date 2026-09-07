@@ -4,19 +4,8 @@ import {
   isTraycerCliEntrypoint,
 } from "../index";
 
-// Native-packaging fixup: the script-entry guard at the bottom of
-// `traycer-cli/src/index.ts` is what gates the auto `parseAsync` so
-// `import { buildProgram }` from a test never triggers commander
-// against `process.argv`. Before this fixup the regex only matched
-// `traycer` (no extension) so a Windows SEA binary
-// (`bun build --compile --target=bun-windows-x64` → `traycer.exe`)
-// was treated as "this module was imported, do nothing" and the CLI
-// silently no-op'd in production.
-//
-// These tests pin the matrix that the script-entry guard cares about:
-// POSIX dev path, POSIX prod path, Windows prod path (`traycer.exe`),
-// plus the negative cases (undefined / unrelated paths) so importing
-// the module from tests stays safe.
+// Native-packaging fixup: the script-entry guard at the bottom of `traycer-cli/src/index.ts` is what gates the auto `parseAsync` so `import { buildProgram }` from a test never triggers commander against `process.argv`.
+// Before this fixup the regex only matched `traycer` (no extension) so a Windows SEA binary (`bun build --compile --target=bun-windows-x64` → `traycer.exe`) was treated as "this module was imported, do nothing" and the CLI silently no-op'd in production.
 
 describe("isTraycerCliEntrypoint", () => {
   it("accepts the tsx dev path (POSIX)", () => {
@@ -79,12 +68,8 @@ describe("isTraycerCliEntrypoint", () => {
   });
 });
 
-// `argvSelectsSupervisedHostStart` gates the long-lived supervised entry
-// (`traycer host start`, invoked by launchd / systemd-user / the Windows
-// Scheduled Task) against a Node-style argv. It shares the same "drop the
-// `--` tail, filter out option tokens, read the command path" rule as
-// `rewriteHostUpdateVersion`'s host-update rewrite - pinned here by unit
-// test rather than by spawning a subprocess.
+// `argvSelectsSupervisedHostStart` gates the long-lived supervised entry (`traycer host start`, invoked by launchd / systemd-user / the Windows Scheduled Task) against a Node-style argv.
+// It shares the same "drop the `--` tail, filter out option tokens, read the command path" rule as `rewriteHostUpdateVersion`'s host-update rewrite - pinned here by unit test rather than by spawning a subprocess.
 describe("argvSelectsSupervisedHostStart", () => {
   const CASES: ReadonlyArray<{
     readonly name: string;

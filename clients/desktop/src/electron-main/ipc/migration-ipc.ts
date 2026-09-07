@@ -1,9 +1,3 @@
-/**
- * Cross-window migration-run announcer. Intentionally carries only the
- * running bit - each window observes its own progress via the host's
- * multicast stream. The IPC fan-out exists so a window that hasn't yet
- * subscribed (e.g. just opened) can mount the blocking modal immediately.
- */
 import {
   RunnerHostEvent,
   RunnerHostInvoke,

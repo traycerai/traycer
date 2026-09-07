@@ -1,32 +1,6 @@
 /**
- * The pre-windowed `chat.subscribe` transcript arm as a degenerate log
- * adapter.
- *
- * `chat.subscribe@1.8` gives the log replica an epoch, ordinals, bounded
- * coverage and range reads. Earlier minors give it none of those: every
- * snapshot replaces the whole transcript and the client has to retain every
- * message and event it receives. Keeping that path behind the same adapter
- * seam makes the mixed fleet a capability choice rather than a second read
- * model.
- *
- * The physical `chat.subscribe` stream also multiplexes queue, turn,
- * approvals, worktree and live-delta frames. Its owner therefore keeps the
- * socket and feeds this adapter only the legacy snapshot callback. The stream's
- * shared generation guard remains outside this decode arm; duplicating it here
- * would create two generation books for one subscription.
- *
- * Honest degeneracies of this adapter:
- *
- * - no authority epoch and no cursor, so `resumeOffer()` is always `null`;
- * - no ordinals, so there is no range request or partial coverage;
- * - no bounded window, so every snapshot is a whole-transcript residency claim
- *   the process-wide memory accountant must measure at the consumer;
- * - replacement is wholesale: a later snapshot supersedes every previously
- *   retained transcript row.
- *
- * It implements no requester and never asks its host for replacement. The
- * adapter speaks for the authority, so it is structurally unable to originate
- * a client reseed.
+ * The pre-windowed `chat.subscribe` transcript arm as a degenerate log adapter.
+ * `chat.subscribe@1.8` gives the log replica an epoch, ordinals, bounded coverage and range reads.
  */
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
@@ -43,12 +17,7 @@ export type LegacyChatSnapshotFrame = Parameters<
 
 export interface LegacyChatTranscriptSnapshotEvent {
   readonly kind: "legacy-unbounded-snapshot";
-  /**
-   * The authority's complete transcript image. The consumer retains
-   * `frame.snapshot.chat.messages` and `frame.snapshot.chat.events` in its
-   * replica, so their full resident cost must be charged; this is never merely
-   * a transient decode buffer.
-   */
+  /** The authority's complete transcript image. */
   readonly frame: LegacyChatSnapshotFrame;
 }
 

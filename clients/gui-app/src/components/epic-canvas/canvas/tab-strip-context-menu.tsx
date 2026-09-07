@@ -35,30 +35,21 @@ export interface TabStripContextMenuProps {
   /** Copies the absolute path for workspace-file tabs; absent for other kinds. */
   readonly onCopyFilePath: (() => void) | null;
   /**
-   * Commit handler for inline title editing. Consumed by the tab item when
-   * the rename is committed (Enter / blur), not by the menu itself - the menu
-   * only triggers `onEditTitle` to enter edit mode.
+   * Consumed by the tab item when the rename is committed (Enter / blur), not by the menu itself - the menu only triggers `onEditTitle` to enter edit mode.
    */
   readonly onRename: (groupId: string, tabId: string, title: string) => void;
-  /** Whether this tab kind can be renamed (chat / artifact / terminal). */
   readonly canRename: boolean;
   /** Switches the tab title into the inline editable input. */
   readonly onEditTitle: () => void;
   /**
-   * Ticket 12's chat cost line - opens the chat's usage/drill-down dialog.
-   * `null` for every non-chat tab and for a chat whose host has not
-   * negotiated `host.usage.summary` (the overflow item itself is the
-   * "unsupported chats show nothing" case - see `ChatUsageDialog`).
+   * `null` for every non-chat tab and for a chat whose host has not negotiated `host.usage.summary` (the overflow item itself is the "unsupported chats show nothing" case - see `ChatUsageDialog`).
    */
   readonly onOpenUsage: (() => void) | null;
 }
 
 /**
- * Right-click menu rendered inside a `<ContextMenu>` parent. The
- * close-family items map to the canvas store's `closeTab*` actions; the
- * split-family items move this tab into a new group on the chosen
- * edge. `Reveal in Sidebar` activates the panel that owns the tab's
- * artifact and scrolls the tree to highlight it.
+ * Right-click menu rendered inside a `<ContextMenu>` parent.
+ * The close-family items map to the canvas store's `closeTab*` actions; the split-family items move this tab into a new group on the chosen edge.
  */
 export function TabStripContextMenu(props: TabStripContextMenuProps) {
   const {

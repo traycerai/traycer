@@ -14,11 +14,8 @@ const tabNavigationMocks = vi.hoisted(() => ({
   activateTabIntent: vi.fn(),
 }));
 
-// Only `activateTabIntent` is replaced with a spy so a Phase row's tap can be
-// observed going through the canonical activation boundary rather than a raw
-// route push; every other export (`openPhaseMigrationIntent`,
-// `__resetTabNavigationControllerForTesting`, and everything else the render
-// tree reaches) stays the real implementation via `importActual`.
+// Only `activateTabIntent` is replaced with a spy so a Phase row's tap can be observed going through the
+// canonical activation boundary rather than a raw route push.
 vi.mock("@/lib/tab-navigation", async () => {
   const actual = await vi.importActual<typeof import("@/lib/tab-navigation")>(
     "@/lib/tab-navigation",
@@ -66,10 +63,8 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 
-/**
- * The breakpoint `useIsMobileViewport()` reads is 768px - anything narrower
- * mounts `<MobileHistoryList>` in place of the desktop row chrome.
- */
+/** The breakpoint `useIsMobileViewport` reads is 768px - anything narrower mounts `<MobileHistoryList>` in
+ * place of the desktop row chrome. */
 const MOBILE_VIEWPORT_WIDTH = 375;
 const DESKTOP_VIEWPORT_WIDTH = 1280;
 const ORIGINAL_INNER_WIDTH = window.innerWidth;
@@ -249,12 +244,8 @@ function RootOutlet(): ReactNode {
   );
 }
 
-/**
- * A fixed pointer identity for every gesture dispatched in this file. Only
- * one touch pointer is ever live at a time in these scenarios, so a shared
- * constant is enough to keep `pointerdown` / `pointermove` / `pointerup`
- * addressing the same in-flight gesture.
- */
+/** Only one touch pointer is ever live at a time in these scenarios, so a shared constant is enough to keep
+ * `pointerdown` / `pointermove` / `pointerup` addressing the same in-flight gesture. */
 const TOUCH_POINTER_ID = 7;
 
 function firePointerDown(el: Element, clientX: number, clientY: number): void {
@@ -287,35 +278,23 @@ function firePointerUp(el: Element, clientX: number, clientY: number): void {
   });
 }
 
-/**
- * Drags a row card 80px left in one motion, well past the half-tray commit
- * distance for the default three-action tray (pin/rename/delete, 44px each -
- * 132px total, so a 66px commit threshold), and releases. A single move is
- * enough: the classifier and the commit rule both key off cumulative travel
- * from the gesture's start, not the number of intermediate samples.
- */
+/** A single move is enough: the classifier and the commit rule both key off cumulative travel from the
+ * gesture's start, not the number of intermediate samples. */
 function openTrayByDrag(card: Element): void {
   firePointerDown(card, 300, 100);
   firePointerMove(card, 220, 100);
   firePointerUp(card, 220, 100);
 }
 
-/**
- * A touch point shaped to match what the production listeners read off a
- * real `Touch`: an `identifier` plus a coordinate pair.
- */
+/** A touch point shaped to match what the production listeners read off a real `Touch`: an `identifier` plus a
+ * coordinate pair. */
 interface FakeTouchPoint {
   readonly identifier: number;
   readonly clientX: number;
   readonly clientY: number;
 }
 
-/**
- * jsdom implements `TouchEvent` but no usable `Touch`/`TouchList`
- * constructor, so a touch here is a plain `Event` wearing the one shape the
- * pull-to-refresh listeners read off it: a `touches` list indexable both by
- * `[]` and `.item()` (the real `TouchList` shape).
- */
+/** jsdom implements `TouchEvent` but no usable `Touch`/`TouchList` constructor. */
 function makeTouchList(
   points: ReadonlyArray<FakeTouchPoint>,
 ): ReadonlyArray<FakeTouchPoint> & {
@@ -413,11 +392,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBeNull();
     });
 
-    // The single-sided design: right belongs to the shell's nav-drawer edge
-    // gesture, so a rightward drag must never reveal the tray, however far it
-    // travels. `classifyDirectionalIntent`'s counter-direction arm fails this
-    // outright at 10px, well before any commit distance is even evaluated -
-    // this case is a pure distance check with no timing dependency.
+    // The single-sided design: right belongs to the shell's nav-drawer edge gesture, so a rightward drag must
+    // never reveal the tray, however far it travels.
     it("stays closed on a rightward drag of any distance", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
@@ -431,13 +407,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBeNull();
     });
 
-    // The edge guard in `withinEdgeZone` only reads `clientX` on an OPEN tray
-    // - a closed one's forward direction is leftward, so a rightward drag
-    // fails `classifyDirectionalIntent`'s counter-direction arm the same way
-    // it does starting anywhere else on the row. Pinned as its own case
-    // because it starts inside the strip the open-tray guard below tests
-    // against, so a regression that widened the guard to the closed state
-    // would still be caught here.
+    // Pinned as its own case because it starts inside the strip the open-tray guard below tests against, so a
+    // regression that widened the guard to the closed state would still be caught here.
     it("stays closed on a rightward drag starting inside the reserved edge zone", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
@@ -503,15 +474,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBeNull();
     });
 
-    // Once the tray is open the recognizer's forward direction flips to
-    // rightward, so putting the tray away is a second, independent drag - not
-    // the leftward one reversing. 80px clears half the 132px tray by distance
-    // alone, the same margin `openTrayByDrag` uses for the leftward case, so
-    // this needs no control over event timing. The origin, `clientX: 220`, is
-    // deliberate: it sits outside the nav-drawer's edge strip (the strip is
-    // `[0, 32]` at the jsdom-default zero safe-area inset), so this is the
-    // contrasting case to the in-strip one below - the row is free to claim
-    // this drag.
+    // The origin, `clientX: 220`, is deliberate: it sits outside the nav-drawer's edge strip (the strip is `[0,
+    // 32]` at the jsdom-default zero safe-area inset), so this is the contrasting case to the in-strip one below.
     it("closes an already-open tray on a rightward drag past half the tray width", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
@@ -529,13 +493,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBeNull();
     });
 
-    // The row sits under `touch-action: pan-y`, not `pan-x`, so nothing
-    // upstream stands a shell recognizer down when a close-swipe starts
-    // inside the reserved strip - the row has to yield instead.
-    // `withinEdgeZone` does that at `onPointerDown`: a touch starting at
-    // `clientX: 10`, inside `[0, 32]` at the jsdom-default zero safe-area
-    // inset, is never tracked, so the tray stays open however far past its
-    // commit distance the drag travels.
+    // `withinEdgeZone` does that at `onPointerDown`: a touch starting at `clientX.
     it("leaves an open tray open on a rightward close-swipe starting inside the reserved edge zone", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
@@ -553,23 +511,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBe("true");
     });
 
-    // Nothing is pointer-captured until a drag ACTIVATES, so a touch that goes
-    // down on the card, moves a little without declaring an axis, and then
-    // ends somewhere the card never sees a `pointerup` or `pointercancel` for,
-    // leaves its tracker resident in `trackingRef`. Touch pointer ids are
-    // reused between contacts, so a later contact carrying the same id would
-    // match that stale tracker by id alone and inherit its start coordinates
-    // instead of getting a fresh one - which is how a touch landing inside the
-    // nav-drawer strip could still end up driving the row. `onPointerDown`
-    // clears the tracker before the edge-zone check runs, precisely so the
-    // yielded contact never gets a chance to claim it.
-    //
-    // The drag target here (400, not the sibling case's 90) is deliberate: the
-    // stale tracker's start (300, outside the strip - a tracker only survives
-    // a contact the edge-zone gate let through) has to still be far enough
-    // from the release point that a row using it as its anchor would clear the
-    // half-tray commit distance, or the exploit this case pins would go
-    // unnoticed even while it silently mis-captured the pointer.
+    // The drag target here (400, not the sibling case's 90) is deliberate: the stale tracker's start (300, outside
+    // the strip.
     it("yields the drawer strip even when a prior undecided pointer left its tracker resident", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
@@ -594,10 +537,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBe("true");
     });
 
-    // A rightward drag this short never clears `classifyDirectionalIntent`'s
-    // 15px activation distance, so the drag never declares itself and the
-    // tray's open state is left exactly where it was - a pure distance check,
-    // like the closed-state "few px" case above.
+    // A rightward drag this short never clears `classifyDirectionalIntent`'s 15px activation distance, so the drag
+    // never declares itself and the tray's open state is left exactly where it was.
     it("leaves an already-open tray open on a rightward drag of only a few px", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
@@ -662,13 +603,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(onOpenItem).toHaveBeenCalledWith(testState.items[0]);
     });
 
-    // A Phase row's overlay is a router `Link` exactly like an Epic row's, so
-    // a raw click on it pushes straight to the epic route by itself. Only the
-    // canonical activation boundary carries the migration intent, so a Phase
-    // tap has to go through it rather than through the Link's own
-    // navigation - this observes `activateTabIntent` firing with an
-    // `open-phase-migration` intent, and the router never having moved off
-    // its starting location on its own.
+    // Only the canonical activation boundary carries the migration intent, so a Phase tap has to go through it
+    // rather than through the Link's own navigation.
     it("routes a tap on a phase row through the phase migration activation path, not a raw router navigation", async () => {
       testState.items = [
         historyItem({
@@ -711,9 +647,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         screen.getByTestId("epics-list-row").getAttribute("data-tray-open"),
       ).toBe("true");
 
-      // A fresh, stationary press-and-release: distinct from the drag that
-      // opened the tray, so neither recognizer has anything to swallow and
-      // the row's own tap-while-open rule is what decides.
+      // A fresh, stationary press-and-release: distinct from the drag that opened the tray, so neither recognizer
+      // has anything to swallow and the row's own tap-while-open rule is what decides.
       firePointerDown(card, 300, 100);
       firePointerUp(card, 300, 100);
       fireEvent.click(
@@ -782,9 +717,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanelWithOpenItem("embedded", "/", onOpenItem);
       const cards = await screen.findAllByTestId("epics-list-row-card");
 
-      // Long-press the second row to enter selection mode; the first row's
-      // checkbox starts unselected, so clicking it below is the toggle under
-      // test rather than a re-toggle of the row the hold already selected.
+      // Long-press the second row to enter selection mode; the first row's checkbox starts unselected, so clicking
+      // it below is the toggle under test rather than a re-toggle of the row the hold already selected.
       vi.useFakeTimers();
       firePointerDown(cards[1], 300, 100);
       await act(async () => {
@@ -801,9 +735,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       fireEvent.click(checkbox);
 
       expect(checkbox.getAttribute("aria-checked")).toBe("true");
-      // The checkbox and the card's overlay are disjoint subtrees, so a click
-      // on the checkbox has no bubbling path to the overlay's own activation
-      // handler - this is the double-fire guard.
+      // The checkbox and the card's overlay are disjoint subtrees, so a click on the checkbox has no bubbling path
+      // to the overlay's own activation handler - this is the double-fire guard.
       expect(onOpenItem).not.toHaveBeenCalled();
     });
 
@@ -820,9 +753,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
 
-      // Long-press the first, deletable row to enter selection mode - a
-      // viewer-only row's own long press is disabled, since a row nobody may
-      // select has nothing to hold into selection mode.
+      // Long-press the first, deletable row to enter selection mode - a viewer-only row's own long press is
+      // disabled, since a row nobody may select has nothing to hold into selection mode.
       vi.useFakeTimers();
       firePointerDown(cards[0], 300, 100);
       await act(async () => {
@@ -843,14 +775,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
   });
 
   describe("selection mode versus the swipe tray", () => {
-    // The tray is a sibling parked behind the row card, concealed only by the
-    // card's own opaque background - so anything that makes the card
-    // translucent shows the tray through it, with no drag involved at all. A
-    // long press enters selection mode with the pressed row already checked,
-    // and a checked row's card carries its own tint, which makes this the one
-    // path into the mode where that could happen. A few px of drift is
-    // included because a hold rarely lands perfectly still, and it stays
-    // under the hold's own 6px slop so the press still completes.
+    // The tray is a sibling parked behind the row card, concealed only by the card's own opaque background - so
+    // anything that makes the card translucent shows the tray through it, with no drag involved at all.
     it("enters selection mode from a long-press with slight drift, with the tray absent and the card untranslated", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
@@ -901,9 +827,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBe("true");
     });
 
-    // Selection mode is one boolean shared by the whole list, not a per-row
-    // flag the pressed row alone flips, so a tray left open on a row the
-    // gesture never touched still has to go.
+    // Selection mode is one boolean shared by the whole list, not a per-row flag the pressed row alone flips, so a
+    // tray left open on a row the gesture never touched still has to go.
     it("hides another row's open tray when a long-press elsewhere enters selection mode", async () => {
       testState.items = [
         historyItem({}),
@@ -993,16 +918,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBe("true");
     });
 
-    // A tracker is created on `pointerdown` and only ever cleared by a FRESH
-    // contact landing on that same row's card - `onPointerDown` says so
-    // explicitly. A long press on a different row enters selection mode
-    // without ever touching the first row's card, so its tracker survives the
-    // stand-down untouched, still carrying the pointerdown it was built from.
-    // The recognizer must reject that tracker on identity once selection mode
-    // has come and gone, not merely refuse it while disabled - otherwise the
-    // same tracker matches again by `pointerId` once re-enabled, and a finger
-    // that was only ever resting on the row would resume travel measured from
-    // an origin the row last believed in before a mode it never took part in.
+    // The recognizer must reject that tracker on identity once selection mode has come and gone, not merely refuse
+    // it while disabled.
     it("rejects a contact that was already down when selection mode came and went", async () => {
       testState.items = [
         historyItem({}),
@@ -1015,15 +932,12 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
 
-      // The first row's pointer goes down and is left resting - no pointerup,
-      // no pointercancel - so whatever tracker this creates is still resident
-      // when the next thing happens.
+      // The first row's pointer goes down and is left resting - no pointerup, no pointercancel - so whatever tracker
+      // this creates is still resident when the next thing happens.
       firePointerDown(cards[0], 300, 100);
 
-      // Selection mode is entered by a long press on the OTHER row, the same
-      // route the cross-row tray case above uses. This never issues a new
-      // contact on the first row's card, so the first row's tracker is not
-      // the one being cleared here.
+      // This never issues a new contact on the first row's card, so the first row's tracker is not the one being
+      // cleared here.
       vi.useFakeTimers();
       firePointerDown(cards[1], 300, 100);
       await act(async () => {
@@ -1040,30 +954,22 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(screen.queryByTestId("epics-list-row-select")).toBeNull();
 
-      // The same pointer id now moves on the first row's card, travelling far
-      // enough - measured from the pointerdown issued before selection mode
-      // ever started - to clear the tray's commit distance if that origin
-      // were honored.
+      // The same pointer id now moves on the first row's card, travelling far enough - measured from the pointerdown
+      // issued before selection mode ever started - to clear the tray's commit distance if that origin were honored.
       const cardsAfterCancel = screen.getAllByTestId("epics-list-row-card");
       firePointerMove(cardsAfterCancel[0], 220, 100);
       firePointerUp(cardsAfterCancel[0], 220, 100);
 
-      // The tray element stays mounted at rest once selection mode has been
-      // left - only `isTrayOpen` governs whether it is revealed - so the
-      // regression this pins is read off `data-tray-open`, the same attribute
-      // every other swipe case in this file asserts against.
+      // The tray element stays mounted at rest once selection mode has been left - only `isTrayOpen` governs whether
+      // it is revealed.
       const rows = screen.getAllByTestId("epics-list-row");
       expect(rows[0].getAttribute("data-tray-open")).toBeNull();
     });
   });
 
   describe("pull to refresh", () => {
-    // The trigger compares raw finger travel against `PULL_TRIGGER_PX`, not
-    // the damped surface distance the user sees - the two diverge fast, and
-    // reading the threshold off the damped value would need roughly double
-    // the raw travel to fire. Two moves: the first (30px) clears the
-    // classifier's 15px activation distance without yet reaching the
-    // trigger, and the second lands raw travel exactly on it.
+    // The trigger compares raw finger travel against `PULL_TRIGGER_PX`, not the damped surface distance the user
+    // sees.
     it("refetches on a raw downward travel of 64px, the trigger threshold", async () => {
       renderPanel("embedded", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
@@ -1111,11 +1017,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(testState.refetch).not.toHaveBeenCalled();
     });
 
-    // A second finger landing mid-pull hands the gesture to `cancel()`, the
-    // same unwind path `touchcancel` and effect cleanup use - never
-    // `startRefresh`. Asserting the transform, not just the missing refetch,
-    // is what catches a surface left translated with nothing left to release
-    // it.
+    // A second finger landing mid-pull hands the gesture to `cancel`, the same unwind path `touchcancel` and
+    // effect cleanup use - never `startRefresh`.
     it("cancels an armed pull when a second finger touches down, stranding no translate", async () => {
       renderPanel("embedded", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");

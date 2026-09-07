@@ -38,11 +38,7 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
   return TERMINAL_AGENT_ARGS_PLACEHOLDER[providerId];
 }
 
-// Extra CLI args appended when launching this provider as a terminal agent.
-// Rendered only for providers whose harness advertises the `tui` surface
-// (Claude Code / Codex / OpenCode - not GUI-only providers like Cursor); the
-// host launch path reads this saved value, and the launch picker pre-fills
-// it for a per-launch override.
+// Rendered only for providers whose harness advertises the `tui` surface (Claude Code / Codex / OpenCode.
 export function TerminalAgentArgsSection({
   state,
 }: {
@@ -58,10 +54,7 @@ export function TerminalAgentArgsSection({
   const saved = state.terminalAgentArgs;
   const [draft, setDraft] = useState(saved);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  // True external sync: `saved` is the canonical host value, and it can
-  // change from outside this component's own `commit()` (another window's
-  // edit, a differently-normalized host value). Skipped while the input is
-  // focused so it never clobbers an in-progress edit.
+  // Skipped while the input is focused so it never clobbers an in-progress edit.
   useEffect(() => {
     if (document.activeElement !== inputRef.current) setDraft(saved);
   }, [saved]);
@@ -76,9 +69,8 @@ export function TerminalAgentArgsSection({
   const commit = (): void => {
     const next = draft.trim();
     if (next !== draft) setDraft(next);
-    // Skip only when nothing changed. Firing while a previous save is still
-    // in-flight is intentional - guarding on `isPending` here would silently
-    // drop the latest edit.
+    // Skip only when nothing changed. Firing while a previous save is still in-flight is intentional - guarding on
+    // `isPending` here would silently drop the latest edit.
     if (next === saved) return;
     setArgs.mutate({ providerId, terminalAgentArgs: next });
   };

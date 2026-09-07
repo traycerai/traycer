@@ -15,22 +15,7 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 
-/**
- * The read side of the Shells surface for one chat.
- *
- * The set rides that chat's own `chat.subscribe` stream, so these hooks are
- * projections of the chat session store rather than a stream of their own.
- * Every surface that reads them is chat-scoped - the chat tile's menu and the
- * chat's Background panel - and reading through the chat session binds them to
- * the tab's host the way every other chat surface is bound. That binding is
- * now EXPLICIT: each hook takes the `hostId` its caller is bound to, since a
- * host-minted `chatId` alone does not name a session.
- *
- * Empty means empty: a host too old to serve the field has no managed-command
- * subsystem, so it owns no commands. There is no "unavailable" state to
- * distinguish, and these hooks never return `null` for "not answered yet" - a
- * chat that has not received its snapshot has nothing to show either way.
- */
+/** The read side of the Shells surface for one chat. */
 
 type ManagedCommandsChatSlice = Pick<
   ChatSessionState,
@@ -52,9 +37,8 @@ function useChatSliceStore(epicId: string, chatId: string, hostId: string) {
 }
 
 /**
- * Running first, then most recent activity. A command that is doing something
- * now outranks one that finished a second ago, which is what a human scanning
- * for "what is live" is looking for.
+ * Running first, then most recent activity. A command that is doing something now outranks one
+ * that finished a second ago, which is what a human scanning for "what is live" is looking for.
  */
 function compareManagedCommands(a: ManagedCommand, b: ManagedCommand): number {
   const aRunning = a.status.state === "running";
@@ -63,11 +47,7 @@ function compareManagedCommands(a: ManagedCommand, b: ManagedCommand): number {
   return b.updatedAtMs - a.updatedAtMs;
 }
 
-/**
- * Every command this chat owns, whatever state it is in - the menu's list. The
- * ordering is applied once here so every reader shares it; the host sends the
- * set whole, so the sorted array only changes when the set does.
- */
+/** Every command this chat owns, whatever state it is in - the menu's list. */
 export function useManagedCommandsForChat(
   epicId: string,
   chatId: string,
@@ -81,9 +61,8 @@ export function useManagedCommandsForChat(
 }
 
 /**
- * The subset of {@link useManagedCommandsForChat} that is live right now - what
- * the chat's Background panel lists, since that panel is about work happening
- * at this moment rather than about the commands as durable objects.
+ * The subset of {@link useManagedCommandsForChat} that is live right now - what the chat's
+ * Background panel lists, since that panel is about work happening at this moment rather than
  */
 export function useRunningManagedCommandsForChat(options: {
   epicId: string;
@@ -101,20 +80,7 @@ export function useRunningManagedCommandsForChat(options: {
   );
 }
 
-/**
- * The shells whose last output a committed Stop fence is holding back.
- *
- * NOT a subset of {@link useRunningManagedCommandsForChat}, and that is the
- * whole point of surfacing it separately: the hold that only a human can clear
- * belongs to a shell that has already FINISHED. A running shell releases its
- * own hold the moment it prints again, so the ones that linger here are
- * precisely the ones the Background panel's running list will never show.
- *
- * Oldest first - a hold that has been waiting since the Stop outranks one
- * installed a moment ago, which is the reverse of the running list's ordering
- * and deliberately so: there is no "what is live" question here, only "what has
- * been waiting on me longest".
- */
+/** The shells whose last output a committed Stop fence is holding back. */
 export function useHeldManagedCommandsForChat(options: {
   epicId: string;
   chatId: string;
@@ -130,11 +96,7 @@ export function useHeldManagedCommandsForChat(options: {
   );
 }
 
-/**
- * The chat stream's connection status, which is now also the commands' - they
- * arrive on it. A menu held open across a dropped connection says its rows may
- * be stale rather than silently freezing them.
- */
+/** The chat stream's connection status, which is now also the commands' - they arrive on it. */
 export function useManagedCommandsConnectionStatus(
   epicId: string,
   chatId: string,
@@ -147,20 +109,8 @@ export function useManagedCommandsConnectionStatus(
 }
 
 /**
- * One command by id, found across the live chat sessions of ONE host in this
- * epic - what an output window's tab title and glyph read, holding a command
- * pointer and no chat id.
- *
- * Scoped to the tile's bound host, not the epic: a cross-host clone carries the
- * source transcript's command ids, so an epic-wide scan would let a tab bound
- * to the clone host wear the source shell's live name and monitor glyph for a
- * shell that host does not own. Within one host the id is unambiguous, and it
- * stays a scan rather than an index because a host's live sessions are a
- * handful and the alternative is a second source of truth to keep in step.
- *
- * `null` when the owning chat has no live session on that host (never opened,
- * or gone idle), which is the window's pre-hydration state - the tab falls back
- * to its persisted name until the chat is opened.
+ * One command by id, found across the live chat sessions of ONE host in this epic - what an output
+ * window's tab title and glyph read, holding a command pointer and no chat id.
  */
 export function useManagedCommandOnHost(args: {
   readonly epicId: string;
@@ -181,32 +131,8 @@ export function useManagedCommandOnHost(args: {
 }
 
 /**
- * Whether a shell still exists, as far as this card can honestly tell.
- *
- * Scoped to the transcript's bound HOST - never to the epic, and not to the
- * owner chat alone. A cross-host clone carries the source transcript's blocks,
- * so a lookup by command id alone would find the SOURCE host's shell and let
- * the clone's card pulse it as live while its door opened a tile on a host
- * that cannot own it. Within the host the chat does not narrow it further: a
- * same-host fork copies those blocks too, and the shell they name is owned by
- * the source chat while being perfectly alive and openable here.
- *
- * Absence is a verdict once the owner's snapshot has landed, and only then:
- * that is the moment its command set is the host's word rather than a
- * placeholder. A session opens with an empty set and stays that way until the
- * snapshot arrives, and a card that read that as "deleted" told every reader,
- * on every chat open, that every shell was gone for the first few frames.
- *
- * The live connection status is deliberately NOT part of it. A shell the host
- * has already said nothing about does not come back when the socket blips, so
- * demoting a proven deletion to `unknown` for the length of a reconnect would
- * re-arm doors onto a shell whose log is gone. `snapshotLoaded` is the honest
- * gate at both ends: it is false before the first word and false again after a
- * re-subscribe, when the new stream has yet to speak.
- *
- * Anything less is `unknown`, and a surface treats unknown as "still there" -
- * the door stays open, and the output window it opens has its own honest
- * account of what it finds.
+ * Whether a shell still exists, as far as this card can honestly tell. Scoped to the transcript's
+ * bound HOST - never to the epic, and not to the owner chat alone.
  */
 export type ManagedCommandPresence =
   | { readonly kind: "present"; readonly command: ManagedCommand }
@@ -219,11 +145,8 @@ export function useManagedCommandPresence(args: {
   readonly owner: { readonly chatId: string; readonly hostId: string } | null;
 }): ManagedCommandPresence {
   const { epicId, commandId, owner } = args;
-  // Presence is read across the owner's HOST, not just the owner chat: a
-  // same-host fork copies the source transcript's blocks verbatim, so a card
-  // there points at a shell the SOURCE chat owns. That shell is alive and its
-  // output opens fine on this host, and the fork's own set - which will never
-  // hold it - is no evidence about it.
+  // Presence is read across the owner's HOST, not just the owner chat: a same-host fork copies the
+  // source transcript's blocks verbatim, so a card there points at a shell the SOURCE chat owns.
   const live = useManagedCommandOnHost({
     epicId: epicId ?? "",
     hostId: owner?.hostId ?? "",
@@ -243,9 +166,8 @@ export function useManagedCommandPresence(args: {
 }
 
 /**
- * Stable across calls while nothing changes: the host sends the set whole, so
- * the array - and the record inside it - keeps its identity until a new frame
- * replaces it. That is what lets `useSyncExternalStore` read this directly.
+ * Stable across calls while nothing changes: the host sends the set whole, so the array - and the
+ * record inside it - keeps its identity until a new frame replaces it.
  */
 function findManagedCommandOnHost(
   epicId: string,
@@ -272,9 +194,8 @@ function hostHandles(
 }
 
 /**
- * The registry is read at call time, never as a module constant: this module is
- * reached from `epic-selectors`, which the registry itself imports, so a
- * top-level read would run inside that import cycle before it exists.
+ * The registry is read at call time, never as a module constant: this module is reached from
+ * `epic-selectors`, which the registry itself imports, so a top-level read would run inside that
  */
 function subscribeHostManagedCommands(
   epicId: string,

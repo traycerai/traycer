@@ -17,16 +17,8 @@ import {
 const PR_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * Header actions for the Pull Requests panel: epic-wide staleness + Refresh.
- * Host switcher is intentionally omitted in T5 — the list follows the
- * canvas-serving host via `useCanvasHostId`, matching the Git Diff panel's
- * default-host stream client; a dedicated switcher affordance can
- * land with workspace-picker parity later if needed.
- *
- * Note: Actions stay mounted when the section collapses (only Body unmounts)
- * and when the whole sidebar collapses (CSS-only). The same visibility gate
- * as the body is applied here so a collapsed surface does not keep a
- * foreground subscription alive.
+ * Note: Actions stay mounted when the section collapses (only Body unmounts) and when the whole sidebar collapses (CSS-only).
+ * The same visibility gate as the body is applied here so a collapsed surface does not keep a foreground subscription alive.
  */
 export function PrPanelActions(
   props: LeftPanelSlotProps & { readonly collapsed: boolean },
@@ -98,11 +90,7 @@ function PrPanelActionsLive(props: {
 }
 
 /**
- * The panel's freshness line, including the state where there is no freshness
- * to report. A null `observedAt` means no row has ever landed for any PR here,
- * and saying so is the only thing that distinguishes "nothing fetched yet"
- * from "fetched, and nothing has changed since" - which matters most while a
- * pause is in effect and the ⓘ beside this text explains why.
+ * A null `observedAt` means no row has ever landed for any PR here, and saying so is the only thing that distinguishes "nothing fetched yet" from "fetched, and nothing has changed since" - which matters most while a pause is in effect and the ⓘ beside this text explains why.
  */
 function PrStalenessHint(props: {
   readonly observedAt: number | null;

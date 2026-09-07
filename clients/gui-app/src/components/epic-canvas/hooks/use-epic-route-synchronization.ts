@@ -69,10 +69,7 @@ export interface EpicRouteFocusIntent {
 }
 
 /**
- * Keeps the route's focus intent, the live per-epic session store, and the
- * GUI-owned canvas/tab store synchronized after mount. These writes target
- * external stores backed by a live stream/Y.Doc, so they intentionally stay
- * in effects rather than being derived during render.
+ * These writes target external stores backed by a live stream/Y.Doc, so they intentionally stay in effects rather than being derived during render.
  */
 export function useEpicRouteSynchronization(
   intent: EpicRouteFocusIntent,
@@ -93,14 +90,7 @@ export function useEpicRouteSynchronization(
   const liveTitle = useEpicTitle();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
-  // Same-host counterpart of the cross-host cloud fallback (chat-sync-v2
-  // ticket 36): `epic.listCloudChats` already excludes anything this host's
-  // own registry has tombstoned, so "still cloud-known" is what tells a
-  // never-adopted chat apart from a genuinely deleted one for
-  // `isTileRefRecordLive` below. `useCloudChatList`'s TanStack Query cache is
-  // shared with the sidebar's own call for this same epic - no extra
-  // network traffic from reading it a second time here - which holds only
-  // because both resolve the SAME client: the Epic session's.
+  // `useCloudChatList`'s TanStack Query cache is shared with the sidebar's own call for this same epic - no extra network traffic from reading it a second time here - which holds only because both resolve the SAME client: the Epic session's.
   const sessionHostClient = useEpicSessionHostClient();
   const cloudChats = useCloudChatList({
     client: sessionHostClient,
@@ -227,13 +217,7 @@ export function useEpicRouteSynchronization(
     nestedRouteRetryToken,
   ]);
 
-  // The nested-route target we last moved DOM focus to. This effect re-runs on
-  // every canvas mutation - a title rename gives `useEpicCanvas` a new identity
-  // while the applied target stays byte-for-byte the same - and the restore is
-  // only meant to service genuine pane/tab navigation. Gating on an actual
-  // target change keeps a bare rename from re-focusing the tile, which would
-  // eject a user typing in the body or paint a stray selection ring after a
-  // tab-strip rename.
+  // This effect re-runs on every canvas mutation - a title rename gives `useEpicCanvas` a new identity while the applied target stays byte-for-byte the same - and the restore is only meant to service genuine pane/tab navigation.
   const lastRestoredNestedTargetRef = useRef<NestedFocusTarget | null>(null);
   useEffect(() => {
     if (!snapshotLoaded) return;
@@ -321,14 +305,8 @@ export function useEpicRouteSynchronization(
     nestedRouteTarget,
   ]);
 
-  // When the route handed us a `focusThreadId`, swap the left panel to
-  // Comments and activate the matching thread *after* the auto-open
-  // effect has set the artifact active. Gating on `activeArtifactId ===
-  // focusArtifactId` avoids racing active-artifact fallback behavior, which
-  // reverts the panel when the active artifact stops supporting comments.
-  // Each (focusedAt, threadId) combination fires once via the de-dupe ref so
-  // manual user interactions (closing the comments panel) aren't fought by
-  // stale route state.
+  // When the route handed us a `focusThreadId`, swap the left panel to Comments and activate the matching thread *after* the auto-open effect has set the artifact active.
+  // Gating on `activeArtifactId === focusArtifactId` avoids racing active-artifact fallback behavior, which reverts the panel when the active artifact stops supporting comments.
   const lastDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
     if (!snapshotLoaded) return;
@@ -392,10 +370,7 @@ export function useEpicRouteSynchronization(
     if (activeArtifactId === target.id) {
       return;
     }
-    // Route landing uses the same gesture mapping as a link click (C11), but
-    // it is the LANDING itself: the focus params it derives belong on the
-    // entry the user already navigated to, so the commit REPLACES rather than
-    // pushing a second entry they would have to press Back through twice.
+    // Route landing uses the same gesture mapping as a link click (C11), but it is the LANDING itself: the focus params it derives belong on the entry the user already navigated to, so the commit REPLACES rather than pushing a second entry they would have to press Back through twice.
     openTileWithNavigation(
       tileIntent(
         {
@@ -449,50 +424,19 @@ export function useEpicRouteSynchronization(
   const lastSyncedFocus = useRef<string | null>(persistedFocus);
   useEffect(() => {
     if (!snapshotLoaded) return;
-    // `activeArtifactId` is `null` for non-artifact tabs (terminal,
-    // workspace-file). Don't sync that `null` into `lastFocusedArtifactId`
-    // - it would wipe the epic's last artifact focus, breaking the
-    // fallback-restore path when the user returns to an artifact tab.
+    // Don't sync that `null` into `lastFocusedArtifactId` - it would wipe the epic's last artifact focus, breaking the fallback-restore path when the user returns to an artifact tab.
     if (activeArtifactId === null) return;
     if (activeArtifactId === lastSyncedFocus.current) return;
     lastSyncedFocus.current = activeArtifactId;
     handle.store.getState().setLastFocusedArtifactId(activeArtifactId);
   }, [snapshotLoaded, activeArtifactId, handle]);
 
-  // The host whose projection feeds `records` - the EPIC SESSION's host, not
-  // the app-wide active one this used to read. The two differ for the whole
-  // of a re-point that is establishing and after one that failed: the
-  // provider keeps the previous handle rendered, so `records` are still host
-  // A's while the app-wide pointer says B. Policing against B closed the
-  // wrong tabs - B-bound tiles judged against A's records read as deleted.
-  // Cross-host chat tiles are exempt from record policing (see
-  // `isTileRefRecordLive`); everything else is judged against the session
-  // host's projection, and the policing identity moves WITH the records - on
-  // a committed re-point both flip together, never one before the other.
+  // Cross-host chat tiles are exempt from record policing (see `isTileRefRecordLive`); everything else is judged against the session host's projection, and the policing identity moves WITH the records - on a committed re-point both flip together, never one before the other.
   const activeHostId = useCanvasHostId();
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
 
-  // Close any open tab whose underlying record was removed (sidebar delete,
-  // server-side cascade, or remote delete by another collaborator). The
-  // sidebar's optimistic Y.Doc delete unmounts the row before the mutation's
-  // per-call `onSuccess` can fire (TanStack Query v5 drops observer-attached
-  // callbacks on unmount), so the close has to be driven by record→canvas
-  // sync rather than by mutation callbacks. `isTileRefRecordLive` is the same
-  // predicate back/forward's preview-reopen path uses before restoring a
-  // closed tile, so "is this tile's record gone" is answered in one place.
-  // An UNANSWERED cloud list is not an empty one, and this decision cannot
-  // tell the difference from `data` alone: while the list is in flight (or
-  // after it FAILED on a transient transport error) every cloud row reads as
-  // absent, which is exactly the never-adopted same-host chat the exemption
-  // below exists for - and closing its tab is not undoable by the response
-  // that would have saved it.
-  //
-  // The predicate is the query's own, not flags spelled out here, and it is
-  // the sweep-authorizing one rather than plain settledness: a transiently
-  // failed list is settled but has produced no evidence about any chat, so it
-  // must not authorize closing tabs. `E_HOST_UNSUPPORTED` and a DISABLED
-  // query DO authorize - nothing will ever answer through either, and record
-  // policing on local records alone is the correct degraded behavior.
+  // The sidebar's optimistic Y.Doc delete unmounts the row before the mutation's per-call `onSuccess` can fire (TanStack Query v5 drops observer-attached callbacks on unmount), so the close has to be driven by record→canvas sync rather than by mutation callbacks.
+  // `isTileRefRecordLive` is the same predicate back/forward's preview-reopen path uses before restoring a closed tile, so "is this tile's record gone" is answered in one place.
   const cloudChatsAuthorizeSweep =
     cloudChatListAuthorizesRecordSweep(cloudChats);
   useEffect(() => {
@@ -501,12 +445,7 @@ export function useEpicRouteSynchronization(
     if (canvas.root === null) return;
     const liveIds = new Set(records.map((record) => record.id));
     const hasLiveRecord = (id: string) => liveIds.has(id);
-    // VIEWER-OWNED rows only, matching `usePublishedChatFallbackRef`'s own
-    // filter: `chatId` is host-minted and the list carries collaborators'
-    // rows too, so an id-only set could keep a deleted viewer-owned tab open
-    // on the strength of a collaborator's row - a row the substitution
-    // resolver would then (correctly) refuse to serve, leaving the tab
-    // permanently loading instead of closed.
+    // VIEWER-OWNED rows only, matching `usePublishedChatFallbackRef`'s own filter: `chatId` is host-minted and the list carries collaborators' rows too, so an id-only set could keep a deleted viewer-owned tab open on the strength of a collaborator's row - a row the substitution resolver would then (correctly) refuse to serve, leaving the tab permanently loading instead of closed.
     const cloudKnownIds = new Set(
       (cloudChats.data?.chats ?? [])
         .filter(cloudRowIsViewersOwn)
@@ -550,18 +489,8 @@ export function useEpicRouteSynchronization(
 }
 
 /**
- * Marked as route bookkeeping: this replace records view state onto the route
- * its tab is already showing, so the navigation controller must never read a
- * late-landing one as the user navigating back to this epic.
- *
- * Deliberately NOT de-duplicated behind an "at most one in flight" guard.
- * Suppressing a replace while another is in flight leaves the URL naming the
- * EARLIER focus target, and this effect's own branch selection is driven by
- * that URL: once it carries a resolvable target, the route drives the canvas
- * (`applyNestedRouteFocus`) instead of the canvas driving the route, so a
- * suppressed update is not merely delayed - it is inverted, pulling tile
- * focus back to where it had already moved from. Letting every update through
- * keeps the LAST one authoritative, which is the whole contract here.
+ * Marked as route bookkeeping: this replace records view state onto the route its tab is already showing, so the navigation controller must never read a late-landing one as the user navigating back to this epic.
+ * Suppressing a replace while another is in flight leaves the URL naming the EARLIER focus target, and this effect's own branch selection is driven by that URL: once it carries a resolvable target, the route drives the canvas (`applyNestedRouteFocus`) instead of the canvas driving the route, so a suppressed update is not merely delayed - it is inverted, pulling tile focus back to where it had already moved from.
  */
 function replaceNestedFocusRoute(
   navigate: NavigateFn,
@@ -582,17 +511,11 @@ function replaceNestedFocusRoute(
       }),
       replace: true,
     }),
-    // Bookkeeping is best-effort by nature: a rejected commit (a blocked or
-    // superseded navigation) leaves the URL without this focus target, and the
-    // next canvas change re-derives it. Swallow it rather than surfacing an
-    // unhandled rejection for something no caller is awaiting.
+        // Bookkeeping is best-effort by nature: a rejected commit (a blocked or superseded navigation) leaves the URL without this focus target, and the next canvas change re-derives it.
+  // Swallow it rather than surfacing an unhandled rejection for something no caller is awaiting.
   ).catch(() => undefined);
 }
 
-/**
- * Whether the legacy auto-open effect should no-op: a committed nested route
- * target already governs focus, or there is nothing to auto-open yet.
- */
 function shouldSuppressLegacyAutoOpen(args: {
   readonly nestedFocusEnabled: boolean;
   readonly nestedRouteTarget: NestedFocusTarget | null;
@@ -614,11 +537,6 @@ function shouldSuppressLegacyAutoOpen(args: {
   return false;
 }
 
-/**
- * Whether the route-sync effect should defer canonicalizing the current
- * canvas focus into the route because a legacy (`focusArtifactId` /
- * `focusThreadId`) deep link is still pending activation.
- */
 function shouldDeferToLegacyArtifactFocus(args: {
   readonly focusArtifactId: string | undefined;
   readonly focusThreadId: string | undefined;
@@ -672,12 +590,7 @@ function focusNestedRouteTarget(
       return;
     }
   }
-  // The pane / tab container is an ancestor of the tile's editing surface, and
-  // this effect re-runs on every canvas mutation (a title rename, for one). If
-  // focus already lives inside the target, moving it up to the container would
-  // blur that deeper element - ejecting a user mid-type from the artifact body.
-  // Only pull focus up when it is currently elsewhere, i.e. a genuine
-  // pane/tab switch that this restore is meant to service.
+  // Only pull focus up when it is currently elsewhere, i.e. a genuine pane/tab switch that this restore is meant to service.
   if (element.contains(document.activeElement)) {
     return;
   }
@@ -696,17 +609,7 @@ function findActivePaneElement(paneId: string): HTMLElement | null {
 }
 
 /**
- * A hosted chat's body no longer sits inside a `[data-tab-instance-id]`
- * pane-tab layer - `TabGroupView` still keeps that selected wrapper mounted
- * around `TileSurfaceSlot`'s bare geometry anchor (it carries layout, tab
- * strip, and DnD target duties independent of hosting), so it is always
- * found by the physical query and would shadow the hosted fallback if tried
- * second (design-review slice-4 finding 4). The hosted record, when one
- * exists for this exact `tileInstanceId`, is therefore checked FIRST: its
- * presence unambiguously means the real body lives there, never in the
- * physical wrapper. With the stable-tile-surface-host switch off (or for a
- * non-hosted tile kind) no hosted record ever exists, so this falls straight
- * through to the same physical lookup as before - byte-equivalent.
+ * The hosted record, when one exists for this exact `tileInstanceId`, is therefore checked FIRST: its presence unambiguously means the real body lives there, never in the physical wrapper.
  */
 function findSelectedTileElement(tileInstanceId: string): HTMLElement | null {
   const hosted = findHostedTileElement(document, tileInstanceId);

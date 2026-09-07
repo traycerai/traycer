@@ -11,13 +11,6 @@ import type { DesktopStateStore } from "./desktop-state-store";
 export interface PerWindowStateChange {
   readonly windowId: string;
   readonly snapshot: PerWindowSnapshot;
-  /**
-   * How this change was produced. `"clear"` is a window-teardown wipe (the
-   * durable snapshot was deleted); it is deliberately NOT forwarded to a renderer
-   * (see the IPC forwarder), so a reloading / re-registering live window is never
-   * clobbered with `createEmptyPerWindowSnapshot()`. `"update"` is an ordinary
-   * state write and forwards normally.
-   */
   readonly origin: "update" | "clear";
 }
 
@@ -116,10 +109,6 @@ export class PerWindowState {
       });
       return Promise.resolve(acknowledgement);
     }
-    // `DesktopStateStore` serializes and recovers its own disk writes. Invoke
-    // it in this turn so a concurrent `store.flush()` observes this revision;
-    // delaying the call through a second microtask queue used to let `flush`
-    // race ahead of an acknowledged renderer update.
     const durableWrite = this.store.setWindowSnapshot(windowId, next);
     return durableWrite.then(() => {
       this.events.emit("change", {

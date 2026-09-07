@@ -12,17 +12,7 @@ const GET_HOME_DIR_PARAMS: WorkspacePrepareFoldersRequestV12 = {
 };
 
 /**
- * The host's home directory (`workspace.prepareFolders` v1.1 `getHomeDir`),
- * used by the remote folder picker to anchor `~`.
- *
- * The picker normally learns home from its root (null-path) browse response
- * and enables this fallback only when that browse fails or `~` needs
- * expanding before it answers. A home directory the host cannot list
- * (consent-gated, denied) still expands, and Add needs no listing - so the
- * user can still type `~/projects/api` and pick it out of an unlistable home.
- *
- * Fails closed with `DOWNGRADE_UNSUPPORTED` against a v1.0 host; the picker
- * falls back to the browse-derived home and shows nothing about it.
+ * Fallback home for `~` when browse fails. Fails closed with `DOWNGRADE_UNSUPPORTED` on a v1.0 host. An unlistable home still expands.
  */
 export function useWorkspaceGetHomeDir(args: {
   readonly client: HostClient<HostRpcRegistry> | null;

@@ -1,9 +1,7 @@
 import type { NotificationsStreamClientFactory } from "@/stores/notifications/notifications-store";
 
 /**
- * Test / production seam for the notifications stream. Production uses
- * `new NotificationsStreamClient({...})`; tests inject a mock so the provider
- * can be asserted without real network I/O.
+ * Production builds NotificationsStreamClient. Tests inject a mock.
  */
 let streamClientFactoryOverride: NotificationsStreamClientFactory | null = null;
 

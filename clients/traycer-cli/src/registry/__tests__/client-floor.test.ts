@@ -45,9 +45,7 @@ describe("evaluateHostClientFloor", () => {
     ).toBe("satisfied");
   });
 
-  // Full SemVer precedence, not a numeric-triplet compare: a release candidate
-  // is BELOW its own GA, and shipping the floor at the GA must not admit the
-  // RC that predates the change the floor exists for.
+  // Full SemVer precedence, not a numeric-triplet compare: a release candidate is BELOW its own GA, and shipping the floor at the GA must not admit the RC that predates the change the floor exists for.
   it("ranks a release candidate below its own GA", () => {
     expect(
       evaluateHostClientFloor({
@@ -57,11 +55,8 @@ describe("evaluateHostClientFloor", () => {
     ).toBe("below-floor");
   });
 
-  // The exemption is BY NAME. A local build reports `0.0.0-local`, which is
-  // genuinely below every floor - blocking it would leave a dev machine unable
-  // to install a floored host at all. Named rather than range-checked so the
-  // exemption cannot widen to a real released version that happens to sort
-  // low.
+  // The exemption is BY NAME.
+  // A local build reports `0.0.0-local`, which is genuinely below every floor - blocking it would leave a dev machine unable to install a floored host at all.
   it("waives the floor for an unreleased build, and only for that exact version", () => {
     expect(
       evaluateHostClientFloor({
@@ -83,9 +78,8 @@ describe("evaluateHostClientFloor", () => {
     ).toBe("below-floor");
   });
 
-  // Fail CLOSED. Degrading a malformed floor to "no floor" would make one
-  // publisher typo the way to disable the floor fleet-wide, silently, which is
-  // the failure mode the whole item exists to remove.
+  // Fail CLOSED.
+  // Degrading a malformed floor to "no floor" would make one publisher typo the way to disable the floor fleet-wide, silently, which is the failure mode the whole item exists to remove.
   it("refuses a floor it cannot compare against instead of ignoring it", () => {
     const verdict = evaluateHostClientFloor({
       cliVersion: "9.9.9",
@@ -106,9 +100,8 @@ describe("evaluateHostClientFloor", () => {
 });
 
 describe("hostClientFloorRefusalMessage", () => {
-  // The remedy is to update the CLI, not to pick another host. A message that
-  // said "choose a different version" would send the user to exactly the
-  // workaround that reinstates the problem.
+  // The remedy is to update the CLI, not to pick another host.
+  // A message that said "choose a different version" would send the user to exactly the workaround that reinstates the problem.
   it("names both versions and points at the CLI", () => {
     const message = hostClientFloorRefusalMessage(
       {

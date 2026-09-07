@@ -22,13 +22,7 @@ export type PluginsMutateVariables = {
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
   readonly mutation: ProvidersPluginsMutateAction;
-  /**
-   * When true, the hook skips the global toast so the caller can render the
-   * native error inline. Same escape hatch as `useProvidersMcpMutate`: the
-   * plugins tab reports failures in its own error slot, and without this the
-   * user gets the toast AND the inline message for one failure. The toast
-   * still fires for non-native errors and when this is omitted/false.
-   */
+  /** Same escape hatch as `useProvidersMcpMutate`: the plugins tab reports failures in its own error slot, and without this the user gets the toast AND the inline message for one failure. */
   readonly suppressToast: boolean | undefined;
 };
 
@@ -82,12 +76,7 @@ export function useProvidersPluginsMutate(): UseMutationResult<
         providersNativeQueryKeys.pluginsList(ctx.hostId, ctx.listParams),
         data,
       );
-      // Writing the list is not enough: icons are cached SEPARATELY, under
-      // `staleTime: Infinity` with polling off, keyed by the plugin's reported
-      // version. That version is nullable - for a plugin that reports none, a
-      // remove-then-add under the same id lands on the identical key, and the
-      // previous install's artwork would be served for the rest of the session.
-      // Only a mutation can produce that, so the invalidation belongs here.
+      // Writing the list is not enough: icons are cached SEPARATELY, under `staleTime: Infinity` with polling off, keyed by the plugin's reported version.
       const hostId = ctx.hostId;
       void queryClient.invalidateQueries({
         predicate: (query) =>

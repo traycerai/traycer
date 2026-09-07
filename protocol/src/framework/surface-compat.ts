@@ -10,57 +10,7 @@ import {
 
 /**
  * Released-peer compatibility oracle over dumped protocol surfaces.
- *
- * Compares the working tree's surface ("mine") against a surface dumped from
- * an immutable released tag ("theirs") and reports every way a peer running
- * that release would fail against a peer built from this tree. Severities
- * mirror the SHIPPED transports' actual behavior:
- *
- * - **fatal** (unary handshake): a `/rpc` method name present on one side
- *   only, or canonical versions neither side can bridge. The unary open-frame
- *   check is fail-closed for the whole connection
- *   (`compatibility-checker.check`), so these kill every RPC. Never
- *   exceptable.
- * - **breaking** (blocking, exceptable): released peers lose something they
- *   shipped with - a stream method removed or version-unbridgeable (streams
- *   check per-method at subscribe time and degrade, so this is a feature
- *   outage rather than a dead connection), or a same-version wire-schema
- *   change that makes existing payloads unparseable (removed/renamed
- *   properties, required-set changes, removed enum values or union variants,
- *   structural type changes).
- * - **advisory** (reported, non-blocking): additive growth that cannot break a
- *   released peer's strict decode of what it already receives - new stream
- *   methods, and enum-value / union-variant additions on **client→host**
- *   slots (`request`, `openRequest`, `clientFrame`). An old peer never emits
- *   the new value; a new peer sending it to an old host fails per-call with
- *   a clear upgrade path.
- * - **breaking** (for additions): enum-value / union-variant additions at a
- *   released negotiated version on **host→client** slots (`response`,
- *   `serverFrame`) - catalogs and broadcast frames a released client
- *   strict-decodes unconditionally. Fix by freezing the shipped line and
- *   opening a new major with downgrade bridges that drop the new values
- *   (amp 003d7586 / devin 407d110 template).
- * - **breaking** (for additions, same rule as above): a brand-new PROPERTY
- *   KEY added at a released version on a host→client slot, even when it is
- *   parse-tolerant (optional, or `.catch()`/default-backed). Tolerance makes
- *   the schema-level parse succeed; it says nothing about whether the
- *   released peer's wire payload ever carries the key, and nothing about
- *   whether every consumer actually runs that parse before touching the
- *   field (the providers.list #258 incident: `profiles: z.array(...).catch([])`
- *   landed on the live 3.0 line, the gate credited the tolerance, and the
- *   untouched-by-parse transport delivered `undefined` to code typed as if
- *   the field were always populated). Mirrored on **client→host** slots as
- *   **advisory**: a released host simply ignores the unrecognized key.
- *
- * Paths that are deliberately catalog-gated (additive ids safe only because a
- * negotiated catalog already gated the client) are encoded as static policy
- * in `compat-exceptions.json` — id-agnostic method/path patterns, not a
- * per-change review mechanism (see `compatExceptionsFileSchema`).
- *
- * Pure data-in/data-out - no registry imports - so a single checker built
- * from the PR tree can adjudicate surfaces dumped from arbitrary old tags.
- * `surface-compat.test.ts` pins its bridging verdicts to the real
- * `compatibility-checker`/`stream-compat` oracles so the mirror cannot drift.
+ * **fatal** (unary handshake): a `/rpc` method name present on one side only, or canonical versions neither side can bridge.
  */
 
 const surfaceVersionSchema = z.object({
@@ -111,11 +61,8 @@ export type SurfaceFamily = "unary" | "stream";
 export const compatExceptionSchema = z.object({
   family: z.enum(["unary", "stream"]),
   /**
-   * Exact method name, or a narrow glob: `*` matches any characters within a
-   * single method-name segment (no `.`). Examples: `providers.set*`,
-   * `agent.gui.listModels`. Do not use a glob that would match the full
-   * catalog methods (`agent.gui.listHarnesses`, `agent.list`, `providers.list`)
-   * for host→client slots - those must always block (validated on load).
+   * Exact method name, or a narrow glob: `*` matches any characters within a single method-name segment (no `.`).
+   * Do not use a glob that would match the full catalog methods (`agent.gui.listHarnesses`, `agent.list`, `providers.list`) for host→client slots - those must always block (validated on load).
    */
   method: z.string().min(1),
   /**
@@ -124,21 +71,13 @@ export const compatExceptionSchema = z.object({
   version: z.string().min(1),
   /** Payload slot: request/response (unary) or openRequest/serverFrame/clientFrame (stream). */
   payload: z.string().min(1),
-  /**
-   * Finding path glob. Path segments are `.`-separated with bracket depth
-   * respected (`anyOf[{...}]` is one segment). `*` matches one segment (and
-   * also works as a within-segment wildcard when the segment pattern itself
-   * contains `*`, e.g. `anyOf[*]`). `**` matches zero or more segments.
-   */
   path: z.string().min(1),
   reason: z.string().min(1),
 });
 export type CompatException = z.infer<typeof compatExceptionSchema>;
 
 /**
- * Host→client catalog methods whose response (or equivalent) enum/union
- * growth at a released version must NEVER be grandfathered. Adding an
- * exception that matches these for host→client payloads is a load-time error.
+ * Host→client catalog methods whose response (or equivalent) enum/union growth at a released version must NEVER be grandfathered.
  */
 export const CATALOG_HOST_TO_CLIENT_METHODS = [
   "agent.gui.listHarnesses",
@@ -249,15 +188,7 @@ function highestInstalledMinor(minors: readonly number[]): number | null {
   return highest;
 }
 
-/**
- * Whether the two surfaces can actually talk on `major`.
- *
- * Each side selects its OWN newest installed minor on the shared line (see
- * `capability-manifest.selectConnectionManifestForPeer`), so the older of the
- * two is what gets spoken, and the newer side has to still install it.
- * Identical in substance to the same-major branch below - deliberately, since
- * that is the check the cross-major path was missing.
- */
+/** Whether the two surfaces can actually talk on `major`. */
 function surfaceLinesBridgeOnMajor(
   mine: SurfaceMethod,
   theirs: SurfaceMethod,
@@ -277,15 +208,7 @@ function surfaceLinesBridgeOnMajor(
 
 /**
  * Mirror of `stream-compat.canBridgeStream` over two dumped surfaces.
- *
- * A canonical-major skew bridges when both surfaces retain a shared major AND
- * that shared LINE can still carry the minor the older side will speak.
- * Retaining a major says nothing about which of its minors survive: keeping
- * the `v1` line while deleting released `v1.0` used to pass here, and at
- * runtime the released peer was then rejected at subscribe time. Unlike the
- * live handshake - where a peer's minor on a non-canonical major is simply
- * not in the manifest - both surfaces are dumped here, so this side CAN check
- * it, and does.
+ * Unlike the live handshake - where a peer's minor on a non-canonical major is simply not in the manifest - both surfaces are dumped here, so this side CAN check it, and does.
  */
 function canBridgeStreamFromSurface(
   mine: SurfaceMethod,
@@ -368,12 +291,8 @@ function asAnyOfVariants(value: unknown): readonly unknown[] | null {
 }
 
 /**
- * Stable identity for a union variant so the two sides' variants can be
- * paired for recursive diffing. Discriminated-union variants are identified
- * by their const-valued properties (e.g. `kind: "user_message"`); other
- * variants (nullable arms, primitive unions) fall back to their JSON-Schema
- * `type`. Returns null when signatures do not uniquely identify variants on
- * either side - the caller then falls back to whole-value comparison.
+ * Stable identity for a union variant so the two sides' variants can be paired for recursive diffing.
+ * `kind: "user_message"`); other variants (nullable arms, primitive unions) fall back to their JSON-Schema `type`.
  */
 /** Browser-safe FNV-1a hash for capping unwieldy variant signatures. */
 function shortHash(value: string): string {
@@ -613,10 +532,8 @@ export function exceptionMatchesFinding(
     readonly path: string | null;
   },
 ): boolean {
-  // Oracle-boundary hard rule: catalog host→client findings can never be
-  // excepted - not even by a hand-built exceptions array that never went
-  // through parseCompatExceptionsFile. Unrecognized payload slots count as
-  // host→client (fail closed).
+  // Oracle-boundary hard rule: catalog host→client findings can never be excepted - not even by a hand-built exceptions array that never went through parseCompatExceptionsFile.
+  // Unrecognized payload slots count as host→client (fail closed).
   if (
     !isClientToHostPayload(finding.payload) &&
     catalogHostToClientMethodNames.includes(finding.method)
@@ -681,18 +598,7 @@ function joinPath(parent: string, segment: string): string {
 }
 
 /**
- * Directional-safety diff between the released schema (`theirs`) and the
- * working tree's schema (`mine`) for the SAME negotiated version. Because a
- * registry ships on both ends, every reported divergence is one that breaks
- * at least one deployment direction:
- *
- * - required-set changes break the side that omits the newly-required (or
- *   still-requires the now-optional-and-omitted) property;
- * - a property added as REQUIRED breaks released senders that don't produce it;
- * - removing a property the released side requires breaks released receivers;
- * - enum value-set changes break whichever released side parses the value
- *   the other side no longer/newly produces;
- * - any other structural change (type, items, variants) must be deep-equal.
+ * Directional-safety diff between the released schema (`theirs`) and the working tree's schema (`mine`) for the SAME negotiated version.
  */
 function diffSchemasAtSameVersion(
   theirs: unknown,
@@ -724,9 +630,7 @@ function diffSchemasAtSameVersion(
               "property required by the released schema was removed - payloads built from this tree omit it and released peers fail to parse them",
           });
         }
-        // Removing a property the released side treats as optional is safe:
-        // released senders' extra key is stripped, released receivers accept
-        // its absence.
+        // Removing a property the released side treats as optional is safe: released senders' extra key is stripped, released receivers accept its absence.
         continue;
       }
       if (theirRequired.has(property) && !mineRequired.has(property)) {
@@ -769,18 +673,7 @@ function diffSchemasAtSameVersion(
         });
         continue;
       }
-      // A tolerated addition (optional, or backed by .catch()/default) is
-      // schema-parse-safe but is still a same-version wire-shape change on an
-      // already-released line: the key genuinely does not exist on the
-      // released peer's wire. This is the exact shape of the providers.list
-      // incident - `profiles: z.array(...).catch([])` landed on the live 3.0
-      // line without a version bump, the gate credited the tolerance and
-      // passed, and the client transport (which did not parse responses at
-      // the time) never ran the catch default, so code typed as if the field
-      // is always populated read `undefined` at runtime against released
-      // 1.1.5/1.1.6 hosts. `.catch()`/optional tolerance is parse-time
-      // hardening only, not a versioning mechanism - see the "Conventions
-      // going forward" note in the fix's decision log.
+      // A tolerated addition (optional, or backed by .catch()/default) is schema-parse-safe but is still a same-version wire-shape change on an already-released line: the key genuinely does not exist on the released peer's wire.
       if (hostToClient) {
         divergences.push({
           path: propertyPath,
@@ -939,13 +832,7 @@ function checkFamily(
     findings.push({ ...finding, excepted: isExcepted(finding) });
   };
 
-  // The unary `/rpc` open-frame check is fail-closed for the whole
-  // connection, so unary handshake mismatches are fatal. Streams check
-  // per-method at subscribe time and degrade (`onMethodSupport`), so a
-  // stream mismatch is a per-feature outage: a method the released peer
-  // never had is advisory (it degrades there by design - the
-  // `resources.subscribe` precedent), while removing or un-bridging a
-  // method the released peer shipped with is breaking.
+  // The unary `/rpc` open-frame check is fail-closed for the whole connection, so unary handshake mismatches are fatal.
   const handshakeSeverity: CompatSeverity =
     family === "unary" ? "fatal" : "breaking";
 
@@ -1233,9 +1120,8 @@ function checkOptionalUnary(
 }
 
 /**
- * Full two-sided compatibility verdict of this tree's surface against one
- * released baseline surface. `blocking` (findings with no reviewed exception)
- * must be empty for the gate to pass.
+ * Full two-sided compatibility verdict of this tree's surface against one released baseline surface.
+ * `blocking` (findings with no reviewed exception) must be empty for the gate to pass.
  */
 export function checkSurfaceCompatibility(args: {
   readonly mine: ProtocolSurface;

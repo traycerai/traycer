@@ -1,9 +1,6 @@
 /**
- * Persisted-state sanitization for the epic canvas store: every reader here
- * takes `unknown` from the zustand persist `merge` and rebuilds a valid
- * slice, dropping (never throwing on) malformed entries. Canvas payloads
- * delegate to `parseEpicCanvasState` (`migrate-canvas.ts`); this module owns
- * the store-level shape around them (tabs, order, pointers, artifact trees).
+ * Persisted-state sanitization for the epic canvas store: every reader here takes `unknown` from
+ * the zustand persist `merge` and rebuilds a valid slice, dropping (never throwing on) malformed
  */
 import {
   isEpicNodeKind,
@@ -120,10 +117,8 @@ function parsePersistedEpicViewTab(value: unknown): EpicViewTab | null {
   ) {
     return null;
   }
-  // The canvas is parsed separately into `canvasByTabId`
-  // (see `readPersistedCanvasByTabId`), not stored on the tab record. Any legacy
-  // `lastSeenAt` in persisted data is ignored - the field was removed (it was
-  // write-only; restore ordering uses `mostRecentTabIdByEpicId`).
+  // The canvas is parsed separately into `canvasByTabId` (see `readPersistedCanvasByTabId`), not
+  // stored on the tab record.
   const surfaceMode = parsePersistedSurfaceMode(value.surfaceMode);
   return {
     tabId: value.tabId,
@@ -195,9 +190,8 @@ function readPersistedArtifactTreeByEpicId(
       const node = parsePersistedEpicNodeRecord(record);
       return node === null ? [] : [node];
     });
-    // Dropping an invalid node would otherwise leave its children pointing at
-    // a parentId that no longer exists - a dangling ref a root-walk silently
-    // hides. Re-root those orphans so they stay reachable.
+    // Dropping an invalid node would otherwise leave its children pointing at a parentId that no
+    // longer exists - a dangling ref a root-walk silently hides.
     const survivingIds = new Set(parsed.map((node) => node.id));
     out[epicId] = parsed.map((node) =>
       node.parentId !== null && !survivingIds.has(node.parentId)

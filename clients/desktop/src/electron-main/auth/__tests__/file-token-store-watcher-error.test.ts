@@ -1,14 +1,6 @@
 /**
- * Runtime watcher-error self-healing, driven by SYNTHETIC FSWatcher stream
- * errors (the FSEvents-reset class that cannot be provoked through the real
- * fs - and module-mocking `node:fs` does not reach the store's transitive
- * import under vitest, hence the injected `watchImpl` seam).
- *
- * Policy under test: an errored watcher is closed and reinstalled on a
- * DOUBLING backoff; the backoff resets only after a stable run
- * (WATCHER_STABILITY_MS) - construction success alone must not reset it, or
- * an install-ok/error-later FSEvents loop would hammer at the initial delay
- * forever.
+ * Runtime watcher-error self-healing, driven by SYNTHETIC FSWatcher stream errors (the FSEvents-reset class that cannot be provoked through the real fs.
+ * Policy under test: an errored watcher is closed and reinstalled on a DOUBLING backoff.
  */
 import { chmodSync, mkdtempSync, rmSync, watch, type FSWatcher } from "node:fs";
 import { dirname, join } from "node:path";
@@ -165,12 +157,6 @@ describe("FileTokenStore watcher self-healing (synthetic stream errors)", () => 
         0,
       );
 
-      // Watch a DECOY directory nothing ever touches. The store believes it
-      // has a healthy watch, but no filesystem event for the credentials file
-      // can ever be delivered - so the catch-up retry is the ONLY thing that
-      // can surface the snapshot. (Watching the real dir made this vacuous:
-      // the chmod that heals the read is itself an event in that dir, and it
-      // delivered the change even with the retry deleted.)
       const decoyDir = mkdtempSync(join(tmpdir(), "traycer-watch-decoy-"));
       decoyDirs.push(decoyDir);
       const created: FSWatcher[] = [];

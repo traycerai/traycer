@@ -21,8 +21,8 @@ function setDocumentHidden(hidden: boolean): void {
 }
 
 /**
- * The global test shim answers every media query with `matches: false`. This
- * narrows the reduced-motion query alone; the clock reads only `matches`.
+ * The global test shim answers every media query with `matches: false`.
+ * This narrows the reduced-motion query alone; the clock reads only `matches`.
  */
 function stubReducedMotion(reduced: boolean): void {
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -43,10 +43,7 @@ interface ReducedMotionListenerStub {
 }
 
 /**
- * Like `stubReducedMotion`, but the returned MediaQueryList actually records
- * `change` listeners (as `attachListenersOnce` registers one via
- * `addEventListener`) and reports a mutable `matches`, so a test can flip the
- * preference mid-run and drive the clock's own `handleReducedMotionChange`.
+ * Like `stubReducedMotion`, but the returned MediaQueryList actually records `change` listeners (as `attachListenersOnce` registers one via `addEventListener`) and reports a mutable `matches`, so a test can flip the preference mid-run and drive the clock's.
  */
 function stubReducedMotionWithListener(
   initialMatches: boolean,
@@ -235,9 +232,7 @@ describe("subscribeStatusAnimation", () => {
   });
 
   it("registers the writer even under reduced motion, and starts ticking once the preference turns off", () => {
-    // Install the listener-recording stub BEFORE the first subscribe: the
-    // module attaches its change listener only once, on the first
-    // subscribe/render after a reset.
+    // Install the listener-recording stub BEFORE the first subscribe: the module attaches its change listener only once, on the first subscribe/render after a reset.
     const stub = stubReducedMotionWithListener(true);
 
     const calls: number[] = [];
@@ -449,9 +444,7 @@ describe("useStatusAnimation", () => {
   });
 
   it("clears and stops the interval when reduced motion turns on mid-run, then resumes with a synchronous write and a new interval when it turns off", () => {
-    // Install the listener-recording stub BEFORE the first render: the
-    // module attaches its change listener only once, on the first
-    // subscribe/render after a reset.
+    // Install the listener-recording stub BEFORE the first render: the module attaches its change listener only once, on the first subscribe/render after a reset.
     const stub = stubReducedMotionWithListener(false);
 
     const writes: number[] = [];

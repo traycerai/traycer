@@ -77,9 +77,8 @@ describe("collectReplicaMemoryTelemetry", () => {
 
   it("THE REDDENING ONE - evictionEffectiveness sums a plane's DEFERRED evictions, not just requested/reclaimed/refused", () => {
     const runtime = createProcessMemoryRuntime(fakeEnvironment());
-    // A tier that defers rather than declines - it reports the deferral to
-    // the accountant itself, mirroring what a fixed `createMainAccountingBridge`
-    // does from inside `demoteColdestUnpinned`.
+    // A tier that defers rather than declines - it reports the deferral to the accountant itself,
+    // mirroring what a fixed `createMainAccountingBridge` does from inside `demoteColdestUnpinned`.
     runtime.hotDocs.attach({
       key: "host:epic:rt",
       materializedIds: () => [],
@@ -87,11 +86,8 @@ describe("collectReplicaMemoryTelemetry", () => {
         runtime.accountant.noteEvictionDeferred(BUDGET_PLANE_IDS.hotDocs);
         return {
           reclaimedBytes: 0,
-          // This fixture MODELS the deferring proxy - it raises the deferral
-          // flag on the line above - so it has to report the ask it accepted.
-          // Saying zero here would be a double that calls itself deferring
-          // while behaving like a refusal, which is exactly the conflation the
-          // field was added to end.
+          // This fixture MODELS the deferring proxy - it raises the deferral flag on the line above - so it
+          // has to report the ask it accepted.
           deferredBytes: overBytes,
           protectedBytesByKind: [{ kind: "leased", bytes: 4_096 }],
         };
@@ -105,9 +101,6 @@ describe("collectReplicaMemoryTelemetry", () => {
     runtime.accountant.reconcile(BUDGET_PLANE_IDS.hotDocs);
 
     const telemetry = collectReplicaMemoryTelemetry(runtime);
-    // Without this field a memory-pressure affordance cannot tell a deferred
-    // eviction from one that never happened - the counter can be correct in
-    // the accountant and still have no way to reach a reader.
     expect(telemetry.evictionEffectiveness.evictionsDeferred).toBe(1);
     // Asserted beside the field that already existed, so this pin cannot pass
     // by `evictionsDeferred` silently aliasing `evictionsRefused`.

@@ -15,9 +15,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
-// The cross-workspace provenance gates walk and parse four workspace trees
-// per test; their cost scales with repository size, not with the code under
-// test, so the 5s default timeout is the wrong ceiling for them.
+// The cross-workspace provenance gates walk and parse four workspace trees per test; their cost scales with repository size, not with the code under test, so the 5s default timeout is the wrong ceiling for them.
 vi.setConfig({ testTimeout: 30_000 });
 
 const SHARED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1653,9 +1651,7 @@ function facadeInternalVerifierViolations(
   const hasCliInvocationShape = (call: ts.CallExpression): boolean => {
     if (!ts.isPropertyAccessExpression(call.expression)) return false;
     const method = call.expression.name.text;
-    // `retireCompetingRegistration` removes THIS label's registration (wholly
-    // or in part) and so runs inside the same record transaction as an
-    // uninstall, through the generic removal runner's `remove` seam.
+    // `retireCompetingRegistration` removes this label's registration (wholly or in part) and so runs inside the same record transaction as an uninstall, through the generic removal runner's `remove` seam.
     const expectedProperty =
       method === "install"
         ? "register"
@@ -1937,14 +1933,6 @@ function semanticControllerActuatorCall(source: string): boolean {
     if (!changed) break;
   }
   return found;
-  /*
-  const clean = stripComments(source);
-  const aliases = new Set<string>(["controller", "opts.controller", "this.controller"]);
-  for (const match of clean.matchAll(/\b(?:const|let|var)\s+(\w+)\s*=\s*(?:controller|opts\.controller|this\.controller)\b/g)) aliases.add(match[1]);
-  return [...aliases].some((name) =>
-    new RegExp(`\\b${name.replace(".", "\\.")}\\.(?:install|uninstall|stop|start|restart|stopForRestart|relaunchAfterRestart|retireCompetingRegistration)\\s*\\(`).test(clean),
-  );
-*/
 }
 
 async function directLockUsers(root: string, call: string): Promise<string[]> {
@@ -2274,9 +2262,7 @@ describe("host update contender architecture boundary", () => {
         "unverified-controller",
         "src/service/index.ts",
       ],
-      // The competing-registration repair removes this label's registration,
-      // so an explicit forward that skips the removal runner is as unverified
-      // as a bare `uninstall` forward.
+      // The competing-registration repair removes this label's registration, so an explicit forward that skips the removal runner is as unverified as a bare `uninstall` forward.
       [
         'import { runServiceRegistrationWithInvocationRecord, runServiceUninstallWithInvocationRecord, runServiceRemovalWithInvocationRecord } from "./cli-invocation-record"; function withCliInvocationRecord(controller) { return { ...controller, install: (options) => runServiceRegistrationWithInvocationRecord({ register: () => controller.install(options) }), uninstall: (options) => runServiceUninstallWithInvocationRecord({ uninstall: () => controller.uninstall(options) }), retireCompetingRegistration: (label) => controller.retireCompetingRegistration(label) }; }',
         "unverified-controller",
@@ -2469,22 +2455,8 @@ describe("host update contender architecture boundary", () => {
   });
 });
 
-// The terminal-completion boundary (Ticket 03 cold-review fixup, revised
-// after the fixup-of-the-fixup): the raw sealer/writer are module-private to
-// `contender.ts`, same as before. What changed is the shape of the PUBLIC
-// shared surface: `completeUpdateExecutorCompletionSession` (a free function
-// a caller could invoke with its own literal evidence object) is GONE. The
-// only public shared surface is `withUpdateExecutorCompletionSegment` itself,
-// which hands its callback a revocable `ExecutorCompletionSession` object -
-// there is no importable name that CONSUMES that session from outside the
-// callback that received it. That session is intended for exactly one
-// owner, `traycer-cli/src/host/update-executor.ts`, where the CLI wrapper is
-// module-private and colocated with its only caller. update-executor.ts
-// never re-exports the session or its evidence shape: the `execute()`
-// callback it hands to production and test callers receives a zero-argument
-// `complete()` closure that performs the real live observation itself. This
-// section proves no OTHER production file anywhere in the client tree can
-// reach the session, the evidence type, or the raw sealer/writer.
+// What changed is the shape of the public shared surface: `completeUpdateExecutorCompletionSession` (a free function a caller could invoke with its own literal evidence object) is gone.
+// That session is intended for exactly one owner, `traycer-cli/src/host/update-executor.ts`, where the CLI wrapper is module-private and colocated with its only caller.
 const VERIFIED_EXECUTOR_COMPLETION_SYMBOLS = [
   "sealVerifiedExecutorCompletion",
   "commitVerifiedExecutorCompletion",
@@ -2733,27 +2705,7 @@ describe("terminal-completion boundary - opaque single-owner sealer/writer, sess
   });
 });
 
-// ---------------------------------------------------------------------------
-// Direct contender-module reference boundary (Ticket 03 authority-fixup cold
-// review, P1: "the single-owner architecture guard is identifier-based and
-// misses direct-module re-exports and client packages"). Every check above
-// this point detects a PROTECTED IDENTIFIER by name via regex. That misses
-// two real shapes the cold review actually reproduced against this exact
-// file's pattern: `export * from "..."` re-exports the whole module without
-// ever naming a symbol, and a namespace import lets a caller reach a
-// protected export through computed/split-string property access the
-// identifier regex never sees (the import statement establishing `bridge`
-// is still there - the regex just never runs the check that would catch it,
-// because until now nothing scanned gui-app or clients/scripts, and nothing
-// matched on the import's MODULE SPECIFIER instead of a mentioned name).
-//
-// This section is MODULE-SPECIFIER based instead: it walks the AST for any
-// import, re-export (named, aliased, or `export *`), or dynamic `import()`
-// whose module specifier resolves to `host-update/contender.ts` - via the
-// bare `@traycer-clients/shared/host-update/contender` path or a relative
-// path from inside the shared package - regardless of which names (if any)
-// are mentioned, and scans every production client package: shared,
-// traycer-cli, desktop, gui-app, and scripts.
+// Every check above this point detects a protected identifier by name via regex.
 const CONTENDER_MODULE_ABS_PATH = join(
   SHARED_ROOT,
   "host-update",
@@ -2768,10 +2720,8 @@ const FORBIDDEN_CONTENDER_REEXPORT_NAMES = new Set([
   "commitExecutorAttemptMutation",
   "commitExecutorRecoveryMutation",
 ]);
-// The only two files structurally allowed to reference the direct contender
-// module AT ALL - not merely "allowed to import certain names from it". Every
-// other production file, in every client package, must have zero reference
-// (import, re-export, or dynamic import) to this module.
+// The only two files structurally allowed to reference the direct contender module AT all - not merely "allowed to import certain names from it".
+// Every other production file, in every client package, must have zero reference (import, re-export, or dynamic import) to this module.
 const TRUSTED_CONTENDER_MODULE_IMPORTERS = new Set([
   "shared/host-update/index.ts",
   "traycer-cli/src/host/update-executor.ts",
@@ -2786,18 +2736,8 @@ async function moduleScanSourceFiles(root: string): Promise<string[]> {
 }
 
 /**
- * Materializes `files` (relative path -> source text) under a fresh temp
- * directory, runs `run` with that directory as the scan root, and removes
- * the directory afterward regardless of outcome. Exists so the
- * production-shaped split-dynamic-import fixtures (Ticket 03 third
- * revalidation, P1) can be driven through the REAL directory-walking
- * scanners (`namedExportProvenanceUsers`, `contenderModuleReferencers`) -
- * which do their own `readdir`/`readFile` against an on-disk root - rather
- * than only through their leaf AST helpers (`reachesNamedExport`,
- * `referencesContenderModule`), which take source text directly and would
- * never exercise the prefilter/traversal bug the reviewer found. Writing to
- * an isolated temp tree (never the real package source directories) keeps
- * this from touching, or racing, any production file.
+ * Materializes `files` (relative path -> source text) under a fresh temp directory, runs `run` with that directory as the scan root, and removes the directory afterward regardless of outcome.
+ * Writing to an isolated temp tree (never the real package source directories) keeps this from touching, or racing, any production file.
  */
 async function withTempFixtureTree<T>(
   files: Readonly<Record<string, string>>,
@@ -2830,21 +2770,15 @@ describe("production source enumeration", () => {
         "utf8",
       );
 
-      // Regression for the installed-tree crash: Dirent reports this as a
-      // symlink, while its name looks like a JavaScript file. node_modules is
-      // excluded before classification, so neither walker attempts readFile
-      // on the directory target.
+      // Regression for the installed-tree crash: Dirent reports this as a symlink, while its name looks like a JavaScript file.
+      // node_modules is excluded before classification, so neither walker attempts readFile on the directory target.
       await mkdir(join(root, "node_modules"), { recursive: true });
       await symlink(target, join(root, "node_modules", "wavesurfer.js"), "dir");
 
-      // A symlinked directory outside node_modules remains real source and
-      // must stay covered; following stat distinguishes it from a file and
-      // recurses into its TypeScript child.
+      // A symlinked directory outside node_modules remains real source and must stay covered; following stat distinguishes it from a file and recurses into its TypeScript child.
       await symlink(target, join(root, "linked-source.js"), "dir");
 
-      // Build outputs are pruned like dependencies: a locally-built
-      // `dist/main/index.js` carrying a flagged identifier must not flip a
-      // gate that is green on CI (where no build output exists).
+      // Build outputs are pruned like dependencies: a locally-built `dist/main/index.js` carrying a flagged identifier must not flip a gate that is green on CI (where no build output exists).
       await mkdir(join(root, "dist", "main"), { recursive: true });
       await writeFile(
         join(root, "dist", "main", "index.ts"),
@@ -2876,19 +2810,7 @@ describe("production source enumeration", () => {
 
 /**
  * Every absolute path a module specifier could actually name.
- *
- * The gates used to do `resolved.endsWith(".ts") ? resolved : resolved + ".ts"`,
- * which has a live bypass: TypeScript's own guidance is to write
- * `import "./update-executor.js"` for an `update-executor.ts` file, and Bun
- * resolves it happily. The old logic produced `update-executor.js.ts` - a file
- * that does not exist - so the edge was silently DROPPED and the fence stayed
- * green while the protected module executed. An unauthorized importer needed
- * only to append four characters.
- *
- * Fail-closed by design: this over-generates candidates rather than under-
- * generating them. A false positive here is a loud, fixable test failure; a
- * false negative is an executable route past an architecture gate, which is
- * the thing gates exist to make impossible.
+ * The old logic produced `update-executor.js.ts` - a file that does not exist - so the edge was silently dropped and the fence stayed green while the protected module executed.
  */
 const SPECIFIER_EXTENSION_REMAPS: ReadonlyArray<
   readonly [string, readonly string[]]
@@ -2945,12 +2867,6 @@ function stringLiteralText(node: ts.Node | undefined): string | null {
   return node !== undefined && ts.isStringLiteralLike(node) ? node.text : null;
 }
 
-/**
- * True if `sourceText` (attributed to `fromFileAbsPath` for relative-path
- * resolution) contains an import, re-export, or dynamic import whose module
- * specifier resolves to the direct contender module - independent of which
- * names, if any, are mentioned in the statement.
- */
 function referencesContenderModule(
   sourceText: string,
   fromFileAbsPath: string,
@@ -2987,12 +2903,7 @@ function referencesContenderModule(
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
-      // `collapsedStringLiteral` (not `stringLiteralText`) so a split-string
-      // dynamic specifier - `import("@traycer-clients/shared/host-update/"
-      // + "contender")` - still resolves. Ticket 03 third revalidation, P1:
-      // `stringLiteralText` returns `null` for a `BinaryExpression`, so this
-      // branch previously missed every split dynamic import outright even
-      // though the caller's own text prefilter let the source through.
+      // `collapsedStringLiteral` (not `stringLiteralText`) so a split-string dynamic specifier - `import("@traycer-clients/shared/host-update/" + "contender")` - still resolves.
       const specifier = collapsedStringLiteral(node.arguments[0], file);
       if (
         specifier !== null &&
@@ -3008,12 +2919,6 @@ function referencesContenderModule(
   return found;
 }
 
-/**
- * Strips `(expr)` and `expr as T` wrappers so a receiver like
- * `(bridge as unknown as Record<string, () => unknown>)` is recognized as
- * the plain identifier `bridge` underneath, rather than never matching a
- * tracked namespace binding because its text includes the cast.
- */
 function unwrapExpression(node: ts.Expression): ts.Expression {
   if (ts.isParenthesizedExpression(node))
     return unwrapExpression(node.expression);
@@ -3054,13 +2959,8 @@ function collapsedStringLiteral(
 }
 
 /**
- * Cheap, conservative admission for the AST dynamic-import path. Static
- * imports are already admitted by the module/export-name hints; this pattern
- * exists only so a dynamic import whose specifier is split across source
- * tokens is not skipped before AST folding runs. It recognizes the `import`
- * keyword followed by arbitrary whitespace and/or comments before `(`, so
- * a comment inserted between the import keyword and opening parenthesis
- * cannot evade the production walker.
+ * Cheap, conservative admission for the ast dynamic-import path.
+ * Static imports are already admitted by the module/export-name hints; this pattern exists only so a dynamic import whose specifier is split across source tokens is not skipped before ast folding runs.
  */
 function mayContainDynamicImport(source: string): boolean {
   return /\bimport(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*(?:\r\n?|[\n\u2028\u2029]|$))*\(/.test(
@@ -3069,33 +2969,10 @@ function mayContainDynamicImport(source: string): boolean {
 }
 
 /**
- * Every route `sourceText` (attributed to `fromFileAbsPath`) can hand a
- * `forbidden` name from a module resolving to the direct contender module
- * onward to ITS OWN importers. Returns the exported (public) names leaked,
- * or `["export *"]` for a star re-export of that module regardless of
- * `forbidden`, since a star re-export leaks everything.
- *
- * This is module-specifier AND local-binding-provenance based, not merely
- * "does this export statement itself name the contender module" (Ticket 03
- * final-authority cold review, P1): it also catches
- *   - a two-step alias re-export: `import { x as y } from "./contender";
- *     export { y as z };` - the export declaration here carries NO module
- *     specifier at all, so a check that only inspects export declarations
- *     with a contender moduleSpecifier misses it entirely;
- *   - an alias chain through an intermediate local variable before the
- *     local re-export;
- *   - a namespace import consumed and re-exported through a wrapper
- *     function or object property, detected via property or
- *     computed/split-string access to the forbidden name off the
- *     namespace binding.
+ * Every route `sourceText` (attributed to `fromFileAbsPath`) can hand a `forbidden` name from a module resolving to the direct contender module onward to its own importers.
  */
 /**
- * The forbidden name that `node` (or its first descendant, depth-first)
- * references, if any - i.e. the first identifier anywhere inside `node`
- * whose text is a key of `boundLocalNames`. Used to trace provenance
- * through a wrapper function/arrow body: `internal` referenced anywhere
- * inside the wrapper's body (a call, a bare reference, a return) is enough
- * to treat the wrapper's own declared name as equally bound.
+ * The forbidden name that `node` (or its first descendant, depth-first) references, if any - i.e. the first identifier anywhere inside `node` whose text is a key of `boundLocalNames`.
  */
 type WrapperFunctionLike =
   | ts.ArrowFunction
@@ -3109,14 +2986,8 @@ function unwrapParenthesized(expr: ts.Expression): ts.Expression {
 }
 
 /**
- * True only if `call`'s arguments forward `fn`'s own parameters VERBATIM
- * and in full - `(...args) => internal(...args)`, or `(a, b) =>
- * internal(a, b)` - never a wrapper that recomputes, defaults, reorders, or
- * partially forwards an argument. This is what distinguishes transparent
- * laundering from a real facade: `commitCliExecutorAttemptMutation`, e.g.,
- * has one statement calling a trusted import too, but recomputes its second
- * argument (`options.hostHomeDir ?? hostHomeDir(options.environment)`)
- * rather than forwarding a parameter unchanged, so it must NOT match here.
+ * This is what distinguishes transparent laundering from a real facade: `commitCliExecutorAttemptMutation`, e.g., has one statement calling a trusted import too, but recomputes its second argument (`options.hostHomeDir ??
+ * hostHomeDir(options.environment)`) rather than forwarding a parameter unchanged, so it must not match here.
  */
 function isVerbatimArgumentForward(
   fn: WrapperFunctionLike,
@@ -3154,17 +3025,6 @@ function soleReturnExpression(block: ts.Block): ts.Expression | undefined {
   return statement.expression;
 }
 
-/**
- * The forbidden name a PURE call-through wrapper forwards, or `undefined`
- * if `fn` does anything else at all. Deliberately narrow - see
- * `isVerbatimArgumentForward` - so a real multi-statement or
- * argument-transforming facade (an authority check, a throw, a branch, a
- * recomputed argument) is never mistaken for transparent laundering just
- * because it also happens to call a trusted import. A facade that adds its
- * own logic or its own argument computation around a trusted call is the
- * intended, reviewed architecture; only a wrapper that adds NOTHING is
- * indistinguishable from re-exporting the trusted name directly.
- */
 function pureCallThroughWrapperTarget(
   fn: WrapperFunctionLike,
   boundLocalNames: ReadonlyMap<string, string>,
@@ -3184,12 +3044,6 @@ function pureCallThroughWrapperTarget(
   return undefined;
 }
 
-/**
- * Set-keyed sibling of `pureCallThroughWrapperTarget`, for scanners that
- * track reachability with a plain `Set<string>` of bound local names rather
- * than a `Map` to a forbidden-name value (`reachesNamedExport`, which is
- * single-export-keyed already). Same narrow verbatim-forward criterion.
- */
 function pureCallThroughWrapperReachesBoundSet(
   fn: WrapperFunctionLike,
   boundNames: ReadonlySet<string>,
@@ -3222,9 +3076,7 @@ function reExportsForbiddenNames(
     scriptKindFor(fromFileAbsPath),
   );
   const leaks = new Set<string>();
-  // local binding name -> the forbidden contender-module export it traces
-  // back to (through a direct import, an alias chain, or - for a
-  // namespace-derived wrapper - the property/computed access itself).
+  // local binding name -> the forbidden contender-module export it traces back to (through a direct import, an alias chain, or - for a namespace-derived wrapper - the property/computed access itself).
   const boundLocalNames = new Map<string, string>();
   const namespaceBindings = new Set<string>();
 
@@ -3282,10 +3134,6 @@ function reExportsForbiddenNames(
           boundLocalNames.set(node.name.text, accessed);
         }
       }
-      // A wrapper: `const recover = (...args) => internal(...args)` (or the
-      // function-expression form) that does nothing but forward to a
-      // trusted import - closing the gap a personal scanner audit found:
-      // propagation previously stopped at plain identifier reassignment.
       if (
         (ts.isArrowFunction(node.initializer) ||
           ts.isFunctionExpression(node.initializer)) &&
@@ -3315,15 +3163,7 @@ function reExportsForbiddenNames(
     }
     ts.forEachChild(node, collectBindings);
   }
-  // Fixed-point binding collection: each pass can only ADD to
-  // `boundLocalNames`/`namespaceBindings` (never remove), so re-running it
-  // until a pass learns nothing new is guaranteed to terminate and, unlike a
-  // fixed pass count, correctly resolves an alias chain of any depth (a ->
-  // b -> c -> ... -> export {..}), not just one or two hops. The iteration
-  // count is bounded by the number of distinct local bindings a real source
-  // file can declare, so cap it at the source length as a generous,
-  // AST-size-scaled safety bound against a pathological or malformed input
-  // rather than trusting monotonic growth alone to stop the loop.
+  // -> export {..}), not just one or two hops.
   let learnedSoFar = -1;
   let fixedPointIterations = 0;
   const fixedPointBound = sourceText.length + 16;
@@ -3357,20 +3197,13 @@ function reExportsForbiddenNames(
         node.exportClause !== undefined &&
         ts.isNamedExports(node.exportClause)
       ) {
-        // The two-step shape: no module specifier on this export statement
-        // at all - it re-exports a LOCAL binding that traces back to a
-        // forbidden contender-module import through `boundLocalNames`.
+        // The two-step shape: no module specifier on this export statement at all - it re-exports a local binding that traces back to a forbidden contender-module import through `boundLocalNames`.
         for (const element of node.exportClause.elements) {
           const localName = (element.propertyName ?? element.name).text;
           if (boundLocalNames.has(localName)) leaks.add(element.name.text);
         }
       }
     }
-    // A directly-exported binding whose declared name is itself a bound
-    // wrapper/alias: `export const recover = (...args) => internal(...args);`
-    // or `export function recover() { return internal(); }` - no separate
-    // re-export statement at all, so this is not the two-step shape above,
-    // it is the export declaration and the alias/wrapper in one.
     if (
       ts.isVariableStatement(node) &&
       node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
@@ -3392,11 +3225,7 @@ function reExportsForbiddenNames(
     ) {
       leaks.add(node.name.text);
     }
-    // A namespace-derived wrapper: `export function rogue() { return
-    // ns.forbiddenName(...); }` or computed/split-string equivalent,
-    // exported directly rather than re-exported by name. The receiver is
-    // unwrapped past any `(... as T)` cast first, since a laundering
-    // attempt routinely hides the namespace identifier behind one.
+    // A namespace-derived wrapper: `export function rogue() { return ns.forbiddenName(...); }` or computed/split-string equivalent, exported directly rather than re-exported by name.
     if (
       ts.isPropertyAccessExpression(node) ||
       ts.isElementAccessExpression(node)
@@ -3429,17 +3258,8 @@ async function contenderModuleReferencers(
     if (relativePath.split("/").includes("__fixtures__")) continue;
     if (relativePath.split("/").includes("fixtures")) continue;
     const source = await readFile(path, "utf8");
-    // Fast pre-filter: any STATIC reference must mention "contender"
-    // somewhere in its specifier text - a static import/export specifier is
-    // always one literal string token, so the target's basename cannot be
-    // split across it. A dynamic `import()` call accepts an arbitrary
-    // expression as its specifier, so it could in principle split "contender"
-    // itself across a concatenation; the `import\s*\(` alternative keeps
-    // that route sound too (Ticket 03 third revalidation, P1 fixed the
-    // analogous gap in `namedExportProvenanceUsers`). Skipping the AST parse
-    // otherwise keeps the gui-app-sized scan fast without weakening
-    // detection - the specifier resolution above stays exact; this is only
-    // a text-level short-circuit.
+    // Fast pre-filter: any static reference must mention "contender" somewhere in its specifier text - a static import/export specifier is always one literal string token, so the target's basename cannot be split across it.
+    // Skipping the ast parse otherwise keeps the gui-app-sized scan fast without weakening detection - the specifier resolution above stays exact; this is only a text-level short-circuit.
     if (!/contender/i.test(source) && !mayContainDynamicImport(source)) {
       continue;
     }
@@ -3593,14 +3413,6 @@ describe("direct contender-module reference boundary - module-specifier based, n
 
   it("detects a 3+ hop alias chain laundering the trusted barrel's forbidden re-export, including an intermediate wrapper-function hop, not just a single-hop two-step re-export", () => {
     const barrelPath = join(SHARED_ROOT, "host-update", "index.ts");
-    // hop 1: import under a fresh local name
-    // hop 2: a plain variable alias of that import
-    // hop 3: a wrapper function that closes over the alias and re-exposes it
-    //        under yet another local name
-    // hop 4: the actual outward re-export, naming only the wrapper's local
-    //        name - nowhere in this statement, or the one before it, does
-    //        "commitExecutorAttemptMutation" appear again after the import
-    //        line, so a scanner that only widens one or two hops misses it.
     const rogueDeepChain = `
       import { commitExecutorAttemptMutation as hop1 } from "./contender";
       const hop2 = hop1;
@@ -3658,12 +3470,7 @@ describe("direct contender-module reference boundary - module-specifier based, n
   );
 });
 
-// The CLI's own split attempt/recovery writers (`commitCliExecutorAttemptMutation`
-// / `commitCliExecutorRecoveryMutation`) are a second, CLI-local trust
-// boundary layered on top of the shared one above: even a file with a
-// legitimate reason to import from `update-contender.ts` for something else
-// must not also reach these two. Ownership must be exact: only
-// `update-executor.ts` may call them.
+// Ownership must be exact: only `update-executor.ts` may call them.
 const CLI_EXECUTOR_MUTATION_FACADE_SYMBOLS = [
   "commitCliExecutorAttemptMutation",
   "commitCliExecutorRecoveryMutation",
@@ -3725,39 +3532,12 @@ describe("commitCliExecutorAttemptMutation / commitCliExecutorRecoveryMutation -
   });
 });
 
-// ---------------------------------------------------------------------------
-// Named-export provenance scanner (Ticket 03 final-authority cold review,
-// P1: "the CLI-local boundary is weaker still - its ownership checks are
-// identifier regexes, not symbol/module provenance. A namespace import
-// followed by `Reflect.get(bridge, "commitCliExecutor" + "RecoveryMutation")`
-// contains no protected token and the checked-in regex returns false;
-// `export * from './update-contender'` likewise republishes the split
-// writers without ever naming them.").
-//
-// This generalizes the module-specifier + local-binding-provenance
-// machinery already proven above (`reExportsForbiddenNames`,
-// `referencesContenderModule`) into a single reusable check keyed on ONE
-// named export of ONE target module, rather than a whole-module boundary.
-// It is used below both to add a provenance-based second gate over the
-// CLI-local split writers (on top of the existing identifier-regex gate,
-// which stays as a cheap first line of defense) and for the new direct
-// store recovery-channel ownership gate.
 interface NamedExportTarget {
   readonly moduleAbsPath: string;
   readonly bareSpecifier: string | null;
   readonly exportName: string;
 }
 
-/**
- * True if `sourceText` exports `name` outward under that exact exported
- * name - a top-level `export function`/`export const` declared as `name`,
- * or a named export list entry (`export { local as name }`, with or
- * without a module specifier) whose EXPORTED (public) name is `name`. This
- * is deliberately about the file's own outward-facing export surface, not
- * about where a local binding came from - it answers "could a downstream
- * importer of THIS file reach `name`", which is the complementary check to
- * `reachesNamedExport`'s "does this file reach `name` from elsewhere".
- */
 function fileExportsIdentifier(
   sourceText: string,
   fromFileAbsPath: string,
@@ -3822,21 +3602,6 @@ function resolvesToNamedExportModule(
   return specifierCandidatePaths(resolved).includes(target.moduleAbsPath);
 }
 
-/**
- * True if `sourceText` (attributed to `fromFileAbsPath`) reaches
- * `target.exportName` from a module resolving to `target.moduleAbsPath`
- * through ANY route: a direct (possibly aliased) named import, a namespace
- * import consumed via property or computed/split-string access, a named or
- * aliased re-export whose statement itself carries the target module
- * specifier, a bare `export *` from that module, a two-step local
- * re-export of an already-imported binding (an export declaration with NO
- * module specifier, naming a local identifier - or an alias of one - that
- * this file imported under `exportName`), or a dynamic `import()` of that
- * module combined with any textual mention of `exportName` (a dynamic
- * import's result type is not statically traceable through this scanner,
- * so this arm is intentionally conservative and over-inclusive rather than
- * risk a false negative).
- */
 function reachesNamedExport(
   sourceText: string,
   fromFileAbsPath: string,
@@ -3851,16 +3616,6 @@ function reachesNamedExport(
   );
   const boundLocalNames = new Set<string>();
   const namespaceBindings = new Set<string>();
-  // A namespace import or a dynamic `import()` of the target module hands
-  // the caller the WHOLE module object, not one property - it can be
-  // forwarded to another file, stored, or accessed through a computed/
-  // split-string key that never mentions `exportName` as a literal
-  // substring anywhere in this file. Both therefore count as reaching
-  // EVERY export of that module, `exportName` included, unconditionally -
-  // requiring a later textual mention (as the dynamic-import arm used to)
-  // is exactly the false-negative surface a personal scanner audit found:
-  // it missed a forwarded namespace object and a split-string dynamic
-  // specifier.
   let leaked = false;
 
   function collect(node: ts.Node): void {
@@ -3889,15 +3644,7 @@ function reachesNamedExport(
             }
           }
         }
-        // A default import (`import bridge from "./target"`) hands the
-        // caller whatever the target module's `export default` resolves
-        // to. This scanner has no cross-file visibility into which name
-        // that binds to, so - same reasoning as the namespace/dynamic-import
-        // arms above - it is treated as reaching every export
-        // unconditionally rather than risk a false negative (Ticket 03
-        // third revalidation, P1: closes the downstream half of the
-        // trusted-definer `export default` gap - `definerLaundersCanonicalAuthorities`
-        // closes the definer-side half).
+        // A default import (`import bridge from "./target"`) hands the caller whatever the target module's `export default` resolves to.
         if (node.importClause.name !== undefined) {
           leaked = true;
         }
@@ -3927,10 +3674,6 @@ function reachesNamedExport(
     ) {
       boundLocalNames.add(node.name.text);
     }
-    // A pure call-through wrapper hop (`const y = (...args) => x(...args)`
-    // or the function-declaration form) - same narrow criterion as
-    // `pureCallThroughWrapperTarget` above, so a real facade with its own
-    // logic is never mistaken for a reachability hop.
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
@@ -3952,14 +3695,7 @@ function reachesNamedExport(
     }
     ts.forEachChild(node, collect);
   }
-  // Fixed-point binding collection, same reasoning as
-  // `reExportsForbiddenNames` above: each pass only ADDS to
-  // `boundLocalNames`/`namespaceBindings`, so re-running until a pass learns
-  // nothing new resolves an alias chain of any depth rather than only one or
-  // two hops, and is order-independent with respect to where a later local
-  // re-export appears relative to its originating import. Bounded by source
-  // length as a generous, AST-size-scaled safety cap against a pathological
-  // input, not relied on to be reached in practice.
+  // Bounded by source length as a generous, ast-size-scaled safety cap against a pathological input, not relied on to be reached in practice.
   let learnedSoFar = -1;
   let fixedPointIterations = 0;
   const fixedPointBound = sourceText.length + 16;
@@ -4025,21 +3761,6 @@ async function namedExportProvenanceUsers(
 ): Promise<string[]> {
   const files = await moduleScanSourceFiles(root);
   const users: string[] = [];
-  // A SOUND, AST-unaware prefilter (Ticket 03 third revalidation, P1): a
-  // static import/export declaration's module specifier is grammatically
-  // required to be one literal string token (TypeScript rejects a
-  // concatenated or computed specifier there), so the target's basename or
-  // exported name always appears as one contiguous substring for that
-  // route, and a `moduleHint|exportName` text match stays exact. A dynamic
-  // `import()` call, by contrast, accepts an ARBITRARY expression as its
-  // specifier - `import("../host/update-" + "contender")` never contains
-  // "update-contender" as contiguous text - so the old prefilter silently
-  // `continue`d past exactly the files this scanner exists to catch. Rather
-  // than drop the prefilter (parsing every file times out a gui-app-sized
-  // scan), this variant ALSO matches any file containing a dynamic import
-  // call at all, regardless of what its specifier looks like: the
-  // AST-level fold (`reachesNamedExport`'s `collapsedStringLiteral`) is
-  // only ever needed for that one syntactic form.
   const moduleHint = target.moduleAbsPath
     .slice(target.moduleAbsPath.lastIndexOf(sep) + 1)
     .replace(/\.ts$/, "");
@@ -4064,38 +3785,11 @@ async function namedExportProvenanceUsers(
   return users.sort();
 }
 
-// `withCliAttemptExecutorCompletion` is the same kind of single-owner
-// CLI-local authority as the two split writers - only `update-executor.ts`
-// may reach it - so it belongs in the same provenance-based symbol list
-// (Ticket 03 final-authority frozen-tree revalidation, P1). Kept separate
-// from `CLI_EXECUTOR_MUTATION_FACADE_SYMBOLS` (the older identifier-regex
-// gate) so that gate's existing scope and fixtures are left untouched.
+// Kept separate from `CLI_EXECUTOR_MUTATION_FACADE_SYMBOLS` (the older identifier-regex gate) so that gate's existing scope and fixtures are left untouched.
 const CLI_LOCAL_CANONICAL_AUTHORITIES = new Set<string>([
   ...CLI_EXECUTOR_MUTATION_FACADE_SYMBOLS,
   "withCliAttemptExecutorCompletion",
 ]);
-
-// ---------------------------------------------------------------------------
-// Trusted-definer alias laundering (Ticket 03 final-authority frozen-tree
-// revalidation, P1). Every check above this point asks "can code OUTSIDE
-// the trusted definer reach a canonical authority" - `reachesNamedExport`
-// treats `update-contender.ts` itself as an automatically-allowed site,
-// since it is where the canonical name is declared. That leaves a gap the
-// reviewer reproduced directly: the trusted file can publish the SAME
-// authority under an ADDITIONAL name (`export { hidden as
-// runPrivilegedSegment }`, a pure call-through wrapper exported under a new
-// name, or an object/namespace-style alias export), and every check above
-// is blind to it, because the downstream file that ultimately imports the
-// new alias name never mentions the canonical name, the module specifier,
-// or anything else those checks scan for.
-//
-// This section is therefore file-internal and name-provenance based rather
-// than module-specifier based: it asks "within the trusted definer's OWN
-// source, does any exported name resolve - through a fixed-point chain of
-// plain-identifier aliasing, a PURE call-through wrapper (never a real
-// facade that adds its own logic or recomputes an argument - see
-// `isVerbatimArgumentForward`), or an object-literal property alias - to a
-// canonical authority it did not declare itself as."
 
 interface DefinerLocalCanonicalBindings {
   readonly bound: Map<string, string>;
@@ -4116,16 +3810,6 @@ function objectLiteralPropertyName(
   return undefined;
 }
 
-/**
- * Every property of `objectLiteral` that resolves, through `bound`
- * (identifier or pure call-through wrapper), to a canonical authority -
- * plain (`{ run: canonical }`), shorthand (`{ canonical }`), or an inline
- * wrapper (`{ run: (...args) => canonical(...args) }`). Shared between
- * `definerLocalCanonicalBindings` (an object bound to a local name) and
- * `definerLaundersCanonicalAuthorities` (an object literal inlined directly
- * as a default export, `export default { run: canonical }`, which has no
- * local name to look up in `objectBound` at all).
- */
 function objectLiteralCanonicalProperties(
   objectLiteral: ts.ObjectLiteralExpression,
   bound: ReadonlyMap<string, string>,
@@ -4159,28 +3843,7 @@ function objectLiteralCanonicalProperties(
 }
 
 /**
- * Local bindings in `file` (the trusted definer's own source) that resolve,
- * through a fixed-point chain of plain-identifier aliasing or pure
- * call-through wrapping, to one of `canonicalNames` - each of which is
- * locally DECLARED in this same file (not imported), so `bound` is seeded
- * with every canonical name mapped to itself.
- *
- * `objectBound` separately tracks every LOCAL object-literal binding
- * carrying one or more properties that resolve to a canonical authority
- * (`objectLiteralCanonicalProperties`). This is populated INDEPENDENTLY of
- * whether the object's own declaration is itself exported: `const bridge =
- * {...}` declared with no `export` modifier at all, then republished later
- * via a separate `export { bridge };`, is exactly as much of an outward
- * route as `export const bridge = {...}` in one statement (Ticket 03 third
- * revalidation, P1 - the object arm previously ran only inside the
- * exported-declaration branch, so this two-step shape was invisible).
- *
- * `objectBound` also propagates through a PLAIN IDENTIFIER alias of an
- * already-tracked object binding (`const facade = bridge;`), to the same
- * fixed point as `bound` - a personal audit after the third revalidation
- * found this was the one alias route the object side never gained, even
- * though the scalar side (`bound`) has aliased through identifiers since
- * the very first authority-cold-review round.
+ * `objectBound` separately tracks every local object-literal binding carrying one or more properties that resolve to a canonical authority (`objectLiteralCanonicalProperties`).
  */
 function definerLocalCanonicalBindings(
   file: ts.SourceFile,
@@ -4217,10 +3880,7 @@ function definerLocalCanonicalBindings(
         const props = objectLiteralCanonicalProperties(initializer, bound);
         if (props.size > 0) objectBound.set(node.name.text, props);
       }
-      // A plain-identifier alias of an already-tracked OBJECT binding:
-      // `const facade = bridge;` where `bridge` is itself `{ run: canonical
-      // }`. Composes with the object-literal arm above and the fixed-point
-      // loop below to resolve any depth of alias chain, not just one hop.
+      // A plain-identifier alias of an already-tracked object binding: `const facade = bridge;` where `bridge` is itself `{ run: canonical }`.
       if (ts.isIdentifier(initializer) && !objectBound.has(node.name.text)) {
         const aliasedObject = objectBound.get(initializer.text);
         if (aliasedObject !== undefined) {
@@ -4252,18 +3912,6 @@ function definerLocalCanonicalBindings(
   return { bound, objectBound };
 }
 
-/**
- * Every OUTWARD exported name (or `name.property` object accessor, or the
- * literal string `"export default"`) in the trusted definer file
- * `sourceText` that resolves (via `definerLocalCanonicalBindings`) to one of
- * `canonicalNames` but is not itself that exact canonical name - i.e. every
- * additional alias the definer publishes for an authority it already owns
- * under its one canonical name. The canonical declaration's own export
- * (`export async function withCliAttemptExecutorCompletion(...)`, or a bare
- * `export { withCliAttemptExecutorCompletion }`) resolves to itself and is
- * correctly never flagged - only a DIFFERENT exported name, an object route
- * wrapping the authority, or a default export of it, is.
- */
 function definerLaundersCanonicalAuthorities(
   sourceText: string,
   fromFileAbsPath: string,
@@ -4289,15 +3937,6 @@ function definerLaundersCanonicalAuthorities(
     }
   }
 
-  // An object binding published outward under ANY exported name is itself
-  // an additional route to every canonical authority it carries as a
-  // property, REGARDLESS of whether the property's own name happens to
-  // match the canonical name. The reviewer's shorthand fixture - `export
-  // const shorthand = { withCliAttemptExecutorCompletion };` - has a
-  // property name IDENTICAL to the canonical name and must still be
-  // flagged: `shorthand.withCliAttemptExecutorCompletion` is a route that
-  // does not exist without the object wrapper, so name-equality is not a
-  // legitimizing signal here the way it is for a bare re-export.
   function flagObjectAlias(localName: string, exportedName: string): void {
     const props = objectBound.get(localName);
     if (props === undefined) return;
@@ -4314,12 +3953,6 @@ function definerLaundersCanonicalAuthorities(
       node.exportClause !== undefined &&
       ts.isNamedExports(node.exportClause)
     ) {
-      // `export { local }` or `export { local as alias }` - including the
-      // reviewer's exact direct-alias shape `export {
-      // withCliAttemptExecutorCompletion as runPrivilegedSegment }`, where
-      // the referenced local name IS the canonical declaration itself, and
-      // the two-step object shape `const bridge = {...}; export { bridge };`
-      // where the object's own declaration carries no `export` modifier.
       for (const element of node.exportClause.elements) {
         if (element.isTypeOnly) continue;
         const localName = (element.propertyName ?? element.name).text;
@@ -4345,17 +3978,7 @@ function definerLaundersCanonicalAuthorities(
     ) {
       flagIfAlias(node.name.text, node.name.text);
     }
-    // `export default <expr>` - an `ExportAssignment`. A default export
-    // carries no exported name at all - the downstream importer picks any
-    // local binding name it likes - so publishing the canonical value (or
-    // any alias/wrapper/object route resolving to it) as the module's
-    // default is itself an unconditional additional route, independent of
-    // what the expression's own text is. Every shape the rest of this
-    // scanner recognizes is checked here too: a scalar identifier alias, an
-    // inline pure call-through wrapper, an identifier aliasing a tracked
-    // OBJECT binding, and an inline object literal (a personal audit after
-    // the third revalidation found the object-route half of this arm was
-    // still scalar-only).
+    // `export default <expr>` - an `ExportAssignment`.
     if (ts.isExportAssignment(node) && !node.isExportEquals) {
       const expr = node.expression;
       if (ts.isIdentifier(expr)) {
@@ -4606,9 +4229,7 @@ describe("module-private executor authorities are not reachable outside update-e
       expect(
         reachesNamedExport(
           source,
-          // Relative to `traycer-cli/src/commands/rogue.ts`, so
-          // `../host/update-executor` resolves exactly the way it would
-          // from a real untrusted CLI command file.
+          // Relative to `traycer-cli/src/commands/rogue.ts`, so `../host/update-executor` resolves exactly the way it would from a real untrusted CLI command file.
           join(SHARED_ROOT, "..", "traycer-cli", "src", "commands", "rogue.ts"),
           {
             moduleAbsPath: CLI_UPDATE_EXECUTOR_ABS_PATH,
@@ -4681,15 +4302,7 @@ describe("module-private executor authorities are not reachable outside update-e
   });
 });
 
-// ---------------------------------------------------------------------------
-// Direct store recovery-channel import ownership (Ticket 03 final-authority
-// cold review, item 3). `commitExecutorOnlyAttemptMutation` is the ONE
-// direct-module channel in `store.ts` that can commit `recover`, `advance`
-// to `complete`, or `supersede` carrying a `recovery` field - the exact
-// three shapes `commitAttemptMutation`'s public channel refuses (see
-// store.test.ts, "commitAttemptMutation - executor-only intents"). Production
-// must have exactly one importer: `contender.ts`, the CLI executor's
-// recovery bridge.
+// Production must have exactly one importer: `contender.ts`, the CLI executor's recovery bridge.
 const STORE_MODULE_ABS_PATH = join(SHARED_ROOT, "host-update", "store.ts");
 const STORE_BARE_SPECIFIER = "@traycer-clients/shared/host-update/store";
 const STORE_RECOVERY_CHANNEL_TARGET: NamedExportTarget = {

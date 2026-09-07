@@ -3,23 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `traycer host service install` (the deferred half of the documented
-// `host install --no-service-register` split flow) owns the SAME sign-in
-// pre-flight + post-start credential provisioning as `host install`, since
-// this command is the one that actually starts the host in that split.
-// This suite pins that wiring: `runSignInPreflight` runs BEFORE the CLI
-// lock, `maybeProvisionCredential` runs with `postSwapAction: "install"`
-// AFTER `controller.install(...)`, and the result payload/human line carry
-// both outcomes - mirroring `host-install.test.ts`'s mocking conventions.
-//
-// `runSignInPreflight`/`maybeProvisionCredential` are mocked directly
-// (rather than their transitive dependencies in `../auth/login-flow`,
-// `../host/credential-provisioning`, `../internal/host-auth`) since this
-// command imports them straight from `../host/install-auth` - the internal
-// behaviour of those two functions has its own coverage in
-// `install-auth.test.ts` / `credential-provisioning.test.ts`.
-// `formatCredentialProvisionNote` is left genuine (pure string formatting,
-// no I/O) so the human-line assertions exercise the real copy.
+// `traycer host service install` (the deferred half of the documented `host install --no-service-register` split flow) owns the SAME sign-in pre-flight + post-start credential provisioning as `host install`, since this command is the one that actually starts the host in that split.
+// This suite pins that wiring: `runSignInPreflight` runs BEFORE the CLI lock, `maybeProvisionCredential` runs with `postSwapAction: "install"` AFTER `controller.install(...)`, and the result payload/human line carry both outcomes - mirroring `host-install.test.ts`'s mocking conventions.
 
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
@@ -75,11 +60,8 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
   };
 });
 
-// `createServiceController`/`resolveServiceCliInvocation` must be mocked:
-// the real controller builds a `createCliLogger` that does filesystem I/O
-// against the operator's actual `~/.traycer` home, and the real invocation
-// resolver reads the CLI manifest off disk. `formatServiceLifecycleWarning`
-// is kept genuine (pure), same convention as `host-install.test.ts`.
+// `createServiceController`/`resolveServiceCliInvocation` must be mocked: the real controller builds a `createCliLogger` that does filesystem I/O against the operator's actual `~/.traycer` home, and the real invocation resolver reads the CLI manifest off disk.
+// `formatServiceLifecycleWarning` is kept genuine (pure), same convention as `host-install.test.ts`.
 vi.mock("../../service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../service")>();
   return {
@@ -92,9 +74,8 @@ vi.mock("../../service", async (importOriginal) => {
   };
 });
 
-// Reads the real install manifest off disk otherwise - same filesystem
-// hazard as the mocks above. Records into `callOrder`: the attestation's
-// placement is load-bearing (see the ordering test below).
+// Reads the real install manifest off disk otherwise - same filesystem hazard as the mocks above.
+// Records into `callOrder`: the attestation's placement is load-bearing (see the ordering test below).
 vi.mock("../../host/attested-install-runtime", () => ({
   attestInstallRuntime: (
     ...callArgs: Parameters<typeof mocks.attestInstallRuntimeMock>
@@ -104,9 +85,8 @@ vi.mock("../../host/attested-install-runtime", () => ({
   },
 }));
 
-// Command wiring does not spawn a real service child. Resolve the adoption
-// acknowledgement immediately while still exercising label publication at
-// the contender-aware service edge.
+// Command wiring does not spawn a real service child.
+// Resolve the adoption acknowledgement immediately while still exercising label publication at the contender-aware service edge.
 vi.mock("../../host/host-start-adoption", () => ({
   publishHostStartAdoption: async () => ({
     waitForSpawn: async () => {},
@@ -228,14 +208,8 @@ describe("buildServiceInstallCommand", () => {
   });
 
   it("runs the sign-in pre-flight before the lock is acquired, attests inside it, and provisions only after it releases", async () => {
-    // Every position here is deliberate. The pre-flight can block on a human
-    // (device-flow sign-in) and the probe can wait up to 30s for the host -
-    // neither touches lock-guarded state, so neither may extend the shared
-    // cli-lock's critical section (mirrors `host install`). The attestation
-    // is the opposite: it must read the install record INSIDE the lock, or a
-    // concurrent bytes-only install committing after release gets its record
-    // attested as this cycle's - and Desktop then stamps the new record with
-    // the runtime version of a host still running the old bytes.
+    // Every position here is deliberate.
+    // The pre-flight can block on a human (device-flow sign-in) and the probe can wait up to 30s for the host - neither touches lock-guarded state, so neither may extend the shared cli-lock's critical section (mirrors `host install`).
     mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
     mocks.maybeProvisionCredentialMock.mockResolvedValue({
       kind: "active",
@@ -268,10 +242,7 @@ describe("buildServiceInstallCommand", () => {
 
   it("a signed-out, non-interactive run still completes registration; credentialProvision is null and the human line names the unprovisioned host", async () => {
     mocks.runSignInPreflightMock.mockResolvedValue(unauthenticatedPreflight());
-    // `maybeProvisionCredential` itself decides not to attempt a mint when
-    // the pre-flight was unauthenticated - this suite only pins that
-    // service-install SURFACES whatever it returns, not that internal
-    // decision (covered in `install-auth.test.ts`).
+    // `maybeProvisionCredential` itself decides not to attempt a mint when the pre-flight was unauthenticated - this suite only pins that service-install SURFACES whatever it returns, not that internal decision (covered in `install-auth.test.ts`).
     mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
 
     const command = buildServiceInstallCommand(baseArgs({}));

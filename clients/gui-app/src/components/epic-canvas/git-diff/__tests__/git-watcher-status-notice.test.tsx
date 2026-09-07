@@ -41,9 +41,7 @@ describe("<GitWatcherStatusNotice />", () => {
   });
 
   it("says nothing while the watcher is healthy or still arming", () => {
-    // "starting" is on the path of EVERY subscription (the host cannot arm
-    // until the first poll resolves the repo root), so rendering it would
-    // flash a notice on every tab open.
+    // "starting" is on the path of EVERY subscription (the host cannot arm until the first poll resolves the repo root), so rendering it would flash a notice on every tab open.
     for (const state of ["watching", "starting"] as const) {
       renderNotice({ state, detail: null });
       expect(screen.queryByTestId(NOTICE)).toBeNull();
@@ -70,9 +68,8 @@ describe("<GitWatcherStatusNotice />", () => {
   });
 
   it("keeps the tooltip body in one block so the diagnostic stacks under the explanation", async () => {
-    // `TooltipContent` is an `inline-flex` ROW. Two bare <p> siblings become
-    // side-by-side columns inside `max-w-xs`, so a host diagnostic - the line
-    // that carries the actual remedy - wraps into an unreadable ribbon.
+    // `TooltipContent` is an `inline-flex` ROW.
+    // Two bare <p> siblings become side-by-side columns inside `max-w-xs`, so a host diagnostic - the line that carries the actual remedy - wraps into an unreadable ribbon.
     const user = userEvent.setup();
     renderNotice({
       state: "degraded-capacity",
@@ -85,21 +82,14 @@ describe("<GitWatcherStatusNotice />", () => {
     const explanation = screen.getByText(/Periodic refresh|watch limit/u, {
       selector: "p",
     });
-    // Same parent, and that parent is a single flex ITEM rather than the flex
-    // CONTAINER. Asserting only "same parent" would be vacuous - two bare
-    // siblings share the content element too - so pin that the shared parent
-    // is not the content element itself.
+    // Same parent, and that parent is a single flex ITEM rather than the flex CONTAINER.
     expect(detail.parentElement).toBe(explanation.parentElement);
     expect(detail.parentElement?.getAttribute("data-slot")).toBeNull();
     expect(detail.closest("[data-slot='tooltip-content']")).not.toBeNull();
   });
 
   it("drops the label but not the accessible name in compact form", async () => {
-    // A diff tile can be dragged to a 240px pane and `DiffTabShell` marks the
-    // whole toolbar `shrink-0`, so a non-shrinking two-word label next to three
-    // or four icon controls pushes them out of the pane. Icon-only there - but
-    // the button must still NAME itself, or the compact form is an unlabelled
-    // control to assistive tech and the explanation becomes pointer-only.
+    // Icon-only there - but the button must still NAME itself, or the compact form is an unlabelled control to assistive tech and the explanation becomes pointer-only.
     const user = userEvent.setup();
     renderCompactNotice({ state: "degraded-capacity", detail: null });
 
@@ -116,9 +106,8 @@ describe("<GitWatcherStatusNotice />", () => {
   });
 
   it("exposes a keyboard-focusable trigger", () => {
-    // The tooltip carries the entire explanation AND the remedy, so the
-    // trigger has to be reachable without a pointer. An `asChild` <span>
-    // renders identically and silently fails this.
+    // The tooltip carries the entire explanation AND the remedy, so the trigger has to be reachable without a pointer.
+    // An `asChild` <span> renders identically and silently fails this.
     renderNotice({ state: "degraded-capacity", detail: "over budget" });
     const trigger = screen.getByTestId(NOTICE);
     expect(trigger.tagName).toBe("BUTTON");

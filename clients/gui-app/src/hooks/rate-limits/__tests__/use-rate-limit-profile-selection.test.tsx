@@ -21,13 +21,7 @@ import type {
 } from "@/stores/epics/canvas/types";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
-// The header rate-limit surfaces read per-harness profile memory scoped to
-// the window's EFFECTIVE host (`useEffectiveHostId()`), which is separate
-// from the focused chat tile's own bound host (`CHAT_TILE.hostId`/
-// `TERMINAL_TILE.hostId` below). No `<TabHostProvider>`/`<HostRuntimeProvider>`
-// is mounted in this suite, so left unmocked the active host resolves `null`
-// and every `recordProfileSelection` write below would land in a bucket this
-// hook never reads. Pin it to a fixed host id the test seeds memory under.
+// No `<TabHostProvider>`/`<HostRuntimeProvider>` is mounted in this suite, so left unmocked the active host resolves `null` and every `recordProfileSelection` write below would land in a bucket this hook never reads.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));

@@ -6,10 +6,8 @@ import type {
 
 const NOW_TICK_INTERVAL_MS = 60_000;
 
-/**
- * Wall-clock millisecond timestamp that re-renders the consuming component
- * once a minute so relative-time labels stay fresh while settings is open.
- */
+/** Wall-clock millisecond timestamp that re-renders the consuming component once a minute so relative-time
+ * labels stay fresh while settings is open. */
 export function useNowMs(): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {

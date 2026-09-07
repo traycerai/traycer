@@ -43,10 +43,7 @@ const forkCreateTestState = vi.hoisted(() => ({
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
 }));
-// The one host this suite runs on. The mocked binding/directory, the tile
-// fixtures, and the per-host run-settings buckets all key off it, so they
-// cannot drift apart into a fixture that tests a host the tile never sees.
-// Hoisted because the module mocks below read it from their factories.
+// The mocked binding/directory, the tile fixtures, and the per-host run-settings buckets all key off it, so they cannot drift apart into a fixture that tests a host the tile never sees.
 const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
 
 const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
@@ -89,9 +86,7 @@ vi.mock(
 const MOCK_HOST_CLIENT = {
   request: () => new Promise(() => {}),
   getActiveHostId: () => HOST_ID,
-  // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
-  // stream-runtime seam x #1227's in-tile fork dialog) - a partial client
-  // mock fails every case in this file at once through the error boundary.
+  // The merged render tree reaches `client?.getActiveHost()` (owner-identity / stream-runtime seam x #1227's in-tile fork dialog) - a partial client mock fails every case in this file at once through the error boundary.
   getActiveHost: () => MOCK_HOST_ENTRY,
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
@@ -120,10 +115,6 @@ vi.mock("@/lib/host", () => ({
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
-// useEpicCreateChatForHost (called inside ChatForkDialog) uses
-// useTabHostClient, which calls useHostClient from @/lib/host/runtime
-// directly (bypassing the barrel mock above). Mocking the hook directly avoids
-// having to replicate the full @/lib/host/runtime export surface.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
 }));
@@ -142,16 +133,9 @@ vi.mock("@/hooks/ui/use-mobile-viewport", async (importActual) => ({
   useIsMobileViewport: () => viewport.mobile,
 }));
 
-// The tile subscribes to the command catalog itself, because its next-step /
-// compact / implement-plan sends bypass the composer and its picker store. The
-// mocked host client above never resolves a request, so without this the
-// catalog would stay loading forever and every `$` prompt would (correctly) be
-// left as prose. Serve one skill so the gated conversion has something to
-// resolve; unknown names still fall through to the ungated `/` fallback.
+// The mocked host client above never resolves a request, so without this the catalog would stay loading forever and every `$` prompt would (correctly) be left as prose.
 vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
-  // Spread the real module rather than listing exports: the tile also imports
-  // `NO_LOCAL_SLASH_COMMANDS` from here, and a hand-listed factory silently
-  // breaks every test in this file the next time an export is added.
+  // Spread the real module rather than listing exports: the tile also imports `NO_LOCAL_SLASH_COMMANDS` from here, and a hand-listed factory silently breaks every test in this file the next time an export is added.
   ...(await importOriginal<
     typeof import("@/hooks/composer/use-slash-commands")
   >()),
@@ -188,17 +172,8 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
     mutate: forkCreateTestState.mutate,
     isPending: false,
   }),
-  // The fork dialog creates on the SELECTED host's client, not the tab's, so
-  // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
-  // only that wrapper left the spread's REAL client hook in place: the fork
-  // ran for real, the spy recorded nothing, and the assertion read `[0]` off
-  // an undefined call.
-  //
-  // Unlike the wrapper above - which the tile tree reads for `mutate` and
-  // `isPending` alone - this hook has consumers that call `reset()` and read
-  // the result channel, so the stub carries the WHOLE `UseMutationResult`
-  // surface. A partial one type-checks (the factory is untyped) and then
-  // fails every case in the file at once on a member the test never mentions.
+  // Stubbing only that wrapper left the spread's REAL client hook in place: the fork ran for real, the spy recorded nothing, and the assertion read `[0]` off an undefined call.
+  // A partial one type-checks (the factory is untyped) and then fails every case in the file at once on a member the test never mentions.
   useEpicCreateChatForHostClient: () => ({
     mutate: forkCreateTestState.mutate,
     isPending: false,
@@ -219,31 +194,13 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
   }),
 }));
 
-// HarnessModelPickerImpl (mounted inside the tile tree via the composer
-// toolbar) resolves the create-profile gate's client through
-// useHostClientForHostId, which unconditionally calls useHostClientFor,
-// which calls useHostClient from @/lib/host/runtime directly (same barrel
-// bypass as useTabHostClient above). Stub the hook directly, mirroring
-// harness-model-picker.test.tsx's convention for this exact hook - null is a
-// production-legitimate value (useProvidersListForClient/useHostQuery own the
-// client === null disabled gate) so no consumer downstream needs a real
-// client here.
-//
-// The fork dialog is the exception, and only since it began creating on the
-// SELECTED host's client: its submit reads `getActiveHostId()` back off that
-// client and RETURNS EARLY when it cannot resolve one, so a blanket `null`
-// turned every fork submit in this file into a silent no-op. This suite's own
-// host therefore resolves; every other id still answers null, leaving the
-// gate's downstream queries disabled exactly as before.
+// The fork dialog is the exception, and only since it began creating on the SELECTED host's client: its submit reads `getActiveHostId()` back off that client and RETURNS EARLY when it cannot resolve one, so a blanket `null` turned every fork submit in this file into a silent no-op.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === HOST_ID ? MOCK_HOST_CLIENT : null,
 }));
 
-// The chat registry now OWNS its transport (built in its factory) and drives
-// tests through the `__setChatStreamClientFactoryForTests` override, so it no
-// longer consumes these per-tile hooks. They're stubbed only so any other
-// consumer in the tile tree never builds a real socket under jsdom.
+// They're stubbed only so any other consumer in the tile tree never builds a real socket under jsdom.
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
   ...(await importActual<
     typeof import("@/hooks/host/use-host-stream-client-for")
@@ -264,27 +221,13 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-// The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// The Epic session resolves its host through the selection authority's derived pointer (selection model §1), not the active-host projection above - seed the decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
 
-// The tile's record gate consults `epic.listCloudChats` for a chat with no
-// local doc record (chat-sync-v2 ticket 49 - post-sweep that is the ordinary
-// state of a healthy owned chat, so the published row is the only local
-// evidence left that it exists). Driven from test state at the hook boundary
-// so a test can put this suite's chat in or out of the cloud list; `data` is
-// always DEFINED so "not cloud-known" is a settled answer rather than a
-// pending one.
-//
-// Rows are built as WHOLE `CloudChatSummary` values: the consumer reads
-// `isOwnedByViewer` as well as `identity`, and an enumerating factory answers
-// `undefined` for whatever it forgot - which a boolean predicate reads as
-// "not the viewer's", silently re-closing the gate this exists to open. The
-// return annotation is the gate: the next field the row gains fails
-// `compile` here instead of quietly turning these tests red in CI.
+// Driven from test state at the hook boundary so a test can put this suite's chat in or out of the cloud list; `data` is always DEFINED so "not cloud-known" is a settled answer rather than a pending one.
+// Rows are built as WHOLE `CloudChatSummary` values: the consumer reads `isOwnedByViewer` as well as `identity`, and an enumerating factory answers `undefined` for whatever it forgot - which a boolean predicate reads as "not the viewer's", silently re-closing the gate this exists to open.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
   ...(await importActual<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -467,10 +410,7 @@ interface ChatHarness {
     settings: ChatRunSettings | null,
   ): void;
   /**
-   * `installWithSettings` plus the chat's own event log. The composer seeds
-   * itself off the FIRST snapshot, so a fact carried by an event - import
-   * provenance is the one that matters here - has to be in that snapshot;
-   * re-emitting it later tests a chat that was already seeded without it.
+   * The composer seeds itself off the FIRST snapshot, so a fact carried by an event - import provenance is the one that matters here - has to be in that snapshot; re-emitting it later tests a chat that was already seeded without it.
    */
   installWithEvents(
     access: "owner" | "viewer",
@@ -719,16 +659,11 @@ function hostUserMessage(): Message {
   };
 }
 
-// Neither this suite's remembered pair (Claude) nor its default provider
-// (Codex), so a settings tuple that names it can only have come from the
-// import provenance.
+// Neither this suite's remembered pair (Claude) nor its default provider (Codex), so a settings tuple that names it can only have come from the import provenance.
 const IMPORTED_SOURCE_PROVIDER = "opencode";
 
 /**
- * The provenance session import writes as an imported chat's first event. It is
- * the only record of which provider the transcript came from - such a chat's own
- * `ChatRunSettings` stays null whenever the source listed no model at import
- * time, which is exactly when the composer has to fall back to something.
+ * It is the only record of which provider the transcript came from - such a chat's own `ChatRunSettings` stays null whenever the source listed no model at import time, which is exactly when the composer has to fall back to something.
  */
 function chatImportedEvent(): ChatEvent {
   return {
@@ -1140,9 +1075,7 @@ async function waitForChatTileLoaded(): Promise<void> {
     // wait above would be vacuous (an id that never renders is always absent).
     expect(screen.queryByTestId("chat-tile-load-chat-1")).toBeNull();
   });
-  // LegendList needs a few frames (plus its scroll-finish fallback) to
-  // bootstrap its initial scroll position and measure rows in jsdom before
-  // any message content actually mounts - see legend-list-test-environment.ts.
+  // LegendList needs a few frames (plus its scroll-finish fallback) to bootstrap its initial scroll position and measure rows in jsdom before any message content actually mounts - see legend-list-test-environment.ts.
   await settleLegendList();
   await waitFor(() => {
     expect(screen.getByText("Host chat content")).not.toBeNull();
@@ -1238,9 +1171,7 @@ describe("<ChatTile />", () => {
     workspaceSelectorTestState.inFlightWorktreeIntent = null;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
-    // The composer gates Send on a resolved (non-empty) model slug. Without a
-    // host binding the catalog never resolves the empty default, so seed a
-    // concrete default model so the composer reaches a sendable state.
+    // Without a host binding the catalog never resolves the empty default, so seed a concrete default model so the composer reaches a sendable state.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -1280,13 +1211,7 @@ describe("<ChatTile />", () => {
   });
 
   it("does not open chat.subscribe until the chat record is in the projection", async () => {
-    // Re-install the epic session with NO chat seeded so the tile's gate
-    // stays closed. This is the local-first subscribe-first race regression:
-    // the renderer must not open the epic via `chat.subscribe` before the
-    // create has landed. `cloudChatListTestState` is empty here, which is
-    // what a create in flight looks like - the owning host publishes long
-    // after `epic.createChat` returns, so no cloud row can vouch for it yet
-    // (chat-sync-v2 ticket 49).
+    // This is the local-first subscribe-first race regression: the renderer must not open the epic via `chat.subscribe` before the create has landed.
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -1300,19 +1225,11 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    // The pre-session presentation is now the BOUNDED load state, not the
-    // unbounded spinner: with no session handle the tile renders
-    // `TileHostLoadState`, which says which host it is waiting on and stops
-    // waiting (redesign invariant 6). The gating claim above is unchanged.
+    // The gating claim above is unchanged.
     expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
   });
 
   it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
-    // The post-migration steady state of a HEALTHY chat: publication proven,
-    // so `ChatDocEntrySweep` deleted the doc entry (ticket 20) and creation
-    // never re-projects one (ticket 19). The record gate used to refuse this
-    // shape forever, which is why every swept chat opened as the locked
-    // published copy on its own connected host.
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -1329,9 +1246,7 @@ describe("<ChatTile />", () => {
   });
 
   it("stays gated for a record-less chat when the cloud row belongs to someone else", async () => {
-    // Identity is the taskId + ownerUserId + chatId TRIPLE. `chatId` is
-    // host-minted and the list carries every task-visible row, so an id-only
-    // match would open a collaborator's transcript under this tab.
+    // `chatId` is host-minted and the list carries every task-visible row, so an id-only match would open a collaborator's transcript under this tab.
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -1349,10 +1264,7 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    // The pre-session presentation is now the BOUNDED load state, not the
-    // unbounded spinner: with no session handle the tile renders
-    // `TileHostLoadState`, which says which host it is waiting on and stops
-    // waiting (redesign invariant 6). The gating claim above is unchanged.
+    // The gating claim above is unchanged.
     expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
   });
 
@@ -1429,12 +1341,6 @@ describe("<ChatTile />", () => {
     if (handle === null) {
       throw new Error("expected live epic handle");
     }
-    // A registry handle is a PRODUCTION one and has no `Y.Doc` - the replica
-    // is on the worker thread. The message count is not projected either
-    // (`ChatProjection` carries no `messages`), so the honest read is the
-    // root-state port: `encodeRootState` is the production member that hands
-    // the replica's bytes across, and decoding them here reconstructs exactly
-    // the map this assertion always walked.
     const rootState = new Y.Doc();
     Y.applyUpdate(rootState, await handle.encodeRootState());
     const chats = rootState.getMap("epic").get("chats");
@@ -1661,10 +1567,7 @@ describe("<ChatTile />", () => {
   });
 
   it("keeps an imported chat on its source provider over a resolved remembered pair", async () => {
-    // The remembered pair is a RESOLVED Claude tuple, which is what made this a
-    // defect rather than a seeding gap: the tile committed it as the chat's
-    // live settings on mount, and from the next render on that commit outranked
-    // the imported fallback the composer had already been handed.
+    // The remembered pair is a RESOLVED Claude tuple, which is what made this a defect rather than a seeding gap: the tile committed it as the chat's live settings on mount, and from the next render on that commit outranked the imported fallback the composer had already been handed.
     useComposerRunSettingsStore.setState({
       globalLastRunSettingsByHostId: { [HOST_ID]: SESSION_SETTINGS },
     });
@@ -2373,11 +2276,8 @@ describe("<ChatTile />", () => {
     });
   });
 
-  // A next-step click never touches the composer, so the chip has to come out of
-  // `buildSubmittedChatJSONContent`. When that converter was `/`-only the `$`
-  // prompt stayed prose, which cost more than the pill: with neither a
-  // `slashCommand` node nor a leading `/name` in the text, the host resolved no
-  // invocation at all and the skill silently never ran.
+  // A next-step click never touches the composer, so the chip has to come out of `buildSubmittedChatJSONContent`.
+  // When that converter was `/`-only the `$` prompt stayed prose, which cost more than the pill: with neither a `slashCommand` node nor a leading `/name` in the text, the host resolved no invocation at all and the skill silently never ran.
   it("sends a $-prefixed next step as a skill chip", async () => {
     renderChatTile();
 
@@ -2687,11 +2587,7 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(1);
   });
 
-  // `-MPLN`, the CLASS: every restoration path ends at one unconditional
-  // `replaceDraftContent`, so any of them could overwrite a newer unsent
-  // draft. The accepted-send pass makes it typical rather than rare - queueing
-  // a send and carrying on typing is the ordinary way to use a queue - but the
-  // guard belongs at the consumption point, where all four paths arrive.
+  // The accepted-send pass makes it typical rather than rare - queueing a send and carrying on typing is the ordinary way to use a queue - but the guard belongs at the consumption point, where all four paths arrive.
   it("keeps a newer composer draft and states the restored prompt instead", async () => {
     registerWaitingChatHandoff();
 
@@ -2749,10 +2645,7 @@ describe("<ChatTile />", () => {
     ).toEqual(newerDraft);
   });
 
-  // `-NRiY`: submittability is text OR image atoms, and `contentIsSubmittable`
-  // is the shared answer. A plain-text reading calls an attachment-only draft
-  // empty and this guard then overwrites images the user could have SENT -
-  // content that cannot be retyped at all.
+  // A plain-text reading calls an attachment-only draft empty and this guard then overwrites images the user could have SENT - content that cannot be retyped at all.
   it("keeps an attachment-only newer draft and states the restored prompt", async () => {
     registerWaitingChatHandoff();
 
@@ -2815,11 +2708,6 @@ describe("<ChatTile />", () => {
 
   it("marks rejected initial handoffs failed and restores the prompt", async () => {
     registerWaitingChatHandoff();
-    // The shared fixture seeds a non-empty draft for the send tests. A chat
-    // opened FROM a landing prompt has an empty composer - the prompt went to
-    // the host, not to the draft - so this is the precondition the case is
-    // named for. With text already there the prompt is stated instead, which
-    // the sibling test above pins.
     act(() => {
       useComposerDraftStore
         .getState()
@@ -2869,12 +2757,6 @@ describe("<ChatTile />", () => {
       useInitialChatHandoffStore.getState().handoffs,
     )[0];
     expect(failed).toMatchObject({ status: "failed" });
-    // CONTAINS, not equals. `failureReason` carries the restoration's reason,
-    // which is a COMPOSED statement - the host's sentence plus whatever
-    // qualifications the send inherited (drift, delivery, worktree). Its exact
-    // text is owned by `chat-queue-reconciler` and asserted there; pinning the
-    // whole string here made this tile test fail for a qualification firing
-    // correctly one layer down.
     expect(failed.failureReason).toContain(
       "Only the agent owner can perform this action.",
     );
@@ -3172,11 +3054,7 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
-  // Decision 14 save-and-steer routing (mod-enter → after_safe_point →
-  // queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx,
-  // which drives the real useChatComposerSubmit + the tile's edit-arm logic
-  // without depending on TipTap DOM key events under jsdom. Plain Enter edit
-  // → queueSettingsUpdate remains covered by the settings-update test above.
+  // Decision 14 save-and-steer routing (mod-enter → after_safe_point → queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx, which drives the real useChatComposerSubmit + the tile's edit-arm logic without depending on TipTap DOM key events under jsdom.
 
   it("cancels queued edit mode from the composer and clears the queued content when there was no previous draft", async () => {
     useComposerDraftStore.setState({ drafts: {} });
@@ -3379,14 +3257,8 @@ describe("<ChatTile />", () => {
   });
 
   /**
-   * Cross-tile transcript jumps (the communication-graph timeline parks one,
-   * this tile performs it).
-   *
-   * The load-bearing case is a WARM tile: the graph stream and the chat stream
-   * are independent, so the timeline routinely exposes a row before this tile's
-   * own transcript has it. Consuming the request then would burn it - the
-   * transcript marks the request handled and only afterwards finds it has no
-   * index entry - and the row would arrive with nothing left parked.
+   * The load-bearing case is a WARM tile: the graph stream and the chat stream are independent, so the timeline routinely exposes a row before this tile's own transcript has it.
+   * Consuming the request then would burn it - the transcript marks the request handled and only afterwards finds it has no index entry - and the row would arrive with nothing left parked.
    */
   it("holds a parked transcript jump until its target message streams in", async () => {
     renderChatTile();
@@ -3461,9 +3333,7 @@ describe("<ChatTile />", () => {
         .getState()
         .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
           kind: "message",
-          // Notification rows persist the protocol message id. Assistant
-          // transcript rows are keyed by turn (`assistant:<turnId>`), so the
-          // jump must resolve through ChatMessageModel.persistentMessageId.
+          // Assistant transcript rows are keyed by turn (`assistant:<turnId>`), so the jump must resolve through ChatMessageModel.persistentMessageId.
           messageId: "next-steps-msg",
         });
     });
@@ -3709,10 +3579,7 @@ describe("<ChatTile />", () => {
   }
 
   function submitComposerWithEnter(): void {
-    // The composer's prompt editor is the only textbox while the inline
-    // message editor is closed; its accessible name is the placeholder,
-    // which varies with narrow/steer-hint state, so the bare role query is
-    // the stable handle.
+    // The composer's prompt editor is the only textbox while the inline message editor is closed; its accessible name is the placeholder, which varies with narrow/steer-hint state, so the bare role query is the stable handle.
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
   }
 
@@ -3899,9 +3766,7 @@ describe("<ChatTile />", () => {
       });
     });
 
-    // One send rule at every point: the Implement button disables exactly like
-    // a next-step chip, a click stays refused with or without a staged rebind
-    // (identical to the no-draft immediate path), and nothing is sent.
+    // One send rule at every point: the Implement button disables exactly like a next-step chip, a click stays refused with or without a staged rebind (identical to the no-draft immediate path), and nothing is sent.
     const implementButton = screen.getByRole("button", { name: "Implement" });
     if (!(implementButton instanceof HTMLButtonElement)) {
       throw new Error("expected implement button");
@@ -4087,7 +3952,6 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(1);
   });
 
-  // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`
-  // (it instruments composer renders directly). Behaviour coverage for the
-  // stop/running transitions is exercised by the other tests above.
+    // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx` (it instruments composer renders directly).
+  // Behaviour coverage for the stop/running transitions is exercised by the other tests above.
 });

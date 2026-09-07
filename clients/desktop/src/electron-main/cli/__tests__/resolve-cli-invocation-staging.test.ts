@@ -10,15 +10,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 
-// Internal-only `staging` deploy slot. Like dev, staging is a NON-production
-// build, but unlike dev it is NOT `isDevBuild`. CLI discovery must still skip
-// the PATH lookup for it: a developer's machine routinely has a released/prod
-// `traycer` on PATH (Homebrew, `~/.traycer/cli/bin` symlinked into the prod
-// `Traycer.app`), and adopting it would drive the staging app's `host
-// ensure`/`host start` through a PRODUCTION CLI - onto the prod host slot
-// (`ai.traycer.host`) and prod cloud, leaving the staging splash stuck on
-// "Starting local Traycer Host...". PATH trust is production-only; every other
-// slot uses its bundled/slot CLI. These tests pin that contract.
+// CLI discovery must still skip the PATH lookup for it: a developer's machine routinely has a released/prod `traycer` on PATH (Homebrew, `~/.traycer/cli/bin` symlinked into the prod.
 
 let work: string;
 let homeDir: string;

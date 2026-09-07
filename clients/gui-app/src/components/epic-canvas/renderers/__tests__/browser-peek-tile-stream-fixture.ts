@@ -11,11 +11,6 @@ import {
 
 export { FakeStreamSession, FakeStreamClient };
 
-/**
- * Shared `beforeEach`-populated state behind the tile's hook mocks below.
- * Every suite owns its own instance via `vi.hoisted` (module state is
- * per-test-file), then wires it into the mock factories here.
- */
 export interface PeekHookState {
   streamClient: FakeStreamClient | null;
   visible: boolean;
@@ -31,11 +26,6 @@ export const PEEK_NODE: BrowserPeekNode = {
   initialUrl: "http://localhost:3000",
 };
 
-/**
- * A fresh node per test for the WebRTC suites: the media registry is
- * module-scoped and its entries outlive a test by the release grace, so a
- * shared session id would carry a previous test's round into the next one.
- */
 export function makeFreshPeekNode(
   sessionPrefix: string,
 ): () => BrowserPeekNode {
@@ -87,9 +77,7 @@ export function hostStreamClientForModule(hookState: PeekHookState): {
 }
 
 /**
- * The toolbar/input-capture suites additionally read the authenticated-key
- * helpers off this module (armed-store ownership keys); the WebRTC suites
- * never touch them.
+ * The toolbar/input-capture suites additionally read the authenticated-key helpers off this module (armed-store ownership keys); the WebRTC suites never touch them.
  */
 export function hostStreamClientForWithAuthModule(hookState: PeekHookState): {
   useHostStreamClientFor: () => FakeStreamClient | null;
@@ -104,10 +92,7 @@ export function hostStreamClientForWithAuthModule(hookState: PeekHookState): {
 }
 
 /**
- * The `tile` control tier. `screencastRoleForShell` reads `browserView` off
- * the runner host and a bare test tree has no `RunnerHostProvider` at all, so
- * without this a peek suite renders the read-only `viewer` presentation (H12)
- * and there is no arm affordance left to drive.
+ * `screencastRoleForShell` reads `browserView` off the runner host and a bare test tree has no `RunnerHostProvider` at all, so without this a peek suite renders the read-only `viewer` presentation (H12) and there is no arm affordance left to drive.
  */
 export function tileRoleRunnerHostModule(): {
   useRunnerHostOrNull: () => { browserView: object };
@@ -116,11 +101,8 @@ export function tileRoleRunnerHostModule(): {
 }
 
 /**
- * The runner bridge behind the toolbar's "open in default browser" affordance,
- * which only renders once a runner host exists - so it is exactly the suites
- * that declare the `tile` role above that need it. Stubbed rather than
- * provided, because the real hook is a react-query mutation and these trees
- * carry no `QueryClientProvider`.
+ * The runner bridge behind the toolbar's "open in default browser" affordance, which only renders once a runner host exists - so it is exactly the suites that declare the `tile` role above that need it.
+ * Stubbed rather than provided, because the real hook is a react-query mutation and these trees carry no `QueryClientProvider`.
  */
 export function runnerOpenExternalLinkModule(): {
   useRunnerOpenExternalLink: () => {
@@ -164,12 +146,8 @@ export function clearScreencastOwner(): void {
 }
 
 /**
- * The `createBrowserMediaPeer` fake shared by every suite that drives the
- * video plane through the real `webrtc-media-registry`: jsdom has no
- * `RTCPeerConnection`, so only the peer connection is stood in, through the
- * registry's own `createPeer` seam. Gathering finishes before the answer
- * settles - the A12 batching mechanics are `webrtc-media-registry.test.ts`'s
- * to pin, not this fake's.
+ * The `createBrowserMediaPeer` fake shared by every suite that drives the video plane through the real `webrtc-media-registry`: jsdom has no `RTCPeerConnection`, so only the peer connection is stood in, through the registry's own `createPeer` seam.
+ * Gathering finishes before the answer settles - the A12 batching mechanics are `webrtc-media-registry.test.ts`'s to pin, not this fake's.
  */
 export function createFakeMediaPeer(
   peers: Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }>,

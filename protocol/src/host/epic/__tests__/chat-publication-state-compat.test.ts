@@ -14,9 +14,8 @@ import {
 const METHOD = "epic.chatPublicationState";
 
 /**
- * Brand-new v1.0 method on the optional-capabilities channel. Landing it on
- * the released floor (or drifting it into the frozen fixture) is
- * handshake-fatal for every peer that shipped before the name existed.
+ * Brand-new v1.0 method on the optional-capabilities channel.
+ * Landing it on the released floor (or drifting it into the frozen fixture) is handshake-fatal for every peer that shipped before the name existed.
  */
 describe("epic.chatPublicationState is optional, not floor", () => {
   it("is present in hostRpcRegistry", () => {
@@ -98,11 +97,8 @@ describe("chatPublicationStateResponseSchema", () => {
       boundaryCovered: true,
       publishedThroughTs: 1_700_000_000_000,
     };
-    // `wire` omits `definitive` on purpose: that is what a host that
-    // predates the field sends. The schema's `.default(null)` is what lets
-    // a new client read that absence as "no terminal cause known" instead
-    // of failing the parse, so the parsed side gains a key the wire side
-    // never had.
+    // `wire` omits `definitive` on purpose: that is what a host that predates the field sends.
+    // The schema's `.default(null)` is what lets a new client read that absence as "no terminal cause known" instead of failing the parse, so the parsed side gains a key the wire side never had.
     expect(chatPublicationStateResponseSchema.parse(wire)).toEqual({
       ...wire,
       definitive: null,
@@ -115,9 +111,7 @@ describe("chatPublicationStateResponseSchema", () => {
       boundaryCovered: null,
       publishedThroughTs: null,
     };
-    // Same reasoning as above: an old-host payload has no `definitive` key,
-    // and the parsed result defaults it to `null` rather than leaving it
-    // absent.
+    // Same reasoning as above: an old-host payload has no `definitive` key, and the parsed result defaults it to `null` rather than leaving it absent.
     expect(chatPublicationStateResponseSchema.parse(wire)).toEqual({
       ...wire,
       definitive: null,
@@ -165,10 +159,7 @@ describe("chatPublicationStateResponseSchema", () => {
 });
 
 describe("chatPublicationStateResponseSchema definitive", () => {
-  // `definitive` is the "stop polling, this will never resolve" mechanism:
-  // any caller that treats an unrecognised value as `null` reintroduces the
-  // infinite wait, so this coverage pins the round-trip for every known
-  // reason plus the explicit-null and rejection cases.
+  // `definitive` is the "stop polling, this will never resolve" mechanism: any caller that treats an unrecognised value as `null` reintroduces the infinite wait, so this coverage pins the round-trip for every known reason.
   const base = {
     published: false,
     boundaryCovered: null,
@@ -188,11 +179,7 @@ describe("chatPublicationStateResponseSchema definitive", () => {
     expect(chatPublicationStateResponseSchema.parse(wire)).toEqual(wire);
   });
 
-  // z.enum(...).nullable().default(null) only substitutes the default when
-  // the field is UNDEFINED (see the omitted-key round-trips above). A
-  // present-but-unrecognised string is neither a member of the enum nor
-  // `null`, so it fails validation outright rather than being coerced to
-  // `null` - verified here rather than assumed.
+  // z.enum(...).nullable().default(null) only substitutes the default when the field is UNDEFINED (see the omitted-key round-trips above).
   it("rejects an unrecognized definitive reason", () => {
     expect(
       chatPublicationStateResponseSchema.safeParse({

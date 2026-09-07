@@ -21,21 +21,8 @@ interface PromptStashState {
 
 let hydration: Promise<void> | null = null;
 
-// Cross-window refresh ordering (repository "Cross-window state refresh"
-// contract): every mutation bumps `meta.revision` inside its own IndexedDB
-// transaction, so revision order always matches true commit order even when
-// JS-visible completion order does not.
-//
-// Load tokens order asynchronous READS ONLY (hydrate, or a
-// BroadcastChannel-triggered reload): a read is applied only if it is still
-// the most recently issued read AND at least as new as the currently applied
-// revision, so two reads completing out of order can never regress the
-// store.
-//
-// A local save/delete result is authoritative and must never be suppressed
-// by an intervening read's token - it is applied purely by revision. It does
-// not invalidate in-flight reads: the revision gate already rejects older
-// snapshots, while a peer read that committed later must remain eligible.
+// Cross-window refresh ordering (repository "Cross-window state refresh" contract): every mutation
+// bumps `meta.revision` inside its own IndexedDB transaction, so revision order always matches
 let issuedLoadToken = 0;
 let appliedRevision = -1;
 
@@ -129,16 +116,14 @@ if (
       appliedRevision = -1;
       hydration = null;
       usePromptStashStore.setState({ rows: [] });
-      // Reset delivery can race a save into the newly recreated database.
-      // Reload after resetting the revision generation so a delayed reset
-      // cannot hide that already-durable post-reset mutation.
+      // Reset delivery can race a save into the newly recreated database. Reload after resetting the
+      // revision generation so a delayed reset cannot hide that already-durable post-reset mutation.
       reloadPromptStashFromChannel();
       return;
     }
     const revision = messageRevision(event.data);
-    // A message that is provably no newer than what's already applied never
-    // needs a re-read; an unrecognized/older-shaped payload falls through and
-    // still triggers one, which `applyLoadIfFresher` then gates on its own.
+    // A message that is provably no newer than what's already applied never needs a re-read; an
+    // unrecognized/older-shaped payload falls through and still triggers one, which
     if (revision !== null && revision <= appliedRevision) return;
     reloadPromptStashFromChannel();
   });

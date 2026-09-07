@@ -115,11 +115,6 @@ function line(
   return { channel, text, atMs: AT_MS };
 }
 
-/**
- * The jump-live control carries whichever of three labels its state calls for,
- * so proving it is ABSENT has to rule out all three: a name-scoped query for
- * one of them passes while the button sits there wearing another.
- */
 const ANY_JUMP_LIVE_LABEL =
   /^(Jump to live|New output available|Loading live output…)$/;
 
@@ -254,11 +249,6 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -308,10 +298,7 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
     );
 
     await waitForSearchable(node);
-    // The precondition the rest of this test rests on: the tile opens at the
-    // tail following live output, so the jump-live button is absent. Without
-    // this, the assertion below proves only that the button is present, not
-    // that the search is what turned following off.
+    // Without this, the assertion below proves only that the button is present, not that the search is what turned following off.
     expect(queryJumpLive()).toBeNull();
     searchTile(node, "ab", false);
 
@@ -370,10 +357,7 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
     });
     expect(screen.getByRole("button", { name: "Jump to live" })).toBeTruthy();
 
-    // A replacement snapshot renumbers every line, so the seq holding the
-    // active match is gone and the adapter clamps to a different one. That is a
-    // re-scan, not a find command: it must not reveal, because the tile drops
-    // follow mode on reveal and the rebase has just restored it.
+    // That is a re-scan, not a find command: it must not reveal, because the tile drops follow mode on reveal and the rebase has just restored it.
     openAtTail(
       stub.emit,
       [line("stdout", "alpha three"), line("stdout", "alpha four")],

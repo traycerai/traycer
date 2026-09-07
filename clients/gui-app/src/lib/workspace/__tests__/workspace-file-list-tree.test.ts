@@ -67,9 +67,7 @@ describe("selectWatchableDirectoryPaths", () => {
   });
 
   it("drops a directory whose ancestor is not expanded", () => {
-    // Collapsing `src/` leaves `src/lib/` marked expanded so re-expanding
-    // restores the subtree - but watching it would violate the contract's
-    // ancestor precondition and be pruned.
+    // Collapsing `src/` leaves `src/lib/` marked expanded so re-expanding restores the subtree - but watching it would violate the contract's ancestor precondition and be pruned.
     expect(selectWatchableDirectoryPaths(["src/lib/"])).toEqual([]);
   });
 

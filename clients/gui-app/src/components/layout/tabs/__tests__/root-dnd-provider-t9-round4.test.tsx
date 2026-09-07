@@ -1,13 +1,5 @@
-/**
- * T9 round-4 real-wiring coverage. Round 1-3 caught divider/chooser/pair/
- * DnD bugs whose retained tests only exercised helpers and pure machines
- * (`resolveValidatedTopLevelTabDrop`) directly - hiding regressions in the
- * actual `RootDndProvider` wiring (the DnD commit's activation seam). These
- * tests mount the REAL `RootDndProvider` and drive a real dnd-kit pointer
- * gesture (pointerdown -> activation-distance move -> hover -> drop) against
- * real draggable/droppable payload shapes, so a mutation at the wiring layer -
- * not just the pure helpers - turns them red.
- */
+/** Round 1-3 caught divider/chooser/pair/ DnD bugs whose retained tests only exercised helpers and pure
+ * machines (`resolveValidatedTopLevelTabDrop`) directly. */
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -104,11 +96,8 @@ function TestSplitGroupHeaderDropTarget(): ReactNode {
   return <div ref={setNodeRef} data-testid="split-group-header-drop-target" />;
 }
 
-/**
- * The root DnD provider reads the app's query client (an RPC-committed
- * sidebar reparent invalidates the moved row's record query), so the harness
- * supplies one the way the app shell does.
- */
+/** The root DnD provider reads the app's query client (an RPC-committed sidebar reparent invalidates the moved
+ * row's record query), so the harness supplies one the way the app shell does. */
 const queryClient = new QueryClient();
 
 function CanvasTearOffHarness(props: {
@@ -263,20 +252,15 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
     );
   });
 
-  // KEEP LAST: `installSourceReconciliation` subscribes the module-singleton
-  // coordinator to the source stores and cannot be uninstalled, so it must
-  // not run before the tests above.
+  // Keep last: `installSourceReconciliation` subscribes the module-singleton coordinator to the source stores
+  // and cannot be uninstalled, so it must not run before the tests above.
   it("keeps the authoritative split when legacy stripOrder is stale during a tear-off", async () => {
     const dragData = seedCanvasTearOffLayout();
-    // Production wiring: the source-store subscriber runs SYNCHRONOUSLY
-    // between the drop's source mutation and its placement unless both live
-    // in one suppressed coordinator transaction.
+    // Production wiring: the source-store subscriber runs synchronously between the drop's source mutation and its
+    // placement unless both live in one suppressed coordinator transaction.
     tabCommandCoordinator.installSourceReconciliation();
-    // A legacy flat caller re-seeding `stripOrder` directly is a supported
-    // compatibility write. Only source-store changes trigger reconciliation,
-    // so the projection stays stale until the next coordinator entry - which
-    // must resolve against the authoritative grouped items, not rebuild the
-    // flat order and dissolve the split.
+    // Only source-store changes trigger reconciliation, so the projection stays stale until the next coordinator
+    // entry.
     useTabsStore.setState((state) => ({ ...state, stripOrder: [] }));
 
     const router = buildRouterWithHarness(

@@ -8,16 +8,8 @@ import { resolveDesktopPowerBridge } from "@/lib/windows/desktop-capabilities";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
-/**
- * Holds the OS power-save blocker while the "Prevent sleep while running"
- * setting is on AND a local-host agent is in progress (a chat turn is
- * running, or a terminal-agent PTY has not exited). The renderer owns the
- * decision because it has both inputs; main owns the actual `powerSaveBlocker` (desktop
- * `sleep-blocker`) and also releases on webContents teardown as a backstop.
- *
- * No-op on non-desktop shells: `resolveDesktopPowerBridge` returns null in the
- * browser, so the app stays browser-safe. Mounted once at the app root.
- */
+/** Holds the OS power-save blocker while the "Prevent sleep while running" setting is on and a local-host agent
+ * is in progress (a chat turn is running, or a terminal-agent PTY has not exited). */
 export function PreventSleepController() {
   const runnerHost = use(RunnerHostContext);
   const hostBinding = useHostBinding();

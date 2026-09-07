@@ -16,9 +16,8 @@ const CLOUD_ONLY_OUTAGE_STATES: readonly EpicSyncPillState[] = [
 ];
 
 /**
- * Cloud-down verdicts whose own copy is the only thing telling the user to
- * protect their work - "Keep this window open" and "keep it running". They run
- * the outage clock like any other cloud-down state, and are never quieted.
+ * Cloud-down verdicts whose own copy is the only thing telling the user to protect their work - "Keep this window open" and "keep it running".
+ * They run the outage clock like any other cloud-down state, and are never quieted.
  */
 const NEVER_QUIET_STATES: readonly EpicSyncPillState[] = [
   "offlineWithUnsavedChanges",
@@ -59,9 +58,8 @@ describe("isCloudOnlyOutage", () => {
     "reads false for %s even with the transport open - cloud-down, but never quiet",
     (state) => {
       expect(isCloudOnlyOutage(state, "open")).toBe(false);
-      // Still a cloud-down verdict: it runs the outage clock, it just may not
-      // be rendered as `syncing`. Losing this distinction is what let an edit
-      // mid-outage restart the window.
+      // Still a cloud-down verdict: it runs the outage clock, it just may not be rendered as `syncing`.
+      // Losing this distinction is what let an edit mid-outage restart the window.
       expect(isCloudLinkDown(state, "open")).toBe(true);
     },
   );
@@ -112,11 +110,8 @@ describe("useCloudLinkGrace", () => {
   );
 
   it("passes 'offlineWithUnsavedChanges' through on the first frame and keeps it there", () => {
-    // Renderer-only work awaiting the host's ack: closing the window discards
-    // it, and the amber copy is the only thing that says so. Quieting it even
-    // briefly is the one thing this grace must never do - so the assertion is
-    // not just "amber at t=0" but "amber for the whole window a graced state
-    // would have spent as 'syncing'".
+    // Renderer-only work awaiting the host's ack: closing the window discards it, and the amber copy is the only thing that says so.
+    // Quieting it even briefly is the one thing this grace must never do - so the assertion is not just "amber at t=0" but "amber for the whole window a graced state would have spent as 'syncing'".
     vi.useFakeTimers();
     const { result, rerender } = renderHook(() =>
       useCloudLinkGrace("offlineWithUnsavedChanges", "open"),
@@ -132,9 +127,7 @@ describe("useCloudLinkGrace", () => {
   });
 
   it("shows unsaved renderer work immediately without stopping the outage clock", () => {
-    // The excluded state is exempt from the QUIET, not from the CLOCK. Here
-    // the edit lands mid-window: it must show through at once, and the window
-    // must still expire on its original schedule rather than restarting.
+    // Here the edit lands mid-window: it must show through at once, and the window must still expire on its original schedule rather than restarting.
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
       (props: { derived: EpicSyncPillState }) =>
@@ -149,9 +142,8 @@ describe("useCloudLinkGrace", () => {
     rerender({ derived: "offlineWithUnsavedChanges" });
     expect(result.current).toBe("offlineWithUnsavedChanges");
 
-    // The host acks; the same outage continues. The remaining 1s of the
-    // ORIGINAL window is all that is left - a restarted clock would need a
-    // further 15s here and would read `syncing` instead.
+    // The host acks; the same outage continues.
+    // The remaining 1s of the ORIGINAL window is all that is left - a restarted clock would need a further 15s here and would read `syncing` instead.
     rerender({ derived: "reconnecting" });
     act(() => {
       vi.advanceTimersByTime(1_000);
@@ -161,11 +153,7 @@ describe("useCloudLinkGrace", () => {
   });
 
   it("keeps a sustained outage amber across an edit and its host ack", () => {
-    // The continuous-editing hole: during a sustained outage every keystroke
-    // briefly derives `offlineWithUnsavedChanges`, and the host acks a moment
-    // later. If that round trip counted as a recovery, each edit would buy
-    // another 15s of quiet and an Epic being typed into would never reach
-    // amber at all, however long the outage ran.
+    // If that round trip counted as a recovery, each edit would buy another 15s of quiet and an Epic being typed into would never reach amber at all, however long the outage ran.
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
       (props: { derived: EpicSyncPillState }) =>

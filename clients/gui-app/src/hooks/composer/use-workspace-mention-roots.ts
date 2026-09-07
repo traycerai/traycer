@@ -16,12 +16,7 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
-/**
- * `hostId` scopes the "globally registered folders" fallback: folder paths
- * are host-local, so the fallback must be the composer's target host's
- * bucket (a tab's bound host, the modal's pinned host, the landing page's
- * active host) - never another machine's paths.
- */
+/** `hostId` scopes the "globally registered folders" fallback: folder paths are host-local, so the fallback must be the composer's target host's bucket (a tab's bound host, the modal's pinned host, the landing page's active host) - never another machine's paths. */
 export function useWorkspaceMentionRoots(
   preferredRoots: ReadonlyArray<string> | null,
   fallbackToGlobalWhenEmpty: boolean,
@@ -76,20 +71,11 @@ export function useLandingComposerMentionRoots(
     return mentionRootsFromWorktreeIntent(folders, stagedIntent);
   }, [draftFolders, globalFolders, stagedIntent]);
 
-  // `preferredRoots` already resolves the global folders (intent-aware) in the
-  // base-landing case, so the global fallback inside `useWorkspaceMentionRoots`
-  // would re-resolve the same source intent-stripped. Disable it - the only way
-  // `preferredRoots` is empty here is when there are no folders at all, where
-  // the fallback would yield `[]` anyway.
+  // `preferredRoots` already resolves the global folders (intent-aware) in the base-landing case, so the global fallback inside `useWorkspaceMentionRoots` would re-resolve the same source intent-stripped.
   return useWorkspaceMentionRoots(preferredRoots, false, activeHostId);
 }
 
-/**
- * Mention roots for a chat composer. A chat's working directories come from
- * its per-device worktree binding - the same source rendered by the host
- * workspace selector. `worktree` entries run against their sibling worktree
- * directory; `local` entries run against the workspace path itself.
- */
+/** Mention roots for a chat composer. */
 export function mentionRootsFromWorktreeBinding(
   binding: WorktreeBinding | null,
 ): ReadonlyArray<string> {
@@ -110,18 +96,7 @@ function bindingEntryRoot(entry: WorktreeBindingEntry): string {
 }
 
 /**
- * Composer-scoped roots for a chat: the staged (not-yet-materialized) worktree
- * intent layers over the committed binding per folder - `stagedEntry ??
- * bindingEntry`, the same precedence the workspace selector renders and the
- * send path materializes. This keeps next-message surfaces (mention search,
- * slash-command discovery) from probing a path the staged selection has
- * superseded, e.g. a deleted worktree the user just replaced from the
- * composer.
- *
- * A staged `worktree` (create) entry resolves to its source `workspacePath` -
- * the materialized checkout that stands in until the host creates the worktree
- * at send - and a staged `import` to its existing on-disk worktree. Staged
- * entries for folders absent from the binding contribute their roots too.
+ * Composer roots: `stagedEntry ?? bindingEntry` per folder so mention/slash search does not probe a path the staged selection superseded.
  */
 export function mentionRootsFromWorktreeBindingAndIntent(
   binding: WorktreeBinding | null,

@@ -28,11 +28,7 @@ const CANVAS_HOST_ID = "host-canvas";
 const TILE_HOST_ID = "host-remote";
 const EPIC_ID = "epic-1";
 
-/**
- * The two-host fence: which hosts the sessions machinery was acquired for, and
- * which host's stream an `openTab` actually went out on. A tile on a remote
- * host must reach ITS host, never the canvas host's stream.
- */
+/** A tile on a remote host must reach ITS host, never the canvas host's stream. */
 const sessionsHarness = vi.hoisted(() => ({
   acquiredHostIds: [] as string[],
   openTabCalls: [] as Array<{ readonly hostId: string; readonly url: string }>,
@@ -87,9 +83,7 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => CANVAS_HOST_ID,
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  // `getRequestContextUserId` because the provider asks the client whether
-  // this renderer knows who it is signed in as yet (H10); it never names the
-  // user to main, so `null` is a complete answer here.
+  // `getRequestContextUserId` because the provider asks the client whether this renderer knows who it is signed in as yet (H10); it never names the user to main, so `null` is a complete answer here.
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? null : { hostId, getRequestContextUserId: () => null },
 }));
@@ -222,9 +216,7 @@ describe("renderTile browser sessions host boundary", () => {
 
     expect(screen.getByTestId("tile-link")).toBeTruthy();
 
-    // No boundary is mounted for the canvas host: the ambient provider above
-    // the canvas already owns that stream, and a second one would be a second
-    // socket for the same host.
+    // No boundary is mounted for the canvas host: the ambient provider above the canvas already owns that stream, and a second one would be a second socket for the same host.
     expect(sessionsHarness.acquiredHostIds).toEqual([]);
   });
 });

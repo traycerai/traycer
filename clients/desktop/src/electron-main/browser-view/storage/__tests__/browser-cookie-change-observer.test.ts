@@ -27,13 +27,6 @@ vi.mock("../../../app/logger", () => ({
   describeLogError: (error: unknown) => String(error),
 }));
 
-/**
- * Minimal stand-in for Electron's `Session["cookies"]`: a jar array plus the
- * single listener slot the observer actually uses. `get({domain})` mirrors
- * Chromium's own domain-match filter (the domain itself or any subdomain of
- * it) - the observer's flush path leans on exactly that behaviour to read
- * back "everything the scope currently holds".
- */
 class FakeCookieChangeSource implements BrowserCookieChangeSource {
   private readonly jar: Cookie[] = [];
   private listener: CookieChangeListener | null = null;
@@ -70,12 +63,6 @@ class FakeCookieChangeSource implements BrowserCookieChangeSource {
     this.removeWithCause(cookie, "explicit");
   }
 
-  /**
-   * The same, under one of Chromium's other removal causes: `expired` for the
-   * expiry sweep, `evicted` for capacity garbage collection, and
-   * `expired-overwrite` for a `Set-Cookie` carrying a past date - which is a
-   * server-side sign-out and stays witnessable.
-   */
   removeWithCause(cookie: Cookie, cause: string): void {
     const index = this.indexOf(cookie);
     if (index !== -1) this.jar.splice(index, 1);
@@ -105,12 +92,7 @@ class FakeCookieChangeSource implements BrowserCookieChangeSource {
   }
 }
 
-/**
- * The same jar with every `get()` parked until the test releases it. The flush
- * path reads its slice through `cookies.get()`, so holding that promise open is
- * the only way to place a WHOLE suppression - entry and exit both - inside the
- * flush's await, which is the interval neither point-in-time check can see.
- */
+/** The same jar with every `get()` parked until the test releases it. */
 class GatedCookieChangeSource extends FakeCookieChangeSource {
   private pendingRead: (() => void) | null = null;
 
@@ -138,23 +120,8 @@ class GatedCookieChangeSource extends FakeCookieChangeSource {
   }
 }
 
-/**
- * Every key the observer attributed to this machine's own browsing, in order.
- *
- * It is the ownership rule's one input (universal-sign-in ticket 08): a key
- * that lands here is one a host may no longer overwrite.
- */
 const localWrites: BrowserCookieKey[] = [];
 
-/**
- * Attaches with the startup grace window running: the clock reads the attach
- * instant.
- *
- * `monotonicNow` is driven off the same faked `Date` as `now` rather than off
- * `performance`, so `advanceTimersByTimeAsync` moves both and a test's elapsed
- * time means one thing. In production they are different clocks precisely
- * because the wall one can go backwards.
- */
 function makeObserverAtAttach(
   source: BrowserCookieChangeSource,
   deltas: BrowserPrimaryProfileDelta[],
@@ -171,13 +138,6 @@ function makeObserverAtAttach(
   return observer;
 }
 
-/**
- * The same, then straight past the startup grace window - the state a jar is
- * in for all but the first minute of a run, and the only state in which a
- * removal is witnessed at all. Nothing is scheduled at attach, so moving the
- * clock here fires no timer; it just puts the observer where every test that
- * is not ABOUT the grace window means to be.
- */
 function makeObserver(
   source: BrowserCookieChangeSource,
   deltas: BrowserPrimaryProfileDelta[],
@@ -261,10 +221,7 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     const delta = deltas[0];
     if (delta === undefined) throw new Error("expected a flushed delta");
     expect(delta.cookies.map((cookie) => cookie.name)).toEqual(["reset"]);
-    // `goneCookie` really left the jar and stayed gone - a genuine removal.
-    // `resetCookie` was removed then re-set within the same window (Chromium's
-    // `overwrite` cause) and is present in the flushed slice, so its claim is
-    // a coalescing artifact and must not survive.
+    // `resetCookie` was removed then re-set within the same window (Chromium's `overwrite` cause) and is present in the flushed slice, so its claim is a coalescing artifact and must not.
     expect(delta.removedKeys).toEqual([
       { domain: "example.com", name: "gone", path: "/" },
     ]);
@@ -329,10 +286,7 @@ describe("BrowserCookieChangeObserver coalescing", () => {
 describe("BrowserCookieChangeObserver unrepresentable cookies", () => {
   it("still emits the scope's delta when the jar holds a cookie it cannot normalise", async () => {
     const source = new FakeCookieChangeSource();
-    // A domain the URL parser cannot place at all. It used to be enough for
-    // the domain merely to need normalising (an IDN, a trailing root dot, a
-    // capital); H11 made `readCookieDomain` normalise those the way Chromium's
-    // own jar does, so only a genuinely malformed one refuses now.
+    // A domain the URL parser cannot place at all.
     source.seed(
       makeCookie({ name: "malformed", domain: "ex ample.example.com" }),
     );
@@ -374,10 +328,7 @@ describe("BrowserCookieChangeObserver suppression across an in-flight read", () 
     expect(source.readIsParked()).toBe(true);
     expect(deltas).toEqual([]);
 
-    // The forget the user asked for, in full: the window this suppression
-    // drops is already gone (the flush deleted it), and the suppression both
-    // starts and finishes before the read resolves - so the check before the
-    // await and the check after it BOTH see an unsuppressed observer.
+    // The forget the user asked for, in full: the window this suppression drops is already gone (the flush deleted it), and the suppression both starts and finishes before the read.
     await observer.suppressAll(() => {
       source.remove(cookie);
       return Promise.resolve();
@@ -517,11 +468,7 @@ describe("BrowserCookieChangeObserver removedKeys (ticket 14)", () => {
 
   it("keys removedKeys entries through the same normalisation as the capture path, byte-identical to what the host stores", async () => {
     const source = new FakeCookieChangeSource();
-    // A leading-dot domain cookie (a non-host-only cookie set on the parent
-    // domain) exercises the normalisation path `cookieKeyOf` shares with
-    // `browserStorageCookies` - the capture routine the host's own store
-    // reads. If the two ever diverged, a removal could never match a stored
-    // key.
+    // If the two ever diverged, a removal could never match a stored key.
     const cookie = makeCookie({ name: "sid", domain: ".example.com" });
     const [expectedCapturedCookie] = browserStorageCookies([cookie]);
     if (expectedCapturedCookie === undefined) {
@@ -555,18 +502,6 @@ describe("BrowserCookieChangeObserver removedKeys (ticket 14)", () => {
   });
 });
 
-/**
- * Universal-sign-in decision 7. `removedKeys` is the only field on this frame
- * that can sign a live remote session out, so what is allowed onto it is
- * narrower than what the jar actually did.
- *
- * The host end of that is a single chokepoint, which is what makes an empty
- * `removedKeys` sufficient here: `handlePrimaryProfileDelta` is the only delta
- * path that reaches `evictPrimaryProfileDomains`, it passes it exactly
- * `loggedOutDomains(frame.removedKeys, ...)`, and that returns `[]` for an
- * empty `removedKeys` before it looks at anything else. The merge still
- * reconciles the host's cache from `cookies`; it evicts nothing.
- */
 describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
   it("never witnesses a session cookie's removal, inside the grace window or long after it", async () => {
     const source = new FakeCookieChangeSource();
@@ -599,10 +534,7 @@ describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
     // The desktop's own view still tracked the change: the slice was re-read
     // and the cookie is gone from it. Only the logout claim was withheld.
     expect(deltas[1]?.cookies).toEqual([]);
-    // Suppression is traceable, which is how the next forensic pass tells
-    // "nothing was removed" apart from "a removal was not believed". At DEBUG,
-    // because a session cookie dying is ordinary traffic and INFO would write
-    // a line per domain per window for the life of the process.
+    // Suppression is traceable, which is how the next forensic pass tells "nothing was removed" apart from "a removal was not believed".
     expect(log.debug).toHaveBeenCalledWith(
       "[browser-view] withheld cookie removals from a delta",
       {
@@ -714,22 +646,10 @@ describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
     });
     await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
 
-    // The delta still goes out - the jar really did change, and the host's
-    // cache converges on it - but it carries no logout evidence, and the empty
-    // list is what makes `loggedOutDomains` return `[]` and the evict fan-out
-    // never run. Before this ticket these four keys signed live remote
-    // sessions out of GitHub.
     expect(deltas).toHaveLength(1);
     expect(deltas[0]?.domain).toBe("github.com");
     expect(deltas[0]?.cookies).toEqual([]);
     expect(deltas[0]?.removedKeys).toEqual([]);
-    // Counted, not one line per cookie, and carrying the CAUSE string: that is
-    // the evidence ticket 07's live pass needs to decide whether boot cleanup
-    // ever announces itself outside `expired`/`evicted` - the one open
-    // question keeping this window alive.
-    // The DOMAIN is browsing history and this log lands in the support bundle,
-    // so it stays on the debug line; the INFO line carries the counted reason
-    // and nothing that names a site.
     expect(log.info).toHaveBeenCalledWith(
       "[browser-view] withheld cookie removals from a delta",
       { reason: "grace-window", cause: "explicit", removals: 4 },
@@ -756,12 +676,6 @@ describe("BrowserCookieChangeObserver witnessed-removal hardening", () => {
 
     const deltas: BrowserPrimaryProfileDelta[] = [];
     const observer = makeObserver(source, deltas);
-    // Ten minutes in: the grace window is long spent and the cookie is
-    // persistent, so the CAUSE is the only thing standing between Chromium's
-    // per-host capacity GC and a witnessed logout - which is the 2026-08-31
-    // bug verbatim. (It broadcast a `primaryProfileEvict` back then; ticket 08
-    // retired that frame, and what a witnessed removal now reaches is this
-    // host's own live headless contexts.)
     await vi.advanceTimersByTimeAsync(600_000);
 
     source.removeWithCause(evicted, "evicted");

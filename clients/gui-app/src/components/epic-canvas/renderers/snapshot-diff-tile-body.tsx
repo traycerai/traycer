@@ -76,13 +76,7 @@ interface SnapshotDiffTileBodyProps {
   readonly viewTabId: string;
 }
 
-/**
- * Renders a chat file-edit snapshot as a full diff tile. Re-reads the agent's
- * before/after live from the chat session by `chatId` (reference-not-copy),
- * synthesizes a unified patch, and renders it through the shared
- * `DiffContentPrimitive` with the same toolbar/view-state as a Git tile -
- * minus refresh (a snapshot is immutable).
- */
+/** Re-reads before/after live by chatId (reference, not copy). No refresh: a snapshot is immutable. */
 export function SnapshotDiffTileBody(
   props: SnapshotDiffTileBodyProps,
 ): ReactNode {
@@ -99,14 +93,7 @@ export function SnapshotDiffTileBody(
             coverageMessage: SNAPSHOT_DIFF_LOADING_FIND_MESSAGE,
           })}
         />
-        {/*
-          Invariant 6. The sibling `segmentPending` gate below already refuses
-          to spin on a DISABLED query (see its comment - `isLoading`, not
-          `isPending`, because a content-less edit disables the query and
-          leaves `isPending` true forever). That fix was right and stayed
-          local; this is the same shape one level up, where the chat session
-          handle never resolves because the tab's host never answered.
-        */}
+        {/* That fix was right and stayed local; this is the same shape one level up, where the chat session handle never resolves because the tab's host never answered. */}
         <BoundedTileLoad
           hostId={hostId}
           subject="diff"
@@ -228,10 +215,7 @@ function SnapshotDiffTileResolved(props: {
         messages: s.messages,
         liveAssistantBlocks: s.liveAssistantMessage?.blocks ?? null,
         accumulatedFileChanges: s.accumulatedFileChanges,
-        // Selected RAW and mapped below. Deriving the rows in here would mint a
-        // fresh array on every call, which `useShallow` compares by reference
-        // one level deep - so the selection would never settle and the tile
-        // would re-render until React gave up.
+        // Deriving the rows in here would mint a fresh array on every call, which `useShallow` compares by reference one level deep - so the selection would never settle and the tile would re-render until React gave up.
         accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
         accumulatedSummaryGenerationSeated:
           s.accumulatedSummaryGenerationSeated,
@@ -251,11 +235,8 @@ function SnapshotDiffTileResolved(props: {
     snapshotLoaded,
     windowed,
   } = source;
-  // Whether `hostRows` is the WHOLE accumulated set or a delivered prefix of
-  // one. A bundle names its paths as of when it was opened, and a path missing
-  // from a complete set is a file that has since been reverted - but a path
-  // missing from a PREFIX is simply one whose chunk has not landed. The two
-  // read identically here and mean opposite things.
+  // Whether `hostRows` is the WHOLE accumulated set or a delivered prefix of one.
+  // A bundle names its paths as of when it was opened, and a path missing from a complete set is a file that has since been reverted - but a path missing from a PREFIX is simply one whose chunk has not landed.
   const hostRowsComplete = accumulatedSummarySetComplete({
     windowed,
     hostChangeCount: accumulatedFileChangeCount,
@@ -263,9 +244,7 @@ function SnapshotDiffTileResolved(props: {
     generationSeated: accumulatedSummaryGenerationSeated,
     assemblyStarted: accumulatedSummaryAssemblyStarted,
   });
-  // How the cumulative kinds address their contents: on the windowed line a
-  // row's `digest` is what fetches the file bodies the snapshot no longer
-  // carries.
+  // How the cumulative kinds address their contents: on the windowed line a row's `digest` is what fetches the file bodies the snapshot no longer carries.
   const hostRows = useMemo(
     () =>
       hostAccumulatedChangeRows({
@@ -276,11 +255,7 @@ function SnapshotDiffTileResolved(props: {
     [accumulatedFileChangeSummaries, accumulatedFileChanges, windowed],
   );
 
-  // A hash-backed tile (segment or artifact-hash) resolves only its content-
-  // addressed endpoints, then lazy-fetches the before/after content by hash (the
-  // chat doc no longer inlines it). A segment reads its hashes from the
-  // file_change blocks; an artifact-hash tile carries them on its payload.
-  // Cumulative/bundle tiles address theirs by accumulated-change digest.
+  // A hash-backed tile (segment or artifact-hash) resolves only its content- addressed endpoints, then lazy-fetches the before/after content by hash (the chat doc no longer inlines it).
   const segmentHashes = useMemo(
     () =>
       resolveHashBackedEndpoints(node.diff, {
@@ -290,16 +265,8 @@ function SnapshotDiffTileResolved(props: {
       }),
     [accumulatedFileChanges, liveAssistantBlocks, messages, node.diff],
   );
-  // Keep the tile's DURABLE capture in step with the blocks while they are
-  // still readable. `segmentHashes` above prefers the blocks, so a stale
-  // capture is invisible right up until the row is evicted - and then the tile
-  // silently falls back to whatever the edit looked like at click time. If the
-  // tile was opened mid-stream that is a half-written diff, kept forever.
-  //
-  // `settledSnapshotSegmentCapture` returns non-null only when the source
-  // blocks say the edit is finished AND the capture disagrees with them, so
-  // this settles after one write rather than looping: the write makes the
-  // payload match, the next render recomputes `null`, and the effect stops.
+  // `segmentHashes` above prefers the blocks, so a stale capture is invisible right up until the row is evicted - and then the tile silently falls back to whatever the edit looked like at click time.
+  // `settledSnapshotSegmentCapture` returns non-null only when the source blocks say the edit is finished AND the capture disagrees with them, so this settles after one write rather than looping: the write makes the payload match, the next render recomputes `null`, and the effect stops.
   const settledCapture = useMemo(
     () =>
       node.diff.kind === "snapshot-segment"
@@ -367,13 +334,8 @@ function SnapshotDiffTileResolved(props: {
         },
       ];
     }
-    // A bundle that could not be fully resolved resolves to NOTHING, so the
-    // tile falls through to its source-unavailable state rather than
-    // presenting a subset as the complete review. `stale` and `failed` differ
-    // in prognosis - the first is repaired by the summary chunk that re-keys
-    // the fetch, the second is not - but both mean `resolved` is missing a
-    // file the bundle was opened to show, and rendering the rest silently is
-    // the reading that has to be prevented in either case.
+    // A bundle that could not be fully resolved resolves to NOTHING, so the tile falls through to its source-unavailable state rather than presenting a subset as the complete review.
+    // `stale` and `failed` differ in prognosis - the first is repaired by the summary chunk that re-keys the fetch, the second is not - but both mean `resolved` is missing a file the bundle was opened to show, and rendering the rest silently is the reading that has to be prevented in either case.
     if (cumulative.stale || cumulative.failed) return [];
     return cumulative.resolved;
   }, [
@@ -384,11 +346,7 @@ function SnapshotDiffTileResolved(props: {
     segmentQuery.data,
   ]);
 
-  // A hash-backed tile whose content is actively in-flight shows the skeleton.
-  // Use isLoading (isPending && isFetching), NOT isPending: a content-less edit
-  // (both hashes null) disables the query, which leaves isPending permanently
-  // true but isFetching false - that case must fall through to the
-  // source-unavailable banner, not spin forever.
+  // Use isLoading (isPending && isFetching), NOT isPending: a content-less edit (both hashes null) disables the query, which leaves isPending permanently true but isFetching false - that case must fall through to the source-unavailable banner, not spin forever.
   const segmentPending = segmentHashes !== null && segmentQuery.isLoading;
 
   const patch = useMemo(() => {
@@ -419,9 +377,7 @@ function SnapshotDiffTileResolved(props: {
   }
 
   if (pdfFilePath !== null) {
-    // Terminal, like every other branch: global Find still gets the file's
-    // metadata (name, directory, kind) and an honest coverage note, rather
-    // than a tile that simply does not exist to it.
+    // Terminal, like every other branch: global Find still gets the file's metadata (name, directory, kind) and an honest coverage note, rather than a tile that simply does not exist to it.
     return (
       <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
         <SnapshotDiffFindRegistration
@@ -484,11 +440,8 @@ function SnapshotDiffTileResolved(props: {
 }
 
 /**
- * Single-file snapshot diff body. Scoped to its own component (not inlined in
- * `SnapshotDiffTileResolved`) so the native scroll-restoration hook runs only
- * on the single-file path - the bundle path owns the same `instanceId` via its
- * Virtuoso restoration, and two hooks writing one anchor would conflict. Mounts
- * only once `patch` is resolved, so content is ready.
+ * Scoped to its own component (not inlined in `SnapshotDiffTileResolved`) so the native scroll-restoration hook runs only on the single-file path - the bundle path owns the same `instanceId` via its Virtuoso restoration, and two hooks writing one anchor would conflict.
+ * Mounts only once `patch` is resolved, so content is ready.
  */
 function SnapshotFileDiffContent(props: {
   readonly node: SnapshotDiffTileRef;
@@ -566,23 +519,8 @@ function SnapshotDiffFindRegistration(props: {
 }
 
 /**
- * The PDF a single-file tile is aimed at, or `null`. Decided by PATH, not
- * by content, for every single-file kind (hash-backed OR cumulative): a
- * binary PDF's blobs were never captured (`SnapshotStore.capture` rejects
- * non-text), so a content query would come back `reason: "binary"` and fall
- * into the generic source-unavailable banner instead of the PDF copy - and
- * an ASCII one would download and render source the tile must not show as
- * a diff. Bundles decide per row (`SnapshotBundleDiffTileContent`).
- *
- * EXISTENCE is the one thing path alone cannot answer. A cumulative tile
- * reads the LIVE accumulated set, where a path can leave (reverted, or
- * edited back to its original) after the tile was opened; every other kind
- * of file then falls to the source-unavailable banner. Short-circuiting on
- * extension would exempt PDFs from that and keep presenting a row that is
- * gone as one whose diff is merely not shown. Absence only counts once the
- * set is COMPLETE - in a delivered prefix it means "not arrived yet"
- * (`hostRowsComplete`) - and falling through costs no fetch, because a path
- * with no row has nothing fetchable in the first place.
+ * Decided by PATH, not by content, for every single-file kind (hash-backed OR cumulative): a binary PDF's blobs were never captured (`SnapshotStore.capture` rejects non-text), so a content query would come back `reason: "binary"` and fall into the generic source-unavailable banner instead of the PDF copy - and an ASCII one would download and render source the tile must not show as a diff.
+ * EXISTENCE is the one thing path alone cannot answer.
  */
 function snapshotTilePdfPath(args: {
   readonly diff: SnapshotDiffTilePayload;

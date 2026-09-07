@@ -38,17 +38,13 @@ describe("placeholderRowHeight", () => {
   });
 
   it("sizes an undescribed row above the one-line floor", () => {
-    // A skeleton hole means "a row exists and nothing about it has arrived",
-    // which is most often an assistant turn - sizing it as one line would
-    // guarantee the largest possible jump when anything lands.
+    // A skeleton hole means "a row exists and nothing about it has arrived", which is most often an assistant turn - sizing it as one line would guarantee the largest possible jump when anything lands.
     expect(placeholderRowHeight(null)).toBe(120);
   });
 
   it("stays conservative while nothing has been measured", () => {
-    // With no measurements, a big byte count is not evidence of a tall row:
-    // measured user and assistant rows of the same size render 39x apart. So
-    // the no-evidence answer stays the long-standing conservative cap, and
-    // only the calibrated estimate is allowed past it.
+    // With no measurements, a big byte count is not evidence of a tall row: measured user and assistant rows of the same size render 39x apart.
+    // So the no-evidence answer stays the long-standing conservative cap, and only the calibrated estimate is allowed past it.
     expect(
       placeholderRowHeight(
         entry({ role: "assistant", byteLength: 100_000_000 }),
@@ -57,9 +53,7 @@ describe("placeholderRowHeight", () => {
   });
 
   it("keeps the raw model carrying size information past the cap", () => {
-    // The clamp is applied on top; the model underneath must stay monotonic,
-    // because the memory fits its scale factor against THIS - a factor fitted
-    // to an already-flattened base cannot recover the ordering.
+    // The clamp is applied on top; the model underneath must stay monotonic, because the memory fits its scale factor against THIS - a factor fitted to an already-flattened base cannot recover the ordering.
     const at2kb = rawPlaceholderRowHeight(2_048);
     const at20kb = rawPlaceholderRowHeight(20_480);
     expect(at2kb).toBeGreaterThan(320);

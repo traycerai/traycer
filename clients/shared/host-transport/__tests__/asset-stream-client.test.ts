@@ -33,7 +33,7 @@ class StubStreamWebSocket implements StreamWebSocketLike {
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
 
   readonly textSent: string[] = [];
-  /** Each `AssetStreamClient` owns one dedicated session/socket (`WsStreamClient`'s per-session `close()` tears down `activeSocket` directly) - counting THIS is the close signal, not a callback the client no longer exposes. */
+  /** Each `AssetStreamClient` owns one dedicated session/socket (`WsStreamClient`'s per-session `close()` tears down `activeSocket` directly) - counting this is the close signal, not a callback the client no longer exposes. */
   closeCount = 0;
 
   send(data: string | Uint8Array): void {
@@ -120,9 +120,7 @@ interface OpenFrame {
 }
 
 /**
- * Mirrors the host's manifest by default, so the method negotiates - unless
- * `mutateManifest` strips an entry, mimicking an older host that predates
- * this method.
+ * Mirrors the host's manifest by default, so the method negotiates - unless `mutateManifest` strips an entry, mimicking an older host that predates this method.
  */
 function completeHandshake(
   socket: StubStreamWebSocket,
@@ -168,7 +166,6 @@ function recordingCallbacks(): {
   };
 }
 
-/** How many times the dedicated socket actually closed so far. */
 function closedCount(socket: StubStreamWebSocket): number {
   return socket.closeCount;
 }
@@ -387,9 +384,7 @@ describe("AssetStreamClient", () => {
     });
     expect(Array.from(bytes)).toEqual([1, 2, 3, 4, 5]);
 
-    // The one-shot fetch closes ITS OWN session as soon as it settles - it
-    // must not leave an idle subscription (and host resolver) alive for as
-    // long as the caller happens to hold the instance.
+    // The one-shot fetch closes its own session as soon as it settles - it must not leave an idle subscription (and host resolver) alive for as long as the caller happens to hold the instance.
     expect(closedCount(sockets[0])).toBe(1);
 
     // The gui-app hook closes on unmount/refetch regardless of whether this
@@ -608,9 +603,7 @@ describe("AssetStreamClient", () => {
       { reason: "length-mismatch", message: "received 3 bytes, expected 10" },
     ]);
 
-    // Failure paths close the session too, not just success - and a
-    // redundant hook-driven close afterward stays silent (no second
-    // onFailure, no second "closed" transition).
+    // Failure paths close the session too, not just success - and a redundant hook-driven close afterward stays silent (no second onFailure, no second "closed" transition).
     expect(closedCount(sockets[0])).toBe(1);
     asset.close();
     expect(closedCount(sockets[0])).toBe(1);
@@ -695,9 +688,7 @@ describe("AssetStreamClient", () => {
       contentIdentity: "blob-ghi789",
     });
 
-    // Something else tears down the whole transport (e.g. sign-out) while
-    // this fetch is still in flight - not this AssetStreamClient's own
-    // close(), so it must surface as a failure rather than go silent.
+    // Something else tears down the whole transport (e.g. sign-out) while this fetch is still in flight - not this AssetStreamClient's own close(), so it must surface as a failure rather than go silent.
     client.close("test-teardown");
 
     expect(recorded.ready).toHaveLength(0);

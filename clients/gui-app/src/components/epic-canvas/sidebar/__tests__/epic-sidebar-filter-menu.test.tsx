@@ -24,14 +24,6 @@ afterEach(() => {
   });
 });
 
-/**
- * Direct coverage of the REAL Agents filter menu.
- *
- * The sidebar integration test mocks this component out with a stub, so every
- * string the rename introduced here - the trigger name, the interface axis
- * options, the group label - was unasserted. A regression in exactly those
- * strings would have gone undetected.
- */
 describe("<ChatFilterMenu />", () => {
   function open(canArchive: boolean): void {
     render(

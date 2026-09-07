@@ -11,32 +11,7 @@ import {
 
 /**
  * Priority scheduler with per-session bulk credits (Architecture §3, audit C2).
- *
- * The unit of queued work is a LOGICAL MESSAGE (`OutboundChunkSource`), not a
- * frame: frames materialize one at a time as the pump pulls, drawing their
- * per-stream `seq` at pull time. Two queues:
- *   - INTERACTIVE (high): keystrokes, live output, unary/control frames. Never
- *     credit-gated — it must not stall on a slow peer. Always drained first.
- *   - BULK (low): large transfers (a >1 MiB body rides BULK regardless of its
- *     stream's class — the chunk source applies that override). Credit-gated,
- *     one frame at a time; between every frame the interactive queue is
- *     re-checked, so a keystroke preempts the next bulk chunk.
- *
- * Ordering: per-stream FIFO holds ACROSS the two queues — an item is skipped
- * while an earlier-enqueued message for the same stream is still queued in
- * the other queue — because interleaving a frame into another message's chunk
- * sequence on the same stream is reassembler corruption on the peer.
- *
- * Pacing: EVERY frame — chunked or single — is metered by a `ChunkPacer`
- * kept safely under the relay's per-session rate caps, because the relay
- * counts raw frames with no class distinction and kills a session over
- * budget: an ungated single-frame burst would trade a few ms of latency for
- * losing the whole session. The pacer is clock-fed, so a pace-blocked
- * interactive frame waits on the bucket refill (ms-scale), never on the
- * peer. When only paced work remains, the pump re-arms at the next refill.
- *
- * Writes are serialized (one in flight at a time) so per-stream FIFO survives
- * the async encode+encrypt.
+ * The unit of queued work is a logical message (`OutboundChunkSource`), not a frame: frames materialize one at a time as the pump pulls, drawing their per-stream `seq` at pull time.
  */
 
 interface QueuedSource {
@@ -99,16 +74,8 @@ export class PriorityScheduler {
   }
 
   /**
-   * Replaces the unspent send window once the peer's `openAck` proved it
-   * grants credits finely (`SESSION_CAPABILITY_FINE_CREDITS`).
-   *
-   * Assignment rather than `Math.min`, and the direction is the point: a
-   * window that ends up LARGER than intended only weakens pacing, while one
-   * that ends up smaller than the peer's grant batch deadlocks the first
-   * transfer outright. In practice neither happens — no bulk frame can be
-   * pulled before the session is ready, so the window is still untouched when
-   * this runs — but if that ever stops being true, this fails toward the
-   * recoverable side.
+   * Replaces the unspent send window once the peer's `openAck` proved it grants credits finely (`SESSION_CAPABILITY_FINE_CREDITS`).
+   * In practice neither happens - no bulk frame can be pulled before the session is ready, so the window is still untouched when this runs - but if that ever stops being true, this fails toward the recoverable side.
    */
   adoptNegotiatedCreditWindow(credits: number): void {
     this.bulkCredits = credits;
@@ -120,10 +87,7 @@ export class PriorityScheduler {
   }
 
   /**
-   * Pauses draining WITHOUT dropping queued frames — used during a host blip
-   * (`host_detached`), where the same Noise session resumes on `host_attached`.
-   * Frames enqueued while paused are held (not lost to the relay, which has no
-   * host to deliver to) and flushed on `resume`.
+   * Pauses draining without dropping queued frames - used during a host blip (`host_detached`), where the same Noise session resumes on `host_attached`.
    */
   pause(): void {
     this.paused = true;
@@ -137,16 +101,12 @@ export class PriorityScheduler {
     void this.pump();
   }
 
-  /** Queued MESSAGES (a mid-transfer chunk source still counts as one). */
+  /** Queued messages (a mid-transfer chunk source still counts as one). */
   queuedCount(): number {
     return this.interactive.length + this.bulk.length;
   }
 
-  /**
-   * Drops every queued message for one stream — including a partially-sent
-   * chunk source. The caller then sends that stream's terminal CLOSE/FATAL,
-   * which the peer's reassembler accepts mid-sequence as a transfer abort.
-   */
+  /** Drops every queued message for one stream - including a partially-sent chunk source. */
   dropStreamOutbound(streamId: number): void {
     for (const queue of [this.interactive, this.bulk]) {
       for (let index = queue.length - 1; index >= 0; index -= 1) {
@@ -158,9 +118,7 @@ export class PriorityScheduler {
   }
 
   /**
-   * Drops all queued frames and halts the pump — called when the underlying
-   * session resets (a resume rebuilds the mux, so in-flight frames are re-driven
-   * by the higher layer, never replayed blindly).
+   * Drops all queued frames and halts the pump - called when the underlying session resets (a resume rebuilds the mux, so in-flight frames are re-driven by the higher layer, never replayed blindly).
    */
   stop(): void {
     this.stopped = true;
@@ -290,21 +248,8 @@ export class PriorityScheduler {
 }
 
 /**
- * Tracks inbound bulk frames consumed and tells the caller when to grant a
- * fresh batch of credits back to the peer (so the peer's send window reopens).
- * Counted at FRAME receipt (post-decrypt, pre-reassembly) on BOTH peers:
- * credits meter transport frames in flight, so reassembly state is irrelevant
- * to them — a per-completed-message count deadlocks any transfer longer than
- * the initial credit window.
- *
- * The batch is `FINE_INBOUND_CREDIT_GRANT_BATCH` UNCONDITIONALLY, with no
- * negotiation, because granting more often is the one direction of the credit
- * change that cannot hurt: extra grants can only un-stall a sender, never
- * stall one. It is the SEND window that must not shrink without the peer's
- * consent. The old "coarse on purpose, credit returns must not become
- * chatter" rationale does not survive the arithmetic: at 32 frames a 34 MB
- * transfer costs ~17 extra sub-100-byte control frames, against a per-session
- * budget of 500 frames per second.
+ * Tracks inbound bulk frames consumed and tells the caller when to grant a fresh batch of credits back to the peer (so the peer's send window reopens).
+ * It is the send window that must not shrink without the peer's consent.
  */
 export class InboundCreditTracker {
   private consumed = 0;

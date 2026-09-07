@@ -11,19 +11,12 @@ const mocks = vi.hoisted(() => ({
   onAddTerminalAgent: vi.fn(),
 }));
 
-// Records the `hostId` each call was made with, so tests can assert the
-// terminal-agent launcher resolves its picker's target host through THIS
-// primitive - keyed on the launch host scope - rather than the app-wide
-// default. The returned "client" is just the hostId echoed back: neither the
-// mocked `useComposerToolbarStore` nor `useProvidersListForClient` below read
-// it for content, only `add-node-dropdown.tsx` itself threads it through.
+// Records the `hostId` each call was made with, so tests can assert the terminal-agent launcher resolves its picker's target host through THIS primitive - keyed on the launch host scope - rather than the app-wide default.
 const hostClientForHostIdMock = vi.hoisted(() => ({
   calls: [] as Array<string | null>,
 }));
 
-// Records the host-scoped props each render passed to the picker, so tests
-// can assert `createProfileHostId` / `runTargetHostId` follow the launch host
-// scope without needing the real (heavy) picker to mount.
+// Records the host-scoped props each render passed to the picker, so tests can assert `createProfileHostId` / `runTargetHostId` follow the launch host scope without needing the real (heavy) picker to mount.
 const harnessModelPickerMock = vi.hoisted(() => ({
   calls: [] as Array<{
     readonly createProfileHostId: string | null;
@@ -38,12 +31,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   },
 }));
 
-// The launcher's null-scope target follows the app-wide active host
-// (`add-node-dropdown.tsx`'s `memoryHostId = launchHostId ?? reactiveActiveHostId`).
-// This suite renders with no HostRuntimeProvider, so the real hook would
-// resolve null; mocking a fixed active host keeps the global-workspace
-// fallback (workspace-folders-store, bucketed by host) reachable exactly as
-// it was before that store was host-scoped.
+// This suite renders with no HostRuntimeProvider, so the real hook would resolve null; mocking a fixed active host keeps the global-workspace fallback (workspace-folders-store, bucketed by host) reachable exactly as it was before that store was host-scoped.
 const composerPinMock = vi.hoisted(() => ({
   selection: null as string | null,
   honoredSelection: null as string | null,
@@ -106,9 +94,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       ],
     },
   }),
-  // `TerminalAgentSubMenuContent` now reads through this (its fixed-scope
-  // launch host client) rather than the app-wide `useProvidersList` - same
-  // canned data, since this suite doesn't vary it by host.
+  // `TerminalAgentSubMenuContent` now reads through this (its fixed-scope launch host client) rather than the app-wide `useProvidersList` - same canned data, since this suite doesn't vary it by host.
   useProvidersListForClient: () => ({
     data: {
       providers: [
@@ -329,9 +315,7 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     await screen.findByRole("button", { name: "Start" });
 
     expect(hostClientForHostIdMock.calls.at(-1)).toBeNull();
-    // The follow arm resolves the composer surface pin ("active-host" via the
-    // mock above): the picker keys on the RESOLVED host while the client stays
-    // the app-wide one (selection null = follow).
+    // The follow arm resolves the composer surface pin ("active-host" via the mock above): the picker keys on the RESOLVED host while the client stays the app-wide one (selection null = follow).
     expect(harnessModelPickerMock.calls.at(-1)).toEqual({
       createProfileHostId: "active-host",
       runTargetHostId: "active-host",
@@ -339,13 +323,7 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
   });
 
   it("resolves the launch client through the FOLLOW arm when the composer pin is deposed - never the dead machine", async () => {
-    // A pin whose host has died: `selection` still names it, `honoredSelection`
-    // is null, and `resolvedHostId` has re-resolved to the live host. The
-    // launcher read `selection` (the raw pin) for its client once, so the
-    // catalog, the profile list and the picker were aimed at the dead host
-    // while every id beside them named the live one - the catalog never
-    // populated and the launch stayed disabled under a chip that was fine.
-    // Same rule as the composer: `honoredSelection`, never `selection`.
+    // The launcher read `selection` (the raw pin) for its client once, so the catalog, the profile list and the picker were aimed at the dead host while every id beside them named the live one - the catalog never populated and the launch stayed disabled under a chip that was fine.
     composerPinMock.selection = "host-dead";
     composerPinMock.honoredSelection = null;
     render(

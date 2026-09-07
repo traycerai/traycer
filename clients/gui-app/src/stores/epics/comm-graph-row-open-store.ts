@@ -1,24 +1,4 @@
-/**
- * Which communication-graph detail rows are expanded.
- *
- * The detail panels list RAW events, and an agent's real message is often a
- * full report - the list is unreadable if every body renders at full height, so
- * a long body collapses to a clamped preview and expands on demand. That is the
- * same bargain chat strikes with a received A2A card, so this store is the same
- * shape as the chat open stores and shares their `updateOpenIds` helper: an
- * immutable id set whose no-op writes bail out by identity.
- *
- * KEYED BY canonical event identity, not by list position. Cloud rows use the
- * server's globally unique `eventId`; local rows fall back to `hostId:id`.
- * The merged array is re-sorted as rows arrive, so a row can move mid-list
- * while it is open - an index-keyed set would hand its expansion to whatever
- * slid into that slot. Scoped per epic on top of that because one event can
- * only belong to one epic's detail surface.
- *
- * SESSION-ONLY and deliberately not persisted, for the same reason as
- * `comm-graph-timeline-store`: this is a reading position into a log that is
- * itself not persisted client-side.
- */
+/** Which communication-graph detail rows are expanded. */
 import { create } from "zustand";
 import { updateOpenIds } from "@/stores/chats/open-id-set";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";

@@ -42,19 +42,7 @@ const STEP_ORDER: ReadonlyArray<StepDefinition> = [
 ];
 
 /**
- * Per-epic migration progress modal. Mounted inside an `EpicSessionProvider`
- * so it reads the per-tab open-epic store directly - multi-tab concurrency
- * is satisfied by the provider scoping, no global registry needed.
- *
- * Lifecycle is driven by `epic.subscribe@1.0` migration frames:
- *
- *   - `migration.status === "idle"`      → render nothing.
- *   - `migration.status === "running"`   → in-pane blocking modal, step
- *     indicator + determinate bar on the active Upload step.
- *   - `migration.status === "error"`     → same in-pane shell, error copy +
- *     Retry / Close buttons.
- *   - `migration.status === "not-allowed"` → same shell, viewer copy + a single
- *     Close-tab button (no Retry: this caller can never perform the migration).
+ * Lifecycle is driven by `epic.subscribe@1.0` migration frames: - `migration.status === "idle"` → render nothing. - `migration.status === "running"` → in-pane blocking modal, step indicator + determinate bar on the active Upload step. - `migration.status === "error"` → same in-pane shell, error copy + Retry / Close buttons. - `migration.status === "not-allowed"` → same shell, viewer copy + a single Close-tab button (no Retry: this caller can never perform the migration).
  */
 export interface EpicMigrationModalProps {
   readonly tabId: string;
@@ -67,13 +55,8 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
   const modalRootRef = useRef<HTMLDivElement | null>(null);
   const blocking = migration.status !== "idle";
   useInertEpicShell(modalRootRef, blocking);
-  // The containment above is LOCAL - it inerts this epic's shell and nothing
-  // else, which is what keeps the rest of the app usable behind a per-tab
-  // migration. Document-level recognizers cannot see it, so this says out loud
-  // what the `inert` attribute only says to one subtree: a surface the user is
-  // required to address is up, and a gesture aimed past it is not theirs to
-  // answer. Mounting the primitive with `modal={false}` is what makes this
-  // necessary - the barrier every ordinary dialog raises is never raised here.
+  // Document-level recognizers cannot see it, so this says out loud what the `inert` attribute only says to one subtree: a surface the user is required to address is up, and a gesture aimed past it is not theirs to answer.
+  // Mounting the primitive with `modal={false}` is what makes this necessary - the barrier every ordinary dialog raises is never raised here.
   useBlockingLayerClaim(blocking);
 
   if (migration.status === "idle") {
@@ -83,11 +66,8 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
   const isRunning = migration.status === "running";
 
   const handleClose = (): void => {
-    // Navigate FIRST, then hide the tab from the strip. If we closed the tab
-    // before navigating, this route component and scoped modal could
-    // be torn down mid-paint while TanStack-Router still pointed at the
-    // `/epics/$epicId/$tabId` route. Navigating first lets the route change
-    // commit before the tab leaves the visible header order.
+    // If we closed the tab before navigating, this route component and scoped modal could be torn down mid-paint while TanStack-Router still pointed at the `/epics/$epicId/$tabId` route.
+    // Navigating first lets the route change commit before the tab leaves the visible header order.
     void navigate({ ...LANDING_ROUTE, replace: true });
     useEpicCanvasStore.getState().closeTab(props.tabId);
   };
@@ -198,11 +178,7 @@ function RunningBody(props: RunningBodyProps): ReactNode {
           />
         ))}
       </ol>
-      {/* Safety-net escape hatch - the escape-key / outside-click handlers
-          preventDefault while running so a healthy migration isn't dismissed
-          by accident, but if the modal ever ends up stuck (e.g., the host
-          stops emitting progress frames or a transport blip after the
-          optimistic Retry flip), the user still has a deliberate way out. */}
+      {/* Safety-net escape hatch - the escape-key / outside-click handlers preventDefault while running so a healthy migration isn't dismissed by accident, but if the modal ever ends up stuck (e.g., the host stops emitting progress frames or a transport blip after the optimistic Retry flip), the user still has a deliberate way out. */}
       <div className="flex justify-end">
         <Button
           type="button"

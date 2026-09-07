@@ -1,7 +1,5 @@
 /**
- * Custom HTML tag names for Traycer reference types.
- * These tags are used to wrap references in LLM output and are transformed
- * by rehype plugins into interactive React components.
+ * Custom HTML tags wrapping LLM references; rehype turns them into React.
  */
 export const TRAYCER_SPEC_TAG = "traycer-spec";
 export const TRAYCER_TICKET_TAG = "traycer-ticket";

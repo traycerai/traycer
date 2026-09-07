@@ -1,15 +1,5 @@
-/**
- * The signed-in user's Traycer subscription + credits, shown under the Traycer
- * provider. A global account-context selector (Personal / each Team) drives
- * which subscription is rendered. Data comes from `useAuthUser` (TanStack
- * Query) - never the auth store, which keeps only its narrow projections.
- *
- * This card owns its query wiring (`useAuthUser`, `useRefreshCreditsOnTraycerTurn`,
- * and - inside the shared `RateLimitView` - `useHostRateLimitUsageQuery` +
- * `useRefreshRateLimitUsageOnTraycerTurn`) and renders through the shared,
- * host/query-free views in `traycer-subscription-views.tsx`, so it and the
- * header popover's Traycer tab can never disagree.
- */
+/** Data comes from `useAuthUser` (TanStack Query) - never the auth store, which keeps only its narrow
+ * projections. */
 import { ExternalLink } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";

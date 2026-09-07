@@ -30,16 +30,7 @@ import { z } from "zod";
 
 /**
  * Round-trip behavior of the shard's passthrough carrier and residual bags.
- *
- * The contract under test is the one that reclassifies a new content-block type
- * (or message role, or chat-event type) from a breaking persistence change to a
- * minor one: a shipped reader must parse the shard, render what it understands,
- * and re-emit what it does not with its meaning intact.
- *
- * It matters more in v2 than it did for a single-object layout. Shards are
- * CONTENT-ADDRESSED, so a reader that loses a byte on the way through does not
- * merely publish a lossy chat - it mints a different hash for a cohort that
- * never changed, and the diff-by-hash publish re-uploads it.
+ * Shards are CONTENT-ADDRESSED, so a reader that loses a byte on the way through does not merely publish a lossy chat - it mints a different hash for a cohort that never changed, and the diff-by-hash publish re-uploads it.
  */
 
 const chatShardSchema = getRecordSchema(
@@ -119,10 +110,6 @@ const assistantMessage: JsonObject = {
   usage: null,
   reasoningEffort: null,
   serviceTier: null,
-  // Present because canonical form is the schema-NORMALIZED encoding, not a
-  // byte echo: a `.default(...)` field materializes on the way through, so the
-  // canonical fixture carries it exactly as `minReaderVersion` and the run
-  // settings do. What the round-trip guarantees is idempotence, not omission.
   envCredentialVar: null,
   imageResolutions: [],
 };
@@ -232,9 +219,7 @@ describe("chat-shard passthrough", () => {
   });
 
   it("re-emits an unknown block type through decode -> encode byte-identically", () => {
-    // The ticket's passthrough-survival case, stated on BYTES rather than on a
-    // structural comparison: this is what keeps the cohort's content address
-    // stable for a reader that never understood half of it.
+    // The ticket's passthrough-survival case, stated on BYTES rather than on a structural comparison: this is what keeps the cohort's content address stable for a reader that never understood half of it.
     expect(serializeChatShard(parse(persistedMessageShard))).toBe(
       canonicalJsonStringify(persistedMessageShard),
     );
@@ -327,11 +312,6 @@ describe("chat-shard section coherence", () => {
 
   it("rejects an empty cohort - a shard IS a cohort", () => {
     // An empty chat is an empty shard list on the HEAD, never an empty shard.
-    // The case that forces this: an empty `"events"` shard paired with a head
-    // whose `events` are `null` states an impossible graduation - a section
-    // that outgrew the head yet holds nothing - and it assembles to
-    // `status: "ok"` with an empty log, indistinguishable from a chat that
-    // never had events.
     expect(() => parse({ ...persistedMessageShard, messages: [] })).toThrow();
     expect(() => parse({ ...persistedEventShard, events: [] })).toThrow();
   });
@@ -367,17 +347,8 @@ describe("chat-shard canonical encoding", () => {
   });
 
   /**
-   * Canonical form is the schema-NORMALIZED encoding, not in general a byte
-   * echo of the input, so the guarantee the contract makes is IDEMPOTENCE -
-   * which is what keeps a cohort's sha256 stable across any number of
-   * read/write cycles.
-   *
-   * A shard happens to hit the stronger property too: everything in one is
-   * either passthrough-preserved (re-emitted from `raw`, defaults never
-   * applied) or has no defaulted modeled field, so a shard's bytes really do
-   * survive verbatim. That is a fact about today's shape rather than a promise,
-   * which is why it is asserted alongside idempotence and not instead of it -
-   * `minReaderVersion` on the head is the counterexample (see the head suite).
+   * Canonical form is the schema-NORMALIZED encoding, not in general a byte echo of the input, so the guarantee the contract makes is IDEMPOTENCE - which is what keeps a cohort's sha256 stable across any number of.
+   * A shard happens to hit the stronger property too: everything in one is either passthrough-preserved (re-emitted from `raw`, defaults never applied) or has no defaulted modeled field, so a shard's bytes really do.
    */
   it("is idempotent, so a cohort's content address holds still", () => {
     const withoutDefaults: JsonObject = {
@@ -393,9 +364,7 @@ describe("chat-shard canonical encoding", () => {
               type: "text",
               text: "hello",
               parentBlockId: null,
-              // `providerNotice` is absent - it is `.default(null)` upstream,
-              // so this is a valid stored block. It stays absent, because the
-              // block rides the passthrough carrier's `raw`.
+              // `providerNotice` is absent - it is `.default(null)` upstream, so this is a valid stored block.
             },
           ],
         },
@@ -413,17 +382,9 @@ describe("chat-shard canonical encoding", () => {
   });
 });
 
-/**
- * `__proto__` is a legal JSON key and `JSON.parse` really does produce it as an
- * OWN property. Zod's record/json schemas rebuild objects from their entries and
- * drop it, and rebuilding with plain assignment invokes the inherited setter
- * instead of creating a key - either one silently punches a hole in the
- * complete-subtree guarantee, and therefore in the content address.
- */
+/** `__proto__` is a legal JSON key and `JSON.parse` really does produce it as an OWN property. */
 describe("chat-shard __proto__ preservation", () => {
-  // Built from a JSON STRING on purpose: an object literal's `__proto__:` key
-  // sets the prototype and creates no own property, so a literal could never
-  // reproduce what `JSON.parse` hands a real reader off the wire.
+  // Built from a JSON STRING on purpose: an object literal's `__proto__:` key sets the prototype and creates no own property, so a literal could never reproduce what `JSON.parse` hands a real reader off the wire.
   const protoMessage: JsonValue = JSON.parse(
     '{"role":"telemetry","messageId":"m-proto",' +
       '"__proto__":{"polluted":true},' +
@@ -514,10 +475,8 @@ describe("chat-sync writer helpers", () => {
 });
 
 describe("chat-sync known-variant vocabulary", () => {
-  // The passthrough lists ARE the reader's declared vocabulary. If a variant is
-  // added to the underlying union without being listed, every entry of that
-  // variant silently degrades to "unknown" - preserved, but never rendered.
-  // Cross-check against the schema so that fails loudly instead.
+  // The passthrough lists ARE the reader's declared vocabulary.
+  // If a variant is added to the underlying union without being listed, every entry of that variant silently degrades to "unknown" - preserved, but never rendered.
   function unionDiscriminants(schema: z.ZodType, key: string): string[] {
     const jsonSchema = z.toJSONSchema(schema, { io: "input" });
     const variants = z.parse(

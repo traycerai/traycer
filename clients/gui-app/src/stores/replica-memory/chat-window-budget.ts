@@ -22,13 +22,7 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 
-/**
- * The six whole-set snapshot slices the windowed (and legacy) chat snapshot
- * copies wholesale. Charged, not bounded: truncating queue / approvals /
- * interviews / background / commands would drop in-flight work the user can
- * see. The accountant's job is to see them; shrinking their *content* is out
- * of scope.
- */
+/** The six whole-set snapshot slices the windowed (and legacy) chat snapshot copies wholesale. */
 export interface ChatWholeSetSlices {
   readonly queue: unknown;
   readonly pendingApprovals: unknown;
@@ -57,10 +51,8 @@ export function chatWholeSetSliceBytes(slices: ChatWholeSetSlices): number {
 }
 
 /**
- * The legacy (pre-windowed) chat arm's residency: the entire transcript,
- * replaced wholesale on every snapshot. T6 owns that adapter; this is the
- * figure it should settle so the accountant can see an unbounded snapshot
- * as a whole-transcript claim rather than as a silent hole in the budget.
+ * The legacy (pre-windowed) chat arm's residency: the entire transcript, replaced wholesale on
+ * every snapshot.
  */
 export function legacyTranscriptResidencyBytes(
   messages: readonly Message[],
@@ -72,14 +64,7 @@ export function legacyTranscriptResidencyBytes(
   return bytes;
 }
 
-/**
- * One chat session's contribution to the process-wide chat-windows plane.
- *
- * The session (windowed or legacy) remains the authority on WHAT to drop;
- * the book only asks, in LRU order, until the plane is under or everything
- * left is protected. Leased sessions are holders like any other — that is
- * how "leased sessions outside every cap" closes without a registry change.
- */
+/** One chat session's contribution to the process-wide chat-windows plane. */
 export interface ChatWindowBudgetSession {
   readonly holderId: BudgetHolderId;
   /** Recency for eviction order. Higher = hotter. A process-wide counter. */
@@ -173,11 +158,7 @@ export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
   };
 }
 
-/**
- * Evict one window toward a byte target, reporting protection the way the
- * accountant needs. Live records that remain after span eviction are
- * `"tail"`: they have no ordinal, so dropping them is not recoverable.
- */
+/** Evict one window toward a byte target, reporting protection the way the accountant needs. */
 export function evictChatWindowForAccountant(
   window: TranscriptWindow,
   maxBytes: number,

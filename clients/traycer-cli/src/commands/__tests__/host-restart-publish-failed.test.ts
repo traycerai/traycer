@@ -11,21 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Codex P1 #2 (fixed on top of the CLI-014 EXDEV work): `host restart`
-// stops the service, calls `finalizePendingCliUpgrade`, and only
-// relaunches AFTER it returns. Before this fix, a publication failure
-// (full disk, unwritable dir, or - exercised here - a corrupted
-// cross-device copy) threw out of `finalizePendingCliUpgrade`, which
-// propagated past the relaunch call and left the host STOPPED because a
-// bolt-on CLI self-upgrade failed. The fix makes `finalizePendingCliUpgrade`
-// return `{status:"publish-failed", ...}` instead of throwing, so
-// `restartWithPendingCliUpgradeFinalize` always reaches
-// `controller.relaunchAfterRestart(...)`.
-//
-// This drives the FULL `buildHostRestartCommand`, not just the split-out
-// helper (host-restart-finalize.test.ts covers that), specifically to
-// observe the rendered `human` string - `humanForRestart` isn't exported,
-// so going through the command is the only way to see its output.
+// Codex P1 #2 (fixed on top of the CLI-014 EXDEV work): `host restart` stops the service, calls `finalizePendingCliUpgrade`, and only relaunches AFTER it returns.
+// Before this fix, a publication failure (full disk, unwritable dir, or - exercised here - a corrupted cross-device copy) threw out of `finalizePendingCliUpgrade`, which propagated past the relaunch call and left the host STOPPED because a bolt-on CLI self-upgrade failed.
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
@@ -68,9 +55,7 @@ vi.mock("../../service", async (importOriginal) => {
   };
 });
 
-// The attempt-gated relaunch publishes a host-start adoption and waits for
-// the spawn; there is no real service here to spawn anything, so the wait
-// must be stubbed exactly as host-restart.test.ts stubs it.
+// The attempt-gated relaunch publishes a host-start adoption and waits for the spawn; there is no real service here to spawn anything, so the wait must be stubbed exactly as host-restart.test.ts stubs it.
 vi.mock("../../host/host-start-adoption", () => ({
   publishHostStartAdoption: async () => ({
     waitForSpawn: async () => undefined,
@@ -78,11 +63,7 @@ vi.mock("../../host/host-start-adoption", () => ({
   }),
 }));
 
-// Selectively fails `rename` with EXDEV once, and corrupts the
-// destination-side copy `publishAcrossFilesystems` makes - same rig as
-// `cli-upgrade-exdev-publish.test.ts`, reused here to reach the
-// `publish-failed` outcome through the real (unmocked)
-// `finalizePendingCliUpgrade` this restart path calls.
+// Selectively fails `rename` with EXDEV once, and corrupts the destination-side copy `publishAcrossFilesystems` makes - same rig as `cli-upgrade-exdev-publish.test.ts`, reused here to reach the `publish-failed` outcome through the real (unmocked) `finalizePendingCliUpgrade` this restart path calls.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -244,9 +225,7 @@ describe("host restart survives a CLI upgrade publication failure (Codex P1 #2)"
       deferIfParked: false,
     });
 
-    // Must resolve, not reject - this is the regression: before the fix
-    // the publish failure's CliError propagated out of this call and the
-    // relaunch below never ran.
+    // Must resolve, not reject - this is the regression: before the fix the publish failure's CliError propagated out of this call and the relaunch below never ran.
     const result = await command(fakeCtx());
 
     expect(mocks.controllerCalls).toEqual([

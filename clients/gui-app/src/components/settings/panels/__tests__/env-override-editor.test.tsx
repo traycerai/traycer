@@ -106,10 +106,7 @@ describe("EnvOverrideEditor", () => {
       onDelete,
     });
 
-    // Rendering alone must not rewrite the value. The spawned CLI receives it
-    // byte for byte and the providers disagree about what a padded value MEANS
-    // - most treat it as a relative path, a few strip it and call it unset - so
-    // the editor states the consequence and leaves the choice with the user.
+    // Rendering alone must not rewrite the value.
     expect(
       screen.queryByText(/Leading or trailing spaces are part of this value/),
     ).not.toBeNull();

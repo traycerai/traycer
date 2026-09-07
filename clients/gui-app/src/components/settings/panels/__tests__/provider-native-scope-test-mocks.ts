@@ -1,12 +1,4 @@
-/**
- * Shared workspace/host mock state for tabs that call `useProviderNativeScope`
- * (Plugins, Skills, MCP). Each suite still declares its own `vi.mock(...)`
- * factories (Vitest hoists those to the file that contains them) and reads
- * these mutable bags from the factories.
- *
- * Mirrors the shape exercised by `provider-mcp-tab.test.tsx` so project-scope
- * picker + listWorkspaceRoot tests stay consistent across domains.
- */
+/** Shared workspace/host mock state for tabs that call `useProviderNativeScope` (Plugins, Skills, MCP). */
 export const nativeScopeWorktreeMocks = {
   workspaces: [] as Array<{
     workspacePath: string;
@@ -55,11 +47,8 @@ export function resetNativeScopeTestMocks(): void {
   nativeScopeFolderActionMocks.isPreparing = false;
 }
 
-/**
- * Default return shape for suites that only need the Global locked path and
- * do not exercise the real scope picker. Avoids pulling host/QueryClient into
- * icon/detail/composer tests that never switch scope.
- */
+/** Default return shape for suites that only need the Global locked path and do not exercise the real scope
+ * picker. Avoids pulling host/QueryClient into icon/detail/composer tests that never switch scope. */
 export const GLOBAL_ONLY_NATIVE_SCOPE = {
   hostId: "host-1",
   targets: [] as const,

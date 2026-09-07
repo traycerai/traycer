@@ -14,9 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startLogTail, type LogTail } from "../log-tail";
 
 // The `tail -f` follower behind `host logs --follow` (see the module doc).
-// Exercised against a REAL file: the whole point of the module is the
-// rotation/offset arithmetic around real fs semantics, which a mocked fs
-// would not prove.
+// Exercised against a REAL file: the whole point of the module is the rotation/offset arithmetic around real fs semantics, which a mocked fs would not prove.
 
 const POLL_INTERVAL_MS = 20;
 
@@ -142,18 +140,12 @@ describe("startLogTail", () => {
     writeFileSync(logPath, "short\n");
     await waitFor(() => text().includes("short"), 3_000);
 
-    // "short" (6 bytes) is well below the pre-rotation offset (~40 bytes) -
-    // it is only reachable if size < offset reset the read position to 0,
-    // rather than the follower stalling forever waiting for the file to grow
-    // past an offset the new, smaller file can never reach.
+    // "short" (6 bytes) is well below the pre-rotation offset (~40 bytes) - it is only reachable if size < offset reset the read position to 0, rather than the follower stalling forever waiting for the file to grow past an offset the new, smaller file can never reach.
     expect(text()).toBe(`${beforeRotation}short\n`);
   });
 
-  // The window BEFORE the first poll: recording only the size at construction
-  // left the identity and continuity unknown, so a file rewritten IN PLACE
-  // before any poll had no signal at all and resumed at the old offset. Same
-  // inode by construction, and longer than the starting offset, so only the
-  // continuity seeded at construction can catch it.
+  // The window BEFORE the first poll: recording only the size at construction left the identity and continuity unknown, so a file rewritten IN PLACE before any poll had no signal at all and resumed at the old offset.
+  // Same inode by construction, and longer than the starting offset, so only the continuity seeded at construction can catch it.
   it("re-reads an in-place rewrite that landed before the first poll", async () => {
     writeFileSync(logPath, `${"o".repeat(200)}\n`);
     const { onBytes, text } = collector();
@@ -172,13 +164,8 @@ describe("startLogTail", () => {
     expect(text()).toBe(replacement);
   });
 
-  // A size-only "is this still the same file?" check is not enough. Consume N
-  // bytes, lose the file to a rotation, and come back to a REPLACEMENT that is
-  // already past N bytes: size > offset reads as an ordinary append and the
-  // follower resumes at N, silently eating the new file's first N bytes. That
-  // is reachable whenever the log is rotated under a live follower and the
-  // host is reinstalled promptly. Identity (inode, or a confirmed ENOENT) is
-  // what distinguishes it.
+  // A size-only "is this still the same file?" check is not enough.
+  // Consume N bytes, lose the file to a rotation, and come back to a REPLACEMENT that is already past N bytes: size > offset reads as an ordinary append and the follower resumes at N, silently eating the new file's first N bytes.
   it("re-reads a replacement from the top even when it is already LONGER than the consumed offset", async () => {
     const head = `${"a".repeat(120)}\n`;
     writeFileSync(logPath, "");
@@ -207,10 +194,8 @@ describe("startLogTail", () => {
     expect(text()).toBe(`${head}${replacement}`);
   });
 
-  // `host.log` is unbounded within a host's lifetime and is written by another
-  // process, so sizing one allocation off `size - offset` lets that process
-  // decide how much memory this one commits. A follower left attached for a
-  // long time, or resuming after any gap, could allocate gigabytes.
+  // `host.log` is unbounded within a host's lifetime and is written by another process, so sizing one allocation off `size - offset` lets that process decide how much memory this one commits.
+  // A follower left attached for a long time, or resuming after any gap, could allocate gigabytes.
   it("bounds a single poll's read and still delivers the whole backlog across ticks", async () => {
     writeFileSync(logPath, "");
     const { onBytes, chunks, text } = collector();
@@ -236,13 +221,8 @@ describe("startLogTail", () => {
     }
   });
 
-  // Inode comparison is NOT sufficient, and this is the case that proves it:
-  // the content is replaced in place, so `ino` is unchanged and the new file is
-  // longer than the consumed offset. `unlink` + create hits the same shape
-  // whenever the allocator hands back the just-freed inode - which is exactly
-  // how this was caught, with the identity-only version passing locally and
-  // failing in CI. The continuity check (are the bytes we already read still
-  // where we read them?) is what actually decides it.
+  // Inode comparison is NOT sufficient, and this is the case that proves it: the content is replaced in place, so `ino` is unchanged and the new file is longer than the consumed offset.
+  // `unlink` + create hits the same shape whenever the allocator hands back the just-freed inode - which is exactly how this was caught, with the identity-only version passing locally and failing in CI.
   it("re-reads when the content changed under an UNCHANGED inode", async () => {
     writeFileSync(logPath, "");
     const { onBytes, text } = collector();
@@ -266,12 +246,8 @@ describe("startLogTail", () => {
     expect(text()).toBe(`${original}${replacement}`);
   });
 
-  // The `unreadable` start branch: a construction-time stat that fails for a
-  // reason OTHER than absence must not be read as "the file is empty". These
-  // pin both halves of that state - EOF is adopted on the first readable
-  // observation (no replay), and continuity is seeded then too (no dropped
-  // prefix one observation later). `chmod 000` is the portable way to make a
-  // real file unreadable; skipped when the test user can read anything.
+  // The `unreadable` start branch: a construction-time stat that fails for a reason OTHER than absence must not be read as "the file is empty".
+  // These pin both halves of that state - EOF is adopted on the first readable observation (no replay), and continuity is seeded then too (no dropped prefix one observation later).
   const canDenyReads = (() => {
     try {
       const probe = join(tmpdir(), `traycer-log-tail-perm-${process.pid}`);
@@ -307,9 +283,7 @@ describe("startLogTail", () => {
         maxMissingRetries: 60,
       });
 
-      // Let the first readable poll adopt EOF before anything new is written -
-      // content that lands BEFORE that observation is deliberately not
-      // emitted, which is what "establish EOF" means.
+      // Let the first readable poll adopt EOF before anything new is written - content that lands BEFORE that observation is deliberately not emitted, which is what "establish EOF" means.
       chmodSync(logPath, 0o600);
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
       appendFileSync(logPath, "after-readable\n");
@@ -378,15 +352,8 @@ describe("startLogTail", () => {
     },
   );
 
-  // `stop()` can land while a tick is inside open/stat/read/close, past its
-  // only entry check. Emitting then breaks the documented guarantee, lets
-  // `host logs --follow` keep writing after its signal cleanup resolved, and
-  // can race the foreground console's synchronous drain.
-  //
-  // Written to be deterministic rather than to hit the window by luck: once
-  // ticks are demonstrably running, the append and the stop happen in the same
-  // synchronous block, so nothing can be emitted between them - whatever the
-  // in-flight tick was doing, its delivery must be suppressed.
+  // `stop()` can land while a tick is inside open/stat/read/close, past its only entry check.
+  // Emitting then breaks the documented guarantee, lets `host logs --follow` keep writing after its signal cleanup resolved, and can race the foreground console's synchronous drain.
   it("emits nothing after stop(), including from a read already in flight", async () => {
     writeFileSync(logPath, "");
     const { chunks, onBytes, text } = collector();

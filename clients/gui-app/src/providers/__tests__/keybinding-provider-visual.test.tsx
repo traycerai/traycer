@@ -106,10 +106,8 @@ function renderProbeWithExtra(
 function buildMutableRouterSource(
   initialPathname: string,
 ): MutableRouterSource {
-  // A real (unbranded) memory history so the source satisfies the widened
-  // `KeybindingRouterSource.history: RouterHistory`. Carrying no controller
-  // brand keeps in-app history nav inert here, which these leader-hint tests
-  // do not exercise.
+  // Unbranded memory history. In-app history nav stays inert; these tests
+  // do not exercise it.
   const history = createMemoryHistory({
     initialEntries: [normalizeProbeRoute(initialPathname)],
   });
@@ -213,10 +211,8 @@ function PickerReasoningScopeProbe(props: {
   return null;
 }
 
-// Registers the model-picker leader scope AND renders the real badge consumers
-// (`usePickerProviderLeaderForIndex` / `usePickerReasoningLeaderForIndex` /
-// `usePickerProfileLeaderForIndex`) so a test can assert exactly which surface
-// lights up, not just the raw leader state.
+// Register picker leader scope and render real badge consumers so tests
+// assert which surface lights, not just raw leader state.
 function PickerBadgeProbe(props: {
   readonly reasoningActionable: boolean;
   readonly profiles: ReadonlyArray<ProviderProfile>;
@@ -1037,10 +1033,8 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     });
     advance(LEADER_HINT_DELAY_MS);
 
-    // Profile (⌘⇧) badges light up; rail (⌘) and reasoning (⌥) badges stay
-    // hidden even though the same picker scope owns all three dimensions -
-    // this is the shifted hint pass `resolveLeaderOwner` used to skip
-    // entirely.
+    // Shifted hold lights profile badges only, even if the picker owns all
+    // three dimensions.
     expect(pickerProbe().getAttribute("data-profile-leader")).toBe("modShift");
     expect(pickerProbe().getAttribute("data-provider-leader")).toBe("");
     expect(pickerProbe().getAttribute("data-reasoning-leader")).toBe("");
@@ -1101,10 +1095,8 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
   });
 
-  // A pending shifted session must be spent at the moment its owner is lost.
-  // If profiles drop 2→1 and return to 2 before the original 300ms timer, the
-  // hold has already crossed an ownerless state and must not revive on the
-  // stale timer - only a fresh hold after releasing leaders may show again.
+  // Spend a pending shifted session when its owner is lost. A stale timer
+  // must not revive after profiles drop and return.
   it("keeps a pending Cmd+Shift session spent across owner loss and restore before the delay", () => {
     const router = createAppRouter("/epics/e1", null);
     const twoProfiles = [

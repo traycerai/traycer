@@ -22,32 +22,19 @@ import {
 } from "@/components/diff/bundle-diff-find-registration-hooks";
 
 /**
- * How a PR diff tile's file sections get their patch bytes, as far as the
- * find session cares: `split` sections fetch on mount, `monolith` sections
- * read from a whole-PR response that was fetched once (old-host fallback).
+ * How a PR diff tile's file sections get their patch bytes, as far as the find session cares: `split` sections fetch on mount, `monolith` sections read from a whole-PR response that was fetched once (old-host fallback).
  */
 export type PrBundleDiffFindPatchMode = "split" | "monolith";
 
-// Stable identity for a PR range-diff file within the find index. Shared by
-// the session (coverage / loaded-patch registration) and the section renderer
-// (`data-bundle-diff-file-id`, `notifySectionMounted`) so reveal targets the
-// same file id the index was built with. Keyed on the CANONICAL file key
-// because that is the list's row identity too (`computeItemKey`): a range
-// diff names each destination once, and a rename's previous side is a
-// property of the row, not a second row - but the lossy `path` alone is NOT
-// unique when two byte paths replace to the same string.
+// Stable identity for a PR range-diff file within the find index.
+// Shared by the session (coverage / loaded-patch registration) and the section renderer (`data-bundle-diff-file-id`, `notifySectionMounted`) so reveal targets the same file id the index was built with.
 export function prBundleDiffFindFileId(file: PrLocalDiffViewFile): string {
   return `pr:${prLocalDiffFileKey(file)}`;
 }
 
 /**
- * Cache key for a loaded patch registered against the PR find session:
- * OID-addressed through `comparisonKey` (the summary's `mergeBase..head`, or
- * the monolith's), plus everything else that changes the bytes - the
- * whitespace mode, the path pair, and whether the per-file byte budget cut
- * the patch. Two different patches must never share a key, since the index
- * treats an unchanged key as an unchanged patch. JSON-encoded so a path can
- * never collide with a neighbouring field.
+ * Two different patches must never share a key, since the index treats an unchanged key as an unchanged patch.
+ * JSON-encoded so a path can never collide with a neighbouring field.
  */
 export function prBundleLoadedPatchCacheKey(args: {
   readonly comparisonKey: string;
@@ -70,13 +57,8 @@ export function prBundleLoadedPatchCacheKey(args: {
 }
 
 /**
- * The coverage a file starts at before its section ever mounts. Terminal
- * states first - a binary file, or a monolith file the whole-PR byte budget
- * never reached, cannot become searchable by expanding or scrolling - then the
- * two states a reveal CAN clear (expand, then mount-and-fetch), then the
- * guarded one: a large file's content stays unsearched until its "Load diff"
- * is pressed, exactly as the Git bundle keeps its large rows out of the index
- * (see `gitBundleDiffFindCoverageState`).
+ * The coverage a file starts at before its section ever mounts.
+ * Terminal states first - a binary file, or a monolith file the whole-PR byte budget never reached, cannot become searchable by expanding or scrolling - then the two states a reveal CAN clear (expand, then mount-and-fetch), then the guarded one: a large file's content stays unsearched until its "Load diff" is pressed, exactly as the Git bundle keeps its large rows out of the index (see `gitBundleDiffFindCoverageState`).
  */
 function prBundleDiffFindCoverageState(args: {
   readonly file: PrLocalDiffViewFile;
@@ -130,11 +112,7 @@ function prBundleDiffFindFileInput(args: {
 }
 
 /**
- * The find session's content identity: a new comparison (the checkout moved,
- * a whitespace flip), a different data plumbing (split ↔ monolith after a
- * mid-session capability change) or a different file list opens a fresh
- * session, dropping the loaded patches and coverage of the old one - they
- * described bytes the tile no longer shows.
+ * The find session's content identity: a new comparison (the checkout moved, a whitespace flip), a different data plumbing (split ↔ monolith after a mid-session capability change) or a different file list opens a fresh session, dropping the loaded patches and coverage of the old one - they described bytes the tile no longer shows.
  */
 function prBundleDiffFindContentIdentity(args: {
   readonly comparisonKey: string;
@@ -161,19 +139,7 @@ function prBundleDiffFindContentIdentity(args: {
 }
 
 /**
- * Owns the PR diff tile's bundle find session: file-input construction,
- * content identity, collapsed-file expansion, navigation, and adapter
- * registration - `useGitBundleDiffFind` for the PR range diff. The renderer
- * stays responsible only for the file list, scroll restoration, and composing
- * the result into the virtualized tree; sections register their coverage and
- * loaded patches through the returned context value.
- *
- * Both patch modes share this one session, so what "searchable" means is the
- * same in split and fallback mode: file metadata for every file up front,
- * plus every patch a mounted section has rendered - retained after the row
- * virtualizes away. Reveal scrolls the list to the target row (mounting it,
- * which in split mode issues its fetch) and expands a collapsed one; the
- * coverage message names the files that were not searched.
+ * The renderer stays responsible only for the file list, scroll restoration, and composing the result into the virtualized tree; sections register their coverage and loaded patches through the returned context value.
  */
 export function usePrBundleDiffFind(args: {
   readonly node: PrDiffTileRef;
@@ -202,11 +168,7 @@ export function usePrBundleDiffFind(args: {
   } = args;
   const nodeId = node.id;
   const nodeView = node.view;
-  // Collapse membership goes through the SAME predicate the row chevron and
-  // the toolbar's collapse-all use (`isPrLocalDiffFileCollapsed`), so find
-  // coverage, reveal-expand and the visible chevrons can never disagree
-  // about what "collapsed" means. Monolith patch lookups stay on the lossy
-  // `path` - that map came from a source whose identity IS the lossy string.
+  // Collapse membership goes through the SAME predicate the row chevron and the toolbar's collapse-all use (`isPrLocalDiffFileCollapsed`), so find coverage, reveal-expand and the visible chevrons can never disagree about what "collapsed" means.
   const collapsedFileKeys = nodeView.collapsedFileKeys;
 
   const bundleFindFiles = useMemo(

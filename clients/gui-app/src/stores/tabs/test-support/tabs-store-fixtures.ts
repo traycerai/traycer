@@ -1,14 +1,7 @@
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 
-/**
- * Shared tabs-store seeds for tests.
- *
- * The versioned `setState` shape is the layout contract, so restating it per
- * test file means every future field has to be added in each copy - and a copy
- * that is missed keeps compiling while seeding a layout the store no longer
- * produces.
- */
+/** Shared tabs-store seeds for tests. */
 export function resetTabsStoreForTest(): void {
   useTabsStore.setState({
     version: 2,

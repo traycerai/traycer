@@ -139,9 +139,8 @@ describe("parseHostVersionsManifest", () => {
   });
 
   it("throws when latest names a malformed entry and NO other usable version remains", () => {
-    // The only version entry is the one `latest` points at, and it is
-    // malformed (skip-and-warn drops it), leaving zero usable versions. With
-    // nothing to fall back to this is a genuine top-level failure.
+    // The only version entry is the one `latest` points at, and it is malformed (skip-and-warn drops it), leaving zero usable versions.
+    // With nothing to fall back to this is a genuine top-level failure.
     const bad = {
       schemaVersion: 1,
       generatedAt: "2026-06-01T00:00:00Z",
@@ -164,11 +163,8 @@ describe("parseHostVersionsManifest", () => {
   });
 
   it("falls back (does NOT brick) when latest names a malformed entry but other versions survive", () => {
-    // Forward-compat: a newer host wrote the `latest` entry in a shape this
-    // CLI can't parse, so skip-and-warn drops it - but older, parseable
-    // versions remain. The parser must NOT hard-fail the whole manifest (which
-    // would brick every install path on a single bad entry); it repoints
-    // `latest` to the newest surviving non-yanked version and warns.
+    // Forward-compat: a newer host wrote the `latest` entry in a shape this CLI can't parse, so skip-and-warn drops it - but older, parseable versions remain.
+    // The parser must NOT hard-fail the whole manifest (which would brick every install path on a single bad entry); it repoints `latest` to the newest surviving non-yanked version and warns.
     const mixed = JSON.parse(JSON.stringify(VALID_MANIFEST));
     mixed.latest = "2.0.0-beta.1";
     mixed.versions.unshift({

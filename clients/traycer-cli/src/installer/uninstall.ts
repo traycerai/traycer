@@ -15,25 +15,12 @@ import {
 import { legacyMutationVerifier } from "./aside-dirs";
 import { sweepOldTrash } from "./install";
 
-// Uninstall the installed host directory for a single environment. Always
-// removes the install dir + record, AND the staged dir alongside it (Tech
-// Plan, "host uninstall ... removes staged/ alongside install/") - a
-// staged-but-not-yet-applied update has nothing left to apply to once the
-// host it was staged against is gone. Both `host uninstall` and
-// `host uninstall --all` route through this function, so both modes get
-// the removal. Runtime state (pid metadata, log) is preserved unless
-// `purgeChannelRuntime` is set. User data under ~/.traycer/ (chats,
-// sqlite, snapshots, credentials, downloaded models + provider binaries)
-// is NEVER removed - there is intentionally no "purge user data" path.
-// The OS service registration is NOT touched here - the caller decides
-// whether to follow up with a service-uninstall (the `--all` flag flow).
+// Uninstall the installed host directory for a single environment.
+// Always removes the install dir + record, AND the staged dir alongside it (Tech Plan, "host uninstall ... removes staged/ alongside install/") - a staged-but-not-yet-applied update has nothing left to apply to once the host it was staged against is gone.
 export interface UninstallHostOptions {
   readonly environment: Environment;
   readonly purgeChannelRuntime: boolean;
-  /**
-   * Every destructive edge receives an explicit verifier. Legacy callers
-   * use the named `legacyMutationVerifier`, never a nullable omission.
-   */
+  /** Every destructive edge receives an explicit verifier. Legacy callers use the named `legacyMutationVerifier`, never a nullable omission. */
   readonly verifyMutationCapability: () => Promise<void>;
 }
 
@@ -122,11 +109,7 @@ export async function uninstallHost(
     verify,
   );
 
-  // A staged update has nothing left to apply to once the host it was
-  // staged against is gone - remove `staged/` (and its own `.old-*`
-  // litter, the identical trash convention `install/` uses, keyed by its
-  // own `staged.json` sidecar) alongside `install/` rather than leaving
-  // it to be silently swept by the next install/apply's reconcile pass.
+  // A staged update has nothing left to apply to once the host it was staged against is gone - remove `staged/` (and its own `.old-*` litter, the identical trash convention `install/` uses, keyed by its own `staged.json` sidecar) alongside `install/` rather than leaving it to be silently swept by the next install/apply's reconcile pass.
   let removedStagedDir = false;
   await verify();
   try {
@@ -152,16 +135,8 @@ export async function uninstallHost(
 
   let purgedRuntime = false;
   if (opts.purgeChannelRuntime) {
-    // Clear pid metadata + log + any other environment-scoped runtime
-    // state. We don't blow away ~/.traycer/host/ wholesale because
-    // the dev environment's install lives under it.
-    //
-    // The log is ROTATED, not deleted. `make dev-desktop` runs
-    // `host uninstall --all` on every Ctrl-C teardown, so deleting here meant
-    // the session you most wanted to investigate was routinely gone before you
-    // could read it. Rotating still clears the live log (a purge that leaves an
-    // orphan behind is its own surprise) while keeping one generation, and it
-    // cannot accumulate.
+    // Clear pid metadata + log + any other environment-scoped runtime state.
+    // We don't blow away ~/.traycer/host/ wholesale because the dev environment's install lives under it.
     await removeHostPidMetadataForPurgeWithVerifier(
       opts.environment,
       logger,

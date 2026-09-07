@@ -15,11 +15,8 @@ export function PreventSleepSettingsSection(): ReactNode {
       })),
     );
 
-  // The only consumer of this setting is `PreventSleepController`, which holds
-  // an OS power-save blocker through the desktop power bridge -
-  // `resolveDesktopPowerBridge` returns null in the mobile app, so the toggle
-  // would persist a preference nothing can act on and the device would sleep
-  // anyway. Hide it there.
+  // The only consumer of this setting is `PreventSleepController`, which holds an OS power-save blocker through
+  // the desktop power bridge.
   if (isMobileApp()) return null;
 
   return (

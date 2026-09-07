@@ -71,84 +71,8 @@ import {
 } from "../store/paths";
 import type { CliInvocation } from "./cli-binary";
 
-// OSS CLI writer for the host-owned invocation record. Schema, filenames,
-// and the cache-bypass contract live in `@traycer/protocol/config` so the
-// host reader cannot drift; this module owns the staged-record /
-// transaction-marker protocol around service registration and uninstall.
-//
-// Ordering (registration):
-//   1. create a unique contender `cli-invocation.txn.<token>` (`wx`) and
-//      become owner only as the sole remaining live marker. Abandoned unique
-//      contenders are elected AROUND and left on disk: each may belong to an
-//      owner that mutated the OS before it could commit, and its marker is
-//      what keeps a host off the pre-mutation record until a fresh lifecycle
-//      generation exists
-//   2. write a unique staging file named in that marker
-//   3. mutate the OS registration
-//   4. on confirmed OS success, rename *this owner's* staging over the live
-//      record, write a fresh lifecycle generation, clear an earlier stale
-//      marker, sweep the abandoned residue from step 1, release this owner's
-//      marker. Every one of those removals is compare-then-unlink and
-//      CONFIRMED: a marker that survives is reported (`stale-clear`,
-//      `release`), because it keeps the committed record bypassed
-//   5. on commit failure, mark stale and unlink the live file so an older
-//      invocation cannot stay preferred, then fail the registration
-//   6. on OS throw, ALSO mark stale and unlink the live file. The platform
-//      controllers do not roll back: launchd `bootstrap` succeeds before
-//      `kickstart` fails, `schtasks /Create` before `/Run` - so the previous
-//      record may describe a registration that no longer exists. The stale
-//      marker sends the host to the OS definition, which is the source of
-//      truth in either outcome
-//   7. on lifecycle-generation failure, mark stale but KEEP the live record:
-//      the record and the OS agree, but a host that re-keys on the old
-//      generation once this owner's marker is gone would replay a
-//      pre-registration answer. The stale marker survives this process and
-//      bypasses the record until the next confirmed CLI transaction clears
-//      it
-//
-// Uninstall contends for the same unique-marker election, so it cannot
-// delete an in-flight install's sidecars. It removes the live record only
-// after the OS uninstall resolves and only when that record carries its own
-// label. The removal is strict: a record that survives (or cannot be read)
-// is marked stale so it cannot be preferred, and the uninstall is reported
-// as failed. A throw from the OS uninstall is handled like a throw from the
-// OS registration: the backend may have deleted the service before the step
-// that threw, so the own-label record is marked stale and removed and the
-// host re-reads the OS definition.
-//
-// Authority reads distinguish an UNREADABLE file (a lock, a permission
-// error) from an absent one and fail closed on it: an unreadable marker
-// still blocks the election (aged out by the usual window), an unreadable
-// record cannot be confirmed removed, an unreadable stale marker cannot be
-// reported cleared.
-//
-// Unparseable txn files use the shared
-// `CLI_INVOCATION_TXN_ABANDON_AFTER_MS` age window, the same bound the
-// host uses. A still-alive parsed owner is never abandoned by age.
-// Dead unique files may be unlinked by anyone: the path is never reused,
-// so that unlink cannot delete a different live owner's marker. The
-// legacy exact `cli-invocation.txn` path is never created, unlinked, or
-// renamed onto: a live exact marker blocks election; an abandoned one
-// is nonblocking residue left on disk.
-//
-// The state child is gated with `O_DIRECTORY|O_NOFOLLOW` (symlinks
-// rejected) and its `dev`/`ino` is re-checked before each write group.
-// Creates exclusive-open then `fchmod` the handle; replacement is
-// rename of that inode (live mode travels with the temp). Every
-// operation below the gate is by pathname - Node has no `openat` family -
-// so a post-gate swap of the child under a group-writable parent can
-// redirect a create, a rename, or an unlink into a directory the attacker
-// chose. What that buys is bounded and stated in the protocol module's
-// header: creates make NEW fixed-basename 0600 files; a redirected record
-// rename lands a record whose label that directory's reader rejects; and
-// every unlink is compare-then-remove (live record by label, stale marker
-// by label, everything else by a per-transaction token), so no other
-// directory's file is removed. No existing file is truncated, written
-// through, or chmod'd through a pathname. Authority reads (markers, live
-// record, compare-before-unlink) use O_NOFOLLOW: a symlink at a marker
-// basename is skipped, not treated as live — a genuine marker is never a
-// symlink (`wx`), and counting one as live would let a parent-writer
-// suppress registration with one link.
+// OSS writer for the host-owned invocation record. Schema lives in `@traycer/protocol/config`.
+// Unreadable markers fail closed. Unlinks are compare-then-remove. Abandoned unique txn markers stay on disk.
 
 const NODE_FAMILY_BASENAMES: ReadonlySet<string> = new Set([
   "node",
@@ -157,33 +81,7 @@ const NODE_FAMILY_BASENAMES: ReadonlySet<string> = new Set([
   "bun.exe",
 ]);
 
-/**
- * Did the OS registration inside `runServiceRegistrationWithInvocationRecord`
- * succeed before this error was thrown?
- *
- * The record commit, the lifecycle write and the stale-marker clear all run
- * AFTER the service manager has accepted the registration and started
- * launching the supervisor. A caller holding a host-start adoption lease must
- * therefore treat such an error differently from an OS failure: the
- * supervisor is already coming up and will present the lease, so the lease
- * has to be honoured (waited for) before the error is surfaced, or a
- * successfully registered service is left without its host.
- *
- * The OS backends answer the same question for their own partial failures,
- * and the register-throw branch above rethrows their error unchanged so the
- * flag travels: macOS `kickstart` after a successful `bootstrap`, Windows
- * `/Run` and the spawn-evidence wait after a successful `/Create`. Linux
- * rolls a failed `enable --now` back (disable, unit removed) and so does not
- * set it.
- *
- * Two carriers, because the answer is independent of the error's TYPE. A
- * `CliError` carries it as `details.registrationCommitted`. A mutation
- * authority failure thrown from the same post-registration step is not a
- * `CliError` and must keep its own identity (callers classify it by
- * `isServiceMutationAuthorityError`, and wrapping it would turn a hard stop
- * into an ordinary failure), so it is marked by reference instead:
- * {@link markRegistrationCommitted}.
- */
+/** True when the OS accepted the registration before this error. Mutation-authority failures keep their identity via {@link markRegistrationCommitted}. */
 export function didServiceRegistrationCommit(error: unknown): boolean {
   if (typeof error === "object" && error !== null) {
     if (committedRegistrationFailures.has(error)) return true;
@@ -192,11 +90,7 @@ export function didServiceRegistrationCommit(error: unknown): boolean {
   return error.details?.registrationCommitted === true;
 }
 
-/**
- * Mark an error thrown AFTER the service manager accepted the registration,
- * without changing its type or identity. Returns the same object so it can be
- * rethrown in place: `throw markRegistrationCommitted(cause)`.
- */
+/** Mark without changing type or identity. */
 export function markRegistrationCommitted<T>(error: T): T {
   if (typeof error === "object" && error !== null) {
     committedRegistrationFailures.add(error);
@@ -208,9 +102,7 @@ const committedRegistrationFailures = new WeakSet<object>();
 
 export interface ServiceRegistrationRecordOptions {
   readonly environment: Environment;
-  // Already-resolved host runtime home (CLI `hostHomeDir(environment)`,
-  // including slotted `dev-runs/<slot>`). Never reconstructed from
-  // `~/.traycer` here — same parameterization as the protocol path helpers.
+  // Already-resolved host runtime home, including slotted `dev-runs/<slot>`. Never reconstructed from `~/.traycer` here.
   readonly hostHomeDir: string;
   readonly serviceLabel: string;
   readonly cli: CliInvocation;
@@ -219,7 +111,6 @@ export interface ServiceRegistrationRecordOptions {
   readonly pollIntervalMs: number;
 }
 
-/** What every record transaction on the removal side is keyed on. */
 export interface ServiceRemovalRecordContext {
   readonly environment: Environment;
   readonly hostHomeDir: string;
@@ -235,22 +126,10 @@ export interface ServiceUninstallRecordOptions extends ServiceRemovalRecordConte
 export interface ServiceRemovalRecordOptions<
   T,
 > extends ServiceRemovalRecordContext {
-  /**
-   * What `remove` did to the service, as the operator reads it in a failure
-   * message: the uninstall path is `uninstalled`, the competing-registration
-   * repair is `retired`. Every message below describes a service that was
-   * already taken away when the record step failed, so the noun has to be
-   * the operation that took it.
-   */
+  /** Failure-message noun: uninstall path is `uninstalled`, competing-registration repair is `retired`. */
   readonly operation: "uninstalled" | "retired";
-  /** The OS operation, run inside the transaction. */
   readonly remove: () => Promise<T>;
-  /**
-   * Did `remove` take this label's registration away, wholly or in part? True
-   * invalidates the record exactly as an uninstall does; false leaves it as it
-   * was. A partial removal counts as removed: a record of a half-retired
-   * registration is as wrong as one of a deleted registration.
-   */
+  /** True invalidates the record as uninstall does. A partial removal counts as removed. */
   readonly removed: (result: T) => boolean;
   readonly waitMs: number;
   readonly pollIntervalMs: number;
@@ -266,11 +145,7 @@ export type CliInvocationTxnObservePause = () => Promise<void>;
 
 let observePauseForTest: CliInvocationTxnObservePause | null = null;
 
-/**
- * Test-only acquire interleaving. Production never calls this. Pass
- * `null` to restore the no-op. Returns the previous hook so tests can
- * save/restore symmetrically.
- */
+/** Test-only acquire interleaving. Production never calls this. */
 export function __setCliInvocationTxnObservePauseForTest(
   next: CliInvocationTxnObservePause | null,
 ): CliInvocationTxnObservePause | null {
@@ -309,11 +184,7 @@ export function __setCliInvocationPauseAfterExclusiveCreateForTest(
   return previous;
 }
 
-/**
- * `cause` is whatever the state-directory check threw. Its errno code is
- * carried in `details` so a plain `EACCES` or `ENOSPC` is diagnosable from a
- * support report; `null` when the rejection was ours (an identity mismatch).
- */
+/** `details` carries the thrown errno; `null` when the rejection was an identity mismatch. */
 function stateDirUnsafeError(
   serviceLabel: string,
   operation: CliInvocationTransactionOperation,
@@ -447,12 +318,7 @@ export async function runServiceRegistrationWithInvocationRecord(
   try {
     await options.register();
   } catch (cause) {
-    // Not a rollback. The controllers mutate the OS in more than one step
-    // (write + `bootstrap` + `kickstart`; `/Create` + `/Run`), and a throw
-    // from a later step leaves the earlier ones in place - so the OS may now
-    // describe THIS registration while the live record still describes the
-    // previous one. Neither can be preferred over the OS definition, and the
-    // stale marker is what sends the host there.
+    // Not a rollback: later-step throws leave earlier OS mutations in place, so the stale marker sends the host to the OS definition.
     logger.debug("OS registration threw; marking the cached invocation stale", {
       environment: options.environment,
       label: options.serviceLabel,
@@ -509,15 +375,7 @@ export async function runServiceRegistrationWithInvocationRecord(
         errorName: errorFromUnknown(cause).name,
       },
     );
-    // The record is committed and correct, so it stays. What is missing is
-    // the generation, and without it a host that latched an answer under
-    // the OLD generation would serve it again the moment this owner's
-    // transaction marker is gone (an abandoned unique marker is swept by the
-    // next CONFIRMED CLI transaction, and nothing else in the key would have
-    // moved). The stale marker is the durable substitute: it outlives this
-    // process, bypasses the record on every read, and is cleared only by a
-    // later confirmed transaction - which writes the generation this one
-    // could not.
+    // Record stays; stale marker is the durable substitute until a later confirmed transaction writes the generation.
     await markStaleKeepLive(held);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -538,12 +396,7 @@ export async function runServiceRegistrationWithInvocationRecord(
       "install",
     );
   } catch (cause) {
-    // Post-registration like the two throws above it: the service manager has
-    // the registration and the record and generation are committed, so the
-    // adoption lease must still be honoured. Nothing is marked here - the
-    // directory this transaction validated is no longer the one at the path,
-    // and a marker written into whatever replaced it would bypass nothing of
-    // ours. The retained transaction marker is what outlives this process.
+    // Post-registration: honour the adoption lease. Do not write a marker into a directory that is no longer ours.
     logger.debug(
       "CLI invocation state directory changed after the lifecycle write",
       {
@@ -564,16 +417,9 @@ export async function runServiceRegistrationWithInvocationRecord(
       exitCode: 1,
     });
   }
-  // Clear an earlier commit failure's stale marker BEFORE releasing, and
-  // report a marker that survives: the record just committed is authoritative,
-  // and a stale marker beside it keeps every host read on the OS definition
-  // until some later CLI transaction succeeds at this step. Silence here would
-  // report a registration as clean while npm/nvm maintenance stays degraded.
+  // Clear an earlier stale marker before releasing; report a survivor so a clean install cannot leave hosts on the OS definition.
   const staleOutcome = await removeStaleMarkerIfOwn(held);
-  // Same rule for every marker that would keep bypassing the record just
-  // committed: the abandoned contenders this owner elected around (safe to
-  // remove now that the generation is written) and this owner's own marker.
-  // Each is confirmed gone or reported; none is best-effort on a success path.
+  // Abandoned residue and this owner's marker: confirmed gone or reported; never best-effort on a success path.
   const residue = await sweepAbandonedResidue(held);
   const release = await releaseOwnedTransaction(held);
   if (staleOutcome === "failed" || staleOutcome === "foreign") {
@@ -626,17 +472,7 @@ export async function runServiceUninstallWithInvocationRecord(
   });
 }
 
-/**
- * Run an OS operation that may remove this label's registration inside the
- * record transaction, and invalidate the record exactly when it did.
- *
- * `uninstall` is the unconditional case (`removed` is always true). The
- * competing-registration repair is the conditional one: it re-probes
- * ownership itself and only sometimes boots the CLI label out, and the record
- * of a registration that was retired - or half-retired - must not outlive it
- * any more than after an uninstall. A result that removed nothing releases the
- * transaction and leaves the record exactly as it was.
- */
+/** Invalidate the record exactly when `remove` took this label away, wholly or in part. */
 export async function runServiceRemovalWithInvocationRecord<T>(
   options: ServiceRemovalRecordOptions<T>,
 ): Promise<T> {
@@ -658,12 +494,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
   try {
     result = await options.remove();
   } catch (cause) {
-    // Same reasoning as the registration path: the backend may have removed
-    // the service before the step that threw (`schtasks /Delete` runs before
-    // the authority check and the launcher removal), so the live record may
-    // describe a service that no longer exists. It is marked stale and
-    // removed after its label matched; the host re-reads the OS definition,
-    // which is the truth whether or not the deletion happened.
+    // Backend may have removed the service before the throw, so unprefer the live record.
     logger.debug("OS uninstall threw; marking the cached invocation stale", {
       environment: options.environment,
       label: options.serviceLabel,
@@ -673,20 +504,14 @@ export async function runServiceRemovalWithInvocationRecord<T>(
     throw cause;
   }
   if (!options.removed(result)) {
-    // Nothing was removed, so the record still describes a registration that
-    // exists. Only this owner's marker has to go - and CONFIRMED, since a
-    // retained marker would keep every host read off that intact record.
+    // Nothing removed: only this owner's marker has to go, and confirmed.
     reportRetainedRelease(
       await releaseOwnedTransaction(held),
       options.serviceLabel,
     );
     return result;
   }
-  // Identity BEFORE the label read, so every classification below - foreign
-  // included - is of the record in the directory this transaction validated.
-  // A directory swapped in after the uninstall would otherwise present some
-  // other environment's record as "foreign" and return clean, leaving the
-  // real record of the removed service behind an abandoned marker.
+  // Identity before the label read, so classification is of the record in the directory this transaction validated.
   await assertStateDirUnchangedAfterUninstall(held, options, stateDirIdentity);
   const matching = await liveRecordMatchesLabel(
     held.livePath,
@@ -709,15 +534,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
   // Again after the label compare: this is the compare half of
   // compare-then-unlink, and the identity must hold at the unlink too.
   await assertStateDirUnchangedAfterUninstall(held, options, stateDirIdentity);
-  // Strict, not best-effort: `matching` above is the compare half of
-  // compare-then-unlink, and this is the unlink. A record that survives its
-  // own uninstall - a sharing violation on Windows is the realistic case -
-  // would be preferred again by the next host read, so it is marked stale
-  // (durable, bypasses it) and the uninstall is reported as failed rather
-  // than clean. `absent` unlinks nothing: whatever is at the name is not a
-  // record of this label, and the host's reader does not prefer it either.
-  // `unreadable` is the same failure as a refused unlink: a record whose
-  // label could not even be checked cannot be confirmed removed.
+  // Strict compare-then-unlink: a surviving own-label record is marked stale and the uninstall is failed, not clean.
   let removalFailure: unknown = null;
   if (matching === "unreadable") {
     removalFailure = new Error("CLI invocation record could not be read");
@@ -742,9 +559,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
       exitCode: 1,
     });
   }
-  // Best effort HERE, unlike after a registration: with no record left, a
-  // stale marker that survives bypasses an empty cache, and the next
-  // registration's strict clear reports it if it is still there.
+  // Best-effort here: with no record left, a surviving stale marker bypasses an empty cache until the next registration's strict clear.
   await removeStaleMarkerIfOwn(held);
   try {
     await assertStateDirUnchanged(
@@ -763,10 +578,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
         errorName: errorFromUnknown(cause).name,
       },
     );
-    // Same durable substitute as the registration path: a host that latched
-    // under the old generation must not replay the pre-uninstall answer once
-    // this owner's marker is reclaimed, and the stale marker is what survives
-    // to stop it.
+    // Stale marker stops a host that latched the old generation from replaying the pre-uninstall answer.
     await markStaleKeepLive(held);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
@@ -775,9 +587,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
       exitCode: 1,
     });
   }
-  // Same completion rule as the registration path: the abandoned residue this
-  // owner elected around is safe to sweep now that the generation is written,
-  // and every removal - residue and own marker - is confirmed or reported.
+  // Sweep abandoned residue now that the generation is written; every removal is confirmed or reported.
   const residue = await sweepAbandonedResidue(held);
   const release = await releaseOwnedTransaction(held);
   if (release === "retained" || residue.length > 0) {
@@ -800,12 +610,7 @@ export async function runServiceRemovalWithInvocationRecord<T>(
   return result;
 }
 
-/**
- * The record was deliberately left as it was (nothing removed, or a foreign
- * record); only this owner's marker had to go, and it did not. Reported for
- * the same reason as every other retained marker: silence here would call an
- * operation clean while it left every host read on the OS definition.
- */
+/** Record left as-is; only this owner's marker had to go, and it did not. Report rather than call the operation clean. */
 function reportRetainedRelease(
   release: "released" | "retained",
   serviceLabel: string,
@@ -871,13 +676,7 @@ async function buildValidatedRegistrationRecord(input: {
         "a file-like leading argument is not a regular file",
       );
     }
-    // EXACTLY one argument for an interpreter, and it is the absolute script.
-    // The record is a closed shape and `<interpreter> <absolute script>` is
-    // the only interpreter form any emitter writes; a vector whose script
-    // this CLI would have to guess at (`node --enable-source-maps /x.js`,
-    // `node --eval payload`) is declined rather than re-interpreted, because
-    // a wrong guess here is a wrong program handed to `spawn` on every later
-    // maintenance call. The host's structural check applies the same rule.
+    // Exactly one argument for an interpreter: the absolute script. Anything else is declined, not re-interpreted.
     if (index === 0 && isNodeFamilyCommand(command) && !isAbsolute(arg)) {
       throw invalidInvocation(
         input.serviceLabel,
@@ -954,22 +753,9 @@ interface HeldTransaction {
   readonly stateDirIdentity: CliInvocationStateDirIdentity;
   readonly serviceLabel: string;
   readonly operation: CliInvocationTransactionOperation;
-  /**
-   * What this owner saw of the abandoned legacy exact `cli-invocation.txn`
-   * when it won the election: its digest, `none`, or `unreadable` (present,
-   * bytes not readable - never hashed as if they were empty). Written into
-   * the lifecycle this transaction commits, so the host can discharge that
-   * marker by matching bytes rather than by comparing clocks.
-   */
+  /** Legacy exact `cli-invocation.txn` as seen at election: digest, `none`, or `unreadable`. Never hashed as empty. */
   readonly legacyMarkerEvidence: CliInvocationLegacyMarkerEvidence;
-  /**
-   * Abandoned UNIQUE contenders observed when this owner won the election.
-   * Not unlinked then: each one is a dead owner that may have mutated the OS
-   * before it could commit its record, and until THIS transaction has written
-   * a fresh lifecycle generation its marker is the only durable thing telling
-   * a host not to prefer the pre-mutation record. They are swept after the
-   * lifecycle write, and left in place on every failure path.
-   */
+  /** Abandoned unique contenders observed at election; swept after the lifecycle write, left in place on failure. */
   readonly abandonedResidue: readonly ObservedContender[];
 }
 
@@ -977,23 +763,12 @@ interface ObservedContender {
   readonly basename: string;
   readonly path: string;
   readonly mtimeMs: number;
-  /**
-   * The file's bytes as read; what the legacy-marker digest is taken over.
-   * The host digests the same bytes from its own bounded read, and the
-   * protocol helper applies one bound to both, so a corrupt marker that is
-   * not valid UTF-8 - or longer than that bound - still yields the same
-   * digest on both sides. Empty when `unreadable`.
-   */
+  /** File bytes the legacy-marker digest is taken over. Empty when `unreadable`. */
   readonly bytes: Buffer;
   /** `bytes` as UTF-8 text; empty when `unreadable`. Never digested. */
   readonly raw: string;
   readonly abandoned: boolean;
-  /**
-   * The file is there but its bytes could not be read. Kept apart from a
-   * readable empty file: the two look the same in `raw`, and hashing the
-   * empty read as if it were the marker's contents would write digest
-   * evidence that can never match the real bytes.
-   */
+  /** Present but unreadable, kept apart from a readable empty file so the digest cannot match real bytes. */
   readonly unreadable: boolean;
 }
 
@@ -1005,11 +780,7 @@ async function acquireTransaction(input: {
   readonly pollIntervalMs: number;
   readonly stateDirIdentity: CliInvocationStateDirIdentity;
 }): Promise<HeldTransaction> {
-  // Monotonic, deliberately: this bounds how long a CLI waits behind another
-  // live transaction, and a wall clock stepped backwards mid-wait would keep
-  // a 30-second deadline in the future for as long as the step was. Marker
-  // AGES stay on wall time because they are compared against timestamps
-  // another process persisted.
+  // Deadline uses monotonic time so a backward wall-clock step cannot stretch it. Marker ages stay on wall time.
   const deadline = performance.now() + input.waitMs;
   let held: HeldTransaction | null = null;
   for (;;) {
@@ -1018,27 +789,14 @@ async function acquireTransaction(input: {
       await observePauseForTest();
     }
     if (observed === null) {
-      // A scan that FAILED is retried, with `held` untouched: this process may
-      // own a marker in the directory it could not list, and the one thing it
-      // must not do is stop owning that marker on the strength of not having
-      // seen it. A scan that keeps failing until the deadline is reported as
-      // exactly that, not as another transaction being in progress.
+      // A failed scan is retried with `held` untouched: this process may own a marker it could not list.
       if (performance.now() >= deadline) {
         await failAcquisition(input, held, "enumeration-failed");
       }
       await sleep(input.pollIntervalMs);
       continue;
     }
-    // Abandoned contenders are elected AROUND, never unlinked here. Each one
-    // is a dead owner that may have mutated the OS before it could commit its
-    // record, and its marker is what keeps a host off the pre-mutation record
-    // until some transaction writes a fresh lifecycle. Unlinking it during the
-    // election opened a window - between that unlink and this contender's own
-    // marker - in which a host read saw no marker and the old generation and
-    // replayed the pre-mutation invocation; and a contender that then failed
-    // before mutating anything released its own marker and left that exposure
-    // permanent. The residue is swept only after THIS owner's lifecycle write,
-    // see `sweepAbandonedResidue`.
+    // Abandoned contenders are elected around, never unlinked here. Sweep only after this owner's lifecycle write.
     const live = observed.filter((entry) => !entry.abandoned);
     const others = live.filter(
       (entry) => held === null || entry.path !== held.txnPath,
@@ -1052,14 +810,7 @@ async function acquireTransaction(input: {
           })),
         );
         if (winnerBasename !== held.basename) {
-          // A loser removes its own marker and CONFIRMS the removal before it
-          // stops owning it. If the file survives - a sharing lock or an
-          // antivirus hold on Windows keeps an unlinked file present for a
-          // while - ownership is retained and the unlink is retried on the
-          // next pass. Dropping `held` here regardless would leave a marker
-          // this still-running process keeps positively live, which the
-          // elected winner then counts as a second live contender, and both
-          // commands wait out the shared deadline and fail.
+          // A loser confirms its own marker gone before dropping `held`; a surviving file would count as a second live contender.
           if (await unlinkIfUnchanged(held.txnPath, held.rawMarker)) {
             held = null;
           }
@@ -1085,10 +836,7 @@ async function acquireTransaction(input: {
         confirmed.length === 1 &&
         confirmed[0]?.path === heldPath
       ) {
-        // The legacy exact marker is never unlinked by anyone, so an
-        // abandoned one is residue this transaction is about to supersede.
-        // Its bytes are what the lifecycle will name as superseded; a LIVE
-        // legacy marker never reaches this branch (it is an `other`).
+        // The legacy exact marker is never unlinked; an abandoned one is residue this transaction is about to supersede.
         const legacy = all.find(
           (entry) =>
             entry.basename === CLI_INVOCATION_RECORD_TXN_FILENAME &&
@@ -1123,13 +871,7 @@ async function acquireTransaction(input: {
   }
 }
 
-/**
- * The deadline failure of `acquireTransaction`, for both of its causes.
- *
- * Reported, not assumed: a marker this process could not remove stays live
- * until the process exits, and the operator reading this error is the one who
- * decides whether to wait or retry.
- */
+/** Reported, not assumed: a marker this process could not remove stays live until the process exits. */
 async function failAcquisition(
   input: {
     readonly operation: CliInvocationTransactionOperation;
@@ -1233,26 +975,7 @@ function openFlagsForAuthorityRead(): number {
   return constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
 }
 
-/**
- * What a read of an authority file inside the state dir found.
- *
- * Four outcomes rather than "content or null", because the callers cannot
- * all treat "could not read" the same way:
- *
- *   - `absent`: nothing at the name (or the directory itself is gone);
- *   - `not-a-file`: a symlink (refused by `O_NOFOLLOW`), a directory, a FIFO.
- *     No writer of ours creates one (`wx` never yields a link), and the
- *     host's reader skips the same entries, so it is skip-not-live: never a
- *     contender, never a bypass, nothing to clear;
- *   - `unreadable`: a regular file is there and could not be opened or read
- *     (`EACCES`, `EBUSY`, `EPERM`, `EIO` - a sharing or antivirus lock on
- *     Windows is the realistic case). Collapsing this into `absent` let a
- *     second CLI confirm itself as sole contender while the first, whose live
- *     marker was momentarily locked, was already mutating the OS. It is
- *     therefore FAIL-CLOSED wherever it matters: a marker that cannot be read
- *     still blocks, a record that cannot be read cannot be confirmed removed,
- *     a stale marker that cannot be read cannot be reported cleared.
- */
+/** `unreadable` is not `absent`: collapsing them let a second CLI elect while the first's marker was locked. Fail closed. */
 type AuthorityRead =
   | {
       readonly kind: "ok";
@@ -1266,10 +989,7 @@ type AuthorityRead =
   | { readonly kind: "not-a-file" }
   | { readonly kind: "unreadable"; readonly mtimeMs: number | null };
 
-/**
- * The most an authority file is ever read: enough for the largest document
- * this module parses AND for the digest prefix the protocol helper hashes.
- */
+/** Enough for the largest document this module parses and for the digest prefix the protocol helper hashes. */
 const AUTHORITY_FILE_READ_BOUND_BYTES = Math.max(
   CLI_INVOCATION_RECORD_MAX_SERIALIZED_BYTES,
   CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES,
@@ -1282,27 +1002,14 @@ async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   } catch (cause) {
     const code = isErrnoException(cause) ? cause.code : undefined;
     if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
-    // `O_NOFOLLOW` refuses a symlink with ELOOP (Linux, macOS). A directory
-    // opened read-only succeeds on POSIX and is caught by `isFile` below, but
-    // Windows refuses the open itself with EISDIR, so that code is the same
-    // "not a marker" answer rather than an unreadable one that would block.
+    // `O_NOFOLLOW` refuses a symlink with ELOOP. Windows EISDIR on a directory is the same not-a-marker answer, not unreadable.
     if (code === "ELOOP" || code === "EISDIR") return { kind: "not-a-file" };
     return { kind: "unreadable", mtimeMs: await lstatMtimeMs(path) };
   }
   try {
     const info = await handle.stat();
     if (!info.isFile()) return { kind: "not-a-file" };
-    // BOUNDED, never `readFile()`: a malformed, oversized legacy marker is
-    // exactly the file the bounded digest exists to discharge, and pulling all
-    // of it into memory first would turn one that exceeds the Buffer limit
-    // into `unreadable` (or into memory pressure) - after which this command
-    // mutates the service, records `unreadable`, and fails its release while
-    // every host keeps bypassing the record it just committed. Nothing of ours
-    // is ever larger than the bound: a record or lifecycle over
-    // `CLI_INVOCATION_RECORD_MAX_SERIALIZED_BYTES` does not parse anyway, and
-    // the digest helper hashes only its own prefix. What is truncated here is
-    // therefore garbage by construction, and the compare-then-unlink that
-    // later re-reads it compares the same prefix.
+    // Bounded, never `readFile()`: an oversized legacy marker must still yield a digest the host can discharge.
     const bytes = await readAuthorityBytes(handle, info.size);
     if (bytes === null) {
       return { kind: "unreadable", mtimeMs: info.mtimeMs };
@@ -1320,23 +1027,7 @@ async function readAuthorityFile(path: string): Promise<AuthorityRead> {
   }
 }
 
-/**
- * Fill-or-fail bounded read of an authority file whose `fstat` said `size`.
- *
- * One positional `read` is not guaranteed to fill the requested range even on
- * a regular file, and a short read taken as the whole observation would hand
- * a PREFIX to the parsers and to the digest - a lifecycle naming the digest of
- * 2 KiB of a marker the host hashes 4 KiB of can never discharge it. So the
- * reads loop until the wanted length is filled or the file ends, and:
- *
- *   - within the bound, the read asks for ONE BYTE MORE than the stat reported
- *     and requires exactly `size` back. A byte more means the file grew after
- *     the stat, fewer means it shrank; either way the bytes in hand describe
- *     no coherent document, and the answer is `unreadable` - the host's
- *     stable-read rule, applied here for the same reason;
- *   - past the bound, the full bound must be filled: that prefix is the
- *     file's identity for the shared digest, and a partial one is not.
- */
+/** Loop until `size` is filled or EOF. Within bound, ask for one extra byte and require exactly `size`; a grow/shrink is `unreadable`. */
 async function readAuthorityBytes(
   handle: FileHandle,
   size: number,
@@ -1367,21 +1058,7 @@ async function lstatMtimeMs(path: string): Promise<number | null> {
   }
 }
 
-/**
- * Every transaction marker in the state directory, or `null` when the
- * directory could not be ENUMERATED.
- *
- * `null` and `[]` are different answers and the caller must not collapse them:
- * ENOENT is a directory nobody has created yet, which genuinely holds no
- * markers, but a `readdir` that fails for any other reason (EIO, EACCES, an
- * antivirus hold on Windows) says nothing about what is in there - and the
- * caller may already OWN a marker in it. Reading that failure as "empty" made
- * `acquireTransaction` conclude its contender had vanished and drop `held`
- * without unlinking the file; the next successful scan then saw that marker
- * as a live competitor this process could neither reclaim nor remove, so the
- * command waited out its deadline and failed, leaving the bypass in place
- * until the process exited.
- */
+/** `null` vs `[]`: a failed `readdir` is not empty; treating it as empty dropped `held` while the marker still blocked. */
 async function observeTransactionMarkers(
   hostHomeDir: string,
 ): Promise<ObservedContender[] | null> {
@@ -1401,11 +1078,7 @@ async function observeTransactionMarkers(
       // contender. A genuine marker is created with wx and is never a link.
       if (read.kind === "absent" || read.kind === "not-a-file") return null;
       if (read.kind === "unreadable") {
-        // A marker that IS there and cannot be read blocks like a live one:
-        // its owner may be mid-mutation right now. It is aged out by the
-        // same window an unparseable payload gets, and its empty `raw`
-        // means no compare-then-unlink can ever match it, so nothing here
-        // removes a file whose contents it never saw.
+        // An unreadable marker blocks like a live one. Empty `raw` means nothing here removes a file whose contents it never saw.
         const mtimeMs = read.mtimeMs ?? Date.now();
         return {
           basename: name,
@@ -1463,13 +1136,7 @@ async function isAbandonedContender(
   });
   if (verdict === "dead" || verdict === "alive-different") return true;
   if (verdict === "alive-same") return false;
-  // `indeterminate`: the pid is alive but the marker carries no start identity
-  // to compare it against (the owner could not obtain one), or the probe could
-  // not read the process's. A dead owner whose pid was reused looks exactly
-  // like this, and without the age window it would hold the election for as
-  // long as the unrelated process keeps the pid - every later install and
-  // uninstall timing out on it. The host applies the same window to the same
-  // verdict; a parsed owner that is positively alive is still never aged out.
+  // `indeterminate`: pid alive but no start identity. Age window applies; a positively alive parsed owner is never aged out.
   return cliInvocationTransactionAbandonedByAge(
     Number.isFinite(Date.parse(marker.startedAt))
       ? Math.max(Date.parse(marker.startedAt), mtimeMs)
@@ -1478,16 +1145,7 @@ async function isAbandonedContender(
   );
 }
 
-/**
- * Remove the abandoned unique contenders this owner elected around, now that
- * its lifecycle generation is on disk and no host can replay the answer those
- * markers were guarding against. Only ever called after a lifecycle write, on
- * a success path; the legacy exact path is never unlinked by anyone.
- *
- * Returns the basenames that survived: each one keeps every host read on the
- * OS definition until a later transaction succeeds here, so the caller
- * reports them rather than reporting a clean completion.
- */
+/** Sweep abandoned unique contenders only after this owner's lifecycle write. The legacy exact path is never unlinked. */
 async function sweepAbandonedResidue(held: HeldTransaction): Promise<string[]> {
   const survivors: string[] = [];
   for (const entry of held.abandonedResidue) {
@@ -1496,26 +1154,14 @@ async function sweepAbandonedResidue(held: HeldTransaction): Promise<string[]> {
       survivors.push(entry.basename);
     }
   }
-  // A legacy exact marker this owner could not READ is a survivor too, by a
-  // different route: nobody unlinks that path, and the lifecycle just written
-  // names no bytes for it (`unreadable` never discharges - see the protocol
-  // module), so the host stays on the OS definition until a later confirmed
-  // transaction reads it and writes its digest. Reported for the same reason
-  // as a marker that refused to unlink.
+  // A legacy exact marker this owner could not read is a survivor too: `unreadable` never discharges.
   if (held.legacyMarkerEvidence.kind === "unreadable") {
     survivors.push(CLI_INVOCATION_RECORD_TXN_FILENAME);
   }
   return survivors;
 }
 
-/**
- * Compare-then-unlink, CONFIRMED: `true` only when the file is gone afterwards.
- *
- * `removeBestEffort` swallows the unlink error, so without the re-read a
- * sharing violation on Windows - the realistic case - would report a marker
- * as released while it still sits on disk telling every host to bypass the
- * record just committed.
- */
+/** `true` only when the file is gone afterwards. `removeBestEffort` can swallow a Windows sharing violation. */
 async function unlinkIfUnchanged(
   path: string,
   expectedRaw: string,
@@ -1531,13 +1177,7 @@ async function unlinkIfUnchanged(
   return confirmAbsent(path);
 }
 
-/**
- * Is the file gone? Polled briefly rather than read once: on Windows a file
- * another process holds open (the host reads markers on every maintenance
- * RPC) is unlinked into a PENDING-DELETE state that reports access denied
- * until that handle closes, and reading it exactly once would call a removal
- * that has already happened "retained".
- */
+/** Poll briefly: Windows pending-delete reports access denied until the handle closes. */
 async function confirmAbsent(path: string): Promise<boolean> {
   for (let attempt = 0; attempt < REMOVAL_CONFIRM_ATTEMPTS; attempt += 1) {
     if ((await readAuthorityFile(path)).kind === "absent") return true;
@@ -1549,16 +1189,7 @@ async function confirmAbsent(path: string): Promise<boolean> {
 const REMOVAL_CONFIRM_ATTEMPTS = 5;
 const REMOVAL_CONFIRM_INTERVAL_MS = 20;
 
-/**
- * Release this owner's marker and staging file. `retained` when the marker
- * could not be confirmed gone, which the completion paths report: a unique
- * marker that outlives its transaction is a bypass the lifecycle never
- * discharges, and a "clean" install or uninstall that leaves one behind keeps
- * npm/nvm maintenance on OS re-reads until another transaction reclaims it.
- * Failure paths call this too and ignore the answer - there the failure being
- * reported already says the state is degraded, and the marker is retained by
- * design.
- */
+/** `retained` when the marker could not be confirmed gone; success paths report it. */
 async function releaseOwnedTransaction(
   held: HeldTransaction,
 ): Promise<"released" | "retained"> {
@@ -1593,13 +1224,7 @@ async function writeExclusiveAuthorityFile(
       await handle.chmod(0o600);
     }
     await handle.writeFile(contents, { encoding: "utf8" });
-    // INSIDE the cleanup boundary, not after it. A close that rejects - a
-    // delayed I/O error the filesystem reports only at the last write-back -
-    // used to escape this catch and leave the file it had just created in
-    // place; for a unique contender that is a valid transaction marker owned
-    // by a process that believes it acquired nothing, so every retry in that
-    // process waits behind its own residue until the deadline. A failed
-    // exclusive write removes what it created, whichever step failed.
+    // Inside the cleanup boundary: a close that rejects must still remove the exclusive file this process created.
     await handle.close();
   } catch (cause) {
     await handle.close().catch(() => undefined);
@@ -1620,10 +1245,7 @@ async function writeConfirmedLifecycle(
   event: CliInvocationLifecycleEvent,
   serviceLabel: string,
 ): Promise<void> {
-  // Unique per owner token so two processes cannot share a temp name.
-  // Same-directory temp + rename matches `writeJsonAtomically`: 0600 write,
-  // then rename over the live file. The txn stays held until this rename
-  // succeeds; failure cleans only this temp.
+  // Unique per owner token so two processes cannot share a temp name. Txn stays held until this rename succeeds.
   const temporary = `${held.lifecyclePath}.${held.token}.tmp`;
   try {
     await writeExclusiveAuthorityFile(
@@ -1635,10 +1257,7 @@ async function writeConfirmedLifecycle(
         event,
         serviceLabel,
         at: new Date().toISOString(),
-        // Written as observed, `none` and `unreadable` included, never
-        // omitted: a lifecycle that saw no legacy marker must stay
-        // distinguishable from one written by a CLI that recorded nothing,
-        // because `none` never discharges by clock and `unknown` may.
+        // Written as observed, `none` and `unreadable` included: `none` never discharges by clock and `unknown` may.
         legacyMarkerEvidence: held.legacyMarkerEvidence,
       }),
     );
@@ -1649,11 +1268,7 @@ async function writeConfirmedLifecycle(
   }
 }
 
-/**
- * Write this label's stale marker. `false` when it could not be written, in
- * which case the caller keeps its transaction marker: presence of either is a
- * cache bypass, and marker I/O must never hide the failure being reported.
- */
+/** `false` when it could not be written; the caller keeps its transaction marker so marker I/O cannot hide the failure. */
 async function writeStaleMarker(held: HeldTransaction): Promise<boolean> {
   try {
     await assertStateDirUnchanged(
@@ -1679,23 +1294,14 @@ async function writeStaleMarker(held: HeldTransaction): Promise<boolean> {
   }
 }
 
-/**
- * Commit failure and OS-throw path: the live record may describe a
- * registration that no longer exists, so it is unpreferred (stale marker) and
- * removed - after its label matched, like every other removal of it.
- */
+/** Commit-failure/OS-throw: unprefer and remove the live record after its label matched. */
 async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
   const staleWritten = await writeStaleMarker(held);
   if (
     (await liveRecordMatchesLabel(held.livePath, held.serviceLabel)) ===
     "matching"
   ) {
-    // Identity re-check as the LAST thing before the unlink, after the label
-    // compare, so the window between "this is our record" and "remove it" is
-    // one syscall wide. A swap that lands inside it redirects the unlink to
-    // a sibling environment's record, which is that environment's CACHE of
-    // its OS definition: the cost is one OS re-read there, never a change in
-    // what executes. Stated exactly in the protocol header.
+    // Identity re-check as the last thing before unlink, after the label compare, so the window is one syscall wide.
     try {
       await assertStateDirUnchanged(
         held.hostHomeDir,
@@ -1715,14 +1321,7 @@ async function markStaleAndUnpreferLive(held: HeldTransaction): Promise<void> {
   }
 }
 
-/**
- * Post-uninstall identity check. The service is gone, so a record of this
- * label that survives describes nothing - which is the OS-throw case with the
- * same remedy: unprefer and remove it as far as the moved directory allows,
- * and report the uninstall as failed rather than clean. Where the identity
- * re-check refuses every write, the retained transaction marker is the bypass
- * that outlives this process.
- */
+/** A surviving own-label record after uninstall is unpreferred and removed; report failed rather than clean. */
 async function assertStateDirUnchangedAfterUninstall(
   held: HeldTransaction,
   options: ServiceRemovalRecordContext,
@@ -1749,10 +1348,7 @@ async function assertStateDirUnchangedAfterUninstall(
   }
 }
 
-/**
- * Lifecycle-write and record-removal failure path: what is on disk is
- * correct but must not be preferred until a later transaction confirms it.
- */
+/** On disk is correct but must not be preferred until a later transaction confirms it. */
 async function markStaleKeepLive(held: HeldTransaction): Promise<void> {
   const staleWritten = await writeStaleMarker(held);
   await removeBestEffort(held.stagingPath);
@@ -1763,23 +1359,7 @@ async function markStaleKeepLive(held: HeldTransaction): Promise<void> {
 
 type StaleMarkerRemoval = "removed" | "absent" | "foreign" | "failed";
 
-/**
- * Compare-then-unlink of `cli-invocation.stale`.
- *
- * The compare is on the marker's label through an `O_NOFOLLOW` read: a marker
- * for another label - which, since a label has exactly one host home, means
- * the state directory entry was re-pointed at another environment's
- * directory - is `foreign` and left alone; a legacy marker without a label is
- * anyone's. `failed` is a marker of ours that `unlink` refused (a Windows
- * sharing violation is the realistic case), and it is distinct from `foreign`
- * because the two want different diagnoses.
- *
- * A symlink, FIFO or directory at the name is `absent`, not `failed`: the
- * host's marker reader opens `O_NOFOLLOW` and skips anything that is not a
- * regular file, so such an entry bypasses nothing and there is nothing to
- * clear. Reporting it would hand anyone who can plant a link in this
- * directory a way to fail every `service install` while changing nothing.
- */
+/** Compare on label via `O_NOFOLLOW`. A symlink/FIFO/directory at the name is `absent`, not `failed`. */
 async function removeStaleMarkerIfOwn(
   held: HeldTransaction,
 ): Promise<StaleMarkerRemoval> {
@@ -1804,10 +1384,7 @@ async function removeStaleMarkerIfOwn(
   } catch {
     return "failed";
   }
-  // CONFIRMED, like every other marker removal on a success path: a stale
-  // marker that `rm` accepted but that still answers at the pathname (Windows
-  // pending-delete under a host or AV handle) still bypasses the record just
-  // committed, and calling it `removed` would report that install as clean.
+  // Confirmed: a stale marker still answering at the pathname (Windows pending-delete) still bypasses the committed record.
   return (await confirmAbsent(held.stalePath)) ? "removed" : "failed";
 }
 
@@ -1817,11 +1394,7 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
-/**
- * `unreadable` is kept apart from `absent` because the two want opposite
- * things from an uninstall: an absent record needs no removal, an unreadable
- * one cannot be confirmed removed and must be marked stale instead.
- */
+/** `unreadable` is not `absent`: an unreadable record cannot be confirmed removed and must be marked stale. */
 async function liveRecordMatchesLabel(
   livePath: string,
   serviceLabel: string,

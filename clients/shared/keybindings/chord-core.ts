@@ -1,11 +1,5 @@
 /**
- * Platform-free core of the canonical `ChordString` format
- * (`mod+ctrl+shift+alt+key`, modifiers in this fixed order and only when
- * active - see `clients/gui-app/src/lib/keybindings/chord.ts` for the full
- * contract). This module never reads `navigator` or `process` so it stays
- * importable from both the Electron main process and the browser-safe
- * `gui-app` renderer; anything DOM-bound (event capture, display labels)
- * stays in gui-app's `chord.ts`, which delegates the parse/format core here.
+ * Platform-free core of the canonical `ChordString` format (`mod+ctrl+shift+alt+key`, modifiers in this fixed order and only when active - see `clients/gui-app/src/lib/keybindings/chord.ts` for the full contract).
  */
 export type ChordString = string;
 
@@ -54,7 +48,6 @@ export function parseChordString(chord: ChordString): ChordParts | null {
   return { mod, ctrl, shift, alt, key };
 }
 
-/** The two platform buckets `toAccelerator` needs to disambiguate `mod`+`ctrl` combos. */
 export type AcceleratorPlatform = "mac" | "other";
 
 const KEY_TO_ACCELERATOR: Readonly<Record<string, string>> = {
@@ -107,20 +100,7 @@ function isSupportedKey(key: ChordKey): boolean {
   return false;
 }
 
-/**
- * Whether `chord` is a canonical `ChordString`: it round-trips through
- * `parseChordString` -> `formatChord` back to the exact same string, and its
- * key is in the supported vocabulary (the named keys `toAccelerator` maps,
- * `f1`-`f24`, single letters/digits, and the punctuation keys
- * `normalizeCode` produces).
- *
- * Used at both the persistence and IPC boundaries (amended decision 3, added
- * after PR #533 review found `typeof chord === "string"` alone let malformed
- * values like `"mod+"` or non-canonical token order reach Electron): a
- * corrupt or hand-edited chord must resolve to the definition's default
- * rather than becoming a confusing OS-refusal or a silently wrong
- * registration.
- */
+/** Canonical `ChordString`: round-trips parse/format and uses a supported key. Malformed chords at persistence/IPC must fall back to the definition default. */
 export function isValidChordString(chord: ChordString): boolean {
   const parts = parseChordString(chord);
   if (parts === null) return false;
@@ -129,22 +109,8 @@ export function isValidChordString(chord: ChordString): boolean {
 }
 
 /**
- * Converts a canonical `ChordString` to Electron's `Accelerator` format (e.g.
- * `mod+shift+space` -> `CommandOrControl+Shift+Space`), the only place this
- * app's chord format leaves its own canon. `platform` is an explicit
- * parameter rather than sniffed - this module has no `navigator`/`process`
- * access - so the caller (Electron main via `process.platform`, or a
- * renderer via `isMac()`) supplies it directly.
- *
- * `mod` alone maps to Electron's own cross-platform `CommandOrControl` token
- * (Electron itself resolves it to Cmd on mac / Ctrl elsewhere), so most
- * chords need no platform branching at all. Platform only matters when `mod`
- * and `ctrl` are held at once: on mac they are genuinely distinct keys (⌘ and
- * ⌃), but elsewhere `mod` already resolves to Control, so folding both in
- * would double up the same physical key.
- *
- * Returns the chord unchanged if it fails to parse - callers only ever pass
- * chords that already round-tripped through `parseChordString`.
+ * Canonical chord to Electron Accelerator. `platform` is passed in (this module has no navigator/process).
+ * `mod`+`ctrl` must not fold into one Control key off Mac.
  */
 export function toAccelerator(
   chord: ChordString,

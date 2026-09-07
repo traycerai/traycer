@@ -24,8 +24,8 @@ export function OpenFolderDialog() {
     void pickAndPrepareFolders(true)
       .then((result) => {
         if (result === null) return;
-        // hostId is the dispatch-time identity from pickAndPrepareFolders —
-        // never re-read the mutable active host here.
+        // hostId is the dispatch-time identity from pickAndPrepareFolders - never re-read the mutable active host
+        // here.
         addResolvedFolders(
           result.hostId,
           result.folders.map((folder) =>

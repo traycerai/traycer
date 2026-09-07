@@ -36,9 +36,7 @@ describe("parseElapsedSeconds (ps -o etime= format)", () => {
 });
 
 describe("computeProcessIdentityVerdict (pure decision logic)", () => {
-  // Tokens are compared only against each other, never against
-  // `process.platform`, so a fixed tag keeps these rows identical on every
-  // runner.
+  // Tokens are compared only against each other, never against `process.platform`, so a fixed tag keeps these rows identical on every runner.
   const A = "linux:boot-a 1000";
   const B = "linux:boot-a 9999";
 
@@ -47,11 +45,7 @@ describe("computeProcessIdentityVerdict (pure decision logic)", () => {
     expect(computeProcessIdentityVerdict("dead", null, null)).toBe("dead");
   });
 
-  // Deliberately does NOT short-circuit on indeterminate liveness: the
-  // liveness probe (kill/tasklist) and the identity probe (/proc, ps,
-  // Get-Process) are independent OS queries, so an identity read can
-  // still succeed and carry positive evidence even when liveness itself
-  // couldn't be established (item B, Fixup round-2 ticket).
+  // Deliberately does NOT short-circuit on indeterminate liveness: the liveness probe (kill/tasklist) and the identity probe (/proc, ps, Get-Process) are independent OS queries, so an identity read can still succeed and carry positive evidence even when liveness itself couldn't be established (item B, Fixup round-2 ticket).
   it("still derives a verdict from the identity comparison when liveness itself is indeterminate", () => {
     // A successful, matching identity read is positive evidence of
     // "still there", even without independent liveness confirmation.
@@ -101,17 +95,7 @@ describe("computeProcessIdentityVerdict (pure decision logic)", () => {
     );
   });
 
-  /*
-   * The comparison used to be a 5s tolerance over two epoch-millisecond
-   * start times, each derived as `Date.now() - <elapsed since start>`. Any
-   * `CLOCK_REALTIME` step wider than the tolerance between recording a token
-   * and verifying it moved one operand and not the other, so a LIVE holder
-   * read as "alive-different" - which every caller here treats as licence to
-   * break its lock or sweep its temp dir. Identities are recorded once by the
-   * kernel and only read back, so there is no clock in the comparison and no
-   * tolerance to tune: two nearby-but-distinct stamps are different, full
-   * stop.
-   */
+  /** The comparison used to be a 5s tolerance over two epoch-millisecond start times, each derived as `Date.now() - <elapsed since start>`. Any `CLOCK_REALTIME` step wider than the tolerance between recording a token and verifying it moved one operand and not the other, so a LIVE holder read as "alive-different" - which every caller here treats as licence to break its lock or sweep its temp dir. */
   it("has no tolerance window a clock step could fall inside", () => {
     expect(
       computeProcessIdentityVerdict(
@@ -163,9 +147,7 @@ describe("verifyProcessIdentity", () => {
     const token: ProcessIdentityToken = {
       pid: process.pid,
       startedAtMs: readProcessStartTimeMs(process.pid),
-      // A well-formed stamp from this platform that is positively not ours -
-      // a dead predecessor's token surviving under a pid the OS has since
-      // recycled onto this process.
+      // A well-formed stamp from this platform that is positively not ours - a dead predecessor's token surviving under a pid the OS has since recycled onto this process.
       startIdentity: `${ownIdentity} 0`,
     };
     expect(verifyProcessIdentity(token)).toBe("dead");
@@ -181,9 +163,7 @@ describe("verifyProcessIdentity", () => {
   });
 
   it("returns dead for a pid that is provably not running", () => {
-    // 999999 is not guaranteed unassigned on every OS, but combined with a
-    // fabricated recent startedAtMs this mirrors the cli-lock dead-holder
-    // fixture and only needs *some* not-currently-alive pid.
+    // 999999 is not guaranteed unassigned on every OS, but combined with a fabricated recent startedAtMs this mirrors the cli-lock dead-holder fixture and only needs *some* not-currently-alive pid.
     const token: ProcessIdentityToken = {
       pid: 999999,
       startedAtMs: Date.now(),
@@ -206,12 +186,8 @@ describe("currentProcessIdentityToken", () => {
   });
 });
 
-// Real two-process scenarios: a genuinely separate OS process (not the
-// `pid === process.pid` shortcut) must be independently identified as
-// alive-same across two reads, and correctly read as dead once it exits.
-// Windows is skipped here (matching the existing cli-lock.test.ts
-// convention for platform-specific probes) - `sleep` isn't available and
-// the PowerShell path has no equivalent light-weight fixture process.
+// Real two-process scenarios: a genuinely separate OS process (not the `pid === process.pid` shortcut) must be independently identified as alive-same across two reads, and correctly read as dead once it exits.
+// Windows is skipped here (matching the existing cli-lock.test.ts convention for platform-specific probes) - `sleep` isn't available and the PowerShell path has no equivalent light-weight fixture process.
 describe.skipIf(process.platform === "win32")(
   "process start-time probing against a real spawned process",
   () => {
@@ -248,9 +224,7 @@ describe.skipIf(process.platform === "win32")(
         startedAtMs: first,
         startIdentity: readProcessStartIdentity(pid),
       };
-      // A second, independent observation of the same still-running
-      // process - the "two-process" scenario the cli-lock hardening
-      // tests build on.
+      // A second, independent observation of the same still-running process - the "two-process" scenario the cli-lock hardening tests build on.
       expect(verifyProcessIdentity(token)).toBe("alive-same");
     });
 

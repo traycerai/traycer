@@ -36,13 +36,7 @@ import {
 
 const STREAM_METHOD = "workspace.subscribeFileList";
 
-/**
- * Per-directory listings for one workspace, as cached. A `listing` frame
- * replaces exactly its own directory's entry; every publish hands out a fresh
- * Map so the disabled `useQuery` mirror re-renders. A Map (not a plain object)
- * because directory tokens are user-controlled file names - `__proto__` is a
- * legal directory name.
- */
+/** A Map (not a plain object) because directory tokens are user-controlled file names - `__proto__` is a legal directory name. */
 export type WorkspaceFileListDirectories = ReadonlyMap<
   string,
   WorkspaceFileListDirectoryListing
@@ -79,15 +73,7 @@ interface SharedSubscription {
   unsubscribeFromStream: () => void;
 }
 
-/**
- * Module-level ref-counted subscriptions keyed by the OWNING CLIENT INSTANCE
- * plus `(hostId, workspacePath)` - the same rule the git status subscription
- * uses. A rebuilt `WsStreamClient` (host swap, sign-in change, liveness
- * rebuild) must never be served an entry whose session belongs to a previous,
- * possibly closed client: every consumer's effect re-runs on the client
- * change, drains the old entry to refCount 0 (tearing its session down), and
- * opens a fresh entry against the new client.
- */
+/** A rebuilt `WsStreamClient` (host swap, sign-in change, liveness rebuild) must never be served an entry whose session belongs to a previous, possibly closed client: every consumer's effect re-runs on the client change, drains the old entry to refCount 0 (tearing its session down), and opens a fresh entry against the new client. */
 const subscriptions = new Map<string, SharedSubscription>();
 
 function subscriptionKeyFor(
@@ -98,18 +84,7 @@ function subscriptionKeyFor(
 }
 
 /**
- * Change channel for the entry-scoped state a consumer reads during render
- * (`hasListing`, `error`). Keyed by subscription key rather than held on the
- * entry so a consumer can subscribe BEFORE its entry exists - the lifecycle
- * effect creates the entry after the first commit - and survive its teardown.
- *
- * Why a channel at all: the desktop renderer runs the React Compiler, which
- * memoizes an imperative `subscriptions.get(key)` performed during render on
- * the identity of its inputs. Those inputs (client, host, workspace) do not
- * change when the entry is created or when its first listing lands, so a
- * plain render-time read froze at "no entry yet" and the file tree spun
- * forever over rows it was already showing. `useSyncExternalStore` owns the
- * value, so the compiler caching its callbacks is harmless.
+ * Subscribe by key before the entry exists. React Compiler memoizes a render-time `subscriptions.get(key)` on inputs that do not change when the listing lands; `useSyncExternalStore` owns the value.
  */
 const entryListeners = new Map<string, Set<() => void>>();
 
@@ -146,14 +121,7 @@ export function __resetWorkspaceFileListSubscriptionsForTesting(): void {
 }
 
 /**
- * Live single-level listings for one workspace, projected into the flat path
- * list the tree adapter consumes.
- *
- * Coverage follows the caller's expansion state (`file-tree-store`): expanding
- * a directory sends `watch`, collapsing sends `unwatch`, and on every
- * (re)connect the whole restored set goes up as ONE batched `watch` frame.
- * Host scope is explicit - the caller passes the host id its unary path
- * already resolves against; nothing here reads an ambient host.
+ * Coverage follows expansion: expand watches, collapse unwatches, reconnect sends one batched `watch`. Host id is explicit; nothing here reads an ambient host.
  */
 export function useWorkspaceFileListSubscription(args: {
   readonly epicId: string;
@@ -269,23 +237,14 @@ export function useWorkspaceFileListSubscription(args: {
     ) {
       return;
     }
-    // Looked up (never captured): the lifecycle effect above re-creates the
-    // shared entry on a remount, and this effect must always address the live
-    // one. Deliberately no cleanup - the lifecycle effect owns removal, so a
-    // coverage change is a single overwrite instead of an unwatch/re-watch
-    // round trip.
+    // Deliberately no cleanup - the lifecycle effect owns removal, so a coverage change is a single overwrite instead of an unwatch/re-watch round trip.
     const shared = subscriptions.get(
       subscriptionKeyFor(wsStreamClient, { hostId, workspacePath }),
     );
     if (shared === undefined) return;
     shared.watchRequests.set(consumerId, new Set(requestedWatchPaths));
     syncCoverage(shared);
-    // `epicId` is not read here, but it IS a dependency: the lifecycle effect
-    // above re-runs on an epic change and its cleanup drops this consumer's
-    // watch request. `requestedWatchPaths` is memoized on the joined path key,
-    // so two epics with the same expanded set keep one identity - without
-    // `epicId` this effect would not re-run and the coverage would stay
-    // dropped until the user toggled a directory.
+    // `requestedWatchPaths` is memoized on the joined path key, so two epics with the same expanded set keep one identity - without `epicId` this effect would not re-run and the coverage would stay dropped until the user toggled a directory.
   }, [
     consumerId,
     enabled,
@@ -308,10 +267,7 @@ export function useWorkspaceFileListSubscription(args: {
     enabled: false,
   });
 
-  // Entry-scoped state is read through the store, never imperatively - see
-  // `entryListeners`. The subscriber is memoized on `key` because
-  // `useSyncExternalStore` compares it by reference: a fresh closure per
-  // render would tear the listener down and re-add it every time.
+  // Entry-scoped state is read through the store, never imperatively - see `entryListeners`.
   const key =
     wsStreamClient === null || hostId === null || workspacePath === null
       ? null
@@ -408,10 +364,7 @@ function openStreamSession(
   session.onStatusChange((status, reason) => {
     if (sessionClosed || generation !== shared.sessionGeneration) return;
     if (status === "open") {
-      // A (re)subscribe covers the workspace root and nothing else, whatever
-      // this stream covered before the drop. Forgetting the applied set makes
-      // the next sync restore the WHOLE requested coverage in one batched
-      // `watch` frame.
+      // A (re)subscribe covers the workspace root and nothing else, whatever this stream covered before the drop.
       shared.appliedWatchPaths = new Set();
       shared.error = null;
       syncCoverage(shared);
@@ -450,10 +403,7 @@ function handleServerFrame(
     if (isFirstListing) notifyEntryChanged(shared.key);
     return;
   }
-  // `pruned`: the host stopped serving these directories. Their covered
-  // descendants go with them (the contract drops them implicitly), and each
-  // consumer collapses its own expansion so the coverage request cannot
-  // immediately ask for the refused path again.
+  // Their covered descendants go with them (the contract drops them implicitly), and each consumer collapses its own expansion so the coverage request cannot immediately ask for the refused path again.
   for (const directoryPath of frame.directoryPaths) {
     for (const listedPath of [...shared.listings.keys()]) {
       if (isWithinDirectory(listedPath, directoryPath)) {
@@ -472,12 +422,7 @@ function handleServerFrame(
   publishListings(shared, queryClient, args);
 }
 
-/**
- * Brings the host's coverage in line with the union of its consumers'
- * requests. Frames are only sent while a session is live; otherwise the
- * applied set stays empty and the whole request is restored on the next
- * `"open"` transition.
- */
+/** Brings the host's coverage in line with the union of its consumers' requests. */
 function syncCoverage(shared: SharedSubscription): void {
   const session = shared.session;
   if (session === null) return;
@@ -492,11 +437,7 @@ function syncCoverage(shared: SharedSubscription): void {
     (directoryPath) => !desired.has(directoryPath),
   );
   if (toWatch.length > 0) {
-    // Ancestors-first within the frame: the host applies a batch in order and
-    // refuses a path whose parent is not yet covered. The requests themselves
-    // are already ancestor-closed (`selectWatchableDirectoryPaths`), so only
-    // the ordering is restored here - re-filtering a DELTA would wrongly drop
-    // a child whose parent is merely already covered.
+    // Ancestors-first within the frame: the host applies a batch in order and refuses a path whose parent is not yet covered.
     sendClientFrame(session, {
       kind: "watch",
       directoryPaths: [...sortDirectoryPathsAncestorsFirst(toWatch)],
@@ -525,13 +466,7 @@ function sendClientFrame(
 }
 
 /**
- * Publishes the shared entry's listings into the query cache.
- *
- * Authorization (CLAUDE.md "optimistic `setQueryData` is reserved for
- * response-equals-state cases"): a `listing` frame IS the authoritative
- * content of that directory at the moment it was emitted, so this is a fan-out
- * of a wire event into its canonical slot, not a guess about a future
- * response.
+ * A `listing` frame is that directory; write it into the query cache.
  */
 function publishListings(
   shared: SharedSubscription,
@@ -545,12 +480,7 @@ function publishListings(
 }
 
 function describeStreamClose(reason: StreamCloseReason | null): string | null {
-  // A RETRYABLE close is the transport reconnecting, not a failure the user
-  // has to see: the client re-subscribes on its own backoff and the next
-  // snapshot repopulates this surface. Returning `null` keeps the panel in
-  // its pending state - "visibly retrying" - instead of flashing an error
-  // that resolves itself, which is what an overnight sleep used to do to
-  // every open panel at once.
+  // A RETRYABLE close is the transport reconnecting, not a failure the user has to see: the client re-subscribes on its own backoff and the next snapshot repopulates this surface.
   if (
     reason !== null &&
     reason.kind === "fatalError" &&

@@ -40,14 +40,7 @@ function editorAvailabilityQueryOptions(runnerHost: IRunnerHost) {
 }
 
 /**
- * Lists the editors whose URL-scheme handler is registered on this machine, so
- * the open-in-editor dropdown can hide options that would fail to launch.
- *
- * Detection runs in the shell (Electron main) via
- * `IRunnerHost.getRegisteredUrlSchemes`, which queries the OS scheme-handler
- * registry by scheme - never by application name or bundle path - so a renamed
- * or relocated install is still detected. The shell answers for the local
- * machine, which is exactly where `editor.openPaths` opens the editor.
+ * OS scheme-handler registry by scheme, never app name or bundle path. The shell answers for the local machine, where `editor.openPaths` opens.
  */
 export function useEditorAvailability(): UseQueryResult<readonly EditorId[]> {
   const runnerHost = useRunnerHost();

@@ -68,11 +68,7 @@ describe("splitLeadingSideChatCommand", () => {
   });
 
   it("keeps a preceding indent node and strips exactly one space", () => {
-    // Mirrors what chip-conversion of "  /side  question" produces: the
-    // indent lives in its own text node ahead of the chip, and the trailing
-    // text node keeps both spaces of the typed separator. The indent is
-    // untouched; only ONE separator space goes (the one the chip stands in
-    // for), the rest of the user's spacing is theirs.
+    // Mirrors what chip-conversion of "  /side  question" produces: the indent lives in its own text node ahead of the chip, and the trailing text node keeps both spaces of the typed separator.
     const doc: JsonContent = {
       type: "doc",
       content: [

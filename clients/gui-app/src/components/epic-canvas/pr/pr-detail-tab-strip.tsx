@@ -22,10 +22,7 @@ interface PrTabDefinition {
 }
 
 /**
- * Labels only - membership and reading order come from `PR_DETAIL_TABS`, which
- * declares the contract. A second ordered list here would let a tab added to
- * the store go silently missing from the strip; as a `Record` keyed by the tab
- * id, a new tab is a compile error until it is given a label.
+ * A second ordered list here would let a tab added to the store go silently missing from the strip; as a `Record` keyed by the tab id, a new tab is a compile error until it is given a label.
  */
 const TAB_LABELS: Record<PrDetailTabId, string> = {
   overview: "Overview",
@@ -62,16 +59,7 @@ interface PrDetailTabPickerProps {
 
 /**
  * The document's tab picker, in the sticky bar's one tab slot.
- *
- * Two presentations of the SAME five tabs, chosen by viewport width alone: a
- * segmented strip at desktop widths, and - despite the name this component
- * keeps - a dropdown MENU below the phone breakpoint. The split is viewport,
- * not build: a narrow desktop window is a narrow window, and a phone-width
- * website should read the same as the installed app.
- *
- * Both arms derive labels, order, counts and blocking state from the same
- * `TABS`/`tabCount`/`tabBlocking` above, so a tab added to `PR_DETAIL_TABS`
- * reaches both or neither.
+ * Two presentations of the SAME five tabs, chosen by viewport width alone: a segmented strip at desktop widths, and - despite the name this component keeps - a dropdown MENU below the phone breakpoint.
  */
 export function PrDetailTabStrip(props: PrDetailTabPickerProps): ReactNode {
   const mobileViewport = useIsMobileViewport();
@@ -96,36 +84,13 @@ export function PrDetailTabStrip(props: PrDetailTabPickerProps): ReactNode {
 }
 
 /**
- * The desktop arm: a segmented control inside the reading column.
- *
- * Deliberately NOT GitHub's underlined tab row spanning a full-width rule -
- * that rule is the single strongest "this is a GitHub page" signal in the
- * layout, and it also fights the card language every surface below it uses.
- * A contained pill group sits inside the same column as everything else and
- * reads as one control rather than page chrome.
- *
- * The group spans the column and its tabs share the space evenly. Hugging its
- * own content left it ending short of every card below it, so the strip read
- * as a stray element floating above the page rather than as its header - and
- * the ragged gap after the last tab had no meaning to carry.
- *
- * That equal share is also exactly why the phone gets a menu instead. Five
- * tabs splitting a phone-width column leave each one under 70px, and the count
- * badge inside every cell does not shrink - so `truncate` eats the LABELS, all
- * five at once, and the control becomes unreadable rather than merely tight.
- * Scrolling the strip would trade that for tabs you cannot see; a menu keeps
- * every label at full length and gives each a real touch target.
+ * A contained pill group sits inside the same column as everything else and reads as one control rather than page chrome.
+ * Hugging its own content left it ending short of every card below it, so the strip read as a stray element floating above the page rather than as its header - and the ragged gap after the last tab had no meaning to carry.
  */
 function PrDetailTabRow(props: PrDetailTabPickerProps): ReactNode {
   const buttonsRef = useRef<Map<PrDetailTabId, HTMLButtonElement>>(new Map());
 
-  // Arrow-key roving focus per the WAI-ARIA tabs pattern: Left/Right move (and
-  // select) the adjacent tab with wraparound, Home/End jump to an end. Every
-  // other key falls through untouched.
-  //
-  // Bound to each TAB rather than the tablist: under a roving tabindex the
-  // focus always sits on a tab button, so the container never needs to be
-  // focusable to receive the key.
+  // Bound to each TAB rather than the tablist: under a roving tabindex the focus always sits on a tab button, so the container never needs to be focusable to receive the key.
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
     const currentIndex = TABS.findIndex(
       (definition) => definition.id === props.tab,
@@ -181,10 +146,7 @@ function PrDetailTabRow(props: PrDetailTabPickerProps): ReactNode {
             onClick={() => props.onSelectTab(definition.id)}
             onKeyDown={handleKeyDown}
             className={cn(
-              // `flex-1` + `basis-0` so every tab gets an equal share of the
-              // row rather than a share proportional to its label: otherwise
-              // "Overview" and "Files" end up visibly different widths and the
-              // control reads as misaligned.
+              // `flex-1` + `basis-0` so every tab gets an equal share of the row rather than a share proportional to its label: otherwise "Overview" and "Files" end up visibly different widths and the control reads as misaligned.
               "inline-flex min-w-0 flex-1 basis-0 items-center justify-center gap-1.5",
               "rounded-lg px-2 py-1.5 text-ui-sm transition-colors",
               "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
@@ -203,17 +165,7 @@ function PrDetailTabRow(props: PrDetailTabPickerProps): ReactNode {
 }
 
 /**
- * The phone arm: the same five tabs as a dropdown menu filling the same slot.
- *
- * MENU semantics rather than a listbox - picking a tab navigates the document,
- * it does not edit a form value - so the `role="tab"`/`tablist` contract and
- * its arrow-key roving focus do not carry over; Radix owns the keyboard model
- * here. `role="tabpanel"` on the panel below is unaffected, and stays labelled
- * by `prDetailTabButtonId`, which the trigger's LABEL span carries: Radix owns
- * the trigger element's own `id` and points the open menu's `aria-labelledby`
- * at it, so taking that id would leave the menu unnamed to name the panel.
- * Naming the panel from the label alone is the better read anyway - "Files"
- * rather than "Files 324, collapsed menu button".
+ * MENU semantics rather than a listbox - picking a tab navigates the document, it does not edit a form value - so the `role="tab"`/`tablist` contract and its arrow-key roving focus do not carry over; Radix owns the keyboard model here.
  */
 function PrDetailTabMenu(props: PrDetailTabPickerProps): ReactNode {
   // Total by construction: `props.tab` is a `PrDetailTabId` and `TABS` is
@@ -250,16 +202,12 @@ function PrDetailTabMenu(props: PrDetailTabPickerProps): ReactNode {
           />
         </button>
       </DropdownMenuTrigger>
-      {/* No `aria-label` here: Radix already points the menu's
-          `aria-labelledby` at its trigger, and `aria-labelledby` wins - so one
-          would be a silent no-op rather than the name it looks like. */}
+      {/* No `aria-label` here: Radix already points the menu's `aria-labelledby` at its trigger, and `aria-labelledby` wins - so one would be a silent no-op rather than the name it looks like. */}
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
           value={props.tab}
           onValueChange={(value) => {
-            // Narrowed by lookup rather than a cast: Radix hands back the bare
-            // `string` it was given, and an unrecognised one must select
-            // nothing rather than be asserted into a `PrDetailTabId`.
+            // Narrowed by lookup rather than a cast: Radix hands back the bare `string` it was given, and an unrecognised one must select nothing rather than be asserted into a `PrDetailTabId`.
             const next = TABS.find((definition) => definition.id === value);
             if (next === undefined) return;
             props.onSelectTab(next.id);
@@ -288,12 +236,7 @@ function PrDetailTabMenu(props: PrDetailTabPickerProps): ReactNode {
 }
 
 /**
- * A tab's count, or its blocking count in that count's place.
- *
- * A red "2" meaning "two failures" is a different fact from a grey "324"
- * meaning "this many files", so the blocking value SUBSTITUTES rather than
- * sits beside - one number per tab, either way. Overview has neither and
- * renders nothing.
+ * A red "2" meaning "two failures" is a different fact from a grey "324" meaning "this many files", so the blocking value SUBSTITUTES rather than sits beside - one number per tab, either way.
  */
 function PrTabCountBadge(props: {
   readonly count: number | null;

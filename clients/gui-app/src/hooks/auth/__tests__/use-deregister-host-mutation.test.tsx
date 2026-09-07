@@ -13,10 +13,7 @@ const deregisterHostFromAccount =
   vi.fn<(hostId: string) => Promise<DeregisterHostFetchResult>>();
 const refresh = vi.fn<() => Promise<readonly []>>();
 
-// F6: the shell capability the success path announces a membership change on.
-// Deliberately reached off the runner host, NOT the selection-authority
-// client - announcing "your copy is stale" must not widen the selection write
-// path this ticket narrowed.
+// Deliberately reached off the runner host, NOT the selection-authority client - announcing "your copy is stale" must not widen the selection write path this ticket narrowed.
 const refreshHostFleet = vi.fn<() => Promise<void>>();
 
 const auth = { deregisterHostFromAccount } as Pick<
@@ -59,13 +56,7 @@ describe("useDeregisterHostFromAccount", () => {
     cleanup();
   });
 
-  /**
-   * The settings host list is a UNION of the registry query and the runtime
-   * directory's own cached entries (`buildHostScopeOptions`). Invalidating only
-   * the registry leaves the removed host on screen as a directory-only row
-   * until the directory's ~15s poll - a row that outlives the success toast
-   * reads as a removal that did not happen.
-   */
+  /** The settings host list is a UNION of the registry query and the runtime directory's own cached entries (`buildHostScopeOptions`). */
   it("refreshes the runtime directory as well as the registry query", async () => {
     deregisterHostFromAccount.mockResolvedValue({ kind: "ok" });
     const queryClient = new QueryClient({
@@ -124,10 +115,7 @@ describe("useDeregisterHostFromAccount", () => {
     expect(otherRefresh).not.toHaveBeenCalled();
   });
 
-  /**
-   * A 404 means the host is already off the account - the user's intent holds,
-   * so it resolves rather than throwing, and the caches still have to catch up.
-   */
+  /** A 404 means the host is already off the account - the user's intent holds, so it resolves rather than throwing, and the caches still have to catch up. */
   it("treats an already-removed host as success and still refreshes", async () => {
     deregisterHostFromAccount.mockResolvedValue({ kind: "not-found" });
     const queryClient = new QueryClient({
@@ -147,12 +135,6 @@ describe("useDeregisterHostFromAccount", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * F6. Renderer-only refreshes leave the selection authority's fleet - which
-   * lives in the desktop main process - holding a host the account no longer
-   * has, so derivation can name a machine that is gone. The call is result-free
-   * and idempotent by contract, so the pin is simply that it happens.
-   */
   it("tells the shell its fleet is stale after a successful removal", async () => {
     deregisterHostFromAccount.mockResolvedValue({ kind: "ok" });
     const queryClient = new QueryClient({

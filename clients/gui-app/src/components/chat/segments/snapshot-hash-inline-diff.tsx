@@ -13,20 +13,7 @@ import {
 import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 
-/**
- * Inline merged diff rendered straight from a pair of snapshot hashes, reusing
- * the same `@pierre/diffs` pipeline as the file-change rows. Unlike
- * `FileChangeInlineDiff` (which keys off a `file_change` segment's
- * `sourceBlockIds`), this takes the before/after hashes directly - the shape
- * artifacts carry (they have no `file_change` block). Mounts only when expanded,
- * so the (common) collapsed case fetches nothing. `create` shows the file as all
- * additions (`beforeHash` null), `delete` as all deletions (`afterHash` null).
- *
- * Pure diff content with no internal scroll/cap: it grows to its full height and
- * scrolls with the chat, while the card / row's sticky header keeps the title +
- * "open full diff" control pinned. The full-diff affordance lives in that header
- * (`OpenFullDiffControl`), not here.
- */
+/** Mounts only when expanded, so the (common) collapsed case fetches nothing. */
 export function SnapshotHashInlineDiff(props: {
   readonly filePath: string;
   readonly beforeHash: string | null;

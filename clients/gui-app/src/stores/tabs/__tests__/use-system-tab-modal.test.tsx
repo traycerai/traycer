@@ -57,11 +57,6 @@ function buildRouter(initialPath: string) {
   });
 }
 
-// Same route tree as `buildRouter`, backed by the real persistent history
-// (`createPersistentMemoryHistory`) instead of a plain in-memory one, so
-// tests can assert on `getHistoryController(...)`'s live stack/cursor - the
-// cold-load redirect's `replace` semantics only interact with adjacent-
-// duplicate collapse on the persistent controller, not on `createMemoryHistory`.
 function buildPersistentRouter(windowId: string) {
   const rootRoute = createRootRoute({
     validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
@@ -332,10 +327,6 @@ describe("settings section is store-backed, not URL-backed", () => {
 describe("useSystemTabModalRefreshGuard", () => {
   beforeEach(() => {
     __resetTabNavigationControllerForTesting();
-    // The cold-load latch is module-scoped ("once per renderer boot"), not
-    // per-hook-instance, so tests must reset it explicitly between cases -
-    // otherwise a prior test's boot consumes it and the redirect below never
-    // gets to fire.
     resetSystemTabModalColdLoadForTests();
     useTabsStore.setState({ systemTabs: { history: null, settings: null } });
   });
@@ -362,10 +353,8 @@ describe("useSystemTabModalRefreshGuard", () => {
   });
 
   it("fires the focus-tab-first redirect exactly once on cold load, using replace", async () => {
-    // Simulates a genuine cold boot: the persisted/restored URL carries an
-    // overlay flag, but the settings tab is already open (e.g. restored from
-    // a prior session). The guard's first-ever effect pass must redirect
-    // straight to the tab and drop the overlay param.
+    // Simulates a genuine cold boot: the persisted/restored URL carries an overlay flag, but the
+    // settings tab is already open (e.g. restored from a prior session).
     useTabsStore.setState({
       systemTabs: {
         history: null,
@@ -390,11 +379,8 @@ describe("useSystemTabModalRefreshGuard", () => {
       expect.objectContaining({ replace: true }),
     );
 
-    // A later in-app crossing back onto an overlay-flagged URL must NOT
-    // re-trigger the cold-load-only redirect. Unlike the old per-instance
-    // ref (which reset on any ancestor remount), the module-scoped latch
-    // stays consumed for the rest of the renderer's life, so this can only
-    // land back on `/settings/general` if the redirect incorrectly re-fires.
+    // A later in-app crossing back onto an overlay-flagged URL must NOT re-trigger the cold-load-only
+    // redirect.
     navigateSpy.mockClear();
     await router.navigate({
       to: "/epics/$epicId/$tabId",
@@ -415,11 +401,7 @@ describe("useSystemTabModalRefreshGuard", () => {
   });
 
   it("cold boot onto an overlay entry with the tab route already ahead leaves no dead forward step", async () => {
-    // A restored stack where the redirect target is ALREADY the next
-    // persisted entry (e.g. the user promoted the overlay to a tab in a
-    // prior session, then quit with the cursor back on the overlay entry).
-    // The cold-load redirect's `replace` must collapse that forward
-    // duplicate, not just land on it and leave a dead forward step.
+    // A restored stack where the redirect target is ALREADY the next persisted entry (e.g.
     useTabsStore.setState({
       systemTabs: {
         history: null,
@@ -487,7 +469,7 @@ describe("canPopOverlayEntry", () => {
   });
 
   it("refuses to pop into a previous overlay entry on the same path", () => {
-    // [page, settingsOverlay, historyOverlay] — closing history must NOT back()
+    // [page, settingsOverlay, historyOverlay] - closing history must NOT back()
     // into the settings overlay, it must dismiss to the page via replace.
     const history = seedHistory(
       "pop-stacked",

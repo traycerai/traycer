@@ -19,16 +19,6 @@ import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
-/**
- * Hovering ANY part of a PR row reveals the chats it came from - the row's
- * owner badges are capped at four and truncate each title to a pill, so on the
- * rows where "which conversation produced this?" is hardest they answer least.
- *
- * Renders the real `PrRow`, not the wrapper alone: the two facts worth holding
- * are that the card opens from the row BODY (not from the badge band) and that
- * the row's title tooltip stands down while the card is showing the same title,
- * and neither is observable with the row stubbed out.
- */
 
 const openTile = vi.fn<(intent: TileOpenIntent) => null>();
 
@@ -38,7 +28,6 @@ let parentByNodeId: Readonly<Record<string, string | null>> = {};
 /** Owner ids whose node has been DELETED - the orphaned-binding case. */
 let deletedNodeIds: ReadonlySet<string> = new Set<string>();
 
-/** Whether the `OpenEpicStore` session handle exists yet. */
 let hasSessionHandle = true;
 
 function treeIndexFromParents(): EpicTreeIndex {
@@ -87,10 +76,6 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile }),
 }));
 
-// `EpicSessionGate` reads the RAW context, not the mocked projection hooks, so
-// the handle's presence is what decides whether the projection is READ at all.
-// Whether the card then renders is a second question the mocked lookups answer
-// - on a real current host, whether the store-backed chat records have landed.
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useMaybeOpenEpicHandle: () =>
     hasSessionHandle ? { epicId: "epic-1" } : null,
@@ -212,9 +197,7 @@ describe("PrRow owner hover card", () => {
   });
 
   it("lists owners the badge band cannot fit", () => {
-    // Six is past `VISIBLE_PR_OWNER_COUNT` + 1, so the band shows three chips
-    // and a `+3`. The card is the whole set with no chip budget at all - the
-    // reason to put it on the row rather than on the band.
+    // The card is the whole set with no chip budget at all - the reason to put it on the row rather than on the band.
     renderRow({ owners: chatOwners(6) });
 
     hoverRow();
@@ -266,12 +249,6 @@ describe("PrRow owner hover card", () => {
   it("heads the card with the full title and stands the row's tooltip down", () => {
     renderRow({ owners: chatOwners(2) });
 
-    // Stood down for the row's whole LIFETIME, not just while the card is
-    // showing: both open at 500ms from the same pointer and the title is the
-    // row's largest hover target, so a tooltip that armed itself between hovers
-    // would still be the second floating surface this exists to prevent. The
-    // three sibling tests below assert the inverse - a row with no card keeps
-    // it.
     expect(screen.getByTestId("pr-row-title").dataset.slot).toBeUndefined();
 
     hoverRow();
@@ -296,12 +273,6 @@ describe("PrRow owner hover card", () => {
   });
 
   it("has no card while no owner resolves to a node", () => {
-    // Two ways to land here, one shape. Owner sets are projected from persisted
-    // worktree-binding rows and can OUTLIVE their nodes (the all-deleted case
-    // `usePresentPrOwners` exists for); and on a current host the titles come
-    // from the store-backed record plane, so a live session that has not yet
-    // been served `epic.listChatRecords` resolves none of them either. Both
-    // mean the same thing to this surface: no card, tooltip stays.
     deletedNodeIds = new Set(["chat-1", "chat-2"]);
     renderRow({ owners: chatOwners(2) });
 
@@ -314,10 +285,8 @@ describe("PrRow owner hover card", () => {
   });
 
   it("renders the row without a card before the epic session lands", () => {
-    // The PR list arrives on its OWN host stream, and `EpicSessionProvider`
-    // renders children before it holds a handle - so fully-populated rows paint
-    // while the epic store session is still null. Every projection read here
-    // would throw; the row must survive that window.
+    // The PR list arrives on its OWN host stream, and `EpicSessionProvider` renders children before it holds a handle - so fully-populated rows paint while the epic store session is still null.
+    // Every projection read here would throw; the row must survive that window.
     hasSessionHandle = false;
     renderRow({ owners: chatOwners(2) });
 

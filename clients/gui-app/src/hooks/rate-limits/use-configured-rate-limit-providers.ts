@@ -38,14 +38,7 @@ interface ProviderRateLimitCacheState {
   readonly isError: boolean;
 }
 
-/**
- * Cache-only observation: never `enabled`, so mounting this options object
- * against a query never initiates its own provider read - it only reflects
- * whatever the shared serial queue or another lane's active query already
- * wrote into that exact cache key. Exported for other picker-only surfaces
- * (`use-profile-usage-comparison.ts`) that need the same "observe, never
- * fetch" contract this module's own `useVisibleRateLimitProviders` uses.
- */
+/** Cache-only observation: never `enabled`, so mounting this options object against a query never initiates its own provider read - it only reflects whatever the shared serial queue or another lane's active query already wrote into that exact cache key. */
 export const PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS: ProviderRateLimitTanstackOptions =
   {
     enabled: false,
@@ -97,20 +90,7 @@ function rateLimitProviderCandidates(
 }
 
 /**
- * The currently-configured rate-limit-capable providers on the default host,
- * each tagged with its fetch lane. Drives both the interval timer (walks the
- * `ephemeralProcess` entries) and, later, the popover rail.
- *
- * Mounted persistently at the app-shell level (via `RateLimitQueueProvider`),
- * so `providers.list` is subscribed for the window's lifetime rather than
- * lazily on Settings open. `subscribed: true` keeps it refreshing so a
- * credential change (login/logout invalidates `providers.list`) re-gates the
- * set - a removed credential drops that target immediately; the provider
- * remains only when another ambient/managed target is still authenticated.
- *
- * TanStack's structural sharing keeps `data.providers` referentially stable
- * across identical polls, so the memoized projection only recomputes on a real
- * list change.
+ * App-shell mount keeps `providers.list` subscribed for the window lifetime so a credential change re-gates the set immediately.
  */
 export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
@@ -123,24 +103,7 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
   }, [providers]);
 }
 
-/**
- * Rate-limit providers that should be displayed in user-facing surfaces
- * (header glyph / popover). This deliberately has a wider gate than
- * `useConfiguredRateLimitProviders()`: the queue polls only providers with at
- * least one target whose account probe says a usage pull is safe, while display also
- * includes a provider once the shared provider-usage query cache has data or an
- * error for it. Candidate construction deliberately includes signed-out
- * providers: auth still makes `configured` false (so the polling hook above
- * drops them), while this display hook keeps observing their existing cache
- * entry. Ambient sign-out stops only the ambient queue; an authenticated
- * managed profile remains a valid target and keeps the provider visible even
- * before a cache entry exists. This display hook still observes existing
- * profile cache entries for every signed-out target.
- *
- * The cache observers below are passive (`enabled: false`) and only subscribe
- * to the existing `host.getRateLimitUsage` provider-pull keys. They do not
- * spawn extra CLI subprocesses or HTTP fetches.
- */
+/** Wider than the poll gate: keep observing cached signed-out entries. Observers are enabled false. */
 export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
   const client = useHostClient();
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });

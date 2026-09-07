@@ -1,16 +1,6 @@
 /**
- * Opens the epic's communication graph from the Agents panel header.
- *
- * The graph used to have its own sidebar rail entry, which put a whole panel in
- * the rail for something that is one canvas. It lives here instead because the
- * Agents panel is already the list of the things the graph draws - the button is
- * "see these as a graph", next to the other controls that act on that list.
- *
- * DEDUPING BY CONSTRUCTION: `makeCommGraphTileRef` derives the tile's content id
- * from the epic, and `openTile` focuses an existing tab with that id rather than
- * minting a second one. That matters beyond tidiness - per-tile state keyed on
- * the content id (the graph's persisted viewport) would otherwise be written by
- * two tabs at once, so panning one would move the other.
+ * DEDUPING BY CONSTRUCTION: `makeCommGraphTileRef` derives the tile's content id from the epic, and `openTile` focuses an existing tab with that id rather than minting a second one.
+ * That matters beyond tidiness - per-tile state keyed on the content id (the graph's persisted viewport) would otherwise be written by two tabs at once, so panning one would move the other.
  */
 import { Waypoints } from "lucide-react";
 import { cn } from "@/lib/utils";

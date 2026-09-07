@@ -24,13 +24,7 @@ import {
   resourcesSubscribeV15,
 } from "@traycer/protocol/host/resources/subscribe";
 
-/**
- * `resources.subscribe@1.0` contract fixtures + registry membership.
- *
- * Covers the open request, every server/client frame kind, and the invariant
- * that the stream method is negotiated from the combined stream registry at
- * `{ major: 1, minor: 0 }`.
- */
+/** `resources.subscribe@1.0` contract fixtures + registry membership. */
 
 const PROCESS_FIXTURE = {
   pid: 42,
@@ -441,10 +435,7 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
   });
 
   it("defaults an absent creator to the empty string", () => {
-    // A host from before the field exists must degrade to the flat list (the
-    // GUI leaves a creatorless shell at the task level), not fail the whole
-    // frame's parse - a required field here blacks out the entire panel, every
-    // owner row included, the moment fleets skew.
+    // A host from before the field exists must degrade to the flat list (the GUI leaves a creatorless shell at the task level), not fail the whole frame's parse - a required field here blacks out the entire panel, every.
     const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
       frameWithOwners([
         {

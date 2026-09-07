@@ -27,13 +27,8 @@ function snapshotDiffTileIdTarget(payload: SnapshotDiffTilePayload): string {
       return `bundle:${encodeURIComponent(payload.chatId)}:${filePaths.map(encodeURIComponent).join(":")}`;
     }
     case "snapshot-hash": {
-      // Identity is the before/after hash pair within the chat - NOT the
-      // filePath. The card passes "index.md" and the change row passes the
-      // absolute path for the same edit; keying on the hashes makes both open
-      // (and dedupe to) one tile. If BOTH hashes are absent (a degenerate,
-      // UI-unreachable case - the open affordance is gated on a renderable
-      // diff), fall back to the filePath so distinct artifacts don't collide
-      // into a single `hash:<chat>::` tile.
+      // Identity is the before/after hash pair within the chat - NOT the filePath.
+      // The card passes "index.md" and the change row passes the absolute path for the same edit; keying on the hashes makes both open (and dedupe to) one tile.
       const before = payload.beforeHash ?? "";
       const after = payload.afterHash ?? "";
       const key =
@@ -46,14 +41,8 @@ function snapshotDiffTileIdTarget(payload: SnapshotDiffTilePayload): string {
 }
 
 /**
- * Tile for a single chat tool-call edit. `sourceBlockIds` names the host
- * file_change blocks that contributed to the row; the renderer re-reads
- * before->after from the chat session. `hostId` binds the tile to the chat's
- * host for life.
- *
- * `beforeHash`/`afterHash` are those blocks' endpoints as of the click, kept so
- * a tile outliving its row's hydration still resolves. They do not enter the
- * tile id.
+ * Tile for a single chat tool-call edit.
+ * `sourceBlockIds` names the host file_change blocks that contributed to the row; the renderer re-reads before->after from the chat session.
  */
 export function makeSnapshotSegmentDiffTile(args: {
   readonly hostId: string;
@@ -128,11 +117,8 @@ export function makeSnapshotCumulativeBundleDiffTile(args: {
 }
 
 /**
- * Tile for an artifact `index.md` edit, addressed by its before/after content
- * hashes. Unlike the segment tile, this carries the hashes inline (artifacts
- * have no `file_change` block to resolve them from), so the renderer fetches the
- * content by hash directly. `title` becomes the tab name (the artifact's title
- * reads far better than the `index.md` basename).
+ * Tile for an artifact `index.md` edit, addressed by its before/after content hashes.
+ * Unlike the segment tile, this carries the hashes inline (artifacts have no `file_change` block to resolve them from), so the renderer fetches the content by hash directly.
  */
 export function makeSnapshotHashDiffTile(args: {
   readonly hostId: string;

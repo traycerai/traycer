@@ -1,12 +1,6 @@
 #!/usr/bin/env bun
 "use strict";
 
-/**
- * Bundles the isolated-world annotation overlay (plus perfect-freehand)
- * into a self-contained IIFE string that CDP can evaluate.
- *
- * Invoked by build-main-bundle.cjs and safe to run on its own.
- */
 
 const { mkdirSync, writeFileSync } = require("node:fs");
 const path = require("node:path");

@@ -1,29 +1,3 @@
-/**
- * Behavioural coverage for `createArtifactRoomTier` — the hot/cold artifact
- * room lease registry.
- *
- * Pins, per the module doc and the invariants written down beside each
- * closure in `artifact-room-tier.ts`:
- *
- *  1. `isPinned`'s three independent arms (lease / local divergence / remote
- *     awareness peers), each verified via `demoteIdle()` against an otherwise
- *     identical unpinned control room that DOES demote.
- *  2. The cooldown timer demotes an unpinned room after
- *     `ARTIFACT_ROOM_LEASE_POLICY.cooldownMs`, driven by the injected
- *     `RuntimeEnvironment` scheduler rather than vitest fake timers, and
- *     releasing a lease re-arms it.
- *  3. `applySnapshot`'s three outcomes: `"filed-cold"` / `"seeded"` /
- *     `"merged"`.
- *  4. `materialize` (via `acquireSync`) returns nothing to `peek` for a
- *     never-seeded room — no fabricated empty doc, and the grant is
- *     `"awaiting-seed"` WITH a lease rather than a refusal.
- *  5. Cold awareness frames are bounded at `COLD_ROOM_AWARENESS_FRAMES` (32)
- *     and replayed on materialization.
- *
- * Real `Y.Doc` / `Awareness` objects throughout; fakes only at the
- * `RuntimeEnvironment` / `EpicSessionFacts` / transport boundary, matching
- * `open-epic/__tests__` convention.
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Awareness, encodeAwarenessUpdate } from "y-protocols/awareness";
@@ -51,9 +25,8 @@ import type { EpicOutboundRequest } from "../epic-runtime-events";
 // ─── Fakes ──────────────────────────────────────────────────────────────────
 
 /**
- * A controllable clock/scheduler with no real timers — the injected seam
- * used INSTEAD OF `vi.useFakeTimers`, mirroring
- * `replica-runtime-seam.test.ts`'s `createFakeEnvironment`.
+ * A controllable clock/scheduler with no real timers - the injected seam used INSTEAD OF
+ * `vi.useFakeTimers`, mirroring `replica-runtime-seam.test.ts`'s `createFakeEnvironment`.
  */
 function createFakeEnvironment(): RuntimeEnvironment & {
   advanceClock(ms: number): void;
@@ -92,9 +65,6 @@ function createFakeEnvironment(): RuntimeEnvironment & {
     },
     advanceClock(ms: number): void {
       nowMs += ms;
-      // Fire in insertion order, snapshotting the due set first so a re-arm
-      // scheduled BY a firing callback is not drained within this same
-      // advance — matching a real scheduler's next tick, not an eager loop.
       const due = pendingTimers.filter(
         (entry) => !entry.cancelled && entry.fireAt <= nowMs,
       );
@@ -146,28 +116,18 @@ interface TestHarness {
   readonly session: EpicSessionFacts & { readonly state: FakeSessionState };
   readonly sent: EpicOutboundRequest[];
   /**
-   * The frames the transport ACCEPTED, which is a different set from `sent`
-   * the moment a test installs a refusing answer - and the difference is the
-   * whole subject of the outbound-queue pins. Asserting on `sent` would count
-   * a refused frame as delivered, which is precisely the bug.
+   * The frames the transport ACCEPTED, which is a different set from `sent` the moment a test
+   * installs a refusing answer - and the difference is the whole subject of the outbound-queue pins.
    */
   readonly delivered: EpicOutboundRequest[];
-  /**
-   * What the transport answers. Mutable because a body LANE refuses
-   * independently of every epic-level fact `session` carries - no adapter yet,
-   * or no `docGuid` because no snapshot has seeded it - and that refusal is
-   * only observable through the outcome.
-   */
+  /** What the transport answers. */
   readonly transport: {
     answer: (request: EpicOutboundRequest) => SendOutcome;
   };
 }
 
-// No override parameter. It was an unused `overrides?: Partial<...>` - both an
-// ESLint-banned optional parameter and dead surface, since no call site ever
-// passed one. A test that needs a different source builds the tier directly;
-// re-adding a spread-over-defaults hole would let a future override silently
-// replace a source this harness is asserting through.
+// No override parameter. It was an unused `overrides?: Partial<...>` - both an ESLint-banned
+// optional parameter and dead surface, since no call site ever passed one.
 function createHarness(): TestHarness {
   const environment = createFakeEnvironment();
   const session = createFakeSession();
@@ -180,9 +140,8 @@ function createHarness(): TestHarness {
     environment,
     session,
     send: (request) => {
-      // Recorded even when refused: "the transport was asked and said no" is a
-      // different fact from "nothing was attempted", and a pin for the queue
-      // has to be able to tell them apart.
+      // Recorded even when refused: "the transport was asked and said no" is a different fact from
+      // "nothing was attempted", and a pin for the queue has to be able to tell them apart.
       sent.push(request);
       const outcome = transport.answer(request);
       if (outcome.kind === "sent") delivered.push(request);
@@ -208,7 +167,7 @@ function makeSnapshotBytes(text: string): {
   return { bytes, hostStateVectorBase64 };
 }
 
-/** Fails loudly instead of silently narrowing — `peek()`'s null covers both
+/** Fails loudly instead of silently narrowing - `peek()`'s null covers both
  * "cold" and "unknown", so a test that expects hot must say so explicitly. */
 function requireHotEntry(
   tier: ArtifactRoomTier,
@@ -221,13 +180,7 @@ function requireHotEntry(
   return entry;
 }
 
-/**
- * A single-client awareness update naming a distinct, deterministic remote
- * peer. `clientID` is set directly on the scratch doc (not left to Yjs's
- * random assignment) so 40 of these are guaranteed pairwise distinct — load
- * bearing for the frame-bound test, which counts distinct clients after
- * replay.
- */
+/** A single-client awareness update naming a distinct, deterministic remote peer. */
 function remoteAwarenessFrame(clientId: number): Uint8Array {
   const scratchDoc = new Y.Doc();
   scratchDoc.clientID = clientId;
@@ -250,16 +203,7 @@ function trackTierDisposal(tier: ArtifactRoomTier): void {
 
 // ─── 1. isPinned's three arms ───────────────────────────────────────────────
 
-/**
- * The lease out of a grant, refusing the one arm that has none.
- *
- * Narrowing rather than a cast, and it earns its place twice: the shared
- * contract's rule is "if you got a lease, you release it", so a test that
- * silently skipped the release would leak demand into the next assertion - and
- * `"unavailable"` reaching here at all would mean the tier refused to register
- * demand for a room it should have, which is precisely the defect the
- * `"awaiting-seed"` arm exists to prevent.
- */
+/** The lease out of a grant, refusing the one arm that has none. */
 function leaseOf(grant: LeaseGrant<ArtifactRoomReplicaEntry>): LeaseHandle {
   if (grant.kind === "unavailable") {
     throw new Error(
@@ -342,7 +286,7 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
     const entry = requireHotEntry(tier, "room-dirty");
     leaseOf(leaseGrant).release(); // drop the lease pin so divergence is the ONLY remaining arm
 
-    session.state.permissionRole = "owner"; // writable — required for the doc-update handler to mark dirty
+    session.state.permissionRole = "owner"; // writable - required for the doc-update handler to mark dirty
     entry.doc.getMap("body").set("local-edit", "1");
 
     expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
@@ -372,11 +316,8 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
 
     tier.applyAwareness("room-peered", remoteAwarenessFrame(999));
     const entry = requireHotEntry(tier, "room-peered");
-    // `Awareness` seeds its OWN clientID into `getStates()` on construction
-    // (with a null state), so the baseline is 1, not 0 - one remote peer
-    // brings it to 2. `hasRemotePeers()` accounts for this by excluding
-    // `entry.awareness.clientID` before deciding, which is exactly what this
-    // arm is pinning.
+    // `Awareness` seeds its OWN clientID into `getStates()` on construction (with a null state), so
+    // the baseline is 1, not 0 - one remote peer brings it to 2.
     expect(entry.awareness.getStates().size).toBe(2);
     expect(entry.awareness.getStates().has(999)).toBe(true);
     expect(entry.awareness.getStates().has(entry.awareness.clientID)).toBe(
@@ -390,17 +331,8 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
   });
 
   it("the RELAYED main-thread identity does NOT keep the room hot", () => {
-    // The twin of the arm above, and the one with a leak behind it.
-    //
-    // After the worker relocation the editor's presence arrives under a
-    // main-side `clientID` that is not `entry.awareness.clientID`. Read
-    // naively that is "a remote collaborator is present", which is a
-    // materialisation PIN - so the room would never cool while an editor was
-    // open, and would stay hot forever if the departure frame never arrived
-    // (a teardown-order accident, permanent when it happens).
-    //
-    // `relayedLocalClientId` is what makes the predicate tell the two apart.
-    // Ablate its exclusion in `isOwnAwarenessClient` and this goes red.
+    // The twin of the arm above, and the one with a leak behind it. After the worker relocation the
+    // editor's presence arrives under a main-side `clientID` that is not `entry.awareness.clientID`.
     const { tier } = createHarness();
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
@@ -430,11 +362,8 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
   });
 
   it("replaces a changed relayed identity and evicts the old one", () => {
-    // A rematerialize builds a fresh main-side `Y.Doc`, so `Awareness` takes a
-    // NEW clientID for the same room. The old id must be evicted, not merely
-    // forgotten: once this field names the new id, nothing excludes the old
-    // one any more - it becomes exactly the stranger that pins the room hot,
-    // and no teardown will ever remove it.
+    // A rematerialize builds a fresh main-side `Y.Doc`, so `Awareness` takes a NEW clientID for the
+    // same room.
     const { tier } = createHarness();
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
@@ -480,16 +409,8 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
   });
 
   it("does not replay the relayed identity back as a peer after a demote", () => {
-    // The GHOST-CURSOR twin, and it has its own ablation: `encodePeerAwareness`
-    // filters by the same helper, and reverting THAT call site alone (leaving
-    // `hasRemotePeers` correct) reds only this test.
-    //
-    // The demote replay exists so a peer who was present before a room cooled
-    // is still visible after it comes back. The relayed identity must be
-    // excluded for the reason the exclusion was written for in the first
-    // place: the editor sets its own state when it rebinds, so replaying a
-    // stale copy fights that - here by rendering the user their own cursor as
-    // a stranger sitting in the room.
+    // The GHOST-CURSOR twin, and it has its own ablation: `encodePeerAwareness` filters by the same
+    // helper, and reverting THAT call site alone (leaving `hasRemotePeers` correct) reds only this
     const { tier } = createHarness();
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
@@ -541,7 +462,7 @@ describe("cooldown timer", () => {
     const leaseGrant = tier.acquireSync("room-cooldown");
     requireHotEntry(tier, "room-cooldown");
 
-    // While leased, no cooldown is armed at all — advancing past cooldownMs
+    // While leased, no cooldown is armed at all - advancing past cooldownMs
     // must not demote a pinned room.
     environment.advanceClock(ARTIFACT_ROOM_LEASE_POLICY.cooldownMs);
     expect(tier.peek("room-cooldown")).not.toBeNull();
@@ -549,10 +470,10 @@ describe("cooldown timer", () => {
     // Releasing the lease re-arms the linger timer.
     leaseOf(leaseGrant).release();
     environment.advanceClock(ARTIFACT_ROOM_LEASE_POLICY.cooldownMs - 1);
-    expect(tier.peek("room-cooldown")).not.toBeNull(); // not yet — one ms short
+    expect(tier.peek("room-cooldown")).not.toBeNull(); // not yet - one ms short
 
     environment.advanceClock(1);
-    expect(tier.peek("room-cooldown")).toBeNull(); // cooldownMs fully elapsed — demoted
+    expect(tier.peek("room-cooldown")).toBeNull(); // cooldownMs fully elapsed - demoted
 
     // Re-materialize (the demoted bytes are retained cold) and re-lease, to
     // prove release RE-ARMS rather than firing once and going inert.
@@ -649,7 +570,7 @@ describe("materialize (via acquire) on a never-seeded room", () => {
     expect(tier.peek("room-unseeded")).toBeNull();
 
     // Confirmed by the applySnapshot outcome on the SAME id: "seeded", never
-    // "merged" — proving no doc existed before this snapshot.
+    // "merged" - proving no doc existed before this snapshot.
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
     expect(
       tier.applySnapshot({
@@ -673,7 +594,7 @@ describe("cold awareness frames", () => {
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
 
-    // File the room cold first — recordColdAwareness only extends a room the
+    // File the room cold first - recordColdAwareness only extends a room the
     // host has already snapshotted.
     expect(
       tier.applySnapshot({
@@ -690,15 +611,13 @@ describe("cold awareness frames", () => {
     for (let clientId = 1; clientId <= 40; clientId += 1) {
       tier.applyAwareness("room-frames", remoteAwarenessFrame(clientId));
     }
-    expect(tier.peek("room-frames")).toBeNull(); // still cold — no lease taken
+    expect(tier.peek("room-frames")).toBeNull(); // still cold - no lease taken
 
     const leaseGrant = tier.acquireSync("room-frames");
     const entry = requireHotEntry(tier, "room-frames");
 
-    // Only the last-32-window's worth of distinct remote clients survived -
-    // clientIDs 9..40, not all 40. Plus the room's own baseline entry (see
-    // the remote-peer pin test above for why `Awareness` always seeds its
-    // own clientID into `getStates()`).
+    // Only the last-32-window's worth of distinct remote clients survived - clientIDs 9..40, not all
+    // 40.
     expect(entry.awareness.getStates().size).toBe(33);
     expect(entry.awareness.getStates().has(1)).toBe(false); // pushed out
     expect(entry.awareness.getStates().has(8)).toBe(false); // pushed out
@@ -718,9 +637,8 @@ describe("dispose() — the registry's terminal contract", () => {
   it("releases every outstanding lease, clears demand, and refuses later acquisition", () => {
     const { tier } = createHarness();
 
-    // Both lease-bearing arms, because the contract is about every HELD lease
-    // and the two arms reach it by different routes: one has a live resource,
-    // one is demand on a room with no bytes yet.
+    // Both lease-bearing arms, because the contract is about every HELD lease and the two arms reach
+    // it by different routes: one has a live resource, one is demand on a room with no bytes yet.
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("seeded body");
     const seededGrant = tier.acquireSync("room-granted");
     tier.applySnapshot({
@@ -785,10 +703,8 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
     });
     expect(seedOutcome).toBe("seeded");
     const entryBefore = requireHotEntry(tier, "room-replace");
-    // `toJSON()`, not `toString()`: yjs declares `toJSON(): string` on `Y.Text`
-    // and does NOT declare `toString`, so the latter resolves to
-    // `Object.prototype.toString` in the type system - it happens to work at
-    // runtime, which is exactly what makes it worth not relying on.
+    // `toJSON()`, not `toString()`: yjs declares `toJSON(): string` on `Y.Text` and does NOT declare
+    // `toString`, so the latter resolves to `Object.prototype.toString` in the type system - it
     expect(entryBefore.doc.getText("body").toJSON()).toBe("alpha");
 
     // A deleted-and-recreated artifact: same room id, new guid, unrelated
@@ -802,17 +718,13 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
       docGuid: "guid-b",
     });
 
-    // "seeded", not "merged" - the room was torn down and rebuilt, so
-    // anything bound to `entryBefore` by reference is now stale and must
-    // rebind.
+    // "seeded", not "merged" - the room was torn down and rebuilt, so anything bound to `entryBefore`
+    // by reference is now stale and must rebind.
     expect(replaceOutcome).toBe("seeded");
     const entryAfter = requireHotEntry(tier, "room-replace");
     expect(entryAfter).not.toBe(entryBefore);
 
-    // A splice would leave BOTH texts in the doc (interleaved or
-    // concatenated). Assert the new content is present AND the old content
-    // is explicitly absent - not just that "beta" appears somewhere, which a
-    // splice would also satisfy.
+    // A splice would leave BOTH texts in the doc (interleaved or concatenated).
     const finalText = entryAfter.doc.getText("body").toJSON();
     expect(finalText).toBe("beta");
     expect(finalText).not.toContain("alpha");
@@ -848,10 +760,7 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
       docGuid: "guid-c",
     });
 
-    // "merged", not "seeded" - the SAME guid never tears the room down. This
-    // is the pin that stops a "fix" for the replace case above from just
-    // replacing on every snapshot: that would also produce a new entry
-    // object and wipe the local edit below.
+    // "merged", not "seeded" - the SAME guid never tears the room down.
     expect(outcome).toBe("merged");
     expect(tier.peek("room-merge-same-guid")).toBe(entry);
     expect(entry.doc.getMap("local-marker").get("kept")).toBe("yes");
@@ -887,9 +796,8 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
       docGuid: null,
     });
 
-    // "merged", the SAME entry survives, and the local edit is intact - the
-    // guarantee that the `@1` arm (which never states an identity) is
-    // unchanged by the guid-replace rule.
+    // "merged", the SAME entry survives, and the local edit is intact - the guarantee that the `@1`
+    // arm (which never states an identity) is unchanged by the guid-replace rule.
     expect(outcome).toBe("merged");
     expect(tier.peek("room-null-guid")).toBe(entry);
     expect(entry.doc.getMap("local-marker").get("kept")).toBe("yes");
@@ -912,9 +820,8 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
     });
     const entry = requireHotEntry(tier, "room-null-vector-dirty");
 
-    // Local edit while the room cannot send - the same writable-role gate as
-    // the local-divergence pin above, plus `canSendBodyWrites: false` so the
-    // edit is queued rather than drained immediately.
+    // Local edit while the room cannot send - the same writable-role gate as the local-divergence pin
+    // above, plus `canSendBodyWrites: false` so the edit is queued rather than drained immediately.
     session.state.permissionRole = "owner";
     session.state.canSendBodyWrites = false;
     entry.doc.getMap("dirty-marker").set("edit", "1");
@@ -936,12 +843,8 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
     expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
     expect(tier.hasDivergence()).toBe(true);
 
-    // A snapshot carrying a vector that actually covers the watermark clears
-    // it - proving the assertions above are not just a tier that never
-    // clears the watermark at all. The covering vector and bytes are the
-    // replica's own current full state taken at the same instant, so the
-    // diff against them is trivial by construction and the coverage check
-    // is unambiguous.
+    // A snapshot carrying a vector that actually covers the watermark clears it - proving the
+    // assertions above are not just a tier that never clears the watermark at all.
     const coveringVector = encodeDocStateVectorBase64(entry.doc);
     const coveringBytes = Y.encodeStateAsUpdate(entry.doc);
     tier.applySnapshot({
@@ -959,18 +862,7 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
   });
 });
 
-// ─── 9. the doc-identity fence on INCREMENTAL frames ──────────────────────
-//
-// `applySnapshot` has always fenced on identity: a stated change REPLACES
-// everything held, because a deleted-and-recreated artifact shares no ancestor
-// with what this client holds. The incremental frames had no fence at all -
-// their guid was dropped one layer up, in `laneBodyTranslationOf`, so nothing
-// down here could compare it.
-//
-// `DocUpdateEvent.docGuid` names the owner of this check in its own words:
-// "REQUIRED, and the replica - not the adapter - owns the drop", because
-// leaving it off the event "would push a core replica invariant into every
-// adapter, where it would be enforced three times and eventually only twice".
+// ─── 9.
 
 describe("incremental frames naming a superseded doc identity", () => {
   it("DROPS an update from the generation a reseed replaced, rather than splicing two histories", () => {
@@ -988,10 +880,8 @@ describe("incremental frames naming a superseded doc identity", () => {
     const entry = requireHotEntry(tier, "room-fence");
     const seeded = entry.doc.getText("body").toJSON();
 
-    // A delayed `doc-update` from the generation this seed superseded. Its
-    // bytes are perfectly valid Yjs - that is exactly the problem. Applied,
-    // `Y.applyUpdate` splices two histories that share no ancestor into one
-    // document, and no later frame can separate them again.
+    // A delayed `doc-update` from the generation this seed superseded. Its bytes are perfectly valid
+    // Yjs - that is exactly the problem.
     tier.applyUpdate(
       "room-fence",
       makeSnapshotBytes("STALE GENERATION").bytes,
@@ -1006,10 +896,8 @@ describe("incremental frames naming a superseded doc identity", () => {
   });
 
   it("APPLIES an update naming the current identity, and one naming none", () => {
-    // The two controls, and they are not decoration: a fence that dropped
-    // every update, or that dropped every update on the `@1` arm (where no
-    // identity is ever stated), would satisfy the pin above completely while
-    // making bodies stop updating for everyone.
+    // The two controls, and they are not decoration: a fence that dropped every update, or that
+    // dropped every update on the `@1` arm (where no identity is ever stated), would satisfy the pin
     const { tier } = createHarness();
     trackTierDisposal(tier);
     const leaseGrant = tier.acquireSync("room-fence-ok");
@@ -1031,9 +919,8 @@ describe("incremental frames naming a superseded doc identity", () => {
     );
     expect(entry.doc.getText("body").toJSON()).toContain("MATCHING");
 
-    // `null` is what `@1` states, on every frame, forever. An unstated
-    // identity cannot be found to have changed - the same rule
-    // `seedReplacesHeldDoc` already applies to snapshots.
+    // `null` is what `@1` states, on every frame, forever. An unstated identity cannot be found to
+    // have changed - the same rule `seedReplacesHeldDoc` already applies to snapshots.
     tier.applyUpdate(
       "room-fence-ok",
       makeSnapshotBytes("LEGACY ARM").bytes,
@@ -1046,11 +933,8 @@ describe("incremental frames naming a superseded doc identity", () => {
   });
 
   it("DROPS a coverage ack from a superseded generation, so it cannot retire the live document's watermark", () => {
-    // The quieter loss of the two, and permanent in a way an update is not:
-    // coverage retires the dirty watermark, so an ack accepted from a
-    // generation the host has replaced marks the CURRENT document's unsent
-    // edits as durable when the host has never seen them. They then leave the
-    // divergence accounting while existing nowhere but this tab.
+    // The quieter loss of the two, and permanent in a way an update is not: coverage retires the dirty
+    // watermark, so an ack accepted from a generation the host has replaced marks the CURRENT
     const { tier, session } = createHarness();
     trackTierDisposal(tier);
     const seed = makeSnapshotBytes("seed content");
@@ -1064,9 +948,8 @@ describe("incremental frames naming a superseded doc identity", () => {
     });
     const entry = requireHotEntry(tier, "room-fence-coverage");
 
-    // Same writable-role gate section 8 uses, and for the same reason: the
-    // doc-update handler only marks the replica dirty for a role that may
-    // write.
+    // Same writable-role gate section 8 uses, and for the same reason: the doc-update handler only
+    // marks the replica dirty for a role that may write.
     session.state.permissionRole = "owner";
     entry.doc.getText("body").insert(0, "local-edit ");
     expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
@@ -1112,44 +995,24 @@ describe("applyCoverage — the body lane's own retirement path for local diverg
     });
     const entry = requireHotEntry(tier, "room-coverage");
 
-    // Captured BEFORE the local edit below, for the non-covering half at the
-    // end of this test — it names a point in the doc's history that does not
-    // yet include the edit's own clock advance.
+    // Captured BEFORE the local edit below, for the non-covering half at the end of this test - it
+    // names a point in the doc's history that does not yet include the edit's own clock advance.
     const preEditVector = encodeDocStateVectorBase64(entry.doc);
 
-    // The same writable-role gate the file's other local-divergence pin uses
-    // ("local divergence ... keeps the room hot" above): "owner" is required
-    // for the doc-update handler to mark the replica dirty. `canSendBodyWrites`
-    // is left at the harness's default `true` (NOT the `false` the null-vector
-    // pin uses) so the edit is SENT rather than queued: `applyCoverage` only
-    // ever retires the dirty WATERMARK, never a queued `pendingUpdates` entry
-    // (that queue drains solely on a reconnect reconcile, via `applySnapshot` -
-    // see `clearPendingRoomUpdates`). A queued edit would make this pin
-    // unwritable, since `hasDivergence()` would then stay `true` regardless of
-    // what vector `applyCoverage` was given.
+    // The same writable-role gate the file's other local-divergence pin uses ("local divergence ...
     session.state.permissionRole = "owner";
     entry.doc.getMap("body").set("local-edit", "1");
 
     expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
     expect(tier.hasDivergence()).toBe(true);
 
-    // A vector captured BEFORE the edit does not cover it — divergence must
-    // survive. This half runs FIRST, while the watermark is still set: once
-    // divergence is retired there is nothing left to test a non-covering
-    // vector against (an absent watermark reads as trivially "covered"), so
-    // running this after the covering half below would make it vacuous — a
-    // tier that clears the watermark unconditionally on any `applyCoverage`
-    // call would still pass.
+    // A vector captured BEFORE the edit does not cover it - divergence must survive.
     tier.applyCoverage("room-coverage", preEditVector, null);
     expect(tier.hasDivergence()).toBe(true);
     expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
 
-    // The doc's own CURRENT state vector covers everything written so far,
-    // including the local edit — the body lane's `room-coverage` event is the
-    // authority stating how much of what this client pushed it now holds.
-    // Taken from the replica's own current full state, so the comparison is
-    // trivially exact by construction, matching the covering-vector pattern
-    // the null-vector pin above already uses for the `@1` `room-update` path.
+    // The doc's own CURRENT state vector covers everything written so far, including the local edit -
+    // the body lane's `room-coverage` event is the authority stating how much of what this client
     const coveringVector = encodeDocStateVectorBase64(entry.doc);
     tier.applyCoverage("room-coverage", coveringVector, null);
 
@@ -1161,21 +1024,8 @@ describe("applyCoverage — the body lane's own retirement path for local diverg
 });
 
 /**
- * The settle path REFUSES a pinned room — ruling (c).
- *
- * The hot doc's lifetime moved to the main thread, but two of the three pin
- * arms read TIER state (local divergence, remote presence). Rather than copy
- * the predicate across the bridge — where it would be a stale snapshot of an
- * output — the predicate stays with the state it reads and reaches main
- * through the refusal the demote contract already has. One predicate, one
- * owner.
- *
- * The divergence arm is the one with a data-loss cost, and it is still real
- * after the relocation: `flushPending` reads `replicas.get(artifactRoomId)`
- * and RETURNS when the entry is absent, so the reconnect reconcile ships only
- * from a LIVE replica. Settling a divergent room would move exactly those
- * bytes into cold state, where the reconcile never looks — the edits are not
- * dropped loudly, they are filed somewhere nothing reads.
+ * The settle path REFUSES a pinned room - ruling (c). The hot doc's lifetime moved to the main
+ * thread, but two of the three pin arms read TIER state (local divergence, remote presence).
  */
 describe("settleColdState refuses a pinned room", () => {
   const GUID = "guid-settle";
@@ -1210,9 +1060,8 @@ describe("settleColdState refuses a pinned room", () => {
   });
 
   it("refuses with `pinned` while the room holds unacknowledged edits", () => {
-    // THE data-loss pin. Ablate the `isPinnedByTierState` guard in
-    // `settleColdState` and this goes red - and in production those edits go
-    // cold where the reconcile cannot find them.
+    // THE data-loss pin. Ablate the `isPinnedByTierState` guard in `settleColdState` and this goes red
+    // - and in production those edits go cold where the reconcile cannot find them.
     const { tier, session } = createHarness();
     trackTierDisposal(tier);
     seedRoomWithIdentity(tier, "room-settle-dirty");
@@ -1230,9 +1079,6 @@ describe("settleColdState refuses a pinned room", () => {
       GUID,
     );
 
-    // Narrowed by a guard rather than by a ternary on `accepted`: the union's
-    // refusal arm is the one that carries `reason`, and reading it through a
-    // boolean comparison hides that from both the reader and the compiler.
     if (settlement.accepted) throw new Error("expected a refusal");
     expect(settlement.reason).toBe("pinned");
     // And the room is still live, which is what main relies on when it keeps
@@ -1254,9 +1100,6 @@ describe("settleColdState refuses a pinned room", () => {
       GUID,
     );
 
-    // Narrowed by a guard rather than by a ternary on `accepted`: the union's
-    // refusal arm is the one that carries `reason`, and reading it through a
-    // boolean comparison hides that from both the reader and the compiler.
     if (settlement.accepted) throw new Error("expected a refusal");
     expect(settlement.reason).toBe("pinned");
   });
@@ -1318,13 +1161,8 @@ describe("outbound body updates — the transport's ANSWER decides whether bytes
   }
 
   /**
-   * The keys a fresh doc ends up with after applying `updates` over the same
-   * snapshot the room was seeded from.
-   *
-   * Asserting on CONVERGENCE rather than on frame counts, because that is the
-   * property the queue exists to hold: an edit dropped in the middle of a
-   * partial flush is not a reordering Yjs absorbs, it is a key that never
-   * arrives.
+   * The keys a fresh doc ends up with after applying `updates` over the same snapshot the room was
+   * seeded from.
    */
   function keysAfterApplying(updates: readonly Uint8Array[]): string[] {
     const doc = new Y.Doc();
@@ -1336,10 +1174,8 @@ describe("outbound body updates — the transport's ANSWER decides whether bytes
   }
 
   it("QUEUES an update the transport refused, even though the SESSION may write", () => {
-    // The gap the lane arm opened. Every epic-level fact says "you may write",
-    // and the body's own lane refuses anyway - it has no adapter yet, or no
-    // `docGuid` because no snapshot has seeded it. `canSendBodyWrites()` cannot
-    // see either, so the outcome is the only thing that can.
+    // The gap the lane arm opened. Every epic-level fact says "you may write", and the body's own lane
+    // refuses anyway - it has no adapter yet, or no `docGuid` because no snapshot has seeded it.
     const harness = createHarness();
     trackTierDisposal(harness.tier);
     const entry = readyRoom(harness, "room-refused");
@@ -1350,16 +1186,12 @@ describe("outbound body updates — the transport's ANSWER decides whether bytes
     });
     entry.doc.getMap("body").set("local-edit", "1");
 
-    // It was ATTEMPTED and REFUSED - this is a transport saying no, not an
-    // epic-level gate that held before the call. The two are indistinguishable
-    // from the queue's side unless the outcome is read, which is the finding.
+    // It was ATTEMPTED and REFUSED - this is a transport saying no, not an epic-level gate that held
+    // before the call.
     expect(harness.sent).toHaveLength(1);
     expect(shippedUpdates(harness)).toHaveLength(0);
 
-    // THE REDDENING ASSERTION. A `queued` outcome is a statement to the caller
-    // that IT must retain the bytes; before this the caller treated the
-    // attempt as delivery and kept nothing, so the edit reached the host on no
-    // path at all and the next flush had nothing to ship.
+    // THE REDDENING ASSERTION.
     harness.delivered.length = 0;
     harness.transport.answer = () => ({ kind: "sent" });
     harness.tier.flushPending("room-refused");
@@ -1413,9 +1245,8 @@ describe("outbound body updates — the transport's ANSWER decides whether bytes
     harness.tier.flushPending("room-partial");
     const secondPass = shippedUpdates(harness);
 
-    // THE REDDENING ASSERTION: all three edits arrive across the two passes.
-    // Under a flush that dropped what it could not send, the two refused
-    // frames are gone and this reads `["edit-1"]`.
+    // THE REDDENING ASSERTION: all three edits arrive across the two passes. Under a flush that
+    // dropped what it could not send, the two refused frames are gone and this reads `["edit-1"]`.
     expect(keysAfterApplying([...firstPass, ...secondPass])).toEqual([
       "edit-1",
       "edit-2",
@@ -1424,9 +1255,8 @@ describe("outbound body updates — the transport's ANSWER decides whether bytes
   });
 
   it("stashes a snapshot reconcile the transport refused instead of clearing the queue", () => {
-    // The third member of the class, and the one nobody flagged: the merge arm
-    // clears `pendingUpdates` on the strength of "the reconcile subsumes it",
-    // which is only true once the reconcile has actually gone out.
+    // The third member of the class, and the one nobody flagged: the merge arm clears `pendingUpdates`
+    // on the strength of "the reconcile subsumes it", which is only true once the reconcile has
     const harness = createHarness();
     trackTierDisposal(harness.tier);
     const entry = readyRoom(harness, "room-reconcile");
@@ -1459,14 +1289,8 @@ describe("outbound body updates — the transport's ANSWER decides whether bytes
 
 describe("hot-growth accounting survives a transport that TRANSFERS the update", () => {
   it("measures the update before handing it over, not after", () => {
-    // The runtime can live in a worker, and the outbound frame then crosses the
-    // bridge by `postMessage` with a transfer list. `takeBytesForTransfer`
-    // MOVES the backing `ArrayBuffer` rather than copying it whenever the view
-    // owns all of it - which a Yjs update does - so the sender's view detaches
-    // synchronously and reads `byteLength === 0` rather than throwing.
-    //
-    // Reproduced here with a real `structuredClone` transfer rather than a
-    // stub that returns zero, so the pin fails for the reason production would.
+    // The runtime can live in a worker, and the outbound frame then crosses the bridge by
+    // `postMessage` with a transfer list.
     const charges: number[] = [];
     const budget: HotDocBudgetSink = {
       settle: () => undefined,
@@ -1484,10 +1308,7 @@ describe("hot-growth accounting survives a transport that TRANSFERS the update",
         if (request.kind === "room-update") {
           const { update } = request;
           const buffer = update.buffer;
-          // The precondition the transfer path turns on. Recorded rather than
-          // assumed: if a future Yjs hands back a VIEW into a larger buffer,
-          // `takeBytesForTransfer` copies instead and this pin would go
-          // vacuously green - so the assertion below fails loudly instead.
+          // The precondition the transfer path turns on.
           ownedItsWholeBuffer =
             buffer instanceof ArrayBuffer &&
             update.byteOffset === 0 &&
@@ -1520,9 +1341,7 @@ describe("hot-growth accounting survives a transport that TRANSFERS the update",
       .set("local-edit", "1");
 
     expect(ownedItsWholeBuffer).toBe(true);
-    // THE REDDENING ASSERTION. Measured after the send, this is 0: the room
-    // records no growth at all, so an actively edited body can grow past the
-    // hot budget without ever becoming an eviction candidate.
+    // THE REDDENING ASSERTION.
     expect(charges).toHaveLength(1);
     expect(charges[0]).toBeGreaterThan(0);
   });
@@ -1581,9 +1400,7 @@ describe("hot-growth accounting survives a transport that TRANSFERS the update",
 
     expect(transferredUpdate).not.toBeNull();
     expect(laterObserverUpdate).not.toBeNull();
-    // Compare identity as a boolean. Passing the detached outbound view into a
-    // matcher makes Vitest's failure-message formatter iterate its bytes,
-    // which throws before the identity result can be reported.
+    // Compare identity as a boolean.
     expect(Object.is(laterObserverUpdate, transferredUpdate)).toBe(false);
   });
 });

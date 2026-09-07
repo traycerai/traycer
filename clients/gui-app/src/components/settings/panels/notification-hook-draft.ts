@@ -3,11 +3,7 @@ import type {
   NotificationHookConfig,
 } from "@traycer/protocol/host/notifications/host-notifications";
 
-/**
- * The severities a notification can actually carry, in the same order and
- * wording as the Interruptions matrix. `info` is omitted for the same reason
- * the matrix omits it: no notification kind emits it today.
- */
+/** The severities a notification can actually carry, in the same order and wording as the Interruptions matrix. */
 export const HOOK_SEVERITIES: ReadonlyArray<{
   readonly id: HostNotificationSeverity;
   readonly label: string;
@@ -30,19 +26,14 @@ export const HOOK_SEVERITIES: ReadonlyArray<{
   },
 ];
 
-/**
- * Editing shape for one hook: headers and args stay raw text so a half-typed
- * line survives keystrokes, and are parsed once on save.
- */
+/** Editing shape for one hook: headers and args stay raw text so a half-typed line survives keystrokes, and are
+ * parsed once on save. */
 export type HookDraft = {
   readonly id: string;
   readonly name: string;
   readonly enabled: boolean;
-  /**
-   * Full severity list as the file holds it. The form renders one switch per
-   * reachable severity; any severity outside that set (e.g. a hand-authored
-   * `info`) simply rides along untouched, so editing never drops it.
-   */
+  /** Full severity list as the file holds it. The form renders one switch per reachable severity; any severity
+   * outside that set (e.g. a hand-authored `info`) simply rides along untouched, so editing never drops it. */
   readonly severities: readonly HostNotificationSeverity[];
   readonly actionType: "http" | "command";
   readonly url: string;

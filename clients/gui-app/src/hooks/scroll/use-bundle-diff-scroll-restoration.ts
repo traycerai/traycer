@@ -15,23 +15,7 @@ interface BundleDiffScrollRestoration {
   readonly isScrolling: (scrolling: boolean) => void;
 }
 
-/**
- * Scroll preservation for a `react-virtuoso` bundle (multi-file) diff list.
- * Spread `ref`, `restoreStateFrom`, and `isScrolling` onto the `<Virtuoso>`.
- *
- * Two mechanisms cooperate because virtualization makes a raw pixel scroll
- * unreliable on a fresh list:
- * - `restoreStateFrom` seeds the initial mount from the saved snapshot (item
- *   ranges + scrollTop), so a full remount after eviction lands correctly even
- *   before every row is measured.
- * - the imperative `scrollTo` (via `applyAnchor`) handles the keep-alive
- *   hidden -> visible case, where the list stayed mounted and measured but
- *   `display:none` zeroed its scrollTop.
- *
- * Virtuoso has no continuous state callback, so we snapshot via `getState` each
- * time scrolling settles (`isScrolling(false)`) while the scroller is still
- * visible - a `getState` at hide time would read the already-zeroed scrollTop.
- */
+/** Snapshot on isScrolling(false) while visible. getState at hide would read zeroed scrollTop. */
 export function useBundleDiffScrollRestoration(
   instanceId: string,
   contentReady: boolean,

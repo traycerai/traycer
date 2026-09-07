@@ -63,11 +63,7 @@ export function assertInteger(
   }
 }
 
-/**
- * Parses the `{ token, refreshToken }` pair the renderer hands to
- * `tokenStore.signIn` over IPC. Fail-closed: a non-string field throws so a
- * malformed payload never lands as credentials.
- */
+/** Fail-closed: a non-string field throws so a malformed payload never lands as credentials. */
 export function parseStoredAuthTokens(value: unknown): StoredAuthTokens {
   if (value === null || typeof value !== "object") {
     throw new Error(
@@ -80,18 +76,6 @@ export function parseStoredAuthTokens(value: unknown): StoredAuthTokens {
   return { token: record.token, refreshToken: record.refreshToken };
 }
 
-/**
- * Parses the `{ id, email, name }` identity block the renderer hands to
- * `tokenStore.signIn`. The main store stamps `savedAt`, so only the user
- * identity crosses here. Fail-closed on any non-string field.
- */
-/**
- * Parses the delegated host-credential mint request. `hostId` is required (the
- * mint is meaningless without it and the server rejects a bad one anyway);
- * `hostLabel` and `platform` are display metadata, so anything that is not a
- * string collapses to `null` rather than throwing - a missing label must not
- * cost the user a credential.
- */
 export function parseMintHostCredentialRequest(
   value: unknown,
 ): MintHostCredentialRequest {
@@ -122,10 +106,6 @@ export function parseStoredCredentialsIdentity(
   return { id: record.id, email: record.email, name: record.name };
 }
 
-/**
- * Parses the `{ userId, token }` CAS guard the renderer hands to
- * `tokenStore.rotate`. Fail-closed on any non-string field.
- */
 export function parseTokenRotateExpected(value: unknown): {
   readonly userId: string;
   readonly token: string;
@@ -191,11 +171,7 @@ export function parseUnsyncedSnapshot(value: unknown): UnsyncedEditsSnapshot {
       title: entry.title,
       queueSize: entry.queueSize,
       isDirty: entry.isDirty,
-      // Carried, not defaulted. A `?? false` here would read as tolerance and
-      // behave as a silent claim that another window's retained buffer is
-      // safe to destroy - the exact direction this field must never fail in.
-      // Renderer, preload and main ship in one binary, so a row without it is
-      // malformed rather than old, and the guard above drops it.
+      // false` here would read as tolerance and behave as a silent claim that another window's retained buffer is safe to destroy - the exact direction this field must never fail in.
       unsyncable: entry.unsyncable,
     });
   }
@@ -220,20 +196,8 @@ export function parseFreshSnapshotResponse(
 }
 
 /**
- * Every member of {@link QuitDecision}, as a TOTAL record.
- *
- * This is the enforcement, not decoration. `parseQuitDecision` used to accept
- * the members it knew about through an `if` chain and fall back to `proceed` -
- * i.e. quit - for everything else. Adding a member to the union left that
- * chain compiling, so a renderer saying "do not quit" would have been parsed
- * as "quit" and answered by quitting. A record keyed by the union cannot omit
- * a member without failing the build, so the next member has to be decided
- * here before it can exist. But the record only makes ADDING a member a
- * compile error - it says nothing about what an unparseable payload means,
- * same as `parseUnsyncedSnapshot` above: an unrecognized `decision` is not
- * evidence the user asked to quit, so the fallback must be the one outcome
- * that can't destroy anything - `userCancelled`, which keeps the app open.
- * `stayOpen` exists on both consumers of this result for exactly that reason.
+ * Adding a member to the union left that chain compiling, so a renderer saying "do not quit" would have been parsed as "quit" and answered by quitting.
+ * A record keyed by the union cannot omit a member without failing the build, so the next member has to be decided here before it can exist.
  */
 const QUIT_DECISION_MEMBERS: Readonly<Record<QuitDecision, true>> = {
   proceed: true,
@@ -464,13 +428,6 @@ export function parseSupportLogTarget(value: unknown): SupportLogTarget {
   );
 }
 
-/**
- * Parses the renderer-supplied `PATCH /api/v3/hosts/:hostId` body (Remote
- * Host Support §13, T16). Every field is tri-state (`undefined` = leave
- * untouched); an unrecognized/mistyped value degrades to `undefined` rather
- * than throwing, so a stale renderer build can never crash main — the server
- * still 400s an empty-effective body.
- */
 export function parseUpdateHostVersionPolicyInput(
   value: unknown,
 ): UpdateHostVersionPolicyInput {
@@ -507,14 +464,7 @@ export function readSenderWebContentsId(
   return sender.id;
 }
 
-/**
- * App-scoped commands that may fire with no focused renderer - tray-menu and
- * Windows jump-list clicks happen while another app is foregrounded. The
- * dispatcher falls back to the MRU window (focusing it) for these, so they
- * never silently no-op. Window-scoped commands (close tab, find in page, ...)
- * deliberately stay focused-window-only: delivering them to an arbitrary
- * window would act on the wrong target.
- */
+/** The dispatcher falls back to the MRU window (focusing it) for these, so they never silently no-op. */
 export function isMruFallbackMenuCommand(command: MenuCommandId): boolean {
   return (
     command === "epic.openInNewWindow" ||

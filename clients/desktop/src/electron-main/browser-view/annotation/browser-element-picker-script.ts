@@ -11,10 +11,6 @@ import {
   isRecord,
 } from "../guards";
 
-/**
- * Bounded per-element capture sanitizer shared by the annotation overlay.
- * Guest-supplied lengths and types are re-bounded in the main process.
- */
 
 export const ELEMENT_PICKER_LIMITS = {
   textPreview: 200,

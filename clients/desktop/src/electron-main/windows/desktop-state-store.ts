@@ -49,14 +49,7 @@ interface DesktopStatePayload {
 }
 
 export function resolveDesktopStateFilePath(): string {
-  // Environment-scoped: each environment keeps its own set of open windows/tabs
-  // so a staging/dev window never auto-restores a tab opened in another
-  // environment's session. Such a foreign-environment epic tab would have the
-  // host connect collab for an epic whose credential context this environment
-  // can't establish, and tearing it down crashes the connecting socket. The
-  // epic data under ~/.traycer/epics stays shared - only the window/tab state
-  // is per-environment. production → ~/.traycer/desktop-windows.json;
-  // dev/staging nest under their name.
+  // Environment-scoped: each environment keeps its own set of open windows/tabs so a staging/dev window never auto-restores a tab opened in another environment's session.
   const base = environmentSubdir(
     join(homedir(), ".traycer"),
     config.environment,
@@ -199,10 +192,6 @@ export class DesktopStateStore {
     return write;
   }
 
-  // Persist policy: one immediate retry, then propagate the terminal failure.
-  // The renderer's layout acknowledgement is a move barrier, so it can only
-  // resolve after a durable write. The private write chain above still recovers
-  // for a later healthy write.
   private async persistWithRetry(): Promise<void> {
     try {
       await this.persist();

@@ -133,10 +133,8 @@ function GeneratedImageContent(props: {
   );
   const alt =
     props.result.alt ?? props.result.revisedPrompt ?? props.fallbackAlt;
-  // The resolved blob's OWN type once it exists, falling back to the stored
-  // claim only while nothing is resolved yet (the gate is inert then anyway,
-  // since there is no `src` to sanitize). A host-sniffed type overrides the
-  // claim, so SVG bytes stored as `image/png` still reach the sanitizer.
+  // The resolved blob's OWN type once it exists, falling back to the stored claim only while nothing is resolved yet (the gate is inert then anyway, since there is no `src` to sanitize).
+  // A host-sniffed type overrides the claim, so SVG bytes stored as `image/png` still reach the sanitizer.
   const effectiveMediaType =
     image.status === "ready" ? image.mediaType : props.result.mediaType;
   const sanitizedSvg = useSanitizedSvg(

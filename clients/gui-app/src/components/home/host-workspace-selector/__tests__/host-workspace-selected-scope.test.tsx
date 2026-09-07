@@ -45,8 +45,6 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-// The active-scope arm resolves the composer surface pin now (pin ??
-// effective) - the reactive-active module died with the redesign.
 vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
   useComposerSurfaceHostPin: () => ({
     selection: null,
@@ -173,9 +171,8 @@ function renderStacked(hostScope: HostWorkspaceControlsHostScope): void {
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          // Scaffolding only — these cases assert on `hostScope`, never on
-          // staged state, so the slot sits in the unresolved-host bucket
-          // rather than claiming a host the assertions do not check.
+          // Scaffolding only - these cases assert on `hostScope`, never on staged state, so the slot sits in the
+          // unresolved-host bucket rather than claiming a host the assertions do not check.
           stagingKey={{ surface: "landing", hostId: null, draftId: null }}
           workspaceSeed={{
             folders: [],

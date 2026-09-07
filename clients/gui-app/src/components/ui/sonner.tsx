@@ -34,33 +34,25 @@ const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
 );
 const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
   "border border-border bg-background text-foreground",
-  // Not `hover:bg-muted`: the button is `bg-background`, and the five flat
-  // light presets define `--muted` as exactly that, so the hover was a no-op
-  // there. The fill IS the whole state change here - the border is static.
+  // Not `hover:bg-muted`: the button is `bg-background`, and the five flat light presets define `--muted` as
+  // exactly that, so the hover was a no-op there.
   "hover:bg-foreground/5",
 );
 const INTERACTIVE_ELEMENT_SELECTOR =
   "button, a, input, textarea, select, [role='button']";
 const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
-// The outer `<section>` sonner renders is a static, zero-height wrapper -
-// the fixed, painted surface is one `<ol data-sonner-toaster>` per toast
-// position, and sonner (2.0.8) mounts each only once a toast exists for
-// that position. Size is measured from those lists so toast placement can
-// prefer anchors that miss live browser tiles.
+// The outer `<section>` sonner renders is a static, zero-height wrapper.
 const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
   const toasterTheme = normalizeToasterTheme(theme);
   const sectionRef = useRef<HTMLElement | null>(null);
-  // Sonner mounts the `<ol>` only while a toast exists (see the selector
-  // comment above), so this is also the "is a toast currently visible" flag
-  // - `recomputeAnchor` reads it to honor invariant 10's other half:
-  // don't re-anchor a toaster a toast is already showing on.
+  // Sonner mounts the `<ol>` only while a toast exists (see the selector comment above), so this is also the "is
+  // a toast currently visible" flag.
   const toastVisibleRef = useRef(false);
-  // The toaster's own last-measured rect, cached across the `<ol>` mounting
-  // and unmounting so a prospective anchor rect never has to hardcode a
-  // size - see `toaster-anchor.ts`.
+  // The toaster's own last-measured rect, cached across the `<ol>` mounting and unmounting so a prospective
+  // anchor rect never has to hardcode a size - see `toaster-anchor.ts`.
   const toasterSizeRef = useRef<ToasterSize | null>(null);
   const [anchor, setAnchor] = useState<ToasterAnchor>(DEFAULT_TOASTER_ANCHOR);
 

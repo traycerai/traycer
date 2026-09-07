@@ -7,12 +7,8 @@ export interface UsageDayBreakdownTableProps {
   readonly rows: readonly UsageDayBreakdownRow[];
 }
 
-/**
- * The "Day" arm of the breakdown's Model/Day toggle - same anatomy as
- * `UsageBreakdownTable` (cost AND tokens always shown), grouped by day
- * instead of harness/model. Newest day first, matching the fold order in
- * `buildUsageDayBreakdownRows`.
- */
+/** The "Day" arm of the breakdown's Model/Day toggle - same anatomy as `UsageBreakdownTable` (cost and tokens
+ * always shown), grouped by day instead of harness/model. */
 export function UsageDayBreakdownTable(
   props: UsageDayBreakdownTableProps,
 ): ReactNode {

@@ -27,24 +27,7 @@ interface SetEpicPinnedVariables {
   readonly pinned: boolean;
 }
 
-/**
- * Personal, default-host-scoped history pin mutation.
- *
- * Optimistic by design (the justified response-equals-state case: the RPC's
- * `{ pinned }` response is exactly the bit the request wrote): `onMutate`
- * flips the row in the scoped first-page query cache and in every retained
- * "Show more" tail so the toggle renders instantly, and `onError` restores
- * the previous state with the inverse patch (each row's control is disabled
- * while its own mutation is pending, so the pre-mutate state is exactly the
- * opposite bit) plus the error toast.
- *
- * `onSuccess` then reconciles in the background: a pin reorders rows across
- * server page boundaries, which makes every retained pagination cursor
- * stale (a later "Show more" against an old cursor could silently skip
- * rows), so the scope's tails are reset - rejecting in-flight ones via the
- * generation guard - and the active first page refetches with no pending UI
- * while the optimistic state keeps rendering.
- */
+/** Optimistic pin bit. onSuccess resets pagination tails; old cursors would skip rows. */
 export function useEpicSetPinned() {
   const client = useHostClient();
   const queryClient = useQueryClient();
@@ -117,14 +100,6 @@ function applyPinnedPatch(
   setCloudEpicTasksPagePinned(scope.hostId, scope.userId, epicId, pinned);
 }
 
-/**
- * epicIds with an in-flight `epic.setPinned` mutation. `useEpicSetPinned()`
- * is a single mutation instance shared across every history row, so reading
- * `.isPending`/`.variables` off it only ever reflects the most-recently
- * fired call - a second row's click would make an earlier still-pending row
- * read as idle. Reading every pending mutation with this shared key from the
- * mutation cache instead lets each row track its own request independently.
- */
 export function usePendingSetPinnedEpicIds(): ReadonlySet<string> {
   const pendingVariables = useMutationState({
     filters: {

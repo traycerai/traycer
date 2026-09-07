@@ -7,10 +7,8 @@ import {
   resolvePortConflict,
 } from "../port-conflict";
 
-// Unit-level pin for the lsof/ss/netstat parsers + the platform-aware
-// `resolvePortConflict` orchestrator. We never spawn the real OS tools
-// in CI - every path is exercised via stubbed stdout fixtures so the
-// suite is reproducible on macOS, Linux, and Windows builders alike.
+// Unit-level pin for the lsof/ss/netstat parsers + the platform-aware `resolvePortConflict` orchestrator.
+// We never spawn the real OS tools in CI - every path is exercised via stubbed stdout fixtures so the suite is reproducible on macOS, Linux, and Windows builders alike.
 
 describe("parseLsof", () => {
   it("extracts pid + command from a typical -Fpcn payload", () => {

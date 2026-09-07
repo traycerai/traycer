@@ -23,9 +23,8 @@ describe("resolveCreateProfileGate", () => {
     expect(gate.reason).toBeUndefined();
   });
 
-  // Row 1 of the terminal-login contract table (this consumer's third):
-  // a terminal-login provider is disabled here (the picker only drives
-  // browser OAuth), with copy that names the terminal, not "browser sign-in".
+  // Row 1 of the terminal-login contract table (this consumer's third): a terminal-login provider is disabled
+  // here (the picker only drives browser OAuth), with copy that names the terminal, not "browser sign-in".
   it("disables profile creation for a terminal-login provider without saying 'browser sign-in'", () => {
     const gate = resolveCreateProfileGate(true, TERMINAL_LOGIN_CAP);
     expect(gate.disabled).toBe(true);
@@ -33,12 +32,8 @@ describe("resolveCreateProfileGate", () => {
     expect(gate.reason).toContain("terminal");
   });
 
-  // `providerSupportsTerminalLogin` answers false for both a null and an
-  // undefined capability, so the terminal-login branch above must fall
-  // through cleanly to the generic reason instead of throwing or matching on
-  // `undefined.oauthArgs`. This is the case the ordering comment ("safe
-  // against a null/absent capability") in the source claims but the suite
-  // never exercised.
+  // This is the case the ordering comment ("safe against a null/absent capability") in the source claims but the
+  // suite never exercised.
   it("falls through to the generic reason for a null loginCapability", () => {
     const gate = resolveCreateProfileGate(true, null);
     expect(gate.disabled).toBe(true);
@@ -55,13 +50,8 @@ describe("resolveCreateProfileGate", () => {
     );
   });
 
-  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
-  // `terminalLogin` with `oauthArgs: null`. The terminal reason must still
-  // win: the generic one names browser sign-in, which these providers do not
-  // do either. `[]` is covered beside `null` because those are the two
-  // spellings of "no headless command", and the gate that used to fall
-  // through to the generic reason treated them alike - so a regression that
-  // restored it would have to redden both.
+  // The terminal reason must still win: the generic one names browser sign-in, which these providers do not do
+  // either.
   it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
     "uses the terminal reason for a terminal-login provider with no oauthArgs (%o)",
     ({ oauthArgs }) => {

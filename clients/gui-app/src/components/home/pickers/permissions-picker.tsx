@@ -22,21 +22,10 @@ interface PermissionsPickerProps {
   value: PermissionMode;
   disabled: boolean;
   onChange: (next: PermissionMode) => void;
-  /**
-   * Permission modes the active harness honors. Items not in this list render
-   * disabled with an "unsupported" hint so users can't pick a mode the harness
-   * silently ignores (Cursor, for example, currently runs only in
-   * "full_access"). `null` means "no harness scope" - every option stays
-   * enabled (used by the Settings default-permission row and during catalog
-   * load).
-   */
+  /** Items not in this list render disabled with an "unsupported" hint so users can't pick a mode the harness
+   * silently ignores (Cursor, for example, currently runs only in "full_access"). */
   supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
-  /**
-   * Display name of the active harness, used in the "Not supported by <name>"
-   * copy on disabled options. `null` falls back to the generic "this provider"
-   * (catalog still loading, or harness-agnostic surfaces like the Settings
-   * default-permission row).
-   */
+  /** Display name of the active harness, used in the "Not supported by <name>" copy on disabled options. */
   harnessLabel: string | null;
 }
 
@@ -44,14 +33,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   const { value, disabled, onChange, supportedPermissionModes, harnessLabel } =
     props;
   const unsupportedSuffix = harnessLabel ?? "this provider";
-  // Display value is the *normalized* one: when the sticky value isn't in the
-  // active harness's supported set (rehydration of a saved chat, the one-frame
-  // window between a harness swap and the parent's clamp commit, or any race
-  // where parent state lags the catalog), the trigger pill + radio's checked
-  // indicator track the mode the harness will actually run, not the stale
-  // sticky. The parent still owns the persisted state and may clamp on
-  // user-intent harness swaps; the picker is responsible for never lying
-  // about the effective permission, regardless of when the parent commits.
+  // Display value is the *normalized* one: when the sticky value isn't in the active harness's supported set
+  // (rehydration of a saved chat, the one-frame window between a harness swap and the parent's clamp commit.
   const displayValue = normalizePermissionMode(value, supportedPermissionModes);
   const Icon = findPermissionOption(displayValue).icon;
   const label = findPermissionLabel(displayValue);
@@ -59,14 +42,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   return (
     <DropdownMenu>
       <NarrowOnlyTooltip label={label}>
-        {/* No tooltip of its own: `NarrowOnlyTooltip` above already renders one
-            (it IS a `TooltipWrapper`), and the label is VISIBLE on this pill
-            until the composer goes narrow - which is exactly when that wrapper
-            takes over. A second wrapper here put two tooltips carrying the same
-            text on one trigger, and its guard span sat between
-            `DropdownMenuTrigger asChild` and the button, so Radix's menu props
-            - `aria-haspopup`, `aria-expanded`, `data-state`, the ref - landed
-            on a generic span instead of the focusable control. */}
+        {/* A second wrapper here put two tooltips carrying the same text on one trigger, and its guard span sat between
+           `DropdownMenuTrigger asChild` and the button, so Radix's menu props. */}
         <DropdownMenuTrigger asChild>
           <ToolbarPillButton
             aria-label={label}
@@ -84,9 +61,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
       <DropdownMenuContent
         align="start"
         className="min-w-[min(90vw,20rem)] p-1.5"
-        // Return focus to the composer editor instead of the trigger pill so
-        // the user can keep typing after picking a mode. Without this Radix
-        // restores focus to the trigger, leaving the caret out of the textbox.
+        // Return focus to the composer editor instead of the trigger pill so the user can keep typing after picking a
+        // mode. Without this Radix restores focus to the trigger, leaving the caret out of the textbox.
         onCloseAutoFocus={(event) => {
           if (focusActiveComposer()) event.preventDefault();
         }}
@@ -96,11 +72,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
           onValueChange={(next) => {
             if (disabled) return;
             if (!isPermissionMode(next)) return;
-            // Defense-in-depth: Radix's disabled RadioItem already blocks
-            // click/keyboard activation, but a programmatic dispatch or future
-            // primitive change could still call us with an unsupported mode.
-            // Treat empty `supportedPermissionModes` identically to `null` -
-            // see `normalizePermissionMode` for the matching semantics.
+            // Defense-in-depth: Radix's disabled RadioItem already blocks click/keyboard activation, but a programmatic
+            // dispatch or future primitive change could still call us with an unsupported mode.
             if (
               supportedPermissionModes !== null &&
               supportedPermissionModes.length > 0 &&
@@ -122,10 +95,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
                 key={option.id}
                 value={option.id}
                 disabled={!isSupported}
-                // No `title=` here: Radix applies `data-disabled:pointer-events-none`
-                // on the dropdown-menu primitive (see ui/dropdown-menu.tsx) so a
-                // native browser tooltip would never fire on hover anyway. The
-                // unsupported reason is rendered inline in the item body below.
+                // No `title=` here: Radix applies `data-disabled:pointer-events-none` on the dropdown-menu primitive (see
+                // ui/dropdown-menu.tsx) so a native browser tooltip would never fire on hover anyway.
                 className="items-start gap-2 py-2 pr-8 pl-2 data-[state=checked]:bg-accent/70"
               >
                 <OptionIcon className="mt-0.5 size-4 text-muted-foreground" />

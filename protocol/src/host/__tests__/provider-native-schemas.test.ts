@@ -108,11 +108,7 @@ type MutationV20Schema = {
   safeParse: (value: unknown) => { success: boolean };
 };
 
-/**
- * Live schema map for the ten host-v1.1.5 mutation@2.0 surfaces. Method names
- * and fixture values come from the tag-derived fixture; this map only binds
- * those names to the current protocol schemas under test.
- */
+/** Live schema map for the ten host-v1.1.5 mutation@2.0 surfaces. */
 const MUTATION_V20_RESPONSE_SCHEMA_BY_METHOD: Record<
   string,
   { schema: MutationV20Schema; nullableState: boolean }
@@ -175,11 +171,7 @@ const MUTATION_V20_REQUEST_PARSER_BY_METHOD: Record<
   "providers.awaitLogin": providersAwaitLoginRequestSchemaV20,
 };
 
-/**
- * Tag-derived minimal state for a provider id. Values come from
- * `__fixtures__/host-v1.1.5-mutation-v20.ts` (generated from
- * `git show host-v1.1.5:protocol/src/host/provider-schemas.ts`).
- */
+/** Tag-derived minimal state for a provider id. */
 function baseState(providerId: string) {
   const fromTag =
     hostV115MutationV20Fixtures.minimalStatesByProviderId[
@@ -273,12 +265,8 @@ describe("nativeCapabilities on ProviderCliState", () => {
 });
 
 describe("providers.list@7.0 upgrade/downgrade bridges", () => {
-  // `cli-v1.1.9` froze v6.0, so its schema models neither `nativeCapabilities`
-  // nor `native`. `upgradeResponseToVersion` chains these callbacks by cast
-  // with no re-parse, so filling here would not fail loudly - it would put the
-  // fields on a released wire that never carried them. The fill has to wait
-  // for v6.0 -> v7.0, and this pins the hop as a pass-through so a future
-  // "helpful" fill here has to argue with a red test first.
+  // `cli-v1.1.9` froze v6.0, so its schema models neither `nativeCapabilities` nor `native`.
+  // `upgradeResponseToVersion` chains these callbacks by cast with no re-parse, so filling here would not fail loudly - it would put the fields on a released wire that never carried them.
   it("fills nothing on the v5.0 -> v6.0 hop (target is frozen)", () => {
     const v50 = providersListResponseSchemaV50.parse({
       providers: [baseState("amp")],
@@ -294,9 +282,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       providers: [baseState("amp")],
     });
     const upgraded = providersListUpgradeV6ToV7.upgradeResponse(v60);
-    // The v7-era default plus `modelProviders: null` on top. Two fills, in one
-    // hop: this bridge absorbed the v7 -> v8 hop's when that unreleased major
-    // collapsed into v7.0, and the composition has to survive the merge.
+    // The v7-era default plus `modelProviders: null` on top.
     expect(upgraded.providers[0]?.nativeCapabilities).toEqual({
       ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
       modelProviders: null,
@@ -307,12 +293,8 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
   });
 
-  // `native` rides v7.0 ALONE. It was authored against the live request object
-  // while v6.0 was unreleased, so it silently grew the already-shipped
-  // v4.0/v5.0/v6.0 request lines too - and `host-v1.1.10` then froze those
-  // three lines WITHOUT it, because the commit that added it missed the
-  // release cherry-pick. These three tests pin where the carrier is allowed to
-  // exist, so the same drift cannot come back through a "helpful" fill.
+  // `native` rides v7.0 ALONE.
+  // These three tests pin where the carrier is allowed to exist, so the same drift cannot come back through a "helpful" fill.
   it("keeps native off every released request line below v7.0", () => {
     expect(
       providersListRequestSchemaBeforeV70.parse({
@@ -359,9 +341,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     expect(result.value.forceAuthRefresh).toBe(true);
   });
 
-  // The adjacent hop, and the one most likely to rot: v6.0 is a RELEASED line
-  // (`cli-v1.1.9`) that never carried either field, so it is the first client
-  // a leak would actually reach. The far downgrades below cover v3/v2/v1.
+  // The adjacent hop, and the one most likely to rot: v6.0 is a RELEASED line (`cli-v1.1.9`) that never carried either field, so it is the first client a leak would actually reach.
   it("downgrades v7.0 → v6.0 by stripping nativeCapabilities and native", () => {
     const v70 = providersListResponseSchema.parse({
       providers: [
@@ -547,11 +527,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     ).toBe("mcp");
   });
 
-  // Regression guard for the compat break this surface originally shipped:
-  // `native` was folded onto the RELEASED `providers.setEnabled@2.1` and
-  // `enabled` was demoted to optional so native-only callers could omit it.
-  // Both are wire breaks against every `cli-v1.1.7+` / `host-v1.1.7+` peer.
-  // Native mutations live on `providers.nativeMutate@1.0` now.
+  // Regression guard for the compat break this surface originally shipped: `native` was folded onto the RELEASED `providers.setEnabled@2.1` and `enabled` was demoted to optional so native-only callers could omit it.
   it("keeps setEnabled@2.1 at its released shape: enabled required, no native", () => {
     expect(
       providersSetEnabledRequestSchema.safeParse({
@@ -609,10 +585,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       state: providerMutationCliStateSchemaV20.parse(baseState("cursor")),
     });
     expect(upgradedResp).not.toHaveProperty("native");
-    // The mutation echo is pinned to the frozen `providerMutationCliStateSchemaV21`,
-    // which deliberately does NOT model `nativeCapabilities` - a state echo
-    // cannot change what is installed, so capability facts ride
-    // `providers.list` only.
+    // The mutation echo is pinned to the frozen `providerMutationCliStateSchemaV21`, which deliberately does NOT model `nativeCapabilities` - a state echo cannot change what is installed, so capability facts ride.
     expect(upgradedResp.state).not.toHaveProperty("nativeCapabilities");
   });
 
@@ -689,12 +662,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
         providerId: "claude-code",
       }),
     ).not.toHaveProperty("mcpAuth");
-    // Non-strict objects ignore unknown keys, so prove the field is DROPPED
-    // by the parse rather than merely unvalidated. Every carrier the compat
-    // gate flagged is asserted here, request AND response: a `.default(null)`
-    // field reintroduced on any one of them re-breaks the released line, and
-    // the upgrade-path assertions above cannot see that (they spread a plain
-    // object and never run the schema).
+    // Non-strict objects ignore unknown keys, so prove the field is DROPPED by the parse rather than merely unvalidated.
     expect(
       providersStartLoginRequestSchema.parse({
         providerId: "droid",
@@ -1032,13 +1000,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   const fixtures = hostV115MutationV20Fixtures;
   const responseMethods = fixtures.mutationResponseMethods;
   const requestMethods = fixtures.mutationRequestMethods;
-  // Everything below that reads the tag itself needs this clone to actually
-  // have the host-v1.1.5 objects. `actions/checkout` fetches no tags, so the
-  // `@traycer/protocol` leg of `test.yml` fetches the one tag explicitly to
-  // keep these two live in CI — skipping them there would have left generator
-  // drift uncaught, since `guarded-files-tripwire` only stops the checked-in
-  // fixture being hand-edited. The skip remains for local clones without the
-  // tag, so a shallow checkout reports "no evidence" rather than a failure.
+  // Everything below that reads the tag itself needs this clone to actually have the host-v1.1.5 objects.
   const traycerRoot = resolve(
     dirname(fileURLToPath(import.meta.url)),
     "../../../../",
@@ -1048,19 +1010,14 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   it.skipIf(!tagReachable)(
     "regenerate-and-compare: checked-in fixture equals live generator output",
     async () => {
-      // Catches ANY hand-edit to the checked-in fixture (not just
-      // enum/provenance fields): re-run the full generator against
-      // host-v1.1.5 and deep-equal.
+      // Catches ANY hand-edit to the checked-in fixture (not just enum/provenance fields): re-run the full generator against host-v1.1.5 and deep-equal.
       const regenerated = await buildHostV115MutationV20Fixtures(traycerRoot);
       // Strip `as const` readonly by JSON round-trip for stable deep equality.
       expect(JSON.parse(JSON.stringify(fixtures))).toEqual(
         JSON.parse(JSON.stringify(regenerated)),
       );
-      // Cross-check: every tag-derived mutation provider id remains valid in
-      // the live schema. The live enum is allowed to grow beyond the tag's
-      // snapshot (e.g. Devin/Pi post-date host-v1.1.5) since
-      // `providerMutationCliStateSchemaV20` deliberately tracks it - it must
-      // never shrink or rename what the tag already proved accepted.
+      // Cross-check: every tag-derived mutation provider id remains valid in the live schema.
+      // Devin/Pi post-date host-v1.1.5) since `providerMutationCliStateSchemaV20` deliberately tracks it - it must never shrink or rename what the tag already proved accepted.
       for (const providerId of fixtures.mutationProviderIds) {
         expect(providerIdSchema.options).toContain(providerId);
       }
@@ -1078,9 +1035,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   it.skipIf(!tagReachable)(
     "tag-derived schemas reject deliberately invalid samples",
     async () => {
-      // Generation-time guarantee: samples must parse against host-v1.1.5
-      // schemas. A wrong field type fails the tag-era parser (not the current
-      // branch).
+      // Generation-time guarantee: samples must parse against host-v1.1.5 schemas.
       const taggedSource = gitShow(
         traycerRoot,
         `${HOST_V115_MUTATION_V20_TAG}:${HOST_V115_MUTATION_V20_SCHEMAS_PATH}`,
@@ -1138,10 +1093,8 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   });
 
   it("amp-accept matrix: every tag-derived provider × all ten @2.0 responses", () => {
-    // The tag-derived set is a snapshot of what host-v1.1.5 shipped, so it
-    // may be a strict subset of the live enum (which has since grown, e.g.
-    // Devin/Pi) - it must never be empty or contain an id the live schema
-    // doesn't recognize.
+    // The tag-derived set is a snapshot of what host-v1.1.5 shipped, so it may be a strict subset of the live enum (which has since grown, e.g.
+    // Devin/Pi) - it must never be empty or contain an id the live schema doesn't recognize.
     expect(fixtures.mutationProviderIds.length).toBeGreaterThan(0);
     for (const providerId of fixtures.mutationProviderIds) {
       expect(providerIdSchema.options).toContain(providerId);
@@ -1195,15 +1148,8 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
 });
 
 describe("registry method-name fold", () => {
-  // This used to assert the native surface added NO method names at all,
-  // because a new name was once handshake-fatal against a released peer, so
-  // every native payload folded onto an existing carrier. The optional
-  // capability channel lifted that constraint, and folding turned out to be
-  // the more dangerous option - it grew four ALREADY-RELEASED wire shapes.
-  //
-  // The invariant that replaces it: a native method may exist, but only off
-  // the released floor and only with a degrade story, which is exactly what
-  // keeps it non-fatal for a peer that lacks it.
+  // This used to assert the native surface added NO method names at all, because a new name was once handshake-fatal against a released peer, so every native payload folded onto an existing carrier.
+  // The invariant that replaces it: a native method may exist, but only off the released floor and only with a degrade story, which is exactly what keeps it non-fatal for a peer that lacks it.
   it("keeps every native method off the released floor with a degrade story", () => {
     const nativeMethods = [
       "providers.mcpAuth",
@@ -1231,13 +1177,7 @@ describe("registry method-name fold", () => {
   });
 
   it("retains every released-floor method name (113)", () => {
-    // host-v1.0.0 / released-method-names fixture freezes 113 unary names as
-    // the released floor - optional capabilities that landed later (e.g.
-    // host.notifications.*, providers.submitLoginCode) are excluded from
-    // this floor by design and legitimately grow hostRpcRegistry beyond it.
-    // A subset check (every floor name still present) is the correct
-    // invariant here, not exact-set equality - that's inherently fragile
-    // against ordinary optional-method growth.
+    // host-v1.0.0 / released-method-names fixture freezes 113 unary names as the released floor - optional capabilities that landed later (e.g. host.notifications.*, providers.submitLoginCode) are excluded from this floor by.
     const names = Object.keys(hostRpcRegistry);
     for (const method of releasedMethodNames) {
       expect(names).toContain(method);

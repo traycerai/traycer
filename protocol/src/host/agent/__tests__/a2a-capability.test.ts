@@ -6,12 +6,8 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 
 /**
- * Outbound tool access and inbound message delivery are deliberately two
- * separate questions (see the doc comment on `canUseA2ATools`): a terminal
- * harness can hold the shared catalog with no inbox transport (Codex,
- * OpenCode), and every GUI surface gets both regardless of harness. This
- * table pins the full matrix so a future harness addition can't silently
- * regress either arm.
+ * Outbound tool access and inbound message delivery are deliberately two separate questions (see the doc comment on `canUseA2ATools`): a terminal harness can hold the shared catalog with no inbox transport (Codex.
+ * This table pins the full matrix so a future harness addition can't silently regress either arm.
  */
 const MATRIX: ReadonlyArray<{
   readonly label: string;

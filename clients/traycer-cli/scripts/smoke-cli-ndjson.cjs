@@ -1,42 +1,6 @@
 "use strict";
 
-// NP-9 smoke test for the CLI's NDJSON envelope contract.
-//
-// Desktop drives every long-running host-lifecycle command through the
-// CLI subprocess with `--json` and parses each stdout line as one of the
-// envelopes documented in the Tech Plan:
-//
-//   { type: "progress", stage, percent, bytes, totalBytes, message, timestamp }
-//   { type: "result", status: "ok",    data, timestamp }
-//   { type: "result", status: "error", error: { code, message, details }, timestamp }
-//
-// This smoke runs the SEA binary in `--json` mode for a representative
-// pair of commands and asserts:
-//
-//   1. Every stdout line is a JSON object with a recognised `type`.
-//   2. Exactly one terminal `type: "result"` event appears, and it is
-//      the LAST stdout line (downstream parsers rely on this so they can
-//      stop reading after the result without dropping progress events).
-//   3. An error path emits a `type: "result"` with `status: "error"`
-//      and a non-empty machine-readable `error.code` - the field
-//      Desktop maps onto Doctor cards / Settings → Host error tails.
-//
-// We intentionally choose two commands that don't need a running host
-// or network access so the smoke can run on any developer machine and in
-// CI without provisioning fixtures:
-//
-//   - `traycer --version` → emits one `result` ok with a string payload.
-//   - `traycer host status --json` against an empty TRAYCER_HOME →
-//     emits a structured `result` (ok or error) depending on whether the
-//     install record is present; either way the envelope contract must
-//     hold.
-//   - `traycer host foo-does-not-exist --json` → exercises the
-//     commander error path, which the runtime catches and re-emits as
-//     a terminal `result` error event.
-//
-// PATH is cleared the same way smoke-cli-sea.cjs does it so this also
-// doubles as a "the SEA carries its own Node runtime" check for the
-// NDJSON code paths.
+// Smoke: CLI NDJSON envelope is exactly one terminal result line on stdout.
 
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -140,9 +104,7 @@ function runCli(args, envOverrides) {
   // Always default to non-interactive so any auto-bootstrap path that
   // tries to prompt the user fails fast instead of hanging the smoke.
   env.TRAYCER_NONINTERACTIVE = "1";
-  // Don't let stray progress sinks (TTY tickers, etc.) leak into
-  // stdout - that would be a contract violation anyway, but if a
-  // regression sneaks in we want the assertion below to flag it.
+  // Don't let stray progress sinks (TTY tickers, etc.) leak into stdout - that would be a contract violation anyway, but if a regression sneaks in we want the assertion below to flag it.
   const result = spawnSync(binaryPath, args, {
     env,
     encoding: "utf8",
@@ -162,10 +124,8 @@ function runCli(args, envOverrides) {
 
 function smokeVersion() {
   const run = runCli(["--version", "--json"], {});
-  // `--version` is commander-owned and may print as plain text on some
-  // versions even with `--json`. Treat it as a soft check: if stdout
-  // *does* contain JSON envelopes, they must conform; otherwise a
-  // non-empty plain-text line is acceptable.
+  // `--version` is commander-owned and may print as plain text on some versions even with `--json`.
+  // Treat it as a soft check: if stdout does* contain JSON envelopes, they must conform; otherwise a non-empty plain-text line is acceptable.
   const trimmed = run.stdout.trim();
   if (trimmed.length === 0) {
     throw new Error("`traycer --version --json` produced no stdout");
@@ -195,9 +155,8 @@ function smokeUnknownSubcommand() {
   }
   const envelopes = parseEnvelopes(run.stdout);
   if (envelopes.length === 0) {
-    // Some commander builds emit the unknown-subcommand error to stderr
-    // before the runner ever boots. Accept that path as long as stderr
-    // is non-empty - Desktop only consumes stdout NDJSON.
+    // Some commander builds emit the unknown-subcommand error to stderr before the runner ever boots.
+    // Accept that path as long as stderr is non-empty - Desktop only consumes stdout NDJSON.
     if (run.stderr.trim().length === 0) {
       throw new Error(
         "unknown-subcommand path produced no NDJSON on stdout AND no stderr text",
@@ -222,14 +181,8 @@ function smokeUnknownSubcommand() {
 }
 
 function smokeWhoamiNoCredentials() {
-  // `whoami` is one of the legacy-JSON commands migrated to the shared
-  // NDJSON runner (Native Packaging follow-up,
-  // ticket:e86b8372-…/a9fa5e4c-…). Point HOME at a freshly-created empty
-  // directory so the command never finds stored credentials and runs
-  // entirely off-disk. The runner contract dictates the terminal event
-  // either reports `status: "ok"` with `data.status: "no-credentials"`
-  // (and a non-zero exit), or `status: "error"` if the auth helper
-  // surfaced a structured failure. Either way the envelope must validate.
+  // `whoami` is one of the legacy-JSON commands migrated to the shared NDJSON runner (Native Packaging follow-up, ticket:e86b8372-…/a9fa5e4c-…).
+  // Point HOME at a freshly-created empty directory so the command never finds stored credentials and runs entirely off-disk.
   const tmpHome = fs.mkdtempSync(
     path.join(os.tmpdir(), "traycer-ndjson-whoami-"),
   );
@@ -256,10 +209,8 @@ function smokeWhoamiNoCredentials() {
 }
 
 function smokeConfigEnvListEmpty() {
-  // `config env list` was migrated alongside `whoami`. With an empty HOME
-  // the on-disk config doesn't exist, so the command reports an empty
-  // overrides list. The envelope contract is the load-bearing assertion
-  // for Desktop's `runTraycerCliJson` call site.
+  // `config env list` was migrated alongside `whoami`.
+  // With an empty HOME the on-disk config doesn't exist, so the command reports an empty overrides list.
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "traycer-ndjson-cfg-"));
   try {
     const run = runCli(["config", "env", "list", "--json"], {
@@ -284,10 +235,8 @@ function smokeConfigEnvListEmpty() {
 }
 
 function smokeHostStatusEmptyHome() {
-  // Pin TRAYCER_HOME to a freshly-created empty directory so the command
-  // runs entirely off-disk - no real install state, no network. Whether
-  // the runner reports ok-with-empty-data or a structured error doesn't
-  // matter for the envelope smoke; both shapes must validate.
+  // Pin TRAYCER_HOME to a freshly-created empty directory so the command runs entirely off-disk - no real install state, no network.
+  // Whether the runner reports ok-with-empty-data or a structured error doesn't matter for the envelope smoke; both shapes must validate.
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "traycer-ndjson-"));
   try {
     const run = runCli(["host", "status", "--json"], {

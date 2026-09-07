@@ -127,11 +127,8 @@ describe("composer draft store hydration", () => {
 });
 
 /**
- * clearDraft must broadcast via replaceDraft (empty content + bumped
- * resetEpoch) rather than deleting the map entry. A delete leaves every
- * other mounted composer for the same taskId with a stale Tiptap document
- * because `drafts[taskId]?.resetEpoch ?? 0` is observationally identical
- * before and after a delete of an epoch-0 entry.
+ * clearDraft must broadcast via replaceDraft (empty content + bumped resetEpoch) rather than
+ * deleting the map entry.
  */
 describe("composer draft store clearDraft", () => {
   it("resets the entry in place with empty content and a bumped resetEpoch (does not delete)", () => {
@@ -180,9 +177,8 @@ describe("composer draft store clearDraft", () => {
 });
 
 /**
- * Prompt-stash CAS token: `revision` must bump on real content changes and
- * external replacements, but NOT on caret-only selection updates or on the
- * hydration-time resetEpoch bump.
+ * Prompt-stash CAS token: `revision` must bump on real content changes and external replacements,
+ * but NOT on caret-only selection updates or on the hydration-time resetEpoch bump.
  */
 describe("composer draft store revision (prompt-stash CAS)", () => {
   it("bumps revision on setSnapshot; selection-only uses setSelection", () => {
@@ -264,7 +260,7 @@ describe("composer draft store revision (prompt-stash CAS)", () => {
     const draft = useComposerDraftStore.getState().drafts["legacy-task"];
     expect(draft).toBeDefined();
     if (draft === undefined) return;
-    // (a) normalized to 0 — not undefined, not NaN.
+    // (a) normalized to 0 - not undefined, not NaN.
     expect(draft.revision).toBe(0);
     expect(Number.isNaN(draft.revision)).toBe(false);
     expect(draft.resetEpoch).toBe(1);

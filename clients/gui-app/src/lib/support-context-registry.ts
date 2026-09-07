@@ -1,11 +1,8 @@
 import { create } from "zustand";
 
 /**
- * Availability of one captured field. `known` is a fresh, currently-observed
- * value; `stale` is a prior value the write side no longer confirms live
- * (e.g. provider state read before the host went unreachable) - callers must
- * label it as such rather than silently reporting a possibly-outdated value
- * as current; `unavailable` means the field was never observed this session.
+ * Availability of one captured field.
+ * `known` is a fresh, currently-observed value; `stale` is a prior value the write side no longer confirms live (e.g. provider state read before the host went unreachable) - callers must label it as such rather than silently reporting a possibly-outdated.
  */
 export type CapturedField<T> =
   | { readonly status: "known"; readonly value: T }
@@ -27,11 +24,8 @@ export function staleField<T>(value: T): CapturedField<T> {
 }
 
 /**
- * Last-known session state for support-report capture. Every field mirrors
- * something a user is actively doing (route, host, epic/tab/artifact,
- * harness/model, provider) so a report opened after a crash can still say
- * what the user was doing right before it - the highest-value capture case,
- * per the redesign's critique (D5).
+ * Last-known session state for support-report capture.
+ * Every field mirrors something a user is actively doing (route, host, epic/tab/artifact, harness/model, provider) so a report opened after a crash can still say what the user was doing right before it - the highest-value capture case, per the redesign's.
  */
 export interface SupportContextSnapshot {
   /** Route template, e.g. `/epics/$epicId/$tabId` - never a full URL/path. */
@@ -72,14 +66,8 @@ interface SupportContextRegistryState {
 }
 
 /**
- * Module-level store (D5): deliberately NOT React context. A root crash
- * unmounts the authenticated runtime subtree that writes this registry, but
- * `ReportIssueDialogHost` stays mounted above the root error boundary (see
- * `traycer-app.tsx`) and must still be able to read the last-known session
- * state for the report it opens. A React context living inside the crashed
- * subtree would be torn down with it; a module-scoped Zustand store (same
- * shape as `desktop-dialog-store.ts`) lives independent of the React tree and
- * survives exactly that unmount.
+ * Module-level store (D5): deliberately NOT React context.
+ * A root crash unmounts the authenticated runtime subtree that writes this registry, but `ReportIssueDialogHost` stays mounted above the root error boundary (see `traycer-app.tsx`) and must still be able to read the last-known session state for the report it.
  */
 export const useSupportContextRegistry = create<SupportContextRegistryState>(
   (set) => ({
@@ -91,8 +79,7 @@ export const useSupportContextRegistry = create<SupportContextRegistryState>(
 );
 
 /**
- * Plain (non-hook) reader for use outside React - at report-open time, and
- * after a root crash has unmounted every component that could call a hook.
+ * Plain (non-hook) reader for use outside React - at report-open time, and after a root crash has unmounted every component that could call a hook.
  */
 export function getSupportContextSnapshot(): SupportContextSnapshot {
   return useSupportContextRegistry.getState().snapshot;

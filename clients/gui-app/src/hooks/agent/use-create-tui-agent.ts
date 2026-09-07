@@ -34,15 +34,7 @@ import {
 
 const TUI_AGENT_PROJECTION_WAIT_MS = 30_000;
 
-/**
- * Resolves once the tui-agent record has projected into the epic store (or after
- * a bounded wait). Creation holds the canvas pending-create mark until this
- * resolves so the close-tile reconcile in `use-epic-route-synchronization` never
- * sees the just-opened tab as neither-pending-nor-live - the race where
- * `epic.createTuiAgent` resolves on the RPC channel BEFORE its Y.Doc update
- * streams back and projects, and the reconcile closes the tab in that window.
- * Mirrors the chat path's `openCreatedChatWhenProjected`.
- */
+/** Creation holds the canvas pending-create mark until this resolves so the close-tile reconcile in `use-epic-route-synchronization` never sees the just-opened tab as neither-pending-nor-live - the race where `epic.createTuiAgent` resolves on the RPC channel BEFORE its Y.Doc update streams back and projects, and the reconcile closes the tab in that window. */
 function waitForTuiAgentProjected(
   epicId: string,
   tuiAgentId: string,
@@ -92,60 +84,7 @@ type ValidateForkProfileMutateAsync = (
   variables: ValidateForkProfileRequest,
 ) => Promise<ValidateForkProfileResponse>;
 
-/**
- * Composite mutation that:
- *   1. mints a client-side `tuiAgentId` so the same id can be used
- *      everywhere (binding row, agent.tui.prepareLaunch, persisted
- *      record),
- *   2. opens a canvas tab placeholder for the client-minted id BEFORE
- *      worktree creation and `agent.tui.prepareLaunch` for normal launches so
- *      the user has a visible tui-agent surface inside the Epic while
- *      worktree creation and launch preparation run. Fork launches
- *      intentionally wait until `agent.tui.prepareLaunch` returns the new
- *      forked session so the tab opens on the forked session rather than a
- *      pre-fork placeholder. The tile renders "Loading terminal agent…" until
- *      the persisted record lands (or the user closes the tab), so a slow
- *      worktree creation or launch preparation cannot strand the user without
- *      a placeholder/recovery surface in the Epic context.
- *   3. for Worktree-mode launches, dispatches the matching `worktree.*`
- *      RPC so the host SQLite binding row exists before the harness
- *      preparation reads it,
- *   4. prepares a tui-agent session via `agent.tui.prepareLaunch`
- *      which seeds a default owner-scoped binding from the epic's folders
- *      when none was dispatched in step 3 (the always-non-empty seam),
- *      rejects with `WORKTREE_MISSING` if a bound folder is gone on disk
- *      (no silent demote); the worktree setup script keeps running in its
- *      background terminal and never gates the launch,
- *   5. inserts a tui-agent record via `epic.createTuiAgent`
- *      with the client-minted id (the Y.Doc projection swaps the
- *      placeholder out for the real record).
- *
- * Errors from any step propagate; the underlying TanStack Query mutations'
- * default toasts surface user-facing messaging. A missing bound folder
- * (`WORKTREE_MISSING`) surfaces as a typed error from
- * `agent.tui.prepareLaunch`; when it fires the harness never starts and the
- * persisted record is never written. Setup-script failure / cancellation is
- * NOT a launch error - the launch is non-blocking and the tile's setup card
- * owns that UX (progress, Open terminal, Retry). Normal launches keep the
- * placeholder canvas tab visible as the durable recovery surface alongside
- * the typed error (and, for `WORKTREE_MISSING`, the tui-agent tile's own
- * restore/retry body). Fork launches do not open the placeholder until the
- * forked session is ready.
- *
- * Orphan-binding boundary (be precise — these two paths differ):
- *   - DEFAULT (null intent): no binding is written until prepareLaunch's seam
- *     runs, and the resolver preflights the missing-check BEFORE that seam write,
- *     so a rejected default-seed launch persists NO binding row. Orphan-safe.
- *   - EXPLICIT intent: step 3's `worktree.create` persists the binding BEFORE
- *     prepareLaunch, so a prepareLaunch rejection (e.g. `WORKTREE_MISSING`)
- *     after that write leaves a binding row for an owner id that never gets
- *     a record. This orphan window is
- *     inherent to this deliberately non-atomic 3-step flow (kept for the
- *     placeholder-during-setup UX; a single atomic create RPC would close it) and
- *     is PRE-EXISTING, not introduced by the missing-worktree work. The retained
- *     background audit (`workspaceBinding.removeEntry`) does not reap it; closing
- *     it is a separate atomic-create / orphan-reaper follow-up.
- */
+/** WORKTREE_MISSING is typed; setup-script failure does not fail the launch. Explicit intent persists worktree.create first and can leave an orphan binding. */
 export type CreateTuiAgentStatus =
   | "preparing-workspace"
   | "forking-session"
@@ -156,59 +95,25 @@ export interface CreateTuiAgentInput {
   readonly tabId: string;
   readonly parentId: string | null;
   readonly title: string;
-  /**
-   * Explicit placement for the placeholder tile, or `null` to let the
-   * conversation tile-placement setting decide (C3, C8). Only the in-pane
-   * PaneOpener names a pane.
-   */
+  /** Explicit placement for the placeholder tile, or `null` to let the conversation tile-placement setting decide (C3, C8). */
   readonly placement: ExplicitTilePlacement | null;
   readonly harnessId: TuiHarnessId;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly forkSourceHarnessSessionId: string | null;
-  /**
-   * The fork source's own stable artifact id. `null`
-   * for a non-fork launch. Threaded onto `agent.tui.prepareLaunch` as
-   * `forkSourceTuiAgentId` so the resolver validates the exact
-   * `{id, epic, harness, session, user, host}` tuple instead of scanning for
-   * a `(harnessId, harnessSessionId, hostId, userId)` match, and used here to
-   * preflight cross-profile admission before any worktree/binding work.
-   */
+  /** Threaded onto `agent.tui.prepareLaunch` as `forkSourceTuiAgentId` so the resolver validates the exact `{id, epic, harness, session, user, host}` tuple instead of scanning for a `(harnessId, harnessSessionId, hostId, userId)` match, and used here to preflight cross-profile admission before any worktree/binding work. */
   readonly sourceTuiAgentId: string | null;
-  /**
-   * The fork source's own `profileId`, so this hook can tell a cross-profile
-   * fork (preflight required) apart from a same-profile one (the guard
-   * trivially admits; skip the extra round trip). `null` for a non-fork
-   * launch, or when the source itself runs ambient.
-   */
+  /** The fork source's own `profileId`, so this hook can tell a cross-profile fork (preflight required) apart from a same-profile one (the guard trivially admits; skip the extra round trip). */
   readonly sourceProfileId: string | null;
   readonly onStatusChange: ((status: CreateTuiAgentStatus) => void) | null;
   /**
-   * Optional worktree binding intent. `null` means no explicit worktree
-   * decision was captured (the default-Local flow): the create path skips the
-   * binding RPC, and `agent.tui.prepareLaunch`'s host seam seeds a default
-   * owner-scoped Local binding from the epic's folders (the always-non-empty
-   * invariant) - so the agent still runs in a real, owner-scoped folder set,
-   * never a sibling-leaking fallback. When non-null the create path dispatches
-   * the matching `worktree.*` RPC against the new agent's id BEFORE preparing
-   * the harness so the explicit binding exists before the resolver reads it.
+   * `null` skips the binding RPC; `prepareLaunch` seeds a default owner-scoped Local binding. Non-null dispatches `worktree.*` before prepare so the resolver sees it.
    */
   readonly worktreeIntent: WorktreeIntent | null;
   readonly workspaceMode: WorktreeBindingWorkspaceMode;
-  /**
-   * Launch-time CLI args for this terminal agent. A string (pre-filled from the
-   * provider's Settings default in the picker, editable per launch) is the
-   * explicit override forwarded to `agent.tui.prepareLaunch`; `null` means "no
-   * override - use the provider's saved Settings default" (surfaces without an
-   * args field, e.g. the in-epic launcher, pass `null`). Not persisted on the
-   * record, so a later reopen falls back to the current Settings default.
-   */
+  /** A string (pre-filled from the provider's Settings default in the picker, editable per launch) is the explicit override forwarded to `agent.tui.prepareLaunch`; `null` means "no override - use the provider's saved Settings default" (surfaces without an args field, e.g. */
   readonly terminalAgentArgs: string | null;
-  /**
-   * Which of the harness's logged-in profiles (subscriptions) to launch this
-   * agent on. `null` = the ambient/host login. See the multi-profile decision
-   * log.
-   */
+  /** Which of the harness's logged-in profiles (subscriptions) to launch this agent on. */
   readonly profileId: string | null;
 }
 
@@ -217,10 +122,7 @@ export function useCreateTuiAgent(): {
   readonly isPending: boolean;
 } {
   const hostClient = useHostClient();
-  // Placeholder tile is opened before `agent.tui.prepareLaunch` resolves,
-  // so the bound host id is not yet known. Stamp the renderer's current
-  // default; once the projection lands, the per-tile binding rides on the
-  // `TuiAgentProjection.hostId` rather than this placeholder value.
+  // Stamp the renderer's current default; once the projection lands, the per-tile binding rides on the `TuiAgentProjection.hostId` rather than this placeholder value.
   const placeholderHostId = useAddressableHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   return useCreateTuiAgentForClient(hostClient, placeholderHostId);
 }
@@ -253,24 +155,10 @@ export function useCreateTuiAgentForClient(
       const opensAfterSessionPrepared =
         input.forkSourceHarnessSessionId !== null;
 
-      // Object holder, not a bare `let`: `opened` is flipped inside the
-      // `openPlaceholder` closure, and a closure-mutated `let` narrows to its
-      // `false` initializer at the `finally` check (no-unnecessary-condition
-      // would flag it always-false). An object property reflects the mutation.
+      // Object holder, not a bare `let`: `opened` is flipped inside the `openPlaceholder` closure, and a closure-mutated `let` narrows to its `false` initializer at the `finally` check (no-unnecessary-condition would flag it always-false).
       const placeholder = { opened: false };
       const openPlaceholder = (): void => {
-        // Open the canvas tab placeholder BEFORE normal
-        // `agent.tui.prepareLaunch` waits so the user has a visible
-        // tui-agent surface inside the Epic for the entire setup wait -
-        // including a setup that fails or cancels. Fork creates are the
-        // exception: the source session must be forked first, then the new
-        // terminal session is opened against the forked session id.
-        //
-        // Mark the id as pending-create around the open so the
-        // record→canvas sync effect in `use-epic-route-synchronization`
-        // doesn't immediately close the placeholder for lacking a
-        // projected record (mirrors `use-initial-chat-handoff`'s
-        // mark/unmark pattern).
+        // Open the canvas placeholder before `prepareLaunch` waits (forks excepted). Mark pending-create so route sync does not close it for lacking a projected record.
         markArtifactPendingCreate(tuiAgentId);
         placeholder.opened = true;
         const placeholderRef = {
@@ -294,11 +182,7 @@ export function useCreateTuiAgentForClient(
 
       let clearStashedPreparedLaunch = false;
       try {
-        // Preflight cross-profile fork admission BEFORE anything else -
-        // including the placeholder tile and worktree/binding work below -
-        // so a rejection leaves NOTHING created (tech plan governing
-        // client-side ordering). See
-        // `resolveForkProfilePreflightTarget` for when this actually applies.
+        // Preflight cross-profile fork admission BEFORE anything else - including the placeholder tile and worktree/binding work below - so a rejection leaves NOTHING created (tech plan governing client-side ordering).
         const preflightTarget = resolveForkProfilePreflightTarget(
           input,
           forkProfilePreflightSupported,
@@ -314,14 +198,7 @@ export function useCreateTuiAgentForClient(
         if (!opensAfterSessionPrepared) {
           openPlaceholder();
         }
-        // For an explicit intent (a worktree, or a specific Local folder set),
-        // the worktree binding RPC is dispatched BEFORE harness preparation so
-        // `agent.tui.prepareLaunch` reads the user's *intended* binding row -
-        // and, for Worktree mode, so the worktree directory is created and its
-        // setup awaited. Skipping it would leave no binding at prepareLaunch, so
-        // the seam there would seed a *default* Local binding from the epic's
-        // folders, silently discarding the explicit choice. (A null intent has
-        // nothing to dispatch; the seam's default seeding is the intended path.)
+        // Skipping it would leave no binding at prepareLaunch, so the seam there would seed a *default* Local binding from the epic's folders, silently discarding the explicit choice.
         if (input.worktreeIntent !== null) {
           if (input.worktreeIntent.entries.length > 0) {
             input.onStatusChange?.("preparing-workspace");
@@ -336,15 +213,7 @@ export function useCreateTuiAgentForClient(
         if (input.forkSourceHarnessSessionId !== null) {
           input.onStatusChange?.("forking-session");
         }
-        // Resolver reads the binding for `tuiAgentId` and awaits the
-        // per-owner setup awaiter. Setup failure / cancellation rejects
-        // here with a typed error before any harness work happens - the
-        // catch chain below ensures `epic.createTuiAgent` is never
-        // invoked on that path. For normal launches, the placeholder canvas
-        // tab opened above remains visible alongside the host-opened setup
-        // terminal tab and the mutation hook's error toast. Fork launches
-        // intentionally have no placeholder yet while the source session is
-        // being forked.
+        // Setup failure / cancellation rejects here with a typed error before any harness work happens - the catch chain below ensures `epic.createTuiAgent` is never invoked on that path.
         const session = await startSession.mutateAsync({
           harnessId: input.harnessId,
           epicId: input.epicId,
@@ -400,11 +269,7 @@ export function useCreateTuiAgentForClient(
           profileId: input.profileId,
           forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
         });
-        // Hold the pending-create mark until the record actually projects, so
-        // the close-tile reconcile can't close the optimistic tab in the window
-        // between this RPC resolving and its Y.Doc update streaming back. On the
-        // error paths above the record is never created, so `finally` unmarks
-        // immediately and the reconcile closes the orphan placeholder tab.
+        // Hold the pending-create mark until the record actually projects, so the close-tile reconcile can't close the optimistic tab in the window between this RPC resolving and its Y.Doc update streaming back.
         await waitForTuiAgentProjected(input.epicId, tuiAgentId);
         clearStashedPreparedLaunch = false;
         return created.tuiAgentId;
@@ -440,15 +305,7 @@ export function useCreateTuiAgentForClient(
   };
 }
 
-// Only a genuine cross-profile fork needs the preflight round trip: a
-// same-profile fork (including every non-fork launch, where
-// `sourceTuiAgentId` is `null`) trivially admits on the host's own guard.
-// `null` also when the connected host predates the capability - never call
-// an unsupported method; `agent.tui.prepareLaunch`'s own authoritative guard
-// still backstops that case with the strict-scan fallback. Split out of
-// `create` purely to keep that callback's branch count down, and returns the
-// narrowed non-null `sourceTuiAgentId` so the call site needs no second null
-// check of its own.
+// `null` also when the connected host predates the capability - never call an unsupported method; `agent.tui.prepareLaunch`'s own authoritative guard still backstops that case with the strict-scan fallback.
 function resolveForkProfilePreflightTarget(
   input: CreateTuiAgentInput,
   preflightSupported: boolean,
@@ -473,11 +330,7 @@ interface PreflightForkProfileAdmissionArgs {
   readonly validateForkProfile: ValidateForkProfileMutateAsync;
 }
 
-// Read-only preflight against the guard core's bulk-verdict shape, asked
-// for exactly this one target profile. Rejects with `TuiForkProfileRejectedError`
-// - never a silent no-op - so the caller's `try` aborts before any
-// worktree/binding side effect. `agent.tui.prepareLaunch` re-runs the SAME
-// guard authoritatively (TOCTOU-safe); this call is advisory only.
+// Rejects with `TuiForkProfileRejectedError` never a silent no-op - so the caller's `try` aborts before any
 async function preflightForkProfileAdmission(
   args: PreflightForkProfileAdmissionArgs,
 ): Promise<void> {
@@ -508,29 +361,17 @@ async function dispatchWorktreeIntent(
   args: DispatchWorktreeIntentArgs,
 ): Promise<void> {
   const { intent, epicId, tuiAgentId } = args;
-  // A mode-only intent with no entries needs no binding write: prepare-launch's
-  // host seam seeds the default owner-scoped Local binding from the epic's
-  // folders when it finds no row (the always-non-empty invariant), so there is
-  // nothing to dispatch here.
+  // A mode-only intent with no entries needs no binding write: prepare-launch's host seam seeds the default owner-scoped Local binding from the epic's folders when it finds no row (the always-non-empty invariant), so there is nothing to dispatch here.
   if (intent.entries.length === 0) return;
   const entries = worktreeCreateEntries(intent.entries);
-  // Send the full union in ONE `worktree.create` call and let the host's
-  // `resolveIntent` route each entry by `kind` (local / import / worktree)
-  // into a single sibling-preserving binding write. One call keeps entry
-  // routing and binding composition owned by `resolveIntent` instead of
-  // re-deriving them client-side across separate create / import / setEntryMode
-  // RPCs.
+  // One call keeps entry routing and binding composition owned by `resolveIntent` instead of re-deriving them client-side across separate create / import / setEntryMode RPCs.
   const result = await args.worktreeCreate({
     epicId,
     ownerId: tuiAgentId,
     ownerKind: "terminal-agent",
     entries,
   });
-  // The RPC resolves per-entry: an entry the host failed - or reported
-  // nothing about - has no `ok` row. Launching anyway would run the agent
-  // against a silently-partial binding, so surface the failure and abort
-  // before any harness work happens (the placeholder cleanup in the caller's
-  // finally handles the tab).
+  // The RPC resolves per-entry: an entry the host failed - or reported nothing about - has no `ok` row.
   const okPaths = new Set(
     result.perEntry
       .filter((entryResult) => entryResult.ok)
@@ -545,12 +386,7 @@ async function dispatchWorktreeIntent(
       failedPaths.length === 1
         ? `"${folder}"`
         : `${failedPaths.length} folders, starting with "${folder}"`;
-    // The reason must describe the SAME entry `scope` names, so read it off
-    // `failedPaths[0]` rather than the first entry that happens to carry one -
-    // a later entry's message would misattribute the failure. A failed entry
-    // rides `perEntry` with `ok: false` and the host's causal `errorMessage`
-    // (git stderr tail, checked-out-elsewhere, …); an entry the host reported
-    // nothing about has no row, so the headline stands alone.
+    // The reason must describe the SAME entry `scope` names, so read it off `failedPaths[0]` rather than the first entry that happens to carry one - a later entry's message would misattribute the failure.
     const reason =
       result.perEntry.find(
         (entryResult) =>

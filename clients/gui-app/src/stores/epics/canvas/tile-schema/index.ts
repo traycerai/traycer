@@ -1,13 +1,4 @@
-/**
- * Canvas tile-kind schema registry - React-free.
- *
- * Owns persistence for every `EpicCanvasTileRef` kind: parse (rehydrate),
- * serialize (persist), and the `isRecordBacked` flag (true => Y.Doc
- * artifact; consumed by route-sync deletion). Keyed by `TileKindId` via a
- * `{ [K in TileKindId]: ... }` mapped type, so a missing kind fails the
- * build. `store.ts` and `dnd.ts` dispatch through here instead of
- * hand-rolling per-kind parse/serialize.
- */
+/** Canvas tile-kind schema registry - React-free. */
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { EpicArtifactRef, EpicCanvasTileRef, EpicNodeRef } from "../types";
 import { isTileKind, type TileKindId } from "../tile-kinds";
@@ -87,13 +78,8 @@ export function serializeTileRef(ref: EpicCanvasTileRef): DesktopJsonValue {
 }
 
 /**
- * True when the kind is backed by a Y.Doc artifact record - and narrows to the
- * ref type those kinds carry, so callers stop re-asserting it.
- *
- * The narrowing is honest rather than a dressed-up cast: `RecordBackedTileRef`
- * is derived from the SAME registry the flag is read from, so a kind that flips
- * `isRecordBacked` and a kind whose ref changes both move the predicate's
- * result type with them.
+ * True when the kind is backed by a Y.Doc artifact record - and narrows to the ref type those
+ * kinds carry, so callers stop re-asserting it.
  */
 export function isTileRefRecordBacked(ref: {
   readonly type: unknown;
@@ -110,12 +96,7 @@ type RecordBackedTileKindId = {
   [K in TileKindId]: TileKindToRefMap[K] extends EpicArtifactRef ? K : never;
 }[TileKindId];
 
-/**
- * The tile kinds whose ref is an Epic NODE - a chat/artifact, a terminal, or a
- * workspace file. Derived from `TileKindToRefMap` rather than spelled out as a
- * `||` ladder over kind literals, so a new node-backed kind is covered the
- * moment it is registered and a non-node kind cannot be added by hand.
- */
+/** The tile kinds whose ref is an Epic NODE - a chat/artifact, a terminal, or a workspace file. */
 const EPIC_NODE_TILE_KINDS: { readonly [K in EpicNodeTileKindId]: true } = {
   chat: true,
   "terminal-agent": true,

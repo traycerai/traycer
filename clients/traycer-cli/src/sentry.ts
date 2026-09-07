@@ -12,10 +12,8 @@ if (dsn) {
     environment: config.environment,
     serverName: "traycer-cli",
     sampleRate: 1.0,
-    // The CLI must be able to END. Sentry's transport keeps no handle we can
-    // reach and installs no request timeout, so a stalled DSN endpoint holds
-    // the event loop open past `Sentry.close()`. This hands it a module that
-    // tracks its requests; see sentry-transport.ts and runner/exit.ts.
+    // The CLI must be able to END.
+    // Sentry's transport keeps no handle we can reach and installs no request timeout, so a stalled DSN endpoint holds the event loop open past `Sentry.close()`.
     transportOptions: { httpModule: trackingHttpModule },
     tracesSampleRate: samplingRate,
     profilesSampleRate: samplingRate,

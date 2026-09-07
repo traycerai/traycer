@@ -13,13 +13,7 @@ import {
 } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
-/**
- * `managedCommand.deliverHeld@1.0` - the human path off a Stop fence's durable
- * hold. `heldManagedCommandUpdateSchema` is shared with the chat stream, so its
- * behaviour THERE (the snapshot field, the `heldUpdatesChanged` frame, and the
- * frozen `1.5` line's refusal of both) lives in
- * `agent/gui/__tests__/chat-subscribe-held-updates.test.ts`.
- */
+/** `managedCommand.deliverHeld@1.0` - the human path off a Stop fence's durable hold. */
 
 const HELD = {
   commandId: "cmd-1",
@@ -64,10 +58,7 @@ describe("managedCommand.deliverHeld@1.0 request", () => {
     ).toThrow();
   });
 
-  // An empty array used to parse as "deliver nothing" and resolve as an
-  // empty, fully-successful response - indistinguishable on the wire from a
-  // real delivery. Nothing a person can do produces it; it is what a caller
-  // that meant `null` gets from building the array off an empty selection.
+  // An empty array used to parse as "deliver nothing" and resolve as an empty, fully-successful response - indistinguishable on the wire from a real delivery.
   it('rejects an empty commandIds array rather than accepting it as "deliver nothing"', () => {
     expect(() =>
       managedCommandDeliverHeldRequestSchema.parse({
@@ -134,9 +125,7 @@ describe("managedCommand.deliverHeld@1.0 response", () => {
     ).toThrow();
   });
 
-  // `commandId` is required on the per-command failure - a failure the host
-  // cannot attribute to one command belongs in `unattributed` instead, so
-  // that `unresolved.length` is always a count of shells.
+  // `commandId` is required on the per-command failure - a failure the host cannot attribute to one command belongs in `unattributed` instead, so that `unresolved.length` is always a count of shells.
   it("requires commandId on a per-command failure - no longer nullable", () => {
     expect(() =>
       managedCommandHeldReleaseFailureSchema.parse({
@@ -148,9 +137,7 @@ describe("managedCommand.deliverHeld@1.0 response", () => {
     ).toThrow();
   });
 
-  // `code` is deliberately free-form, NOT an enum, so a failure mode the
-  // schema has never seen still parses - the wire never breaks when the host
-  // learns a new one.
+  // `code` is deliberately free-form, NOT an enum, so a failure mode the schema has never seen still parses - the wire never breaks when the host learns a new one.
   it("parses a code the schema has never seen", () => {
     const parsed = managedCommandHeldReleaseFailureSchema.parse({
       commandId: "cmd-1",
@@ -163,11 +150,6 @@ describe("managedCommand.deliverHeld@1.0 response", () => {
 });
 
 describe("managedCommand.deliverHeld@1.0 response - unattributed failures", () => {
-  // The proof arms that fail before anything is enumerated (a disposed
-  // router, an unreadable delivery-state table, a failed boot record load)
-  // have no command to name - this is where THAT goes, distinct from
-  // `unresolved`, so a chat holding four commands does not get reported as
-  // "1 shell can't be delivered".
   it("carries no commandId - only code, retryable, message", () => {
     const parsed = managedCommandHeldReleaseUnattributedSchema.parse({
       code: "command_records_unavailable",
@@ -183,10 +165,8 @@ describe("managedCommand.deliverHeld@1.0 response - unattributed failures", () =
   });
 
   it("rejects a commandId field on the unattributed shape", () => {
-    // Zod's default (non-strict) object parsing drops unknown keys rather
-    // than rejecting them, so this only proves the field does not survive a
-    // parse - not that providing it throws. That is the property this test
-    // actually needs: a caller cannot smuggle a commandId through this shape.
+    // Zod's default (non-strict) object parsing drops unknown keys rather than rejecting them, so this only proves the field does not survive a parse - not that providing it throws.
+    // That is the property this test actually needs: a caller cannot smuggle a commandId through this shape.
     const parsed = managedCommandHeldReleaseUnattributedSchema.parse({
       commandId: "should-not-survive",
       code: "delivery_state_unreadable",

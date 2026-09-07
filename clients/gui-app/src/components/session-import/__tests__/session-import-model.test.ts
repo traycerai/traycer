@@ -30,12 +30,8 @@ import {
   type SessionImportWizardState,
 } from "@/components/session-import/session-import-model";
 
-/**
- * Every test builds its own candidates and groups rather than sharing
- * literals, so a test that mutates a field (a title, a state) can never leak
- * into another - the reducer's whole job is to react to what arrives, and a
- * shared fixture would hide which arrival caused which effect.
- */
+/** Every test builds its own candidates and groups rather than sharing literals, so a test that mutates a field
+ * (a title, a state) can never leak into another. */
 let candidateSequence = 0;
 
 function candidate(
@@ -179,9 +175,7 @@ describe("sessionImportWizardReducer - selection defaults as groups stream in", 
 
 describe("buildSessionImportView - disabled rows", () => {
   it("drops an arriving group that holds nothing but already-imported rows", () => {
-    // An older host still sends already_in_traycer rows; a current one hides
-    // them at the scan. Either way the wizard shows only what is new, so a
-    // group with nothing new never appears.
+    // Either way the wizard shows only what is new, so a group with nothing new never appears.
     const alreadyImported = candidate({
       nativeSessionId: "s1",
       state: { kind: "already_in_traycer", epicId: "epic-1", chatId: "chat-1" },
@@ -313,9 +307,8 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
     );
   });
 
-  // Both folders below hold the same two providers and differ only in the
-  // order the host reported them, so a pill row that reshuffled with arrival
-  // order would render the same fact two different ways on one screen.
+  // Both folders below hold the same two providers and differ only in the order the host reported them, so a
+  // pill row that reshuffled with arrival order would render the same fact two different ways on one screen.
   it("pills providers in the app's harness order, with counts summed across every group, not the order the host reported", () => {
     const claudeFirst = group(folderLocation("/repo/a"), [
       candidate({ harness: "claude", nativeSessionId: "a1" }),
@@ -352,9 +345,8 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
     ]);
   });
 
-  // The pill row is STATIC: the scan's `started` frame names every provider
-  // it covers, so the row is complete before the first folder lands instead
-  // of pills popping in with results.
+  // The pill row is static: the scan's `started` frame names every provider it covers, so the row is complete
+  // before the first folder lands instead of pills popping in with results.
   it("pills every provider the scan covers from scanStarted, before any group arrives", () => {
     const view = buildSessionImportView(
       applyActions([{ kind: "scanStarted", providers: ["claude", "codex"] }]),
@@ -376,9 +368,7 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
     ]);
   });
 
-  // A window change starts a fresh scan that wipes the groups - but which
-  // providers the host scans is not a per-scan fact, so the roster (and with
-  // it the pill row) holds instead of blinking empty until `started` re-lands.
+  // A window change starts a fresh scan that wipes the groups.
   it("keeps the provider roster through a fresh restart", () => {
     const view = buildSessionImportView(
       applyActions([
@@ -481,9 +471,6 @@ describe("buildSessionImportView - search + provider filter", () => {
     ]);
     const view = buildSessionImportView(state);
 
-    // Scope is not a view filter: switching codex out both hides its row and
-    // unticks it, so totalSessions (everything the scan produced) holds at 2
-    // while matchedSessions and selectedCount both drop to the claude-only 1.
     expect(view.matchedSessions).toBe(1);
     expect(view.totalSessions).toBe(2);
     expect(view.selectedCount).toBe(1);
@@ -679,9 +666,8 @@ describe("sessionImportWizardReducer - provider scope toggling", () => {
   });
 
   it("keeps a disabled provider's pill at count 0 even when the groups on hand hold nothing for it", () => {
-    // Nothing has arrived for codex - or anything else - yet, but the user
-    // already switched it out; the pill has to survive that with no group to
-    // read a count off, because it's the only way back to turning it on.
+    // Nothing has arrived for codex - or anything else - yet, but the user already switched it out; the pill has
+    // to survive that with no group to read a count off, because it's the only way back to turning it on.
     const state = applyActions([
       { kind: "providerScopeToggled", harness: "codex" },
     ]);
@@ -884,9 +870,8 @@ describe("buildSessionImportView - group ordering", () => {
       { kind: "scanGroupArrived", group: busyRepo },
     ]);
 
-    // The missing folder no longer keeps its own path in the header - every
-    // missing_folder group folds into the one "Deleted Folders" group, so the
-    // last tier is identified by its groupKey, not the source folder's path.
+    // The missing folder no longer keeps its own path in the header - every missing_folder group folds into the
+    // one "Deleted Folders" group, so the last tier is identified by its groupKey, not the source folder's path.
     expect(
       buildSessionImportView(state).groups.map((one) => one.groupKey),
     ).toEqual([
@@ -1235,9 +1220,8 @@ describe("groupSessionImportFailures", () => {
     ]);
   });
 
-  // The order failures arrive in is the order sessions happened to be worked
-  // on, which is not a fact about the failures. Two identical runs must leave
-  // the same summary.
+  // The order failures arrive in is the order sessions happened to be worked on, which is not a fact about the
+  // failures. Two identical runs must leave the same summary.
   it("stacks the groups in the failure reasons' canonical order, not in arrival order", () => {
     const outcomes: ReadonlyArray<SessionImportOutcomeEntry> = [
       failureEntry("s1", "internal_error", "boom"),

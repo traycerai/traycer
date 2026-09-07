@@ -89,33 +89,7 @@ function ProfileUsagePickerProfileDropdown({
   );
 }
 
-/**
- * Usage rows must never combine one host's visible identity with another
- * host's rate-limit summary. Only enable comparison when the run target
- * reports the same complete set of profile identities the dropdown is
- * rendering; return the target host's objects so every summary field consumed
- * by `useProfileUsageComparison` comes from that same host. A missing, partial,
- * renamed, recolored, or differently-authenticated target set stays
- * identity-only until the picker receives a coherent snapshot.
- *
- * `visibleProfiles` is caller-supplied, so this stays as the structural guard
- * for a caller whose rail is scoped to some other host. Today no such caller
- * exists: `HarnessModelPicker` resolves its rail's `providers.list` through
- * the SAME `runTargetHostId` this dropdown queries, so both arrays come from
- * one host's cached response and the join is a self-comparison that passes.
- *
- * Account identity is compared structurally, unresolved included: two
- * `identity === null` rows (or two resolved rows with no `accountUuid` /
- * `email` key) are the SAME row seen twice, not two independently queried
- * hosts that happen to both be unresolved. The guard used to demand a resolved
- * identity whenever the run target was explicit - back when the rail's
- * visible rows came from the app-wide default host and the dropdown's from
- * the tab host, so a null on each side proved nothing. That cross-host join no
- * longer exists, and keeping the requirement made every tab-bound picker drop
- * usage for the whole dropdown as soon as ONE profile's identity had not
- * resolved yet - a state the same picker on the landing page (`null` target)
- * always rendered through.
- */
+/** Usage rows must never combine one host's visible identity with another host's rate-limit summary. */
 function resolveHostConsistentUsageProfiles(
   visibleProfiles: ReadonlyArray<ProviderProfile>,
   runTargetProfiles: ReadonlyArray<ProviderProfile>,

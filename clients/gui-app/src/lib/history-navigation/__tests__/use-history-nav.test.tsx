@@ -95,9 +95,7 @@ describe("useHistoryNavState", () => {
     expect(result.current).toEqual({ canGoBack: false, canGoForward: false });
   });
 
-  // The one navigability question a plain history answers, read off the index
-  // the router stamps into each entry: the session has moved, so there is
-  // somewhere behind it.
+  // The one navigability question a plain history answers, read off the index the router stamps into each entry: the session has moved, so there is somewhere behind it.
   it("enables back on a plain history once the session has navigated", () => {
     const router = makeRouter(
       createMemoryHistory({ initialEntries: ["/", "/settings/general"] }),
@@ -108,10 +106,8 @@ describe("useHistoryNavState", () => {
     expect(result.current).toEqual({ canGoBack: true, canGoForward: false });
   });
 
-  // Deliberate, and NOT a claim that there is nothing ahead: this stack has an
-  // entry the cursor could move to, and a plain history exposes no way to know
-  // that. Reporting it as available would light up a control that may lead
-  // nowhere, so the state stays false while the ACTION remains attemptable.
+  // Deliberate, and NOT a claim that there is nothing ahead: this stack has an entry the cursor could move to, and a plain history exposes no way to know that.
+  // Reporting it as available would light up a control that may lead nowhere, so the state stays false while the ACTION remains attemptable.
   it("keeps forward unavailable on a plain history even mid-stack", () => {
     const history = createMemoryHistory({
       initialEntries: ["/", "/settings/general"],

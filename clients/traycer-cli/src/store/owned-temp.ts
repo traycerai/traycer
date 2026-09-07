@@ -18,34 +18,20 @@ import {
 } from "./process-identity";
 import { legacyMutationVerifier } from "../installer/aside-dirs";
 
-// Owner-tokened temp dirs under the host staging root
-// (`~/.traycer/host[/<env>]/install-staging/`) - Host Update Layer
-// Redesign Tech Plan, "Stage lifecycle" step 5. `host download`'s
-// download+extract phase runs outside the `cli-lock` (no busy check, no
-// lock during network transfer), so its in-progress temp has to survive
-// every OTHER command's reconcile pass that runs concurrently. Each temp
-// is stamped with its creator's pid + process-start-time; reconcile
-// spares a verified-live owner regardless of age and only falls back to
-// the historical 24h-mtime rule when the owner's identity can't be
-// established at all.
+// Owner-tokened temp dirs under the host staging root (`~/.traycer/host[/<env>]/install-staging/`) - Host Update Layer Redesign Tech Plan, "Stage lifecycle" step 5.
+// `host download`'s download+extract phase runs outside the `cli-lock` (no busy check, no lock during network transfer), so its in-progress temp has to survive every OTHER command's reconcile pass that runs concurrently.
 
 const OWNER_TOKEN_FILENAME = ".owner.json";
 
-// Fallback ceiling for temps whose owner identity is unreadable or
-// unverifiable (the token file is missing/corrupt, or the identity probe
-// itself failed) - the pre-hardening sweep rule, kept as the safety net
-// for exactly the cases where "identity outranks age" has no identity to
-// outrank age with.
+// Fallback ceiling for temps whose owner identity is unreadable or unverifiable (the token file is missing/corrupt, or the identity probe itself failed) - the pre-hardening sweep rule, kept as the safety net for exactly the cases where "identity outranks age" has no identity to outrank age with.
 const UNVERIFIABLE_TEMP_AGE_FALLBACK_MS = 24 * 60 * 60 * 1000;
 
 export interface OwnedTempDir {
   readonly path: string;
 }
 
-// Creates a fresh temp dir under the staging root and stamps it with this
-// process's identity token. `prefix` is passed straight to `mkdtemp`
-// (joined onto the staging root) so callers control the debug-friendly
-// naming, e.g. `dl-` for `host download`'s temp.
+// Creates a fresh temp dir under the staging root and stamps it with this process's identity token.
+// `prefix` is passed straight to `mkdtemp` (joined onto the staging root) so callers control the debug-friendly naming, e.g.
 export async function createOwnedTempDir(
   environment: Environment,
   prefix: string,
@@ -90,9 +76,7 @@ async function readOwnerToken(
   return {
     pid: obj.pid,
     startedAtMs: typeof obj.startedAtMs === "number" ? obj.startedAtMs : null,
-    // Absent on a token written before the field existed, which
-    // `verifyProcessIdentity` reports as "indeterminate" - so an old owned
-    // temp dir is left alone rather than swept out from under a live owner.
+    // Absent on a token written before the field existed, which `verifyProcessIdentity` reports as "indeterminate" - so an old owned temp dir is left alone rather than swept out from under a live owner.
     startIdentity: isProcessStartIdentity(obj.startIdentity)
       ? obj.startIdentity
       : null,
@@ -123,24 +107,8 @@ async function removeTempDir(
   });
 }
 
-// Sweeps stale temp dirs directly under the staging root. Best-effort -
-// one entry's sweep failure never aborts the pass. Returns the paths
-// actually removed.
-//
-// Decision per entry:
-//   - owner token reads + `verifyProcessIdentity` returns "alive-same"
-//     -> spared, regardless of age (a stalled-but-alive download costs
-//        only disk).
-//   - "dead" or "alive-different" (positive evidence the recorded owner
-//     is gone or the pid was recycled) -> swept immediately, regardless
-//     of age.
-//   - token unreadable, or the identity probe itself was "indeterminate"
-//     -> the 24h-mtime fallback decides, but ONLY on a successful,
-//        readable mtime. An unreadable age (the directory vanished, a
-//        stat error) is itself just another form of "can't verify" and
-//        must spare, not delete - "only positive evidence" applies to
-//        age-based sweeping exactly as it does to identity-based
-//        sweeping; there is no positive evidence in an unreadable stat.
+// Sweeps stale temp dirs directly under the staging root.
+// Best-effort - one entry's sweep failure never aborts the pass.
 export async function sweepOwnedTempDirs(
   environment: Environment,
 ): Promise<readonly string[]> {

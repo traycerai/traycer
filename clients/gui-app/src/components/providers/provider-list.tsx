@@ -117,21 +117,15 @@ function rowClassName(variant: ProviderListVariant, active: boolean): string {
       active ? "bg-accent text-accent-foreground" : "text-foreground/80",
     );
   }
-  // No row-level dim: a dimmed onboarding row still carries its live controls
-  // ("Sign in & enable", the enable switch) in `trailing`, and a wrapper
-  // opacity would dim those with it - stacked on the outline button's
-  // translucent dark fill it left the row's one call to action near
-  // invisible. The dimmed treatment lives on the identity pieces instead
-  // (icon, label, badge - each already keyed on `dimmed`), which recede
-  // without taking the controls down with them.
+  // The dimmed treatment lives on the identity pieces instead (icon, label, badge - each already keyed on
+  // `dimmed`), which recede without taking the controls down with them.
   return "min-w-0";
 }
 
 function iconClassName(variant: ProviderListVariant, dimmed: boolean): string {
   if (variant === "onboarding") {
-    // Opacity as well as text color: brand icons that paint their own colors
-    // ignore `currentColor`, so without the opacity a disabled row's logo
-    // renders at full vibrance next to its dimmed label.
+    // Opacity as well as text color: brand icons that paint their own colors ignore `currentColor`, so without the
+    // opacity a disabled row's logo renders at full vibrance next to its dimmed label.
     return cn("size-4", dimmed ? "text-white/35 opacity-60" : "text-white/85");
   }
   if (variant === "diorama") return "size-3.5 shrink-0";

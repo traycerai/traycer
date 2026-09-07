@@ -4,10 +4,8 @@ import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { uninstallHostServiceWithAttempt } from "../host/update-mutation";
 
-// `traycer host service uninstall` - deregister the OS service for the
-// current environment. Idempotent: a not-installed service resolves
-// cleanly. Does NOT remove the host install dir; that's
-// `host uninstall --all`.
+// `traycer host service uninstall` - deregister the OS service for the current environment.
+// Idempotent: a not-installed service resolves cleanly.
 export const serviceUninstallCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {

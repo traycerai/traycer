@@ -45,20 +45,11 @@ export interface ComposerBodyProps {
   readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
   readonly header: ReactNode;
-  /**
-   * Rendered between `header` and the composer card (`ComposerShell`) - the
-   * decision-log-mandated slot for a banner that must sit flush above the
-   * card itself, below any mode-switch header. `null` for callers with
-   * nothing to show there (the chat composer routes its own rate-limit
-   * banner through a separate portal and never uses this slot).
-   */
+  /** `null` for callers with nothing to show there (the chat composer routes its own rate-limit banner through a
+   * separate portal and never uses this slot). */
   readonly topBanner: ReactNode | null;
-  /**
-   * Which toolbar this surface wants. `"collapsed"` is the phone-width row,
-   * which moves the secondary controls into a single options sheet. The
-   * calling surface decides, so `ComposerBody` itself stays viewport-agnostic;
-   * only the landing composer asks for `"collapsed"`, and only below `md`.
-   */
+  /** The calling surface decides, so `ComposerBody` itself stays viewport-agnostic; only the landing composer
+   * asks for `"collapsed"`, and only below `md`. */
   readonly toolbarLayout: "full" | "collapsed";
   readonly stashControl: ReactNode;
   readonly attachmentsStrip: ReactNode;
@@ -72,27 +63,14 @@ export interface ComposerBodyProps {
         images: ReadonlyArray<PastedComposerImage>,
       ) => ReadonlyArray<PastedComposerImageOutcome>)
     | null;
-  /**
-   * Forwarded to the chat `ComposerPromptEditor`'s `onEditorReady` (fired once
-   * when its async editor is created). Landing passes a callback that re-ingests
-   * a restored draft's still-pending b64 image nodes; `null` where the editor
-   * has nothing to resume (chat / new-conversation).
-   */
+  /** Forwarded to the chat `ComposerPromptEditor`'s `onEditorReady` (fired once when its async editor is
+   * created). */
   readonly onEditorReady: (() => void) | null;
-  /**
-   * The host this composer creates on - threaded to the toolbar's and the
-   * terminal launcher's model pickers as their `createProfileHostId` /
-   * `runTargetHostId`, so the harnesses/models/providers they offer are that
-   * host's. `null` follows the app-wide default (the landing composer, whose
-   * own host picker rebinds that default); the new-conversation modal passes
-   * the host it was pinned to.
-   */
+  /** The host this composer creates on - threaded to the toolbar's and the terminal launcher's model pickers as
+   * their `createProfileHostId` / `runTargetHostId`. */
   readonly hostId: string | null;
-  /**
-   * Where the model pickers' setup terminal lands - the landing page whose
-   * terminal panel opens, or `null` for a composer with no terminal surface
-   * of its own (the in-epic new-conversation modal). See the type's doc.
-   */
+  /** Where the model pickers' setup terminal lands - the landing page whose terminal panel opens, or `null` for a
+   * composer with no terminal surface of its own (the in-epic new-conversation modal). */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly onSubmit: () => void;
   readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
@@ -139,9 +117,7 @@ export function ComposerBody({
   const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
-  // Every prop both toolbars take, identical for either layout - only the
-  // desktop-only permission note below differs. Shared so the two branches
-  // cannot drift apart silently; the moment they need different values, stop
+  // Shared so the two branches cannot drift apart silently; the moment they need different values, stop
   // spreading and pass them explicitly again.
   const sharedToolbarProps = {
     store: toolbarStore,

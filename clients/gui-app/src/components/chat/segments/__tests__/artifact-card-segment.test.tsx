@@ -29,18 +29,14 @@ type TestProjectionState = {
   resolvedTabId: string | null;
 };
 
-// Captured `useDraggable` inputs, one entry per card rendered, so a test can
-// read the emitted drag payload / disabled state and assert occurrence-unique
-// ids (constraint C3) across multiple cards.
+// Captured `useDraggable` inputs, one entry per card rendered, so a test can read the emitted drag payload / disabled state and assert occurrence-unique ids (constraint C3) across multiple cards.
 type CapturedDraggable = {
   readonly id: string;
   readonly disabled: boolean;
   readonly data: unknown;
 };
 
-// Mutable projection state the mocked selectors read on every render, so a test
-// can flip an id from absent → present and re-render to exercise the card's
-// reactive (subscription, not one-shot) resolution.
+// Mutable projection state the mocked selectors read on every render, so a test can flip an id from absent → present and re-render to exercise the card's reactive (subscription, not one-shot) resolution.
 const projection = vi.hoisted<TestProjectionState>(() => ({
   artifacts: {},
   deleted: {},
@@ -67,12 +63,7 @@ const canvas = vi.hoisted(() => ({
       return null;
     },
   ),
-  // The removed global/MRU resolver (constraint C1). It returns a DIFFERENT tab
-  // than the card's owning `useEpicViewTabId` context ("tab-1"), modelling a
-  // same-Epic split where a different pane is globally focused. The card must
-  // read its owning context, never this resolver: the drag test asserts the
-  // payload carries the owner and that this spy is never called, so any regress
-  // to MRU resolution flips the emitted tab and goes red.
+  // The card must read its owning context, never this resolver: the drag test asserts the payload carries the owner and that this spy is never called, so any regress to MRU resolution flips the emitted tab and goes red.
   resolveTabIdForEpic: vi.fn(() => "tab-focused-partner"),
 }));
 
@@ -112,17 +103,14 @@ vi.mock("@/stores/epics/canvas/store", () => {
   useEpicCanvasStore.getState = () => canvas;
   return {
     useEpicCanvasStore,
-    // The global/MRU resolver the card must NOT consult (it reads its owning
-    // `useEpicViewTabId` context instead). Distinct from the owner so the drag
-    // test discriminates owner vs MRU.
+    // The global/MRU resolver the card must NOT consult (it reads its owning `useEpicViewTabId` context instead).
+    // Distinct from the owner so the drag test discriminates owner vs MRU.
     resolveTabIdForEpic: canvas.resolveTabIdForEpic,
     trackOpenedCanvasTile: () => undefined,
   };
 });
 
-// The card's own open goes through the one `openTile` seam, so the intent is
-// what this suite asserts; the drop path below still runs the real executor
-// against the store mock above.
+// The card's own open goes through the one `openTile` seam, so the intent is what this suite asserts; the drop path below still runs the real executor against the store mock above.
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: tileNavigation.openTile }),
 }));
@@ -583,11 +571,8 @@ describe("<ArtifactCardSegment />", () => {
     if (drag === null) return;
     expect(drag.disabled).toBe(false);
     expect(drag.id.startsWith("chat-artifact:")).toBe(true);
-    // The payload carries the card's OWNING view tab ("tab-1", from
-    // `useEpicViewTabId`), never the global/MRU resolver's "tab-focused-partner".
-    // In a same-Epic split with a different pane focused, an MRU-resolving drag
-    // source would emit the partner's tab and reject its own drop; asserting the
-    // owner here (distinct from MRU) is what makes that regression go red.
+    // The payload carries the card's OWNING view tab ("tab-1", from `useEpicViewTabId`), never the global/MRU resolver's "tab-focused-partner".
+    // In a same-Epic split with a different pane focused, an MRU-resolving drag source would emit the partner's tab and reject its own drop; asserting the owner here (distinct from MRU) is what makes that regression go red.
     expect(canvas.resolveTabIdForEpic).not.toHaveBeenCalled();
     expect(drag.data).toMatchObject({
       kind: "chat-artifact",
@@ -662,11 +647,8 @@ describe("<ArtifactCardSegment />", () => {
   });
 
   it("marks a deleted / tombstone card as non-draggable, driven by the deleted gate alone", () => {
-    // A delete can race tombstone projection, so BOTH the live entry and the
-    // tombstone are present here. With hasLiveArtifact true and a host set, the
-    // `!isDeleted` term in canOpenArtifactCard is the SOLE reason the card is
-    // non-draggable - removing that gate (regressing the tombstone guard) would
-    // flip this card back to draggable and open a bodyless / broken tile.
+    // A delete can race tombstone projection, so BOTH the live entry and the tombstone are present here.
+    // With hasLiveArtifact true and a host set, the `!isDeleted` term in canOpenArtifactCard is the SOLE reason the card is non-draggable - removing that gate (regressing the tombstone guard) would flip this card back to draggable and open a bodyless / broken tile.
     projection.artifacts["d1"] = {
       id: "d1",
       kind: "spec",

@@ -27,18 +27,14 @@ import { dirnameOfPath, mentionPathTree } from "@/lib/path";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 
 /**
- * Row-display mapping for @mention suggestion entries: the picker's
- * detail/description text, full preview payload, and icon, derived per
- * entry kind. Extracted out of `providers.tsx` (provider registration +
- * routing) to keep that file focused - `suggestionEntry` there is the only
- * caller.
+ * Row-display mapping for @mention suggestion entries: the picker's detail/description text, full preview payload, and icon, derived per entry kind.
+ * Extracted out of `providers.tsx` (provider registration + routing) to keep that file focused - `suggestionEntry` there is the only caller.
  */
 export const MENU_ICON_CLASS = "size-4 shrink-0 text-muted-foreground";
 
 /**
- * Interface label for an Agent row. The product axis is
- * **Interface: Chat / Terminal** - both arms are Agents, so this reads as a
- * qualifier on one entity, not as two entity types.
+ * Interface label for an Agent row.
+ * The product axis is **Interface: Chat / Terminal** - both arms are Agents, so this reads as a qualifier on one entity, not as two entity types.
  */
 const AGENT_INTERFACE_LABELS: Readonly<Record<AgentMentionInterface, string>> =
   {
@@ -47,19 +43,13 @@ const AGENT_INTERFACE_LABELS: Readonly<Record<AgentMentionInterface, string>> =
   };
 
 /**
- * Shown when an Agent's runtime has no agent-to-agent inbox at all (Codex /
- * OpenCode Terminal Agents today). The row stays selectable - this only stops
- * the picker from implying the Agent is messageable. Its ABSENCE is not a
- * promise of delivery: see `runtimeSupportsMessageDelivery`, which is the
- * runtime arm of the host's send gate, not full routability.
+ * Shown when an Agent's runtime has no agent-to-agent inbox at all (Codex / OpenCode Terminal Agents today).
+ * The row stays selectable - this only stops the picker from implying the Agent is messageable.
  */
 const REFERENCE_ONLY_LABEL = "Reference only";
 
 /**
- * Secondary context that disambiguates two Agents sharing a title: which
- * interface it uses, which coding agent backs it (Terminal only - a chat's
- * harness label is not statically known in the renderer), and whether its
- * runtime can receive agent-to-agent messages at all.
+ * Secondary context that disambiguates two Agents sharing a title: which interface it uses, which coding agent backs it (Terminal only - a chat's harness label is not statically known in the renderer), and whether its runtime can receive agent-to-agent.
  */
 export function agentEntrySecondaryContext(
   entry: EpicAgentMentionEntry,
@@ -73,11 +63,7 @@ export function agentEntrySecondaryContext(
 }
 
 /**
- * The menu ROW's trailing text for an Agent, as opposed to the preview
- * panel's `agentEntrySecondaryContext`: no interface label ("Chat",
- * "Terminal") - the row's trailing slot shows the Agent's last-activity
- * time, which is what helps pick between same-named rows - while the
- * harness name and the reference-only marker disambiguate.
+ * The menu ROW's trailing text for an Agent, as opposed to the preview panel's `agentEntrySecondaryContext`: no interface label ("Chat", "Terminal") - the row's trailing slot shows the Agent's last-activity time, which is what helps pick between same-named.
  */
 function agentEntryRowDetail(entry: EpicAgentMentionEntry): string {
   const parts: string[] = [];
@@ -98,9 +84,7 @@ export function detailForSuggestion(entry: MentionSuggestionEntry): string {
   if (entry.kind === "file" || entry.kind === "folder") {
     return dirnameOfPath(entry.relPath);
   }
-  // Agent rows are always current-Task, so the epic title the artifact rows use
-  // here carries no signal; harness + capability disambiguate, and the row
-  // renders its last-activity time as a separate trailing element.
+  // Agent rows are always current-Task, so the epic title the artifact rows use here carries no signal; harness + capability disambiguate, and the row renders its last-activity time as a separate trailing element.
   if (isAgentEntry(entry)) return agentEntryRowDetail(entry);
   // Two shells started in the same Task routinely share a title; the working
   // directory is what tells them apart.
@@ -120,12 +104,7 @@ export function descriptionForSuggestion(
   if (isAgentEntry(entry) && entry.description === entry.epicTitle) {
     return "";
   }
-  // A browser tab carries no separate `description` field - the row's detail
-  // slot already shows the url (see `detailForSuggestion`), so the picker's
-  // description slot stays empty rather than repeating it. The one thing it
-  // does say is that a tab on another host attaches a snapshot, not a handle
-  // the agent can drive (spec decision #10) - naming the host, since that is
-  // the whole reason the row behaves differently.
+  // A browser tab carries no separate `description` field - the row's detail slot already shows the url (see `detailForSuggestion`), so the picker's description slot stays empty rather than repeating it.
   if (entry.kind === "browser-tab") {
     return entry.contextOnly
       ? `Snapshot from ${entry.hostLabel ?? entry.hostId}`
@@ -218,9 +197,7 @@ function previewForGitSuggestion(
 }
 
 /**
- * The host bakes a commit row's label as `${shortHash} ${subject}` (see
- * `buildGitCommitSuggestion`) with no separate subject field over the wire;
- * strip the leading short-hash token to recover the subject for the preview.
+ * The host bakes a commit row's label as `${shortHash} ${subject}` (see `buildGitCommitSuggestion`) with no separate subject field over the wire; strip the leading short-hash token to recover the subject for the preview.
  */
 function commitSubjectFromLabel(label: string): string {
   const spaceIndex = label.indexOf(" ");
@@ -253,11 +230,7 @@ export function iconForSuggestion(entry: MentionSuggestionEntry): ReactElement {
 }
 
 /**
- * Live favicon for a browser-tab row - `useMaybeBrowserSessionsContext()` is
- * not needed here (unlike the composer chip's decorator): the entry is
- * already sourced from that same live context, so its `url` is current for
- * as long as the row is on screen. Falls back to `Globe2` when the tab has
- * no resolvable http(s) favicon or the image fails to load.
+ * Live favicon for a browser-tab row - `useMaybeBrowserSessionsContext()` is not needed here (unlike the composer chip's decorator): the entry is already sourced from that same live context, so its `url` is current for as long as the row is on screen.
  */
 function browserTabRowIcon(entry: BrowserTabMentionEntry): ReactElement {
   return (
@@ -270,9 +243,8 @@ function browserTabRowIcon(entry: BrowserTabMentionEntry): ReactElement {
 }
 
 /**
- * Icon for the unified **Agents** mention category. Uses the terminal-agent
- * glyph (a bot) rather than the chat bubble: the category spans both
- * interfaces, so the conversational icon would under-describe it.
+ * Icon for the unified **Agents** mention category.
+ * Uses the terminal-agent glyph (a bot) rather than the chat bubble: the category spans both interfaces, so the conversational icon would under-describe it.
  */
 export function agentCategoryIcon(): ReactElement {
   return epicNodeIcon("terminal-agent");

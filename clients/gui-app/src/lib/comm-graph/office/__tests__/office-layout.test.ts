@@ -148,9 +148,8 @@ describe("layoutOffice", () => {
       agent({ id: "child-b", parentId: "root", createdAt: 3 }),
     ]);
 
-    // Two siblings side by side sit exactly one slot plus one gap apart. A
-    // manager-only widening would make a desk's column depend on how many
-    // managers precede it, so promoting one agent would shuffle the floor.
+    // Two siblings side by side sit exactly one slot plus one gap apart.
+    // A manager-only widening would make a desk's column depend on how many managers precede it, so promoting one agent would shuffle the floor.
     const first = tileOf(layout, "child-a");
     const second = tileOf(layout, "child-b");
     expect(second.row).toBe(first.row);
@@ -213,9 +212,8 @@ describe("layoutOffice", () => {
         false,
       );
     }
-    // Furniture blocks; the lobby rug and the things a character gets ON do
-    // not. A sleeping bag, an armchair and a treadmill each ARE their errand
-    // spot, so a grid that called them solid would put the spot behind a wall.
+    // Furniture blocks; the lobby rug and the things a character gets ON do not.
+    // A sleeping bag, an armchair and a treadmill each ARE their errand spot, so a grid that called them solid would put the spot behind a wall.
     const occupiable = new Set(["rug", "sleep-bag", "armchair", "treadmill"]);
     for (const prop of layout.props) {
       const walkable = layout.walkable[prop.tile.row][prop.tile.col];
@@ -420,10 +418,8 @@ describe("layoutOffice", () => {
   });
 
   it("keeps every chair reachable from its cabin door, however deep the tree", () => {
-    // A wide-and-deep shape: pods beside pods, pods inside pods, and leaves at
-    // every level. The failure this catches is a desk drawn behind a ring
-    // nobody can walk through, which is invisible until someone tries to
-    // deliver a message to it.
+    // A wide-and-deep shape: pods beside pods, pods inside pods, and leaves at every level.
+    // The failure this catches is a desk drawn behind a ring nobody can walk through, which is invisible until someone tries to deliver a message to it.
     const agents: OfficeAgentInput[] = [agent({ id: "root", createdAt: 1 })];
     let createdAt = 1;
     for (let branch = 0; branch < 3; branch += 1) {
@@ -446,10 +442,8 @@ describe("layoutOffice", () => {
     const layout = layoutOffice(agents);
     const room = layout.rooms[0];
     expect(Math.max(...room.pods.map((pod) => pod.depth))).toBeGreaterThan(1);
-    // EVERY sub-team keeps its boundary. A pod the door cannot reach inside of
-    // is dropped to plain slots, so a missing one here would mean the packing
-    // had walled somebody in and the fallback had quietly papered over it -
-    // which would still pass the reachability sweep below.
+    // EVERY sub-team keeps its boundary.
+    // A pod the door cannot reach inside of is dropped to plain slots, so a missing one here would mean the packing had walled somebody in and the fallback had quietly papered over it - which would still pass the reachability sweep below.
     const parents = new Set(
       agents
         .map((person) => person.parentId)
@@ -473,9 +467,8 @@ describe("layoutOffice", () => {
   it("never repeats a style across the first three pods under one lead", () => {
     const agents: OfficeAgentInput[] = [agent({ id: "root", createdAt: 1 })];
     let createdAt = 1;
-    // Four sub-teams under one lead, each with a child of its own so each earns
-    // a pod. Four is past what three styles can keep distinct, which is exactly
-    // why the promise is about the first three.
+    // Four sub-teams under one lead, each with a child of its own so each earns a pod.
+    // Four is past what three styles can keep distinct, which is exactly why the promise is about the first three.
     for (let branch = 0; branch < 4; branch += 1) {
       createdAt += 1;
       const lead = `lead-${branch}`;
@@ -531,18 +524,15 @@ describe("layoutOffice", () => {
     expect(after.rooms.map((room) => room.rootAgentId)).toEqual(
       before.rooms.map((room) => room.rootAgentId),
     );
-    // Every OTHER cabin keeps its own shape. It may well slide - a family that
-    // grows makes its own room bigger, and the rooms after it tile along - but
-    // nothing about those rooms is re-planned.
+    // Every OTHER cabin keeps its own shape.
+    // It may well slide - a family that grows makes its own room bigger, and the rooms after it tile along - but nothing about those rooms is re-planned.
     for (const id of ["root-b", "root-c"]) {
       const was = roomOf(before, id).bounds;
       const now = roomOf(after, id).bounds;
       expect(now.cols, id).toBe(was.cols);
       expect(now.rows, id).toBe(was.rows);
     }
-    // The lead keeps its place at the top-left of its own room, so a family
-    // grows DOWNWARD from the person who started it rather than reshuffling
-    // around the newcomer.
+    // The lead keeps its place at the top-left of its own room, so a family grows DOWNWARD from the person who started it rather than reshuffling around the newcomer.
     const leadBefore = tileOf(before, "root-a");
     const roomBefore = roomOf(before, "root-a").bounds;
     const leadAfter = tileOf(after, "root-a");
@@ -692,9 +682,7 @@ describe("layoutOffice floors", () => {
     if (deskA === undefined || deskB === undefined) {
       throw new Error("expected a desk on each floor");
     }
-    // Messaging is host-local, so there is nothing to walk between - and a
-    // route that existed would let a character stroll out of its own epic
-    // half.
+    // Messaging is host-local, so there is nothing to walk between - and a route that existed would let a character stroll out of its own epic half.
     expect(findOfficePath(layout, deskA.chairTile, deskB.chairTile)).toBeNull();
     expect(
       findOfficePath(layout, layout.floors[0].lobbyTile, deskB.chairTile),
@@ -831,23 +819,16 @@ describe("layoutOffice floors", () => {
   });
 
   it("still gives a single-host layout no stairwell", () => {
-    // The stairwell only exists to join storeys, so a building with exactly
-    // one has nothing to climb to. A regression that always reserved a
-    // stairwell corner would show up here first.
+    // The stairwell only exists to join storeys, so a building with exactly one has nothing to climb to.
+    // A regression that always reserved a stairwell corner would show up here first.
     const layout = layoutOffice(SINGLE_HOST);
     expect(layout.floors).toHaveLength(1);
     expect(layout.floors[0].stairsTile).toBeNull();
   });
 
   it.each(
-    // Host A sweeps every count from 1 to 20; host B sweeps 1, 4, 7, ...19 -
-    // a coarser stride paired against the finer one so the two storeys rarely
-    // land on the same size. The previous amenity packer stacked every room
-    // straight down the first (right-hand) column, and on a two-storey
-    // building that column's last room could run its own bottom wall right
-    // through the stairwell reserved in the lobby's corner - but only at
-    // SOME combinations of sizes, never all of them, which is why a sweep
-    // catches it and a handful of fixed cases did not.
+    // Host A sweeps every count from 1 to 20; host B sweeps 1, 4, 7, ...19 - a coarser stride paired against the finer one so the two storeys rarely land on the same size.
+    // The previous amenity packer stacked every room straight down the first (right-hand) column, and on a two-storey building that column's last room could run its own bottom wall right through the stairwell reserved in the lobby's corner - but only at SOME.
     Array.from({ length: 20 }, (_, index) => index + 1).map((aCount, index) => {
       const bCounts = [1, 4, 7, 10, 13, 16, 19];
       return { aCount, bCount: bCounts[index % bCounts.length] };
@@ -930,9 +911,8 @@ describe("layoutOffice floors", () => {
     const bounds = layout.floors[0].cafeteria;
     if (bounds === null) throw new Error("expected a cafeteria");
 
-    // The machine used to stand in the open corner. Nothing outside the break
-    // room should still be a break-room fixture, or the errand system would be
-    // sending people to two different coffees.
+    // The machine used to stand in the open corner.
+    // Nothing outside the break room should still be a break-room fixture, or the errand system would be sending people to two different coffees.
     const fixtures = layout.props.filter((prop) =>
       ["coffee-machine", "water-cooler", "vending", "cafe-table"].includes(
         prop.sprite.name,
@@ -991,9 +971,7 @@ describe("layoutOffice floors", () => {
     const floor = layout.floors[0];
     const kinds = new Set(floor.errandSpots.map((spot) => spot.kind));
 
-    // Typed rather than asserted through `as never`: the point of the list is
-    // that it names REAL spot kinds, and a cast is what would let a renamed one
-    // sit here forever passing.
+    // Typed rather than asserted through `as never`: the point of the list is that it names REAL spot kinds, and a cast is what would let a renamed one sit here forever passing.
     const expected: ReadonlyArray<OfficeErrandSpot["kind"]> = [
       "coffee",
       "cooler",
@@ -1030,9 +1008,8 @@ describe("layoutOffice floors", () => {
   it.each([1, 2])(
     "gives a %i-agent epic a cafeteria rather than a bare corner",
     (count) => {
-      // The break room is not a reward for having enough agents. A small epic
-      // is exactly where a floor with one lonely fixture reads as broken, so
-      // the storey is widened to fit one however few cabins there are.
+      // The break room is not a reward for having enough agents.
+      // A small epic is exactly where a floor with one lonely fixture reads as broken, so the storey is widened to fit one however few cabins there are.
       const layout = layoutOffice(
         Array.from({ length: count }, (_, index) => agent({ id: `a${index}` })),
       );
@@ -1124,9 +1101,8 @@ describe("layoutOffice floors", () => {
       floor.bounds.row + floor.bounds.rows,
     );
 
-    // A two-agent floor gets the two fixtures every game room has. The rest -
-    // foosball, darts, chess, the television - are earned; see the scaling
-    // table below.
+    // A two-agent floor gets the two fixtures every game room has.
+    // The rest - foosball, darts, chess, the television - are earned; see the scaling table below.
     for (const name of ["pingpong-table", "arcade"]) {
       const inside = layout.props.filter(
         (prop) =>
@@ -1308,9 +1284,7 @@ describe("layoutOffice floors", () => {
       const look = spots.find(
         (spot) => spot.kind === "plant" && spot.tile.col === plant.tile.col,
       );
-      // ASSERTED before skipping: a plant with no spots beside it is the bug
-      // this test exists to catch, and `continue` alone made the whole loop
-      // pass by finding nothing to check.
+      // ASSERTED before skipping: a plant with no spots beside it is the bug this test exists to catch, and `continue` alone made the whole loop pass by finding nothing to check.
       expect(
         water,
         `no watering spot beside the plant at ${plant.tile.col}`,
@@ -1320,9 +1294,7 @@ describe("layoutOffice floors", () => {
         `no looking spot beside the plant at ${plant.tile.col}`,
       ).toBeDefined();
       if (water === undefined || look === undefined) continue;
-      // The can has to reach the leaves, so watering happens from the tile
-      // touching the plant; standing and looking at it happens from further
-      // back, and the two can never be the same tile.
+      // The can has to reach the leaves, so watering happens from the tile touching the plant; standing and looking at it happens from further back, and the two can never be the same tile.
       expect(water.tile.row).toBe(plant.tile.row + 1);
       expect(look.tile.row).toBeGreaterThan(water.tile.row);
     }
@@ -1427,9 +1399,8 @@ function overlaps(left: OfficeTileRect, right: OfficeTileRect): boolean {
 }
 
 describe("layoutOffice amenities", () => {
-  // The whole point of the round: the floor's facilities are a function of how
-  // many people are on it. A room that is always there reads as scenery on a
-  // floor of one and as a queue on a floor of twenty.
+  // The whole point of the round: the floor's facilities are a function of how many people are on it.
+  // A room that is always there reads as scenery on a floor of one and as a queue on a floor of twenty.
   it.each([
     { agents: 1, rooms: ["cafeteria", "game", "library"] },
     { agents: 3, rooms: ["cafeteria", "game", "nap", "library"] },

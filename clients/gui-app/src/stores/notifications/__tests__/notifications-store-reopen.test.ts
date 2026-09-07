@@ -107,7 +107,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
 
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     expect(useNotificationsStore.getState().connectionStatus).toBe("closed");
-    // The reopen waits out the backoff — no synchronous redial storm.
+    // The reopen waits out the backoff - no synchronous redial storm.
     expect(clients).toHaveLength(1);
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(2);
@@ -131,9 +131,8 @@ describe("openNotificationsStream terminal-close reopen", () => {
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(clients).toHaveLength(2);
 
-    // A raw transport `open` is NOT proof of a usable stream — the host
-    // resolver's async init can still fail and terminate after it. The
-    // backoff must keep escalating: this close waits the doubled delay.
+    // A raw transport `open` is NOT proof of a usable stream - the host resolver's async init can
+    // still fail and terminate after it.
     clients[1].callbacks.onConnectionStatus("open", null);
     clients[1].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
@@ -158,7 +157,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
     emptyServerSnapshot(clients[0]);
     expect(clients[0].applyUpdateCalls).toHaveLength(0);
 
-    // Local mutation lands while the session is terminally dead — the
+    // Local mutation lands while the session is terminally dead - the
     // fire-and-forget forward has nowhere to go.
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     appendLocalEntry("offline-entry");

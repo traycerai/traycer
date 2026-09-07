@@ -636,9 +636,7 @@ describe("resourcesRegistry", () => {
     expect(resourcesRegistry.get("epic-1")).toBe(handleB);
   });
 
-  // Summing entries opened against different machines produces totals no
-  // computer ever had. An aggregate that cannot name ONE host is not merely
-  // unattributed - it is not publishable, so the fallback yields nothing.
+  // Summing entries opened against different machines produces totals no computer ever had.
   it("publishes nothing when per-epic entries disagree about their host", () => {
     const first = makeFakeClient();
     const second = makeFakeClient();
@@ -753,12 +751,6 @@ describe("global scope support", () => {
     handle.dispose();
   });
 
-  // A remote session that is already ready but does not advertise the method
-  // rejects the subscribe synchronously, and `LogicalStream.onStatusChange`
-  // REPLAYS that terminal close the moment a handler is installed — which the
-  // typed wrapper does in its constructor. So the verdict lands while
-  // `streamClientFactory` is still running. Nothing follows a terminal close to
-  // republish it, so losing it here strands the surface forever.
   it("keeps a verdict published while the stream was still being constructed", () => {
     const handle = createResourcesStore({
       scope: { kind: "global" },
@@ -802,10 +794,8 @@ describe("global scope support", () => {
     );
   });
 
-  // The entry is a module singleton that outlives a swap, so the verdict it
-  // holds routinely belongs to the machine we just STOPPED watching. Repeating
-  // it for whoever asks would print "cannot report its processes" under the
-  // name of a host that never said any such thing.
+  // The entry is a module singleton that outlives a swap, so the verdict it holds routinely belongs
+  // to the machine we just STOPPED watching.
   it("refuses to repeat one host's verdict for another", () => {
     const fake = makeFakeClient();
     resourcesRegistry.acquireGlobal("token-a", "host-a", () =>
@@ -819,16 +809,7 @@ describe("global scope support", () => {
     expect(resourcesRegistry.getGlobalScopeSupport("host-b")).toBe("unknown");
   });
 
-  // Two unnamed things are not the same thing. An entry whose mount could not
-  // name its host, asked about a scope that has not resolved one either, would
-  // match on `null === null` and convict a machine neither side identified.
-  // Following the ACTIVE host nothing on screen names a machine, so no
-  // incompatible notice is shown — the surface just renders the projection. An
-  // `@1.0` host's global entry outranks the per-epic fallback purely by
-  // existing, so leaving it in place publishes emptiness from a stream that
-  // will never carry anything, while the per-epic streams on the very same
-  // transport hold that host's real numbers. That read as "Waiting for resource
-  // data." forever.
+  // Two unnamed things are not the same thing.
   it("falls back to the per-epic entries when the global stream cannot serve the scope", () => {
     const globalFake = makeFakeClient();
     const epicFake = makeFakeClient();

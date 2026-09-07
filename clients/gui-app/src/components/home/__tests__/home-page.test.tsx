@@ -48,23 +48,10 @@ import {
   usePaneActivationFocusIntent,
 } from "@/components/epic-canvas/pane-activation";
 
-/**
- * Commit-level observation of the mocked LandingComposer's mount identity.
- * `useLayoutEffect` runs after each committed render (before paint / before
- * passive effects), so a passive-effect pending rotation leaves a detectable
- * intermediate commit that a render-phase rotation never produces.
- *
- * The null-draft pre-minted-key rotation this verifies is implemented one
- * level down, in `LandingDraftSurface` (`HomePage` only sets up
- * `DraftSurfaceProvider` and does not itself pre-mint anything). `HomePage`
- * renders the real, unmocked `LandingDraftSurface`, so rendering `<HomePage />`
- * here still exercises that guarantee end-to-end against this mocked
- * `LandingComposer`.
- */
+/** `useLayoutEffect` runs after each committed render (before paint / before passive effects). */
 type ComposerCommit = {
   readonly draftId: string | null;
   readonly pendingCreateId: string | null;
-  /** `LandingDraftSurface` uses `draftId ?? pendingDraftId` as the React key. */
   readonly effectiveKey: string | null;
   readonly instanceId: number;
   readonly phase: "mount" | "commit" | "unmount";
@@ -128,7 +115,6 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-/** The composer's resolved placement (P1.2), pointed at the mocked host. */
 function useTestPlacementTarget(): LandingPlacementTarget {
   return {
     resolvedHostId: homeMocks.getActiveHostId(),
@@ -146,18 +132,8 @@ vi.mock("@/lib/host/runtime", () => ({
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
   }),
-  // `landing-draft-store.ts` (real, unmocked) and `use-landing-composer-actions.ts`
-  // (also real - invoked through the mocked `LandingComposer`'s `handleClick`)
-  // both resolve the per-host workspace-folder bucket through an imperative
-  // read, not through a hook. A whole-module mock missing one leaves the
-  // import `undefined` and throws on the very first call.
-  //
-  // `createDraft`'s own host resolution no longer goes through this module at
-  // all - it reads `readComposerHostIdSnapshot()` (real, unmocked), which
-  // falls through to the app-wide effective host since this suite pins no
-  // composer surface. `useSelectionAuthorityStore` below is seeded to the
-  // same `TEST_HOST_ID` this mock's `getActiveHostId()` returns, so the two
-  // cannot drift apart.
+  // `useSelectionAuthorityStore` below is seeded to the same `TEST_HOST_ID` this mock's `getActiveHostId`
+  // returns, so the two cannot drift apart.
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
@@ -235,10 +211,8 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           : composer.closest("[data-primary-focus-scope='true']");
       if (
         activityEnabled &&
-        // Mirrors the real editor's own gate: becoming active is not a user
-        // gesture, so the installed mobile app never takes focus from it. The
-        // mock carries it so a surface-driven focus is the only thing left that
-        // could raise the keyboard here.
+        // Mirrors the real editor's own gate: becoming active is not a user gesture, so the installed mobile app never
+        // takes focus from it.
         !isMobileApp() &&
         !paneActivationFocusIntent.shouldYieldAutoFocus() &&
         (focusScope === null ||
@@ -391,9 +365,8 @@ vi.mock(
 );
 import { HomePage } from "@/components/home/home-page";
 
-// The workspace-folders store buckets by host; every fixture in this suite
-// resolves the active host through `homeMocks.getActiveHostId()`, so seed and
-// read that same host's bucket.
+// The workspace-folders store buckets by host; every fixture in this suite resolves the active host through
+// `homeMocks.getActiveHostId`, so seed and read that same host's bucket.
 const TEST_HOST_ID = "host-home";
 const INITIAL_TAB_LAYOUT = {
   items: useTabsStore.getState().items,
@@ -454,9 +427,8 @@ describe("<HomePage />", () => {
       mostRecentTabIdByEpicId: {},
     });
     useWorkspaceFoldersStore.setState({ byHost: {} });
-    // `createDraft`'s workspace/settings seed falls through to this (no
-    // composer surface pin is set in this suite) - keep it in lockstep with
-    // `homeMocks.getActiveHostId()` above.
+    // `createDraft`'s workspace/settings seed falls through to this (no composer surface pin is set in this suite)
+    // - keep it in lockstep with `homeMocks.getActiveHostId` above.
     useSelectionAuthorityStore.setState({
       attached: true,
       effectiveHostId: TEST_HOST_ID,
@@ -718,11 +690,8 @@ describe("<HomePage />", () => {
     });
     expect(homeMocks.navigate).not.toHaveBeenCalled();
 
-    // `useEpicCreate` refetches the new epic's workspace listings so the chat
-    // tile's folder chip reflects the attached folders once the epic exists,
-    // but must not blanket-invalidate the host scope or the manual-refresh-
-    // only history list. Every host-scoped invalidation it fires targets a
-    // worktree binding listing method.
+    // `useEpicCreate` refetches the new epic's workspace listings so the chat tile's folder chip reflects the
+    // attached folders once the epic exists.
     const hostInvalidations = invalidateSpy.mock.calls
       .map(([options]) => (options as { queryKey?: unknown }).queryKey)
       .filter(
@@ -931,10 +900,7 @@ describe("<HomePage />", () => {
       queryClient.clear();
     });
 
-    // The installed mobile app's rule: only a gesture may raise the software
-    // keyboard. The landing surface reaches both endpoints through their focus
-    // registries, so neither endpoint's own guard is on this path - the guard
-    // has to be here, and these two cases are what hold it.
+    // The installed mobile app's rule: only a gesture may raise the software keyboard.
     it("takes no focus on the mobile app when the landing surface becomes focused", async () => {
       setMobileApp(true);
       useLandingDraftStore.getState().createDraftWithId("draft-a", null);
@@ -1006,9 +972,8 @@ describe("<HomePage />", () => {
       const pendingKey = initial?.pendingCreateId ?? "";
       expect(initial?.effectiveKey).toBe(pendingKey);
 
-      // Create the draft WITH that pre-minted id (mirrors LandingComposer's
-      // real handleSnapshot create branch, which calls
-      // createDraftWithId(props.pendingCreateId ?? uuidv4(), settings)).
+      // Create the draft with that pre-minted id (mirrors LandingComposer's real handleSnapshot create branch, which
+      // calls createDraftWithId(props.pendingCreateId ??
       act(() => {
         useLandingDraftStore.getState().createDraftWithId(pendingKey, null);
       });
@@ -1025,9 +990,8 @@ describe("<HomePage />", () => {
         useLandingDraftStore.getState().clearActiveDraft();
       });
 
-      // Passive-effect rotation would leave a committed frame with
-      // draftId=null and effectiveKey=pendingKey (retired id) before reminting.
-      // Render-phase rotation must never produce that frame.
+      // Passive-effect rotation would leave a committed frame with draftId=null and effectiveKey=pendingKey (retired
+      // id) before reminting. Render-phase rotation must never produce that frame.
       const afterClear = homeMocks.composerCommits.slice(commitsBeforeClear);
       const nullCommits = afterClear.filter(
         (c) => c.phase === "commit" && c.draftId === null,
@@ -1084,8 +1048,7 @@ describe("<HomePage />", () => {
       });
 
       const afterClear = homeMocks.composerCommits.slice(commitsBeforeClear);
-      // Every mount after the clear — intermediate stale-pending would be
-      // an extra mount entry.
+      // Every mount after the clear - intermediate stale-pending would be an extra mount entry.
       const mountsAfterClear = afterClear.filter((c) => c.phase === "mount");
       expect(mountsAfterClear).toHaveLength(1);
 

@@ -27,13 +27,7 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
-/**
- * Mock stream session for `pr.subscribeListForEpic`. Unlike git's status
- * stream, the PR list stream's frame fields ride directly on the envelope
- * (`prSubscribeListForEpicServerFrameSchema` is NOT nested under
- * `envelope.value`), so `emitFrame` spreads the frame straight onto the
- * envelope instead of wrapping it.
- */
+/** Unlike git's status stream, the PR list stream's frame fields ride directly on the envelope (`prSubscribeListForEpicServerFrameSchema` is NOT nested under `envelope.value`), so `emitFrame` spreads the frame straight onto the envelope instead of wrapping it. */
 class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
@@ -200,10 +194,7 @@ describe("usePrListSubscription", () => {
     if (backgroundSession === undefined) return;
     expect(backgroundSession.closed).toBe(false);
 
-    // A foreground subscriber for the SAME host+epic mounts too - the module
-    // keys shared subscriptions by (client, hostId, epicId, mode), so this
-    // must open a SECOND, independent session rather than reusing/collapsing
-    // into the background one.
+    // A foreground subscriber for the SAME host+epic mounts too - the module keys shared subscriptions by (client, hostId, epicId, mode), so this must open a SECOND, independent session rather than reusing/collapsing into the background one.
     const { unmount: unmountForeground } = renderHook(
       () =>
         usePrListSubscription({

@@ -100,11 +100,7 @@ let listHoldersHandler: (
   worktreePath: string,
 ) => WorktreeListHoldersResponse = () => ({ holders: [] });
 
-/**
- * Wires the two-request act-time flow: the un-probed base walk returns
- * `baseEntries` (owner discovery only), the forced selection-mode probe
- * returns `probedEntries` (the rows the dialog derives from).
- */
+/** Wires the two-request act-time flow: the un-probed base walk returns `baseEntries` (owner discovery only), the forced selection-mode probe returns `probedEntries` (the rows the dialog derives from). */
 function mockActTimeProbe(
   baseEntries: ReadonlyArray<StubEntry>,
   probedEntries: ReadonlyArray<StubEntry>,
@@ -435,10 +431,7 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     });
   });
 
-  // The bulk-sweep rule the multi-select exists for: "shared" is judged
-  // against the SELECTION, not one Task. Selecting every owner of a shared
-  // worktree satisfies the constraint, because sweeping the selection removes
-  // every binding that referenced it.
+  // The bulk-sweep rule the multi-select exists for: "shared" is judged against the SELECTION, not one Task.
   it("stops treating a worktree as shared once ALL its owner tasks are selected", async () => {
     const probed = [
       entry({

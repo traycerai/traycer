@@ -1,26 +1,3 @@
-/**
- * `createEpicArtifactBodyLanes` - the demand tracker that turns "which bodies
- * is someone looking at" into `artifact.subscribe@1.0` adapters, matched to
- * the epoch the records lane is currently serving.
- *
- * Every test here drives the real function through a COUNTING artifact stream
- * factory - copied from `open-epic/__tests__/lane-adapter-probe.test.ts` - that
- * records what each constructed client was built with and captures its
- * `ArtifactStreamCallbacks` so a test can deliver real `doc` / `unavailable`
- * frames, built through the wire's own zod schema rather than hand-rolled.
- * Nothing here mocks `createArtifactLaneAdapter` itself: the adapter, the
- * `lane-body-translation` seam, and the body-lanes module all run for real, so
- * what is pinned is the composed behaviour, not a stubbed contract.
- *
- * The eight pins below are, in order: demand held before an epoch exists
- * (the cold-open shape); idempotence under one epoch; an epoch change
- * rebuilding rather than reusing an adapter; the `release`-forgets /
- * `detachAll`-remembers asymmetry; `sendUpdate` queuing (never dropping) a
- * user's edit before the body is seeded; `sendUpdate` stamping the guid
- * learned from the seed; `sendAwareness` dropping (never queuing) presence
- * with nowhere to go; and a `stale-authority-epoch` frame requesting a replica
- * replacement rather than reading as an availability change.
- */
 import { describe, expect, it } from "vitest";
 import type {
   ArtifactLaneStreamClient,
@@ -43,9 +20,8 @@ import {
 import type { EpicRoomEvent } from "../epic-runtime-events";
 import { createRendererRuntimeEnvironment } from "../runtime-environment";
 
-// ── Narrowing helper - throw rather than a non-null assertion, so a wrong
-//    count reports WHERE it went wrong instead of a bare "possibly undefined"
-//    type error. Same shape as the probe test's `requireSupport`. ──────────
+// ── Narrowing helper - throw rather than a non-null assertion, so a wrong count reports WHERE it
+// went wrong instead of a bare "possibly undefined" type error.
 
 function requireAt<T>(items: readonly T[], index: number): T {
   const item = items[index];
@@ -57,9 +33,8 @@ function requireAt<T>(items: readonly T[], index: number): T {
   return item;
 }
 
-// ── Real wire frames, built through the schema's own `.parse` and narrowed -
-//    never hand-rolled, per the module's own "epoch changes meaning" and
-//    "delta vs full seed" warnings about drifting from the contract. ───────
+// ── Real wire frames, built through the schema's own `.parse` and narrowed - never hand-rolled,
+// per the module's own "epoch changes meaning" and "delta vs full seed" warnings about drifting
 
 function buildDocFrame(fields: {
   readonly authorityEpoch: string;
@@ -101,10 +76,6 @@ function buildUnavailableFrame(fields: {
   return parsed;
 }
 
-// ── The counting artifact factory - the harness style
-//    `lane-adapter-probe.test.ts` uses, extended to capture each client's
-//    callbacks (so a test can deliver frames) and its outbound calls (so a
-//    test can assert on what the adapter sent down the wire). ─────────────
 
 interface ApplyUpdateCall {
   readonly docGuid: string;
@@ -158,41 +129,28 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
   return { factory, clients };
 }
 
-// ── Runtime construction - a real `createEpicArtifactBodyLanes` wired to the
-//    counting factory, with a controllable authority-epoch source. Every
-//    other source is a plain recording fake: this module's only real
-//    collaborators are the epoch reader and the factory it is asked to
-//    open lanes through. ─────────────────────────────────────────────────
+// ── Runtime construction - a real `createEpicArtifactBodyLanes` wired to the counting factory,
+// with a controllable authority-epoch source.
 
 interface LanesRig {
   readonly lanes: EpicArtifactBodyLanes;
   readonly artifacts: CountingArtifactFactory;
   readonly roomEvents: readonly EpicRoomEvent[];
   readonly replacementReasons: readonly ReplicaReplacementReason[];
-  /**
-   * How many times this module reported the host refusing
-   * `artifact.subscribe`. Exposed so a pin can assert the count rather than
-   * merely that it happened - the arm above coalesces across tiles, and a
-   * per-tile fan-out is only visible as a number.
-   */
+  /** How many times this module reported the host refusing `artifact.subscribe`. */
   laneUnsupportedCount(): number;
   setAuthorityEpoch(epoch: string | null): void;
 }
 
 /**
- * `initialAuthorityEpoch` is required, not optional, so every call site
- * states up front whether it is exercising the cold-open (`null`) shape or
- * the already-known-epoch shape.
+ * `initialAuthorityEpoch` is required, not optional, so every call site states up front whether it
+ * is exercising the cold-open (`null`) shape or the already-known-epoch shape.
  */
 function createLanesRig(initialAuthorityEpoch: string | null): LanesRig {
   const artifacts = createCountingArtifactFactory();
   const roomEvents: EpicRoomEvent[] = [];
   const replacementReasons: ReplicaReplacementReason[] = [];
-  /**
-   * How many times the host has been observed refusing `artifact.subscribe`.
-   * Counted rather than flagged: the arm above coalesces across tiles, and a
-   * per-tile fan-out would show up here as a number greater than one.
-   */
+  /** How many times the host has been observed refusing `artifact.subscribe`. */
   let laneUnsupportedCount = 0;
   let authorityEpoch = initialAuthorityEpoch;
   const lanes = createEpicArtifactBodyLanes({
@@ -286,9 +244,6 @@ describe("createEpicArtifactBodyLanes - demand-tracked artifact body lanes", () 
 
       rig.lanes.syncToAuthorityEpoch();
 
-      // No epoch change happened, so this call has nothing to rebuild for
-      // art-2 - and, because release() forgot art-1's demand, nothing to
-      // reopen for it either: still one closed client, ever, for art-1.
       expect(rig.artifacts.clients).toHaveLength(2);
       expect(rig.lanes.attachedArtifactIds()).toEqual(["art-2"]);
     });
@@ -323,9 +278,8 @@ describe("createEpicArtifactBodyLanes - demand-tracked artifact body lanes", () 
     const outcome = rig.lanes.sendUpdate("art-1", new Uint8Array([1, 2, 3]));
 
     expect(outcome.kind).toBe("queued");
-    // Stated as its own assertion, per the pin: `dropped` would tell the
-    // caller to discard a user's edit, which is the one outcome that must
-    // never happen here.
+    // Stated as its own assertion, per the pin: `dropped` would tell the caller to discard a user's
+    // edit, which is the one outcome that must never happen here.
     expect(outcome.kind).not.toBe("dropped");
     expect(client.applyUpdateCalls).toHaveLength(0);
   });
@@ -395,9 +349,8 @@ describe("createEpicArtifactBodyLanes - demand-tracked artifact body lanes", () 
       }),
     );
 
-    // The opposite outcome: a room-level availability event, and no
-    // additional replacement request beyond what the first frame already
-    // produced.
+    // The opposite outcome: a room-level availability event, and no additional replacement request
+    // beyond what the first frame already produced.
     expect(rig.roomEvents).toHaveLength(1);
     expect(requireAt(rig.roomEvents, 0)).toEqual({
       kind: "room-availability",
@@ -418,11 +371,7 @@ describe("createEpicArtifactBodyLanes - demand-tracked artifact body lanes", () 
 
     rig.lanes.release("art-1", "superseded");
 
-    // One of two demands let go, not the last one - the client must still be
-    // open. Asserted on the CLIENT'S close count, not on attachedArtifactIds()
-    // alone: a demand-tracking bug that forgot to keep the lane open would
-    // still report "art-1" as attached right up until the map entry it never
-    // closed was deleted some other way.
+    // One of two demands let go, not the last one - the client must still be open.
     expect(client.closeCount()).toBe(0);
     expect(rig.lanes.attachedArtifactIds()).toEqual(["art-1"]);
 
@@ -444,10 +393,8 @@ describe("createEpicArtifactBodyLanes - demand-tracked artifact body lanes", () 
     rig.setAuthorityEpoch("epoch-2");
     rig.lanes.syncToAuthorityEpoch();
 
-    // This is the leak the ref-count exists to stop: before it, every tile
-    // ever opened was rebuilt on every epoch change forever, including one
-    // with no demand left at all. No new client for "art-1" - the demand set
-    // to rebuild from no longer contains it.
+    // This is the leak the ref-count exists to stop: before it, every tile ever opened was rebuilt on
+    // every epoch change forever, including one with no demand left at all.
     expect(rig.artifacts.clients).toHaveLength(1);
     expect(rig.lanes.attachedArtifactIds()).toEqual([]);
   });

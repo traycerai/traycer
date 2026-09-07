@@ -10,12 +10,6 @@ import {
   resetDesktopIdentityForTests,
 } from "../browser-desktop-identity";
 
-/**
- * The desktop half of H09. Nothing here is stubbed below the keystore: the
- * signature is produced by the real `node:crypto` and verified the way the host
- * verifies it, through the contract's own canonical-bytes helper - a stub in
- * between would let the two sides drift and still pass.
- */
 const userData = { path: "" };
 const keystore = {
   encrypting: true,
@@ -122,10 +116,6 @@ describe("this installation's browser identity", () => {
   });
 
   it("mints ONE key when two hosts challenge in the same tick", async () => {
-    // A co-located host and a relay host both challenge on attach. Memoising
-    // only the settled record would let both find nothing, both mint, and the
-    // second write win - leaving the two hosts holding different keys for one
-    // machine, and the loser refusing this desktop over the relay for good.
     const [local, relay] = await Promise.all([
       attestDesktopIdentity({ hostId: HOST_ID, nonce: NONCE }),
       attestDesktopIdentity({ hostId: "host-2", nonce: NONCE }),
@@ -183,11 +173,7 @@ describe("this installation's browser identity", () => {
   });
 
   it("V-9: still attests on a keystore that does not encrypt, with jarEligible: false and no wrap call", async () => {
-    // `basic_text` is a Linux-only backend, and the refusal is asked only
-    // there, so the platform has to be the real input. Tying placement to the
-    // wrapped key would refuse such a machine a native tab entirely, so it
-    // must still mint and attest - just never claim eligibility for the
-    // encrypted jar slice.
+    // Tying placement to the wrapped key would refuse such a machine a native tab entirely, so it must still mint and attest - just never claim eligibility for the encrypted jar slice.
     const platform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux" });
     try {

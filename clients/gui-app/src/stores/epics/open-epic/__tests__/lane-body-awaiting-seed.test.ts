@@ -1,29 +1,3 @@
-/**
- * The cold open on the lane arm, end to end: a tile mounts before the host has
- * sent a byte, and its body still arrives.
- *
- * ## The defect this pins
- *
- * On the lane arm `acquireArtifactBodyLease` IS the `artifact.subscribe` open -
- * "a body is not served until something asks for it", `epic-replica-runtime.ts`
- * - so the ordinary mount order is lease first, bytes later. The relocated
- * `body/materialize` took that lease, found nothing to hand over, and RELEASED,
- * which closed the subscription that was about to deliver the bytes. Nothing
- * retried: `useEpicArtifactBodyLease` keys its effect on
- * `[handle, artifactId, bodyDocKey]` and on this arm `bodyDocKey` IS the
- * artifact id, so it never moves. Every artifact body on the arm was
- * unreachable, and the six rows of
- * `lane-legacy-availability-equivalence.test.ts` were the same cause seen from
- * the availability side.
- *
- * ## Why it is pinned HERE rather than one layer down
- *
- * `epic-artifact-body-lanes.test.ts` drives the lanes module directly and was
- * green throughout; `epic-runtime-core-ports.test.ts` drives the ports and had
- * a pin asserting the release. Both were right about their own layer. What
- * nothing covered was the SEQUENCE across them - subscribe, wait, seed, install
- * - which is the only place the defect is visible.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type {
@@ -99,9 +73,8 @@ function createLaneRig(): LaneRig {
     return {
       applyUpdate: () => undefined,
       awareness: () => undefined,
-      // COUNTED, because "the subscription is still open" is a claim about
-      // something NOT happening, and the close is the only event that could
-      // falsify it.
+      // COUNTED, because "the subscription is still open" is a claim about something NOT happening, and
+      // the close is the only event that could falsify it.
       close: () => {
         closes += 1;
       },
@@ -109,9 +82,6 @@ function createLaneRig(): LaneRig {
   };
 
   const laneSelection: EpicLaneSelectionSources = {
-    // The relay shape: support never resolves, so the probe's own outcome is
-    // what installs the lanes - the way a real remote connection reaches this
-    // arm, rather than a manifest a test resolved by hand.
     support: () => "unknown",
     subscribeSupport: () => () => {},
     unaries: absentLaneUnaries(),
@@ -149,9 +119,8 @@ function createLaneRig(): LaneRig {
     },
     async seed(): Promise<void> {
       const donor = new Y.Doc();
-      // The fragment the STORE reads, composed from the protocol's own helper -
-      // a hand-written name would seed a document the reader never looks at and
-      // the pin would assert an empty fragment against an empty one.
+      // The fragment the STORE reads, composed from the protocol's own helper - a hand-written name
+      // would seed a document the reader never looks at and the pin would assert an empty fragment
       donor
         .getXmlFragment(artifactBodyFragmentName(ARTIFACT))
         .insert(0, [new Y.XmlText("hello")]);
@@ -169,11 +138,8 @@ function createLaneRig(): LaneRig {
         throw new Error(`expected a doc frame, got ${parsed.kind}`);
       }
       liveBody().onDoc(parsed, Y.encodeStateAsUpdate(donor));
-      // TWO drains, because the completion is genuinely two hops and saying so
-      // is better than a loop that hides the count. The first delivers the
-      // projection this frame produced (the room turns `ready`); the retry that
-      // projection triggers issues its own `body/materialize` DURING that
-      // delivery, so its answer is queued behind the drain that caused it.
+      // TWO drains, because the completion is genuinely two hops and saying so is better than a loop
+      // that hides the count.
       await handle.flush();
       await handle.flush();
     },
@@ -199,10 +165,8 @@ describe("a body leased before its seed arrives", () => {
     const rig = rigUnderTest();
     await rig.open();
 
-    // THE WAIT. One subscription opened, still open, and nothing on main yet -
-    // which is the honest state rather than a failure. Before the fix the
-    // subscription was already closed at this exact point, by the materialize
-    // that opened it.
+    // THE WAIT. One subscription opened, still open, and nothing on main yet - which is the honest
+    // state rather than a failure.
     expect(rig.subscribeCount()).toBe(1);
     expect(rig.subscriptionIsOpen()).toBe(true);
     expect(
@@ -211,9 +175,8 @@ describe("a body leased before its seed arrives", () => {
 
     await rig.seed();
 
-    // THE COMPLETION. The projection's `ready` is what drives the re-materialize,
-    // and the doc arrives with its identity intact - which is why this is a
-    // re-call rather than a pushed seed.
+    // THE COMPLETION. The projection's `ready` is what drives the re-materialize, and the doc arrives
+    // with its identity intact - which is why this is a re-call rather than a pushed seed.
     expect(
       rig.handle.store.getState().getArtifactBodyAvailability(ARTIFACT),
     ).toBe("ready");
@@ -221,16 +184,12 @@ describe("a body leased before its seed arrives", () => {
     if (fragment === null) throw new Error("expected a materialized fragment");
     expect(fragment.doc).not.toBeNull();
     // The bytes really crossed - an empty fragment would satisfy a null check.
-    // `toJSON()` rather than `toString()`: a `Y.XmlFragment` has no meaningful
-    // default stringification, so the latter asserts against "[object Object]".
     expect(fragment.toJSON()).toContain("hello");
   });
 
   it("does not re-subscribe to deliver the body: the ORIGINAL subscription is the one that seeds it", async () => {
-    // The property that separates this design from a reconnect: the retry is a
-    // second `body/materialize`, not a second `artifact.subscribe`. A fix that
-    // re-opened the lane would also pass the test above while paying a round
-    // trip per body and re-seeding from scratch.
+    // The property that separates this design from a reconnect: the retry is a second
+    // `body/materialize`, not a second `artifact.subscribe`.
     const rig = rigUnderTest();
     await rig.open();
     await rig.seed();

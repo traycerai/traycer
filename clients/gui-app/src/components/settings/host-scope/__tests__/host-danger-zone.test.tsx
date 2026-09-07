@@ -29,21 +29,11 @@ import {
 } from "@/components/settings/host-scope/host-danger-zone";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 
-/**
- * `general-settings-panel.test.tsx` used to carry the ONLY test that enforced
- * the no-silent-fallback invariant for this row — "must not silently fall back
- * to reading/writing through the active host", asserting the query client was
- * null once the picked host vanished. The row moved here during the host-scope
- * overhaul and that test was deleted with its old home, replacing nothing.
- *
- * These restore it, and add the guard the old row did not have: a destructive
- * action captures its target when ARMED, so a scope that moves while the
- * confirmation is open cannot re-point the wipe at another host.
- */
+/** These restore it, and add the guard the old row did not have: a destructive action captures its target when
+ * armed, so a scope that moves while the confirmation is open cannot re-point the wipe at another host. */
 
-// `vi.hoisted` so the values exist when the hoisted `vi.mock` factory below
-// runs; the binding is annotated (matching `runnerHostMock`) rather than cast,
-// since this file deliberately carries no `as` at all.
+// `vi.hoisted` so the values exist when the hoisted `vi.mock` factory below runs; the binding is annotated
+// (matching `runnerHostMock`) rather than cast, since this file deliberately carries no `as` at all.
 const {
   mutateSpy,
   capturedQueryClients,
@@ -53,7 +43,6 @@ const {
   readonly mutateSpy: Mock;
   readonly capturedQueryClients: Array<HostClient<HostRpcRegistry> | null>;
   readonly removeFromAccountSpy: Mock;
-  /** Which host id the account-removal hook was BOUND to, per render. */
   readonly removeFromAccountHostIds: string[];
 } = vi.hoisted(() => ({
   mutateSpy: vi.fn(),
@@ -62,10 +51,8 @@ const {
   removeFromAccountHostIds: [],
 }));
 
-// "Remove from account" is an ACCOUNT write, not host RPC and not the local
-// bridge — it goes out through `AuthService` over the host binding. Mocked at
-// the hook the way this suite already mocks the uninstall hook, so the row's
-// gating and copy can be tested without standing up an auth boundary.
+// "Remove from account" is an account write, not host RPC and not the local bridge - it goes out through
+// `AuthService` over the host binding.
 vi.mock("@/hooks/auth/use-deregister-host-mutation", () => ({
   useDeregisterHostFromAccount: (hostId: string) => {
     removeFromAccountHostIds.push(hostId);
@@ -83,9 +70,8 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: () => ({ mutate: mutateSpy, isPending: false }),
 }));
 
-// Mutable so a test can put this shell on the desktop branch. `RemoveTraycerRow`
-// returns null without the bridge, so with a fixed `null` here the local
-// half of this component could never render and its gating went unexercised.
+// `RemoveTraycerRow` returns null without the bridge, so with a fixed `null` here the local half of this
+// component could never render and its gating went unexercised.
 const runnerHostMock: { hostManagement: object | null } = vi.hoisted(() => ({
   hostManagement: null,
 }));
@@ -121,9 +107,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
-// A real client over a mock messenger, not a chained assertion — the repo's
-// lint forbids `as unknown as` in tests too, and rightly: a cast here would
-// also hide the day this component starts calling something the stub lacks.
+// A real client over a mock messenger, not a chained assertion.
 const SOME_CLIENT: HostClient<HostRpcRegistry> =
   new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -154,9 +138,8 @@ beforeEach(() => {
   uninstallMock.mutate.mockClear();
 });
 
-// Explicit: without it a previous test's tree stays mounted and `getByTestId`
-// finds two Clear buttons, which fails as "multiple elements" rather than as
-// the behaviour under test.
+// Explicit: without it a previous test's tree stays mounted and `getByTestId` finds two Clear buttons, which
+// fails as "multiple elements" rather than as the behaviour under test.
 afterEach(cleanup);
 
 describe("HostDangerZone", () => {
@@ -176,11 +159,8 @@ describe("HostDangerZone", () => {
   });
 
   it("never reads through a client once the scoped host has vanished", () => {
-    // The assertion the deleted test made, restored — and now satisfied a
-    // stronger way. The snapshots row is host RPC, so an unusable scope does
-    // not mount it at all rather than mounting it with a null client. Either
-    // way the guarantee is the one that matters: nothing here can reach the
-    // previously-active host.
+    // The snapshots row is host RPC, so an unusable scope does not mount it at all rather than mounting it with a
+    // null client.
     render(
       <HostDangerZone
         scope={hostScopeFixture({
@@ -198,11 +178,8 @@ describe("HostDangerZone", () => {
   });
 
   it("keeps Remove Traycer reachable while this computer's host is down", () => {
-    // The regression, and the one that mattered most: `RemoveTraycerRow` calls
-    // `hostManagement.uninstallTraycer()` over the LOCAL CLI bridge, not host
-    // RPC. Gating the whole zone on a dialable route took the only way to
-    // remove a broken install out of the app precisely when the host is
-    // stopped or wedged — the sole state anyone reaches for it in.
+    // Gating the whole zone on a dialable route took the only way to remove a broken install out of the app
+    // precisely when the host is stopped or wedged - the sole state anyone reaches for it in.
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     render(
       <HostDangerZone
@@ -221,11 +198,8 @@ describe("HostDangerZone", () => {
 
     const removeRow = screen.getByTestId("settings-remove-traycer");
     expect(isConcealed(removeRow)).toBe(false);
-    // ...while the genuinely RPC-backed row stays behind the gate — concealed
-    // (the gate preserves it hidden through the outage) or absent — and the
-    // gate says why instead of the region just disappearing. Query hooks may
-    // render under the concealed row, but every one of them sees a NULL
-    // client: nothing here can reach the previously-active host.
+    // ...while the genuinely RPC-backed row stays behind the gate - concealed (the gate preserves it hidden
+    // through the outage) or absent - and the gate says why instead of the region just disappearing.
     const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
     expect(clearRow === null || isConcealed(clearRow)).toBe(true);
     expect(capturedQueryClients.every((client) => client === null)).toBe(true);
@@ -268,9 +242,8 @@ describe("HostDangerZone", () => {
   });
 
   it("explains the missing rows for an unreachable host that is not this one", () => {
-    // The counterweight to loosening the gate: a host with no route and no
-    // local bridge must not silently drop the region — that reads as "there is
-    // nothing to do here" rather than "this host cannot be reached".
+    // The counterweight to loosening the gate: a host with no route and no local bridge must not silently drop the
+    // region - that reads as "there is nothing to do here" rather than "this host cannot be reached".
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     render(
       <HostDangerZone
@@ -299,8 +272,8 @@ describe("HostDangerZone", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
     expect(screen.getByRole("dialog")).not.toBeNull();
 
-    // The scope moves underneath the open dialog — another window changed the
-    // active host, or the sidebar picked a different one.
+    // The scope moves underneath the open dialog - another window changed the active host, or the sidebar picked a
+    // different one.
     rerender(
       <HostDangerZone
         scope={hostScopeFixture({
@@ -311,9 +284,8 @@ describe("HostDangerZone", () => {
       />,
     );
 
-    // Destroyed, not retargeted: the gate keys this subtree by host, so the
-    // switch unmounts the dialog with everything else. A confirmation the
-    // user gave about host-b cannot be re-aimed to wipe host-c's snapshots.
+    // Destroyed, not retargeted: the gate keys this subtree by host, so the switch unmounts the dialog with
+    // everything else. A confirmation the user gave about host-b cannot be re-aimed to wipe host-c's snapshots.
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(mutateSpy).not.toHaveBeenCalled();
   });
@@ -339,23 +311,8 @@ describe("HostDangerZone", () => {
   });
 
   it("names the host and states what survives in the snapshots-clear confirmation", () => {
-    // Pinned DIRECTLY here because nothing else can reach it. The Overview's
-    // parity comparison reads the panel's rendered prose, and Radix renders
-    // dialogs through a portal — outside that subtree — so a copy regression in
-    // any confirmation is invisible to it. Dialog copy is therefore pinned in
-    // the suite that owns the dialog, which is this one.
-    //
-    // Two claims, both load-bearing for a destructive action:
-    //
-    //  - it NAMES the host. This row's whole history is a destructive control
-    //    taking its target from somewhere the user could not see; a dialog that
-    //    said "this host" would put that ambiguity back at the last moment.
-    //  - it separates what is LOST from what SURVIVES. "Cleared snapshots
-    //    cannot be restored" is the irreversibility; "conversation history and
-    //    checkpoint records stay visible" is the reassurance that makes the
-    //    action legible. Dropping the second half would read as a history wipe
-    //    and is the more likely regression, because it is the part that sounds
-    //    optional.
+    // "Cleared snapshots cannot be restored" is the irreversibility; "conversation history and checkpoint records
+    // stay visible" is the reassurance that makes the action legible.
     render(
       <HostDangerZone
         scope={hostScopeFixture({
@@ -376,17 +333,13 @@ describe("HostDangerZone", () => {
   });
 
   it("keeps uninstall reachable in the empty-account recovery state", () => {
-    // "No host row" is an enrollment fact, not an installation fact: an
-    // install that completed while sign-in did not leaves components on this
-    // machine with nothing in the account — and this page is the only
-    // uninstall surface. The recovery variant renders the local-bridge row
-    // without any host in hand.
+    // "No host row" is an enrollment fact, not an installation fact: an install that completed while sign-in did
+    // not leaves components on this machine with nothing in the account.
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     render(<LocalRecoveryDangerZone />);
     expect(screen.getByTestId("host-danger-zone")).not.toBeNull();
     expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
-    // No host means no RPC row — nothing to clear, and nothing that could
-    // read through an ambient client.
+    // No host means no RPC row - nothing to clear, and nothing that could read through an ambient client.
     expect(
       screen.queryByTestId("settings-clear-file-edit-snapshots"),
     ).toBeNull();
@@ -417,14 +370,7 @@ describe("HostDangerZone", () => {
   });
 
   it("offers Remove from account for a remote host, and never the word deregister", () => {
-    // The remote counterpart to Remove Traycer, on a THIRD capability plane:
-    // an account write that needs no route to the machine.
-    //
-    // The copy rule is not a style preference. This app already says
-    // "Deregister" one card away in the Advanced disclosure, for OS-SERVICE
-    // deregistration — a machine-local repair with nothing in common with
-    // ending a host's membership of an account. Two destructive controls
-    // sharing a verb is how someone reaches for the wrong one.
+    // The copy rule is not a style preference.
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     render(
       <HostDangerZone
@@ -441,15 +387,13 @@ describe("HostDangerZone", () => {
     expect(screen.getByTestId("host-danger-zone").textContent).not.toMatch(
       /deregister/i,
     );
-    // Bound to the host it is rendered for — the hook, the button and the
-    // dialog all close over the same id, so a scope change cannot retarget it.
+    // Bound to the host it is rendered for - the hook, the button and the dialog all close over the same id, so a
+    // scope change cannot retarget it.
     expect(removeFromAccountHostIds).toContain("host-b");
   });
 
   it("does not offer account removal for this computer's host", () => {
-    // This computer gets Remove Traycer, which actually removes something.
-    // Offering both would present two destructive buttons whose difference is
-    // invisible until afterwards.
+    // Offering both would present two destructive buttons whose difference is invisible until afterwards.
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     render(
       <HostDangerZone
@@ -492,23 +436,8 @@ describe("HostDangerZone", () => {
   });
 
   it("tells the truth in the confirmation: nothing is uninstalled, and the host does NOT come back on its own", () => {
-    // Pinned because the copy is a claim about behaviour two repos away, and
-    // the first version of it was WRONG in the reassuring direction — it said a
-    // running host "re-enrols on its own and comes back".
-    //
-    // It does not. `POST /api/v3/hosts/:id/deregister` stamps `deregisteredAt`
-    // and clears the presence lease (no revoke, nothing touched on the box).
-    // The host's next heartbeat 404s and it reads that as `not-registered`, but
-    // `reconcile()` then finds the on-box device credential still present and
-    // still matching, takes `adoptActiveCredential()` and RETURNS — before
-    // either enrollment source, and `registerHost()` is the only caller that
-    // clears `deregisteredAt`. So it loops instead of recovering, and the
-    // interactive login path sits below that same early return, which is why
-    // the copy must not offer "sign in again" as the remedy either.
-    //
-    // This asserts the NEGATIVE claims explicitly. A dialog that quietly
-    // promises self-recovery is worse than one that says nothing: it is the
-    // reason someone would leave a host removed and expect it back.
+    // So it loops instead of recovering, and the interactive login path sits below that same early return, which
+    // is why the copy must not offer "sign in again" as the remedy either.
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     render(
       <HostDangerZone
@@ -532,9 +461,8 @@ describe("HostDangerZone", () => {
     // revoked, so the id survives and a re-setup restores name and settings.
     expect(copy).toMatch(/host ID is kept/i);
     expect(copy).not.toMatch(/deregister/i);
-    // The refuted claim, pinned as ABSENT. Without this the copy could drift
-    // back to promising self-recovery and every assertion above would still
-    // pass.
+    // The refuted claim, pinned as absent. Without this the copy could drift back to promising self-recovery and
+    // every assertion above would still pass.
     expect(copy).not.toMatch(/re-enrols on its own|re-enrolls on its own/i);
 
     fireEvent.click(

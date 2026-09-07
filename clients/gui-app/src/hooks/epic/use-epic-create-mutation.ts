@@ -47,19 +47,7 @@ function taskCreationMode(
 }
 
 /**
- * `epic.create` on an explicit client (redesign P1.2).
- *
- * There is no app-wide variant on purpose. Epic creation is PLACEMENT - the
- * epic and its folded chat live on the created-on host for life - so the
- * caller must name the machine rather than inherit whichever one the window
- * happens to be bound to. The landing composer resolves it from its surface
- * pin (`pin ?? effective`), re-validated at submit.
- *
- * The folded chat seed carries its own `hostId`, and a mismatch between it and
- * the client this hook would send on is refused here, in the same shape (and
- * for the same reason) as `useEpicCreateChatForHostClient`'s pre-flight: a
- * create that lands anyway puts the chat on a machine the caller never named.
- * A `null` client is refused by `useHostMutation`'s own guard.
+ * Caller names the create host; there is no app-wide variant. A folded-chat `hostId` that disagrees with this client is refused here.
  */
 export function useEpicCreateForClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -111,22 +99,14 @@ export function useEpicCreateForClient(
           mode: taskCreationMode(variables.chat),
         });
         if (ctx.hostId === null) return;
-        // The new epic's workspace folders are seeded into the host's
-        // warm-slot create context by `epic.create`, but the just-mounted
-        // chat tile's `worktree.listBindingsForEpic` may have fetched before that
-        // seed landed (and the chat flow has no follow-up worktree RPC to
-        // refresh it, unlike the terminal-agent flow). Refetch now that the
-        // epic exists so the workspace chip reflects the attached folders.
+        // The new epic's workspace folders are seeded into the host's warm-slot create context by `epic.create`, but the just-mounted chat tile's `worktree.listBindingsForEpic` may have fetched before that seed landed (and the chat flow has no follow-up worktree RPC to refresh it, unlike the terminal-agent flow).
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(
             ctx.hostId,
             "worktree.listBindingsForEpic",
           ),
         });
-        // Ingest the freshly-created TaskLight (returned by the cloud-side
-        // create step) into the cached cloud-tasks history so the new epic
-        // shows up in the history list immediately. The cloud query is
-        // otherwise manual-refresh-only (`staleTime: Infinity`).
+        // The cloud query is otherwise manual-refresh-only (`staleTime: Infinity`).
         if (ctx.userId === null) return;
         const task = response.task;
         if (task === null || task === undefined) return;
@@ -246,12 +226,7 @@ function taskProjectionMatchesRequest(
   if (!matchesRepoFilter(projection.repoLabels, filters)) {
     return false;
   }
-  // A host filter cannot be evaluated from a create projection: the response
-  // carries no `chatHostIds`, and the epic has no chats to own a host yet.
-  // Refuse the optimistic insert rather than guess - inserting would place an
-  // UNVERIFIED row into a host-filtered list, which is the one thing this
-  // filter's fail-closed design exists to prevent. The row appears on the next
-  // fetch, once the server can answer for it.
+  // A host filter cannot be evaluated from a create projection: the response carries no `chatHostIds`, and the epic has no chats to own a host yet.
   if (filters.chatHostIds !== undefined && filters.chatHostIds.length > 0) {
     return false;
   }
@@ -279,13 +254,7 @@ function mergeProjectionIntoFacets(
   ) {
     return facets;
   }
-  // `chatHosts` is CARRIED, never rebuilt. Dropping it makes the history gate
-  // read the response as one from a server that cannot filter by host, which
-  // withholds every row behind "Can't filter by host here" - and these entries
-  // never refetch on their own (`staleTime`/`gcTime` at Infinity), so a single
-  // create would strand the list there. It is carried UNCHANGED because a
-  // brand-new epic has no published chats yet, so it contributes to no host's
-  // count; the next real fetch is what introduces one.
+  // Dropping it makes the history gate read the response as one from a server that cannot filter by host, which withholds every row behind "Can't filter by host here" - and these entries never refetch on their own (`staleTime`/`gcTime` at Infinity), so a single create would strand the list there.
   return { repos, workspaces, ownershipScopes, chatHosts: facets.chatHosts };
 }
 

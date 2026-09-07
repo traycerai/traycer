@@ -63,9 +63,7 @@ const handshakeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: z.object({
     id: z.string(),
-    // `.default(null)` is what makes this ADDITIVE, as the fixture's name
-    // and comment claim: a v1.0 peer never sends the key, so a v1.1 schema
-    // that required it would reject every v1.0 open request.
+    // `.default(null)` is what makes this ADDITIVE, as the fixture's name and comment claim: a v1.0 peer never sends the key, so a v1.1 schema that required it would reject every v1.0 open request.
     resumeToken: z.string().nullable().default(null),
   }),
   serverFrameSchema: z.discriminatedUnion("kind", [
@@ -99,12 +97,6 @@ const MULTI_MAJOR_STREAM_REGISTRY = defineVersionedStreamRpcRegistry({
   },
 });
 
-/**
- * Structural and schema-compatibility tests for the versioned streaming-RPC
- * framework plus a smoke test that `defineVersionedStreamRpcRegistry`
- * accepts the real combined registry shipped from
- * `@traycer/protocol/host/registry`.
- */
 
 describe("validateVersionedStreamRpcRegistry", () => {
   it("accepts the combined hostStreamRpcRegistry", () => {
@@ -355,9 +347,6 @@ describe("stream compatibility", () => {
       hostStreamRpcRegistry,
       SERVES_EVERY_INSTALLED_MAJOR,
     );
-    // A hypothetical peer on some future, unbridgeable chat.subscribe major -
-    // exercises the method-isolation property below, independent of
-    // chat.subscribe's real, currently-bridgeable version history.
     const skewedManifest = {
       ...currentManifest,
       "chat.subscribe": { major: 2, minor: 0 },
@@ -421,17 +410,7 @@ describe("stream compatibility", () => {
 
   /**
    * A retained MAJOR is not a retained released contract.
-   *
-   * This is the negative twin of the test above. Same shape - a multi-major
-   * side meeting a frozen peer pinned at `1.0` - except the retained major-1
-   * line has DELETED its `v1.0` registration while keeping the line alive at
-   * `1.1`. `highestSharedMajor` still answers 1, so before this guard both
-   * release oracles went green while the runtime rejected that peer at
-   * subscribe time: the handshake selects a concrete `{major, minor}`, and
-   * `1.0` was no longer installed to select.
-   *
-   * That gap is the whole reason the oracles exist, so it has to fail HERE,
-   * loudly, at the layer that is supposed to catch it before release.
+   * Same shape - a multi-major side meeting a frozen peer pinned at `1.0` - except the retained major-1 line has DELETED its `v1.0` registration while keeping the line alive at `1.1`.
    */
   it("refuses a peer pinned to a released minor the retained major line no longer installs", () => {
     const registryMissingV10 = defineVersionedStreamRpcRegistry({
@@ -539,11 +518,8 @@ describe("stream compatibility", () => {
     ]);
   });
 
-  // Regression guard for the release-v1.1.0 RC incident: chat.subscribe
-  // bumped to a new major (dropping the v1.0 registration entirely) and broke
-  // every host still running host-v1.0.0. Fixed by keeping chat.subscribe on
-  // major 1 and shipping the background-items controls as additive minors, so a
-  // current app must still bridge to a host that only advertises 1.0.
+  // Regression guard for the release-v1.1.0 RC incident: chat.subscribe bumped to a new major (dropping the v1.0 registration entirely) and broke every host still running host-v1.0.0.
+  // Fixed by keeping chat.subscribe on major 1 and shipping the background-items controls as additive minors, so a current app must still bridge to a host that only advertises 1.0.
   it("bridges chat.subscribe@1.3 to a host still on chat.subscribe@1.0 (host-v1.0.0)", () => {
     const currentManifest = buildStreamManifest(
       hostStreamRpcRegistry,
@@ -562,10 +538,7 @@ describe("stream compatibility", () => {
     );
     expect(fullConnection.ok).toBe(true);
 
-    // Mirrored host-role check: host-v1.0.0 itself, running this same check
-    // from its own (older) side against a 1.2 client's manifest, must reach the
-    // same verdict - the host's own subscribe-time compatibility gate runs with
-    // `selfRole: "host"`, not "client".
+    // Mirrored host-role check: host-v1.0.0 itself, running this same check from its own (older) side against a 1.2 client's manifest, must reach the same verdict - the host's own subscribe-time compatibility gate runs with.
     const fullConnectionAsHost = checkStreamCompatibility(
       hostStreamRpcRegistry,
       hostV100Manifest,
@@ -610,11 +583,7 @@ describe("stream compatibility", () => {
       oldHostStreamRpcRegistry,
       SERVES_EVERY_INSTALLED_MAJOR,
     );
-    // The host's openAck advertises its own manifest intersected with the
-    // peer's. `deriveOpenAckManifest` itself lives in the host and is not
-    // importable here, but both of its steps are protocol primitives, so the
-    // intersection is reproduced rather than assumed: drop the methods the
-    // peer never named, then select the shared major/minor per method.
+    // The host's openAck advertises its own manifest intersected with the peer's.
     const peerNamedHostManifest = Object.fromEntries(
       Object.entries(oldHostManifest).filter(([method]) =>
         Object.prototype.hasOwnProperty.call(newGuiManifest, method),

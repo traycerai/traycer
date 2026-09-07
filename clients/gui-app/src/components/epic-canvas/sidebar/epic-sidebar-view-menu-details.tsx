@@ -1,18 +1,5 @@
 /**
- * The view-menu bodies shared by the desktop sidebar and the mobile switcher.
- *
- * Each export here is a leaf: it renders `DropdownMenu*` items for one facet of
- * the view and takes that facet's value and setter as props, holding no state
- * and reading no view state of its own. That is the whole line between this
- * file and its callers -
- * the surrounding menu decides how the facets are REACHED (the sidebar nests
- * them behind submenus, or drills into them when a rail is too narrow for two
- * columns; the phone lists them one after another in a single scrolling menu),
- * while what each facet SAYS and DOES lives here once.
- *
- * A facet duplicated per surface is how two surfaces silently disagree about
- * the same persisted view state, so callers compose these rather than
- * re-declaring them.
+ * A facet duplicated per surface is how two surfaces silently disagree about the same persisted view state, so callers compose these rather than re-declaring them.
  */
 import {
   ArrowDownWideNarrow,
@@ -64,13 +51,7 @@ import {
 } from "./epic-sidebar-view-menu-shared";
 
 /**
- * Field and direction pickers for a panel's sort mode, plus a reset that only
- * appears once the mode is off its default.
- *
- * Every item preventDefaults its own select so the menu stays open: ordering is
- * a control the user re-aims (pick a field, then flip the direction), and a
- * menu that closed on the first pick would have to be reopened to finish the
- * thought.
+ * Field and direction pickers for a panel's sort mode, plus a reset that only appears once the mode is off its default.
  */
 export function OrderingDetail(props: {
   readonly fields: ReadonlyArray<SortField>;
@@ -150,12 +131,7 @@ export function OrderingDetail(props: {
 }
 
 /**
- * The "how many filters are on" count that rides the corner of a view-menu
- * trigger, capped at `9+` so a wide count cannot stretch the icon button.
- *
- * `aria-hidden`: the trigger's own label already spells the count out, and a
- * screen reader reading a bare digit beside it would say the number twice.
- * Renders nothing at zero, so an unfiltered trigger is a plain icon.
+ * The "how many filters are on" count that rides the corner of a view-menu trigger, capped at `9+` so a wide count cannot stretch the icon button.
  */
 export function ViewMenuBadge(props: { readonly filterCount: number }) {
   if (props.filterCount <= 0) return null;
@@ -258,10 +234,8 @@ export function ChatOwnershipDetail(props: {
 }
 
 /**
- * The Agents facets behind one `detail` key, for a menu that shows exactly one
- * at a time and would otherwise carry the switch itself. A caller that renders
- * several facets composes the leaves above instead, so it passes only the props
- * the facets it shows actually use.
+ * The Agents facets behind one `detail` key, for a menu that shows exactly one at a time and would otherwise carry the switch itself.
+ * A caller that renders several facets composes the leaves above instead, so it passes only the props the facets it shows actually use.
  */
 export function ChatDetailContent(props: {
   readonly detail: ChatViewDetail;
@@ -386,9 +360,7 @@ export function ArtifactDetailContent(props: {
 }
 
 /**
- * Kind checkboxes, each carrying the icon the artifact's rows carry - including
- * the user's per-type icon colour, so the menu entry and the row it filters for
- * are recognizably the same thing.
+ * Kind checkboxes, each carrying the icon the artifact's rows carry - including the user's per-type icon colour, so the menu entry and the row it filters for are recognizably the same thing.
  */
 function ArtifactTypeDetail(props: {
   readonly filterKinds: readonly EpicArtifactKind[];

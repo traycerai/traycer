@@ -22,9 +22,8 @@ const mocks = vi.hoisted(() => ({
   lifecycleCalls: [] as Array<{ readonly force: boolean }>,
 }));
 
-// Keep the real staging and commit primitives, but route their host paths to a
-// disposable tree. The downgrade helper must therefore replace real bytes and
-// records, not merely pass a version through a mocked apply function.
+// Keep the real staging and commit primitives, but route their host paths to a disposable tree.
+// The downgrade helper must therefore replace real bytes and records, not merely pass a version through a mocked apply function.
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return {
@@ -78,9 +77,7 @@ vi.mock("../../registry", async (importOriginal) => {
   };
 });
 
-// The helper's real stage/commit primitives still run, while the contender
-// facade is reduced to a live capability callback so this suite focuses on
-// staging, the busy gate, swap, and cleanup rather than lock-process setup.
+// The helper's real stage/commit primitives still run, while the contender facade is reduced to a live capability callback so this suite focuses on staging, the busy gate, swap, and cleanup rather than lock-process setup.
 vi.mock("../../host/update-contender", () => ({
   withCliUpdateExecutionSegment: async (
     _options: unknown,

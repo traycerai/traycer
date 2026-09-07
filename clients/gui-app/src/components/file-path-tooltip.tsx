@@ -23,23 +23,10 @@ interface FilePathTooltipProps {
   /** Full text to display in the tooltip - usually the un-truncated path,
    * but any string works (e.g., `"Open <path> in editor"`). */
   readonly content: string;
-  /** Placement relative to the trigger. */
   readonly side: "bottom" | "right";
 }
 
-/**
- * Hover-tooltip for a (potentially truncated) file path. Renders content
- * via Radix's portal so the trigger's `direction: rtl` (used for left-
- * side ellipsis truncation) doesn't leak into the tooltip's bidi context
- * - Unicode neutrals like `/` would otherwise be reordered into the
- * wrong position.
- *
- * Font-size is delivered through inline `style` rather than a `text-*`
- * className: shadcn's `TooltipContent` already sets `text-ui-xs
- * text-background`, and adding a second `text-*` class would make
- * `tailwind-merge` collapse the group and drop the color, leaving the
- * tooltip invisible against its own background.
- */
+/** Font-size is delivered through inline `style` rather than a `text-*` className. */
 export function FilePathTooltip(props: FilePathTooltipProps) {
   return (
     <Tooltip>
@@ -63,21 +50,7 @@ const FilePathRevealContext = createContext<((path: string) => void) | null>(
   null,
 );
 
-/**
- * Owns the reveal sheet on behalf of the rows beneath it, and must wrap them
- * rather than sit inside one.
- *
- * A Radix portal is DOM-detached but React-ATTACHED: the sheet's markup goes to
- * the body, yet React propagates events through the React TREE. A sheet
- * rendered by a row therefore bubbles its clicks back into that row - a
- * `CommandItem` or `DropdownMenuItem` whose click launches a terminal or adopts
- * a worktree - so dismissing the sheet picked the very row the press was only
- * inspecting. Stopping propagation at the sheet was tried and is not enough:
- * the overlay is a sibling of the content inside the same portal, so each
- * surface has to be found and covered one at a time, and the next one added
- * would silently reopen the hole. Hoisting the sheet out of every row's subtree
- * removes the class instead of patching its instances.
- */
+/** Owns the reveal sheet on behalf of the rows beneath it, and must wrap them rather than sit inside one. */
 export function FilePathRevealProvider(props: {
   readonly children: ReactNode;
 }): ReactNode {
@@ -91,27 +64,8 @@ export function FilePathRevealProvider(props: {
   );
 }
 
-/**
- * {@link FilePathTooltip} plus the touch half of the same disclosure: a long
- * press carries the identical string into the full-path sheet, the way an
- * abbreviated row in the remote folder picker does. Hover and press reveal one
- * string, so a truncated path is never a pointer-only fact.
- *
- * The press lives on the path line rather than on the row around it. Rows that
- * carry a truncated path routinely disable themselves - a launch in flight, a
- * worktree that is still `checking` - and a disabled row takes
- * `pointer-events-none` for its whole box, so a row-level recognizer would go
- * dead on exactly the row whose location someone most wants to read. Those
- * lines already re-open that one hole with `pointer-events-auto`; this hangs
- * off the same element.
- *
- * The sheet itself belongs to {@link FilePathRevealProvider}, which must wrap
- * the rows - see there for why a row cannot own it.
- *
- * A row that wires its own long press (the remote picker's, which spans the
- * whole row because nothing there disables) keeps using {@link FilePathTooltip}
- * directly - two recognizers over one gesture would open two sheets.
- */
+/** Hover and press reveal one string, so a truncated path is never a pointer-only fact. The sheet itself
+ * belongs to FilePathRevealProvider, which must wrap the rows - see there for why a row cannot own it. */
 export function FilePathReveal(props: FilePathTooltipProps): ReactNode {
   const reveal = useContext(FilePathRevealContext);
   const longPress = useLongPress({
@@ -132,10 +86,7 @@ export function FilePathReveal(props: FilePathTooltipProps): ReactNode {
       <Slot.Root
         {...longPress.handlers}
         onClick={(event) => {
-          // The browser still delivers a click after a long press. Here that
-          // click reaches the enclosing menu or command item and picks the
-          // row - moving the user off the path the press just revealed - so
-          // the press that already answered the gesture swallows it.
+          // The browser still delivers a click after a long press.
           if (!longPress.consumedTap()) return;
           event.preventDefault();
           event.stopPropagation();

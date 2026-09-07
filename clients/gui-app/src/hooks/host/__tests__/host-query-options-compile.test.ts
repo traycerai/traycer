@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostQueryTanstackOptions } from "@/hooks/host/use-host-query";
 
-// Compile assertions for the closed builder surface. These assignments are
-// only for TypeScript; runtime never reads them. `@ts-expect-error` sits on
-// the exact excess-property line so the directive is precise — if the surface
-// re-opens, compile fails because the directive becomes unused.
+// Compile-only assignments. `@ts-expect-error` sits on the excess-property line so a re-opened surface fails as unused.
 
 const conditionRefetchInterval: HostQueryTanstackOptions<
   "speech.getModelStatus",

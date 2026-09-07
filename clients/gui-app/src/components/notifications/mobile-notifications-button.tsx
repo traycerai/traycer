@@ -14,13 +14,7 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 
-/**
- * Notifications trigger for the phone header, sitting alongside the other
- * global status controls. The desktop `NotificationsBell` owns an anchored
- * Radix popover; on mobile the center is the full-screen
- * `NotificationsMobileSheet` driven by the same store, so this is a plain
- * button that flips it open.
- */
+/** Notifications trigger for the phone header, sitting alongside the other global status controls. */
 export function MobileNotificationsButton(): ReactNode {
   const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
   const unread = useMergedNotificationUnreadCount();
@@ -28,10 +22,8 @@ export function MobileNotificationsButton(): ReactNode {
   const hostState = useNotificationCenterHostState();
 
   const handleOpen = () => {
-    // Mirror the desktop bell's open telemetry (notifications-bell.tsx). That
-    // bell isn't mounted on mobile, so its edge-triggered open effect never
-    // fires - this button is the sole open path here, and it's a direct UI
-    // interaction, hence entry_point "direct_ui".
+    // That bell isn't mounted on mobile, so its edge-triggered open effect never fires - this button is the sole
+    // open path here, and it's a direct UI interaction, hence entry_point "direct_ui".
     const attentionCount = bellState.kind === "attention" ? bellState.count : 0;
     Analytics.getInstance().track(AnalyticsEvent.NotificationCenterOpened, {
       entry_point: "direct_ui",
@@ -66,10 +58,8 @@ export function MobileNotificationsButton(): ReactNode {
           {bellState.count > 99 ? "99+" : bellState.count}
         </span>
       )}
-      {/* Unlike the desktop bell's quiet dot, show the unread count - this is
-          the only notifications surface on phones, so the count carries real
-          signal here. Dot only when the merged count hasn't resolved to a
-          number yet. */}
+      {/* Unlike the desktop bell's quiet dot, show the unread count - this is the only notifications surface on
+         phones, so the count carries real signal here. */}
       {bellState.kind === "quietDot" && unread > 0 && (
         <span
           data-testid="mobile-notifications-unread-badge"

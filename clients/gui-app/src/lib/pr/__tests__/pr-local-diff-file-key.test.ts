@@ -29,10 +29,8 @@ describe("prLocalDiffFileKey / prLocalDiffPathKey", () => {
     expect(prLocalDiffPathKey("src/a.ts", "dG9rZW4=")).toBe("b:dG9rZW4=");
   });
 
-  // The whole point of the tag: without it, a clean file literally NAMED
-  // like some other file's token would collide with that file's key in the
-  // same string space. `YmFkLf8udHh0` is real base64 (the byte token of
-  // `bad-\xff.txt`) and also a syntactically valid file name.
+  // The whole point of the tag: without it, a clean file literally NAMED like some other file's token would collide with that file's key in the same string space.
+  // `YmFkLf8udHh0` is real base64 (the byte token of `bad-\xff.txt`) and also a syntactically valid file name.
   it("keeps a clean file named like a token distinct from the byte file that token belongs to", () => {
     const cleanFileNamedLikeAToken = viewFile({
       path: "YmFkLf8udHh0",
@@ -81,9 +79,7 @@ describe("prLocalDiffPreviousSideKey", () => {
     expect(prLocalDiffPreviousSideKey(file)).toBe("b:dG9rZW4=");
   });
 
-  // Each side is derived independently of the other - a byte destination can
-  // legitimately sit beside a clean source, and vice versa (the common
-  // rename-away-from-a-bad-name case).
+  // Each side is derived independently of the other - a byte destination can legitimately sit beside a clean source, and vice versa (the common rename-away-from-a-bad-name case).
   it("derives the source side independently of the destination side: byte destination, clean source", () => {
     const file = viewFile({
       path: "renamed-�.ts",

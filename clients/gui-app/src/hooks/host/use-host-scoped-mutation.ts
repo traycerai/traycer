@@ -33,29 +33,13 @@ interface UseHostScopedMutationArgs<
   readonly method: Method;
   readonly mutationKey: ReadonlyArray<unknown>;
   readonly errorMessage: string;
-  /**
-   * Method prefixes to invalidate on success. Each entry expands to
-   * `["host", hostId, method]`, dropping every cached query for that
-   * method regardless of params. Pass the full set of read methods this
-   * mutation affects; an empty list means "no automatic invalidation."
-   */
+  /** Each entry expands to `["host", hostId, method]`, dropping every cached query for that method regardless of params. Method prefixes to invalidate on success. */
   readonly invalidateMethods: ReadonlyArray<keyof HostRpcRegistry & string>;
   /**
-   * Success work that must land even if the caller unmounted mid-flight.
-   *
-   * TanStack skips the per-`mutate` callbacks once the observer has no
-   * listeners, while the mutation's own options still run from
-   * `Mutation.execute`. Anything whose omission would leave the HOST and the
-   * UI disagreeing - a resource the host created that nothing else will ever
-   * surface - belongs here, not in a `mutate(vars, { onSuccess })` at the call
-   * site.
+   * Success work that must run even if the observer unmounted. Per-`mutate` callbacks are skipped with no listeners; `Mutation.execute` options still run.
    */
   /**
-   * `hostId` is the one captured in `onMutate` - the host this request was
-   * SENT on, which is not necessarily the one the client addresses by the time
-   * it answers (a surface whose target host moved mid-flight re-points the
-   * client underneath). A caller that files the response against a host must
-   * use this one, per the host-swap rule in gui-app AGENTS.md.
+   * `hostId` captured in `onMutate` (the host the request was sent on). The client may have re-pointed since.
    */
   readonly onSuccess?:
     | ((
@@ -66,33 +50,16 @@ interface UseHostScopedMutationArgs<
       ) => void)
     | undefined;
   /**
-   * Per-request state to hand `onSuccess` alongside the host id. Runs inside
-   * `onMutate` - before the request is dispatched, once per `mutate()`, in
-   * the order the `mutate()`s were called - and its answer travels with THAT
-   * mutation to its own `onSuccess`. A caller that stashes per-press state in
-   * a ref and reads it back in `onSuccess` gets the LAST press's value
-   * instead: the mutation-level callback closes over the ref, not over the
-   * call, and nothing serializes two `mutate()`s on one observer.
-   *
-   * `onMutate` is not synchronous with `mutate()` (TanStack awaits the
-   * cache-level hook first), so a caller pairing state to a press must hand
-   * it over in press ORDER - a queue - not by reading "the current" value.
+   * Per-request state from `onMutate` travels with that `mutate()` to its `onSuccess`. A shared ref would return the last press; `onMutate` is not synchronous with `mutate()`.
    */
   readonly captureContext?:
     | ((variables: RequestOfMethod<HostRpcRegistry, Method>) => Captured)
     | undefined;
-  /**
-   * Codes the caller handles inline (a confirm dialog). The default toast is
-   * skipped so the user is not told to "stop the run" AND asked to confirm.
-   */
+  /** Codes the caller handles inline (a confirm dialog). */
   readonly silentCodes?: readonly HostRpcError["code"][];
 }
 
-/**
- * Standard host-mutation shape: capture `hostId` in `onMutate` to
- * survive a host swap mid-flight, invalidate the listed read methods
- * for that host on success, surface a host-error toast on failure.
- */
+/** Standard host-mutation shape: capture `hostId` in `onMutate` to survive a host swap mid-flight, invalidate the listed read methods for that host on success, surface a host-error toast on failure. */
 export function useHostScopedMutation<
   Method extends keyof HostRpcRegistry & string,
   Captured = undefined,

@@ -59,46 +59,23 @@ const handleCopyError = (): void => {
 interface AssistantBodyProps {
   segments: ReadonlyArray<MessageSegment>;
   backgroundToolBlockIds: ReadonlySet<string>;
-  /**
-   * Host-owned run state of this turn. Non-null only for the active turn;
-   * drives the in-progress indicator that persists for the whole turn (first
-   * message and every multi-turn send) and flips to "Stopping…" on stop.
-   */
+  /** Host-owned run state of this turn. Non-null only for the active turn; drives the in-progress indicator that persists for the whole turn (first message and every multi-turn send) and flips to "Stopping…" on stop. */
   runState: ChatMessageRunState | null;
-  /**
-   * Stable per-turn id (e.g. `assistant:<turnKey>`). Seeds the elapsed
-   * footer's verb so each turn gets its own verb even when sibling turns
-   * share `createdAt` (e.g. multiple turns following one user-send).
-   */
+  /** Stable per-turn id (e.g. `assistant:<turnKey>`). */
   messageId: string;
   /** Wall-clock turn start used only for elapsed-duration calculations. */
   elapsedStartedAt: number;
-  /** Whether the complete turn contains only autonomous-resume dividers. */
   turnHasOnlyAutonomousResumeSegments: boolean;
-  /** Whether this terminal row should render its elapsed completion footer. */
   showCompletionFooter: boolean;
   /** User-wait time already accumulated during this assistant turn. */
   pausedDurationMs: number;
   /** Start of an open user-wait interval for this turn, if any. */
   pausedSinceMs: number | null;
-  /**
-   * Wall-clock turn end; non-null once the turn finishes. Drives the elapsed
-   * footer.
-   */
+  /** Wall-clock turn end; non-null once the turn finishes. Drives the elapsed footer. */
   completedAt: number | null;
-  /**
-   * Present when this turn ended via a user Stop (direct or cascaded
-   * `agent.stop`), derived from the persisted `turn.stopped` chat event.
-   * Drives the "Stopped · Nm Xs" footer variant, the "Stopped before
-   * responding" empty-turn note, and the error-suppression override on
-   * `shouldShowElapsedFooter`.
-   */
+  /** Present when this turn ended via a user Stop (direct or cascaded `agent.stop`), derived from the persisted `turn.stopped` chat event. Drives the "Stopped · Nm Xs" footer variant, the "Stopped before responding" empty-turn note, and the error-suppression override on `shouldShowElapsedFooter`. */
   stopped: ChatMessageStoppedInfo | null;
-  /**
-   * Per-turn agent run metadata (provider, model, reasoning effort, fast mode)
-   * surfaced through the elapsed footer's info tooltip. `null` for turns that
-   * predate the persisted run-metadata fields.
-   */
+  /** Per-turn agent run metadata (provider, model, reasoning effort, fast mode) surfaced through the elapsed footer's info tooltip. `null` for turns that predate the persisted run-metadata fields. */
   meta: AssistantTurnMeta | null;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
@@ -131,12 +108,8 @@ export function AssistantMessageBody({
       }),
     [activityTimelineTurnState, backgroundToolBlockIds, segments],
   );
-  // A content-less boundary row's own segments never carry copyable text
-  // (the reply lives on an earlier row in the same turn, before the trailing
-  // steer bubble) - fall back to the turn-wide text `withTurnCompletion`
-  // aggregated onto `stopped` so the copy button still has something to
-  // copy. Every other row (including a stopped row that legitimately has its
-  // own content) keeps using its own segments, unchanged.
+  // A content-less boundary row's own segments never carry copyable text (the reply lives on an earlier row in the same turn, before the trailing steer bubble) - fall back to the turn-wide text `withTurnCompletion` aggregated onto `stopped` so the copy button still has something to copy.
+  // Every other row (including a stopped row that legitimately has its own content) keeps using its own segments, unchanged.
   const replyText = useMemo(
     () =>
       segments.length === 0 && stopped !== null && stopped.turnHadOutput
@@ -144,11 +117,8 @@ export function AssistantMessageBody({
         : collectAssistantReplyText(segments),
     [segments, stopped],
   );
-  // A completed turn whose only visible segment is the autonomous-resume
-  // divider genuinely woke the agent but produced no reply. Give that case
-  // explicit footer copy so it cannot be mistaken for the notification-only
-  // row that exists when the provider never resumed (that row suppresses its
-  // footer while retaining a terminal `completedAt`).
+  // A completed turn whose only visible segment is the autonomous-resume divider genuinely woke the agent but produced no reply.
+  // Give that case explicit footer copy so it cannot be mistaken for the notification-only row that exists when the provider never resumed (that row suppresses its footer while retaining a terminal `completedAt`).
   const silentAutonomousResume =
     stopped === null && turnHasOnlyAutonomousResumeSegments;
   const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
@@ -156,17 +126,7 @@ export function AssistantMessageBody({
     !stoppedBeforeResponding &&
     showCompletionFooter &&
     shouldShowElapsedFooter(runState, completedAt, segments, stopped);
-  // No content yet. While the turn is live (`runState` non-null) show the
-  // in-progress indicator for the pre-first-token gap. Once the turn has
-  // ended (`runState === null`), a genuinely empty stopped turn (no output
-  // anywhere) gets its own note - the transcript must always explain why
-  // there is no reply. A content-less STOPPED row whose turn DID produce
-  // output elsewhere (`stopped.turnHadOutput`) - the boundary marker
-  // synthesized after a trailing steer bubble - falls through to the normal
-  // render below instead: an empty `segments` there renders an empty
-  // timeline plus just the elapsed footer, which is exactly the "Stopped ·
-  // Nm Xs" the turn's true end needs. Any other ended, empty turn renders
-  // nothing, NEVER a "Working…" indicator that would stick.
+  // Any other ended, empty turn renders nothing, NEVER a "Working…" indicator that would stick.
   if (segments.length === 0) {
     if (runState !== null) {
       return (
@@ -223,12 +183,7 @@ export function AssistantMessageBody({
             nextStepActions={nextStepActions}
             forkAction={forkAction}
             interviewDeliveryRetry={interviewDeliveryRetry}
-            // The turn's OWN harness, for an error row that offers to open that
-            // provider's settings. Taken from the row rather than from ambient
-            // app state so the link points at the provider that actually failed,
-            // even when the transcript is scrolled back to a turn from a harness
-            // the chat has since switched away from. `null` on legacy turns with
-            // no metadata; the affordance then falls back to the section root.
+            // Taken from the row rather than from ambient app state so the link points at the provider that actually failed, even when the transcript is scrolled back to a turn from a harness the chat has since switched away from.
             harnessId={meta?.provider ?? null}
           />
         );
@@ -263,16 +218,7 @@ export function AssistantMessageBody({
   );
 }
 
-/**
- * The footer represents successful "worked for" framing. Suppress for live
- * turns (still working), turns with no completion timestamp, and turns whose
- * last block is an error (the host emits a terminal `error` block when the
- * turn fails - rendering "Cogitated for ..." in that case misrepresents an
- * error as a successful run). A user Stop overrides the error suppression: a
- * turn.stopped event means the turn ended because the user asked it to, not
- * because it failed, so hiding the footer would recreate the abrupt-end
- * confusion this indicator exists to fix.
- */
+/** A user Stop overrides the error suppression: a turn.stopped event means the turn ended because the user asked it to, not because it failed, so hiding the footer would recreate the abrupt-end confusion this indicator exists to fix. */
 function shouldShowElapsedFooter(
   runState: ChatMessageRunState | null,
   completedAt: number | null,
@@ -287,12 +233,7 @@ function shouldShowElapsedFooter(
   return true;
 }
 
-/**
- * Stop-button pictogram for a stopped turn - a faint destructive circle with
- * a smaller solid destructive rounded square centered inside, matching the
- * composer's stop button in miniature. A plain outline square at footer size
- * previously read as an empty checkbox.
- */
+/** Stop-button pictogram for a stopped turn - a faint destructive circle with a smaller solid destructive rounded square centered inside, matching the composer's stop button in miniature. A plain outline square at footer size previously read as an empty checkbox. */
 function StopBadge() {
   return (
     <span
@@ -319,11 +260,7 @@ function StoppedBeforeResponding() {
   );
 }
 
-/**
- * Leading glyph for the elapsed footer. A stopped turn always shows the
- * filled stop glyph, never the provider icon - natural footers keep the
- * provider mark (legacy turns with no metadata fall back to the spark).
- */
+/** Leading glyph for the elapsed footer. A stopped turn always shows the filled stop glyph, never the provider icon - natural footers keep the provider mark (legacy turns with no metadata fall back to the spark). */
 function AssistantElapsedFooterIcon({
   stopped,
   meta,
@@ -361,9 +298,7 @@ function AssistantElapsedFooter({
   silentAutonomousResume: boolean;
 }) {
   if (completedAt === null) return null;
-  // Wind-down time counts toward the elapsed duration - a Stop doesn't get a
-  // separate truncated-at-click timer, it uses the same
-  // `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
+  // Wind-down time counts toward the elapsed duration - a Stop doesn't get a separate truncated-at-click timer, it uses the same `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
   const nonStoppedElapsedLabel = silentAutonomousResume
@@ -382,9 +317,8 @@ function AssistantElapsedFooter({
       )}
     </>
   );
-  // Hovering the whole footer reveals the agent run details (provider, model,
-  // reasoning effort, fast mode) - no separate info icon, so the row stays
-  // clean. `w-fit` keeps the hover target tight to the text.
+  // Hovering the whole footer reveals the agent run details (provider, model, reasoning effort, fast mode) - no separate info icon, so the row stays clean.
+  // `w-fit` keeps the hover target tight to the text.
   const elapsed =
     meta === null && stopped === null ? (
       <div
@@ -402,10 +336,8 @@ function AssistantElapsedFooter({
         {elapsedContent}
       </button>
     );
-  // The meta tooltip wraps only the elapsed text, not the copy button, so the
-  // copy hit-target stays its own affordance rather than re-triggering the
-  // agent-details popover. Shown whenever there's either agent metadata or
-  // stop detail to surface.
+  // The meta tooltip wraps only the elapsed text, not the copy button, so the copy hit-target stays its own affordance rather than re-triggering the agent-details popover.
+  // Shown whenever there's either agent metadata or stop detail to surface.
   const elapsedWithTooltip =
     meta === null && stopped === null ? (
       elapsed
@@ -430,11 +362,7 @@ function AssistantElapsedFooter({
   );
 }
 
-/**
- * Always-visible muted copy button trailing the elapsed footer. Mirrors the
- * segment copy affordance but without the hover-reveal gate, so the finished
- * reply is one click away.
- */
+/** Always-visible muted copy button trailing the elapsed footer. Mirrors the segment copy affordance but without the hover-reveal gate, so the finished reply is one click away. */
 function AssistantReplyCopyButton({ text }: { text: string }) {
   const { copied, copy } = useClipboardCopy({
     resetMs: COPIED_RESET_MS,
@@ -498,14 +426,7 @@ function AssistantForkButton({
   );
 }
 
-/**
- * Hover content for the elapsed-footer info icon: provider, profile, model,
- * reasoning effort, and fast mode (only when enabled), plus - for a
- * user-stopped turn - the stop time and reason from the `turn.stopped` event.
- * Mirrors the context-usage chip's label/value row layout so the two tooltips
- * read consistently. Either section is optional; `AssistantElapsedFooter`
- * only renders this tooltip at all when at least one is present.
- */
+/** Hover content for the elapsed-footer info icon: provider, profile, model, reasoning effort, and fast mode (only when enabled), plus - for a user-stopped turn - the stop time and reason from the `turn.stopped` event. */
 function AssistantMetaTooltip({
   meta,
   stopped,
@@ -525,12 +446,7 @@ function AssistantMetaTooltip({
             Agent
           </div>
           <AssistantMetaRow label="Provider" value={meta.providerLabel} />
-          {/* Either field alone is enough to justify the row. Gating on
-              `profileLabel` alone silently dropped the credential disclosure
-              on exactly the turns that most need it: a turn whose session
-              anchor is missing or harness-mismatched has no label, and if an
-              env credential ALSO won there, the bypass notice vanished with
-              the row. */}
+          {/* Either field alone is enough to justify the row. Gating on `profileLabel` alone silently dropped the credential disclosure on exactly the turns that most need it: a turn whose session anchor is missing or harness-mismatched has no label, and if an env credential ALSO won there, the bypass notice vanished with the row. */}
           {meta.profileLabel === null &&
           meta.envCredentialVar === null ? null : (
             <AssistantMetaRow
@@ -575,12 +491,7 @@ function AssistantMetaTooltip({
   );
 }
 
-/**
- * Absolute clock time for the stop-detail tooltip row (e.g. "3:45 PM"). A
- * user Stop is a here-and-now action the user just took, so the exact time of
- * day is more useful than a relative/elapsed label - unlike `formatWorkedFor`,
- * which measures the turn's duration, not when it ended.
- */
+/** Absolute clock time for the stop-detail tooltip row (e.g. A user Stop is a here-and-now action the user just took, so the exact time of day is more useful than a relative/elapsed label - unlike `formatWorkedFor`, which measures the turn's duration, not when it ended. */
 function formatStoppedAt(timestampMs: number): string {
   return new Date(timestampMs).toLocaleTimeString(undefined, {
     hour: "numeric",
@@ -588,11 +499,7 @@ function formatStoppedAt(timestampMs: number): string {
   });
 }
 
-/**
- * Compact USD formatter for the cost row: sub-dollar turns show 4 decimals
- * ("$0.0123"); a positive amount too small to show at 4 decimals reads
- * "<$0.0001" rather than a misleading "$0.0000"; >= $1 shows 2 decimals.
- */
+/** Compact USD formatter for the cost row: sub-dollar turns show 4 decimals ("$0.0123"); a positive amount too small to show at 4 decimals reads "<$0.0001" rather than a misleading "$0.0000"; >= $1 shows 2 decimals. */
 function formatUsd(value: number): string {
   if (value >= 1) return `$${value.toFixed(2)}`;
   if (value < 0.0001) return "<$0.0001";
@@ -602,26 +509,7 @@ function formatUsd(value: number): string {
   return Number(rounded) >= 1 ? `$${value.toFixed(2)}` : `$${rounded}`;
 }
 
-/**
- * The Profile row's value, annotated when an environment variable - not the
- * named profile - is what actually authenticated the turn:
- * `Terminal account (bypassed — env: ANTHROPIC_API_KEY)`.
- *
- * The bare label alone answers "which account ran this?" WRONG in that case,
- * because a provider CLI prefers an env key/token over its own signed-in store.
- * Annotating in place rather than adding a separate row keeps the correction
- * attached to the claim it corrects - a reader who skims one line still gets the
- * true answer.
- *
- * Rendered ONLY for a positive `envCredentialVar`. Absence is a real claim (the
- * profile sign-in was used), so it needs no badge of its own - and a turn
- * persisted before the field existed reads as absent, so a "signed in normally"
- * marker here would be asserting something those rows never recorded.
- *
- * With no profile label (an anchor-less or harness-mismatched turn) the value
- * still has to carry the disclosure, so it states the credential directly
- * rather than prefixing an empty string and leaking a leading space.
- */
+/** The Profile row's value, annotated when an environment variable - not the named profile - is what actually authenticated the turn: `Terminal account (bypassed - env: ANTHROPIC_API_KEY)`. Absence is a real claim (the profile sign-in was used), so it needs no badge of its own - and a turn persisted before the field existed reads as absent, so a "signed in normally" marker here would be asserting something those rows never recorded. */
 function assistantProfileMetaValue(meta: AssistantTurnMeta): string {
   if (meta.envCredentialVar === null) return meta.profileLabel ?? "";
   if (meta.profileLabel === null) {
@@ -639,12 +527,7 @@ function AssistantMetaRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-/**
- * Past-tense verbs rotated per turn so the footer reads playfully rather than
- * mechanically (Claude Code CLI pattern). Seeded by `messageId` (stable per
- * turn AND distinct between sibling turns sharing one user-send) so the verb
- * never flips on re-render and never collides on adjacent rows.
- */
+/** Past-tense verbs rotated per turn so the footer reads playfully rather than mechanically (Claude Code CLI pattern). Seeded by `messageId` (stable per turn AND distinct between sibling turns sharing one user-send) so the verb never flips on re-render and never collides on adjacent rows. */
 const ELAPSED_VERBS = [
   "Cogitated",
   "Pondered",
@@ -678,21 +561,7 @@ function pickElapsedVerb(seed: string): string {
   return ELAPSED_VERBS[index] ?? ELAPSED_VERBS[0];
 }
 
-/**
- * Format an elapsed duration for the "Worked for Nm Xs" footer.
- *
- * Named distinctly from the dictation-bar's `formatElapsed` (M:SS stopwatch
- * format) so an unqualified import never picks the wrong formatter.
- *
- * - Non-finite / negative inputs (clock skew, replay anomalies) → "<1s",
- *   visually distinct from a sub-1s real-fast turn (which reads "<1s" too -
- *   acceptable since both convey "negligible duration" without the misleading
- *   "0s" rounding from `Math.round`).
- * - 1ms..999ms → "<1s".
- * - 1s..59s → "Ns".
- * - 1m..59m → "Nm Xs".
- * - 1h+    → "Nh Nm Xs".
- */
+/** Format an elapsed duration for the "Worked for Nm Xs" footer. Named distinctly from the dictation-bar's `formatElapsed` (M:SS stopwatch format) so an unqualified import never picks the wrong formatter. - Non-finite / negative inputs (clock skew, replay anomalies) → "<1s", visually distinct from a sub-1s real-fast turn (which reads "<1s" too - acceptable since both convey "negligible duration" without the misleading "0s" rounding from `Math.round`). - 1ms..999ms → "<1s". - 1s..59s → "Ns". - 1m..59m → "Nm Xs". - 1h+ → "Nh Nm Xs". */
 function formatWorkedFor(ms: number): string {
   if (!Number.isFinite(ms) || ms < 1000) return "<1s";
   return formatClockDuration(Math.floor(ms / 1000));
@@ -713,11 +582,7 @@ function AssistantRunIndicator({
   messageId: string;
   meta: AssistantTurnMeta | null;
 }) {
-  // Resolved once per turn by the chat tile (seeded on the chat + turn ordinal,
-  // not the row id) so the word stays fixed for the whole turn even as the
-  // pre-turn placeholder swaps to the real turn id. Freeze on "Stopping" the
-  // moment a stop is requested. Falls back to a `messageId` seed outside a chat
-  // (isolated component tests).
+  // Resolved once per turn by the chat tile (seeded on the chat + turn ordinal, not the row id) so the word stays fixed for the whole turn even as the pre-turn placeholder swaps to the real turn id.
   const runVerb = use(WorkingVerbContext);
   const verb =
     runState === "stopping"
@@ -729,9 +594,7 @@ function AssistantRunIndicator({
       data-run-state={runState}
       className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-muted-foreground"
     >
-      {/* Leading icon names the running provider; the 3-dot loader trails the
-          shimmering verb at the text baseline (like "Pondering…") to carry the
-          "in progress" cue. */}
+      {/* Leading icon names the running provider; the 3-dot loader trails the shimmering verb at the text baseline (like "Pondering…") to carry the "in progress" cue. */}
       {meta === null ? null : (
         <HarnessIcon harnessId={meta.provider} className="size-3.5" />
       )}
@@ -823,8 +686,7 @@ function ApprovalSegmentCard({
   );
 }
 
-// Renders one of many assistant segment kinds; the branch count is the segment
-// taxonomy (one arm per kind), not reducible nesting.
+// Branch count is the segment taxonomy, one arm per kind.
 // eslint-disable-next-line complexity
 function AssistantSegment({
   id,
@@ -848,10 +710,8 @@ function AssistantSegment({
         />
       );
     case "reasoning":
-      // Unreachable from the timeline - `isActivitySegment` admits reasoning
-      // unconditionally, so every reasoning block reaches the renderer through
-      // an activity group. Kept so the switch stays exhaustive over the segment
-      // taxonomy, and for direct renders in tests.
+      // Unreachable from the timeline - `isActivitySegment` admits reasoning unconditionally, so every reasoning block reaches the renderer through an activity group.
+      // Kept so the switch stays exhaustive over the segment taxonomy, and for direct renders in tests.
       return (
         <ReasoningSegment
           findUnitId={findUnitId}
@@ -910,9 +770,7 @@ function AssistantSegment({
         />
       );
     case "command": {
-      // Same treatment as a promoted tool call: while the host still lists the
-      // command as running background work, the card keeps reading "running"
-      // even though the turn that spawned it already finalized its blocks.
+      // Same treatment as a promoted tool call: while the host still lists the command as running background work, the card keeps reading "running" even though the turn that spawned it already finalized its blocks.
       const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
         <CommandSegment
@@ -1020,9 +878,8 @@ function AssistantSegment({
         />
       );
     case "setup-card":
-      // The setup card only ever rides a synthesized `role: "system"` row,
-      // never an assistant turn's segments; it's rendered by `ChatMessage`'s
-      // top-level branch. Listed here so the exhaustive switch stays complete.
+      // The setup card only ever rides a synthesized `role: "system"` row, never an assistant turn's segments; it's rendered by `ChatMessage`'s top-level branch.
+      // Listed here so the exhaustive switch stays complete.
       return null;
     case "forked-chat-link":
       // Fork provenance only ever rides a synthesized `role: "system"` row,

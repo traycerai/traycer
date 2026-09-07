@@ -20,10 +20,7 @@ export interface TerminalQuoteSelection {
 }
 
 /**
- * The slice of xterm's `Terminal` this hook reads, satisfied structurally by
- * the real engine. Narrow on purpose: it says exactly what watching a
- * selection needs, and it is what lets the state machine be exercised without
- * standing up a canvas-backed terminal.
+ * Narrow on purpose: it says exactly what watching a selection needs, and it is what lets the state machine be exercised without standing up a canvas-backed terminal.
  */
 export interface TerminalSelectionSource {
   readonly element: HTMLElement | undefined;
@@ -45,31 +42,14 @@ interface UseTerminalQuoteSelectionArgs {
   /** The `position: relative` pane box the control is positioned within. */
   readonly paneRef: RefObject<HTMLElement | null>;
   /**
-   * True while the control's own menu is open. Dismissal is suspended for as
-   * long as it is: picking a target from the menu must not retract the control
-   * that opened it.
+   * Dismissal is suspended for as long as it is: picking a target from the menu must not retract the control that opened it.
    */
   readonly menuOpen: boolean;
 }
 
 /**
- * Publishes the terminal selection the quote control acts on.
- *
- * Two signals, doing different jobs. `onSelectionChange` fires continuously
- * while dragging, so it is used only to RETRACT (an empty selection means the
- * control has nothing to act on). `mouseup` is what PUBLISHES, so the control
- * appears once the user has finished choosing rather than flickering along
- * behind the cursor.
- *
- * That `mouseup` is watched on the DOCUMENT, for the length of a drag that
- * began in the pane. Selecting to the end of the output means dragging past
- * the pane's edge, and xterm follows the pointer out and finishes the drag
- * wherever it is released - so a pane-local listener misses exactly the
- * selections a user most wants to quote.
- *
- * Nothing here resizes or refits the terminal. That is load-bearing: a reflow
- * makes xterm drop its selection, which would retract the control the moment it
- * appeared. The control floats over the output for exactly this reason.
+ * `onSelectionChange` fires continuously while dragging, so it is used only to RETRACT (an empty selection means the control has nothing to act on).
+ * `mouseup` is what PUBLISHES, so the control appears once the user has finished choosing rather than flickering along behind the cursor.
  */
 export function useTerminalQuoteSelection(
   args: UseTerminalQuoteSelectionArgs,
@@ -81,9 +61,7 @@ export function useTerminalQuoteSelection(
   const [selection, setSelection] = useState<TerminalQuoteSelection | null>(
     null,
   );
-  // Read from inside long-lived xterm event handlers, which must not be torn
-  // down and re-bound every time the menu opens. Written in an effect so the
-  // lint rule forbidding ref writes during render is satisfied.
+  // Read from inside long-lived xterm event handlers, which must not be torn down and re-bound every time the menu opens.
   const menuOpenRef = useRef(menuOpen);
   useEffect(() => {
     menuOpenRef.current = menuOpen;
@@ -145,10 +123,7 @@ export function useTerminalQuoteSelection(
       setSelection((current) => (current === null ? null : next));
     });
 
-    // Only a drag that STARTED in this pane publishes: `readSelection` already
-    // returns null for a selection this terminal does not own, but binding on
-    // mousedown keeps the document listener off entirely except while this
-    // pane's drag is in flight.
+    // Only a drag that STARTED in this pane publishes: `readSelection` already returns null for a selection this terminal does not own, but binding on mousedown keeps the document listener off entirely except while this pane's drag is in flight.
     const handleMouseUp = (): void => {
       document.removeEventListener("mouseup", handleMouseUp);
       publish();
@@ -166,11 +141,8 @@ export function useTerminalQuoteSelection(
     };
   }, [term, paneRef]);
 
-  // Escape dismisses the control without touching the terminal's selection, so
-  // the user can hide the affordance and keep what they highlighted. Exempt
-  // while the menu is open, for the same reason the click-away handler is:
-  // Escape closes the menu (Radix handles that), and the control it was opened
-  // from must survive to be used again.
+  // Escape dismisses the control without touching the terminal's selection, so the user can hide the affordance and keep what they highlighted.
+  // Exempt while the menu is open, for the same reason the click-away handler is: Escape closes the menu (Radix handles that), and the control it was opened from must survive to be used again.
   useEffect(() => {
     if (selection === null) return;
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -178,19 +150,13 @@ export function useTerminalQuoteSelection(
       if (menuOpenRef.current) return;
       setSelection(null);
     };
-    // Capture phase: focus usually sits inside the xterm right after a
-    // selection, and xterm's own key handling can swallow the event before it
-    // bubbles back to the document.
+    // Capture phase: focus usually sits inside the xterm right after a selection, and xterm's own key handling can swallow the event before it bubbles back to the document.
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [selection]);
 
-  // Clicking away dismisses. A click INSIDE the terminal already clears xterm's
-  // own selection and is handled above; this covers clicks that land elsewhere
-  // entirely - another pane, the sidebar - where the selection survives but the
-  // affordance no longer belongs on screen. The control's own surface is
-  // exempt, as is everything while its menu is open: that menu portals to the
-  // body, so its items are outside both elements.
+  // Clicking away dismisses.
+  // A click INSIDE the terminal already clears xterm's own selection and is handled above; this covers clicks that land elsewhere entirely - another pane, the sidebar - where the selection survives but the affordance no longer belongs on screen.
   useEffect(() => {
     if (selection === null) return;
     const handleMouseDown = (event: MouseEvent): void => {

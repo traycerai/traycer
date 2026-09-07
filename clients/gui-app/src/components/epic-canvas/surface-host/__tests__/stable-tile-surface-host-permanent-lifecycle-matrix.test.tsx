@@ -89,19 +89,7 @@ import { resetPendingHydrationRestoreForTesting } from "@/stores/chats/chat-tab-
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 /**
- * Ticket 21 slice 5 (jsdom half): the PERMANENT lifecycle-matrix gate for the
- * REAL `ChatTile -> ChatMessages -> LegendList` chain, routed through the
- * REAL production wiring (`TileCanvas` + a real `StableTileSurfaceHost`
- * sibling using the REAL `renderHostedChatSurfaceBody` renderer), with the
- * stable-tile-surface-host switch ON.
- *
- * This is deliberately the real-body companion to the composite lifecycle
- * test in `stable-tile-surface-host.test.tsx`, which drives the same kind of
- * structural operations but against a SYNTHETIC body and a standalone
- * `<StableTileSurfaceHost>` (no `TabGroupView`/`TileCanvas`, no switch-ON
- * routing, no real chat content). Extend THIS file, not that one, when a new
- * structural canvas operation needs lifecycle coverage against real chat
- * content.
+ * Ticket 21 slice 5 (jsdom half): the PERMANENT lifecycle-matrix gate for the REAL `ChatTile -> ChatMessages -> LegendList` chain, routed through the REAL production wiring (`TileCanvas` + a real `StableTileSurfaceHost` sibling using the REAL `renderHostedChatSurfaceBody` renderer), with the stable-tile-surface-host switch ON.
  */
 
 vi.mock(
@@ -224,16 +212,13 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-// The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// The Epic session resolves its host through the selection authority's derived pointer (selection model §1), not the active-host projection above - seed the decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
 
-// This matrix uses a live Y.Doc as the local projection. The deletion row
-// additionally needs an answered cloud plane so doc absence is authoritative
-// under the same two-plane gate production uses.
+// This matrix uses a live Y.Doc as the local projection.
+// The deletion row additionally needs an answered cloud plane so doc absence is authoritative under the same two-plane gate production uses.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -250,10 +235,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 }));
 
 /**
- * Instrumentation-only wrapper around the REAL `ChatTile` (`importOriginal`,
- * following the `ChatMessage` render-probe precedent in
- * `chat-timeline.test.tsx`): gives a real numeric mount/unmount counter per
- * `instanceId` without mocking away any real rendering.
+ * Instrumentation-only wrapper around the REAL `ChatTile` (`importOriginal`, following the `ChatMessage` render-probe precedent in `chat-timeline.test.tsx`): gives a real numeric mount/unmount counter per `instanceId` without mocking away any real rendering.
  */
 const chatTileLifecycle = vi.hoisted(() => ({
   mounts: new Map<string, number>(),
@@ -368,15 +350,7 @@ function seedDocWithChats(doc: Y.Doc): void {
  * Mutation-check / row 13 helper: remote-delete a chat by removing its entry
  * from the chats map of the live epic Y.Doc.
  */
-/**
- * Edit the root replica through the root-state PORT.
- *
- * A registry handle is a production handle and has no `Y.Doc` - the replica is
- * on the worker thread. So: decode the current state, mutate the decoded copy,
- * and send back only the DIFF as a local edit. The diff is what keeps the edit
- * on the replica's own lineage; applying a freshly-built document instead
- * would merge a second, independently-created `chats` map beside the real one.
- */
+/** So: decode the current state, mutate the decoded copy, and send back only the DIFF as a local edit. */
 async function editLiveRootDoc(mutate: (root: Y.Doc) => void): Promise<void> {
   const handle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
   if (handle === null) throw new Error("expected a live epic session handle");
@@ -538,11 +512,6 @@ function emitChatSnapshot(
 }
 
 interface ChatStreamFactoryHandle {
-  /**
-   * Re-emit a chat.subscribe snapshot with a new messages array. Updates the
-   * seed used on later remounts as well, so growth while a same-pane tab is
-   * unmounted still appears when that tab is selected again.
-   */
   readonly pushMessages: (
     chatId: string,
     messages: ReadonlyArray<Message>,
@@ -656,30 +625,21 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   resetFocusedComposerControlsForTests();
   resetSurfaceHostModules();
-  // Visibility-boundary / bottom-follow rows seed free-scrolling or
-  // following-end coordinates into BOTH halves of the dual-key cache for
-  // this epic's chat tiles. Clear durable (epic) AND tab-key (instance)
-  // entries so later rows never inherit a leftover restore.
+  // Visibility-boundary / bottom-follow rows seed free-scrolling or following-end coordinates into BOTH halves of the dual-key cache for this epic's chat tiles.
+  // Clear durable (epic) AND tab-key (instance) entries so later rows never inherit a leftover restore.
   evictChatTabPersistenceForEpic(EPIC_ID);
   evictChatTabState(
     ALL_CHATS.map((chat) =>
       chatTabPersistenceTabKey({ tileInstanceId: chat.instanceId }),
     ),
   );
-  // Review P2: the pending-hydration registry is module-scope and private to
-  // chat-messages.tsx, so it survives an ordinary cache eviction. Rows 16
-  // onward reuse the fixed CHAT_TRACKED/CHAT_SIBLING instance ids - without
-  // this, a missing-anchor mount in one row can leave a pending entry a
-  // later row's mount still reads, even though its own visible cache was
-  // cleared above.
+  // Rows 16 onward reuse the fixed CHAT_TRACKED/CHAT_SIBLING instance ids - without this, a missing-anchor mount in one row can leave a pending entry a later row's mount still reads, even though its own visible cache was cleared above.
   resetPendingHydrationRestoreForTesting();
   setLegendListScrollContainerScrollHeightOverride(null);
   vi.restoreAllMocks();
 });
 
-// ---------------------------------------------------------------------------
-// Canvas / tab-strip seeding
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Canvas / tab-strip seeding ---------------------------------------------------------------------------
 
 function seedCanvas(
   root: TileLayoutNode,
@@ -727,18 +687,8 @@ function currentCanvas(): EpicCanvasState {
   return canvas;
 }
 
-// ---------------------------------------------------------------------------
-// Render tree - the REAL production wiring
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Render tree - the REAL production wiring ---------------------------------------------------------------------------
 
-/**
- * A pane goes empty (and mounts the real PaneOpener, which needs a
- * CommandPaletteRouterContext) whenever a structural op vacates a pane -
- * the flat/wrap split rows and the tear-off row all do this. Navigation
- * itself is irrelevant to tile-identity assertions, so this is a no-op
- * stub matching the precedent in search-run-view.test.tsx (same
- * epic-canvas/canvas/__tests__ directory), not a defeated real dependency.
- */
 function noopKeybindingRouter(): KeybindingRouter {
   return {
     getPathname: () => "/",
@@ -802,10 +752,7 @@ function renderMatrix(options: { readonly strictMode: boolean } | undefined) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// DOM accessors, scoped to a hosted record so a query can never
-// accidentally cross into an unrelated instance subtree.
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- DOM accessors, scoped to a hosted record so a query can never accidentally cross into an unrelated instance subtree. ---------------------------------------------------------------------------
 
 function hostedRecord(container: HTMLElement, instanceId: string): HTMLElement {
   const element = container.querySelector(
@@ -863,13 +810,7 @@ function firstMessageRow(
 }
 
 /**
- * Waits for the REAL `ChatTile -> ChatMessages -> LegendList` chain to
- * finish loading for `instanceId`: the loading marker is gone, the real
- * `chat-tile` wrapper has replaced it, and at least one real message row is
- * in the DOM. Only AFTER this resolves is a captured DOM node reference
- * meaningful (`chat-tile` also labels the pre-handle loading wrapper, a
- * different element, so capturing before this settles would pin the wrong
- * node identity).
+ * Only AFTER this resolves is a captured DOM node reference meaningful (`chat-tile` also labels the pre-handle loading wrapper, a different element, so capturing before this settles would pin the wrong node identity).
  */
 async function waitForHostedChatLoaded(
   container: HTMLElement,
@@ -911,9 +852,7 @@ function expectRefsStable(
   expect(firstMessageRow(container, instanceId)).toBe(before.firstRow);
 }
 
-// ---------------------------------------------------------------------------
-// Scroll / same-pane switch helpers (internal-tab-bottom-follow coverage)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Scroll / same-pane switch helpers (internal-tab-bottom-follow coverage) ---------------------------------------------------------------------------
 
 const PILL_SHOW_DEBOUNCE_MS = 150;
 
@@ -956,16 +895,7 @@ async function waitForPillVisible(
 }
 
 /**
- * Real gesture to strict bottom: leave the end first (so this is not just the
- * fresh-mount bootstrap default), then land at max scrollTop.
- *
- * The wheel is load-bearing, not decoration. Since #1042 the follow latch
- * treats only PUBLISHING READER INPUT as a departure and leaves layout-owned
- * scroll reports (MVCP, deferred measurement, inset compensation) corrective —
- * so a bare `scrollTop =` assignment no longer leaves the end, and this helper
- * was asserting a departure it never actually performed. `noteReaderGesture`
- * is armed from the wheel/touch listeners, which is what a real reader
- * produces; the same `fireEvent.wheel` idiom is used by the pill tests below.
+ * Since #1042 the follow latch treats only PUBLISHING READER INPUT as a departure and leaves layout-owned scroll reports (MVCP, deferred measurement, inset compensation) corrective - so a bare `scrollTop =` assignment no longer leaves the end, and this helper was asserting a departure it never actually performed.
  */
 async function gestureToTrueBottom(scrollNode: HTMLElement): Promise<void> {
   fireEvent.wheel(scrollNode, { deltaY: -80 });
@@ -981,12 +911,7 @@ async function gestureToTrueBottom(scrollNode: HTMLElement): Promise<void> {
   expect(scrollNode.dataset.scrollMode).toBe("following-end");
 }
 
-/**
- * Seed the mount-time clamped free-scrolling restore race (row 16): a saved
- * free-scrolling anchor that is missing from `messages` arms convergence
- * that used to trap `restorePersistencePendingRef` when the reader reached
- * true bottom mid-flight. Call BEFORE first mount of that instance.
- */
+/** Call BEFORE first mount of that instance. */
 function seedMissingFreeScrollingAnchor(
   chat: EpicCanvasTileRef,
   anchorIndex: number,
@@ -1005,11 +930,6 @@ function seedMissingFreeScrollingAnchor(
   });
 }
 
-/**
- * Race the mount-time free-restore: keep forcing true bottom across frames
- * until mode flips to following-end, then settle. Pair with
- * `seedMissingFreeScrollingAnchor` + a mount that has NOT yet settled.
- */
 async function raceTrueBottomPastInFlightFreeRestore(
   scrollNode: HTMLElement,
 ): Promise<void> {
@@ -1088,9 +1008,7 @@ function seedSamePaneLongPair(
   return stream;
 }
 
-// ---------------------------------------------------------------------------
-// Rows
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Rows ---------------------------------------------------------------------------
 
 describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinator, real ChatTile/ChatMessages/LegendList body)", () => {
   it("row 1 - background-tab add: an inert background tab never mounts, tracked active chat is untouched", async () => {
@@ -1110,9 +1028,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
     expectRefsStable(container, CHAT_TRACKED.instanceId, before);
-    // A background-only tab never becomes the active tab of its pane, so it
-    // is never mounted at all (no keep-alive for chat tabs, see
-    // `remountsOnTabSwitch` in `use-mounted-pane-tabs.ts`).
+    // A background-only tab never becomes the active tab of its pane, so it is never mounted at all (no keep-alive for chat tabs, see `remountsOnTabSwitch` in `use-mounted-pane-tabs.ts`).
     expect(queryHostedRecord(container, CHAT_SIBLING.instanceId)).toBeNull();
     expect(mountCount(CHAT_SIBLING.instanceId)).toBe(0);
   });
@@ -1143,14 +1059,6 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 3 - cross-pane move: tracked chat AND an unrelated bystander pane both survive without remounting", async () => {
-    // Three panes, not two: p2 hosts an unrelated bystander chat that is
-    // NEITHER the move source NOR the move target, so this row is a clean
-    // test of cross-pane geometry-move stability in isolation. (A two-pane
-    // version where the target pane already has an active tab conflates
-    // this with decision #17's real, INTENDED remount-on-deactivation
-    // policy - see row 11's negative control - because dropping a tab onto
-    // a pane makes the dropped tab that pane's new active tab, which
-    // legitimately unmounts whatever was active there before.)
     seedCanvas(
       group("root-g", "horizontal", [
         pane("p1", [CHAT_TRACKED.instanceId]),
@@ -1183,10 +1091,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expectRefsStable(container, CHAT_TRACKED.instanceId, trackedBefore);
     expectRefsStable(container, CHAT_SIBLING.instanceId, siblingBefore);
 
-    // Thin-wrapper allowance: the pane-id attribute owned by the hosted
-    // record is allowed (expected) to update, that is the geometry/env
-    // republish this whole ticket exists to make cheap. Only the CONTENT
-    // identity above is pinned to zero remounts.
+    // Only the CONTENT identity above is pinned to zero remounts.
     expect(
       hostedRecord(container, CHAT_TRACKED.instanceId).getAttribute(
         HOSTED_TILE_PANE_ID_ATTRIBUTE,
@@ -1195,11 +1100,6 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 3b - two-pane occupied-target move: the dragged chat survives, the displaced destination chat is retained rather than remounted, and the emptied source pane dissolves", async () => {
-    // Review finding 2: row 3 only drives an empty-target move; row 11 only
-    // drives `setActiveTileTab` (a plain in-pane switch), never
-    // `moveTabOnTabStrip` across two panes. Neither composes the real drop's
-    // three simultaneous consequences a genuine drag-onto-an-occupied-pane
-    // produces. This row does.
     seedCanvas(
       group("root-g", "horizontal", [
         pane("pA", [CHAT_TRACKED.instanceId]),
@@ -1215,10 +1115,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(mountCount(CHAT_SIBLING.instanceId)).toBe(1);
     expect(unmountCount(CHAT_SIBLING.instanceId)).toBe(0);
 
-    // Drag TRACKED (pA's only tab) onto pB, which already has SIBLING
-    // active. `moveTabAcrossPanes` both makes TRACKED the new active tab of
-    // pB (displacing SIBLING) and, since pA is now empty, closes pA -
-    // dissolving the 2-child root group down to pB alone.
+    // Drag TRACKED (pA's only tab) onto pB, which already has SIBLING active.
     act(() => {
       useEpicCanvasStore.getState().moveTabOnTabStrip(VIEW_TAB_ID, {
         sourcePaneId: "pA",
@@ -1233,19 +1130,13 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
     expectRefsStable(container, CHAT_TRACKED.instanceId, draggedBefore);
 
-    // (b) The displaced destination chat: still pB's most recently active
-    // chat after TRACKED, so pane retention keeps it. It loses the pane's
-    // foreground, not its body - a drop onto an occupied pane no longer costs
-    // the chat it displaces a remount.
     expect(
       queryHostedRecord(container, CHAT_SIBLING.instanceId),
     ).not.toBeNull();
     expect(mountCount(CHAT_SIBLING.instanceId)).toBe(1);
     expect(unmountCount(CHAT_SIBLING.instanceId)).toBe(0);
 
-    // (c) Source-pane dissolve: pA had only TRACKED, so the move empties
-    // and closes it, collapsing the 2-child root group down to pB as the
-    // bare root pane.
+    // (c) Source-pane dissolve: pA had only TRACKED, so the move empties and closes it, collapsing the 2-child root group down to pB as the bare root pane.
     const after = currentCanvas();
     if (after.root === null || after.root.kind !== "pane") {
       throw new Error(
@@ -1306,23 +1197,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
     await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
     const trackedBefore = captureRefs(container, CHAT_TRACKED.instanceId);
-    // The chat the flat split actually MOVES - this is the row's real
-    // subject. Review finding 1: an earlier version of this row loaded and
-    // asserted only the untouched bystander (tracked), so it never proved
-    // content continuity through the same-axis insertion it claims to
-    // cover - a `Suspense` boundary keyed by `environment.placement.paneId`
-    // could silently remount the moved chat's body and this row would still
-    // pass. Capturing and re-asserting the SIBLING's own refs below is what
-    // catches that.
     const siblingBefore = captureRefs(container, CHAT_SIBLING.instanceId);
 
-    // The parent group of p2 (root-g) is already horizontal and "right" is
-    // also horizontal, so per `insertPaneAtEdge` this is the FLAT branch:
-    // the new pane splices into root-g as a third sibling; the identity of
-    // root-g and the rest of the tree (in particular p1, tracked) stay
-    // untouched. Verified by the tree-shape assertions below; this row
-    // currently has zero existing DOM-level real-action coverage anywhere
-    // else in the suite.
     act(() => {
       useEpicCanvasStore.getState().splitPaneWithTab(VIEW_TAB_ID, {
         sourcePaneId: "p2",
@@ -1457,10 +1333,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const trackedBefore = captureRefs(container, CHAT_TRACKED.instanceId);
     const siblingBefore = captureRefs(container, CHAT_SIBLING.instanceId);
 
-    // This is literally the `onResizeGroup` callback body of `TileCanvas`,
-    // a divider-drag commit, called directly on the store the same way
-    // production calls it. Zero existing coverage of this action through
-    // the real store prior to this row.
+    // Zero existing coverage of this action through the real store prior to this row.
     act(() => {
       useEpicCanvasStore
         .getState()
@@ -1501,10 +1374,6 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     );
     if (handle === null) throw new Error("expected the split resize handle");
 
-    // Row 1's live-pass fix: move/up are delivered via window listeners once
-    // a drag starts, so they no longer need to target the handle itself.
-    // Dispatching them on a stand-in element proves the REAL production
-    // wiring (not just the isolated hook) tolerates that.
     const decoy = document.createElement("div");
     document.body.appendChild(decoy);
     fireEvent(
@@ -1565,11 +1434,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
       });
     });
 
-    // The tile moved to a BRAND NEW top-level view tab (a completely
-    // different `EpicCanvasStore` root than the one `<TileCanvas>` above is
-    // bound to). The hosted body survives this only because its content
-    // lives in the plane owned by `StableTileSurfaceHost`, decoupled from
-    // which `TileCanvas` is currently showing it.
+    // The hosted body survives this only because its content lives in the plane owned by `StableTileSurfaceHost`, decoupled from which `TileCanvas` is currently showing it.
     expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
     expectRefsStable(container, CHAT_TRACKED.instanceId, before);
@@ -1596,13 +1461,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 11b - the retained record is genuinely unpainted, through the REAL store -> slot -> publish path", async () => {
-    // Cold review F3: the presentation guard's only other coverage builds
-    // `canvasActivity: { tabSelected: false }` by hand, so a regression in
-    // `ActiveTabBody`'s `tabSelected={props.selected}` wiring - the thing that
-    // actually produces that field in production - would ship green. This row
-    // never names `tabSelected`: it drives a real store activation and reads
-    // the rendered record, so it fails if EITHER the guard or the wiring that
-    // feeds it breaks.
+    // Cold review F3: the presentation guard's only other coverage builds `canvasActivity: { tabSelected: false }` by hand, so a regression in `ActiveTabBody`'s `tabSelected={props.selected}` wiring - the thing that actually produces that field in production - would ship green.
+    // This row never names `tabSelected`: it drives a real store activation and reads the rendered record, so it fails if EITHER the guard or the wiring that feeds it breaks.
     seedCanvas(
       pane("p1", [CHAT_TRACKED.instanceId, CHAT_SIBLING.instanceId]),
       [CHAT_TRACKED, CHAT_SIBLING],
@@ -1661,9 +1521,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
 
-    // Away and back inside the pane: retained the whole time. This is the
-    // transition that used to remount, and with it the transcript's visible
-    // re-convergence on the way back.
+    // Away and back inside the pane: retained the whole time.
+    // This is the transition that used to remount, and with it the transcript's visible re-convergence on the way back.
     activate(CHAT_SIBLING.instanceId);
     expect(
       queryHostedRecord(container, CHAT_TRACKED.instanceId),
@@ -1685,9 +1544,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     activate(CHAT_TRACKED.instanceId);
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
 
-    // Exactly one fresh mount, one prior unmount: proves the mount-count
-    // assertions in this matrix are meaningful (they would correctly flag a
-    // real remount) rather than vacuously always passing.
+    // Exactly one fresh mount, one prior unmount: proves the mount-count assertions in this matrix are meaningful (they would correctly flag a real remount) rather than vacuously always passing.
     expect(mountCount(CHAT_TRACKED.instanceId)).toBe(2);
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(1);
   });
@@ -1704,16 +1561,6 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const { container } = renderMatrix({ strictMode: true });
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
 
-    // StrictMode (dev-only) double-invokes the passive effects of the
-    // initial mount (mount -> cleanup -> mount), so this counting wrapper
-    // does not necessarily start its baseline at 1/0 after initial settle;
-    // see the StrictMode test in `stable-tile-surface-host.test.tsx` for
-    // the same codebase precedent of not asserting a literal
-    // post-StrictMode count. The real invariant under test is that the
-    // STRUCTURAL OPERATIONS below add no ADDITIONAL mount/unmount beyond
-    // whatever the one-time double-invoke performed by StrictMode itself
-    // already produced, captured here as a baseline and then reasserted
-    // unchanged after each op.
     const mountBaseline = mountCount(CHAT_TRACKED.instanceId);
     const unmountBaseline = unmountCount(CHAT_TRACKED.instanceId);
     const before = captureRefs(container, CHAT_TRACKED.instanceId);
@@ -1790,25 +1637,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 14 - production visibility boundary: topLevelVisible handoff through real hosted chain restores free-reading position", async () => {
-    // Fixup requirement 3 / review P2: every existing visibility-handoff
-    // case in `chat-messages.test.tsx` drives `ChatMessages.visible` via a
-    // direct prop re-render, so a broken
-    // `environment.presentation.topLevelVisible` bridge would still pass.
-    // This row is the only gate that flips visibility through the REAL
-    // production chain:
-    //   publishTileSurfaceEnvironment(presentation.topLevelVisible)
-    //   -> StableTileSurfaceHost record (subscribes via environment registry)
-    //   -> HostedChatSurfaceContextBridge (re-provides PaneVisibilityContext)
-    //   -> ChatTile (usePaneVisible() && useTabBodySelected() -> surfaceVisible)
-    //   -> ChatMessages visible prop
-    //
-    // jsdom cannot reproduce the real geometry-coordinator 0x0 loss:
-    // `installLegendListViewportMetrics` reads every dimension from element
-    // ROLE (not CSS/inline style), and the global ResizeObserver mock never
-    // fires. Keep the same terminal-symptom injection the unit handoff tests
-    // use (`scrollTop = 0` on the scroll node) for the browser-zeroing
-    // symptom; the NEW coverage here is that the production
-    // `topLevelVisible` publish is what drives `visible` false/true.
+    // Fixup requirement 3 / review P2: every existing visibility-handoff case in `chat-messages.test.tsx` drives `ChatMessages.visible` via a direct prop re-render, so a broken `environment.presentation.topLevelVisible` bridge would still pass.
+    // This row is the only gate that flips visibility through the REAL production chain: publishTileSurfaceEnvironment(presentation.topLevelVisible) -> StableTileSurfaceHost record (subscribes via environment registry) -> HostedChatSurfaceContextBridge (re-provides PaneVisibilityContext) -> ChatTile (usePaneVisible() && useTabBodySelected() -> surfaceVisible) -> ChatMessages visible prop jsdom cannot reproduce the real geometry-coordinator 0x0 loss: `installLegendListViewportMetrics` reads every dimension from element ROLE (not CSS/inline style), and the global ResizeObserver mock never fires.
     const messageCount = 80;
     const anchorIndex = 20;
     const savedViewOffset = 24;
@@ -1827,9 +1657,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     seedCanvas(pane("p1", [CHAT_TRACKED.instanceId]), [CHAT_TRACKED], "p1");
     const { container } = renderMatrix(undefined);
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
-    // Second settle covers restore-promise + double-rAF quiet window so the
-    // free-scroll landing has fully validated (and the last-visible mirror
-    // is populated) before we hide.
+    // Second settle covers restore-promise + double-rAF quiet window so the free-scroll landing has fully validated (and the last-visible mirror is populated) before we hide.
     await settleLegendList();
 
     const scrollNode = messagesScroll(container, CHAT_TRACKED.instanceId);
@@ -1856,9 +1684,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     }
     expect(readyEnvironment.presentation.topLevelVisible).toBe(true);
 
-    // Terminal symptom only: real browser zeroes scrollTop when the hosted
-    // record becomes 0x0; jsdom cannot drive that via the geometry
-    // coordinator (see block comment above).
+    // Terminal symptom only: real browser zeroes scrollTop when the hosted record becomes 0x0; jsdom cannot drive that via the geometry coordinator (see block comment above).
     act(() => {
       scrollNode.scrollTop = 0;
     });
@@ -1922,10 +1748,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
 
     const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
-    // The shared helper, not a second copy of it. This block was a verbatim
-    // inline duplicate that drifted: when the helper gained the wheel that
-    // makes the departure real (see its note on #1042), this one did not, so
-    // it kept asserting a departure it never performed.
+    // This block was a verbatim inline duplicate that drifted: when the helper gained the wheel that makes the departure real (see its note on #1042), this one did not, so it kept asserting a departure it never performed.
     await gestureToTrueBottom(trackedScroll);
     const bottomTop = trackedScroll.scrollTop;
     expect(bottomTop).toBeGreaterThan(0);
@@ -1958,26 +1781,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
-    // Regression for the live-Electron identity-pinned P1: a saved
-    // free-scrolling anchor that is missing from `messages` at mount
-    // (branch edit / suffix removal) arms a mount-time clamped restore
-    // convergence AND `pendingHydrationRestoreAnchorIdRef`. If the reader
-    // reaches strict bottom (a real, demonstrably-past-the-clamped-target
-    // scroll) WHILE that convergence is still in flight, its own
-    // `isAborted` fires - and `settleChatTimelineNavigation`'s abort path
-    // calls neither `onSettledValid` nor `onSettledInvalid`, so nothing
-    // else ever released `restorePersistencePendingRef` for this mount.
-    // Every later persist (scroll mirror, unmount save) then silently
-    // no-ops, leaving the STALE free-scrolling entry in the tab-key cache
-    // across the next remount - reproducing the live evidence's stable,
-    // repeatable detached landing (identical scrollTop every cycle, since
-    // the cache is never touched again).
-    //
-    // The remount is driven by RETENTION EVICTION rather than a bare
-    // same-pane switch: a switch no longer unmounts the body, so it would
-    // leave this regression with nothing to detect. Eviction (and close, and
-    // top-level surface eviction) is where a real remount still happens, and
-    // therefore where a stale cache entry would still land detached.
+    // Every later persist (scroll mirror, unmount save) then silently no-ops, leaving the STALE free-scrolling entry in the tab-key cache across the next remount - reproducing the live evidence's stable, repeatable detached landing (identical scrollTop every cycle, since the cache is never touched again).
+    // The remount is driven by RETENTION EVICTION rather than a bare same-pane switch: a switch no longer unmounts the body, so it would leave this regression with nothing to detect.
     const longMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
     setLegendListScrollContainerScrollHeightOverride(
@@ -2008,21 +1813,14 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
       "p1",
     );
     const { container } = renderMatrix(undefined);
-    // Deliberately NOT waitForHostedChatLoaded/settleLegendList here: the
-    // mount-time clamped free-scrolling restore convergence must still be
-    // IN FLIGHT when the reader reaches true bottom, to reproduce the abort
-    // race (isAborted fires once mode flips away from "free-scrolling").
+    // Deliberately NOT waitForHostedChatLoaded/settleLegendList here: the mount-time clamped free-scrolling restore convergence must still be IN FLIGHT when the reader reaches true bottom, to reproduce the abort race (isAborted fires once mode flips away from "free-scrolling").
     await waitFor(() => {
       const record = queryHostedRecord(container, CHAT_TRACKED.instanceId);
       expect(record).not.toBeNull();
       expect(record?.querySelector("[data-message-id]")).not.toBeNull();
     });
     const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
-    // The mount-time clamped free-scrolling restore's own bounded
-    // validate/retry loop is racing to land at row 40. Keep re-asserting the
-    // true-bottom scrollTop across several frames so a real scroll to bottom
-    // wins at least one settle-check before that loop's own reissue would
-    // otherwise keep winning.
+    // Keep re-asserting the true-bottom scrollTop across several frames so a real scroll to bottom wins at least one settle-check before that loop's own reissue would otherwise keep winning.
     for (let frame = 0; frame < 8; frame += 1) {
       act(() => {
         trackedScroll.scrollTop =
@@ -2071,10 +1869,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 17 - internal-tab-bottom-follow: A bottom survives 3+ A↔B round trips without drift", async () => {
-    // Lock the race across repeated cache round-trips: seed the missing
-    // free-scrolling anchor, race true bottom past the in-flight restore,
-    // then thrash A↔B. Without the isDemonstrablyPastTarget gate release,
-    // every cycle reloads the stale free entry (live A_bottom evidence).
+    // Without the isDemonstrablyPastTarget gate release, every cycle reloads the stale free entry (live A_bottom evidence).
     const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
     seedMissingFreeScrollingAnchor(CHAT_TRACKED, 40);
@@ -2422,8 +2217,6 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   it("row 24 - internal-tab-bottom-follow: same-group reorder (no remount) preserves following-end", async () => {
     // Row 2's precedent: moveTabOnTabStrip within one pane never remounts.
     // Bottom-follow must hold live without a cache round-trip.
-    // Do not pin firstMessageRow identity: virtualization recycles which
-    // message is the first mounted shell after a true-bottom park.
     const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
     seedSamePaneLongPair(trackedMessages, siblingMessages);
@@ -2462,10 +2255,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 25 - internal-tab-bottom-follow: edge-drop split (stable-host no remount) preserves following-end", async () => {
-    // Residual-risk matrix documents paint/edge-drop as remount-class under
-    // the pre-stable-host mental model. With STABLE_TILE_SURFACE_HOST_ENABLED
-    // this suite's rows 4-7 prove the painted body does NOT remount - so the
-    // contract here is live following-end survival (not a cache round-trip).
+    // With STABLE_TILE_SURFACE_HOST_ENABLED this suite's rows 4-7 prove the painted body does NOT remount - so the contract here is live following-end survival (not a cache round-trip).
     // Same-pane remount round-trip is covered by rows 15-20.
     const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);

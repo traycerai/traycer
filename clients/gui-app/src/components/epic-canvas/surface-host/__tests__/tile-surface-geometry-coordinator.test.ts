@@ -8,13 +8,8 @@ import {
 } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 
 /**
- * The global `MockResizeObserver` installed by `test-browser-apis.ts` is a
- * total no-op - it never invokes its callback. Installing a controllable
- * replacement at MODULE LOAD TIME (before any test body runs, so it is in
- * place before this coordinator's lazily-constructed singleton observer is
- * ever created) lets these tests fire real RO callbacks on demand. Same
- * technique this repo already used for the ticket-17/18 stack's height-only
- * resize pin - see [[legendlist-pass-through-mock-ref-tee]] in memory.
+ * The global `MockResizeObserver` installed by `test-browser-apis.ts` is a total no-op - it never invokes its callback.
+ * Installing a controllable replacement at MODULE LOAD TIME (before any test body runs, so it is in place before this coordinator's lazily-constructed singleton observer is ever created) lets these tests fire real RO callbacks on demand.
  */
 class ControllableResizeObserver implements ResizeObserver {
   readonly callback: ResizeObserverCallback;
@@ -202,9 +197,7 @@ describe("explicit remeasure (position-only move)", () => {
     rectsA.length = 0;
     rectsB.length = 0;
 
-    // Position-only move: ONLY `left` changes, width/height stay identical -
-    // exactly the "Reverse views" swap condition (`swapSplitSides`) that a
-    // ResizeObserver cannot see, since it only fires on a SIZE change.
+    // Position-only move: ONLY `left` changes, width/height stay identical - exactly the "Reverse views" swap condition (`swapSplitSides`) that a ResizeObserver cannot see, since it only fires on a SIZE change.
     stubRect(slotA, { left: 500, top: 0, width: 500, height: 600 });
     stubRect(slotB, { left: 0, top: 0, width: 500, height: 600 });
 
@@ -260,10 +253,6 @@ describe("unregister and re-registration", () => {
     );
     rectsSecond.length = 0;
 
-    // The first registration's own cleanup fires late, after the second
-    // registration has already replaced it under the identical key -
-    // exactly the StrictMode double-invoke ordering ticket 22's sentinel
-    // bug got wrong ("cleanup cancelled but didn't clear").
     unregisterFirst();
 
     stubRect(slot, { left: 0, top: 0, width: 250, height: 250 });

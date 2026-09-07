@@ -1,8 +1,4 @@
-/**
- * Artifact image node view: loading / unavailable / ready states, SVG
- * thumbnails via <img>, and shared lightbox path. mediaType is stored on the
- * node (from prepare) and forwarded to the blob resolver + lightbox.
- */
+/** mediaType is stored on the node (from prepare) and forwarded to the blob resolver and lightbox. */
 import {
   cleanup,
   fireEvent,

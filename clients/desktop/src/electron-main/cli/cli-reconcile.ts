@@ -29,40 +29,8 @@ type PackageManagerSource =
   | "rpm";
 
 /**
- * Launch-time CLI reconciliation (Core Flow 2, "newest-wins"):
- *
- *   - If a Desktop-owned manifest CLI (`source: "desktop"`) is **older** than
- *     the bundled CLI, silently upgrade it: copy bundled → stable per-user
- *     path and rewrite the manifest. If the live binary is locked (typical
- *     on Windows), surface a `pendingUpgrade` instead of erroring.
- *
- *   - If the Desktop-owned slot binary is present but cannot report its
- *     version (failed probe: corrupt file, ENOEXEC, hang), never let the
- *     manifest's recorded version stand in for it - route through the same
- *     upgrade path and re-stage the bundled CLI over it.
- *
- *   - If a **package-manager**-owned CLI (homebrew/npm/winget/scoop/apt/rpm) is
- *     older than the bundled CLI, **do not** overwrite it. Return a
- *     reconciliation outcome with platform/source-specific upgrade
- *     instructions so the UI can surface the right hint.
- *
- *   - If the installed manifest/PATH CLI is **newer** than (or equal to)
- *     the bundled CLI, trust it silently for the session. A PATH CLI is
- *     only ever trusted after a successful `--version` probe: a PATH name
- *     that cannot answer is not a Traycer CLI (oss #872: the name squatted
- *     by a desktop-app launcher) and routes to bundled staging instead.
- *
- *   - If no installed CLI exists, leave staging to the first-launch
- *     setup flow (it already calls `installBundledCli`).
- *
- *   - If the manifest is malformed but a binary is reachable on PATH,
- *     fall back to the PATH binary. If neither exists, the function
- *     returns `kind: "none"`.
- *
- * The reconciliation must run **before** host-dependent setup or
- * Settings actions pick which CLI to invoke - `discoverCli()` is
- * deterministic so as long as the manifest is up-to-date when those
- * code paths run, the right CLI is chosen.
+ * - If the Desktop-owned slot binary is present but cannot report its version (failed probe: corrupt file, ENOEXEC, hang), never let the manifest's recorded version stand in for it.
+ * - If a package-manager-owned CLI (homebrew/npm/winget/scoop/apt/rpm) is older than the bundled CLI, do not overwrite it.
  */
 
 export type CliReconcileOutcome =
@@ -118,10 +86,6 @@ export type CliReconcileOutcome =
 const PACKAGE_MANAGER_SOURCES: ReadonlySet<CliInstallManifest["source"]> =
   new Set(["homebrew", "npm", "winget", "scoop", "apt", "rpm"]);
 
-// Windows: EBUSY, EACCES, EPERM are all common when a process holds the
-// live binary open. POSIX: only EBUSY (and a textual "locked" tag) are
-// real transient locks; EACCES/EPERM mean a permission problem the
-// operator must resolve, so they route to `manifest-rewrite-failed`.
 const WINDOWS_LOCK_RE = /EBUSY|EACCES|EPERM|locked/i;
 const POSIX_LOCK_RE = /EBUSY|locked/i;
 
@@ -137,10 +101,6 @@ function packageManagerUpgradeHint(
 ): string {
   switch (source) {
     case "homebrew":
-      // Must match the Homebrew formula name shipped via
-      // scripts/native-packaging/publish-cli-package-managers.cjs
-      // (`Formula/traycer.rb`) and the CLI self-upgrade guidance in
-      // traycer-cli/src/commands/cli-upgrade.ts.
       return "brew upgrade traycer";
     case "npm":
       // `latest` names stable builds, so it can be older than an installed RC.
@@ -200,18 +160,9 @@ export function defaultReconcileCliDeps(): ReconcileCliDeps {
     readCliManifest,
     resolveBundledCliPath,
     readBundledCliVersion,
-    // The PATIENT deadline on both probing deps, and the reason is the same
-    // for each: this pass is detached, runs once per launch, and is the
-    // only prober whose verdict decides who OWNS the slot. A real CLI busy
-    // copying ~100 MB into the well-known slot is precisely the binary this
-    // pass must not misread, and each killed probe abandons that copy for
-    // the next one to start over. See `CLI_RECONCILE_PROBE_TIMEOUT_MS`.
+    // A real CLI busy copying ~100 MB into the well-known slot is precisely the binary this pass must not misread, and each killed probe abandons that copy for the next one to start.
     discoverCli: () => discoverCli(CLI_RECONCILE_PROBE_TIMEOUT_MS),
-    // The reconcile's contract is version-or-null; the probe's third state
-    // (timeout) collapses to null here on purpose. Both reconcile call
-    // sites treat null as "could not determine", never as "not a CLI" -
-    // the adopt/condemn distinction that made the timeout worth a state of
-    // its own lives in `vetPathCliCandidate`.
+    // Both reconcile call sites treat null as "could not determine", never as "not a CLI".
     probeCliVersion: async (binaryPath: string): Promise<string | null> => {
       const probed = await probeCliVersion(
         binaryPath,
@@ -279,14 +230,8 @@ export async function reconcileCli(
           binaryPath: discovery.binaryPath,
         };
       }
-      // PATH binary present but no manifest. Package managers that don't
-      // run our `cli mark-source` post-install hook surface here, so a
-      // binary that can answer `--version` is trusted whatever its version
-      // - we can't name the owning package manager to print an upgrade
-      // hint, and overwriting a working install is not this branch's call.
-      // Production discovery has usually probed already
-      // (`vetPathCliCandidate`); probe here otherwise so trust is never
-      // extended on the strength of the file name alone.
+      // Package managers that don't run our `cli mark-source` post-install hook surface here, so a binary that can answer `--version` is trusted whatever its version.
+      // Production discovery has usually probed already (`vetPathCliCandidate`); probe here otherwise so trust is never extended on the strength of the file name alone.
       const probedVersion =
         discovery.version ?? (await deps.probeCliVersion(discovery.binaryPath));
       if (probedVersion !== null) {
@@ -302,11 +247,7 @@ export async function reconcileCli(
           binaryPath: discovery.binaryPath,
         };
       }
-      // A `traycer` on PATH that cannot print its version is not a usable
-      // CLI. Trusting it anyway is what suppressed bundled staging and
-      // bricked first-launch service install when the name was squatted by
-      // a desktop-app launcher (oss #872) - fall through to the
-      // fresh-install staging below instead.
+      // A `traycer` on PATH that cannot print its version is not a usable CLI.
       deps.logger.warn(
         "[cli-reconcile] PATH `traycer` failed the version probe - treating it as not-a-CLI and staging the bundled CLI",
         { binaryPath: discovery.binaryPath, bundledVersion },
@@ -317,42 +258,15 @@ export async function reconcileCli(
       (discovery.kind === "bundled" || discovery.kind === "path") &&
       bundledPath !== null
     ) {
-      // Fresh install: no manifest, and either no `traycer` on PATH or only
-      // a probe-failed imposter under that name, but the app ships a bundled
-      // CLI.
-      //
-      // "Probe-failed" here includes a candidate that answered nothing at
-      // all within `CLI_RECONCILE_PROBE_TIMEOUT_MS`, and that arm is a
-      // deliberate policy call rather than an oversight: staging writes a
-      // Desktop-owned manifest that outranks PATH from then on, so it is
-      // the expensive direction - but deferring instead would re-open oss
-      // #872, where a `traycer` that never answers left the slot unstaged
-      // and first launch bricked. A binary that cannot say what it is
-      // inside fifteen seconds is not serving the host either. Patience is
-      // where this is fought; refusal is not.
-      //
-      // Stage it into the Desktop-owned slot - a COPY on every platform, see
-      // `installBundledCli` - so the bundle-blind host has a deterministic,
-      // space-free `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for
-      // the monitor / title hooks / terminal agents. Nothing else self-heals
-      // this slot.
-      //
-      // Said "a symlink on POSIX" until now, which is what it was before the
-      // pre-copy era ended and is no longer true of any platform. Left
-      // uncorrected it reads as a live design note rather than history, and
-      // it has already been cited that way in review - the link is exactly
-      // what was removed, because a bundle remove/replace left it DANGLING
-      // with no healer but the next successful app launch.
+      // "Probe-failed" here includes a candidate that answered nothing at all within `CLI_RECONCILE_PROBE_TIMEOUT_MS`, and that arm is a deliberate policy call rather than an oversight.
+      // A binary that cannot say what it is inside fifteen seconds is not serving the host either.
       const installed = await deps.installBundledCli({
         bundledCliPath: bundledPath,
         version: bundledVersion,
         source: "desktop",
       });
       if (!installed.published) {
-        // Deferred behind the CLI lock. Reporting `installed-bundled` here
-        // would claim a version that was never written, so say nothing was
-        // installed and let the next reconcile try again - the writer holding
-        // the lock is itself publishing a CLI.
+        // Reporting `installed-bundled` here would claim a version that was never written, so say nothing was installed and let the next reconcile try again.
         deps.logger.warn(
           "[cli-reconcile] fresh install deferred - the CLI lock is held by another writer",
           { binaryPath: installed.path, version: bundledVersion },
@@ -375,15 +289,8 @@ export async function reconcileCli(
     return { kind: "no-cli-anywhere" };
   }
 
-  // Case 2a: manifest outlived its binary. An uninstall (or manual cleanup)
-  // can remove the slot symlink while `manifest.json` lingers - its recorded
-  // version still "trusts equal/newer" in the compare below, so without this
-  // guard reconcile hands back a dead `binaryPath` and the bundle-blind host
-  // never gets a `traycer` on PATH (monitor / title hooks / terminal agents
-  // all exit 127). When the manifest points at our own slot symlink and that
-  // symlink is gone, re-stage the bundled CLI to recreate it before trusting
-  // the manifest. PATH / package-manager manifests point outside our slot, so
-  // they never match here and keep their existing semantics.
+  // An uninstall (or manual cleanup) can remove the slot symlink while `manifest.json` lingers.
+  // PATH / package-manager manifests point outside our slot, so they never match here and keep their existing semantics.
   if (
     manifest.binaryPath === deps.stableCliBinaryPath() &&
     bundledPath !== null &&
@@ -432,21 +339,8 @@ export async function reconcileCli(
     });
   }
 
-  // Case 2b: the desktop-owned slot binary is present (case 2a saw it) but
-  // cannot report its version - a corrupt file's ENOEXEC, garbage
-  // `--version` output, and a hung binary all collapse to a null probe.
-  // The manifest's recorded version is exactly what must NOT stand in for
-  // it then: a broken slot plus a record claiming >= bundled reads
-  // "trusted-equal" on every launch, and the CLI stays dead until a manual
-  // reinstall (v1.1.9-rc.3 field incident: the slot held a non-executable
-  // file while the manifest claimed 2.0.0, so reconcile trusted it
-  // indefinitely). A binary that cannot even print its version has nothing
-  // worth preserving, so route it through the upgrade path below - which
-  // re-stages the app's own bundled CLI and already owns the
-  // binary-locked/pendingUpgrade fallbacks - instead of the trust branch.
-  // A transiently failing probe (the 2s timeout under cold-launch I/O)
-  // merely re-stages bytes the desktop owns anyway; the next launch probes
-  // the healthy copy and trusts it again.
+  // Case 2b: the desktop-owned slot binary is present (case 2a saw it) but cannot report its version.
+  // The manifest's recorded version is exactly what must NOT stand in for it then: a broken slot plus a record claiming >= bundled reads "trusted-equal" on every launch, and the CLI.
   const slotBinaryUnresponsive =
     manifest.source === "desktop" && probedManifestVersion === null;
 
@@ -462,13 +356,7 @@ export async function reconcileCli(
       },
     );
   } else if (cmp >= 0) {
-    // Version comparison is blind between two dogfood builds: every local
-    // build stamps the same `0.0.0-local` sentinel, so a stale slot CLI
-    // reads "equal" forever and keeps running host installs/stops with old
-    // code. When BOTH sides are the sentinel - a state release bundles
-    // cannot produce (they stamp real semvers) - and the slot is
-    // desktop-owned, settle it by comparing the binaries themselves and
-    // route a differing slot through the normal upgrade path below.
+    // When BOTH sides are the sentinel - a state release bundles cannot produce (they stamp real semvers).
     const dogfoodRefresh =
       isLocalSentinelVersion(installedVersion) &&
       isLocalSentinelVersion(bundledVersion) &&
@@ -523,11 +411,7 @@ export async function reconcileCli(
   // Desktop-owned or manual install - Desktop is allowed to upgrade.
   await clearPackageManagerHint(deps);
   if (bundledPath === null) {
-    // No bundled binary to copy from - `pendingUpgrade.stagedBinaryPath`
-    // would have nowhere safe to point at (the live binary at
-    // `manifest.binaryPath` is not a real staged copy, and the missing
-    // bundled binary can't be staged). Surface a blocked outcome and let
-    // the caller route to support/diagnostic state.
+    // Surface a blocked outcome and let the caller route to support/diagnostic state.
     deps.logger.warn(
       "[cli-reconcile] desktop-owned CLI is older than bundled but no bundled binary is reachable - skipping pendingUpgrade",
       { installed: installedVersion, bundled: bundledVersion },
@@ -549,16 +433,6 @@ export async function reconcileCli(
       source: manifest.source === "desktop" ? "desktop" : manifest.source,
     });
     if (!installed.published) {
-      // The upgrade was deferred behind the CLI lock - most likely a
-      // `traycer cli upgrade` holding it across its download. Deliberately
-      // NOT staged and NOT persisted as `pendingUpgrade`: the lock holder is
-      // mid-mutation of the very manifest a persist would write, and no
-      // renderer affordance consumes this outcome anyway - nothing beyond a
-      // debug log reads `CliReconcileOutcome`, and the one real "restart to
-      // finalize" surface keys on `manifest.pendingUpgrade`, which correctly
-      // stays null here. The retry is the next launch's reconcile, which
-      // recomputes the version gap and re-enters the install. The user keeps
-      // the CLI they already had.
       deps.logger.warn(
         "[cli-reconcile] upgrade deferred - the CLI lock is held by another writer",
         { from: installedVersion, to: bundledVersion, path: installed.path },
@@ -585,15 +459,6 @@ export async function reconcileCli(
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    // Platform-gated lock detection (review item 8). On Windows, EBUSY,
-    // EACCES, and EPERM are all routinely produced when a process holds
-    // the live binary open and we try to rename onto it - they all map
-    // to `binary-locked` so the renderer surfaces the "restart service
-    // to finalize upgrade" recovery. On POSIX, EACCES/EPERM mean
-    // permission denied (not a transient lock), so they should route to
-    // `manifest-rewrite-failed` and surface as a real error; only EBUSY
-    // (and the human-readable "locked" suffix some node errors carry)
-    // remain `binary-locked`.
     const isLocked =
       process.platform === "win32"
         ? WINDOWS_LOCK_RE.test(errorMessage)
@@ -603,13 +468,7 @@ export async function reconcileCli(
       reason,
       errorMessage,
     });
-    // Stage the bundled CLI into a writable Desktop-owned path before
-    // recording `pendingUpgrade`. The staged copy is the artifact that
-    // `traycer cli upgrade` will rename onto the live binary path once the
-    // service restarts and releases the lock. We deliberately do NOT point
-    // `stagedBinaryPath` at `process.resourcesPath` (packaged app
-    // resources) or at the live `manifest.binaryPath` (renaming a file
-    // onto itself is a no-op and risks blowing away the running binary).
+    // We deliberately do NOT point `stagedBinaryPath` at `process.resourcesPath` (packaged app resources) or at the live `manifest.binaryPath` (renaming a file onto itself is a no-op.
     let stagedBinaryPath: string | null = null;
     try {
       stagedBinaryPath = await deps.stageBundledCliForUpgrade({
@@ -661,10 +520,6 @@ async function persistPackageManagerUpgradeHint(
     args.source,
     args.bundledVersion,
   );
-  // Persist the hint to a Desktop-owned sidecar so the renderer's
-  // `cliManifest()` IPC can surface "your homebrew traycer is N
-  // versions behind - `brew upgrade traycer`" without Desktop ever
-  // writing into the package-manager-owned manifest file.
   try {
     await deps.writeDesktopReconcileState({
       packageManagerUpgrade: {
@@ -695,10 +550,7 @@ async function persistPendingUpgrade(
       existing,
     );
     if (written === null) {
-      // Two causes share this null - no manifest to attach to, or the CLI
-      // lock was held past the wait - and cli-discovery already logged
-      // which. Kept deliberately cause-neutral here so this line cannot
-      // assert the wrong one.
+      // Kept deliberately cause-neutral here so this line cannot assert the wrong one.
       deps.logger.warn(
         "[cli-reconcile] pendingUpgrade not recorded - see the cli log line above for the cause",
         { pending },
@@ -714,22 +566,6 @@ async function persistPendingUpgrade(
   }
 }
 
-/**
- * Launch-time gate around `reconcileCli`. The dev slot's CLI lifecycle is
- * owned by the `make dev-desktop` orchestrator: it stages the dev wrapper at
- * `~/.traycer/cli/dev/bin/traycer`, which the desktop resolves via the
- * bundled-CLI path (see `resolveBundledCliPath`). The desktop's
- * reconcile/upgrade machinery (version probes, pending-upgrade staging,
- * package-manager hints) only applies to shipped builds, so it is skipped on
- * the dev slot - there is nothing for it to reconcile that the orchestrator
- * has not already set up. Shipped builds (staging/production) reconcile
- * unchanged. With the env-scoped CLI paths this is a lifecycle-ownership
- * boundary, no longer a guard against touching the prod tree.
- *
- * The gate is intentionally a thin wrapper rather than a branch inside
- * `reconcileCli` so the per-branch reconciler stays pure and so the
- * "skip on the dev slot" rule is unit-testable without an Electron process.
- */
 export async function runLaunchTimeCliReconciliation(args: {
   readonly isDevDesktop: boolean;
   readonly deps: ReconcileCliDeps;

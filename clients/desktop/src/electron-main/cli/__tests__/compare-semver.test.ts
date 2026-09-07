@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-// `cli-discovery.ts` imports the desktop logger, whose `electron` dependency
-// otherwise boots Vitest's real Electron runtime. These tests exercise only a
-// pure comparator, so keep the suite independent of a downloaded Electron
-// binary and the app lifecycle.
 vi.mock("electron", () => ({
   app: { getPath: (): string => "/tmp/desktop-app" },
 }));
@@ -23,10 +19,6 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// `compareSemver` is the comparator that drives launch-time
-// reconciliation's newest-wins decision (`cli-reconcile.ts`). SemVer
-// precedence and the local-build sentinel are intentional and need
-// regression coverage so a future contributor does not flatten RC ordering.
 describe("compareSemver", () => {
   it("returns 1 / -1 / 0 for ordinary triplets", async () => {
     const { compareSemver } = await import("../cli-discovery");
@@ -47,12 +39,8 @@ describe("compareSemver", () => {
     expect(compareSemver(a, b)).toBe(expected);
   });
 
-  // Review item 6 - `0.0.0-local` is the placeholder
-  // `readBundledCliVersion()` returns when version.json is missing
-  // (local dev builds). Before the fix `compareSemver("0.0.0-local",
-  // "1.5.0")` returned 0 → cli-reconcile.ts derived `trusted-equal` and
-  // silently skipped the upgrade. The sentinel must sort below any real
-  // release version so newest-wins routes through the installed CLI.
+  // Before the fix `compareSemver("0.0.0-local", "1.5.0")` returned 0 → cli-reconcile.ts derived `trusted-equal` and silently skipped the upgrade.
+  // The sentinel must sort below any real release version so newest-wins routes through the installed CLI.
   it("treats the 0.0.0-local sentinel as less than any real semver", async () => {
     const { compareSemver } = await import("../cli-discovery");
     expect(compareSemver("0.0.0-local", "1.5.0")).toBe(-1);

@@ -69,10 +69,7 @@ describe("fetchableAccumulatedChanges", () => {
     expect(fetchableAccumulatedChanges(["/gone.ts"], [])).toEqual([]);
   });
 
-  // An ASCII-authored PDF is capturable (it IS text), so its row carries a
-  // digest and every other rule here would let it through - downloading a
-  // whole document whose section renders `PDF_FILE_DIFF_COPY` no matter what
-  // the bytes say, and letting one discarded fetch fail the entire bundle.
+  // An ASCII-authored PDF is capturable (it IS text), so its row carries a digest and every other rule here would let it through - downloading a whole document whose section renders `PDF_FILE_DIFF_COPY` no matter what the bytes say, and letting one discarded.
   it("does not ask for a PDF, whose section never reads the bytes", () => {
     expect(
       fetchableAccumulatedChanges(
@@ -133,10 +130,8 @@ describe("mergeCumulativeDiffs", () => {
   });
 
   it("keeps loading while paths the summary stream has not reached remain", () => {
-    // Every other case passes `undeliveredPaths: 0`, so the branch this input
-    // exists for was uncovered. A path the stream has not reached yet is
-    // outstanding for the same reason a query in flight is: presenting the
-    // delivered subset as a whole bundle is the failure being prevented.
+    // Every other case passes `undeliveredPaths: 0`, so the branch this input exists for was uncovered.
+    // A path the stream has not reached yet is outstanding for the same reason a query in flight is: presenting the delivered subset as a whole bundle is the failure being prevented.
     expect(
       mergeCumulativeDiffs({
         filePaths: ["/a.ts"],
@@ -194,9 +189,8 @@ describe("mergeCumulativeDiffs", () => {
   });
 
   /**
-   * The digest race: the agent edited the file between render and open, so the
-   * version asked for is gone. The host refuses rather than pairing newer
-   * bodies with the metadata still on screen. It must NOT resolve to content.
+   * The digest race: the agent edited the file between render and open, so the version asked for is gone.
+   * The host refuses rather than pairing newer bodies with the metadata still on screen.
    */
   it("resolves nothing for a superseded version, and says so", () => {
     expect(
@@ -212,9 +206,8 @@ describe("mergeCumulativeDiffs", () => {
   });
 
   /**
-   * A bundle renders its files in the order it was opened showing. Merging by
-   * source would reorder them the moment one file's body arrived separately
-   * from another's - which is every mixed set, and every partial load.
+   * A bundle renders its files in the order it was opened showing.
+   * Merging by source would reorder them the moment one file's body arrived separately from another's - which is every mixed set, and every partial load.
    */
   it("keeps the tile's order across a mixed inline/fetched set", () => {
     const result = mergeCumulativeDiffs({
@@ -267,11 +260,8 @@ describe("mergeCumulativeDiffs", () => {
   });
 
   it("keeps loading when there are fewer fetches than fetchable paths", () => {
-    // The bound is `min(fetchable, fetches)`, so a `fetchable` entry past the
-    // end of `fetches` is simply never visited. It has not answered - the
-    // caller has not even asked yet - so it must read as outstanding. Skipping
-    // it returned a bundle that claimed to be whole while silently omitting
-    // those files, which is what every other "no answer" branch here prevents.
+    // The bound is `min(fetchable, fetches)`, so a `fetchable` entry past the end of `fetches` is simply never visited.
+    // It has not answered - the caller has not even asked yet - so it must read as outstanding.
     const result = mergeCumulativeDiffs({
       filePaths: ["/a.ts", "/b.ts"],
       inline: [],
@@ -296,9 +286,7 @@ describe("mergeCumulativeDiffs", () => {
   });
 
   it("reports a failure when a fetch errors", () => {
-    // `failed` is its own channel rather than an empty `resolved`: the tile
-    // says the source could not be read instead of rendering a diff with the
-    // file quietly missing from it.
+    // `failed` is its own channel rather than an empty `resolved`: the tile says the source could not be read instead of rendering a diff with the file quietly missing from it.
     const result = mergeCumulativeDiffs({
       filePaths: ["/a.ts"],
       inline: [],
@@ -337,9 +325,7 @@ describe("mergeCumulativeDiffs", () => {
   });
 
   it("renders a bundle of only contentless paths rather than nothing", () => {
-    // Nothing to fetch takes the early return, where a bundle whose every row
-    // is a PDF would otherwise resolve to an empty set - i.e. to the
-    // source-unavailable banner, over files that are all present.
+    // Nothing to fetch takes the early return, where a bundle whose every row is a PDF would otherwise resolve to an empty set - i.e. to the source-unavailable banner, over files that are all present.
     const result = mergeCumulativeDiffs({
       filePaths: ["/docs/a.pdf", "/docs/b.pdf"],
       inline: [],

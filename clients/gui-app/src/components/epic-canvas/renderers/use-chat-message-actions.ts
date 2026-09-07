@@ -60,10 +60,7 @@ export interface ChatMessageActionsInput {
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
   /**
-   * The tile's loaded command catalog, or null when it has not loaded. An edit
-   * resubmit re-runs `buildSubmittedChatJSONContent`, so it needs the same
-   * catalog the original send used - otherwise a `$skill` the user retyped
-   * after deleting its chip would silently stay prose.
+   * An edit resubmit re-runs `buildSubmittedChatJSONContent`, so it needs the same catalog the original send used - otherwise a `$skill` the user retyped after deleting its chip would silently stay prose.
    */
   readonly slashCatalog: SlashCommandCatalog | null;
   readonly mentionRoots: ReadonlyArray<string>;
@@ -75,10 +72,7 @@ export interface ChatMessageActionsInput {
   readonly messages: ChatSessionState["messages"];
   readonly events: ChatSessionState["events"];
   /**
-   * The hydration state behind `messages`/`events`, or `null` on the legacy
-   * line where those two ARE the whole transcript. Read only by the
-   * revert-scope resolution, which is the one thing here that scans DOWNWARD
-   * from a message and so cannot treat the two arrays as complete.
+   * Read only by the revert-scope resolution, which is the one thing here that scans DOWNWARD from a message and so cannot treat the two arrays as complete.
    */
   readonly transcriptWindow: TranscriptWindow | null;
   readonly profile: AuthProfile | null;
@@ -92,9 +86,8 @@ export interface ChatMessageActionsInput {
   readonly worktreeBinding: WorktreeBinding | null;
   readonly revertOnEditOpen: boolean;
   /**
-   * Items currently parked in the message queue. They survive a history edit
-   * untouched and send after the replacement turn; the revert-on-edit dialog
-   * surfaces the count so that isn't a surprise.
+   * Items currently parked in the message queue.
+   * They survive a history edit untouched and send after the replacement turn; the revert-on-edit dialog surfaces the count so that isn't a surprise.
    */
   readonly queuedCount: number;
 }
@@ -104,17 +97,8 @@ export interface ChatMessageActionsResult {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   /**
-   * Opens the fork dialog to branch the chat through the given assistant
-   * message, pre-configured for the chosen fork mode ("cross-question" =
-   * source binding verbatim + carried questions settled as reference;
-   * "ab-worktree" = new worktrees carrying the working tree + unanswered
-   * carried questions re-opened as answerable). Used by pending and resolved
-   * interview actions; the per-message fork buttons route through the same
-   * seed.
-   *
-   * `initialHostId` preselects the dialog's host picker — the host-switch
-   * gesture passes the host the user picked there; every per-message entry
-   * point passes `null` (open on the source chat's own host).
+   * Opens the fork dialog to branch the chat through the given assistant message, pre-configured for the chosen fork mode ("cross-question" = source binding verbatim + carried questions settled as reference; "ab-worktree" = new worktrees carrying the working tree + unanswered carried questions re-opened as answerable).
+   * Used by pending and resolved interview actions; the per-message fork buttons route through the same seed.
    */
   readonly forkAtAssistantMessage: (
     assistantMessageId: string,
@@ -128,10 +112,8 @@ export interface ChatMessageActionsResult {
     readonly onRevert: (revertArtifacts: boolean) => void;
     readonly onDontRevert: () => void;
     /**
-     * `null` when the transcript below the edit point is not fully hydrated, so
-     * the count would be an under-count rather than a measurement. The dialog
-     * renders the artifact opt-out without a number in that case - see
-     * {@link RevertScope}.
+     * `null` when the transcript below the edit point is not fully hydrated, so the count would be an under-count rather than a measurement.
+     * The dialog renders the artifact opt-out without a number in that case - see {@link RevertScope}.
      */
     readonly artifactCount: number | null;
     readonly queuedCount: number;
@@ -139,11 +121,8 @@ export interface ChatMessageActionsResult {
 }
 
 /**
- * Encapsulates the inline-edit lifecycle (begin, update, submit, delete) and the
- * `messageActionsFor` factory that wires them into the per-message action surface.
- *
- * All callbacks preserve the same `useCallback` dependency structure as the
- * original view-model so memoized children are not disturbed.
+ * Encapsulates the inline-edit lifecycle (begin, update, submit, delete) and the `messageActionsFor` factory that wires them into the per-message action surface.
+ * All callbacks preserve the same `useCallback` dependency structure as the original view-model so memoized children are not disturbed.
  */
 export function useChatMessageActions(
   input: ChatMessageActionsInput,
@@ -179,16 +158,9 @@ export function useChatMessageActions(
   } = input;
 
   /**
-   * What a revert from the message being edited would touch.
-   *
-   * Resolved once for both readers below - the submit gate and the dialog's
-   * artifact count - because they are two halves of one prompt and must not be
-   * able to disagree about its scope.
+   * Resolved once for both readers below - the submit gate and the dialog's artifact count - because they are two halves of one prompt and must not be able to disagree about its scope.
    */
-  // Keyed on the target id alone, NOT on `activeInlineEdit`: that object gets a
-  // fresh identity on every `updateInlineEditContent`, i.e. per keystroke,
-  // while the scope depends only on which message is being edited. Widening it
-  // back would re-run three transcript passes for each character typed.
+  // Keyed on the target id alone, NOT on `activeInlineEdit`: that object gets a fresh identity on every `updateInlineEditContent`, i.e. per keystroke, while the scope depends only on which message is being edited.
   const inlineEditTargetMessageId = activeInlineEdit?.targetMessageId ?? null;
   const revertScope = useMemo<RevertScope | null>(
     () =>
@@ -236,9 +208,7 @@ export function useChatMessageActions(
 
   const performEditSubmit = useCallback(
     (revertFileChanges: boolean, revertArtifacts: boolean) => {
-      // Always dismiss the modal first - if any guard below bails (the inline
-      // edit was invalidated by an incoming snapshot, etc.) the modal must not
-      // be left open with dead buttons.
+      // Always dismiss the modal first - if any guard below bails (the inline edit was invalidated by an incoming snapshot, etc.) the modal must not be left open with dead buttons.
       dispatchUi({ type: "setRevertOnEditOpen", open: false });
       if (activeInlineEdit === null) return;
       if (!canModifyMessages) return;
@@ -282,12 +252,8 @@ export function useChatMessageActions(
     if (activeInlineEdit === null) return;
     if (!canModifyMessages) return;
     if (userMessageSenderForProfile(profile) === null) return;
-    // Editing a previous message with reversible edits below it - or a history
-    // this side cannot see the bottom of - prompts for a revert first;
-    // otherwise submit straight through. See `editSubmitNeedsRevertPrompt`.
-    //
-    // Null only when there is no active edit, which the guard above already
-    // returned on - the memo is keyed by the same value.
+    // Editing a previous message with reversible edits below it - or a history this side cannot see the bottom of - prompts for a revert first; otherwise submit straight through.
+    // Null only when there is no active edit, which the guard above already returned on - the memo is keyed by the same value.
     if (revertScope === null) return;
     if (editSubmitNeedsRevertPrompt(revertScope)) {
       dispatchUi({ type: "setRevertOnEditOpen", open: true });
@@ -316,16 +282,8 @@ export function useChatMessageActions(
     [canModifyMessages, chatActions, dispatchUi],
   );
 
-  // Open the fork dialog seeded to branch the source chat through
-  // `assistantMessageId`. Shared by the per-message fork buttons and the
-  // interview actions so all entry points seed identically.
-  // Cross Question seeds the source binding VERBATIM (same working copy:
-  // local stays local, an existing worktree is adopted — matching the "+ chat"
-  // defaults in a Task) and settles carried questions as reference. A/B Fork
-  // REBASES each folder to the chat's actual working-copy directory (a
-  // worktree-bound folder's base becomes the origin worktree path) and
-  // pre-selects a new worktree off that base's working tree; unanswered
-  // carried questions re-open as answerable.
+  // Open the fork dialog seeded to branch the source chat through `assistantMessageId`.
+  // Shared by the per-message fork buttons and the interview actions so all entry points seed identically.
   const forkAtAssistantMessage = useCallback(
     (
       assistantMessageId: string,
@@ -351,16 +309,8 @@ export function useChatMessageActions(
               ...seedInput,
               hostId: tabHostId,
             });
-      // Seed the fork dialog's picker from the source chat's currently visible
-      // workspace (its binding overlaid with any unsent staged choices) so it
-      // opens exactly where the source chat's composer is. The dialog applies
-      // this through the shared seedIntent -> seedEntryForFolder path the
-      // terminal-agent launcher also uses; only the source owner differs (here,
-      // the chat being forked).
-      // Every host's slot, not just this tab's: the dialog can retarget while
-      // it is open, so a previous fork that moved to another machine before
-      // closing would otherwise leave that machine's folders staged for the
-      // next open.
+      // The dialog applies this through the shared seedIntent -> seedEntryForFolder path the terminal-agent launcher also uses; only the source owner differs (here, the chat being forked).
+      // Every host's slot, not just this tab's: the dialog can retarget while it is open, so a previous fork that moved to another machine before closing would otherwise leave that machine's folders staged for the next open.
       clearChatForkWorkspacesForEpic(currentEpicId);
       setForkTarget({
         sourceChatId: node.id,
@@ -371,10 +321,8 @@ export function useChatMessageActions(
         settingsSeed: currentComposerSettings,
         workspaceSeed,
         seedIntentOverride: mode === "ab-worktree" ? "worktree-carry" : null,
-        // A/B forks re-open a carried question as an answerable card so the
-        // user can answer differently and proceed; plain and Cross Question
-        // forks leave it settled (inert reference, composer free). Moot for a
-        // plain fork of a completed message — no streaming interview to carry.
+        // A/B forks re-open a carried question as an answerable card so the user can answer differently and proceed; plain and Cross Question forks leave it settled (inert reference, composer free).
+        // Moot for a plain fork of a completed message - no streaming interview to carry.
         carriedInterviews: mode === "ab-worktree" ? "pending" : "settled",
         forkMode: mode,
         initialHostId,
@@ -417,9 +365,8 @@ export function useChatMessageActions(
               },
             }
           : null;
-      // A completed assistant message exposes the plain footer fork. A stable
-      // message with a resolved interview also exposes its Q&A fork icons while
-      // the rest of that assistant turn may still be running.
+      // A completed assistant message exposes the plain footer fork.
+      // A stable message with a resolved interview also exposes its Q&A fork icons while the rest of that assistant turn may still be running.
       const plainForkMessageId = forkableAssistantMessageId(message);
       const hasTerminalInterview = message.segments.some(
         (segment) =>

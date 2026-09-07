@@ -1,25 +1,6 @@
 /**
- * Derives B1 (mutation@2.0 amp-inclusive) fixture data from the immutable
- * host-v1.1.5 tag.
- *
- * Pipeline:
- * 1. `git show host-v1.1.5:protocol/src/host/{provider-schemas,registry}.ts`
- * 2. AST-extract provider id enums from the tagged schemas source
- * 3. AST-extract the ten state-returning mutation@2.0 method names from the
- *    tagged registry (contracts at major=2,minor=0 whose response schema is
- *    the latest amp-inclusive state wrapper — not list@2.0's pre-amp freeze)
- * 4. Materialize the tagged `provider-schemas.ts` into a temp module and import
- *    its real zod schemas; validate every sample state/request against those
- *    TAG-era parsers (not the current branch)
- * 5. Emit a checked-in fixture with tag/source provenance hashes
- *
- * Regenerate (from traycer submodule root):
- *
- *   bun run protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts > \
- *     protocol/src/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20.ts
- *
- * The test suite re-invokes {@link buildHostV115MutationV20Fixtures} and
- * deep-equals the result against the checked-in fixture — any hand-edit fails.
+ * Derives B1 (mutation@2.0 amp-inclusive) fixtures from the immutable `host-v1.1.5` tag, using tag-era parsers.
+ * Hand-edits fail: the suite re-invokes {@link buildHostV115MutationV20Fixtures}.
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -67,13 +48,8 @@ export type HostV115MutationV20Fixtures = {
 };
 
 /**
- * A parent git hook (e.g. this repo's pre-commit) invokes us with GIT_DIR /
- * GIT_WORK_TREE / GIT_INDEX_FILE set to the OUTER (superproject) repo. Those
- * env vars override cwd-based repo discovery, so an inherited GIT_DIR can
- * make `git show <rev>:<path>` resolve against the wrong repo's object
- * database entirely (silently, if the outer repo happens to have a
- * same-named tag). Strip them so every call here discovers the repo strictly
- * from the `cwd` we pass.
+ * A parent git hook (e.g. this repo's pre-commit) invokes us with GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE set to the OUTER (superproject) repo.
+ * Those env vars override cwd-based repo discovery, so an inherited GIT_DIR can make `git show <rev>:<path>` resolve against the wrong repo's object database entirely (silently, if the outer repo happens to have a.
  */
 function gitEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
@@ -128,18 +104,8 @@ function gitRevParse(repoRoot: string, rev: string): string {
 }
 
 /**
- * Whether this clone can actually reach the two host-v1.1.5 blobs the
- * generator reads. False in a clone that has no release tags at all
- * (`actions/checkout` fetches none by default), and equally false in a shallow
- * or partial clone that has the tag ref but not the objects behind it — hence
- * `cat-file -e` on each blob rather than a bare `rev-parse` on the tag.
- *
- * Callers that regenerate (the emitter CLI) still fail loudly on a miss: the
- * fixture must never be produced from something other than the tag. Only the
- * regenerate-and-compare TEST consults this, so a tagless checkout reports the
- * guard as skipped instead of failing a check it has no evidence for. What
- * keeps the checked-in fixture honest there is `guarded-files-tripwire`, which
- * needs no tag to notice the file being edited.
+ * Whether this clone can actually reach the two host-v1.1.5 blobs the generator reads.
+ * Callers that regenerate (the emitter CLI) still fail loudly on a miss: the fixture must never be produced from something other than the tag.
  */
 export function hostV115TagObjectsAvailable(traycerRoot: string): boolean {
   const reachable = (revPath: string): boolean =>
@@ -264,17 +230,6 @@ function readSchemaVersion(
   };
 }
 
-/**
- * From the tagged registry source, collect method names of every
- * `defineRpcContract({ method, schemaVersion: {major:2,minor:0}, responseSchema })`
- * whose response schema identifier is the LATEST (amp-inclusive) state wrapper
- * — i.e. ends with `ResponseSchema` and does NOT end with `ResponseSchemaV10`
- * or `ResponseSchemaV20` (list@2.0 freezes pre-amp under the V20 suffix).
- *
- * At host-v1.1.5, all ten mutation@2.0 contracts used
- * `providers*ResponseSchema` (latest) while list used
- * `providersListResponseSchemaV20`.
- */
 export function extractMutationV20MethodsFromRegistrySource(
   registrySource: string,
 ): string[] {
@@ -333,11 +288,7 @@ export function extractMutationV20MethodsFromRegistrySource(
   return unique;
 }
 
-/**
- * Minimal valid ProviderCliState field bag. Field set matches host-v1.1.5's
- * latest `providerCliStateSchema` (validated at generation time against the
- * tag-imported zod schema — not the current branch).
- */
+/** Minimal valid ProviderCliState field bag. */
 function buildMinimalState(providerId: string): Record<string, unknown> {
   return {
     providerId,
@@ -365,11 +316,7 @@ function buildMinimalState(providerId: string): Record<string, unknown> {
   };
 }
 
-/**
- * Illustrative request samples for each mutation method. Literal values are
- * arbitrary; generation validates each sample against the TAG-imported request
- * schema so they are provably valid instances of what shipped.
- */
+/** Illustrative request samples for each mutation method. */
 function buildRequestSample(
   method: string,
   ampProviderId: string,
@@ -419,9 +366,7 @@ type ZodParseSchema = {
 };
 
 /**
- * Materialize the tagged provider-schemas module and import its zod exports so
- * samples are validated against host-v1.1.5 parsers, not the current branch.
- * Exported for tests that prove invalid samples fail the tag-era schemas.
+ * Materialize the tagged provider-schemas module and import its zod exports so samples are validated against host-v1.1.5 parsers, not the current branch.
  */
 export async function importTaggedProviderSchemas(
   taggedSchemasSource: string,
@@ -477,10 +422,6 @@ export async function importTaggedProviderSchemas(
     if (zodPath === null) {
       throw new Error("Could not locate zod package for tag schema import");
     }
-    // `node:fs` rather than spawning `test -d` / `ln -sfn`: neither binary is
-    // guaranteed off POSIX, and `spawnSync("ln")`'s exit status went unchecked,
-    // so a failed link surfaced later as a confusing module-resolution error
-    // instead of here. `symlinkSync` throws at the real cause.
     const zodLink = join(dir, "node_modules", "zod");
     rmSync(zodLink, { recursive: true, force: true });
     symlinkSync(
@@ -500,10 +441,7 @@ export async function importTaggedProviderSchemas(
     >;
     return mod;
   } finally {
-    // Keep temp dir until process exits so dynamic import cache stays valid
-    // for the duration of buildHostV115MutationV20Fixtures. Cleanup is best
-    // effort after the returned module is no longer needed — caller finishes
-    // synchronously after validation, so we schedule delayed cleanup.
+    // Keep temp dir until process exits so dynamic import cache stays valid for the duration of buildHostV115MutationV20Fixtures.
     setTimeout(() => {
       try {
         rmSync(dir, { recursive: true, force: true });

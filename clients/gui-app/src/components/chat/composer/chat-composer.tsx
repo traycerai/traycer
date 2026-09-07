@@ -108,92 +108,42 @@ export type { ChatComposerSideChatInput };
 
 interface ChatComposerProps {
   readonly taskId: string;
-  /**
-   * When true, this composer is the tile currently active inside
-   * the epic canvas; it registers with the focused-composer-
-   * controls registry so the command palette dispatches against
-   * it. Otherwise registration is suppressed. Callers that never
-   * render in a multi-tile context (e.g. a mobile standalone chat
-   * view) should pass `true`.
-   */
+  /** Otherwise registration is suppressed. Callers that never render in a multi-tile context (e.g. a mobile standalone chat view) should pass `true`. */
   readonly isActive: boolean;
   readonly sendDisabled: boolean | undefined;
-  /**
-   * Why `sendDisabled` is true, shown as the send button's hover/focus
-   * tooltip (e.g. "Reconnecting to the host…"). Without it a blocked send
-   * button is silently grey and reads as broken. `null`/absent when
-   * `sendDisabled` is false or the caller has no reason to give.
-   */
+  /** Without it a blocked send button is silently grey and reads as broken. */
   readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
-  /**
-   * The view tab this composer is rendered in. Used only by the provider
-   * re-auth banner's terminal sign-in, which must open the host-created
-   * terminal as a tile in ITS OWN view - in a split view each pane renders
-   * its own banner, and the app-wide active view is the wrong answer for at
-   * least one of them. `null` where the composer is not inside an epic view
-   * (the home composer), which is also where terminal sign-in is not offered.
-   */
+  /** `null` where the composer is not inside an epic view (the home composer), which is also where terminal sign-in is not offered. */
   readonly viewTabId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
-  /**
-   * Handles a prompt that leads with `/btw` / `/side`
-   * (`lib/chats/side-chat-command.ts`): fork this chat and ask the remainder
-   * there. Also what makes the two names appear in this composer's `/` picker.
-   * `null` where no chat exists to fork - the command is then not offered, and
-   * a typed one is sent like any other text.
-   */
+  /** Handles a prompt that leads with `/btw` / `/side` (`lib/chats/side-chat-command.ts`): fork this chat and ask the remainder there. `null` where no chat exists to fork - the command is then not offered, and a typed one is sent like any other text. */
   readonly onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
-  /**
-   * Whether the running turn's harness supports same-turn steering, projected
-   * from the host `activeTurn.sameTurnSteeringSupported` capability. A stable
-   * boolean (changes only when the turn's harness changes), so it never churns
-   * the memoized composer per streamed token. Gates the Cmd+Enter steer
-   * behavior and the discovery hints (decisions 5, 8, 9).
-   */
+  /** A stable boolean (changes only when the turn's harness changes), so it never churns the memoized composer per streamed token. */
   readonly steerCapable: boolean;
-  /**
-   * Whether the tab's negotiated `chat.subscribe` protocol version understands
-   * `after_safe_point` (host handshake minor >= 5). `false` degrades `Mod-Enter`
-   * to plain-Enter queueing so a new renderer never steers a released <=1.4 host
-   * that predates same-turn steering.
-   */
+  /** Whether the tab's negotiated `chat.subscribe` protocol version understands `after_safe_point` (host handshake minor >= 5). `false` degrades `Mod-Enter` to plain-Enter queueing so a new renderer never steers a released <=1.4 host that predates same-turn steering. */
   readonly steerProtocolSupported: boolean;
-  /**
-   * Reads the live active turn at submit time (not a reactive prop) so the
-   * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
-   * callback per streamed token - mirrors `steerQueuedItemNow`'s live read.
-   */
+  /** Reads the live active turn at submit time (not a reactive prop) so the settings-drift comparison for a Cmd+Enter steer never re-creates the submit callback per streamed token - mirrors `steerQueuedItemNow`'s live read. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly editingQueueItemId: string | null;
   readonly onCancelQueueEdit: (() => void) | null;
   readonly hasPendingApprovals: boolean;
   readonly stopDisabled: boolean;
   readonly onStopTurn: (() => void) | null;
-  /**
-   * The workspace-controls cluster (Location / Mode+branch / Environment chips,
-   * plus any trailing chip like context usage) rendered below the input. The
-   * caller - typically the chat tile - owns each chip's binding source so this
-   * prop stays presentation-only. `null` renders no row.
-   */
+  /** The workspace-controls cluster (Location / Mode+branch / Environment chips, plus any trailing chip like context usage) rendered below the input. The caller - typically the chat tile - owns each chip's binding source so this prop stays presentation-only. */
   readonly workspaceControls: ReactNode | null;
   /** Availability of the workspace backing this chat turn. */
   readonly workspaceAvailability: WorkspaceComposerAvailability;
   readonly topSpacing: ChatLowerSurfaceTopSpacing;
-  /**
-   * Optional element rendered directly above the composer input box (within
-   * the same `max-w-3xl` column). Used by the chat tile for the
-   * accumulated-changes tab, which connects to the composer's top edge.
-   * `null` renders nothing.
-   */
+  /** Optional element rendered directly above the composer input box (within the same `max-w-3xl` column). Used by the chat tile for the accumulated-changes tab, which connects to the composer's top edge. */
   readonly topSlot: ReactNode | null;
 }
 
@@ -203,10 +153,7 @@ export interface ChatComposerSubmitInput {
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-  /**
-   * Editor document without submit-only crop atoms, plus the annotation cards
-   * that left with the send.
-   */
+  /** Editor document without submit-only crop atoms, plus the annotation cards that left with the send. */
   readonly restore: ChatSendRestore;
 }
 
@@ -289,9 +236,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
-  // Where the picker's setup terminal lands: this epic, in THIS view - in a
-  // split view each pane's composer names its own, exactly as the reauth
-  // banner does. Memoized because the toolbar and picker are memo'd.
+  // Where the picker's setup terminal lands: this epic, in THIS view - in a split view each pane's composer names its own, exactly as the reauth banner does.
+  // Memoized because the toolbar and picker are memo'd.
   const terminalLoginSurface = useMemo<ProviderTerminalLoginSurface | null>(
     () =>
       currentEpicId === null || viewTabId === null
@@ -308,26 +254,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
-  // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
-  // and re-created editor re-fires). The draft-reset bridge keys its
-  // handle-ready catch-up on this - a ref flip alone never re-renders us.
+  // Counts editor-ready transitions (a counter, not a boolean, so a torn-down and re-created editor re-fires).
+  // The draft-reset bridge keys its handle-ready catch-up on this - a ref flip alone never re-renders us.
   const [editorReadyTick, setEditorReadyTick] = useState(0);
   const handleEditorReady = useCallback(
     () => setEditorReadyTick((tick) => tick + 1),
     [],
   );
-  // "The chat I am working in" for this Task, which is what a terminal quote
-  // targets by default. Focus is the signal, not message recency: an agent that
-  // just finished streaming is not where the user was typing.
+  // "The chat I am working in" for this Task, which is what a terminal quote targets by default.
+  // Focus is the signal, not message recency: an agent that just finished streaming is not where the user was typing.
   const handleComposerFocus = useCallback(() => {
     if (currentEpicId === null) return;
     recordFocusedChat(currentEpicId, taskId);
   }, [currentEpicId, taskId]);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  // The mention/slash menu renders through a body portal. It belongs to the
-  // one focused canvas tile, not merely every visible split member, so close
-  // its logical picker state whenever the exact focused owner changes. All
-  // three context signals default to `true` outside Epic surfaces.
+  // The mention/slash menu renders through a body portal.
+  // It belongs to the one focused canvas tile, not merely every visible split member, so close its logical picker state whenever the exact focused owner changes.
   const paneFocused = usePaneFocused();
   const tabSelected = useTabBodySelected();
   const focused = chatComposerFocused(isActive, paneFocused, tabSelected);
@@ -355,25 +297,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive: focused,
   });
 
-  // S11: one seed source, computed once and consumed identically by both the
-  // toolbar store and the reauth gate below - `settingsSeed` (non-null) makes
-  // it `authoritative` (a real chat pin); otherwise it falls back to
-  // `fallbackSettingsSeed` (a picker default, not a commitment - see
-  // `deriveReauthReason`'s comment for why that distinction matters).
+  // S11: one seed source, computed once and consumed identically by both the toolbar store and the reauth gate below - `settingsSeed` (non-null) makes it `authoritative` (a real chat pin); otherwise it falls back to `fallbackSettingsSeed` (a picker default, not a commitment - see `deriveReauthReason`'s comment for why that distinction matters).
   const seedSource = authoritativeOrFallbackSeedSource(
     settingsSeed,
     fallbackSettingsSeed,
     hostClient,
   );
-  // Per-composer toolbar store: this component only subscribes to the two
-  // slices it consumes (harness id for the picker/editor, selected model for
-  // the image gate); everything else - permission, reasoning, tier, the
-  // catalog churn - stays inside the toolbar leaves and the submit path.
-  // Only the focused top-level surface owns composer controls, automatic focus,
-  // and their catalog subscriptions. Visible split partners retain their body.
-  // The catalog is the TAB host's (`hostClient`), like every other read in
-  // this composer - a tab bound to another host offers that host's harnesses
-  // and models, never the app-wide default's.
+  // The catalog is the TAB host's (`hostClient`), like every other read in this composer - a tab bound to another host offers that host's harnesses and models, never the app-wide default's.
   const toolbarStore = useComposerToolbarStore(
     focused ? "chat-tile" : null,
     seedSource,
@@ -382,9 +312,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
-  // Connection-level auth gate for the selected provider, scoped to the tab's
-  // host. When the provider CLI is signed out it blocks send and mounts the
-  // re-auth banner above the composer; a doomed turn can't start.
+  // Connection-level auth gate for the selected provider, scoped to the tab's host.
+  // When the provider CLI is signed out it blocks send and mounts the re-auth banner above the composer; a doomed turn can't start.
   const reauthGate = useProviderReauthGate(
     harnessId,
     profileId,
@@ -397,10 +326,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     focused,
   );
-  // Managed-pack gate, scoped to the TAB's host - a tab bound to another host
-  // must gate on that host's packs, never the app-wide default's. Same shape as
-  // the reauth gate above: block send and say why, so a doomed turn can't
-  // start. The host resolver still refuses independently; this is the UX half.
+  // Managed-pack gate, scoped to the TAB's host - a tab bound to another host must gate on that host's packs, never the app-wide default's.
+  // Same shape as the reauth gate above: block send and say why, so a doomed turn can't start.
   const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
   const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
@@ -412,9 +339,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabledHint,
   });
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
-  // Rate-limit switch prompt: purely informational + user-confirmed, so it
-  // never blocks send the way the reauth gate does. Scoped to the selected
-  // model - a limit gating only another model family stays silent here.
+  // Rate-limit switch prompt: purely informational + user-confirmed, so it never blocks send the way the reauth gate does.
+  // Scoped to the selected model - a limit gating only another model family stays silent here.
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,
@@ -422,10 +348,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     active: focused,
     client: hostClient,
   });
-  // Keeps the switch prompt's own `providers.list` read converging with a
-  // turn's passive rate-limit capture: without this, a turn that just pushed
-  // this harness's profile into near/hard limit wouldn't surface the banner
-  // until `providers.list`'s next unrelated 15-minute refetch.
+  // Keeps the switch prompt's own `providers.list` read converging with a turn's passive rate-limit capture: without this, a turn that just pushed this harness's profile into near/hard limit wouldn't surface the banner until `providers.list`'s next unrelated 15-minute refetch.
   const providerRefreshInputs = focusedProviderRefreshInputs(
     focused,
     harnessId,
@@ -496,17 +419,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isResolvingFilePaths,
   });
 
-  // Chat-plane read with the reader's own bound, which replaces the old
-  // `hasAttachmentBytes` pre-check: the bytes may live on this host's disk or
-  // in the cloud now, so presence is no longer answerable synchronously, and
-  // the bound is what keeps a stash save from hanging on an unreachable image.
-  // A capture deliberately survives composer unmount, so this read is not
-  // coupled to component-lifecycle cancellation.
+  // Chat-plane read with the reader's own bound, which replaces the old `hasAttachmentBytes` pre-check: the bytes may live on this host's disk or in the cloud now, so presence is no longer answerable synchronously, and the bound is what keeps a stash save from hanging on an unreachable image.
+  // A capture deliberately survives composer unmount, so this read is not coupled to component-lifecycle cancellation.
   const readPromptStashImage = useChatAttachmentByteReader();
   const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
-  // Chat writes the draft store, but restore still requires the exact ready
-  // editor generation that started the restore - a remount under the same
-  // taskId must not consume the stash into a different editor instance.
+  // Chat writes the draft store, but restore still requires the exact ready editor generation that started the restore - a remount under the same taskId must not consume the stash into a different editor instance.
   const promptStashDestination = useChatPromptStashDestination(
     taskId,
     editorRef,
@@ -593,10 +510,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
-  // Excludes the model-resolution gate: ComposerToolbarRight ANDs the
-  // store-derived `modelResolved` onto the send button, and the submit hook
-  // re-checks it at dispatch, so this composer never re-renders when the
-  // model catalog resolves.
+  // Excludes the model-resolution gate: ComposerToolbarRight ANDs the store-derived `modelResolved` onto the send button, and the submit hook re-checks it at dispatch, so this composer never re-renders when the model catalog resolves.
   const canSubmit = canSubmitDraft({
     activeTurnStatus,
     hasPendingApprovals,
@@ -786,15 +700,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
 }
 
-/**
- * The composer owns exactly what the tile it lives in owns, so it answers with
- * the tile's own predicate rather than a second, shorter one. `tabSelected` is
- * the part that is easy to lose: keep-alive leaves a background tab's body
- * mounted inside a focused pane, so pane focus plus tile-active is `true` for a
- * composer that is not on screen - which would let it hold catalog
- * subscriptions, own dictation, and mark its editor active from behind
- * whichever tab the user is actually looking at.
- */
+/** The composer owns exactly what the tile it lives in owns, so it answers with the tile's own predicate rather than a second, shorter one. `tabSelected` is the part that is easy to lose: keep-alive leaves a background tab's body mounted inside a focused pane, so pane focus plus tile-active is `true` for a composer that is not on screen - which would let it hold catalog subscriptions, own dictation, and mark its editor active from behind whichever tab the user is actually looking at. */
 function chatComposerFocused(
   isActive: boolean,
   paneFocused: boolean,
@@ -814,9 +720,7 @@ function focusedProviderRefreshInputs(
 
 export const ChatComposer = memo(ChatComposerImpl);
 
-// Narrowed props for `ProviderReauthBanner`, resolved once so neither the
-// `topBannerKind` derivation nor the JSX re-derives the same three-way
-// `signedOut && providerId !== null && reason !== null` check.
+// Narrowed props for `ProviderReauthBanner`, resolved once so neither the `topBannerKind` derivation nor the JSX re-derives the same three-way `signedOut && providerId !== null && reason !== null` check.
 function resolveReauthBannerProps(gate: ProviderReauthGate): {
   readonly providerId: ProviderId;
   readonly reason: ProviderReauthReason;
@@ -895,11 +799,7 @@ interface CanSubmitDraftArgs {
   readonly draftHasImages: boolean;
 }
 
-/**
- * Whether send is blocked, and the one hint that explains it. Returned together
- * so a reason can never block send without also supplying its copy — a silently
- * grey button reads as broken.
- */
+/** Whether send is blocked, and the one hint that explains it. Returned together so a reason can never block send without also supplying its copy - a silently grey button reads as broken. */
 function resolveSendBlock(args: {
   readonly workspaceDisabledHint: string | null;
   readonly signedOut: boolean;
@@ -922,12 +822,7 @@ function resolveSendBlock(args: {
   };
 }
 
-/**
- * Priority mirrors severity: the workspace gate (can't run anywhere), then the
- * signed-out gate (the reauth banner has the full story), then the managed-pack
- * gate (self-resolving — it says so, and ranks below the two the user must act
- * on), then the caller's reason (connection loss / view-only access).
- */
+/** Priority mirrors severity: the workspace gate (can't run anywhere), then the signed-out gate (the reauth banner has the full story), then the managed-pack gate (self-resolving - it says so, and ranks below the two the user must act on), then the caller's reason (connection loss / view-only access). */
 function resolveSendBlockedHint(args: {
   readonly workspaceDisabledHint: string | null;
   readonly signedOut: boolean;

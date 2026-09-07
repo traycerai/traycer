@@ -424,18 +424,7 @@ describe("fileReadToDurableBytes", () => {
   });
 });
 
-/**
- * The sentinel decoder is the fix for a lockout-class blocker: the previous
- * per-platform reader recognised a bare boolean or `{"value": bool}` and fell
- * through **everything else** to `observed(true)`, while the only writer in
- * either repo emits `{"removedByUser": bool}`.
- *
- * Every arm below is reachable from bytes the product can actually produce.
- * The writer↔reader pinning — running the real desktop writer and decoding its
- * literal output — lives in
- * `clients/desktop/src/electron-main/host/__tests__/host-removal-state-sentinel-contract.test.ts`,
- * because that is the only place the real writer can run.
- */
+/** Every arm below is reachable from bytes the product can actually produce. */
 describe("decodeBooleanSentinel", () => {
   it("is absent when the file does not exist", () => {
     expect(decodeBooleanSentinel(missing, "removedByUser")).toEqual({
@@ -499,8 +488,8 @@ describe("decodeBooleanSentinel", () => {
     });
   });
 
-  // The heart of the blocker: an unrecognised shape must NEVER become a value,
-  // and specifically never `observed(true)` — a durable refusal to start.
+  // The heart of the blocker: an unrecognised shape must never become a value,
+  // and specifically never `observed(true)` - a durable refusal to start.
   it.each([
     ['{"somethingElse":true}', "an unknown key"],
     ["{}", "an empty object"],
@@ -544,9 +533,8 @@ describe("booleanSentinelToEvidence", () => {
     });
   });
 
-  // I3 — evidence travels. Doctor has to be able to tell a user *why* their
-  // sentinel could not be read, so the failed arms keep distinct causes rather
-  // than collapsing onto one generic `probe-error`.
+  // I3 - evidence travels.
+  // Doctor has to be able to tell a user *why* their sentinel could not be read, so the failed arms keep distinct causes rather than collapsing onto one generic `probe-error`.
   it("maps each failed arm to its own distinguishable cause", () => {
     expect(booleanSentinelToEvidence({ kind: "corrupt" })).toEqual({
       kind: "indeterminate",

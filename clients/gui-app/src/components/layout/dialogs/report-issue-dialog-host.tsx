@@ -36,12 +36,8 @@ export function ReportIssueDialogHost(): ReactNode {
     };
   }, [activeDialog, close, setReportIssueAvailable, support]);
 
-  // G2: a new report trigger while a confirmation is showing replaces the
-  // dialog outright (the host below always remounts by `reportIssueDraftId`)
-  // - but the confirmation holds the only copy of that report id, so surface
-  // it in a toast before it is gone for good. `lastConfirmedReport` is
-  // cleared on any intentional close, so this only fires for a live
-  // replacement, never after the user already dismissed the confirmation.
+  // `lastConfirmedReport` is cleared on any intentional close, so this only fires for a live replacement, never
+  // after the user already dismissed the confirmation.
   const previousDraftIdRef = useRef(reportIssueDraftId);
   useEffect(() => {
     const previousDraftId = previousDraftIdRef.current;

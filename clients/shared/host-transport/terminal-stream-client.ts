@@ -18,16 +18,8 @@ import type {
 import type { IHostStreamClient } from "./host-stream-client";
 
 /**
- * Typed handlers for a `terminal.subscribe` session. The renderer's terminal
- * store binds these so raw stream envelopes do not leak into React.
- *
- * `onSnapshot`/`onData` take the content as a separate `string | Uint8Array`
- * parameter rather than reading it off the frame: a `@1.2`+ connection
- * receives `binarySnapshot`/`binaryData` instead of `snapshot`/`data`, whose
- * payload arrives out-of-band as the paired binary WS frame rather than a
- * JSON string field (see `subscribe.ts`'s file-level doc comment). This
- * lets the store handle either encoding uniformly without knowing which
- * minor negotiated.
+ * Typed handlers for a `terminal.subscribe` session.
+ * The renderer's terminal store binds these so raw stream envelopes do not leak into React.
  */
 type TerminalSubscribeServerFrameOnWire =
   | TerminalSubscribeServerFrame
@@ -85,20 +77,16 @@ export interface TerminalStreamClientOptions {
   readonly cols: number;
   readonly rows: number;
   /**
-   * `terminal.subscribe@1.6` attachment intent. Absent ⇒ `presentation`
-   * (today's behavior). `cache` is a warm-reattach attachment with no
-   * attention claim; intent is open-frame-only, so a lease-state change
-   * constructs a new client rather than restating on the live session.
+   * `terminal.subscribe@1.6` attachment intent.
+   * `cache` is a warm-reattach attachment with no attention claim; intent is open-frame-only, so a lease-state change constructs a new client rather than restating on the live session.
    */
   readonly viewer?: TerminalSubscribeViewer;
   readonly callbacks: TerminalStreamCallbacks;
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for a single host-owned terminal
- * session. The renderer attaches with its current cols/rows so the host's
- * effective-size recompute (`min` across attached clients) lands before the
- * `snapshot` frame is sent.
+ * Typed wrapper over `WsStreamClient` for a single host-owned terminal session.
+ * The renderer attaches with its current cols/rows so the host's effective-size recompute (`min` across attached clients) lands before the `snapshot` frame is sent.
  */
 export class TerminalStreamClient {
   private readonly session: IStreamSession;
@@ -137,11 +125,8 @@ export class TerminalStreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
-    // THIS session's negotiated version: each terminal tab is its own
-    // `terminal.subscribe` session, and the client-wide accessor answers for
-    // whichever one reconciliation reached first. Parsing a frame at a sibling
-    // tab's minor either strips fields this host did send or demands fields it
-    // cannot.
+    // This session's negotiated version: each terminal tab is its own `terminal.subscribe` session, and the client-wide accessor answers for whichever one reconciliation reached first.
+    // Parsing a frame at a sibling tab's minor either strips fields this host did send or demands fields it cannot.
     const version = this.session.getNegotiatedSchemaVersion();
     const parsed =
       version !== null && version.major === 1 && version.minor >= 5
@@ -151,9 +136,7 @@ export class TerminalStreamClient {
           : terminalSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       // Schema mismatch: a version-skewed host/client or a genuine wire bug.
-      // Log the envelope kind and issue paths only - never `parsed.error` or
-      // the raw envelope, which may carry user terminal content
-      // (scrollback/chunk) inside whichever field failed to validate.
+      // Log the envelope kind and issue paths only - never `parsed.error` or the raw envelope, which may carry user terminal content (scrollback/chunk) inside whichever field failed to validate.
       const issuePaths = parsed.error.issues
         .map((issue) =>
           issue.path.length > 0 ? issue.path.join(".") : "(root)",
@@ -172,11 +155,8 @@ export class TerminalStreamClient {
       }
       case "binarySnapshot": {
         if (binaryPayload === null) {
-          // Protocol violation: `hasBinaryPayload: true` promises a paired
-          // binary WS frame right behind this envelope (see subscribe.ts's
-          // file-level doc comment). Losing it here means the transport's
-          // envelope/binary-frame pairing broke somewhere below this class -
-          // surface it rather than silently dropping the snapshot.
+          // Protocol violation: `hasBinaryPayload: true` promises a paired binary WS frame right behind this envelope (see subscribe.ts's file-level doc comment).
+          // Losing it here means the transport's envelope/binary-frame pairing broke somewhere below this class - surface it rather than silently dropping the snapshot.
           console.warn(
             `[stream] binarySnapshot for terminal.subscribe (sessionId=${frame.sessionId}) arrived without its paired binary payload; dropping frame`,
           );

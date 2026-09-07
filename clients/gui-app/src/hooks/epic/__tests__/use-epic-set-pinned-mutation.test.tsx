@@ -301,11 +301,7 @@ describe("useEpicSetPinned", () => {
   });
 
   it("resets the scope's pagination and refreshes the first page on success", async () => {
-    // The committed reorder crosses server page boundaries, so retained
-    // cursors are stale: success must drop the scope's tails (advancing
-    // their generations so in-flight ones are rejected), remove the scope's
-    // inactive first pages, and refetch the active ones - all without
-    // disturbing other scopes or the already-correct optimistic display.
+    // The committed reorder crosses server page boundaries, so retained cursors are stale: success must drop the scope's tails (advancing their generations so in-flight ones are rejected), remove the scope's inactive first pages, and refetch the active ones - all without disturbing other scopes or the already-correct optimistic display.
     const queryClient = new QueryClient();
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
     const scopedQueryKey = cloudEpicTasksQueryKey(
@@ -380,10 +376,7 @@ describe("useEpicSetPinned", () => {
 
 describe("usePendingSetPinnedEpicIds", () => {
   it("tracks two concurrently pending epics independently and drops each as its own mutation settles", async () => {
-    // A real `useMutation` sharing `epicMutationKeys.setPinned()` stands in
-    // for two rows calling the same shared `useEpicSetPinned()` instance -
-    // the mutation cache (not this local observer) is what the hook under
-    // test reads from.
+    // A real `useMutation` sharing `epicMutationKeys.setPinned()` stands in for two rows calling the same shared `useEpicSetPinned()` instance - the mutation cache (not this local observer) is what the hook under test reads from.
     const resolvers = new Map<string, (value: { pinned: boolean }) => void>();
     const queryClient = new QueryClient({
       defaultOptions: { mutations: { retry: false } },

@@ -87,15 +87,8 @@ describe("<LogsChooserDialog />", () => {
     act(() => {
       useDesktopDialogStore.setState({ reportIssueAvailable: true });
     });
-    // `findByRole`, not `getByRole`: the claim is that the action APPEARS
-    // once the capability flips, not that it appears in the same synchronous
-    // flush as the store write. Asserted synchronously this failed on CI's
-    // gui-app shard 1/8 on two consecutive heads (a5d1a7f4, 5cd01e0f) - both
-    // pushes that added test files and so re-shuffled the shard's file order
-    // - while passing on rerun, and never reproducing locally (12 runs). The
-    // mechanism is not pinned down (a worker-shared React flush deferred by an
-    // earlier file is the leading suspect); a lost update would still fail
-    // here, since `findByRole` times out rather than passes.
+    // The mechanism is not pinned down (a worker-shared React flush deferred by an earlier file is the leading
+    // suspect); a lost update would still fail here, since `findByRole` times out rather than passes.
     fireEvent.click(
       await screen.findByRole("button", { name: "Report issue" }),
     );

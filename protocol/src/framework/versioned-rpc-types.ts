@@ -9,9 +9,7 @@ export type SchemaVersion = {
   minor: number;
 };
 
-// Single source of truth for the wire error codes. The type is derived from
-// this array so adding a code here automatically widens `RpcErrorCode` and is
-// recognized by `isRpcErrorCode` - no parallel list to keep in sync.
+// Single source of truth for the wire error codes.
 export const RPC_ERROR_CODES = [
   "RPC_ERROR",
   "DOWNGRADE_UNSUPPORTED",
@@ -29,46 +27,26 @@ export const RPC_ERROR_CODES = [
   "WORKTREE_REMOVE_LAST_ENTRY",
   "PROVIDER_DISABLED",
   "SENDER_TUI_UNSUPPORTED",
-  // Caller-supplied input is structurally valid but semantically rejected
-  // (e.g. minting the reserved `traycer:system` agent id). Additive and
-  // degrade-safe: the wire `code` is an open string and old clients narrow
-  // unknown codes to RPC_ERROR while keeping the 4xx status.
+  // Caller-supplied input is structurally valid but semantically rejected (e.g. minting the reserved `traycer:system` agent id).
   "E_INVALID_ARGUMENT",
   // Role-surface outcomes (same additive degrade story as E_INVALID_ARGUMENT).
-  // An absent agent and a foreign-account agent share E_AGENT_NOT_FOUND with
-  // one message template - anything more specific would be an existence
-  // oracle across the account boundary.
   "E_AGENT_NOT_FOUND",
   // The caller's OWN agent lives on another host; the message names it, so
   // telling the caller where to go discloses nothing across accounts.
   "E_AGENT_NOT_LOCAL",
-  // A claim held by ANOTHER of the caller's own agents - a real authorization
-  // error with role-specific copy, distinct from the generic epic-access
-  // FORBIDDEN whose "check Task access" guidance would mislead here.
+  // A claim held by ANOTHER of the caller's own agents - a real authorization error with role-specific copy, distinct from the generic epic-access FORBIDDEN whose "check Task access" guidance would mislead here.
   "E_ROLE_FORBIDDEN",
-  // The epic document is sealed, newer than this host understands, or cannot
-  // be read safely. Distinct from FORBIDDEN: the caller may hold editor access
-  // while the document itself is intentionally read-only.
+  // The epic document is sealed, newer than this host understands, or cannot be read safely.
+  // Distinct from FORBIDDEN: the caller may hold editor access while the document itself is intentionally read-only.
   "E_EPIC_READ_ONLY",
-  // A keyed unary was refused before resolver dispatch because the bounded
-  // replay cache had no safe slot. The command definitely did not run and may
-  // retry with the SAME key once capacity returns. This meaning is part of the
-  // negotiated `unary.idempotencyKey` capability; changing it requires a new
-  // capability name, never a reinterpretation of this code.
+  // A keyed unary was refused before resolver dispatch because the bounded replay cache had no safe slot.
+  // This meaning is part of the negotiated `unary.idempotencyKey` capability; changing it requires a new capability name, never a reinterpretation of this code.
   "E_IDEMPOTENCY_CACHE_SATURATED",
   // The original keyed unary exceeded the host's in-flight replay ceiling.
-  // The host will never dispatch the key again while that execution remains
-  // live, but it can no longer promise a committed or rejected answer to a
-  // later joiner. Clients reconcile this ambiguous outcome through echo/TTL.
+  // The host will never dispatch the key again while that execution remains live, but it can no longer promise a committed or rejected answer to a later joiner.
   "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
-  // The original keyed unary SETTLED, and its response was too large for the
-  // host to retain for replay. Distinct from E_IDEMPOTENCY_OUTCOME_UNKNOWN in
-  // the one way a client acts on: there the answer is unknowable, here it is
-  // known and simply not kept, so the command definitely ran and must NOT be
-  // retried under the same key expecting a result. The host keeps the key
-  // precisely so the retry cannot re-execute it. Additive and degrade-safe
-  // like E_INVALID_ARGUMENT - a client that does not know this code sees an
-  // ordinary 409.
+  // The original keyed unary SETTLED, and its response was too large for the host to retain for replay.
+  // The host keeps the key precisely so the retry cannot re-execute it.
   "E_IDEMPOTENCY_REPLAY_TOO_LARGE",
   "TERMINAL_ID_TAKEN",
   // A durable terminal is mid-delete. 409, not 500: the caller can retry
@@ -77,25 +55,8 @@ export const RPC_ERROR_CODES = [
   // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
   // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
   "MESSAGE_TOO_LARGE",
-  // A latest-checkpoint fork (`epic.createChat`'s `forkSource: {boundary:
-  // "latest"}`, and the A2A `agent.fork`/`forkAgent` tool that shares the same
-  // seed builder) named a source chat with no assistant record to fork from
-  // yet. A precondition on the CALLER's chosen source, not a server fault -
-  // same additive degrade story as E_INVALID_ARGUMENT.
   "E_FORK_CHECKPOINT_UNAVAILABLE",
-  // A fork named a boundary the source chat's cloud publication does not
-  // cover yet: the host could only reach the source through the cloud (or
-  // doc) tier - a cross-host fork, where the target holds no local
-  // transcript - and the requested assistant message is newer than what the
-  // source host has published. RETRYABLE, and the only fork refusal that is:
-  // the same call succeeds once the source's next publish sweep lands, so
-  // callers should keep the surface open and offer a retry rather than
-  // treating it as a dead end. Distinct from
-  // E_FORK_CHECKPOINT_UNAVAILABLE (no assistant record to fork from at all)
-  // and from the caller-bug slice errors (boundary is not an assistant
-  // message, no turn key, interview block missing), which are permanent and
-  // must never be reported as "still syncing". Same additive degrade story
-  // as E_INVALID_ARGUMENT.
+  // A fork named a boundary the source chat's cloud publication does not cover yet: the host could only reach the source through the cloud (or doc) tier - a cross-host fork, where the target holds no local transcript - and.
   "E_FORK_BOUNDARY_NOT_PUBLISHED",
 ] as const;
 
@@ -108,12 +69,7 @@ export function isRpcErrorCode(value: string): value is RpcErrorCode {
 export type RpcErrorDetails = {
   code: RpcErrorCode;
   message: string;
-  /**
-   * Typed holder inventory on `WORKTREE_BUSY` and
-   * `WORKTREE_HOLDERS_CHANGED`. Optional: omitted on every other code, and
-   * omitted by hosts that predate the holders minor. See
-   * `worktreeBusyHolderSchema`.
-   */
+  /** Typed holder inventory on `WORKTREE_BUSY` and `WORKTREE_HOLDERS_CHANGED`. */
   holders?: readonly WorktreeBusyHolder[];
   /**
    * Host-computed digest of `holders`. Present on `WORKTREE_BUSY` and
@@ -296,10 +252,7 @@ type ErasedMethodDegradeDeclaration<
 
 /**
  * Erased bridge shape used by registry storage and traversal internals.
- *
- * Author bridges with `defineUpgradePath()` instead of constructing this type
- * directly. The `never` parameter preserves assignability for narrower adapters
- * after erasure.
+ * The `never` parameter preserves assignability for narrower adapters after erasure.
  */
 export type AnyUpgradePath = {
   from: SchemaVersion;
@@ -313,10 +266,7 @@ export type AnyUpgradePath = {
 
 /**
  * Erased downgrade bridge shape used by registry storage and traversal internals.
- *
- * Author bridges with `defineDowngradePath()` instead of constructing this type
- * directly. As with `AnyUpgradePath`, the `never` parameter keeps narrower
- * downgrade functions assignable after erasure.
+ * As with `AnyUpgradePath`, the `never` parameter keeps narrower downgrade functions assignable after erasure.
  */
 export type AnyDowngradePath = {
   from: SchemaVersion;
@@ -332,24 +282,12 @@ export type VersionEntry<
   readonly contract: Contract;
   readonly upgradeFromPreviousVersion: Upgrade;
   /**
-   * Declares that this minor's RESPONSE value growth (new enum values,
-   * new union variants, widened forms relative to the previous minor)
-   * is emission-gated: the host consults the negotiated version and
-   * never emits the new values to older peers (the chat-frame-projection
-   * pattern). Without this, the registry validator rejects response-side
-   * value growth on a minor - an old peer's schema REFUSES such values,
-   * and for state-controlled response data that refusal poisons every
-   * old peer with no opt-out. It also permits replacing a dropped union arm
-   * when that same projection supplies the older arm to older callers.
-   * Declaring it is a reviewed claim about the EMITTER, which the validator
-   * cannot check; other structural reductions remain forbidden.
+   * Declares that this minor's RESPONSE value growth (new enum values, new union variants, widened forms relative to the previous minor) is emission-gated: the host consults the negotiated version and never emits the new.
+   * Declaring it is a reviewed claim about the EMITTER, which the validator cannot check; other structural reductions remain forbidden.
    */
   readonly responseGrowthProjectionGated?: true;
   /**
-   * Declares that the first contract in a new major changes semantics even
-   * when its isolated request/response schemas remain structurally
-   * compatible. Use only when the method belongs to a coherently negotiated
-   * family whose authority or topology changed across the major boundary.
+   * Declares that the first contract in a new major changes semantics even when its isolated request/response schemas remain structurally compatible.
    */
   readonly semanticMajorBreakFromPreviousMajor?: true;
 };
@@ -377,30 +315,14 @@ type AnyMajorVersionLine = MajorVersionLine<
   Readonly<Record<number, AnyDowngradePath>>
 >;
 
-/**
- * Raw method registry shape before validation.
- *
- * Use this at boundaries where a registry can still be malformed. Promote it to
- * `MethodVersionRegistry` with `defineVersionedRpcRegistry()` or
- * `validateVersionedRpcRegistry()` before calling traversal helpers.
- */
+/** Raw method registry shape before validation. */
 export type UncheckedMethodVersionRegistry = Readonly<
   Record<number, AnyMajorVersionLine>
 > & {
   readonly degrade?: MethodDegradeDeclaration;
 };
 
-/**
- * Validated method registry required by the traversal helpers.
- *
- * Guarantees:
- * - `latestMinor` is installed and is the highest installed minor in the line
- * - each contract matches its major/minor slot and method key
- * - each non-initial installed version defines an upgrade from the previous
- *   installed version in the overall chain
- * - each downgrade originates from the latest installed version of its line and
- *   targets the latest installed version of an older major
- */
+/** Validated method registry required by the traversal helpers. */
 export type MethodVersionRegistry<
   Registry extends UncheckedMethodVersionRegistry =
     UncheckedMethodVersionRegistry,
@@ -429,13 +351,7 @@ type ValidatedVersionedRpcRegistryBrand = {
   readonly [validatedVersionedRpcRegistryBrand]: true;
 };
 
-/**
- * Validated multi-method registry.
- *
- * Usage pattern:
- * - static source literals: `defineVersionedRpcRegistry(...)`
- * - dynamic inputs: `validateVersionedRpcRegistry(registry)` then use the refined value
- */
+/** Validated multi-method registry. */
 export type VersionedRpcRegistry<
   Registry extends UncheckedVersionedRpcRegistry =
     UncheckedVersionedRpcRegistry,
@@ -692,16 +608,7 @@ type ValidateMethodVersionRegistry<
   >;
 };
 
-/**
- * Compile-time mirror of the runtime registry validator.
- *
- * Enforced invariants:
- * - registry key matches `contract.method`
- * - major/minor slots match `contract.schemaVersion`
- * - `latestMinor` points at the highest installed minor in the line
- * - each non-initial version defines an upgrade from the previous installed version
- * - downgrades target latest contracts on older majors only
- */
+/** Compile-time mirror of the runtime registry validator. */
 export type ValidateVersionedRpcRegistry<
   Registry extends UncheckedVersionedRpcRegistry,
 > = {
@@ -769,12 +676,7 @@ export type ContractForInstalledVersion<
   Version extends InstalledSchemaVersion<Registry>,
 > = ContractAtVersion<Registry, Version["major"], Version["minor"]>;
 
-/**
- * Erased bridge view used while iterating across installed versions.
- *
- * Validation guarantees each stored bridge lines up with the previous installed
- * version in the chain, so traversal can safely operate over registry-wide unions.
- */
+/** Erased bridge view used while iterating across installed versions. */
 export type RuntimeUpgradePath<Registry extends MethodVersionRegistry> = {
   from: SchemaVersion;
   to: SchemaVersion;

@@ -1,17 +1,5 @@
 /**
- * Pins `FileTreeRowContextMenu`'s row recovery, menu order, and gating:
- *
- * - The row under a right-click is recovered from the event's composed path,
- *   not from a per-row element the tree hands the menu directly - a
- *   right-click that hits no tagged row must not open an empty menu.
- * - Finder is listed as the last row of the open group, labelled the same for
- *   a file and a folder: the host picks reveal-vs-open from the path itself.
- * - The absolute path handed to the host strips a directory row's trailing
- *   separator; the copied relative path is the workspace-relative tree path
- *   with the same separator stripped.
- * - Finder and the editors are independently gated (Finder's own availability
- *   probe; the editors on the host directory entry being local) while the two
- *   Copy items are unconditional.
+ * Pins `FileTreeRowContextMenu`'s row recovery, menu order, and gating: - The row under a right-click is recovered from the event's composed path, not from a per-row element the tree hands the menu directly - a right-click that hits no tagged row must not open an empty menu. - Finder is listed as the last row of the open group, labelled the same for a file and a folder: the host picks reveal-vs-open from the path itself. - The absolute path handed to the host strips a directory row's trailing separator; the copied relative path is the workspace-relative tree path with the same separator stripped. - Finder and the editors are independently gated (Finder's own availability probe; the editors on the host directory entry being local) while the two Copy items are unconditional.
  */
 import {
   afterEach,
@@ -111,9 +99,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   },
 }));
 
-// Captures what each copy call was actually given, and fires the real
-// `onSuccess` synchronously - which is what drives the two distinct toast
-// messages the component wires per copy target.
+// Captures what each copy call was actually given, and fires the real `onSuccess` synchronously - which is what drives the two distinct toast messages the component wires per copy target.
 vi.mock("@/hooks/ui/use-clipboard-copy", () => ({
   useClipboardCopy: (options: ClipboardCopyOptions) => ({
     copied: false,
@@ -302,9 +288,7 @@ describe("<FileTreeRowContextMenu />", () => {
     screen.getByRole("menuitem", { name: "Copy Relative Path" });
   });
 
-  // Radix arms a 700ms long-press timer on a touch/pen pointerdown and opens
-  // WITHOUT ever firing `contextMenu`, so the row has to be captured there too
-  // or the menu opens with no content mounted.
+  // Radix arms a 700ms long-press timer on a touch/pen pointerdown and opens WITHOUT ever firing `contextMenu`, so the row has to be captured there too or the menu opens with no content mounted.
   describe("touch long-press", () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -371,9 +355,7 @@ describe("<FileTreeRowContextMenu />", () => {
     });
   });
 
-  // One launch at a time: the menu can be reopened and a target reselected
-  // while a slow open is still in flight, and every mutate is queued rather
-  // than coalesced, so an unguarded handler launches the same path twice.
+  // One launch at a time: the menu can be reopened and a target reselected while a slow open is still in flight, and every mutate is queued rather than coalesced, so an unguarded handler launches the same path twice.
   describe("while an open is in flight", () => {
     it("disables the editor and Finder items but not the Copy items", () => {
       menuState.isPending = true;
@@ -409,9 +391,7 @@ describe("<FileTreeRowContextMenu />", () => {
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-      // The disabled state has to read as work in progress rather than as a
-      // dead item, and the label must not become "Opening…" - the spinner is
-      // the only channel that moves.
+      // The disabled state has to read as work in progress rather than as a dead item, and the label must not become "Opening…" - the spinner is the only channel that moves.
       screen.getByTestId("epic-file-tree-row-open-vscode-spinner");
       screen.getByTestId("epic-file-tree-row-open-finder-spinner");
       screen.getByRole("menuitem", { name: "VS Code" });
@@ -449,9 +429,7 @@ describe("<FileTreeRowContextMenu />", () => {
     });
 
     it("does not relaunch when the menu is reopened and reselected inside the feedback window", () => {
-      // The pending flag has to outlive the menu closing, which is exactly the
-      // reopen-and-reselect path: `isPending` stays false here, so the
-      // press-feedback half of the guard is what has to hold.
+      // The pending flag has to outlive the menu closing, which is exactly the reopen-and-reselect path: `isPending` stays false here, so the press-feedback half of the guard is what has to hold.
       renderTree("host-1");
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));

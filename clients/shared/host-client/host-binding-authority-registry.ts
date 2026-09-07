@@ -4,7 +4,6 @@ import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
 import { isConfirmedTransportRefusal } from "./remote-fetcher";
 import { hasReadyRemoteSession } from "../host-transport/remote/active-remote-sessions";
 
-/** Immutable binding portion of a request authority, shared per host id. */
 export interface HostBindingAuthority {
   /** Opaque identity used by the coordinator to compare binding domains. */
   readonly token: object;
@@ -19,35 +18,20 @@ interface StoredBindingAuthority extends HostBindingAuthority {
 }
 
 /**
- * The fields that make one binding generation a DIFFERENT route from the next.
- *
- * `transportDialability` is deliberately absent, and its absence is load-
- * bearing. Renewing a binding aborts the previous generation's in-flight
- * requests, so anything in here is a reason to cancel work — which is a claim
- * about the route, not about how confident the directory currently feels. A
- * failed liveness read flips the coarse bit on a host whose address never
- * moved; including it meant one degraded read on the cloud side cancelled every
- * request riding the socket that read said nothing about. What DOES belong is
- * the directory positively refusing the route, and that arrives through
- * `isConfirmedTransportRefusal` below rather than through the coarse bit.
+ * The fields that make one binding generation a different route from the next.
+ * Renewing a binding aborts the previous generation's in-flight requests, so anything in here is a reason to cancel work - which is a claim about the route, not about how confident the directory currently feels.
  */
 interface HostTransportSnapshot {
   readonly hostId: string;
   readonly kind: HostDirectoryEntry["kind"];
   readonly websocketUrl: string | null;
   readonly version: string | null;
-  /**
-   * The directory has positively refused this route (confirmed `offline`, or
-   * `plan-restricted`) — the same gate the transport dials on, so a binding is
-   * torn down exactly when a re-dial would be refused and not one flip sooner.
-   */
   readonly refused: boolean;
 }
 
 /**
- * Owns immutable, abortable host-binding generations. A binding is renewed
- * whenever any meaningful transport field changes, including H1 → H2 → H1;
- * the old generation is aborted before its replacement is exposed.
+ * Owns immutable, abortable host-binding generations.
+ * A binding is renewed whenever any meaningful transport field changes, including H1 → H2 → H1; the old generation is aborted before its replacement is exposed.
  */
 export class HostBindingAuthorityRegistry {
   private readonly bindings = new Map<string, StoredBindingAuthority>();

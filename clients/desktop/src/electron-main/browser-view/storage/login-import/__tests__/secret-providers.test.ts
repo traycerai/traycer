@@ -11,11 +11,7 @@ import type {
   CommandResult,
 } from "../secret-providers/run-command";
 
-/**
- * A `CommandRunner` fake that records every request it was handed and
- * answers with whatever the test queues up. Never spawns a process - the one
- * rule every case in this file has to hold.
- */
+/** Never spawns a process - the one rule every case in this file has to hold. */
 function fakeRunner(result: CommandResult): {
   readonly run: (request: CommandRequest) => Promise<CommandResult>;
   readonly calls: CommandRequest[];

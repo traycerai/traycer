@@ -120,9 +120,8 @@ export function getFillableSlotChoicesWithCatalog(
 ): ReadonlyArray<FillableSlotChoice> {
   const choices = getFillableSlotChoices(splitId, side);
   const existingIds = new Set(choices.map((choice) => choice.id));
-  // An Epic reachable both as an open ref (row id keyed by tab id) and a
-  // catalog destination (row id keyed by Epic id) never collides on id
-  // string alone - dedupe by the Epic's identity instead.
+  // An Epic reachable both as an open ref (row id keyed by tab id) and a catalog destination (row id keyed by
+  // Epic id) never collides on id string alone - dedupe by the Epic's identity instead.
   const openEpicIds = new Set(
     getHeaderTabs().flatMap((tab) =>
       tab.kind === "epic" && existingIds.has(`open:epic:${tab.id}`)
@@ -201,10 +200,8 @@ function sameEpicCatalog(
   if (split === null) return [];
   const partner = side === "left" ? split.right : split.left;
   if (partner.kind !== "tab" || partner.ref.kind !== "epic") return [];
-  // A Phase-migration tab reuses `epicId` as a placeholder for its phaseId
-  // (see openEpicTabWithId's phase-migration branch) - surfacing it here
-  // would offer a bogus "Epic" destination whose id is actually the Phase's
-  // tab id, bypassing the dedicated phase-migration catalog entry kind.
+  // A Phase-migration tab reuses `epicId` as a placeholder for its phaseId (see openEpicTabWithId's
+  // phase-migration branch).
   const canvasTab = useEpicCanvasStore.getState().tabsById[partner.ref.id];
   if (canvasTab?.surfaceMode?.kind === "phase-migration") return [];
   const tab = getHeaderTabs().find(
@@ -221,12 +218,8 @@ function optionalChoice(
   return choice === undefined ? [] : [choice];
 }
 
-/**
- * Resolve first, then mutate once. Singleton selections already represented
- * by another split intentionally activate that group and leave this fillable
- * side untouched; duplicate-able Epics always get a distinct ref when no
- * ungrouped reusable view is available.
- */
+/** Singleton selections already represented by another split intentionally activate that group and leave this
+ * fillable side untouched. */
 export function resolveFillableSlotDestination(
   splitId: string,
   side: SplitSideName,
@@ -403,10 +396,8 @@ function findUngroupedEpicRef(
   layout: PersistedTabStripLayout,
   epicId: string,
 ): TabRef | null {
-  // Resolve reusable views from the authoritative grouped items, not the
-  // legacy `stripOrder` projection `getHeaderTabs` reads: an Epic visible as
-  // a standalone item must be moved into the slot - not duplicated - even
-  // while the flat compatibility order is stale.
+  // Resolve reusable views from the authoritative grouped items, not the legacy `stripOrder` projection
+  // `getHeaderTabs` reads: an Epic visible as a standalone item must be moved into the slot - not duplicated.
   const tabsById = useEpicCanvasStore.getState().tabsById;
   for (const item of layout.items) {
     if (item.kind !== "tab" || item.ref.kind !== "epic") continue;

@@ -7,12 +7,8 @@ import {
 import { createIdentityRelay } from "../remote-path";
 
 /**
- * Non-MVP-gating harness for the future remote/relay path.
- *
- * These tests do not exercise a real relay server. They pin the invariant
- * that the committed versioned RPC envelope survives a hop through an
- * identity relay without shape change - the only contract guarantee the
- * future remote path needs to preserve.
+ * Non-mvp-gating harness for the future remote/relay path.
+ * These tests do not exercise a real relay server.
  */
 
 const echoV10 = defineRpcContract({
@@ -38,9 +34,7 @@ describe("remote-path identity relay", () => {
   it("preserves the committed RPC envelope shape across a relay hop", async () => {
     const seen: { request: unknown; response: unknown }[] = [];
 
-    // Simulated downstream host: round-trip the `host.echo` envelope,
-    // mirroring `{ requestId, method, schemaVersion, params | result }`
-    // without rewriting the payload.
+    // Simulated downstream host: round-trip the `host.echo` envelope, mirroring `{ requestId, method, schemaVersion, params | result }` without rewriting the payload.
     const downstream = async (envelope: unknown): Promise<unknown> => {
       const request = envelope as {
         requestId: string;
@@ -61,8 +55,7 @@ describe("remote-path identity relay", () => {
     const relay = createIdentityRelay({ downstream });
 
     // Construct the envelope directly from the registry's committed shape.
-    // Using the registry (rather than a hard-coded literal) proves the relay
-    // forwards whatever the client produces today without interpreting it.
+    // Using the registry (rather than a hard-coded literal) proves the relay forwards whatever the client produces today without interpreting it.
     const methodLine = testRegistry["host.echo"][1];
     const latestVersion =
       methodLine.versions[methodLine.latestMinor].contract.schemaVersion;
@@ -73,7 +66,7 @@ describe("remote-path identity relay", () => {
       params: { message: "hi" },
     };
 
-    // Serialize + parse to model on-wire bytes: the relay MUST observe the
+    // Serialize + parse to model on-wire bytes: the relay must observe the
     // exact object the client serialized, and return it verbatim.
     const relayed = await relay(JSON.parse(JSON.stringify(clientEnvelope)));
 

@@ -1,10 +1,6 @@
 import { attestTraycerRegistration, type TraycerLabelIds } from "../identity";
 import type { LingerState, UnitFileState } from "./types";
 
-/**
- * Classify a systemd user unit file on disk with Traycer identity
- * attestation over ExecStart tokens.
- */
 export function classifyUnitFile(input: {
   readonly path: string;
   readonly labelId: string;
@@ -63,10 +59,6 @@ export function extractExecStartTokens(
   return tokenizeExecStart(raw);
 }
 
-/**
- * Minimal systemd ExecStart tokenizer: respects double quotes and
- * backslash escapes. Good enough for units this project writes.
- */
 export function tokenizeExecStart(raw: string): readonly string[] {
   const tokens: string[] = [];
   let current = "";

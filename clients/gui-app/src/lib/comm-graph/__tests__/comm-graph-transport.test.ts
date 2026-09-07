@@ -68,9 +68,7 @@ describe("commGraphFractionForTimestamp", () => {
   });
 
   it("puts a zero-width range at the LIVE edge, not the start", () => {
-    // Every row shares the newest instant, so they all belong at the right -
-    // parking the playhead left while the graph shows the newest state reads as
-    // a broken scrubber rather than as a short session.
+    // Every row shares the newest instant, so they all belong at the right - parking the playhead left while the graph shows the newest state reads as a broken scrubber rather than as a short session.
     expect(
       commGraphFractionForTimestamp(500, { startMs: 500, endMs: 500 }),
     ).toBe(1);

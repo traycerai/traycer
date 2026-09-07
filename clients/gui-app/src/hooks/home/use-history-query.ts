@@ -75,12 +75,8 @@ export function useHistoryQuery(
   const debouncedQuery = useDebouncedValue(trimmedQuery, SEARCH_DEBOUNCE_MS);
   const [fallbackNowMs] = useState(() => Date.now());
   const nowMs = params.nowMs ?? fallbackNowMs;
-  // Branch/worktree strings and PR numbers live only in local worktree
-  // metadata, never in the cloud task index. The cloud query stays a plain
-  // text search; local matches are resolved to epic ids here and fetched by
-  // id (`epic.getTaskContexts`) as an additive union below. PR matching needs
-  // the activity-enriched listing (`prNumber` is null on the cheap index), so
-  // that heavier host-wide probe is gated on a PR-shaped query.
+  // Branch/worktree strings and PR numbers live only in local worktree metadata, never in the cloud task index.
+  // PR matching needs the activity-enriched listing (`prNumber` is null on the cheap index), so that heavier host-wide probe is gated on a PR-shaped query.
   const worktreeIndex = useWorktreeHostIndex(true);
   const pullRequestQueryNumber = historyPullRequestQueryNumber(debouncedQuery);
   const isPullRequestNumberQuery = pullRequestQueryNumber !== null;
@@ -146,10 +142,7 @@ export function useHistoryQuery(
       ),
     [currentUserId, nowMs, params.search, taskContexts.tasksById],
   );
-  // Locally matched tasks are unioned under the cloud page: the cloud rows
-  // keep their server order and the id-fetched extras are appended (dedup by
-  // row id). Extras respect the structured filters via the local predicate
-  // above; the ordering pass happens in the `data` memo.
+  // Locally matched tasks are unioned under the cloud page: the cloud rows keep their server order and the id-fetched extras are appended (dedup by row id).
   const { allBaseItems, contextExtrasCount } = useMemo(() => {
     if (contextItems.length === 0) {
       return { allBaseItems: baseItems, contextExtrasCount: 0 };
@@ -176,12 +169,7 @@ export function useHistoryQuery(
     if (tasksQuery.data === undefined) {
       return undefined;
     }
-    // The settled server order is pinned-first, but an optimistic pin patch
-    // flips a cached row's bit without moving it - the stable pinned-first
-    // partition lifts it into (or drops it out of) the pinned block
-    // instantly, and is an order-preserving no-op on untouched server data.
-    // When id-fetched extras joined the settled list they arrive appended out
-    // of order, so that path re-sorts the union client-side instead.
+    // The settled server order is pinned-first, but an optimistic pin patch flips a cached row's bit without moving it - the stable pinned-first partition lifts it into (or drops it out of) the pinned block instantly, and is an order-preserving no-op on untouched server data.
     const items = shouldProjectLocally
       ? projectHistoryItems(allItems, params.search)
       : settledHistoryItems(
@@ -199,19 +187,7 @@ export function useHistoryQuery(
       facets.workspaces.length > 0
         ? facets.workspaces.map((workspace) => workspace.workspace)
         : collectHistoryWorkspaces(allItems);
-    // Fail closed on BOTH skew directions. The host arm is the negotiated
-    // minor; the cloud arm is a first page that came back without the
-    // `chatHosts` group at all, which is how an old cloud tier - it has no
-    // version negotiation, it simply drops request keys it does not know -
-    // reveals that it never applied the filter. In either case the rows in
-    // hand are UNFILTERED, and showing them under an active host filter is
-    // the exact failure this whole gate exists to prevent. Withhold them and
-    // let the panel say why.
-    //
-    // A MISSING `facets` object counts too, and deliberately has no exemption:
-    // this query never carries a cursor ("Show more" pages append through a
-    // separate mutation and store), so its response is always a first page,
-    // and a first page without facets is a server that never computed them.
+    // Fail closed on either skew: old host minor or a first page without `chatHosts`/`facets` means the rows are unfiltered. Withhold them.
     const chatHostFilterUnsupported =
       chatHostFilterActive &&
       (hostChatHostSupport === "unsupported" ||
@@ -270,10 +246,7 @@ export function useHistoryQuery(
     hostId,
     refetch,
     fetchNextPage,
-    // Pagination follows the plain cloud query; id-fetched local matches are
-    // complete per query (not paginated). Keep the guard so "Show more"
-    // cannot fetch against a stale request during debouncing / placeholder
-    // handoff.
+    // Keep the guard so "Show more" cannot fetch against a stale request during debouncing / placeholder handoff.
     hasNextPage:
       hasNextPage && !isQueryDebouncing && !tasksQuery.isPlaceholderData,
     isFetchingNextPage,
@@ -290,11 +263,8 @@ export interface HistoryFetchResult {
   totalCount: number;
   facets: HistoryFacets;
   worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>;
-  /**
-   * The chat-host filter is active but the serving peer cannot apply it, so
-   * `items` is deliberately EMPTY rather than unfiltered. Render an
-   * explanation, never an empty-history message.
-   */
+  /** The chat-host filter is active but the serving peer cannot apply it, so `items` is deliberately EMPTY rather than unfiltered.
+   * Render an explanation, never an empty-history message. */
   chatHostFilterUnsupported: boolean;
 }
 
@@ -346,11 +316,7 @@ function mapHistoryFacets(
       workspace: facet.workspaceIdentifier,
       count: facet.count,
     })),
-    // Absence is preserved as `null` rather than flattened to `[]`. It is the
-    // only signal that the CLOUD tier (which has no version negotiation of its
-    // own - an old server's body schema just drops unknown request keys)
-    // could not evaluate the filter, and `[]` would read as a truthful
-    // "no host owns any chat".
+    // Absence is preserved as `null` rather than flattened to `[]`.
     chatHosts: facets.chatHosts ?? null,
     ownershipScopes: facets.ownershipScopes,
   };
@@ -392,10 +358,7 @@ function filterHistoryItemsLocally(
     repoMatchMode: search.repoMode,
     workspaces: search.workspaces,
     workspaceMatchMode: search.workspaceMode,
-    // Rows carry the caller's own chat hosts, so the host filter is
-    // re-applied locally: to id-fetched worktree/PR matches, which never went
-    // through the server's filter, and to cached rows while a request for a
-    // newly-toggled host is still in flight.
+    // Rows carry the caller's own chat hosts, so the host filter is re-applied locally: to id-fetched worktree/PR matches, which never went through the server's filter, and to cached rows while a request for a newly-toggled host is still in flight.
     chatHosts: search.chatHosts,
     chatHostMatchMode: search.chatHostMode,
     ownershipScopes: search.ownershipScopes,

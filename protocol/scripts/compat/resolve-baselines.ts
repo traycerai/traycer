@@ -1,16 +1,6 @@
 /**
- * Resolves the set of released baselines the protocol must stay compatible
- * with: every stable `host-v*` / `cli-v*` / `desktop-v*` tag on the remote at
- * or above the support floor, deduplicated by commit (host and clients often
- * release from the same commit). Prints JSON:
- *
- *   { "baselines": [ { "sha": "...", "tags": ["host-v1.1.4", "cli-v1.1.4"] } ] }
- *
- * The tag list comes from `git ls-remote` at run time - never from a file in
- * the tree - so a PR cannot shrink the protected set. The only in-tree knob is
- * `support-floor.json` (CODEOWNERS-gated, tripwired).
- *
- *   bun run protocol/scripts/compat/resolve-baselines.ts [<remote-or-url>]
+ * Resolves the set of released baselines the protocol must stay compatible with: every stable `host-v*` / `cli-v*` / `desktop-v*` tag on the remote at or above the support floor, deduplicated by commit (host and clients.
+ * The tag list comes from `git ls-remote` at run time - never from a file in the tree - so a PR cannot shrink the protected set.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";

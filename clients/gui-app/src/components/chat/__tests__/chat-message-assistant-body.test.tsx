@@ -410,9 +410,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     await user.tab();
     expect(document.activeElement).toBe(footer);
 
-    // Radix renders the open tooltip's content twice - once positioned via
-    // the popper portal, once as a visually-hidden accessibility clone - so
-    // assert presence via `getAllByText` rather than the single-match query.
+    // Radix renders the open tooltip's content twice - once positioned via the popper portal, once as a visually-hidden accessibility clone - so assert presence via `getAllByText` rather than the single-match query.
     await waitFor(() => {
       expect(
         screen.getAllByText("Stop requested by owner.").length,
@@ -444,9 +442,8 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     expect(screen.getAllByText("Work").length).toBeGreaterThan(0);
   });
 
-  // Ground truth for "what actually ran this turn". The profile label alone
-  // answers that WRONG when a shell env credential outranked the sign-in, which
-  // is exactly the state that made the original incident unreadable.
+  // Ground truth for "what actually ran this turn".
+  // The profile label alone answers that WRONG when a shell env credential outranked the sign-in, which is exactly the state that made the original incident unreadable.
   it("annotates the profile row when an env credential bypassed the sign-in", async () => {
     const user = userEvent.setup();
     render(
@@ -482,9 +479,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   });
 
   it("leaves the profile row bare when the sign-in was used", async () => {
-    // Absence of the bracket is itself a claim - "the profile sign-in ran this"
-    // - so a normal turn must not grow a badge, or the annotation above stops
-    // meaning anything.
+    // Absence of the bracket is itself a claim - "the profile sign-in ran this" - so a normal turn must not grow a badge, or the annotation above stops meaning anything.
     const user = userEvent.setup();
     render(
       <AssistantMessageBody
@@ -508,10 +503,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     expect(screen.queryByText(/bypassed/)).toBeNull();
   });
 
-  // Regression: the Profile row used to be gated on `profileLabel` alone, so a
-  // turn with no resolvable anchor label dropped the row entirely - taking the
-  // credential disclosure with it, on exactly the turns least able to explain
-  // themselves.
+  // Regression: the Profile row used to be gated on `profileLabel` alone, so a turn with no resolvable anchor label dropped the row entirely - taking the credential disclosure with it, on exactly the turns least able to explain themselves.
   it("still discloses the credential when the turn has no profile label", async () => {
     const user = userEvent.setup();
     render(

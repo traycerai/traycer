@@ -1,20 +1,6 @@
 /**
- * The `agent.roles.*` wire contracts, and the negotiated stream minor that
- * carries role awareness.
- *
- * Two things here are load-bearing:
- *
- * 1. These methods are advertised ONLY because Sprint 02 also ships their
- *    resolvers. A method advertised without a resolver negotiates fine and then
- *    dies at dispatch with "Unknown method" - exactly how `agent.tui.
- *    listHarnesses` shipped. The host-side resolver-coverage tripwire is what
- *    actually proves the resolvers exist; this file proves the advertisement.
- *
- * 2. The `role-awareness` frame lives ONLY in `agent.inbox.subscribe@1.1`. The
- *    @1.0 union is frozen and must REJECT it: a monitor that negotiated @1.0
- *    never agreed to receive that frame, and sending it anyway is the host
- *    breaking the negotiated contract - not a "graceful" degrade the peer
- *    happens to drop.
+ * `agent.inbox.subscribe@1.1` - The `agent.roles.*` wire contracts, and the negotiated stream minor that carries role awareness.
+ * The @1.0 union is frozen and must REJECT it: a monitor that negotiated @1.0 never agreed to receive that frame, and sending it anyway is the host breaking the negotiated contract - not a "graceful" degrade the peer.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -67,11 +53,6 @@ describe("agent.roles.* contracts", () => {
   });
 
   it("is now ADVERTISED, and lands in the same change as its resolvers", () => {
-    // Sprint 01 asserted the opposite: absent from the registry, because a
-    // method advertised without a resolver negotiates and then dies at dispatch
-    // with "Unknown method" (the `agent.tui.listHarnesses` defect). Sprint 02
-    // adds the resolvers, so registration is now correct — and the host-side
-    // resolver-coverage tripwire is what proves the resolvers actually exist.
     for (const method of ROLE_METHODS) {
       expect(Object.hasOwn(hostRpcRegistry, method)).toBe(true);
     }
@@ -199,10 +180,7 @@ describe("request validation", () => {
   });
 
   it("TOLERATES an unknown extra key - deliberately not .strict()", () => {
-    // A strict v1.0 request schema would make a v1.0 host REJECT a v1.1
-    // client's additive field, which is the compatibility break this protocol
-    // exists to avoid. This test exists to fail if someone "hardens" these
-    // schemas with .strict() later.
+    // A strict v1.0 request schema would make a v1.0 host REJECT a v1.1 client's additive field, which is the compatibility break this protocol exists to avoid.
     expect(() =>
       claimAgentRoleRequestSchema.parse({
         ...VALID_CLAIM_REQUEST,

@@ -1,16 +1,3 @@
-/**
- * Pins the invariants documented on `projection-delivery.ts`:
- *
- * - `createBatchingDelivery`: re-entrant batching commits once per outermost
- *   window, an empty window commits nothing, overlapping keys published
- *   within one window merge with later-wins (`Object.assign` semantics), a
- *   throwing batch body still commits whatever was published before the
- *   throw, and a commit that itself republishes synchronously is not
- *   dropped (pending is cleared BEFORE `commit` runs).
- * - `projectedSlicesView`: `publish` folds the narrow slice over the wide
- *   sink's CURRENT value (via `sink.read()`), including a value the sink
- *   mutated inside an open `transact`, never a value captured before entry.
- */
 import { describe, expect, it } from "vitest";
 import type { ProjectionSink } from "@traycer-clients/shared/replica-runtime";
 import {
@@ -138,17 +125,7 @@ describe("createBatchingDelivery", () => {
 });
 
 describe("projectedSlicesView", () => {
-  /**
-   * A complete `ChatProjection`, annotated so the compiler checks it HERE.
-   *
-   * The fixture only stands in for "a row with a stable identity" - nothing in
-   * these tests reads a field - but it is spelled out in full rather than
-   * narrowed, because a partial fixture is only as safe as the one annotation
-   * that happens to be checking it. Naming the type on the row itself puts the
-   * error on the missing field instead of on the slice three lines out, and
-   * makes the next field added to `ChatProjection` fail here rather than
-   * somewhere that has to be traced back.
-   */
+  /** A complete `ChatProjection`, annotated so the compiler checks it HERE. */
   function makeChatProjection(id: string): ChatProjection {
     return {
       id,
@@ -226,9 +203,8 @@ describe("projectedSlicesView", () => {
 
     const result = read();
     expect(result.epic).toEqual({ title: "Renamed", updatedAt: 42 });
-    // The records-only field the narrow slice never touched must survive
-    // the fold, proving `publish` merged over the sink's current value
-    // rather than overwriting it wholesale.
+    // The records-only field the narrow slice never touched must survive the fold, proving `publish`
+    // merged over the sink's current value rather than overwriting it wholesale.
     expect(result.chatRecords).toEqual(
       makeChatsSlice("seeded-record-only-chat"),
     );
@@ -240,11 +216,8 @@ describe("projectedSlicesView", () => {
     );
     const view = projectedSlicesView(sink);
 
-    // The fake sink's `transact` mutates its own read-back value BEFORE
-    // running `body`, standing in for a value "buffered inside an open
-    // transaction" per the sink's contract. If `publish` folded over a
-    // snapshot captured before `transact` was entered, this mutation would
-    // be silently discarded.
+    // The fake sink's `transact` mutates its own read-back value BEFORE running `body`, standing in
+    // for a value "buffered inside an open transaction" per the sink's contract.
     const mutatedChatRecords = makeChatsSlice(
       "mutated-during-open-transaction",
     );
@@ -296,17 +269,8 @@ describe("projectedSlicesView", () => {
 });
 
 /**
- * `deliverInto` publishes only the keys whose reference MOVED.
- *
- * A sink flush delivers its whole slice on any change. In-process that cost
- * nothing: the projector mints a new reference only for what changed, so
- * unchanged keys arrived as the same objects and no selector over them was
- * disturbed. A structured clone does not preserve references, so post-flip
- * the whole slice is re-minted every publish and every selector over any of
- * its keys re-renders on every frame.
- *
- * The diff restores that property at the last point which still holds the
- * producer's references.
+ * `deliverInto` publishes only the keys whose reference MOVED. A sink flush delivers its whole
+ * slice on any change.
  */
 describe("deliverInto", () => {
   function recorder(): {
@@ -378,12 +342,7 @@ describe("deliverInto", () => {
   });
 
   it("does NOT see an in-place mutation - the documented non-case", () => {
-    // Not a bug being pinned, a boundary being recorded. The diff rests on the
-    // projector's new-reference-iff-changed discipline; a producer that
-    // mutated a sub-object in place would keep its reference, read as
-    // unchanged, and stop publishing - a value frozen on screen with no error
-    // anywhere. This test exists so that behaviour is discovered here, by
-    // someone reading the contract, rather than in a UI that stopped updating.
+    // Not a bug being pinned, a boundary being recorded.
     const { published, delivery } = recorder();
     const deliver = deliverInto<Partial<EpicRuntimeProjection>>({
       ...delivery,

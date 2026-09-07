@@ -1,7 +1,6 @@
 /**
  * Resolves the running directory from a WorktreeBindingEntry.
- * Per Q4 lock: for "worktree" mode, returns worktreePath (may be null);
- * for "local" mode, returns workspacePath.
+ * Per Q4 lock: for "worktree" mode, returns worktreePath (may be null); for "local" mode, returns workspacePath.
  */
 
 import type { WorktreeBindingEntry } from "@traycer/protocol/host";

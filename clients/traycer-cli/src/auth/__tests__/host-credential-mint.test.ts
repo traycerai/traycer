@@ -115,10 +115,7 @@ describe("createCliHostCredentialMintFlow", () => {
   );
 
   it("invokes onUnauthorized exactly once when the server responds unauthorized", async () => {
-    // 401/403 from authn is NOT like the other mint failures: the same
-    // stored bearer fails for every client, so a caller with a follow-up
-    // (the host install probe) needs to know, even though the flow itself
-    // still returns the same `unavailable` the stream contract has room for.
+    // 401/403 from authn is NOT like the other mint failures: the same stored bearer fails for every client, so a caller with a follow-up (the host install probe) needs to know, even though the flow itself still returns the same `unavailable` the stream contract has room for.
     mintMock.mockResolvedValue({ kind: "unauthorized" });
     const onUnauthorized = vi.fn();
     const flow = createCliHostCredentialMintFlow({

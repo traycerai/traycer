@@ -34,9 +34,8 @@ export interface DesktopHeapSnapshotBridge {
 }
 
 /**
- * One V8 isolate in this renderer - the page, or a dedicated worker started
- * from `url`. Mirrors the desktop's `RendererJsHeapIsolate`; the GUI reads it
- * structurally off the runner host like every other desktop bridge here.
+ * One V8 isolate in this renderer - the page, or a dedicated worker started from `url`.
+ * Mirrors the desktop's `RendererJsHeapIsolate`; the GUI reads it structurally off the runner host like every other desktop bridge here.
  */
 export interface DesktopJsHeapIsolate {
   readonly kind: "page" | "worker";
@@ -93,9 +92,7 @@ export function getDesktopDiagnosticsBridge(): DesktopDiagnosticsBridge | null {
 }
 
 /**
- * Separate resolver from `getDesktopDiagnosticsBridge` because the two are
- * independently available: metrics are cheap and polled, while a heap snapshot
- * is an explicit, expensive, user-initiated capture.
+ * Separate resolver from `getDesktopDiagnosticsBridge` because the two are independently available: metrics are cheap and polled, while a heap snapshot is an explicit, expensive, user-initiated capture.
  */
 export function getDesktopHeapSnapshotBridge(): DesktopHeapSnapshotBridge | null {
   const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
@@ -105,9 +102,7 @@ export function getDesktopHeapSnapshotBridge(): DesktopHeapSnapshotBridge | null
 }
 
 /**
- * Its own resolver for the same reason as the heap snapshot's: an older shell
- * can carry the snapshot capability without this one, and the Memory group
- * offers each button on its own bridge.
+ * Its own resolver for the same reason as the heap snapshot's: an older shell can carry the snapshot capability without this one, and the Memory group offers each button on its own bridge.
  */
 export function getDesktopJsHeapBridge(): DesktopJsHeapBridge | null {
   const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
@@ -117,11 +112,8 @@ export function getDesktopJsHeapBridge(): DesktopJsHeapBridge | null {
 }
 
 /**
- * A human label for an isolate row. The worker's script URL is a hashed Vite
- * chunk name, so the label reads the chunk's stem, which is stable across
- * builds: `epic-runtime-worker-entry-<hash>.js` is the per-epic runtime,
- * `worker-<hash>.js` is `@pierre/diffs`' highlighter (the only worker the app
- * starts from a bare `worker` chunk), `pdf.worker.min-<hash>.mjs` is pdf.js.
+ * A human label for an isolate row.
+ * The worker's script URL is a hashed Vite chunk name, so the label reads the chunk's stem, which is stable across builds: `epic-runtime-worker-entry-<hash>.js` is the per-epic runtime, `worker-<hash>.js` is `@pierre/diffs`' highlighter (the only worker the.
  */
 export function describeDesktopJsHeapIsolate(
   isolate: DesktopJsHeapIsolate,

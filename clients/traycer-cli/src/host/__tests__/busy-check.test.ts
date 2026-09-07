@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `assertHostNotBusy` is the CLI's fail-safe gate before it reinstalls a
-// running host. It must (a) return when there is no LIVE host to protect
-// (no pid.json, or a stale pid.json whose process has exited), and (b) treat
-// every non-`busy:false` outcome from a live host as busy (D3) so in-progress
-// work is never torn down on an indeterminate answer.
+// `assertHostNotBusy` is the CLI's fail-safe gate before it reinstalls a running host.
+// It must (a) return when there is no LIVE host to protect (no pid.json, or a stale pid.json whose process has exited), and (b) treat every non-`busy:false` outcome from a live host as busy (D3) so in-progress work is never torn down on an indeterminate answer.
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataMock: vi.fn(),

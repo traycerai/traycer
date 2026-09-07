@@ -37,9 +37,7 @@ export function TileFindOwnerBridge(): ReactNode {
   const notificationPopoverOpen = useNotificationsPopoverStore(
     (state) => state.open,
   );
-  // The blocking modal is up whenever ANY host is migrating or has left an
-  // unacknowledged failure - it is one modal over the whole app, so tile-find
-  // yields to it the same way whichever machine raised it.
+  // The blocking modal is up whenever ANY host is migrating or has left an unacknowledged failure - it is one modal over the whole app, so tile-find yields to it the same way whichever machine raised it.
   const migrationDialogActive = useMigrationRunStore(
     (state) => migrationModalRun(state.runs) !== null || state.remoteRunning,
   );

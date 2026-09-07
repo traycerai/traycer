@@ -226,11 +226,7 @@ describe("useWorktreeGetBinding condition cadence", () => {
       setupState: "running",
       fail: false,
     });
-    // Spy on the SPINE's own `requestForWithSignal`, not the pinned
-    // requester's `requestWithSignal`: the requester is a Proxy that
-    // special-cases that property to a fresh closure over the spine's method
-    // on every access, so a spy installed on the requester itself is never
-    // consulted.
+    // Spy on the SPINE's own `requestForWithSignal`, not the pinned requester's `requestWithSignal`: the requester is a Proxy that special-cases that property to a fresh closure over the spine's method on every access, so a spy installed on the requester itself is never consulted.
     const originalRequest = fixture.spine.requestForWithSignal.bind(
       fixture.spine,
     );

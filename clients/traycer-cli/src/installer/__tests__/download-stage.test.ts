@@ -33,15 +33,8 @@ function cliHomeFor(): string {
   return join(sandboxRoot, "cli");
 }
 
-// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
-// load - any export this mock leaves un-overridden would otherwise resolve
-// against the REAL production `~/.traycer`, not this sandbox. Redirect the
-// `os` boundary itself so `vi.importActual`'s fresh module evaluation picks
-// up the sandbox (falling back to the real tmpdir, never the real home,
-// before the first `beforeEach` has set `sandboxRoot`).
-// `vi.mock` factories are hoisted above this file's own top-level `let
-// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
-// live value has to live in `vi.hoisted` instead.
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module load - any export this mock leaves un-overridden would otherwise resolve against the REAL production `~/.traycer`, not this sandbox.
+// Redirect the `os` boundary itself so `vi.importActual`'s fresh module evaluation picks up the sandbox (falling back to the real tmpdir, never the real home, before the first `beforeEach` has set `sandboxRoot`).
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -158,11 +151,8 @@ function buildManifest(opts: FakeClientOptions): HostVersionsManifest {
   };
 }
 
-// A hand-rolled `RegistryClient` double - bypasses the real minisign trust
-// chain entirely (already covered by `registry/__tests__/{client,
-// minisign}.test.ts`). These tests exercise `download-stage.ts`'s OWN
-// logic: short-circuits, promote policy, reconcile integration, and lock
-// timing around the transfer.
+// A hand-rolled `RegistryClient` double - bypasses the real minisign trust chain entirely (already covered by `registry/__tests__/{client, minisign}.test.ts`).
+// These tests exercise `download-stage.ts`'s OWN logic: short-circuits, promote policy, reconcile integration, and lock timing around the transfer.
 function fakeRegistryClient(opts: FakeClientOptions): RegistryClient {
   const manifest = buildManifest(opts);
   return {
@@ -209,19 +199,13 @@ function fakeRegistryClient(opts: FakeClientOptions): RegistryClient {
         totalBytes: asset.sizeBytes,
       });
       if (opts.downloadGate !== null) await opts.downloadGate;
-      // `extractHostSource`'s bare-file branch copies using the SOURCE
-      // file's own basename, so the archive's basename must be exactly
-      // the expected executable name - not version-prefixed. Each call
-      // gets its own unique directory so overlapping/sequential calls in
-      // one test never collide.
+      // `extractHostSource`'s bare-file branch copies using the SOURCE file's own basename, so the archive's basename must be exactly the expected executable name - not version-prefixed.
+      // Each call gets its own unique directory so overlapping/sequential calls in one test never collide.
       const callDir = mkdtempSync(join(archiveTmpDir, "arc-"));
       const archivePath = join(callDir, executableBasename());
       writeFileSync(archivePath, "fake host binary");
-      // The real client stages into the shared download cache and stamps
-      // the archive with an ownership marker holding ITS OWN process identity
-      // (registry/download-cache.ts). Mirror that sibling faithfully - the
-      // release path is a compare-and-delete, so a marker recording someone
-      // else's pid is deliberately left alone.
+      // The real client stages into the shared download cache and stamps the archive with an ownership marker holding ITS OWN process identity (registry/download-cache.ts).
+      // Mirror that sibling faithfully - the release path is a compare-and-delete, so a marker recording someone else's pid is deliberately left alone.
       writeFileSync(
         `${archivePath}.owner`,
         JSON.stringify({ pid: process.pid, startedAtMs: null }),
@@ -237,11 +221,8 @@ function fakeRegistryClient(opts: FakeClientOptions): RegistryClient {
   };
 }
 
-// Downloads "successfully" but stages an archive whose basename is not the
-// expected host executable, so `resolveHostExecutable` throws AFTER the
-// transfer and verification have both passed. Reproduces every local
-// post-download failure - a bad extract, a tree missing the binary, a
-// `cli-lock` wait that times out - in the one shape this harness can force.
+// Downloads "successfully" but stages an archive whose basename is not the expected host executable, so `resolveHostExecutable` throws AFTER the transfer and verification have both passed.
+// Reproduces every local post-download failure - a bad extract, a tree missing the binary, a `cli-lock` wait that times out - in the one shape this harness can force.
 function unresolvableArchiveRegistryClient(
   base: RegistryClient,
   onArchive: (archivePath: string) => void,
@@ -335,23 +316,8 @@ function attemptRecord(
   };
 }
 
-// Promote-time STATE INJECTION: a raw, test-only write straight to the
-// canonical `update-attempt.json` path `download-stage.ts`'s promote-time
-// guard reads - NOT a conforming reproduction of a real concurrent-process
-// race. The public `downloadAndStageHost` holds its outer stage-maintenance
-// capability for the whole segment (acquire through transfer through
-// promote) and currently exposes no adoption input a second contender could
-// use to legitimately hold or hand off that same capability mid-segment, so
-// there is no way, today, for a second REAL contender to reach and write
-// this file while this call's transfer is in flight without that write
-// itself being refused by the very capability this call holds. This helper
-// bypasses that entirely and writes the bytes directly, which is sufficient
-// to exercise the guard's OWN read-and-decide logic in isolation, but it is
-// not evidence that the modeled race is reachable through any currently
-// public API. If `downloadAndStageHost` (or its shared segment machinery)
-// ever gains an adoption input - the same shape `withCliUpdateExecutionSegment`
-// already supports for other callers - this locking argument, and whether
-// the race these tests model becomes actually reachable, must be revisited.
+// Promote-time STATE INJECTION: a raw, test-only write straight to the canonical `update-attempt.json` path `download-stage.ts`'s promote-time guard reads - NOT a conforming reproduction of a real concurrent-process race.
+// The public `downloadAndStageHost` holds its outer stage-maintenance capability for the whole segment (acquire through transfer through promote) and currently exposes no adoption input a second contender could use to legitimately hold or hand off that same capability mid-segment, so there is no way, today, for a second REAL contender to reach and write this file while this call's transfer is in flight without that write itself being refused by the very capability this call holds.
 function writeAttemptRecord(overrides: Partial<HostUpdateAttemptRecord>): void {
   const home = hostHomeFor(ENV);
   mkdirSync(home, { recursive: true });
@@ -361,11 +327,8 @@ function writeAttemptRecord(overrides: Partial<HostUpdateAttemptRecord>): void {
   );
 }
 
-// A manually-releasable gate for simulating a slow download. Stored as an
-// object property (rather than a bare `let` reassigned inside the promise
-// executor) so `release()` stays soundly typed as `() => void` at every
-// call site - TS's control-flow narrowing doesn't track reassignment
-// through a closure reliably for a plain nullable `let`.
+// A manually-releasable gate for simulating a slow download.
+// Stored as an object property (rather than a bare `let` reassigned inside the promise executor) so `release()` stays soundly typed as `() => void` at every call site - TS's control-flow narrowing doesn't track reassignment through a closure reliably for a plain nullable `let`.
 interface Gate {
   readonly promise: Promise<void>;
   readonly release: () => void;
@@ -388,9 +351,7 @@ describe("downloadAndStageHost", () => {
     archiveTmpDir = mkdtempSync(
       join(tmpdir(), "traycer-download-stage-archives-"),
     );
-    // Cleared per test so an absence assertion cannot pass against a stale
-    // path from an earlier test whose files are already gone - that would
-    // make a "the slot was released" check succeed without a release.
+    // Cleared per test so an absence assertion cannot pass against a stale path from an earlier test whose files are already gone - that would make a "the slot was released" check succeed without a release.
     lastFakeArchivePath = "";
   });
 
@@ -606,13 +567,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
     });
-    // The archive now lives in the SHARED download cache keyed by
-    // version+sha (registry/download-cache.ts), so the consumer must drop
-    // its own archive plus the ownership marker and nothing else. The old
-    // `rm(dirname(archivePath))` would take the whole cache with it -
-    // including another process's in-flight partial.
-    // The download actually ran, so the absence checks below are about this
-    // test's own archive rather than an empty path.
+    // The archive now lives in the SHARED download cache keyed by version+sha (registry/download-cache.ts), so the consumer must drop its own archive plus the ownership marker and nothing else.
+    // The old `rm(dirname(archivePath))` would take the whole cache with it - including another process's in-flight partial.
     expect(lastFakeArchivePath).not.toBe("");
     expect(existsSync(lastFakeArchivePath)).toBe(false);
     expect(existsSync(`${lastFakeArchivePath}.owner`)).toBe(false);
@@ -645,11 +601,8 @@ describe("downloadAndStageHost", () => {
         registryClient: client,
       }),
     ).rejects.toThrow(/expected executable/);
-    // These bytes already cleared sha256 AND minisign. Whatever failed
-    // afterwards is local, so re-downloading them over the throttled link
-    // this whole feature exists for could not produce anything different -
-    // the next run resumes this file over a single 416 instead. Only the
-    // ownership claim comes off, so another process is free to take it.
+    // These bytes already cleared sha256 AND minisign.
+    // Whatever failed afterwards is local, so re-downloading them over the throttled link this whole feature exists for could not produce anything different - the next run resumes this file over a single 416 instead.
     expect(existsSync(stagedArchivePath)).toBe(true);
     expect(existsSync(`${stagedArchivePath}.owner`)).toBe(false);
   });
@@ -810,10 +763,7 @@ describe("downloadAndStageHost", () => {
       registryClient: client,
     });
     await started.promise;
-    // Simulate a concurrent, faster `host install 2.0.0` completing while
-    // this explicit download for 1.5.0 is still in flight - the fresh
-    // locked read at promote time must catch that 1.5.0 is no longer
-    // newer than what's now installed.
+    // Simulate a concurrent, faster `host install 2.0.0` completing while this explicit download for 1.5.0 is still in flight - the fresh locked read at promote time must catch that 1.5.0 is no longer newer than what's now installed.
     await writeInstall("2.0.0", {});
     gate.release();
     const outcome = await downloadPromise;
@@ -845,10 +795,7 @@ describe("downloadAndStageHost", () => {
       registryClient: client,
     });
     await started.promise;
-    // Simulate a concurrent local-file install swapping in an
-    // incomparable build while this automatic download is still in
-    // flight - phase 1 saw a comparable installed version and let the
-    // download proceed, but phase 3's fresh locked read must re-refuse.
+    // Simulate a concurrent local-file install swapping in an incomparable build while this automatic download is still in flight - phase 1 saw a comparable installed version and let the download proceed, but phase 3's fresh locked read must re-refuse.
     await writeInstall("local-swapped-build-2026", {});
     gate.release();
     const outcome = await downloadPromise;
@@ -945,10 +892,8 @@ describe("downloadAndStageHost", () => {
       (error: unknown) => ({ kind: "error" as const, error }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
-    // T2 serialization: one outer stage-maintenance capability spans the
-    // transfer, so overlapping downloads in one segment are unrepresentable.
-    // Positively prove the second transfer has not started while the first
-    // owns that capability.
+    // T2 serialization: one outer stage-maintenance capability spans the transfer, so overlapping downloads in one segment are unrepresentable.
+    // Positively prove the second transfer has not started while the first owns that capability.
     expect(fastStarted).toBe(false);
     const busyResult = await firstFastResult;
     expect(busyResult.kind).toBe("error");
@@ -1008,13 +953,7 @@ describe("downloadAndStageHost", () => {
   it("promote-after-uninstall does not resurrect a stage", async () => {
     await writeInstall("1.0.0", {});
     const gate = makeGate();
-    // Handshake so the simulated uninstall only fires once the download
-    // has genuinely reached phase 2 (past phase 1's own install-record
-    // read) - without it, the synchronous `rmSync` below can race ahead
-    // of `downloadAndStageHost`'s first `await` and delete the install
-    // dir before phase 1 even runs, making the whole call throw
-    // E_HOST_NOT_INSTALLED instead of exercising the promote-time
-    // "install-record-vanished" discard path this test targets.
+    // Handshake so the simulated uninstall only fires once the download has genuinely reached phase 2 (past phase 1's own install-record read) - without it, the synchronous `rmSync` below can race ahead of `downloadAndStageHost`'s first `await` and delete the install dir before phase 1 even runs, making the whole call throw E_HOST_NOT_INSTALLED instead of exercising the promote-time "install-record-vanished" discard path this test targets.
     const started = makeGate();
     const client = fakeRegistryClient({
       latest: "1.5.0",
@@ -1033,9 +972,7 @@ describe("downloadAndStageHost", () => {
       registryClient: client,
     });
     await started.promise;
-    // Simulate a concurrent `host uninstall` completing while the download
-    // is still in flight (no lock is held during transfer, so this is a
-    // legitimate interleaving).
+    // Simulate a concurrent `host uninstall` completing while the download is still in flight (no lock is held during transfer, so this is a legitimate interleaving).
     rmSync(installDirFor(ENV), { recursive: true, force: true });
 
     gate.release();
@@ -1059,9 +996,8 @@ describe("downloadAndStageHost", () => {
       ],
       downloadGate: gate.promise,
       onDownloadStart: () => {
-        // Fires once download has started, i.e. past the phase-1 lock
-        // section. A contender (standing in for `host ensure`) must be
-        // able to acquire the lock promptly.
+        // Fires once download has started, i.e. past the phase-1 lock section.
+        // A contender (standing in for `host ensure`) must be able to acquire the lock promptly.
         void (async () => {
           const handle = await acquireCliLock({
             environment: ENV,
@@ -1118,14 +1054,8 @@ describe("downloadAndStageHost", () => {
     expect(leftoverEntries).toEqual([]);
   });
 
-  // Promote-time attempt guard (Host Update Layer Redesign): these tests use
-  // promote-time STATE INJECTION after the outer admission snapshot and
-  // before phase 3's re-read. This is focused fault injection, not proof of a
-  // currently representable conforming race: public download owns its outer
-  // capability across the transfer and exposes no adoption input for a second
-  // writer. The gate/release timing exercises the guard's real read-and-decide
-  // behavior against real staged I/O; if download adoption is ever added, the
-  // reachability and locking argument must be revisited separately.
+  // Promote-time attempt guard (Host Update Layer Redesign): these tests use promote-time STATE INJECTION after the outer admission snapshot and before phase 3's re-read.
+  // This is focused fault injection, not proof of a currently representable conforming race: public download owns its outer capability across the transfer and exposes no adoption input for a second writer.
   describe("promote-time attempt guard", () => {
     it("a parked waiting-to-activate attempt appearing during a background/latest download's transfer window yields at promote and preserves the parked attempt's staged bytes", async () => {
       await writeInstall("1.0.0", {});
@@ -1134,9 +1064,7 @@ describe("downloadAndStageHost", () => {
         { version: "1.2.0", yanked: false },
         { version: "1.5.0", yanked: false },
       ];
-      // Stage 1.2.0 first - stands in for the parked attempt's already-
-      // placed bytes, exactly as `waiting-to-activate` means "bytes are
-      // already placed; only activation may proceed".
+      // Stage 1.2.0 first - stands in for the parked attempt's already- placed bytes, exactly as `waiting-to-activate` means "bytes are already placed; only activation may proceed".
       await downloadAndStageHost({
         environment: ENV,
         versionRequest: "1.2.0",
@@ -1170,10 +1098,8 @@ describe("downloadAndStageHost", () => {
         registryClient: client,
       });
       await started.promise;
-      // Promote-time STATE INJECTION after the outer admission snapshot and
-      // before phase 3's re-read. A conforming second writer cannot currently
-      // produce this state while public download holds its outer capability;
-      // this case isolates the guard's response if those bytes are observed.
+      // Promote-time STATE INJECTION after the outer admission snapshot and before phase 3's re-read.
+      // A conforming second writer cannot currently produce this state while public download holds its outer capability; this case isolates the guard's response if those bytes are observed.
       writeAttemptRecord({
         attemptId: "parked-attempt-1",
         targetVersion: "1.2.0",
@@ -1188,9 +1114,7 @@ describe("downloadAndStageHost", () => {
         (error: unknown) => ({ kind: "error" as const, error }),
       );
 
-      // The load-bearing negative: the parked attempt's staged record AND
-      // its staged bytes are byte-for-byte untouched by the yielded
-      // download - not merely "some record still exists at some version".
+      // The load-bearing negative: the parked attempt's staged record AND its staged bytes are byte-for-byte untouched by the yielded download - not merely "some record still exists at some version".
       const stagedAfter = await readHostStagedRecord(ENV);
       expect(stagedAfter).toEqual(stagedBefore);
       expect(readFileSync(executablePath)).toEqual(executableBefore);
@@ -1308,9 +1232,8 @@ describe("downloadAndStageHost", () => {
         registryClient: client,
       });
       await started.promise;
-      // Same timing as the positive case above - only `phase`/`execution`
-      // differ (a finished, terminal attempt instead of a park). Proves the
-      // guard keys on nonterminal execution, not merely "a record exists".
+      // Same timing as the positive case above - only `phase`/`execution` differ (a finished, terminal attempt instead of a park).
+      // Proves the guard keys on nonterminal execution, not merely "a record exists".
       writeAttemptRecord({
         attemptId: "finished-attempt-1",
         targetVersion: "1.2.0",
@@ -1360,10 +1283,8 @@ describe("downloadAndStageHost", () => {
         downloadGate: gate.promise,
         onDownloadStart: () => started.release(),
       });
-      // Explicit version request - normally replaces ANY existing stage,
-      // even a newer one (see "an explicit version request replaces any
-      // existing stage" above). The promote-time guard must still yield in
-      // front of that otherwise-unconditional replace-any-stage policy.
+      // Explicit version request - normally replaces ANY existing stage, even a newer one (see "an explicit version request replaces any existing stage" above).
+      // The promote-time guard must still yield in front of that otherwise-unconditional replace-any-stage policy.
       const downloadPromise = downloadAndStageHost({
         environment: ENV,
         versionRequest: "1.5.0",
@@ -1457,27 +1378,12 @@ describe("downloadAndStageHost", () => {
       });
       expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
     });
-    // at all at promote time) is already load-bearing coverage from the
-    // pre-existing "downloads and promotes a fresh, strictly-newer version by
-    // default (latest)" and "an explicit version request replaces any
-    // existing stage, even a newer one" tests above - every test in this
-    // file before this `describe` block runs with no attempt record ever
-    // written, so those promotions already prove the absent direction.
+    // at all at promote time) is already load-bearing coverage from the pre-existing "downloads and promotes a fresh, strictly-newer version by default (latest)" and "an explicit version request replaces any existing stage, even a newer one" tests above - every test in this file before this `describe` block runs with no attempt record ever written, so those promotions already prove the absent direction.
   });
 
   it("structurally pins capability checks on every deliberate discard and release edge", () => {
-    // The public function currently owns its contender internally, so this is
-    // a source-contract guard for the exact cleanup boundary. Runtime holder
-    // loss is exercised by the contender/lifecycle suites; this assertion
-    // prevents a future refactor from moving these checks outside the edges.
-    //
-    // The promote-time discard edge still checks and THROWS directly (a
-    // capability loss there aborts the promote decision itself). The three
-    // `finally`-block cleanup edges route through the shared
-    // `cleanupAdmitted()` helper instead (fixup ticket, change 11): a
-    // capability loss there must skip the destructive op and return `false`
-    // rather than throw, so it can never replace the primary promote/discard
-    // outcome the caller classifies with a spurious `E_CLI_LOCK_BUSY`.
+    // The public function currently owns its contender internally, so this is a source-contract guard for the exact cleanup boundary.
+    // Runtime holder loss is exercised by the contender/lifecycle suites; this assertion prevents a future refactor from moving these checks outside the edges.
     const source = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "../download-stage.ts"),
       "utf8",

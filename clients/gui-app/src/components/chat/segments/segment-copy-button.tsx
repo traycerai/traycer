@@ -21,10 +21,7 @@ const handleCopyError = (): void => {
   });
 };
 
-/**
- * Hover-revealed copy button used inside expanded segment panels. Falls back
- * to a sonner toast on clipboard rejection so the user always sees feedback.
- */
+/** Hover-revealed copy button used inside expanded segment panels. Falls back to a sonner toast on clipboard rejection so the user always sees feedback. */
 export function SegmentCopyButton(props: SegmentCopyButtonProps) {
   const { value, ariaLabel, className } = props;
   const { copied, copy } = useClipboardCopy({

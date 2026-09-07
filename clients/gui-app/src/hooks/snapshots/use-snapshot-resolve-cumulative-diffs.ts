@@ -14,32 +14,7 @@ import {
 } from "@/lib/chat/cumulative-diff-resolution";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
-/**
- * Before/after contents for a CUMULATIVE snapshot tile, on either line (D7).
- *
- * A cumulative tile (one file, or the whole accumulated set as a bundle) used
- * to read its contents straight out of the snapshot's `accumulatedFileChanges`.
- * On the windowed line that array is empty by construction - the snapshot
- * carries summaries, and the bodies come from `chat.readAccumulatedFileChange`
- * when a diff is actually opened, which is what this hook does.
- *
- * ## Why both paths run every render
- *
- * The inline resolution and the fetch are both evaluated and one is chosen,
- * rather than branching before the hook call. Hook order cannot be conditional,
- * and the alternative - two sibling components picked by line - would put the
- * line discriminator in the component tree, where a tile that changed lines
- * mid-life would remount and lose its scroll position. On the pre-windowed line
- * the request list is empty, and `useHostQueries` over an empty list is free.
- *
- * ## `null` digest means "do not fetch"
- *
- * A row whose digest is `null` is one whose contents rode the snapshot, so it
- * is resolved inline. That makes the two paths complementary rather than
- * alternative, and a mixed set - which the active turn produces, since a file
- * the running turn created has no host version yet - is handled correctly by
- * construction rather than by a special case.
- */
+/** Always call both paths; hook order cannot be conditional. null digest means do not fetch (contents rode the snapshot). */
 export function useSnapshotResolveCumulativeDiffs(args: {
   readonly payload: SnapshotDiffTilePayload;
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -47,17 +22,7 @@ export function useSnapshotResolveCumulativeDiffs(args: {
   readonly chatId: string;
   readonly hostRows: ReadonlyArray<AccumulatedChangeRow>;
   /**
-   * Whether {@link hostRows} is the whole accumulated set rather than the
-   * prefix delivered so far.
-   *
-   * Load-bearing for absence. A bundle names its paths as of when it was
-   * opened, and this hook reads a path missing from `hostRows` as "reverted
-   * since, so drop the section". That is right for a complete set and wrong
-   * for a prefix: reopening an existing bundle starts from the snapshot, whose
-   * summary chunks normally arrive AFTERWARDS, so every file still in transit
-   * looked reverted and the tile rendered the early ones as a finished bundle -
-   * or "source unavailable" before the first chunk - with nothing on screen
-   * saying it was still loading.
+   * True only when `hostRows` is the whole set. A missing path in a prefix is still in transit, not reverted; treating it as reverted dropped early files from a reopened bundle.
    */
   readonly hostRowsComplete: boolean;
   readonly inlineChanges: ReadonlyArray<ChatAccumulatedFileChange>;

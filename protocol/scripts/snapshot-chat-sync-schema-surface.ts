@@ -1,17 +1,6 @@
 /**
- * Emits the frozen surface of the `chat-head` / `chat-shard` persistence
- * contract: both JSON-Schema IO surfaces of each registered record. The two
- * ride one fixture because they are one contract on one version line - a head
- * names shards, a shard embeds the sub-schemas the head's core is built from,
- * and every change that moves one moves the other.
- *
- * Do not edit the generated fixture by hand. When the guard fails, classify the
- * change using `src/persistence/COMPATIBILITY.md` ("Chat-sync contract").
- * Regenerate only after a compatible change has been reviewed or the required
- * breaking-version and migration work is in place:
- *
- *   bun run protocol/scripts/snapshot-chat-sync-schema-surface.ts > \
- *     protocol/src/persistence/chat-sync/__tests__/__fixtures__/chat-sync-schema-surface.ts
+ * Emits the frozen surface of the `chat-head` / `chat-shard` persistence contract: both JSON-Schema IO surfaces of each registered record.
+ * Do not edit the generated fixture by hand.
  */
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { chatHeadStorageSchema } from "@traycer/protocol/persistence/chat-sync/head";
@@ -36,11 +25,7 @@ const header =
   "// The registered chat-head / chat-shard JSON-Schema surfaces; frozen by chat-sync-schema-surface-compat.test.ts.\n";
 
 const baseline = {
-  // The WIRE projections, not the registered schemas' own input surfaces. Both
-  // records capture unmodeled keys through `z.preprocess`, and
-  // `z.toJSONSchema` reports a preprocess's inner (post-capture) schema in both
-  // IO modes - which would freeze a "storage" surface requiring the internal
-  // `residual` key and marking `core` optional. See `chat-sync/residual.ts`.
+  // The WIRE projections, not the registered schemas' own input surfaces.
   head: {
     storage: z.toJSONSchema(chatHeadStorageSchema, { io: "input" }),
     domain: z.toJSONSchema(chatHeadSchema),

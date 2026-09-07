@@ -126,10 +126,8 @@ export function createBrowserTileFindAdapter(args: {
         matchCase: snapshot.matchCase,
       },
       forward,
-      // Follow-up request that advances within the active session, so
-      // findNext is false (Electron: true begins a NEW session, false is a
-      // follow-up). Passing true here restarts the find at the first match on
-      // every next/previous.
+      // Follow-up request that advances within the active session, so findNext is false (Electron: true begins a NEW session, false is a follow-up).
+      // Passing true here restarts the find at the first match on every next/previous.
       false,
     );
   };
@@ -184,10 +182,8 @@ export function createBrowserTileFindAdapter(args: {
       };
     },
     search: (input) => {
-      // A new/changed query begins a fresh finding session, so findNext is
-      // true (Electron: true = initial request, false = follow-up). Passing
-      // false made each keystroke a follow-up into a session that did not
-      // exist yet, so results lagged a keystroke behind the query.
+      // A new/changed query begins a fresh finding session, so findNext is true (Electron: true = initial request, false = follow-up).
+      // Passing false made each keystroke a follow-up into a session that did not exist yet, so results lagged a keystroke behind the query.
       runSearch(input, true, true);
     },
     next: () => {

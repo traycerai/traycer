@@ -145,10 +145,6 @@ describe("scrubSupportText", () => {
     });
 
     it("redacts a JSON-stringified Windows path whole, not leaving a bare drive letter (finding #2)", () => {
-      // Was: `{"path":"C:<path-1>"}` - the doubled backslashes JSON.stringify
-      // produces between each level were matched one-at-a-time, leaving the
-      // second backslash of each pair (and the bare "C:") for a later
-      // pattern to mis-claim instead.
       const jsonStringified = JSON.stringify({
         path: "C:\\Users\\anurag\\file.txt",
       });
@@ -186,11 +182,6 @@ describe("scrubSupportText", () => {
       );
     });
 
-    // The shared leaf's quoted-JSON Authorization pattern keeps the scheme and
-    // redacts the credential after it, which is strictly more than the old
-    // whole-value redaction did: this 12-character payload is below the bare
-    // `Basic <base64>` pattern's 16-character floor, so before the leaf it
-    // only ever redacted because the value happened to be quoted.
     it("redacts a quoted-key authorization Basic-auth value, keeping the scheme", () => {
       expect(scrubSupportText('{"authorization":"Basic dXNlcjpwYXNz"}')).toBe(
         '{"authorization":"Basic <redacted>"}',
@@ -198,10 +189,6 @@ describe("scrubSupportText", () => {
     });
 
     it("redacts an unquoted Basic-auth header value in full, not just the word Basic (finding #3)", () => {
-      // The bare-value branch of the inline patterns stops at the first
-      // whitespace, so without a dedicated Basic-auth pattern only the word
-      // "Basic" was redacted and the base64 credential right after it
-      // survived untouched.
       const result = scrubSupportText(
         "Authorization: Basic dXNlcjpwYXNzd29yZA==",
       );
@@ -215,12 +202,6 @@ describe("scrubSupportText", () => {
     });
   });
 
-  // Live E2E verification (finding N2, P1): a naked, high-entropy API key
-  // pasted directly into free text - no surrounding key=value/quoted-key
-  // context at all - matched none of the patterns above. This is the exact
-  // planted fixture from that run, plus one fixture per token family, each
-  // checked in both an "intent text" position (a plain user sentence) and a
-  // "log line" position (the shape a host.log/desktop.log line takes).
   describe("token-shape redaction (finding N2)", () => {
     const ANTHROPIC_KEY =
       "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH";
@@ -424,12 +405,6 @@ describe("deepScrubSupportValue", () => {
   });
 });
 
-/**
- * Root cause H: `SENSITIVE_INLINE_VALUE_PATTERN` keys on the word "cookie"
- * itself, so a log line or a `browser-trace.jsonl` record naming
- * `csrftoken=...` / `sessionid=...` carried a live session and read as
- * ordinary text. Replaying one is a full account takeover.
- */
 describe("scrubSupportText session cookies", () => {
   it("redacts csrftoken and sessionid in a cookie string", () => {
     expect(
@@ -463,11 +438,6 @@ describe("scrubSupportText session cookies", () => {
   });
 
   it("redacts the JSON-serialized cookie form too", () => {
-    // A trace record or a structured log line renders a cookie as JSON, and a
-    // closing key-quote sits between the name and the `:` - which the bare
-    // `name=value` pattern's `\s*[:=]` does not skip past.
-    // The value's own quotes go with it, exactly as the quoted inline-value
-    // pattern already does for `"password": "..."`.
     expect(scrubSupportText('{"sessionid": "abc123def456"}')).toBe(
       '{"sessionid": <redacted>}',
     );

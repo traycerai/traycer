@@ -227,9 +227,8 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
 }
 
 function makeHost(tray: IHostTray, management: IHostManagement): IRunnerHost {
-  // Shared `IRunnerHost` stub base so this test never has to re-declare the
-  // whole surface (it grows with every runner-host addition); only the two
-  // facets under test are overridden.
+  // Shared `IRunnerHost` stub base so this test never has to re-declare the whole surface (it grows with every
+  // runner-host addition); only the two facets under test are overridden.
   return createFakeRunnerHost({
     hostTray: tray,
     hostManagement: management,
@@ -279,12 +278,8 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
   });
 
   it("opens a confirmation dialog for restartHost and only calls requestHostRespawn after confirm", async () => {
-    // `LocalHostRestartFlow` now owns this flow (shared with the menu
-    // listener). Mounted here with no `<HostRuntimeProvider>`, so
-    // `useHostBinding()` reads `null` and the flow takes its ForceOnly arm:
-    // confirm dispatches the bridge respawn directly, not the CLI's
-    // `IHostManagement.restartHost` (that RPC belongs to the cooperative
-    // Settings ▸ Overview path, exercised in `host-overview-mutations.test.tsx`).
+    // Mounted here with no `<HostRuntimeProvider>`, so `useHostBinding` reads `null` and the flow takes its
+    // ForceOnly arm.
     const tray = createTray();
     const management = makeManagement({});
     const requestHostRespawn = vi.fn(() =>

@@ -25,13 +25,7 @@ export type SkillsMutateVariables = {
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
   readonly mutation: ProvidersSkillsMutateAction;
-  /**
-   * When true, the hook skips the global toast so the caller can render the
-   * native error inline. Same escape hatch as `useProvidersMcpMutate`: the
-   * skills tab reports failures in its own error slot, and without this the
-   * user gets the toast AND the inline message for one failure. The toast
-   * still fires for non-native errors and when this is omitted/false.
-   */
+  /** Same escape hatch as `useProvidersMcpMutate`: the skills tab reports failures in its own error slot, and without this the user gets the toast AND the inline message for one failure. */
   readonly suppressToast: boolean | undefined;
 };
 

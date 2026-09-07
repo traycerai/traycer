@@ -76,10 +76,7 @@ type SurfacePlacement =
   | { readonly kind: "left"; readonly width: string }
   | { readonly kind: "right"; readonly left: string; readonly width: string };
 
-/**
- * One keyed keep-alive layer for every top-level tab kind. Active split members
- * are pinned; all remaining capacity is global MRU across hidden surfaces.
- */
+/** One keyed keep-alive layer for every top-level tab kind. */
 export function TopLevelTabHost() {
   const { items, activeItemId } = useTabsStore(
     useShallow((state) => ({
@@ -138,17 +135,8 @@ export function TopLevelTabHost() {
       },
     ];
   });
-  // Hosted chat bodies (`StableTileSurfaceHost`) are positioned by rects the
-  // geometry coordinator reads inside a ResizeObserver callback, and a
-  // ResizeObserver reports SIZE changes only. A placement change here can move
-  // a surface without resizing it - "Reverse views" swaps the two sides'
-  // `left` offsets while each side keeps its width (`1 - leftRatio` on the
-  // other side is the same width it already had) - so without this the two
-  // hosted bodies stay painted at their pre-swap rects while the tab strips
-  // and sidebars around them have already crossed over. Layout effect, not
-  // effect: the surface styles above are applied in this same commit and the
-  // re-read has to see them before paint. Parent layout effects run after the
-  // children's, so every record's own registration already exists by now.
+  // Layout effect, not effect: the surface styles above are applied in this same commit and the re-read has to
+  // see them before paint.
   const placementSignature = mounts
     .map((mount) => surfacePlacementKey(mount.tab, mount.placement))
     .join("\u001f");
@@ -159,10 +147,8 @@ export function TopLevelTabHost() {
   return (
     <div
       ref={hostBoundsRef}
-      // `overflow-clip`, not `overflow-hidden`: see the content viewport in
-      // `app-shell.tsx`. Every box between the header and a surface must be
-      // unscrollable, or a stray `focus()` / `scrollIntoView` can park it at a
-      // non-zero offset and push the surface's top row under the header.
+      // Every box between the header and a surface must be unscrollable, or a stray `focus` / `scrollIntoView` can
+      // park it at a non-zero offset and push the surface's top row under the header.
       className="relative flex min-h-0 min-w-0 flex-1 overflow-clip"
       data-testid="top-level-tab-host"
     >
@@ -448,16 +434,8 @@ function FillableSplitSlot(props: {
   );
 }
 
-/**
- * Whether releasing the current drag here would actually commit.
- *
- * `isOver` on its own is not enough: it reports pure hit geometry, so it would
- * light the slot up for a drag the live guard will refuse - a tab that is
- * already a group member, a structurally locked tab, or a suppressed command
- * ledger - promising a drop that then silently does nothing. Routing through
- * the same resolver the commit uses keeps the highlight and the outcome in
- * agreement.
- */
+/** `isOver` on its own is not enough: it reports pure hit geometry, so it would light the slot up for a drag
+ * the live guard will refuse. */
 function useFillableSlotDropActive(
   target: TopLevelFillableTarget,
   isOver: boolean,
@@ -471,11 +449,8 @@ function useFillableSlotDropActive(
       systemTabs: state.systemTabs,
     })),
   );
-  // `resolveValidatedTopLevelTabDrop` consults the structural-lock registry,
-  // which lives outside both stores above. Without this the highlight would
-  // keep whatever it computed when the pointer arrived, so a lock taken or
+  // Without this the highlight would keep whatever it computed when the pointer arrived, so a lock taken or
   // released mid-drag left the feedback disagreeing with what the drop does.
-  // Same subscription the split-slot chooser uses.
   useSyncExternalStore(
     subscribeTabStructuralLocks,
     getTabStructuralLockRevision,

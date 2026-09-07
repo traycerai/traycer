@@ -1,21 +1,6 @@
 import { z } from "zod";
 import type { ImportCookieRow, ImportCookieSameSite } from "./cookie-rows";
 
-/**
- * Parser for the cookie exports a user can produce without Traycer's help:
- *
- * - **Netscape `cookies.txt`** (curl, wget, the "Get cookies.txt" extensions):
- *   seven tab-separated fields per line, `#` comments, and the `#HttpOnly_`
- *   line prefix the extensions use to keep HttpOnly cookies in a format that
- *   has no column for it.
- * - **Cookie-Editor JSON**: an array of the extension's cookie objects.
- * - **Playwright storage state**: `{ cookies, origins }`. `origins` is dropped
- *   on purpose - the import is cookies only, and a localStorage blob from
- *   another browser has no origin here to be lent to.
- *
- * This is the way through for the jars no on-disk reader can open: Windows
- * Chrome under App-Bound Encryption, and Linux desktops with KWallet only.
- */
 
 export type CookieFileParse =
   | { readonly ok: true; readonly rows: readonly ImportCookieRow[] }
@@ -99,28 +84,10 @@ const cookieEditorCookieSchema = z.object({
   // `no_restriction`, `unspecified`); some exports carry null.
   sameSite: z.string().nullable().default(null),
   session: z.boolean().default(false),
-  // The extension serialises Chrome's own `cookies.Cookie`, whose
-  // `partitionKey` is `{ topLevelSite, hasCrossSiteAncestor }` and is present
-  // only on a CHIPS cookie; some exports flatten it to the top-level site.
-  // Read, not stripped: a partitioned record must be flagged so the scan
-  // counts it and the import leaves it out, since writing it to the
-  // unpartitioned jar would widen a cookie one top-level site could read to
-  // every site. Taken as `unknown` rather than a shape, so a value this
-  // reader does not understand marks ITS row partitioned (left out) instead
-  // of making the whole export unreadable.
+  // Read, not stripped: a partitioned record must be flagged so the scan counts it and the import leaves it out, since writing it to the unpartitioned jar would widen a cookie one.
   partitionKey: z.unknown().optional(),
 });
 
-/**
- * Chrome's `getAll` leaves `partitionKey` off an unpartitioned cookie, and
- * sets `{ topLevelSite }` on a CHIPS one; a flattened export writes the site
- * as a string. Absent or `null` is the only unpartitioned reading; a present
- * key whose site is empty is the one other shape a writer could use for
- * "none". Anything else present - an object without a string site, a number,
- * an array - is a shape this reader cannot vouch for, and the safe reading of
- * "maybe partitioned" is partitioned: the row is counted and left out rather
- * than written to a jar every site can read.
- */
 function cookieEditorPartitioned(key: unknown): boolean {
   if (key === undefined || key === null) return false;
   if (typeof key === "string") return key.length > 0;
@@ -168,10 +135,6 @@ function parseJsonCookieFile(text: string): CookieFileParse {
     return {
       ok: true,
       rows: cookieEditor.data.map((cookie) => ({
-        // `hostOnly` present: the writer's word. Absent: the Netscape
-        // convention the domain itself carries - a leading dot is a domain
-        // cookie, a bare host is host-only - so an export that omits the
-        // flag is never widened to every subdomain by a default.
         domain: withDomainScope(
           cookie.domain,
           cookie.hostOnly === null

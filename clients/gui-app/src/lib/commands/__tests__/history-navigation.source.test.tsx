@@ -140,12 +140,8 @@ describe("historyNavigationSource", () => {
     expect(goForward).toHaveBeenCalledTimes(1);
   });
 
-  // Regression guard for the crash this fixup addresses: the production palette
-  // mounts ABOVE `<RouterProvider>`, so there is no TanStack router context.
-  // `CommandPaletteProvider` builds the adapter via `routerAdapterFor(router)`
-  // (its real production path) and publishes it on `CommandPaletteRouterContext`.
-  // Evaluating the source through that adapter - with NO `RouterContextProvider`
-  // in the tree - must not crash, and must surface rows for a branded history.
+  // Regression guard for the crash this fixup addresses: the production palette mounts ABOVE `<RouterProvider>`, so there is no TanStack router context.
+  // `CommandPaletteProvider` builds the adapter via `routerAdapterFor(router)` (its real production path) and publishes it on `CommandPaletteRouterContext`.
   it("evaluates via CommandPaletteProvider's adapter with no router context - no crash, rows present", () => {
     const router = makeRouter(seedPersistentHistory(["/epics/e1/t1"], 0));
 

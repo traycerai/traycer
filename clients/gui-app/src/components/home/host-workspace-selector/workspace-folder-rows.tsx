@@ -11,14 +11,8 @@ import type { WorkspaceRunItem } from "./workspace-run-item";
 
 export type AddFolderHandler = () => Promise<boolean>;
 
-/**
- * The flat one-folder-per-row renderer shared by both surfaces. The folders are
- * laid out in one shared grid: pin / folder / location / branch / actions.
- * The "＋ Add folder" button sits left-aligned below. `trailingSlot` (the
- * device chip on landing, `null` in-epic) is pushed to the far right to match
- * the composer's alignment. All controls call the EXISTING item handlers — this
- * component never owns binding, staging, or mutation logic.
- */
+/** All controls call the existing item handlers - this component never owns binding, staging, or mutation
+ * logic. */
 export function WorkspaceFolderRows(props: {
   readonly items: ReadonlyArray<WorkspaceRunItem>;
   readonly trailingSlot: ReactNode;
@@ -26,9 +20,7 @@ export function WorkspaceFolderRows(props: {
   readonly addFolderPending: boolean;
   readonly addFolderDisabled: boolean;
   readonly addFolderDisabledReason: string | null;
-  // Terminal-agent "Update": applies the staged folder edits and resumes the
-  // PTY. `null` on chat / landing surfaces (no live session to resume), where
-  // the button is hidden. When set, it renders to the right of "Add folder".
+  // Terminal-agent "Update": applies the staged folder edits and resumes the PTY.
   readonly onUpdate: (() => void) | null;
   readonly updateEnabled: boolean;
   readonly updatePending: boolean;
@@ -41,12 +33,8 @@ export function WorkspaceFolderRows(props: {
   /** Recent tier; null for read-only and terminal-agent binding surfaces. */
   readonly recentWorkspaces: ReactNode;
   readonly moveToRecent: boolean;
-  // True only when the rows live inside a popover (in-epic): nested popovers
-  // (branch form + its source dropdown) then portal into — and are collision-
-  // bounded by — this container so they stay inside the parent popover and a
-  // click inside them isn't treated as "interact outside". Inline (landing) it
-  // must stay false, else the short inline container collision-clips the source
-  // dropdown to near-zero height (it renders but reads as "missing").
+  // Inline (landing) it must stay false, else the short inline container collision-clips the source dropdown to
+  // near-zero height (it renders but reads as "missing").
   readonly nestedInPopover: boolean;
 }) {
   const { items } = props;
@@ -55,9 +43,7 @@ export function WorkspaceFolderRows(props: {
   const [boundaryEl, setBoundaryEl] = useState<HTMLDivElement | null>(null);
   const nestedBoundaryEl = props.nestedInPopover ? boundaryEl : null;
 
-  // Per-worktree uncommitted counts for the Location submenu annotation. Shares
-  // the warm host-wide `worktree.listAllForHost` query key (same source as
-  // Settings ▸ Worktrees). Keyed to the surface's host via the first item.
+  // Per-worktree uncommitted counts for the Location submenu annotation.
   const hostClient = items[0]?.hostClient ?? null;
   const hasAnyWorktrees = items.some(
     (item) =>
@@ -270,13 +256,8 @@ export function AddFolderButton(props: {
   return button;
 }
 
-/**
- * Applies the staged terminal-agent folder edits and resumes the PTY against
- * the new binding. Pinned to the far right of the folder block (opposite "Add
- * folder"), styled like the row's select controls. Disabled (muted) until there
- * is at least one staged change, so an accidental click can't pointlessly
- * restart the terminal; the tooltip explains the gated state.
- */
+/** Disabled (muted) until there is at least one staged change, so an accidental click can't pointlessly restart
+ * the terminal; the tooltip explains the gated state. */
 function UpdateFoldersButton(props: {
   readonly onUpdate: () => void;
   readonly enabled: boolean;
@@ -289,9 +270,7 @@ function UpdateFoldersButton(props: {
       disabled={!props.enabled || props.pending}
       onClick={props.onUpdate}
       className={cn(
-        // Select-like chip matching the location / branch controls: bordered,
-        // rounded, far-right. Primary accent when there are changes to apply;
-        // muted + inert otherwise.
+        // Primary accent when there are changes to apply; muted + inert otherwise.
         "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-ui-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
         props.enabled && !props.pending
           ? "border-primary/40 bg-primary/5 text-primary hover:bg-primary/10"

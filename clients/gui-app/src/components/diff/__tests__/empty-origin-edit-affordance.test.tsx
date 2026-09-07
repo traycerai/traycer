@@ -1,16 +1,5 @@
-/**
- * `EmptyOriginEditAffordance` is shared across the workspace-file source
- * surface and the single/aggregate Git-diff surfaces. jsdom has no layout
- * engine, so `document.elementFromPoint` cannot be used here to prove a real
- * pointer hit-test the way a live browser can - that gap is exactly why a
- * live E2E round (Playwright `force:true` masking the real bug) missed this
- * once already: the library's own rendered host can win hit-testing over a
- * same-DOM-order sibling with no z-index of its own, even when this control
- * comes later in markup. This suite instead asserts the CSS contract that
- * makes the fix work (an explicit `z-10` on a CSS Grid item, which Grid
- * respects without needing `position` declared) so a future edit that drops
- * the z-index class fails a test instead of only failing in a real browser.
- */
+/** jsdom has no layout engine, so `document.elementFromPoint` cannot be used here to prove a real pointer
+ * hit-test the way a live browser can. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import {
@@ -29,10 +18,7 @@ describe("EmptyOriginEditAffordance", () => {
       <EmptyOriginEditAffordance onActivate={vi.fn()} />,
     );
     const affordance = getByTestId(EMPTY_ORIGIN_AFFORDANCE_TEST_ID);
-    // A CSS Grid item respects z-index without needing `position` declared -
-    // this class is what guarantees the affordance paints above the
-    // library's own rendered host regardless of what stacking context that
-    // host establishes internally.
+    // A CSS Grid item respects z-index without needing `position` declared.
     expect(affordance.className).toContain("z-10");
     expect(affordance.className).toContain("col-start-1");
     expect(affordance.className).toContain("row-start-1");

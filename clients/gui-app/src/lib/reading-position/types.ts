@@ -8,9 +8,8 @@ export type ReadingPositionSurfaceKind =
 export type ReadingPositionDurability = "durable" | "renderer-live";
 
 /**
- * Dual identity for one reading surface. `viewKey` identifies the exact tile;
- * `contentKey` is the last-left fallback used only when that exact view has no
- * record. Renderer-live surfaces deliberately carry no content key.
+ * Dual identity for one reading surface.
+ * `viewKey` identifies the exact tile; `contentKey` is the last-left fallback used only when that exact view has no record.
  */
 export interface ReadingPositionIdentity {
   readonly viewKey: string;

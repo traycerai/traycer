@@ -6,122 +6,8 @@ import {
 } from "../host/lifecycle/process-start-identity";
 
 /**
- * The host-owned, environment-scoped CLI invocation record.
- *
- * Written by the OSS CLI after a confirmed service registration (and removed
- * only after a confirmed matching uninstall). Also written by the host on the
- * first successful legacy-OS recovery. Both processes live in different
- * packages, and the host cannot import the CLI, so the filename, schema, and
- * parser live HERE — the same reason `./host-stop-intent` and
- * `./host-update-attempt-paths` do.
- *
- * ### Why these take a directory instead of an `Environment`
- *
- * The CLI resolves the host runtime home through `hostHomeDir(environment)`
- * (dev-run slot nesting included). The host resolves its OWN home through the
- * path-only `--host-data-dir` override the supervisor spawned it with. Those
- * two always name the same directory for the same host, so taking the
- * directory as input makes the agreement structural instead of a slot rule
- * duplicated in a third place that can drift.
- *
- * Authority files live in a private child {@link cliInvocationStateDir}
- * (`<hostHome>/cli-invocation/`), not in the host-home root. Helpers still
- * take the host home and join through that child. Root-level
- * `cli-invocation.*` names are never authority. The child entry is gated
- * with a no-follow directory open (a symlink is rejected). Writers
- * re-check {@link CliInvocationStateDirIdentity} before each write
- * group. Residual, stated exactly because Node has no `openat` family and
- * every operation below the gate is therefore by pathname: a post-gate
- * swap of the child under a group-writable parent can redirect a CREATE
- * (a new fixed-basename 0600 file appears in the directory the attacker
- * chose), a RENAME (a record or lifecycle lands there; the record names a
- * `serviceLabel` the redirected directory's reader rejects as foreign,
- * the lifecycle only re-keys that reader's cache), and an UNLINK. Unlinks
- * are compare-then-remove: the live record is removed only after its
- * label matched, the stale marker only after
- * {@link cliInvocationStaleMarkerRemovableBy} agreed, and every other
- * name carries a per-transaction token no other directory can hold. No
- * existing file is truncated, written through, or chmod'd via a pathname
- * (`fchmod` on the exclusive-open inode; replace only by `rename` of that
- * inode). The precondition - another account with write access to this
- * account's host home - already exposes the host install tree and the
- * credentials beside it, so nothing here widens that boundary.
- *
- * ### Cache bypass
- *
- * Presence of **any** discovered transaction marker OR the stale marker
- * forces the host to ignore `cli-invocation.json`. Staging files are
- * never a cache.
- *
- * Transaction markers are unique contenders, not a reused pathname:
- * `cli-invocation.txn.<owner-token>`, created with `O_EXCL`/`wx` at that
- * exact unique path (no `.tmp` under this stem). Identity still lives
- * inside the file (owner pid + processStartIdentity + token), and
- * `owner.token` must equal the basename suffix. The legacy exact name
- * `cli-invocation.txn` is residue from older writers. Current writers
- * never create it, never unlink it, and never rename onto it. A
- * **positively live** exact marker blocks election. An abandoned or
- * unparseable-old-enough exact marker is nonblocking residue and stays
- * on disk; unique contenders may still elect. The host may **ignore**
- * (never unlink) a parseable abandoned exact marker for cache bypass
- * and publication when {@link cliInvocationLifecycleNewerThanLegacyExactMarker}
- * holds. Unique contenders are never discharged that way. Discover
- * names with {@link isCliInvocationTransactionMarkerBasename}.
- *
- * Staging is unique per owner: `cli-invocation.json.staging.<token>`.
- * Only that owner may commit or unlink its staging file. The host never
- * creates or removes any transaction marker (legacy or unique).
- *
- * A **live** contender (processStartIdentity still the same process)
- * means a CLI mutation or election is in flight: the host must not
- * memoize or execute an OS recovery obtained in that window. **Any**
- * live contender makes the whole marker state live — the host does not
- * elect an owner. An **abandoned** owner (pid positively dead or
- * identity recycled) means that contender crashed: the host may recover
- * from the OS and persist if no live contender remains, and still must
- * not unlink txn files. Unparseable markers fall back to
- * {@link CLI_INVOCATION_TXN_ABANDON_AFTER_MS} measured as ELAPSED age
- * only; a marker stamped in the future stays live
- * ({@link cliInvocationTransactionAbandonedByAge}).
- *
- * CLI election (host does not implement this): observe existing
- * markers and elect AROUND dead **unique** files - they are not
- * unlinked during the election, because each may belong to an owner
- * that mutated the OS before it could commit, and its marker is what
- * keeps a host off the pre-mutation record until a fresh lifecycle
- * generation exists. Create a unique contender only when no other
- * live marker remains. Become owner only as the sole remaining live
- * marker after a confirm re-list. If two processes create in the
- * same empty window, the winner is earliest filesystem `mtimeMs`,
- * then basename; losers unlink **only their own** unique file. A
- * later arrival that sees a live owner — including a live legacy
- * exact marker — does not create a file and cannot unlink that
- * owner's path. The winner sweeps the dead unique files it elected
- * around only AFTER its lifecycle write succeeds, and confirms each
- * removal; a file that survives is reported, never silently left as
- * a bypass beside a record the command called clean. The exact
- * legacy path is never unlinked by anyone.
- *
- * After a successful host migration write of the live record, the host may
- * unlink `cli-invocation.stale`. The host's own live-record commit uses a
- * pid-scoped temp name, never a CLI staging filename.
- *
- * ### Lifecycle generation
- *
- * `cli-invocation.lifecycle` is rewritten with a fresh UUID on every
- * confirmed registration and confirmed matching uninstall, **before** the
- * transaction marker is released. The host folds `generation` into its
- * migration-cache key so a confirmed uninstall cannot resurrect a
- * no-marker in-memory recovery. An absent file is generation `""` (old
- * CLI). A foreign-label uninstall does not rewrite it.
- *
- * ### Remaining check/use race
- *
- * Path-based validation cannot eliminate replacement between `stat` and
- * `spawn`. Schema version 1 does not store `dev`/`ino` (or a Windows file
- * id). A process that can replace the registered CLI already controls that
- * account's service execution; this record is same-account compatibility
- * state, not cryptographic provenance.
+ * Host-owned CLI invocation record. Filename, schema, and parser live here (host cannot import the CLI).
+ * Authority is only `<hostHome>/cli-invocation/`; any txn or stale marker bypasses `cli-invocation.json`; never unlink the legacy exact `cli-invocation.txn`.
  */
 
 export const CLI_INVOCATION_RECORD_SCHEMA_VERSION = 1;
@@ -140,13 +26,7 @@ export interface CliInvocationStateDirIdentity {
 
 /**
  * `null` when the stats carry no usable identity.
- *
- * A zero `dev` or `ino` is not an identity, it is the platform saying it has
- * none: Windows reports `ino === 0` on a volume without file indexes, and two
- * different directories there would compare equal. Treating that as evidence
- * that the directory is unchanged would let a replacement through the exact
- * check that exists to catch one, so both sides refuse to hold authority
- * behind an identity they cannot verify.
+ * Treating that as evidence that the directory is unchanged would let a replacement through the exact check that exists to catch one, so both sides refuse to hold authority behind an identity they cannot verify.
  */
 export function cliInvocationStateDirIdentityFromStats(stats: {
   readonly dev: number;
@@ -205,10 +85,8 @@ export interface CliInvocationRecordSource {
 }
 
 /**
- * Durable `{ command, args }` the host should spawn, plus the provenance of
- * that vector. `recoveredAt` is the write timestamp for both the host
- * migration writer and the CLI registration writer — the field name is
- * frozen by the schema, not a claim that every write was a recovery.
+ * Durable `{ command, args }` the host should spawn, plus the provenance of that vector.
+ * `recoveredAt` is the write timestamp for both the host migration writer and the CLI registration writer - the field name is frozen by the schema, not a claim that every write was a recovery.
  */
 export interface CliInvocationRecord {
   readonly schemaVersion: typeof CLI_INVOCATION_RECORD_SCHEMA_VERSION;
@@ -264,10 +142,8 @@ export function cliInvocationRecordOwnedStagingPath(
 }
 
 /**
- * Legacy exact transaction path. Current writers never create, unlink,
- * or rename onto this file. It remains a discovered name so an older
- * CLI's in-flight marker is still a cache bypass, and an abandoned
- * exact file is left as residue.
+ * Legacy exact transaction path.
+ * Current writers never create, unlink, or rename onto this file.
  */
 export function cliInvocationRecordTransactionMarkerPath(
   hostHomeDir: string,
@@ -297,9 +173,7 @@ export function cliInvocationRecordOwnedTransactionPath(
 }
 
 /**
- * Directory-entry predicate for transaction markers: the legacy exact
- * `cli-invocation.txn`, or `cli-invocation.txn.<uuid>`. Rejects temps and
- * other suffixes so a `cli-invocation.txn*.tmp` is not a marker.
+ * Directory-entry predicate for transaction markers: the legacy exact `cli-invocation.txn`, or `cli-invocation.txn.<uuid>`.
  */
 export function isCliInvocationTransactionMarkerBasename(
   name: string,
@@ -325,11 +199,7 @@ export interface CliInvocationTransactionContenderOrder {
   readonly mtimeMs: number;
 }
 
-/**
- * Deterministic order among live contenders: earliest filesystem mtime,
- * then basename. Not owner-supplied `startedAtMs` — a late writer could
- * forge an earlier stamp and preempt.
- */
+/** Deterministic order among live contenders: earliest filesystem mtime, then basename. */
 export function compareCliInvocationTransactionContenders(
   left: CliInvocationTransactionContenderOrder,
   right: CliInvocationTransactionContenderOrder,
@@ -358,9 +228,8 @@ export function electCliInvocationTransactionOwnerBasename(
 }
 
 /**
- * Written when a live record must not be preferred (commit failed after OS
- * success, or an explicit un-prefer). Presence is cache bypass, same as the
- * transaction marker.
+ * Written when a live record must not be preferred (commit failed after OS success, or an explicit un-prefer).
+ * Presence is cache bypass, same as the transaction marker.
  */
 export function cliInvocationRecordStaleMarkerPath(
   hostHomeDir: string,
@@ -373,17 +242,7 @@ export function cliInvocationRecordStaleMarkerPath(
 
 /**
  * The stale marker's payload.
- *
- * `serviceLabel` is what makes removing the marker safe against a swapped
- * state directory. Every removal of `cli-invocation.stale` is by pathname -
- * Node has no `unlinkat` - so under a group-writable host home the entry
- * named `cli-invocation` can be re-pointed at another environment's state
- * directory between the identity check and the unlink. A remover that first
- * reads the marker and compares this label with its own refuses a foreign
- * marker, which turns that redirection from "the other slot's cache bypass
- * silently disappears" into a no-op. A marker written by a CLI too old to
- * carry the label parses with `serviceLabel: null` and is removable by anyone,
- * exactly as it was before the field existed.
+ * A remover that first reads the marker and compares this label with its own refuses a foreign marker, which turns that redirection from "the other slot's cache bypass silently disappears" into a no-op.
  */
 export interface CliInvocationStaleMarker {
   readonly schemaVersion: typeof CLI_INVOCATION_RECORD_SCHEMA_VERSION;
@@ -437,9 +296,7 @@ export function parseCliInvocationStaleMarker(
 
 /**
  * May a remover that acts on behalf of `ownLabel` unlink this marker?
- *
- * Shared so the CLI and the host cannot drift on the rule: a legacy marker
- * without a label is anyone's to remove, a labelled one belongs to its label.
+ * Shared so the CLI and the host cannot drift on the rule: a legacy marker without a label is anyone's to remove, a labelled one belongs to its label.
  */
 export function cliInvocationStaleMarkerRemovableBy(
   marker: CliInvocationStaleMarker,
@@ -462,47 +319,12 @@ export interface CliInvocationLifecycle {
   readonly event: CliInvocationLifecycleEvent;
   readonly serviceLabel: string;
   readonly at: string;
-  /**
-   * Causal evidence for discharging a legacy exact `cli-invocation.txn`.
-   * See {@link CliInvocationLegacyMarkerEvidence} for the four states and
-   * {@link cliInvocationLifecycleSupersedesLegacyExactMarker} for how each
-   * one decides.
-   */
+  /** Causal evidence for discharging a legacy exact `cli-invocation.txn`. */
   readonly legacyMarkerEvidence: CliInvocationLegacyMarkerEvidence;
 }
 
 /**
- * What the confirming transaction saw of the legacy exact marker when it
- * acquired, as written into the lifecycle it committed.
- *
- * Four states, because "no digest" means three different things:
- *
- *   - `digest`: the {@link cliInvocationTransactionMarkerDigest} of the
- *     abandoned legacy marker that was present. A host matching it against
- *     the marker it is looking at knows the marker predates the lifecycle
- *     without consulting any clock.
- *   - `none`: a current CLI acquired and saw NO legacy marker. Any legacy
- *     marker present afterwards was therefore created after this lifecycle's
- *     transaction acquired - by an older CLI - and must never be discharged
- *     by it, whatever the clocks say. On the wire this is the field written
- *     as `null`.
- *   - `unreadable`: a legacy marker was present and abandoned by age, but its
- *     bytes could not be read, so there is no digest to name. Hashing the
- *     empty read would have manufactured evidence that can never match the
- *     real bytes. This state NEVER discharges either: it proves a marker
- *     existed but carries no identity for it, so once the path is readable
- *     the host cannot tell "that same marker" from "a later incarnation an
- *     older CLI wrote at the same path", and a timestamp comparison under a
- *     backward clock step would discharge the later one - the exact hazard
- *     `none` closes. The transaction that observed it reports the surviving
- *     bypass on completion instead. On the wire this is the literal string
- *     `"unreadable"`, which no hex digest can collide with.
- *   - `unknown`: a lifecycle written by a CLI predating the field, which
- *     recorded nothing. On the wire this is the field being absent.
- *
- * The timestamp comparison applies to `unknown` only: a pre-field CLI could
- * not record what it saw, and ordering the two CLI-authored stamps is the
- * best that remains for lifecycles it wrote.
+ * Legacy exact marker as seen at acquire. `none` and `unreadable` never discharge by clock; timestamp fallback is for `unknown` only.
  */
 export type CliInvocationLegacyMarkerEvidence =
   | { readonly kind: "digest"; readonly digest: string }
@@ -516,29 +338,13 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /**
  * How many leading bytes of a transaction marker its digest covers.
- *
- * A real marker is a few hundred bytes, so every marker either side ever
- * wrote is digested whole. The bound exists for the OTHER case - a corrupt or
- * oversize legacy marker that the CLI elects around by age and names by
- * digest so a host can discharge it. That discharge only works if both sides
- * hash identical bytes, and the host reads a marker through a bounded
- * descriptor read; putting the bound HERE, inside the one helper both call,
- * is what makes "identical bytes" true by construction rather than by two
- * constants agreeing. The host's bounded read must cover at least this many
- * bytes; the CLI passes whatever it read and the helper takes the prefix.
+ * The host's bounded read must cover at least this many bytes; the CLI passes whatever it read and the helper takes the prefix.
  */
 export const CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES = 4096;
 
 /**
- * Identity of a transaction marker's BYTES, shared so the CLI (which writes
- * the digest into a lifecycle) and the host (which computes it from the file
- * it read) cannot disagree on the hashing.
- *
- * Over the RAW bytes as read from the file, never text decoded from them: a
- * corrupt marker may not be valid UTF-8, and a decode-then-re-encode would
- * hash replacement characters the file does not contain. Bounded to
- * {@link CLI_INVOCATION_TRANSACTION_MARKER_DIGEST_BYTES} for the reason given
- * there.
+ * Identity of a transaction marker's BYTES, shared so the CLI (which writes the digest into a lifecycle) and the host (which computes it from the file it read) cannot disagree on the hashing.
+ * Over the RAW bytes as read from the file, never text decoded from them: a corrupt marker may not be valid UTF-8, and a decode-then-re-encode would hash replacement characters the file does not contain.
  */
 export function cliInvocationTransactionMarkerDigest(
   bytes: Uint8Array,
@@ -560,11 +366,7 @@ export function serializeCliInvocationLifecycle(
       event: record.event,
       serviceLabel: record.serviceLabel,
       at: record.at,
-      // `digest`, `none` and `unreadable` are all WRITTEN (a hex string,
-      // `null`, the literal `"unreadable"`), so a reader can tell each from
-      // "recorded nothing". `unknown` is only ever re-serialised from a
-      // parsed pre-field lifecycle and keeps the field absent, exactly as
-      // that CLI wrote it.
+      // `digest`, `none` and `unreadable` are all WRITTEN (a hex string, `null`, the literal `"unreadable"`), so a reader can tell each from "recorded nothing".
       ...(evidence.kind === "unknown"
         ? {}
         : {
@@ -576,12 +378,6 @@ export function serializeCliInvocationLifecycle(
   )}\n`;
 }
 
-/**
- * The wire value of a RECORDED evidence state. Exhaustive by construction: a
- * new evidence kind fails to compile here rather than falling through to the
- * `null` that means "saw no marker", which is the one value that would let a
- * later host discharge on a claim nobody made.
- */
 function recordedEvidenceWireValue(
   evidence: Exclude<CliInvocationLegacyMarkerEvidence, { kind: "unknown" }>,
 ): string | null {
@@ -618,10 +414,8 @@ export function parseCliInvocationLifecycle(
   }
   if (typeof value.at !== "string") return null;
   if (Number.isNaN(Date.parse(value.at))) return null;
-  // Absent and `null` are DIFFERENT answers - see
-  // {@link CliInvocationLegacyMarkerEvidence}. Absent is a CLI that recorded
-  // nothing; `null` is a CLI that looked and saw nothing. Anything else that
-  // is not a hex digest is a document this parser cannot vouch for.
+  // Absent and `null` are DIFFERENT answers - see {@link CliInvocationLegacyMarkerEvidence}.
+  // Anything else that is not a hex digest is a document this parser cannot vouch for.
   let legacyMarkerEvidence: CliInvocationLegacyMarkerEvidence;
   if (
     !("supersededLegacyMarkerDigest" in value) ||
@@ -690,18 +484,8 @@ export function cliInvocationTransactionMarkerMatchesBasename(
 }
 
 /**
- * Whether a parseable lifecycle generation is demonstrably newer than a
- * parseable legacy exact transaction marker.
- *
- * The host uses this only to *ignore* an abandoned exact
- * `cli-invocation.txn` for cache bypass and publication. It never
- * unlinks the file. Unique contenders are not discharged by this
- * helper — callers must still require the exact basename, a parseable
- * payload, and a positively abandoned owner.
- *
- * Marker start is `max(Date.parse(startedAt), owner.startedAtMs)`:
- * CLI-authored evidence only, not filesystem mtime. Fail-closed when
- * neither stamp is a finite number.
+ * Whether a parseable lifecycle generation is demonstrably newer than a parseable legacy exact transaction marker.
+ * Fail-closed when neither stamp is a finite number.
  */
 export function cliInvocationLifecycleNewerThanLegacyExactMarker(
   marker: CliInvocationTransactionMarker,
@@ -723,41 +507,8 @@ export function cliInvocationLifecycleNewerThanLegacyExactMarker(
 }
 
 /**
- * Whether a lifecycle discharges a legacy exact marker, by CAUSAL evidence
- * first and by timestamp only as the fallback.
- *
- * The digest match is what makes the rule clock-independent: the CLI writes
- * the digest of the abandoned legacy marker it observed at acquire time into
- * the lifecycle it commits, so a lifecycle naming this marker's bytes was
- * written by a transaction that completed after the marker existed - true
- * regardless of what the wall clock did in between. The timestamp comparison
- * remains only for a lifecycle written by a CLI predating the field
- * (`unknown`).
- *
- * Recorded evidence is decisive in every other case, and each of the other
- * states refuses when it cannot match - `unreadable` always, since it names
- * no bytes to match and a later incarnation at the same path would be
- * indistinguishable from the one it saw:
- *
- *   - a digest naming a DIFFERENT marker is evidence against, not absence of
- *     evidence: the confirming transaction saw another incarnation of this
- *     file, so the marker read now was written after it acquired - by an
- *     older CLI rewriting the exact path - and a lifecycle cannot discharge a
- *     transaction that started after it;
- *   - `none` is the same argument with nothing seen: the transaction acquired
- *     with no legacy marker present (a LIVE one would have blocked its
- *     election), so any legacy marker present now postdates it.
- *
- * Falling back to timestamps in either case would let a backward clock step
- * discharge that later transaction and drop its record bypass.
- *
- * `digest` is the {@link cliInvocationTransactionMarkerDigest} of the marker
- * file's bytes as the caller read them. `parsed` is `null` when those bytes do
- * not parse: the digest still names them - the CLI digests bytes, not a
- * payload, so a corrupt marker it elected around is dischargeable by the
- * causal arm - while the timestamp fallback has no start to order and
- * refuses. Without that, a corrupt legacy marker (which no writer unlinks)
- * kept every host off a record the CLI had just reported committing.
+ * Whether a lifecycle discharges a legacy exact marker, by CAUSAL evidence first and by timestamp only as the fallback.
+ * Falling back to timestamps in either case would let a backward clock step discharge that later transaction and drop its record bypass.
  */
 export function cliInvocationLifecycleSupersedesLegacyExactMarker(
   marker: {
@@ -792,18 +543,6 @@ export function cliInvocationLifecycleSupersedesLegacyExactMarker(
 /**
  * Elapsed-age window for unparseable / identity-less markers.
  * A parsed still-alive owner is never abandoned by this function.
- *
- * ONE-SIDED on purpose. A marker stamped in the future - the wall clock was
- * stepped back after it was written - is not old, it is unreadable in time,
- * and the callers that reach this function are exactly the ones that could
- * not verify the owner's liveness any other way (an unreadable file, an
- * unparseable payload, an identity-less owner). Ageing such a marker out on
- * the absolute distance from `now` would let a second CLI elect around an
- * owner that is still running and mutate the OS registration beside it,
- * which is the one thing the transaction exists to prevent. A future stamp
- * therefore stays LIVE until the clock catches up with it plus the window;
- * the cost is a wait that reports the marker by path, the alternative is two
- * writers.
  */
 export function cliInvocationTransactionAbandonedByAge(
   startedAtMs: number,
@@ -959,13 +698,7 @@ export function serializeCliInvocationRecord(
 
 /**
  * `null` for anything that is not a well-formed schemaVersion 1 record.
- * Hand-rolled rather than zod: a torn or hostile file must read as absent
- * so the host fails closed to OS recovery / `cli-unavailable`, not as a
- * thrown parse that could take down a maintenance path.
- *
- * Unknown keys are ignored on purpose. A future additive field must not
- * make an otherwise valid schemaVersion 1 record unreadable; required
- * fields and enums stay fail-closed.
+ * A future additive field must not make an otherwise valid schemaVersion 1 record unreadable; required fields and enums stay fail-closed.
  */
 export function parseCliInvocationRecord(
   value: unknown,

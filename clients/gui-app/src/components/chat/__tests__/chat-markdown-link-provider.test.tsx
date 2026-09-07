@@ -51,10 +51,7 @@ const mocks = vi.hoisted(() => ({
       focus: input.focus,
     }),
   ),
-  // Relative chat links now probe each bound root for existence before
-  // opening; these provider-wiring tests exercise the OPEN behavior, not the
-  // probe itself (that's `fetchWorkspaceFileExists`'s own unit tests), so
-  // every candidate reports "exists" by default.
+  // Relative chat links now probe each bound root for existence before opening; these provider-wiring tests exercise the OPEN behavior, not the probe itself (that's `fetchWorkspaceFileExists`'s own unit tests), so every candidate reports "exists" by default.
   workspaceFileExists: vi.fn<
     (args: FetchWorkspaceFileExistsArgs) => Promise<boolean>
   >(() => Promise.resolve(true)),
@@ -128,14 +125,7 @@ const SAME_EPIC_ARTIFACT_PATH = `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifa
 const CROSS_EPIC_ARTIFACT_PATH =
   "/Users/them/.traycer/epics/epic-other/artifacts/parent/child-ticket/index.md";
 
-// The exact markdown a Windows agent emits when it lists an epic's artifacts:
-// a native drive path with backslash separators, wrapped in `<>` because the
-// home directory contains a space. Rendering this reloaded the production
-// renderer, so it is driven through the whole pipeline (markdown parse ->
-// url transform -> sanitize -> anchor -> link policy -> artifact RPC).
-// Assembled by joining rather than interpolated into one `String.raw` literal:
-// a `${…}` directly after a backslash reads as an escaped `$`, which would
-// quietly eat the separator this case is about.
+// Assembled by joining rather than interpolated into one `String.raw` literal: a `${…}` directly after a backslash reads as an escaped `$`, which would quietly eat the separator this case is about.
 const WINDOWS_SAME_EPIC_ARTIFACT_PATH = [
   String.raw`C:\Users\Traycer Dev\.traycer\epics`,
   OPEN_EPIC_ID,
@@ -144,11 +134,8 @@ const WINDOWS_SAME_EPIC_ARTIFACT_PATH = [
   "index.md",
 ].join("\\");
 
-// What the link policy receives once the markdown parser is done with it. The
-// `\.` before `.traycer` is a CommonMark escape and is consumed by the parser
-// (spec behaviour, unrecoverable at render time) - every other separator
-// survives, so the root-agnostic `epics/<id>/artifacts/<chain>/index.md` marker
-// the artifact resolver keys on is intact and the link still resolves.
+// What the link policy receives once the markdown parser is done with it.
+// The `\.` before `.traycer` is a CommonMark escape and is consumed by the parser (spec behaviour, unrecoverable at render time) - every other separator survives, so the root-agnostic `epics/<id>/artifacts/<chain>/index.md` marker the artifact resolver keys on is intact and the link still resolves.
 const WINDOWS_SAME_EPIC_RESOLVED_PATH = [
   String.raw`C:\Users\Traycer Dev.traycer\epics`,
   OPEN_EPIC_ID,
@@ -326,12 +313,8 @@ describe("ChatMarkdownLinkProvider", () => {
   });
 
   it("declines a relative file link when no workspace roots are bound (the no-binding failure mode #2 fixes upstream)", () => {
-    // With zero roots, a relative link cannot be tied to any workspace, so the
-    // policy opens nothing. This is exactly the dead-click a no-binding chat
-    // hit before the chat tile started feeding the link policy its composer
-    // fallback roots (`useWorkspaceMentionRoots(mentionRoots, true)`); the chat
-    // tile now resolves the global fallback so this empty-roots case no longer
-    // reaches the provider for an epic-workspace chat.
+    // With zero roots, a relative link cannot be tied to any workspace, so the policy opens nothing.
+    // This is exactly the dead-click a no-binding chat hit before the chat tile started feeding the link policy its composer fallback roots (`useWorkspaceMentionRoots(mentionRoots, true)`); the chat tile now resolves the global fallback so this empty-roots case no longer reaches the provider for an epic-workspace chat.
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -410,12 +393,8 @@ describe("ChatMarkdownLinkProvider", () => {
   });
 
   it("opens a Windows-authored artifact link without letting the browser navigate the anchor", async () => {
-    // The production crash: the drive-letter bypass in `markdownUrlTransform`
-    // only matched a LITERAL `\` or `/` after the colon, but remark hands it a
-    // percent-encoded destination (`C:%5CUsers…`). The bypass missed and
-    // `defaultUrlTransform` emptied the href as an unsafe `C:` scheme - and
-    // `<a href="">` points at the current document, so the click navigated for
-    // real and unloaded the whole renderer.
+    // The production crash: the drive-letter bypass in `markdownUrlTransform` only matched a LITERAL `\` or `/` after the colon, but remark hands it a percent-encoded destination (`C:%5CUsers…`).
+    // The bypass missed and `defaultUrlTransform` emptied the href as an unsafe `C:` scheme - and `<a href="">` points at the current document, so the click navigated for real and unloaded the whole renderer.
     mocks.resolveArtifactByPath.mockResolvedValue({
       artifactId: "artifact-dummy-alpha",
       kind: "spec",
@@ -432,10 +411,8 @@ describe("ChatMarkdownLinkProvider", () => {
       />,
     );
 
-    // Addressed as an element, not by role: an anchor whose href was emptied
-    // (and therefore dropped) has no `link` role, and that href is the bug.
-    // Asserting the drive prefix specifically - a bare "not empty" check would
-    // pass on the dropped-attribute form the anchor falls back to.
+    // Addressed as an element, not by role: an anchor whose href was emptied (and therefore dropped) has no `link` role, and that href is the bug.
+    // Asserting the drive prefix specifically - a bare "not empty" check would pass on the dropped-attribute form the anchor falls back to.
     const link = container.querySelector("a");
     if (link === null) throw new Error("Expected a rendered anchor.");
     expect(link.getAttribute("href")).toMatch(/^C:(%5C|\\)Users/i);
@@ -466,13 +443,8 @@ describe("ChatMarkdownLinkProvider", () => {
   });
 
   it("resolves an artifact whose chain folder contains a space", async () => {
-    // A POSIX artifact link into a folder named "space path test". The parser
-    // percent-encodes the space either way - whether the agent wrote `%20`
-    // itself or wrapped a literal space in `<>` - so the policy used to receive
-    // `space%20path%20test`, which matches no folder in the epic's
-    // `folderName -> id` index. The resolve came back null and the click ended
-    // in the "Couldn't open link" toast (the tolerable macOS symptom of the
-    // same encoding bug that reloads the renderer on Windows).
+    // A POSIX artifact link into a folder named "space path test".
+    // The parser percent-encodes the space either way - whether the agent wrote `%20` itself or wrapped a literal space in `<>` - so the policy used to receive `space%20path%20test`, which matches no folder in the epic's `folderName -> id` index.
     mocks.resolveArtifactByPath.mockResolvedValue({
       artifactId: "artifact-spaced",
       kind: "spec",
@@ -589,13 +561,8 @@ describe("ChatMarkdownLinkProvider", () => {
   });
 
   it("makes an artifact link a no-op when it resolves to null and its index.md is outside the chat roots", async () => {
-    // SAME_EPIC_ARTIFACT_PATH lives under ~/.traycer, outside the chat's
-    // workspaceRoots (["/repo"]). Before the CL-1 boundary fix the null-resolve
-    // fallback synthesized a workspace from the path's dirname and previewed the
-    // raw index.md; CL-1 removed that synthesis, so an out-of-root artifact path
-    // yields no workspace-file ref and the click degrades to a safe no-op — no
-    // pane, no navigation, no projection open. (The degrade-to-file-preview
-    // fallback still fires for artifact paths that resolve within a bound root.)
+    // SAME_EPIC_ARTIFACT_PATH lives under ~/.traycer, outside the chat's workspaceRoots (["/repo"]).
+    // Before the CL-1 boundary fix the null-resolve fallback synthesized a workspace from the path's dirname and previewed the raw index.md; CL-1 removed that synthesis, so an out-of-root artifact path yields no workspace-file ref and the click degrades to a safe no-op - no pane, no navigation, no projection open.
     mocks.resolveArtifactByPath.mockResolvedValue(null);
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
 
@@ -675,12 +642,8 @@ describe("ChatMarkdownLinkProvider", () => {
   });
 
   it("opens a parent-escaping relative link end-to-end via its resolved absolute target", async () => {
-    // Real (unmocked) `candidateWorkspaceFileRefsForRelativeLinkPath` +
-    // `firstEagerlyTrueIndex` racing - only the RPC (`fetchWorkspaceFileExists`)
-    // is mocked, defaulting every candidate to "exists". `../sibling/app.ts`
-    // resolved against the bound root `/repo` escapes it, so the opened ref
-    // must be the client-side-resolved absolute target, not a rejected
-    // `{ workspacePath: "/repo", filePath: "../sibling/app.ts" }` candidate.
+    // Real (unmocked) `candidateWorkspaceFileRefsForRelativeLinkPath` + `firstEagerlyTrueIndex` racing - only the RPC (`fetchWorkspaceFileExists`) is mocked, defaulting every candidate to "exists".
+    // `../sibling/app.ts` resolved against the bound root `/repo` escapes it, so the opened ref must be the client-side-resolved absolute target, not a rejected `{ workspacePath: "/repo", filePath: "../sibling/app.ts" }` candidate.
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
     renderProvider(
       tabId,

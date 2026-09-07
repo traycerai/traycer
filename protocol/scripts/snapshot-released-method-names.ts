@@ -1,21 +1,6 @@
 /**
- * Emits the released-floor `/rpc` method-name set for the unary host RPC
- * registry. Optional-capability methods declare a `degrade` strategy and are
- * deliberately excluded: adding them to this snapshot would make them part of
- * the handshake-fatal floor.
- *
- * The committed snapshot (`src/host/__tests__/__fixtures__/released-method-names.ts`)
- * freezes the handshake-critical method-name set. `released-surface-compat.test.ts`
- * freezes the handshake-critical released floor. Optional methods never enter
- * it; their missing-peer behavior is declared in the registry. Per-method
- * schema evolution is intentionally NOT frozen here; schemas grow additively
- * within a version, and breaking changes ride a version bump instead.
- *
- * Regenerate ONLY for a coordinated release that drops support for the baselined
- * host - the resulting diff is the reviewable record of that decision:
- *
- *   bun run protocol/scripts/snapshot-released-method-names.ts > \
- *     protocol/src/host/__tests__/__fixtures__/released-method-names.ts
+ * Emits the released-floor `/rpc` method-name set for the unary host RPC registry.
+ * `released-surface-compat.test.ts` freezes the handshake-critical released floor.
  */
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 

@@ -8,13 +8,7 @@ import {
   subscribeNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
-/**
- * Direct unit tests for the per-host negotiated-method registry that backs
- * optional-capability gates (including `epic.setChatArchived` / B4).
- *
- * Unknown hosts must fail closed; a recorded manifest must answer; re-recording
- * an identical set must not churn listeners (referential stability).
- */
+/** Unknown hosts must fail closed; a recorded manifest must answer; re-recording an identical set must not churn listeners (referential stability). */
 describe("negotiated-manifest-registry", () => {
   afterEach(() => {
     resetNegotiatedManifests();
@@ -95,13 +89,7 @@ describe("negotiated-manifest-registry", () => {
   });
 
   it("notifies but keeps the method set stable when only a VERSION changes", () => {
-    // The branch the fork dialog's capability healing rides on: a host upgraded
-    // in place answers the same methods at a higher minor, so `methodsChanged`
-    // is false and `versionsChanged` is true. `recordNegotiatedHostManifest`
-    // handles the two independently - it must still notify (or the gate never
-    // re-reads and the row keeps its stale "needs update" word), while leaving
-    // the method Set's REFERENCE alone (or every presence consumer's
-    // `getSnapshot` churns for a change that did not touch presence).
+    // `recordNegotiatedHostManifest` handles the two independently - it must still notify (or the gate never re-reads and the row keeps its stale "needs update" word), while leaving the method Set's REFERENCE alone (or every presence consumer's `getSnapshot` churns for a change that did not touch presence).
     recordNegotiatedHostManifest("host-1", {
       "epic.createChat": { major: 1, minor: 1 },
     });

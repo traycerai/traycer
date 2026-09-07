@@ -99,24 +99,15 @@ export function useCloseTabFlow(): CloseTabFlow {
   );
 
   const closeActiveTab = useCallback(() => {
-    // Deliberately keyed off the route, NOT `selectHostFocusedRef`. A split
-    // only moves `routeBackingSide` onto the focused side when that side holds
-    // a tab, so focusing the fillable half leaves the two diverged and the
-    // focused ref reading `null` - which is exactly where `createEmptySplit`
-    // starts ("Add tab to new split view" focuses the empty side). Gating on
-    // the focused ref made Cmd+W silently do nothing there. Whenever the
-    // focused side does hold a tab the two agree, so the route-backed tab is
-    // the right target in both cases.
+    // Gating on the focused ref made Cmd+W silently do nothing there. Whenever the focused side does hold a tab
+    // the two agree, so the route-backed tab is the right target in both cases.
     const active = getHeaderTabs().find((t) =>
       tabMatchesPath(t, activePathname),
     );
     if (active !== undefined) requestCloseTab(active);
   }, [activePathname, requestCloseTab]);
 
-  // Stable identity: consumers list the whole flow in `useCallback` /
-  // `useEffect` deps. A fresh object literal per render gave every derived
-  // handler a new identity, which defeated the memoized strip items and
-  // re-registered the split action handlers on each render.
+  // Stable identity: consumers list the whole flow in `useCallback` / `useEffect` deps.
   return useMemo(
     () => ({
       requestCloseTab,

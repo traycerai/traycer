@@ -10,9 +10,8 @@ import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 
 /**
- * Which route a control took. `share` exists only on shells that own an OS
- * chooser, where handing the bytes to another app and writing them into the
- * device's own storage are two different acts (see `hasSeparateDownloadRoute`).
+ * Which route a control took.
+ * `share` exists only on shells that own an OS chooser, where handing the bytes to another app and writing them into the device's own storage are two different acts (see `hasSeparateDownloadRoute`).
  */
 export type ImageAction = "copy" | "share" | "download";
 
@@ -46,9 +45,7 @@ export async function performImageAction(params: {
     toast.success("Image copied");
     return;
   }
-  // `saveBlobToDisk` is the shell's OWN save route, which on a shell that also
-  // owns a chooser-free download is the share sheet - that is what makes it
-  // the share leg rather than a second download.
+  // `saveBlobToDisk` is the shell's OWN save route, which on a shell that also owns a chooser-free download is the share sheet - that is what makes it the share leg rather than a second download.
   const saved =
     params.action === "share"
       ? await saveBlobToDisk(blob, params.suggestedName, params.fileSave)

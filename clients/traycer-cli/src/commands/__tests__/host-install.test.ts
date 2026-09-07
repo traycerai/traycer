@@ -3,16 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `host install` (Host Update Layer Redesign Tech Plan, "Lock-scope
-// restructure" + "--no-service-register" + "--if-idle"): stage/verify/
-// extract into an owner-tokened temp OUTSIDE `cli-lock`
-// (`stageHostInstallSource`), then commit (reconcile -> stop -> swap ->
-// start -> re-reconcile, `commitHostInstallSource`) INSIDE the lock. This
-// suite pins the command-layer wiring around that split - lock scope,
-// flag plumbing, and the busy-abort/discard path - by mocking the
-// installer boundary and the service lifecycle, mirroring host-update.
-// test.ts's mock style. The genuine two-process lock-contention coverage
-// lives in host-install-lock.test.ts.
+// `host install` (Host Update Layer Redesign Tech Plan, "Lock-scope restructure" + "--no-service-register" + "--if-idle"): stage/verify/ extract into an owner-tokened temp OUTSIDE `cli-lock` (`stageHostInstallSource`), then commit (reconcile -> stop -> swap -> start -> re-reconcile, `commitHostInstallSource`) INSIDE the lock.
+// This suite pins the command-layer wiring around that split - lock scope, flag plumbing, and the busy-abort/discard path - by mocking the installer boundary and the service lifecycle, mirroring host-update. test.ts's mock style.
 
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
@@ -52,11 +44,8 @@ vi.mock("../../installer", () => ({
   currentInstallPlatform: mocks.currentInstallPlatformMock,
 }));
 
-// The contender-aware command facade imports the commit edge from the
-// concrete installer module, not through the package barrel above. Mock the
-// same boundary there so this command-wiring suite cannot mutate the
-// operator's real host install while still providing a genuine staged file
-// for the pre-commit attestation path.
+// The contender-aware command facade imports the commit edge from the concrete installer module, not through the package barrel above.
+// Mock the same boundary there so this command-wiring suite cannot mutate the operator's real host install while still providing a genuine staged file for the pre-commit attestation path.
 vi.mock("../../installer/install", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../installer/install")>();
@@ -76,13 +65,8 @@ vi.mock("../../service/install-lifecycle", () => ({
   createBytesOnlyInstallLifecycle: mocks.createBytesOnlyInstallLifecycleMock,
 }));
 
-// `createServiceController`/`serviceLabelFor` must be mocked here too, not
-// just `createServiceInstallLifecycle` - the bytes-only path
-// (`--no-service-register`) now calls them directly, and the REAL
-// `createServiceController()` builds a `createCliLogger` that does real
-// filesystem I/O against the operator's actual `~/.traycer` home. Leaving
-// this unmocked would run real disk writes from this suite. `formatService
-// LifecycleWarning` is kept genuine (pure string formatting, no I/O).
+// `createServiceController`/`serviceLabelFor` must be mocked here too, not just `createServiceInstallLifecycle` - the bytes-only path (`--no-service-register`) now calls them directly, and the REAL `createServiceController()` builds a `createCliLogger` that does real filesystem I/O against the operator's actual `~/.traycer` home.
+// Leaving this unmocked would run real disk writes from this suite.
 vi.mock("../../service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../service")>();
   return {
@@ -101,10 +85,8 @@ vi.mock("../../host/busy-check", () => ({
   },
 }));
 
-// The real `resolveHostAuth` reads `~/.traycer/cli/credentials` (via
-// `createCliLogger` + `readCredentials`) - genuine filesystem I/O against
-// the operator's actual home, same hazard as the `createServiceController`
-// mock above. Must be mocked even for tests that never care about auth.
+// The real `resolveHostAuth` reads `~/.traycer/cli/credentials` (via `createCliLogger` + `readCredentials`) - genuine filesystem I/O against the operator's actual home, same hazard as the `createServiceController` mock above.
+// Must be mocked even for tests that never care about auth.
 vi.mock("../../internal/host-auth", () => ({
   resolveHostAuth: async (
     ...callArgs: Parameters<typeof mocks.resolveHostAuthMock>
@@ -123,9 +105,7 @@ vi.mock("../../auth/login-flow", () => ({
   },
 }));
 
-// The real module dials a WebSocket (`provisionInstalledHostCredential`
-// opens a `/stream` session against the just-installed host) - mandatory to
-// mock for the whole suite, not just the tests that assert on it.
+// The real module dials a WebSocket (`provisionInstalledHostCredential` opens a `/stream` session against the just-installed host) - mandatory to mock for the whole suite, not just the tests that assert on it.
 vi.mock("../../host/credential-provisioning", () => ({
   provisionInstalledHostCredential: async (
     ...callArgs: Parameters<typeof mocks.provisionInstalledHostCredentialMock>
@@ -283,10 +263,8 @@ function fakeCtxWithRuntime(overrides: {
   };
 }
 
-// The sign-in pre-flight's prompt gate reads `process.stdout.isTTY` directly
-// (not through `ctx`). Under vitest it is normally an absent property (no
-// own descriptor), not `false` - captured once at module load, before any
-// test touches it, so `afterEach` can restore the exact original shape.
+// The sign-in pre-flight's prompt gate reads `process.stdout.isTTY` directly (not through `ctx`).
+// Under vitest it is normally an absent property (no own descriptor), not `false` - captured once at module load, before any test touches it, so `afterEach` can restore the exact original shape.
 const originalStdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(
   process.stdout,
   "isTTY",
@@ -301,10 +279,8 @@ function setStdoutIsTTY(value: boolean): void {
 
 describe("buildHostInstallCommand", () => {
   beforeEach(() => {
-    // Default stand-ins so the bytes-only branch (which now calls these
-    // directly) never falls through to the real, side-effecting
-    // implementations. `resetAllMocks` in `afterEach` wipes these between
-    // tests, so they're re-applied here rather than once at module load.
+    // Default stand-ins so the bytes-only branch (which now calls these directly) never falls through to the real, side-effecting implementations.
+    // `resetAllMocks` in `afterEach` wipes these between tests, so they're re-applied here rather than once at module load.
     mocks.createServiceControllerMock.mockReturnValue({
       install: vi.fn(),
       uninstall: vi.fn(),
@@ -320,24 +296,17 @@ describe("buildHostInstallCommand", () => {
       devSlot: null,
     });
     mocks.currentInstallPlatformMock.mockReturnValue("darwin");
-    // Pin the prompt gate rather than depending on vitest leaving `isTTY`
-    // absent: a TTY-attached local run would otherwise send the signed-out
-    // tests down the prompt path and fail only on some machines. Tests that
-    // want the prompt call `setStdoutIsTTY(true)` themselves.
+    // Pin the prompt gate rather than depending on vitest leaving `isTTY` absent: a TTY-attached local run would otherwise send the signed-out tests down the prompt path and fail only on some machines.
+    // Tests that want the prompt call `setStdoutIsTTY(true)` themselves.
     setStdoutIsTTY(false);
-    // Every existing test predates the sign-in pre-flight and expects to run
-    // as signed-in with zero prompt/warning noise - default to that so only
-    // the tests that care about auth need to override it.
+    // Every existing test predates the sign-in pre-flight and expects to run as signed-in with zero prompt/warning noise - default to that so only the tests that care about auth need to override it.
     mocks.resolveHostAuthMock.mockResolvedValue({
       token: "test-token",
       authnBaseUrl: "https://authn.test",
       userId: "user-1",
     });
-    // Every signed-in, non-JSON, service-started install now also runs
-    // post-install credential provisioning. Default to an outcome that adds
-    // NO human suffix ({ kind: "active", minted: false }) so existing
-    // human/data assertions on other fields stay green; only the tests below
-    // that care about provisioning override this.
+    // Every signed-in, non-JSON, service-started install now also runs post-install credential provisioning.
+    // Default to an outcome that adds NO human suffix ({ kind: "active", minted: false }) so existing human/data assertions on other fields stay green; only the tests below that care about provisioning override this.
     mocks.provisionInstalledHostCredentialMock.mockResolvedValue({
       kind: "active",
       minted: false,
@@ -345,9 +314,7 @@ describe("buildHostInstallCommand", () => {
   });
 
   afterEach(() => {
-    // resetAllMocks (not clearAllMocks) so a mockResolvedValue/
-    // mockRejectedValue configured in one test can't leak into the next -
-    // matches host-update.test.ts's convention.
+    // resetAllMocks (not clearAllMocks) so a mockResolvedValue/ mockRejectedValue configured in one test can't leak into the next - matches host-update.test.ts's convention.
     vi.resetAllMocks();
     mocks.callOrder = [];
     for (const fixtureRoot of stagedFixtureRoots.splice(0)) {
@@ -394,11 +361,8 @@ describe("buildHostInstallCommand", () => {
   });
 
   it("--no-service-register skips the service lifecycle entirely: no stop, no register, no start (Finding 4)", async () => {
-    // `createServiceInstallLifecycle`'s `bootstrap: null` still rewrites and
-    // re-loads an EXISTING OS registration post-swap (see `service/install-
-    // lifecycle.ts`'s `afterSwap`) - that is NOT the bytes-only contract
-    // `--no-service-register` promises. The fix skips that lifecycle
-    // entirely and uses the bytes-only builder instead.
+    // `createServiceInstallLifecycle`'s `bootstrap: null` still rewrites and re-loads an EXISTING OS registration post-swap (see `service/install- lifecycle.ts`'s `afterSwap`) - that is NOT the bytes-only contract `--no-service-register` promises.
+    // The fix skips that lifecycle entirely and uses the bytes-only builder instead.
     const bytesOnlyLifecycle = {
       beforeSwap: vi.fn(async () => {}),
       afterSwap: vi.fn(async () => {}),
@@ -428,9 +392,7 @@ describe("buildHostInstallCommand", () => {
     expect(mocks.commitHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({ lifecycle: bytesOnlyLifecycle }),
     );
-    // `commitHostInstallSource` (which owns invoking the hooks) is mocked
-    // here, so neither hook having fired proves nothing in the command
-    // layer itself calls stop/register/start directly.
+    // `commitHostInstallSource` (which owns invoking the hooks) is mocked here, so neither hook having fired proves nothing in the command layer itself calls stop/register/start directly.
     expect(bytesOnlyLifecycle.beforeSwap).not.toHaveBeenCalled();
     expect(bytesOnlyLifecycle.afterSwap).not.toHaveBeenCalled();
     // No service action is reported - activation remains a separate step.
@@ -483,10 +445,8 @@ describe("buildHostInstallCommand", () => {
     );
     await command(fakeCtx());
 
-    // No `attemptAdoption` here, deliberately: `host install` mints its own
-    // adoption for the children it spawns rather than forwarding one into the
-    // service-install lifecycle. Production is right; the field was carried in
-    // this assertion from an earlier shape of the call.
+    // No `attemptAdoption` here, deliberately: `host install` mints its own adoption for the children it spawns rather than forwarding one into the service-install lifecycle.
+    // Production is right; the field was carried in this assertion from an earlier shape of the call.
     expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledWith({
       environment: "production",
       bootstrap: { enableLinger: false, allowSelfInvocation: true },
@@ -580,10 +540,7 @@ describe("buildHostInstallCommand", () => {
     });
 
     expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
-    // The third argument is the verify callback, whose signature has now
-    // settled: the discard runs under the same execution segment as the commit
-    // it is scrubbing after, so it re-verifies the capability at the actuator
-    // rather than trusting the one captured at segment entry.
+    // The third argument is the verify callback, whose signature has now settled: the discard runs under the same execution segment as the commit it is scrubbing after, so it re-verifies the capability at the actuator rather than trusting the one captured at segment entry.
     expect(mocks.discardStagedHostInstallSourceMock).toHaveBeenCalledWith(
       "production",
       staged,
@@ -611,10 +568,7 @@ describe("buildHostInstallCommand", () => {
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
     });
 
-    // The third argument is the verify callback, whose signature has now
-    // settled: the discard runs under the same execution segment as the commit
-    // it is scrubbing after, so it re-verifies the capability at the actuator
-    // rather than trusting the one captured at segment entry.
+    // The third argument is the verify callback, whose signature has now settled: the discard runs under the same execution segment as the commit it is scrubbing after, so it re-verifies the capability at the actuator rather than trusting the one captured at segment entry.
     expect(mocks.discardStagedHostInstallSourceMock).toHaveBeenCalledWith(
       "production",
       staged,
@@ -731,10 +685,7 @@ describe("buildHostInstallCommand", () => {
     const result = await command(ctx);
 
     // The device flow runs, and completes, BEFORE staging ever starts.
-    // `resolveHostAuthMock` stays pinned to `null` for the whole test (it is
-    // never re-armed after the inline sign-in), so the credential-
-    // provisioning re-read also comes back null and skips the mint - only
-    // the extra `auth-resolve` shows up, never `credential-provision`.
+    // `resolveHostAuthMock` stays pinned to `null` for the whole test (it is never re-armed after the inline sign-in), so the credential- provisioning re-read also comes back null and skips the mint - only the extra `auth-resolve` shows up, never `credential-provision`.
     expect(mocks.callOrder).toEqual([
       "auth-resolve",
       "device-login",
@@ -753,10 +704,7 @@ describe("buildHostInstallCommand", () => {
   });
 
   it("signed out + interactive: the inline sign-in's OWN credentials provision the started host", async () => {
-    // The end-to-end shape of the whole feature, and the one combination the
-    // test above cannot show: the real device flow persists credentials, so
-    // the post-install re-read succeeds and provisioning runs on the token
-    // the inline sign-in just wrote - not on the pre-flight's (absent) one.
+    // The end-to-end shape of the whole feature, and the one combination the test above cannot show: the real device flow persists credentials, so the post-install re-read succeeds and provisioning runs on the token the inline sign-in just wrote - not on the pre-flight's (absent) one.
     mocks.resolveHostAuthMock
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
@@ -867,9 +815,7 @@ describe("buildHostInstallCommand", () => {
     const result = await command(ctx);
 
     expect(mocks.commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
-    // A network failure and a denial are NOT distinguished by `reason` - the
-    // device flow raises `AUTH_REJECTED` for denial, expiry, invalid request
-    // and token rejection alike, so any split there would be false precision.
+    // A network failure and a denial are NOT distinguished by `reason` - the device flow raises `AUTH_REJECTED` for denial, expiry, invalid request and token rejection alike, so any split there would be false precision.
     // The flow's own message is what carries the difference.
     expect(result.data).toMatchObject({
       authPreflight: { state: "unauthenticated", reason: "sign-in-incomplete" },
@@ -974,11 +920,8 @@ describe("buildHostInstallCommand", () => {
   });
 
   it("credentials file unreadable at pre-flight: does not fail the install, continues unauthenticated", async () => {
-    // `resolveHostAuth` only maps ENOENT to `null`; every other fs error
-    // (EACCES on a foreign-owned credentials file, EISDIR, ...) rethrows.
-    // `host install` never read credentials before the pre-flight existed, so
-    // letting that escape would turn an unreadable file into a command that
-    // refuses to install at all.
+    // `resolveHostAuth` only maps ENOENT to `null`; every other fs error (EACCES on a foreign-owned credentials file, EISDIR, ...) rethrows.
+    // `host install` never read credentials before the pre-flight existed, so letting that escape would turn an unreadable file into a command that refuses to install at all.
     const eacces = new Error(
       "EACCES: permission denied, open '/home/other/.traycer/cli/credentials'",
     );
@@ -1012,12 +955,8 @@ describe("buildHostInstallCommand", () => {
   });
 
   it("credentials file unreadable at the provisioning re-read: install still succeeds, but the loss surfaces as unauthorized", async () => {
-    // The nastier half of the same hazard: this read happens AFTER the bytes
-    // are swapped and the service started, so a throw here would report an
-    // install that genuinely succeeded as a failure. The lost credentials are
-    // no longer silently swallowed either - the pre-flight said signed-in, so
-    // `maybeProvisionCredential` reports `unauthorized` rather than skipping
-    // provisioning outright, and the human line names the remedy.
+    // The nastier half of the same hazard: this read happens AFTER the bytes are swapped and the service started, so a throw here would report an install that genuinely succeeded as a failure.
+    // The lost credentials are no longer silently swallowed either - the pre-flight said signed-in, so `maybeProvisionCredential` reports `unauthorized` rather than skipping provisioning outright, and the human line names the remedy.
     mocks.resolveHostAuthMock
       .mockResolvedValueOnce({
         token: "test-token",
@@ -1177,10 +1116,8 @@ describe("buildHostInstallCommand", () => {
     });
 
     it("json mode: STILL provisions - automation is the caller that most needs it", async () => {
-      // `--json` is the documented automation mode, not a signal that some
-      // GUI will connect and mint later. A headless provisioning script is
-      // precisely the run with no other minting client coming, so gating on
-      // output format denied the credential to the cohort that needed it.
+      // `--json` is the documented automation mode, not a signal that some GUI will connect and mint later.
+      // A headless provisioning script is precisely the run with no other minting client coming, so gating on output format denied the credential to the cohort that needed it.
       mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
       mocks.createServiceInstallLifecycleMock.mockReturnValue(
         sampleLifecycleHandle(),

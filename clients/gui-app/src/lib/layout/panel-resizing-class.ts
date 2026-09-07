@@ -1,12 +1,6 @@
 /**
- * Global "a panel resize drag is in progress" signal, expressed as the
- * `traycer-panel-resizing` class on `<html>`. Before the class is added,
- * registered transcript surfaces imperatively snapshot their currently
- * visible rows. Descendant selectors keep those marked rows live, freeze only
- * unmarked/off-screen rows, and suppress transient resize chrome without any
- * per-scroll React subscription. Snapshot markers are cleared after the class
- * is removed. The signal is shared by every resize handle, so consumers do
- * not need to know which surface started the drag.
+ * Global "a panel resize drag is in progress" signal, expressed as the `traycer-panel-resizing` class on `<html>`.
+ * Before the class is added, registered transcript surfaces imperatively snapshot their currently visible rows.
  */
 import { appLogger } from "@/lib/logger";
 
@@ -28,12 +22,8 @@ interface PanelResizeParticipant {
 const panelResizeParticipants = new Set<PanelResizeParticipant>();
 
 /**
- * Registers a surface (ticket 23's D20 port: one per mounted `ChatTimeline`)
- * that imperatively snapshots/clears its own visible-row markers around a
- * panel-resize drag. Returns an unregister function. A participant's own
- * `capture`/`clear` failure is isolated (logged, not thrown) so one broken
- * tile never blocks the drag's class lifecycle or another tile's own
- * capture/clear.
+ * Registers a surface (ticket 23's D20 port: one per mounted `ChatTimeline`) that imperatively snapshots/clears its own visible-row markers around a panel-resize drag.
+ * Returns an unregister function.
  */
 export function registerPanelResizeParticipant(
   participant: PanelResizeParticipant,

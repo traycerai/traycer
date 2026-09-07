@@ -49,12 +49,7 @@ interface DiffCounts {
   readonly deletions: number;
 }
 
-/**
- * Pinned summary of every file changed across the chat (first-in-chat
- * snapshot → current). Collapsed by default. Per-row Undo (on hover) and the
- * header's Undo all revert files to their first snapshot. The list is
- * host-computed, so reverted files drop off.
- */
+/** Pinned summary of every file changed across the chat (first-in-chat snapshot → current). Collapsed by default. */
 export function ChatAccumulatedChangesPanel(
   props: ChatAccumulatedChangesPanelProps,
 ) {
@@ -64,14 +59,7 @@ export function ChatAccumulatedChangesPanel(
   const [open, setOpen] = useState(false);
   const [confirmUndoAll, setConfirmUndoAll] = useState(false);
   const gate = useMemo(() => revertGate(restore), [restore]);
-  // CONTENT-BEARING rows only. A `hasContents: false` summary has no
-  // before/after to fetch - `fetchableAccumulatedChanges` drops it and the
-  // durable tile has no inline contents for it either - so including it here
-  // makes the bundle's title count sections the tile can never render, and a
-  // bundle of nothing but such rows opens straight into "source unavailable".
-  //
-  // The panel's own list still shows every row: a content-less change is a real
-  // change and the user should see it. It is only unreviewable.
+  // A `hasContents: false` summary has no before/after to fetch - `fetchableAccumulatedChanges` drops it and the durable tile has no inline contents for it either - so including it here makes the bundle's title count sections the tile can never render, and a bundle of nothing but such rows opens straight into "source unavailable".
   const filePaths = useMemo(
     () =>
       changes
@@ -80,27 +68,15 @@ export function ChatAccumulatedChangesPanel(
     [changes],
   );
   // Gated on the summary set being COMPLETE, not just on there being one.
-  // While chunks are still arriving `filePaths` is the delivered prefix, and
-  // this action captures it into a durable cumulative-bundle tile - so a click
-  // during ordinary initial loading produces a "review all changes" bundle
-  // that permanently omits the files that had not landed yet, with nothing on
-  // screen to say so. The header already counts the whole host set, which is
-  // what makes the shortfall invisible.
+  // While chunks are still arriving `filePaths` is the delivered prefix, and this action captures it into a durable cumulative-bundle tile - so a click during ordinary initial loading produces a "review all changes" bundle that permanently omits the files that had not landed yet, with nothing on screen to say so.
   const reviewAll = useMemo(
     () =>
       opener === null ||
       restore.activeTurnStatus !== null ||
-      // EXACT completeness, not the clamped count. A revert that lowers the
-      // host's total while the replacement index-0 summary chunk is dropped
-      // leaves MORE summaries than the count, so `undeliveredChangeCount`
-      // clamps to `0` and reads as a finished stream - and during the watchdog
-      // recovery window this action would capture reverted, stale paths into a
-      // durable bundle. `accumulatedSummarySetComplete` is the predicate that
-      // can tell an overshoot from a finished stream; the count cannot.
+      // EXACT completeness, not the clamped count. `accumulatedSummarySetComplete` is the predicate that can tell an overshoot from a finished stream; the count cannot.
       !restore.accumulatedSetComplete ||
-      // Nothing reviewable. Offering the action anyway opens a tile with no
-      // sections at all, which reads as a failure rather than as "these
-      // changes have no contents to diff".
+      // Nothing reviewable.
+      // Offering the action anyway opens a tile with no sections at all, which reads as a failure rather than as "these changes have no contents to diff".
       filePaths.length === 0
         ? null
         : opener.cumulativeBundle(filePaths),
@@ -111,28 +87,16 @@ export function ChatAccumulatedChangesPanel(
       restore.accumulatedSetComplete,
     ],
   );
-  // Every row arrives carrying its own `+/-`: derived from contents on the
-  // pre-windowed line, host-computed on the windowed one, and summed per-edit
-  // for a file the active turn is still writing. The panel used to diff two
-  // file bodies per row per render to get here.
+  // Every row arrives carrying its own `+/-`: derived from contents on the pre-windowed line, host-computed on the windowed one, and summed per-edit for a file the active turn is still writing.
+  // The panel used to diff two file bodies per row per render to get here.
   const totals = useMemo(() => aggregateCounts(changes), [changes]);
-  // The header counts what "Undo all" would touch, which is the host's whole
-  // set - not the prefix of it that has arrived. The rows below fill in as
-  // their summaries land.
+  // The header counts what "Undo all" would touch, which is the host's whole set - not the prefix of it that has arrived.
+  // The rows below fill in as their summaries land.
   const undelivered = restore.undeliveredChangeCount;
-  // Known-undoable rows only. A non-zero `undelivered` is NOT evidence of
-  // undoability: that count includes summaries whose `undoable` is false -
-  // denied, binary, otherwise non-intercepted - so enabling the control on it
-  // offers a revert confirmation that can revert nothing, and the same set
-  // correctly disables the control once its summaries arrive.
+  // Known-undoable rows only.
+  // A non-zero `undelivered` is NOT evidence of undoability: that count includes summaries whose `undoable` is false - denied, binary, otherwise non-intercepted - so enabling the control on it offers a revert confirmation that can revert nothing, and the same set correctly disables the control once its summaries arrive.
   const hasUndoable = changes.some((change) => change.undoable);
-  // What a prefix DOES change is what the disabled state may claim. "Nothing
-  // here can be reverted." is a statement about the whole set, and while
-  // summaries are still arriving this side does not know the whole set - the
-  // host may well hold undoable files behind the count. So the copy says what
-  // is actually true in that state, and only the settled set makes the
-  // stronger claim. (Line 255 already treats a non-zero `undelivered` as "the
-  // set is a prefix"; this keeps the two controls saying one thing about it.)
+  // "Nothing here can be reverted." is a statement about the whole set, and while summaries are still arriving this side does not know the whole set - the host may well hold undoable files behind the count.
   const undoableTooltip =
     undelivered > 0
       ? "Still loading the full list of changes."
@@ -158,8 +122,7 @@ export function ChatAccumulatedChangesPanel(
         data-testid="accumulated-changes-panel"
       >
         <div className="flex items-stretch">
-          {/* muted-fill-ok: trigger inside the canvas-surface panel above;
-              --canvas never equals --muted */}
+          {/* muted-fill-ok: trigger inside the canvas-surface panel above; --canvas never equals --muted */}
           <CollapsibleTrigger className="group/acc flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
             <ChevronDown
               aria-hidden
@@ -168,10 +131,7 @@ export function ChatAccumulatedChangesPanel(
                 open ? null : "-rotate-90",
               )}
             />
-            {/* The one shrinkable item in the row. Every sibling is a fixed
-                chip (chevron, +/− counts, the action buttons), so if this
-                label could not give up width, a narrow viewport would push
-                the counts out of the trigger's box and under the buttons. */}
+            {/* The one shrinkable item in the row. Every sibling is a fixed chip (chevron, +/− counts, the action buttons), so if this label could not give up width, a narrow viewport would push the counts out of the trigger's box and under the buttons. */}
             <span className="min-w-0 truncate text-ui-xs font-medium text-foreground/85">
               {fileCount} {fileCount === 1 ? "file changed" : "files changed"}
             </span>
@@ -270,9 +230,7 @@ export function ChatAccumulatedChangesPanel(
         open={confirmUndoAll}
         onOpenChange={setConfirmUndoAll}
         isPending={restore.restoreActionPending}
-        // `null` while the set is a prefix: the opt-out defaults to CHECKED and
-        // "Undo all" reverts every file the host holds, so a count taken from
-        // the rows on screen would understate what is being opted out of.
+        // `null` while the set is a prefix: the opt-out defaults to CHECKED and "Undo all" reverts every file the host holds, so a count taken from the rows on screen would understate what is being opted out of.
         artifactCount={
           undelivered > 0 || !restore.accumulatedSetComplete
             ? null
@@ -502,23 +460,7 @@ function ArtifactAccumulatedHeader(props: {
   );
 }
 
-/**
- * Which tile a row opens, or `null` for a row that opens nothing.
- *
- * Every branch here answers one question: can the surface this click opens
- * actually RESOLVE this row's contents? An advertised click that lands on
- * source-unavailable is worse than a plain row, so a row only becomes
- * interactive once something can answer for it.
- *
- * - `hasContents: false` (a `diffSource: "none"` summary) has no before/after
- *   to show at all - the fetch list excludes it by construction and the
- *   windowed inline-change array is empty.
- * - {@link AccumulatedChangeRow.liveDiff} is the active turn's own row, which
- *   no host version names yet: cumulative resolution has neither a digest nor
- *   an inline change for it. Its `file_change` blocks are hydrated, so it opens
- *   the SEGMENT tile that addresses them by block id instead.
- * - Everything else is a host row, and the cumulative surface answers for it.
- */
+/** Which tile a row opens, or `null` for a row that opens nothing. Every branch here answers one question: can the surface this click opens actually RESOLVE this row's contents? */
 function rowClickHandlers(
   opener: ChatSnapshotDiffOpener | null,
   change: AccumulatedChangeRow,
@@ -555,12 +497,7 @@ function revertGate(restore: ChatRestoreContextValue): RevertGate {
   return { enabled: true, tooltip: "Revert to the first snapshot." };
 }
 
-/**
- * The collapsed header's totals.
- *
- * A `null` count contributes nothing, which is the right reading: it means the
- * row has no diff to count (`diffSource: "none"`), not that it counted zero.
- */
+/** The collapsed header's totals. A `null` count contributes nothing, which is the right reading: it means the row has no diff to count (`diffSource: "none"`), not that it counted zero. */
 function aggregateCounts(
   rows: ReadonlyArray<AccumulatedChangeRow>,
 ): DiffCounts {

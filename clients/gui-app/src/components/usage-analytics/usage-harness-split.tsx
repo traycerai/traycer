@@ -8,23 +8,12 @@ export interface UsageHarnessSplitProps {
   readonly rows: readonly UsageHarnessSplitRow[];
   /** Ties each row's dot/bar color to the daily chart's legend - same entity, same color, never re-derived. */
   readonly scale: UsageSeriesScale;
-  /**
-   * Whether each row carries its token total after the cost. Settings shows
-   * it; the epic usage dialog passes `false` - there the stat tiles beside
-   * this split already carry the token detail, so the column would repeat
-   * them at every width.
-   */
+  /** Whether each row carries its token total after the cost. */
   readonly showTokens: boolean;
 }
 
-/**
- * Per-harness cost split under the headline: one row per harness with a
- * share bar, its % of the window's cost, and its token total. Rows key their
- * color off the chart's own series scale (`colorVar`/`labelFor`) so a
- * harness reads the same hue here as in the daily chart's legend - the
- * dataviz skill's "color follows the entity" rule applied across two views
- * of the same window.
- */
+/** Per-harness cost split under the headline: one row per harness with a share bar, its % of the window's cost,
+ * and its token total. */
 export function UsageHarnessSplit(props: UsageHarnessSplitProps): ReactNode {
   if (props.rows.length === 0) return null;
   return (
@@ -50,16 +39,8 @@ function UsageHarnessSplitItem(props: {
   const color = scale.colorVar(row.harnessId);
   const percentLabel = `${(row.shareOfCost * 100).toFixed(1)}%`;
   return (
-    // Fluid rather than a fixed-width track. The row's fixed columns added
-    // up to ~380px of non-shrinking content, and its container
-    // (`SettingsModalContent`) is `overflow-x-hidden` - so once the pane got
-    // narrower than that, the cost and token values were CLIPPED rather than
-    // scrollable-to. The desktop shell's 960px minimum width leaves slack at
-    // 100% text size, but rem-based columns outgrow a px-sized pane under
-    // browser text-only zoom or an OS font-scaling setting, which is exactly
-    // the case the fluid-sizing rule exists for. Now the label shrinks and
-    // truncates, the value columns keep their aligned widths as minimums,
-    // and the trailing group wraps instead of disappearing.
+    // Fluid rather than a fixed-width track. Now the label shrinks and truncates, the value columns keep their
+    // aligned widths as minimums, and the trailing group wraps instead of disappearing.
     <li
       className="flex flex-wrap items-center gap-x-3 gap-y-1"
       data-testid={`usage-harness-split-row-${row.harnessId}`}

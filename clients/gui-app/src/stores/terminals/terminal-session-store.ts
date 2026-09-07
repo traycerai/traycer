@@ -46,15 +46,8 @@ export type TerminalStreamClientFactory = (
 
 export type TerminalReattachMode = "fresh" | "live";
 /**
- * `"lost"` - the stream closed for an unknown/recoverable reason (transport
- * drop, host restart, etc.) - the session MAY still be alive server-side
- * (within its detach-linger window, T13); auto-recovery
- * (`useTerminalSessionRecovery`) is worth attempting.
- * `"reaped"` - the host explicitly confirmed via `TERMINAL_NOT_FOUND` that
- * the PTY addressed by this handle no longer exists (linger expired + reaped,
- * or the host restarted and lost it). This handle is definitively dead, but a
- * durable terminal with the same logical id may already have been restored;
- * bounded recovery must replace the handle and consult current host authority.
+ * `"lost"` - the stream closed for an unknown/recoverable reason (transport drop, host restart,
+ * etc.) - the session MAY still be alive server-side (within its detach-linger window, T13);
  */
 export type TerminalLifecycleStatus =
   | "creating"
@@ -64,38 +57,16 @@ export type TerminalLifecycleStatus =
   | "reaped";
 
 const MAX_PENDING_ACTIONS = 64;
-// Cap the pre-writer queue so a misconfigured tile that never registers a
-// writer can't grow the buffer unboundedly. The host's own scrollback is
-// 512 KB so 1 MB is generous headroom for snapshot + a burst of data frames.
+// Cap the pre-writer queue so a misconfigured tile that never registers a writer can't grow the
+// buffer unboundedly.
 const MAX_PENDING_BYTES = 1024 * 1024;
 
-// Ack-credit (terminal.subscribe@1.1) coalescing: acks are batched so a
-// steady stream of parsed chunks doesn't send one `ack` frame per chunk. A
-// pending credit is flushed as soon as either threshold is crossed.
+// Ack-credit (terminal.subscribe@1.1) coalescing: acks are batched so a steady stream of parsed
+// chunks doesn't send one `ack` frame per chunk.
 const ACK_COALESCE_BYTES = 64 * 1024;
 const ACK_COALESCE_MS = 50;
 
-// A unit of terminal output handed to the xterm host. `snapshot` carries the
-// grid dimensions the host serialized the redraw for: the host snapshot is a
-// full-screen VT redraw (absolute cursor positioning) valid only at those
-// cols/rows, so the host must resize the grid to them BEFORE replaying. `live`
-// is raw PTY bytes appended at whatever the current grid is.
-//
-// `chunk` is `string | Uint8Array` (`terminal.subscribe@1.2`): a host
-// negotiating binary framing sends raw UTF-8 bytes via the paired binary WS
-// frame instead of a JSON string field, and xterm.js accepts `Uint8Array`
-// directly - the renderer skips re-decoding it to a JS string, which is the
-// whole point of the binary path (killing the 3-6x JSON-escaping tax on
-// ANSI-heavy output). A `1.1`-or-older host still sends plain strings.
-//
-// `onAckable` is the ack-credit (terminal.subscribe@1.1) parse-completion
-// channel: the xterm host calls it once this write's bytes have actually been
-// parsed (via xterm's own `write(data, callback)`), or immediately if the
-// write is dropped before ever reaching xterm (the pre-writer queue's byte
-// cap). Either way the bytes are "accounted for" and safe to credit back to
-// the host - crediting only on genuine parse would leak credit for anything
-// dropped, eventually stalling the host's ack-credit gate for this
-// subscriber forever.
+// A unit of terminal output handed to the xterm host.
 export type TerminalWrite =
   | {
       readonly kind: "live";
@@ -114,11 +85,8 @@ export type TerminalDataWriter = (write: TerminalWrite) => void;
 export interface PendingTerminalAction {
   readonly clientActionId: string;
   /**
-   * The exact client frame originally sent for this action (T13 terminal
-   * action protocol). Kept so a reconnect can replay it verbatim - the
-   * client's own bounded buffer is the only place this data survives; the
-   * host's per-session idempotency window dedupes a replay that already
-   * landed instead of re-applying it.
+   * Kept so a reconnect can replay it verbatim - the client's own bounded buffer is the only place
+   * this data survives; the host's per-session idempotency window dedupes a replay that already
    */
   readonly frame: Extract<
     TerminalSubscribeClientFrame,
@@ -134,10 +102,8 @@ export interface TerminalSessionState {
   readonly status: TerminalLifecycleStatus;
   readonly exitCode: number | null;
   /**
-   * Why the PTY ended, from the host's exit frame / exited snapshot.
-   * `null` until exited, and for hosts predating the field (treat as
-   * `process-exit`). A `reaped` exit is host lifecycle - the idle-reap of
-   * an unwatched terminal-agent - and must not be presented as a crash.
+   * Why the PTY ended, from the host's exit frame / exited snapshot. `null` until exited, and for
+   * hosts predating the field (treat as `process-exit`).
    */
   readonly exitReason: TerminalSessionExitReason | null;
   readonly effectiveCols: number;
@@ -145,39 +111,21 @@ export interface TerminalSessionState {
   readonly requestedCols: number;
   readonly requestedRows: number;
   readonly reattachMode: TerminalReattachMode;
-  /**
-   * Whether this session backs a plain terminal tab or a terminal-agent. The
-   * agent-activity monitor counts a live terminal-agent PTY as "an agent in
-   * progress" (for sleep prevention) but ignores an idle plain shell.
-   */
+  /** Whether this session backs a plain terminal tab or a terminal-agent. */
   readonly kind: TerminalSessionKind;
-  /**
-   * `terminal.subscribe@1.6` attachment intent currently on the wire.
-   * Follows lease state, not session kind: a leased tile is `presentation`;
-   * a lease-free keep-warm / linger attachment is `cache`. Intent is
-   * open-frame-only, so {@link TerminalSessionState.setViewer} reopens the
-   * stream rather than restating on the live session.
-   */
+  /** `terminal.subscribe@1.6` attachment intent currently on the wire. */
   readonly viewer: TerminalSubscribeViewer;
   readonly pendingActions: Readonly<Record<string, PendingTerminalAction>>;
   readonly lastOutputPreview: string | null;
   /**
-   * Wall-clock time (`Date.now()`) the pending-action ring last evicted an
-   * unacked action to make room (T13's honest overflow signal - see
-   * {@link AppendPendingActionResult}). `null` until the first eviction.
-   * Tiles watch this to surface an "input may have been lost" notice rather
-   * than silently swallowing it.
+   * Wall-clock time (`Date.now()`) the pending-action ring last evicted an unacked action to make
+   * room (T13's honest overflow signal - see {@link AppendPendingActionResult}).
    */
   readonly lastInputLostAt: number | null;
   readonly title: string | null;
   readonly activeProcessName: string | null;
   readonly currentCwd: string | null;
-  /**
-   * Whether a negotiated stream frame has explicitly carried `currentCwd`.
-   * This distinguishes a pre-1.5/absent field from an explicit empty value,
-   * which is normalized to `currentCwd: null` but must still clear cached
-   * `terminal.list` metadata.
-   */
+  /** Whether a negotiated stream frame has explicitly carried `currentCwd`. */
   readonly currentCwdReported: boolean;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */
@@ -187,11 +135,8 @@ export interface TerminalSessionState {
   /** Ask the host to resize; the host may pick a smaller min(cols/rows). */
   requestResize: (cols: number, rows: number) => string | null;
   /**
-   * Retag attachment intent. A change reopens `terminal.subscribe` (open
-   * frame only; there is no restate client frame). No-op when the value
-   * is unchanged or the store is disposed. A dead session (`lost` /
-   * `exited` / `reaped`) updates the field but does not attach a new
-   * stream — the PTY is no longer addressable.
+   * Retag attachment intent. A change reopens `terminal.subscribe` (open frame only; there is no
+   * restate client frame).
    */
   setViewer: (viewer: TerminalSubscribeViewer) => void;
   /** Rebuilds the owned transport while preserving this retained PTY handle. */
@@ -217,14 +162,6 @@ export interface TerminalSessionStoreHandle {
   readonly dispose: () => void;
 }
 
-/**
- * Result of appending to the pending-action ring: the updated map, plus
- * whether an unacked action was evicted to make room (T13's overflow
- * policy - drop-oldest + an honest "input lost" signal, Architecture §3/§8).
- * An evicted action never got an `actionAck` and never will - it fell out of
- * the buffer that would have replayed it on reconnect, so the caller must
- * surface this rather than dropping it silently.
- */
 interface AppendPendingActionResult {
   readonly pendingActions: Readonly<Record<string, PendingTerminalAction>>;
   readonly evicted: boolean;
@@ -267,11 +204,8 @@ function removePendingAction(
 }
 
 /**
- * `TERMINAL_NOT_FOUND` (see `terminal-stream-resolver.ts`'s subscribe-time
- * catch) authoritatively confirms that this handle's PTY incarnation no longer
- * exists. A durable terminal with the same session id may already be restored,
- * so the renderer must replace this handle before reattaching. Every other
- * closed reason is treated as a recoverable attachment loss.
+ * `TERMINAL_NOT_FOUND` (see `terminal-stream-resolver.ts`'s subscribe-time catch) authoritatively
+ * confirms that this handle's PTY incarnation no longer exists.
  */
 function isDefinitiveHandleLoss(reason: StreamCloseReason | null): boolean {
   return (
@@ -302,34 +236,19 @@ function isTerminalOrDead(status: TerminalLifecycleStatus): boolean {
 
 const textDecoder = new TextDecoder();
 
-// The ANSI-stripping regex below only operates on strings. Only ever called
-// on `previewTail`'s bounded output (see `terminalOutputPreview`), so this
-// decode stays a small, fixed-size cost regardless of the source frame's
-// size - unrelated to (and far smaller than) the bulk-throughput decode
-// xterm's own `Uint8Array` write path is specifically built to skip.
+// The ANSI-stripping regex below only operates on strings.
 function contentToText(content: string | Uint8Array): string {
   return typeof content === "string" ? content : textDecoder.decode(content);
 }
 
-// Ack-credit byte-counting convention (see `accountAckableBytes`): a `1.1`
-// text connection counts JS string length (UTF-16 code units) since that's
-// what it received and reports back; a `1.2`+ binary connection counts
-// `Uint8Array.byteLength` since it never decodes to a string at all. The two
-// conventions must never mix on the same tally - `TerminalWrite.chunk`'s
-// type already guarantees a single connection stays on one or the other for
-// its whole lifetime (see `terminal-session-manager.ts`'s host-side twin).
+// Ack-credit byte-counting convention (see `accountAckableBytes`): a `1.1` text connection counts
+// JS string length (UTF-16 code units) since that's what it received and reports back; a `1.2`+
 function contentAccountLength(content: string | Uint8Array): number {
   return typeof content === "string" ? content.length : content.byteLength;
 }
 
-// Bounds preview-extraction cost on a large coalesced binary frame (up to
-// ~2 MB under a `@1.2` firehose): the preview only ever needs the trailing
-// non-empty line, so decoding/scanning more than a generous tail is wasted
-// work on exactly the firehose path binary framing exists to speed up. A
-// byte offset can split a multi-byte UTF-8 sequence at the slice boundary -
-// `TextDecoder` replaces it with U+FFFD, which can't land in the retained
-// line (the split fragment is discarded by the following newline-split),
-// inconsequential for a cosmetic preview.
+// Bounds preview-extraction cost on a large coalesced binary frame (up to ~2 MB under a `@1.2`
+// firehose): the preview only ever needs the trailing non-empty line, so decoding/scanning more
 const PREVIEW_SOURCE_TAIL_BYTES = 8 * 1024;
 
 function previewTail(content: string | Uint8Array): string | Uint8Array {
@@ -374,16 +293,7 @@ function currentCwdFromSession(
   return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
-/**
- * Every frame this store accepts, made inert once `generation` is retired.
- *
- * The check itself is the shared {@link guardHandler} - the same one the chat
- * twin's twenty-seven handlers go through - so the rule that a superseded
- * socket's frames never reach the live store is written once rather than once
- * per plane. What stays here is the enumeration of THIS plane's frames, which
- * is the part a bulk mapper cannot do without inventing a type-level construct
- * nobody can read at the call site.
- */
+/** Every frame this store accepts, made inert once `generation` is retired. */
 function bindStreamCallbacks(
   callbacks: TerminalStreamCallbacks,
   guard: GenerationGuard,
@@ -413,21 +323,15 @@ export function createTerminalSessionStore(
   // Bumped before tearing down a subscriber so its close-driven status
   // callback cannot map a deliberate viewer-intent reopen to "lost".
   const streamGuard = createGenerationGuard();
-  // After a viewer-intent reopen of an already-open session, ignore the
-  // replacement stream's connecting/reconnecting statuses so the tile does
-  // not flash a reconnect overlay (keep-warm reattach stays instant).
+  // After a viewer-intent reopen of an already-open session, ignore the replacement stream's
+  // connecting/reconnecting statuses so the tile does not flash a reconnect overlay (keep-warm
   let ignoreTransientStatus = false;
-  // Buffers host output that arrives before the tile has finished mounting
-  // its xterm host and registered a writer. Without this queue the snapshot
-  // frame and any initial shell output (zsh's first prompt, motd, etc.) get
-  // dropped, and the user sees an empty terminal even though the host is
-  // streaming bytes. Flushed in `setWriter` when the writer is first set.
+  // Buffers host output that arrives before the tile has finished mounting its xterm host and
+  // registered a writer.
   const pendingWrites: TerminalWrite[] = [];
   let pendingBytes = 0;
   const enqueuePending = (write: TerminalWrite): void => {
-    // Live zero-length writes carry no bytes. An empty snapshot is still an
-    // authoritative full-screen boundary and must reach a retained engine's
-    // reset path (viewer-intent reopen keeps the xterm across streams).
+    // Live zero-length writes carry no bytes.
     if (write.chunk.length === 0 && write.kind !== "snapshot") return;
     pendingWrites.push(write);
     pendingBytes += write.chunk.length;
@@ -435,10 +339,8 @@ export function createTerminalSessionStore(
       const dropped = pendingWrites.shift();
       if (dropped !== undefined) {
         pendingBytes -= dropped.chunk.length;
-        // Dropped before ever reaching xterm - it will never fire its own
-        // parse-completion callback, so credit it back to the host right
-        // here. Without this the host's ack-credit tally for these bytes
-        // never clears, eventually stalling this subscriber's gate for good.
+        // Dropped before ever reaching xterm - it will never fire its own parse-completion callback, so
+        // credit it back to the host right here.
         dropped.onAckable();
       }
     }
@@ -459,26 +361,15 @@ export function createTerminalSessionStore(
     client.close();
   };
 
-  // Ack-credit accounting: bytes accounted (parsed by xterm, or dropped
-  // before ever reaching it) since the last `ack` frame was sent, and the
-  // coalescing timer for the current batch.
+  // Ack-credit accounting: bytes accounted (parsed by xterm, or dropped before ever reaching it)
+  // since the last `ack` frame was sent, and the coalescing timer for the current batch.
   let unackedLocalBytes = 0;
   let ackFlushTimer: number | null = null;
-  // Bumped on every disconnect so `onAckable` callbacks captured by writes
-  // handed to xterm before the drop become no-ops if xterm's write callback
-  // fires late (after a reconnect has already minted a fresh host
-  // subscriber). Without this, a stale callback would credit bytes that
-  // subscriber never sent, letting the host believe the renderer has more
-  // headroom than it really does.
+  // Bumped on every disconnect so `onAckable` callbacks captured by writes handed to xterm before
+  // the drop become no-ops if xterm's write callback fires late (after a reconnect has already
   let ackGeneration = 0;
-  // Capability sentinel: the renderer has no direct way to read the minor
-  // negotiated for this stream, so it waits for the host to confirm
-  // ack-credit support on a snapshot frame (same pattern as
-  // `chat.subscribe@1.1`'s `backgroundItems`) before ever sending an `ack`.
-  // A `1.0` host's frame schema can't parse "ack", so sending one blind
-  // would just produce a steady stream of malformed-frame warnings
-  // server-side instead of a fatal error - annoying, not dangerous, but
-  // avoidable.
+  // Capability sentinel: the renderer has no direct way to read the minor negotiated for this
+  // stream, so it waits for the host to confirm ack-credit support on a snapshot frame (same pattern
   let ackCreditSupported = false;
   const clearAckFlushTimer = (): void => {
     if (ackFlushTimer === null) return;
@@ -536,10 +427,7 @@ export function createTerminalSessionStore(
     };
 
     const flushRequestedResize = (): void => {
-      // Reconnect ordering is open -> snapshot. The open callback can see the
-      // old effective grid and skip, then the snapshot can overwrite effective
-      // with the host's stale serialized size. Re-check after both events so a
-      // remembered resize is not stranded behind the xterm engine's dedupe.
+      // Reconnect ordering is open -> snapshot.
       const state = get();
       if (isTerminalOrDead(state.status)) return;
       if (state.connectionStatus !== "open") return;
@@ -563,10 +451,8 @@ export function createTerminalSessionStore(
     };
 
     /**
-     * Appends to the pending-action ring and, on eviction, stamps
-     * `lastInputLostAt` in the SAME `set()` call (T13's honest overflow
-     * signal) so a tile watching either field never observes them out of
-     * sync.
+     * Appends to the pending-action ring and, on eviction, stamps `lastInputLostAt` in the SAME
+     * `set()` call (T13's honest overflow signal) so a tile watching either field never observes them
      */
     const recordPendingAction = (next: PendingTerminalAction): void => {
       set((current) => {
@@ -582,18 +468,8 @@ export function createTerminalSessionStore(
     };
 
     /**
-     * Replays every still-unacked `write` action after a reconnect (T13
-     * terminal action protocol - Architecture §3/§8's "in-flight keystrokes
-     * replay exactly-once-effect on reattach"). The host's per-session
-     * idempotency window dedupes by `clientActionId`, so a write the old
-     * subscriber already applied (only its `actionAck` was lost) just gets
-     * re-acked, not re-typed into the PTY.
-     *
-     * Stale `resize` entries are dropped rather than replayed verbatim:
-     * `flushRequestedResize` already reissues a fresh resize reflecting the
-     * CURRENT pane size on every reconnect, which supersedes whatever size
-     * was requested before the drop - replaying the old value would just
-     * race a more-correct one.
+     * Replays every still-unacked `write` action after a reconnect (T13 terminal action protocol -
+     * Architecture §3/§8's "in-flight keystrokes replay exactly-once-effect on reattach").
      */
     const replayPendingActionsAfterReconnect = (): void => {
       const pendingActions = get().pendingActions;
@@ -621,35 +497,12 @@ export function createTerminalSessionStore(
         // First host frame for this session: the scrollback is in hand even
         // if xterm hasn't registered its writer yet (it lands in pendingWrites).
         markTerminalLoad(options.sessionId, "snapshot");
-        // Capability sentinel (see `ackCreditSupported` above) - re-read on
-        // every snapshot, including a reconnect's, so the flag always
-        // reflects the CURRENT subscription's negotiated support rather than
-        // a stale value from before a drop. `binarySnapshot` has no field to
-        // read: receiving it at all already proves the connection negotiated
-        // `1.2`, which implies `1.1`'s ack-credit support.
+        // Capability sentinel (see `ackCreditSupported` above) - re-read on every snapshot, including a
+        // reconnect's, so the flag always reflects the CURRENT subscription's negotiated support rather
         ackCreditSupported =
           frame.kind === "binarySnapshot" || frame.ackCreditSupported === true;
-        // Per the protocol contract on `terminalSubscribeServerFrameSchema`,
-        // `scrollback` is raw terminal bytes the renderer feeds straight into
-        // xterm. This is usually the first frame into a fresh xterm, but NOT
-        // always: a transport reconnect re-subscribes and the host re-sends a
-        // full snapshot into the SAME kept-alive engine that still holds
-        // pre-disconnect content. The engine's snapshot write path resets the
-        // buffer before replaying a snapshot once it already has content (see
-        // `writerProxy`), so the authoritative snapshot lands clean instead of
-        // colliding with the stale screen (which dropped the trailing output and
-        // left the native OSC theme un-rasterized until a tab switch). The
-        // `snapshot` kind is load-bearing: xterm can emit protocol responses
-        // while parsing historical bytes, and those must not be forwarded back
-        // to the live PTY as user input.
-        //
-        // Always forward the write, including a zero-length payload. The host
-        // serializes a cleared screen to `""`; dropping that boundary on a
-        // viewer-intent reopen leaves the retained engine showing stale
-        // content. Carry the snapshot's grid so the host resizes xterm to it
-        // BEFORE replaying. `session.cols/rows` are the post-`min()`
-        // effective size the host serialized the redraw at; replaying into a
-        // differently sized grid garbles it (see `TerminalWrite`).
+        // Per the protocol contract on `terminalSubscribeServerFrameSchema`, `scrollback` is raw terminal
+        // bytes the renderer feeds straight into xterm.
         const scrollbackAccountLength = contentAccountLength(scrollback);
         const generationAtWrite = ackGeneration;
         const write: TerminalWrite = {
@@ -715,12 +568,8 @@ export function createTerminalSessionStore(
       },
       onExit: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
-        // A live exit frame carries no reason. It is NOT only ever a genuine
-        // process exit to an attached viewer: the host's setup-terminal reap
-        // kills sessions whose canvas tiles are live subscribers. The reason
-        // for such a kill arrives on the `sessionUpdated` frame the host
-        // broadcasts immediately before this exit frame (handled below), so
-        // leave `exitReason` untouched here rather than clearing it.
+        // A live exit frame carries no reason. It is NOT only ever a genuine process exit to an attached
+        // viewer: the host's setup-terminal reap kills sessions whose canvas tiles are live subscribers.
         set({
           status: "exited",
           exitCode: frame.exitCode,
@@ -743,11 +592,6 @@ export function createTerminalSessionStore(
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
           // The one live carrier of the exit reason for an attached viewer.
-          // The host kills setup terminals whose tiles are subscribed (the
-          // reap keys on typed input, not viewers), and its `handlePtyExit`
-          // broadcasts this frame - reason included - before the reasonless
-          // `exit` frame. Dropping it here classified every reaped setup
-          // shell as a crash ("exited unexpectedly" notifications).
           exitReason: frame.session.exitReason ?? get().exitReason,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
@@ -770,21 +614,12 @@ export function createTerminalSessionStore(
           }
         }
         if (status !== "open") {
-          // A reconnect re-subscribes and the host mints a fresh subscriber
-          // with unackedBytes = 0, so any credit accumulated for the old
-          // connection is moot - drop it rather than send a stale ack (or
-          // leak the timer) once the new connection opens.
           resetAckAccounting();
         }
         set((state) => ({
           connectionStatus: status,
-          // If the stream drops before a snapshot, "creating" would otherwise
-          // survive forever and leave the tile stuck on its loading state.
-          // Exited sessions remain exited. A closed stream otherwise splits on
-          // WHY (T13): the host's `TERMINAL_NOT_FOUND` fatal definitively ends
-          // this handle's PTY incarnation ("reaped"). The durable session id
-          // may already point at a replacement; anything else is a recoverable
-          // "lost" renderer attachment worth auto-retrying.
+          // If the stream drops before a snapshot, "creating" would otherwise survive forever and leave the
+          // tile stuck on its loading state. Exited sessions remain exited.
           status: nextLifecycleStatusAfterConnectionStatus(
             status,
             state.status,
@@ -792,9 +627,6 @@ export function createTerminalSessionStore(
           ),
         }));
         if (status !== "open") return;
-        // Replay stale pending actions from BEFORE this reconnect first, so the
-        // fresh resize `flushRequestedResize` is about to dispatch isn't
-        // immediately swept up and removed as one of those stale entries.
         replayPendingActionsAfterReconnect();
         flushRequestedResize();
       },
@@ -883,13 +715,7 @@ export function createTerminalSessionStore(
         if (disposed || streamClient === null) return null;
         const state = get();
         if (state.status === "exited" || state.status === "reaped") return null;
-        // Dedupe only a size that is BOTH already requested and already the
-        // effective grid. Skipping on requested alone stranded the xterm
-        // engine's latch self-heal: a resize frame lost in flight leaves
-        // `requested` recorded while the host never adopted it, and the
-        // engine's deliberate re-report of the same size must reach the wire
-        // to retry. Calls arriving here are already engine-dedupe-gated, so
-        // this cannot re-send on render-tick churn.
+        // Dedupe only a size that is BOTH already requested and already the effective grid.
         if (
           state.requestedCols === cols &&
           state.requestedRows === rows &&
@@ -898,12 +724,6 @@ export function createTerminalSessionStore(
         ) {
           return null;
         }
-        // "lost" stashes rather than drops: the xterm engine records every
-        // report in its own dedupe before this store sees it, so a dropped
-        // resize here is never re-offered - after the reconnect the session
-        // would stay latched at the pre-disconnect grid. The stash is flushed
-        // by `flushRequestedResize` once the reconnect's snapshot restores the
-        // session to "running".
         if (state.status === "lost" || state.connectionStatus !== "open") {
           set({
             requestedCols: cols,
@@ -941,11 +761,8 @@ export function createTerminalSessionStore(
         const state = get();
         if (state.status === "exited" || state.status === "reaped") return;
         resetAckAccounting();
-        // Upstream bumped a bare `streamGeneration` counter here; this branch
-        // replaced that counter with `streamGuard`, so the bump is its
-        // `next()`. The ORDER is upstream's and is load-bearing for the same
-        // reason `setViewer` states it: invalidate before `close()`, or the
-        // outgoing client's closed status marks this still-alive session lost.
+        // Upstream bumped a bare `streamGeneration` counter here; this branch replaced that counter with
+        // `streamGuard`, so the bump is its `next()`.
         streamGuard.next();
         closeStreamClient();
         set({
@@ -955,10 +772,8 @@ export function createTerminalSessionStore(
         try {
           attachStream(state.requestedCols, state.requestedRows);
         } catch (cause) {
-          // Construction can fail after the old client has been closed. Leave
-          // the retained handle in the same recoverable terminal state as an
-          // ordinary transport close, so registry replacement and explicit
-          // retry remain available after the bounded automatic attempts end.
+          // Leave the retained handle in the same recoverable terminal state as an ordinary transport close,
+          // so registry replacement and explicit retry remain available after the bounded automatic attempts
           set({
             connectionStatus: "closed",
             status: "lost",

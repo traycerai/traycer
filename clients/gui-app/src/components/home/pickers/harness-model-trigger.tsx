@@ -18,20 +18,12 @@ interface HarnessModelTriggerProps extends Omit<
   serviceTierLabel: string | null;
   serviceTierActive: boolean;
   profileLabel: string | null;
-  /** Bottom-right corner dot on the harness icon (`AccentDot`).
-   *  `null` unless the provider has multiple profiles and the selection's
-   *  profileId matches a known profile. */
+  /** Bottom-right corner dot on the harness icon (`AccentDot`). */
   profileAccentDot: ProfileAccentDotInput | null;
   isLoading: boolean;
   disabled: boolean;
-  /**
-   * `"responsive"` is the desktop toolbar: the full pill (model, thinking
-   * effort, chevron), collapsing to the harness glyph alone in a narrow
-   * container. `"model-only"` is the phone toolbar: the model name and nothing
-   * else, at any width - the thinking effort is noise on a row that narrow, and
-   * an unlabelled glyph would be worse. Both keep the same accessible name, so
-   * the effort is still announced either way.
-   */
+  /** `"model-only"` is the phone toolbar: the model name and nothing else, at any width - the thinking effort is
+   * noise on a row that narrow, and an unlabelled glyph would be worse. */
   labelDisplay: "responsive" | "model-only";
   ref?: Ref<HTMLButtonElement>;
 }

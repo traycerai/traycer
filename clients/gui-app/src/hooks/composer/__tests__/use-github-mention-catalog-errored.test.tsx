@@ -10,13 +10,7 @@ import type { MentionGithubCatalogResponse } from "@traycer/protocol/host/mentio
 import { useGithubMentionCatalog } from "@/hooks/composer/use-github-mention-catalog";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * `errored` is "the read itself failed", and it is requested-gated.
- *
- * A rejection carries no rows and no scope, so without this flag nothing
- * downstream can tell "settled and empty" from "never answered" - the
- * zero-match dismissal closed the picker over a source that never spoke.
- */
+/** A rejection carries no rows and no scope, so without this flag nothing downstream can tell "settled and empty" from "never answered" - the zero-match dismissal closed the picker over a source that never spoke. */
 
 const request = vi.fn();
 

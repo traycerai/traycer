@@ -150,10 +150,6 @@ function serializeThread(
   return lines.join("\n");
 }
 
-// Legacy comments were persisted before author handles were guaranteed at
-// write time; fall back to the stable user id (as `user_id=`, mirroring what
-// the GUI shows) so the model always gets an attribution signal instead of an
-// anonymous comment.
 function authorAttribute(
   providerHandle: string | null,
   userId: string,

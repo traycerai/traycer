@@ -21,10 +21,8 @@ import {
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
 
-// In-memory stand-in for idb-keyval. The store argument is ignored - the module
-// only ever keys by string hash, and each test drains the map via the module's
-// own API between cases. `createStore` is a real spy so the DB-name shape
-// (`traycer-gui-app:<partition>:landing-images`) can be asserted.
+// In-memory stand-in for idb-keyval.
+// The store argument is ignored - the module only ever keys by string hash, and each test drains the map via the module's own API between cases.
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
 function idbStringKey(key: IDBValidKey): string {
@@ -300,7 +298,7 @@ describe("landing-image-store", () => {
     expect(vi.mocked(idbSet).mock.calls[0]?.[0]).toBe(failedHash);
 
     const second = putImage(bytesOf([4, 4, 4, 4]));
-    // Joiner shares the in-flight write — still a single set call.
+    // Joiner shares the in-flight write - still a single set call.
     await Promise.resolve();
     await Promise.resolve();
     expect(vi.mocked(idbSet).mock.calls.length).toBe(1);

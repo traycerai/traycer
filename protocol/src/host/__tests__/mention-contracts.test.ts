@@ -344,9 +344,6 @@ describe("GitHub mention schemas", () => {
   });
 
   it("accepts a search response carrying a non-null notice", () => {
-    // The null case is already covered above; a search that came back
-    // rate-limited is the one this schema has to carry, because the section
-    // chrome renders the notice rather than the rows in that state.
     const notice = { kind: "rate-limited", retryAt: 1_700_000_003_000 };
     expect(
       mentionGithubSearchResponseSchema.parse({

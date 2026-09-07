@@ -82,9 +82,7 @@ describe("useChatFindController - chain-open on reveal", () => {
     const tileFindContext = {
       tileInstanceId: TILE_INSTANCE_ID,
       registerAdapter: (adapter: TileFindAdapter) => {
-        // The controller only ever registers its own ChatFindAdapter here -
-        // safe to narrow for test-only access to notifyRowsChanged (not
-        // part of the base TileFindAdapter interface).
+        // The controller only ever registers its own ChatFindAdapter here - safe to narrow for test-only access to notifyRowsChanged (not part of the base TileFindAdapter interface).
         registeredAdapter = adapter as ChatFindAdapter;
         return () => {
           if (registeredAdapter === adapter) {

@@ -7,10 +7,8 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 export type { Environment } from "../../config";
 
 /**
- * A `ServiceLabel` namespaces a service registration (LaunchAgent / unit /
- * Scheduled Task) so production and dev installations don't overwrite each
- * other. Kept here so the small set of consumers (`main-process`,
- * `host-lifecycle`) don't need to depend on the deleted `service/` subtree.
+ * A `ServiceLabel` namespaces a service registration (LaunchAgent / unit / Scheduled Task) so production and dev installations don't overwrite each other.
+ * Kept here so the small set of consumers (`main-process`, `host-lifecycle`) don't need to depend on the deleted `service/` subtree.
  */
 export interface ServiceLabel {
   /** Reverse-DNS service identifier (e.g. `ai.traycer.host`). */
@@ -33,13 +31,6 @@ export const DEV_LABEL: ServiceLabel = {
   appSupportDirName: "Traycer-Dev",
 };
 
-// The label for an environment/slot. Mirrors the CLI's `serviceLabelFor`:
-// production keeps the bare `ai.traycer.host`; every other slot nests under its
-// own name (`ai.traycer.host.<environment>`) so a staging/dev install owns an
-// isolated LaunchAgent + app-support dir and never collides with prod. A
-// hardcoded dev-only fallback silently mapped internal `staging` builds onto the
-// dev slot (`ai.traycer.host.dev`), mismatching the `ai.traycer.host.staging`
-// plist the installer ships - derive from `environment` so new slots can't drift.
 export function labelForEnvironment(environment: Environment): ServiceLabel {
   if (environment === "production") return PRODUCTION_LABEL;
   const devSlot = devDesktopSlotForEnvironment(environment, process.env);
@@ -64,86 +55,22 @@ function capitalizeEnvironment(environment: Environment): string {
   return environment.charAt(0).toUpperCase() + environment.slice(1);
 }
 
-// The label the desktop registers via SMAppService, derived from the CLI
-// label above (`<cli-label>.agent`) - deliberately NOT the CLI label itself.
-// macOS BTM matches an SMAppService registration to an existing record BY
-// LABEL, and a legacy record created by a raw `~/Library/LaunchAgents`
-// plist (any machine that ever ran a CLI-registered host, i.e. every
-// release install upgraded from <= 1.1.6) survives file deletion, bootout,
-// and BTM sweeps - registering the same label there lands `not-registered`
-// forever. The `.agent` suffix is collision-free by construction: raw CLI
-// installs never append it, so no legacy record can ever match this label.
-//
-// DO NOT change this derivation without updating the three sites that must
-// stay in lockstep and cannot import this module:
-//   - `clients/traycer-cli/src/service/label.ts` (`smAppServiceAgentLabelId`)
-//   - `clients/desktop/scripts/prepack/inject-host-launch-agent.cjs`
-//   - the internal repo's `scripts/desktop-install-cloud.js` (`hostAgentLabel`)
+// The `.agent` suffix is collision-free by construction: raw CLI installs never append it, so no legacy record can ever match this label.
+// DO NOT change this derivation without updating the three sites that must stay in lockstep and cannot import this module.
 export function smAppServiceAgentLabelId(cliLabelId: string): string {
   return `${cliLabelId}.agent`;
 }
 
-// The raw user-domain LaunchAgent manifest path the CLI writes for a label
-// (mirrors the CLI's `serviceManifestPath` on darwin; separate bundle, so it
-// can't be imported here). The desktop only ever REMOVES this file: the
-// register cycle's legacy-plist cleanup deletes the pre-1.1.7 CLI manifest
-// so the old label's `RunAtLoad` agent can't start a competing host at
-// login. macOS-only by contract - callers gate on darwin.
+// The raw user-domain LaunchAgent manifest path the CLI writes for a label (mirrors the CLI's `serviceManifestPath` on darwin; separate bundle, so it can't be imported here).
 export function userLaunchAgentPlistPath(labelId: string): string {
   return join(homedir(), "Library", "LaunchAgents", `${labelId}.plist`);
 }
 
-/**
- * Filesystem layout the desktop shell uses to locate the host's published
- * metadata and diagnostics.
- *
- * ### Cross-workspace contract
- *
- * `pidMetadataFile` is the on-disk coordination point with the host.
- * For the prod environment the canonical path is `~/.traycer/host/pid.json`;
- * for the dev environment it is `~/.traycer/host/dev/pid.json`, or
- * `~/.traycer/host/dev-runs/<slot>/pid.json` when `DEV_DESKTOP_SLOT` is set.
- * The path is a JSON document matching `HostPidMetadata`, written by the host
- * (the external Traycer Host). The host writes it on bind and unlinks it on
- * graceful shutdown; this runner reads it to discover a live local host and
- * its localhost `websocketUrl`.
- *
- * The dev/prod split mirrors the CLI's
- * `clients/traycer-cli/src/store/paths.ts` and the layout used by the host
- * (the external Traycer Host). CLI service status, Doctor,
- * Desktop dev flow, and the host runtime all agree on the same
- * environment-scoped layout so a `make dev-desktop` session never reads a
- * production host's pid metadata (or vice-versa).
- *
- * DO NOT change the filename without updating the matching helper
- * `getDefaultHostPidMetadataPath()` on the host side - drift here
- * silently breaks local host discovery for every packaged build.
- *
- * `pendingLoginItemRevisionFile` is a second cross-repo coordination point,
- * this time with the *internal* `traycer-internal` repository's
- * `scripts/desktop-install-cloud.js` (a separate repo from this one - see
- * that repo's CLAUDE.md for the submodule boundary). That installer writes
- * this marker when it deliberately preserves a busy/indeterminate running
- * host across a bundle swap instead of `launchctl bootout`-ing it: the
- * on-disk LaunchAgent plist changed (e.g. a new descriptor limit) but the
- * loaded launchd job/SMAppService registration did not. `ensureHost`'s
- * already-ready fast path checks for this file and, once it observes the
- * host idle, runs the existing `registerHostLoginItem()` bootout->
- * unregister->register cycle to apply the refreshed plist, then deletes the
- * marker. DO NOT change this filename without updating the matching write
- * site in `desktop-install-cloud.js`.
- */
+/** Do not rename `pid.json` or the pending-login-item marker without updating `getDefaultHostPidMetadataPath()` and `desktop-install-cloud.js`. */
 
 export interface HostFsLayout {
   readonly rootDir: string;
   readonly pidMetadataFile: string;
-  /**
-   * The host's durable enrollment record. Unlike `pidMetadataFile` - which the
-   * host UNLINKS on graceful shutdown, so it is absent for exactly as long as
-   * the host is stopped - this survives shutdown, reinstall, and update. It is
-   * therefore the only on-disk answer to "which hostId is this machine?" while
-   * no host is running.
-   */
   readonly identityEnrollmentFile: string;
   readonly logFile: string;
   readonly installDir: string;
@@ -152,64 +79,18 @@ export interface HostFsLayout {
   readonly stagedRecordFile: string;
   readonly pendingLoginItemRevisionFile: string;
   /**
-   * `substrate.json` - the durable CURRENT SERVICE-REGISTRATION OWNER
-   * (`{active: "smappservice" | "raw-fallback"}`), and the only durable answer
-   * to "who owns launchd for this host right now".
-   *
-   * Deliberately NOT `hostManagesHostLoginItem()`: that predicate is a
-   * capability of THIS Desktop build (darwin, not dev, in-bundle plist
-   * present) and stays true on a machine where the CLI owns a raw
-   * LaunchAgent. Reading capability as ownership is the dual-registration bug
-   * `inspectLaunchdOwnership` exists to prevent.
-   *
-   * Filename must stay in lockstep with the CLI's `hostSubstratePath`
-   * (`traycer-cli/src/store/paths.ts`); separate bundle, so it cannot be
-   * imported here. The shared schema/decoder ARE shared
-   * (`@traycer-clients/shared/host-lifecycle`), so only the path is duplicated.
+   * Deliberately NOT `hostManagesHostLoginItem()`: that predicate is a capability of THIS Desktop build (darwin, not dev, in-bundle plist present) and stays true on a machine where.
+   * Filename must stay in lockstep with the CLI's `hostSubstratePath` (`traycer-cli/src/store/paths.ts`); separate bundle, so it cannot be imported here.
    */
   readonly substrateFile: string;
-  /**
-   * `transition.json` - an ownership takeover between substrates, retained
-   * as durable history after it settles. An IN-FLIGHT journal (decodable,
-   * non-terminal phase) vetoes the owner projection to `unknown`, because
-   * mid-transition neither substrate is authoritative and guessing either
-   * way is how a contender boots out a job the other half is still
-   * registering. A terminal journal is history and does not veto — a
-   * presence-only veto excluded the machine permanently — and an
-   * undecodable one fails closed. See `projectHostServiceOwner` in
-   * `host-owner.ts`.
-   *
-   * Lockstep with the CLI's `hostTransitionJournalPath`.
-   */
   readonly transitionJournalFile: string;
-  /**
-   * The browser agent surface's self-verification trace (JSONL), beside
-   * `logFile` in the same slot-resolved `rootDir` - hand-mirrors the host's
-   * `browserTraceLogPath` (`traycer-host/src/paths.ts:389-405`), which this
-   * bundle cannot import (separate repo). `browserTraceRotatedFile` is the
-   * `.1` rotation sibling the shared buffered writer (plan D2) renames the
-   * live file to once it exceeds its cap; report-issue reads `.1` then the
-   * live file, concatenated in that order, before windowing (plan D3).
-   * Absence of either file is the normal state outside dev/staging - this
-   * trace is off by default in production.
-   */
   readonly browserTraceFile: string;
   readonly browserTraceRotatedFile: string;
-  /**
-   * The always-on PII-free counter slice (`browser-telemetry.ts`), beside the
-   * trace it filters - hand-mirrors the host's `browserTelemetryLogPath`.
-   * `browserTelemetryRotatedFile` is its `.1` rotation sibling, same shape as
-   * `browserTraceRotatedFile` above.
-   */
   readonly browserTelemetryFile: string;
   readonly browserTelemetryRotatedFile: string;
   readonly environment: Environment;
 }
 
-// The deploy-slot subdir rule, single-sourced for the desktop: production has
-// no suffix; every other environment nests under its own name. Mirrors the CLI
-// package's `environmentSubdir` in store/paths.ts (separate bundle, so it can't
-// be imported here).
 export function environmentSubdir(
   base: string,
   environment: Environment,
@@ -251,25 +132,12 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
   };
 }
 
-/**
- * The CLI's own home root (`~/.traycer/cli[/dev|/dev-runs/<slot>]/`), the
- * same dev-slot rule as `hostSlotRoot` above but rooted at `cli/` instead of
- * `host/` - mirrors `cliInstallHomeDir` in
- * `clients/traycer-cli/src/store/paths.ts` (separate bundle, can't be
- * imported here; same duplication precedent as `environmentSubdir`).
- */
 export function cliSlotRootForEnvironment(environment: Environment): string {
   const cliRoot = join(homedir(), ".traycer", "cli");
   return hostSlotRoot(cliRoot, environment);
 }
 
-/**
- * Path to the CLI's cross-process `cli-lock` file
- * (`clients/traycer-cli/src/store/paths.ts:cliLockPath`). The desktop-held
- * lock sections (Host Update Layer Redesign Tech Plan, "cli-lock" rule 3)
- * acquire the SAME file via `desktop-cli-lock.ts`, so this must resolve
- * byte-for-byte identically to the CLI's own resolution.
- */
+/** The desktop-held lock sections (Host Update Layer Redesign Tech Plan, "cli-lock" rule 3) acquire the SAME file via `desktop-cli-lock.ts`, so this must resolve byte-for-byte. */
 export function cliLockPath(environment: Environment): string {
   return join(cliSlotRootForEnvironment(environment), ".lock");
 }

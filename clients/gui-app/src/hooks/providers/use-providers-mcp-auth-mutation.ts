@@ -18,10 +18,7 @@ import {
 } from "@/lib/query-keys/providers-native-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
-/**
- * External auth variables keep the previous flat shape used by MCP tab:
- * scope tuple + `auth: { action, serverName, code? }`.
- */
+/** External auth variables keep the previous flat shape used by MCP tab: scope tuple + `auth: { action, serverName, code? */
 export type McpAuthVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
@@ -66,13 +63,7 @@ function toMcpAuthAction(variables: McpAuthVariables): NativeAuthAction {
   }
 }
 
-/**
- * Starts an MCP auth action via the dedicated `providers.mcpAuth` method.
- * Callers open `authorizationUrl` when returned. Login/forceReauth may return
- * `{ kind: "pending" }` immediately — poll list (and optionally
- * `providers.awaitMcpAuth` with the same scope tuple) for settlement. Success
- * invalidates the mcp list so status dots update promptly.
- */
+/** Success invalidates the mcp list so status dots update promptly. */
 export function useProvidersMcpAuth(): UseMutationResult<
   McpAuthData,
   HostRpcError,

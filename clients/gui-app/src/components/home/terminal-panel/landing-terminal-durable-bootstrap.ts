@@ -31,12 +31,8 @@ export interface LandingTerminalDurableLifecycleResult {
   readonly retry: () => void;
 }
 
-/**
- * Dispatches at most once per authoritative missing/dormant episode. Seeing a
- * running projection arms the next dormant episode, so one mounted tile can
- * survive any number of host restart/crash cycles without hot-looping on a
- * stable dormant failure.
- */
+/** Seeing a running projection arms the next dormant episode, so one mounted tile can survive any number of
+ * host restart/crash cycles without hot-looping on a stable dormant failure. */
 export function useLandingTerminalDurableLifecycle(args: {
   readonly projectionStatus: "running" | "dormant" | "unknown" | "missing";
   readonly pendingCreate: boolean;

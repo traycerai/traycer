@@ -13,10 +13,8 @@ import { c as tarCreate } from "tar";
 import { extractHostSource } from "../extract";
 import { CliError } from "../../runner/errors";
 
-// CRC32 used by buildZipWithEntry below. Inlined so the test stays
-// self-contained (we don't depend on `archiver` or a CRC helper from a
-// runtime dep - the zip-write path in production never builds archives,
-// only consumes them).
+// CRC32 used by buildZipWithEntry below.
+// Inlined so the test stays self-contained (we don't depend on `archiver` or a CRC helper from a runtime dep - the zip-write path in production never builds archives, only consumes them).
 function crc32(buf: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of buf) {
@@ -28,9 +26,8 @@ function crc32(buf: Buffer): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-// Build a minimal single-entry ZIP archive whose entry name is exactly
-// `entryName` (no normalisation), with the supplied stored (uncompressed)
-// content. Used to exercise the zip traversal rejection path.
+// Build a minimal single-entry ZIP archive whose entry name is exactly `entryName` (no normalisation), with the supplied stored (uncompressed) content.
+// Used to exercise the zip traversal rejection path.
 function buildZipWithEntry(entryName: string, data: string): Buffer {
   const nameBuf = Buffer.from(entryName, "utf8");
   const dataBuf = Buffer.from(data, "utf8");
@@ -81,10 +78,8 @@ function buildZipWithEntry(entryName: string, data: string): Buffer {
   return Buffer.concat([localChunk, centralChunk, eocd]);
 }
 
-// Verifies the in-process tar/zip extraction enforces path-traversal
-// protection. The local-file install path (`host install --from
-// <archive>`) bypasses minisign verification, so this is the only
-// defence against a malicious archive escaping the staging directory.
+// Verifies the in-process tar/zip extraction enforces path-traversal protection.
+// The local-file install path (`host install --from <archive>`) bypasses minisign verification, so this is the only defence against a malicious archive escaping the staging directory.
 
 let scratchRoot: string;
 
@@ -113,11 +108,8 @@ describe("extractHostSource (tar)", () => {
   });
 
   it("rejects a tar entry that escapes the target dir with a leading ..", async () => {
-    // Build a tarball whose single entry is named `../escape`. We can
-    // express this via the tar package's `add` API only with a literal
-    // file path that survives `path.normalize`, so we generate the
-    // archive bytes manually via tar's create stream with an explicit
-    // entry name override.
+    // Build a tarball whose single entry is named `../escape`.
+    // We can express this via the tar package's `add` API only with a literal file path that survives `path.normalize`, so we generate the archive bytes manually via tar's create stream with an explicit entry name override.
     const sourceDir = mkdtempSync(join(scratchRoot, "src-"));
     // Create a file literally named `escape` and then re-tar it with a
     // header `prefix` of `..` so the resulting entry name is `../escape`.
@@ -169,9 +161,7 @@ describe("extractHostSource (tar)", () => {
 
   it("rejects tar archive with absolute-path entry", async () => {
     // Build a tarball whose single entry name is `/etc/foo` (absolute).
-    // The `prefix` create option is concatenated as `<prefix>/<name>`, so
-    // a prefix of `/etc` and an entry name of `foo` yields an absolute
-    // entry. Verified via tar's list API: see scripts in repo history.
+    // The `prefix` create option is concatenated as `<prefix>/<name>`, so a prefix of `/etc` and an entry name of `foo` yields an absolute entry.
     const sourceDir = mkdtempSync(join(scratchRoot, "src-"));
     writeFileSync(join(sourceDir, "foo"), "data");
     const archive = join(scratchRoot, "absolute.tar");
@@ -199,13 +189,11 @@ describe("extractHostSource (tar)", () => {
   });
 
   it("rejects tar archive with symlink target traversal", async () => {
-    // The `tar` package packs a symlink entry as a SymbolicLink whose
-    // `linkpath` is the symlink target. Our extract guard inspects
-    // `linkpath` and rejects anything containing a `..` segment.
+    // The `tar` package packs a symlink entry as a SymbolicLink whose `linkpath` is the symlink target.
+    // Our extract guard inspects `linkpath` and rejects anything containing a `..` segment.
     if (osPlatform() === "win32") {
-      // Symlink creation on Windows usually requires elevation. Skip
-      // rather than fail in unprivileged CI; the unit test asserting
-      // unsafeEntryReason() already covers the pure-logic branch.
+      // Symlink creation on Windows usually requires elevation.
+      // Skip rather than fail in unprivileged CI; the unit test asserting unsafeEntryReason() already covers the pure-logic branch.
       return;
     }
     const sourceDir = mkdtempSync(join(scratchRoot, "src-"));
@@ -233,10 +221,8 @@ describe("extractHostSource (tar)", () => {
   });
 
   it("rejects zip archive with traversal entry name", async () => {
-    // Build a raw ZIP with a single entry named `../escape`. Both our
-    // pre-flight scan in extractZipArchive() and the `node-stream-zip`
-    // library's own `validateName()` reject such names - either path is
-    // an acceptable failure mode (the install path is closed in both).
+    // Build a raw ZIP with a single entry named `../escape`.
+    // Both our pre-flight scan in extractZipArchive() and the `node-stream-zip` library's own `validateName()` reject such names - either path is an acceptable failure mode (the install path is closed in both).
     const archive = join(scratchRoot, "evil.zip");
     writeFileSync(archive, buildZipWithEntry("../escape", "evil"));
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
@@ -264,12 +250,8 @@ describe("extractHostSource (tar)", () => {
   });
 });
 
-// `onEntry` is the only liveness signal during an extract that can run for
-// minutes: Desktop SIGKILLs a CLI whose NDJSON stream goes quiet, and the
-// download cache hands a slot whose archive stopped being touched to another
-// process. A callback that silently never fires - a mistyped `zip.on(...)`
-// event being the easiest way to get there - restores both failures with
-// every other test still green, so each unpack shape asserts it directly.
+// `onEntry` is the only liveness signal during an extract that can run for minutes: Desktop SIGKILLs a CLI whose NDJSON stream goes quiet, and the download cache hands a slot whose archive stopped being touched to another process.
+// A callback that silently never fires - a mistyped `zip.on(...)` event being the easiest way to get there - restores both failures with every other test still green, so each unpack shape asserts it directly.
 describe("extractHostSource (onEntry liveness)", () => {
   it("fires once per entry while unpacking a tar", async () => {
     const sourceDir = mkdtempSync(join(scratchRoot, "src-"));

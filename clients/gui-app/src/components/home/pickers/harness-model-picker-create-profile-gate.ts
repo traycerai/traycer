@@ -14,14 +14,7 @@ export const EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID: ReadonlyMap<
   ProviderCliState["loginCapability"]
 > = new Map();
 
-/**
- * S8: host-scoped, capability-gated "Create new profile" support for the
- * picker. OAuth sign-in needs a local host that advertises login args for
- * the browsed provider - this mirrors Settings' `providerCanStartProfileOauth`
- * gate (`providers-settings-panel.tsx`), scoped to whichever host the
- * picker's `createProfileHostId` prop resolves to (a tab's host, or the
- * app-wide default when `null`) instead of always the renderer-default host.
- */
+/** OAuth sign-in needs a local host that advertises login args for the browsed provider. */
 
 export function loginCapabilityByHarnessIdFromProviderStates(
   providers: ReadonlyArray<ProviderCliState>,
@@ -44,9 +37,8 @@ function isHostLocal(
   return directory.find((entry) => entry.hostId === hostId)?.kind === "local";
 }
 
-/** Whether the "Create new profile" target host (`createProfileHostId`, or
- *  the app-wide default when `null`) is local - OAuth sign-in needs a local
- *  host to spawn the browser flow on. */
+/** Whether the "Create new profile" target host (`createProfileHostId`, or the app-wide default when `null`) is
+ * local - OAuth sign-in needs a local host to spawn the browser flow on. */
 export function useCreateProfileHostIsLocal(
   createProfileHostId: string | null,
 ): boolean {
@@ -66,14 +58,8 @@ export function resolveCreateProfileGate(
   hostIsLocal: boolean,
   loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): { readonly disabled: boolean; readonly reason: string | undefined } {
-  // A terminal-login provider is answered before the `oauthArgs` gate below,
-  // whichever way its `oauthArgs` point. Copilot carries real ones (its
-  // headless command exists, the host just refuses it), so without this it
-  // would read as gate-passing and offer a "Create new profile" flow the host
-  // refuses; Qwen, Droid, OMP and OpenCode carry none, and would fall to the
-  // generic copy - which names browser sign-in, exactly the thing none of
-  // these providers do. Ordering is safe against a null/absent capability
-  // because the helper answers false for both.
+  // A terminal-login provider is answered before the `oauthArgs` gate below, whichever way its `oauthArgs`
+  // point.
   if (providerSupportsTerminalLogin(loginCapability)) {
     return {
       disabled: true,

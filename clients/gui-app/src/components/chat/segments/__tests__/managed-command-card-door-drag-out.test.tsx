@@ -18,16 +18,7 @@ import {
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-/**
- * Dragging a shell's transcript door - the start card's and every restart
- * card's "Open in tab" button - out onto the canvas, driven as a real pointer
- * gesture through the real `RootDndProvider`.
- *
- * The door became a drag source on the SAME payload the Background-panel row
- * already drops (see `chat-background-panel-drag-out`), so this proves that
- * same contract for a second surface - and its one real difference: a deleted shell's door is
- * not a button at all, so it must not register as a drag source either.
- */
+/** Dragging a shell's transcript door - the start card's and every restart card's "Open in tab" button - out onto the canvas, driven as a real pointer gesture through the real `RootDndProvider`. The door became a drag source on the SAME payload the Background-panel row already drops (see `chat-background-panel-drag-out`), so this proves that same contract for a second surface - and its one real difference: a deleted shell's door is not a button at all, so it must not register as a drag source either. */
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
@@ -103,11 +94,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 let epicHandle: OpenedStoreForTest;
 let chatSession: ManagedCommandChatSessionStub;
 
-/**
- * The pane's measured box. dnd-kit measures a droppable the moment it
- * registers - and a pane drop zone registers mid-drag - so the stub has to be
- * in place before the gesture starts, not after the element appears.
- */
+/** The pane's measured box. dnd-kit measures a droppable the moment it registers - and a pane drop zone registers mid-drag - so the stub has to be in place before the gesture starts, not after the element appears. */
 const PANE_RECT = new DOMRect(200, 0, 400, 400);
 // Everything else keeps the all-zero box jsdom lays out anyway.
 const EMPTY_RECT = new DOMRect(0, 0, 0, 0);
@@ -197,9 +184,7 @@ function Harness(props: {
   readonly withViewTab: boolean;
   readonly card: ReactNode;
 }): ReactNode {
-  // The root DnD provider reads the app's query client (an RPC-committed
-  // sidebar reparent invalidates the moved row's record query), so the
-  // harness supplies one the way the app shell does.
+  // The root DnD provider reads the app's query client (an RPC-committed sidebar reparent invalidates the moved row's record query), so the harness supplies one the way the app shell does.
   const canvas = (
     <QueryClientProvider client={queryClient}>
       <RootDndProvider>
@@ -287,10 +272,7 @@ function startDrag(node: HTMLElement): void {
   });
 }
 
-/**
- * Two moves deep into the pane's rect: the first only re-measures after the
- * zone mounted, the second resolves the collision the drop commits against.
- */
+/** Two moves deep into the pane's rect: the first only re-measures after the zone mounted, the second resolves the collision the drop commits against. */
 function moveIntoPane(): void {
   act(() => {
     fireEvent.pointerMove(document, {
@@ -330,11 +312,8 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -352,9 +331,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // dnd-kit keeps a click-swallowing document listener for 50ms after a drag
-  // ends (its own guard against the browser's post-drag click). Without
-  // waiting it out, the NEXT test's first click never reaches React.
+  // dnd-kit keeps a click-swallowing document listener for 50ms after a drag ends (its own guard against the browser's post-drag click).
+  // Without waiting it out, the NEXT test's first click never reaches React.
   await new Promise((resolve) => {
     setTimeout(resolve, 60);
   });

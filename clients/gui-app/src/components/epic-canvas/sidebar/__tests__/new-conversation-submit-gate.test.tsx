@@ -96,21 +96,13 @@ const stubHostClient = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => stubHostClient,
-  // The modal's per-host memory key for the unpinned path subscribes through
-  // the binding; null = no active host, so memory reads fall to the legacy tier
-  // and writes no-op - inert here.
-  //
-  // This comment used to name `useAddressableHostId` as the subscriber. That
-  // hook no longer exists anywhere in the tree; the sentence is left describing
-  // the binding it actually mocks rather than being re-pointed at a successor
-  // nobody has verified. What is asserted here is the `null`, not the reader.
+  // That hook no longer exists anywhere in the tree; the sentence is left describing the binding it actually mocks rather than being re-pointed at a successor nobody has verified.
   useHostBinding: () => null,
 }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 
-// P1.2: the body resolves its placement through this hook and refuses to
-// create when it is unusable. This suite is about the SUBMIT GATE, not
-// placement, so it presents a usable one addressing the stub client's host.
+// P1.2: the body resolves its placement through this hook and refuses to create when it is unusable.
+// This suite is about the SUBMIT GATE, not placement, so it presents a usable one addressing the stub client's host.
 vi.mock("@/hooks/host/use-composer-placement", () => {
   // Built inside the factory: `vi.mock` is hoisted above the module-level
   // `stubHostClient`, so closing over it would read a TDZ binding.
@@ -145,10 +137,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => "host-1",
 }));
 
-// The body resolves its host through `useHostClientForHostId`, which reads the
-// directory to pin an explicit id. This suite only exercises the unpinned
-// (`hostId: null`) path, where that lookup is skipped and the app-wide client
-// above is returned as-is - so an empty directory is all it needs.
+// This suite only exercises the unpinned (`hostId: null`) path, where that lookup is skipped and the app-wide client above is returned as-is - so an empty directory is all it needs.
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
 }));
@@ -227,10 +216,6 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
   useComposerPickerItems: () => undefined,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
-  // Same treatment as `use-composer-dictation` above: a host-backed readiness
-  // hook stubbed to its "nothing to report" answer so these gate tests stay
-  // about the gate they name. `blocked: false` is also the hook's real
-  // fail-open answer before `providers.list` resolves.
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
@@ -297,9 +282,8 @@ afterEach(() => {
 });
 
 function Med4Harness(props: { readonly focused: boolean }) {
-  // Mimics `NewConversationModalDialog`: the picker store lives ABOVE the
-  // `DialogContent` gate, so it survives the body's focus-driven unmount. The
-  // caret is persisted in the draft store, which also outlives the unmount.
+  // Mimics `NewConversationModalDialog`: the picker store lives ABOVE the `DialogContent` gate, so it survives the body's focus-driven unmount.
+  // The caret is persisted in the draft store, which also outlives the unmount.
   const [transient] = useState(() => ({
     pickerStore: createComposerPickerStore(),
   }));

@@ -18,22 +18,8 @@ async function waitForFile(path: string): Promise<void> {
   throw new Error(`desktop-cli-lock-worker: timed out waiting for ${path}`);
 }
 
-// Worker process for `host-controller.test.ts`'s genuine two-process
-// desktop-held cli-lock test (Host Update Layer Redesign Tech Plan, "cli-lock"
-// rule 3 + the ticket's "Desktop lock sections" verification bullet). Spawned
-// as a real, separate OS process (via `bun run`) so the test proves an
-// in-process `HostController` mutation genuinely blocks on a lock held by a
-// DIFFERENT process, not just an in-process promise. Acquires the same
-// `acquireDesktopCliLock` primitive `HostController` itself uses, signals
-// `<dir>/held`, then - only once the test tells it to via `<dir>/mutate`, by
-// which point the desktop side is already blocked waiting on the lock -
-// starts the real terminal CLI's `host uninstall` command while that lock is
-// still held. The command cannot enter its critical section until this worker
-// releases the lock, proving the actual CLI command (not Desktop's wrapper)
-// participates in the shared lock. It then deletes the install record under
-// its real critical section. This is fixup C1: the desktop side must re-read
-// state after it acquires the lock and detect the terminal supersession that
-// landed mid-wait, not act on whatever it observed before it started waiting.
+// The command cannot enter its critical section until this worker releases the lock, proving the actual CLI command (not Desktop's wrapper) participates in the shared lock.
+// This is fixup C1: the desktop side must re-read state after it acquires the lock and detect the terminal supersession that landed mid-wait, not act on whatever it observed before.
 async function main(): Promise<void> {
   const lockPath = process.env.WORKER_LOCK_PATH;
   const barrierDir = process.env.WORKER_BARRIER_DIR;
@@ -53,10 +39,6 @@ async function main(): Promise<void> {
       "desktop-cli-lock-worker: lock path, barrier, CLI entry, environment, dev slot, and lock marker are required",
     );
   }
-  // The checked-in CLI source has a baked dev environment. Keep the worker's
-  // real terminal command on the exact dev-run slot the controller owns;
-  // otherwise this test can prove a callback ran while accidentally letting
-  // the CLI mutate a different environment's install/lock tree.
   if (
     environment !== "dev" ||
     process.env.DEV_DESKTOP_SLOT !== devDesktopSlot

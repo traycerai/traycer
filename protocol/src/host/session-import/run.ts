@@ -1,45 +1,6 @@
 /**
- * `sessionImport.run@1.0` - versioned streaming-RPC contract for importing a
- * wizard submission's worth of native sessions.
- *
- * One subscription per wizard submission. The host materializes each selected
- * session into a real epic + chat and reports one `progress` frame per
- * selection, in submission order.
- *
- * ## The run outlives the socket, deliberately
- *
- * Closing the WS does NOT abort the run - the opposite of `migration.run`,
- * whose loop watches its connection-scoped `RequestContext`. Import is a
- * background bring-over the user is explicitly told to walk away from (it runs
- * while the onboarding tour continues), so a closed tab, a reload, or a
- * quit-and-restart must not leave half a submission behind. Re-subscribing
- * ATTACHES to the run already in flight: the host replays `started` and every
- * `progress` frame it has produced so far, then continues live. A subscribe
- * that arrives while a run is active therefore ignores its own `selections` -
- * there is at most one run at a time, and `runId` is how a client tells the
- * run it is watching from the one it asked for.
- *
- * Resumability across a host restart is free rather than engineered: import is
- * idempotent per `(harness, nativeSessionId)` (the chat id is derived from the
- * pair), so re-submitting a partially-completed selection set re-imports
- * nothing and reports the finished ones as `skipped_already_imported`. Note
- * what that does and does not promise: a restart drops the run, and the host
- * resumes NOTHING on its own - picking the remainder back up requires a client
- * to re-submit, which is safe precisely because the re-submission is
- * idempotent.
- *
- * There is no cancel in v1.
- *
- * Server frames:
- *
- * - `started`  - emitted once per subscription, including on re-attach.
- * - `progress` - one per selection, terminal for that selection.
- * - `complete` - terminal frame; carries the summary the wizard renders.
- * - `pong`     - heartbeat response.
- *
- * Client frames:
- *
- * - `ping` - heartbeat. No application client frames.
+ * `sessionImport.run@1.0` - versioned streaming-RPC contract for importing a wizard submission's worth of native sessions.
+ * Import is a background bring-over the user is explicitly told to walk away from (it runs while the onboarding tour continues), so a closed tab, a reload, or a quit-and-restart must not leave half a submission behind.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -61,12 +22,7 @@ export {
 
 export const sessionImportRunOpenRequestSchema = z.object({
   selections: z.array(sessionImportSelectionSchema),
-  // The permission mode every imported chat continues under: the client's
-  // default for a NEW chat, so an imported task starts exactly as one the
-  // user created would. The host has no default of its own to fall back on -
-  // that setting lives in the client - and the source CLI's permission model
-  // is not a signal, so nothing is inferred from the session. Ignored by a
-  // subscribe that attaches to a run already in flight, like `selections`.
+  // The permission mode every imported chat continues under: the client's default for a NEW chat, so an imported task starts exactly as one the user created would.
   permissionMode: permissionModeSchema,
 });
 export type SessionImportRunOpenRequest = z.infer<
@@ -106,11 +62,7 @@ export const sessionImportRunServerFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("started"),
     runId: z.string().min(1),
     total: z.number().int().nonnegative(),
-    // False when this subscription STARTED the run, true when it attached to
-    // one already in flight (see the module doc). The wizard needs the
-    // difference: an attach ignores the `selections` it just submitted, and the
-    // `progress` frames that follow are a replay of work already done, not
-    // live progress on this client's request.
+    // False when this subscription STARTED the run, true when it attached to one already in flight (see the module doc).
     attached: z.boolean(),
     hasBinaryPayload: z.literal(false),
   }),

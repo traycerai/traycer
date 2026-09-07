@@ -83,11 +83,8 @@ describe("stable transcript list rows", () => {
   });
 
   it("does not reuse a placeholder whose entry arrived", () => {
-    // A skeleton chunk landing under a rendered placeholder moves `entry` from
-    // `null` to a delivered one. Nothing about the row's KEY changes, so a
-    // reuse rule keyed on identity alone would hold the old element - and the
-    // placeholder's height is derived from `byteLength`, so the row would keep
-    // the 120px "nothing known" guess for a row the skeleton now describes.
+    // A skeleton chunk landing under a rendered placeholder moves `entry` from `null` to a delivered one.
+    // Nothing about the row's KEY changes, so a reuse rule keyed on identity alone would hold the old element - and the placeholder's height is derived from `byteLength`, so the row would keep the 120px "nothing known" guess for a row the skeleton now describes.
     const previous = computeStableTranscriptListRows(
       [placeholder("r-1", 1, null)],
       EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,

@@ -35,9 +35,7 @@ function withScope(
 
 describe("terminal session filters", () => {
   it("keeps only running raw terminal sessions, excluding terminal-agents", () => {
-    // A worktree-setup shell is a plain `terminal` that stays running after
-    // setup, so it is shown like any other running terminal; exited sessions
-    // (and terminal-agents) are not.
+    // A worktree-setup shell is a plain `terminal` that stays running after setup, so it is shown like any other running terminal; exited sessions (and terminal-agents) are not.
     expect(
       [
         session("term-1", "terminal", "running"),
@@ -51,9 +49,7 @@ describe("terminal session filters", () => {
   });
 
   it("scopes an epic surface to its own epic, hiding landing and foreign-epic sessions", () => {
-    // Every session below is a running raw terminal, so only the scope tag can
-    // tell them apart: a host serves one epic's terminals alongside another
-    // epic's and the epic-less landing ones over the same `terminal.list`.
+    // Every session below is a running raw terminal, so only the scope tag can tell them apart: a host serves one epic's terminals alongside another epic's and the epic-less landing ones over the same `terminal.list`.
     expect(
       [
         session("term-1", "terminal", "running"),

@@ -1,19 +1,6 @@
 /**
- * Stateless boundary helpers that turn a raw bearer token into a full
- * `AuthenticatedUser` identity, refresh a token pair, or exchange a PKCE code.
- *
- * Lives under `shared/auth/` because it is the auth-boundary conversion
- * point: raw bearer strings are allowed here only inside validation/refresh
- * helpers, and everything past the boundary trades them for a
- * `RequestContext`. Keeping these helpers stateless and platform-neutral
- * means they can run from Electron main, mobile native, browser preview,
- * or unit tests without any DI or singleton state.
- *
- * Validation is ACCESS-ONLY (credentials-file token-store tech plan §3): the
- * `validateAuthTokenIdentity*` helpers do a single `/api/v3/user` lookup with NO
- * refresh-on-401, so they can never spend a refresh token. Every *spend* runs
- * inside the credentials file lock via the mutation store's `rotate`, which
- * injects the single-attempt `refreshOnceAbortable` below as its `RefreshFn`.
+ * Stateless boundary helpers that turn a raw bearer token into a full `AuthenticatedUser` identity, refresh a token pair, or exchange a PKCE code.
+ * Keeping these helpers stateless and platform-neutral means they can run from Electron main, mobile native, browser preview, or unit tests without any DI or singleton state.
  */
 import { authRecordRegistry } from "@traycer/protocol/auth/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
@@ -41,20 +28,8 @@ const authenticatedUserResponseSchema = getRecordSchema(
 );
 
 /**
- * Per-attempt ceiling and bounded exponential-backoff retry for the auth
- * boundary's HTTP calls (`/api/v3/user`, `/api/v3/auth/refresh`).
- *
- * Every attempt is time-boxed with `AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)`
- * so a stalled/half-open socket can no longer hang the caller indefinitely -
- * previously an un-timed-out `fetch` here could block `auth.start()` (and, through
- * it, the renderer's "Loading Traycer…" gate) until the OS TCP timeout,
- * i.e. many minutes. A fired timeout rejects the `fetch`, which the surrounding
- * `catch` already collapses to `network-error`; that outcome (plus a 5xx or a 409
- * refresh-grace race) is the only one re-driven. A terminal `rejected`/`valid`
- * returns on the first attempt.
- *
- * Total wall-clock is bounded to `AUTH_FETCH_MAX_ATTEMPTS` attempts spaced by an
- * exponential backoff capped at `AUTH_FETCH_RETRY_MAX_DELAY_MS`.
+ * Per-attempt ceiling and bounded exponential-backoff retry for the auth boundary's HTTP calls (`/api/v3/user`, `/api/v3/auth/refresh`).
+ * A fired timeout rejects the `fetch`, which the surrounding `catch` already collapses to `network-error`; that outcome (plus a 5xx or a 409 refresh-grace race) is the only one re-driven.
  */
 export const AUTH_FETCH_MAX_ATTEMPTS = 3;
 const AUTH_FETCH_TIMEOUT_MS = 10_000;
@@ -62,10 +37,8 @@ const AUTH_FETCH_RETRY_BASE_DELAY_MS = 500;
 const AUTH_FETCH_RETRY_MAX_DELAY_MS = 4_000;
 
 /**
- * Runs `attempt`, then re-drives it while `isTransient(outcome)` holds, up to
- * `AUTH_FETCH_MAX_ATTEMPTS` total invocations. Never throws: `attempt` is a
- * boundary helper that already maps every transport failure (including a fired
- * per-attempt timeout) to a typed outcome, so there is nothing to catch here.
+ * Runs `attempt`, then re-drives it while `isTransient(outcome)` holds, up to `AUTH_FETCH_MAX_ATTEMPTS` total invocations.
+ * Never throws: `attempt` is a boundary helper that already maps every transport failure (including a fired per-attempt timeout) to a typed outcome, so there is nothing to catch here.
  */
 async function withAuthNetworkRetry<T>(
   attempt: () => Promise<T>,
@@ -95,11 +68,8 @@ function delayFor(ms: number): Promise<void> {
 }
 
 /**
- * True for an abort/timeout thrown while reading a response body *after* the
- * headers arrived - the per-attempt `AbortSignal.timeout` (a `TimeoutError`) or
- * a caller abort (`AbortError`) firing during `response.json()`. Such a failure
- * is transient/retriable and must surface as `network-error`, NOT be collapsed
- * into a terminal `rejected`/invalid body the way a genuine parse failure is.
+ * True for an abort/timeout thrown while reading a response body *after* the headers arrived - the per-attempt `AbortSignal.timeout` (a `TimeoutError`) or a caller abort (`AbortError`) firing during `response.json()`.
+ * Such a failure is transient/retriable and must surface as `network-error`, not be collapsed into a terminal `rejected`/invalid body the way a genuine parse failure is.
  */
 function isAbortOrTimeout(error: unknown): boolean {
   return (
@@ -111,14 +81,8 @@ function isAbortOrTimeout(error: unknown): boolean {
 }
 
 /**
- * Access-only full-identity validation (credentials-file token-store tech plan
- * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it can
- * never spend a refresh token. This is the validator the desktop renderer's
- * `AuthService` uses everywhere it checks a bearer (startup rehydration, reactive
- * 401 revalidation, device-flow finalization, cross-window projection): a stale
- * access token comes back `rejected`/`network-error` and the caller routes the
- * *spend* through the locked `rotate` op instead. `valid` never carries a
- * `refreshedToken` — the pair on hand is unchanged.
+ * Access-only full-identity validation (credentials-file token-store tech plan §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it can never spend a refresh token.
+ * `valid` never carries a `refreshedToken` - the pair on hand is unchanged.
  */
 export function validateAuthTokenIdentityAccessOnly(
   authnBaseUrl: string,
@@ -128,14 +92,7 @@ export function validateAuthTokenIdentityAccessOnly(
 }
 
 /**
- * Single-attempt, ~10s, abort-aware access-only identity probe — the migration
- * counterpart to {@link validateAuthTokenIdentityAccessOnly} (tech plan §6).
- * ONE `/api/v3/user` lookup with NO refresh-on-401 (never spends) and NO internal
- * retry: the migration state machine owns bounded re-entry and threads its
- * deadline `signal` through here, so a slow probe cannot outlive the migration
- * budget or blur its "L unspent" accounting the way the 3×10s stack would. The
- * `signal` is combined with a fresh ~10s timeout (à la {@link refreshOnceAbortable});
- * either firing collapses to `network-error`.
+ * Single-attempt, ~10s, abort-aware access-only identity probe - the migration counterpart to {@link validateAuthTokenIdentityAccessOnly} (tech plan §6).
  */
 export async function validateAuthTokenIdentityAccessOnceAbortable(args: {
   readonly authnBaseUrl: string;
@@ -163,10 +120,7 @@ async function validateAuthTokenIdentityFetch(
 }
 
 /**
- * Projects a `/api/v3/user` fetch onto the caller-facing result, re-attaching
- * the response's server-time observation to every outcome that had one. The
- * projection is shared by the retrying and single-attempt validators so the
- * clock-skew tracker sees the same sample whichever one ran.
+ * Projects a `/api/v3/user` fetch onto the caller-facing result, re-attaching the response's server-time observation to every outcome that had one.
  */
 function toIdentityValidationResult(
   result: UserFetchResult,
@@ -195,9 +149,8 @@ function serverTimeFields(serverTime: AuthServerTimeObservation | null): {
 }
 
 /**
- * Reads the response's HTTP `Date` header as a server-time sample, paired with
- * the local clock right now. Opportunistic: an absent or unparseable header
- * yields `null`, never a guess.
+ * Reads the response's HTTP `Date` header as a server-time sample, paired with the local clock right now.
+ * Opportunistic: an absent or unparseable header yields `null`, never a guess.
  */
 function readServerTimeObservation(
   response: Response,
@@ -213,17 +166,6 @@ function readServerTimeObservation(
   return { serverEpochMs, observedAtMs: Date.now() };
 }
 
-/**
- * Projects a validated `AuthenticatedUser` onto the `StoredCredentials.user`
- * identity block persisted in the credentials file. Shared so the device-flow
- * sign-in (renderer) and the §6 migration `/user` probe (main) stamp identical
- * identity shapes; `email`/`name` fall back exactly as the file's decoder
- * tolerates.
- *
- * NB: distinct from protocol's `identityFromAuthenticatedUser`, which projects
- * onto the `AuthenticatedIdentity` (`{ userId, username, providerHandle }`) a
- * `RequestContext` carries — a different shape for a different consumer.
- */
 export function credentialsIdentityFromAuthenticatedUser(
   user: AuthenticatedUser,
 ): StoredCredentials["user"] {
@@ -285,9 +227,7 @@ async function fetchUserResponseOnce(
       signal,
     });
   } catch {
-    // A thrown `fetch` - a transport failure OR the per-attempt
-    // `AbortSignal.timeout` firing (a `TimeoutError`) - is transient and
-    // retriable, so both collapse to `network-error`.
+    // A thrown `fetch` - a transport failure OR the per-attempt `AbortSignal.timeout` firing (a `TimeoutError`) - is transient and retriable, so both collapse to `network-error`.
     return {
       kind: "failed",
       result: { kind: "network-error" },
@@ -295,9 +235,7 @@ async function fetchUserResponseOnce(
     };
   }
 
-  // Read BEFORE any status branching: a 401 response is a server-time sample
-  // exactly as good as a 200, and it is the one a badly skewed client actually
-  // gets back.
+  // Read before any status branching: a 401 response is a server-time sample exactly as good as a 200, and it is the one a badly skewed client actually gets back.
   const serverTime = readServerTimeObservation(response);
 
   if (response.status === 401 || response.status === 404) {
@@ -312,9 +250,7 @@ async function fetchUserResponseOnce(
   try {
     body = await response.json();
   } catch (error) {
-    // A timeout/abort firing mid-body-read (after headers) is transient, not a
-    // dead credential - classify it like a pre-headers abort. A genuinely
-    // malformed 2xx body stays `rejected`.
+    // A timeout/abort firing mid-body-read (after headers) is transient, not a dead credential - classify it like a pre-headers abort.
     if (isAbortOrTimeout(error)) {
       return { kind: "failed", result: { kind: "network-error" }, serverTime };
     }
@@ -323,16 +259,6 @@ async function fetchUserResponseOnce(
   return { kind: "ok", body, serverTime };
 }
 
-/**
- * Single-attempt, ~10s, abort-aware refresh — the exact shape the credentials
- * mutation store injects as its `RefreshFn` (tech plan §2/§3). It makes ONE
- * bounded attempt so it fits the "at most one refresh per lock hold" budget: the
- * locked rotate holds the credentials lock across this call, so a multi-attempt
- * helper would blow the lock hold time and starve a competing sign-out. The
- * caller's `signal` (the rotate/migration `AbortSignal`) is combined with a fresh
- * ~10s timeout, so either the caller aborting or the deadline firing collapses to
- * `network-error` (nothing spent — the retry re-enters under a fresh lock).
- */
 export async function refreshOnceAbortable(args: {
   readonly authnBaseUrl: string;
   readonly token: string;
@@ -378,11 +304,8 @@ async function refreshAuthTokenOnceViaHttp(
     return { kind: "network-error" };
   }
 
-  // A 409 means the authn refresh grace window is mid-rotation: a concurrent
-  // refresher won the race and is minting the new pair. This is transient and
-  // retriable, NOT a dead credential, so map it to `network-error` (a retry
-  // re-drives and lands on the winner's replayed pair) rather than `rejected`,
-  // which would sign the GUI out.
+  // A 409 means the authn refresh grace window is mid-rotation: a concurrent refresher won the race and is minting the new pair.
+  // This is transient and retriable, not a dead credential, so map it to `network-error` (a retry re-drives and lands on the winner's replayed pair) rather than `rejected`, which would sign the gui out.
   if (response.status === 409) {
     return { kind: "network-error" };
   }
@@ -423,20 +346,6 @@ export type AuthCodeExchangeResult =
   | { readonly kind: "rejected" }
   | { readonly kind: "network-error" };
 
-/**
- * Exchanges a one-time PKCE `code` + `codeVerifier` for the token pair at
- * `/api/v3/auth/exchange-code`. The shell calls this at its sign-in callback with
- * the verifier it generated (and kept in-memory) at sign-in start. Public
- * endpoint - no bearer; the code is the credential.
- *
- * A `4xx` is a terminal `rejected` (bad/expired/used code, or a PKCE mismatch);
- * any other non-2xx or a transport failure is a transient `network-error`. The
- * request is time-boxed by `AbortSignal.timeout` (a fired timeout surfaces as
- * `network-error` via the `catch`); unlike validation/refresh it is deliberately
- * NOT retried, because the `code` is single-use - replaying it after a lost
- * response would be rejected as already-consumed. The sign-in callback surfaces
- * the `network-error` as a retry CTA instead.
- */
 export async function exchangeCodeForTokens(
   authnBaseUrl: string,
   code: string,
@@ -487,14 +396,6 @@ export async function exchangeCodeForTokens(
   };
 }
 
-/**
- * Outcome of reading the rotated `{ token, refreshToken }` pair from a 2xx
- * token-mint body:
- *   - `ok`        - a valid non-empty pair;
- *   - `invalid`   - the body is malformed or missing a field (terminal);
- *   - `transient` - the body read was aborted/timed out after headers arrived
- *                   (retriable; must NOT be treated as a bad body).
- */
 export type RotatedTokensOutcome =
   | {
       readonly kind: "ok";
@@ -504,14 +405,10 @@ export type RotatedTokensOutcome =
   | { readonly kind: "invalid" }
   | { readonly kind: "transient" };
 
-/**
- * Parses the rotated `{ token, refreshToken }` pair from a 2xx token-mint
- * response body. Exported so the device-flow client (`device-auth.ts`) can
- * reuse the exact same 200-body shape that `exchange-code` / `refresh` use,
- * without duplicating the field validation. A body-read abort/timeout is
- * reported as `transient` so callers keep it retriable instead of collapsing it
- * into a terminal bad-body outcome; a malformed/missing-field body is `invalid`.
- */
+  /**
+   * Parses the rotated `{ token, refreshToken }` pair from a 2xx token-mint response body.
+   * Exported so the device-flow client (`device-auth.ts`) can reuse the exact same 200-body shape that `exchange-code` / `refresh` use, without duplicating the field validation.
+   */
 export async function readRotatedTokens(
   response: Response,
 ): Promise<RotatedTokensOutcome> {

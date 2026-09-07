@@ -35,12 +35,6 @@ function fakeStatus(
   };
 }
 
-// The broadcaster only exercises `getStatus`, `onMutationProgress`, and
-// optionally `onMutationStatus` (`hasMutationStatus` feature-detects it at
-// runtime); every other `IpcHostController` member is stubbed to throw so
-// the fake stays honestly typed without asserting.
-// `emitProgress`/`emitMutationStatus` drive the module under test the
-// same way `HostController`'s real observers would.
 type FakeHostController = IpcHostController & {
   status: HostControllerStatus;
   getStatusError: Error | null;
@@ -193,12 +187,6 @@ describe("registerHostControllerStatusBroadcast", () => {
     expect(bridge.fanOutCalls).toHaveLength(1);
   });
 
-  // A host install streams progress far faster than `getStatus()` (three JSON
-  // reads plus a reachability probe) can resolve. Letting one read start per
-  // tick piled thousands of concurrent fs operations onto libuv's threadpool
-  // and stalled the main process, so a burst must collapse to a bounded
-  // number of reads. Publishing the newest status is a property of that
-  // serialization rather than a separate ordering guard.
   it("collapses a burst of mutation ticks into one in-flight read plus one trailing re-read", async () => {
     const progressListeners = new Set<() => void>();
     const resolvers: Array<(status: HostControllerStatus) => void> = [];
@@ -241,10 +229,7 @@ describe("registerHostControllerStatusBroadcast", () => {
     ]);
   });
 
-  // The tick queued behind a failed read may carry the mutation's terminal
-  // status. Dropping it would leave the renderer showing the operation as
-  // active (controls disabled) until the idle interval fires, so the drain
-  // loop must survive a failed read and still run the trailing re-read.
+  // Dropping it would leave the renderer showing the operation as active (controls disabled) until the idle interval fires, so the drain loop must survive a failed read and still run.
   it("services the queued re-read after a failed in-flight read", async () => {
     const progressListeners = new Set<() => void>();
     const reads: Array<{

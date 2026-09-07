@@ -181,7 +181,6 @@ const providerMocks = vi.hoisted(() => ({
   recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
   removeProfileMutate: vi.fn<RemoveProfileMutate>(),
   refreshProviders: vi.fn(() => Promise.resolve()),
-  /** Host id each Refresh RESOLVED, which is the wrong-host bug's signature. */
   refreshedHostIds: [] as string[],
   /** The app-wide binding. Null unless a test opts into a distinct ambient. */
   ambientBinding: null as {
@@ -266,16 +265,13 @@ vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
   }),
 }));
 
-// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
-// goes through TanStack Query. Mocked here alongside the other provider
-// mutations so this panel test keeps rendering without a QueryClientProvider.
+// Mocked here alongside the other provider mutations so this panel test keeps rendering without a
+// QueryClientProvider.
 vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
   useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
 }));
 
-// Same reason: the MCP tab's scope picker reads the host's worktree listing,
-// which is a real TanStack query. This panel suite is about the tab shell, not
-// worktree rows, so it reports none.
+// Same reason: the MCP tab's scope picker reads the host's worktree listing, which is a real TanStack query.
 vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
   useWorktreeListByWorkspacePathsForClient: () => ({
     data: { workspaces: [] },
@@ -311,10 +307,8 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
   }),
 }));
 
-// The panel's profile controls use a host-scoped TanStack mutation in
-// production. This legacy panel harness intentionally has no QueryClient;
-// keep its provider-detail coverage focused on rendering and the existing
-// provider mutations while the dedicated hook suite covers cache behavior.
+// This legacy panel harness intentionally has no QueryClient; keep its provider-detail coverage focused on
+// rendering and the existing provider mutations while the dedicated hook suite covers cache behavior.
 vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
   useProvidersSetProfileEnabledForClient: () => ({
     mutate: providerMocks.setProfileEnabledMutate,
@@ -371,12 +365,7 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
   }),
 }));
 
-// Both the plain and `*ForClient` names are exported: the inline profile
-// re-auth panel calls the plain hooks (host-runtime-context-
-// scoped, unchanged by S8), while `AddProviderProfileDialog` calls the
-// `*ForClient` variants with an explicit client (also Settings' own host in
-// this tree - see the `@/lib/host` mock below). Both resolve to the same
-// recorded mock so assertions don't care which path fired.
+// Both resolve to the same recorded mock so assertions don't care which path fired.
 vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => {
   const useProvidersStartLogin = () => ({
     mutate: providerMocks.startLoginMutate,
@@ -478,10 +467,8 @@ vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => {
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  // `ProviderDetail` resolves the add-profile dialog's host scope via
-  // `useHostClient()` directly (Settings always targets the selected/default
-  // host, never a tab) - this harness has no real `<HostRuntimeProvider>`, so
-  // stub it the same way every other provider hook here is stubbed.
+  // `ProviderDetail` resolves the add-profile dialog's host scope via `useHostClient` directly (Settings always
+  // targets the selected/default host, never a tab).
   return { ...actual, useHostClient: () => null };
 });
 
@@ -515,11 +502,7 @@ vi.mock("@/hooks/providers/use-refresh-providers", async () => {
   const { useContext } = await import("react");
   const { HostRuntimeContext } = await import("@/lib/host/runtime");
   return {
-    // Resolves its client the way the real hook does - off
-    // `HostRuntimeContext` - rather than being handed one. That is the whole
-    // point: a stub that ignores context cannot tell a header inside the
-    // provider from a header outside it, which is exactly the bug this suite
-    // needs to be able to fail on.
+    // Resolves its client the way the real hook does - off `HostRuntimeContext` - rather than being handed one.
     useRefreshProviders: () => {
       const binding = useContext(HostRuntimeContext);
       const hostId = binding?.hostClient.getActiveHostId() ?? "ambient";
@@ -535,9 +518,8 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => providerMocks.openLink,
 }));
 
-// The subscription section still reads the bridge for `signInUrl` (only its
-// URL EGRESS moved to `openLink`), and most cases here render the panel with
-// no `<RunnerHostProvider>` above it.
+// The subscription section still reads the bridge for `signInUrl` (only its URL egress moved to `openLink`),
+// and most cases here render the panel with no `<RunnerHostProvider>` above it.
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://auth.example/sign-in" }),
 }));
@@ -552,9 +534,8 @@ vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   }),
 }));
 
-// Same reason: the MCP scope picker can add a workspace folder, and the real
-// action hook opens with `useQueryClient()` - which THROWS, not degrades, with
-// no provider above it. Every host hook in this file is stubbed the same way.
+// Same reason: the MCP scope picker can add a workspace folder, and the real action hook opens with
+// `useQueryClient` - which throws, not degrades, with no provider above it.
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
   useWorkspaceFolderActionsForClient: () => ({
     isPreparing: false,
@@ -575,16 +556,11 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    // The SAME binding the `@/lib/host/runtime` mock below supplies, because
-    // `@/lib/host` re-exports that symbol and the two must not disagree. They
-    // used to: this returned `null` while the runtime mock returned the
-    // ambient binding, and nothing noticed because the panel read the runtime
-    // path. It now re-provides through `useScopedHostBinding`, which reads
-    // this one - so a fixture answering `null` here silently withholds the
-    // wrapper and the selected-host refresh lands on the ambient host.
+    // The same binding the `@/lib/host/runtime` mock below supplies, because `@/lib/host` re-exports that symbol
+    // and the two must not disagree.
     useHostBinding: () => providerMocks.ambientBinding,
     useHostClient: () => null,
-    // The SPINE, a separate export since redesign P2.1.
+    // The spine, a separate export since redesign.
     useHostRuntimeClient: () => null,
   };
 });
@@ -593,11 +569,8 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
-    // `HostRuntimeContext` stays REAL - the panel's provider swap is the thing
-    // under test. Only the ambient binding is faked, and it is null by DEFAULT
-    // so every existing test keeps the shape it was written against. A non-null
-    // one is what lets the provider actually wrap the shell, which is the only
-    // way the wrong-host regression can observe anything at all.
+    // `HostRuntimeContext` stays real - the panel's provider swap is the thing under test. Only the ambient
+    // binding is faked, and it is null by default so every existing test keeps the shape it was written against.
     useHostBinding: () => providerMocks.ambientBinding,
   };
 });
@@ -633,9 +606,8 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
   useRefreshRateLimitUsageOnTraycerTurn: () => {},
 }));
 
-// Provider rate-limit query + its refresh hook (ProviderRateLimitForProvider,
-// mounted for every codex/claude-code provider row). Same reason: no host
-// client/QueryClient in this harness.
+// Provider rate-limit query + its refresh hook (ProviderRateLimitForProvider, mounted for every
+// codex/claude-code provider row).
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: () => ({
     data: undefined,
@@ -657,17 +629,13 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
     isRefreshing: false,
   }),
 }));
-// The section also asks whether a read we stopped waiting for still has its
-// delayed follow-up coming. That reads the queue registry through
-// `useRateLimitQueueScope`, which needs the QueryClient this harness has none
-// of; no target is ever enqueued here, so an idle answer is the truthful one.
+// The section also asks whether a read we stopped waiting for still has its delayed follow-up coming.
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
   useIsRateLimitReadFollowUpExhausted: () => false,
 }));
 
-// Host picker plumbing: a single active host and no transient client means
-// the panel renders inline (no runtime-context re-provide), and `useHostBinding`
-// returns null without a `<HostRuntimeProvider>`.
+// Host picker plumbing: a single active host and no transient client means the panel renders inline (no
+// runtime-context re-provide), and `useHostBinding` returns null without a `<HostRuntimeProvider>`.
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "local",
 }));
@@ -690,9 +658,8 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
 }));
 
-// Once a sign-in-intent dialog closes itself on a same-account reconnect, the
-// toast is the ONLY surviving success signal - so it has to be assertable
-// rather than a real Sonner store write with no `<Toaster />` to land in.
+// Once a sign-in-intent dialog closes itself on a same-account reconnect, the toast is the only surviving
+// success signal.
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -702,30 +669,18 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// The profile-scoped section's `ProfileDropdown` renders through Radix's real
-// DropdownMenu, which opens on pointerdown rather than click - render it
-// inline + always-open so tests can select a row without fighting
-// pointer-open semantics in jsdom (mirrors the established mock in
-// worktrees-settings-panel.test / folder-controls.test).
+// The profile-scoped section's `ProfileDropdown` renders through Radix's real DropdownMenu, which opens on
+// pointerdown rather than click.
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
 
-// Radix's Select needs a pointer-capable layout to open its listbox, which
-// jsdom does not provide. Mirrors the stand-in
-// `provider-model-provider-connect-dialog.test.tsx` uses: same element
-// structure, every option always rendered, `onValueChange` forwarded so a
-// test can pick an option by clicking it - plus `disabled` forwarding on both
-// `Select` and `SelectItem`, which that mock doesn't need but the enablement
-// floor here does (the "Off" item disables itself rather than vanishing).
+// Radix's Select needs a pointer-capable layout to open its listbox, which jsdom does not provide.
 vi.mock("@/components/ui/select", async () => {
   const { createContext, useContext } = await import("react");
   const ValueChangeContext = createContext<(value: string) => void>(() => {});
-  // The currently-selected value, threaded down to `SelectItem` so it can
-  // report `data-state` the way real Radix does. Absent from the mock until
-  // the mobile section picker's "reopening marks the picked row as checked"
-  // test needed it - every other consumer just clicks an item and never reads
-  // this attribute back.
+  // Absent from the mock until the mobile section picker's "reopening marks the picked row as checked" test
+  // needed it - every other consumer just clicks an item and never reads this attribute back.
   const SelectedValueContext = createContext<string | undefined>(undefined);
   return {
     Select: (props: {
@@ -746,12 +701,7 @@ vi.mock("@/components/ui/select", async () => {
         </SelectedValueContext.Provider>
       </ValueChangeContext.Provider>
     ),
-    // `role="combobox"` and the forwarded `aria-label` mirror real Radix
-    // (`SelectPrimitive.Trigger` sets `role="combobox"`; the trigger's
-    // `aria-label` prop passes straight through). Without both, every
-    // `getByRole("combobox", { name: ... })` query this file already had
-    // before this mock existed - the mobile provider/section pickers - would
-    // find a plain unnamed `role="button"` element instead.
+    // Without both, every `getByRole("combobox", { name:...
     SelectTrigger: (props: {
       readonly children: ReactNode;
       readonly id?: string;
@@ -793,12 +743,8 @@ vi.mock("@/components/ui/select", async () => {
     },
   };
 });
-/**
- * The only thing the panel calls on a scope client, so the only thing a stub
- * has to be. Named rather than asserted: the real `HostClient` is far wider
- * than this test needs, and casting to it would be claiming a shape nothing
- * here provides.
- */
+/** Named rather than asserted: the real `HostClient` is far wider than this test needs, and casting to it would
+ * be claiming a shape nothing here provides. */
 type ScopeClientStub = { readonly getActiveHostId: () => string };
 
 const hostScopeMocks: {
@@ -815,8 +761,8 @@ const hostScopeMocks: {
   host: undefined,
 }));
 
-// Panels depend on the host SCOPE, not on the six hooks it composes, so this
-// mocks at that boundary rather than re-mocking the scope's internals.
+// Panels depend on the host scope, not on the six hooks it composes, so this mocks at that boundary rather
+// than re-mocking the scope's internals.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -825,8 +771,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       ...hostScopeFixture({
         setHostId: hostScopeMocks.setHostId,
         hostId: hostScopeMocks.hostId,
-        // `host: undefined` must be OMITTED, not passed: the fixture's final
-        // spread would clobber its default host with the explicit undefined.
+        // `host: undefined` must be omitted, not passed: the fixture's final spread would clobber its default host
+        // with the explicit undefined.
         ...(hostScopeMocks.host === undefined
           ? {}
           : { host: hostScopeMocks.host }),
@@ -836,8 +782,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
           ? {}
           : { status: hostScopeMocks.status }),
       }),
-      // Spread OUTSIDE the fixture call: the stub satisfies what the panel
-      // uses, not the full `HostClient` the fixture's type demands.
+      // Spread outside the fixture call: the stub satisfies what the panel uses, not the full `HostClient` the
+      // fixture's type demands.
       client: hostScopeMocks.client,
     }),
   };
@@ -1106,9 +1052,8 @@ function firstSubmitLoginCodeCall(): readonly [
   return call;
 }
 
-/** An oauth-only codex with the ambient row plus one managed "Work" profile,
- *  so a test can hand it a different `managed-1` before and after a sign-in
- *  and drive the reauth panel's changed-account branch. */
+/** An oauth-only codex with the ambient row plus one managed "Work" profile, so a test can hand it a different
+ * `managed-1` before and after a sign-in and drive the reauth panel's changed-account branch. */
 function codexWithManaged(managed: ProviderProfile): ProviderCliState {
   return {
     ...providerState({
@@ -1139,9 +1084,7 @@ function codexWithManaged(managed: ProviderProfile): ProviderCliState {
   };
 }
 
-/** `managed-1` as a given account. The pre-sign-in address is the signed-OUT
- *  row (that is the state the row is in when its "Sign in" button shows); any
- *  other address is the authenticated result of a sign-in. */
+/** `managed-1` as a given account. */
 function workProfileSignedInAs(email: string): ProviderProfile {
   return profile({
     profileId: "managed-1",
@@ -1195,13 +1138,7 @@ function codePasteReauthProviderState(): ProviderCliState {
   };
 }
 
-/**
- * An `awaitLogin` response for the ambient row taken while the host's auth
- * probe is still in flight: the login runner evicts the ambient auth-cache
- * entry when the login child closes, so the row can read non-definitive with
- * `authPending` set even though the sign-in landed. The flow must treat this
- * as unsettled, never as a failed sign-in.
- */
+/** The flow must treat this as unsettled, never as a failed sign-in. */
 function pendingAmbientAwaitResponse(): unknown {
   return {
     codeRejected: false,
@@ -1300,46 +1237,26 @@ function createRunnerHost(): MockRunnerHost {
   });
 }
 
-/**
- * Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
- * tab, so every profile assertion has to activate that tab after mounting.
- * Kept as one helper so the next time the section moves (or the label changes
- * again) this is a one-line change, not forty.
- */
+/** Kept as one helper so the next time the section moves (or the label changes again) this is a one-line
+ * change, not forty. */
 function openProfilesTab(): void {
   selectTab("Profiles & Limits");
 }
 
-/**
- * The SAME tab for a provider without managed profiles, which is most of them.
- *
- * The label is per-provider now: the tab holds profiles and usage limits, and
- * for a provider that cannot have profiles it holds only the second - so
- * promising them in the rail was promising a section that is not there.
- */
+/** The label is per-provider now: the tab holds profiles and usage limits, and for a provider that cannot have
+ * profiles it holds only the second - so promising them in the rail was promising a section that is not there. */
 function openUsageLimitsTab(): void {
   selectTab("Usage limits");
 }
 
-/**
- * The provider header and tab rail are PINNED rows; only the active tab's body
- * scrolls.
- *
- * Asserted structurally (what contains what) plus the one class that carries
- * the mechanism, because jsdom has no layout engine - it reports every element
- * as 0×0 and never computes an overflow, so "does this scroll?" has no
- * observable answer here beyond the declaration. The containment checks are the
- * load-bearing half: the regression this guards against is the rail or the
- * header drifting back INSIDE the scroll box, which is exactly a parent/child
- * relationship and is checked as one.
- */
+/** Asserted structurally (what contains what) plus the one class that carries the mechanism, because jsdom has
+ * no layout engine. */
 function expectPinnedRailLayout(): void {
   const panel = screen.getByRole("tabpanel");
   expect(panel.className).toContain("overflow-y-auto");
 
-  // The rail must be a SIBLING of the scrolling body, not a descendant of it -
-  // a sticky-positioned rail inside the scroll box would satisfy neither this
-  // nor the background constraint that motivated the flex layout.
+  // The rail must be a sibling of the scrolling body, not a descendant of it - a sticky-positioned rail inside
+  // the scroll box would satisfy neither this nor the background constraint that motivated the flex layout.
   const list = screen.getByRole("tablist");
   expect(panel.contains(list)).toBe(false);
 
@@ -1364,11 +1281,8 @@ function expectPinnedRailLayout(): void {
   expect(scrollers).toEqual([]);
 }
 
-/**
- * Provider rows currently in the rail, in rendered order. Scoped to the LIST
- * rather than the nav, which also holds the search row's filter button - and
- * returns `[]` for the filtered-empty rail, where no list is rendered at all.
- */
+/** Scoped to the list rather than the nav, which also holds the search row's filter button - and returns `[]`
+ * for the filtered-empty rail, where no list is rendered at all. */
 function railProviderNames(): readonly string[] {
   const nav = screen.getByRole("navigation", { name: "Providers" });
   const list = within(nav).queryByRole("list", { name: "Providers" });
@@ -1378,17 +1292,8 @@ function railProviderNames(): readonly string[] {
     .map((button) => button.getAttribute("aria-label") ?? "");
 }
 
-/**
- * The rail row for a provider, scoped to the rail LIST like
- * `railProviderNames` above - never bare `screen`. Below `md` the
- * always-mounted `ProvidersMobileSelect` renders one item per provider under
- * the SAME display name (jsdom applies no CSS, so `md:hidden` never actually
- * hides it there), so an unscoped `getByRole("button", { name })` collides
- * with that item the moment more than one provider is in the fixture.
- * `hidden` is threaded through explicitly rather than defaulted, since the
- * one caller behind a dialog's `hideOthers` needs it true and every other
- * caller needs it false.
- */
+/** Below `md` the always-mounted `ProvidersMobileSelect` renders one item per provider under the same display
+ * name (jsdom applies no CSS, so `md:hidden` never actually hides it there). */
 function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
   const nav = screen.getByRole("navigation", { name: "Providers", hidden });
   const list = within(nav).getByRole("list", { name: "Providers", hidden });
@@ -1478,9 +1383,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   afterEach(() => {
-    // Unconditional and before `cleanup()`: the ambient re-poll tests opt into
-    // fake timers mid-test, and a leaked fake clock would strand every later
-    // test's timers (and Testing Library's own unmount work).
+    // Unconditional and before `cleanup`: the ambient re-poll tests opt into fake timers mid-test, and a leaked
+    // fake clock would strand every later test's timers (and Testing Library's own unmount work).
     vi.useRealTimers();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     cleanup();
@@ -1499,13 +1403,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("applies a re-auth deep link's host even though the rail clears the intent on mount", () => {
-    // The rail is a DESCENDANT of the panel and clears the whole focus intent
-    // — host half included — in its own mount effect. React runs child passive
-    // effects before the parent's, so a parent that read the store in an
-    // effect saw an already-emptied store whenever the rail mounted in the
-    // same commit, which is exactly what cached provider data produces. The
-    // deep link then silently consumed its provider/profile intent against
-    // whichever host was already on screen.
+    // React runs child passive effects before the parent's, so a parent that read the store in an effect saw an
+    // already-emptied store whenever the rail mounted in the same commit.
     useProvidersFocusStore.getState().setProfileFocus({
       harnessId: "opencode",
       hostId: "host-that-needs-reauth",
@@ -1522,19 +1421,14 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(hostScopeMocks.setHostId).toHaveBeenCalledWith(
       "host-that-needs-reauth",
     );
-    // Consumed exactly once: the host half is cleared at the point of use, so
-    // a later visit does not yank the scope back to a host the user has since
-    // navigated away from.
+    // Consumed exactly once: the host half is cleared at the point of use, so a later visit does not yank the
+    // scope back to a host the user has since navigated away from.
     expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
   });
 
   it("refuses a profile intent whose target host is not the one on screen", () => {
-    // The target was unreachable or plan-gated, so its rail never mounted and
-    // the harness/profile/sign-in halves stayed armed. Splitting the host half
-    // off (so an unreachable target could not re-yank the scope forever) threw
-    // away WHICH host they belonged to — and the next reachable host the user
-    // picked consumed them, in the worst case starting an automatic sign-in
-    // there. The retained target is what makes the remainder refusable.
+    // The target was unreachable or plan-gated, so its rail never mounted and the harness/profile/sign-in halves
+    // stayed armed.
     useProvidersFocusStore.setState({
       focusHarnessId: "cursor",
       focusHostId: null,
@@ -1568,12 +1462,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    // Not consumed here: the pane stays on the rail's first provider rather
-    // than opening the deep link's target on the wrong machine. The probe is
-    // that provider's DEFAULT tab, which is the first entry of
-    // PROVIDER_TAB_ORDER it supports - "Usage limits" here, since
-    // FULL_TABS advertises `usage` and `providerState` leaves the API key
-    // unsupported so no Account tab precedes it.
+    // Not consumed here: the pane stays on the rail's first provider rather than opening the deep link's target on
+    // the wrong machine.
     expect(
       screen
         .getByRole("tab", { name: "Usage limits" })
@@ -1597,21 +1487,13 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("switches the scope BEFORE any child can consume the rest of the intent", () => {
-    // Capturing the host half before children mount was necessary but not
-    // sufficient: the rail consumes (and clears) the provider/profile half in
-    // its own mount effect, and child passive effects run before the parent's.
-    // So when the rail mounted in the same commit — cached data — it consumed
-    // the intent against the OLD host, in the worst case starting a re-auth
-    // sign-in there, one commit before the scope moved. The panel now holds
-    // its subtree until the switch has landed, so the rail's first mount is
-    // already scoped to the deep-linked host. This asserts the ORDER, which is
-    // the actual contract the two narrower fixes missed.
+    // Capturing the host half before children mount was necessary but not sufficient.
     const order: string[] = [];
     hostScopeMocks.setHostId.mockImplementation(() => {
       order.push("scope-switched");
     });
-    // The suite's beforeEach only mockClear()s this spy, which keeps the
-    // implementation — drop it here so it cannot leak into later tests.
+    // The suite's beforeEach only mockClears this spy, which keeps the implementation - drop it here so it cannot
+    // leak into later tests.
     onTestFinished(() => {
       hostScopeMocks.setHostId.mockReset();
     });
@@ -1636,8 +1518,8 @@ describe("<ProvidersSettingsPanel />", () => {
 
     const switched = order.indexOf("scope-switched");
     expect(switched).not.toBe(-1);
-    // Whether or not the rail consumed the intent during this render, nothing
-    // may have consumed it BEFORE the switch.
+    // Whether or not the rail consumed the intent during this render, nothing may have consumed it before the
+    // switch.
     const consumed = order.indexOf("intent-consumed");
     if (consumed !== -1) {
       expect(switched).toBeLessThan(consumed);
@@ -1645,12 +1527,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("applies a deep link armed AFTER mount — the keep-alive case", async () => {
-    // The top-level keep-alive host retains this panel while its tab is
-    // hidden, so a re-auth banner click arms the intent against an
-    // already-mounted panel: there is no fresh mount to capture it. A
-    // mount-time snapshot stayed stale, pending never rose, and Sign in
-    // appeared to do nothing while the intent waited to fire against
-    // whichever host a later remount happened to select.
+    // A mount-time snapshot stayed stale, pending never rose, and Sign in appeared to do nothing while the intent
+    // waited to fire against whichever host a later remount happened to select.
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
@@ -1734,14 +1612,7 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("keeps an actionable failure card for an EXHAUSTED local transport failure", () => {
-    // A spinner is a promise that something will refetch, and on a local host
-    // nothing can keep it. The remote path has the messenger's own binding,
-    // whose ready boundary invalidates this query; a local host has no such
-    // binding, `useHostQuery` pins `retry: false`, and by the time this error
-    // surfaces the retry wrapper has already spent its budget - its final
-    // attempt rethrows unchanged, so the class says what the failure WAS, not
-    // that anything is still retrying. Showing "Reconnecting…" here parked the
-    // panel on a permanent spinner with no way to report the fault.
+    // A spinner is a promise that something will refetch, and on a local host nothing can keep it.
     providerMocks.listResult.isError = true;
     providerMocks.listResult.error = new RetryableTransportError({
       replaySafetyFromKey: false,
@@ -1765,11 +1636,8 @@ describe("<ProvidersSettingsPanel />", () => {
 
   it("keeps an actionable failure card for an AMBIGUOUS post-send transport drop", () => {
     providerMocks.listResult.isError = true;
-    // The base class, not the retryable subclass: the request frame WAS on the
-    // wire when the socket died, so nothing may assume it resolves itself.
-    // `useHostQuery` pins `retry: false` and no recovery event is owed, so
-    // showing this as "connecting" parks the panel on a spinner forever and
-    // hides the report-issue affordance.
+    // The base class, not the retryable subclass: the request frame was on the wire when the socket died, so
+    // nothing may assume it resolves itself.
     providerMocks.listResult.error = new HostTransportFailureError({
       code: "RPC_ERROR",
       message: "The connection dropped before a response arrived",
@@ -1815,10 +1683,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("shows the CLI & Args tab and empty-state notice for amp (no longer id-hidden)", () => {
-    // hidesCliCandidates(amp||cursor) used to suppress this whole tab on the
-    // premise that those two have no user-selectable binary. Both spawn the
-    // Traycer-resolved binary for MCP write verbs, so the table is the only
-    // route out of the F2 dead end when nothing is on PATH.
+    // Both spawn the Traycer-resolved binary for MCP write verbs, so the table is the only route out of the dead
+    // end when nothing is on PATH.
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -2072,9 +1938,8 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     const nav = screen.getByRole("navigation", { name: "Providers" });
-    // Scoped to the LIST, not the whole nav: the nav also holds the rail's
-    // search row, whose filter trigger is a button too and would otherwise
-    // enter this ordering assertion as a phantom first provider.
+    // Scoped to the list, not the whole nav: the nav also holds the rail's search row, whose filter trigger is a
+    // button too and would otherwise enter this ordering assertion as a phantom first provider.
     const list = within(nav).getByRole("list", { name: "Providers" });
     expect(
       within(list)
@@ -2254,15 +2119,8 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
-  // The panel used to carry its own host `Select` in the header - one of four
-  // near-identical dropdowns doing one job - and then, briefly, an inert
-  // readout of the scoped host. Both are gone: the sidebar owns the scope.
-  //
-  // Asserting on the host NAME, not on a testid. An earlier version of this
-  // test checked that `host-scope-line` was absent, which is unfalsifiable -
-  // that testid exists nowhere in the codebase, so the assertion passes no
-  // matter what the panel renders. The name is the thing that must not
-  // reappear, and the fixture puts it on screen the moment anything prints it.
+  // Asserting on the host name, not on a testid. The name is the thing that must not reappear, and the fixture
+  // puts it on screen the moment anything prints it.
   it("names no host and offers no host picker, leaving both to the sidebar", () => {
     render(
       <TooltipProvider>
@@ -2280,9 +2138,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("puts the global status on the heading row, and says it is global", () => {
-    // `checkedAt` is a max over every provider and Refresh re-probes all of
-    // them; at the card's top-right it sat inches from the selected provider's
-    // Enabled toggle and read as that provider's own status.
+    // `checkedAt` is a max over every provider and Refresh re-probes all of them; at the card's top-right it sat
+    // inches from the selected provider's Enabled toggle and read as that provider's own status.
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
@@ -2300,14 +2157,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("refreshes the SELECTED host, never the ambient one", async () => {
-    // The wrong-host bug's actual signature. DOM absence cannot see it: the
-    // failure was never a missing control, it was a present control resolving
-    // the wrong client - so this gives the two hosts distinct identities and
-    // asks which one Refresh reached.
-    //
-    // Moving `HostRuntimeContext.Provider` back below the header - the exact
-    // historical regression - makes this fail, because the header would then
-    // resolve `ambient` instead of the selected host.
+    // DOM absence cannot see it: the failure was never a missing control, it was a present control resolving the
+    // wrong client - so this gives the two hosts distinct identities and asks which one Refresh reached.
     providerMocks.ambientBinding = {
       hostClient: { getActiveHostId: () => "host-ambient" },
     };
@@ -2330,16 +2181,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("mounts NO global control - and no RPC - until the scope is ready", () => {
-    // The real invariant, and the reason this control was kept out of the
-    // header for a round. `headerAction` is not gated, so it is only safe
-    // because `HostRuntimeContext.Provider` wraps the whole shell EXACTLY when
-    // the scope resolved a client. Mounted any earlier, `useHostClient()` falls
-    // back to the ambient host - which is how Refresh once re-probed and
-    // rewrote the provider list of a host the page was not showing.
-    //
-    // "Not in the header" was the wrong thing to pin: it forbids a safe
-    // implementation. What must hold is that nothing renders, and nothing is
-    // requested, while the scope is unresolved.
+    // `headerAction` is not gated, so it is only safe because `HostRuntimeContext.Provider` wraps the whole shell
+    // exactly when the scope resolved a client.
     hostScopeMocks.status = "unreachable";
 
     render(
@@ -2384,19 +2227,8 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
   });
 
-  // The three-way Auto/On/Off enablement control (and the `enablementMode`/
-  // `enablementSource` wire fields, the `mode` param on `providers.setEnabled`,
-  // and the `legacyEnabledForMode` helper that translated a chosen mode into
-  // the legacy `enabled` mirror) are gone. `providers-settings-panel.tsx`'s
-  // own comment on `ProviderEnablementControl` explains why: "nobody could
-  // tell what Auto meant from looking at it, and a provider it enabled could
-  // silently switch itself off a few seconds later when a background probe
-  // finally answered." Every provider row now renders the same binary switch
-  // unconditionally - there is no second rendering path left to contrast it
-  // against, so the "with enablementMode absent" framing this describe block
-  // used to test under is gone too. What survives is the one fact worth
-  // keeping on its own: the switch calls `setEnabled` with the plain
-  // {providerId, enabled, profileAction} shape and no `mode` field.
+  // The three-way Auto/On/Off enablement control (and the `enablementMode`/ `enablementSource` wire fields, the
+  // `mode` param on `providers.setEnabled`.
   it("clicking the enable switch calls setEnabled with no mode field", () => {
     // Two enabled providers so the one-enabled floor doesn't block the click.
     providerMocks.listResult.data = {
@@ -2430,15 +2262,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.setEnabledMutate).toHaveBeenCalledTimes(1);
     const variables = firstSetEnabledCall();
     expect(variables).not.toHaveProperty("mode");
-    // Default-selected provider is whichever ORDERED_PROVIDERS ranks
-    // first (opencode, ahead of traycer) - the row identity isn't the
-    // point of this test, the absent `mode` is.
-    //
-    // `enabled: false` is asserted alongside it because the absence of `mode`
-    // is only half the contract: with the tri-state gone, this boolean is the
-    // ENTIRE payload's worth of intent, so a switch that sent the unflipped
-    // value would satisfy every other assertion here. The row starts enabled
-    // (see the two-provider fixture above), so the click must request off.
+    // The row starts enabled (see the two-provider fixture above), so the click must request off.
     expect(variables).toMatchObject({
       providerId: "opencode",
       enabled: false,
@@ -2446,14 +2270,8 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  // The detail pane's inert gate used to be keyed on the sticky MODE rather
-  // than the effective `enabled` boolean, specifically so an auto-undetected
-  // provider (`enabled: false` with no explicit off) stayed reachable for its
-  // sign-in CTA. That distinction is gone along with the mode: `enabled: false`
-  // now has exactly one cause - the user turned the provider off - so
-  // `providers-settings-panel.tsx` keys the gate on `!state.enabled` directly
-  // (see its comment on `detailPaneInert`), and there is no longer a case
-  // where a disabled provider's pane stays reachable.
+  // That distinction is gone along with the mode: `enabled: false` now has exactly one cause - the user turned
+  // the provider off.
   describe("detail pane inert gate", () => {
     function singleProvider(overrides: { readonly enabled: boolean }): void {
       providerMocks.listResult.data = {
@@ -2575,13 +2393,8 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBe("active");
   });
 
-  // The Account tab renders the API-key field, and Radix UNMOUNTS an inactive
-  // `TabsContent`. Held inside the section, a pasted key would be destroyed by
-  // an ordinary tab switch - the section used to escape that by sitting outside
-  // the tab bar entirely, so moving it onto a tab is what put the draft at
-  // risk. A provider switch is the one case that MUST still clear it: a key
-  // typed for Cursor appearing in Devin's field would be a far worse bug than
-  // losing it.
+  // A provider switch is the one case that must still clear it: a key typed for Cursor appearing in Devin's
+  // field would be a far worse bug than losing it.
   it("keeps a typed API key across tab switches, but not across providers", () => {
     const apiKeyProvider = (
       providerId: ProviderCliState["providerId"],
@@ -2692,14 +2505,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("opens the FOCUSED provider's own first tab when no focusTab is given", () => {
-    // The "Add API key" CTA sets `focusHarnessId` and no `focusTab`, so the
-    // initial tab falls out of the default rule. That default is now
-    // provider-dependent (account -> usage -> ...), which makes deriving it
-    // from the RAIL'S FIRST provider actively wrong: opencode has no API key
-    // and defaults to `usage`, and because amp also advertises `usage` the
-    // stale value survives `resolveTabForProvider` and the pane settles on
-    // the usage tab - never showing the key field the CTA exists to
-    // reach.
+    // That default is now provider-dependent (account -> usage ->...), which makes deriving it from the rail'S
+    // first provider actively wrong.
     useProvidersFocusStore.getState().setFocusHarnessId("amp");
 
     providerMocks.listResult.data = {
@@ -2731,9 +2538,8 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
     ).toBe("active");
-    // Discriminating: the usage tab is rendered and selectable for amp,
-    // so this is the deep link picking the right one of two live tabs rather
-    // than the wrong one being absent.
+    // Discriminating: the usage tab is rendered and selectable for amp, so this is the deep link picking the right
+    // one of two live tabs rather than the wrong one being absent.
     expect(
       screen
         .getByRole("tab", { name: "Usage limits" })
@@ -2778,10 +2584,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     selectTab("Plugins");
-    // F5 replaced the "Installed plugins" heading with the shared scope
-    // picker. Match the MCP suite's aria-label idiom so this both identifies
-    // the Plugins tab body and covers the control the heading used to stand
-    // in for.
+    // replaced the "Installed plugins" heading with the shared scope picker.
     expect(
       screen.getByRole("button", { name: /^Plugins location/ }),
     ).toBeDefined();
@@ -2823,11 +2626,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("saves terminal-agent args once across the post-save remount", () => {
-    // `TerminalAgentArgsSection` is keyed on `state.terminalAgentArgs`, so a
-    // successful save remounts it. That remount is the dangerous moment: any
-    // commit-on-unmount or commit-on-mount path would re-fire the mutation
-    // with the value it just saved. The `next === saved` guard in `commit()`
-    // plus having no unmount cleanup is what keeps it at exactly one call.
+    // That remount is the dangerous moment: any commit-on-unmount or commit-on-mount path would re-fire the
+    // mutation with the value it just saved.
     const args = "--foo";
     providerMocks.listResult.data = {
       providers: [
@@ -3015,10 +2815,8 @@ describe("<ProvidersSettingsPanel />", () => {
     const refreshButton = screen.getByRole("button", {
       name: "Refresh profile statuses and usage limits",
     });
-    // The add-profile button now sits inside the span that lets its tooltip
-    // fire while it is disabled, so adjacency is measured from that span.
-    // Both buttons now sit inside the span that lets their tooltip fire while
-    // disabled, so adjacency is asserted between those spans.
+    // The add-profile button now sits inside the span that lets its tooltip fire while it is disabled, so
+    // adjacency is measured from that span.
     expect(
       addProfileButton.parentElement?.nextElementSibling?.contains(
         refreshButton,
@@ -3777,9 +3575,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
-    // Still `starting` - `startLogin` hasn't resolved yet, so there is no
-    // profileId/child for a paste to reach. The field must not render (a
-    // paste here would silently lock the field without ever being sent).
+    // The field must not render (a paste here would silently lock the field without ever being sent).
     expect(screen.queryByLabelText("Paste the code")).toBeNull();
 
     const [, startOptions] = firstStartLoginCall();
@@ -3928,10 +3724,8 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
-    // A rejected code drives a restart - the underlying mutation objects
-    // must be reset before the fresh attempt's field ever renders, or the
-    // remounted (key-changed) field would still show the previous attempt's
-    // stale error/pending state off the shared mutation.
+    // A rejected code drives a restart - the underlying mutation objects must be reset before the fresh attempt's
+    // field ever renders.
     act(() => {
       awaitOptions.onSuccess({ codeRejected: true });
     });
@@ -4027,10 +3821,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    // "verifying": the relay succeeded, but `awaitLogin` hasn't settled this
-    // attempt yet - the real exchange window `submitPending` alone never
-    // covered. The header must say so instead of still claiming to be
-    // waiting on the browser.
+    // The header must say so instead of still claiming to be waiting on the browser.
     expect(screen.getByText("Checking approval…")).toBeDefined();
     expect(input).toHaveProperty("readOnly", true);
     expect(
@@ -4270,9 +4061,6 @@ describe("<ProvidersSettingsPanel />", () => {
       });
     });
 
-    // The sign-in landed, but the host assembled the response right after
-    // the login runner evicted the ambient auth-cache entry: the ambient row
-    // reads non-definitive with the probe still in flight (`authPending`).
     // That must resolve as "not settled yet" - never as a failed sign-in.
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
     expect(awaitVariables).toEqual({
@@ -4373,11 +4161,8 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected re-poll await login call.");
     }
 
-    // ...and the user cancels while it is still in flight. Clearing the timer
-    // cannot recall an already-dispatched RPC, and cancelling leaves the
-    // attempt id untouched, so the late resolution must be ignored outright -
-    // otherwise it settles a cancelled attempt, and a still-pending verdict
-    // would arm yet another re-poll for a sign-in the user already abandoned.
+    // Clearing the timer cannot recall an already-dispatched RPC, and cancelling leaves the attempt id untouched,
+    // so the late resolution must be ignored outright.
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
@@ -4441,11 +4226,8 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected re-poll await login call.");
     }
 
-    // The flow goes away with its re-poll still in flight - no cancel involved
-    // (the in-chat banner unmounts on its own the moment its reauth gate
-    // clears). Clearing the scheduled timer is not enough: the dispatched RPC
-    // still resolves, and a still-pending verdict must not arm a fresh timer on
-    // a dead hook.
+    // Clearing the scheduled timer is not enough: the dispatched RPC still resolves, and a still-pending verdict
+    // must not arm a fresh timer on a dead hook.
     act(() => {
       view.unmount();
     });
@@ -4489,9 +4271,8 @@ describe("<ProvidersSettingsPanel />", () => {
       });
     });
 
-    // The initial await plus every budgeted re-poll keeps reporting the
-    // probe as still pending - after the budget is spent the flow must land
-    // on the ordinary not-finished failure instead of re-polling forever.
+    // The initial await plus every budgeted re-poll keeps reporting the probe as still pending - after the budget
+    // is spent the flow must land on the ordinary not-finished failure instead of re-polling forever.
     for (
       let attempt = 0;
       attempt < AMBIENT_AUTH_PENDING_REPOLL_CAP + 1;
@@ -4556,9 +4337,8 @@ describe("<ProvidersSettingsPanel />", () => {
     const [, awaitOptions] = firstAwaitLoginCall();
 
     act(() => submitOptions.onSuccess({ outcome: "noActiveLogin" }));
-    // The await re-probe agrees no profile is signed in - restart, not a
-    // generic failure, and with the session-expired notice, not the
-    // rejected-code one.
+    // The await re-probe agrees no profile is signed in - restart, not a generic failure, and with the
+    // session-expired notice, not the rejected-code one.
     act(() => {
       awaitOptions.onSuccess({ state: { profiles: [] } });
     });
@@ -4645,9 +4425,8 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
-    // The re-probed row for this profile is present but still signed out -
-    // `providers.list` keeps a profile's row even when its account is not
-    // authenticated, so presence alone must not resolve to identity.
+    // The re-probed row for this profile is present but still signed out - `providers.list` keeps a profile's row
+    // even when its account is not authenticated, so presence alone must not resolve to identity.
     act(() => {
       awaitOptions.onSuccess({
         state: {
@@ -4802,9 +4581,8 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     screen.getByText(/Sign-in did not finish for/);
 
-    // The banner's Retry reopens the dialog; STARTING the next attempt must
-    // clear the banner instead of letting it sit next to a sign-in that
-    // then succeeds.
+    // The banner's Retry reopens the dialog; starting the next attempt must clear the banner instead of letting it
+    // sit next to a sign-in that then succeeds.
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
@@ -4824,9 +4602,8 @@ describe("<ProvidersSettingsPanel />", () => {
     if (retryAwait === undefined) {
       throw new Error("Expected a second await login call.");
     }
-    // The real awaitLogin success merges the fresh provider state into the
-    // providers.list cache - mirror that so the completed profile resolves
-    // once the panel re-renders.
+    // The real awaitLogin success merges the fresh provider state into the providers.list cache - mirror that so
+    // the completed profile resolves once the panel re-renders.
     const createdProfile = profile({
       profileId: "managed-2",
       kind: "managed",
@@ -5074,9 +4851,8 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "work-profile",
       startSignIn: true,
     });
-    // The scope mock's `setHostId` is inert, so model the applied switch: the
-    // rail consumes a profile intent only when the host on screen IS the
-    // intent's target (the foreign-host case is covered separately).
+    // The scope mock's `setHostId` is inert, so model the applied switch: the rail consumes a profile intent only
+    // when the host on screen IS the intent's target (the foreign-host case is covered separately).
     hostScopeMocks.hostId = "local";
 
     render(
@@ -5085,10 +4861,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    // The usage tab is now the default first tab for providers without an
-    // API-key Account tab, so startSignIn opens the dialog immediately. That
-    // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
-    // fail getByRole("tab") without { hidden: true }.
+    // That dialog aria-hides the tab rail; openProfilesTab is unnecessary and would fail getByRole("tab") without
+    // { hidden: true }.
     expect(
       railProviderRow("Claude Code", true).getAttribute("data-active"),
     ).toBe("true");
@@ -5299,9 +5073,8 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("button", { name: "Keep new account" }),
     ).toBeDefined();
-    // Sign-in intent, but a CHANGED account: the acknowledgment survives the
-    // same-account auto-close, because this notice is the only thing telling
-    // the user the profile was rebound. Nothing settled, so no toast either.
+    // Sign-in intent, but a changed account: the acknowledgment survives the same-account auto-close, because this
+    // notice is the only thing telling the user the profile was rebound.
     expect(
       screen.getByRole("dialog", { name: "Sign in to Work" }),
     ).toBeDefined();
@@ -5437,9 +5210,8 @@ describe("<ProvidersSettingsPanel />", () => {
         screen.queryByRole("dialog", { name: "Sign in to Work" }),
       ).toBeNull();
     });
-    // Not merely skipped on the way out - never rendered. The acknowledgment
-    // confirmed something the host had already persisted, then stranded the
-    // user on an edit form whose only exit was Cancel.
+    // Not merely skipped on the way out - never rendered. The acknowledgment confirmed something the host had
+    // already persisted, then stranded the user on an edit form whose only exit was Cancel.
     expect(screen.queryByText("Signed in as")).toBeNull();
     expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
@@ -5478,17 +5250,8 @@ describe("<ProvidersSettingsPanel />", () => {
 
     const [, awaitOptions] = firstAwaitLoginCall();
 
-    // Production ordering, which a static fixture would otherwise hide:
-    // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row
-    // into the `providers.list` cache, and query-core AWAITS that before the
-    // flow's own per-call `onSuccess` settles the step. So the row this panel
-    // reads ALREADY names the new account by the first render of the settled
-    // step - it cannot be the "before" side of the comparison.
-    //
-    // The re-render is the load-bearing half: mutating the fixture alone
-    // changes nothing, because the settle below re-renders only the panel
-    // LEAF, while the profile row is a prop from an ancestor. `setQueryData`
-    // is what re-renders that ancestor in production.
+    // So the row this panel reads already names the new account by the first render of the settled step - it
+    // cannot be the "before" side of the comparison.
     providerMocks.listResult.data = {
       providers: [
         codexWithManaged(workProfileSignedInAs("personal@example.test")),
@@ -5523,9 +5286,8 @@ describe("<ProvidersSettingsPanel />", () => {
       screen.getByRole("dialog", { name: "Sign in to Work" }),
     ).toBeDefined();
     expect(toast.success).not.toHaveBeenCalled();
-    // The header names the journey the user started, not the state the commit
-    // above produced - a profile that was signed out is still "Signing in",
-    // never relabelled mid-flow as an account SWITCH it never was.
+    // The header names the journey the user started, not the state the commit above produced - a profile that was
+    // signed out is still "Signing in", never relabelled mid-flow as an account switch it never was.
     expect(screen.getByText("Signing in")).toBeDefined();
     expect(screen.queryByText("Switching account")).toBeNull();
   });
@@ -5568,9 +5330,8 @@ describe("<ProvidersSettingsPanel />", () => {
     // The notice still gets its stop - that is the whole carve-out.
     fireEvent.click(screen.getByRole("button", { name: "Keep new account" }));
 
-    // But acknowledging it ends the dialog rather than handing back an edit
-    // form with nothing staged in it: the user came here to sign in, and the
-    // sign-in is over however the account came back.
+    // But acknowledging it ends the dialog rather than handing back an edit form with nothing staged in it: the
+    // user came here to sign in, and the sign-in is over however the account came back.
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Sign in to Work" }),
@@ -5756,9 +5517,8 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
 
-    // Cancelling kills the host's login child, which makes the in-flight
-    // awaitLogin resolve (not reject) - simulate that late resolution racing
-    // the inline flow's unmount.
+    // Cancelling kills the host's login child, which makes the in-flight awaitLogin resolve (not reject) -
+    // simulate that late resolution racing the inline flow's unmount.
     act(() => {
       awaitOptions.onSuccess({
         state: {
@@ -5786,12 +5546,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("does not offer the share-skills-and-plugins checkbox for codex (overlay layout, not a bug)", () => {
-    // Codex's exclusion is CORRECT: seedManagedProfileDir honours
-    // shareSkillsAndPlugins only on the partial-overlay layout branch
-    // (profile-seeding.ts), and codex takes the overlay branch whose seeding
-    // never reads the flag. Offering the checkbox here would send a request
-    // the host silently discards. Do not "fix" this by adding codex to
-    // PROVIDER_SHARES_SKILLS_AND_PLUGINS without changing the host layout.
+    // Codex's exclusion is correct: seedManagedProfileDir honours shareSkillsAndPlugins only on the
+    // partial-overlay layout branch (profile-seeding.ts).
     providerMocks.listResult.data = {
       providers: [
         {
@@ -6121,9 +5877,8 @@ describe("<ProvidersSettingsPanel />", () => {
       });
     });
 
-    // Email collision holds the dialog open on the resolved identity instead
-    // of auto-finalizing - the split-by-org case that minting distinct
-    // same-email profiles makes possible.
+    // Email collision holds the dialog open on the resolved identity instead of auto-finalizing - the split-by-org
+    // case that minting distinct same-email profiles makes possible.
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeDefined();
     expect(within(dialog).getByText("Signed in as")).toBeDefined();
@@ -6635,9 +6390,8 @@ describe("<ProvidersSettingsPanel />", () => {
       accentColor: selectedColor,
     });
 
-    // Identity is a real committed render before the finalize effect settles.
-    // Implicit dismissal must neither close nor delete the authenticated
-    // profile during that transient window.
+    // Identity is a real committed render before the finalize effect settles. Implicit dismissal must neither
+    // close nor delete the authenticated profile during that transient window.
     fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
     expect(screen.getByRole("dialog")).toBeDefined();
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
@@ -6729,35 +6483,16 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 });
 
-// -----------------------------------------------------------------------------
-// Mobile section picker: below `md`, `ProviderDetail` swaps the desktop tab rail
-// for a dropdown (see `provider-section-select.tsx`). A separate, top-level
-// `describe` rather than nesting inside the suite above - it needs its own
-// narrow-viewport `beforeEach`/`afterEach` (the outer suite's tests assume the
-// default 1024px width), and keeping the override scoped to these tests is what
-// stops it leaking into every test above or below.
-// -----------------------------------------------------------------------------
+// A separate, top-level `describe` rather than nesting inside the suite above.
 
-// Radix Select opens from a click on the trigger, and the trigger is named by
-// its `aria-label` - which is what tells it apart from the PROVIDER select one
-// row above it. (The three-way Auto/On/Off enablement control used to render
-// a THIRD combobox, labelled "Availability", when a provider's `enablementMode`
-// was set - that control is gone, so querying by name is now belt-and-braces
-// rather than load-bearing, and is kept for that reason.)
+// Radix Select opens from a click on the trigger, and the trigger is named by its `aria-label` - which is what
+// tells it apart from the provider select one row above it.
 function openSectionPicker(): void {
   fireEvent.click(screen.getByRole("combobox", { name: "Section" }));
 }
 
-/**
- * The section picker's own rendered items, scoped to ITS `Select` root - not
- * `screen`, which also holds the always-mounted `ProvidersMobileSelect` one
- * row above it (same collision `railProviderRow` exists for). The mock
- * renders a `Select`'s trigger and content as siblings under one wrapping
- * element (see the `@/components/ui/select` mock), and the trigger is
- * `role="combobox"` rather than `"button"`, so scoping to that sibling group
- * and querying `role="button"` reaches exactly the section rows and nothing
- * else on the page.
- */
+/** The mock renders a `Select`'s trigger and content as siblings under one wrapping element (see the
+ * `@/components/ui/select` mock), and the trigger is `role="combobox"` rather than `"button"`. */
 function sectionPicker(): BoundFunctions<typeof queries> {
   const trigger = screen.getByRole("combobox", { name: "Section" });
   const root = trigger.parentElement;
@@ -6767,9 +6502,8 @@ function sectionPicker(): BoundFunctions<typeof queries> {
   return within(root);
 }
 
-// `FULL_TABS` (general/env/usage/mcp/plugins/skills) has no `account` or
-// `modelProviders` entry, so it cannot exercise every section row. This adds
-// both, on top of the same `mcp`/`plugins`/`skills` capability blocks.
+// `FULL_TABS` (general/env/usage/mcp/plugins/skills) has no `account` or `modelProviders` entry, so it cannot
+// exercise every section row. This adds both, on top of the same `mcp`/`plugins`/`skills` capability blocks.
 const PICKER_EIGHT_TABS: ProviderNativeCapabilities = {
   ...FULL_TABS,
   supportedTabs: [
@@ -6801,10 +6535,8 @@ function pickerProviderState(input: {
 
 describe("<ProvidersSettingsPanel /> mobile section picker", () => {
   beforeEach(() => {
-    // `useIsMobileViewport` reads `window.innerWidth` directly (not
-    // `matchMedia().matches`, which the global test shim always reports as
-    // `false`), so setting it before render is enough to force the phone
-    // presentation.
+    // `useIsMobileViewport` reads `window.innerWidth` directly (not `matchMedia.matches`, which the global test
+    // shim always reports as `false`), so setting it before render is enough to force the phone presentation.
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       value: 400,
@@ -6868,10 +6600,8 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
 
     openSectionPicker();
 
-    // Same list and same labels the desktop rail draws, in `PROVIDER_TAB_ORDER`
-    // - the point of the swap is that only the CONTAINER differs. Compared as
-    // one ordered array rather than eight presence checks, since the order is
-    // half of what is being asserted.
+    // Compared as one ordered array rather than eight presence checks, since the order is half of what is being
+    // asserted.
     expect(
       sectionPicker()
         .getAllByRole("button")
@@ -6895,10 +6625,8 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
       </TooltipProvider>,
     );
 
-    // Radix points a pane's `aria-labelledby` at the trigger that selects it.
-    // The dropdown replaces the whole `TabsList`, so that id names an element
-    // that is not rendered - the phone arm labels the pane by its section
-    // instead, and clears the dangling reference.
+    // The dropdown replaces the whole `TabsList`, so that id names an element that is not rendered - the phone arm
+    // labels the pane by its section instead, and clears the dangling reference.
     const panel = screen.getByRole("tabpanel");
     expect(panel.getAttribute("aria-labelledby")).toBeNull();
     expect(panel.getAttribute("aria-label")).toBe("Account");
@@ -6941,9 +6669,8 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
       </TooltipProvider>,
     );
 
-    // The deep link's section is the one on screen, and it is READABLE on
-    // arrival rather than merely present in the DOM - a phone spends no gesture
-    // on a chooser for a question the caller already answered.
+    // The deep link's section is the one on screen, and it is readable on arrival rather than merely present in
+    // the DOM - a phone spends no gesture on a chooser for a question the caller already answered.
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     expect(screen.getByText("Environment variables")).toBeDefined();
@@ -6957,14 +6684,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
       </TooltipProvider>,
     );
 
-    // Checked as exact class-LIST membership rather than a substring: the
-    // `md:`-prefixed class contains the unprefixed one as a substring
-    // (`md:overflow-y-auto` contains `overflow-y-auto`), so a substring check
-    // cannot tell "scrolls at every width" from "scrolls from md up" apart -
-    // and telling those two apart is the entire point of this assertion.
-    // jsdom applies no CSS and computes no layout, so the class list is the
-    // only observable this test has for which breakpoint a scroll declaration
-    // lives under.
+    // Checked as exact class-list membership rather than a substring.
     const panel = screen.getByRole("tabpanel");
     const classes = panel.className.split(" ");
     expect(classes).not.toContain("overflow-y-auto");

@@ -12,13 +12,8 @@ export interface GitWatcherStatusNoticeProps {
   readonly status: GitWatcherStatus | null;
   readonly className: string | undefined;
   /**
-   * Icon-only. For toolbars that share a narrow pane - a diff tile can be
-   * dragged to a 240px minimum, where a non-shrinking two-word label next to
-   * three or four icon controls overflows and clips them.
-   *
-   * Nothing is lost: the tooltip still carries the whole explanation and the
-   * remedy, and the trigger keeps an accessible name, so keyboard and
-   * assistive-tech users read exactly what the wide form says.
+   * Icon-only.
+   * For toolbars that share a narrow pane - a diff tile can be dragged to a 240px minimum, where a non-shrinking two-word label next to three or four icon controls overflows and clips them.
    */
   readonly compact: boolean;
 }
@@ -29,14 +24,8 @@ interface NoticeCopy {
 }
 
 /**
- * Only the two DEGRADED states render. `watching` needs no affordance (it is
- * the expectation), and `starting` is transient by construction - the host
- * cannot arm its watcher until the first poll resolves the repo root, so every
- * subscription passes through it. Rendering `starting` would put a notice on
- * screen for a moment on every single tab open.
- *
- * `null` renders nothing too, and that is a deliberate refusal to guess: it
- * means the host never told us, not that all is well.
+ * Only the two DEGRADED states render.
+ * `watching` needs no affordance (it is the expectation), and `starting` is transient by construction - the host cannot arm its watcher until the first poll resolves the repo root, so every subscription passes through it.
  */
 function noticeCopyFor(status: GitWatcherStatus): NoticeCopy | null {
   if (status.state === "degraded-capacity") {
@@ -57,13 +46,8 @@ function noticeCopyFor(status: GitWatcherStatus): NoticeCopy | null {
 }
 
 /**
- * A quiet marker that this repo's Git changes are arriving on a poll rather
- * than on filesystem events.
- *
- * Deliberately not a banner, toast or blocking state: polling is CORRECT, only
- * slower - every tick recomputes the full changeset, so nothing is ever missed,
- * it just surfaces with up to ~30s of delay. The point is to make the delay
- * explicable rather than to demand action.
+ * A quiet marker that this repo's Git changes are arriving on a poll rather than on filesystem events.
+ * Deliberately not a banner, toast or blocking state: polling is CORRECT, only slower - every tick recomputes the full changeset, so nothing is ever missed, it just surfaces with up to ~30s of delay.
  */
 export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
   const status = props.status;
@@ -76,11 +60,7 @@ export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
 
   return (
     <Tooltip>
-      {/* A real focusable trigger, NOT an `asChild` span. The tooltip carries
-          the entire explanation and the remedy, so a non-focusable trigger
-          would leave keyboard-only users with the two-word label and no way to
-          reach the reason for it. Radix's default trigger is a button, which
-          also gives the label to assistive tech. */}
+      {/* The tooltip carries the entire explanation and the remedy, so a non-focusable trigger would leave keyboard-only users with the two-word label and no way to reach the reason for it. */}
       <TooltipTrigger
         className={cn(
           "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5",
@@ -98,27 +78,13 @@ export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
         <Icon className="size-3.5 text-muted-foreground/60" />
         {props.compact ? null : copy.label}
       </TooltipTrigger>
-      {/* No width cap here: `TooltipContent` already applies `w-fit max-w-xs`,
-          so this was a redundant restatement of the primitive's own value.
-          Whether that cap should be viewport-bounded is a question about the
-          shared primitive and every tooltip in the app, not about this one. */}
+      {/* No width cap here: `TooltipContent` already applies `w-fit max-w-xs`, so this was a redundant restatement of the primitive's own value. Whether that cap should be viewport-bounded is a question about the shared primitive and every tooltip in the app, not about this one. */}
       <TooltipContent className={undefined}>
-        {/* Block wrapper, not two bare siblings: `TooltipContent` is an
-            `inline-flex` ROW, so an explanation and a diagnostic placed
-            directly inside it become side-by-side columns and each wraps into
-            a narrow ribbon. One flex item that stacks internally is the fix
-            that doesn't reach into the shared primitive. */}
+        {/* Block wrapper, not two bare siblings: `TooltipContent` is an `inline-flex` ROW, so an explanation and a diagnostic placed directly inside it become side-by-side columns and each wraps into a narrow ribbon. One flex item that stacks internally is the fix that doesn't reach into the shared primitive. */}
         <div className="w-full">
           <p>{copy.explanation}</p>
           {status.detail === null ? null : (
-            // Host diagnostics, rendered verbatim and never parsed: the wording
-            // is unstable by contract, which is exactly why it is not schema.
-            //
-            // Toned against `background`, not `muted-foreground`: this surface
-            // is INVERSE (`bg-foreground`/`text-background`), so the muted
-            // token - designed to sit on `bg-background` - lands dark-on-dark
-            // in light themes and washes out in dark ones, obscuring the one
-            // line that carries the remedy.
+            // Host diagnostics, rendered verbatim and never parsed: the wording is unstable by contract, which is exactly why it is not schema.
             <p className="mt-1 text-background/70">{status.detail}</p>
           )}
         </div>

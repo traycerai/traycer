@@ -22,17 +22,8 @@ import type {
 } from "@traycer/protocol/config/credentials-mutation";
 import { fakeCredentialsMutationStore } from "../../__tests__/support/credentials-mutation-store";
 
-// Native Packaging runner-discipline migration: every runner-aware
-// command (logout, config env set/delete, config shell set/reset,
-// cli re-anchor, host uninstall) must emit exactly one terminal
-// `result` event in JSON mode and route errors through `cliError(...)`
-// with a stable machine-readable code. The runner - not the command -
-// owns process.exit and the NDJSON envelope.
-//
-// This file pins the behaviour of the commands the legacy-JSON
-// migration ticket added/touched. It mirrors the harness shape of
-// `legacy-json-migration.test.ts` so future drift in the runner
-// contract surfaces in the same way across the suite.
+// Native Packaging runner-discipline migration: every runner-aware command (logout, config env set/delete, config shell set/reset, cli re-anchor, host uninstall) must emit exactly one terminal `result` event in JSON mode and route errors through `cliError(...)` with a stable machine-readable code.
+// The runner - not the command - owns process.exit and the NDJSON envelope.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -59,11 +50,8 @@ beforeEach(() => {
   process.env.USERPROFILE = workHome;
   stdoutChunks = [];
   stderrChunks = [];
-  // `write`'s completion callback is load-bearing, not decoration: the
-  // runner awaits it (via `flushStdio`) before `process.exit` so a terminal
-  // NDJSON line larger than the 64 KiB pipe buffer is not truncated on the
-  // way to Desktop. A stub that swallows the callback would leave that
-  // flush waiting on a write that never reports completion, so invoke it.
+  // `write`'s completion callback is load-bearing, not decoration: the runner awaits it (via `flushStdio`) before `process.exit` so a terminal NDJSON line larger than the 64 KiB pipe buffer is not truncated on the way to Desktop.
+  // A stub that swallows the callback would leave that flush waiting on a write that never reports completion, so invoke it.
   stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
     callback: (() => void) | undefined,
@@ -100,11 +88,8 @@ afterEach(() => {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
   rmSync(workHome, { recursive: true, force: true });
-  // The runner now signals failure by SETTING `process.exitCode` rather than
-  // calling `process.exit`, so a test that drives a failing command leaves it
-  // set on this very process. Left behind, vitest exits non-zero with every
-  // test green - a red suite with nothing to point at. Clear it here so no
-  // individual test has to remember.
+  // The runner now signals failure by SETTING `process.exitCode` rather than calling `process.exit`, so a test that drives a failing command leaves it set on this very process.
+  // Left behind, vitest exits non-zero with every test green - a red suite with nothing to point at.
   process.exitCode = undefined;
   stdoutSpy.mockRestore();
   stderrSpy.mockRestore();
@@ -126,10 +111,8 @@ function joined(chunks: readonly string[]): string {
 async function runAndCapture(
   fn: () => Promise<void>,
 ): Promise<ParsedRunnerOutput> {
-  // The runner records its code on `process.exitCode` and lets the loop drain
-  // instead of calling `process.exit` (see runner/exit.ts). Snapshot and
-  // RESTORE it around the run: a leaked non-zero value would otherwise make
-  // the vitest process itself exit non-zero with every test green.
+  // The runner records its code on `process.exitCode` and lets the loop drain instead of calling `process.exit` (see runner/exit.ts).
+  // Snapshot and RESTORE it around the run: a leaked non-zero value would otherwise make the vitest process itself exit non-zero with every test green.
   const priorExitCode = process.exitCode;
   process.exitCode = undefined;
   try {
@@ -137,12 +120,8 @@ async function runAndCapture(
   } catch (err) {
     process.exitCode = priorExitCode;
     if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-      // Deliberately fatal rather than translated. This harness USED to report
-      // the thrown code as the run's exit code, which meant every
-      // `expect(out.exitCode)` below passed under either implementation - so
-      // none of them was evidence for int#4840's drain fix. Reaching
-      // `process.exit` is now the failure, because on win32 that is the
-      // teardown abort coming back.
+      // Deliberately fatal rather than translated.
+      // This harness USED to report the thrown code as the run's exit code, which meant every `expect(out.exitCode)` below passed under either implementation - so none of them was evidence for int#4840's drain fix.
       throw new Error(
         `${err.message.replace("__test_exit_", "process.exit(")}) was called: the runner must record process.exitCode and let the loop drain, never exit abruptly`,
       );
@@ -214,10 +193,8 @@ function assertSingleTerminalResult(out: ParsedRunnerOutput): void {
 
 // ----------------------------- logoutCommand ----------------------------
 
-// `traycer logout` now signs out through the locked mutation store (§7): a
-// pre-read decides `loggedOut`, and `signOut` deletes-under-lock + tombstones.
-// Mock the store-factory helpers so the runner contract is exercised without
-// touching disk.
+// `traycer logout` now signs out through the locked mutation store (§7): a pre-read decides `loggedOut`, and `signOut` deletes-under-lock + tombstones.
+// Mock the store-factory helpers so the runner contract is exercised without touching disk.
 function mockLogoutStore(args: {
   readonly hadSession: boolean;
   readonly signOut: MutationResult;
@@ -269,9 +246,7 @@ describe("logoutCommand runner contract", () => {
       status: "ok",
       data: {
         chatCache: { path: cliChatPartCacheDir(), cleared: true, error: null },
-        // Deprecated alias, kept for scripts written against the old shape -
-        // it must stay in lockstep with `chatCache.cleared` rather than drift
-        // or get dropped silently.
+        // Deprecated alias, kept for scripts written against the old shape - it must stay in lockstep with `chatCache.cleared` rather than drift or get dropped silently.
         chatCacheCleared: true,
       },
     });
@@ -298,10 +273,8 @@ describe("logoutCommand runner contract", () => {
     const { logoutCommand } = await import("../logout");
     const out = await runJsonCommand(logoutCommand);
     assertSingleTerminalResult(out);
-    // The sign-out itself landed - only the cache cleanup did not - so this is
-    // still `status: "ok"` with `data.loggedOut: true`, not an error envelope.
-    // But the exit code flips to 1: an unattended `logout && hand-over` must
-    // not treat "content still on disk" as a clean hand-off.
+    // The sign-out itself landed - only the cache cleanup did not - so this is still `status: "ok"` with `data.loggedOut: true`, not an error envelope.
+    // But the exit code flips to 1: an unattended `logout && hand-over` must not treat "content still on disk" as a clean hand-off.
     expect(out.exitCode).toBe(1);
     expect(out.terminal).toMatchObject({
       status: "ok",
@@ -348,7 +321,7 @@ describe("logoutCommand runner contract", () => {
       data: { loggedOut: false },
     });
     // logout always advances the tombstone via signOut, even when nothing was on
-    // disk — so a racing first-write can't resurrect a just-signed-out session.
+    // disk - so a racing first-write can't resurrect a just-signed-out session.
     expect(store.signOut).toHaveBeenCalledTimes(1);
   });
 
@@ -378,9 +351,8 @@ describe("logoutCommand runner contract", () => {
     const entry = join(cacheDir, digest.slice(0, 2), digest);
     mkdirSync(dirname(entry), { recursive: true });
     writeFileSync(entry, "a published shard's bytes");
-    // The injected state, OBSERVED before the act. Without this the assertion
-    // after would pass just as well against a cache directory that never
-    // existed, which is precisely the shape of a test that proves nothing.
+    // The injected state, OBSERVED before the act.
+    // Without this the assertion after would pass just as well against a cache directory that never existed, which is precisely the shape of a test that proves nothing.
     expect(existsSync(entry)).toBe(true);
 
     const { logoutCommand } = await import("../logout");
@@ -425,10 +397,8 @@ describe("logoutCommand runner contract", () => {
     const error = out.terminal?.error as Record<string, unknown>;
     expect(error.code).toBe("E_UNEXPECTED");
     expect(out.exitCode).toBe(1);
-    // The message must not claim the session survived. `commitMutation`
-    // DELETES the credentials file at its apply step and only then finalizes
-    // the sidecar, so a `commit-failed` can arrive with the file already gone -
-    // "could not confirm" is the whole of what is known here.
+    // The message must not claim the session survived.
+    // `commitMutation` DELETES the credentials file at its apply step and only then finalizes the sidecar, so a `commit-failed` can arrive with the file already gone - "could not confirm" is the whole of what is known here.
     expect(String(error.message)).toContain("could not confirm");
     expect(String(error.message)).toContain(
       "may or may not still be signed in",
@@ -511,12 +481,8 @@ describe("buildConfigEnvDeleteCommand missing-key surface", () => {
 // ---------------------- buildConfigShellSetCommand ---------------------
 
 describe("buildConfigShellSetCommand conflict-detection", () => {
-  // The actual `--clear-args` vs positional-args conflict is enforced in
-  // the entrypoint wrapper (see index.ts); the command body itself
-  // refuses an all-null call so a future re-route still routes through
-  // a CONFIG_INVALID_VALUE rather than a silent no-op. Both surfaces
-  // share the same error code, so a refactor that pushes the check up
-  // OR down keeps the contract stable.
+  // The actual `--clear-args` vs positional-args conflict is enforced in the entrypoint wrapper (see index.ts); the command body itself refuses an all-null call so a future re-route still routes through a CONFIG_INVALID_VALUE rather than a silent no-op.
+  // Both surfaces share the same error code, so a refactor that pushes the check up OR down keeps the contract stable.
   it("rejects path=null + args=null with CONFIG_INVALID_VALUE", async () => {
     const { buildConfigShellSetCommand } = await import("../config-shell-set");
     const cmd = buildConfigShellSetCommand({ path: null, args: null });
@@ -530,9 +496,8 @@ describe("buildConfigShellSetCommand conflict-detection", () => {
   });
 
   it("entrypoint: --clear-args combined with positional args is rejected via CONFIG_INVALID_VALUE", async () => {
-    // The wrapper in index.ts owns the conflict check. We exercise it
-    // through the live commander tree to keep this test honest about
-    // what the user actually sees on the wire.
+    // The wrapper in index.ts owns the conflict check.
+    // We exercise it through the live commander tree to keep this test honest about what the user actually sees on the wire.
     const { buildProgram } = await import("../../index");
     const program = buildProgram();
     program.exitOverride();
@@ -543,10 +508,8 @@ describe("buildConfigShellSetCommand conflict-detection", () => {
       );
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        // Not tolerated any more: the runner records the failure on
-        // `process.exitCode` and returns normally. A `process.exit` here is
-        // the win32 teardown abort's precondition, so accepting it would let
-        // this case pass against the very implementation it exists to reject.
+        // Not tolerated any more: the runner records the failure on `process.exitCode` and returns normally.
+        // A `process.exit` here is the win32 teardown abort's precondition, so accepting it would let this case pass against the very implementation it exists to reject.
         throw new Error(
           `${err.message.replace("__test_exit_", "process.exit(")}) was called during a --clear-args parse failure`,
         );
@@ -601,9 +564,7 @@ describe("buildCliReAnchorCommand happy-path manual re-anchor", () => {
     const binaryPath = join(workHome, "traycer-bin");
     writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
-    // Point the readCliManifest system-marker probe at an empty tmp dir
-    // so a Linux CI host with /var/lib/traycer/source.apt present
-    // doesn't inject a fake "apt" prior-state into the test.
+    // Point the readCliManifest system-marker probe at an empty tmp dir so a Linux CI host with /var/lib/traycer/source.apt present doesn't inject a fake "apt" prior-state into the test.
     const markerSandbox = mkdtempSync(join(tmpdir(), "traycer-marker-sb-"));
     const { __setSystemSourceMarkerDirForTest } =
       await import("../../manifest/cli-manifest");

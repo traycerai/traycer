@@ -7,14 +7,7 @@ import {
   createDiskChatPartCache,
 } from "../chat-part-cache";
 
-/**
- * Driven against a REAL directory, not a memfs.
- *
- * Everything interesting about this adapter is filesystem behaviour - the
- * rename, the fan-out, what a half-written file reads back as, what happens
- * when a path is not writable - and a stub filesystem is exactly the thing that
- * would make all four pass while none of them worked.
- */
+/** Driven against a REAL directory, not a memfs. Everything interesting about this adapter is filesystem behaviour - the rename, the fan-out, what a half-written file reads back as, what happens when a path is not writable - and a stub filesystem is exactly the thing that would make all four pass while none of them worked. */
 
 const DIGEST_A =
   "0000000000000000000000000000000000000000000000000000000000000001";

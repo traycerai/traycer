@@ -91,9 +91,6 @@ function environment(
       },
     },
     services: {
-      // Slice 2 has no real session wiring yet - a synthetic handle is the
-      // deliberate fixture seam the design calls for (real host/session
-      // integration is slice 5).
       openEpicHandle:
         {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
       hostClient: null,
@@ -202,10 +199,6 @@ describe("tile surface environment registry", () => {
     publishTileSurfaceEnvironment(first);
     expect(getTileSurfaceEnvironment("chat-1")).toBe(first);
 
-    // Simulate a structural move: the tile stays a member (instanceId
-    // unchanged) while its owning pane changes underneath it - the source
-    // slot goes quiet (no unregister call exists; see the module doc) and
-    // the destination slot has not published yet.
     useEpicCanvasStore.setState((state) => ({
       canvasByTabId: {
         ...state.canvasByTabId,
@@ -280,9 +273,8 @@ describe("tile surface environment registry", () => {
         },
       }),
     );
-    // The destination slot publishes for the same instance BEFORE the source
-    // slot tears down - the cross-commit transfer ordering. The source's
-    // teardown must not conceal the live record.
+    // The destination slot publishes for the same instance BEFORE the source slot tears down - the cross-commit transfer ordering.
+    // The source's teardown must not conceal the live record.
     const destination = environment({});
     publishTileSurfaceEnvironment(destination);
 
@@ -306,9 +298,7 @@ describe("tile surface environment registry", () => {
     const source = environment({});
     publishTileSurfaceEnvironment(source);
 
-    // Source tears down before any destination has published - the accepted
-    // gap. The record is RETAINED (still non-null, still a member) but stops
-    // claiming the rect.
+    // Source tears down before any destination has published - the accepted gap.
     retractTileSurfacePresentation(
       "chat-1",
       source.services.geometryAnchorElement,
@@ -319,9 +309,7 @@ describe("tile surface environment registry", () => {
       false,
     );
 
-    // Elapsed time does not end the gap: nothing in the registry schedules or
-    // bounds the recovery. Only the destination's own publish does - which is
-    // why the bound is "until the destination publishes", not "one frame".
+    // Only the destination's own publish does - which is why the bound is "until the destination publishes", not "one frame".
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
       false,
@@ -530,9 +518,7 @@ describe("tile surface environment registry", () => {
       },
     );
 
-    // Walk recency through the remaining tabs so ref0 is the least-recently
-    // active and is evicted once the retained cap is exceeded (same pattern
-    // as the membership suite's eviction pin).
+    // Walk recency through the remaining tabs so ref0 is the least-recently active and is evicted once the retained cap is exceeded (same pattern as the membership suite's eviction pin).
     for (const ref of [ref1, ref2, ref3, ref4, ref5]) {
       useTabsStore.setState((state) => ({
         ...state,
@@ -564,9 +550,7 @@ describe("tile surface environment registry", () => {
     resetTileSurfaceEnvironmentRegistryForTesting();
     expect(getTileSurfaceEnvironment("chat-1")).toBeNull();
 
-    // Re-seed membership and publish again for the same instanceId (fake
-    // reincarnation). The pre-reset subscriber must not fire - the registry
-    // dropped its listener map on reset.
+    // The pre-reset subscriber must not fire - the registry dropped its listener map on reset.
     seedMember("chat-1", "tab-1");
     publishTileSurfaceEnvironment(environment({}));
     expect(getTileSurfaceEnvironment("chat-1")).not.toBeNull();
@@ -630,10 +614,7 @@ describe("tile surface environment registry", () => {
     seedMember("chat-1", "tab-1");
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
-    // Simulate the registry module initializing (or being reset) while
-    // membership is already non-empty - the "normal shape" the review
-    // flagged, since the canvas/tabs stores are synchronously hydrated
-    // before this module's own module-load-time snapshot runs.
+    // Simulate the registry module initializing (or being reset) while membership is already non-empty - the "normal shape" the review flagged, since the canvas/tabs stores are synchronously hydrated before this module's own module-load-time snapshot runs.
     resetTileSurfaceEnvironmentRegistryForTesting();
 
     publishTileSurfaceEnvironment(environment({}));

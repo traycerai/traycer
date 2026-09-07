@@ -1,91 +1,13 @@
 /**
- * `worktree.deleteBatchByPath@1.0` - one host-owned deletion COMMAND over N
- * approved targets. `@1.1` adds per-target `stopOwners` consent and typed busy
- * details on `target.failed` while keeping the released `@1.0` schemas frozen.
- *
- * Added rather than growing `worktree.deleteByPath@1.0`, whose request and
- * frames are released and frozen. The two differ in ownership, not in
- * mechanism: the released stream is one target whose lifetime is the socket's,
- * while a command here is minted by the client, owned by the host, and
- * survives its observer. That is what lets the host aggregate N targets into
- * ONE durable completion notification - a renderer-side queue of N streams
- * cannot, because it has no identity the host can attribute the summary to.
- *
- * ## Start versus observe
- *
- * The open request is a discriminated union, and that discriminant is the
- * whole replay-safety story for a destructive operation.
- *
- * `WsStreamClient` re-sends a session's ORIGINAL open request on every
- * reconnect, automatically and indefinitely. Single-flight alone cannot make
- * that safe: the map is process-local and evicted a minute after completion,
- * so an outage longer than the grace window - or a host restart - would turn
- * an automatic re-subscribe into a second execution of the same `commandId`,
- * and its result would overwrite the durable summary the first run wrote.
- *
- * So the authority to START work lives in the request itself: only a `start`
- * may create a command, and a client only ever issues one from an explicit
- * user action. Once a `start` has actually reached the host, the client
- * re-subscribes as `observe`, which can attach to a live command but can never
- * create one. A command the host no longer knows about (evicted, or lost to a
- * restart) answers `command.failed` - honest uncertainty, no deletion.
- *
- * This is deliberately NOT keyed off the completion notification row: policy
- * can suppress that row and the sink write can fail, so it is not an execution
- * ledger.
- *
- * ## Command semantics (enforced by `WorktreeDeletionCommandService`)
- *
- * - `commandId` is a client-minted UUID. Commands are single-flight by
- *   `(userId, commandId)` for the host process lifetime, so a duplicate
- *   subscribe during the bounded grace window ATTACHES to the running command
- *   instead of executing it a second time. There is no cross-restart
- *   exactly-once claim: an unconfirmed destructive result stays uncertain and
- *   needs explicit user action.
- * - Closing the socket detaches that observer. It does NOT cancel accepted
- *   work: remaining targets run and the completion notification is still
- *   written. This is the whole point of host ownership - a Settings tab closed
- *   mid-bulk-delete must not strand half the selection.
- * - An empty `targets` list is not a command: the resolver answers
- *   `command.complete` with zero counts, creates no command, and writes no
- *   notification row.
- * - Per-target frames are NOT replayed to an observer that attached late, so a
- *   client that missed some must treat `command.complete` as terminal for
- *   every target it never saw settle.
- *
- * Server frames are tagged by `worktreePath`, the target's own stable key.
- * Requests carry unique paths (the schema rejects duplicates), so a path
- * identifies exactly one target for the command's lifetime and a client can
- * route a frame to its per-target record without minting a parallel id space.
- *
- * - `target.started`  - target validated and not busy; `hasTeardown` says
- *                       whether a teardown step will run.
- * - `target.phase`    - `teardown` | `remove`.
- * - `target.output`   - a chunk of teardown stdout/stderr.
- * - `target.complete` - terminal for that target; `deleted` is its outcome
- *                       (a declined/no-op delete is `false`, not a failure).
- * - `target.failed`   - terminal for that target; displayable reason.
- * - `command.complete`- terminal for the COMMAND, after every target settled.
- * - `command.failed`  - terminal: no work ran or will run UNDER THIS
- *                       SUBSCRIPTION, with a displayable reason. Either the
- *                       host cannot serve the command at all (worktree service
- *                       unavailable), or an `observe` named a command this host
- *                       no longer holds. No target frames precede it.
- * - `pong`            - heartbeat response.
- *
- * Client frames: `ping` only, like the released stream.
+ * `worktree.deleteBatchByPath@1.0` - one host-owned deletion COMMAND over N approved targets.
+ * Added rather than growing `worktree.deleteByPath@1.0`, whose request and frames are released and frozen.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { worktreeBusyHoldersWireFieldSchema } from "@traycer/protocol/framework/worktree-busy-holders";
 import { worktreeEntryScriptsSchema } from "@traycer/protocol/host/worktree-schemas";
 
-/**
- * Where the command came from. Durable: it rides into the notification
- * payload, so the row can say "a bulk delete you started in Settings" without
- * persisting a route. Closed on purpose - an unrecognized source is a client
- * bug, not a compatibility event, and every producer is in this repo.
- */
+/** Where the command came from. */
 export const worktreeDeletionSourceSchema = z.enum([
   "settings",
   "task_cleanup",
@@ -99,23 +21,14 @@ export type WorktreeDeletionSource = z.infer<
 
 export const worktreeDeleteBatchTargetSchema = z.object({
   worktreePath: z.string().min(1),
-  /**
-   * Per-target script override from the Settings review modal. `null` means
-   * "read the worktree's own `.traycer/environment.json`", matching the
-   * released single-target request.
-   */
+  /** Per-target script override from the Settings review modal. */
   scripts: worktreeEntryScriptsSchema.nullable(),
 });
 export type WorktreeDeleteBatchTarget = z.infer<
   typeof worktreeDeleteBatchTargetSchema
 >;
 
-/**
- * `worktree.deleteBatchByPath@1.1` target. Consent covers whichever owners are
- * active when deletion runs, so the target needs only `stopOwners`; there is
- * deliberately no holder-inventory revision. Defaulting to false lets a 1.1
- * host parse a 1.0-shaped target with the original refuse-on-busy behavior.
- */
+/** `worktree.deleteBatchByPath@1.1` target. */
 export const worktreeDeleteBatchTargetSchemaV11 =
   worktreeDeleteBatchTargetSchema.extend({
     stopOwners: z.boolean().default(false),
@@ -125,10 +38,8 @@ export type WorktreeDeleteBatchTargetV11 = z.infer<
 >;
 
 /**
- * Client-minted UUID naming a command. Validated as a UUID rather than an open
- * string so a client cannot collapse distinct commands onto a shared constant
- * and have the single-flight map silently attach the second one to the first's
- * already-finished result.
+ * Client-minted UUID naming a command.
+ * Validated as a UUID rather than an open string so a client cannot collapse distinct commands onto a shared constant and have the single-flight map silently attach the second one to the first's already-finished result.
  */
 const commandIdSchema = z.uuid();
 
@@ -147,10 +58,8 @@ export const worktreeDeleteBatchByPathOpenRequestSchema = z.discriminatedUnion(
        * single durable Task destination for the completion notification. */
       epicId: z.string().min(1).optional(),
       /**
-       * Every approved target, in one request. Paths must be unique: the frame
-       * tagging keys off `worktreePath`, and a repeated path would make two
-       * target records indistinguishable on the wire (and schedule the same
-       * directory twice).
+       * Every approved target, in one request.
+       * Paths must be unique: the frame tagging keys off `worktreePath`, and a repeated path would make two target records indistinguishable on the wire (and schedule the same directory twice).
        */
       targets: z
         .array(worktreeDeleteBatchTargetSchema)
@@ -162,9 +71,8 @@ export const worktreeDeleteBatchByPathOpenRequestSchema = z.discriminatedUnion(
         ),
     }),
     /**
-     * Re-attaches to a command already accepted by this host process. Carries
-     * NO targets on purpose: an observe request that cannot describe work is
-     * structurally incapable of starting any, however it is routed or replayed.
+     * Re-attaches to a command already accepted by this host process.
+     * Carries NO targets on purpose: an observe request that cannot describe work is structurally incapable of starting any, however it is routed or replayed.
      */
     z.object({
       mode: z.literal("observe"),
@@ -176,11 +84,7 @@ export type WorktreeDeleteBatchByPathOpenRequest = z.infer<
   typeof worktreeDeleteBatchByPathOpenRequestSchema
 >;
 
-/**
- * Frozen @1.1 open-request schema. A 1.0 host parses against the separate
- * schema above and strips `stopOwners`; clients therefore gate consented
- * targets on the negotiated minor instead of assuming the field survived.
- */
+/** Frozen @1.1 open-request schema. */
 export const worktreeDeleteBatchByPathOpenRequestSchemaV11 =
   z.discriminatedUnion("mode", [
     z.object({
@@ -272,11 +176,7 @@ export type WorktreeDeleteBatchByPathServerFrame = z.infer<
   typeof worktreeDeleteBatchByPathServerFrameSchema
 >;
 
-/**
- * Frozen @1.1 server frames. Busy details are optional so a 1.0-shaped failure
- * remains valid. Malformed `holders` and unknown future `code` values sanitize
- * to absent rather than dropping the terminal frame and stranding the target.
- */
+/** Frozen @1.1 server frames. */
 export const worktreeDeleteBatchByPathServerFrameSchemaV11 =
   z.discriminatedUnion("kind", [
     z.object({

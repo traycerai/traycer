@@ -35,22 +35,8 @@ interface PathAuthority {
 }
 
 /**
- * Splits `basePath` into its filesystem authority (a POSIX root, a Windows
- * drive, or a UNC share) and everything after it. The authority is the
- * floor `..` traversal must never climb above - `resolveAbsolutePath` joins
- * and walks `rest`, then re-prepends `prefix` unconditionally, so a drive
- * letter or UNC share can never be stripped or escaped by enough `../`
- * segments.
- *
- * `basePath` may arrive in native backslash form (`D:\repo`,
- * `\\server\share\nested`, a bound workspace root reported by a Windows
- * host) or with mixed separators - normalized to forward slashes FIRST
- * because `WINDOWS_DRIVE_PATH_PATTERN`/`WINDOWS_UNC_PATH_PATTERN` only match
- * the forward-slash form. Without this, a native-backslash drive base falls
- * through both patterns into the POSIX branch, which only strips a LEADING
- * separator - `D:\repo` has none (it starts with `D`), so the drive letter
- * ends up folded into `rest` and re-prefixed with a bogus POSIX `/` root
- * instead of being recognized as the authority itself.
+ * Splits `basePath` into its filesystem authority (a POSIX root, a Windows drive, or a UNC share) and everything after it.
+ * The authority is the floor `..` traversal must never climb above - `resolveAbsolutePath` joins and walks `rest`, then re-prepends `prefix` unconditionally, so a drive letter or UNC share can never be stripped or escaped by enough `../` segments.
  */
 function pathAuthority(basePath: string): PathAuthority {
   const slashForm = basePath.replace(/\\/g, "/");
@@ -72,13 +58,8 @@ function pathAuthority(basePath: string): PathAuthority {
 }
 
 /**
- * Resolves `relativePath` against `basePath` into a normalized absolute path
- * (string manipulation only, no filesystem access). `basePath` must already
- * be absolute. Traversal is clamped at `basePath`'s filesystem authority
- * (POSIX root, Windows drive, or UNC share): enough `../` segments to climb
- * above it lands AT the authority root rather than stripping the drive/share
- * or producing a non-absolute result, matching how a real filesystem clamps
- * `..` at its own root instead of erroring or escaping.
+ * Resolves `relativePath` against `basePath` into a normalized absolute path (string manipulation only, no filesystem access).
+ * `basePath` must already be absolute.
  */
 export function resolveAbsolutePath(
   basePath: string,
@@ -121,12 +102,8 @@ export function isWindowsLikePath(path: string): boolean {
 }
 
 /**
- * Relativizes `path` against the most specific (longest) root in `roots`
- * that contains it, mirroring the file-mention convention: when bound roots
- * overlap (e.g. `/repo` and `/repo/sub`), the longest matching root wins.
- * Returns a normalized POSIX-style relative path, or `null` when `path` is
- * not under any root, or equals a root itself (a directory, not a file
- * under it).
+ * Relativizes `path` against the most specific (longest) root in `roots` that contains it, mirroring the file-mention convention: when bound roots overlap (e.g.
+ * `/repo` and `/repo/sub`), the longest matching root wins.
  */
 export function relativizeToWorkspaceRoot(
   roots: ReadonlyArray<string>,
@@ -151,11 +128,8 @@ export function relativizeToWorkspaceRoot(
 }
 
 /**
- * Splits on `/` only and resolves `.`/`..` segments without touching `\` -
- * unlike `pathe`'s `normalize`, which folds `\` into `/` on every platform.
- * POSIX paths may legally contain a literal backslash in a filename, so this
- * is used in place of `normalizePath` whenever neither side of a comparison
- * is Windows-like (drive-letter or UNC form).
+ * Splits on `/` only and resolves `.`/`..` segments without touching `\` - unlike `pathe`'s `normalize`, which folds `\` into `/` on every platform.
+ * POSIX paths may legally contain a literal backslash in a filename, so this is used in place of `normalizePath` whenever neither side of a comparison is Windows-like (drive-letter or UNC form).
  */
 function normalizePosixPreservingBackslashes(path: string): string {
   const isAbsolute = path.startsWith("/");
@@ -178,10 +152,8 @@ function normalizePosixPreservingBackslashes(path: string): string {
 }
 
 /**
- * True when `candidate` is `root` or a descendant. Browser-safe: folds
- * Windows separators, trailing seps, relative segments, and drive-letter
- * case. POSIX paths keep literal backslashes so a `\` filename is not a
- * separator.
+ * True when `candidate` is `root` or a descendant.
+ * Browser-safe: folds Windows separators, trailing seps, relative segments, and drive-letter case.
  */
 export function pathContainsDirectory(
   root: string,

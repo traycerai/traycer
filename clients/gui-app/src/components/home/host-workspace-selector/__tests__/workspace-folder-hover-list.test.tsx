@@ -92,18 +92,14 @@ describe("WorkspaceFolderHoverList", () => {
       screen.getByText("/Users/me/.traycer/worktrees/infra/feat-login"),
     ).toBeTruthy();
     expect(screen.queryByText("/Users/me/Work/infra")).toBeNull();
-    // This renders inside a HoverCard (not a Tooltip), which mounts a single
-    // copy of its content with no visually-hidden accessible clone - so the
-    // per-folder copy-path button is safe here. One per folder with a path.
+    // This renders inside a HoverCard (not a Tooltip), which mounts a single copy of its content with no
+    // visually-hidden accessible clone - so the per-folder copy-path button is safe here.
     const list = screen.getByTestId("workspace-folder-hover-list");
     expect(
       within(list).getAllByTestId("workspace-hover-copy-path"),
     ).toHaveLength(2);
-    // jsdom can't reproduce Chromium making an overflowing scroll container an
-    // implicit tab stop - assert the explicit opt-out is present instead
-    // (verified against real Chromium separately; see the ticket notes).
-    // `HTMLElement.tabIndex` reads -1 for a plain div with NO tabindex
-    // attribute, so read the content attribute explicitly.
+    // jsdom can't reproduce Chromium making an overflowing scroll container an implicit tab stop - assert the
+    // explicit opt-out is present instead (verified against real Chromium separately; see the ticket notes).
     expect(list.getAttribute("tabindex")).toBe("-1");
   });
 
@@ -152,7 +148,7 @@ describe("WorkspaceFolderHoverList", () => {
       />,
     );
     expect(screen.getByText(/New worktree/)).toBeTruthy();
-    // The source folder path is not shown — there's no path yet.
+    // The source folder path is not shown - there's no path yet.
     expect(screen.queryByText("/Users/me/Work/traycer")).toBeNull();
   });
 
@@ -283,10 +279,8 @@ describe("WorkspaceFolderHoverList", () => {
         ]}
       />,
     );
-    // The hover-preview card has no `max-w-xs`, so this root must claim its own
-    // viewport-aware width - matching the owner preview's `w-[min(92vw,24rem)]`
-    // intent - instead of falling back to an unbounded `w-fit` that a long path
-    // could stretch arbitrarily wide.
+    // The hover-preview card has no `max-w-xs`, so this root must claim its own viewport-aware width - matching
+    // the owner preview's `w-[min(92vw,24rem)]` intent.
     const list = screen.getByTestId("workspace-folder-hover-list");
     expect(list.className).toContain("w-[min(92vw,24rem)]");
   });

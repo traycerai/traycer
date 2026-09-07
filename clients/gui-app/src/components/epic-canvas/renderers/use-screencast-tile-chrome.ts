@@ -64,10 +64,7 @@ export function toastScreencastUnsupportedInteraction(
 }
 
 /**
- * Shared-toolbar controller for a headless screencast tile. Capabilities
- * are nav-only; the address draft stays owned by focus, so an in-flight
- * agent navigation cannot clobber a URL the user is still editing.
- * A submitted draft yields to the next navState so redirects land.
+ * Capabilities are nav-only; the address draft stays owned by focus, so an in-flight agent navigation cannot clobber a URL the user is still editing.
  */
 export function useScreencastTileChrome(
   args: UseScreencastTileChromeArgs,

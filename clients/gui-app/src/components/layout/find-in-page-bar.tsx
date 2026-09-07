@@ -21,17 +21,8 @@ import { useTerminalFindStore } from "@/stores/find-in-page/terminal-find-store"
 
 const LIVE_SEARCH_DEBOUNCE_MS = 140;
 
-/**
- * Legacy global find bar driven by the CSS-highlight-based `FindEngine`.
- * Quarantined after the tile-local Command+F cutover; do not mount for the
- * default find command path.
- *
- * The engine paints matches via `CSS.highlights` and never mutates
- * `window.getSelection()` - so contenteditable editors (TipTap composer,
- * etc.) don't observe a selection change and don't grab focus from the
- * find input. Live-search runs on every keystroke (debounced) without
- * any focus-reclamation gymnastics.
- */
+/** The engine paints matches via `CSS.highlights` and never mutates `window.getSelection` - so contenteditable
+ * editors (TipTap composer, etc.) don't observe a selection change and don't grab focus from the find input. */
 export function FindInPageBar() {
   const isOpen = useFindInPageStore((s) => s.isOpen);
   const matches = useFindInPageStore((s) => s.matches);
@@ -96,9 +87,8 @@ export function FindInPageBar() {
     };
   }, [isOpen, matchCase, supported, terminalSearchActive]);
 
-  // Run / re-run the search whenever the query (or matchCase, via engine
-  // recreation) changes - debounced so fast typists don't trigger a
-  // TreeWalker pass per keystroke.
+  // Run / re-run the search whenever the query (or matchCase, via engine recreation) changes - debounced so fast
+  // typists don't trigger a TreeWalker pass per keystroke.
   useEffect(() => {
     if (!isOpen) return;
     if (!terminalSearchActive && !supported) return;
@@ -149,9 +139,7 @@ export function FindInPageBar() {
     [matchCase, query, setMatches, terminalFindController],
   );
 
-  // React to Cmd+G / Cmd+Shift+G fired from the Edit menu. Each menu
-  // press bumps the matching nonce; we advance once per bump. Skip the
-  // initial render (when both nonces start at 0).
+  // React to Cmd+G / Cmd+Shift+G fired from the Edit menu.
   const lastForwardSeen = useRef(advanceForwardNonce);
   const lastBackwardSeen = useRef(advanceBackwardNonce);
   useEffect(() => {

@@ -1,37 +1,10 @@
-/**
- * The record channel's FRESHNESS seam (chat-sync-v2 ticket 49).
- *
- * Since the single-write pivot a created chat exists only in the host's chat
- * database: nothing pushes it to this renderer, so `epic.listChatRecords` is
- * the only way a fresh chat ever reaches `chats.byId`. Two mechanisms are
- * supposed to keep that list current - the mutations invalidate it on success,
- * and the table's 20s cadence bounds everything else - and a create-then-open
- * flow (`openCreatedChatWhenProjected`, the new-conversation modal's handoff)
- * waits on the projection with nothing else to wake it.
- *
- * Both mechanisms were dead on the staging shakedown build, which is what
- * these tests pin. The suite drives the REAL hooks against a real
- * `QueryClient`, a real `HostClient` over the mock messenger, and a real
- * open-epic store, because the defect was precisely a cache-key / opt-in
- * mismatch between those layers - every layer was correct on its own.
- *
- * Ablations each test is written against:
- *  - drop `invalidateEpicChatRecords` from `useEpicCreateChatForHostClient`
- *    (the explicit-client twin, ticket 43) and the create tests hang on a
- *    record list that is never re-read: the user-visible spinning new tab.
- *  - drop `poll: true` from `useEpicSyncChatRecords` and the cadence test
- *    reads `false`, i.e. a list that only ever refreshes on window focus.
- */
+/** Create must invalidate listChatRecords; the sync hook must opt in to poll: true. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
-// The `@1.1` row, which is what the negotiated contract actually returns. Typing
-// the fixture against the LATEST row rather than a hand-picked field list is what
-// makes the next field added to this response fail HERE, at compile time, instead
-// of silently leaving the mock a shape no host can produce - which is exactly how
-// `docResident` slipped past this file.
+// Typing the fixture against the LATEST row rather than a hand-picked field list is what makes the next field added to this response fail HERE, at compile time, instead of silently leaving the mock a shape no host can produce - which is exactly how `docResident` slipped past this file.
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -67,13 +40,7 @@ const EPIC_ID = "epic-records";
 const VIEWER_ID = "viewer-1";
 const HOST_ID = mockLocalHostEntry.hostId;
 
-// `useEpicSyncChatRecords` and the rename/delete hooks read the EPIC SESSION's
-// client (`EpicSessionHostClientContext`, provided by the wrapper below); the
-// create-for-client hook takes one as an argument; the app-wide runtime mock
-// serves whatever still resolves through it. All must land on the same host
-// for the invalidation key to match the query key at all, which is the
-// mismatch class this suite exists to catch - so every seam hands back the one
-// fixture client and the assertions do the rest.
+// All must land on the same host for the invalidation key to match the query key at all, which is the mismatch class this suite exists to catch - so every seam hands back the one fixture client and the assertions do the rest.
 const runtime: { client: HostClient<HostRpcRegistry> | null } = vi.hoisted(
   () => ({ client: null }),
 );
@@ -124,10 +91,7 @@ function record(
     revision: 1,
     visibility: "private",
     origin: "own",
-    // Registry-backed, which is what this fixture's rows are: they are minted
-    // through the `epic.createChat` handler below. A `true` row would be one
-    // read out of the epic doc's `chats` subtree, which this fixture never
-    // exercises.
+    // A `true` row would be one read out of the epic doc's `chats` subtree, which this fixture never exercises.
     docResident: false,
     ...overrides,
   };
@@ -181,11 +145,7 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: EPIC_ID,
     userId: VIEWER_ID,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -256,13 +216,7 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
             records[index] = {
               ...records[index],
               title: params.title,
-              // `revision` is per-chat MONOTONIC and the only ordering fact
-              // `applyChatRecords` has - a served row whose revision does not
-              // strictly exceed what is held is dropped as stale (see
-              // `chat-records-union.test.ts`'s "rejects a STALE poll answer").
-              // A real host bumps this on every write; a fixture that left it
-              // unchanged would describe an update no host actually emits, and
-              // the re-read this test proves would silently no-op.
+              // `revision` is per-chat MONOTONIC and the only ordering fact `applyChatRecords` has - a served row whose revision does not strictly exceed what is held is dropped as stale (see `chat-records-union.test.ts`'s "rejects a STALE poll answer").
               revision: records[index].revision + 1,
             };
           }
@@ -275,10 +229,7 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
           if (index >= 0) {
             records[index] = {
               ...records[index],
-              // BOTH fields, the way a real host answers: `archived` is the
-              // rendering-authoritative boolean every row can carry, and
-              // `archivedAt` the timestamp only an OWN row has. A fixture that
-              // moved the timestamp alone would describe a row no host emits.
+              // BOTH fields, the way a real host answers: `archived` is the rendering-authoritative boolean every row can carry, and `archivedAt` the timestamp only an OWN row has.
               archived: params.archived,
               archivedAt: params.archived ? 5 : null,
               // See `epic.renameChat` above - the revision guard drops a
@@ -340,7 +291,6 @@ afterEach(() => {
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
-/** Renders the record channel plus one mutation hook, as the epic route does. */
 function renderChannel<T>(useMutationHook: () => T): { readonly current: T } {
   const rendered = renderHook(
     () => {
@@ -403,10 +353,7 @@ describe("a create refreshes the record list", () => {
       title: "",
     });
 
-    // The create's own success is not the assertion - the record list being
-    // re-read is. Without it the created chat reaches `chats.byId` only when
-    // the poll fires (or never, if the poll is off), and the create-then-open
-    // flow spins on a projection that never arrives.
+    // Without it the created chat reaches `chats.byId` only when the poll fires (or never, if the poll is off), and the create-then-open flow spins on a projection that never arrives.
     await waitFor(() => {
       expect(fixture.listCalls.value).toBe(2);
     });
@@ -504,11 +451,7 @@ describe("the record list runs on the table's cadence", () => {
     renderChannel(() => null);
     await settleFirstRead();
 
-    // `HOST_METHOD_POLL_TABLE` declares a fixed 20s cadence for this method,
-    // but a fixed policy is OPT-IN (`useHostQuery` arms `refetchInterval` only
-    // for `poll: true`). Without the opt-in the query's interval is `false` and
-    // the only thing that ever refreshes the list is a window-focus refetch -
-    // which is exactly the irregular cadence the staging host log showed.
+    // Without the opt-in the query's interval is `false` and the only thing that ever refreshes the list is a window-focus refetch - which is exactly the irregular cadence the staging host log showed.
     const found = fixture.queryClient
       .getQueryCache()
       .findAll({ queryKey: ["host", HOST_ID, "epic.listChatRecords"] });
@@ -546,10 +489,7 @@ describe("a cached answer's fence degrades across a store generation change", ()
     fixture.handle.store.getState().dispose();
 
     const handleB = newSession();
-    // Ingested into B BEFORE the stale cached answer applies to it - the row
-    // the bug retracts. B's own ingest counter restarts at 0/1, numerically
-    // smaller than A's captured fence, which is exactly what let the
-    // omission pass misread this as "already held when the answer issued".
+    // B's own ingest counter restarts at 0/1, numerically smaller than A's captured fence, which is exactly what let the omission pass misread this as "already held when the answer issued".
     handleB.store.getState().applyChatRecordDelta({
       kind: "upsert",
       epicId: EPIC_ID,
@@ -579,11 +519,7 @@ describe("a cached answer's fence degrades across a store generation change", ()
     await waitFor(() => {
       expect(handleB.store.getState().chatRecordListAuthoritative).toBe(true);
     });
-    // The fix: `fenceIdentity` mismatches B's `ingestFenceIdentity`, so the
-    // applying effect degrades the fence to `null` before calling
-    // `applyChatRecords` - the conservative no-session path - instead of
-    // trusting A's numerically-larger-but-meaningless seq. Pre-fix this row
-    // read as omitted-and-already-held, and was retracted.
+    // The fix: `fenceIdentity` mismatches B's `ingestFenceIdentity`, so the applying effect degrades the fence to `null` before calling `applyChatRecords` - the conservative no-session path - instead of trusting A's numerically-larger-but-meaningless seq.
     expect(
       Object.hasOwn(handleB.store.getState().chats.byId, "pushed-into-b"),
     ).toBe(true);

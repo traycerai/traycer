@@ -8,22 +8,7 @@ import type {
 import { pathContainsDirectory as pathIsUnderRoot } from "@/lib/path/cross-platform-path";
 import { displayTitle } from "@/lib/display-title";
 
-/**
- * Phase-1 (client-local) owner-scoped teardown snapshot.
- *
- * Synthesizes the T2 `WorktreeBusyHolder` shape so `TeardownDisclosure` does
- * not know where the list came from. When the host-authoritative
- * `listHolders` minor lands (path-scoped with optional owner filter), only
- * this provider changes.
- *
- * Known gaps vs the T6 inventory, acceptable at gesture time because they
- * are not a user-stoppable thing here, or cannot be proven from GUI state:
- * - host-only `active-run-cwd` marks after a partial rebind
- * - grace-window PTYs (no live session in the terminal store)
- * - TUI-owned (and any other) supervised shells whose host or cwd is
- *   unproven — the resource projection has no cwd and is not
- *   host-attributed, so those rows are omitted rather than over-matched
- */
+/** Phase-1 (client-local) owner-scoped teardown snapshot. */
 export type OwnerTeardownShell = {
   readonly id: string;
   readonly description: string;
@@ -103,11 +88,8 @@ export function runDirectoryOfFolderIntent(
 }
 
 /**
- * The committed binding's run directory per workspace folder — the shared
- * "previous" side of both draft predicates below. `worktreeDraftCommitsRebind`
- * GATES the send disclosure and `droppedRunDirectoriesFromDraft` SCOPES it,
- * so the two must read the binding identically; building the map here makes
- * an edit to one an edit to both.
+ * The committed binding's run directory per workspace folder - the shared "previous" side of both draft predicates below.
+ * `worktreeDraftCommitsRebind` GATES the send disclosure and `droppedRunDirectoriesFromDraft` SCOPES it, so the two must read the binding identically; building the map here makes an edit to one an edit to both.
  */
 function bindingRunDirectoriesByWorkspace(
   binding: WorktreeBinding | null,
@@ -121,11 +103,8 @@ function bindingRunDirectoriesByWorkspace(
 }
 
 /**
- * Run directories the draft would leave: each staged folder whose next run
- * directory differs from the live binding, plus each pending-removed folder's
- * current run directory. Staged intent is a sparse overlay (changed folders
- * only), so unstaged binding entries are not dropped unless listed in
- * `removedWorkspacePaths`.
+ * Run directories the draft would leave: each staged folder whose next run directory differs from the live binding, plus each pending-removed folder's current run directory.
+ * Staged intent is a sparse overlay (changed folders only), so unstaged binding entries are not dropped unless listed in `removedWorkspacePaths`.
  */
 export function droppedRunDirectoriesFromDraft(input: {
   readonly binding: WorktreeBinding | null;
@@ -158,15 +137,7 @@ export function droppedRunDirectoriesFromDraft(input: {
 }
 
 /**
- * Whether committing this draft at send would actually change the owner's
- * binding: a staged folder whose next run directory differs from the bound
- * one (a staged `worktree` create always does — its run directory does not
- * exist yet), a staged folder the binding does not carry, or a pending
- * removal of a bound folder. A draft that merely restates the committed
- * binding — or no draft at all — commits nothing, so a send with one is not
- * a rebind gesture and must not be gated on teardown disclosure: the
- * disclosure exists to confirm "switch folders and stop what runs there",
- * and with nothing switching there is nothing to confirm.
+ * Whether committing this draft at send would actually change the owner's binding: a staged folder whose next run directory differs from the bound one (a staged `worktree` create always does - its run directory does not exist yet), a staged folder the.
  */
 export function worktreeDraftCommitsRebind(input: {
   readonly binding: WorktreeBinding | null;
@@ -244,10 +215,8 @@ export function snapshotOwnerTeardown(
       shell.id,
     );
     holders.push(holder);
-    // agent.stop already awaits stopCommandsForAgent for every owner
-    // shell. Expanded consequence rows are disclosure-only so a
-    // follow-up managedCommand.stop cannot reject after teardown
-    // succeeded and block the binding commit.
+    // agent.stop already awaits stopCommandsForAgent for every owner shell.
+    // Expanded consequence rows are disclosure-only so a follow-up managedCommand.stop cannot reject after teardown succeeded and block the binding commit.
     if (!agentStopClearsOwner) {
       stopTargets.push({
         kind: "supervised-shell",
@@ -277,9 +246,8 @@ function chatTurnWillCallAgentStop(input: OwnerTeardownSnapshotInput): boolean {
 }
 
 /**
- * Evidence-naming fallback for a holder row. Untitled chats/agents use the
- * short "This agent" so the tab-strip's empty-title state doesn't overflow
- * the disclosure as "Untitled agent is working…".
+ * Evidence-naming fallback for a holder row.
+ * Untitled chats/agents use the short "This agent" so the tab-strip's empty-title state doesn't overflow the disclosure as "Untitled agent is working…".
  */
 export function teardownOwnerDisplayName(ownerLabel: string): string {
   const trimmed = ownerLabel.trim();

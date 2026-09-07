@@ -1,21 +1,7 @@
-/** The file a skill directory is defined by, per the Agent Skills layout. */
 export const SKILL_ENTRY_FILE = "SKILL.md";
 
-/**
- * Drop a leading YAML frontmatter block from a SKILL.md.
- *
- * The host already parsed that block: `name` and `description` come back on
- * `ProviderSkill` and the dialog renders them in its header. Leaving the raw
- * block in the markdown body would print the same two fields a second time -
- * and worse, as a `<hr>`-delimited paragraph of `key: value` lines, since a
- * markdown renderer with no frontmatter plugin reads `---` as a thematic
- * break.
- *
- * Deliberately narrow: only a block that starts at byte 0, and only `---`
- * (not the `+++`/TOML variant, which the skill format does not use). Anything
- * else is body content and is returned untouched - a skill whose body legitimately
- * opens with a horizontal rule must not lose its first section.
- */
+/** Anything else is body content and is returned untouched - a skill whose body legitimately opens with a
+ * horizontal rule must not lose its first section. */
 export function stripSkillFrontmatter(raw: string): string {
   return splitSkillMarkdown(raw).body;
 }
@@ -26,11 +12,7 @@ export type ParsedSkillMarkdown = {
   readonly body: string;
 };
 
-/**
- * Name + description from the leading YAML block, body via
- * {@link stripSkillFrontmatter}. Used to prefill Edit from the file on disk
- * rather than from the list-row snapshot.
- */
+/** Name + description from the leading YAML block, body via stripSkillFrontmatter. */
 export function parseSkillMarkdown(raw: string): ParsedSkillMarkdown {
   const split = splitSkillMarkdown(raw);
   if (split.frontmatter === null) {

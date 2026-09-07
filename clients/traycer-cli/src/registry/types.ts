@@ -1,12 +1,5 @@
-// Host registry types per the Native Packaging Tech Plan. The CLI
-// reads `versions.json` from a Traycer-hosted CDN to discover available
-// host releases; downloads each archive from the URL recorded in the
-// per-platform entry, verifies its sha256 + minisign signature, and
-// only then unpacks/replaces the install directory.
-//
-// NP-2 ships the type seam + a stub `RegistryClient` so the installer
-// can be wired up end-to-end against local-file sources. NP-4 fills in
-// the actual HTTP fetch + minisign verifier.
+// Host registry types per the Native Packaging Tech Plan.
+// The CLI reads `versions.json` from a Traycer-hosted CDN to discover available host releases; downloads each archive from the URL recorded in the per-platform entry, verifies its sha256 + minisign signature, and only then unpacks/replaces the install directory.
 
 export type HostPlatformKey =
   | "darwin-arm64"
@@ -34,24 +27,7 @@ export interface HostVersionEntry {
   readonly yanked: boolean;
   readonly deprecationReason: string | null;
   readonly requiredCliVersion: string | null;
-  /**
-   * The client-compatibility EPOCH this host build baked, or `null` when it
-   * baked none.
-   *
-   * PURELY DESCRIPTIVE HERE. Nothing on the client reads it to decide anything:
-   * the floor is enforced by the host itself at connection time, from its own
-   * bytes, and a client that tried to pre-empt that would be second-guessing a
-   * decision it does not own. It is recorded so RELEASE TOOLING can answer the
-   * one question nothing else can - "which floors are currently active in the
-   * field" - before letting a client build become the candidate an updater
-   * resolves.
-   *
-   * ABSENT MEANS NO FLOOR, and absence is the common case: every entry
-   * published before this field existed lacks it. That is why it parses as
-   * nullable rather than required - making it required would reject the entire
-   * existing manifest, and this parser is shipped in clients that must keep
-   * reading manifests written both before and after this change.
-   */
+  /** The client-compatibility EPOCH this host build baked, or `null` when it baked none. PURELY DESCRIPTIVE HERE. */
   readonly minimumEpoch: number | null;
   readonly platforms: Readonly<Record<string, HostPlatformAsset>>;
 }
@@ -64,14 +40,11 @@ export interface HostVersionsManifest {
 }
 
 export interface RegistryClient {
-  // Fetch the canonical versions.json manifest. NP-4 implements this
-  // against the production CDN; NP-2 returns a NotImplemented error so
-  // commands that depend on the registry surface a clean message and
-  // doctor can flag the gap.
+  // Fetch the canonical versions.json manifest.
+  // NP-4 implements this against the production CDN; NP-2 returns a NotImplemented error so commands that depend on the registry surface a clean message and doctor can flag the gap.
   fetchManifest(): Promise<HostVersionsManifest>;
-  // Resolve a version string ("latest" or an explicit semver) against
-  // the manifest, returning the platform-appropriate asset. NP-2 stub
-  // returns a NotImplemented error.
+  // Resolve a version string ("latest" or an explicit semver) against the manifest, returning the platform-appropriate asset.
+  // NP-2 stub returns a NotImplemented error.
   resolveAsset(
     versionRequest: string,
     platformKey: HostPlatformKey,
@@ -79,10 +52,8 @@ export interface RegistryClient {
     readonly entry: HostVersionEntry;
     readonly asset: HostPlatformAsset;
   }>;
-  // Download + verify a previously-resolved asset, returning the path
-  // of the verified archive on local disk (typically a temp file). NP-4
-  // implements the minisign + sha256 chain; NP-2 returns a
-  // NotImplemented error.
+  // Download + verify a previously-resolved asset, returning the path of the verified archive on local disk (typically a temp file).
+  // NP-4 implements the minisign + sha256 chain; NP-2 returns a NotImplemented error.
   downloadAndVerify(
     entry: HostVersionEntry,
     asset: HostPlatformAsset,

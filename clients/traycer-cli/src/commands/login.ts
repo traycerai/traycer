@@ -9,11 +9,8 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 import type { StoredCredentials } from "../store/credentials";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 
-// `traycer login` only authenticates: it opens the browser sign-in and
-// persists the resulting credentials. It does NOT provision the host -
-// host install/start is an explicit action driven by the `host`
-// subcommands (`host ensure` / `host install`). A user signing in should
-// never trigger a host download as a side effect.
+// `traycer login` only authenticates: it opens the browser sign-in and persists the resulting credentials.
+// It does NOT provision the host - host install/start is an explicit action driven by the `host` subcommands (`host ensure` / `host install`).
 export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   ctx.runtime.logger.info("Interactive login command started", {
     environment: ctx.runtime.environment,
@@ -37,18 +34,8 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   };
 };
 
-// Resolves the right `login` behaviour from the parsed `--token` flag.
-//   - no `--token` → the interactive device-flow sign-in (`loginCommand`).
-//   - `--token -` → a non-interactive credential-seeding path: read a JSON
-//     `{ token, refreshToken }` payload from stdin, validate the captured bearer
-//     access-only, and persist it to the shared credentials file via the locked
-//     store. No browser, no host auto-bootstrap. (The Desktop app used to drive
-//     this after its own sign-in; that seam was removed in the credentials-file
-//     refactor now that the CLI reads the same shared file, so this path now
-//     serves scripted/support use.)
-//
-// `--token` only accepts `-`; passing a literal bearer on argv is rejected so
-// secrets never land in the process list.
+// Resolves the right `login` behaviour from the parsed `--token` flag. - no `--token` → the interactive device-flow sign-in (`loginCommand`). - `--token -` → a non-interactive credential-seeding path: read a JSON `{ token, refreshToken }` payload from stdin, validate the captured bearer access-only, and persist it to the shared credentials file via the locked store.
+// No browser, no host auto-bootstrap.
 export function buildLoginCommand(opts: {
   readonly token: string | null;
 }): CommandFn {
@@ -95,16 +82,8 @@ function loginWithToken(rawToken: string): CommandFn {
     }
 
     const { authnBaseUrl } = config;
-    // `--token -` carries a JSON `{ token, refreshToken }` payload; the CLI
-    // persists the paired refresh token so LATER host calls can self-refresh on
-    // a 401 through the locked `rotate` (§7). Back-compat: a non-JSON stdin
-    // string is treated as a bare bearer with no refresh token.
-    //
-    // Validation here is access-only and FAILS FAST (§7): the Desktop pipes a
-    // fresh pair right after sign-in, so a valid access token is expected. This
-    // seam must NEVER spend the refresh token to recover a stale access token -
-    // an expired/invalid token is rejected and the Desktop re-seeds on its own
-    // next sign-in.
+    // `--token -` carries a JSON `{ token, refreshToken }` payload; the CLI persists the paired refresh token so LATER host calls can self-refresh on a 401 through the locked `rotate` (§7).
+    // Back-compat: a non-JSON stdin string is treated as a bare bearer with no refresh token.
     const validation = await validateAuthTokenIdentityAccessOnly(
       authnBaseUrl,
       token,
@@ -137,18 +116,13 @@ function loginWithToken(rawToken: string): CommandFn {
     const user = credentialsIdentityFromAuthenticatedUser(validation.user);
     const credentials: StoredCredentials = {
       token,
-      // A bare-bearer re-seed carries no refresh token (refreshToken ""); the
-      // locked `signIn` KEEPS the refresh token already on disk in that case
-      // instead of clobbering it, else the host loses its ability to
-      // self-refresh. Read fresh under the same lock that performs the write,
-      // so a concurrent rotate can't race this fallback.
+      // A bare-bearer re-seed carries no refresh token (refreshToken ""); the locked `signIn` KEEPS the refresh token already on disk in that case instead of clobbering it, else the host loses its ability to self-refresh.
+      // Read fresh under the same lock that performs the write, so a concurrent rotate can't race this fallback.
       refreshToken,
       savedAt: new Date().toISOString(),
       user,
     };
-    // Persist through the locked mutation store (§7); `signIn` is unconditional
-    // (aside from the refresh-token preservation above) and clears any
-    // tombstone - the interactive re-seed semantics.
+    // Persist through the locked mutation store (§7); `signIn` is unconditional (aside from the refresh-token preservation above) and clears any tombstone - the interactive re-seed semantics.
     const persisted = await runWithCliStore((store) =>
       withCommitRetry(() => store.signIn(credentials, true, null), null),
     );
@@ -181,10 +155,8 @@ function loginWithToken(rawToken: string): CommandFn {
   };
 }
 
-// Parses the `--token -` stdin payload. The Desktop pipes a JSON
-// `{ token, refreshToken }` bundle so the CLI persists a paired refresh token
-// and can self-refresh on a 401. Back-compat: any input that does not parse to
-// that shape is treated as a bare bearer string with no refresh token.
+// Parses the `--token -` stdin payload.
+// The Desktop pipes a JSON `{ token, refreshToken }` bundle so the CLI persists a paired refresh token and can self-refresh on a 401.
 function parseStdinCredentials(raw: string): {
   token: string;
   refreshToken: string;
@@ -209,16 +181,12 @@ function parseStdinCredentials(raw: string): {
   return { token: raw.trim(), refreshToken: "" };
 }
 
-// Upper bound on waiting for the piped token. The TTY guard catches an
-// interactive terminal, but a non-TTY pipe that is opened and never closed
-// (a caller that forgets to close its write end) would otherwise block the
-// `for await` on EOF forever - this fails fast instead.
+// Upper bound on waiting for the piped token.
+// The TTY guard catches an interactive terminal, but a non-TTY pipe that is opened and never closed (a caller that forgets to close its write end) would otherwise block the `for await` on EOF forever - this fails fast instead.
 const STDIN_READ_TIMEOUT_MS = 10_000;
 
-// Reads the bearer from stdin for `--token -`. Refuses an interactive TTY so a
-// missing pipe fails fast instead of hanging on EOF; trims so a trailing
-// newline from the caller's `echo`/pipe is stripped. Bounded by
-// `STDIN_READ_TIMEOUT_MS` so an open-but-silent pipe can't hang the command.
+// Reads the bearer from stdin for `--token -`.
+// Refuses an interactive TTY so a missing pipe fails fast instead of hanging on EOF; trims so a trailing newline from the caller's `echo`/pipe is stripped.
 async function readTokenFromStdin(): Promise<string> {
   if (process.stdin.isTTY === true) {
     throw cliError({
@@ -235,10 +203,7 @@ async function readTokenFromStdin(): Promise<string> {
     }
     return Buffer.concat(chunks).toString("utf8").trim();
   })();
-  // `Promise.race` below attaches a rejection handler to `read`, so a late
-  // rejection (after the timeout already won) is absorbed there rather than
-  // surfacing as an unhandled rejection; the process exits once the command
-  // settles, so an abandoned read is otherwise harmless.
+  // `Promise.race` below attaches a rejection handler to `read`, so a late rejection (after the timeout already won) is absorbed there rather than surfacing as an unhandled rejection; the process exits once the command settles, so an abandoned read is otherwise harmless.
 
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {

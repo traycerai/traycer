@@ -15,28 +15,7 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 
 /**
  * Released baseline surface guard for host→client enum/union growth.
- *
- * Compares the live host registries (built in-process via `buildProtocolSurface`,
- * same floor-name resolution as `dump-protocol-surface.ts`) against the newest
- * released baseline surface committed at
- * `__fixtures__/released-baseline-surface.json`. That fixture is the same
- * artifact releases publish as `protocol-surface.json` (regenerate with
- * `protocol/scripts/compat/snapshot-released-baseline.ts`).
- *
- * With direction-aware severity + the static catalog-gated policy in
- * `compat-exceptions.json`, this fails in plain `bun run test` when ids are
- * added on a released line (the Devin/Pi ids-on-v3.0 incident class). A
- * correctly opened new major line stays green with zero policy edits.
- *
- * ROLE: this test is a FAST LOCAL TRIPWIRE only. The authoritative gate is the
- * `protocol-compat` CI workflow, which dumps every released baseline's surface
- * from its immutable git tag (`protocol/scripts/compat/`) - a baseline no PR
- * can edit. Editing the fixture here does NOT change what CI verifies.
- *
- * When this fails, freeze the shipped line and open a new major with downgrade
- * bridges that drop the new values (amp 003d7586 / devin 407d110 template).
- * For genuinely catalog-gated growth on non-catalog methods, encode the path
- * in `protocol/scripts/compat/compat-exceptions.json`.
+ * When this fails, freeze the shipped line and open a new major with downgrade bridges that drop the new values (amp 003d7586 / devin 407d110 template).
  */
 
 const fixturePath = join(

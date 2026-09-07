@@ -1,10 +1,4 @@
-/**
- * Ticket 2 - editor-boundary contract.
- *
- * `ComposerPromptEditor` splits Tiptap's document-change `update` event from
- * selection-only `selectionUpdate`. Selection must never call `getJSON()`
- * (documents can carry multi-megabyte inline images).
- */
+/** Selection must never call `getJSON()` (documents can carry multi-megabyte inline images). */
 import { useState } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -214,9 +208,7 @@ describe("ComposerPromptEditor document vs selection contract", () => {
     const getJSONSpy = vi.spyOn(Editor.prototype, "getJSON");
     const getJSONBefore = getJSONSpy.mock.calls.length;
 
-    // Move the caret without changing the document. `syncContent` applies
-    // with emitUpdate:false (no onDocumentChange) then setTextSelection
-    // (onSelectionChange only).
+    // Move the caret without changing the document. `syncContent` applies with emitUpdate:false (no onDocumentChange) then setTextSelection (onSelectionChange only).
     for (let i = 0; i < 10; i += 1) {
       const from = 1 + (i % 5);
       act(() => {
@@ -233,13 +225,8 @@ describe("ComposerPromptEditor document vs selection contract", () => {
   });
 
   it("syncContent suppresses onDocumentChange even when content genuinely changes", async () => {
-    // The two tests above only ever pass `syncContent` UNCHANGED content, so
-    // a passing result there is also consistent with a broken/inverted
-    // `emitUpdate` flag - Tiptap's own `prevState.doc.eq(state.doc)` gate
-    // would independently suppress `update` for a no-op replace regardless of
-    // what `emitUpdate` says. This test replaces the document with something
-    // genuinely different (mirroring the chat resetEpoch bridge restoring
-    // different content) to isolate the `emitUpdate:false` mechanism itself.
+    // The two tests above only ever pass `syncContent` UNCHANGED content, so a passing result there is also consistent with a broken/inverted `emitUpdate` flag - Tiptap's own `prevState.doc.eq(state.doc)` gate would independently suppress `update` for a no-op replace regardless of what `emitUpdate` says.
+    // This test replaces the document with something genuinely different (mirroring the chat resetEpoch bridge restoring different content) to isolate the `emitUpdate:false` mechanism itself.
     const onDocumentChange = vi.fn();
     const onSelectionChange = vi.fn();
     const handleRef: { current: ComposerPromptEditorHandle | null } = {

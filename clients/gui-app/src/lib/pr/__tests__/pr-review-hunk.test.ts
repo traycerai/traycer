@@ -3,10 +3,8 @@ import type { PrReviewThread } from "@traycer/protocol/host/pr-schemas";
 import { buildPrReviewHunkPatch } from "@/lib/pr/pr-review-hunk";
 
 /**
- * The adapter between GitHub's bare hunk and `parsePatchFiles`. The thing that
- * matters is the `@@` line: it is the only place the file's line numbers exist,
- * and the host clips long hunks, so both "header present" and "header gone"
- * are real inputs.
+ * The adapter between GitHub's bare hunk and `parsePatchFiles`.
+ * The thing that matters is the `@@` line: it is the only place the file's line numbers exist, and the host clips long hunks, so both "header present" and "header gone" are real inputs.
  */
 
 function thread(overrides: Partial<PrReviewThread>): PrReviewThread {

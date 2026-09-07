@@ -4,13 +4,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
 
 /**
- * What a published chat shows when there is no transcript to show.
- *
- * Replaces the tile body rather than sitting above an empty one: unlike a live
- * chat, there is no cached history underneath to keep reading. Each arm has its
- * own remedy, which is why they are not collapsed into one "unavailable" - a
- * host that is too old, a cloud that could not be reached, and a chat this
- * viewer may not read are three different next actions.
+ * Replaces the tile body rather than sitting above an empty one: unlike a live chat, there is no cached history underneath to keep reading.
  */
 
 export interface PublishedChatNoticeProps {
@@ -62,9 +56,7 @@ function describe(props: PublishedChatNoticeProps): {
     };
   }
   if (props.refusal !== null) return props.refusal;
-  // `loading` never reaches here (the tile renders its skeleton for that), and
-  // `ready` is the whole point of the surface - so this is the refusal arm
-  // whose outcome produced no copy the reader can act on.
+  // `loading` never reaches here (the tile renders its skeleton for that), and `ready` is the whole point of the surface - so this is the refusal arm whose outcome produced no copy the reader can act on.
   return {
     title: "This agent has no published copy yet",
     body: `${props.ownerLabel} has not published this agent, so there is nothing to read from here.`,

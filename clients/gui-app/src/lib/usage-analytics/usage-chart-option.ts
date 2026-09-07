@@ -19,40 +19,28 @@ export type UsageChartOption = ComposeOption<
 >;
 
 /**
- * Every color in the option is a series/harness CSS variable or theme token
- * REFERENCE, never a resolved value: the chart renders through ECharts' SVG
- * renderer, which writes these strings into DOM attributes and inline
- * styles where Chromium resolves them live against `.usage-chart-root`'s
- * scoped palette (and its `.dark` override). Resolving at build time would
- * freeze the first theme's colors into the option and miss a live theme
- * switch. This is why the canvas renderer is not an option here.
+ * Every color in the option is a series/harness CSS variable or theme token REFERENCE, never a resolved value: the chart renders through ECharts' SVG renderer, which writes these strings into DOM attributes and inline styles where Chromium resolves them live.
  */
 export function buildUsageChartOption(input: {
   readonly columns: readonly UsageChartColumn[];
   readonly scale: UsageSeriesScale;
   readonly metric: UsageMetric;
   /**
-   * Legend-filtered series keys. Zeroing a series' VALUES is not enough to
-   * hide it: a stacked line at zero still draws its 2px stroke, so a
-   * filtered harness stays visible riding the baseline or the series
-   * below it. The series stays in the option (slot order and color
-   * assignment never shift) but renders nothing.
+   * Legend-filtered series keys.
+   * Zeroing a series' VALUES is not enough to hide it: a stacked line at zero still draws its 2px stroke, so a filtered harness stays visible riding the baseline or the series below it.
    */
   readonly hiddenSeries: ReadonlySet<string>;
 }): UsageChartOption {
   const { columns, scale, metric, hiddenSeries } = input;
-  // A one-point line with hidden symbols renders zero visible pixels - an
-  // epic whose whole life fits in one day would show an empty chart. The
-  // dot only appears when it is the ONLY mark available.
+  // A one-point line with hidden symbols renders zero visible pixels - an epic whose whole life fits in one day would show an empty chart.
+  // The dot only appears when it is the ONLY mark available.
   const showSymbol = columns.length === 1;
   return {
     animationDuration: 300,
     grid: { left: 4, right: 12, top: 12, bottom: 4, containLabel: true },
     xAxis: {
       type: "category",
-      // The area should span the full plot, not start half a slot in - and
-      // labels are thinned by ECharts (`hideOverlap`), never truncated,
-      // which is the fix for the "Jul …" feedback.
+      // The area should span the full plot, not start half a slot in - and labels are thinned by ECharts (`hideOverlap`), never truncated, which is the fix for the "Jul …" feedback.
       boundaryGap: false,
       data: columns.map((column) => formatDayLabel(column.day)),
       axisLabel: {
@@ -95,12 +83,7 @@ export function buildUsageChartOption(input: {
     },
     series: scale.order.map((seriesKey) => {
       const colorVar = scale.colorVar(seriesKey);
-      // Draw nothing for a series that contributes nothing - whether the
-      // LEGEND hid it or its data is genuinely all zero (ticket 19: an
-      // unpriced grok turn contributed $0, yet its stacked boundary line
-      // traced the TOP of claude's mass in grok's color, so a $0 harness
-      // read as owning the whole total). The series stays in the option
-      // (slot order, color, legend chip, tooltip filtering all unchanged).
+      // Draw nothing for a series that contributes nothing - whether the LEGEND hid it or its data is genuinely all zero (ticket 19: an unpriced grok turn contributed $0, yet its stacked boundary line traced the TOP of claude's mass in grok's color, so a $0.
       const hidden =
         hiddenSeries.has(seriesKey) ||
         columns.every(
@@ -121,13 +104,7 @@ export function buildUsageChartOption(input: {
         lineStyle: { width: hidden ? 0 : 2 },
         areaStyle: { opacity: hidden ? 0 : 0.3 },
         // Every emphasis color is pinned to the series' own var() reference.
-        // This is not decorative: with no explicit emphasis color, ECharts
-        // applies its default hover "color lift" (states.js -> zrender
-        // `liftColor`), which parses the color to brighten it - `var(...)`
-        // strings don't parse, `lift` returns undefined, and the whole
-        // band/line renders as fill:none for as long as the axis pointer
-        // hovers the chart. Explicit colors make `hasFillOrStroke` true and
-        // skip that lift branch entirely.
+        // This is not decorative: with no explicit emphasis color, ECharts applies its default hover "color lift" (states.js -> zrender `liftColor`), which parses the color to brighten it - `var(...)` strings don't parse, `lift` returns undefined, and the whole.
         emphasis: {
           focus: "none" as const,
           lineStyle: { color: colorVar, width: hidden ? 0 : 2 },
@@ -151,11 +128,8 @@ export interface UsageTooltipEntry {
 }
 
 /**
- * The axis tooltip's body. Zero-value entries are dropped - a series the
- * legend filter zeroed out (or that simply had no usage that day) must not
- * pad the list, matching the old per-bar tooltip's behavior. The tooltip
- * element mounts INSIDE the chart container, so usage palette variables
- * marker colors resolve against the same scoped palette as the areas.
+ * The axis tooltip's body.
+ * Zero-value entries are dropped - a series the legend filter zeroed out (or that simply had no usage that day) must not pad the list, matching the old per-bar tooltip's behavior.
  */
 export function buildUsageTooltipHtml(
   day: string,
@@ -182,9 +156,7 @@ export function buildUsageTooltipHtml(
 }
 
 /**
- * Series labels are wire-provided harness ids and the tooltip is injected
- * as `innerHTML` by ECharts - escape rather than trust the 64-char id
- * grammar to stay markup-free forever.
+ * Series labels are wire-provided harness ids and the tooltip is injected as `innerHTML` by ECharts - escape rather than trust the 64-char id grammar to stay markup-free forever.
  */
 function escapeHtml(value: string): string {
   return value

@@ -1,13 +1,6 @@
 /**
- * The records lane's read model, pinned against the rules that read backwards
- * from each other.
- *
- * Every frame here is built through the REAL schema's `.parse()` rather than as
- * a hand literal. That is the fixture standard this branch settled on and it
- * has already paid for itself twice: a fixture that constructs cleanly against
- * a stale shape passes against a stale adapter, and the failure surfaces as a
- * green suite. When a contract field becomes required, construction fails here
- * instead of the assertion passing for the wrong reason.
+ * The records lane's read model, pinned against the rules that read backwards from each other.
+ * Every frame here is built through the REAL schema's `.parse()` rather than as a hand literal.
  */
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
@@ -38,10 +31,8 @@ import { selectLaneCommentThreads } from "@/hooks/comments/use-lane-comment-thre
 const EPOCH = "epoch-1";
 
 /**
- * Parse a server frame through the REAL `@1.0` union - superRefine included, so
- * the "a delta must carry a change" invariant runs on every fixture - and
- * narrow it to the arm the caller asked for. The private per-arm schemas are
- * not exported; going through the union is stricter anyway.
+ * Parse a server frame through the REAL `@1.0` union - superRefine included, so the "a delta must
+ * carry a change" invariant runs on every fixture - and narrow it to the arm the caller asked for.
  */
 function parseSnapshotFrame(
   raw: unknown,
@@ -124,9 +115,8 @@ function snapshotEvent(args: {
 }
 
 /**
- * A snapshot's metadata and claim rows, which the adapter emits on EVERY
- * snapshot - an epic with no claims is a fact the snapshot states, and omitting
- * the row would leave a previous epoch's set renderable.
+ * A snapshot's metadata and claim rows, which the adapter emits on EVERY snapshot - an epic with
+ * no claims is a fact the snapshot states, and omitting the row would leave a previous epoch's set
  */
 function metaRows(args: {
   readonly title: string;
@@ -450,13 +440,8 @@ describe("epic.state.subscribe read model - row rules", () => {
   });
 
   it("emits an AUTHORITATIVELY EMPTY thread list for a known artifact, so the selector never falls back to a stale poll", () => {
-    // `selectLaneCommentThreads` already draws the distinction: a missing key
-    // means "the lane has said nothing about this artifact" and sends the
-    // caller to the poll, an empty array means "the lane says there are none".
-    // Only the SELECTOR knew that - the producer emitted a key exclusively for
-    // artifacts that had threads, so a collaborator deleting an artifact's last
-    // thread took its key away, which read as lane silence and left the deleted
-    // thread rendered from the last poll until an unrelated refresh.
+    // `selectLaneCommentThreads` already draws the distinction: a missing key means "the lane has said
+    // nothing about this artifact" and sends the caller to the poll, an empty array means "the lane
     const { replica } = newReplica();
     replica.apply(
       snapshotEvent({
@@ -471,25 +456,20 @@ describe("epic.state.subscribe read model - row rules", () => {
       }),
     );
 
-    // THE REDDENING ASSERTION. `hasOwn`, not truthiness: the whole point is
-    // that a present-and-empty entry is a different answer from an absent one,
-    // and every other way of asking collapses them.
+    // THE REDDENING ASSERTION. `hasOwn`, not truthiness: the whole point is that a present-and-empty
+    // entry is a different answer from an absent one, and every other way of asking collapses them.
     const { byArtifactId } = replica.slices().commentThreads;
     expect(Object.hasOwn(byArtifactId, "a")).toBe(true);
     expect(byArtifactId["a"]).toEqual([]);
 
-    // The PRODUCER's own output through the real selector, rather than a
-    // hand-built keyed empty in the selector's unit test. The selector has
-    // always understood this state; nothing produced it, and that gap is
-    // invisible to a test that constructs the input it wants.
+    // The PRODUCER's own output through the real selector, rather than a hand-built keyed empty in the
+    // selector's unit test.
     expect(selectLaneCommentThreads(byArtifactId, "a")).toEqual([]);
     expect(selectLaneCommentThreads(byArtifactId, "never-seen")).toBeNull();
   });
 
   it("says nothing about an artifact the lane has never seen", () => {
-    // The control. Seeding an empty array for EVERY id asked about would make
-    // the lane claim authority over artifacts it has no rows for, which turns
-    // the poll fallback off for surfaces the lane genuinely cannot answer.
+    // The control.
     const { replica } = newReplica();
     replica.apply(
       snapshotEvent({
@@ -571,10 +551,7 @@ describe("epic.state.subscribe read model - row rules", () => {
         cause: "initial",
       }),
     );
-    // The one projected field the two heads cannot agree on. Stated, not
-    // papered over: a body is attached by artifact id over `artifact.subscribe`
-    // on this arm, so there is no room name to carry and synthesising one would
-    // be a fabricated authority-side fact.
+    // The one projected field the two heads cannot agree on.
     expect(replica.slices().artifacts.byId.a.artifactRoomId).toBeNull();
   });
 });
@@ -658,9 +635,8 @@ describe("epic.state.subscribe read model - epoch and trust", () => {
 
     replica.reset({ origin: "authority", reason: "manifest-changed" });
 
-    // A replica that kept its watermark would offer a resume into a position
-    // space that has been replaced; one that kept its trust would label the
-    // next host's seed bytes with the previous host's verdict.
+    // A replica that kept its watermark would offer a resume into a position space that has been
+    // replaced; one that kept its trust would label the next host's seed bytes with the previous
     expect(replica.appliedCursor()).toBeNull();
     expect(replica.authorityEpoch()).toBeNull();
     expect(replica.trust()).toBeNull();
@@ -668,17 +644,8 @@ describe("epic.state.subscribe read model - epoch and trust", () => {
   });
 
   it("forgets absorbed retractions when the POSITION SPACE is replaced, so the new authority's rows are not censored by the old one's tombstones", () => {
-    // Rule 3 of `record-table.ts` makes a removal absorbing "for the life of
-    // the session", and justifies it with an ordering argument about ONE store:
-    // "the host applies a removal before it emits one, so a response that still
-    // carries the row was necessarily issued before the retraction". An
-    // authority-epoch replacement is exactly the event that ends that argument
-    // - the replacement may be a different replica, on a different host, whose
-    // store legitimately still holds the row.
-    //
-    // `reset` emptied the rows and left the filter, so the replacement's first
-    // authoritative snapshot was censored by the replica it replaced, and the
-    // row stayed absent for the whole session with nothing anywhere saying why.
+    // Rule 3 of `record-table.ts` makes a removal absorbing "for the life of the session", and
+    // justifies it with an ordering argument about ONE store: "the host applies a removal before it
     const { replica } = newReplica();
     replica.apply(
       snapshotEvent({
@@ -726,12 +693,7 @@ describe("epic.state.subscribe read model - epoch and trust", () => {
   });
 
   it("KEEPS them across a same-authority reseed, where the ordering argument still holds", () => {
-    // The control, and it is the reason this is a predicate rather than an
-    // unconditional clear. `resume-too-old` is the same host and the same epoch
-    // re-serving after a compaction, so a poll answer issued before the removal
-    // can still be in flight - which is the case the absorbing rule exists for.
-    // Clearing here would resurrect a row seconds after its tab said it was
-    // gone.
+    // The control, and it is the reason this is a predicate rather than an unconditional clear.
     const { replica } = newReplica();
     replica.apply(
       snapshotEvent({
@@ -796,9 +758,8 @@ describe("epic.state.subscribe read model - epoch and trust", () => {
       "b",
     ]);
 
-    // A lane snapshot is the authority's COMPLETE row set at its watermark, so
-    // an omission is a deletion - unlike a poll answer, whose omissions are
-    // fenced against what the client ingested since it was issued.
+    // A lane snapshot is the authority's COMPLETE row set at its watermark, so an omission is a
+    // deletion - unlike a poll answer, whose omissions are fenced against what the client ingested
     replica.apply(
       snapshotEvent({
         rows: [

@@ -1,22 +1,6 @@
 /**
- * STEP 2 of the opener's two-step content search: the query + options + results
- * surface. The pane opener renders this (instead of the generic fuzzy list) for
- * a `open:search:run:*` sub-page, with cmdk's own filtering DISABLED - content
- * search is literal/regex, never a fuzzy filter over the pattern.
- *
- * Both targets run through ONE `workspace.searchText` flow (one options bar, one
- * debounced query, one set of guards), differing only in source + open:
- *  - Code (`reference: { root }`): ripgrep over one authorized workspace root; a
- *    match opens the file preview and reveals the matched line/column.
- *  - Artifact (`reference: { kind: "epic-artifacts" }`): ripgrep over the Epic's
- *    on-disk artifact mirror. A match carries a LOGICAL artifact path; opening
- *    re-resolves it against authoritative live Yjs state (by id + kind) and fails
- *    safe on a stale/deleted hit - it never opens the editable mirror Markdown.
- *
- * Late results are guarded twice: the TanStack key scopes by
- * epic/host/source/query/options, and the response echoes `epicId` plus its
- * source (`root` for code, `source` for artifacts), re-checked here so a payload
- * that crosses a target/source change is dropped.
+ * The pane opener renders this (instead of the generic fuzzy list) for a `open:search:run:*` sub-page, with cmdk's own filtering DISABLED - content search is literal/regex, never a fuzzy filter over the pattern.
+ * Both targets run through ONE `workspace.searchText` flow (one options bar, one debounced query, one set of guards), differing only in source + open: - Code (`reference: { root }`): ripgrep over one authorized workspace root; a match opens the file preview and reveals the matched line/column. - Artifact (`reference: { kind: "epic-artifacts" }`): ripgrep over the Epic's on-disk artifact mirror.
  */
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -66,12 +50,8 @@ export function SearchRunView({ target, ctx }: SearchRunViewProps) {
 }
 
 /**
- * Coalesce rapid typing before it feeds a search hook: each keystroke restarts a
- * short timer and only the settled value reaches the query key / RPC, so a fast
- * typist spawns ONE ripgrep run per pause instead of one per keystroke. Clearing
- * (an empty/whitespace query) short-circuits the timer and takes effect
- * immediately, so back/clear stays instant. Only the query is debounced -
- * options, target, Epic, and host stay in the key/guards and change at once.
+ * Coalesce rapid typing before it feeds a search hook: each keystroke restarts a short timer and only the settled value reaches the query key / RPC, so a fast typist spawns ONE ripgrep run per pause instead of one per keystroke.
+ * Only the query is debounced - options, target, Epic, and host stay in the key/guards and change at once.
  */
 const SEARCH_QUERY_DEBOUNCE_MS = 150;
 
@@ -122,9 +102,7 @@ function HighlightedText({
   readonly text: string;
   readonly ranges: ReadonlyArray<SnippetByteRange>;
 }) {
-  // Segments partition the line left-to-right; each carries its own char-index
-  // `start` (a distinct offset per segment), so `start` is a stable, unique key
-  // without re-deriving it - alternating highlighted/plain segments never collide.
+  // Segments partition the line left-to-right; each carries its own char-index `start` (a distinct offset per segment), so `start` is a stable, unique key without re-deriving it - alternating highlighted/plain segments never collide.
   const keyed = useMemo(() => {
     const segments = highlightSegmentsFromByteRanges(text, ranges);
     return segments.map((segment) => ({
@@ -166,24 +144,15 @@ function SearchRun({
   readonly target: SearchRunTarget;
   readonly ctx: CommandContext;
 }) {
-  // The EPIC's session host, not the app-wide pointer. This view lives inside a
-  // retained Epic canvas: after Settings activates another host, the pointer
-  // moves while this Epic stays bound to the machine its session runs on. Sent
-  // app-wide, `workspace.searchText` went to the new host carrying a root or
-  // artifact-mirror source belonging to the old one, and artifact hits were
-  // stamped with the wrong hostId. `useWorkspaceSearchText` already takes a
-  // nullable client and disables itself, which is the right answer before the
-  // session resolves.
+  // `useWorkspaceSearchText` already takes a nullable client and disables itself, which is the right answer before the session resolves.
   const client = useEpicSessionHostClient();
   const defaultHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const resolveArtifact = useArtifactPathResolver(ctx.activeEpicId);
   const query = usePaletteLiveQuery();
   const trimmed = query.trim();
   const debouncedQuery = useDebouncedSearchQuery(query);
-  // Source-of-truth option state. Globs are edited as raw text and normalized
-  // into arrays for the request; this state is reset by remount (the pane opener
-  // keys `SearchRunView` on the target sub-page id, so switching target or
-  // backing out and re-entering starts fresh).
+  // Source-of-truth option state.
+  // Globs are edited as raw text and normalized into arrays for the request; this state is reset by remount (the pane opener keys `SearchRunView` on the target sub-page id, so switching target or backing out and re-entering starts fresh).
   const [regex, setRegex] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
@@ -200,9 +169,7 @@ function SearchRun({
     [regex, caseSensitive, wholeWord, includeText, excludeText],
   );
 
-  // The typed source: an attached code root, or the opaque Epic-artifact mirror.
-  // Memoized so its identity is stable across keystrokes (only a target change,
-  // which remounts, mints a new one).
+  // Memoized so its identity is stable across keystrokes (only a target change, which remounts, mints a new one).
   const reference = useMemo<WorkspaceSearchSource>(
     () =>
       target.kind === "artifact"
@@ -221,9 +188,7 @@ function SearchRun({
     enabled: ctx.activeEpicId !== null,
   });
 
-  // Late-result guard: only render a payload whose epic AND source echo still
-  // match this target, so a response cannot cross a query/option/source/epic/host
-  // change (the TanStack key already scopes those; this is the belt-and-braces).
+  // Late-result guard: only render a payload whose epic AND source echo still match this target, so a response cannot cross a query/option/source/epic/host change (the TanStack key already scopes those; this is the belt-and-braces).
   const data = matchingData(result.data, epicId, target);
 
   const openCodeMatch = (
@@ -253,9 +218,7 @@ function SearchRun({
 
   const openArtifactMatch = (logicalPath: string): void => {
     if (ctx.activeTabId === null) return;
-    // Re-resolve the LOGICAL disk path against authoritative live Yjs state. A
-    // stale/deleted hit (no live artifact at that path, or a non-openable kind)
-    // fails safe: never open the mirror Markdown as a workspace file.
+    // A stale/deleted hit (no live artifact at that path, or a non-openable kind) fails safe: never open the mirror Markdown as a workspace file.
     const resolved = resolveArtifact(logicalPath);
     if (resolved === null || !isOpenableEpicNodeKind(resolved.kind)) {
       toast("Couldn’t open artifact — it may have moved or been deleted.");
@@ -356,9 +319,7 @@ function SearchRun({
 }
 
 /**
- * The response is a union: a code (`root`) branch and an artifact (`source`)
- * branch. Keep only a payload whose epic AND source echo match THIS target, so a
- * late response from a previous target/source is dropped rather than rendered.
+ * Keep only a payload whose epic AND source echo match THIS target, so a late response from a previous target/source is dropped rather than rendered.
  */
 function matchingData(
   data: ResponseOfMethod<HostRpcRegistry, "workspace.searchText"> | undefined,
@@ -497,10 +458,7 @@ function SearchOptionsBar(props: SearchOptionsBarProps) {
   );
 }
 
-// Stop a key from reaching cmdk's root handler so it acts on the focused control
-// (typing, caret movement, activation) instead of moving/opening the result
-// list - EXCEPT Escape, which is allowed to bubble so the pane opener's
-// intentional back/return behavior still fires.
+// Stop a key from reaching cmdk's root handler so it acts on the focused control (typing, caret movement, activation) instead of moving/opening the result list - EXCEPT Escape, which is allowed to bubble so the pane opener's intentional back/return behavior still fires.
 function isolateFromCmdk(event: KeyboardEvent<HTMLElement>): void {
   if (event.key !== "Escape") event.stopPropagation();
 }

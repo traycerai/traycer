@@ -182,11 +182,8 @@ it("invalidates every enrichment overlay on a root event", () => {
   expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
 });
 
-// The epic-scoped binding listing feeds the git-diff / file-tree workspace
-// pickers. It is binding-backed, not path-backed - a changed worktree can flip
-// any epic's rows - so it invalidates at EVERY scope; without it a worktree
-// finishing setup (or a cold row re-deriving as a git repo) never reached the
-// pickers until a remount refetch.
+// Binding listing invalidates at every scope. A changed worktree can flip any
+// epic's picker rows.
 it("invalidates the epic-scoped binding listing at both scopes", () => {
   const scopes = [
     { root: true, worktreePaths: new Set<string>() },
@@ -211,11 +208,8 @@ it("invalidates the epic-scoped binding listing at both scopes", () => {
   }
 });
 
-// A mid-create epic's optimistic binding seed is authoritative until the
-// create settles: an active burst refetch could return pre-binding
-// `{ rows: [] }` and clobber it. The guard marks the query invalidated
-// without refetching, then normal refetching resumes once the pending mark
-// clears.
+// Mid-create: mark invalidated without refetch so a burst cannot clobber the
+// optimistic seed with { rows: [] }.
 it("marks but does not refetch a mid-create epic's binding listing until the create settles", async () => {
   let requests = 0;
   const spine = new HostClient<HostRpcRegistry>({
@@ -288,19 +282,7 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
 });
 
 /**
- * `<WorktreeChangedStreamMount />` itself - the reopen lane.
- *
- * Everything above this point exercises `invalidateWorktreeChangedCaches` and
- * the query hooks it feeds; the mount that actually opens the
- * `worktree.changed` subscription and wires its connection status is stubbed
- * at the class boundary here, mirroring
- * `chat-records-stream-mount.test.tsx`'s own reopen-lane suite (the sibling
- * mount that shares this exact mechanism).
- *
- * A terminal close (e.g. the transport's bounded UNAUTHORIZED give-up) used
- * to leave this mount's subscription dead until reload - worktree
- * push-invalidation stopped firing with no error and no visible state. It now
- * opens a reopen lane on the host's shared reconnect engine instead.
+ * Reopen lane for `<WorktreeChangedStreamMount />`. A terminal close must reopen on the host's shared reconnect engine, not stay dead until reload.
  */
 interface OpenedWorktreeStream {
   readonly emitChanged: (scope: WorktreeChangedScope) => void;
@@ -326,12 +308,7 @@ const worktreeMountStreamState = vi.hoisted((): WorktreeMountStreamState => ({
   hasClient: true,
 }));
 
-/**
- * ONE stable client object across renders, same reasoning as
- * `chat-records-stream-mount.test.tsx`'s `stubWsStreamClient`: the mount keys
- * its effect on the client's identity, and a mock that minted a fresh object
- * per render would re-run the effect for the wrong reason.
- */
+/** One stable client across renders. A per-render stub retriggers the effect for the wrong reason. */
 const stubWorktreeWsStreamClient = vi.hoisted((): { readonly stub: true } => ({
   stub: true,
 }));

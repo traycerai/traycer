@@ -14,16 +14,7 @@ import {
   hostCommunicationGraphCloudFeedSubscribeV10,
 } from "@traycer/protocol/host/epic/communication-graph";
 
-/**
- * `host.communicationGraph.subscribe@1.0` contract fixtures + the
- * optional-method degrade guard.
- *
- * Unlike `host.notifications.cloudFeed.subscribe` (whole-snapshot), this
- * contract is cursor/resume-based like `epic.communicationGraph.subscribe` -
- * these fixtures pin the compound cloud cursor shape, the
- * never-a-bootstrap-reset framing, and the `connectionState: "reconnecting"`
- * degrade frame this contract additionally carries over the local one.
- */
+/** `host.communicationGraph.subscribe@1.0` contract fixtures + the optional-method degrade guard. */
 
 const METHOD = "host.communicationGraph.subscribe";
 

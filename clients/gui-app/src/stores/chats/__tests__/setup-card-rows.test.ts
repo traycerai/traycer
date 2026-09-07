@@ -17,11 +17,6 @@ beforeEach(() => {
   eventCounter = 0;
 });
 
-/**
- * Minimal `setup.*` event factory. `timestamp` defaults to a monotonically
- * increasing counter so array order and timestamp order agree unless a test
- * pins `timestamp` explicitly to exercise out-of-order handling.
- */
 function setupEvent(
   type: ChatEvent["type"],
   metadata: Record<string, unknown>,
@@ -563,8 +558,6 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.running", { workspacePath: "/api" }, 2_000),
         setupEvent("setup.succeeded", { workspacePath: "/api" }, 3_000),
         // ...then a SEPARATE later send creates a worktree for a different repo.
-        // Its `setup.creating` lands after the first window progressed past its
-        // creating phase, so it opens its own card instead of folding in.
         setupEvent("setup.creating", { workspacePath: "/web" }, 4_000),
         setupEvent("setup.running", { workspacePath: "/web" }, 5_000),
       ],
@@ -587,9 +580,8 @@ describe("buildSetupCardRows", () => {
 
   it("consolidates a multi-worktree single send whose creatings arrive together", () => {
     const row = onlyRow([
-      // One send creating two worktrees: both `setup.creating` events arrive
-      // BEFORE either `setup.running`, so the window has not progressed past its
-      // creating phase and they stay in one consolidated card.
+      // One send creating two worktrees: both `setup.creating` events arrive BEFORE either
+      // `setup.running`, so the window has not progressed past its creating phase and they stay in one
       setupEvent("setup.creating", { workspacePath: "/api" }, 1_000),
       setupEvent("setup.creating", { workspacePath: "/web" }, 2_000),
       setupEvent("setup.running", { workspacePath: "/api" }, 3_000),
@@ -615,10 +607,8 @@ describe("buildSetupCardRows", () => {
   });
 
   it("flags a worktree.missing-closed window inactive even when stranded at setting-up", () => {
-    // The worktree vanished mid-setup: the host emits no terminal setup event,
-    // so the row stays `setting-up`. But the window is closed - it is NOT the
-    // live lifecycle and must read inactive so it can never gate a later turn,
-    // and the card must render it statically (no spinner / ticking timer).
+    // The worktree vanished mid-setup: the host emits no terminal setup event, so the row stays
+    // `setting-up`.
     const row = onlyRow([
       setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
       setupEvent("worktree.missing", { workspacePath: "/repo" }, 2_000),
@@ -712,16 +702,7 @@ describe("buildSetupCardRows", () => {
   });
 });
 
-/**
- * # The host's partition decides how many cards exist
- *
- * On the windowed line `events` is a SLICE. `worktree.missing` is the lifecycle
- * boundary and is NOT a setup event, so it belongs to no card's record set - a
- * slice that dropped it partitions two lifecycles into one. The host reserved
- * two ordinals; drawing one card leaves the second reading to the row merge as
- * a row renderer policy withheld, so it renders as nothing at all - not even a
- * placeholder.
- */
+/** On the windowed line `events` is a SLICE. */
 describe("buildSetupCardRows against the host's whole-log partition", () => {
   it("splits a merged local window back across the host's own anchors", () => {
     const rows = buildSetupCardRows(
@@ -731,9 +712,8 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
           { workspacePath: "/repo", terminalSessionId: "term-1" },
           1_000,
         ),
-        // FAILED, not succeeded: a `failed` -> `running` retry supersedes in
-        // place, so the defensive ready->running split does not fire and the
-        // local partition really does merge these two lifecycles.
+        // FAILED, not succeeded: a `failed` -> `running` retry supersedes in place, so the defensive
+        // ready->running split does not fire and the local partition really does merge these two
         setupEvent(
           "setup.failed",
           { workspacePath: "/repo", setupExitCode: 1 },
@@ -776,9 +756,8 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("draws no card for a host window whose events the slice does not hold", () => {
-    // The ordinary cold card: its row is unhydrated, so the transcript wants
-    // the skeleton placeholder there. A card built from no events would replace
-    // a loading row with a permanently blank one.
+    // The ordinary cold card: its row is unhydrated, so the transcript wants the skeleton placeholder
+    // there. A card built from no events would replace a loading row with a permanently blank one.
     const rows = buildSetupCardRows(
       [setupEvent("setup.running", { workspacePath: "/repo" }, 4_000)],
       BINDING,
@@ -803,11 +782,7 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("still draws the anchor's card when the next host window shares its millisecond", () => {
-    // Two lifecycles a millisecond apart have no timestamp boundary to be split
-    // on. Letting the later one take events "stamped at or after" its own
-    // createdAt would take the ANCHOR's earliest event too - the one whose
-    // timestamp IS the anchor - leaving that bucket empty and drawing no card
-    // for it at all. Staying merged is a degradation; losing the card is not.
+    // Two lifecycles a millisecond apart have no timestamp boundary to be split on.
     const rows = buildSetupCardRows(
       [
         setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
@@ -865,16 +840,6 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("anchors a live event to its own host window when the opening is cold", () => {
-    // `onEventAppended` seats a live setup event and `hydratedRecords`
-    // publishes it at once, so a lifecycle whose opening events are still
-    // unhydrated is partitioned from its LATER events alone - and stamped at
-    // their timestamp, which is past the host's `createdAt`.
-    //
-    // Matching on equality alone reads that as a lifecycle the host has never
-    // published and numbers it past the end of the list, so the card computes a
-    // row id the skeleton never published, its ordinal is suppressed, and it
-    // draws unplaced at the tail - while the ordinal reserved for it stays
-    // empty.
     const rows = buildSetupCardRows(
       [setupEvent("setup.running", { workspacePath: "/repo" }, 5_000)],
       BINDING,
@@ -895,11 +860,6 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("opens a NEW lifecycle for a live event past the last window's closedAt", () => {
-    // The case the empty-bucket inference gets wrong, and cannot not get wrong:
-    // when every event of the last host window is cold, a genuinely new
-    // lifecycle leaves exactly the same empty bucket as that window's tail.
-    // `closedAt` is the boundary the slice never carries - `worktree.missing`
-    // forms no row - so the host publishes it.
     const rows = buildSetupCardRows(
       [setupEvent("setup.running", { workspacePath: "/repo" }, 9_000)],
       BINDING,
@@ -943,10 +903,8 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("treats an event stamped exactly AT closedAt as past the boundary", () => {
-    // The tie, pinned. `closedAt` is the closing event's own stamp and the
-    // window's events all strictly precede it, so equality is the boundary's
-    // contemporary - not the closed window's. Undefined edges are how this kind
-    // of comparison gets reopened.
+    // The tie, pinned. `closedAt` is the closing event's own stamp and the window's events all
+    // strictly precede it, so equality is the boundary's contemporary - not the closed window's.
     const rows = buildSetupCardRows(
       [setupEvent("setup.running", { workspacePath: "/repo" }, 3_000)],
       BINDING,
@@ -965,18 +923,7 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("opens a NEW lifecycle past an OPEN window when the slice HOLDS the boundary", () => {
-    // `closedAt: null` is "open AS OF THE SNAPSHOT", not "open, therefore
-    // everything later joins it". The live events below arrived after that
-    // snapshot, and they carry the very boundary the host had not seen yet -
-    // so the client's own partition is the FRESHER evidence here, and reading
-    // the published `null` as an unconditional answer overrides it with a
-    // staler one.
-    //
-    // The empty-bucket inference gets this right on its own: window 0 already
-    // received an event, so a later local window is not its cold-opening tail.
-    // The `null` short-circuit is what stepped in front of that and merged two
-    // lifecycles into one card - the count defect this file's header calls the
-    // one no per-window correction can reach.
+    // `closedAt: null` is "open AS OF THE SNAPSHOT", not "open, therefore everything later joins it".
     const rows = buildSetupCardRows(
       [
         setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
@@ -1000,22 +947,12 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.windowIndex)).toEqual([0, 1]);
     expect(rows[1].createdAt).toBe(5_000);
-    // The second card is its own lifecycle, not a re-run of the first: the
-    // reattachment reused window 0's row id and lifecycle flags, so the new
-    // binding rendered as the OLD one flipping back to `setting-up`.
     expect(rows[0].model.workspaces[0].workspacePath).toBe("/repo");
     expect(rows[1].model.workspaces[0].workspacePath).toBe("/other");
   });
 
   it("opens a NEW lifecycle past an OPEN window whose own rows are all COLD", () => {
-    // The half the empty-bucket inference cannot reach. Here the prior
-    // lifecycle contributed NOTHING to the slice, so its bucket is empty for
-    // the same reason a cold-opening tail's is - and the only thing telling the
-    // two apart is the boundary the slice happens to hold.
-    //
-    // `worktree.missing` forms no window, so the local partition consumes it
-    // and keeps nothing; carrying the stamps alongside is what lets an
-    // unbounded identity take one as the `closedAt` the host had not published.
+    // The half the empty-bucket inference cannot reach.
     const rows = buildSetupCardRows(
       [
         setupEvent("worktree.missing", { workspacePath: "/repo" }, 4_000),
@@ -1033,10 +970,8 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
       ],
     );
 
-    // Window 0 draws no card - the slice holds none of its events, so the
-    // transcript wants its skeleton placeholder rather than a blank card. What
-    // matters is that the LIVE lifecycle is numbered past it instead of
-    // wearing its identity.
+    // Window 0 draws no card - the slice holds none of its events, so the transcript wants its
+    // skeleton placeholder rather than a blank card.
     expect(rows).toHaveLength(1);
     expect(rows[0].windowIndex).toBe(1);
     expect(rows[0].createdAt).toBe(5_000);
@@ -1044,11 +979,8 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("anchors to an OPEN window whose bucket is still empty", () => {
-    // The cold-opening tail, one field over from the test above: same open
-    // window, but the slice supplied it NOTHING, so this live event is that
-    // lifecycle's own later activity rather than a new one. `closedAt: null`
-    // is not what decides it - the empty bucket is - which is exactly the
-    // difference the test above turns on.
+    // The cold-opening tail, one field over from the test above: same open window, but the slice
+    // supplied it NOTHING, so this live event is that lifecycle's own later activity rather than a new
     const rows = buildSetupCardRows(
       [setupEvent("setup.running", { workspacePath: "/repo" }, 9_000)],
       BINDING,
@@ -1068,9 +1000,8 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("does not leak the merged window's triggering message onto the second half", () => {
-    // The anchor a card pins to. Carried over from the merged local window it
-    // would pin the SECOND card above the FIRST card's message - above a
-    // message that predates the lifecycle it describes.
+    // The anchor a card pins to. Carried over from the merged local window it would pin the SECOND
+    // card above the FIRST card's message - above a message that predates the lifecycle it describes.
     const rows = buildSetupCardRows(
       [
         setupEvent(

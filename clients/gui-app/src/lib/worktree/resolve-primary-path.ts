@@ -1,11 +1,5 @@
 /**
- * Single membership-validating resolver for "which folder is primary" - the
- * one source every consumer (rows, the collapsed chip, optimistic bindings,
- * and both launch paths) reads instead of re-deriving primary from array
- * order or a captured intent's own `isPrimary` bit. A stored `primaryPath`
- * wins only while it still names a folder in the current set; otherwise the
- * first folder is the deterministic fallback (covers absent, stale, and
- * post-removal state alike).
+ * Single membership-validating resolver for "which folder is primary" - the one source every consumer (rows, the collapsed chip, optimistic bindings, and both launch paths) reads instead of re-deriving primary from array order or a captured intent's own.
  */
 export function resolvePrimaryPath(
   folders: ReadonlyArray<string>,
@@ -18,11 +12,8 @@ export function resolvePrimaryPath(
 }
 
 /**
- * Reorders `folders` so the resolved primary is first, preserving the
- * relative order of every other folder. Feeds the legacy order-sensitive
- * launch boundary (workspace associations / optimistic binding rows), which
- * infers primary from array position; picker DISPLAY order stays untouched -
- * this is a launch-time projection, never written back to a store.
+ * Reorders `folders` so the resolved primary is first, preserving the relative order of every other folder.
+ * Feeds the legacy order-sensitive launch boundary (workspace associations / optimistic binding rows), which infers primary from array position; picker DISPLAY order stays untouched - this is a launch-time projection, never written back to a store.
  */
 export function orderFoldersPrimaryFirst(
   folders: ReadonlyArray<string>,
@@ -35,10 +26,7 @@ export function orderFoldersPrimaryFirst(
 }
 
 /**
- * Caps `folders` at `max` while never evicting the resolved primary: the
- * oldest SECONDARY folders are trimmed first (front of the array, skipping
- * the primary's own slot), so a folder-51 add can never silently promote a
- * new primary the way trimming from the front unconditionally would.
+ * Caps `folders` at `max` while never evicting the resolved primary: the oldest SECONDARY folders are trimmed first (front of the array, skipping the primary's own slot), so a folder-51 add can never silently promote a new primary the way trimming from the.
  */
 export function trimFoldersPreservingPrimary(
   folders: ReadonlyArray<string>,

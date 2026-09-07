@@ -1,8 +1,4 @@
-/**
- * The overlay's live mark stack: the marks themselves, their DOM nodes, and the
- * per-element identity keys. Owns node attach/detach so callers never leak an
- * outline, badge or ink path.
- */
+/** Owns node attach/detach so callers never leak an outline, badge or ink path. */
 import type { StrokePoint } from "./browser-annotation-overlay-ink";
 import type { OverlayMarkModel } from "./browser-annotation-overlay-logic";
 

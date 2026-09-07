@@ -28,12 +28,7 @@ function session(
   };
 }
 
-/**
- * The picker's terminal rows and the Task's Terminals panel read the same host
- * rows through the same query and the same visibility predicate, so "listed in
- * the panel" and "mentionable" are one fact. These cases pin that they cannot
- * drift apart.
- */
+/** The picker's terminal rows and the Task's Terminals panel read the same host rows through the same query and the same visibility predicate, so "listed in the panel" and "mentionable" are one fact. These cases pin that they cannot drift apart. */
 describe("terminal mention sourcing", () => {
   it("lists exactly what the Terminals panel lists", () => {
     const sessions = [

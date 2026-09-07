@@ -1,15 +1,7 @@
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
-// The panel is host-scoped now (log levels / logs are fields of the selected
-// host's own config), so it reads `useHostScope`. Mock at that boundary:
-// these suites render the panel bare, without the host runtime and query
-// providers the real hook needs.
-// `Partial<HostScope>`, not `Record<string, unknown>`: the keys these helpers
-// set (`host`, `hostId`, `hostLabel`, `status`, `client`) have to stay checked
-// against the real scope. Untyped, a renamed `HostScope` field would leave
-// these suites compiling and quietly asserting against fixture defaults
-// instead of the scope they meant to install. The `import type` is erased, so
-// it is safe inside a hoisted factory.
+// Mock at that boundary: these suites render the panel bare, without the host runtime and query providers the
+// real hook needs.
 const scopeOverrides = vi.hoisted((): { current: Partial<HostScope> } => ({
   current: {},
 }));
@@ -21,10 +13,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-// `useScopedHostBinding` and the panel's own direct `useHostBinding()?.hostClient`
-// reads go through this module. Mocked wholesale rather than standing up a
-// real `<HostRuntimeProvider>` - see `providers-settings-panel.test.tsx` and
-// `provider-mcp-tab.test.tsx` for the same partial-object pattern.
+// Mocked wholesale rather than standing up a real `<HostRuntimeProvider>` - see
+// `providers-settings-panel.test.tsx` and `provider-mcp-tab.test.tsx` for the same partial-object pattern.
 const hostBindingMock = vi.hoisted(
   (): { current: { readonly hostClient: unknown } | null } => ({
     current: null,
@@ -88,13 +78,8 @@ vi.mock("sonner", () => ({
   },
 }));
 
-/**
- * Renders the panel with NO host RPC client bound (default scope: local,
- * connectable, `following`, `client: null` per `hostScopeFixture`'s default -
- * see its own note on why panel suites never prove that pairing). Used for
- * the cases that are genuinely independent of the host's own RPC: both
- * bridges absent, or only the support bridge present.
- */
+/** Renders the panel with NO host RPC client bound (default scope: local, connectable, `following`, `client:
+ * null` per `hostScopeFixture`'s default - see its own note on why panel suites never prove that pairing). */
 function renderPanelWithoutRpc(host: IRunnerHost): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -109,13 +94,8 @@ function renderPanelWithoutRpc(host: IRunnerHost): QueryClient {
   return queryClient;
 }
 
-/**
- * This computer's host, unable to answer for itself: `localConfigFallbackReason`
- * is non-null, so the panel falls back to the local log-levels/support bridges
- * instead of the RPC path. Covers BOTH reasons for a local host - stopped
- * (`connectable: false`, the default) or a connectable host whose recorded
- * manifest omits `config.logLevels.get` ("host-outdated").
- */
+/** This computer's host, unable to answer for itself: `localConfigFallbackReason` is non-null, so the panel
+ * falls back to the local log-levels/support bridges instead of the RPC path. */
 function renderPanelStoppedLocal(options: {
   readonly support: DesktopSupportBridge | null;
   readonly connectable?: boolean;
@@ -141,11 +121,8 @@ function renderPanelStoppedLocal(options: {
   return renderPanelWithoutRpc(makeHost(options.support));
 }
 
-/**
- * Renders the panel with a real `HostClient` bound as the scoped host's RPC
- * transport (`config.logLevels.*` / `diagnostics.logs.*`) - the production
- * path for every reachable host, local or remote.
- */
+/** Renders the panel with a real `HostClient` bound as the scoped host's RPC transport (`config.logLevels.*` /
+ * `diagnostics.logs.*`) - the production path for every reachable host, local or remote. */
 function renderPanelOverRpc(options: {
   readonly support: DesktopSupportBridge | null;
   readonly hostId?: string;
@@ -153,12 +130,8 @@ function renderPanelOverRpc(options: {
   readonly hostName?: string;
   readonly logLevels?: { cliLogLevel: LogLevel; hostLogLevel: LogLevel };
   readonly diagnosticsLogs?: readonly DiagnosticsLogFixtureEntry[];
-  /**
-   * Recorded via `recordNegotiatedHostMethods`. Defaults to the full
-   * log-level+diagnostics families; pass `null` to record NOTHING for this
-   * host id — the "no handshake yet" tri-state, distinct from a
-   * recorded-but-empty manifest.
-   */
+  /** Defaults to the full log-level+diagnostics families; pass `null` to record nothing for this host id - the
+   * "no handshake yet" tri-state, distinct from a recorded-but-empty manifest. */
   readonly methods?: readonly string[] | null;
   readonly overrideHandlers?: Parameters<
     typeof buildConfigHostFixture
@@ -214,19 +187,8 @@ interface HeldLogLevels {
   readonly flushNext: () => void;
 }
 
-/**
- * A `config.logLevels.set` that stays pending until flushed, over its own
- * `get`.
- *
- * The RPC-path counterpart of the bridge's `installHeldLogLevelsBridge`, which
- * this page no longer reaches: with `desktop` gone, every write here is an RPC,
- * so holding one in flight has to be done at the handler.
- *
- * It owns BOTH halves deliberately. Overriding `set` alone leaves the fixture's
- * `get` answering from state the override never mutates, so the invalidating
- * re-read after a flush hands back the level the reset just cleared — and the
- * reminder this asserts on never goes away.
- */
+/** Overriding `set` alone leaves the fixture's `get` answering from state the override never mutates, so the
+ * invalidating re-read after a flush hands back the level the reset just cleared. */
 function heldLogLevels(initial: ConfigLogLevelsSetResponse): HeldLogLevels {
   const pending: Array<() => void> = [];
   let levels = initial;
@@ -304,10 +266,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
   });
 
   it("carries nothing app-scoped, even with both desktop bridges installed", async () => {
-    // The split, pinned from this side. The log-levels bridge IS installed and
-    // the support snapshot DOES carry its `desktop` entry, so each absence
-    // below is this page declining to render something available to it rather
-    // than something it could not have shown.
+    // The log-levels bridge IS installed and the support snapshot does carry its `desktop` entry.
     installLogLevelsBridge(defaultSnapshot());
     renderPanelOverRpc({
       support: makeSupportBridge({}),
@@ -596,10 +555,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalled();
     });
-    // With one control, the mutation's own host-error toast already said it -
-    // an aggregate line would double-report a single failure. The message is
-    // NOT pinned: `toastFromHostError` maps host error codes to their own copy,
-    // and this test is about the second toast that must not exist.
+    // The message is not pinned: `toastFromHostError` maps host error codes to their own copy, and this test is
+    // about the second toast that must not exist.
     expect(toast.error).not.toHaveBeenCalledWith(
       expect.stringContaining("Couldn't reset"),
     );
@@ -608,8 +565,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
   });
 
   it("continues resetting remaining scopes after one set() fails and toasts the aggregate", async () => {
-    // Reset-all must attempt EVERY non-default scope even if an earlier one
-    // rejects - previously a single outer try/catch stopped the loop early.
+    // Reset-all must attempt every non-default scope even if an earlier one rejects - previously a single outer
+    // try/catch stopped the loop early.
     const attempted: Array<{ scope: string; level: LogLevel }> = [];
     vi.mocked(toast.error).mockClear();
     renderPanelOverRpc({
@@ -734,7 +691,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
       hostName: "Old Box",
       isLocalMachine: false,
       support: makeSupportBridge({}),
-      // Handshaked WITHOUT the config/diagnostics families.
+      // Handshaked without the config/diagnostics families.
       methods: ["host.status"],
     });
 
@@ -746,9 +703,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(screen.queryByTestId("settings-log-level-cli")).toBeNull();
     expect(screen.queryByTestId("settings-log-level-host")).toBeNull();
 
-    // The logs region's notice covers "logs and log levels", so Log detail has
-    // nothing left to say - and a titled card with an empty body is worse than
-    // no card. This is the branch that made `LogDetailGroup` return null.
+    // The logs region's notice covers "logs and log levels", so Log detail has nothing left to say - and a titled
+    // card with an empty body is worse than no card.
     expect(screen.queryByRole("heading", { name: "Log detail" })).toBeNull();
     // A remote host has no local truth to fall back to.
     expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
@@ -787,9 +743,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
     });
   });
 
-  // The widened case: a RUNNING, connectable local host whose handshake did
-  // not carry `config.logLevels.get` (the fleet-update window) still gets a
-  // working, bridge-backed page instead of the capability notice.
+  // The widened case: a running, connectable local host whose handshake did not carry `config.logLevels.get`
+  // (the fleet-update window) still gets a working, bridge-backed page instead of the capability notice.
   it('host-outdated: a connectable local host with an old manifest still uses the bridge, with data-reason="host-outdated"', async () => {
     const { setMock } = installLogLevelsBridge({
       desktopLogLevel: "info",
@@ -799,7 +754,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
     renderPanelStoppedLocal({
       support: makeSupportBridge({}),
       connectable: true,
-      methods: ["host.status"], // handshaked WITHOUT config.logLevels.get
+      methods: ["host.status"], // handshaked without config.logLevels.get
     });
 
     const notice = await screen.findByTestId("local-config-fallback-notice");
@@ -816,10 +771,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
     });
   });
 
-  // The tri-state guard: a local, CONNECTABLE host with no recorded manifest
-  // at all ("not dialled yet", not "unsupported") must take the RPC path, not
-  // the bridge — collapsing the tri-state to a boolean would divert it here
-  // permanently, before its own first RPC ever produced an answer.
+  // The tri-state guard: a local, connectable host with no recorded manifest at all ("not dialled yet", not
+  // "unsupported") must take the RPC path, not the bridge.
   it("does not fall back for a connectable local host with no handshake recorded yet", async () => {
     renderPanelOverRpc({
       hostId: "host-a",
@@ -836,12 +789,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
   });
 });
 
-// The negotiated-manifest registry never clears a stale `false` answer on its
-// own - `useHostCapabilityProbe` is what re-dials a parked host so a page that
-// promises "update the host and this fills in on its own" can keep that
-// promise. These pins prove the probe actually dispatched (not merely that
-// the panel changed state for some other reason), then prove the RPC path
-// resumes once a fresh handshake and a bumped incarnation land.
+// The negotiated-manifest registry never clears a stale `false` answer on its own.
 describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
@@ -871,8 +819,7 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
       logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
       diagnosticsLogs: [],
     });
-    // Handshaked WITHOUT the config/diagnostics families - parks the panel on
-    // the unsupported notice.
+    // Handshaked without the config/diagnostics families - parks the panel on the unsupported notice.
     recordNegotiatedHostMethods(hostId, ["host.status"]);
 
     scopeOverrides.current = {
@@ -912,11 +859,8 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
     });
     const callsWhileParked = fixture.hostStatusCalls();
 
-    // Bump ONLY the incarnation, manifest still unhealed: this is the leg
-    // `cacheKeyIdentity` protects - a re-dial driven purely by the host's
-    // version changing, still while parked. Without a cache key keyed on the
-    // incarnation, this rerender would reuse the already-fetched query and
-    // never ask again.
+    // Without a cache key keyed on the incarnation, this rerender would reuse the already-fetched query and never
+    // ask again.
     scopeOverrides.current = {
       ...scopeOverrides.current,
       host: hostScopeOptionFixture({
@@ -977,7 +921,7 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
       logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
       diagnosticsLogs: [],
     });
-    // Handshaked WITHOUT the log-levels family - the fleet-update window.
+    // Handshaked without the log-levels family - the fleet-update window.
     recordNegotiatedHostMethods(hostId, ["host.status"]);
 
     scopeOverrides.current = {
@@ -1018,9 +962,8 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
     });
     const callsWhileParked = fixture.hostStatusCalls();
 
-    // Bump ONLY the incarnation, manifest still unhealed: this is the leg
-    // `cacheKeyIdentity` protects - a re-dial driven purely by the host's
-    // version changing, still while parked.
+    // Bump only the incarnation, manifest still unhealed: this is the leg `cacheKeyIdentity` protects - a re-dial
+    // driven purely by the host's version changing, still while parked.
     scopeOverrides.current = {
       ...scopeOverrides.current,
       host: hostScopeOptionFixture({

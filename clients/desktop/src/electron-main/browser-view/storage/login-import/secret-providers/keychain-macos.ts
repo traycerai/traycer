@@ -2,16 +2,6 @@ import type { ChromiumImportBrowser } from "../chromium-browsers";
 import type { CommandRunner } from "./run-command";
 import type { SecretReadResult } from "./secret-read-result";
 
-/**
- * The macOS half of Chromium's `v10` key: the "<Browser> Safe Storage"
- * generic password in the user's login keychain, read with the system
- * `security` tool.
- *
- * This is the one OS prompt the whole import raises, and the dialog has said
- * which button to press before it appears: **Allow**, not Always Allow. The
- * latter writes `/usr/bin/security` into the ACL of the user's own Chrome
- * key for good, which is a wider grant than one import needs.
- */
 
 const SECURITY_BINARY = "/usr/bin/security";
 /** `errSecItemNotFound`, as `security` exits with it. */

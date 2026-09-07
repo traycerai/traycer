@@ -31,11 +31,7 @@ export type ExpandedImageState =
       readonly mediaType: string;
     };
 
-/**
- * The shared expanded view for user-attached images - composer strip chips
- * and sent-message gallery thumbs. Thumbnails stay action-free by design;
- * copy and download live only here, on the expanded image.
- */
+/** The shared expanded view for user-attached images - composer strip chips and sent-message gallery thumbs. Thumbnails stay action-free by design; copy and download live only here, on the expanded image. */
 export function ExpandedImageDialogContent(props: {
   readonly title: string;
   readonly alt: string;
@@ -66,10 +62,7 @@ export function ExpandedImageDialogContent(props: {
     );
   } else {
     body = (
-      // The minimum reserves room for the absolutely positioned action bar,
-      // so no image aspect ratio (tiny icon, extreme panorama) can collapse
-      // the wrapper and clip Copy/Download under overflow-hidden; the 90vh
-      // clamp keeps the floor inside the wrapper's own max height.
+      // The minimum reserves room for the absolutely positioned action bar, so no image aspect ratio (tiny icon, extreme panorama) can collapse the wrapper and clip Copy/Download under overflow-hidden; the 90vh clamp keeps the floor inside the wrapper's own max height.
       <div className="relative flex max-h-[90vh] min-h-[min(6rem,90vh)] w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
         <img
           src={image.src}
@@ -96,10 +89,8 @@ export function ExpandedImageDialogContent(props: {
       className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem,var(--safe-area-width))] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem,var(--safe-area-width))]"
       showCloseButton
       ref={contentRef}
-      // Focus the dialog itself, not the first action button, whose tooltip
-      // pops open on that focus. Radix skips its own focus move once this is
-      // prevented, so the dialog has to take focus explicitly or it would be
-      // left outside the modal, on the trigger Radix hides from screen readers.
+      // Focus the dialog itself, not the first action button, whose tooltip pops open on that focus.
+      // Radix skips its own focus move once this is prevented, so the dialog has to take focus explicitly or it would be left outside the modal, on the trigger Radix hides from screen readers.
       onOpenAutoFocus={(event) => {
         event.preventDefault();
         contentRef.current?.focus();
@@ -112,12 +103,7 @@ export function ExpandedImageDialogContent(props: {
   );
 }
 
-/**
- * Owns the copy/download mutation, deliberately BELOW `DialogContent`: Radix
- * mounts a closed dialog's subtree lazily, so keeping the hook here means a
- * thumbnail that never gets opened costs no query client at all - the chips
- * render inside surfaces that have no reason to provide one.
- */
+/** Owns the copy/download mutation, deliberately BELOW `DialogContent`: Radix mounts a closed dialog's subtree lazily, so keeping the hook here means a thumbnail that never gets opened costs no query client at all - the chips render inside surfaces that have no reason to provide one. */
 function ExpandedImageActionBar(props: {
   readonly src: string;
   readonly mediaType: string;

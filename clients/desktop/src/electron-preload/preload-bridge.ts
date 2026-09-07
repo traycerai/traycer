@@ -34,20 +34,6 @@ import {
 } from "./selection-authority-bridge";
 import { readSyncString } from "./sync-bootstrap";
 
-/**
- * Preload script exposing an `IRunnerHost`-shaped bridge through
- * `contextBridge.exposeInMainWorld('runnerHost', …)`. The renderer entry
- * (`src/renderer-shell/main.tsx`) wraps this bridge into a `DesktopRunnerHost`
- * that implements the shared
- * `@traycer-clients/shared/platform/runner-host` interface.
- *
- * Because `contextIsolation` is enabled, only serializable values and
- * registered functions cross the bridge. Per-feature bridge surfaces (auth,
- * host, tray, windows, menu, support, lifecycle) live in sibling
- * `*-bridge.ts` files; importing them registers their eager `ipcRenderer.on`
- * subscriptions at module load. This entry only composes them into the final
- * `runnerHost` object.
- */
 
 const windowId = readSyncString(RunnerHostSync.windowId, "primary");
 const sentryRendererDsn = readSyncString(RunnerHostSync.sentryRendererDsn, "");

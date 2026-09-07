@@ -59,9 +59,8 @@ type ErrorInstallState = Extract<
   { status: "error" }
 >;
 
-// Typed on the protocol reason union, not `string`. With the assertion a
-// misspelled reason still compiled, and the test then exercised the
-// default-deny arm while claiming to cover the named one.
+// With the assertion a misspelled reason still compiled, and the test then exercised the default-deny arm
+// while claiming to cover the named one.
 function errorState(reason: ErrorInstallState["reason"]): ErrorInstallState {
   return {
     status: "error",
@@ -73,10 +72,7 @@ function errorState(reason: ErrorInstallState["reason"]): ErrorInstallState {
 
 describe("versionUseEligibility", () => {
   it("allows Use for an installed version below the recommended baseline (D1 as revised 2026-08-12)", () => {
-    // The below-baseline disable and the offline fail-closed arm are gone:
-    // the host refuses `below-security-floor` / `host-ineligible` server-side,
-    // and those arrive as certification on the row, not as a baseline math
-    // problem for the client.
+    // The below-baseline disable and the offline fail-closed arm are gone.
     const row = version({
       version: "1.0.0",
       installState: { status: "installed" },
@@ -128,10 +124,7 @@ describe("versionUseEligibility", () => {
         }),
       );
       expect(result.allowed).toBe(false);
-      // Pin the BRANCH, not just the flag. `versionUseEligibility` refuses for
-      // three different reasons; asserting `allowed === false` alone stays
-      // green if the certification check regresses and the not-installed arm
-      // answers instead.
+      // Pin the branch, not just the flag.
       if (!result.allowed) {
         expect(result.reason).toBe(certificationMetaLine(certification));
       }
@@ -172,9 +165,8 @@ describe("versionDeleteEligibility", () => {
     expect(versionDeleteEligibility(row)).toEqual({ allowed: true });
   });
 
-  // The host reserves a quarantined directory as evidence of a failed
-  // verification and answers `quarantine-reserved`, so an enabled Delete here
-  // is an action offered solely to be refused.
+  // The host reserves a quarantined directory as evidence of a failed verification and answers
+  // `quarantine-reserved`, so an enabled Delete here is an action offered solely to be refused.
   it("does not allow Delete for a quarantined version", () => {
     const result = versionDeleteEligibility(
       version({
@@ -334,10 +326,7 @@ describe("versionErrorIsRetryable", () => {
 });
 
 describe("copy and label rules with no coverage before this", () => {
-  // `deferred-locked` is the one remove refusal that is NOT a failure: the
-  // host queues the delete for boot GC. The panel renders it as an `info`
-  // notice on that reasoning, so copy that reads as an error would contradict
-  // the surface it appears on.
+  // `deferred-locked` is the one remove refusal that is not a failure: the host queues the delete for boot GC.
   it("states deferred-locked removal as queued, not as a failure", () => {
     const message = removeResultUserMessage({
       ok: false,
@@ -358,8 +347,7 @@ describe("copy and label rules with no coverage before this", () => {
     ).toBe("Pinned as current for this pack");
   });
 
-  // Retry is a promise that trying again can work. It may only appear for the
-  // reasons on the retryable allow-list; every other error state still offers
+  // It may only appear for the reasons on the retryable allow-list; every other error state still offers
   // Download, and `versionDownloadEligibility` is what disables it.
   it("labels the fetch action Retry only for a retryable error", () => {
     expect(
@@ -428,9 +416,8 @@ describe("labels and helpers", () => {
   });
 
   it("gives every install-error reason its own sentence", () => {
-    // Totality matters more than the wording: a reason with no case would be a
-    // compile error, but two reasons collapsing onto one sentence would not,
-    // and that silently loses the retry/no-retry distinction.
+    // Totality matters more than the wording: a reason with no case would be a compile error, but two reasons
+    // collapsing onto one sentence would not, and that silently loses the retry/no-retry distinction.
     const reasons = [
       "disk-full",
       "network",
@@ -448,10 +435,8 @@ describe("labels and helpers", () => {
   });
 
   it("speaks a broken row's trouble from the typed reason, never the wire message", () => {
-    // `message` is documented as the UNDERLYING operator-facing detail and can
-    // carry raw filesystem or network text. This assertion used to live on
-    // `composeVersionRowMeta`, which the hover card's removal deleted; the
-    // invariant outlived the function, so it moves here.
+    // `message` is documented as the underlying operator-facing detail and can carry raw filesystem or network
+    // text.
     const raw = "ENOSPC: no space left on device, write '/var/tmp/pack.part'";
     const line = versionTroubleLine(
       version({
@@ -471,9 +456,8 @@ describe("labels and helpers", () => {
   });
 
   it("gives a healthy row no trouble line at all", () => {
-    // The redesign's whole premise: a row that is fine is a number, a chip and
-    // its controls. If this ever returns a string for `installed` or `absent`,
-    // every healthy row grows a second line and the list is a wall again.
+    // If this ever returns a string for `installed` or `absent`, every healthy row grows a second line and the
+    // list is a wall again.
     for (const state of [
       { status: "installed" },
       { status: "absent" },
@@ -486,10 +470,7 @@ describe("labels and helpers", () => {
   });
 
   it("speaks a blocking certification on the CURRENT row, whose chip slot `Current` owns", () => {
-    // `versionRowChip` hands `Current` the chip unconditionally, so a current
-    // version that is later withdrawn has nowhere else to say so. Non-current
-    // blocked rows wear the certification AS their chip and must not get a
-    // second copy here.
+    // Non-current blocked rows wear the certification AS their chip and must not get a second copy here.
     for (const certification of [
       "yanked",
       "below-security-floor",
@@ -543,10 +524,8 @@ describe("labels and helpers", () => {
   });
 
   it("orders the SemVer §11 canonical precedence chain (finding 4 harden)", () => {
-    // Spec-published chain: catches numeric-vs-alphanumeric identifier
-    // ordering and beta.2 < beta.11 (naive string compare gets both wrong).
-    // Anchored on the list's own comparator since the baseline predicate
-    // left with the 2026-08-12 D1 revision.
+    // Spec-published chain: catches numeric-vs-alphanumeric identifier ordering and beta.2 < beta.11 (naive string
+    // compare gets both wrong).
     const chain = [
       "1.0.0-alpha",
       "1.0.0-alpha.1",
@@ -664,12 +643,8 @@ describe("labels and helpers", () => {
   });
 
   it("gives an unpublished version a chip that outranks Recommended", () => {
-    // The signal this chip carries is "deleting this is permanent", because an
-    // unpublished version cannot be fetched again. A version can be BOTH
-    // unpublished and recommended, and of the two only one of them changes
-    // what pressing delete costs - so the warning has to win. This ordering
-    // is the whole reason the chip exists; before it, the state lived only in
-    // a hover card, and deleting the card would have taken it with it.
+    // This ordering is the whole reason the chip exists; before it, the state lived only in a hover card, and
+    // deleting the card would have taken it with it.
     const chip = versionRowChip(
       version({
         version: "1.0.0",
@@ -682,9 +657,8 @@ describe("labels and helpers", () => {
   });
 
   it("still lets Current outrank an unpublished chip", () => {
-    // Not an oversight that the warning loses here: delete is refused for the
-    // current version outright, so there is no reversibility question to warn
-    // about on this row.
+    // Not an oversight that the warning loses here: delete is refused for the current version outright, so there
+    // is no reversibility question to warn about on this row.
     const chip = versionRowChip(
       version({
         version: "1.0.0",
@@ -697,11 +671,7 @@ describe("labels and helpers", () => {
   });
 
   it("shows a Delete control for anything with bytes on disk, and only that", () => {
-    // `versionShowsDeleteAction` is what lets a BLOCKED delete still render as
-    // a disabled button carrying its reason. The quarantine case is the one
-    // that regressed before: the panel hardcoded a `current`-only disabled arm,
-    // so a quarantined row rendered no control and never showed the sentence
-    // `versionDeleteEligibility` computes for it.
+    // The quarantine case is the one that regressed before.
     const onDisk = [
       version({ version: "1.0.0", installState: { status: "installed" } }),
       version({

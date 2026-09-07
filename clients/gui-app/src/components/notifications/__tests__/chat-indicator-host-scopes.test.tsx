@@ -22,14 +22,8 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * The multi-host indicator fan-out, driven through real `HostClient`s over
- * `MockHostMessenger` so "which host was asked about which chat" is OBSERVED on
- * the wire rather than asserted against a spy's shape.
- *
- * Only the client resolver is stubbed - `useHostClientForHostId` reaches the
- * live host runtime binding, which no provider publishes in jsdom.
- */
+/** Only the client resolver is stubbed - `useHostClientForHostId` reaches the live host runtime binding, which
+ * no provider publishes in jsdom. */
 
 const HOST_A = mockLocalHostEntry.hostId;
 const HOST_B = mockRemoteHostEntry.hostId;
@@ -55,7 +49,6 @@ vi.mock("sonner", () => ({
 }));
 
 interface HostStub {
-  /** Every chat id set this host was actually ASKED about, in order. */
   readonly asked: string[][];
 }
 
@@ -77,11 +70,8 @@ function lit(
   };
 }
 
-/**
- * A host that answers ONLY about chats it owns - which is what the real RPC
- * does, since it is computed over that host's own SQLite rows. A host asked
- * about someone else's chat returns nothing for it.
- */
+/** A host that answers only about chats it owns - which is what the real RPC does, since it is computed over
+ * that host's own SQLite rows. */
 type OwnedIndicatorRows = ReadonlyArray<
   readonly [string, Record<string, HostNotificationsIndicatorState>]
 >;
@@ -138,13 +128,8 @@ function createHarness(ownedEntries: OwnedIndicatorRows): Harness {
   return { queryClient, hosts };
 }
 
-/**
- * One tab's indicator read, host-qualified end to end: the probe reads with
- * its tab's bound host (the same `originHostId` a real host-bound tab icon
- * passes), and its key and test id carry the host too - `chatId` is
- * host-minted, so two tabs can legitimately share one under different hosts
- * and a chatId-only key would collide in that exact test.
- */
+/** One tab's indicator read, host-qualified end to end: the probe reads with its tab's bound host (the same
+ * `originHostId` a real host-bound tab icon passes), and its key and test id carry the host too. */
 function Probe(props: {
   readonly hostId: string;
   readonly chatId: string;
@@ -240,10 +225,8 @@ describe("ChatIndicatorHostScopes", () => {
 
   it("does not let one host light a tab bound to another that shares its host-minted id", async () => {
     const harness = createHarness([
-      // Both hosts have a chat called `shared` - `chatId` is host-minted and
-      // not unique across hosts. Only host A's is lit, and BOTH tabs are on
-      // screen at once: the collision is only real when the two same-id tabs
-      // render together, and each probe must read its own host's answer.
+      // Only host A's is lit, and both tabs are on screen at once: the collision is only real when the two same-id
+      // tabs render together, and each probe must read its own host's answer.
       [HOST_A, { shared: lit({ pendingApproval: true }) }],
       [HOST_B, { shared: lit({}) }],
     ]);
@@ -257,9 +240,8 @@ describe("ChatIndicatorHostScopes", () => {
       expect(harness.hosts.get(HOST_A)?.asked).toEqual([["shared"]]);
       expect(harness.hosts.get(HOST_B)?.asked).toEqual([["shared"]]);
     });
-    // Host A's flag lights host A's tab and ONLY host A's tab - the same-id
-    // tab bound to host B stays dark even though the aggregate map now holds
-    // an OR of both answers under this one chatId.
+    // Host A's flag lights host A's tab and only host A's tab - the same-id tab bound to host B stays dark even
+    // though the aggregate map now holds an OR of both answers under this one chatId.
     await waitFor(() => {
       expect(screen.getByTestId(`probe-${HOST_A}-shared`).textContent).toBe(
         "approval",

@@ -51,13 +51,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  // Reports which of the requested URL schemes have a registered handler on
-  // this machine. `getApplicationNameForProtocol` consults the same OS registry
-  // (LaunchServices / Windows registry / xdg) that backs `scheme://` launches,
-  // so a non-empty handler name means a `scheme://` open would resolve. The
-  // query is by scheme only - no app-name or bundle-path matching - so a
-  // renamed install still reports as available. Synchronous and side-effect
-  // free; it never launches anything.
+  // Synchronous and side-effect free; it never launches anything.
   bridge.handleInvoke(
     RunnerHostInvoke.getRegisteredUrlSchemes,
     (_event, schemes: unknown): readonly string[] => {
@@ -107,11 +101,6 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
     await shell.openExternal(url);
   });
 
-  // Opens the macOS Privacy → Full Disk Access pane, where the login import
-  // sends a user whose Safari jar the OS refused. Hardcoded in main for the
-  // same reason as the microphone link: `x-apple.systempreferences:` is not
-  // an http(s) scheme, so `openExternalLink` would refuse it and report
-  // nothing (`safelyOpenExternal` answers `false`, which that handler drops).
   bridge.handleInvoke(RunnerHostInvoke.openFullDiskAccessSettings, async () => {
     if (process.platform !== "darwin") {
       log.warn(
@@ -286,9 +275,6 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  // Ticket 09 / T6: same wire shape as `supportSubmitReport` (draftId + the
-  // five public fields + optional privateDiagnostics), so it reuses that
-  // parser rather than duplicating an identical one.
   bridge.handleInvoke(
     RunnerHostInvoke.supportBuildPublicDraft,
     (event, form: unknown) => {
@@ -337,13 +323,6 @@ function parseForegroundAppLocal(
   };
 }
 
-// A draftId is only unique within one renderer realm (`desktop-dialog-store`
-// resets its counter to 0 per window), and the frozen-evidence store is one
-// process-wide map - without the sender scoped in, two windows' draft 1 would
-// collide (overwritten freezes, cross-window discards, a submit consuming the
-// other window's report id). `-1` is a defensive fallback for the
-// (practically unreachable) case where the real Electron event carries no
-// sender id at all; it does not itself dedupe across such calls.
 const UNKNOWN_SENDER_ID = -1;
 
 function frozenEvidenceKey(event: IpcMainInvokeEvent, draftId: number): string {
@@ -442,11 +421,6 @@ function parseSupportPrivateOutcome(
   throw new Error(`${context} must be "delivered", "unconfirmed", or "none"`);
 }
 
-// Exactly ticket 05's five `SerializedReportIssuePrivateDiagnostics` keys,
-// all required whenever `privateDiagnostics` is sent at all - the serializer
-// never omits one (an "empty" cause/registry is `null`/all-`unavailable`,
-// not a missing key), so a missing key here is a real contract violation,
-// not an optional field left out.
 const PRIVATE_DIAGNOSTICS_KEYS = contractKeySet<SupportPrivateDiagnostics>({
   cause: true,
   registry: true,
@@ -484,10 +458,6 @@ const CONTEXT_REGISTRY_KEYS = contractKeySet<SupportContextRegistrySnapshot>({
 const CAPTURED_FIELD_KNOWN_KEYS = new Set(["status", "value"]);
 const CAPTURED_FIELD_UNAVAILABLE_KEYS = new Set(["status"]);
 
-// Renderer and main ship from the same build in this Electron app (no
-// independent client/server versioning), so rejecting unknown fields outright
-// carries no forward-compat risk - and is the point: an allowlisted field
-// must never become a smuggling path for an untyped object.
 function assertOnlyAllowedKeys(
   record: Record<string, unknown>,
   allowedKeys: ReadonlySet<string>,
@@ -540,11 +510,6 @@ function parseProviderSelectionClassValue(
   throw new Error(`${context} must be "bundled", "path", or "custom"`);
 }
 
-/**
- * A `CapturedField<T>` is validated by its `status` first: `unavailable`
- * allows no other keys (there is no value to carry), `known`/`stale` require
- * exactly `{ status, value }` with `parseValue` applied to `value`.
- */
 function parseCapturedField<T>(
   value: unknown,
   context: string,
@@ -701,14 +666,6 @@ function assertArrayBuffer(
   }
 }
 
-/**
- * Full revalidation of one attached screenshot, independent of whatever the
- * renderer's attach-time checks already did (ticket 08 guardrail: Electron
- * main trusts nothing from the renderer). Checks shape, the MIME allowlist,
- * per-image size, and the actual magic bytes against the declared type - a
- * mismatched extension/Content-Type pair is exactly what a crafted payload
- * would present.
- */
 function parseSupportImageAttachment(
   value: unknown,
   context: string,
@@ -845,17 +802,8 @@ function parseSupportReportRequest(
   };
 }
 
-// G15: mirrors the dialog's own evidence gate (tech-plan T4/T5 - a sentence,
-// a screenshot, or (bug-only) an actively-changed location satisfies it;
-// an error envelope always does) at the wire boundary, so a stale or buggy
-// client can never smuggle a genuinely-empty report past a UI gate that was
-// supposed to be the only thing blocking it. `location` is non-null on the
-// wire ONLY when the client's own gate already treated an actively-changed
-// bug location as satisfying evidence (see `buildRequest` in the dialog),
-// so checking it here is an exact mirror, not a re-derivation. Every
-// non-empty case the client's own gate accepts must still be accepted here:
-// this must never regress into rejecting an error-triggered report with no
-// typed text, or a bug report satisfied by location alone.
+// G15: mirrors the dialog's own evidence gate (tech-plan T4/T5 - a sentence, a screenshot, or (bug-only) an actively-changed location satisfies it.
+// Every non-empty case the client's own gate accepts must still be accepted here: this must never regress into rejecting an error-triggered report with no typed text, or a bug.
 function assertHasSubmittableEvidence(
   input: {
     readonly intent: string;

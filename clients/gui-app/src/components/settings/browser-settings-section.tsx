@@ -51,9 +51,8 @@ export function BrowserSettingsSection(): ReactNode {
 
   return (
     <>
-      {/* The whole group is conditional now, not just its row: link and agent
-          controls moved to Settings > Opening behavior, so with no detected
-          origins the card would be a heading over an empty box. */}
+      {/* The whole group is conditional now, not just its row: link and agent controls moved to Settings > Opening
+         behavior, so with no detected origins the card would be a heading over an empty box. */}
       {browserDevOrigins.length > 0 ? (
         <SettingsGroup
           title="Browser"
@@ -108,32 +107,12 @@ function BrowserDevOriginsControl(props: {
   );
 }
 
-/**
- * Settings > Browser's saved-logins group (spec section 7.3, decision #26).
- * The one place a privacy-minded person sees where their website logins are
- * kept, turns them off, forgets them, and sees which sites they cover.
- *
- * Saving is silent and on by default, Chrome-style: there is nothing to
- * explain, consent to or retry, so this group is passive - a toggle, a list and
- * one destructive action.
- *
- * Host-scoped like every other host read on this page: the site list comes from
- * THIS surface's host, and clearing goes back out to the browser streams of
- * whichever hosts are live. The toggle is the odd one out on purpose - it is
- * desktop-local, per machine (decision #18), so it is read from the desktop
- * bridge rather than from any host.
- *
- * Renders nothing without a browser bridge (the web build, a host-less test
- * harness): there is no machine here whose jar this could be about. Nor
- * without a host runtime: the list is a host's own answer and both destructive
- * actions travel to hosts, so with no runtime above this group there is
- * nothing to show and no button here that could work.
- */
+/** Nor without a host runtime: the list is a host's own answer and both destructive actions travel to hosts, so
+ * with no runtime above this group there is nothing to show and no button here that could work. */
 function BrowserSavedLoginsGroup(): ReactNode {
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
-  // The non-throwing accessor, deliberately: Settings panels render in shells
-  // with no host runtime bound, and `useHostClient()` - which the site-list
-  // query reaches - throws there rather than answering null.
+  // The non-throwing accessor, deliberately: Settings panels render in shells with no host runtime bound, and
+  // `useHostClient` - which the site-list query reaches - throws there rather than answering null.
   const hostBinding = useHostBinding();
   const saveLogins = useBrowserSaveLogins(browserView);
   const enabled = saveLogins.enabled;
@@ -149,11 +128,8 @@ function BrowserSavedLoginsGroup(): ReactNode {
   );
 }
 
-/**
- * The group's rows, in their own component so the host query lives BELOW the
- * runtime gate: the gate has to govern what renders, since a hook cannot be
- * called conditionally.
- */
+/** The group's rows, in their own component so the host query lives below the runtime gate: the gate has to
+ * govern what renders, since a hook cannot be called conditionally. */
 function BrowserSavedLoginsRows(props: {
   readonly browserView: BrowserViewBridge;
   readonly saveLogins: BrowserSaveLoginsController;
@@ -221,12 +197,8 @@ function BrowserSavedLoginsRows(props: {
   );
 }
 
-/**
- * Turning saving off moves this machine's browser onto a throwaway jar: open
- * tabs reload signed out, and nothing new is kept. What is already saved is
- * left exactly where it is - that is what Forget is for - so turning it back on
- * returns to the same logins.
- */
+/** What is already saved is left exactly where it is - that is what Forget is for - so turning it back on
+ * returns to the same logins. */
 function SavedLoginsToggleRow(props: {
   readonly saveLogins: BrowserSaveLoginsController;
   readonly enabled: boolean;
@@ -301,12 +273,8 @@ function ImportLoginsRow(props: {
   );
 }
 
-/**
- * Both destructive actions are main's: it raises the native dialog, does the
- * work, and answers whether the user confirmed. This renderer only reports
- * that answer, so a rejected IPC has to read as "not confirmed" rather than
- * escape a click handler as an unhandled rejection.
- */
+/** This renderer only reports that answer, so a rejected IPC has to read as "not confirmed" rather than escape
+ * a click handler as an unhandled rejection. */
 async function confirmedByMain(
   request: Promise<boolean>,
   failureMessage: string,

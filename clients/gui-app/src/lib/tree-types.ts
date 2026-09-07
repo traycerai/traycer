@@ -3,7 +3,6 @@ import type React from "react";
 /**
  * Base constraint for user-provided tree node data.
  * Users extend this with their own properties.
- * Using `object` allows interfaces without index signatures.
  */
 export type TreeNodeData = object;
 
@@ -11,9 +10,7 @@ export type TreeNodeData = object;
  * Nested input format - what users pass as tree data.
  */
 export interface TreeNodeNested<T extends TreeNodeData = TreeNodeData> {
-  /** Unique identifier for this node */
   id: string;
-  /** Custom user data */
   data: T;
   /** Whether this node can have children (shows expand affordance even when empty) */
   isGroup?: boolean;
@@ -45,28 +42,16 @@ export type DropPosition = "before" | "after" | "inside";
  * Information passed to DND event handlers.
  */
 export interface TreeDragEvent<T extends TreeNodeData = TreeNodeData> {
-  /** The node being dragged */
   source: FlatTreeNode<T>;
-  /** The source tree instance id */
   sourceTreeId: string;
-  /** The target node (drop target) */
   target: FlatTreeNode<T>;
-  /** The target tree instance id */
   targetTreeId: string;
-  /** Where relative to target */
   position: DropPosition;
-  /** Projected depth after drop */
   projectedDepth: number;
 }
 
-/**
- * Callback for lazy loading children.
- */
 export type MaybePromise<T> = T | Promise<T>;
 
-/**
- * Callback for lazy loading children.
- */
 export type LoadChildrenFn<T extends TreeNodeData = TreeNodeData> = (
   node: FlatTreeNode<T>,
 ) => Promise<TreeNodeNested<T>[]>;

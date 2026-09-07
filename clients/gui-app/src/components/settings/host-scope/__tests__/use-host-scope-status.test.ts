@@ -12,21 +12,10 @@ import {
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
-/**
- * The status machine is the safety contract of the whole settings host scope:
- * every "may this panel read through a client, and which one" decision reduces
- * to its return value.
- *
- * Nothing else covered it. Every panel suite mocks `useHostScope` wholesale
- * with a fixture pinned to `following`, so the derivation never ran in a test —
- * which is how a `vanished` scope came to resolve as this computer's host, and
- * how a signed-out client came to render a spinner that could never resolve.
- */
+/** Every panel suite mocks `useHostScope` wholesale with a fixture pinned to `following`, so the derivation
+ * never ran in a test. */
 
-// A REAL client, not a cast. The derivation only branches on its presence, so
-// a stub would do behaviourally — but a chained `as unknown as` assertion is
-// exactly what this repo's lint forbids, in tests as much as in production,
-// and constructing the real thing over a mock messenger costs three lines.
+// A real client, not a cast.
 const SOME_CLIENT: HostClient<HostRpcRegistry> =
   new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -76,9 +65,8 @@ describe("hostListReadiness", () => {
   const FAILED = { hasData: false, isError: true };
 
   it("treats a rejected list as settled, not as perpetual loading", () => {
-    // The regression this exists for: a failed request left `resolved` false
-    // forever, so a pinned host that was genuinely gone could never be called
-    // `vanished` and spun until the app restarted.
+    // The regression this exists for: a failed request left `resolved` false forever, so a pinned host that was
+    // genuinely gone could never be called `vanished` and spun until the app restarted.
     expect(hostListReadiness(FAILED, ANSWERED)).toEqual({
       resolved: true,
       failed: true,
@@ -109,9 +97,8 @@ describe("hostListReadiness", () => {
 
 describe("deriveHostScopeStatus", () => {
   it("reports vanished before anything else, even when a host resolved", () => {
-    // Precedence matters: a stale `host` alongside a vanished id must not be
-    // read as usable. This ordering is what stops an administration surface
-    // silently re-pointing at a machine the user never chose.
+    // Precedence matters: a stale `host` alongside a vanished id must not be read as usable. This ordering is what
+    // stops an administration surface silently re-pointing at a machine the user never chose.
     expect(
       derive({ vanishedHostId: "gone", host: CONNECTABLE, isFollowing: true }),
     ).toBe("vanished");
@@ -136,9 +123,8 @@ describe("deriveHostScopeStatus", () => {
   });
 
   it("treats a missing credential as unreachable rather than connecting", () => {
-    // The transient client is built synchronously, so a connectable host with
-    // no client means no request context / no bound user — signed out. This
-    // rendered "Connecting to X…" forever before.
+    // The transient client is built synchronously, so a connectable host with no client means no request context /
+    // no bound user - signed out.
     expect(derive({ overrideClient: null, hasRequestAuthority: false })).toBe(
       "unreachable",
     );
@@ -161,12 +147,7 @@ describe("deriveHostScopeStatus", () => {
   });
 
   it("refuses to follow an active host whose route went unavailable", () => {
-    // The active host keeps its id when its directory entry flips to
-    // `unavailable`, so `isFollowing` stays true. Answering `following` first
-    // let the ACTIVE host alone bypass the availability rule the model applies
-    // to every other row: `connectable` was correctly false and RPC panels
-    // mounted regardless, on the ambient client, against a route the transport
-    // refuses. `following` is a claim about the CLIENT, not about the pick.
+    // `following` is a claim about the client, not about the pick.
     expect(derive({ isFollowing: true, host: UNROUTABLE })).toBe("unreachable");
   });
 

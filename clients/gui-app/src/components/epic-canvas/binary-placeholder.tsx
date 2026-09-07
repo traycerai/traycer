@@ -7,7 +7,6 @@ import { cn } from "@/lib/utils";
 interface BinaryPlaceholderProps {
   readonly fileName: string;
   readonly sizeBytes: number | null;
-  /** One-line reason shown below the size (image-preview decision log, decision #14). `null` renders none. */
   readonly reason: string | null;
   /** `null` when there is no single unambiguous file on disk to open (e.g. a per-side diff placeholder) - hides the button entirely rather than disabling it. */
   readonly onOpenExternally: (() => void) | null;
@@ -17,9 +16,7 @@ interface BinaryPlaceholderProps {
 }
 
 export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
-  // A PDF is a KNOWN type here (the heading below already says so) - the
-  // question-mark file icon reads as "unidentified", and the PDF diff block
-  // uses the document icon, so keep the two surfaces consistent.
+  // A PDF is a KNOWN type here (the heading below already says so) - the question-mark file icon reads as "unidentified", and the PDF diff block uses the document icon, so keep the two surfaces consistent.
   const isPdf = isPdfAssetPath(props.fileName);
   const Icon = isPdf ? FileTextIcon : FileQuestionMarkIcon;
   return (

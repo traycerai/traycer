@@ -28,9 +28,8 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: undefined, isLoading: false }),
 }));
 
-// Render the Radix dropdown menu (and its submenu) inline + always-open so the
-// test can assert the menu items without fighting pointer-open semantics in
-// jsdom. This mirrors the established mock in epic-sidebar-selection-mode.test.
+// Render the Radix dropdown menu (and its submenu) inline + always-open so the test can assert the menu items
+// without fighting pointer-open semantics in jsdom.
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
@@ -426,8 +425,6 @@ describe("FolderRow", () => {
       NOOP,
     );
     const copyButton = screen.getByLabelText("Copy folder path");
-    // The bug was `text-muted-foreground/70` (a fractional text color) MULTIPLIED
-    // by an outer `opacity-[var(--fc-opacity,0.7)]` - ~49% effective opacity.
     // Both must be gone from the default (non-hover) state.
     expect(copyButton.className).not.toMatch(/text-muted-foreground\/\d/);
     expect(copyButton.className).not.toMatch(/opacity-\[var\(--fc-opacity/);
@@ -471,9 +468,8 @@ describe("FolderRow", () => {
     expect(identity.children[1].className).toContain("text-foreground/90");
     expect(location.className).toContain("var(--color-muted-foreground)");
     expect(branch.className).toContain("text-foreground/75");
-    // The path tooltip is scoped to the NAME now, not the whole chip - the
-    // chip also carries the copy-path button and missing-folder warning, each
-    // with a tooltip of its own.
+    // The path tooltip is scoped to the name now, not the whole chip - the chip also carries the copy-path button
+    // and missing-folder warning, each with a tooltip of its own.
     expect(tooltipTextNear(identity.children[1])).toBe("/repo");
   });
 
@@ -599,8 +595,8 @@ describe("FolderRow", () => {
   it("renders a read-only branch picker for an adopted worktree", () => {
     renderRow(
       {
-        // An import is `mode: "worktree"`, so keying off `mode` alone would wrongly
-        // show the editable new-worktree form — the branch must stay read-only.
+        // An import is `mode: "worktree"`, so keying off `mode` alone would wrongly show the editable new-worktree
+        // form - the branch must stay read-only.
         mode: "worktree",
         branchLabel: "feat/login",
         currentIntent: {
@@ -1291,9 +1287,8 @@ describe("WorkspaceSummaryTrigger", () => {
         document.querySelector('[data-slot="hover-card-content"]'),
       ).not.toBeNull();
     });
-    // ...and clicking to open the inspect popover must dismiss it. This is the
-    // read-only sibling of the interactive coordination gate - the same
-    // HoverCard-doesn't-close-on-trigger-click gap, guarded here too.
+    // ...and clicking to open the inspect popover must dismiss it. This is the read-only sibling of the
+    // interactive coordination gate - the same HoverCard-doesn't-close-on-trigger-click gap, guarded here too.
     fireEvent.click(trigger);
     await screen.findByTestId("workspace-readonly-folders-popover");
     await waitFor(() => {
@@ -1386,20 +1381,18 @@ describe("FolderBranchControl — Escape close", () => {
     const popover = await screen.findByTestId("folder-branch-popover");
     expect(popover).toBeTruthy();
 
-    // Escape closes the popover and restores focus to the trigger. Production
-    // arms suppress via onCloseAutoFocus (no preventDefault) so the chip
-    // tooltip does not open solely from that focus return.
+    // Production arms suppress via onCloseAutoFocus (no preventDefault) so the chip tooltip does not open solely
+    // from that focus return.
     fireEvent.keyDown(popover, { key: "Escape", code: "Escape" });
     await waitFor(() => {
       expect(screen.queryByTestId("folder-branch-popover")).toBeNull();
     });
 
-    // Do not preventDefault onCloseAutoFocus for Escape — chip must regain focus.
+    // Do not preventDefault onCloseAutoFocus for Escape - chip must regain focus.
     expect(document.activeElement).toBe(chip);
 
-    // Drain focusin microtask + 150ms suppress fallback so any delayed open
-    // would surface. With delayDuration={0}, a suppress miss would show a
-    // tooltip role for the chip label.
+    // Drain focusin microtask + 150ms suppress fallback so any delayed open would surface. With delayDuration={0},
+    // a suppress miss would show a tooltip role for the chip label.
     await act(async () => {
       await Promise.resolve();
       vi.advanceTimersByTime(200);
@@ -1513,11 +1506,7 @@ describe("WorkspaceFolderSummaryControl", () => {
       "workspace-hover-copy-path",
     );
     expect(copyButtons).toHaveLength(1);
-    // The copy action is a real (non-inert) focusable control - it exists once
-    // on the card, not duplicated into an a11y clone. NB: this asserts it is
-    // focusable, not that it is in the sequential Tab order: hover-card content
-    // is pointer-operable only (see hover-card.tsx), and copy-path's
-    // keyboard-reachable home is the click-open folder rows.
+    // NB: this asserts it is focusable, not that it is in the sequential Tab order.
     copyButtons[0].focus();
     expect(document.activeElement).toBe(copyButtons[0]);
   });
@@ -1654,9 +1643,8 @@ describe("WorkspaceFolderSummaryControl", () => {
       ).not.toBeNull();
     });
 
-    // ...but clicking to open the picker must dismiss it. A HoverCard, unlike a
-    // Tooltip, does not close on the trigger's own click, so the control gates
-    // the preview closed while the popover is open (regression guard).
+    // ...but clicking to open the picker must dismiss it. A HoverCard, unlike a Tooltip, does not close on the
+    // trigger's own click, so the control gates the preview closed while the popover is open (regression guard).
     fireEvent.click(trigger);
     await screen.findByTestId("workspace-rows-popover");
     await waitFor(() => {

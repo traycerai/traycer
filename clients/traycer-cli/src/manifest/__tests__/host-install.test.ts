@@ -9,21 +9,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Pin every environment-aware path helper at a sandbox under tmpdir so the
-// writer can mkdir + rename without touching the real user home. We
-// register the mock up-front via vi.mock and let each test rebind the
-// sandbox root through `__setSandbox` exposed on the mock module.
+// Pin every environment-aware path helper at a sandbox under tmpdir so the writer can mkdir + rename without touching the real user home.
+// We register the mock up-front via vi.mock and let each test rebind the sandbox root through `__setSandbox` exposed on the mock module.
 let sandboxRoot = "";
 
-// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
-// load - any export this mock leaves un-overridden would otherwise resolve
-// against the REAL production `~/.traycer`, not this sandbox. Redirect the
-// `os` boundary itself so `vi.importActual`'s fresh module evaluation picks
-// up the sandbox (falling back to the real tmpdir, never the real home,
-// before the first `beforeEach` has set `sandboxRoot`).
-// `vi.mock` factories are hoisted above this file's own top-level `let
-// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
-// live value has to live in `vi.hoisted` instead.
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module load - any export this mock leaves un-overridden would otherwise resolve against the REAL production `~/.traycer`, not this sandbox.
+// Redirect the `os` boundary itself so `vi.importActual`'s fresh module evaluation picks up the sandbox (falling back to the real tmpdir, never the real home, before the first `beforeEach` has set `sandboxRoot`).
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();

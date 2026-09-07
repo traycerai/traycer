@@ -7,13 +7,7 @@ import {
 } from "@/lib/chats/resolve-steer-submit";
 
 /**
- * Exhaustive unit coverage of the pure Cmd+Enter submit-path resolution
- * (decision 1, 4, 5, 13, 17) and the matching discovery-hint gate (decisions 8, 9).
- *
- * Policy is NOT harness-capability-gated, but IS protocol-gated: mod-enter +
- * running + steerEnabled + steerProtocolSupported (chat.subscribe minor>=5) →
- * `"after_safe_point"`. A new renderer on a <=1.4 host must not speak
- * after_safe_point. Capability still gates discovery hints only.
+ * Exhaustive unit coverage of the pure Cmd+Enter submit-path resolution (decision 1, 4, 5, 13, 17) and the matching discovery-hint gate (decisions 8, 9).
  */
 
 const SOURCES: readonly ChatComposerSubmitSource[] = ["enter", "mod-enter"];
@@ -126,9 +120,7 @@ describe("resolveSubmitDeliveryPolicy", () => {
   });
 
   it("still yields after_safe_point on an unsupported harness when protocol supports steer", () => {
-    // Harness capability is deliberately not an argument - the renderer keeps
-    // the steer intent so the host can mark a labeled "After turn" fallback
-    // (decisions 5, 11) instead of erasing it into plain auto.
+    // Harness capability is deliberately not an argument - the renderer keeps the steer intent so the host can mark a labeled "After turn" fallback (decisions 5, 11) instead of erasing it into plain auto.
     expect(
       resolveSubmitDeliveryPolicy({
         source: "mod-enter",

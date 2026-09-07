@@ -21,15 +21,7 @@ import {
 } from "@/lib/attachments/use-chat-image-fetcher";
 
 /**
- * The chat-plane byte chain: `epic.readChatAttachment` on the tile's host
- * first, the epic doc replica only as the legacy fallback.
- *
- * The load-bearing case is a chat whose doc `attachments` map is EMPTY - which
- * is every chat once bytes stop being written into the document - so most of
- * these tests hold `hasAttachmentBytes` at false and assert the image resolves
- * anyway. The second load-bearing case is the inverse: `readAttachmentBytes`
- * waits indefinitely for a hash the replica does not hold, so the chain must
- * never reach it without the presence guard passing first.
+ * The chat-plane byte chain: `epic.readChatAttachment` on the tile's host first, the epic doc replica only as the legacy fallback.
  */
 
 const docMocks = vi.hoisted(() => ({
@@ -180,10 +172,8 @@ describe("useChatImageFetcher", () => {
     await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
       DOC_BYTES,
     );
-    // ONE argument, no signal. `readHeldEpicAttachmentBytes` says why at its
-    // own site: "there is nothing to abort. The waiting is what a signal
-    // bounded, and this leg does not wait." A pin still demanding a signal is
-    // asserting the pre-relocation shape of a call that deliberately lost it.
+    // ONE argument, no signal.
+    // `readHeldEpicAttachmentBytes` says why at its own site: "there is nothing to abort.
     expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
   });
 
@@ -194,17 +184,8 @@ describe("useChatImageFetcher", () => {
     await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
       /unavailable/,
     );
-    // The PROPERTY survives; the mechanism it used to name does not. This leg
-    // was guarded by a separate `hasAttachmentBytes` pre-check, and the guard
-    // moved INTO the worker - `readAttachmentBytes` answers `null` for a hash
-    // the replica does not hold rather than waiting for one to arrive, so
-    // there is one call where there were two, and main no longer calls the
-    // predicate at all. Asserting the old pre-check here would pin a
-    // construction that was deleted on purpose.
-    //
-    // What must stay true is what the test's NAME claims: the caller never
-    // parks. The rejection above is that, and this is the read that answered
-    // null to produce it.
+    // The PROPERTY survives; the mechanism it used to name does not.
+    // This leg was guarded by a separate `hasAttachmentBytes` pre-check, and the guard moved INTO the worker - `readAttachmentBytes` answers `null` for a hash the replica does not hold rather than waiting for one to arrive, so there is one call where there were.
     expect(docMocks.hasAttachmentBytes).not.toHaveBeenCalled();
     expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
   });
@@ -258,10 +239,8 @@ describe("useChatImageFetcher", () => {
     );
     expect(request).toHaveBeenCalledTimes(1);
 
-    // Traycer can install and activate a newer host under the SAME id with no
-    // renderer reload. Keyed on the id alone the verdict would outlive the
-    // build that produced it, and chat-plane-only images - whose bytes are not
-    // in the doc replica at all - would stay unavailable until a full reload.
+    // Traycer can install and activate a newer host under the SAME id with no renderer reload.
+    // Keyed on the id alone the verdict would outlive the build that produced it, and chat-plane-only images - whose bytes are not in the doc replica at all - would stay unavailable until a full reload.
     request.mockReset();
     request.mockResolvedValue({
       ok: true,
@@ -275,12 +254,7 @@ describe("useChatImageFetcher", () => {
   });
 
   it("does not let one build's unsupported verdict suppress a different build", async () => {
-    // The verdict key was `${hostId}\n${hostVersion}`, with a comment
-    // asserting a host id "never contains" a newline - an assumption about a
-    // value that crosses the wire as an unconstrained string, and silent about
-    // `hostVersion` entirely. These two pairs joined to the same key, so the
-    // first host's permanent negative suppressed the second's RPC leg for the
-    // rest of the renderer session.
+    // The verdict key was `${hostId}\n${hostVersion}`, with a comment asserting a host id "never contains" a newline - an assumption about a value that crosses the wire as an unconstrained string, and silent about `hostVersion` entirely.
     request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
     docMocks.hasAttachmentBytes.mockReturnValue(true);
     docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
@@ -322,9 +296,7 @@ describe("useChatImageFetcher", () => {
   });
 
   it("carries the host's sniffed media type alongside the bytes", async () => {
-    // The host derives this from the delivered bytes' magic bytes and never
-    // echoes a client claim, so it is the only trustworthy statement about
-    // what the image IS - and the SVG sanitization gate downstream keys on it.
+    // The host derives this from the delivered bytes' magic bytes and never echoes a client claim, so it is the only trustworthy statement about what the image IS - and the SVG sanitization gate downstream keys on it.
     request.mockResolvedValue({
       ok: true,
       bytesBase64: CHAT_PLANE_BASE64,

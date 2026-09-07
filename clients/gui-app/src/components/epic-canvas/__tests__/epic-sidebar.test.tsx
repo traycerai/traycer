@@ -130,12 +130,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecords: () => [],
 }));
 
-// The rail and panel hosts read PR presence under the CANVAS host - the Epic
-// session's - which is the key `pr-panel-body.tsx` records it under. This
-// suite used to seed the app-wide read instead; after the readers were
-// re-pointed that mock would have been stranded (installed, never read) and
-// the PR rail item would have silently vanished from every assertion below,
-// which is exactly the producer/consumer split the re-point fixed.
+// This suite used to seed the app-wide read instead; after the readers were re-pointed that mock would have been stranded (installed, never read) and the PR rail item would have silently vanished from every assertion below, which is exactly the producer/consumer split the re-point fixed.
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => HOST_ID,
 }));
@@ -172,10 +167,7 @@ function resetLeftPanelStore(): void {
 }
 
 /**
- * The Pull Requests panel is presence-gated, so the rail only carries its icon
- * once this epic has observed a PR. Rail-geometry tests want the full default
- * complement of groups, so they seed presence; the gate itself is covered
- * separately below.
+ * The Pull Requests panel is presence-gated, so the rail only carries its icon once this epic has observed a PR.
  */
 function setPullRequestPresence(hasPullRequests: boolean): void {
   usePrPresenceStore.setState({
@@ -642,9 +634,7 @@ describe("<EpicLeftPanelRail />", () => {
       renderRail();
       openRailMenu();
 
-      // Re-checking an already-visible panel must not freeze today's answer:
-      // Pull Requests has to keep following PR discovery. Selecting closes the
-      // menu, so the second toggle needs it reopened.
+      // Re-checking an already-visible panel must not freeze today's answer: Pull Requests has to keep following PR discovery.
       fireEvent.click(screen.getByTestId("epic-rail-toggle-pull-requests"));
       openRailMenu();
       fireEvent.click(screen.getByTestId("epic-rail-toggle-pull-requests"));

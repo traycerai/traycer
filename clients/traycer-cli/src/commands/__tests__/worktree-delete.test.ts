@@ -76,10 +76,7 @@ const resolveEndpointMock = vi.mocked(resolveEndpoint);
 
 const ctx = {} as CommandContext;
 
-/**
- * A JSON-mode context, so relayed lifecycle/output lines land on the NDJSON
- * `progress` channel where a test can read them instead of on stderr.
- */
+/** A JSON-mode context, so relayed lifecycle/output lines land on the NDJSON `progress` channel where a test can read them instead of on stderr. */
 function jsonCtx(recorded: ProgressInfo[]): CommandContext {
   const noop = (): void => undefined;
   return {
@@ -158,10 +155,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// The readonly-surface refusal moved out of this command: `worktree delete` is
-// now one entry in `READONLY_REFUSED_COMMANDS`, enforced for every gated
-// command in `withRunner` before the body runs. Its coverage lives with that
-// gate, in `__tests__/readonly-surface-gate.test.ts`.
+// The readonly-surface refusal moved out of this command: `worktree delete` is now one entry in `READONLY_REFUSED_COMMANDS`, enforced for every gated command in `withRunner` before the body runs.
+// Its coverage lives with that gate, in `__tests__/readonly-surface-gate.test.ts`.
 
 describe("buildWorktreeDeleteCommand input validation", () => {
   it("rejects an empty --path before any network call", async () => {
@@ -195,9 +190,7 @@ describe("buildWorktreeDeleteCommand command shape", () => {
       source: "cli",
       targets: [{ worktreePath: "/wt/x", scripts: null }],
     });
-    // A validated UUID, minted once per invocation - the host rejects an open
-    // string, and a shared constant would collapse distinct commands onto one
-    // single-flight entry.
+    // A validated UUID, minted once per invocation - the host rejects an open string, and a shared constant would collapse distinct commands onto one single-flight entry.
     expect(
       (session.params as { readonly commandId: string }).commandId,
     ).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -294,9 +287,8 @@ describe("buildWorktreeDeleteCommand stream-drop safety", () => {
       message: expect.stringContaining("may or may not have been removed"),
     });
 
-    // The drop tore the run down. The batch client swaps to `observe` inside
-    // the `reconnecting` transition, so if anything WAS re-sent it can only
-    // have been an observe - never a second authorization to delete.
+    // The drop tore the run down.
+    // The batch client swaps to `observe` inside the `reconnecting` transition, so if anything WAS re-sent it can only have been an observe - never a second authorization to delete.
     expect(
       hoisted.state.sessions.every(
         (opened) =>
@@ -522,11 +514,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
   });
 });
 
-/**
- * Drives the command past the `worktree.deleteBatchByPath` compatibility
- * check into the released `worktree.deleteByPath@1.1` fallback stream and
- * returns that session, mirroring the "older-host fallback" setup above.
- */
+/** Drives the command past the `worktree.deleteBatchByPath` compatibility check into the released `worktree.deleteByPath@1.1` fallback stream and returns that session, mirroring the "older-host fallback" setup above. */
 async function startLegacyFallback(): Promise<{
   readonly pending: Promise<CommandResult>;
   readonly legacy: FakeSession;
@@ -549,15 +537,8 @@ async function startLegacyFallback(): Promise<{
 }
 
 describe("buildWorktreeDeleteCommand legacy stream v1.1 holders", () => {
-  // The v1.0 -> v1.1 diff on `worktree.deleteByPath` is an OPTIONAL `holders`
-  // field added to the `failed` arm - `worktreeBusyHoldersWireFieldSchema` is
-  // `.optional().catch(undefined)`, so a stale v1.0 decode does not fail, it
-  // silently drops the field. A busy refusal kept its prose `reason` and lost
-  // the only actionable part. Because the difference is optional-on-one-arm,
-  // a `ZodType<...>` compile-time constraint alone would NOT have caught a
-  // call site still naming the v1.0 schema - this is exactly the case the
-  // runtime canonical-identity backstop exists for (see
-  // `host-rpc.test.ts`'s "canonical stream frame pairing" suite).
+  // The v1.0 -> v1.1 diff on `worktree.deleteByPath` is an OPTIONAL `holders` field added to the `failed` arm - `worktreeBusyHoldersWireFieldSchema` is `.optional().catch(undefined)`, so a stale v1.0 decode does not fail, it silently drops the field.
+  // A busy refusal kept its prose `reason` and lost the only actionable part.
   it("surfaces holders from a v1.1 failed frame in details and the human message", async () => {
     const { pending, legacy } = await startLegacyFallback();
 

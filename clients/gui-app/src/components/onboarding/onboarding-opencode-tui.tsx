@@ -4,14 +4,8 @@ interface OnboardingOpencodeTuiProps {
   readonly reducedMotion: boolean;
 }
 
-/**
- * Static recreation of the OpenCode terminal UI used inside the onboarding
- * diorama's OpenCode agent pane. Colors come from the shared `--term-ansi-*`
- * tokens so it repaints with the active theme, exactly like the real xterm
- * host. Like a real terminal, the conversation sits at the top and the prompt
- * stays pinned to the bottom; when the pane is short the conversation clips
- * first so the prompt + footer always stay visible.
- */
+/** Like a real terminal, the conversation sits at the top and the prompt stays pinned to the bottom; when the
+ * pane is short the conversation clips first so the prompt + footer always stay visible. */
 export function OnboardingOpencodeTui(props: OnboardingOpencodeTuiProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas p-3 font-mono text-code-xs leading-relaxed text-foreground/85">

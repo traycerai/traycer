@@ -94,9 +94,7 @@ describe("readSeededLaunchWorkspace", () => {
     useWorktreeIntentStagingStore.getState().setIntent(STAGING_KEY, {
       entries: [stagedWorktreeEntry(GIT_FOLDER.path, true)],
     });
-    // The picker mounted and the user clicked "Set as primary" on the
-    // non-git folder - mirrored into the external snapshot store exactly as
-    // `useHomeWorkspaceSource`'s sync effect would.
+    // The picker mounted and the user clicked "Set as primary" on the non-git folder - mirrored into the external snapshot store exactly as `useHomeWorkspaceSource`'s sync effect would.
     useSeededWorkspaceSnapshotStore.getState().setSnapshot(STAGING_KEY, {
       ...fallbackWorkspace,
       primaryPath: NON_GIT_FOLDER.path,
@@ -119,10 +117,7 @@ describe("readSeededLaunchWorkspace", () => {
   });
 
   it("never produces a zero-primary intent when the staged intent alone is restamped away from its only entry", () => {
-    // Reproduces the exact HIGH-severity failure mode: `setPrimaryFolder`
-    // restamped the ONLY staged entry (the git folder) to non-primary
-    // because the target (non-git) has no entry to promote - without the
-    // live-snapshot read, this would leave the launch with zero primaries.
+    // Reproduces the exact HIGH-severity failure mode: `setPrimaryFolder` restamped the ONLY staged entry (the git folder) to non-primary because the target (non-git) has no entry to promote - without the live-snapshot read, this would leave the launch with zero.
     const fallbackWorkspace: LandingDraftWorkspaceSnapshot = {
       folders: [GIT_FOLDER.path, NON_GIT_FOLDER.path],
       folderInfoByPath: {
@@ -148,9 +143,7 @@ describe("readSeededLaunchWorkspace", () => {
 
     const primaries =
       result.worktreeIntent?.entries.filter((entry) => entry.isPrimary) ?? [];
-    // EXACTLY one, never "at least one": `isPrimary` is stamped from a single
-    // resolved path, so a multi-primary intent is as much a regression as a
-    // zero-primary one.
+    // EXACTLY one, never "at least one": `isPrimary` is stamped from a single resolved path, so a multi-primary intent is as much a regression as a zero-primary one.
     expect(primaries).toHaveLength(1);
   });
 

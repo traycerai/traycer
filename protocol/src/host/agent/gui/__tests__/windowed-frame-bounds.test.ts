@@ -16,23 +16,9 @@ import {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
-/**
- * These guard the half of the 1 MiB frame invariant that was assertion-only.
- *
- * `range` responses and the snapshot's tail are budgeted by `read-range.ts`.
- * The skeleton chunks and the index delta were left to their producers, which
- * is exactly the shape `maxBytes` had before it became a real frame ceiling -
- * an invariant every doc comment states and no code enforces.
- *
- * So the assertions below measure the ENCODED frame rather than counting
- * entries. A guard that counts entries passes on a skeleton of 20k tiny rows
- * and says nothing about one carrying full-length previews.
- */
+/** These guard the half of the 1 MiB frame invariant that was assertion-only. */
 
 function entry(rowId: string, preview: string): RowSkeletonEntry {
-  // A realistic fixed-width digest: this suite measures ENCODED bytes, so an
-  // entry missing a field every real entry carries would understate the budget
-  // it is asserting.
   return {
     rowId,
     createdAt: 1_000,
@@ -108,9 +94,7 @@ describe("chunkRowSkeleton keeps every chunk under the frame budget", () => {
   });
 
   it("ships an over-budget entry alone rather than dropping it", () => {
-    // The opposite call from the snapshot tail's, and deliberately: a tail row
-    // the client can refetch is recoverable, a skeleton entry it can never
-    // learn about is a hole in navigation.
+    // The opposite call from the snapshot tail's, and deliberately: a tail row the client can refetch is recoverable, a skeleton entry it can never learn about is a hole in navigation.
     const entries = [
       entry("row-0", "a".repeat(200)),
       entry("row-1", "b".repeat(200)),
@@ -176,15 +160,6 @@ describe("indexChangeFits", () => {
   });
 
   it("measures the whole frame, not its members one at a time", () => {
-    // The reason this takes an array: a turn finishing sends an `appended` and
-    // an `updated` in ONE frame, and two deltas that each fit on their own can
-    // exceed the threshold together. Measuring per member would pass a frame
-    // the relay then reclassifies onto the BULK lane.
-    // MEASURED, not guessed. A 200-char-preview entry encodes to roughly 310
-    // bytes, so the literal 220 that used to sit here made both assertions hold
-    // by luck: the pair landed near 1.41x the budget and one change near 0.70x.
-    // Any move in the preview cap, in `bodyDigest`, or in any other entry field
-    // shifts that ratio and breaks one direction with nothing to say why.
     const measuredEntryBytes = encodedEntriesBytes([
       entry("row-measure", "x".repeat(200)),
     ]);
@@ -217,11 +192,7 @@ describe("indexChangeFits", () => {
   });
 
   it("still measures an array that merely CONTAINS a reindexed", () => {
-    // The exemption above is for the fallback ARRAY, not for the member. An
-    // exemption that fired on membership would let an oversized `appended`
-    // ride along beside a `reindexed` and skip the ceiling entirely - the
-    // measurement waived by the very thing that exists to make waiving
-    // unnecessary.
+    // The exemption above is for the fallback ARRAY, not for the member.
     const oversized: ChatIndexChange = {
       type: "appended",
       entries: Array.from({ length: 4_000 }, (unused, index) =>
@@ -251,9 +222,7 @@ describe("indexChangeFits", () => {
 
 function summary(index: number): ChatAccumulatedFileChangeSummary {
   return {
-    // A realistic path: deep, hyphenated, and the kind a refactor touches by
-    // the thousand. Short fixture paths are how a size guard passes while
-    // saying nothing.
+    // A realistic path: deep, hyphenated, and the kind a refactor touches by the thousand.
     filePath: `packages/app/src/features/settings/panels/section-${index}/settings-panel-row-${index}.tsx`,
     operation: "edit",
     diffSource: "snapshot",
@@ -265,19 +234,10 @@ function summary(index: number): ChatAccumulatedFileChangeSummary {
   };
 }
 
-/**
- * The snapshot's own budget — the one that was assertion-only.
- *
- * The tail, the skeleton chunks, the range and the index delta were each
- * budgeted by code while the SNAPSHOT measured nothing, which is the exact
- * shape `maxBytes` had before a review measured 4,378 rows producing a
- * 1,196,401-byte frame.
- */
+/** The snapshot's own budget - the one that was assertion-only. */
 describe("the bounded snapshot is actually bounded", () => {
   it("a broad-refactor chat's summaries would ALONE blow the frame, which is why they are chunked", () => {
-    // The premise of moving them out. If this ever stops being true the
-    // chunking is dead weight and someone should find out from a test rather
-    // than by reasoning about it.
+    // The premise of moving them out.
     const summaries = Array.from({ length: 5_000 }, (unused, index) =>
       summary(index),
     );
@@ -303,7 +263,7 @@ describe("the bounded snapshot is actually bounded", () => {
         ACCUMULATED_CHANGE_CHUNK_MAX_BYTES,
       );
     }
-    // Every summary exactly once, in order — a panel that reverts a subset it
+    // Every summary exactly once, in order - a panel that reverts a subset it
     // presented as the whole set is worse than one that takes another frame.
     expect(chunks.flatMap((chunk) => chunk.items)).toEqual(summaries);
     expect(chunks.at(-1)?.isFinal).toBe(true);
@@ -319,9 +279,6 @@ describe("the bounded snapshot is actually bounded", () => {
   });
 
   it("rejects a snapshot that would exceed the frame, whatever the field", () => {
-    // Not scoped to the summaries: the guard measures the ENCODED object, so a
-    // future field that grows without anyone noticing is caught by the same
-    // check rather than by a new one nobody remembers to add.
     expect(
       windowedSnapshotFitsFrame(
         { somethingAddedLater: "x".repeat(WINDOWED_SNAPSHOT_MAX_BYTES) },
@@ -339,14 +296,6 @@ describe("the bounded snapshot is actually bounded", () => {
     ).toBe(false);
   });
 
-  /**
-   * The ceiling and the relay's BULK threshold are the same 1 MiB, so a
-   * snapshot that measures just under the ceiling encodes - inside the frame's
-   * own `kind`/`epicId`/`chatId`, plus `encodeMuxMessageBody`'s five-byte
-   * header - to just over the threshold. It is then put on the BULK lane and
-   * can reorder against the interactive deltas this bound exists to keep it
-   * ordered with: the check passes and the invariant breaks.
-   */
   it("reserves the frame envelope, so a just-under snapshot does not just-over the wire", () => {
     // Sized to land in the reserve: over `ceiling - overhead`, under `ceiling`.
     const insideTheReserve = {

@@ -184,13 +184,7 @@ export interface CertificateErrorReport {
   readonly certificate: Certificate;
 }
 
-/**
- * Registration seam for the browser feature, mirroring `pendingEmitter`
- * below: `certificate-error` is an app-level event this module owns, but a
- * native browser tile's untrusted cert belongs to the browser's own in-page
- * UX, not the settings allowlist. `browser-view/browser-session` registers
- * itself here at startup so this file never imports into browser-view.
- */
+/** `browser-view/browser-session` registers itself here at startup so this file never imports into browser-view. */
 export interface BrowserCertificateErrorHandler {
   /** True when the webContents is a native browser tile (scope `browser`). */
   readonly owns: (webContentsId: number) => boolean;
@@ -217,14 +211,7 @@ function reportAppShellCertificateError(input: CertificateErrorReport): void {
   });
 }
 
-/**
- * Corporate-MITM proxies and self-signed cloud endpoints both produce
- * certificate errors Chromium rejects by default. Without this handler,
- * every HTTPS call through such a proxy fails. Trust decisions are
- * never granted silently - only an entry in the user-managed allowlist
- * (added through the renderer settings UI via `trustCertificate`) lets
- * a cert through.
- */
+/** Trust decisions are never granted silently - only an entry in the user-managed allowlist (added through the renderer settings UI via `trustCertificate`) lets a cert through. */
 export function installCertificateErrorHandler(): void {
   app.on(
     "certificate-error",
@@ -294,10 +281,6 @@ export interface PendingCertificateError {
   readonly observedAt: number;
 }
 
-// Coalesced by `${fingerprint}|${hostname}` so a thundering herd of
-// failed requests against the same MITM cert spams neither the renderer
-// nor this Map. Bounded to MAX_PENDING entries (FIFO eviction) so a
-// misconfigured app can't grow the Map unbounded over time.
 const MAX_PENDING = 64;
 const pendingByCompositeKey = new Map<string, PendingCertificateError>();
 let pendingEmitter: ((entry: PendingCertificateError) => void) | null = null;

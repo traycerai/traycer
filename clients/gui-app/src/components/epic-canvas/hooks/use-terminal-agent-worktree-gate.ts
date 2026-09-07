@@ -29,11 +29,8 @@ export interface TerminalAgentWorktreeCreateInput extends TerminalAgentLaunchSel
 export interface TerminalAgentWorktreeGate {
   readonly isPending: boolean;
   /**
-   * Launches a terminal agent with the selected harness/model/mode/args and
-   * supplied worktree intent. A `null` worktree intent means no per-folder
-   * binding was picked and the host should default to Local. The intent is
-   * remembered per-epic so reopening this epic restores the same picks; the
-   * pending-launcher staging slot is cleared.
+   * Launches a terminal agent with the selected harness/model/mode/args and supplied worktree intent.
+   * A `null` worktree intent means no per-folder binding was picked and the host should default to Local.
    */
   readonly requestCreate: (input: TerminalAgentWorktreeCreateInput) => void;
 }
@@ -41,9 +38,7 @@ export interface TerminalAgentWorktreeGate {
 export function useTerminalAgentWorktreeGate(
   epicId: string,
   tabId: string,
-  // Host the agent launches on. The remembered per-epic intent is host-local
-  // (its paths and branches only exist on one machine), so a `null` host - no
-  // resolved target - records nothing rather than stamping another host's.
+  // The remembered per-epic intent is host-local (its paths and branches only exist on one machine), so a `null` host - no resolved target - records nothing rather than stamping another host's.
   hostId: string | null,
 ): TerminalAgentWorktreeGate {
   const terminalAgentCreate = useCreateTuiAgent();

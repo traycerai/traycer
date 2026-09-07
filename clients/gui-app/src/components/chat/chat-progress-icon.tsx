@@ -20,50 +20,18 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ChatProgressIconProps {
   readonly epicId: string;
   readonly chatId: string;
-  /**
-   * The host that owns this chat, named by the surface rendering the icon: a
-   * canvas tab passes its ref's bound host, a sidebar row passes the host off
-   * its own projection row. A chat id alone does not identify a session (it is
-   * host-minted), so without this the icon could read a same-id chat on
-   * another machine. `null` (a row whose projection carries no host) simply
-   * means no session to read - the icon falls back to epic awareness. The same
-   * host also scopes the notification indicator to this chat's origin.
-   */
+  /** A chat id alone does not identify a session (it is host-minted), so without this the icon could read a same-id chat on another machine. `null` (a row whose projection carries no host) simply means no session to read - the icon falls back to epic awareness. */
   readonly hostId: string | null;
   readonly className: string | undefined;
   readonly mutedClassName: string;
   readonly testId: string;
-  /**
-   * Optional idle-slot content (e.g. title-generation spinner). Shown only
-   * when no notification status, running state, or read-only lock replaces it.
-   */
+  /** Optional idle-slot content (e.g. title-generation spinner). Shown only when no notification status, running state, or read-only lock replaces it. */
   readonly defaultIcon: ReactNode | undefined;
 }
 
 export function ChatProgressIcon(props: ChatProgressIconProps) {
-  // Sidebar-level awareness covers chats running host-side without a renderer
-  // session handle. An opened session adds run-status race smoothing and
-  // authoritative chat access; notification rows own prompt and outcome
-  // presentation.
-  //
-  // Read as a TIER, not as membership of the active-id set. The two have
-  // identical membership, but the set alone cannot say whether an unopened
-  // chat is mid-turn or merely kept alive by background work, so it forced the
-  // turn spinner on both. The tier is the same awareness data the descendant
-  // rollup already reads, so a background-only chat now presents the same way
-  // whether you look at its own row or at the collapsed parent standing in
-  // for it. A host that has not classified its agents still reports `"turn"`.
-  //
-  // Both reads go through the REGISTERED (keyed, non-throwing) selectors, not
-  // the ambient `useEpicAgentActivityTiers()` / `useEpicPermissionRole()`: this
-  // icon already carries its `epicId`, and it is a presentational leaf that
-  // must stay renderable wherever a chat node is drawn - the same rule the
-  // sibling `TuiAgentLiveTabIcon` follows. With the ambient hooks it was the
-  // least-defended node icon: any render outside an `<EpicSessionProvider>`
-  // (or under one whose handle is momentarily `null`) threw from here and
-  // blanked the window via the root boundary. Outside a session both degrade
-  // - no activity, `null` role - which is the same neutral idle the icon
-  // already shows for an unknown permission.
+  // The two have identical membership, but the set alone cannot say whether an unopened chat is mid-turn or merely kept alive by background work, so it forced the turn spinner on both.
+  // Both reads go through the REGISTERED (keyed, non-throwing) selectors, not the ambient `useEpicAgentActivityTiers()` / `useEpicPermissionRole()`: this icon already carries its `epicId`, and it is a presentational leaf that must stay renderable wherever a chat node is drawn - the same rule the sibling `TuiAgentLiveTabIcon` follows.
   const awarenessRunning: IndicatorRunningKind =
     useRegisteredEpicAgentActivityTiers(props.epicId).get(props.chatId) ??
     false;
@@ -119,13 +87,8 @@ function ChatProgressIconWithHandle(props: {
   readonly subjectId: string;
   readonly defaultIcon: ReactNode | undefined;
 }) {
-  // `useStore(api, selector)` instead of `props.handle.store(...)`: the
-  // bound-store call form isn't recognizable as a hook to the React Compiler,
-  // which memoizes it away and corrupts the hook order.
-  //
-  // The selector collapses the session state to the tri-state activity kind
-  // (a primitive), so array-identity churn on queue/backgroundItems can't
-  // re-render this icon.
+  // `useStore(api, selector)` instead of `props.handle.store(...)`: the bound-store call form isn't recognizable as a hook to the React Compiler, which memoizes it away and corrupts the hook order.
+  // The selector collapses the session state to the tri-state activity kind (a primitive), so array-identity churn on queue/backgroundItems can't re-render this icon.
   const activity = useStore(props.handle.store, (state) =>
     chatActivityIndicator(state),
   );
@@ -133,14 +96,11 @@ function ChatProgressIconWithHandle(props: {
   return (
     <ChatProgressPresentation
       indicatorState={props.indicatorState}
-      // The session's own tri-state is authoritative when it reads any
-      // activity: it sees the queue and background items directly, while
-      // awareness reports what the HOST classified. Awareness only backfills
-      // the brief subscription-gap window where the store still reads idle.
+      // The session's own tri-state is authoritative when it reads any activity: it sees the queue and background items directly, while awareness reports what the HOST classified.
+      // Awareness only backfills the brief subscription-gap window where the store still reads idle.
       running={activity ?? props.awarenessRunning}
-      // A session's access snapshot is authoritative. Keep the icon neutral
-      // while it is unknown so an owner never sees the unopened-chat fallback
-      // lock flash before the snapshot arrives.
+      // A session's access snapshot is authoritative.
+      // Keep the icon neutral while it is unknown so an owner never sees the unopened-chat fallback lock flash before the snapshot arrives.
       isReadOnly={access !== null && access.role !== "owner"}
       subjectId={props.subjectId}
       className={props.className}

@@ -15,9 +15,8 @@ import type { IHostStreamClient } from "./host-stream-client";
 
 export interface BrowserSessionsStreamCallbacks {
   /**
-   * One validated `browser.sessions` server frame. Handed over whole rather
-   * than as a per-kind callback set: the stream's 15 kinds are consumed by a
-   * single coordinator reducer, not by 15 independent listeners.
+   * One validated `browser.sessions` server frame.
+   * Handed over whole rather than as a per-kind callback set: the stream's 15 kinds are consumed by a single coordinator reducer, not by 15 independent listeners.
    */
   readonly onServerFrame: (frame: BrowserSessionsServerFrame) => void;
   readonly onConnectionStatus: (
@@ -31,17 +30,6 @@ export type BrowserSessionsStreamClientOptions = BrowserSessionsOpenRequest & {
   readonly callbacks: BrowserSessionsStreamCallbacks;
 };
 
-/**
- * Typed wrapper over one `browser.sessions` subscription. `epicId` is the
- * stream's sole authorization and routing scope, so one client speaks for one
- * epic's whole browser inventory.
- *
- * `browser.sessions` serves a single minor (`@1.0`) - when the first additive
- * minor lands, the per-session schema selection belongs in
- * `handleServerFrame`, keyed off `session.getNegotiatedSchemaVersion()` the
- * way `TerminalStreamClient` does it. Parsing against a sibling session's
- * minor is the failure that placing the parse here exists to prevent.
- */
 export class BrowserSessionsStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: BrowserSessionsStreamCallbacks;
@@ -74,9 +62,7 @@ export class BrowserSessionsStreamClient {
   private handleServerFrame(envelope: StreamFrameEnvelope): void {
     const parsed = browserSessionsServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
-      // Log the frame kind and issue paths only - never the raw envelope or
-      // `parsed.error`, which carry page URLs, titles and captured storage
-      // state inside whichever field failed to validate.
+      // Log the frame kind and issue paths only - never the raw envelope or `parsed.error`, which carry page URLs, titles and captured storage state inside whichever field failed to validate.
       const issuePaths = parsed.error.issues
         .map((issue) =>
           issue.path.length > 0 ? issue.path.join(".") : "(root)",

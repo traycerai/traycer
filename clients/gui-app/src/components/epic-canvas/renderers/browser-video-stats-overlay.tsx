@@ -4,17 +4,8 @@ import { STATS_SAMPLE_INTERVAL_MS } from "@/lib/browser-view/sessions/video-plan
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * Dev-only per-tile stats readout (ticket 11, webrtc-display-plane spec §5
- * Instrumentation). There is no dev/debug settings flag anywhere in gui-app
- * to gate a UI affordance behind (only `import.meta.env.DEV`, the same
- * build-time check `traycer-app.tsx` already gates `ReactQueryDevtools`
- * behind), so this follows that precedent rather than inventing a new
- * user-facing setting.
- *
- * Self-contained: reads only `ScreencastSession` and touches no controller
- * state. The `import.meta.env.DEV` gate lives at the CALL SITE
- * (`screencast-surface.tsx`) so esbuild eliminates the whole subtree in
- * production rather than keeping this module in the bundle.
+ * There is no dev/debug settings flag anywhere in gui-app to gate a UI affordance behind (only `import.meta.env.DEV`, the same build-time check `traycer-app.tsx` already gates `ReactQueryDevtools` behind), so this follows that precedent rather than inventing a new user-facing setting.
+ * The `import.meta.env.DEV` gate lives at the CALL SITE (`screencast-surface.tsx`) so esbuild eliminates the whole subtree in production rather than keeping this module in the bundle.
  */
 export function BrowserVideoStatsOverlay(props: {
   readonly session: ScreencastSession;
@@ -63,10 +54,7 @@ interface DecodedFpsState {
 }
 
 /**
- * fps from consecutive `framesDecoded` samples against the sampler's known
- * cadence (`STATS_SAMPLE_INTERVAL_MS` - a `setInterval`, not a measured gap),
- * derived during render rather than in an effect: `session.videoStats` already
- * IS the value this reacts to. A dev readout, not a frame-accurate meter.
+ * fps from consecutive `framesDecoded` samples against the sampler's known cadence (`STATS_SAMPLE_INTERVAL_MS` - a `setInterval`, not a measured gap), derived during render rather than in an effect: `session.videoStats` already IS the value this reacts to.
  */
 function useDecodedFps(session: ScreencastSession): number | null {
   const stats = session.videoStats;

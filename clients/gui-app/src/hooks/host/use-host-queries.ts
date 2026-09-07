@@ -45,10 +45,7 @@ export interface UseHostQueriesOptions<
 > {
   readonly client: HostRequester<Registry> | null;
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
-  /**
-   * Extra cache identity which is not sent to the host. Batched callers use
-   * this for renderer-local dimensions such as the authenticated user.
-   */
+  /** Extra cache identity which is not sent to the host. */
   readonly cacheKeyIdentity: string | undefined;
   readonly options: HostQueryTanstackOptions<
     Method,
@@ -106,13 +103,7 @@ export interface UseHostQueriesWithResponseMapOptions<
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
   readonly cacheKeyIdentity: string | undefined;
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
-  /**
-   * Same role as `UseHostQueryWithResponseMapOptions.mapResponse` in
-   * `use-host-query.ts` (see that doc comment), applied per-request here -
-   * each request in the batch gets its own `queryKey` passed to this
-   * function, so an accumulator reading `queryClient.getQueryData(queryKey)`
-   * targets the right slot for that specific request.
-   */
+  /** Same role as `UseHostQueryWithResponseMapOptions.mapResponse` in `use-host-query.ts` (see that doc comment), applied per-request here - each request in the batch gets its own `queryKey` passed to this function, so an accumulator reading `queryClient.getQueryData(queryKey)` targets the right slot for that specific request. */
   readonly mapResponse: (args: {
     readonly response: ResponseOfMethod<Registry, Method>;
     readonly queryClient: QueryClient;
@@ -131,10 +122,7 @@ export interface UseHostQueriesWithResponseMapAndCombineOptions<
   ) => TCombinedResult;
 }
 
-/**
- * `useHostQueries` generalized with a caller-supplied response-to-cache
- * transform, mirroring `useHostQueryWithResponseMap`'s singular counterpart.
- */
+/** `useHostQueries` generalized with a caller-supplied response-to-cache transform, mirroring `useHostQueryWithResponseMap`'s singular counterpart. */
 export function useHostQueriesWithResponseMap<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
@@ -227,10 +215,7 @@ export function useHostQueriesWithResponseMap<
     return queryOptions<TData, HostRpcError, TData>({
       ...queryOptionsWithoutReservedFields,
       ...tablePollingOptions,
-      // A throw inside a caller-supplied `select` is stored by the observer as
-      // `result.error` - the same `HostRpcError`-typed channel the queryFn
-      // boundary protects - so it must be normalized too. Mirrors
-      // `useHostQueryWithResponseMap` in `use-host-query.ts`.
+      // A throw inside a caller-supplied `select` is stored by the observer as `result.error` - the same `HostRpcError`-typed channel the queryFn boundary protects - so it must be normalized too.
       select:
         select === undefined
           ? undefined
@@ -245,10 +230,7 @@ export function useHostQueriesWithResponseMap<
       queryFn: fetcher,
       // Reserved key wins over caller meta; the coordinator latches it once.
       meta: stampHostRpcMethod(meta, request.method),
-      // A function-form `enabled` must still be evaluated per-query - not
-      // collapsed to a boolean up front - or a caller's dynamic condition is
-      // silently replaced by "always true" the moment a client is bound.
-      // Mirrors `useHostQueryWithResponseMap` in `use-host-query.ts`.
+      // A function-form `enabled` must still be evaluated per-query - not collapsed to a boolean up front - or a caller's dynamic condition is silently replaced by "always true" the moment a client is bound.
       enabled: (query) => {
         if (client === null || !readiness.canExecute) return false;
         const callerEnabled = options?.enabled;

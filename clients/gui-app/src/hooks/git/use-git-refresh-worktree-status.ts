@@ -34,27 +34,8 @@ type GitListChangedFilesResponse = ResponseOfMethod<
   "git.listChangedFiles"
 >;
 
-/**
- * Forces a fresh git.listChangedFiles fetch for a worktree and writes the
- * response into the same cache slot the subscription feeds, so a manual refresh
- * pulls the latest working-tree state on demand instead of waiting for the
- * host's 5s poll. Unlike useGitPrefetchWorktreeStatus there is no cached
- * early-exit: a refresh always hits the host, and the returned promise
- * resolves once the response lands so callers can spin while it is in flight.
- *
- * Q20: response-equals-state carve-out. The RPC response directly reifies the
- * change-list UI state without transformation.
- *
- * Rolls a bespoke `useMutation` (rather than `useHostMutation`) because
- * `variables.hostId` in the request body does not route the call
- * (`HostClient.request()` sends through the bound messenger) - the mutation
- * must resolve a transient client for `variables.hostId` inside `mutationFn`,
- * per mutate call, instead of binding one fixed client at hook-render time.
- * Mirrors `useGitListChangedFilesWithSubmodules`'s reasoning for bypassing its
- * wrapper. A host with no reachable client rejects the same way
- * `useHostMutation` does for `client === null`, rather than silently falling
- * back to the app-wide active host.
- */
+/** Always hits the host; resolve a transient client for variables.hostId inside mutationFn (hostId in the body does not route).
+ * A missing client rejects like useHostMutation, never falling back to the app-wide host. */
 export function useGitRefreshWorktreeStatus(): UseMutationResult<
   GitListChangedFilesResponse,
   HostRpcError,

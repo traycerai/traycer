@@ -1,8 +1,6 @@
 /**
- * Schema + factory for `blank` tiles (the "New tab" opener placeholder). A
- * blank tile carries only the common ref fields; its body renders the inline
- * opener. `makeBlankTileRef` mints fresh ids; `parse` rehydrates a persisted
- * blank as a blank (fresh content id, preserved instanceId when present).
+ * Schema + factory for `blank` tiles (the "New tab" opener placeholder). A blank tile carries only
+ * the common ref fields; its body renders the inline opener.
  */
 import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
@@ -15,9 +13,8 @@ import { readTileInstanceId } from "./instance-id";
 export const BLANK_TILE_NAME = "New tab";
 
 /**
- * Build a fresh blank tile ref. `hostId` is a placeholder - the inline opener
- * binds the real default host when content is created; the blank body never
- * reads a per-tab host.
+ * Build a fresh blank tile ref. `hostId` is a placeholder - the inline opener binds the real
+ * default host when content is created; the blank body never reads a per-tab host.
  */
 export function makeBlankTileRef(): BlankTileRef {
   return {

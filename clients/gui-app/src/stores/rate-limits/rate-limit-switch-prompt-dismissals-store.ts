@@ -1,18 +1,8 @@
 import { create } from "zustand";
 
 /**
- * App-wide registry of dismissed rate-limit switch prompts, keyed by the
- * prompt key `useProfileRateLimitSwitchPrompt` derives (harness + limited
- * profile + severity + viable alternatives). The same limited profile is
- * typically selected in several composers at once (multiple chat tabs, the
- * home composer), and each used to hold its own dismissed flag - dismissing
- * the banner in one tab left it standing everywhere else. One shared set
- * makes a dismissal stick across every composer.
- *
- * Deliberately in-memory (not persisted): a dismissal should outlive tab
- * switches, not app restarts - rate-limit state moves constantly, and any
- * material change (severity, alternatives) already re-arms the prompt via a
- * new key.
+ * App-wide registry of dismissed rate-limit switch prompts, keyed by the prompt key
+ * `useProfileRateLimitSwitchPrompt` derives (harness + limited profile + severity + viable
  */
 interface RateLimitSwitchPromptDismissalsState {
   readonly dismissedKeys: ReadonlySet<string>;

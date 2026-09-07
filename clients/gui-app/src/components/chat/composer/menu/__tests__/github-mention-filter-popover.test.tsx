@@ -16,20 +16,7 @@ import {
   useGithubMentionFilterStore,
 } from "@/stores/composer/github-mention-filter-store";
 
-/**
- * What this suite proves, stated precisely: the popover renders its radio
- * groups, Escape closes its OWN Radix layer, and the funnel's dot tracks the
- * published selection.
- *
- * It deliberately does NOT claim Escape *containment* - that the mention menu
- * survives. `GithubMentionFilterPopover` takes only `{ filter, onReturnFocus }`
- * and holds no reference to the picker store, so a test asserting the store
- * stayed open would be true by construction and could not fail however the
- * Escape handling changed. Containment, and the editor focus restore, are
- * covered by the hands-on Chromium probe recorded in the execution log; jsdom
- * cannot even focus a ProseMirror contenteditable, so it cannot reach the
- * precondition either behaviour needs.
- */
+/** It deliberately does NOT claim Escape *containment* - that the mention menu survives. Containment, and the editor focus restore, are covered by the hands-on Chromium probe recorded in the execution log; jsdom cannot even focus a ProseMirror contenteditable, so it cannot reach the precondition either behaviour needs. */
 
 beforeEach(() => {
   useGithubMentionFilterStore.getState().resetForTests();
@@ -86,9 +73,8 @@ describe("GithubMentionFilterPopover", () => {
     ).toBeTruthy();
     expect(screen.getByRole("radiogroup", { name: "Repository" })).toBeTruthy();
 
-    // Escape while the popover holds focus. This is Radix closing its own
-    // dismissable layer; whether the mention menu behind it survives is the
-    // Chromium probe's claim, not this test's.
+    // Escape while the popover holds focus.
+    // This is Radix closing its own dismissable layer; whether the mention menu behind it survives is the Chromium probe's claim, not this test's.
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
       bubbles: true,
@@ -102,11 +88,7 @@ describe("GithubMentionFilterPopover", () => {
   });
 
   it("returns focus to the composer when Escape closes the popover", async () => {
-    // The control for the outside-interaction test below: an ordinary close
-    // (the "closes its own layer on Escape" test above pins that Radix's own
-    // layer unmounts) must still hand focus back, or the outside-interaction
-    // skip added to `onInteractOutside`/`onCloseAutoFocus` would be dead code
-    // that never fires either way.
+    // The control for the outside-interaction test below: an ordinary close (the "closes its own layer on Escape" test above pins that Radix's own layer unmounts) must still hand focus back, or the outside-interaction skip added to `onInteractOutside`/`onCloseAutoFocus` would be dead code that never fires either way.
     const onReturnFocus = vi.fn();
     const user = userEvent.setup();
 
@@ -141,10 +123,8 @@ describe("GithubMentionFilterPopover", () => {
   });
 
   it("does not return focus to the composer when the close came from an outside interaction", async () => {
-    // An outside interaction moves focus where the user POINTED (a target
-    // rendered outside the popover). Returning the caret to the composer over
-    // it would steal focus back from the control the user just chose - the
-    // next keystrokes would land in the mention query instead of their target.
+    // An outside interaction moves focus where the user POINTED (a target rendered outside the popover).
+    // Returning the caret to the composer over it would steal focus back from the control the user just chose - the next keystrokes would land in the mention query instead of their target.
     const onReturnFocus = vi.fn();
     const user = userEvent.setup();
 
@@ -175,9 +155,7 @@ describe("GithubMentionFilterPopover", () => {
     fireEvent.click(outside);
     await flush();
 
-    // The popover actually closed from the outside click - otherwise the
-    // assertion below would be vacuously true regardless of what
-    // `onInteractOutside`/`onCloseAutoFocus` do.
+    // The popover actually closed from the outside click - otherwise the assertion below would be vacuously true regardless of what `onInteractOutside`/`onCloseAutoFocus` do.
     await waitFor(() => {
       expect(screen.queryByRole("radiogroup", { name: "State" })).toBeNull();
     });
@@ -185,10 +163,8 @@ describe("GithubMentionFilterPopover", () => {
   });
 
   it("tracks the dot to the PUBLISHED selection, not the raw store", () => {
-    // The store holds a repository the scope no longer contains, so the
-    // section reconciles it away and its list is unfiltered. The dot has to
-    // agree with the LIST: core flows calls it "the tell that a filter is
-    // active", and a dot lit over an unfiltered list is simply a lie.
+    // The store holds a repository the scope no longer contains, so the section reconciles it away and its list is unfiltered.
+    // The dot has to agree with the LIST: core flows calls it "the tell that a filter is active", and a dot lit over an unfiltered list is simply a lie.
     useGithubMentionFilterStore.getState().setFilter({
       epicId: "epic-1",
       section: "pull-requests",
@@ -244,9 +220,8 @@ describe("GithubMentionFilterPopover", () => {
   });
 
   it("checks radios from chrome.selected, not the raw store", async () => {
-    // Store still holds the pre-reconcile selection (dead repo + non-default
-    // involvement). The list publishes the reconciled value; radios must
-    // follow THAT, or the Repository/Involvement groups disagree with the list.
+    // Store still holds the pre-reconcile selection (dead repo + non-default involvement).
+    // The list publishes the reconciled value; radios must follow THAT, or the Repository/Involvement groups disagree with the list.
     useGithubMentionFilterStore.getState().setFilter({
       epicId: "epic-1",
       section: "pull-requests",
@@ -313,11 +288,8 @@ describe("GithubMentionFilterPopover", () => {
   });
 
   it("keeps a detached repository selection across a State change", async () => {
-    // Detached repository still in the store; the list (and chrome.selected)
-    // has reconciled it to null AS A DISPLAY FALLBACK. Changing State edits
-    // that projection, and writing it back verbatim would turn "remembered
-    // while unrepresented" into a permanent delete - the selection has to
-    // come back when its folder is re-attached.
+    // Detached repository still in the store; the list (and chrome.selected) has reconciled it to null AS A DISPLAY FALLBACK.
+    // Changing State edits that projection, and writing it back verbatim would turn "remembered while unrepresented" into a permanent delete - the selection has to come back when its folder is re-attached.
     const detached = {
       githubHost: "github.com",
       owner: "traycerai",
@@ -360,9 +332,7 @@ describe("GithubMentionFilterPopover", () => {
     await user.click(screen.getByRole("button", { name: "Filter" }));
     await user.click(await screen.findByRole("radio", { name: "Merged" }));
 
-    // Read back through the selector rather than reproducing the store's
-    // internal key format: a separator change would otherwise make this
-    // `undefined` and report the popover as broken.
+    // Read back through the selector rather than reproducing the store's internal key format: a separator change would otherwise make this `undefined` and report the popover as broken.
     const stored = selectGithubMentionFilter(
       useGithubMentionFilterStore.getState(),
       "epic-1",
@@ -376,9 +346,7 @@ describe("GithubMentionFilterPopover", () => {
   });
 
   it("lets the Repository group replace a detached selection outright", async () => {
-    // The control for the test above: the preserve rule must not apply to the
-    // Repository group's own writes, or the one control that manages the
-    // selection would be the one place it cannot be changed.
+    // The control for the test above: the preserve rule must not apply to the Repository group's own writes, or the one control that manages the selection would be the one place it cannot be changed.
     useGithubMentionFilterStore.getState().setFilter({
       epicId: "epic-1",
       section: "pull-requests",
@@ -430,9 +398,7 @@ describe("GithubMentionFilterPopover", () => {
   });
 
   it("escalates repository radio labels only as far as a collision forces, shared with every row surface", async () => {
-    // `repositoryLabel` now switches on `githubRepositoryQualification`
-    // rather than restating the escalation - this pins the walk still
-    // produces the right label at each step through the popover.
+    // `repositoryLabel` now switches on `githubRepositoryQualification` rather than restating the escalation - this pins the walk still produces the right label at each step through the popover.
     const user = userEvent.setup();
     render(
       <GithubMentionFilterPopover

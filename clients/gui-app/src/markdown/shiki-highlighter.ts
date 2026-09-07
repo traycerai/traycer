@@ -3,23 +3,11 @@ import type { ThemePreset } from "@/lib/theme-presets";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
- * Content longer than this (in characters) skips syntax highlighting -
- * Shiki's `codeToHtml` is synchronous and runs on the main thread; above
- * this size it would freeze the UI for seconds. Callers fall back to a
- * plain `<pre>` instead.
+ * Skip highlighting above this length: codeToHtml is sync on the main thread.
  */
 export const MAX_HIGHLIGHT_CHARS = 100_000;
 
-/**
- * The curated grammar set. This is the ceiling: anything outside it renders
- * as plaintext - there is deliberately NO dynamic registry fallback, which is
- * what lets the build drop shiki's full ~200-grammar bundle wiring. Each
- * entry is an explicit lazy importer so Vite emits one analyzable chunk per
- * grammar, all loaded together behind the highlighter's lazy boundary.
- * Aliases ship inside each registration (`ts`, `js`, `py`, `sh`, `golang`,
- * `c#`, `docker`, `makefile`, ...), so common fence infos resolve for free.
- * `make` is included because `languageForFileName` emits it for Makefiles.
- */
+/** Curated grammars only - no dynamic registry. Each entry is a lazy importer; aliases live in the registration. */
 const CURATED_LANG_IMPORTERS = [
   () => import("shiki/langs/typescript.mjs"),
   () => import("shiki/langs/javascript.mjs"),
@@ -69,11 +57,7 @@ export type ShikiThemeId =
   | "ayu-dark"
   | "min-light";
 
-/**
- * Only the ACTIVE preset's light+dark pair is loaded (at highlighter
- * creation); switching presets dynamic-imports the new pair on demand via
- * `ensureThemePair`. The other ~12 themes stay as unfetched async chunks.
- */
+/** Load only the active preset's light+dark pair. Switching dynamic-imports the new pair; other themes stay unfetched chunks. */
 const THEME_IMPORTERS: Record<
   ShikiThemeId,
   () => Promise<{ default: ThemeRegistrationRaw }>
@@ -131,12 +115,7 @@ function getDocIsDark(): boolean {
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;
 
-/**
- * Lazy singleton over `createHighlighterCore`. Everything heavy - the core
- * runtime, the JS regex engine, the 30 curated grammars, and the active
- * preset's theme pair - stays behind dynamic imports, so none of it lands in
- * the entry bundle and the full-registry `shiki` index is never referenced.
- */
+/** Lazy createHighlighterCore singleton. Heavy runtime/grammars/themes stay behind dynamic imports; never import the full shiki index. */
 export function getOrCreateHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
     const preset = useSettingsStore.getState().themePreset;
@@ -160,11 +139,7 @@ export function getOrCreateHighlighter(): Promise<HighlighterCore> {
   return highlighterPromise;
 }
 
-/**
- * One in-flight/settled load per preset. A rejected load stays memoized
- * (mirrors the old `failedThemes` negative cache): the preset renders plain
- * code for the session instead of retrying forever.
- */
+/** One load per preset. A rejected load stays memoized so the session renders plaintext instead of retrying forever. */
 const themePairLoads = new Map<ThemePreset, Promise<void>>();
 
 function ensureThemePair(
@@ -203,13 +178,7 @@ export function ensureActiveThemePair(
 /** Plaintext infos shiki's core handles natively without a grammar. */
 const BUILTIN_ALIASES = new Set(["text", "txt", "plain", "plaintext"]);
 
-/**
- * Synchronous highlight against the curated core highlighter. Returns `null`
- * when the requested theme pair hasn't finished loading (transient - the
- * hook's `themesVersion` bump re-renders consumers when it lands) or when the
- * language is outside the curated set (permanent - the caller's plain `<pre>`
- * fallback is the final rendering).
- */
+/** null while the theme pair is loading (transient) or when the language is outside the curated set (permanent plaintext fallback). */
 export function highlightCode(
   highlighter: HighlighterCore,
   code: string,

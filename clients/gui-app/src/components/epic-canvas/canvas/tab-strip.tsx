@@ -124,9 +124,8 @@ import {
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 /**
- * Neighbour displacement while a tile is dragged past it. Same shape as the
- * header's certified reorder spring: overdamped (no overshoot, which Chrome
- * also has none of) and ~174ms to settle, comfortably inside the 320ms budget.
+ * Neighbour displacement while a tile is dragged past it.
+ * Same shape as the header's certified reorder spring: overdamped (no overshoot, which Chrome also has none of) and ~174ms to settle, comfortably inside the 320ms budget.
  */
 const EPIC_TAB_REORDER_TRANSITION = {
   type: "tween",
@@ -144,9 +143,8 @@ export interface TabStripProps {
   readonly tabId: string;
   readonly groupId: string;
   readonly tabs: ReadonlyArray<EpicCanvasTileRef>;
-  // For the auto-scroll effect only. Per-tab active/preview/globally-active
-  // state is read inside `TabItem` via `useTabActivation`, NOT threaded through
-  // the map - see the `tabs.map(...)` note below.
+  // For the auto-scroll effect only.
+  // Per-tab active/preview/globally-active state is read inside `TabItem` via `useTabActivation`, NOT threaded through the map - see the `tabs.map(...)` note below.
   readonly activeTabId: string | null;
   readonly onSelectTab: (groupId: string, tabId: string) => void;
   readonly onCloseTab: (groupId: string, tabId: string) => void;
@@ -194,14 +192,6 @@ function useTabElementRegistry() {
   return { setTabRef, getTabElement };
 }
 
-/**
- * VS Code-style tab strip. Renders one tab item per canvas tile ref, with
- * preview-mode italic, hover/active close buttons, top-border accent on
- * the globally-active tab, an overflow chevron-dropdown, and far-right
- * "split right" + "close group" buttons (always shown). Acts as a drop
- * target for both new sidebar nodes and tab moves; computes the
- * insertion index from the cursor x against rendered tab rects.
- */
 export function TabStrip(props: TabStripProps) {
   const {
     epicId,
@@ -247,9 +237,7 @@ export function TabStrip(props: TabStripProps) {
     el.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeTabId, getTabElement]);
 
-  // Double-clicking the empty area after the tabs opens a blank tab in this
-  // group (browser new-tab gesture). Guarded to the strip-end container itself
-  // so double-clicking a tab (preview-promote) is never hijacked.
+  // Guarded to the strip-end container itself so double-clicking a tab (preview-promote) is never hijacked.
   const handleStripEndDoubleClick = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget) return;
@@ -258,24 +246,13 @@ export function TabStrip(props: TabStripProps) {
     [groupId, onOpenBlankTab],
   );
 
-  // Narrow per-strip subscription: preview ticks re-render only the strip
-  // actually hovered, not every strip on the canvas. Non-null only while a
-  // drag's preview targets THIS group, so it needs no active-source guard -
-  // and any source that produces a strip preview (sidebar node, workspace
-  // file, terminal tile, ...) gets the indicator, not just a dragged tile.
+  // Narrow per-strip subscription: preview ticks re-render only the strip actually hovered, not every strip on the canvas.
+  // Non-null only while a drag's preview targets THIS group, so it needs no active-source guard - and any source that produces a strip preview (sidebar node, workspace file, terminal tile, ...) gets the indicator, not just a dragged tile.
   const dndDropIndicator = useTabStripDropIndex(groupId);
   // Displacement is an explicit per-tile x offset resolved by the drag model,
   // not a provisional CSS `order`. Empty map => every tile sits at x 0.
   const tileOffsets = useTileStripOffsets(groupId);
-  // Terminal-agent tabs are chat-scoped notification entities too: a TUI
-  // agent's `agent.stopped` row is keyed by its agent id, and the tab icon
-  // already reads `chats[tab.id]`.
-  //
-  // Grouped by the tab's OWN bound host, not asked of the app-wide active one.
-  // A strip can hold a retained cross-host tab beside a local one, and
-  // `indicatorState` only ever answers about the rows its own host holds: the
-  // active-host read left host B's `pendingFork` permanently dark and could
-  // light a tab from an unrelated chat on A that shares its host-minted id.
+  // A strip can hold a retained cross-host tab beside a local one, and `indicatorState` only ever answers about the rows its own host holds: the active-host read left host B's `pendingFork` permanently dark and could light a tab from an unrelated chat on A that shares its host-minted id.
   const indicatorScopes = useMemo(
     () =>
       chatIndicatorHostScopes(
@@ -307,14 +284,7 @@ export function TabStrip(props: TabStripProps) {
             onDoubleClick={handleStripEndDoubleClick}
             className="no-scrollbar flex min-w-0 flex-1 touch-pan-x items-stretch overflow-x-auto overscroll-x-contain"
           >
-            {/*
-            Per-tab active/preview/globally-active state is read inside TabItem
-            via `useTabActivation`, NOT computed here from `activeTabId`. If it
-            were a map dep, React Compiler would re-run this whole map on every
-            active/preview change and re-render every tab. Keeping the map's
-            deps to `tabs` + stable handlers means a pure active-switch
-            re-renders only the two tabs whose flags flip.
-          */}
+            {/* Keeping the map's deps to `tabs` + stable handlers means a pure active-switch re-renders only the two tabs whose flags flip. */}
             <LayoutGroup id={`epic-tab-strip-${groupId}`}>
               {tabs.map((tab, index) => {
                 return (
@@ -352,9 +322,7 @@ export function TabStrip(props: TabStripProps) {
         <div
           className={cn(
             "flex shrink-0 items-center gap-0.5 bg-canvas px-1",
-            // Every tab already draws its own right border, so a border here
-            // too would stack two hairlines against each other. Only an empty
-            // strip has no preceding tab to supply the separator.
+            // Only an empty strip has no preceding tab to supply the separator.
             tabs.length === 0 && "border-l border-canvas-border/70",
           )}
         >
@@ -465,17 +433,13 @@ interface TabItemProps {
   readonly domRef: (el: HTMLElement | null) => void;
 }
 
-// Ticket 12's chat cost line: the tab's own overflow (this context menu),
-// never the header. `null` for every non-chat tab kind and for a chat whose
-// host hasn't negotiated `host.usage.summary` - "unsupported chats show
+// `null` for every non-chat tab kind and for a chat whose host hasn't negotiated `host.usage.summary` - "unsupported chats show
 /** The tab's bound host, for the tile kinds that have one. */
 function tabHostId(tab: EpicCanvasTileRef): string | null {
   return "hostId" in tab ? tab.hostId : null;
 }
 
-// nothing" applied to the menu item itself rather than opening a dialog that
-// would then show a capability notice. Extracted out of `TabItem` to keep
-// that component's branching under the complexity budget.
+// nothing" applied to the menu item itself rather than opening a dialog that would then show a capability notice.
 function useChatUsageMenuHandler(
   tab: EpicCanvasTileRef,
   chatTitle: string,
@@ -674,9 +638,7 @@ function TabItemBody(
     menuProps,
     domRef,
   } = props;
-  // Read this tab's active/preview/globally-active state per tab so the strip's
-  // map need not depend on the group's `activeTabId`; an active-switch then
-  // re-renders only the two tabs whose flags flip. See `makeSelectTabActivation`.
+  // Read this tab's active/preview/globally-active state per tab so the strip's map need not depend on the group's `activeTabId`; an active-switch then re-renders only the two tabs whose flags flip.
   const { isActive, isPreview, isGloballyActive } = useTabActivation(
     tabId,
     groupId,
@@ -722,8 +684,7 @@ function TabItemBody(
     id: getArtifactTabDropId(groupId, tab.instanceId),
     data: dropData,
     // Keep the dimmed source frame as layout space, never as a drop target.
-    // Otherwise provisional reordering can slide it beneath the pointer and
-    // mask the adjacent tab that should drive the next insertion boundary.
+    // Otherwise provisional reordering can slide it beneath the pointer and mask the adjacent tab that should drive the next insertion boundary.
     disabled: isDragging,
   });
   const { onRename } = menuProps;
@@ -1132,16 +1093,7 @@ function GitDiffTooltipSummaryRow(props: {
 }
 
 /**
- * Tile frames are displaced by an EXPLICIT x transform driven from the drag
- * model - deliberately not `layout="position"` + CSS `order`, which is what the
- * header still uses.
- *
- * That pairing strands a `translateX` when the item set changes under an
- * in-flight layout projection: closing two tabs ~40ms apart leaves tiles
- * rendered hundreds of px from their layout position until the next drag clears
- * it. Binding x to state instead means the target is always explicitly stated
- * and is 0 whenever no drag is active, so a stranded transform is not
- * representable rather than merely unlikely.
+ * Binding x to state instead means the target is always explicitly stated and is 0 whenever no drag is active, so a stranded transform is not representable rather than merely unlikely.
  */
 function TabItemMotionFrame(props: {
   readonly isDragging: boolean;
@@ -1175,10 +1127,7 @@ function TabItemMotionFrame(props: {
 }
 
 /**
- * Displacement transition for tile frames. Matches the header's short,
- * monotone reorder tween so a quick one-slot drag visibly completes instead of
- * leaving the neighbour chasing a spring after pointer-up. Under reduced
- * motion the order still changes but nothing travels.
+ * Matches the header's short, monotone reorder tween so a quick one-slot drag visibly completes instead of leaving the neighbour chasing a spring after pointer-up.
  */
 function useTileDisplacementTransition(): Transition {
   const reduceMotion = useReducedMotion() === true;
@@ -1188,10 +1137,7 @@ function useTileDisplacementTransition(): Transition {
 }
 
 function TabStripDropIndicator(props: { readonly visible: boolean }) {
-  // No AnimatePresence: its exit animation keeps the OLD indicator mounted
-  // while the new one enters, so the strip shows two landing positions at once
-  // for the length of the exit (~110ms measured). A drop indicator states one
-  // destination, so it unmounts immediately and only its entry animates.
+  // A drop indicator states one destination, so it unmounts immediately and only its entry animates.
   if (!props.visible) return null;
   return (
     <m.span
@@ -1265,10 +1211,7 @@ function renderFixedTabIcon(
 }
 
 /**
- * Live tile icon (chat progress spinner / harness brand / static kind glyph,
- * with diff + blank fallbacks). Exported so the mobile current-tile bar
- * (`epic-canvas/mobile/mobile-current-tile-bar.tsx`) renders the identical icon
- * as the desktop tab strip instead of duplicating the dispatch.
+ * Exported so the mobile current-tile bar (`epic-canvas/mobile/mobile-current-tile-bar.tsx`) renders the identical icon as the desktop tab strip instead of duplicating the dispatch.
  */
 export function TabIcon(props: {
   readonly epicId: string;
@@ -1281,9 +1224,7 @@ export function TabIcon(props: {
   const boundHostReachability = useHostReachability(
     props.tab.type === "chat" ? props.tab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
-  // Same live lookup the title already runs (`useEpicTabDisplayTitle`), so the
-  // glyph and the name in one tab can never disagree about whether the shell is
-  // watching. Unconditional for hook order; an empty id resolves to null.
+  // Same live lookup the title already runs (`useEpicTabDisplayTitle`), so the glyph and the name in one tab can never disagree about whether the shell is watching.
   const managedCommand = useManagedCommandOnHost({
     epicId: props.epicId,
     // Scoped to the tab's own bound host: a clone's tab must never wear the
@@ -1306,10 +1247,7 @@ export function TabIcon(props: {
   );
   if (fixedIcon !== null) return fixedIcon;
   if (!isEpicNodeTileRef(props.tab)) return null;
-  // A live chat tab whose bound host is unreachable renders the published
-  // copy (see tab-group-view's fallback), so its strip icon must say the same
-  // thing the surface does: locked, not steerable, exactly like a copy tab.
-  // Flips back to the chat glyph reactively when the host returns.
+  // A live chat tab whose bound host is unreachable renders the published copy (see tab-group-view's fallback), so its strip icon must say the same thing the surface does: locked, not steerable, exactly like a copy tab.
   if (
     props.tab.type === "chat" &&
     boundHostReachability.status === "unreachable"
@@ -1321,10 +1259,8 @@ export function TabIcon(props: {
       />
     );
   }
-  // Title generation is the idle default for chat tabs only - threaded into
-  // ChatProgressIcon so running / notification / read-only semantics win
-  // (mirrors global TabLeadingIcon). Non-chat tabs never subscribe to the
-  // indicator store from this component.
+  // Title generation is the idle default for chat tabs only - threaded into ChatProgressIcon so running / notification / read-only semantics win (mirrors global TabLeadingIcon).
+  // Non-chat tabs never subscribe to the indicator store from this component.
   const defaultIcon =
     props.tab.type === "chat" && props.titleGenerationPending ? (
       <AgentSpinningDots

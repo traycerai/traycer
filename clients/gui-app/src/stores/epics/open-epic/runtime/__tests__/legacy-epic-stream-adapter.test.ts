@@ -20,13 +20,8 @@ import {
 import type { EpicRuntimeEvent } from "../epic-runtime-events";
 
 /**
- * `epic.subscribe@1` legacy adapter - decode, plane routing, generation-guard
- * dropping, and send routing.
- *
- * Every test here drives the adapter with a fake stream-client factory that
- * records the callbacks and seed-offer provider it was handed, and a
- * recording `AdapterHost` fake. No socket, no store, no projection -
- * exactly the seam the module doc describes.
+ * `epic.subscribe@1` legacy adapter - decode, plane routing, generation-guard dropping, and send
+ * routing.
  */
 
 // ─── Fakes ──────────────────────────────────────────────────────────────
@@ -221,12 +216,7 @@ describe("createLegacyEpicStreamAdapter - decode into plane/event", () => {
             artifactRoomId: "room-1",
             update: bytes,
             hostStateVectorBase64: "sv-base64",
-            // The `@1` arm states no offer protocol and no doc identity. These
-            // two values are what keep the tier's "a changed guid replaces the
-            // held doc" rule unreachable from this arm, so they are asserted
-            // rather than left to the shape check: a future edit that made
-            // this adapter invent a guid would splice two histories together
-            // on the next recreate, and this is the line that would stop it.
+            // The `@1` arm states no offer protocol and no doc identity.
             seed: "full",
             docGuid: null,
           },
@@ -245,10 +235,8 @@ describe("createLegacyEpicStreamAdapter - decode into plane/event", () => {
             artifactRoomId: "room-1",
             update: bytes,
             hostStateVectorBase64: "sv-after",
-            // `null` on this arm, always: `epic.subscribe@1` claims no doc
-            // identity, so there is nothing for the tier's fence to compare
-            // and an unstated identity cannot have changed. The same value
-            // this arm's snapshots already state.
+            // `null` on this arm, always: `epic.subscribe@1` claims no doc identity, so there is nothing for
+            // the tier's fence to compare and an unstated identity cannot have changed.
             docGuid: null,
           },
         };
@@ -333,10 +321,8 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
           kind: "transport-status",
           status: "closed",
           reason,
-          // `@1` has one socket carrying every plane, the root snapshot
-          // included, so its transitions ARE the control cycle's and they do
-          // carry records. The lane arm is the only place where either answer
-          // is not automatic.
+          // `@1` has one socket carrying every plane, the root snapshot included, so its transitions ARE the
+          // control cycle's and they do carry records.
           ownsControlCycle: true,
           carriesRecords: true,
         },

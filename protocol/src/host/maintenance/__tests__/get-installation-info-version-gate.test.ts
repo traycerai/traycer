@@ -5,18 +5,8 @@ import {
   hostGetInstallationInfoV11,
 } from "../contracts";
 
-// `host.getInstallationInfo` — the `@1.0` freeze and the `@1.1` growth.
-//
-// v1.2.0 released `@1.0` BEFORE `executableSha256` existed on the install and
-// staged records. T3 then added the field, which is additive on disk and a
-// host→client divergence on a RELEASED wire version — the two BREAKING findings
-// `released-baseline-compat` raised.
-//
-// The fix is a version split, not a filter. These tests pin the property that
-// makes it a fix: a `@1.0` peer CANNOT receive the key, because its contract
-// does not declare it and the dispatcher parses a resolver's canonical result
-// against the CALLER's schema. Same mechanism `host.update.install@1.0` relies
-// on to never emit `attemptId`.
+// `host.update.install@1.0` - `host.getInstallationInfo` - the `@1.0` freeze and the `@1.1` growth.
+// The fix is a version split, not a filter.
 
 const SHA = "a".repeat(64);
 
@@ -77,9 +67,7 @@ describe("host.getInstallationInfo@1.0 — the frozen released line", () => {
   });
 
   it("keeps every OTHER field of both records intact", () => {
-    // The freeze removes exactly one key. A version split that quietly dropped
-    // a sibling would also make the gate green, so the negative above is paired
-    // with this positive.
+    // The freeze removes exactly one key.
     const parsed = hostGetInstallationInfoV10.responseSchema.parse(
       MANAGED_WITH_ATTESTATION,
     );
@@ -105,10 +93,6 @@ describe("host.getInstallationInfo@1.1 — the growth", () => {
 
   it("the upgrade reports null rather than inventing an attestation", () => {
     // A `@1.0` host never sent the field, so the bridge must not claim one.
-    // `null` is also exactly what both record readers already produce for a
-    // legacy record with no attestation, so this introduces no novel shape —
-    // and `update-recovery-evidence` refuses a non-string as proof, which is
-    // why a null here is safe rather than merely tolerated.
     const v10 = hostGetInstallationInfoV10.responseSchema.parse(
       MANAGED_WITH_ATTESTATION,
     );

@@ -10,11 +10,7 @@ const panelMocks = vi.hoisted(() => ({
   providers: [
     { providerId: "claude-code", terminalAgentArgs: "--from-settings" },
   ],
-  // S11 coverage (see the new "forwards a non-null hostId..." test below):
-  // records every argument these mocks receive so a test can assert the
-  // panel's `hostId` prop actually reaches the launch host's client, the
-  // `providers.list` read, and the picker - not just that SOME client/host
-  // was used.
+  // S11 coverage (see the new "forwards a non-null hostId..." test below).
   hostClientCalls: [] as (string | null)[],
   providersListClients: [] as (string | null)[],
   pickerProps: [] as {
@@ -58,13 +54,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   },
 }));
 
-// The panel now resolves its launch host's client via
-// `useHostClientForHostId(hostId)` (previously `useProvidersList()` read the
-// app-wide default unconditionally) - that hook needs a
-// `<HostRuntimeProvider>` this bare-render suite doesn't set up. Returning
-// `hostId` itself as the sentinel "client" (mirroring the picker's own
-// intent-RPC suite) lets a test assert WHICH host's client reached
-// `useProvidersListForClient` without needing a real `HostClient`.
+// Returning `hostId` itself as the sentinel "client" (mirroring the picker's own intent-RPC suite) lets a test
+// assert which host's client reached `useProvidersListForClient` without needing a real `HostClient`.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => {
     panelMocks.hostClientCalls.push(hostId);
@@ -85,9 +76,8 @@ function makeToolbarStore() {
     tuiOnly: true,
     hostId: "host-a",
   });
-  // The Start gate reads the selected harness's runtime `modes` from the
-  // catalog, so seed a loaded catalog where `claude` is TUI-capable - otherwise
-  // Start stays disabled.
+  // The Start gate reads the selected harness's runtime `modes` from the catalog, so seed a loaded catalog where
+  // `claude` is TUI-capable - otherwise Start stays disabled.
   store.getState().setCatalog({
     hostId: "host-a",
     harnesses: [
@@ -284,11 +274,8 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     expect(onStart).not.toHaveBeenCalled();
   });
 
-  // S11 coverage: a regression back to the app-wide default host would leave
-  // `useHostClientForHostId`, `providers.list`, and the picker all pinned to
-  // `null` regardless of the `hostId` prop - this asserts the non-null host
-  // actually threads through every one of them, not just that the panel
-  // renders without crashing.
+  // S11 coverage: a regression back to the app-wide default host would leave `useHostClientForHostId`,
+  // `providers.list`, and the picker all pinned to `null` regardless of the `hostId` prop.
   it("forwards a non-null hostId to the launch host's client, the providers.list read, and the picker's createProfileHostId/runTargetHostId", () => {
     render(
       <TerminalLaunchPanel

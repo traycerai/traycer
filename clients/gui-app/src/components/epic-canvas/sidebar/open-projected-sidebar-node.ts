@@ -1,9 +1,6 @@
 /**
- * Open a freshly created sidebar node as a canvas tile once its projection
- * lands in the open-epic store. Shared by the sidebar root-create flow
- * (`epic-sidebar.tsx`) and the artifact-tree child-create flow
- * (`epic-sidebar-artifact-tree.tsx`) so the wait/subscribe/timeout dance and
- * the `onBeforeOpen` handoff (e.g. one-shot editor focus) stay in lockstep.
+ * Open a freshly created sidebar node as a canvas tile once its projection lands in the open-epic store.
+ * Shared by the sidebar root-create flow (`epic-sidebar.tsx`) and the artifact-tree child-create flow (`epic-sidebar-artifact-tree.tsx`) so the wait/subscribe/timeout dance and the `onBeforeOpen` handoff (e.g. one-shot editor focus) stay in lockstep.
  */
 import { v4 as uuidv4 } from "uuid";
 import { displayTitle } from "@/lib/display-title";
@@ -36,15 +33,8 @@ export interface ProjectedSidebarNodeOpenArgs {
 }
 
 /**
- * Returns a cancel function. If the node is already projected, it opens
- * synchronously and the returned cancel is a no-op; otherwise the store is
- * watched until the node appears or the wait times out.
- *
- * Caller-cancel vs timeout are distinct give-ups: the returned cancel is
- * SILENT (tears the wait down, notifies `onCleanup`, but never fires
- * `onUnavailable`) because "I no longer care / a newer action superseded this"
- * is not "the node is unavailable". Only the 30s timeout — the genuine
- * give-up that warrants a fallback — fires `onUnavailable`.
+ * If the node is already projected, it opens synchronously and the returned cancel is a no-op; otherwise the store is watched until the node appears or the wait times out.
+ * Caller-cancel vs timeout are distinct give-ups: the returned cancel is SILENT (tears the wait down, notifies `onCleanup`, but never fires `onUnavailable`) because "I no longer care / a newer action superseded this" is not "the node is unavailable".
  */
 export function openProjectedSidebarNodeInTabWhenAvailable(
   args: ProjectedSidebarNodeOpenArgs,

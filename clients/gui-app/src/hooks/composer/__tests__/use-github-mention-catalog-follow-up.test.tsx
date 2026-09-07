@@ -14,23 +14,12 @@ import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-cat
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * The stale follow-up is ONE `refresh: "auto"` per (host, scope, section) per
- * menu session, and the guard that enforces it has exactly one reset edge: the
- * picker closing.
- *
- * The narrower flags cannot own that lifetime. `allowStaleFollowUp` goes false
- * every time the user steps back to the picker's root, and `enabled` goes false
- * while the OTHER section is open - so resetting on either turned one sweep per
- * session into one per re-entry - against a cache the host is still answering
- * `stale: true` for.
+ * One `refresh: "auto"` per (host, scope, section) per menu session. Reset only when the picker closes, not on `allowStaleFollowUp` or `enabled`.
  */
 
 const request = vi.fn();
 
-/**
- * Mutable so a test can swap the bound host, or flip readiness, without
- * remounting the hook.
- */
+/** Mutable so a test can swap the bound host, or flip readiness, without remounting the hook. */
 const readiness = vi.hoisted(() => ({ hostId: "host-1", isReady: true }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
@@ -42,10 +31,7 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   }),
 }));
 
-// `HostClient` is a class with ~40 private fields, so a structural stand-in
-// cannot be asserted into it. `{} as HostClient<...>` is what this suite's
-// neighbours already use; grafting on the two methods `useHostQuery` and
-// `useHostMutation` call is the same stand-in with behaviour attached.
+// `HostClient` is a class with ~40 private fields, so a structural stand-in cannot be asserted into it.
 const client = Object.assign({} as HostClient<HostRpcRegistry>, {
   request,
   requestWithSignal: request,
@@ -106,7 +92,6 @@ interface CatalogProps {
   readonly scope: GithubMentionScope;
 }
 
-/** Inside the section: this read is enabled and owns the follow-up. */
 const IN_SECTION: CatalogProps = {
   enabled: true,
   allowStaleFollowUp: true,
@@ -218,10 +203,7 @@ describe("useGithubMentionCatalog stale follow-up guard", () => {
     const { rerender } = renderCatalog(IN_SECTION);
     await waitFor(() => expect(autoSweepCount()).toBe(1));
 
-    // An app-wide composer rebinds to another host that advertises the same
-    // epic and the same workspace paths, so every other term in the guard key
-    // is unchanged. Keyed without the host, the second host's `stale: true`
-    // catalog reads as a sweep that already ran.
+    // Keyed without the host, the second host's `stale: true` catalog reads as a sweep that already ran.
     readiness.hostId = "host-2";
     rerender(IN_SECTION);
 
@@ -248,14 +230,7 @@ describe("useGithubMentionCatalog stale follow-up guard", () => {
   });
 
   /**
-   * READY, not merely bound. The query cache can still serve a `stale: true`
-   * answer while the host has no authenticated request context - the window
-   * a transient auth hiccup, or an app-wide host swap, can open. The mark
-   * used to be written before this check, so a mutation issued into that
-   * window died at preflight with the session's ONE follow-up already spent,
-   * and readiness becoming ready afterward found the guard already marked and
-   * never retried - leaving the scope unrefreshed for the rest of the picker
-   * session.
+   * Mark the follow-up only when the host is ready. Marking earlier spends the session's one follow-up on a preflight that dies.
    */
   it("does not spend the follow-up while readiness is not ready, then issues it once readiness becomes ready", async () => {
     alwaysStale();
@@ -271,12 +246,7 @@ describe("useGithubMentionCatalog stale follow-up guard", () => {
     readiness.isReady = false;
     rerender(IN_SECTION);
 
-    // The cached `stale: true` answer is still visible - the read is merely
-    // disabled, not cleared - but the follow-up must not spend itself on it.
-    // The zero is asserted only AFTER draining async work: the spend this
-    // pins is an async mutation, and a synchronous read of the counter
-    // stayed 0 even with the guard deleted, because the doomed request had
-    // not reached the mock yet.
+    // The cached `stale: true` answer is still visible - the read is merely disabled, not cleared - but the follow-up must not spend itself on it.
     expect(result.current.freshnessAt).toBe(1_000);
     await act(async () => {
       await Promise.resolve();

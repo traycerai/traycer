@@ -11,11 +11,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// A terminal tile must create its PTY at most once and must NOT respawn a
-// session the host reports as `exited` (the user ran `exit` / killed it
-// from the sidebar). It SHOULD still create when the session is simply
-// absent (fresh tile, or host-restart resilience). These cases cover the
-// `hostSessionExited` gate in useTerminalTileBootstrap.
+// A terminal tile must create its PTY at most once and must NOT respawn a session the host reports as `exited` (the user ran `exit` / killed it from the sidebar).
 
 let mockList: {
   data: { sessions: ReadonlyArray<Record<string, unknown>> } | undefined;
@@ -209,11 +205,7 @@ describe("useTerminalTileBootstrap create gate", () => {
   });
 
   it("does not let the measure timeout expire while disabled - a late-projecting agent still spawns at the probed grid", async () => {
-    // A TUI tile keeps the bootstrap disabled (and renders no probe) until
-    // its agent record projects. The measure timeout must therefore not run
-    // while disabled: if it expired during a slow projection, enabling would
-    // dispatch the create at the fallback grid before the freshly-mounted
-    // probe could report - the wrong-sized spawn this machinery prevents.
+    // The measure timeout must therefore not run while disabled: if it expired during a slow projection, enabling would dispatch the create at the fallback grid before the freshly-mounted probe could report - the wrong-sized spawn this machinery prevents.
     mockList.data = { sessions: [] };
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

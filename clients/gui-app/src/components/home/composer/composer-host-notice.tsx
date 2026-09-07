@@ -1,19 +1,8 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, X } from "lucide-react";
 
-/**
- * The composer's host-placement refusal slot (selection model §2/§54):
- * submit-time re-validation refused to create. Nothing was created, the
- * draft is untouched, and this states why. It is deliberately inline rather
- * than a toast: a toast that scrolls away leaves the user pressing send
- * again on a composer that still looks fine.
- *
- * The G4 `repointed` kind used to share this slot. It is a toast now
- * (`toastRepointedStagingReset`), and only when the move actually reset
- * staged worktree/branch intent: a derivation move is informational, not a
- * blocker, and the persistent banner outlived the condition it described -
- * after a failover round trip it announced the user's own host as news.
- */
+/** It is a toast now (`toastRepointedStagingReset`), and only when the move actually reset staged
+ * worktree/branch intent. */
 export interface ComposerHostNoticeState {
   readonly kind: "refused";
   readonly message: string;

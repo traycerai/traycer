@@ -18,26 +18,14 @@ export type EditorOpenMutation = UseMutationResult<
   RequestOfMethod<HostRpcRegistry, "editor.openPaths">
 >;
 
-/**
- * App-wide form, for a FOLLOWING surface with no host of its own - the dead-tile
- * "open in editor" button (selection model §2). Every Epic-scoped caller (a diff
- * tile, a workspace-file tile) must use {@link useEditorOpenForClient} with its
- * own tab client instead: `editor.openPaths` resolves the path on the host it is
- * sent to, so an app-wide read opens the wrong machine's file during an A→B
- * re-point (D15).
- */
+/** Every Epic-scoped caller (a diff tile, a workspace-file tile) must use {@link useEditorOpenForClient} with its own tab client instead: `editor.openPaths` resolves the path on the host it is sent to, so an app-wide read opens the wrong machine's file during an A→B re-point (D15). */
 export function useEditorOpen(
   intent: "file" | "workspace",
 ): EditorOpenMutation {
   return useEditorOpenForClient(useHostClient(), intent);
 }
 
-/**
- * `intent` is the caller's declared gesture: only opening a workspace ROOT
- * counts toward `workspace_opened_in_editor` - single-file opens (e.g. a
- * changed file from a diff tile) would overstate editor workspace adoption
- * and deliberately emit nothing here.
- */
+/** a changed file from a diff tile) would overstate editor workspace adoption and deliberately emit nothing here. */
 export function useEditorOpenForClient(
   client: HostClient<HostRpcRegistry> | null,
   intent: "file" | "workspace",
@@ -50,11 +38,7 @@ export function useEditorOpenForClient(
       mutationKey: editorMutationKeys.openPaths(),
       onSuccess: (_response, variables) => {
         if (intent !== "workspace") return;
-        // `editor.openPaths` carries OS surfaces alongside editors -
-        // `"system"` (the OS default app for a PDF) and `"finder"`. Neither is
-        // an editor and the analytics `editor` field is the editor enum, so
-        // the guard asks "is this an editor" rather than listing the literals
-        // that exist today: a later target is excluded by construction.
+        // Neither is an editor and the analytics `editor` field is the editor enum, so the guard asks "is this an editor" rather than listing the literals that exist today: a later target is excluded by construction.
         if (!isEditorId(variables.editorId)) return;
         Analytics.getInstance().track(AnalyticsEvent.WorkspaceOpenedInEditor, {
           source: "direct_ui",

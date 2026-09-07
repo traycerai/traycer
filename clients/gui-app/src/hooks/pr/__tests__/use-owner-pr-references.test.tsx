@@ -2,12 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { useOwnerListPrReferences } from "@/hooks/pr/use-owner-pr-references";
 
-/**
- * `useOwnerListPrReferences` is a thin composition over the host directory,
- * stream client, method-support probe and the shared PR-list subscription -
- * every one of those is mocked here so the test exercises only the
- * composition itself, not any of their internals (each has its own suite).
- */
+/** `useOwnerListPrReferences` is a thin composition over the host directory, stream client, method-support probe and the shared PR-list subscription - every one of those is mocked here so the test exercises only the composition itself, not any of their internals (each has its own suite). */
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: () => null,
 }));
@@ -51,11 +46,7 @@ function renderOwnerPr() {
 
 describe("useOwnerListPrReferences", () => {
   it("does not stay pending once the host has confirmed pr.subscribeListForEpic is unsupported", () => {
-    // Regression: the hook disables the underlying subscription once support
-    // is known-absent (`enabled: methodSupport !== "unsupported"`), but a
-    // disabled TanStack query still reports `isPending: true` - it has never
-    // received data and never will. Left unaccounted for, an unsupported
-    // host's hover card would spin on "Loading workspace..." forever.
+    // Regression: the hook disables the underlying subscription once support is known-absent (`enabled: methodSupport !== "unsupported"`), but a disabled TanStack query still reports `isPending: true` - it has never received data and never will.
     methodSupport.current = "unsupported";
     subscriptionResult.current = {
       data: null,

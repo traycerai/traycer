@@ -7,12 +7,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
-/**
- * Forgets a previously-added shell (`traycer config shell remove`). The backend
- * falls back to the OS default when the removed shell was the current
- * selection, so on success this invalidates both the shell config and the shell
- * list; the picker stays open and refreshes in place.
- */
+/** The backend falls back to the OS default when the removed shell was the current selection, so on success this invalidates both the shell config and the shell list; the picker stays open and refreshes in place. */
 export function useRunnerTraycerShellConfigRemoveMutation(): UseMutationResult<
   void,
   Error,

@@ -107,9 +107,7 @@ describe("<SplitResizeHandle />", () => {
 
     expect(handle.classList.contains("w-1")).toBe(true);
     expect(handle.classList.contains("w-px")).toBe(false);
-    // Adjacent split children are intentionally not clipped. The canvas fill
-    // masks their overflow inside the safe in-flow footprint while the
-    // centered pseudo-element remains the only visible separator line.
+    // The canvas fill masks their overflow inside the safe in-flow footprint while the centered pseudo-element remains the only visible separator line.
     expect(handle.classList.contains("bg-canvas")).toBe(true);
     expect(handle.classList.contains("bg-border")).toBe(false);
     expect(handle.className).toContain("before:w-px");
@@ -175,16 +173,7 @@ describe("<SplitResizeHandle />", () => {
     expect(committed[1]).toBeCloseTo(0.4, 10);
   });
 
-  // Ticket 21 wave-2 live pass (row 1): a live divider drag under a
-  // stacked-plane layout showed `onDragStart` succeeding (capture engaged)
-  // while every subsequent move/up event silently failed to reach the
-  // handle's own listeners - jsdom cannot reproduce the browser's real hit-
-  // testing/pointer-capture behavior (both are stubbed to inert no-ops in
-  // this repo's test setup), so this pin instead proves the actual
-  // guarantee the fix provides: once a drag starts, move/up delivery no
-  // longer depends on the event's native target being the handle at all. A
-  // "decoy" element standing in for an occluding later-DOM sibling receives
-  // the move/up events directly; the drag must still progress and commit.
+  // A "decoy" element standing in for an occluding later-DOM sibling receives the move/up events directly; the drag must still progress and commit.
   it("continues and commits a drag even when move/up events target an unrelated overlapping element, not the handle", () => {
     const onCommitSizes =
       vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
@@ -234,12 +223,7 @@ describe("<SplitResizeHandle />", () => {
     expect(committed[1]).toBeCloseTo(0.4, 10);
   });
 
-  // Ticket 21 wave-2 live pass, fix round 2 (F1): moving move/up/cancel to
-  // window listeners means blur must be a terminal event this hook owns
-  // directly - `beginPanelResizeInteraction`'s own blur cleanup only clears
-  // the shared interaction id for the CSS class, it has no idea `dragRef`
-  // exists. Without the hook's own blur listener, a later window move still
-  // mutates flexGrow even though the resize-freeze lifecycle already ended.
+  // Without the hook's own blur listener, a later window move still mutates flexGrow even though the resize-freeze lifecycle already ended.
   it("blur cancels the drag outright: no later frames apply, nothing commits, fractions restore, and a fresh drag starts cleanly", () => {
     const onCommitSizes =
       vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
@@ -270,9 +254,7 @@ describe("<SplitResizeHandle />", () => {
 
     fireEvent(window, new Event("blur"));
 
-    // Terminal: the class lifecycle ends immediately, and the pair is
-    // restored to the pre-drag committed fractions (the cancel semantic),
-    // not left frozen at the mid-drag value.
+    // Terminal: the class lifecycle ends immediately, and the pair is restored to the pre-drag committed fractions (the cancel semantic), not left frozen at the mid-drag value.
     expect(
       document.documentElement.classList.contains("traycer-panel-resizing"),
     ).toBe(false);
@@ -329,11 +311,7 @@ describe("<SplitResizeHandle />", () => {
     expect(onCommitSizes.mock.calls[0][0]).toBe(GROUP_ID);
   });
 
-  // Ticket 21 wave-2 live pass, fix round 2 (F2): the pre-fix React-prop
-  // design died with the element on unmount for free. Once move/up/cancel
-  // are imperative window listeners, an unmount mid-drag must be an
-  // explicit teardown path, or the dead component's closures keep
-  // listening and a later release commits through them.
+  // Once move/up/cancel are imperative window listeners, an unmount mid-drag must be an explicit teardown path, or the dead component's closures keep listening and a later release commits through them.
   it("unmounting mid-drag detaches the window listeners: a later release commits nothing", () => {
     const onCommitSizes =
       vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
@@ -765,10 +743,6 @@ describe("<SplitResizeHandle />", () => {
       vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
     const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
 
-    // The handle carries the split GROUP id, but NOT under `data-group-id` -
-    // that attribute marks tab-group panes and is collected by the canvas
-    // focus-navigation `readTileRects`. A handle on `data-group-id` would win
-    // the spatial neighbour search and break cross-split focus navigation.
     expect(handle.getAttribute("data-resize-group-id")).toBe(GROUP_ID);
     expect(handle.hasAttribute("data-group-id")).toBe(false);
   });

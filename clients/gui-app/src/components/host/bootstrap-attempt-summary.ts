@@ -1,24 +1,12 @@
 import type { BootstrapMarkerEntry } from "@traycer-clients/shared/platform/runner-host";
 
-/**
- * Pure reduction of the bootstrap marker file, kept out of
- * `bootstrap-attempt-details.tsx` so that component file exports only a
- * component and keeps fast refresh (the same split `tab-chrome-tokens.ts`
- * makes for the header tabs).
- */
 export interface BootstrapAttemptSummary {
   readonly attempt: BootstrapMarkerEntry;
   readonly outcome: BootstrapMarkerEntry | null;
 }
 
-/**
- * Picks the most recent `phase=starting` marker and its terminal follow-up
- * (`exited` / `crashed` / `killed` / `failed-to-spawn`). The marker file is
- * append-only, so the relevant pair is "the last `starting` and the next
- * non-`starting` after it". When no follow-up exists, the host is mid-
- * spawn or never published a terminal marker - surface that as `outcome:
- * null` and let the renderer say so.
- */
+/** When no follow-up exists, the host is mid- spawn or never published a terminal marker - surface that as
+ * `outcome: null` and let the renderer say so. */
 export function summariseBootstrapAttempts(
   markers: readonly BootstrapMarkerEntry[],
 ): BootstrapAttemptSummary | null {

@@ -11,15 +11,7 @@ import {
   selectUnfoldedCloudChats,
 } from "@/lib/chats/unified-chat-list";
 
-/**
- * The fold and the interleave, driven by the geometry that motivated them.
- *
- * The fork numbers below are not invented: they are the live witness on task
- * `d60781ca` - a local chat `56254cae…` whose publication was redirected into
- * the derived clone row `d44cc96f…` after the other host's lineage kept the
- * original cloud row. Every wrong fold this file guards against was observable
- * on that task.
- */
+/** The fold and the interleave, driven by the geometry that motivated them. */
 
 const TASK = "d60781ca-e0d3-4318-bf2a-e03d8ce4e3a7";
 const VIEWER = "user-1";
@@ -201,9 +193,8 @@ describe("selectUnfoldedCloudChats", () => {
     });
 
     it("degrades to the pre-fork answer when the mapping is unavailable", () => {
-      // An older host has no `epic.listChatPublicationTargets`. The fold then
-      // keeps the clone and drops the incumbent - wrong, but it is the exact
-      // behaviour that host could always support, and it still renders a list.
+      // An older host has no `epic.listChatPublicationTargets`.
+      // The fold then keeps the clone and drops the incumbent - wrong, but it is the exact behaviour that host could always support, and it still renders a list.
       const kept = selectUnfoldedCloudChats({
         ...inputs,
         publicationChatIdByChatId: NO_REDIRECTS,
@@ -320,10 +311,8 @@ describe("mergeChatListEntries", () => {
 
 describe("cross-owner folding", () => {
   /**
-   * The reviewer's executable case. `chatId` is host-minted and not unique
-   * under a task, and the cloud list carries every task-visible chat including
-   * other people's - so an id-only fold can delete a collaborator's genuinely
-   * different chat from the only agent list there now is.
+   * The reviewer's executable case.
+   * `chatId` is host-minted and not unique under a task, and the cloud list carries every task-visible chat including other people's - so an id-only fold can delete a collaborator's genuinely different chat from the only agent list there now is.
    */
   const COLLABORATOR_ROW: CloudChatSummary = {
     ...cloudChat({

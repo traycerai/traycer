@@ -31,24 +31,7 @@ import {
   validateCouponResponseSchema,
 } from "@traycer/protocol/auth/_internal/schemas";
 
-/**
- * Auth wire DTO registry.
- *
- * Two layers of records:
- *
- * 1. **Entity records** - core domain shapes (`user`, `organization`,
- *    `team`, `subscription`, `credit`, `mcp-server`, `mcp-tool`, etc.)
- *    embedded inside multiple HTTP responses. Versioning these
- *    independently means a change to `User` is one bump, even when 12
- *    responses embed it.
- * 2. **Response-envelope records** - top-level HTTP wire surfaces
- *    consumed from `Authnv3Client`. Each is a record so the wire
- *    contract evolves explicitly.
- *
- * Schemas backing each contract live under
- * `protocol/auth/_internal/schemas.ts`; this file is the only one
- * outside `_internal/` allowed to import them.
- */
+/** Auth wire DTO registry. */
 
 // ---- Entity records ----------------------------------------------------- //
 
@@ -511,13 +494,8 @@ export type PayAsYouGoUsage = RecordValue<
   "pay-as-you-go-usage"
 >;
 export type BundleSummary = RecordValue<AuthRecordRegistry, "bundle-summary">;
-// `MCPTool` / `MCPServer` types are derived directly from their
-// registered schemas via `RecordValue<>` so the registry's
-// schema-vs-type lockstep guarantee holds - `inputSchema` and
-// `outputSchema` stay as `Record<string, unknown>` on both sides of
-// the boundary, matching the `z.record(z.string(), z.unknown())` in
-// `mcpToolSchema`. Constructors that receive raw MCP SDK `object`
-// values must narrow at the boundary rather than at the type wall.
+// `MCPTool` / `MCPServer` types are derived directly from their registered schemas via `RecordValue<>` so the registry's schema-vs-type lockstep guarantee holds - `inputSchema` and `outputSchema` stay as `Record<string.
+// Constructors that receive raw MCP SDK `object` values must narrow at the boundary rather than at the type wall.
 export type MCPTool = RecordValue<AuthRecordRegistry, "mcp-tool">;
 
 export type MCPServer = RecordValue<AuthRecordRegistry, "mcp-server">;
@@ -550,10 +528,6 @@ export type EmailOtpResponse = RecordValue<
   AuthRecordRegistry,
   "email-otp-response"
 >;
-// Response envelopes that embed MCPServer / MCPTool derive their shape
-// directly from the registered record schema - the embedded
-// `inputSchema` / `outputSchema` remain `Record<string, unknown>` in
-// lockstep with the runtime `mcpToolSchema`.
 export type InstallMCPServerResponse = RecordValue<
   AuthRecordRegistry,
   "install-mcp-server-response"

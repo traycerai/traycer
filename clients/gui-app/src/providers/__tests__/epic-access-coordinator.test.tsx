@@ -110,10 +110,8 @@ function seedTabs(
     mostRecentTabIdByEpicId: mostRecent,
     artifactTreeByEpicId: trees,
   });
-  // `handleEpicAccessLoss` derives its affected refs from the coordinator's
-  // OWN layout (`useTabsStore`), not from the canvas store - keep the two in
-  // sync here exactly as `installSourceReconciliation` keeps them in sync in
-  // the real app, or the access-loss command finds nothing to do.
+  // handleEpicAccessLoss reads useTabsStore. Keep it in sync with the canvas
+  // store or access-loss finds nothing.
   const refs: ReadonlyArray<TabRef> = tabs.map((tab) => ({
     kind: "epic",
     id: tab.tabId,
@@ -486,12 +484,8 @@ describe("EpicAccessCoordinator", () => {
       "handleEpicAccessLoss",
     );
 
-    // Both epics behind the split are deleted together, in ONE notification -
-    // exactly the shape a real batch delete produces. Plan §9 requires this
-    // routed through ONE coordinated command, not one `handleEpicAccessLoss`
-    // call per epic: firing a separate coordinator transaction (and a
-    // separate persistence flush) per epic for what is semantically one
-    // event is exactly the bypass this ticket closes.
+    // Batch delete of both split sides is one handleEpicAccessLoss call, not
+    // one per epic (that would flush twice and leave both sides unavailable).
     dispatchDeletedEpicStorageEvent(
       "user-1",
       ["epic-left", "epic-right"],
@@ -655,23 +649,7 @@ describe("EpicAccessCoordinator", () => {
         // Still open: a spent slot is not a verdict.
         expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
         expect(toastInfo).not.toHaveBeenCalled();
-        // Simulate the retry itself failing the same way the real reconnect
-        // would, so the next slot is taken by a genuine re-ARRIVAL. The
-        // arrival is the point: the coordinator arms the next slot on the
-        // error TRANSITIONING back in, not on its presence.
-        //
-        // Cleared explicitly first, and that is what the relocation changed.
-        // `snapshotFetchError` is the WORKER's state now, projected to main,
-        // and `requestFreshSnapshot` clears it by publishing a change-gated
-        // patch. The worker never saw the direct `setState` below, so after the
-        // first cycle its own value is already null and it emits nothing for
-        // this field - main keeps the error the test wrote, the re-seed is a
-        // no-op transition, and the loop stalls one slot short with the third
-        // retry never fired. Only the first iteration worked, on a clear the
-        // worker still had a reason to publish.
-        //
-        // Writing both halves here keeps the simulation at ONE layer instead of
-        // depending on the worker to supply half of it.
+        // Retry fails the same way a real reconnect would. Clear worker-projected `snapshotFetchError` first so the re-seed is a real transition.
         act(() => {
           handle.store.setState({ snapshotFetchError: null });
         });

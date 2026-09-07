@@ -1,13 +1,6 @@
 /**
- * Opener "Diff" sub-page (two-step): step 1 picks a linked git workspace, step
- * 2 fuzzes that workspace's changed files. A single git-workspace epic skips
- * straight to the changed-file step. The chosen file opens into the target
- * group as a GitDiffTileRef. Non-git workspaces are excluded (no changes to
- * diff). Snapshot diffs stay programmatic (out of scope).
- *
- * Large-list handling mirrors the Files sub-page: substring-filter by the live
- * palette query, render the top `OPENER_RESULT_CAP` rows, append a hint when
- * capped.
+ * Opener "Diff" sub-page (two-step): step 1 picks a linked git workspace, step 2 fuzzes that workspace's changed files.
+ * A single git-workspace epic skips straight to the changed-file step.
  */
 import { useMemo } from "react";
 import { getBasename } from "@/lib/path/cross-platform-path";
@@ -132,9 +125,7 @@ function makeDiffStepSubpage(row: WorktreeBindingSelectorRow): CommandSubpage {
 export function useDiffOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  // The epic's worktree bindings are host-local records of the host serving
-  // the epic - read them there (`useActiveEpicHostId`), not from whichever
-  // host the app points at.
+  // The epic's worktree bindings are host-local records of the host serving the epic - read them there (`useActiveEpicHostId`), not from whichever host the app points at.
   const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
   const bindingsQuery = useWorktreeListBindingsForEpicForClient({
     client: useHostClientForHostId(activeEpicHostId),

@@ -62,11 +62,6 @@ const AGENT: CommGraphAgentNode = {
   createdAt: 1,
 };
 
-/**
- * This suite drives the NODE-GRAPH rendering, so it names that mode
- * explicitly - the schema default is the office floor, which renders no React
- * Flow at all.
- */
 const GRAPH_DEFAULT_VIEW: CommGraphTileViewState = {
   ...DEFAULT_COMM_GRAPH_VIEW,
   mode: "graph",
@@ -229,9 +224,7 @@ afterEach(() => {
 
 describe("CommGraphCanvas viewport", () => {
   it("fits every node on first open and permits a full-graph overview", () => {
-    // `GRAPH_DEFAULT_VIEW` differs from the schema default in `mode` alone, so
-    // this also pins that a mode toggle is not a framing gesture: counting it
-    // would open a never-panned graph at (0, 0) zoom 1 instead of fitting.
+    // `GRAPH_DEFAULT_VIEW` differs from the schema default in `mode` alone, so this also pins that a mode toggle is not a framing gesture: counting it would open a never-panned graph at (0, 0) zoom 1 instead of fitting.
     renderCanvas(GRAPH_DEFAULT_VIEW, STATIC_CANVAS);
 
     expect(reactFlowMock.mock.lastCall?.[0]).toEqual(

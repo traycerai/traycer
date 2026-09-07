@@ -51,11 +51,8 @@ interface TileCanvasProps {
 }
 
 /**
- * Epic-scoped tab-group canvas. Recursively renders the binary split
- * tree via `ResizablePanelGroup` / `ResizablePanel`. When the canvas is
- * empty, renders the empty-shell drop target which seeds a root group
- * on first drop. When the epic has zero artifacts at all, it first seeds a
- * blank root tab so the normal in-pane fuzzy opener is shown instead.
+ * Epic-scoped tab-group canvas.
+ * Recursively renders the binary split tree via `ResizablePanelGroup` / `ResizablePanel`.
  */
 export function TileCanvas(props: TileCanvasProps) {
   const { epicId, tabId } = props;
@@ -63,12 +60,8 @@ export function TileCanvas(props: TileCanvasProps) {
   const hasActiveHandoff = useInitialChatHandoffStore((state) =>
     selectHasActiveInitialChatHandoffForEpic(state, epicId),
   );
-  // Render the live canvas as soon as the epic snapshot is loaded OR a
-  // freshly-created epic still has a live initial-chat handoff. The latter
-  // paints the eager-opened chat tab (from the canvas store, NOT the epic
-  // chats slice) during the epic-snapshot load - its `pendingCreateArtifactIds`
-  // mark suppresses the remote-deleted branch while the real chat lands, so the
-  // tab survives the empty initial snapshot.
+  // Render the live canvas as soon as the epic snapshot is loaded OR a freshly-created epic still has a live initial-chat handoff.
+  // The latter paints the eager-opened chat tab (from the canvas store, NOT the epic chats slice) during the epic-snapshot load - its `pendingCreateArtifactIds` mark suppresses the remote-deleted branch while the real chat lands, so the tab survives the empty initial snapshot.
   const renderLive = snapshotLoaded || hasActiveHandoff;
   return (
     <div
@@ -120,10 +113,7 @@ function TileCanvasLive(
   props: TileCanvasProps & { hasActiveHandoff: boolean },
 ) {
   const { epicId, tabId, hasActiveHandoff } = props;
-  // Subscribe to `root` and `sizesByGroupId` separately (NOT the whole
-  // canvas state): tile-payload churn in `tilesByInstanceId` (rename, diff
-  // view state) must not re-render the layout layer - per-pane views
-  // subscribe to their own payloads.
+  // Subscribe to `root` and `sizesByGroupId` separately (NOT the whole canvas state): tile-payload churn in `tilesByInstanceId` (rename, diff view state) must not re-render the layout layer - per-pane views subscribe to their own payloads.
   const root = useEpicCanvasStore((s) => s.canvasByTabId[tabId]?.root ?? null);
   const sizesByGroupId = useEpicCanvasStore(
     (s) => s.canvasByTabId[tabId]?.sizesByGroupId ?? EMPTY_SIZES,
@@ -140,41 +130,21 @@ function TileCanvasLive(
   );
   const paneContext = useMemo(() => ({ epicId, tabId }), [epicId, tabId]);
 
-  // Hosted chat bodies (`StableTileSurfaceHost`) paint at rects the geometry
-  // coordinator reads inside a ResizeObserver callback, and a ResizeObserver
-  // reports SIZE changes only. A structural change to this tree can move a
-  // pane without resizing it: dropping a tab on the left edge of the only
-  // other pane in a 50/50 split inserts a new pane on that side and closes
-  // the emptied source, so the chat pane keeps its exact width and only its
-  // `left` changes - the same position-only move `TopLevelTabHost` handles
-  // for "Reverse views". The chat's `TabGroupView` is keyed by pane id and
-  // never remounts, so its slot registration is not re-created either;
-  // without this the hosted body stays painted at its old rect, over the pane
-  // that now holds it, while the chat's own pane draws empty. Sizes matter
-  // too: a middle pane between two inline (non-hosted) neighbours moves
-  // without resizing when they trade width, and nothing registered resizes.
-  // Layout effect, not effect: the flex geometry lands in this same commit
-  // and the re-read has to see it before paint. Parent layout effects run
-  // after the children's, so a slot mounted by this commit has already
-  // registered and measured itself.
+  // A structural change to this tree can move a pane without resizing it: dropping a tab on the left edge of the only other pane in a 50/50 split inserts a new pane on that side and closes the emptied source, so the chat pane keeps its exact width and only its `left` changes - the same position-only move `TopLevelTabHost` handles for "Reverse views".
+  // The chat's `TabGroupView` is keyed by pane id and never remounts, so its slot registration is not re-created either; without this the hosted body stays painted at its old rect, over the pane that now holds it, while the chat's own pane draws empty.
   useLayoutEffect(() => {
     remeasureTileSurfaceGeometry();
   }, [root, sizesByGroupId]);
 
   if (root === null) {
-    // During a fresh create the eager-opened chat tab populates the canvas a
-    // tick after mount. Hold the skeleton until it lands instead of flashing
-    // the blank root opener / empty-shell for a frame.
+    // Hold the skeleton until it lands instead of flashing the blank root opener / empty-shell for a frame.
     if (hasActiveHandoff) {
       return <CanvasSkeleton />;
     }
     if (!hasRecords) {
       return <EmptyEpicBlankRoot tabId={tabId} />;
     }
-    // A phone reaches its tabs through the header's switcher trigger, so the
-    // sheet has to be mounted here too - the empty shell's "drag from the
-    // sidebar" is a desktop answer, and without this the trigger would open
-    // nothing on the one screen with no tabs to switch between.
+    // A phone reaches its tabs through the header's switcher trigger, so the sheet has to be mounted here too - the empty shell's "drag from the sidebar" is a desktop answer, and without this the trigger would open nothing on the one screen with no tabs to switch between.
     if (isMobile) {
       return (
         <>
@@ -185,11 +155,8 @@ function TileCanvasLive(
     }
     return <EmptyShell epicId={epicId} tabId={tabId} />;
   }
-  // Below the mobile breakpoint an open epic shows exactly ONE tile
-  // full-screen instead of the recursively-splitting canvas. The split tree is
-  // read but never mutated, so the persisted desktop layout is unchanged on
-  // return. Desktop (>=768px) falls through to the SplitContainer path below,
-  // which stays byte-for-byte identical.
+  // Below the mobile breakpoint an open epic shows exactly ONE tile full-screen instead of the recursively-splitting canvas.
+  // The split tree is read but never mutated, so the persisted desktop layout is unchanged on return.
   if (isMobile) {
     return <MobileEpicTileView epicId={epicId} tabId={tabId} />;
   }
@@ -234,11 +201,7 @@ interface EmptyShellProps {
   readonly tabId: string;
 }
 
-/**
- * Drop zone shown when the canvas has no root group. The first sidebar-node
- * drop seeds the root group with the dragged artifact. Pointer-only hit
- * testing comes from the root context's collision detection.
- */
+/** Pointer-only hit testing comes from the root context's collision detection. */
 function EmptyShell(props: EmptyShellProps) {
   const { epicId, tabId } = props;
   const dropData = useMemo<EpicCanvasDropTargetData>(

@@ -19,10 +19,7 @@ export function useWorktreeGetBinding(args: {
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
   readonly enabled: boolean;
-  // The response carries the host-recomputed `missingWorktreePaths`, so a
-  // caller surfacing that signal sets `staleTime: 0` + `refetchOnWindowFocus`
-  // (typically gated on surface visibility) to re-check on focus. A caller that
-  // only needs the binding for rendering passes a normal staleTime + `false`.
+  // The response carries the host-recomputed `missingWorktreePaths`, so a caller surfacing that signal sets `staleTime: 0` + `refetchOnWindowFocus` (typically gated on surface visibility) to re-check on focus.
   readonly staleTime: number;
   readonly refetchOnWindowFocus: boolean;
   // Background setup runs server-side and only mutates the binding. Consumers

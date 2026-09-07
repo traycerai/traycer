@@ -46,23 +46,13 @@ import {
 } from "@/stores/epics/left-panel-store";
 
 /**
- * The switcher's view menu is capped well below the desktop sidebar's, because
- * it opens inside a 70dvh bottom sheet rather than over the full window: a menu
- * sized against the VIEWPORT would overhang the sheet that anchors it and read
- * as a detached overlay. Scrolling inside the menu is the intended outcome for
- * a long facet list on a phone.
+ * The switcher's view menu is capped well below the desktop sidebar's, because it opens inside a 70dvh bottom sheet rather than over the full window: a menu sized against the VIEWPORT would overhang the sheet that anchors it and read as a detached overlay.
  */
 const SWITCHER_VIEW_MENU_MAX_HEIGHT = "min(50dvh, 20rem)";
 
 /**
  * Trigger + content shell for a switcher category's view menu.
- *
- * Deliberately flat: the desktop sidebar reaches each facet through a Radix
- * submenu, or drills into it with a Back row when the rail is too narrow for
- * two columns, because a rail has no room to show them all at once. A phone
- * menu does - it scrolls - so the facets are listed one after another and the
- * whole drill-in controller (and the viewport-width rule behind it) has no
- * mobile counterpart to port. The facet bodies themselves are desktop's own.
+ * Deliberately flat: the desktop sidebar reaches each facet through a Radix submenu, or drills into it with a Back row when the rail is too narrow for two columns, because a rail has no room to show them all at once.
  */
 function SwitcherViewMenuShell(props: {
   readonly label: string;
@@ -98,10 +88,7 @@ function SwitcherViewMenuShell(props: {
 }
 
 /**
- * A facet's heading in the flat menu. The sidebar puts this text on the row you
- * open the facet FROM; with the facets inlined there is no such row, so the
- * label has to introduce the group instead - otherwise three radio groups run
- * together with nothing saying which axis each one is.
+ * The sidebar puts this text on the row you open the facet FROM; with the facets inlined there is no such row, so the label has to introduce the group instead - otherwise three radio groups run together with nothing saying which axis each one is.
  */
 function SwitcherFacetLabel(props: { readonly children: ReactNode }) {
   return (
@@ -112,10 +99,7 @@ function SwitcherFacetLabel(props: { readonly children: ReactNode }) {
 }
 
 /**
- * View menu for the Agents category, reading and writing the same per-epic chat
- * filter and sort the desktop sidebar does - so a narrowing picked on a phone
- * is the narrowing the sidebar shows, and neither surface owns a private copy.
- *
+ * View menu for the Agents category, reading and writing the same per-epic chat filter and sort the desktop sidebar does - so a narrowing picked on a phone is the narrowing the sidebar shows, and neither surface owns a private copy.
  * Carries the sidebar's Agents facets, in the sidebar's order.
  */
 export function SwitcherAgentsViewMenu(props: { readonly epicId: string }) {
@@ -205,10 +189,8 @@ export function SwitcherAgentsViewMenu(props: { readonly epicId: string }) {
 }
 
 /**
- * View menu for the Artifacts category. Every sidebar facet is present here -
- * Ordering, Status, Type and Read state are all plain predicates over artifacts
- * this surface already holds - so this menu also carries the sidebar's "Reset
- * view".
+ * View menu for the Artifacts category.
+ * Every sidebar facet is present here - Ordering, Status, Type and Read state are all plain predicates over artifacts this surface already holds - so this menu also carries the sidebar's "Reset view".
  */
 export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
   const { epicId } = props;

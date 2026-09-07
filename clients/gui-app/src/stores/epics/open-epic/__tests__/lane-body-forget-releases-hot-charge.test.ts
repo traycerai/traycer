@@ -1,26 +1,6 @@
 /**
- * `forget()` must release the hot-doc charge, not just drop the entry.
- *
- * A body is charged through `budget.chargeHot(docKey, bytes)` when it is
- * installed. Both acknowledged demote paths end in the same triple - delete the
- * entry, `budget.settleCold(...)`, drop the doc - but `forget()` did only the
- * first. `dropBodiesWhoseRoomIsGone()` calls it whenever a binding-epoch change
- * or a projection update makes a resident room disappear, and then destroys the
- * main-thread Y.Doc, so every forgotten room left a permanent phantom holder in
- * a process-wide budget for a body that no longer exists anywhere. The plane
- * reads over limit and evicts unrelated LIVE documents to get back under it.
- *
- * ## Why the method's own doc comment does not excuse it
- *
- * It argues "there is nothing on the far side to settle bytes back INTO, so a
- * demote would be answered `not-held`". That is true and it is about the
- * WORKER - it justifies not POSTING a demote. `budget` is main-side
- * accounting, and nothing about the worker's replicas being gone releases a
- * charge the main thread took. The two got conflated, which is the whole bug.
- *
- * Zero settled bytes is the right argument, and the acknowledged path already
- * states it: "No bytes came back, so nothing to record cold - only the hot
- * charge is released."
+ * `forget()` must release the hot-doc charge, not just drop the entry. A body is charged through
+ * `budget.chargeHot(docKey, bytes)` when it is installed.
  */
 import { describe, expect, it } from "vitest";
 import { stubMainCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-main-call-handlers";
@@ -45,14 +25,7 @@ const DOC_KEY = "room-1";
 /** Any non-empty payload: the charge is taken on `update.byteLength`. */
 const BODY_BYTES = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]);
 
-/**
- * Answers every `body/materialize` with bytes, so installation charges hot.
- *
- * Shaped like `artifact-body-lease-bridge.test.ts`'s worker side - the value is
- * posted through an `unknown` seam rather than a `BridgeCallResult<...>`
- * literal, because the generic response type does not narrow through the frame
- * union and the annotated form lands on `no-unsafe-assignment`.
- */
+/** Answers every `body/materialize` with bytes, so installation charges hot. */
 function createGrantingWorker(pair: FakeBridgePair): void {
   pair.worker.subscribe((message) => {
     if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
@@ -144,9 +117,8 @@ describe("forget() - the binding-epoch drop path", () => {
       throw new Error(`expected a granted lease, got ${grant.kind}`);
     }
 
-    // ANTI-VACUITY: the charge really happened, so the release below is
-    // releasing something. Without this the test would pass on a build where
-    // installation never charged at all.
+    // ANTI-VACUITY: the charge really happened, so the release below is releasing something. Without
+    // this the test would pass on a build where installation never charged at all.
     expect(log.charged).toEqual([
       { docKey: DOC_KEY, bytes: BODY_BYTES.byteLength },
     ]);
@@ -155,18 +127,15 @@ describe("forget() - the binding-epoch drop path", () => {
     // The room is gone - `dropBodiesWhoseRoomIsGone`'s call, verbatim.
     leases.forget(DOC_KEY);
 
-    // Charged once, released once. Under the unfixed tree `settled` stays
-    // empty and the eight bytes are held against the process-wide budget
-    // forever, for a doc the caller destroys on the very next line.
+    // Charged once, released once.
     expect(log.settled).toEqual([{ docKey: DOC_KEY, settledBytes: 0 }]);
   });
 
   it("stays silent for a doc key it never held", () => {
     const { leases, log } = setup();
 
-    // The early return must not settle: releasing a charge that was never
-    // taken would credit the budget for bytes nobody charged, which is the
-    // same accounting error with the sign flipped.
+    // The early return must not settle: releasing a charge that was never taken would credit the
+    // budget for bytes nobody charged, which is the same accounting error with the sign flipped.
     leases.forget("room-never-held");
 
     expect(log.charged).toEqual([]);

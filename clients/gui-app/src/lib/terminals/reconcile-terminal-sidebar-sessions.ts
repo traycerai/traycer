@@ -17,9 +17,8 @@ const DORMANT_GRID_ROWS = 24;
 export type TerminalListLifecycleOwner = "registry" | "manager";
 
 /**
- * A `terminal.list` row as consumed by sidebar reconciliation. Updated hosts
- * always send `lifecycleOwner`. A missing value is fail-closed as a registry
- * shadow on a capable host and ignored on a positively known legacy host.
+ * A `terminal.list` row as consumed by sidebar reconciliation.
+ * Updated hosts always send `lifecycleOwner`.
  */
 export type ListedTerminalSidebarSession = CanonicalTerminalSessionInfo & {
   readonly lifecycleOwner?: TerminalListLifecycleOwner;
@@ -95,10 +94,7 @@ function durableEpicTerminals(
 }
 
 /**
- * One non-duplicated sidebar list from three classified authorities:
- * v2 durable fleet rows, manager-owned `terminal.list` rows on a capable
- * host, and the full `terminal.list` compatibility view on a genuinely
- * older connected host. Capability `unknown` is a no-row state.
+ * One non-duplicated sidebar list from three classified authorities: v2 durable fleet rows, manager-owned `terminal.list` rows on a capable host, and the full `terminal.list` compatibility view on a genuinely older connected host.
  */
 export function reconcileTerminalSidebarSessions(
   args: ReconcileTerminalSidebarSessionsArgs,

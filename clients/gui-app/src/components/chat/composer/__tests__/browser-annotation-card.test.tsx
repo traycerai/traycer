@@ -29,10 +29,7 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
-/**
- * The card resolves its session across the coordinator REGISTRY rather than a
- * surrounding sessions context, so the fixture seeds the registry lookup.
- */
+/** The card resolves its session across the coordinator REGISTRY rather than a surrounding sessions context, so the fixture seeds the registry lookup. */
 const sessionsHarness = vi.hoisted(() => ({
   items: null as ReadonlyArray<BrowserSessionInfo> | null,
 }));

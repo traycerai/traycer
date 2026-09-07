@@ -10,10 +10,8 @@ type RouteErrorComponentProps = Omit<ErrorComponentProps, "error"> & {
   readonly error: unknown;
 };
 
-// StrictMode invokes lazy state initializers twice in development. The props
-// object identifies this mounted error occurrence even when a route throws a
-// primitive or redirect-like value; keying by the value itself would conflate
-// separate failures that happen to throw the same string or number.
+// The props object identifies this mounted error occurrence even when a route throws a primitive or
+// redirect-like value.
 const captureByOccurrence = new WeakMap<
   RouteErrorComponentProps,
   ReportIssueErrorCapture
@@ -34,13 +32,8 @@ function captureRouteError(
   return capture;
 }
 
-/**
- * Router `defaultErrorComponent`: the catch-all for any error thrown inside a
- * route match (loader, `beforeLoad`, or a component render) that the route's
- * own `errorComponent` didn't handle. TanStack mounts it inside the nearest
- * route's error boundary and resets that boundary automatically on the next
- * successful navigation, so navigating home clears the error.
- */
+/** Router `defaultErrorComponent`: the catch-all for any error thrown inside a route match (loader,
+ * `beforeLoad`, or a component render) that the route's own `errorComponent` didn't handle. */
 export function RouteErrorComponent(
   props: RouteErrorComponentProps,
 ): ReactNode {

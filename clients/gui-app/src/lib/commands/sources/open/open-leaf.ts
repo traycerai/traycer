@@ -1,9 +1,6 @@
 /**
- * Shared builders for opener sub-page leaves. Every opener item carries
- * group "open" + scope "actions" (rendered by the shell's OpenerRootView /
- * SubpageView, never the global buckets). Existing-item leaves route their
- * open through the canonical `openTileIntoTargetGroup` delegate so a fresh
- * instance lands in the bound target group (dedup intentionally bypassed).
+ * Shared builders for opener sub-page leaves.
+ * Every opener item carries group "open" + scope "actions" (rendered by the shell's OpenerRootView / SubpageView, never the global buckets).
  */
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import type {
@@ -15,15 +12,12 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
  * Cap on rows handed to the renderer for a large two-step list (Files / Diff).
- * The full tree (up to 25k entries) is path-filtered by the live palette query
- * first (see `matchesPathQuery`); only the top slice is rendered so the
- * sub-page never janks.
+ * The full tree (up to 25k entries) is path-filtered by the live palette query first (see `matchesPathQuery`); only the top slice is rendered so the sub-page never janks.
  */
 export const OPENER_RESULT_CAP = 100;
 
 /**
- * Non-actionable hint row appended when a large list was truncated, so the
- * user knows results are capped and to refine the query.
+ * Non-actionable hint row appended when a large list was truncated, so the user knows results are capped and to refine the query.
  */
 export function openerTruncatedHint(
   categoryId: string,
@@ -91,9 +85,7 @@ export function openerSubpageLeaf(args: OpenerSubpageLeafArgs): CommandItem {
 
 /**
  * Leaf for an already-existing tile ref: opens a fresh instance in target.
- * `hostBadge` is the row's trailing host indicator (null when the ref's
- * resolved host matches the active host, or the category is host-agnostic) -
- * see `CommandItem.hostBadge`.
+ * `hostBadge` is the row's trailing host indicator (null when the ref's resolved host matches the active host, or the category is host-agnostic) - see `CommandItem.hostBadge`.
  */
 export function openerExistingLeaf(
   categoryId: string,
@@ -103,9 +95,7 @@ export function openerExistingLeaf(
 ): CommandItem {
   const name = ref.name;
   const leaf = openerActionLeaf({
-    // Row id is keyed on the stable content id (unique among a category's
-    // existing items); the ref's instanceId is a placeholder re-minted by
-    // openTileInPane on open.
+    // Row id is keyed on the stable content id (unique among a category's existing items); the ref's instanceId is a placeholder re-minted by openTileInPane on open.
     id: `open:${categoryId}:${ref.id}`,
     label: name,
     keywords: [name],

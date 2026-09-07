@@ -22,23 +22,8 @@ import type {
   DesktopSupportLogTailResult,
 } from "@/lib/windows/types";
 
-/**
- * The log-tail reader, shared by the two Diagnostics pages.
- *
- * There are two of them because a log has an OWNER: the app's own log describes
- * this window and follows you between hosts, while `host.log` / `cli.log`
- * describe whichever machine the sidebar picker names. They used to sit in one
- * list, which meant every host in the account rendered its own copy of the same
- * desktop log — the duplication this split removes.
- *
- * What did NOT split is the presentation. A log entry is a disclosure with a
- * tail and one action, whichever transport produced it, so the frame and the
- * bridge-backed entry live here and both pages render the same row.
- *
- * Components only — `LOG_TAIL_LINES`, `LogTailView` and the snapshot query live
- * in `diagnostics-log-tail.ts`, because a `.tsx` module that exports anything
- * else loses fast refresh for the whole file.
- */
+/** Components only - `LOG_TAIL_LINES`, `LogTailView` and the snapshot query live in `diagnostics-log-tail.ts`,
+ * because a `.tsx` module that exports anything else loses fast refresh for the whole file. */
 export function LogInfoLine(props: {
   readonly children: ReactNode;
 }): ReactNode {
@@ -49,12 +34,8 @@ export function LogInfoLine(props: {
   );
 }
 
-/**
- * The evidence viewer: a quiet external label (mirrors the Notifications
- * "Notification hooks" manager label) followed by a content-sized card. The
- * card grows only as its rows need it, then caps at the section's remaining
- * height and becomes the page's primary scroll owner.
- */
+/** The card grows only as its rows need it, then caps at the section's remaining height and becomes the page's
+ * primary scroll owner. */
 export function RecentLogsFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {

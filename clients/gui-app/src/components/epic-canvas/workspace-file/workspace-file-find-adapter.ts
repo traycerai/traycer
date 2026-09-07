@@ -15,10 +15,8 @@ export type WorkspaceFileFindViewMode = "source" | "preview";
 export interface WorkspaceFileSourceFindRange {
   readonly line: number;
   readonly column: number;
-  // Absolute character offset of the match start into the (loaded) file
-  // content, and its length. Together they let the renderer paint the exact
-  // text span - including matches that straddle Shiki token boundaries - while
-  // `line`/`column` keep the gutter marker and scroll target addressable.
+  // Absolute character offset of the match start into the (loaded) file content, and its length.
+  // Together they let the renderer paint the exact text span - including matches that straddle Shiki token boundaries - while `line`/`column` keep the gutter marker and scroll target addressable.
   readonly offset: number;
   readonly length: number;
 }

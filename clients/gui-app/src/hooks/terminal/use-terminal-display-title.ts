@@ -15,27 +15,7 @@ export interface TerminalSessionIdentity {
   readonly sessionId: string | null;
 }
 
-/**
- * The HOST's `terminal.list` row for an epic-scoped session - the single
- * source of truth for everything about a live terminal that the session store
- * does not carry (title, directories, foreground process).
- *
- * `client` is the session's BOUND-host client (session ids are only unique
- * per host, and a tab's bound host may not be the app-wide default host).
- * The caller resolves it once - e.g. `TabItem` shares one
- * `useHostClientForHostId(tab.hostId)` between this hook and the rename
- * mutation - so reading the row adds no extra directory subscription.
- *
- * Mounting this hook keeps a query observer on that host, so a backgrounded
- * tab whose tile (and PTY stream) is unmounted still tracks renames and
- * process changes; the stream metadata subscription in
- * `terminal-session-registry.ts` patches the same cached rows in place while
- * a tile is live.
- *
- * Returns `null` while the host has no row for the session (host restarted /
- * unreachable, list not yet hydrated). Callers rendering a non-terminal node
- * pass all-null identity; the hook is then inert (no query).
- */
+/** Bound-host terminal.list row. Session ids are per host. null while the host has no row. */
 export function useTerminalFindSessionRow(
   args: TerminalSessionIdentity,
 ): CanonicalTerminalSessionInfoWithCurrentCwd | null {
@@ -55,11 +35,7 @@ export function useTerminalFindSessionRow(
   );
 }
 
-/**
- * Live display title for a terminal session: the host's explicit title, else
- * the live directory plus active process/default. `null` while there is no
- * row yet - the caller then falls back to the persisted tile-name snapshot.
- */
+/** Live display title for a terminal session: the host's explicit title, else the live directory plus active process/default. */
 export function useTerminalDisplayTitle(
   args: TerminalSessionIdentity,
 ): string | null {

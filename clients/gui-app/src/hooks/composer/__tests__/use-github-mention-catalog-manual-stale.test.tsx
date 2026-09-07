@@ -15,14 +15,7 @@ import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-cat
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * A manual sweep pays the session's automatic follow-up.
- *
- * The follow-up effect watches the very slot `onSuccess` folds a manual
- * response into, and its ref guard used to be armed only by the AUTO lane. So
- * a catalog that was fresh at open - no follow-up owed - could have a manual
- * refresh come back `stale: true` (GitHub rate-limited, a partial sweep), and
- * the effect would immediately spend a second, automatic request re-asking
- * what the user just watched be answered.
+ * A manual sweep spends the session's automatic follow-up so a stale manual response does not immediately fire a second auto request.
  */
 
 const request = vi.fn();

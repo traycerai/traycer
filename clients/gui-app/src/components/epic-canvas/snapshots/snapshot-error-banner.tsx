@@ -21,7 +21,7 @@ interface SnapshotErrorBannerProps {
 export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
   const requestFreshSnapshot = useEpicRequestFreshSnapshot();
   const clock = useServerClockSkew();
-  // Direction-aware copy (R4-D2) only for a genuine INCOMPATIBLE close — every
+  // Direction-aware copy (R4-D2) only for a genuine INCOMPATIBLE close - every
   // other fatal code keeps its plain message.
   const skew =
     props.error.code === "INCOMPATIBLE"
@@ -31,19 +31,8 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
           guidance: props.error.upgradeGuidance,
         })
       : null;
-  // A clock running FAST outranks whatever fatal code got recorded, because
-  // under that skew the recorded code is a symptom: an UNAUTHORIZED whose cause
-  // was the clock, or a session that went terminal on an older build before
-  // parking existed. Retrying is futile until the clock is fixed, so the copy
-  // has to say so rather than offering "Failed to load epic" as the diagnosis.
-  //
-  // Never on the error code — so a genuinely broken host on a machine with a
-  // correct clock keeps its own message. And never on `skewed` alone: this
-  // block REPLACES the recorded error with a causal claim, and a clock running
-  // BEHIND cannot make any bearer look expired or make a host reject one, so
-  // the claim would be false AND would bury the real message. The ambient
-  // clock banner still tells that user their clock is wrong; this pane keeps
-  // telling them what actually failed here.
+  // A clock running FAST outranks whatever fatal code got recorded, because under that skew the recorded code is a symptom: an UNAUTHORIZED whose cause was the clock, or a session that went terminal on an older build before parking existed.
+  // Retrying is futile until the clock is fixed, so the copy has to say so rather than offering "Failed to load epic" as the diagnosis.
   const clockOffsetMs = clockCanMakeValidBearersLookExpired(clock)
     ? clock.offsetMs
     : null;
@@ -96,9 +85,7 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
 }
 
 /**
- * Headline for the pane, in priority order: a wrong local clock outranks
- * everything (it explains every other code and makes retrying futile), then the
- * direction-aware version-skew title, then the generic failure.
+ * Headline for the pane, in priority order: a wrong local clock outranks everything (it explains every other code and makes retrying futile), then the direction-aware version-skew title, then the generic failure.
  */
 function errorTitle(
   clockOffsetMs: number | null,

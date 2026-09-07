@@ -26,9 +26,7 @@ export interface ProfileRateLimitDestination {
   /** Normalized for composer-selection semantics: `null` is the ambient
    * profile even though its wire id is the literal ambient sentinel. */
   readonly profileId: string | null;
-  /** Whether the user may deliberately choose this destination. An
-   * authenticated profile with unknown usage remains selectable, but is never
-   * promoted to `primaryTarget` until a rate-limit read proves it is better. */
+  /** Whether the user may deliberately choose this destination. An authenticated profile with unknown usage remains selectable, but is never promoted to `primaryTarget` until a rate-limit read proves it is better. */
   readonly selectable: boolean;
 }
 
@@ -42,23 +40,16 @@ interface VisibleProfileRateLimitPrompt {
   readonly warningKey: string;
   readonly providerId: ProviderId;
   readonly severity: ProfileRateLimitSeverity;
-  /** Model families named by the limits behind this warning, for copy like
-   * "running low on Fable usage". Empty when any triggering limit is shared
-   * (or per-scope data is unavailable) - the warning is then profile-wide and
-   * the generic copy applies. */
+  /** Model families named by the limits behind this warning, for copy like "running low on Fable usage". Empty when any triggering limit is shared (or per-scope data is unavailable) - the warning is then profile-wide and the generic copy applies. */
   readonly limitedFamilies: ReadonlyArray<string>;
   readonly current: ProviderProfile;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   /** Every other provider profile in the host's stable order. Rows that
    * are unavailable for switching stay here so the menu can explain why. */
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
-  /** First proven-better destination in provider order. Unknown-usage
-   * profiles may be selectable from the menu, but never become this confident
-   * one-click recommendation. Usage is not used to rank eligible targets. */
+  /** Unknown-usage profiles may be selectable from the menu, but never become this confident one-click recommendation. Usage is not used to rank eligible targets. */
   readonly primaryTarget: ProfileRateLimitDestination | null;
-  /** Set only when `primaryTarget` is null: the first authenticated
-   * destination with UNKNOWN rate-limit state, for the banner's single
-   * automatic `ensureFresh` check. See `findProbeTarget`. */
+  /** Set only when `primaryTarget` is null: the first authenticated destination with UNKNOWN rate-limit state, for the banner's single automatic `ensureFresh` check. See `findProbeTarget`. */
   readonly probeTarget: ProfileRateLimitDestination | null;
   readonly dismiss: () => void;
 }
@@ -104,14 +95,7 @@ function findLimitedProfile(
   return severity === null ? null : { current, severity };
 }
 
-/**
- * A user may deliberately choose an authenticated destination unless it is
- * known to be no better for the selected model. Unknown (never read, stale,
- * or failed-probe gauge) is therefore a menu option, but remains incomparable
- * rather than weakly healthy; `recommendedDestination` separately prevents it
- * from powering the confident one-click switch. A destination limited only
- * on a family the selected model does not use stays selectable.
- */
+/** Unknown (never read, stale, or failed-probe gauge) is therefore a menu option, but remains incomparable rather than weakly healthy; `recommendedDestination` separately prevents it from powering the confident one-click switch. A destination limited only on a family the selected model does not use stays selectable. */
 function selectableDestination(
   profile: ProviderProfile,
   selectedModel: ModelOption | null,
@@ -142,15 +126,7 @@ function recommendedDestination(
   );
 }
 
-/**
- * The one destination worth spending an automatic usage check on: the first
- * authenticated profile whose rate-limit state is unknown, and only when no
- * known strictly-better destination already exists. The banner fires a
- * single non-forced (`ensureFresh`) check for it; a successful reading
- * lands in the gauge and the next `providers.list` snapshot promotes it to
- * `primaryTarget` through the normal projection. Never a cascade - one
- * candidate, one attempt.
- */
+/** The one destination worth spending an automatic usage check on: the first authenticated profile whose rate-limit state is unknown, and only when no known strictly-better destination already exists. Never a cascade - one candidate, one attempt. */
 function findProbeTarget(
   destinations: ReadonlyArray<ProfileRateLimitDestination>,
   selectedModel: ModelOption | null,
@@ -165,14 +141,7 @@ function findProbeTarget(
   );
 }
 
-/**
- * The banner's default menu preview target, before any hover/keyboard
- * preview overrides it. `profileId` is the commit id, which is `null` for
- * the ambient profile - a plain `??` chain on `.profileId` would treat a
- * legitimately-ambient primary/first-selectable target as absent and fall
- * through to the wrong destination. Each candidate is therefore null-checked
- * on the destination object itself, not its `profileId`.
- */
+/** `profileId` is the commit id, which is `null` for the ambient profile - a plain `??` chain on `.profileId` would treat a legitimately-ambient primary/first-selectable target as absent and fall through to the wrong destination. */
 export function initialPreviewProfileId(
   primaryTarget: ProfileRateLimitDestination | null,
   current: ProviderProfile,
@@ -206,11 +175,7 @@ function destinationsForLimitedProfile(
     }));
 }
 
-/**
- * Families named in the banner line - only the scopes AT the effective
- * severity (a hard-limit banner must not name a merely near-limit family),
- * and only when every scope behind the warning names a model family.
- */
+/** Families named in the banner line - only the scopes AT the effective severity (a hard-limit banner must not name a merely near-limit family), and only when every scope behind the warning names a model family. */
 function limitedFamiliesForCopy(
   current: ProviderProfile,
   selectedModel: ModelOption | null,
@@ -269,29 +234,14 @@ function warningProjection(input: {
       input.harnessId,
       limited.current.profileId,
       limited.severity,
-      // Scope identity: dismissing a "Fable is running low" warning must not
-      // suppress a later shared-window warning (and vice versa), moving the
-      // composer to a model gated by different scopes re-evaluates the
-      // dismissal, and each scope carries its severity so a hard limit moving
-      // between the same families resurfaces too. `null` = no per-scope data
-      // (profile-level fallback).
+      // Scope identity: dismissing a "Fable is running low" warning must not suppress a later shared-window warning (and vice versa), moving the composer to a model gated by different scopes re-evaluates the dismissal, and each scope carries its severity so a hard limit moving between the same families resurfaces too.
+      // `null` = no per-scope data (profile-level fallback).
       matchingScopes === null
         ? null
         : matchingScopes
             .map((scope) => `${scope.family ?? ""}\u0000${scope.severity}`)
             .toSorted(),
-      // Destination identity: each destination contributes {profileId,
-      // recommended} rather than mere membership in the selectable set. A
-      // probe that proves an unknown destination strictly better flips its
-      // `recommended` flag false -> true, changing the key and re-arming the
-      // dismissal - the banner just gained a confident one-click switch. A
-      // probe that instead proves it known-but-not-better only drops the
-      // destination out of the selectable set; `recommended` was false and
-      // stays false, so the key is unchanged - no fresh warning episode, and
-      // (because the composer keys the banner by this key) no remount to
-      // re-arm the banner's single automatic probe onto the next unknown
-      // profile. A destination that appears or disappears entirely still
-      // changes the array and re-arms, as before.
+      // Destination identity: each destination contributes {profileId, recommended} rather than mere membership in the selectable set.
       destinations
         .map(
           (destination) =>
@@ -322,24 +272,7 @@ function warningProjection(input: {
   };
 }
 
-/**
- * Composer-facing rate-limit warning projection. Its eligibility comes only
- * from the subscribed `providers.list` snapshot of `client`'s host; detailed
- * usage is a separate, cache-only presentation concern in the banner.
- * Eligibility is scoped to the composer's selected model: a limit that only
- * gates another model family (per `rateLimitLimitedScopes`) neither shows the
- * warning nor disqualifies a destination. When per-scope data is unavailable
- * (old host, never-read gauge, unresolved model) it falls back to the
- * profile-level enum - every uncertain path shows the warning rather than
- * hiding a real one. The visible state deliberately remains representable
- * with no selectable alternative so the user can inspect profile limits
- * instead of losing the warning entirely.
- *
- * `client` is caller-resolved rather than looked up internally, so each
- * surface can scope the read to the host it actually cares about (e.g. the
- * chat composer's tab host vs. a future landing composer's default host) -
- * mirrors `useResolvedSeededProfileId`'s identical `client` parameter.
- */
+/** When per-scope data is unavailable (old host, never-read gauge, unresolved model) it falls back to the profile-level enum - every uncertain path shows the warning rather than hiding a real one. `client` is caller-resolved rather than looked up internally, so each surface can scope the read to the host it actually cares about (e.g. the chat composer's tab host vs. a future landing composer's default host) - mirrors `useResolvedSeededProfileId`'s identical `client` parameter. */
 export function useProfileRateLimitSwitchPrompt(input: {
   readonly harnessId: GuiHarnessId;
   readonly profileId: string | null;

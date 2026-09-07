@@ -116,12 +116,7 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
   };
 }
 
-// Seeded from `selectionFromChatRunSettings` on a legacy (no `profileId`
-// key) blob, so the initial `profileId` state matches exactly what a
-// pre-feature chat resolves to on first render - mirrors
-// `ComposerProfileSwitchHarness` in
-// `profile-durability-d2-d3-rate-limit-switch.test.tsx`, the current
-// composer/store harness pattern for this banner.
+// Seeded from `selectionFromChatRunSettings` on a legacy (no `profileId` key) blob, so the initial `profileId` state matches exactly what a pre-feature chat resolves to on first render - mirrors `ComposerProfileSwitchHarness` in `profile-durability-d2-d3-rate-limit-switch.test.tsx`, the current composer/store harness pattern for this banner.
 function PreFeatureComposerHarness() {
   const [profileId, setProfileId] = useState<string | null>(
     selectionFromChatRunSettings(legacyChatRunSettingsBlob()).profileId,
@@ -248,10 +243,7 @@ describe("D6: pre-feature chat + multi-profile state", () => {
     render(<PreFeatureComposerHarness />);
 
     expect(screen.getByTestId("profile-id").textContent).toBe("ambient");
-    // Expected, not a regression: a pre-feature chat is indistinguishable
-    // from a chat committed to the ambient login once resolved, and
-    // ambient's own rate-limit state is real - the multi-profile feature
-    // does not special-case "this chat predates profiles".
+    // Expected, not a regression: a pre-feature chat is indistinguishable from a chat committed to the ambient login once resolved, and ambient's own rate-limit state is real - the multi-profile feature does not special-case "this chat predates profiles".
     expect(screen.getByTestId("banner-visible").textContent).toBe("true");
     expect(
       screen.getByRole("button", { name: "Switch to Work" }),

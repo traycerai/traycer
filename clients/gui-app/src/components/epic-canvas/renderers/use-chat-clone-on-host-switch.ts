@@ -14,11 +14,7 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 
 /**
- * Lifted out of `chat-tile.tsx` (P1.2 fixup F5) so the host it targets is
- * reachable by a test. The defect this module exists to keep fixed is a
- * TIMING one - the clone resolves settings asynchronously before it creates -
- * and it is only observable by driving the hook across that window, which is
- * impossible while it is a private function inside a 2,800-line tile.
+ * The defect this module exists to keep fixed is a TIMING one - the clone resolves settings asynchronously before it creates - and it is only observable by driving the hook across that window, which is impossible while it is a private function inside a 2,800-line tile.
  */
 export interface UseChatCloneOnHostSwitchArgs {
   readonly epicId: string;
@@ -26,11 +22,10 @@ export interface UseChatCloneOnHostSwitchArgs {
   readonly chatId: string;
   readonly sourceHostId: string;
   readonly sourceSettings: ChatRunSettings | null;
-  /** The source chat's RAW stored title, or `""` when this banner has no
-   *  record to read one from - a dead tile whose record was retracted is
-   *  exactly that case. Empty leaves the clone's name to the host's
-   *  fork-seed gap-fill, which reads the title off the copy the history
-   *  came from. */
+  /**
+   * The source chat's RAW stored title, or `""` when this banner has no record to read one from - a dead tile whose record was retracted is exactly that case.
+   * Empty leaves the clone's name to the host's fork-seed gap-fill, which reads the title off the copy the history came from.
+   */
   readonly sourceTitle: string;
   /** The owner this banner was showing, or `null` when it does not know. */
   readonly sourceOwnerUserId: string | null;
@@ -47,11 +42,8 @@ interface CloneProfileRecoveryOffer {
 }
 
 /**
- * Wires the chat dead-tile banner's Clone action to
- * `cloneChatOnHostSwitch`. Targets the directory's currently selected
- * host (the user's active default). Tracks the returned cancel in a
- * ref and disposes it on unmount so an aborted clone doesn't leak the
- * projection-wait subscription (ticket 10).
+ * Wires the chat dead-tile banner's Clone action to `cloneChatOnHostSwitch`.
+ * Targets the directory's currently selected host (the user's active default).
  */
 export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
   readonly clone: () => void;
@@ -59,15 +51,8 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
   readonly profileRecovery: CloneProfileRecoveryOffer | null;
 } {
   const binding = useHostBinding();
-  // Resolved at RENDER, not in the click handler: `cloneChatOnHostSwitch`
-  // awaits settings resolution before it creates, and the app-wide selection
-  // can move inside that window. Reading the target here and binding the
-  // mutation to THAT host up front means the clone lands where the button was
-  // pressed for, or refuses - it can never be re-pointed mid-flight. (A
-  // mutation pinned to the app-wide active host instead would reject the
-  // whole clone on a move, which is safe but loses the user's action for no
-  // reason - `useEpicCreateChatForHostClient` is what lets the target be
-  // frozen here instead.)
+  // Resolved at RENDER, not in the click handler: `cloneChatOnHostSwitch` awaits settings resolution before it creates, and the app-wide selection can move inside that window.
+  // Reading the target here and binding the mutation to THAT host up front means the clone lands where the button was pressed for, or refuses - it can never be re-pointed mid-flight. (A mutation pinned to the app-wide active host instead would reject the whole clone on a move, which is safe but loses the user's action for no reason - `useEpicCreateChatForHostClient` is what lets the target be frozen here instead.)
   const cloneTargetHostId = useEffectiveHostId();
   const cloneTargetClient = useHostClientForHostId(cloneTargetHostId);
   const createChat = useEpicCreateChatForHostClient(cloneTargetClient);
@@ -98,20 +83,14 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
       return;
     }
     if (cloneTargetHostId === args.sourceHostId) {
-      // The refusal this finding is about: the active host IS the agent's
-      // own bound host, so there is nowhere to clone to - silently doing
-      // nothing here used to read as a broken button.
+      // The refusal this finding is about: the active host IS the agent's own bound host, so there is nowhere to clone to - silently doing nothing here used to read as a broken button.
       toast(
         "The active host is this agent's own bound host - switch to a different host before cloning.",
       );
       return;
     }
     if (cloneTargetClient === null) {
-      // Named, but not addressable (no endpoint, or no live credential
-      // context). Refuse rather than start a clone whose create can only fail
-      // after the projection-wait subscription has already been armed. Checked
-      // AFTER the same-host case so an unreachable own-host still gets the
-      // message that actually explains the button.
+      // Refuse rather than start a clone whose create can only fail after the projection-wait subscription has already been armed.
       toast("That host can't be reached right now - try again in a moment.");
       return;
     }
@@ -200,9 +179,6 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
     args.epicId,
     args.tabId,
     args.chatId,
-    // The cloud list can resolve AFTER this banner first renders, so the
-    // callback must be rebuilt when the owner lands - otherwise a click still
-    // sends the `null` this closed over on the first pass (ticket 37).
     args.sourceOwnerUserId,
     args.sourceHostId,
     args.sourceSettings,

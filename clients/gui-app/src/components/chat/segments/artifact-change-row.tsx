@@ -10,13 +10,7 @@ import { SegmentRow } from "./segment-row";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 import { useArtifactRowDisplay } from "./use-artifact-row-display";
 
-/**
- * One artifact row inside a per-turn "Changes" group: shows the resolved
- * artifact title (live by id, with the captured fallback) instead of the raw
- * `index.md` path. The title opens the artifact in the canvas; expanding the row
- * lazy-renders the merged diff from the captured snapshot hashes. Mirrors how a
- * file row both opens a tile and expands inline.
- */
+/** One artifact row inside a per-turn "Changes" group: shows the resolved artifact title (live by id, with the captured fallback) instead of the raw `index.md` path. The title opens the artifact in the canvas; expanding the row lazy-renders the merged diff from the captured snapshot hashes. */
 export function ArtifactChangeRow(props: { row: ArtifactChangeRowModel }) {
   const { row } = props;
   const [open, setOpen] = useState(false);

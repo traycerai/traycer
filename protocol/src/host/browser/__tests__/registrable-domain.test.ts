@@ -53,9 +53,6 @@ describe("registrableDomain", () => {
   });
 
   it("keeps a private-suffix tenant to itself - the clear-site blast radius", () => {
-    // The public suffix list's private section is what makes these separate
-    // sites: collapsing to `github.io` would put every GitHub Pages login in
-    // one clear-site scope.
     expect(registrableDomain("app.github.io")).toBe("app.github.io");
     expect(registrableDomain("foo.github.io")).toBe("foo.github.io");
     expect(registrableDomain("page.user.github.io")).toBe("user.github.io");
@@ -68,10 +65,7 @@ describe("registrableDomain", () => {
     );
   });
 
-  // H11: the two ends of the wire have to derive one scope for an
-  // international domain however it is spelled. `tldts` alone treats the two
-  // spellings as different names, so a scope derived from the Unicode form
-  // rejected every cookie the jar spelled in A-labels.
+  // H11: the two ends of the wire have to derive one scope for an international domain however it is spelled.
   it("collapses a Unicode IDN onto its punycode form", () => {
     expect(registrableDomain("m\u00fcnchen.de")).toBe("xn--mnchen-3ya.de");
     expect(registrableDomain("a.M\u00dcNCHEN.de")).toBe("xn--mnchen-3ya.de");
@@ -79,10 +73,7 @@ describe("registrableDomain", () => {
     expect(registrableDomain(".m\u00fcnchen.de.")).toBe("xn--mnchen-3ya.de");
   });
 
-  // R3-8: a host is refused rather than parsed as a URL. Handing
-  // `evil.com/../good.com` or `user@good.com` to the URL parser would answer
-  // with the host it decided the string meant, and a caller asking "what is
-  // this cookie's host" would take that as the sender's claim.
+  // R3-8: a host is refused rather than parsed as a URL.
   it.each([
     ["userinfo", "user@evil.example"],
     ["path traversal", "good.example/../evil.example"],

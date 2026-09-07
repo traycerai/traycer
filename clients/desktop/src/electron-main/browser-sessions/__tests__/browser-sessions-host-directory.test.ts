@@ -2,15 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { createBrowserSessionsHostDirectory } from "../browser-sessions-transport";
 
-/**
- * Main resolves a host id itself (H10 ruling 1).
- *
- * The renderer passes an ID and nothing else, because a directory row carries
- * the host's static Noise key: a renderer-supplied row would let a compromised
- * renderer aim main's jar stream at a host it controls, which is the whole
- * ticket. These pin that the resolution happens here, off main's own local-host
- * snapshot and main's own bearer.
- */
 
 vi.mock("../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -176,11 +167,6 @@ describe("main resolves the browser.sessions host itself", () => {
     await directory.resolve("host-2");
     expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
 
-    // The rows are per ACCOUNT but the cache is keyed by host id alone, so a
-    // sign-out or an account switch would otherwise let the next account dial
-    // the previous account's row for the same id. The cooldown goes with the
-    // rows - the clock has not moved here - because a fresh identity is
-    // exactly the moment one read is owed rather than deferred.
     directory.reset();
     await directory.resolve("host-2");
 

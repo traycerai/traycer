@@ -5,11 +5,8 @@ import {
 } from "../cloud-chat";
 
 /**
- * The `chat`/`outcome.status` cross-field invariant is part of the wire
- * contract, not a doc comment: `chat` is null exactly when the outcome is
- * "missing". Every consumer branches on the status while reading `chat`, so a
- * response that violates the pairing must be refused at the schema - the two
- * fields validating independently is precisely what these rows pin against.
+ * The `chat`/`outcome.status` cross-field invariant is part of the wire contract, not a doc comment: `chat` is null exactly when the outcome is "missing".
+ * Every consumer branches on the status while reading `chat`, so a response that violates the pairing must be refused at the schema - the two fields validating independently is precisely what these rows pin against.
  */
 
 const SUMMARY: CloudChatSummary = {

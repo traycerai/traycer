@@ -126,11 +126,8 @@ export interface QueuedMessagePanelProps {
   readonly separated?: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  // Edit / steer are prompt-only by type: a managed-command item carries no
-  // message to load into the composer and is never hand-steerable, so the
-  // compiler - not a runtime guard - is what keeps it out of these paths.
-  // Cancel and reorder stay on the union: both key off `queueItemId` alone and
-  // both are offered for managed-command items.
+  // Edit / steer are prompt-only by type: a managed-command item carries no message to load into the composer and is never hand-steerable, so the compiler - not a runtime guard - is what keeps it out of these paths.
+  // Cancel and reorder stay on the union: both key off `queueItemId` alone and both are offered for managed-command items.
   readonly onEdit: (item: ChatQueuedPromptItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
   readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
@@ -147,9 +144,8 @@ function queueItemAllowsReorder(item: ChatQueuedItem): boolean {
 
 export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
   const [open, setOpen] = useState(true);
-  // Render the queue in its true order, user-typed and received A2A items
-  // alike. Received items render read-only (see QueuedMessageRow) - the user
-  // can reorder them but cannot edit, delete, or hand-steer them.
+  // Render the queue in its true order, user-typed and received A2A items alike.
+  // Received items render read-only (see QueuedMessageRow) - the user can reorder them but cannot edit, delete, or hand-steer them.
   const items = props.queue.items;
   const reorderableCount = useMemo(
     () => items.filter(queueItemAllowsReorder).length,
@@ -420,9 +416,7 @@ function QueuedMessageHeader(props: {
       <span className="sr-only" aria-live="polite">
         {announcement}
       </span>
-      {/* On the collapse trigger, not the header strip: the strip also holds
-          Resume/Pause, and a strip-wide trigger surfaced this queue-state text
-          while hovering either of those buttons. */}
+      {/* On the collapse trigger, not the header strip: the strip also holds Resume/Pause, and a strip-wide trigger surfaced this queue-state text while hovering either of those buttons. */}
       <TooltipWrapper
         label={tooltip}
         side="top"
@@ -592,9 +586,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
       mergeRefs<HTMLDivElement>(rowSortable.setNodeRef, handleRegisteredRowRef),
     [handleRegisteredRowRef, rowSortable.setNodeRef],
   );
-  // The prompt-only affordances (edit / steer / abort-steer) close over the
-  // narrowed item, so a managed-command row cannot reach them even if a future
-  // change accidentally rendered their buttons.
+  // The prompt-only affordances (edit / steer / abort-steer) close over the narrowed item, so a managed-command row cannot reach them even if a future change accidentally rendered their buttons.
   const promptItem = item.kind === "prompt" ? item : null;
   const handleEdit = useCallback(() => {
     if (promptItem === null) return;
@@ -761,18 +753,7 @@ function QueuedMessageRowContent(props: {
   );
 }
 
-/**
- * Provenance marker for a pending shell output delivery (a watcher's log
- * digest, a backgrounded shell's completion digest). Distinct tone from
- * `ReceivedAgentBadge` so the two system-owned row kinds stay tellable apart.
- *
- * Also a door (`UI.md` §5): clicking it opens or focuses that shell's output
- * window, so a human who wants to see what the agent is about to read does not
- * have to find the row in the sidebar first. The label names the shell either
- * way; only the glyph waits on the monitor flag, which a delivery queued by an
- * older build does not carry - it gets the neutral terminal glyph rather than a
- * guessed one.
- */
+/** Also a door (`UI.md` §5): clicking it opens or focuses that shell's output window, so a human who wants to see what the agent is about to read does not have to find the row in the sidebar first. The label names the shell either way; only the glyph waits on the monitor flag, which a delivery queued by an older build does not carry - it gets the neutral terminal glyph rather than a guessed one. */
 export function ManagedCommandBadge(props: {
   readonly commandId: string;
   readonly monitoring: boolean | null;
@@ -795,13 +776,9 @@ export function ManagedCommandBadge(props: {
           openOutput?.(props.commandId);
         }}
       >
-        {/* An unrecorded flag renders NO glyph: the label already names the
-            shell, and the terminal glyph is reserved for the Terminals
-            surface (see managed-command-monitor-icon.tsx). */}
+        {/* An unrecorded flag renders NO glyph: the label already names the shell, and the terminal glyph is reserved for the Terminals surface (see managed-command-monitor-icon.tsx). */}
         {props.monitoring === null ? null : (
-          // Speaks, unlike every row glyph: this chip's label is the constant
-          // "Shell output", so nothing else here says whether the shell was
-          // watching.
+          // Speaks, unlike every row glyph: this chip's label is the constant "Shell output", so nothing else here says whether the shell was watching.
           <ManagedCommandMonitorIcon
             monitoring={props.monitoring}
             decorative={false}
@@ -814,11 +791,7 @@ export function ManagedCommandBadge(props: {
   );
 }
 
-/**
- * The only affordance a managed-command row offers. Cancelling is not
- * destructive to the underlying output: the host leaves the delivery cursor
- * where it is, so the next output from that command re-queues a fresh digest.
- */
+/** The only affordance a managed-command row offers. Cancelling is not destructive to the underlying output: the host leaves the delivery cursor where it is, so the next output from that command re-queues a fresh digest. */
 function ManagedCommandCancelButton(props: { readonly onCancel: () => void }) {
   return (
     <Tooltip>
@@ -873,17 +846,7 @@ function shouldShowDropIndicatorAfter(input: {
   );
 }
 
-/**
- * Which of the row's mutually exclusive toolbars is offered. A managed-command
- * row is system-owned like a received A2A row, but it gets its own
- * single-action toolbar (cancel only) rather than the prompt row's
- * edit/delete/steer trio.
- *
- * Only a user-owned safe-point steer still "Waiting for steer" can be
- * un-staged: an interrupt_restart ("Restart pending") has already torn the turn
- * down, and received-agent rows are system-owned. The host re-checks and rejects
- * if the harness began folding the steer in between render and click.
- */
+/** A managed-command row is system-owned like a received A2A row, but it gets its own single-action toolbar (cancel only) rather than the prompt row's edit/delete/steer trio. */
 function queuedMessageRowChrome(
   input: QueuedMessageRowChromeInput,
 ): QueuedMessageRowChrome {
@@ -932,14 +895,8 @@ function queuedMessageRowActionState(
 function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
   if (isOptimisticQueuedItem(item)) return "Queuing";
   if (item.kind === "managed-command") {
-    // The badge is the row's provenance marker, so an ordinary next-turn
-    // pending item needs no additional label. `steering` is the handover
-    // window: the digest is being delivered into the running turn, and the
-    // cancel lever has closed - the label is what tells the user why the
-    // row's controls went away. A pending SAME-TURN item is aimed at the
-    // running turn ("Will deliver", the delivery-vocabulary sibling of the
-    // received-agent rows' "Will steer"), so the user knows the cancel
-    // window is the current turn, not some later one.
+    // The badge is the row's provenance marker, so an ordinary next-turn pending item needs no additional label.
+    // A pending SAME-TURN item is aimed at the running turn ("Will deliver", the delivery-vocabulary sibling of the received-agent rows' "Will steer"), so the user knows the cancel window is the current turn, not some later one.
     if (item.status === "steering") return "Delivering";
     if (item.status === "paused") return "Paused";
     return item.delivery === "same_turn" ? "Will deliver" : null;
@@ -954,10 +911,8 @@ function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
   if (item.status === "fallback") return "After turn";
   if (item.status === "paused") return "Paused";
   if (item.delivery === "same_turn") {
-    // Received A2A responses ride the same `same_turn` (steer) delivery as user
-    // follow-ups, but they are system-owned and read-only: the user can only
-    // reorder them, never hand-steer. "Can steer" reads as a user affordance, so
-    // name the automatic behavior instead for received responses.
+    // Received A2A responses ride the same `same_turn` (steer) delivery as user follow-ups, but they are system-owned and read-only: the user can only reorder them, never hand-steer.
+    // "Can steer" reads as a user affordance, so name the automatic behavior instead for received responses.
     return isReceivedAgentResponse(item) ? "Will steer" : "Can steer";
   }
   return null;
@@ -988,11 +943,7 @@ function QueuedMessageStatusBadge(props: {
   );
 }
 
-/**
- * Trailing marker for a received A2A response in the queue. It replaces the
- * edit/delete/steer actions a user-typed row carries, making clear the row is
- * read-only (reorder only) and naming the agent it came from.
- */
+/** Trailing marker for a received A2A response in the queue. It replaces the edit/delete/steer actions a user-typed row carries, making clear the row is read-only (reorder only) and naming the agent it came from. */
 function ReceivedAgentBadge(props: {
   readonly sender: Extract<ChatQueuedPromptItem["sender"], { type: "agent" }>;
 }) {
@@ -1106,12 +1057,7 @@ function QueuedMessageDropIndicator(props: {
   );
 }
 
-/**
- * Un-stage affordance for a steer still "Waiting for steer". It replaces the
- * full edit/delete/steer toolbar (hidden once a row is steer-locked) with a
- * single revert control that returns the prompt to the queue as a plain pending
- * item.
- */
+/** Un-stage affordance for a steer still "Waiting for steer". It replaces the full edit/delete/steer toolbar (hidden once a row is steer-locked) with a single revert control that returns the prompt to the queue as a plain pending item. */
 function QueuedMessageAbortSteerButton(props: {
   readonly onAbortSteer: () => void;
 }) {

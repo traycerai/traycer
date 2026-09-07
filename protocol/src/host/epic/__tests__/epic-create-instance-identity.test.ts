@@ -6,16 +6,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
- * Hard invariant: the `epic.create` host RPC contract must wire the
- * canonical `createEpic*` schema instances exported from `unary-schemas`,
- * not structurally-equal copies. Referential equality (`toBe`) catches an
- * accidental future redefinition where a local re-declaration would pass a
- * structural check but break the shared wire-contract identity.
- *
- * The cloud-side (`cloudDataRpcRegistry`) reuse of these same instances is
- * guaranteed by construction - the cloud registry imports them directly from
- * `@traycer/protocol/host/epic/unary-schemas` - and is covered on the
- * consumer side, so protocol's own tests stay within the protocol package.
+ * Hard invariant: the `epic.create` host RPC contract must wire the canonical `createEpic*` schema instances exported from `unary-schemas`, not structurally-equal copies.
  */
 describe("epic.create instance identity", () => {
   const hostContract = hostRpcRegistry["epic.create"][1].versions[0].contract;

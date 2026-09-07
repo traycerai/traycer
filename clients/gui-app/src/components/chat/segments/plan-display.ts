@@ -1,11 +1,6 @@
 import type { PlanSegmentModel } from "@/stores/composer/chat-store";
 
-// Pure plan-card display helpers shared by the plan renderer (`plan-segment.tsx`)
-// and the chat search projection (`chat-find.ts`). The card shows a headline, a
-// status badge, an optional subtitle, and the first N steps; the full markdown
-// preview and remaining steps live behind an unopened dialog. Keeping these
-// derivations in one place stops the projection from indexing dialog-only text
-// the card never renders.
+// Keeping these derivations in one place stops the projection from indexing dialog-only text the card never renders.
 
 export const PLAN_PREVIEW_STEP_LIMIT = 4;
 
@@ -30,9 +25,8 @@ export function planStatusBadgeLabel(
   return PLAN_STATUS_LABELS[planStatus];
 }
 
-// The single title shown for a plan: the harness-provided title when specific,
-// else the plan's own first heading/line. A generic "Plan" title is dropped so
-// the card/modal don't echo the "Plan" label the header already shows.
+// The single title shown for a plan: the harness-provided title when specific, else the plan's own first heading/line.
+// A generic "Plan" title is dropped so the card/modal don't echo the "Plan" label the header already shows.
 export function planHeadline(
   segment: PlanSegmentModel,
   markdown: string,

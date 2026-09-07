@@ -1,22 +1,6 @@
 /**
- * Android emulator launcher - the mirror of `dev-ios.ts`, consuming the same
- * slot and the same `run.json`. Slot resolution, metadata reading, and the
- * Capacitor live-reload handoff are shared in `dev-run.ts`.
- *
- * The one thing Android needs that iOS does not: the emulator is a separate
- * machine as far as sockets are concerned, so its `127.0.0.1` is its own
- * loopback, not the Mac's. `adb reverse` is what closes that gap - it maps
- * each dev port on the DEVICE's loopback back to the same port on this
- * machine, so every `http://localhost:<port>` the Vite config bakes in
- * (authn, cloud UI, the GUI App server) and the host's `ws://127.0.0.1:<port>`
- * RPC socket resolve unchanged, with no Android-only URL rewriting anywhere in
- * the app.
- *
- * `adb reverse` is preferred over the emulator's `10.0.2.2` host alias for
- * exactly that reason: the alias would force a second, Android-shaped set of
- * URLs through `vite.config.ts`, and it does not exist on a physical device.
- * (Debug builds still permit cleartext to `10.0.2.2` as a manual fallback -
- * see `android/app/src/debug/res/xml/network_security_config.xml`.)
+ * Android emulator launcher - the mirror of `dev-ios.ts`, consuming the same slot and the same `run.json`.
+ * The one thing Android needs that iOS does not: the emulator is a separate machine as far as sockets are concerned, so its `127.0.0.1` is its own loopback, not the Mac's.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -47,11 +31,6 @@ function adb(args: readonly string[]): string {
   return result.stdout;
 }
 
-/**
- * The one attached device/emulator, or an explicit `--target`. Deliberately
- * strict about "exactly one", matching the Simulator side: a silent choice
- * between two emulators is the kind of thing that costs half an hour.
- */
 function attachedDeviceSerial(): string {
   const serials = adb(["devices"])
     .split("\n")
@@ -86,10 +65,8 @@ function parseOptions(args: readonly string[]): DevAndroidOptions {
 }
 
 /**
- * Must run after `waitForGuiApp`: that is what makes the host's live RPC port
- * readable (see `readHostRpcPort`). The RPC socket is the one the app exists to
- * talk to, so its absence is announced rather than left to be inferred from an
- * app that loads and then reaches nothing.
+ * Must run after `waitForGuiApp`: that is what makes the host's live RPC port readable (see `readHostRpcPort`).
+ * The RPC socket is the one the app exists to talk to, so its absence is announced rather than left to be inferred from an app that loads and then reaches nothing.
  */
 function reverseDevPorts(
   target: string,
@@ -119,10 +96,7 @@ const options = parseOptions(process.argv.slice(2));
 const { urls, ports } = readDevRun(options.slot);
 await waitForGuiApp(urls.guiAppBaseUrl);
 ensureWebAssets(options.slot, urls);
-// After the GUI App answers (so the live RPC port is readable) but before
-// Capacitor installs and launches: the app dials loopback on first paint, so
-// the tunnels have to already exist. They are per-device state that survives
-// this process, and re-running is how a restarted host gets picked up.
+// After the gui App answers (so the live RPC port is readable) but before Capacitor installs and launches: the app dials loopback on first paint, so the tunnels have to already exist.
 reverseDevPorts(options.target, options.slot, ports);
 console.log(
   `[gui-app] slot=${options.slot} device=${options.target} url=${urls.guiAppBaseUrl.origin}`,

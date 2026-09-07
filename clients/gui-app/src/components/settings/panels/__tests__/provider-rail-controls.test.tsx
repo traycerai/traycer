@@ -1,11 +1,5 @@
-/**
- * The rail's search + status control, driven against the REAL Radix dropdown.
- *
- * Deliberately not folded into providers-settings-panel.test: that suite
- * replaces the dropdown module with an always-open passthrough, so a status
- * selection there would only ever prove the stand-in works. Everything this
- * component owns is host-free, so it renders on its own with no provider hooks.
- */
+/** Deliberately not folded into providers-settings-panel.test: that suite replaces the dropdown module with an
+ * always-open passthrough, so a status selection there would only ever prove the stand-in works. */
 import { useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -128,11 +122,8 @@ describe("<ProviderRailControls />", () => {
   });
 
   it("leaves Escape alone inside a real Settings dialog", () => {
-    // Against a REAL Radix Dialog, not a hand-rolled document listener. Radix
-    // registers its Escape hook on the document with `capture: true`, so it
-    // runs BEFORE anything this component could do from a React bubble
-    // handler - a `stopPropagation()` here would still let the dialog close
-    // and additionally eat the query, which is the worst of both.
+    // Radix registers its Escape hook on the document with `capture: true`, so it runs before anything this
+    // component could do from a React bubble handler.
     const onOpenChange = vi.fn();
     const onViewChange = vi.fn();
     render(

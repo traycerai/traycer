@@ -10,30 +10,9 @@ import {
 import type { SnapshotContentBlock } from "@traycer/protocol/persistence/chat-sync/open-harness";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 
-/**
- * Presented snapshot -> the flat rows the cloud transcript renders.
- *
- * A DELIBERATE reduction, not renderer parity. A published chat read from
- * another device is a read-only archival copy: it has no live session, no
- * fetchable blobs, no approval to answer, and no tool to re-run. Re-modelling
- * the fifteen live block cards here would buy a second renderer to keep in
- * sync with the real one, for a surface that cannot act on any of it.
- *
- * What this must NOT do is drop anything. A block this build cannot interpret
- * still gets a row, with the presenter's shared generic label - a dropped
- * block is indistinguishable from a chat that never had one, and the same
- * chat must read the same way in the GUI and in cloud-ui.
- */
+/** Presented snapshot -> the flat rows the cloud transcript renders. */
 
-/**
- * A payload the reader MAY fetch, as the row that offers it.
- *
- * The counterpart of `missingPayloads`, and deliberately a separate field: a
- * reader whose host cannot answer `epic.listCloudChatPayloads` produces an
- * empty one of these and exactly the markers it produced before the channel
- * existed. The bytes are not carried here - they arrive per ref, on demand,
- * when the reader asks for them.
- */
+/** A payload the reader MAY fetch, as the row that offers it. */
 export type TranscriptPayloadFetch = {
   readonly key: string;
   readonly ref: ChatPayloadRef;
@@ -52,9 +31,8 @@ export type TranscriptBlockDisplay = {
   readonly details: readonly string[];
   readonly isUnknown: boolean;
   /**
-   * One message per payload this reader cannot fetch. Rendered explicitly:
-   * a blank card would read as "no changes", which is both plausible and
-   * wrong.
+   * One message per payload this reader cannot fetch.
+   * Rendered explicitly: a blank card would read as "no changes", which is both plausible and wrong.
    */
   readonly missingPayloads: readonly string[];
   /** One entry per payload this reader CAN fetch, in record order. */
@@ -97,9 +75,8 @@ export function buildCloudChatTranscript(
 }
 
 /**
- * A one-line summary of what this build could not fully render, or `null`
- * when the read was lossless. Stated once at the top rather than repeated as
- * an apology per row.
+ * A one-line summary of what this build could not fully render, or `null` when the read was lossless.
+ * Stated once at the top rather than repeated as an apology per row.
  */
 export function describeTranscriptFidelity(
   presented: PresentedChat,
@@ -150,9 +127,7 @@ function buildMessage(
           ? (known.message.senderTitle ?? "Agent")
           : "You",
       timestamp: message.timestamp,
-      // The composer's own extractor, not a private copy: a user message is
-      // rich JSON content, and two different plain-text derivations of the
-      // same message would read differently in the two places we show it.
+      // The composer's own extractor, not a private copy: a user message is rich JSON content, and two different plain-text derivations of the same message would read differently in the two places we show it.
       body: extractPlainTextFromComposerJSONContent(known.message.content),
       blocks: [],
     };
@@ -181,9 +156,7 @@ function buildBlock(
   const fetchablePayloads = block.payloadRefs
     .filter((payload) => payload.availability === "resolvable")
     .map((payload, payloadIndex) => ({
-      // The index rides the key because a `file_change` whose before and after
-      // are identical carries the SAME digest twice, and two rows keyed on the
-      // ref alone would collide.
+      // The index rides the key because a `file_change` whose before and after are identical carries the SAME digest twice, and two rows keyed on the ref alone would collide.
       key: `${rowKey("b", index, block.blockId)}:p:${payloadIndex}`,
       ref: payload.ref,
       label: describeFetchablePayload(payload.ref),
@@ -214,13 +187,7 @@ function buildBlock(
   };
 }
 
-/**
- * The label on the control that fetches a payload.
- *
- * Names the SIDE for a file snapshot: a `file_change` offers two, and two
- * controls reading "File contents" would leave the reader guessing which is
- * which.
- */
+/** The label on the control that fetches a payload. */
 function describeFetchablePayload(ref: ChatPayloadRef): string {
   if (ref.kind === "plan-content") return "Full plan text";
   return ref.side === "before"
@@ -236,15 +203,7 @@ type BlockSummary = {
 
 const NO_DETAILS: readonly string[] = [];
 
-/**
- * Reduces a known block to a title, its text (when it HAS text), and a few
- * short facts.
- *
- * Every arm reads persisted fields only. Nothing here reconstructs content the
- * record deliberately does not carry - tool output, command stdout and file
- * bodies are all absent by design, and inventing a stand-in for them would
- * misrepresent the chat.
- */
+/** Reduces a known block to a title, its text (when it HAS text), and a few short facts. */
 // One arm per block type; splitting it would only scatter the same table.
 // eslint-disable-next-line complexity
 function summarizeBlock(block: SnapshotContentBlock): BlockSummary {
@@ -367,13 +326,7 @@ function buildEvent(
   };
 }
 
-/**
- * A list key that is unique even when the record carries no id.
- *
- * The index alone would be unstable across a re-read, and the id alone can be
- * null (or, for an unknown variant, absent entirely). Both together are stable
- * within one rendered transcript, which is all a list key has to be.
- */
+/** A list key that is unique even when the record carries no id. */
 function rowKey(prefix: string, index: number, id: string | null): string {
   return `${prefix}:${index}:${id ?? ""}`;
 }

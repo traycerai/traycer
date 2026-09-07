@@ -1,7 +1,5 @@
-// The panel is host-scoped now (shell config / log levels are fields of the
-// selected host's own config), so it reads `useHostScope`. Mock at that
-// boundary: these suites render the panel bare, without the host runtime and
-// query providers the real hook needs.
+// Mock at that boundary: these suites render the panel bare, without the host runtime and query providers the
+// real hook needs.
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
@@ -13,10 +11,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-// `useScopedHostBinding` (and the panel's own direct `useHostBinding()?.hostClient`
-// reads) go through this module. Panel suites mock it wholesale rather than
-// standing up a real `<HostRuntimeProvider>` - see `providers-settings-panel.test.tsx`
-// and `provider-mcp-tab.test.tsx` for the same partial-object pattern.
+// Panel suites mock it wholesale rather than standing up a real `<HostRuntimeProvider>` - see
+// `providers-settings-panel.test.tsx` and `provider-mcp-tab.test.tsx` for the same partial-object pattern.
 const hostBindingMock = vi.hoisted(
   (): { current: { readonly hostClient: unknown } | null } => ({
     current: null,
@@ -81,28 +77,17 @@ const CAT = {
 
 const SAVED_FLASH_MS = 1600;
 
-/**
- * The panel over the config RPC path - the production path for every
- * reachable host, local or remote. Wires a real `HostClient` (over an
- * in-memory messenger delegating to a `MockTraycerCli`) as the SCOPED host's
- * client, so writes exercise the real `useHostQuery`/`useHostMutation` wiring
- * rather than a bridge stub.
- */
+/** Wires a real `HostClient` (over an in-memory messenger delegating to a `MockTraycerCli`) as the scoped
+ * host's client. */
 function renderShellPanelOverRpc(options: {
   readonly configure?: (cli: MockTraycerCli) => void;
-  /** Supply the CLI when a handler override needs to close over it. */
   readonly cli?: MockTraycerCli;
-  /** Replaces individual RPC handlers - e.g. to hold one write pending. */
   readonly overrideHandlers?: MockHandlerMap<HostRpcRegistry>;
   readonly hostId?: string;
   readonly isLocalMachine?: boolean;
   readonly connectable?: boolean;
-  /**
-   * Recorded via `recordNegotiatedHostMethods`. Defaults to the full shell
-   * family (a host that has handshaked and supports everything); pass `null`
-   * to record NOTHING for this host id — the "no handshake yet" tri-state,
-   * distinct from a recorded-but-empty manifest.
-   */
+  /** Defaults to the full shell family (a host that has handshaked and supports everything); pass `null` to
+   * record nothing for this host id. */
   readonly methods?: readonly string[] | null;
 }): ConfigHostFixture {
   const hostId = options.hostId ?? "host-a";
@@ -156,12 +141,7 @@ function renderShellPanelOverRpc(options: {
   return fixture;
 }
 
-/**
- * This computer's host, unable to answer for itself: the panel falls back to
- * the CLI bridge. Covers BOTH `localConfigFallbackReason` outcomes for a local
- * host - `connectable: false` ("host-stopped", the default) or a connectable
- * host whose recorded manifest omits `config.shell.get` ("host-outdated").
- */
+/** This computer's host, unable to answer for itself: the panel falls back to the CLI bridge. */
 function renderShellPanelStoppedLocal(options: {
   readonly configure: (cli: MockTraycerCli) => void;
   readonly connectable?: boolean;
@@ -299,11 +279,8 @@ describe("<ShellSettingsPanel /> hierarchy", () => {
   });
 
   it("announces transient saving/saved feedback beside the changed control", async () => {
-    // Real timers only: waitFor + fake timers race easily, and the deferred
-    // CLI mutation already gives a stable pending window.
-    // Gate holds the mutation in pending; setFinished resolves only after the
-    // full shellConfigSet (gate + originalSet) completes — not merely after
-    // the gate opens.
+    // Real timers only: waitFor + fake timers race easily, and the deferred CLI mutation already gives a stable
+    // pending window.
     let releaseGate: (() => void) | null = null;
     const setGate = new Promise<void>((resolve) => {
       releaseGate = resolve;
@@ -413,13 +390,8 @@ describe("<ShellSettingsPanel /> flags row", () => {
   });
 
   it("floors the flags row label below md so the chips take their own line", async () => {
-    // This row is two columns from its own markup rather than through
-    // SettingsRow, so the shared floor is the only thing putting one under its
-    // label - and the floor is what flex line-breaking acts on. Without it the
-    // chips-plus-restore-button cluster keeps its intrinsic width, the label
-    // takes whatever remains, and at phone width that is a sliver breaking
-    // "Startup flags for zsh" one word per line. The floor pushes the cluster
-    // onto a line of its own instead.
+    // This row is two columns from its own markup rather than through SettingsRow, so the shared floor is the only
+    // thing putting one under its label - and the floor is what flex line-breaking acts on.
     renderPanel((cli) => {
       cli.shellConfig = {
         path: "/bin/zsh",
@@ -495,7 +467,7 @@ describe("<ShellSettingsPanel /> flags row", () => {
     });
 
     await screen.findByText("Startup flags for zsh");
-    // The trigger reads "System default" — the auto state is active.
+    // The trigger reads "System default" - the auto state is active.
     expect(screen.getByText("System default")).toBeTruthy();
 
     // Add a flag chip via the "＋ flag" affordance. (Exact name: the
@@ -513,9 +485,8 @@ describe("<ShellSettingsPanel /> flags row", () => {
     expect(screen.getByText("Startup flags for zsh")).toBeTruthy();
   });
 
-  // Restore stays on the flags row and is gated by `disabled`: predictable
-  // placement, enabled exactly while the visible flags deviate from the
-  // selected shell's family default.
+  // Restore stays on the flags row and is gated by `disabled`: predictable placement, enabled exactly while the
+  // visible flags deviate from the selected shell's family default.
   it("disables Restore default flags when the flags match the family default", async () => {
     renderPanel((cli) => {
       cli.shellConfig = {
@@ -590,9 +561,8 @@ describe("<ShellSettingsPanel /> remote host over RPC", () => {
     await waitFor(() => {
       expect(screen.getByText("-x")).toBeTruthy();
     });
-    // The write actually reached this host's mock CLI-backed handler — the
-    // config.shell.set RPC delegates to it, so a value change here proves the
-    // request was dispatched (and answered) rather than merely rendered.
+    // The write actually reached this host's mock CLI-backed handler - the config.shell.set RPC delegates to it,
+    // so a value change here proves the request was dispatched (and answered) rather than merely rendered.
     expect(fixture.cli.shellConfig.args).toContain("-x");
   });
 
@@ -625,7 +595,7 @@ describe("<ShellSettingsPanel /> host-config-unsupported degrade", () => {
     renderShellPanelOverRpc({
       hostId: "host-old",
       isLocalMachine: false,
-      // Handshaked WITHOUT the shell family — an old host.
+      // Handshaked without the shell family - an old host.
       methods: ["host.status"],
       configure: (cli) => {
         cli.shellConfig = { path: "/bin/zsh", args: [], synthesised: true };
@@ -636,8 +606,8 @@ describe("<ShellSettingsPanel /> host-config-unsupported degrade", () => {
     expect(notice.textContent).toContain("running an older version");
     expect(screen.queryByTestId("terminal-shell-settings")).toBeNull();
     expect(screen.queryByText("Startup flags for zsh")).toBeNull();
-    // A remote host has no local truth to fall back to — it never takes the
-    // bridge notice, only the capability one.
+    // A remote host has no local truth to fall back to - it never takes the bridge notice, only the capability
+    // one.
     expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
   });
 });
@@ -673,10 +643,8 @@ describe("<ShellSettingsPanel /> local host falls back to the CLI bridge", () =>
     expect(await screen.findByText("-x")).toBeTruthy();
   });
 
-  // The widened case: a RUNNING, connectable local host whose handshake did
-  // not carry `config.shell.get` (the fleet-update window — the app updated
-  // before the host it manages) still gets a working, bridge-backed page
-  // instead of the capability notice.
+  // The widened case: a running, connectable local host whose handshake did not carry `config.shell.get` (the
+  // fleet-update window.
   it('host-outdated: a connectable local host with an old manifest still uses the bridge, with data-reason="host-outdated"', async () => {
     const cli = renderShellPanelStoppedLocal({
       configure: (cli) => {
@@ -687,7 +655,7 @@ describe("<ShellSettingsPanel /> local host falls back to the CLI bridge", () =>
         };
       },
       connectable: true,
-      methods: ["host.status"], // handshaked WITHOUT config.shell.get
+      methods: ["host.status"], // handshaked without config.shell.get
     });
 
     const notice = await screen.findByTestId("local-config-fallback-notice");
@@ -707,10 +675,8 @@ describe("<ShellSettingsPanel /> local host falls back to the CLI bridge", () =>
     expect(await screen.findByText("-x")).toBeTruthy();
   });
 
-  // The tri-state guard: a local, CONNECTABLE host with no recorded manifest
-  // at all ("not dialled yet", not "unsupported") must take the RPC path, not
-  // the bridge — collapsing the tri-state to a boolean would divert it here
-  // permanently, before its own first RPC ever produced an answer.
+  // The tri-state guard: a local, connectable host with no recorded manifest at all ("not dialled yet", not
+  // "unsupported") must take the RPC path, not the bridge.
   it("does not fall back for a connectable local host with no handshake recorded yet", async () => {
     const fixture = renderShellPanelOverRpc({
       hostId: "host-a",
@@ -734,12 +700,7 @@ describe("<ShellSettingsPanel /> local host falls back to the CLI bridge", () =>
   });
 });
 
-// The negotiated-manifest registry never clears a stale `false` answer on its
-// own - `useHostCapabilityProbe` is what re-dials a parked host so a page that
-// promises "update the host and this fills in on its own" can keep that
-// promise. These pins prove the probe actually dispatched (not merely that
-// the panel changed state for some other reason), then prove the RPC path
-// resumes once a fresh handshake and a bumped incarnation land.
+// The negotiated-manifest registry never clears a stale `false` answer on its own.
 describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
   it("remote host: probes host.status while parked, then resumes the RPC editor once the host re-handshakes with the shell family", async () => {
     const hostId = "host-old";
@@ -754,7 +715,7 @@ describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
       isLocalMachine: false,
       cli,
     });
-    // Handshaked WITHOUT the shell family - parks the panel on the unsupported notice.
+    // Handshaked without the shell family - parks the panel on the unsupported notice.
     recordNegotiatedHostMethods(hostId, ["host.status"]);
 
     scopeOverrides.current = {
@@ -801,11 +762,8 @@ describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
     });
     const callsWhileParked = fixture.hostStatusCalls();
 
-    // Bump ONLY the incarnation, manifest still unhealed: this is the leg
-    // `cacheKeyIdentity` protects - a re-dial driven purely by the host's
-    // version changing, still while parked. Without a cache key keyed on the
-    // incarnation, this rerender would reuse the already-fetched query and
-    // never ask again.
+    // Without a cache key keyed on the incarnation, this rerender would reuse the already-fetched query and never
+    // ask again.
     scopeOverrides.current = {
       ...scopeOverrides.current,
       host: hostScopeOptionFixture({
@@ -865,15 +823,14 @@ describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
       args: ["-i", "-l"],
       synthesised: true,
     };
-    // Backs the probe's client (and the eventual RPC editor) - independent of
-    // the local bridge's own MockTraycerCli, since a "host-outdated" host
-    // reads/writes through the bridge until it heals.
+    // Backs the probe's client (and the eventual RPC editor) - independent of the local bridge's own
+    // MockTraycerCli, since a "host-outdated" host reads/writes through the bridge until it heals.
     const fixture = buildConfigHostFixture({
       hostId,
       isLocalMachine: true,
       cli: rpcCli,
     });
-    // Handshaked WITHOUT the shell family - the fleet-update window.
+    // Handshaked without the shell family - the fleet-update window.
     recordNegotiatedHostMethods(hostId, ["host.status"]);
 
     scopeOverrides.current = {
@@ -920,9 +877,8 @@ describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
     });
     const callsWhileParked = fixture.hostStatusCalls();
 
-    // Bump ONLY the incarnation, manifest still unhealed: this is the leg
-    // `cacheKeyIdentity` protects - a re-dial driven purely by the host's
-    // version changing, still while parked.
+    // Bump only the incarnation, manifest still unhealed: this is the leg `cacheKeyIdentity` protects - a re-dial
+    // driven purely by the host's version changing, still while parked.
     scopeOverrides.current = {
       ...scopeOverrides.current,
       host: hostScopeOptionFixture({
@@ -970,21 +926,7 @@ describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
 });
 
 describe("<ShellSettingsPanel /> env rename survives unmount", () => {
-  /**
-   * The rename is ONE operation, and this pins the property the repair rests
-   * on: both writes live inside a single `mutationFn`, so neither half is
-   * carried by a per-`mutate` callback.
-   *
-   * The discriminating instant is the SET being in flight when the panel goes
-   * away - not the delete. In the defective shape (`setEnv(..., { onSuccess:
-   * () => deleteEnv(old) })`) a set that resolves while still mounted fires
-   * its callback normally and the delete goes out, so holding the DELETE
-   * pending proves nothing: both shapes pass. Hold the SET across the unmount
-   * and the shapes separate - TanStack drops the per-`mutate` callbacks of an
-   * observer that is gone, so the defective shape never dispatches the delete
-   * and the rename leaves TWO live variables, while the repaired one completes
-   * inside its own `mutationFn`.
-   */
+  /** The discriminating instant is the set being in flight when the panel goes away - not the delete. */
   it("drops the old key when the set is still in flight as the panel unmounts", async () => {
     const cli = new MockTraycerCli();
     cli.shellConfig = {
@@ -1019,9 +961,8 @@ describe("<ShellSettingsPanel /> env rename survives unmount", () => {
       name: "Name for OLD_NAME",
     });
     fireEvent.change(nameInput, { target: { value: "NEW_NAME" } });
-    // Blur directly: the row commits in `onBlur`, and Enter only gets there by
-    // calling `.blur()` on the focused element - which jsdom no-ops when the
-    // input was never focused, so a keyDown alone commits nothing.
+    // Blur directly: the row commits in `onBlur`, and Enter only gets there by calling `.blur` on the focused
+    // element - which jsdom no-ops when the input was never focused, so a keyDown alone commits nothing.
     fireEvent.blur(nameInput);
 
     // The rename is genuinely airborne before the panel goes away; without
@@ -1037,11 +978,7 @@ describe("<ShellSettingsPanel /> env rename survives unmount", () => {
       await Promise.resolve();
     });
 
-    // Terminal state of the store the host will read: renamed, not duplicated.
-    // BOTH halves in one condition. The set writes NEW_NAME before the delete
-    // runs, so waiting on NEW_NAME alone awaits an intermediate state and the
-    // follow-up assertion could fail a CORRECT implementation the moment the
-    // delete lands a microtask later.
+    // The set writes NEW_NAME before the delete runs.
     await waitFor(() => {
       const keys = cli.envOverrides.map((row) => row.key);
       expect(keys).toContain("NEW_NAME");
@@ -1049,15 +986,8 @@ describe("<ShellSettingsPanel /> env rename survives unmount", () => {
     });
   });
 
-  /**
-   * The SAME property on the stopped-local fallback. The bridge speaks IPC
-   * rather than host RPC, which tempted a comment claiming it had "no
-   * cross-observer boundary to lose the delete at" - but the boundary that
-   * loses the second half is the OBSERVER, not the transport, so a delete
-   * chained onto the set's per-`mutate` callback was dropped here exactly as
-   * it was on the RPC path. This is the user-facing path for a host that is
-   * stopped or predates the config methods, so it needs its own pin.
-   */
+  /** The bridge speaks IPC rather than host RPC, which tempted a comment claiming it had "no cross-observer
+   * boundary to lose the delete at". */
   it("drops the old key on the bridge fallback when the set is still in flight as the panel unmounts", async () => {
     let releaseSet: (() => void) | null = null;
     const setInFlight = new Promise<void>((resolve) => {
@@ -1114,13 +1044,8 @@ describe("<ShellSettingsPanel /> env rename survives unmount", () => {
 });
 
 describe("<ShellSettingsPanel /> partially failed rename refreshes the editor", () => {
-  /**
-   * A rename is two writes, so it has a THIRD outcome besides success and
-   * failure: the set lands and the delete rejects, leaving both keys on the
-   * host. Invalidating only in `onSuccess` skips that path entirely, so the
-   * editor keeps rendering the pre-rename list over a config the host will
-   * actually read. Both controllers invalidate on SETTLEMENT for this reason.
-   */
+  /** Invalidating only in `onSuccess` skips that path entirely, so the editor keeps rendering the pre-rename list
+   * over a config the host will actually read. */
   it("shows the new key after the delete half fails, on the RPC path", async () => {
     const cli = new MockTraycerCli();
     cli.shellConfig = {
@@ -1153,10 +1078,4 @@ describe("<ShellSettingsPanel /> partially failed rename refreshes the editor", 
   });
 
   // NOTE: there is deliberately no bridge-path twin of this test. One was
-  // written and PROVED VACUOUS - it passed with the invalidation reverted to
-  // `onSuccess`-only, because something else on that path refreshes the list
-  // before the assertion runs. The bridge controller still invalidates on
-  // settlement, for symmetry with the RPC twin above and because the failure
-  // mode is identical; it is simply not pinned here rather than pinned by a
-  // test that cannot fail. Do not re-add one in this shape.
 });

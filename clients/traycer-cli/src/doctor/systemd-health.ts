@@ -6,18 +6,8 @@ import {
 } from "@traycer-clients/shared/host-lifecycle";
 import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 
-// The Linux half of doctor's run-state reading. The comment atop
-// `service/platforms/linux.ts` promised "Doctor surfaces the missing linger
-// as a warning" from the day linger became best-effort - but doctor had NO
-// Linux probes at all, and `service status` deliberately keys liveness off
-// pid metadata, never systemd. The result was a diagnostic dead end on the
-// platform with the most failure modes: a restart-looping unit read as
-// plain "stopped", a WSL box without systemd read as healthy-but-stopped,
-// and a disabled linger (host dies at logout) was invisible everywhere.
-//
-// Same philosophy as the launchd wedge probe: read the manager's ACTUAL
-// run state, report only on positive evidence, stay silent on healthy
-// machines.
+// The Linux half of doctor's run-state reading.
+// The comment atop `service/platforms/linux.ts` promised "Doctor surfaces the missing linger as a warning" from the day linger became best-effort - but doctor had NO Linux probes at all, and `service status` deliberately keys liveness off pid metadata, never systemd.
 
 const execFileAsync = promisify(execFile);
 
@@ -79,9 +69,7 @@ export function createRealSystemdProbeRunner(): SystemdProbeRunner {
 
 export interface LinuxSystemdProbeInput {
   readonly labelId: string;
-  // Whether the unit file is on disk - the unit-state probe only runs for
-  // an installed service; the reachability probe runs regardless, because
-  // "no bus" is exactly why an install may have failed.
+  // Whether the unit file is on disk - the unit-state probe only runs for an installed service; the reachability probe runs regardless, because "no bus" is exactly why an install may have failed.
   readonly unitFileInstalled: boolean;
   readonly runner: SystemdProbeRunner;
 }
@@ -102,12 +90,8 @@ export async function probeLinuxSystemdHealth(
   const issues: DoctorIssue[] = [];
   const unit = `${input.labelId}.service`;
 
-  // ---- user-manager reachability ----
-  // `systemctl --user` needs a per-user manager on a session bus. On WSL
-  // without systemd, in `sudo su` shells, or SSH sessions with no logind
-  // session, every lifecycle operation fails - and before this probe, in
-  // exactly the environments where things fail, doctor had nothing to say
-  // (install errors even steer users here).
+  // ---- user-manager reachability ---- `systemctl --user` needs a per-user manager on a session bus.
+  // On WSL without systemd, in `sudo su` shells, or SSH sessions with no logind session, every lifecycle operation fails - and before this probe, in exactly the environments where things fail, doctor had nothing to say (install errors even steer users here).
   const reachability = await input.runner("systemctl", [
     "--user",
     "show-environment",
@@ -117,11 +101,8 @@ export async function probeLinuxSystemdHealth(
     reachability.timedOut ||
     reachability.exitCode !== 0
   ) {
-    // `spawnFailed` means `systemctl` itself could not be found/executed -
-    // a genuinely non-systemd distro (Alpine/OpenRC, Void, ...), not a
-    // systemd machine in an unreachable state. The WSL/headless-login
-    // guidance below is worded entirely around the latter and would
-    // misdirect a user on the former.
+    // `spawnFailed` means `systemctl` itself could not be found/executed - a genuinely non-systemd distro (Alpine/OpenRC, Void, ...), not a systemd machine in an unreachable state.
+    // The WSL/headless-login guidance below is worded entirely around the latter and would misdirect a user on the former.
     const message = reachability.spawnFailed
       ? "systemctl could not be found or executed, so the host cannot be registered to start automatically. " +
         "This machine may not be running systemd (e.g. Alpine/OpenRC, Void) - Traycer's Linux service install requires a systemd user manager."
@@ -159,13 +140,8 @@ export async function probeLinuxSystemdHealth(
       const loadState = props.get("LoadState") ?? "";
       const activeState = props.get("ActiveState") ?? "";
       const subState = props.get("SubState") ?? "";
-      // Positive-evidence guard, verified against a live systemd 255:
-      // `systemctl show` on a NOT-LOADED unit exits 0 and reports the
-      // property DEFAULTS - which include `ConditionResult=no` - and a
-      // loaded unit that has never attempted a start reports the same
-      // default with ConditionTimestampMonotonic=0. Only a start that
-      // actually evaluated the condition (non-zero timestamp, loaded
-      // unit) may report "skipped because the CLI is missing".
+      // Positive-evidence guard, verified against a live systemd 255: `systemctl show` on a NOT-LOADED unit exits 0 and reports the property DEFAULTS - which include `ConditionResult=no` - and a loaded unit that has never attempted a start reports the same default with ConditionTimestampMonotonic=0.
+      // Only a start that actually evaluated the condition (non-zero timestamp, loaded unit) may report "skipped because the CLI is missing".
       const conditionStamp = props.get("ConditionTimestampMonotonic") ?? "";
       const conditionEvaluated =
         loadState === "loaded" &&
@@ -175,9 +151,7 @@ export async function probeLinuxSystemdHealth(
         ? (props.get("ConditionResult") ?? "")
         : "";
 
-      // A unit that landed `failed` (start-limit hit) or is cycling
-      // `auto-restart` is the exact state `service status` reads as plain
-      // "stopped" - liveness there deliberately keys off pid metadata.
+      // A unit that landed `failed` (start-limit hit) or is cycling `auto-restart` is the exact state `service status` reads as plain "stopped" - liveness there deliberately keys off pid metadata.
       // This is where the truth surfaces.
       if (activeState === "failed" || subState === "auto-restart") {
         issues.push({
@@ -198,9 +172,7 @@ export async function probeLinuxSystemdHealth(
         });
       }
 
-      // ConditionFileIsExecutable gates the start on the CLI binary
-      // existing; `no` here means systemd skipped the last start because
-      // the binary the unit points at is gone - stranded definition.
+      // ConditionFileIsExecutable gates the start on the CLI binary existing; `no` here means systemd skipped the last start because the binary the unit points at is gone - stranded definition.
       if (conditionResult === "no") {
         issues.push({
           code: DOCTOR_ISSUE_CODES.SERVICE_START_CONDITION_UNMET,
@@ -214,11 +186,8 @@ export async function probeLinuxSystemdHealth(
       }
     }
 
-    // ---- linger ----
-    // Without linger the user manager - and the host with it - is torn
-    // down at last logout and only returns at next login. Enabling it is
-    // best-effort at install (polkit may refuse non-interactively); this
-    // warning is the promised follow-up surface.
+    // ---- linger ---- Without linger the user manager - and the host with it - is torn down at last logout and only returns at next login.
+    // Enabling it is best-effort at install (polkit may refuse non-interactively); this warning is the promised follow-up surface.
     const user = process.env.USER ?? process.env.USERNAME ?? "";
     const lingerResult = await input.runner("loginctl", [
       "show-user",

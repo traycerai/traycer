@@ -12,24 +12,8 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * # The append republish interleave
- *
- * The host's append broadcast emits, in one synchronous pass and in this
- * order: the shared frames (`messageAccepted` / `eventAppended`), then the
- * bounded SNAPSHOT - stamped with the post-append `rowCount` but the
- * subscriber's PRE-delta `indexRevision` - and then the `indexChanged` delta
- * for that same append. So the delta always lands on a window whose
- * `rowCount` already includes its rows.
- *
- * Read naively against `window.rowCount`, every such delta has the
- * `0 !== appendedRows` signature of a lost frame. The client shipped exactly
- * that misreading once: it voided the window and requested a resnapshot on
- * EVERY append, which under an active turn is a transcript that is blank for
- * as long as the stream keeps appending - the "launch a task, see an empty
- * chat" regression. The first fixture replays the host's real emission order,
- * captured from a live `ChatSessionManager` running the launch flow, and pins
- * that the window survives it; the second holds that order and varies only the
- * one field the wire lets a producer omit.
+ * The host's append broadcast emits, in one synchronous pass and in this order: the shared frames
+ * (`messageAccepted` / `eventAppended`), then the bounded SNAPSHOT - stamped with the post-append
  */
 
 const EPIC_ID = "epic-r";
@@ -52,12 +36,7 @@ function userMessage(messageId: string, timestamp: number): Message {
   };
 }
 
-/**
- * The `messageAccepted` frame's own message type. NOT the `Message` above:
- * the two are structurally identical and nominally distinct (the frame's
- * resolves through the subscribe union's schema instance), so a fixture typed
- * as one cannot be passed where the other is expected.
- */
+/** The `messageAccepted` frame's own message type. */
 type AcceptedMessage = Parameters<
   ChatStreamCallbacks["onMessageAccepted"]
 >[0]["message"];
@@ -119,14 +98,8 @@ type WindowedSnapshotFrame = Parameters<
 >[0];
 
 /**
- * A snapshot as the append republish stamps it: the CURRENT `rowCount` and
- * tail, at the subscriber's held (pre-delta) `indexRevision`.
- *
- * `tailRowIds` is what the host actually sends - `chat-session-manager.ts`
- * always names the tail's rows - and it is passed explicitly here rather than
- * derived, so a fixture cannot quietly drift onto the positional fallback the
- * live producer never uses. The one case that DOES omit it is the fallback's
- * own test below, which says so.
+ * A snapshot as the append republish stamps it: the CURRENT `rowCount` and tail, at the
+ * subscriber's held (pre-delta) `indexRevision`.
  */
 function republishSnapshot(input: {
   readonly epoch: number;
@@ -241,12 +214,8 @@ function createHarness(): Harness {
 
 describe("the append republish interleave (bootstrap → accept → snapshot → delta)", () => {
   it("keeps the transcript through a launch-flow turn instead of voiding on every append", () => {
-    // Fake timers throughout, because "the transcript survived" is only half
-    // the claim: the window must also come out of the interleave declaring the
-    // skeleton COMPLETE. It does not travel through `state.messages`, so
-    // nothing above would notice it staying false - but
-    // `chunkedDeliveryIncomplete()` reads it, and the completion watchdog then
-    // spends its per-epoch restream budget resnapshotting a healthy stream.
+    // Fake timers throughout, because "the transcript survived" is only half the claim: the window
+    // must also come out of the interleave declaring the skeleton COMPLETE.
     vi.useFakeTimers();
     const harness = createHarness();
     try {
@@ -358,10 +327,8 @@ describe("the append republish interleave (bootstrap → accept → snapshot →
         2,
       );
 
-      // 4. And the stream goes quiet, as a turn does between tokens. A window
-      //    that came out of the interleave still calling its skeleton
-      //    incomplete asks for a full resnapshot here - once per idle window,
-      //    up to `MAX_WATCHDOG_RESTREAMS_PER_EPOCH` - having lost nothing.
+      // that came out of the interleave still calling its skeleton incomplete asks for a full resnapshot
+      // here - once per idle window, up to `MAX_WATCHDOG_RESTREAMS_PER_EPOCH` - having lost nothing.
       vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
       expect(harness.resnapshotCount()).toBe(0);
     } finally {
@@ -371,14 +338,8 @@ describe("the append republish interleave (bootstrap → accept → snapshot →
   });
 
   it("names the rows it appends to a tail seated without ids", () => {
-    // The positional fallback: `tail.rowIds` is optional on the wire, and a
-    // host that sends none leaves the tail seated with the empty string at
-    // every ordinal (`tailRowIdsFor`). The skeleton stream is what normally
-    // backfills those - but a row appended AFTER that stream finished is one
-    // no chunk will ever revisit, so the delta is the last authority to reach
-    // it. Left unadopted the span keeps `""`, and `transcriptListRows` renders
-    // neither the ordinal (no model is named `""`) nor the model (the skeleton
-    // now names it) - a row the client holds, drawn nowhere.
+    // The positional fallback: `tail.rowIds` is optional on the wire, and a host that sends none
+    // leaves the tail seated with the empty string at every ordinal (`tailRowIdsFor`).
     const harness = createHarness();
     try {
       const cb = harness.callbacks();
@@ -447,23 +408,15 @@ describe("the append republish interleave (bootstrap → accept → snapshot →
 });
 
 /**
- * # Retiring the runtime-disposal card on the WINDOWED line
- *
- * The host removes the `CLAUDE_RUNTIME_DISPOSED` error from the row owning an
- * answered interview, in the settlement's own durable write. The client mirrors
- * that fold — and on this line the mirror has to reach `transcriptWindow`, not
- * just `state.messages`, because that array is DERIVED: the next skeleton
- * chunk, delta or range rebuilds it from the window and would resurrect the red
- * card under a question the user has already answered, with `pendingInterviews`
- * long since cleared and nothing left to re-settle it.
+ * The host removes the `CLAUDE_RUNTIME_DISPOSED` error from the row owning an answered interview,
+ * in the settlement's own durable write.
  */
 describe("the runtime-disposal card on an already-hydrated windowed row", () => {
   const INTERVIEW_BLOCK_ID = "toolu-windowed:interview";
 
   function disposedInterviewRow(): Message {
-    // Narrow before spreading: `assistantMessage` is declared as the `Message`
-    // union, and spreading it resolves the literal against the USER variant,
-    // which has no `blocks`.
+    // Narrow before spreading: `assistantMessage` is declared as the `Message` union, and spreading it
+    // resolves the literal against the USER variant, which has no `blocks`.
     const base = assistantMessage("a-1", 3);
     if (base.role !== "assistant") {
       throw new Error("expected an assistant row");
@@ -590,9 +543,8 @@ describe("the runtime-disposal card on an already-hydrated windowed row", () => 
         "error:QUEUE_PAUSED_AFTER_ERROR",
       ]);
 
-      // The rebuild. `state.messages` is re-derived from `transcriptWindow`
-      // here, so a fold that wrote only the published array would hand the red
-      // card back at exactly this point.
+      // The rebuild. `state.messages` is re-derived from `transcriptWindow` here, so a fold that wrote
+      // only the published array would hand the red card back at exactly this point.
       cb.onSkeletonChunk({
         kind: "skeletonChunk",
         hasBinaryPayload: false,

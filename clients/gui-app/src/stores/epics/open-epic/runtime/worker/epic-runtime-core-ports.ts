@@ -1,26 +1,5 @@
 import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
-/**
- * {@link EpicRuntimeCorePorts} over a composed {@link EpicReplicaRuntime}.
- *
- * Its own module rather than a closure inside `install-epic-runtime-core.ts`
- * for one reason: the attachments port has a property that must be pinned -
- * it never waits - and pinning it through the whole install would need a host,
- * a bridge and a bootstrap to observe one promise settling.
- *
- * Named members rather than the runtime itself: the runtime has 42 members and
- * these ports need eight. A parameter typed as the whole runtime would let a
- * future member reach across this seam without anyone noticing the seam had
- * moved.
- *
- * This paragraph used to cite `in-process-runtime-port.ts` as the discipline's
- * other practitioner. That module is retired, and the sentence was corrected in
- * the SAME commit that deleted it rather than left to be found later - a
- * deletion that leaves a name behind mints a stale-prose instance instead of
- * merely inheriting one. `epicRuntimeCorePortSourceOf` in
- * `install-epic-runtime-core.ts` is the mapping that fills these members now,
- * and it is exported so the arm-equality pin uses production's rather than a
- * copy.
- */
+/** {@link EpicRuntimeCorePorts} over a composed {@link EpicReplicaRuntime}. */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
@@ -45,41 +24,20 @@ export interface EpicRuntimeCorePortSource {
     hash: string,
     signal: AbortSignal,
   ): Promise<Uint8Array | null>;
-  /**
-   * Take the runtime's body lease and return its release.
-   *
-   * This is what MATERIALIZES. `acquireArtifactBodyLease` takes body-lane
-   * demand ("the lease is also the subscribe" on the lane arm), then the tier
-   * lease that creates the replica entry, then signals a rebind for a new doc
-   * identity. Encoding cold state without it reads a `replicas` entry that
-   * does not exist, so it answers "not held" for every body.
-   */
+  /** Take the runtime's body lease and return its release. This is what MATERIALIZES. */
   acquireBodyLease(artifactId: string): () => void;
   bodyDocKey(artifactId: string): string | null;
   encodeColdState(docKey: string): ArtifactRoomColdState | null;
   /** Live bytes for a room that states no identity. See the runtime member. */
   encodeForwardOnly(docKey: string): Uint8Array | null;
-  /**
-   * Observe a materialized room's doc. Returns the detach.
-   *
-   * Every update is forwarded, with NO origin filter on this side, and that is
-   * deliberate rather than an omission. Main runs the only filter: an update
-   * main itself sent comes back as the arm's echo and re-applies as a Yjs
-   * no-op, while a collaborator's edit is stamped with main's private origin
-   * on arrival so main's observer does not send it back out. A second filter
-   * here would be a second thing to keep in step with that one, and the two
-   * would drift.
-   */
+  /** Observe a materialized room's doc. Returns the detach. */
   observeBodyDoc(
     docKey: string,
     onUpdate: (update: Uint8Array) => void,
   ): () => void;
   /**
-   * Relay a local presence frame for one body to the arm.
-   *
-   * `localClientId` is the main-side `Awareness.clientID` the frame speaks
-   * for; the room excludes it from its remote-peer pin. See the runtime
-   * member and `ArtifactRoomReplicaEntry.relayedLocalClientId`.
+   * Relay a local presence frame for one body to the arm. `localClientId` is the main-side
+   * `Awareness.clientID` the frame speaks for; the room excludes it from its remote-peer pin.
    */
   applyBodyAwareness(
     docKey: string,
@@ -90,15 +48,7 @@ export interface EpicRuntimeCorePortSource {
   isBodyPinned(docKey: string): boolean;
   /** This body's known remote peers, to ride the materialize response. */
   encodeBodyPeerAwareness(docKey: string): readonly Uint8Array[];
-  /**
-   * Observe a materialized room's presence. Returns the detach.
-   *
-   * The mirror of {@link observeBodyDoc}, with ONE difference that is not
-   * cosmetic: the source DOES filter here, dropping frames it relayed in
-   * itself. Presence has no equivalent of a Yjs no-op re-apply - handing main
-   * back its own state would resurrect a cursor it had just removed - so that
-   * cut is made where the origin is still known, not left to main.
-   */
+  /** Observe a materialized room's presence. Returns the detach. */
   observeBodyAwareness(
     docKey: string,
     onFrame: (frame: Uint8Array) => void,
@@ -135,15 +85,7 @@ export interface EpicRuntimeCorePortSource {
    * id and recorded nothing - and is not an error.
    */
   enqueueWriteCommand(intent: EpicWriteCommandIntent): string | null;
-  /**
-   * Narrow the wire form of an intent, or `null` if it is not one.
-   *
-   * The intent crosses as `unknown` exactly as `main/write-command`'s does -
-   * it is the caller's clonable wire form and the worker carries it opaquely -
-   * but the QUEUE is typed, so something has to narrow it. Refusing an
-   * unrecognised payload is the fail-closed answer: enqueuing a malformed
-   * intent would mint an id for a command that can never be dispatched.
-   */
+  /** Narrow the wire form of an intent, or `null` if it is not one. */
   readWriteCommandIntent(intent: unknown): EpicWriteCommandIntent | null;
   applyChatRecords(
     records: readonly ChatRecordSummaryV11[],
@@ -174,14 +116,8 @@ export interface EpicRuntimeCorePortSource {
 }
 
 /**
- * The narrowing for `begin-pending-chat-creation`'s payload.
- *
- * It crosses as `unknown` because `PendingChatCreation` belongs to gui-app and
- * a copy in the protocol would rot against it. Built as a literal so a field
- * added to that type fails to compile HERE, which a cast would have discarded.
- * A payload that is not a record is DROPPED rather than defaulted: a pending
- * creation with an invented id would put a row on screen that no create will
- * ever resolve.
+ * The narrowing for `begin-pending-chat-creation`'s payload. It crosses as `unknown` because
+ * `PendingChatCreation` belongs to gui-app and a copy in the protocol would rot against it.
  */
 function readPendingChatCreation(value: unknown): PendingChatCreation | null {
   if (typeof value !== "object" || value === null) return null;
@@ -193,22 +129,15 @@ function readPendingChatCreation(value: unknown): PendingChatCreation | null {
   if (typeof chatId !== "string" || typeof hostId !== "string") return null;
   if (typeof title !== "string") return null;
   if (parentChatId !== null && typeof parentChatId !== "string") return null;
-  // `null` is a REPRESENTED state here - the caller had no signed-in user, and
-  // the registry drops that registration itself. Anything else is a foreign
-  // payload rather than an absent one.
+  // `null` is a REPRESENTED state here - the caller had no signed-in user, and the registry drops
+  // that registration itself. Anything else is a foreign payload rather than an absent one.
   if (ownerUserId !== null && typeof ownerUserId !== "string") return null;
   return { chatId, hostId, parentChatId, title, ownerUserId };
 }
 
 /**
- * Where a resident body's return traffic goes: `body/doc-in` to main's live
- * doc, `body/awareness-in` to main's `Awareness`.
- *
- * A NAMED pair rather than two positional callbacks, because the two have the
- * identical shape `(docKey, Uint8Array) => void` - passing them in the wrong
- * order compiles clean and silently feeds document updates into a presence
- * channel, where they decode as garbage or as nothing at all. There is no
- * type that catches that; a field name is.
+ * Where a resident body's return traffic goes: `body/doc-in` to main's live doc,
+ * `body/awareness-in` to main's `Awareness`.
  */
 export interface EpicRuntimeBodyReturnLeg {
   readonly onDocUpdate: (docKey: string, update: Uint8Array) => void;
@@ -219,59 +148,19 @@ export function buildEpicRuntimeCorePorts(
   source: EpicRuntimeCorePortSource,
   returnLeg: EpicRuntimeBodyReturnLeg,
 ): EpicRuntimeCorePorts {
-  /**
-   * One retained release per resident `docKey`.
-   *
-   * Closure state, not module state - one map per composed runtime, which is
-   * also what keeps this module off the worker-graph ratchet's process-scoped
-   * list.
-   */
+  /** One retained release per resident `docKey`. */
   const heldLeases = new Map<string, () => void>();
 
-  /**
-   * The return-leg observers per resident docKey - doc AND presence, behind
-   * ONE composite detach.
-   *
-   * Kept as a single entry rather than two maps so the two can never be
-   * detached at different corners: they are attached together and released
-   * together, and a room whose doc stopped being watched while its presence
-   * was not is a half-live room no assertion is looking for.
-   *
-   * Detached at THREE corners: an accepted demote, a drop, and core dispose.
-   * The third is the one that gets forgotten - a worker tearing down with
-   * observers attached is the same shape as the pending-await park, and this
-   * leak is worse to find because the tier, the projection and the tile all
-   * look correct throughout it.
-   */
+  /** The return-leg observers per resident docKey - doc AND presence, behind ONE composite detach. */
   const bodyObservers = new Map<string, () => void>();
 
   /**
-   * Demand retained for a body that has no bytes YET - one release per docKey,
-   * held rather than called.
-   *
-   * The defect it closes: on the lane arm the lease taken at the top of
-   * `materialize` IS the `artifact.subscribe` open, so a cold open runs
-   * lease → no bytes → release, and the release closes the subscription that
-   * was about to deliver those bytes. Nothing retried, because the tile's
-   * effect keys on a docKey that never moves. Every artifact body on that arm
-   * was unreachable.
-   *
-   * Disjoint from {@link heldLeases} BY CONSTRUCTION, and the disjointness is
-   * what makes "already held" answerable in one question: a docKey is resident
-   * (bytes handed over, demote owed) or awaiting (demand held, nothing handed
-   * over), never both. Every transition below moves the entry rather than
-   * copying it.
+   * Demand retained for a body that has no bytes YET - one release per docKey, held rather than
+   * called.
    */
   const awaitingDemand = new Map<string, () => void>();
 
-  /**
-   * Whether this docKey already has demand on it from either map.
-   *
-   * The guard a second `materialize` for the same body needs, and it must ask
-   * about BOTH: `bodies.release` is ref-counted, so a retry that recorded its
-   * own release on top of a retained one would leave demand permanently one
-   * too high and keep the subscription open for the session.
-   */
+  /** Whether this docKey already has demand on it from either map. */
   function hasBodyDemand(docKey: string): boolean {
     return heldLeases.has(docKey) || awaitingDemand.has(docKey);
   }
@@ -280,19 +169,6 @@ export function buildEpicRuntimeCorePorts(
     if (bodyObservers.has(docKey)) return;
     const detachDoc = source.observeBodyDoc(docKey, (update) => {
       // COPIED, because we do not own these bytes.
-      //
-      // Yjs delivers ONE freshly-encoded array to every `update` listener, and
-      // on the `@1` arm two listen: the tier's outbound observer, which turns
-      // it into an `artifactRoomApplyUpdate` frame, and this one. BOTH
-      // downstream legs can transfer full-span arrays in place, so both copy:
-      // the tier before its stream send, and this return leg before its worker
-      // post. Neither may rely on observer order; transferring the shared Yjs
-      // array in either observer detaches it before every later observer can
-      // even make its own copy.
-      //
-      // The copy belongs HERE and not inside `takeBytesForTransfer`: this is
-      // the point where non-ownership is known, and teaching the helper to
-      // copy always would tax every legitimate transfer to pay for this one.
       returnLeg.onDocUpdate(docKey, update.slice());
     });
     const detachAwareness = source.observeBodyAwareness(docKey, (frame) => {
@@ -312,15 +188,8 @@ export function buildEpicRuntimeCorePorts(
   }
 
   /**
-   * Record demand for a body whose bytes have not arrived, and answer nothing.
-   *
-   * NO OBSERVER IS ATTACHED HERE, and that is not an omission to tidy up later.
-   * `observeArtifactBodyDoc` on an unmaterialized key is a documented no-op
-   * that watches nothing and hands back a no-op detach - but
-   * {@link attachBodyObserver} would still record an entry for the docKey, and
-   * its `bodyObservers.has(docKey)` early-out would then make the REAL attach
-   * on the retry a silent no-op. The body would materialise on main and never
-   * receive another update.
+   * Record demand for a body whose bytes have not arrived, and answer nothing. NO OBSERVER IS
+   * ATTACHED HERE, and that is not an omission to tidy up later.
    */
   function holdAwaitingDemand(docKey: string, release: () => void): void {
     // Demand from either map already covers this body; a second retained
@@ -332,16 +201,7 @@ export function buildEpicRuntimeCorePorts(
     awaitingDemand.set(docKey, release);
   }
 
-  /**
-   * Record demand for a body whose bytes ARE being handed over.
-   *
-   * The awaiting → resident transition MOVES the retained release rather than
-   * dropping it and keeping this call's: the retained one has held the
-   * subscription open continuously since the awaiting answer, so promoting it
-   * takes demand from two to one with no instant at zero. Dropping it instead
-   * would be correct on a ref-count and wrong on a socket, if the two releases
-   * ever stop being interchangeable.
-   */
+  /** Record demand for a body whose bytes ARE being handed over. */
   function holdResidentLease(docKey: string, release: () => void): void {
     const awaited = awaitingDemand.get(docKey);
     if (awaited !== undefined) {
@@ -350,11 +210,7 @@ export function buildEpicRuntimeCorePorts(
       release();
       return;
     }
-    // Already resident for this doc. Drop the SECOND lease rather than stacking
-    // it: the main side has one doc per `docKey` and will send one demote, so a
-    // second retained release would never be called - and `bodies.release`
-    // decrements a ref-count, so an unreleased extra demand keeps the body
-    // stream open for the session.
+    // Already resident for this doc.
     if (heldLeases.has(docKey)) {
       release();
       return;
@@ -367,16 +223,7 @@ export function buildEpicRuntimeCorePorts(
 
   return {
     attachments: {
-      /**
-       * The WAITING read, keyed by the caller's id so it can be cancelled.
-       *
-       * Built on the runtime's own signal-shaped read rather than beside it:
-       * that machinery already holds in-flight waits outside the doc and
-       * re-points them across a replica swap, which is the hard part and is
-       * already tested. What the bridge adds is a NAME for the wait, because
-       * an `AbortSignal` cannot cross a `postMessage` and a call in flight has
-       * no other handle.
-       */
+      /** The WAITING read, keyed by the caller's id so it can be cancelled. */
       await: (awaitId, hash) => {
         const controller = new AbortController();
         pendingAwaits.set(awaitId, controller);
@@ -389,9 +236,8 @@ export function buildEpicRuntimeCorePorts(
       },
       cancel: (awaitId) => {
         const controller = pendingAwaits.get(awaitId);
-        // `false` for an id that was never pending or has already settled.
-        // Bytes can land while a cancel is in flight, so that race is
-        // inherent - a no-op, not a fault.
+        // `false` for an id that was never pending or has already settled. Bytes can land while a cancel
+        // is in flight, so that race is inherent - a no-op, not a fault.
         if (controller === undefined) return false;
         pendingAwaits.delete(awaitId);
         controller.abort();
@@ -399,26 +245,12 @@ export function buildEpicRuntimeCorePorts(
       },
       cancelAll: () => {
         const pending = [...pendingAwaits.values()];
-        // Cleared BEFORE aborting: each abort settles a promise whose `.then`
-        // deletes its own entry, and mutating the map mid-iteration is how a
-        // wait gets skipped and left parked.
+        // Cleared BEFORE aborting: each abort settles a promise whose `.then` deletes its own entry, and
+        // mutating the map mid-iteration is how a wait gets skipped and left parked.
         pendingAwaits.clear();
         for (const controller of pending) controller.abort();
       },
-      /**
-       * NON-WAITING, which is this port's whole contract.
-       *
-       * The runtime's own read waits indefinitely for a hash that has not
-       * synced and resolves `null` only when its signal aborts - deliberately,
-       * for a main-thread caller that holds one. Across the bridge there is no
-       * signal to abort, so an unguarded read parks the call forever and holds
-       * a call slot open for the life of the worker.
-       *
-       * The guard that used to live on main - `hasAttachmentBytes`, which
-       * every caller was required to check first and which was documented as
-       * "not optional" - lives HERE now, where it is a local synchronous read
-       * and cannot be forgotten by a caller.
-       */
+      /** NON-WAITING, which is this port's whole contract. */
       read: (hash) =>
         source.hasAttachmentBytes(hash)
           ? source.readAttachmentBytes(hash, new AbortController().signal)
@@ -436,13 +268,8 @@ export function buildEpicRuntimeCorePorts(
         }
         const cold = source.encodeColdState(docKey);
         if (cold === null) {
-          // No COLD state, but the room may still be materialized with no
-          // stated identity - the `@1` arm, whose snapshots claim none by
-          // design. Serve those FORWARD-ONLY: real bytes, `docGuid: null`, and
-          // the lease bridge never posts a demote for them. Refusing here
-          // instead would take the whole `@1` arm dark, since its bodies
-          // reached editors by reference before the relocation and have no
-          // other way across now.
+          // No COLD state, but the room may still be materialized with no stated identity - the `@1` arm,
+          // whose snapshots claim none by design.
           const live = source.encodeForwardOnly(docKey);
           if (live !== null) {
             attachBodyObserver(docKey);
@@ -457,18 +284,7 @@ export function buildEpicRuntimeCorePorts(
             });
           }
         }
-        // No bytes on either path. This is AWAITING SEED, not not-held, and the
-        // difference is the whole defect: on the lane arm the lease taken above
-        // IS the `artifact.subscribe` open, so releasing here closes the
-        // subscription that was about to deliver these bytes - and nothing ever
-        // retries, because the tile's effect keys on a docKey that does not
-        // move. Every body on that arm was unreachable.
-        //
-        // The demand is RETAINED instead, and main re-calls when the
-        // projection says this artifact is ready
-        // (`retryAwaitingBodies`). `null` is still not empty bytes: a
-        // zero-length update applies cleanly and yields an empty document, so
-        // the answer states no bytes rather than handing over none.
+        // No bytes on either path.
         if (cold === null) {
           holdAwaitingDemand(docKey, release);
           return Promise.resolve({
@@ -499,19 +315,11 @@ export function buildEpicRuntimeCorePorts(
           input.update,
           input.docGuid,
         );
-        // The refusal REASON now CROSSES. It stopped here while every refusal
-        // meant the same thing to main; `pinned` does not - it says the room
-        // is still in use and will settle later, where `newer-generation` says
-        // these bytes belong to a body that has been replaced. Main's
-        // behaviour is still identical for all three, so nothing branches on
-        // it; it crosses so the seam is readable when one arrives where
-        // another was expected.
+        // The refusal REASON now CROSSES.
         if (settlement.accepted) {
           detachBodyObserver(input.docKey);
-          // Released ONLY on acceptance, and that asymmetry is the contract: a
-          // refusal means the main thread KEEPS its live doc, so the demand and
-          // the tier lease that doc stands on are still in use. Releasing on a
-          // refusal would unsubscribe a body the user still has open.
+          // Released ONLY on acceptance, and that asymmetry is the contract: a refusal means the main thread
+          // KEEPS its live doc, so the demand and the tier lease that doc stands on are still in use.
           heldLeases.get(input.docKey)?.();
           heldLeases.delete(input.docKey);
         }
@@ -531,37 +339,16 @@ export function buildEpicRuntimeCorePorts(
       },
       heldDocKeys: () => [...heldLeases.keys()],
       release: (docKey) => {
-        // REFUSED while the tier still pins this room. A forward-only body has
-        // no settle to be refused, so this is the only channel its pins have -
-        // and without it main releases a room the tier considers occupied.
+        // REFUSED while the tier still pins this room.
         if (source.isBodyPinned(docKey)) {
           return { released: false, reason: "pinned" as const };
         }
-        // The FORWARD-ONLY lifecycle's terminator, and the twin of the
-        // `settlement.accepted` branch above rather than a second way into it.
-        //
-        // It deliberately touches NOTHING that path touches beyond these two
-        // maps: no settlement is recorded, no bytes are read, no generation is
-        // compared. A body has exactly one of the two lifecycles - identity-
-        // named bodies settle their bytes back, forward-only bodies release
-        // their hold - decided by whether its seed stated an identity, and the
-        // two must not learn about each other.
-        //
-        // IDEMPOTENT: `Map.get` on an absent key is `undefined` and both
-        // deletes are no-ops, so a release that races a re-acquire or arrives
-        // twice after a reconnect costs nothing. That is load-bearing rather
-        // than defensive - this is a fire-and-forget event, so the sender has
-        // no answer to deduplicate on.
+        // The FORWARD-ONLY lifecycle's terminator, and the twin of the `settlement.accepted` branch above
+        // rather than a second way into it.
         detachBodyObserver(docKey);
         heldLeases.get(docKey)?.();
         heldLeases.delete(docKey);
-        // The AWAITING half of the same terminator. A consumer that unmounts
-        // while its body is still waiting for a seed sends this release like
-        // any other, and the demand retained for it is the only thing holding
-        // that subscription open - so it comes off here or it never does, and
-        // the tab stays subscribed to a body nobody is looking at for the rest
-        // of the session. Disjoint from `heldLeases` by construction, so at
-        // most one of these two lines does anything.
+        // The AWAITING half of the same terminator.
         awaitingDemand.get(docKey)?.();
         awaitingDemand.delete(docKey);
         return { released: true, reason: null };
@@ -574,13 +361,8 @@ export function buildEpicRuntimeCorePorts(
     },
     mutations: {
       /**
-       * One branch per kind rather than a generic dispatch, and the repetition
-       * is the safety - the same reasoning `CALL_BUILDERS` states in the
-       * protocol. Inside each branch the kind is a literal, so TypeScript
-       * checks the answer against THAT kind's response type; a generic
-       * dispatch over the union can only be made to compile with an assertion,
-       * at exactly the point where a wrong-shaped answer would be bound to a
-       * kind.
+       * One branch per kind rather than a generic dispatch, and the repetition is the safety - the same
+       * reasoning `CALL_BUILDERS` states in the protocol.
        */
       apply: (mutation) => {
         switch (mutation.kind) {
@@ -673,19 +455,11 @@ export function buildEpicRuntimeCorePorts(
           : { outcome: "enqueued", commandId };
       },
       /**
-       * One branch per kind, exhaustive, no default - so a command added to
-       * the vocabulary without a branch here fails to compile rather than
-       * being silently dropped at runtime. That is the whole exhaustiveness
-       * guarantee for a direction with no responses.
+       * One branch per kind, exhaustive, no default - so a command added to the vocabulary without a
+       * branch here fails to compile rather than being silently dropped at runtime.
        */
       apply: (command) => {
-        // Dispatched by FAMILY, not one 15-arm switch. The families are real
-        // groupings - record-plane ingest, payload-free control gestures, and
-        // the ones carrying an argument - and splitting on them is also what
-        // keeps each function readable. Exhaustiveness survives the split:
-        // anything the two predicates do not claim lands in
-        // `applyArgumentCommand`, whose `assertNever` makes an unhandled kind
-        // a COMPILE error rather than a silent drop.
+        // Dispatched by FAMILY, not one 15-arm switch.
         if (isRecordPlaneCommand(command)) {
           applyRecordPlaneCommand(source, command);
           return;
@@ -703,11 +477,8 @@ export function buildEpicRuntimeCorePorts(
       // half-emptied map - the same ordering `cancelAll` uses.
       bodyObservers.clear();
       for (const detach of detachers) detach();
-      // Retained demand is the OTHER thing a teardown leaves behind, and it is
-      // invisible to the loop above: an awaiting body has no observer to
-      // detach, by design, so a corner that only walked `bodyObservers` would
-      // skip exactly the entries this map exists to hold. Same order, same
-      // reason.
+      // Retained demand is the OTHER thing a teardown leaves behind, and it is invisible to the loop
+      // above: an awaiting body has no observer to detach, by design, so a corner that only walked
       const awaited = [...awaitingDemand.values()];
       awaitingDemand.clear();
       for (const release of awaited) release();
@@ -717,9 +488,8 @@ export function buildEpicRuntimeCorePorts(
       apply: (update, asLocalEdit) =>
         source.applyRootUpdate(update, asLocalEdit),
     },
-    // The core's documented shutdown order, mapped onto the runtime's two
-    // teardown members: the core stops serving, then the transport closes,
-    // then the durable store. `dispose()` owns the store, so it goes last.
+    // The core's documented shutdown order, mapped onto the runtime's two teardown members: the core
+    // stops serving, then the transport closes, then the durable store.
     transport: {
       close: () => {
         source.detachTransport();
@@ -767,15 +537,7 @@ type ArgumentCommand = Exclude<
   RecordPlaneCommand | ControlCommand
 >;
 
-/**
- * Switches rather than module-scoped `Set`s, and that is not a style choice.
- *
- * A `const KINDS = new Set([...])` at module scope is process state, and the
- * worker-graph ratchet reads it as exactly that - correctly, since it cannot
- * know the set is never mutated. This module is on the worker entry's value
- * graph, whose allowlist is empty and stays empty, so the membership test has
- * to be stateless.
- */
+/** Switches rather than module-scoped `Set`s, and that is not a style choice. */
 function isRecordPlaneCommand(
   command: RuntimeCommand,
 ): command is RecordPlaneCommand {
@@ -886,16 +648,12 @@ function applyArgumentCommand(
       source.discardWriteCommand(command.payload.commandId);
       return;
     case "detach-transport":
-      // Ends the transport while the replica lives on. The member is
-      // idempotent (`transportDetached` latches worker-side), which is what
-      // makes a duplicated command harmless rather than something this
-      // dispatch has to guard.
+      // Ends the transport while the replica lives on.
       source.detachTransport();
       return;
     default:
-      // The exhaustiveness guarantee for the whole vocabulary: a kind added to
-      // `RuntimeCommandMap` and to neither family above lands here, and
-      // `command` is then not `never`, which does not compile.
+      // The exhaustiveness guarantee for the whole vocabulary: a kind added to `RuntimeCommandMap` and
+      // to neither family above lands here, and `command` is then not `never`, which does not compile.
       return assertNever(command);
   }
 }

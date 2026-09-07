@@ -10,11 +10,7 @@ import {
 } from "@/lib/host/session-connectivity";
 
 /**
- * Only these tests exercise `createSessionConnectivityStore` and
- * `isAnnouncedInterruption` directly - the `isReady`, `now` and `pollMs`
- * arguments exist precisely so the store can be driven without a real
- * transport or a real clock. The React hooks built on top of it
- * (`useHostSessionConnectivity`, `useHostSessionWake`) are out of scope here.
+ * Only these tests exercise `createSessionConnectivityStore` and `isAnnouncedInterruption` directly - the `isReady`, `now` and `pollMs` arguments exist precisely so the store can be driven without a real transport or a real clock.
  */
 
 function fakeStreamSession(): IStreamSession {
@@ -38,17 +34,8 @@ interface FakeHostStreamClient extends IHostStreamClient<HostStreamRpcRegistry> 
 }
 
 /**
- * A minimal stand-in for the real transport client. Only
- * `subscribeAvailabilityRecovered` and `onClosed` are wired to a live listener
- * set - the store's `subscribe` calls exactly those two - and the rest of the
- * interface is stubbed with real no-op implementations so the fake type-checks
- * against `IHostStreamClient<HostStreamRpcRegistry>` unchanged.
- *
- * `isReady` is fed from the SAME source as the store's injected readiness
- * thunk. The store reads the injected one, but the two answering differently
- * would be a fake that cannot occur in production, and a later reader wiring
- * the store to `client.isReady()` would then get silently inconsistent tests.
- * `reconnectAll` belongs to `useHostSessionWake` and is never called here.
+ * A minimal stand-in for the real transport client.
+ * Only `subscribeAvailabilityRecovered` and `onClosed` are wired to a live listener set - the store's `subscribe` calls exactly those two - and the rest of the interface is stubbed with real no-op implementations so the fake type-checks against.
  */
 function createFakeHostStreamClient(
   isReady: () => boolean,
@@ -116,11 +103,8 @@ function createReadyControl(initial: boolean): {
 }
 
 /**
- * A controllable `now` double paired with the fake timer clock. `advance`
- * moves both together: the fake timer is what fires a poll tick or an episode
- * deadline, and the injected clock is what the resulting `refresh()` reads to
- * decide the outcome - moving only one of them would either never fire the
- * timer or fire it against a clock that has not actually moved.
+ * A controllable `now` double paired with the fake timer clock.
+ * `advance` moves both together: the fake timer is what fires a poll tick or an episode deadline, and the injected clock is what the resulting `refresh()` reads to decide the outcome - moving only one of them would either never fire the timer or fire it.
  */
 function createControllableClock(): {
   readonly now: () => number;
@@ -137,9 +121,8 @@ function createControllableClock(): {
 }
 
 /**
- * Deliberately not the production cadence. These cases are about the ORDER and
- * the boundaries of the transitions, and a poll far coarser than the announce
- * window makes it visible which of the two actually decided each one.
+ * Deliberately not the production cadence.
+ * These cases are about the ORDER and the boundaries of the transitions, and a poll far coarser than the announce window makes it visible which of the two actually decided each one.
  */
 const POLL_MS = 1_000;
 
@@ -218,9 +201,7 @@ describe("createSessionConnectivityStore", () => {
   });
 
   it('holds "settling" until the announce deadline, then reports "interrupted"', () => {
-    // The settling window is a real state with a real reason - a drop that has
-    // not yet outlived the transport's own first-redial recovery - so it gets
-    // its own assertion rather than being skipped over.
+    // The settling window is a real state with a real reason - a drop that has not yet outlived the transport's own first-redial recovery - so it gets its own assertion rather than being skipped over.
     const ready = createReadyControl(true);
     const clock = createControllableClock();
     const store = createSessionConnectivityStore({
@@ -248,10 +229,8 @@ describe("createSessionConnectivityStore", () => {
   });
 
   it("announces on the episode deadline rather than on the next poll tick", () => {
-    // The poll decides when a drop is NOTICED; the one-shot armed at that
-    // moment decides when it is announced. With a poll far coarser than the
-    // announce window, a poll-quantized implementation would still read
-    // "settling" here.
+    // The poll decides when a drop is NOTICED; the one-shot armed at that moment decides when it is announced.
+    // With a poll far coarser than the announce window, a poll-quantized implementation would still read "settling" here.
     const ready = createReadyControl(true);
     const clock = createControllableClock();
     const client = createFakeHostStreamClient(ready.isReady);
@@ -304,9 +283,7 @@ describe("createSessionConnectivityStore", () => {
   });
 
   it('stays "interrupted-prolonged" through a recovery emission whose session is still not ready', () => {
-    // The stickiness this proves: a redial that gets far enough to fire the
-    // recovery signal and then fails again, before the session is actually
-    // ready, must not walk the verdict back down to reassuring wording.
+    // The stickiness this proves: a redial that gets far enough to fire the recovery signal and then fails again, before the session is actually ready, must not walk the verdict back down to reassuring wording.
     const ready = createReadyControl(true);
     const clock = createControllableClock();
     const client = createFakeHostStreamClient(ready.isReady);
@@ -321,9 +298,8 @@ describe("createSessionConnectivityStore", () => {
     const dispose = store.subscribe(vi.fn());
 
     ready.setReady(false);
-    // Stepped, not one jump: the first advance is what lets a poll tick
-    // OBSERVE the drop and start the episode. A single large advance would
-    // date the outage from the end of the jump instead.
+    // Stepped, not one jump: the first advance is what lets a poll tick OBSERVE the drop and start the episode.
+    // A single large advance would date the outage from the end of the jump instead.
     clock.advance(POLL_MS);
     clock.advance(SESSION_CONNECTIVITY_ESCALATE_AFTER_MS);
     expect(store.getSnapshot()).toBe("interrupted-prolonged");
@@ -335,9 +311,7 @@ describe("createSessionConnectivityStore", () => {
   });
 
   it('starts a fresh episode at "settling" after reaching ready again', () => {
-    // A new outage is not the old one: reaching ready clears the episode, or a
-    // session that recovers and drops again would skip straight back to the
-    // strongest wording for a brand new drop.
+    // A new outage is not the old one: reaching ready clears the episode, or a session that recovers and drops again would skip straight back to the strongest wording for a brand new drop.
     const ready = createReadyControl(true);
     const clock = createControllableClock();
     const store = createSessionConnectivityStore({
@@ -399,10 +373,7 @@ describe("createSessionConnectivityStore", () => {
 
   it("keeps the surviving subscriber's signals when an overlapping subscription is disposed", () => {
     // React can hold an old and a new subscription at once across a re-render.
-    // Every signal is registered ONCE for the store, so a per-subscription
-    // teardown would cancel the deadlines and delete the client registrations
-    // that the surviving subscriber is still relying on - leaving it attached
-    // to a store that has quietly stopped listening to anything.
+    // Every signal is registered ONCE for the store, so a per-subscription teardown would cancel the deadlines and delete the client registrations that the surviving subscriber is still relying on - leaving it attached to a store that has quietly stopped.
     const ready = createReadyControl(true);
     const clock = createControllableClock();
     const client = createFakeHostStreamClient(ready.isReady);
@@ -447,9 +418,8 @@ describe("createSessionConnectivityStore", () => {
   });
 
   it("resumes the current episode's remaining deadlines when a listener re-subscribes mid-outage", () => {
-    // A remount during an outage must not restart its clock. If it did, a
-    // surface that re-subscribed often enough would postpone its own
-    // announcement indefinitely while the connection stayed down.
+    // A remount during an outage must not restart its clock.
+    // If it did, a surface that re-subscribed often enough would postpone its own announcement indefinitely while the connection stayed down.
     const ready = createReadyControl(true);
     const clock = createControllableClock();
     const client = createFakeHostStreamClient(ready.isReady);
@@ -510,11 +480,7 @@ describe("createSessionConnectivityStore", () => {
   });
 
   it("clears the armed episode deadlines once the last listener leaves", () => {
-    // The poll and the client subscriptions are torn down explicitly, so the
-    // episode deadlines are the only timers that could still fire into a store
-    // nobody is watching - and they are armed precisely when an outage is
-    // live, which is when a store is most likely to be torn down. The episode
-    // itself survives; only its timers stand down.
+    // The poll and the client subscriptions are torn down explicitly, so the episode deadlines are the only timers that could still fire into a store nobody is watching - and they are armed precisely when an outage is live, which is when a store is most likely.
     const ready = createReadyControl(true);
     const clock = createControllableClock();
     const client = createFakeHostStreamClient(ready.isReady);

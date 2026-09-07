@@ -32,12 +32,8 @@ function checkingRow(): WorktreeBindingSelectorRowV12 {
   };
 }
 
-/**
- * The row is visible but not selectable. This is the case the press placement
- * turns on: a disabled `CommandItem` takes `pointer-events-none` for its whole
- * box, so a recognizer on the ROW would be dead here - on the one row whose
- * location someone most wants to read.
- */
+/** This is the case the press placement turns on: a disabled `CommandItem` takes `pointer-events-none` for its
+ * whole box, so a recognizer on the row would be dead here. */
 const DISABLED_BADGE: WorktreeFolderRowBadge = {
   label: "checking",
   pending: true,
@@ -46,12 +42,7 @@ const DISABLED_BADGE: WorktreeFolderRowBadge = {
   disabled: true,
 };
 
-/**
- * A ready row, which is the only kind that can prove anything about the sheet's
- * dismissal: `WorktreeFolderList` returns before `onSelect` when a row is
- * disabled, so asserting "the row was not selected" against a DISABLED row
- * passes whether or not the click reached it.
- */
+/** A ready row, which is the only kind that can prove anything about the sheet's dismissal. */
 const READY_BADGE: WorktreeFolderRowBadge | null = null;
 
 function renderList(
@@ -103,16 +94,12 @@ describe("WorktreeFolderList path on touch", () => {
   });
 
   it("does not select the row underneath when the sheet is dismissed", () => {
-    // A device run saw a terminal launch when the sheet's Close was tapped,
-    // and could not tell a real pass-through from an artefact of synthetic
-    // input. This is the half that is decidable here: dismissing the sheet
-    // must not reach the row that raised it. A row-level recognizer, or a
-    // sheet rendered inside the row's own click path, would fail this.
+    // This is the half that is decidable here: dismissing the sheet must not reach the row that raised it. A
+    // row-level recognizer, or a sheet rendered inside the row's own click path, would fail this.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const onSelect = vi.fn();
-    // ENABLED, deliberately: the disabled arm returns before `onSelect`, so the
-    // same assertion against a disabled row would pass without the sheet
-    // containing anything.
+    // Enabled, deliberately: the disabled arm returns before `onSelect`, so the same assertion against a disabled
+    // row would pass without the sheet containing anything.
     renderList(onSelect, READY_BADGE);
 
     const line = screen.getByText(RUNNING_DIR);
@@ -127,10 +114,8 @@ describe("WorktreeFolderList path on touch", () => {
       vi.advanceTimersByTime(500);
     });
 
-    // Every surface inside the sheet, not just Close. A portal's clicks bubble
-    // through React ancestry regardless of which element they start on, so the
-    // path text a user selects and the overlay they tap to dismiss reach the
-    // row exactly as the button does.
+    // A portal's clicks bubble through React ancestry regardless of which element they start on, so the path text
+    // a user selects and the overlay they tap to dismiss reach the row exactly as the button does.
     const sheet = screen.getByRole("dialog");
     fireEvent.click(within(sheet).getByText(RUNNING_DIR));
     expect(onSelect).not.toHaveBeenCalled();
@@ -138,9 +123,8 @@ describe("WorktreeFolderList path on touch", () => {
     // The overlay too: it is a sibling of the content inside the same portal,
     // so it shares the row's React ancestry exactly as the content does.
     const overlay = document.querySelector('[data-slot="sheet-overlay"]');
-    // Asserted, not guarded: a `if (overlay !== null)` here would skip silently
-    // the day the slot is renamed, which is the same shape as the disabled-row
-    // fixture this test was just rescued from.
+    // Asserted, not guarded: a `if (overlay !== null)` here would skip silently the day the slot is renamed, which
+    // is the same shape as the disabled-row fixture this test was just rescued from.
     if (!(overlay instanceof Element)) {
       throw new Error("the sheet rendered no overlay");
     }

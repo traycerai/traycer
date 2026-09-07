@@ -20,24 +20,12 @@ const tuiAgent = vi.hoisted(() => ({
 const wireProfiles = vi.hoisted(() => ({
   current: [] as ReadonlyArray<ProviderProfile>,
 }));
-/** What the host answers `epic.getChatRunSettings` with, and whether it was
- *  asked at all - the second half matters as much as the first, because the
- *  read must stay OFF for the owners that still have local settings. */
+/** What the host answers `epic.getChatRunSettings` with, and whether it was asked at all - the second half
+ * matters as much as the first, because the read must stay off for the owners that still have local settings. */
 const fetchedSettings = vi.hoisted(() => ({
   current: null as ChatRunSettings | null,
-  /**
-   * Whether the host read has SETTLED successfully, kept separate from
-   * `current` because the header has to tell an answer of `null` apart from no
-   * answer at all. A settled `{ settings: null }` is the host stating the chat
-   * has no persisted tuple, which OUTRANKS a stale local one; an unsettled read
-   * (in flight, errored, unsupported, or no reachable host) must fall back to
-   * local instead. Collapsing the two into "data is null" is exactly the bug
-   * these tests exist to catch.
-   *
-   * Defaults to NOT answered, so the suites below that are about rendering a
-   * LOCAL tuple keep exercising that path; a settled host answer is opted into
-   * per test.
-   */
+  /** A settled `{ settings: null }` is the host stating the chat has no persisted tuple, which outranks a stale
+   * local one. */
   answered: false,
   lastEnabled: null as boolean | null,
 }));
@@ -47,9 +35,8 @@ const hostResolution = vi.hoisted(() => ({
   resolveToNull: false,
   byHostId: new Map<string, { readonly getActiveHostId: () => string }>(),
 }));
-/** The clients each host-scoped read actually received, so tests assert WHICH
- *  host served the catalog and the provider list - not just what data came
- *  back (data the mocks themselves supplied). */
+/** The clients each host-scoped read actually received, so tests assert which host served the catalog and the
+ * provider list - not just what data came back (data the mocks themselves supplied). */
 const scopedReads = vi.hoisted(() => ({
   catalogClients: [] as unknown[],
   providersClients: [] as unknown[],
@@ -82,19 +69,15 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     if (hostId === null || hostResolution.resolveToNull) return null;
     const existing = hostResolution.byHostId.get(hostId);
     if (existing !== undefined) return existing;
-    // One stable sentinel per host id, like the real hook's memoized
-    // requester - the identity assertions below compare what the catalog and
-    // provider-list reads received, which only means "same host" if the same
-    // id yields the same object.
+    // One stable sentinel per host id, like the real hook's memoized requester.
     const sentinel = { getActiveHostId: () => hostId };
     hostResolution.byHostId.set(hostId, sentinel);
     return sentinel;
   },
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  // Client-scoped like the real hook: a `null` client is a disabled read and
-  // yields an EMPTY catalog (never another host's entries), which is what
-  // drives the raw-slug fallback the unresolvable-host test asserts.
+  // Client-scoped like the real hook: a `null` client is a disabled read and yields an empty catalog (never
+  // another host's entries), which is what drives the raw-slug fallback the unresolvable-host test asserts.
   useGuiHarnessCatalogForClient: (client: unknown) => {
     scopedReads.catalogClients.push(client);
     return {
@@ -104,10 +87,8 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       modelsLoading: false,
     };
   },
-  // The header's targeted subject-harness warmup (its catalog read is
-  // `"cached-only"`, so this is the ONLY model fetch the card may cause).
-  // Recorded so tests can assert it targets the owner's host and the subject
-  // harness - never a fan-out and never another host's client.
+  // Recorded so tests can assert it targets the owner's host and the subject harness - never a fan-out and never
+  // another host's client.
   useGuiHarnessModelsWarmup: (
     client: unknown,
     harnessId: string | null,
@@ -137,8 +118,8 @@ const catalogHarnesses = vi.hoisted(() => () => [
         ],
         metadata: {},
       },
-      // A SECOND model, so a host tuple and a local tuple can disagree
-      // visibly - which is the only way to test which one the header trusts.
+      // A second model, so a host tuple and a local tuple can disagree visibly - which is the only way to test which
+      // one the header trusts.
       {
         harnessId: "claude",
         slug: "opus-4.1",
@@ -154,9 +135,8 @@ const catalogHarnesses = vi.hoisted(() => () => [
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: (client: unknown) => {
     scopedReads.providersClients.push(client);
-    // `claude-code` is the WIRE id for the `claude` harness; the header has to
-    // map across that boundary to find these at all. A `null` client is a
-    // disabled read (real hook contract): no data.
+    // `claude-code` is the wire id for the `claude` harness; the header has to map across that boundary to find
+    // these at all.
     return {
       data:
         client === null
@@ -169,10 +149,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     };
   },
 }));
-// Records `enabled` rather than ignoring it: a mock that always answers would
-// let the header read a fetched tuple it never actually requested, and the
-// "store settings win, no round trip" half of the contract would pass
-// vacuously.
+// Records `enabled` rather than ignoring it: a mock that always answers would let the header read a fetched
+// tuple it never actually requested, and the "store settings win.
 vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
   useChatRunSettings: (args: { readonly enabled: boolean }) => {
     fetchedSettings.lastEnabled = args.enabled;
@@ -269,11 +247,8 @@ function permissionIconClass(): string {
   return svg?.getAttribute("class") ?? "";
 }
 
-/**
- * The `AccentDot` itself, found by its inline accent color - the wrapper's
- * `textContent` is unusable here because the harness brand SVG carries its own
- * `<title>`.
- */
+/** The `AccentDot` itself, found by its inline accent color - the wrapper's `textContent` is unusable here
+ * because the harness brand SVG carries its own `<title>`. */
 function accentDotText(): string | null {
   const mark = screen.getByTestId("owner-settings-harness-mark");
   const dot = mark.querySelector('span[style*="background-color"]');
@@ -303,11 +278,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
   });
 
   it("warms exactly the subject harness's models on the owner's host - the card's only permitted model fetch", () => {
-    // The catalog read is `"cached-only"` (an all-harness `listModels`
-    // fan-out here would spawn every provider server on the owner's host to
-    // label one tuple), so the targeted warmup is what keeps a cold remote
-    // owner's model label resolving instead of falling back to a raw slug
-    // forever. It must aim at the subject harness on the OWNER's client.
+    // The catalog read is `"cached-only"` (an all-harness `listModels` fan-out here would spawn every provider
+    // server on the owner's host to label one tuple).
     renderChatHeader({
       permissionMode: "full_access",
       profileId: null,
@@ -326,9 +298,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
   });
 
   it("keeps the warmup disabled while the subject harness is unavailable - a tombstoned subject must not hit its provider's listModels", () => {
-    // The tuple is persisted history: it can name a harness the owner's host
-    // has since disabled or lost. `hasSubject` is still true (the card
-    // renders, with the raw-slug fallback), so availability is the ONLY thing
+    // `hasSubject` is still true (the card renders, with the raw-slug fallback), so availability is the only thing
     // standing between every card open and a doomed listModels attempt.
     catalogAvailability.subjectAvailable = false;
     renderChatHeader({
@@ -345,12 +315,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
   });
 
   it("reads the harness catalog through the OWNER's host client - the same one the provider list uses", () => {
-    // The regression this guards: the catalog read went through the app-wide
-    // default host (`useGuiHarnessCatalog(null, …)`) while the provider list
-    // beside it was scoped to `props.hostId` - so a chat on another of the
-    // viewer's hosts labeled its model from the WRONG host's catalog (a model
-    // only the owner's host offers rendered as a raw slug even with that
-    // host's catalog warm).
+    // The regression this guards: the catalog read went through the app-wide default host
+    // (`useGuiHarnessCatalog(null, …)`) while the provider list beside it was scoped to `props.hostId`.
     renderChatHeader({
       permissionMode: "full_access",
       profileId: null,
@@ -420,11 +386,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
   });
 
   it("keeps the settings line unwrapped so the card widens instead", () => {
-    // jsdom does no layout, so this asserts the CONTRACT rather than a measured
-    // width: the row must not wrap, and the model must be the segment that
-    // gives way when the card hits its ceiling. Re-adding `flex-wrap` here is
-    // exactly the regression - it silently restores the two-line header the
-    // widening behaviour replaced.
+    // jsdom does no layout, so this asserts the contract rather than a measured width: the row must not wrap, and
+    // the model must be the segment that gives way when the card hits its ceiling.
     renderChatHeader({
       permissionMode: "full_access",
       profileId: null,
@@ -445,8 +408,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
   });
 
   it("does not render Full access behind a padlock", () => {
-    // The specific inversion reported: the LEAST restricted mode was the one
-    // drawn as locked shut.
+    // The specific inversion reported: the least restricted mode was the one drawn as locked shut.
     renderChatHeader({
       permissionMode: "full_access",
       profileId: null,
@@ -574,14 +536,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
   });
 });
 
-/**
- * The single-write regression: a chat that exists only as a host registry row
- * has `settings: null` on its projection (`chatProjectionFromRecord`), because
- * the row carries a harness-id summary and not the tuple. Before the per-chat
- * read this header returned `null` for such a chat and the whole line - model,
- * reasoning, permission mode, profile dot and the relative timestamp - simply
- * vanished from the hover card.
- */
+/** The single-write regression: a chat that exists only as a host registry row has `settings: null` on its
+ * projection (`chatProjectionFromRecord`), because the row carries a harness-id summary and not the tuple. */
 describe("chat settings sourced from the host", () => {
   afterEach(() => {
     cleanup();
@@ -642,9 +598,7 @@ describe("chat settings sourced from the host", () => {
   });
 
   it("renders nothing when the host answers no tuple", () => {
-    // `settings: null` from the host is the honest "no tuple here" - a legacy
-    // record with nothing persisted. With no local tuple either, that must read
-    // as an absent header, never as a half-populated line.
+    // With no local tuple either, that must read as an absent header, never as a half-populated line.
     fetchedSettings.answered = true;
     fetchedSettings.current = null;
 
@@ -655,13 +609,8 @@ describe("chat settings sourced from the host", () => {
   });
 
   it("prefers the host tuple over a local one that disagrees", () => {
-    // A pre-pivot chat still has a doc entry, and `unionChatsSlice` deliberately
-    // prefers its `settings` over the record's. But since the single-write pivot
-    // NOTHING rewrites that entry - `epic.updateChatRunSettings` and
-    // `epic.updateChatProfile` reach only the host's own store - so it is frozen
-    // at whatever it held when the doc was last written. Gating the read on its
-    // absence, or letting it win the coalesce, would pin the card to values that
-    // stopped being true at the user's first model change.
+    // Gating the read on its absence, or letting it win the coalesce, would pin the card to values that stopped
+    // being true at the user's first model change.
     fetchedSettings.answered = true;
     fetchedSettings.current = {
       harnessId: "claude",
@@ -687,9 +636,8 @@ describe("chat settings sourced from the host", () => {
   });
 
   it("falls back to the local tuple while the host read has not answered", () => {
-    // In flight, errored, unsupported, or an unreachable owner host whose query
-    // never runs - none of them should blank a row that already had something
-    // true enough to show.
+    // In flight, errored, unsupported, or an unreachable owner host whose query never runs - none of them should
+    // blank a row that already had something true enough to show.
     fetchedSettings.answered = false;
     fetchedSettings.current = null;
 
@@ -706,11 +654,8 @@ describe("chat settings sourced from the host", () => {
   });
 
   it("honors a settled null over a frozen local tuple", () => {
-    // The other side of the fallback, and the one that is easy to get wrong: a
-    // SUCCESSFUL `{ settings: null }` is the host saying this chat has no
-    // persisted tuple, not the absence of an answer. Coalescing the two with
-    // `??` would fall through to the frozen doc tuple the host just
-    // contradicted, which is the very staleness this read exists to end.
+    // The other side of the fallback, and the one that is easy to get wrong: a successful `{ settings: null }` is
+    // the host saying this chat has no persisted tuple, not the absence of an answer.
     fetchedSettings.answered = true;
     fetchedSettings.current = null;
 

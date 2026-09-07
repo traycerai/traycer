@@ -1,23 +1,11 @@
 /**
  * The scheme gate every relay dial passes, on BOTH legs.
- *
- * The attach grant rides in the dial URL's query string, and everything after
- * it is Noise ciphertext over that socket - so a `ws:` dial hands the grant to
- * anything on the path, and the E2E channel it protects never gets a chance to
- * matter. Cleartext is allowed only against a loopback relay, which is the
- * local development default (`transport/remote/config.ts` bakes
- * `ws://localhost:8787/attach`).
- *
- * It lives in the protocol package because the host leg and the client leg
- * build the same grant-in-query URL from the same configured base, and a rule
- * two files apart is a rule that drifts.
+ * The attach grant rides in the dial URL's query string, and everything after it is Noise ciphertext over that socket - so a `ws:` dial hands the grant to anything on the path, and the E2E channel it protects never gets.
  */
 
 /**
  * A dial was refused because its attach URL is neither `wss:` nor loopback.
- *
- * Carries the SCHEME only, never the URL: the URL holds the attach grant, and
- * this reason reaches a log on both legs.
+ * Carries the SCHEME only, never the URL: the URL holds the attach grant, and this reason reaches a log on both legs.
  */
 export class InsecureRelaySchemeError extends Error {
   readonly scheme: string;
@@ -29,15 +17,7 @@ export class InsecureRelaySchemeError extends Error {
   }
 }
 
-/**
- * Loopback literals, plus the NAME `localhost`.
- *
- * The name is not the address, and a hosts-file entry could in principle point
- * it elsewhere - but editing `/etc/hosts` needs root, and a peer with root has
- * strictly better moves than downgrading one WebSocket. What this buys is the
- * developer stack working out of the box, which is the whole reason cleartext
- * is admitted at all.
- */
+/** Loopback literals, plus the NAME `localhost`. */
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set([
   "127.0.0.1",
   "::1",
@@ -45,15 +25,7 @@ const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set([
   "localhost",
 ]);
 
-/**
- * Throws {@link InsecureRelaySchemeError} unless `attachUrl` is `wss:` or a
- * cleartext loopback URL.
- *
- * Throws rather than degrades on both legs, because both already catch a
- * synchronous throw out of the socket construction and re-arm their backoff
- * loop (`SessionFanOut.dial`, `RemoteSession.beginConnectGuarded`) - so a
- * misconfigured URL parks the uplink instead of leaking the grant.
- */
+/** Throws {@link InsecureRelaySchemeError} unless `attachUrl` is `wss:` or a cleartext loopback URL. */
 export function assertRelayAttachUrlSecure(attachUrl: string): void {
   let url: URL;
   try {

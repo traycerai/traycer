@@ -20,18 +20,7 @@ interface AwaitModelProviderAuthContext {
 }
 
 /**
- * One BOUNDED status read for an in-flight OAuth attempt.
- *
- * A mutation rather than a query even though it reads: the caller drives the
- * cadence from its own waiting panel and each tick must produce a fresh answer,
- * which is the opposite of what a cached, invalidation-driven query slot is
- * for. It also needs no long-poll budget - the host answers from its
- * pending-auth registry immediately, so the default response frame applies
- * (unlike `providers.awaitLogin`, which blocks on a child process).
- *
- * Errors are typed arms on a SUCCESSFUL response, so there is no `onError`
- * toast: `attempt_superseded` in particular is a normal, expected outcome
- * (a newer attempt owns the surface) and the caller stands down silently on it.
+ * Bounded status read as a mutation so each tick is fresh. Typed errors ride a successful response; no `onError` toast (`attempt_superseded` is expected).
  */
 export function useProvidersAwaitModelProviderAuth(): UseMutationResult<
   ProvidersAwaitModelProviderAuthResponse,

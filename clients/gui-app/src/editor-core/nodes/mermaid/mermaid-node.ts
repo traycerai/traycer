@@ -14,19 +14,7 @@ export interface MermaidAttrs {
 }
 
 /**
- * Atom block that renders a Mermaid diagram. Persisted as a ` ```mermaid `
- * fence in markdown; emitted as `<div data-type="mermaid-block" data-code>`
- * in HTML for cross-editor paste.
- *
- * Key schema decisions:
- *  - `atom: true` - no editable children; the React NodeView owns all
- *    interactions (source editing, copy, download).
- *  - `isolating: true` - ProseMirror commands like backspace across the
- *    boundary treat the block as a single unit.
- *  - `defining: true` - copy/paste preserves the wrapper rather than
- *    absorbing the contents into surrounding prose.
- *  - `draggable: true` - Tiptap surfaces a drag handle; combined with the
- *    atom semantics this lets users reorder the block like a heading.
+ * Mermaid atom block. Persisted as a mermaid fence; HTML paste uses `data-type="mermaid-block"`. Atom, isolating, defining, draggable.
  */
 export const MermaidNode = Node.create({
   name: "mermaidBlock",
@@ -96,10 +84,8 @@ export const MermaidNode = Node.create({
 
   addNodeView() {
     return ReactNodeViewRenderer(MermaidNodeView, {
-      // Atom NodeViews don't have editable content, but the React subtree
-      // contains a CodeMirror editor when the user opens the source panel.
-      // ProseMirror must not interpret focus / input events inside that
-      // subtree as doc mutations.
+      // CodeMirror in the NodeView is not a doc mutation. Stop ProseMirror
+      // from treating its focus/input as one.
       stopEvent: () => true,
       // Let the NodeView handle its own DOM updates; ProseMirror's
       // attribute-driven re-render through React is the source of truth.

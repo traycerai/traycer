@@ -27,9 +27,7 @@ describe("taskChatInheritsProfileSwitch", () => {
   });
 
   it("excludes a sibling on the same profile but a different model", () => {
-    // The destination is validated strictly-better only for the composer's
-    // Opus selection; a Fable sibling must not ride that guarantee onto a
-    // profile that may be equal or worse for Fable.
+    // The destination is validated strictly-better only for the composer's Opus selection; a Fable sibling must not ride that guarantee onto a profile that may be equal or worse for Fable.
     expect(
       taskChatInheritsProfileSwitch(
         settings({ model: "claude-fable-5[1m]" }),

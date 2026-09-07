@@ -2,17 +2,7 @@ import { z } from "zod";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 
-/**
- * Epic artifacts: spec / ticket / story / review (plus their tombstone
- * variants). Each carries a `kind` discriminator. Tickets and stories
- * embed `ticketStatusSchema` from the common registry so the status
- * vocabulary stays versioned independently of the artifact shape.
- *
- * Bodies live in artifact-body artifact-rooms after the artifact-room cutover -
- * each artifact metadata entry references its artifact-room via `artifactRoomId`,
- * and the body fragment is `artifact-body:{artifactId}` inside that artifactRoom
- * room. Root artifact metadata no longer carries inline body content.
- */
+/** Epic artifacts: spec / ticket / story / review (plus their tombstone variants). */
 
 const ticketStatusSchema = getRecordSchema(
   commonRecordRegistry,
@@ -24,11 +14,7 @@ const baseEpicArtifactFields = {
   id: z.string(),
   folderName: z.string(),
   title: z.string(),
-  // Artifact room hosting this artifact's body fragment
-  // (`artifact-body:{artifactId}`). Populated when the host assigns the
-  // artifact to a artifactRoom; empty string is a transitional placeholder for code
-  // paths that pre-date artifact-room allocation (e.g. v1.0.0→v2.0.0 migration emit
-  // before the artifactRoom manager lands).
+  // Artifact room hosting this artifact's body fragment (`artifact-body:{artifactId}`).
   artifactRoomId: z.string(),
   createdAt: z.number(),
   updatedAt: z.number(),
@@ -72,25 +58,17 @@ export const epicArtifactSchema = z.discriminatedUnion("kind", [
 ]);
 export type EpicArtifact = z.infer<typeof epicArtifactSchema>;
 
-/**
- * Deterministic prefix for artifact body fragment names. Consumers that
- * iterate share-keys looking for body fragments may match on this; everyone
- * else should use {@link artifactBodyFragmentName} to compose the full name.
- */
+/** Deterministic prefix for artifact body fragment names. */
 export const ARTIFACT_BODY_FRAGMENT_PREFIX = "artifact-body:";
 
 /**
- * Field name on a root artifact entry that names the artifact-room hosting this
- * artifact's body fragment. Consumers reading or writing this field on a
- * Y.Map should use this constant rather than the literal string.
+ * Field name on a root artifact entry that names the artifact-room hosting this artifact's body fragment.
  */
 export const ARTIFACT_ARTIFACT_ROOM_FIELD = "artifactRoomId";
 
 /**
- * Deterministic Y.Doc root key for an artifact's body fragment inside its
- * assigned artifact-room. Authoritative across protocol/host/GUI: every consumer
- * that resolves an artifact body must derive the fragment name from this
- * helper rather than hard-coding the prefix.
+ * Deterministic Y.Doc root key for an artifact's body fragment inside its assigned artifact-room.
+ * Authoritative across protocol/host/GUI: every consumer that resolves an artifact body must derive the fragment name from this helper rather than hard-coding the prefix.
  */
 export function artifactBodyFragmentName(artifactId: string): string {
   return `${ARTIFACT_BODY_FRAGMENT_PREFIX}${artifactId}`;

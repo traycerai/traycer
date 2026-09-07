@@ -1,13 +1,6 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 /**
- * The one mock stream session + client the `pr.*` suites drive.
- *
- * The three PR suites (`pr-detail-body`, `pr-panel-actions`, `pr-panel-body`)
- * all fake the same single boundary - the host stream transport - and had one
- * verbatim copy of these classes each. The only real difference was the frame
- * type `emitFrame` accepts, which is a type parameter here, so a change to
- * `IStreamSession` or to the `WsStreamClient` constructor options is now one
- * edit rather than three.
+ * The only real difference was the frame type `emitFrame` accepts, which is a type parameter here, so a change to `IStreamSession` or to the `WsStreamClient` constructor options is now one edit rather than three.
  */
 import type {
   IStreamSession,
@@ -58,14 +51,11 @@ export class MockStreamSession<
   }
 
   requestReconnect(): void {
-    // No-op for these tests; reconnect is owned by the real StreamSession.
+  // No-op for these tests; reconnect is owned by the real StreamSession.
   }
 
   close(): void {
-    // Idempotent, because `IStreamSession.close()` is. Emitting a second
-    // "closed" on a repeat call would let this fixture drive a lifecycle the
-    // real transport cannot produce - and a hook that mishandled it would
-    // fail here while working in the app, or pass here while broken in it.
+    // Emitting a second "closed" on a repeat call would let this fixture drive a lifecycle the real transport cannot produce - and a hook that mishandled it would fail here while working in the app, or pass here while broken in it.
     if (this.closed) return;
     this.closed = true;
     this.statusChangeHandler?.("closed", { kind: "caller" });

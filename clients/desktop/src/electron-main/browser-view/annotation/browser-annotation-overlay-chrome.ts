@@ -1,8 +1,3 @@
-/**
- * Pure DOM construction for the isolated-world overlay: the closed shadow root,
- * its stylesheet, and every chrome node the guest paints into. No state, no
- * listeners - `boot()` owns those.
- */
 import { ANNOTATION_TARGET_PICKER_CSS } from "./browser-annotation-target-picker";
 
 export const OVERLAY_MODES = ["select", "region", "draw", "erase"] as const;
@@ -32,10 +27,7 @@ export interface OverlayChrome {
   readonly errorLine: HTMLDivElement;
 }
 
-/**
- * Builds the overlay host and returns its nodes. The caller appends
- * `host` to the page and wires behavior.
- */
+/** The caller appends `host` to the page and wires behavior. */
 export function createOverlayChrome(input: {
   readonly document: Document;
   readonly targetPickerRoot: HTMLElement;

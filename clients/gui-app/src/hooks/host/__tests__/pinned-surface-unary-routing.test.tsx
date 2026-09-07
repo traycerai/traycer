@@ -12,26 +12,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 
-/**
- * A host-pinned surface's UNARY reads must reach the host the surface names.
- *
- * The file-tree sidebar and the git-diff panel both resolve a surface pin and
- * then hand `hostId` down to their leaf hooks. Several of those hooks used the
- * id to KEY their cache slot and to fill the `hostId` request PARAM, while
- * taking the client itself from `useHostClient()` - and the param does not
- * route: `HostClient.request()` sends through its own bound messenger. So the
- * app-wide host was asked about the pinned host's repo and filesystem, and the
- * answer was cached under the pinned host's key.
- *
- * `useGitListChangedFilesWithSubmodules` beside them already resolved its client
- * from its `hostId`, which is why this is a correction rather than a new rule.
- *
- * The ambient host is A and every pin below is B, so the two sources always
- * disagree and a build that reads the wrong one fails on the VALUE. The
- * assertion is the messenger ENDPOINT the request actually reached - not which
- * client object came back, and not the `hostId` param, which is precisely the
- * field that looked right the whole time it was wrong.
- */
+/** Assert the messenger endpoint, not the hostId param. hostId in the request body does not route. */
 const HOST_B: HostDirectoryEntry = {
   ...mockLocalHostEntry,
   hostId: "host-b",
@@ -178,10 +159,7 @@ describe("a pinned surface's unary reads reach the pinned host", () => {
   });
 
   it("follows the app-wide host when the surface names none - the control", async () => {
-    // `null` is "this surface has no pin", which must keep meaning "follow the
-    // app" rather than "address nothing". Without this the cases above would
-    // also pass for a build that had simply hardwired the requester to the id
-    // in its params, never resolving anything.
+    // Without this the cases above would also pass for a build that had simply hardwired the requester to the id in its params, never resolving anything.
     renderHook(
       () =>
         // eslint-disable-next-line @typescript-eslint/no-deprecated -- pinning the DEPRECATED fallback's host routing is the point: it is still the old-host path in `epic-sidebar-file-tree.tsx`, and it routed to the app-wide host before this epic

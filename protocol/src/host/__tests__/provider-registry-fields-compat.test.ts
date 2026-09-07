@@ -42,13 +42,7 @@ import {
 } from "@traycer/protocol/host/registry";
 
 /**
- * Provider pack registry protocol coverage: the managed-install
- * lifecycle, aggregated version-visibility, and dormant Phase-2 advisory
- * fields are additive on the live `ProviderCliState` shape only - a host that
- * predates the provider pack registry (or any already-frozen v1.0/v2.0/v3.0
- * wire line) never carries them, and every downgrade bridge that targets a
- * frozen/strict pre-registry wire shape must strip the new fields instead of
- * failing the parse.
+ * Provider pack registry protocol coverage: the managed-install lifecycle, aggregated version-visibility, and dormant Phase-2 advisory fields are additive on the live `ProviderCliState` shape only - a host that predates.
  */
 
 function providerState(providerId: string) {
@@ -75,9 +69,7 @@ function providerState(providerId: string) {
 
 describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
   it("total-decodes a genuinely missing key to undefined, never throwing", () => {
-    // An old host omits the key; the client reads undefined as "true" (no
-    // notice) via `?? true` / the field's quiet default. A throw here would
-    // drop every provider on an old host.
+    // An old host omits the key; the client reads undefined as "true" (no notice) via `?? true` / the field's quiet default.
     const parsed = providerCliStateSchema.parse(providerState("claude-code"));
     expect(parsed.cliBinaryResolved).toBeUndefined();
   });
@@ -110,10 +102,8 @@ describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
   });
 
   it("downgradeProviderCliStateToV10 strips the key so the strict v1.0 parse still returns a state", () => {
-    // providerCliStateSchemaV10 is a strictObject. A missed strip silently
-    // drops EVERY provider for v1.0 clients - the key is unknown and the
-    // whole row fails the parse. Use a pre-v2.0 provider id so the frozen
-    // v1.0 providerId enum accepts the row after the strip.
+    // providerCliStateSchemaV10 is a strictObject.
+    // Use a pre-v2.0 provider id so the frozen v1.0 providerId enum accepts the row after the strip.
     const state = providerCliStateSchema.parse({
       ...providerState("cursor"),
       cliBinaryResolved: false,
@@ -162,10 +152,7 @@ describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
 
 describe("provider-pack-registry fields default for old (pre-registry) hosts", () => {
   it("providerCliStateSchema total-decodes a genuinely missing key to undefined, never throwing", () => {
-    // `.optional()` keeps the key itself omittable in a TS object literal (so
-    // host-side construction sites that predate this ticket don't need to be
-    // touched); a caller that hasn't populated it yet should read this the
-    // same as an explicit null (see the renderer's `?? null` normalization).
+    // `.optional()` keeps the key itself omittable in a TS object literal (so host-side construction sites that predate this ticket don't need to be touched); a caller that hasn't populated it yet should read this the same.
     const parsed = providerCliStateSchema.parse(providerState("claude-code"));
     expect(parsed.managedInstallState).toBeUndefined();
     expect(parsed.versionVisibility).toBeUndefined();
@@ -218,11 +205,7 @@ describe("providerManagedInstallStateSchema", () => {
     ).toBe(false);
   });
 
-  // N13: a live sibling host owns the download under a per-cell lease, so this
-  // host can see a transfer is in progress but cannot read the owner's
-  // in-memory byte counter. `absent` would be a lie; `downloading` with no
-  // percent is the honest observer state. If this parse ever fails, the
-  // observing host has no way to report the truth at all.
+  // N13: a live sibling host owns the download under a per-cell lease, so this host can see a transfer is in progress but cannot read the owner's in-memory byte counter.
   it("accepts downloading with a null percent (live-sibling observer state)", () => {
     const parsed = providerManagedInstallStateSchema.safeParse({
       status: "downloading",
@@ -281,9 +264,7 @@ describe("providerManagedInstallStateSchema", () => {
   });
 });
 
-// The whole point of the additive union: `providers.list@6.0` is the carrier
-// line, so the new arms must survive an actual v6.0 response parse rather than
-// only the standalone schema's.
+// The whole point of the additive union: `providers.list@6.0` is the carrier line, so the new arms must survive an actual v6.0 response parse rather than only the standalone schema's.
 describe("the new arms survive the providers.list@6.0 response parse", () => {
   it("carries a null-percent download and a full error arm through the live response schema", () => {
     const parsed = providersListResponseSchema.parse({
@@ -318,12 +299,8 @@ describe("the new arms survive the providers.list@6.0 response parse", () => {
   });
 });
 
-// The accepted residual, asserted rather than merely documented: a client on
-// any RELEASED line never sees the `error` arm at all, because every bridge
-// down to a released target strips `managedInstallState` wholesale. What it
-// renders is the plain `available` fallback - post-T7 a silently-unavailable
-// row with no message. The `.catch(null)` path (below) is the narrower case of
-// a client that negotiates 6.0 but predates this arm.
+// The accepted residual, asserted rather than merely documented: a client on any RELEASED line never sees the `error` arm at all, because every bridge down to a released target strips `managedInstallState` wholesale.
+// What it renders is the plain `available` fallback - post-T7 a silently-unavailable row with no message.
 describe("old-client behavior on the error arm", () => {
   const erroredState = providerCliStateSchema.parse({
     ...providerState("claude-code"),
@@ -355,17 +332,8 @@ describe("old-client behavior on the error arm", () => {
     },
   );
 
-  // The unrecognized-DISCRIMINATOR half of this story - a 6.0 client whose
-  // union has no `error` arm at all - is asserted once, generically, by
-  // "tolerates an unknown future managedInstallState/advisory shape" above; it
-  // exercises this same field and its same `.catch(null)`, so repeating it here
-  // would be a second copy of one guard rather than new coverage. What follows
-  // bounds that fallback from the other side, which nothing else covered.
   it("tolerates an additive key on a recognized arm but nulls a malformed one", () => {
-    // Why the fallback cannot be read as "any unexpected input nulls the
-    // field": each arm is a plain `z.object`, so an unknown EXTRA key is
-    // stripped and the arm survives - that is what lets a future arm add a
-    // field without blanking this state on every older client.
+    // Why the fallback cannot be read as "any unexpected input nulls the field": each arm is a plain `z.object`, so an unknown EXTRA key is stripped and the arm survives - that is what lets a future arm add a field without.
     const additive = providerCliStateSchema.parse({
       ...providerState("codex"),
       managedInstallState: {
@@ -398,9 +366,6 @@ describe("old-client behavior on the error arm", () => {
   });
 
   it("nulls the arm when retryAtMs is not a non-negative integer instant", () => {
-    // Guards the tightened `retryAtMs` constraint through the same `.catch(null)`
-    // path: a fractional or negative epoch-ms is a producer bug, and degrading
-    // to "no retry scheduled" beats surfacing a countdown to a nonsense instant.
     for (const retryAtMs of [-1, 1.5]) {
       const parsed = providerCliStateSchema.parse({
         ...providerState("codex"),
@@ -601,11 +566,8 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
   });
 
   it("upgrades a v4.0 response to v7.0 - the path a released host actually takes", () => {
-    // The case that was missing, and the only one that runs in the field:
-    // `host-v1.1.7` tops out at `providers.list` 4.0. The earlier cases both
-    // route through the v3->v4 bridge, which is where the fill used to live -
-    // so they passed while the released path filled nothing, because v4.0's
-    // frozen target does not model the fields and silently discarded it.
+    // The case that was missing, and the only one that runs in the field: `host-v1.1.7` tops out at `providers.list` 4.0.
+    // The earlier cases both route through the v3->v4 bridge, which is where the fill used to live - so they passed while the released path filled nothing, because v4.0's frozen target does not model the fields and silently.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 4, minor: 0 },
@@ -634,9 +596,6 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
   });
 
   it("upgrades a v6.0 response to v7.0, where the fill now lives", () => {
-    // `cli-v1.1.9` froze v6.0 without the registry fields, so v6->v7 is the
-    // first bridge whose target models them - the same reason the fill moved
-    // from v3->v4 to v5->v6 when `cli-v1.1.8` froze v5.0.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 6, minor: 0 },
@@ -653,21 +612,12 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
 
 describe("providers.list v6.0 is frozen against the registry fields", () => {
   it("v6.0 does not model them, so a latest -> v6.0 downgrade strips them", () => {
-    // `cli-v1.1.9` shipped v6.0 while the registry fields were still growing
-    // it - the same defect `cli-v1.1.8` exposed on v5.0, one version later.
-    // v6.0 now pins the frozen v4.0 base shape, so a field added to the LIVE
-    // base shape cannot reach a client that negotiated v6.0.
-    //
-    // Driven from the LATEST major, not from 7, because only the latest
-    // major's `downgradePathsFromLatest` table is reachable in negotiation -
-    // an older major's table is kept for the record, not consulted.
+    // `cli-v1.1.9` shipped v6.0 while the registry fields were still growing it - the same defect `cli-v1.1.8` exposed on v5.0, one version later. v6.0 now pins the frozen v4.0 base shape, so a field added to the LIVE base.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
       8,
       6,
-      // `native` is required here and absent from the major-6 cases above
-      // because the live response shape carries it - v6.0 froze before it
-      // existed. Same reason the registry fields only ride v7.0 and up.
+      // `native` is required here and absent from the major-6 cases above because the live response shape carries it - v6.0 froze before it existed.
       providersListResponseSchema.parse({
         providers: [stateWithRegistryFields],
         native: null,
@@ -701,10 +651,8 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
 
 describe("providers.list v5.0 is frozen against the registry fields", () => {
   it("v5.0 does not model them, so a v7.0 -> v5.0 downgrade strips them", () => {
-    // `cli-v1.1.8` shipped v5.0. Growing it is the same defect class as the
-    // original mutation-echo break, on the carrier line itself. v5.0 pins the
-    // frozen v4.0 base shape precisely so a field added to the LIVE base shape
-    // cannot reach it.
+    // `cli-v1.1.8` shipped v5.0.
+    // Growing it is the same defect class as the original mutation-echo break, on the carrier line itself. v5.0 pins the frozen v4.0 base shape precisely so a field added to the LIVE base shape cannot reach it.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
       8,
@@ -733,13 +681,8 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
   });
 });
 
-// The provider.* state-echo mutations never carry the registry fields on ANY
-// line. Both their released majors are pinned to frozen shapes that don't
-// model them, so a host whose in-memory state carries the fields (every host
-// after the compatibility change) still emits the exact wire a released
-// 2.0/2.1 peer expects. This is what `providers.list` - the sole carrier,
-// properly versioned at v6.0 -
-// exists for; see `providerMutationCliStateSchemaV21`'s comment.
+// The provider.* state-echo mutations never carry the registry fields on ANY line.
+// Both their released majors are pinned to frozen shapes that don't model them, so a host whose in-memory state carries the fields (every host after the compatibility change) still emits the exact wire a released 2.0/2.1.
 describe("provider.* mutation lines never carry the provider-pack-registry fields", () => {
   it("providerMutationCliStateSchemaV20 drops the unmodeled keys on parse", () => {
     const parsed = providerMutationCliStateSchemaV20.parse(
@@ -804,12 +747,7 @@ describe("provider.* mutation lines never carry the provider-pack-registry field
     expect(upgradedNull.state).toBeNull();
   });
 
-  // The regression this pin exists to stop: the host builds ONE live-shaped
-  // state (`toWire`) and echoes it from both `providers.list` and every
-  // mutation, so the mutation response schema is the only thing standing
-  // between the registry fields and an already-released 2.1 wire that never
-  // carried them (cli-/host-v1.1.7 negotiate 2.1). This schema is what
-  // `providersSetEnabledV21` is wired to.
+  // The regression this pin exists to stop: the host builds ONE live-shaped state (`toWire`) and echoes it from both `providers.list` and every mutation, so the mutation response schema is the only thing standing between.
   it("strips the fields from a live-shaped host echo at the 2.1 wire boundary", () => {
     const onWire = providersSetEnabledResponseSchema.parse({
       state: stateWithRegistryFields,
@@ -821,17 +759,7 @@ describe("provider.* mutation lines never carry the provider-pack-registry field
 });
 
 /**
- * `terminalLogin` marks a provider whose sign-in must run in a real terminal
- * (Copilot: `copilot login` prints a device code that a headless child
- * discards). It is a v7.0 field, and every already-released `providers.list`
- * line plus every @2.1 mutation echo is backed by the hand-frozen
- * `providerCliStateBaseShapeV40` - whose `loginCapability` is now pinned to
- * `providerLoginCapabilitySchemaV40` rather than the live capability.
- *
- * Both directions are asserted, because either one alone passes for the wrong
- * reason: "the frozen shape strips it" is also true of a schema that never
- * models the field anywhere, and "the live shape keeps it" is also true of a
- * frozen shape that leaks.
+ * `terminalLogin` marks a provider whose sign-in must run in a real terminal (Copilot: `copilot login` prints a device code that a headless child discards).
  */
 describe("terminalLogin is a v7.0-only login capability", () => {
   const capabilityWithTerminalLogin = {
@@ -878,9 +806,8 @@ describe("terminalLogin is a v7.0-only login capability", () => {
   });
 
   it("the @2.1 mutation state echo strips terminalLogin", () => {
-    // Ten released @2.1 echoes share this shape. An echo that carried the
-    // field would break a released client for a value a login can never
-    // change anyway.
+    // Ten released @2.1 echoes share this shape.
+    // An echo that carried the field would break a released client for a value a login can never change anyway.
     const parsed = providerMutationCliStateSchemaV21.parse({
       ...providerState("copilot"),
       loginCapability: capabilityWithTerminalLogin,
@@ -905,18 +832,8 @@ describe("terminalLogin is a v7.0-only login capability", () => {
 
 describe("providers.list v6->v7 fills terminalLogin for an old host", () => {
   it("fills null through the REGISTERED bridge, not just a hand-called helper", () => {
-    // A client decodes an old host's payload through the negotiated FROZEN
-    // schema, so the live `.catch(null)` never runs and the key would arrive
-    // genuinely `undefined`. This bridge is the only hop onto the live shape,
-    // so it is the only place the fill can happen.
-    //
-    // Two mechanisms currently produce it: the bridge's explicit
-    // `upgradeLoginCapabilityFromV40` call, and the live re-parse inside
-    // `upgradeProviderCliStateListToV70Preimage` (which exists for
-    // `nativeCapabilities` and incidentally runs `.catch(null)`). This test
-    // asserts the OUTCOME, so it stays green while either survives and goes
-    // red only if both go - which is the contract worth pinning. Do not read
-    // it as proof that either mechanism alone is present.
+    // A client decodes an old host's payload through the negotiated FROZEN schema, so the live `.catch(null)` never runs and the key would arrive genuinely `undefined`.
+    // Do not read it as proof that either mechanism alone is present.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 6, minor: 0 },
@@ -953,9 +870,7 @@ describe("providers.list v6->v7 fills terminalLogin for an old host", () => {
 
 describe("providers.startTerminalLogin is an additive optional method", () => {
   it("is registered, declares unsupported degradation, and stays out of the released floor", () => {
-    // A new method NAME is handshake-fatal against a released peer, so it has
-    // to ride the optional-capability channel exactly like
-    // `providers.submitLoginCode` / `touchLogin` do.
+    // A new method NAME is handshake-fatal against a released peer, so it has to ride the optional-capability channel exactly like `providers.submitLoginCode` / `touchLogin` do.
     const entry = hostRpcRegistry["providers.startTerminalLogin"];
     expect(entry).toBeDefined();
     expect(entry.degrade).toEqual({ kind: "unsupported" });

@@ -22,19 +22,12 @@ interface ComposerToolbarProps {
   activeTurnStatus: ChatActiveTurn["status"] | null;
   stopDisabled: boolean;
   onStopTurn: (() => void) | null;
-  /**
-   * When non-null, the composer can't create an epic (e.g. no workspace
-   * folder selected): the send button and terminal-agent launchers render
-   * disabled with this string as their tooltip. `null` means enabled.
-   */
+  /** When non-null, the composer can't create an epic (e.g. no workspace folder selected): the send button and
+   * terminal-agent launchers render disabled with this string as their tooltip. */
   composerDisabledHint: string | null;
-  /** Voice-input control, or `null` when voice input is disabled/unavailable. */
   dictation: ComposerDictationControl | null;
-  /**
-   * Non-null while the on-device model is still being readied (engine present,
-   * model downloading/absent/errored); renders a status indicator in the mic
-   * slot. Null when ready or when voice input is off/unsupported.
-   */
+  /** Non-null while the on-device model is still being readied (engine present, model
+   * downloading/absent/errored); renders a status indicator in the mic slot. */
   dictationPreparing: DictationPreparingStatus | null;
   settingsLocked: boolean;
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s

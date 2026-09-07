@@ -11,15 +11,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 
-// `terminal-tile.tsx` drives automatic recovery off a handle that can no
-// longer address its PTY: `if (status === "lost" || status === "reaped")
-// onSessionLost()`. Both statuses now follow the SAME bounded-recovery
-// overlay path (`resolveTerminalOverlayState` - see its own test file) - a
-// mounted "reaped" handle is no longer a definitive dead end that renders a
-// standalone "sessionLost" Close affordance, so this file no longer pins
-// that (formerly this file's whole purpose, hence the rename from
-// `terminal-tile-session-lost-overlay-close`). It now only pins the
-// recovery-callback contract shared with `tui-agent-tile-dead-ended-recovery`.
+// It now only pins the recovery-callback contract shared with `tui-agent-tile-dead-ended-recovery`.
 
 const testState = vi.hoisted(() => ({
   canMutate: true,

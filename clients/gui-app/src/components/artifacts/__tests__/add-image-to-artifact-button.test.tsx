@@ -1,8 +1,5 @@
-/**
- * Add-to-artifact: retain/prepare → Y node insert → finish commit →
- * reference index handoff, plus rollback on mid-failure and remote
- * snapshot failure that leaves no broken node.
- */
+/** Add-to-artifact: retain/prepare → Y node insert → finish commit → reference index handoff, plus rollback on
+ * mid-failure and remote snapshot failure that leaves no broken node. */
 import {
   cleanup,
   fireEvent,
@@ -201,10 +198,8 @@ describe("AddImageToArtifactButton", () => {
     });
     expect(prepareBytes).toHaveBeenCalledTimes(1);
     expect(imageNodeCount()).toBe(1);
-    // `"linger"` is asserted, not tolerated: this surface inserts an image the
-    // user is about to keep editing, so its lease must outlive the mutation by
-    // the linger window rather than ending the body's lifecycle at release.
-    // The export path is the other arm and passes `"immediate"`.
+    // `"linger"` is asserted, not tolerated: this surface inserts an image the user is about to keep editing, so
+    // its lease must outlive the mutation by the linger window rather than ending the body's lifecycle at release.
     expect(acquireResidentArtifactBodyLease).toHaveBeenCalledWith(
       "artifact-a",
       "linger",

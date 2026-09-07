@@ -120,11 +120,7 @@ type FakeAdoptedWebContents = WebContents & {
   readonly setUserAgent: Mock<(userAgent: string) => void>;
 };
 
-// Stands in for the popup contents Chromium pre-creates for a scripted
-// window.open. WebContents extends EventEmitter, so a bare emitter satisfies the
-// structural cast the adoption path only ever passes through, never inspects -
-// `setUserAgent` is spied on only to assert the adoption path no longer calls
-// it (that UA now comes from app.userAgentFallback, see network.ts).
+// WebContents extends EventEmitter, so a bare emitter satisfies the structural cast the adoption path only ever passes through, never inspects.
 function fakeAdoptedContents(): FakeAdoptedWebContents {
   return Object.assign(new EventEmitter(), {
     setUserAgent: vi.fn(),
@@ -645,10 +641,6 @@ type HarnessOptions = {
   readonly localHostId?: string | null;
 };
 
-/**
- * `send` is channel-keyed and payload-agnostic by design, so the harness
- * re-narrows once per channel to keep assertions concretely typed.
- */
 function asPayload<T>(payload: unknown): T {
   return payload as T;
 }
@@ -661,20 +653,7 @@ function createHarness(): Harness {
   return createHarnessWithOptions(undefined);
 }
 
-/**
- * Every manager this file creates, so cleanup does not depend on any single
- * test reaching its own last line.
- *
- * A live PiP capture re-arms a real 200ms timer forever
- * (`BrowserPipCapture.captureFrame`); one left running outlives its test,
- * and once a LATER test installs fake timers the chain migrates into the
- * fake queue and spins `runAllTimersAsync` into vitest's 10000-timer abort.
- * An assertion failure between `startPipCapture` and an in-test stop would
- * resurrect exactly that leak - one failed test manufacturing a second,
- * flaky one - so the stop lives in an `afterEach` that covers every
- * PiP-starting path, current and future. `pip.stop()` is idempotent, so
- * stopping managers that never captured is a no-op.
- */
+/** `pip.stop()` is idempotent, so stopping managers that never captured is a no-op. */
 const createdManagers: BrowserViewManager[] = [];
 
 afterEach(() => {
@@ -754,10 +733,6 @@ function createHarnessWithOptions(
     const readySettlement = Promise.withResolvers<void>();
     currentReadySettlement = readySettlement;
     void readySettlement.promise.catch(() => undefined);
-    // Production `onAttached` reads `mount.registrationId` after mint
-    // returns. A synchronous callback would throw on the TDZ.
-    // `ready` is an independent settlement: TTL/drop can reject it while
-    // `onAttached` is still pending (`attached.then()` cannot).
     queueMicrotask(() => {
       void (async () => {
         const hold = pendingAttachHold;
@@ -1204,10 +1179,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
 
-    // The renderer-owned guest is born at about:blank; that birth navigation
-    // commits on the entry's own did-navigate listener before the host accepts
-    // the tab. It must NOT overwrite the intended initial URL, or the accepted
-    // navigation would load about:blank and the tile would hang forever.
+    // The renderer-owned guest is born at about:blank; that birth navigation commits on the entry's own did-navigate listener before the host accepts the tab.
+    // It must NOT overwrite the intended initial URL, or the accepted navigation would load about:blank and the tile would hang forever.
     view.emit("did-navigate", {}, "about:blank", 200, "OK");
     await Promise.resolve();
 
@@ -1332,10 +1305,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ).toHaveLength(2);
   });
 
-  // Root cause C: guests had no navigation policy at all - `installNavigationGuard`
-  // covers the app shell only, so `file:`, `javascript:`, `data:` and the
-  // `traycer:` app scheme were reachable from a tile. Both doors are pinned:
-  // what this process is ASKED to navigate to, and what the page tries itself.
+  // Both doors are pinned: what this process is ASKED to navigate to, and what the page tries itself.
   it.each([
     ["javascript", "javascript:fetch('https://attacker.test')"],
     ["data", "data:text/html,<script>1</script>"],
@@ -2211,12 +2181,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
   });
 
   it("recreates only accepted primary guests when the saved-logins jar changes", async () => {
-    // The re-placement mechanism is the teardown itself: the host suspends the
-    // session to dormant and re-materializes the same durable tab on whichever
-    // jar the pref now names. An isolated guest's jar is throwaway and never
-    // reaches the persistent partition, and an unaccepted guest has no durable
-    // route to be revived through - tearing either down would only destroy a
-    // session nothing brings back.
+    // An isolated guest's jar is throwaway and never reaches the persistent partition, and an unaccepted guest has no durable route to be revived through.
     const harness = createHarness();
     const accepted = await harness.manager.ensureTab("window-1", {
       hostId: "host-1",
@@ -3302,10 +3267,6 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
   });
 
   it("does not set a per-contents UA on adopted popup contents (app.userAgentFallback covers it)", async () => {
-    // A pre-created popup WebContents ignores both the guest session's UA
-    // and a per-contents setUserAgent call, so that responsibility moved to
-    // `app.userAgentFallback` (set once in configureUserAgent()) - see
-    // network.ts. This only asserts createWindow no longer calls it here.
     const harness = createHarness();
     const { view } = await attachNativeTab(
       harness,

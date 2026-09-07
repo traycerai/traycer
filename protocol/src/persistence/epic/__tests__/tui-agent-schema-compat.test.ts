@@ -4,18 +4,7 @@ import { tuiAgentSchema } from "@traycer/protocol/persistence/epic/tui-agents";
 
 /**
  * Cursor terminal-agent read-compatibility guard.
- *
- * Cursor is GUI-only in the product today - the host adapter no longer
- * implements the TUI surface, the runtime catalog omits it, and
- * `epic.createTuiAgent` rejects `harnessId: "cursor"`. But "cursor" stays a
- * RESERVED `TuiHarnessId` on the released persistence (and wire) schemas for
- * read compatibility: any epic that was written while the dormant path still
- * persisted Cursor terminal-agent records must keep reading. Removing the
- * schema value would be a destructive break of that persisted data.
- *
- * This freezes the compatibility boundary: the reserved id parses, and a whole
- * persisted Cursor `tuiAgents` record still round-trips to the discriminated
- * cursor variant.
+ * But "cursor" stays a RESERVED `TuiHarnessId` on the released persistence (and wire) schemas for read compatibility: any epic that was written while the dormant path still persisted Cursor terminal-agent records must.
  */
 describe("cursor is a reserved TuiHarnessId (read compatibility)", () => {
   it("parses the reserved 'cursor' harness id", () => {

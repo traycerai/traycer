@@ -38,9 +38,8 @@ describe("agent.activity.subscribe@1.1", () => {
     ).toEqual({ kind: "pong", hasBinaryPayload: false });
   });
 
-  // A `1.0` host never writes the key. The `1.1` client must read that as NO
-  // CLAIM, never as "connected" - inventing a healthy cloud link for a host
-  // that cannot make the claim is the lie the field exists to end.
+  // A `1.0` host never writes the key.
+  // The `1.1` client must read that as NO CLAIM, never as "connected" - inventing a healthy cloud link for a host that cannot make the claim is the lie the field exists to end.
   it("defaults an absent cloudSyncStatus (1.0 host) to null, never connected", () => {
     expect(
       agentActivitySubscribeServerFrameSchema.parse({
@@ -117,9 +116,7 @@ describe("agent.activity.subscribe@1.1", () => {
     expect(entry[1].versions[1].contract).toBe(agentActivitySubscribeV11);
   });
 
-  // Read the schema OFF THE REGISTRY, not the imported symbol: a later edit
-  // re-pointing `1.0` at a laxer schema must fail here, not only in the
-  // protocol-compat CI gate.
+  // Read the schema OFF THE REGISTRY, not the imported symbol: a later edit re-pointing `1.0` at a laxer schema must fail here, not only in the protocol-compat CI gate.
   it("keeps the released 1.0 serverFrame free of cloudSyncStatus (strips it on parse)", () => {
     const v10 =
       hostStreamRpcRegistry["agent.activity.subscribe"][1].versions[0].contract

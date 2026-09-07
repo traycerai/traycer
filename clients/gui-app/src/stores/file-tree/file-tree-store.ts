@@ -1,17 +1,4 @@
-/**
- * Standalone zustand store for the file-tree panel. Owns the per-epic +
- * per-host "selected workspace root" so multi-host users keep distinct
- * selections per host (a feature the previous slice in
- * `left-panel-store` could not represent - it was keyed by epicId alone),
- * plus the expanded-directory set per `[epicId, hostId, workspacePath]`.
- *
- * Expansion is durable client state, not server state: it is what the live
- * `workspace.subscribeFileList` stream's coverage is derived from, so it has
- * to survive a remount (and a reload) to be restorable as one batched `watch`
- * frame on (re)connect. Paths are the stream's trailing-slash directory
- * tokens, stored verbatim - never parsed here beyond the descendant test
- * pruning needs.
- */
+/** Standalone zustand store for the file-tree panel. */
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
@@ -32,11 +19,7 @@ type ExpandedPathsByScope = Readonly<
   Partial<Record<string, ReadonlyArray<string>>>
 >;
 
-/**
- * Flat key for the `[epicId, hostId, workspacePath]` expansion scope. The
- * separator is a control character, so it cannot occur in an epic id, a host
- * id, or a workspace path - the join is unambiguous.
- */
+/** Flat key for the `[epicId, hostId, workspacePath]` expansion scope. */
 export function fileTreeExpansionScopeKey(
   epicId: string,
   hostId: string,
@@ -65,11 +48,6 @@ interface FileTreeStore {
     expandedPaths: ReadonlyArray<string>,
   ) => void;
 
-  /**
-   * Drops directories the host stopped serving (a `pruned` frame) and every
-   * expanded descendant of them, so a vanished or refused directory cannot sit
-   * expanded forever re-requesting a watch the host will refuse again.
-   */
   readonly pruneExpandedPaths: (
     epicId: string,
     hostId: string,
@@ -198,12 +176,7 @@ export function useSelectedFileTreeWorkspace(
   );
 }
 
-/**
- * The expanded directory tokens for one file-tree scope. The stored array is
- * returned by reference (and replaced only when the set actually changes), so
- * it is a stable dependency for the coverage effect that turns it into
- * `watch` / `unwatch` frames.
- */
+/** The expanded directory tokens for one file-tree scope. */
 export function useFileTreeExpandedPaths(
   epicId: string,
   hostId: string | null,

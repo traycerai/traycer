@@ -22,22 +22,7 @@ export const EMPTY_DEFAULT_BRANCH: DefaultBranchDescriptor = {
 };
 
 /**
- * Default new-branch names for the unified worktree picker, keyed by workspace
- * path, paired with the warning `resolveEffectiveBranchPrefix` produces when
- * a repository override is invalid or unreadable (`null` for an absent or
- * valid override). Each name is a fresh random friendly slug (e.g.
- * `traycer/swift-otter` under the default configured prefix); the host owns
- * final collision-suffixing at create time. The repo prefix is only added
- * when several git workspaces are configured at once, so multi-repo
- * worktrees branched together stay distinguishable.
- *
- * `globalBranchPrefix` is the app-profile-scoped fallback. Each workspace
- * resolves its OWN effective prefix independently - `repo override ??
- * global` via `resolveEffectiveBranchPrefix` - so a multi-repo Task can
- * legitimately produce different prefixes per workspace. The creation
- * picker renders the warning on the affected row so a fallback that changed
- * the generated proposal is visible without opening Environment; creation
- * itself stays unblocked.
+ * Default new-branch names for the unified worktree picker, keyed by workspace path, paired with the warning `resolveEffectiveBranchPrefix` produces when a repository override is invalid or unreadable (`null` for an absent or valid override).
  */
 export function buildDefaultBranchByPath(
   workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>,
@@ -80,21 +65,8 @@ function buildDefaultBranchEntry(
 }
 
 /**
- * Regenerates ONE workspace's proposed branch name using
- * `freshRepoBranchPrefix` INSTEAD OF whatever `repoBranchPrefix` its entry in
- * `workspaces` currently holds. Deliberately ignores the matching summary's
- * own `repoBranchPrefix` field (only its `workspacePath`/`repoIdentifier`
- * matter) - the picker's cached workspace summaries only reflect a saved
- * repo-prefix override once `worktree.listByWorkspacePaths` has been
- * invalidated AND refetched, an async step a "regenerate" click must not be
- * made to wait on. `null` when `workspacePath` isn't in `workspaces`.
- *
- * `suffix` is supplied by the caller rather than picked here (contrast
- * `buildDefaultBranchByPath`, which picks a fresh one per workspace) - the
- * Environment dialog's Branch naming section calls this with the SAME stable
- * suffix it already used for its live "Effective branch" preview, so the
- * displayed candidate and whatever ends up staged are guaranteed to be the
- * exact same branch name, not two independent random picks.
+ * Regenerates ONE workspace's proposed branch name using `freshRepoBranchPrefix` INSTEAD OF whatever `repoBranchPrefix` its entry in `workspaces` currently holds.
+ * Deliberately ignores the matching summary's own `repoBranchPrefix` field (only its `workspacePath`/`repoIdentifier` matter) - the picker's cached workspace summaries only reflect a saved repo-prefix override once `worktree.listByWorkspacePaths` has been.
  */
 export function regenerateSingleWorkspaceBranchName(input: {
   readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
@@ -115,16 +87,8 @@ export function regenerateSingleWorkspaceBranchName(input: {
   ).name;
 }
 
-// `worktreeBranchPrefix` is the resolved effective prefix (repo override ??
-// global), used verbatim - no separator is auto-appended, so an empty string
-// means no prefix at all. `branchPrefix` is the per-workspace repo/folder
-// slug added only when several git workspaces are staged together.
-//
-// This is the single choke point where the configured prefix reaches branch
-// composition - the editors' own validation only guards their own input, not
-// a hand-edited localStorage value, direct store write, or hand-edited
-// `environment.json`, so it is re-validated here and an invalid prefix falls
-// back to the default rather than flowing verbatim into a branch name.
+// `worktreeBranchPrefix` is the resolved effective prefix (repo override ?? global), used verbatim - no separator is auto-appended, so an empty string means no prefix at all.
+// `branchPrefix` is the per-workspace repo/folder slug added only when several git workspaces are staged together.
 function composeDefaultNewBranch(
   worktreeBranchPrefix: string,
   branchPrefix: string,

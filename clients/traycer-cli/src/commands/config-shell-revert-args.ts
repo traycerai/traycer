@@ -3,11 +3,8 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { revertShellArgs } from "../store/config-store";
 
-// Runner-aware `traycer config shell revert-args`. Restores a remembered shell's
-// flags to its family default by clearing the entry's deviation (`args: null`)
-// while keeping the entry - so the shell stays in the picker list. Reverting a
-// path with no entry is a successful no-op. JSON mode emits the resulting shape;
-// human mode prints a one-line confirmation.
+// Runner-aware `traycer config shell revert-args`.
+// Restores a remembered shell's flags to its family default by clearing the entry's deviation (`args: null`) while keeping the entry - so the shell stays in the picker list.
 export function buildConfigShellRevertArgsCommand(args: {
   readonly path: string;
 }): CommandFn {

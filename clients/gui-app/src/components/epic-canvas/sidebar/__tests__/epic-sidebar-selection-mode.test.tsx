@@ -83,10 +83,8 @@ interface TestState {
   readonly deleteChatMutateAsync: Mock;
   readonly deleteTuiAgentMutateAsync: Mock;
   /**
-   * Rename RPCs, deliberately NEVER settled by default (they return a promise
-   * that stays pending). The rename editor must close on COMMIT, not on the
-   * ack, so a mock that resolved would make that assertion vacuous - it would
-   * pass on the old close-on-success code too.
+   * Rename RPCs, deliberately NEVER settled by default (they return a promise that stays pending).
+   * The rename editor must close on COMMIT, not on the ack, so a mock that resolved would make that assertion vacuous - it would pass on the old close-on-success code too.
    */
   readonly renameChatMutateAsync: Mock;
   readonly renameTuiAgentMutateAsync: Mock;
@@ -131,9 +129,7 @@ interface TestState {
   chatHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   tuiHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   /**
-   * Optional TUI agent projection fields for the leading harness mark. When a
-   * node is missing here, the row still renders the harness (via
-   * `tuiHarnessIds`) but without a managed-profile accent.
+   * When a node is missing here, the row still renders the harness (via `tuiHarnessIds`) but without a managed-profile accent.
    */
   tuiAgentById: Readonly<
     Partial<
@@ -153,11 +149,7 @@ interface TestState {
   }>;
   permissionRole: "owner" | "editor" | "viewer" | null;
   /**
-   * The host's `epic.setChatArchived` support, as the registry reports it:
-   * `true` advertised, `false` known absent, `null` no handshake yet. One knob
-   * for both consumers - affordances read the fail-closed boolean derived from
-   * it, and archive HIDING reads the tri-state - so a test can never put the
-   * two into a combination the real registry could not produce.
+   * One knob for both consumers - affordances read the fail-closed boolean derived from it, and archive HIDING reads the tri-state - so a test can never put the two into a combination the real registry could not produce.
    */
   archiveSupport: boolean | null;
   archiveVisibility: "unarchived" | "archived" | "all";
@@ -165,12 +157,6 @@ interface TestState {
   archivedIds: readonly string[];
   archiveMutate: Mock;
   archiveBatchPending: boolean;
-  /**
-   * `useEpicArchiveChat().isPending` - the PER-ROW mutation. Distinct from
-   * `archiveBatchPending`, which drives the bulk `useEpicArchiveChats` hook
-   * only; a row's own hard-disabled-while-in-flight state is unreachable
-   * through that one.
-   */
   archiveRowPending: boolean;
   archiveMutateAsync: Mock<
     (input: {
@@ -253,13 +239,6 @@ const testState = vi.hoisted<TestState>(() => ({
   sessionHandleByChatId: {},
 }));
 
-// The panel re-provides its own `StreamRuntimeContext` for the host its pin
-// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
-// to the ambient binding this suite supplies - the client every assertion here
-// is about. Which transport the pin resolves to is a different question, and
-// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
-// The hook returns the value to PROVIDE: the ambient binding while following
-// (this suite's), the pin's own once built, null while pending. Following here.
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
   const { use } = await import("react");
   const { StreamRuntimeContext } =
@@ -387,20 +366,13 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
   ),
-  // Forwards `aria-disabled` as well as `disabled`: real Radix renders a
-  // `<div role="menuitem" aria-disabled>`, and an entry that carries a
-  // disabled-reason is soft-disabled through ARIA alone (so it stays
-  // keyboard-reachable). A mock that dropped it would report every such entry
-  // as ENABLED and quietly invert the assertions that depend on it.
   DropdownMenuItem: (props: {
     readonly children: ReactNode;
     readonly onSelect: () => void;
     readonly "data-testid": string;
     readonly disabled: boolean;
-    // `undefined` is not padding: a HARD-disabled entry OMITS the key entirely
-    // so Radix's own derived `aria-disabled` survives, and only a soft-disabled
-    // one spreads `true`. Declaring it as a required boolean would describe a
-    // shape the production component never emits.
+    // `undefined` is not padding: a HARD-disabled entry OMITS the key entirely so Radix's own derived `aria-disabled` survives, and only a soft-disabled one spreads `true`.
+    // Declaring it as a required boolean would describe a shape the production component never emits.
     readonly "aria-disabled": boolean | undefined;
     readonly "aria-describedby": string | undefined;
   }) => (
@@ -462,11 +434,6 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
 
-// The row's unreachable-owner lock reads the host directory through
-// `useHostReachability`; this harness mounts no HostRuntimeProvider, so mock
-// at the hook boundary. "reachable" everywhere = the pre-lock rendering, so
-// every existing assertion is exercised unchanged; the lock's own behavior is
-// pinned where the directory is faked per-entry (host-binding.test.ts).
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => ({
     status: testState.rowHostReachability,
@@ -537,12 +504,8 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicRenameChat: () => ({
     mutate: vi.fn(),
     mutateAsync: testState.renameChatMutateAsync,
-    // Honest pending, derived from the spy: every call returns a promise that
-    // never settles, so once one has been issued the rename IS in flight. A
-    // hardcoded `false` makes any "second rename while the first is pending"
-    // assertion VACUOUS - a re-introduced pending guard would never see a
-    // pending state under it, so the test would pass against the very code it
-    // exists to reject. Cleared per test by `vi.clearAllMocks()`.
+    // Honest pending, derived from the spy: every call returns a promise that never settles, so once one has been issued the rename IS in flight.
+    // A hardcoded `false` makes any "second rename while the first is pending" assertion VACUOUS - a re-introduced pending guard would never see a pending state under it, so the test would pass against the very code it exists to reject.
     isPending: testState.renameChatMutateAsync.mock.calls.length > 0,
   }),
 }));
@@ -555,15 +518,8 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 }));
 
 /**
- * The two host queries behind the unified list's cloud rows, stubbed to
- * "nothing to add".
- *
- * The chat panel reads both directly now that the "other devices" section is
- * gone, and both are ordinary host queries - so leaving them real would need
- * this suite to supply a `QueryClientProvider` and a host-client stub complete
- * enough for `useReactiveHostReadiness`, for rows that do not render here
- * either way. The fold and the interleave they feed are asserted without a
- * renderer in `unified-chat-list.test.ts`.
+ * The chat panel reads both directly now that the "other devices" section is gone, and both are ordinary host queries - so leaving them real would need this suite to supply a `QueryClientProvider` and a host-client stub complete enough for `useReactiveHostReadiness`, for rows that do not render here either way.
+ * The fold and the interleave they feed are asserted without a renderer in `unified-chat-list.test.ts`.
  */
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
   const actual =
@@ -577,19 +533,12 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
       isError: false,
       isPending: true,
       isFetching: false,
-      // DISABLED, which is what this harness would really produce: it mounts no
-      // host client and no signed-in viewer, and the real hook gates on both. It
-      // matters to the assertions below - the panel's empty state waits for the
-      // list to have answered, and "it will never run" is an answer, while a
-      // request still in flight is not.
+      // It matters to the assertions below - the panel's empty state waits for the list to have answered, and "it will never run" is an answer, while a request still in flight is not.
       isEnabled: false,
     }),
     useCloudChatPayload: () => ({ data: undefined, isError: false }),
     useCloudChatViewerId: () => "",
-    // The real predicate rather than a constant, so the stub above actually
-    // decides: a hard-coded `true` here would hide the difference between "this
-    // query will never run" and "its answer has not arrived yet", which is the
-    // one distinction the panel's empty state depends on.
+    // The real predicate rather than a constant, so the stub above actually decides: a hard-coded `true` here would hide the difference between "this query will never run" and "its answer has not arrived yet", which is the one distinction the panel's empty state depends on.
     isCloudChatListSettled: (query: {
       readonly isEnabled: boolean;
       readonly isSuccess: boolean;
@@ -598,10 +547,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
   };
 });
 
-// The fold's mapping. Stubbed alongside the list rather than left real for the
-// same reason, and to `undefined` deliberately: that is the shape an older host
-// (or an in-flight request) produces, so this suite exercises the degraded
-// path the fold is specified to tolerate.
+// Stubbed alongside the list rather than left real for the same reason, and to `undefined` deliberately: that is the shape an older host (or an in-flight request) produces, so this suite exercises the degraded path the fold is specified to tolerate.
 vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
   useChatPublicationTargets: () => ({ data: undefined, isError: false }),
   publicationTargetMap: () => new Map<string, string>(),
@@ -656,9 +602,8 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  // The chat write-routing gate reads the session through the
-  // NON-throwing accessor. `null` here is the honest double: this suite
-  // mounts no epic store, and no session means no epic write path to gate.
+  // The chat write-routing gate reads the session through the NON-throwing accessor.
+  // `null` here is the honest double: this suite mounts no epic store, and no session means no epic write path to gate.
   useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => {
     if (!testState.sessionReady) {
@@ -671,16 +616,10 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
       store: {
         getState: () => ({
           deleteArtifact: testState.localDeleteArtifact,
-          // The unread marker computes its variant from BOTH stores, reading
-          // the tree non-reactively through this handle so a body-write stamp
-          // cannot re-render the row. That makes `tree` part of the state this
-          // double has to carry.
+          // The unread marker computes its variant from BOTH stores, reading the tree non-reactively through this handle so a body-write stamp cannot re-render the row.
           tree: testState.tree,
           renameArtifact: vi.fn(),
-          // The rename path stamps an optimistic overlay patch before firing
-          // the RPC, and reads the stamp tombstone back on settle. An empty
-          // `tuiAgents` map is the doc-resident reading for an agent row,
-          // which is what an absent union entry means.
+          // The rename path stamps an optimistic overlay patch before firing the RPC, and reads the stamp tombstone back on settle.
           beginRenameMutation: testState.beginRenameMutation,
           retirePendingMutation: testState.retirePendingMutation,
           isLatestRenameStamp: () => true,
@@ -722,12 +661,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
         unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
       }),
     {
-      // `openTileWithNavigation` reads the store imperatively: `canvasByTabId`
-      // for the resolver, `tabsById[tabId].epicId` to decide whether to wrap
-      // the prepare in `navigateNested`, and the `*FromSource` actions the
-      // executor dispatches into. Only the boundary functions are exposed -
-      // never a raw `openTileInTab` - so a regression to a direct canvas
-      // mutation throws instead of silently passing.
+      // Only the boundary functions are exposed - never a raw `openTileInTab` - so a regression to a direct canvas mutation throws instead of silently passing.
       getState: () => ({
         canvasByTabId: {},
         tabsById: { [TAB_ID]: { epicId: EPIC_ID } },
@@ -880,9 +814,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => testState.activeAgentIds,
   useEpicAgentRoleClaims: () => [],
-  // Awareness reports a tier per working agent. An agent whose host did not
-  // classify it reads as "turn", so tests that only set `activeAgentIds` keep
-  // their pre-tier behaviour.
+  // An agent whose host did not classify it reads as "turn", so tests that only set `activeAgentIds` keep their pre-tier behaviour.
   useEpicAgentActivityTiers: () =>
     new Map(
       [...testState.activeAgentIds].map((id) => [
@@ -912,9 +844,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   },
   useEpicArchivedNodeIds: () => testState.archivedIds,
   useEpicArtifactRecords: () => testState.records,
-  // Dedup input for the cloud-chat section. Empty: this suite is about the
-  // LOCAL tree, and the section hides itself when the cloud list has nothing
-  // to add - which, with no host client bound here, it never does.
+  // Empty: this suite is about the LOCAL tree, and the section hides itself when the cloud list has nothing to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
@@ -928,10 +858,8 @@ vi.mock("@/lib/epic-selectors", () => ({
     nodeIds.map(() => testState.rowHostId ?? "host-1"),
   useEpicNodeOwnerUserId: () => "user-1",
   useEpicNodeOwnerKind: () => "chat",
-  // The row's last-activity time. Production reads the chat/TUI PROJECTION
-  // rather than the tree node (the node's copy lags - see the selector's doc),
-  // but these fixtures only ever set it on the node, so the fake sources it
-  // from there. Rows without one read 0, which the row renders as no time.
+  // Production reads the chat/TUI PROJECTION rather than the tree node (the node's copy lags - see the selector's doc), but these fixtures only ever set it on the node, so the fake sources it from there.
+  // Rows without one read 0, which the row renders as no time.
   useEpicNodeUpdatedAt: (nodeId: string) =>
     testState.tree.nodeById[nodeId]?.updatedAt ?? 0,
   // Stable empty array (reference-stable across renders) so the chat-row seed
@@ -951,12 +879,8 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: testState.snapshotLoaded,
-      // The tree index, because the row-level tree reads subscribe HERE now
-      // rather than through `useEpicTreeIndex`. A row that used to take the
-      // whole slice re-rendered on every record change; it now selects its own
-      // answer out of the store, so this fake has to carry what production
-      // reads. Same object the `epic-selectors` fake hands back, so the two
-      // mocks cannot disagree about the shape of the tree.
+      // The tree index, because the row-level tree reads subscribe HERE now rather than through `useEpicTreeIndex`.
+      // Same object the `epic-selectors` fake hands back, so the two mocks cannot disagree about the shape of the tree.
       tree: testState.tree,
       artifacts: {
         allIds: testState.records
@@ -1006,8 +930,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       providers: [
         {
           // Wire id for the `claude` / `codex` harnesses used in identity tests.
-          // Codex is not multi-profile here; claude-code carries the profiles
-          // the managed-badge case resolves against.
+          // Codex is not multi-profile here; claude-code carries the profiles the managed-badge case resolves against.
           providerId: "claude-code",
           profiles: testState.tuiProviderProfiles.map((entry) => ({
             profileId: entry.profileId,
@@ -2426,15 +2349,6 @@ describe("epic sidebar selection mode", () => {
   });
 });
 
-/**
- * The leading icon's status kinds, in the lattice's own precedence order.
- *
- * Status lives on the LEADING icon: the row's trailing slot was a status chip
- * until the single-line redesign removed it, leaving that slot to the relative
- * last-activity time and the archive/menu controls that replace it on hover.
- * These ids are `ChatProgressIcon`'s (`chat-sidebar-spinner` prefix + the tone
- * / activity id from `NotificationIndicatorIcon`).
- */
 const LEADING_STATUS_KINDS = [
   "failure",
   "interview",
@@ -2445,11 +2359,7 @@ const LEADING_STATUS_KINDS = [
 ] as const;
 
 /**
- * Which of those kinds a chat row is currently showing.
- *
- * Returned as a LIST rather than asserted one at a time so a precedence step
- * proves the losing kinds are gone, not merely that the winner arrived - and so
- * an idle row is `[]` rather than a pile of separate `queryByTestId` nulls.
+ * Returned as a LIST rather than asserted one at a time so a precedence step proves the losing kinds are gone, not merely that the winner arrived - and so an idle row is `[]` rather than a pile of separate `queryByTestId` nulls.
  */
 function leadingStatusKinds(nodeId: string): readonly string[] {
   return LEADING_STATUS_KINDS.filter(
@@ -2459,15 +2369,8 @@ function leadingStatusKinds(nodeId: string): readonly string[] {
 }
 
 /**
- * A row's read-only lock, which `ChatProgressIcon` renders in the IDLE slot -
- * so it appears only once no attention tone, activity tier or unread completion
- * has claimed the icon. Scoped to the row so a sibling's lock cannot satisfy it.
- */
-/**
- * The hover label attached to `el`. The real `TooltipContent` is portalled and
- * open-only, but this file's `@/components/ui/tooltip` mock renders it inline -
- * as a sibling of the trigger, since the mocked `Tooltip`/`TooltipTrigger` both
- * render their children directly.
+ * A row's read-only lock, which `ChatProgressIcon` renders in the IDLE slot - so it appears only once no attention tone, activity tier or unread completion has claimed the icon.
+ * Scoped to the row so a sibling's lock cannot satisfy it.
  */
 function tooltipTextIn(el: HTMLElement): string | null {
   const tip = el.parentElement?.querySelector('[role="tooltip"]') ?? null;
@@ -2553,12 +2456,6 @@ describe("chat descendant status rollup", () => {
     };
   }
 
-  // The fork indicator is an OBSERVATION now, not an entry point: a
-  // publication fork resolves itself and the user is told afterwards by a
-  // notification, so clicking the glyph opens nothing. Pinned as a click that
-  // selects the row like any other part of it, because the previous behaviour
-  // (swallow the click, open an arbitration dialog) is exactly what the
-  // demolition removed and a silent no-op glyph would read as a bug.
   it("shows the fork glyph as a status, with no arbitration to click into", () => {
     seedNestedChatTree();
     testState.indicatorChats = {
@@ -2568,13 +2465,8 @@ describe("chat descendant status rollup", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     const glyph = screen.getByTestId("chat-sidebar-spinner-fork-chat-root");
-    // The indicator survives - an open episode is real state and worth showing
-    // while it lasts - but it is an OBSERVATION now. The affordance that made
-    // it an entry point into the fork dialog is gone, and both halves of that
-    // are asserted structurally rather than through a click: the delegation
-    // hook the row used to read, and the pointer affordance that advertised
-    // it. A click assertion alone would pass against a handler that silently
-    // did nothing.
+    // The affordance that made it an entry point into the fork dialog is gone, and both halves of that are asserted structurally rather than through a click: the delegation hook the row used to read, and the pointer affordance that advertised it.
+    // A click assertion alone would pass against a handler that silently did nothing.
     const span = glyph.parentElement;
     expect(span?.getAttribute("data-notification-indicator-action")).toBeNull();
     expect(span?.className).not.toContain("cursor-pointer");
@@ -2704,9 +2596,7 @@ describe("chat descendant status rollup", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    // The parent is running (rank below failure), so the nested failure owns
-    // the icon slot - rendered as the muted variant in place of the parent's
-    // own icon, with the tooltip carrying the full nested breakdown.
+    // The parent is running (rank below failure), so the nested failure owns the icon slot - rendered as the muted variant in place of the parent's own icon, with the tooltip carrying the full nested breakdown.
     const nested = screen.getByTestId(
       "chat-descendant-status-failure-chat-root",
     );
@@ -2752,10 +2642,8 @@ describe("chat descendant status rollup", () => {
 
   it("distinguishes a background-only descendant from one mid-turn", () => {
     seedNestedChatTree();
-    // The grandchild is non-idle, but only because a background task
-    // (run_in_background / Monitor / a scheduled wakeup) is keeping it alive -
-    // the agent itself is not executing. Before the awareness tier existed
-    // this was indistinguishable from a live turn.
+    // The grandchild is non-idle, but only because a background task (run_in_background / Monitor / a scheduled wakeup) is keeping it alive - the agent itself is not executing.
+    // Before the awareness tier existed this was indistinguishable from a live turn.
     testState.activeAgentIds = new Set(["chat-grandchild"]);
     testState.activityTierById = new Map([["chat-grandchild", "background"]]);
 
@@ -2805,9 +2693,7 @@ describe("chat descendant status rollup", () => {
 
   it("lets a descendant's turn outrank the parent's own background work", () => {
     seedNestedChatTree();
-    // Parent is non-idle but only in background; a hidden descendant is
-    // actually mid-turn, so the busier nested tier must win the slot rather
-    // than being masked by the parent's own (lower) tier.
+    // Parent is non-idle but only in background; a hidden descendant is actually mid-turn, so the busier nested tier must win the slot rather than being masked by the parent's own (lower) tier.
     testState.activeAgentIds = new Set(["chat-root", "chat-grandchild"]);
     testState.activityTierById = new Map([
       ["chat-root", "background"],
@@ -2872,9 +2758,7 @@ describe("chat descendant status rollup", () => {
 
   it("excludes a filter-hidden subtree from the rollup while keeping a visible descendant's status", () => {
     seedNestedChatTree();
-    // GUI-only origin filter hides the terminal-agent descendant entirely -
-    // its active-run state must not leak into the rollup as "running" - while
-    // the chat subtree (still reachable under the filter) keeps surfacing.
+    // GUI-only origin filter hides the terminal-agent descendant entirely - its active-run state must not leak into the rollup as "running" - while the chat subtree (still reachable under the filter) keeps surfacing.
     testState.chatFilterOrigin = "gui";
     testState.activeAgentIds = new Set(["agent-child"]);
     seedLocalChatFailure("chat-grandchild");
@@ -3031,10 +2915,8 @@ describe("chat row leading status icon", () => {
       screen.getByTestId("terminal-agent-sidebar-activity-agent-root"),
     ).toBeTruthy();
 
-    // Background-only work reads calm, not busy. Without this split the agent's
-    // own row wore the turn spinner while its collapsed parent rendered the
-    // background glyph for that same agent - two surfaces disagreeing about one
-    // fact. The trailing chip used to carry the tier; the icon carries it now.
+    // Background-only work reads calm, not busy.
+    // Without this split the agent's own row wore the turn spinner while its collapsed parent rendered the background glyph for that same agent - two surfaces disagreeing about one fact.
     testState.activityTierById = new Map([["agent-root", "background"]]);
     view.rerender(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
@@ -3284,10 +3166,7 @@ describe("status survives selection mode and rename", () => {
     fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-child"));
 
     const input = screen.getByTestId("epic-sidebar-rename-input-chat-child");
-    // Renaming shows chat-child's OWN status - idle, since it has no attention
-    // state of its own - so the plain chat glyph, not the nested rollup. The
-    // rename row swaps the whole display row out, hence resolving it from the
-    // input's known ancestry rather than from `epic-sidebar-item-*`.
+    // The rename row swaps the whole display row out, hence resolving it from the input's known ancestry rather than from `epic-sidebar-item-*`.
     const renameRow = input.parentElement?.parentElement?.parentElement;
     expect(renameRow).toBeTruthy();
     expect(renameRow?.querySelector(".lucide-message-square")).toBeTruthy();
@@ -3301,9 +3180,7 @@ describe("status survives selection mode and rename", () => {
 const createdSessionHandles: ChatSessionStoreHandle[] = [];
 
 /**
- * A real chat session store, standing in for an OPEN chat. Module-scope because
- * two describes need one: the leading icon's authority order, and the archive
- * gate - which reads the same store and must agree with the icon.
+ * Module-scope because two describes need one: the leading icon's authority order, and the archive gate - which reads the same store and must agree with the icon.
  */
 function createSessionHandle(chatId: string): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
@@ -3375,9 +3252,7 @@ describe("chat status icon session authority (open session vs awareness)", () =>
 
   it("lets an open session's background tri-state override an awareness tier of turn, then falls back to awareness once the session closes", () => {
     seedChatTree();
-    // Awareness alone would read "turn" (the default tier for an active id) -
-    // the scenario where the host doesn't publish the turn-awareness field
-    // and only a background task keeps the chat non-idle.
+    // Awareness alone would read "turn" (the default tier for an active id) - the scenario where the host doesn't publish the turn-awareness field and only a background task keeps the chat non-idle.
     testState.activeAgentIds = new Set(["chat-child"]);
 
     const handle = createSessionHandle("chat-child");
@@ -3430,10 +3305,7 @@ describe("chat status icon session authority (open session vs awareness)", () =>
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(readOnlyLock("chat-child")).toBeTruthy();
-    // Exactly ONE announced read-only status in the whole tree. There used to
-    // be two candidates - the leading icon's lock and a trailing status chip -
-    // which is why the leading slot was `aria-hidden`. The chip is gone, the
-    // slot is announced again, and this guards the count either way.
+    // Exactly ONE announced read-only status in the whole tree.
     expect(
       screen.getAllByRole("status", { name: "Read-only agent" }),
     ).toHaveLength(1);
@@ -3512,16 +3384,8 @@ describe("chat row idle-time compact format", () => {
 });
 
 /**
- * Leading identity icon on chat / terminal-agent sidebar rows.
- *
- * The row is a horizontal flex (`items-center`): chevron → leading icon slot →
- * text column → trailing time. Chat rows always wear the chat glyph (never a
- * harness brand); idle TUI rows wear the harness brand + surface subscript (or
- * bot fallback / spinner when active).
- *
- * This icon is also the row's ONLY status surface since the trailing chip was
- * removed, so the tests below cover both jobs it now holds: identity, and
- * being the single thing that announces status.
+ * Chat rows always wear the chat glyph (never a harness brand); idle TUI rows wear the harness brand + surface subscript (or bot fallback / spinner when active).
+ * This icon is also the row's ONLY status surface since the trailing chip was removed, so the tests below cover both jobs it now holds: identity, and being the single thing that announces status.
  */
 describe("sidebar leading identity icon", () => {
   afterEach(() => {
@@ -3542,16 +3406,8 @@ describe("sidebar leading identity icon", () => {
   });
 
   function expectChatGlyphWithoutHarness(nodeId: string): void {
-    // Display / selection rows expose epic-sidebar-item-*. Rename replaces that
-    // surface, so resolve the rename row from the input's known ancestry -
-    // input → row-1 flex → text column → the row itself, which is where the
-    // leading slot sits as the column's sibling.
-    //
-    // Resolved by walking a FIXED number of parents rather than searching
-    // upward for the glyph: an unbounded search escapes this row and would be
-    // satisfied by a sibling row's chat glyph. Assertions use `toBeTruthy` so
-    // an `undefined` from a broken ancestry chain fails instead of sliding
-    // past `not.toBeNull()`.
+    // Resolved by walking a FIXED number of parents rather than searching upward for the glyph: an unbounded search escapes this row and would be satisfied by a sibling row's chat glyph.
+    // Assertions use `toBeTruthy` so an `undefined` from a broken ancestry chain fails instead of sliding past `not.toBeNull()`.
     const item = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
     if (item !== null) {
       expect(item.querySelector(".lucide-message-square")).toBeTruthy();
@@ -3710,11 +3566,7 @@ describe("sidebar leading identity icon", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    // jsdom has no layout, so assert the structural contract instead: the row
-    // is a horizontal flex with items-center; the chevron and the leading icon
-    // slot are direct children of the row and siblings of the text column, not
-    // nested inside it; and nothing pins a fixed height, so a row whose title
-    // wraps grows rather than clipping.
+    // jsdom has no layout, so assert the structural contract instead: the row is a horizontal flex with items-center; the chevron and the leading icon slot are direct children of the row and siblings of the text column, not nested inside it; and nothing pins a fixed height, so a row whose title wraps grows rather than clipping.
     const row = screen.getByTestId("epic-sidebar-item-chat-root");
     expect(row.className).toContain("items-center");
     // Fixed height would be `h-N` / `h-[…]`; min-h is the allowed floor.
@@ -3788,20 +3640,15 @@ describe("sidebar leading identity icon", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    // The slot was `aria-hidden` while a trailing status chip existed, because
-    // the two said the same thing and a read-only row announced "Read-only
-    // agent" twice. With the chip gone, hiding it would drop running, approval,
-    // failure and read-only out of the a11y tree entirely - de-duplicating
-    // nothing. So the running row must announce, from inside the slot.
+    // The slot was `aria-hidden` while a trailing status chip existed, because the two said the same thing and a read-only row announced "Read-only agent" twice.
+    // With the chip gone, hiding it would drop running, approval, failure and read-only out of the a11y tree entirely - de-duplicating nothing.
     const chatChild = screen.getByTestId("epic-sidebar-item-chat-child");
     const running = within(chatChild).getByRole("status", {
       name: "Agent in progress",
     });
     expect(running.closest("[aria-hidden]")).toBeNull();
 
-    // The row's own accessible name stays its TITLE: the explicit `aria-label`
-    // keeps the status, badges and timestamp inside it from being concatenated
-    // into the name.
+    // The row's own accessible name stays its TITLE: the explicit `aria-label` keeps the status, badges and timestamp inside it from being concatenated into the name.
     expect(chatChild.getAttribute("aria-label")).toBe("Child chat");
 
     // Identity-only icons carry no status role to announce in the first place.
@@ -3810,14 +3657,6 @@ describe("sidebar leading identity icon", () => {
   });
 });
 
-/**
- * Host-backed archive for Agents panel rows.
- *
- * Behaviours B1–B10 from the archive feature. The harness knobs
- * (`archiveSupport`, `archiveVisibility`, `archivedIds`, `archiveMutate`) drive
- * the gate, filter, and projected flags - these tests assert renderer
- * behaviour against those knobs, not production selector/RPC wiring.
- */
 describe("chat row archive", () => {
   afterEach(() => {
     cleanup();
@@ -3932,9 +3771,7 @@ describe("chat row archive", () => {
 
   it("unarchiving a parent restores the subtree except independently archived descendants (B2)", () => {
     seedArchiveSubtree();
-    // Parent was archived (hiding everything under it); descendant was also
-    // archived on its own. Unarchive parent → only the parent's own flag
-    // clears; the descendant's flag keeps its subtree hidden.
+    // Unarchive parent → only the parent's own flag clears; the descendant's flag keeps its subtree hidden.
     testState.archivedIds = ["chat-child"];
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
@@ -4141,20 +3978,13 @@ describe("chat row archive", () => {
     fireEvent.change(input, { target: { value: "Renamed while in flight" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    // The optimistic patch is stamped and the RPC issued - and by construction
-    // of `renameChatMutateAsync` that RPC has NOT settled, so this asserts the
-    // editor closed on the commit itself. Under the previous close-on-success
-    // code the input was still mounted here, and stayed mounted for the whole
-    // round trip (and forever on a failure, whose arm never closed it at all).
+    // Under the previous close-on-success code the input was still mounted here, and stayed mounted for the whole round trip (and forever on a failure, whose arm never closed it at all).
     expect(testState.beginRenameMutation).toHaveBeenCalledWith(
       "chat-root",
       "Renamed while in flight",
     );
-    // AWAITED: `beginRenameMutation` is a bridge round trip, so the RPC it
-    // gates is issued a microtask after the key event rather than inside it.
-    // The stamp assertion above still reads synchronously - that call IS made
-    // on the event - which is what makes this a delivery boundary rather than
-    // a wholesale change of when the commit starts.
+    // AWAITED: `beginRenameMutation` is a bridge round trip, so the RPC it gates is issued a microtask after the key event rather than inside it.
+    // The stamp assertion above still reads synchronously - that call IS made on the event - which is what makes this a delivery boundary rather than a wholesale change of when the commit starts.
     await waitFor(() =>
       expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({ title: "Renamed while in flight" }),
@@ -4180,15 +4010,7 @@ describe("chat row archive", () => {
     commitRename("First title");
     commitRename("Second title");
 
-    // Closing on commit is what makes "renaming" and "pending" concurrent for
-    // the first time, and `renameChatMutateAsync` never settles - so the second
-    // commit here happens with the first rename genuinely still on the wire.
-    // The `if (renamePending) return` guard this change removed sat at the top
-    // of `commitRename`, so under it the second rename reached NEITHER the
-    // overlay nor the RPC and the user got no feedback that it was dropped.
-    // Asserting both calls is the point: a count of 1 was the old behaviour,
-    // and the rename hook mocks report `isPending` from their own call log, so
-    // a re-introduced guard in any form genuinely fires here.
+    // Closing on commit is what makes "renaming" and "pending" concurrent for the first time, and `renameChatMutateAsync` never settles - so the second commit here happens with the first rename genuinely still on the wire.
     expect(testState.beginRenameMutation).toHaveBeenNthCalledWith(
       1,
       "chat-root",
@@ -4239,9 +4061,7 @@ describe("chat row archive", () => {
       screen.getByTestId("epic-sidebar-archive-item-agent-root").textContent,
     ).toContain("Archive");
 
-    // Running row: entry present but unavailable. Soft-disabled (ARIA) rather
-    // than hard-disabled, so it stays keyboard-reachable and can explain
-    // itself - see the keyboard-reachability test below.
+    // Soft-disabled (ARIA) rather than hard-disabled, so it stays keyboard-reachable and can explain itself - see the keyboard-reachability test below.
     testState.activeAgentIds = new Set(["chat-root"]);
     testState.activityTierById = new Map([["chat-root", "turn"]]);
     view.rerender(
@@ -4643,10 +4463,6 @@ describe("chat row archive", () => {
   });
 
   it("does not close a same-id other-host tab after bulk chat delete", async () => {
-    // Chat tile teardown is hook-owned (`closeConfirmedDeletedChatTiles` is
-    // host-scoped). An id-only `findOpenArtifactInTab` close here would shut
-    // a surviving clone on another host after the hook already closed the
-    // matching tile.
     seedChatTree();
     testState.openArtifactById = {
       "chat-root": { paneId: "pane-1", instanceId: "peer-same-id" },
@@ -4702,9 +4518,7 @@ describe("chat row archive", () => {
 
   it("never lets the hover archive button displace a collapsed parent's descendant rollup (B5)", () => {
     seedGuiChatTree();
-    // Parent COLLAPSED, so its trailing slot rolls the hidden child up. The
-    // parent itself is idle; only the hidden child needs attention. That muted
-    // rollup glyph is the sole signal those descendants have.
+    // The parent itself is idle; only the hidden child needs attention.
     testState.expandedIds = new Set<string>();
     seedLocalChatFailure("chat-child");
 
@@ -4713,9 +4527,7 @@ describe("chat row archive", () => {
     expect(
       screen.getByTestId("chat-descendant-status-failure-chat-root"),
     ).toBeTruthy();
-    // The button would take over that slot and hover would blank the glyph, so
-    // one click could archive the whole subtree, failure and all. The row's own
-    // status being idle is NOT sufficient - the slot must be the idle time.
+    // The row's own status being idle is NOT sufficient - the slot must be the idle time.
     expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
 
     // The menu entry stays available: it does not touch the status slot.
@@ -4731,13 +4543,8 @@ describe("chat row archive", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    // The invariant: an archived record must never become unreachable. Every
-    // route back to one - the archive visibility filter, Unarchive entry, the
-    // empty-state hint - is capability-gated, so a host that is known to lack
-    // the method must stop hiding. Otherwise a row archived on a newer host and
-    // then viewed from an older one is invisible with nothing left to recover
-    // it (a real path: hosts can be rolled back, and the default host can
-    // simply be an older machine).
+    // The invariant: an archived record must never become unreachable.
+    // Every route back to one - the archive visibility filter, Unarchive entry, the empty-state hint - is capability-gated, so a host that is known to lack the method must stop hiding.
     expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
     expect(screen.queryByTestId("epic-chat-sidebar-archived-empty")).toBeNull();
     // ...and still no affordances, because the host genuinely cannot archive.
@@ -4747,9 +4554,7 @@ describe("chat row archive", () => {
   it("keeps hiding archived rows while the host's support is still UNKNOWN (B4)", () => {
     seedGuiChatTree();
     testState.archivedIds = ["chat-root"];
-    // No handshake yet. Revealing here would flash archived rows on every cold
-    // start and hide them again a moment later, so unknown keeps hiding - only
-    // a positive "known absent" reveals.
+    // Revealing here would flash archived rows on every cold start and hide them again a moment later, so unknown keeps hiding - only a positive "known absent" reveals.
     testState.archiveSupport = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
@@ -4759,13 +4564,6 @@ describe("chat row archive", () => {
 
   // --- B11: busy rows cannot be archived, and say why ----------------------
 
-  /**
-   * The attention tones are the regression this pins. `chatOwnStatusKind` folds
-   * failure/interview/approval AHEAD of the running tier, so gating archive on
-   * the folded kind left the entry enabled on a chat that was genuinely
-   * mid-turn - and a pending approval is raised from inside a running turn, so
-   * that is the common case, not a rare interleaving.
-   */
   it("keeps Archive disabled on a running row even under an attention tone (B11)", () => {
     seedChatTree();
     testState.activeAgentIds = new Set(["chat-root"]);
@@ -4810,21 +4608,7 @@ describe("chat row archive", () => {
   });
 
   /**
-   * The tooltip's trigger sits on the menu ITEM, with no element in between.
-   *
-   * A soft-disabled entry is not Radix-`disabled`, so it carries no
-   * `data-disabled` and takes hover itself - the wrapper that used to be needed
-   * for that is gone. Keeping the item a direct child of the menu is what
-   * preserves `menu` -> `menuitem` ownership: an intermediate
-   * `role="presentation"` element could NOT, because ARIA ignores a
-   * presentational role on any element carrying a global ARIA property, and
-   * Radix Tooltip puts `aria-describedby` on its trigger while open. The
-   * wrapper stopped being presentational exactly when a keyboard user focused
-   * the busy entry and opened its tooltip.
-   *
-   * (The `pointer-events` rule itself is CSS, which jsdom does not evaluate;
-   * the mocked tooltip here renders its content eagerly, as every other tooltip
-   * assertion in this file does.)
+   * The wrapper stopped being presentational exactly when a keyboard user focused the busy entry and opened its tooltip. (The `pointer-events` rule itself is CSS, which jsdom does not evaluate; the mocked tooltip here renders its content eagerly, as every other tooltip assertion in this file does.)
    */
   it("explains the refusal, per activity tier (B11)", () => {
     seedChatTree();
@@ -4840,11 +4624,6 @@ describe("chat row archive", () => {
     expect(tooltipTextIn(turnItem)).toBe(
       "Can't archive while this agent is working. Stopping it ends a turn, but not a detached subagent or workflow. Wait for it to go idle, or stop it, then archive.",
     );
-    // The `turn` TIER is not "a turn is running": `chatActivityIndicator` maps
-    // a detached subagent or workflow outliving its turn into it, and
-    // `resolvedTurnStatus` reports no active turn for that same state so no
-    // Stop-turn affordance surfaces. An unhedged "stop it" would point at an
-    // action the host early-returns from.
     expect(tooltipTextIn(turnItem)).toContain("not a detached subagent");
 
     testState.activityTierById = new Map([["chat-root", "background"]]);
@@ -4855,25 +4634,18 @@ describe("chat row archive", () => {
     expect(tooltipTextIn(bgItem)).toBe(
       "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.",
     );
-    // The background arm must never advertise stopping the AGENT as the
-    // remedy. `stopActiveTurn()` early-returns with no turn running, and this
-    // tooltip is the only message a soft-disabled entry produces - the host's
-    // corrected refusal never fires because `onSelect` is prevented. Getting
-    // this wrong sends the user round a loop with nothing to correct it.
+    // The background arm must never advertise stopping the AGENT as the remedy.
+    // `stopActiveTurn()` early-returns with no turn running, and this tooltip is the only message a soft-disabled entry produces - the host's corrected refusal never fires because `onSelect` is prevented.
     expect(tooltipTextIn(bgItem)).toContain("stop them from its chat");
 
-    // No wrapper: a busy entry stays a direct sibling of the other entries, so
-    // the menu owns it in every state. Nesting it under a presentational node
-    // would have un-owned it the moment its tooltip opened.
+    // No wrapper: a busy entry stays a direct sibling of the other entries, so the menu owns it in every state.
+    // Nesting it under a presentational node would have un-owned it the moment its tooltip opened.
     expect(bgItem.parentElement).toBe(
       screen.getByTestId("epic-sidebar-rename-chat-root").parentElement,
     );
 
-    // On an idle row there is no tooltip at all: an available action must carry
-    // no explanation. Scoped to the item's own menu container rather than the
-    // whole row, because an idle row also renders the hover Archive button,
-    // whose own ("Archive <name>") tooltip would satisfy a looser query and
-    // make this pass for the wrong reason.
+    // On an idle row there is no tooltip at all: an available action must carry no explanation.
+    // Scoped to the item's own menu container rather than the whole row, because an idle row also renders the hover Archive button, whose own ("Archive <name>") tooltip would satisfy a looser query and make this pass for the wrong reason.
     testState.activeAgentIds = new Set<string>();
     testState.activityTierById = new Map();
     view.rerender(
@@ -4904,12 +4676,6 @@ describe("chat row archive", () => {
   });
 
   it("keeps a busy row's Archive entry keyboard-reachable (B11)", () => {
-    // Radix renders a `disabled` item as non-focusable AND filters it out of
-    // typeahead. Since the hover button is hidden while the row is busy, hard
-    // -disabling here would make the action and its reason invisible to
-    // keyboard/screen-reader users: Archive would simply vanish from the menu
-    // with no signal it exists. `aria-disabled` keeps it announced and
-    // focusable while still refusing selection.
     seedChatTree();
     testState.activeAgentIds = new Set(["chat-root"]);
     testState.activityTierById = new Map([["chat-root", "turn"]]);
@@ -4923,14 +4689,7 @@ describe("chat row archive", () => {
   });
 
   it("puts NOTHING between the menu and a busy item (B11)", () => {
-    // Any element between `role="menu"` and `role="menuitem"` breaks the
-    // owned-children relationship, so the item's announced position/count goes
-    // wrong - and only on busy rows. `role="presentation"` does not rescue it
-    // here: ARIA ignores a presentational role on an element carrying a global
-    // ARIA property, and Radix Tooltip assigns `aria-describedby` to its
-    // trigger while open. A wrapper would therefore un-presentation itself at
-    // the exact moment a keyboard user focused the entry and opened its
-    // tooltip - the one state it was added for.
+    // Any element between `role="menu"` and `role="menuitem"` breaks the owned-children relationship, so the item's announced position/count goes wrong - and only on busy rows.
     seedChatTree();
     testState.activeAgentIds = new Set(["chat-root"]);
     testState.activityTierById = new Map([["chat-root", "turn"]]);
@@ -4946,10 +4705,7 @@ describe("chat row archive", () => {
   });
 
   it("applies the same refusal to the CONTEXT menu entry (B11)", () => {
-    // The context menu is the one path that runs against unmocked Radix in
-    // this file (`@/components/ui/dropdown-menu` is mocked,
-    // `@/components/ui/context-menu` is not), so it is the only place a real
-    // Radix regression in the wrapper could surface.
+    // The context menu is the one path that runs against unmocked Radix in this file (`@/components/ui/dropdown-menu` is mocked, `@/components/ui/context-menu` is not), so it is the only place a real Radix regression in the wrapper could surface.
     seedChatTree();
     testState.activeAgentIds = new Set(["chat-root"]);
     testState.activityTierById = new Map([["chat-root", "background"]]);
@@ -4959,14 +4715,7 @@ describe("chat row archive", () => {
 
     const item = screen.getByTestId("epic-sidebar-context-archive-chat-root");
     expect(isMenuItemUnavailable(item)).toBe(true);
-    // Soft-disabled, so Radix `disabled` is false and no `data-disabled`
-    // pointer-events trap applies - which is what lets the tooltip trigger sit
-    // on the item and keeps the item directly under the menu.
-    //
-    // `data-disabled` carries the whole assertion. A `:disabled` check would
-    // read like a second one but could never fail here: this item is real
-    // Radix, so it is a `<div role="menuitem">`, and CSS `:disabled` matches
-    // only form elements. See `isMenuItemUnavailable` below.
+    // A `:disabled` check would read like a second one but could never fail here: this item is real Radix, so it is a `<div role="menuitem">`, and CSS `:disabled` matches only form elements.
     expect(item.hasAttribute("data-disabled")).toBe(false);
     expect(item.parentElement).toBe(
       screen.getByTestId("epic-sidebar-context-rename-chat-root")
@@ -4975,15 +4724,7 @@ describe("chat row archive", () => {
   });
 
   it("describes the FOCUSED item with the reason, not just the wrapper (B11)", () => {
-    // The tooltip alone does not reach a screen reader. `TooltipWrapper` uses
-    // `asChild`, so Radix owns `aria-describedby` on the WRAPPER while keyboard
-    // focus lands on the item inside it - and ARIA descriptions are not
-    // inherited by descendants. Without the item's own description the user
-    // hears "Archive, dimmed" and never the reason, which is the entire point
-    // of keeping the entry reachable.
-    //
-    // Asserted on the context menu because it runs against unmocked Radix: a
-    // mock could satisfy this by construction.
+    // Without the item's own description the user hears "Archive, dimmed" and never the reason, which is the entire point of keeping the entry reachable.
     seedChatTree();
     testState.activeAgentIds = new Set(["chat-root"]);
     testState.activityTierById = new Map([["chat-root", "background"]]);
@@ -5009,14 +4750,8 @@ describe("chat row archive", () => {
   });
 
   it("leaves an unexplained disabled entry undescribed (B11)", () => {
-    // A transient in-flight mutation is hard-disabled and carries no reason.
-    // Pointing `aria-describedby` at an element that does not exist would be
-    // worse than omitting it, so the id must be absent, not empty.
-    //
-    // Driven through `archiveRowPending`, the PER-ROW hook. Clearing
-    // `activeAgentIds` alone would leave the entry fully ENABLED, so the
-    // assertion would hold for a row that is not disabled at all - passing
-    // without ever reaching the state named in the title.
+    // Pointing `aria-describedby` at an element that does not exist would be worse than omitting it, so the id must be absent, not empty.
+    // Clearing `activeAgentIds` alone would leave the entry fully ENABLED, so the assertion would hold for a row that is not disabled at all - passing without ever reaching the state named in the title.
     seedChatTree();
     testState.activeAgentIds = new Set();
     testState.archiveRowPending = true;
@@ -5031,11 +4766,8 @@ describe("chat row archive", () => {
   });
 
   /**
-   * A running shell is the one activity `runStatus` cannot speak for: it
-   * outlives the turn that started it, so the chat reads idle while a process
-   * of its own is still printing. The host refuses to archive over one, so the
-   * row must refuse too - both halves of the affordance, since the hover button
-   * is offered only on an idle row.
+   * A running shell is the one activity `runStatus` cannot speak for: it outlives the turn that started it, so the chat reads idle while a process of its own is still printing.
+   * The host refuses to archive over one, so the row must refuse too - both halves of the affordance, since the hover button is offered only on an idle row.
    */
   it("refuses Archive while an open session owns a running shell (B11)", () => {
     seedChatTree();
@@ -5088,14 +4820,7 @@ describe("chat row archive", () => {
 });
 
 /**
- * "Unavailable" as the USER experiences it, across both disable mechanisms.
- *
- * An entry that carries an explanation is soft-disabled (`aria-disabled`) so it
- * stays keyboard-reachable and can still surface its tooltip; a transient one
- * is hard-disabled. Asserting `:disabled` alone would both miss the soft form
- * and, in this file, only ever be testing the tooltip MOCK - CSS `:disabled`
- * matches form elements, and real Radix renders
- * `<div role="menuitem" aria-disabled="true">`, which it can never match.
+ * Asserting `:disabled` alone would both miss the soft form and, in this file, only ever be testing the tooltip MOCK - CSS `:disabled` matches form elements, and real Radix renders `<div role="menuitem" aria-disabled="true">`, which it can never match.
  */
 function isMenuItemUnavailable(el: HTMLElement): boolean {
   return el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
@@ -5189,20 +4914,12 @@ function recordFromNode(node: TestTreeNode): TestRecord {
 }
 
 /**
- * The tree mounted on a non-desktop SURFACE - the mobile switcher's Agents tab.
- *
- * These live beside the desktop cases rather than in a switcher test file
- * because the harness above is what standing this tree up costs: 45 module
- * mocks, every one of them derived from a real producer. A second copy of that
- * set would be fixtures chosen to go green, not fixtures that describe the
- * system, so the surface's cases reuse this one.
+ * These live beside the desktop cases rather than in a switcher test file because the harness above is what standing this tree up costs: 45 module mocks, every one of them derived from a real producer.
  */
 describe("chat tree on a mounting surface", () => {
   afterEach(cleanup);
   beforeEach(() => {
-    // This describe drives the panel search store directly, and the outer
-    // suite's reset does not reach here - without this, the case that seeds a
-    // query leaks it into the case asserting the store stays untouched.
+    // This describe drives the panel search store directly, and the outer suite's reset does not reach here - without this, the case that seeds a query leaks it into the case asserting the store stays untouched.
     usePanelHeaderSearchStore.setState(
       usePanelHeaderSearchStore.getInitialState(),
       true,
@@ -5274,9 +4991,7 @@ describe("chat tree on a mounting surface", () => {
   });
 
   it("leaves the panel's own query authoritative when the surface owns none", () => {
-    // The other direction. `searchQuery: null` must read the store, or the
-    // desktop panel silently stops filtering the moment anything mounts a
-    // surface anywhere above it.
+    // `searchQuery: null` must read the store, or the desktop panel silently stops filtering the moment anything mounts a surface anywhere above it.
     seedChatTree();
     act(() => {
       usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "Child");
@@ -5288,14 +5003,10 @@ describe("chat tree on a mounting surface", () => {
   });
 
   it("does not write the invisible panel query from type-to-filter", () => {
-    // The surface renders its own field; this store's query would be edited by
-    // a control the user cannot see, and would still be there when the desktop
-    // panel next opened.
+    // The surface renders its own field; this store's query would be edited by a control the user cannot see, and would still be there when the desktop panel next opened.
     seedChatTree();
     renderOnSurface(mountedSurface({ searchQuery: "" }));
-    // The two fields `openSearch` would have written. Asserting them by name
-    // rather than snapshotting the store, which holds live DOM nodes in
-    // `slotBySurfaceKey` and cannot be serialized.
+    // Asserting them by name rather than snapshotting the store, which holds live DOM nodes in `slotBySurfaceKey` and cannot be serialized.
     const before = usePanelHeaderSearchStore.getState();
     expect(before.openBySurfaceKey).toEqual({});
     expect(before.queryBySurfaceKey).toEqual({});

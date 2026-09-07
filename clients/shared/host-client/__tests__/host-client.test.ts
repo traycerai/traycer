@@ -94,22 +94,14 @@ function makeContext(userId: string, bearer: string): RequestContext {
 }
 
 /**
- * Host-scope sweeps are coalesced per host per microtask tick (see
- * `HostClient.deliverHostScopeSweep`), so their invalidation/change event
- * lands one microtask after the reporting call. One awaited resolved promise
- * is exactly that boundary.
+ * Host-scope sweeps are coalesced per host per microtask tick (see `HostClient.deliverHostScopeSweep`), so their invalidation/change event lands one microtask after the reporting call.
  */
 async function flushAvailabilityCoalescing(): Promise<void> {
   await Promise.resolve();
 }
 
 /**
- * The spine addresses NO host (redesign D17 / P4.2), so anything that actually
- * sends must go through a requester. `findHostById` is supplied because
- * `captureAuthority` re-resolves a requester's entry against the live
- * directory and refuses one it cannot find - a client without it produces
- * requesters whose every request fails as a stale binding, which looks exactly
- * like a routing bug and is really a missing fixture.
+ * The spine addresses NO host (redesign D17 / P4.2), so anything that actually sends must go through a requester.
  */
 function buildHostClientWithMock(): {
   client: HostClient<typeof registry>;
@@ -149,10 +141,6 @@ function buildHostClientWithMock(): {
   };
 }
 
-/**
- * Minimal `WebSocketLike` stub that scripts the host side of a single
- * request: open → openAck → request → response → close.
- */
 class StubWebSocket implements WebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
   onmessage: ((event: WebSocketMessageEvent) => void) | null = null;
@@ -216,41 +204,8 @@ function readRequestFrame(socket: StubWebSocket): ClientRequestFrame {
 }
 
 describe("HostClient", () => {
-  // SIX CASES WERE DELETED HERE, and they were tests OF `bind` rather than
-  // tests that used it (redesign D17 / P4.2 deleted the active slot):
-  //
-  //   - "announces bind/unbind without sweeping any host's query scope"
-  //   - "does not re-invalidate when binding to the same host id"
-  //   - "emits and refetches when a same-id host entry changes transport state"
-  //   - "treats a coarse flip the directory cannot vouch for as the same
-  //      transport - no cancel, no sweep, no event"
-  //   - "still emits when a same-id host is positively refused, with every
-  //      other field held stable"
-  //   - "emits host-updated on a same-id remote host's public-key rotation,
-  //      isolated from every other field (R-1)"
-  //
-  // Every one asserted on `getActiveHost()` and/or a `host-bound` /
-  // `host-updated` / `host-unbound` reason. The slot is gone, the reason union
-  // is down to two, and nothing re-binds - so the same-id re-bind comparison
-  // those five existed to exercise has no code path left to run against.
-  //
-  // TWO CONCERNS OUTLIVED THEIR TESTS and are recorded rather than quietly
-  // dropped. Both moved DOWN a layer, because "the directory row changed" is
-  // now the directory's event to raise, not this client's:
-  //   - R-1 (a remote host's public key rotating must reach that host's
-  //     consumers). Nothing re-binds, so a rotation is an ordinary row change
-  //     and the registry's row signal is what carries it. That half IS
-  //     covered, in two places, both proven live by neutering the arm:
-  //     `stream-runtime.test.tsx` rebuilds the client and closes the stale
-  //     session on a rotation, and `registry-row-changed-signal.test.tsx`
-  //     re-projects the owner identity key off the same signal.
-  //     What did NOT survive is the query-scope sweep: `bind()` invalidated
-  //     the rotated host's scope with `refetchActive`, the registry never
-  //     invalidates, and so that sweep is GONE rather than untested.
-  //   - "a coarse move that is not evidence of a refusal must not churn the
-  //     transport". Vacuous at this layer now (no re-bind, no churn to
-  //     suppress). Its live half - the shell's `busy` projecting to `dialable`
-  //     rather than flapping - is still pinned in `host-directory-service.test.ts`.
+  // The slot is gone, the reason union is down to two, and nothing re-binds - so the same-id re-bind comparison those five existed to exercise has no code path left to run against.
+  // Two concerns outlived their tests and are recorded rather than quietly dropped.
   it("invalidates every host's scope on a RequestContext identity change", () => {
     const { client, invalidator, events } = buildHostClientWithMock();
 
@@ -259,10 +214,8 @@ describe("HostClient", () => {
     client.setRequestContext(ctx); // no-op, same reference
     client.setRequestContext(null);
 
-    // SCOPE-FREE, and it used to be scoped to the bound host. Credentials are
-    // not per-host: an identity transition invalidates cached responses for
-    // EVERY host this window addresses, which `null` means here. Scoping it to
-    // one host was only ever defensible while exactly one host was reachable.
+    // Scope-free, and it used to be scoped to the bound host.
+    // Scoping it to one host was only ever defensible while exactly one host was reachable.
     expect(invalidator.calls).toEqual([null, null]);
     expect(events.map((e) => e.reason)).toEqual([
       "auth-changed",
@@ -284,30 +237,19 @@ describe("HostClient", () => {
     );
   });
 
-  // DELETED: "invalidates on availability recovery only when a host is bound".
-  // It was a test OF the bound-gate - the no-arg `notifyAvailabilityRecovered()`
-  // it drove was the active slot's entry point, and its first half asserted
-  // that an UNBOUND client stays silent. There is no bound state to gate on
-  // now: every report names its host, and every named host is invalidated. The
-  // surviving half (a recovery invalidates and announces) is what the case
-  // below pins, for both hosts rather than only the privileged one.
+  // Deleted: "invalidates on availability recovery only when a host is bound".
+  // It was a test OF the bound-gate - the no-arg `notifyAvailabilityRecovered()` it drove was the active slot's entry point, and its first half asserted that an unbound client stays silent.
 
   it("announces an availability recovery for whichever host recovered", async () => {
     const { client, invalidator, events } = buildHostClientWithMock();
 
-    // A tab-bound durable stream heartbeats its own host; its queries are keyed
-    // by THAT id. Pre-P4.2 this host was "not the active one" and was
-    // deliberately invalidated WITHOUT an event, because an event meant "the
-    // active host changed" and this was not it.
+    // A tab-bound durable stream heartbeats its own host; its queries are keyed by that id.
+    // Pre-P4.2 this host was "not the active one" and was deliberately invalidated without an event, because an event meant "the active host changed" and this was not it.
     client.notifyHostAvailabilityRecovered("other-host");
     await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["other-host"]);
     expect(invalidator.options).toEqual([{ refetchActive: true }]);
-    // NOW IT ANNOUNCES, and the event names the host it is about. That is the
-    // whole substitution: the active-host gate is replaced by a field
-    // consumers filter on, so a reason-agnostic subscriber must be ready to
-    // hear about a host it does not care about (which is why
-    // `buildRuntimeChangeScopeHandler` exists in gui-app).
+    // Now IT announces, and the event names the host it is about.
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       currentHostId: "other-host",
@@ -328,15 +270,7 @@ describe("HostClient", () => {
   it("un-strands a host's scope without announcing a change", async () => {
     const { client, invalidator, events } = buildHostClientWithMock();
 
-    // Two callers reach this, and neither is reporting an availability
-    // recovery - which is why the method is named for what it does rather
-    // than for either of their reasons. One is a remote binding that owes a
-    // ready boundary for a host whose first dial was still in flight: it must
-    // still deliver (the stream runtime replays nothing to a session that is
-    // already ready, so a dropped boundary strands those queries for good) but
-    // it must NOT announce, or the runtime answers the change by resetting the
-    // very binding reporting the recovery. The other is the R-1 key-rotation
-    // sweep in gui-app, where announcing would be a plainly false reason.
+    // Two callers reach this, and neither is reporting an availability recovery - which is why the method is named for what it does rather than for either of their reasons.
     client.invalidateHostScopeUnannounced("mock-local");
     await flushAvailabilityCoalescing();
 
@@ -348,11 +282,7 @@ describe("HostClient", () => {
   it("coalesces same-tick availability reports per host into one invalidation and at most one change event", async () => {
     const { client, invalidator, events } = buildHostClientWithMock();
 
-    // One shared session's ready boundary fans out to every consumer wiring
-    // in the same tick: the app-wide stream and a durable tab both notify,
-    // the runtime messenger delivers its change-event-free variant, and an
-    // unrelated host's tab reports too. Per host: ONE invalidation; the
-    // change event survives because at least one caller asked for it.
+    // Per host: one invalidation; the change event survives because at least one caller asked for it.
     client.notifyHostAvailabilityRecovered("mock-local");
     client.notifyHostAvailabilityRecovered("mock-local");
     client.invalidateHostScopeUnannounced("mock-local");
@@ -360,11 +290,8 @@ describe("HostClient", () => {
     await flushAvailabilityCoalescing();
 
     expect(invalidator.calls.sort()).toEqual(["mock-local", "other-host"]);
-    // PER HOST, and that is the claim. `mock-local` was reported three times
-    // in one tick and announces ONCE; `other-host` announces on its own,
-    // where pre-P4.2 it would have stayed silent for not being the active
-    // host. Coalescing merges reports for the same host - it never merges
-    // across hosts, because the event names one.
+    // Per host, and that is the claim.
+    // Coalescing merges reports for the same host - it never merges across hosts, because the event names one.
     expect(events.map((e) => e.currentHostId).sort()).toEqual([
       "mock-local",
       "other-host",
@@ -373,11 +300,7 @@ describe("HostClient", () => {
       true,
     );
 
-    // The unannounced sweep ALONE must NOT gain a change event from the merge
-    // machinery when nothing in its tick asked for one. (The converse - a
-    // rotation sweep merging with a genuine availability report and therefore
-    // announcing - is the case above, and is correct: the availability caller
-    // asked, and its announcement is true.)
+    // The unannounced sweep alone must not gain a change event from the merge machinery when nothing in its tick asked for one.
     invalidator.calls.length = 0;
     events.length = 0;
     client.invalidateHostScopeUnannounced("mock-local");
@@ -422,12 +345,7 @@ describe("HostClient", () => {
     try {
       const { client, invalidator, events } = buildHostClientWithMock();
 
-      // The production shape the older cases miss: every wiring in this suite
-      // reports in the same synchronous tick, so a purely-microtask merge
-      // would satisfy them. A window runs a dozen or more stream clients and
-      // each one's recovery cooldown fires on its own timer, so the reports
-      // land in separate macrotasks - which is what the time-gated leading
-      // edge, not the microtask merge, is holding to one call.
+      // The production shape the older cases miss: every wiring in this suite reports in the same synchronous tick, so a purely-microtask merge would satisfy them.
       for (let i = 0; i < 5; i += 1) {
         client.notifyHostAvailabilityRecovered("mock-local");
         await vi.advanceTimersByTimeAsync(0);
@@ -510,11 +428,8 @@ describe("HostClient", () => {
   });
 
   it("createRequester follows same-host directory refreshes instead of freezing its snapshot", async () => {
-    // A host's directory entry refreshes in place (status, version, endpoint)
-    // while a dialog holding a requester stays open. `captureAuthority`
-    // refuses a routed entry that no longer matches the live directory, so a
-    // requester frozen on its creation-time snapshot would fail every request
-    // after the refresh until rebuilt.
+    // A host's directory entry refreshes in place (status, version, endpoint) while a dialog holding a requester stays open.
+    // `captureAuthority` refuses a routed entry that no longer matches the live directory, so a requester frozen on its creation-time snapshot would fail every request after the refresh until rebuilt.
     const invalidator = new RecordingInvalidator();
     const messenger = new MockHostMessenger<typeof registry>({
       registry,
@@ -599,10 +514,7 @@ describe("HostClient", () => {
             ? mockRemoteHostEntry
             : null,
     });
-    // Two hosts, addressed by two requesters rather than by re-binding one
-    // slot - which is the whole substitution P4.2 makes. The endpoint the
-    // transport dials still comes from the routed entry, so this case pins the
-    // same provider plumbing it always did.
+    // Two hosts, addressed by two requesters rather than by re-binding one slot - which is the whole substitution P4.2 makes.
     const ctx1 = makeContext("user-1", "tok-1");
     client.setRequestContext(ctx1);
     await client.createRequester(mockLocalHostEntry).request("host.ping", {});

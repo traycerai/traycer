@@ -1,13 +1,6 @@
 /**
- * DOM measurement for tile (in-task) strips, the canvas counterpart of
- * `header-strip-geometry.ts`. Kept apart from the model so the model stays a
- * pure function testable without a browser.
- *
- * Two things differ from the header. Tile widths are content-sized rather than
- * flex-equal, so every slot's width and advance are genuinely different and
- * must be measured per item. And the canvas has one strip PER GROUP, so every
- * lookup is group-scoped: a tile dragged from group A over group B resolves
- * against B's geometry, not A's.
+ * Kept apart from the model so the model stays a pure function testable without a browser.
+ * Tile widths are content-sized rather than flex-equal, so every slot's width and advance are genuinely different and must be measured per item.
  */
 import type {
   StripDragGeometry,
@@ -15,11 +8,7 @@ import type {
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 
 /**
- * The scrolling element inside a group's strip; also its own droppable.
- *
- * Matched by comparing `dataset.groupId` rather than interpolating the id into
- * a selector: a group id is opaque, and `CSS.escape` is not available in every
- * environment this module runs in (jsdom has no `CSS` global).
+ * Matched by comparing `dataset.groupId` rather than interpolating the id into a selector: a group id is opaque, and `CSS.escape` is not available in every environment this module runs in (jsdom has no `CSS` global).
  */
 function stripScrollElement(groupId: string): HTMLElement | null {
   for (const strip of document.querySelectorAll<HTMLElement>(
@@ -93,11 +82,7 @@ export function tileStripGroupAtPoint(
 }
 
 /**
- * Slots for one tile strip, measured from live rects.
- *
- * Tile frames carry an explicit x transform while a drag is in flight. The
- * currently rendered transform is removed from each rect so measurements are
- * restored to layout-space before a mid-drag item-list remap.
+ * The currently rendered transform is removed from each rect so measurements are restored to layout-space before a mid-drag item-list remap.
  */
 export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
   const el = stripScrollElement(groupId);
@@ -114,9 +99,8 @@ export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
         itemId,
         width: rect.width,
         contentLeft: rect.left - originX - renderedTranslateX(child),
-        // Tile strips have no pair-into-split gesture, so no tile is ever a
-        // merge target. This - not the zero band width - is what makes the
-        // model's merge branch unreachable here.
+        // Tile strips have no pair-into-split gesture, so no tile is ever a merge target.
+        // This - not the zero band width - is what makes the model's merge branch unreachable here.
         isMergeTarget: false,
       },
     ];
@@ -135,8 +119,7 @@ export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
 
 /**
  * Geometry for a gesture that just started on `tileItemId` inside `groupId`.
- * Returns null when the strip or the dragged tile is not measurable, which the
- * caller treats as "no model" and leaves the strip alone.
+ * Returns null when the strip or the dragged tile is not measurable, which the caller treats as "no model" and leaves the strip alone.
  */
 export function measureTileStripGeometry(input: {
   readonly groupId: string;
@@ -159,19 +142,15 @@ export function measureTileStripGeometry(input: {
     grabOffsetX: input.pointerX - (originX + source.contentLeft),
     sourceInitialLeft: originX + source.contentLeft,
     sourceWidth: source.width,
-    // Tile tabs have no pair-into-split gesture: the split lives on the pane
-    // BODY, a different target. `readTileStripSlots` marks every slot
-    // `isMergeTarget: false`, which is what keeps the model's merge branch
-    // unreachable here.
+    // Tile tabs have no pair-into-split gesture: the split lives on the pane BODY, a different target.
+    // `readTileStripSlots` marks every slot `isMergeTarget: false`, which is what keeps the model's merge branch unreachable here.
     stripTop: stripRect.top,
     stripBottom: stripRect.bottom,
   };
 }
 
 /**
- * Geometry for a strip the dragged tile is being inserted INTO from another
- * group. It has no slot there, so `sourceIndex` is -1 and the caller uses
- * `insertionOffsetsFor` rather than the reorder path.
+ * It has no slot there, so `sourceIndex` is -1 and the caller uses `insertionOffsetsFor` rather than the reorder path.
  */
 export function measureForeignTileStrip(groupId: string): {
   readonly slots: ReadonlyArray<StripSlot>;

@@ -1,22 +1,11 @@
 /**
- * Reconstructs the on-disk folder-name chain for an artifact from the
- * client's own tree + artifact projections - no host round trip.
- *
- * `epic.resolveArtifactByPath` resolves a folder-name chain to an artifact
- * id via a Y.Doc index walk on the host; there is no reverse RPC (id ->
- * path). Both `parentId` (tree) and `folderName` (artifact metadata) are
- * already projected client-side, so the chain can be rebuilt locally and fed
- * into the EXISTING path-shaped resolution flow instead of adding a new host
- * RPC (the host lives in a separate, closed-source repo this change cannot
- * touch).
+ * Reconstructs the on-disk folder-name chain for an artifact from the client's own tree + artifact projections - no host round trip.
  */
 import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
 
 /**
- * Root-to-leaf folder names for `artifactId`, ending with its own
- * `folderName`. Returns `null` when the id is unknown, the tree has a cycle,
- * an ancestor isn't a projected artifact (folder-nesting is artifact-only),
- * or any folder name in the chain is empty (a legacy/malformed entry).
+ * Root-to-leaf folder names for `artifactId`, ending with its own `folderName`.
+ * Returns `null` when the id is unknown, the tree has a cycle, an ancestor isn't a projected artifact (folder-nesting is artifact-only), or any folder name in the chain is empty (a legacy/malformed entry).
  */
 export function artifactFolderChain(
   tree: TreeSlice,

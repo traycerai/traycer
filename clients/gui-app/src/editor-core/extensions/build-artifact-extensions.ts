@@ -15,12 +15,7 @@ import { CommentShortcutExtension } from "./comment-shortcut-extension";
 import { MarkdownClipboard } from "./markdown-clipboard-extension";
 import { ArtifactFindExtension } from "./artifact-find-extension";
 
-/**
- * `@tiptap/extension-collaboration-caret` only reads `provider.awareness` off
- * the object it's given - the full Hocuspocus provider surface is not used
- * here because awareness is owned by the per-epic store and shipped through
- * the host stream.
- */
+/** Caret extension only reads provider.awareness. Awareness lives on the per-epic store and ships through the host stream. */
 export interface ArtifactAwarenessProvider {
   readonly awareness: Awareness;
 }
@@ -31,31 +26,21 @@ export interface BuildArtifactExtensionsParams {
   readonly awareness: Awareness;
   readonly user: CollabUser;
   /**
-   * Wired by tiles whose artifact type supports comments (spec / ticket /
-   * story / review). `null` for unsupported tiles (chat) - the shortcut
-   * extension still mounts but no-ops on the keystroke.
+   * null for chat. Shortcut still mounts but no-ops on the keystroke.
    */
   readonly onCommentShortcut: ((editor: Editor) => boolean) | null;
   /**
-   * Empty-document hint rendered by the `Placeholder` extension. Shown only
-   * while the doc is empty AND the editor is editable (Tiptap default), so
-   * viewers and streamed agent docs never see it. The visual comes from the
-   * `.tc-editor-prose .is-editor-empty::before` rule in `styles/editor.css`.
+   * Empty+editable only. Visual is .tc-editor-prose .is-editor-empty::before.
    */
   readonly placeholderText: string;
   /**
-   * Hint rendered inside an empty leading level-1 heading - the Notion-style
-   * "title line" a hand-created artifact opens on (see
-   * `seedArtifactTitleHeading`). Distinct from `placeholderText` (the body
-   * hint) so the title line prompts for a title, not a description.
+   * Empty leading h1 title hint. Distinct from placeholderText (body).
    */
   readonly titlePlaceholderText: string;
 }
 
 /**
- * Placeholder text for a given empty node: the title hint for the doc's
- * leading level-1 heading (the "title line"), else the body hint. Exported for
- * unit tests; the live wiring passes this to `Placeholder`'s function form.
+ * Title hint for a leading empty h1, else the body hint. Exported for tests.
  */
 export function resolveArtifactPlaceholderText(params: {
   readonly nodeTypeName: string;
@@ -73,17 +58,7 @@ export function resolveArtifactPlaceholderText(params: {
     : params.placeholderText;
 }
 
-/**
- * Opinionated Tiptap extension bundle for Traycer artifact editors
- * (specs, ticket reviews, stories). Opinionated means: collaboration is
- * required - there is no non-collab variant; the Yjs undo manager replaces
- * Tiptap's history; markdown is the canonical serialization; and the node
- * vocabulary is fixed (headings, lists, task lists, tables, code blocks
- * with syntax highlighting, horizontal rules, blockquotes, inline code).
- *
- * Consumers pass in the doc + fragment + awareness + user; the returned
- * array can be handed straight to `useEditor({ extensions })`.
- */
+/** Collab is required; Yjs undo replaces history; markdown is canonical. Pass doc + fragment + awareness + user. */
 export function buildArtifactExtensions(
   params: BuildArtifactExtensionsParams,
 ): AnyExtension[] {
@@ -99,10 +74,8 @@ export function buildArtifactExtensions(
   const provider: ArtifactAwarenessProvider = { awareness };
 
   const editorOnlyExtensions: AnyExtension[] = [
-    // Cmd+C / Cmd+X -> Markdown (via the `Markdown` manager above) instead of
-    // ProseMirror's default textContent, which drops `#` / `-` / `1.` / fences
-    // and double-spaces every block. Registered right after `Markdown` so the
-    // manager its serializer reads is already in storage.
+    // Cmd+C/X copy Markdown, not textContent (which drops # / - / fences).
+    // Register after Markdown so the serializer's manager is in storage.
     MarkdownClipboard,
     Collaboration.configure({ document: doc, fragment }),
     CollaborationCaret.configure({
@@ -113,10 +86,8 @@ export function buildArtifactExtensions(
     // (from live typing, paste, or streamed content) and swaps each into
     // the corresponding rich atom after a ~400ms idle window.
     FencePromotionExtension,
-    // Inline-decoration plugin painting active / hover / resolved / draft
-    // visual state over `threadAnchor` ranges. Driven by the React layer via
-    // `applyCommentDecorationSnapshot(editor, ...)` so the persisted doc
-    // never carries UI-only attrs.
+    // Comment decorations over threadAnchor. UI state is not persisted on
+    // the doc.
     CommentDecorationsExtension,
     // Tile-local find paints search matches and tracks the active match in
     // ProseMirror document positions rather than mounted DOM text.
@@ -138,10 +109,8 @@ export function buildArtifactExtensions(
     }),
   ];
 
-  // The template's bare `Markdown` is replaced by one configured with a
-  // private `marked`: this function runs once per editor, so each editor's
-  // tokenizer registrations live and die with it instead of accumulating on
-  // the module singleton (see `createArtifactMarkdownExtension`).
+  // Replace the template Markdown with a private marked instance per editor.
+  // Tokenizers must not accumulate on the module singleton.
   return artifactDocumentBundle.extensions.flatMap((extension) =>
     extension.name === "markdown"
       ? [createArtifactMarkdownExtension(), ...editorOnlyExtensions]
@@ -150,10 +119,7 @@ export function buildArtifactExtensions(
 }
 
 /**
- * Class applied to the ProseMirror content root via `editorProps.attributes`.
- * The `tc-editor-prose` suffix scopes the workspace-specific tweaks
- * (task-list bullet reset, table borders, code-block chrome) shipped from
- * `styles/editor.css`.
+ * ProseMirror root class; tc-editor-prose scopes editor.css tweaks.
  */
 export const ARTIFACT_EDITOR_CONTENT_CLASS =
   "prose prose-sm sm:prose-base dark:prose-invert md-prose max-w-none focus:outline-none tc-editor-prose";

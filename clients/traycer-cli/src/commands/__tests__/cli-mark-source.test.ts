@@ -15,29 +15,7 @@ import type { CommandContext } from "../../runner/runner";
 import type { CliInstallManifest } from "../../manifest/cli-manifest";
 import type { WellKnownCliStageOutcome } from "../../store/well-known-cli";
 
-// `writeMarkSource` (shared by `cli mark-source` and `cli re-anchor`) is the
-// single writer of both the CLI install manifest and the well-known slot
-// (`<cliInstallHomeDir>/bin/traycer`) that the host daemon's own CLI
-// discovery reads exclusively. A review caught that it used to stage that
-// slot UNCONDITIONALLY - including for the npm distribution, which ships a
-// `#!/usr/bin/env node`-shebanged bundle, not an executable. Copying that
-// into the slot would leave the host spawning a script that resolves `node`
-// off the SERVICE MANAGER's PATH (not the interactive shell's), and on
-// Windows would put JavaScript behind `traycer.exe`. The fix taught
-// `isInterpreterDistribution` (well-known-cli.ts) to identify npm and made
-// this function skip staging for it - reported as `staged: "not-applicable"`
-// rather than silently dropped, since the host stays unable to see the
-// install either way and callers must be able to surface that.
-//
-// No prior behavioral suite covered `writeMarkSource` at all, so this file
-// exercises it directly against a real tmp HOME - the manifest write and
-// slot staging both run for real, not mocked - with only the CLI lock
-// replaced by a pass-through, mirroring
-// `commands/__tests__/cli-finalize-upgrade.test.ts`. Two cases matter: npm
-// must NOT stage the slot, and a non-interpreter source (homebrew) MUST
-// still stage it byte-for-byte. The second case is what makes the first
-// meaningful - without it, a `writeMarkSource` that simply never staged
-// anything would pass the npm case too.
+// `writeMarkSource` is the only writer of the CLI manifest source field; both commands must go through it.
 
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
@@ -45,12 +23,8 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
 
-// `withCliLock` acquires a real cross-process file lock under
-// `cliInstallHomeDir`. Each test here gets its own tmp HOME, so there is
-// never real contention - but neighbouring command suites
-// (`cli-finalize-upgrade.test.ts`) still replace it with a pass-through that
-// just runs `fn()` and records the call, and this suite follows that same
-// shape rather than inventing a new one.
+// `withCliLock` acquires a real cross-process file lock under `cliInstallHomeDir`.
+// Each test here gets its own tmp HOME, so there is never real contention - but neighbouring command suites (`cli-finalize-upgrade.test.ts`) still replace it with a pass-through that just runs `fn()` and records the call, and this suite follows that same shape rather than inventing a new one.
 const lockMocks = vi.hoisted(() => ({
   calls: [] as Array<{ reason: string }>,
 }));
@@ -100,9 +74,7 @@ function fakeCtx(): CommandContext {
   };
 }
 
-// Mirrors the `data` shape `writeMarkSource` returns (cli-mark-source.ts) -
-// `CommandResult.data` is `unknown` on the wire, and there is no shared
-// exported type for a single command's own payload.
+// Mirrors the `data` shape `writeMarkSource` returns (cli-mark-source.ts) - `CommandResult.data` is `unknown` on the wire, and there is no shared exported type for a single command's own payload.
 interface WriteMarkSourceData {
   readonly previous: CliInstallManifest | null;
   readonly current: CliInstallManifest;
@@ -172,8 +144,7 @@ describe("writeMarkSource", () => {
     expect(persisted).toEqual(data.current);
 
     // The hole the review caught: the well-known slot must stay untouched.
-    // Staging an interpreter bundle there is worse than an empty slot - see
-    // `isInterpreterDistribution`'s comment in well-known-cli.ts.
+    // Staging an interpreter bundle there is worse than an empty slot - see `isInterpreterDistribution`'s comment in well-known-cli.ts.
     expect(existsSync(wellKnownPath)).toBe(false);
 
     if (result.human === null) {
@@ -183,11 +154,8 @@ describe("writeMarkSource", () => {
     expect(result.human).toContain(wellKnownPath);
   });
 
-  // The state Codex flagged: anchoring to npm on a machine that already has
-  // an executable in the slot. It is deliberately NOT deleted - the host
-  // daemon and any registered service launch from it, so removing it would
-  // break a working machine - but the message must say what is really
-  // running rather than claim the interpreter now serves the host.
+  // The state Codex flagged: anchoring to npm on a machine that already has an executable in the slot.
+  // It is deliberately NOT deleted - the host daemon and any registered service launch from it, so removing it would break a working machine - but the message must say what is really running rather than claim the interpreter now serves the host.
   it("for an npm source over an EXISTING slot, warns that the prior executable is still what runs", async () => {
     const { writeMarkSource } = await import("../cli-mark-source");
     const { wellKnownCliBinaryPath } =
@@ -260,11 +228,8 @@ describe("writeMarkSource", () => {
     const persisted = await readCliManifest(ENVIRONMENT);
     expect(persisted).toEqual(data.current);
 
-    // This is what makes the npm case above meaningful: a `writeMarkSource`
-    // that never staged anything would also pass an "empty slot" assertion.
-    // The slot must be a regular-file COPY (never a symlink - see
-    // `stageWellKnownCliBinary`'s doc comment) holding exactly the anchored
-    // binary's bytes.
+    // This is what makes the npm case above meaningful: a `writeMarkSource` that never staged anything would also pass an "empty slot" assertion.
+    // The slot must be a regular-file COPY (never a symlink - see `stageWellKnownCliBinary`'s doc comment) holding exactly the anchored binary's bytes.
     expect(existsSync(wellKnownPath)).toBe(true);
     const slotStat = await lstat(wellKnownPath);
     expect(slotStat.isSymbolicLink()).toBe(false);

@@ -50,9 +50,8 @@ describe("resolveUsageHostName", () => {
   });
 
   it("falls back to a truncated id for a host the directory doesn't list", () => {
-    // The cloud plane summarizes every host on the ACCOUNT, including one
-    // this client cannot dial or that has since been removed. That gap is
-    // ordinary, and a blank there would read as a rendering fault.
+    // The cloud plane summarizes every host on the ACCOUNT, including one this client cannot dial or that has since been removed.
+    // That gap is ordinary, and a blank there would read as a rendering fault.
     expect(resolveUsageHostName("01JX7Q2M9K4B8Z6T5N3P1V0WYD", new Map())).toBe(
       "01JX7Q2M…",
     );
@@ -119,9 +118,7 @@ describe("buildUsageHostFilterOptions", () => {
       hostIdsWithUsage: ["host-a", "host-c"],
       selectedHostId: null,
     });
-    // Named hosts as a block, so the machine the reader recognizes is not
-    // scattered among truncated ids by locale collation ("host-c" otherwise
-    // sorts between "Air" and "Studio Mac").
+    // Named hosts as a block, so the machine the reader recognizes is not scattered among truncated ids by locale collation ("host-c" otherwise sorts between "Air" and "Studio Mac").
     expect(options.map((option) => option.name)).toEqual([
       "Air",
       "Studio Mac",
@@ -130,9 +127,7 @@ describe("buildUsageHostFilterOptions", () => {
   });
 
   it("keeps the selected host present even when it resolved to an empty window", () => {
-    // Otherwise the control would show a selection it could not re-offer:
-    // filtering to a host with no usage empties `hostBuckets`, and a
-    // directory that never listed that host would empty the option list too.
+    // Otherwise the control would show a selection it could not re-offer: filtering to a host with no usage empties `hostBuckets`, and a directory that never listed that host would empty the option list too.
     const options = buildUsageHostFilterOptions({
       hostNames: new Map(),
       hostIdsWithUsage: [],
@@ -153,9 +148,7 @@ describe("buildUsageHostFilterOptions", () => {
 
 describe("usage host filter value mapping", () => {
   it("round-trips All hosts through a sentinel Radix will accept", () => {
-    // Radix `Select` refuses an empty-string item value and has no concept of
-    // `null`, so "no filter" needs a value of its own - and that value must
-    // never be mistaken for a host id on the way back.
+    // Radix `Select` refuses an empty-string item value and has no concept of `null`, so "no filter" needs a value of its own - and that value must never be mistaken for a host id on the way back.
     expect(usageHostFilterHostId(usageHostFilterValue(null))).toBeNull();
     expect(usageHostFilterValue(null)).not.toBe("");
   });

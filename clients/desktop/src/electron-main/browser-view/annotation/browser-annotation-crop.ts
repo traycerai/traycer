@@ -25,13 +25,6 @@ export interface AnnotationDeviceDimensions {
   readonly height: number;
 }
 
-/**
- * Map a CSS-pixel union rect onto the captured image.
- *
- * `scale = image.width / viewport CSS width` covers both devicePixelRatio and
- * browser zoom. Scroll lock is what makes the viewport stable between mark
- * and capture. One ratio is applied to both axes.
- */
 export function computeAnnotationCropRect(input: {
   readonly unionRect: BrowserAnnotationCssRect;
   readonly viewport: AnnotationCssDimensions;
@@ -111,11 +104,7 @@ export function countAnnotationMarks(
   return { elements, regions, strokes };
 }
 
-/**
- * Payload counts after guest + main budget trim. `counts.elements` is the
- * delivered capture list, not the mark list. `droppedElementCount` is how
- * many element marks never made it into that list.
- */
+/** `droppedElementCount` is how many element marks never made it into that list. */
 export function deliveredAnnotationCounts(
   marks: readonly BrowserAnnotationMarkSnapshot[],
   elements: readonly BrowserViewElementCapture[],

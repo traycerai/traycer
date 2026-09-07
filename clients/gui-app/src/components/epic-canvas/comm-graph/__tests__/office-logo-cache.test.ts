@@ -9,12 +9,6 @@ afterEach(() => {
   clearOfficeLogoCache();
 });
 
-/**
- * A stand-in for the browser's `Image` element. Schedules `onload` on a
- * MICROtask, the way a real decode resolves asynchronously relative to the
- * synchronous `src` assignment that starts it - `vi.stubGlobal` takes the
- * class as `unknown`, so no cast is needed to install it as `globalThis.Image`.
- */
 class FakeLogoImage {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -31,9 +25,7 @@ class FakeLogoImage {
 }
 
 /**
- * A macrotask boundary. Every microtask queued ahead of it - the fake
- * image's `onload` included - is guaranteed to have run by the time this
- * resolves, since a macrotask never starts while microtasks remain.
+ * Every microtask queued ahead of it - the fake image's `onload` included - is guaranteed to have run by the time this resolves, since a macrotask never starts while microtasks remain.
  */
 function flushMacrotask(): Promise<void> {
   return new Promise((resolve) => {
@@ -50,20 +42,13 @@ interface LogoDrawContext {
   readonly drawImage: CanvasRenderingContext2D["drawImage"];
 }
 
-/**
- * THE DOM boundary of this suite, in one place: `getContext` is typed by the
- * platform to return the whole 2D context, and the narrow double above is
- * what the module under test actually reads from it.
- */
 function asRenderingContext(context: LogoDrawContext): RenderingContext {
   return context as CanvasRenderingContext2D;
 }
 
 /**
- * Installs the whole decode pipeline jsdom does not have: an `Image` that
- * actually loads, a `URL` that hands back a fake blob URL, and a 2D canvas
- * context to draw into. Everything is torn down together, so a listener test
- * cannot leak a stub into the next one.
+ * Installs the whole decode pipeline jsdom does not have: an `Image` that actually loads, a `URL` that hands back a fake blob URL, and a 2D canvas context to draw into.
+ * Everything is torn down together, so a listener test cannot leak a stub into the next one.
  */
 function installLogoDecodePipeline(): () => void {
   vi.stubGlobal("Image", FakeLogoImage);
@@ -85,11 +70,8 @@ function installLogoDecodePipeline(): () => void {
 }
 
 /**
- * jsdom has no 2d canvas and no image decoder, so a logo can never become
- * ready here. That is the same state a real browser is in for the first frames
- * after a miss, which is why the contract under test is "returns null and does
- * not throw" rather than anything about pixels: the frame loop calls this on
- * every frame, and a throw would take the whole floor down.
+ * jsdom has no 2d canvas and no image decoder, so a logo can never become ready here.
+ * That is the same state a real browser is in for the first frames after a miss, which is why the contract under test is "returns null and does not throw" rather than anything about pixels: the frame loop calls this on every frame, and a throw would take the whole floor down.
  */
 describe("officeHarnessLogo", () => {
   it("returns null and stays silent where nothing can be rasterized", () => {
@@ -108,12 +90,7 @@ describe("officeHarnessLogo", () => {
   });
 
   it("serves one raster per harness and forgets it all on a clear", async () => {
-    // The theme is NOT part of the key: the mark is recolored to the harness
-    // accent, which is the same colour in both themes, so a per-theme entry
-    // only ever held a second identical raster. With a decode pipeline in
-    // place the raster actually lands, so a clear is observable as a cold
-    // miss followed by a DIFFERENT canvas - a no-op clear would hand the
-    // first one straight back.
+    // The theme is NOT part of the key: the mark is recolored to the harness accent, which is the same colour in both themes, so a per-theme entry only ever held a second identical raster.
     const restore = installLogoDecodePipeline();
     try {
       expect(officeHarnessLogo("claude")).toBeNull();
@@ -141,9 +118,7 @@ describe("onOfficeLogoReady", () => {
   });
 
   it("does not call a subscribed listener synchronously when nothing can decode", () => {
-    // jsdom has no image decoder, so this call can only ever claim the slot
-    // and return null - the ready notification is for a LATER frame, once a
-    // real decode finishes, never for this call itself.
+    // jsdom has no image decoder, so this call can only ever claim the slot and return null - the ready notification is for a LATER frame, once a real decode finishes, never for this call itself.
     const listener = vi.fn();
     const unsubscribe = onOfficeLogoReady(listener);
 
@@ -170,9 +145,7 @@ describe("onOfficeLogoReady", () => {
     officeHarnessLogo("claude");
     await flushMacrotask();
 
-    // A second decode runs, but the unsubscribed listener is no longer in
-    // the set - still one call, not two, is what proves the unsubscribe
-    // actually removed it rather than merely returning a no-op.
+    // A second decode runs, but the unsubscribed listener is no longer in the set - still one call, not two, is what proves the unsubscribe actually removed it rather than merely returning a no-op.
     expect(listener).toHaveBeenCalledTimes(1);
   });
 });

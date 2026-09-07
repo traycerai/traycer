@@ -6,16 +6,8 @@ import {
 } from "@tiptap/pm/model";
 
 /**
- * Rewrites a pasted slice so every soft newline is a paragraph boundary instead
- * of an inline `hardBreak` (or a literal `\n` inside a text node). Each visual
- * line then becomes its own textblock, so the native list/heading input rules
- * fire on every line - the composer no longer needs a custom plugin to start a
- * list on a non-first visual line.
- *
- * Only paragraph content (and loose top-level inline content) is split. Code
- * blocks keep their literal `\n`, and lists pass through untouched. When the
- * slice carries no soft break, the original slice is returned verbatim so a
- * plain single-line paste keeps its inline-merge behavior.
+ * Rewrites a pasted slice so every soft newline is a paragraph boundary instead of an inline `hardBreak` (or a literal `\n` inside a text node).
+ * Each visual line then becomes its own textblock, so the native list/heading input rules fire on every line - the composer no longer needs a custom plugin to start a list on a non-first visual line.
  */
 export function normalizeSliceSoftBreaks(slice: Slice, schema: Schema): Slice {
   if (!fragmentHasSoftBreak(slice.content)) return slice;
@@ -23,10 +15,7 @@ export function normalizeSliceSoftBreaks(slice: Slice, schema: Schema): Slice {
   const blocks = splitFragmentIntoParagraphs(slice.content, schema);
   const fragment = Fragment.fromArray(blocks);
 
-  // Open the paragraph boundaries (depth 1) so the leading block merges into the
-  // caret's left remainder and the trailing block into the right remainder - the
-  // standard "paste paragraphs into mid-text" behavior. A non-paragraph boundary
-  // (list / code block) stays closed so it is inserted as its own block.
+  // Open the paragraph boundaries (depth 1) so the leading block merges into the caret's left remainder and the trailing block into the right remainder - the standard "paste paragraphs into mid-text" behavior.
   const openStart = fragment.firstChild?.type.name === "paragraph" ? 1 : 0;
   const openEnd = fragment.lastChild?.type.name === "paragraph" ? 1 : 0;
   return new Slice(fragment, openStart, openEnd);

@@ -1,28 +1,5 @@
 /**
- * Glass-to-glass latency, read off the `requestVideoFrameCallback` metadata
- * the decode loop already receives (ticket 17, F7).
- *
- * `VideoFrameCallbackMetadata` carries three timestamps in the RECEIVER's
- * `performance.now()` clock domain:
- *
- * ```
- *   captureTime ──── network + jitter buffer ────▶ receiveTime
- *   receiveTime ──── decode + composite ─────────▶ expectedDisplayTime
- *   captureTime ──── the whole trip (glass to glass) ─▶ expectedDisplayTime
- * ```
- *
- * `captureTime` is the SENDER's capture instant, translated into this clock by
- * the Absolute Capture Time RTP header extension. Chromium negotiates that
- * extension by default, which is not the same as guaranteeing it: a peer that
- * strips it, or a WebView with no per-frame callback at all, leaves the field
- * `undefined`. `receiveTime` is likewise optional. So every derived value is
- * independently optional, and a missing input yields `null` - never a `NaN`
- * that would fail the wire's `nonnegative()` parse at the next cadence tick.
- *
- * Aggregation is a fixed-size ring of the last {@link LATENCY_WINDOW_SIZE}
- * frames: at ~30fps the 5s stats cadence sees ~150 frames, so the window is
- * roughly the trailing two seconds. Percentiles are nearest-rank over a copy,
- * which costs one 64-element sort per cadence tick and nothing per frame.
+ * Glass-to-glass latency, read off the `requestVideoFrameCallback` metadata the decode loop already receives (ticket 17, F7).
  */
 
 /** Deliberately small - see the module comment; this is a sample, not a history. */
@@ -49,12 +26,8 @@ interface VideoFrameLatencyWindow {
 }
 
 /**
- * A difference of two clock readings, or `null`. Rejects a missing endpoint,
- * a non-finite reading, and a negative result - the last is not merely
- * unrepresentable on the wire, it means the two timestamps did not come from
- * the same clock domain (a peer that stamped `captureTime` without the
- * extension's translation), and a clamp to zero would report that as a
- * suspiciously perfect measurement instead of as no measurement.
+ * A difference of two clock readings, or `null`.
+ * Rejects a missing endpoint, a non-finite reading, and a negative result - the last is not merely unrepresentable on the wire, it means the two timestamps did not come from the same clock domain (a peer that stamped `captureTime` without the extension's.
  */
 function elapsed(
   from: number | undefined,

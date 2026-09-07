@@ -33,17 +33,13 @@ vi.mock("../../../../shared/auth/link-login", async (importOriginal) => {
 
 vi.mock("../validate", () => ({ validateStoredCredentials: vi.fn() }));
 
-// The approval prompt. `answer.current` is what the human "types"; `null` is
-// Ctrl-D — the stream closes and the question is never answered at all, which
-// the double has to be able to express or the deny-on-close path is untestable.
+// The approval prompt.
+// `answer.current` is what the human "types"; `null` is Ctrl-D - the stream closes and the question is never answered at all, which the double has to be able to express or the deny-on-close path is untestable.
 const answer = vi.hoisted(() => ({
   current: "" as string | null,
   /** The question the human was last asked, verbatim. */
   lastPrompt: "",
-  /**
-   * When set, the human has not answered yet: `question` parks its callback
-   * in `release` so a test can advance the clock while the prompt is open.
-   */
+  /** When set, the human has not answered yet: `question` parks its callback in `release` so a test can advance the clock while the prompt is open. */
   hold: false,
   release: null as (() => void) | null,
   /** Every prompt readline was asked to repaint, in order. */
@@ -247,10 +243,7 @@ afterEach(() => {
   });
 });
 
-/**
- * Runs the flow far enough for `ticks` status polls to land. The flow sleeps
- * between polls, so the timers have to be driven for it to make progress.
- */
+/** Runs the flow far enough for `ticks` status polls to land. The flow sleeps between polls, so the timers have to be driven for it to make progress. */
 async function runWithPolls(
   ctx: CommandContext,
   ticks: number,
@@ -263,12 +256,7 @@ async function runWithPolls(
   return result;
 }
 
-/**
- * A terminal branch's whole contract: the run rejects, and it rejects with a
- * `CliError` carrying the machine-readable code and exit status a script will
- * branch on. Asserting only the prose would let the type or the code drift -
- * and the prose is the one part no caller depends on.
- */
+/** A terminal branch's whole contract: the run rejects, and it rejects with a `CliError` carrying the machine-readable code and exit status a script will branch on. Asserting only the prose would let the type or the code drift - and the prose is the one part no caller depends on. */
 function expectCliError(
   result: PromiseSettledResult<unknown>,
   code: string,
@@ -304,9 +292,7 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("ticks one footer line under the code: the rotation clock and the two facts", async () => {
-    // The footer is transient stderr, rewritten in place: it bypasses the
-    // line-oriented output sink, and it is the ONLY line under the code - the
-    // hint and the clock are one line, not a static sentence plus a counter.
+    // The footer is transient stderr, rewritten in place: it bypasses the line-oriented output sink, and it is the ONLY line under the code - the hint and the clock are one line, not a static sentence plus a counter.
     const restoreStderr = setTty(process.stderr, true);
     const stderrWrite = vi
       .spyOn(process.stderr, "write")
@@ -423,9 +409,7 @@ describe("runLinkPhoneFlow", () => {
     const output = printed(ctx);
     expect(output).toContain("● A phone scanned this code · iPhone");
     expect(output).toContain("Approve only if you scanned this code yourself.");
-    // The phone's address was never the phone's (it is the load balancer's,
-    // if anything) and its location is never reported: neither is shown
-    // anywhere, block or question.
+    // The phone's address was never the phone's (it is the load balancer's, if anything) and its location is never reported: neither is shown anywhere, block or question.
     for (const text of [output, answer.lastPrompt]) {
       expect(text).not.toContain("203.0.113.7");
       expect(text).not.toContain("Bengaluru");
@@ -440,10 +424,7 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("warns loudly when the server says the phone presented no code", async () => {
-    // A legitimate older app and a leaked-QR holder withholding the code look
-    // identical from here, so this must read as a different, worse state than
-    // an ordinary claim - and still be decidable, so the older app gets
-    // through.
+    // A legitimate older app and a leaked-QR holder withholding the code look identical from here, so this must read as a different, worse state than an ordinary claim - and still be decidable, so the older app gets through.
     statusMock.mockResolvedValue(CLAIMED_WITHOUT_CODE);
     answer.current = "";
     const ctx = interactiveCtx();
@@ -470,9 +451,8 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("states the claim's server-stated deadline above the question, and not without one", async () => {
-    // The deadline is the server's; the terminal only ticks it. It is part of
-    // the PROMPT - the line above the question - never a write of its own to
-    // the stream readline is drawing on.
+    // The deadline is the server's; the terminal only ticks it.
+    // It is part of the PROMPT - the line above the question - never a write of its own to the stream readline is drawing on.
     statusMock.mockResolvedValue({
       kind: "ok" as const,
       response: {
@@ -488,9 +468,7 @@ describe("runLinkPhoneFlow", () => {
 
     await runWithPolls(ctx, 1);
 
-    // The prompt goes up one poll interval (2 s) after the claim was stated
-    // 90 s out, so it opens at 1:28 - the server's deadline minus the
-    // terminal's own clock, not a copy of the claim window.
+    // The prompt goes up one poll interval (2 s) after the claim was stated 90 s out, so it opens at 1:28 - the server's deadline minus the terminal's own clock, not a copy of the claim window.
     expect(answer.lastPrompt).toBe(
       "  Approve within 1:28\nApprove sign-in from an iPhone? [y/N] ",
     );
@@ -507,11 +485,8 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("repaints the open prompt through readline as the deadline ticks, never over it", async () => {
-    // The regression: a clock written straight to stderr while readline owns
-    // that line lands on the question, or on a half-typed answer. Every tick
-    // must instead go through readline's own repaint (`setPrompt` + a
-    // cursor-preserving `prompt`), and only on a terminal - anywhere else,
-    // readline would print the prompt again per tick rather than repaint it.
+    // The regression: a clock written straight to stderr while readline owns that line lands on the question, or on a half-typed answer.
+    // Every tick must instead go through readline's own repaint (`setPrompt` + a cursor-preserving `prompt`), and only on a terminal - anywhere else, readline would print the prompt again per tick rather than repaint it.
     const restoreStderr = setTty(process.stderr, true);
     const stderrWrite = vi
       .spyOn(process.stderr, "write")
@@ -566,9 +541,7 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("does not ask readline to repaint on a dumb terminal", async () => {
-    // A TTY whose TERM is `dumb`: readline's `prompt()` skips its refresh and
-    // prints the prompt verbatim, so a repaint per tick would stack copies of
-    // the question beside a half-typed answer exactly as a raw write would.
+    // A TTY whose TERM is `dumb`: readline's `prompt()` skips its refresh and prints the prompt verbatim, so a repaint per tick would stack copies of the question beside a half-typed answer exactly as a raw write would.
     const restoreStderr = setTty(process.stderr, true);
     const originalTerm = process.env.TERM;
     process.env.TERM = "dumb";
@@ -641,10 +614,8 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("asks about the match code when the claim carries one, with the device as context", async () => {
-    // The phone in the user's hand shows the same two digits; agreement
-    // between the two screens is what the self-reported description cannot
-    // prove. The description stays, demoted to context, and the decision
-    // itself is unchanged - the code is never sent back.
+    // The phone in the user's hand shows the same two digits; agreement between the two screens is what the self-reported description cannot prove.
+    // The description stays, demoted to context, and the decision itself is unchanged - the code is never sent back.
     statusMock.mockResolvedValue(CLAIMED_WITH_CODE);
     answer.current = "y";
     const ctx = interactiveCtx();
@@ -757,9 +728,8 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("keeps the displayed code when rotation is refused by a claim that just landed", async () => {
-    // The claim arrives between a poll and the rotation moment, so the server
-    // refuses to mint over it. That is the flow succeeding, not failing: the
-    // original code must stay watched and reach the prompt.
+    // The claim arrives between a poll and the rotation moment, so the server refuses to mint over it.
+    // That is the flow succeeding, not failing: the original code must stay watched and reach the prompt.
     mintMock
       .mockResolvedValueOnce(mintedCode("ABCDE-FGHJK"))
       .mockResolvedValue({ kind: "claim-pending" });
@@ -813,9 +783,8 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("stops when the status poll is refused rather than watching blind", async () => {
-    // An `unauthorized` status is the credential dying mid-watch. Continuing
-    // would leave a QR on screen whose claim this terminal can no longer see,
-    // so the phone waits on an approval that can never be asked for.
+    // An `unauthorized` status is the credential dying mid-watch.
+    // Continuing would leave a QR on screen whose claim this terminal can no longer see, so the phone waits on an approval that can never be asked for.
     statusMock.mockResolvedValue({ kind: "unauthorized" });
 
     const result = await runWithPolls(interactiveCtx(), 1);
@@ -825,9 +794,8 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("stops when the code was already decided somewhere else", async () => {
-    // Another surface answered this claim. There is nothing left to approve,
-    // and the flow says so instead of prompting for a decision that would be
-    // refused.
+    // Another surface answered this claim.
+    // There is nothing left to approve, and the flow says so instead of prompting for a decision that would be refused.
     for (const decided of ["approved", "denied"] as const) {
       vi.clearAllMocks();
       mintMock.mockResolvedValue(mintedCode("ABCDE-FGHJK"));
@@ -873,9 +841,7 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("denies when stdin closes without an answer", async () => {
-    // Ctrl-D, or a piped stdin that ends. readline emits `close` and never
-    // calls back, so without the close handler the flow waits forever - after
-    // a phone has already claimed the code and is sitting on the approval.
+    // Ctrl-D, or a piped stdin that ends. readline emits `close` and never calls back, so without the close handler the flow waits forever - after a phone has already claimed the code and is sitting on the approval.
     statusMock.mockResolvedValue(CLAIMED);
     answer.current = null;
 

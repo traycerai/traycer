@@ -8,15 +8,7 @@ import {
 } from "@/lib/composer/tiptap-json-content";
 
 /**
- * The composer-local `/btw` (alias `/side`) command: fork the current chat at
- * its latest checkpoint and ask the rest of the prompt THERE, leaving this chat
- * untouched - Claude Code's own `/btw` semantics, done by the GUI because the
- * GUI is the only party that can open the fork as a tab.
- *
- * Intercepted client-side, never forwarded: a provider's CLI parses a prompt
- * whose first token is `/word` as one of ITS slash commands, and an unknown one
- * short-circuits before any model call (`num_turns: 0`, no assistant output) -
- * so a `/btw …` that reached the wire would answer with nothing.
+ * The composer-local `/btw` (alias `/side`) command: fork the current chat at its latest checkpoint and ask the rest of the prompt THERE, leaving this chat untouched - Claude Code's own `/btw` semantics, done by the GUI because the GUI is the only party that.
  */
 export type SideChatCommandName = "btw" | "side";
 
@@ -34,23 +26,13 @@ export interface SideChatCommandSplit {
   readonly command: SideChatCommandName;
   /**
    * The prompt with the command token removed - what the side chat is asked.
-   * May be empty (a bare `/btw`), which callers treat as "open the side chat
-   * with nothing to say yet".
+   * May be empty (a bare `/btw`), which callers treat as "open the side chat with nothing to say yet".
    */
   readonly rest: JsonContent;
 }
 
 /**
- * Whether submitted composer content leads with a side-chat command, and the
- * content that remains once it is stripped.
- *
- * Reads the same leading position the chip converter settles on - through the
- * atoms and indent that `isTransparentToLeadingScan` names - so a `/btw` the
- * converter turned into a chip (catalog hit or the ungated `/` fallback) and
- * one it left as text (a chip it refused because the token was not closed)
- * are both recognized. Only the document's FIRST paragraph is a command
- * context, exactly as for provider commands: a `/btw` inside a code block or
- * list stays prose.
+ * Whether submitted composer content leads with a side-chat command, and the content that remains once it is stripped.
  */
 export function splitLeadingSideChatCommand(
   content: JsonContent,
@@ -70,10 +52,7 @@ export function splitLeadingSideChatCommand(
   const leading = inlines[inlineIndex];
   const stripped = stripLeadingCommand(leading);
   if (stripped === null) return null;
-  // The separator is stripped in exactly one place: inside the command's own
-  // text node when the question shares it (`stripLeadingCommand`), otherwise
-  // off the node that follows the fully-consumed command (a chip, or a text
-  // node that was nothing but the command).
+  // The separator is stripped in exactly one place: inside the command's own text node when the question shares it (`stripLeadingCommand`), otherwise off the node that follows the fully-consumed command (a chip, or a text node that was nothing but the command).
   const following = inlines.slice(inlineIndex + 1);
   const restInlines = [
     ...inlines.slice(0, inlineIndex),
@@ -121,10 +100,8 @@ function stripLeadingCommand(node: JsonContent): {
 }
 
 /**
- * The separator the user typed between the command and the question. A chip is
- * followed by the space the picker inserts (already dropped by the text strip
- * above when the two shared a node); `/btw⏎question` leaves a hard break whose
- * only job was to end the command token.
+ * The separator the user typed between the command and the question.
+ * A chip is followed by the space the picker inserts (already dropped by the text strip above when the two shared a node); `/btw⏎question` leaves a hard break whose only job was to end the command token.
  */
 function dropLeadingBreak(
   inlines: ReadonlyArray<JsonContent>,
@@ -144,10 +121,8 @@ const SIDE_CHAT_COMMAND_DESCRIPTION =
   "Ask a side question in a forked copy of this chat, without interrupting it";
 
 /**
- * The picker rows for the two names. Local to the composer - the host has no
- * catalog entry to serve, since only the renderer can open the fork as a tab -
- * and stamped with the composer's harness so the chip they produce is
- * indistinguishable from a provider command's.
+ * The picker rows for the two names.
+ * Local to the composer - the host has no catalog entry to serve, since only the renderer can open the fork as a tab - and stamped with the composer's harness so the chip they produce is indistinguishable from a provider command's.
  */
 export function sideChatSlashCommands(
   harnessId: GuiHarnessId,
@@ -175,13 +150,8 @@ export function sideChatSlashCommands(
 const SIDE_CHAT_TITLE_MAX_LENGTH = 60;
 
 /**
- * The stored title for a side chat. Explicit rather than `""` on purpose: the
- * host gap-fills an empty title on a fork with the SOURCE's title, which both
- * blocks AI titling (it only fills an empty title) and names every side chat
- * after the conversation it came from. The question is what distinguishes one
- * side chat from the next, so it is the title; a bare `/btw` (nothing asked
- * yet) falls back to the source's name, and an untitled source stays `""` so
- * the fork remains eligible for AI titling like a fresh chat.
+ * The stored title for a side chat.
+ * Explicit rather than `""` on purpose: the host gap-fills an empty title on a fork with the SOURCE's title, which both blocks AI titling (it only fills an empty title) and names every side chat after the conversation it came from.
  */
 export function sideChatTitle(
   questionText: string,
@@ -199,9 +169,7 @@ export function sideChatTitle(
 }
 
 /**
- * Counted and cut in CODE POINTS, not UTF-16 units: `slice` can land between
- * the halves of a surrogate pair (an emoji, or anything outside the BMP) and
- * leave an unpaired half that renders as `�` in the sidebar.
+ * Counted and cut in CODE POINTS, not UTF-16 units: `slice` can land between the halves of a surrogate pair (an emoji, or anything outside the BMP) and leave an unpaired half that renders as `�` in the sidebar.
  */
 function truncateTitle(text: string): string {
   const points = Array.from(text);

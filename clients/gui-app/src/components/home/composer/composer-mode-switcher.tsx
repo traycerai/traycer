@@ -8,7 +8,6 @@ interface ComposerModeSwitcherProps {
   readonly onSwitch: () => void;
 }
 
-/** Shared Chat/Terminal switch so every new-agent surface stays identical. */
 export function ComposerModeSwitcher(props: ComposerModeSwitcherProps) {
   const { composerMode, disabled, onSwitch } = props;
   const nextInterface = composerMode === "chat" ? "Terminal" : "Chat";

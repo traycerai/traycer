@@ -30,28 +30,7 @@ export interface InlineRename {
 }
 
 /**
- * Shared inline "edit this label" state machine for the header and canvas tab
- * strips (and anywhere a label turns into an in-place `<input>`). The caller
- * owns the input's presentation (className / aria / testid) and spreads
- * `inputProps` onto it.
- *
- * Two behaviours matter and are easy to get wrong when hand-rolled per call
- * site:
- *
- * - **Focus.** The edit is started from a context menu; focusing in a
- *   `setTimeout` races the menu's focus-restore. We focus after mount, then
- *   again on the next animation frame after the menu focus scope has finished
- *   closing. The menu must also set
- *   `onCloseAutoFocus={(e) => e.preventDefault()}` so Radix does not pull focus
- *   back to the trigger and instantly blur-commit the input.
- * - **Idempotency.** Enter / Escape and the input's `blur` can both try to
- *   settle the same edit. `settledRef` guarantees commit/cancel runs at most
- *   once per session, so a blur delivered while the input unmounts can't fire a
- *   second (stale) commit.
- *
- * `onCommit` receives the trimmed value and is called only when it is non-empty
- * and actually changed; pass a stable (memoised) callback to keep `inputProps`
- * referentially stable.
+ * Focus after mount and again next frame; the menu must preventDefault onCloseAutoFocus. settledRef makes commit/cancel run at most once.
  */
 export function useInlineRename(args: {
   readonly value: string;

@@ -9,12 +9,6 @@ import {
   type SqliteRow,
 } from "./sqlite-columns";
 
-/**
- * Reader for Firefox's `cookies.sqlite`. Plaintext on every platform, so the
- * only thing this has to get right is scope: a non-empty `originAttributes`
- * is a container tab, a private window, or a partitioned (dFPI) cookie, and
- * none of those has an unpartitioned home in Electron's jar.
- */
 export function readFirefoxCookieRows(
   database: DatabaseSync,
 ): readonly ImportCookieRow[] {

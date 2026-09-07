@@ -1,15 +1,3 @@
-/**
- * Structural double for `IpcHostController`, shared by every IPC suite that
- * needs a bridge but is not testing the controller itself (see
- * `host-controller.test.ts` for that) - so each method just resolves a
- * plausible "ok" outcome.
- *
- * It lives here rather than in each suite because `HostControllerStatus` and
- * the mutation outcomes keep growing: a per-suite copy compiles until the day
- * a field is added, and then only the copies whose authors are in the room get
- * updated. One implementation means one compile error, in the file the person
- * adding the field is already looking at.
- */
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,

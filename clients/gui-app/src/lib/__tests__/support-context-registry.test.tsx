@@ -43,11 +43,8 @@ describe("support-context registry", () => {
     const { unmount } = render(<WritesOnMount />);
     expect(getSupportContextSnapshot().hostId).toEqual(knownField("host-abc"));
 
-    // Simulates a root crash: `RootErrorBoundary` unmounts the entire
-    // authenticated-runtime subtree that wrote this registry. A registry
-    // backed by React context would lose its value at this exact point,
-    // since the context provider is torn down along with the subtree; the
-    // module-scoped Zustand store (critique D5) must not.
+    // Simulates a root crash: `RootErrorBoundary` unmounts the entire authenticated-runtime subtree that wrote this registry.
+    // A registry backed by React context would lose its value at this exact point, since the context provider is torn down along with the subtree; the module-scoped Zustand store (critique D5) must not.
     unmount();
 
     expect(getSupportContextSnapshot().hostId).toEqual(knownField("host-abc"));

@@ -7,15 +7,7 @@ export interface WaitingStepCopy {
   readonly guidance: string | null;
 }
 
-/**
- * Shared header/guidance copy for the waiting step's phase (statefulness
- * fixup): both the add-profile dialog/Settings reauth panel's full step and
- * the in-chat banner's compact row derive their title text from this, so a
- * provider's real exchange-verification window ("verifying") always reads
- * the same way instead of leaving the generic "waiting for browser sign-in"
- * header showing while the paste field sits locked with nothing left to do
- * in the browser.
- */
+/** Shared header/guidance copy for the waiting step's phase (statefulness fixup). */
 export function waitingStepCopy(args: {
   readonly phase: ProviderProfileLoginFlowCodePastePhase;
   readonly queuePending: boolean;

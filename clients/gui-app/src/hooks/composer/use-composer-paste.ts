@@ -34,19 +34,10 @@ import {
 export const IMAGE_MIME_PREFIX = "image/";
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const IMAGE_READ_TIMEOUT_MS = 15_000;
-/**
- * Bound on a single file/URL's `fileDrops` round trip. Without this, a
- * stalled host IPC call never settles `resolveFilePaths`'s `Promise.all`,
- * which permanently gates submit (`isResolvingFilePaths` never clears) and
- * keeps the path-insertion job pending indefinitely.
- */
+/** Without this, a stalled host IPC call never settles `resolveFilePaths`'s `Promise.all`, which permanently gates submit (`isResolvingFilePaths` never clears) and keeps the path-insertion job pending indefinitely. */
 export const FILE_PATH_RESOLUTION_TIMEOUT_MS = 20_000;
 
-/**
- * Races `promise` against a timer, resolving to `onTimeout()` if the timer
- * fires first. Never rejects - a stalled or failing resolution both fall
- * back to the same "not resolved" outcome the caller already handles.
- */
+/** Never rejects - a stalled or failing resolution both fall back to the same "not resolved" outcome the caller already handles. */
 function withResolutionTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -127,11 +118,7 @@ function readFileAsDataUrl(file: File, signal: AbortSignal): Promise<string> {
   });
 }
 
-/**
- * `onOversized` lets each surface observe the 5MB rejection (which is
- * user-visible via the toast here) without the shared filter knowing surface
- * names; it receives no file details so nothing sensitive can leak into it.
- */
+/** `onOversized` lets each surface observe the 5MB rejection (which is user-visible via the toast here) without the shared filter knowing surface names; it receives no file details so nothing sensitive can leak into it. */
 export function collectImages(
   files: ReadonlyArray<File>,
   onOversized: () => void,
@@ -195,27 +182,13 @@ function base64PayloadFromDataUrl(dataUrl: string): string {
   return commaIndex < 0 ? dataUrl : dataUrl.slice(commaIndex + 1);
 }
 
-/**
- * Result of converting raw files to image attachment attrs, before insertion.
- * `release` (when supplied) is capacity a surface reserved across the
- * conversion writes above (landing's hash-only ingest) - `runImageIngest`
- * below calls it exactly once, only AFTER `insertAttrs` has run (or thrown),
- * never earlier. A surface with no such reservation (chat / new-conversation,
- * whose base64 ingest owns no budget) simply omits it.
- */
+/** `release` (when supplied) is capacity a surface reserved across the conversion writes above (landing's hash-only ingest) - `runImageIngest` below calls it exactly once, only AFTER `insertAttrs` has run (or thrown), never earlier. */
 export interface ComposerImageConversionResult<Attrs = ImageAttachmentAttrs> {
   readonly attrs: ReadonlyArray<Attrs>;
   readonly release?: () => void;
 }
 
-/**
- * Converts raw files to image attachment attrs (base64 vs hash-only differs
- * per surface) without inserting them. `onSettled` receives the attrs
- * that were actually accepted by the editor alongside every attr that was
- * successfully converted (accepted can be a strict subset, e.g. when the
- * editor isn't ready) - each surface's own bookkeeping (analytics, orphaned-
- * byte reconciliation) depends on that distinction.
- */
+/** Converts raw files to image attachment attrs (base64 vs hash-only differs per surface) without inserting them. */
 export interface ComposerImageIngest<Attrs = ImageAttachmentAttrs> {
   readonly convert: (
     files: ReadonlyArray<File>,
@@ -256,10 +229,7 @@ async function runImageIngest<Attrs>(
   } catch (error) {
     imageIngest.onRejected(error, signal.aborted);
   } finally {
-    // Fires after insertion decides the reserved bytes' fate (accepted,
-    // not-inserted, or thrown) - never before, and never from inside
-    // `convert` itself, so a concurrent admission check during the
-    // conversion-to-insertion handoff still sees this reservation charged.
+    // Fires after insertion decides the reserved bytes' fate (accepted, not-inserted, or thrown) - never before, and never from inside `convert` itself, so a concurrent admission check during the conversion-to-insertion handoff still sees this reservation charged.
     release?.();
     insertion.release();
   }
@@ -272,23 +242,12 @@ export interface UseComposerPasteResult {
   onDragEnter: (event: DragEvent<HTMLElement>) => void;
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   attachImageFiles: (files: ReadonlyArray<File>) => void;
-  /**
-   * Run a caller-provided async image job under the SAME pending accounting as
-   * `attachImageFiles` (so it counts toward `isIngestingImages`/submit gating)
-   * and abort signal (fired on unmount). Landing's in-place b64 paste uses this
-   * for its per-image hash+store+rewrite jobs, which insert nothing themselves —
-   * the node is already in the document.
-   */
+  /** Run a caller-provided async image job under the SAME pending accounting as `attachImageFiles` (so it counts toward `isIngestingImages`/submit gating) and abort signal (fired on unmount). */
   runPendingImageJob: (job: (signal: AbortSignal) => Promise<void>) => void;
   isDraggingFiles: boolean;
   dragOverlayVariant: FileTransferDragOverlayVariant | null;
   isIngestingImages: boolean;
-  /**
-   * True while a paste/drop's non-image file(s) are still resolving to real
-   * paths (async `fileDrops` round trip). Independent of `isIngestingImages`
-   * - a folder/file-only paste never touches the image pipeline at all, so
-   * surfaces that gate submit on attachment activity must check both.
-   */
+  /** a folder/file-only paste never touches the image pipeline at all, so surfaces that gate submit on attachment activity must check both. */
   isResolvingFilePaths: boolean;
 }
 
@@ -302,10 +261,7 @@ const IDLE_COMPOSER_DRAG_STATE: ComposerDragState = {
   overlayVariant: null,
 };
 
-/**
- * Whether a composer surface should hold submission open while either ingest
- * pipeline can still land content.
- */
+/** Whether a composer surface should hold submission open while either ingest pipeline can still land content. */
 export function isAttachmentIngestPending(
   paste: Pick<
     UseComposerPasteResult,
@@ -318,24 +274,11 @@ export function isAttachmentIngestPending(
 /** Commits resolved paths at the position captured when the paste began. */
 export type PathInsertionCommit = (paths: ReadonlyArray<string>) => boolean;
 
-/**
- * Non-image paste/drop ingest: resolves every non-image file (and any
- * URI-only clipboard/drop entry) to a real path and inserts each as its own
- * inline-code span. Runner-host-dependent (`fileDrops`) and relativization-
- * dependent (`mentionRoots`) - threaded in explicitly by each surface rather
- * than read from context here, so this stays trivially testable without a
- * `<RunnerHostProvider>`.
- */
+/** Runner-host-dependent (`fileDrops`) and relativization- dependent (`mentionRoots`) - threaded in explicitly by each surface rather than read from context here, so this stays trivially testable without a `<RunnerHostProvider>`. */
 export interface ComposerFilePathIngestArgs {
   readonly fileDrops: IFileDropHost;
   readonly mentionRoots: ReadonlyArray<string>;
-  /**
-   * Starts a path-insertion job anchored to the caret now (called
-   * synchronously from `onPaste`/`onDrop`, before any async resolution
-   * begins), returning a one-shot commit to call once paths are ready - or
-   * `null` if the editor isn't ready to start one at all. See
-   * `ComposerPromptEditorHandle.beginPathInsertion` for the full contract.
-   */
+  /** Starts a path-insertion job anchored to the caret now (called synchronously from `onPaste`/`onDrop`, before any async resolution begins), returning a one-shot commit to call once paths are ready - or `null` if the editor isn't ready to start one at all. */
   readonly beginPathInsertion: () => PathInsertionCommit | null;
 }
 
@@ -360,12 +303,7 @@ function resolutionFromPaths(
   return { name, path: path !== undefined && path.length > 0 ? path : null };
 }
 
-/**
- * Resolves one file/URL entry at a time (rather than a single batched call)
- * so a failure on one item never sinks the rest, and so the failure can be
- * attributed back to its source name for the partial-failure toast -
- * `IFileDropHost`'s batched result carries no such correlation.
- */
+/** Resolves one file/URL entry at a time (rather than a single batched call) so a failure on one item never sinks the rest, and so the failure can be attributed back to its source name for the partial-failure toast - `IFileDropHost`'s batched result carries no such correlation. */
 async function resolveFileToPath(
   file: File,
   fileDrops: IFileDropHost,
@@ -481,10 +419,7 @@ async function resolveAndInsertFilePaths(
   const displayPaths = resolvedPaths.map((path) =>
     displayPathForInsertion(path, filePaths.mentionRoots),
   );
-  // `commit` returns `false` when the editor was torn down (unmounted or
-  // replaced) while this resolution was in flight - skip both the insertion
-  // it already skipped internally and the toast, since there's no longer a
-  // composer surface for either to land on.
+  // `commit` returns `false` when the editor was torn down (unmounted or replaced) while this resolution was in flight - skip both the insertion it already skipped internally and the toast, since there's no longer a composer surface for either to land on.
   if (!commit(displayPaths)) return;
   showFilePathResolutionToast(resolvedPaths.length, failedNames);
 }
@@ -508,15 +443,7 @@ async function resolveAndInsertNativeClipboardFilePaths(
   commit(displayPaths);
 }
 
-/**
- * Drag/drop/paste plumbing shared by every composer surface. The image ingest
- * (base64 vs hash-only) is delegated to `imageIngest`/`insertAttrs`; image
- * filtering + the 5MB cap belong to the ingest via `collectImages`. Surfaces
- * wrap this with their own ingest: `useComposerPasteAdapter` (base64) for
- * chat / new-conversation, `useLandingComposerPaste` (hash-only) for landing.
- * Non-image file/URL entries resolve through `filePaths`, while images keep
- * their existing independent ingest behavior.
- */
+/** The image ingest (base64 vs hash-only) is delegated to `imageIngest`/`insertAttrs`; image filtering + the 5MB cap belong to the ingest via `collectImages`. */
 export function useComposerPasteEvents<Attrs>(
   imageIngest: ComposerImageIngest<Attrs>,
   insertAttrs: (attrs: ReadonlyArray<Attrs>) => number,
@@ -669,11 +596,7 @@ export function useComposerPasteEvents<Attrs>(
 
   const onDrop = useCallback(
     (event: DragEvent<HTMLElement>) => {
-      // Drag-enter can only inspect the transfer's type names, so an ordinary
-      // HTTPS URI is intentionally shown as potentially file-like until its
-      // payload is readable here. A drop does not reliably emit dragleave,
-      // therefore it must always clear the affordance before deciding whether
-      // this hook owns the content.
+      // A drop does not reliably emit dragleave, therefore it must always clear the affordance before deciding whether this hook owns the content.
       setDragState(IDLE_COMPOSER_DRAG_STATE);
       if (!hasClaimableFileTransfer(event.dataTransfer)) return;
       event.preventDefault();
@@ -701,11 +624,7 @@ export function useComposerPasteEvents<Attrs>(
   };
 }
 
-/**
- * Base64 paste adapter for chat / new-conversation: accepted files are read as
- * base64 (`filesToImageAttrs`) and inserted as inline `b64content` nodes. This
- * is the behavior every non-landing surface relies on — do NOT change it.
- */
+/** This is the behavior every non-landing surface relies on - do NOT change it. */
 export function useComposerPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
@@ -819,11 +738,7 @@ export interface InsertPathSpansCommandInput {
   readonly position: number;
 }
 
-/**
- * Inserts resolved paths in one history group at a mapped caret position.
- * Each path is its own inline-code span, separated by plain spaces, followed
- * by a plain trailing space so continued typing resumes outside the code mark.
- */
+/** Inserts resolved paths in one history group at a mapped caret position. */
 export function insertPathSpansCommand(
   editor: Editor,
   input: InsertPathSpansCommandInput,

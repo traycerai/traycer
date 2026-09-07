@@ -29,9 +29,8 @@ import {
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
 export const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
-// The listing's cache IDENTITY. `forceRefresh` is pinned to its canonical
-// `false` here and never varies: it is a fetch directive, so a forced refetch
-// must land in this same entry rather than fork a second one.
+// `forceRefresh` is pinned to its canonical `false` here and never varies: it is a fetch directive, so a
+// forced refetch must land in this same entry rather than fork a second one.
 const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
   includeActivity: false,
   activityPaths: null,
@@ -43,9 +42,7 @@ const EMPTY_WORKTREES: readonly WorktreeHostEntryV14[] = [];
 // Debounce for the warm-open listing snapshot writes, mirroring the activity
 // snapshot's cadence: pages settle in bursts, so wait for a quiet window.
 const WORKTREE_LISTING_PERSIST_DEBOUNCE_MS = 1_500;
-// Seed-vs-live boundary, same convention as the enrichment leg: the restore
-// seeds the listing query with its snapshot-era `updatedAt` (always a previous
-// run), while any fetch this session stamps a fresh `dataUpdatedAt`.
+// Seed-vs-live boundary, same convention as the enrichment leg.
 const APP_SESSION_START_MS = Date.now();
 
 // The base listing's cache identity, shared by the query options, the
@@ -58,14 +55,7 @@ export function listingQueryKeyFor(hostId: string | null): readonly unknown[] {
   );
 }
 
-// Rebuilds the snapshot's rows as page-shaped InfiniteData. Chunked at the
-// live page limit with SYNTHETIC chained cursors - not one flat page - so the
-// reconciling refetch behaves exactly like a normal one: TanStack refetches an
-// infinite query page-by-page, re-deriving each next cursor from the PREVIOUS
-// freshly-fetched page via `getNextPageParam`, so the synthetic cursors never
-// reach the wire and the visible list never collapses to a single live page
-// mid-reconcile. A shrunken live list simply stops early (stale tail pages are
-// dropped); a grown one continues through the auto-advance effect.
+// Chunked at the live page limit with synthetic chained cursors - not one flat page.
 function seededListingData(
   entries: readonly WorktreeHostEntryV14[],
 ): InfiniteData<WorktreeListAllForHostResponseV14, string | null> {
@@ -86,13 +76,8 @@ function seededListingData(
   return { pages, pageParams };
 }
 
-/**
- * Base worktree listing - the instant, viewport-independent leg. It walks the
- * host-wide listing in finite pages with `includeActivity: false`, accumulating
- * cheap rows as pages land. The heavy activity probes are fetched lazily, only
- * for the rows scrolled into view, by
- * {@link import("@/components/settings/panels/worktrees-enrichment").useWorktreeActivityEnrichment}.
- */
+/** The heavy activity probes are fetched lazily, only for the rows scrolled into view, by
+ * import("@/components/settings/panels/worktrees-enrichment").useWorktreeActivityEnrichment. */
 export function useWorktreeListing(
   client: HostClient<HostRpcRegistry> | null,
   reachable: boolean,
@@ -102,49 +87,24 @@ export function useWorktreeListing(
   readonly isError: boolean;
   readonly errorMessage: string | null;
   readonly isEmpty: boolean;
-  /**
-   * A later page failed after earlier pages already landed, so `worktrees` is
-   * a real but INCOMPLETE prefix of the host's full list - `isError` stays
-   * false (there is usable data to show), so this is the only signal that the
-   * list is truncated. Callers must not present `worktrees` as the complete
-   * set while this is true; surface it and let the user retry.
-   */
+  /** Callers must not present `worktrees` as the complete set while this is true; surface it and let the user
+   * retry. */
   readonly isPartial: boolean;
   readonly refresh: () => Promise<unknown>;
-  /**
-   * Resumes a truncated list by re-requesting only the page that failed - via
-   * the same `fetchNextPage`/`getNextPageParam` path auto-pagination already
-   * uses - instead of `refresh`'s full `refetch()`, which would re-request
-   * every already-landed page too.
-   */
+  /** Resumes a truncated list by re-requesting only the page that failed - via the same
+   * `fetchNextPage`/`getNextPageParam` path auto-pagination already uses. */
   readonly retryPartial: () => Promise<unknown>;
-  /**
-   * True only while the user's explicit Refresh (the forced-listing mutation)
-   * is in flight - NOT during background page fetches or enrichment. The
-   * toolbar keys the Refresh button's disabled/spinner state off this, so it
-   * stays clickable while a cold fleet is still converging its rows.
-   */
+  /** True only while the user's explicit Refresh (the forced-listing mutation) is in flight - not during
+   * background page fetches or enrichment. */
   readonly isRefreshPending: boolean;
-  /**
-   * When the listing data was last written: a live fetch's wall-clock stamp,
-   * or the snapshot's own save time while the warm-open seed is still what's
-   * showing. `null` until any data exists. Drives the toolbar's
-   * "Updated Xm ago" label under the manual-refresh model.
-   */
+  /** When the listing data was last written: a live fetch's wall-clock stamp, or the snapshot's own save time
+   * while the warm-open seed is still what's showing. */
   readonly lastUpdatedAt: number | null;
 } {
   const readiness = useReactiveHostReadiness(client);
   const enabled = reachable && client !== null && readiness.isReady;
   const queryClient = useQueryClient();
-  // ---- Warm-open restore (persisted last-known listing) --------------------
-  // The row list itself blocks first paint: nothing renders until the base
-  // listing query has data, and on a cold host that RPC takes seconds. Seed
-  // the last run's listing on the first open per host - keyed by the same
-  // hostId the query key uses, so rows paint even while the host is still
-  // dialing. The seed keeps its snapshot-era `updatedAt`, so it is stale from
-  // birth: the observer refetches it the moment the query is enabled, and the
-  // live response replaces the seed wholesale (deleted worktrees drop, new
-  // ones appear). Live cache data is never overwritten.
+  // Live cache data is never overwritten.
   const restoredHostsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const hostId = readiness.hostId;
@@ -166,10 +126,7 @@ export function useWorktreeListing(
     >(key, seededListingData(snapshot.entries), {
       updatedAt: snapshot.savedAt,
     });
-    // Under `staleTime: Infinity` a seed would otherwise read as fresh
-    // forever. The snapshot is ANOTHER session's truth, so mark it
-    // invalidated: the observer reconciles it against the host exactly once
-    // (on enable), and only live data earned this session sticks.
+    // Under `staleTime: Infinity` a seed would otherwise read as fresh forever.
     void queryClient.invalidateQueries({ queryKey: key });
     logPerfEvent("worktree.listing_restore", {
       restoredCount: snapshot.entries.length,
@@ -215,11 +172,8 @@ export function useWorktreeListing(
       initialPageParam: null,
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       enabled,
-      // Manual-refresh model: the listing never expires on its own. The host
-      // pushes `worktree.changed` only on real mutations now (no periodic
-      // sweep), so freshness is owned by the Refresh button + invalidation;
-      // the toolbar surfaces `lastUpdatedAt` so staleness is visible instead
-      // of silently refetched.
+      // The host pushes `worktree.changed` only on real mutations now (no periodic sweep), so freshness is owned by
+      // the Refresh button + invalidation.
       staleTime: Infinity,
     }),
   );
@@ -234,12 +188,7 @@ export function useWorktreeListing(
       // rejected promise is swallowed by useRefreshSpinner.
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh worktrees."),
-      // Annotated to the version this panel reads, exactly as
-      // `fetchWorktreeListPage` above is. The client always returns the
-      // CANONICAL response, which is now a superset of this one; without the
-      // annotation the inferred wider type flows into `UseMutationOptions`,
-      // which is invariant in its data parameter through `onSuccess`, and the
-      // options object stops matching the declared generic.
+      // The client always returns the canonical response, which is now a superset of this one.
       mutationFn: (input): Promise<WorktreeListAllForHostResponseV14> =>
         withHostQueryErrorBoundary("worktree.listAllForHost", () =>
           input.client.request("worktree.listAllForHost", {
@@ -257,12 +206,8 @@ export function useWorktreeListing(
           pages: [response],
           pageParams: [null],
         });
-        // The forced listing re-resolves the BASE rows, so every cached overlay
-        // is now older than its base row and `acceptedEnrichedByPath` rejects it
-        // - the rows read "Checking..." until something re-probes them. Nothing
-        // would: the overlays keep their keys, so they are neither invalidated
-        // nor sweep candidates. Without this the Refresh button strands every
-        // on-screen row, permanently on a host that lacks `worktree.changed`.
+        // Nothing would: the overlays keep their keys, so they are neither invalidated nor sweep candidates. Without
+        // this the Refresh button strands every on-screen row, permanently on a host that lacks `worktree.changed`.
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(
             input.hostId,
@@ -280,22 +225,13 @@ export function useWorktreeListing(
     if (isFetchingNextPage || isError) return;
     void fetchNextPage();
   }, [enabled, fetchNextPage, hasNextPage, isError, isFetchingNextPage]);
-  // Memoized on `data` (structurally shared by TanStack), so consumers keyed on
-  // the array identity - the merge/search memos and the enrichment sweep's
-  // denominator - re-derive only when a page actually changes, not per render.
+  // Memoized on `data` (structurally shared by TanStack), so consumers keyed on the array identity - the
+  // merge/search memos and the enrichment sweep's denominator.
   const worktrees = useMemo(
     () => data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES,
     [data],
   );
-  // ---- Debounced snapshot writes (see the restore above) -------------------
-  // Only COMPLETE listings persist: `isSuccess && !hasNextPage` means every
-  // page landed, so a restored row list is never a truncated prefix (a partial
-  // walk has `isError` with loaded data, which drops `isSuccess`). The empty
-  // case never writes (guarded in the writer too): a zero-row snapshot can't
-  // improve a cold open. The timer re-checks the LIVE-data gate at fire time -
-  // a restored seed still carries its snapshot-era `dataUpdatedAt`, and
-  // re-writing it would extend a stale snapshot's max-age life without the
-  // host having confirmed anything this session.
+  // The empty case never writes (guarded in the writer too): a zero-row snapshot can't improve a cold open.
   const persistDebounceRef = useRef<number | null>(null);
   useEffect(() => {
     const hostId = readiness.hostId;
@@ -345,11 +281,7 @@ export function useWorktreeListing(
     painted: isSuccess && worktrees.length > 0,
     rowCount: worktrees.length,
   });
-  // `data !== undefined` - not `worktrees.length > 0` - is what distinguishes
-  // "a page has landed" from "no page has landed yet": a host with zero
-  // worktrees legitimately has an empty first page, and a later background
-  // error on that host must still read as partial/empty, never as the hard
-  // error state (which would hide the fact that the empty result was real).
+  // `data !== undefined` - not `worktrees.length > 0`.
   const hasLoadedData = data !== undefined;
   return {
     worktrees,

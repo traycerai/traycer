@@ -67,9 +67,7 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
-// The link seam reaches the desktop bridge through `RunnerHostContext`, which
-// this suite has no provider for; the terminal's own `useRunnerHost` mock
-// above covers its file-drop wiring only.
+// The link seam reaches the desktop bridge through `RunnerHostContext`, which this suite has no provider for; the terminal's own `useRunnerHost` mock above covers its file-drop wiring only.
 vi.mock("@/lib/links/open-external-link", () => ({
   useOpenExternalLink: () => ({
     isPending: false,
@@ -89,9 +87,7 @@ vi.mock("@xterm/xterm", () => ({
     readonly buffer = {
       active: { baseY: 0, length: 24, type: "normal" as const },
     };
-    // Real cell-width behaviour is covered in
-    // terminal-xterm-host-unicode-width.test.tsx against a real Terminal; here
-    // the addon just needs somewhere to register.
+    // Real cell-width behaviour is covered in terminal-xterm-host-unicode-width.test.tsx against a real Terminal; here the addon just needs somewhere to register.
     readonly unicode = { activeVersion: "6", register: vi.fn() };
     readonly focus = vi.fn();
     readonly scrollPages = vi.fn();
@@ -282,10 +278,6 @@ describe("<TerminalXtermHost /> link handling", () => {
     });
   });
 
-  // OSC 8 hyperlinks (e.g. Codex's OAuth sign-in URL) flow through xterm's
-  // built-in OscLinkProvider, which falls back to a dead `window.open` confirm
-  // dialog unless `options.linkHandler` is set. Guard that we set it and route
-  // it to the host browser.
   it("routes OSC 8 hyperlinks through the host browser via linkHandler", async () => {
     renderHost();
 

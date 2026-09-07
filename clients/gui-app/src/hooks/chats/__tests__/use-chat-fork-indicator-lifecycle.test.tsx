@@ -122,10 +122,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
       "host.notifications.indicatorState",
     ]);
 
-    // No notification feed is mounted or changed in this test. These explicit
-    // reads stand in for the fixed lifecycle poll while keeping wall-clock
-    // timers out of the test; the production query client's 60s stale cache is
-    // otherwise untouched.
+    // These explicit reads stand in for the fixed lifecycle poll while keeping wall-clock timers out of the test; the production query client's 60s stale cache is otherwise untouched.
     harness.forkEvent.value = sampleForkEvent();
     await act(async () => {
       await result.current.refetchFork();

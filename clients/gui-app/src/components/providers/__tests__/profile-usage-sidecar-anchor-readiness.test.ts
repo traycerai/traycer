@@ -368,15 +368,13 @@ describe("waitForAnchorPlacement", () => {
         resolved = true;
       });
 
-      // Well past the old 2000ms fallback - and past it again, several
-      // times over. Nothing internal should ever fire; only an explicit
-      // placement mutation or an abort may resolve this.
+      // Well past the old 2000ms fallback - and past it again, several times over. Nothing internal should ever
+      // fire; only an explicit placement mutation or an abort may resolve this.
       await vi.advanceTimersByTimeAsync(60_000);
       expect(resolved).toBe(false);
 
-      // Abort is still the only way out, and it still works after a long
-      // pending period - proves cleanup isn't tied to a timer that no
-      // longer exists.
+      // Abort is still the only way out, and it still works after a long pending period - proves cleanup isn't tied
+      // to a timer that no longer exists.
       controller.abort();
       await vi.advanceTimersByTimeAsync(0);
       expect(resolved).toBe(true);

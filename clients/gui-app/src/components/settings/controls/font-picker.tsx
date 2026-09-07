@@ -29,15 +29,8 @@ interface FontPickerProps {
   readonly ariaLabel: string;
 }
 
-/**
- * Searchable font picker modeled on `ThemePresetPicker` (Popover + cmdk
- * combobox, portaled into the enclosing Settings dialog so its scroll shard
- * still works). The first entry is always the group's default ("Figtree
- * (Default)" / "System Default" / "Same as code font"), which stores `null`.
- * Typing a name absent from `options` offers a "Use <typed>" item so an
- * unlisted or misdetected font - and non-desktop hosts, which have no
- * enumerated list at all - still works.
- */
+/** The first entry is always the group's default ("Figtree (Default)" / "System Default" / "Same as code
+ * font"), which stores `null`. */
 export function FontPicker(props: FontPickerProps) {
   const { value, onChange, options, defaultLabel, resetTooltip, ariaLabel } =
     props;

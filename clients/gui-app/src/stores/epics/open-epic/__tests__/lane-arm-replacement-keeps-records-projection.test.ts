@@ -1,31 +1,6 @@
 /**
- * A replica REPLACEMENT on the lane arm must keep the projector bound to the
- * lane head, not the fresh (and forever empty) root `Y.Doc`.
- *
- * ## Why this suite exists
- *
- * `epic-records-replica.ts`'s `replaceReplica()` used to end with
- * `projector.attach(doc, projectorSink)` unconditionally. On the LANE arm the
- * projector is bound to the lane head instead (`attachLaneHead()` ->
- * `projector.attachLaneSources`), so every replica replacement -
- * `resetAllPlanes` on an authority-epoch change, `resetStateRecordsOnly` on a
- * `resumeTooOld` lead, `requestFreshSnapshot` - silently rebound the projector
- * onto the brand-new, forever-empty root doc. Every later `applyLaneState`
- * kept updating `laneSlices` correctly, but the projector was no longer
- * reading from it: the store showed ZERO artifacts for the rest of the
- * session (staging, 2026-09-04: a host restart minted a new replica identity
- * for one epic, the tab's next lead was `authorityEpochChanged`, the rows
- * landed in the lane replica, and the projection never read them).
- *
- * The fix tracks `attachedHead` (`"doc" | "lane" | null`) and, in
- * `replaceReplica()`, re-attaches whichever head was attached before the
- * replacement - the lane head via `attachLaneSources()` (with `laneSlices`
- * emptied first, so this replica does not depend on the arm's own reset
- * republishing them empty a step later) rather than always the doc head.
- *
- * This suite pins that the lane arm survives all three replacement paths
- * (authority-epoch change, resume-too-old, and one more that specifically
- * proves the row set is DISCARDED and refilled rather than merged).
+ * A replica REPLACEMENT on the lane arm must keep the projector bound to the lane head, not the
+ * fresh (and forever empty) root `Y.Doc`.
  */
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
@@ -54,10 +29,8 @@ const ARTIFACT_A_ID = "artifact-a";
 const ARTIFACT_B_ID = "artifact-b";
 
 /**
- * One `spec` artifact row on the records lane, in the shape
- * `epicArtifactRecordSchema` accepts: the persisted spec fields minus
- * `artifactRoomId` (omitted at the wire layer - a lane client has no use for
- * it), plus the wire-only `revision`.
+ * One `spec` artifact row on the records lane, in the shape `epicArtifactRecordSchema` accepts:
+ * the persisted spec fields minus `artifactRoomId` (omitted at the wire layer - a lane client has
  */
 interface SpecArtifactRecordFixture {
   readonly kind: "spec";
@@ -151,9 +124,8 @@ function stateSnapshot(
 }
 
 function openLaneRig(options: LaneRigOptions): LaneRig {
-  // The LATEST callbacks only, exactly as the sibling authority-replacement
-  // suite's rig: a factory call reassigns these, which is what matters for a
-  // rig that drives a replacement mid-session.
+  // The LATEST callbacks only, exactly as the sibling authority-replacement suite's rig: a factory
+  // call reassigns these, which is what matters for a rig that drives a replacement mid-session.
   let statusCallbacks: EpicStatusStreamCallbacks | null = null;
   let stateCallbacks: EpicStateStreamCallbacks | null = null;
 
@@ -251,24 +223,15 @@ describe("a lane-arm replica replacement keeps the records projection bound to t
     expect(opened.artifacts.allIds).toContain(ARTIFACT_A_ID);
     expect(opened.artifacts.byId[ARTIFACT_A_ID]?.title).toBe("Spec A");
 
-    // The replacement: NO transport event, only the two lanes' next
-    // snapshots at the new epoch - exactly as the sibling
-    // authority-replacement suite drives it. The status snapshot's
-    // `foldAuthorityEpoch` is what actually fires `resetAllPlanes` /
-    // `replaceReplica()`; the state snapshot's own replacement request
-    // coalesces into the same one because both name the same transition.
+    // The replacement: NO transport event, only the two lanes' next snapshots at the new epoch -
+    // exactly as the sibling authority-replacement suite drives it.
     rig.deliverStatusSnapshot("authority-epoch-2");
     rig.deliverStateSnapshot("authority-epoch-2", "authorityEpochChanged", 1, [
       specArtifactRecord(ARTIFACT_A_ID, "Spec A"),
     ]);
     await settle(rig.handle);
 
-    // THE REDDENING ASSERTION. Before the fix, `replaceReplica()` always
-    // ended with `projector.attach(doc, projectorSink)`, silently rebinding
-    // the projector onto the brand-new, forever-empty root `Y.Doc`. Every
-    // later `applyLaneState` kept `laneSlices` correct, but the projector
-    // was reading from the empty doc instead - the store held zero
-    // artifacts for the rest of the session.
+    // THE REDDENING ASSERTION.
     const replaced = rig.handle.store.getState();
     expect(replaced.snapshotLoaded).toBe(true);
     expect(replaced.artifacts.allIds).toContain(ARTIFACT_A_ID);
@@ -291,10 +254,6 @@ describe("a lane-arm replica replacement keeps the records projection bound to t
       ARTIFACT_A_ID,
     );
 
-    // `resumeTooOld` routes through `resetStateRecordsOnly`, which calls the
-    // SAME `records.replaceReplica()` the authority-epoch path does - this is
-    // the second of `replaceReplica()`'s two callers, and the bug lived in
-    // the function both share.
     rig.deliverStateSnapshot("authority-epoch-1", "resumeTooOld", 2, [
       specArtifactRecord(ARTIFACT_A_ID, "Spec A"),
     ]);
@@ -321,10 +280,6 @@ describe("a lane-arm replica replacement keeps the records projection bound to t
       ARTIFACT_A_ID,
     );
 
-    // The replacement snapshot carries ONLY artifact B - proving both halves
-    // of the empty-then-refill path: the old row is gone (the replica really
-    // was emptied, not left stale) AND the new row is there (the projector is
-    // still bound to whatever `laneSlices` holds, not stuck reading nothing).
     rig.deliverStatusSnapshot("authority-epoch-2");
     rig.deliverStateSnapshot("authority-epoch-2", "authorityEpochChanged", 1, [
       specArtifactRecord(ARTIFACT_B_ID, "Spec B"),

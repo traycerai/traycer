@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-// In-memory stand-in for idb-keyval, mirroring landing-image-store.test. Keyed by
-// string hash; the store argument is ignored. The Map is hoisted so tests can
-// reinstall a working `set` after a rejecting override without losing the body.
+// In-memory stand-in for idb-keyval, mirroring landing-image-store.test.
+// Keyed by string hash; the store argument is ignored.
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
 function idbStringKey(key: IDBValidKey): string {
@@ -163,11 +162,11 @@ describe("landing-image-gc", () => {
 
   it("[C1] does not delete stored bytes before the desktop draft set is known", async () => {
     const m = await loadModules({ desktop: true });
-    // Restored bytes (IDB-only, no session entry) — the desktop-restart shape.
+    // Restored bytes (IDB-only, no session entry) - the desktop-restart shape.
     await m.idb.set("restored-1", bytesOf([1, 2, 3]), m.store.imageStore());
 
     // Drafts have NOT been projected yet (empty set). An UNGATED sweep would
-    // compute orphans = [restored-1] and delete it — the C1 data-loss bug.
+    // compute orphans = [restored-1] and delete it - the C1 data-loss bug.
     expect(m.gc.landingDraftsReady()).toBe(false);
     await m.gc.reconcile();
     await flush();
@@ -177,11 +176,7 @@ describe("landing-image-gc", () => {
 
   it("[C1] the first desktop projection flips the ready gate and runs the sweep", async () => {
     const m = await loadModules({ desktop: true });
-    // [B2] Open the deletion gate WITHOUT flipping readiness: a non-empty
-    // authoritative snapshot marks the roots trustworthy but, unlike
-    // `markLandingEditorMounted`, does not itself fire `markLandingDraftsReady`
-    // (which mount now does). That keeps `landingDraftsReady()` false below so
-    // this test still exercises the FIRST projection flipping the ready gate.
+    // [B2] Open the deletion gate WITHOUT flipping readiness: a non-empty authoritative snapshot marks the roots trustworthy but, unlike `markLandingEditorMounted`, does not itself fire `markLandingDraftsReady` (which mount now does).
     m.gc.markLandingDraftsAuthoritativeNonEmpty();
     await m.idb.set(
       "restored-orphan",
@@ -207,10 +202,8 @@ describe("landing-image-gc", () => {
 
   it("[B2] defers orphan deletion on desktop while the roots are untrustworthy", async () => {
     const m = await loadModules({ desktop: true });
-    // Restored bytes, ready gate open (draft set known), but NO trustworthy
-    // signal yet: neither markLandingDraftsAuthoritativeNonEmpty nor
-    // markLandingEditorMounted. A cold-start empty projection would otherwise
-    // reap every restored image as an "orphan".
+    // Restored bytes, ready gate open (draft set known), but NO trustworthy signal yet: neither markLandingDraftsAuthoritativeNonEmpty nor markLandingEditorMounted.
+    // A cold-start empty projection would otherwise reap every restored image as an "orphan".
     await m.idb.set("cold-orphan", bytesOf([1, 2, 3, 4]), m.store.imageStore());
     m.gc.markLandingDraftsReady();
     await flush();
@@ -318,10 +311,8 @@ describe("landing-image-gc", () => {
     m.gc.markLandingDraftsReady();
     await flush();
 
-    // Gate the keys() read so it resolves only after we release it — modelling a
-    // paste whose putImage lands DURING reconcile's `await imageHashKeys()`. The
-    // one-shot override delegates back to the default mock impl (which reads the
-    // current data) once released.
+    // Gate the keys() read so it resolves only after we release it - modelling a paste whose putImage lands DURING reconcile's `await imageHashKeys()`.
+    // The one-shot override delegates back to the default mock impl (which reads the current data) once released.
     let releaseKeys: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       releaseKeys = resolve;
@@ -332,25 +323,22 @@ describe("landing-image-gc", () => {
     );
 
     const reconcilePromise = m.gc.reconcile();
-    // Reconcile is now parked on the gated keys(). A paste completes: bytes land in
-    // IDB + session, but the node is NOT inserted, so the hash is in neither the
-    // persisted drafts nor the live editor.
+    // Reconcile is now parked on the gated keys().
+    // A paste completes: bytes land in IDB + session, but the node is NOT inserted, so the hash is in neither the persisted drafts nor the live editor.
     const pasted = await m.store.putImage(bytesOf([40, 41, 42]));
     releaseKeys();
     await reconcilePromise;
     await flush();
 
-    // The fix snapshots the session/live roots AFTER the await, so the just-pasted
-    // bytes are protected even though they were not referenced when reconcile
-    // started. (Pre-fix, the pre-await snapshot missed them and they were reaped.)
+    // The fix snapshots the session/live roots AFTER the await, so the just-pasted bytes are protected even though they were not referenced when reconcile started.
+    // (Pre-fix, the pre-await snapshot missed them and they were reaped.)
     expect(await m.store.imageHashKeys()).toContain(pasted);
   });
 
   it("deletes orphan bytes once the sweep is unblocked (session empty)", async () => {
     const m = await loadModules({ desktop: true });
-    // [B2] The deleting sweep only runs once the roots are trustworthy; mounting
-    // the landing editor unblocks it. (The cold-start deferral itself — no delete
-    // while untrustworthy — is covered separately.)
+    // [B2] The deleting sweep only runs once the roots are trustworthy; mounting the landing editor unblocks it.
+    // (The cold-start deferral itself - no delete while untrustworthy - is covered separately.)
     m.gc.markLandingEditorMounted();
     await m.idb.set("orphan", bytesOf([1]), m.store.imageStore());
     m.gc.markLandingDraftsReady();
@@ -414,19 +402,12 @@ describe("landing-image-gc", () => {
   });
 
   it("partial putImage failure rolls back failed presence and reclaims the successful sibling orphan", async () => {
-    // Real scheduleLandingImageReconcile + reconcile (not a no-op mock): after a
-    // multi-image ingest where one putImage rejects, the failed hash must not
-    // report present without durable bytes, and the successful sibling's now-
-    // unreferenced IDB bytes must be reclaimed by the two-phase reconcile chain.
+    // Real scheduleLandingImageReconcile + reconcile (not a no-op mock): after a multi-image ingest where one putImage rejects, the failed hash must not report present without durable bytes, and the successful sibling's now- unreferenced IDB bytes must be.
     const m = await loadModules({ desktop: false });
     await flush();
     expect(m.gc.landingDraftsReady()).toBe(true);
 
-    // Empty live roots (no drafts, no live runtime mirror - loadModules already
-    // reset draftRuntimeRegistry and this test never attaches one) so a
-    // successful put with no editor node is unreferenced and eligible for
-    // reclaim — the same shape as Promise.all multi-file attach after
-    // onRejected (no nodes inserted).
+    // Empty live roots (no drafts, no live runtime mirror - loadModules already reset draftRuntimeRegistry and this test never attaches one) so a successful put with no editor node is unreferenced and eligible for reclaim - the same shape as Promise.all.
     m.draft.useLandingDraftStore.setState({
       drafts: [],
       activeDraftId: null,
@@ -463,9 +444,8 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).toContain(successHash);
     expect(m.store.sessionObjectUrl(successHash)).not.toBeNull();
 
-    // (b) Real scheduler: onRejected would schedule reconcile. First sweep
-    // releases the unreferenced session entry and schedules a follow-up; the
-    // follow-up reclaims the now-unprotected IDB bytes.
+    // (b) Real scheduler: onRejected would schedule reconcile.
+    // First sweep releases the unreferenced session entry and schedules a follow-up; the follow-up reclaims the now-unprotected IDB bytes.
     m.gc.scheduleLandingImageReconcile();
     await vi.advanceTimersByTimeAsync(250);
     await flush();
@@ -485,11 +465,8 @@ describe("landing-image-gc", () => {
   });
 
   it("[B1+B2] later empty-inbound guard preserves roots; mount then reaps unreferenced restored bytes", async () => {
-    // Real projection → GC seam (no stubbed gates): the first empty desktop
-    // hydrate is authoritative and opens readiness, but NOT the deletion gate.
-    // After a live draft exists, a later spurious empty inbound preserves its
-    // roots. markLandingEditorMounted then opens the deletion gate and reaps
-    // genuine orphans while keeping the live draft's bytes.
+    // Real projection → GC seam (no stubbed gates): the first empty desktop hydrate is authoritative and opens readiness, but NOT the deletion gate.
+    // After a live draft exists, a later spurious empty inbound preserves its roots. markLandingEditorMounted then opens the deletion gate and reaps genuine orphans while keeping the live draft's bytes.
     const m = await loadModules({ desktop: true });
     m.draft.applyLandingDraftDesktopProjection({
       epicTabs: [],

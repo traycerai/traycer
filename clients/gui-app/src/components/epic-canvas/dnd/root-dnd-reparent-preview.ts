@@ -1,10 +1,6 @@
 /**
- * Sidebar-reparent preview + spring-load for a `sidebar-node` drag. Split out
- * of `root-dnd-provider.tsx` so the provider stays a thin lifecycle dispatcher
- * (mirroring `root-dnd-collision.ts` / `root-dnd-commits.ts`): everything that
- * resolves, validates, highlights, or clears the row/panel reparent preview -
- * and the auto-expand spring-load timer - lives here. The provider owns the
- * gesture-scoped refs and feeds them in.
+ * Sidebar-reparent preview + spring-load for a `sidebar-node` drag.
+ * Split out of `root-dnd-provider.tsx` so the provider stays a thin lifecycle dispatcher (mirroring `root-dnd-collision.ts` / `root-dnd-commits.ts`): everything that resolves, validates, highlights, or clears the row/panel reparent preview - and the auto-expand spring-load timer - lives here.
  */
 import type { RefObject } from "react";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
@@ -61,10 +57,7 @@ export interface SpringLoadEntry {
 }
 
 /**
- * The provider's gesture-scoped reparent refs, bundled so the preview helpers
- * take one object instead of three positional ref params. `lastResolved` is the
- * canvas drop ref (cleared when a reparent wins); `lastReparent` is the reparent
- * commit ref; `springLoad` tracks the pending auto-expand timer.
+ * The provider's gesture-scoped reparent refs, bundled so the preview helpers take one object instead of three positional ref params.
  */
 export interface ReparentRefs {
   readonly lastResolved: RefObject<ResolvedEpicCanvasDrop | null>;
@@ -84,13 +77,7 @@ export function clearSpringLoad(
   }
 }
 
-/**
- * Spring-load: while a VALID reparent row stays hovered, arm a timer that
- * expands it so the dragger can reach nested children mid-drag. Gated on
- * "has children" (read from the projected tree); `expand` is idempotent, so an
- * already-expanded parent is a harmless no-op. Re-arms only when the hovered
- * nodeId changes; cleared on target change / drag end / cancel.
- */
+/** Re-arms only when the hovered nodeId changes; cleared on target change / drag end / cancel. */
 function armSpringLoadForRow(
   target: Extract<
     EpicCanvasDropTargetData,
@@ -126,9 +113,7 @@ export function clearSidebarReparentPreview(refs: ReparentRefs): void {
 
 /**
  * Whether the dragged node may reparent onto this target, given the live doc.
- * Row targets defer entirely to `canReparent`; panel (root) drops additionally
- * require the node's family to match the panel so a cross-panel empty-space
- * hover reads as no-drop.
+ * Row targets defer entirely to `canReparent`; panel (root) drops additionally require the node's family to match the panel so a cross-panel empty-space hover reads as no-drop.
  */
 function isSidebarReparentValid(
   tree: TreeSlice,
@@ -136,9 +121,8 @@ function isSidebarReparentValid(
   target: SidebarReparentTarget,
   newParentId: string | null,
 ): boolean {
-  // Against the PROJECTED tree, not the doc maps: registry-backed chats and
-  // terminal agents have no doc entry, and the doc evaluator would read a row
-  // the user is dragging as `missing-node`. See `reparent-projection-rules`.
+  // Against the PROJECTED tree, not the doc maps: registry-backed chats and terminal agents have no doc entry, and the doc evaluator would read a row the user is dragging as `missing-node`.
+  // See `reparent-projection-rules`.
   if (
     target.kind === "sidebar-reparent-panel" &&
     resolveProjectedReparentNode(tree, sourceNodeId)?.family !==
@@ -150,11 +134,7 @@ function isSidebarReparentValid(
 }
 
 /**
- * Reparent preview for a `sidebar-node` over a sidebar-reparent target. Reads
- * the live doc (`peek`), pre-flights validity, and on success lights the
- * row/panel highlight while CLEARING every canvas-side preview channel (and
- * vice-versa) so the two never co-render. Records / clears the commit ref the
- * drag-end handler reads.
+ * Reads the live doc (`peek`), pre-flights validity, and on success lights the row/panel highlight while CLEARING every canvas-side preview channel (and vice-versa) so the two never co-render.
  */
 export function updateSidebarReparentPreview(
   source: Extract<

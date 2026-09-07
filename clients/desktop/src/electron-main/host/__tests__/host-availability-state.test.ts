@@ -17,14 +17,6 @@ function fold(
   );
 }
 
-/**
- * The verdict policy from int #48, isolated from timers and the filesystem.
- *
- * Every case here is a statement about what the RENDERER is told, because that
- * is where the 2026-08-11 damage happened: a host answering RPCs in
- * milliseconds was reported as gone, and every chat it owned went read-only
- * for two hours.
- */
 describe("foldHostAvailability", () => {
   it("publishes available as soon as the endpoint answers", () => {
     expect(fold("available")).toMatchObject({

@@ -52,9 +52,8 @@ afterEach(() => {
 
 describe("ProviderApiKeySection dashboard link", () => {
   it("renders the key field without a 'get a key' button when the dashboard URL is null (kiro)", () => {
-    // Kiro takes a KIRO_API_KEY but has no stable public key page. The total
-    // Record marks that omission with null rather than silently dropping the
-    // button the way a Partial record did for any missing entry.
+    // The total Record marks that omission with null rather than silently dropping the button the way a Partial
+    // record did for any missing entry.
     render(
       <ProviderApiKeySection
         state={apiKeyState("kiro")}

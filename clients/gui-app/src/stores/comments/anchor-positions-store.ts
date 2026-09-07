@@ -1,17 +1,4 @@
-/**
- * Per-`(epicId, artifactId)` cache of `threadAnchor` mark positions in the
- * Tiptap document. Written by the active tile body whenever the editor
- * transactions fire, read by the comment sidebar to (a) sort threads by
- * document order and (b) flag orphans whose anchor mark has been deleted.
- *
- * This split exists because the epic left panel mounts the comment surface but
- * does NOT own the editor - that lives in the tile canvas. A small Zustand
- * pipe is the cheapest way to bridge the two without prop-drilling through
- * the canvas tree, while keeping the `AnchorPositionMap` out of TanStack
- * Query (it's purely-derived UI state, not server state).
- *
- * Not persisted - pure ephemeral.
- */
+/** Per-`(epicId, artifactId)` cache of `threadAnchor` mark positions in the Tiptap document. */
 import { create } from "zustand";
 import type { AnchorPositionMap } from "@/lib/comments/comment-filter-utils";
 
@@ -39,12 +26,8 @@ export const useAnchorPositionsStore = create<AnchorPositionsStore>((set) => ({
   setForArtifact: (epicId, artifactId, positions) => {
     set((state) => {
       const key = compositeKey(epicId, artifactId);
-      // Skip writes whose positions match the prior snapshot - the tile
-      // body recomputes on every editor transaction, but most of those
-      // don't touch any threadAnchor mark, so structural equality saves
-      // every consumer a re-render. `Object.hasOwn` (vs an index check) is
-      // needed because tsconfig leaves `noUncheckedIndexedAccess` off and
-      // `Record<string, T>[key]` therefore narrows to `T` directly.
+      // Skip writes whose positions match the prior snapshot - the tile body recomputes on every editor
+      // transaction, but most of those don't touch any threadAnchor mark, so structural equality saves
       if (
         Object.hasOwn(state.mapByKey, key) &&
         positionsEqual(state.mapByKey[key], positions)

@@ -55,10 +55,8 @@ describe("CommGraphOpenButton", () => {
   });
 
   /**
-   * The graph tile's content id is derived from the epic rather than minted per
-   * instance, and `openTile` focuses an existing tab with that id. Two presses
-   * must therefore reach the SAME ref - a second tab sharing that id would have
-   * two writers for the graph's persisted viewport.
+   * The graph tile's content id is derived from the epic rather than minted per instance, and `openTile` focuses an existing tab with that id.
+   * Two presses must therefore reach the SAME ref - a second tab sharing that id would have two writers for the graph's persisted viewport.
    */
   it("asks for the same epic-derived ref every time, so the opener can dedupe", () => {
     render(

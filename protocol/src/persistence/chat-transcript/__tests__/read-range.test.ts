@@ -20,13 +20,7 @@ import {
   type TranscriptTailSlice,
 } from "@traycer/protocol/persistence/chat-transcript/read-range";
 
-/**
- * `sliceTranscriptRange` is the read behind `loadRange`. These pin its boundary
- * behaviour - clamping, the deliberately-unclamped inverted span, the byte
- * budget's always-serve-one rule - plus the property that only exists because
- * rows are not records: several rows can share one record set, and the budget
- * must charge for it once.
- */
+/** `sliceTranscriptRange` is the read behind `loadRange`. */
 
 function makeUserMessage(fields: {
   messageId: string;
@@ -120,10 +114,7 @@ function slice(
 }
 
 /**
- * What a row costs the budget: its records, its row id as a JSON array
- * element, and one separator byte each. Spelled out here rather than imported
- * so the tests state the accounting instead of restating the implementation -
- * if the two ever disagree, that is the bug.
+ * What a row costs the budget: its records, its row id as a JSON array element, and one separator byte each.
  */
 function rowCost(rowId: string, records: readonly Message[]): number {
   const idBytes = Buffer.byteLength(JSON.stringify(rowId), "utf8") + 1;
@@ -208,9 +199,7 @@ describe("sliceTranscriptRange", () => {
   });
 
   it("a span entirely past the end is empty, NOT the last row clamped back", () => {
-    // Previously this clamped `fromOrdinal` down and served row 2 while
-    // reporting `fromOrdinal: 2` - an unsolicited row under an ordinal the
-    // caller never asked for. The doc always said empty; the code did not.
+    // Previously this clamped `fromOrdinal` down and served row 2 while reporting `fromOrdinal: 2` - an unsolicited row under an ordinal the caller never asked for.
     const result = slice(THREE_ROWS, THREE, [], {
       fromOrdinal: 10,
       toOrdinal: 20,
@@ -319,9 +308,7 @@ describe("shared record sets", () => {
 
   it("charges the budget once for a shared record set, so a second slice is free", () => {
     const turnRows = sliceRows("t-1", ["m-0", "m-1"], 10);
-    // Exactly enough for the turn's records once, plus BOTH row ids. If the
-    // second slice were charged for the records again it would not fit, and
-    // the span would truncate at ordinal 1.
+    // Exactly enough for the turn's records once, plus BOTH row ids.
     const budget = budgetFor([
       { rowId: "assistant:t-1:part:0", records: [M0, M1] },
       { rowId: "assistant:t-1:part:1", records: [] },
@@ -356,10 +343,7 @@ describe("shared record sets", () => {
 
 describe("the frame ceiling", () => {
   /**
-   * Encodes the slice exactly as `chatRangeResponseSchema` puts it on the wire,
-   * so the assertion measures the FRAME rather than the records inside it.
-   * `requestId` is at its schema maximum, which is the worst case the host has
-   * to survive because the client picks it.
+   * Encodes the slice exactly as `chatRangeResponseSchema` puts it on the wire, so the assertion measures the FRAME rather than the records inside it.
    */
   function encodedFrameBytes(result: TranscriptRangeSlice): number {
     return Buffer.byteLength(
@@ -381,11 +365,7 @@ describe("the frame ceiling", () => {
   }
 
   /**
-   * The review's measured shape: 4,378 records averaging ~273 encoded bytes,
-   * which came to a 1,196,401-byte frame under the old accounting. The padding
-   * is what makes each record that size - an unpadded fixture is small enough
-   * that 4,378 of them fit inside 1 MiB, and the test would then pass without
-   * ever exercising the ceiling.
+   * The review's measured shape: 4,378 records averaging ~273 encoded bytes, which came to a 1,196,401-byte frame under the old accounting.
    */
   function manySmallRows(count: number): {
     readonly rows: readonly TranscriptRowDescriptor[];
@@ -402,11 +382,6 @@ describe("the frame ceiling", () => {
   }
 
   it("keeps the ENCODED frame under the relay threshold for thousands of small rows", () => {
-    // The cold review's exact measurement: 4,378 small records under a 1 MiB
-    // budget produced a 1,196,401-byte frame - 148 KB past the threshold, with
-    // no oversized record anywhere in it - because the budget counted only
-    // `JSON.stringify(record)` and ignored the row ids, the separators and the
-    // envelope. This is the assertion that was missing.
     const { rows, messages } = manySmallRows(4_378);
 
     const result = slice(rows, messages, [], {
@@ -440,9 +415,7 @@ describe("the frame ceiling", () => {
   });
 
   it("charges the row id, so ids alone cannot push the frame over", () => {
-    // Same records, ids two orders of magnitude longer. If row ids were free
-    // the two slices would serve the same number of rows and the second frame
-    // would be far larger.
+    // Same records, ids two orders of magnitude longer.
     const { messages } = manySmallRows(4_378);
     const shortIdRows = messages.map(userRow);
     const longIdRows: TranscriptRowDescriptor[] = messages.map((message) => ({
@@ -486,14 +459,7 @@ describe("the frame ceiling", () => {
   });
 });
 
-/**
- * A tail budget that fits exactly these rows and nothing more.
- *
- * No envelope reserve, unlike {@link budgetFor}: the tail does not own a frame,
- * it is one field of a snapshot, and `TRANSCRIPT_TAIL_MAX_BYTES` is already
- * only a quarter of the frame ceiling precisely so the rest of the snapshot
- * has room. Adding a second reserve here would be double-counting.
- */
+/** A tail budget that fits exactly these rows and nothing more. */
 function tailBudgetFor(
   rows: ReadonlyArray<{ rowId: string; records: readonly Message[] }>,
 ): number {
@@ -520,12 +486,7 @@ function tail(
 
 /**
  * The tail is the one budgeted read with a HARD ceiling.
- *
- * `sliceTranscriptRange` serves an over-budget row alone rather than leave a
- * permanent hole, because a `range` response is ordered against nothing. A
- * snapshot has no such protection - it is ordered against every delta after it,
- * and a re-snapshot is not even first on the wire - so the tail must be willing
- * to come back EMPTY and let `loadRange` do the work.
+ * A snapshot has no such protection - it is ordered against every delta after it, and a re-snapshot is not even first on the wire - so the tail must be willing to come back EMPTY and let `loadRange` do the work.
  */
 describe("sliceTranscriptTail", () => {
   it("takes the last rows that fit, not the first", () => {
@@ -554,9 +515,6 @@ describe("sliceTranscriptTail", () => {
   });
 
   it("carries the served rows' projection context, and charges it", () => {
-    // The tail is the one hydration nothing ever repairs: the planner counts
-    // these rows hydrated, so no range is ever asked for them and a wrong
-    // elapsed time or profile label persists until they are evicted.
     const withContext: readonly TranscriptRowDescriptor[] = THREE_ROWS.map(
       (row) =>
         row.rowId === "m-2"
@@ -581,9 +539,7 @@ describe("sliceTranscriptTail", () => {
   });
 
   it("returns an EMPTY tail rather than break the ceiling for one huge row", () => {
-    // The whole reason this is not `sliceTranscriptRange` with a flag. The
-    // client paints one round trip later for this chat; the alternative is an
-    // oversized snapshot the relay can reorder against the deltas that follow.
+    // The whole reason this is not `sliceTranscriptRange` with a flag.
     const huge = makeUserMessage({
       messageId: "m-huge",
       timestamp: 1,
@@ -600,10 +556,7 @@ describe("sliceTranscriptTail", () => {
   });
 
   it("abandons the rows BEFORE an unfittable last row, because the tail is contiguous", () => {
-    // Walking backward, the huge row is hit first and stops the walk - so the
-    // tail is empty even though earlier rows would have fit. That is the
-    // honest consequence of a contiguous tail, and it is pinned here so a
-    // future change to skip-and-continue is a deliberate decision.
+    // Walking backward, the huge row is hit first and stops the walk - so the tail is empty even though earlier rows would have fit.
     const huge = makeUserMessage({
       messageId: "m-huge",
       timestamp: 40,
@@ -628,11 +581,6 @@ describe("sliceTranscriptTail", () => {
 
     const result = tail(wide.map(userRow), wide, [], 64 * 1024 * 1024);
 
-    // Charged separately, because `rowIds` and `messages` are NOT parallel -
-    // this file proves it twice over, deduplicating a record set shared across
-    // rows and omitting one the lookup no longer holds. Pairing them by index
-    // happens to hold for this fixture's one-record-per-row shape, and would
-    // start measuring `undefined` the moment that stopped being true.
     const spent =
       result.rowIds.reduce((total, rowId) => total + rowCost(rowId, []), 0) +
       result.messages.reduce(
@@ -693,15 +641,7 @@ function makeTurnEvent(fields: {
 
 /**
  * A row is not only what it is built from.
- *
- * The renderer folds a turn's `turn.*` into its elapsed counter and its
- * `checkpoint.captured` into the restore affordance, by scanning the WHOLE
- * event array — which is exactly what a windowed client stops having. So the
- * ids travel with the row, and the range must actually carry the bodies.
- *
- * The failure this prevents is the quietest kind: hydration reports success and
- * the row renders with no duration and no restore point, looking merely poorer
- * rather than broken.
+ * So the ids travel with the row, and the range must actually carry the bodies.
  */
 describe("assistant rows carry the events that decorate them", () => {
   const TURN_KEY = "turn-1";
@@ -802,11 +742,6 @@ describe("assistant rows carry the events that decorate them", () => {
   });
 });
 
-/**
- * A row that under-reports the records it needs is the failure `rowRecordIds`
- * exists to prevent: hydration reports success and the row renders blank, and
- * nothing retries because the span says the ordinal is hydrated.
- */
 describe("a row's records are enumerated, not inferred", () => {
   it("serves the triggering user record with a synthesized stopped row", () => {
     const user = makeUserMessage({ messageId: "m-1", timestamp: 10 });

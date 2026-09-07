@@ -1,16 +1,3 @@
-/**
- * The composition's stream factories, driven END TO END through the real proxy.
- *
- * Nothing here fakes the proxy. A wrapper built by `buildProxiedStreamFactories`
- * subscribes on the worker's `IStreamClient`, that open crosses the real
- * `createStreamProxyHost`, and the assertion is on what the RECORDING CLIENT -
- * standing in for the socket, the one thing a suite cannot have - actually saw.
- *
- * That chain is the claim worth pinning. The four wrappers all declare
- * `wsStreamClient: IStreamClient<HostStreamRpcRegistry>`, so the proxy is
- * type-substitutable for the real client; whether it is BEHAVIOURALLY
- * substitutable is what these tests answer.
- */
 import { describe, expect, it } from "vitest";
 import { createWorkerStreamClient } from "@traycer-clients/shared/replica-runtime/worker/worker-stream-client";
 import { createStreamProxyHost } from "@traycer-clients/shared/replica-runtime/worker/stream-proxy-host";
@@ -67,10 +54,7 @@ describe("buildProxiedStreamFactories", () => {
 
     factories.streamClientFactory("epic-1", INERT_LEGACY_CALLBACKS, () => null);
 
-    // The wrapper reached a real session through the real proxy host. Asserting
-    // on the recording client rather than on the worker's own bookkeeping is
-    // what makes this end-to-end: the worker could open a stream nobody serves
-    // and look identical from its own side.
+    // The wrapper reached a real session through the real proxy host.
     expect(recording.opened()).toHaveLength(1);
     expect(recording.opened()[0]?.method).toBe("epic.subscribe");
   });
@@ -119,9 +103,7 @@ describe("buildProxiedStreamFactories", () => {
       unaries: absentLaneUnaries(),
     });
 
-    // On main this read casts the method to the registry's key type. Here it is
-    // a lookup in a replicated snapshot: an unknown method answers `"unknown"`,
-    // which selection already treats as "not a selection".
+    // On main this read casts the method to the registry's key type.
     expect(factories.laneSelection?.support("epic.state.subscribe")).toBe(
       "supported",
     );

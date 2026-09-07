@@ -75,7 +75,6 @@ function workspaceRunItem(
   };
 }
 
-/** Opens the Location menu and its "Existing worktree" submenu. */
 async function openWorktreeSubmenu(): Promise<void> {
   fireEvent.pointerDown(screen.getByLabelText("Choose run location"), {
     button: 0,
@@ -87,7 +86,6 @@ async function openWorktreeSubmenu(): Promise<void> {
   await screen.findByTestId("folder-location-existing-list");
 }
 
-/** The row's secondary path line - the element hover and press both hang off. */
 function pathLine(): HTMLElement {
   const row = screen.getByTestId(`folder-location-import-${WORKTREE_PATH}`);
   return within(row).getByText(WORKTREE_PATH);
@@ -128,9 +126,8 @@ describe("FolderLocationControl worktree path on touch", () => {
     const line = pathLine();
     press(line, "touch");
 
-    // The sheet, not merely the string: the string is already in the row (the
-    // truncation that hides it is CSS, which jsdom does not apply), so asserting
-    // the text alone would pass against no change at all.
+    // The sheet, not merely the string: the string is already in the row (the truncation that hides it is CSS,
+    // which jsdom does not apply), so asserting the text alone would pass against no change at all.
     const sheet = screen.getByRole("dialog");
     expect(sheet.textContent).toContain("Full path");
     expect(sheet.textContent).toContain(WORKTREE_PATH);
@@ -139,13 +136,8 @@ describe("FolderLocationControl worktree path on touch", () => {
     // would take the sheet down with it.
     expect(screen.getByTestId("folder-location-existing-list")).toBeTruthy();
 
-    // The load-bearing case, and the one the press alone does not reach: a
-    // pointer landing INSIDE the sheet is, to the menu, a pointer outside
-    // itself. What stops the menu dismissing on it is a layer-index predicate
-    // in Radix's dismissable layer, not hit-testing - the modal sheet is the
-    // highest layer with outside pointer events disabled, so the menu's own
-    // outside handler is skipped. That predicate is plain JS and runs here
-    // exactly as it does in a browser.
+    // The load-bearing case, and the one the press alone does not reach: a pointer landing inside the sheet is, to
+    // the menu, a pointer outside itself.
     fireEvent.pointerDown(sheet, { pointerId: 2, pointerType: "touch" });
     expect(screen.getByTestId("folder-location-existing-list")).toBeTruthy();
     expect(screen.getByRole("dialog")).toBeTruthy();

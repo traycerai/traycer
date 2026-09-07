@@ -1,9 +1,5 @@
 /**
- * The viewer and the build step agree on where pdf.js's data files live only
- * by convention - one names a directory in a URL, the other copies into it -
- * and a mismatch is invisible: pdf.js 404s the file and renders the document
- * WRONG rather than failing, which is the whole class of bug this pairing
- * exists to close.
+ * The viewer and the build step agree on where pdf.js's data files live only by convention - one names a directory in a URL, the other copies into it - and a mismatch is invisible: pdf.js 404s the file and renders the document WRONG rather than failing, which is the whole class of bug this pairing exists to close.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";

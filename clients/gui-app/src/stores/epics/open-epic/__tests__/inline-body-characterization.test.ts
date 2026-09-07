@@ -1,23 +1,3 @@
-/**
- * B6 GUI artifact-room binding characterization
- * (ticket:e86b8372-ad33-45d7-9672-2e1851d777e8/900a0484).
- *
- * After B6 the renderer no longer reads body fragments from the root
- * Epic doc - it routes through `artifactRoomId` on the artifact metadata and
- * a per-artifact-room Y.Doc replica seeded by `onArtifactRoomSnapshot`. These tests pin the
- * post-cutover invariants:
- *
- *   - Freshly created artifacts are metadata-only placeholders with no
- *     root `content` fragment and no `artifactRoomId` (seeded here via
- *     `createArtifactInDocForTests`, standing in for the host-side create).
- *   - `getArtifactFragment` returns null when no artifactRoom has been seeded for
- *     the artifact's `artifactRoomId` (the expected state after a fresh
- *     create).
- *   - Chat / unknown artifacts still return null.
- *   - Editing a leftover legacy root `content` fragment does not produce
- *     a bindable body (`getArtifactFragment` stays null) because body
- *     edits now live on the artifact-room doc.
- */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
@@ -79,11 +59,7 @@ function newSession(): {
   const handle = openStoreForTest({
     epicId: "epic-test",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -147,10 +123,8 @@ describe("open-epic store artifact-room binding (post-B6)", () => {
   });
 
   it("getArtifactFragment returns null for an artifact without a artifactRoomId / artifactRoom snapshot", () => {
-    // A locally-created artifact has no `artifactRoomId` until the host
-    // assigns one and ships a `artifactRoomSnapshot` for the chosen artifactRoom. Until
-    // then the editor must render a placeholder rather than bind a stale
-    // root-doc fragment.
+    // A locally-created artifact has no `artifactRoomId` until the host assigns one and ships a
+    // `artifactRoomSnapshot` for the chosen artifactRoom.
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
     expect(handle.store.getState().getArtifactFragment(id)).toBeNull();

@@ -1,14 +1,5 @@
 /**
- * Task-level activity aggregation, with the layering that survived the move to
- * per-user activity: an open chat session that reads some activity is
- * authoritative for its own tier, and host-published activity backfills
- * everything else.
- *
- * The load-bearing case is the last pair: activity for an epic this window has
- * NEVER opened must show through (no projection to check it against), while
- * activity naming an agent a LIVE projection no longer holds must be filtered
- * out. Both look like "an empty candidate set" if you only count ids, which is
- * why the hook distinguishes "no session" from "a session with no agents".
+ * Distinguish "no session" from "a session with no agents". Unopened-epic activity must show; activity naming an agent a live projection dropped must not.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
@@ -46,21 +37,12 @@ function registerEmptySession(): void {
   registerSessionHoldingAgents([]);
 }
 
-/**
- * A live epic projection holding `agentIds`. The projection is the liveness
- * filter the aggregation runs its candidates through, so a chat session only
- * counts once its id is in there.
- */
 function registerSessionHoldingAgents(agentIds: readonly string[]): void {
   const handle = __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
     openStoreForTest({
       epicId: EPIC_ID,
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
       factories: {
         streamClientFactory: noopStreamClientFactory,
         laneSelection: null,
@@ -77,7 +59,6 @@ function registerSessionHoldingAgents(agentIds: readonly string[]): void {
  *  handle, so one host id serves the whole fixture set. */
 const ACTIVITY_HOST_ID = "host-1";
 
-/** A live chat session for `chatId`, owning `managedCommands`. */
 function registerChatSession(
   chatId: string,
   managedCommands: readonly ManagedCommand[],
@@ -181,11 +162,7 @@ describe("useEpicActivityStatus", () => {
   });
 
   it("stops filtering once the epic's session is evicted from the MRU", () => {
-    // The handle -> null transition the liveness filter turns on. While the
-    // session is live its projection is authoritative and suppresses the stale
-    // id; the moment the MRU evicts it the epic is UNKNOWN again, so
-    // host-published activity has to show through rather than staying
-    // suppressed by a projection that no longer exists.
+    // While the session is live its projection is authoritative and suppresses the stale id; the moment the MRU evicts it the epic is UNKNOWN again, so host-published activity has to show through rather than staying suppressed by a projection that no longer exists.
     registerEmptySession();
     const { result } = renderHook(() => useEpicActivityStatus(EPIC_ID));
     act(() => {

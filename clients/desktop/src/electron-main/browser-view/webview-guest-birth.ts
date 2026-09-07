@@ -16,10 +16,6 @@ import {
   registerBrowserViewWebContents,
 } from "./browser-session";
 
-/**
- * How long a minted grant may wait for did-attach and for `onAttached` to
- * settle.
- */
 const ATTACHMENT_GRANT_TTL_MS = 10_000;
 
 const BLANK_GUEST_SRC = "about:blank";
@@ -64,12 +60,6 @@ interface GuestBirth {
 }
 
 const births = new Map<string, GuestBirth>();
-/**
- * One embedder slot. Electron 42.11 `createGuest` emits `will-attach-webview`
- * then, same turn, `webContents.create()` (app `web-contents-created`).
- * `AttachToIframe` then `Emit("did-attach")` before `createGuest` returns
- * the id the renderer needs for webview methods.
- */
 const awaitingCreateByEmbedderId = new Map<number, string>();
 let watchingGuestCreation = false;
 
@@ -126,10 +116,6 @@ export function clearAllAttachmentGrants(): void {
   }
 }
 
-/**
- * Fail-closed `<webview>` admission for one trusted main window.
- * Install before `loadMainWindow`.
- */
 export function installWebviewAttachGuards(
   host: WebContents,
   windowId: string,
@@ -273,11 +259,6 @@ function finishReady(birth: GuestBirth): void {
   birth.settlement.resolve();
 }
 
-/**
- * The renderer picks `<webview webpreferences="...">`, so every key main does
- * not itself assign below is deleted first: a deny-list would miss whatever
- * key Electron gains next.
- */
 function hardenGuestPreferences(
   webPreferences: WebPreferences,
   partition: string,
@@ -298,10 +279,6 @@ function hardenGuestPreferences(
   prefs.partition = partition;
 }
 
-/**
- * The renderer puts the registration id in the `about:blank#…` fragment, the
- * one attribute `will-attach-webview` params forward.
- */
 function registrationIdFromAttachParams(
   params: Record<string, string>,
 ): string {

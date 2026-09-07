@@ -15,10 +15,8 @@ export function ToolbarIconButton(props: ToolbarButtonProps) {
         className,
       )}
       onMouseDown={(event) => {
-        // Keep the caret in the composer editor: a toolbar action button taking
-        // focus on press would blur the textbox, leaving the user unable to type
-        // after clicking. preventDefault on mousedown blocks the focus shift
-        // while leaving the click handler (and keyboard focus) intact.
+        // preventDefault on mousedown blocks the focus shift while leaving the click handler (and keyboard focus)
+        // intact.
         event.preventDefault();
         onMouseDown?.(event);
       }}

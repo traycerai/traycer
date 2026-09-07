@@ -3,16 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The state this probe exists for is the one where every OTHER probe reads
-// healthy. The host is installed, the service is running, the port answers -
-// and the host's own delegated credential was refused by the cloud in a way
-// refreshing cannot repair, so it burned the credential and fell back to
-// whatever bearer a connected client carries. The user sees sign-in-flavoured
-// failures on work the host does for them, and neither reloading nor signing
-// in again changes what the host spends. Before this, `traycer host doctor`
-// said clean.
-//
-// The marker is the only durable trace, and it is on disk the whole time.
+// The state this probe exists for is the one where every OTHER probe reads healthy.
+// The host is installed, the service is running, the port answers - and the host's own delegated credential was refused by the cloud in a way refreshing cannot repair, so it burned the credential and fell back to whatever bearer a connected client carries.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 const osHome = vi.hoisted(() => ({ current: "" }));
@@ -134,37 +126,25 @@ describe("runDoctor host credential needs-reauth", () => {
       "a freshly refreshed credential was itself rejected",
     );
     expect(issue?.message).toContain("2026-08-21T15:12:00.000Z");
-    // NEITHER, and the terminal command especially: Desktop renders "Open in
-    // Terminal" for any non-null `terminalCommand`, and `traycer login` signs
-    // the HUMAN in - it cannot provision the HOST's credential, so the button
-    // could only ever look like it had failed.
+    // NEITHER, and the terminal command especially: Desktop renders "Open in Terminal" for any non-null `terminalCommand`, and `traycer login` signs the HUMAN in - it cannot provision the HOST's credential, so the button could only ever look like it had failed.
     expect(issue?.fixAction).toBeNull();
     expect(issue?.terminalCommand).toBeNull();
-    // ...which is exactly why the message has to carry the repair itself, and
-    // why that is asserted rather than left to the prose. With both action
-    // fields null this text is the whole recovery path the CLI report and
-    // Desktop's card can show, and it once ruled out signing in again without
-    // ever saying what does work - a dead end that no test noticed, because
-    // only a comment claimed the instruction was there.
+    // ...which is exactly why the message has to carry the repair itself, and fields null this text is the whole recovery path the CLI report and Desktop's card can show, and it once ruled out signing in again without ever saying what does work - a dead end that no test noticed, because only a comment claimed the instruction was there.
     expect(issue?.message).toContain("open the Traycer desktop app");
     expect(issue?.message).toContain("provisions a new credential");
     expect(issue?.details).toMatchObject({
       reason: "a freshly refreshed credential was itself rejected",
       recordedAt: "2026-08-21T15:12:00.000Z",
-      // The credential file is gone in the ordinary burn: the host deletes it
-      // and THEN writes the marker. Carried so a support bundle can tell this
-      // apart from the delete-failed shape.
+      // The credential file is gone in the ordinary burn: the host deletes it and THEN writes the marker.
+      // Carried so a support bundle can tell this apart from the delete-failed shape.
       credentialFilePresent: false,
       markerReadable: true,
     });
   });
 
   it("reports it on the marker alone, which is the only state a burned host is ever in", async () => {
-    // Pins the correction to the ticket's original wording. Requiring the
-    // credential FILE alongside the marker would have made this probe
-    // unreachable: the host removes the credential before recording the
-    // verdict, so the two coexist only when that delete failed - a state the
-    // host already self-repairs at its next startup.
+    // Pins the correction to the ticket's original wording.
+    // Requiring the credential FILE alongside the marker would have made this probe unreachable: the host removes the credential before recording the verdict, so the two coexist only when that delete failed - a state the host already self-repairs at its next startup.
     stageHealthyHostMocks();
     writeNeedsReauthMarker({
       reason: "burned",
@@ -181,9 +161,7 @@ describe("runDoctor host credential needs-reauth", () => {
   });
 
   it("stays silent for a host with no marker", async () => {
-    // The overwhelmingly common case, and the one that must never become
-    // noise: a host that has never held a credential, or holds a healthy one,
-    // has no marker at all.
+    // The overwhelmingly common case, and the one that must never become noise: a host that has never held a credential, or holds a healthy one, has no marker at all.
     stageHealthyHostMocks();
 
     const result = await runProductionDoctor();
@@ -194,12 +172,8 @@ describe("runDoctor host credential needs-reauth", () => {
   });
 
   it("still reports a present-but-malformed marker, with unknown diagnostics", async () => {
-    // PRESENT IS THE VERDICT. Tolerating a truncated or hand-edited marker
-    // means "do not crash", not "report clean" - the file existing is what
-    // says this host burned a credential, and its contents are only ever
-    // diagnostics. Reading a malformed marker as ABSENT inverted the contract
-    // and hid exactly the fault this probe exists to surface, on the machines
-    // most likely to have something wrong with them.
+    // PRESENT IS THE VERDICT.
+    // Tolerating a truncated or hand-edited marker means "do not crash", not "report clean" - the file existing is what says this host burned a credential, and its contents are only ever diagnostics.
     stageHealthyHostMocks();
     mkdirSync(hostAuthDir(), { recursive: true });
     writeFileSync(join(hostAuthDir(), "needs-reauth.json"), "{not json");
@@ -237,30 +211,11 @@ describe("runDoctor host credential needs-reauth", () => {
   });
 });
 
-/**
- * The THIRD answer, and why two were not enough.
- *
- * `readFile(markerPath)` failing for any reason other than ENOENT was read as
- * "the marker is there and we cannot read it" - i.e. as a burn. That inference
- * silently assumes the marker's PARENT was inspectable. On a host whose auth
- * directory is unsearchable (damaged ownership, an ACL, a stray file standing
- * where the directory belongs), every read inside it fails the same way
- * WHETHER OR NOT the file exists - so doctor asserted a burned credential over
- * a directory that may well be empty, and pointed the reader at re-provisioning
- * the host, which does nothing about a filesystem permission.
- *
- * "Only ENOENT is clean" was right about the MARKER. It was wrong to assume the
- * marker's parent is always probeable.
- */
+/** The THIRD answer, and why two were not enough. `readFile(markerPath)` failing for any reason other than ENOENT was read as "the marker is there and we cannot read it" - i.e. as a burn. */
 describe("runDoctor when the host auth directory cannot be inspected", () => {
   it("does NOT claim the credential was burned when the directory is unprobeable", async () => {
-    // The negative direction, and the whole point: the absence of a readable
-    // marker here is not evidence of anything.
-    //
-    // The fixture puts a regular FILE where the auth directory belongs, which
-    // reproduces the shape without chmod - reads under it fail ENOTDIR rather
-    // than ENOENT, exactly as they do inside an unsearchable directory, and
-    // root and permission-ignoring CI filesystems cannot paper over it.
+    // The negative direction, and the whole point: the absence of a readable marker here is not evidence of anything.
+    // The fixture puts a regular FILE where the auth directory belongs, which reproduces the shape without chmod - reads under it fail ENOTDIR rather than ENOENT, exactly as they do inside an unsearchable directory, and root and permission-ignoring CI filesystems cannot paper over it.
     stageHealthyHostMocks();
     mkdirSync(join(workHome, ".traycer", "host"), { recursive: true });
     writeFileSync(hostAuthDir(), "not a directory");
@@ -277,9 +232,8 @@ describe("runDoctor when the host auth directory cannot be inspected", () => {
     // Warning, not error: nothing is known to be broken - but nothing is known
     // to be working either, which is why it is not silence.
     expect(issue?.severity).toBe("warning");
-    // The repair named must be the one that applies. `fixAction` /
-    // `terminalCommand` stay null because no CLI subcommand fixes a
-    // permission, and the message has to carry the instruction instead.
+    // The repair named must be the one that applies.
+    // `fixAction` / `terminalCommand` stay null because no CLI subcommand fixes a permission, and the message has to carry the instruction instead.
     expect(issue?.fixAction).toBeNull();
     expect(issue?.terminalCommand).toBeNull();
     expect(issue?.message).toContain(hostAuthDir());
@@ -287,22 +241,12 @@ describe("runDoctor when the host auth directory cannot be inspected", () => {
     expect(issue?.details).toMatchObject({ authDirPath: hostAuthDir() });
   });
 
-  // NOTE ON WHAT IS NOT TESTED HERE, and why. The reviewer's literal case is an
-  // EACCES directory, and there is no honest way to reach that errno in this
-  // suite: chmod is ignored by root and by several CI filesystems (so the test
-  // would pass vacuously exactly where it would otherwise run), and injecting
-  // it means mocking `node:fs/promises` for a suite whose engine touches the
-  // filesystem for a dozen unrelated probes. The fixture above reaches the SAME
-  // branch through ENOTDIR, and that branch is errno-agnostic by construction -
-  // `isFileNotFoundError(err) ? "absent" : "unprobeable"` - so EACCES and
-  // ENOTDIR cannot diverge without the classifier itself changing, which these
-  // cases would catch.
+  // NOTE ON WHAT IS NOT TESTED HERE, and why.
+  // The reviewer's literal case is an EACCES directory, and there is no honest way to reach that errno in this suite: chmod is ignored by root and by several CI filesystems (so the test would pass vacuously exactly where it would otherwise run), and injecting it means mocking `node:fs/promises` for a suite whose engine touches the filesystem for a dozen unrelated probes.
 
   it("still reports the burn when the directory is fine and only the MARKER is unreadable", async () => {
-    // The behaviour the fix must not cost: a probeable directory holding a
-    // marker we cannot read is still a burn, with unknown diagnostics.
-    // Reproduced with a DIRECTORY standing where the marker file belongs, so
-    // the read fails non-ENOENT while its parent is perfectly searchable.
+    // The behaviour the fix must not cost: a probeable directory holding a marker we cannot read is still a burn, with unknown diagnostics.
+    // Reproduced with a DIRECTORY standing where the marker file belongs, so the read fails non-ENOENT while its parent is perfectly searchable.
     stageHealthyHostMocks();
     mkdirSync(join(hostAuthDir(), "needs-reauth.json"), { recursive: true });
 
@@ -325,8 +269,7 @@ describe("runDoctor when the host auth directory cannot be inspected", () => {
 
   it("stays clean when the auth directory simply does not exist", async () => {
     // A host that has never held a credential has no auth directory at all.
-    // That must read as clean, not as "cannot inspect" - the overwhelmingly
-    // common case must never become noise.
+    // That must read as clean, not as "cannot inspect" - the overwhelmingly common case must never become noise.
     stageHealthyHostMocks();
 
     const result = await runProductionDoctor();

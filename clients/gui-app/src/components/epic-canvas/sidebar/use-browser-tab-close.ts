@@ -28,15 +28,7 @@ export interface BrowserTabClose {
 }
 
 /**
- * Closing a browser tab from a list row: ask the host, then retire the tile the
- * row points at.
- *
- * The tile close is deliberately sequenced after the host's answer rather than
- * done optimistically - a refused close would otherwise leave the canvas with
- * no tile for a tab that is still open, and no row action that could bring it
- * back. A failure is reported and the row returns to its idle state; the
- * `closing` status the host reports in the meantime is folded in here so a
- * close an agent started reads the same as one this row started.
+ * The tile close is deliberately sequenced after the host's answer rather than done optimistically - a refused close would otherwise leave the canvas with no tile for a tab that is still open, and no row action that could bring it back.
  */
 export function useBrowserTabClose(args: BrowserTabCloseArgs): BrowserTabClose {
   const {
@@ -85,15 +77,8 @@ export function useBrowserTabClose(args: BrowserTabCloseArgs): BrowserTabClose {
 }
 
 /**
- * The close button's label, in both of its states. A title shared by more than
- * one row cannot identify which tab the button closes, so those rows fall back
- * to their disambiguating label - or the tab id, which is unique by
- * construction.
- *
- * Both strings are built here rather than one being derived from the other by
- * substitution: a caller rewriting `Close ` into `Closing ` depends on wording
- * this function owns, so changing the phrasing would silently leave the pending
- * label behind.
+ * A title shared by more than one row cannot identify which tab the button closes, so those rows fall back to their disambiguating label - or the tab id, which is unique by construction.
+ * Both strings are built here rather than one being derived from the other by substitution: a caller rewriting `Close ` into `Closing ` depends on wording this function owns, so changing the phrasing would silently leave the pending label behind.
  */
 export function browserTabCloseLabel(args: {
   readonly tabId: string;

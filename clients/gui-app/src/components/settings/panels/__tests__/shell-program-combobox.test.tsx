@@ -103,9 +103,8 @@ function openPopover(): void {
   fireEvent.click(screen.getAllByRole("button")[0]);
 }
 
-// The System default row and every concrete row share role="option", so target
-// the concrete rows by the path text they render, excluding the System default
-// row (which carries the migrated reset test id).
+// The System default row and every concrete row share role="option", so target the concrete rows by the path
+// text they render, excluding the System default row (which carries the migrated reset test id).
 function concreteRow(pathText: string): HTMLElement {
   const rows = screen
     .getAllByRole("option")
@@ -179,9 +178,8 @@ describe("<ShellProgramCombobox />", () => {
   it("pins the login shell on an explicit pick from auto mode", async () => {
     const onUseSystemDefault = vi.fn();
     const onSelect = vi.fn();
-    // While synthesised, `value` already equals the default path - clicking the
-    // concrete row must still store it so the choice stops following the login
-    // shell.
+    // While synthesised, `value` already equals the default path - clicking the concrete row must still store it
+    // so the choice stops following the login shell.
     renderCombobox({
       value: "/bin/zsh",
       synthesised: true,
@@ -285,9 +283,8 @@ describe("<ShellProgramCombobox />", () => {
 
   it("refuses the System default row when the OS default is a broken WSL", async () => {
     const onUseSystemDefault = vi.fn();
-    // %COMSPEC% can point at wsl.exe, which makes the OS default itself a
-    // shell that cannot start a terminal - resetting to it would reintroduce
-    // exactly the failure the concrete row already refuses.
+    // %comspec% can point at wsl.exe, which makes the OS default itself a shell that cannot start a terminal -
+    // resetting to it would reintroduce exactly the failure the concrete row already refuses.
     const WSL_DEFAULT: TraycerDetectedShell = {
       name: "WSL",
       path: "C:\\Windows\\System32\\wsl.exe",

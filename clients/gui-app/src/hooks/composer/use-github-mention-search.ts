@@ -27,19 +27,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { GithubMentionScope } from "./use-github-mention-catalog";
 
 /**
- * The section's live GitHub search.
- *
- * Two things route through here, not one. The obvious one is the user's typed
- * query. The other is a FILTER the cache cannot answer - `State: Merged`, say,
- * over a catalog that only ever swept open items: the search unary takes an
- * empty query plus the filter's qualifiers, which is the wire's fetch-through
- * path. Without that, selecting a non-default filter would silently show a
- * subset of the wrong list.
- *
- * Local results are never blocked on this. The rows the cache already holds
- * render immediately and this merges in behind them, so the only thing the
- * user waits for is the extra hits - covered by the appended `Searching GitHub…`
- * row rather than by a spinner over the whole list.
+ * Live GitHub search: typed query, or an empty query plus filter qualifiers the cache cannot answer. Cached rows render immediately; this merges in behind them.
  */
 
 const SEARCH_STALE_TIME_MS = 30_000;
@@ -61,29 +49,10 @@ export interface GithubMentionSearchResult {
   readonly notice: PrSourceNotice | null;
   /** True while a remote search is in flight - the appended row's condition. */
   readonly isSearching: boolean;
-  /**
-   * The requested search itself FAILED - retries exhausted, no response at
-   * all. Not a degraded answer (`sourceStatus` reports those): a rejection
-   * carries no rows, so without this a failed remote search reads exactly
-   * like "settled, no extra hits", and the zero-match dismissal closes the
-   * picker over rows the search never saw. The same fact the catalog read
-   * reports for its lane, gated on `wanted` like every projected field - a
-   * disabled observer can still HOLD an error from when it was live.
-   */
+  /** Not a degraded answer (`sourceStatus` reports those): a rejection carries no rows, so without this a failed remote search reads exactly like "settled, no extra hits", and the zero-match dismissal closes the picker over rows the search never saw. */
   readonly errored: boolean;
   /**
-   * Re-runs the live search, for the section's refresh button.
-   *
-   * The button is one control over a list that is two reads merged, so
-   * refreshing the catalog alone leaves a typed query's rows - and this
-   * observer's own `sourceStatus` and `notice` - exactly as they were. A user
-   * who hits Refresh because the section says `gh` is unavailable would watch
-   * that message survive the refresh that was supposed to clear it.
-   *
-   * No-ops when this observer is disabled, for the same reason every projected
-   * field is gated on `wanted`: with the query cleared and the default filter
-   * back, the catalog owns the list and a search here would be a GitHub call
-   * for rows the section is not showing.
+   * Refresh both merged reads (catalog + live search). No-op when this observer is disabled: the catalog owns the list then.
    */
   readonly refresh: () => Promise<void>;
 }
@@ -107,17 +76,7 @@ export function useGithubMentionSearch(
     [filter, query, scope, section],
   );
 
-  // The LANE this observer's answer belongs to - host, epic, roots, section -
-  // and deliberately nothing else. `query` and `filter` are the axes the
-  // previous answer is held ACROSS: they are what the user is changing while
-  // the next one lands, and the merged list corrects for both one layer up
-  // (the funnel re-filters, the ranker re-ranks against the new query).
-  //
-  // The scope terms are the ones nothing downstream can correct. Held across
-  // a host, epic or roots change, the previous scope's rows are merged into
-  // the new one and stay SELECTABLE, so the user can commit a mention naming
-  // a pull request the current scope cannot resolve - the same rule the
-  // catalog read already applies to its own placeholder.
+  // Placeholder key is host/epic/roots/section only. Holding across those would keep previous-scope rows selectable.
   const lane = useMemo(
     () =>
       searchLane(
@@ -146,12 +105,8 @@ export function useGithubMentionSearch(
     },
   });
 
-  // Every field is gated on `wanted`, not just the rows. The observer is
-  // disabled - not discarded - when the query is cleared or the default filter
-  // comes back, and `keepPreviousData` keeps its last response readable. Left
-  // ungated, a `gh-unavailable` status or a rate-limit notice from a search
-  // that is no longer running would keep its banner on the section chrome with
-  // nothing behind it.
+  // Every field is gated on `wanted`, not just the rows.
+  // The observer is disabled - not discarded - when the query is cleared or the default filter comes back, and `keepPreviousData` keeps its last response readable.
   const answer = wanted ? searchQuery.data : undefined;
   const { refetch } = searchQuery;
   const refresh = useCallback(
@@ -168,14 +123,7 @@ export function useGithubMentionSearch(
   };
 }
 
-/**
- * The scope lane a `mention.githubSearch` cache entry belongs to.
- *
- * `prefix` is whatever precedes the request in the key (`["host", hostId,
- * method]`), so the two sides of the placeholder comparison never have to
- * agree on where the host id sits - both build the lane the same way, from
- * the same two ingredients.
- */
+/** `prefix` is whatever precedes the request in the key (`["host", hostId, method]`), so the two sides of the placeholder comparison never have to agree on where the host id sits - both build the lane the same way, from the same two ingredients. */
 function searchLane(
   prefix: ReadonlyArray<unknown>,
   request: MentionGithubSearchRequest,
@@ -188,27 +136,14 @@ function searchLane(
   ]);
 }
 
-/**
- * The lane of an EXISTING key, read back out of it.
- *
- * Fails closed: a key whose last element is not a search request - a
- * `cacheKeyIdentity` appended later, say - yields a string the current lane
- * cannot match, so the placeholder is dropped rather than accepted across a
- * boundary this function could not read. That costs the anti-flicker hold,
- * never correctness.
- */
+/** Fails closed: a key whose last element is not a search request - a `cacheKeyIdentity` appended later, say - yields a string the current lane cannot match, so the placeholder is dropped rather than accepted across a boundary this function could not read. */
 function searchLaneOfKey(key: QueryKey): string {
   const parsed = mentionGithubSearchRequestSchema.safeParse(key.at(-1));
   if (!parsed.success) return JSON.stringify({ unreadableKey: key });
   return searchLane(key.slice(0, -1), parsed.data);
 }
 
-/**
- * The request is discriminated by `section`, and the two filter shapes are not
- * interchangeable (only PRs have `review-requested`; only issues have
- * `mentions`). Building it through this narrowing is what keeps a filter from
- * one section reaching the other's arm.
- */
+/** The request is discriminated by `section`, and the two filter shapes are not interchangeable (only PRs have `review-requested`; only issues have `mentions`). */
 function buildSearchRequest(
   scope: GithubMentionScope,
   section: GithubMentionSection,

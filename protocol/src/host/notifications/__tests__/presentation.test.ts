@@ -117,7 +117,7 @@ const CASES: readonly {
       },
     },
     title: "Notification reliability",
-    // Context exhaustion is the session's fault, not the provider's — the copy
+    // Context exhaustion is the session's fault, not the provider's - the copy
     // stays provider-neutral even when the provider is known.
     body: "Long refactor • Context limit reached",
   },
@@ -401,9 +401,7 @@ describe("formatHostNotificationPresentation", () => {
     });
   });
 
-  // Cross-version degrade: an older renderer reading a row whose `reason` a
-  // NEWER host persisted must fall through to generic copy, never throw or
-  // surface the unrecognised taxonomy string.
+  // Cross-version degrade: an older renderer reading a row whose `reason` a NEWER host persisted must fall through to generic copy, never throw or surface the unrecognised taxonomy string.
   it("keeps an unknown persisted reason generic", () => {
     const entry: HostNotificationEntry = {
       ...BASE,

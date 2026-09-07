@@ -163,10 +163,7 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("dedupes a row that appears in both the first page and a loaded tail, first page winning", async () => {
-    // An optimistic pin moves a row across server page boundaries: after the
-    // pin, a refetched first page carries the pinned row at the top while a
-    // previously loaded tail still carries it at its old position. The
-    // assembled list must render it once, from the first page.
+    // The assembled list must render it once, from the first page.
     const firstPage: ListTasksResponse = {
       tasks: [taskLight("epic-first", "First page task")],
       hasMore: true,
@@ -215,12 +212,7 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("carries visible rows across a modal-to-tab observer remount while the promoted request is still unsettled", async () => {
-    // Reproduces review finding 2: promotion happens during the search
-    // debounce / while a structured-filter request is still pending, so the
-    // promoted tab's request has never settled. The modal and the promoted
-    // tab render `EpicsListPanel` separately, so promotion destroys one
-    // `QueryObserver` and mounts a fresh one for the promoted request - here,
-    // `LIST_CLOUD_TASKS_REQUEST` (modal) vs. `promotedRequest` (tab).
+    // Reproduces review finding 2: promotion happens during the search debounce / while a structured-filter request is still pending, so the promoted tab's request has never settled.
     const settledFirstPage: ListTasksResponse = {
       tasks: [taskLight("epic-settled", "Settled task")],
       hasMore: false,
@@ -277,11 +269,7 @@ describe("useCloudEpicTasksQuery", () => {
       { wrapper: makeWrapper(queryClient) },
     );
 
-    // Visible immediately, on the very first render - not after a wait - and
-    // without ever having been empty in between. The fresh observer has no
-    // `previousQuery` of its own and the promoted key has no settled cache
-    // entry, so TanStack's own `placeholderData(previousData, previousQuery)`
-    // alone would return `undefined` here.
+    // Visible immediately, on the very first render - not after a wait - and without ever having been empty in between.
     expect(taskLightIds(tabRender.result.current.tasks)).toEqual([
       "epic-settled",
     ]);

@@ -1,12 +1,4 @@
-/**
- * Real-cache integration for the dead-code restart: a REAL QueryClient and
- * the real watch/code/status hooks (only the AuthService seam and the
- * respond mutation are faked). Pins the mechanism the mocked-hook suite
- * cannot: after another surface supersedes the displayed code, "Show a new
- * code here" must EVICT the mint entry and re-enable the query so a SECOND
- * mint fires and a genuinely fresh code renders — a bare refetch (or a
- * key-switched placeholder query) leaves the panel dead.
- */
+/** Pins the mechanism the mocked-hook suite cannot: after another surface supersedes the displayed code. */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,11 +28,8 @@ vi.mock("@/hooks/auth/use-respond-link-login-mutation", () => ({
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
-  // The panel encodes the QR against the shell's own platform origin, taken
-  // from `signInUrl`. Without one the tile draws a placeholder instead of a
-  // symbol - deliberately, so a build that cannot name its deployment never
-  // puts a live code in front of a camera - which is not the state these
-  // tests are about.
+  // Without one the tile draws a placeholder instead of a symbol - deliberately, so a build that cannot name its
+  // deployment never puts a live code in front of a camera - which is not the state these tests are about.
   useRunnerHost: () => ({ signInUrl: "https://platform.test/sign-in" }),
 }));
 
@@ -110,7 +99,7 @@ describe("LinkPhonePanel against a real query cache", () => {
     });
     expect(mintCalls).toBe(1);
 
-    // The explicit user action mints a genuinely FRESH code and renders it.
+    // The explicit user action mints a genuinely fresh code and renders it.
     act(() => {
       screen.getByTestId("link-phone-show-new").click();
     });

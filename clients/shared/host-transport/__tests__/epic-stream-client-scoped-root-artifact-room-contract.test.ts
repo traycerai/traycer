@@ -1,17 +1,3 @@
-/**
- * B6 scoped root/artifact-room stream-client contract
- * (ticket:e86b8372-ad33-45d7-9672-2e1851d777e8/900a0484).
- *
- * Pins the artifact-room-aware `epic.subscribe@1.0` contract from the shared
- * `EpicStreamClient` perspective:
- *
- *   - Outbound root `applyUpdate` / `awareness` carry only `epicId`.
- *   - Outbound artifactRoom `artifactRoomApplyUpdate` / `artifactRoomAwareness` carry `artifactRoomId`.
- *   - Inbound root `snapshot` / `update` / `awareness` route to the
- *     root-doc callbacks; inbound `artifactRoomSnapshot` / `artifactRoomUpdate` /
- *     `artifactRoomAwareness` / `artifactRoomState` route to the per-artifact-room callbacks.
- *   - Inbound `permissionChanged` carries the parent-Epic permission only.
- */
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -331,15 +317,8 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     });
     completeHandshake(sockets[0]);
 
-    // T5 (artifactRoomDirty) bumped the registry's latestMinor to 1, @1.2
-    // (roomId on the snapshot frame's meta) bumped it to 2, and @1.3
-    // (delta-seed reattach) bumped it to 3 - the client now opens at
-    // {major:1, minor:3}.
-    //
-    // `params` stays `{epicId}` here because this client offers no seed
-    // (`seedOfferProvider: () => null`), and a null offer omits the key
-    // rather than sending `seedOffer: undefined`. That is the cold-open row
-    // of the skew matrix, asserted on the wire.
+    // T5 (artifactRoomDirty) bumped the registry's latestMinor to 1, @1.2 (roomId on the snapshot frame's meta) bumped it to 2, and @1.3 (delta-seed reattach) bumped it to 3 - the client now opens at {major:1, minor:3}.
+    // `params` stays `{epicId}` here because this client offers no seed (`seedOfferProvider: () => null`), and a null offer omits the key rather than sending `seedOffer: undefined`.
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",

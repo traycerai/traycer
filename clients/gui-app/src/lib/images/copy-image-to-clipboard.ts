@@ -70,9 +70,8 @@ export async function copyImageBlobToClipboard(blob: Blob): Promise<void> {
 }
 
 /**
- * Issues the browser write against a still-pending blob, or `null` when this
- * runtime has no usable `ClipboardItem` write path. Everything here runs
- * synchronously so the write is attributed to the caller's user activation.
+ * Issues the browser write against a still-pending blob, or `null` when this runtime has no usable `ClipboardItem` write path.
+ * Everything here runs synchronously so the write is attributed to the caller's user activation.
  */
 function startBrowserImageWrite(
   blobPromise: Promise<Blob>,
@@ -85,9 +84,7 @@ function startBrowserImageWrite(
     return null;
   }
   try {
-    // A promise-valued item is the sanctioned way to hold the clipboard open
-    // while the bytes are produced; the MIME type is fixed because the blob
-    // it resolves to cannot be inspected yet.
+    // A promise-valued item is the sanctioned way to hold the clipboard open while the bytes are produced; the MIME type is fixed because the blob it resolves to cannot be inspected yet.
     return browserClipboard.write([
       new ClipboardItem({ "image/png": blobPromise }),
     ]);
@@ -98,15 +95,7 @@ function startBrowserImageWrite(
   }
 }
 
-/**
- * Copy an image to the clipboard while its bytes are still being produced.
- *
- * WebKit consumes the user activation at the first `await`, so a write issued
- * only after the capture resolved is rejected as untrusted. Passing the
- * pending blob to `ClipboardItem` starts the write inside the activation and
- * streams the pixels in when `blobPromise` settles. Callers must therefore
- * create `blobPromise` and call this synchronously from the event handler.
- */
+/** Copy an image to the clipboard while its bytes are still being produced. */
 export async function copyImageBlobPromiseToClipboard(
   blobPromise: Promise<Blob>,
 ): Promise<void> {

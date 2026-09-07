@@ -134,11 +134,8 @@ function getRailBoundaryIndex(
 }
 
 /**
- * VS Code-style mini rail. Always visible (~3rem wide). Clicking an
- * inactive icon switches the active panel and expands the main panel if
- * collapsed. Clicking the already-active group toggles main panel
- * collapse. Dragging before/after reorders groups; dragging onto the
- * middle of another icon combines those panels into one rail group.
+ * VS Code-style mini rail.
+ * Always visible (~3rem wide).
  */
 export function EpicLeftPanelRail(props: EpicLeftPanelRailProps) {
   const { epicId, tabId, orientation } = props;
@@ -204,16 +201,13 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
     () => getVisibleLeftPanelGroups(panelGroups, availabilityContext),
     [availabilityContext, panelGroups],
   );
-  // Which icon lights up. Resolved rather than compared against `activePanelId`
-  // directly so a hidden active panel highlights whatever the body fell back
-  // to, instead of leaving the rail with nothing marked.
+  // Resolved rather than compared against `activePanelId` directly so a hidden active panel highlights whatever the body fell back to, instead of leaving the rail with nothing marked.
   const activeGroupIndex = resolveActiveVisibleGroupIndex(
     visibleGroups.map((group) => group.panelIds),
     activePanelId,
   );
-  // The icon the pointer was over when the menu opened, or null for empty rail
-  // space. Set on the button's own contextmenu after the rail's capture-phase
-  // reset, so both land in the same render as Radix opening the menu.
+  // The icon the pointer was over when the menu opened, or null for empty rail space.
+  // Set on the button's own contextmenu after the rail's capture-phase reset, so both land in the same render as Radix opening the menu.
   const [contextPanelId, setContextPanelId] = useState<LeftPanelId | null>(
     null,
   );
@@ -254,14 +248,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
 
   return (
     <TooltipProvider delayDuration={150}>
-      {/*
-        One context menu for the WHOLE rail rather than one per icon. Right-
-        clicking an icon opens it, and so does right-clicking the empty rail -
-        which is the only way back to a panel the user hid, once there is no
-        icon left to aim at. Nesting a second trigger on the button would fire
-        both menus for the same event; the button reports which panel was under
-        the pointer through `contextPanelId` instead.
-      */}
+      {/* One context menu for the WHOLE rail rather than one per icon. Right- clicking an icon opens it, and so does right-clicking the empty rail - which is the only way back to a panel the user hid, once there is no icon left to aim at. */}
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
@@ -327,18 +314,8 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
 }
 
 /**
- * Rail context menu: every panel we have, each with a checkmark for whether it
- * is in the rail right now. Unchecking hides a panel; checking one reveals it -
- * including the presence-gated `pull-requests` / `comments`, where an explicit
- * check keeps the icon there even before the thing that would reveal it exists.
- *
- * A choice is stored only when it disagrees with the panel's own rule (see
- * `setPanelVisibilityOverride`), so checking an already-auto-visible panel
- * leaves it following that rule rather than pinning today's answer forever.
- *
- * The last visible panel cannot be unchecked: the sidebar body always renders
- * some panel, so an empty rail would leave the two disagreeing with no icon to
- * click back.
+ * Unchecking hides a panel; checking one reveals it - including the presence-gated `pull-requests` / `comments`, where an explicit check keeps the icon there even before the thing that would reveal it exists.
+ * A choice is stored only when it disagrees with the panel's own rule (see `setPanelVisibilityOverride`), so checking an already-auto-visible panel leaves it following that rule rather than pinning today's answer forever.
  */
 function RailContextMenuContent(props: {
   readonly context: LeftPanelAvailabilityContext;

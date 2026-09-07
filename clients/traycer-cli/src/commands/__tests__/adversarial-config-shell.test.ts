@@ -173,9 +173,7 @@ describe("adversarial: JSON envelope shape stability across all seven commands",
     const listRes = await configShellListCommand(makeCtx());
     assertRecordArray(listRes.data);
     for (const row of listRes.data) {
-      // `wslHealth` is present only on a Windows wsl.exe row whose WSL cannot
-      // host a terminal - a live probe of THIS machine, so the suite cannot
-      // pin its presence either way without becoming machine-dependent.
+      // `wslHealth` is present only on a Windows wsl.exe row whose WSL cannot host a terminal - a live probe of THIS machine, so the suite cannot pin its presence either way without becoming machine-dependent.
       const keys = Object.keys(row)
         .filter((key) => key !== "wslHealth")
         .sort();

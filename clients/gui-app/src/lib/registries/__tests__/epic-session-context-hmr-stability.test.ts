@@ -8,12 +8,8 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 
 /**
- * Mirrors `src/providers/__tests__/host-runtime-provider-context.test.ts`:
- * the pattern for proving a `globalThis`-pinned context survives Fast
- * Refresh module re-imports. `epic-session-registry.ts` pins THREE contexts
- * (`EpicSessionContext`, `EpicSessionPresentationContext`,
- * `EpicSessionHostClientContext`) via one `createStableDevContext` helper, so
- * each global is exercised the same way.
+ * Mirrors `src/providers/__tests__/host-runtime-provider-context.test.ts`: the pattern for proving a `globalThis`-pinned context survives Fast Refresh module re-imports.
+ * `epic-session-registry.ts` pins THREE contexts (`EpicSessionContext`, `EpicSessionPresentationContext`, `EpicSessionHostClientContext`) via one `createStableDevContext` helper, so each global is exercised the same way.
  */
 interface EpicSessionDevGlobals {
   __TRAYCER_EPIC_SESSION_CONTEXT__:
@@ -31,9 +27,7 @@ const HANDLE_KEY = "__TRAYCER_EPIC_SESSION_CONTEXT__";
 const PRESENTATION_KEY = "__TRAYCER_EPIC_SESSION_PRESENTATION_CONTEXT__";
 const HOST_CLIENT_KEY = "__TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__";
 
-// Typed as the dev-globals record alone (not the `typeof globalThis`
-// intersection) so the keyed write in `restoreGlobal` type-checks against the
-// one property it is generic over - the same shape the source module uses.
+// Typed as the dev-globals record alone (not the `typeof globalThis` intersection) so the keyed write in `restoreGlobal` type-checks against the one property it is generic over - the same shape the source module uses.
 const devGlobals: EpicSessionDevGlobals = globalThis as typeof globalThis &
   EpicSessionDevGlobals;
 
@@ -92,10 +86,7 @@ describe("epic-session-registry HMR-stable contexts", () => {
   });
 
   it("negative control: without the pinned globals surviving between imports, two generations get DIFFERENT context objects", async () => {
-    // Proves the `toBe` assertions above are discriminating, not vacuous
-    // (e.g. because module caching alone would make this pass regardless of
-    // whether pinning works): deleting the global right before each import
-    // forces a fresh `createContext()` call every time.
+    // Proves the `toBe` assertions above are discriminating, not vacuous (e.g. because module caching alone would make this pass regardless of whether pinning works): deleting the global right before each import forces a fresh `createContext()` call every time.
     vi.resetModules();
     deleteAllPinnedGlobals();
     const gen1 = await import("@/lib/registries/epic-session-registry");
@@ -121,9 +112,7 @@ describe("epic-session-registry HMR-stable contexts", () => {
     vi.resetModules();
     const gen2 = await import("@/lib/registries/epic-session-registry");
 
-    // Object identity only matters for the `use()`/`useContext()` lookup;
-    // any object shaped like the handle works here (mirrors the exemplar's
-    // `Object.create(null) as HostRuntimeBinding<...>` binding fake).
+    // Object identity only matters for the `use()`/`useContext()` lookup; any object shaped like the handle works here (mirrors the exemplar's `Object.create(null) as HostRuntimeBinding<...>` binding fake).
     const fakeHandle = Object.create(null) as OpenEpicStoreHandle;
 
     function Consumer(): ReactNode {

@@ -114,7 +114,6 @@ function response(input: {
 }
 
 function renderPanel(input: {
-  /** A function receives the request, so a test can answer a FILTERED query differently. */
   readonly response:
     | UsageSummaryResponse
     | ((request: UsageSummaryRequest) => UsageSummaryResponse);
@@ -164,9 +163,7 @@ function renderPanel(input: {
 
 describe("<UsageSummaryPanel /> activity section", () => {
   it("falls back to a shorter calendar when the host is too old for the year window", async () => {
-    // Hosts update independently of the app: one released before this
-    // feature caps windowDays at 90 and rejects the year outright. That
-    // must degrade to a shorter calendar, not an error.
+    // That must degrade to a shorter calendar, not an error.
     const seen: number[] = [];
     renderPanel({
       response: (request) => {
@@ -189,10 +186,8 @@ describe("<UsageSummaryPanel /> activity section", () => {
   });
 
   it("does NOT shrink the calendar for a transient year-read failure", async () => {
-    // The 90-day fallback exists for ONE failure: an old host's window cap.
-    // A transient error on the year read followed by a lucky 90-day success
-    // must surface as an error, not quietly present a quarter of the
-    // calendar as if it were the whole thing.
+    // A transient error on the year read followed by a lucky 90-day success must surface as an error, not quietly
+    // present a quarter of the calendar as if it were the whole thing.
     const seen: number[] = [];
     renderPanel({
       response: (request) => {
@@ -217,9 +212,8 @@ describe("<UsageSummaryPanel /> activity section", () => {
   });
 
   it("offers hosts that only the FALLBACK calendar read knows about", async () => {
-    // An old host that rejects the year can still surface a host (active
-    // e.g. 60 days ago) that neither the directory nor the 30-day window
-    // knows - the filter has to learn it from the fallback response too.
+    // An old host that rejects the year can still surface a host (active e.g. 60 days ago) that neither the
+    // directory nor the 30-day window knows - the filter has to learn it from the fallback response too.
     const user = userEvent.setup();
     renderPanel({
       response: (request) => {
@@ -247,9 +241,8 @@ describe("<UsageSummaryPanel /> activity section", () => {
   });
 
   it("shows an error with a retry only once BOTH activity reads fail", async () => {
-    // The page's own Retry refetches the window query alone, so a dropped
-    // activity error would leave the section silently absent with no way
-    // back.
+    // The page's own Retry refetches the window query alone, so a dropped activity error would leave the section
+    // silently absent with no way back.
     let attempts = 0;
     renderPanel({
       response: (request) => {
@@ -343,8 +336,8 @@ describe("<UsageSummaryPanel /> host scope", () => {
       hostNames: new Map([[mockLocalHostEntry.hostId, "Studio Mac"]]),
     });
 
-    // Not a disabled dropdown: there is nothing to choose BETWEEN, because
-    // that plane can only ever see the machine it runs on.
+    // Not a disabled dropdown: there is nothing to choose between, because that plane can only ever see the
+    // machine it runs on.
     const pinned = await screen.findByTestId("usage-host-filter-pinned");
     expect(pinned.textContent).toContain("Studio Mac");
     expect(screen.queryByTestId("usage-host-filter")).toBeNull();
@@ -362,16 +355,13 @@ describe("<UsageSummaryPanel /> host scope", () => {
     });
 
     await screen.findByTestId("usage-cost-figure");
-    // The account-wide total is exactly what the reader expects here, so a
-    // scope note would be noise - the qualifier appears only once the read
-    // is narrowed.
+    // The account-wide total is exactly what the reader expects here, so a scope note would be noise - the
+    // qualifier appears only once the read is narrowed.
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
   });
 
   it("offers hosts that only the year-long activity read knows about", async () => {
-    // The calendar spans a year; the picker's own read spans 30 days. A
-    // host active months ago, absent from the directory, showed up in the
-    // All-hosts calendar with no way to isolate it.
+    // The calendar spans a year; the picker's own read spans 30 days.
     const user = userEvent.setup();
     renderPanel({
       response: (request) =>
@@ -393,11 +383,8 @@ describe("<UsageSummaryPanel /> host scope", () => {
   });
 
   it("keeps every discovered host in the picker after narrowing to one", async () => {
-    // The shared aggregator filters facts by `hostId` BEFORE grouping, so a
-    // filtered response's `hostBuckets` names only the selected host. With an
-    // empty directory - hosts that have usage but the client cannot name -
-    // rebuilding the options from the current response alone left no way to
-    // move from one such host straight to another.
+    // With an empty directory - hosts that have usage but the client cannot name - rebuilding the options from the
+    // current response alone left no way to move from one such host straight to another.
     const user = userEvent.setup();
     const { requests } = renderPanel({
       response: (request) =>

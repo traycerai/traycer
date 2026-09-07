@@ -257,9 +257,8 @@ vi.mock("@/lib/commands/actions", () => ({
 }));
 vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
   useActiveEpicProjection: () => FAKE_PROJECTION,
-  // The host serving the active epic's projection - what the opener stamps
-  // into tiles and reads the epic's own records from (PR #1243 round 6). The
-  // suite's "active host" knob drives it, so every arm below reads as before.
+  // The host serving the active epic's projection - what the opener stamps into tiles and reads the epic's own records from (PR #1243 round 6).
+  // The suite's "active host" knob drives it, so every arm below reads as before.
   useActiveEpicHostId: () => activeHostIdMock.current,
 }));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -378,9 +377,7 @@ vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>
     latestConversationWorkspaceSeedMock.seed,
 }));
-// chats-subpage resolves a mismatched chat's hostId to a friendly label; a
-// host id absent from this list (e.g. an unlisted/offline host) falls back to
-// the raw id in the badge.
+// chats-subpage resolves a mismatched chat's hostId to a friendly label; a host id absent from this list (e.g. an unlisted/offline host) falls back to the raw id in the badge.
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({
     data: [
@@ -629,9 +626,8 @@ describe("Agents opener sub-page", () => {
 
   it("preserves the leaf id prefixes the palette keys analytics off", () => {
     const items = renderItems(useAgentsOpenerItems);
-    // `palette-cmdk-controller` maps `open:chats:*` -> open_chat and
-    // `open:tui:*` -> open_terminal. Merging the visible category must not
-    // renumber the leaves out from under that routing.
+    // `palette-cmdk-controller` maps `open:chats:*` -> open_chat and `open:tui:*` -> open_terminal.
+    // Merging the visible category must not renumber the leaves out from under that routing.
     expect(items.every((i) => /^open:(chats|tui):/.test(i.id))).toBe(true);
   });
 
@@ -660,9 +656,7 @@ describe("Agents opener sub-page", () => {
     expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
 
-  // Chat leaves reach these assertions through the merged Agents sub-page:
-  // `useChatsOpenerItems` now returns `{ create, existing }`, while
-  // `useAgentsOpenerItems` is the flat list the palette actually renders.
+  // Chat leaves reach these assertions through the merged Agents sub-page: `useChatsOpenerItems` now returns `{ create, existing }`, while `useAgentsOpenerItems` is the flat list the palette actually renders.
   it("badges a chat whose hostId differs from the active host, using the directory label", () => {
     const items = renderItems(useAgentsOpenerItems);
     const mismatched = items.find((i) => i.id === "open:chats:c1");
@@ -975,10 +969,7 @@ describe("Terminals opener sub-page", () => {
     expect(existing.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
 
-  // A sign-in terminal reopened from the palette must carry its origin too -
-  // `terminal.list` cannot say who created a session, so without this the
-  // eviction-recreate path (correct for an ordinary shell) would spawn a bare
-  // prompt under the sign-in session's id once the host lost the PTY.
+  // A sign-in terminal reopened from the palette must carry its origin too - `terminal.list` cannot say who created a session, so without this the eviction-recreate path (correct for an ordinary shell) would spawn a bare prompt under the sign-in session's id.
   it("carries provider-login origin for a recorded sign-in session, and leaves an unrecorded one plain", () => {
     recordProviderLoginTerminal({
       hostId: "default-host",

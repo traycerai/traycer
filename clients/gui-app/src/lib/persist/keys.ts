@@ -1,18 +1,10 @@
 // Centralized localStorage key construction for the gui-app persisted stores.
-// Mirrors the `src/lib/query-keys/` convention: durable builders live here and
-// are re-exported through the `index.ts` barrel, so no store rebuilds a key
-// shape ad hoc.
-//
-// OUTPUT-PRESERVING: every builder emits each store's CURRENT localStorage key
-// byte-for-byte. A mismatch changes a store's key and wipes that store. The
-// guarantee is the hand-transcribed non-circular test in
-// `__tests__/keys.test.ts`.
+// Mirrors the `src/lib/query-keys/` convention: durable builders live here and are re-exported through the `index.ts` barrel, so no store rebuilds a key shape ad hoc.
 
 export const PERSIST_PREFIX = "traycer-gui-app";
 
-// Account-scoped stores bucket their key by the signed-in identity; an absent/empty
-// identity collapses to the shared anonymous bucket. Preserved verbatim from
-// the per-store `ANONYMOUS_USER_KEY = "anon"` + `value.length > 0` logic.
+// Account-scoped stores bucket their key by the signed-in identity; an absent/empty identity collapses to the shared anonymous bucket.
+// Preserved verbatim from the per-store `ANONYMOUS_USER_KEY = "anon"` + `value.length > 0` logic.
 export const scopeBucket = (value: string | null): string =>
   value !== null && value.length > 0 ? value : "anon";
 
@@ -21,19 +13,7 @@ export const persistKey = (name: string): string => `${PERSIST_PREFIX}:${name}`;
 export const scopedPersistKey = (name: string, ...segments: string[]): string =>
   [persistKey(name), ...segments].join(":");
 
-// ── Scoped builders (reproduce today's exact strings) ──────────────────────
-// Each scoped store namespaces its key by the signed-in identity; the bridges
-// pass the CANONICAL `profile.userId` (or `null` → the shared `anon` bucket).
-// An email is passed to a builder only ONCE per sign-in, as a bridge's
-// `legacyName` argument to `retargetPersistedStore` — a one-shot migration
-// name for adopting a pre-userId-scoping bucket, never an ongoing identity.
-// The registry never changes WHICH value a store passes, so keys stay
-// byte-identical; only construction is centralized.
-//
-// Shared shape: every builder below takes `identity: string | null` — the
-// canonical user id, or `null` for the anonymous bucket. A caller may also
-// pass an email string here, but ONLY as the one-shot `legacyName` described
-// above; it is not a second kind of identity the builder understands.
+// ── Scoped builders (reproduce today's exact strings) ────────────────────── Each scoped store namespaces its key by the signed-in identity; the bridges pass the CANONICAL `profile.userId` (or `null` → the shared `anon` bucket).
 
 export const composerRunSettingsKey = (identity: string | null): string =>
   scopedPersistKey("composer-run-settings", scopeBucket(identity));
@@ -54,32 +34,21 @@ export const landingTerminalsKey = (identity: string | null): string =>
   scopedPersistKey("landing-terminals", scopeBucket(identity));
 
 // Per-surface host pins (git-diff / file-tree / new-terminal / composer).
-// Identity-scoped like composer run settings (G1): a pin names an account's
-// host id, so another account must never inherit it across a user switch.
+// Identity-scoped like composer run settings (G1): a pin names an account's host id, so another account must never inherit it across a user switch.
 export const surfaceHostSelectionKey = (identity: string | null): string =>
   scopedPersistKey("surface-host-selection", scopeBucket(identity));
 
-// Arg order is `(identity, epicId)` but the emitted string keeps today's
-// `…:open-epic:{identityBucket}:{epicId}` order (the current store's local
-// `persistKey(epicId, userId)` emitted exactly this).
+// Arg order is `(identity, epicId)` but the emitted string keeps today's `…:open-epic:{identityBucket}:{epicId}` order (the current store's local `persistKey(epicId, userId)` emitted exactly this).
 export const openEpicKey = (identity: string | null, epicId: string): string =>
   scopedPersistKey("open-epic", scopeBucket(identity), epicId);
 
 // The composer's PR/Issue mention filters, sticky per (task, section).
-// Identity-scoped like the run settings above, NOT like the host picker: a
-// stored repository selection names a GitHub host, owner and repo - private
-// coordinates for a private repository - so an identity-free bucket would
-// leave them readable after sign-out and hand them to the next account on
-// this profile. The lifecycle bridge retargets on sign-in and wipes the
-// bucket on sign-out, same as composer run settings.
+// Identity-scoped like the run settings above, NOT like the host picker: a stored repository selection names a GitHub host, owner and repo - private coordinates for a private repository - so an identity-free bucket would leave them readable after sign-out.
 export const githubMentionFiltersKey = (identity: string | null): string =>
   scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
 
-// The hostId this machine's OWN local host last published. Unscoped and
-// identity-free like the picker memory: it is a fact about this machine, not
-// about who is signed in. The directory uses it to keep the machine's own
-// host out of the remote arm while the local host is booting - the boot
-// window is exactly when no live local snapshot exists to tell it apart.
+// The hostId this machine's OWN local host last published.
+// Unscoped and identity-free like the picker memory: it is a fact about this machine, not about who is signed in.
 export const lastLocalHostIdKey = (): string =>
   persistKey("last-local-host-id");
 
@@ -141,12 +110,8 @@ export const appLocalNotificationCompletionReceiptKey = (input: {
     encodeURIComponent(input.occurrenceKey),
   );
 
-// Interview answer drafts persist ONE localStorage key per (chatId, blockId)
-// instead of a single full-snapshot Zustand blob. Separate keys prevent a
-// full-map write from one window (or a stale store context) from erasing an
-// unrelated chat's draft persisted by another window — the same isolation the
-// app-local display receipts above rely on. Both segments are percent-encoded so
-// a `:` inside an id can never split the key.
+// Interview answer drafts persist ONE localStorage key per (chatId, blockId) instead of a single full-snapshot Zustand blob.
+// Separate keys prevent a full-map write from one window (or a stale store context) from erasing an unrelated chat's draft persisted by another window - the same isolation the app-local display receipts above rely on.
 export const interviewDraftKeyPrefix = (): string =>
   `${persistKey("interview-drafts")}:`;
 
@@ -163,29 +128,15 @@ export const readingPositionKeyPrefix = (accountId: string): string =>
     encodeURIComponent(scopeBucket(accountId)),
   )}:`;
 
-// Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
-// of per-path activity entries (worktrees-enrichment-persistence.ts). A host
-// id is always non-empty, so no `scopeBucket` collapse applies.
+// Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot of per-path activity entries (worktrees-enrichment-persistence.ts).
+// A host id is always non-empty, so no `scopeBucket` collapse applies.
 export const worktreeActivityCacheKey = (hostId: string): string =>
   scopedPersistKey("worktree-activity-cache", hostId);
 
-// Host-scoped sibling of `worktreeActivityCacheKey`: the base listing rows
-// (worktrees-listing-query.ts), so the panel paints its row list instantly on
-// launch while the live listing refetches behind it.
+// Host-scoped sibling of `worktreeActivityCacheKey`: the base listing rows (worktrees-listing-query.ts), so the panel paints its row list instantly on launch while the live listing refetches behind it.
 export const worktreeListingCacheKey = (hostId: string): string =>
   scopedPersistKey("worktree-listing-cache", hostId);
-// ── Catalog ────────────────────────────────────────────────────────────────
-// `kind` tells enumeration the shape of each persisted surface:
-//   - "static"  : plain `traycer-gui-app:<leaf>` localStorage key.
-//   - "scoped"  : `traycer-gui-app:<leaf>:<bucket>[…]` localStorage key.
-//   - "session" : sessionStorage key (not localStorage).
-//   - "channel" : a BroadcastChannel NAME, not a storage key.
-//
-// The `leaf` is the DIVERGENCE-CORRECT key leaf, not the store/file name (six
-// stores diverge — see the literals below). Non-zustand `traycer-gui-app:` keys
-// are cataloged here too; builders may stay local to their owner unless a
-// centralized builder is useful. Auth (`traycer.*`) keys are intentionally
-// excluded.
+// ── Catalog ──────────────────────────────────────────────────────────────── `kind` tells enumeration the shape of each persisted surface:
 export type PersistStoreKind = "static" | "scoped" | "session" | "channel";
 
 export interface PersistStoreEntry {
@@ -246,10 +197,7 @@ export const PERSIST_STORES = [
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
-  // Enumerated under the `interview-drafts` leaf, but persisted as one key per
-  // (chatId, blockId) — `interview-drafts:{encChatId}:{encBlockId}` — for
-  // cross-window isolation (see `interviewDraftKey`). The `traycer-gui-app:`
-  // prefix sweep in `wipe.ts` still clears every per-draft key.
+  // Enumerated under the `interview-drafts` leaf, but persisted as one key per (chatId, blockId) - `interview-drafts:{encChatId}:{encBlockId}` - for cross-window isolation (see `interviewDraftKey`).
   {
     camelName: "interviewDraft",
     leaf: "interview-drafts",
@@ -332,8 +280,7 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   // Imported tasks the user has not opened yet: the task list's unread dot.
-  // Epic ids are cloud entities, so no host scoping; entries clear on first
-  // open and the set is small (one import run's worth at most).
+  // Epic ids are cloud entities, so no host scoping; entries clear on first open and the set is small (one import run's worth at most).
   {
     camelName: "sessionImportUnseen",
     leaf: "session-import-unseen",
@@ -344,9 +291,8 @@ export const PERSIST_STORES = [
     leaf: "notifications-filter",
     kind: "static",
   },
-  // Which feature announcements this install has shown, keyed by feature id
-  // (`feature-announcements-store.ts`). Machine-local like onboarding: it is
-  // a fact about what this install has said, not about who is signed in.
+  // Which feature announcements this install has shown, keyed by feature id (`feature-announcements-store.ts`).
+  // Machine-local like onboarding: it is a fact about what this install has said, not about who is signed in.
   {
     camelName: "featureAnnouncements",
     leaf: "feature-announcements",
@@ -354,23 +300,23 @@ export const PERSIST_STORES = [
   },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
-  // `last-route:<windowId>` — per-window router history (persistent-history.ts).
+  // `last-route:<windowId>` - per-window router history (persistent-history.ts).
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
   // This machine's own local host id (host-directory-service.ts).
   { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
-  // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.
+  // `consumed-initial-route:<windowId>:<route>` - sessionStorage guard.
   {
     camelName: "consumedInitialRoute",
     leaf: "consumed-initial-route",
     kind: "session",
   },
-  // `deleted-epic-events:last` — localStorage cross-tab notification mirror.
+  // `deleted-epic-events:last` - localStorage cross-tab notification mirror.
   {
     camelName: "deletedEpicEventsLast",
     leaf: "deleted-epic-events:last",
     kind: "static",
   },
-  // `deleted-epic-events:v1` — a BroadcastChannel NAME, not storage.
+  // `deleted-epic-events:v1` - a BroadcastChannel NAME, not storage.
   {
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
@@ -382,22 +328,21 @@ export const PERSIST_STORES = [
     leaf: "live-chat-completion-acknowledgements:v1",
     kind: "channel",
   },
-  // One monotonic key per displayed app-local notification version. Separate
-  // keys prevent an unrelated full-snapshot Zustand write in another window
-  // from erasing a receipt.
+  // One monotonic key per displayed app-local notification version.
+  // Separate keys prevent an unrelated full-snapshot Zustand write in another window from erasing a receipt.
   {
     camelName: "appLocalNotificationDisplayReceipt",
     leaf: "app-local-notification-display-receipt",
     kind: "scoped",
   },
-  // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
+  // `worktree-activity-cache:<hostId>` - the worktrees panel's warm-open
   // TanStack snapshot (worktrees-enrichment-persistence.ts), host-scoped.
   {
     camelName: "worktreeActivityCache",
     leaf: "worktree-activity-cache",
     kind: "scoped",
   },
-  // `worktree-listing-cache:<hostId>` — the worktrees panel's base listing
+  // `worktree-listing-cache:<hostId>` - the worktrees panel's base listing
   // snapshot (worktrees-listing-query.ts), host-scoped.
   {
     camelName: "worktreeListingCache",
@@ -407,16 +352,14 @@ export const PERSIST_STORES = [
 ] as const satisfies ReadonlyArray<PersistStoreEntry>;
 
 // Ergonomic, typo-safe `{ camelName: "leaf" }` map derived from the catalog.
-// The keyed type means a store referencing `STORE_KEYS.<wrongName>` fails to
-// compile — the catalog is the single source of truth for every store's leaf.
+// The keyed type means a store referencing `STORE_KEYS.<wrongName>` fails to compile - the catalog is the single source of truth for every store's leaf.
 type PersistStoreCamelName = (typeof PERSIST_STORES)[number]["camelName"];
 export const STORE_KEYS = Object.fromEntries(
   PERSIST_STORES.map((entry) => [entry.camelName, entry.leaf]),
 ) as Readonly<Record<PersistStoreCamelName, string>>;
 
-// Runtime uniqueness assertion: an object literal does not guarantee no two
-// entries share a leaf, so prove it at module load. Two stores sharing a leaf
-// would silently collide on one localStorage key.
+// Runtime uniqueness assertion: an object literal does not guarantee no two entries share a leaf, so prove it at module load.
+// Two stores sharing a leaf would silently collide on one localStorage key.
 const catalogLeaves = new Set(PERSIST_STORES.map((entry) => entry.leaf));
 if (catalogLeaves.size !== PERSIST_STORES.length) {
   throw new Error(

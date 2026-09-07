@@ -211,11 +211,8 @@ describe("resolveProviderTerminalSetup", () => {
     ).toBeNull();
   });
 
-  // The launch-the-CLI providers declare `terminalLogin` with `oauthArgs:
-  // null` (no headless command; the host launches the CLI itself). They get
-  // the terminal action on that capability alone, with the generic guidance
-  // re-worded to name the step inside the CLI - and, like copilot, nothing at
-  // all on a host that declares no capability.
+  // The launch-the-CLI providers declare `terminalLogin` with `oauthArgs: null` (no headless command; the host launches the CLI itself).
+  // They get the terminal action on that capability alone, with the generic guidance re-worded to name the step inside the CLI - and, like copilot, nothing at all on a host that declares no capability.
   it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
     "gives a launch-the-CLI provider (qwen, no oauthArgs %o) the terminal action with copy naming the in-CLI step",
     ({ oauthArgs }) => {
@@ -317,11 +314,8 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    // The provider row says yes and the surface exists; only the host's
-    // negotiated `providers.startTerminalLogin` major says no. Reporting
-    // 'here' would lead the steps with a button that can only ever fail, and
-    // 'unsupported-host' would lead with nothing - but this host DOES draw
-    // the button, in an Epic, and the steps have to say so.
+    // The provider row says yes and the surface exists; only the host's negotiated `providers.startTerminalLogin` major says no.
+    // Reporting 'here' would lead the steps with a button that can only ever fail, and 'unsupported-host' would lead with nothing - but this host DOES draw the button, in an Epic, and the steps have to say so.
     expect(providerSetupActionPlacement(setup, true, "unsupported")).toBe(
       "unsupported-scope",
     );
@@ -334,10 +328,8 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    // No manifest recorded, or no host at all: the button stays hidden, but
-    // the epic-only sentence claims this host negotiated the pre-scope major,
-    // which nothing has proven. The claim-free copy leads with the manual
-    // route instead.
+    // No manifest recorded, or no host at all: the button stays hidden, but the epic-only sentence claims this host negotiated the pre-scope major, which nothing has proven.
+    // The claim-free copy leads with the manual route instead.
     expect(providerSetupActionPlacement(setup, true, "unknown")).toBe(
       "unsupported-host",
     );

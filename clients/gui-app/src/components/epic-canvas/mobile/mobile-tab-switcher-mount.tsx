@@ -5,14 +5,7 @@ import {
   useMobileSwitcherStore,
 } from "@/stores/epics/mobile-switcher-store";
 
-/**
- * Binds the switcher store to the switcher sheet for one epic tab.
- *
- * The sheet mounts inside the canvas tree, where the epic projection and the
- * providers its embedded panel bodies rely on are in scope, while the trigger
- * that opens it lives in the app header. Every mobile canvas state that a user
- * can reach mounts this, so the header trigger is never inert.
- */
+/** Every mobile canvas state that a user can reach mounts this, so the header trigger is never inert. */
 export function MobileTabSwitcherMount(props: {
   readonly epicId: string;
   readonly tabId: string;

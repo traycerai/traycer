@@ -26,13 +26,7 @@ export interface ConversationWorkspaceOwner {
   readonly hostId: string | null;
 }
 
-/**
- * A caller that will create the chat on a specific host (a pinned
- * new-conversation modal) passes that host here so the seed is read from and
- * about the SAME host - seeding from the app-wide active host would suggest a
- * worktree that may not exist where the chat is actually created. `null`
- * keeps the historical behavior: active host, active client.
- */
+/** A caller that will create the chat on a specific host (a pinned new-conversation modal) passes that host here so the seed is read from and about the SAME host - seeding from the app-wide active host would suggest a worktree that may not exist where the chat is actually created. */
 export interface ConversationSeedHostPin {
   readonly hostId: string;
   readonly hostClient: HostClient<HostRpcRegistry> | null;

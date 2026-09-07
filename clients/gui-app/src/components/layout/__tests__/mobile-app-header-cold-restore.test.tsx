@@ -42,9 +42,8 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { UpdateEpicRequest } from "@traycer/protocol/host/epic/unary-schemas";
 
-// Host-backed chrome only; the registry accessors the header reads for the
-// epic's title and permission role stay REAL here - they are the half of the
-// cold-restore path under test.
+// Host-backed chrome only; the registry accessors the header reads for the epic's title and permission role
+// stay real here - they are the half of the cold-restore path under test.
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <button type="button" aria-label="Usage limits" />,
 }));
@@ -80,14 +79,12 @@ const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => {},
 });
 
-/** The session the epic surface's provider has registered by now. */
 function registerSession(title: string): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the composition now: the store stopped constructing a runtime, so a
+    // `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: fakeStreamClientFactory,
       laneSelection: null,
@@ -106,18 +103,8 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
-/**
- * A registered session whose write-command queue can actually SEND and
- * settle, for the one test that drives a rename through to commit. Unlike
- * {@link registerSession}, this seeds the epic title into the real Y.Doc and
- * opens the transport (`onConnectionStatus` before `onSnapshot` - the
- * control replica clears `hasFreshRootSnapshotForOpenCycle` on every
- * transport-status transition, including into "open", so opening first is
- * what lets the snapshot's own landing set it back to true) so the queue's
- * send gate (`transportStatus === "open" && hasFreshRootSnapshotForOpenCycle`)
- * is actually satisfied - `registerSession`'s bare `setState` never touches
- * that gate, so a rename fired against it would sit "queued" forever.
- */
+/** Unlike registerSession, this seeds the epic title into the real Y.Doc and opens the transport
+ * (`onConnectionStatus` before `onSnapshot`. */
 function registerCommittableSession(title: string): {
   readonly handle: OpenedStoreForTest;
   readonly titleCalls: () => readonly UpdateEpicRequest[];
@@ -173,9 +160,8 @@ function registerCommittableSession(title: string): {
   const handle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the composition now: the store stopped constructing a runtime, so a
+    // `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -188,9 +174,8 @@ function registerCommittableSession(title: string): {
       ),
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  // Seeded into the real Y.Doc BEFORE the snapshot lands, so the FULL
-  // projection the snapshot triggers reads it back as the epic header - the
-  // honest replacement for forcing the projected `epic` slice directly.
+  // Seeded into the real Y.Doc before the snapshot lands, so the full projection the snapshot triggers reads it
+  // back as the epic header - the honest replacement for forcing the projected `epic` slice directly.
   handle.doc.getMap("epic").set("title", title);
   handle.doc.getMap("epic").set("updatedAt", 1);
   captured.value.onConnectionStatus("open", null);
@@ -229,7 +214,6 @@ function registerCommittableSession(title: string): {
   };
 }
 
-/** The persisted tab record a restore rehydrates from localStorage. */
 function seedTabRecord(name: string): void {
   useEpicCanvasStore.setState({
     tabsById: { [TAB_ID]: { tabId: TAB_ID, epicId: EPIC_ID, name } },
@@ -246,12 +230,8 @@ function restoreEpicTabLayout(): void {
   });
 }
 
-/**
- * Renders the header at the LANDING route, which is where a cold-restored phone
- * actually sits: the shell has no route persistence, so its WebView boots at
- * `/` and the epic is known only from the restored tab layout. Rendering at
- * `/epics/...` here would hide every failure this file exists to catch.
- */
+/** Renders the header at the landing route, which is where a cold-restored phone actually sits: the shell has
+ * no route persistence, so its WebView boots at `/` and the epic is known only from the restored tab layout. */
 function renderRestoredAtLanding(): void {
   const rootRoute = createRootRoute({
     component: () => (
@@ -278,9 +258,6 @@ function renderRestoredAtLanding(): void {
     routeTree,
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
-  // `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
-  // success arm's cloud-cache patch; the mocked mutation hook used to hide
-  // that dependency.
   render(
     <QueryClientProvider client={new QueryClient()}>
       <RouterProvider router={router} />
@@ -288,13 +265,8 @@ function renderRestoredAtLanding(): void {
   );
 }
 
-/**
- * A cold restore reaches the header with the tab layout rehydrated and nothing
- * else primed: no route match, and none of the epic route's active-session
- * effects mounted. That last part is the point - those effects own the only
- * production write back into the tab record, so anything the header shows has
- * to come from a source that is live without them.
- */
+/** That last part is the point - those effects own the only production write back into the tab record, so
+ * anything the header shows has to come from a source that is live without them. */
 describe("MobileAppHeader on a cold-restored epic tab", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState({ tabsById: {} });
@@ -314,9 +286,8 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     useTabsStore.setState({ items: [], activeItemId: null });
   });
 
-  // The restored layout names a TAB; only the tab record maps that id to an
-  // epic. Without it there is no epic identity to resolve a session against, so
-  // no title is the honest answer rather than a defect.
+  // The restored layout names a tab; only the tab record maps that id to an epic. Without it there is no epic
+  // identity to resolve a session against, so no title is the honest answer rather than a defect.
   it("renders no title when the layout has a tab the canvas has no record for", async () => {
     registerSession("Ship the mobile header");
     renderRestoredAtLanding();
@@ -376,12 +347,8 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     expect(screen.queryByTestId("mobile-header-title")).toBeNull();
   });
 
-  // The rename field is editable in exactly this state, so the name it shows
-  // has to be the one its own commit lands in. The tab record is NOT that
-  // place: its only production writer is the epic route's active-session title
-  // sync, which is unmounted here - so a header reading the record would keep
-  // rendering the pre-rename name after a successful commit, and keep it
-  // across the next restart too.
+  // The tab record is not that place: its only production writer is the epic route's active-session title sync,
+  // which is unmounted here.
   it("shows the committed name after a rename, not the stale tab record", async () => {
     seedTabRecord("Old name");
     const { handle, titleCalls, settleTitleUpdate } =
@@ -394,15 +361,7 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     fireEvent.change(input, { target: { value: "Renamed on the phone" } });
     fireEvent.blur(input);
 
-    // Post-T11 this dispatches through the session's own write-command
-    // queue, never `useEpicUpdateTitle` - and the queue's `onEnqueued` stamps
-    // an optimistic overlay onto the projected `epic.title` the same way it
-    // does an artifact rename onto `artifacts.byId`
-    // (`epic-records-replica.ts`'s `stampWriteCommand` has an
-    // `update-epic-title` arm calling `beginEpicTitleMutationWithId`, same
-    // shape as the artifact arms beside it). So the header already reads the
-    // committed-to-be title from the enqueue alone - no forced doc echo
-    // needed to observe it.
+    // Post-T11 this dispatches through the session's own write-command queue, never `useEpicUpdateTitle`.
     expect(titleCalls()).toHaveLength(1);
     const firstTitleCall = titleCalls().at(0);
     if (firstTitleCall === undefined) {
@@ -421,9 +380,8 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
       ),
     );
 
-    // Settle the RPC so the command actually reaches "committed" (rather
-    // than leaving it permanently "queued", which the header's optimistic
-    // read alone would not catch a regression in).
+    // Settle the RPC so the command actually reaches "committed" (rather than leaving it permanently "queued",
+    // which the header's optimistic read alone would not catch a regression in).
     settleTitleUpdate();
     await act(async () => {
       await Promise.resolve();

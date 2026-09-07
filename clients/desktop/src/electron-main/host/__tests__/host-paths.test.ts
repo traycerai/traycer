@@ -12,16 +12,7 @@ import {
 } from "../../../../../traycer-cli/src/service/label";
 import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
-/**
- * Pin the cross-workspace contract: the desktop runner MUST look for the
- * host PID metadata at the environment-scoped path that the CLI supervisor
- * and the host runtime agree on. Prod = `~/.traycer/host/pid.json`;
- * dev = `~/.traycer/host/dev/pid.json`. Changing these without also
- * updating the host (the external Traycer Host) helper
- * `getDefaultHostPidMetadataPath` AND the CLI's
- * `clients/traycer-cli/src/store/paths.ts` breaks local host
- * discovery.
- */
+/** Pin the cross-workspace contract: the desktop runner MUST look for the host PID metadata at the environment-scoped path that the CLI supervisor and the host runtime agree on. */
 describe("getHostFsLayout", () => {
   it("resolves the prod ~/.traycer/host/pid.json metadata path", () => {
     const layout = getHostFsLayout("production");
@@ -47,10 +38,6 @@ describe("getHostFsLayout", () => {
     );
   });
 
-  // Ticket 03 / plan D3: hand-mirrors `traycer-host/src/paths.ts`'s
-  // `browserTraceLogPath`/`browserTelemetryLogPath` - same filenames, beside
-  // `host.log` in the same slot-resolved `rootDir`, plus the `.1` rotation
-  // siblings the shared writer (plan D2) renames the live file to.
   it("resolves the browser telemetry/trace files (+ .1 rotation siblings) beside host.log", () => {
     const layout = getHostFsLayout("production");
     const root = join(homedir(), ".traycer", "host");
@@ -78,11 +65,6 @@ describe("getHostFsLayout", () => {
     );
   });
 
-  // Channel-aware install record paths (Ticket 29cf341f). The host-
-  // management IPC reads the install record from `installRecordFile`;
-  // dev Desktop must point at `~/.traycer/host/dev/install/install.json`
-  // so a `make dev-desktop` session never reads the production install
-  // record (and never mutates prod via host-install/uninstall).
   it("exposes the prod install dir + install record at ~/.traycer/host/install/install.json", () => {
     const layout = getHostFsLayout("production");
     expect(layout.installDir).toBe(
@@ -124,14 +106,7 @@ describe("getHostFsLayout", () => {
   });
 });
 
-/**
- * The service label namespaces the host's LaunchAgent / SMAppService
- * registration per slot. It MUST agree with the in-bundle plist the installer
- * ships (`scripts/desktop-install-cloud.js` `hostAgentLabel`) and the CLI's
- * `serviceLabelFor`: production keeps the bare `ai.traycer.host`; every other
- * slot nests under its own name. A dev-only fallback that mapped internal
- * `staging` builds onto `ai.traycer.host.dev` broke staging host bring-up.
- */
+/** It MUST agree with the in-bundle plist the installer ships (`scripts/desktop-install-cloud.js` `hostAgentLabel`) and the CLI's `serviceLabelFor`: production keeps the bare. */
 describe("labelForEnvironment", () => {
   it("keeps the bare ai.traycer.host id for production", () => {
     const label = labelForEnvironment("production");
@@ -162,17 +137,6 @@ describe("labelForEnvironment", () => {
   });
 });
 
-/**
- * The desktop and the CLI each derive the SMAppService agent label
- * (`<cli-label>.agent`) with their own copy of the rule - separate bundles,
- * so neither can import the other at runtime. Unlike the injector/installer
- * copies (pinned by packaging tests against real bundles), this pair had no
- * parity guard, and its drift would be the quietest failure: the CLI would
- * silently probe a label nobody registers, so `service install` stops
- * refusing on Desktop machines and status/uninstall stop seeing the agent.
- * This test imports the REAL CLI derivation across the workspace boundary
- * and pins the two rules - and the underlying label ids - together.
- */
 describe("smAppServiceAgentLabelId", () => {
   it("derives `<cli-label>.agent`", () => {
     expect(smAppServiceAgentLabelId("ai.traycer.host")).toBe(

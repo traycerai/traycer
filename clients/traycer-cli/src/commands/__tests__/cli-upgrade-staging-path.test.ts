@@ -14,35 +14,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliVersionsManifest } from "../../registry/cli-versions";
 import type { HostPlatformKey } from "../../registry/types";
 
-// Codex P1 #1: `buildCliUpgradeCommand` used to stage the download at
-// `join(installDir, "traycer-<targetVersion>-<platformKey><ext>")`. A
-// re-anchored manual install can legitimately have EXACTLY that name -
-// `cli re-anchor` records whatever version string it is told, not the
-// one baked into the filename, so `manifest.version !== targetVersion`
-// while `basename(manifest.binaryPath) === "traycer-<targetVersion>-
-// <platformKey><ext>"` is reachable. When that happens the staged
-// download path collides with `manifest.binaryPath`, and
-// `downloadToFile` treats its destination as a RESUMABLE PARTIAL - it
-// reads the existing file's size to resume from and discards/truncates
-// it on a restart, destroying the live executable before any digest
-// check ever runs.
-//
-// The fix (`resolveStagingPath` in `commands/cli-upgrade.ts`) stages at
-// a dotted, `.download`-suffixed name instead
-// (`.traycer-upgrade-<targetVersion>-<platformKey>.download<ext>`) and
-// falls back to an additional `.staged` suffix on the (now practically
-// impossible) chance even THAT collides with the live path.
-//
-// `fetchCliVersions` and `downloadToFile` are mocked to avoid the
-// network, matching `cli-upgrade-target-version.test.ts`.
+// Staging path must not be the live binary path; a failed download must not truncate the running CLI.
 
 const mocks = vi.hoisted(() => ({
   versionsManifest: null as CliVersionsManifest | null,
   downloadCalls: [] as Array<{ url: string; destPath: string }>,
   downloadContent: "staged-cli-bytes-1.5.0",
-  // Captured INSIDE the downloadToFile mock, before it writes anything -
-  // proves the live binary was untouched at the moment staging began,
-  // which is exactly the window the old colliding path corrupted.
+  // Captured INSIDE the downloadToFile mock, before it writes anything - proves the live binary was untouched at the moment staging began, which is exactly the window the old colliding path corrupted.
   liveContentAtDownloadStart: null as string | null,
   liveBinaryPathForCapture: null as string | null,
 }));
@@ -226,12 +204,8 @@ describe("buildCliUpgradeCommand's staging path never collides with the live bin
     mkdirSync(installDir, { recursive: true });
     const platformKey = await currentPlatformKey();
 
-    // Deliberately the OLD (pre-fix) staging template's exact shape -
-    // this is the collision the fix exists to make impossible. Reachable
-    // because `cli re-anchor` records the version it's told, independent
-    // of the binary's filename, so `manifest.version` ("1.4.0" below)
-    // and the version embedded in the live binary's own NAME ("1.5.0",
-    // matching the feed's targetVersion) can legitimately disagree.
+    // Deliberately the OLD (pre-fix) staging template's exact shape - this is the collision the fix exists to make impossible.
+    // Reachable because `cli re-anchor` records the version it's told, independent of the binary's filename, so `manifest.version` ("1.4.0" below) and the version embedded in the live binary's own NAME ("1.5.0", matching the feed's targetVersion) can legitimately disagree.
     const liveBinaryPath = join(
       installDir,
       `traycer-1.5.0-${platformKey}${binaryExtension()}`,
@@ -265,11 +239,7 @@ describe("buildCliUpgradeCommand's staging path never collides with the live bin
     expect(mocks.downloadCalls).toHaveLength(1);
     expect(mocks.downloadCalls[0]?.destPath).not.toBe(liveBinaryPath);
 
-    // At the moment staging began, the live binary still held its
-    // ORIGINAL bytes - proof the download never touched it (the old
-    // template would have pointed `downloadToFile` straight at it,
-    // where a resumable-partial read/discard corrupts it before any
-    // digest check).
+    // At the moment staging began, the live binary still held its ORIGINAL bytes - proof the download never touched it (the old template would have pointed `downloadToFile` straight at it, where a resumable-partial read/discard corrupts it before any digest check).
     expect(mocks.liveContentAtDownloadStart).toBe(
       "original-live-bytes-pre-upgrade",
     );
@@ -323,19 +293,14 @@ describe("buildCliUpgradeCommand's staging path never collides with the live bin
   });
 
   it("a live binary differing from the staging template only by LETTER CASE still gets a distinct staging path (Codex P1: Windows/macOS are case-insensitive)", async () => {
-    // `pathsMayAlias` runs its case-folded comparison unconditionally -
-    // it is not gated on `process.platform` in production, so this test
-    // exercises the real code path on whatever OS this suite happens to
-    // run on (this repo's CI is Linux/macOS) rather than needing an
-    // actual case-insensitive filesystem to prove the guard works.
+    // `pathsMayAlias` runs its case-folded comparison unconditionally - it is not gated on `process.platform` in production, so this test exercises the real code path on whatever OS this suite happens to run on (this repo's CI is Linux/macOS) rather than needing an actual case-insensitive filesystem to prove the guard works.
     const installDir = join(workHome, "bin");
     mkdirSync(installDir, { recursive: true });
     const platformKey = await currentPlatformKey();
 
     const candidateName = `.traycer-upgrade-1.5.0-${platformKey}.download${binaryExtension()}`;
     // Same name, different case throughout - e.g.
-    // ".TRAYCER-UPGRADE-1.5.0-<PLATFORM>.DOWNLOAD". A plain `===` guard
-    // would call this a different file; `pathsMayAlias` must not.
+    // ".TRAYCER-UPGRADE-1.5.0-<PLATFORM>.DOWNLOAD".
     const liveBinaryPath = join(installDir, candidateName.toUpperCase());
     writeFileSync(liveBinaryPath, "original-live-bytes-case-alias");
     mocks.liveBinaryPathForCapture = liveBinaryPath;

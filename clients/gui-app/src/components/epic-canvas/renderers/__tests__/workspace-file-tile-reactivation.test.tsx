@@ -191,16 +191,10 @@ describe("<WorkspaceFileTile /> reactivation refresh", () => {
   });
 
   it("shows the freshly refetched disk content after reactivation (no unsaved draft to preserve)", async () => {
-    // Read-only (no edit runtime attach): isolates the reactivation-refetch
-    // path from the pre-existing, unrelated edit-session attach lifecycle,
-    // which races its own async recovery/reconciliation against this same
-    // isActive edge.
     state.supportsWrite = false;
     const harness = renderTile({ isActive: false });
     const newContent = "const value = 2;\n";
-    // `state.readContent` only changes once `refetch` itself resolves - not
-    // ahead of time - so this only passes if the reactivation edge actually
-    // called `refetch`, not merely because the tile re-rendered.
+    // `state.readContent` only changes once `refetch` itself resolves - not ahead of time - so this only passes if the reactivation edge actually called `refetch`, not merely because the tile re-rendered.
     state.refetch.mockImplementation(() => {
       state.readContent = newContent;
       return Promise.resolve({
@@ -213,9 +207,7 @@ describe("<WorkspaceFileTile /> reactivation refresh", () => {
     await waitFor(() => {
       expect(state.refetch).toHaveBeenCalled();
     });
-    // The mocked hook has no real subscription, so re-render it manually to
-    // observe the post-refetch value - a real `useQuery` would do this via
-    // its own store subscription once `refetch` settles.
+    // The mocked hook has no real subscription, so re-render it manually to observe the post-refetch value - a real `useQuery` would do this via its own store subscription once `refetch` settles.
     await waitFor(() => {
       harness.setActive(true);
       expect(state.rendererContent).toHaveBeenCalledWith(newContent);
@@ -264,11 +256,7 @@ describe("<WorkspaceFileTile /> reactivation refresh", () => {
     state.rendererContent.mockClear();
 
     state.refetch.mockRejectedValueOnce(new Error("disk read offline"));
-    // The mocked hook's `data` never actually changes here (only the direct
-    // `refetch()` call - which the mock always resolves independently of
-    // `useWorkspaceReadFile`'s returned `data` - can be made to fail), so
-    // this proves the reactivation trigger itself is inert on error: no
-    // renderer re-invocation with different content, no thrown error.
+    // The mocked hook's `data` never actually changes here (only the direct `refetch()` call - which the mock always resolves independently of `useWorkspaceReadFile`'s returned `data` - can be made to fail), so this proves the reactivation trigger itself is inert on error: no renderer re-invocation with different content, no thrown error.
     const harness = renderTile({ isActive: false });
     harness.setActive(true);
 

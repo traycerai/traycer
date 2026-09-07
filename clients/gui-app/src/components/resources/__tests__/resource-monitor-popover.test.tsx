@@ -1,23 +1,5 @@
-/**
- * Proves that the resource-monitor popover's owner-open flow commits through
- * the nested-focus opener boundary instead of raw canvas store mutations
- * paired with a stale-search `navigateToTabIntent` call. See the decision
- * artifact "Nested Focus Opener Boundary".
- *
- * The resource monitor is a global surface: the owner it opens can live in
- * the currently active tab, a DIFFERENT open tab, or not be open at all -
- * unlike same-route openers (chat markdown links, sidebar rows), it must
- * decide whether to reuse `useEpicNestedFocusNavigation` in place or perform
- * a cross-route top-level navigation carrying a store-prepared focus target.
- * `useEpicNestedFocusNavigation` is mocked with a spy that still invokes the
- * `prepare` callback (mirrors `epic-sidebar-nested-focus-boundary.test.tsx`),
- * so each assertion checks both that the right boundary path was taken AND
- * that the underlying `prepare*FocusTarget` store action ran with the right
- * arguments. The canvas store mock deliberately omits the raw
- * `openTileInTab` / `setActiveTilePane` / `setActiveTileTab` actions, so a
- * regression back to calling them directly throws instead of silently
- * passing.
- */
+/** The canvas store mock deliberately omits the raw `openTileInTab` / `setActiveTilePane` / `setActiveTileTab`
+ * actions, so a regression back to calling them directly throws instead of silently passing. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -94,9 +76,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostMock.hostId,
 }));
 
-// Partial, not wholesale: the popover re-provides the real
-// `StreamRuntimeContext` to re-target its stream at the picked host, so a
-// factory that dropped that export would leave `.Provider` undefined at render.
+// Partial, not wholesale: the popover re-provides the real `StreamRuntimeContext` to re-target its stream at
+// the picked host, so a factory that dropped that export would leave `.Provider` undefined at render.
 vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/host/stream-runtime-context")>();
@@ -108,15 +89,8 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
   };
 });
 
-// The plan-restricted branch is the only thing in this popover that reaches the
-// runner bridge, and it needs both a provider (`useRunnerHost` throws without
-// one) and a QueryClient. Faking those two boundaries keeps the REAL upgrade
-// button under test — stubbing the component itself would assert its own test
-// id and nothing about what this surface actually offers.
-//
-// `importOriginal` rather than a fixed factory, deliberately: a fixed one goes
-// stale the moment either module gains an export some other component in this
-// tree already calls, and fails at the call site rather than here.
+// The plan-restricted branch is the only thing in this popover that reaches the runner bridge, and it needs
+// both a provider (`useRunnerHost` throws without one) and a QueryClient.
 const openLinkMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/providers/use-runner-host", async (importOriginal) => {
@@ -132,9 +106,8 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
 
-// The scope's own six hooks (both host lists, the runner host, the plan gate)
-// are not this suite's subject - it mocks at the scope boundary, exactly as the
-// Settings panel suites and the usage popover's do.
+// The scope's own six hooks (both host lists, the runner host, the plan gate) are not this suite's subject -
+// it mocks at the scope boundary, exactly as the Settings panel suites and the usage popover's do.
 const hostScopeMock = vi.hoisted(() => ({
   scope: null as HostScope | null,
   hasExplicitPick: false,
@@ -148,16 +121,13 @@ vi.mock("@/hooks/resources/use-resource-monitor-host-scope", () => ({
   }),
 }));
 
-// Dialing a transient stream transport needs the auth service and the host
-// directory, neither of which this pure-render harness mounts. The binding's
-// only job HERE is whether a pick resolved to its own client.
+// The binding's only job here is whether a pick resolved to its own client.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => hostScopeMock.streamBinding,
 }));
 
-// The picker's two collaborators outside this suite's subject: the Settings
-// jump (a router the harness has no route tree for) and the registry liveness
-// poll (a TanStack query with no QueryClientProvider mounted).
+// The picker's two collaborators outside this suite's subject: the Settings jump (a router the harness has no
+// route tree for) and the registry liveness poll (a TanStack query with no QueryClientProvider mounted).
 const systemTabModalMock = vi.hoisted(() => ({
   openSettings: vi.fn(),
   openHistory: vi.fn(),
@@ -243,10 +213,8 @@ vi.mock("@/lib/epic-selectors", () => ({
       ) {
         return liveAgentsMock.byAgentId[ref.agentId];
       }
-      // `null` stands for "this window has no live projection for the epic",
-      // the state the canvas-record path exists to cover. An EMPTY title is a
-      // live agent that is merely untitled, and the real hook normalizes that
-      // to `title: null` - not to an absent agent.
+      // `null` stands for "this window has no live projection for the epic", the state the canvas-record path exists
+      // to cover.
       if (ref.agentId === "chat-1" && liveArtifactTitleMock.title !== null) {
         return {
           kind: "chat" as const,
@@ -265,9 +233,8 @@ vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
   useHistoryNavAvailable: () => historyNavAvailableMock.enabled,
 }));
 
-// The kill mutation reaches into the host-runtime + query providers, which this
-// pure-render harness does not mount. Stub it so the popover renders the kill
-// affordances without that wiring; `resourcesKillMock.mutate` captures calls.
+// Stub it so the popover renders the kill affordances without that wiring; `resourcesKillMock.mutate` captures
+// calls.
 const resourcesKillMock = vi.hoisted(() => ({ mutate: vi.fn() }));
 vi.mock("@/hooks/resources/use-resources-kill-mutation", () => ({
   useResourcesKill: () => ({
@@ -276,9 +243,8 @@ vi.mock("@/hooks/resources/use-resources-kill-mutation", () => ({
   }),
 }));
 
-// Same reason as the kill stub: a shell row drives `managedCommand.stop`,
-// whose hook resolves a per-host client through providers this harness does
-// not mount. `managedCommandStopMock.mutate` captures the stops.
+// Same reason as the kill stub: a shell row drives `managedCommand.stop`, whose hook resolves a per-host
+// client through providers this harness does not mount. `managedCommandStopMock.mutate` captures the stops.
 const managedCommandStopMock = vi.hoisted(() => ({ mutate: vi.fn() }));
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
@@ -290,12 +256,8 @@ vi.mock(
   }),
 );
 
-// Overrides the projection a host-picker test needs to name a host the real
-// registry flow cannot produce on demand (a stale/in-flight attribution).
-// `null` (the default) falls through to the REAL hook, so every suite that
-// does not touch this mock keeps exercising the real registry exactly as
-// before - only a test that sets `globalResourceProjectionMock.projection`
-// substitutes it.
+// Overrides the projection a host-picker test needs to name a host the real registry flow cannot produce on
+// demand (a stale/in-flight attribution).
 const globalResourceProjectionMock = vi.hoisted(() => ({
   projection: null as GlobalResourceProjection | null,
 }));
@@ -313,10 +275,7 @@ vi.mock("@/stores/resources/resources-registry", async (importOriginal) => {
   };
 });
 
-// Same fall-through pattern as the projection override above: `null` defers
-// to the real hook (driven by the mocked `streamVersionMock` /
-// `useStreamMethodSupport`), a test only overrides it to force the
-// too-old-host notice on demand.
+// Same fall-through pattern as the projection override above.
 const globalResourcesUnsupportedMock = vi.hoisted(() => ({
   unsupported: null as boolean | null,
 }));
@@ -329,12 +288,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      // Call first, THEN let the mock win — never `mock ?? real()`. `??`
-      // short-circuits, so the real hook (three inner hooks now) would go
-      // uncalled whenever an override is set; a test that flips `unsupported`
-      // on a mounted tree then changes the hook count and React throws
-      // "Rendered fewer hooks than expected". Same shape as the projection
-      // override above.
+      // Call first, then let the mock win - never `mock ??
       useGlobalResourcesUnsupported: (claimedHostId: string | null) => {
         const real = actual.useGlobalResourcesUnsupported(claimedHostId);
         return globalResourcesUnsupportedMock.unsupported ?? real;
@@ -675,13 +629,8 @@ function projection(
 
 const SINGLE_HOST_SCOPE: HostScope = hostScopeFixture({});
 
-/**
- * The window every launch passes through: an ambient stream already connected
- * and naming its host, before the host LISTS have answered. `isFollowing`
- * requires a resolved host, so `isViewingActive` is false here even though
- * nobody picked anything - the exact pairing that makes it useless as a
- * "is this an explicit pick" test.
- */
+/** The window every launch passes through: an ambient stream already connected and naming its host, before the
+ * host lists have answered. */
 const COLD_START_SCOPE: HostScope = hostScopeFixture({
   host: null,
   hostId: null,
@@ -692,7 +641,6 @@ const COLD_START_SCOPE: HostScope = hostScopeFixture({
   status: "connecting",
 });
 
-/** Two hosts, watching the one that is NOT active - the picker's whole point. */
 function watchingSecondHostScope(overrides: Partial<HostScope>): HostScope {
   const active = hostScopeOptionFixture({ hostId: "host-a" });
   const watched = hostScopeOptionFixture({
@@ -714,11 +662,7 @@ function watchingSecondHostScope(overrides: Partial<HostScope>): HostScope {
   });
 }
 
-/**
- * Non-null is the whole assertion this stands in for: "the pick resolved to a
- * transport of its own". Nothing below ever calls through it - the resources
- * stream itself is driven by `__setResourcesStreamClientFactoryForTests`.
- */
+/** Non-null is the whole assertion this stands in for: "the pick resolved to a transport of its own". */
 function fakeScopedStreamBinding(): StreamRuntimeBinding {
   const client: IHostStreamClient<HostStreamRpcRegistry> = {
     subscribe: () => {
@@ -744,12 +688,7 @@ function fakeScopedStreamBinding(): StreamRuntimeBinding {
   return { wsStreamClient: client, hostId: "host-b", retain: null };
 }
 
-/**
- * A `GlobalResourceProjection` fixture for the host-attribution suites below —
- * mirrors the shape `resources-registry` itself produces (one owner surfaced
- * both at the top level and inside its epic's `entries` row), naming
- * whichever host the test wants the reading to claim.
- */
+/** A `GlobalResourceProjection` fixture for the host-attribution suites below. */
 function ownerRowsProjection(hostId: string | null): GlobalResourceProjection {
   const ownerSnapshot = owner({});
   return {
@@ -775,9 +714,8 @@ function ownerRowsProjection(hostId: string | null): GlobalResourceProjection {
   };
 }
 
-// Same pattern as `diagnostics-test-support.ts`'s `GlobalWithRunnerHost`: a
-// narrow, fully-typed view of the one slot `getDesktopDiagnosticsBridge`
-// reads, so installing it needs no `as any` / `as unknown`.
+// Same pattern as `diagnostics-test-support.ts`'s `GlobalWithRunnerHost`: a narrow, fully-typed view of the
+// one slot `getDesktopDiagnosticsBridge` reads, so installing it needs no `as any` / `as unknown`.
 interface TestDesktopDiagnosticsBridge {
   readonly getMetrics: () => Promise<DesktopProcessMetricsSnapshot>;
 }
@@ -1770,9 +1708,8 @@ describe("ResourceMonitorPopover", () => {
                   cpuPercent: 5,
                   rssBytes: 20 * 1024 * 1024,
                 }),
-                // Second tracked root that is an OS descendant of the first
-                // tree: must be counted exactly once (as a child), never as
-                // an additional root.
+                // Second tracked root that is an OS descendant of the first tree: must be counted exactly once (as a child),
+                // never as an additional root.
                 resourceProcess({
                   pid: 102,
                   parentPid: 101,
@@ -1790,9 +1727,7 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    // 3 + 5 + 9 single-counted, shown by exactly two elements: the task
-    // header and the owner row. A double-count regression in either
-    // projection drops the count below 2 and surfaces 26% instead.
+    // 3 + 5 + 9 single-counted, shown by exactly two elements: the task header and the owner row.
     expect(screen.getAllByText("17%")).toHaveLength(2);
     expect(screen.queryByText("26%")).toBeNull();
   });
@@ -1928,9 +1863,7 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    // The dash is `aria-hidden` decoration; these are the words assistive
-    // tech is actually handed. `aria-label` on the bare span cannot supply
-    // them - naming is prohibited on the generic role.
+    // `aria-label` on the bare span cannot supply them - naming is prohibited on the generic role.
     expect(
       screen.getByText("Resident memory (RSS): unavailable"),
     ).not.toBeNull();
@@ -1943,9 +1876,8 @@ describe("ResourceMonitorPopover", () => {
     const stub = installStubFactory();
     renderPopover();
 
-    // Every reading in the displayed scope carries a PSS value, so the panel
-    // is entitled to the proportional view - and once it takes it, the label,
-    // the total, the share and the ordering must all be on that same metric.
+    // Every reading in the displayed scope carries a pss value, so the panel is entitled to the proportional view
+    // - and once it takes it, the label, the total, the share and the ordering must all be on that same metric.
     const MiB = 1024 * 1024;
     act(() => {
       stub.emit().onSnapshot(
@@ -2592,10 +2524,8 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    // The row label comes from the preserved ref's manual title, not the
-    // running process name. Assert the row button is ENABLED before clicking:
-    // a disabled row is the exact regression this covers, and it would
-    // otherwise show up only indirectly as a missing navigation call.
+    // Assert the row button is enabled before clicking: a disabled row is the exact regression this covers, and it
+    // would otherwise show up only indirectly as a missing navigation call.
     const row = await screen.findByRole<HTMLButtonElement>("button", {
       name: /^Background Build/,
     });
@@ -2632,10 +2562,7 @@ describe("ResourceMonitorPopover", () => {
 
   it("cannot reopen a resource owner after terminal invalidation prunes its closed payload", async () => {
     routerMock.pathname = "/epics/epic-1/tab-1";
-    // The canvas store is mocked here, so the real invalidation fanout cannot
-    // reach it. Terminal invalidation having already pruned the tile's closed
-    // payload is the precondition under test - stated directly rather than
-    // written and then deleted, which read as pruning but was a no-op pair.
+    // The canvas store is mocked here, so the real invalidation fanout cannot reach it.
     canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {};
     const stub = installStubFactory();
     renderPopover();
@@ -2760,10 +2687,8 @@ describe("ResourceMonitorPopover", () => {
         pendingCreate: false,
       },
     };
-    // Non-empty canvas (tab-1 already hosts pane-1): `resolveTileOpen`'s
-    // default-tab-placement path lands on that pane via `anchorPaneId`, so
-    // the executor dispatches `prepareOpenTileInPaneFocusTargetFromSource`
-    // rather than the (now empty-canvas-only) tab-level opener.
+    // Non-empty canvas (tab-1 already hosts pane-1): `resolveTileOpen`'s default-tab-placement path lands on that
+    // pane via `anchorPaneId`.
     canvasMock.prepareOpenTileInPaneFocusTargetFromSource.mockReturnValue({
       paneId: "pane-1",
       tileInstanceId: "tile-term-gone",
@@ -2823,12 +2748,8 @@ describe("ResourceMonitorPopover", () => {
   });
 
   it("prefers a live tile over a stale preserved payload for the same owner", async () => {
-    // Reachable state: a tile is closed (payload captured) and the same
-    // terminal is later reopened. Eviction only happens in
-    // `restoreClosedTilePreview` (keyed on that exact instanceId) and
-    // `discardClosedTilePayload`, so the stale payload outlives the reopen.
-    // The live tile MUST win - reopening would otherwise add a duplicate tile
-    // instead of focusing the one already on the canvas.
+    // Reachable state: a tile is closed (payload captured) and the same terminal is later reopened. The live tile
+    // must win - reopening would otherwise add a duplicate tile instead of focusing the one already on the canvas.
     routerMock.pathname = "/epics/epic-1/tab-1";
     canvasMock.state.closedTilePayloadsByTabId["tab-1"] = {
       "tile-term-1-stale": {
@@ -2906,9 +2827,8 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(await screen.findByText("Agent Chat"));
 
     expect(canvasMock.resolveTargetTabForEpic).not.toHaveBeenCalled();
-    // Cross-route: the real `tab-navigation.ts` (which would eventually call
-    // `openTileWithNavigation`) is mocked out entirely here, so no local
-    // store action ever runs.
+    // Cross-route: the real `tab-navigation.ts` (which would eventually call `openTileWithNavigation`) is mocked
+    // out entirely here, so no local store action ever runs.
     expect(
       canvasMock.prepareOpenTileInTabFocusTargetFromSource,
     ).not.toHaveBeenCalled();
@@ -2935,9 +2855,8 @@ describe("ResourceMonitorPopover", () => {
   });
 
   it("opens an untitled live-only agent under the untitled-agent fallback, not a blank tile", async () => {
-    // `useEpicTabDisplayTitle` projects an untitled agent's live title as
-    // `null` and lands on the tile's own `name`, so an unnamed record has to
-    // carry the render-tier fallback itself or the tab strip renders blank.
+    // `useEpicTabDisplayTitle` projects an untitled agent's live title as `null` and lands on the tile's own
+    // `name`, so an unnamed record has to carry the render-tier fallback itself or the tab strip renders blank.
     routerMock.pathname = "/epics/epic-1/tab-1";
     liveAgentsMock.byAgentId["chat-untitled"] = {
       kind: "chat",
@@ -3043,9 +2962,8 @@ describe("ResourceMonitorPopover", () => {
   });
 
   it("ignores a live agent whose projection names a different host than the process", async () => {
-    // An epic's projection spans hosts and agent ids are host-minted, so a
-    // same-id entry from another host must not enable this row - opening it
-    // would bind the tile to a machine the process is not running on.
+    // An epic's projection spans hosts and agent ids are host-minted, so a same-id entry from another host must
+    // not enable this row - opening it would bind the tile to a machine the process is not running on.
     routerMock.pathname = "/epics/epic-1/tab-1";
     liveAgentsMock.byAgentId["chat-live"] = {
       kind: "chat",
@@ -3811,9 +3729,8 @@ describe("ResourceMonitorPopover", () => {
     outside.remove();
   });
 
-  // A managed command reads as the shell it is (CONTEXT.md), never as the
-  // umbrella term, and its noun follows the monitor flag the same way the
-  // chat's Shells list names the very same shell.
+  // A managed command reads as the shell it is (context.md), never as the umbrella term, and its noun follows
+  // the monitor flag the same way the chat's Shells list names the very same shell.
   function managedCommandOwner(
     monitoring: boolean,
     description: string,
@@ -3835,11 +3752,8 @@ describe("ResourceMonitorPopover", () => {
     });
   }
 
-  /**
-   * A shell renders behind its creator's chevron, and `chat-1` has no owner row
-   * of its own in these projections - so the one collapsed row standing above
-   * the shell is its Synthetic Agent Row.
-   */
+  /** A shell renders behind its creator's chevron, and `chat-1` has no owner row of its own in these projections
+   * - so the one collapsed row standing above the shell is its Synthetic Agent Row. */
   function openPopoverAndExpandCreator(): void {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     fireEvent.click(
@@ -3896,17 +3810,8 @@ describe("ResourceMonitorPopover", () => {
   });
 });
 
-/**
- * Shells nest under their creator (CONTEXT.md: the agent whose tool call made
- * them), uniformly for a chat whose program is still running and for one whose
- * is not - the latter gets a Synthetic Agent Row standing in for it. What these
- * pin is the panel's arithmetic invariant across the new level ("collapsed =
- * whole subtree, expanded = self only, visible lines sum to the truth"), the
- * flat fallback for a creator this client cannot name, and the shell row's
- * click now reaching its Output Window instead of dying.
- *
- * `chat-1` is the canvas mock's only agent node, named "Agent Chat".
- */
+/** What these pin is the panel's arithmetic invariant across the new level ("collapsed = whole subtree,
+ * expanded = self only, visible lines sum to the truth"). */
 describe("ResourceMonitorPopover · shells nested under their creator", () => {
   const MiB = 1024 * 1024;
 
@@ -4183,9 +4088,8 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
 
-    // The shell is tucked behind the collapsed chat: killing it from here
-    // would reap a process the user never saw a row for. Selecting the one
-    // visible row must also satisfy the toggle, not leave it stuck.
+    // The shell is tucked behind the collapsed chat: killing it from here would reap a process the user never saw
+    // a row for. Selecting the one visible row must also satisfy the toggle, not leave it stuck.
     expect(
       screen.getByRole("button", { name: "Kill 1 selected" }),
     ).not.toBeNull();
@@ -4207,15 +4111,7 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
   });
 });
 
-/**
- * A shell is SUPERVISED, so the monitor must not signal it the way it signals
- * an ordinary process tree: `resources.kill` would land as `exited (signal
- * SIGTERM)`, which reads as a crash, lights the chat's attention badge, and
- * gets the agent to start the shell the human just asked it to stop. The shell
- * row therefore carries the supervisor's Stop - the same button the Shells
- * surfaces use - while everything underneath it keeps the raw kill, because
- * killing one pid out of a shell's tree really is process-level intent.
- */
+/** A shell is supervised, so the monitor must not signal it the way it signals an ordinary process tree. */
 describe("ResourceMonitorPopover · stopping a shell rather than killing it", () => {
   const MiB = 1024 * 1024;
 
@@ -4292,7 +4188,6 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
   }
 
-  /** Reveals the shell tucked behind its creator's chevron. */
   function expandCreator(): void {
     fireEvent.click(
       screen.getAllByRole("button", { name: "Expand process tree" })[0],
@@ -4448,9 +4343,8 @@ describe("ResourceMonitorPopover · host picker", () => {
     fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-a"));
 
     expect(setHostId).toHaveBeenCalledWith("host-a");
-    // The list portals outside this popover, so without the host-switcher
-    // exemption in `onInteractOutside` the click that picks a host would also
-    // dismiss the surface the pick was meant to re-scope.
+    // The list portals outside this popover, so without the host-switcher exemption in `onInteractOutside` the
+    // click that picks a host would also dismiss the surface the pick was meant to re-scope.
     expect(
       screen.getByTestId("resource-monitor-host-picker-row"),
     ).not.toBeNull();
@@ -4520,9 +4414,8 @@ describe("ResourceMonitorPopover · host picker", () => {
   it("offers an upgrade, not a connectivity story, for a plan-restricted pick", () => {
     const returnToActive = vi.fn();
     hostScopeMock.scope = watchingSecondHostScope({
-      // `unreachable` is how a plan-gated route surfaces - the server refuses
-      // the attach - so this is the SAME status as the test above and the
-      // reason is the only thing telling them apart.
+      // `unreachable` is how a plan-gated route surfaces - the server refuses the attach - so this is the same
+      // status as the test above and the reason is the only thing telling them apart.
       status: "unreachable",
       host: hostScopeOptionFixture({
         hostId: "host-b",
@@ -4546,9 +4439,8 @@ describe("ResourceMonitorPopover · host picker", () => {
     expect(
       screen.getByTestId("resource-monitor-host-plan-restricted"),
     ).not.toBeNull();
-    // The remedy is the same button the Settings gate offers, so the two
-    // surfaces cannot drift on what a person is supposed to do next — and it
-    // has to ACT, or it is decoration with the right test id.
+    // The remedy is the same button the Settings gate offers, so the two surfaces cannot drift on what a person is
+    // supposed to do next - and it has to act, or it is decoration with the right test id.
     fireEvent.click(screen.getByTestId("host-scope-plan-upgrade"));
     expect(openLinkMock).toHaveBeenCalledWith(
       expect.any(String),
@@ -4566,9 +4458,8 @@ describe("ResourceMonitorPopover · host picker", () => {
   it("refuses a stream whose snapshot is not attributed to the watched host", () => {
     hostScopeMock.scope = watchingSecondHostScope({});
     hostScopeMock.hasExplicitPick = true;
-    // No scoped binding: the pick has not resolved to a transport of its own,
-    // so the global mount is held out of the tree entirely and whatever the
-    // registry still holds belongs to another machine.
+    // No scoped binding: the pick has not resolved to a transport of its own, so the global mount is held out of
+    // the tree entirely and whatever the registry still holds belongs to another machine.
     hostScopeMock.streamBinding = null;
     const stub = installStubFactory();
     render(
@@ -4591,8 +4482,8 @@ describe("ResourceMonitorPopover · host picker", () => {
     hostScopeMock.scope = watchingSecondHostScope({});
     hostScopeMock.hasExplicitPick = true;
     hostScopeMock.streamBinding = fakeScopedStreamBinding();
-    // Named "host-a" - the ACTIVE host, not the one being watched. A stale
-    // attribution left over from before the pick, not an unattributed one.
+    // Named "host-a" - the active host, not the one being watched. A stale attribution left over from before the
+    // pick, not an unattributed one.
     globalResourceProjectionMock.projection = ownerRowsProjection("host-a");
     renderPopover();
 
@@ -4617,8 +4508,6 @@ describe("ResourceMonitorPopover · host picker", () => {
 
   it("does not render a picked host's rows while following the active host", () => {
     hostScopeMock.scope = SINGLE_HOST_SCOPE;
-    // A projection still naming the host someone just stopped watching - the
-    // exact shape of the regression this scope used to be exempt from.
     globalResourceProjectionMock.projection = ownerRowsProjection("host-b");
     renderPopover();
 
@@ -4639,10 +4528,7 @@ describe("ResourceMonitorPopover · host picker", () => {
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
   });
 
-  // No pick involved: swapping the ambient host moves every render-path reader
-  // to the new machine a commit before the stream transport follows, so the
-  // registry still holds the OLD host's samples. Reachable with one host in the
-  // list and the picker never opened.
+  // Reachable with one host in the list and the picker never opened.
   it("refuses the previous host's rows through an ambient host swap", () => {
     hostScopeMock.scope = SINGLE_HOST_SCOPE;
     globalResourceProjectionMock.projection =
@@ -4655,17 +4541,8 @@ describe("ResourceMonitorPopover · host picker", () => {
     expect(screen.queryByText("Terminal Alpha")).toBeNull();
   });
 
-  // The cold-start window: the ambient stream is up and naming its host before
-  // the host LISTS answer, so the scope cannot name one yet. That proves no
-  // mismatch, and there is no kill target during it either - demanding proof
-  // here would blank a working monitor on every launch.
-  //
-  // `isViewingActive: false` is the load-bearing part of this fixture, and the
-  // reason the previous version of this test proved nothing: `isFollowing`
-  // requires a resolved host, so production ALWAYS pairs `host: null` with
-  // `isViewingActive: false`. A cold start is therefore indistinguishable from
-  // a pick by that flag alone, which is why attribution branches on
-  // `hasExplicitPick` instead.
+  // The cold-start window: the ambient stream is up and naming its host before the host lists answer, so the
+  // scope cannot name one yet.
   it("still renders while the scope has not resolved its own host id yet", () => {
     hostScopeMock.scope = COLD_START_SCOPE;
     hostScopeMock.hasExplicitPick = false;
@@ -4743,17 +4620,13 @@ describe("ResourceMonitorPopover · host picker", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
 
-    // Gated on machine identity, not fetch timing - `readingShowsLocalDesktop`
-    // forces `desktopApp: null` for this scope regardless of whether the
-    // metrics promise above has settled yet, so this holds without an await.
+    // Gated on machine identity, not fetch timing - `readingShowsLocalDesktop` forces `desktopApp: null` for this
+    // scope regardless of whether the metrics promise above has settled yet, so this holds without an await.
     expect(screen.queryByText("Traycer Desktop")).toBeNull();
   });
 
-  // `isViewingActive` is `isFollowing`, which REQUIRES a resolved host, so
-  // `host === null` always travels with `isViewingActive: false`. A fixture
-  // pairing a null host with `isViewingActive: true` describes a state the
-  // scope model cannot produce, and a test built on one proves nothing about
-  // production - this asserts the reachable half instead.
+  // A fixture pairing a null host with `isViewingActive: true` describes a state the scope model cannot produce,
+  // and a test built on one proves nothing about production - this asserts the reachable half instead.
   it("hides the Desktop section until a host resolves", () => {
     installDesktopMetricsBridge(() =>
       Promise.resolve({ appMetrics: [desktopMetric({})] }),
@@ -4812,10 +4685,8 @@ describe("ResourceMonitorPopover · host picker", () => {
     ).toBeNull();
   });
 
-  // The capability verdict is read from whichever client the context serves.
-  // With the pick's own binding unresolved that is the AMBIENT one, so an old
-  // ambient host must not be able to convict the picked machine of being
-  // outdated on evidence gathered from a different computer.
+  // With the pick's own binding unresolved that is the ambient one, so an old ambient host must not be able to
+  // convict the picked machine of being outdated on evidence gathered from a different computer.
   it("does not call a picked host outdated on the ambient host's capabilities", () => {
     hostScopeMock.scope = watchingSecondHostScope({});
     hostScopeMock.hasExplicitPick = true;

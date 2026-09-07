@@ -1,9 +1,5 @@
 /**
- * The link-login poll's projected progress: the phone's QR sign-in surface
- * counts down to the next `/link/token` poll off the loop's own absolute
- * `nextPollAtMs`, so the number it shows is derived from the cadence the loop
- * is actually running at — the claim's advertised interval, or whatever a
- * `slow_down` directive stretched it to — and never from a constant in the UI.
+ * The link-login poll's projected progress: the phone's QR sign-in surface counts down to the next `/link/token` poll off the loop's own absolute `nextPollAtMs`, so the number it shows is derived from the cadence the loop is actually running at - the claim's.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -125,9 +121,8 @@ function recordProgress(service: AuthService): {
 }
 
 /**
- * The wait each `waiting` emission is advertising — the gap between when the
- * surface is told the next poll lands and when it was told. This is the
- * number the countdown starts at.
+ * The wait each `waiting` emission is advertising - the gap between when the surface is told the next poll lands and when it was told.
+ * This is the number the countdown starts at.
  */
 function advertisedWaitsMs(emissions: readonly Emission[]): number[] {
   return emissions
@@ -209,7 +204,7 @@ describe("link-login poll progress", () => {
       script.tokenResponse = () => slowDown(RETRY_AFTER_SECONDS);
       await vi.advanceTimersByTimeAsync(ADVERTISED_INTERVAL_SECONDS * 1_000);
 
-      // The directive is spent after one wait — an ordinary pending poll
+      // The directive is spent after one wait - an ordinary pending poll
       // restores the advertised cadence rather than leaving it ratcheted up.
       script.tokenResponse = () =>
         json({ error: "authorization_pending" }, 428);
@@ -239,7 +234,7 @@ describe("link-login poll progress", () => {
       const linkResult = service.signInWithLinkCode("ABCDE-FGHJK");
       await vi.advanceTimersByTimeAsync(0);
       // One pending poll: waiting → checking → waiting, all showing the code
-      // — the phone must keep displaying it until the wait is over.
+      // - the phone must keep displaying it until the wait is over.
       await vi.advanceTimersByTimeAsync(ADVERTISED_INTERVAL_SECONDS * 1_000);
       const codes = recorder.emissions
         .filter((entry) => entry.progress !== null)

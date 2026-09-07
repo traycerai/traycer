@@ -98,9 +98,8 @@ export function updateEpicTitleInCloudTaskCaches(
     if (next === response) continue;
     queryClient.setQueryData<ListTasksResponse>(queryKey, next);
   }
-  // Batch-title entries (`epic.getTaskContexts`) are a second copy of the same
-  // ListTaskLight rows. Patch them in the same write so rename never leaves a
-  // stale owner chip in Settings ▸ Worktrees.
+  // Batch-title entries (`epic.getTaskContexts`) are a second copy of the same ListTaskLight rows.
+  // Patch them in the same write so rename never leaves a stale owner chip in Settings ▸ Worktrees.
   updateEpicTitleInTaskContextsCaches(
     queryClient,
     scope,
@@ -111,8 +110,7 @@ export function updateEpicTitleInCloudTaskCaches(
 
 /**
  * Patches every matching `epic.getTaskContexts` cache entry for `epicId`.
- * Invoked from `updateEpicTitleInCloudTaskCaches` so all rename call sites
- * keep both cache families coherent without a second call.
+ * Invoked from `updateEpicTitleInCloudTaskCaches` so all rename call sites keep both cache families coherent without a second call.
  */
 export function updateEpicTitleInTaskContextsCaches(
   queryClient: QueryClient,
@@ -185,10 +183,8 @@ function patchMatchingQueries<TResponse>(
 }
 
 /**
- * Identity-preserving per-row pin patch: returns the same response reference
- * when the epic is absent or already carries the requested pin state. Shared
- * with the pages store so the cached first page and the accumulated "Show
- * more" tails patch identically.
+ * Identity-preserving per-row pin patch: returns the same response reference when the epic is absent or already carries the requested pin state.
+ * Shared with the pages store so the cached first page and the accumulated "Show more" tails patch identically.
  */
 export function setEpicPinnedInCloudTasksResponse(
   response: ListTasksResponse,
@@ -260,10 +256,7 @@ export function cloudEpicTasksLastViewedQueryKeyMatchesScope(
   );
 }
 
-/**
- * Scope match for `epic.getTaskContexts` keys:
- * `["host", hostId, "epic.getTaskContexts", { taskIds }, userId]`.
- */
+/** Scope match for `epic.getTaskContexts` keys: `["host", hostId, "epic.getTaskContexts", { taskIds }, userId]`. */
 export function epicTaskContextsQueryKeyMatchesScope(
   queryKey: readonly unknown[],
   scope: CloudEpicTasksCacheScope,
@@ -334,8 +327,7 @@ function updateEpicTitleInTaskContextsResponse(
 }
 
 /**
- * Returns a new row with the epic title updated, or `null` when the row does
- * not carry `epicId` / already has `title` (identity-preserving skip).
+ * Returns a new row with the epic title updated, or `null` when the row does not carry `epicId` / already has `title` (identity-preserving skip).
  */
 function updateEpicTitleInListTaskLight(
   task: ListTaskLight,
@@ -374,26 +366,12 @@ function removeTasksFromFacets(
       facets.ownershipScopes,
       ownershipScopesFromTasks(tasks, userId),
     ),
-    // Rebuilding this object DROPS `chatHosts` unless it is carried, and its
-    // absence is not cosmetic: the history gate reads a missing group as proof
-    // that the server never applied the host filter and withholds every row
-    // (`use-history-query`). A local delete would then present as "this host
-    // is too old to filter by host" - permanently, since these entries are
-    // cached with `staleTime`/`gcTime` at Infinity and never refetch on their
-    // own. Any future facet group must be carried here for the same reason.
+    // Rebuilding this object DROPS `chatHosts` unless it is carried, and its absence is not cosmetic: the history gate reads a missing group as proof that the server never applied the host filter and withholds every row (`use-history-query`).
     chatHosts: decrementChatHostFacets(facets.chatHosts, tasks),
   };
 }
 
-/**
- * Decrements per-host task counts for the removed rows, and drops a host whose
- * last task just went.
- *
- * A row with no `chatHostIds` (an older peer that cannot report them) is
- * skipped rather than treated as contributing to no host: its counts stay
- * high until the next fetch, which is a stale number rather than a wrong
- * shape. Losing the GROUP entirely is the failure that matters.
- */
+/** Decrements per-host task counts for the removed rows, and drops a host whose last task just went. */
 function decrementChatHostFacets(
   current: ListTasksFacets["chatHosts"],
   removed: ReadonlyArray<ListTaskLight>,

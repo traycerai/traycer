@@ -15,37 +15,12 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 
-/**
- * Banner-flash bug: switching chat tabs (a real ChatTile remount past the
- * keep-alive LRU) or creating a new chat via its first message briefly
- * flashes "This agent's Codex profile is no longer available", then self-
- * corrects. Root cause (confirmed): `chat-composer.tsx` seeds its toolbar
- * store with `settingsSeed ?? fallbackSettingsSeed`. Before the chat's own
- * authoritative settings hydrate (fresh mount, or a brand-new chat with
- * `settings: null`), the FALLBACK - composer-run-settings-store's epic/
- * global last-run, a landing draft's frozen snapshot, ... - feeds
- * `useProviderReauthGate`. That fallback is zustand-persisted, NOT host-
- * scoped, and can carry a stale/host-mismatched non-null `profileId`, which
- * `deriveReauthReason` correctly (but wrongly, for THIS purpose) reports as
- * "profile_missing" for a selection the chat never actually owned.
- *
- * Two-prong fix under test here, wired exactly like `chat-composer.tsx`:
- *  1. GATE - `useProviderReauthGate`'s new `authoritative` param: `false`
- *     for a fallback-derived selection, so `profile_missing`/
- *     `profile_unauthenticated` never fire from it.
- *  2. SEED HYGIENE - `useComposerToolbarStore`'s new `client` param:
- *     validates every seed (authoritative or fallback) against the target
- *     host's live `providers.list` via `resolveSeededProfileId`, nulling a
- *     genuinely-absent profile instead of trusting it verbatim.
- */
+/** That fallback is zustand-persisted, NOT host- scoped, and can carry a stale/host-mismatched non-null `profileId`, which `deriveReauthReason` correctly (but wrongly, for THIS purpose) reports as "profile_missing" for a selection the chat never actually owned. GATE - `useProviderReauthGate`'s new `authoritative` param: `false` for a fallback-derived selection, so `profile_missing`/ `profile_unauthenticated` never fire from it. 2. */
 
 const mocks = vi.hoisted(() => ({
   // Feeds `useTabProvidersList` (the reauth gate's OWN query).
   tabProviders: [] as ProviderCliState[],
-  // Feeds `useHostQuery` (used inside `useResolvedSeededProfileId`, called by
-  // `useComposerToolbarStore`), keyed by the exact `client` reference it was
-  // invoked with - so a decoy client's data can never leak into the result
-  // unless the code under test genuinely reads from it.
+  // Feeds `useHostQuery` (used inside `useResolvedSeededProfileId`, called by `useComposerToolbarStore`), keyed by the exact `client` reference it was invoked with - so a decoy client's data can never leak into the result unless the code under test genuinely reads from it.
   providersByClient: new Map<unknown, ProviderCliState[]>(),
 }));
 
@@ -128,9 +103,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     findHostById: (id) => (id === entry.hostId ? entry : null),
-    // `useHostQuery` is mocked wholesale above, so this messenger's handlers
-    // are never actually invoked - this just needs to be a real, distinct
-    // `HostClient` instance to key `mocks.providersByClient` by.
+    // `useHostQuery` is mocked wholesale above, so this messenger's handlers are never actually invoked - this just needs to be a real, distinct `HostClient` instance to key `mocks.providersByClient` by.
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `req-${hostId}`,
@@ -142,10 +115,8 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
 
 // The tab's own host - the ONLY host this composer's turns actually run on.
 const TAB_HOST_CLIENT = buildHostClient("tab-host");
-// A decoy "host A" - a DIFFERENT host that a stale/cross-session fallback
-// pin might have been minted on. Never wired to anything the composer
-// actually reads from; its data proves cross-host isolation by being the
-// OPPOSITE of the tab host's, in each direction.
+// A decoy "host A" - a DIFFERENT host that a stale/cross-session fallback pin might have been minted on.
+// Never wired to anything the composer actually reads from; its data proves cross-host isolation by being the OPPOSITE of the tab host's, in each direction.
 const DECOY_HOST_A_CLIENT = buildHostClient("host-a");
 
 function profile(
@@ -223,9 +194,7 @@ const STALE_FALLBACK_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "regular",
-  // Minted on a different host/session and now dead on the tab host - the
-  // exact shape composer-run-settings-store's epic/global last-run, or a
-  // frozen landing-draft snapshot, can carry.
+  // Minted on a different host/session and now dead on the tab host - the exact shape composer-run-settings-store's epic/global last-run, or a frozen landing-draft snapshot, can carry.
   profileId: "stale-codex-id",
 };
 
@@ -235,14 +204,7 @@ const AUTHORITATIVE_MISSING_SETTINGS: ChatRunSettings = {
   profileId: "genuinely-missing-uuid",
 };
 
-/**
- * Mirrors `chat-composer.tsx`'s wiring exactly: computes one `seedSource`
- * (authoritative when `settingsSeed` is non-null, else a fallback seeded
- * from `fallbackSettingsSeed`) and feeds the SAME discriminant to both the
- * toolbar store and the reauth gate - this is exactly the shared signal that
- * keeps prong 2 (seed hygiene) from fighting prong 1 (the gate) over a
- * genuinely-pinned, genuinely-missing profile (see the CONTROL test).
- */
+/** Mirrors `chat-composer.tsx`'s wiring exactly: computes one `seedSource` (authoritative when `settingsSeed` is non-null, else a fallback seeded from `fallbackSettingsSeed`) and feeds the SAME discriminant to both the toolbar store and the reauth gate - this is exactly the shared signal that keeps prong 2 (seed hygiene) from fighting prong 1 (the gate) over a genuinely-pinned, genuinely-missing profile (see the CONTROL test). */
 function ChatComposerLikeHarness(props: {
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
@@ -298,17 +260,12 @@ describe("banner-flash fix: fallback-vs-authoritative gate + host-scoped seed hy
       />,
     );
 
-    // FIX (both prongs land on the same observable outcome here): the
-    // fallback-derived selection never accuses itself of being missing
-    // (prong 1), AND seed hygiene has already nulled the dead pin (prong 2)
-    // - so nothing is even authoritatively "missing" to complain about.
+    // FIX (both prongs land on the same observable outcome here): the fallback-derived selection never accuses itself of being missing (prong 1), AND seed hygiene has already nulled the dead pin (prong 2) - so nothing is even authoritatively "missing" to complain about.
     expect(screen.getByTestId("send-blocked").textContent).toBe("false");
     expect(screen.getByTestId("reason").textContent).toBe("none");
     expect(screen.getByTestId("profile-id").textContent).toBe("ambient");
 
-    // The chat's own authoritative settings arrive (post-snapshot), re-
-    // seeding with `profileId: null` - the self-correction the bug report
-    // observed. Still no banner.
+    // The chat's own authoritative settings arrive (post-snapshot), re- seeding with `profileId: null` - the self-correction the bug report observed. Still no banner.
     rerender(
       <ChatComposerLikeHarness
         settingsSeed={{ ...STALE_FALLBACK_SETTINGS, profileId: null }}
@@ -320,10 +277,8 @@ describe("banner-flash fix: fallback-vs-authoritative gate + host-scoped seed hy
   });
 
   it("(b) new-chat path: a brand-new chat (settings: null) seeded the same way shows no flash either", () => {
-    // A brand-new chat's `chat.settings` is null until the first turn - the
-    // GUI represents this identically to the pre-snapshot window above
-    // (`settingsSeed: null`), so it is the SAME code path. This test pins
-    // that the new-chat entry point isn't accidentally wired differently.
+    // A brand-new chat's `chat.settings` is null until the first turn - the GUI represents this identically to the pre-snapshot window above (`settingsSeed: null`), so it is the SAME code path.
+    // This test pins that the new-chat entry point isn't accidentally wired differently.
     mocks.tabProviders = [
       claudeState([profile("ambient", "ambient", "Terminal account")]),
     ];
@@ -388,18 +343,13 @@ describe("banner-flash fix: fallback-vs-authoritative gate + host-scoped seed hy
       />,
     );
 
-    // Seed hygiene (prong 2) confirms the profile is genuinely alive on the
-    // tab host and keeps it - a live fallback pin is not something either
-    // prong should ever clear.
+    // Seed hygiene (prong 2) confirms the profile is genuinely alive on the tab host and keeps it - a live fallback pin is not something either prong should ever clear.
     expect(screen.getByTestId("profile-id").textContent).toBe("work-uuid");
     expect(screen.getByTestId("send-blocked").textContent).toBe("false");
   });
 
   it("(e) host-env mismatch: a fallback pin valid on a DECOY host but absent on the tab host never flashes, and seed hygiene resolves it to ambient", () => {
-    // The decoy "host A" (never wired to anything the composer reads from)
-    // has "stale-codex-id" alive - proving that if the composer ever
-    // accidentally read from the wrong host, this test would catch it (the
-    // assertions below would flip).
+    // The decoy "host A" (never wired to anything the composer reads from) has "stale-codex-id" alive - proving that if the composer ever accidentally read from the wrong host, this test would catch it (the assertions below would flip).
     mocks.providersByClient.set(DECOY_HOST_A_CLIENT, [
       claudeState([
         profile("ambient", "ambient", "Terminal account"),

@@ -12,7 +12,7 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
 import { openOneShotStreamTransport } from "@/lib/host/one-shot-stream-transport";
 
 // `buildHostStreamClient` is mocked in these tests, so `target` only needs to
-// satisfy the type — its content plays no role in the assembly contract.
+// satisfy the type - its content plays no role in the assembly contract.
 const FAKE_TARGET: HostDirectoryEntry = {
   hostId: "host-a",
   label: "host-a",
@@ -43,11 +43,7 @@ describe("openOneShotStreamTransport", () => {
 
     const transport = openOneShotStreamTransport(buildParams());
 
-    // Both fields pinned together: `auth: null` makes UNAUTHORIZED terminal,
-    // and `proactiveWakeEligible: false` bars the process-wide sweep from
-    // force-dropping a healthy mux whose reconnect would REPLAY the
-    // destructive `worktree.deleteByPath` subscribe. Flipping either one
-    // re-opens a real replay path, so this assertion must fail for either.
+    // Both fields pinned together: `auth: null` makes UNAUTHORIZED terminal, and `proactiveWakeEligible: false` bars the process-wide sweep from force-dropping a healthy mux whose reconnect would REPLAY the destructive `worktree.deleteByPath` subscribe.
     expect(mocks.buildHostStreamClient).toHaveBeenCalledWith(
       expect.objectContaining({ auth: null, proactiveWakeEligible: false }),
     );
@@ -58,10 +54,8 @@ describe("openOneShotStreamTransport", () => {
   });
 
   it("throws an honest, cause-inclusive error when buildHostStreamClient returns null", () => {
-    // Two refusals map to null: a corrupt registry public key, or the
-    // transport bearer gate finding no presentable credential (this delete
-    // racing a sign-out / context handoff). The error must not blame the key
-    // for what may be an auth-transition race.
+    // Two refusals map to null: a corrupt registry public key, or the transport bearer gate finding no presentable credential (this delete racing a sign-out / context handoff).
+    // The error must not blame the key for what may be an auth-transition race.
     mocks.buildHostStreamClient.mockReturnValue(null);
 
     expect(() => openOneShotStreamTransport(buildParams())).toThrow(

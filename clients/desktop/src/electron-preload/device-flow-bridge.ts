@@ -14,11 +14,6 @@ interface DeviceFlowResultEnvelope {
   readonly result: DeviceFlowResult;
 }
 
-/**
- * Narrowed `deviceFlowStart` reply for a successfully started attempt. `ok:
- * false` (or any malformed reply) collapses an authorize failure (network/5xx)
- * into a `null` session for the renderer.
- */
 interface StartedDeviceFlowResponse {
   readonly ok: true;
   readonly attemptId: string;
@@ -95,16 +90,8 @@ function isStartedDeviceFlowResponse(
 }
 
 /**
- * Per-attempt terminal-result routing. The main-process loop can settle before
- * the renderer subscribes (or the event can race the `start()` response), so a
- * result that arrives without a live handler is cached by `attemptId` and
- * replayed on the next `onResult`. Mirrors the cold-start replay cache in
- * `auth-bridge.ts`. Each `attemptId` settles exactly once, so an entry is
- * consumed-and-dropped on delivery and never accumulates.
- *
- * A `Set` of listeners per `attemptId` keeps every subscriber: a second
- * `onResult` must NOT silently replace the first, or only the last subscriber
- * could observe the terminal result.
+ * The main-process loop can settle before the renderer subscribes (or the event can race the `start()` response), so a result that arrives without a live handler is cached by.
+ * Each `attemptId` settles exactly once, so an entry is consumed-and-dropped on delivery and never accumulates.
  */
 const resultHandlers = new Map<string, Set<Listener<DeviceFlowResult>>>();
 const cachedResults = new Map<string, DeviceFlowResult>();
@@ -144,10 +131,6 @@ export interface DeviceFlowBridgeSurface {
 export function buildDeviceFlowBridge(): DeviceFlowBridgeSurface {
   return {
     start: async (): Promise<DeviceFlowSessionBridge | null> => {
-      // The invoke can reject if the main handler throws or the channel is gone
-      // during shutdown; this preload boundary collapses that to a failed start
-      // (`null`) to honor the `DeviceFlowSession | null` contract instead of
-      // rejecting `start()`.
       let response: unknown;
       try {
         response = await ipcRenderer.invoke(RunnerHostInvoke.deviceFlowStart);

@@ -6,12 +6,8 @@ export interface UsageBreakdownTableProps {
   readonly rows: readonly UsageBreakdownRow[];
 }
 
-/**
- * Harness/model breakdown for the selected window - always shows both cost
- * and tokens (not gated by the page's metric toggle) since this table is
- * also the dataviz relief channel for the chart's WARN-band contrast slots:
- * every exact value has to be reachable here without hovering anything.
- */
+/** Harness/model breakdown for the selected window - always shows both cost and tokens (not gated by the page's
+ * metric toggle) since this table is also the dataviz relief channel for the chart's warn-band contrast slots. */
 export function UsageBreakdownTable(
   props: UsageBreakdownTableProps,
 ): ReactNode {
@@ -52,18 +48,13 @@ export function UsageBreakdownTable(
       <tbody>
         {props.rows.map((row) => (
           <tr
-            // Structural, not space-joined: a model name may itself contain
-            // a space, and `["a b", "c"]` must not key the same as
-            // `["a", "b c"]` or React can reuse the wrong row on an update.
+            // Structural, not space-joined: a model name may itself contain a space, and `["a b", "c"]` must not key the
+            // same as `["a", "b c"]` or React can reuse the wrong row on an update.
             key={JSON.stringify([row.harnessId, row.model])}
             className="border-b border-border/40 last:border-b-0"
           >
-            {/* `wrap-anywhere` on the two identifier cells: the wire allows
-                64/255 characters, and one unbroken model id would otherwise
-                set the auto-layout table's minimum width and push Turns,
-                Tokens and Cost out of a Settings modal that hides horizontal
-                overflow. Wrapping keeps every value on screen; truncating
-                would hide the identifier instead. */}
+            {/* `wrap-anywhere` on the two identifier cells: the wire allows 64/255 characters, and one unbroken model id
+               would otherwise set the auto-layout table's minimum width and push Turns. */}
             <td className="py-1.5 pr-3 wrap-anywhere text-foreground">
               {row.harnessId}
             </td>

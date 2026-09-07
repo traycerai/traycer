@@ -421,9 +421,6 @@ describe("chat-queue-reconciler", () => {
     });
 
     it("keeps an unconfirmed send from the snapshot's own connection pending, without restoration", () => {
-      // A steady-state refresh snapshot (turn finished, backlog backfill) built
-      // before the host processed the send lacks the message; the ack is still
-      // coming on this connection, so nothing is lost and nothing is restored.
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const pendingUser = createPendingUserMessage("action-1", "msg-1");
       const input: ReconcileSnapshotInput = {
@@ -503,10 +500,6 @@ describe("chat-queue-reconciler", () => {
       const result = reconcileSnapshotChange(input);
 
       expect(result.failedSendRestoration).toEqual(existingRestore);
-      // First writer keeps the slot; the displaced send is SETTLED rather than
-      // parked - no pending action to re-state itself on the next snapshot or
-      // to re-claim the slot once it frees - and its text rides the statement,
-      // since dropping the row takes the last copy with it.
       expect(result.appendedErrorNotices).toHaveLength(1);
       expect(result.appendedErrorNotices[0]).toMatchObject({
         code: "SEND_NOT_RECORDED",
@@ -541,9 +534,8 @@ describe("chat-queue-reconciler", () => {
     });
 
     it("keeps a send dispatched on the snapshot's own connection", () => {
-      // Epoch 0 pending, epoch 0 snapshot: the frame was dispatched on THIS
-      // connection and simply outran the snapshot the host built. Its ack is
-      // still deliverable, so absence proves nothing yet.
+      // Epoch 0 pending, epoch 0 snapshot: the frame was dispatched on THIS connection and simply outran
+      // the snapshot the host built. Its ack is still deliverable, so absence proves nothing yet.
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileSnapshotInput = {
         pendingActions: { "action-1": pendingAction },
@@ -953,9 +945,8 @@ describe("chat-queue-reconciler", () => {
 
       const result = pruneAcceptedActions(acceptedActions, 350_000);
 
-      // A slow-to-resolve interview must stay gated until the host's
-      // interviewAnswered/interviewErrored frame clears it - the retention
-      // window must not silently un-gate a duplicate dispatch.
+      // A slow-to-resolve interview must stay gated until the host's interviewAnswered/interviewErrored
+      // frame clears it - the retention window must not silently un-gate a duplicate dispatch.
       expect(result).toHaveProperty("action-1");
     });
 
@@ -996,10 +987,6 @@ describe("chat-queue-reconciler", () => {
         ...createPendingAction("action-send", "msg-1", "send"),
         connectionEpoch: 0,
       };
-      // A stale EDIT has no restoration path (restore is null and its
-      // fresh messageId never appears in the snapshot when the frame died
-      // with the connection), so it IS swept - otherwise it wedges the edit
-      // affordances forever.
       const staleEdit: PendingChatAction = {
         ...createPendingAction("action-edit", "msg-2", "editUserMessage"),
         connectionEpoch: 0,
@@ -1312,11 +1299,8 @@ describe("chat-queue-reconciler", () => {
     });
   });
 
-  // R13 `-A8bJ`: everything the notice says ABOUT the draft has to be said
-  // before the draft, because the draft is the one part whose extent the
-  // notice does not control. It is verbatim user text of unbounded shape,
-  // rendered pre-wrapped, and the user's next gesture is to select it - so a
-  // clause after it is indistinguishable from a line the user typed.
+  // R13 `-A8bJ`: everything the notice says ABOUT the draft has to be said before the draft, because
+  // the draft is the one part whose extent the notice does not control.
   describe("quoted body delimitation", () => {
     const MULTI_LINE: JsonContent = {
       type: "doc",
@@ -1353,12 +1337,8 @@ describe("chat-queue-reconciler", () => {
       }).message;
     }
 
-    // `-H2bA`: the send that WON the slot got its text back and was told
-    // nothing, while every DISPLACED send got explicit drift and delivery
-    // warnings. That is backwards - the winner's prompt is the one sitting in
-    // the composer ready to be resent, so it is the one that most needs to
-    // hear what changed underneath it. The founding invariant says restored
-    // or stated; drift is invisible under both arms unless spoken.
+    // `-H2bA`: the send that WON the slot got its text back and was told nothing, while every
+    // DISPLACED send got explicit drift and delivery warnings.
     it("qualifies a snapshot-restored prompt with the drift it inherits", () => {
       const pendingAction: PendingChatAction = {
         ...createPendingAction("action-1", "msg-1", "send"),
@@ -1411,15 +1391,8 @@ describe("chat-queue-reconciler", () => {
       expect(reason).toContain("after the running turn reached a safe point");
     });
 
-    // `-G8sh`: a NEW chat's `chat.settings` stays null until the first turn,
-    // and the drift guard short-circuited the WHOLE comparison on that null -
-    // including billing, which was perfectly comparable. So an initial send
-    // displaced while the user switched Personal -> Team said nothing about
-    // which account the resend would charge.
-    //
-    // Consistent with this module's own shape, not a redesign: the drift
-    // record is keyed `keyof ChatRunSettings | "accountContext"` precisely
-    // because billing is NOT a run setting, so it must not share their gate.
+    // `-G8sh`: a NEW chat's `chat.settings` stays null until the first turn, and the drift guard
+    // short-circuited the WHOLE comparison on that null - including billing, which was perfectly
     it("states billing drift even before the chat has any settings", () => {
       const message = unrecoverableSendNotice({
         clientActionId: "action-1",
@@ -1473,11 +1446,8 @@ describe("chat-queue-reconciler", () => {
 
     it("puts every clause ahead of the draft in one exact shape", () => {
       expect(noticeFor(MULTI_LINE, { ...SETTINGS, model: "gpt-5.6" })).toBe(
-        // `MULTI_LINE` is two PARAGRAPHS, so the blank line between them is
-        // `-CUdX`: the serializer separates top-level blocks with `\n\n` and
-        // the quote now does too. This expectation previously read
-        // `first line\nsecond line`, which was the defect - it made a
-        // paragraph break indistinguishable from a hard break in the copy.
+        // `MULTI_LINE` is two PARAGRAPHS, so the blank line between them is `-CUdX`: the serializer
+        // separates top-level blocks with `\n\n` and the quote now does too.
         `${PREAMBLE}${DRIFT}${MARKER}first line\n\nsecond line`,
       );
     });

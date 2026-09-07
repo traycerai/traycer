@@ -16,11 +16,7 @@ function tag(
 }
 
 /**
- * The failure this exists to prevent is two names printed on top of each other
- * - which is worse than one name missing, because it costs BOTH. So the rules
- * under test are: move a clashing tag down if there is room, drop it if there
- * is not, and never let the order the scene happened to emit them in decide
- * which one survives.
+ * So the rules under test are: move a clashing tag down if there is room, drop it if there is not, and never let the order the scene happened to emit them in decide which one survives.
  */
 describe("layoutNameTags", () => {
   it("leaves tags that do not touch exactly where they were", () => {
@@ -94,12 +90,6 @@ describe("layoutNameTags", () => {
   });
 });
 
-/**
- * A cluster is the case this exists for: the user's screenshot had
- * "Serendipity" printed through "The Multi Agent C…" at adjacent cafeteria
- * seats. Two agents side by side, both seated, both tags anchored a few pixels
- * apart.
- */
 describe("layoutNameTags on a cluster", () => {
   it("keeps both names readable when two agents sit side by side", () => {
     const placed = layoutNameTags(

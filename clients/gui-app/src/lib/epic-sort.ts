@@ -1,14 +1,4 @@
-/**
- * Sidebar sort model shared by the chat and artifact panels.
- *
- * Sort is a presentation concern: the projector emits one canonical order
- * (most-recent-activity-first, see `compareNodes` in
- * `projection-helpers.ts`, which reuses `DEFAULT_SORT_MODE` here), and the
- * sidebars re-sort the already-filtered ids when the user picks a different
- * mode. The comparator is defined once, over a structural `SortableNode`,
- * so it drives roots and nested children for both panels without coupling
- * to the store's `TreeNode` shape.
- */
+/** Sidebar sort model shared by the chat and artifact panels. */
 
 export const SORT_FIELD = {
   Updated: "updated",
@@ -94,9 +84,8 @@ function compareByField(
 }
 
 /**
- * Comparator for `mode`. Direction flips the primary key; the `id`
- * tie-break stays ascending regardless so equal-key ordering is stable and
- * deterministic across renders.
+ * Comparator for `mode`.
+ * Direction flips the primary key; the `id` tie-break stays ascending regardless so equal-key ordering is stable and deterministic across renders.
  */
 export function makeNodeComparator(mode: SortMode): NodeComparator {
   const sign = mode.direction === SORT_DIRECTION.Asc ? 1 : -1;
@@ -110,10 +99,8 @@ export function makeNodeComparator(mode: SortMode): NodeComparator {
 }
 
 /**
- * Reorder `ids` by `comparator`, resolving each id through `nodeById`. A
- * `null` comparator (the default-sort case) returns the input array
- * unchanged so memoized callers keep referential identity and the
- * projector's own ordering stands.
+ * Reorder `ids` by `comparator`, resolving each id through `nodeById`.
+ * A `null` comparator (the default-sort case) returns the input array unchanged so memoized callers keep referential identity and the projector's own ordering stands.
  */
 export function sortNodeIds(
   ids: readonly string[],

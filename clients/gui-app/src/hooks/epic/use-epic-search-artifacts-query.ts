@@ -22,7 +22,6 @@ export interface UseEpicSearchArtifactsArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly query: string;
-  /** Composed from the sidebar's kind filter. `null` = no kind restriction. */
   readonly kinds: ReadonlyArray<EpicArtifactKind> | null;
   /** Composed from the sidebar's status filter. `null` = no status restriction. */
   readonly statuses: ReadonlyArray<number> | null;
@@ -31,24 +30,7 @@ export interface UseEpicSearchArtifactsArgs {
   readonly enabled: boolean;
 }
 
-/**
- * Scoped, host-ranked artifact search over one Epic (`epic.searchArtifacts`).
- * Titles are Fuse-ranked over authoritative artifact metadata and bodies are
- * ripgrep-matched over the Epic's on-disk Markdown mirror - the renderer never
- * loads or scans Markdown itself.
- *
- * The query key is `[host, method, { epicId, query, fields, filters, limit }]`,
- * so a change of host, Epic, query, or composed filter mints a new key and a
- * late in-flight response for the previous scope lands in that previous key's
- * cache slot - never the current one. `keepPreviousData` is intentionally NOT
- * used: `data` for the current key is therefore only ever this exact scope's
- * result, and the consumer owns same-scope retention across keystrokes so a
- * prior Epic/host/filter result can never render.
- *
- * `epic.searchArtifacts` is an optional (non-floor) capability: an old host
- * rejects with `E_HOST_UNSUPPORTED`, surfaced here as `query.error.code` for
- * the consumer to render a degraded state without a toast.
- */
+/** Renderer never scans Markdown. No keepPreviousData. E_HOST_UNSUPPORTED is a degraded state, no toast. */
 export function useEpicSearchArtifacts(
   args: UseEpicSearchArtifactsArgs,
 ): UseQueryResult<

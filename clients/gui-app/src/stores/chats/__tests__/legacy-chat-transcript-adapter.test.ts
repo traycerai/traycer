@@ -13,15 +13,6 @@ import {
   type LegacyChatTranscriptSnapshotEvent,
 } from "../legacy-chat-transcript-adapter";
 
-/**
- * `chat.subscribe@1.0-1.7` degenerate adapter - descriptor identity, honest
- * `resumeOffer(): null`, exact emission while attached, silence after
- * detach, and proof it never asks its host for a replacement.
- *
- * Mirrors `legacy-epic-stream-adapter.test.ts`'s seam: no socket, no store,
- * no projection - a fake `AdapterHost` recording exactly what the adapter
- * does to it.
- */
 
 function createFakeRuntimeEnvironment(): RuntimeEnvironment {
   return {
@@ -69,12 +60,7 @@ function createFakeAdapterHost(): AdapterHost<LegacyChatTranscriptSnapshotEvent>
   };
 }
 
-/**
- * A minimal, schema-shaped legacy snapshot frame. The adapter never reads
- * into it - it only carries it through to `host.emit` - so the exact field
- * values are not the point; a distinguishing `chatId` per call is, so
- * `toBe`/`toEqual` assertions below are about identity, not coincidence.
- */
+/** A minimal, schema-shaped legacy snapshot frame. */
 function legacyFrame(chatId: string): LegacyChatSnapshotFrame {
   return {
     kind: "snapshot",
@@ -217,9 +203,8 @@ describe("createLegacyChatTranscriptAdapter - detach", () => {
     adapter.attach(secondHost);
     adapter.ingestSnapshot(legacyFrame("chat-1"));
 
-    // `LaneAdapter.attach`'s own contract: an adapter that has been detached
-    // is not re-attached, the runtime builds a fresh one instead. This is
-    // that per-instance latch, not the stream's generation guard.
+    // `LaneAdapter.attach`'s own contract: an adapter that has been detached is not re-attached, the
+    // runtime builds a fresh one instead.
     expect(secondHost.emitted).toEqual([]);
   });
 });
@@ -234,9 +219,6 @@ describe("createLegacyChatTranscriptAdapter - never originates a replacement", (
     adapter.ingestSnapshot(legacyFrame("chat-2"));
     adapter.detach("disposed");
 
-    // The adapter speaks for the authority and is structurally unable to
-    // originate a client reseed - proven by recording every call the fake
-    // host actually received, not merely by absence of a positive assertion.
     expect(host.requestReplacementCalls).toEqual([]);
     expect(host.resumeOutcomes).toEqual([]);
     expect(host.statuses).toEqual([]);

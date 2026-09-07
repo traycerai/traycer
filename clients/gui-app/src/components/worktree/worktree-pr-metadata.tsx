@@ -34,21 +34,8 @@ import {
 } from "@/components/worktree/worktree-pr-state-palette";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
-/**
- * PR pills for the Epic history list (page background) and the chat/owner
- * hover preview (the `bg-popover` hover-preview card). Both are normal,
- * non-inverted surfaces, so one palette covers them - and it now lives in
- * `worktree-pr-state-palette.ts` (`PR_STATE_PILL_CLASS` + `PR_STATE_TINT_CLASS`)
- * alongside the glyph ramp, shared with the sidebar's icon variant and the
- * Epic PR panel row.
- *
- * **The LABEL's contrast comes from `text-foreground`, not a tuned ramp.** It
- * used to be `-800` light / `-300` dark, picked against the pill's own 10%
- * tint. Coloured label text is gone, so that tuning no longer applies here:
- * `text-foreground` is the theme's own body-text token, already contrast-checked
- * against every preset surface. The tuning did NOT become moot, though - the
- * state GLYPH inherited the job of carrying the state, so it inherited the ramp.
- */
+/** Coloured label text is gone, so that tuning no longer applies here: `text-foreground` is the theme's own
+ * body-text token, already contrast-checked against every preset surface. */
 export function WorktreePrPills(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly detailOnHover: boolean;
@@ -116,9 +103,8 @@ function WorktreePrPill(props: {
   readonly flexible: boolean;
   readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
-  // The pill is a real PR link everywhere it renders - the Epic history list
-  // and the chat/owner hover preview (now an interactive HoverCard, so a
-  // focusable `<a>` no longer duplicates into a Tooltip a11y clone).
+  // The pill is a real PR link everywhere it renders - the Epic history list and the chat/owner hover preview
+  // (now an interactive HoverCard, so a focusable `<a>` no longer duplicates into a Tooltip a11y clone).
   const pill = (
     <Badge
       asChild
@@ -208,11 +194,8 @@ function WorktreePrPillContent(props: {
         className={cn("size-3 shrink-0", PR_STATE_TINT_CLASS[props.state])}
       />
       <span className="truncate tabular-nums">{props.label}</span>
-      {/* Revealed on hover/focus rather than always-on. Every pill is a link,
-          so a permanent icon on each one is redundant chrome repeated N times;
-          on hover it confirms the affordance exactly when it is being
-          considered. `opacity` (not conditional mount) so the pill's width is
-          identical in both states and a row of them cannot reflow on hover. */}
+      {/* Revealed on hover/focus rather than always-on. `opacity` (not conditional mount) so the pill's width is
+         identical in both states and a row of them cannot reflow on hover. */}
       {props.opensInApp ? (
         <PanelsTopLeft
           className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
@@ -236,8 +219,8 @@ function WorktreePrAnchor(props: {
   const openLink = useOpenLink();
   const openPr = (event: MouseEvent<HTMLAnchorElement>): void => {
     event.stopPropagation();
-    // Cmd/Ctrl-click is the platform gesture for "open this where it actually
-    // lives" — it bypasses the in-app PR view and goes straight to the host.
+    // Cmd/Ctrl-click is the platform gesture for "open this where it actually lives" - it bypasses the in-app PR
+    // view and goes straight to the host.
     const wantsExternal = event.metaKey || event.ctrlKey;
     if (
       !wantsExternal &&
@@ -305,19 +288,13 @@ function WorktreePrHoverDetail(props: {
   );
 }
 
-/**
- * Chat/owner workspace hover preview. Renders on the shared hover-preview card
- * surface (`HoverPreviewCard`), so its tones are the card's own
- * foreground/muted pair — matching the composer's @mention preview panel and
- * the workspace picker's folder list.
- */
+/** Chat/owner workspace hover preview. */
 export function OwnerWorkspaceMetadataContent(props: {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly prReferences: readonly WorktreePrReference[];
   readonly pending: boolean;
-  /** No host client to ask - the facts are unknown, not absent. */
   readonly hostUnavailable: boolean;
   readonly error: boolean;
   readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
@@ -341,11 +318,8 @@ export function OwnerWorkspaceMetadataContent(props: {
   });
   const ungroupedReferences = [...remainingReferences.values()];
   const hasContent = items.length > 0 || props.prReferences.length > 0;
-  // Ahead of the spinner, because this is the state that CANNOT resolve on its
-  // own. The owner's host is unreachable, so no request is in flight and none
-  // is coming; a spinner here waits for an event that never arrives. It also
-  // outranks "No workspace linked", which would claim the owner runs nowhere
-  // when the truth is only that nobody could be asked.
+  // It also outranks "No workspace linked", which would claim the owner runs nowhere when the truth is only that
+  // nobody could be asked.
   if (props.hostUnavailable && !hasContent) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
@@ -353,19 +327,8 @@ export function OwnerWorkspaceMetadataContent(props: {
       </span>
     );
   }
-  // Gated on having NOTHING TO SHOW, not on `binding === null`, and that
-  // difference is the whole point. "No workspace linked" is a definitive claim
-  // about an owner - it is what the card says when a chat really runs nowhere -
-  // so it must never be the answer while a read that could contradict it is
-  // still in flight. The old condition only covered the FIRST load: once a
-  // `{ binding: null }` had been cached, a later re-open served that null with
-  // `isPending` false and printed the definitive negative over a refetch that
-  // was about to replace it (`ownerMetadataPending` documents the matching
-  // half). A chat with a perfectly good workspace read "No workspace linked"
-  // until the refetch landed.
-  //
-  // Owners that DO have items keep rendering them through a refetch, so the
-  // spinner only ever replaces the empty state, never populated content.
+  // "No workspace linked" is a definitive claim about an owner - it is what the card says when a chat really
+  // runs nowhere - so it must never be the answer while a read that could contradict it is still in flight.
   if (props.pending && !hasContent) {
     return (
       <span className="flex items-center gap-2 px-3 py-2 text-ui-xs">
@@ -395,21 +358,14 @@ export function OwnerWorkspaceMetadataContent(props: {
   return (
     <span
       className={cn(
-        // Hairline between folder blocks. Deliberately LIGHTER than the
-        // settings header's `border-border/70`: that rule separates two
-        // different kinds of information (run settings vs workspaces) and
-        // should read as a section break, while these separate repeats of the
-        // SAME kind and only need to group. `divide-y` rather than a border on
-        // each child, so no rule lands above the first block or below the last.
-        // Padding moves onto the children (`py-2` below) so the rule spans the
-        // full width and the blocks are not crowded against it.
+        // Hairline between folder blocks. `divide-y` rather than a border on each child, so no rule lands above the
+        // first block or below the last.
         "flex max-h-[min(60vh,20rem)] w-full flex-col divide-y divide-border/25",
         HOVER_PREVIEW_SCROLL_CLASS,
       )}
       data-testid="owner-workspace-metadata-content"
-      // See workspace-folder-hover-list.tsx: Chromium makes an overflowing
-      // scroll container a sequential tab stop regardless of DOM tabIndex;
-      // this keeps it out of the Tab order while pointer/wheel scroll works.
+      // See workspace-folder-hover-list.tsx: Chromium makes an overflowing scroll container a sequential tab stop
+      // regardless of DOM tabIndex; this keeps it out of the Tab order while pointer/wheel scroll works.
       tabIndex={-1}
     >
       {itemGroups.map(({ item, references }) => (

@@ -63,9 +63,8 @@ describe("OnboardingDiorama", () => {
       "Reasonix",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
-    // Longest match, not first match: display names overlap ("Pi" is a
-    // substring of "Oh My Pi"), so a first-match probe would label the Oh My Pi
-    // row "Pi" and silently pass a wrong order.
+    // Longest match, not first match: display names overlap ("Pi" is a substring of "Oh My Pi"), so a first-match
+    // probe would label the Oh My Pi row "Pi" and silently pass a wrong order.
     const longestMatch = (text: string): string =>
       expectedNames
         .filter((name) => text.includes(name))

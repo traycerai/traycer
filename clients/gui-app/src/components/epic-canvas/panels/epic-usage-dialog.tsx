@@ -64,33 +64,16 @@ type UsageSummaryQueryResult = UseQueryResult<
 
 const DEFAULT_WINDOW_DAYS: UsageSummaryWindowDays = 7;
 
-// >=44px touch targets on coarse pointers without growing the tabs list's
-// hardcoded h-8: an invisible overlay extends each trigger's vertical hit
-// area (the trigger is already `relative`; `after:` is taken by the
-// line-variant indicator, so this rides `before:`).
+// >=44px touch targets on coarse pointers without growing the tabs list's hardcoded h-8: an invisible overlay extends each trigger's vertical hit area (the trigger is already `relative`; `after:` is taken by the line-variant indicator, so this rides `before:`).
 const COARSE_POINTER_TRIGGER =
   "pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2.5";
 
-/**
- * The scoped epic panel ticket 12 replaces the ambient cost badge with:
- * headline (`UsageCostFigure`), harness split, curated stat tiles, a
- * per-day trend chart, and a by-chat/agent breakdown, with window options
- * 7/30/90 - variant B of the usage-dialog redesign (48rem mini-dashboard
- * in a fixed frame; states swap inside it, never resize it). Cost is
- * on-demand by construction - the query is only `enabled` while the dialog
- * is open, so there is nothing ambient left to silently revert (fixup-01's
- * failure mode). `poll: false` matches every other actively-viewed usage
- * surface (Settings' `UsageSummaryPanel`).
- */
+/** `poll: false` matches every other actively-viewed usage surface (Settings' `UsageSummaryPanel`). */
 export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   const { epicId, client, open, onOpenChange } = props;
   const [windowDays, setWindowDays] =
     useState<UsageSummaryWindowDays>(DEFAULT_WINDOW_DAYS);
-  // Held here rather than in the body: Radix unmounts `DialogContent` - and
-  // with it the body - while the dialog is closed, so a grouping picked
-  // there would silently reset on every reopen. This component outlives
-  // that (it lives as long as its `EpicShell`), which is the same reason
-  // the window selection above it is held here.
+  // Held here rather than in the body: Radix unmounts `DialogContent` - and with it the body - while the dialog is closed, so a grouping picked there would silently reset on every reopen.
   const [chartGroupBy, setChartGroupBy] =
     useState<UsageChartGroupBy>("harness");
   const request = useMemo(
@@ -103,12 +86,8 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   );
   const query = useUsageSummaryForClient(client, request, open, false);
   const { openSettings } = useSystemTabModalActions();
-  // The capture region is found by data attribute under this dialog's own
-  // content node at click time, not held as a threaded RefObject - the
-  // React Compiler's ref rules reject a ref object travelling through
-  // props, and an event-time DOM query needs no render-time ref reads.
-  // Scoping the query to this content node (rather than `document`) keeps
-  // it correct if another usage surface ever grows its own export region.
+  // The capture region is found by data attribute under this dialog's own content node at click time, not held as a threaded RefObject - the React Compiler's ref rules reject a ref object travelling through props, and an event-time DOM query needs no render-time ref reads.
+  // Scoping the query to this content node (rather than `document`) keeps it correct if another usage surface ever grows its own export region.
   const contentRef = useRef<HTMLDivElement | null>(null);
   const exportReady =
     query.data !== undefined && query.data.summary.totals.factCount > 0;
@@ -129,10 +108,8 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         ref={contentRef}
-        // Fixed `h` - not `max-h` - is the no-jump fix: every state renders
-        // into the same frame. `sm:max-w-3xl` overrides the primitive's
-        // `sm:max-w-sm` cap (load-bearing, same reason the earlier shape
-        // carried `sm:max-w-lg`).
+        // Fixed `h` - not `max-h` - is the no-jump fix: every state renders into the same frame.
+        // `sm:max-w-3xl` overrides the primitive's `sm:max-w-sm` cap (load-bearing, same reason the earlier shape carried `sm:max-w-lg`).
         className={cn(
           "flex h-[min(88dvh,46rem)] w-[min(92vw,48rem)] min-w-0 flex-col gap-4 overflow-hidden sm:max-w-3xl",
           USAGE_DIALOG_SHEET_CLASSES,
@@ -152,10 +129,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
           }
           footer={
             <>
-              {/* `sm:mr-auto` splits the band: export actions lead, the
-                  Settings hand-off keeps the trailing primary slot. On the
-                  sheet tier the footer column-reverses, so this group
-                  stacks below it, full width like its sibling. */}
+              {/* `sm:mr-auto` splits the band: export actions lead, the Settings hand-off keeps the trailing primary slot. On the sheet tier the footer column-reverses, so this group stacks below it, full width like its sibling. */}
               <div className="flex gap-2 max-[28rem]:flex-col sm:mr-auto">
                 <UsageExportImageActions
                   exportReady={exportReady}
@@ -198,9 +172,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
 }
 
 /**
- * One state switch, in routing order; every branch renders into the
- * frame's body slot while the frame (header, picker, footer) stays
- * constant around it.
+ * One state switch, in routing order; every branch renders into the frame's body slot while the frame (header, picker, footer) stays constant around it.
  */
 function EpicUsageDialogBody(props: {
   readonly query: UsageSummaryQueryResult;
@@ -223,10 +195,7 @@ function EpicUsageDialogBody(props: {
     );
   }
   if (query.data === undefined) return <UsageDialogUnavailable />;
-  // The empty routing owns "nothing in this window" entirely: the loaded
-  // layout below can assume facts exist, which is also why the group-by
-  // toggle no longer needs a factCount guard of its own - a control with
-  // nothing to regroup is unreachable from the loaded branch.
+  // The empty routing owns "nothing in this window" entirely: the loaded layout below can assume facts exist, which is also why the group-by toggle no longer needs a factCount guard of its own - a control with nothing to regroup is unreachable from the loaded branch.
   if (query.data.summary.totals.factCount === 0) {
     return (
       <EpicUsageEmptyState
@@ -246,9 +215,7 @@ function EpicUsageDialogBody(props: {
 }
 
 /**
- * Wider windows only: a chip that re-requests the CURRENT window would be
- * a broken control, so a 90-day empty offers none. (365 exists on the wire
- * for the activity heatmap and is never a picker state here.)
+ * Wider windows only: a chip that re-requests the CURRENT window would be a broken control, so a 90-day empty offers none. (365 exists on the wire for the activity heatmap and is never a picker state here.)
  */
 function widerWindows(
   windowDays: UsageSummaryWindowDays,
@@ -268,9 +235,7 @@ function EpicUsageEmptyState(props: {
     <UsageDialogEmpty
       headline={`No usage in the last ${String(props.windowDays)} days`}
       hint="Chats and agents in this epic haven't recorded usage in this window."
-      // A local-plane read only speaks for THIS machine, so an unqualified
-      // "no usage" would overclaim - the same note `UsageCostFigure` carries
-      // on the loaded branch (`hostScopeName` null for the reason below).
+      // A local-plane read only speaks for THIS machine, so an unqualified "no usage" would overclaim - the same note `UsageCostFigure` carries on the loaded branch (`hostScopeName` null for the reason below).
       note={servedByScopeNote(props.servedBy, null)}
     >
       {wider.length === 0 ? null : (
@@ -303,13 +268,7 @@ function EpicUsageLoadedBody(props: {
   const { chartGroupBy } = props;
   const { summary, coverage, servedBy } = props.data;
   const days = daysForSummaryWindow(summary);
-  // Two scales, the Settings dashboard's shape: the harness split beside
-  // the headline always stacks by harness, so it keeps a harness-keyed
-  // scale regardless of what the chart shows, and the chart shares it only
-  // while it groups by harness. A single `chartGroupBy`-keyed scale was
-  // the earlier shape here, and it grayed every split row the moment the
-  // chart regrouped by model - `colorVar` falls back to the "Other" token
-  // for keys outside its space.
+  // Two scales, the Settings dashboard's shape: the harness split beside the headline always stacks by harness, so it keeps a harness-keyed scale regardless of what the chart shows, and the chart shares it only while it groups by harness.
   const scale = buildUsageSeriesScaleForBuckets(summary.buckets, "harness");
   const chartScale =
     chartGroupBy === "harness"
@@ -324,26 +283,16 @@ function EpicUsageLoadedBody(props: {
   });
   const harnessRows = buildUsageHarnessSplitRows(summary.buckets);
   const statTiles = buildUsageStatTiles(summary.totals, summary.buckets);
-  // Travels with the tiles wherever they render, per the note's own
-  // contract: turns that reported no usage at all still add a silent zero to
-  // every token sum in them, so unqualified tiles read as "this work used no
-  // cache" rather than "this work reported nothing". Settings pairs the two
-  // the same way - this dialog only needs it because it now shows tiles.
+  // Settings pairs the two the same way - this dialog only needs it because it now shows tiles.
   const absentNote = usageCompletenessAbsentNote(
     summary.usageCompletenessBreakdown,
   );
   const dateRangeLabel = formatDateRangeLabel(days);
 
   return (
-    // `usage-chart-root` scopes the series and harness palettes over BOTH
-    // consumers - the chart and its sibling harness split - the same
-    // reason Settings hangs it on their common ancestor.
+    // `usage-chart-root` scopes the series and harness palettes over BOTH consumers - the chart and its sibling harness split - the same reason Settings hangs it on their common ancestor.
     <div className="usage-chart-root flex flex-col gap-5">
-      {/* The image-export capture region: summary hero + trend chart, and
-          deliberately not the by-chat table below - "what did this cost"
-          shares fine, an unbounded row list doesn't. Inside
-          `usage-chart-root` so the chart's `var(...)` palette resolves in
-          the capture's computed styles. */}
+      {/* The image-export capture region: summary hero + trend chart, and deliberately not the by-chat table below - "what did this cost" shares fine, an unbounded row list doesn't. Inside `usage-chart-root` so the chart's `var(...)` palette resolves in the capture's computed styles. */}
       <div
         className="flex flex-col gap-5"
         data-usage-export-region=""
@@ -400,10 +349,7 @@ function EpicUsageLoadedBody(props: {
               triggerClassName={COARSE_POINTER_TRIGGER}
             />
           </div>
-          {/* `key` per the prop's contract: the legend's hidden-series set is
-            keyed by the current grouping's series keys, so a switch
-            remounts rather than letting stale harness keys filter model
-            bands. */}
+          {/* `key` per the prop's contract: the legend's hidden-series set is keyed by the current grouping's series keys, so a switch remounts rather than letting stale harness keys filter model bands. */}
           <UsageDailyChart
             key={chartGroupBy}
             columns={columns}
@@ -424,22 +370,8 @@ function EpicUsageLoadedBody(props: {
 }
 
 /**
- * The trend chart's x-axis, anchored on the RESPONSE's own window rather
- * than on any client clock.
- *
- * `endAtExclusive` is the first instant OUTSIDE the window, so
- * `endAtExclusive - 1` is the last instant it includes, which is the day
- * the axis must end on. A fixed window ends at local midnight tomorrow, so
- * `- 1` lands on "today so far".
- *
- * Anchoring on a client `Date.now()` sampled at mount was the earlier
- * shape, and this dialog is mounted for as long as its `EpicShell` lives
- * while staying closed - so opening it after a local midnight built columns
- * ending on the previous day and dropped the newest buckets the query had
- * just returned.
- *
- * Only called from the loaded branch, where the empty routing has already
- * guaranteed facts exist.
+ * The trend chart's x-axis, anchored on the RESPONSE's own window rather than on any client clock.
+ * `endAtExclusive` is the first instant OUTSIDE the window, so `endAtExclusive - 1` is the last instant it includes, which is the day the axis must end on.
  */
 function daysForSummaryWindow(
   summary: UsageSummaryResponse["summary"],

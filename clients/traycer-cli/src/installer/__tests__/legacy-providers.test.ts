@@ -17,12 +17,7 @@ import type { ILogger, LogFields } from "../../logger";
 import { ServiceMutationAuthorityError } from "../../service/mutation-authority";
 import { preserveLegacyProviders } from "../legacy-providers";
 
-/**
- * `preserveLegacyProviders` - the OSS half of the slim-release carryover
- * contract with `traycer-host/src/domain/providers/legacy-provider-carryover.ts`
- * in the internal repo. tmpdir-based, real filesystem: the point of the
- * function is what actually lands on disk after the swap.
- */
+/** `preserveLegacyProviders` - the OSS half of the slim-release carryover contract with `traycer-host/src/domain/providers/legacy-provider-carryover.ts` in the internal repo. tmpdir-based, real filesystem: the point of the function is what actually lands on disk after the swap. */
 
 let sandboxRoot: string;
 
@@ -120,11 +115,8 @@ describe("preserveLegacyProviders", () => {
     writeRootFile(oldResources, "providers", "PROVIDERS.json", "{}");
     writePack(newResources, "providers", "ripgrep", "14.0.0");
 
-    // Captured BEFORE the move: a same-inode comparison after is what proves
-    // this is a rename (the same bytes on disk, just re-linked), not a copy
-    // that happens to leave the source behind. `ino` is not a meaningful
-    // identity on win32 (NTFS via Node reports it inconsistently across
-    // rename), so that half of the assertion is skipped there.
+    // Captured BEFORE the move: a same-inode comparison after is what proves this is a rename (the same bytes on disk, just re-linked), not a copy that happens to leave the source behind.
+    // `ino` is not a meaningful identity on win32 (NTFS via Node reports it inconsistently across rename), so that half of the assertion is skipped there.
     const originalIno =
       platform() === "win32"
         ? null
@@ -284,11 +276,7 @@ describe("preserveLegacyProviders", () => {
     writePack(oldResources, "providers", "opencode", "0.9.0");
     writePack(newResources, "providers", "ripgrep", "14.0.0");
 
-    // Pre-seed the destination slot a "codex" move would land in with a FILE,
-    // not a directory: `rename()` of a directory onto an existing
-    // non-directory path fails (ENOTDIR/EISDIR depending on platform), which
-    // is the one failure this best-effort loop must survive without
-    // aborting the packs after it.
+    // Pre-seed the destination slot a "codex" move would land in with a FILE, not a directory: `rename()` of a directory onto an existing non-directory path fails (ENOTDIR/EISDIR depending on platform), which is the one failure this best-effort loop must survive without aborting the packs after it.
     const dest = join(newResources, "legacy-providers");
     mkdirSync(dest, { recursive: true });
     writeFileSync(join(dest, "codex"), "not a directory");
@@ -334,9 +322,7 @@ describe("preserveLegacyProviders", () => {
       writePack(oldResources, "legacy-providers", "opencode", "0.9.0");
       writePack(newResources, "providers", "ripgrep", "14.0.0");
 
-      // EACCES, not ENOENT/ENOTDIR: the dir genuinely exists but this
-      // process cannot list it - the one case `isExpectedAbsence` must NOT
-      // swallow silently.
+      // EACCES, not ENOENT/ENOTDIR: the dir genuinely exists but this process cannot list it - the one case `isExpectedAbsence` must NOT swallow silently.
       chmodSync(oldProvidersDir, 0o000);
 
       const { logger, warnings } = capturingLogger();
@@ -382,10 +368,7 @@ describe("preserveLegacyProviders", () => {
       const newResources = wrappedResources(newInstall);
       writePack(newResources, "providers", "ripgrep", "14.0.0");
 
-      // EACCES on the install dir itself: neither `stat` on a path inside
-      // it (the direct "<install>/resources" probe) nor `readdir` on it
-      // directly can succeed - both fail EACCES, not ENOENT/ENOTDIR, so
-      // BOTH must be warned rather than silently swallowed.
+      // EACCES on the install dir itself: neither `stat` on a path inside it (the direct "<install>/resources" probe) nor `readdir` on it directly can succeed - both fail EACCES, not ENOENT/ENOTDIR, so BOTH must be warned rather than silently swallowed.
       chmodSync(oldInstall, 0o000);
 
       const { logger, warnings } = capturingLogger();
@@ -447,9 +430,8 @@ describe("preserveLegacyProviders", () => {
       verifyMutationCapability,
     );
 
-    // One verification is required before mkdir and another before rename for
-    // each pack. The exact count also keeps a future refactor from moving the
-    // verifier back to a once-per-loop check.
+    // One verification is required before mkdir and another before rename for each pack.
+    // The exact count also keeps a future refactor from moving the verifier back to a once-per-loop check.
     expect(verifierCalls).toBeGreaterThanOrEqual(4);
     expect(existsSync(join(newResources, "legacy-providers", "codex"))).toBe(
       true,

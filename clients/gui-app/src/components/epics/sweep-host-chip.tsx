@@ -15,85 +15,40 @@ import {
 } from "@/components/epics/sweep-host-model";
 import { cn } from "@/lib/utils";
 
-/**
- * What the chip says when nobody has named a host yet.
- *
- * A question rather than a guess. The dialog behind it runs no census in this
- * state, so a chip that named a machine would be claiming to show that
- * machine's worktrees while showing nothing.
- */
+/** A question rather than a guess. The dialog behind it runs no census in this state, so a chip that named a
+ * machine would be claiming to show that machine's worktrees while showing nothing. */
 export const SWEEP_HOST_UNCHOSEN_LABEL = "Choose a host";
 
-/**
- * The host decision, as the confirmation dialog receives it. `null` means this
- * account has one usable host, so there is no decision and no chip - the
- * dialog renders exactly what it rendered before multi-host Sweep existed.
- */
+/** `null` means this account has one usable host, so there is no decision and no chip - the dialog renders
+ * exactly what it rendered before multi-host Sweep existed. */
 export interface SweepHostChoice {
-  /**
-   * The host this dialog is pointed at, LATCHED by the flow at open and moved
-   * only by `onSwitch`. Never derived from anything the fleet plane can move
-   * underneath an open confirmation — and, `null` or not, never filled in from
-   * a fallback here: the whole point of the latch is that this is the one
-   * answer.
-   *
-   * `null` means nobody has chosen yet. The dialog is open and asking; no
-   * census runs until it is answered.
-   */
+  /** Never derived from anything the fleet plane can move underneath an open confirmation - and, `null` or not,
+   * never filled in from a fallback here: the whole point of the latch is that this is the one answer. */
   readonly hostId: string | null;
   /** A host that was picked and whose client then would not build. */
   readonly unavailableHostId: string | null;
   readonly onSwitch: (hostId: string) => void;
 }
 
-/**
- * Everything the dialog's own chrome needs to know about the host decision,
- * with every name already resolved.
- *
- * The chip arrives as an ELEMENT rather than as data because only this scope
- * holds the fleet list it is drawn from, and threading `hosts` through the
- * dialog would put a second reader on it. What the dialog does need in its own
- * words - the host's name for Review's read-only line - is a plain value.
- */
+/** The chip arrives as an element rather than as data because only this scope holds the fleet list it is drawn
+ * from, and threading `hosts` through the dialog would put a second reader on it. */
 export interface SweepHostChoiceView {
   /** The chip, or `null` when the host cannot be named yet. */
   readonly chip: ReactNode;
-  /** Human name of the host being censused, or `null` if unresolved. */
   readonly hostName: string | null;
-  /**
-   * THE way to change host - the popover row.
-   *
-   * `null` while switching is unavailable (a refresh in flight, a sweep of
-   * these rows already streaming). A nullable callback rather than a callback
-   * plus a `disabled` flag, because the two shapes are not equally safe: with
-   * a flag, a new switch surface reads as complete while quietly skipping the
-   * check. Here a caller that wants to switch has to confront the `null`, and
-   * a caller that renders a control has the same value to disable it with.
-   *
-   * It is also the only place the "changing hosts clears this selection"
-   * confirmation is raised, so no entry point can forget to ask.
-   */
+  /** A nullable callback rather than a callback plus a `disabled` flag, because the two shapes are not equally
+   * safe: with a flag, a new switch surface reads as complete while quietly skipping the check. */
   readonly requestSwitch: ((hostId: string) => void) | null;
 }
 
-/**
- * Mounts the fleet list ONCE for an open Sweep and hands its consumers a
- * fully-resolved view.
- *
- * A render prop rather than a wrapper with children, because the dialog's body
- * needs the view and the view needs a hook: this is the seam that keeps
- * `useHostOptions` from being mounted at all on a single-host install, where
- * the dialog renders no host control of any kind.
- */
+/** A render prop rather than a wrapper with children, because the dialog's body needs the view and the view
+ * needs a hook. */
 export function SweepHostChoiceScope(props: {
   /** `null` ⇒ unchosen: the chip asks instead of naming. */
   readonly hostId: string | null;
-  /** The Task(s) whose worktrees the popover's rows count. */
   readonly selectedEpicIds: ReadonlySet<string>;
-  /** The censused host's own count from the dialog's proof; `null` unsettled. */
   readonly currentHostCount: number | null;
   readonly unavailableHostId: string | null;
-  /** Refreshing or sweeping: the census the chip names is not settled. */
   readonly disabled: boolean;
   /** Switching would discard checks the person made by hand. */
   readonly hasSelectionOverrides: boolean;
@@ -101,9 +56,8 @@ export function SweepHostChoiceScope(props: {
   readonly render: (view: SweepHostChoiceView) => ReactNode;
 }): ReactNode {
   const { hosts, isLoading, listsFailed, retryLists } = useHostOptions();
-  // The host somebody has asked for while a hand-made selection is still on
-  // screen. Held rather than applied, because the retarget it triggers clears
-  // that selection and there is no undo for a list you spent a minute on.
+  // Held rather than applied, because the retarget it triggers clears that selection and there is no undo for a
+  // list you spent a minute on.
   const [pendingHostId, setPendingHostId] = useState<string | null>(null);
   const rows = buildSweepHostPickerRows({
     hosts,
@@ -111,12 +65,8 @@ export function SweepHostChoiceScope(props: {
   });
   const hostName = hostNameOf(hosts, props.hostId);
   const unavailableName = hostNameOf(hosts, props.unavailableHostId);
-  // THE policy value. Both the gesture that RAISES a switch and the one that
-  // COMMITS a held question derive from it, so a switch cannot be admitted by
-  // a check that ran at a moment which has since passed. The confirmation is
-  // the only gesture with a gap between those two moments, and the gap is real
-  // time: another surface can start sweeping one of these rows, or a refresh
-  // can begin, while the question sits on screen.
+  // Both the gesture that raises a switch and the one that commits a held question derive from it, so a switch
+  // cannot be admitted by a check that ran at a moment which has since passed.
   const switchNow = props.disabled
     ? null
     : (hostId: string): void => {
@@ -166,19 +116,11 @@ export function SweepHostChoiceScope(props: {
   return props.render(view);
 }
 
-/**
- * `on {host} ▾` — the host as a CONTROL, in the header of the dialog that can
- * actually answer "did I choose right".
- *
- * Disabled rather than hidden while the census is unsettled (a refresh in
- * flight, a sweep of these rows already streaming): the sentence it renders is
- * still true, and a control that vanished mid-refresh would read as the host
- * having been decided for you.
- */
+/** Disabled rather than hidden while the census is unsettled (a refresh in flight, a sweep of these rows
+ * already streaming). */
 function SweepHostChip(props: {
-  /** `on {host}`, or the unchosen question. */
   readonly label: string;
-  /** `null` while unchosen — there is no host to still be showing. */
+  /** `null` while unchosen - there is no host to still be showing. */
   readonly hostName: string | null;
   readonly unavailableHostName: string | null;
   readonly rows: readonly SweepHostPickerRow[];
@@ -189,16 +131,9 @@ function SweepHostChip(props: {
   readonly onRetryLists: () => void;
   /** The gated seam; `null` while switching is unavailable. */
   readonly onPick: ((hostId: string) => void) | null;
-  /** A switch waiting on the person's answer. */
   readonly pendingHost: HostScopeOption | null;
   readonly onCancelPending: () => void;
-  /**
-   * Commits the held question — the same nullable policy value `onPick` comes
-   * from, re-read at CONFIRM time. A question raised while switching was
-   * allowed can sit on screen through a refresh starting or another surface
-   * beginning to sweep these rows; `null` then makes the answer itself
-   * unavailable rather than letting a stale admission through.
-   */
+  /** Commits the held question - the same nullable policy value `onPick` comes from, re-read at confirm time. */
   readonly onConfirmPending: ((hostId: string) => void) | null;
 }): ReactNode {
   const [open, setOpen] = useState(false);
@@ -253,9 +188,8 @@ function SweepHostChip(props: {
               listsFailed={props.listsFailed}
               onRetryLists={props.onRetryLists}
               onPick={(hostId) => {
-                // Closed unconditionally: a pick that raises a confirmation
-                // re-opens through `popoverOpen`, and one that does not has
-                // nothing left to show.
+                // Closed unconditionally: a pick that raises a confirmation re-opens through `popoverOpen`, and one that does
+                // not has nothing left to show.
                 setOpen(false);
                 props.onPick?.(hostId);
               }}
@@ -319,14 +253,7 @@ function SweepHostChip(props: {
   );
 }
 
-/**
- * What the chip reads, or `null` for no chip at all.
- *
- * Three states, and the third is the one worth spelling out. Unchosen ASKS;
- * a chosen host STATES what is being shown; and a chosen host whose NAME has
- * not arrived yet is neither, so it renders nothing rather than a chip saying
- * `on host-7f3a` for the one render it takes the fleet list to load.
- */
+/** Unchosen asks; a chosen host states what is being shown. */
 function sweepChipLabel(
   hostId: string | null,
   hostName: string | null,

@@ -15,11 +15,7 @@ export interface SurfaceHostSelectionPersistLifecycleBridgeProps {
   readonly children: ReactNode;
 }
 
-/**
- * Identity-scopes surface pins (G1 / composer-run-settings policy). A pin
- * names an account's host id; left standing it would open the next sign-in
- * on a vanished machine the new account has never seen.
- */
+/** Identity-scope surface pins. A leftover pin would open the next sign-in on a vanished host. */
 export function SurfaceHostSelectionPersistLifecycleBridge(
   props: SurfaceHostSelectionPersistLifecycleBridgeProps,
 ): ReactNode {

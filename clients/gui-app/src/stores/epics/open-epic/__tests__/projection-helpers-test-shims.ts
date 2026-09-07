@@ -1,8 +1,3 @@
-/**
- * Test shims that re-expose private slice projectors from
- * `projection-helpers.ts` so tests can call them without coupling to
- * the live `projectFullState` (which projects every slice at once).
- */
 import * as Y from "yjs";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -64,12 +59,8 @@ export function projectChatsSliceForTests(
 }
 
 /**
- * Seeds a metadata-only artifact or chat entry directly into the doc,
- * standing in for the host-side `epic.createArtifact` / `epic.createChat`
- * writes. The renderer no longer exposes a local create action (creation is
- * host-RPC-only), so tests seed the doc here. Transacts with the store's
- * LOCAL_ORIGIN so `handleDocUpdate` routes the update exactly like the
- * removed local mutation did, keeping projector and render-count semantics.
+ * Seeds a metadata-only artifact or chat entry directly into the doc, standing in for the
+ * host-side `epic.createArtifact` / `epic.createChat` writes.
  */
 export function createArtifactInDocForTests(
   doc: Y.Doc,

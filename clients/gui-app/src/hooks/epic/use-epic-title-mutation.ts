@@ -11,11 +11,6 @@ interface UpdateTitleMutationContext {
   readonly userId: string | null;
 }
 
-/**
- * Mutation hook for epic.updateTitle.
- * Save button enters pending state; on success a brief "Epic renamed"
- * toast appears (only mutation hook that surfaces success feedback).
- */
 export function useEpicUpdateTitle() {
   const client = useHostClient();
   const queryClient = useQueryClient();

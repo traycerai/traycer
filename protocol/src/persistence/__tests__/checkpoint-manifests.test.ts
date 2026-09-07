@@ -66,9 +66,7 @@ describe("isNoOpCheckpointEntry", () => {
   });
 
   it("does NOT flag a skipped entry (both hashes null but not undoable)", () => {
-    // Denied / binary / not-intercepted edits also carry before === after ===
-    // null, but they represent a real change attempt and must stay visible as a
-    // "Skipped" row. The `undoable: false` guard is what keeps them in.
+    // Denied / binary / not-intercepted edits also carry before === after === null, but they represent a real change attempt and must stay visible as a "Skipped" row.
     for (const reason of ["denied", "binary", "not_intercepted"]) {
       expect(
         isNoOpCheckpointEntry(

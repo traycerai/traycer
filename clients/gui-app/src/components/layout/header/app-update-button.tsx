@@ -16,14 +16,7 @@ import {
   trackUpdateRestartRequested,
 } from "@/lib/app-update-analytics";
 
-/**
- * Compact circular update control in the header's right-side cluster. It cycles
- * through three states in the same footprint (no layout shift): download the
- * available update, show a filling progress ring, then a tick that restarts to
- * install. It's a persistent fallback to the in-app update toast - nothing
- * renders until the updater reports an actionable state, so the header stays
- * clean when there is no update.
- */
+/** Compact circular update control in the header's right-side cluster. */
 export function AppUpdateHeaderButton() {
   const { bridge, snapshot } = useDesktopAppUpdates();
   if (bridge === null) {
@@ -31,9 +24,8 @@ export function AppUpdateHeaderButton() {
   }
 
   if (snapshot.status === "available") {
-    // Updates can't be installed from a read-only location (macOS app outside
-    // /Applications): keep the affordance visible but disabled, with the reason
-    // as the tooltip, instead of letting a click fail at install time.
+    // Updates can't be installed from a read-only location (macOS app outside /Applications): keep the affordance
+    // visible but disabled, with the reason as the tooltip, instead of letting a click fail at install time.
     const blockedReason = snapshot.installBlockedReason;
     const versionLabel =
       snapshot.latestVersion === null
@@ -42,9 +34,8 @@ export function AppUpdateHeaderButton() {
     const label = blockedReason === null ? versionLabel : blockedReason;
     return (
       <TooltipWrapper label={label} side="top" sideOffset={6} align={undefined}>
-        {/* Trigger off the span, not the Button: a disabled Button has
-            `pointer-events-none`, so it would never fire the hover that opens
-            the (block-reason) tooltip. */}
+        {/* Trigger off the span, not the Button: a disabled Button has `pointer-events-none`, so it would never fire
+           the hover that opens the (block-reason) tooltip. */}
         <span className="inline-flex">
           <Button
             type="button"
@@ -109,17 +100,8 @@ export function AppUpdateHeaderButton() {
   );
 }
 
-/**
- * The "ready" state splits into three cases sharing one round tick:
- * automated restart (emerald, restarts to install straight away - the click
- * IS the confirmation, and the host keeps running agents across the app
- * restart), a manual step still needed (sky, opens the guidance dialog - Linux
- * deb/rpm where silent install can't/didn't work), or blocked with no path
- * forward (disabled + tooltip - macOS outside /Applications).
- * `installBlockedReason` and `installGuidance` shouldn't co-occur in practice
- * (the download is gated before a blocked location ever reaches "ready"), but
- * the blocked reason wins defensively if they ever do.
- */
+/** The "ready" state splits into three cases sharing one round tick: automated restart (emerald, restarts to
+ * install straight away. */
 function AppUpdateReadyButton(props: {
   readonly bridge: DesktopAppUpdatesBridge;
   readonly latestVersion: string | null;
@@ -130,11 +112,7 @@ function AppUpdateReadyButton(props: {
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
-  // Pending state is read from the snapshot, not latched locally: the quit that
-  // installs drains in-flight work first, so this button (and the ready toast,
-  // and both of them in every other window) stays on screen through it. Main
-  // owns the fact, so all of them disarm together and a remount can't re-arm
-  // this one.
+  // Main owns the fact, so all of them disarm together and a remount can't re-arm this one.
   const { installBlockedReason, installInFlight } = props;
   const needsManualInstall =
     installBlockedReason === null && props.installGuidance !== null;
@@ -196,9 +174,8 @@ function AppUpdateReadyIcon(props: {
   readonly needsManualInstall: boolean;
 }) {
   if (props.installInFlight) {
-    // The button only goes `disabled` here - nothing announces the state
-    // change on its own, so the spinner carries a live region (the icons it
-    // replaces are decorative and the accessible name stays the same).
+    // The button only goes `disabled` here - nothing announces the state change on its own, so the spinner carries
+    // a live region (the icons it replaces are decorative and the accessible name stays the same).
     return (
       <span role="status" aria-label="Restarting to install the update">
         <AgentSpinningDots
@@ -215,9 +192,7 @@ function AppUpdateReadyIcon(props: {
   return <Check className="size-4" aria-hidden />;
 }
 
-// Mic-button-style determinate ring (mirrors `MicProgressRing`): the arc fills
-// as the download progresses with the download icon centered inside. Falls back
-// to a spinning indeterminate arc while progress is not yet known.
+// Falls back to a spinning indeterminate arc while progress is not yet known.
 function DownloadProgressRing(props: { readonly progress: number | null }) {
   const radius = 8.5;
   const circumference = 2 * Math.PI * radius;

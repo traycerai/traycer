@@ -114,11 +114,6 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: null }),
 }));
 
-/**
- * Fake browser.sessions transport. When `dropUntilLive` is true, every client
- * frame is discarded until the stream reports `open` (provider lifecycle
- * `live`) - matching host behavior that drops pre-live readiness frames.
- */
 class FakeStreamSession {
   readonly sentFrames: Array<Record<string, unknown>> = [];
   readonly droppedFrames: Array<Record<string, unknown>> = [];

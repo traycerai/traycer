@@ -20,11 +20,10 @@ export type GovernorEligibility =
     }
   | { readonly kind: "blocked"; readonly until: string };
 
-/**
- * A new CDHash may bypass delay only after an LWCR failure.  Other classes
- * deliberately retain their backoff: a new build cannot prove a transient
- * endpoint failure or ambiguous probe was repaired.
- */
+  /**
+   * A new CDHash may bypass delay only after an lwcr failure.
+   * Other classes deliberately retain their backoff: a new build cannot prove a transient endpoint failure or ambiguous probe was repaired.
+   */
 export function evaluateGovernorEligibility(input: {
   readonly governor: TransitionGovernor;
   readonly now: string;
@@ -46,10 +45,8 @@ export function evaluateGovernorEligibility(input: {
   ) {
     return { kind: "eligible", reason: "elapsed" };
   }
-  // A breaker is a persisted failure signal, not a permanent lockout. It
-  // shares the durable retry deadline with ordinary backoff, and a successful
-  // retry clears it in the terminal journal write. This makes `until` an
-  // honest, actionable time rather than the former unusable `null`.
+  // A breaker is a persisted failure signal, not a permanent lockout.
+  // This makes `until` an honest, actionable time rather than the former unusable `null`.
   return { kind: "blocked", until: input.governor.nextEligibleAt };
 }
 

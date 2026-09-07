@@ -44,11 +44,7 @@ vi.mock("@/hooks/images/use-can-copy-images", () => ({
   useCanCopyImages: mocks.useCanCopyImages,
 }));
 
-// html-to-image's `toBlob` rasterises via a canvas that jsdom can't back -
-// the hook's own capture step is stubbed here so these tests exercise the
-// panel's wiring (which node it resolves, what it hands off) rather than
-// real rasterisation. Mirrors the mocking pattern in
-// `epic-usage-dialog.test.tsx`.
+// html-to-image's `toBlob` rasterises via a canvas that jsdom can't back.
 vi.mock("@/lib/usage-analytics/usage-export-image", () => ({
   USAGE_EXPORT_REGION_SELECTOR: "[data-usage-export-region]",
   captureUsageExportImageBlob: mocks.captureUsageExportImageBlob,
@@ -105,10 +101,8 @@ const RESPONSE_WINDOW = {
   endAtExclusive: Date.parse("2026-08-10T00:00:00Z"),
 } satisfies UsageSummaryResponse["summary"]["window"];
 
-// The panel builds its subheading from the response's own window (see
-// `daysForResponse`/`formatDateRangeLabel` in `usage-summary-panel.tsx`) -
-// computed here with the same helpers rather than hand-typed, so the
-// assertion tracks the panel's actual label instead of a guess at its format.
+// The panel builds its subheading from the response's own window (see `daysForResponse`/`formatDateRangeLabel`
+// in `usage-summary-panel.tsx`).
 const EXPECTED_DATE_RANGE = formatDateRangeLabel(
   lastNCalendarDays(
     RESPONSE_WINDOW.windowDays,
@@ -117,9 +111,7 @@ const EXPECTED_DATE_RANGE = formatDateRangeLabel(
   ),
 );
 
-// The metric is part of the subheading because its toggle is outside the
-// capture region. The separator and the metric wording are asserted literally
-// - this is the text a reader of the exported PNG sees.
+// The metric is part of the subheading because its toggle is outside the capture region.
 const EXPECTED_SUBHEADING = `${EXPECTED_DATE_RANGE} · Cost`;
 
 function usageSummaryResponse(): UsageSummaryResponse {
@@ -187,18 +179,11 @@ function usageSummaryResponse(): UsageSummaryResponse {
 function renderPanel(
   handler: (request: UsageSummaryRequest) => UsageSummaryResponse,
 ): void {
-  // A client no longer binds an active host of its own: the host row lives in
-  // `host-connection-registry` and a consumer addresses one host through a
-  // REQUESTER, which is a routing view over this spine rather than a second
-  // client. Matches `usage-summary-panel-host-scope.test.tsx`.
+  // A client no longer binds an active host of its own.
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
-    // Load-bearing, not boilerplate: a requester resolves its entry through
-    // this at property-access time, and `captureAuthority` refuses a routed
-    // entry that no longer matches the live directory. Omit it and every
-    // request is silently never issued - the panel renders but no figure ever
-    // arrives.
+    // Omit it and every request is silently never issued - the panel renders but no figure ever arrives.
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -232,9 +217,8 @@ function renderPanel(
 describe("<UsageSummaryPanel /> image export", () => {
   it("enables both export buttons and renders the capture region once loaded", async () => {
     renderPanel(usageSummaryResponse);
-    // Both reads, not just the primary one: `exportReady` also waits for the
-    // activity lane to settle, so waiting on the cost figure alone would
-    // assert on a pass where the buttons are still legitimately disabled.
+    // Both reads, not just the primary one: `exportReady` also waits for the activity lane to settle, so waiting
+    // on the cost figure alone would assert on a pass where the buttons are still legitimately disabled.
     await screen.findByTestId("usage-cost-figure");
     await screen.findByTestId("usage-activity-section");
 
@@ -252,9 +236,8 @@ describe("<UsageSummaryPanel /> image export", () => {
   it("disables both export buttons until the query resolves, then enables them", async () => {
     renderPanel(usageSummaryResponse);
 
-    // Synchronously after mount the query has not resolved yet, so
-    // `query.data` is still `undefined` - `exportReady` gates on exactly
-    // that (not on fact count), and the buttons must not race ahead of it.
+    // Synchronously after mount the query has not resolved yet, so `query.data` is still `undefined` -
+    // `exportReady` gates on exactly that (not on fact count), and the buttons must not race ahead of it.
     const copyButton = screen.getByTestId("usage-copy-image");
     const downloadButton = screen.getByTestId("usage-download-image");
     expect(copyButton instanceof HTMLButtonElement && copyButton.disabled).toBe(
@@ -334,9 +317,8 @@ describe("<UsageSummaryPanel /> image export", () => {
 
     await user.click(screen.getByTestId("usage-copy-image"));
 
-    // The clipboard call is what has to happen inside the click's user
-    // activation, so it must already have been made while the capture it was
-    // handed is still pending - not after the blob lands.
+    // The clipboard call is what has to happen inside the click's user activation, so it must already have been
+    // made while the capture it was handed is still pending - not after the blob lands.
     expect(mocks.copyImageBlobPromiseToClipboard).toHaveBeenCalledTimes(1);
     const [captured] = mocks.copyImageBlobPromiseToClipboard.mock.calls[0];
     resolveCapture(blob);
@@ -383,9 +365,8 @@ describe("<UsageSummaryPanel /> image export", () => {
   });
 
   it("adds share alongside copy on a shell whose save route is an OS chooser", async () => {
-    // The iOS install: its `saveFile` reaches the share sheet, so share and
-    // download are two different acts - and WKWebView does honour an image
-    // clipboard write, so Copy stays. All three controls.
+    // The iOS install: its `saveFile` reaches the share sheet, so share and download are two different acts - and
+    // WKWebView does honour an image clipboard write, so Copy stays.
     mocks.hasSeparateDownloadRoute.mockReturnValue(true);
     renderPanel(usageSummaryResponse);
     await screen.findByTestId("usage-cost-figure");
@@ -400,10 +381,8 @@ describe("<UsageSummaryPanel /> image export", () => {
   });
 
   it("drops copy where the shell cannot put an image on the clipboard", async () => {
-    // The Android install: the write RESOLVES having written nothing, so a
-    // Copy button would report a success the clipboard never received. Share
-    // and download are unaffected, and the sheet's own Copy action is the
-    // route that works.
+    // The Android install: the write resolves having written nothing, so a Copy button would report a success the
+    // clipboard never received.
     mocks.hasSeparateDownloadRoute.mockReturnValue(true);
     mocks.useCanCopyImages.mockReturnValue(false);
     renderPanel(usageSummaryResponse);

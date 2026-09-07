@@ -23,30 +23,14 @@ export interface GlobalResourcesStreamMountProps {
   readonly interactive: boolean;
 }
 
-/**
- * Headless lifecycle owner for one epic's `resources.subscribe` stream. Mounted
- * inside the epic pane (where the app-wide `WsStreamClient` and the epic id are
- * both in scope), it acquires the registry entry for `epicId` and releases it on
- * unmount. Rendering is delegated to the app-level surfaces that read the
- * registry by `epicId`, so this mount emits nothing itself.
- *
- * Deferred until the stream client binds (`useWsStreamClient()` is `null` during
- * the initial host-hydration gap); the effect re-runs when it becomes available.
- *
- * Gated behind the settings that actually consume resource data (the header
- * popover and the sidebar chips) — with both off, no consumer would ever read
- * the entry, so the stream stays closed. Both booleans join the effect deps so
- * toggling a setting live acquires/releases without remounting the pane.
- */
+/** Headless owner of one epic's `resources.subscribe` stream. Deferred until the stream client binds. Gated behind the settings that consume resource data; both booleans join the effect deps. */
 export function ResourcesStreamMount(
   props: ResourcesStreamMountProps,
 ): ReactNode {
   const { epicId } = props;
   const wsStreamClient = useWsStreamClient();
-  // Named for the same reason the global mount is: these entries are what the
-  // registry aggregates when no global stream exists (a pre-v1.1 host), so a
-  // reader checking "did this come from the machine I name" must be able to
-  // answer it for the fallback too, not just the global entry.
+  // Fallback entries must carry the host name too: the registry aggregates
+  // them when no global stream exists.
   const hostId = useStreamHostId();
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
   const resourcesUnsupported = resourcesSupport === "unsupported";
@@ -98,59 +82,29 @@ export function GlobalResourcesStreamMount(
   props: GlobalResourcesStreamMountProps,
 ): ReactNode {
   const wsStreamClient = useWsStreamClient();
-  // Taken from the SAME binding as the client above, never from a prop or a
-  // scope model: the host id republished on the projection is what a scoped
-  // reader checks its data against, so it has to be the host this transport is
-  // actually dialing rather than the one the caller believes it asked for.
+  // Host id from the same binding as the client. A scoped reader checks
+  // against the machine this transport is dialing.
   const hostId = useStreamHostId();
-  // The PRE-STREAM verdict only, never the full one the panel reads. The full
-  // one includes this stream's own negotiation, so gating the acquire on it
-  // would be a loop: acquire → learn `unsupported` → release → the verdict dies
-  // with the store → acquire again. The pre-check cannot move as a result of
-  // anything this effect does, which is what makes it safe to gate on.
-  //
-  // So a host convicted only by its own stream keeps that stream open. It costs
-  // one idle subscription: an `@1.0` host answers a global probe with a single
-  // empty projection and then, having nothing to say about an epic that does
-  // not exist, stays silent.
+  // Gate on the pre-stream verdict only. The full verdict includes this stream,
+  // so gating acquire on it would acquire/release loop.
   const resourcesUnsupported = useGlobalResourcesPreCheckUnsupported();
   // Bumped ONLY by the recovery listener below — never during a render.
   const [reprobeGeneration, setReprobeGeneration] = useState(0);
-  // "Which stream should be open": the transport, plus the re-probe generation.
-  // The generation belongs in the identity rather than in the effect alone, so
-  // a bump rebuilds the entry even when a second lease holder would otherwise
-  // keep the existing one alive.
+  // Stream identity is transport plus re-probe generation. A bump rebuilds
+  // even if a second lease holder would keep the old entry.
   const reacquireToken = useMemo(
     () => ({ transport: wsStreamClient, reprobeGeneration }),
     [wsStreamClient, reprobeGeneration],
   );
 
   /**
-   * Re-probes a verdict that cannot clear itself.
-   *
-   * A version verdict self-heals: that stream stays open, a drop takes its
-   * negotiated version with it, and the resume re-negotiates. A TERMINAL
-   * incompatible close has no such path — it fails only the stream, while the
-   * shared session stays healthy, so the transport identity never changes and
-   * nothing above would ever rebuild. A host that advertises no bridgeable
-   * `resources.subscribe` and is then upgraded in place would keep being called
-   * incapable for as long as this surface stayed mounted.
-   *
-   * Driven off transport recovery, which is the only positive evidence that the
-   * host on the other end may not be the one we judged.
+   * Re-probe a terminal incompatible close. A version verdict self-heals; a terminal close does not, so drive off transport recovery.
    */
   useEffect(() => {
     if (wsStreamClient === null) return;
     return wsStreamClient.subscribeAvailabilityRecovered(() => {
-      // Read IMPERATIVELY. As an effect dependency this verdict is a loop:
-      // it changes → the effect re-runs → release/acquire → the fresh store
-      // reports `unknown` → it changes again. Edge-triggered off recovery it
-      // cannot self-perpetuate, because a re-probe that lands on the same
-      // terminal verdict emits no further recovery event.
-      //
-      // Gated on `unsupported` so an ordinary reconnect — including the clean
-      // first open, which `RemoteStreamClient` also reports — does not tear
-      // down and rebuild a working stream, losing its projection each time.
+      // Read imperatively: as an effect dep this verdict acquire/release loops.
+      // Gate on unsupported so an ordinary reconnect does not rebuild a working stream.
       if (resourcesRegistry.getGlobalScopeSupport(hostId) !== "unsupported") {
         return;
       }
@@ -187,17 +141,12 @@ export function GlobalResourcesStreamMount(
     return () => {
       resourcesRegistry.releaseGlobal();
     };
-    // `hostId` belongs in the deps, not just in the closure: the name is fixed
-    // at acquire time, so a host id that resolves after its transport did must
-    // rebuild the entry rather than leave the projection speaking for the wrong
-    // machine. In practice it now moves WITH `wsStreamClient` (one binding, one
-    // change), so this rarely fires on its own.
+    // hostId is a dep: a late-resolving id must rebuild rather than leave the
+    // projection speaking for the wrong machine.
   }, [hostId, reacquireToken, resourcesUnsupported, wsStreamClient]);
 
-  // Declared after the acquire effect and carrying its full dependency set, so
-  // it runs on the same commit as any re-acquire and re-states the demand on
-  // the entry that acquire just installed. `getGlobal` is the registry's own
-  // accessor for that entry - no second handle needs to be held here.
+  // After acquire, same deps: re-state demand on the entry acquire just
+  // installed via getGlobal.
   useEffect(() => {
     resourcesRegistry
       .getGlobal()

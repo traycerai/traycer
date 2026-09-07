@@ -23,17 +23,7 @@ interface ImageAttachmentBaseAttrs {
   readonly size: number | null;
 }
 
-/**
- * An image node carries EXACTLY ONE payload:
- * - `b64content` — inline base64. Chat / new-conversation paste, and the landing
- *   submit re-inline, build nodes this way; the host ingests + hashes it.
- * - `hash` — a content hash into the per-runtime landing image store. The landing
- *   composer pastes hash-only nodes so persisted draft content never carries
- *   base64; bytes are resolved back to base64 at submit time.
- *
- * The `?: never` on the absent field makes the union mutually exclusive: a node
- * can present `b64content` or `hash`, never both, never neither.
- */
+/** The landing composer pastes hash-only nodes so persisted draft content never carries base64; bytes are resolved back to base64 at submit time. The `?: never` on the absent field makes the union mutually exclusive: a node can present `b64content` or `hash`, never both, never neither. */
 export type ImageAttachmentAttrs =
   | (ImageAttachmentBaseAttrs & {
       readonly b64content: string;
@@ -176,11 +166,8 @@ export const ImageAttachmentNode = TiptapNode.create({
           });
           if (matches.length === 0) return false;
           const match = matches[0];
-          // Flip a pending b64 image node to its stored content hash IN PLACE:
-          // `setNodeMarkup` rewrites the attrs while preserving the node's exact
-          // position (no re-insert, no mapping, caret untouched). This is what
-          // lets the paste insert full content in document order and convert each
-          // image's payload once its background hash+store job resolves.
+          // Flip a pending b64 image node to its stored content hash IN PLACE: `setNodeMarkup` rewrites the attrs while preserving the node's exact position (no re-insert, no mapping, caret untouched).
+          // This is what lets the paste insert full content in document order and convert each image's payload once its background hash+store job resolves.
           tr.setNodeMarkup(match.pos, undefined, {
             ...match.attrs,
             hash,

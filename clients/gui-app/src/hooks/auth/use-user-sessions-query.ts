@@ -24,11 +24,7 @@ function userSessionsQueryOptions(
   }
   return queryOptions<ListUserSessionsResponse | null>({
     queryKey: authQueryKeys.userSessions(auth, userId),
-    // The signal is forwarded rather than dropped because `fetchUserSessions`
-    // can spend a single-use refresh rotation on its repair path. A revoke
-    // invalidating this query, an unmount, or a focus refetch superseding the
-    // 30s poll all cancel here, and none of them should leave that spend in
-    // flight for an answer no one will read.
+    // The signal is forwarded rather than dropped because `fetchUserSessions` can spend a single-use refresh rotation on its repair path.
     queryFn: ({ signal }) => auth.fetchUserSessions(signal),
     enabled: true,
     refetchInterval: USER_SESSIONS_POLL_MS,

@@ -1,15 +1,7 @@
 import { z } from "zod";
 import { LOG_LEVELS } from "@traycer/protocol/config/log-level";
 
-/**
- * RPC payloads for the machine-user-global CLI config store.
- *
- * The store lives at `~/.traycer/cli/config.json`, outside a host slot. Shell,
- * environment, and CLI/host log-level changes therefore apply to every Traycer
- * host environment run by this OS user. Writes are intentionally last-writer-
- * wins and use the store's atomic-write path; these contracts add no per-host
- * state or locking layer.
- */
+/** RPC payloads for the machine-user-global CLI config store. */
 
 const emptyRequestSchema = z.object({});
 const shellArgsSchema = z.array(z.string()).nullable();
@@ -28,9 +20,7 @@ export type ConfigShellGetResponse = z.infer<
   typeof configShellGetResponseSchema
 >;
 
-// A shell-set operation must change either the selected program or its args;
-// accepting `{ path: null, args: null }` would turn an RPC typo into a silent
-// config-file rewrite instead of matching the CLI command's validation.
+// A shell-set operation must change either the selected program or its args; accepting `{ path: null, args: null }` would turn an RPC typo into a silent config-file rewrite instead of matching the CLI command's validation.
 export const configShellSetRequestSchema = z.union([
   z.object({ path: shellPathSchema, args: shellArgsSchema }),
   z.object({ path: z.null(), args: z.array(z.string()) }),
@@ -109,12 +99,7 @@ export type ConfigShellListDetectedRequest = z.infer<
   typeof configShellListDetectedRequestSchema
 >;
 
-/**
- * The v1.0 row, FROZEN as released (cli-v1.2.0 shipped this shape). Adding a
- * key here - even an optional one - changes the wire schema at a released
- * version, which the protocol-compat gate rightly blocks; growth happens at
- * v1.1 below instead.
- */
+/** The v1.0 row, FROZEN as released (cli-v1.2.0 shipped this shape). */
 export const configDetectedShellSchemaV10 = z.object({
   name: z.string(),
   path: shellPathSchema,
@@ -124,10 +109,7 @@ export const configDetectedShellSchemaV10 = z.object({
 });
 
 /**
- * v1.1 adds `wslHealth`: optional both ways - absent from hosts predating the
- * probe, and absent on every healthy or non-WSL row. See
- * `DetectedShell.wslHealth`. This unversioned name stays the canonical row
- * shape clients import.
+ * v1.1 adds `wslHealth`: optional both ways - absent from hosts predating the probe, and absent on every healthy or non-WSL row.
  */
 export const configDetectedShellSchema = configDetectedShellSchemaV10.extend({
   wslHealth: z.enum(["not-installed", "no-distro"]).optional(),

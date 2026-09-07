@@ -2,10 +2,8 @@ import { randomUUID } from "node:crypto";
 import { rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 
 /**
- * Shared low-level filesystem helpers for the credentials-file token store
- * (primitives, lock, WAL sidecar). Kept in one place so the atomic-rename guard,
- * the errno reader, and the monotonic-mtime logic do not drift across the
- * modules that need them.
+ * Shared low-level filesystem helpers for the credentials-file token store (primitives, lock, WAL sidecar).
+ * Kept in one place so the atomic-rename guard, the errno reader, and the monotonic-mtime logic do not drift across the modules that need them.
  */
 
 /** The `code` of a Node errno-style error, or `null` when there isn't one. */
@@ -15,11 +13,7 @@ export function errorCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-// Escalating mtime bumps for the set-and-verify below. A coarse-granularity
-// filesystem (HFS+ 1s, some FAT 2s) truncates a sub-second-newer mtime back to
-// the same tick, which the host's mtime-equality owner cache would read as
-// "unchanged". Each step forces the next whole-second boundaries until the
-// observed mtime is provably above the floor.
+// Escalating mtime bumps for the set-and-verify below.
 const MTIME_BUMP_STEPS_MS = [1000, 2000, 4000, 8000, 16000] as const;
 
 /** The file's mtime in ms, or `0` when it is absent (ENOENT). */
@@ -33,10 +27,7 @@ export async function fileMtimeMsOrZero(path: string): Promise<number> {
 }
 
 /**
- * Ensures `path`'s mtime is strictly greater than `floorMs`, re-bumping across
- * coarse-filesystem granularity, and returns the landed mtime. Shared by the
- * write primitive (post-rename verify) and WAL recovery (replaying an
- * interrupted write's mtime guarantee), so both enforce it identically.
+ * Ensures `path`'s mtime is strictly greater than `floorMs`, re-bumping across coarse-filesystem granularity, and returns the landed mtime.
  */
 export async function bumpMtimeAbove(
   path: string,
@@ -51,10 +42,7 @@ export async function bumpMtimeAbove(
   return (await stat(path)).mtimeMs;
 }
 
-// Windows filesystem filters (antivirus/indexers) can briefly hold a
-// newly-written file open, so a `rename` over it fails transiently with
-// EACCES/EBUSY/EPERM. Node's `rename` has no retry; a bounded one belongs at
-// this persistence boundary. POSIX and non-transient failures surface at once.
+// Windows filesystem filters (antivirus/indexers) can briefly hold a newly-written file open, so a `rename` over it fails transiently with EACCES/EBUSY/EPERM.
 const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100, 200] as const;
 const TRANSIENT_WINDOWS_RENAME_ERROR_CODES: ReadonlySet<string> = new Set([
   "EACCES",
@@ -88,10 +76,7 @@ export async function renameWithWindowsRetry(
 }
 
 /**
- * Atomically writes `value` as pretty JSON: a per-write unique temp (so
- * concurrent writers never share a temp and clobber each other's staging), then
- * an atomic rename into place. The temp is removed if the write or rename
- * fails. `mode` sets the file permission bits on the temp.
+ * Atomically writes `value` as pretty JSON: a per-write unique temp (so concurrent writers never share a temp and clobber each other's staging), then an atomic rename into place.
  */
 export async function writeJsonFileAtomic(
   path: string,

@@ -7,9 +7,8 @@ import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
-// A double-click can fire two handlers before React flushes the state update
-// that closes the popover. Row selection must not launch anything; the launch
-// latch is what collapses a double-fired Launch action to a single terminal.
+// A double-click can fire two handlers before React flushes the state update that closes the popover.
+// Row selection must not launch anything; the launch latch is what collapses a double-fired Launch action to a single terminal.
 
 const ROW: WorktreeBindingSelectorRow = {
   hostId: "host-1",

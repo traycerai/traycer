@@ -33,37 +33,10 @@ import {
   useInitialChatHandoffStore,
 } from "@/stores/epics/initial-chat-handoff-store";
 
-/**
- * Resolves existence for exactly the epic ids that have an open tab, via
- * `epic.getTaskContexts` - id-scoped, so the cost is O(open tabs) rather than
- * O(the account's whole epic history) as the previous `epic.listTasks` sweep
- * was (it paged the entire list and then intersected).
- *
- * `epic.getTaskContexts` is an OPTIONAL (non-floor) method: it is absent from
- * `RELEASED_FLOOR_METHOD_NAMES`, so a host that predates it negotiates it away
- * instead of failing the handshake, and the client rejects the call locally
- * with `E_HOST_UNSUPPORTED`. Because this reconciler's only action is
- * DESTRUCTIVE (force-closing tabs), every path where existence is not
- * positively established must conclude nothing:
- *
- *  - the host has not advertised the method (or no handshake has completed
- *    yet) - the run never starts;
- *  - any batch is still pending, or failed for any reason including
- *    `E_HOST_UNSUPPORTED` - no ids are treated as missing.
- *
- * Reading an ambiguous or failed response as absence would close tabs that
- * may still exist, so only a positive absence result is actionable.
- */
+/** Existence for open-tab epic ids via optional `epic.getTaskContexts`. Only a positive absence result is actionable. Unsupported, pending, or failed batches must conclude nothing: this run force-closes tabs. */
 const RECONCILE_METHOD = "epic.getTaskContexts" as const;
 
-/**
- * Existence has to stay reasonably fresh - the whole point of the run is to
- * notice an epic deleted elsewhere - but a run's identity already changes on
- * every host / user / canvas-rehydration boundary, so the only repeats this
- * window covers are the ones a plain remount produces (a route change, a
- * StrictMode double-mount, a window reopened). Half a minute collapses those
- * into one RPC while still re-asking the host well inside a session.
- */
+/** Collapses remount repeats into one RPC while still re-asking the host inside a session. */
 const EXISTENCE_STALE_TIME_MS = 30_000;
 
 export function EpicTabExistenceReconciler() {
@@ -88,12 +61,7 @@ function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
   );
   const canvasHydrationVersion = useEpicCanvasHydrationVersion();
   const openEpicIds = useVisibleEpicIds();
-  // Three-valued on purpose (`null` = no handshake yet, `false` = known
-  // absent): only `true` may license a run. `compatibility.status` cannot
-  // stand in for this - it is a `host.status` probe over the released FLOOR
-  // channel and says nothing about an optional method. In practice the
-  // manifest is already known by the time the gates below pass, because a
-  // `compatible` verdict required a completed handshake with this host.
+  // Three-valued (`null` = no handshake yet). Only `true` may license a run. `compatibility.status` is a floor probe and says nothing about this optional method.
   const methodSupport = useHostMethodSupport(
     readiness.hostId,
     RECONCILE_METHOD,
@@ -126,13 +94,7 @@ function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
   }, [identity, openEpicIds]);
 }
 
-/**
- * Freezes the id set this run probes. Tabs opened or closed after the run
- * starts must not re-key the batch: reconciliation is about the set as it was
- * persisted, and re-keying on every tab gesture would issue one RPC per
- * gesture. Identity changes remount this component (see the `key` above) and
- * that is the only thing that starts a new run.
- */
+/** Freeze the probed id set. Tabs opened or closed after start must not re-key the batch. */
 function EpicTabReconciliationRun(props: { readonly seed: ReconcileSeed }) {
   const [run] = useState<ReconcileSeed>(() => props.seed);
 
@@ -151,10 +113,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
       })),
     [openEpicIds],
   );
-  // `null` until EVERY batch has succeeded - see the file header. The combined
-  // value is a fresh `Set` per computation, so the effect below can re-run on
-  // an unrelated render; `completionAppliedRef` keeps the apply once-only, as
-  // it did for the paginated implementation.
+  // `null` until every batch has succeeded. `completionAppliedRef` keeps the apply once-only.
   const confirmedAbsentEpicIds = useHostQueries<
     HostRpcRegistry,
     typeof RECONCILE_METHOD,
@@ -171,17 +130,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
     if (confirmedAbsentEpicIds === null) return;
     if (completionAppliedRef.current) return;
     completionAppliedRef.current = true;
-    // Never force-close an epic this session just created (or is creating):
-    // cloud reads lag `epic.create` (that lag is exactly why
-    // `useEpicCreate.onSuccess` manually patches the cloud-tasks cache), so a
-    // freshly-created epic is legitimately absent for a short window. Closing
-    // its tab strands the route on a loading skeleton that never recovers.
-    // Such epics carry a live open-epic session and/or an active initial-chat
-    // handoff; a genuinely-stale persisted tab (its epic deleted while the app
-    // was closed) carries neither. A remote delete of an OPEN epic is handled
-    // by `EpicAccessCoordinator` (via the live session's `epicDeleted` /
-    // `accessLost` / unavailable-`snapshotFetchError` signals), not here, so
-    // this exclusion cannot hide a real "epic is gone" signal.
+    // Never force-close an epic this session just created: cloud reads lag `epic.create`. Remote delete of an OPEN epic is `EpicAccessCoordinator`.
     const staleEpicIds = closableStaleEpicIds([...confirmedAbsentEpicIds]);
     if (staleEpicIds.length > 0) {
       useComposerRunSettingsStore.getState().clearEpicRunSettings(staleEpicIds);
@@ -192,18 +141,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
   return null;
 }
 
-/**
- * The subset of open epic ids the host positively confirmed absent, or `null`
- * when a batch has not completed successfully. `unknown` and legacy `null`
- * rows deliberately stay out of this set: only a current host's explicit
- * `confirmed-absent` arm may close a tab.
- *
- * `null` covers pending batches and ANY failure - a transport error, and
- * specifically `E_HOST_UNSUPPORTED` from a host that does not carry the
- * method. Do not soften this into an empty set: `useEpicGetTaskContexts`
- * deliberately degrades unsupported to an empty map because its callers only
- * enrich titles, but here an empty set means "every open tab is stale".
- */
+/** Open epic ids the host positively confirmed absent, or `null` when any batch is pending or failed. Do not soften failure into an empty set: here empty means every open tab is stale. */
 function combineConfirmedAbsentEpicIds(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
 ): ReadonlySet<string> | null {
@@ -232,20 +170,7 @@ function chunkEpicIds(
   );
 }
 
-/**
- * Drop epics that must never be force-closed by existence reconciliation. An
- * epic is protected when ANY of these hold:
- *  - it was created from the start page this session (synchronous marker set at
- *    create time - the deterministic guard both the GUI-chat and terminal-agent
- *    landing flows share);
- *  - it has a live open-epic session in the registry (`peek` reads without
- *    disturbing MRU ordering);
- *  - it has an active (non-failed) initial-chat handoff (the GUI-chat flow).
- * Each marks an epic this session opened or created, for which a transient
- * absence from the cloud is propagation lag rather than a deletion. Evaluated
- * fresh here, at close time, so a session/handoff that appears after the
- * reconcile RPC resolves still counts.
- */
+/** Protect session-created epics, live registry sessions, and active initial-chat handoffs. Evaluated at close time. */
 function closableStaleEpicIds(
   candidateEpicIds: ReadonlyArray<string>,
 ): ReadonlyArray<string> {

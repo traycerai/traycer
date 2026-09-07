@@ -20,19 +20,7 @@ import {
 } from "@/lib/chats/next-handoff-transition";
 
 /**
- * Single owner for the chat-tile's initial-chat handoff lifecycle.
- *
- * Replaces the four sibling effects in chat-tile.tsx that previously
- * coordinated:
- *  - handoff failure detection (markFailedByAction)
- *  - failed-send restoration (restorePromptContent + ackFailedSendRestoration)
- *  - sending → consumed via acceptedActions
- *  - sending → consumed via messages
- *
- * The fifth side-effect - `waitingChat → sendMessage → markSending` - is
- * also collapsed into this hook. The decision policy lives in the pure
- * `nextHandoffTransition` function so each transition is unit-testable
- * without rendering React.
+ * Single owner for the chat-tile initial-chat handoff. Policy lives in `nextHandoffTransition`.
  */
 export interface InitialChatHandoffDriverOptions {
   readonly handle: ChatSessionStoreHandle;
@@ -51,12 +39,7 @@ export function useInitialChatHandoffDriver(
   const replaceDraftContent = useComposerDraftStore(
     (state) => state.replaceDraft,
   );
-  // Subscribe to the chat-session pieces the driver actually reads so the
-  // effect re-runs when any of them transitions (e.g. snapshotLoaded flips
-  // from false to true, a new accepted action arrives, the persisted
-  // messages array gains the user message). Without this subscription the
-  // effect would only re-run when `handoff` or `scope` change, missing
-  // state-change-driven transitions like waitingChat → send.
+  // Without this subscription the effect would only re-run when `handoff` or `scope` change, missing state-change-driven transitions like waitingChat → send.
   const chatSnapshot = useStore(
     handle.store,
     useShallow((s) => ({
@@ -127,18 +110,7 @@ interface ApplyInitialChatHandoffStepInput {
 }
 
 /**
- * Whether the composer for this node has nothing the user would miss.
- *
- * `contentIsSubmittable` is the canonical answer - text OR image atoms - and
- * it is deliberately shared so the rule stays in lockstep across surfaces. A
- * plain-text reading of this question calls an attachment-only draft empty,
- * and this guard would then overwrite images the user could have SENT with
- * the restored prompt: the very loss it exists to prevent, on content that
- * cannot be retyped at all.
- *
- * Read live rather than through a subscription: this runs inside an effect
- * that fires on the transition, and a stale read would decide the question
- * with the wrong draft.
+ * Empty means `contentIsSubmittable` is false (text or image). A text-only read would overwrite an attachment-only draft. Read live; a stale subscription would decide on the wrong draft.
  */
 function composerDraftIsEmpty(nodeId: string): boolean {
   const draft = useComposerDraftStore.getState().drafts[nodeId];
@@ -204,18 +176,7 @@ function applyInitialChatHandoffStep(
       return;
     }
     case "restoreAndAckFailed": {
-      // THE consumption point for every restoration path - the pending pass,
-      // the settled pass, the rejection winner and the accepted-send pass all
-      // arrive here - so the newer-draft rule belongs here rather than at any
-      // one of them. `replaceDraftContent` is unconditional, and a queued send
-      // followed by more typing is the ordinary way to use a queue, so an
-      // unguarded restore overwrites work the user can still see themselves
-      // doing.
-      //
-      // The newer draft wins the composer and the older prompt is STATED with
-      // its text inlined. That keeps the founding invariant intact - restored
-      // XOR stated, never neither - with the composer going to whichever text
-      // the user is actually looking at.
+      // Every restoration path lands here. A newer draft wins the composer; the older prompt is stated. Restored XOR stated, never neither.
       if (composerDraftIsEmpty(input.nodeId)) {
         input.replaceDraftContent(input.nodeId, input.step.content, null);
         useComposerDraftStore
@@ -227,14 +188,7 @@ function applyInitialChatHandoffStep(
         input.state.ackFailedSendRestoration(input.step.clientActionId);
         return;
       }
-      // The worktree hand-back already ran at RECONCILE time, so the stated
-      // prompt's binding is now staged under the user's newer draft. Left
-      // deliberately: a staged pick is VISIBLE in the composer's worktree
-      // picker, which makes it a wrong-looking choice rather than a silent
-      // local run - and the notice's own worktree clause names the binding. -
-      // Unwinding it here would mean a blind clear from a seam that does not
-      // know whose pick it is, re-opening exactly the cross-dispatch
-      // sweep-evidence lifecycle `restoreIntentForDispatch` exists to protect.
+      // Left deliberately: a staged pick is VISIBLE in the composer's worktree picker, which makes it a wrong-looking choice rather than a silent local run - and the notice's own worktree clause names the binding.
       input.state.stateFailedSendRestoration(input.step.clientActionId);
       return;
     }

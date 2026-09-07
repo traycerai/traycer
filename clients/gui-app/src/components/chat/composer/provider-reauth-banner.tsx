@@ -76,42 +76,22 @@ const BANNER_HEADER_ICON = (
 
 interface ProviderReauthBannerProps {
   readonly providerId: ProviderId;
-  /**
-   * Live provider state from the composer's tab-scoped re-auth gate
-   * (`useProviderReauthGate`). The banner reads its reconnect capability from
-   * here rather than owning a second subscription; the gate unmounts the banner
-   * the instant the provider flips back to `authenticated`.
-   */
+  /** Live provider state from the composer's tab-scoped re-auth gate (`useProviderReauthGate`). The banner reads its reconnect capability from here rather than owning a second subscription; the gate unmounts the banner the instant the provider flips back to `authenticated`. */
   readonly state: ProviderCliState | null;
   readonly reason: ProviderReauthReason;
   /** The blocked managed profile id; null only for provider-wide auth. */
   readonly profileId: string | null;
   /** The blocked profile's own label - only set for `profile_unauthenticated`. */
   readonly profileLabel: string | null;
-  /**
-   * Confirm-first fallback to the ambient/host login for the two
-   * profile-specific reasons - `null` for `provider_unauthenticated` (already
-   * ambient, so there is no fallback to offer). Never called automatically.
-   */
+  /** Confirm-first fallback to the ambient/host login for the two profile-specific reasons - `null` for `provider_unauthenticated` (already ambient, so there is no fallback to offer). Never called automatically. */
   readonly onContinueOnAmbient: (() => void) | null;
-  /**
-   * Epic + view this banner is rendered in, needed only by terminal sign-in:
-   * the host creates the PTY under `epicId`, and the tile has to open in the
-   * view that CONTAINS this banner. In a split view each pane renders its own
-   * banner, so the app-wide active view would be wrong for at least one of
-   * them. `null` outside an epic view (the home composer), where terminal
-   * sign-in is simply not offered.
-   */
+  /** In a split view each pane renders its own banner, so the app-wide active view would be wrong for at least one of them. */
   readonly epicId: string | null;
   readonly viewTabId: string | null;
 }
 
-// A profile-specific block (missing/removed, or that profile's own auth is
-// signed out) has no provider-wide OAuth/token form to fall into - the
-// managed profile's config dir is what would need reconnecting, and that
-// flow already lives in Settings -> Providers (ticket 04/06), not duplicated
-// here. This banner only offers the confirm-first ambient fallback plus a
-// link to the existing per-profile reconnect UI.
+// A profile-specific block (missing/removed, or that profile's own auth is signed out) has no provider-wide OAuth/token form to fall into - the managed profile's config dir is what would need reconnecting, and that flow already lives in Settings -> Providers (ticket 04/06), not duplicated here.
+// This banner only offers the confirm-first ambient fallback plus a link to the existing per-profile reconnect UI.
 function ProfileUnavailableBanner({
   providerId,
   reason,
@@ -168,12 +148,8 @@ function ProfileUnavailableBanner({
   );
 }
 
-// Destructive chrome shared by every banner state, mirroring the inline
-// `ErrorSegment` frame so a signed-out provider keeps a familiar weight above
-// the composer whether or not the tab's host is reachable. The status line
-// rides above the box in every state, so it lives here rather than at each call.
-// `action` is a top-right slot for the manual Refresh control; the unreachable
-// state passes `null` (no tab client to re-probe with).
+// Destructive chrome shared by every banner state, mirroring the inline `ErrorSegment` frame so a signed-out provider keeps a familiar weight above the composer whether or not the tab's host is reachable.
+// The status line rides above the box in every state, so it lives here rather than at each call.
 function ReauthBannerShell({
   icon,
   action,
@@ -208,11 +184,8 @@ function ReauthBannerShell({
   );
 }
 
-// Manual re-check: the gate no longer auto-force-refreshes on activate (that
-// re-ran the flaky standalone probe and flickered the banner). This hands the
-// user an explicit "I reconnected - check again" affordance. Uses the
-// tab-scoped refresh (same hook the token form uses) so it targets the host
-// that ran (and will re-run) the turn explicitly, not via the context override.
+// Manual re-check: the gate no longer auto-force-refreshes on activate (that re-ran the flaky standalone probe and flickered the banner).
+// Uses the tab-scoped refresh (same hook the token form uses) so it targets the host that ran (and will re-run) the turn explicitly, not via the context override.
 function BannerRefreshButton() {
   const refreshProviders = useTabRefreshProviders();
   return (
@@ -224,15 +197,8 @@ function BannerRefreshButton() {
   );
 }
 
-// The reconnect methods to offer a signed-out (web-login) provider. `canOauth`
-// requires a local host (the `<cli> auth login` loopback runs on the host's
-// machine) plus a real (non-empty) OAuth login command (an empty `oauthArgs`
-// would spawn the bare binary, which can't browser-OAuth headlessly); `envVars`
-// are the credential vars the
-// paste form can write (an API key / OAuth token) via `providers.setEnvOverride`,
-// which works on any host. Both are reconnect affordances - distinct from a
-// *rejected* credential, which never reaches here (it surfaces as a generic error
-// row; API-key-only providers like Cursor have no capability and no banner).
+// `canOauth` requires a local host (the `<cli> auth login` loopback runs on the host's machine) plus a real (non-empty) OAuth login command (an empty `oauthArgs` would spawn the bare binary, which can't browser-OAuth headlessly); `envVars` are the credential vars the paste form can write (an API key / OAuth token) via `providers.setEnvOverride`, which works on any host.
+// Both are reconnect affordances - distinct from a *rejected* credential, which never reaches here (it surfaces as a generic error row; API-key-only providers like Cursor have no capability and no banner).
 function deriveLoginOptions(
   state: ProviderCliState | null,
   isLocalHost: boolean,
@@ -240,12 +206,7 @@ function deriveLoginOptions(
   readonly envVars: ReadonlyArray<string>;
   readonly canOauth: boolean;
   readonly canTerminalLogin: boolean;
-  /**
-   * The pack state blocking the terminal login right now, or null. A terminal
-   * login spawns the provider's CLI, so a pack that cannot spawn yet turns
-   * the row's button into a request whose only answer is the host's
-   * `preparing` error; the row shows the wait instead.
-   */
+  /** The pack state blocking the terminal login right now, or null. A terminal login spawns the provider's CLI, so a pack that cannot spawn yet turns the row's button into a request whose only answer is the host's `preparing` error; the row shows the wait instead. */
   readonly terminalLoginPackBlock: ProviderPackPreparing | null;
 } {
   const loginCapability: ProviderLoginCapability | null =
@@ -255,20 +216,9 @@ function deriveLoginOptions(
       ? loginCapability.token.vars
       : [];
   const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
-  // Terminal login is decided by `terminalLogin` alone, and it excludes the
-  // headless button whatever `oauthArgs` says: Copilot carries real ones (the
-  // host refuses them headlessly), Qwen / Droid / OMP / OpenCode carry `null`
-  // (they have no headless command; the host launches the CLI itself). No
-  // `isLocalHost` requirement: unlike browser OAuth there is no loopback here,
-  // so a device flow works just as well against a remote host. ONE helper for
-  // this surface and the two gate helpers, so they cannot answer differently
-  // for the same provider.
+  // ONE helper for this surface and the two gate helpers, so they cannot answer differently for the same provider.
   const canTerminalLogin = providerSupportsTerminalLogin(loginCapability);
-  // A real HEADLESS login needs a non-empty subcommand. `null` = no OAuth;
-  // `[]` is also inert because the host would spawn the bare binary under
-  // piped stdio, which for an interactive-TUI CLI (e.g. droid) opens no
-  // browser and hangs the banner on "Waiting for browser sign-in…". (The
-  // terminal row above has no such constraint - a TUI is what it is for.)
+  // `null` = no OAuth; `[]` is also inert because the host would spawn the bare binary under piped stdio, which for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the banner on "Waiting for browser sign-in…".
   const canOauth =
     !canTerminalLogin &&
     isLocalHost &&
@@ -284,16 +234,7 @@ function deriveLoginOptions(
   };
 }
 
-/**
- * What the terminal sign-in slot shows, decided in one place.
- *
- * Terminal sign-in needs a canvas view to open the terminal into. Outside one
- * (the home composer) the banner falls through to the paste form / CLI stub
- * rather than drawing a button that cannot deliver a terminal. A provider
- * whose pack cannot spawn yet keeps its ROW - the wait is the thing to show -
- * but not its button. The `button` arm carries the ids it narrowed, so the
- * row it feeds cannot be handed a null view.
- */
+/** Outside one (the home composer) the banner falls through to the paste form / CLI stub rather than drawing a button that cannot deliver a terminal. A provider whose pack cannot spawn yet keeps its ROW - the wait is the thing to show - but not its button. */
 function deriveTerminalLoginRow(input: {
   readonly canTerminalLogin: boolean;
   readonly terminalLoginPackBlock: ProviderPackPreparing | null;
@@ -320,16 +261,7 @@ function deriveTerminalLoginRow(input: {
   return { kind: "button", epicId: input.epicId, viewTabId: input.viewTabId };
 }
 
-/**
- * Composer-level re-authentication banner for a provider whose CLI is signed
- * out on the tab's host. Rendered (and unmounted) by `useProviderReauthGate`
- * purely from live auth state - there is no "reconnected" success state here,
- * because reconnecting simply clears the gate and removes the banner.
- *
- * The banner addresses the tab's host, not the app-wide active host: it
- * re-provides `HostRuntimeContext` bound to the tab client so the `providers.*`
- * login/refresh mutations target the host that ran (and will re-run) the turn.
- */
+/** The banner addresses the tab's host, not the app-wide active host: it re-provides `HostRuntimeContext` bound to the tab client so the `providers.*` login/refresh mutations target the host that ran (and will re-run) the turn. */
 export function ProviderReauthBanner({
   providerId,
   state,
@@ -351,20 +283,10 @@ export function ProviderReauthBanner({
       null,
     [directory.data, tabHostId],
   );
-  // OAuth runs a localhost loopback on the host's machine, so the reconnect
-  // button is only offered when the tab's host is local; remote hosts fall
-  // through to the "reconnect from the CLI" stub.
+  // OAuth runs a localhost loopback on the host's machine, so the reconnect button is only offered when the tab's host is local; remote hosts fall through to the "reconnect from the CLI" stub.
   const isLocalHost = tabEntry?.kind === "local";
-  // TAB-bound, not scope-bound — which is why this cannot go through
-  // `useScopedHostBinding` (it takes a `HostScope`; there is none here). Listed
-  // as a governed exception on that hook.
-  //
-  // `hostId` is `tabHostId` because that is the host `tabClient` addresses, and
-  // the pair has to move as one value: the mutations below re-authenticate a
-  // provider ON the machine that ran the turn. The spread cannot be
-  // type-checked into supplying it — `...realBinding` satisfies the field with
-  // the app-wide `null` — so without it every `providers.*` login here would go
-  // to the ambient host while the banner named the tab's.
+  // TAB-bound, not scope-bound - which is why this cannot go through `useScopedHostBinding` (it takes a `HostScope`; there is none here).
+  // The spread cannot be type-checked into supplying it - `...realBinding` satisfies the field with the app-wide `null` - so without it every `providers.*` login here would go to the ambient host while the banner named the tab's.
   const scopedBinding = useMemo(
     () =>
       tabClient !== null && realBinding !== null
@@ -375,10 +297,7 @@ export function ProviderReauthBanner({
 
   const message = providerSignedOutMessage(providerId);
 
-  // A profile-specific block has no host-scoped OAuth/token mutation to set
-  // up (see `ProfileUnavailableBanner`'s comment) - render it standalone,
-  // independent of the tab-host-reachability plumbing below that only the
-  // ambient `provider_unauthenticated` path needs.
+  // A profile-specific block has no host-scoped OAuth/token mutation to set up (see `ProfileUnavailableBanner`'s comment) - render it standalone, independent of the tab-host-reachability plumbing below that only the ambient `provider_unauthenticated` path needs.
   if (reason !== "provider_unauthenticated") {
     if (onContinueOnAmbient === null) {
       throw new Error(
@@ -449,14 +368,11 @@ function ReauthBannerInner({
     epicId,
     viewTabId,
   });
-  // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
-  // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
-  // override, matching how Settings > Providers stores it.
+  // Providers with a host-side encrypted API-key store (Cursor / Droid) save the pasted key as that secret (`providers.setApiKey`) rather than a plaintext env override, matching how Settings > Providers stores it.
   const apiKeySupported = state?.apiKey.supported ?? false;
 
-  // No reconnect method available from here: a provider with no web login, or an
-  // OAuth-only provider on a remote host (loopback unreachable) with no paste
-  // vars. Direct the user to the CLI.
+  // No reconnect method available from here: a provider with no web login, or an OAuth-only provider on a remote host (loopback unreachable) with no paste vars.
+  // Direct the user to the CLI.
   if (
     !canOauth &&
     terminalRow.kind === "none" &&
@@ -513,22 +429,7 @@ function ReauthBannerInner({
   );
 }
 
-/**
- * Terminal sign-in: ask the host to open a terminal running the provider's
- * login command, and put it in front of the user.
- *
- * There is no waiting state, no completion detection, and deliberately so. The
- * CLI prints a device code and a URL into that terminal, the user finishes in
- * their browser, and the interactive shell stays alive afterwards - there is no
- * honest completion edge to watch for, so this hands off to the terminal and
- * points at the Refresh control already in this banner's corner. Inventing a
- * "Waiting for sign-in…" state here would be guessing.
- *
- * The button is disabled while the RPC is in flight. That is the only guard
- * against a double click, and it only needs to be: a second click that DOES
- * land is handled host-side by joining the in-flight attempt, so both clicks
- * end up on the same terminal.
- */
+/** Inventing a "Waiting for sign-in…" state here would be guessing. */
 function TerminalLoginRow({
   providerId,
   epicId,
@@ -546,14 +447,8 @@ function TerminalLoginRow({
     // host itself reports as replaced.
     launchedFromTile: null,
   });
-  // ONE resolver with the picker's setup CTA, never an inline fallback: the
-  // generic sentences are only generic until a provider needs different ones.
-  // A terminal flow that is a credential WIZARD rather than a device-code
-  // sign-in (Reasonix's `setup` asks for an API key) and one that opens the
-  // CLI's own UI (Qwen's `/auth`, Droid's first-run prompt, OMP's
-  // `login <provider>`, OpenCode's picker) each need their own label and hint
-  // - "prints a sign-in code" is false for both, and this is the copy the
-  // user reads while deciding what to do next.
+  // ONE resolver with the picker's setup CTA, never an inline fallback: the generic sentences are only generic until a provider needs different ones.
+  // A terminal flow that is a credential WIZARD rather than a device-code sign-in (Reasonix's `setup` asks for an API key) and one that opens the CLI's own UI (Qwen's `/auth`, Droid's first-run prompt, OMP's `login <provider>`, OpenCode's picker) each need their own label and hint - "prints a sign-in code" is false for both, and this is the copy the user reads while deciding what to do next.
   const guidance = providerTerminalGuidance(providerId);
   return (
     <div className="flex flex-col gap-1.5">
@@ -575,16 +470,7 @@ function TerminalLoginRow({
   );
 }
 
-/**
- * Drives the ambient (no-profile-picker) OAuth reconnect through the same
- * `useProviderProfileLoginFlow` state machine the add-profile dialog and
- * Settings reauth panel use (`mode: "reauth"`, `existingProfileId: null` -
- * see that hook's doc comment for how it resolves this without a profile).
- * This gets keepalive, code-paste validation, and bounded auto-restart for
- * free; on success there is still no distinct "reconnected" state here -
- * the flow returns to `start` and the reauth gate's own live subscription
- * unmounts this banner, exactly like before code paste existed.
- */
+/** Drives the ambient (no-profile-picker) OAuth reconnect through the same `useProviderProfileLoginFlow` state machine the add-profile dialog and Settings reauth panel use (`mode: "reauth"`, `existingProfileId: null` - see that hook's doc comment for how it resolves this without a profile). This gets keepalive, code-paste validation, and bounded auto-restart for free; on success there is still no distinct "reconnected" state here - the flow returns to `start` and the reauth gate's own live subscription unmounts this banner, exactly like before code paste existed. */
 function OAuthReauthForm({
   providerId,
   providerLabel,
@@ -652,11 +538,8 @@ function OAuthReauthForm({
     );
   }
 
-  // "start" and "cancelled" both fall back to the Authenticate button - a
-  // cancelled ambient reconnect reverts straight to it, same as before code
-  // paste existed. "starting" keeps showing it too, pending/disabled, the
-  // same way the original single-mutation form did (no separate
-  // intermediate row).
+  // "start" and "cancelled" both fall back to the Authenticate button - a cancelled ambient reconnect reverts straight to it, same as before code paste existed.
+  // "starting" keeps showing it too, pending/disabled, the same way the original single-mutation form did (no separate intermediate row).
   return (
     <div className="flex flex-col gap-2">
       <div>
@@ -677,9 +560,8 @@ function OAuthReauthForm({
   );
 }
 
-// Compact counterpart of `AddProfileWaitingStep`: one browser-approval status
-// with code paste available as a conditional fallback. The same field, copy,
-// restart notice, and mutation-derived status are shared across all surfaces.
+// Compact counterpart of `AddProfileWaitingStep`: one browser-approval status with code paste available as a conditional fallback.
+// The same field, copy, restart notice, and mutation-derived status are shared across all surfaces.
 function OAuthWaitingRow({
   loginUrl,
   codePaste,
@@ -782,14 +664,8 @@ function OAuthWaitingRow({
   );
 }
 
-// Paste a fresh credential into the provider's reconnect path, then immediately
-// force-probe auth. Providers with a host-side encrypted API-key store (Cursor /
-// Droid) save it as that secret via `providers.setApiKey` — the same path as
-// Settings > Providers; OAuth-token providers (Claude Code / Grok) write the
-// chosen credential var via `providers.setEnvOverride`. If the probe returns
-// authenticated the gate unmounts this banner; if still unauthenticated (bad
-// token) we stay mounted and show an inline error so the user can retry without a
-// page reload.
+// Paste a fresh credential into the provider's reconnect path, then immediately force-probe auth.
+// Providers with a host-side encrypted API-key store (Cursor / Droid) save it as that secret via `providers.setApiKey` - the same path as Settings > Providers; OAuth-token providers (Claude Code / Grok) write the chosen credential var via `providers.setEnvOverride`.
 function TokenReauthForm({
   providerId,
   envVars,
@@ -800,9 +676,7 @@ function TokenReauthForm({
   readonly envVars: ReadonlyArray<string>;
   // True when rendered beneath the OAuth button as the fallback option.
   readonly secondary: boolean;
-  // True when the provider has an encrypted host-side API-key store (Cursor /
-  // Droid), so the pasted key is saved as that secret instead of a plaintext env
-  // override.
+  // True when the provider has an encrypted host-side API-key store (Cursor / Droid), so the pasted key is saved as that secret instead of a plaintext env override.
   readonly apiKeySupported: boolean;
 }) {
   const inputId = useId();
@@ -826,13 +700,7 @@ function TokenReauthForm({
 
   const busy = setEnvOverride.isPending || setApiKey.isPending || probing;
 
-  // Shared post-write step: force-probe auth after the credential is stored.
-  // `useTabRefreshProviders` writes the fresh probe result into the query cache
-  // synchronously in its `onSuccess` before `mutateAsync` resolves, so by the
-  // time the `.then()` runs the cache already holds the updated auth status. Read
-  // it directly rather than using `finally` (which fires on both success and
-  // failure, causing a false "not accepted" flash when the token is valid and the
-  // gate is about to unmount this component).
+  // Read it directly rather than using `finally` (which fires on both success and failure, causing a false "not accepted" flash when the token is valid and the gate is about to unmount this component).
   const afterWrite = (): void => {
     setDraft("");
     setProbing(true);

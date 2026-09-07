@@ -24,15 +24,8 @@ import type {
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
- * The renderer side of `resources.subscribe@1.0`: one store per open epic that
- * mirrors the host's live per-owner + epic-aggregate projection. Each server
- * frame carries the FULL projection, so the store replaces its view wholesale -
- * an owner absent from a frame is "not currently tracked" (rendered as unknown),
- * never zero use. See `ResourcesStreamClient` for the wire contract.
- *
- * Owner snapshots are kept in a `Map` keyed by `resourceOwnerKey` so an owner
- * chip can select exactly its own entry (identity-stable across unchanged
- * frames - see `mergeOwners`) and re-render only when its own metrics move.
+ * The renderer side of `resources.subscribe@1.0`: one store per open epic that mirrors the host's
+ * live per-owner + epic-aggregate projection.
  */
 
 export type ResourcesStreamClientHandle = Pick<
@@ -53,10 +46,8 @@ export type OtherResourceUsage = OtherResourceSnapshotWireV15;
 export type RestrictedResourceUsage = RestrictedResourceSnapshotWireV15;
 
 /**
- * Stable map key for one owner within an epic's projection.
- * Terminal owners are keyed by `(kind, hostId, ownerId)` so two hosts can
- * report the same terminal id without collapsing. Chat/agent owners stay
- * the historical 2-part key.
+ * Stable map key for one owner within an epic's projection. Terminal owners are keyed by `(kind,
+ * hostId, ownerId)` so two hosts can report the same terminal id without collapsing.
  */
 export function resourceOwnerKey(
   kind: ResourceOwnerKindWireV14,
@@ -84,23 +75,12 @@ export function globalResourceOwnerKey(
 export interface ResourcesState {
   readonly key: string;
   readonly connectionStatus: StreamConnectionStatus;
-  /**
-   * Whether the host this stream negotiated with can serve THIS store's scope -
-   * the transport-agnostic half of that question, learned from the session
-   * itself rather than from a capability pre-check only a local client can
-   * answer. See `ResourcesScopeSupport`.
-   *
-   * A global-scope store answering `"unsupported"` is the whole reason this
-   * exists: it is the only way a REMOTE host too old for a global stream is
-   * ever distinguishable from one that is merely quiet.
-   */
   readonly scopeSupport: ResourcesScopeSupport;
   /** `null` until the first projection lands. */
   readonly sampledAt: number | null;
   /**
-   * Live owner snapshots keyed by `resourceOwnerKey`. An owner absent from this
-   * map is "not currently tracked" - callers must treat that as unknown, never
-   * as zero use.
+   * Live owner snapshots keyed by `resourceOwnerKey`. An owner absent from this map is "not
+   * currently tracked" - callers must treat that as unknown, never as zero use.
    */
   readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV15>;
   /** Host-app usage sampled alongside the owner projection. */
@@ -134,11 +114,7 @@ const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWireV15> =
   new Map();
 const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWireV15> = new Map();
 
-// Compare only the fields a chip renders. `sampledAt`/`rootPids` move on every
-// host tick even when nothing displayable changed, so excluding them lets an
-// unchanged owner keep its previous object identity across frames - the whole
-// projection is resent each update, but only owners whose metrics actually moved
-// get a new reference (and re-render their chip).
+// Compare only the fields a chip renders.
 function ownerUsageEqual(
   a: OwnerResourceSnapshotWireV15,
   b: OwnerResourceSnapshotWireV15,
@@ -155,9 +131,8 @@ function ownerUsageEqual(
   );
 }
 
-// Renaming a shell - or muting one - changes what its row reads without moving
-// a number, so both have to take part in the identity check that gates
-// re-renders.
+// Renaming a shell - or muting one - changes what its row reads without moving a number, so both
+// have to take part in the identity check that gates re-renders.
 function managedCommandEqual(
   a: ManagedCommandOwnerWire | null,
   b: ManagedCommandOwnerWire | null,
@@ -438,15 +413,7 @@ export function createResourcesStore(
     },
   };
 
-  // Opened only AFTER the initial state is installed, never from inside the
-  // zustand initializer. A stream can publish before its factory returns: a
-  // remote session that is already ready but does not advertise the method
-  // rejects the subscribe synchronously, and `LogicalStream.onStatusChange`
-  // replays that terminal close the instant the typed wrapper's constructor
-  // installs a handler. Built inside the initializer, those writes land on a
-  // state object the initializer's own `return` then overwrites - and a
-  // terminal close has nothing following it to republish the verdict, so the
-  // surface waits forever on a host that already answered.
+  // Opened only AFTER the initial state is installed, never from inside the zustand initializer.
   streamClient = options.streamClientFactory(options.scope, callbacks);
 
   return {

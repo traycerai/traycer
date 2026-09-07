@@ -33,11 +33,7 @@ type ProvidersListResponse = ResponseOfMethod<
 >;
 type ProviderListEntry = ProvidersListResponse["providers"][number];
 
-// The real @2.1 echo shape: `loginCapability` is PRESENT but frozen at v4.0,
-// which has no `terminalLogin` key at all - not `null`, genuinely absent.
-// `ProviderMutationCliStateV21` is that frozen wire type, so building the
-// fixture directly against it (rather than against the live
-// `ProviderCliState`) is what keeps this fixture honest without a cast.
+// `ProviderMutationCliStateV21` is that frozen wire type, so building the fixture directly against it (rather than against the live `ProviderCliState`) is what keeps this fixture honest without a cast.
 function v21Echo(
   overrides: Partial<ProviderMutationCliStateV21>,
 ): ProviderMutationCliStateV21 {
@@ -158,18 +154,10 @@ describe("useProvidersAwaitLogin overlay merge", () => {
     mocks.tabHostId.mockReset();
   });
 
-  // Row 8 of the terminal-login contract table: the cached `terminalLogin`
-  // capability (set by `providers.list`) must survive a login echo whose own
-  // `loginCapability` is present but frozen-shaped (no `terminalLogin` key at
-  // all). Getting the fixture wrong - giving the echo an ABSENT or NULL
-  // `loginCapability` - would pass whether or not the merge strips it, since
-  // there would be nothing to overwrite with.
+  // Row 8 of the terminal-login contract table: the cached `terminalLogin` capability (set by `providers.list`) must survive a login echo whose own `loginCapability` is present but frozen-shaped (no `terminalLogin` key at all).
   it("keeps the seeded terminalLogin capability after a login echo lands", async () => {
     const { queryClient, wrapper } = makeWrapper();
-    // `{ native: null }`, not `{}` - the classic (non-native) poll is keyed
-    // that way and `commitAuthoritativeProvidersList` targets that exact
-    // entry. Seeding a different key would leave the overlay writing into a
-    // cache row this test never reads.
+    // Seeding a different key would leave the overlay writing into a cache row this test never reads.
     const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
       HOST_ID,
       "providers.list",
@@ -214,13 +202,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       command: "copilot --profile work",
       shell: "posix",
     });
-    // The missing direction: `terminalLogin` staying `{}` is also what a
-    // no-op merge (one that dropped the WHOLE echo, not just its
-    // `loginCapability`) would produce, since the seeded cache already has
-    // it. Only a merge that actually overlays the echo's other fields would
-    // flip `auth.status` from the seeded "unauthenticated" to the echo's
-    // "authenticated" - proving the echo is authoritative for what it models,
-    // not merely inert here.
+    // The missing direction: `terminalLogin` staying `{}` is also what a no-op merge (one that dropped the WHOLE echo, not just its `loginCapability`) would produce, since the seeded cache already has it.
     expect(copilot?.auth.status).toBe("authenticated");
   });
 
@@ -259,13 +241,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
   });
 });
 
-// The echo is pinned to `providerMutationCliStateSchemaV21`, whose field set
-// is the hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
-// the live `providers.list` row, and a login is exactly when the rest of that
-// row moves too (the profile list gains the new account, its ambient identity
-// resolves). So the overlay in the suite above cannot be the last word;
-// invalidating `providers.list` here is not belt-and-braces on top of it, it
-// is the only way those fields are ever refreshed after a login completes.
+// So the overlay in the suite above cannot be the last word; invalidating `providers.list` here is not belt-and-braces on top of it, it is the only way those fields are ever refreshed after a login completes.
 describe("useProvidersAwaitLogin providers.list invalidation", () => {
   beforeEach(() => {
     mocks.tabHostId.mockReturnValue(HOST_ID);

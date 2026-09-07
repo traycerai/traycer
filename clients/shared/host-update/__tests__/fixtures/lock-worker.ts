@@ -17,18 +17,8 @@ async function waitForFile(path: string): Promise<void> {
   throw new Error(`lock-worker: timed out waiting for ${path}`);
 }
 
-// Worker process for `lock.test.ts`'s genuine two-process
-// `update-attempt.lock` contention test. Spawned as a real, separate OS
-// process (via `bun run`) so the test proves `acquireUpdateAttemptLock`
-// contends across actual processes, not merely across in-process promises -
-// the README's `held-in-process` distinction only means anything if `busy`
-// is exercised against a REAL other holder.
-//
-// Protocol: acquire the canonical lock under `WORKER_HOST_HOME_DIR`. On
-// success, write `<barrierDir>/held` with this process's pid and the lock
-// token it was granted, then block until `<barrierDir>/release` appears
-// before releasing and writing `<barrierDir>/released`. On contention, write
-// `<barrierDir>/busy` with the observed holder (or `null`) and exit.
+// Worker process for `lock.test.ts`'s genuine two-process `update-attempt.lock` contention test.
+// On success, write `<barrierDir>/held` with this process's pid and the lock token it was granted, then block until `<barrierDir>/release` appears before releasing and writing `<barrierDir>/released`.
 async function main(): Promise<void> {
   const hostHomeDir = process.env.WORKER_HOST_HOME_DIR;
   const barrierDir = process.env.WORKER_BARRIER_DIR;

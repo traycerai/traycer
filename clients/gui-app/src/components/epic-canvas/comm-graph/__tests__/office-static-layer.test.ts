@@ -16,9 +16,7 @@ const KEY: OfficeStaticLayerKey = {
 };
 
 /**
- * A typed 2D context borrowed from a temporary `getContext` stub - jsdom's own
- * returns null, and a chained cast to put the type back is banned here for the
- * same reason it is everywhere else.
+ * A typed 2D context borrowed from a temporary `getContext` stub - jsdom's own returns null, and a chained cast to put the type back is banned here for the same reason it is everywhere else.
  */
 function stubGetContext(): () => void {
   const original = Object.getOwnPropertyDescriptor(
@@ -52,11 +50,6 @@ afterEach(() => {
   restoreGetContext();
 });
 
-/**
- * Surfaces whose context records nothing but the calls the layer makes of it,
- * plus the list of every surface handed out - which is how "reused" and
- * "reallocated" are told apart.
- */
 function fakeSurfaces(): {
   readonly create: (width: number, height: number) => OfficeStaticSurface;
   readonly made: OfficeStaticSurface[];
@@ -195,10 +188,7 @@ describe("OfficeStaticLayer", () => {
 });
 
 /**
- * One drawable of every kind the scene can emit. Written as a record keyed by
- * the kind so the compiler rejects a kind added to `OfficeDrawable` and
- * forgotten here - the partition below is only a partition if it covers all
- * of them.
+ * Written as a record keyed by the kind so the compiler rejects a kind added to `OfficeDrawable` and forgotten here - the partition below is only a partition if it covers all of them.
  */
 const ONE_OF_EACH: Readonly<Record<OfficeDrawable["kind"], OfficeDrawable>> = {
   sprite: { kind: "sprite", sprite: { name: "desk" }, x: 0, y: 0 },
@@ -215,12 +205,6 @@ const ONE_OF_EACH: Readonly<Record<OfficeDrawable["kind"], OfficeDrawable>> = {
   logo: { kind: "logo", harnessId: "claude", x: 0, y: 0 },
 };
 
-/**
- * The two floor paths - blitted and drawn - have to contain the same things.
- * The offscreen paints exactly what this admits and the per-frame path draws
- * exactly what it does not, so anything it got wrong would be a drawable that
- * appears on one kind of host and not the other.
- */
 describe("officeBakesIntoStaticFloor", () => {
   it("bakes a sprite, which is what a floor is made of", () => {
     expect(officeBakesIntoStaticFloor(ONE_OF_EACH.sprite)).toBe(true);
@@ -229,10 +213,7 @@ describe("officeBakesIntoStaticFloor", () => {
   it.each(["label", "clock", "envelope", "logo"] as const)(
     "leaves a %s to the per-frame path",
     (kind) => {
-      // A label on the floor is drawn in SCREEN space, a clock needs hands
-      // over it, and neither an envelope nor a logo is static by nature. Each
-      // would have been silently dropped by a blitted floor that baked
-      // everything, and silently duplicated by one that baked nothing.
+      // Each would have been silently dropped by a blitted floor that baked everything, and silently duplicated by one that baked nothing.
       expect(officeBakesIntoStaticFloor(ONE_OF_EACH[kind])).toBe(false);
     },
   );

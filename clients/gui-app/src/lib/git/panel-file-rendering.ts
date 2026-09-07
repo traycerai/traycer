@@ -167,10 +167,8 @@ export function buildGitTreeDirectoryPaths(
 }
 
 /**
- * Pierre flattens a directory into its sole directory child by default, so a
- * chain such as `Profile/components` occupies one rendered row rather than
- * one row per directory segment. Return only the directory paths that start a
- * rendered row while preserving the full directory list for expansion state.
+ * Pierre flattens a directory into its sole directory child by default, so a chain such as `Profile/components` occupies one rendered row rather than one row per directory segment.
+ * Return only the directory paths that start a rendered row while preserving the full directory list for expansion state.
  */
 export function buildGitTreeRowDirectoryPaths(
   paths: ReadonlyArray<string>,

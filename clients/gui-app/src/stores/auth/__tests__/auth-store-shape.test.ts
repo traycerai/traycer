@@ -1,20 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
 
-/**
- * Static / structural guard for the GUI auth store boundary contract.
- *
- * The Zustand auth store is part of the runtime UI surface host / shared
- * core consumers can subscribe to. Per the boundary contract, raw bearer
- * material is allowed only in the persisted token store, the
- * validation/refresh paths inside `AuthService`, the cross-window auth
- * projection bridge, and the final transport extraction. The public store
- * MUST therefore NOT carry a raw `token` field.
- *
- * If this test starts failing as a TypeScript error or a runtime regression,
- * a regression has reintroduced the raw bearer into the store - fix the
- * regression instead of relaxing this test.
- */
 
 const forbiddenRawBearerStoreKeys = [
   "accessToken",

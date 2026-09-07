@@ -3,11 +3,8 @@ import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-cl
 
 describe("requestLandingTerminalClose", () => {
   it("collapses concurrent closes for one lifetime onto a single request", async () => {
-    // The panel's fast path and the recovery bridge both send the close for one
-    // gesture on an already-drainable host, from separate mutation instances.
-    // Two real requests means the loser fails on a terminal the winner already
-    // removed, and raises "Couldn't close the terminal." for a close that
-    // worked.
+    // The panel's fast path and the recovery bridge both send the close for one gesture on an already-drainable host, from separate mutation instances.
+    // Two real requests means the loser fails on a terminal the winner already removed, and raises "Couldn't close the terminal." for a close that worked.
     let resolveClose = (): void => undefined;
     const close = vi.fn(
       () =>
@@ -27,11 +24,8 @@ describe("requestLandingTerminalClose", () => {
       close,
     });
 
-    // Both callers share one REQUEST - not one promise object. They settle
-    // together, and each is told whether it owned the request, because the key
-    // is the terminal's lifetime rather than the RPC: a `terminal.plain.close`
-    // can join an in-flight `terminal.kill`, and those do not mean the same
-    // thing on success. Only the owner may retire the tombstone.
+    // Both callers share one REQUEST - not one promise object.
+    // They settle together, and each is told whether it owned the request, because the key is the terminal's lifetime rather than the RPC: a `terminal.plain.close` can join an in-flight `terminal.kill`, and those do not mean the same thing on success.
     await Promise.resolve();
     expect(close).toHaveBeenCalledTimes(1);
 

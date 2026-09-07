@@ -9,7 +9,6 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import "./settings-touch-targets.css";
 
-/** Route-independent Settings body. The current route selects its section. */
 export function SettingsSurface(props: { readonly lastPath: string | null }) {
   const sectionPath = useRouterState({
     select: (state) =>
@@ -20,20 +19,7 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
   // `null` at `/settings` itself - the index, which is depth 0 of the phone
   // drill-down and NOT a section.
   const section = settingsSectionFromPath(sectionPath);
-  // Phone rules, unchanged in intent from when they lived on the route shell:
-  // the rail is a pointer-width affordance, so below md the surface stacks and
-  // drills down instead - the index lists the sections, a section shows its
-  // panel alone, and the header's "Settings > <section>" crumb walks back up
-  // (`mobile-app-header.tsx`) - all under the coarse-pointer hit-area scope.
-  //
-  // The index list has to be rendered HERE. It used to arrive through the
-  // route outlet (`settings-index-route-components.tsx`), but the surface is
-  // mounted by the settings TAB now and `SettingsLayout` renders nothing while
-  // signed in, so nothing on that route ever mounts. Without this branch the
-  // phone lands on General with no way to reach any other section.
-  //
-  // Desktop (>=768px) is unaffected: the rail already lists every section, and
-  // the index falls through to General exactly as its `<Navigate>` did.
+  // Without this branch the phone lands on General with no way to reach any other section.
   const isMobile = useIsMobileViewport();
 
   return (
@@ -58,7 +44,6 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
   );
 }
 
-/** The section this path selects, or `null` at the `/settings` index. */
 function settingsSectionFromPath(
   pathname: string | null,
 ): SettingsSectionId | null {

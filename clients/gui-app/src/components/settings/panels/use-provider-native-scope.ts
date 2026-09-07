@@ -24,33 +24,8 @@ function resolveLockedScope(
   return "global";
 }
 
-/**
- * Which project root this tab is pointed at: the stored selection when it
- * still names something offered, else the single workspace of a one-workspace
- * host, else nothing.
- *
- * Extracted rather than inlined in `useProviderNativeScope` because the middle
- * case has a timing condition that reads as noise beside the hook's other work
- * — and it is the case that matters. `targetPaths` gains WORKTREE paths only
- * once the worktree query resolves, so until then a stored worktree selection
- * fails the membership test and looks indistinguishable from "nothing
- * selected". Taking the single-workspace default in that window silently
- * retargets the PARENT repo, and this value drives both the list and every
- * add/remove — so an action landing there writes a different repo's config.
- *
- * The gate is "have we got worktree data", NOT "is the query still pending".
- * A FAILED lookup also leaves `targetPaths` worktree-less, but leaves
- * `isPending` false - so gating on pending would hand the error path the exact
- * silent retarget the gate exists to prevent. `data === undefined` is the one
- * predicate that covers both, and it is what `targetPaths` is derived from, so
- * the two cannot drift apart; it also survives a failed BACKGROUND refetch,
- * where cached targets are still the right answer.
- *
- * Gating this way is safe only because it guards the branch that already
- * requires exactly one workspace, which is precisely when that query is
- * enabled. With zero workspaces it is disabled and never resolves, so a wider
- * gate here would strand the empty-host states behind it.
- */
+/** With zero workspaces it is disabled and never resolves, so a wider gate here would strand the empty-host
+ * states behind it. */
 export function resolveProviderNativeWorkspaceRoot(args: {
   readonly selected: string | undefined;
   readonly targetPaths: readonly string[];
@@ -62,32 +37,18 @@ export function resolveProviderNativeWorkspaceRoot(args: {
   // stored worktree selection survives a reload.
   if (selected !== undefined && targetPaths.includes(selected)) return selected;
   if (selected !== undefined && !worktreesLoaded) return null;
-  // Still defaults the single-workspace host to its one workspace - but the
-  // picker now RENDERS that as a selected control instead of a static line, so
-  // the default is visible as a choice that can be changed (including to one
-  // of that repo's worktrees).
+  // Still defaults the single-workspace host to its one workspace.
   if (hostPaths.length === 1) return hostPaths[0];
   return null;
 }
 
-/**
- * Shared global/project scope state for provider native-config tabs (MCP,
- * Plugins, Skills). Driven by each domain's `actionScopes.list` so a provider
- * that only advertises one scope does not show a dead second option.
- *
- * Workspace selection is per host (not per tab): switching MCP/Plugins/Skills
- * keeps the same project folder, which is the intended consistency.
- */
+/** Driven by each domain's `actionScopes.list` so a provider that only advertises one scope does not show a
+ * dead second option. */
 export function useProviderNativeScope(
   listScopes: readonly ProviderNativeScope[],
 ) {
-  // Subscribed for the RE-RENDER, not for the value: the app-wide active host
-  // changing has to repaint this hook. The id below is read off the BOUND
-  // client instead, because Settings can target a non-active host through a
-  // transient `HostRuntimeContext` override - and then `targets` come from
-  // that host while the selection would have been filed under the active
-  // one's key, so a stored path could never validate against the list it was
-  // picked from.
+  // The id below is read off the bound client instead, because Settings can target a non-active host through a
+  // transient `HostRuntimeContext` override.
   const activeHostId = useAddressableHostId();
   // Prefer the runtime binding when present; null is valid (tests / host-less
   // shells) and falls through to local-only resolution.
@@ -132,12 +93,7 @@ export function useProviderNativeScope(
     [workspaces],
   );
 
-  // Worktrees are targets, not trivia. A Traycer-managed worktree is a real
-  // project root with its own config, and previously it could only be picked
-  // here by coincidence - if its path happened to sit in the global
-  // recent-folders store - and then showed as a bare basename indistinguishable
-  // from its sibling worktrees. Listing them explicitly, with their branch, is
-  // what makes "which folder?" answerable.
+  // Worktrees are targets, not trivia.
   const worktreeQuery = useWorktreeListByWorkspacePathsForClient(client, {
     workspacePaths: hostPaths,
     enabled: hostPaths.length > 0,
@@ -157,9 +113,8 @@ export function useProviderNativeScope(
         summaries.find((entry) => entry.workspacePath === ws.path) ?? null;
       const entries = summary?.worktrees ?? [];
       const self = entries.find((wt) => wt.worktreePath === ws.path) ?? null;
-      // Emission order IS the grouping the picker relies on: a workspace
-      // immediately followed by its own sibling worktrees, so no group headers
-      // are needed to see which repo a worktree belongs to.
+      // Emission order IS the grouping the picker relies on: a workspace immediately followed by its own sibling
+      // worktrees, so no group headers are needed to see which repo a worktree belongs to.
       push({
         path: ws.path,
         name: ws.name,
@@ -204,11 +159,8 @@ export function useProviderNativeScope(
 
   const multiWorkspace = hostPaths.length > 1;
 
-  // Adding a folder here is the escape hatch for the case the old control had
-  // no answer to at all: this client has opened no folders on this host, so
-  // `targets` is empty and Global is the only reachable destination. Bound to
-  // the SETTINGS-selected client, not the app-wide one, so a folder picked
-  // while viewing host B is prepared on B.
+  // Bound to the settings-selected client, not the app-wide one, so a folder picked while viewing host B is
+  // prepared on B.
   const folderActions = useWorkspaceFolderActionsForClient(client);
   const addResolvedFolders = useWorkspaceFoldersStore(
     (s) => s.addResolvedFolders,
@@ -254,11 +206,8 @@ export function useProviderNativeScope(
     projectNeedsWorkspace,
     listWorkspaceRoot,
     listEnabled: !projectNeedsWorkspace,
-    // Only the workspace resolution gates the empty states. The worktree query
-    // is ENRICHMENT layered on rows that already exist, and it is `enabled:
-    // false` with zero workspaces - where `isPending` stays true forever, so
-    // folding it in here would strand the "open a workspace" state behind a
-    // spinner that never resolves.
+    // The worktree query is enrichment layered on rows that already exist, and it is `enabled: false` with zero
+    // workspaces.
     workspacesLoading: resolved.isLoading,
   };
 }

@@ -16,17 +16,8 @@ export interface HostBusyForceDeferDialogProps {
   readonly onDefer: () => void;
 }
 
-/**
- * Shown when a host update/activation intent settles `"busy"`: another
- * Traycer surface (or the host's own boot) already holds the mutation lane.
- * Defer just dismisses - the next launch's boot converge reconciles it, so
- * there is nothing to abandon. Force's target intent is the caller's choice
- * (see each call site): a `continuation: "retry-with-force"` outcome
- * re-submits the same pre-commit intent with `force`; a `continuation:
- * "activate"` outcome (post-commit, packaged macOS) submits
- * `activateInstalled{force}` instead, never re-running the already-consumed
- * apply/pin.
- */
+/** Force's target intent is the caller's choice (see each call site): a `continuation: "retry-with-force"`
+ * outcome re-submits the same pre-commit intent with `force`. */
 export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
   return (
     <Dialog

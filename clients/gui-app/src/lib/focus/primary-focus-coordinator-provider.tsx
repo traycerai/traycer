@@ -25,10 +25,8 @@ export function PrimaryFocusCoordinatorProvider(props: {
     const handlePointerSettled = (): void => {
       setPrimaryFocusInteractionActive(false);
     };
-    // React portals and retained xterm hosts can move an already-focused
-    // endpoint without emitting a new focus event. Child-list commits are the
-    // concrete readiness signal for that relocation; observe only while a
-    // semantic focus intent is parked.
+    // React portals and retained xterm hosts can move an already-focused endpoint without emitting a new focus event.
+    // Child-list commits are the concrete readiness signal for that relocation; observe only while a semantic focus intent is parked.
     const observer = new MutationObserver(() => reconcilePrimaryFocus());
     const unsubscribeFromIntent = subscribeToPrimaryFocusIntent((pending) => {
       if (pending) {

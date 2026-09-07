@@ -2,13 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { composeDesktopSignInUrl, DESKTOP_REDIRECT_URI } from "../sign-in-url";
 import { DESKTOP_SIGN_IN_BASE_URL } from "../../config";
 
-/**
- * `composeDesktopSignInUrl` reads `DESKTOP_SIGN_IN_BASE_URL` (the Cloud UI
- * base from `config`), decided at compile time by the `environment` field.
- * The OSS build ships production endpoints in source, so the base URL is the
- * production Cloud UI; the deep-link callback still uses the dev
- * `traycer-dev://` scheme because an unpackaged source build runs the dev shell.
- */
 describe("composeDesktopSignInUrl", () => {
   it("appends the deep-link redirect to the source-controlled Cloud UI base URL", () => {
     expect(composeDesktopSignInUrl(DESKTOP_REDIRECT_URI)).toBe(
@@ -45,13 +38,7 @@ describe("composeDesktopSignInUrl", () => {
   });
 });
 
-/**
- * Multi-run dev: the redirect URI's scheme must be the slot-suffixed one the
- * main process registers (`electron-main/auth/deep-link.ts`), or the cloud's
- * redirect targets a scheme no running app owns. The slot reaches the
- * renderer as `VITE_DEV_DESKTOP_SLOT` (see `scripts/dev/dev-stack.cjs`), so
- * the module is re-imported with the env stubbed.
- */
+/** Multi-run dev: the redirect URI's scheme must be the slot-suffixed one the main process registers (`electron-main/auth/deep-link.ts`), or the cloud's redirect targets a scheme no. */
 describe("DESKTOP_REDIRECT_URI under a dev-desktop slot", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

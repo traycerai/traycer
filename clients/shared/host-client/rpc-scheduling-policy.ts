@@ -5,9 +5,7 @@ export type RpcSchedulingMode = "latest" | "fifo" | "join";
 
 /**
  * Registry-declared scheduling behavior for unary host RPCs.
- *
- * Shared host-client infrastructure depends only on this port; each shell
- * supplies its own exhaustive registry policy.
+ * Shared host-client infrastructure depends only on this port; each shell supplies its own exhaustive registry policy.
  */
 export interface RpcSchedulingPolicy<Registry extends VersionedRpcRegistry> {
   modeFor<Method extends keyof Registry & string>(

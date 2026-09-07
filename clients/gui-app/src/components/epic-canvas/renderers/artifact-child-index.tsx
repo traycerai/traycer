@@ -41,15 +41,8 @@ interface MakeArtifactDragIdentityArgs {
 }
 
 /**
- * Presentation-only index of an artifact's immediate children, rendered below
- * its body. The list is derived live from the tree projection - it is never
- * written into the artifact's markdown - so it stays correct as children are
- * added, renamed, reordered, or removed. An empty-bodied container (e.g. a
- * grouping `spec` materialized from an index.md-less folder) therefore reads as
- * "the children are the page". Renders nothing when the artifact has no
- * children. Each row mirrors the sidebar's node identity (canonical kind icon +
- * color, status dot for status-bearing kinds) and is navigation-only: clicking
- * opens the child as a preview tile in the same tab.
+ * Presentation-only index of an artifact's immediate children, rendered below its body.
+ * The list is derived live from the tree projection - it is never written into the artifact's markdown - so it stays correct as children are added, renamed, reordered, or removed.
  */
 export function ArtifactChildIndex(props: ArtifactChildIndexProps) {
   const childIds = useChildIdsOf(props.parentId);

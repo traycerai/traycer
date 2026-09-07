@@ -325,9 +325,7 @@ describe("resolveRememberedFolderIntent", () => {
 
 describe("seedEntryForFolder", () => {
   it("stages the seed verbatim, beating per-epic memory, per-folder memory, and the default", () => {
-    // The source conversation runs on an adopted worktree; that seed is the top
-    // tier and must win over any remembered pick or the generic new-worktree
-    // default - and it needs no branch list (staged verbatim, not disk-validated).
+    // The source conversation runs on an adopted worktree; that seed is the top tier and must win over any remembered pick or the generic new-worktree default - and it needs no branch list (staged verbatim, not disk-validated).
     const seed = rememberedImport("/a/.worktrees/feature");
     expect(
       seedEntryForFolder({
@@ -372,9 +370,7 @@ describe("seedEntryForFolder", () => {
   });
 
   it("self-heals a stale per-epic entry to the default instead of replaying a doomed pick", () => {
-    // The epic remembered an existing-branch checkout that no longer exists; it
-    // must fall back to a fresh worktree rather than stage a pick that fails at
-    // worktree.create (the per-epic tier is validated like the per-folder tier).
+    // The epic remembered an existing-branch checkout that no longer exists; it must fall back to a fresh worktree rather than stage a pick that fails at worktree.create (the per-epic tier is validated like the per-folder tier).
     const entry = seedEntryForFolder({
       seedFolderIntent: null,
       epicIntentEntry: rememberedExisting("gone-from-epic"),

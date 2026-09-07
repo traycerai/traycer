@@ -18,23 +18,7 @@ import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { installFreshIndexedDb } from "./prompt-stash-fake-idb";
 
 /**
- * `landing-image-move.ts` against a REAL fake-indexeddb factory per test (the
- * same harness the prompt-stash repository suites use -
- * `installFreshIndexedDb`), rather than a mocked storage layer: the module's
- * contract IS the cross-DB byte copy, which a mocked in-memory map can't
- * exercise honestly.
- *
- * The delete-triggering paths (adopt's import branch, discard after a real
- * stage) are exercised END TO END here, and that is load-bearing: the module
- * once drove the handoff DB through `idb-keyval`, whose `createStore` never
- * closes its connection - so `indexedDB.deleteDatabase` in the same window
- * blocked forever on the module's own open handle and the cleanup promise
- * never settled. The module now opens raw connections and closes them before
- * any delete; these tests hang rather than pass if that regresses.
- *
- * `idb-keyval` is still used for a couple of ASSERTION-side reads/writes -
- * fine in a test, but never against a draftId whose handoff a later step
- * deletes, because its held connection would re-introduce the block.
+ * `landing-image-move.ts` against a REAL fake-indexeddb factory per test (the same harness the prompt-stash repository suites use - `installFreshIndexedDb`), rather than a mocked storage layer: the module's contract IS the cross-DB byte copy, which a mocked.
  */
 
 function imageNode(hash: string): JsonContent {
@@ -70,10 +54,7 @@ function handoffStoreFor(draftId: string) {
 }
 
 /**
- * fake-indexeddb structured-clones a `Uint8Array` across its own realm (same
- * reasoning as `prompt-stash-repository-test-helpers.ts`'s
- * `expectUint8ArrayBytes`), so a round-tripped value fails a plain `toEqual`
- * against the original even though its bytes match. Compare by content.
+ * fake-indexeddb structured-clones a `Uint8Array` across its own realm (same reasoning as `prompt-stash-repository-test-helpers.ts`'s `expectUint8ArrayBytes`), so a round-tripped value fails a plain `toEqual` against the original even though its bytes match.
  */
 function expectBytes(value: unknown, expected: Uint8Array): void {
   expect(ArrayBuffer.isView(value)).toBe(true);
@@ -179,9 +160,7 @@ describe("landing-image-move", () => {
       const bytes = new Uint8Array([7, 7, 7, 7, 7]);
       const hash = await putImage(bytes);
       const draftId = "draft-adopt-import";
-      // The production sequence: the source stages, then the bytes go missing
-      // from THIS partition (in production it is a different window's
-      // partition that never had them; here the local copy is removed).
+      // The production sequence: the source stages, then the bytes go missing from THIS partition (in production it is a different window's partition that never had them; here the local copy is removed).
       await stageDraftImageHandoff(draftId, [hash]);
       releaseSession(hash);
       await deleteImage(hash);
@@ -202,10 +181,8 @@ describe("landing-image-move", () => {
       const bytes = new Uint8Array([9, 9, 9]);
       const hash = await putImage(bytes);
       const draftId = "draft-adopt-noop";
-      // Pre-seed the handoff store with an unrelated entry. If the no-op
-      // path opened (and, per its own doc comment, deleted) the handoff DB
-      // regardless, this entry would disappear too - its survival is the
-      // proof the no-op path never touches the handoff DB at all.
+      // Pre-seed the handoff store with an unrelated entry.
+      // If the no-op path opened (and, per its own doc comment, deleted) the handoff DB regardless, this entry would disappear too - its survival is the proof the no-op path never touches the handoff DB at all.
       const sentinel = new Uint8Array([1]);
       await idbSet("sentinel", sentinel, handoffStoreFor(draftId));
 

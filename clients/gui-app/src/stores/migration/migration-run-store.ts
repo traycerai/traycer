@@ -24,12 +24,8 @@ export interface MigrationRunState {
 }
 
 /**
- * Migration runs, ONE PER HOST: a migration moves one machine's local data, so
- * two machines can be migrating at once and each carries its own progress.
- *
- * `remoteRunning` is deliberately NOT per host. It comes from the desktop's
- * cross-window IPC, which carries a single running bit and the window that
- * owns it - no host - so it stays the one aggregate the blocking modal reads.
+ * Migration runs, ONE PER HOST: a migration moves one machine's local data, so two machines can be
+ * migrating at once and each carries its own progress.
  */
 export interface MigrationRunsState {
   readonly runs: ReadonlyMap<string, MigrationRunState>;
@@ -90,11 +86,7 @@ export function epicsSeen(counts: MigrationRunCounts): number {
   return counts.epicsComplete + counts.epicsFailed;
 }
 
-/**
- * The run for one host, or the idle state for a host with none. A single
- * shared `MIGRATION_RUN_IDLE` instance, so a selector over a host that is not
- * migrating returns the same object every time and cannot churn its readers.
- */
+/** The run for one host, or the idle state for a host with none. */
 export function migrationRunFor(
   state: MigrationRunsState,
   hostId: string | null,
@@ -109,10 +101,8 @@ export interface MigrationRunEntry {
 }
 
 /**
- * The run the ONE blocking modal speaks for: a live migration first - it is
- * what the modal blocks the app for - and otherwise a failure nobody has
- * acknowledged yet. `null` when no host has either, which is when the modal
- * is not on screen at all.
+ * The run the ONE blocking modal speaks for: a live migration first - it is what the modal blocks
+ * the app for - and otherwise a failure nobody has acknowledged yet.
  */
 export function migrationModalRun(
   runs: ReadonlyMap<string, MigrationRunState>,
@@ -195,11 +185,7 @@ export const useMigrationRunStore = create<
         },
       })),
     ),
-  // Nothing is being tracked for this host: no run started, or a finished one
-  // was retired. A late frame must not materialise a slice for a run nobody
-  // is showing - an `error` slice conjured this way would put the blocking
-  // modal on screen for a migration that never happened. Same rule as the
-  // session-import store, for the same reason.
+  // Nothing is being tracked for this host: no run started, or a finished one was retired.
   applyComplete: (hostId, { success, counts }) =>
     set(
       foldRun(hostId, (prev) =>

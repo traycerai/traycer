@@ -1,4 +1,3 @@
-/** Production adapter wiring for landing prompt-stash image adoption. */
 import { cleanup } from "@testing-library/react";
 import { createStore } from "zustand/vanilla";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

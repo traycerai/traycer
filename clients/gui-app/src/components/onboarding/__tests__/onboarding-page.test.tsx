@@ -65,13 +65,8 @@ vi.mock("@/components/onboarding/onboarding-theme-picker", () => ({
 }));
 
 vi.mock("@/components/session-import/session-import-wizard", () => ({
-  // Prints the host of the stream binding the tour re-provided above it, which
-  // is the whole point of the picker: the wizard's scan, and the run it starts,
-  // must move to whichever machine the title bar names. Also renders the real
-  // (unmocked) `SessionImportProgress` behind the same `runIdle` gate the real
-  // wizard uses, so a suite about switching between two importing hosts can
-  // drive the actual run store and read the actual progress copy instead of a
-  // second, hand-rolled stand-in for it.
+  // Prints the host of the stream binding the tour re-provided above it, which is the whole point of the picker:
+  // the wizard's scan, and the run it starts, must move to whichever machine the title bar names.
   SessionImportWizard: () => {
     const hostId = useStreamHostId();
     const runIdle = useSessionImportRun(hostId).status === "idle";
@@ -91,9 +86,7 @@ vi.mock("@/components/session-import/session-import-wizard", () => ({
   },
 }));
 
-// The scan subscribes over the stream transport the moment one exists, and
-// this suite provides a stub client with no server behind it. The tour only
-// hands the handle on to the (stubbed) wizard.
+// The tour only hands the handle on to the (stubbed) wizard.
 vi.mock("@/components/session-import/use-session-import-scan", () => ({
   useSessionImportScan: () => ({
     state: { kind: "scan-stub" },
@@ -101,12 +94,8 @@ vi.mock("@/components/session-import/use-session-import-scan", () => ({
   }),
 }));
 
-/**
- * The tour re-provides the picked host's runtimes, so the six hooks a
- * `HostScope` composes (both host lists, the runner host, the plan gate) would
- * all have to stand up for a suite about act navigation. Mocked at the scope
- * boundary, exactly as the Settings panels' and the usage popover's suites do.
- */
+/** The tour re-provides the picked host's runtimes, so the six hooks a `HostScope` composes (both host lists,
+ * the runner host, the plan gate) would all have to stand up for a suite about act navigation. */
 const hostsMock = vi.hoisted(() => ({ ids: ["host-a"] as readonly string[] }));
 
 vi.mock(
@@ -125,13 +114,8 @@ vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
   useScopedHostBinding: () => null,
 }));
 
-// The stream half is this suite's subject, so it answers the way the real hook
-// does: a binding of its own for an explicit pick, `null` while following.
-//
-// `streamStallMock` reproduces the window that makes the tour's agreement
-// check necessary. The real hook holds its binding in STATE and replaces it in
-// an effect, so for at least the commit after a pick it still answers for the
-// host being left - or `null` - while the scope has already moved.
+// The real hook holds its binding in state and replaces it in an effect, so for at least the commit after a
+// pick it still answers for the host being left - or `null` - while the scope has already moved.
 const streamStallMock = vi.hoisted(() => ({ hostId: null as string | null }));
 
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
@@ -143,9 +127,8 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
       : streamBindingFor(scope.hostId),
 }));
 
-// The picker's two collaborators outside this suite's subject: the registry
-// liveness poll (a query with no client behind it) and the Settings jump (a
-// router this harness has no route tree for).
+// The picker's two collaborators outside this suite's subject: the registry liveness poll (a query with no
+// client behind it) and the Settings jump (a router this harness has no route tree for).
 vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/auth/use-registered-hosts-query")
@@ -165,16 +148,10 @@ vi.mock("@/stores/tabs/use-system-tab-modal", async (importOriginal) => ({
   }),
 }));
 
-/**
- * The negotiated capability the tour's length turns on. Driven directly here
- * rather than through the stream transport that backs the real hook.
- */
+/** Driven directly here rather than through the stream transport that backs the real hook. */
 const sessionImportAvailableMock = vi.hoisted(() => ({ value: true }));
 
-// The per-CLIENT form is the session-import stage's own gate, so it answers
-// per host: each fake transport carries its host in `instanceId`, which is what
-// lets this say "host B is too old" without the stage being told a host id it
-// could have read from anywhere.
+// The per-client form is the session-import stage's own gate, so it answers per host.
 const scanUnsupportedMock = vi.hoisted(() => ({
   hostId: null as string | null,
 }));
@@ -189,17 +166,15 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
     client.instanceId !== streamClientInstanceId(scanUnsupportedMock.hostId),
 }));
 
-// The wizard is stubbed above, so nothing in this file can click its own
-// Import button - this mock exists solely to prove the tour's own forward
-// control never starts a run on its own.
+// The wizard is stubbed above, so nothing in this file can click its own Import button - this mock exists
+// solely to prove the tour's own forward control never starts a run on its own.
 const startSessionImportRunMock = vi.hoisted(() => vi.fn());
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
   startSessionImportRun: startSessionImportRunMock,
 }));
 
-// Off by default: the login-import act needs a browser bridge and saved
-// logins on, which this harness has no desktop for. Suites that exercise
-// the act flip it and stub the stage.
+// Off by default: the login-import act needs a browser bridge and saved logins on, which this harness has no
+// desktop for.
 const loginImportAvailableMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("@/hooks/browser/use-login-import-available", () => ({
@@ -266,9 +241,8 @@ vi.mock(
   }),
 );
 
-// `isPending` is DRIVEN, not pinned false: the page reads it as
-// `agentGuideSaving`, and `saveAgentGuideDraft` reports failure while it is
-// true. A suite that pins it false cannot reach the mid-save arm at all.
+// `isPending` is driven, not pinned false: the page reads it as `agentGuideSaving`, and `saveAgentGuideDraft`
+// reports failure while it is true. A suite that pins it false cannot reach the mid-save arm at all.
 const guideSavingMock = vi.hoisted(() => ({ pending: false }));
 
 vi.mock("@/hooks/agent/use-agent-selection-guide-set-global-mutation", () => ({
@@ -280,11 +254,8 @@ vi.mock("@/hooks/agent/use-agent-selection-guide-set-global-mutation", () => ({
   }),
 }));
 
-/**
- * The scope the tour sees, over the selection the PAGE owns - so a pick made
- * through the picker really does re-point the tour, rather than the fixture
- * deciding the answer in advance.
- */
+/** The scope the tour sees, over the selection the page owns - so a pick made through the picker really does
+ * re-point the tour, rather than the fixture deciding the answer in advance. */
 function tourScope(selection: HostScopeSelection): HostScope {
   const hosts = hostsMock.ids.map((hostId) =>
     hostScopeOptionFixture({ hostId, name: hostId }),
@@ -306,10 +277,8 @@ function tourScope(selection: HostScopeSelection): HostScope {
   });
 }
 
-/**
- * One binding per host, kept rather than rebuilt: a fresh object each render
- * would hand the whole subtree a new stream client on every commit.
- */
+/** One binding per host, kept rather than rebuilt: a fresh object each render would hand the whole subtree a
+ * new stream client on every commit. */
 const streamBindings = new Map<string, StreamRuntimeBinding>();
 
 function streamBindingFor(hostId: string): StreamRuntimeBinding {
@@ -379,10 +348,8 @@ import {
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
 
-/**
- * Every link surface below reaches the external-link bridge mutation, which
- * needs a `QueryClientProvider` above it.
- */
+/** Every link surface below reaches the external-link bridge mutation, which needs a `QueryClientProvider`
+ * above it. */
 function render(ui: ReactNode): RenderResult {
   return renderUi(ui, { wrapper: WithTestQueryClient });
 }
@@ -608,9 +575,8 @@ describe("OnboardingPage", () => {
   });
 
   it("does not start an import when 'Start building' is pressed on the session-import act", async () => {
-    // The wizard's own Import button is the only thing that starts a run; an
-    // earlier version made Continue do both, which imported the default
-    // selection without an explicit ask.
+    // The wizard's own Import button is the only thing that starts a run; an earlier version made Continue do
+    // both, which imported the default selection without an explicit ask.
     renderPage({ replay: false });
 
     const acts = visibleActs();
@@ -683,9 +649,8 @@ describe("OnboardingPage", () => {
     });
     expect(setGlobalGuideMock).not.toHaveBeenCalled();
 
-    // command-theme is no longer the last act - session-import now follows
-    // it - so Continue here only advances, and the guide is only saved once
-    // "Start building" is pressed on that final act.
+    // command-theme is no longer the last act - session-import now follows it - so Continue here only advances,
+    // and the guide is only saved once "Start building" is pressed on that final act.
     fireEvent.click(screen.getByTestId("onboarding-advance"));
 
     await waitFor(() => {
@@ -1068,11 +1033,8 @@ describe("OnboardingPage", () => {
     await advanceToAct("login-import");
     expect(currentActId()).toBe("login-import");
 
-    // Drives the SAME mutation cache `useIsMutating` reads, under the exact
-    // key the import mutation uses - no need to walk the whole import flow's
-    // UI to get a pending mutation registered.
-    // A holder rather than a `let`: the assignment happens inside the
-    // mutation's callback, which TypeScript's narrowing cannot see.
+    // A holder rather than a `let`: the assignment happens inside the mutation's callback, which TypeScript's
+    // narrowing cannot see.
     const releaseImport: { current: (() => void) | null } = { current: null };
     const mutation = client.getMutationCache().build(client, {
       mutationKey: browserMutationKeys.importLogins(),
@@ -1142,9 +1104,8 @@ describe("OnboardingPage", () => {
     await waitFor(() => {
       expect(useOnboardingStore.getState().completedAt).not.toBeNull();
     });
-    // The marker, not the live availability: the act was offered at some
-    // point during this tour, even though the list held it for only part of
-    // it.
+    // The marker, not the live availability: the act was offered at some point during this tour, even though the
+    // list held it for only part of it.
     expect(
       useFeatureAnnouncementsStore.getState().consumed["login-import"],
     ).toBeDefined();
@@ -1171,9 +1132,8 @@ describe("OnboardingPage", () => {
     await waitFor(() => {
       expect(currentActId()).toBe("agent-guide");
     });
-    // The store's own position moved WITH the act, to wherever agent-guide
-    // now sits in the longer tour - never left pointing at the login-import
-    // act that took its old index.
+    // The store's own position moved with the act, to wherever agent-guide now sits in the longer tour - never
+    // left pointing at the login-import act that took its old index.
     const agentGuideIndex = visibleActs().findIndex(
       (entry) => entry.id === "agent-guide",
     );
@@ -1225,8 +1185,8 @@ describe("OnboardingPage", () => {
 
   it("saves the guide draft to the host being left before the pick commits", async () => {
     hostsMock.ids = ["host-a", "host-b"];
-    // Held open so the ORDER is observable rather than inferred from a promise
-    // that resolves in the same tick as the click.
+    // Held open so the order is observable rather than inferred from a promise that resolves in the same tick as
+    // the click.
     const save = { release: (): void => undefined };
     setGlobalGuideMock.mockImplementationOnce(
       (variables: { readonly content: string }) =>
@@ -1252,9 +1212,8 @@ describe("OnboardingPage", () => {
     expect(setGlobalGuideMock).toHaveBeenCalledWith({
       content: "notes for host a",
     });
-    // The write is still in flight, so the tour is still on the host it is
-    // writing to - a pick that committed here would land host A's draft on
-    // host B.
+    // The write is still in flight, so the tour is still on the host it is writing to - a pick that committed here
+    // would land host A's draft on host B.
     expect(streamHostOfWizard()).toBe("");
 
     act(() => save.release());
@@ -1264,9 +1223,8 @@ describe("OnboardingPage", () => {
   });
 
   it("withholds the wizard while the stream still names the host being left", async () => {
-    // The scope resolves a pick synchronously; the transport does not. Between
-    // the two, the wizard on screen would scan - and import from - host A under
-    // a title bar reading host B.
+    // The scope resolves a pick synchronously; the transport does not. Between the two, the wizard on screen would
+    // scan - and import from - host A under a title bar reading host B.
     hostsMock.ids = ["host-a", "host-b"];
     streamStallMock.hostId = "host-b";
     const view = renderPage({ replay: false });
@@ -1343,8 +1301,8 @@ describe("OnboardingPage", () => {
   });
 
   it("refuses the wizard on a picked host too old to scan sessions", async () => {
-    // The act EXISTS because the ambient host can scan; the picked one is a
-    // different machine and may predate the feature entirely.
+    // The act exists because the ambient host can scan; the picked one is a different machine and may predate the
+    // feature entirely.
     hostsMock.ids = ["host-a", "host-b"];
     scanUnsupportedMock.hostId = "host-b";
     renderPage({ replay: false });
@@ -1385,23 +1343,15 @@ describe("OnboardingPage", () => {
 
   it("shows each host's own import progress when switching between two hosts that are both importing", async () => {
     hostsMock.ids = ["host-a", "host-b"];
-    // Both hosts' slices are host-scoped in the run store, but the store is a
-    // module singleton this suite does not otherwise touch - clear both
-    // before seeding so an earlier test's run (there is none today) could
-    // never bleed in.
+    // Both hosts' slices are host-scoped in the run store, but the store is a module singleton this suite does not
+    // otherwise touch.
     useSessionImportRunStore.setState({ runs: new Map() });
 
     renderPage({ replay: false });
     await advanceToAct("session-import");
 
-    // The tour opens FOLLOWING host A, which rides the ambient (here: absent)
-    // ws-stream transport rather than a scoped one - see
-    // `useScopedStreamBinding`'s `isViewingActive` branch. Picking host A
-    // explicitly through the switcher is what the real app does the moment a
-    // user glances at the picker, and it is the only way this harness ever
-    // resolves the wizard's stream to a real "host-a", which
-    // `SessionImportProgress` needs in order to read host A's own slice
-    // rather than the idle fallback a `null` host id resolves to.
+    // The tour opens following host A, which rides the ambient (here: absent) ws-stream transport rather than a
+    // scoped one - see `useScopedStreamBinding`'s `isViewingActive` branch.
     pickHost("host-a");
     await waitFor(() => {
       expect(streamHostOfWizard()).toBe("host-a");
@@ -1463,9 +1413,8 @@ describe("OnboardingPage", () => {
     });
     expect(progressText()).toContain("Importing 1 of 10…");
 
-    // A frame lands for host A while B is the one on screen. It must be
-    // folded into A's slice - the wizard reads `useSessionImportRun`, keyed
-    // by host - and must not touch what B's view is showing.
+    // A frame lands for host A while B is the one on screen. It must be folded into A's slice - the wizard reads
+    // `useSessionImportRun`, keyed by host - and must not touch what B's view is showing.
     act(() => {
       useSessionImportRunStore.getState().applyProgress(
         "host-a",
@@ -1479,9 +1428,8 @@ describe("OnboardingPage", () => {
     });
     expect(progressText()).toContain("Importing 1 of 10…");
 
-    // Switching back to host A shows A's own progress, including the frame
-    // that landed while B was on screen - nothing was lost, and nothing of
-    // B's leaked in.
+    // Switching back to host A shows A's own progress, including the frame that landed while B was on screen -
+    // nothing was lost, and nothing of B's leaked in.
     pickHost("host-a");
     await waitFor(() => {
       expect(streamHostOfWizard()).toBe("host-a");

@@ -236,10 +236,8 @@ describe("withUpdateContender - canonical first-run boundary", () => {
     await waitForFile(join(barrierDir, "actuator-ready"), 10_000);
     await waitForFile(join(barrierDir, "actuator-edge-running"), 10_000);
 
-    // The lock-acquiring helper's death must not make the blocked actuator's
-    // irreversible edge reclaimable. This is a lower-level
-    // rebindAttemptLockLiveness primitive test, not the production C-envelope
-    // process topology (covered by the OS-descendant fixture below).
+    // The lock-acquiring helper's death must not make the blocked actuator's irreversible edge reclaimable.
+    // This is a lower-level rebindAttemptLockLiveness primitive test, not the production C-envelope process topology (covered by the OS-descendant fixture below).
     helper.kill("SIGKILL");
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
     forgetChild(helper);
@@ -631,8 +629,7 @@ describe("withUpdateContender - canonical first-run boundary", () => {
     const outcome = await withUpdateContender(
       options(hostHomeDir, "service-maintenance"),
       async () => {
-        // This is the gap a root script has after its lock-aware CLI child
-        // reports success and before the first root-side launchctl/rm edge.
+        // This is the gap a root script has after its lock-aware CLI child reports success and before the first root-side launchctl/rm edge.
         // A real second OS process must still lose the canonical lease here.
         const competitor = spawnAttemptCompetitor(hostHomeDir, barrierDir);
         await waitForFile(join(barrierDir, "busy"), 10_000);
@@ -686,13 +683,8 @@ describe("withUpdateContender - canonical first-run boundary", () => {
 
   it("preserves the callback for a retained terminal record without selecting a schema-v2 executor", async () => {
     const hostHomeDir = await freshHome();
-    // `completedAt` must be INSIDE `TERMINAL_ATTEMPT_RETENTION_MS` for this
-    // record to be "retained" at all, which is what the test name claims. It
-    // was previously a fixed `2026-01-01`, i.e. months past a seven-day
-    // retention - harmless only for as long as `pruneTerminalAttemptRecord` had
-    // no production caller. Now that attempt-store open prunes, an expired
-    // fixture would be legitimately deleted and the survival assertion below
-    // would be asserting that retention does NOT work.
+    // `completedAt` must be inside `TERMINAL_ATTEMPT_RETENTION_MS` for this record to be "retained" at all, which is what the test name claims.
+    // It was previously a fixed `2026-01-01`, i.e. months past a seven-day retention - harmless only for as long as `pruneTerminalAttemptRecord` had no production caller.
     const terminal = record({
       phase: "complete",
       execution: "terminal",
@@ -712,15 +704,7 @@ describe("withUpdateContender - canonical first-run boundary", () => {
   });
 
   describe("terminal-attempt retention is enforced at attempt-store open", () => {
-    // Codex round 3, P2. `pruneTerminalAttemptRecord` had no production caller,
-    // so `TERMINAL_ATTEMPT_RETENTION_MS` was dead policy: a terminal attempt
-    // that no newer attempt replaced survived forever and `host.status` kept
-    // projecting it, so the Overview could show an old failure indefinitely.
-    //
-    // Wired at lock acquisition because that is the ONLY place it can go: prune
-    // is handle-bound, and a handle exists here and on no read path - the very
-    // surface that exposes the stale record is structurally unable to expire
-    // it.
+    // Codex round 3, P2.
     const EXPIRED_MS = TERMINAL_ATTEMPT_RETENTION_MS + 60_000;
 
     it("removes a terminal record older than the retention window", async () => {
@@ -740,18 +724,14 @@ describe("withUpdateContender - canonical first-run boundary", () => {
       );
 
       expect(outcome).toEqual({ kind: "ran", result: "ran" });
-      // Gone from disk is exactly what stops `host.status` projecting it: the
-      // status read decodes this file, so an absent record is an absent
-      // projection.
+      // Gone from disk is exactly what stops `host.status` projecting it: the status read decodes this file, so an absent record is an absent projection.
       await expect(
         stat(updateAttemptRecordPath(hostHomeDir)),
       ).rejects.toThrow();
     });
 
     it("keeps a terminal record that is still INSIDE the retention window", async () => {
-      // The paired direction, and the one that matters: retention must expire
-      // old records without becoming "delete every terminal record", which
-      // would erase a just-completed failure before anyone could read it.
+      // The paired direction, and the one that matters: retention must expire old records without becoming "delete every terminal record", which would erase a just-completed failure before anyone could read it.
       const hostHomeDir = await freshHome();
       const fresh = record({
         phase: "complete",
@@ -771,9 +751,8 @@ describe("withUpdateContender - canonical first-run boundary", () => {
     });
 
     it("leaves a NON-terminal record alone however old it is", async () => {
-      // Retention is scoped to terminal records. An active attempt that has
-      // been running a long time is not garbage, and pruning it would delete
-      // live state - so age alone must never be sufficient.
+      // Retention is scoped to terminal records.
+      // An active attempt that has been running a long time is not garbage, and pruning it would delete live state - so age alone must never be sufficient.
       const hostHomeDir = await freshHome();
       const active = record({
         phase: "downloading",
@@ -1352,19 +1331,7 @@ describe("public barrel cannot reach a structural recover terminal write (author
 });
 
 describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.complete - the sole terminal-completion path", () => {
-  // `sealVerifiedExecutorCompletion`/`commitVerifiedExecutorCompletion` are
-  // module-PRIVATE to `contender.ts`. `ExecutorCompletionObservation` (the
-  // evidence a caller supplies) is ALSO module-private now - it is a plain,
-  // non-exported interface, so `completionEvidence()` below builds a
-  // structurally-matching literal, the same as any other caller with access
-  // to this module would have to. What actually closes the authority gap is
-  // that the only way to reach a terminal write from outside this module is
-  // through the `ExecutorCompletionSession` object `withUpdateExecutorCompletionSegment`
-  // hands directly to its `run` callback as a THIRD argument - there is no
-  // free function to import and call from anywhere else, and the session
-  // itself is a plain closure (not an AsyncLocalStorage-propagated value), so
-  // it is `revoke()`-d and made single-use the instant that callback settles,
-  // not merely "intended" to be scope-bound.
+  // `sealVerifiedExecutorCompletion`/`commitVerifiedExecutorCompletion` are module-private to `contender.ts`.
   async function advanceToVerifying(
     capability: UpdateMutationCapability,
     hostHomeDir: string,
@@ -1409,12 +1376,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
     return current;
   }
 
-  // This local shape mirrors the exported, publicly-constructible
-  // `ExecutorCompletionObservation` - the argument to
-  // `completeUpdateExecutorCompletionSession()`. It is declared locally
-  // rather than imported only so the malformed-owner cast below has a named
-  // target type in this file; the type itself is not what production keeps
-  // private (that is the completion scope/session, not the evidence shape).
+  // This local shape mirrors the exported, publicly-constructible `ExecutorCompletionObservation` - the argument to `completeUpdateExecutorCompletionSession()`.
   interface CompletionEvidenceInput {
     readonly expected: {
       readonly attemptId: string;
@@ -1427,11 +1389,6 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
     readonly nowIso: string;
   }
 
-  // The real `ExecutorCompletionObservation.runningOwner` is typed as the
-  // single literal `"host-home-bound"`, so the only way to prove the session
-  // actually re-checks it (rather than trusting the type) is to force a
-  // differently-shaped value through a single direct cast to the exact
-  // seal-input type - not a chain through `unknown`.
   type MalformedRunningOwnerEvidence = Omit<
     CompletionEvidenceInput,
     "runningOwner"
@@ -1639,10 +1596,6 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
       executorCompletionOptions(hostHomeDir),
       async (capability, _context, completion) => {
         const verifying = await advanceToVerifying(capability, hostHomeDir);
-        // Simulates a caller stashing the session object somewhere it
-        // outlives the callback - the exact shape of the prior bug, where
-        // an AsyncLocalStorage-propagated flag could outlive the callback
-        // that established it through a detached async resource.
         escaped.session = completion;
         escaped.identity = verifying.identity;
         return "done";
@@ -1672,11 +1625,8 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
       executorCompletionOptions(hostHomeDir),
       async (capability, _context, completion) => {
         const verifying = await advanceToVerifying(capability, hostHomeDir);
-        // Deliberately NOT awaited: this schedules a macrotask from inside
-        // the still-live callback, then returns immediately. `revoke()` runs
-        // in `withUpdateExecutorCompletionSegment`'s `finally` as part of
-        // this callback's own microtask settling, strictly before the
-        // detached `setImmediate` macrotask below can fire.
+        // Deliberately not awaited: this schedules a macrotask from inside the still-live callback, then returns immediately.
+        // `revoke()` runs in `withUpdateExecutorCompletionSegment`'s `finally` as part of this callback's own microtask settling, strictly before the detached `setImmediate` macrotask below can fire.
         detached.promise = new Promise((resolve) => {
           setImmediate(() => {
             resolve(
@@ -1715,9 +1665,8 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
       async (capability, _context, completion) => {
         const verifying = await advanceToVerifying(capability, hostHomeDir);
         escaped.session = completion;
-        // A perfectly legitimate, exactly-matching literal - the same shape
-        // the genuine live verifier would have produced. Even this cannot
-        // complete once the session outlives its callback.
+        // A perfectly legitimate, exactly-matching literal - the same shape the genuine live verifier would have produced.
+        // Even this cannot complete once the session outlives its callback.
         void verifying;
         return "done";
       },
@@ -1752,12 +1701,8 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
       executorCompletionOptions(hostHomeDir),
       async (capability, _context, completion) => {
         const verifying = await advanceToVerifying(capability, hostHomeDir);
-        // Deliberately NOT awaited: starts the terminal write and returns
-        // immediately - the same shape as the CLI's un-awaited detached call
-        // reaching the inner mutation lock before `execute()` returns. The
-        // hook above pauses this write mid-rename, simulating "already past
-        // the last liveness check, mid-durable-write" rather than "not yet
-        // started".
+        // Deliberately not awaited: starts the terminal write and returns immediately - the same shape as the CLI's un-awaited detached call reaching the inner mutation lock before `execute()` returns.
+        // The hook above pauses this write mid-rename, simulating "already past the last liveness check, mid-durable-write" rather than "not yet started".
         detached.promise = completion
           .complete(completionEvidence({}, verifying.identity))
           .finally(() => {
@@ -1769,10 +1714,8 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
 
     await waitUntil(() => hookEntered, 5_000);
 
-    // The callback has already returned and the terminal write is paused
-    // mid-rename. `revoke()` runs inside withUpdateExecutorCompletionSegment's
-    // own `finally`, so the ENTIRE outer segment promise must not settle
-    // until the in-flight write actually finishes.
+    // The callback has already returned and the terminal write is paused mid-rename.
+    // `revoke()` runs inside withUpdateExecutorCompletionSegment's own `finally`, so the entire outer segment promise must not settle until the in-flight write actually finishes.
     let outerSettled = false;
     void outcomePromise.then(() => {
       outerSettled = true;
@@ -1787,9 +1730,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
     expect(completeSettled).toBe(true);
     expect(outcome.kind).toBe("ran");
     if (outcome.kind !== "ran") return;
-    // The callback's own return value settles independently of the detached
-    // write it started; the write's outcome is only observable through the
-    // promise it returned, asserted below.
+    // The callback's own return value settles independently of the detached write it started; the write's outcome is only observable through the promise it returned, asserted below.
     expect(outcome.result).toBe("returned-with-completion-in-flight");
 
     if (detached.promise === null) {

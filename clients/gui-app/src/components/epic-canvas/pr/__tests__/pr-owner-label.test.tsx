@@ -56,13 +56,7 @@ function treeIndexFromParents(): EpicTreeIndex {
  */
 let deletedNodeIds: ReadonlySet<string> = new Set<string>();
 
-// Both lookup hooks run unconditionally (rules-of-hooks) with the id gated to
-// `null` for the kind that doesn't apply, so each owner resolves through
-// exactly one of them. Titled from the id so every chip is distinguishable.
-//
-// `useEpicAgentNodeIds` and the two lookups are driven by ONE fixture: a real
-// projection cannot hold a node in its id list and fail to resolve its title,
-// and a mock that let those disagree would test a state the app cannot reach.
+// `useEpicAgentNodeIds` and the two lookups are driven by ONE fixture: a real projection cannot hold a node in its id list and fail to resolve its title, and a mock that let those disagree would test a state the app cannot reach.
 vi.mock("@/lib/epic-selectors", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/epic-selectors")>()),
   useChatById: (id: string | null) =>
@@ -84,9 +78,7 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
 let treeIndexReads = 0;
 
 /**
- * Every id the tests hand out, minus the deleted ones. Broad on purpose: the
- * component filters by membership, so the set only has to CONTAIN the owners a
- * test renders.
+ * Broad on purpose: the component filters by membership, so the set only has to CONTAIN the owners a test renders.
  */
 let presentNodeIds: readonly string[] = [];
 
@@ -101,10 +93,7 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile }),
 }));
 
-// A session HANDLE has to exist for `EpicSessionGate` to render the owner row
-// at all - the projection hooks above are mocked, but the gate reads the raw
-// context. Only its presence matters here; every projection read this component
-// makes is intercepted above, so the handle is never dereferenced.
+// Only its presence matters here; every projection read this component makes is intercepted above, so the handle is never dereferenced.
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useMaybeOpenEpicHandle: () => ({ epicId: "epic-1" }),
 }));
@@ -146,11 +135,6 @@ afterEach(() => {
   treeIndexReads = 0;
 });
 
-/**
- * The popover row for an owner, by the label `useChatById` is mocked to give.
- * Scoped to the list: an inline badge carries the same `Open <title>` name, so
- * an unscoped query matches twice for any owner that is also a visible chip.
- */
 function ownerRow(ownerId: string): HTMLElement {
   return within(screen.getByTestId("pr-owner-overflow-list")).getByLabelText(
     `Open Chat ${ownerId}`,
@@ -242,11 +226,6 @@ describe("PrOwnerBadges overflow", () => {
   });
 });
 
-/**
- * Worktree bindings cascade on epic delete but not on chat delete, so a PR
- * keeps naming owners whose chat is gone. They used to render as bare "Removed
- * chat" text in a row of pills - no title, no tile, nothing to click.
- */
 describe("PrOwnerBadges deleted owners", () => {
   it("renders nothing for an owner whose chat has been deleted", () => {
     deletedNodeIds = new Set(["chat-2"]);
@@ -309,21 +288,9 @@ describe("PrOwnerBadges deleted owners", () => {
   });
 });
 
-/**
- * The reported bug: a PR derived from a chat AND the sub-agents it spawned
- * listed them flat, and since a spawned agent inherits its parent's title the
- * popover read as the same chat repeated once per child.
- *
- * Indent values are the sidebar's own arithmetic (`BASE_PAD_LEFT` 8 +
- * `INDENT_PX` 16 per level), asserted as literals so a change to either
- * constant has to be a deliberate change to this expectation too.
- */
 describe("PrOwnerBadges overflow hierarchy", () => {
   /**
-   * The forest is only ever LOOKED at through an open popover, but the tree it
-   * is built from churns on every rename, reparent and agent create/delete.
-   * Subscribing from the collapsed chip would put that rebuild on every `+N`
-   * on the surface - once per PR row - for a list nobody has asked to see.
+   * The forest is only ever LOOKED at through an open popover, but the tree it is built from churns on every rename, reparent and agent create/delete.
    */
   it("does not read the agent tree until the overflow is opened", () => {
     parentByNodeId = { "chat-1": null, "chat-2": "chat-1" };
@@ -362,11 +329,8 @@ describe("PrOwnerBadges overflow hierarchy", () => {
   });
 
   /**
-   * `role="tree"` advertises a composite widget - roving focus, arrow-key
-   * navigation, selection - and this list implements none of it: the rows are
-   * plain buttons and the forest never collapses. Nesting is carried by the
-   * `<ul>`/`<li>` structure instead, so the announced interaction cannot
-   * promise more than the markup delivers.
+   * `role="tree"` advertises a composite widget - roving focus, arrow-key navigation, selection - and this list implements none of it: the rows are plain buttons and the forest never collapses.
+   * Nesting is carried by the `<ul>`/`<li>` structure instead, so the announced interaction cannot promise more than the markup delivers.
    */
   it("announces a plain nested list rather than an unimplemented tree widget", () => {
     parentByNodeId = { "chat-1": null, "chat-2": "chat-1" };
@@ -385,11 +349,8 @@ describe("PrOwnerBadges overflow hierarchy", () => {
   });
 
   /**
-   * jsdom has no layout engine, so this pins the CLASS CONTRACT the scrolling
-   * depends on rather than observing a scroll. The original bug was a
-   * `ScrollArea` under a `max-h` with no definite height, whose viewport
-   * resolved to `auto` - it never scrolled and the rows painted outside the
-   * popover.
+   * jsdom has no layout engine, so this pins the CLASS CONTRACT the scrolling depends on rather than observing a scroll.
+   * The original bug was a `ScrollArea` under a `max-h` with no definite height, whose viewport resolved to `auto` - it never scrolled and the rows painted outside the popover.
    */
   it("caps the popover against measured space and viewport, never a fixed rem", () => {
     renderBadges(chatOwners(12));
@@ -414,11 +375,8 @@ describe("PrOwnerBadges overflow hierarchy", () => {
   });
 
   /**
-   * Same jsdom caveat as the height cap above: this pins the class contract, not
-   * an observed layout. The width used to be SET (`w-[min(80vw,20rem)]`), so a
-   * two-row list painted a mostly-empty column and a deep lineage - whose indent
-   * eats the title column that IS the reason to open this list - got no more
-   * room on a display with plenty. It is now sized by content and only capped.
+   * Same jsdom caveat as the height cap above: this pins the class contract, not an observed layout.
+   * It is now sized by content and only capped.
    */
   it("sizes the popover to its content and caps the width rather than setting it", () => {
     renderBadges(chatOwners(12));
@@ -433,9 +391,7 @@ describe("PrOwnerBadges overflow hierarchy", () => {
 
     const widthCap = /max-w-\[[^\]]*\]/.exec(className)?.[0];
     expect(widthCap).toBeDefined();
-    // Never wider than the space Radix measured, nor than the viewport - and
-    // each var needs a fallback, since an unmeasured one invalidates `min()`
-    // and drops the cap entirely.
+    // Never wider than the space Radix measured, nor than the viewport - and each var needs a fallback, since an unmeasured one invalidates `min()` and drops the cap entirely.
     expect(widthCap).toContain(
       "var(--radix-popover-content-available-width,100vw)",
     );
@@ -471,8 +427,6 @@ describe("PrOwnerBadges overflow hierarchy", () => {
   });
 
   it("keeps an owner at the top level when its parent is not itself an owner", () => {
-    // `chat-2`'s parent is a chat the PR did NOT come from - promoting it to a
-    // root beats inventing a row for a chat that is not in the set.
     parentByNodeId = {
       "chat-1": null,
       "chat-2": "chat-outside-the-set",

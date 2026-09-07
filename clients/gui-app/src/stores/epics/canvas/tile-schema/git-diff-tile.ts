@@ -1,9 +1,4 @@
-/**
- * Schema for `git-diff` tiles. `parse` recomputes the tile `id` from the
- * host + payload via `gitDiffTileId` rather than trusting the persisted
- * value - older persisted tiles carried a random uuid, so recomputing on
- * rehydrate makes dedup self-healing with no migration step.
- */
+/** Schema for `git-diff` tiles. */
 import type { GitStage } from "@traycer/protocol/host";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { gitBundleGroupLabel, gitDiffTileId } from "@/lib/git/git-diff-tile";

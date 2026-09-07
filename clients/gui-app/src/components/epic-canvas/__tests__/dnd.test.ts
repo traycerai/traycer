@@ -896,15 +896,6 @@ describe("getEpicCanvasDropPreview", () => {
     ).toBeNull();
   });
 
-  /**
-   * The corridor's WIRING, not its geometry.
-   *
-   * `pane-corridor-geometry.test.ts` covers the pure function exhaustively, but
-   * nothing asserted that `getEpicCanvasDropPreview` actually consults it - the
-   * `useNeutralCorridor === true` branch had no direct test, so the pure
-   * geometry could have been correct while the consumer ignored it. These are
-   * the two answers that differ between the branches.
-   */
   describe("neutral corridor wiring", () => {
     const paneRect = { left: 0, top: 0, width: 600, height: 600 };
     const bodyTarget = {
@@ -923,9 +914,7 @@ describe("getEpicCanvasDropPreview", () => {
     });
 
     it("still commits a split at the same point with the corridor disabled", () => {
-      // The same coordinates under the legacy nearest-edge fallback resolve to
-      // a position - which is precisely the behaviour change the corridor makes,
-      // and why the flag has to be passed explicitly at every call site.
+      // The same coordinates under the legacy nearest-edge fallback resolve to a position - which is precisely the behaviour change the corridor makes, and why the flag has to be passed explicitly at every call site.
       const corridorPoint = { x: 120, y: 300 };
       expect(
         getEpicCanvasDropPreview(bodyTarget, paneRect, corridorPoint, false),

@@ -4,13 +4,6 @@ import {
   type DeviceFlowResultPayload,
 } from "../device-flow-controller";
 
-/**
- * Drives the main-process device-flow controller against a mocked global
- * `fetch` so the `/device/authorize` + `/device/token` poll loop runs end to
- * end without a real authn service. Covers the Finding 7/9 guarantees: a
- * terminal result is delivered exactly once, cancellation stops the loop and
- * delivers nothing, and an authorize failure is reported as `ok: false`.
- */
 const AUTHN = "http://authn.test";
 // A slot-suffixed dev scheme, the shape that most needs to round-trip: the
 // /device page must deep-link back to THIS run, not an installed sibling.

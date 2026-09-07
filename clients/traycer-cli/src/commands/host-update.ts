@@ -41,82 +41,14 @@ import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import { assertHostNotBusy } from "../host/busy-check";
 import { createServiceController, serviceLabelFor } from "../service";
 
-// `traycer host update [--version X] [--force]` - the composite (Host Update Layer
-// Redesign Tech Plan, "New/changed commands" > `host update`, D6): stage
-// whatever `latest` requires (reusing an existing stage, explicit-
-// incomparable policy - a `local-*` install proceeds), then promote it.
-// `downloadAndStageHost` runs its OWN brief lock spans internally (no
-// network transfer ever runs under `cli-lock` - plan rule 1); only the
-// apply half below acquires the lock, matching `host apply`'s own
-// contract that the caller holds it across reconcile/read/no-op/busy/
-// commit. An explicit `--release X --allow-downgrade` below the installed
-// version uses a private install source instead, with the same progress,
-// mutation authority, busy checks, and post-swap health verification.
-//
-// Busy (D6): the stage is kept - `applyHost`'s busy check runs before it
-// touches the stage - and this command re-throws `E_HOST_BUSY` with the
-// staged version attached to `details`, rather than the generic
-// `details: null` `assertHostNotBusy` throws on its own.
-//
-// SUCCESS CONTRACT: when an update is actually applied, exit 0 here means a
-// host came back healthy after the swap. Two limits are deliberate and worth
-// naming rather than overstating:
-//   - an install already at the target whose RUNNING host is also at the
-//     target short-circuits before the probe and re-checks nothing. When the
-//     running host is NOT at the target (bytes committed by `host apply
-//     --no-service` and never activated), this command owes the activation
-//     and performs it - restart, marker, probe - see `readActivationState`;
-//   - `probeHostHealth` asks "is the recorded pid alive and its port
-//     accepting?" - it does not compare versions. On the Desktop-managed macOS
-//     degraded path a surviving OLD host can answer it, so a healthy probe is
-//     not by itself proof that the applied bytes are the ones serving.
-//     `traycer host status` reports the running version.
-// A version-comparing probe was tried and backed out: pid.json's version can
-// lag a restart, so it turned successful updates into failures - a worse
-// outcome than the narrower claim.
-// The post-apply `probeHostHealth` below is what earns the claim when it runs,
-// and a host that committed cleanly but never came back exits non-zero with
-// `E_HOST_UPDATE_HEALTH_CHECK_FAILED` (no rollback - see the note at the
-// probe). This is deliberately stronger than `host apply`'s exit 0, which
-// promises only that the bytes committed; `commands/host-apply.ts` records
-// why the low-level primitive must keep reporting "applied but not
-// converged" as a successful, inspectable outcome instead of an error.
-//
-// Legacy wire-contract compat: Desktop's `host-management-ipc.ts` runs
-// `host update`'s stdout through `projectInstallResult`, which reads a
-// *flat* legacy shape off `data` (`version`, `installedAt`,
-// `executablePath`, `source`, `archiveSha256`, `signatureKeyId`,
-// `sizeBytes`, `previousVersion`, `serviceLifecycle`) and silently
-// degrades every field to a fallback ("", 0, "none") if the shape
-// changes - Desktop bundles a version-matched CLI (D7), so "this CLI +
-// Desktop's not-yet-rewired handler" is a real shipped pairing, not a
-// hypothetical (D6's rejected-alternative note: "breaks the existing
-// `HostInstallResult` projection mid-migration"). `host apply` is a
-// brand-new command with no such consumer and is free to use
-// `ApplyHostOutcome` directly (see `commands/host-apply.ts`); this
-// compat boundary is scoped to `host update` alone - remove only when
-// Desktop's `host update` invocation is deleted (post ticket-4 cleanup).
+// Stage then apply. Network never runs under `cli-lock`. Exit 0 after an apply means the host came back healthy; Desktop still reads the flat legacy `data` shape.
 export interface HostUpdateArgs {
   /** Explicit installs may downgrade; automatic update callers never opt in. */
   readonly allowDowngrade: boolean;
   readonly force: boolean;
   /** `null` stages the latest registry version; an explicit value is a pin. */
   readonly versionRequest?: string | null;
-  /**
-   * Correlation nonce for the dispatch ACK (Ticket 07 §5.2.8), or `null` when
-   * this run was not dispatched by a host resolver waiting to name the attempt.
-   *
-   * A nonce, never a token: it grants nothing, so argv is a legitimate carrier
-   * for it. The child stamps it into the sibling ACK file at durable-claim
-   * time, and the resolver accepts an ACK only when the nonce matches one it
-   * minted for a child it spawned.
-   *
-   * Consumed at the schema-v2 executor's acknowledgement seam. That junction is
-   * the CUTOVER: today `host update` runs the legacy path, whose contender
-   * admission is `legacy-update-shadow` and which creates no schema-v2 attempt
-   * to acknowledge, so a nonce passed now is carried and not stamped. That is
-   * the same darkness the resolver's wait ships with, and the two flip together.
-   */
+  /** Correlation nonce for the dispatch ACK (Ticket 07 §5.2.8), or `null` when this run was not dispatched by a host resolver waiting to name the attempt. A nonce, never a token: it grants nothing, so argv is a legitimate carrier for it. */
   readonly ackNonce: string | null;
 }
 
@@ -139,10 +71,7 @@ export interface LegacyHostUpdateResult {
   readonly serviceLifecycle: LegacyHostUpdateServiceLifecycle;
 }
 
-// Matches `projectInstallResult`'s own fallback when `serviceLifecycle`
-// is absent from the payload - used whenever this command's own
-// operation took no service action (a genuine no-op) rather than
-// hand-rolling an equivalent-but-distinct literal.
+// Matches `projectInstallResult`'s own fallback when `serviceLifecycle` is absent from the payload - used whenever this command's own operation took no service action (a genuine no-op) rather than hand-rolling an equivalent-but-distinct literal.
 const NO_SERVICE_ACTION_LIFECYCLE: LegacyHostUpdateServiceLifecycle = {
   priorServiceState: "not-installed",
   stoppedBeforeSwap: false,
@@ -158,14 +87,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       force: args.force,
     });
 
-    // Ticket 07 §5.2.8. FIRST, before `downloadAndStageHost` writes anything:
-    // a run dispatched with a nonce this build cannot honour has already lost
-    // the correlation its caller is waiting on, and discovering that after
-    // staging bytes would mean doing destructive work for a dispatch that can
-    // only ever report indeterminate.
-    //
-    // The returned callback is the executor segment's `acknowledge` hook, so
-    // the stamp lands after the claim is durable rather than beside it.
+    // Ticket 07 §5.2.8.
+    // FIRST, before `downloadAndStageHost` writes anything: a run dispatched with a nonce this build cannot honour has already lost the correlation its caller is waiting on, and discovering that after staging bytes would mean doing destructive work for a dispatch that can only ever report indeterminate.
     const dispatchAckAcknowledgement = installDispatchAckStamper(
       hostHomeDir(environment),
       args.ackNonce,
@@ -186,16 +109,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       preparation.download.outcome === "short-circuit" &&
       preparation.download.reason === "installed-up-to-date";
     const needsApply = !installedUpToDate;
-    // "Installed" is a fact about `install.json`; "running" is a fact about
-    // the process. The two disagree whenever the bytes were swapped by a
-    // caller that could not (or did not) restart the host - Desktop's launch
-    // reconcile runs `host apply --no-service` and then activates through
-    // SMAppService, and when that cycle parks the OLD host keeps serving on
-    // top of the NEW install record indefinitely. This command then answered
-    // "installed-up-to-date" to a Settings click made precisely BECAUSE the
-    // live version was behind, exited 0 having changed nothing, and the GUI
-    // toasted "Updating…" over a host that never moved. Activation debt is
-    // therefore an update this command owes, not a no-op it may report.
+    // "Installed" is a fact about `install.json`; "running" is a fact about the process.
+    // The two disagree whenever the bytes were swapped by a caller that could not (or did not) restart the host - Desktop's launch reconcile runs `host apply --no-service` and then activates through SMAppService, and when that cycle parks the OLD host keeps serving on top of the NEW install record indefinitely.
     const activationReading = installedUpToDate
       ? await readActivationState(environment)
       : null;
@@ -216,15 +131,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     const needsActivate = activationDebt !== null;
     const needsWork = needsApply || needsActivate;
 
-    // A `failed` marker outlives the failure it reported: the post-swap
-    // health probe can time out on a host that finishes starting a moment
-    // later, and nothing on the legacy path ever revisits the file. Every
-    // @1.3 host then renders that stale failure indefinitely, and a retry
-    // cannot clear it because a retry with nothing to do returns before the
-    // marker is touched. So the no-work path reconciles it here - and ONLY
-    // when the running host has been OBSERVED at the installed version. A
-    // host that is down, or a dev build, leaves the marker alone: for those
-    // the failure may still be exactly true.
+    // A `failed` marker outlives the failure it reported: the post-swap health probe can time out on a host that finishes starting a moment later, and nothing on the legacy path ever revisits the file.
+    // Every cannot clear it because a retry with nothing to do returns before the marker is touched.
     if (
       !needsWork &&
       activationReading !== null &&
@@ -233,24 +141,15 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       await clearStaleFailedMarker(ctx.runtime.logger, environment);
     }
 
-    // Remote Host Support T16: the daemon polls `update-progress.json` and
-    // folds it into `host.status@1.1` / the drain gate, so an update that is
-    // in flight (or that failed) is visible to a remote client that cannot
-    // watch this process. Written BEFORE the apply half touches the install
-    // and terminated on every exit path below. Marker I/O is deliberately
-    // never allowed to fail the update itself - a missing marker degrades
-    // the remote progress readout, it must not break the local update.
+    // Remote Host Support T16: the daemon polls `update-progress.json` and folds it into `host.status@1.1` / the drain gate, so an update that is in flight (or that failed) is visible to a remote client that cannot watch this process.
+    // Written BEFORE the apply half touches the install and terminated on every exit path below.
     const targetVersion =
       activationDebt !== null
         ? activationDebt.installedVersion
         : preparation.kind === "downgrade"
           ? preparation.version
           : downloadTargetVersion(preparation.download);
-    // The marker THIS invocation wrote, kept so the clear at the end can be
-    // conditional on it: marker writes happen before their writer takes the
-    // contender lock, so by the time this command reaches its clear another
-    // updater may have landed its own `updating` at the same path, and an
-    // unconditional delete would erase that updater's only progress signal.
+    // The marker THIS invocation wrote, kept so the clear at the end can be conditional on it: marker writes happen before their writer takes the contender lock, so by the time this command reaches its clear another updater may have landed its own `updating` at the same path, and an unconditional delete would erase that updater's only progress signal.
     let writtenMarker: HostUpdateProgress | null = null;
     if (needsWork) {
       writtenMarker = progressRecord({
@@ -266,19 +165,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     }
 
     let legacy: LegacyHostUpdateResult;
-    // What was decided BEFORE the lock is whether to enter the activation
-    // path; what happened UNDER it is a separate fact, because the debt can
-    // clear (another actor restarted the host) or the record can move
-    // (another actor installed) while this command waits for admission. The
-    // health probe and the failed-marker stamp below belong to work that was
-    // actually performed: probing a host this command never touched, and
-    // stamping the no-op `failed` when that probe misses, would report a
-    // failure for an update that did not happen.
+    // What was decided BEFORE the lock is whether to enter the activation path; what happened UNDER it is a separate fact, because the debt can clear (another actor restarted the host) or the record can move (another actor installed) while this command waits for admission.
+    // The health probe and the failed-marker stamp below belong to work that was actually performed: probing a host this command never touched, and stamping the no-op `failed` when that probe misses, would report a failure for an update that did not happen.
     let activationPerformed = false;
-    // The version the progress marker names. Written pre-lock from the
-    // record as it stood; re-pointed when the activation path finds the
-    // record moved under the lock, so a `failed` stamp names the version
-    // that was actually being activated.
+    // The version the progress marker names.
+    // Written pre-lock from the record as it stood; re-pointed when the activation path finds the record moved under the lock, so a `failed` stamp names the version that was actually being activated.
     let markerTargetVersion = targetVersion;
     try {
       if (activationDebt !== null) {
@@ -293,16 +184,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
               error: null,
               targetVersion: installedVersion,
             });
-            // Ownership-aware like every other write after the first: a newer
-            // updater's pre-lock `updating` may already sit at the path, and
-            // an unconditional re-point would replace it with a record THIS
-            // run then clears at the end - leaving that updater's whole
-            // apply/restart without its progress signal. The re-point lands
-            // only over this run's own marker, and `writtenMarker` follows
-            // what is actually on disk: if the swap reports the marker is no
-            // longer ours, it stays pointed at the old record, so the later
-            // stamp and clear (both conditional on it) leave the newer
-            // updater's marker alone.
+            // Ownership-aware like every other write after the first: a newer updater's pre-lock `updating` may already sit at the path, and an unconditional re-point would replace it with a record THIS run then clears at the end - leaving that updater's whole apply/restart without its progress signal.
+            // The re-point lands only over this run's own marker, and `writtenMarker` follows what is actually on disk: if the swap reports the marker is no longer ours, it stays pointed at the old record, so the later stamp and clear (both conditional on it) leave the newer updater's marker alone.
             if (writtenMarker === null) {
               writtenMarker = repointed;
               markerTargetVersion = installedVersion;
@@ -364,14 +247,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
 
     const workPerformed = needsApply || activationPerformed;
     if (workPerformed) {
-      // Verify the host the swap just installed actually comes back before
-      // reporting success: a binary that commits cleanly but never listens
-      // is exactly the failure the marker exists to surface remotely.
-      //
-      // NOTE: this does NOT roll back. `applyHost` documents an explicit
-      // no-rollback contract for the staged layer, so a failed probe is
-      // reported (marker + E_HOST_UPDATE_HEALTH_CHECK_FAILED) and left for
-      // an operator/next apply rather than silently reverted here.
+      // Verify the host the swap just installed actually comes back before reporting success: a binary that commits cleanly but never listens is exactly the failure the marker exists to surface remotely.
+      // NOTE: this does NOT roll back.
       const probe = await probeHostHealth({
         environment,
         checkProcessAlive: null,
@@ -396,13 +273,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       }
     }
     if (writtenMarker !== null) {
-      // Written above whenever work was OWED, so it is cleared whenever it
-      // was - including the activation debt that another actor paid while
-      // this command waited, which leaves nothing to probe but a marker
-      // that still says `updating`. Cleared CONDITIONALLY: the lock has been
-      // released by now, and a third updater writes its `updating` before it
-      // waits for that lock, so a marker that is no longer the one written
-      // above belongs to someone whose update is still to come.
+      // Written above whenever work was OWED, so it is cleared whenever it was - including the activation debt that another actor paid while this command waited, which leaves nothing to probe but a marker that still says `updating`.
+      // Cleared CONDITIONALLY: the lock has been released by now, and a third updater writes its `updating` before it waits for that lock, so a marker that is no longer the one written above belongs to someone whose update is still to come.
       const cleared = await deleteUpdateProgressMarkerIfUnchanged(
         environment,
         writtenMarker,
@@ -453,28 +325,7 @@ interface ActivationDebt {
   readonly runningVersion: string;
 }
 
-/**
- * What the install record and the live process say about each other. Every
- * reading is named rather than collapsed to "debt or not", because the two
- * places that consult it need different things from the non-debt cases:
- * before the lock, only `debt` is a reason to act; under the lock, `debt`
- * and `no-live-host` both are, while `activated` is the reason NOT to.
- *
- * - `no-install`: nothing to activate (the caller throws later anyway);
- * - `no-live-host`: no pid metadata, or a pid that is not alive. Before the
- *   lock this is left alone - a host that is DOWN is the service manager's
- *   problem, and `host start` re-resolves the install record on every spawn.
- *   Under the lock, after a debt was seen, it means the host this command
- *   was about to replace is gone, which is not the same as replaced;
- * - `foreign-runtime`: a running version that is not a release version,
- *   against a record with no runtime stamp. A dev build is not a host this
- *   command reasons about when all it has to compare it with is the catalog
- *   version. A record WITH a runtime stamp never reads this way: the stamp is
- *   whatever the archive reported about itself (a staging host's is
- *   `staging.<epoch>.<sha>`), and equality with it is the whole test;
- * - `activated`: the committed archive is what is running;
- * - `debt`: the record and the process disagree.
- */
+/** Install record vs live process. Do not treat a healthy probe as proof of the applied version. */
 type ActivationReading =
   | { readonly kind: "no-install" }
   | { readonly kind: "no-live-host"; readonly installedVersion: string }
@@ -482,32 +333,7 @@ type ActivationReading =
   | { readonly kind: "activated" }
   | ActivationDebt;
 
-/**
- * Read the activation state of the committed install.
- *
- * "Match" is decided in the RUNTIME identity domain when the record has one.
- * `pid.json` publishes the version the host binary reports about itself,
- * and the install record keeps that same stamp as `runtimeVersion` (read
- * from the extracted archive, or stamped after its first run) precisely
- * because it can differ from the catalog `version` the caller asked for -
- * an older CLI installing a newer archive, a build whose self-reported
- * version carries a suffix the manifest does not. Ordering those two
- * domains by SemVer would skip a needed restart when they happen to read
- * equal, or restart a correctly activated host on every run when they do
- * not; equality of runtime stamps is the test Desktop uses, and it is the
- * one used here. Only a record with no runtime stamp yet falls back to the
- * catalog version, compared with the same comparator the update decision
- * itself uses (comparable and unequal).
- *
- * The comparison is on VERSION rather than on install generation because
- * `pid.json` publishes the version and nothing finer; a swap to the same
- * version (re-install of identical bytes) is invisible here, and restarting
- * for it would be gratuitous.
- *
- * Either direction of inequality is debt. A downgrade that was committed but
- * never activated leaves the running host AHEAD of the record, and the record
- * is what the operator asked for.
- */
+/** Bytes committed but not serving still owe activation. Already-serving at target short-circuits. */
 async function readActivationState(
   environment: Environment,
 ): Promise<ActivationReading> {
@@ -517,16 +343,8 @@ async function readActivationState(
   if (running === null) {
     return { kind: "no-live-host", installedVersion: installed.version };
   }
-  // The published identity verdict, not bare pid liveness: a `pid.json` that
-  // survived a crash names a pid the OS may since have handed to an unrelated
-  // process, and `isProcessAlive` would call that occupant the host. With a
-  // differing recorded version that reads as debt (and the busy gate then
-  // fails against a stale endpoint); with a matching one it reads as
-  // activated and would clear a `failed` marker over no host at all. The
-  // verdict compares the process start stamp `pid.json` published and
-  // reports `mismatch` for exactly that impostor. `indeterminate` (a record
-  // that predates the stamp, or a failed OS probe) keeps the host, the same
-  // fail-open reading every other consumer of the verdict takes.
+  // The published identity verdict, not bare pid liveness: a `pid.json` that survived a crash names a pid the OS may since have handed to an unrelated process, and `isProcessAlive` would call that occupant the host.
+  // With a differing recorded version that reads as debt (and the busy gate then fails against a stale endpoint); with a matching one it reads as activated and would clear a `failed` marker over no host at all.
   const identity = await getPublishedProcessIdentityVerdict(
     running.pid,
     running.processStartIdentity,
@@ -535,12 +353,8 @@ async function readActivationState(
     return { kind: "no-live-host", installedVersion: installed.version };
   }
   if (installed.runtimeVersion !== null) {
-    // Runtime-stamp domain: equality decides, and the STAMPS are not
-    // required to be SemVer. A staging host publishes
-    // `staging.<epoch>.<sha>` and the record keeps that same stamp
-    // (`readExtractedRuntimeVersion`), so a SemVer guard applied before this
-    // comparison would classify every staging host as foreign and turn both
-    // its activated and its indebted states into no-ops.
+    // Runtime-stamp domain: equality decides, and the STAMPS are not required to be SemVer.
+    // A staging host publishes `staging.<epoch>.<sha>` and the record keeps that same stamp (`readExtractedRuntimeVersion`), so a SemVer guard applied before this comparison would classify every staging host as foreign and turn both its activated and its indebted states into no-ops.
     return running.version === installed.runtimeVersion
       ? { kind: "activated" }
       : {
@@ -549,9 +363,8 @@ async function readActivationState(
           runningVersion: running.version,
         };
   }
-  // Catalog-version domain (a record with no runtime stamp yet): the
-  // release-version policy applies. A running version that is not a release
-  // version is not a host this command reasons about.
+  // Catalog-version domain (a record with no runtime stamp yet): the release-version policy applies.
+  // A running version that is not a release version is not a host this command reasons about.
   if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
   const comparison = compareHostVersions(running.version, installed.version);
   if (!comparison.comparable || comparison.ordering === "equal") {
@@ -564,18 +377,7 @@ async function readActivationState(
   };
 }
 
-/**
- * Remove a `failed` progress marker that the observed state contradicts.
- *
- * The delete is CONDITIONAL on the marker still being the `failed` record
- * that was read: another updater racing this no-op can replace it with a
- * live `updating` in between, and deleting that would erase the legacy
- * path's only progress signal for the whole download → swap → restart. A
- * lock would not close the window (the `updating` write precedes its
- * writer's lock acquisition), so the marker module re-reads and compares
- * immediately before the unlink. Marker I/O never fails the command (same
- * rule as the writes).
- */
+/** Remove a `failed` progress marker that the observed state contradicts. The delete is CONDITIONAL on the marker still being the `failed` record that was read: another updater racing this no-op can replace it with a live `updating` in between, and deleting that would erase the legacy path's only progress signal for the whole download → swap → restart. */
 async function clearStaleFailedMarker(
   logger: ILogger,
   environment: Environment,
@@ -599,48 +401,7 @@ async function clearStaleFailedMarker(
   }
 }
 
-/**
- * The activation half of an update whose bytes are already committed: stop
- * the running host and relaunch it from the install record, under the same
- * busy gate and the same contender admission a full apply runs under.
- *
- * `controller.restart` is the SAME actuator `host restart` uses, so a
- * Desktop-managed macOS agent is restarted cooperatively (claim → commit →
- * kickstart) rather than by a `launchctl` the CLI does not own - and the
- * supervisor it relaunches re-resolves the install record on spawn, which is
- * what turns "committed" into "running".
- *
- * Projected as an UPDATE, not a no-op: `previousVersion` is the version that
- * was serving, so the human summary and Desktop's legacy projection both say
- * `rc.1 → rc.2`, which is what actually happened from the operator's seat.
- *
- * The debt the caller detected is deliberately NOT a parameter: it was read
- * outside the contender lock, and `host restart` shares that lock. Desktop's
- * parked-registration fallback runs exactly that command on exactly this
- * host, so a Settings click that arrives while it holds the lock would
- * otherwise wait its turn and then restart a host that had just come up on
- * the committed bytes - costing it its connections and reporting a
- * `rc.1 → rc.2` transition that the other actor performed. The debt is
- * re-derived under the lock and a cleared debt is the plain no-op.
- *
- * `activated` tells the caller which of the two happened, because the two
- * need different aftercare (a health probe for a restart, none for a no-op).
- * `onInstalledVersionUnderLock` is called with the record's version as read
- * under the lock, before anything is restarted, so the caller can re-point a
- * progress marker it wrote from the pre-lock record if another actor
- * installed a different version in between.
- *
- * A debt is CLEARED only by observing the running host at the installed
- * version. A host that is simply gone under the lock - it exited, crashed,
- * or is mid-relaunch and has not republished `pid.json` - is not cleared
- * debt: reporting the no-op there would skip the health probe, delete the
- * marker and exit 0 over a host that may never come back. That case is
- * relaunched through the same stop → relaunch pair (the stop half treats an
- * absent host as a recycle, not an error), so the caller's probe verifies
- * that the committed bytes are actually serving. `lastSeenRunningVersion`
- * is what was serving when the debt was detected, and is the best available
- * fact about "before" for that report.
- */
+/** Activation half of an already-committed update: stop, start, probe. Do not restage. */
 async function activateInstalledAndProjectLegacy(
   environment: Environment,
   force: boolean,
@@ -658,12 +419,8 @@ async function activateInstalledAndProjectLegacy(
     admission: "legacy-update-shadow",
   };
   return withCliUpdateContender(contenderOptions, async (capability) => {
-    // Re-read under the lock: BOTH halves the debt was computed from may have
-    // moved while this command waited for admission - the record through
-    // another apply, the running version through another actor's restart.
-    // Decided BEFORE the busy gate: a host that is already current owes
-    // nothing, so its live work is no reason to fail the command (and stamp
-    // a failed marker) - it is the no-op, busy or not.
+    // Re-read under the lock: BOTH halves the debt was computed from may have moved while this command waited for admission - the record through another apply, the running version through another actor's restart.
+    // Decided BEFORE the busy gate: a host that is already current owes nothing, so its live work is no reason to fail the command (and stamp a failed marker) - it is the no-op, busy or not.
     const installed = await requireInstalled(environment);
     const reading = await readActivationState(environment);
     if (reading.kind !== "debt" && reading.kind !== "no-live-host") {
@@ -672,20 +429,13 @@ async function activateInstalledAndProjectLegacy(
     const previousVersion =
       reading.kind === "debt" ? reading.runningVersion : lastSeenRunningVersion;
     await onInstalledVersionUnderLock(installed.version);
-    // Same gate `applyHost` runs before it touches anything: a host with
-    // live work is not restarted under it unless the caller said `--force`.
+    // Same gate `applyHost` runs before it touches anything: a host with live work is not restarted under it unless the caller said `--force`.
     // A host that is gone has no work to protect, so the gate is not asked.
     if (!force && reading.kind === "debt") {
       await assertHostNotBusy(environment);
     }
-    // The stop → relaunch pair `host restart` drives, with `force` threaded
-    // into the stop half. The busy gate above is only the pre-check: on a
-    // Desktop-managed macOS host the stop itself claims a cooperative
-    // stand-down that a busy host denies, so a `--force` that skipped the
-    // gate but not the claim would still fail to activate - in precisely
-    // the recovery case `host update --force` exists for. `stopForRestart`
-    // also reports an unreachable host as a forced recycle instead of
-    // throwing, so the relaunch below repairs it rather than aborting.
+    // The stop → relaunch pair `host restart` drives, with `force` threaded into the stop half.
+    // The busy gate above is only the pre-check: on a Desktop-managed macOS host the stop itself claims a cooperative stand-down that a busy host denies, so a `--force` that skipped the gate but not the claim would still fail to activate - in precisely the recovery case `host update --force` exists for.
     const controller = createServiceController();
     const label = serviceLabelFor(environment);
     const stopped = await stopHostForRestartWithAttempt(
@@ -771,20 +521,7 @@ async function writeUpdateProgressMarkerSafely(
 
 // Terminates the "updating" marker with the real cause so the daemon reports
 // a failed update instead of an update that appears to still be running.
-/**
- * Stamp this invocation's failure - but only over ITS OWN marker.
- *
- * Marker writes precede their writer's lock acquisition, so by the time
- * this command fails another updater may already have landed its `updating`
- * at the same path. That updater's run is the one whose outcome now matters;
- * stamping `failed` over its live marker would hide its progress for the
- * whole update and report a failure that is not about it. An absent marker
- * does not get the stamp either (see `replaceUpdateProgressMarkerIfUnchanged`
- * for why an empty live path is not proof of an idle peer); the failure is
- * still reported by exit code and log. `ours` is `null` only when this run
- * never wrote a marker, in which case there is nothing to compare against and
- * the stamp lands unconditionally.
- */
+/** Stamp this invocation's failure - but only over ITS OWN marker. Marker writes precede their writer's lock acquisition, so by the time this command fails another updater may already have landed its `updating` at the same path. */
 async function markUpdateFailed(
   logger: ILogger,
   environment: Environment,
@@ -797,9 +534,7 @@ async function markUpdateFailed(
     await writeUpdateProgressMarkerSafely(logger, environment, failed);
     return;
   }
-  // One atomic compare-and-swap, not a read followed by a write: the other
-  // updater's `updating` can land between those two, and the write would then
-  // bury it under this failure for the whole of its update.
+  // One atomic compare-and-swap, not a read followed by a write: the other updater's `updating` can land between those two, and the write would then bury it under this failure for the whole of its update.
   const outcome = await replaceUpdateProgressMarkerIfUnchanged(
     environment,
     ours,
@@ -843,13 +578,8 @@ async function applyAndProjectLegacy(
       });
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
-        // The stage was left intact by `applyHost`'s own busy check (it
-        // runs before any commit) - read it HERE, still inside the same
-        // lock span `applyHost`'s busy decision was made under (never
-        // re-acquired), so the reported version can't have changed out
-        // from under the decision the way a read after this call's own
-        // lock release could. D6's "staged-version details in the error
-        // payload" contract needs this coherence, not just a value.
+        // The stage was left intact by `applyHost`'s own busy check (it runs before any commit) - read it HERE, still inside the same lock span `applyHost`'s busy decision was made under (never re-acquired), so the reported version can't have changed out from under the decision the way a read after this call's own lock release could.
+        // D6's "staged-version details in the error payload" contract needs this coherence, not just a value.
         const staged = await readHostStagedRecord(environment);
         throw cliError({
           code: CLI_ERROR_CODES.HOST_BUSY,
@@ -861,10 +591,7 @@ async function applyAndProjectLegacy(
       throw err;
     }
     if (outcome.outcome === "no-op") {
-      // Still holding the same lock `applyHost` itself ran under
-      // (it assumes the caller holds `cli-lock`, never re-acquires)
-      // - this re-read observes exactly the state `applyHost` had
-      // internal access to but didn't return, not a fresh race.
+      // Still holding the same lock `applyHost` itself ran under (it assumes the caller holds `cli-lock`, never re-acquires) - this re-read observes exactly the state `applyHost` had internal access to but didn't return, not a fresh race.
       return projectNoOp(await requireInstalled(environment));
     }
     if (outcome.outcome === "stage-fingerprint-mismatch") {
@@ -936,14 +663,8 @@ function projectApplied(
   };
 }
 
-// `LegacyHostUpdateServiceLifecycle` is a pinned, frozen wire shape (see
-// the module doc comment) - it must not silently grow to track new
-// `ServiceState` variants. `externally-managed` (macOS SMAppService-owned
-// label, added after this shape was pinned) has no legacy equivalent;
-// degrade it to `not-installed` exactly as Desktop's own
-// `projectInstallResult` reader already degrades any `priorServiceState`
-// value outside its own three-way union, so the projected wire value
-// matches what an old-CLI payload would already read as.
+// `LegacyHostUpdateServiceLifecycle` is a pinned, frozen wire shape (see the module doc comment) - it must not silently grow to track new `ServiceState` variants.
+// `externally-managed` (macOS SMAppService-owned label, added after this shape was pinned) has no legacy equivalent; degrade it to `not-installed` exactly as Desktop's own `projectInstallResult` reader already degrades any `priorServiceState` value outside its own three-way union, so the projected wire value matches what an old-CLI payload would already read as.
 function toLegacyPriorServiceState(
   state: "running" | "stopped" | "not-installed" | "externally-managed",
 ): "running" | "stopped" | "not-installed" {

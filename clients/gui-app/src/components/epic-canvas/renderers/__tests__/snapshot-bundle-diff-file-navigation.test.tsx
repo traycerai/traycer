@@ -22,10 +22,7 @@ import {
   type SnapshotCumulativeBundleDiffTileRef,
 } from "@/components/epic-canvas/renderers/snapshot-bundle-diff-tile-content";
 
-// The real hook's argument shape - tracked via the wrapping mock below so a
-// `.pdf` entry's computed `coverageState` can be asserted without replacing
-// the hook's return, which the notifySectionMounted/registerLoadedPatch
-// assertions below still depend on.
+// The real hook's argument shape - tracked via the wrapping mock below so a `.pdf` entry's computed `coverageState` can be asserted without replacing the hook's return, which the notifySectionMounted/registerLoadedPatch assertions below still depend on.
 interface RegisterBundleDiffTileFindAdapterCall {
   readonly tileInstanceId: string;
   readonly tileKind: TileKindId;
@@ -57,9 +54,7 @@ const testState = vi.hoisted(() => ({
   ),
   notifySectionMounted: vi.fn(),
   registerLoadedPatch: vi.fn(),
-  // Tracked so the coverage-state test can assert what `files` the content
-  // component computed per entry, rather than only what the mocked
-  // registration hook returns.
+  // Tracked so the coverage-state test can assert what `files` the content component computed per entry, rather than only what the mocked registration hook returns.
   useRegisterBundleDiffTileFindAdapter:
     vi.fn<(args: RegisterBundleDiffTileFindAdapterCall) => void>(),
 }));
@@ -139,10 +134,7 @@ vi.mock("@/components/diff/diff-content-primitive", () => ({
 }));
 
 /*
- * Counting PASSTHROUGHS, not stubs: every test in this file still gets the
- * real patch/counts for a text entry. Only the PDF-skip test below reads the
- * call list, to pin that a PDF entry's (possibly ASCII-authored, possibly
- * large) contents never reach either function.
+ * Only the PDF-skip test below reads the call list, to pin that a PDF entry's (possibly ASCII-authored, possibly large) contents never reach either function.
  */
 vi.mock("@/lib/diff/snapshot-diff-patch", async (importOriginal) => {
   const actual =
@@ -234,10 +226,7 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
     });
   });
 
-  // `snapshotBundleFileCoverageState` checks the PDF extension BEFORE the
-  // reason check - a PDF's blobs are never captured, so it must read as
-  // "binary" (the same terminal coverage the git bundle gives its media
-  // rows) rather than as an "unloaded" file that was simply never searched.
+  // `snapshotBundleFileCoverageState` checks the PDF extension BEFORE the reason check - a PDF's blobs are never captured, so it must read as "binary" (the same terminal coverage the git bundle gives its media rows) rather than as an "unloaded" file that was simply never searched.
   it("computes binary coverage state for a .pdf bundle entry", () => {
     const node = snapshotBundleNode();
 
@@ -269,10 +258,7 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
     expect(textFile?.coverageState).toBe("unloaded");
   });
 
-  // A PDF row renders a placeholder, never a text diff - `buildSnapshotUnifiedPatch`
-  // and `diffLineCountsFromContents` must not be handed its (possibly
-  // ASCII-authored, possibly large) contents. A sibling text entry in the
-  // same bundle still gets both calls.
+  // A PDF row renders a placeholder, never a text diff - `buildSnapshotUnifiedPatch` and `diffLineCountsFromContents` must not be handed its (possibly ASCII-authored, possibly large) contents.
   it("skips buildSnapshotUnifiedPatch and diffLineCountsFromContents for a .pdf bundle entry", () => {
     const node = snapshotBundleNode();
 

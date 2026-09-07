@@ -13,20 +13,8 @@ import {
 } from "./browser-store-key-ledger";
 
 /**
- * Whether this machine keeps browser logins across restarts - Chrome's model,
- * silently on by default. There is no consent state here and no keystore probe:
- * a `persist:` partition reaches the OS keystore through Chromium's own cookie
- * store the moment it opens, which the `enableCookieEncryption` fuse already
- * settles at boot, so a probe could only ask a question nobody answers.
- *
- * The pref is a statement about the machine, not the Traycer account, so it
- * lives in desktop userData and never travels to the host. A missing or
- * unparseable file reads back as "on", so a corrupt pref degrades to the
- * default rather than silently signing the user out of everything.
- *
- * This is a new file name, so the four-state decision file it replaces is never
- * read: a machine that had declined saved logins gets them, which is what
- * "always on, Chrome-style" means.
+ * The pref is a statement about the machine, not the Traycer account, so it lives in desktop userData and never travels to the host.
+ * This is a new file name, so the four-state decision file it replaces is never read: a machine that had declined saved logins gets them, which is what "always on, Chrome-style".
  */
 const SAVED_LOGINS_FILE_NAME = "browser-saved-logins.json";
 
@@ -66,14 +54,7 @@ export function isBrowserSavedLoginsEnabled(): boolean {
   return saveLogins;
 }
 
-/**
- * Settings' toggle. The caller moves the live tiles onto the new jar.
- *
- * The durable write goes first and is allowed to throw: flipping the in-memory
- * flag on a write that did not land would move every tile onto the other jar
- * and report the new state, then silently revert at the next launch. The
- * rejection reaches the renderer, whose toggle reverts on it.
- */
+/** The caller moves the live tiles onto the new jar. */
 export async function setBrowserSavedLoginsEnabled(
   enabled: boolean,
 ): Promise<boolean> {
@@ -84,37 +65,13 @@ export async function setBrowserSavedLoginsEnabled(
   return saveLogins;
 }
 
-/**
- * Does this machine's keystore actually ENCRYPT what it is handed?
- *
- * On Linux `safeStorage` falls back to a `basic_text` backend that obfuscates
- * rather than encrypts, and a machine like that must not be handed anything
- * that is supposed to be at rest under an OS keystore. One predicate, so the
- * store-key wrap and the desktop identity refuse for one cause rather than
- * two. `getSelectedStorageBackend` is Linux-only, so it is asked only there.
- */
+/** On Linux `safeStorage` falls back to a `basic_text` backend that obfuscates rather than encrypts, and a machine like that must not be handed anything that is supposed to be at. */
 export function isKeystoreEncrypting(): boolean {
   if (!safeStorage.isEncryptionAvailable()) return false;
   if (process.platform !== "linux") return true;
   return safeStorage.getSelectedStorageBackend() !== "basic_text";
 }
 
-/**
- * `safeStorage.encryptString(rawKey)`, base64 for the wire: the desktop half of
- * the host's store-key handshake.
- *
- * Refused outright when the keystore does not actually encrypt: a `basic_text`
- * Linux keyring round-trips, so a wrap would SUCCEED and hand the host a blob
- * anyone holding the file can open, with the custody model silently degraded
- * to obfuscation. `null` is a defined answer - the host stays sealed, which is
- * the honest state for such a machine.
- *
- * Every blob that leaves here is recorded in the wrap ledger under the account
- * AND the host it was wrapped for - the pair is the ledger's eviction key -
- * because that record is what later lets
- * {@link unwrapStoreKey} tell this desktop's own blobs - for this account -
- * from anything else a host names.
- */
 export function wrapStoreKey(
   rawKeyBase64: string,
   userId: string,
@@ -140,17 +97,7 @@ export function wrapStoreKey(
 
 /**
  * `safeStorage.decryptString(blob)`; null when this machine cannot open it.
- *
  * A blob this desktop did not wrap is refused BEFORE the keystore sees it.
- * Decrypting on demand made this process an oracle for the caller: OSCrypt is
- * AES-CBC with a fixed IV and no MAC, so the ok/null answer over a chosen
- * ciphertext is a padding oracle against this machine's own cookie database,
- * and a forged blob that did decrypt would install a host-chosen store key.
- * A foreign blob answers null, which is what the host's heal path already
- * expects from a machine that cannot open another machine's blob. A blob this
- * machine wrapped for a DIFFERENT account is foreign by the same rule: a store
- * key is per user, and opening one account's blob for another would hand a
- * host custody it was never given.
  */
 export function unwrapStoreKey(
   wrappedKeyBase64: string,

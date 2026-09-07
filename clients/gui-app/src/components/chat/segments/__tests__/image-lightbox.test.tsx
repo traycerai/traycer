@@ -41,9 +41,7 @@ const downloadBlobToDeviceMock = vi.hoisted(() =>
     ) => Promise<{ name: string; path: string | null } | null>
   >(() => Promise.resolve({ name: "generated.png", path: null })),
 );
-/** Whether the shell under test hands files to an OS chooser. */
 const hasShareRoute = vi.hoisted(() => vi.fn<() => boolean>(() => false));
-/** Whether a Download can be honoured at all on that shell. */
 const canDownload = vi.hoisted(() => vi.fn<() => boolean>(() => true));
 const trustedMarkupSpy = vi.hoisted(() => vi.fn());
 
@@ -52,9 +50,8 @@ vi.mock("@/lib/files/save-blob-to-disk", () => ({
     saveBlobToDiskMock(blob, suggestedName),
   downloadBlobToDevice: (blob: Blob, suggestedName: string) =>
     downloadBlobToDeviceMock(blob, suggestedName),
-  // Browser-runtime shape by default: the shell's own save route IS the
-  // download, so there is no chooser and no Share control. A case that wants
-  // the share-sheet shape opts into it.
+  // Browser-runtime shape by default: the shell's own save route IS the download, so there is no chooser and no Share control.
+  // A case that wants the share-sheet shape opts into it.
   hasSeparateDownloadRoute: () => hasShareRoute(),
   canDownloadToDevice: () => canDownload(),
   // Browser-runtime shape: no path comes back, so no "Open file" action.

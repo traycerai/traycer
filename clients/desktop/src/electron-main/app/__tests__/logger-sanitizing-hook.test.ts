@@ -1,9 +1,3 @@
-/**
- * Redaction used to be per-call-site opt-in, which is the wrong shape for a
- * guarantee: it holds only where someone remembered, and the log line that
- * carries a token is written by the site that did NOT remember. `initLogger`
- * installs one `electron-log` hook instead, so a new call site inherits it.
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({

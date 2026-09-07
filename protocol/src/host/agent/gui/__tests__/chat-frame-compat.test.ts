@@ -235,11 +235,7 @@ describe("projectChatClientFrameForVersion", () => {
   });
 });
 
-/**
- * A production-shaped durable chat event. The deep `1.7` parse validates these
- * fully (unlike the shallow path's `z.custom`), so a stub with three keys is
- * rejected before the assertion under test is ever reached.
- */
+/** A production-shaped durable chat event. */
 function chatEventFixture(
   eventId: string,
   timestamp: number,
@@ -262,10 +258,8 @@ function chatEventFixture(
 }
 
 /**
- * A production-shaped durable chat event of a chosen type. The projector is
- * typed against `event.type` and `event.metadata`; a stub missing the rest of
- * `chatEventSchema` would fail the frozen deep parse before the assertion
- * under test is reached.
+ * A production-shaped durable chat event of a chosen type.
+ * The projector is typed against `event.type` and `event.metadata`; a stub missing the rest of `chatEventSchema` would fail the frozen deep parse before the assertion under test is reached.
  */
 function chatEventWith(
   eventId: string,
@@ -363,9 +357,7 @@ function textBlock(blockId: string): Record<string, unknown> {
 }
 
 function legacyInterviewBlock(blockId: string): Record<string, unknown> {
-  // Pre-1.7 shape: no outcome/drafts/settlement/diagnostics/delivery, and
-  // answers carry no selection. The normalizer's job is to supply those
-  // defaults in place without touching any other block.
+  // Pre-1.7 shape: no outcome/drafts/settlement/diagnostics/delivery, and answers carry no selection.
   return {
     blockId,
     status: "completed",
@@ -513,9 +505,7 @@ describe("chatSubscribeSnapshotServerFrameShallowSchemaV16", () => {
     const parsed =
       chatSubscribeSnapshotServerFrameShallowSchemaV16.parse(payload);
     expect(parsed.kind).toBe("snapshot");
-    // Structural: the interview still lacks 1.7 keys, proving the schema
-    // did not walk the histories. The normalizer — not this schema — supplies
-    // those defaults.
+    // Structural: the interview still lacks 1.7 keys, proving the schema did not walk the histories.
     const messages = parsed.snapshot.chat.messages;
     expect(messages).toHaveLength(1);
     const interviewAfter = extractInterviewBlocks(messages)[0];
@@ -573,11 +563,7 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
     expect(originalText[0]).toBe(textRef);
     expect(originalText[2]).toBe(populatedRef);
 
-    // A legal 1.6 frame CANNOT carry these fields, so a populated one did not
-    // come from a conforming 1.6 host - and the shallow path never validated
-    // it. Trusting it would let a mislabeled or hostile peer smuggle an
-    // unvalidated settlement authority and a "delivered" claim straight into
-    // history. Neutralized, not preserved.
+    // A legal 1.6 frame CANNOT carry these fields, so a populated one did not come from a conforming 1.6 host - and the shallow path never validated it.
     expect(populatedInterview.outcome).toBeNull();
     expect(populatedInterview.settlement).toBeNull();
     expect(populatedInterview.delivery).toBeNull();
@@ -603,10 +589,7 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
   });
 
   it("overwrites malformed enhanced values rather than filling around them", () => {
-    // The shallow path never validated these, so a number/string/array in a
-    // settlement field is not "present truth" - it is hostile or buggy input
-    // and must be neutralized. `values` is the answer the provider sees and
-    // stays untouched.
+    // The shallow path never validated these, so a number/string/array in a settlement field is not "present truth" - it is hostile or buggy input and must be neutralized.
     const malformed: Record<string, unknown> = {
       ...legacyInterviewBlock("iv-malformed"),
       outcome: 42,
@@ -650,27 +633,8 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
 });
 
 /**
- * The RECEIVE side of the `1.6` line, end to end, for the two surfaces the
- * message normalizer does NOT walk: `snapshot.queue` and `messageAccepted`.
- *
- * These pin the pipeline `chat-stream-client` actually runs, because the
- * hazard here is not visible from either schema alone. `chat.messages` needs
- * `normalizeV16MessagesInShallowSnapshot` precisely because the shallow
- * schemas leave it structural. The queue is the opposite: the frozen `1.6`
- * schema DEEP-parses it (so a browser payload on a `1.6` queue item is
- * stripped as an unknown key), and the live shallow re-parse then supplies
- * `browserAnnotations: []` from the live payload schema's `.default([])`.
- * Same for `messageAccepted`, which is not a snapshot and so takes the live
- * deep parse directly.
- *
+ * The RECEIVE side of the `1.6` line, end to end, for the two surfaces the message normalizer does NOT walk: `snapshot.queue` and `messageAccepted`.
  * Net effect on a `1.6` peer: the array reads as `[]`, never as `undefined`.
- * That is load-bearing for consumers typed as if it is present, and it rests
- * entirely on that `.default([])` - swapping it for `.optional()` breaks this
- * line silently, which is what these tests exist to catch.
- *
- * SMUGGLED payloads on `messageAccepted` / `queueChanged` are a separate
- * matter: those frames get no frozen parse, so `normalizeV16BrowserPayloadsInFrame`
- * is what neutralizes them, pinned in `chat-stream-client.test.ts`.
  */
 describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
   function v16QueuePromptItem(
@@ -743,9 +707,7 @@ describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
   });
 
   it("neutralizes a browser payload smuggled onto a 1.6 queue prompt item", () => {
-    // A legal 1.6 frame cannot carry these, so a populated one did not come
-    // from a conforming 1.6 host. Same reading as the message normalizer's:
-    // on this line they are absent, whatever bytes arrived.
+    // A legal 1.6 frame cannot carry these, so a populated one did not come from a conforming 1.6 host.
     const { queuePayload } = receiveV16Snapshot(
       v16SnapshotWithQueueItem({
         kind: "user",
@@ -819,10 +781,7 @@ describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
   });
 
   it("deep-validates the same browser payload on the live line instead of defaulting it away", () => {
-    // The mirror of the neutralizing case above, and why the `1.6` result is
-    // not merely "zod happened to strip something": on the live line this
-    // array is validated content, so an unvalidatable record is a parse
-    // error rather than a silently emptied field.
+    // The mirror of the neutralizing case above, and why the `1.6` result is not merely "zod happened to strip something": on the live line this array is validated content, so an unvalidatable record is a parse error rather.
     expect(() =>
       chatSubscribeSnapshotServerFrameShallowSchema.parse(
         v16SnapshotWithQueueItem({
@@ -881,21 +840,8 @@ describe("1.6 shallow snapshot + normalizer vs deep 1.7 parse", () => {
     expect(shallowInterviews.length).toBeGreaterThan(0);
     expect(shallowInterviews).toEqual(deepInterviews);
 
-    // THE STRUCTURAL PROOF that the shallow path did not deep-walk the
-    // histories - a deterministic replacement for the timing assertion this
-    // test used to make.
-    //
-    // A deep zod parse REBUILDS every object it validates, so the messages it
-    // returns are new references. The shallow schema validates the two history
-    // arrays with `z.custom`, which passes the value through untouched, so its
-    // messages are the SAME objects as the input's. Identity is therefore an
-    // exact witness for "no deep walk happened", and unlike a wall-clock ratio
-    // it cannot flake on a loaded CI runner.
-    //
-    // It is also a strictly stronger regression gate: swapping the shallow
-    // schema for the deep one fails this immediately and unambiguously,
-    // whereas a timing floor only fails once the machine is quiet enough to
-    // measure the difference.
+    // THE STRUCTURAL PROOF that the shallow path did not deep-walk the histories - a deterministic replacement for the timing assertion this test used to make.
+    // Identity is therefore an exact witness for "no deep walk happened", and unlike a wall-clock ratio it cannot flake on a loaded CI runner.
     const identityInput = structuredClone(payload);
     const identitySnapshot = identityInput.snapshot;
     if (!isRecord(identitySnapshot)) throw new Error("expected snapshot");
@@ -926,23 +872,13 @@ describe("1.6 shallow snapshot + normalizer vs deep 1.7 parse", () => {
       expect(event).toBe(inputEvents[index]);
     });
 
-    // The contrast that makes the assertions above meaningful rather than
-    // vacuous: the deep parse does NOT preserve identity.
-    //
+    // The contrast that makes the assertions above meaningful rather than vacuous: the deep parse does NOT preserve identity.
     // The references MUST come from the very object handed to the deep parse.
-    // Comparing against `inputMessages` - which belongs to a different clone -
-    // would pass no matter what the deep parser did, because two clones never
-    // share references. That is a test that can only ever succeed, which is
-    // worse than no test: it reports the contrast as verified while checking
-    // nothing.
     const deepInput = structuredClone(payload);
     const deepSnapshot = deepInput.snapshot;
     if (!isRecord(deepSnapshot)) throw new Error("expected snapshot");
     const deepChat = deepSnapshot.chat;
     if (!isRecord(deepChat)) throw new Error("expected chat");
-    // The base payload carries no events, and `expect(undefined).not.toBe(
-    // undefined)` is the same vacuity this block exists to remove - so give
-    // the deep input the SAME event fixtures the identity half used.
     const deepInputEvents: Record<string, unknown>[] = [
       chatEventFixture("e1", 1),
       chatEventFixture("e2", 2),
@@ -1133,9 +1069,7 @@ describe("projectChatServerFrameForVersion", () => {
     };
 
     it("drops an eventAppended carrying chat.imported for a 1.7 peer", () => {
-      // A released 1.7 client's strict event enum predates chat.imported;
-      // an unprojected frame fails its parse, so the send must throw and the
-      // host's catch drops the frame - the peer has nothing to render anyway.
+      // A released 1.7 client's strict event enum predates chat.imported; an unprojected frame fails its parse, so the send must throw and the host's catch drops the frame - the peer has nothing to render anyway.
       const frame = asProjectedServerFrame({
         kind: "eventAppended",
         hasBinaryPayload: false,
@@ -1168,10 +1102,7 @@ describe("projectChatServerFrameForVersion", () => {
   });
 
   describe("relaunchOnHostRestart below 1.7", () => {
-    // `1.6` shipped binding the pre-relaunch command, so the flag must leave
-    // the wire for a `1.6` peer on BOTH channels the set rides - and the
-    // commands themselves must survive, since a projector that dropped the
-    // set would also satisfy "no flag on the wire".
+    // `1.6` shipped binding the pre-relaunch command, so the flag must leave the wire for a `1.6` peer on BOTH channels the set rides - and the commands themselves must survive, since a projector that dropped the set would.
     const command = {
       id: "cmd-1",
       monitoring: false,
@@ -1351,11 +1282,7 @@ describe("projectChatServerFrameForVersion", () => {
         asRecord(projectedUser, "projected user frame").message,
       );
 
-      // messageAccepted's frozen schema is a user message, so an
-      // assistant-bearing frame is not a legal 1.4–1.6 payload. The
-      // projector still strips interview settlement if one arrives; the
-      // parse-equals-projected proof for this kind is the user-message
-      // identity below (no settlement keys to drop).
+      // messageAccepted's frozen schema is a user message, so an assistant-bearing frame is not a legal 1.4-1.6 payload.
       for (const contract of frozenServerContracts()) {
         const parsedUser = contract.parse(projectedUser);
         expect(parsedUser.kind).toBe("messageAccepted");
@@ -1735,8 +1662,6 @@ describe("chat-event metadata projection", () => {
 
   it("strips selection from interview.resolved metadata.answers and keeps values", () => {
     // The live host writes `metadata: { answers }` on interview.resolved.
-    // Selection evidence is a 1.7 fact; values are the answer a 1.4-1.6
-    // peer has always received.
     const event = chatEventWith(
       "e-resolved",
       20,
@@ -1780,11 +1705,8 @@ describe("chat-event metadata projection", () => {
   });
 
   it("preserves pre-1.7 interview.requested source and interview.errored reason/code byte-for-byte", () => {
-    // COLLISION GUARD. Today's host writes `{ source: "traycer_a2a" }` on
-    // interview.requested and `{ reason }` / `{ reason, code }` on
-    // interview.errored. The settlement payload has its own `source` and
-    // `reason`. A projector that stripped settlement facts by flat name
-    // would silently rewrite what 1.4-1.6 peers have always received.
+    // COLLISION GUARD.
+    // A projector that stripped settlement facts by flat name would silently rewrite what 1.4-1.6 peers have always received.
     const requestedMetadata = { source: "traycer_a2a" };
     const erroredMetadata = { reason: "adapter cleanup", code: "E_INTERVIEW" };
     const requestedEvent = chatEventWith(
@@ -1834,10 +1756,7 @@ describe("chat-event metadata projection", () => {
   });
 
   it("keeps colliding source on interview.resolved while still stripping selection", () => {
-    // The same event can carry BOTH a pre-1.7 `source` convention and
-    // 1.7 selection evidence. Only the answer selection is 1.7; a flat
-    // `source` strip would corrupt the convention the collision guard
-    // exists to protect.
+    // The same event can carry BOTH a pre-1.7 `source` convention and 1.7 selection evidence.
     const event = chatEventWith("e-resolved", 20, "interview.resolved", {
       source: "traycer_a2a",
       ...resolvedAnswersMetadata(),
@@ -1922,9 +1841,7 @@ describe("chat-event metadata projection", () => {
   });
 
   it("projects snapshot.chat.events and snapshot messages together", () => {
-    // Settlement reaches a subscriber in TWO places: interview blocks on
-    // messages, and metadata on the durable event log. One snapshot has
-    // to exercise both or the event-log half stays untested.
+    // Settlement reaches a subscriber in TWO places: interview blocks on messages, and metadata on the durable event log.
     const text = textBlock("text-1");
     const interview = populatedInterviewBlock("iv-1");
     const user = userMessage();

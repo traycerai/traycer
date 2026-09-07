@@ -2,18 +2,7 @@ import { formatRgb, parse } from "culori";
 
 const SAFE_BLACK = "rgb(0, 0, 0)";
 
-/**
- * Convert any CSS color expression - `oklch()`, `hex`, `rgb()`, `hsl()`,
- * named - to an `rgb(...)` string.
- *
- * Tailwind v4 stores design tokens as raw `oklch()` literals.
- * `getComputedStyle().getPropertyValue("--color-*")` returns those
- * literals verbatim, but consumers that paint outside the Tailwind
- * cascade - xterm.js (WebGL atlas via 2D canvas), Mermaid v11
- * (`Theme.calculate`), and similar - only understand rgb/hsl/hex/named.
- * culori is the same library Tailwind v4 ships internally, so the
- * toolchain stays consistent.
- */
+/** Convert any CSS color expression - `oklch()`, `hex`, `rgb()`, `hsl()`, named - to an `rgb(...)` string. */
 export function rgbify(value: string): string {
   if (value.length === 0) return SAFE_BLACK;
   if (/^(rgb|#)/i.test(value)) return value;
@@ -29,9 +18,7 @@ export function readCssVar(doc: Document, name: string): string {
 }
 
 /**
- * Resolve a CSS custom property to an `rgb(...)` string, falling back to
- * `fallback` (which may itself be an oklch/hex/named/rgb literal) when
- * the variable is unset on the active cascade.
+ * Resolve a CSS custom property to an `rgb(...)` string, falling back to `fallback` (which may itself be an oklch/hex/named/rgb literal) when the variable is unset on the active cascade.
  */
 export function resolveCssColor(
   doc: Document,

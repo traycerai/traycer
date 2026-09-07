@@ -14,9 +14,8 @@ import { parseLeadingSlashCommand } from "@/lib/composer/tiptap-json-content";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
- * The options this seam mirrors. `bulletMarker` / `listIndent` are left unset
- * so the serializer takes the very defaults `content-recovery` hard-codes -
- * that is the claim under test.
+ * The options this seam mirrors.
+ * `bulletMarker` / `listIndent` are left unset so the serializer takes the very defaults `content-recovery` hard-codes - that is the claim under test.
  */
 const SERIALIZER_DEFAULTS = {
   mentionFormat: "llm" as const,
@@ -74,10 +73,8 @@ const NESTED_ORDERED_DOC: JsonContent = {
 };
 
 /**
- * `-LJlU`: a `hardBreak` in the item's FIRST paragraph. `serializeHardBreak`
- * returns a bare "\n" and `serializeListItem` pushes the first child as one
- * whole string behind the marker, so the second line sits at column zero -
- * the continuation indent belongs to LATER blocks only.
+ * `-LJlU`: a `hardBreak` in the item's FIRST paragraph.
+ * `serializeHardBreak` returns a bare "\n" and `serializeListItem` pushes the first child as one whole string behind the marker, so the second line sits at column zero - the continuation indent belongs to LATER blocks only.
  */
 const HARD_BREAK_IN_FIRST_PARAGRAPH_DOC: JsonContent = {
   type: "doc",
@@ -130,8 +127,7 @@ const HARD_BREAK_IN_CONTINUATION_DOC: JsonContent = {
 };
 
 /**
- * The corner the mirrored loop settles by construction: the first-child slot
- * is consumed by whatever the first child IS, including a nested list.
+ * The corner the mirrored loop settles by construction: the first-child slot is consumed by whatever the first child IS, including a nested list.
  */
 const NESTED_LIST_AS_FIRST_CHILD_DOC: JsonContent = {
   type: "doc",
@@ -164,10 +160,7 @@ const NESTED_LIST_AS_FIRST_CHILD_DOC: JsonContent = {
 };
 
 /**
- * `-LV74`: fence blocks carry `listDepth * 2` of their own on EVERY line, and
- * the continuation indent goes on TOP of that - so a top-level bullet's
- * continuation fence goes out at four columns, not two. Paragraphs get no
- * depth indent inside an item, so this is fence-specific.
+ * `-LV74`: fence blocks carry `listDepth * 2` of their own on EVERY line, and the continuation indent goes on TOP of that - so a top-level bullet's continuation fence goes out at four columns, not two.
  */
 const FENCE_AS_CONTINUATION_DOC: JsonContent = {
   type: "doc",
@@ -251,12 +244,8 @@ const FENCE_AS_FIRST_CHILD_DOC: JsonContent = {
 };
 
 /**
- * `-MlZl`: `serializeTable` escapes `\` then `|` and nothing else, so an
- * embedded hardBreak's newline goes out RAW inside the row. Whether that is
- * well-formed markdown is not the question - it is what the agent received,
- * and the recovery copy has to match it. Plain-text cells only: cell content
- * deliberately routes through this module for mentionFormat consistency, which
- * is documented design rather than drift.
+ * `-MlZl`: `serializeTable` escapes `\` then `|` and nothing else, so an embedded hardBreak's newline goes out RAW inside the row.
+ * Whether that is well-formed markdown is not the question - it is what the agent received, and the recovery copy has to match it.
  */
 const TABLE_WITH_HARD_BREAK_CELL_DOC: JsonContent = {
   type: "doc",
@@ -334,9 +323,8 @@ const TABLE_WITH_MULTI_BLOCK_CELL_DOC: JsonContent = {
 };
 
 /**
- * `-MlZs`: `serializeHeading` sends `#`-markers, so a heading recovered as
- * bare text is a different request. Top-level only - the composer schema does
- * not put headings inside list items.
+ * `-MlZs`: `serializeHeading` sends `#`-markers, so a heading recovered as bare text is a different request.
+ * Top-level only - the composer schema does not put headings inside list items.
  */
 const HEADING_LEVELS_DOC: JsonContent = {
   type: "doc",
@@ -389,12 +377,7 @@ const NESTED_MIXED_WITH_CONTINUATION_DOC: JsonContent = {
 };
 
 /**
- * `json-content-serializer` is the authoritative enumeration of the node kinds
- * that reach an agent, and `tiptap-json-content`'s projection is what the
- * recovery statement can actually carry. Every kind either enumeration names
- * has to be classified, or the notice can silently present a partial recovery
- * as a whole one - the defect that shipped three times running (attachments,
- * mentions, sourced quotes) before the classification existed.
+ * `json-content-serializer` is the authoritative enumeration of the node kinds that reach an agent, and `tiptap-json-content`'s projection is what the recovery statement can actually carry.
  */
 describe("content recovery classification", () => {
   it("classifies every label the serializer enumerates", () => {
@@ -406,12 +389,7 @@ describe("content recovery classification", () => {
       "utf8",
     );
     // Extracted from `case "..."` TOKENS, not from a brace-delimited slice.
-    // The boundary hunt this replaced keyed on `"\n  }"`, so a reformat could
-    // silently shrink the region and let an unclassified kind through - the
-    // guard must fail when a kind is ADDED, never when formatting moves.
-    // Node kinds and marks both appear as `case` labels here, and both need
-    // classifying, so scanning the whole file is the point rather than a
-    // limitation.
+    // The boundary hunt this replaced keyed on `"\n  }"`, so a reformat could silently shrink the region and let an unclassified kind through - the guard must fail when a kind is ADDED, never when formatting moves.
     const enumerated = [...source.matchAll(/case "([^"]+)":/g)].map(
       (match) => match[1],
     );
@@ -424,10 +402,8 @@ describe("content recovery classification", () => {
   });
 
   it("classifies every node kind the text projection names", () => {
-    // Follows the projection, which now lives in protocol so the host can run
-    // the same one. `tiptap-json-content.ts` re-exports it and still names a
-    // few node kinds of its own, so reading THAT file would keep passing while
-    // silently no longer guarding the enumeration this test is about.
+    // Follows the projection, which now lives in protocol so the host can run the same one.
+    // `tiptap-json-content.ts` re-exports it and still names a few node kinds of its own, so reading THAT file would keep passing while silently no longer guarding the enumeration this test is about.
     const source = readFileSync(
       resolve(
         HERE,
@@ -519,10 +495,8 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  // `-CbBS`: parity supersedes the round-5 retypeability call. The serializer
-  // puts these delimiters on the wire, so they are what the agent receives -
-  // and once the optimistic row is gone, nothing else records which span was
-  // marked. They stay non-losses, but by seam EMISSION now.
+  // `-CbBS`: parity supersedes the round-5 retypeability call.
+  // The serializer puts these delimiters on the wire, so they are what the agent receives - and once the optimistic row is gone, nothing else records which span was marked.
   it("emits inline mark delimiters, matching the serializer", () => {
     const marked: JsonContent = {
       type: "doc",
@@ -550,10 +524,8 @@ describe("content recovery classification", () => {
     expect(classifyContentRecovery(marked).size).toBe(0);
   });
 
-  // `-CUdX`: `serializeDocument` joins TOP-LEVEL blocks with `\n\n`, but the
-  // shared projection joins every surviving node with a single `\n`. Without
-  // this the recovery copy makes a paragraph break look like a hard break, and
-  // the optimistic row that could have settled it is already gone.
+  // `-CUdX`: `serializeDocument` joins TOP-LEVEL blocks with `\n\n`, but the shared projection joins every surviving node with a single `\n`.
+  // Without this the recovery copy makes a paragraph break look like a hard break, and the optimistic row that could have settled it is already gone.
   it("separates top-level blocks with a blank line, matching the serializer", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -566,9 +538,8 @@ describe("content recovery classification", () => {
     expect(text).toBe("first\n\nsecond");
   });
 
-  // ...but a list is ONE block. Its items are lines within it, so they keep
-  // the single newline the serializer gives them - spacing them out would be
-  // the same parity error in the other direction.
+  // ...but a list is ONE block.
+  // Its items are lines within it, so they keep the single newline the serializer gives them - spacing them out would be the same parity error in the other direction.
   it("keeps a list's items on single newlines inside their block", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -597,9 +568,8 @@ describe("content recovery classification", () => {
     expect(text).toBe("steps:\n\n1. one\n2. two");
   });
 
-  // `-HVod`: both editor nodes allow an empty source and both serializers emit
-  // the labeled fence anyway. Treating empty as absent dropped the block, so an
-  // atom-only draft was reported as having no recoverable content at all.
+  // `-HVod`: both editor nodes allow an empty source and both serializers emit the labeled fence anyway.
+  // Treating empty as absent dropped the block, so an atom-only draft was reported as having no recoverable content at all.
   it("emits an empty atom block's fence, because its serializer does", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -609,14 +579,8 @@ describe("content recovery classification", () => {
     expect(text).toBe("```mermaid\n\n```");
   });
 
-  // `-H2a9`: convertibility first, then parity - and the composer settles the
-  // first outright. `buildComposerExtensions` has no table extension
-  // (`@tiptap/extension-table` is in the ARTIFACT bundle only), so the schema
-  // cannot hold a table node and no paste rebuilds one. It is a loss.
-  //
-  // The emission is the worse half: the default container walk joins children
-  // with `""`, so this table projected to `envurlproda.test` - the `foobar`
-  // list mangling one level up, quoting back something nobody wrote.
+  // `-H2a9`: convertibility first, then parity - and the composer settles the first outright.
+  // `buildComposerExtensions` has no table extension (`@tiptap/extension-table` is in the ARTIFACT bundle only), so the schema cannot hold a table node and no paste rebuilds one.
   it("emits a table as its markdown grid, and counts the grid as lost", () => {
     const table: JsonContent = {
       type: "doc",
@@ -787,11 +751,8 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  // R13 `-BZH5`: the leading-only invariant the round-5 note leaned on is
-  // EXEMPTED for skills - `isLegalSlashChip` returns true for
-  // `kind === "skill"` at any position. A non-leading skill chip's `/name`
-  // does not round-trip, because the raw-text converter only rebuilds a
-  // LEADING one.
+  // R13 `-BZH5`: the leading-only invariant the round-5 note leaned on is EXEMPTED for skills - `isLegalSlashChip` returns true for `kind === "skill"` at any position.
+  // A non-leading skill chip's `/name` does not round-trip, because the raw-text converter only rebuilds a LEADING one.
   it("counts a non-leading skill chip as a loss", () => {
     const report = classifyContentRecovery({
       type: "doc",
@@ -834,11 +795,8 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  // `-CUdW`: "leading" is a claim about the RECOVERY TEXT, not about node
-  // position. A skill chip is legal inside a blockquote, and it is genuinely
-  // the document's first inline node there - but the seam emits `> /review`,
-  // and `LEADING_SLASH_COMMAND_REGEX` accepts only spaces and tabs before the
-  // trigger. So it pastes back as prose, silently.
+  // `-CUdW`: "leading" is a claim about the RECOVERY TEXT, not about node position.
+  // A skill chip is legal inside a blockquote, and it is genuinely the document's first inline node there - but the seam emits `> /review`, and `LEADING_SLASH_COMMAND_REGEX` accepts only spaces and tabs before the trigger.
   it("counts a leading skill chip inside a blockquote as a loss", () => {
     const report = classifyContentRecovery({
       type: "doc",
@@ -894,13 +852,8 @@ describe("content recovery classification", () => {
     expect(report.get("command")).toBe(1);
   });
 
-  // `-Jy8u` flipped this with the marker. The criterion is unchanged -
-  // CONVERTIBILITY - but the fact it reads changed: a bullet item now carries
-  // `- ` for parity with the serializer, so a chip in the first one recovers
-  // as `- /review` and the converter will not rebuild it. Kept as a stated
-  // expectation now that the block above holds the marker and the membership
-  // together generically: this one says out loud which way a bullet item goes,
-  // and a computed check cannot say that.
+  // `-Jy8u` flipped this with the marker.
+  // The criterion is unchanged - CONVERTIBILITY - but the fact it reads changed: a bullet item now carries `- ` for parity with the serializer, so a chip in the first one recovers as `- /review` and the converter will not rebuild it.
   it("counts a leading skill chip in a bullet item as a loss", () => {
     const report = classifyContentRecovery({
       type: "doc",
@@ -930,25 +883,8 @@ describe("content recovery classification", () => {
     expect(report.get("command")).toBe(1);
   });
 
-  // `PKSL`, and the CLASS both drifts on this seam belong to. Whether a chip
-  // round-trips is settled by two implementations neither of which lives in
-  // `lostSlashChip`: what THIS module emits in front of the chip, and what the
-  // converter's parser accepts in front of a trigger. The classifier carried a
-  // hand-written mirror of each, and both drifted -
-  //
-  //  - the emission mirror, twice and QUIETLY: `bulletList` when bullets
-  //    started emitting `- `, `heading` when headings started emitting `#`.
-  //    Each shipped a chip reported SAFE that no paste path rebuilds.
-  //  - the parser mirror, by hard-selecting `children[0]`: an indent-only text
-  //    node became the "leading position", so `  /review` - which
-  //    `LEADING_SLASH_COMMAND_REGEX` rebuilds, spaces and all - was reported as
-  //    a chip to re-pick.
-  //
-  // So the expectation here is COMPUTED, not listed: project the shape with the
-  // real seam, ask the converter's real parser what it would rebuild from that
-  // text, and require the report to agree. A shape nobody thought to enumerate
-  // still gets the right answer, and a third emission change fails HERE instead
-  // of shipping.
+  // `PKSL`, and the CLASS both drifts on this seam belong to.
+  // Whether a chip round-trips is settled by two implementations neither of which lives in `lostSlashChip`: what THIS module emits in front of the chip, and what the converter's parser accepts in front of a trigger.
   describe("a chip's classification agrees with the seam and the parser", () => {
     const CHIP: JsonContent = {
       type: "slashCommand",
@@ -1058,12 +994,7 @@ describe("content recovery classification", () => {
     });
   });
 
-  // `-G8sl`: a blockquote is not text-complete, because BOTH paste paths
-  // deliberately dissolve it - `normalizeComposerMarkdownNode` hoists a parsed
-  // blockquote's children into the doc, and `sanitizeMarkdownHtml` unwraps
-  // `<blockquote>` via STRIP_TAGS. So a resend never rebuilds the node and
-  // never reaches the serializer's `<user_quoted_section>` branch: the agent
-  // stops being told which part was quoted.
+  // `-G8sl`: a blockquote is not text-complete, because BOTH paste paths deliberately dissolve it - `normalizeComposerMarkdownNode` hoists a parsed blockquote's children into the doc, and `sanitizeMarkdownHtml` unwraps `<blockquote>` via STRIP_TAGS.
   it("counts a blockquote as a loss, because pasting it back cannot rebuild it", () => {
     const quoted: JsonContent = {
       type: "doc",
@@ -1080,9 +1011,8 @@ describe("content recovery classification", () => {
       ],
     };
 
-    // The CATEGORY, deliberately - not the `> ` prefix. What is lost is the
-    // quote-ness, and a test that asserted the prefix would pass just as well
-    // if the prefix were the only thing that ever came back.
+    // The CATEGORY, deliberately - not the `> ` prefix.
+    // What is lost is the quote-ness, and a test that asserted the prefix would pass just as well if the prefix were the only thing that ever came back.
     expect(classifyContentRecovery(quoted).get("quotedBlock")).toBe(1);
     // The founding invariant still holds: the quoted TEXT is inlined, so the
     // send is stated with its content rather than merely reported lost.
@@ -1091,12 +1021,7 @@ describe("content recovery classification", () => {
     );
   });
 
-  // `-IfOW`: the native exemption was unconditional because the editor holds a
-  // native command at the leading position - but `isLegalSlashChip` asks
-  // `leadingTokenBefore`, which is DOCUMENT-WIDE, so a native command as the
-  // first token inside a leading blockquote is legal. The editor's "leading"
-  // and the raw converter's are different questions, and only the converter's
-  // decides whether a copy-back rebuilds the chip.
+  // `-IfOW`: the native exemption was unconditional because the editor holds a native command at the leading position - but `isLegalSlashChip` asks `leadingTokenBefore`, which is DOCUMENT-WIDE, so a native command as the first token inside a leading blockquote.
   it("counts a native command inside a leading blockquote as a loss", () => {
     const report = classifyContentRecovery({
       type: "doc",
@@ -1141,9 +1066,8 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  // R13 `-B-Wc`: emission inherits `-4IH`'s adjacency rule. One link across a
-  // bold word arrives as three text nodes, so wrapping each independently
-  // recovered three separate links where the user wrote one.
+  // R13 `-B-Wc`: emission inherits `-4IH`'s adjacency rule.
+  // One link across a bold word arrives as three text nodes, so wrapping each independently recovered three separate links where the user wrote one.
   it("emits a link split across text nodes as one link", () => {
     const href = "https://example.test/rb";
     const text = recoveryTextFromContent({
@@ -1172,11 +1096,8 @@ describe("content recovery classification", () => {
       ],
     });
 
-    // The inner `**` is `-CbBS`: this expectation used to read
-    // `[the bold runbook](...)`, which encoded the very mark-dropping the
-    // parity rule now forbids. `jsonContentToMarkdown` on this same input
-    // returns exactly the string below - checked against the serializer, not
-    // reasoned about.
+    // The inner `**` is `-CbBS`: this expectation used to read `[the bold runbook](...)`, which encoded the very mark-dropping the parity rule now forbids.
+    // `jsonContentToMarkdown` on this same input returns exactly the string below - checked against the serializer, not reasoned about.
     expect(text).toBe("[the **bold** runbook](https://example.test/rb)");
   });
 
@@ -1292,11 +1213,8 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  // `mermaidBlock` and `uiPreviewBlock` are ATOMS (`atom: true`) whose source
-  // lives in `attrs.code` / `attrs.htmlContent`. The shared projection walks
-  // children, so it emits nothing for them - classifying them text-complete
-  // while the projection skips them is the defect: a diagram-only send was
-  // told it had "no recoverable content" while its source was deleted.
+  // `mermaidBlock` and `uiPreviewBlock` are ATOMS (`atom: true`) whose source lives in `attrs.code` / `attrs.htmlContent`.
+  // The shared projection walks children, so it emits nothing for them - classifying them text-complete while the projection skips them is the defect: a diagram-only send was told it had "no recoverable content" while its source was deleted.
   it("carries a mermaid block's source into the recovery text", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -1324,11 +1242,8 @@ describe("content recovery classification", () => {
     expect(text).toBe("```wireframe\n<section>hello</section>\n```");
   });
 
-  // The recovery text is quoted back verbatim for the user to copy. Trimming
-  // it strips meaningful leading indentation - a Python block comes back
-  // invalid, and they are told to resend something subtly not theirs.
-  // R7 `-oRi`: the round-5 hoist only reached TOP-LEVEL lists. A list nested
-  // in a blockquote reached the projection untouched and joined as `foobar`.
+  // The recovery text is quoted back verbatim for the user to copy.
+  // Trimming it strips meaningful leading indentation - a Python block comes back invalid, and they are told to resend something subtly not theirs.
   it("keeps list boundaries for a list nested in a blockquote", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -1385,8 +1300,7 @@ describe("content recovery classification", () => {
   });
 
   // R10 `-AdAM`: a list marker is visible in its absence, but a NUMBER is not.
-  // The composer preserves non-default `attrs.start`, so dissolving the list
-  // silently renumbered the user's steps from 1.
+  // The composer preserves non-default `attrs.start`, so dissolving the list silently renumbered the user's steps from 1.
   it("keeps ordered-list numbering, including a non-default start", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -1462,9 +1376,7 @@ describe("content recovery classification", () => {
     expect(text).toBe("1. parent\n  1. child");
   });
 
-  // R12 `-BQcf`: an item whose nested list is followed by a continuation
-  // paragraph used to emit the prose FIRST and the sub-list after, so the
-  // trailing note jumped above the steps it was written to follow.
+  // R12 `-BQcf`: an item whose nested list is followed by a continuation paragraph used to emit the prose FIRST and the sub-list after, so the trailing note jumped above the steps it was written to follow.
   it("keeps an item's children in document order", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -1507,12 +1419,8 @@ describe("content recovery classification", () => {
     expect(text).toBe("1. step\n  - detail\n   after");
   });
 
-  // The parity claim, checked against the REAL serializer rather than against
-  // a string someone believed it produced. Every list shape this seam mirrors
-  // by hand - bullet marker, ordered marker, nested-list indent (by DEPTH),
-  // continuation indent (by marker width) - is one transcription error away
-  // from silent divergence, and the four expectations above were written from
-  // a reading of `serializeListItem`. This one asks it.
+  // The parity claim, checked against the REAL serializer rather than against a string someone believed it produced.
+  // Every list shape this seam mirrors by hand - bullet marker, ordered marker, nested-list indent (by DEPTH), continuation indent (by marker width) - is one transcription error away from silent divergence, and the four expectations above were written from a.
   it("matches jsonContentToMarkdown byte for byte on list shapes", () => {
     const shapes: ReadonlyArray<JsonContent> = [
       listDoc("bulletList", ["one", "two"]),
@@ -1536,9 +1444,7 @@ describe("content recovery classification", () => {
     }
   });
 
-  // `-Jy8u`: the serializer sends `- item`, so a recovery copy without the
-  // dash is not the markdown the agent received - and a nested bullet followed
-  // by a continuation paragraph came back as two identically-indented lines.
+  // `-Jy8u`: the serializer sends `- item`, so a recovery copy without the dash is not the markdown the agent received - and a nested bullet followed by a continuation paragraph came back as two identically-indented lines.
   it("emits bullet markers, matching the serializer", () => {
     const text = recoveryTextFromContent({
       type: "doc",
@@ -1567,18 +1473,16 @@ describe("content recovery classification", () => {
     expect(text).toBe("- one\n- two");
   });
 
-  // R10 `-AdAI`: content ending in a newline plus the join's own newline made
-  // a blank code line the user never wrote. The serializer strips exactly one
-  // terminal newline; match it byte for byte.
+  // R10 `-AdAI`: content ending in a newline plus the join's own newline made a blank code line the user never wrote.
+  // The serializer strips exactly one terminal newline; match it byte for byte.
   it("preserves an atom block's terminal newline, matching its serializer", () => {
     const text = recoveryTextFromContent({
       type: "doc",
       content: [{ type: "mermaidBlock", attrs: { code: "graph TD;\n" } }],
     });
 
-    // PARITY: the atom serializers keep a terminal newline, so this does. The
-    // source attrs are byte-exact user data the agent received; trimming them
-    // for tidiness would be mutating content to improve its looks.
+    // PARITY: the atom serializers keep a terminal newline, so this does.
+    // The source attrs are byte-exact user data the agent received; trimming them for tidiness would be mutating content to improve its looks.
     expect(text).toBe("```mermaid\ngraph TD;\n\n```");
   });
 

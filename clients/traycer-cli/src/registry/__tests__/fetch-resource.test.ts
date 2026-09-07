@@ -24,9 +24,8 @@ import {
 } from "./fault-server-test-helpers";
 
 const RESOURCE_URL = "https://registry.example.test/host.tar.gz";
-// Retry tests keep production watchdogs frozen and advance only backoffs that
-// the download reports through its heartbeat. The timeout remains a fail-closed
-// guard for a genuine I/O hang; it is not used to poll fake time.
+// Retry tests keep production watchdogs frozen and advance only backoffs that the download reports through its heartbeat.
+// The timeout remains a fail-closed guard for a genuine I/O hang; it is not used to poll fake time.
 const SETTLE_RETRY_TEST_TIMEOUT_MS = 15_000;
 
 function createRetryBackoffSignal() {
@@ -248,9 +247,7 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "resumes a partial left behind by a previous process",
     async () => {
-      // The cross-invocation case (traycer#588): a fresh downloader sees
-      // bytes on disk and no validator for them - it must put the offset on
-      // the wire, not delete the file before the first request.
+      // The cross-invocation case (traycer#588): a fresh downloader sees bytes on disk and no validator for them - it must put the offset on the wire, not delete the file before the first request.
       const destPath = join(workDir, "prior-process.tar.gz");
       writeFileSync(destPath, "abc");
       const requests: Request[] = [];
@@ -275,12 +272,8 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "reports the resumed offset before the attempt's first byte arrives",
     async () => {
-      // Desktop carries the last concrete progress value forward, but a
-      // freshly spawned process has no prior value to carry. A resumed
-      // download that stays silent until its first chunk therefore renders
-      // no progress bar at all while a large partial sits on disk - the
-      // resume itself becomes invisible, which reads as "it started over".
-      // The offset has to be published before the request goes out.
+      // Desktop carries the last concrete progress value forward, but a freshly spawned process has no prior value to carry.
+      // A resumed download that stays silent until its first chunk therefore renders no progress bar at all while a large partial sits on disk - the resume itself becomes invisible, which reads as "it started over".
       const destPath = join(workDir, "resume-progress.tar.gz");
       writeFileSync(destPath, "abc");
       const opts = downloadOptions(destPath, "abcdef");
@@ -306,10 +299,8 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "reports the rewind when a resume is forced to restart from zero",
     async () => {
-      // An origin that answers 200 to a Range makes the downloader discard
-      // the partial. The offset tick at the top of the next attempt is what
-      // moves the bar back to 0 immediately; without it the bar would hold
-      // the stale pre-restart percentage until the next chunk landed.
+      // An origin that answers 200 to a Range makes the downloader discard the partial.
+      // The offset tick at the top of the next attempt is what moves the bar back to 0 immediately; without it the bar would hold the stale pre-restart percentage until the next chunk landed.
       const destPath = join(workDir, "restart-progress.tar.gz");
       writeFileSync(destPath, "abc");
       const opts = downloadOptions(destPath, "abcdef");
@@ -332,14 +323,8 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "resumes a body that ends short without raising a stream error",
     async () => {
-      // Not every truncation surfaces as a stream error: bun's fetch
-      // reports some mid-body connection drops as a clean end-of-stream,
-      // and a response without a usable length can end short on any
-      // runtime. Trusting `done` alone let a truncated transfer be reported
-      // as a finished download, so the size check failed terminally and
-      // took the partial with it - traycer#585's "downloaded 231 MB of
-      // 721 MB before failure". A short body must stay a retryable
-      // transfer failure that the next attempt resumes.
+      // Not every truncation surfaces as a stream error: bun's fetch reports some mid-body connection drops as a clean end-of-stream, and a response without a usable length can end short on any runtime.
+      // Trusting `done` alone let a truncated transfer be reported as a finished download, so the size check failed terminally and took the partial with it - traycer#585's "downloaded 231 MB of 721 MB before failure".
       const destPath = join(workDir, "short-clean-eof.tar.gz");
       const requests: Request[] = [];
       let call = 0;
@@ -367,18 +352,10 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "keeps going after a forced restart as long as every attempt transfers",
     async () => {
-      // One Range-ignoring hop (a CDN edge, a corporate proxy) forces a
-      // restart from zero mid-resume. Everything after it makes real forward
-      // progress and must be allowed to finish. Judging that progress against
-      // a high-water mark left over from BEFORE the restart made it
-      // unreachable, so a 700MB resume gave up inside six attempts while
-      // genuinely transferring on every one of them.
+      // One Range-ignoring hop (a CDN edge, a corporate proxy) forces a restart from zero mid-resume.
+      // Everything after it makes real forward progress and must be allowed to finish.
       const destPath = join(workDir, "restart-then-progress.tar.gz");
-      // The pre-restart partial has to sit far enough above what the post-
-      // restart dribble can reach inside the stall budget, or the download
-      // escapes the stale mark by accident and the regression hides: 30 of 40
-      // bytes already on disk, then 2 bytes per attempt, needs 16 attempts to
-      // climb back past 30 against a budget of 6.
+      // The pre-restart partial has to sit far enough above what the post- restart dribble can reach inside the stall budget, or the download escapes the stale mark by accident and the regression hides: 30 of 40 bytes already on disk, then 2 bytes per attempt, needs 16 attempts to climb back past 30 against a budget of 6.
       const expected = "a".repeat(40);
       writeFileSync(destPath, "a".repeat(30));
       let call = 0;
@@ -416,15 +393,8 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "gives up promptly when the origin's entity is shorter than the manifest declares",
     async () => {
-      // A truncated publish, or a mirror serving a partial object. Judging
-      // progress against the attempt's own starting offset let this run
-      // forever: the short body looked like progress, the next attempt's
-      // Range past the end took a 416 and restarted from zero, and the one
-      // after that "progressed" over the same bytes again - resetting the
-      // stall counter every other attempt and burning the whole runaway
-      // guard on ~100 complete re-transfers of an archive that can never
-      // verify. Against a high-water mark that only ever rises, re-reading
-      // the same bytes is correctly not progress.
+      // A truncated publish, or a mirror serving a partial object.
+      // Judging progress against the attempt's own starting offset let this run forever: the short body looked like progress, the next attempt's Range past the end took a 416 and restarted from zero, and the one after that "progressed" over the same bytes again - resetting the stall counter every other attempt and burning the whole runaway guard on ~100 complete re-transfers of an archive that can never verify.
       const destPath = join(workDir, "short-entity.tar.gz");
       const requests: Request[] = [];
       globalThis.fetch = vi.fn(async (input, init) => {
@@ -475,9 +445,7 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "spends stall budget only on attempts that made no progress",
     async () => {
-      // Six resets that each append a byte must not exhaust a budget that a
-      // dead endpoint burns in six attempts - forward progress is what buys
-      // the next round (traycer#589).
+      // Six resets that each append a byte must not exhaust a budget that a dead endpoint burns in six attempts - forward progress is what buys the next round (traycer#589).
       const destPath = join(workDir, "progress-budget.tar.gz");
       const payload = "abcdefghij";
       let call = 0;
@@ -739,10 +707,8 @@ describe("downloadToFile resume and integrity policy", () => {
     expect(sawRequest).toBe(true);
     await vi.advanceTimersByTimeAsync(30_000);
     await closeFaultServer(server);
-    // A blackholed archive never transfers a byte, so every attempt counts
-    // against the stall budget. Drive enough rounds (watchdog + the growing
-    // backoff) for that budget to run out; each iteration advances past the
-    // longest single wait either can impose.
+    // A blackholed archive never transfers a byte, so every attempt counts against the stall budget.
+    // Drive enough rounds (watchdog + the growing backoff) for that budget to run out; each iteration advances past the longest single wait either can impose.
     let done = false;
     void outcome.then(() => {
       done = true;
@@ -819,9 +785,8 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "never sends a weak ETag as If-Range, but still resumes by offset",
     async () => {
-      // A weak validator cannot certify byte-for-byte identity, so it must
-      // not gate the server's resume decision. The bare Range still goes
-      // out - Content-Range and sha256 are what make that safe.
+      // A weak validator cannot certify byte-for-byte identity, so it must not gate the server's resume decision.
+      // The bare Range still goes out - Content-Range and sha256 are what make that safe.
       const destPath = join(workDir, "weak-etag.tar.gz");
       const requests: Request[] = [];
       let call = 0;

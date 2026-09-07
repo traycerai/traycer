@@ -126,11 +126,6 @@ export class MenuController {
     Menu.setApplicationMenu(null);
   }
 
-  /**
-   * Entry point for commands that originate outside any window or native
-   * menu - currently the Windows jump-list task flags delivered via
-   * second-instance argv (`--new-epic`, `--open-settings`).
-   */
   dispatchShellCommand(command: MenuCommandId): void {
     this.handleCommand(command, null, null);
   }
@@ -160,12 +155,6 @@ export class MenuController {
     });
   }
 
-  /**
-   * Update the cached host-update version surfaced through the tray
-   * (Flow 6). The launch-time registry probe in `main-process.ts` calls
-   * this with the latest registry version when an upgrade is available;
-   * `null` clears the tray row.
-   */
   setHostUpdateAvailableVersion(version: string | null): void {
     this.hostUpdateAvailableVersion = version;
     this.rebuild();
@@ -191,11 +180,8 @@ export class MenuController {
     };
   }
 
-  // Menu/tray commands are invoked synchronously by Electron off the AppKit
-  // action path (including keyboard accelerators). An exception escaping here
-  // - or an un-`.catch()`'d rejection from a dispatched promise below - has no
-  // caller to absorb it and fatally aborts the main process. Wrap dispatch so
-  // a single broken command degrades to a log line instead of a SIGTRAP.
+  // Menu/tray commands are invoked synchronously by Electron off the AppKit action path (including keyboard accelerators).
+  // An exception escaping here - or an un-`.catch()`'d rejection from a dispatched promise below - has no caller to absorb it and fatally aborts the main process.
   private handleCommand(
     command: MenuCommandId,
     senderWindow: BaseWindow | null,
@@ -224,11 +210,6 @@ export class MenuController {
       return;
     }
     if (command === "host.restart") {
-      // The renderer owns the whole restart flow (`LocalHostRestartFlow`):
-      // confirm, then the cooperative claim-gated `host.restart` RPC, with
-      // runnerHost.requestHostRespawn() - the shared main-process respawn
-      // entrypoint - reserved for the explicit Force choice and for a host
-      // that cannot take the cooperative path.
       if (this.options.dispatchRendererCommand(command, null)) return;
 
       void this.options.windowRegistry
@@ -252,13 +233,8 @@ export class MenuController {
       return;
     }
     if (command === "host.installUpdate") {
-      // The tray's "Update to <version>" row dispatches here. The version
-      // must come from the *item callback that was built with the label*,
-      // not from live MenuController state: an already-open native tray
-      // menu can fire its old click after setHostUpdateAvailableVersion
-      // has moved the controller to a different target (cold-review #3).
-      // The renderer echoes this as `expectedVersion` so main refuses a
-      // mismatch rather than installing a target the user never confirmed.
+      // The version must come from the *item callback that was built with the label*, not from live MenuController state: an already-open native tray menu can fire its old click after.
+      // The renderer echoes this as `expectedVersion` so main refuses a mismatch rather than installing a target the user never confirmed.
       const dispatched = this.options.dispatchRendererCommand(
         command,
         hostUpdateVersion,

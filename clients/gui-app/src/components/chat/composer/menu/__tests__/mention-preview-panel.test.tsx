@@ -30,10 +30,8 @@ function makeListRef(activeRow: HTMLElement | null): {
 function makeActiveRow(): HTMLElement {
   const row = document.createElement("div");
   row.setAttribute("data-active", "true");
-  // jsdom computes no layout, so every rect is zero - and a zero rect reads
-  // as "no anchor" to the panel, which hides itself instead of positioning.
-  // Give the row a real rectangle so positioning runs as it would in a
-  // browser.
+  // jsdom computes no layout, so every rect is zero - and a zero rect reads as "no anchor" to the panel, which hides itself instead of positioning.
+  // Give the row a real rectangle so positioning runs as it would in a browser.
   row.getBoundingClientRect = () => new DOMRect(40, 100, 200, 32);
   return row;
 }
@@ -51,10 +49,8 @@ describe("panelFitFor", () => {
   });
 
   it("shrinks the panel to the available space instead of letting it overflow", () => {
-    // Regression: the panel's CSS width can request up to 22rem (352px). At
-    // 220px available, that used to still report `fits: true` with nothing
-    // capping the rendered width, so the panel rendered past the viewport
-    // edge. It must now report a maxWidthPx that clamps it to what's there.
+    // Regression: the panel's CSS width can request up to 22rem (352px).
+    // At 220px available, that used to still report `fits: true` with nothing capping the rendered width, so the panel rendered past the viewport edge.
     const fit = panelFitFor(220, 300);
     expect(fit.fits).toBe(true);
     expect(fit.maxWidthPx).toBe(220);
@@ -72,11 +68,8 @@ describe("panelFitFor", () => {
   });
 
   it("clamps negative available space to 0 instead of an invalid CSS length", () => {
-    // The reference can already overflow the boundary before `size` runs,
-    // so floating-ui's available space can go negative. A negative
-    // max-width/max-height is invalid and silently dropped by the CSSOM,
-    // which would leave the panel unconstrained - clamp to 0 so it's always
-    // a settable value, and `fits` (0 < 160) still hides the panel.
+    // The reference can already overflow the boundary before `size` runs, so floating-ui's available space can go negative.
+    // A negative max-width/max-height is invalid and silently dropped by the CSSOM, which would leave the panel unconstrained - clamp to 0 so it's always a settable value, and `fits` (0 < 160) still hides the panel.
     const fit = panelFitFor(-16, -16);
     expect(fit.fits).toBe(false);
     expect(fit.maxWidthPx).toBe(0);
@@ -258,9 +251,7 @@ describe("MentionPreviewPanel", () => {
   });
 
   it("never renders monospace for a slash-bearing title with mono: false", async () => {
-    // Regression: monospace must come from the explicit `mono` flag, not a
-    // heuristic on `primary`'s content - a title like "UI/UX" or
-    // "client/server" contains a slash but is not a path.
+    // Regression: monospace must come from the explicit `mono` flag, not a heuristic on `primary`'s content - a title like "UI/UX" or "client/server" contains a slash but is not a path.
     const listRef = makeListRef(makeActiveRow());
     const preview: MentionPreview = {
       kind: "text",
@@ -378,10 +369,8 @@ describe("MentionPreviewPanel", () => {
       '[data-slot="mention-preview-panel"]',
     );
     expect(panel).not.toBeNull();
-    // jsdom has no real layout, so the exact px values just reflect its
-    // fixed viewport - `panelFitFor` above covers the interesting
-    // shrink-vs-hide thresholds. This only proves the `apply` callback ran
-    // and constrained the element, per the fix.
+    // jsdom has no real layout, so the exact px values just reflect its fixed viewport - `panelFitFor` above covers the interesting shrink-vs-hide thresholds.
+    // This only proves the `apply` callback ran and constrained the element, per the fix.
     expect(panel?.style.maxWidth.endsWith("px")).toBe(true);
     expect(panel?.style.maxHeight.endsWith("px")).toBe(true);
   });

@@ -27,9 +27,7 @@ describe("dev-backend-urls", () => {
     ).toBe(BAKED);
   });
 
-  // The gate that keeps shipped builds immune to a hostile/stray runtime
-  // environment: staging/production bake a non-"dev" literal, so the lookup
-  // never happens - not even to validate.
+  // The gate that keeps shipped builds immune to a hostile/stray runtime environment: staging/production bake a non-"dev" literal, so the lookup never happens - not even to validate.
   it.each(["staging", "production"])(
     "ignores the env var entirely for the %s baked environment",
     (environment) => {

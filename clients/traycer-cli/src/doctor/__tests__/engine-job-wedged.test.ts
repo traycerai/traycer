@@ -3,11 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Wiring pin: `probeMacosWedgedJob` existing is not the same thing as
-// runDoctor consulting it. This mocks the probe module and asserts a
-// wedged verdict actually reaches the issue list. darwin-only because the
-// engine gates the probe behind the platform check - the same reason this
-// pin matters: a gate nobody exercises is how wiring silently dies.
+// Wiring pin: `probeMacosWedgedJob` existing is not the same thing as runDoctor consulting it.
+// This mocks the probe module and asserts a wedged verdict actually reaches the issue list. darwin-only because the engine gates the probe behind the platform check - the same reason this pin matters: a gate nobody exercises is how wiring silently dies.
 
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {

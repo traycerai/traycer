@@ -194,8 +194,8 @@ describe("surface presentation boundary — kept-mounted manual portals", () => 
     });
     expect(document.activeElement).toBe(inputByTestId("manual"));
 
-    // Unfocus: hidden + inert, the active descendant is blurred (so keyboard no
-    // longer targets it), but the portal stays MOUNTED (typed state survives).
+    // Unfocus: hidden + inert, the active descendant is blurred (so keyboard no longer targets it), but the portal
+    // stays mounted (typed state survives).
     act(() => {
       rerender(
         <SurfacePresentationBoundary visible focused={false}>
@@ -281,13 +281,8 @@ function CloseGuardButton(props: {
 }
 
 describe("surface presentation boundary — close-autofocus guard (HIGH1)", () => {
-  // The guard reads the boundary's live `data-pane-focused` (via the focus probe)
-  // at close-autofocus time and preventDefaults Radix's restore only while the
-  // pane is unfocused. Killing the restore at the source is what stops the
-  // background pane from being reactivated. The full end-to-end bounce is proven
-  // in a REAL browser (jsdom neither fires Radix's onUnmountAutoFocus on an
-  // external unmount nor models Chrome's trusted `.focus()`); this covers the
-  // guard's contract against the real boundary + probe.
+  // The guard reads the boundary's live `data-pane-focused` (via the focus probe) at close-autofocus time and
+  // preventDefaults Radix's restore only while the pane is unfocused.
   it("preventDefaults the restore for an unfocused pane, and passes it through for a focused pane", () => {
     const caller = vi.fn();
     const blocked = new Event("radix", { cancelable: true });

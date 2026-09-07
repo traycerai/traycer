@@ -71,17 +71,8 @@ interface SwitcherListProps {
 }
 
 /**
- * Artifacts category: spec / ticket / story / review over the shared
- * `useEpicArtifactRecords()` projection (everything that is not a chat or
- * terminal-agent). Reuses the desktop status-dot helpers, the desktop indent
- * step and the desktop tree's roles, so a nested artifact reads as nested here
- * exactly as it does in the sidebar and in the Agents category beside it -
- * which mounts the desktop chat tree outright.
- *
- * What this surface does NOT take from the sidebar is collapsing. Every node is
- * always drawn, so there is no chevron column - which is also why the sidebar's
- * indent-guide rails are absent: `TreeGroupGuide` is positioned against the
- * parent's chevron, and a rail here would descend from nothing.
+ * Artifacts category: spec / ticket / story / review over the shared `useEpicArtifactRecords()` projection (everything that is not a chat or terminal-agent).
+ * Reuses the desktop status-dot helpers, the desktop indent step and the desktop tree's roles, so a nested artifact reads as nested here exactly as it does in the sidebar and in the Agents category beside it - which mounts the desktop chat tree outright.
  */
 export function SwitcherArtifactsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
@@ -103,16 +94,12 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
   // Query state is the sheet's, not the store's - see the Agents list for why a
   // query must not outlive a sheet that closes on the first tap.
   const [searchQuery, setSearchQuery] = useState("");
-  // The same gate the sidebar's affordance uses: emptiness, not size. An epic
-  // with no artifacts has nothing to match, so offering to search it is a dead
-  // end - and the category's own "No artifacts yet." already says so.
+  // The same gate the sidebar's affordance uses: emptiness, not size.
+  // An epic with no artifacts has nothing to match, so offering to search it is a dead end - and the category's own "No artifacts yet." already says so.
   const searchAvailable = useArtifactSearchAvailable();
   const debouncedQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
   const search = useArtifactSearchResults({ epicId, debouncedQuery });
-  // Hits are the host's, ordered by its ranking; the rows are this list's own.
-  // A hit the projection cannot resolve is stale in the on-disk mirror, and the
-  // switcher has no row to offer for it - unlike the sidebar, which lists it and
-  // reports the staleness when tapped. Dropping it keeps every row openable.
+  // A hit the projection cannot resolve is stale in the on-disk mirror, and the switcher has no row to offer for it - unlike the sidebar, which lists it and reports the staleness when tapped.
   const recordById = useMemo(
     () => new Map(records.map((record) => [record.id, record])),
     [records],
@@ -179,10 +166,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
 }
 
 /**
- * The category's ordinary list: every artifact surviving the facet filters, in
- * the epic's sort order, each child grouped under whichever of its ancestors
- * survived with it. Search replaces this wholesale rather than narrowing it,
- * because the host ranks its own hits and that ranking is the answer.
+ * Search replaces this wholesale rather than narrowing it, because the host ranks its own hits and that ranking is the answer.
  */
 function SwitcherArtifactBrowseList(props: {
   readonly artifacts: ReadonlyArray<EpicTreeRecord>;
@@ -208,11 +192,7 @@ function SwitcherArtifactBrowseList(props: {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-      {/* The desktop artifact tree's roles, for the same reason it carries
-          them: indentation is a sighted reader's only cue, and a screen
-          reader that is handed a flat run of buttons is told nothing at all
-          about what contains what. Level comes from the nesting itself
-          (`role="group"`), exactly as it does on the sidebar. */}
+      {/* The desktop artifact tree's roles, for the same reason it carries them: indentation is a sighted reader's only cue, and a screen reader that is handed a flat run of buttons is told nothing at all about what contains what. */}
       <ul role="tree" aria-label="Epic artifacts tree" className="space-y-0.5">
         {roots.map((node) => (
           <SwitcherArtifactNode
@@ -241,10 +221,8 @@ function SwitcherArtifactNode(props: {
   const { node, depth, records, epicId, tabId, onClose } = props;
   const isActive = useIsActiveEpicArtifact(tabId, node.record.id);
   return (
-    // A tree that never collapses still owes its branches an expansion state:
-    // with none, a parent is announced as a leaf and the group under it reads
-    // as unrelated. Leaves omit the attribute entirely - that omission is what
-    // marks them as leaves, so it must not be `false`.
+    // A tree that never collapses still owes its branches an expansion state: with none, a parent is announced as a leaf and the group under it reads as unrelated.
+    // Leaves omit the attribute entirely - that omission is what marks them as leaves, so it must not be `false`.
     <li
       role="treeitem"
       aria-selected={isActive}
@@ -279,13 +257,7 @@ function SwitcherArtifactNode(props: {
 }
 
 /**
- * The host's ranked hits, as switcher rows.
- *
- * The phone needs none of the sidebar's tree-hiding machinery: this list IS the
- * results surface, so a search simply renders different rows into it. What it
- * does owe the user is the sidebar's honesty about WHY there are no rows - an
- * old host that cannot answer, a mirror that is not built yet, and a failure are
- * three different situations and only one of them means "no matches".
+ * What it does owe the user is the sidebar's honesty about WHY there are no rows - an old host that cannot answer, a mirror that is not built yet, and a failure are three different situations and only one of them means "no matches".
  */
 function SwitcherArtifactSearchResults(props: {
   readonly search: ArtifactSearchResults;
@@ -396,10 +368,7 @@ function SwitcherArtifactSearchBody(props: {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-      {/* Hits stay flat at depth 0, and carry no tree roles. They are a
-          ranking, not a tree: indenting one under another would claim a
-          containment the host's ordering never asserted, and the parent it
-          looked nested under may not even be a hit. */}
+      {/* They are a ranking, not a tree: indenting one under another would claim a containment the host's ordering never asserted, and the parent it looked nested under may not even be a hit. */}
       {hitRecords.map((record) => (
         <SwitcherArtifactSearchRow
           key={record.id}
@@ -443,13 +412,8 @@ function SwitcherArtifactsEmpty(props: {
 }
 
 /**
- * One artifact row, indented by its depth in the list's own tree.
- *
- * The indent is the sidebar's `INDENT_PX` step rather than a mobile-only scale,
- * so a tree the user reads on the phone steps at the same rate as the one they
- * read on the desktop. It is padding on a wrapper, not on the row, which keeps
- * the row itself the shared `SwitcherListRow` every other category renders -
- * indentation narrows the row, and cannot shorten it below its 44px minimum.
+ * The indent is the sidebar's `INDENT_PX` step rather than a mobile-only scale, so a tree the user reads on the phone steps at the same rate as the one they read on the desktop.
+ * It is padding on a wrapper, not on the row, which keeps the row itself the shared `SwitcherListRow` every other category renders - indentation narrows the row, and cannot shorten it below its 44px minimum.
  */
 function SwitcherArtifactRow(props: {
   readonly record: EpicTreeRecord;
@@ -482,9 +446,7 @@ function SwitcherArtifactRow(props: {
   );
 
   return (
-    // `min-w-0` for the same reason the row's own levels carry it: this wrapper
-    // is one more level between the scroll container and the truncating label,
-    // and one level that may not shrink below its content re-inflates the row.
+    // `min-w-0` for the same reason the row's own levels carry it: this wrapper is one more level between the scroll container and the truncating label, and one level that may not shrink below its content re-inflates the row.
     <div
       className="min-w-0"
       data-depth={depth}

@@ -22,10 +22,7 @@ vi.mock("@/components/layout/app-shell", () => ({
   ),
 }));
 
-// The standalone sign-in / onboarding surfaces render the Windows menu strip
-// in a title-bar band, and the strip routes its popup through a TanStack
-// mutation. This routing test wraps RootComponent in only a router queryClient
-// (no QueryClientProvider), so stub the module like AppShell above.
+// Stub the Windows menu strip: this routing test has no QueryClientProvider.
 vi.mock("@/components/layout/header/windows-menu-bar", () => ({
   WindowsMenuBar: () => null,
 }));

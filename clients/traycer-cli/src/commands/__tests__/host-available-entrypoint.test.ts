@@ -13,33 +13,7 @@ import type {
 } from "../../registry";
 import type { HostInstallRecord } from "../../manifest/host-install";
 
-/**
- * `host available`'s three flag states, driven through the REAL commander
- * tree.
- *
- * The derive state is spelled as an ABSENT commander option, which makes it
- * the one state no source line asserts: it exists only because commander
- * leaves `includePreReleases` unset when a command declares both `--x` and
- * `--no-x` and neither is passed. That is a library rule, and it has not been
- * stable across majors - commander 9.5.0 lets a `--no-x` declared FIRST
- * install an implicit `true` default, so on that version the declaration order
- * in `index.ts` is load-bearing. The CLI resolves 15.0.0, where neither order
- * does that (verified both ways). A dependency bump is therefore the live
- * risk, not a source edit: if the 9.x rule ever returns, "neither flag"
- * silently becomes `true` and every default listing on every host starts
- * including release candidates.
- *
- * So these assert BEHAVIOUR, not registration. The structural suite next door
- * only checks the flag exists; these parse real argv and pin the value that
- * comes out the far end, so a regression anywhere along commander ->
- * `index.ts`'s mapping -> `resolveIncludePreReleases` lands here. Confirmed by
- * mutation: collapsing the mapping back to a plain boolean fails two of them.
- *
- * Deliberately its own file: it has to mock the registry client and the
- * install-record reader to keep the command off the network and off disk, and
- * `cli-entrypoint-registration.test.ts` walks the whole command tree - those
- * mocks have no business being in scope there.
- */
+/** Drive `host available` flag states through the real commander parser, not a reconstructed argv. */
 const mocks = vi.hoisted(() => ({
   results: [] as CommandResult[],
   fetchManifestMock: vi.fn(),
@@ -68,9 +42,7 @@ vi.mock("../../manifest/host-install", async (importOriginal) => {
   };
 });
 
-// Same shape as `cli-entrypoint-registration.test.ts`: replace only
-// `runCommand`, which owns `process.exit`, so `parseAsync` can drive the real
-// command wiring to completion inside the test process.
+// Same shape as `cli-entrypoint-registration.test.ts`: replace only `runCommand`, which owns `process.exit`, so `parseAsync` can drive the real command wiring to completion inside the test process.
 vi.mock("../../runner/runner", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../runner/runner")>();
   return {
@@ -194,9 +166,8 @@ describe("host available flag states through the real commander tree", () => {
   });
 
   it("leaves the option undefined with neither flag, and derives from the RC install", async () => {
-    // The load-bearing assertion. If commander ever defaults this to `true`,
-    // `parsedOption` catches it before the provenance does - and the
-    // provenance proves the CLI did not merely guess right by accident.
+    // The load-bearing assertion.
+    // If commander ever defaults this to `true`, `parsedOption` catches it before the provenance does - and the provenance proves the CLI did not merely guess right by accident.
     const { parsedOption, data } = await runHostAvailable([]);
 
     expect(parsedOption).toBe(undefined);
@@ -217,9 +188,7 @@ describe("host available flag states through the real commander tree", () => {
   });
 
   it("parses the negative flag as an explicit exclude that beats the RC install", async () => {
-    // Critique finding 7's remedy, end to end: on an RC host, whose derived
-    // default includes RCs, the negative flag must still produce a
-    // stable-only listing.
+    // Critique finding 7's remedy, end to end: on an RC host, whose derived default includes RCs, the negative flag must still produce a stable-only listing.
     const { parsedOption, data } = await runHostAvailable([
       "--no-include-pre-releases",
     ]);
@@ -232,10 +201,8 @@ describe("host available flag states through the real commander tree", () => {
   });
 
   it("keeps all three states distinct - none collapses into another", async () => {
-    // The regression this file exists for is a COLLAPSE: two of the three
-    // states quietly becoming one. Asserted together so a reorder that makes
-    // "neither" behave like "--include-pre-releases" cannot pass by fixing
-    // each case's expectation in isolation.
+    // The regression this file exists for is a COLLAPSE: two of the three states quietly becoming one.
+    // Asserted together so a reorder that makes "neither" behave like "--include-pre-releases" cannot pass by fixing each case's expectation in isolation.
     const neither = await runHostAvailable([]);
     const positive = await runHostAvailable(["--include-pre-releases"]);
     const negative = await runHostAvailable(["--no-include-pre-releases"]);

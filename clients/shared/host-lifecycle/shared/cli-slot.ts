@@ -3,15 +3,8 @@
 
 export type CliSlotValidity =
   /**
-   * Structurally valid slot. `attested` reports whether the **invocation**
-   * probe positively ran and passed — it is not a restatement of `kind`.
-   *
-   * It was a literal `true`, which carried no information and conflated
-   * structural validity (the symlink resolves to an executable at the
-   * expected target) with invocation attestation (the binary answered
-   * `host start --help`). That is exactly the distinction the F8 phase-2
-   * probe exists to make, and a caller reading `attested` got `true` for a
-   * slot whose invocation probe had never been run.
+   * Structurally valid slot.
+   * `attested` reports whether the **invocation** probe positively ran and passed - it is not a restatement of `kind`.
    */
   | { readonly kind: "valid"; readonly attested: boolean }
   | { readonly kind: "dangling" }
@@ -37,9 +30,6 @@ export type CliSlotProbeInput = {
   readonly probeError: string | null;
 };
 
-/**
- * Pure classification of CLI-slot state from pre-gathered fs facts.
- */
 export function classifyCliSlot(input: CliSlotProbeInput): CliSlotValidity {
   if (input.probeError !== null) {
     return { kind: "indeterminate", cause: input.probeError };

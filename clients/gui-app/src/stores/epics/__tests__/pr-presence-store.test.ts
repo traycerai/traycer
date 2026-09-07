@@ -112,12 +112,6 @@ describe("pr presence store", () => {
       window.localStorage.clear();
     });
 
-    // `migrate` only runs on a version mismatch, so persisted corruption
-    // written under the CURRENT version would reach zustand's default merge
-    // unsanitized without a `merge` option applying the same guard on every
-    // rehydration. Driven through `persist.rehydrate()` rather than calling
-    // `migratePrPresencePersistedState` directly - the helper alone would not
-    // fail if `merge:` were deleted from the store's persist config.
     it("sanitizes a corrupted hasItemsByScopeKey even though the version already matches", async () => {
       window.localStorage.setItem(
         PR_PRESENCE_PERSIST_KEY,

@@ -33,12 +33,7 @@ export function traycerShellProbeQueryOptions(
   });
 }
 
-/**
- * Probes whether `path` exists and is executable, backing the picker's live
- * "Add a shell" validation. The caller passes the already-debounced path and an
- * `enabled` gate (only absolute, non-empty paths are worth probing). Disabled
- * when `traycerCli === null` (mobile/web hosts).
- */
+/** Probes whether `path` exists and is executable, backing the picker's live "Add a shell" validation. */
 export function useRunnerTraycerShellProbeQuery(input: {
   readonly path: string;
   readonly enabled: boolean;

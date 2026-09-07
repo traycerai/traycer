@@ -22,18 +22,7 @@ import {
 } from "@traycer/protocol/persistence/registry";
 
 /**
- * A published chat as a reader actually meets it: a head, the shard bytes it
- * names, and a fetch port that serves them.
- *
- * Shared by the assembly and presentation suites because they test two halves
- * of one journey, and a fixture that drifted between them would let each half
- * pass against a chat the other could not produce.
- *
- * The content is chosen for what it exercises rather than for realism: one
- * known message with a known block, a block carrying payload refs the reader
- * cannot resolve, a block type from the future, a message role from the future,
- * and an event type from the future - all split across two cohorts so the
- * assembly order actually has something to get wrong.
+ * A published chat as a reader actually meets it: a head, the shard bytes it names, and a fetch port that serves them.
  */
 
 const chatHeadSchema = getRecordSchema(
@@ -70,9 +59,7 @@ export const textBlock: JsonObject = {
 };
 
 /**
- * The payload-ref case: both diff sides live as content-addressed blobs in the
- * ORIGIN host's SnapshotStore, so a cloud reader has the block but not its
- * contents.
+ * The payload-ref case: both diff sides live as content-addressed blobs in the ORIGIN host's SnapshotStore, so a cloud reader has the block but not its contents.
  */
 export const fileChangeBlock: JsonObject = {
   blockId: "b-file",
@@ -281,11 +268,7 @@ export function publishShard(wire: JsonObject): {
 
 /**
  * Canonical bytes for a wire shard WITHOUT parsing it first.
- *
- * For the shapes a writer must not produce: a shard the registered schema
- * rejects cannot be built through `publishShard`, but a hostile or buggy writer
- * can still upload its bytes under a correct content address. That is the case
- * the reader has to refuse on its own, so a test needs a way to forge one.
+ * For the shapes a writer must not produce: a shard the registered schema rejects cannot be built through `publishShard`, but a hostile or buggy writer can still upload its bytes under a correct content address.
  */
 export function publishRawShard(wire: JsonObject): {
   readonly bytes: string;
@@ -316,13 +299,7 @@ export type PublishedChat = {
   readonly documentBytes: string;
   /**
    * The head's identity: sha256 of `documentBytes`.
-   *
-   * This is the CAS witness, the digest the chat row holds, and the value the
-   * NEXT head carries as its `parentHeadSha256` - one value for all three. A
-   * fixture that exposed the payload digest here would teach every consumer to
-   * chain on bytes nobody stores, so the next sync would fail to find the
-   * ancestor it named and report a fork that never happened. This fixture did
-   * exactly that once; hence the emphasis.
+   * A fixture that exposed the payload digest here would teach every consumer to chain on bytes nobody stores, so the next sync would fail to find the ancestor it named and report a fork that never happened.
    */
   readonly headSha256: string;
   /** Every part's bytes, keyed by the address the head names it with. */
@@ -333,10 +310,7 @@ export type PublishedChat = {
 
 /**
  * Publishes the fixture chat.
- *
- * `graduate` decides which head sections have outgrown the head and moved to
- * parts of their own - the two layouts a reader must handle identically.
- * `parentHeadSha256` seeds the lineage chain.
+ * `graduate` decides which head sections have outgrown the head and moved to parts of their own - the two layouts a reader must handle identically.
  */
 export function publishChat(options: {
   readonly graduate: {
@@ -407,10 +381,8 @@ export function publishChat(options: {
     parentHeadSha256: options.parentHeadSha256,
     throughRecordSeq: 42,
     capturedAt: 1_700_000_000_000,
-    // What a correct publisher on this line stamps. The floor is for a change
-    // an older reader cannot safely INTERPRET, and neither minor is one: a 1.0
-    // reader takes the part entries as addresses and re-derives its own cut,
-    // and 1.2's `chat.imported` rides the unknown-variant passthrough.
+    // What a correct publisher on this line stamps.
+    // The floor is for a change an older reader cannot safely INTERPRET, and neither minor is one: a 1.0 reader takes the part entries as addresses and re-derives its own cut, and 1.2's `chat.imported` rides the.
     minReaderVersion: null,
     cdc: { ...FIXTURE_CDC },
     core: {

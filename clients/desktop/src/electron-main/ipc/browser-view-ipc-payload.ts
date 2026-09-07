@@ -119,14 +119,7 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
 /** The saved-logins toggle's new value. */
 const saveLoginsSchema = z.boolean();
 
-/**
- * Which main-owned `browser.sessions` stream a renderer means.
- *
- * A host ID, never a directory row: the row carries the host's static Noise
- * key, and accepting one from a renderer would let a compromised renderer aim
- * main's jar stream at a host it controls. Bounded because every field is
- * echoed into a map key and a log line.
- */
+/** A host ID, never a directory row: the row carries the host's static Noise key, and accepting one from a renderer would let a compromised renderer aim main's jar stream at a host. */
 const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
   z.strictObject({
     epicId: nonEmptyStringSchema.max(128),
@@ -134,15 +127,6 @@ const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
     identityKey: nonEmptyStringSchema.max(512),
   });
 
-/**
- * One user-initiated request onto that stream, parsed against the PROTOCOL's
- * own client-frame schema and then narrowed to the three kinds a renderer may
- * ask for.
- *
- * The narrowing is the gate, not the parse: `forgetLogins` and `clearSite`
- * shred every connected host's slice of the user's logins, so they are
- * produced in main behind its own confirmation and refused here.
- */
 const sessionsStreamSendSchema = z
   .strictObject({
     key: sessionsStreamKeySchema,
@@ -159,16 +143,7 @@ const UX_CLIENT_FRAME_KINDS: ReadonlySet<string> = new Set(
   BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
 );
 
-/**
- * One saved-login row's domain, as Settings names it.
- *
- * A REGISTRABLE domain and nothing else. It is interpolated into a native
- * confirmation dialog and it is the blast radius of the clear that dialog
- * authorises, so a renderer that could name `x` could write the sentence the
- * user is answering. Anything that does not collapse to itself - a subdomain, a
- * url, a sentence - is refused rather than narrowed, because narrowing would
- * clear a scope the caller did not name.
- */
+/** Anything that does not collapse to itself - a subdomain, a url, a sentence - is refused rather than narrowed, because narrowing would clear a scope the caller did not name. */
 const savedLoginSiteSchema = z.strictObject({
   domain: nonEmptyStringSchema
     .max(253)
@@ -177,24 +152,11 @@ const savedLoginSiteSchema = z.strictObject({
     }),
 });
 
-/**
- * A source id the desktop listed for this renderer: a 32-hex digest of the
- * source's location (`sourceIdFor`). The bound is loose on purpose so a
- * future id shape does not have to touch the IPC contract; the service still
- * refuses any id it did not mint.
- */
 const loginImportSourceIdSchema = nonEmptyStringSchema.max(128);
 const loginImportScanSchema = z.strictObject({
   sourceId: loginImportSourceIdSchema,
 });
 
-/**
- * The import request: registrable domains from the scan's own site list. A
- * ceiling bounds the write; a real jar has a few hundred sites at most. Each
- * entry is bounded like `savedLoginSiteSchema`'s domain (a DNS name is at
- * most 253 characters); the service intersects the list with the scan the
- * request quotes, so an unknown domain is dropped there, not narrowed here.
- */
 const LOGIN_IMPORT_MAX_DOMAINS = 5_000;
 const loginImportRunSchema: z.ZodType<LoginImportRequest> = z.strictObject({
   sourceId: loginImportSourceIdSchema,
@@ -225,11 +187,7 @@ export const browserViewIpcPayload = {
   tileKey: tileKeySchema,
 } as const;
 
-/**
- * Per-ROW catch, deliberately. A newer renderer may list a command this build
- * has never heard of; catching on the ARRAY would discard the whole policy
- * table over that one row and leave every chord unclaimed.
- */
+/** A newer renderer may list a command this build has never heard of; catching on the ARRAY would discard the whole policy table over that one row and leave every chord unclaimed. */
 const reservedChordRowSchema = z
   .object({
     token: z.string(),

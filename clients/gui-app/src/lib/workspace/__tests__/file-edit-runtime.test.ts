@@ -295,12 +295,8 @@ describe("FileEditRuntimeRegistry", () => {
     expect(attachment.runtime.store.getState().status).toBe("offline");
     expect(journal.entries.size).toBe(1);
 
-    // The user, seeing the offline error, edits the draft back to what they
-    // read from disk before attempting the change. Without the ambiguous-
-    // offline fix, this content now matches `baselineContent` again, so
-    // `isDirty` would flip to false: the recovery journal would be deleted
-    // and a subsequent `retry()` would no-op (`canStartSave()` requires
-    // `isDirty`), silently abandoning reconciliation.
+    // The user, seeing the offline error, edits the draft back to what they read from disk before attempting the change.
+    // Without the ambiguous- offline fix, this content now matches `baselineContent` again, so `isDirty` would flip to false: the recovery journal would be deleted and a subsequent `retry()` would no-op (`canStartSave()` requires `isDirty`), silently abandoning.
     attachment.runtime.setDraft("surface-a", "base");
     expect(attachment.runtime.store.getState()).toMatchObject({
       status: "offline",
@@ -684,11 +680,7 @@ describe("FileEditRuntimeRegistry", () => {
     });
     await attachment.runtime.whenRecovered();
 
-    // A single misbehaving runtime must not fail the whole aggregate: every
-    // caller of `registry.teardown()` either discards the promise (`void`) or
-    // awaits it without a `.catch`, so an `all`-style rejection would surface
-    // as an unhandled rejection or abort an unrelated caller's flow (e.g. the
-    // local-state wipe).
+    // A single misbehaving runtime must not fail the whole aggregate: every caller of `registry.teardown()` either discards the promise (`void`) or awaits it without a `.catch`, so an `all`-style rejection would surface as an unhandled rejection or abort an.
     vi.spyOn(attachment.runtime, "teardown").mockRejectedValue(
       new Error("teardown failed"),
     );

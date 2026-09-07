@@ -494,11 +494,6 @@ describe("MenuController", () => {
     controller.dispose();
   });
 
-  // Cold-review #3 / review finding 5: the version dispatched with
-  // `host.installUpdate` is the value captured into the tray item callback
-  // when the row was labelled - not live MenuController state - so a stale
-  // open-menu click after presentation moves on still pins the version the
-  // user saw.
   it("dispatches host.installUpdate with the version captured by the tray item callback", () => {
     const dispatchRendererCommand = vi.fn(() => true);
     const controller = createController({
@@ -542,11 +537,6 @@ describe("MenuController", () => {
     controller.dispose();
   });
 
-  // Stale open-menu capture of version A after presentation moves to B is
-  // covered end-to-end at the tray boundary in tray.test.ts (DesktopTrayController
-  // private fields make a real tray fixture impractical here). The cases above
-  // prove MenuController dispatches the callback-captured version rather than
-  // live hostUpdateAvailableVersion.
 
   it("dispatches Restart Host through the renderer confirmation path", () => {
     const host = new FakeHost();

@@ -404,11 +404,8 @@ describe("composer draft store browserAnnotations", () => {
   });
 
   it("Sidecar mutations DO bump revision (the prompt-stash clear-if-unchanged token)", async () => {
-    // A stash captures {content, revision}, saves to IndexedDB, then clears
-    // the draft only if the revision still matches - and `clearDraft` wipes
-    // the sidecar the stash never captured. Without a bump here, an
-    // annotation attached during that save is destroyed with nothing holding
-    // it.
+    // A stash captures {content, revision}, saves to IndexedDB, then clears the draft only if the
+    // revision still matches - and `clearDraft` wipes the sidecar the stash never captured.
     useComposerDraftStore
       .getState()
       .setSnapshot("chat-cas", EMPTY_DOC, { from: 1, to: 1 });

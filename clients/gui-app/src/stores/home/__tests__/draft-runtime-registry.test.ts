@@ -46,9 +46,8 @@ function imageContent(hash: string): JsonContent {
 }
 
 /**
- * ~2 MiB inline-image document. Large enough that accidental whole-document
- * `JSON.stringify` on a selection-only flush shows up as O(document) work.
- * Mirrors the Ticket 2 `multiMegabyteImageDoc` helper.
+ * ~2 MiB inline-image document. Large enough that accidental whole-document `JSON.stringify` on a
+ * selection-only flush shows up as O(document) work.
  */
 function multiMegabyteImageDoc(): JsonContent {
   const b64content = "B".repeat(2 * 1024 * 1024);
@@ -76,9 +75,8 @@ function multiMegabyteImageDoc(): JsonContent {
 }
 
 /**
- * Counts `JSON.stringify` calls that directly serialize `content` (the old
- * `sameJsonContent` shape). Zustand persist may still stringify the store
- * envelope - that is durability, not a content-comparison path.
+ * Zustand persist may still stringify the store envelope - that is durability, not a
+ * content-comparison path.
  */
 function contentComparisonStringifies(
   spy: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
@@ -88,10 +86,8 @@ function contentComparisonStringifies(
 }
 
 /**
- * Wire the real landing-draft store as the registry source. Module load does
- * this once; tests that reconfigure for write spies must restore afterward.
- * Spying zustand action methods directly is unreliable: `setState` copies the
- * spy onto the next state object and `vi.restoreAllMocks` cannot unwind it.
+ * Wire the real landing-draft store as the registry source. Module load does this once; tests that
+ * reconfigure for write spies must restore afterward.
  */
 function configureLandingDraftSource(): void {
   draftRuntimeRegistry.configure({
@@ -285,13 +281,8 @@ describe("DraftRuntimeRegistry", () => {
   });
 
   it("keeps a submission current when only the caret moves after submit", () => {
-    // Under the event-driven contract, `setSnapshot` is only called for real
-    // document mutations (Tiptap's `docChanged`-gated `update`). The old
-    // `setEditable` phantom that re-emitted identical content through
-    // `setSnapshot` can no longer happen: production passes
-    // `setEditable(!disabled, false)` and selection moves go through
-    // `setSelection`. A caret-only path after submit must keep settlement
-    // current; a real document edit still retires the placement.
+    // Under the event-driven contract, `setSnapshot` is only called for real document mutations
+    // (Tiptap's `docChanged`-gated `update`).
     useLandingDraftStore.getState().createDraftWithId("draft-a", null);
     const runtime = draftRuntimeRegistry.attach("draft-a");
     if (runtime === null) throw new Error("expected keyed draft runtime");
@@ -314,10 +305,8 @@ describe("DraftRuntimeRegistry", () => {
   });
 
   it("tracks a caret move without counting it as a content change", () => {
-    // Selection-only updates must go through `setSelection`: update the
-    // stored caret (draft restores it on reopen) without bumping the
-    // revision an in-flight submission is pinned to, and still schedule the
-    // debounced durable flush so the selection lands in the landing draft.
+    // Selection-only updates must go through `setSelection`: update the stored caret (draft restores
+    // it on reopen) without bumping the revision an in-flight submission is pinned to, and still
     useLandingDraftStore.getState().createDraftWithId("draft-a", null);
     const runtime = draftRuntimeRegistry.attach("draft-a");
     if (runtime === null) throw new Error("expected keyed draft runtime");
@@ -412,10 +401,7 @@ describe("DraftRuntimeRegistry", () => {
   });
 
   it("selection-only flush after debounce never compares multi-megabyte content", () => {
-    // Ticket 2 proved the *synchronous* setSelection path stays cheap; this
-    // advances fake timers through the real 300ms debounce and proves the
-    // *deferred* write also goes through writeSelection / setDraftSelection
-    // without sameJsonContent or a direct content JSON.stringify.
+    // Advance the real 300ms debounce so the deferred write also goes through writeSelection.
     useLandingDraftStore.getState().createDraftWithId("draft-mega", null);
     const runtime = draftRuntimeRegistry.attach("draft-mega");
     if (runtime === null) throw new Error("expected keyed draft runtime");

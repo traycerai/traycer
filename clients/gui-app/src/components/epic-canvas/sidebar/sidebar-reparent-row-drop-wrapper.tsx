@@ -11,10 +11,8 @@ import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 
 /**
- * Row container shared by the chat and artifact trees: registers the
- * `sidebar-reparent-row` drop target on the row wrapper (the draggable stays on
- * the inner row button) and highlights while this row is the active reparent
- * target. Only `panelId` differs between the two trees.
+ * Row container shared by the chat and artifact trees: registers the `sidebar-reparent-row` drop target on the row wrapper (the draggable stays on the inner row button) and highlights while this row is the active reparent target.
+ * Only `panelId` differs between the two trees.
  */
 export function SidebarReparentRowDropWrapper(props: {
   readonly epicId: string;

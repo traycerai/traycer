@@ -31,23 +31,14 @@ import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
 const BOLD_MARK = { type: "bold" };
 
-/**
- * An inline-base64 image found in a landing paste. Handed to the landing ingest
- * for synchronous validation; accepted ones stay in the inserted document as
- * pending nodes (b64) and their background hash+store job converts them in place.
- */
+/** An inline-base64 image found in a landing paste. Handed to the landing ingest for synchronous validation; accepted ones stay in the inserted document as pending nodes (b64) and their background hash+store job converts them in place. */
 export interface PastedComposerImage {
   readonly fileName: string;
   readonly mimeType: string;
   readonly b64content: string;
 }
 
-/**
- * The landing ingest's verdict for one pasted image, parallel to the input
- * array: `accepted` carries the fresh uuid to stamp on the in-document node (its
- * background job is already running, keyed by that id); `rejected` means the node
- * is dropped from the inserted content.
- */
+/** The landing ingest's verdict for one pasted image, parallel to the input array: `accepted` carries the fresh uuid to stamp on the in-document node (its background job is already running, keyed by that id); `rejected` means the node is dropped from the inserted content. */
 export type PastedComposerImageOutcome =
   | { readonly kind: "accepted"; readonly id: string }
   | { readonly kind: "rejected" };
@@ -55,15 +46,7 @@ export type PastedComposerImageOutcome =
 export interface ChatPasteHandlerDeps {
   readonly pickerStore: ComposerPickerStore;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
-  /**
-   * Landing-only: validate a paste's inline-base64 images synchronously (decode,
-   * MIME/5MB, budget), mint fresh ids for accepted ones, and START their
-   * background hash+`putImage`+rewrite-by-id jobs. Returns a verdict per image so
-   * the handler can insert the FULL content in document order — accepted images
-   * kept in place as pending b64 nodes (fresh id), rejected ones dropped.
-   * `null` on chat / new-conversation, where base64 nodes are inserted verbatim.
-   * Read through a getter because the paste plugin is built once.
-   */
+  /** Landing-only: validate a paste's inline-base64 images synchronously (decode, MIME/5MB, budget), mint fresh ids for accepted ones, and START their background hash+`putImage`+rewrite-by-id jobs. Returns a verdict per image so the handler can insert the FULL content in document order - accepted images kept in place as pending b64 nodes (fresh id), rejected ones dropped. */
   readonly getIngestPastedComposerImages: () =>
     | ((
         images: ReadonlyArray<PastedComposerImage>,
@@ -77,13 +60,8 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
 
     addProseMirrorPlugins() {
       const { editor } = this;
-      // The composer-content (JSON) clipboard flavor is a whole standalone
-      // copied-message doc, so both the no-strip and strip cases rebuild
-      // through `pasteComposerContent`'s closed 0/0 slice - there's no open
-      // slice to preserve for this flavor. The HTML clipboard flavor uses
-      // `pasteSliceWithValidatedImages` below instead, which strips directly
-      // against the parsed `Slice`'s `Fragment` so an inline paste's open
-      // boundaries survive a strip.
+      // The composer-content (JSON) clipboard flavor is a whole standalone copied-message doc, so both the no-strip and strip cases rebuild through `pasteComposerContent`'s closed 0/0 slice - there's no open slice to preserve for this flavor.
+      // The HTML clipboard flavor uses `pasteSliceWithValidatedImages` below instead, which strips directly against the parsed `Slice`'s `Fragment` so an inline paste's open boundaries survive a strip.
       const validateAndPasteComposerContent = (
         view: EditorView,
         content: JsonContent,
@@ -114,12 +92,8 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
         content: JsonContent,
       ): boolean => {
         const ingest = deps.getIngestPastedComposerImages();
-        // Landing only: keep the base64 image nodes IN the content (in document
-        // order) and insert everything synchronously. The ingest validates each
-        // image, mints its fresh id, and starts its background hash+store job; we
-        // stamp those ids / drop rejected images, then insert. Each accepted node
-        // renders its b64 immediately and flips to a hash in place when its job
-        // resolves. Chat passes a null ingest and inserts base64 nodes verbatim.
+        // Landing only: keep the base64 image nodes IN the content (in document order) and insert everything synchronously.
+        // The ingest validates each image, mints its fresh id, and starts its background hash+store job; we stamp those ids / drop rejected images, then insert.
         let workingContent = content;
         if (ingest !== null) {
           const images = collectPastedB64Images(content);
@@ -139,11 +113,8 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           view.dispatch(tr.scrollIntoView());
           return true;
         };
-        // Landing only: native editor HTML (a plain Cmd+C of an image atom) also
-        // serializes `data-b64content`. Run those base64 images through the SAME
-        // in-place ingest as the structured path — keep them in the slice (fresh
-        // id / drop rejected) and start their background jobs — so raw HTML can't
-        // persist inline base64 that skips MIME/5MB/budget/pending/reconcile.
+        // Landing only: native editor HTML (a plain Cmd+C of an image atom) also serializes `data-b64content`.
+        // Run those base64 images through the SAME in-place ingest as the structured path - keep them in the slice (fresh id / drop rejected) and start their background jobs - so raw HTML can't persist inline base64 that skips MIME/5MB/budget/pending/reconcile.
         const ingest = deps.getIngestPastedComposerImages();
         let workingSlice = slice;
         if (ingest !== null) {
@@ -185,30 +156,11 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               const clipboardData = event.clipboardData;
               if (clipboardData === null) return false;
 
-              // File-like clipboards (real `File`s, or a URI-only flavor that
-              // actually parses to a `file://` path) are owned exclusively by
-              // the React-level paste handler (`useComposerPasteEvents`),
-              // which resolves them to real paths asynchronously. Claiming
-              // the event here (returning `true` with no dispatch) stops
-              // ProseMirror's own fallback text/html/markdown branches below
-              // from also inserting the clipboard's textual representation -
-              // a `text/uri-list` paste commonly carries a `text/plain`
-              // sibling (e.g. VS Code), and without this early return that
-              // sibling would insert as plain text alongside the async
-              // path-span insertion. `hasClaimableFileTransfer` (unlike a
-              // type-name-only check) parses the URI content first, so an
-              // ordinary `https://` link paste - which also carries a
-              // `text/uri-list` type - is correctly left unclaimed and falls
-              // through to normal text/markdown paste below.
+              // VS Code), and without this early return that sibling would insert as plain text alongside the async path-span insertion.
               if (hasClaimableFileTransfer(clipboardData)) return true;
 
-              // Inside a code block, every textual flavor degrades to the
-              // clipboard's literal plain text — the in-code paste behavior
-              // ProseMirror itself would apply if this handler didn't claim
-              // the event. The branches below parse the paste into block
-              // nodes (markdown/HTML), and `replaceSelection` can fit only
-              // the first line's text inside the code block; the remaining
-              // blocks get hoisted out below it.
+              // Inside a code block, every textual flavor degrades to the clipboard's literal plain text - the in-code paste behavior ProseMirror itself would apply if this handler didn't claim the event.
+              // The branches below parse the paste into block nodes (markdown/HTML), and `replaceSelection` can fit only the first line's text inside the code block; the remaining blocks get hoisted out below it.
               if (view.state.selection.$from.parent.type.spec.code === true) {
                 const codeText = clipboardData.getData("text/plain");
                 if (codeText.length === 0) return false;
@@ -245,11 +197,8 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               const text = clipboardData.getData("text/plain");
               if (text.length === 0) return false;
 
-              // A `/command …` pasted at the start of the composer (e.g. a copied
-              // next-step prompt) becomes a slashCommand chip, mirroring the
-              // submit-time normalization and the live suggestion popover. This
-              // runs before the markdown branch so the command name and its
-              // literal arguments are preserved verbatim.
+              // A `/command …` pasted at the start of the composer (e.g. a copied next-step prompt) becomes a slashCommand chip, mirroring the submit-time normalization and the live suggestion popover.
+              // This runs before the markdown branch so the command name and its literal arguments are preserved verbatim.
               const slashSlice = leadingSlashCommandSlice(
                 view.state,
                 text,
@@ -286,13 +235,8 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               view.dispatch(tr.scrollIntoView());
               return true;
             },
-            // Mirrors the `handlePaste` file-ownership guard above: a
-            // file-like drop (real `File`s, or a URI entry that parses to a
-            // `file://` path) is owned by the React-level drop handler.
-            // Without this, ProseMirror's own default drop handling - which
-            // runs whenever no plugin claims the drop - would insert whatever
-            // text/html representation the drag also carries before React's
-            // async path resolution lands.
+            // Mirrors the `handlePaste` file-ownership guard above: a file-like drop (real `File`s, or a URI entry that parses to a `file://` path) is owned by the React-level drop handler.
+            // Without this, ProseMirror's own default drop handling - which runs whenever no plugin claims the drop - would insert whatever text/html representation the drag also carries before React's async path resolution lands.
             handleDrop(_view, event) {
               const dataTransfer = event.dataTransfer;
               if (dataTransfer === null) return false;
@@ -315,10 +259,8 @@ function pasteComposerContent(view: EditorView, content: JsonContent): boolean {
   return true;
 }
 
-// Collect a landing paste's inline-base64 images in document order, as
-// descriptors for the ingest to validate. The nodes are NOT removed here — they
-// stay in the content and are updated in place by `applyPastedB64ImageOutcomes`
-// once the ingest returns its per-image verdicts (same traversal order).
+// Collect a landing paste's inline-base64 images in document order, as descriptors for the ingest to validate.
+// The nodes are NOT removed here - they stay in the content and are updated in place by `applyPastedB64ImageOutcomes` once the ingest returns its per-image verdicts (same traversal order).
 function collectPastedB64Images(content: JsonContent): PastedComposerImage[] {
   const images: PastedComposerImage[] = [];
   collectPastedB64ImagesNode(content, images);
@@ -370,10 +312,7 @@ function pastedComposerImage(
   };
 }
 
-// Apply the ingest's per-image verdicts to the content, walking the b64 image
-// nodes in the SAME order they were collected: an accepted node keeps its b64
-// payload but takes the fresh id its background job is keyed on; a rejected node
-// (and any `attachmentGroup` left empty) is dropped.
+// Apply the ingest's per-image verdicts to the content, walking the b64 image nodes in the SAME order they were collected: an accepted node keeps its b64 payload but takes the fresh id its background job is keyed on; a rejected node (and any `attachmentGroup` left empty) is dropped.
 function applyPastedB64ImageOutcomes(
   content: JsonContent,
   outcomes: ReadonlyArray<PastedComposerImageOutcome>,
@@ -546,11 +485,8 @@ interface FilteredPastedImageFragment {
   readonly removedCount: number;
 }
 
-// Mirrors `filterUnavailablePastedImages`, but works on the ProseMirror
-// `Slice`/`Fragment` directly instead of round-tripping through JSON, so the
-// original slice's `openStart`/`openEnd` survive a strip. An inline atomic
-// `imageAttachment` node's removal never changes block-nesting depth, so
-// reusing the original open boundaries on the filtered fragment stays valid.
+// Mirrors `filterUnavailablePastedImages`, but works on the ProseMirror `Slice`/`Fragment` directly instead of round-tripping through JSON, so the original slice's `openStart`/`openEnd` survive a strip.
+// An inline atomic `imageAttachment` node's removal never changes block-nesting depth, so reusing the original open boundaries on the filtered fragment stays valid.
 function filterUnavailablePastedImageSlice(
   slice: Slice,
   availableHashes: ReadonlySet<string>,
@@ -756,11 +692,8 @@ function leadingSlashCommandSlice(
   }
 }
 
-// True when a slashCommand inserted at the current selection would land at the
-// document's leading position - the only place the leading-only schema guard
-// keeps it. Reuses the suggestion plugin's `isLeadingRange` predicate so paste
-// is exactly as permissive as typing, and bails when the first block already
-// opens with a slashCommand chip (a second one would be stripped by the guard).
+// True when a slashCommand inserted at the current selection would land at the document's leading position - the only place the leading-only schema guard keeps it.
+// Reuses the suggestion plugin's `isLeadingRange` predicate so paste is exactly as permissive as typing, and bails when the first block already opens with a slashCommand chip (a second one would be stripped by the guard).
 function isLeadingSlashTarget(state: EditorState): boolean {
   const { selection, doc } = state;
   if (!isLeadingRange(state, selection.from, selection.to)) return false;
@@ -773,9 +706,8 @@ function existingLeadingSlashCommandPaste(
   knownCommands: SlashCommandCatalog | null,
 ): { readonly pos: number; readonly text: string } | null {
   if (knownCommands === null) return null;
-  // This path inserts after the existing chip without replacing the selection,
-  // so restrict it to a collapsed caret. A range selection falls through to the
-  // markdown branch, which replaces the selected content as the user expects.
+  // This path inserts after the existing chip without replacing the selection, so restrict it to a collapsed caret.
+  // A range selection falls through to the markdown branch, which replaces the selected content as the user expects.
   if (!state.selection.empty) return null;
   if (!isLeadingRange(state, state.selection.from, state.selection.to)) {
     return null;

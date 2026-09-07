@@ -17,13 +17,7 @@ export interface ChatOpenTileInput {
   readonly sessionHostId: string;
 }
 
-/**
- * Whether opening this chat must use its published read-only copy.
- *
- * An unreachable owner is not enough by itself: the published read is keyed
- * by task + owner user + chat, so a legacy row without either owner field must
- * retain the live fallback instead of constructing an unaddressable tile.
- */
+/** Whether opening this chat must use its published read-only copy. */
 export function chatOpensPublishedCopy(
   input: Pick<
     ChatOpenTileInput,
@@ -38,14 +32,7 @@ export function chatOpensPublishedCopy(
   );
 }
 
-/**
- * Chooses a chat tile once, at open time.
- *
- * Reachable chats stay live and bind to their persisted owner for the tile's
- * lifetime. Unreachable chats with a complete cloud identity open the last
- * published copy, served through the Epic session host. Legacy / optimistic
- * rows without an owner keep the session-host live fallback.
- */
+/** Chooses a chat tile once, at open time. */
 export function makeChatOpenTileRef(
   input: ChatOpenTileInput,
 ): EpicArtifactRef | PublishedChatTileRef {

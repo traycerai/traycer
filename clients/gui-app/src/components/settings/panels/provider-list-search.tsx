@@ -8,12 +8,7 @@ import {
 } from "@/components/ui/input-group";
 import { isProviderListSearchActive } from "./provider-list-search-filter";
 
-/**
- * The shared search affordance for MCP, Skills, and Plugins. It deliberately
- * owns the corresponding no-results state too, so all three tabs distinguish
- * an unmatched query from a provider that has no resources at all in the same
- * way.
- */
+/** The shared search affordance for MCP, Skills, and Plugins. */
 export function ProviderListSearch(props: {
   readonly query: string;
   readonly onQueryChange: (query: string) => void;

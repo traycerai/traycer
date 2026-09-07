@@ -438,9 +438,7 @@ describe("buildAgentTitleFromHookCommand", () => {
       value: {
         isTTY: false,
         async *[Symbol.asyncIterator]() {
-          // Suspend forever (until destroy() rejects the await internally,
-          // which Node's async iterator does - but for the unit test the
-          // hard timeout is the path under exercise).
+          // Suspend forever (until destroy() rejects the await internally, which Node's async iterator does - but for the unit test the hard timeout is the path under exercise).
           await new Promise(() => {
             // never resolves
           });
@@ -506,10 +504,7 @@ describe("buildAgentTitleFromHookCommand", () => {
     const ctx = makeCtx();
     const result = await fn(ctx);
     expect(JSON.stringify(result)).not.toContain(secret);
-    // Every output-channel mock the runtime exposes must never see the
-    // raw prompt either - the returned-result check above is not enough
-    // because the command could have logged via any of these channels
-    // (the leak surface CodeRabbit flagged).
+    // Every output-channel mock the runtime exposes must never see the raw prompt either - the returned-result check above is not enough because the command could have logged via any of these channels (the leak surface CodeRabbit flagged).
     const callsForChannel = (mock: Mock): string =>
       JSON.stringify(mock.mock.calls);
     expect(callsForChannel(ctx.output.progress as Mock)).not.toContain(secret);

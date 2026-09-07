@@ -17,14 +17,7 @@ export interface InstallVersionVariables {
   readonly force: boolean;
 }
 
-/**
- * Pins an explicit host version (incl. downgrades) via
- * `IHostManagement.installVersion`, bypassing the staged update. Resolves
- * the raw `MutationOutcome` (never throws for a settled outcome) so Settings
- * → Host branches on every `kind` itself: `"ok"` toasts success, `"busy"`
- * opens the Force/Defer dialog, everything else is a terminal per-intent
- * convergence failure rendered inline (incl. exhausted lock-retry).
- */
+/** Resolves the raw `MutationOutcome` (never throws for a settled outcome) so Settings → Host branches on every `kind` itself: `"ok"` toasts success, `"busy"` opens the Force/Defer dialog, everything else is a terminal per-intent convergence failure rendered inline (incl. */
 export function useRunnerInstallVersion(): UseMutationResult<
   MutationOutcome<InstallVersionOk>,
   Error,

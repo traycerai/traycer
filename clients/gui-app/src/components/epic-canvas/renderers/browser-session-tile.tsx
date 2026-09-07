@@ -36,12 +36,7 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly binding: ElectronTabBinding | null;
   readonly inventoryReady: boolean;
   /**
-   * Whether THIS client could place a native tab on the session's host
-   * (`BrowserSessionsState.canMaterializeElectron`). Every other input here is
-   * a host-side fact that describes some other client's window, and reading
-   * only those is what stranded a viewer-only client on an Electron session:
-   * `kind === "electron"` with no binding read as "my native tab is
-   * reconnecting" on a client that has no native tabs to reconnect.
+   * Every other input here is a host-side fact that describes some other client's window, and reading only those is what stranded a viewer-only client on an Electron session: `kind === "electron"` with no binding read as "my native tab is reconnecting" on a client that has no native tabs to reconnect.
    */
   readonly canMaterializeElectron: boolean;
   readonly wakeRequested: boolean;
@@ -50,10 +45,7 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
 }
 
 /**
- * What the host's `complete` frame means for a peek standing in for this
- * session, which is entirely a question about the client reading it: the frame
- * says "this tab is Electron-placed and has no viewer plane here", and only
- * the client knows whether that Electron tab is its own.
+ * What the host's `complete` frame means for a peek standing in for this session, which is entirely a question about the client reading it: the frame says "this tab is Electron-placed and has no viewer plane here", and only the client knows whether that Electron tab is its own.
  */
 function browserPeekCompleteMeaning(
   runtimeKind: BrowserSessionInfo["runtime"]["kind"],
@@ -79,19 +71,8 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
     );
   }
 
-  // The wake-capable branch is chosen per TAB, not per session. A session's
-  // runtime says where the tabs that ARE attached live; it says nothing about
-  // a durable tab that has not been attached yet. `materialize` provisions
-  // only the tab it was asked for, so an `electron` session routinely holds
-  // dormant siblings - and the peek tile's screencast subscription is what
-  // funnels one into the host's `ensureTabAttached`, which attaches a tab
-  // into an already-electron session and publishes its native binding. Take
-  // that branch only while there is no binding: a bound tab's pixels are
-  // native, whatever the host has published for its status.
-  //
-  // A client that cannot place a native tab on this host takes it
-  // unconditionally: every branch below waits on a binding this client can
-  // never be handed, so the viewer is the only one that can ever resolve.
+  // `materialize` provisions only the tab it was asked for, so an `electron` session routinely holds dormant siblings - and the peek tile's screencast subscription is what funnels one into the host's `ensureTabAttached`, which attaches a tab into an already-electron session and publishes its native binding.
+  // Take that branch only while there is no binding: a bound tab's pixels are native, whatever the host has published for its status.
   if (
     props.session.runtime.kind !== "electron" ||
     !props.canMaterializeElectron ||
@@ -150,25 +131,13 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
 }
 
 /**
- * How long a bound-for-life native tab may go without a renderer binding
- * before the tile stops calling it a reconnect. The window only has to cover
- * a desktop-side re-publish (a `browser.sessions` reconnect re-announces every
- * live binding), so seconds, not minutes - past it the wait is not transient
- * and an unbounded spinner is indistinguishable from a lost tab.
+ * How long a bound-for-life native tab may go without a renderer binding before the tile stops calling it a reconnect.
+ * The window only has to cover a desktop-side re-publish (a `browser.sessions` reconnect re-announces every live binding), so seconds, not minutes - past it the wait is not transient and an unbounded spinner is indistinguishable from a lost tab.
  */
 const BROWSER_TAB_REBIND_DEADLINE_MS = 10_000;
 
 /**
- * The bounded half of the null-binding wait. Below the deadline this is the
- * ordinary reconnect spinner; past it the tab is offered the same wake path a
- * dormant tab takes, which asks the host to attach the tab again and publish a
- * fresh binding.
- *
- * `startExpired` skips straight to the error state with no timer: the tile
- * passes it once the bounded wake window it started on "Reopen tab" has
- * itself expired with the binding still null, so a reader who already waited
- * once is not made to sit through a second identical spinner before seeing
- * the button again.
+ * `startExpired` skips straight to the error state with no timer: the tile passes it once the bounded wake window it started on "Reopen tab" has itself expired with the binding still null, so a reader who already waited once is not made to sit through a second identical spinner before seeing the button again.
  */
 function BrowserTabRebindWait(props: {
   readonly onWake: () => void;
@@ -215,12 +184,7 @@ function BrowserTabRebindWait(props: {
 }
 
 /**
- * `plan-restricted` is not an outage (see `useHostReachability`'s doc): the
- * machine is very probably running, only this account's plan has no remote
- * route to it. Worded the same way `TerminalDeadTileBanner` words it for
- * that reason. `offline` also covers `indeterminate`/`starting-deadline`
- * fall-through - neither of those reaches `status: "unreachable"` with a
- * `plan-restricted` reason.
+ * `plan-restricted` is not an outage (see `useHostReachability`'s doc): the machine is very probably running, only this account's plan has no remote route to it.
  */
 function dormantStatusLine(unavailability: HostUnavailability | null): string {
   if (unavailability === "plan-restricted") {
@@ -230,19 +194,7 @@ function dormantStatusLine(unavailability: HostUnavailability | null): string {
 }
 
 /**
- * Dormant placeholder for a tile whose OWN host is `unreachable`
- * (decision #9). Never rendered for `busy` - a busy host is still
- * reachable (`useHostReachability`/`isHostReachable`), and the live tile
- * keeps rendering as-is/connecting through that state.
- *
- * Greys out the last known frame if the tab ever streamed one
- * (`useLastBrowserPeekFrame`, which reads the cache once the placeholder is
- * committed - the peek tile's teardown writes its dormant video snapshot in
- * that same commit, after this render). There is deliberately no interactive
- * chrome and no clone/"open on
- * this device" affordance - the tile re-renders live on its own once the
- * host's lease returns, through the same reactive `useHostReachability` read
- * that put it here.
+ * Never rendered for `busy` - a busy host is still reachable (`useHostReachability`/`isHostReachable`), and the live tile keeps rendering as-is/connecting through that state.
  */
 function BrowserSessionDormantPlaceholder(props: {
   readonly node: BrowserSessionTileRef;
@@ -250,13 +202,8 @@ function BrowserSessionDormantPlaceholder(props: {
   readonly unavailability: HostUnavailability | null;
 }) {
   const cached = useLastBrowserPeekFrame(browserPeekFrameKey(props.node));
-  // First non-null frame wins for this placeholder's life. The cache read is a
-  // post-commit re-check (the peek tile's teardown writes in the same commit
-  // that mounts this), but it keeps re-reading afterwards - and the cache is
-  // insertion-order evicted, so other tiles streaming can drop this key while
-  // the placeholder is still up. Latching here keeps the greyed frame from
-  // disappearing mid-dormancy. Set during render, the same sanctioned pattern
-  // `useRuntimeDemotionNote` uses below.
+  // First non-null frame wins for this placeholder's life.
+  // The cache read is a post-commit re-check (the peek tile's teardown writes in the same commit that mounts this), but it keeps re-reading afterwards - and the cache is insertion-order evicted, so other tiles streaming can drop this key while the placeholder is still up.
   const [lastFrame, setLastFrame] = useState(cached);
   if (lastFrame === null && cached !== null) setLastFrame(cached);
   return (
@@ -282,10 +229,7 @@ function BrowserSessionDormantPlaceholder(props: {
 }
 
 /**
- * One-line dismissible note for a session that just lost its Electron
- * runtime (`runtime.kind` flip electron -> headless on a revision bump).
- * The tab keeps working, streamed instead of native, but silently loses
- * annotate/find/DevTools/zoom - this is the only surface that says so.
+ * The tab keeps working, streamed instead of native, but silently loses annotate/find/DevTools/zoom - this is the only surface that says so.
  */
 function BrowserRuntimeDemotionNote(props: {
   readonly hostLabel: string;
@@ -315,14 +259,7 @@ function BrowserRuntimeDemotionNote(props: {
 }
 
 /**
- * Tracks the electron -> headless transition for one session across
- * revision bumps and whether the reader has dismissed the note for the
- * revision that caused it.
- *
- * Adjusted during render (React's documented "adjusting state when props
- * change") rather than in an effect: an effect would trip
- * `react-hooks/set-state-in-effect`, and would also paint one stale commit
- * before the transition is recorded.
+ * Adjusted during render (React's documented "adjusting state when props change") rather than in an effect: an effect would trip `react-hooks/set-state-in-effect`, and would also paint one stale commit before the transition is recorded.
  */
 function useRuntimeDemotionNote(
   runtimeKind: BrowserSessionInfo["runtime"]["kind"] | null,
@@ -345,9 +282,7 @@ function useRuntimeDemotionNote(
       prev.revision !== runtimeRevision)
   ) {
     setPrev({ kind: runtimeKind, revision: runtimeRevision });
-    // Re-promoted back to Electron: the note's premise (streamed instead of
-    // native) no longer holds, so clear it rather than leaving it stuck on
-    // until someone dismisses a note about a demotion that already reversed.
+    // Re-promoted back to Electron: the note's premise (streamed instead of native) no longer holds, so clear it rather than leaving it stuck on until someone dismisses a note about a demotion that already reversed.
     if (runtimeKind === "electron") {
       setDemotedRevision(null);
     } else if (
@@ -359,9 +294,7 @@ function useRuntimeDemotionNote(
     }
   }
 
-  // Dismissing clears the demotion outright: a LATER demotion sets a new
-  // revision, so there is nothing a separate "dismissed" revision can say that
-  // this cannot.
+  // Dismissing clears the demotion outright: a LATER demotion sets a new revision, so there is nothing a separate "dismissed" revision can say that this cannot.
   const dismiss = useCallback(() => {
     setDemotedRevision(null);
   }, []);
@@ -370,9 +303,7 @@ function useRuntimeDemotionNote(
 }
 
 /**
- * The sessions context this reads is the TILE's host stream: `renderTile`
- * puts every tile's subtree behind a `BrowserSessionsHostBoundary` for
- * `node.hostId`, so there is no per-tile boundary here.
+ * The sessions context this reads is the TILE's host stream: `renderTile` puts every tile's subtree behind a `BrowserSessionsHostBoundary` for `node.hostId`, so there is no per-tile boundary here.
  */
 export function BrowserSessionTile(props: BrowserSessionTileProps) {
   const sessions = useBrowserSessionsContext();
@@ -395,23 +326,8 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
     session?.runtime.kind ?? null,
     session?.runtime.revision ?? null,
   );
-  // Bounded, not latched: once the reader has asked for the tab back, the
-  // wake path stays selected for one BROWSER_TAB_REBIND_DEADLINE_MS window -
-  // the same deadline the reconnect wait itself uses, long enough to cover
-  // the peek tile's own attach round trip. `wakeRequestedAt` is written ONLY
-  // by the "Reopen tab" click, which is also the only place a fresh request
-  // clears `wakeWindowExpired`; the timer that flips it back to `true` is
-  // armed once per click (keyed on `wakeRequestedAt` alone) and keeps
-  // counting down regardless of binding transitions in between - a binding
-  // arriving doesn't need to reset anything, because a bound tab already
-  // wins over the wake branch below purely by requiring `binding === null`,
-  // and a stale expiry is inert while bound. `wakeActive`/`wakeExpired` are
-  // plain reads of that state at render time (render must stay pure, so
-  // `Date.now()` is read only inside the click handler and the effect, never
-  // here) - if a LATER reconnect drops the binding again after the window
-  // has already elapsed, it reads straight as expired, the same actionable
-  // alert a fresh expiry produces, never a phantom headless projection or an
-  // infinite spinner.
+  // `wakeRequestedAt` is written ONLY by the "Reopen tab" click, which is also the only place a fresh request clears `wakeWindowExpired`; the timer that flips it back to `true` is armed once per click (keyed on `wakeRequestedAt` alone) and keeps counting down regardless of binding transitions in between - a binding arriving doesn't need to reset anything, because a bound tab already wins over the wake branch below purely by requiring `binding === null`, and a stale expiry is inert while bound.
+  // `wakeActive`/`wakeExpired` are plain reads of that state at render time (render must stay pure, so `Date.now()` is read only inside the click handler and the effect, never here) - if a LATER reconnect drops the binding again after the window has already elapsed, it reads straight as expired, the same actionable alert a fresh expiry produces, never a phantom headless projection or an infinite spinner.
   const [wakeRequestedAt, setWakeRequestedAt] = useState<number | null>(null);
   const [wakeWindowExpired, setWakeWindowExpired] = useState(false);
   const requestWake = useCallback(() => {
@@ -439,17 +355,9 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
   useEffect(() => {
     if (session !== undefined && tab !== undefined) return;
     if (sessions.lifecycle !== "live" || !sessions.inventoryReady) return;
-    // Belt-and-braces guard, not the primary gate: the coordinator's own
-    // "live" lifecycle is sourced from its stream and can lag the
-    // directory's faster reachability signal, so a host that just went
-    // unreachable could still read `lifecycle: "live"` here for one tick
-    // with stale/emptied `items`. Without this, that window could close a
-    // tile decision #9 requires to go dormant instead. `unreachable` alone
-    // decides it - `busy` stays reachable and must not gate self-close.
+    // `unreachable` alone decides it - `busy` stays reachable and must not gate self-close.
     if (reachability.status === "unreachable") return;
-    // The tab is genuinely gone, not merely dormant - free its cached frame
-    // along with closing the tile so a future tab reusing this instance id
-    // never starts from a stale image.
+    // The tab is genuinely gone, not merely dormant - free its cached frame along with closing the tile so a future tab reusing this instance id never starts from a stale image.
     clearLastBrowserPeekFrame(browserPeekFrameKey(props.node));
     closeCanvasTile();
   }, [

@@ -18,15 +18,7 @@ import {
   type ModelProviderMethodFilter,
 } from "./model-provider-filter";
 
-/**
- * The catalog's search row: the shared `ProviderListSearch` plus one filter
- * menu, laid out the way the provider rail's controls are
- * (`provider-rail-controls.tsx`) so the two search rows in Settings ▸ Providers
- * do not each invent a vocabulary.
- *
- * The search box is COMPOSED rather than modified: it is shared with the MCP,
- * Plugins and Skills tabs, and none of those has a second axis to filter on.
- */
+/** The catalog's search row: the shared `ProviderListSearch` plus one filter menu. */
 export function ModelProviderListControls(props: {
   readonly query: string;
   readonly onQueryChange: (query: string) => void;
@@ -57,9 +49,8 @@ function ModelProviderFilterMenu(props: {
   readonly onFilterChange: (filter: ModelProviderMethodFilter) => void;
 }): ReactNode {
   const active = props.filter !== MODEL_PROVIDER_METHOD_FILTER.All;
-  // The accessible name carries the CURRENT value, not just "Filter": the dot
-  // below says only that something is filtered, and a screen reader gets no
-  // other reading of the trigger while the menu is closed.
+  // The accessible name carries the current value, not just "Filter": the dot below says only that something is
+  // filtered, and a screen reader gets no other reading of the trigger while the menu is closed.
   const label = active
     ? `Filter model providers, showing ${modelProviderMethodFilterLabel(props.filter).toLowerCase()}`
     : "Filter model providers";
@@ -81,9 +72,8 @@ function ModelProviderFilterMenu(props: {
             data-testid="model-provider-filter-trigger"
           >
             <ListFilter className="size-4" />
-            {/* A dot, not a count: this list has ONE filter axis, so a number
-                could only ever read "1" and would invite the question of what
-                the one is. Same reasoning as the provider rail's. */}
+            {/* A dot, not a count: this list has one filter axis, so a number could only ever read "1" and would invite the
+               question of what the one is. */}
             {active ? (
               <span
                 aria-hidden

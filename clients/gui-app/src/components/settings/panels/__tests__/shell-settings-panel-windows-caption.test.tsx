@@ -1,7 +1,5 @@
-// The panel is host-scoped now (shell config / log levels are fields of the
-// selected host's own config), so it reads `useHostScope`. Mock at that
-// boundary: this suite renders the panel bare, without the host runtime and
-// query providers the real hook needs.
+// Mock at that boundary: this suite renders the panel bare, without the host runtime and query providers the
+// real hook needs.
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
@@ -43,9 +41,8 @@ import {
   buildConfigHostFixture,
 } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
 
-// `isWindows()` is computed once at module load from UA hints, so the host
-// platform is faked through a togglable mock rather than a per-test navigator
-// tweak. The rest of the module (mac/modifier helpers) stays real.
+// `isWindows` is computed once at module load from UA hints, so the host platform is faked through a togglable
+// mock rather than a per-test navigator tweak.
 const platformState = vi.hoisted(() => ({ windows: true }));
 vi.mock("@/lib/keybindings/platform", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/keybindings/platform")>()),
@@ -137,8 +134,8 @@ describe("<ShellSettingsPanel /> WSL agent caption", () => {
     expect(
       await screen.findByText(/WSL isn't installed — terminals won't start/),
     ).toBeTruthy();
-    // The escalated caption REPLACES the quiet scoping note rather than
-    // stacking with it: one line under the picker, the more urgent one.
+    // The escalated caption replaces the quiet scoping note rather than stacking with it: one line under the
+    // picker, the more urgent one.
     expect(screen.queryByText(WSL_CAPTION)).toBeNull();
   });
 
@@ -152,10 +149,7 @@ describe("<ShellSettingsPanel /> WSL agent caption", () => {
   });
 
   it("still warns when a non-Windows GUI configures a Windows host", async () => {
-    // The regression this guards: `isWindows()` reads the RENDERER's platform,
-    // so a macOS/Linux app driving a remote Windows host would hide the
-    // warning. `wslHealth` is computed on the host, so it must not be gated on
-    // the renderer at all.
+    // `wslHealth` is computed on the host, so it must not be gated on the renderer at all.
     platformState.windows = false;
     renderPanel(WSL_PATH, brokenWslShells("not-installed"));
     expect(

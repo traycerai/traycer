@@ -3,11 +3,8 @@ import type { BundledLanguage, SpecialLanguage } from "shiki";
 import { contentFingerprint } from "@/lib/text-hash";
 
 /**
- * Structured hunks for a file-change diff, used by the cumulative/bundle diff
- * surfaces (which still resolve before/after content host-side) to derive the
- * +N/−M counter. Per-chat-block file_change rows instead carry precomputed
- * `additions`/`deletions` on the segment (see `FileChangeSegment`), so they
- * need no content to render the counter.
+ * Structured hunks for a file-change diff, used by the cumulative/bundle diff surfaces (which still resolve before/after content host-side) to derive the +N/−M counter.
+ * Per-chat-block file_change rows instead carry precomputed `additions`/`deletions` on the segment (see `FileChangeSegment`), so they need no content to render the counter.
  */
 
 export type DiffRowKind = "added" | "removed" | "context";
@@ -94,28 +91,13 @@ function diffLineCountsFromHunks(
   );
 }
 
-/**
- * `+N/-M` for the accumulated-changes panel, memoized on the content itself.
- *
- * The panel recomputes every row whenever the host replaces its accumulated
- * changes - which is every snapshot frame of an active turn - and each row
- * costs a full `structuredPatch` over both revisions of the file. The rows
- * arrive as freshly decoded objects holding freshly decoded strings, so
- * nothing upstream can memoize them by identity, and a chat that has touched
- * dozens of files was re-diffing all of them several times a second.
- *
- * Keyed by content fingerprint rather than by the content: retaining the key
- * would mean holding a second copy of every file the agent has edited, which
- * is the memory this cache exists to avoid paying twice.
- */
+/** `+N/-M` for the accumulated-changes panel, memoized on the content itself. */
 const DIFF_COUNT_CACHE_LIMIT = 512;
 const diffCountCache = new Map<string, DiffLineCounts>();
 
 /**
- * Fingerprint of one side of a diff. A `null` side - a created or deleted
- * file - gets its own sentinel rather than skipping the cache entirely.
- * Bulk creation is exactly the shape that produces the most rows per frame,
- * so it is the shape that needs the memo most.
+ * Fingerprint of one side of a diff.
+ * A `null` side - a created or deleted file - gets its own sentinel rather than skipping the cache entirely.
  */
 function sideFingerprint(content: string | null): string {
   return content === null ? "~" : contentFingerprint(content);
@@ -154,9 +136,10 @@ export function resetDiffLineCountCacheForTests(): void {
   diffCountCache.clear();
 }
 
-/** Maps file extensions to shiki language ids from the preloaded set in
- * `shiki-highlighter.ts`. Returns `"text"` for unknowns; shiki has a
- * built-in plain-text alias so this never throws. */
+/**
+ * Maps file extensions to shiki language ids from the preloaded set in `shiki-highlighter.ts`.
+ * Returns `"text"` for unknowns; shiki has a built-in plain-text alias so this never throws.
+ */
 const LANGUAGE_BY_EXTENSION: Record<string, BundledLanguage> = {
   ts: "typescript",
   tsx: "tsx",

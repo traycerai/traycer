@@ -42,13 +42,7 @@ const explicitNavigate: NotificationNavigate = (options) => {
 const activeHostIdStub: { value: string | null } = vi.hoisted(() => ({
   value: "stub-host",
 }));
-/**
- * `createRequesterForHostId` is not optional decoration: production resolves
- * the app-wide host through the spine's id-pinned requester (redesign P4.2),
- * so a stub without it takes the subject down at first render rather than
- * failing an assertion. One host per fixture means the requester IS the
- * client, which is what makes the self-return honest here.
- */
+/** `createRequesterForHostId` is not optional decoration: production resolves the app-wide host through the spine's id-pinned requester (redesign P4.2), so a stub without it takes the subject down at first render rather than failing an assertion. */
 interface StubActivationHostClient {
   readonly getActiveHostId: () => string | null;
   readonly createRequesterForHostId: (
@@ -112,15 +106,7 @@ function createWrapper(): (props: {
   };
 }
 
-/**
- * Moves the app-wide pointer the way the authority does.
- *
- * SEEDED, not stubbed: the origin-host guard reads this store live, and a
- * fixture that mocked the reader instead would leave the guard comparing the
- * mock against itself - it could never catch a real pointer move again. This
- * is the one thing the guard asks about, so it is the one thing the fixture
- * supplies.
- */
+/** SEEDED, not stubbed: the origin-host guard reads this store live, and a fixture that mocked the reader instead would leave the guard comparing the mock against itself - it could never catch a real pointer move again. */
 function setEffectiveHost(hostId: string | null): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,
@@ -515,7 +501,6 @@ describe("useNotificationActivation", () => {
     }
     const paneId = canvas.activePaneId;
 
-    // Close hides from openTabOrder but keeps tabsById + canvas (retained).
     store.closeTab(tabId);
     expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
     expect(useEpicCanvasStore.getState().tabsById[tabId]?.epicId).toBe(
@@ -549,7 +534,7 @@ describe("useNotificationActivation", () => {
     });
 
     // Reopened (or resolved) tab is source-open again and navigation targets
-    // the retained terminal's nested focus — not a silent no-op.
+    // the retained terminal's nested focus - not a silent no-op.
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
     expect(navigateSpy).toHaveBeenCalled();
     const [navigation] = navigateSpy.mock.calls[0];
@@ -916,10 +901,7 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
 
   it("reports failure when the active host rebinds during routing for a host feed", () => {
     const onResult = vi.fn();
-    // Capture-before-route / check-after-route: move the APP-WIDE POINTER as
-    // a side effect of navigate, so the post-route check sees host B. Before
-    // P4.2 this drove `client.bind(hostB)` - the same event expressed against
-    // the slot that used to carry it.
+    // Capture-before-route / check-after-route: move the APP-WIDE POINTER as a side effect of navigate, so the post-route check sees host B.
     navigateSpy.mockImplementation(() => {
       setEffectiveHost(hostB.hostId);
     });
@@ -988,12 +970,7 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       wrapper: createWrapper(),
     });
 
-    // Move the pointer AFTER render but BEFORE the click, with no
-    // intervening re-render - `hook.result.current.activate` still closes
-    // over the render-time host. The "before" read must go to the live
-    // store rather than that stale closure, or this reports "failure" for a
-    // move that happened before routing ever started (no move occurs during
-    // routing itself, so a correct guard sees no move at all).
+    // The "before" read must go to the live store rather than that stale closure, or this reports "failure" for a move that happened before routing ever started (no move occurs during routing itself, so a correct guard sees no move at all).
     setEffectiveHost(hostB.hostId);
 
     act(() => {
@@ -1010,28 +987,10 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  // "selects an approval's origin host before routing to its exact tile" is
-  // deleted: its subject, `ensureOriginHostSelected`, no longer exists.
-  // Activation does not move the app-wide selection at all now (redesign
-  // P1.2, D7) - a notification click routes against whatever host the target
-  // surface already resolves through.
-  //
-  // The fail-closed half of that guard came BACK, one limb narrower, and the
-  // pin below is it. Deleting the function took the refusal along with the
-  // selection write, and only the write was the D7 violation: an origin-
-  // required prompt that routed through the wrong host still reported
-  // SUCCESS, so the popover closed and marked it read. What is refused now is
-  // the acknowledgment, never the navigation, and only on positive evidence
-  // that the route went elsewhere - routability itself remains the caller's
-  // decision, not this hook's.
+  // Activation does not move app-wide selection. Refuse acknowledgment (never navigation) only on positive evidence the route went to a different host.
 
   it("declines to ACKNOWLEDGE a cloud approval that routed through a host other than its origin", () => {
-    // Host A is effective, the approval was raised on host B, and no B-bound
-    // tile is open - so routing falls through to the hostless epic intent and
-    // resolves through A. The prompt is only answerable on B, and the feed is
-    // a CLOUD one, so `hostFeedStayedOnOrigin` (host feeds only) cannot catch
-    // it: without this, activation reported success and the row was marked
-    // read for a prompt that was never opened on its host.
+    // The prompt is only answerable on B, and the feed is a CLOUD one, so `hostFeedStayedOnOrigin` (host feeds only) cannot catch it: without this, activation reported success and the row was marked read for a prompt that was never opened on its host.
     const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),

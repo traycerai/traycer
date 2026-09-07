@@ -2,37 +2,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-/**
- * Builds the Electron main process and preload bridge into self-contained
- * CommonJS bundles via esbuild. Inlines every dependency (electron-log,
- * electron-updater, the @traycer-clients/shared barrel, etc.) so the
- * packaged Traycer.app does not need to ship `node_modules/` inside the
- * asar - the only external is `electron` itself, which is provided by
- * the Electron runtime.
- *
- * Replaces the prior `tsc + tsc-alias + write-main-entry.cjs` chain.
- * Dev (`bun run dev`) now uses these same bundles - main-process changes
- * require an Electron restart, and preload changes have always required
- * one - so the prior tsx-based shim path is no longer needed.
- *
- * Output layout matches what `main-process.ts:resolvePreloadPath`,
- * `first-launch-setup.ts:resolveSplashPreloadPath`, and
- * `package.json:main` expect:
- *
- *   dist/main/index.js                          - bundled main process (Electron entry)
- *   dist/preload/index.js                       - bundled preload bridge (main window)
- *
- * Externals:
- *   - `electron`            (Electron runtime - provided at load time)
- *   - `*.node`              (native bindings, future-proofing - none today)
- *   - `font-list`           (spawns a compiled sidecar binary/script via
- *     `__dirname`-relative `execFile` - inlining it breaks both that path
- *     resolution and its ESM `createRequire(import.meta.url)` entry, which
- *     esbuild reduces to `createRequire(undefined)` when squashed into a
- *     CJS bundle. Left as a real `require("font-list")` so Node resolves it
- *     from `node_modules` at runtime; `package.json`'s `files`/`asarUnpack`
- *     ship it alongside the packaged app.)
- */
 
 const { existsSync, mkdirSync, rmSync } = require("node:fs");
 const path = require("node:path");

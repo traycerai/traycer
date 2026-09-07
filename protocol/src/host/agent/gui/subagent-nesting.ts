@@ -1,24 +1,12 @@
 /**
- * Shared sub-agent nesting/suppression policy for the harness converters
- * (Codex, OpenCode, …). A sub-agent runs in a child session/thread; its events
- * must either nest under the sub-agent card (tagged with the card's
- * `parentBlockId`) or be suppressed - they must NEVER surface un-parented in the
- * parent timeline. Keeping the policy here (one source of truth) stops the
- * per-converter copies from drifting and makes the classification total:
- * anything not explicitly suppressed nests (default-nest), so a newly added
- * `RuntimeEvent` type can't silently leak to the parent timeline.
+ * Shared sub-agent nesting/suppression policy for the harness converters (Codex, OpenCode, …).
+ * A sub-agent runs in a child session/thread; its events must either nest under the sub-agent card (tagged with the card's `parentBlockId`) or be suppressed - they must NEVER surface un-parented in the parent timeline.
  */
 import type { RuntimeEvent } from "./agent-runtime";
 import { deriveToolInputSummary, toSummaryLine } from "./tool-input-summary";
 
-// A sub-agent's own narration, turn lifecycle, usage, compaction, and errors
-// must not surface in the parent timeline (parity with the Claude harness, which
-// shows only a sub-agent's tool/file activity, not its narration). `error` is
-// suppressed because the adapters treat a top-level `error` as terminal for the
-// chat turn - a sub-agent's own failure must close only that sub-agent, never
-// the parent turn. The set is the UNION across harnesses (e.g. Codex emits
-// `turn.started`, OpenCode emits `compaction.started`); listing an event a given
-// harness never emits is harmless.
+// A sub-agent's own narration, turn lifecycle, usage, compaction, and errors must not surface in the parent timeline (parity with the Claude harness, which shows only a sub-agent's tool/file activity, not its narration).
+// Codex emits `turn.started`, OpenCode emits `compaction.started`); listing an event a given harness never emits is harmless.
 const SUBAGENT_SUPPRESSED_EVENTS: ReadonlySet<RuntimeEvent["type"]> = new Set([
   "text.delta",
   "text.completed",
@@ -49,25 +37,14 @@ function subagentProgressForChildEvent(event: RuntimeEvent): string | null {
         ? event.toolName
         : `${event.toolName} · ${summary}`;
     }
-    // NOTE: `tool_call.progress` is deliberately NOT echoed here. It nests onto
-    // the child's `tool_call` block as replace-latest (one `progress` field,
-    // O(1)); echoing it as a `subagent.progress` line would APPEND one entry to
-    // the card's `progressUpdates` per MCP tick (e.g. "Fetched 1/200".."200/200")
-    // - an unbounded log, the exact growth replace-latest was designed to avoid.
+    // NOTE: `tool_call.progress` is deliberately NOT echoed here.
     default:
       return null;
   }
 }
 
 /**
- * Re-homes a single child-session `RuntimeEvent` under its sub-agent card:
- *  - narration / turn lifecycle ({@link SUBAGENT_SUPPRESSED_EVENTS}) -> dropped,
- *  - everything else -> tagged with `parentBlockId` so the GUI nests it. This is
- *    default-nest, NOT default-leak: an unclassified or newly added event type
- *    (interview prompt, a nested sub-agent's card, …) nests rather than silently
- *    surfacing in the parent timeline.
- *  - tool/command activity additionally emits a `subagent.progress` line
- *    (stamped with `timestamp`) so the card streams its recent activity.
+ * Re-homes a single child-session `RuntimeEvent` under its sub-agent card: - narration / turn lifecycle ({@link SUBAGENT_SUPPRESSED_EVENTS}) -> dropped, - everything else -> tagged with `parentBlockId` so the GUI nests it.
  */
 export function nestChildRuntimeEvent(
   event: RuntimeEvent,

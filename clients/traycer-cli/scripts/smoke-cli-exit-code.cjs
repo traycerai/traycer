@@ -1,28 +1,6 @@
 "use strict";
 
-// Repro/regression gate for the win32 SEA exit-teardown abort (int#4840,
-// field: OSS #955 and #995, both 1.1.9 win32):
-//
-//   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76
-//
-// The CLI printed its complete `host available --json` document and THEN died
-// with that assertion, so the operation succeeded and the exit code said it
-// failed. `assert(!(handle->flags & UV_HANDLE_CLOSING))` lives inside
-// `uv_async_send()`; libuv's POSIX `uv_async_send` carries no such assertion,
-// which is why this reproduces on Windows and nowhere else.
-//
-// It is a teardown RACE, so a single run proves nothing - this loops.
-//
-// THE INVARIANT, and why it is not "exit code must be 0": `host available`
-// fetches the live registry manifest over the network. A genuine network
-// failure is a legitimate CLI outcome - terminal `error` envelope, non-zero
-// exit - and must NOT turn this gate red. The defect is precisely:
-//
-//     a terminal `ok` envelope was emitted AND the process still exited non-zero
-//
-// so that is what is asserted. Registry flakiness fails the fetch, not the
-// gate. The assertion text on stderr is failed unconditionally on top, since
-// nothing legitimate ever prints it.
+// Win32 SEA exit-teardown abort: the process must still exit with the command's code after stdout drain.
 
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -32,9 +10,8 @@ const workspaceRoot = path.resolve(__dirname, "..");
 const binaryName = process.platform === "win32" ? "traycer.exe" : "traycer";
 const binaryPath = path.join(workspaceRoot, "dist-sea", binaryName);
 
-// Every iteration is a full process spawn + a live registry fetch. The org
-// caps CI jobs at ten minutes and the SEA build eats most of it, so keep the
-// default modest and let the workflow raise it via the env var.
+// Every iteration is a full process spawn + a live registry fetch.
+// The org caps CI jobs at ten minutes and the SEA build eats most of it, so keep the default modest and let the workflow raise it via the env var.
 const DEFAULT_ITERATIONS = 15;
 
 function fail(msg) {
@@ -54,10 +31,8 @@ function resolveIterations() {
   return parsed;
 }
 
-// The runner emits NDJSON: zero or more `progress` lines then exactly one
-// terminal line. Mirrors `extractTerminalEnvelope` in
-// clients/desktop/src/electron-main/cli/traycer-cli.ts - this gate has to
-// agree with the consumer about what "the CLI succeeded" means.
+// The runner emits NDJSON: zero or more `progress` lines then exactly one terminal line.
+// Mirrors `extractTerminalEnvelope` in clients/desktop/src/electron-main/cli/traycer-cli.ts - this gate has to agree with the consumer about what "the CLI succeeded" means.
 function terminalStatus(stdout) {
   let status = null;
   for (const line of stdout.split(/\r?\n/)) {
@@ -119,10 +94,8 @@ function main() {
       }
       continue;
     }
-    // No terminal ok: either the registry fetch genuinely failed (error
-    // envelope) or the process died before emitting one. The first is not
-    // this gate's business; the second is already covered by the assertion
-    // check above, so just account for it and keep going.
+    // No terminal ok: either the registry fetch genuinely failed (error envelope) or the process died before emitting one.
+    // The first is not this gate's business; the second is already covered by the assertion check above, so just account for it and keep going.
     fetchFailures += 1;
   }
 

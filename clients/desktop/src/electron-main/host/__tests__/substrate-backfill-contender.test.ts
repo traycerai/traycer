@@ -11,11 +11,6 @@ vi.mock("../../app/host-login-item", () => ({
 import { backfillSubstrateOwnerAtLaunch } from "../substrate-backfill-contender";
 import type { HostFsLayout } from "../host-paths";
 
-// Unconditional healthy-launch ownership backfill (design §3.1 obligations
-// 1-2): `enabled`/`requires-approval` commit `smappservice`; every other
-// login-item status writes nothing and leaves the previous valid owner
-// standing. `substrate.json` is absent across the whole installed base
-// today, so the common case this exercises IS the migration write.
 
 const roots: string[] = [];
 const LABELS = {

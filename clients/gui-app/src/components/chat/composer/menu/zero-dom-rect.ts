@@ -1,10 +1,4 @@
-/**
- * Zero-size fallback for a floating-ui virtual reference's
- * `getBoundingClientRect()` when nothing is measurable yet (e.g. the caret
- * or active row rect isn't available on the first render). `DOMRect` isn't
- * guaranteed to exist as a constructible global in every environment this
- * module can load in, so fall back to a plain object of the same shape.
- */
+/** Zero-size fallback for a floating-ui virtual reference's `getBoundingClientRect()` when nothing is measurable yet (e.g. the caret or active row rect isn't available on the first render). `DOMRect` isn't guaranteed to exist as a constructible global in every environment this module can load in, so fall back to a plain object of the same shape. */
 export const ZERO_DOM_RECT: DOMRect =
   typeof DOMRect === "function"
     ? new DOMRect(0, 0, 0, 0)

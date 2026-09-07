@@ -33,16 +33,7 @@ export function registerAppUpdateIpc(bridge: RunnerIpcBridge): void {
     installDownloadedUpdate(),
   );
 
-  // The RC opt-in the compatibility-recovery surface offers, and deliberately
-  // the ONLY way a channel change is reachable: there is no general Settings
-  // toggle, so consent is always given against a named RC build that a probe
-  // has already proven clears the rejecting host's floor.
-  //
-  // The full `DesktopAppUpdateChannelChange` crosses back, not just the
-  // snapshot. `refused-update-pending` is a standing state on macOS (a natively
-  // staged update cannot be withdrawn), and a caller that saw only a snapshot
-  // would read the unchanged `allowPrerelease` as a silent failure rather than
-  // as the instruction it is.
+  // `refused-update-pending` is a standing state on macOS (a natively staged update cannot be withdrawn), and a caller that saw only a snapshot would read the unchanged.
   bridge.handleInvoke(
     RunnerHostInvoke.appUpdateSetAllowPrerelease,
     async (_event, allowPrerelease) => {
@@ -76,20 +67,7 @@ function parseAppUpdateCheckIntent(
   return value === "automatic" ? "automatic" : "manual";
 }
 
-/**
- * Normalizes the recovery request arriving over IPC.
- *
- * Both members fail CLOSED. A floor that is not a positive safe integer becomes
- * `Number.MAX_SAFE_INTEGER`, so no candidate can clear it and the plan degrades
- * to the manual link - the opposite of defaulting to a low floor, which would
- * offer a build that the host then refuses. `hostAllowsRcRecovery` must be
- * exactly `true`; anything else means no RC hop is authorized.
- *
- * This is a renderer of ours over a contextIsolated bridge, not an untrusted
- * peer, so the point is not defence - it is that a shape bug here would
- * otherwise present as a mysteriously permissive gate rather than as a visibly
- * conservative one.
- */
+/** `hostAllowsRcRecovery` must be exactly `true`; anything else means no RC hop is authorized. */
 function parseCompatRecoveryRequest(value: unknown): {
   readonly minimumEpoch: number;
   readonly hostAllowsRcRecovery: boolean;

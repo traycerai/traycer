@@ -1,30 +1,5 @@
-/**
- * S2 coverage for the router-optional fix.
- *
- * Sprint 04 made `RootDndProvider` router-REQUIRED by calling the tear-off flow
- * from inside it: that flow reaches `useRouterState`, which THROWS without a
- * router where `useNavigate` only warns. Four tests broke and the cause hid
- * across two certifications. Sprint 05 moved the flow into `TabDetachOwner`,
- * mounted in the ROUTE tree, so the router requirement is satisfied by WHERE it
- * renders rather than by a runtime check - a placement fact cannot be dormant.
- *
- * These tests cover the three things that fix needs and that a green suite did
- * not previously imply:
- *
- *   S2.1  the provider renders with NO router at all
- *   S2.6  the channel is POPULATED when the owner mounts under a router
- *   S2.8  `null` (no owner) and `{ isAvailable: false }` (owner says no) are
- *         DISTINCT, so a missing owner cannot masquerade as an unavailable one
- *
- * S2.7 is NOT covered here, and deliberately not dressed up as covered. It
- * requires a real header-tab drag released below the strip - `channel !== null`
- * proves publication, never consumption, and every test in this file would stay
- * green if the provider stopped reading the channel entirely.
- *
- * The provider-light half lives in `app-shell-lifecycle-bridges.test.tsx`,
- * which passes with no detach stub at all - if a stub is ever needed there
- * again, the dependency has moved back into the provider.
- */
+/** Sprint 05 moved the flow into `TabDetachOwner`, mounted in the route tree, so the router requirement is
+ * satisfied by where it renders rather than by a runtime check - a placement fact cannot be dormant. */
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -99,15 +74,8 @@ function queryClient() {
   });
 }
 
-/**
- * A real header strip with MEASURED geometry.
- *
- * `measureHeaderStripGeometry` reads `getBoundingClientRect()` off the strip
- * and each `[data-strip-item-id]`, and jsdom returns zeros - so without stubbed
- * rects `stripBottom` is 0, every release is "below" it, and the test would
- * pass for the wrong reason. Stubbing them is what makes the tear-off threshold
- * real rather than degenerate.
- */
+/** `measureHeaderStripGeometry` reads `getBoundingClientRect` off the strip and each `[data-strip-item-id]`,
+ * and jsdom returns zeros. */
 const STRIP_TOP = 0;
 const STRIP_BOTTOM = 40;
 const TAB_LEFT = 100;
@@ -161,13 +129,7 @@ function HeaderStripHarness(): ReactNode {
   );
 }
 
-/**
- * Put the dragged tab into the real header-tab projection.
- *
- * `resolveTearOff` looks the tab up in `getHeaderTabs()`, which projects from
- * the canvas store AND `stripOrder` - a literal is not enough, and the epic tab
- * alone is not either.
- */
+/** Put the dragged tab into the real header-tab projection. */
 function seedHeaderProjection(): void {
   const ref: TabRef = { kind: "epic", id: EPIC_TAB.id };
   const neighbourRef: TabRef = { kind: "epic", id: NEIGHBOUR_TAB_ID };
@@ -178,9 +140,8 @@ function seedHeaderProjection(): void {
     useEpicCanvasStore
       .getState()
       .openEpicTabWithId(NEIGHBOUR_TAB_ID, "neighbour-epic-id", "Neighbour");
-    // A SECOND entry is what makes `stripOrder` a real observable: with one tab
-    // every possible reorder is the identity, so an equality assertion would
-    // hold no matter what the drag-end did.
+    // A second entry is what makes `stripOrder` a real observable: with one tab every possible reorder is the
+    // identity, so an equality assertion would hold no matter what the drag-end did.
     useTabsStore.setState({
       version: 2,
       items: [
@@ -194,16 +155,8 @@ function seedHeaderProjection(): void {
   });
 }
 
-/**
- * Drive a real tear-off: pointerdown, activation move, release BELOW the
- * measured strip bottom.
- *
- * Rects are stubbed because jsdom returns zeros - without them `stripBottom` is
- * 0, every release counts as below it, and the threshold is degenerate. Each
- * event gets its own `act()` and `isPrimary` is set: the sensor ignores a
- * non-primary pointer, and batching activation with the first move collapses
- * two frames it treats separately.
- */
+/** Rects are stubbed because jsdom returns zeros - without them `stripBottom` is 0, every release counts as
+ * below it, and the threshold is degenerate. */
 function driveTearOff(view: RenderResult): void {
   const strip = view.getByTestId(HEADER_STRIP_SCROLL_TEST_ID);
   const source = view.getByTestId("header-drag-source");
@@ -283,11 +236,8 @@ describe("tab detach channel wiring", () => {
   });
 
   it("S2.8 - null and isAvailable:false are distinct states", () => {
-    // The whole point of the three-state channel. Collapsed into one boolean,
-    // an owner that silently stopped mounting would make every tear-off fall
-    // through to ordinary drop handling: the tab reorders instead of
-    // detaching, with no crash and no warning - strictly worse than the throw
-    // this replaced, because the throw was loud.
+    // Collapsed into one boolean, an owner that silently stopped mounting would make every tear-off fall through
+    // to ordinary drop handling: the tab reorders instead of detaching, with no crash and no warning.
     expect(readTabDetachHandler()).toBeNull();
 
     const requestOpen = vi.fn();
@@ -338,16 +288,8 @@ describe("tab detach channel wiring", () => {
   });
 
   it("channel round-trip under a router - NOT S2.7", async () => {
-    // HONEST SCOPE. This mounts the provider under a router and drives the
-    // handler, but it invokes `requestOpen` DIRECTLY - so it exercises the
-    // channel, not the provider's consumption of it. Deleting the provider's
-    // `readTabDetachHandler()` call would leave this test green.
-    //
-    // S2.7 asks for a real header-tab drag released below the strip, asserting
-    // the detach fires. That needs `activeHeaderStripGeometry` populated from a
-    // measured strip, which this harness does not build. Recorded as NOT
-    // COVERED rather than renamed into a pass - a test that looks like it
-    // covers an assertion and does not is worse than an absent one.
+    // This mounts the provider under a router and drives the handler, but it invokes `requestOpen` directly - so
+    // it exercises the channel, not the provider's consumption of it.
     const requestOpen = vi.fn();
     publishTabDetachHandler({ isAvailable: true, requestOpen });
 
@@ -376,14 +318,8 @@ describe("tab detach channel wiring", () => {
   });
 
   it("S2.7 - a real tear-off drag reaches the published handler", async () => {
-    // The assertion the whole of S2 exists for. `channel !== null` proves
-    // publication; this proves CONSUMPTION - it drives a real dnd-kit header
-    // drag, releases BELOW the measured strip bottom, and asserts the handler
-    // the provider read is the one that ran. Deleting `readTabDetachHandler()`
-    // from `handleDragEnd`, or changing its branch, turns this red.
-    // `resolveTearOff` looks the dragged tab up in the REAL header-tab
-    // projection, so a literal is not enough - the tab has to exist in the
-    // store or the lookup returns undefined and nothing detaches.
+    // `resolveTearOff` looks the dragged tab up in the real header-tab projection, so a literal is not enough -
+    // the tab has to exist in the store or the lookup returns undefined and nothing detaches.
     seedHeaderProjection();
     expect(getHeaderTabs().some((tab) => tab.id === EPIC_TAB.id)).toBe(true);
 
@@ -398,11 +334,8 @@ describe("tab detach channel wiring", () => {
   });
 
   it("S2.9 - a tear-off with no detach owner warns and falls through safely", async () => {
-    // The diagnostic added for the missing-owner case. Before it, a tear-off
-    // released below the strip with no owner mounted did NOTHING, silently -
-    // indistinguishable from a gesture the user aborted. This drives the same
-    // real drag S2.7 does, so it fails if the provider stops reaching the
-    // channel or the branch stops logging.
+    // Before it, a tear-off released below the strip with no owner mounted did nothing, silently -
+    // indistinguishable from a gesture the user aborted.
     resetTabDetachHandler();
     const warn = vi
       .spyOn(appLogger, "warn")
@@ -429,17 +362,14 @@ describe("tab detach channel wiring", () => {
       tabKind: "epic",
     });
 
-    // The ordinary drop path is allowed to run when detach cannot. Entering
-    // the tear-off region already withdrew the reorder preview, so the safe
-    // fall-through preserves the order rather than swallowing the gesture.
+    // The ordinary drop path is allowed to run when detach cannot. Entering the tear-off region already withdrew
+    // the reorder preview, so the safe fall-through preserves the order rather than swallowing the gesture.
     expect(useTabsStore.getState().stripOrder).toEqual(orderBefore);
   });
 
   it("S2.9 - an owner that reports itself unavailable is not warned about", async () => {
-    // The distinction S2.8 draws at the channel level, drawn here at the
-    // consumer level: `{ isAvailable: false }` is an owner DECIDING not to
-    // detach - an intentional, already-explained state. Logging it would make
-    // the warning fire on a supported path and train readers to ignore it.
+    // The distinction S2.8 draws at the channel level, drawn here at the consumer level: `{ isAvailable: false }`
+    // is an owner deciding not to detach - an intentional, already-explained state.
     const requestOpen = vi.fn();
     publishTabDetachHandler({ isAvailable: false, requestOpen });
     const warn = vi
@@ -460,9 +390,7 @@ describe("tab detach channel wiring", () => {
   });
 
   it("S2.1 - the provider renders without a RouterProvider", () => {
-    // The regression this sprint exists to fix: `RootDndProvider` went from
-    // router-optional to router-REQUIRED. Rendering it bare must not throw and
-    // its children must appear.
+    // Rendering it bare must not throw and its children must appear.
     const { getByTestId } = render(
       <QueryClientProvider client={queryClient()}>
         <RootDndProvider>

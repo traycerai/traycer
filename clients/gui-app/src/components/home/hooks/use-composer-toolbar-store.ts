@@ -44,75 +44,19 @@ import {
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 
-/**
- * The catalog a composer's toolbar store resolves selections against: WHICH
- * host's harnesses/models, and whether only TUI-capable harnesses count.
- */
+/** The catalog a composer's toolbar store resolves selections against: which host's harnesses/models, and
+ * whether only TUI-capable harnesses count. */
 export interface ComposerToolbarCatalogScope {
-  /**
-   * The host this composer runs turns on - a chat tab's bound host, a fork
-   * dialog's fixed host, the new-conversation modal's pinned host, the
-   * landing page's active host. The harness + model catalog is fetched
-   * through this client, so the harnesses/models the store resolves and
-   * validates a selection against are that host's, never the app-wide
-   * default's while the composer is bound elsewhere. `null` while that host's
-   * client is still resolving: the catalog stays empty rather than borrowing
-   * another host's.
-   */
+  /** The harness + model catalog is fetched through this client, so the harnesses/models the store resolves and
+   * validates a selection against are that host's. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  /**
-   * The same target host as `hostClient`, as an id: it keys the per-host
-   * harness-memory reads/writes (`commitSelection` + the recording
-   * `onSettingsChange` wrapper), so a selection committed on one host never
-   * seeds or overwrites another host's remembered state. `null` while the
-   * target host is still resolving - memory writes are dropped, never
-   * misattributed.
-   */
+  /** `null` while the target host is still resolving - memory writes are dropped, never misattributed. */
   readonly hostId: string | null;
-  /** Restrict the catalog to TUI-capable harnesses (terminal launchers). */
   readonly tuiOnly: boolean;
 }
 
-/**
- * Creates this composer's private toolbar store (see
- * `createComposerToolbarStore` for the state model) and keeps it synchronized
- * with its external inputs:
- *
- * - settings-store defaults / the seeded settings (re-seeds when the seed
- *   identity changes);
- * - the harness + model catalog queries, gated on the surrounding
- *   `SurfaceActivityContext` and issued against `catalog.hostClient` (see
- *   `ComposerToolbarCatalogScope`);
- * - the latest `onSettingsChange` callback.
- *
- * When `registerAs !== null` (and the surface is active), the store's setters
- * are registered with the focused-composer-controls registry so the command
- * palette's "Switch model" / "Switch provider" items dispatch against this
- * composer.
- *
- * `seedSource` (S11: replaces the old positional `settingsSeed` +
- * `client` + `seedIsAuthoritative` trio) decides both WHAT seeds the store
- * and WHETHER a dead `profileId` may be silently corrected to ambient - the
- * load-bearing distinction that keeps this validation from fighting the
- * reauth gate's OWN missing-profile feature:
- * - `none`: no seed - the store falls back to settings-store defaults.
- * - `fallback` (fork dialogs, the landing composer, the new-conversation
- *   modal, and a chat composer's fallback-seeded window before its own
- *   settings hydrate): the seed is a picker default, not a commitment anyone
- *   is relying on - its `profileId` is validated against `seedSource.client`
- *   (the SAME host this composer will actually run turns on) and corrected
- *   to ambient (`null`) if dead, so it can never reach a fork/new-chat
- *   submission or falsely accuse itself of being "missing" in
- *   `useProviderReauthGate`.
- * - `authoritative` (a chat composer once its OWN `chat.settings` seed the
- *   composer): the seed IS a real commitment - a dead `profileId` is passed
- *   through UNVALIDATED so `useProviderReauthGate` (fed the identical
- *   `seedSource.kind`) can detect and BLOCK it with a banner, never silently
- *   swap to ambient behind the user's back.
- *
- * Returns the store itself: toolbar leaves subscribe to slices, submit paths
- * read `store.getState()`.
- */
+/** `authoritative` (a chat composer once its own `chat.settings` seed the composer): the seed IS a real
+ * commitment. */
 export function useComposerToolbarStore(
   registerAs: FocusedComposerKind | null,
   seedSource: ComposerSeedSource,
@@ -172,21 +116,12 @@ export function useComposerToolbarStore(
       hostId,
     }),
   );
-  // The store's `onSettingsChange` is ALWAYS this recording wrapper, even when
-  // the surface passes `onSettingsChange: null` (fork dialogs / add-node), so
-  // their edits still populate memory. It records ONLY when the resolved slug is
-  // catalog-confirmed (`selectionCatalogConfirmed`, exposed by the store) - the
-  // catalog-confirmed write gate - so a seed, a surface reroute (the store
-  // suppresses the emit), or an unvalidated/stale remembered slug is never
-  // written. `record()` also self-guards an empty model.
+  // It records only when the resolved slug is catalog-confirmed (`selectionCatalogConfirmed`, exposed by the
+  // store) - the catalog-confirmed write gate.
   const recordingOnSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
-      // Precondition: every store emit site `set()`s the derived state BEFORE
-      // invoking `onSettingsChange`, so `getState().selectionCatalogConfirmed`
-      // here reflects the very settings being emitted - the write gate does not
-      // race the emit. The memory write is keyed by the store-carried target
-      // host (`catalog.hostId`) - the same host the confirming catalog was
-      // fetched from - so the record can never land in another host's bucket.
+      // Precondition: every store emit site `set`s the derived state before invoking `onSettingsChange`, so
+      // `getState.selectionCatalogConfirmed` here reflects the very settings being emitted.
       const state = store.getState();
       if (state.selectionCatalogConfirmed) {
         useComposerHarnessMemoryStore
@@ -200,22 +135,13 @@ export function useComposerToolbarStore(
   useEffect(() => {
     store.getState().setOnSettingsChange(recordingOnSettingsChange);
   }, [store, recordingOnSettingsChange]);
-  // Re-seed when the seed identity changes (applySeed no-ops on a matching
-  // key, so default-value churn never clobbers user edits). A LAYOUT effect,
-  // not a passive one: ticket 07 round 2's transition-window gap - a seed
-  // whose `profileId` flips (e.g. `resolveSeededProfileId` clearing a stale
-  // pin once `providers.list` settles) must land in the store before the
-  // browser paints, so a submit triggered by the very next user interaction
-  // can never read a stale committed `selection` through a passive-effect
-  // scheduling gap. `applySeed`'s no-op-on-matching-key guard keeps this
-  // synchronous timing side-effect-free for every other render.
+  // A layout effect, not a passive one: ticket 07 round 2's transition-window gap.
   useLayoutEffect(() => {
     store.getState().applySeed(seedKey, seededValues);
   }, [store, seedKey, seededValues]);
 
-  // Feed the catalog. The models query follows the store's RESOLVED harness
-  // (availability rerouting included); `modelsHarnessId` rides along so a
-  // stale response can never resolve a slug for the wrong harness.
+  // The models query follows the store's resolved harness (availability rerouting included); `modelsHarnessId`
+  // rides along so a stale response can never resolve a slug for the wrong harness.
   const harnessId = useStore(store, (s) => s.selection.harnessId);
   const harnessesQuery = useGuiHarnessesQueryForClient(hostClient, {
     enabled: activityEnabled,
@@ -230,21 +156,10 @@ export function useComposerToolbarStore(
       subscribed: activityEnabled,
     },
   );
-  // Read the cache regardless of `activityEnabled`. The gate above already does
-  // the whole job it exists for - an inactive surface fetches nothing and holds
-  // no observer - and `enabled:false` does not evict what is already cached.
-  // Blanking the catalog on top of that is not a narrower subscription, it is
-  // this composer throwing away its own resolved state: `selectedModel` goes
-  // null, and with it the reasoning-effort and fast-mode chips (both derived
-  // from the model's advertised options) plus `supportedPermissionModes`. That
-  // was invisible while an inactive surface was also a hidden one, and became a
-  // visible defect with split panes, where the unfocused pane stays on screen.
+  // Read the cache regardless of `activityEnabled`.
   const harnesses = harnessesQuery.data?.harnesses;
   const models = modelsQuery.data?.models ?? EMPTY_MODELS;
-  // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
-  // the store so it can tell "loading" from "loaded empty" (the query is keyed
-  // on `harnessId`, so `data` resets to undefined during a cross-harness switch
-  // until the new harness's models land). Never inferred from `models.length`.
+  // Never inferred from `models.length`.
   const modelsLoaded = modelsQuery.data !== undefined;
   useEffect(() => {
     store.getState().setCatalog({
@@ -263,18 +178,16 @@ export function useComposerToolbarStore(
       setReasoning: actions.setReasoning,
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,
-      // The command palette has no rail/profile context of its own - default
-      // the independent profile choice to ambient while restoring the
-      // provider's last-used model/effort/tier.
+      // The command palette has no rail/profile context of its own - default the independent profile choice to
+      // ambient while restoring the provider's last-used model/effort/tier.
       switchHarness: (harnessId: ProviderId) =>
         commitSelection(store, harnessId, null, null),
       selectModel: (harnessId: ProviderId, modelSlug: string) =>
         commitSelection(store, harnessId, modelSlug, null),
     };
   }, [store]);
-  // The palette's composer subpages list the catalog of the SAME host this
-  // store reads it through, so what they offer is what `switchHarness` /
-  // `selectModel` can commit against.
+  // The palette's composer subpages list the catalog of the same host this store reads it through, so what they
+  // offer is what `switchHarness` / `selectModel` can commit against.
   useRegisterFocusedComposerControls(
     activityEnabled ? registerAs : null,
     registeredControls,

@@ -1,10 +1,4 @@
-/**
- * The Link mobile app panel under the server's one-live-code policy: the
- * countdown derives the next-mint moment from the mint response alone, the
- * displayed code is the ONLY watched code (a claim on it swaps the QR for
- * the confirmation card), a rejection resumes rotation with a fresh code,
- * and the one-time nature of a code is stated in copy.
- */
+/** The Link mobile app panel under the server's one-live-code policy. */
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,11 +29,8 @@ vi.mock("@/stores/auth/auth-store", () => ({
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
-  // The panel encodes the QR against the shell's own platform origin, taken
-  // from `signInUrl`. Without one the tile draws a placeholder instead of a
-  // symbol - deliberately, so a build that cannot name its deployment never
-  // puts a live code in front of a camera - which is not the state these
-  // tests are about.
+  // Without one the tile draws a placeholder instead of a symbol - deliberately, so a build that cannot name its
+  // deployment never puts a live code in front of a camera - which is not the state these tests are about.
   useRunnerHost: () => ({ signInUrl: "https://platform.test/sign-in" }),
 }));
 
@@ -87,11 +78,8 @@ function claimedStatus(claimedAtMs: number, userAgent: string) {
   };
 }
 
-/**
- * The same claim from a server that knows about match codes: a string is
- * the code the phone is showing, `null` is the server saying the phone
- * presented none.
- */
+/** The same claim from a server that knows about match codes: a string is the code the phone is showing, `null`
+ * is the server saying the phone presented none. */
 function claimedStatusWithCode(
   claimedAtMs: number,
   userAgent: string,
@@ -191,9 +179,8 @@ describe("LinkPhonePanel", () => {
       { code: "ABCDE-FGHJK", approve: false },
       expect.anything(),
     );
-    // The rejected claim released the server's per-user lock; the panel
-    // immediately requests a fresh code via the EVICTING restart (a bare
-    // refetch could re-serve the dead entry from cache).
+    // The rejected claim released the server's per-user lock; the panel immediately requests a fresh code via the
+    // evicting restart (a bare refetch could re-serve the dead entry from cache).
     expect(mocks.evictLinkLoginCode).toHaveBeenCalled();
   });
 
@@ -222,10 +209,8 @@ describe("LinkPhonePanel", () => {
     const codeQuery = queryResultWithCode(Date.now());
     mocks.useAuthLinkLoginCode.mockReturnValue(codeQuery);
     const view = render(<LinkPhonePanel />);
-    // The server reports the displayed code gone — another surface minted
-    // over it. Rendered as the superseded state, never an automatic re-mint
-    // (that would supersede the other surface right back, ping-ponging
-    // mints until the rate limit).
+    // Rendered as the superseded state, never an automatic re-mint (that would supersede the other surface right
+    // back, ping-ponging mints until the rate limit).
     mocks.useAuthLinkLoginStatus.mockReturnValue(statusResult("gone"));
     view.rerender(<LinkPhonePanel />);
     expect(screen.getByTestId("link-phone-superseded")).toBeTruthy();
@@ -236,9 +221,8 @@ describe("LinkPhonePanel", () => {
       | unknown[]
       | undefined;
     expect(lastMintCall?.[0]).toBe(false);
-    // Only the explicit user action mints again — via the EVICTING restart
-    // (a bare refetch would re-serve the dead entry from cache), which also
-    // re-enables the mint query so the empty cache must fetch fresh.
+    // Only the explicit user action mints again - via the evicting restart (a bare refetch would re-serve the dead
+    // entry from cache), which also re-enables the mint query so the empty cache must fetch fresh.
     act(() => {
       screen.getByTestId("link-phone-show-new").click();
     });
@@ -269,9 +253,8 @@ describe("LinkPhonePanel", () => {
   });
 
   it("claim-pending during rotation of a LIVE code keeps the QR — the claim may be its own", () => {
-    // The rotation mint hit the claim lock while the displayed code's own
-    // scan was landing: the next status poll surfaces it as the confirm
-    // card. Flashing "awaiting elsewhere" over a live QR would be wrong.
+    // The rotation mint hit the claim lock while the displayed code's own scan was landing: the next status poll
+    // surfaces it as the confirm card. Flashing "awaiting elsewhere" over a live QR would be wrong.
     mocks.useAuthLinkLoginCode.mockReturnValue({
       ...queryResultWithCode(Date.now()),
       isError: true,
@@ -283,9 +266,8 @@ describe("LinkPhonePanel", () => {
   });
 
   it("gone → claim-pending renders the awaiting state, not a dead QR or an error", () => {
-    // The displayed code is gone AND minting is refused because the user's
-    // single live claim awaits the decision on another surface: the panel
-    // must say so — not render the retained dead QR, not an error card.
+    // The displayed code is gone and minting is refused because the user's single live claim awaits the decision
+    // on another surface: the panel must say so - not render the retained dead QR, not an error card.
     mocks.useAuthLinkLoginCode.mockReturnValue({
       ...queryResultWithCode(Date.now()),
       isError: true,
@@ -310,8 +292,7 @@ describe("LinkPhonePanel", () => {
       mutate: vi.fn(),
     });
     render(<LinkPhonePanel />);
-    // The REJECT round-trip is in flight: its button spins, Approve does
-    // not — it only disables.
+    // The reject round-trip is in flight: its button spins, Approve does not - it only disables.
     expect(screen.getByTestId("link-phone-reject-spinner")).toBeTruthy();
     expect(screen.queryByTestId("link-phone-approve-spinner")).toBeNull();
     expect(
@@ -348,9 +329,8 @@ describe("LinkPhonePanel", () => {
     );
     render(<LinkPhonePanel />);
     expect(screen.getByTestId("link-phone-confirm")).toBeTruthy();
-    // The status poll is FROZEN (the mock never changes): the local claim
-    // deadline alone must retire the card once the window + grace elapse —
-    // never a card whose buttons act on a record the server deleted.
+    // The status poll is frozen (the mock never changes): the local claim deadline alone must retire the card once
+    // the window + grace elapse - never a card whose buttons act on a record the server deleted.
     act(() => {
       vi.advanceTimersByTime(140_000);
     });
@@ -387,16 +367,14 @@ describe("LinkPhonePanel", () => {
     act(() => {
       screen.getByTestId("link-phone-approve").click();
     });
-    // Not the approved state — the evicting restart runs instead.
+    // Not the approved state - the evicting restart runs instead.
     expect(screen.queryByTestId("link-phone-approved")).toBeNull();
     expect(mocks.evictLinkLoginCode).toHaveBeenCalled();
   });
 
   it("a lost respond keeps the claim and says so, instead of re-minting", () => {
-    // The decision never reached the server, so the phone is still waiting on
-    // it. Silently swapping in a fresh QR would answer a network problem by
-    // invalidating the code the user was mid-way through approving - and say
-    // nothing about why.
+    // Silently swapping in a fresh QR would answer a network problem by invalidating the code the user was mid-way
+    // through approving - and say nothing about why.
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
@@ -454,11 +432,8 @@ describe("LinkPhonePanel", () => {
   });
 
   it("does NOT report approval when the other surface already rejected", () => {
-    // authn is idempotent per direction: the SAME decision replays as 200,
-    // the OPPOSITE one is 409 `already_decided`. So Approve coming back
-    // already-decided means a denial won - the phone was refused. Reporting
-    // "signed in" here would be a false confirmation on the one decision in
-    // this flow that is security-sensitive.
+    // Reporting "signed in" here would be a false confirmation on the one decision in this flow that is
+    // security-sensitive.
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
@@ -489,10 +464,8 @@ describe("LinkPhonePanel", () => {
   });
 
   it("shows the replacement code after a decided-elsewhere card", () => {
-    // The card REPLACED the Approve/Reject controls, so nothing else can
-    // clear the state gating it. Without clearing it here the re-mint happens
-    // behind a card that never goes away - the user is stuck on a dead end
-    // with a fresh code they cannot see.
+    // Without clearing it here the re-mint happens behind a card that never goes away - the user is stuck on a
+    // dead end with a fresh code they cannot see.
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
@@ -515,8 +488,8 @@ describe("LinkPhonePanel", () => {
     });
     expect(screen.getByTestId("link-phone-decided-elsewhere")).toBeTruthy();
 
-    // The re-mint lands, but the SPENT claim is still in the status cache -
-    // polls are two seconds apart, so this is the ordinary case, not a corner.
+    // The re-mint lands, but the spent claim is still in the status cache - polls are two seconds apart, so this
+    // is the ordinary case, not a corner.
     mocks.useAuthLinkLoginCode.mockReturnValue({
       ...queryResultWithCode(Date.now()),
       data: {
@@ -533,9 +506,8 @@ describe("LinkPhonePanel", () => {
       vi.advanceTimersByTime(2_100);
     });
 
-    // The terminal card is gone, and the dead claim did NOT come back with it:
-    // resurrecting it would put live Approve/Reject controls on a decision the
-    // server has already settled.
+    // The terminal card is gone, and the dead claim did not come back with it: resurrecting it would put live
+    // Approve/Reject controls on a decision the server has already settled.
     expect(screen.queryByTestId("link-phone-decided-elsewhere")).toBeNull();
     expect(screen.queryByTestId("link-phone-confirm")).toBeNull();
 
@@ -582,9 +554,8 @@ describe("LinkPhonePanel", () => {
   });
 
   it("does not carry a failed decision's warning onto the next claim", () => {
-    // The notice belongs to the code it happened on. A bare flag outlives
-    // that claim, so the next phone's card would open already complaining
-    // about a failure that was not its own.
+    // The notice belongs to the code it happened on. A bare flag outlives that claim, so the next phone's card
+    // would open already complaining about a failure that was not its own.
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
@@ -607,9 +578,8 @@ describe("LinkPhonePanel", () => {
     });
     expect(screen.getByTestId("link-phone-respond-failed")).toBeTruthy();
 
-    // Claim A goes away — decided elsewhere, or expired. Only with no claim
-    // on screen does the watch hook follow a fresh mint, which is exactly the
-    // real sequence: the card clears, a new code is shown, a new phone scans.
+    // Claim A goes away - decided elsewhere, or expired. Only with no claim on screen does the watch hook follow a
+    // fresh mint, which is exactly the real sequence: the card clears, a new code is shown, a new phone scans.
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult({ status: "unclaimed", claimant: null }),
     );
@@ -618,7 +588,7 @@ describe("LinkPhonePanel", () => {
       vi.advanceTimersByTime(2_100);
     });
 
-    // A DIFFERENT phone claims a DIFFERENT code.
+    // A different phone claims a different code.
     mocks.useAuthLinkLoginCode.mockReturnValue({
       ...queryResultWithCode(Date.now()),
       data: {
@@ -655,9 +625,8 @@ describe("LinkPhonePanel", () => {
   });
 
   it("asks about the match code when the claim carries one, with the device as context", () => {
-    // The question is the code: the phone shows the same two digits, and
-    // agreement between the screens is what the self-reported description
-    // cannot prove. The description stays, demoted to context.
+    // The question is the code: the phone shows the same two digits, and agreement between the screens is what the
+    // self-reported description cannot prove.
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
@@ -674,8 +643,8 @@ describe("LinkPhonePanel", () => {
     // The code is announced with the prompt: a screen-reader user hears the
     // number they are asked to compare, not only that a prompt appeared.
     expect(screen.getByRole("status").textContent).toContain("47");
-    // The decision is unchanged by the code: Approve still sends only the
-    // code being decided — the match code is never an input.
+    // The decision is unchanged by the code: Approve still sends only the code being decided - the match code is
+    // never an input.
     act(() => {
       screen.getByRole("button", { name: "Approve" }).click();
     });
@@ -686,10 +655,8 @@ describe("LinkPhonePanel", () => {
   });
 
   it("warns loudly when the server says the phone presented no code", () => {
-    // `/claim` is unauthenticated and the claimant decides whether a code is
-    // minted, so a leaked-QR holder can withhold it. The server reports that
-    // as an explicit null, and the card must read as a different, worse
-    // state than a normal claim — not as today's prompt with a detail gone.
+    // The server reports that as an explicit null, and the card must read as a different, worse state than a
+    // normal claim - not as today's prompt with a detail gone.
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", null)),
@@ -702,9 +669,8 @@ describe("LinkPhonePanel", () => {
     expect(warning.textContent).toContain(
       "Sign-in request from iPhone 16 Pro.",
     );
-    // The BLOCK treatment, not just the text color: a warning that collapsed
-    // to a destructive-tinted subtitle would read as a detail, not a state.
-    // Background, border, icon and heading are what make it loud.
+    // The block treatment, not just the text color: a warning that collapsed to a destructive-tinted subtitle
+    // would read as a detail, not a state.
     expect(warning.className).toContain("bg-destructive/");
     expect(warning.className).toContain("border-destructive/");
     expect(warning.className).toContain("text-destructive");
@@ -719,17 +685,13 @@ describe("LinkPhonePanel", () => {
     expect(screen.getByRole("status").textContent).toContain(
       "did not show a sign-in code",
     );
-    // Still decidable — a legitimate older phone must get through.
+    // Still decidable - a legitimate older phone must get through.
     expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
   });
 
   it("drops the code the moment the status stops carrying it, and with the decision", () => {
-    // The code is read off the CURRENT status, never retained: a status that
-    // stops carrying it (a server that rolled back, or a re-mint watched
-    // onto a code the phone declined on) must lose the code prompt on the
-    // next render, and a decided record — which omits the key — must not
-    // keep a confirm card with a number on it at all.
+    // The code is read off the current status, never retained.
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
       statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
@@ -784,9 +746,8 @@ describe("LinkPhonePanel", () => {
     const countdown = () =>
       screen.getByTestId("link-phone-claim-countdown").textContent;
     expect(countdown()).toBe("Expires in 1:59");
-    // Beneath the prompt in reading order but OUTSIDE the status live region:
-    // a region announces every change under it, and a once-a-second clock
-    // would have a screen reader talking over the code and the instructions.
+    // Beneath the prompt in reading order but outside the status live region: a region announces every change
+    // under it, and a once-a-second clock would have a screen reader talking over the code and the instructions.
     const live = screen.getByRole("status");
     expect(live.textContent).not.toContain("Expires in");
     expect(

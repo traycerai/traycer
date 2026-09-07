@@ -10,18 +10,8 @@ import {
 } from "@/lib/history-search";
 
 /**
- * Search / filter / sort state for the *ambient* history surfaces - the
- * history modal overlay and the home page's embedded recent-epics list.
- *
- * These surfaces are rendered as root-level siblings of the page content, so
- * routing their high-frequency search/filter through the URL (as the `/epics`
- * strip-tab route legitimately does) lands it on the **root route's** search
- * params - and re-renders the entire shell (the page behind the modal) on every
- * keystroke. Owning the state here instead keeps interaction scoped to the list,
- * while `persist` preserves "restore where I left off" across a refresh.
- *
- * The `/epics` route is unaffected: it keeps the URL as its source of truth
- * (deep-linkable + loader-prefetched) - see `useRouteHistorySearchState`.
+ * Search / filter / sort state for the *ambient* history surfaces - the history modal overlay and
+ * the home page's embedded recent-epics list.
  */
 interface HistorySearchStoreState {
   readonly search: HistorySearchState;
@@ -48,10 +38,8 @@ export const useHistorySearchStore = create<HistorySearchStoreState>()(
       storage: createJSONStorage(() => localStorage),
       // Persist only the data; the actions come from the initializer on rehydrate.
       partialize: (state) => ({ search: state.search }),
-      // The default shallow merge takes the persisted `search` verbatim, so a
-      // value written before a `HistorySearchState` field existed rehydrates
-      // without it and every `.length` read on the new field crashes the
-      // renderer (chatHosts, #1303). Normalize against defaults instead.
+      // The default shallow merge takes the persisted `search` verbatim, so a value written before a
+      // `HistorySearchState` field existed rehydrates without it and every `.length` read on the new
       merge: (persistedState, currentState) => ({
         ...currentState,
         search: normalizePersistedHistorySearch(

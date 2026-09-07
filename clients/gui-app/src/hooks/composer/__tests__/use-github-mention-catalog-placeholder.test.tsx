@@ -14,15 +14,8 @@ import { useGithubMentionCatalog } from "@/hooks/composer/use-github-mention-cat
 import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-catalog";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * A scope that has not answered reads as LOADING, never as settled-empty.
- *
- * `keepPreviousData` leaves `catalogQuery.data` defined and the query in
- * `success` while the new scope's read is in flight, so a loading flag taken
- * off the query is false. The rows are withheld - they belong to the previous
- * scope - so the section had zero rows and nothing claiming to be loading, and
- * rendered the settled "no matches" copy for a scope that had said nothing.
- */
+/** A scope that has not answered reads as LOADING, never as settled-empty.
+ * `keepPreviousData` leaves `catalogQuery.data` defined and the query in `success` while the new scope's read is in flight, so a loading flag taken off the query is false. */
 
 const request = vi.fn();
 
@@ -40,11 +33,7 @@ const client = Object.assign({} as HostClient<HostRpcRegistry>, {
   requestWithSignal: request,
 });
 
-// `Wrapper` is a COMPONENT, so a bare `new QueryClient(...)` in its body mints
-// a fresh one on every render - four per test here, measured - and each one
-// publishes an empty cache and an empty mutation cache through the provider.
-// Held in state instead, so the client is the one thing in this harness that
-// does not change while the scope and the bound host do.
+// Held in state instead, so the client is the one thing in this harness that does not change while the scope and the bound host do.
 function Wrapper(props: { readonly children: ReactNode }): ReactNode {
   const [queryClient] = useState(
     () =>
@@ -141,10 +130,7 @@ describe("useGithubMentionCatalog placeholder loading", () => {
   });
 
   it("reports answeredAt once the scope has answered, and withholds it while its data is a placeholder", async () => {
-    // `answeredAt` is the clock `preferredScopeAnswer` compares to decide
-    // which section's `repositories` to believe - it must name THIS scope's
-    // arrival, never the previous scope's, or a placeholder pretending to be
-    // fresh would win a tie-break it never earned.
+    // `answeredAt` is the clock `preferredScopeAnswer` compares to decide which section's `repositories` to believe - it must name THIS scope's arrival, never the previous scope's, or a placeholder pretending to be fresh would win a tie-break it never earned.
     answerOnly("/repo-a");
 
     const { result, rerender } = renderCatalog({ scope: REPO_A });

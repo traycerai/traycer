@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-// `host stop`'s command-level wiring (Host Update Layer Redesign Tech
-// Plan, "Lifecycle lock coverage"): the stop call runs inside one
-// `cli-lock` acquisition.
+// `host stop`'s command-level wiring (Host Update Layer Redesign Tech Plan, "Lifecycle lock coverage"): the stop call runs inside one `cli-lock` acquisition.
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],

@@ -1,25 +1,6 @@
 /**
- * What runs inside the runtime worker.
- *
- * Everything except the two lines that reach for the ambient worker scope,
- * which live in `epic-runtime-worker-entry.ts`. The split is what makes this
- * testable: the suites drive THIS against a real bridge endpoint over a fake
- * port pair, so the frames, the correlation, the stream proxy and the
- * lifecycle are all the production ones - only the pipe is a stand-in.
- *
- * The composition root itself (stream clients, lane and legacy adapters, root
- * replica, projection kernel, cold tier, durable store) is not here yet. It
- * arrives through {@link EpicRuntimeWorkerHost.installCore}, which is the one
- * named seam that phase adds. Until something installs a core, the host is a
- * fully working bridge over an empty runtime: it records the bootstrap's facts,
- * it forwards logs, and it answers the reads it can answer - `{ bytes: null }`
- * for an attachment, which is the honest "not available from here" every
- * surviving caller already handles, and not a throw.
- *
- * The two things a core needs from OUTSIDE the worker are reachable here before
- * it exists: `bootstrapFacts()` (the window it serves), and `streams` -
- * the `IStreamClient` proxy the four typed wrappers are constructed over. The
- * socket behind it never leaves the main thread.
+ * What runs inside the runtime worker. Everything except the two lines that reach for the ambient
+ * worker scope, which live in `epic-runtime-worker-entry.ts`.
  */
 import {
   createWorkerBridgeEndpoint,
@@ -54,43 +35,24 @@ import { createWorkerRuntimeEnvironment } from "../worker-runtime-environment";
 import { createWorkerAccountingPort } from "./worker-accounting-port";
 import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port";
 
-/**
- * The relocated composition root, as the bridge sees it.
- *
- * Deliberately tiny and deliberately not the runtime's own interface: what the
- * bridge needs is the set of operations a MAIN-THREAD caller can ask for, and
- * that set is much smaller than the runtime's surface because everything else
- * the runtime does travels outward as events.
- */
+/** The relocated composition root, as the bridge sees it. */
 /** What the queue answered: a minted id, or an explicit refusal. */
 export type EnqueuedWriteCommand = RuntimeWorkerCallResponse<"command/enqueue">;
 
 export interface EpicRuntimeWorkerCore {
   /**
-   * Content-addressed attachment bytes from the root replica, or `null` when
-   * this replica does not hold the hash.
-   *
-   * Returns the bytes; the host owns handing over the buffer. A core that
-   * returned a view into a live decode buffer would otherwise have that buffer
-   * transferred out from under it.
+   * Content-addressed attachment bytes from the root replica, or `null` when this replica does not
+   * hold the hash. Returns the bytes; the host owns handing over the buffer.
    */
   readAttachmentBytes(hash: string): Promise<Uint8Array | null>;
   /**
-   * The cold bytes for an artifact body, or `null` when this replica cannot
-   * serve one. The live `Y.Doc` is built from these on the MAIN thread, which
-   * is where Tiptap needs it.
+   * The cold bytes for an artifact body, or `null` when this replica cannot serve one. The live
+   * `Y.Doc` is built from these on the MAIN thread, which is where Tiptap needs it.
    */
   materializeBody(
     artifactId: string,
   ): Promise<ArtifactBodyMaterialization | null>;
-  /**
-   * Take an artifact body's encoded state back and settle it.
-   *
-   * Answers only once the bytes are durably held: the main thread keeps the
-   * live doc until this resolves, so an early `accepted: true` is a window in
-   * which an edit exists nowhere. `accepted: false` tells the main thread to
-   * keep the doc.
-   */
+  /** Take an artifact body's encoded state back and settle it. */
   demoteBody(input: {
     readonly docKey: string;
     readonly generation: number;
@@ -103,28 +65,12 @@ export interface EpicRuntimeWorkerCore {
     /** WHY, when refused. `null` when accepted. Shared with `body/release`. */
     readonly reason: "not-held" | "newer-generation" | "pinned" | null;
   }>;
-  /**
-   * A local edit from the main-thread doc, on its way to the body lane.
-   *
-   * Answers the lane's own `SendOutcome` unchanged - `queued` is not a failure
-   * and must not be retried; only `dropped` is loss.
-   */
+  /** A local edit from the main-thread doc, on its way to the body lane. */
   updateBody(input: {
     readonly docKey: string;
     readonly update: Uint8Array;
   }): Promise<{ readonly outcome: SendOutcome }>;
-  /**
-   * One metadata mutation against the replica and its optimistic overlay.
-   *
-   * Async like the rest of this interface even though the replica answers
-   * synchronously: the caller is across a bridge either way, and a synchronous
-   * member here would be a promise the host has to make on the replica's
-   * behalf that the bridge cannot keep.
-   *
-   * MAY THROW. `reparent-artifact` rejects an illegal move by throwing, and
-   * the endpoint turns that into an `error` result carrying the error's own
-   * `name` - which is how the caller still tells a cycle from a missing node.
-   */
+  /** One metadata mutation against the replica and its optimistic overlay. */
   applyMutation(mutation: EpicMutation): Promise<EpicMutationResult>;
   /**
    * One fire-and-forget command. `void` on both sides of the boundary: the
@@ -168,45 +114,12 @@ export interface EpicRuntimeWorkerCore {
   dispose(): void;
 }
 
-/**
- * One answer to `body/materialize`, and it has THREE outcomes, not two.
- *
- * The third one is the reason this type carries a nullable `update`, and it is
- * a distinction the wire always permitted while nothing produced it:
- *
- * | answer | meaning |
- * | --- | --- |
- * | `null` (this type absent) | **not held** - no body for that artifact on the installed arm |
- * | `docKey` set, `update: null` | **awaiting seed** - the demand is retained and bytes will exist later |
- * | `update` set | **granted** - install these bytes |
- *
- * Awaiting exists because on the LANE arm the lease IS the subscribe
- * (`epic-replica-runtime.ts`, "so the lease is also the subscribe"), so a cold
- * open legitimately has demand and no bytes yet. Collapsing that into "not
- * held" made the release run, which closed the subscription that was about to
- * deliver the bytes - the body never arrived and nothing retried.
- *
- * The awaiting answer states nothing it does not know: `docGuid: null` because
- * no bytes were cut so no identity was cut either (and fabricating one is
- * forbidden - `artifact-room-tier.ts:325`), `hostStateVector: null` because
- * there is no coverage to claim, `awarenessFrames: []` because presence rides
- * an INSTALL and there is no doc for a peer to be present in yet - the retry's
- * own answer carries the real set. `seedMode` is the union's inert `"full"`,
- * matching the not-held answer, because there is no seed to describe.
- */
+/** One answer to `body/materialize`, and it has THREE outcomes, not two. */
 export interface ArtifactBodyMaterialization {
   readonly docKey: string;
   /** `null` is AWAITING SEED, never "empty body". See this type's table. */
   readonly update: Uint8Array | null;
-  /**
-   * The identity these bytes were cut at, or `null` when the arm states none.
-   *
-   * `null` is the `@1` arm's truth carried forward, never a value invented
-   * here - `artifact-room-tier.ts:325` forbids fabricating one. A `null` guid
-   * marks the body FORWARD-ONLY: the lease bridge installs it and never posts
-   * a demote for it, because `settleColdState` decides its refusal on an
-   * identity and would refuse these bytes anyway.
-   */
+  /** The identity these bytes were cut at, or `null` when the arm states none. */
   readonly docGuid: string | null;
   readonly seedMode: ArtifactBodySeedMode;
   readonly hostStateVector: string | null;
@@ -221,19 +134,13 @@ export interface EpicRuntimeWorkerHost {
    */
   readonly environment: RuntimeEnvironment;
   /**
-   * The stream client the relocated composition root is built on: a PROXY whose
-   * frames cross the bridge while the real socket, its process-wide session
-   * cache, its wake and endpoint re-dial wiring and its credential recovery all
-   * stay on the main thread. See `stream-proxy-protocol.ts` for why.
+   * The stream client the relocated composition root is built on: a PROXY whose frames cross the
+   * bridge while the real socket, its process-wide session cache, its wake and endpoint re-dial
    */
   readonly streams: WorkerStreamClientHandle;
   /**
-   * What the main thread told this worker about the surface it serves, or
-   * `null` before the bootstrap arrives.
-   *
-   * A read rather than a constructor argument because the host is started by
-   * the entry module, which has nothing to tell it - the facts arrive on the
-   * wire. The core builder is what waits for them.
+   * What the main thread told this worker about the surface it serves, or `null` before the
+   * bootstrap arrives.
    */
   bootstrapFacts(): RuntimeWorkerBootstrap | null;
   /**
@@ -241,21 +148,11 @@ export interface EpicRuntimeWorkerHost {
    * producer is `useAuthStore` and not the transport.
    */
   currentUserId(): string | null;
-  /**
-   * The worker->main call surface, for the composed runtime's write commands.
-   *
-   * Narrow by construction: `MainThreadPort` is `call` and nothing else, so a
-   * composition cannot reach `emit` and publish a second projection stream
-   * beside the one {@link publishProjection} owns.
-   */
+  /** The worker->main call surface, for the composed runtime's write commands. */
   readonly main: MainThreadPort;
   /**
-   * Publish one projection slice to main.
-   *
-   * The revision is the HOST's, minted here and strictly increasing per
-   * worker, because the main side drops a revision it has already applied. A
-   * caller minting its own would be a second sequence over one stream, and two
-   * sequences interleave into an order that drops deliveries as stale.
+   * Publish one projection slice to main. The revision is the HOST's, minted here and strictly
+   * increasing per worker, because the main side drops a revision it has already applied.
    */
   publishProjection(value: unknown): void;
   /** Push a resident body's update to main's live doc (`body/doc-in`). */
@@ -263,27 +160,13 @@ export interface EpicRuntimeWorkerHost {
   /** Push a remote presence frame for one body (`body/awareness-in`). */
   publishBodyAwareness(docKey: string, frame: Uint8Array): void;
   /**
-   * Runs `listener` when the bootstrap lands, BEFORE `ready` is emitted.
-   *
-   * The composition root cannot be built at construction: it needs the epic id,
-   * and that arrives on the wire. Running before `ready` is the whole point -
-   * `ready` is what makes the main thread start sending calls, so a core
-   * installed after it would leave a window in which the worker answers
-   * "not held" to reads the runtime could have served. A listener that throws
-   * fails the handshake into a `fatal`, which is the honest outcome for a
-   * composition that could not be built.
-   *
-   * Returns an unsubscribe, and does not fire for a SKEWED bootstrap: a
-   * version-mismatched worker must compose nothing.
+   * Runs `listener` when the bootstrap lands, BEFORE `ready` is emitted. The composition root cannot
+   * be built at construction: it needs the epic id, and that arrives on the wire.
    */
   onBootstrap(listener: (facts: RuntimeWorkerBootstrap) => void): () => void;
   /**
-   * Where the composed runtime reports its bytes.
-   *
-   * Available before a core is installed, for the same reason `environment` is:
-   * building the core needs it. Pushes over the bridge - the books themselves
-   * are on main, because a worker importing them would COPY the accountant
-   * rather than share it.
+   * Where the composed runtime reports its bytes. Available before a core is installed, for the same
+   * reason `environment` is: building the core needs it.
    */
   readonly accounting: EpicRuntimeAccountingPort;
   /**
@@ -300,20 +183,14 @@ export function startEpicRuntimeWorkerHost(
 ): EpicRuntimeWorkerHost {
   let core: EpicRuntimeWorkerCore | null = null;
   let bootstrap: RuntimeWorkerBootstrap | null = null;
-  // `null` is a real state - nobody signed in - and it is also what this reads
-  // before the first push. Both mean the same thing to the projector, which
-  // hides chats owned by a different user and shows none while unknown.
+  // `null` is a real state - nobody signed in - and it is also what this reads before the first
+  // push.
   let currentUserId: string | null = null;
   let stopped = false;
   const bootstrapListeners = new Set<(facts: RuntimeWorkerBootstrap) => void>();
   let projectionRevision = 0;
 
-  /**
-   * Answer a release. Split out so the handler can stay a one-liner that is
-   * obviously synchronous under its promise - releasing touches two maps and
-   * never awaits, which is what makes the ordering argument on `body/release`
-   * hold: once invoked it completes without interleaving.
-   */
+  /** Answer a release. */
   function releaseBodyReply(request: { readonly docKey: string }): {
     value: {
       readonly released: boolean;
@@ -321,9 +198,7 @@ export function startEpicRuntimeWorkerHost(
     };
     transfer: readonly ArrayBuffer[];
   } {
-    // No core: nothing to release, and `not-held` says so honestly. The hold
-    // is created BY a materialize this same core answered, so a release
-    // arriving without one names nothing that exists.
+    // No core: nothing to release, and `not-held` says so honestly.
     if (core === null) {
       return {
         value: { released: false, reason: "not-held" },
@@ -339,19 +214,8 @@ export function startEpicRuntimeWorkerHost(
         core === null ? null : await core.readAttachmentBytes(request.hash);
       if (held === null)
         return { value: { bytes: null }, transfer: NO_TRANSFER };
-      // COPIED FIRST, because these bytes are the replica's, not ours.
-      //
-      // `readAttachmentBytes` returns the value held in the root doc's
-      // `attachments` map BY REFERENCE. `takeBytesForTransfer` transfers a
-      // full-span standalone buffer in place - a judgement about GEOMETRY,
-      // sound only for a buffer the caller owns - so handing it this array
-      // detaches the one still sitting in the `Y.Map`. The attachment reads as
-      // zero bytes from then on, for every later reader.
-      //
-      // The pre-existing comment here worried about the opposite case, "a
-      // window onto a buffer the replica is still using": a VIEW is the arm
-      // the helper already copies. A locally-pasted attachment is stored as a
-      // standalone full-span array, which is exactly the arm it transfers.
+      // COPIED FIRST, because these bytes are the replica's, not ours. `readAttachmentBytes` returns the
+      // value held in the root doc's `attachments` map BY REFERENCE.
       const prepared = takeBytesForTransfer(held.slice());
       return {
         value: { bytes: prepared.bytes },
@@ -362,9 +226,8 @@ export function startEpicRuntimeWorkerHost(
       const held =
         core === null ? null : await core.materializeBody(request.artifactId);
       if (held === null) {
-        // No core, or no body for that artifact. Both reach the main thread as
-        // an `unavailable` grant, which is what a lease with nothing behind it
-        // has always been.
+        // No core, or no body for that artifact. Both reach the main thread as an `unavailable` grant,
+        // which is what a lease with nothing behind it has always been.
         return {
           value: {
             docKey: null,
@@ -379,14 +242,8 @@ export function startEpicRuntimeWorkerHost(
         };
       }
       if (held.update === null) {
-        // AWAITING SEED. `docKey` is stated and `update` is not, which is the
-        // discriminator main reads - see `ArtifactBodyMaterialization`.
-        //
-        // No transfer list, because there are no bytes to give up. Routed
-        // through its own arm rather than falling into the one below:
-        // `takeBytesForTransfer(null)` has no meaning, and widening it to
-        // accept a null would put an "or nothing" case inside a helper whose
-        // whole job is deciding what is safe to detach.
+        // AWAITING SEED. `docKey` is stated and `update` is not, which is the discriminator main reads -
+        // see `ArtifactBodyMaterialization`.
         return {
           value: {
             docKey: held.docKey,
@@ -414,13 +271,8 @@ export function startEpicRuntimeWorkerHost(
     },
     "body/update": async (request) => {
       if (core === null) {
-        // No core: the body lane this update was destined for does not exist
-        // here. `dropped` rather than `queued` because nothing in this worker
-        // is holding it. The main thread's live doc remains the only proven
-        // holder and latches that fact into its visible dirty state until a
-        // full demote or authoritative replacement retires the doc. The reason
-        // names the state so a caller can tell a teardown drop from a lane
-        // refusing a doc it should have had.
+        // No core: the body lane this update was destined for does not exist here. `dropped` rather than
+        // `queued` because nothing in this worker is holding it.
         return {
           value: {
             outcome: {
@@ -445,9 +297,8 @@ export function startEpicRuntimeWorkerHost(
           : await core.awaitAttachmentBytes(request.awaitId, request.hash);
       if (bytes === null)
         return { value: { bytes: null }, transfer: NO_TRANSFER };
-      // Same ownership rule as `attachment/read` above - the waiter resolves
-      // with the map's own value, so it is copied before it can be
-      // transferred out from under the replica.
+      // Same ownership rule as `attachment/read` above - the waiter resolves with the map's own value,
+      // so it is copied before it can be transferred out from under the replica.
       const encoded = takeBytesForTransfer(bytes.slice());
       return { value: { bytes: encoded.bytes }, transfer: encoded.transfer };
     },
@@ -457,10 +308,8 @@ export function startEpicRuntimeWorkerHost(
       return Promise.resolve({ value: { cancelled }, transfer: NO_TRANSFER });
     },
     "root/encode": async () => {
-      // Empty bytes without a core, and the caller's `applied` guard is what
-      // makes that safe: an empty update applies as nothing rather than as a
-      // document, and the transfer site checks the answer before retiring the
-      // source.
+      // Empty bytes without a core, and the caller's `applied` guard is what makes that safe: an empty
+      // update applies as nothing rather than as a document, and the transfer site checks the answer
       const update =
         core === null ? new Uint8Array() : await core.encodeRootState();
       const encoded = takeBytesForTransfer(update);
@@ -476,9 +325,8 @@ export function startEpicRuntimeWorkerHost(
       return { value: { applied }, transfer: NO_TRANSFER };
     },
     "command/enqueue": async (request) => {
-      // REFUSED without a core, never a minted id: an id handed back for a
-      // command nothing queued is a caller waiting on a record that will never
-      // arrive.
+      // REFUSED without a core, never a minted id: an id handed back for a command nothing queued is a
+      // caller waiting on a record that will never arrive.
       const answer =
         core === null
           ? ({ outcome: "refused" } as const)
@@ -487,9 +335,8 @@ export function startEpicRuntimeWorkerHost(
     },
     "mutation/apply": async (request) => {
       if (core === null) {
-        // Fail-closed, and each arm says the same thing three ways: nothing
-        // happened. A no-core `changed: true` would let the caller's follow-on
-        // view write run against a mutation the replica never made.
+        // Fail-closed, and each arm says the same thing three ways: nothing happened. A no-core `changed:
+        // true` would let the caller's follow-on view write run against a mutation the replica never made.
         return { value: inertMutationResult(request), transfer: NO_TRANSFER };
       }
       return {
@@ -499,9 +346,8 @@ export function startEpicRuntimeWorkerHost(
     },
     "body/release": (request) => Promise.resolve(releaseBodyReply(request)),
     "body/demote": async (request) => {
-      // Refusing is the only safe answer without a core: the main thread keeps
-      // the live doc on `accepted: false`, and an unowned `true` would tell it
-      // to drop bytes nothing has stored.
+      // Refusing is the only safe answer without a core: the main thread keeps the live doc on
+      // `accepted: false`, and an unowned `true` would tell it to drop bytes nothing has stored.
       const settled =
         core === null
           ? { accepted: false, settledBytes: 0, reason: "not-held" as const }
@@ -510,9 +356,8 @@ export function startEpicRuntimeWorkerHost(
     },
   };
 
-  // Built before the environment, so the log sink can close over a `const`
-  // bridge rather than a slot that is null until construction finishes -
-  // a log line emitted while the core is being built would otherwise vanish.
+  // Built before the environment, so the log sink can close over a `const` bridge rather than a slot
+  // that is null until construction finishes - a log line emitted while the core is being built
   const bridge: WorkerBridgeEndpoint = createWorkerBridgeEndpoint(
     transport,
     handlers,
@@ -520,9 +365,8 @@ export function startEpicRuntimeWorkerHost(
   const emitLog = (entry: RuntimeWorkerLogEntry): void => {
     bridge.emit({ kind: "log", entry }, NO_TRANSFER);
   };
-  // After the bridge for the same reason the log sink is: its emit closes over
-  // a `const`, so a frame produced while the core is being built cannot vanish
-  // into a slot that is still null.
+  // After the bridge for the same reason the log sink is: its emit closes over a `const`, so a frame
+  // produced while the core is being built cannot vanish into a slot that is still null.
   const streams = createWorkerStreamClient(
     (event, transfer) => {
       bridge.emit(event, transfer);
@@ -552,10 +396,7 @@ export function startEpicRuntimeWorkerHost(
         if (
           event.bootstrap.protocolVersion !== RUNTIME_BRIDGE_PROTOCOL_VERSION
         ) {
-          // Loud, and NOT followed by `ready`. A version-skewed worker that
-          // answered `ready` would be adopted by the main thread and then
-          // ignore half the traffic it was sent, which reads as a runtime that
-          // is merely slow.
+          // Loud, and NOT followed by `ready`.
           bridge.emit(
             {
               kind: "fatal",
@@ -568,15 +409,9 @@ export function startEpicRuntimeWorkerHost(
           );
           return;
         }
-        // Recorded only on a MATCHING handshake. A skewed bootstrap's payload
-        // is exactly the thing that must not be trusted: storing it and then
-        // answering `fatal` would leave the core builder able to construct
-        // against facts the two sides do not agree on.
+        // Recorded only on a MATCHING handshake.
         bootstrap = event.bootstrap;
-        // Composition BEFORE `ready`. A throw here propagates to the listener
-        // wrapper's catch and becomes a `fatal` with no `ready` - main then
-        // rejects its handshake instead of adopting a worker whose runtime
-        // does not exist.
+        // Composition BEFORE `ready`.
         for (const listener of [...bootstrapListeners])
           listener(event.bootstrap);
         bridge.emit(
@@ -590,9 +425,8 @@ export function startEpicRuntimeWorkerHost(
         return;
       }
       case "stream/session-version": {
-        // Applied before the status it belongs to, which is the order main
-        // posts them in - so a handler reacting to `open` already reads the
-        // version negotiated for that open.
+        // Applied before the status it belongs to, which is the order main posts them in - so a handler
+        // reacting to `open` already reads the version negotiated for that open.
         streams.deliverSessionVersion(
           event.version.streamId,
           event.version.version,
@@ -626,11 +460,6 @@ export function startEpicRuntimeWorkerHost(
         return;
       }
       case "runtime/command": {
-        // Dropped when no core is installed, and that is the honest answer
-        // rather than a queue: these commands are driven by main-side state
-        // that will re-drive them (an auth change, a record push, a user
-        // gesture), and a queue replayed after `installCore` would apply a
-        // viewer's records to a session that has since changed viewer.
         core?.applyCommand(event.command);
         return;
       }
@@ -651,9 +480,8 @@ export function startEpicRuntimeWorkerHost(
     try {
       onEvent(event);
     } catch (cause: unknown) {
-      // A throw inside a message listener is otherwise an unhandled error with
-      // no route back to the main thread, which then waits on a runtime that
-      // has already failed.
+      // A throw inside a message listener is otherwise an unhandled error with no route back to the main
+      // thread, which then waits on a runtime that has already failed.
       bridge.emit(
         {
           kind: "fatal",
@@ -678,9 +506,8 @@ export function startEpicRuntimeWorkerHost(
     const disposing = core;
     core = null;
     disposing?.dispose();
-    // Before the bridge: the closes have to reach main, and a disposed bridge
-    // drops what is posted through it. A session left open on the other side is
-    // a live subscription carrying frames nothing reads.
+    // Before the bridge: the closes have to reach main, and a disposed bridge drops what is posted
+    // through it.
     streams.disposeAll();
     bridge.dispose();
   }

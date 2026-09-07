@@ -27,12 +27,7 @@ function activate(): void {
   act(() => result.current(THREAD_ID));
 }
 
-/**
- * Every field the hook writes, back to empty. `setActivePanelIdAndExpand`
- * touches three slices of the left-panel store and `revealCommentsPanel` a
- * fourth, so resetting the active-panel map alone would leave a test's expand
- * and reveal state visible to the next one.
- */
+/** `setActivePanelIdAndExpand` touches three slices of the left-panel store and `revealCommentsPanel` a fourth, so resetting the active-panel map alone would leave a test's expand and reveal state visible to the next one. */
 function resetStores(): void {
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},

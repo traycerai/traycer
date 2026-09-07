@@ -43,12 +43,8 @@ describe("<ChatAccumulatedChangesPanel />", () => {
   });
 
   it("opens an active-turn row through the SEGMENT tile, not the cumulative one", () => {
-    // The active turn's own row is the client's view of a file no host version
-    // names yet: `digest: null`, and absent from both host arrays. Cumulative
-    // resolution addresses a file by digest or by the inline change array, so
-    // it can resolve neither - the tile it opened could only ever say
-    // source-unavailable. The edit's `file_change` blocks ARE hydrated (the row
-    // is on screen because they are), so it opens on those instead.
+    // The active turn's own row is the client's view of a file no host version names yet: `digest: null`, and absent from both host arrays.
+    // Cumulative resolution addresses a file by digest or by the inline change array, so it can resolve neither - the tile it opened could only ever say source-unavailable.
     const segment = vi.fn(() => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }));
     const cumulative = vi.fn(() => ({
       onClick: vi.fn(),
@@ -77,9 +73,7 @@ describe("<ChatAccumulatedChangesPanel />", () => {
   });
 
   it("opens a host row through the cumulative tile", () => {
-    // The other side of the same branch: a row a host version names resolves
-    // through the cumulative surface, which is the only one that can show the
-    // whole-chat before→after the panel is about.
+    // The other side of the same branch: a row a host version names resolves through the cumulative surface, which is the only one that can show the whole-chat before→after the panel is about.
     const segment = vi.fn(() => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }));
     const cumulative = vi.fn(() => ({
       onClick: vi.fn(),
@@ -135,9 +129,8 @@ describe("<ChatAccumulatedChangesPanel />", () => {
   });
 
   it("shows an active-turn row's live magnitude in the header total", () => {
-    // A file the running turn created has no host version yet, so its row is
-    // the client's own and its counts are the per-edit magnitudes summed across
-    // the turn. The header must show those rather than nothing.
+    // A file the running turn created has no host version yet, so its row is the client's own and its counts are the per-edit magnitudes summed across the turn.
+    // The header must show those rather than nothing.
     renderPanel({
       changes: [
         streamingChange("/repo/src/app.ts", { additions: 5, deletions: 2 }),
@@ -151,9 +144,8 @@ describe("<ChatAccumulatedChangesPanel />", () => {
   });
 
   it("omits an uncountable row from the header total rather than adding zero", () => {
-    // `counts: null` is "no diff to count" (`diffSource: "none"`), which is a
-    // different statement from `{0, 0}`. It must not drag the total to nothing
-    // when a countable row is sitting beside it.
+    // `counts: null` is "no diff to count" (`diffSource: "none"`), which is a different statement from `{0, 0}`.
+    // It must not drag the total to nothing when a countable row is sitting beside it.
     renderPanel({
       changes: [
         fileChange("/repo/src/app.ts"),
@@ -174,12 +166,7 @@ describe("<ChatAccumulatedChangesPanel />", () => {
   });
 });
 
-/**
- * On the windowed line the summaries arrive as chunks while the snapshot states
- * the total up front, so the list is a PREFIX until they all land. "Undo all"
- * reverts the host's whole set regardless, so neither the header nor the
- * artifact opt-out may be counted off the rows on screen.
- */
+/** On the windowed line the summaries arrive as chunks while the snapshot states the total up front, so the list is a PREFIX until they all land. "Undo all" reverts the host's whole set regardless, so neither the header nor the artifact opt-out may be counted off the rows on screen. */
 describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
   afterEach(() => {
     cleanup();
@@ -212,12 +199,7 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
   });
 
   it("withholds Review all on an OVERSHOOT, which the undelivered count reads as 0", () => {
-    // The case `undeliveredChangeCount` structurally cannot report. A revert
-    // lowers the host's authoritative total while the client still holds the
-    // previous summary array - the replacement index-0 chunk was dropped - so
-    // the delivered set is LONGER than the count and the clamp turns that into
-    // `0`. Read as "complete", this action captures reverted, stale paths into
-    // a durable bundle during the watchdog recovery window.
+    // The case `undeliveredChangeCount` structurally cannot report.
     renderPanel({
       changes: [fileChange("/repo/src/app.ts")],
       activeTurnStatus: null,
@@ -253,12 +235,7 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
   });
 
   it("does not claim nothing is revertible while the host holds undelivered files", async () => {
-    // The panel mounts on the COUNT, so it can render with an empty delivered
-    // prefix. `hasUndoable` read only the delivered rows, so in that state the
-    // button was disabled under "Nothing here can be reverted." while "Undo
-    // all" would in fact revert every file the host holds - and the artifact
-    // opt-out beside it was already treating the same non-zero value as "the
-    // set is a prefix". Two controls, one state, opposite claims.
+    // `hasUndoable` read only the delivered rows, so in that state the button was disabled under "Nothing here can be reverted." while "Undo all" would in fact revert every file the host holds - and the artifact opt-out beside it was already treating the same non-zero value as "the set is a prefix".
     renderPanel({
       changes: [],
       activeTurnStatus: null,
@@ -266,9 +243,8 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
       undeliveredChangeCount: 4,
     });
 
-    // The control stays DISABLED - no delivered row is undoable, and the
-    // undelivered count is not evidence that any of them will be: it includes
-    // denied and binary changes too. What must not survive is the CLAIM.
+    // The control stays DISABLED - no delivered row is undoable, and the undelivered count is not evidence that any of them will be: it includes denied and binary changes too.
+    // What must not survive is the CLAIM.
     expect(await undoAllTooltipText()).toBe(
       "Still loading the full list of changes.",
     );
@@ -300,21 +276,13 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
 
     fireEvent.click(screen.getByTestId("accumulated-undo-all"));
     const dialog = screen.getByTestId("undo-all-dialog");
-    // The opt-out still appears - it defaults to CHECKED, so hiding it would
-    // revert artifacts with nothing having offered the choice - but without a
-    // number, which would be counted off one row out of four.
+    // The opt-out still appears - it defaults to CHECKED, so hiding it would revert artifacts with nothing having offered the choice - but without a number, which would be counted off one row out of four.
     expect(screen.getByTestId("revert-artifacts-checkbox")).not.toBeNull();
     expect(dialog.textContent).not.toMatch(/also revert \d+ artifact/i);
   });
 });
 
-/**
- * The Undo-all tooltip's text.
- *
- * Radix mounts tooltip content only while open, so the label cannot be read
- * from the resting DOM - the trigger has to be focused first. The harness
- * already provides `delayDuration={0}`, so no timers are involved.
- */
+/** Radix mounts tooltip content only while open, so the label cannot be read from the resting DOM - the trigger has to be focused first. */
 async function undoAllTooltipText(): Promise<string> {
   fireEvent.focus(screen.getByTestId("accumulated-undo-all"));
   const tip = await screen.findByRole("tooltip");
@@ -335,9 +303,7 @@ function renderPanel(input: {
           restore={{
             ...baseRestore(input.changes, input.activeTurnStatus),
             undeliveredChangeCount: input.undeliveredChangeCount ?? 0,
-            // Mirrors the real relationship for the ordinary case - a prefix is
-            // incomplete - while letting a test drive the OVERSHOOT, where the
-            // count clamps to 0 and only this flag can tell the difference.
+            // Mirrors the real relationship for the ordinary case - a prefix is incomplete - while letting a test drive the OVERSHOOT, where the count clamps to 0 and only this flag can tell the difference.
             accumulatedSetComplete:
               input.accumulatedSetComplete ??
               (input.undeliveredChangeCount ?? 0) === 0,
@@ -387,11 +353,7 @@ function fileChange(filePath: string): AccumulatedChangeRow {
   };
 }
 
-/**
- * The client's own row for a file the ACTIVE turn is writing - what
- * `activeTurnRow` produces. No host version names it, so it carries the
- * block-addressed `liveDiff` its segment tile opens on.
- */
+/** The client's own row for a file the ACTIVE turn is writing - what `activeTurnRow` produces. No host version names it, so it carries the block-addressed `liveDiff` its segment tile opens on. */
 function liveChange(filePath: string): AccumulatedChangeRow {
   return {
     ...fileChange(filePath),

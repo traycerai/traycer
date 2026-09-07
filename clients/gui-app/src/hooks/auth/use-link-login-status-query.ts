@@ -11,11 +11,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const LINK_LOGIN_STATUS_POLL_MS = 2_000;
 
-/**
- * `gone` is a first-class datum, not an error: an expired/consumed/foreign
- * code answers this way and the panel resolves it against its own state
- * (fresh QR supersedes it, or the approved claim was just consumed).
- */
+/** `gone` is a first-class datum, not an error: an expired/consumed/foreign code answers this way and the panel resolves it against its own state (fresh QR supersedes it, or the approved claim was just consumed). */
 export type LinkLoginStatusDatum = LinkLoginStatusResponse | "gone";
 
 function linkLoginStatusQueryOptions(
@@ -55,11 +51,7 @@ function linkLoginStatusQueryOptions(
   });
 }
 
-/**
- * The minting surface's watch on one displayed code: whether a phone claimed
- * it, and the claimant metadata for the confirmation prompt. Pass `null` to
- * hold the watch (no code on screen).
- */
+/** The minting surface's watch on one displayed code: whether a phone claimed it, and the claimant metadata for the confirmation prompt. */
 export function useAuthLinkLoginStatus(
   code: string | null,
 ): UseQueryResult<LinkLoginStatusDatum | null> {

@@ -24,8 +24,8 @@ export function rateLimitWindowSeverityBarClassName(
 }
 
 /**
- * The width (0-100) a severity-colored window bar should fill. This tracks the
- * real used percentage, clamped to [0, 100].
+ * The width (0-100) a severity-colored window bar should fill.
+ * This tracks the real used percentage, clamped to [0, 100].
  */
 export function rateLimitWindowFillPercent(usedPercent: number): number {
   return Math.min(100, Math.max(0, usedPercent));

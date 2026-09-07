@@ -1,12 +1,4 @@
-/**
- * `traycer agent stop` and `traycer agent archive` command functions.
- *
- * Pins: typed request construction over the existing `agent.stop@1.0` /
- * `epic.setChatArchived@1.0` contracts, env-var epic-id defaulting, and the
- * CLI-side remap of the host's `AGENT_BUSY:` / `RECORD_NOT_FOUND:` message
- * prefixes (the only signal available - the 409-vs-500 split never crosses
- * the wire) into typed `CliError`s with actionable messages.
- */
+/** `traycer agent stop` and `traycer agent archive` command functions. Pins: typed request construction over the existing `agent.stop@1.0` / `epic.setChatArchived@1.0` contracts, env-var epic-id defaulting, and the CLI-side remap of the host's `AGENT_BUSY:` / `RECORD_NOT_FOUND:` message prefixes (the only signal available - the 409-vs-500 split never crosses the wire) into typed `CliError`s with actionable messages. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentStopCommand } from "../agent-stop";
 import { buildAgentArchiveCommand } from "../agent-archive";
@@ -190,10 +182,7 @@ describe("agent archive command function", () => {
     expect(result.human).toBe("agent_1 unarchived");
   });
 
-  // `updated: false` is not proof the record exists: the @1.0 response contract
-  // also permits it for an id that matched nothing, so the copy stays
-  // noncommittal rather than claiming success for a mistyped id (PR #1076
-  // review).
+  // `updated: false` is not proof the record exists: the @1.0 response contract also permits it for an id that matched nothing, so the copy stays noncommittal rather than claiming success for a mistyped id (PR #1076 review).
   it("reports updated:false noncommittally, without asserting the record exists", async () => {
     rpcMock.mockResolvedValue({ updated: false });
 
@@ -265,10 +254,8 @@ describe("agent archive command function", () => {
     expect(error.message).not.toContain("AGENT_BUSY");
   });
 
-  // Regression: the host's OTHER busy arm prescribes the opposite remedy -
-  // stopping cannot clear background items. An earlier revision substituted a
-  // single "stop it first" line for every busy case, which walked this arm
-  // into a retry loop (PR #1076 review).
+  // Regression: the host's OTHER busy arm prescribes the opposite remedy - stopping cannot clear background items.
+  // An earlier revision substituted a single "stop it first" line for every busy case, which walked this arm into a retry loop (PR #1076 review).
   it("preserves the background-items AGENT_BUSY: arm instead of advising a stop", async () => {
     rpcMock.mockRejectedValue(
       rpcError(

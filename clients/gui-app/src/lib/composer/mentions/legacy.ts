@@ -1,9 +1,7 @@
 import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { basenameOfPath } from "@/lib/path";
 
-// Set membership beats `epicArtifactKindSchema.safeParse(value).success`
-// on the per-render mention paths (`createLegacyMentionAttachment` runs
-// for every mention segment in every chat-message render).
+// Set membership beats `epicArtifactKindSchema.safeParse(value).success` on the per-render mention paths (`createLegacyMentionAttachment` runs for every mention segment in every chat-message render).
 const EPIC_ARTIFACT_KINDS: ReadonlySet<string> = new Set<EpicArtifactKind>([
   "spec",
   "ticket",
@@ -110,9 +108,7 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
   }
 
   // `terminal:` names the shell itself, not an Agent - see `ContextType.Terminal`.
-  // Order against the `terminal-agent:` branch above does not matter: each
-  // pattern is separately anchored, so `@terminal-agent:…` cannot satisfy this
-  // one however the branches are arranged.
+  // Order against the `terminal-agent:` branch above does not matter: each pattern is separately anchored, so `@terminal-agent:…` cannot satisfy this one however the branches are arranged.
   const terminalMatch = path.match(/^terminal:([^/\s]+)\/([^\s]+)$/u);
   if (terminalMatch !== null) {
     const epicId = terminalMatch[1];
@@ -137,14 +133,7 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
     };
   }
 
-  // `@browser-tab:<title> [tabId=...]` (see `formatMentionForLLMQuery`'s
-  // `ContextType.BrowserTab` arm) - only the title survives into `path`
-  // (`MENTION_TOKEN_REGEX` stops at the first space, so a multi-word title
-  // loses its tail here same as it already does for `@agent:`/`@terminal:`).
-  // `tabId` is genuinely unrecoverable from text alone when the attachments
-  // array is missing, so this degrades to a reference-only chip that carries
-  // no live identity - the composer/sent-message favicon branches already
-  // treat an empty `tabId` as "not resolvable" and fall back to the globe icon.
+  // `@browser-tab:<title> [tabId=...]` (see `formatMentionForLLMQuery`'s `ContextType.BrowserTab` arm) - only the title survives into `path` (`MENTION_TOKEN_REGEX` stops at the first space, so a multi-word title loses its tail here same as it already does for.
   const browserTabMatch = path.match(/^browser-tab:([^/\s]+)$/u);
   if (browserTabMatch !== null) {
     const title = browserTabMatch[1];

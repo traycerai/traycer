@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -55,43 +53,8 @@ import {
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
-/**
- * The Overview addresses the host it NAMES, without depending on anything
- * above it to arrange that.
- *
- * READ THE HARNESS BEFORE THE RESULT — the mocking condition is what this
- * suite means, and quoting its numbers without it would mislead.
- *
- * In production, `HostSettingsPanel` wraps this subtree in
- * `<HostRuntimeContext.Provider value={scopedBinding}>` (`:148`), so the
- * ambient binding a descendant reads has ALREADY been swapped for the scoped
- * host's. That wrapper is correct and load-bearing. This suite mounts through
- * `HostSettingsPanel`, so the wrapper is present — but it also mocks
- * `useHostBinding` wholesale, which is what `useScopedHostBinding` itself
- * calls, so the re-provision cannot take effect here. The harness therefore
- * simulates the one condition production does not have: **the wrapper absent
- * or wrong.**
- *
- * That makes it a robustness guard, not a bug reproduction. Measured against
- * the panel body BEFORE it read `scope.client`, with the ambient binding on A
- * and the scope explicitly picked to B: `host.status` dispatched **1 call on A
- * and 0 on B**. In production the wrapper compensated, so no user ever saw it;
- * what the number proves is that the body had no scoping of its own and the
- * invariant lived entirely in a wrapper two files away — one spelled
- * `HostRuntimeContext.Provider`, which the obvious greps for
- * `HostBindingProvider`/`HostRuntimeProvider` do not match. A correct mechanism
- * that reads as absent is one a refactor deletes without noticing.
- *
- * With the body reading `scope.client`, the same arrangement dispatches on B.
- * The panel is now immune to wrapper drift, and this is the test that would
- * fail if that immunity were ever traded back.
- *
- * Why it matters here in particular: eight reads hang off that client and three
- * of them WRITE — `host.identity.set` renames a machine, `host.restart` ends
- * its sessions, and the drain-gate force ends them without waiting.
- * `host-scope-status.ts` states the rule they owe: "a visible host name must
- * always match the client used by every read, stream and mutation beneath it."
- */
+/** Read the harness before the result - the mocking condition is what this suite means, and quoting its numbers
+ * without it would mislead. */
 
 const ALL_OVERVIEW_METHODS = [
   "host.status",
@@ -133,12 +96,7 @@ function renderPanel(): void {
   );
 }
 
-/**
- * Ambient binding on host A, scope explicitly picked to host B — two
- * independent `HostClient`s over two in-memory messengers, so which host was
- * addressed is counted at the transport rather than inferred from what was
- * passed where.
- */
+/** Ambient binding on host A, scope explicitly picked to host B. */
 function arrangeDivergentScope(): {
   readonly ambient: OverviewHostFixture;
   readonly picked: OverviewHostFixture;
@@ -187,8 +145,8 @@ describe("Overview under an explicit pick — RPCs address the PICKED host", () 
     const { ambient, picked } = arrangeDivergentScope();
     renderPanel();
 
-    // Positive control FIRST: a panel that rendered nothing would satisfy the
-    // negative assertion below for entirely the wrong reason.
+    // Positive control first: a panel that rendered nothing would satisfy the negative assertion below for
+    // entirely the wrong reason.
     await waitFor(() => {
       expect(picked.hostStatusCalls()).toBeGreaterThan(0);
     });

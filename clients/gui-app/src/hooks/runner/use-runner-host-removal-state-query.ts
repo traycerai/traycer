@@ -37,14 +37,7 @@ function hostRemovalStateQueryOptions(
   });
 }
 
-/**
- * Reads the persisted "removed by user" sentinel directly via
- * `IHostManagement.getRemovalState()`, independent of `ensureHost`'s one-shot
- * auto-provision. Consumed by `useHostProvisioning` in
- * `components/host/host-provisioning-controller.tsx`
- * so a removal that happens after the initial connect (Settings -> Danger
- * Zone -> Remove Traycer) is picked up without requiring a reload.
- */
+/** Reads the persisted "removed by user" sentinel directly via `IHostManagement.getRemovalState()`, independent of `ensureHost`'s one-shot auto-provision. */
 export function useRunnerHostRemovalStateQuery(
   opts: UseRunnerHostRemovalStateQueryOptions,
 ): UseQueryResult<HostRemovalState> {

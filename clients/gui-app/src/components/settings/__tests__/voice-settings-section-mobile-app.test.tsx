@@ -1,10 +1,5 @@
-/**
- * The voice row is hidden in the installed mobile app, where the build refuses
- * dictation outright (`useDictationAvailability`). A toggle for a feature the
- * build will not perform is worse than no toggle - and its description promises
- * on-device transcription the mobile app cannot deliver, since every host it
- * reaches is a remote machine.
- */
+/** A toggle for a feature the build will not perform is worse than no toggle - and its description promises
+ * on-device transcription the mobile app cannot deliver, since every host it reaches is a remote machine. */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 

@@ -3,20 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Stop intent is the ONE thing standing between the supervisor's relaunch loop
-// and it resurrecting a host the user just stopped. Its correctness is mostly
-// about biases, and they are deliberately asymmetric:
-//
-//   - a false "intent present" leaves the machine with NO host (the crash goes
-//     unrecovered), so a torn/garbled/unknown record must read as ABSENT;
-//   - a false "intent absent" relaunches a host the user just stopped.
-//
-// This header used to call that second cost "one unwanted relaunch, which the
-// supervisor's budget and incumbent re-check then contain". Neither contains
-// it: a replacement that stays healthy resets the budget and IS the incumbent.
-// The bias is still the one above, but it is a real trade, not a free one.
-//
-// Same direction as `findLiveIncumbentHost`: never strand the machine hostless.
+// Stop intent is the ONE thing standing between the supervisor's relaunch loop and it resurrecting a host the user just stopped.
+// Its correctness is mostly about biases, and they are deliberately asymmetric: - a false "intent present" leaves the machine with NO host (the crash goes unrecovered), so a torn/garbled/unknown record must read as ABSENT; - a false "intent absent" relaunches a host the user just stopped.
 
 const mocks = vi.hoisted(() => ({
   hostHome: { current: "" },
@@ -82,10 +70,8 @@ describe("writeStopIntent", () => {
     await writeFile(blocker, "not a directory", "utf8");
     mocks.hostHome.current = join(blocker, "nested");
 
-    // Not a throw - the caller decides what an unrecorded intent means, and
-    // that answer is platform-dependent. But it must not read as success:
-    // on win32 this record is the only thing that stops the supervisor
-    // relaunching the host the caller is about to kill.
+    // Not a throw - the caller decides what an unrecorded intent means, and that answer is platform-dependent.
+    // But it must not read as success: on win32 this record is the only thing that stops the supervisor relaunching the host the caller is about to kill.
     await expect(writeStopIntent("production", "stop")).resolves.toBe(false);
   });
 
@@ -173,14 +159,8 @@ describe("isStopIntentFresh", () => {
   });
 
   it("expires a stamp dated FAR in the future, so a backward clock jump cannot wedge recovery", () => {
-    // The window has to be symmetric. A VM resuming, or NTP correcting a bad
-    // clock, leaves an already-written intent dated hours ahead - and an
-    // unbounded forward window makes that record permanent - nothing else would
-    // retire it, since it stays "recent" for as long as the jump lasts. Every
-    // automatic start that had not already seen the record would decline to
-    // spawn until the clock caught up: the guard against a stop being undone,
-    // holding the machine hostless, which is this ticket's own bug wearing the
-    // fix's clothes.
+    // The window has to be symmetric.
+    // A VM resuming, or NTP correcting a bad clock, leaves an already-written intent dated hours ahead - and an unbounded forward window makes that record permanent - nothing else would retire it, since it stays "recent" for as long as the jump lasts.
     const now = Date.parse("2026-08-05T12:00:00.000Z");
     const intent = at(
       new Date(now + (STOP_INTENT_STALE_MS + 1_000)).toISOString(),
@@ -223,15 +203,8 @@ describe("clearStopIntent", () => {
 
 describe("hasActionableStopIntent", () => {
   it("serves the record it saw at startup, whatever that record's stamp says", async () => {
-    // Two cases that used to be answered by a timestamp cutoff, and are now one
-    // case because they always WERE one case: this is the record our own start
-    // answered.
-    //
-    // The second half is the one the cutoff got wrong. After a backward clock
-    // correction a pre-existing record looks FUTURE-dated, so the cutoff read an
-    // already-answered stop as aimed at this supervisor - which declines to
-    // spawn and exits 0. No service manager answers exit 0, so the host stayed
-    // down until the next logon instead of the intended five minutes.
+    // Two cases that used to be answered by a timestamp cutoff, and are now one case because they always WERE one case: this is the record our own start answered.
+    // The second half is the one the cutoff got wrong.
     await writeStopIntent("production", "stop");
     const served = await readStopIntentIdentity("production");
     const now = Date.now();
@@ -248,15 +221,8 @@ describe("hasActionableStopIntent", () => {
   });
 
   it("honours a record it never saw even when the clock says it is older", async () => {
-    // The backward-clock-step case, and the reason the cutoff cannot stand
-    // alone. A machine that boots with a wrong RTC gets its correction seconds
-    // after the logon task started this supervisor, so a stop issued NOW is
-    // stamped EARLIER than our own start. The cutoff reads that as served, and
-    // on win32 the orphaned supervisor then relaunches the host the user just
-    // stopped - this ticket's bug, restored by its own guard.
-    //
-    // Identity settles it without consulting a clock: this is not the record we
-    // saw at startup, so it is a request we have not answered.
+    // The backward-clock-step case, and the reason the cutoff cannot stand alone.
+    // A machine that boots with a wrong RTC gets its correction seconds after the logon task started this supervisor, so a stop issued NOW is stamped EARLIER than our own start.
     await writeStopIntent("production", "stop");
     const now = Date.now();
 
@@ -266,9 +232,7 @@ describe("hasActionableStopIntent", () => {
   });
 
   it("ignores an intent that is past the staleness window", async () => {
-    // Freshness short-circuits BOTH halves, so an unknown identity cannot
-    // resurrect an expired record - the five-minute bound still caps how long
-    // any of this can hold a spawn back.
+    // Freshness short-circuits BOTH halves, so an unknown identity cannot resurrect an expired record - the five-minute bound still caps how long any of this can hold a spawn back.
     await writeStopIntent("production", "stop");
     const now = Date.now() + STOP_INTENT_STALE_MS + 1_000;
 

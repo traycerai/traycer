@@ -5,13 +5,7 @@ import {
   isCloudChatListSettled,
 } from "@/hooks/chats/use-cloud-chat-queries";
 
-/**
- * The record-liveness sweep closes tabs it cannot prove alive and is not
- * undone by a later, better answer - so the one arm where this predicate is
- * STRICTER than plain settledness is the whole point: a transiently failed
- * list has produced no evidence about any chat, and its `data === undefined`
- * must not read as "no cloud rows".
- */
+/** The record-liveness sweep closes tabs it cannot prove alive and is not undone by a later, better answer - so the one arm where this predicate is STRICTER than plain settledness is the whole point: a transiently failed list has produced no evidence about any chat, and its `data === undefined` must not read as "no cloud rows". */
 
 function rpcError(code: "RPC_ERROR" | "E_HOST_UNSUPPORTED"): HostRpcError {
   return new HostRpcError({

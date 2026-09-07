@@ -92,9 +92,7 @@ function SidebarProvider({
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open);
   }, [isMobile, setOpen, setOpenMobile]);
 
-  // App-level left-panel keyboard shortcuts are owned by the global
-  // keybinding system (`KeybindingProvider`). This primitive keeps its own
-  // toggle for local trigger components.
+  // App-level left-panel keyboard shortcuts are owned by the global keybinding system (`KeybindingProvider`).
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.

@@ -1,14 +1,5 @@
-/**
- * Regression: landing composer's first submittable keystroke mints a draft id
- * and flips the workspace picker's staging key from `landing:` to
- * `landing:<uuid>`. If the Environment dialog is open mid-edit at that moment,
- * the staged worktree intent must migrate with the key (and the dialog must not
- * remount / drop the in-progress branch-prefix edit + "Use new prefix" offer).
- *
- * Production trigger mirrored here (landing-composer.tsx handleDocumentChange):
- * createDraftWithId → migrateKey(null → minted id) → React re-render with the
- * new draftId. Mocks only the host-RPC boundary.
- */
+/** If the Environment dialog is open mid-edit at that moment, the staged worktree intent must migrate with the
+ * key (and the dialog must not remount / drop the in-progress branch-prefix edit + "Use new prefix" offer). */
 import { useMemo, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -119,7 +110,7 @@ vi.mock("@/components/ui/select", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ directory: { selectById: mocks.selectHost } }),
   useHostClient: () => hostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => hostClient,
 }));
 
@@ -127,9 +118,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-// P1.2: the picker's non-fixed arm resolves `pin ?? effective` and takes its
-// client from `useHostClientForHostId`. Mocked at their own boundary (like the
-// host list below) so this suite stays about the draft-id flip.
+// : the picker's non-fixed arm resolves `pin ??
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
@@ -153,10 +142,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
-// This suite is about branch-prefix / draftId edge behavior, not the host
-// list, so it mocks `useHostOptions` at the boundary (the same pattern panel
-// suites use for `useHostScope`) rather than standing up the six hooks it
-// composes.
+// This suite is about branch-prefix / draftId edge behavior, not the host list.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -280,10 +266,7 @@ vi.mock("@/components/ui/dialog", () => ({
   ),
 }));
 
-/**
- * Mirrors HomeSurface's stagingKey memo
- * (`{ surface: "landing", draftId }` from host-workspace-selector.tsx).
- */
+/** Mirrors HomeSurface's stagingKey memo (`{ surface: "landing", draftId }` from host-workspace-selector.tsx). */
 function LandingLikeHarness(props: {
   readonly draftId: string | null;
 }): ReactNode {
@@ -363,11 +346,8 @@ function stagedBranchName(draftId: string | null): string | null {
   return entry.branch.name;
 }
 
-/**
- * Mirrors landing-composer.tsx handleDocumentChange after createDraftWithId:
- * migrate the null-draft staging slot onto the minted id, then re-render the
- * picker under the new draftId (as HomeSurface does once activeDraftId flips).
- */
+/** Mirrors landing-composer.tsx handleDocumentChange after createDraftWithId: migrate the null-draft staging
+ * slot onto the minted id. */
 function mintLandingDraftMidSetup(
   rerenderWithDraftId: (nextDraftId: string | null) => void,
   mintedDraftId: string,

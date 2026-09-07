@@ -5,21 +5,7 @@ import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-acti
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 /**
- * The Epic status row's sweep affordance sits INSIDE the Epic session, so the
- * rollup it shows and the flow it opens describe the SESSION's host - not the
- * app-wide one, which already answers host B while an A-backed Epic is still
- * rendered through a re-point (PR #1243, round 6: the row read
- * `useTaskWorktreeMetadata()` and mounted the dialog on the app-wide client).
- *
- * The affordance's GATE is the other half, and it is deliberately wider than
- * the rollup: session-host worktrees OR a record naming another machine. The
- * session host's binding registry is the only reliable per-host worktree
- * oracle, so a Task whose agents ran elsewhere has nothing for it to count -
- * and greying the only route to those worktrees out is exactly the bug
- * multi-host Sweep exists to fix.
- *
- * Identity sentinels, not real clients: the assertion is "which object was
- * handed to the query / the flow", which `toBe` answers exactly.
+ * The session host's binding registry is the only reliable per-host worktree oracle, so a Task whose agents ran elsewhere has nothing for it to count - and greying the only route to those worktrees out is exactly the bug multi-host Sweep exists to fix.
  */
 const clients = vi.hoisted(() => ({
   session: { label: "session-client" },
@@ -57,9 +43,7 @@ vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
       worktreesByEpicId: new Map([
         [
           epicIds[0] ?? "",
-          // Only what the row reads: `computeTaskMergeRollup` maps
-          // `prState` / `mergedHeadShaMatches` / `submodules`, and the
-          // affordance counts entries.
+          // Only what the row reads: `computeTaskMergeRollup` maps `prState` / `mergedHeadShaMatches` / `submodules`, and the affordance counts entries.
           Array.from({ length: state.worktreeCount }, (_unused, index) => ({
             worktreePath: `/tmp/wt-${index}`,
             prState: null,

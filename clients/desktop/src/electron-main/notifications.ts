@@ -16,19 +16,7 @@ export interface NativeNotificationOptions {
   readonly onForegroundSuppressed: (() => void) | null;
 }
 
-/**
- * Shows a native notification when every Traycer window is unfocused. A
- * replacement key groups notifications that describe the same entity: a newer
- * notification closes and re-alerts over the prior one instead of leaving a
- * stack in the OS notification center.
- *
- * The returned outcome names the delivery decision so the calling renderer
- * can tell "someone is presenting this" from "nothing was and nothing will".
- * The delivery-key ledger makes `undeliverable` a single-winner outcome: the
- * first window to report an occurrence on an unsupported platform hears it,
- * every later window hears `duplicate` - which is what lets exactly one
- * renderer own the fallback cue without re-creating the per-window fan-out.
- */
+/** The returned outcome names the delivery decision so the calling renderer can tell "someone is presenting this" from "nothing was and nothing will". */
 export function showNativeNotification(
   options: NativeNotificationOptions,
 ): DesktopNotificationShowOutcome {
@@ -106,12 +94,7 @@ function rememberDeliveredNotificationKey(deliveryKey: string | null): void {
   deliveredNotificationKeys.add(deliveryKey);
 }
 
-/**
- * Bounds bookkeeping for platforms that do not report notification closes.
- * It deliberately does not dismiss native notifications; once capacity is
- * reached, a later same-key notification may stack rather than replace the
- * oldest forgotten entry.
- */
+/** Bounds bookkeeping for platforms that do not report notification closes. */
 function evictReplaceableNotifications(): void {
   while (replaceableNotifications.size >= MAX_REPLACEABLE_NOTIFICATIONS) {
     const oldest = replaceableNotifications.entries().next();
@@ -131,11 +114,6 @@ function deleteReplacementIfCurrent(
   }
 }
 
-/**
- * Shows a plain title/body notification whose only interaction is a body click.
- * Used where there is no command to route - the click handler runs directly
- * (e.g. bring the app forward).
- */
 export function showSimpleNotification(
   title: string,
   body: string,
@@ -151,16 +129,6 @@ export function showSimpleNotification(
   });
 }
 
-/**
- * Logs cold-start notification activations (clicks/buttons/replies that
- * launched the app from background). The static `Notification.handleActivation`
- * hook ships in the Electron typedefs ahead of the runtime in some 42.x
- * point releases - guard the call so the absence is a no-op log rather
- * than an unhandled rejection at app startup. Without a `toastXml`
- * integration to embed routing metadata in the Windows activation string,
- * the handler currently only logs; future work can decode
- * `details.arguments` to route commands.
- */
 export function installNotificationActivationHandler(): void {
   if (typeof Notification.handleActivation !== "function") {
     log.info(

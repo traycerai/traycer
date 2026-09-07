@@ -55,13 +55,6 @@ interface HeapUsageResult {
   readonly totalSize: number;
 }
 
-/**
- * What a build that reports the two experimental fields answers with. A
- * separate shape rather than optional properties (which this repo's lint
- * bans), so a fixture can genuinely OMIT the keys - the case
- * `readHeapUsage` has to survive, and a different one from a key that is
- * present and null.
- */
 interface HeapUsageResultWithExternal extends HeapUsageResult {
   readonly embedderHeapUsedSize: number | null;
   readonly backingStorageSize: number | null;
@@ -91,12 +84,6 @@ interface FakeDebugger {
       sessionId: string | undefined,
     ) => Promise<unknown>
   >;
-  /**
-   * Settles a worker's `heapUsage: "pending"` read. Separate from
-   * `sendCommand` because the fixture that registers as "pending" does not
-   * know its own answer yet - the test decides it later, after the timeout
-   * has already fired around it.
-   */
   readonly resolvePendingHeapUsage: (
     sessionId: string,
     payload: HeapUsagePayload,
@@ -114,13 +101,6 @@ interface FakeEvent {
   readonly sender: FakeSender;
 }
 
-/**
- * A prototype-less object asserted to the event type, with the one member
- * `handleMeasureJsHeaps` reads (`sender`, and off it `isDestroyed` / `getURL`
- * / `getOSProcessId` / `debugger.*`) assigned onto it. `as unknown as` is
- * lint-forbidden here, and a one-member literal does not overlap the real
- * event type enough for a direct `as`.
- */
 function asIpcMainInvokeEvent(fake: FakeEvent): IpcMainInvokeEvent {
   return Object.assign(Object.create(null) as IpcMainInvokeEvent, fake);
 }
@@ -130,11 +110,6 @@ function buildFakeDebugger(options: {
   readonly workers: ReadonlyArray<FakeWorkerFixture>;
   readonly isAttachedInitially: boolean;
   readonly attachThrows: boolean;
-  /**
-   * Rejects the cleanup `Target.setAutoAttach` call (`autoAttach: false`)
-   * only - the arming call (`autoAttach: true`) always succeeds, matching a
-   * session that goes away only after the reads it enabled already landed.
-   */
   readonly autoAttachFalseRejects: boolean;
 }): FakeDebugger {
   let attached = options.isAttachedInitially;
@@ -401,10 +376,6 @@ describe("handleMeasureJsHeaps", () => {
   });
 
   it("carries null for embedder and backing storage whether the protocol result omits the keys or answers null, and still returns the row", async () => {
-    // `embedderHeapUsedSize` / `backingStorageSize` are experimental CDP
-    // fields. The page here is a build that does not send them AT ALL (the
-    // keys are absent), the worker one that sends them as null; neither may
-    // cost the isolate its row, only those two fields.
     const workers: ReadonlyArray<FakeWorkerFixture> = [
       {
         sessionId: "session-worker",
@@ -564,11 +535,8 @@ describe("handleMeasureJsHeaps", () => {
   });
 
   it("keeps a timed-out measurement's late cleanup from switching off a later measurement's auto-attach", async () => {
-    // CDP commands cannot be cancelled: a timed-out `measureIsolates` keeps
-    // running behind `withTimeout`. Before the `cancellation` guard, its own
-    // stale cleanup (`Target.setAutoAttach` with `autoAttach:false`) would
-    // fire once its stuck worker read finally settled - this pins that it no
-    // longer does, and that a later, ordinary measurement is unaffected.
+    // CDP commands cannot be cancelled: a timed-out `measureIsolates` keeps running behind `withTimeout`.
+    // Before the `cancellation` guard, its own stale cleanup (`Target.setAutoAttach` with `autoAttach:false`) would fire once its stuck worker read finally settled.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
     const workerSessionId = "session-stuck";
@@ -694,11 +662,7 @@ describe("handleMeasureJsHeaps", () => {
   });
 
   it("still returns the full breakdown, and still detaches, when the cleanup autoAttach:false command rejects", async () => {
-    // CodeRabbit Minor: a `finally` block that throws replaces whatever the
-    // `try` returned. This command can reject for reasons that say nothing
-    // about the rows already read (the page navigated, the session went
-    // away), so the read isolates must survive it rather than turning a
-    // complete breakdown into a failure toast.
+    // This command can reject for reasons that say nothing about the rows already read (the page navigated, the session went away), so the read isolates must survive it rather than.
     const workers: ReadonlyArray<FakeWorkerFixture> = [
       {
         sessionId: "session-worker",

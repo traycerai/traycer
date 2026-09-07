@@ -1,12 +1,5 @@
-// Host lifecycle substrate — read-only evidence algebra, per-platform parsers,
-// durable-record codecs, and the journaled transition/activation primitives the
-// CLI and desktop actually consume.
-//
-// The autonomous decision layer (planner, actuators, the three world probes,
-// the transition/activation reconcilers) was built to full generality before
-// any consumer existed and reached zero production callers. It is archived in
-// the epic's `parked-decision-layer` artifact rather than carried here — see
-// that artifact before re-introducing any of it.
+// Host lifecycle substrate - read-only evidence algebra, per-platform parsers, durable-record codecs, and the journaled transition/activation primitives the CLI and desktop actually consume.
+// The autonomous decision layer (planner, actuators, the three world probes, the transition/activation reconcilers) was built to full generality before any consumer existed and reached zero production callers.
 
 export type { Evidence, DurableRecord } from "./evidence";
 export { observed, absent, indeterminate, assertNever } from "./evidence";

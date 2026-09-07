@@ -46,24 +46,11 @@ interface ChatFindControllerArgs {
   readonly messages: ReadonlyArray<ChatMessageModel>;
   /** Latest transcript, read lazily by the adapter's getRows supplier. */
   readonly messagesRef: RefObject<ReadonlyArray<ChatMessageModel>>;
-  /**
-   * Live background-tool promotion set. Drives the notify-rows-changed
-   * lifecycle alongside `messages`: promotion changes which runs group
-   * together, so it changes unit ids and owning chains even when no message
-   * did, and a projection that missed it would be stale in exactly the way
-   * that produces unpaintable matches.
-   */
+  /** Live background-tool promotion set. Drives the notify-rows-changed lifecycle alongside `messages`: promotion changes which runs group together, so it changes unit ids and owning chains even when no message did, and a projection that missed it would be stale in exactly the way that produces unpaintable matches. */
   readonly backgroundToolBlockIds: ReadonlySet<string>;
   /** Latest promotion set, read lazily by the adapter's getRows supplier. */
   readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
-  /**
-   * Caveat describing the rows `messagesRef` does NOT contain, read lazily
-   * beside it.
-   *
-   * A ref-free supplier rather than a value, for the same reason the rows are:
-   * a closed find bar must not re-register its adapter every time the window
-   * hydrates.
-   */
+  /** Caveat describing the rows `messagesRef` does NOT contain, read lazily beside it. A ref-free supplier rather than a value, for the same reason the rows are: a closed find bar must not re-register its adapter every time the window hydrates. */
   readonly getFindCoverageMessage: () => string | null;
   readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
@@ -82,13 +69,7 @@ interface ChatFindController {
   readonly onRenderedDataChange: () => void;
 }
 
-/**
- * Owns chat find registration, active-match reveal/reconcile orchestration, and
- * the mounted-highlight resync loop. Lifted out of `chat-messages.tsx` so the
- * renderer returns to message-list orchestration and the find machinery has a
- * single home. The adapter pulls rows lazily via a `getRows()` supplier, so a
- * closed find bar pays no transcript-projection cost on streaming updates.
- */
+/** Owns chat find registration, active-match reveal/reconcile orchestration, and the mounted-highlight resync loop. Lifted out of `chat-messages.tsx` so the renderer returns to message-list orchestration and the find machinery has a single home. */
 export function useChatFindController(
   args: ChatFindControllerArgs,
 ): ChatFindController {
@@ -256,9 +237,7 @@ export function useChatFindController(
         previousTarget.unitId !== target.unitId ||
         !arrayShallowEq(previousTarget.chainKeyIds, chainKeyIds);
       if (!forceApply && !targetChanged) return false;
-      // LegendList's own `maintainVisibleContentPosition` is the sole passive
-      // stability mechanism (behavior contract) - the chain-open flows
-      // directly into it, with no bespoke scroll-preservation wrapper.
+      // LegendList's own `maintainVisibleContentPosition` is the sole passive stability mechanism (behavior contract) - the chain-open flows directly into it, with no bespoke scroll-preservation wrapper.
       applyFindOpenedChain(target.owningChain);
       const interviewKey = target.owningChain.find(
         (key) => key.kind === "interview",
@@ -345,10 +324,8 @@ export function useChatFindController(
           return;
         }
         findRevealAnchorMissCountRef.current = 0;
-        // An in-place hop stays in the same already-open unit, so re-centering
-        // the row would churn the layout (flicker) for no reason. Skip the
-        // unit re-center and let the active-match paint scroll only the inner
-        // scroll container to the next occurrence.
+        // An in-place hop stays in the same already-open unit, so re-centering the row would churn the layout (flicker) for no reason.
+        // Skip the unit re-center and let the active-match paint scroll only the inner scroll container to the next occurrence.
         if (!skipUnitScroll) {
           unitRoot.scrollIntoView({
             block: "center",
@@ -376,10 +353,8 @@ export function useChatFindController(
 
   const requestFindReveal = useCallback(
     (target: ChatFindRevealTarget): void => {
-      // Consecutive matches inside the same already-revealed unit are an
-      // in-place hop: the row is mounted and positioned, so scrolling the row
-      // and re-centering the unit would visibly flicker. Detect it against the
-      // previous reveal target before applyFindOpenedTarget overwrites it.
+      // Consecutive matches inside the same already-revealed unit are an in-place hop: the row is mounted and positioned, so scrolling the row and re-centering the unit would visibly flicker.
+      // Detect it against the previous reveal target before applyFindOpenedTarget overwrites it.
       const previousTarget = findOpenedTargetRef.current;
       const sameUnit =
         previousTarget !== null &&
@@ -390,12 +365,8 @@ export function useChatFindController(
       activeFindRevealRef.current = target;
       findRevealAnchorMissCountRef.current = 0;
       findRevealSkipUnitScrollRef.current = sameUnit;
-      // LegendList remeasures a row's height via its own per-row
-      // ResizeObserver, so the chain-open below picks up the target row's OWN
-      // layout change without an explicit nudge. Content ABOVE the viewport
-      // changing size (a deeply nested chain-open) is corrected by LegendList's
-      // own `maintainVisibleContentPosition`, unconditionally enabled - no
-      // bespoke scroll-preservation wrapper needed here.
+      // LegendList remeasures a row's height via its own per-row ResizeObserver, so the chain-open below picks up the target row's OWN layout change without an explicit nudge.
+      // Content ABOVE the viewport changing size (a deeply nested chain-open) is corrected by LegendList's own `maintainVisibleContentPosition`, unconditionally enabled - no bespoke scroll-preservation wrapper needed here.
       applyFindOpenedTarget(target, true);
       cancelFindRevealFrame();
       findRevealFrameRef.current = window.requestAnimationFrame(() => {

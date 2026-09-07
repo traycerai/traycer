@@ -32,33 +32,7 @@ const EMPTY_BAR_KEYS = ["primary", "secondary"] as const;
 /** Stable identity so the placeholder path never re-renders on a new array. */
 const NO_BARS: ReadonlyArray<HeaderRateLimitBar> = [];
 
-/**
- * Header trigger for the provider rate-limit popover, scoped to the host the
- * popover's own picker selected.
- *
- * The scope is resolved HERE, above both the glyph and the popover, and
- * re-provided as this subtree's `HostRuntimeContext`. That one swap is what
- * re-targets the whole surface: every hook below reaches its host through
- * `useHostClient()` / `useAddressableHostId()`, and both read the binding
- * from context, so the query keys, the serial fetch queue's scope and the
- * invalidations all move together and cannot end up describing different
- * machines. Nothing outside this subtree moves — picking a host to WATCH is
- * not picking where new work lands (`stores/rate-limits/rate-limit-popover-store`).
- *
- * `useScopedHostBinding` returns null while the pick is the active host, or
- * while it has not resolved to its own client — in both cases the value below
- * falls back to the AMBIENT binding, which is exactly what this subtree read
- * before there was a picker at all.
- *
- * The provider is rendered unconditionally, and that is load-bearing rather
- * than tidiness. Mounting it only when a scoped binding exists changes the
- * element type at this position the moment a pick resolves, so React unmounts
- * the whole subtree and mounts a fresh one — taking the popover's own `open`
- * state with it. The popover therefore closed the instant a host was chosen
- * from the picker inside it, which is to say the control could not be used.
- * The fallback re-provides the ambient binding VERBATIM (never a copy), so a
- * subtree that is not scoped still sees ambient binding updates.
- */
+/** The provider is rendered unconditionally, and that is load-bearing rather than tidiness. */
 export function RateLimitIconButton(): ReactNode {
   const { scope, hasExplicitPick } = useRateLimitResolveHostScope();
   const scopedBinding = useScopedHostBinding(scope);
@@ -73,17 +47,8 @@ export function RateLimitIconButton(): ReactNode {
   );
 }
 
-/**
- * Its compact outlined surface combines a recognizable gauge icon with the two
- * live usage bars, so the control still reads as an intentional button when
- * both fills are 0%. Clicking opens the popover in any glyph state, including
- * empty (which lands on the zero-provider CTA).
- *
- * Never gates on data loading: `useHeaderRateLimitBars` returns `[]` both
- * before any provider has data and when zero providers are configured, and
- * both render the same neutral empty tracks - there is no separate loading
- * state and no fabricated placeholder usage.
- */
+/** Never gates on data loading: `useHeaderRateLimitBars` returns `[]` both before any provider has data and
+ * when zero providers are configured, and both render the same neutral empty tracks. */
 function ScopedRateLimitIconButton({
   scope,
   hasExplicitPick,
@@ -101,24 +66,10 @@ function ScopedRateLimitIconButton({
     [],
   );
   useTitleBarDragSuppression("rate-limits", open);
-  // One subscription bridge owns active-chat + per-harness profile state for
-  // both the always-mounted glyph and the lazily-mounted popover. Passing the
-  // same snapshot down avoids N duplicate chat-store subscriptions when the
-  // Overview renders several multi-profile provider blocks.
+  // Passing the same snapshot down avoids N duplicate chat-store subscriptions when the Overview renders several
+  // multi-profile provider blocks.
   const profileSelection = useRateLimitProfileSelection();
-  // A PICK that has not resolved to its own client leaves this subtree on the
-  // AMBIENT binding, so mounting the bars here would draw one host's usage
-  // under a glyph that stands for another - and the glyph, unlike every panel
-  // in the popover, has no room to name the host it is describing. The neutral
-  // placeholder is the honest reading, and keeping the hook out of the tree
-  // (rather than discarding its output) also stops it driving fetch-on-mount
-  // subprocesses against the host the user did not choose.
-  //
-  // Without a pick there is no second host to confuse this one with: the
-  // ambient binding is the only thing the glyph has ever meant, and an
-  // `unreachable` active host is the routine blip the envelope's last-good
-  // retention is built to ride out. Blanking the bars there would be a
-  // regression paid by every single-host user for a picker they never opened.
+  // Blanking the bars there would be a regression paid by every single-host user for a picker they never opened.
   const scopedToOwnHost = !hasExplicitPick || isHostScopeUsable(scope.status);
   const tooltipLabel = scope.isViewingActive
     ? "Usage limits"
@@ -131,9 +82,8 @@ function ScopedRateLimitIconButton({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
-        // The host belongs in the label only when it is NOT the obvious one.
-        // Naming the active host on every hover would train people to ignore
-        // the one case the words exist for.
+        // The host belongs in the label only when it is not the obvious one. Naming the active host on every hover
+        // would train people to ignore the one case the words exist for.
         label={tooltip}
         side="top"
         sideOffset={6}
@@ -166,11 +116,8 @@ function ScopedRateLimitIconButton({
   );
 }
 
-/**
- * The glyph over live data. Split from `RateLimitGlyph` so the hook is mounted
- * only when this subtree is actually bound to the host being displayed - see
- * `scopedToOwnHost` above.
- */
+/** Split from `RateLimitGlyph` so the hook is mounted only when this subtree is actually bound to the host
+ * being displayed - see `scopedToOwnHost` above. */
 function LiveRateLimitGlyph({
   profileSelection,
 }: {

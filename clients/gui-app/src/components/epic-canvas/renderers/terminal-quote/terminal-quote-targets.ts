@@ -9,10 +9,7 @@ export interface TerminalQuoteChatTarget {
   /** The chat the user last focused a composer in. Marked, never reordered. */
   readonly isLastFocused: boolean;
   /**
-   * Bound to a host other than the terminal's, so its agent could not resolve
-   * the terminal a chip would name. Marked, never reordered or dropped - the
-   * chat is real and the user knows it is there, so the roster owes them the
-   * row and the reason rather than a silent omission.
+   * Marked, never reordered or dropped - the chat is real and the user knows it is there, so the roster owes them the row and the reason rather than a silent omission.
    */
   readonly isOnOtherHost: boolean;
 }
@@ -29,27 +26,8 @@ export interface TerminalQuoteChatTargetsInput {
 }
 
 /**
- * The chats a terminal selection can be sent to.
- *
- * Two bands, and the order within each is the sidebar's. Chats already open in
- * this view come first because they are where the user is working right now -
- * the selection is nearly always headed for something already on screen, and a
- * list that opens with the four chats they can see reads as "pick one of
- * these" rather than "search the Task". Everything else follows in the exact
- * order the sidebar shows it, so the two lists never disagree about where a
- * chat sits; recency is deliberately NOT the rule here, because during a long
- * agent turn the most recently updated chat is just whichever agent streamed
- * last.
- *
- * Archived chats are excluded: they are hidden from the sidebar, so offering
- * one here would send a message somewhere the user cannot see it.
- *
- * A chat on ANOTHER host is kept, marked rather than removed. The terminal is
- * local to the tile's host, so its agent has no way to resolve a chip naming
- * it - but dropping the row would leave the user hunting for a chat they can
- * see in the sidebar. A legacy chat with no recorded host is not on another
- * one: opening it adopts the tab's host (`chat.hostId ?? tabHostId`), so it is
- * offered exactly like a same-host chat.
+ * Everything else follows in the exact order the sidebar shows it, so the two lists never disagree about where a chat sits; recency is deliberately NOT the rule here, because during a long agent turn the most recently updated chat is just whichever agent streamed last.
+ * Archived chats are excluded: they are hidden from the sidebar, so offering one here would send a message somewhere the user cannot see it.
  */
 export function resolveTerminalQuoteChatTargets(
   input: TerminalQuoteChatTargetsInput,

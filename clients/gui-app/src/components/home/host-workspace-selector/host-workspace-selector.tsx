@@ -154,25 +154,8 @@ import { useRecentWorkspaces } from "./use-recent-workspaces";
 import { RecentWorkspacesSection } from "./recent-workspaces-section";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-/**
- *
- *
- *
- *
- *
- *
- *
- * `home` swaps the bound directory; `chat` forks the chat on switch (chats
- * are host-bound for life, so "switching" means forking onto the picked
- * machine — the owning tile opens the fork dialog via `onForkOnHost`);
- * `terminal-agent` locks the host section because a PTY can't migrate, but
- * its folder binding can be edited; the owning tile restarts the PTY after a
- * committed binding write.
- *
- * For the file-tree panel see `FileTreeWorkspacePicker` (display-only
- * picker keyed by `[epicId, hostId]`); it does not share this surface
- * union because it has no owner binding to coordinate.
- */
+/** `home` swaps the bound directory; `chat` forks the chat on switch (chats are host-bound for life, so
+ * "switching" means forking onto the picked machine. */
 type BoundOwnerSurface = {
   readonly kind: "chat" | "terminal-agent";
   readonly hostId: string;
@@ -181,65 +164,34 @@ type BoundOwnerSurface = {
   readonly ownerId: string;
   readonly binding: WorktreeBinding | null;
   readonly isOwnerActive: boolean;
-  // Narrower than `isOwnerActive`: is the owner active specifically because
-  // of a genuinely running/activating turn, as opposed to visible background
-  // work (Bash `run_in_background` / a subagent / Monitor) outliving an
-  // already-completed turn? Drives ONLY the disabled-remove tooltip wording -
-  // `isOwnerActive` still decides whether removal is disabled at all (a live
-  // background process could still be touching the folder either way).
+  // Drives only the disabled-remove tooltip wording - `isOwnerActive` still decides whether removal is disabled
+  // at all (a live background process could still be touching the folder either way).
   readonly hasActiveTurn: boolean;
-  /** Display name used in teardown copy (agent title, chat title). */
   readonly ownerLabel: string;
-  /**
-   * Chat-only display overlay for a worktree intent already consumed by an
-   * outstanding send. It must never feed dispatch or commit capture; the chat
-   * session remains the owner of this intent's lifecycle.
-   */
+  /** Chat-only display overlay for a worktree intent already consumed by an outstanding send. It must never feed
+   * dispatch or commit capture; the chat session remains the owner of this intent's lifecycle. */
   readonly inFlightWorktreeIntent: WorktreeIntent | null;
-  // The `workspacePath`s whose bound directory is gone on disk (host-computed,
-  // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
-  // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
-  // indicator on the chip so BOTH owner kinds surface it the same way — the
-  // host send / prepareLaunch reject is the actual run gate; this is the
-  // proactive visual.
+  // Drives the per-folder "missing" indicator on the chip so both owner kinds surface it the same way - the host
+  // send / prepareLaunch reject is the actual run gate; this is the proactive visual.
   readonly missingWorktreePaths: readonly string[];
-  // Whether the owner's binding has been resolved yet (chat snapshot received /
-  // `worktree.getBinding` settled). Lets the chip distinguish "still loading"
-  // (spinner) from "resolved with no folders" (a folderless epic / degraded
-  // host — a real terminal state, not an indefinite spinner).
+  // Lets the chip distinguish "still loading" (spinner) from "resolved with no folders" (a folderless epic /
+  // degraded host - a real terminal state, not an indefinite spinner).
   readonly bindingResolved: boolean;
   readonly onBindingCommitted:
     | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
     | null;
-  /**
-   * Chat-only: the owning tile's handler for the host picker's "switch host"
-   * gesture. Chats are host-bound for life (clone-not-migrate), so switching
-   * means forking — the tile opens its fork dialog anchored at the chat's
-   * latest completed turn, preselected on `targetHostId`, or explains why it
-   * can't yet (turn still running / no reply to fork). `null` for surfaces
-   * that cannot fork at all (terminal agents), whose host section is locked.
-   */
+  /** `null` for surfaces that cannot fork at all (terminal agents), whose host section is locked. */
   readonly onForkOnHost: ((targetHostId: string) => void) | null;
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
-// Stable identity for "the query has not answered yet", so the summaries array
-// can be threaded straight into memos and the refresh hook without a fresh
-// `[]` per render invalidating every one of them.
+// Stable identity for "the query has not answered yet", so the summaries array can be threaded straight into
+// memos and the refresh hook without a fresh `[]` per render invalidating every one of them.
 const EMPTY_WORKSPACE_SUMMARIES: ReadonlyArray<WorktreeWorkspaceSummaryV15> =
   [];
 
-/**
- * Binding-entry → `WorktreeWorkspaceSummaryV15` fallback, rendered for a row until
- * `worktree.listByWorkspacePaths` returns the authoritative disk metadata. Git
- * details are inferred from the entry; the row shows a loading affordance
- * (`metadataPending`) while the real query is in flight, so this guess is never
- * presented as disk truth. (Moved here from the deleted `merge-owner-workspaces`
- * — the picker no longer merges an epic-wide base set.)
- *
- * `presence: "present"` with `resolvedAt: null` matches the wire rule for an
- * unverifiable path: keep the pending affordance, never invent an absence.
- */
+/** Git details are inferred from the entry; the row shows a loading affordance (`metadataPending`) while the
+ * real query is in flight, so this guess is never presented as disk truth. */
 function workspaceSummaryFromBindingEntry(
   entry: WorktreeBindingEntry,
 ): WorktreeWorkspaceSummaryV15 {
@@ -268,13 +220,7 @@ function workspaceSummaryFromBindingEntry(
   };
 }
 
-/**
- * Working disk facts a row can stage from. A refresh that rewrites the listing
- * with schema-default `resolvedAt: null` must not wipe a previously resolved
- * snapshot — that is the working set for Location/Branch, matching how a
- * settled-busy pill keeps its last good snapshot. First open (never resolved)
- * keeps the unresolved fallback so git/non-git is not guessed.
- */
+/** First open (never resolved) keeps the unresolved fallback so git/non-git is not guessed. */
 function lastResolvedWorkspaceSummary(
   live: WorktreeWorkspaceSummaryV15 | undefined,
   remembered: WorktreeWorkspaceSummaryV15 | undefined,
@@ -318,7 +264,6 @@ export type HostWorkspaceSelectorSurface =
 
 interface HostWorkspaceSelectorProps {
   readonly surface: HostWorkspaceSelectorSurface;
-  /** A draft create owns the snapshot until it settles. */
   readonly disabled: boolean;
 }
 
@@ -337,13 +282,8 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
       : (directoryEntries.find((entry) => entry.hostId === ownerHostId) ??
         null);
   const ownerHostClient = useHostClientFor(ownerHostEntry);
-  // In-epic surfaces address their bound owner host. When that host is not
-  // in the directory (unreachable / not yet discovered), do NOT fall back to
-  // the active host's label - that would label the chip with one host while
-  // every worktree operation runs against the (null) owner client. Show the
-  // bound host's own label, or an explicit unavailable state once the
-  // directory has loaded (during the initial load `hostLabel` is the neutral
-  // "Local" default, not a specific active-host name).
+  // When that host is not in the directory (unreachable / not yet discovered), do not fall back to the active
+  // host's label.
   const inEpicHostLabel =
     ownerHostEntry?.label ??
     (directoryList.data === undefined ? hostLabel : "Unavailable");
@@ -369,10 +309,8 @@ interface HomeSurfaceProps {
 }
 
 function HomeSurface(props: HomeSurfaceProps) {
-  // Must be the SAME host `ActiveHostWorkspaceControls` resolves for an
-  // "active" scope below - the staged slot and the folder rows it stages into
-  // have to agree on which machine they describe. That resolution is the
-  // composer surface pin (pin ?? effective), so read the same primitive.
+  // Must be the same host `ActiveHostWorkspaceControls` resolves for an "active" scope below - the staged slot
+  // and the folder rows it stages into have to agree on which machine they describe.
   const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
@@ -395,43 +333,17 @@ function HomeSurface(props: HomeSurfaceProps) {
   );
 }
 
-/**
- * Host-only dropdown + Workspace rail/panel folder picker, bound to a staging
- * key and to whichever host its `hostScope` names. Shared by every surface
- * that picks (but has not yet created) a chat/agent's host + folders +
- * worktree intent: the landing composer, the terminal-agent launcher submenu,
- * and the fork-chat dialog. Writes the per-folder choices to the staging store
- * under `stagingKey`; the launch/send handler reads them back from the same
- * key.
- *
- * Two host scopes, and the name is now historical: `fixed` addresses a
- * caller-supplied host with an inert picker, and what used to be the "active"
- * scope is the composer's window-keyed SURFACE PIN (selection model §2), which
- * resolves to `pin ?? effective` and follows the effective host only until the
- * user names one. Neither scope writes the app-wide selection any more.
- */
+/** Host-only dropdown + Workspace rail/panel folder picker, bound to a staging key and to whichever host its
+ * `hostScope` names. effective` and follows the effective host only until the user names one. */
 type ActiveHostWorkspaceControlsProps = {
   readonly stagingKey: WorktreeStagingKey;
   readonly workspaceSeed: LandingDraftWorkspaceSnapshot | null;
-  /**
-   * The source conversation's intent for seeding the folder rows (top
-   * precedence in the picker's seeding). `null` on the landing composer, and on
-   * the fork dialog (which pre-stages its intent into `stagingKey` directly).
-   * Supplied by the terminal-agent launcher so a new agent opens on the same
-   * workspace as the latest conversation - the same value GUI chat creation
-   * passes straight into `createChat`.
-   */
+  /** The source conversation's intent for seeding the folder rows (top precedence in the picker's seeding). */
   readonly seedIntent: WorktreeIntent | null;
-  /**
-   * Per-folder transform applied on top of `seedIntent` when seeding: force
-   * every seeded folder to a new worktree carrying the working tree ("A/B
-   * Fork"). `null` stages the seed verbatim (the Cross Question fork's "same
-   * working copy" semantics).
-   */
+  /** Per-folder transform applied on top of `seedIntent` when seeding: force every seeded folder to a new
+   * worktree carrying the working tree ("A/B Fork"). */
   readonly seedIntentOverride: SeedIntentOverride | null;
-  // "inline" (landing composer): folder rows with the host chip pushed to the
-  // far right of row 1. "stacked" (fork dialog, terminal-agent launcher): a
-  // file-tree-style Host list above a Workspaces section, no trailing chip.
+  // "inline" (landing composer): folder rows with the host chip pushed to the far right of row 1.
   readonly layout: "inline" | "stacked";
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
@@ -443,33 +355,20 @@ export function ActiveHostWorkspaceControls(
   const directoryList = useHostDirectoryList();
   const disabled = props.disabled;
   const directoryEntries = directoryList.data ?? [];
-  // The composer is PLACEMENT, and placement is a per-surface pin (redesign
-  // P1.2, selection model §2/§54) - not the app-wide selection, which is
-  // Settings ▸ Activate's alone now. A scope that NAMES a host (`fixed`, or
-  // #1227's dialog-local `selected`) wins outright; the follow arm resolves
-  // the composer's own pin - `pin ?? effective` - and the picker below writes
-  // the pin. Nothing here moves the window.
+  // The composer is placement, and placement is a per-surface pin - not the app-wide selection, which is
+  // Settings ▸ Activate's alone now.
   const composerPin = useComposerSurfaceHostPin();
   const scopeHostId = hostWorkspaceControlsScopeHostId(props.hostScope);
   const activeHostId = scopeHostId ?? composerPin.resolvedHostId;
   const activeEntry =
     directoryEntries.find((entry) => entry.hostId === activeHostId) ?? null;
-  // "Local" is the neutral pre-directory default, and it is only honest while
-  // this surface is FOLLOWING: a pin naming a host the directory does not
-  // carry is a real unavailable state (D6), not a slow first paint.
+  // "Local" is the neutral pre-directory default, and it is only honest while this surface is following: a pin
+  // naming a host the directory does not carry is a real unavailable state, not a slow first paint.
   const hostLabel =
     activeEntry?.label ??
     (scopeHostId === null && !composerPin.isPinned ? "Local" : "Unavailable");
-  // `pin.selection`, NOT `pin.resolvedHostId`: a FOLLOWING surface must keep
-  // using the app-wide bound client (which the authority bridge holds on the
-  // effective host) rather than a transient requester, so nothing about the
-  // unpinned path changes. Only a pin resolves its own host's requester - and
-  // that is what stops a pinned composer from sending to the machine the
-  // window happens to be bound to.
-  // `honoredSelection`, not `selection`: a deposed pin still NAMES the dead
-  // host in `selection` (sticky return), but must not READ through it - the
-  // chip auto-follows, and the rows must describe the machine the chip shows
-  // (the same F3 rule `use-composer-placement.ts` applies).
+  // `honoredSelection`, not `selection`: a deposed pin still names the dead host in `selection` (sticky return),
+  // but must not read through it - the chip auto-follows, and the rows must describe the machine the chip shows.
   const pinResolvedHostClient = useHostClientForHostId(
     composerPin.honoredSelection,
   );
@@ -477,14 +376,8 @@ export function ActiveHostWorkspaceControls(
     props.hostScope.kind === "active"
       ? pinResolvedHostClient
       : props.hostScope.hostClient;
-  // The picker's rows come from the merged host list, not from the directory
-  // this component reads for the chip label: a host the account owns but this
-  // client cannot dial belongs in the list (named, with its reason, inert),
-  // where before it was simply absent here and present in Settings.
-  //
-  // A FIXED scope is pinned to one machine — the source agent's — so the list
-  // is that host alone. It resolves out of the same merged list, and only falls
-  // back to a stand-in row when the list has never heard of it.
+  // It resolves out of the same merged list, and only falls back to a stand-in row when the list has never heard
+  // of it.
   const hostOptions = useHostOptions();
   const listedHostOption = findHostOption(hostOptions.hosts, activeHostId);
   const selectedHostOption =
@@ -500,9 +393,8 @@ export function ActiveHostWorkspaceControls(
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
-    // The scope-correct host: the FIXED host when pinned, else the app-wide
-    // active one - the same resolution every other host-derived read in this
-    // component uses, so the folder bucket can never disagree with them.
+    // The scope-correct host: the fixed host when pinned, else the app-wide active one - the same resolution every
+    // other host-derived read in this component uses, so the folder bucket can never disagree with them.
     activeHostId,
   );
   const workspaceSource = useMemo<HomeWorkspaceSource>(
@@ -521,18 +413,16 @@ export function ActiveHostWorkspaceControls(
         : homeWorkspaceSource,
     [disabled, homeWorkspaceSource],
   );
-  // Resolve repo-identifier → path against the scope-correct host: this
-  // composer's pinned (or followed) host, the source agent's FIXED host in the
-  // terminal-agent fork dialog (else paths resolve on the wrong machine).
+  // Resolve repo-identifier → path against the scope-correct host: this composer's pinned (or followed) host,
+  // the source agent's fixed host in the terminal-agent fork dialog (else paths resolve on the wrong machine).
   const resolved = useResolvedWorkspaceFolders(
     workspaceSource.source,
     activeHostClient,
     activeHostId,
   );
   const refusalByHostId = hostWorkspaceControlsScopeRefusals(props.hostScope);
-  // A surface-level blocker: every row but the named one goes inert, and none
-  // of them says why, because the reason is not about them. The surface owns
-  // that sentence.
+  // A surface-level blocker: every row but the named one goes inert, and none of them says why, because the
+  // reason is not about them.
   const unselectableExceptHostId =
     props.hostScope.kind === "selected"
       ? props.hostScope.unselectableExceptHostId
@@ -546,13 +436,8 @@ export function ActiveHostWorkspaceControls(
       props.hostScope.onSelect(hostId);
       return;
     }
-    // Writes THIS surface's pin and nothing else. Before P1.2 this called
-    // `binding.directory.selectById(hostId)` - moving the whole app to place
-    // one chat, which is the defect the surface-pin model exists to end.
-    // Restore the target host's remembered workspace BEFORE publishing the
-    // new pin. That makes the host gesture atomic at the submit boundary and,
-    // unlike an effect keyed by `resolvedHostId`, does not overwrite another
-    // draft on mount or react to lease-driven automatic failover.
+    // Before this called `binding.directory.selectById(hostId)` - moving the whole app to place one chat, which is
+    // the defect the surface-pin model exists to end.
     if (
       (hostId !== activeHostId || composerPin.selection !== hostId) &&
       props.stagingKey.surface === "landing" &&
@@ -568,10 +453,8 @@ export function ActiveHostWorkspaceControls(
   };
 
   if (props.layout === "stacked") {
-    // Host picker as a flat file-tree-style list (own header), with the
-    // folder rows in their own "Workspaces" section below — no trailing chip.
-    // `--fc-text` brightens location labels to match the panel's other sections;
-    // identity, branch values, icons, and actions retain their semantic hierarchy.
+    // Host picker as a flat file-tree-style list (own header), with the folder rows in their own "Workspaces"
+    // section below - no trailing chip.
     return (
       <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
@@ -580,19 +463,13 @@ export function ActiveHostWorkspaceControls(
           onSelect={handleSelectHost}
           refusalByHostId={refusalByHostId}
           inertExceptHostId={unselectableExceptHostId}
-          // A FIXED scope cannot change hosts — `handleSelectHost` returns
-          // early there. Saying so on the row instead of swallowing the click
-          // is the same rule the section already applies to a busy submission:
-          // a row that accepts a click and does nothing reads as broken. A
-          // SELECTED scope is the opposite case: the rows are live, they just
-          // write to the caller's state instead of the directory.
+          // A fixed scope cannot change hosts - `handleSelectHost` returns early there.
           disabled={disabled || props.hostScope.kind === "fixed"}
           isLoading={hostOptions.isLoading}
           listsFailed={hostOptions.listsFailed}
           onRetryLists={hostOptions.retryLists}
-          // `pin`, not `bind`: since P1.2 a pick here writes this composer's
-          // surface pin and never rebinds the window. (The two intents gate
-          // rows identically; only `view` differs.)
+          // `pin`, not `bind`: since a pick here writes this composer's surface pin and never rebinds the window. (The
+          // two intents gate rows identically; only `view` differs.)
           intent="pin"
         />
         <section
@@ -675,25 +552,13 @@ function HomeWorkspaceRows(props: {
   readonly workspaceSource: HomeWorkspaceSource;
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
-  /**
-   * Passed separately from the client. The original reason no longer holds:
-   * `HostClient.bind()` rebound in place, so the active-scope client was ONE
-   * object for the app's lifetime and a memo keyed on it alone would pin the
-   * first host's answer. P4.2 deleted that - the app-wide client is now a
-   * requester rebuilt when the effective host changes, so it does move. The
-   * id stays an explicit input because it is also non-null in states where
-   * the client is null. See `rowsIntentKey`.
-   */
+  /** The original reason no longer holds: `HostClient.bind` rebound in place, so the active-scope client was one
+   * object for the app's lifetime and a memo keyed on it alone would pin the first host's answer. */
   readonly activeHostId: string | null;
-  /** Display label for the selected host — used in absent-path row copy. */
   readonly hostLabel: string;
   readonly stagingKey: WorktreeStagingKey;
-  /**
-   * The source conversation's intent - top precedence when seeding folders (the
-   * fork dialog, and creating a new GUI/terminal agent from the latest
-   * conversation). `null` on the blank landing composer, where the generic
-   * per-epic / per-folder memory / default seeding applies instead.
-   */
+  /** The source conversation's intent - top precedence when seeding folders (the fork dialog, and creating a new
+   * GUI/terminal agent from the latest conversation). */
   readonly seedIntent: WorktreeIntent | null;
   // Per-folder transform on top of `seedIntent` (A/B Fork → new worktree
   // carrying the working tree; null = verbatim). See `SeedIntentOverride`.
@@ -710,10 +575,8 @@ function HomeWorkspaceRows(props: {
     seedIntent,
     seedIntentOverride,
   } = props;
-  // Remembered defaults are host-local, so every read and write here is bound
-  // to the surface's target host. Both maps are stable references (the bucket
-  // is the stored object, or the shared empty one), so subscribing to them
-  // does not churn renders.
+  // Both maps are stable references (the bucket is the stored object, or the shared empty one), so subscribing
+  // to them does not churn renders.
   const rememberFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
@@ -734,10 +597,6 @@ function HomeWorkspaceRows(props: {
   const legacyFolderIntentByPath = useWorktreeIntentMemoryStore(
     (state) => state.legacyFolderIntentByPath,
   );
-  // The single resolved primary every row / the collapsed chip / the launch
-  // boundary agrees on - re-derived from the CURRENT resolved folder set so a
-  // stale/removed `primaryPath` always falls back to the first remaining
-  // folder without a separate write.
   const resolvedPrimaryPath = useMemo(
     () =>
       resolvePrimaryPath(
@@ -746,10 +605,8 @@ function HomeWorkspaceRows(props: {
       ),
     [resolvedFolders, workspaceSource.primaryPath],
   );
-  // Polite live-region announcement for a primary change - either an
-  // explicit "Make primary" click or the deterministic reassignment when
-  // removing the current primary. Sequence-keyed so consecutive identical
-  // messages (duplicate folder basenames) both announce.
+  // Polite live-region announcement for a primary change - either an explicit "Make primary" click or the
+  // deterministic reassignment when removing the current primary.
   const { announcement: primaryAnnouncement, announcePrimaryChange } =
     usePrimaryChangeAnnouncement();
   const addFolderPending =
@@ -758,8 +615,8 @@ function HomeWorkspaceRows(props: {
     activeHostClient,
     workspaceSource,
   );
-  // Locate on an absent row must REPLACE the dead path — add-only left it
-  // blocking readiness until the user manually removed it.
+  // Locate on an absent row must replace the dead path - add-only left it blocking readiness until the user
+  // manually removed it.
   const locateAndReplaceFolder = useLocateAndReplaceWorkspaceFolder(
     activeHostClient,
     workspaceSource,
@@ -799,50 +656,21 @@ function HomeWorkspaceRows(props: {
   );
   const summaries =
     summariesQuery.data?.workspaces ?? EMPTY_WORKSPACE_SUMMARIES;
-  // Adjacent to the query ON PURPOSE: it writes its forced response into that
-  // query's cache entry, and the path list is part of the key - so both must
-  // read the same `queryableFolderPaths`, not two independently derived lists.
+  // Adjacent to the query ON purpose: it writes its forced response into that query's cache entry, and the path
+  // list is part of the key.
   const summariesRefresh = useWorktreeWorkspacesRefresh({
     client: activeHostClient,
     workspacePaths: queryableFolderPaths,
     summaries,
   });
-  // MOUNT is the intent edge for the rows arm.
-  //
-  // The summary arm gets its forced re-derive from the picker popover's
-  // `onOpenChange`. The rows arm has no open/close of its own - it renders
-  // inline in the fork-chat dialog, the terminal-agent fork dialog and the
-  // add-node launcher, each a Radix `Dialog`/`DropdownMenu` with no
-  // `forceMount`, so it unmounts on close and mounts fresh on every open.
-  // Without this, those surfaces render `forceRefresh: false` branch metadata
-  // with no user recovery at all when the host's watcher cannot see a checkout
-  // (network mount, container boundary, LRU eviction, failed arm). They need no
-  // Refresh button of their own: close-and-reopen is the recovery, and with
-  // this edge wired it is a real re-derive rather than another cache-only read.
-  //
-  // Latched per TARGET, not per mount, and released on failure.
-  //
-  // A bare boolean would be wrong in both directions. It never resets, so a
-  // surface that switches hosts in place - or has folders added while open -
-  // would keep the first target's answer and never heal the new one. And
-  // because `canRefresh` only asserts a non-null client and a non-empty path
-  // list, the active scope's always-present default client makes it true even
-  // against an unbound or unreachable host: that attempt fails, toasts, and a
-  // latch set before the request would spend the surface's only chance before
-  // any recovery was possible.
+  // It never resets, so a surface that switches hosts in place - or has folders added while open - would keep
+  // the first target's answer and never heal the new one.
   const rowsIntentTarget = useRef<string | null>(null);
   const rowsResting = props.restingMode === "rows";
   const canRefreshSummaries = summariesRefresh.canRefresh;
   const refreshSummaries = summariesRefresh.refresh;
-  // Keyed on the REACTIVE host id, not on `activeHostClient.getActiveHostId()`.
-  // The active-scope client rebinds in place, so its identity survives a host
-  // swap: a memo keyed on the client would keep returning the previous host's
-  // key, and this surface - which unmounts on close and has no Refresh button
-  // of its own - would spend its one intent edge on the host the user just left.
-  // `JSON.stringify`, not a space-joined string: folder paths routinely contain
-  // spaces, and joining on one loses the boundaries - `["/a b", "/c"]` and
-  // `["/a", "/b c"]` collapse to the same key, so moving between those two
-  // scopes would read as "same target" and skip the re-derive.
+  // The active-scope client rebinds in place, so its identity survives a host swap: a memo keyed on the client
+  // would keep returning the previous host's key, and this surface.
   const rowsIntentKey = useMemo(
     () => JSON.stringify([props.activeHostId, queryableFolderPaths]),
     [props.activeHostId, queryableFolderPaths],
@@ -851,11 +679,8 @@ function HomeWorkspaceRows(props: {
     if (!rowsResting || !canRefreshSummaries) return;
     if (rowsIntentTarget.current === rowsIntentKey) return;
     rowsIntentTarget.current = rowsIntentKey;
-    // The rows keep rendering the cached view meanwhile, so this costs no blank
-    // frame; the hook toasts its own failure, so the rejection is already
-    // reported by the time it lands here. Releasing the latch on failure lets
-    // the next move of target or readiness try again, without spinning: this
-    // effect only runs when one of its deps actually changes.
+    // The rows keep rendering the cached view meanwhile, so this costs no blank frame; the hook toasts its own
+    // failure, so the rejection is already reported by the time it lands here.
     void refreshSummaries().catch(() => {
       if (rowsIntentTarget.current === rowsIntentKey) {
         rowsIntentTarget.current = null;
@@ -913,15 +738,9 @@ function HomeWorkspaceRows(props: {
       ),
     [gitSummaries, worktreeBranchPrefix],
   );
-  // Seed every freshly-added git folder by precedence: per-epic memory >
-  // per-folder memory (validated against disk) > default new worktree off the
-  // working tree. A folder the user already touched this session is never
-  // overwritten. The per-chat binding outranks all of this and is applied live
-  // by the in-Epic surface, not here.
+  // A folder the user already touched this session is never overwritten.
   const seedStageEntry = workspaceSource.stageEntry;
-  // Subscribed (not an imperative read) so the effect re-runs when persisted
-  // staging rehydrates after auth - otherwise a rehydrate that replaces the map
-  // would drop just-seeded defaults for folders that weren't persisted.
+  // Subscribed (not an imperative read) so the effect re-runs when persisted staging rehydrates after auth.
   const seedCapturedIntent = workspaceSource.capturedIntent;
   const seedStagingKey = stagingKey;
   const seedEpicId =
@@ -929,9 +748,7 @@ function HomeWorkspaceRows(props: {
     seedStagingKey.surface === "new-conversation"
       ? seedStagingKey.epicId
       : null;
-  // Reactive so branch-validation fetching + seeding re-run when the per-epic
-  // memory changes. `getEpicIntent` returns the stored intent reference, stable
-  // until a write, so this does not churn renders.
+  // `getEpicIntent` returns the stored intent reference, stable until a write, so this does not churn renders.
   const epicIntent = useWorktreeIntentMemoryStore(
     useCallback(
       (state) =>
@@ -944,9 +761,8 @@ function HomeWorkspaceRows(props: {
 
   const rememberedFor = useCallback(
     (workspacePath: string): WorktreeFolderIntent | null => {
-      // The host's own bucket first, then the frozen pre-host-scoping
-      // fallback - the same per-key precedence `selectRememberedFolderIntent`
-      // applies (inlined here so both maps stay reactive subscriptions).
+      // The host's own bucket first, then the frozen pre-host-scoping fallback - the same per-key precedence
+      // `selectRememberedFolderIntent` applies (inlined here so both maps stay reactive subscriptions).
       if (Object.hasOwn(folderIntentByPath, workspacePath)) {
         return folderIntentByPath[workspacePath].intent;
       }
@@ -956,9 +772,7 @@ function HomeWorkspaceRows(props: {
     },
     [folderIntentByPath, legacyFolderIntentByPath],
   );
-  // The per-epic entry for a folder, if any. Outranks per-folder memory in both
-  // the branch-validation fetch list and the seed, so a remembered epic pick is
-  // validated (and its branches fetched) the same way.
+  // The per-epic entry for a folder, if any.
   const epicEntryFor = useCallback(
     (workspacePath: string): WorktreeFolderIntent | null =>
       epicIntent?.entries.find((e) => e.workspacePath === workspacePath) ??
@@ -966,9 +780,8 @@ function HomeWorkspaceRows(props: {
     [epicIntent],
   );
 
-  // A remembered existing-branch checkout (or a fork from a non-working-tree
-  // source) can only be validated against the full branch list, fetched lazily
-  // here for exactly those folders - none in the common case.
+  // A remembered existing-branch checkout (or a fork from a non-working-tree source) can only be validated
+  // against the full branch list, fetched lazily here for exactly those folders - none in the common case.
   const branchValidationPaths = useMemo<ReadonlyArray<string>>(
     () =>
       gitSummaries.flatMap((summary) => {
@@ -1028,11 +841,8 @@ function HomeWorkspaceRows(props: {
       const folder: SeedFolderContext = {
         workspacePath: summary.workspacePath,
         repoIdentifier: summary.repoIdentifier,
-        // Stamped from the explicit resolved primary - never from array/
-        // git-summary position. After a reload restores a draft whose
-        // explicit primary is NOT the first git summary (empty staging
-        // slot), an order-derived seed here would silently re-mark the first
-        // summary primary and contradict the badge.
+        // After a reload restores a draft whose explicit primary is not the first git summary (empty staging slot), an
+        // order-derived seed here would silently re-mark the first summary primary and contradict the badge.
         isPrimary: summary.workspacePath === resolvedPrimaryPath,
         isGitRepo: summary.isGitRepo,
         currentBranch,
@@ -1041,9 +851,8 @@ function HomeWorkspaceRows(props: {
         ).name,
         summary,
       };
-      // A fork surface may override the seed's per-folder disposition (Cross
-      // Question → local, A/B Fork → new worktree carrying the working tree);
-      // the overridden entry stays top-precedence like the verbatim seed.
+      // A fork surface may override the seed's per-folder disposition (Cross Question → local, A/B Fork → new
+      // worktree carrying the working tree); the overridden entry stays top-precedence like the verbatim seed.
       const seedEntry = applySeedIntentOverride({
         override: seedIntentOverride,
         seedEntry:
@@ -1054,9 +863,8 @@ function HomeWorkspaceRows(props: {
       });
       const epicEntry = epicEntryFor(summary.workspacePath);
       const remembered = rememberedFor(summary.workspacePath);
-      // A seed (the source conversation's live binding) is authoritative and
-      // staged verbatim, so it short-circuits the memory/default tiers AND their
-      // branch-validation wait below.
+      // A seed (the source conversation's live binding) is authoritative and staged verbatim, so it short-circuits
+      // the memory/default tiers and their branch-validation wait below.
       const needsBranches =
         seedEntry === null &&
         rememberedNeedsBranchValidation(epicEntry ?? remembered, currentBranch);
@@ -1167,9 +975,7 @@ function HomeWorkspaceRows(props: {
     />
   ) : null;
 
-  // Setup/teardown editor is hosted here (not inside the popover) so it outlives
-  // the popover closing. Landing is pre-epic: no owner/binding, `epicId: ""`
-  // (the host resolver is authn-only for the empty epic).
+  // Landing is pre-epic: no owner/binding, `epicId: ""` (the host resolver is authn-only for the empty epic).
   const [scriptsTargetPath, setScriptsTargetPath] = useState<string | null>(
     null,
   );
@@ -1257,9 +1063,8 @@ function HomeWorkspaceRows(props: {
           // Rendered inline in the fork / add-node dialogs, never inside a
           // popover, so nested branch/source dropdowns portal to the body.
           nestedInPopover={false}
-          // Home folder list is a synchronous local draft, never an async binding
-          // snapshot — an empty list is a genuine "no folders linked yet", so the
-          // row shows the add affordance rather than an indefinite spinner.
+          // Home folder list is a synchronous local draft, never an async binding snapshot - an empty list is a genuine
+          // "no folders linked yet", so the row shows the add affordance rather than an indefinite spinner.
           bindingResolved
           recentWorkspaces={recentWorkspacesSection}
           moveToRecent={recentWorkspaces.supported}
@@ -1340,7 +1145,7 @@ function workspaceRunItemForResolvedFolder(input: {
   >;
   readonly hostLabel: string;
   readonly isFetchingSummaries: boolean;
-  /** The summaries read REJECTED - distinct from "answered with nothing". */
+  /** The summaries read rejected - distinct from "answered with nothing". */
   readonly summariesFailed: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
@@ -1352,11 +1157,7 @@ function workspaceRunItemForResolvedFolder(input: {
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem {
   const summary = summaryForResolvedFolder(input.entry, input.summariesByPath);
-  // Presence is per-(host, path) display state from the listing — never stored
-  // in the draft. An absent path is not a non-git folder: the NON_GIT tooltip
-  // is reserved for genuinely-present non-repo directories. Require
-  // `resolvedAt !== null` too — the wire schema does not enforce the
-  // cross-field invariant, and `{absent, resolvedAt:null}` must stay pending.
+  // Presence is per-(host, path) display state from the listing - never stored in the draft.
   const absentItem = workspaceRunItemForAbsentSummary({
     entry: input.entry,
     summary,
@@ -1404,10 +1205,8 @@ function workspaceRunItemForResolvedFolder(input: {
     currentIntent: capturedEntry,
     diskWorktrees: summary?.worktrees.filter((w) => !w.isMain) ?? [],
   });
-  // The resolver (backed by the explicit `primaryPath` field) is the single
-  // source of truth for which row is primary - NOT the captured intent's own
-  // `isPrimary` bit (which can go stale between an explicit switch and the
-  // next launch-boundary canonicalization) and NOT array/git-summary order.
+  // The resolver (backed by the explicit `primaryPath` field) is the single source of truth for which row is
+  // primary.
   const isPrimary = input.entry.path === input.resolvedPrimaryPath;
   const emit = (intent: WorktreeFolderIntent): void => {
     input.workspaceSource.stageEntry(intent);
@@ -1471,11 +1270,7 @@ function workspaceRunItemForResolvedFolder(input: {
   };
 }
 
-/**
- * Resolved absence on the wire (`presence: "absent"` with a real `resolvedAt`)
- * is definitive not-available. Unresolved absence (`resolvedAt: null`) falls
- * through to the pending path instead.
- */
+/** Resolved absence on the wire (`presence: "absent"` with a real `resolvedAt`) is definitive not-available. */
 function workspaceRunItemForAbsentSummary(input: {
   readonly entry: ResolvedFolder;
   readonly summary: WorktreeWorkspaceSummaryV15 | null;
@@ -1515,16 +1310,14 @@ function workspaceRunItemForUnresolvedFolder(input: {
   readonly entry: UnresolvedWorkspaceFolder;
   readonly hostLabel: string;
   readonly isFetchingSummaries: boolean;
-  /** The summaries read REJECTED - distinct from "answered with nothing". */
+  /** The summaries read rejected - distinct from "answered with nothing". */
   readonly summariesFailed: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
   readonly summary: WorktreeWorkspaceSummaryV15 | null;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem | null {
-  // A summary that landed (present non-git, or present git) falls through to
-  // the normal row builder. Only the no-summary case stays here — pending
-  // while the listing is in flight, else the not-available row.
+  // Only the no-summary case stays here - pending while the listing is in flight, else the not-available row.
   if (input.summary !== null) return null;
   const isPrimary = input.entry.path === input.resolvedPrimaryPath;
   const onRemove = (): void => {
@@ -1549,12 +1342,8 @@ function workspaceRunItemForUnresolvedFolder(input: {
     repoIdentifier: input.entry.repoIdentifier,
     hostLabel: input.hostLabel,
     isPrimary,
-    // A FAILED summaries read is not a confirmed absence. Both leave
-    // `summary === null` with `isFetching` false, so without this the row
-    // offered to replace the folder on the strength of a metadata request
-    // that never got an answer. Removing stays available - it acts on the
-    // binding the user can see - but replacing waits for the host to say
-    // `presence: "absent"` out loud.
+    // Both leave `summary === null` with `isFetching` false, so without this the row offered to replace the folder
+    // on the strength of a metadata request that never got an answer.
     onLocate: input.summariesFailed ? null : input.onLocate,
     onMakePrimary: () => {
       input.workspaceSource.setPrimaryFolder(input.entry.path);
@@ -1583,15 +1372,8 @@ function supportedCapturedEntryForSummary(
   return capturedEntry?.kind === "local" ? capturedEntry : null;
 }
 
-/**
- * `onSelectMode` body shared by the home and in-Epic rows, extracted so the
- * surrounding `workspaceRunItems`/item-building callbacks stay under the
- * ESLint complexity cap - this branching (no-op-reselect guard, local vs
- * worktree) is local to one row's mode switch, not the item-building loop
- * around it. Callers derive their own `repoIdentifier`/`isGitRepo` (and any
- * unresolved guard, like the in-Epic caller's `resolvedAt === null` check)
- * since the two surfaces source those facts differently.
- */
+/** `onSelectMode` body shared by the home and in-Epic rows, extracted so the surrounding
+ * `workspaceRunItems`/item-building callbacks stay under the ESLint complexity cap. */
 function emitRowMode(input: {
   readonly currentBranch: string | null;
   readonly currentIntent: WorktreeFolderIntent | null;
@@ -1638,12 +1420,7 @@ function removeDisabledReasonFor(
   return null;
 }
 
-/**
- * A row's facts are pending while the listing query's first fetch is in
- * flight, and also once it lands but the host has not resolved that row yet
- * (`resolvedAt === null` - cache-served schema defaults, not disk truth).
- * Pending is a spinner on the chip only — it must not disable selection.
- */
+/** Pending is a spinner on the chip only - it must not disable selection. */
 function isRowMetadataPending(
   metadataPending: boolean,
   resolvedAt: number | null,
@@ -1651,34 +1428,22 @@ function isRowMetadataPending(
   return metadataPending || resolvedAt === null;
 }
 
-/**
- * Hover preview of every linked folder, themed like the standard tooltip:
- * `repo · branch` over the full path (left-truncated so the tail stays
- * readable), with a copy-path button to the right of the path. The path is
- * where the chat actually runs — the adopted worktree for worktree mode, the
- * folder for local — not the source folder.
- */
+/** The path is where the chat actually runs - the adopted worktree for worktree mode, the folder for local -
+ * not the source folder. */
 function unresolvedWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
   readonly repoIdentifier: WorktreeWorkspaceSummaryV15["repoIdentifier"];
   readonly hostLabel: string;
   readonly isPrimary: boolean;
-  /**
-   * `null` withholds the replace affordance.
-   *
-   * Locate REPLACES this entry, so offering it demands a confirmed absence.
-   * A failed `worktree.listByWorkspacePaths` leaves the same empty summary a
-   * real `presence: "absent"` does, and acting on that would talk the user
-   * into replacing a folder that is very likely still there.
-   */
+  /** A failed `worktree.listByWorkspacePaths` leaves the same empty summary a real `presence: "absent"` does, and
+   * acting on that would talk the user into replacing a folder that is very likely still there. */
   readonly onLocate: (() => void) | null;
   readonly onMakePrimary: () => void;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {
-  // Copy is true for both "path gone" and "path is a regular file" — the
-  // host conflates those into `presence: "absent"`. Locate re-points at a
-  // usable directory on this host either way.
+  // Copy is true for both "path gone" and "path is a regular file" - the host conflates those into `presence:
+  // "absent"`.
   const notAvailableLabel = `Not available on ${input.hostLabel}`;
   return {
     key: input.path,
@@ -1781,10 +1546,7 @@ function branchForSummary(
   return mainEntry?.branch ?? summary.mainBranch ?? null;
 }
 
-// Terminal-agent add/remove can commit to the binding before the explicit
-// "Update" resumes the PTY. Keep that dirty bit outside the summary popover
-// state because `development` now owns the overlay in
-// `WorkspaceFolderSummaryControl`.
+// Terminal-agent add/remove can commit to the binding before the explicit "Update" resumes the PTY.
 type FolderEditorState = {
   readonly dirtyPathsSinceResume: ReadonlySet<string>;
   readonly pendingRemovedPaths: ReadonlySet<string>;
@@ -1830,10 +1592,7 @@ function folderEditorReducer(
       return { ...state, pendingRemovedPaths: next };
     }
     case "discardStaged":
-      // Clear overlays Discard itself created. Terminal add/remove commits the
-      // binding immediately and marks dirty WITHOUT resume — that dirty set is
-      // the only bookkeeping that Update still has to resync the PTY, so a
-      // blanket `resumed` here would suppress a required rebind.
+      // Terminal add/remove commits the binding immediately and marks dirty without resume.
       if (state.pendingRemovedPaths.size === 0) return state;
       return {
         ...state,
@@ -1853,9 +1612,8 @@ interface InEpicSurfaceProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
 }
 
-// Coordinates host-bound folder metadata, staged worktree edits, add/remove
-// mutations, and terminal resume state in one owner-scoped surface.
 // eslint-disable-next-line complexity
+// Coordinates host-bound folder metadata, staged worktree edits, add/remove
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
   const hostOptions = useHostOptions();
@@ -1921,17 +1679,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   });
   const folderActions = useWorkspaceFolderActionsForClient(props.hostClient);
   const bindingEntries = surface.binding?.entries ?? EMPTY_BINDING_ENTRIES;
-  // ANTI-REVERT — render THIS owner's binding entries ONLY; never an epic-wide
-  // base set. Basing the picker on an epic-wide source made each chat show every
-  // sibling chat's folders. T2's host seam guarantees every chat / terminal-
-  // agent always has a non-empty, owner-scoped binding, so rendering it directly
-  // is now both correct AND leak-free. Do NOT reintroduce an epic-wide source
-  // or merge here.
-  //
-  // Disk metadata (isGitRepo / branch / sibling worktrees / scripts) is fetched
-  // per binding path via `worktree.listByWorkspacePaths`; until it resolves, each
-  // row falls back to a binding-derived summary and shows a loading affordance
-  // (`metadataPending`) so a guessed value never renders as disk truth.
+  // Anti-revert - render this owner's binding entries only; never an epic-wide base set. Do not reintroduce an
+  // epic-wide source or merge here.
   const bindingWorkspacePaths = useMemo(
     () =>
       Array.from(new Set(bindingEntries.map((entry) => entry.workspacePath))),
@@ -1943,9 +1692,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const metadataSummaries =
     metadataQuery.data?.workspaces ?? EMPTY_WORKSPACE_SUMMARIES;
-  // Adjacent to the query ON PURPOSE - see the landing surface's copy: the
-  // forced response is written into that query's cache entry, whose key
-  // includes this exact path list.
+  // Adjacent to the query ON purpose - see the landing surface's copy: the forced response is written into that
+  // query's cache entry, whose key includes this exact path list.
   const summariesRefresh = useWorktreeWorkspacesRefresh({
     client: props.hostClient,
     workspacePaths: bindingWorkspacePaths,
@@ -1955,21 +1703,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     () => new Map(metadataSummaries.map((ws) => [ws.workspacePath, ws])),
     [metadataSummaries],
   );
-  /**
-   * Rows the host has actually resolved. Listing reads are served from the
-   * host's cache, so an unresolved row (`resolvedAt === null`) carries schema
-   * defaults rather than disk truth - seeding a default worktree intent from
-   * one would stage a decision made on a guess. Unresolved rows stay out of
-   * this view entirely and re-enter once the host resolves them.
-   */
+  /** Listing reads are served from the host's cache, so an unresolved row (`resolvedAt === null`) carries schema
+   * defaults rather than disk truth. */
   const resolvedSummariesByPath = useMemo(
     () =>
       new Map([...summariesByPath].filter(([, ws]) => ws.resolvedAt !== null)),
     [summariesByPath],
   );
-  // `isLoading` (not `isPending`): a disabled query — empty binding, so no paths
-  // to fetch — is `isPending` in v5 but never actually loading, so guard on the
-  // active first fetch only.
+  // `isLoading` (not `isPending`): a disabled query - empty binding, so no paths to fetch - is `isPending` in v5
+  // but never actually loading, so guard on the active first fetch only.
   const metadataPending = props.hostClient !== null && metadataQuery.isLoading;
   const [lastResolvedByPath, setLastResolvedByPath] = useState<
     ReadonlyMap<string, WorktreeWorkspaceSummaryV15>
@@ -1994,9 +1736,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     [bindingEntries, rememberedByPath, summariesByPath],
   );
 
-  // In-epic surfaces address their bound owner host (`props.activeHostId` is
-  // `surface.hostId` there), which is also the host whose remembered defaults
-  // this picker may read and write.
+  // In-epic surfaces address their bound owner host (`props.activeHostId` is `surface.hostId` there), which is
+  // also the host whose remembered defaults this picker may read and write.
   const ownerHostId = props.activeHostId;
   const rememberFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
@@ -2016,10 +1757,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     [ownerHostId, readFolderIntent],
   );
 
-  // Mid-chat "Create new worktree" / existing-branch checkout stages the
-  // worktree instead of creating it now; the chat's next message send carries
-  // the intent and the host creates it at turn-start (mirrors the landing
-  // page). The staged branch shows on the folder row until then.
+  // Mid-chat "Create new worktree" / existing-branch checkout stages the worktree instead of creating it now.
   const stageWorktreeIntent = useWorktreeIntentStagingStore(
     (s) => s.stageIntent,
   );
@@ -2045,10 +1783,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],
   );
-  // A live picker choice is authoritative. Once send consumes that choice,
-  // the chat session keeps its captured copy visible until the existing
-  // pending/accepted action lifecycle retires it. This overlay is deliberately
-  // render-only: dispatch and commit capture continue reading `stagedIntent`.
+  // Once send consumes that choice, the chat session keeps its captured copy visible until the existing
+  // pending/accepted action lifecycle retires it.
   const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
     (state) => state.setSuspendedWorkspacePaths,
   );
@@ -2076,9 +1812,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     for (const entry of surface.inFlightWorktreeIntent?.entries ?? []) {
       map.set(entry.workspacePath, entry);
     }
-    // A live re-pick supersedes only its own folder. The remainder of a
-    // multi-folder dispatched intent stays visible until that dispatch
-    // resolves; dispatch capture itself continues reading stagedIntent only.
+    // A live re-pick supersedes only its own folder. The remainder of a multi-folder dispatched intent stays
+    // visible until that dispatch resolves; dispatch capture itself continues reading stagedIntent only.
     for (const entry of stagedIntent?.entries ?? []) {
       map.set(entry.workspacePath, entry);
     }
@@ -2116,20 +1851,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     [onBindingCommitted],
   );
 
-  // Folders added to this owner this session, awaiting their default seed. Held
-  // in a ref (written by the add handler, read only by the effect below - never
-  // rendered) so it doesn't fan out renders. Each is defaulted to a new worktree
-  // off the working tree (or the user's remembered choice, unless that is Local)
-  // once its disk metadata resolves, then dropped - so a later adjustment is
-  // never re-clobbered. Established binding folders are untouched (binding wins).
+  // Held in a ref (written by the add handler, read only by the effect below - never rendered) so it doesn't fan
+  // out renders.
   const pendingDefaultPathsRef = useRef(new Set<string>());
 
-  // Terminal-agent "Update": apply every staged folder edit to the binding in a
-  // single worktree.create (resolveIntent merges per-folder), then resume the
-  // PTY once against the new binding. Edits accumulate locally as the user picks
-  // them (see `emitForFolder`); this is the one commit + resume, so changing
-  // several folders restarts the terminal a single time. Reads the live staged
-  // intent at click time so it never applies a stale closure.
+  // Reads the live staged intent at click time so it never applies a stale closure.
   const hasStagedFolderChanges =
     stagedIntent !== undefined && stagedIntent.entries.length > 0;
   const changedWorkspacePathsSinceResume = useMemo<ReadonlySet<string>>(() => {
@@ -2192,9 +1918,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       }
       const stagedEntries = capture.draft?.entries ?? [];
       const removedWorkspacePaths = capture.removedWorkspacePaths;
-      // A just-added git folder may still be waiting for metadata so the default
-      // new-worktree seed can be staged. Keep Update enabled, but don't resume
-      // until those pending defaults either stage or resolve as no-op.
+      // Keep Update enabled, but don't resume until those pending defaults either stage or resolve as no-op.
       if (pendingDefaultPathsRef.current.size > 0) {
         settleRun();
         return;
@@ -2405,9 +2129,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     readLiveCommitCapture,
     snapshotOwnerTeardown,
   ]);
-  // Terminal-agent add/remove commit to the binding but deliberately do NOT
-  // resume — only the explicit "Update" does. Mark the binding dirty so
-  // "Update" stays enabled until that resume.
+  // Terminal-agent add/remove commit to the binding but deliberately do not resume - only the explicit "Update"
+  // does.
   const markBindingDirtyWithoutResume = useCallback(
     (workspacePaths: ReadonlyArray<string>): void => {
       dispatchEditor({ type: "markDirty", workspacePaths });
@@ -2431,11 +2154,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     clearStagedWorktreeIntent(stagedKey);
     dispatchEditor({ type: "discardStaged" });
   }, [clearStagedWorktreeIntent, stagedKey]);
-  // Phase-1 GUI-composed teardown: stop disclosed owner-scoped holders
-  // (managed-command stop, agent.stop) before removeBindingEntry /
-  // worktree.create. create has no commitIntent (protocol frozen behind
-  // the pin). Upgrade with listHolders + create-with-intent in the same
-  // follow-up as the snapshot provider.
+  // Phase-1 GUI-composed teardown: stop disclosed owner-scoped holders (managed-command stop, agent.stop) before
+  // removeBindingEntry / worktree.create.
   const confirmImmediateCommit = useCallback(async (): Promise<void> => {
     const dialog = teardownDialog;
     if (dialog === null || teardownCommitPending) return;
@@ -2603,11 +2323,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         ).name,
       });
       if (intent.kind === "worktree") {
-        // Stage the new git folder's default worktree for BOTH owner kinds.
-        // Terminal-agent no longer auto-creates + resumes here — the explicit
-        // "Update" applies the staged set and resumes once (the add itself
-        // already marked the binding dirty, so "Update" is enabled even before
-        // this seeds).
+        // Stage the new git folder's default worktree for both owner kinds.
         stageWorktreeIntent(stagedKey, { entries: [intent] });
       }
     }
@@ -2621,12 +2337,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     stagedKey,
   ]);
 
-  // `fork-on-switch` mode (and therefore this handler) is only offered for a
-  // chat surface - see the `HostWorkspaceSelector` render below. Chats are
-  // host-bound for life (clone-not-migrate), so picking another host here
-  // means forking onto it: the owning tile opens its fork dialog anchored at
-  // the chat's latest completed turn, preselected on the picked host, or says
-  // why it can't yet (turn still running / nothing to fork).
+  // Chats are host-bound for life (clone-not-migrate), so picking another host here means forking onto it: the
+  // owning tile opens its fork dialog anchored at the chat's latest completed turn.
   const handleSelectHostForChat = (hostId: string): void => {
     if (hostId === props.activeHostId) return;
     if (surface.onForkOnHost === null) return;
@@ -2691,9 +2403,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ],
   );
 
-  // Free functions (not useCallback) matching HEAD: they close over render
-  // locals and are only invoked from event handlers / item onLocate, never
-  // listed as memo deps that would thrash the items array.
+  // Free functions (not useCallback) matching HEAD: they close over render locals and are only invoked from
+  // event handlers / item onLocate, never listed as memo deps that would thrash the items array.
   const addFoldersToOwnerBinding = async (): Promise<boolean> => {
     const result = await folderActions.pickAndPrepareFolders(false);
     if (result === null) return false;
@@ -2712,13 +2423,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     return activatedPaths.length > 0;
   };
 
-  // One folder intent from the unified picker maps to the existing in-Epic
-  // semantics. For CHATS: Local / adopting an existing on-disk worktree apply
-  // immediately (and supersede any staged create); creating or checking out a
-  // branch into a fresh worktree defers to the next message send. For TERMINAL
-  // AGENTS: every edit (Local / import / new worktree) is staged locally and
-  // applied together on the explicit "Update" — no edit resumes the PTY on its
-  // own.
+  // One folder intent from the unified picker maps to the existing in-Epic semantics.
   const emitForFolder = useCallback(
     (ws: WorktreeWorkspaceSummaryV15) =>
       (intent: WorktreeFolderIntent): void => {
@@ -2732,9 +2437,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         // a reload and seeds future adds of this folder.
         setFolderIntent(intent, Date.now());
         if (surface.kind === "terminal-agent" || surface.isOwnerActive) {
-          // Draft: no host write. Terminal-agent commits via Update;
-          // a busy chat rides the next send. `stageIntent` merges by
-          // workspacePath, so re-picking a folder replaces its prior choice.
+          // Draft: no host write.
           stageWorktreeIntent(stagedKey, { entries: [intent] });
           return;
         }
@@ -2753,10 +2456,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         }
         if (intent.kind === "import") {
           unstageWorktreeEntry(stagedKey, ws.workspacePath);
-          // Preserve the folder's current primary status instead of forcing it
-          // primary: adopting a worktree on a SECONDARY folder must not silently
-          // move the agent's primary run directory to that folder. A folder with
-          // no binding row yet defaults to primary (single-folder / first add).
+          // Preserve the folder's current primary status instead of forcing it primary: adopting a worktree on a
+          // secondary folder must not silently move the agent's primary run directory to that folder.
           const boundEntry = findBindingEntry(
             surface.binding,
             ws.workspacePath,
@@ -2803,11 +2504,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ],
   );
 
-  // Everything a row needs BEFORE the `WorkspaceRunItem` is assembled,
-  // pulled out of the `.map()` callback below so that callback's own
-  // ESLint complexity count only has to cover assembling the item, not also
-  // deriving mode/intent/branch facts (the pattern the landing surface's
-  // standalone `workspaceRunItemForResolvedFolder` already follows).
+  // Everything a row needs before the `WorkspaceRunItem` is assembled, pulled out of the `.map` callback below
+  // so that callback's own ESLint complexity count only has to cover assembling the item.
   const deriveInEpicRowState = useCallback(
     (ws: WorktreeWorkspaceSummaryV15) => {
       const entry = findBindingEntry(surface.binding, ws.workspacePath);
@@ -2893,12 +2591,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             stagedEntry,
             emit,
           } = deriveInEpicRowState(ws);
-          // Presence is per-(host, path) display state — never stored on the
-          // binding. An absent path is not a non-git folder; Locate REPLACes
-          // the dead path with a picked one (add-only left it blocking).
-          // Handlers that close over pendingDefaultPathsRef are attached AFTER
-          // unresolvedWorkspaceRunItem returns — passing them as arguments is
-          // flagged by react-hooks/refs as "ref access during render".
+          // Presence is per-(host, path) display state - never stored on the binding. An absent path is not a non-git
+          // folder; Locate REPLACes the dead path with a picked one (add-only left it blocking).
           if (ws.presence === "absent" && ws.resolvedAt !== null) {
             const base = unresolvedWorkspaceRunItem({
               path: ws.workspacePath,
@@ -2914,16 +2608,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               ...base,
               // Bound owner rows have no set-primary RPC.
               canChangePrimary: false,
-              // An absent row is still a BOUND row: Locate adds and removes
-              // binding entries exactly like the normal controls, so it takes
-              // the same active-run lock. Without this the one row that mutates
-              // the binding hardest stayed live while an owner turn was running,
-              // and `unresolvedWorkspaceRunItem`'s `removeDisabled: false` came
-              // through the spread untouched. The lock clears with the turn and
-              // the row is retryable again - nothing about it is one-shot.
-              // No last-folder guard: removing the only entry is a legitimate
-              // rebind to folderless (the host writes the explicit folderless
-              // binding on the last `removeEntry`).
+              // An absent row is still a bound row: Locate adds and removes binding entries exactly like the normal
+              // controls, so it takes the same active-run lock.
               removeDisabled: activeRunLocksBinding || removePending,
               removeDisabledReason: removeDisabledReasonFor(
                 activeRunLocksBinding,
@@ -2932,9 +2618,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               onLocate: activeRunLocksBinding
                 ? null
                 : () => {
-                    // Locate REPLACes only after ≥1 DISTINCT add succeeds — never
-                    // delete-first (empty pick / all-adds-fail would drop the entry).
-                    // Cancel and zero-success leave the binding untouched.
+                    // Locate REPLACes only after ≥1 distinct add succeeds - never delete-first (empty pick / all-adds-fail would
+                    // drop the entry).
                     void (async (): Promise<void> => {
                       const result =
                         await folderActions.pickAndPrepareFolders(false);
@@ -2979,9 +2664,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                       ) {
                         return;
                       }
-                      // A retained path is still bound, so it is not "touched" by a
-                      // commit that did not move it - the absent row stays put and
-                      // stays retryable. The adds are real either way.
+                      // A retained path is still bound, so it is not "touched" by a commit that did not move it - the absent row
+                      // stays put and stays retryable.
                       const touchedPaths =
                         outcome.kind === "replaced"
                           ? [outcome.removedPath, ...outcome.addedPaths]
@@ -3022,19 +2706,13 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             branchPrefixWarning,
             repoIdentifier: ws.repoIdentifier,
             isPrimary,
-            // Bound owner rows (chat / terminal-agent) have no atomic
-            // set-primary RPC yet - the badge renders read-only here; switching
-            // stays scoped to not-yet-created pickers (landing, fork dialogs,
-            // the new-conversation modal, the terminal-agent launcher).
+            // Bound owner rows (chat / terminal-agent) have no atomic set-primary RPC yet.
             canChangePrimary: false,
             makePrimaryDisabled: false,
             makePrimaryDisabledReason: null,
             hostClient: props.hostClient,
-            // Snapshot fetch (isLoading / unresolved cache defaults) must
-            // never gate selection — the draft picker's first principle.
-            // Binding-derived mode/branch stay editable; the chip spinner
-            // is the only in-flight affordance. Commit controls (Update)
-            // may disable on their own pending flag.
+            // Snapshot fetch (isLoading / unresolved cache defaults) must never gate selection - the draft picker's first
+            // principle. Binding-derived mode/branch stay editable; the chip spinner is the only in-flight affordance.
             modeDisabled: false,
             modeDisabledReason: null,
             hasStagedIntent: stagedEntry !== null,
@@ -3152,9 +2830,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     />
   ) : null;
 
-  // Setup/teardown editor, hosted here so it outlives the popover. In-epic
-  // surfaces carry the real owner + live binding, so an edit can target a bound
-  // worktree's own env file (or stage onto the next worktree).
+  // Setup/teardown editor, hosted here so it outlives the popover.
   const [scriptsTargetPath, setScriptsTargetPath] = useState<string | null>(
     null,
   );
@@ -3207,10 +2883,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ],
   );
 
-  // Terminal agents keep the host fixed, but folder binding edits are allowed.
-  // Edits never resume on their own (add/remove commit to the binding, location/
-  // branch edits stage); the explicit "Update" applies the staged set and tells
-  // the owning tile to restart the PTY once against the updated binding.
+  // Edits never resume on their own (add/remove commit to the binding, location/ branch edits stage).
   const readOnly = false;
   const hostSwitcher = (
     <WorkspaceHostSwitcher
@@ -3286,11 +2959,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             recentWorkspaces={recentWorkspacesSection}
             recentWorkspaceCount={recentWorkspaces.entries.length}
             moveToRecent={recentWorkspacesSupported}
-            // The terminal-agent toolbar is anchored at the TOP of its tile, so the
-            // editor must open DOWNWARD into the terminal body (plenty of room).
-            // Opening upward (chat's default, where the composer is bottom-anchored)
-            // collapses against the top of the viewport on a maximized tile and
-            // turns into a cramped scroll once several folders are listed.
+            // The terminal-agent toolbar is anchored at the top of its tile, so the editor must open downward into the
+            // terminal body (plenty of room).
             popoverSide={surface.kind === "terminal-agent" ? "bottom" : "top"}
           />
         </div>
@@ -3353,10 +3023,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
 }
 
-// No staged pick yet (`capturedEntry === null`): a git folder reflects the
-// default (new worktree); a non-git folder can only be Local. The seeding effect
-// stages a pick shortly after mount, so this is the transient pre-seed state. A
-// supported staged entry's own kind wins.
+// No staged pick yet (`capturedEntry === null`): a git folder reflects the default (new worktree); a non-git
+// folder can only be Local.
 function folderRemovalFailureMessage(
   workspacePath: string,
   error: unknown,

@@ -18,10 +18,7 @@ interface PhaseMigrationRunnerProps {
   readonly phaseId: string;
 }
 
-/**
- * Owns every live migration runner independently from the five-surface LRU.
- * A slot can disappear or be evicted without affecting its exact mutation.
- */
+/** A slot can disappear or be evicted without affecting its exact mutation. */
 export function PhaseMigrationControllerHost(): ReactNode {
   const { openTabOrder, tabsById } = useEpicCanvasStore(
     useShallow((state) => ({

@@ -9,10 +9,8 @@ import {
 } from "@/lib/composer/tiptap-json-content";
 
 /**
- * The durable Agent reference syntax. `chat:` names a chat-interface Agent and
- * is the syntax already persisted in shipped messages - it must keep parsing
- * byte-for-byte. `terminal-agent:` is the new sibling for terminal-interface
- * Agents; no stored data is rewritten to adopt it.
+ * The durable Agent reference syntax.
+ * `chat:` names a chat-interface Agent and is the syntax already persisted in shipped messages - it must keep parsing byte-for-byte.
  */
 describe("Agent reference tokens", () => {
   it("keeps parsing persisted chat-interface references unchanged", () => {
@@ -84,10 +82,7 @@ describe("Agent reference tokens", () => {
   });
 
   it("emits the contextType the protocol serializer switches on", () => {
-    // The GUI's string and the protocol enum are declared independently, and
-    // this is the exact hop where a Terminal-interface mention used to fall
-    // through to `default:` and reach the coding agent as a bare title with no
-    // agentId. Pin the seam from both ends.
+    // The GUI's string and the protocol enum are declared independently, and this is the exact hop where a Terminal-interface mention used to fall through to `default:` and reach the coding agent as a bare title with no agentId.
     const attachment = createLegacyMentionAttachment(
       "terminal-agent:epic-1/tui-9",
     );

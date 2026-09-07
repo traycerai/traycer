@@ -8,7 +8,6 @@ export interface UsageBreakdownToggleProps {
   readonly onChange: (groupBy: UsageBreakdownGroupBy) => void;
 }
 
-/** Model/Day toggle for the breakdown table - same anatomy as `UsageMetricToggle`. */
 export function UsageBreakdownToggle(
   props: UsageBreakdownToggleProps,
 ): ReactNode {

@@ -132,9 +132,5 @@ describe("/epics/$epicId phase migration gate", () => {
   });
 });
 
-// TODO(canvas-tab-groups): rewrite the route-level integration tests against
-// the new TileTabGroup data model. The previous suite asserted on
-// `activeTileId`, `splitTileInEpic`, `closeTileInEpic`, `findLeafByTileId`,
-// and `flattenLeaves` - all replaced by the tab/group action surface.
-// Re-add coverage for: `?focusArtifactId` opening as preview and canvas
-// restoration from the persisted `EpicCanvasState` shape.
+// TODO(canvas-tab-groups): rewrite against TileTabGroup. Cover ?focusArtifactId
+// preview open and EpicCanvasState restoration.

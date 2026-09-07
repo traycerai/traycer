@@ -68,35 +68,12 @@ const resolveSessionHostClient = vi.hoisted(
 );
 
 /**
- * Every `DurableStreamTransport` this suite's fake `openTransport` has ever
- * minted, in open order.
- *
- * THIS is the seam the whole file pins: the transport is opened by the fake
- * itself (counted here), never by a stream client.
- *
- * The fake was hand-rolled here, and the sibling `epic-session-provider.test.tsx`
- * had a stub that THREW instead - safe only because every one of its tests
- * overrode the stream factory and the provider short-circuited before the opener
- * ran. That override is gone, so every provider suite needs an opener that
- * ANSWERS, and they share this one rather than growing six copies of it. The
- * adapter-verdict reasoning that used to sit on `getMethodSupport` here moved
- * with it, to the member it describes.
+ * Transports this suite's fake `openTransport` minted, in open order. The transport is opened by the fake itself, never by a stream client.
  */
 const reprobeSpy = vi.hoisted(() => ({
   attachCalls: [] as unknown[],
   detachCount: 0,
-  /**
-   * The owner callbacks handed to `attachPlanRestrictedReprobe`, so a pin can
-   * FIRE one - the deadline coming due is the whole stimulus.
-   *
-   * An array rather than a `(() => void) | null` slot, and not for style: a
-   * pin resets the slot before mounting, and TypeScript's control flow then
-   * narrows the property to `null` for the rest of the test - so reading it
-   * back yields `null` and the guard that would recover it is a comparison
-   * between literal values, which `no-unnecessary-condition` refuses. An
-   * element read is not narrowed by the reset, and the repo's type rules
-   * leave no cast to reach for.
-   */
+  /** Owner callbacks as an array: a pin reset would narrow a scalar slot to null for the rest of the test. */
   fireCallbacks: [] as Array<() => void>,
 }));
 vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
@@ -221,11 +198,7 @@ async function mountSession(
 ): Promise<{
   handle: OpenEpicStoreHandle;
   unmount: () => void;
-  /**
-   * Every handle this mount has presented, in order - a GETTER because the
-   * interesting ones arrive after this function returns. One caller: the
-   * reprobe-rebuild pin, whose whole subject is the SECOND handle.
-   */
+  /** Presented handles in order, as a getter: the interesting one is the second, after this function returns. */
   handles: () => ReadonlyArray<OpenEpicStoreHandle>;
 }> {
   const seenHandles: OpenEpicStoreHandle[] = [];
@@ -260,11 +233,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     navigateMock.mockClear();
     __getOpenEpicRegistryForTests().disposeAll();
     resetAuth("signed-in", "alice@example.com");
-    // The cap's busy gate fails CLOSED while the agent-activity plane cannot
-    // vouch for "no agent is working" - every Epic reads busy, so nothing is
-    // prunable. The store's own default is `connecting`, which is exactly
-    // that state, so the prune case below needs the plane answering. This
-    // suite is about transports, not agents: no Epic here has working agents.
+    // Busy gate fails closed while the plane is connecting. The prune case
+    // needs the plane answering; no Epic here has working agents.
     __setAgentActivityPlaneAnsweringForTests();
   });
 
@@ -372,14 +342,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
   });
 
   it("attaches a plan-restricted reprobe to THIS session's client, and detaches it with the transport", async () => {
-    // Upstream gave every durable-transport owner a plan-denial reprobe by
-    // adding a parameter to `openOwnedDurableStreamClient`. This session does
-    // not use that helper - it multiplexes four typed clients over one socket,
-    // so it opens its transport directly - which means the merge that brought
-    // the feature in left it live for chat/terminal/worktree and silently
-    // absent for epics. Reconnecting the closed client itself cannot acquire
-    // the cache's controlled fresh session, so without this an epic denied by
-    // plan stays denied until the tab is reloaded.
+    // Epic opens its transport directly (not openOwnedDurableStreamClient), so
+    // plan-denial reprobe must be wired here or a denied epic stays denied until reload.
     reprobeSpy.attachCalls.length = 0;
     reprobeSpy.detachCount = 0;
 
@@ -403,15 +367,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
   });
 
   it("rebuilds the session when the attached reprobe fires on a clean epic", async () => {
-    // THE WIRE BETWEEN THE TWO HALVES, and pinned separately because neither
-    // half can see it. The pin above proves the reprobe is SUBSCRIBED;
-    // `store.test.ts`'s two arms prove the store's gate ANSWERS correctly.
-    // What sits between them is the provider callback, and it fills
-    // `reprobeHandle` AFTER subscribing - deliberately, since `onClosed` does
-    // not retro-fire and a negative-cache adoption can hand back an
-    // already-closed client. A slot left unfilled would leave both halves
-    // green while a plan-denied epic stayed denied until the tab was
-    // reloaded, which is exactly the absence this merge recovered.
+    // Fill reprobeHandle after subscribe: onClosed does not retro-fire, and a
+    // negative-cache adoption can return an already-closed client.
     reprobeSpy.attachCalls.length = 0;
     reprobeSpy.detachCount = 0;
     reprobeSpy.fireCallbacks.length = 0;
@@ -432,11 +389,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       await Promise.resolve();
     });
 
-    // A fresh session on a fresh transport. The denied one is RETIRED rather
-    // than left beside its replacement: marking the handle dead is what lets
-    // the acquire pass retire it, and without that mark the pass sees
-    // `current.hostId === targetHostId` and re-presents the same closed
-    // handle as `ready`.
+    // Mark the denied handle dead so acquire retires it. Without that mark
+    // it re-presents the closed handle as ready.
     await waitFor(() => {
       expect(transportRegistry.records.length).toBeGreaterThan(1);
     });
@@ -489,10 +443,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     const candidate = transportRegistry.records.at(1);
     if (candidate === undefined) throw new Error("expected repoint candidate");
 
-    // The candidate is discarded once the already-mounted handle wins the
-    // re-point effect is cleaned up; its transport close must retain the
-    // product trigger even though the provider is unmounted before a snapshot
-    // can commit the replacement.
+    // Discarded candidate's close must retain the product trigger even if the
+    // provider unmounts before snapshot commit.
     rendered.unmount();
     await waitFor(() => {
       expect(candidate.closeReasons).toEqual([
@@ -527,16 +479,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     expect(secondRecord.closeCount).toBe(1);
   });
 
-  // RETIRED AND REPLACED: this used to be "opens NOTHING when the stream
-  // factory is overridden for tests". Its subject no longer exists - the
-  // stream-factory override was deleted, because a factory built on MAIN
-  // cannot cross `postMessage` to a runtime living in the worker, and the
-  // provider branch serving it could only ever reach a throw.
-  //
-  // What replaces it is the property the deletion makes universal, and it is
-  // the stronger claim: there is no longer ANY path that opens a session
-  // without a transport, so "exactly one per session" holds unconditionally
-  // rather than "one, unless a test said otherwise".
+  // No path opens a session without a transport. The stream-factory override
+  // was deleted because a main-thread factory cannot postMessage to the worker.
   it("opens exactly one transport per session, with no opt-out path", async () => {
     const { handle } = await mountSession(
       "epic-transport-test",
@@ -548,11 +492,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
   });
 
   it("a revived session (dispose, then reacquire) gets a FRESH transport, never the disposed one", async () => {
-    // Sign-in identity change is a security boundary: the provider discards
-    // the previous session (`registry.release(..., "discard", ...)`, which
-    // disposes it - the sibling suite pins the resulting CLIENT close under
-    // this exact flow) and acquires a brand-new one for the new user, on the
-    // SAME still-mounted provider. No unmount/remount needed to revive it.
+    // Identity change discards the previous session and acquires a new one on
+    // the still-mounted provider. No remount.
     const seenHandles: OpenEpicStoreHandle[] = [];
     render(
       sessionBody("epic-transport-test", "epic-transport-test", (handle) => {
@@ -587,26 +528,15 @@ describe("<EpicSessionProvider /> transport ownership", () => {
   });
 
   it("closes the transport when construction THROWS before a handle exists", async () => {
-    // Every close in this suite so far runs off the handle - `dispose` and
-    // `detachTransport` are the only two paths to `closeSessionTransport`, and
-    // both are members of an object that construction has to finish producing.
-    // So a synchronous throw between opening the transport and returning that
-    // object leaked the socket with no reference anywhere that could close it:
-    // it went on dialling `host-a` for the life of the window.
-    //
-    // `new Worker` refused by the runtime or a CSP is the reachable trigger -
-    // it is the one call in that span that touches a browser primitive with
-    // its own policy - but the leak is a property of the WINDOW, so the fix
-    // and this pin are about the span rather than about the worker.
+    // A throw between opening the transport and returning the handle leaks the
+    // socket; close must cover that span, not only dispose/detach.
     const previousFactory = getEpicRuntimeWorkerFactoryOverride();
     __setEpicRuntimeWorkerFactoryForTests(() => {
       throw new Error("Worker construction blocked by the runtime");
     });
     try {
-      // The throw travels out of the acquire effect. Swallowed HERE and not in
-      // the provider: turning it into a caught, quiet failure would be a
-      // different change, and this pin is about the socket, not the
-      // presentation.
+      // Swallow the throw here, not in the provider. This pin is the socket,
+      // not the presentation.
       try {
         render(
           sessionBody("epic-worker-throws", "epic-worker-throws", () => {}),

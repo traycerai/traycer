@@ -91,12 +91,7 @@ describe("mintAttachGrantViaHttp", () => {
     const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
     expect(result).toMatchObject({ kind: "network-error" });
     if (result.kind === "network-error") {
-      // The thrown error's message survives - a DNS failure, a refusal and the
-      // mint timeout must not read identically. It survives in `context`, not
-      // in `detail`: a message is per-attempt text (it carries the address the
-      // attempt resolved), and `detail` is the dedup key. What discriminates
-      // those three in the key is the error class and the cause's `code`, which
-      // is what the fetch-throw dedup tests below pin.
+      // The thrown error's message survives - a dns failure, a refusal and the mint timeout must not read identically.
       expect(result.context).toContain("boom");
     }
   });
@@ -232,10 +227,8 @@ describe("mint failure detail", () => {
   });
 
   it("keeps the body OUT of the dedup key, so a varying body cannot defeat the throttle", async () => {
-    // `detail` is what `DialFailureLog` compares to decide whether anything
-    // changed. Two attempts against the same fault must produce the same
-    // `detail` even when the server tags each response differently - otherwise
-    // every retry reads as a cause change and the throttle is bypassed.
+    // `detail` is what `DialFailureLog` compares to decide whether anything changed.
+    // Two attempts against the same fault must produce the same `detail` even when the server tags each response differently - otherwise every retry reads as a cause change and the throttle is bypassed.
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () =>
@@ -259,11 +252,7 @@ describe("mint failure detail", () => {
   });
 
   it("keeps a per-attempt ADDRESS out of the dedup key on the fetch-throw path", async () => {
-    // The other half of the same rule, on the path that never reaches a
-    // response at all. `connect ECONNREFUSED 10.0.0.1:443` names the address
-    // THIS attempt resolved, so a multi-address endpoint (or a proxy pool)
-    // rotates it while the outage never changes - and a `detail` built from
-    // that message would read as a fresh cause on every single retry.
+    // The other half of the same rule, on the path that never reaches a response at all.
     const details = new Set<string>();
     const contexts: string[] = [];
     for (const address of ["10.0.0.1:443", "10.0.0.2:443", "10.0.0.3:443"]) {
@@ -285,7 +274,7 @@ describe("mint failure detail", () => {
     // One unchanged fault: one unchanged key.
     expect(details.size).toBe(1);
     expect([...details][0]).toContain("ECONNREFUSED");
-    // ...and the address is still REPORTED, just as context rather than as
+    // ...and the address is still reported, just as context rather than as
     // identity - so a reader can still see which endpoint refused.
     expect(contexts).toEqual([
       "fetch failed: connect ECONNREFUSED 10.0.0.1:443",
@@ -295,9 +284,7 @@ describe("mint failure detail", () => {
   });
 
   it("separates two DIFFERENT network faults, so the key is not stable-by-being-useless", async () => {
-    // Guards the obvious over-correction: collapsing every fetch throw to one
-    // constant would also dedup perfectly, and would hide a DNS failure
-    // turning into a refusal.
+    // Guards the obvious over-correction: collapsing every fetch throw to one constant would also dedup perfectly, and would hide a dns failure turning into a refusal.
     const refused = new Error("connect ECONNREFUSED 10.0.0.1:443");
     Object.assign(refused, { code: "ECONNREFUSED" });
     vi.stubGlobal(
@@ -327,10 +314,8 @@ describe("mint failure detail", () => {
   });
 
   it("stops READING an oversized body rather than buffering it to truncate it", async () => {
-    // The 200-character log cap is not a memory cap: `response.text()` would
-    // decode the whole body first, and a 5xx here enters the session's
-    // forever-retrying mint loop. This body never ends, so anything that
-    // buffers it to completion hangs here instead of returning.
+    // The 200-character log cap is not a memory cap: `response.text()` would decode the whole body first, and a 5xx here enters the session's forever-retrying mint loop.
+    // This body never ends, so anything that buffers it to completion hangs here instead of returning.
     const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
     let chunksPulled = 0;
     let cancelled = false;
@@ -360,10 +345,7 @@ describe("mint failure detail", () => {
   });
 
   it("decodes at most the cap even when ONE chunk exceeds it", async () => {
-    // The read loop only re-checks the budget between reads, so a single
-    // oversized chunk would be decoded whole — into a JS string, the expensive
-    // half — and the advertised cap would bound nothing. Counted at the
-    // decoder, which is the thing actually paying the cost.
+    // The read loop only re-checks the budget between reads, so a single oversized chunk would be decoded whole - into a JS string, the expensive half - and the advertised cap would bound nothing.
     const decodeSpy = vi.spyOn(TextDecoder.prototype, "decode");
     const oneHugeChunk = new TextEncoder().encode("x".repeat(1024 * 1024));
     let delivered = false;

@@ -2,24 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 
-/**
- * Geometry and open-focus contract for `chat-fork-dialog.tsx`.
- *
- * The dialog carries a title field, a harness picker, stacked workspace
- * controls and a notice stack - a stack taller than a phone viewport before a
- * soft keyboard is anywhere near it. Uncapped, a centre-translated `fixed`
- * dialog puts Fork past the bottom edge with nothing able to scroll to it.
- *
- * The structural guarantee, not pixels: the height cap is applied, the middle
- * region owns the scroll, and the footer sits outside that region so Fork
- * stays put while the form scrolls under it.
- *
- * Focus is the other half, and it is what decides whether a keyboard opens at
- * all. The title field is the first tabbable descendant, so Radix's own
- * open-autofocus takes it - free on a keyboard-driven machine, a summoned
- * software keyboard on a touch one. Both arms are pinned here because the
- * coarse arm is invisible on every developer's desktop.
- */
+/** Geometry and open-focus contract for `chat-fork-dialog.tsx`. The structural guarantee, not pixels: the height cap is applied, the middle region owns the scroll, and the footer sits outside that region so Fork stays put while the form scrolls under it. */
 
 const dialogMocks = vi.hoisted(() => ({
   createMutate: vi.fn(),
@@ -143,9 +126,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
-// The workspace controls are the tallest thing in the stack, and their own
-// geometry is not what this suite is about; a stand-in keeps the assertions
-// pointed at the dialog's three regions.
+// The workspace controls are the tallest thing in the stack, and their own geometry is not what this suite is about; a stand-in keeps the assertions pointed at the dialog's three regions.
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
@@ -196,12 +177,7 @@ function renderDialog(): void {
   );
 }
 
-/**
- * The global test shim answers every media query with `matches: false`, which
- * is the fine-pointer arm. This narrows the coarse-pointer query alone so the
- * rest of the app's queries keep the shim's answer, and the original is put
- * back afterwards so neither arm leaks into the next case.
- */
+/** The global test shim answers every media query with `matches: false`, which is the fine-pointer arm. This narrows the coarse-pointer query alone so the rest of the app's queries keep the shim's answer, and the original is put back afterwards so neither arm leaks into the next case. */
 const originalMatchMedia = window.matchMedia.bind(window);
 
 function stubCoarsePointer(coarse: boolean): void {
@@ -241,9 +217,7 @@ describe("<ChatForkDialog /> height cap and footer", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(dialog.className).toContain("max-h-[min(86dvh,calc(100dvh-2rem))]");
-    // Header / scroller / footer: the middle track is the only one allowed to
-    // take the leftover height, and `minmax(0,…)` is what lets it shrink below
-    // its content so the scroll can happen at all.
+    // Header / scroller / footer: the middle track is the only one allowed to take the leftover height, and `minmax(0,…)` is what lets it shrink below its content so the scroll can happen at all.
     expect(dialog.className).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
   });
 

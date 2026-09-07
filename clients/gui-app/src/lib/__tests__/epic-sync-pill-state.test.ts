@@ -262,9 +262,7 @@ describe("summarizeEpicWriteCommands", () => {
     });
   });
 
-  // A real bug fix on this branch: the old pill folded `writeCommands.length
-  // > 0` into divergence, so a committed-but-unacknowledged record pinned it
-  // to "Saving changes" for the rest of the session.
+  // A real bug fix on this branch: the old pill folded `writeCommands.length > 0` into divergence, so a committed-but-unacknowledged record pinned it to "Saving changes" for the rest of the session.
   it("counts a committed record as NOTHING, and the pill still reads synced with it present", async () => {
     const queue = makeQueue(
       () => Promise.resolve(committed("host-1")),
@@ -555,12 +553,7 @@ describe("deriveEpicSyncPillState", () => {
     });
   });
 
-  // `offlineChangesSavedLocally` is a deliberately unreachable member of the
-  // union: the aggregate dirty bit does not prove the newest bytes reached
-  // the host's own durable store, so the ladder always resolves that case to
-  // `offlineWithHostPending` instead. Pinned here so a future change that
-  // starts returning it has to be a deliberate decision, not a regression
-  // this suite let slide.
+  // `offlineChangesSavedLocally` is a deliberately unreachable member of the union: the aggregate dirty bit does not prove the newest bytes reached the host's own durable store, so the ladder always resolves that case to `offlineWithHostPending` instead.
   it("offlineChangesSavedLocally is never returned by any combination", () => {
     const combos = allCombinations();
     for (const inputs of combos) {

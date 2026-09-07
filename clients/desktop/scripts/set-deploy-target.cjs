@@ -2,16 +2,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-// Stamp the release-time values onto `clients/desktop/src/config.ts` for a
-// production build, then `--restore` back to the committed source defaults.
-// See ../../scripts/rewrite-config-target.cjs.
-//
-// The OSS build commits its production endpoints directly in source, so this
-// script stamps `environment`, `version`, the per-environment app identity
-// (app name / OAuth scheme / AppUserModelId), and the Sentry DSNs - the
-// per-build crash-reporting secrets sourced from the CI env
-// (TRAYCER_DESKTOP_SENTRY_DSN) so they never live in committed source (empty in
-// source / on --restore).
 
 const path = require("node:path");
 const {

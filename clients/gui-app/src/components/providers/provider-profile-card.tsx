@@ -18,10 +18,7 @@ interface ProviderProfileCardProps {
   readonly disabled: boolean;
 }
 
-/**
- * The edit-profile form body. Mutations and save orchestration live at the
- * dialog boundary so name and color commit together from one footer action.
- */
+/** The edit-profile form body. */
 export function ProviderProfileCard({
   profile,
   profiles,

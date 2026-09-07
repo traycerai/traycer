@@ -16,12 +16,7 @@ import { agentMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-/**
- * Resolves the directory entry for `hostId`, referentially stable across
- * renders (`useHostClientFor` requires a stable target). `null` for a local /
- * unknown host (which routes through the surrounding tile's client instead) or a host
- * absent from the directory.
- */
+/** Resolves the directory entry for `hostId`, referentially stable across renders (`useHostClientFor` requires a stable target). `null` for a local / unknown host (which routes through the surrounding tile's client instead) or a host absent from the directory. */
 function useStableHostEntry(hostId: string | null): HostDirectoryEntry | null {
   const list = useHostDirectoryList();
   return useMemo(() => {
@@ -53,12 +48,7 @@ function StopButtonShell(props: {
           type="button"
           variant="ghost"
           size="xs"
-          // NB: no `text-{color}` here. `cn`/tailwind-merge treats the custom
-          // `text-ui-xs` font-size token (from `size="xs"`) as a text-color class,
-          // so adding a real color class would win the conflict and silently drop
-          // the font size - leaving the button at the inherited (larger) size. The
-          // ghost variant already supplies the resting/hover colors, matching the
-          // sibling "Undo all" button.
+          // `cn`/tailwind-merge treats the custom `text-ui-xs` font-size token (from `size="xs"`) as a text-color class, so adding a real color class would win the conflict and silently drop the font size - leaving the button at the inherited (larger) size.
           className="shrink-0"
           disabled={props.disabled}
           onClick={props.onClick}
@@ -81,7 +71,6 @@ function StopButtonShell(props: {
   );
 }
 
-/** Renders the live button once we hold a client for a reachable host. */
 function ReachableStopButton(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly epicId: string;
@@ -118,14 +107,7 @@ function ReachableStopButton(props: {
   );
 }
 
-/**
- * Stops an agent on its OWN host. Agents on the surrounding tile's host use
- * the tile client; agents on another reachable host use a
- * transient client dialed to it; agents on an unreachable host render a
- * disabled button ("Runs on <device>") - visible but not actionable. The stop's
- * effect surfaces via the cross-host awareness working set, so no query
- * invalidation is needed.
- */
+/** Stops an agent on its OWN host. Agents on the surrounding tile's host use the tile client; agents on another reachable host use a transient client dialed to it; agents on an unreachable host render a disabled button ("Runs on <device>") - visible but not actionable. */
 export function AgentStopButton(props: {
   readonly epicId: string;
   readonly agentId: string;

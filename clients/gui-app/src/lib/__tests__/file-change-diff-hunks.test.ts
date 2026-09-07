@@ -41,9 +41,7 @@ describe("diffLineCountsFromContents memoization", () => {
   });
 
   it("diffs a given pair of revisions once, however many times it is asked", () => {
-    // Freshly built strings on every call, mirroring the panel: the host's
-    // accumulated changes are re-decoded per frame, so nothing upstream can
-    // memoize them by object identity.
+    // Freshly built strings on every call, mirroring the panel: the host's accumulated changes are re-decoded per frame, so nothing upstream can memoize them by object identity.
     const before = (): string =>
       ["line one", "line two", "line three"].join("\n");
     const after = (): string =>

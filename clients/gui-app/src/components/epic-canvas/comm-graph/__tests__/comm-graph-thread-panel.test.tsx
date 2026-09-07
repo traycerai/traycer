@@ -141,9 +141,7 @@ function renderPanel(events: ReadonlyArray<CommGraphEvent>): () => void {
   const onClose = vi.fn();
   const [edge] = aggregateCommGraphEdges(events, new Set(["a", "b"]));
   render(
-    // The app mounts one of these at its root (`traycer-app.tsx`), so the panel
-    // never renders without it in production - this supplies the real context
-    // to a panel rendered in isolation, it does not stub anything out.
+    // The app mounts one of these at its root (`traycer-app.tsx`), so the panel never renders without it in production - this supplies the real context to a panel rendered in isolation, it does not stub anything out.
     <TooltipProvider>
       <CommGraphThreadPanel
         edge={edge}
@@ -492,10 +490,7 @@ describe("CommGraphThreadPanel markdown bodies", () => {
   });
 
   it("renders a file link as visibly unresolvable, not as a dead link", async () => {
-    // Chat resolves these against its own worktree roots. This panel cannot -
-    // the path belongs to whichever agent sent it, on whichever host - so a
-    // live-looking anchor that silently swallows the click is the one thing it
-    // must not render.
+    // This panel cannot - the path belongs to whichever agent sent it, on whichever host - so a live-looking anchor that silently swallows the click is the one thing it must not render.
     renderPanel([
       event({
         id: 1,
@@ -536,17 +531,13 @@ describe("CommGraphThreadPanel markdown bodies", () => {
 });
 
 /**
- * BOTH endpoints in the heading are reachable, and they do different things
- * because the log supports different things: origin refs are receiver-side, so
- * only the receiver has an anchor to scroll to.
+ * BOTH endpoints in the heading are reachable, and they do different things because the log supports different things: origin refs are receiver-side, so only the receiver has an anchor to scroll to.
  */
 describe("CommGraphThreadPanel heading links", () => {
   const ROW = "comm-graph-detail-host-a-1";
 
   /**
-   * The scroll claim needs a real in-transcript anchor, not merely a jumpable
-   * row - `canJump` is also true for rows whose jump degrades to a plain tile
-   * open. These are the receiver-side origin fields the capture path writes.
+   * The scroll claim needs a real in-transcript anchor, not merely a jumpable row - `canJump` is also true for rows whose jump degrades to a plain tile open.
    */
   const ANCHORED = {
     originKind: "gui_message",
@@ -574,9 +565,7 @@ describe("CommGraphThreadPanel heading links", () => {
   });
 
   it("jumps the SENDER name to its own Sent-message card when resolvable", async () => {
-    // The endpoint readers reach for first. No captured anchor exists for the
-    // sender side, so the claim comes from the sender-jump capability (a
-    // projected GUI chat whose transcript can resolve the send at jump time).
+    // No captured anchor exists for the sender side, so the claim comes from the sender-jump capability (a projected GUI chat whose transcript can resolve the send at jump time).
     const handles = renderPanelWithSenderJump(
       [event({ id: 1, timestamp: 100, ...ANCHORED })],
       true,
@@ -637,10 +626,7 @@ describe("CommGraphThreadPanel heading links", () => {
   });
 
   it("puts an anchored NOTICE's scroll claim on the waiting sender's endpoint", async () => {
-    // A notice anchors in the DB SENDER's transcript (the waiting agent it
-    // was delivered to), which the reversed direction projection displays as
-    // the arrow's receiver. The claim must follow the anchor's chat, not a
-    // fixed side.
+    // The claim must follow the anchor's chat, not a fixed side.
     const handles = renderPanelWithHandles(
       [
         event({
@@ -705,10 +691,8 @@ describe("CommGraphThreadPanel heading links", () => {
   });
 
   it("opens a Notice row's idle agent plainly - it anchors on nothing", async () => {
-    // The idle agent (arrow's sender after the notice reversal) never WROTE
-    // this notice: the broker observed it going quiet. Nothing in its
-    // transcript is the row, so the endpoint is the same generic open a
-    // Created row's creator gets - it must not claim a landing.
+    // The idle agent (arrow's sender after the notice reversal) never WROTE this notice: the broker observed it going quiet.
+    // Nothing in its transcript is the row, so the endpoint is the same generic open a Created row's creator gets - it must not claim a landing.
     const handles = renderPanelWithHandles(
       [
         event({
@@ -732,9 +716,7 @@ describe("CommGraphThreadPanel heading links", () => {
 
   it("claims no scroll on an anchor-less row - the tile opens, honestly", async () => {
     // A jumpable row whose origin was never captured (every notice today).
-    // Its jump would degrade to a plain tile open, so labeling the endpoint
-    // "scroll to this message" would promise a landing that never happens -
-    // the exact live symptom this pins: click, no scroll, no highlight.
+    // Its jump would degrade to a plain tile open, so labeling the endpoint "scroll to this message" would promise a landing that never happens - the exact live symptom this pins: click, no scroll, no highlight.
     const handles = renderPanelWithHandles(
       [event({ id: 1, timestamp: 100 })],
       true,
@@ -759,11 +741,6 @@ describe("CommGraphThreadPanel heading links", () => {
     expect(handles.onJump).not.toHaveBeenCalled();
   });
 
-  /**
-   * The heading's names are buttons now, so the collapse control had to leave
-   * the header: a button inside a button is invalid and unusable by assistive
-   * tech. The chevron is its own labelled control.
-   */
   it("keeps the collapse control out of the heading", async () => {
     renderPanelWithHandles(
       [event({ id: 1, timestamp: 100, messageText: "a\n\nb" })],

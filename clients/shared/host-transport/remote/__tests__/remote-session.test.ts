@@ -116,27 +116,13 @@ import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/clie
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
 
-// Integration-style tests for the session lifecycle edges a cold audit found
-// unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
-// case) must revalidate + redial rather than brick the session; a genuinely
-// terminal fatal must FIRE `onClosed` so owners can rebuild; and a ready
-// boundary re-reached after a drop must surface availability-recovered
-// evidence. The fake below implements the REAL wire: relay attach_ack, a real
-// responder-side Noise-NK handshake, and mux frame encode/decode - so the
-// session under test runs its full production connect path (only the network
-// and the grant/authn HTTP are faked).
-//
-// Timing: the session's reconnect backoff starts at 1s (config.ts), so every
-// recovery assertion waits with an explicit generous budget rather than
-// vitest's 1s `waitFor` / 5s per-test defaults.
+// Timing: the session's reconnect backoff starts at 1s (config.ts), so every recovery assertion waits with an explicit generous budget rather than vitest's 1s `waitFor` / 5s per-test defaults.
 
 const EMPTY_AD = new Uint8Array(0);
 const WAIT = { timeout: 10_000, interval: 50 } as const;
 const TEST_BUDGET_MS = 15_000;
 
-// Zero-method registries: the session's connect/open/fatal lifecycle under
-// test never dispatches a method, and an empty manifest is trivially
-// compatible with the fake host echoing an empty manifest back.
+// Zero-method registries: the session's connect/open/fatal lifecycle under test never dispatches a method, and an empty manifest is trivially compatible with the fake host echoing an empty manifest back.
 const emptyRpcRegistry: VersionedRpcRegistry = defineVersionedRpcRegistry({});
 const emptyStreamRegistry: VersionedStreamRpcRegistry =
   defineVersionedStreamRpcRegistry({});
@@ -222,13 +208,6 @@ function unauthorizedDetails(): FatalErrorDetails {
   };
 }
 
-/**
- * A retryable session-fatal, reused across the wake/forceReconnect suites to
- * arm/escalate the reconnect backoff without ever reaching the ready
- * boundary - the schedule resets ONLY there (`maybeReachReadyBoundary`), so a
- * script that lets the session go ready between failures would never build up
- * an escalation to wake against.
- */
 function retryableDropDetails(): FatalErrorDetails {
   return { ...unauthorizedDetails(), retryable: true };
 }
@@ -266,24 +245,12 @@ interface FakeConnection {
   readonly reassembler: ChunkReassembler;
   readonly seqByStream: Map<number, number>;
   /**
-   * Host-side H11 mirror (`RemoteClientSession.inboundSeqByStream`): the
-   * `seq` due next on each client stream. The production host closes the
-   * whole session with `SESSION_FRAME_SEQUENCE_MISMATCH` when an unchunked
-   * frame skips or repeats one, so the fake fails the same way - into
-   * `errors`, which the suites assert empty. Without it a client that
-   * retired a stream's counter and THEN sent the CLOSE (seq 0 where 1 was
-   * due) passed every test here and killed every real session on the first
-   * unsubscribe.
+   * Host-side H11 mirror (`RemoteClientSession.inboundSeqByStream`): the `seq` due next on each client stream.
+   * Without it a client that retired a stream's counter and then sent the close (seq 0 where 1 was due) passed every test here and killed every real session on the first unsubscribe.
    */
   readonly inboundSeqByStream: Map<number, number>;
   /**
-   * Host-side R-2 mirror (`r2-host-stream-tombstone`), enforced per
-   * connection exactly like `RemoteClientSession.terminalStreamIds`: once the
-   * fake sends a FATAL for a stream, every later CLIENT frame for that id -
-   * a SUBSCRIBE included - is dropped at ingest, and the harness refuses to
-   * send server frames for it. Without this the fake accepted a re-subscribe
-   * of a tombstoned id that the production host silently ignores, and a
-   * recovery test passed against a client that was in fact permanently dead.
+   * Without this the fake accepted a re-subscribe of a tombstoned id that the production host silently ignores, and a recovery test passed against a client that was in fact permanently dead.
    */
   readonly terminalStreamIds: Set<number>;
   /** Serializes async frame handling so mux ordering matches the wire. */
@@ -291,25 +258,12 @@ interface FakeConnection {
   closed: boolean;
 }
 
-/**
- * The relay + host end of the wire, scripted per test via `decideOpen`. Runs a
- * REAL responder Noise-NK handshake against the session's initiator and
- * answers each in-channel `open{bearer}` with an `openAck` or a session-level
- * `fatal`, recording every bearer presented.
- */
 class FakeRelayHost {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: FakeConnection[] = [];
   /** Every bearer presented across all `open` frames, in arrival order. */
   readonly openBearers: string[] = [];
-  /**
-   * The `clientIdentity` on every `open`, index-aligned with `openBearers`.
-   *
-   * Captured raw (`unknown`) rather than typed, deliberately: what a suite
-   * needs to prove is that the transport PUT IT ON THE WIRE, and a typed slot
-   * would let an absent field read as a shape mismatch rather than as the
-   * missing key it is.
-   */
+  /** The `clientIdentity` on every `open`, index-aligned with `openBearers`. */
   readonly openIdentities: unknown[] = [];
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
@@ -317,38 +271,30 @@ class FakeRelayHost {
   readonly subscribeSchemaVersions: unknown[] = [];
   /** streamId of every logical subscribe, index-aligned with `subscribeParams`. */
   readonly subscribeStreamIds: number[] = [];
-  /** Every `credits` value from a CREDIT control frame the client sent. */
+  /** Every `credits` value from a credit control frame the client sent. */
   readonly creditGrants: number[] = [];
-  /** Fired synchronously the instant a CREDIT frame is recorded - lets a test
-   * capture ordering evidence (e.g. "was the stream frame already delivered
-   * to the consumer?") at the exact tick the grant landed, not on a later poll. */
+  /**
+   * Fired synchronously the instant a credit frame is recorded - lets a test capture ordering evidence (e.g. "was the stream frame already delivered to the consumer?") at the exact tick the grant landed, not on a later poll.
+   */
   onCreditGrant: (() => void) | null = null;
   streamManifest = buildStreamManifest(
     emptyStreamRegistry,
     SERVES_EVERY_INSTALLED_MAJOR,
   );
-  /**
-   * The OPTIONAL rpc manifest the fake host advertises in `openAck`. Floor
-   * stays empty (matching the empty client registries here); optional
-   * methods are the interesting surface - they must publish to the
-   * negotiated-manifest registry and must NEVER fatal the session, however
-   * unknown to the client they are.
-   */
+  /** The optional rpc manifest the fake host advertises in `openAck`. */
   optionalRpcManifest: Record<string, { major: number; minor: number }> = {};
-  /** The FLOOR rpc manifest advertised in `openAck` (compat-checked). */
+  /** The floor rpc manifest advertised in `openAck` (compat-checked). */
   floorRpcManifest: Record<string, { major: number; minor: number }> = {};
   /**
-   * When false the `openAck` omits `optionalRpc` entirely - the shape a peer
-   * built before the floor/optional split would send. `sessionManifestsSchema`
-   * requires the field, so this exercises the parse-rejection path rather
-   * than a silently half-understood manifest.
+   * When false the `openAck` omits `optionalRpc` entirely - the shape a peer built before the floor/optional split would send.
+   * `sessionManifestsSchema` requires the field, so this exercises the parse-rejection path rather than a silently half-understood manifest.
    */
   sendOptionalRpc = true;
   /** The `capabilities` array this fake host advertises in `openAck` (T5). */
   openAckCapabilities: string[] = [];
-  /** Every mux frame decoded off the wire from the CLIENT, pre-reassembly - lets a test read `compressed` per frame exactly as the host would (T5). */
+  /** Every mux frame decoded off the wire from the client, pre-reassembly - lets a test read `compressed` per frame exactly as the host would (T5). */
   readonly clientFrames: MuxFrame[] = [];
-  /** Every REQUEST frame the client sent: method + on-wire version + params. */
+  /** Every request frame the client sent: method + on-wire version + params. */
   readonly unaryRequests: {
     method: string;
     schemaVersion: unknown;
@@ -356,10 +302,10 @@ class FakeRelayHost {
     idempotencyKey: string | null;
     streamId: number;
   }[] = [];
-  /** Answers the next REQUEST with this result payload. */
+  /** Answers the next request with this result payload. */
   unaryResult: unknown = { ready: true };
   /**
-   * When set, auto-RESPONSE carries this error envelope (and a null result)
+   * When set, auto-response carries this error envelope (and a null result)
    * instead of `unaryResult`. Used to pin `WORKTREE_BUSY` holder preservation.
    */
   unaryError: {
@@ -367,22 +313,10 @@ class FakeRelayHost {
     readonly message: string;
     readonly holders?: unknown;
   } | null = null;
-  /**
-   * When true, a REQUEST is recorded in `unaryRequests` but NOT auto-answered
-   * with a RESPONSE - lets a test inject its own terminal frame (e.g. a
-   * stream-scoped FATAL) for that request's streamId instead of racing the
-   * harness's own reply.
-   */
   skipUnaryAutoRespond = false;
-  /** streamId of every CLOSE frame the CLIENT sent, in arrival order. */
+  /** streamId of every close frame the client sent, in arrival order. */
   readonly closesSent: number[] = [];
-  /**
-   * Every client frame the R-2 ingest check dropped (streamId + mux frame
-   * type). The production host logs these; recording them here is what lets
-   * a test observe "the client DID send X, and the host deliberately ignored
-   * it" - e.g. the belt-and-braces CLOSE a client sends for a stream the
-   * host already condemned with a FATAL.
-   */
+  /** Every client frame the R-2 ingest check dropped (streamId + mux frame type). */
   readonly droppedTombstonedFrames: { streamId: number; type: number }[] = [];
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
@@ -392,9 +326,7 @@ class FakeRelayHost {
   /** Count of `relay-ping` keepalive frames received from the client. */
   pingCount = 0;
   /**
-   * When false, pings are counted but never answered - the half-open-socket
-   * shape an OS suspend leaves behind (sends go out, nothing comes back),
-   * which is what the wake-probe tests need the wire to look like.
+   * When false, pings are counted but never answered - the half-open-socket shape an OS suspend leaves behind (sends go out, nothing comes back), which is what the wake-probe tests need the wire to look like.
    */
   answerPings = true;
 
@@ -487,11 +419,7 @@ class FakeRelayHost {
   }
 
   /**
-   * Pushes a single logical STREAM_FRAME to the client through the REAL
-   * chunker (`OutboundChunkSource`, same as production `sendMux`) - a body
-   * over `BULK_CHUNK_SIZE_BYTES` spans many wire frames automatically. Used
-   * by the C1 per-frame credit-accounting regression to drive a transfer
-   * long enough to cross `FINE_INBOUND_CREDIT_GRANT_BATCH` mid-flight.
+   * Pushes a single logical STREAM_FRAME to the client through the real chunker (`OutboundChunkSource`, same as production `sendMux`) - a body over `BULK_CHUNK_SIZE_BYTES` spans many wire frames automatically.
    */
   async sendStreamFrame(
     streamId: number,
@@ -501,9 +429,8 @@ class FakeRelayHost {
   ): Promise<void> {
     const connection = this.liveConnection();
     if (connection.terminalStreamIds.has(streamId)) {
-      // The real host tears its resolver down with the FATAL, so no server
-      // frame for a terminal id can exist. Loud rather than dropped: a test
-      // reaching here is asserting recovery on an id that never recovered.
+      // The real host tears its resolver down with the fatal, so no server frame for a terminal id can exist.
+      // Loud rather than dropped: a test reaching here is asserting recovery on an id that never recovered.
       throw new Error(
         `test sent a server frame for tombstoned stream ${streamId}`,
       );
@@ -517,21 +444,11 @@ class FakeRelayHost {
     });
   }
 
-  /**
-   * Sends a stream-scoped FATAL for `streamId` through the real chunker
-   * (`sendMux`, same path as `sendStreamFrame`) - lets a test simulate the
-   * host abandoning a pending unary request or a live subscription without
-   * ever answering it normally.
-   */
   async sendStreamFatal(
     streamId: number,
     details: FatalErrorDetails,
   ): Promise<void> {
     const connection = this.liveConnection();
-    // Mirrors `RemoteClientSession`: the host marks the stream terminal
-    // whenever it sends a FATAL - retryable or not - and its ingest drops
-    // every later client frame for the id, so a client re-open must arrive
-    // under a fresh id to be heard.
     connection.terminalStreamIds.add(streamId);
     connection.inboundSeqByStream.delete(streamId);
     await this.sendMux(connection, {
@@ -544,11 +461,7 @@ class FakeRelayHost {
   }
 
   /**
-   * Sends a stream-scoped CLOSE for `streamId` - the host ending a stream
-   * NORMALLY (resolver finished, entity gone benignly). Mirrors
-   * `RemoteClientSession.handleStreamClose`: a host-side CLOSE is a terminal
-   * path exactly like a FATAL, so the id is tombstoned here too and every
-   * later client frame for it is dropped at ingest.
+   * Sends a stream-scoped close for `streamId` - the host ending a stream normally (resolver finished, entity gone benignly).
    */
   async sendStreamClose(streamId: number, reason: string): Promise<void> {
     const connection = this.liveConnection();
@@ -563,15 +476,6 @@ class FakeRelayHost {
     });
   }
 
-  /**
-   * Noise-encrypts one already-built `EncodeMuxFrameInput` WITHOUT delivering
-   * it - lets a test build several chunk sequences by hand, encrypt them in
-   * whatever order it chooses (the Noise send counter is reserved
-   * synchronously per call, so sequential `await`s here still produce a
-   * strictly increasing, decryptable counter sequence), and then hand the
-   * sealed bytes to `deliverToClient` in an INTERLEAVED order that differs
-   * from a naive "one sequence at a time" send.
-   */
   async encryptFrame(input: EncodeMuxFrameInput): Promise<Uint8Array> {
     const connection = this.liveConnection();
     const noise = connection.noise;
@@ -581,12 +485,6 @@ class FakeRelayHost {
     return noise.encrypt(encodeMuxFrame(input), EMPTY_AD);
   }
 
-  /**
-   * Hands one already-Noise-sealed frame straight to the client's socket
-   * `onmessage` - the same call `deliverBinary` makes internally, exposed so
-   * a test can fire several of these back-to-back with NO await between
-   * them, matching production `onData`'s fire-and-forget per-message entry.
-   */
   deliverToClient(bytes: Uint8Array): void {
     this.deliverBinary(this.liveConnection(), bytes);
   }
@@ -634,14 +532,10 @@ class FakeRelayHost {
     }
     const muxBytes = await connection.noise.decrypt(data, EMPTY_AD);
     const frame = decodeMuxFrame(muxBytes);
-    // Recorded BEFORE the tombstone drop below: `clientFrames` is what the
-    // CLIENT put on the wire, and a frame the host then drops was still sent.
-    // Folding the drop in first would silently shrink the frame/compression
-    // accounting the transfer assertions read.
+    // Recorded before the tombstone drop below: `clientFrames` is what the client put on the wire, and a frame the host then drops was still sent.
+    // Folding the drop in first would silently shrink the frame/compression accounting the transfer assertions read.
     this.clientFrames.push(frame);
-    // R-2 ingest drop, same placement as the production host's `feedInbound`:
-    // BEFORE `accept()`, so a tombstoned id can neither seed a fresh
-    // reassembler accumulator nor smuggle a SUBSCRIBE through to the handler.
+    // R-2 ingest drop, same placement as the production host's `feedInbound`: before `accept()`, so a tombstoned id can neither seed a fresh reassembler accumulator nor smuggle a subscribe through to the handler.
     if (connection.terminalStreamIds.has(frame.streamId)) {
       this.droppedTombstonedFrames.push({
         streamId: frame.streamId,
@@ -649,9 +543,7 @@ class FakeRelayHost {
       });
       return;
     }
-    // H11 mirror, same placement and predicate as the production host's
-    // `feedInbound`: after the tombstone drop, before `accept()`, unchunked
-    // frames only (chunk sequences are ordered by the reassembler itself).
+    // H11 mirror, same placement and predicate as the production host's `feedInbound`: after the tombstone drop, before `accept()`, unchunked frames only (chunk sequences are ordered by the reassembler itself).
     const expectedSeq = connection.inboundSeqByStream.get(frame.streamId);
     if (
       !frame.chunked &&
@@ -736,9 +628,7 @@ class FakeRelayHost {
     this.openBearers.push(bearer);
     this.openIdentities.push(message.json?.clientIdentity);
     if (this.stallOpens) {
-      // Freeze this attempt mid-flight (the session sits in its opening
-      // phase, its own phase timer pending) until the test releases it -
-      // the window the forced-intent ordering tests need to aim into.
+      // Freeze this attempt mid-flight (the session sits in its opening phase, its own phase timer pending) until the test releases it - the window the forced-intent ordering tests need to aim into.
       this.stalledOpens.push({ connection, bearer, openIndex });
       return;
     }
@@ -832,7 +722,6 @@ class FakeRelayHost {
   }
 }
 
-/** One recorded call to a `TransportEvidenceReporter` method, keyed by name. */
 type RecordedEvidenceCall =
   | {
       readonly method: "sessionEstablished";
@@ -887,11 +776,9 @@ type RecordedEvidenceCall =
       readonly expiresAt: number | null;
     };
 
-/**
- * Records every call a transport makes into a `TransportEvidenceReporter`, in
- * arrival order, so a test can assert on sequences and per-method counts
- * rather than only on the latest call (the shape a plain `vi.fn` gives).
- */
+    /**
+     * Records every call a transport makes into a `TransportEvidenceReporter`, in arrival order, so a test can assert on sequences and per-method counts rather than only on the latest call (the shape a plain `vi.fn` gives).
+     */
 class RecordingEvidence implements TransportEvidenceReporter {
   readonly calls: RecordedEvidenceCall[] = [];
 
@@ -1048,10 +935,6 @@ describe("RemoteSession client identity", () => {
   it(
     "sends the configured identity on the session open frame, and again on every redial",
     async () => {
-      // The redial half is the part worth driving rather than reasoning
-      // about: each attach re-authenticates and is therefore re-admitted from
-      // scratch, so an identity sent only on the first `open` would leave
-      // every reconnect looking like a legacy client to a floored host.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       relay.decideOpen = (_bearer, openIndex) =>
@@ -1116,11 +999,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
   it(
     "publishes the readiness DOWN edge when a READY session takes an UNAUTHORIZED fatal - the one drop that used to skip it",
     async () => {
-      // `handleUnauthorizedSessionFatal` was the only `dropConnection` caller
-      // without a `syncReadinessLatch()`, so `subscribeReadinessLost` never
-      // fired and `hasReadyRemoteSession` held a stale `true` for the whole
-      // revalidate-and-backoff window - the class that subscription exists to
-      // close. The sync now lives in `dropConnection` itself.
+      // The sync now lives in `dropConnection` itself.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const auth: StreamAuthRevalidator = {
@@ -1139,15 +1018,13 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(lostEvents).toBe(0);
 
-        // A session-level UNAUTHORIZED on an already-READY session (a
+        // A session-level unauthorized on an already-ready session (a
         // mid-session credential rejection), not an open-frame rejection.
         await relay.sendStreamFatal(
           SESSION_CONTROL_STREAM_ID,
           unauthorizedDetails(),
         );
-        // The DOWN edge fires with the drop (the frame is delivered
-        // asynchronously through the relay); the redial that follows reaches
-        // a new ready boundary on its own and emits no second edge.
+        // The down edge fires with the drop (the frame is delivered asynchronously through the relay); the redial that follows reaches a new ready boundary on its own and emits no second edge.
         await vi.waitFor(() => expect(lostEvents).toBe(1), WAIT);
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(lostEvents).toBe(1);
@@ -1164,7 +1041,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("expired-token", "user-1");
       // The host rejects the stale bearer exactly the way the production host
-      // does at a wake-time re-attach: a session-level FATAL{UNAUTHORIZED}.
+      // does at a wake-time re-attach: a session-level fatal{unauthorized}.
       relay.decideOpen = (bearer) =>
         bearer === "fresh-token"
           ? { kind: "ack" }
@@ -1223,7 +1100,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
-        // Terminal BECAUSE the revalidation said so - the recovery path ran
+        // Terminal because the revalidation said so - the recovery path ran
         // exactly once and stopped, rather than never being consulted.
         expect(revalidateCalls).toBe(1);
         expect(closedEvents).toBe(1);
@@ -1251,13 +1128,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
             }
           : { kind: "ack" };
       const revalidate = vi.fn(() => Promise.resolve("rotated" as const));
-      // A RECORDING reporter, not `NO_TRANSPORT_EVIDENCE`. This test modelled
-      // the exact trigger shape for a real classification defect and could not
-      // see it, because an inert reporter records nothing to assert on: the
-      // session reconnected correctly the whole time while filing a confirmed
-      // refusal against a host that was answering. A test that drives the
-      // right scenario through a blind instrument reads as coverage and is
-      // not.
+      // A recording reporter, not `NO_TRANSPORT_EVIDENCE`.
       const recorder = new RecordingEvidence();
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, {
@@ -1272,14 +1143,10 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         expect(revalidate).not.toHaveBeenCalled();
         expect(relay.errors).toEqual([]);
 
-        // THE CLASSIFICATION: a retryable UNAUTHORIZED is the credential plane
-        // failing in front of a live host. It must never be recorded as a
-        // confirmed refusal - three of those reach the death streak and fail
-        // the window away from a host that never stopped answering.
+        // The classification: a retryable unauthorized is the credential plane failing in front of a live host.
+        // It must never be recorded as a confirmed refusal - three of those reach the death streak and fail the window away from a host that never stopped answering.
         expect(recorder.callsNamed("reportDialRefusal")).toEqual([]);
-        // The control, so the empty set above is a real exclusion rather than
-        // a reporter that was never called at all: the drop WAS reported, as
-        // indeterminate, against this host.
+        // The control, so the empty set above is a real exclusion rather than a reporter that was never called at all: the drop was reported, as indeterminate, against this host.
         expect(
           recorder.callsNamed("reportDialIndeterminate").map((c) => c.hostId),
         ).toEqual(["host-1"]);
@@ -1293,12 +1160,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
   it(
     "treats a SYNCHRONOUSLY thrown revalidation as transient, not an unhandled rejection",
     async () => {
-      // `revalidateForReconnect` is typed to RETURN a promise, but nothing stops
-      // an implementation throwing before it returns one. Called bare, that
-      // throw skips the `.catch` that maps a failed revalidation to
-      // "network-error" and the `finally` that clears the budget timer, then
-      // escapes the `void`-discarded recovery task — an unhandled rejection,
-      // with the session parked in "reconnecting" and no redial armed.
+      // `revalidateForReconnect` is typed to return a promise, but nothing stops an implementation throwing before it returns one.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("stale-token", "user-1");
       let opens = 0;
@@ -1344,12 +1206,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
   it(
     "closes cleanly when the consumer wired NO revalidator at all (not just null)",
     async () => {
-      // `auth` is required by the type, but untyped consumers (the connect-path
-      // E2E harness, ad-hoc probes) can omit it entirely. An `undefined`
-      // sliding past a `!== null` check calls `.revalidateForReconnect()` on
-      // nothing, and the TypeError lands in a floating promise on the reconnect
-      // path — the session dies as an unhandled rejection instead of closing
-      // with the host's own UNAUTHORIZED reason.
+      // `auth` is required by the type, but untyped consumers (the connect-path E2E harness, ad-hoc probes) can omit it entirely.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("dead-token", "user-1");
       relay.decideOpen = () => ({
@@ -1362,7 +1219,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
       };
       process.on("unhandledRejection", onUnhandled);
 
-      // Build with the property ABSENT, exactly as an untyped caller would.
+      // Build with the property absent, exactly as an untyped caller would.
       const options = buildSessionOptions(relay, lease, null);
       delete (options as { auth?: unknown }).auth;
       const session = new RemoteSession(options);
@@ -1413,7 +1270,7 @@ describe("RemoteSession terminal close notification", () => {
           () => expect(streamClient.isClosed()).toBe(true),
           WAIT,
         );
-        // The auth hook is for UNAUTHORIZED only - an INCOMPATIBLE fatal must
+        // The auth hook is for unauthorized only - an incompatible fatal must
         // stay terminal and must not spend a revalidation.
         expect(closedEvents).toBe(1);
         expect(revalidate).not.toHaveBeenCalled();
@@ -1452,12 +1309,7 @@ describe("RemoteSession relay policy kills", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        // MUST clear before the kill. The ready boundary arms the ladder
-        // probation timer at RECONNECT_STABLE_RESET_MS, which is the same
-        // 30_000 as RECONNECT_MAX_BACKOFF_MS - so without this the assertion
-        // below is satisfied by that timer no matter what the backoff
-        // scheduled, and it passed for months against a redial that was
-        // actually armed at 16s.
+        // Must clear before the kill.
         setTimeoutSpy.mockClear();
 
         relay.sendRelayKill(controlType, "policy_violation");
@@ -1528,9 +1380,7 @@ describe("RemoteSession relay policy kills", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        // Same constant collision as the arm above - clear, or the cap
-        // assertion is answered by the probation timer rather than by the
-        // redial this test is about.
+        // Same constant collision as the arm above - clear, or the cap assertion is answered by the probation timer rather than by the redial this test is about.
         setTimeoutSpy.mockClear();
 
         relay.sendRelayKill(controlType, "future_reason");
@@ -1632,9 +1482,7 @@ describe("RemoteSession availability-recovered evidence", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        // The clean first open IS evidence: queries that raced this dial have
-        // already errored pre-send and this is their only automatic refetch
-        // signal (the 15-20s stranded Providers card). Exactly one emission.
+        // The clean first open IS evidence: queries that raced this dial have already errored pre-send and this is their only automatic refetch signal (the 15-20s stranded Providers card).
         expect(recoveredEvents).toBe(1);
 
         relay.dropCurrentConnection();
@@ -1663,22 +1511,12 @@ describe("RemoteSession reconnect ladder accounting", () => {
     jitterPin.mockRestore();
   });
 
-  // `RECONNECT_STABLE_RESET_MS` and `RECONNECT_MAX_BACKOFF_MS` are BOTH
-  // 30_000, and the ready boundary arms the former. Any assertion that "the
-  // backoff was the cap" which does not first clear the spy is therefore
-  // satisfied by the probation timer regardless of what the backoff actually
-  // scheduled - which is why the arms below clear before acting.
+  // `RECONNECT_STABLE_RESET_MS` and `RECONNECT_MAX_BACKOFF_MS` are both 30_000, and the ready boundary arms the former.
 
   it(
     "cancels the ladder-reset probation timer on the host_detached edge",
     async () => {
-      // `host_detached` does NOT run through `handleConnectionLost`, so it is
-      // the one loss edge that never reached the funnel's
-      // `clearStableResetTimer`. Left running, the probation timer counts a
-      // host that is ABSENT as sustained health and resets `reconnectAttempt`
-      // to 0 - so the full reconnect that `host_attached` then triggers is
-      // handed the immediate rung, which is precisely the flapping-host
-      // hammering the probation window exists to prevent.
+      // `host_detached` does not run through `handleConnectionLost`, so it is the one loss edge that never reached the funnel's `clearStableResetTimer`.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = buildSession(relay, lease, null);
@@ -1688,9 +1526,7 @@ describe("RemoteSession reconnect ladder accounting", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        // Premise: exactly one probation timer is armed, at the ready
-        // boundary. If this ever picks up a second 30s timer the handle
-        // assertion below would be testing the wrong one.
+        // Premise: exactly one probation timer is armed, at the ready boundary.
         const armed = setTimeoutSpy.mock.results
           .filter(
             (_result, index) =>
@@ -1715,24 +1551,10 @@ describe("RemoteSession reconnect ladder accounting", () => {
   it(
     "cancels the ladder-reset probation timer when an UNAUTHORIZED session fatal drops a ready session",
     async () => {
-      // The third loss edge that bypassed the funnel, and the one the
-      // `host_detached` fix above does NOT cover:
-      // `handleUnauthorizedSessionFatal` calls `dropConnection()` directly and
-      // then awaits credential revalidation. Revalidation is a network round
-      // trip against the auth plane, so the disconnected window is open-ended
-      // - and for as long as the probation timer runs through it, an ABSENT
-      // host is being counted as sustained health. If it expires there,
-      // `reconnectAttempt` returns to 0 and the redial that revalidation
-      // finally triggers is handed the immediate rung, hammering a host that
-      // has just refused this client's credential.
+      // The third loss edge that bypassed the funnel, and the one the `host_detached` fix above does not cover: `handleUnauthorizedSessionFatal` calls `dropConnection()` directly and then awaits credential revalidation.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
-      // Held open deliberately. Letting revalidation resolve would redial, and
-      // the next ready boundary calls `clearStableResetTimer` on its way to
-      // arming a fresh probation timer - which would satisfy the assertion
-      // below through the RECOVERY path rather than the drop, and the test
-      // would pass against the unfixed code. The bug lives entirely in the
-      // window this pause holds open.
+      // Held open deliberately.
       let releaseRevalidation: () => void = () => undefined;
       const auth: StreamAuthRevalidator = {
         revalidateForReconnect: () =>
@@ -1778,12 +1600,7 @@ describe("RemoteSession reconnect ladder accounting", () => {
   it(
     "a congestion kill after the session reached ready redials at the full cap, not one rung under it",
     async () => {
-      // `raiseReconnectBackoffToMax` solves for the ATTEMPT whose backoff is
-      // the cap, but post-ready `scheduleReconnect` reads rung `attempt - 1`
-      // (rung 0 is the immediate recovery redial). Ignoring that offset lands
-      // one rung short - 16s against a promised 30s - so a relay
-      // `policy_violation`, which is a congestion signal, redials an already
-      // overloaded relay at half the interval it claims to.
+      // `raiseReconnectBackoffToMax` solves for the attempt whose backoff is the cap, but post-ready `scheduleReconnect` reads rung `attempt - 1` (rung 0 is the immediate recovery redial).
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession(
@@ -1799,16 +1616,8 @@ describe("RemoteSession reconnect ladder accounting", () => {
 
         const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
         expect(delays).toContain(RECONNECT_MAX_BACKOFF_MS);
-        // The value the regression actually produces: rung 4 of the doubling
-        // ladder rather than rung 5. Derived from the constants so it tracks
-        // them if they move.
-        //
-        // It was written as `RECONNECT_MAX_BACKOFF_MS / 2` (15_000), which is
-        // not a rung of a ladder that doubles from 1_000 and therefore could
-        // never fail - the positive assertion above was carrying this test on
-        // its own. Same family as the 30_000 collision this file works around
-        // in three places: an assertion naming a plausible number rather than
-        // a reachable one.
+        // The value the regression actually produces: rung 4 of the doubling ladder rather than rung 5.
+        // It was written as `RECONNECT_MAX_BACKOFF_MS / 2` (15_000), which is not a rung of a ladder that doubles from 1_000 and therefore could never fail - the positive assertion above was carrying this test on its own.
         expect(delays).not.toContain(RECONNECT_INITIAL_BACKOFF_MS * 2 ** 4);
       } finally {
         session.close();
@@ -1821,15 +1630,8 @@ describe("RemoteSession reconnect ladder accounting", () => {
   it(
     "reports reattach duration from the moment the link was lost, including the backoff wait",
     async () => {
-      // The clock used to start at `beginConnect`, so the backoff the client
-      // imposed on ITSELF was excluded: a 1s wait plus a 5ms dial logged
-      // "reattached in 5ms" against 1005ms of real user downtime, and the
-      // budget the line exists to make falsifiable could not be checked.
-      //
-      // Two drops, because the FIRST post-ready drop takes the immediate rung
-      // (0ms) and would leave nothing to exclude. The second pays rung 0 of
-      // the ladder, `RECONNECT_INITIAL_BACKOFF_MS`, which is what must show up
-      // in the total.
+      // Two drops, because the first post-ready drop takes the immediate rung (0ms) and would leave nothing to exclude.
+      // The second pays rung 0 of the ladder, `RECONNECT_INITIAL_BACKOFF_MS`, which is what must show up in the total.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = buildSession(relay, lease, null);
@@ -1843,9 +1645,8 @@ describe("RemoteSession reconnect ladder accounting", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         infoSpy.mockClear();
-        // The ready boundary arms a 30s probation timer, but the rung under
-        // test is 1s. Clear first so this proves the reconnect timer itself,
-        // not a timer left by the preceding recovery.
+        // The ready boundary arms a 30s probation timer, but the rung under test is 1s.
+        // Clear first so this proves the reconnect timer itself, not a timer left by the preceding recovery.
         setTimeoutSpy.mockClear();
         relay.sendRelayKill("killed", "host_gone");
         expect(setTimeoutSpy).toHaveBeenCalledWith(
@@ -1860,13 +1661,7 @@ describe("RemoteSession reconnect ladder accounting", () => {
         expect(line).toBeDefined();
         const total = Number(/reattached in (\d+)ms/.exec(line ?? "")?.[1]);
         const wait = Number(/wait=(\d+)ms/.exec(line ?? "")?.[1]);
-        // `wait` is the difference between integer-millisecond `Date.now()`
-        // stamps, while the real timer may be armed from the event loop's
-        // clock sample taken one tick before the loss handler's stamp. A
-        // genuine 1,000ms timer can therefore log 999ms; one millisecond is
-        // the full possible skew because both printed stamps have 1ms units.
-        // The exact 1,000ms arm is asserted above, independently of this
-        // observation boundary.
+        // `wait` is the difference between integer-millisecond `Date.now()` stamps, while the real timer may be armed from the event loop's clock sample taken one tick before the loss handler's stamp.
         expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS - 1);
         expect(total).toBeGreaterThanOrEqual(wait);
       } finally {
@@ -1895,12 +1690,7 @@ describe("RemoteSession host_detached readiness evidence", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(recoveredEvents).toBe(1);
 
-        // Relay says the HOST's leg is gone. The session keeps its socket and
-        // its "ready" phase while it waits - but the scheduler is paused and
-        // nothing will drain it, so answering "ready" would be the standing
-        // lie R4-B5 kills (Settings rendering Online, off this session, for a
-        // host that is OFF - for up to the 15-min standing bound), and an
-        // enqueued unary would just die at the 30s timeout as NON-retryable.
+        // Relay says the host's leg is gone.
         relay.sendHostAttachment("host_detached");
         expect(session.isReady()).toBe(false);
         expect(session.isClosed()).toBe(false);
@@ -1913,9 +1703,7 @@ describe("RemoteSession host_detached readiness evidence", () => {
           );
         expect(error).toBeInstanceOf(RetryableTransportError);
 
-        // `host_attached` out of detached means the host rebuilt its Noise
-        // state - the session routes it through a FULL re-attach, whose ready
-        // boundary restores the evidence and fires availability recovery.
+        // `host_attached` out of detached means the host rebuilt its Noise state - the session routes it through a full re-attach, whose ready boundary restores the evidence and fires availability recovery.
         relay.sendHostAttachment("host_attached");
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(recoveredEvents).toBe(2);
@@ -1930,15 +1718,7 @@ describe("RemoteSession host_detached readiness evidence", () => {
   it(
     "retracts the AUTHORITY session on host_detached (the socket stays), and re-announces at the re-attach's ready boundary",
     async () => {
-      // The arm above pins the readiness LATCH (`isReady()`), which is what
-      // `hasReadyRemoteSession` reads. This one pins the other announcement
-      // this connection makes: the selection authority's session, whose
-      // presence suppresses every death verdict for the host and pins its
-      // lease `ready`. It used to survive the detach, reasoning from the
-      // latch - a different consumer - so a remote host whose box lost power
-      // read `ready` in every window, refusals against it were dropped, no
-      // corpse ceiling armed, and failover waited on the 15-minute standing
-      // bound (re-armed by every attach, so measured from the LAST attach).
+      // The arm above pins the readiness latch (`isReady()`), which is what `hasReadyRemoteSession` reads.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const recorder = new RecordingEvidence();
@@ -2118,9 +1898,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         );
         expect(relay.subscribeParams[0]).toEqual({ cursor: null });
 
-        // Advance application state while the first physical connection is
-        // live. Freezing the provider at stream creation makes this assertion
-        // fail with the original null cursor (the required ablation).
+        // Advance application state while the first physical connection is live.
         cursor = 42;
         relay.dropCurrentConnection();
         await vi.waitFor(
@@ -2139,11 +1917,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
 });
 
 describe("RemoteSession dial-failure logging", () => {
-  // These pin the WIRING, not the throttle itself (dial-failure-log.test.ts
-  // owns that): a failing connect loop must produce a line saying WHY, and a
-  // recovered session must say it recovered. The console is the sink on
-  // purpose - shared OSS transport code has no logger seam, and the desktop
-  // shell forwards renderer console output into its log file.
+  // These pin the wiring, not the throttle itself (dial-failure-log.test.ts owns that): a failing connect loop must produce a line saying why, and a recovered session must say it recovered.
 
   function sessionLines(
     calls: ReadonlyArray<ReadonlyArray<unknown>>,
@@ -2198,9 +1972,7 @@ describe("RemoteSession dial-failure logging", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("token", "user-1");
-      // A factory whose sockets die instantly with the browser's opaque
-      // 1006/empty close - exactly what a nonexistent relay hostname
-      // produced in the real outage.
+      // A factory whose sockets die instantly with the browser's opaque 1006/empty close - exactly what a nonexistent relay hostname produced in the real outage.
       const deadFactory: IStreamWebSocketFactory = {
         create: (): StreamWebSocketLike => {
           const socket = new FakeSocket(
@@ -2266,9 +2038,7 @@ describe("RemoteSession dial-failure logging", () => {
           });
         },
       });
-      // Matched on the recovery wording rather than the line prefix: the
-      // session writes other `[remote-session]` info lines (an early redial),
-      // and this suite is about the failure log's own recovery statement.
+      // Matched on the recovery wording rather than the line prefix: the session writes other `[remote-session]` info lines (an early redial), and this suite is about the failure log's own recovery statement.
       const recoveryLines = (): string[] =>
         infoSpy.mock.calls
           .map((call) => String(call[0]))
@@ -2276,9 +2046,8 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        // Reaching ready is not recovery. A connection that opens and dies
-        // seconds later reaches this boundary every time, so the log must not
-        // announce a recovery the connection has not yet earned.
+        // Reaching ready is not recovery.
+        // A connection that opens and dies seconds later reaches this boundary every time, so the log must not announce a recovery the connection has not yet earned.
         expect(recoveryLines()).toEqual([]);
 
         vi.advanceTimersByTime(RECONNECT_STABLE_RESET_MS + 1_000);
@@ -2300,12 +2069,8 @@ describe("RemoteSession dial-failure logging", () => {
   );
 
   it("rejects on a TERMINAL session as a non-retryable transport failure", async () => {
-    // "Not ready" covers two opposite futures. A dialing session will become
-    // ready; a closed one never will - `close()` is terminal and `start()`
-    // only re-dials from idle. Waiting on a closed session would park forever,
-    // and calling it retryable would make the retry wrapper spend its whole
-    // budget on a session that cannot answer (the Providers panel did exactly
-    // that). A CLOSED session must reject immediately, non-retryable.
+    // "Not ready" covers two opposite futures.
+    // A dialing session will become ready; a closed one never will - `close()` is terminal and `start()` only re-dials from idle.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     const session = buildSession(relay, lease, null);
@@ -2326,10 +2091,7 @@ describe("RemoteSession dial-failure logging", () => {
   it(
     "awaits the ready boundary and then sends while the session is still dialing",
     async () => {
-      // D5.2: a still-dialing session is no longer rejected pre-send. The
-      // call parks on the session's own phase machine and dispatches once the
-      // fake relay completes the attach - which is the contract every consumer
-      // that races a fresh remote session's first dial now depends on.
+      // D5.2: a still-dialing session is no longer rejected pre-send.
       const statusContract = defineRpcContract({
         method: "host.status",
         schemaVersion: { major: 1, minor: 0 } as const,
@@ -2392,9 +2154,7 @@ describe("RemoteSession dial-failure logging", () => {
   it(
     "rejects an in-flight sendUnary as retryable when the attach attempt fails mid-dial",
     async () => {
-      // A parked caller is riding THIS attach attempt: if the socket drops
-      // before ready, the wait must reject RetryableTransportError (pre-send,
-      // so the caller's retry license buys a fresh attach) rather than hang.
+      // A parked caller is riding this attach attempt: if the socket drops before ready, the wait must reject RetryableTransportError (pre-send, so the caller's retry license buys a fresh attach) rather than hang.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("token", "user-1");
       // Factory whose sockets die before the handshake can finish - same
@@ -2428,9 +2188,7 @@ describe("RemoteSession dial-failure logging", () => {
             () => null,
             (reason: unknown) => reason,
           );
-        // RetryableTransportError extends HostTransportFailureError - the
-        // pin is that the class carries the retry license (subclass), not a
-        // terminal transport failure alone.
+        // RetryableTransportError extends HostTransportFailureError - the pin is that the class carries the retry license (subclass), not a terminal transport failure alone.
         expect(error).toBeInstanceOf(RetryableTransportError);
       } finally {
         session.close();
@@ -2442,9 +2200,7 @@ describe("RemoteSession dial-failure logging", () => {
   it(
     "rejects an in-flight sendUnary as non-retryable when the session goes terminal mid-wait",
     async () => {
-      // A plan-restricted grant is terminal: a parked caller must get
-      // HostTransportFailureError (with fatal details), not hang forever and
-      // not inherit a retry license for a session that will never answer.
+      // A plan-restricted grant is terminal: a parked caller must get HostTransportFailureError (with fatal details), not hang forever and not inherit a retry license for a session that will never answer.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("token", "user-1");
       const session = new RemoteSession({
@@ -2475,11 +2231,7 @@ describe("RemoteSession dial-failure logging", () => {
   it(
     "rejects a parked sendUnary when the caller's authority aborts mid-dial",
     async () => {
-      // Parking on the phase machine only became safe once the caller could
-      // still get out. A cancelled TanStack read (or a replaced host binding)
-      // aborts its authority; without this the call stayed parked for the
-      // whole dial, holding the request coordinator's active slot, and then
-      // dispatched to the host anyway at the ready boundary.
+      // Parking on the phase machine only became safe once the caller could still get out.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("token", "user-1");
       const session = buildSession(relay, lease, null);
@@ -2516,13 +2268,7 @@ describe("RemoteSession dial-failure logging", () => {
   it(
     "does not dispatch a request whose authority aborted between the ready boundary and the send",
     async () => {
-      // The ordering the post-wait recheck exists for, and the one the abort
-      // LISTENER cannot catch. Queuing the abort as a microtask from the
-      // availability listener puts it ahead of the waiter's own continuation:
-      // `settleReadyWaiters(true)` resolves (and DISPOSES this waiter's abort
-      // listener) first, then the queued abort runs, and only then does
-      // `sendUnary` resume - already past every guard except the recheck
-      // immediately before the enqueue.
+      // The ordering the post-wait recheck exists for, and the one the abort listener cannot catch.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("token", "user-1");
       const session = buildSession(relay, lease, null);
@@ -2570,9 +2316,7 @@ describe("RemoteSession negotiated-manifest publication", () => {
     "publishes the openAck's merged rpc manifest at the ready boundary - optional methods included",
     async () => {
       const relay = new FakeRelayHost();
-      // Methods the CLIENT's registry does not know: exactly the shape of an
-      // optional (non-floor) method a newer host advertises - the case that
-      // silently failed closed when the remote path did not publish.
+      // Methods the client's registry does not know: exactly the shape of an optional (non-floor) method a newer host advertises - the case that silently failed closed when the remote path did not publish.
       relay.optionalRpcManifest = {
         "host.usage.summary": { major: 1, minor: 0 },
         "workspace.writeFile": { major: 2, minor: 1 },
@@ -2610,9 +2354,7 @@ describe("RemoteSession negotiated-manifest publication", () => {
         expect(getNegotiatedHostMethods("host-1")).toEqual(
           new Set(["host.usage.summary"]),
         );
-        // The host restarts on a newer binary advertising one more optional
-        // method; the client's re-attach after the drop must overwrite the
-        // stale entry without an app restart.
+        // The host restarts on a newer binary advertising one more optional method; the client's re-attach after the drop must overwrite the stale entry without an app restart.
         relay.optionalRpcManifest = {
           "host.usage.summary": { major: 1, minor: 0 },
           "host.newly.added": { major: 1, minor: 0 },
@@ -2634,10 +2376,8 @@ describe("RemoteSession negotiated-manifest publication", () => {
   );
 
   /**
-   * The version half of the same publish, mirroring `WsRpcClient`'s pin in
-   * `ws-rpc-client.test.ts`. A2/critique finding 5: without the exact
-   * negotiated `{major, minor}` per method, a same-major feature gate cannot
-   * tell a V12 host from a V11 host that silently degraded the request.
+   * The version half of the same publish, mirroring `WsRpcClient`'s pin in `ws-rpc-client.test.ts`.
+   * A2/critique finding 5: without the exact negotiated `{major, minor}` per method, a same-major feature gate cannot tell a V12 host from a V11 host that silently degraded the request.
    */
   it(
     "records the exact negotiated version from the session openAck",
@@ -2667,21 +2407,15 @@ describe("RemoteSession negotiated-manifest publication", () => {
 });
 
 describe("RemoteSession absent optional method", () => {
-  // A method the client knows and the host never advertised. Before the
-  // floor/optional split this was unreachable - the handshake fataled on the
-  // skew - so the remote path had no degrade at all and would have answered a
-  // generic RPC_ERROR. Callers key off E_HOST_UNSUPPORTED (the run-settings
-  // write queue suppresses exactly that code to fall back to legacy
-  // persist-on-next-send), so a generic error reads as a real failure.
+  // A method the client knows and the host never advertised.
+  // Before the floor/optional split this was unreachable - the handshake fataled on the skew - so the remote path had no degrade at all and would have answered a generic RPC_ERROR.
   const unsupportedV10 = defineRpcContract({
     method: "host.syntheticUnsupported",
     schemaVersion: { major: 1, minor: 0 } as const,
     requestSchema: z.object({}),
     responseSchema: z.object({ ok: z.boolean() }),
   });
-  // Typed as the erased `VersionedRpcRegistry` at the declaration (same shape
-  // as `emptyRpcRegistry` above) so the session can take it directly - the
-  // repo bans chained/`as unknown` assertions, and none is needed here.
+  // Typed as the erased `VersionedRpcRegistry` at the declaration (same shape as `emptyRpcRegistry` above) so the session can take it directly - the repo bans chained/`as unknown` assertions, and none is needed here.
   const unsupportedRegistry: VersionedRpcRegistry =
     defineFloorAwareVersionedRpcRegistry([] as const, {
       "host.syntheticUnsupported": {
@@ -2737,12 +2471,7 @@ describe("RemoteSession absent optional method", () => {
 });
 
 describe("RemoteSession fallback degrade version anchoring", () => {
-  // `degrade.to` names version 1.0 while the target's canonical is 1.1. The
-  // request handed to the fallback is ALREADY adapted to 1.0, so dispatching
-  // it at canonical would validate `{}` against 1.1's `{verbose}` schema and
-  // transform the response with the wrong contract. Re-entering the public
-  // `sendUnary` would do exactly that - hence the version-preserving internal
-  // dispatch this pins.
+  // `degrade.to` names version 1.0 while the target's canonical is 1.1.
   const statusV10 = defineRpcContract({
     method: "host.status",
     schemaVersion: { major: 1, minor: 0 } as const,
@@ -2759,9 +2488,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
     method: "host.syntheticSkewFallback",
     schemaVersion: { major: 1, minor: 0 } as const,
     requestSchema: z.object({ label: z.string() }),
-    // `detailSeen` is the DISCRIMINATOR: `detail` exists only on the 1.1
-    // response, so it is true exactly when the response was decoded (and
-    // upgraded) at canonical instead of at the declared 1.0.
+    // `detailSeen` is the discriminator: `detail` exists only on the 1.1 response, so it is true exactly when the response was decoded (and upgraded) at canonical instead of at the declared 1.0.
     responseSchema: z.object({ summary: z.string(), detailSeen: z.boolean() }),
   });
   const upgradeStatus = defineUpgradePath<typeof statusV10, typeof statusV11>({
@@ -2819,7 +2546,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
     "dispatches the fallback at degrade.to, not the target's canonical version",
     async () => {
       const relay = new FakeRelayHost();
-      // The host has the older 1.0 target on its FLOOR and NOT the
+      // The host has the older 1.0 target on its floor and NOT the
       // fallback's own (optional) method.
       relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
       relay.unaryResult = { ready: true };
@@ -2839,10 +2566,10 @@ describe("RemoteSession fallback degrade version anchoring", () => {
           undefined,
           false,
         );
-        // adaptResponse ran over the DECLARED 1.0 response shape: no `detail`
+        // adaptResponse ran over the declared 1.0 response shape: no `detail`
         // key, i.e. no canonical-version upgrade was applied on the way back.
         expect(result).toEqual({ summary: "ready", detailSeen: false });
-        // ONE request, sent as host.status anchored at the DECLARED 1.0 -
+        // ONE request, sent as host.status anchored at the declared 1.0 -
         // canonical 1.1 here would have rejected the adapted `{}` payload.
         expect(relay.unaryRequests).toHaveLength(1);
         expect(relay.unaryRequests[0]?.method).toBe("host.status");
@@ -2881,9 +2608,7 @@ describe("RemoteSession wake", () => {
       // backoff to actually be armed before waking it.
       await new Promise((resolve) => setTimeout(resolve, 300));
       session.wake("app-resumed", null);
-      // The collapsed redial is a sub-second draw, so a budget well under
-      // the armed tier's JITTERED minimum (8s halved, not 8s) is what makes
-      // this an honest check rather than a race with the schedule.
+      // The collapsed redial is a sub-second draw, so a budget well under the armed tier's jittered minimum (8s halved, not 8s) is what makes this an honest check rather than a race with the schedule.
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 2_500,
         interval: 50,
@@ -2910,9 +2635,7 @@ describe("RemoteSession wake", () => {
         session.start();
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
         session.wake("app-resumed", null);
-        // Shortly after the wake, no new dial has begun: the draw is bounded
-        // below by half the initial backoff, so an immediate dial is not a
-        // thing this can produce however loudly it is woken.
+        // Shortly after the wake, no new dial has begun: the draw is bounded below by half the initial backoff, so an immediate dial is not a thing this can produce however loudly it is woken.
         await new Promise((resolve) => setTimeout(resolve, 300));
         expect(relay.openBearers).toHaveLength(1);
         // It still redials, on roughly the schedule the failure armed.
@@ -2942,9 +2665,7 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      // Five wakes in a row - the app-switch-flapping case. The armed timer
-      // carries ONE collapse, spent by the first of these; the rest find it
-      // already spent and draw nothing, so no wake can outbid another.
+      // Five wakes in a row - the app-switch-flapping case.
       for (let i = 0; i < 5; i += 1) {
         session.wake(`app-resumed-${i}`, null);
       }
@@ -3005,9 +2726,7 @@ describe("RemoteSession wake", () => {
         session.start();
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
 
-        // `wake` only pokes the socket of an already-ready session - a
-        // connection that is mid-dial or sitting in backoff has nothing to
-        // poke, so no keepalive traffic should reach the wire from this call.
+        // `wake` only pokes the socket of an already-ready session - a connection that is mid-dial or sitting in backoff has nothing to poke, so no keepalive traffic should reach the wire from this call.
         session.wake("app-resumed", null);
         await new Promise((resolve) => setTimeout(resolve, 200));
         expect(relay.pingCount).toBe(0);
@@ -3070,19 +2789,14 @@ describe("RemoteSession wake", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
       session.wake("app-resumed", null);
-      // The woken redial (the third open) fails too - a real host outage,
-      // not a resumed one. If `wake` had reset the attempt counter, THIS
-      // failure would arm a fresh 1s backoff instead of continuing the
-      // escalation to 4s.
+      // The woken redial (the third open) fails too - a real host outage, not a resumed one.
+      // If `wake` had reset the attempt counter, this failure would arm a fresh 1s backoff instead of continuing the escalation to 4s.
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {
         timeout: 3_000,
         interval: 50,
       });
       const armedAt = Date.now();
-      // Give a reset-attempt bug every chance to fire: a restarted schedule
-      // arms the initial tier, whose jittered draw tops out at 1s, so its
-      // redial would already have landed well inside this window. The
-      // continued escalation's own jittered minimum sits above it.
+      // Give a reset-attempt bug every chance to fire: a restarted schedule arms the initial tier, whose jittered draw tops out at 1s, so its redial would already have landed well inside this window.
       await new Promise((resolve) => setTimeout(resolve, 1_800));
       expect(relay.openBearers).toHaveLength(3);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
@@ -3112,11 +2826,7 @@ describe("RemoteSession wake", () => {
         timeoutMs: 250,
         immediateRedialOnFailure: false,
       });
-      // The 250ms probe deadline fails the socket and the recovery redial
-      // (immediate rung - this session was stable) dials again, all well
-      // inside a second. Under the default 10s deadline nothing would have
-      // moved yet - this window is what proves the caller's deadline was the
-      // one armed.
+      // The 250ms probe deadline fails the socket and the recovery redial (immediate rung - this session was stable) dials again, all well inside a second.
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
         timeout: 1_200,
         interval: 25,
@@ -3144,10 +2854,8 @@ describe("RemoteSession wake", () => {
       });
       expect(relay.openBearers).toHaveLength(3);
       relay.answerPings = false;
-      // The burst a real resume produces: the mobile resume arms the probe
-      // with its policy, then a default-tuned trigger (`wake-online` crossing
-      // the same edge) joins the SAME in-flight probe. The joiner must not
-      // rewrite the policy the armed probe was started under.
+      // The burst a real resume produces: the mobile resume arms the probe with its policy, then a default-tuned trigger (`wake-online` crossing the same edge) joins the same in-flight probe.
+      // The joiner must not rewrite the policy the armed probe was started under.
       session.wake("app-resumed", {
         timeoutMs: 250,
         immediateRedialOnFailure: true,
@@ -3167,9 +2875,7 @@ describe("RemoteSession wake", () => {
   it("a failed probe with immediateRedialOnFailure skips the armed backoff rung", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
-    // Two failed opens escalate the ladder before the third is allowed to
-    // succeed, so the session reaches ready with its attempt counter NOT at
-    // zero (the stable reset needs 30s of sustained health it will not get).
+    // Two failed opens escalate the ladder before the third is allowed to succeed, so the session reaches ready with its attempt counter not at zero (the stable reset needs 30s of sustained health it will not get).
     relay.decideOpen = (_bearer, openIndex) =>
       openIndex < 2
         ? { kind: "fatal", details: retryableDropDetails() }
@@ -3187,10 +2893,8 @@ describe("RemoteSession wake", () => {
         timeoutMs: 250,
         immediateRedialOnFailure: true,
       });
-      // Probe fails at ~250ms; the loss funnel arms the escalated rung
-      // (jittered floor 1s), and the latch pulls that redial to NOW. The
-      // fourth open landing inside 900ms is therefore only reachable with
-      // the rung skipped: 250ms (probe) + a same-tick redial.
+      // Probe fails at ~250ms; the loss funnel arms the escalated rung (jittered floor 1s), and the latch pulls that redial to now.
+      // The fourth open landing inside 900ms is therefore only reachable with the rung skipped: 250ms (probe) + a same-tick redial.
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
         timeout: 900,
         interval: 25,
@@ -3218,10 +2922,7 @@ describe("RemoteSession wake", () => {
       });
       expect(relay.openBearers).toHaveLength(3);
       relay.answerPings = false;
-      // The online edge arms first: 10s deadline, no immediate redial. The
-      // measured resume lands second with STRONGER evidence - under
-      // first-poke-owns it would be discarded and the user would sit out the
-      // 10s arm; monotonic merge shortens the deadline and raises the policy.
+      // The online edge arms first: 10s deadline, no immediate redial.
       session.wake("network-online", null);
       session.wake("app-resumed", {
         timeoutMs: 250,
@@ -3253,7 +2954,7 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       expect(relay.openBearers).toHaveLength(3);
-      // First arm: immediate-redial policy, and the relay ANSWERS it.
+      // First arm: immediate-redial policy, and the relay answers it.
       const pingsBefore = relay.pingCount;
       session.wake("app-resumed", {
         timeoutMs: 3_000,
@@ -3264,10 +2965,8 @@ describe("RemoteSession wake", () => {
         WAIT,
       );
       await new Promise((resolve) => setTimeout(resolve, 100));
-      // Second arm, after the answer: NO immediate-redial policy, and this
-      // one fails. If retirement leaked the first arm's policy, the redial
-      // would land inside the rung's jittered floor - the exact leak the
-      // raise-only alternative to arm-scoped ownership would have had.
+      // Second arm, after the answer: NO immediate-redial policy, and this one fails.
+      // If retirement leaked the first arm's policy, the redial would land inside the rung's jittered floor - the exact leak the raise-only alternative to arm-scoped ownership would have had.
       relay.answerPings = false;
       session.wake("app-resumed-again", {
         timeoutMs: 250,
@@ -3307,10 +3006,8 @@ describe("RemoteSession wake", () => {
         immediateRedialOnFailure: true,
       });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      // The socket dies with an ORDINARY close (1006 server-drop), before
-      // the arm's own deadline. That close is negative wake-probe evidence
-      // all the same - the user is still watching - so it inherits the arm's
-      // policy rather than being reserved for the synthetic timeout tuple.
+      // The socket dies with an ordinary close (1006 server-drop), before the arm's own deadline.
+      // That close is negative wake-probe evidence all the same - the user is still watching - so it inherits the arm's policy rather than being reserved for the synthetic timeout tuple.
       relay.dropCurrentConnection();
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
         timeout: 900,
@@ -3321,10 +3018,8 @@ describe("RemoteSession wake", () => {
     } finally {
       session.close();
     }
-  }, 15_000); /**
-   * A one-method registry for the two `sendUnary` cases below, which need a
-   * real dispatchable method rather than the suite's empty registries.
-   */
+  }, 15_000);
+
   function statusRpcRegistry(): VersionedRpcRegistry {
     const statusContract = defineRpcContract({
       method: "host.status",
@@ -3368,10 +3063,7 @@ describe("RemoteSession wake", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // Demand alone earns nothing. The call parks on the attempt the
-      // backoff already owns; it does NOT hurry it. If arriving were enough,
-      // ambient polling reads would collapse the long tiers continuously and
-      // an unavailable host would be dialed in a loop.
+      // Demand alone earns nothing.
       const pending = session.sendUnary(
         "host.status",
         {},
@@ -3418,9 +3110,7 @@ describe("RemoteSession wake", () => {
       await expect(
         session.sendUnary("host.status", {}, null, null, undefined, false),
       ).rejects.toBeInstanceOf(RetryableTransportError);
-      // Still pre-send, so the caller keeps its retry license - and the
-      // failure it just proved has accelerated the NEXT redial rather than
-      // leaving it on the tier that failure escalated to.
+      // Still pre-send, so the caller keeps its retry license - and the failure it just proved has accelerated the next redial rather than leaving it on the tier that failure escalated to.
       const rejectedAt = Date.now();
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 2_500,
@@ -3491,15 +3181,11 @@ describe("RemoteSession wake", () => {
       });
       expect(relay.openBearers).toHaveLength(4);
 
-      // Lose the connection well inside the proving dwell. Reaching ready
-      // was not evidence this connection WORKS - a socket that opens and
-      // dies seconds later reaches that boundary every time - so the streak
-      // must still be at its escalated tier.
+      // Lose the connection well inside the proving dwell.
+      // Reaching ready was not evidence this connection works - a socket that opens and dies seconds later reaches that boundary every time - so the streak must still be at its escalated tier.
       session.requestSessionReconnect("forced-drop");
       await new Promise((resolve) => setTimeout(resolve, 2_000));
-      // Forgiving at the boundary would have armed a fresh sub-second
-      // backoff and redialed inside this window; the escalated tier (4-8s
-      // jittered) cannot have.
+      // Forgiving at the boundary would have armed a fresh sub-second backoff and redialed inside this window; the escalated tier (4-8s jittered) cannot have.
       expect(relay.openBearers).toHaveLength(4);
 
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
@@ -3514,20 +3200,8 @@ describe("RemoteSession wake", () => {
   }, 25_000);
 
   /**
-   * The two dwell cases below install fake timers BEFORE the session starts,
-   * and that ordering is the whole test.
-   *
-   * A fake-timer implementation does not adopt timers already scheduled
-   * against the real one, so switching over after the session has settled
-   * leaves the dwell timer running natively: `advanceTimersByTime` cannot fire
-   * it, and `clearTimeout` against it cannot be observed. Both cases then pass
-   * or fail for reasons unrelated to what they assert - the cancellation case
-   * in particular would pass whether or not the detach clears anything, which
-   * is the one outcome a regression must never have.
-   *
-   * `shouldAdvanceTime` keeps the clock moving on its own, so the real Noise
-   * handshake this harness performs still completes while the dwell stays
-   * under the test's control.
+   * The two dwell cases below install fake timers before the session starts, and that ordering is the whole test.
+   * Both cases then pass or fail for reasons unrelated to what they assert - the cancellation case in particular would pass whether or not the detach clears anything, which is the one outcome a regression must never have.
    */
   function useDwellControlledTimers(): void {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -3548,11 +3222,7 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
 
-      // The host's uplink goes away. This is the loss that keeps its socket
-      // and its Noise session, so nothing tears the connection down - yet
-      // the mux is carrying nothing and `isReady` says so. A dwell that ran
-      // to completion through this would pardon a streak on the strength of
-      // a connection that spent the whole window dead.
+      // The host's uplink goes away.
       relay.sendHostAttachment("host_detached");
       expect(session.isReady()).toBe(false);
       // Fires the dwell timer for real if the detach left it armed - which
@@ -3580,9 +3250,7 @@ describe("RemoteSession wake", () => {
         : { kind: "ack" };
     const session = buildSession(relay, lease, null);
     const wakeSpy = vi.spyOn(session, "wake");
-    // Built over an acquired view, as production does, so this also covers
-    // the view's ownership guard: a client whose consumer has released must
-    // not be able to hurry a session it no longer holds.
+    // Built over an acquired view, as production does, so this also covers the view's ownership guard: a client whose consumer has released must not be able to hurry a session it no longer holds.
     const identity: RemoteSessionIdentity = {
       hostId: "host-reconnect-all-sweep",
       userId: "user-1",
@@ -3604,9 +3272,7 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      // The client answers for its OWN session and nothing else - a session
-      // in backoff is not ready, whatever any other cached session for the
-      // host may be doing.
+      // The client answers for its own session and nothing else - a session in backoff is not ready, whatever any other cached session for the host may be doing.
       expect(streamClient.isReady()).toBe(false);
       streamClient.reconnectAll("wake-resume", {
         probeFirst: true,
@@ -3653,10 +3319,8 @@ describe("RemoteSession forceReconnect", () => {
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
       expect(relay.openBearers).toHaveLength(1);
       session.forceReconnect("user-retry");
-      // The drop is synchronous and the redial immediate - no probe window,
-      // no backoff draw. A `wake` on the same healthy session provably dials
-      // nothing (see the wake suite); this MUST dial, that is the contract
-      // difference.
+      // The drop is synchronous and the redial immediate - no probe window, no backoff draw.
+      // A `wake` on the same healthy session provably dials nothing (see the wake suite); this must dial, that is the contract difference.
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
         timeout: 800,
         interval: 25,
@@ -3686,10 +3350,8 @@ describe("RemoteSession forceReconnect", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
       session.forceReconnect("network-path-changed");
-      // A wake's collapse draw is bounded BELOW by 500ms (half the initial
-      // backoff); the forced redial is not a draw at all. Landing the fourth
-      // open inside 450ms is therefore only reachable through the forced
-      // path.
+      // A wake's collapse draw is bounded below by 500ms (half the initial backoff); the forced redial is not a draw at all.
+      // Landing the fourth open inside 450ms is therefore only reachable through the forced path.
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
         timeout: 450,
         interval: 10,
@@ -3739,17 +3401,13 @@ describe("RemoteSession forceReconnect", () => {
     try {
       session.start();
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-      // The iOS-unfreeze ordering: the resume/network event runs while the
-      // pre-suspend attach is still nominally in flight. The force can
-      // neither drop (nothing attached) nor hurry it - but it must not
-      // evaporate either.
+      // The iOS-unfreeze ordering: the resume/network event runs while the pre-suspend attach is still nominally in flight.
+      // The force can neither drop (nothing attached) nor hurry it - but it must not evaporate either.
       session.forceReconnect("network-path-changed");
       relay.stallOpens = false;
       const releasedAt = Date.now();
       await relay.releaseStalledOpens();
-      // The stalled attempt fails; without the retained intent the loss
-      // would arm the first rung (jittered floor 500ms). The retained force
-      // pulls exactly that wait to zero.
+      // The stalled attempt fails; without the retained intent the loss would arm the first rung (jittered floor 500ms).
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
         timeout: 400,
         interval: 10,
@@ -3777,9 +3435,7 @@ describe("RemoteSession forceReconnect", () => {
       relay.stallOpens = false;
       await relay.releaseStalledOpens();
       await new Promise((resolve) => setTimeout(resolve, 250));
-      // Still one open: a never-ready session's first failure arms the
-      // jittered initial rung (floor 500ms), which the forced arm above
-      // provably beat.
+      // Still one open: a never-ready session's first failure arms the jittered initial rung (floor 500ms), which the forced arm above provably beat.
       expect(relay.openBearers).toHaveLength(1);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
       expect(relay.errors).toEqual([]);
@@ -3791,10 +3447,6 @@ describe("RemoteSession forceReconnect", () => {
   it("a force during a stalled GRANT mint is spent when that pre-dial path fails - not only the loss funnel", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
-    // A grant provider the test releases by hand: first mint hangs until
-    // released and then FAILS (the pre-dial lander that schedules its
-    // reconnect directly, without ever reaching the connection-loss funnel);
-    // every later mint succeeds.
     let releaseFirstMint = (): void => undefined;
     const firstMint = new Promise<void>((resolve) => {
       releaseFirstMint = resolve;
@@ -3827,7 +3479,7 @@ describe("RemoteSession forceReconnect", () => {
       const releasedAt = Date.now();
       releaseFirstMint();
       // The failed mint arms the first rung (jittered floor 500ms); the
-      // retained force must pull that wait to zero from THIS lander too.
+      // retained force must pull that wait to zero from this lander too.
       await vi.waitFor(() => expect(mintIndex).toBe(2), {
         timeout: 400,
         interval: 10,
@@ -3854,7 +3506,7 @@ describe("RemoteSession forceReconnect", () => {
         mintIndex += 1;
         if (mintIndex === 1) {
           await firstMint;
-          // The awaited pre-socket path REJECTS - the `beginConnectGuarded`
+          // The awaited pre-socket path rejects - the `beginConnectGuarded`
           // catch lander, distinct from a structured `unavailable` result.
           throw new Error("grant fetch transport failure");
         }
@@ -3883,10 +3535,6 @@ describe("RemoteSession forceReconnect", () => {
   }, 10_000);
 
   it("a spent force skips ONE wait without pardoning the ladder - the next failure waits its escalated rung", async () => {
-    // Deterministic jitter: with `Math.random()` pinned at 0.5, the rungs
-    // are exact - rung 0 waits 750ms, rung 1 waits 1500ms - so the pardoning
-    // mutation cannot hide in the random tail (an un-stubbed [500ms, 1s)
-    // rung-0 draw can exceed a fixed probe window and stay green).
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3909,11 +3557,6 @@ describe("RemoteSession forceReconnect", () => {
         timeout: 400,
         interval: 10,
       });
-      // Its failure was UNFORCED, and the first failure already spent attempt
-      // #1 - so this wait is deterministically rung 1 = 1500ms. A helper that
-      // pardoned `reconnectAttempt` when spending the force would wait
-      // exactly rung 0 = 750ms instead, so the 1000ms probe below fails the
-      // mutant on every run, not merely on most draws.
       const secondFailureAt = Date.now();
       await new Promise((resolve) => setTimeout(resolve, 1_000));
       expect(relay.openBearers).toHaveLength(2);
@@ -3931,13 +3574,7 @@ describe("RemoteSession forceReconnect", () => {
   }, 15_000);
 
   it("the ready boundary retires an in-flight force even when the rung it would zero is NONZERO", async () => {
-    // The discriminating order for the ready-boundary clear: the trivially
-    // green version drops a rung-0 session, where a stale surviving intent
-    // only zeroes a wait that was already zero. Here the reattach that gets
-    // forced rides an ESCALATED ladder, reaches ready inside the survival
-    // window (no forgiveness), and then drops - so a stale intent for that
-    // generation would zero a deterministic 1500ms rung. Deleting the ready
-    // clear turns the probe below red.
+    // The discriminating order for the ready-boundary clear: the trivially green version drops a rung-0 session, where a stale surviving intent only zeroes a wait that was already zero.
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3949,7 +3586,7 @@ describe("RemoteSession forceReconnect", () => {
     const session = buildSession(relay, lease, null);
     try {
       session.start();
-      // Let the two failures land, then stall the THIRD generation mid-open.
+      // Let the two failures land, then stall the third generation mid-open.
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
         timeout: 8_000,
         interval: 50,
@@ -3968,9 +3605,7 @@ describe("RemoteSession forceReconnect", () => {
       // needs 30s), and the recorded force must be consumed here, unspent.
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-      // Drop inside the survival window: this loss belongs to generation 3 -
-      // the very generation the stale intent (if the ready clear were
-      // deleted) would match and zero.
+      // Drop inside the survival window: this loss belongs to generation 3 - the very generation the stale intent (if the ready clear were deleted) would match and zero.
       relay.dropCurrentConnection();
       const droppedAt = Date.now();
       // attempt=2, recovery offset 1 -> rung 1 is deterministically 1500ms.
@@ -4024,7 +3659,7 @@ describe("RemoteSession forceReconnect", () => {
     for (const outcome of ["network-error", "rotated"] as const) {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("token", "user-1");
-      // First open: UNAUTHORIZED (recoverable via the revalidator); later
+      // First open: unauthorized (recoverable via the revalidator); later
       // opens succeed.
       relay.decideOpen = (_bearer, openIndex) =>
         openIndex === 0
@@ -4037,7 +3672,7 @@ describe("RemoteSession forceReconnect", () => {
       const session = buildSession(relay, lease, {
         revalidateForReconnect: async () => {
           await revalidationHeld;
-          // "rotated" must present a DIFFERENT bearer than the rejected one
+          // "rotated" must present a different bearer than the rejected one
           // or the no-progress bound trips; rotate the lease in place.
           if (outcome === "rotated") {
             lease.rotate("token-rotated");
@@ -4048,7 +3683,7 @@ describe("RemoteSession forceReconnect", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-        // The revalidation is now in flight (the UNAUTHORIZED fatal dropped
+        // The revalidation is now in flight (the unauthorized fatal dropped
         // the connection first). A resume/network force lands here.
         await new Promise((resolve) => setTimeout(resolve, 100));
         session.forceReconnect("network-path-changed");
@@ -4112,11 +3747,9 @@ describe("RemoteSession forceReconnect", () => {
       session.forceReconnect("network-path-changed");
       relay.stallOpens = false;
       await relay.releaseStalledOpens();
-      // The forced generation SUCCEEDS - the intent is satisfied and consumed.
+      // The forced generation succeeds - the intent is satisfied and consumed.
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      // A later ordinary outage: the drop redials immediately (recovery
-      // rung), that redial fails, and the NEXT wait must be the ladder's -
-      // a stale surviving intent would zero it.
+      // A later ordinary outage: the drop redials immediately (recovery rung), that redial fails, and the next wait must be the ladder's - a stale surviving intent would zero it.
       relay.dropCurrentConnection();
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
       const failedAt = Date.now();
@@ -4151,10 +3784,7 @@ describe("RemoteSession forceReconnect", () => {
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
       expect(relay.openBearers).toHaveLength(2);
 
-      // The teardown was OUR decision, not host evidence: it must land as
-      // indeterminate and must not advance the confirmed-death streak. The
-      // provenance mutation (client-initiated -> host-transport-plane) turns
-      // exactly this assertion red.
+      // The teardown was our decision, not host evidence: it must land as indeterminate and must not advance the confirmed-death streak.
       expect(
         recorder.callsNamed("reportDialIndeterminate").length,
       ).toBeGreaterThan(0);
@@ -4178,11 +3808,8 @@ describe("RemoteSession openAck without optionalRpc", () => {
     "refuses a manifest missing the required optionalRpc rather than half-reading it",
     async () => {
       const relay = new FakeRelayHost();
-      // The pre-split frame shape. `sessionManifestsSchema` requires
-      // `optionalRpc`, so this is rejected at parse - it never reaches the
-      // floor compat check, and the merged legacy set is never mistaken for a
-      // floor. The session stays un-ready and retries rather than proceeding
-      // on a manifest it did not understand.
+      // The pre-split frame shape.
+      // `sessionManifestsSchema` requires `optionalRpc`, so this is rejected at parse - it never reaches the floor compat check, and the merged legacy set is never mistaken for a floor.
       relay.sendOptionalRpc = false;
       const lease = new MutableBearerLease("token", "user-1");
       const session = buildSession(relay, lease, null);
@@ -4281,11 +3908,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
   it(
     "refuses to dispatch a replay this connection cannot key",
     async () => {
-      // The legacy arm of the matrix above proves this same openAck strips the
-      // key and sends anyway. That is correct for a FIRST attempt - nothing was
-      // dispatched, so an unkeyed send is a first send. It is a second
-      // undeduplicated execution once an earlier attempt has gone out keyed,
-      // which is exactly the state `replayMustBeKeyed` names.
+      // The legacy arm of the matrix above proves this same openAck strips the key and sends anyway.
       const relay = new FakeRelayHost();
       relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
       relay.openAckCapabilities = [];
@@ -4309,10 +3932,8 @@ describe("RemoteSession unary idempotency negotiation", () => {
         // Ambiguous, never retryable: the attempt this one replays may already
         // have committed, so licensing a third would compound it.
         expect(error).not.toBeInstanceOf(RetryableTransportError);
-        // The refusal is the assertion. The relay auto-responds here (no
-        // `skipUnaryAutoRespond`), so a dispatched frame would have RESOLVED
-        // the call rather than reaching either check above - and this pins
-        // that nothing reached the wire even so.
+        // The refusal is the assertion.
+        // The relay auto-responds here (no `skipUnaryAutoRespond`), so a dispatched frame would have resolved the call rather than reaching either check above - and this pins that nothing reached the wire even so.
         expect(relay.unaryRequests).toHaveLength(0);
       } finally {
         session.close();
@@ -4326,12 +3947,7 @@ describe("RemoteSession inbound bulk credit accounting (C1: per-FRAME, not per-m
   it(
     "grants credits after FINE_INBOUND_CREDIT_GRANT_BATCH FRAMES - mid-transfer, before the logical STREAM_FRAME finishes reassembling",
     async () => {
-      // The deadlock this pins: the old code counted consumed BULK frames
-      // per completed logical MESSAGE, so a single message spanning more
-      // than `FINE_INBOUND_CREDIT_GRANT_BATCH` chunk frames would never itself
-      // trigger a grant - the peer's send credits would run out and the
-      // transfer would stall forever. Accounting per FRAME (remote-session's
-      // `onData`, right after decrypt) grants mid-transfer instead.
+      // Accounting per frame (remote-session's `onData`, right after decrypt) grants mid-transfer instead.
       const relay = new FakeRelayHost();
       relay.streamManifest = buildStreamManifest(
         cursorStreamRegistry,
@@ -4347,9 +3963,7 @@ describe("RemoteSession inbound bulk credit accounting (C1: per-FRAME, not per-m
       stream.onServerFrame(() => {
         messageDelivered = true;
       });
-      // Captured at the exact tick the FIRST credit grant lands - proves the
-      // grant fires before the (much later) full-message delivery callback,
-      // rather than relying on a later poll racing both events.
+      // Captured at the exact tick the first credit grant lands - proves the grant fires before the (much later) full-message delivery callback, rather than relying on a later poll racing both events.
       let creditSeenBeforeDelivery: boolean | null = null;
       relay.onCreditGrant = () => {
         if (creditSeenBeforeDelivery === null) {
@@ -4363,9 +3977,7 @@ describe("RemoteSession inbound bulk credit accounting (C1: per-FRAME, not per-m
         );
         const streamId = relay.subscribeStreamIds[0];
 
-        // Comfortably over FINE_INBOUND_CREDIT_GRANT_BATCH frames at the real
-        // BULK_CHUNK_SIZE_BYTES chunk cap - a transfer the old per-MESSAGE
-        // accounting would never have granted credits for mid-flight.
+        // Comfortably over FINE_INBOUND_CREDIT_GRANT_BATCH frames at the real BULK_CHUNK_SIZE_BYTES chunk cap - a transfer the old per-message accounting would never have granted credits for mid-flight.
         const frameCount = FINE_INBOUND_CREDIT_GRANT_BATCH + 5;
         const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * frameCount);
         await relay.sendStreamFrame(
@@ -4376,9 +3988,7 @@ describe("RemoteSession inbound bulk credit accounting (C1: per-FRAME, not per-m
         );
 
         await vi.waitFor(() => expect(messageDelivered).toBe(true), WAIT);
-        // Exactly one grant, of exactly the batch size: `frameCount` crossed
-        // the batch boundary once (at frame FINE_INBOUND_CREDIT_GRANT_BATCH)
-        // and the remaining 5 frames were not enough to cross it again.
+        // Exactly one grant, of exactly the batch size: `frameCount` crossed the batch boundary once (at frame FINE_INBOUND_CREDIT_GRANT_BATCH) and the remaining 5 frames were not enough to cross it again.
         expect(relay.creditGrants).toEqual([FINE_INBOUND_CREDIT_GRANT_BATCH]);
         expect(creditSeenBeforeDelivery).toBe(true);
         expect(relay.errors).toEqual([]);
@@ -4488,10 +4098,6 @@ describe("RemoteSession body compression is gated on the host's openAck advert (
     async () => {
       const relay = new FakeRelayHost();
       relay.openAckCapabilities = [SESSION_CAPABILITY_BODY_COMPRESSION];
-      // A large, highly compressible bearer token: the `open` frame's body must
-      // exceed COMPRESSION_MIN_PAYLOAD_BYTES so this test actually exercises the
-      // gate rather than passing merely because a small `open` body was never
-      // going to be compressed either way, capability advert or not.
       const lease = new MutableBearerLease("a".repeat(8192), "user-1");
       const session = buildSession(relay, lease, null);
       try {
@@ -4510,13 +4116,7 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
   it(
     "reassembles several interleaved chunk sequences correctly when delivered without awaiting between wire frames",
     async () => {
-      // The production `onData` handler is fire-and-forget per `onmessage`
-      // call (Noise decrypt is the only await, entered synchronously in
-      // arrival order - see the ORDERING INVARIANT comment above `onData`).
-      // This drives several DISTINCT streams' chunk sequences interleaved
-      // frame-by-frame through that same entry point, delivered in one tight
-      // synchronous burst, and asserts every sequence reassembles to its own
-      // stream with no cross-stream splice.
+      // The production `onData` handler is fire-and-forget per `onmessage` call (Noise decrypt is the only await, entered synchronously in arrival order - see the ordering invariant comment above `onData`).
       const relay = new FakeRelayHost();
       relay.streamManifest = buildStreamManifest(
         cursorStreamRegistry,
@@ -4580,9 +4180,7 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
           return { label, json, frames };
         });
 
-        // Interleave frame-by-frame across the three sequences (alpha0,
-        // beta0, gamma0, alpha1, beta1, gamma1, ...) rather than sending one
-        // whole sequence before starting the next.
+        // Interleave frame-by-frame across the three sequences (alpha0, beta0, gamma0, alpha1, beta1, gamma1, ...) rather than sending one whole sequence before starting the next.
         const interleaved: EncodeMuxFrameInput[] = [];
         for (let i = 0; i < 3; i += 1) {
           for (const sequence of sequences) {
@@ -4590,9 +4188,7 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
           }
         }
 
-        // Encrypt sequentially (the Noise send counter must be reserved in
-        // this exact order for the counter sequence to stay decryptable),
-        // THEN deliver every sealed frame with no await between calls.
+        // Encrypt sequentially (the Noise send counter must be reserved in this exact order for the counter sequence to stay decryptable), then deliver every sealed frame with no await between calls.
         const sealed: Uint8Array[] = [];
         for (const frame of interleaved) {
           sealed.push(await relay.encryptFrame(frame));
@@ -4617,7 +4213,6 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
   );
 });
 
-/** One two-chunk stream message: enough to observe the in-flight interval. */
 const buildChunkFrames = (
   streamId: number,
 ): [EncodeMuxFrameInput, EncodeMuxFrameInput] => {
@@ -4658,13 +4253,6 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
   it(
     "counts a replayed stream as restored on its FIRST accepted chunk - a large snapshot mid-transfer does not hold the session not-ready",
     async () => {
-      // The failure this pins: a reconnect's resubscribe answers with a
-      // multi-chunk snapshot, and the session read "restored" only off the
-      // COMPLETED message - so for the whole transfer (minutes for a
-      // tens-of-MB snapshot through the relay) `isReady()` was false, the
-      // connectivity surfaces reported an outage on a link that was
-      // demonstrably carrying frames, and the retry they invited restarted
-      // the transfer from zero.
       const relay = new FakeRelayHost();
       relay.streamManifest = buildStreamManifest(
         cursorStreamRegistry,
@@ -4685,9 +4273,7 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
           () => expect(relay.subscribeStreamIds).toHaveLength(1),
           WAIT,
         );
-        // Establish the baseline: the first attach's boundary waits on this
-        // stream's snapshot exactly as a reconnect's does, so deliver it
-        // whole and reach ready once.
+        // Establish the baseline: the first attach's boundary waits on this stream's snapshot exactly as a reconnect's does, so deliver it whole and reach ready once.
         const [seedFirst, seedLast] = buildChunkFrames(
           relay.subscribeStreamIds[0],
         );
@@ -4712,7 +4298,7 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
         // One accepted chunk IS restore evidence: ready flips while the
         // message is still in flight...
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        // ...and provably BEFORE the consumer saw anything - the stream's own
+        // ...and provably before the consumer saw anything - the stream's own
         // delivery still waits for the completed message.
         expect(delivered).toHaveLength(1);
 
@@ -4754,10 +4340,8 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
           () => expect(relay.subscribeStreamIds).toHaveLength(1),
           WAIT,
         );
-        // Reach ready once so the reconnect below exercises the RESTORE path.
-        // The first attach arms its own diagnostic (its boundary waits on
-        // this stream's snapshot too); the boundary then clears it, so only
-        // the CALL record remains - count relatively from here.
+        // Reach ready once so the reconnect below exercises the restore path.
+        // The first attach arms its own diagnostic (its boundary waits on this stream's snapshot too); the boundary then clears it, so only the call record remains - count relatively from here.
         const [seedFirst, seedLast] = buildChunkFrames(
           relay.subscribeStreamIds[0],
         );
@@ -4779,11 +4363,8 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
         );
         const armedStall = stallArms()[armsAtBaseline][0] as () => void;
 
-        // Fire the armed callback directly (the suite's idiom for timers too
-        // long to wait out): still blocked, so it reports - naming the method.
-        // Counted from a clean slate: the forced drop above legitimately
-        // warns through other components (the dial-failure log), and this
-        // assertion is about the STALL line only.
+        // Fire the armed callback directly (the suite's idiom for timers too long to wait out): still blocked, so it reports - naming the method.
+        // Counted from a clean slate: the forced drop above legitimately warns through other components (the dial-failure log), and this assertion is about the stall line only.
         warnSpy.mockClear();
         armedStall();
         expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -4793,9 +4374,7 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
           `cursor.subscribe#${relay.subscribeStreamIds[1]}`,
         );
 
-        // Restore evidence ends the episode: once a chunk flips the boundary,
-        // the same callback is inert - the diagnostic cannot cry wolf about a
-        // session that recovered.
+        // Restore evidence ends the episode: once a chunk flips the boundary, the same callback is inert - the diagnostic cannot cry wolf about a session that recovered.
         warnSpy.mockClear();
         const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[1]);
         relay.deliverToClient(await relay.encryptFrame(firstChunk));
@@ -4850,11 +4429,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
   it(
     "reopens a stream whose transfer stops after its first chunk - stream-local, on a fresh id, with the session staying ready",
     async () => {
-      // The state this pins: first-chunk evidence published ready, then no
-      // further chunk ever arrives. No other deadline can see it - any
-      // inbound frame clears the socket's awaiting state, and a relay that
-      // keeps answering pings feeds the idle deadline forever - so the
-      // watchdog's expiry is the only verdict, and it must stay stream-local.
+      // The state this pins: first-chunk evidence published ready, then no further chunk ever arrives.
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const warnSpy = vi
         .spyOn(console, "warn")
@@ -4886,10 +4461,8 @@ describe("RemoteSession reassembly progress watchdog", () => {
         await vi.waitFor(() => expect(watchdogArms()).toHaveLength(1), WAIT);
         const dialsBefore = relay.openBearers.length;
 
-        // Fire the armed deadline (suite idiom for long timers). The verdict:
-        // abandon + tombstone the old id, CLOSE it host-side, resubscribe
-        // fresh - and the SESSION stays ready throughout, because the rest of
-        // the mux is provably fine.
+        // Fire the armed deadline (suite idiom for long timers).
+        // The verdict: abandon + tombstone the old id, close it host-side, resubscribe fresh - and the session stays ready throughout, because the rest of the mux is provably fine.
         (watchdogArms()[0][0] as () => void)();
         expect(session.isReady()).toBe(true);
         await vi.waitFor(
@@ -4910,11 +4483,6 @@ describe("RemoteSession reassembly progress watchdog", () => {
           ),
         ).toBe(true);
 
-        // The recovery must be a LOOP, not a single shot: the replacement
-        // subscribe armed a first-evidence deadline of its own at send time,
-        // so an upstream stall that answers the fresh id with NOTHING gets
-        // judged again - another CLOSE, another fresh id - with the session
-        // ready and free of redial churn throughout.
         await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
         (watchdogArms()[1][0] as () => void)();
         await vi.waitFor(
@@ -4943,12 +4511,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
   it(
     "leaves a retryable-FATAL reopen unarmed - an event-only method is never churned through zero-evidence CLOSE/resubscribe cycles",
     async () => {
-      // The first-evidence deadline's license is STALL provenance (the
-      // resolver provably emitted, then stopped mid-message). A stream that
-      // reaches the reopen regime through a retryable FATAL has no such
-      // proof - its method may legitimately emit nothing on subscribe - so
-      // its replacement subscribe must not be judged for silence, or a
-      // healthy event-only stream would CLOSE/resubscribe forever.
+      // The first-evidence deadline's license is stall provenance (the resolver provably emitted, then stopped mid-message).
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const warnSpy = vi
         .spyOn(console, "warn")
@@ -4985,9 +4548,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const armsAfterDelivery = watchdogArms().length;
 
-        // A retryable per-stream FATAL re-keys the stream and re-subscribes
-        // it on the reopen backoff - a host that ANSWERS, not one that
-        // stalled.
+        // A retryable per-stream fatal re-keys the stream and re-subscribes it on the reopen backoff - a host that answers, not one that stalled.
         await relay.sendStreamFatal(originalId, retryableDropDetails());
         await vi.waitFor(
           () => expect(relay.subscribeStreamIds).toHaveLength(2),
@@ -4996,7 +4557,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
         expect(relay.subscribeStreamIds[1]).not.toBe(originalId);
         // The replacement subscribe armed NO first-evidence deadline...
         expect(watchdogArms()).toHaveLength(armsAfterDelivery);
-        // ...and firing every arm recorded so far judges nothing: no CLOSE,
+        // ...and firing every arm recorded so far judges nothing: no close,
         // no churned third subscribe, the quiet stream simply waits.
         for (const call of watchdogArms()) {
           (call[0] as () => void)();
@@ -5019,12 +4580,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
   it(
     "moves the stall license through a retryable-FATAL re-key - the verdict answers one attempt, not the stream's proven stall",
     async () => {
-      // stall -> licensed replacement B -> host answers B with a retryable
-      // FATAL -> replacement C. The FATAL proves attempt B was heard; it
-      // says nothing about C, and the stream's stall provenance (its
-      // resolver emitted, then stopped) is the stronger prior fact - so C's
-      // subscribe must still carry the first-evidence deadline, and zero
-      // evidence on C is judged like any other stall hop.
+      // stall -> licensed replacement B -> host answers B with a retryable fatal -> replacement C.
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const warnSpy = vi
         .spyOn(console, "warn")
@@ -5065,7 +4621,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
         const idB = relay.subscribeStreamIds[1];
         await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
 
-        // The host ANSWERS B with a retryable FATAL: re-key to C, license
+        // The host answers B with a retryable fatal: re-key to C, license
         // moving with it - C's subscribe arms.
         await relay.sendStreamFatal(idB, retryableDropDetails());
         await vi.waitFor(
@@ -5076,7 +4632,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
         expect(idC).not.toBe(idB);
         await vi.waitFor(() => expect(watchdogArms()).toHaveLength(3), WAIT);
 
-        // Zero evidence on C: judged - CLOSE(C), fresh D - session ready and
+        // Zero evidence on C: judged - close(C), fresh D - session ready and
         // undialed throughout.
         (watchdogArms()[2][0] as () => void)();
         await vi.waitFor(() => expect(relay.closesSent).toContain(idC), WAIT);
@@ -5142,7 +4698,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
 
-        // Fire EVERY recorded arm, in order. A's is retired (its message
+        // Fire every recorded arm, in order. A's is retired (its message
         // completed) and must do nothing; B's is live and must reopen B only.
         for (const call of watchdogArms()) {
           (call[0] as () => void)();
@@ -5217,7 +4773,7 @@ describe("RemoteSession reassembly progress watchdog", () => {
         await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        // Fire every recorded arm from BOTH generations: all retired or
+        // Fire every recorded arm from both generations: all retired or
         // completed, so none may close a stream or force a resubscribe.
         const subscribesBefore = relay.subscribeStreamIds.length;
         for (const call of watchdogArms()) {
@@ -5272,10 +4828,6 @@ describe("RemoteSession per-stream inbound error routing", () => {
         );
         const [streamIdA, streamIdB] = relay.subscribeStreamIds;
 
-        // Stream A: a corrupt chunk sequence - a valid CHUNK_FIRST followed
-        // by a continuation whose `seq` skips ahead (must be 1, sent as 5),
-        // tripping `ChunkSequenceMismatchError` (a `ChunkReassemblyError`
-        // subclass) on THIS stream only.
         const bodyA = encodeMuxMessageBody(
           { kind: "snapshot", hasBinaryPayload: true },
           new TextEncoder().encode("x".repeat(200)),
@@ -5320,15 +4872,12 @@ describe("RemoteSession per-stream inbound error routing", () => {
             code: "STREAM_CHUNK_REASSEMBLY_FAILED",
           }),
         });
-        // The Noise decrypt succeeded - only THIS stream is condemned; the
+        // The Noise decrypt succeeded - only this stream is condemned; the
         // session itself must not have been dropped/reconnected over it.
         expect(session.isClosed()).toBe(false);
         expect(relay.openBearers).toHaveLength(1);
 
-        // Stream B, never touched by the corruption, still delivers a
-        // perfectly normal frame afterward - proving the shared connection
-        // (and this stream's own reassembly state) survived stream A's fatal
-        // untouched.
+        // Stream B, never touched by the corruption, still delivers a perfectly normal frame afterward - proving the shared connection (and this stream's own reassembly state) survived stream A's fatal untouched.
         const normalEnvelope = { kind: "snapshot", hasBinaryPayload: false };
         await relay.sendStreamFrame(
           streamIdB,
@@ -5338,13 +4887,6 @@ describe("RemoteSession per-stream inbound error routing", () => {
         );
         await vi.waitFor(() => expect(streamBDelivered).not.toBeNull(), WAIT);
         expect(streamBDelivered).toEqual(normalEnvelope);
-        // `isReady()` requires every LIVE subscription to have delivered at
-        // least one frame (Architecture's ready-boundary evidence): stream A
-        // was condemned and dropped out of `subscriptions` on its fatal, and
-        // stream B just delivered its first frame above - so the boundary is
-        // reached only now, which is itself further proof the connection
-        // never reconnected (a reconnect would have re-armed a NEW
-        // generation and required B to be resubscribed AND re-delivered).
         expect(session.isReady()).toBe(true);
         expect(relay.errors).toEqual([]);
       } finally {
@@ -5358,21 +4900,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
   it(
     "fails only the corrupted stream on an undecodable COMPRESSED frame - a deterministic mis-encode must not become a reconnect loop",
     async () => {
-      // The asymmetry this closes. `inflateFramePayload` throws
-      // `MuxFrameDecodeError`, which the per-stream router did not recognise,
-      // so one malformed compressed frame tore down the whole session - and a
-      // peer that mis-encodes DETERMINISTICALLY then loops: drop, reconnect,
-      // re-request the same body, fail again. That loop is what per-stream
-      // routing exists to prevent, and it is the exact failure shape this
-      // epic's ruling rules out.
-      //
-      // Safe to route per-stream because the fault is provably confined to one
-      // stream by the time it is thrown: `decodeMuxFrame` already parsed the
-      // header OUTSIDE this try (a header fault has no stream to blame and
-      // stays session-fatal), the Noise decrypt already succeeded, and
-      // `inflateFramePayload` is a pure per-frame function - raw deflate with
-      // a fresh output buffer, holding no state across frames or streams that
-      // a bad payload could poison.
+      // The asymmetry this closes.
       const relay = new FakeRelayHost();
       relay.streamManifest = buildStreamManifest(
         cursorStreamRegistry,
@@ -5402,10 +4930,8 @@ describe("RemoteSession per-stream inbound error routing", () => {
         );
         const [streamIdA, streamIdB] = relay.subscribeStreamIds;
 
-        // A frame FLAGGED compressed whose payload is not a valid deflate
-        // stream: a well-formed 4-byte plaintext-length header (so it clears
-        // the length and bound checks) followed by bytes `inflateSync` cannot
-        // decode. This is the mis-encoding shape, not a truncation.
+        // A frame flagged compressed whose payload is not a valid deflate stream: a well-formed 4-byte plaintext-length header (so it clears the length and bound checks) followed by bytes `inflateSync` cannot decode.
+        // This is the mis-encoding shape, not a truncation.
         const corrupt = new Uint8Array(4 + 8);
         new DataView(corrupt.buffer).setUint32(0, 64);
         corrupt.set([9, 9, 9, 9, 9, 9, 9, 9], 4);
@@ -5461,16 +4987,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
     TEST_BUDGET_MS,
   );
 
-  // An "over-cap sequence via a shrunk-cap reassembler" sub-case
-  // (`MuxMessageSizeError` routing) is intentionally NOT covered here.
-  // `RemoteSession` constructs the client-side `ActiveConnection.reassembler`
-  // as a fixed `new ChunkReassembler(undefined)` (remote-session.ts) with no
-  // seam for a test to inject a smaller `maxMessageBytes` cap for one session
-  // under test. Exercising `MuxMessageSizeError` routing honestly would
-  // require either genuinely exceeding `MAX_MUX_MESSAGE_BYTES` (512 MiB - not
-  // viable in a unit test) or adding an injection seam to `RemoteSession`,
-  // which this task's brief forbids touching. Skipped; flagged for whoever
-  // owns that seam decision.
+  // An "over-cap sequence via a shrunk-cap reassembler" sub-case (`MuxMessageSizeError` routing) is intentionally not covered here.
 });
 
 describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
@@ -5653,12 +5170,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
 });
 
 describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
-  // A host-side per-stream FATAL for a still-pending unary request must
-  // reject the caller promptly - not after the 30s unary timeout - and must
-  // CLOSE the stream back to the host so it stops producing for an id this
-  // side has already tombstoned. Mirrors `failStreamOnInboundError`'s
-  // `rejectUnary` path, exercised here through a REAL stream-scoped FATAL
-  // frame instead of a reassembly error.
+  // Mirrors `failStreamOnInboundError`'s `rejectUnary` path, exercised here through a real stream-scoped fatal frame instead of a reassembly error.
   const statusContract = defineRpcContract({
     method: "host.status",
     schemaVersion: { major: 1, minor: 0 } as const,
@@ -5678,12 +5190,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
       },
     });
 
-  // The caller's response budget has to reach the remote unary TIMER, not just
-  // the messenger. It used to be dropped on the reasoning that the mux session
-  // owns its own response-wait semantics - so a method sized for a slow
-  // host-side probe (`host.getRateLimitUsage` allows ~180s) was silently cut
-  // off at the shared 30s default on every REMOTE host, while the local
-  // transport honored it.
+  // The caller's response budget has to reach the remote unary timer, not just the messenger.
   it(
     "arms the unary timer with the CALLER's budget, not the shared default",
     async () => {
@@ -5700,7 +5207,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        // A budget far BELOW the 30s default, so only a timer that honors the
+        // A budget far below the 30s default, so only a timer that honors the
         // argument can fire this fast.
         const budgeted = session.sendUnary(
           "host.status",
@@ -5710,9 +5217,8 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           60,
           false,
         );
-        // The positive control: same request, no budget. If the argument were
-        // still ignored, both would behave identically - and this one must NOT
-        // settle inside the window, or the assertion above proves nothing.
+        // The positive control: same request, no budget.
+        // If the argument were still ignored, both would behave identically - and this one must not settle inside the window, or the assertion above proves nothing.
         const defaulted = session.sendUnary(
           "host.status",
           {},
@@ -5738,11 +5244,8 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         expect((error as HostRpcError).message).toContain(
           "timed out awaiting a response",
         );
-        // Dispatched-but-unheard, not a delivered answer. A caller that can
-        // recover from an unheard read (the rate-limit queue collects the
-        // host's gauge cache shortly after) can only do so if it can TELL, and
-        // a plain `HostRpcError` reads as an answer. Same line `WsRpcClient`
-        // draws once the request is on the wire.
+        // Dispatched-but-unheard, not a delivered answer.
+        // A caller that can recover from an unheard read (the rate-limit queue collects the host's gauge cache shortly after) can only do so if it can tell, and a plain `HostRpcError` reads as an answer.
         expect(error).toBeInstanceOf(HostTransportFailureError);
         // ...but still NOT retryable: the host may already have applied it, so
         // nothing should resend on its own.
@@ -5760,8 +5263,8 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
-      // The harness must NOT auto-answer this REQUEST - the whole point is
-      // that the host abandons it with a stream-scoped FATAL instead.
+      // The harness must NOT auto-answer this request - the whole point is
+      // that the host abandons it with a stream-scoped fatal instead.
       relay.skipUnaryAutoRespond = true;
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
@@ -5805,11 +5308,8 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         expect(error).toBeInstanceOf(HostRpcError);
         expect((error as HostRpcError).fatalDetails?.code).toBe("RPC_ERROR");
 
-        // The client tells the host it is done with the stream - the host
-        // must not keep producing/pacing for an id this side already
-        // tombstoned. The host tombstoned the id itself when it sent the
-        // FATAL, so its R-2 ingest DROPS this CLOSE rather than processing
-        // it - the drop record is the evidence the client sent it at all.
+        // The client tells the host it is done with the stream - the host must not keep producing/pacing for an id this side already tombstoned.
+        // The host tombstoned the id itself when it sent the fatal, so its R-2 ingest drops this close rather than processing it - the drop record is the evidence the client sent it at all.
         await vi.waitFor(
           () =>
             expect(
@@ -5821,7 +5321,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
             ).toBe(true),
           WAIT,
         );
-        // The FATAL was stream-scoped, not session-level - the session
+        // The fatal was stream-scoped, not session-level - the session
         // itself survives untouched.
         expect(session.isClosed()).toBe(false);
         expect(session.isReady()).toBe(true);
@@ -5848,7 +5348,7 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
         ...buildSessionOptions(relay, lease, null),
         streamRegistry: cursorStreamRegistry,
       });
-      // A sibling stream, subscribed BEFORE the attack, so it can prove
+      // A sibling stream, subscribed before the attack, so it can prove
       // afterward that the poisoned stream's failure stayed local to itself.
       const streamA = session.subscribe("cursor.subscribe", { cursor: null });
       const streamB = session.subscribe("cursor.subscribe", { cursor: null });
@@ -5869,12 +5369,7 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
         );
         const [streamIdA, streamIdB] = relay.subscribeStreamIds;
 
-        // A genuine 3-chunk sequence for stream A. Only the FINAL chunk is
-        // delivered first (adversarial reorder - the relay withholds the
-        // genuine CHUNK_FIRST and middle chunk) - no CHUNK_FIRST for this
-        // streamId has EVER been sent, so `accept()` throws a bare
-        // `ChunkReassemblyError` (a continuation with no accumulator at
-        // all), not a sequence mismatch.
+        // A genuine 3-chunk sequence for stream A.
         const bodyA = encodeMuxMessageBody(
           { kind: "snapshot", hasBinaryPayload: true },
           new TextEncoder().encode("y".repeat(300)),
@@ -5919,9 +5414,7 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
           },
         ];
 
-        // S2: deliver ONLY the final chunk. No accumulator exists for this
-        // streamId, so this trips `ChunkReassemblyError` ->
-        // `failStreamOnInboundError`.
+        // S2: deliver only the final chunk.
         const sealedFinal = await relay.encryptFrame(genuineFrames[2]);
         relay.deliverToClient(sealedFinal);
 
@@ -5944,11 +5437,8 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
         expect(session.pendingReassemblyCount).toBe(0);
         expect(session.isClosed()).toBe(false);
 
-        // S4-client: the relay now delivers the withheld GENUINE start-chunk
-        // and middle chunk for the SAME (now-tombstoned) streamId. Pre-R-2
-        // this would call `reassembler.accept()` before ever checking
-        // whether the streamId already failed, starting a fresh,
-        // uncollectable accumulator.
+        // S4-client: the relay now delivers the withheld genuine start-chunk and middle chunk for the same (now-tombstoned) streamId.
+        // Pre-R-2 this would call `reassembler.accept()` before ever checking whether the streamId already failed, starting a fresh, uncollectable accumulator.
         const closesBeforeReplay = relay.closesSent.length;
         const sealedFirst = await relay.encryptFrame(genuineFrames[0]);
         const sealedMiddle = await relay.encryptFrame(genuineFrames[1]);
@@ -5958,7 +5448,7 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
         await Promise.resolve();
         await Promise.resolve();
 
-        // No accumulator got created, and no duplicate CLOSE was sent - the
+        // No accumulator got created, and no duplicate close was sent - the
         // frames were dropped outright as tombstoned.
         expect(session.pendingReassemblyCount).toBe(0);
         expect(relay.closesSent.length).toBe(closesBeforeReplay);
@@ -6044,11 +5534,6 @@ describe("RemoteSession evidence classification (redesign P1.3 invariant 5)", ()
         expect(indeterminates).toHaveLength(1);
         expect(indeterminates[0].hostId).toBe("host-1");
         expect(indeterminates[0].transportKind).toBe("remote-relay");
-        // The classification rule's whole point: a credential/authn-plane
-        // failure must never be counted as a refusal, or one authn outage
-        // would reach the confirmed-death streak on every remote host at
-        // once and fail the whole fleet over (module header, transport
-        // -evidence.ts).
         expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
       } finally {
         session.close();
@@ -6077,10 +5562,6 @@ describe("RemoteSession evidence retraction on terminal-fatal (redesign P1.3)", 
         expect(established).toHaveLength(1);
         const announcedSessionId = established[0].sessionId;
 
-        // Drive a genuine terminal-fatal (not a plain drop): a session-level
-        // FATAL whose code is neither `retryable` nor `UNAUTHORIZED` stays
-        // terminal via `goTerminalFatal`, exactly like the existing
-        // "terminal close notification" describe block above.
         await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, {
           code: "INCOMPATIBLE",
           reason: "manifest mismatch",
@@ -6094,11 +5575,6 @@ describe("RemoteSession evidence retraction on terminal-fatal (redesign P1.3)", 
         expect(lost[0].sessionId).toBe(announcedSessionId);
         expect(lost[0].hostId).toBe("host-1");
 
-        // A fresh session/generation for the SAME host must still be able to
-        // produce refusal evidence afterward - proving `teardownConnection`'s
-        // retraction really ran and left no phantom "still live" session
-        // suppressing later death evidence for this host (module header,
-        // `announcedSessionId`).
         const deadFactory: IStreamWebSocketFactory = {
           create: (): StreamWebSocketLike => {
             const socket = new FakeSocket(
@@ -6171,9 +5647,7 @@ describe("RemoteSession connection-loss attempt id is distinct from its generati
         const refusals = recorder.callsNamed("reportDialRefusal");
         expect(refusals).toHaveLength(1);
         const lostAttemptId = refusals[0].attemptId;
-        // Not deduped away: reusing the generation's own dial-success id
-        // here would collide with the authority's per-attempt-id dedup and
-        // swallow the very first refusal after a live session died.
+        // Not deduped away: reusing the generation's own dial-success id here would collide with the authority's per-attempt-id dedup and swallow the very first refusal after a live session died.
         expect(lostAttemptId).not.toBe(successAttemptId);
         expect(lostAttemptId).toBe(`${successAttemptId}-lost`);
       } finally {
@@ -6257,9 +5731,7 @@ describe("RemoteSession restart tombstone forwarding (P1.4 / D5 / M1)", () => {
           retryable: true,
         });
 
-        // Positive control in the SAME test: the retryable path DOES still
-        // run and produce its ordinary loss evidence, so the absence of a
-        // tombstone report below is not because nothing happened at all.
+        // Positive control in the same test: the retryable path does still run and produce its ordinary loss evidence, so the absence of a tombstone report below is not because nothing happened at all.
         await vi.waitFor(
           () =>
             expect(
@@ -6374,11 +5846,6 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        // `RemoteSession.requestSessionReconnect` is the exact
-        // `LogicalStreamPort` member `LogicalStream.requestReconnect()`
-        // delegates to in production (see `logical-stream.ts`); calling it
-        // directly here avoids simulating a full subscribe/restore cycle
-        // through the fake relay while still driving the SAME funnel arm.
         session.requestSessionReconnect("caller-requested-reconnect");
 
         await vi.waitFor(
@@ -6432,9 +5899,7 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
     "the missing-bearer path reports indeterminate - credential plane, never dialed the host",
     async () => {
       const relay = new FakeRelayHost();
-      // Empty from the start: every attach attempt fails to present a
-      // bearer at `sendOpenFrame`, so this drives the SAME `not-host-evidence`
-      // funnel arm without needing a mid-session credential drop.
+      // Empty from the start: every attach attempt fails to present a bearer at `sendOpenFrame`, so this drives the same `not-host-evidence` funnel arm without needing a mid-session credential drop.
       const lease = new MutableBearerLease("", "user-1");
       const recorder = new RecordingEvidence();
       const session = new RemoteSession({
@@ -6461,10 +5926,7 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
 });
 
 describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
-  // These assertions bound EXACT rung delays, so the equal jitter every
-  // non-immediate rung carries is pinned to its ceiling (factor 1.0 = the
-  // un-jittered base). The jitter's own behaviour is covered by the wake and
-  // escalation suites, which assert ranges against real randomness.
+  // These assertions bound exact rung delays, so the equal jitter every non-immediate rung carries is pinned to its ceiling (factor 1.0 = the un-jittered base).
   let jitterPin: MockInstance<() => number>;
   beforeEach(() => {
     jitterPin = vi.spyOn(Math, "random").mockReturnValue(1);
@@ -6491,25 +5953,8 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
   }
 
   it("after a session has reached ready, the next drop redials at 0ms and only THEN climbs to RECONNECT_INITIAL_BACKOFF_MS", async () => {
-    // REAL timers, deliberately: `beginConnect` runs a genuine WebCrypto
-    // key generation (`NoiseChannel.begin`) before it ever reaches the
-    // socket factory, and that operation does not resolve under
-    // `vi.useFakeTimers()` (confirmed empirically - the very first dial
-    // attempt never landed even after advancing 130s of fake time). The
-    // doubling-and-cap ARITHMETIC is already proven in isolation by
-    // `backoff.test.ts`; this test's job is only to prove RemoteSession
-    // wires `reconnectAttempt` through that formula, including the rung-0
-    // special case - so it observes the first two real rungs, not the
-    // full climb to the 30s cap.
-    //
-    // The session MUST reach ready before the measured drop, and that is
-    // the whole point rather than setup noise: the immediate rung is a
-    // RECOVERY affordance, gated on `hasReachedReadyOnce`. A session that
-    // has never connected deliberately keeps the original ladder, because
-    // its retries are evidence about host liveness and doubling their rate
-    // would hammer a host that is legitimately down. An earlier version of
-    // this test measured a never-ready session and asserted 0ms, which
-    // pinned exactly the behaviour that gating removed.
+    // The session must reach ready before the measured drop, and that is the whole point rather than setup noise: the immediate rung is a recovery affordance, gated on `hasReachedReadyOnce`.
+    // A session that has never connected deliberately keeps the original ladder, because its retries are evidence about host liveness and doubling their rate would hammer a host that is legitimately down.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("valid-token", "user-1");
     let firstDialTaken = false;
@@ -6549,7 +5994,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         { timeout: 8_000, interval: 20 },
       );
 
-      // Rung 0: the redial after losing a HEALTHY session is immediate -
+      // Rung 0: the redial after losing a healthy session is immediate -
       // allow scheduling jitter, not a full second.
       expect(redialTimestamps[0] - droppedAt).toBeLessThan(200);
       // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
@@ -6563,13 +6008,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
   }, 12_000);
 
   it("a session that has NEVER reached ready keeps the original ladder - its first failure waits RECONNECT_INITIAL_BACKOFF_MS, not 0ms", async () => {
-    // The other half of the gate, and the one with real consequences: a
-    // never-connected session's retries feed the host-liveness evidence
-    // machinery, so granting them the immediate rung would both hammer a
-    // host that is legitimately down and accelerate the death-streak logic
-    // that reads those attempts. Two evidence-classification tests in this
-    // file fail if this regresses, which is the coupling that makes this
-    // behaviour load-bearing rather than cosmetic.
+    // Two evidence-classification tests in this file fail if this regresses, which is the coupling that makes this behaviour load-bearing rather than cosmetic.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("valid-token", "user-1");
     const createTimestamps: number[] = [];
@@ -6592,13 +6031,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     }
   }, 10_000);
   it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {
-    // The flapping case, stated explicitly and set up honestly: rung 0 is
-    // legitimately available to a session's very FIRST-ever failure (that
-    // is the whole point of the feature), so proving the ladder does NOT
-    // reset on a quick re-drop requires this session to have already
-    // consumed rung 0 once, via one real failure, BEFORE it ever reaches
-    // ready. Only then does a second drop shortly after ready expose
-    // whether the reset is real or premature.
+    // Only then does a second drop shortly after ready expose whether the reset is real or premature.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("valid-token", "user-1");
     let failuresLeft = 1;
@@ -6643,10 +6076,6 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         interval: 20,
       });
 
-      // This session already spent rung 0 on its first-ever failure, so
-      // this second, post-ready drop must continue the ladder rather than
-      // restart it - or a host that accepts and immediately drops
-      // sessions gets hammered at the fastest rung forever.
       expect(setTimeoutSpy).toHaveBeenCalledWith(
         expect.any(Function),
         RECONNECT_INITIAL_BACKOFF_MS,
@@ -6670,21 +6099,12 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         interval: 20,
       });
 
-      // Identify the EXACT timer handle `armStableResetTimer` scheduled at
-      // the ready boundary (its delay is the unique fingerprint), so this
-      // test proves the SPECIFIC timer was cancelled - not merely that
-      // *some* `clearTimeout` call happened to fire around the same time.
       const stableResetCallIndexes = setTimeoutSpy.mock.calls
         .map((call, index) =>
           call[1] === RECONNECT_STABLE_RESET_MS ? index : -1,
         )
         .filter((index) => index >= 0);
-      // `RECONNECT_MAX_BACKOFF_MS` is also 30_000, so a second match would
-      // mean this test is about to fingerprint the backoff handle instead.
-      // Safe today only because the session reaches ready on the first dial
-      // and no capped backoff timer exists; an edit that adds a prior failure
-      // to the setup would silently select the wrong one, and the assertion
-      // would then pass or fail for a reason unrelated to its name.
+      // `RECONNECT_MAX_BACKOFF_MS` is also 30_000, so a second match would mean this test is about to fingerprint the backoff handle instead.
       expect(stableResetCallIndexes).toHaveLength(1);
       const stableResetHandle =
         setTimeoutSpy.mock.results[stableResetCallIndexes[0]].value;
@@ -6706,12 +6126,8 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
 });
 
 describe("RemoteSession per-stream retryable FATAL recovery", () => {
-  // `retryable` has to mean the same thing on both transports. On the local
-  // socket a retryable close is followed by the session's own reconnect, which
-  // re-subscribes the stream; here the stream used to be disposed and dropped
-  // from `subscriptions` with nothing left to revive it. Consumers read only
-  // the flag, so they silenced their error UI for a stream that was in fact
-  // permanently dead - strictly worse than the visible failure it replaced.
+  // `retryable` has to mean the same thing on both transports.
+  // Consumers read only the flag, so they silenced their error UI for a stream that was in fact permanently dead - strictly worse than the visible failure it replaced.
   it(
     "re-subscribes the stream instead of disposing it, and reports reconnecting rather than closed",
     async () => {
@@ -6749,20 +6165,15 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
           upgradeGuidance: null,
         });
 
-        // The recovery is a real re-subscribe on the wire, not merely a status
-        // the client invented for itself. With the fake enforcing the host's
-        // R-2 ingest drop, a re-subscribe of the tombstoned id would never
-        // even be recorded here - so reaching length 2 already proves the
-        // re-open rode an id the host will answer.
+        // The recovery is a real re-subscribe on the wire, not merely a status the client invented for itself.
+        // With the fake enforcing the host's R-2 ingest drop, a re-subscribe of the tombstoned id would never even be recorded here - so reaching length 2 already proves the re-open rode an id the host will answer.
         await vi.waitFor(
           () => expect(relay.subscribeStreamIds.length).toBeGreaterThan(1),
           WAIT,
         );
         expect(statuses).toContain("reconnecting");
         expect(statuses).not.toContain("closed");
-        // The verdict killed the old id on both peers, so the re-open must
-        // ride a FRESH one - `config.ts`: stream ids are never reused within
-        // a session.
+        // The verdict killed the old id on both peers, so the re-open must ride a fresh one - `config.ts`: stream ids are never reused within a session.
         expect(relay.subscribeStreamIds[1]).not.toBe(streamId);
 
         await relay.sendStreamFrame(
@@ -6820,13 +6231,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     TEST_BUDGET_MS,
   );
 
-  // The interleaving the per-stream timer alone cannot cover: the session
-  // drops DURING the reopen backoff. The re-dial clears every pending
-  // per-stream timer and the next openAck replays the subscription itself -
-  // and the replay must carry the FRESH id the fatal re-keyed the stream to,
-  // because the old id is tombstoned on the client (`handleRelayFrame` would
-  // discard every frame it earned) even though the new host session would
-  // happily answer it.
+  // The interleaving the per-stream timer alone cannot cover: the session drops during the reopen backoff.
   it(
     "recovers a retryable-fatal stream when the session reconnects during the reopen backoff",
     async () => {
@@ -6863,11 +6268,8 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
           incompatibleMethods: null,
           upgradeGuidance: null,
         });
-        // The fatal must be PROCESSED (tombstone set, reopen scheduled) before
-        // the drop, or the drop can outrun the frame and the test exercises a
-        // plain reconnect instead of the fatal-then-drop interleaving. The
-        // first `reconnecting` can only come from the fatal handler here - no
-        // drop has happened yet.
+        // The fatal must be processed (tombstone set, reopen scheduled) before the drop, or the drop can outrun the frame and the test exercises a plain reconnect instead of the fatal-then-drop interleaving.
+        // The first `reconnecting` can only come from the fatal handler here - no drop has happened yet.
         await vi.waitFor(
           () => expect(statuses).toContain("reconnecting"),
           WAIT,
@@ -6891,9 +6293,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         await vi.waitFor(() => expect(framesDelivered).toBe(1), WAIT);
         expect(statuses[statuses.length - 1]).toBe("open");
         expect(statuses).not.toContain("closed");
-        // The drop cleared the pending per-stream reopen, so the handshake
-        // replay is the ONLY re-subscribe - a surviving timer would have sent
-        // a duplicate SUBSCRIBE for a stream that already recovered.
+        // The drop cleared the pending per-stream reopen, so the handshake replay is the only re-subscribe - a surviving timer would have sent a duplicate subscribe for a stream that already recovered.
         expect(relay.subscribeStreamIds).toHaveLength(2);
       } finally {
         session.close();
@@ -6903,11 +6303,6 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
   );
 
   // One broken resolver must not make the whole remote host look unavailable.
-  // The ready boundary waits for every subscribed id to earn a frame, and a
-  // stream in its private retryable-FATAL loop can never earn one - so before
-  // the exemption, `isReady()` stayed false forever, the session was never
-  // announced, availability recovery never fired, and the reconnect backoff
-  // never reset, while every other stream exchanged frames on a healthy mux.
   it(
     "reaches the ready boundary while one stream is stuck in its retryable-FATAL loop",
     async () => {
@@ -6940,9 +6335,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         );
         const [healthyId, brokenId] = relay.subscribeStreamIds;
 
-        // The healthy stream earns its frame; the broken one gets the
-        // retryable verdict that re-keys it and parks it on the reopen
-        // backoff - the loop this layer deliberately lets run forever.
+        // The healthy stream earns its frame; the broken one gets the retryable verdict that re-keys it and parks it on the reopen backoff - the loop this layer deliberately lets run forever.
         await relay.sendStreamFrame(
           healthyId,
           { kind: "snapshot", hasBinaryPayload: false },
@@ -6958,9 +6351,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         });
 
         await vi.waitFor(() => expect(healthyFrames).toBe(1), WAIT);
-        // The boundary completes despite the retry-looping stream: the
-        // session is ready and the recovery edge (the only automatic signal
-        // that un-strands pre-dial query errors) has fired.
+        // The boundary completes despite the retry-looping stream: the session is ready and the recovery edge (the only automatic signal that un-strands pre-dial query errors) has fired.
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(recoveredEvents).toBe(1);
       } finally {
@@ -6970,11 +6361,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     TEST_BUDGET_MS,
   );
 
-  // The retry-state ledger has to empty on EVERY terminal path. A delivered
-  // frame clears it, a non-retryable FATAL clears it, a caller close clears
-  // it - but a HOST close of a reopened stream that had not yet earned its
-  // first frame did not, and in this long-lived shared session those entries
-  // accumulated per short-lived stream forever.
+  // The retry-state ledger has to empty on every terminal path.
   it(
     "clears the per-stream retry state when the host CLOSEs a reopened stream before its first frame",
     async () => {
@@ -7019,7 +6406,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         // first frame that would clear it.
         expect(session.streamReopenStateForTests().attempts).toBe(1);
 
-        // The host ends the reopened stream normally BEFORE any frame - the
+        // The host ends the reopened stream normally before any frame - the
         // one terminal path that leaked the entry.
         await relay.sendStreamClose(reopenedId, "resolver finished");
         await vi.waitFor(() => expect(statuses).toContain("closed"), WAIT);
@@ -7036,33 +6423,12 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
 });
 
 /**
- * Clock-skew park on the RELAY transport (Clock-skew detection and self-healing
- * recovery, §2 — extended to remote sessions).
- *
- * A wrong wall clock is a property of the MACHINE, so a user whose clock is
- * hours off wedges identically against a remote host: authn (correct clock)
- * keeps answering "valid" while the host keeps FATAL-ing the same bearer, and
- * the no-progress bound walks the session terminal. The remote user is also the
- * one least able to guess why — hence the same park here.
- *
- * One structural difference from the local transport, and it is the reason
- * there is a single park site rather than two: this session has no pre-dial
- * expiry gate, so it always spends one full attach+reject round trip before the
- * verdict is consulted.
+ * Clock-skew park on the relay transport (Clock-skew detection and self-healing recovery, §2 - extended to remote sessions).
  */
 describe("RemoteSession clock-skew park", () => {
   /**
-   * A hand-driven `ServerClockSkewSignal`. The transport's contract is with the
-   * verdict, its DIRECTION, and the recovery edge; keeping the double dumb
-   * makes these tests statements about the session, not about the tracker
-   * (which has its own suite).
-   *
-   * `skewed-ahead` is the incident: a local clock running FAST, so
-   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
-   * clock - just as wrong, just as banner-worthy, and incapable of being why
-   * the relay rejected a bearer. The predicate is computed exactly as the real
-   * tracker computes it rather than hardcoded per case, so the double cannot
-   * drift from the sign convention.
+   * A hand-driven `ServerClockSkewSignal`.
+   * The predicate is computed exactly as the real tracker computes it rather than hardcoded per case, so the double cannot drift from the sign convention.
    */
   function makeClockSignal(initial: "ok" | "skewed-ahead" | "skewed-behind"): {
     readonly signal: ServerClockSkewSignal;
@@ -7102,7 +6468,7 @@ describe("RemoteSession clock-skew park", () => {
     };
   }
 
-  /** Always UNAUTHORIZED, and a revalidator that never rotates: no progress. */
+  /** Always unauthorized, and a revalidator that never rotates: no progress. */
   function buildNoProgressSession(
     relay: FakeRelayHost,
     lease: MutableBearerLease,
@@ -7135,8 +6501,6 @@ describe("RemoteSession clock-skew park", () => {
           WAIT,
         );
         // Far longer than the three backoff rungs the bound would have burned.
-        // A session that counted this cycle would be closed by now; a parked
-        // one has not re-attached even once.
         await new Promise((resolve) => setTimeout(resolve, 400));
         expect(session.isClosed()).toBe(false);
         expect(relay.openBearers).toEqual(["clock-skewed-token"]);
@@ -7191,9 +6555,7 @@ describe("RemoteSession clock-skew park", () => {
   it(
     "still reaches the terminal bound for a host config mismatch, which looks identical on the wire",
     async () => {
-      // The reason the park keys on the tracker's verdict and never on the
-      // rejection shape: a misconfigured host produces the very same
-      // no-progress streak, and retrying that forever helps nobody.
+      // The reason the park keys on the tracker's verdict and never on the rejection shape: a misconfigured host produces the very same no-progress streak, and retrying that forever helps nobody.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("mismatched-token", "user-1");
       const clock = makeClockSignal("ok");
@@ -7201,10 +6563,8 @@ describe("RemoteSession clock-skew park", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
-        // The bound is what this case is about, so pin that it was actually
-        // walked. Without this, an implementation that closed on the first
-        // rejection - never retrying at all - would satisfy `isClosed()` and
-        // read as "reached the terminal bound".
+        // The bound is what this case is about, so pin that it was actually walked.
+        // Without this, an implementation that closed on the first rejection - never retrying at all - would satisfy `isClosed()` and read as "reached the terminal bound".
         expect(relay.openBearers).toHaveLength(3);
         expect(clock.recoverySubscribers()).toBe(0);
       } finally {
@@ -7216,13 +6576,8 @@ describe("RemoteSession clock-skew park", () => {
   it(
     "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
     async () => {
-      // The mirror of the incident, and the failure this feature would
-      // otherwise have reintroduced in the opposite direction. A SLOW clock
-      // makes a bearer look more valid, never expired, and the relay validates
-      // against its own clock - so it cannot be why this bearer was rejected.
-      // Whatever is (host config mismatch, revocation) is exactly what the
-      // bound exists to diagnose, and a remote user stranded behind "fix your
-      // clock" has no way at all to discover the real cause.
+      // The mirror of the incident, and the failure this feature would otherwise have reintroduced in the opposite direction.
+      // A slow clock makes a bearer look more valid, never expired, and the relay validates against its own clock - so it cannot be why this bearer was rejected.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("mismatched-token", "user-1");
       const clock = makeClockSignal("skewed-behind");
@@ -7239,13 +6594,7 @@ describe("RemoteSession clock-skew park", () => {
   );
 });
 
-/**
- * The remote twin of the local park's status-emit hazard. Here the external
- * callback inside the park is `reportEvidenceOutcome`, which hands control to
- * the selection authority - a component whose entire job is to react to
- * transport evidence, and which can retire this host (closing this session)
- * before the call returns.
- */
+/** The remote twin of the local park's status-emit hazard. */
 describe("RemoteSession clock-skew park re-entrancy", () => {
   it(
     "leaves NO subscription behind when the evidence sink closes the session re-entrantly",
@@ -7304,15 +6653,8 @@ describe("RemoteSession clock-skew park re-entrancy", () => {
 });
 
 /**
- * The host's H11 gate (`RemoteClientSession.feedInbound`) closes the whole
- * session when an unchunked frame arrives out of sequence on its stream. A
- * stream's CLOSE is the last frame the client sends on it, and every path
- * that retires the stream's `seq` counter must therefore draw the CLOSE's
- * `seq` from the retired counter, not from a fresh one - a CLOSE at seq 0 on
- * a stream whose SUBSCRIBE already drew 0 is `SESSION_FRAME_SEQUENCE_MISMATCH`
- * on the host, which is how every remote session on mobile died on the first
- * screen change. `FakeRelayHost` enforces the same gate, so each of these
- * also proves the fake would have caught the regression.
+ * The host's H11 gate (`RemoteClientSession.feedInbound`) closes the whole session when an unchunked frame arrives out of sequence on its stream.
+ * `FakeRelayHost` enforces the same gate, so each of these also proves the fake would have caught the regression.
  */
 describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H11 gate)", () => {
   function seqsOnStream(
@@ -7345,7 +6687,7 @@ describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H1
         );
         const streamId = relay.subscribeStreamIds[0];
         stream.close();
-        // The host HANDLED the CLOSE (it is in `closesSent`, past the seq
+        // The host handled the close (it is in `closesSent`, past the seq
         // gate) - not merely that the client put one on the wire.
         await vi.waitFor(
           () => expect(relay.closesSent).toContain(streamId),
@@ -7433,12 +6775,7 @@ describe("RemoteSession outbound seq continuity across a client-detected inbound
   it(
     "a stream failed on inbound reassembly sends its CLOSE at the seq after the SUBSCRIBE",
     async () => {
-      // The fifth retire site, and the one a source-order reading misses:
-      // `failStreamOnInboundError` enqueued the CLOSE ABOVE its delete, but
-      // the seq is drawn when the scheduler pulls - after every synchronous
-      // line of the method - so the CLOSE still left at seq 0. Unlike a
-      // host-sent FATAL, the host has NOT tombstoned this stream (the fault
-      // was detected here), so this CLOSE reaches its seq gate for real.
+      // Unlike a host-sent fatal, the host has not tombstoned this stream (the fault was detected here), so this close reaches its seq gate for real.
       const relay = new FakeRelayHost();
       relay.streamManifest = buildStreamManifest(
         cursorStreamRegistry,
@@ -7483,19 +6820,11 @@ describe("RemoteSession outbound seq continuity across a client-detected inbound
           QosClass.INTERACTIVE,
         );
         await vi.waitFor(() => expect(siblingOpen).toBe(true), WAIT);
-        // A continuation chunk with no start in flight: a per-stream
-        // reassembly fault the client attributes to `faulted`. Sealed ahead
-        // so the two sends below share one synchronous tick.
+        // A continuation chunk with no start in flight: a per-stream reassembly fault the client attributes to `faulted`.
         const [, continuation] = buildChunkFrames(faultedId);
         const sealedFault = await relay.encryptFrame(continuation);
 
-        // The interleaving that made the old code wrong ONLY here: a 3-chunk
-        // client message on the sibling puts the pump mid-`await write` when
-        // the fault lands, so the CLOSE cannot draw its seq synchronously at
-        // enqueue and instead draws it when the pump comes back - after every
-        // line of `failStreamOnInboundError` has run. With an idle pump the
-        // old source order happened to work, which is why a single-stream
-        // version of this test stayed green against the bug.
+        // With an idle pump the old source order happened to work, which is why a single-stream version of this test stayed green against the bug.
         sibling.sendClientFrame(
           { kind: "snapshot", hasBinaryPayload: true },
           new Uint8Array(3 * BULK_CHUNK_SIZE_BYTES),

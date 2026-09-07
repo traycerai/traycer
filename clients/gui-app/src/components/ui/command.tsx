@@ -28,10 +28,8 @@ function CommandInput({
   leading,
   ...props
 }: React.ComponentProps<typeof CommandPrimitive.Input> & {
-  /**
-   * Optional leading affordance rendered in place of the search icon - e.g. a
-   * back button when the surface has drilled into a sub-page.
-   */
+  /** Optional leading affordance rendered in place of the search icon - e.g. a back button when the surface has
+   * drilled into a sub-page. */
   leading?: React.ReactNode;
 }) {
   return (
@@ -63,10 +61,7 @@ function CommandList({
       ref={ref}
       data-slot="command-list"
       className={cn(
-        // `overflow-anchor:none` is required: cmdk physically re-sorts the item
-        // DOM nodes on every keystroke, and the browser's scroll-anchoring would
-        // otherwise fight cmdk's own scroll-into-view and leave the active item
-        // scrolled out of view.
+        // `overflow-anchor:none` is required: cmdk physically re-sorts the item DOM nodes on every keystroke.
         "no-scrollbar max-h-72 scroll-py-1 overflow-x-hidden overflow-y-auto outline-none [overflow-anchor:none]",
         className,
       )}
@@ -117,19 +112,7 @@ function CommandSeparator({
   );
 }
 
-/**
- * Selected-state utilities are spelled `data-[selected=true]:`, never the
- * shorter bare `data-selected:`. cmdk sets the attribute on EVERY item
- * (`"data-selected": !!selected`, which React stringifies to `"false"`), and
- * Tailwind compiles the bare form to an attribute-PRESENCE selector - so it
- * matches every row and the "selected" styling has no unselected state to
- * contrast with. That held for this row's fill, border, shadow and icon tint
- * simultaneously, which is why it read as a theme rather than as a bug.
- *
- * `src/__tests__/data-selected-value-form-lint.test.ts` keeps the bare form
- * out of the tree; `__tests__/command-selected-state.test.tsx` checks that the
- * compiled rules actually discriminate.
- */
+/** Selected-state utilities are spelled `data-[selected=true]:`, never the shorter bare `data-selected:`. */
 function CommandItem({
   className,
   children,
@@ -150,10 +133,7 @@ function CommandItem({
   );
 }
 
-// The row's trailing chord chip. Gated as a whole rather than at its one call
-// site: the wrapper span is also what `CommandItem` keys its check-mark off
-// (`group-has-data-[slot=command-shortcut]`), so a bound command must either
-// show its chord or read as a plain row.
+// Gated as a whole rather than at its one call site.
 function CommandShortcut({
   className,
   children,
@@ -169,9 +149,8 @@ function CommandShortcut({
         )}
         {...props}
       >
-        {/* Repeated on the keycap because the span above only sets an INHERITED
-            color, and `Kbd` paints its own `text-muted-foreground` directly on
-            the element, which beats it. */}
+        {/* Repeated on the keycap because the span above only sets an inherited color, and `Kbd` paints its own
+           `text-muted-foreground` directly on the element, which beats it. */}
         <Kbd className="font-mono tabular-nums group-data-[selected=true]/command-item:text-foreground">
           {children}
         </Kbd>

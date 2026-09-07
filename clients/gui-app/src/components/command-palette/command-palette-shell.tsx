@@ -1,21 +1,5 @@
-/**
- * Modal command palette (⌘K). Presentational shell - dialog, input, grouped
- * list, sub-page stack, dispatch wiring. Items + context come in as props so
- * callers pick which sources participate:
- *
- *   - `CommandPalette` (prod) feeds items from every registered source.
- *   - `CommandPaletteTestShell` skips React-backed sources so palette tests
- *     don't need a full host + query provider stack.
- *
- * The cmdk view/sub-page machinery is shared with the inline in-pane opener via
- * `palette-cmdk.tsx`; this file owns only the modal chrome + the global root
- * (pinned / recents / scope buckets). The opener lives inline in empty panes
- * (`pane-opener.tsx`), not in this modal.
- *
- * Scope narrowing comes from the leading prefix character of the query
- * (`>`, `#`, `@`, `?`). The input shows the raw query with the prefix visible;
- * a custom cmdk filter strips the prefix before substring matching.
- */
+/** The input shows the raw query with the prefix visible; a custom cmdk filter strips the prefix before
+ * substring matching. */
 import {
   useCallback,
   useMemo,
@@ -68,11 +52,8 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const PLACEHOLDER_HINT = "Search commands…";
 
-/**
- * Props the shell hands to the injected root-list component. The shell renders
- * `RootList` ONLY inside the open dialog content, so whatever command sources it
- * subscribes to run only while the palette is open.
- */
+/** The shell renders `RootList` only inside the open dialog content, so whatever command sources it subscribes
+ * to run only while the palette is open. */
 export interface PaletteRootListProps {
   readonly ctx: CommandContext;
   readonly effectiveQuery: string;
@@ -85,13 +66,8 @@ export interface PaletteRootListProps {
 
 export interface CommandPaletteShellProps {
   readonly ctx: CommandContext;
-  /**
-   * Root command list. The shell mounts it only inside the OPEN dialog content
-   * (Radix unmounts content while closed), so the command sources it subscribes
-   * to - canvas tabs, keybindings, host, history - don't run and can't
-   * re-render the app behind a closed palette. Prod and test inject different
-   * source sets via this seam.
-   */
+  /** The shell mounts it only inside the open dialog content (Radix unmounts content while closed), so the
+   * command sources it subscribes to - canvas tabs, keybindings, host, history. */
   readonly RootList: ComponentType<PaletteRootListProps>;
 }
 
@@ -116,9 +92,8 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
   const { activeSubpage, runItem, popSubpage, resetStack } =
     usePaletteController({ ctx, resetQuery, recordUse, close });
 
-  // Typing re-filters the list; `handleQueryChange` snaps back to the top so the
-  // auto-selected first match stays in view instead of cmdk's scroll landing
-  // off-target.
+  // Typing re-filters the list; `handleQueryChange` snaps back to the top so the auto-selected first match stays
+  // in view instead of cmdk's scroll landing off-target.
   const { listRef, handleQueryChange } = usePaletteScrollReset(setQuery);
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -145,9 +120,8 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
       <DialogContent
         className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden rounded-xl p-0"
         showCloseButton={false}
-        // Radix's document-level Esc listener can't be reached via React
-        // propagation; `onEscapeKeyDown` + `preventDefault` is the first-party
-        // hook for popping a sub-page instead of closing the dialog.
+        // Radix's document-level Esc listener can't be reached via React propagation; `onEscapeKeyDown` +
+        // `preventDefault` is the first-party hook for popping a sub-page instead of closing the dialog.
         onEscapeKeyDown={(event) => {
           if (activeSubpage !== null) {
             event.preventDefault();
@@ -204,9 +178,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Root view (global palette)
-// ---------------------------------------------------------------------------
 
 export interface RootViewProps extends PaletteRootListProps {
   readonly items: ReadonlyArray<CommandItemShape>;
@@ -276,9 +248,7 @@ export function RootView(props: RootViewProps) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Group renderer
-// ---------------------------------------------------------------------------
 
 interface GroupBlockProps {
   readonly bucket: CommandGroupBucket;

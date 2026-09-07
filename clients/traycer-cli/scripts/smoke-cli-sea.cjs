@@ -1,18 +1,7 @@
 "use strict";
 
-// Smoke test for the production CLI SEA artifact. Verifies that:
-//
-//   1. `dist-sea/traycer[.exe]` exists (`build:sea` ran first).
-//   2. The binary executes with `PATH=""` so neither user-installed
-//      `node` nor `bun` can be picked up - proving the SEA blob carries
-//      its own Node runtime end-to-end.
-//   3. The expected commander surface is reachable (`traycer --version`
-//      returns a non-empty version string).
-//
-// `PATH=""` is the best-effort local approximation of "machine with no
-// Node/Bun installed". On Windows PATH always includes the system32
-// directory regardless, so we settle for clearing user PATH entries
-// rather than emptying it entirely.
+// Smoke test for the production CLI SEA artifact.
+// Verifies that: 1.
 
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -67,18 +56,15 @@ function main() {
   if (out.length === 0) {
     fail("`traycer --version` produced no stdout");
   }
-  // Regression guard for ticket:e86b8372-…/284b9132-… - the pre-fix
-  // entrypoint advertised a hardcoded `0.0.0` regardless of what
-  // `TRAYCER_CLI_VERSION` injected. The local-fallback sentinel is
-  // `0.0.0-local`, so we only refuse the bare `0.0.0` shape here.
+  // Regression guard for ticket:e86b8372-…/284b9132-… - the pre-fix entrypoint advertised a hardcoded `0.0.0` regardless of what `TRAYCER_CLI_VERSION` injected.
+  // The local-fallback sentinel is `0.0.0-local`, so we only refuse the bare `0.0.0` shape here.
   if (out === "0.0.0") {
     fail(
       `\`traycer --version\` reported the pre-fix placeholder '0.0.0'; the SEA build is not consuming TRAYCER_CLI_VERSION`,
     );
   }
-  // When the build environment injected an expected version, assert
-  // the SEA reports it exactly. CI release workflows always set this;
-  // local builds skip the check.
+  // When the build environment injected an expected version, assert the SEA reports it exactly.
+  // CI release workflows always set this; local builds skip the check.
   const expected = process.env.TRAYCER_CLI_VERSION_EXPECT;
   if (typeof expected === "string" && expected.length > 0 && out !== expected) {
     fail(

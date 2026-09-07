@@ -8,9 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
 
 /**
- * `PrDetailHeader`'s "Open on GitHub" action - a plain `<a>` whose click
- * routes through {@link useOpenLink} (`"github"` kind) instead of navigating
- * natively.
+ * `PrDetailHeader`'s "Open on GitHub" action - a plain `<a>` whose click routes through {@link useOpenLink} (`"github"` kind) instead of navigating natively.
  */
 
 const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));

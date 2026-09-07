@@ -2,10 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { deriveTitleBarOverlayColors } from "@/lib/title-bar-overlay-colors";
 
 /**
- * The Windows native min/max/close controls are drawn by Electron from the
- * `titleBarOverlay` colors. They must track the app's active theme + light/dark
- * mode, so the derived overlay colors are read from the same `--canvas` /
- * `--canvas-foreground` surface tokens the header itself paints with.
+ * The Windows native min/max/close controls are drawn by Electron from the `titleBarOverlay` colors.
+ * They must track the app's active theme + light/dark mode, so the derived overlay colors are read from the same `--canvas` / `--canvas-foreground` surface tokens the header itself paints with.
  */
 describe("deriveTitleBarOverlayColors", () => {
   afterEach(() => {

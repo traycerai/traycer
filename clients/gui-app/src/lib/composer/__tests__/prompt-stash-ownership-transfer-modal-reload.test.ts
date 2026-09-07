@@ -603,16 +603,8 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
   });
 
   it("accepted consume residual: landing accepted-insert-then-crash-before-projection-flush", async () => {
-    // Residual: landing destination accepts restore into the live editor
-    // (production importAndInsert only calls handle.setContent). Projection
-    // into the draft runtime / durable store is a separate async path. Crash
-    // before that projection lands loses the restored body even though the
-    // stash was already consumed (accepted risk, not a stash bug).
-    //
-    // Note: `resetForTesting` → runtime.close() flushes pending snapshots, so
-    // we deliberately do NOT wire onSetContent→setSnapshot here. That keeps
-    // the restore confined to the editor (the destination's actual write),
-    // matching "accepted insert, projection never ran".
+    // Residual: landing destination accepts restore into the live editor (production importAndInsert only calls handle.setContent).
+    // Projection into the draft runtime / durable store is a separate async path.
     const h = await loadHarness();
     const { act, cleanup, renderHook } = h.testing;
     const draftId = "residual-landing-crash";

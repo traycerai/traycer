@@ -5,54 +5,25 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { formatInstallDate } from "@/components/settings/panels/host-settings-panel-model";
 import { cn } from "@/lib/utils";
 
-/**
- * One installable host version, reduced to what a row shows.
- *
- * The two surfaces that list versions read from genuinely different places —
- * the recovery console asks the LOCAL CLI bridge (`host available --json` on
- * this box, via `IHostManagement`), and the Overview asks the SCOPED HOST over
- * `host.update.check`, which is the only way to answer the question for a
- * machine in a datacenter. Their payloads differ in shape and in what they can
- * know: the bridge snapshot carries a `platformKey` and the manifest URL it
- * read, the RPC manifest carries neither, because the host's CLI already
- * projected the entry to its own platform before emitting it.
- *
- * What a person reads off a row is identical either way, so this is the shared
- * half: each caller projects its own payload to these fields, and neither has
- * to pretend to be the other to reuse the markup. An earlier pass tried the
- * other direction — synthesising a bridge-shaped snapshot from the RPC manifest
- * — which meant inventing a `platformKey` and a `manifestUrl` the host never
- * sent, on a page whose whole premise is that it does not make facts up.
- */
+/** An earlier pass tried the other direction - synthesising a bridge-shaped snapshot from the RPC manifest. */
 export interface HostVersionRow {
   readonly version: string;
   readonly releasedAt: string;
   readonly yanked: boolean;
   readonly isLatest: boolean;
   readonly isInstalled: boolean;
-  /**
-   * Why this version cannot be installed HERE, or `null` when it can. Carries
-   * the reason rather than a boolean so the disabled button can say what a
-   * person would otherwise have to guess: no asset for this platform, an
-   * unavailable one, or a publisher's own note.
-   */
+  /** Carries the reason rather than a boolean so the disabled button can say what a person would otherwise have
+   * to guess: no asset for this platform, an unavailable one, or a publisher's own note. */
   readonly unavailableReason: string | null;
 }
 
-/**
- * The version list itself: rows, per-row Install, and the preview/full toggle.
- *
- * Deliberately presentational. Which versions exist, which one is installed and
- * what "install" means are all the caller's business — this decides only how a
- * row looks and when its button is dead.
- */
+/** Which versions exist, which one is installed and what "install" means are all the caller's business - this
+ * decides only how a row looks and when its button is dead. */
 export function HostVersionRows(props: {
   readonly rows: readonly HostVersionRow[];
-  /** Rows beyond the preview slice, so the toggle can say whether it is worth it. */
   readonly totalCount: number;
   readonly showAll: boolean;
   readonly onToggleShowAll: () => void;
-  /** The version whose install is in flight, or `null`. */
   readonly installingVersion: string | null;
   /** Something else holds the surface (another mutation, a degraded host). */
   readonly disabled: boolean;
@@ -77,9 +48,8 @@ export function HostVersionRows(props: {
             key={row.version}
             row={row}
             installing={props.installingVersion === row.version}
-            // Any install in flight freezes every row, not just its own. These
-            // all drive one detached swap on one host, and a second request
-            // mid-swap retargets an update already running.
+            // These all drive one detached swap on one host, and a second request mid-swap retargets an update already
+            // running.
             disabled={props.disabled || props.installingVersion !== null}
             onInstall={props.onInstall}
           />
@@ -149,8 +119,8 @@ function VersionRow(props: {
             variant="secondary"
             size="sm"
             disabled={props.disabled || blocked}
-            // The version lives in a SIBLING element, so every row's button
-            // otherwise reads as the same bare "Install" to a screen reader.
+            // The version lives in a sibling element, so every row's button otherwise reads as the same bare "Install" to
+            // a screen reader.
             aria-label={`Install ${row.version}`}
             onClick={() => props.onInstall(row.version)}
           >

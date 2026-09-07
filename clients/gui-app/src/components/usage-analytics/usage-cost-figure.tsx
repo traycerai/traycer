@@ -15,44 +15,21 @@ export interface UsageCostFigureProps {
   readonly totals: UsageSummaryTotals;
   readonly coverage: UsageCostCoverage;
   readonly servedBy: UsageServedBy;
-  /**
-   * The host this figure was narrowed to, when the reader picked one -
-   * `null` for an unfiltered read AND for every surface where the host
-   * dimension does not apply (the epic- and chat-scoped dialogs, whose
-   * subject is the same work wherever it ran).
-   */
+  /** The host this figure was narrowed to, when the reader picked one. */
   readonly hostScopeName: string | null;
-  /**
-   * `display` is the epic usage dialog's hero treatment: one step larger,
-   * proportional figures. `default` (Settings' hero, the chat dialog) and
-   * `compact` are untouched by it.
-   */
+  /** `display` is the epic usage dialog's hero treatment: one step larger, proportional figures. */
   readonly size: "compact" | "default" | "display";
 }
 
-/**
- * The one place every honesty element for a cost total is composed - at
- * t3code's density (user ruling 2026-08-10, fixup-01): the headline carries
- * its own asterisk, a five-word footnote sits below it ("* if billed at
- * full API rate"), and a "· N turns not counted" suffix is the ONE thing
- * allowed to claim extra standing pixels, only while unpriced turns exist.
- * Everything else - the estimate-at-list-prices explanation, the
- * subscription-bills-separately note, the exact-vs-estimate split with
- * amounts, the not-counted detail - lives in a tooltip on the figure
- * itself, never as standing text. Still the single owner of this
- * presentation so the rule can't fragment across surfaces.
- */
+/** Still the single owner of this presentation so the rule can't fragment across surfaces. */
 export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
   const { totals, coverage, servedBy, hostScopeName, size } = props;
   const { amount, footnote } = describeCostHeadline(totals, coverage);
   const tooltip =
     totals.factCount === 0 ? null : usageCostTooltip(totals, coverage);
   const scopeNote = servedByScopeNote(servedBy, hostScopeName);
-  // Only the host-filter branch of the note embeds a workspace-internal
-  // name, and a shared image must not carry it. The local-plane note names
-  // no host AND wins over the filter, so this mirrors `servedByScopeNote`'s
-  // branch order rather than testing `hostScopeName` alone - otherwise the
-  // export would rewrite a note that never leaked anything.
+  // Only the host-filter branch of the note embeds a workspace-internal name, and a shared image must not carry
+  // it.
   const redactedScopeNote =
     servedBy !== "local" && hostScopeName !== null
       ? "Selected host only — your other hosts aren't included."
@@ -61,9 +38,8 @@ export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
     "font-semibold text-foreground",
     size === "compact" && "text-ui-sm tabular-nums",
     size === "default" && "text-title-md tabular-nums",
-    // No `tabular-nums` at display size on purpose: tabular figures give
-    // every digit a zero's width, which reads loose on a standalone hero
-    // number - they are for columns that must align, not display type.
+    // No `tabular-nums` at display size on purpose: tabular figures give every digit a zero's width, which reads
+    // loose on a standalone hero number - they are for columns that must align, not display type.
     size === "display" && "text-title-lg",
   );
 
@@ -78,10 +54,8 @@ export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
           sideOffset={undefined}
           align="start"
         >
-          {/* A real button, not `tabIndex` on a span
-              (jsx-a11y/no-noninteractive-tabindex) - the only way a
-              keyboard/AT user can reach this tooltip's explanation without a
-              mouse. No `onClick`: focus alone is its job. */}
+          {/* A real button, not `tabIndex` on a span (jsx-a11y/no-noninteractive-tabindex) - the only way a keyboard/AT
+             user can reach this tooltip's explanation without a mouse. */}
           <button
             type="button"
             className={cn(

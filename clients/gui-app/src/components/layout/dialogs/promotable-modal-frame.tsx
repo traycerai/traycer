@@ -11,9 +11,7 @@ import {
 interface PromotableModalFrameProps {
   readonly icon: ReactNode;
   readonly title: string;
-  /** Sizing for the centered frame (the rest of the chrome is shared). */
   readonly contentClassName: string;
-  /** Extra `data-*` attributes spread onto the content (debug/test hooks). */
   readonly dataAttributes: Record<string, string>;
   readonly promoteAriaLabel: string;
   readonly promoteTestId: string;
@@ -23,45 +21,23 @@ interface PromotableModalFrameProps {
   readonly children: ReactNode;
 }
 
-// `top-safe-center-y` / `left-safe-center-x`, not the halfway marks: a fixed
-// frame centres on the viewport, which on a phone includes the strips the app
-// never paints into - the status bar above, and the sensor housing on one side
-// in landscape. The horizontal centre is displaced by half the DIFFERENCE
-// between the two side insets, not by half of one of them, because only one
-// side carries the housing at a time.
-//
-// `max-w-safe-dvw` caps the width against the same region: a caller sizing the
-// frame to the full window (`w-safe-dvw`) is already inside it, but one asking
-// for a viewport fraction is not. Both collapse to their plain equivalents
-// wherever the insets are zero.
+// `top-safe-center-y` / `left-safe-center-x`, not the halfway marks: a fixed frame centres on the viewport,
+// which on a phone includes the strips the app never paints into.
 const FRAME_CONTENT_CLASS =
   "fixed top-safe-center-y left-safe-center-x z-50 flex max-w-safe-dvw -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl bg-background text-foreground ring-1 ring-foreground/10 shadow-2xl duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
 
-/**
- * Shared floating-modal chrome for surfaces that can be promoted into a tab
- * (Settings/History, Workspaces): dimmed overlay, centered frame, and a title
- * bar with "Open as tab" + Close. Callers supply the sizing and body so the
- * modal reads as the same surface as its tab-mounted variant, just framed.
- *
- * Render inside a `<DialogPrimitive.Root>` whose open state the caller owns.
- */
+/** Shared floating-modal chrome for surfaces that can be promoted into a tab (Settings/History, Workspaces):
+ * dimmed overlay, centered frame, and a title bar with "Open as tab" + Close. */
 export function PromotableModalFrame(
   props: PromotableModalFrameProps,
 ): ReactNode {
   const overlayRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  // Sampled in the overlay's onPointerDown: while a nested layer (the
-  // tier-filter/sort dropdown) is open, the dialog Content is pointer-events:none,
-  // so the overlay is the hit-target for EVERY click-out - and the dialog's
-  // outside-dismissal is deferred to the subsequent click, after the dropdown has
-  // already closed. Only this pointerdown-time sample can tell "dismissing the
-  // dropdown" apart from a genuine backdrop click; see dialog-outside-guard.ts.
+  // Only this pointerdown-time sample can tell "dismissing the dropdown" apart from a genuine backdrop click;
+  // see dialog-outside-guard.ts.
   const nestedLayerOwnedPointerDownRef = useRef(false);
-  // A genuine backdrop click still closes the modal; any outside-dismissal whose
-  // gesture did not start on the overlay, or started while a nested layer held
-  // the pointer, is left to that inner layer - it must not close the whole modal.
-  // Escape is deliberately NOT guarded: Radix routes it to the top layer, so the
-  // first Escape closes an open dropdown and the next closes the modal.
+  // A genuine backdrop click still closes the modal; any outside-dismissal whose gesture did not start on the
+  // overlay, or started while a nested layer held the pointer, is left to that inner layer.
   const preventUnlessGenuineBackdropGesture = (event: {
     readonly detail: { readonly originalEvent: Event };
     readonly preventDefault: () => void;

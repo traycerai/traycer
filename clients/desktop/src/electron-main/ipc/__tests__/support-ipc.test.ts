@@ -797,12 +797,6 @@ describe("parseSupportSubmitReportRequest", () => {
     });
 
     it("rejects a payload larger than the per-image size limit before the budget check", () => {
-      // With current constants, MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES
-      // (15_728_640) is still under the budget ceiling
-      // (TOTAL - 2*LOG = 19_947_520), so a pure budget-exceed path is not
-      // reachable through valid per-image sizes. The size gate fires first
-      // for any buffer large enough to threaten the total budget alone.
-      // Predicate boundary coverage lives in image-attachment-guards.test.ts.
       const maxFitting =
         TOTAL_ATTACHMENT_BUDGET_BYTES - 2 * REPORT_LOG_TAIL_MAX_BYTES;
       expect(MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES).toBeLessThan(

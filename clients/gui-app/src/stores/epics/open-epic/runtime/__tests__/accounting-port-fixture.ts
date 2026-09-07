@@ -1,21 +1,9 @@
-/**
- * The ONE `EpicRuntimeAccountingPort` construction site for tests.
- *
- * One site and an EXPLICIT return type, which is the pairing 4d's `docGuid`
- * sweep proved is needed: a collapsed-but-unannotated helper lets an added
- * contract member fail at every CALL site instead of once here, and the
- * annotation is the half that makes it a single point of failure.
- *
- * It records rather than no-ops, so a suite that wants to assert on accounting
- * can, and one that does not can ignore `calls` entirely.
- */
 import type {
   EpicRuntimeAccountingPort,
   EpicRuntimeAccountingSource,
 } from "../epic-runtime-accounting-port";
 
 export interface RecordingAccountingPort extends EpicRuntimeAccountingPort {
-  /** Every reporting call, in order, as `member:arg…`. */
   readonly calls: string[];
   /** The registered source, or `null` before register / after unregister. */
   registeredSource(): EpicRuntimeAccountingSource | null;

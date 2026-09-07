@@ -100,26 +100,7 @@ interface FocusedNotificationScope {
   readonly entity: HostNotificationsEntityRef;
 }
 
-/**
- * Mounted inside the app shell post-auth. Opens the notifications stream as
- * soon as the user is signed in and tears it down on sign-out / token
- * expiry. On sign-out - and on transitions between two distinct signed-in
- * users - the local notifications replica is reset so the incoming user
- * does not see the previous user's entries.
- *
- * On a shell that has a local host, notifications always come from that
- * host (the G8 decision) - never from whichever host happens to be active in
- * a composer/tab elsewhere in the app. A shell with no local host at all
- * falls back to the bound host, because otherwise nothing would ever serve
- * it; that choice lives entirely in `useNotificationsServingHostEntry()`,
- * which is also where the reasoning for the fallback's gate lives.
- *
- * Every stream here binds to that ONE serving host through a transient,
- * non-rebinding client (`useHostStreamClientBindingFor`), never through the
- * app-wide `useWsStreamClient()`. The cloud feed rides the same client: it
- * is reached THROUGH a host, so binding it anywhere else would reintroduce
- * exactly the active-host coupling the local-host rule exists to prevent.
- */
+/** Post-auth notifications stream. Reset the replica on sign-out and on user change. Bind every stream to the serving host (`useHostStreamClientBindingFor`), never the app-wide client. */
 export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
@@ -134,26 +115,9 @@ export function NotificationsSessionProvider(
     streamAuth,
   );
   const servingHostId = servingHostEntry?.hostId ?? null;
-  // Unary acknowledgements share the stream's serving-host binding (the local
-  // host where one exists, the bound host on a shell without one). The
-  // app-wide effective host can still be unresolved when this stream opens.
+  // Unary acknowledgements share the stream's serving-host binding. The app-wide effective host can still be unresolved when this stream opens.
   const servingHostClient = useHostClientFor(servingHostEntry);
-  // A serving-host change reaches this component one commit before its
-  // transport does: `useHostStreamClientBindingFor` builds the replacement
-  // inside an effect, so the value rendered alongside the NEW serving entry
-  // is still the OUTGOING host's binding. Opening against it would stamp the
-  // new host's id onto the old host's transport - a frame arriving on the
-  // outgoing host would enter the replica, toast, and persist receipts under
-  // the incoming host's id.
-  //
-  // The proof of freshness has to be OWNERSHIP, not liveness. A released
-  // client is not necessarily a closed one: a remote client's `close()`
-  // drops this consumer's reference to a SHARED relay session that other
-  // references - or the keep-warm linger - keep open, and the released view
-  // still delegates `subscribe()` to it. So compare the binding's owner
-  // identity against the identity the current serving entry demands, and
-  // treat any mismatch as "no client yet". The live one arrives on the very
-  // next render.
+  // Serving-host change lands one commit before its transport. Prove freshness by ownership, not liveness: a released remote client can still subscribe.
   const servingOwnerIdentity = remoteAwareOwnerIdentityKey(
     servingHostEntry,
     hostClient.getRequestContextUserId(),
@@ -175,11 +139,7 @@ export function NotificationsSessionProvider(
   const activityDisposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const cloudDisposerRef = useRef<(() => void) | null>(null);
-  // The stream client all notification streams were opened against. Stream
-  // ownership follows the client instance: when the provider context serves a
-  // different client (the app-wide liveness rebuild, or any same-identity
-  // replacement), the old client's sessions are already dead, so the streams
-  // must be torn down and reopened against the new client.
+  // Stream ownership follows the client instance: a replacement client means tear down and reopen.
   const openedStreamClientRef =
     useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
   const previousStreamClientRef =
@@ -187,8 +147,7 @@ export function NotificationsSessionProvider(
       servingStreamClient,
     );
   const previousServingHostIdRef = useRef<string | null>(servingHostId);
-  // Start unset so an initially cloud-capable session also clears the legacy
-  // local sources before opening its first relay stream.
+  // Start unset so an initially cloud-capable session also clears legacy local sources.
   const previousFeedModeRef = useRef<
     "local" | "cloud" | "upgrade-required" | null
   >(null);
@@ -198,12 +157,8 @@ export function NotificationsSessionProvider(
     useNotificationMarkEntityRead(servingHostClient);
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<FocusedNotificationScope | null>(null);
-  // Notification-feed delivery is independent from the live chat stream. A
-  // newly observed row may describe an older turn that replicated late, so it
-  // cannot causally consume a renderer-local transport failure. Seed every
-  // completion into the durable replay ledger only; the live
-  // `turn.completed` event acknowledges app-local failures at the chat-store
-  // boundary where ordering is authoritative.
+  // Seed completions into the replay ledger only. A late-replicated row cannot
+  // consume a renderer-local transport failure.
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
@@ -269,11 +224,8 @@ export function NotificationsSessionProvider(
   useEffect(() => {
     onToastClickRef.current = onToastClick;
   }, [onToastClick]);
-  // The merged actions are rebuilt whenever any cloud mutation's state
-  // changes. Reading the fan-out through a ref keeps the two cloud effects
-  // below subscribed for the life of the mode instead of tearing down and
-  // resubscribing on every in-flight mark-read - which would leave a window
-  // where an arriving snapshot has no listener.
+  // Read fan-out through a ref so cloud effects stay subscribed for the mode
+  // lifetime. Resubscribing on every mark-read would miss arriving snapshots.
   const markCloudEntityReadRef = useRef(mergedActions.markEntityAsRead);
   useEffect(() => {
     markCloudEntityReadRef.current = mergedActions.markEntityAsRead;
@@ -289,10 +241,8 @@ export function NotificationsSessionProvider(
       acknowledgementScope: FocusedNotificationScope,
       presenceEntity: HostNotificationsEntityRef,
     ): void => {
-      // App-local rows are client-side state owned by neither feed, so this
-      // half runs identically in both modes. Match them against the focused
-      // presence, which can be narrower than an arriving Task-level row's
-      // acknowledgement target.
+      // App-local rows run in both modes. Match against focused presence,
+      // which can be narrower than a Task-level ack target.
       useAppLocalNotificationsStore
         .getState()
         .markEntityAsRead(
@@ -434,10 +384,8 @@ export function NotificationsSessionProvider(
 
   const tearDown = useCallback((): void => {
     openedStreamClientRef.current = null;
-    // Release this host's connection lease LAST-ish but unconditionally: the
-    // lease is ref-counted with a keep-warm linger, so dropping it here lets
-    // the registry retire the host's bookkeeping when nothing else holds it,
-    // while a prompt re-open (a mode flip, a re-mount) adopts it warm.
+    // Release the connection lease unconditionally. Ref-counted linger lets a
+    // prompt re-open adopt it warm.
     if (hostConnectionRef.current !== null) {
       const lease = hostConnectionRef.current;
       hostConnectionRef.current = null;
@@ -465,10 +413,8 @@ export function NotificationsSessionProvider(
     }
   }, []);
 
-  // The relay session's rows and its view-consumption bookkeeping are one
-  // unit of ownership: the driver holds an in-flight claim and a retry timer
-  // that would otherwise outlive the snapshot they were derived from and fire
-  // against the next session's feed.
+  // Reset relay rows and view-consumption together. An in-flight claim and
+  // retry timer must not fire against the next session.
   const resetCloudRelaySession = useCallback((): void => {
     useCloudNotificationsStore.getState().reset();
     resetCloudEntityReadDriver();
@@ -500,10 +446,8 @@ export function NotificationsSessionProvider(
     clearNotificationIndicatorCaches(queryClient);
   }, [queryClient, resetCloudRelaySession]);
 
-  // Cloud rows are a relay-session snapshot, not a durable replica. A lost
-  // binding or replacement stream client starts a new ownership epoch and
-  // stays non-authoritative while the new relay connects and delivers its own
-  // snapshot.
+  // Cloud rows are a relay snapshot. A lost binding starts a new epoch and
+  // stays non-authoritative until the new snapshot.
   const resetCloudRelayOwnership = useCallback((): void => {
     resetCloudRelaySession();
   }, [resetCloudRelaySession]);
@@ -515,10 +459,8 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().setConnectionStatus("connecting");
     useCloudNotificationsStore.getState().setConnectionState("reconnecting");
-    // Through the store's own setter, not a bare `setState`: moving off
-    // `open` also drops the union's attestation, and a hand-written status
-    // write would leave the cap's busy gate vouching with a union the
-    // dropped connection attested.
+    // Use the store setter. A bare setState would leave the busy gate
+    // vouching with a dropped connection's union.
     noteAgentActivityConnectionStatus("reconnecting");
   }, []);
 
@@ -551,16 +493,8 @@ export function NotificationsSessionProvider(
     });
   }, [consumeFocusedEntity]);
 
-  // TRIGGER 1 (cloud) - presence change.
-  //
-  // Local mode learns "the user is looking at X" from host presence frames,
-  // and neither local stream is opened in cloud mode. But those frames are
-  // built from state this renderer already owns: the canvas store plus
-  // document focus. `readFocusedHostNotificationPresence` is literally
-  // the function the outgoing frame is composed from, and
-  // `subscribeHostNotificationPresence` already watches exactly the inputs
-  // that can change it. Reading it directly is the same signal one hop
-  // earlier - no stream reopened to be told what this window already knows.
+  // Cloud presence: readFocusedHostNotificationPresence is the same signal as
+  // host frames, one hop earlier - do not reopen a stream to learn it.
   useEffect(() => {
     if (notificationFeedMode !== "cloud") return;
     const evaluate = (): void => {
@@ -582,15 +516,8 @@ export function NotificationsSessionProvider(
     return subscribeHostNotificationPresence(evaluate);
   }, [notificationFeedMode, consumeFocusedEntity]);
 
-  // TRIGGER 2 (cloud) - a row arriving for the entity already in view.
-  //
-  // The local counterpart is the terminal-severity branch of `onFeedFrame`.
-  // Cloud rows arrive only as whole snapshots, so the equivalent is to
-  // re-evaluate consumption whenever the row set changes. The severity filter
-  // and the convergence guard both live in the fan-out itself, which writes
-  // nothing when it has no targets - so this cannot drive a mark -> snapshot
-  // -> mark loop, and a server that never takes the marker still gets at most
-  // one request per entry per session.
+  // Cloud: re-evaluate consumption when the row set changes. Fan-out writes
+  // nothing without targets, so this cannot mark/snapshot/mark loop.
   useEffect(() => {
     if (notificationFeedMode !== "cloud") return;
     return useCloudNotificationsStore.subscribe((state, previous) => {
@@ -608,10 +535,8 @@ export function NotificationsSessionProvider(
     ) {
       return;
     }
-    // Same recovery contract as EpicSessionProvider: an `UNAUTHORIZED`
-    // terminal close means the host couldn't accept the current context
-    // bearer. Re-validate against AuthnV3 so the cascade either rotates the
-    // context credentials (transient) or tears the session down via sign-out.
+    // UNAUTHORIZED terminal close: re-validate against AuthnV3 to rotate
+    // credentials or sign out.
     const onAuthError = (): void => {
       void authService.revalidateCurrentContext();
     };
@@ -624,12 +549,8 @@ export function NotificationsSessionProvider(
     };
     if (servingHostId === null) return;
     const streamHostId = servingHostId;
-    // ONE reconnect policy for this host, handed to every stream opened below
-    // (redesign P4.1 / connection-registry §6). This is the single wiring
-    // point for all four, which is exactly why the acquisition belongs here:
-    // four stores each constructing their own scheduler was the scattered
-    // ownership the consolidation removes. Each store still opens its OWN
-    // lane off it, so their backoffs stay independent.
+    // One reconnect policy per host for all four streams; each store still
+    // opens its own lane so backoffs stay independent.
     const hostConnection = acquireHostConnection(streamHostId);
     hostConnectionRef.current = hostConnection;
     const reconnect = hostConnection.reconnect;
@@ -651,10 +572,8 @@ export function NotificationsSessionProvider(
         callbacks,
       });
     };
-    // Agent activity is host-selected-plane data: it rides the SAME serving
-    // client as the feeds in every mode, never the app-wide active-host
-    // stream. Its plane (`servedBy`) is what decides whether a view survives
-    // a serving-host swap, not the host that carried it.
+    // Agent activity rides the serving client, never the app-wide stream.
+    // servedBy decides whether a view survives a serving-host swap.
     if (servingStreamClient !== null) {
       activityDisposerRef.current = openAgentActivityStream(
         reconnect,
@@ -665,10 +584,8 @@ export function NotificationsSessionProvider(
     }
     if (notificationFeedMode === "cloud") {
       if (servingStreamClient === null) return;
-      // The cloud feed owns host/agent rows only. Collaboration events are
-      // still written to the per-user Notifications room, so cloud mode must
-      // keep that replica live alongside the relay or sharing notifications
-      // disappear after the mode-transition reset below.
+      // Cloud feed is host/agent only. Keep the collaboration replica live
+      // or sharing notifications disappear after the mode-transition reset.
       disposerRef.current = openNotificationsStream(
         reconnect,
         createNotificationsStream,
@@ -700,10 +617,8 @@ export function NotificationsSessionProvider(
       useCloudNotificationsStore.getState().setConnectionState("unavailable");
       return;
     }
-    // Every transport session starts with a baseline snapshot. Keep durable,
-    // bounded receipts for replay bookkeeping, but never treat a row from
-    // this independently ordered feed as causal evidence over a renderer-local
-    // failure.
+    // Keep replay receipts. Never treat a feed row as causal evidence over a
+    // renderer-local failure.
     disposerRef.current = openNotificationsStream(
       reconnect,
       createNotificationsStream,
@@ -766,28 +681,11 @@ export function NotificationsSessionProvider(
     },
     [tearDown, resetIdentityReplica],
   );
-  // Canonical `contextMetadata.userId`, not `profile.email` - two distinct
-  // accounts can share an email, and an email-keyed comparison would then
-  // misclassify a genuine user switch as an idle re-render, leaving the
-  // outgoing user's collaboration/host rows visible to the incoming one.
+  // Key on contextMetadata.userId, not profile.email. Shared email would
+  // leak the outgoing user's rows.
   useAuthIdentityTransition(status, userId, onAuthTransition);
 
-  // Open / reopen the stream on signed-in + serving-host-client transitions.
-  // `servingStreamClient` flips to `null` when there is no serving host at
-  // all (a relay-only shell before a host is bound) or the serving host's
-  // channel drops - we teardown so the next reconnect lands on a fresh
-  // client. It becomes a NEW object when the serving host respawns at a fresh
-  // endpoint under the SAME `hostId` (`useHostStreamClientBindingFor` rebuilds the
-  // transport on an endpoint move) - that reference change, not a `hostId`
-  // comparison, is what drives teardown/reopen here, so a respawn is followed
-  // even though the host identity never changed. On a shell WITH a local
-  // host, switching the app-wide active host leaves `servingStreamClient`
-  // untouched, so this effect intentionally does not re-run for that
-  // transition; on a relay-only shell the bound host IS the serving host, so
-  // there it re-runs and rebinds. A disconnect preserves host rows and
-  // cursors - only the summary degrades to unknown until a replacement
-  // snapshot lands; a genuine serving-host identity change is what resets the
-  // host replica.
+  // Reopen on signed-in + serving-host-client transitions. Drive teardown/reopen off the client reference, not `hostId`, so a same-id endpoint respawn is followed.
   useEffect(() => {
     const isSignedIn = status === "signed-in";
     const priorStreamClient = previousStreamClientRef.current;
@@ -798,31 +696,15 @@ export function NotificationsSessionProvider(
       // signedOut path; no-op here.
       return;
     }
-    // Keyed on the HOST, not the client: `useHostStreamClientBindingFor` returns a
-    // client exactly when it is given an entry, so in production these two are
-    // the same condition - but the test stream-factory override supplies a
-    // stream with no client at all, and gating on the client would make that
-    // path unreachable. Client identity still matters below, for the respawn
-    // case where both sides are non-null.
+    // Key on the host, not the client: the test factory supplies a stream with
+    // no client. Client identity still matters for respawn below.
     if (servingHostId === null) {
       tearDown();
       resetCloudRelayOwnership();
       markHostReplicaDisconnected();
       return;
     }
-    // Two independent ways the replica goes stale, and each needs its own ref
-    // because neither sees the other's case:
-    //
-    //  - CLIENT SWAP (both sides non-null): the serving host respawned at a
-    //    fresh endpoint, so it is a NEW host process with new notification
-    //    state - the old rows must not survive into it.
-    //  - HOST SWITCH ACROSS A DISCONNECT (A -> null -> B): the disconnect
-    //    already nulled `previousStreamClientRef`, so the client comparison
-    //    above sees nothing. `previousServingHostIdRef` is updated only on a
-    //    non-null host, so it still spans the gap. A -> null -> A stays a
-    //    reconnect (rows and cursors are preserved, the re-landed snapshot
-    //    refreshes them); A -> null -> B resets before B's stream opens, or
-    //    B's snapshot would land on A's stale rows for one render.
+    // Replica goes stale on a client swap (new endpoint) or a host switch across a disconnect (A -> null -> B). A -> null -> A is a reconnect and preserves rows.
     const priorServingHostId = previousServingHostIdRef.current;
     previousServingHostIdRef.current = servingHostId;
     const clientSwapped =
@@ -848,13 +730,8 @@ export function NotificationsSessionProvider(
         useNotificationsStore.getState().reset();
       }
     }
-    // A replaced stream client under the SAME host + user (the app-wide
-    // liveness rebuild after the client was closed underneath the provider)
-    // closes the old client's sessions, so both notification streams must
-    // rebind to the new client. The identity did not change, so the replica
-    // is kept - the re-landed snapshot merges into the same doc.
-    // Evaluated twice on purpose, not hoisted: the second read must see the
-    // effect of the `tearDown()` immediately below it.
+    // Same host+user, new client: rebind streams, keep the replica. Read twice
+    // so the second sees tearDown() below.
     const openStreams = [
       disposerRef,
       activityDisposerRef,
@@ -888,10 +765,8 @@ export function NotificationsSessionProvider(
   useEffect(() => {
     return () => {
       tearDown();
-      // `tearDown` only closes streams. The view-consumption driver keeps its
-      // own re-arming retry timer, and unmount is the one teardown edge that
-      // reaches none of the `resetCloudRelaySession` call sites - so without
-      // this, a failing server's retry chain outlives the provider.
+      // tearDown only closes streams. Stop the view-consumption retry timer
+      // on unmount or it outlives the provider.
       resetCloudEntityReadDriver();
     };
   }, [tearDown]);
@@ -903,15 +778,7 @@ export function NotificationsSessionProvider(
   );
 }
 
-/**
- * True when this provider still holds any of its streams open.
- *
- * Extracted because the reopen effect tests the same set twice - once as "any
- * open" and once as "none open" - and the activity disposer (host-selected
- * activity planes) made each of those a four-term boolean, pushing the effect
- * past the complexity ceiling. Structurally typed over `{ current }` so it
- * takes ref objects without this module depending on React's ref types.
- */
+/** True when this provider still holds any of its streams open. */
 function anyStreamOpen(
   refs: readonly { readonly current: (() => void) | null }[],
 ): boolean {

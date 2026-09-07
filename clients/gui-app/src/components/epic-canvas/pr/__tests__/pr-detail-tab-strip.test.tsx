@@ -12,10 +12,6 @@ function renderStrip(args: {
     <PrDetailTabStrip
       tab={args.tab}
       onSelectTab={args.onSelectTab}
-      // Every blocking value differs from its own plain count. With the two
-      // equal, the Checks tab renders the same digit whichever one the strip
-      // reads, so the substitution assertion below would pass even with the
-      // substitution deleted.
       counts={{ feedback: 4, files: 324, checks: 12, commits: 66 }}
       blocking={{ feedback: 1, checks: 2 }}
     />,
@@ -25,9 +21,7 @@ function renderStrip(args: {
 afterEach(cleanup);
 
 /**
- * Each tab paired with a matcher for its accessible name. Regexes rather than
- * exact strings because a tab's name also carries its count badge (e.g.
- * "Files 324"), which is deliberately not `aria-hidden`.
+ * Regexes rather than exact strings because a tab's name also carries its count badge (e.g. "Files 324"), which is deliberately not `aria-hidden`.
  */
 const TAB_NAMES: readonly (readonly [PrDetailTabId, RegExp])[] = [
   ["overview", /Overview/],
@@ -154,10 +148,7 @@ describe("PrDetailTabStrip", () => {
 
 describe("<PrDetailTabStrip /> on a phone viewport", () => {
   beforeEach(() => {
-    // `useIsMobileViewport` reads `window.innerWidth` directly (not
-    // `matchMedia().matches`, which the global test shim always reports as
-    // `false`), so setting it before render is enough to force the phone
-    // presentation.
+    // `useIsMobileViewport` reads `window.innerWidth` directly (not `matchMedia().matches`, which the global test shim always reports as `false`), so setting it before render is enough to force the phone presentation.
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       value: 400,
@@ -176,9 +167,8 @@ describe("<PrDetailTabStrip /> on a phone viewport", () => {
   it("replaces the strip with a menu rather than shrinking five tabs", () => {
     renderStrip({ tab: "overview", onSelectTab: () => undefined });
 
-    // The whole point of the change: at phone width no tab is rendered at all,
-    // so none can be truncated to "Ov…". A strip that merely restyled itself
-    // would still satisfy every other assertion here.
+    // The whole point of the change: at phone width no tab is rendered at all, so none can be truncated to "Ov…".
+    // A strip that merely restyled itself would still satisfy every other assertion here.
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     const trigger = screen.getByRole("button", { name: /Overview/ });
     expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
@@ -194,10 +184,6 @@ describe("<PrDetailTabStrip /> on a phone viewport", () => {
   });
 
   it("names the panel from the active tab's label", () => {
-    // `pr-detail-body` labels its `role="tabpanel"` with this id. Radix owns
-    // the trigger BUTTON's id and points the open menu's `aria-labelledby` at
-    // it, so the id lives on the label span - taking the button's would leave
-    // the menu unnamed to name the panel.
     renderStrip({ tab: "checks", onSelectTab: () => undefined });
 
     const label = document.getElementById("pr-detail-tab-trigger-checks");

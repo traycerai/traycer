@@ -46,10 +46,7 @@ interface StartTerminalLoginResult {
   readonly replacedSessionId: string | null;
 }
 
-/** A promise the test resolves by hand, so the RPC can be left in flight while
- *  the caller unmounts. Not `let resolve … | null`: the assignment happens in a
- *  callback TypeScript does not track, so the later null-check reads as always
- *  true and the value needs a cast to call. */
+/** Not `let resolve … | null`: the assignment happens in a callback TypeScript does not track, so the later null-check reads as always true and the value needs a cast to call. */
 function deferredStartResult(): {
   readonly promise: Promise<StartTerminalLoginResult>;
   readonly resolve: (value: StartTerminalLoginResult) => void;
@@ -105,11 +102,7 @@ describe("useProviderTerminalLogin", () => {
     cleanup();
   });
 
-  // The surfaces that mount this hook (the composer banner, the ended-tile
-  // restart button) can render before an epic/view tab is resolved. `start`
-  // refuses there rather than firing. A regression would send `epicId: null`
-  // to the host, or make it spawn a real PTY with no surface to open it into -
-  // a live sign-in terminal reachable only through the Terminals sidebar.
+  // `start` refuses there rather than firing.
   it.each([
     ["no epic", null, "tab-1"],
     ["no view tab", EPIC_ID, null],
@@ -211,12 +204,7 @@ describe("useProviderTerminalLogin", () => {
     expect(matched).toBe(true);
   });
 
-  // All of the success work hangs off the MUTATION's onSuccess (passed
-  // through `useProvidersStartTerminalLoginForClient`'s required `onSuccess`
-  // param), not a per-`mutate` callback - TanStack drops the latter once the
-  // calling component (the banner) has unmounted, which would otherwise leave
-  // a live host-side sign-in terminal with no tile in front of the user and
-  // no registry entry to reopen it correctly later.
+  // All of the success work hangs off the MUTATION's onSuccess (passed through `useProvidersStartTerminalLoginForClient`'s required `onSuccess` param), not a per-`mutate` callback - TanStack drops the latter once the calling component (the banner) has unmounted, which would otherwise leave a live host-side sign-in terminal with no tile in front of the user and no registry entry to reopen it correctly later.
   it("still opens the tile and records the registry entry after the starter unmounts before the RPC resolves", async () => {
     const pending = deferredStartResult();
     mocks.startTerminalLoginRequest.mockImplementation(() => pending.promise);
@@ -286,11 +274,7 @@ describe("useProviderTerminalLogin", () => {
     });
   });
 
-  // Row 4b: "Start again" on a dead sign-in tile passes its OWN tile as
-  // `launchedFromTile`. After a host restart the coordinator has no
-  // predecessor pointer, so it reports `replacedSessionId: null` - nothing
-  // else would ever close the stale panel, and every press would add another
-  // tile beside the fresh one.
+  // Row 4b: "Start again" on a dead sign-in tile passes its OWN tile as `launchedFromTile`.
   it("closes the launching tile itself when the restart reports no replaced session", async () => {
     mocks.startTerminalLoginRequest.mockResolvedValue({
       sessionId: "term-new",
@@ -319,11 +303,7 @@ describe("useProviderTerminalLogin", () => {
     expect(closeSelf).toHaveBeenCalledTimes(1);
   });
 
-  // Row 4c: when the reported `replacedSessionId` IS the launching tile's own
-  // session (an ordinary predecessor, not a restart), the dedicated
-  // `launchedFromTile.close` must NOT also fire - that tile is already
-  // retired through the replaced-session close-and-focus path, and calling
-  // both would be a double-close.
+  // Row 4c: when the reported `replacedSessionId` IS the launching tile's own session (an ordinary predecessor, not a restart), the dedicated `launchedFromTile.close` must NOT also fire - that tile is already retired through the replaced-session close-and-focus path, and calling both would be a double-close.
   it("does not also call launchedFromTile.close when it is the reported replaced session", async () => {
     mocks.startTerminalLoginRequest.mockResolvedValue({
       sessionId: "term-new",

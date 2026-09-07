@@ -25,14 +25,8 @@ export interface WorktreeDeleteProgressModalProps {
   readonly onClose: () => void;
 }
 
-/**
- * Progress card for a worktree delete, shown inside the viewport-anchored
- * Worktrees delete overlay. It shows a phased step indicator (teardown →
- * remove) and, when a teardown script runs, a collapsible pane streaming its
- * stdout/stderr. While the delete is running the action reads
- * "Run in background", which dismisses the modal and lets the worktree's row
- * carry the in-progress state; once terminal it offers an explicit Close.
- */
+/** While the delete is running the action reads "Run in background", which dismisses the modal and lets the
+ * worktree's row carry the in-progress state; once terminal it offers an explicit Close. */
 export function WorktreeDeleteProgressModal(
   props: WorktreeDeleteProgressModalProps,
 ): ReactNode {
@@ -179,11 +173,8 @@ function StepIcon(props: { readonly state: StepState }): ReactNode {
   );
 }
 
-/**
- * Collapsible toggle around the teardown script's streamed output - the same
- * `tail -f`-style treatment as the host bootstrap-log view. Collapsed by
- * default; the user expands to watch.
- */
+/** Collapsible toggle around the teardown script's streamed output - the same `tail -f`-style treatment as the
+ * host bootstrap-log view. */
 function TeardownLog(props: {
   readonly log: readonly LogSegment[];
   readonly active: boolean;

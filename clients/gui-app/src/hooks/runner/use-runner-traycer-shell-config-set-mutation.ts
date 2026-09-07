@@ -8,12 +8,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
-/**
- * Updates the stored shell config. Either field may be `null` to preserve
- * the existing stored value (or fall back to the synthesised default). On
- * success, invalidates `traycerShellConfig` so the form reflects the
- * new value; the new host process picks it up on its next start.
- */
+/** On success, invalidates `traycerShellConfig` so the form reflects the new value; the new host process picks it up on its next start. */
 export function useRunnerTraycerShellConfigSetMutation(): UseMutationResult<
   void,
   Error,

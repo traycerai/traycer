@@ -9,16 +9,7 @@ import {
 import { FLEET_ACTIVE_POLL_MS } from "@/lib/host/fleet-update/fleet-poll-policy";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 
-// Codex round 3, P2. The acceleration is a property of the HOST's operation,
-// but the hook runs once per observing surface and has more than one caller by
-// design (the landing banner and the selected-host Overview). A timer per hook
-// INSTANCE therefore meant two independently-phased intervals invalidating the
-// same `host.status` key, roughly doubling the RPC cadence for the length of a
-// download - and scaling with the number of observers.
-//
-// gui-app has no RTL auto-cleanup, so every test unmounts explicitly; a leaked
-// mounted hook would hold a ref-count into the next test and silently make
-// these assertions read the wrong state.
+// Acceleration is per host, not per hook instance. Unmount explicitly: gui-app has no RTL auto-cleanup, and a leaked mount holds the ref-count into the next test.
 
 const ACTIVE_VIEW: FleetUpdateView = {
   kind: "downloading",
@@ -85,11 +76,7 @@ describe("useActiveUpdatePollAccelerator - one timer per host, not per consumer"
       vi.advanceTimersByTime(FLEET_ACTIVE_POLL_MS);
     });
 
-    // THE BUG, asserted FIRST and deliberately so. Two instances used to mean
-    // two timers and two invalidations per cadence. The ref-count assertion
-    // below is supporting detail about the mechanism; if it came first it would
-    // fail before this ever ran, and the test would be reporting "the registry
-    // is missing" while claiming to be about cadence.
+    // THE BUG, asserted FIRST and deliberately so.
     expect(invalidate).toHaveBeenCalledTimes(1);
 
     act(() => {
@@ -171,11 +158,7 @@ describe("useActiveUpdatePollAccelerator - one timer per host, not per consumer"
   });
 
   it("every interval-driven invalidateQueries call passes { cancelRefetch: false }", () => {
-    // Non-canceling, or the cadence eats its own reads: TanStack's default
-    // `cancelRefetch: true` would abort the in-flight `host.status` read on
-    // every tick, so on a link whose RTT exceeds this cadence no poll would
-    // ever complete. See the comment beside the `setInterval` callback in the
-    // hook itself.
+    // Non-canceling, or the cadence eats its own reads: TanStack's default `cancelRefetch: true` would abort the in-flight `host.status` read on every tick, so on a link whose RTT exceeds this cadence no poll would ever complete.
     vi.useFakeTimers();
     const { client, wrapper } = harness();
     const invalidate = vi.spyOn(client, "invalidateQueries");

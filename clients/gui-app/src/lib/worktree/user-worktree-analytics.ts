@@ -46,11 +46,7 @@ function entriesSucceeded(
 
 /**
  * Observes a deliberate worktree picker commit, not the underlying union RPC.
- * Local-only entries intentionally produce no worktree-created/imported
- * event, and an entry that the host reports as failed does not count as
- * created/imported. Purely an observer: callers invoke it from their success
- * callback AFTER product work, never wrapping the mutation promise, so
- * telemetry can neither delay nor fail a successful write.
+ * Local-only entries intentionally produce no worktree-created/imported event, and an entry that the host reports as failed does not count as created/imported.
  */
 export function trackUserInitiatedWorktreeWrite(
   entries: ReadonlyArray<WorktreeIntentEntry>,

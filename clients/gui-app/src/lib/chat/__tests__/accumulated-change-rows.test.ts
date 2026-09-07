@@ -18,9 +18,8 @@ import type {
 
 describe("accumulatedChangeRows", () => {
   it("emits the client's own row for an active-turn file no host version names", () => {
-    // The host recomputes its accumulated set at turn boundaries, so a file the
-    // running turn just created is not in it. The client's row stands in until
-    // the recompute lands, carrying the per-edit magnitude so the panel moves.
+    // The host recomputes its accumulated set at turn boundaries, so a file the running turn just created is not in it.
+    // The client's row stands in until the recompute lands, carrying the per-edit magnitude so the panel moves.
     const changes = accumulatedChangeRows(
       [
         assistantMessage({
@@ -54,9 +53,7 @@ describe("accumulatedChangeRows", () => {
         // shows a live `+/-` before the host recomputes at turn end.
         counts: { additions: 1, deletions: 1 },
         hasContents: true,
-        // No host version names this file yet, so there is nothing to quote in
-        // a contents request - the segment tile is what opens its diff, and
-        // `liveDiff` is the address it opens on.
+        // No host version names this file yet, so there is nothing to quote in a contents request - the segment tile is what opens its diff, and `liveDiff` is the address it opens on.
         digest: null,
         liveDiff: {
           sourceBlockIds: ["change-1"],
@@ -68,9 +65,8 @@ describe("accumulatedChangeRows", () => {
   });
 
   it("prefers the host row when present during an active turn", () => {
-    // The host's row is authoritative and used wholesale. Mid-turn its counts
-    // are one turn stale, which is deliberate: a stale number that means the
-    // same thing as every other row beats a per-edit number that does not.
+    // The host's row is authoritative and used wholesale.
+    // Mid-turn its counts are one turn stale, which is deliberate: a stale number that means the same thing as every other row beats a per-edit number that does not.
     const changes = accumulatedChangeRows(
       [
         assistantMessage({
@@ -138,11 +134,7 @@ describe("accumulatedChangeRows", () => {
   });
 
   it("sums per-edit streaming counts across multiple active-turn edits of the same file", () => {
-    // The same file is edited twice this turn; the placeholder's
-    // `streamingCounts` is the SUM of both edits' additions/deletions, so the
-    // pinned panel's `+/-` grows on every edit instead of snapping at turn end.
-    // Distinct before/after hashes (a→b, b→c) keep the merged endpoints
-    // unequal so the row is not suppressed as a net no-op.
+    // The same file is edited twice this turn; the placeholder's `streamingCounts` is the SUM of both edits' additions/deletions, so the pinned panel's `+/-` grows on every edit instead of snapping at turn end.
     const changes = accumulatedChangeRows(
       [
         assistantMessage({
@@ -179,13 +171,8 @@ describe("accumulatedChangeRows", () => {
 
   describe("what decides the order", () => {
     it("keeps the host's order when the hydrated rows disagree with it", () => {
-      // The panel's order is first-touched across the WHOLE chat, and the
-      // host's list is exactly that. On the windowed line the rendered rows are
-      // the hydrated tail, so deriving the order from them put a file the
-      // recent turns touched ahead of one first touched in unhydrated history.
-      //
-      // Here the host says `old.ts` was touched first; the only hydrated
-      // message mentions `recent.ts` first. The host wins.
+      // The panel's order is first-touched across the WHOLE chat, and the host's list is exactly that.
+      // On the windowed line the rendered rows are the hydrated tail, so deriving the order from them put a file the recent turns touched ahead of one first touched in unhydrated history.
       const changes = accumulatedChangeRows(
         [
           assistantMessage({
@@ -229,9 +216,7 @@ describe("accumulatedChangeRows", () => {
     });
 
     it("appends an active-turn file the host has no row for", () => {
-      // A path no host row names has not been touched by any completed turn,
-      // so the running turn is its first toucher and it sorts last - after
-      // every file the host knows, whether or not any of them are hydrated.
+      // A path no host row names has not been touched by any completed turn, so the running turn is its first toucher and it sorts last - after every file the host knows, whether or not any of them are hydrated.
       const changes = accumulatedChangeRows(
         [
           assistantMessage({
@@ -268,9 +253,7 @@ describe("accumulatedChangeRows", () => {
     });
 
     it("keeps a host row in place even when the active turn re-touches it", () => {
-      // The host's row wins wholesale where one exists, and that includes its
-      // POSITION: an active-turn edit to a long-known file must not lift it to
-      // the front of the panel.
+      // The host's row wins wholesale where one exists, and that includes its POSITION: an active-turn edit to a long-known file must not lift it to the front of the panel.
       const changes = accumulatedChangeRows(
         [
           assistantMessage({
@@ -410,11 +393,8 @@ describe("hostAccumulatedChangeRows", () => {
   });
 
   /**
-   * The tempting wrong implementation is "whichever array is non-empty". It
-   * agrees with this one everywhere except the state that matters: a chat that
-   * has touched no files is empty on BOTH lines, so emptiness can never be the
-   * discriminator - and on the windowed line it would then read the array that
-   * is empty by construction and show a panel with nothing in it.
+   * The tempting wrong implementation is "whichever array is non-empty".
+   * It agrees with this one everywhere except the state that matters: a chat that has touched no files is empty on BOTH lines, so emptiness can never be the discriminator - and on the windowed line it would then read the array that is empty by construction and.
    */
   it("follows the line even when the line's own array is empty", () => {
     expect(
@@ -449,9 +429,8 @@ describe("undeliveredHostChangeCount", () => {
   });
 
   /**
-   * The snapshot's count and the chunks are two frames, so a client can hold
-   * summaries from a newer set than the count it last read. A negative
-   * shortfall would then subtract rows from the header.
+   * The snapshot's count and the chunks are two frames, so a client can hold summaries from a newer set than the count it last read.
+   * A negative shortfall would then subtract rows from the header.
    */
   it("never goes negative when more summaries arrived than were counted", () => {
     expect(
@@ -567,15 +546,8 @@ function summary(input: {
 
 describe("accumulatedSummarySetComplete", () => {
   it("is INCOMPLETE after a rebuild until a chunk of the new generation lands", () => {
-    // The case a length comparison structurally cannot see. A rebuild retains
-    // the previous stream's array on purpose, so between the generation reset
-    // and the first replacement chunk those entries - and their digests - are
-    // the OLD generation's. When the replacement's authoritative total happens
-    // to equal the retained length, "delivered === authoritative" is true over
-    // entries this generation never sent.
-    //
-    // Certain rather than incidental whenever the whole set fits one chunk and
-    // that chunk is the one dropped: there is no later chunk to expose the gap.
+    // The case a length comparison structurally cannot see.
+    // A rebuild retains the previous stream's array on purpose, so between the generation reset and the first replacement chunk those entries - and their digests - are the OLD generation's.
     expect(
       accumulatedSummarySetComplete({
         windowed: true,
@@ -588,14 +560,8 @@ describe("accumulatedSummarySetComplete", () => {
   });
 
   it("is incomplete while a generation assembles under a count rewound to zero", () => {
-    // The count is aux and aux is last-write-wins, so a delayed same-epoch
-    // snapshot can rewind it to zero while a generation is still arriving.
-    // Every OTHER input then looks exactly like a chat that has no accumulated
-    // changes at all: nothing seated, nothing delivered, nothing promised. The
-    // assembly is the only thing that tells the two apart, and without it the
-    // equality below reads `0 === 0` and consumers act on an empty published
-    // array - a bundle path missing from it reading as reverted rather than as
-    // not yet arrived.
+    // The count is aux and aux is last-write-wins, so a delayed same-epoch snapshot can rewind it to zero while a generation is still arriving.
+    // Every OTHER input then looks exactly like a chat that has no accumulated changes at all: nothing seated, nothing delivered, nothing promised.
     expect(
       accumulatedSummarySetComplete({
         windowed: true,
@@ -606,10 +572,7 @@ describe("accumulatedSummarySetComplete", () => {
       }),
     ).toBe(false);
 
-    // The other direction, so this cannot pass by calling everything
-    // incomplete: a chat with genuinely no accumulated changes assembles
-    // nothing and IS complete, unseated and zero-count though it looks
-    // identical in every other field.
+    // The other direction, so this cannot pass by calling everything incomplete: a chat with genuinely no accumulated changes assembles nothing and IS complete, unseated and zero-count though it looks identical in every other field.
     expect(
       accumulatedSummarySetComplete({
         windowed: true,
@@ -646,9 +609,8 @@ describe("accumulatedSummarySetComplete", () => {
   });
 
   it("is complete on an EMPTY set even before a chunk arrives", () => {
-    // The bound. A host with nothing accumulated streams no chunks at all, so
-    // gating on a chunk that will never come would hold every consumer of an
-    // empty set open forever.
+    // The bound.
+    // A host with nothing accumulated streams no chunks at all, so gating on a chunk that will never come would hold every consumer of an empty set open forever.
     expect(
       accumulatedSummarySetComplete({
         windowed: true,
@@ -673,13 +635,8 @@ describe("accumulatedSummarySetComplete", () => {
   });
 
   it("is INCOMPLETE on an overshoot, which is the case the clamp erases", () => {
-    // The whole reason this is a separate question from
-    // `undeliveredHostChangeCount`. A revert LOWERS the host count while the
-    // client keeps the previous generation's array until a replacement chunk
-    // starting at index 0 lands - so a dropped first chunk leaves more
-    // summaries than the count claims. Under a shortfall-only reading that
-    // clamps to `0` and every gate calls it finished, leaving reverted paths
-    // and stale digests in the panel for the rest of the connection.
+    // The whole reason this is a separate question from `undeliveredHostChangeCount`.
+    // A revert LOWERS the host count while the client keeps the previous generation's array until a replacement chunk starting at index 0 lands - so a dropped first chunk leaves more summaries than the count claims.
     expect(
       accumulatedSummarySetComplete({
         windowed: true,

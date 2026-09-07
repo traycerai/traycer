@@ -1,17 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-// Type-only, so it is erased before `vi.hoisted` runs. Annotating the fixture
-// with the PRODUCER's contract rather than a hand-copied structural twin is
-// what makes this mock fail to compile - instead of silently going stale -
-// when `KillConflictingPortOwnerResult` grows a field the command must handle.
+// Type-only, so it is erased before `vi.hoisted` runs.
+// Annotating the fixture with the PRODUCER's contract rather than a hand-copied structural twin is what makes this mock fail to compile - instead of silently going stale - when `KillConflictingPortOwnerResult` grows a field the command must handle.
 import type { KillConflictingPortOwnerResult } from "../../host/free-port-kill";
 
-// `host free-port`'s command-level wiring (Host Update Layer Redesign Tech
-// Plan, "Lifecycle lock coverage"): the kill-only sibling of `host
-// free-port-and-restart` - the kill runs inside one `cli-lock`
-// acquisition and the command never touches the service controller (no
-// restart). The kill/probe logic itself lives in
-// `host/free-port-kill.ts` and is exercised there; this file only
-// proves the command's own wiring.
+// `host free-port`'s command-level wiring (Host Update Layer Redesign Tech Plan, "Lifecycle lock coverage"): the kill-only sibling of `host free-port-and-restart` - the kill runs inside one `cli-lock` acquisition and the command never touches the service controller (no restart).
+// The kill/probe logic itself lives in `host/free-port-kill.ts` and is exercised there; this file only proves the command's own wiring.
 
 const mocks = vi.hoisted(() => ({
   lockCalls: [] as Array<{ reason: string }>,
@@ -118,9 +111,8 @@ describe("buildHostFreePortCommand", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  // Inverted from the pre-CLI-011 contract, kept in place rather than deleted
-  // so the diff shows the flip: a failed SIGTERM used to surface as a
-  // `killError` string inside an `exitCode: 0` envelope. It must now throw.
+  // Inverted from the pre-CLI-011 contract, kept in place rather than deleted so the diff shows the flip: a failed SIGTERM used to surface as a `killError` string inside an `exitCode: 0` envelope.
+  // It must now throw.
   it("surfaces a failed SIGTERM as a thrown E_HOST_PORT_KILL_FAILED, not a killError field", async () => {
     mocks.lockCalls = [];
     mocks.killCalls = [];

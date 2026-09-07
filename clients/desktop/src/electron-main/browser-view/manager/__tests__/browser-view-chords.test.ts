@@ -139,12 +139,7 @@ describe("hostSendKeyCodeForToken", () => {
   });
 });
 
-/**
- * The guest-focused input policy, at the seam that decides it. A browser-scoped
- * chord must NEVER be replayed into the host renderer (that is what made Cmd+W
- * close the app's task tab), and an app-forwarded one must never be delivered
- * as a tile command.
- */
+/** A browser-scoped chord must NEVER be replayed into the host renderer (that is what made Cmd+W close the app's task tab), and an app-forwarded one must never be delivered as a tile. */
 describe("guest-focused dispositions", () => {
   const SURFACE = {
     windowId: "window-1",
@@ -179,10 +174,6 @@ describe("guest-focused dispositions", () => {
       send,
     });
     chords.setReservedChords(policy);
-    /**
-     * Deliver a keystroke exactly as the guest seam would: a match is what
-     * `preventDefault`s, and only a first press also dispatches.
-     */
     const press = (input: BrowserViewKeyInput): void => {
       const matched = chords.match(input);
       if (matched !== null && !input.isAutoRepeat) {

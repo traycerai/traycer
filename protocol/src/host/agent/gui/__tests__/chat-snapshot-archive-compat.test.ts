@@ -2,12 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chatSnapshotSchema } from "../subscribe";
 
 /**
- * `archivedAt` snapshot-propagation guard: the LIVE `chat.subscribe@1.4`
- * snapshot carries the chat's `archivedAt` (it embeds the live `chatSchema`
- * directly), while the frozen `chatSchemaPreInReplyTo` copy bound to
- * `chat.subscribe@1.0-1.3` must never surface it - see
- * `chat-archive-compat.test.ts` for that half of the guarantee. This locks
- * the field to the live wire only.
+ * `archivedAt` snapshot-propagation guard: the LIVE `chat.subscribe@1.4` snapshot carries the chat's `archivedAt` (it embeds the live `chatSchema` directly), while the frozen `chatSchemaPreInReplyTo` copy bound to.
  */
 
 function baseChat() {

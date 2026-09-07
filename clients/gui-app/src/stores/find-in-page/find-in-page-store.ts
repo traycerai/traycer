@@ -11,9 +11,8 @@ export interface FindInPageState {
   readonly matches: FindMatchesState | null;
   readonly matchCase: boolean;
   /**
-   * Monotonic counters bumped by menu commands so the find bar can react
-   * to Cmd+G / Cmd+Shift+G without having to expose its engine ref to
-   * the outside world.
+   * Monotonic counters bumped by menu commands so the find bar can react to Cmd+G / Cmd+Shift+G
+   * without having to expose its engine ref to the outside world.
    */
   readonly advanceForwardNonce: number;
   readonly advanceBackwardNonce: number;

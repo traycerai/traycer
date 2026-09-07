@@ -11,16 +11,7 @@ import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
-/**
- * A profile id is HOST-LOCAL - it names a managed config dir on one machine -
- * so an anchor a fork/clone carried here from another host can never match
- * this host's `providers.list`, and the old "(removed)" verdict accused the
- * user of deleting a profile that is alive and well on the other machine.
- *
- * The provenance itself stays: which account a past turn ran on is useful.
- * Only the removal claim is dropped, and only for a FOREIGN anchor - a
- * same-host miss is a genuine deletion and still says "(removed)".
- */
+/** A profile id is HOST-LOCAL - it names a managed config dir on one machine - so an anchor a fork/clone carried here from another host can never match this host's `providers.list`, and the old "(removed)" verdict accused the user of deleting a profile that is alive and well on the other machine. */
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => null,

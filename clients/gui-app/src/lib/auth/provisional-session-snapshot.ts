@@ -1,45 +1,6 @@
 /**
- * The last VALIDATED user, cached beside the credentials so boot can paint
- * before it validates.
- *
- * `AuthService.start()` used to await `validateAuthTokenIdentity` - a cloud
- * round trip - before a session existed, and the app shell renders
- * `HostRuntimeBootFallback` until it does. That was 616 ms of the 968 ms to
- * first paint on a LAN, and a cold launch measured 8.0 s when the authn
- * service answered 700 ms late. The token store holds the bearer, but
- * `applySignedIn` needs an `AuthenticatedUser`, and the credentials file's own
- * `user` block is only `{ id, email, name }` - not enough, and widening it is
- * not an option: that file is parsed by the CLI, the desktop main process and
- * the HOST, and its reader treats a payload that fails the shape check as "no
- * session at all".
- *
- * So the snapshot lives here instead: renderer-local, in the shell's encrypted
- * storage, read by nothing but `AuthService`.
- *
- * ## Fail closed, and let the protocol say when
- *
- * A malformed or stale-shaped payload reaching `applySignedIn` would produce
- * `undefined` reads INSIDE a signed-in session, which is the worst failure
- * available on this path. Three things prevent it, and none of them is a
- * hand-maintained field list:
- *
- * 1. The validator is the protocol's OWN schema for this type
- *    (`authenticatedUserResponseRecordV100.schema`) - the same one the
- *    `/api/v3/user` response is parsed with. What reaches `applySignedIn` is
- *    the PARSED value, never the raw JSON.
- * 2. The stamp is the protocol's own `schemaVersion` for that record, so a
- *    protocol bump invalidates every snapshot written by an older build
- *    automatically. There is deliberately no constant here to remember to
- *    bump: the version that matters is the one the type already carries.
- * 3. The snapshot names the user it describes, and the caller only accepts it
- *    when that id matches the credentials file's. That is also what retires a
- *    snapshot belonging to an account the CLI has since replaced on this
- *    machine - the stale one is simply never adopted, and the next
- *    `applySignedIn` overwrites it.
- *
- * Every refusal falls through to today's awaited validation. The worst case is
- * a boot exactly as slow as it is now, never a session built from a payload
- * nobody checked.
+ * Last validated user, renderer-local, so boot can paint before `validateAuthTokenIdentity`.
+ * Adopt only a protocol-schema parse whose `schemaVersion` and user id match; otherwise fall through to live validation.
  */
 
 import { z } from "zod";
@@ -53,11 +14,7 @@ const SNAPSHOT_KEY = "traycer.auth.provisionalSession.v1";
 const RECORD = authenticatedUserResponseRecordV100;
 
 /**
- * The envelope, validated separately from its payload so the two refusals stay
- * distinguishable: an old-schema snapshot is expected housekeeping, a payload
- * that fails the protocol's schema at the CURRENT version is not, and they are
- * logged at different levels for that reason. `user` rides through as
- * `unknown` and is validated below by the only thing entitled to judge it.
+ * The envelope, validated separately from its payload so the two refusals stay distinguishable: an old-schema snapshot is expected housekeeping, a payload that fails the protocol's schema at the CURRENT version is not, and they are logged at different levels.
  */
 const snapshotEnvelopeSchema = z.object({
   schemaVersion: z.object({ major: z.number(), minor: z.number() }),
@@ -73,14 +30,7 @@ interface PersistedSnapshot {
 }
 
 /**
- * The last validated user for `expectedUserId`, or `null` when there is no
- * usable snapshot - which the caller must read as "await the cloud verdict, as
- * before", never as "signed out".
- *
- * `expectedUserId` is the id the CREDENTIALS FILE names. Passing it is what
- * makes this safe across accounts: a snapshot left by a different user (the
- * CLI signed a new one in on this machine) fails the comparison and is never
- * adopted.
+ * The last validated user for `expectedUserId`, or `null` when there is no usable snapshot - which the caller must read as "await the cloud verdict, as before", never as "signed out".
  */
 export async function readProvisionalSessionSnapshot(
   storage: ISecureStorage,
@@ -98,17 +48,7 @@ export async function readProvisionalSessionSnapshot(
     return null;
   }
   // THE ONLY SILENT RETURN in this function - every other refusal below logs.
-  // So if a boot is taking the awaited path with no line in the console, this
-  // is where it went, and the question is whether the slot is genuinely empty
-  // or whether the storage adapter LOST a value it holds.
-  //
-  // It has happened: the desktop adapter's encrypt-storage back-end parses
-  // JSON on read by default, so this envelope came back as an object and was
-  // reported as `null` for every launch. Nothing in this package could catch
-  // it - `MockRunnerHost.secureStorageEntries` is a `Map`, which honours the
-  // string contract by construction. `clients/desktop/src/renderer-shell/
-  // __tests__/secure-local-storage.test.ts` is what guards it now, against
-  // the real module.
+  // So if a boot is taking the awaited path with no line in the console, this is where it went, and the question is whether the slot is genuinely empty or whether the storage adapter LOST a value it holds.
   if (raw === null || raw.length === 0) return null;
 
   let decoded: unknown;
@@ -152,12 +92,8 @@ export async function readProvisionalSessionSnapshot(
     appLogger.warn("[auth] provisional session snapshot failed validation", {});
     return null;
   }
-  // The PAYLOAD's own id, against the credentials file - not against the
-  // envelope. Read together with the envelope check above it is transitively
-  // both (that one already established `parsed.userId === expectedUserId`),
-  // but the comparison written here is the one that matters: it is what makes
-  // a snapshot whose envelope was hand-edited to match unable to hand back a
-  // different user than the one it claims.
+  // The PAYLOAD's own id, against the credentials file - not against the envelope.
+  // Read together with the envelope check above it is transitively both (that one already established `parsed.userId === expectedUserId`), but the comparison written here is the one that matters: it is what makes a snapshot whose envelope was hand-edited to.
   if (user.data.user.id !== expectedUserId) {
     appLogger.warn(
       "[auth] provisional session snapshot envelope disagrees",
@@ -169,12 +105,8 @@ export async function readProvisionalSessionSnapshot(
 }
 
 /**
- * Records `user` as the last validated identity. Called from every path that
- * establishes a session, so the snapshot is never older than the credentials
- * beside it.
- *
- * Never throws: failing to cache an identity must not fail the sign-in that
- * produced it. The cost of a lost write is one slow boot.
+ * Records `user` as the last validated identity.
+ * Called from every path that establishes a session, so the snapshot is never older than the credentials beside it.
  */
 export async function writeProvisionalSessionSnapshot(
   storage: ISecureStorage,

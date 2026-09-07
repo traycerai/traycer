@@ -60,10 +60,7 @@ export function useTerminalCreate(
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _variables, ctx) => {
         if (ctx.hostId === null) return;
-        // Refresh only the terminal-session list (drives `hostHasSession`).
-        // Invalidating the whole host scope would also force-refetch the
-        // manual-refresh-only cloud-tasks history, dropping a just-created
-        // local-first epic that the cloud `listTasks` does not contain yet.
+        // Invalidating the whole host scope would also force-refetch the manual-refresh-only cloud-tasks history, dropping a just-created local-first epic that the cloud `listTasks` does not contain yet.
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
         });

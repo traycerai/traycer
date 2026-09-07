@@ -3,11 +3,7 @@ import { useAuthStore, type EpicShareableTeam } from "@/stores/auth/auth-store";
 
 export type { EpicShareableTeam };
 
-/**
- * Teams the signed-in user can share an epic with. Sourced from the auth store,
- * which projects them from the user's `teamSubscriptions` at sign-in - the
- * identity snapshot no longer embeds the full `AuthenticatedUser`.
- */
+/** Teams the signed-in user can share an epic with. */
 export function useEpicShareableTeams(): ReadonlyArray<EpicShareableTeam> {
   return useAuthStore((state) => state.shareableTeams);
 }

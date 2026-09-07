@@ -9,22 +9,7 @@ import { buildSystemdUnit } from "../linux";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import type { ServiceLabel } from "../../label";
 
-/**
- * The systemd emitter had NO test file at all: `buildUnit` was covered only by
- * `toContain` substring assertions in `commands/__tests__/host-start.test.ts`.
- * That was proven vacuous twice over during cold review -
- *
- *   * dropping one closing quote from the emitted script left all 31 tests
- *     green while `sh -n` on the extracted `ExecStart` reported
- *     "unexpected EOF"; the Linux host would never have started;
- *   * `expect(unit).toContain("--service-label")` passed even with the label
- *     branch stripped, because the string also appeared in the probe.
- *
- * So everything here goes through the emitted artifact the way systemd would:
- * parse `ExecStart=`, recover the token vector, and EXECUTE the resulting
- * program against stub CLIs. Substring assertions appear only where the claim
- * genuinely is about text (the unit-file scaffolding).
- */
+/** The systemd emitter had NO test file at all: `buildUnit` was covered only by `toContain` substring assertions in `commands/__tests__/host-start.test.ts`. That was proven vacuous twice over during cold review - * dropping one closing quote from the emitted script left all 31 tests green while `sh -n` on the extracted `ExecStart` reported "unexpected EOF"; the Linux host would never have started; * `expect(unit).toContain("--service-label")` passed even with the label branch stripped, because the string also appeared in the probe. */
 
 const execFileAsync = promisify(execFile);
 
@@ -37,12 +22,7 @@ function labelFor(id: string): ServiceLabel {
   };
 }
 
-/**
- * Recover the argv vector systemd would exec, straight out of the emitted
- * unit. `extractExecStartTokens` is systemd's own quoting/escaping rule as
- * implemented for the world probe, so this exercises the emitter's escaping
- * rather than trusting it.
- */
+/** Recover the argv vector systemd would exec, straight out of the emitted unit. `extractExecStartTokens` is systemd's own quoting/escaping rule as implemented for the world probe, so this exercises the emitter's escaping rather than trusting it. */
 function execStartOf(unit: string): readonly string[] {
   const tokens = extractExecStartTokens(unit);
   if (tokens === null) throw new Error("unit has no ExecStart= line");
@@ -59,11 +39,7 @@ afterEach(async () => {
   await rm(work, { recursive: true, force: true });
 });
 
-/**
- * A CLI that predates the capability contract: it has no `host capabilities`
- * subcommand, so commander exits non-zero with a message on stderr. Anything
- * else it is asked to run is recorded, one argument per line.
- */
+/** A CLI that predates the capability contract: it has no `host capabilities` subcommand, so commander exits non-zero with a message on stderr. Anything else it is asked to run is recorded, one argument per line. */
 async function writeLegacyCliStub(recordTo: string): Promise<string> {
   const path = join(work, "legacy-cli.sh");
   await writeFile(
@@ -176,10 +152,8 @@ describe("systemd unit ExecStart — executed, not grepped", () => {
   });
 
   it("a label containing a single quote still emits parseable shell and reaches the CLI verbatim", async () => {
-    // F7: `shellQuote` used to emit `'ab'\"'\"'cd'`, which is neither the
-    // POSIX `'\''` form nor the `'"'"'` one it was reaching for - `sh` died
-    // with "unexpected EOF". Unreachable through today's label alphabet, but
-    // it is the guard the emitters lean on, so it has to actually hold.
+    // F7: `shellQuote` used to emit `'ab'\"'\"'cd'`, which is neither the POSIX `'\''` form nor the `'"'"'` one it was reaching for - `sh` died with "unexpected EOF".
+    // Unreachable through today's label alphabet, but it is the guard the emitters lean on, so it has to actually hold.
     const currentArgs = join(work, "quoted-args.txt");
     const currentCli = await writeCurrentCliStub(currentArgs, []);
     const unit = buildSystemdUnit({
@@ -242,11 +216,8 @@ describe("systemd unit — scaffolding and the token guard", () => {
   });
 
   it("names the journald stream after the label, not the /bin/sh wrapper", () => {
-    // journald's default SYSLOG_IDENTIFIER is the basename of the Exec
-    // line's first executable - `sh` - and the stdout stream opens BEFORE
-    // the wrapper exec's the CLI, so exec never renames it. Without this
-    // line every supervisor message the debugging user reads in
-    // `journalctl --user -u <unit>` is attributed to `sh[pid]`.
+    // journald's default SYSLOG_IDENTIFIER is the basename of the Exec line's first executable - `sh` - and the stdout stream opens BEFORE the wrapper exec's the CLI, so exec never renames it.
+    // Without this line every supervisor message the debugging user reads in `journalctl --user -u <unit>` is attributed to `sh[pid]`.
     const unit = buildSystemdUnit({
       label: labelFor("ai.traycer.host.dev"),
       cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
@@ -255,12 +226,8 @@ describe("systemd unit — scaffolding and the token guard", () => {
   });
 
   it("gates the start on the CLI binary existing, so a stranded definition goes inert instead of restart-looping", () => {
-    // A definition can outlive the CLI it points at (`apt remove
-    // traycer-cli` with the unit still enabled). Without the condition,
-    // every login exec's a missing $0 → exit 127 → Restart=on-failure loops
-    // it into a `failed` unit on every boot. With it, systemd skips the
-    // start as "condition not met": visible in status, not failing, and
-    // re-evaluated fresh by the next `systemctl start` after a reinstall.
+    // A definition can outlive the CLI it points at (`apt remove traycer-cli` with the unit still enabled).
+    // Without the condition, every login exec's a missing $0 → exit 127 → Restart=on-failure loops it into a `failed` unit on every boot.
     const unit = buildSystemdUnit({
       label: labelFor("ai.traycer.host.dev"),
       cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
@@ -271,9 +238,7 @@ describe("systemd unit — scaffolding and the token guard", () => {
   });
 
   it("omits the path condition for a non-absolute CLI command", () => {
-    // systemd rejects relative paths in Condition*= values; the self-invoke
-    // fallback can in principle yield a bare command, which must degrade to
-    // "no condition" rather than an invalid unit.
+    // systemd rejects relative paths in Condition*= values; the self-invoke fallback can in principle yield a bare command, which must degrade to "no condition" rather than an invalid unit.
     const unit = buildSystemdUnit({
       label: labelFor("ai.traycer.host.dev"),
       cli: { command: "traycer", args: [] },

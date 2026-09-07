@@ -7,14 +7,10 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 
-// The gate's only collaborators are the tab-scoped providers query and its
-// force-refresh twin, plus a reconnect toast - stub all three so the test drives
-// pure probe-status combinations.
+// The gate's only collaborators are the tab-scoped providers query and its force-refresh twin, plus a reconnect toast - stub all three so the test drives pure probe-status combinations.
 const mocks = vi.hoisted(() => ({
   refresh: vi.fn(() => Promise.resolve()),
-  // `undefined` simulates a `providers.list` query that hasn't settled yet
-  // (the genuine "still loading" signal); an array simulates a settled
-  // response, empty or not.
+  // `undefined` simulates a `providers.list` query that hasn't settled yet (the genuine "still loading" signal); an array simulates a settled response, empty or not.
   providers: [] as ProviderCliState[] | undefined,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -172,10 +168,8 @@ describe("useProviderReauthGate", () => {
     renderHook(() =>
       useProviderReauthGate("claude", null, true, "authoritative"),
     );
-    // A bare force-refresh bypasses the host poison and re-runs the flaky
-    // standalone probe, flipping a genuinely signed-out provider back to
-    // `authenticated`. Re-checks are user-driven (the banner Refresh button) or
-    // driven by the next failing run's poison - never automatic here.
+    // A bare force-refresh bypasses the host poison and re-runs the flaky standalone probe, flipping a genuinely signed-out provider back to `authenticated`.
+    // Re-checks are user-driven (the banner Refresh button) or driven by the next failing run's poison - never automatic here.
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
@@ -233,9 +227,7 @@ describe("useProviderReauthGate", () => {
 
   describe("convergence window (provider summary lags the ambient profile row)", () => {
     it("blocks send when the ambient profile row is definitively unauthenticated even though the provider-level summary is still unavailable", () => {
-      // Regression for the send-gate finding: the picker already reads both
-      // sources and degrades, but the gate used to read only `state.auth`
-      // (still `unavailable`, not yet converged) and left Send enabled.
+      // Regression for the send-gate finding: the picker already reads both sources and degrades, but the gate used to read only `state.auth` (still `unavailable`, not yet converged) and left Send enabled.
       mocks.providers = [
         {
           ...claudeState(UNAVAILABLE),
@@ -258,9 +250,7 @@ describe("useProviderReauthGate", () => {
     });
 
     it("does NOT block a healthy managed profile under the same lagging-summary state", () => {
-      // Same provider state as above, but the composer's committed profile is
-      // the healthy managed row - the broadened ambient predicate must not
-      // leak into the profileId !== null branch.
+      // Same provider state as above, but the composer's committed profile is the healthy managed row - the broadened ambient predicate must not leak into the profileId !== null branch.
       mocks.providers = [
         {
           ...claudeState(UNAVAILABLE),
@@ -356,9 +346,7 @@ describe("useProviderReauthGate", () => {
     });
 
     it("does NOT block send for a healthy managed profile just because ambient is signed out", () => {
-      // The provider-level `auth` (ambient's own probe) is unauthenticated, but
-      // the composer's committed profile is a DIFFERENT, healthy managed one -
-      // the gate must read that profile's own status, not the provider-level one.
+      // The provider-level `auth` (ambient's own probe) is unauthenticated, but the composer's committed profile is a DIFFERENT, healthy managed one - the gate must read that profile's own status, not the provider-level one.
       mocks.providers = [
         {
           ...claudeState(UNAUTH),
@@ -395,12 +383,8 @@ describe("useProviderReauthGate", () => {
     });
 
     it("ticket 07 round 2: blocks send for a non-null profileId once providers.list SETTLES on no profiles for this provider (flag off / old host) - a settled empty list means 'no support', not 'unknown'", () => {
-      // `claudeState` defaults `profiles: []` - the provider HAS responded,
-      // just with no multi-profile support (old host, or a new host with the
-      // flag off / an unsupported provider). Preserving the pin here would
-      // silently run the account on ambient while the chat artifact still
-      // claimed the managed profile - this must block send and offer the
-      // confirm-first ambient fallback instead (never a silent switch).
+      // `claudeState` defaults `profiles: []` - the provider HAS responded, just with no multi-profile support (old host, or a new host with the flag off / an unsupported provider).
+      // Preserving the pin here would silently run the account on ambient while the chat artifact still claimed the managed profile - this must block send and offer the confirm-first ambient fallback instead (never a silent switch).
       mocks.providers = [claudeState(AUTHED)];
       const { result } = renderHook(() =>
         useProviderReauthGate(
@@ -431,12 +415,8 @@ describe("useProviderReauthGate", () => {
 
   describe("authoritative gates ONLY profile_missing, never profile_unauthenticated", () => {
     it("a non-authoritative selection whose pin EXISTS but is itself unauthenticated still shows the banner and blocks send", () => {
-      // Prong 2 (`useComposerToolbarStore`'s seed validation) already nulls
-      // out a non-existent fallback pin before it ever reaches this gate, so
-      // a non-authoritative `profileId` that still resolves to a real row
-      // here is a CONFIRMED-EXISTING profile, not a guess. Suppressing this
-      // would silently let a turn dispatch on a signed-out profile and only
-      // surface the banner after it failed host-side mid-send.
+      // Prong 2 (`useComposerToolbarStore`'s seed validation) already nulls out a non-existent fallback pin before it ever reaches this gate, so a non-authoritative `profileId` that still resolves to a real row here is a CONFIRMED-EXISTING profile, not a guess.
+      // Suppressing this would silently let a turn dispatch on a signed-out profile and only surface the banner after it failed host-side mid-send.
       mocks.providers = [
         claudeStateWithProfiles([
           profile("ambient", "ambient", "Terminal account", "authenticated"),

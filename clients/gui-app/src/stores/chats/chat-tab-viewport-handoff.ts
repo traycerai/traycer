@@ -1,8 +1,4 @@
-/**
- * Compatibility seam for canvas actions that already flush chat view ids.
- * Registrations and storage now belong to the global capture registry, so
- * chat and non-chat structural handoffs have one authority.
- */
+/** Compatibility seam for canvas actions that already flush chat view ids. */
 import {
   flushLiveReadingPositionViews,
   registerReadingPositionCapture,

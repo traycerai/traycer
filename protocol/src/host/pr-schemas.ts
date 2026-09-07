@@ -1,30 +1,10 @@
-/**
- * Schemas for the `pr.*` host stream surface - the Epic PR View's list and
- * detail subscriptions.
- *
- * `pr.subscribeListForEpic` carries light per-PR summaries for every PR
- * derived from an epic's chats/worktree bindings. `pr.subscribeDetail`
- * carries the heavy per-PR facts (body, checks, comments/reviews) for one
- * PR at a time, keyed by its GitHub base coordinates.
- *
- * `githubHost` is reserved on every shape from v1.0 even though v1 sweeps
- * github.com only (decision #12) - so multi-host support is additive later
- * rather than a wire break. `sourceStatus` reflects the outcome of the sweep
- * that produced a frame; `liveness` is a per-PR fact (network eligibility)
- * that persists across sweeps.
- */
+/** Schemas for the `pr.*` host stream surface - the Epic PR View's list and detail subscriptions. */
 import { z } from "zod";
 import { worktreeBindingOwnerKindSchema } from "./worktree-schemas";
 
 // ---- Shared building blocks ---------------------------------------------- //
 
-/**
- * Per-frame sweep outcome. `cached` marks hydration snapshots and cache-only
- * re-emits where no sweep was attempted; the other four mirror the
- * structured `GhSweepOutcome` union the host runner returns. Participates in
- * the host's emission fingerprint so an `error`/`gh-unavailable` recovery to
- * `ok` always emits, even when the underlying facts are unchanged.
- */
+/** Per-frame sweep outcome. */
 export const prSourceStatusSchema = z.enum([
   "ok",
   "partial",
@@ -35,17 +15,8 @@ export const prSourceStatusSchema = z.enum([
 export type PrSourceStatus = z.infer<typeof prSourceStatusSchema>;
 
 /**
- * Why the host is not refreshing right now, when that reason is the FETCH
- * LAYER rather than any one PR's outcome.
- *
- * Deliberately a separate channel from `sourceStatus`: the host's per-epic
- * status is the worst per-fact outcome, and `cached` ranks LOWEST there, so a
- * rate-limit pause would be masked the moment one fact came back `ok`. A
- * paused emission is `sourceStatus: "cached"` PLUS this notice.
- *
- * `retryAt` is an epoch-ms estimate of when fetching resumes - `null` when the
- * host has not learned a reset time yet (a fresh restart mid-limit). Copy is
- * built CLIENT-SIDE from `kind` + `retryAt`; the host never sends prose.
+ * Why the host is not refreshing right now, when that reason is the FETCH LAYER rather than any one PR's outcome.
+ * Copy is built CLIENT-SIDE from `kind` + `retryAt`; the host never sends prose.
  */
 export const prSourceNoticeSchema = z.object({
   kind: z.enum(["rate-limited", "backing-off"]),
@@ -54,10 +25,8 @@ export const prSourceNoticeSchema = z.object({
 export type PrSourceNotice = z.infer<typeof prSourceNoticeSchema>;
 
 /**
- * Network eligibility for a PR, NOT connectivity health. `cache-only` marks
- * GHES/unknown-host PRs the policy never sweeps by design; a github.com PR
- * that simply hasn't been swept yet is still `live` (its frames carry
- * `sourceStatus: "cached"` until the first sweep lands).
+ * Network eligibility for a PR, NOT connectivity health.
+ * `cache-only` marks GHES/unknown-host PRs the policy never sweeps by design; a github.com PR that simply hasn't been swept yet is still `live` (its frames carry `sourceStatus: "cached"` until the first sweep lands).
  */
 export const prLivenessSchema = z.enum(["live", "cache-only"]);
 export type PrLiveness = z.infer<typeof prLivenessSchema>;
@@ -81,11 +50,8 @@ export const prChecksRollupSchema = z.object({
 export type PrChecksRollup = z.infer<typeof prChecksRollupSchema>;
 
 /**
- * The PR's *base* GitHub coordinates - owner/repo/prNumber of the repo the
- * PR targets, never the fork/head repo. Nullable AS A GROUP on the light
- * item (see the unknown-base rule below): a positive fact can lack these
- * when discovery only proved head identity (absent/unparseable `prUrl`), and
- * substituting head owner/repo would misidentify a fork PR.
+ * The PR's *base* GitHub coordinates - owner/repo/prNumber of the repo the PR targets, never the fork/head repo.
+ * Nullable AS A GROUP on the light item (see the unknown-base rule below): a positive fact can lack these when discovery only proved head identity (absent/unparseable `prUrl`), and substituting head owner/repo would.
  */
 export const prBaseCoordinatesSchema = z.object({
   owner: z.string().min(1),
@@ -94,12 +60,6 @@ export const prBaseCoordinatesSchema = z.object({
 });
 export type PrBaseCoordinates = z.infer<typeof prBaseCoordinatesSchema>;
 
-/**
- * The local repo a PR is grouped under in the panel (paired internal +
- * OSS-submodule PRs land adjacent) - derived per list projection from the
- * owning chat's worktree binding, independent of the PR's own base
- * coordinates (which may point at an upstream fork owner).
- */
 export const prRepoIdentifierSchema = z.object({
   owner: z.string(),
   repo: z.string(),
@@ -107,26 +67,14 @@ export const prRepoIdentifierSchema = z.object({
 export type PrRepoIdentifier = z.infer<typeof prRepoIdentifierSchema>;
 
 /**
- * Which side of a worktree binding entry a row was enumerated from: the
- * entry's own repo (`superproject`) or one of its owned submodule branches
- * (`submodule`). The GUI nests a `submodule` row under the `superproject` row
- * it shares a {@link prLinkGroupKeySchema} with, so a paired
- * internal+OSS-submodule change reads as one piece of work rather than two
- * unrelated repo groups.
- *
- * A repo is only `submodule` RELATIVE TO a binding entry - the same repo bound
- * directly as its own workspace enumerates as `superproject`. When one PR is
- * reachable both ways, `superproject` wins so the row keeps its own group.
+ * Which side of a worktree binding entry a row was enumerated from: the entry's own repo (`superproject`) or one of its owned submodule branches (`submodule`).
  */
 export const prRepoRoleSchema = z.enum(["superproject", "submodule"]);
 export type PrRepoRole = z.infer<typeof prRepoRoleSchema>;
 
 /**
- * Opaque token shared by every PR enumerated from the SAME worktree binding
- * entry - the entry's superproject PR and each of its owned-submodule PRs.
- * Display-hostile by design (it is the entry's local running directory): the
- * client groups on it and never renders it. `null` when the entry has no
- * stable local path, which only suppresses nesting - both rows still list.
+ * Opaque token shared by every PR enumerated from the SAME worktree binding entry - the entry's superproject PR and each of its owned-submodule PRs.
+ * Display-hostile by design (it is the entry's local running directory): the client groups on it and never renders it.
  */
 export const prLinkGroupKeySchema = z.string();
 
@@ -166,11 +114,8 @@ export type PrSubscribeListForEpicOpenRequest = z.infer<
 >;
 
 /**
- * One PR row on the list stream. `base` is nullable as a whole group (see
- * `prBaseCoordinatesSchema`) - a `null` base marks a list-only row rendered
- * from head identity alone (no tile affordance, no persisted selection).
- * Every enrichment field below `liveness` is independently nullable so a
- * cache-only or never-swept item still renders from identity + state alone.
+ * One PR row on the list stream.
+ * Every enrichment field below `liveness` is independently nullable so a cache-only or never-swept item still renders from identity + state alone.
  */
 export const prLightItemSchema = z.object({
   githubHost: z.string().nullable(),
@@ -199,9 +144,7 @@ export type PrLightItem = z.infer<typeof prLightItemSchema>;
 const PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS = {
   hasBinaryPayload: z.literal(false),
   sourceStatus: prSourceStatusSchema,
-  // Present on HYDRATION snapshots too, not just sweep-driven updates: a
-  // panel opened while the host is already paused must say so on its first
-  // frame rather than looking merely stale.
+  // Present on HYDRATION snapshots too, not just sweep-driven updates: a panel opened while the host is already paused must say so on its first frame rather than looking merely stale.
   notice: prSourceNoticeSchema.nullable(),
   items: z.array(prLightItemSchema),
 } as const;
@@ -266,36 +209,16 @@ export const prCheckConclusionSchema = z.enum([
 export type PrCheckConclusion = z.infer<typeof prCheckConclusionSchema>;
 
 export const prCheckContextSchema = z.object({
-  /**
-   * The JOB name alone (`build`, `pre-commit`) - which is not unique. A repo
-   * running one reusable workflow across five packages reports `build` five
-   * times, and a list keyed on this shows five identical rows. See
-   * {@link prCheckContextSchema.workflowName}.
-   */
+  /** The JOB name alone (`build`, `pre-commit`) - which is not unique. */
   name: z.string(),
-  /**
-   * The workflow the job belongs to (`Run Pre-commit`), or `null` for a check
-   * that did not come from a workflow run at all - a third-party app's check,
-   * or a commit status. Together with `name` and `event` this reconstructs the
-   * identity GitHub displays, and is what makes five `build` rows tellable
-   * apart.
-   */
   workflowName: z.string().nullable(),
   /** What triggered the run (`pull_request`). `null` outside a workflow run. */
   event: z.string().nullable(),
   /** The app that reported it - "GitHub Actions", "Mintlify", "CodeRabbit". */
   appName: z.string().nullable(),
-  /**
-   * The reporting app's icon. A check list is scanned, not read: the app mark
-   * is what lets a reader find the one CodeRabbit row among fourteen Actions
-   * rows without parsing any text.
-   */
+  /** The reporting app's icon. */
   appLogoUrl: z.string().nullable(),
-  /**
-   * The one-line reason a commit status carries ("Review completed",
-   * "Skipping deployment"). Only `StatusContext` has this; a `CheckRun` has no
-   * equivalent field and reports `null`.
-   */
+  /** The one-line reason a commit status carries ("Review completed", "Skipping deployment"). */
   description: z.string().nullable(),
   status: prCheckStatusSchema,
   conclusion: prCheckConclusionSchema.nullable(),
@@ -304,9 +227,8 @@ export const prCheckContextSchema = z.object({
 export type PrCheckContext = z.infer<typeof prCheckContextSchema>;
 
 /**
- * `checks` section of a detail frame - the first 50 check contexts plus a
- * truncation marker. `observedAt` is `null` for a row that has never been
- * swept (cache-only or not-yet-observed).
+ * `checks` section of a detail frame - the first 50 check contexts plus a truncation marker.
+ * `observedAt` is `null` for a row that has never been swept (cache-only or not-yet-observed).
  */
 export const prChecksSectionSchema = z.object({
   observedAt: z.number().nullable(),
@@ -339,11 +261,7 @@ export const prActivityItemSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("review"),
     /**
-     * GitHub's review node id where one is known, so a
-     * {@link prReviewThreadSchema} can name the review that submitted it.
-     * Falls back to the review's url, then to a synthetic key, for facts
-     * persisted before the id was captured - a thread then simply fails to
-     * match and renders un-nested.
+     * GitHub's review node id where one is known, so a {@link prReviewThreadSchema} can name the review that submitted it.
      */
     id: z.string(),
     author: prActorSchema.nullable(),
@@ -390,27 +308,13 @@ export type PrReviewThreadComment = z.infer<typeof prReviewThreadCommentSchema>;
 
 /**
  * One inline review thread: a place in the diff plus the conversation about it.
- *
- * This is where a bot review's actual findings live. A review's `body` is only
- * its preamble - CodeRabbit's is literally "Actionable comments posted: 5" -
- * and the five findings are five threads. Carrying reviews without threads
- * therefore renders the count and hides the content, which is what it did.
- *
- * `reviewId` is the join back to the review that submitted it (GitHub's
- * `PullRequestReviewComment.pullRequestReview.id`). Nullable because a thread
- * can outlive the 20-review window, and because a fact persisted before this
- * field existed has no review id to match - both cases render the thread
- * un-nested rather than dropping it.
+ * Nullable because a thread can outlive the 20-review window, and because a fact persisted before this field existed has no review id to match - both cases render the thread un-nested rather than dropping it.
  */
 export const prReviewThreadSchema = z.object({
   id: z.string(),
   reviewId: z.string().nullable(),
   path: z.string(),
-  /**
-   * The line in the CURRENT head. GitHub returns `null` for an outdated
-   * thread - the code it referred to has since moved or gone - which is
-   * exactly when {@link originalLine} is the only anchor left.
-   */
+  /** The line in the CURRENT head. */
   line: z.number().int().nullable(),
   /** The line as of the commit reviewed. Present even when `line` is not. */
   originalLine: z.number().int().nullable(),
@@ -418,15 +322,7 @@ export const prReviewThreadSchema = z.object({
   subject: prReviewThreadSubjectSchema,
   isResolved: z.boolean(),
   isOutdated: z.boolean(),
-  /**
-   * The tail of the diff hunk the thread is anchored to, or `null`.
-   *
-   * Carried ONCE per thread and truncated to its last few lines. GitHub
-   * repeats the full hunk verbatim on every comment in the thread, and for a
-   * comment on a new file that hunk is the entire file: measured over one real
-   * PR it was 2.7x the weight of every comment body combined, and two thirds
-   * of the whole payload.
-   */
+  /** The tail of the diff hunk the thread is anchored to, or `null`. */
   diffHunk: z.string().nullable(),
   comments: z.array(prReviewThreadCommentSchema).max(10),
   /** True count, so a clipped thread can say how many replies it is hiding. */
@@ -434,17 +330,7 @@ export const prReviewThreadSchema = z.object({
 });
 export type PrReviewThread = z.infer<typeof prReviewThreadSchema>;
 
-/**
- * `reviewThreads` section of a detail frame.
- *
- * Kept OUT of {@link prActivitySectionSchema} deliberately. That section is a
- * chronological conversation whose members have no file, no line and no
- * resolved state; a thread has all three, and one bot review can contribute
- * twenty of them. Merged in, twenty findings would drown two human comments,
- * blow the section's own 20-item cap, and force every consumer that walks
- * `activity.items` (the attention queue, the reviewer roll-up) to learn a
- * third kind it has no use for.
- */
+/** `reviewThreads` section of a detail frame. */
 export const prReviewThreadsSectionSchema = z.object({
   observedAt: z.number().nullable(),
   threads: z.array(prReviewThreadSchema).max(20),
@@ -508,12 +394,8 @@ export const prCommitsSectionSchema = z.object({
 export type PrCommitsSection = z.infer<typeof prCommitsSectionSchema>;
 
 /**
- * `core` section of a detail frame - the light fields plus the heavy-only
- * overview fields (body, author, reviewers/review requests, headRefOid,
- * mergedAt). Unlike the light item's `base`, `owner`/`repo`/`prNumber` here
- * are never null: a detail subscription only ever opens for a fully
- * identified PR (its base coordinates are the subscription's own open-request
- * key).
+ * `core` section of a detail frame - the light fields plus the heavy-only overview fields (body, author, reviewers/review requests, headRefOid, mergedAt).
+ * Unlike the light item's `base`, `owner`/`repo`/`prNumber` here are never null: a detail subscription only ever opens for a fully identified PR (its base coordinates are the subscription's own open-request key).
  */
 export const prDetailCoreSchema = z.object({
   observedAt: z.number().nullable(),
@@ -537,10 +419,7 @@ export const prDetailCoreSchema = z.object({
   updatedAt: z.number().nullable(),
   mergedAt: z.number().nullable(),
   repoIdentifier: prRepoIdentifierSchema,
-  // Carried for `pr.getLocalDiff`, which needs to name WHICH checkout and
-  // which repo under it. Both were already on the light item; the detail
-  // stream re-states them so a tile opened straight from a deep link (with no
-  // list frame ever received) can still ask for the local diff.
+  // Carried for `pr.getLocalDiff`, which needs to name WHICH checkout and which repo under it.
   repoRole: prRepoRoleSchema,
   linkGroupKey: prLinkGroupKeySchema.nullable(),
   owners: z.array(prOwnerRefSchema),
@@ -582,11 +461,7 @@ export type PrSubscribeDetailServerFrame = z.infer<
 
 // ---- Shared client frame --------------------------------------------------- //
 
-/**
- * Client frame shared by both `pr.*` streams: a manual refresh request.
- * Concurrent refreshes coalesce single-flight into at most one trailing
- * sweep (host-side); the wire shape is identical on both methods.
- */
+/** Client frame shared by both `pr.*` streams: a manual refresh request. */
 export const prSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("refresh"),
@@ -599,25 +474,15 @@ export type PrSubscribeClientFrame = z.infer<
 
 // ---- `pr.getLocalDiff` ---------------------------------------------------- //
 
-/**
- * Default byte cap for one range-diff sweep. Deliberately larger than the
- * per-file `git.getFileDiff` budget: this is ONE call carrying a whole PR,
- * and a PR whose full patch exceeds 2MiB is one no reader was going to read
- * inline anyway - it truncates and points at GitHub.
- */
+/** Default byte cap for one range-diff sweep. */
 export const DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET = 2 * 1_048_576;
 
 /**
- * Why a PR has no local diff. Each value is a DIFFERENT sentence to the
- * reader, which is the whole reason this isn't a boolean: "you have no
- * checkout of this PR" and "your checkout never fetched the base branch" want
- * different next actions.
+ * Why a PR has no local diff.
+ * Each value is a DIFFERENT sentence to the reader, which is the whole reason this isn't a boolean: "you have no checkout of this PR" and "your checkout never fetched the base branch" want different next actions.
  */
 export const prLocalDiffUnavailableReasonSchema = z.enum([
-  // The `linkGroupKey` matches no worktree binding on this host, or the
-  // directory it named is gone. Includes the case of a client that made the
-  // key up: keys are only ever honoured when a persisted binding vouches for
-  // them (they are local paths, so an unchecked key would be a read primitive).
+  // The `linkGroupKey` matches no worktree binding on this host, or the directory it named is gone.
   "no-local-checkout",
   // A checkout was found but it isn't this PR's repo - a submodule that was
   // never initialized, or a binding whose remote has since been re-pointed.
@@ -636,38 +501,13 @@ export type PrLocalDiffUnavailableReason = z.infer<
 >;
 
 /**
- * `pr.getLocalDiff` request - a ref-RANGE diff, run by the host against the
- * local checkout a PR was pushed from.
- *
- * `linkGroupKey` is the same opaque token the list/detail streams already
- * carry (see {@link prLinkGroupKeySchema}); the host resolves it back to a
- * directory itself rather than accepting a path from the client. `repoRole`
- * and `repoIdentifier` disambiguate WHICH repo under that key is meant, since
- * one key covers a superproject and every submodule it owns.
- *
- * `epicId` gates this the same way the two `pr.*` streams do: the caller must
- * hold SOME role on the named epic, and the resolved checkout must itself
- * belong to that epic. Without it, a caller who merely knows another epic's
- * `linkGroupKey` (an opaque token, not a secret) could read that epic's local
- * diff despite having no role on it.
- *
- * `expectedHeadOid` is GitHub's tip. The host never uses it to select refs -
- * it only reports the local tip back, so the client can say "your checkout is
- * N commits from what GitHub is showing" instead of quietly rendering a diff
- * of something else.
+ * `pr.getLocalDiff` request - a ref-RANGE diff, run by the host against the local checkout a PR was pushed from.
+ * `epicId` gates this the same way the two `pr.*` streams do: the caller must hold SOME role on the named epic, and the resolved checkout must itself belong to that epic.
  */
 export const prGetLocalDiffRequestSchema = z.object({
-  // No `hostId`: like the two `pr.*` streams, and unlike `git.*`, the host it
-  // runs on is the only host it could mean - taking one as an argument would
-  // invite a caller to believe it selects something.
   epicId: z.string().min(1),
-  // `.min(1)` on the REQUEST fields, not on the shared schemas: the host
-  // resolves `linkGroupKey` to a directory and matches `repoIdentifier`
-  // against a binding, so an empty value reaches that resolution and only
-  // fails later as `no-local-checkout`/`repo-mismatch` - a wrong answer
-  // dressed as a real one. The same fields are nullable on the stream frames
-  // (`prLightItemSchema`, `prDetailCoreSchema`), which may legitimately carry
-  // an identifier this request could never be made with.
+  // `.min(1)` on the REQUEST fields, not on the shared schemas: the host resolves `linkGroupKey` to a directory and matches `repoIdentifier` against a binding, so an empty value reaches that resolution and only fails later.
+  // The same fields are nullable on the stream frames (`prLightItemSchema`, `prDetailCoreSchema`), which may legitimately carry an identifier this request could never be made with.
   linkGroupKey: prLinkGroupKeySchema.min(1),
   repoIdentifier: prRepoIdentifierSchema.extend({
     owner: z.string().min(1),
@@ -687,11 +527,8 @@ export const prGetLocalDiffRequestSchema = z.object({
 export type PrGetLocalDiffRequest = z.infer<typeof prGetLocalDiffRequestSchema>;
 
 /**
- * One file in the range. Metadata comes from `--name-status` + `--numstat`,
- * which cover EVERY file in the range; `patch` comes from the byte-capped
- * patch sweep, so it is `null` for files the budget never reached. That split
- * is deliberate: a truncated response still knows the true file count and
- * per-file line counts, so the UI can say what it is not showing.
+ * One file in the range.
+ * Metadata comes from `--name-status` + `--numstat`, which cover EVERY file in the range; `patch` comes from the byte-capped patch sweep, so it is `null` for files the budget never reached.
  */
 export const prLocalDiffFileSchema = z.object({
   path: z.string(),
@@ -704,11 +541,7 @@ export const prLocalDiffFileSchema = z.object({
 });
 export type PrLocalDiffFile = z.infer<typeof prLocalDiffFileSchema>;
 
-/**
- * `pr.getLocalDiff` response. `unavailable` is a normal outcome, not an error:
- * most PRs in a list have no checkout on this machine, and the caller renders
- * the GitHub-sourced file list instead.
- */
+/** `pr.getLocalDiff` response. */
 export const prGetLocalDiffResponseSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("unavailable"),
@@ -724,10 +557,8 @@ export const prGetLocalDiffResponseSchema = z.discriminatedUnion("kind", [
     mergeBaseOid: z.string(),
     localHeadOid: z.string(),
     /**
-     * `localHeadOid !== expectedHeadOid`. Computed host-side so every client
-     * draws the same conclusion from the same two strings; a `null`
-     * `expectedHeadOid` (GitHub never told us) is NOT stale, it is unknown,
-     * and reports `false`.
+     * `localHeadOid !== expectedHeadOid`.
+     * Computed host-side so every client draws the same conclusion from the same two strings; a `null` `expectedHeadOid` (GitHub never told us) is NOT stale, it is unknown, and reports `false`.
      */
     isStale: z.boolean(),
     files: z.array(prLocalDiffFileSchema),
@@ -740,36 +571,20 @@ export type PrGetLocalDiffResponse = z.infer<
 >;
 
 // ---- `pr.getLocalDiffSummary` / `pr.getLocalFileDiff` --------------------- //
-//
-// The split form of `pr.getLocalDiff`: one cheap metadata frame, then one
-// small patch fetch per file the reader actually scrolls to - the shape the
-// Git Diff bundle tile already ships. The monolith stays registered for old
-// clients; a client that finds these methods missing
-// (`E_HOST_UNSUPPORTED`) falls back to the monolith itself.
 
-/**
- * Default byte cap for ONE file's patch. Mirrors `git.getFileDiff`'s
- * {@link DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET} deliberately: the per-file fetch
- * cadence, truncation banner and "Load Full" affordance are the same surface,
- * so the same budget keeps the two diff views truncating at the same size.
- */
+/** Default byte cap for ONE file's patch. */
 export const DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET = 256 * 1024;
 
 /**
- * A full commit OID as the summary response reports it - 40 hex for SHA-1
- * repos, 64 for SHA-256. Enforced at the schema so an abbreviated OID, a ref
- * name or a revision expression (`HEAD~2`, `a..b`) can never PARSE into a
- * request whose host-side handler splices it into git argv; the host
- * revalidates independently.
+ * A full commit OID as the summary response reports it - 40 hex for SHA-1 repos, 64 for SHA-256.
+ * Enforced at the schema so an abbreviated OID, a ref name or a revision expression (`HEAD~2`, `a..b`) can never PARSE into a request whose host-side handler splices it into git argv; the host revalidates independently.
  */
 export const prLocalDiffOidSchema = z
   .string()
   .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u);
 
 /**
- * `pr.getLocalDiffSummary` request - `pr.getLocalDiff`'s request minus
- * `byteBudget`, because metadata is never byte-capped: `--name-status` and
- * `--numstat` cover every file in the range at a few dozen bytes each.
+ * `pr.getLocalDiffSummary` request - `pr.getLocalDiff`'s request minus `byteBudget`, because metadata is never byte-capped: `--name-status` and `--numstat` cover every file in the range at a few dozen bytes each.
  */
 export const prGetLocalDiffSummaryRequestSchema =
   prGetLocalDiffRequestSchema.omit({ byteBudget: true });
@@ -779,13 +594,7 @@ export type PrGetLocalDiffSummaryRequest = z.infer<
 
 /**
  * One file in the range - {@link prLocalDiffFileSchema} minus its patch.
- *
- * `path` and `previousPath` additionally reject the empty string, matching
- * {@link prGetLocalFileDiffRequestSchema}: the client forwards both values
- * verbatim into per-file requests, so the schemas must state ONE emptiness
- * rule or a parse-valid summary could produce request-invalid asks. The
- * released monolith file schema stays untouched - its files never feed a
- * request.
+ * The released monolith file schema stays untouched - its files never feed a request.
  */
 export const prLocalDiffSummaryFileSchema = prLocalDiffFileSchema
   .omit({
@@ -801,18 +610,7 @@ export type PrLocalDiffSummaryFile = z.infer<
 
 /**
  * A byte-path sidecar token: CANONICAL standard base64 of raw path bytes.
- *
- * Canonicality is enforced at the schema, not just documented: clients use
- * the token STRING as file/cache/collapse identity, so a noncanonical alias
- * of the same bytes (`/w` for `/w==`, the url-safe alphabet, embedded
- * whitespace, nonzero padding bits) would otherwise become a distinct
- * identity for the same file on any peer that trusts wire validation.
- * `btoa(atob(x)) === x` is exactly that predicate, in browser and Node
- * alike: forgiving-base64 tolerates every alias class, so round-tripping
- * detects each one. The host still re-validates independently - plus the
- * checks that need the decoded bytes and the sibling field (non-UTF-8-ness,
- * companion-path equality) - because it cannot know its caller parsed a
- * request at all.
+ * The host still re-validates independently - plus the checks that need the decoded bytes and the sibling field (non-UTF-8-ness, companion-path equality) - because it cannot know its caller parsed a request at all.
  */
 export const prPathBytesTokenSchema = z
   .string()
@@ -830,22 +628,8 @@ function isCanonicalBase64(value: string): boolean {
 }
 
 /**
- * One summary file WITH the byte-path sidecars - the shape
- * `pr.getLocalDiffSummary@1.0` binds.
- *
- * The `V11` in the name is historical: the sidecars were built on an
- * unreleased 1.1 that the release collapsed into 1.0, so this is now the only
- * line, not the upper half of a pair. There is no sidecar-less peer to project
- * for - `pr.getLocalDiffSummary` had never shipped at all.
- *
- * `pathBytes` / `previousPathBytes` are canonical base64
- * ({@link prPathBytesTokenSchema}) of the raw path bytes exactly as git
- * reported them, non-null IFF those bytes are not valid UTF-8. `path` remains
- * the (possibly lossy, U+FFFD-bearing) UTF-8 decode, display-only.
- * Each rename side is derived independently: a clean source beside a byte
- * destination legitimately carries `previousPathBytes: null`. Clients treat
- * tokens as opaque: never decoded, only echoed into `pr.getLocalFileDiff`
- * and used as identity keys.
+ * One summary file WITH the byte-path sidecars - the shape `pr.getLocalDiffSummary@1.0` binds.
+ * There is no sidecar-less peer to project for - `pr.getLocalDiffSummary` had never shipped at all.
  */
 export const prLocalDiffSummaryFileV11Schema =
   prLocalDiffSummaryFileSchema.extend({
@@ -857,12 +641,8 @@ export type PrLocalDiffSummaryFileV11 = z.infer<
 >;
 
 /**
- * `pr.getLocalDiffSummary` response - the `diff` variant of
- * `pr.getLocalDiff`'s response minus per-file `patch` and minus
- * `isTruncated` (nothing here is byte-capped, so nothing can truncate).
- * The OIDs are what the per-file calls address: both endpoints are commits,
- * so a per-file answer fetched later can never disagree with the summary
- * that named them, even if the checkout moves in between.
+ * `pr.getLocalDiffSummary` response - the `diff` variant of `pr.getLocalDiff`'s response minus per-file `patch` and minus `isTruncated` (nothing here is byte-capped, so nothing can truncate).
+ * The OIDs are what the per-file calls address: both endpoints are commits, so a per-file answer fetched later can never disagree with the summary that named them, even if the checkout moves in between.
  */
 export const prGetLocalDiffSummaryResponseSchema = z.discriminatedUnion(
   "kind",
@@ -891,30 +671,7 @@ export type PrGetLocalDiffSummaryResponse = z.infer<
 >;
 
 /**
- * `pr.getLocalDiffSummary@1.0` response: the summary shape with
- * {@link prLocalDiffSummaryFileV11Schema} rows (field docs on the sidecar-less
- * schema above, which survives only as the base this extends).
- *
- * EVERY negotiated peer receives these rows, including two rows whose lossy
- * `path` strings collide under distinct `pathBytes`. The host's legacy
- * fold-back-to-lossy-merge BRANCH went with the 1.0 line that needed it, so a
- * client keying rows or its patch map by `path` alone is now the broken case.
- *
- * Key by a DISCRIMINATED identity - tag the side, then the value: byte-
- * addressed when `pathBytes` is non-null, clean otherwise. Neither half works
- * alone. Keying on the token is not implementable, because `pathBytes` is null
- * for every byte-exact UTF-8 path, which is most rows; and `pathBytes ?? path`
- * collapses both into one string space, where a clean file literally named
- * like some token collides with that token's file. The tag is what keeps the
- * two domains disjoint.
- *
- * The GUI already does this - `clients/gui-app/src/lib/pr/pr-local-diff-file-
- * key.ts` is the one function every row key, collapse entry, find id and patch
- * cache scope derives from. A new consumer should reuse it rather than
- * re-deriving an identity here.
- *
- * (`pr.getLocalDiff`, a separate released method, still folds; that fold is
- * unrelated to this line.)
+ * `pr.getLocalDiffSummary@1.0` response: the summary shape with {@link prLocalDiffSummaryFileV11Schema} rows (field docs on the sidecar-less schema above, which survives only as the base this extends).
  */
 export const prGetLocalDiffSummaryResponseV11Schema = z.discriminatedUnion(
   "kind",
@@ -939,25 +696,9 @@ export type PrGetLocalDiffSummaryResponseV11 = z.infer<
   typeof prGetLocalDiffSummaryResponseV11Schema
 >;
 
-/**
- * `pr.getLocalFileDiff` request - one file's patch from the range the summary
- * resolved. Addressed by OID pair rather than ref names so the answer is
- * immutable (and honestly cacheable) once the summary has named the range.
- *
- * The identity/authorization fields repeat `pr.getLocalDiffSummary`'s
- * because the host re-runs the same two gates on EVERY call - epic role, then
- * the `linkGroupKey` binding lookup - rather than trusting that some earlier
- * summary call was gated.
- *
- * `previousPath` matters beyond labelling: `git diff -M <range> -- <path>`
- * fails to pair a rename whose source is outside the pathspec and reports a
- * pure add instead, so the host puts BOTH sides into the pathspec.
- */
+/** `pr.getLocalFileDiff` request - one file's patch from the range the summary resolved. */
 export const prGetLocalFileDiffRequestSchema = z.object({
   epicId: z.string().min(1),
-  // `.min(1)` for the same reason as `prGetLocalDiffRequestSchema`: an empty
-  // token would reach binding resolution and fail later as a wrong answer
-  // dressed as a real one.
   linkGroupKey: prLinkGroupKeySchema.min(1),
   repoIdentifier: prRepoIdentifierSchema.extend({
     owner: z.string().min(1),
@@ -982,15 +723,7 @@ export type PrGetLocalFileDiffRequest = z.infer<
 >;
 
 /**
- * `pr.getLocalFileDiff@1.0` request: the summary row's byte-path sidecars,
- * echoed verbatim per side (never derived client-side).
- *
- * `null` now carries exactly ONE meaning - "this side's `path` IS the
- * byte-exact UTF-8 path". The 1.0->1.1 bridge that used to manufacture
- * ambiguous `null`s meaning "legacy peer, token unavailable" was deleted with
- * the 1.0 line it bridged from, so the host may read `null` as a positive
- * byte-validity fact rather than an absence. It still resolves both cases to
- * the plain string pathspec today; that is now a choice, not a requirement.
+ * `pr.getLocalFileDiff@1.0` request: the summary row's byte-path sidecars, echoed verbatim per side (never derived client-side).
  */
 export const prGetLocalFileDiffRequestV11Schema =
   prGetLocalFileDiffRequestSchema.extend({
@@ -1001,18 +734,7 @@ export type PrGetLocalFileDiffRequestV11 = z.infer<
   typeof prGetLocalFileDiffRequestV11Schema
 >;
 
-/**
- * `pr.getLocalFileDiff` response. Unlike the monolith's per-file `patch:
- * string | null`, `patch` here is ALWAYS a string: `""` is a genuinely
- * output-free diff (a pure rename or mode change stated entirely in headers,
- * or `-w` swallowing every changed line), and a budget-capped patch is
- * signalled by `isTruncated`, never by omission.
- *
- * `unavailable` covers the per-file gates: the binding checks (same as the
- * summary), and `ref-unavailable` for an OID this checkout no longer has - a
- * range pruned by `git gc` after the summary named it. The client's recovery
- * for that is ONE summary refetch (fresh OIDs), not a retry of this call.
- */
+/** `pr.getLocalFileDiff` response. */
 export const prGetLocalFileDiffResponseSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("unavailable"),

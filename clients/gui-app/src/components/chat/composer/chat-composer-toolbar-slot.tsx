@@ -44,11 +44,8 @@ function selectPermission(state: ComposerToolbarStoreState): PermissionMode {
 }
 
 function ChatComposerToolbarSlotImpl(props: ChatComposerToolbarSlotProps) {
-  // The toolbar stays fully editable during a turn: a queued message
-  // live-mirrors these settings and steering reconciles any turn-start-baked
-  // change via the restart dialog. Only this soft permission note signals a
-  // pending turn - tracked here (not in ChatComposer) so the host composer
-  // never subscribes to permission changes.
+  // The toolbar stays fully editable during a turn: a queued message live-mirrors these settings and steering reconciles any turn-start-baked change via the restart dialog.
+  // Only this soft permission note signals a pending turn - tracked here (not in ChatComposer) so the host composer never subscribes to permission changes.
   if (props.activeTurnStatus !== null || props.hasPendingApprovals) {
     return <PendingChatComposerToolbarSlot {...props} />;
   }

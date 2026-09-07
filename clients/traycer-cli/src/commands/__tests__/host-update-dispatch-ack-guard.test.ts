@@ -1,17 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Ticket 07 §5.2.8 — `buildHostUpdateCommand` calls `installDispatchAckStamper`
-// as its FIRST action, before `downloadAndStageHost` writes anything. A run
-// dispatched with a nonce this build cannot honour has already lost the
-// correlation its caller is waiting on, and discovering that after staging
-// bytes would mean doing destructive work for a dispatch that can only ever
-// report indeterminate.
-//
-// This suite uses the REAL `../host/update-dispatch-ack` module (unmocked) —
-// the claim under test is that an illegal nonce is refused by the actual
-// validator before any destructive work runs, not merely that some mock was
-// called. `host-update-dispatch-ack-wiring.test.ts` covers the wiring itself
-// (that the nonce reaches the installer at all) with the module mocked.
+// Ticket 07 §5.2.8 - `buildHostUpdateCommand` calls `installDispatchAckStamper` as its FIRST action, before `downloadAndStageHost` writes anything.
+// A run dispatched with a nonce this build cannot honour has already lost the correlation its caller is waiting on, and discovering that after staging bytes would mean doing destructive work for a dispatch that can only ever report indeterminate.
 
 const mocks = vi.hoisted(() => ({
   downloadAndStageHostMock: vi.fn(),
@@ -21,10 +11,8 @@ vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: mocks.downloadAndStageHostMock,
 }));
 
-// SAFETY: `buildHostUpdateCommand` now probes the REAL `~/.traycer/host/
-// pid.json` for activation debt, and an unmocked read on a developer machine
-// could classify the developer's live host as debt and restart it. Every test
-// that invokes the command mocks the probe to "no running host".
+// SAFETY: `buildHostUpdateCommand` now probes the REAL `~/.traycer/host/ pid.json` for activation debt, and an unmocked read on a developer machine could classify the developer's live host as debt and restart it.
+// Every test that invokes the command mocks the probe to "no running host".
 vi.mock("../../host/pid-metadata", () => ({
   readHostPidMetadata: vi.fn(async () => null),
 }));

@@ -62,9 +62,8 @@ const testState = vi.hoisted<{
 }));
 
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
-  // Host-backed readiness hook, stubbed to its fail-open answer - the same
-  // treatment this suite already gives every other host-dependent hook. It
-  // renders `LandingComposer`, which now consults the managed-pack gate.
+  // Host-backed readiness hook, stubbed to its fail-open answer - the same treatment this suite already gives
+  // every other host-dependent hook. It renders `LandingComposer`, which now consults the managed-pack gate.
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
@@ -246,10 +245,7 @@ vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({ isPending: false }),
 }));
-// P1.2: the composer resolves its placement (pin ?? effective) through this
-// one hook. These suites are about paste/gating/banner behaviour, not
-// selection derivation, so it is stubbed at that single boundary - the same
-// treatment the other host-backed hooks above get.
+// : the composer resolves its placement (pin ??
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => ({
     pin: {
@@ -273,7 +269,7 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => null,
 }));
 
@@ -360,10 +356,7 @@ describe("LandingComposer rate-limit banner wiring", () => {
     if (bannerProps === null) throw new Error("expected banner props");
     // Task-wide checkbox is never wired: affectedChatCount is fixed at 0.
     expect(bannerProps.affectedChatCount).toBe(0);
-    // Landing has no tab, but it does have a PLACEMENT (redesign P1.2): the
-    // usage sidecar / R-key refresh must resolve to the composer's own
-    // resolved host - the machine the turn will run on - not to whichever
-    // host the window happens to be bound to.
+    // Landing has no tab, but it does have a placement.
     expect(bannerProps.runTargetHostId).toBe("host-test");
     expect(bannerProps.probeTarget).toBeNull();
 

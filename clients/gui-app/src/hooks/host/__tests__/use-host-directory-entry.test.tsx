@@ -4,14 +4,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 
-/**
- * Minimal directory stub that reproduces the production churn: `findById`
- * allocates a FRESH entry object on every call (mirrors `toLocalEntry` + the
- * IPC-bridge copy), and `onChange` fires listeners on every emit. The current
- * fields live in `state`; `emit()` is a same-content re-emit (new object, no
- * field delta - the respawn-in-place / new-pid case), `update()` changes a
- * field.
- */
+/** Minimal directory stub that reproduces the production churn: `findById` allocates a FRESH entry object on every call (mirrors `toLocalEntry` + the IPC-bridge copy), and `onChange` fires listeners on every emit. */
 class ChurningDirectory<T extends HostDirectoryEntry = HostDirectoryEntry> {
   state: T;
   private readonly listeners = new Set<() => void>();
@@ -145,13 +138,7 @@ describe("useHostDirectoryEntry", () => {
   });
 
   it("returns a new reference when an offline row's relay-fuse grace expires, even though every other field stays identical", () => {
-    // `relayFuseGrace` is recomputed from `lastSeenAt` recency at every
-    // projection: an `offline` row whose only change is aging past the 4h
-    // fuse cap flips it while hostId/label/kind/url/version, the derived
-    // verdict (still `offline`) and the public key all hold stable. A cache
-    // that ignored the flip pinned `relayFuseGrace: true` on every consumer
-    // forever - recovery dials permitted indefinitely past the documented
-    // cap.
+    // `relayFuseGrace` is recomputed from `lastSeenAt` recency at every projection: an `offline` row whose only change is aging past the 4h fuse cap flips it while hostId/label/kind/url/version, the derived verdict (still `offline`) and the public key all hold stable.
     const remoteEntry: RemoteHostDirectoryEntry = {
       hostId: "remote-host-fuse",
       label: "Remote Host Fuse",
@@ -189,13 +176,7 @@ describe("useHostDirectoryEntry", () => {
     ).toBe(false);
   });
 
-  /**
-   * The plan flip. `planAllowsRemote` is stamped at projection time and is NOT
-   * compared field-by-field here — deliberately. Every plan flip that a
-   * consumer could observe changes the DERIVED verdict this cache already
-   * compares, so adding the raw field would be redundant; this pins that
-   * reasoning rather than trusting it.
-   */
+  /** Every plan flip that a consumer could observe changes the DERIVED verdict this cache already compares, so adding the raw field would be redundant; this pins that reasoning rather than trusting it. */
   describe("a downgrade/upgrade between polls", () => {
     function remote(
       connectivity: "connectable" | "offline" | "unknown",

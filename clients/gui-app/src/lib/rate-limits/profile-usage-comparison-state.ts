@@ -7,16 +7,12 @@ import type {
 } from "@/lib/rate-limits/rate-limit-envelope";
 
 /**
- * Per-profile comparison-state contract the model picker's profile selector
- * consumes (T3): one shape combining a target host's cached rate-limit
- * envelope with the cheap per-profile host summary (`rateLimitStatus`,
- * `usageUpdatedAt`) into the states the Core Flows state-treatment table
- * names, so no consumer re-derives this classification independently.
+ * Per-profile comparison-state contract the model picker's profile selector consumes (T3): one shape combining a target host's cached rate-limit envelope with the cheap per-profile host summary (`rateLimitStatus`, `usageUpdatedAt`) into the states the Core.
  */
 
-/** `providerProfileRateLimitStatusSchema` narrowed to the two warning
- *  values - "ok"/"unknown" never produce a semantic-only reading (see
- *  `deriveProfileUsageDetailState`). */
+/**
+ * `providerProfileRateLimitStatusSchema` narrowed to the two warning values - "ok"/"unknown" never produce a semantic-only reading (see `deriveProfileUsageDetailState`).
+ */
 export type ProfileUsageSemanticWarning = "near_limit" | "hard_limit";
 
 export type ProfileUsageRefreshStatus = "idle" | "queued" | "refreshing";
@@ -26,23 +22,7 @@ type UnavailableProviderRateLimits = Extract<
 >;
 
 /**
- * Detail-cache classification for one profile, independent of refresh
- * status: which state-treatment table row a consumer should render.
- *
- * - `never-checked`: no envelope in this renderer's cache, and the host
- *   summary reports no warning either - an empty, neutral track.
- * - `semantic-only`: no envelope in cache, but the host summary already
- *   knows the profile is running low or limited - an empty track tinted by
- *   `status`, never a fabricated percentage.
- * - `fresh` / `stale`: a retained `usage` reading exists and the current
- *   attempt (if any) is not itself a failure; `stale` once `asOf` is older
- *   than `PROVIDER_RATE_LIMITS_STALE_TIME_MS`.
- * - `failed-with-last-good`: the current attempt is a failure, but a prior
- *   `usage` reading is retained and dimmed alongside it.
- * - `unavailable`: the provider successfully reported an authoritative or
- *   transient unavailable snapshot; its wire reason is retained exactly.
- * - `failed-no-last-good`: the query itself threw and no reading has ever been
- *   retained - nothing to show but the generic error/empty state.
+ * Detail-cache classification for one profile, independent of refresh status: which state-treatment table row a consumer should render.
  */
 export type ProfileUsageDetailState =
   | { readonly kind: "never-checked" }
@@ -83,14 +63,10 @@ export interface ProfileUsageComparisonEntry {
   /** Addresses exactly this `(host, provider, profile)` - see
    *  `useProfileUsageComparison`'s doc comment for routing/serialization. */
   readonly refresh: () => Promise<void>;
-  /** Non-forced sibling of `refresh` for AUTOMATIC callers (the composer
-   *  banner's single unknown-destination check). On the queue-backed
-   *  `ephemeralProcess` lane (claude-code / codex / grok - the providers with
-   *  managed profiles, so the only ones this automatic check ever runs on) it
-   *  passes `force: false`, so it no-ops on still-fresh cache and honors the
-   *  post-`usage_fetch_failed` cool-down instead of re-tripping a server-side
-   *  penalty window. The httpFetch lane (openrouter / kilocode) has no such
-   *  queue and always refetches, but its call is a cheap direct HTTP GET. */
+  /**
+   * Non-forced sibling of `refresh` for AUTOMATIC callers (the composer banner's single unknown-destination check).
+   * On the queue-backed `ephemeralProcess` lane (claude-code / codex / grok - the providers with managed profiles, so the only ones this automatic check ever runs on) it passes `force: false`, so it no-ops on still-fresh cache and honors the.
+   */
   readonly ensureFresh: () => Promise<void>;
 }
 
@@ -132,12 +108,7 @@ function queryFailureDetailState(
 }
 
 /**
- * Pure classifier: folds a target-host cache-only `ProviderRateLimitEnvelope`
- * (`undefined` when this renderer's cache has never observed this exact
- * `(host, provider, profile)` key) together with the cheap host summary into
- * one detail state. Never fabricates a percentage - a warning with no
- * retained reading stays `semantic-only`, never a synthesized `fresh`/`stale`
- * fill.
+ * Pure classifier: folds a target-host cache-only `ProviderRateLimitEnvelope` (`undefined` when this renderer's cache has never observed this exact `(host, provider, profile)` key) together with the cheap host summary into one detail state.
  */
 export function deriveProfileUsageDetailState(
   envelope: ProviderRateLimitEnvelope | undefined,
@@ -152,10 +123,7 @@ export function deriveProfileUsageDetailState(
   if (envelope !== undefined && envelope.latest !== null) {
     if (envelope.lastGood !== null) {
       if (!envelope.latest.available) {
-        // The envelope invariant guarantees `lastFailureAt` is set whenever
-        // a transient failure retained `lastGood` (see
-        // `buildProviderRateLimitEnvelope`) - the `?? now` fallback only
-        // satisfies the wider `number | null` field type.
+        // The envelope invariant guarantees `lastFailureAt` is set whenever a transient failure retained `lastGood` (see `buildProviderRateLimitEnvelope`) - the `?? now` fallback only satisfies the wider `number | null` field type.
         return {
           kind: "failed-with-last-good",
           usage: envelope.lastGood,
@@ -181,14 +149,7 @@ export function deriveProfileUsageDetailState(
 }
 
 /**
- * Pure classifier for the refresh axis, orthogonal to `detail`: whether THIS
- * profile's own query key is actively fetching (`refreshing`), waiting its
- * turn behind another entry in the shared serial queue (`queued` - only a
- * concept for the `ephemeralProcess` lane, which the caller passes as
- * `lane`), or neither (`idle`). Mirrors `useProviderRateLimitRefresh`'s
- * existing `isFetching || (lane === "ephemeralProcess" && draining)` fold,
- * split into three states instead of two booleans so callers can render
- * "queued" and "refreshing" distinctly.
+ * Pure classifier for the refresh axis, orthogonal to `detail`: whether THIS profile's own query key is actively fetching (`refreshing`), waiting its turn behind another entry in the shared serial queue (`queued` - only a concept for the `ephemeralProcess`.
  */
 export function deriveProfileUsageRefreshStatus(args: {
   readonly isFetchingThisProfile: boolean;

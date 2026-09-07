@@ -92,12 +92,6 @@ function versionManagerProviderState(providerId: string) {
 
 describe("providers.list@7.0 carries the version manager and bridges older lines", () => {
   it("keeps every version-manager field on the head line and strips them for a v6.0 peer", () => {
-    // This is the primary bridge guard. v7.0 is the head line and the ONLY one
-    // that models the version manager: v8.0 opened for these fields while v7.0
-    // was still unreleased, and the release collapsed the two back into one.
-    // The strip therefore happens on the v7 -> v6 hop, and v6.0 models no
-    // managed-install slot at all - so what has to hold is that the whole key
-    // set is absent, not merely that its values were blanked.
     const response = providersListResponseSchema.parse({
       providers: [versionManagerProviderState("claude-code")],
       native: null,
@@ -169,10 +163,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
   });
 
   it("reparses the request for every peer below v7 rather than passing it through", () => {
-    // v7.0 is the only line whose REQUEST models the `native` carrier, so a
-    // pass-through to any older peer would hand it a field its schema does not
-    // model. Asserting `not.toBe(request)` is what distinguishes a real reparse
-    // from an identity that happens to look equal.
+    // v7.0 is the only line whose REQUEST models the `native` carrier, so a pass-through to any older peer would hand it a field its schema does not model.
     const request = providersListRequestSchema.parse({
       forceAuthRefresh: true,
       native: {
@@ -201,11 +192,8 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
 
 describe("providers.list@6.0 -> @7.0 upgrades", () => {
   it("fills every version-manager field for a v6.0 host and lands on the live shape", () => {
-    // The fill used to be split across two hops - v6 -> v7 for the registry and
-    // native fields, v7 -> v8 for the version manager. Collapsing v8.0 into
-    // v7.0 merged them, and this is the guard that the second half survived the
-    // merge: deleting a version is never just deleting its contract, whatever
-    // its bridge did has to land on the surviving hop.
+    // The fill used to be split across two hops - v6 -> v7 for the registry and native fields, v7 -> v8 for the version manager.
+    // Collapsing v8.0 into v7.0 merged them, and this is the guard that the second half survived the merge: deleting a version is never just deleting its contract, whatever its bridge did has to land on the surviving hop.
     const oldResponse = providersListResponseSchemaV60.parse({
       providers: [providerState("codex")],
     });
@@ -220,26 +208,16 @@ describe("providers.list@6.0 -> @7.0 upgrades", () => {
     expect(upgradedState.packId).toBeNull();
     expect(upgradedState.managedVersions).toBeNull();
     expect(upgradedState.nextRunBinary).toBeNull();
-    // A v6.0 row can never carry a managed-install arm: v6.0 does not model the
-    // slot, and the hop's own pre-registry fill nulls it unconditionally. So
-    // the honest projection is `null` outright rather than an arm-by-arm lift.
+    // A v6.0 row can never carry a managed-install arm: v6.0 does not model the slot, and the hop's own pre-registry fill nulls it unconditionally.
     expect(upgradedState.managedInstallState).toBeNull();
     expect(upgradedState.nativeCapabilities.modelProviders).toBeNull();
     expect(upgraded.native).toBeNull();
-    // `upgradeResponseToVersion` chains these callbacks BY CAST with no
-    // re-parse, so a missing required key would not surface at the hop - it
-    // would surface as a failed decode on whatever consumer parsed the result
-    // later. This parse is what stands in for that consumer.
     expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
   });
 
   it("keeps a populated managed-install version on the head line and off every older peer", () => {
-    // This proves only that a populated `version` survives the head schema and
-    // reaches no older peer. It does NOT prove a host producer ever populates
-    // the optional field: absence is valid at the protocol layer. The host's
-    // wire-assembly tests must assert that an in-flight download's assembled
-    // row carries a non-null version; protocol tests cannot observe host
-    // construction and must not retire that suspicion.
+    // This proves only that a populated `version` survives the head schema and reaches no older peer.
+    // The host's wire-assembly tests must assert that an in-flight download's assembled row carries a non-null version; protocol tests cannot observe host construction and must not retire that suspicion.
     for (const managedInstallState of [
       { status: "downloading" as const, percent: 50, version: "1.2.3" },
       { status: "installed" as const, version: "1.2.3" },
@@ -266,9 +244,6 @@ describe("providers.list@6.0 -> @7.0 upgrades", () => {
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) continue;
-      // Asserting the WHOLE key is absent, not just `version`: v6.0 models no
-      // managed-install slot, so a `not.toHaveProperty("version")` on an
-      // already-absent object would pass without proving anything.
       expect(downgraded.value.providers[0]).not.toHaveProperty(
         "managedInstallState",
       );
@@ -366,15 +341,7 @@ describe("per-pack RPC contracts", () => {
         result: { ok: true, installState: { status: "installed" } },
       }).success,
     ).toBe(true);
-    // All six, written out literally. The enum is one member per producer
-    // outcome of `resolveUserPickedProviderPackTarget` (four arms fanning out
-    // to six refusals; `pin-below-floor` left with the 2026-08-12 D1
-    // revision), so a member silently disappearing here would leave the host
-    // with a real refusal it cannot express and force a lossy "closest fit"
-    // at the resolver - the collapse the enum's own comment exists to
-    // prevent. Listed rather than derived from `.options` for the same
-    // reason the v7.0 key-set pins are literal: a derived list stays green
-    // through exactly the drift it is supposed to catch.
+    // All six, written out literally.
     for (const code of [
       "condemned",
       "unfetchable",
@@ -392,9 +359,7 @@ describe("per-pack RPC contracts", () => {
         detail: "not available",
       });
     }
-    // The enum is closed: a plausible-looking code the producer never emits
-    // must not decode, or a typo'd resolver would ship a refusal no renderer
-    // has copy for.
+    // The enum is closed: a plausible-looking code the producer never emits must not decode, or a typo'd resolver would ship a refusal no renderer has copy for.
     expect(
       providersInstallPackVersionResponseSchema.safeParse({
         result: { ok: false, code: "ineligible", detail: null },
@@ -479,11 +444,6 @@ describe("per-pack RPC contracts", () => {
     ).toBe(false);
   });
 
-  // A separate `it` rather than folding into the block above: that one covers
-  // the four store MUTATIONS as a set, and this method mutates nothing - it
-  // runs the discovery poll, which reads a registry head. Keeping it apart
-  // also gives a failure here better attribution than one more assertion
-  // buried at the end of an already long test.
   it("accepts valid requests, rejects malformed payloads, and round-trips outcomes and refusals", () => {
     expect(
       providersRefreshPackDiscoveryRequestSchema.safeParse({
@@ -495,10 +455,6 @@ describe("per-pack RPC contracts", () => {
         .success,
     ).toBe(false);
 
-    // All four, written out literally rather than derived from `.options`,
-    // for the same reason the install-version refusal codes above are
-    // literal: a derived list stays green through exactly the drift it is
-    // meant to catch.
     for (const outcome of [
       "moved",
       "unchanged",
@@ -511,10 +467,8 @@ describe("per-pack RPC contracts", () => {
       expect(parsed.result).toEqual({ ok: true, outcome });
     }
 
-    // The enum is closed both ways. Each member has its own panel copy, and
-    // `unpublished` was considered and deliberately folded into `unchanged`
-    // (see the schema's doc comment), so a fifth member appearing here would
-    // silently ship an outcome no renderer has copy for.
+    // The enum is closed both ways.
+    // Each member has its own panel copy, and `unpublished` was considered and deliberately folded into `unchanged` (see the schema's doc comment), so a fifth member appearing here would silently ship an outcome no renderer.
     expect(providerPackRefreshOutcomeSchema.options).toEqual([
       "moved",
       "unchanged",
@@ -544,9 +498,7 @@ describe("per-pack RPC contracts", () => {
       expect(parsed.result).toEqual({ ok: false, code, detail });
     }
 
-    // An unknown pack id throws host-side and is deliberately not a member of
-    // this enum, so "pack-not-managed" is the realistic typo to guard - a
-    // resolver that emitted it would ship a refusal this schema never models.
+    // An unknown pack id throws host-side and is deliberately not a member of this enum, so "pack-not-managed" is the realistic typo to guard - a resolver that emitted it would ship a refusal this schema never models.
     expect(
       providersRefreshPackDiscoveryResponseSchema.safeParse({
         result: { ok: false, code: "pack-not-managed", detail: null },
@@ -687,9 +639,8 @@ describe("managedVersionsUnavailable: why the panel is absent", () => {
     ).toBe(false);
   });
 
-  // The field-level `.catch(null)` must degrade only THIS field. A newer host
-  // sending a reason this client does not know must not take the row - or the
-  // version panel next to it - down with it.
+  // The field-level `.catch(null)` must degrade only THIS field.
+  // A newer host sending a reason this client does not know must not take the row - or the version panel next to it - down with it.
   it("degrades an unknown reason to null without disturbing managedVersions", () => {
     const parsed = providerCliStateSchema.parse({
       ...versionManagerProviderState("claude-code"),

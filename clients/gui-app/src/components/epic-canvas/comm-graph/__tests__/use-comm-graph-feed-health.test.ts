@@ -1,8 +1,5 @@
 /**
- * `deriveCommGraphFeedHealth` (pure) and `useCommGraphFeedHealth` (the
- * registry-backed hook) for the Epic header's feed-health dot - see
- * `use-comm-graph-feed-health.ts` for why this rolls up per-host socket
- * status instead of captioning it onto every agent node.
+ * `deriveCommGraphFeedHealth` (pure) and `useCommGraphFeedHealth` (the registry-backed hook) for the Epic header's feed-health dot - see `use-comm-graph-feed-health.ts` for why this rolls up per-host socket status instead of captioning it onto every agent node.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
@@ -92,14 +89,8 @@ describe("deriveCommGraphFeedHealth", () => {
 });
 
 /**
- * Integrated against the REAL registries: only the stream boundary is faked,
- * exactly as `comm-graph-tile.test.tsx` and `comm-graph-registry.test.ts` do
- * for the subscription manager itself.
- *
- * The cloud manager is never acquired here, so `getAvailability()` stays at
- * its `"pending"` default (never `"available"`) and
- * `selectCommGraphAuthoritativeSnapshot` reads the LOCAL manager throughout -
- * the same authority rule `useCommGraphSnapshot` applies.
+ * Integrated against the REAL registries: only the stream boundary is faked, exactly as `comm-graph-tile.test.tsx` and `comm-graph-registry.test.ts` do for the subscription manager itself.
+ * The cloud manager is never acquired here, so `getAvailability()` stays at its `"pending"` default (never `"available"`) and `selectCommGraphAuthoritativeSnapshot` reads the LOCAL manager throughout - the same authority rule `useCommGraphSnapshot` applies.
  */
 describe("useCommGraphFeedHealth", () => {
   afterEach(() => {
@@ -155,11 +146,8 @@ describe("useCommGraphFeedHealth", () => {
   });
 
   it("leaves no registry entry for an epic whose graph was never opened, once the hook unmounts", () => {
-    // The hook is claim-free (see the module doc) - it registers as an
-    // OBSERVER, not a claimant, so it must not strand a registry entry for
-    // every epic a header was ever rendered for. Proof by identity: a
-    // manager fetched after unmount for the same epic id must be a
-    // DIFFERENT instance, and the original must report itself disposed.
+    // The hook is claim-free (see the module doc) - it registers as an OBSERVER, not a claimant, so it must not strand a registry entry for every epic a header was ever rendered for.
+    // Proof by identity: a manager fetched after unmount for the same epic id must be a DIFFERENT instance, and the original must report itself disposed.
     const epicId = "epic-feed-health-unmount-only";
     const before = getCommGraphSubscriptionManager(epicId);
 

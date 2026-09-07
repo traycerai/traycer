@@ -11,16 +11,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// `adoptOnly` tiles (a provider sign-in terminal attaching to a host-created
-// PTY) never dispatch `terminal.create`, but - unlike the old `enabled: false`
-// spelling this replaced - the measure-grid wait must still ARM for them. A
-// sign-in tile's measurement probe can go unreported forever (a stalled xterm
-// chunk, a zero-sized container): without the bounded wait firing, `gridReady`
-// never flips and the session handle never acquires, stranding the tile on
-// "Starting terminal session…" with no timeout and no error. These cases
-// cover that gate directly on the hook - see
-// `terminal-tile-provider-login-no-create.test.tsx` for the full-tile version,
-// which mocks the probe to report SYNCHRONOUSLY and so cannot observe this.
+// `adoptOnly` still arms the measure-grid wait. Without it, an unreported probe strands the tile on "Starting terminal session" with no timeout.
 
 let mockList: {
   data: { sessions: ReadonlyArray<Record<string, unknown>> } | undefined;
@@ -186,11 +177,7 @@ describe("useTerminalTileBootstrap adoptOnly grid-timeout arming", () => {
   });
 
   it("never dispatches terminal.create for an adopt-only tile, even once the grid times out and the host has not (yet) listed the session", async () => {
-    // Defense-in-depth case: the list momentarily disagrees with reality (a
-    // race, or the session just not caught up yet) while adoptOnly is set.
-    // Without the dedicated `adoptOnly` gate in the create effect, a timed-out
-    // grid would be enough to dispatch `terminal.create` here and spawn a
-    // bare, provider-less shell in place of the host's sign-in PTY.
+    // Without the dedicated `adoptOnly` gate in the create effect, a timed-out grid would be enough to dispatch `terminal.create` here and spawn a bare, provider-less shell in place of the host's sign-in PTY.
     mockList.data = { sessions: [] };
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

@@ -3,13 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Redirect `~/.traycer/cli/config.json` to a per-test temp home by mocking
-// `os.homedir()` (paths.ts derives the config path from it). `os.platform()`
-// stays real so the OS-default shell logic is exercised honestly. `userInfo`
-// is mockable so the passwd-vs-$SHELL precedence in `defaultShellPath` can be
-// driven deterministically; `passwdShell: undefined` delegates to the real
-// implementation, a string overrides it, and `passwdThrows` simulates no
-// passwd entry.
+// Redirect `~/.traycer/cli/config.json` to a per-test temp home by mocking `os.homedir()` (paths.ts derives the config path from it).
 const h = vi.hoisted(() => ({
   home: "",
   passwdShell: undefined as string | undefined,
@@ -348,9 +342,7 @@ describe("familyDefault (defaultShellArgs)", () => {
 });
 
 describe("shell entries + mirror invariant", () => {
-  // The compat contract: outside the one pure-system-default state, `shell.args`
-  // always equals the resolved args for `shell.path`, materialised - so an old
-  // host binary never applies its own family default to the wrong program.
+  // The compat contract: outside the one pure-system-default state, `shell.args` always equals the resolved args for `shell.path`, materialised - so an old host binary never applies its own family default to the wrong.
   async function expectMirror(): Promise<void> {
     const cfg = await readCliConfig();
     if (cfg.shell.path === null && cfg.shell.args === null) return;

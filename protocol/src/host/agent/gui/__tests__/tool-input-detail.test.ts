@@ -66,7 +66,7 @@ describe("deriveToolInputDetail", () => {
     });
     if (detail?.kind !== "fields") throw new Error("expected fields detail");
     // old_string/new_string carry the file body and are never displayed (the
-    // file_change card shows the diff) — dropped entirely, not truncated.
+    // file_change card shows the diff) - dropped entirely, not truncated.
     expect(detail.entries.find((e) => e.key === "old_string")).toBeUndefined();
     expect(detail.entries.find((e) => e.key === "new_string")).toBeUndefined();
     // the small file_path field is preserved in full.

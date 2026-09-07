@@ -30,17 +30,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { ToolSegment } from "../tool-segment";
 
-/**
- * One successful `traycer_restart_shell`, rendered as the immutable event it
- * was - never a second live card, never a mutation of the start card.
- *
- * Unlike the start card (whose status rides the chat's live set forever), this
- * card's whole point is that it does NOT: outcome is a snapshot from the
- * result that produced it, frozen at render, and the only live thing about it
- * is whether the door still has a shell to open. Both halves are proven here
- * through the real projection - reached via `ToolSegment`, since which calls
- * route to this card is itself the behaviour.
- */
+/** One successful `traycer_restart_shell`, rendered as the immutable event it was - never a second live card, never a mutation of the start card. Unlike the start card (whose status rides the chat's live set forever), this card's whole point is that it does NOT: outcome is a snapshot from the result that produced it, frozen at render, and the only live thing about it is whether the door still has a shell to open. */
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
@@ -148,11 +138,8 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -318,11 +305,8 @@ describe("the restart shell card", () => {
       screen.getByTestId(`managed-command-restart-outcome-${COMMAND_ID}`)
         .textContent,
     ).toBe("Failed to start");
-    // A spawn failure is routine for a shell the agent restarted on purpose -
-    // the red status DOT beside the label is the whole signal, per the start
-    // card's own demotion decision (checked above via textContent). The
-    // CARD's own tone is a separate thing and never switches to destructive
-    // the way the generic tool row would for a real error.
+    // A spawn failure is routine for a shell the agent restarted on purpose - the red status DOT beside the label is the whole signal, per the start card's own demotion decision (checked above via textContent).
+    // The CARD's own tone is a separate thing and never switches to destructive the way the generic tool row would for a real error.
     const trigger = container.querySelector(
       '[data-chat-find-unit="restart-spawn-failure"]',
     );
@@ -337,9 +321,8 @@ describe("the restart shell card", () => {
   });
 
   it("keeps the door open before the owning chat's set has arrived", () => {
-    // Pre-hydration: a session is installed (beforeEach) but its stream is
-    // still "connecting" and has sent no commands. Absence proves nothing
-    // until the owning stream is open, so the door must stay a live button.
+    // Pre-hydration: a session is installed (beforeEach) but its stream is still "connecting" and has sent no commands.
+    // Absence proves nothing until the owning stream is open, so the door must stay a live button.
     renderCall({
       variant: "card",
       managedCommand: restartPayload({}),
@@ -428,9 +411,7 @@ describe("the restart shell card", () => {
   });
 
   it("reads only the payload: the call's own inputSummary/inputDetail never leak into the card", () => {
-    // ToolSegment does not even forward inputSummary/inputDetail to the
-    // restart card - this proves the observable consequence of that, the way
-    // a caller of the card actually would.
+    // ToolSegment does not even forward inputSummary/inputDetail to the restart card - this proves the observable consequence of that, the way a caller of the card actually would.
     const restart = restartPayload({});
     const { container } = render(
       tree(
@@ -609,9 +590,7 @@ describe("the restart shell card", () => {
     expect(screen.getByText("Command")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
     expect(screen.getByText(restart.effectiveCommand)).toBeTruthy();
-    // The directory is deliberately NOT on the card: the delta phrase says
-    // "cwd changed" when that is what happened, and the output window's
-    // details popover carries the effective cwd.
+    // The directory is deliberately NOT on the card: the delta phrase says "cwd changed" when that is what happened, and the output window's details popover carries the effective cwd.
     expect(screen.queryByText(restart.effectiveCwd)).toBeNull();
     expect(screen.queryByText(/^in /)).toBeNull();
   });
@@ -631,10 +610,8 @@ describe("the restart shell card", () => {
   });
 
   it("claims no deletion and renders no door outside an epic session", () => {
-    // Absence only proves the shell is gone if we actually searched. Rendered
-    // outside an epic session there is nowhere to search, so the card must
-    // not claim a deletion it cannot see - and the door itself renders
-    // nothing rather than a button that would open nothing.
+    // Absence only proves the shell is gone if we actually searched.
+    // Rendered outside an epic session there is nowhere to search, so the card must not claim a deletion it cannot see - and the door itself renders nothing rather than a button that would open nothing.
     render(
       <TooltipProvider>
         <ToolSegment

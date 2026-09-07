@@ -56,22 +56,16 @@ import {
   reconcileHostStageWithAttempt,
 } from "./stage-reconcile";
 
-// `host download` - the CLI's half of the two-phase split (Host Update
-// Layer Redesign Tech Plan, "CLI: two-phase split with a staged store").
-// Download+verify+extract runs with NO `cli-lock` held (no busy check
-// either - the running host is never touched); only the brief
-// eligibility-check-and-promote sections take the lock.
+// `host download` - the CLI's half of the two-phase split (Host Update Layer Redesign Tech Plan, "CLI: two-phase split with a staged store").
+// Download+verify+extract runs with NO `cli-lock` held (no busy check either - the running host is never touched); only the brief eligibility-check-and-promote sections take the lock.
 
 export interface DownloadAndStageHostOptions {
   readonly environment: Environment;
-  // `null` requests the manifest's `latest` pointer. A concrete string is
-  // an explicit version request - `host download <v>` without
-  // `--automatic` replaces any existing stage (see `ShortCircuitReason`/
-  // promotion policy below).
+  // `null` requests the manifest's `latest` pointer.
+  // A concrete string is an explicit version request - `host download <v>` without `--automatic` replaces any existing stage (see `ShortCircuitReason`/ promotion policy below).
   readonly versionRequest: string | null;
-  // The hidden `--automatic` contract: additionally refuses to stage when
-  // the installed version is incomparable (a `local-*` pin). Explicit
-  // invocations (this flag false) proceed regardless.
+  // The hidden `--automatic` contract: additionally refuses to stage when the installed version is incomparable (a `local-*` pin).
+  // Explicit invocations (this flag false) proceed regardless.
   readonly automatic: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
   // Test seam so unit tests can inject a fake `RegistryTransport` without
@@ -86,18 +80,12 @@ export type HostDownloadShortCircuitReason =
 
 export type HostDownloadDiscardReason =
   | "install-record-vanished"
-  // A slower "latest" download lost a reverse-completion race: a newer
-  // (or equal) stage was already promoted by the time this one reached
-  // phase 3.
+  // A slower "latest" download lost a reverse-completion race: a newer (or equal) stage was already promoted by the time this one reached phase 3.
   | "not-strictly-newer"
-  // An explicit version request's target is not newer than the fresh,
-  // locked-read installed version (comparable case only - see
-  // "automatic-refused-incomparable-installed" for the incomparable case).
+  // An explicit version request's target is not newer than the fresh, locked-read installed version (comparable case only - see "automatic-refused-incomparable-installed" for the incomparable case).
   | "not-newer-than-installed"
-  // `--automatic` re-refuses an incomparable installed version at promote
-  // time too, not just in phase 1 - the installed version can change
-  // during the unlocked transfer window. Mirrors the phase-1 short-circuit
-  // reason of the same name; the two are distinguished by `outcome`.
+  // `--automatic` re-refuses an incomparable installed version at promote time too, not just in phase 1 - the installed version can change during the unlocked transfer window.
+  // Mirrors the phase-1 short-circuit reason of the same name; the two are distinguished by `outcome`.
   | "automatic-refused-incomparable-installed";
 
 export type HostDownloadOutcome =
@@ -173,9 +161,7 @@ function progressStage(
   });
 }
 
-// Yank-heal: a staged version that is no longer a valid, non-yanked
-// manifest entry is discarded - "the desktop-scheduled yank-heal" that
-// must run even when no download follows this invocation.
+// Yank-heal: a staged version that is no longer a valid, non-yanked manifest entry is discarded - "the desktop-scheduled yank-heal" that must run even when no download follows this invocation.
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -196,9 +182,8 @@ async function discardIneligibleStagedVersion(
   const entry = manifest.versions.find((v) => v.version === staged.version);
   const ineligible = entry === undefined || entry.yanked;
   if (!ineligible) return;
-  // This runs under the caller's short promote/precheck lock. Do not delete
-  // only canonical `staged/`: normal reconcile would restore a valid
-  // `staged.old-*` aside and resurrect this withdrawn artifact.
+  // This runs under the caller's short promote/precheck lock.
+  // Do not delete only canonical `staged/`: normal reconcile would restore a valid `staged.old-*` aside and resurrect this withdrawn artifact.
   await purgeHostStage(environment, null, verifyMutationCapability);
   logger.info("Host download discarded an ineligible staged version", {
     environment,
@@ -224,12 +209,7 @@ async function replaceStagedDir(
   await verifyMutationCapability();
   await renameWithRetry(tempDir, target, verifyMutationCapability);
   if (targetExists) {
-    // Layered invalidation (rename to a `.dead-*` sibling, else unlink
-    // just the sidecar, else a full recursive removal) so a partial
-    // failure can never leave a fully intact, restorable aside behind -
-    // shared with `stage-reconcile.ts`'s own pure-litter cleanup, which
-    // creates and discards asides via the identical explicit-replace
-    // shape.
+    // Layered invalidation (rename to a `.dead-*` sibling, else unlink just the sidecar, else a full recursive removal) so a partial failure can never leave a fully intact, restorable aside behind - shared with `stage-reconcile.ts`'s own pure-litter cleanup, which creates and discards asides via the identical explicit-replace shape.
     await verifyMutationCapability();
     await invalidateAsideDir(
       target,
@@ -241,9 +221,8 @@ async function replaceStagedDir(
   }
 }
 
-// The one shape every stage-maintenance leg shares. Named once so a changed
-// admission literal or wait policy cannot drift between the three copies the
-// inline types used to be.
+// The one shape every stage-maintenance leg shares.
+// Named once so a changed admission literal or wait policy cannot drift between the three copies the inline types used to be.
 interface StageMaintenanceContenderOptions {
   readonly environment: Environment;
   readonly reason: string;
@@ -270,13 +249,8 @@ async function replaceStagedDirWithAttempt(
   );
 }
 
-// Phase 0 - brief lock, zero network: fail fast with HOST_NOT_INSTALLED
-// before any WAN call, so an uninstalled host + an unreachable registry
-// reports the correct, actionable error instead of a misleading
-// REGISTRY_UNAVAILABLE. Superseded by phase 1's own locked re-read
-// immediately below - state can still change in the gap before the
-// manifest fetch completes, so phase 1's read remains the authoritative
-// decision snapshot; this is purely a fast-fail precondition.
+// Phase 0 - brief lock, zero network: fail fast with HOST_NOT_INSTALLED before any WAN call, so an uninstalled host + an unreachable registry reports the correct, actionable error instead of a misleading REGISTRY_UNAVAILABLE.
+// Superseded by phase 1's own locked re-read immediately below - state can still change in the gap before the manifest fetch completes, so phase 1's read remains the authoritative decision snapshot; this is purely a fast-fail precondition.
 async function ensureHostInstalledPrecondition(
   environment: Environment,
   capability: UpdateMutationCapability,
@@ -332,14 +306,8 @@ async function downloadAndStageHostInSegment(
   const manifest = await client.fetchManifest();
   const requestedLatest = opts.versionRequest === null;
   const targetVersion = requestedLatest ? manifest.latest : opts.versionRequest;
-  // The registry side of the version domain must always be valid SemVer
-  // (incomparability is a policy reserved for the INSTALLED side only -
-  // see the Tech Plan's "Version identity" section). A malformed
-  // manifest.latest or a garbled explicit request would otherwise read as
-  // "incomparable" everywhere it's compared against `installed.version`,
-  // silently defeating short-circuiting and, worse, letting a bad version
-  // get staged and wedge stage-reconcile's convergence. Fail closed here,
-  // before any lock or network transfer.
+  // The registry side of the version domain must always be valid SemVer (incomparability is a policy reserved for the INSTALLED side only - see the Tech Plan's "Version identity" section).
+  // A malformed manifest.latest or a garbled explicit request would otherwise read as "incomparable" everywhere it's compared against `installed.version`, silently defeating short-circuiting and, worse, letting a bad version get staged and wedge stage-reconcile's convergence.
   if (!isValidHostVersion(targetVersion)) {
     throw cliError({
       code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
@@ -349,14 +317,8 @@ async function downloadAndStageHostInSegment(
     });
   }
 
-  // Phase 1 - brief lock: locked install re-read + yank-heal + short-
-  // circuit evaluation. Runs even when no download follows. The install
-  // record is read HERE, under the lock, rather than before it - a
-  // pre-lock read can be stale by the time the short-circuit decision
-  // actually runs (another command could install/uninstall/update in the
-  // gap), and every phase-1 decision (missing-record, short-circuits,
-  // automatic incomparable refusal) must be judged against the same
-  // consistent snapshot.
+  // Phase 1 - brief lock: locked install re-read + yank-heal + short- circuit evaluation.
+  // Runs even when no download follows.
   const preDownload = await withCliAttemptMutation(
     capability,
     { ...contenderOptions, reason: "host-download-precheck" },
@@ -396,10 +358,7 @@ async function downloadAndStageHostInSegment(
         stagedAfterYankHeal !== null &&
         stagedAfterYankHeal.stageId !== null &&
         stagedAfterYankHeal.version === targetVersion;
-      // Snapshot both taken under this same lock acquisition - the
-      // short-circuit return below must report exactly what was true at
-      // decision time, not a second, unlocked re-read after the lock has
-      // already been released (which could observe a different state).
+      // Snapshot both taken under this same lock acquisition - the short-circuit return below must report exactly what was true at decision time, not a second, unlocked re-read after the lock has already been released (which could observe a different state).
       const installedVersion = installed.version;
       const stagedVersion = stagedAfterYankHeal?.version ?? null;
       if (installedAtOrAboveTarget) {
@@ -441,10 +400,8 @@ async function downloadAndStageHostInSegment(
     };
   }
 
-  // Phase 2 - no lock: download, verify, extract into an owner-tokened
-  // temp. The registry client owns the network+verify chain end to end
-  // (fetch-resource.ts's size cap, sha256, minisign, pinned keyId) - not
-  // forked here.
+  // Phase 2 - no lock: download, verify, extract into an owner-tokened temp.
+  // The registry client owns the network+verify chain end to end (fetch-resource.ts's size cap, sha256, minisign, pinned keyId) - not forked here.
   const platformKey = currentHostPlatformKey();
   const { entry, asset } = await client.resolveAsset(
     targetVersion,
@@ -472,11 +429,8 @@ async function downloadAndStageHostInSegment(
 
   let ownedPath: string | null = null;
   let ownedConsumed = false;
-  // Whether the promote phase ran to a decision. Only then is the archive
-  // finished with; anything that THROWS out of the block below (a failed
-  // extract, a missing executable in the tree, a `cli-lock` wait that times
-  // out) leaves a downloaded, sha256- and signature-verified archive that a
-  // retry can reuse as-is. See the `finally`.
+  // Whether the promote phase ran to a decision.
+  // Only then is the archive finished with; anything that THROWS out of the block below (a failed extract, a missing executable in the tree, a `cli-lock` wait that times out) leaves a downloaded, sha256- and signature-verified archive that a retry can reuse as-is.
   let archiveConsumed = false;
   try {
     progressStage(
@@ -486,9 +440,7 @@ async function downloadAndStageHostInSegment(
     );
     const owned = await createOwnedTempDir(opts.environment, "dl-");
     ownedPath = owned.path;
-    // `const` alias so the closures below (captured by `withCliLock`)
-    // keep the narrowed `string` type instead of the outer `let`'s
-    // `string | null`.
+    // `const` alias so the closures below (captured by `withCliLock`) keep the narrowed `string` type instead of the outer `let`'s `string | null`.
     const tempPath = owned.path;
     await extractHostSource({
       source: verified.archivePath,
@@ -501,10 +453,8 @@ async function downloadAndStageHostInSegment(
       }),
     });
     const executablePath = await resolveHostExecutable(tempPath, osPlatform());
-    // The archive digest proves the fetched source.  Recovery also needs the
-    // digest of the exact executable extracted from that verified archive,
-    // so a stable but replaced staged file cannot be mistaken for a resumable
-    // target generation.
+    // The archive digest proves the fetched source.
+    // Recovery also needs the digest of the exact executable extracted from that verified archive, so a stable but replaced staged file cannot be mistaken for a resumable target generation.
     const executableSha256 = await hashFileSha256(executablePath, null);
     const runtimeVersion = await readExtractedRuntimeVersion(
       dirname(executablePath),
@@ -536,14 +486,8 @@ async function downloadAndStageHostInSegment(
       capability,
       { ...contenderOptions, reason: "host-download-promote" },
       async () => {
-        // Re-evaluate the attempt predicate inside the SAME cli-lock section
-        // that owns reconcile and promotion. The outer stage-maintenance
-        // admission normally excludes an already-active attempt, but it is a
-        // pre-transfer observation and cannot substitute for the fresh
-        // promote-time guard. In particular, a parked activation releases
-        // cli-lock while its staged bytes remain identity-bound to that
-        // attempt; neither background/latest nor an explicit version request
-        // may replace that slot underneath it.
+        // Re-evaluate the attempt predicate inside the SAME cli-lock section that owns reconcile and promotion.
+        // The outer stage-maintenance admission normally excludes an already-active attempt, but it is a pre-transfer observation and cannot substitute for the fresh promote-time guard.
         const attempt = await readUpdateAttemptRecord(
           hostHomeDir(opts.environment),
         );
@@ -618,20 +562,8 @@ async function downloadAndStageHostInSegment(
         }
 
         const explicitVersionRequested = !requestedLatest;
-        // Installed-monotonicity, re-evaluated against this fresh locked
-        // read (the installed version can change during the unlocked
-        // transfer window - phase 1's decision is not enough on its own).
-        // `--automatic` refuses an incomparable installed version here
-        // too, not just in phase 1: a comparable install at phase-1 time
-        // could have been replaced by an incomparable (local-*) one by
-        // now. Non-automatic (explicit OR latest) waives the incomparable
-        // case - moving a local build onto the registry track is the
-        // user's stated intent (D6 parity).
-        // An explicit version request always replaces any existing stage
-        // (the settled exception is replace-any-STAGE, not
-        // ignore-installed) - the staged-monotonicity check below only
-        // applies to the latest/automatic path, where a slower "latest"
-        // download must not regress a faster one that already promoted.
+        // Installed-monotonicity, re-evaluated against this fresh locked read (the installed version can change during the unlocked transfer window - phase 1's decision is not enough on its own).
+        // `--automatic` refuses an incomparable installed version here too, not just in phase 1: a comparable install at phase-1 time could have been replaced by an incomparable (local-*) one by now.
         const freshStaged = explicitVersionRequested
           ? null
           : await readHostStagedRecord(opts.environment);
@@ -665,9 +597,8 @@ async function downloadAndStageHostInSegment(
           } satisfies HostDownloadOutcome;
         }
 
-        // This deliberate-discard edge is still a mutation of the
-        // capability-bound staging tree. Do not let a long download's holder
-        // loss turn its final cleanup into an unadmitted delete.
+        // This deliberate-discard edge is still a mutation of the capability-bound staging tree.
+        // Do not let a long download's holder loss turn its final cleanup into an unadmitted delete.
         await requireCliUpdateMutationCapability(capability, {
           ...contenderOptions,
           reason: "host-download-discard",
@@ -690,19 +621,13 @@ async function downloadAndStageHostInSegment(
         } satisfies HostDownloadOutcome;
       },
     );
-    // Reached only by a normal return from the promote phase - promoted, or
-    // deliberately discarded because the install record vanished or the
-    // version is not newer. Either way this download is over and the archive
-    // will not be wanted again.
+    // Reached only by a normal return from the promote phase - promoted, or deliberately discarded because the install record vanished or the version is not newer.
+    // Either way this download is over and the archive will not be wanted again.
     archiveConsumed = true;
     return outcome;
   } finally {
-    // Verification stays outside the best-effort I/O catches — an unadmitted
-    // delete must never run — but a capability loss inside this `finally`
-    // must not THROW either: it would replace the primary outcome (the
-    // promote-time error the caller classifies, or a completed promotion)
-    // with E_CLI_LOCK_BUSY. Losing the capability skips the destructive
-    // edge and leaves the leftovers to the next admitted run's sweep.
+    // Verification stays outside the best-effort I/O catches - an unadmitted delete must never run - but a capability loss inside this `finally` must not THROW either: it would replace the primary outcome (the promote-time error the caller classifies, or a completed promotion) with E_CLI_LOCK_BUSY.
+    // Losing the capability skips the destructive edge and leaves the leftovers to the next admitted run's sweep.
     const cleanupAdmitted = async (reason: string): Promise<boolean> => {
       try {
         await requireCliUpdateMutationCapability(capability, {
@@ -721,11 +646,8 @@ async function downloadAndStageHostInSegment(
         );
       }
     }
-    // The verified archive is not auto-cleaned on success (by contract -
-    // see registry/client.ts's `downloadAndVerify`): the caller owns
-    // releasing it once it has extracted what it needs. Whichever release
-    // runs, it must never be a plain `rm(dirname(...))` - that directory is
-    // now the SHARED download cache, not a private per-invocation temp.
+    // The verified archive is not auto-cleaned on success (by contract - see registry/client.ts's `downloadAndVerify`): the caller owns releasing it once it has extracted what it needs.
+    // Whichever release runs, it must never be a plain `rm(dirname(...))` - that directory is now the SHARED download cache, not a private per-invocation temp.
     if (archiveConsumed) {
       // Drop the archive AND the claim on it.
       if (await cleanupAdmitted("host-download-archive-release")) {
@@ -734,13 +656,8 @@ async function downloadAndStageHostInSegment(
         );
       }
     } else if (await cleanupAdmitted("host-download-archive-release")) {
-      // Something between the transfer and the promote decision threw. These
-      // bytes already cleared sha256 AND minisign, so re-downloading them
-      // could not produce anything different - it would just spend another
-      // ~800MB over the same throttled link this work exists for, only to
-      // hit the same local failure. Drop the claim and leave them: the next
-      // run's `acquireDownloadSlot` spares this version's slot from the
-      // sweep and resumes it over a single 416 round-trip.
+      // Something between the transfer and the promote decision threw.
+      // These bytes already cleared sha256 AND minisign, so re-downloading them could not produce anything different - it would just spend another ~800MB over the same throttled link this work exists for, only to hit the same local failure.
       await releaseDownloadSlotOwnership(
         opts.environment,
         verified.archivePath,

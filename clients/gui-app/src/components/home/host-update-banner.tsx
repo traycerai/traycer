@@ -52,22 +52,14 @@ interface HostUpdateBannerProps {
   readonly className: string | undefined;
 }
 
-// `pendingActivation`/`activationUnknown` render identically ("debt");
-// `"unavailable"` never renders debt UI here - that ambiguous state is the
-// gate's domain, not a banner affordance (Renderer surfaces cutover ticket).
+// `pendingActivation`/`activationUnknown` render identically ("debt"); `"unavailable"` never renders debt UI
+// here.
 const ACTIVATION_DEBT_STATES: ReadonlySet<string> = new Set([
   "pendingActivation",
   "activationUnknown",
 ]);
 
-/**
- * In-app host update / activation-debt banner (Host Update Layer Redesign
- * Tech Plan, D4). Driven entirely by the canonical two-lane
- * `HostControllerStatus` - never the raw registry probe - so it never shows
- * for a merely-detected update, only once a stage is `updateReady` or the
- * host carries activation debt. A ready update supersedes debt (applying new
- * bytes activates them too), so the two never render together.
- */
+/** Driven entirely by the canonical two-lane `HostControllerStatus` - never the raw registry probe. */
 export function HostUpdateBanner(props: HostUpdateBannerProps) {
   const runnerHost = useRunnerHost();
   const binding = useHostBinding();
@@ -75,17 +67,8 @@ export function HostUpdateBanner(props: HostUpdateBannerProps) {
   if (management === null) {
     return null;
   }
-  // SPLIT ON THE BINDING, exactly as `LocalHostRestartFlow` does and for the
-  // same reason: reading the durable attempt needs a host client, and
-  // `useHostClient()` THROWS without a mounted `<HostRuntimeProvider>` rather
-  // than returning null. Hooks cannot be called conditionally, so the branch
-  // has to be a component boundary.
-  //
-  // The unbound arm is not a degraded stub — it is today's shipped banner,
-  // driven by the two-lane `HostControllerStatus` alone. That is a truthful
-  // answer for a client with no host runtime: it still knows a stage is ready
-  // or that activation is owed, and it correctly claims nothing about an
-  // attempt it cannot read.
+  // That is a truthful answer for a client with no host runtime: it still knows a stage is ready or that
+  // activation is owed, and it correctly claims nothing about an attempt it cannot read.
   return binding === null ? (
     <HostUpdateBannerInner
       management={management}
@@ -100,7 +83,6 @@ export function HostUpdateBanner(props: HostUpdateBannerProps) {
   );
 }
 
-/** The bound arm: identical banner, plus the durable attempt. */
 function BoundHostUpdateBanner(props: {
   readonly management: IHostManagement;
   readonly className: string | undefined;
@@ -144,17 +126,12 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const statusQuery = useRunnerHostControllerStatusQuery();
   const status = statusQuery.data;
 
-  // The DURABLE attempt, which outranks the two-lane controller status below
-  // whenever it has something to say. The controller lane knows this client
-  // started a mutation; the attempt knows what is actually happening on the
-  // host, survives this window closing, and names its phase. See
-  // `operationSupersedesControllerStatus` for exactly when it wins.
+  // The durable attempt, which outranks the two-lane controller status below whenever it has something to say.
   const localUpdate = props.localUpdate;
   const localEntry = useReactiveLocalHostEntry();
   const localHostName = localEntry?.label ?? "This computer";
-  // Drives the SHARED local restart flow: cooperative `host.restart` first
-  // (which re-asks the host about live work and answers with its current busy
-  // verdict), then the existing confirmation. See the Force restart… handler.
+  // Drives the shared local restart flow: cooperative `host.restart` first (which re-asks the host about live
+  // work and answers with its current busy verdict), then the existing confirmation.
   const [forceRestartRequested, setForceRestartRequested] = useState(false);
 
   const [busy, setBusy] = useState<BusyState | null>(null);
@@ -166,10 +143,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const dismissLandingAttempt = useHostUpdateBannerStore(
     (state) => state.dismissLandingAttempt,
   );
-  // The canonical in-app route to a Settings section, the same one the menu and
-  // tray bridges use. Taking a router dependency here is deliberate: the
-  // failure copy has always pointed at Diagnostics, and pointing somewhere the
-  // user cannot get to from the pointer is the gap this closes.
+  // Taking a router dependency here is deliberate: the failure copy has always pointed at Diagnostics, and
+  // pointing somewhere the user cannot get to from the pointer is the gap this closes.
   const { openSettings } = useSystemTabModalActions();
 
   const handleApplyOutcome = (
@@ -228,20 +203,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     offeredVersion !== null &&
     isHostUpdateBannerSnoozed(snoozeUntilByVersion, offeredVersion, nowMs);
 
-  // An attempt that is doing something is NOT snoozable and does not wait for
-  // the controller lane to agree — "active, parked, or reconnecting operations
-  // cannot be snoozed away" (experience doc), and a parked
-  // `waiting-to-activate` is precisely the state a person needs to see.
-  //
-  // A TERMINAL attempt is different, and used to be treated the same. A rich
-  // `failed`/`complete` view superseded the controller status like every other
-  // non-idle kind, but the branch it superseded INTO rendered no terminal
-  // lifecycle at all — no Retry, no Diagnostics, no dismiss for a failure, no
-  // acknowledgement for a success. The controller lane's own terminal branch
-  // has all of those, and a rich attempt could never reach it. So a detached
-  // attempt that failed left a dead-end banner on the landing page for the
-  // whole retention lifetime of the record, and a completed one simply never
-  // went away.
+  // So a detached attempt that failed left a dead-end banner on the landing page for the whole retention
+  // lifetime of the record, and a completed one simply never went away.
   const dismissedAttemptIds = useHostUpdateBannerStore(
     (state) => state.landingDismissedAttemptIds,
   );
@@ -277,11 +240,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     return null;
   }
 
-  // Disables off the mutation lane only (never the download lane) - and off
-  // the SHARED lane, not just this banner's own mutations, so a mutation
-  // started from Settings, the tray/menu, or the background auto-update
-  // reconciler disables this banner's button too (the exclusive mutation
-  // lane can only run one intent system-wide at a time).
+  // Disables off the mutation lane only (never the download lane).
   const isPending =
     applyStagedMutation.isPending ||
     activateInstalledMutation.isPending ||
@@ -297,21 +256,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     hostName: localHostName,
   });
 
-  // THE RENDERED BRANCH, AS A VALUE — computed once and read by the markup, the
-  // label, the styling and the live region alike.
-  //
-  // These were four parallel ternaries over the same two conditions, and one of
-  // them disagreed with the other three. `aria-live` derived its politeness from
-  // `describeUpdateOperation(localUpdate.view)` unconditionally, so when the
-  // controller lane rendered a FAILURE the local rich view was typically
-  // `idle`/`unknown`, `assertive` was false, and a failed apply was announced
-  // politely — while the visible text, the accessible label and the destructive
-  // styling all correctly said "failed". A screen-reader user got the one
-  // rendering that had quietly kept reading a branch nobody was looking at.
-  //
-  // Naming the branch is the structural fix: there is now no way to derive a
-  // property from a branch that is not on screen, because there is only one
-  // expression that decides which branch that is.
+  // Naming the branch is the structural fix: there is now no way to derive a property from a branch that is not
+  // on screen, because there is only one expression that decides which branch that is.
   const branch = resolveBannerBranch({
     showOperation,
     hasTerminalOutcome: terminalOutcome !== null,
@@ -330,15 +276,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   return (
     <>
-      {/*
-        The SHARED local restart flow, mounted unconditionally so the banner
-        never owns a second restart path. It re-asks the host about live work
-        (cooperative `host.restart`), renders the existing busy/force
-        confirmation, and runs its forced respawn under the same mutation key
-        every other restart gate watches — which is what "through the existing
-        confirmation modal to the attempt-aware restart boundary" means. The
-        banner only sets `requested`.
-      */}
+      {/* The shared local restart flow, mounted unconditionally so the banner never owns a second restart path. The
+         banner only sets `requested`. */}
       <LocalHostRestartFlow
         requested={forceRestartRequested}
         onClose={() => {
@@ -358,14 +297,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       <output
         aria-label={bannerAriaLabel}
         data-testid="host-update-banner"
-        // Polite for ordinary phase changes, assertive for a failure — the
-        // experience doc's accessibility rule. `aria-live` on the same element
-        // as `aria-label` is what makes each phase transition announce itself
-        // rather than only being readable on focus.
-        //
-        // Reads `showsFailure`, which is derived from the branch actually
-        // rendered. It must never go back to consulting one lane's copy while
-        // the other lane is on screen.
+        // It must never go back to consulting one lane's copy while the other lane is on screen.
         aria-live={showsFailure ? "assertive" : "polite"}
         className={bannerClassName}
       >
@@ -383,33 +315,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
             setForceRestartRequested(true);
           }}
           onOperationRetry={() => {
-            // A `failed` view does not carry the phase it failed in — the
-            // projection's `failed` arms set `lastKnownKind: null` — so the
-            // attempt itself cannot say whether bytes still need applying or
-            // only activating, and the controller lane has to decide.
-            //
-            // Activate when the machine owes an activation OR when the host is
-            // DOWN. The second half is the fix: `showDebt` is
-            // `!updateReady && activation ∈ {pendingActivation,
-            // activationUnknown}`, and `deriveActivationState` returns
-            // `unavailable` — in neither set — whenever there is no running
-            // runtime identity. A packaged-macOS activation that fails after
-            // bootout leaves exactly that state, so the one case this routing
-            // was added for took the apply arm and re-ran `applyStaged` against
-            // a stage the failed attempt had already consumed. The recovery
-            // button did not recover, on a machine whose host was not running.
-            //
-            // `hostDown` is a SEPARATE flag rather than a wider
-            // `ACTIVATION_DEBT_STATES`, because that set also gates banner
-            // visibility and `unavailable` is the ordinary state during every
-            // healthy swap — widening it would raise a debt banner on each
-            // restart.
-            //
-            // Apply stays the default for everything else, including a healthy
-            // `activated` host with no ready stage: an attempt that failed
-            // during download has nothing staged to activate, and apply is the
-            // retry that re-runs the download. Routing that case to activate
-            // would restart an already-correct host to no purpose.
+            // The second half is the fix: `showDebt` is `!updateReady && activation ∈ {pendingActivation,
+            // activationUnknown}`, and `deriveActivationState` returns `unavailable` - in neither set.
             if (showDebt || hostDown) {
               runActivate(false);
               return;
@@ -452,57 +359,19 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   );
 }
 
-/**
- * Whether the durable attempt has something to say that outranks the two-lane
- * controller status.
- *
- * `idle` does NOT: the host looked and there is no attempt, so the controller's
- * "a stage is ready" / "activation debt" answer is the more useful one.
- *
- * Everything concrete wins — including `unavailable`, whose whole point is to
- * stay visible rather than read as a quiet host.
- *
- * `unknown` SPLITS, and used to be rejected outright.
- *
- * A BARE unknown (`lastKnownKind === null`) still loses: we could not establish
- * anything, and an unknown must never displace a concrete local fact the
- * controller does know.
- *
- * A RETAINED ATTEMPT phase does not lose, because it is not the absence of
- * knowledge — and rejecting it made the host-down window (Ticket 07 §5.2.7)
- * unrenderable on this surface. The projection's record arm ALWAYS returns
- * `kind: "unknown"` with `lastKnownKind` set: that is the deliberate shape for
- * "an attempt exists and the host is unreachable", chosen so the view holds no
- * lifecycle gate and earns no active poll. The blanket `kind !== "unknown"`
- * test therefore suppressed 100% of record-backed views, and the landing banner
- * showed nothing at all while a local update sat half-finished behind a host
- * that was not answering. The two modules downstream of this one were already
- * built for the case — `primarySentence` has a "Last seen: …" arm and
- * `showsProgressBar` an `unknown`-with-progress arm — and neither could ever be
- * reached from here.
- *
- * Retained `idle` is different: it means the last successful read found no
- * update attempt. It remains useful last-known context in Settings, but it is
- * not an operation and must not raise the landing update banner merely because
- * startup temporarily made that quiet read stale.
- *
- * It still may not DISPLACE a concrete controller fact, which is the original
- * rule kept verbatim: a ready stage or activation debt is something the user
- * can act on now, and it outranks a phase we are only remembering.
- */
+/** It remains useful last-known context in Settings, but it is not an operation and must not raise the landing
+ * update banner merely because startup temporarily made that quiet read stale. */
 function operationSupersedesControllerStatus(
   view: FleetUpdateView,
   controllerHasConcreteFact: boolean,
 ): boolean {
-  // `isQuietUpdateView` is the shared "nothing to show" predicate — the
-  // Overview hides its operation card on the same test, so the two surfaces
-  // agree on where quiet begins.
+  // `isQuietUpdateView` is the shared "nothing to show" predicate - the Overview hides its operation card on the
+  // same test, so the two surfaces agree on where quiet begins.
   if (isQuietUpdateView(view)) return false;
   if (view.kind === "unknown") return !controllerHasConcreteFact;
   return true;
 }
 
-/** Which of the three bodies is on screen. See where it is computed. */
 type BannerBranch = "operation" | "terminal-outcome" | "update-or-debt";
 
 function resolveBannerBranch(input: {
@@ -534,15 +403,8 @@ interface BannerBodyProps {
   readonly onSnooze: () => void;
 }
 
-/**
- * The one place the named branch becomes markup.
- *
- * A `switch` rather than the chained ternary this replaced, and separated from
- * the wrapper so that the element carrying `aria-live`, `aria-label` and the
- * destructive styling is built from `branch` in one place and rendered from
- * `branch` in another — with no room between them for a fourth reading of the
- * same two conditions.
- */
+/** A `switch` rather than the chained ternary this replaced, and separated from the wrapper so that the element
+ * carrying `aria-live`. */
 function BannerBody(props: BannerBodyProps) {
   switch (props.branch) {
     case "operation":
@@ -580,13 +442,7 @@ function BannerBody(props: BannerBodyProps) {
   }
 }
 
-/**
- * A terminal attempt the landing banner has finished with.
- *
- * `complete` and `failed` only. `unavailable` is deliberately NOT dismissible —
- * its whole purpose is to stay visible until the record is repaired, and it
- * carries no attempt id to key a dismissal by in any case.
- */
+/** A terminal attempt the landing banner has finished with. */
 function isLandingDismissed(
   view: FleetUpdateView,
   dismissedAttemptIds: ReadonlyArray<string>,
@@ -596,19 +452,8 @@ function isLandingDismissed(
   return attemptId !== null && dismissedAttemptIds.includes(attemptId);
 }
 
-/**
- * A completed update acknowledges itself and collapses.
- *
- * "Completion may auto-collapse after a short acknowledgement; Settings still
- * shows the running version" (experience doc). Without this a retained
- * `complete` record — which the host keeps for days — sat on the landing page
- * indefinitely announcing a success nobody had to act on.
- *
- * Keyed on the attempt id so the timer restarts for a genuinely new completion
- * and does nothing on a re-render. The dismissal it writes is the same one the
- * failure path uses, so "collapsed" and "dismissed" cannot drift into two
- * different notions of hidden.
- */
+/** The dismissal it writes is the same one the failure path uses, so "collapsed" and "dismissed" cannot drift
+ * into two different notions of hidden. */
 function useLandingCompletionCollapse(view: FleetUpdateView): void {
   const dismissLandingAttempt = useHostUpdateBannerStore(
     (state) => state.dismissLandingAttempt,
@@ -634,18 +479,8 @@ interface OperationContentProps {
   readonly onDismiss: (attemptId: string) => void;
 }
 
-/**
- * The attempt-driven banner body: named phase, continuous progress, and — only
- * when live work is genuinely blocking the update — a prominent
- * **Force restart…**.
- *
- * WHAT IS DELIBERATELY ABSENT: any control that disables anything else. This
- * banner never gates Restart, Diagnostics, Activate or the overflow menu.
- * Update state is not a host-action mutex (plan §4), and the user is never
- * required to clear or dismiss this banner before recovering the host — which
- * is why there is no dismiss affordance on an active operation and no disabled
- * state applied to anything outside this element.
- */
+/** Update state is not a host-action mutex (plan §4), and the user is never required to clear or dismiss this
+ * banner before recovering the host. */
 function OperationContent(props: OperationContentProps) {
   const { view } = props;
   const percent = operationProgressPercent(view);
@@ -657,15 +492,8 @@ function OperationContent(props: OperationContentProps) {
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1" data-testid="host-update-banner-phase">
           {props.copy.primary}
-          {/*
-            Freshness, stated rather than implied. A qualified view is the last
-            thing we knew, not what is true now, and the doc requires it be
-            marked honestly rather than presented as live.
-
-            `needsQualifiedMarker`, not `view.qualified`: when the sentence
-            already begins "Last seen: …" a second marker here would say the
-            same thing twice in one line.
-          */}
+          {/* Freshness, stated rather than implied. A qualified view is the last thing we knew, not what is true now, and
+             the doc requires it be marked honestly rather than presented as live. */}
           {props.copy.needsQualifiedMarker ? (
             <span
               className="ml-1 opacity-70"
@@ -675,12 +503,6 @@ function OperationContent(props: OperationContentProps) {
             </span>
           ) : null}
         </span>
-        {/*
-          Byte detail rides BESIDE the percentage rather than instead of it, and
-          appears whenever the host measured it — including for an operation
-          with no percentage at all, which is the case that previously showed
-          nothing but an anonymous moving bar.
-        */}
         {bytes === null ? null : (
           <span
             className="shrink-0 font-mono text-code-xs tabular-nums opacity-80"
@@ -709,12 +531,7 @@ function OperationContent(props: OperationContentProps) {
             Retry
           </Button>
         ) : null}
-        {/*
-          Diagnostics for the two states the contract points there: a failure
-          (its "Retry; Diagnostics" pair) and an unreadable record, whose own
-          copy already ends "see Diagnostics" and until now named a place with
-          no way to get to it.
-        */}
+        {/* Diagnostics for the two states the contract points there: a failure (its "Retry. */}
         {view.kind === "failed" || view.kind === "unavailable" ? (
           <Button
             type="button"
@@ -736,25 +553,12 @@ function OperationContent(props: OperationContentProps) {
             onClick={props.onForceRestart}
             data-testid="host-update-banner-force-restart"
           >
-            {/*
-              The ellipsis is load-bearing: it promises a confirmation step, and
-              there is one. This click only ARMS the shared restart flow, which
-              re-asks the host about live work and then requires the existing
-              modal. It never restarts on the first click.
-            */}
+            {/* This click only arms the shared restart flow, which re-asks the host about live work and then requires the
+               existing modal. It never restarts on the first click. */}
             Force restart…
           </Button>
         ) : null}
-        {/*
-          Dismiss exists ONLY for a failure, and only once there is an attempt
-          id to remember it by. There is deliberately no dismiss on an active or
-          parked operation — the doc forbids snoozing those away — and none on a
-          completion, which collapses on its own.
-
-          Dismissing hides this banner and nothing else: the selected-host
-          Overview still shows the failed attempt, because "the failure remains
-          discoverable in the selected-host Overview".
-        */}
+        {/* Dismiss exists only for a failure, and only once there is an attempt id to remember it by. */}
         {failedAttemptId === null ? null : (
           <Button
             type="button"
@@ -831,7 +635,7 @@ function resolveForceAction(
 function deriveOfferedVersion(status: HostControllerStatus | undefined): {
   readonly showUpdate: boolean;
   readonly showDebt: boolean;
-  /** Retry routing only — never banner visibility. See `onOperationRetry`. */
+  /** Retry routing only - never banner visibility. See `onOperationRetry`. */
   readonly hostDown: boolean;
   readonly offeredVersion: string | null;
   readonly installedVersion: string | null;
@@ -848,13 +652,8 @@ function deriveOfferedVersion(status: HostControllerStatus | undefined): {
   const showUpdate = status.updateReady;
   const showDebt =
     !status.updateReady && ACTIVATION_DEBT_STATES.has(status.activation);
-  // NOT part of `showDebt`, and deliberately separate from it.
-  //
-  // `ACTIVATION_DEBT_STATES` gates banner VISIBILITY across several surfaces,
-  // and `unavailable` is the ordinary state during every healthy swap window —
-  // widening that set would raise a debt banner every time a host restarts.
-  // This flag is consumed by exactly one thing: which mutation a retry of an
-  // ALREADY-FAILED attempt should dispatch. See `onOperationRetry`.
+  // `ACTIVATION_DEBT_STATES` gates banner visibility across several surfaces, and `unavailable` is the ordinary
+  // state during every healthy swap window.
   const hostDown = !status.updateReady && status.activation === "unavailable";
   let offeredVersion: string | null = null;
   if (showUpdate) {

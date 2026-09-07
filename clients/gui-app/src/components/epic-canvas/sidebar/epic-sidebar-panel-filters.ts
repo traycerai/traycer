@@ -1,18 +1,6 @@
 /**
- * The facet filters for the Agents and Artifacts panels, as raw MATCH sets.
- *
- * A match set is the honest answer to "which nodes does this filter select",
- * and it is deliberately all these hooks return. Ancestor expansion - pulling
- * in a matched node's parents so a nested match stays reachable - is a
- * RENDERING concession made by whoever draws a tree, and it belongs to that
- * caller: expanding here would mean every consumer inherits path nodes that
- * matched nothing. The sidebar trees expand through
- * {@link expandMatchesToVisibleIds}, once, after intersecting every narrowing;
- * the mobile switcher's flat lists never expand at all, because a flat list has
- * no path to keep reachable.
- *
- * `null` means "not narrowing" throughout, the same no-op value an inactive
- * search uses, so the two compose without either side special-casing the other.
+ * The sidebar trees expand through {@link expandMatchesToVisibleIds}, once, after intersecting every narrowing; the mobile switcher's flat lists never expand at all, because a flat list has no path to keep reachable.
+ * `null` means "not narrowing" throughout, the same no-op value an inactive search uses, so the two compose without either side special-casing the other.
  */
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -35,11 +23,7 @@ import {
 } from "@/stores/epics/left-panel-store";
 import { CHATS_TREE_FILTER } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 
-/**
- * Heading for a surface whose list is empty only because a filter is on. It has
- * to be distinguishable from "there is nothing here yet": one is a state the
- * user created and can undo, the other is not.
- */
+/** Heading for a surface whose list is empty only because a filter is on. */
 export const FILTERED_EMPTY_TITLE = "No matches for the current filters.";
 
 /** Which of the Agents facets is doing the hiding, when only one of them is. */
@@ -56,18 +40,13 @@ export function chatFilterEmptyStateDescription(filter: ChatFilter): string {
 }
 
 /**
- * The Artifacts counterpart. Named rather than derived because its three facets
- * combine freely - a status and a kind constraint routinely narrow together, so
- * singling one out would be a guess.
+ * Named rather than derived because its three facets combine freely - a status and a kind constraint routinely narrow together, so singling one out would be a guess.
  */
 export const ARTIFACT_FILTER_EMPTY_DESCRIPTION =
   "Status, Type, or Read state may be hiding artifacts.";
 
 /**
- * Nodes the active interface and ownership filters MATCH. Every local agent is
- * owned by the viewer; collaborators' agents arrive only as cloud rows, which
- * are not in the tree and answer both axes directly at their own call site.
- * `null` when neither filter is active.
+ * Every local agent is owned by the viewer; collaborators' agents arrive only as cloud rows, which are not in the tree and answer both axes directly at their own call site.
  */
 export function useChatFilterMatchIds(
   epicId: string,
@@ -93,10 +72,7 @@ export function useChatFilterMatchIds(
 }
 
 /**
- * Artifacts the active status / kind / read filter MATCHES. Status and read are
- * evaluated only against artifacts that carry them; specs and reviews (status
- * `null`, never assignable) drop out whenever a status constraint is set.
- * `null` when no filter is active.
+ * Status and read are evaluated only against artifacts that carry them; specs and reviews (status `null`, never assignable) drop out whenever a status constraint is set.
  */
 export function useArtifactFilterMatchIds(
   epicId: string,

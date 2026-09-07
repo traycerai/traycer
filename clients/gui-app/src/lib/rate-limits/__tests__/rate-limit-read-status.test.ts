@@ -18,18 +18,16 @@ const BASE = {
 };
 
 /**
- * The DISPATCHED-but-unheard case: a slow-but-healthy `ephemeralProcess` probe
- * that outran our response budget. The host finishes regardless and banks the
- * reading in its gauge cache, which is what the queue's follow-up collects.
+ * The DISPATCHED-but-unheard case: a slow-but-healthy `ephemeralProcess` probe that outran our response budget.
+ * The host finishes regardless and banks the reading in its gauge cache, which is what the queue's follow-up collects.
  */
 function stillRunning(): HostTransportFailureError {
   return new HostTransportFailureError({ ...BASE, fatalDetails: null });
 }
 
 /**
- * The TERMINAL pre-dispatch case: `RemoteSession.notReadyRejection` on a closed
- * session. Also a plain `HostTransportFailureError` - it must not be retried,
- * so it cannot be a `RetryableTransportError` - but nothing was ever sent.
+ * The TERMINAL pre-dispatch case: `RemoteSession.notReadyRejection` on a closed session.
+ * Also a plain `HostTransportFailureError` - it must not be retried, so it cannot be a `RetryableTransportError` - but nothing was ever sent.
  */
 function terminalPreDispatch(reason: string): HostTransportFailureError {
   return new HostTransportFailureError({
@@ -67,11 +65,8 @@ describe("isRateLimitReadStillRunningOnHost", () => {
     ).toBe(false);
   });
 
-  // The gap the two subclass exclusions miss. A closed remote session rejects
-  // pre-dispatch with the BASE class, because a terminal failure must not be
-  // retried - so class alone cannot separate it from a slow probe. Treating it
-  // as "still running" suppresses a failure nothing can resolve and arms a
-  // follow-up with nothing to collect, leaving stale usage looking healthy.
+  // The gap the two subclass exclusions miss.
+  // A closed remote session rejects pre-dispatch with the BASE class, because a terminal failure must not be retried - so class alone cannot separate it from a slow probe.
   it.each([
     ["a revoked credential", "credentials revoked"],
     ["a plan restriction", "plan does not permit remote hosts"],
@@ -117,11 +112,8 @@ describe("isRateLimitQueryFailure", () => {
     ).toBe(false);
   });
 
-  // The queue allows ONE delayed collection per target. When that follow-up
-  // also comes back unheard, `scheduleReadFollowUp` declines another and
-  // nothing is left to collect the answer - so the lane being queue-owned stops
-  // justifying the suppression. Without this arm the row keeps showing a stale
-  // reading as healthy with no failure and no collector.
+  // The queue allows ONE delayed collection per target.
+  // When that follow-up also comes back unheard, `scheduleReadFollowUp` declines another and nothing is left to collect the answer - so the lane being queue-owned stops justifying the suppression.
   it("reports a still-running read once the follow-up budget is spent", () => {
     expect(
       isRateLimitQueryFailure({
@@ -133,10 +125,8 @@ describe("isRateLimitQueryFailure", () => {
     ).toBe(true);
   });
 
-  // `httpFetch` providers refetch their own query and never enter the serial
-  // queue, so no follow-up is ever scheduled for them. Suppressing there would
-  // hide a dropped connection behind cached usage that looks healthy, with
-  // nothing coming back to correct it.
+  // `httpFetch` providers refetch their own query and never enter the serial queue, so no follow-up is ever scheduled for them.
+  // Suppressing there would hide a dropped connection behind cached usage that looks healthy, with nothing coming back to correct it.
   it("does NOT suppress the same error for a lane the queue does not own", () => {
     expect(
       isRateLimitQueryFailure({

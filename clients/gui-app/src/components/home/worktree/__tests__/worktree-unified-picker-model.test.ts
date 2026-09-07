@@ -233,8 +233,8 @@ describe("buildUnifiedPickerModel — partition invariant", () => {
       branches: [currentBranch("development")],
       uncommittedFileCount: 5,
     });
-    // A fresh worktree should not silently carry WIP — default selection is the
-    // clean fork id even though the carry row is offered above it.
+    // A fresh worktree should not silently carry wip - default selection is the clean fork id even though the
+    // carry row is offered above it.
     expect(model.newBranchSourceId).toBe("development");
   });
 

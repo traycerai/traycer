@@ -4,27 +4,11 @@ import {
 } from "@/hooks/host/use-host-supports-method";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 
-/**
- * The archive RPC's method name, shared by the capability gate and the mutation
- * so the two can never name different methods.
- */
+/** The archive RPC's method name, shared by the capability gate and the mutation so the two can never name different methods. */
 export const SET_CHAT_ARCHIVED_METHOD = "epic.setChatArchived";
 
 /**
- * Whether archive affordances should be offered at all.
- *
- * `epic.setChatArchived` is registered OFF the released floor with
- * `degrade: { kind: "unsupported" }`, so a host predating it negotiates the
- * method away rather than failing the handshake - and every archive affordance
- * (row hover button, row-menu entry, archive visibility filter) disappears on such
- * a host instead of offering an action that cannot work.
- *
- * Used for epic-wide presentation such as the archive filter. Per-record
- * actions check the record's owning host, which may differ from the host
- * serving the epic's replicated list.
- *
- * Fails closed while the host's manifest is still unknown - see
- * {@link useHostSupportsMethod}.
+ * Archive affordances fail closed while the host manifest is unknown. Per-record actions check the record's owning host, which may differ from the epic list host.
  */
 export function useChatArchiveSupported(): boolean {
   const epicHostId = useEpicSessionHostId();
@@ -32,21 +16,7 @@ export function useChatArchiveSupported(): boolean {
 }
 
 /**
- * The tri-state behind {@link useChatArchiveSupported}, for the one decision
- * that must not collapse it: whether to HIDE archived rows.
- *
- * Hiding and revealing are gated differently, and deliberately so. Every
- * archive *affordance* is hidden unless support is positively known
- * (`useChatArchiveSupported`, fail-closed). But hiding rows on a host that is
- * KNOWN to lack the method would strand them: the archive visibility filter, the
- * Unarchive entry and the empty-state hint are all capability-gated, so a row
- * archived on a newer host and then seen from an older one would be invisible
- * with nothing left to bring it back. Archived records must never become
- * unreachable, so a known-absent host stops hiding.
- *
- * `null` (pre-handshake) keeps hiding rather than revealing: revealing on
- * unknown would flash archived rows on every cold start and then hide them a
- * moment later, which is worse than the toggle appearing late.
+ * Known-absent host stops hiding archived rows so they stay reachable. `null` (pre-handshake) keeps hiding to avoid a flash.
  */
 export function useChatArchiveSupportState(): boolean | null {
   const epicHostId = useEpicSessionHostId();

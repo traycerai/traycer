@@ -13,12 +13,8 @@ const MODES: ReadonlyArray<{ id: ThemeMode; label: string }> = [
   { id: "system", label: "System" },
 ];
 
-/**
- * Theme act controls. Writes straight to the real settings store, so the
- * theme-applier flips the `<html>` token cascade instantly and the diorama
- * (styled with semantic tokens) repaints live while the cinematic shell
- * around it stays dark. Choices persist - this *is* the appearance setting.
- */
+/** Writes straight to the real settings store, so the theme-applier flips the `<html>` token cascade instantly
+ * and the diorama (styled with semantic tokens) repaints live while the cinematic shell around it stays dark. */
 export function OnboardingThemePicker() {
   const theme = useSettingsStore((state) => state.theme);
   const themePreset = useSettingsStore((state) => state.themePreset);

@@ -5,24 +5,15 @@ import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { appLogger } from "@/lib/logger";
 
-/**
- * One target that did not get removed, with the display-safe reason the host
- * gave for it.
- *
- * The reason is LIVE-ONLY copy: it names the absolute worktree path and comes
- * straight off the stream frame, which is fine in a toast shown at the moment
- * of the action and wrong anywhere durable. Never persist it, and never put it
- * in a report-issue context (those are public and fixed product copy).
- */
+/** One target that did not get removed, with the display-safe reason the host gave for it. */
 export interface WorktreeCleanupFailure {
   readonly worktreePath: string;
   readonly reason: string;
 }
 
 /**
- * A target the host settled as `deleted: false` rather than throwing. The
- * stream carries no reason string on that path, so the tally supplies fixed
- * copy - the durable row's failure categories are the real answer there.
+ * A target the host settled as `deleted: false` rather than throwing.
+ * The stream carries no reason string on that path, so the tally supplies fixed copy - the durable row's failure categories are the real answer there.
  */
 const DECLINED_REASON = "The host declined the deletion.";
 const NEVER_REACHED_HOST_REASON =
@@ -33,14 +24,7 @@ export interface WorktreeCleanupOutcome {
   readonly removed: ReadonlyArray<string>;
   readonly failed: ReadonlyArray<WorktreeCleanupFailure>;
   /**
-   * Paths whose outcome this client never learned: the command reached the
-   * host and then the observation dropped, so the removal may or may not have
-   * happened.
-   *
-   * Kept apart from `failed` because the two demand different copy. "Couldn't
-   * be removed" is a claim about the filesystem; this is a claim about what we
-   * observed. The host owns the command either way and writes the durable
-   * completion notification with the real counts.
+   * Paths whose outcome this client never learned: the command reached the host and then the observation dropped, so the removal may or may not have happened.
    */
   readonly uncertain: ReadonlyArray<string>;
 }
@@ -51,39 +35,11 @@ const EMPTY_OUTCOME: WorktreeCleanupOutcome = {
   uncertain: [],
 };
 
-// Fan-out cap for the FALLBACK path only (an older host with no batch command
-// method). On a current host the cleanup is one command and the host schedules
-// its targets, where the cap can actually bound the machine rather than one
-// window's share of it.
+// Fan-out cap for the FALLBACK path only (an older host with no batch command method).
+// On a current host the cleanup is one command and the host schedules its targets, where the cap can actually bound the machine rather than one window's share of it.
 const MAX_PARALLEL_CLEANUP_STREAMS = 2;
 
-/**
- * Runs one user-approved, multi-path worktree cleanup, resolving once every
- * path has an observed outcome.
- *
- * On a current host this is ONE `worktree.deleteBatchByPath@1.0` command. That
- * is the point of the migration: the renderer used to be the only place that
- * knew the paths were one user action, so the host could not attribute a
- * durable completion notification to it and could not finish the work if this
- * window went away. Now it can do both. The caller supplies the durable source
- * (`task_cleanup` after deleting Tasks, `task_sweep` for the standalone Sweep
- * action) so telemetry and future presentation can distinguish the workflows
- * without adding a notification kind.
- *
- * On an older host - one whose handshake rejects the batch method outright,
- * before any subscribe frame asks it to delete anything - the previous bounded
- * per-path fan-out runs instead, unchanged.
- *
- * This is intentionally NOT wired into the Settings `useWorktreeDeleteRun`
- * store: that store owns the Settings progress modal / strip / backgrounding
- * UX. Task deletion and Sweep only need a tally for their summary toasts, so
- * they drive the stream clients directly with `scripts: null` (the host
- * resolves each worktree's own committed teardown scripts).
- *
- * The host-side busy-check stays intact on both paths: a path that became
- * in-use after the dialog opened is declined and lands in `failed`, never
- * silently force-removed.
- */
+/** Runs one user-approved, multi-path worktree cleanup, resolving once every path has an observed outcome. */
 export interface WorktreeCleanupRequest {
   readonly hostId: string;
   readonly paths: ReadonlyArray<string>;
@@ -122,9 +78,8 @@ export async function runWorktreeCleanup(
   });
   if (attempt.kind === "outcome") return attempt.outcome;
 
-  // The pinned open was rejected before subscribe. Preserve the old-host
-  // behavior: normal targets use a fresh @1.0 batch attempt, while consented
-  // targets use the released per-path stream.
+  // The pinned open was rejected before subscribe.
+  // Preserve the old-host behavior: normal targets use a fresh @1.0 batch attempt, while consented targets use the released per-path stream.
   const [normal, force] = await Promise.all([
     runNormalCleanup(openStreamTransport, request, normalPaths),
     runFallbackCleanupSafely({
@@ -176,17 +131,7 @@ type CleanupCommandAttempt =
   | { readonly kind: "outcome"; readonly outcome: WorktreeCleanupOutcome }
   | { readonly kind: "unsupported" };
 
-/**
- * Opens one host-owned deletion command over every approved path and reports
- * what it observed.
- *
- * Observation and execution are separate here, which is what makes the drop
- * handling safe. Detaching never cancels: whatever this promise resolves with,
- * the host keeps deleting the remaining targets and still writes the completion
- * notification. So when the socket drops there is nothing to replay and nothing
- * to wait for - the honest move is to stop observing, report the unfinished
- * paths as uncertain, and let the durable row carry the real result.
- */
+/** Opens one host-owned deletion command over every approved path and reports what it observed. */
 function runCleanupCommand(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
   input: {
@@ -209,9 +154,8 @@ function runCleanupCommand(
     const state = { settled: false, reachedHost: false };
 
     /**
-     * What the targets still open at settle time become. `failed` carries the
-     * reason that applies to all of them - a host rejection's own words, or
-     * fixed copy for a transport failure that produced none.
+     * What the targets still open at settle time become.
+     * `failed` carries the reason that applies to all of them - a host rejection's own words, or fixed copy for a transport failure that produced none.
      */
     const settle = (
       unsettled:
@@ -241,21 +185,11 @@ function runCleanupCommand(
         },
       });
     };
-    /**
-     * This host has no such method, so the per-path fallback runs the work
-     * instead.
-     *
-     * Safe precisely because `onUnsupported` comes from the openAck
-     * compatibility check - the host never received a subscribe frame, so
-     * nothing was attempted and re-issuing the work cannot double it. Only
-     * still-pending paths are handed over, so a path that somehow already
-     * settled is never deleted twice.
-     */
+    /** This host has no such method, so the per-path fallback runs the work instead. */
     const reportUnsupported = (): void => {
       if (state.settled) return;
-      // Only an initial compatibility rejection has the no-side-effect
-      // guarantee. A replacement host rejecting an observe arrives after the
-      // command may have started, so its remaining targets stay uncertain.
+      // Only an initial compatibility rejection has the no-side-effect guarantee.
+      // A replacement host rejecting an observe arrives after the command may have started, so its remaining targets stay uncertain.
       if (state.reachedHost) {
         settle({ kind: "uncertain" });
         return;
@@ -290,9 +224,7 @@ function runCleanupCommand(
               stopOwners: target.stopOwners,
             })),
             callbacks: {
-              // No per-target progress surface in this flow - the Task-delete
-              // summary toast is the only feedback, so phases and teardown
-              // output have nowhere to go.
+              // No per-target progress surface in this flow - the Task-delete summary toast is the only feedback, so phases and teardown output have nowhere to go.
               onTargetStarted: () => {},
               onTargetPhase: () => {},
               onTargetOutput: () => {},
@@ -302,9 +234,8 @@ function runCleanupCommand(
                   : settleTargetFailed(worktreePath, DECLINED_REASON),
               onTargetFailed: (worktreePath, reason) =>
                 settleTargetFailed(worktreePath, reason),
-              // Terminal for the command. Anything still pending is a target
-              // the host settled while this client was away - it does not
-              // replay per-target frames to a late observer.
+              // Terminal for the command.
+              // Anything still pending is a target the host settled while this client was away - it does not replay per-target frames to a late observer.
               onCommandComplete: () => settle({ kind: "uncertain" }),
               // No work ran or will run under this subscription: the host
               // cannot serve the command at all. Nothing was deleted.
@@ -322,10 +253,8 @@ function runCleanupCommand(
                   return;
                 }
                 if (status !== "reconnecting" && status !== "closed") return;
-                // A drop before the session ever opened means the subscribe
-                // frame never reached the host: nothing was attempted, so the
-                // paths failed rather than being unknown. After it opened the
-                // command exists and keeps running without us.
+                // A drop before the session ever opened means the subscribe frame never reached the host: nothing was attempted, so the paths failed rather than being unknown.
+                // After it opened the command exists and keeps running without us.
                 if (!state.reachedHost) {
                   settle({
                     kind: "failed",
@@ -357,19 +286,8 @@ function runCleanupCommand(
 }
 
 /**
- * Per-path `worktree.deleteByPath` fan-out, bounded to
- * {@link MAX_PARALLEL_CLEANUP_STREAMS} in flight. Used for older hosts that
- * cannot serve the batch command. Force paths use it only after an @1.1-pinned
- * batch open was rejected before subscribe.
- *
- * A drop after the stream opened is `uncertain` — the host may still finish
- * the delete — matching the batch command. A drop before open, an open
- * failure, or an app terminal `failed`/`deleted: false` is `failed`.
- *
- * Expected never to reject - each path settles through
- * {@link deleteOneWorktree}. The caller still handles rejection, because the
- * "always settles" invariant belongs to the caller's promise, not to this
- * function's present implementation.
+ * Per-path `worktree.deleteByPath` fan-out, bounded to {@link MAX_PARALLEL_CLEANUP_STREAMS} in flight.
+ * Used for older hosts that cannot serve the batch command.
  */
 async function runFallbackCleanup(input: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -418,9 +336,8 @@ async function runFallbackCleanupSafely(input: {
   try {
     return await runFallbackCleanup(input);
   } catch {
-    // A fallback worker can only reject through an exceptional client-side
-    // failure after the fan-out started. Its filesystem outcomes are unknown;
-    // never reject the parent Task/Sweep flow or replay destructive work.
+    // A fallback worker can only reject through an exceptional client-side failure after the fan-out started.
+    // Its filesystem outcomes are unknown; never reject the parent Task/Sweep flow or replay destructive work.
     return { removed: [], failed: [], uncertain: [...input.paths] };
   }
 }
@@ -431,16 +348,7 @@ type DeleteOneOutcome =
   | { readonly kind: "uncertain" };
 
 /**
- * Every per-path delete settles: on an app terminal frame (`complete`/`failed`),
- * on the FIRST connection drop after start (`reconnecting`/`closed`), or on a
- * synchronous open failure. The session is torn down immediately so the
- * transport's reconnect loop can't re-issue the `subscribe` frame (which would
- * re-run the host delete pipeline) - so exactly one subscribe is ever sent per
- * path, and the overall promise always resolves.
- *
- * A drop after `open` is `uncertain` (the host may still finish). A drop
- * before the session opened, an open failure, or an app terminal failure is
- * `failed`.
+ * Every per-path delete settles: on an app terminal frame (`complete`/`failed`), on the FIRST connection drop after start (`reconnecting`/`closed`), or on a synchronous open failure.
  */
 function deleteOneWorktree(input: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -480,15 +388,8 @@ function deleteOneWorktree(input: {
                 ),
               onFailed: (reason) => finish({ kind: "failed", reason }),
               onConnectionStatus: (status) => {
-                // Fail fast on the FIRST drop after start. The one-shot delete
-                // stream must not silently re-run, but WsStreamClient's own
-                // reconnect loop keeps rescheduling `reconnecting` (reason:
-                // null) drops - which would both re-issue the subscribe (re-run
-                // the host pipeline) AND leave this promise hanging (the summary
-                // toast + cache invalidation would never fire).
-                // `connecting`/`open` are the normal startup; a `closed` fired
-                // by our own teardown after a terminal frame is absorbed by
-                // the `settled` guard.
+                // Fail fast on the FIRST drop after start.
+                // The one-shot delete stream must not silently re-run, but WsStreamClient's own reconnect loop keeps rescheduling `reconnecting` (reason: null) drops - which would both re-issue the subscribe (re-run the host pipeline) AND leave this promise hanging (the.
                 if (status === "open") {
                   state.reachedHost = true;
                   return;
@@ -522,11 +423,7 @@ function deleteOneWorktree(input: {
 }
 
 /**
- * Holds a stream client's `close` for callbacks that may, in the pathological
- * case, fire synchronously inside the constructor - before
- * `openOwnedDurableStreamClient` has returned the handle that closes it. A
- * close requested in that window is applied the moment the handle exists, so a
- * session can never be left open with nobody holding it.
+ * Holds a stream client's `close` for callbacks that may, in the pathological case, fire synchronously inside the constructor - before `openOwnedDurableStreamClient` has returned the handle that closes it.
  */
 interface CloseHolder {
   close: (() => void) | null;
@@ -551,20 +448,13 @@ function adoptClose(holder: CloseHolder, close: () => void): void {
 }
 
 /**
- * Beyond this many failures the toast shows the count line only. Naming three
- * paths and their reasons still reads as a sentence; naming eight turns the
- * toast into a log, and the Settings run log + the durable row are where a
- * list that long belongs.
+ * Beyond this many failures the toast shows the count line only.
+ * Naming three paths and their reasons still reads as a sentence; naming eight turns the toast into a log, and the Settings run log + the durable row are where a list that long belongs.
  */
 const MAX_LISTED_FAILURE_REASONS = 3;
 
 /**
- * Toast DETAIL for a settled cleanup: one `<path>: <reason>` entry per failed
- * target, or `null` when there is nothing to add beyond the count line.
- *
- * On-screen only. This string names absolute paths, so it goes in the toast's
- * `description` and never in a `ReportIssueContext` (public, fixed product
- * copy) or anywhere durable.
+ * Toast DETAIL for a settled cleanup: one `<path>: <reason>` entry per failed target, or `null` when there is nothing to add beyond the count line.
  */
 export function worktreeCleanupFailureDetail(
   failed: ReadonlyArray<WorktreeCleanupFailure>,

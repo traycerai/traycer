@@ -58,9 +58,7 @@ interface SnapshotDiffQueryCall {
   readonly enabled: boolean;
 }
 
-// Only the fields the tile body reads off the query - the vi.mock factory
-// replaces the module wholesale, so the full UseQueryResult surface is not
-// required, but the mock's RETURN must be typed for the lint gate.
+// Only the fields the tile body reads off the query - the vi.mock factory replaces the module wholesale, so the full UseQueryResult surface is not required, but the mock's RETURN must be typed for the lint gate.
 interface SnapshotDiffQueryResult {
   readonly data:
     | {
@@ -72,10 +70,7 @@ interface SnapshotDiffQueryResult {
   readonly isLoading: boolean;
 }
 
-// The real hook's argument shape - tracked via a wrapping vi.mock
-// (importOriginal) rather than replaced, so the cumulative resolution the
-// non-PDF tests depend on keeps running for real; only the PDF test cares
-// about `enabled`.
+// The real hook's argument shape - tracked via a wrapping vi.mock (importOriginal) rather than replaced, so the cumulative resolution the non-PDF tests depend on keeps running for real; only the PDF test cares about `enabled`.
 interface SnapshotResolveCumulativeDiffsCall {
   readonly payload: SnapshotDiffTilePayload;
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -87,9 +82,7 @@ interface SnapshotResolveCumulativeDiffsCall {
   readonly enabled: boolean;
 }
 
-// Same tracking shape for the find-adapter registration hook - wrapped, not
-// replaced, so every existing search test keeps exercising the real tile-find
-// store; only the PDF-branch test inspects what source it registered.
+// Same tracking shape for the find-adapter registration hook - wrapped, not replaced, so every existing search test keeps exercising the real tile-find store; only the PDF-branch test inspects what source it registered.
 interface RegisterDiffTileFindAdapterCall {
   readonly tileInstanceId: string;
   readonly tileKind: TileKindId;
@@ -107,9 +100,7 @@ const state = vi.hoisted(() => ({
   } | null,
   buildPatch: vi.fn(),
   diffPrimitiveCalls: [] as DiffPrimitiveCall[],
-  // Tracked (not a static return) so a PDF short-circuit test can assert the
-  // query was called with `enabled: false` - i.e. never actually issued -
-  // rather than merely asserting on what it rendered.
+  // Tracked (not a static return) so a PDF short-circuit test can assert the query was called with `enabled: false` - i.e. never actually issued - rather than merely asserting on what it rendered.
   snapshotDiffQuery:
     vi.fn<(args: SnapshotDiffQueryCall) => SnapshotDiffQueryResult>(),
   cumulativeResolveCalls:
@@ -132,10 +123,6 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
   useChatSessionHandle: () => state.handle,
 }));
 
-// The tile resolves the snapshot store on its TAB's host (D15). The real
-// `<TabHostProvider>` below supplies the host ID, but resolving a client from it
-// needs the whole host runtime; the query is mocked just below, so the seam is
-// what matters here, not a live client.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -145,10 +132,6 @@ vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
     state.snapshotDiffQuery(args),
 }));
 
-// Wrapped (not replaced): the non-PDF cumulative tests resolve their content
-// through this hook's REAL inline path (no digest -> no host round trip), so
-// swapping in a static mock would break them. Only `enabled` is tracked here;
-// the PDF test asserts the resolver was told not to fetch.
 vi.mock(
   "@/hooks/snapshots/use-snapshot-resolve-cumulative-diffs",
   async (importOriginal) => {
@@ -168,9 +151,7 @@ vi.mock(
   },
 );
 
-// Same wrap-not-replace shape: the "replays the active search" test drives
-// the real tile-find store through this hook, so only the registration CALL
-// is tracked here, not the hook's effect on the store.
+// Same wrap-not-replace shape: the "replays the active search" test drives the real tile-find store through this hook, so only the registration CALL is tracked here, not the hook's effect on the store.
 vi.mock(
   "@/components/diff/use-register-diff-tile-find-adapter",
   async (importOriginal) => {
@@ -222,11 +203,6 @@ function cumulativeChange(
   };
 }
 
-/**
- * A row for a file the snapshot could not capture - what a binary PDF's
- * accumulated change actually looks like: it is IN the set (the agent did
- * change it), with no before/after to show.
- */
 function binaryCumulativeChange(filePath: string): ChatAccumulatedFileChange {
   return {
     filePath,
@@ -240,8 +216,7 @@ function binaryCumulativeChange(filePath: string): ChatAccumulatedFileChange {
 }
 
 function renderSnapshotTile(node: SnapshotDiffTileRef): void {
-  // The tile is a Query consumer on every path now: hash-backed tiles fetch by
-  // content hash and cumulative ones fetch by accumulated-change digest (D7).
+  // The tile is a Query consumer on every path now: hash-backed tiles fetch by content hash and cumulative ones fetch by accumulated-change digest (D7).
   // Production always mounts it under the app's provider; this supplies one.
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -429,11 +404,7 @@ describe("<SnapshotDiffTileBody />", () => {
     });
   });
 
-  // A hash-backed tile aimed at a PDF short-circuits by PATH (the filePath
-  // carried on the payload / resolved hash endpoints), not by the query's
-  // resolved content - a binary PDF's blobs were never captured, so asking
-  // the host would only waste a round trip for a reason the client already
-  // knows from the extension alone.
+  // A hash-backed tile aimed at a PDF short-circuits by PATH (the filePath carried on the payload / resolved hash endpoints), not by the query's resolved content - a binary PDF's blobs were never captured, so asking the host would only waste a round trip for a reason the client already knows from the extension alone.
   it("renders the PDF copy and never issues the snapshot content query for a PDF filePath", () => {
     const node = makeSnapshotHashDiffTile({
       hostId: "host-1",
@@ -455,11 +426,7 @@ describe("<SnapshotDiffTileBody />", () => {
     );
   });
 
-  // Same PDF short-circuit as above, but the query mock answers as though it
-  // HAD run and come back `reason: "binary"` (the exact response a PDF's
-  // never-captured blobs would actually produce). The PDF copy must still be
-  // what renders - proving the branch is decided before `resolved` (and thus
-  // the query's data) is ever consulted, not merely coincide with it here.
+  // The PDF copy must still be what renders - proving the branch is decided before `resolved` (and thus the query's data) is ever consulted, not merely coincide with it here.
   it("renders the PDF copy over the resolved-content branch even when the query would answer binary", () => {
     state.snapshotDiffQuery.mockReturnValue({
       data: { reason: "binary", beforeContent: null, afterContent: null },
@@ -482,12 +449,7 @@ describe("<SnapshotDiffTileBody />", () => {
     ).toBeNull();
   });
 
-  // A CUMULATIVE tile aimed at a PDF is the same PATH-decided gate as the
-  // hash-backed kind above - `singleFilePath` reads `node.diff.filePath`
-  // directly when there is no hash-backed endpoint. The cumulative resolver
-  // must be told `enabled: false` for the same reason the hash query is:
-  // a binary PDF's blobs were never captured, so letting it run would only
-  // waste a fetch for a reason the client already knows from the extension.
+  // The cumulative resolver must be told `enabled: false` for the same reason the hash query is: a binary PDF's blobs were never captured, so letting it run would only waste a fetch for a reason the client already knows from the extension.
   it("renders the PDF copy and short-circuits the cumulative resolver for a PDF filePath", () => {
     state.handle?.store.setState({
       accumulatedFileChanges: [binaryCumulativeChange("docs/report.pdf")],
@@ -509,13 +471,7 @@ describe("<SnapshotDiffTileBody />", () => {
     );
   });
 
-  // Extension decides the RENDERING; it must not decide EXISTENCE. A
-  // cumulative tile reads the live accumulated set, so a path reverted out
-  // of it after the tile was opened is gone - and every other file type says
-  // so. Short-circuiting on `.pdf` alone exempted PDFs from that and left a
-  // dead row claiming its diff was merely not shown (and indexed its stale
-  // path into Find). Falling through costs no fetch: a path with no row has
-  // nothing fetchable.
+  // Extension decides the RENDERING; it must not decide EXISTENCE.
   it("falls through to source-unavailable for a cumulative PDF reverted out of a complete set", () => {
     state.handle?.store.setState({
       accumulatedFileChanges: [
@@ -536,10 +492,7 @@ describe("<SnapshotDiffTileBody />", () => {
     expect(screen.queryByText(PDF_FILE_DIFF_COPY)).toBeNull();
   });
 
-  // The PDF branch is terminal like every other branch, but it must still
-  // publish something to global Find rather than simply not existing to it:
-  // a metadata-only source carrying the file's identity and an honest
-  // "not searchable" coverage note.
+  // The PDF branch is terminal like every other branch, but it must still publish something to global Find rather than simply not existing to it: a metadata-only source carrying the file's identity and an honest "not searchable" coverage note.
   it("registers a metadata-only find source with the PDF coverage message for the PDF branch", () => {
     const node = makeSnapshotHashDiffTile({
       hostId: "host-1",

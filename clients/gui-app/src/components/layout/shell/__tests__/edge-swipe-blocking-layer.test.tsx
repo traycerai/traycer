@@ -1,9 +1,5 @@
-// The blocking surfaces that raise NO document barrier, driven through the real
-// component rather than by poking the claim counter. A surface can be blocking
-// in two ways - by making the whole document inert, or by inerting a subtree
-// itself - and only the first is visible to a document-level recognizer. This
-// suite covers the second, which is the one a barrier-only guard waves straight
-// through.
+// The blocking surfaces that raise NO document barrier, driven through the real component rather than by
+// poking the claim counter.
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -34,9 +30,8 @@ const IDLE_MIGRATION: EpicMigrationSlice = {
   chunksTotal: 0,
 };
 
-// Only the per-epic store reads are faked - the modal itself, the swipe
-// recognizer, the shared actions and the router are all real. Partial, so every
-// other selector in that module stays intact for the rest of the graph.
+// Only the per-epic store reads are faked - the modal itself, the swipe recognizer, the shared actions and the
+// router are all real.
 const migrationState = vi.hoisted((): { current: EpicMigrationSlice } => ({
   current: {
     status: "idle",
@@ -137,21 +132,8 @@ afterEach(() => {
   migrationState.current = IDLE_MIGRATION;
 });
 
-/**
- * WHEN the claim is acquired, which no behavioural test in this file can see:
- * Testing Library flushes passive effects inside `act`, so a claim registered
- * in a passive effect looks identical to one registered before paint. The
- * window it hides is real on a device - the surface is painted and under a
- * finger while the claim is still queued - so it is pinned structurally
- * instead.
- *
- * The probe is two competing effects in ONE component, with the passive one
- * declared FIRST. Passive effects run in declaration order, so a passively
- * acquired claim would run second and this probe would see the app free; a
- * layout effect runs before any passive effect regardless of where it was
- * declared, so seeing the claim held is proof of the earlier slot rather than
- * of ordering luck.
- */
+/** Passive effects run in declaration order, so a passively acquired claim would run second and this probe
+ * would see the app free. */
 describe("blocking-layer claim acquisition", () => {
   const passiveObservations: boolean[] = [];
 
@@ -175,10 +157,8 @@ describe("blocking-layer claim acquisition", () => {
 });
 
 describe("edge swipes under the epic migration modal", () => {
-  // The modal mounts the dialog primitive with `modal={false}` and inerts only
-  // its own epic shell, so the barrier an ordinary dialog raises never appears.
-  // Pinned first, because it is the premise every case below rests on - and the
-  // day the modal starts raising it, this fails and says so.
+  // The modal mounts the dialog primitive with `modal={false}` and inerts only its own epic shell, so the
+  // barrier an ordinary dialog raises never appears.
   it("raises no document barrier, and claims the app instead", () => {
     migrationState.current = {
       status: "running",
@@ -247,9 +227,7 @@ describe("edge swipes under the epic migration modal", () => {
     expect(backSpy).toHaveBeenCalledTimes(1);
   });
 
-  // Unmounting mid-migration is an ordinary end for this surface - the tab is
-  // closed from inside the modal itself. A claim outliving its surface would
-  // leave the app permanently unswipeable for the rest of the session.
+  // A claim outliving its surface would leave the app permanently unswipeable for the rest of the session.
   it("releases the claim when the surface unmounts mid-migration", () => {
     migrationState.current = {
       status: "running",
@@ -265,9 +243,8 @@ describe("edge swipes under the epic migration modal", () => {
     cleanup();
     expect(blockingLayerClaimed()).toBe(false);
 
-    // The recognizer went with the surface, so the behavioural proof that the
-    // claim lifted is a fresh mount - with nothing migrating - navigating
-    // normally. A leaked claim would refuse this for the rest of the session.
+    // The recognizer went with the surface, so the behavioural proof that the claim lifted is a fresh mount - with
+    // nothing migrating - navigating normally. A leaked claim would refuse this for the rest of the session.
     migrationState.current = IDLE_MIGRATION;
     renderUnderMigration(history);
     swipeFromEdge("leading");

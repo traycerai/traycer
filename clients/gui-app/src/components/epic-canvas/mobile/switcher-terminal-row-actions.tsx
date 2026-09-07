@@ -19,15 +19,7 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import type { ListedTerminalSidebarSession } from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
 
 /**
- * The per-row "…" actions for a raw terminal in the mobile switcher: the same
- * Rename, Copy ID, and Close the desktop row offers. Mutations use the same
- * lifetime authority (a durable row renames and closes through the host projection, a
- * compatibility row through the legacy manager RPCs, an unreachable or
- * capability-unknown one not at all). Only the rename affordance differs -
- * desktop edits the row in place, which has no touch analog, so this opens the
- * shared rename dialog and drives the identical mutation from it.
- *
- * Mutations require editor access; copying the session ID is always available.
+ * Only the rename affordance differs - desktop edits the row in place, which has no touch analog, so this opens the shared rename dialog and drives the identical mutation from it.
  */
 export function SwitcherTerminalRowActions(props: {
   readonly epicId: string;
@@ -94,16 +86,7 @@ export function SwitcherTerminalRowActions(props: {
         title="Rename terminal"
         initialValue={actions.label}
         nodeId={session.sessionId}
-        // Close on COMMIT, like the chat/artifact row above and the two epic
-        // sidebar trees. Waiting on the mutation kept this dialog up for the
-        // whole round trip, and up forever when the rename failed.
-        //
-        // A refusal is the one case that keeps it up: rename can go
-        // unavailable while the dialog is open (the host stops being mutable,
-        // or another row's rename is in flight - that pending flag is
-        // panel-wide), and closing then would discard the typed title having
-        // sent nothing. The return is synchronous, so the settle still happens
-        // on the gesture rather than on the ack.
+        // The return is synchronous, so the settle still happens on the gesture rather than on the ack.
         onSubmit={(value) => {
           if (actions.submitRename(value)) setRenameOpen(false);
         }}

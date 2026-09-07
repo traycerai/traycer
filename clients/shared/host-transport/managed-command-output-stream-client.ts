@@ -36,12 +36,7 @@ export interface ManagedCommandOutputLiveFrame {
 }
 
 /**
- * Typed handlers for a `managedCommand.subscribeOutput@1.0` session - one
- * command's log as an interleaved timeline of output and lifecycle records.
- *
- * `onDeleted` does NOT end the session: the command's history is gone on the
- * host, but the window keeps the scrollback the viewer already has until the
- * human closes it.
+ * Typed handlers for a `managedCommand.subscribeOutput@1.0` session - one command's log as an interleaved timeline of output and lifecycle records.
  */
 export interface ManagedCommandOutputStreamCallbacks {
   readonly onSnapshot: (snapshot: ManagedCommandOutputSnapshot) => void;
@@ -63,9 +58,8 @@ export interface ManagedCommandOutputStreamClientOptions {
 }
 
 /**
- * Typed wrapper over the host stream client for
- * `managedCommand.subscribeOutput@1.0`. Upstream frames page backwards from a
- * host-minted position or request a fresh tail after the reader detached.
+ * Typed wrapper over the host stream client for `managedCommand.subscribeOutput@1.0`.
+ * Upstream frames page backwards from a host-minted position or request a fresh tail after the reader detached.
  */
 export class ManagedCommandOutputStreamClient {
   private readonly session: IStreamSession;

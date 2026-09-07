@@ -60,10 +60,7 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly viewTabId: string;
   readonly chatId: string;
   /**
-   * The tile's bound host. A prop rather than a `useTabHostId()` read so this
-   * surface stays renderable on its own (several suites mount it directly),
-   * and so the host it resolves chat-session state under is visible at the
-   * boundary like `epicId` and `chatId` already are.
+   * A prop rather than a `useTabHostId()` read so this surface stays renderable on its own (several suites mount it directly), and so the host it resolves chat-session state under is visible at the boundary like `epicId` and `chatId` already are.
    */
   readonly hostId: string;
   readonly runtime: ChatLowerRuntimeState;
@@ -90,24 +87,14 @@ export interface ChatLowerAccessState {
   readonly isViewer: boolean;
   readonly canAct: boolean;
   /**
-   * Why this surface cannot be typed into, when the reason is not the ordinary
-   * one. Null means the ordinary one - a viewer's permission - and the notice
-   * says so itself.
-   *
-   * A reason rather than a second boolean because the states are not
-   * alternatives to each other: "you may only watch this chat" and "this chat
-   * lives on a machine that is asleep, and you are reading its last backup"
-   * are both read-only, and telling a user the first when the second is true
-   * sends them looking for a permission to ask for.
+   * Why this surface cannot be typed into, when the reason is not the ordinary one.
+   * A reason rather than a second boolean because the states are not alternatives to each other: "you may only watch this chat" and "this chat lives on a machine that is asleep, and you are reading its last backup" are both read-only, and telling a user the first when the second is true sends them looking for a permission to ask for.
    */
   readonly readOnlyNotice: string | null;
 }
 
 /**
- * Why the composer's send is blocked, for the send button's tooltip. `canAct`
- * folds role and connection: a viewer can never act; a non-viewer with
- * `canAct === false` means the chat stream is not open (host reconnecting
- * after a drop / renderer resume).
+ * `canAct` folds role and connection: a viewer can never act; a non-viewer with `canAct === false` means the chat stream is not open (host reconnecting after a drop / renderer resume).
  */
 function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
   if (access.canAct) return null;
@@ -121,9 +108,8 @@ export interface ChatLowerTurnState {
   /** Host-projected same-turn steering capability of the running turn's harness. */
   readonly steerCapable: boolean;
   /**
-   * Whether the tab's negotiated `chat.subscribe` version understands
-   * `after_safe_point` (host handshake minor >= 5). Gates whether `Mod-Enter`
-   * can steer at all, keeping a new renderer from steering a <=1.4 host.
+   * Whether the tab's negotiated `chat.subscribe` version understands `after_safe_point` (host handshake minor >= 5).
+   * Gates whether `Mod-Enter` can steer at all, keeping a new renderer from steering a <=1.4 host.
    */
   readonly steerProtocolSupported: boolean;
   /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
@@ -134,13 +120,10 @@ export interface ChatLowerTurnState {
 
 export interface ChatLowerInterviewState {
   readonly pending: PendingInterviewView | null;
-  // True while an answer/skip for the pending block is in flight or accepted
-  // but unresolved (derived from the chat session's pending/accepted actions).
   // Gates the card so the same action cannot be double-sent.
   readonly isBusy: boolean;
-  // Host-pending interviews with no answerable card in this transcript. Non-
-  // empty means the chat is send-locked with nothing to answer, so the escape-
-  // hatch notice renders above whatever else occupies the composer slot.
+  // Host-pending interviews with no answerable card in this transcript.
+  // Non- empty means the chat is send-locked with nothing to answer, so the escape- hatch notice renders above whatever else occupies the composer slot.
   readonly unanswerable: ReadonlyArray<UnanswerableInterviewView>;
   // True while a dismissal for any `unanswerable` block is in flight.
   readonly unanswerableBusy: boolean;
@@ -206,11 +189,7 @@ export interface ChatLowerComposerState {
 
 interface ComposerSurfaceModel {
   /**
-   * The view tab this composer is rendered in. Reaches the composer only for
-   * the provider re-auth banner's terminal sign-in: the host creates the PTY
-   * and the banner has to open THAT session as a tile in ITS OWN view. In a
-   * split view each pane renders its own banner, so a banner that used the
-   * app-wide active view would open the terminal in the other pane.
+   * Reaches the composer only for the provider re-auth banner's terminal sign-in: the host creates the PTY and the banner has to open THAT session as a tile in ITS OWN view.
    */
   readonly viewTabId: string;
   readonly runtime: ChatLowerRuntimeState;
@@ -248,9 +227,7 @@ export function ChatLowerInteractionSurfaces(
   const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
-  // Intercept the composer Stop button: when this chat has active
-  // sub-agents, raise the cascade prompt instead of stopping only its turn.
-  // The button ignores the return value, so `null` here is just "handled".
+  // Intercept the composer Stop button: when this chat has active sub-agents, raise the cascade prompt instead of stopping only its turn.
   const requestStopTurn = useCallback((): string | null => {
     if (activeAgents.length > 0) {
       setStopChildrenOpen(true);
@@ -278,11 +255,7 @@ export function ChatLowerInteractionSurfaces(
     ],
   );
 
-  // Memoize on the underlying approvals array: `visibleComposerApprovals`
-  // returns a fresh array every call (`.filter`), so without this the derived
-  // `composerModel` memo would get a new dependency identity each render and
-  // re-render the composer on every streaming token. Render-count proof:
-  // chat-tile-composer-rerender.test.tsx.
+  // Memoize on the underlying approvals array: `visibleComposerApprovals` returns a fresh array every call (`.filter`), so without this the derived `composerModel` memo would get a new dependency identity each render and re-render the composer on every streaming token.
   const visiblePendingApprovals = useMemo(
     () => visibleComposerApprovals(props.approvals.pendingApprovals),
     [props.approvals.pendingApprovals],
@@ -300,20 +273,14 @@ export function ChatLowerInteractionSurfaces(
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
-  // Read here rather than inside the dock: the same counts decide the dock's
-  // Background section and the spacing of everything below it. Scoped to the
-  // tile's bound host - that is the host the tile opened the session under,
-  // and a same-id chat on another machine is a different agent.
+  // Read here rather than inside the dock: the same counts decide the dock's Background section and the spacing of everything below it.
   const runningManagedCommandCount = useRunningManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,
     hostId: props.hostId,
   }).length;
-  // A second read rather than a bigger first one: the sets overlap, so this is
-  // not a partition, and only the union decides whether the section exists. A
-  // hold that only a human can clear belongs to a shell that has FINISHED, so a
-  // chat holding output while running nothing - the case Deliver exists for -
-  // has a running count of zero and must open the section on this alone.
+  // A second read rather than a bigger first one: the sets overlap, so this is not a partition, and only the union decides whether the section exists.
+  // A hold that only a human can clear belongs to a shell that has FINISHED, so a chat holding output while running nothing - the case Deliver exists for - has a running count of zero and must open the section on this alone.
   const heldManagedCommandCount = useHeldManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,
@@ -518,14 +485,7 @@ function ComposerSurface(props: {
     return null;
   }
   if (model.access.isViewer) {
-    // The workspace row is LIVE: its selector targets the reading host and this
-    // surface's chat id, and both create/re-bind and remove are real mutations.
-    // For a viewer of a live chat that is the chat's own workspace and the row
-    // is informative. For a COPY (`readOnlyNotice` is set only by the published
-    // and doc-replica surfaces) the binding shown is `null` and the chat id is
-    // the one the OWNER minted, so acting on the row would commit a workspace
-    // change against whatever local lineage happens to hold that id here.
-    // A copy has no live workspace to show, so it shows none.
+    // For a COPY (`readOnlyNotice` is set only by the published and doc-replica surfaces) the binding shown is `null` and the chat id is the one the OWNER minted, so acting on the row would commit a workspace change against whatever local lineage happens to hold that id here.
     const isCopy = model.access.readOnlyNotice !== null;
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -540,10 +500,7 @@ function ComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  // The escape hatch stacks ABOVE the card/composer rather than replacing
-  // either: a stuck block can coexist with an answerable one, and the composer
-  // must stay reachable in case the host would in fact accept a send (only
-  // `detached` waits gate it host-side, which the renderer cannot observe).
+  // The escape hatch stacks ABOVE the card/composer rather than replacing either: a stuck block can coexist with an answerable one, and the composer must stay reachable in case the host would in fact accept a send (only `detached` waits gate it host-side, which the renderer cannot observe).
   const escapeHatch =
     model.interview.unanswerable.length > 0 ? (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">

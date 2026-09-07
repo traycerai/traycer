@@ -79,9 +79,7 @@ function renderSlashCommand(
   return (
     <SlashCommandChip
       key={key}
-      // Label, not plain text: a chip picked (or written into a next step) with
-      // `$` reads back as `$name` here just as it does in the live composer,
-      // while the node it came from still serializes to the canonical `/name`.
+      // Label, not plain text: a chip picked (or written into a next step) with `$` reads back as `$name` here just as it does in the live composer, while the node it came from still serializes to the canonical `/name`.
       name={slashCommandLabelFromAttrs(node.attrs)}
       density={context.profile.inlineChipDensity}
     />
@@ -208,9 +206,8 @@ const RENDERERS: Partial<Record<string, NodeRenderer>> = {
       ),
       nodeKey: key,
     }),
-  // A sourced quote reads as a quote; its source rides in the attrs for the
-  // coding agent, and the accompanying mention chip is what shows the reader
-  // where it came from. Rendering it any louder would double-state that.
+  // A sourced quote reads as a quote; its source rides in the attrs for the coding agent, and the accompanying mention chip is what shows the reader where it came from.
+  // Rendering it any louder would double-state that.
   sourcedQuote: (node, key, context) =>
     context.profile.renderBlockquote({
       children: (

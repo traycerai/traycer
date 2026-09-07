@@ -13,9 +13,7 @@ type ResolveRequest = (
   params: unknown,
 ) => Promise<ResolveArtifactByPathResponse>;
 
-// Only `client.request` is exercised by fetchResolveArtifactByPath; the rest of
-// HostClient is irrelevant here, so the double carries just that method (mirrors
-// the `as never` test-double pattern used elsewhere in the suite).
+// Only `client.request` is exercised by fetchResolveArtifactByPath; the rest of HostClient is irrelevant here, so the double carries just that method (mirrors the `as never` test-double pattern used elsewhere in the suite).
 function makeArgs(queryClient: QueryClient, request: Mock<ResolveRequest>) {
   return {
     queryClient,

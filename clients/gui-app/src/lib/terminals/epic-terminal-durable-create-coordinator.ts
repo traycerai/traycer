@@ -143,15 +143,8 @@ function resolveCreateError(error: unknown): Error {
 }
 
 /**
- * Dispatches at most one create per accepted terminal identity. Unmounting a
- * tile or owner cannot cancel an in-flight job; a remount joins the same
- * promise. Capability resolution is a dispatch gate, not an accept gate.
- *
- * `create` must be observationally silent (RPC only). Optional `commit` runs
- * only after a failed/uncertain create and this attempt still owns the
- * generation. It must not write shared cache; it returns an isolated list
- * snapshot. After a generation re-check, `onCommit` may publish that snapshot.
- * `onSuccess` / `onFailure` run only for the still-current attempt.
+ * Dispatches at most one create per accepted terminal identity.
+ * Unmounting a tile or owner cannot cancel an in-flight job; a remount joins the same promise.
  */
 export function requestEpicTerminalDurableCreate(args: {
   readonly hostId: string;
@@ -237,11 +230,8 @@ export function requestEpicTerminalDurableCreate(args: {
 }
 
 /**
- * Re-accepts a failed job so the owner re-issues create with the same
- * identity. A legacy same-owner/same-kind/same-scope `terminal.create` for
- * an already-running session collapses onto that session, so Retry after an
- * isolated `terminal.list` transport failure does not need a discovery-first
- * preflight and does not spawn a second PTY.
+ * Re-accepts a failed job so the owner re-issues create with the same identity.
+ * A legacy same-owner/same-kind/same-scope `terminal.create` for an already-running session collapses onto that session, so Retry after an isolated `terminal.list` transport failure does not need a discovery-first preflight and does not spawn a second PTY.
  */
 export function retryEpicTerminalDurableCreate(
   hostId: string,
@@ -266,8 +256,8 @@ export function discardEpicTerminalDurableCreate(
 }
 
 /**
- * Settles a failed (or any remaining) job because an authoritative row now
- * exists. The job is removed so Retry cannot resurrect it after a later delete.
+ * Settles a failed (or any remaining) job because an authoritative row now exists.
+ * The job is removed so Retry cannot resurrect it after a later delete.
  */
 export function settleEpicTerminalDurableCreate(
   hostId: string,

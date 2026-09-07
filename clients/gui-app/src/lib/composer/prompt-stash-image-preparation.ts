@@ -53,9 +53,8 @@ export interface PromptStashImagePreparationSession {
 }
 
 /**
- * Creates one capture-scoped image preparation session. The session owns the
- * WebP support probe so a prompt with several oversized images probes the
- * browser codec exactly once.
+ * Creates one capture-scoped image preparation session.
+ * The session owns the WebP support probe so a prompt with several oversized images probes the browser codec exactly once.
  */
 export function createPromptStashImagePreparationSession(
   codec: PromptStashImageCodec | undefined,

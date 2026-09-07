@@ -38,12 +38,6 @@ export function makeCookie(input: {
   };
 }
 
-/**
- * A session cookie, exactly as Chromium reports one: `session: true` and NO
- * `expirationDate` at all. The pair is not independent in Electron - one is
- * the other's shape - and the capture path reads the absent expiry, so a
- * fixture that set both would not exercise the rule it claims to.
- */
 export function makeSessionCookie(input: {
   readonly name: string;
   readonly domain: string;
@@ -52,16 +46,6 @@ export function makeSessionCookie(input: {
   return { ...cookie, session: true };
 }
 
-/**
- * A `primary` jar with the two Chromium behaviours the observed-sign-in apply
- * path is written against, and nothing else: setting an already-expired cookie
- * DELETES the matching one, and `set` may refuse a single cookie without
- * failing the batch around it.
- *
- * Shared by ticket 03's applier suite and ticket 07's cross-plane suite, so
- * both halves of "what the desktop does with a frame" answer to one jar rather
- * than to two stand-ins that could drift apart.
- */
 export class FakeCookieJar {
   private readonly jar: Cookie[] = [];
   private listener: CookieChangeListener | null = null;
@@ -114,12 +98,7 @@ export class FakeCookieJar {
     if (this.listener === listener) this.listener = null;
   }
 
-  /**
-   * Pre-existing jar state the applier never wrote, and no `changed` event.
-   * Replaces by key like the real jar does, so seeding over a cookie an
-   * earlier apply left behind models a local re-write rather than a duplicate
-   * key no Chromium jar could hold.
-   */
+  /** Pre-existing jar state the applier never wrote, and no `changed` event. */
   seed(cookie: Cookie): void {
     const index = this.indexOf(cookie);
     if (index === -1) this.jar.push(cookie);
@@ -144,13 +123,6 @@ export class FakeCookieJar {
     this.emit(cookie, true);
   }
 
-  /**
-   * Chromium replaces by (name, domain, path) with the domain taken RAW: a
-   * leading dot is the difference between a host-only cookie and a domain
-   * cookie, and a real jar holds both rows at once. Trimming it here collapsed
-   * them into one, which made every ownership and delta test blind to exactly
-   * the pair the production key spells apart.
-   */
   private indexOf(cookie: Cookie): number {
     return this.jar.findIndex(
       (existing) =>

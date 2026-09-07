@@ -20,24 +20,15 @@ interface DeleteTasksDialogProps {
   readonly isPending: boolean;
   readonly isCheckingWorktrees: boolean;
   readonly onConfirm: () => void;
-  /**
-   * Worktrees the deleted Task(s) alone reference. Empty (no candidates, or a
-   * failed candidate query) collapses this dialog to exactly today's
-   * confirmation - the cleanup section is additive and never blocks deletion.
-   */
+  /** Empty (no candidates, or a failed candidate query) collapses this dialog to exactly today's confirmation -
+   * the cleanup section is additive and never blocks deletion. */
   readonly candidates: ReadonlyArray<TaskDeleteWorktreeCandidate>;
   readonly isPathChecked: (worktreePath: string) => boolean;
   readonly onTogglePath: (worktreePath: string, checked: boolean) => void;
 }
 
-/**
- * The Task-delete confirmation. It keeps the irreversible action, optional
- * local cleanup, and confirmation controls in distinct visual regions. The
- * cleanup checklist appears only when the deleted Task(s) exclusively own
- * worktrees on this host. Copy is deliberately "no longer used by any other
- * Task" - never "orphaned", which the Settings tab reserves for
- * `gitRemovable: false`.
- */
+/** Copy is deliberately "no longer used by any other Task" - never "orphaned", which the Settings tab reserves
+ * for `gitRemovable: false`. */
 export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
   const {
     open,
@@ -153,10 +144,7 @@ function WorktreeCleanupRow(props: {
 }) {
   const { candidate, checked, disabled, onToggle } = props;
   const branch = candidate.branch ?? "detached HEAD";
-  // Per-row loss/uncertainty hint. Dirty rows name the concrete uncommitted
-  // loss; clean rows with local-only commits name that concrete loss; clean rows
-  // whose branch status could not be probed carry a neutral "unverified" note
-  // (never "safe" / "loss-free"). A clean, proven row is quiet.
+  // Dirty rows name the concrete uncommitted loss; clean rows with local-only commits name that concrete loss.
   const status = candidate.branchStatus;
   let hint: ReactNode = null;
   if (candidate.uncommittedCount > 0) {
@@ -168,9 +156,8 @@ function WorktreeCleanupRow(props: {
       </span>
     );
   } else if (candidate.branch === null) {
-    // Detached HEAD has no branch ref, so removal can orphan its commits -
-    // surface this before any branchStatus hint, which a detached row can
-    // still carry (e.g. probed against the workspace's default branch).
+    // Detached HEAD has no branch ref, so removal can orphan its commits - surface this before any branchStatus
+    // hint, which a detached row can still carry (e.g. probed against the workspace's default branch).
     hint = (
       <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
@@ -195,9 +182,8 @@ function WorktreeCleanupRow(props: {
     status.ahead === null &&
     !status.mergedIntoDefault
   ) {
-    // Never-pushed and not contained in the default branch: local-only commits
-    // exist but the count is unknown (no upstream). The branch ref survives
-    // removal, so this names the state without claiming unrecoverable loss.
+    // Never-pushed and not contained in the default branch: local-only commits exist but the count is unknown (no
+    // upstream). The branch ref survives removal, so this names the state without claiming unrecoverable loss.
     hint = (
       <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />

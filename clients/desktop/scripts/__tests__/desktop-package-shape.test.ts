@@ -1,25 +1,4 @@
-/**
- * Static guard against Desktop package-shape regressions tied to the
- * native-packaging cleanup (see ticket
- * f613895a-bdb0-4a95-b1e6-b974ee7dafa0).
- *
- * Pins the `electron-builder` `extraResources` declarations in
- * `clients/desktop/package.json` so:
- *
- *   - Desktop **does not** stage `../../traycer-host/resources` (or
- *     anything else) under `host/client-assets`. Host-side client
- *     assets travel with the native host SEA / runtime archive cut
- *     by the host release workflows, not Desktop.
- *   - Desktop **does not** reintroduce a bundled host executable, a
- *     host runtime, a developer Node binary, a host wrapper, or a
- *     service plist via `extraResources`.
- *   - The `resources/host` placeholder entry stays restricted to
- *     `.gitkeep` + `README.md` so the package shape matches RELEASE.md
- *     / AGENTS.md.
- *
- * The test reads the JSON directly (not the workflow YAMLs) so a hand
- * edit to `package.json` is gated independently of CI workflow drift.
- */
+/** Pin `electron-builder` `extraResources`: no host assets, no bundled host, `resources/host` is `.gitkeep`+README. */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -84,12 +63,6 @@ function readDesktopPackage(): ParsedDesktopPackage {
   };
 }
 
-/**
- * Every `extraResources` entry electron-builder will evaluate for a given
- * platform: the top-level list plus that platform's own list (app-builder-lib
- * `getFileMatchers` concatenates the two - platform entries ADD to the
- * top-level ones, they do not replace them).
- */
 function allExtraResourcesFor(
   pkg: ParsedDesktopPackage,
   platform: keyof PlatformExtraResources,
@@ -148,16 +121,6 @@ describe("desktop package.json - extraResources shape", () => {
     }
   });
 
-  // The bundled CLI is the only host-lifecycle bridge Desktop ships, and it
-  // is staged PER TARGET ARCH. A single arch-blind `resources/cli` -> `cli`
-  // mapping copies every staged `<platform>-<arch>/` dir into every app, and
-  // the macOS release job stages arm64 AND x64 before one `electron-builder
-  // --mac` builds both apps - so the arm64 bundle shipped an x86_64-only
-  // Mach-O and macOS 26 flagged it as an Intel app (traycerai/traycer#1528).
-  // electron-builder's `${arch}` file macro is the supported way to scope a
-  // resource to the arch being packed; the platform prefix has to be literal
-  // per platform because `${os}` expands to `mac`/`win`/`linux`, not the
-  // `process.platform` value the runtime discovery layer keys on.
   const CLI_PLATFORM_PREFIX: Record<keyof PlatformExtraResources, string> = {
     mac: "darwin",
     win: "win32",
@@ -186,10 +149,6 @@ describe("desktop package.json - extraResources shape", () => {
       const entry = cliEntries[0];
       expect(entry.from).toBe(`resources/cli/${prefix}-\${arch}`);
       expect(entry.to).toBe(`cli/${prefix}-\${arch}`);
-      // The runtime resolves `<resourcesPath>/cli/<platform>-<arch>/<binary>`
-      // (cli-discovery.ts) and the macOS afterPack hook copies
-      // `cli/darwin-<arch>/traycer` into the helper app - the `to` must keep
-      // that exact shape, not flatten to `cli/`.
       expect(entry.to).not.toBe("cli");
     },
   );

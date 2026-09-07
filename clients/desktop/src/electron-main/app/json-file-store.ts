@@ -2,22 +2,13 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { log } from "./logger";
 
-/**
- * Atomic file rewrite + serialized write chain. A crash mid-write leaves
- * either the previous file intact or the new one - never a half-written
- * blob. Without this, a `writeFile` can corrupt a JSON store on power loss
- * (cert allowlist, gpu pref, etc.).
- */
+/** A crash mid-write leaves either the previous file intact or the new one - never a half-written blob. */
 export interface JsonFileStore<T> {
   load(): Promise<T>;
   save(value: T): Promise<void>;
   flush(): Promise<void>;
 }
 
-/**
- * A JSON store that lets safety-sensitive callers observe a failed durable
- * write. `save` remains best-effort for existing consumers.
- */
 export interface StrictJsonFileStore<T> extends JsonFileStore<T> {
   saveStrict(value: T): Promise<void>;
 }

@@ -8,9 +8,8 @@ export interface ReportIssueContext {
 }
 
 /**
- * Normalizes context that the caller has already classified as safe for a
- * public issue. This function deliberately does not redact or inspect values:
- * callers must pass fixed product copy, stable codes, and broad source names.
+ * Normalizes context that the caller has already classified as safe for a public issue.
+ * This function deliberately does not redact or inspect values: callers must pass fixed product copy, stable codes, and broad source names.
  */
 export function createReportIssueContext(input: {
   readonly title: string;
@@ -26,10 +25,8 @@ export function createReportIssueContext(input: {
   };
 }
 
-// Total over `undefined` as well as `null`: callers routinely feed `.code`
-// off error objects whose declared type (e.g. `HostRpcError`) is a TanStack
-// generic promise, not a runtime guarantee - a bare `Error` leaking through
-// that seam made this helper crash the whole view.
+// Total over `undefined` as well as `null`: callers routinely feed `.code` off error objects whose declared type (e.g.
+// `HostRpcError`) is a TanStack generic promise, not a runtime guarantee - a bare `Error` leaking through that seam made this helper crash the whole view.
 function normalizeReportContextValue(
   value: string | null | undefined,
 ): string | null {

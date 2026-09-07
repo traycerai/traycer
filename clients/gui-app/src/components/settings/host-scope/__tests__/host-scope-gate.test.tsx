@@ -27,15 +27,8 @@ function expectHiddenFromView(node: Element | null): void {
   expect(node === null || isConcealed(node)).toBe(true);
 }
 
-/**
- * The gate is where "no hosts in hand" is turned into a sentence a person
- * reads, and the two ways of having none are not the same claim:
- *
- *   - the lists answered, and the account owns nothing → install one.
- *   - a list request FAILED → we do not know, and retrying is the fix.
- *
- * Collapsing them told people with hosts to go install a host.
- */
+/** The gate is where "no hosts in hand" is turned into a sentence a person reads, and the two ways of having
+ * none are not the same claim: - the lists answered, and the account owns nothing → install one. */
 describe("<HostScopeGate /> empty and failed states", () => {
   afterEach(cleanup);
 
@@ -54,10 +47,8 @@ describe("<HostScopeGate /> empty and failed states", () => {
   });
 
   it("names the plan gate and offers Upgrade instead of claiming unreachable", async () => {
-    // A plan-gated route is a billing fact: the host works on its own
-    // machine and the server refuses the attach. Rendering it through the
-    // generic unreachable notice sent people debugging connectivity over a
-    // limit only an upgrade lifts.
+    // Rendering it through the generic unreachable notice sent people debugging connectivity over a limit only an
+    // upgrade lifts.
     const runnerHost = new MockRunnerHost({
       signInUrl: "https://auth.example/sign-in",
       authnBaseUrl: "https://auth.example",
@@ -117,12 +108,7 @@ describe("<HostScopeGate /> empty and failed states", () => {
   });
 
   it("offers no return action when the unreachable host is already the active one", async () => {
-    // Asking `connectable` before `isFollowing` made `unreachable` reachable
-    // for the ACTIVE host, which turned this action into a no-op: "Back to X"
-    // while already on X, calling `returnToActive` to clear an override that
-    // is already null. Nothing changes, including the notice the user is
-    // looking at. An action that cannot alter the state it is offered against
-    // is worse than none — it reads as the way out.
+    // An action that cannot alter the state it is offered against is worse than none - it reads as the way out.
     const { hostScopeOptionFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
     const active = hostScopeOptionFixture({
@@ -147,7 +133,7 @@ describe("<HostScopeGate /> empty and failed states", () => {
       </HostScopeGate>,
     );
 
-    // The explanation still renders — only the dead button is withheld.
+    // The explanation still renders - only the dead button is withheld.
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
     expect(screen.queryByTestId("host-scope-return-to-active")).toBeNull();
     expectHiddenFromView(screen.queryByTestId("body"));
@@ -273,11 +259,8 @@ function EffectProbe(props: { readonly log: string[] }) {
   return <div />;
 }
 
-/**
- * The gate's preservation contract: a non-usable state conceals children and
- * tears their side effects down, but their component state is only destroyed
- * by a REAL host switch — never by a transient same-host flap.
- */
+/** The gate's preservation contract: a non-usable state conceals children and tears their side effects down,
+ * but their component state is only destroyed by a real host switch - never by a transient same-host flap. */
 describe("<HostScopeGate /> concealment and preservation", () => {
   afterEach(cleanup);
 
@@ -307,10 +290,8 @@ describe("<HostScopeGate /> concealment and preservation", () => {
 
     rerender(gateAt("unreachable", <TypedProbe />, "host-a"));
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
-    // No role query can address the concealed probe — `display: none` drops
-    // it from the accessibility tree and empties its accessible name — which
-    // is itself the concealment working. The value query is the Testing
-    // Library query that still reaches it.
+    // No role query can address the concealed probe - `display: none` drops it from the accessibility tree and
+    // empties its accessible name - which is itself the concealment working.
     expectHiddenFromView(screen.queryByDisplayValue("typed mid-flap"));
 
     rerender(gateAt("ready", <TypedProbe />, "host-a"));
@@ -328,7 +309,7 @@ describe("<HostScopeGate /> concealment and preservation", () => {
     });
 
     rerender(gateAt("ready", <TypedProbe />, "host-b"));
-    // The remounted probe is FRESH — present, but with host-a's typing gone.
+    // The remounted probe is fresh - present, but with host-a's typing gone.
     const fresh = screen.getByRole("textbox", { name: "Typed probe" });
     expect(fresh instanceof HTMLInputElement ? fresh.value : null).toBe("");
   });
@@ -350,13 +331,8 @@ describe("<HostScopeGate /> concealment and preservation", () => {
   });
 
   it("un-presents an open portaled surface while concealed and re-presents it", () => {
-    // A portal's DOM escapes the hidden Activity's styling entirely (it hangs
-    // off document.body, and React conceals only the topmost in-tree host
-    // nodes), so without the concealment context an open popover, menu, or
-    // select would float above the unreachable notice with its dismissal
-    // effects torn down — visible, interactive, and unclosable. The popover
-    // stands in for the class here; the dialog variant is covered end-to-end
-    // in the notifications panel suite.
+    // A portal's DOM escapes the hidden Activity's styling entirely (it hangs off document.body, and React
+    // conceals only the topmost in-tree host nodes), so without the concealment context an open popover, menu.
     const surface = (
       <Popover open>
         <PopoverTrigger>anchor</PopoverTrigger>

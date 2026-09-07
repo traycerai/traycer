@@ -10,30 +10,9 @@ import {
 } from "@traycer-clients/shared/host-client/host-key-pin";
 import type { HostKeyPinMismatch } from "../../ipc-contracts/platform-types";
 
-/**
- * The durable half of the host Noise-static-key TOFU pin
- * (browser-security-hardening H11); the rule itself lives in
- * `@traycer-clients/shared/host-client/host-key-pin`.
- *
- * A plain `{hostId: publicKey}` file beside the other desktop stores, and
- * deliberately nothing more: a public key is not a secret, so this file is
- * integrity-relevant only - which is exactly why the recovery is "delete the
- * line" rather than a UI. Installing it here also covers the renderer, whose
- * host list is this process's `fetchRegisteredHostsViaHttp` answer relayed
- * over IPC.
- */
-
 const STORE_FILE_NAME = "host-key-pins.json";
 
-/**
- * Where a refusal goes so a surface can say it happened, exactly as
- * `setPendingCertificateEmitter` carries the app shell's certificate
- * refusals: this store is installed in the on-ready phase, before the runner
- * host bridge exists, so startup hands the fan-out down afterwards. A refusal
- * before that (or in a shell with no bridge) is logged and nothing more -
- * the host is refused either way, which is the part that must not depend on
- * anyone listening.
- */
+/** A refusal with no emitter is logged; the host is refused either way. */
 let mismatchEmitter: ((entry: HostKeyPinMismatch) => void) | null = null;
 
 export function setHostKeyPinMismatchEmitter(
@@ -58,10 +37,6 @@ function parsePayload(value: unknown): Payload {
 export function installDesktopHostKeyPins(): void {
   const filePath = join(app.getPath("userData"), STORE_FILE_NAME);
   const file = createJsonFileStore<Payload>(filePath, FALLBACK, parsePayload);
-  // Memoised on the PROMISE, not on its result: two registry reads can be in
-  // flight at once (the renderer's directory poll and main's own jar-stream
-  // resolve), and memoising the settled value let both start a load, both see
-  // an empty map, and the second's write clobber the first's first-sight pin.
   let pins: Promise<Record<string, string>> | null = null;
 
   const loaded = (): Promise<Record<string, string>> => {
@@ -75,25 +50,12 @@ export function installDesktopHostKeyPins(): void {
     },
     async pin(hostId, publicKey) {
       const current = await loaded();
-      // The whole read-and-first-write is SYNCHRONOUS from here to the
-      // `saveStrict` below, which is what makes first sight atomic: the map is
-      // the source of truth, every concurrent pin awaits the same memoised
-      // load, and the loser therefore resumes after the winner has already
-      // written its key into the map. Answering with the incumbent rather than
-      // overwriting it is what turns the enrolment race into a refusal.
       const incumbent = current[hostId];
       if (incumbent !== undefined) return incumbent;
-      // Mutated BEFORE the write and rolled back after a failed one, rather
-      // than snapshotted: the map is shared by every in-flight pin, and a
-      // snapshot taken here would drop a concurrent first-sight pin that
-      // landed in the map after it (R3-9).
+      // Mutated BEFORE the write and rolled back after a failed one, rather than snapshotted: the map is shared by every in-flight pin, and a snapshot taken here would drop a concurrent.
       current[hostId] = publicKey;
       try {
-        // `saveStrict`, not `save`: `save` swallows a persist failure, so a
-        // read-only userData or an ENOSPC would log a pin nothing wrote and
-        // never reach `onPinWriteFailed`. A first-sight pin is the whole of
-        // this store's TOFU protection - a write that did not land has to be
-        // reported.
+        // `saveStrict`, not `save`: `save` swallows a persist failure, so a read-only userData or an ENOSPC would log a pin nothing wrote and never reach `onPinWriteFailed`.
         await file.saveStrict({ pins: current });
       } catch (cause) {
         // Undo the memory half too, or the failed pin reads as pinned for the
@@ -115,10 +77,7 @@ export function installDesktopHostKeyPins(): void {
   installHostKeyPinStore({
     store,
     onPinWriteFailed: (hostId: string, cause: unknown) => {
-      // The host is admitted anyway - nothing is pinned, so nothing disagrees -
-      // and the next registry read tries the write again. What it costs until
-      // then is TOFU protection for this host, which is why it is a warning
-      // rather than a debug line.
+      // The host is admitted anyway - nothing is pinned, so nothing disagrees - and the next registry read tries the write again.
       log.warn("[host-key-pin] could not write a first-sight pin", {
         hostId,
         error: describeLogError(cause),

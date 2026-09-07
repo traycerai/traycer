@@ -20,12 +20,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface UserMessageAttachmentGalleryProps {
   readonly align: "start" | "end";
   readonly attachments: ReadonlyArray<Attachment>;
-  /**
-   * Annotation crops are rendered by the reference chips, not here, so the
-   * gallery hides the attachments they own. Taken as the message's own array
-   * (a stable reference) and reduced to hashes inside the memo below - passing
-   * a freshly built `Set` defeated the memo on every parent render.
-   */
+  /** Annotation crops are rendered by the reference chips, not here, so the gallery hides the attachments they own. Taken as the message's own array (a stable reference) and reduced to hashes inside the memo below - passing a freshly built `Set` defeated the memo on every parent render. */
   readonly browserAnnotations:
     | ReadonlyArray<BrowserAnnotationRecord>
     | undefined;
@@ -93,14 +88,7 @@ function imageAttachmentRenderKey(attachment: ImageAttachment): string {
   ].join(":");
 }
 
-/**
- * Resolves the image source: persisted images (`hash`) fetch their bytes off the
- * chat plane (this chat's tab host, epic doc as the legacy fallback) into a
- * shared blob URL via the content-addressed cache; draft/optimistic images
- * render their inline `dataUrl` directly. A persisted hash transitions from
- * loading to unavailable after its grace period while remaining able to recover
- * when bytes arrive later.
- */
+/** Resolves the image source: persisted images (`hash`) fetch their bytes off the chat plane (this chat's tab host, epic doc as the legacy fallback) into a shared blob URL via the content-addressed cache; draft/optimistic images render their inline `dataUrl` directly. A persisted hash transitions from loading to unavailable after its grace period while remaining able to recover when bytes arrive later. */
 function useImageAttachmentSrc(
   attachment: ImageAttachment,
 ): AttachmentBlobSrcState {

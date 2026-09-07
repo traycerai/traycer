@@ -14,9 +14,7 @@ import type { IStreamClient } from "./i-stream-client";
 import type { ParamsOf } from "./ws-stream-client";
 
 /**
- * The two stream methods that share the `assetHeader`/`assetChunk`/
- * `assetComplete`/`assetError` frame shape - see
- * `asset-stream-schemas.ts`'s file-level doc.
+ * The two stream methods that share the `assetHeader`/`assetChunk`/ `assetComplete`/`assetError` frame shape - see `asset-stream-schemas.ts`'s file-level doc.
  */
 export type AssetStreamMethod = "workspace.streamAsset" | "git.streamFileAsset";
 
@@ -30,30 +28,7 @@ export interface AssetStreamHeader {
 
 /**
  * Why a fetch did not produce usable bytes.
- *
- * - `"unsupported-method"` - the host predates this stream method; the
- *   mirror compatibility check rejected the subscribe before anything was
- *   sent. Old-host behaviour: falls back to today's placeholder.
- * - `"fatal"` - any other fatal close, or a wire-protocol violation: an
- *   unparseable frame, a second `assetHeader` reporting a DIFFERENT identity
- *   than the one already retained (a same-identity second `assetHeader` is a
- *   reconnect resumption instead - see the `reconnecting` handling below), a
- *   chunk arriving before the header/out of sequence/duplicated, a chunk's
- *   payload length not matching its declared `byteLength`, cumulative bytes
- *   exceeding the header's declared size or `MAX_ASSET_BYTES`, a chunk
- *   without its paired binary payload, or `assetComplete` before
- *   `assetHeader`. Any invalid frame ends the fetch immediately - a strict
- *   state machine, not best-effort parsing.
- * - `"interrupted"` - the session closed (caller or transport drop) before
- *   `assetComplete`, with no fatal detail to explain why.
- * - `"length-mismatch"` - every chunk arrived but the assembled byte count
- *   does not match the header's `sizeBytes`.
- * - every other value is a host-reported `assetError.reason`, forwarded
- *   verbatim.
- *
- * Every value maps to the SAME uniform placeholder fallback UI
- * (image-preview decision log, decision #14) - the distinction exists so
- * tests and logs can tell the paths apart, not for divergent UI.
+ * - `"unsupported-method"` - the host predates this stream method; the mirror compatibility check rejected the subscribe before anything was sent.
  */
 export type AssetStreamFailureReason =
   | "unsupported-method"
@@ -69,9 +44,7 @@ export interface AssetStreamFailure {
 
 export interface AssetStreamCallbacks {
   /**
-   * Fires once, as soon as the header frame arrives - before bytes finish -
-   * so a consumer can render a skeleton at the declared aspect ratio
-   * (decision #12).
+   * Fires once, as soon as the header frame arrives - before bytes finish - so a consumer can render a skeleton at the declared aspect ratio (decision #12).
    */
   readonly onHeader: (header: AssetStreamHeader) => void;
   /** Terminal success: every chunk assembled and the length verified. */
@@ -88,20 +61,8 @@ export interface AssetStreamClientOptions<Method extends AssetStreamMethod> {
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for `workspace.streamAsset` /
- * `git.streamFileAsset`. One instance fetches exactly one asset: it opens
- * the session, assembles `assetChunk` payloads into a single `Uint8Array` in
- * arrival order, verifies the assembled length against the header's
- * `sizeBytes`, and settles exactly once via `onReady` or `onFailure`.
- *
- * Unlike the long-lived typed wrappers in this directory
- * (`TerminalStreamClient`, `WorktreeDeleteStreamClient`, ...), this one is a
- * single fetch: nothing more is ever expected once it settles, so it closes
- * its own session on every terminal path (success or failure) instead of
- * leaving an idle subscription - and the host resolver behind it - alive for
- * as long as the caller happens to hold the instance. `close()` is still
- * there and still idempotent, for the caller to cancel BEFORE the fetch
- * settles (unmount, refetch, a superseded request).
+ * Typed wrapper over `WsStreamClient` for `workspace.streamAsset` / `git.streamFileAsset`.
+ * `close()` is still there and still idempotent, for the caller to cancel before the fetch settles (unmount, refetch, a superseded request).
  */
 export class AssetStreamClient<
   Method extends AssetStreamMethod = AssetStreamMethod,
@@ -136,21 +97,10 @@ export class AssetStreamClient<
     });
     this.session.onStatusChange((status, reason) => {
       if (status === "reconnecting") {
-        // Only the PARTIAL payload is attempt-scoped - `chunks`/
-        // `receivedBytes` reset so the retry's budget/sequence checks
-        // start clean. `header` is deliberately RETAINED (not nulled) as
-        // the attempt's contract: the retry's own `assetHeader` is checked
-        // against it below rather than treated as a fresh one, since
-        // `onHeader` must still fire at most once per subscription
-        // (sol re-review, ticket 09 reconnect follow-up) - re-emitting it
-        // on every reconnect would double-acquire the consumer's single
-        // blob-cache lease and, for a hook mounting mid-drop, replay a
-        // header a shared subscription can no longer stand behind.
+        // Only the partial payload is attempt-scoped - `chunks`/ `receivedBytes` reset so the retry's budget/sequence checks start clean.
         this.chunks = [];
         this.receivedBytes = 0;
-        // Only meaningful if a header had already arrived before the drop -
-        // an attempt that never got that far has nothing to resume, so its
-        // eventual `assetHeader` is the ordinary first one, not a retry.
+        // Only meaningful if a header had already arrived before the drop - an attempt that never got that far has nothing to resume, so its eventual `assetHeader` is the ordinary first one, not a retry.
         this.awaitingReconnectHeader = this.header !== null;
         return;
       }
@@ -176,10 +126,6 @@ export class AssetStreamClient<
     if (this.settled) {
       return;
     }
-    // Parse with the LATEST installed schema, whatever minor was negotiated:
-    // a header this client's protocol copy cannot represent should never
-    // arrive (the host emission-gates on the negotiated minor), and every
-    // older minor's frames are a subset of the latest schema by additivity.
     const parsed = assetStreamServerFrameSchemaV11.safeParse(envelope);
     if (!parsed.success) {
       this.fail({ reason: "fatal", message: "received an invalid frame" });
@@ -189,20 +135,10 @@ export class AssetStreamClient<
     switch (frame.kind) {
       case "assetHeader": {
         if (this.header !== null) {
-          // `awaitingReconnectHeader` is true for exactly the ONE header
-          // expected right after a `reconnecting` reset (above) - any OTHER
-          // second `assetHeader` is the ordinary wire-protocol violation
-          // Fix 1 already guards against and stays fatal unconditionally.
           const isReconnectRetry = this.awaitingReconnectHeader;
           this.awaitingReconnectHeader = false;
           if (isReconnectRetry) {
-            // A retry that reports the IDENTICAL identity is a resumption -
-            // swallow it (assembly already reset to empty) rather than
-            // firing `onHeader` a second time. A DIFFERENT identity (the
-            // underlying file changed during the drop) can't be reconciled
-            // with a consumer already mid-fetch on the old one - fail
-            // through the normal path below, same as any other mid-stream
-            // error; the consumer's usual fallback/re-stat recovers it.
+            // A retry that reports the identical identity is a resumption - swallow it (assembly already reset to empty) rather than firing `onHeader` a second time.
             const retained = this.header;
             const isSameIdentity =
               retained.contentIdentity === frame.contentIdentity &&
@@ -231,13 +167,7 @@ export class AssetStreamClient<
         return;
       }
       case "assetChunk": {
-        // `header` being non-null during `awaitingReconnectHeader` is the
-        // RETAINED prior attempt's header, not proof this retry resumed it
-        // - only the retry's OWN `assetHeader` (swallowed on a match, above)
-        // clears the flag. A chunk arriving before that would otherwise be
-        // accepted against the stale header, letting a malformed/hostile
-        // retry stream a full new payload under the OLD identity and skip
-        // the changed-identity check entirely (sol re-review).
+        // `header` being non-null during `awaitingReconnectHeader` is the retained prior attempt's header, not proof this retry resumed it - only the retry's own `assetHeader` (swallowed on a match, above) clears the flag.
         if (this.awaitingReconnectHeader) {
           this.fail({
             reason: "fatal",

@@ -4,9 +4,8 @@ import { setMobileApp } from "@/lib/mobile-app";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 
-// The single gate every hint surface reads (directly, or through
-// `<ShortcutHint>` / a self-gating hint component): the installed mobile app
-// has no modifier keys to advertise, everywhere else keeps its hints.
+// The single gate every hint surface reads (directly, or through `<ShortcutHint>` / a self-gating hint
+// component): the installed mobile app has no modifier keys to advertise, everywhere else keeps its hints.
 describe("shortcutHintsVisible", () => {
   afterEach(() => {
     setMobileApp(false);

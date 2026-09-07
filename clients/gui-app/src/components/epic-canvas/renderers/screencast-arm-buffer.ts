@@ -3,10 +3,7 @@ export const SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX = 4;
 export interface ScreencastArmGestureDown<T> {
   readonly payload: T;
   /**
-   * The surface the buffered press was aimed at, as one comparable number:
-   * the painted frame's sequence on the JPEG plane, the host's viewport epoch
-   * on the video plane. The buffer never interprets it - it only replays a
-   * gesture whose surface is still the one on screen when the arm lands.
+   * The buffer never interprets it - it only replays a gesture whose surface is still the one on screen when the arm lands.
    */
   readonly correlationToken: number;
   readonly clientX: number;
@@ -43,11 +40,6 @@ interface PendingArmGesture<T> {
   readonly timeoutId: number;
 }
 
-/**
- * `readTimeoutMs` is read when a press is stored, not captured once: the
- * timeout is derived from the measured control-plane RTT (ticket 18), which
- * arrives after the buffer is built and refines while the tile lives.
- */
 export function createScreencastArmBuffer<T>(
   onDropped: () => void,
   readTimeoutMs: () => number,

@@ -1,27 +1,6 @@
 /**
- * The worker's `RuntimeEnvironment` - the other half of the boundary
- * `runtime-environment.ts` was written to be replaced at.
- *
- * Same interface, different platform. Three differences, and each is the
- * reason this file exists rather than a flag inside the renderer one:
- *
- *  - Timers are the BARE globals. `window.setTimeout` is what the renderer
- *    environment deliberately uses (jsdom and the suite's fake timers both
- *    patch the `window`-bound pair, and the artifact-room cooldown tests
- *    depend on that binding); in a worker there is no `window` at all, so the
- *    same line throws on import. Bare `setTimeout` is patched by
- *    `vi.useFakeTimers` on `globalThis`, so the fake-timer story survives.
- *  - The logger has nowhere local to write. `appLogger` is a renderer module
- *    reaching renderer transports, so a worker log line becomes a message the
- *    main thread re-emits into the real logger. That hop is why the sink is
- *    injected: this module must not know the bridge exists, and the bridge
- *    must not know what a logger is.
- *  - A caught value is reduced to a string HERE, before it crosses.
- *    `RuntimeLogger.error` takes `unknown`, which is what a `catch` binding
- *    is, and an arbitrary caught value is exactly what structured clone
- *    refuses - a `DOMException`, a class instance, anything holding a
- *    function. Reducing at the source means a logging call can never be the
- *    reason a message is lost, which is a bad way to lose one.
+ * The worker's `RuntimeEnvironment` - the other half of the boundary `runtime-environment.ts` was
+ * written to be replaced at. Same interface, different platform.
  */
 import type {
   RuntimeEnvironment,
@@ -31,9 +10,8 @@ import type {
 import type { RuntimeWorkerLogEntry } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 
 /**
- * Where a worker log line goes. Injected rather than imported so this module
- * stays a pure platform adapter, and so a suite can assert on the entries
- * without standing up a bridge.
+ * Where a worker log line goes. Injected rather than imported so this module stays a pure platform
+ * adapter, and so a suite can assert on the entries without standing up a bridge.
  */
 export type WorkerLogSink = (entry: RuntimeWorkerLogEntry) => void;
 
@@ -73,13 +51,7 @@ export function createWorkerRuntimeEnvironment(
   };
 }
 
-/**
- * Reduces a caught value to one clonable line.
- *
- * The stack is kept when there is one: a worker error read on the main thread
- * with no stack points at the bridge rather than at the code that failed,
- * which is the wrong place to start every investigation.
- */
+/** Reduces a caught value to one clonable line. */
 function describeError(error: unknown): string {
   if (error instanceof Error) {
     return error.stack === undefined

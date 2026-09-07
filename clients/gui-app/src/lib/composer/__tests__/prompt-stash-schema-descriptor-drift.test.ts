@@ -1,9 +1,5 @@
 /**
- * Drift guard: hand-maintained KNOWN_STASH_* allowlists must exactly match the
- * live composer Tiptap schema built from `buildComposerExtensions`.
- *
- * Persistence code imports only the pure descriptor (no live editor config).
- * This test is the only place that bridges both sides.
+ * Drift guard: hand-maintained KNOWN_STASH_* allowlists must exactly match the live composer Tiptap schema built from `buildComposerExtensions`.
  */
 import { describe, expect, it } from "vitest";
 import { getSchema } from "@tiptap/core";

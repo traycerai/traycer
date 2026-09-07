@@ -87,13 +87,7 @@ const CHAT_FIND_PREVIEW_MAX_LENGTH = 180;
 export function buildChatFindRows(
   messages: ReadonlyArray<ChatMessageModel>,
   tileInstanceId: string,
-  /**
-   * The renderer's live promotion set, threaded in verbatim. Find must group
-   * runs exactly as the renderer does: a unit id and owning chain are both
-   * derived from the group a segment lands in, so a projection that grouped
-   * differently would emit ids no element carries and chains that open the
-   * wrong disclosure - matches counted but impossible to paint or navigate to.
-   */
+  /** The renderer's live promotion set, threaded in verbatim. Find must group runs exactly as the renderer does: a unit id and owning chain are both derived from the group a segment lands in, so a projection that grouped differently would emit ids no element carries and chains that open the wrong disclosure - matches counted but impossible to paint or navigate to. */
   promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatFindRow> {
   return messages.map((message) => {
@@ -173,24 +167,14 @@ function chatFindUnitsForMessage(
     ]);
   }
 
-  // A synthesized row whose single segment is a setup-card / forked-chat-link
-  // / imported-chat-marker
-  // renders that segment's own find anchor and no content block (the render side
-  // is renderSingleSpecialSegment in chat-message.tsx; both key off the shared
-  // singleSpecialSegment predicate), so index the segment.
+  // A synthesized row whose single segment is a setup-card / forked-chat-link / imported-chat-marker renders that segment's own find anchor and no content block (the render side is renderSingleSpecialSegment in chat-message.tsx; both key off the shared singleSpecialSegment predicate), so index the segment.
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
     return segmentSearchUnits(specialSegment, tileInstanceId);
   }
 
-  // Every other user/system message renders its whole body as ONE anchor
-  // (message:{id}:content) via UserMessageBody - never per-segment anchors. Its
-  // `text` segments mirror that content, so also projecting them would
-  // double-count every match with a phantom unit that has no anchor to paint.
-  // Project the content unit alone so the count matches what actually renders.
-  // The DISPLAY projection, not the clipboard one: find has to index the text
-  // the DOM actually paints, or a `$`-written chip is unfindable by what it
-  // reads as and findable by a `/name` the highlighter cannot locate.
+  // Every other user/system message renders its whole body as ONE anchor (message:{id}:content) via UserMessageBody - never per-segment anchors.
+  // The DISPLAY projection, not the clipboard one: find has to index the text the DOM actually paints, or a `$`-written chip is unfindable by what it reads as and findable by a `/name` the highlighter cannot locate.
   const contentText =
     message.structuredContent === null
       ? message.content
@@ -238,12 +222,8 @@ function activityGroupSearchUnits(
       text: group.label,
       owningChain: [],
     }),
-    // A reveal force-opens the group, and every child that renders a header
-    // renders it in both the live window and the expanded body, so each of
-    // these units has somewhere to paint. The ONE child that renders no header
-    // is a group's sole reasoning block, and it is skipped below - its label is
-    // already the group summary's own leading clause, so nothing leaves the
-    // index with it.
+    // A reveal force-opens the group, and every child that renders a header renders it in both the live window and the expanded body, so each of these units has somewhere to paint.
+    // The ONE child that renders no header is a group's sole reasoning block, and it is skipped below - its label is already the group summary's own leading clause, so nothing leaves the index with it.
     ...group.segments.flatMap((segment) =>
       activityGroupChildSearchUnits({
         segment,
@@ -375,9 +355,8 @@ function interviewSearchUnits(
     delivery: segment.delivery,
     forkedWithoutAnswer: segment.forkedWithoutAnswer,
   });
-  // Historical interview details live behind the card disclosure. Every field
-  // therefore owns the same force-open chain as the rendered card, including
-  // the summary (which remains mounted both before and after expansion).
+  // Historical interview details live behind the card disclosure.
+  // Every field therefore owns the same force-open chain as the rendered card, including the summary (which remains mounted both before and after expansion).
   const owningChain = [
     deriveInterviewCollapsibleKey(tileInstanceId, segment.id),
   ];
@@ -388,7 +367,7 @@ function interviewSearchUnits(
   }));
 }
 
-// The branch count mirrors the persisted chat segment taxonomy.
+// Branch count mirrors the persisted chat segment taxonomy.
 // eslint-disable-next-line complexity
 function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
   switch (segment.kind) {
@@ -451,10 +430,8 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
         normalizeSearchableText(`Forked from ${segment.sourceChatTitle}`),
       ];
     case "imported-chat-marker":
-      // The marker's own label, and nothing else it does not paint. The raw
-      // `sourceProvider` id is never on screen (the row shows "Claude Code"),
-      // and `sourceCwd` lives in a tooltip portal outside the find anchor -
-      // indexing either counts matches the highlighter has no text to paint.
+      // The marker's own label, and nothing else it does not paint.
+      // The raw `sourceProvider` id is never on screen (the row shows "Claude Code"), and `sourceCwd` lives in a tooltip portal outside the find anchor - indexing either counts matches the highlighter has no text to paint.
       return [
         normalizeSearchableText(
           importedChatMarkerLabel({
@@ -518,9 +495,7 @@ function activityGroupChildHeaderSearchText(
 function approvalHeaderSearchText(
   segment: ApprovalSegment,
 ): ReadonlyArray<string> {
-  // Mirror the rendered header label: verdict + (toolName ?? description ??
-  // "approval"). Body text is unanchored, so indexing it would count matches
-  // that cannot paint.
+  // Body text is unanchored, so indexing it would count matches that cannot paint.
   return [
     segment.decision?.approved === true ? "Approved" : "Denied",
     segment.toolName ?? segment.description ?? "approval",
@@ -608,18 +583,8 @@ function providerNoticeSegmentSearchText(
   ];
 }
 
-// A subagent renders TWO independently-visible regions, so it projects to two
-// find units:
-//   - header (name + agent type): always visible while the parent is open, so
-//     its owning chain is the PARENT chain - it must stay findable even when the
-//     subagent's own body is collapsed.
-//   - body (task + progress + result, or for a workflow card: intent +
-//     activity + result): inside the subagent's own collapsible, so its chain
-//     additionally includes the subagent's own key.
-// PLUS one recursive pass per nested agent child (the "Sub-agents" section) -
-// each renders as its own `row` inside THIS subagent's body, so its search
-// units chain through this subagent's body key exactly as deep as a user must
-// expand to reach it.
+// A subagent renders TWO independently-visible regions, so it projects to two find units: - header (name + agent type): always visible while the parent is open, so its owning chain is the PARENT chain - it must stay findable even when the subagent's own body is collapsed. - body (task + progress + result, or for a workflow card: intent + activity + result): inside the subagent's own collapsible, so its chain additionally includes the subagent's own key.
+// PLUS one recursive pass per nested agent child (the "Sub-agents" section) - each renders as its own `row` inside THIS subagent's body, so its search units chain through this subagent's body key exactly as deep as a user must expand to reach it.
 interface SubagentSegmentSearchUnitsArgs {
   readonly segment: SubagentSegment;
   readonly renderId: string;
@@ -655,10 +620,7 @@ function subagentSegmentSearchUnits(
           tileInstanceId,
         });
       }
-      // A nested provider notice renders as a visible row inside this
-      // subagent's own body (see `SubagentChildProviderNotices`), so its
-      // owning chain opens the SAME body key as the subagent's other content
-      // - not a further-nested key of its own.
+      // A nested provider notice renders as a visible row inside this subagent's own body (see `SubagentChildProviderNotices`), so its owning chain opens the SAME body key as the subagent's other content - not a further-nested key of its own.
       if (child.kind === "provider_notice") {
         return compactUnits([
           chatFindUnit({
@@ -688,9 +650,7 @@ function subagentBodySearchText(
   const workflowMeta = segment.workflowMeta;
   const resultText =
     segment.result === null ? "" : markdownToChatSearchText(segment.result);
-  // The workflow card replaces Task/Progress with Intent/Activity, so index
-  // only what it actually renders - the base task/progressUpdates fields are
-  // the dual-written degradation for old readers, never shown here.
+  // The workflow card replaces Task/Progress with Intent/Activity, so index only what it actually renders - the base task/progressUpdates fields are the dual-written degradation for old readers, never shown here.
   if (workflowMeta !== null) {
     return [
       workflowMeta.intent ?? "",
@@ -709,22 +669,15 @@ function subagentBodySearchText(
   ];
 }
 
-// Reasoning is intentionally summary-only: the find unit is the header BUTTON,
-// whose only text is this label ("Thinking" while streaming, "Thought for Xs"
-// once done). The streaming tail and the expanded full trace render in a SIBLING
-// element OUTSIDE the find-unit anchor, so they are neither paintable nor
-// counted - indexing them would be a phantom match. Keep this in lockstep with
-// the button label in `reasoning-segment.tsx`.
+// The streaming tail and the expanded full trace render in a SIBLING element OUTSIDE the find-unit anchor, so they are neither paintable nor counted - indexing them would be a phantom match.
 function reasoningSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "reasoning" }>,
 ): ReadonlyArray<string> {
   return [reasoningBlockLabel(segment.isStreaming, segment.durationMs)];
 }
 
-// Index ONLY what the inline plan card renders: the headline, the status badge
-// label (suppressed for awaiting_approval), the optional subtitle, and the first
-// N step labels. The full markdown preview and the remaining steps live behind
-// an unopened dialog, so indexing them would over-count un-findable matches.
+// Index ONLY what the inline plan card renders: the headline, the status badge label (suppressed for awaiting_approval), the optional subtitle, and the first N step labels.
+// The full markdown preview and the remaining steps live behind an unopened dialog, so indexing them would over-count un-findable matches.
 function planSegmentSearchText(
   segment: PlanSegmentModel,
 ): ReadonlyArray<string> {
@@ -743,9 +696,8 @@ function planSegmentSearchText(
   ];
 }
 
-// The todo card renders a "<done> of <total> Done" header line and one
-// status-aware label per item. The status / priority words are NOT rendered, so
-// they must not be indexed (they were phantom matches before).
+// The todo card renders a "<done> of <total> Done" header line and one status-aware label per item.
+// The status / priority words are NOT rendered, so they must not be indexed (they were phantom matches before).
 function todoSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "todo" }>,
 ): ReadonlyArray<string> {
@@ -767,7 +719,7 @@ function tokensToText(tokens: ReadonlyArray<Token>): string {
     .join("\n");
 }
 
-// The branch count follows marked's token union.
+// Branch count follows marked's token union.
 // eslint-disable-next-line complexity
 function tokenToText(token: Token): string {
   if (!isBuiltInMarkedToken(token)) return "";

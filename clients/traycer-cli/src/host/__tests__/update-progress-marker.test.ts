@@ -10,12 +10,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The update-progress marker is the cross-process handoff the host daemon
-// polls after spawning `traycer host update` detached (it does not wait
-// for the process). This suite exercises the real filesystem contract
-// against a sandboxed HOME, mirroring the pattern `host-restart-finalize
-// .test.ts` uses - `store/paths` resolves `homedir()` once at module load,
-// so each test re-points HOME and drops the module cache.
+// The update-progress marker is the cross-process handoff the host daemon polls after spawning `traycer host update` detached (it does not wait for the process).
+// This suite exercises the real filesystem contract against a sandboxed HOME, mirroring the pattern `host-restart-finalize .test.ts` uses - `store/paths` resolves `homedir()` once at module load, so each test re-points HOME and drops the module cache.
 
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
@@ -177,10 +173,7 @@ describe("update-progress-marker", () => {
     expect(sameProgress(a, { ...a, writerId: "someone-else" })).toBe(false);
   });
 
-  // Shared by the delete and replace conditional-swap suites: both back
-  // `host update`'s marker reconciliation with the same compare-and-swap
-  // primitive, and a scratch (`.reconcile-`) or staging (`.tmp-`) leftover in
-  // either direction is the same kind of bug.
+  // Shared by the delete and replace conditional-swap suites: both back `host update`'s marker reconciliation with the same compare-and-swap primitive, and a scratch (`.reconcile-`) or staging (`.tmp-`) leftover in either direction is the same kind of bug.
   const failed = {
     state: "failed" as const,
     error: "host did not become healthy",
@@ -210,10 +203,8 @@ describe("update-progress-marker", () => {
     );
   }
 
-  // The conditional delete backs `host update`'s stale-failure reconcile: it
-  // decided from a marker it READ, and another updater can replace that
-  // marker with a live `updating` before the unlink. Deleting unconditionally
-  // there would erase the legacy path's only progress signal.
+  // The conditional delete backs `host update`'s stale-failure reconcile: it decided from a marker it READ, and another updater can replace that marker with a live `updating` before the unlink.
+  // Deleting unconditionally there would erase the legacy path's only progress signal.
   describe("deleteUpdateProgressMarkerIfUnchanged", () => {
     it("clears the marker when it still reads exactly as expected", async () => {
       const {
@@ -389,9 +380,7 @@ describe("update-progress-marker", () => {
         expect(
           await deleteUpdateProgressMarkerIfUnchanged("production", a),
         ).toBe("changed");
-        // Neither `link` nor the `wx` fallback could land the displaced
-        // marker back at the live path - it stays retained in its scratch
-        // rather than being dropped, and the live path is left empty.
+        // Neither `link` nor the `wx` fallback could land the displaced marker back at the live path - it stays retained in its scratch rather than being dropped, and the live path is left empty.
         expect(await readUpdateProgressMarker("production")).toBeNull();
         const scratchFiles = scratchAndStagingFiles().filter((name) =>
           name.includes(".reconcile-"),
@@ -408,12 +397,8 @@ describe("update-progress-marker", () => {
     });
   });
 
-  // The conditional replace backs `host update`'s failure stamp: it computes
-  // `next` from a record it already holds (the `updating` marker THIS
-  // invocation wrote), and another updater can land its own `updating` at
-  // the same path before the stamp writes. Replacing unconditionally there
-  // would bury that updater's live progress under a failure that is not
-  // about it.
+  // The conditional replace backs `host update`'s failure stamp: it computes `next` from a record it already holds (the `updating` marker THIS invocation wrote), and another updater can land its own `updating` at the same path before the stamp writes.
+  // Replacing unconditionally there would bury that updater's live progress under a failure that is not about it.
   describe("replaceUpdateProgressMarkerIfUnchanged", () => {
     const expectedUpdating = {
       state: "updating" as const,

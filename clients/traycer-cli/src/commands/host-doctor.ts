@@ -1,10 +1,8 @@
 import { runDoctor, type DoctorIssue } from "../doctor";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
-// `traycer host doctor [--json]` - runs the doctor engine and emits a
-// structured DoctorResult. Exit code is 0 on info-only / warning-only
-// reports and non-zero when at least one issue's severity is `error`
-// or `fatal` so scripts can branch on success without parsing details.
+// `traycer host doctor [--json]` - runs the doctor engine and emits a structured DoctorResult.
+// Exit code is 0 on info-only / warning-only reports and non-zero when at least one issue's severity is `error` or `fatal` so scripts can branch on success without parsing details.
 export const hostDoctorCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {

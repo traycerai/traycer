@@ -1,8 +1,4 @@
-/**
- * Artifact paste/drop: prepare → insert at caret → finish commit, with
- * abort on failure/uninserted and size/type classification.
- * Non-image path paste is disabled (`beginPathInsertion: () => null`).
- */
+/** Artifact paste/drop: prepare → insert at caret → finish commit, with abort on failure/uninserted and size/type classification. */
 import {
   act,
   cleanup,

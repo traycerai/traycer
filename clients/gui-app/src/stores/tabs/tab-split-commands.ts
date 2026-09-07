@@ -67,11 +67,7 @@ export interface PreparedPairTabsCommand {
   readonly focusedRef: TabRef;
 }
 
-/**
- * Resolves against the live store every time it is invoked. This is shared by
- * context menus and command-palette handlers, which prevents a stale menu
- * render from authorizing a structural mutation after focus changed.
- */
+/** Resolves against the live store every time it is invoked. */
 export function resolveTabSplitCommandAvailability(
   invokedRef: TabRef | null,
 ): TabSplitCommandAvailability {
@@ -95,12 +91,7 @@ export function resolveTabSplitCommandAvailability(
   };
 }
 
-/**
- * The caller must hand this command to the navigation controller's prepared
- * pair seam. Keeping construction here makes menu availability and execution
- * sample the same live state without letting a background-tab menu mutate the
- * current tab.
- */
+/** The caller must hand this command to the navigation controller's prepared pair seam. */
 export function preparePairTabsCommand(
   invokedRef: TabRef | null,
 ): PreparedPairTabsCommand | null {

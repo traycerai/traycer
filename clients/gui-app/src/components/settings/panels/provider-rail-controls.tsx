@@ -1,14 +1,5 @@
-/**
- * Search + status filter for the Settings ▸ Providers rail, mirroring the
- * Epic sidebar's chat/artifact panels: a text box, and a `ListFilter` menu
- * holding the one axis this rail has (All / Enabled / Disabled).
- *
- * Unlike the sidebar's search, this box is a RESTING fixture rather than a
- * mode. The sidebar hides its input because the panel it lives in owns a header
- * row worth trading away; this rail has no header, so a mode would need a
- * trigger with nowhere to sit - and the provider list is a fixed ~18 rows that
- * never grows, so there is no "too small to be worth it" state to gate on.
- */
+/** The sidebar hides its input because the panel it lives in owns a header row worth trading away; this rail
+ * has no header, so a mode would need a trigger with nowhere to sit. */
 import { ListFilter, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,15 +35,6 @@ export function ProviderRailControls(props: {
   const setQuery = (query: string): void => onViewChange({ ...view, query });
 
   // NOTE: no Escape-to-clear here, deliberately. Escape belongs to the Settings
-  // dialog, and this component cannot take it back: Radix registers its Escape
-  // hook on the document with `capture: true`, so it runs before any React
-  // handler on the input. A `stopPropagation()` here does not stop the dialog -
-  // it closes anyway - and the handler then ALSO wipes the query on the way
-  // out, which is worse than doing nothing. The first-party seam is
-  // `onEscapeKeyDown` on the Dialog content (see `command-palette-shell`), and
-  // that lives five levels up in `PromotableModalFrame`, shared by every system
-  // overlay. Clearing is the X button's job; `provider-rail-controls.test`
-  // pins Escape reaching a real Dialog untouched.
 
   return (
     <div className="flex shrink-0 items-center gap-1 px-2 pt-2 pb-1">
@@ -107,9 +89,8 @@ function ProviderRailFilterMenu(props: {
   readonly onStatusChange: (status: ProviderRailStatus) => void;
 }) {
   const active = props.status !== PROVIDER_RAIL_STATUS.All;
-  // The accessible name carries the CURRENT value, not just "Filter" - the dot
-  // below says only that something is filtered, and a screen reader gets no
-  // other reading of the trigger while the menu is closed.
+  // The accessible name carries the current value, not just "Filter" - the dot below says only that something is
+  // filtered, and a screen reader gets no other reading of the trigger while the menu is closed.
   const label = active
     ? `Filter providers, showing ${providerRailStatusLabel(props.status).toLowerCase()}`
     : "Filter providers";
@@ -131,9 +112,8 @@ function ProviderRailFilterMenu(props: {
             data-testid="provider-rail-filter-trigger"
           >
             <ListFilter className="size-4" />
-            {/* A dot, not the sidebar's numeric badge: this rail has ONE filter
-                axis, so a count could only ever read "1" and would invite the
-                question of what the one is. */}
+            {/* A dot, not the sidebar's numeric badge: this rail has one filter axis, so a count could only ever read "1"
+               and would invite the question of what the one is. */}
             {active ? (
               <span
                 aria-hidden

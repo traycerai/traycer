@@ -56,10 +56,7 @@ const MOCK_DEVICE_USER_CODE = "ABCDE-FGHIJ";
 const MOCK_DEVICE_VERIFICATION_URI_COMPLETE =
   "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ";
 
-// Collapse consecutive identical entries so an ordered validate -> refresh
-// assertion tolerates the auth boundary's bounded retry (a transient 5xx /
-// transport error is re-driven a few times before the flow advances) without
-// coupling the test to the exact attempt count.
+// Collapse consecutive identical entries so an ordered validate -> refresh assertion tolerates the auth boundary's bounded retry (a transient 5xx / transport error is re-driven a few times before the flow advances) without coupling the test to the exact.
 function collapseConsecutiveCalls(calls: readonly string[]): string[] {
   return calls.filter(
     (call, index) => index === 0 || call !== calls[index - 1],
@@ -104,14 +101,7 @@ function installFetch(handler: FetchHandler): () => void {
   };
 }
 
-/**
- * A `caches` global that records which stores were dropped.
- *
- * jsdom has no Cache API, so the sign-out's clear is a silent no-op here unless
- * one is installed - which would make an assertion about it pass for the wrong
- * reason. Installed the same way `installFetch` installs a fetch, and the
- * recorder is what the sign-out test observes.
- */
+/** A `caches` global that records which stores were dropped. */
 function installCacheStorage(): {
   readonly names: string[];
   restore(): void;
@@ -161,8 +151,7 @@ function createDeferredResponse(): DeferredResponse {
 }
 
 /**
- * The signal a live TanStack query hands `fetchUserSessions`: never aborted, so
- * these cases exercise the ordinary read rather than the cancellation path.
+ * The signal a live TanStack query hands `fetchUserSessions`: never aborted, so these cases exercise the ordinary read rather than the cancellation path.
  */
 function liveQuerySignal(): AbortSignal {
   return new AbortController().signal;
@@ -426,9 +415,8 @@ function repairedRaceFetch(
 }
 
 /**
- * Drives a full device-flow sign-in: start the attempt, then settle its poll on
- * the `authorized` terminal and wait for the signed-in projection. The minted
- * `token` validates through the installed fetch mock (default `okWithProfile`).
+ * Drives a full device-flow sign-in: start the attempt, then settle its poll on the `authorized` terminal and wait for the signed-in projection.
+ * The minted `token` validates through the installed fetch mock (default `okWithProfile`).
  */
 async function deviceSignIn(
   service: AuthService,
@@ -451,9 +439,7 @@ function base64url(value: string): string {
 }
 
 /**
- * A JWS-shaped access token whose payload carries a decodable `exp`, so the
- * proactive refresh scheduler arms off it (the arbitrary opaque strings the
- * other tests use carry no `exp` and leave the scheduler disabled).
+ * A JWS-shaped access token whose payload carries a decodable `exp`, so the proactive refresh scheduler arms off it (the arbitrary opaque strings the other tests use carry no `exp` and leave the scheduler disabled).
  */
 function jwtExpiringInMs(fromNowMs: number): string {
   const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
@@ -629,9 +615,7 @@ describe("AuthService", () => {
     );
     expect(refreshCalls).toHaveLength(1);
 
-    // A later poll (every 30s, or on window focus) with the SAME
-    // now-current bearer must not re-spend another refresh rotation or
-    // throw indefinitely; it returns the unidentified listing instead.
+    // A later poll (every 30s, or on window focus) with the SAME now-current bearer must not re-spend another refresh rotation or throw indefinitely; it returns the unidentified listing instead.
     await expect(service.fetchUserSessions(liveQuerySignal())).resolves.toEqual(
       {
         sessions: [],
@@ -646,11 +630,7 @@ describe("AuthService", () => {
   });
 
   it("does not spend the repair refresh rotation for a read cancelled while the list is in flight", async () => {
-    // Identity fencing cannot cover this on its own: a revoke invalidating the
-    // panel query, an unmount, or a focus refetch superseding the 30s poll all
-    // leave the SAME account signed in, so every authority check still passes.
-    // Only the query's signal says nobody is waiting - and the repair below
-    // spends a single-use, cross-process refresh rotation.
+    // Identity fencing cannot cover this on its own: a revoke invalidating the panel query, an unmount, or a focus refetch superseding the 30s poll all leave the SAME account signed in, so every authority check still passes.
     const { service, host } = makeService();
     await host.tokenStore.signIn(
       { token: "legacy-token", refreshToken: "legacy-refresh" },
@@ -689,13 +669,7 @@ describe("AuthService", () => {
   });
 
   it("rotates the live lease in place when a snapshot re-signs-in the SAME user", async () => {
-    // "Same user => same context object" is load-bearing beyond this file:
-    // the remote-session cache keys its auth epoch on the lease SOURCE, and
-    // stream owners do not rebuild transports on a same-user event. Minting a
-    // fresh context here would retire the epoch under every live remote
-    // session while its holders keep using it, then duplicate the physical
-    // connection on the next acquire. The cross-window snapshot projection is
-    // one of the two paths that used to sidestep the same-user rotate.
+    // "Same user => same context object" is load-bearing beyond this file: the remote-session cache keys its auth epoch on the lease SOURCE, and stream owners do not rebuild transports on a same-user event.
     const { service, host } = makeService();
     await service.start();
     await deviceSignIn(service, host, "user-1-token");
@@ -951,9 +925,8 @@ describe("AuthService", () => {
 
   it("proactively refreshes the bearer on OS resume when the token is inside the lead window", async () => {
     const { service, host } = makeService();
-    // 5m of life left → inside the ~10m proactive lead window. During a sleep
-    // the scheduler's monotonic timer is frozen, so without a wake hook this
-    // bearer would rot; the OS resume signal must drive an immediate refresh.
+    // 5m of life left → inside the ~10m proactive lead window.
+    // During a sleep the scheduler's monotonic timer is frozen, so without a wake hook this bearer would rot; the OS resume signal must drive an immediate refresh.
     const nearExpiry = jwtExpiringInMs(5 * 60_000);
     await host.tokenStore.signIn(
       { token: nearExpiry, refreshToken: `${nearExpiry}-refresh` },
@@ -1086,11 +1059,8 @@ describe("AuthService", () => {
   });
 
   it("surfaces session-expired on refresh-rejected but keeps the credentials file", async () => {
-    // Startup validation gets a transient 5xx: NO verdict, so nothing is
-    // spent and no terminal error is claimed - the recovery loop waits for a
-    // real answer. Once validation actually REJECTS, the tick runs the locked
-    // rotate; its refresh 401 is the genuine session-expired.
-    // Virtualize so the auth-boundary retry budget is not real wall-clock.
+    // Startup validation gets a transient 5xx: NO verdict, so nothing is spent and no terminal error is claimed - the recovery loop waits for a real answer.
+    // Once validation actually REJECTS, the tick runs the locked rotate; its refresh 401 is the genuine session-expired.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
@@ -1255,14 +1225,11 @@ describe("AuthService", () => {
       expectedStored("offline-token", "offline-token-refresh"),
     );
     expect(service.getLastError()).toBeNull();
-    // Offline startup never reaches the refresh: a validation with NO verdict
-    // does not authorize a spend (only a REJECTED one does), so the whole
-    // offline window costs zero refresh generations.
+    // Offline startup never reaches the refresh: a validation with NO verdict does not authorize a spend (only a REJECTED one does), so the whole offline window costs zero refresh generations.
     expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
 
-    // The anti-latch: a transient startup failure arms the recovery loop
-    // rather than parking signed-out until an app restart. The next tick
-    // re-runs the validate cycle.
+    // The anti-latch: a transient startup failure arms the recovery loop rather than parking signed-out until an app restart.
+    // The next tick re-runs the validate cycle.
     const callsBefore = calls.length;
     await vi.advanceTimersByTimeAsync(1_000);
     for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
@@ -1272,10 +1239,8 @@ describe("AuthService", () => {
   });
 
   it("reconcile hands an expired-but-present file to the recovery loop, which rotates it in", async () => {
-    // A sibling wrote (or left) a file whose access token has expired past its
-    // 4h TTL while its 30d refresh token is perfectly good. The watcher-driven
-    // reconcile must not latch signed-out over it: it hands off to the
-    // recovery loop, whose locked rotate mints a fresh pair and signs in.
+    // A sibling wrote (or left) a file whose access token has expired past its 4h TTL while its 30d refresh token is perfectly good.
+    // The watcher-driven reconcile must not latch signed-out over it: it hands off to the recovery loop, whose locked rotate mints a fresh pair and signs in.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await service.start();
@@ -1316,10 +1281,8 @@ describe("AuthService", () => {
   });
 
   it("recovers the stored session once authn becomes reachable again", async () => {
-    // The RCA headline case: the app boots while its authn is still coming up
-    // (or a sibling dev slot owns the file and this slot's backend lags). The
-    // transient failure must not latch - when authn answers, the recovery
-    // loop re-validates and signs back in with no user action.
+    // The RCA headline case: the app boots while its authn is still coming up (or a sibling dev slot owns the file and this slot's backend lags).
+    // The transient failure must not latch - when authn answers, the recovery loop re-validates and signs back in with no user action.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
@@ -1356,13 +1319,8 @@ describe("AuthService", () => {
   });
 
   it("never resurrects a session deleted while the recovery tick's identity probe was in flight", async () => {
-    // Another dev slot signs out. That deletes the SHARED file for the whole
-    // machine (by design), and it reaches this process through the watcher -
-    // which deliberately does not touch `identityGeneration`, and installs no
-    // bearer. So every fence a recovery tick holds is still "current" when its
-    // `/user` call returns valid (the token stays valid server-side for hours
-    // after the local file is gone). Without a file re-check the tick would
-    // sign the UI back in with no later event to correct it.
+    // Another dev slot signs out.
+    // That deletes the SHARED file for the whole machine (by design), and it reaches this process through the watcher - which deliberately does not touch `identityGeneration`, and installs no bearer.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
@@ -1401,10 +1359,8 @@ describe("AuthService", () => {
   });
 
   it("does not burn refresh generations while identity validation is unreachable but refresh works", async () => {
-    // A half-reachable authn: /user unreachable, /auth/refresh alive. A
-    // validation with no verdict must NEVER authorize a spend - otherwise
-    // every recovery tick would rotate a fresh pair it can never validate,
-    // burning one refresh generation per backoff step.
+    // A half-reachable authn: /user unreachable, /auth/refresh alive.
+    // A validation with no verdict must NEVER authorize a spend - otherwise every recovery tick would rotate a fresh pair it can never validate, burning one refresh generation per backoff step.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
@@ -1452,11 +1408,8 @@ describe("AuthService", () => {
   });
 
   it("an in-flight recovery rotate stands down when the watcher adopts a newer session", async () => {
-    // While a recovery tick's locked rotate is in flight, another slot can
-    // sign a DIFFERENT user in; the watcher adopts that session without
-    // bumping the identity generation. The stale tick must stand down for the
-    // live bearer - never project its own outcome (here: session-expired)
-    // over user B's freshly-adopted session.
+    // While a recovery tick's locked rotate is in flight, another slot can sign a DIFFERENT user in; the watcher adopts that session without bumping the identity generation.
+    // The stale tick must stand down for the live bearer - never project its own outcome (here: session-expired) over user B's freshly-adopted session.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await service.start();
@@ -1578,10 +1531,8 @@ describe("AuthService", () => {
   });
 
   it("a file event that cannot be validated while signed out still arms recovery", async () => {
-    // The watcher fires for an externally-written session exactly while authn
-    // is briefly unreachable. Authn recovering writes no new file event, so
-    // dropping this one would leave the app signed out forever - reconcile
-    // must hand the adoption to the recovery loop instead.
+    // The watcher fires for an externally-written session exactly while authn is briefly unreachable.
+    // Authn recovering writes no new file event, so dropping this one would leave the app signed out forever - reconcile must hand the adoption to the recovery loop instead.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await service.start();
@@ -1677,9 +1628,7 @@ describe("AuthService", () => {
 
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
-    // `refresh-rejected` is terminal for the SESSION (session-expired copy),
-    // but only an explicit sign-out destroys the credentials file - so the
-    // pair survives for a later re-auth (H1 / §5).
+    // `refresh-rejected` is terminal for the SESSION (session-expired copy), but only an explicit sign-out destroys the credentials file - so the pair survives for a later re-auth (H1 / §5).
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("rejected-token", "rejected-token-refresh"),
     );
@@ -1696,9 +1645,7 @@ describe("AuthService", () => {
 
     await service.signIn();
 
-    // signIn() now runs the device flow directly: it starts the main-process
-    // authorize+poll and opens the pre-filled verification page (not a redirect
-    // sign-in URL).
+    // signIn() now runs the device flow directly: it starts the main-process authorize+poll and opens the pre-filled verification page (not a redirect sign-in URL).
     expect(host.deviceFlow.startCalls).toBe(1);
     expect(host.openedExternalLinks).toEqual([
       MOCK_DEVICE_VERIFICATION_URI_COMPLETE,
@@ -1821,11 +1768,8 @@ describe("AuthService", () => {
   });
 
   it("surfaces sign-in-failed when a device-poll token validation hits a network error", async () => {
-    // Auth-boundary validation retries transient failures on a bounded
-    // exponential backoff. Drive those
-    // windows with fake timers so the suite does not sleep real wall-clock.
-    // Install before constructing the subject so any timer the service arms
-    // is already virtualized (suite afterEach restores real timers).
+    // Auth-boundary validation retries transient failures on a bounded exponential backoff.
+    // Drive those windows with fake timers so the suite does not sleep real wall-clock.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await service.start();
@@ -1846,7 +1790,7 @@ describe("AuthService", () => {
       refreshToken: "net-fail-token-refresh",
     });
 
-    // Advance only the retry delays — not the device_code TTL (~600s) that
+    // Advance only the retry delays - not the device_code TTL (~600s) that
     // signIn arms as a backstop (runAllTimersAsync would fire that too).
     for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
       await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
@@ -2244,10 +2188,8 @@ describe("AuthService", () => {
       await service.start();
       await deviceSignIn(service, host, "still-valid");
 
-      // Revalidation's access-only `/user` lookup retries transient 5xx on the
-      // same bounded schedule as sign-in validation. Virtualize
-      // after the signed-in subject exists so deviceSignIn's real-timer
-      // waitFor is unaffected; suite afterEach restores real timers.
+      // Revalidation's access-only `/user` lookup retries transient 5xx on the same bounded schedule as sign-in validation.
+      // Virtualize after the signed-in subject exists so deviceSignIn's real-timer waitFor is unaffected; suite afterEach restores real timers.
       vi.useFakeTimers();
       restoreFetch();
       const validationCalls: string[] = [];
@@ -2421,9 +2363,8 @@ describe("AuthService", () => {
         await originalDelete();
       };
 
-      // Replace the whole context/lease while the old AuthnV3 validation is
-      // still pending. The stale validation must not clear or mutate this new
-      // session when it eventually resolves.
+      // Replace the whole context/lease while the old AuthnV3 validation is still pending.
+      // The stale validation must not clear or mutate this new session when it eventually resolves.
       await service.signOut();
       await deviceSignIn(service, host, "replacement-token");
 
@@ -2454,11 +2395,8 @@ describe("AuthService", () => {
 
   describe("credentials file write before signed-in (owner gate)", () => {
     it("writes tokenStore.signIn BEFORE flipping to signed-in on the device happy path", async () => {
-      // Device happy-path characterization:
-      //   signIn → device poll authorized → applyTokenInternal →
-      //   tokenStore.signIn (file write) → applySignedIn.
-      // Pins that the credentials file is written while the store is still
-      // "signing-in" (BEFORE the signed-in projection enables host RPCs).
+      // Device happy-path characterization: signIn → device poll authorized → applyTokenInternal → tokenStore.signIn (file write) → applySignedIn.
+      // Pins that the credentials file is written while the store is still "signing-in" (BEFORE the signed-in projection enables host RPCs).
       const { service, host } = makeService();
       const statusAtWrite: string[] = [];
       const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
@@ -2604,9 +2542,7 @@ describe("AuthService", () => {
   });
 
   describe("identity-transition generation fencing", () => {
-    // The attempt epoch is consumed before the finalization's token-save and
-    // provisioning awaits, so these races are exactly the window only the
-    // identity generation can fence.
+    // The attempt epoch is consumed before the finalization's token-save and provisioning awaits, so these races are exactly the window only the identity generation can fence.
 
     it("a sign-out during the token save wins over the in-flight finalization", async () => {
       const { service, host } = makeService();
@@ -2639,10 +2575,8 @@ describe("AuthService", () => {
       // The finalization validated the token and is now awaiting the save.
       await saveStarted;
 
-      // Sign out while the save is in flight. Its generation bump lands
-      // synchronously; the storage clear is SERIALIZED behind the hanging
-      // save (last-dispatched op owns the final on-disk state), so the
-      // sign-out settles only after the save is released.
+      // Sign out while the save is in flight.
+      // Its generation bump lands synchronously; the storage clear is SERIALIZED behind the hanging save (last-dispatched op owns the final on-disk state), so the sign-out settles only after the save is released.
       const signOutSettled = service.signOut();
       releaseSave();
       await signOutSettled;
@@ -2716,9 +2650,7 @@ describe("AuthService", () => {
 
     it("an overlapping start() sharing the live generation cannot clobber an authorized sign-in", async () => {
       const { service, host } = makeService();
-      // A stale, independently-valid stored session: if a straggling start()
-      // rehydration is not stopped, it has a real (different) identity to
-      // wrongly adopt.
+      // A stale, independently-valid stored session: if a straggling start() rehydration is not stopped, it has a real (different) identity to wrongly adopt.
       await host.tokenStore.signIn(
         { token: "stale-token", refreshToken: "stale-token-refresh" },
         { id: "stale-user", email: "stale@example.com", name: "Stale User" },
@@ -2744,10 +2676,7 @@ describe("AuthService", () => {
 
       await service.signIn();
 
-      // start() invoked AFTER signIn() has already bumped identityGeneration,
-      // with nothing bumping it again before the race below - it captures the
-      // SAME generation the live attempt is using, so only
-      // `authResolvedDuringStart` (not the generation fence) can stop it.
+      // start() invoked AFTER signIn() has already bumped identityGeneration, with nothing bumping it again before the race below - it captures the SAME generation the live attempt is using, so only `authResolvedDuringStart` (not the generation fence) can stop it.
       const overlappingStart = service.start();
       await staleValidateStarted;
 
@@ -2827,10 +2756,8 @@ describe("AuthService", () => {
       await service.start();
       expect(useAuthStore.getState().status).toBe("signed-in");
 
-      // The wake-driven proactive refresh dispatches and hangs on /refresh
-      // inside `tokenStore.rotate`. `delete` is serialized behind that rotate
-      // (AuthTokenStore op chain), so signOut must be started while the rotate
-      // is in flight and the hang must be released before signOut can finish.
+      // The wake-driven proactive refresh dispatches and hangs on /refresh inside `tokenStore.rotate`.
+      // `delete` is serialized behind that rotate (AuthTokenStore op chain), so signOut must be started while the rotate is in flight and the hang must be released before signOut can finish.
       host.emitSystemResumed({ backgroundedForMs: null });
       await refreshStarted;
 
@@ -2848,9 +2775,8 @@ describe("AuthService", () => {
       );
       await signOutPromise;
 
-      // Identity-generation fence: the rotate tail must not re-project signed-in
-      // after an explicit sign-out won. The file is gone because delete ran after
-      // the in-flight rotate finished (op-chain serialization).
+      // Identity-generation fence: the rotate tail must not re-project signed-in after an explicit sign-out won.
+      // The file is gone because delete ran after the in-flight rotate finished (op-chain serialization).
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(service.getCurrentSessionSnapshot().token).toBeNull();
       expect(await host.tokenStore.get()).toBeNull();
@@ -2931,16 +2857,13 @@ describe("AuthService", () => {
       try {
         await service.start();
         await deviceSignIn(service, host, "live-token");
-        // The injected observation point, checked BEFORE the act: nothing has
-        // dropped a cache yet, so the assertion after cannot be satisfied by a
-        // recorder that was already non-empty.
+        // The injected observation point, checked BEFORE the act: nothing has dropped a cache yet, so the assertion after cannot be satisfied by a recorder that was already non-empty.
         expect(deleted.names).toEqual([]);
 
         await service.signOut();
 
-        // Leaving the account means leaving the content. The part store is
-        // shared across every viewer on the installation, which is sound while
-        // they are signed in and is not sound as a residue.
+        // Leaving the account means leaving the content.
+        // The part store is shared across every viewer on the installation, which is sound while they are signed in and is not sound as a residue.
         await vi.waitFor(() =>
           expect(deleted.names).toEqual(["traycer-chat-parts-v1"]),
         );
@@ -2960,9 +2883,8 @@ describe("AuthService", () => {
 
         await service.signOut();
 
-        // Still signed in, so the content is still theirs. The clear rides the
-        // path AFTER the delete lands, not the attempt - a failed sign-out that
-        // wiped the cache would cost a cold read for a session that never ended.
+        // Still signed in, so the content is still theirs.
+        // The clear rides the path AFTER the delete lands, not the attempt - a failed sign-out that wiped the cache would cost a cold read for a session that never ended.
         expect(useAuthStore.getState().status).toBe("signed-in");
         expect(deleted.names).toEqual([]);
       } finally {
@@ -3077,7 +2999,7 @@ describe("AuthService", () => {
       await expect(service.start()).resolves.toBeUndefined();
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
-      // File kept — automatic failure never deletes.
+      // File kept - automatic failure never deletes.
       expect(await host.tokenStore.get()).toEqual(
         expectedStored("stale-token", "stale-token-refresh"),
       );
@@ -3162,7 +3084,7 @@ describe("AuthService", () => {
         expect(useAuthStore.getState().status).toBe("signed-out");
       });
       expect(service.getCurrentSessionSnapshot().token).toBeNull();
-      // Reconcile never writes — file stays absent.
+      // Reconcile never writes - file stays absent.
       expect(await host.tokenStore.get()).toBeNull();
     });
 
@@ -3201,7 +3123,7 @@ describe("AuthService", () => {
         );
       });
       expect(useAuthStore.getState().status).toBe("signed-in");
-      // Still the external write — reconcile did not re-signIn.
+      // Still the external write - reconcile did not re-signIn.
       expect(await host.tokenStore.get()).toEqual(
         expect.objectContaining({ token: "external-rotated" }),
       );
@@ -3255,7 +3177,7 @@ describe("AuthService", () => {
       });
       expect(service.getCurrentSessionSnapshot().token).toBe("fresh-sign-in");
 
-      // Release the stale reconcile's validation — it must drop on generation.
+      // Release the stale reconcile's validation - it must drop on generation.
       deferredValidate.resolve(await okWithProfile());
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
@@ -3493,16 +3415,7 @@ describe("AuthService", () => {
     });
   });
 
-  /**
-   * Which bearers may be read as a SERVER-TIME sample (clock-skew tracker,
-   * `iat` input).
-   *
-   * An `iat` is a reading of authn's clock only while the token's age is
-   * bounded by the round trip that just minted it. For anything else it is the
-   * token's AGE, and feeding that to the tracker reports a skew that does not
-   * exist - an app-wide false banner, plus every transport made eligible to
-   * park on the next unrelated auth failure.
-   */
+  /** Which bearers may be read as a SERVER-TIME sample (clock-skew tracker, `iat` input). */
   describe("server-time sampling from adopted bearers", () => {
     /** A JWT issued `agoMs` in the past and still valid for an hour. */
     function jwtIssuedAgo(agoMs: number): string {
@@ -3526,17 +3439,12 @@ describe("AuthService", () => {
     }
 
     it("does NOT sample a stale-but-valid bearer adopted from the credentials file", async () => {
-      // The scenario, and it is an ordinary one on a CORRECT clock: window B
-      // mints a token; window A sits backgrounded past the 5-minute threshold,
-      // reconciles, and adopts it. The adopted token's `iat` is legitimately
-      // that old.
+      // The scenario, and it is an ordinary one on a CORRECT clock: window B mints a token; window A sits backgrounded past the 5-minute threshold, reconciles, and adopts it.
+      // The adopted token's `iat` is legitimately that old.
       resetAppClockToOk();
       const staleButValid = jwtIssuedAgo(30 * 60_000);
 
-      // POSITIVE CONTROL, on a throwaway tracker so the singleton stays clean:
-      // this token IS old enough to move a verdict if anything samples it, so
-      // the assertion below cannot pass merely because the fixture was too
-      // fresh to matter.
+      // POSITIVE CONTROL, on a throwaway tracker so the singleton stays clean: this token IS old enough to move a verdict if anything samples it, so the assertion below cannot pass merely because the fixture was too fresh to matter.
       const control = new ServerTimeOffsetTracker({
         nowMs: () => Date.now(),
         monotonicNowMs: () => performance.now(),

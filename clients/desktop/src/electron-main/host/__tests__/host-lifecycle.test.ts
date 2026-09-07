@@ -66,11 +66,6 @@ import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
 
-// These fixtures deliberately use synthetic PIDs. Their endpoint listener is
-// the positive readiness evidence under test; an OS liveness result is
-// unavailable for a synthetic pid, just as it can be unavailable for a real
-// host because of permissions or a failed platform probe. Model that state
-// locally, so no unrelated test can inherit the test-only global seam.
 function useIndeterminateProcessLiveness(): () => void {
   const restore = __setAsyncProcessLivenessReaderForTest(
     async () => "indeterminate",
@@ -128,10 +123,7 @@ describe("readPidMetadata", () => {
   });
 });
 
-// Review finding 4: the retry ladder must distinguish a CONFIRMED-absent file
-// (deliberate stop → clear the ladder) from a present-but-indeterminate read (a
-// partial write / transient error → keep retrying). Collapsing both to `null`
-// let a coalesced watcher edge that landed mid-write silently clear the ladder.
+// Review finding 4: the retry ladder must distinguish a CONFIRMED-absent file (deliberate stop → clear the ladder) from a present-but-indeterminate read (a partial write / transient.
 describe("readPidMetadataState", () => {
   it("reports `absent` only for a missing file (ENOENT)", async () => {
     const state = await readPidMetadataState(
@@ -140,11 +132,7 @@ describe("readPidMetadataState", () => {
     expect(state.kind).toBe("absent");
   });
 
-  // A non-ENOENT read failure (EISDIR here - deterministic regardless of
-  // root/CI, unlike a chmod-based EACCES) must classify as `indeterminate`,
-  // never `absent`. If every read error collapsed to `absent`, a transient
-  // EACCES/EIO on a present file would clear the retry ladder exactly like a
-  // deliberate stop - the bug this discrimination exists to prevent.
+  // A non-ENOENT read failure (EISDIR here - deterministic regardless of root/CI, unlike a chmod-based EACCES) must classify as `indeterminate`, never `absent`.
   it("reports `indeterminate` for a non-ENOENT read failure", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
     const path = join(dir, "pid.json");
@@ -209,11 +197,6 @@ describe("readPidMetadataState", () => {
   });
 });
 
-// Directly exercises the real TCP probe that `HostLifecycle` uses by default
-// (`reachabilityProbe: undefined`). Deterministic - a single listener for the
-// reachable case, an immediate ECONNREFUSED on a freed port for the
-// unreachable case - without the close/rebind-same-port race that made the
-// orchestration test flaky.
 describe("canReachHostWebsocketUrl", () => {
   it("returns true when the endpoint completes a WebSocket handshake", async () => {
     const { server, port } = await listenOnEphemeralPort();
@@ -299,10 +282,6 @@ describe("canReachHostWebsocketUrl", () => {
 });
 
 describe("HostLifecycle.bootstrap (metadata-first)", () => {
-  // Ticket 7c890b39 - steady-state Desktop boot is metadata-first. The
-  // legacy platform service-manager dispatch was deleted from the desktop
-  // tree alongside `electron-main/service/`; bootstrap now reads pid.json
-  // and probes the websocket endpoint, nothing else.
 
   it("publishes a snapshot from reachable PID metadata", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
@@ -472,23 +451,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     }
   });
 
-  // traycer#961 / #996 / #1001, int #4845: on a machine where no host has
-  // EVER been installed, the launch converge refuses to provision before
-  // sign-in, so no provisioning lane exists to re-arm the quiet budget - the
-  // wait below could only ever run to completion and then report that a host
-  // "did not start" when nothing asked it to. That ERROR rides in the
-  // desktop.log attached to every fresh-install support report (it misdirected
-  // three field investigations) and holding bootstrap open delays the deferred
-  // work gated on it.
-  //
-  // The budget here is 30s against a 3s race: a regression to the waiting path
-  // fails this test outright rather than merely slowing it down.
   it("skips the readiness wait entirely when no host is installed on this machine", async () => {
     const parent = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
-    // A never-installed machine has NO host root at all - the CLI creates it
-    // during provisioning. Rooting the layout at an absent nested directory
-    // is what makes this the real fresh-install shape: watching an existing
-    // `mkdtemp` root would pass even with the ENOENT bug present.
     const dir = join(parent, "host");
     const layout = {
       rootDir: dir,
@@ -535,16 +499,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors).toEqual([]);
       expect(lifecycle.getSnapshot()).toBeNull();
 
-      // The watcher still went in - against a root that did not exist when
-      // bootstrap started. That is what picks the host up once the user signs
-      // in and provisioning runs; skipping the wait must not cost the
-      // auto-heal, and an ENOENT here would leave the desktop blind to a host
-      // that appears later.
       reachable = true;
-      // Exactly what provisioning does after sign-in: create the host root,
-      // then publish pid.json into it. Creating it HERE rather than in the
-      // fixture is what isolates the watcher - if bootstrap failed to install
-      // one, these writes land silently and the snapshot never converges.
+      // Creating it HERE rather than in the fixture is what isolates the watcher - if bootstrap failed to install one, these writes land silently and the snapshot never converges.
       await mkdir(dir, { recursive: true });
       await writeFile(
         layout.pidMetadataFile,
@@ -556,11 +512,6 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         }),
         "utf8",
       );
-      // Comfortably inside this test's own 10s budget so a missing watcher
-      // fails on the snapshot assertion below - naming the actual cause -
-      // rather than as an opaque test timeout. The watcher fires in
-      // milliseconds when it exists; the margin is for a loaded CI box where
-      // event-loop and fs.watch latency spike.
       const deadline = Date.now() + 5_000;
       while (lifecycle.getSnapshot() === null && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -576,11 +527,6 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     }
   }, 10_000);
 
-  // traycer#862: a fresh install downloaded ~800MB and extracted a 2.2GB
-  // runtime tree - 3m17s on that machine - and the flat wall-clock budget
-  // reported "Could not start Traycer Host" at the 60s mark, over an install
-  // that was still visibly running. The budget is quiet-time, not wall-clock:
-  // installer progress re-arms it, and only silence spends it.
   it("holds the startup budget open while host provisioning reports progress", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
     const layout = {
@@ -643,11 +589,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HOST_NOT_READY");
       expect(elapsedMs).toBeGreaterThanOrEqual(progressWindowMs);
-      // ...and the budget is still a BUDGET once progress stops. Outliving the
-      // progress window alone cannot tell "re-armed, then spent the full quiet
-      // budget" apart from "re-armed, then fired the instant the stream went
-      // quiet" - which is the regression a quiet-time deadline can actually
-      // have. Measuring from the last event is what separates them.
+      // Outliving the progress window alone cannot tell "re-armed, then spent the full quiet budget" apart from "re-armed, then fired the instant the stream went quiet".
       expect(Date.now() - lastProgressAt).toBeGreaterThanOrEqual(
         readyTimeoutMs,
       );
@@ -659,11 +601,6 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     }
   });
 
-  // The build-stamp gate was removed: a reachable host is surfaced regardless
-  // of its version stamp, and the renderer negotiates protocol compatibility
-  // over the WS handshake. This is what prevents the permanent "Starting Local
-  // Host" loop when the Desktop build stamp and the host release version differ
-  // but are still compatible.
   it("surfaces a reachable host whose stamp differs from config.version on a non-production slot", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
     const layout = {
@@ -1022,10 +959,6 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
 
-      // ONE failed probe against a live process changes nothing the renderer
-      // can see. This assertion used to demand `null` - and that is the
-      // 2026-08-11 outage in one line: a single unanswered loopback probe
-      // telling the renderer a host it was actively using no longer exists.
       reachable = false;
       await lifecycle.reloadSnapshotFromDisk();
       expect(lifecycle.getSnapshot()?.availability).toBe("available");

@@ -22,9 +22,7 @@ interface TrustEmitters {
 }
 
 /**
- * The desktop platform bridge, with only the two subscriptions this reader
- * probes for. Anything else on it is irrelevant to whether the refusal
- * reaches a person.
+ * Desktop bridge stub with only the two subscriptions this reader probes.
  */
 function renderWithTrustBridge(): TrustEmitters {
   const handlers: {

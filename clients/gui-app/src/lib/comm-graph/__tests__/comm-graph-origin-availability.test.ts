@@ -61,9 +61,7 @@ describe("isCommGraphOriginAvailable", () => {
   });
 
   it("lets a ready live session outrank an offline verdict", () => {
-    // The caller-supplied answer is the whole point of the parametric form: a
-    // client holding an open session has firsthand proof the origin is up,
-    // and the jump must not be disabled by a stale cloud verdict.
+    // The caller-supplied answer is the whole point of the parametric form: a client holding an open session has firsthand proof the origin is up, and the jump must not be disabled by a stale cloud verdict.
     expect(
       isCommGraphOriginAvailable(
         { findById: () => entry("not-dialable") },

@@ -16,21 +16,6 @@ import {
   sentinelPriorDecode,
 } from "../durable/repair";
 
-/**
- * Keyed sentinel decode (§I2a job 2) and canonical repair (§I2a second half).
- *
- * **Every case here is driven by a byte sequence through the real decoder**,
- * not by a hand-built `BooleanSentinelRecord`. This changeset's dominant defect
- * class is fixture vacuity — assertions that are perfectly sound over inputs
- * production cannot produce — and a record object handed straight to a
- * classifier proves nothing about what the decoder does with bytes.
- *
- * The repaired side of every round trip is produced by the **real encoder**
- * (`canonicalBooleanSentinelBytes`) for the same reason: if the encoder and
- * decoder ever disagree about "canonical shape", repair stops converging and
- * the loop this arm exists to close reopens silently.
- */
-
 const bytes = (text: string): DurableBytes => ({ kind: "bytes", text });
 const KEYS: readonly BooleanSentinelKey[] = ["removedByUser", "stoppedByUser"];
 const TARGETS: readonly DurableRepairTarget[] = [
@@ -38,22 +23,12 @@ const TARGETS: readonly DurableRepairTarget[] = [
   "stopped-by-user",
 ];
 
-/**
- * The shipped desktop writer's byte-for-byte output:
- * `host-removal-state.ts` → `createJsonFileStore` → `JSON.stringify(v, null, 2)`.
- * The writer↔reader pinning that *runs* that writer lives in
- * `clients/desktop/src/electron-main/host/__tests__/host-removal-state-sentinel-contract.test.ts`
- * (the only place it can run); this is the same shape, kept here so the keyed
- * rules are stated against real bytes rather than a convenient one-liner.
- */
 const SHIPPED_REMOVED_TRUE = '{\n  "removedByUser": true\n}';
 const SHIPPED_REMOVED_FALSE = '{\n  "removedByUser": false\n}';
 
 describe("decodeBooleanSentinel is keyed to the sentinel it is reading", () => {
-  // The measured defect. `observed(true)` is the ONLY verdict that suppresses
-  // a start, so a stray or mis-keyed file decoding to it silently prevents the
-  // host from ever running — on macOS the planner goes straight to
-  // `none / already-removed`.
+  // The measured defect.
+  // `observed(true)` is the only verdict that suppresses a start, so a stray or mis-keyed file decoding to it silently prevents the host from ever running - on macOS the planner goes straight to `none / already-removed`.
   it("rejects the other sentinel's key rather than honouring it", () => {
     expect(
       decodeBooleanSentinel(bytes('{"stoppedByUser":true}'), "removedByUser"),
@@ -86,16 +61,8 @@ describe("decodeBooleanSentinel is keyed to the sentinel it is reading", () => {
   });
 
   /**
-   * The canonical envelope carries the fact twice (`value` + the file's own
-   * legacy key, so the shipped desktop reader can still read it). Two
-   * encodings of one fact can therefore contradict — the encoder never does
-   * it, a torn write or a hand edit does. Neither key wins: a record that
-   * disagrees with itself is unattributable, same principle as the
-   * cross-sentinel rule.
-   *
-   * This is the shape that matters most in the `true`/`false` direction: if
-   * the reader resolved it by whichever key it checked first, a half-written
-   * file would decide whether the user's removal is honoured.
+   * The canonical envelope carries the fact twice (`value` + the file's own legacy key, so the shipped desktop reader can still read it).
+   * Two encodings of one fact can therefore contradict - the encoder never does it, a torn write or a hand edit does.
    */
   it("rejects a record that disagrees with itself", () => {
     expect(
@@ -110,7 +77,7 @@ describe("decodeBooleanSentinel is keyed to the sentinel it is reading", () => {
         "removedByUser",
       ),
     ).toEqual({ kind: "corrupt" });
-    // Unversioned too — the disagreement is the defect, not the envelope.
+    // Unversioned too - the disagreement is the defect, not the envelope.
     expect(
       decodeBooleanSentinel(
         bytes('{"value":true,"stoppedByUser":false}'),
@@ -209,9 +176,7 @@ describe("canonical repair encoder", () => {
     }
   });
 
-  // A repaired file copied to the other sentinel's path is unattributable. The
-  // legacy key that makes it readable to the shipped desktop reader is also
-  // what stops it masquerading as the other sentinel.
+  // A repaired file copied to the other sentinel's path is unattributable.
   it("is corrupt at the other sentinel's key", () => {
     for (const target of TARGETS) {
       const otherKey: BooleanSentinelKey =
@@ -233,7 +198,7 @@ describe("canonical repair encoder", () => {
 
 describe("repairCanonical", () => {
   // Prior decode is derived from bytes, so the evidence doctor prints is the
-  // verdict the decoder actually reached — not a label chosen at the call site.
+  // verdict the decoder actually reached - not a label chosen at the call site.
   it.each([
     ['{"v":1,"value":true}', "observed"],
     ["{ not json", "corrupt"],
@@ -314,14 +279,7 @@ describe("repairCanonical", () => {
   });
 });
 
-/**
- * The harm this arm exists to remove, played out over ticks against a
- * simulated disk. `host stop` on a faulted stop sentinel: without a repair the
- * bytes never change, so the monitor re-reads the same fault every tick, sees
- * no refusal, and restarts the host forever — the user cannot stop their host,
- * and the undo the permissive direction is justified by is the mechanism that
- * is broken.
- */
+/** The harm this arm exists to remove, played out over ticks against a simulated disk. */
 describe("stop converges after one repair, from every faulted start state", () => {
   const monitorWouldRestart = (disk: string): boolean => {
     const decoded = decodeBooleanSentinel(bytes(disk), "stoppedByUser");
@@ -342,7 +300,7 @@ describe("stop converges after one repair, from every faulted start state", () =
   it.each(faulted)("repairs %s and stops looping", (start) => {
     let disk = start;
 
-    // Tick 1 — the fault is real: the monitor would restart the stopped host.
+    // Tick 1 - the fault is real: the monitor would restart the stopped host.
     expect(monitorWouldRestart(disk)).toBe(true);
 
     // `stop` establishes stopped-by-user := true. The effect rewrites rather
@@ -357,7 +315,7 @@ describe("stop converges after one repair, from every faulted start state", () =
     expect(effect.kind).toBe("repair-canonical");
     disk = canonicalBooleanSentinelBytes(effect.target, effect.value);
 
-    // Tick 2 and every tick after — the refusal is readable and honoured.
+    // Tick 2 and every tick after - the refusal is readable and honoured.
     expect(monitorWouldRestart(disk)).toBe(false);
     expect(decodeBooleanSentinel(bytes(disk), "stoppedByUser")).toEqual({
       kind: "observed",
@@ -378,9 +336,7 @@ describe("stop converges after one repair, from every faulted start state", () =
     );
   });
 
-  // `restart` establishes the same sentinel to `false`, and must also leave
-  // readable bytes behind — otherwise restart-after-a-corrupt-stop leaves the
-  // fault on disk for the next `stop` to trip over.
+  // `restart` establishes the same sentinel to `false`, and must also leave readable bytes behind - otherwise restart-after-a-corrupt-stop leaves the fault on disk for the next `stop` to trip over.
   it("clears through the same arm, leaving canonical bytes", () => {
     const cleared = repairCanonical("stopped-by-user", false, {
       kind: "indeterminate",

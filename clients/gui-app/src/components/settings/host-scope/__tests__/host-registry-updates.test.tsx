@@ -1,11 +1,5 @@
-/**
- * `ApplyNowControl` refusal composition: the drain-gate force names a count
- * ("Apply now — ends N sessions") and destroys that many sessions on
- * confirm. This pins the review's ask directly — with the dialog open,
- * `liveBusySessionCount` changing underneath it (to a different number, and
- * to `null`) must make confirming a NO-OP and change the description copy,
- * following the same arm-time-capture pattern `targetMoved` already uses.
- */
+/** This pins the review's ask directly - with the dialog open, `liveBusySessionCount` changing underneath it
+ * (to a different number, and to `null`) must make confirming a NO-OP and change the description copy. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -29,15 +23,8 @@ vi.mock("@/hooks/auth/use-update-host-version-mutation", () => ({
 import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 
-/**
- * The drain gate as the Overview actually mounts it.
- *
- * `HostRegistryUpdates` used to own both the policy switch and the drain gate
- * and to create the mutation itself. Those are now two components — the switch
- * lives behind Advanced, the gate stays on the identity card — and the caller
- * owns the mutation. This stands in for that caller so every assertion below
- * still runs against the mocked mutation, unchanged.
- */
+/** The drain gate as the Overview actually mounts it. Those are now two components - the switch lives behind
+ * Advanced, the gate stays on the identity card - and the caller owns the mutation. */
 function MountedDrainGate(props: {
   readonly item: HostListItem;
   readonly liveBusySessionCount: number | null;
@@ -100,8 +87,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
       /ends every open terminal and agent session/i,
     );
 
-    // The count moves while the dialog stands open — a session opened,
-    // or the read simply changed between renders.
+    // The count moves while the dialog stands open - a session opened, or the read simply changed between renders.
     rerender(
       <MountedDrainGate
         item={item}
@@ -117,18 +103,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
   });
 
   it("withdraws the whole drain-gate force (trigger AND open dialog) when the display count is lost — never a stale confirm surface", () => {
-    // Losing the DISPLAY read is still the strongest outcome:
-    // `deriveUpdateAffordance` nulls `applyNowLabel` whenever
-    // `liveBusySessionCount` is `null` while `updateState` is `pending`, and
-    // `HostUpdateDrainGateRow` gates the ENTIRE block (trigger button,
-    // `ApplyNowControl`, and therefore any open dialog) on
-    // `applyNowLabel !== null`. So this does not leave a stale, unconfirmable
-    // dialog behind — it unmounts the affordance outright, dialog included.
-    //
-    // What is NOT covered by that unmount is the settled read going away on
-    // its own while the display read survives, which is what a refetch does.
-    // That case is the next two tests, and it is why this component takes two
-    // numbers.
+    // Losing the display read is still the strongest outcome.
     const item = pendingRegistryItem("host-b");
     const { rerender } = render(
       <MountedDrainGate
@@ -176,15 +151,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
   });
 });
 
-/**
- * The display/destructive split (repair round 3, finding 4).
- *
- * A retained-through-refetch count is good enough to READ and not good enough
- * to DESTROY things by. The two tests below are the two halves of that
- * sentence, and they are deliberately adjacent: pass them the same props and
- * one asserts the row still says "2", the other asserts nothing can be armed
- * from it.
- */
+/** The display/destructive split (repair round 3, finding 4). */
 describe("ApplyNowControl — refetch splits display from arming", () => {
   it("keeps rendering the retained count while a replacement read is in flight", () => {
     const item = pendingRegistryItem("host-d");
@@ -222,11 +189,8 @@ describe("ApplyNowControl — refetch splits display from arming", () => {
   });
 
   it("auto-disarms an already-open confirmation when a refetch starts", () => {
-    // The concrete failure this closes: armed at 2, a focus refetch begins
-    // while the host is actually at 5, and the confirm-time guard compares the
-    // retained 2 to the armed 2, agrees with itself, and ends five sessions
-    // while promising two. With the settled read the guard has nothing to
-    // agree with, so it refuses.
+    // The concrete failure this closes: armed at 2, a focus refetch begins while the host is actually at 5, and
+    // the confirm-time guard compares the retained 2 to the armed 2, agrees with itself.
     const item = pendingRegistryItem("host-f");
     const { rerender } = render(
       <MountedDrainGate
@@ -269,9 +233,8 @@ describe("ApplyNowControl — same-total category swap between arm and confirm",
   };
 
   it("refuses to confirm when the named kinds change and the total stays 2", () => {
-    // The defect: the button said "ends 2 agents", those agents finished, two
-    // terminals started, the settled COUNT was still 2, and confirm ended
-    // terminals the user was never told about.
+    // The defect: the button said "ends 2 agents", those agents finished, two terminals started, the settled count
+    // was still 2, and confirm ended terminals the user was never told about.
     const item = pendingRegistryItem("host-g");
     const { rerender } = render(
       <MountedDrainGate

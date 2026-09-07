@@ -153,10 +153,6 @@ describe("ChatEvent persistence schema", () => {
   });
 
   it("rejects an imported chat whose source directory is empty", () => {
-    // The marker discloses the source directory through a tooltip, and an
-    // empty label renders no tooltip at all - so this would be a provenance
-    // row naming no provenance. A folderless import keeps its path, so there
-    // is no legitimate producer of one.
     expect(() =>
       chatImportedMetadataSchema.parse({
         sourceProvider: "claude",

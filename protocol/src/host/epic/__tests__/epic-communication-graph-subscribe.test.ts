@@ -15,19 +15,8 @@ import {
 } from "@traycer/protocol/host/epic/communication-graph";
 
 /**
- * `epic.communicationGraph.subscribe@1.0` contract fixtures + the
- * optional-method degrade guard.
- *
- * The degrade case is the load-bearing one: this method ships AFTER
- * host-v1.0.0, so a host in the field may not advertise it at all. Stream
- * compatibility is evaluated per method at subscribe time, which is what keeps
- * that from being handshake-fatal - the Communication Graph tile loses that
- * one host's edges, every other subscription on the connection is untouched.
- *
- * On the frame fixtures: `snapshot` is a BOUNDED first batch, not the whole
- * backlog, so frame kind carries no activity semantics - these fixtures are
- * written to reflect that rather than the older "snapshot = everything, events
- * = live" reading.
+ * `epic.communicationGraph.subscribe@1.0` contract fixtures + the optional-method degrade guard.
+ * Stream compatibility is evaluated per method at subscribe time, which is what keeps that from being handshake-fatal - the Communication Graph tile loses that one host's edges, every other subscription on the connection.
  */
 
 const METHOD = "epic.communicationGraph.subscribe";
@@ -126,11 +115,8 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
   });
 
   it("carries a bounded snapshot plus overflow events as one ascending sequence", () => {
-    // The delivery contract is about ORDER and COMPLETENESS, not frame kind:
-    // the snapshot is a bounded FIRST BATCH, and the rest of the backlog
-    // continues as `event` frames in the same strictly id-ascending sequence.
-    // This fixture encodes that shape - the ordering and exactly-once
-    // properties themselves are resolver behaviour and are pinned host-side.
+    // The delivery contract is about ORDER and COMPLETENESS, not frame kind: the snapshot is a bounded FIRST BATCH, and the rest of the backlog continues as `event` frames in the same strictly id-ascending sequence.
+    // This fixture encodes that shape - the ordering and exactly-once properties themselves are resolver behaviour and are pinned host-side.
     const snapshot = epicCommunicationGraphSubscribeServerFrameSchema.parse({
       kind: "snapshot",
       epicId: "epic-1",
@@ -138,9 +124,6 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
         { ...A2A_MESSAGE_EVENT, id: 11 },
         { ...A2A_MESSAGE_EVENT, id: 12 },
       ],
-      // The log's head at handoff covers the overflow below: 13 and 14 are
-      // pre-existing rows the bounded snapshot could not carry, and headId is
-      // what lets a client class them as history rather than new activity.
       headId: 14,
       hasBinaryPayload: false,
     });
@@ -181,9 +164,7 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
   });
 
   it("rejects the file_write kind this minor no longer carries", () => {
-    // File-write capture was descoped: the graph is A2A-only, and a row whose
-    // kind this contract cannot represent must fail the frame rather than
-    // arrive with every file field missing.
+    // File-write capture was descoped: the graph is A2A-only, and a row whose kind this contract cannot represent must fail the frame rather than arrive with every file field missing.
     expect(
       epicCommunicationGraphEventSchema.safeParse({
         ...A2A_MESSAGE_EVENT,

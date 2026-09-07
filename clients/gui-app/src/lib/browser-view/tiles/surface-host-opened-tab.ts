@@ -1,13 +1,5 @@
 /**
- * Surfacing for a tab the HOST opened - the agent driving a session, or a page
- * inside one spawning a popup (decisions A4, B5, B6, C9, C10; plan §5.3).
- *
- * The `tabOpened` frame arrives on the browser-sessions coordinator, which is
- * module-global and outside React, so this file opens through the non-React
- * `openTileWithNavigation` seam using the active React consumer's injected
- * router commit. Everything about WHERE the tile lands is the resolver's;
- * what stays here is the part the resolver cannot see: the `agentTabSurfacing`
- * gate and the PiP suppression rules (C9).
+ * Surfacing for a tab the HOST opened - the agent driving a session, or a page inside one spawning a popup (decisions A4, B5, B6, C9, C10; plan §5.3).
  */
 import type { BrowserTabOpenedSource } from "@traycer/protocol/host/browser/contracts";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -35,18 +27,8 @@ export type HostTabSuppressReason =
   | "pip-epic-hidden";
 
 /**
- * Pure gate. Contract:
- * - `off` suppresses agent presentation only; page popups are browser
- *   semantics and are never gated by a setting (A4). Host-side tab creation is
- *   unaffected either way - it is the host's lifecycle transaction.
- * - a `pip` browser placement is skipped when the user converted a PiP
- *   manually (never stomp explicit user intent) or the epic surface is hidden
- *   (a floating overlay nobody can see arms nothing).
- * - every other placement always lands a tile, even in a hidden epic: layout
- *   mutations are fine where an overlay would be invisible.
- *
- * `browserPlacement` is the EFFECTIVE placement, not the raw setting (R4) -
- * see {@link effectiveBrowserPlacement}.
+ * Pure gate.
+ * Contract:
  */
 export function hostOpenedTabSuppressReason(input: {
   readonly source: BrowserTabOpenedSource;
@@ -63,11 +45,8 @@ export function hostOpenedTabSuppressReason(input: {
 }
 
 /**
- * What the resolver will DO with this push, as far as the pip gate cares. Only
- * a float can be suppressed, and two things upstream of the setting turn a
- * `pip` setting into a plain tab: an explicit grouped pane (C7) and the
- * single-tile viewport (C10). Gating on the raw setting instead dropped those
- * tabs entirely (R4).
+ * What the resolver will DO with this push, as far as the pip gate cares.
+ * Only a float can be suppressed, and two things upstream of the setting turn a `pip` setting into a plain tab: an explicit grouped pane (C7) and the single-tile viewport (C10).
  */
 function effectiveBrowserPlacement(input: {
   readonly configured: BrowserTilePlacement;
@@ -79,11 +58,8 @@ function effectiveBrowserPlacement(input: {
 }
 
 /**
- * Per-window registry of which epic surfaces are currently visible. Epic
- * surfaces stay mounted (retained) while their route is inactive, so mount
- * state alone cannot answer visibility; `EpicSurface` reports its
- * `activity.visible` here instead. The view id is part of the key because
- * duplicated header views of one Epic have independent visibility lifetimes.
+ * Per-window registry of which epic surfaces are currently visible.
+ * Epic surfaces stay mounted (retained) while their route is inactive, so mount state alone cannot answer visibility; `EpicSurface` reports its `activity.visible` here instead.
  */
 const visibleEpicSurfaces = new Map<string, Set<string>>();
 
@@ -121,10 +97,8 @@ export function isManualPipActive(epicId: string): boolean {
 }
 
 /**
- * The pane already hosting a canvas tile of `sessionId`. The resolver's own
- * affinity groups by CATEGORY, which would drop a popup into whichever browser
- * pane was last active; a tab of this session belongs beside its siblings, so
- * the lookup stays here and travels as an explicit placement (§5.3).
+ * The pane already hosting a canvas tile of `sessionId`.
+ * The resolver's own affinity groups by CATEGORY, which would drop a popup into whichever browser pane was last active; a tab of this session belongs beside its siblings, so the lookup stays here and travels as an explicit placement (§5.3).
  */
 function findPaneIdHostingSessionTile(
   canvas: EpicCanvasState,
@@ -164,17 +138,14 @@ export interface HostOpenedTabSurfacing {
 
 /**
  * Returns false only when the selected view no longer exists for this Epic.
- * Suppression is a handled outcome, so the coordinator does not retry another
- * presenter and accidentally duplicate an intentional no-op.
+ * Suppression is a handled outcome, so the coordinator does not retry another presenter and accidentally duplicate an intentional no-op.
  */
 export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
   const settings = useSettingsStore.getState();
   const store = useEpicCanvasStore.getState();
   const viewTab = store.tabsById[input.viewTabId];
-  // The presenter was selected from a retained React consumer, but closing a
-  // header tab and releasing that consumer are separate commits. Revalidate
-  // its exact identity at command time so a frame in that gap cannot mutate a
-  // preserved, closed canvas or a recycled id from another Epic.
+  // The presenter was selected from a retained React consumer, but closing a header tab and releasing that consumer are separate commits.
+  // Revalidate its exact identity at command time so a frame in that gap cannot mutate a preserved, closed canvas or a recycled id from another Epic.
   if (
     viewTab?.epicId !== input.epicId ||
     !store.openTabOrder.includes(input.viewTabId)
@@ -208,14 +179,10 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
         sessionId: input.sessionId,
         tabId: input.tabId,
       }),
-      // The coordinator selected the presenting retained surface. Never
-      // re-resolve this through the legacy active/MRU compatibility fields:
-      // two top-level views of one Epic have independent canvases.
+      // The coordinator selected the presenting retained surface.
+      // Never re-resolve this through the legacy active/MRU compatibility fields: two top-level views of one Epic have independent canvases.
       target: { tabId: input.viewTabId },
-      // Always `explicit`: the wire carries no disposition (a headless runtime
-      // cannot detect one, and Electron's real in-page disposition travels on
-      // `browserViewOpenTileRequest` instead - A5/B6), so a host push is a
-      // deliberate open, not a background one.
+      // Always `explicit`: the wire carries no disposition (a headless runtime cannot detect one, and Electron's real in-page disposition travels on `browserViewOpenTileRequest` instead - A5/B6), so a host push is a deliberate open, not a background one.
       gesture: "explicit",
       modifiers: null,
       placement:
@@ -223,10 +190,7 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
           ? null
           : { kind: "tab", paneId: groupedPaneId, index: null },
       dedupe: true,
-      // ponytail: `AnalyticsSource` has no host-push member and `analytics.ts` is
-      // out of this ticket's blast radius; `trackOpenedCanvasTile` emits nothing
-      // for `browser-session` tiles anyway, so this value is inert today. Add a
-      // real source when the analytics schema is next opened.
+      // Add a real source when the analytics schema is next opened.
       source: "direct_ui",
     },
     input.navigateNested,

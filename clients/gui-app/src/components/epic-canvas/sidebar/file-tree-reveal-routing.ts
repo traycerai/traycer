@@ -1,21 +1,7 @@
 import type { FileTreeRevealRequest } from "@/stores/file-tree/file-tree-reveal-store";
 
 /**
- * What the Files panel should do next about a pending "Reveal in Sidebar"
- * request, given where the panel currently points. Pure so the routing rules
- * are testable without the panel's pin, bindings query, or stores.
- *
- * - `pin-host`: the panel resolves to another host; pin it to the file's.
- * - `drop`: the request cannot be served - the file's host is pinned yet the
- *   panel still resolves elsewhere (the host cannot serve: dead, or since
- *   deregistered so the fleet guard cleared the pin), or the file's root is
- *   not a browsable root of this host (a synthesized out-of-root workspace,
- *   or a binding since removed). The consumer clears the request and leaves
- *   the panel where it was.
- * - `wait`: the roots have not been read yet; decide on a later render.
- * - `select-workspace`: on the right host, wrong root; switch the selection.
- * - `ready`: host and workspace match - the tree body serves the row-level
- *   reveal.
+ * Pure so the routing rules are testable without the panel's pin, bindings query, or stores. - `pin-host`: the panel resolves to another host; pin it to the file's. - `drop`: the request cannot be served - the file's host is pinned yet the panel still resolves elsewhere (the host cannot serve: dead, or since deregistered so the fleet guard cleared the pin), or the file's root is not a browsable root of this host (a synthesized out-of-root workspace, or a binding since removed).
  */
 export type FileTreeRevealRoutingStep =
   | { readonly kind: "pin-host"; readonly hostId: string }

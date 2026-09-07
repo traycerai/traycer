@@ -15,13 +15,7 @@ export interface WireframeAttrs {
   readonly title: string;
 }
 
-/**
- * Atom block that renders a sandboxed HTML preview. Persisted as a
- * ` ```wireframe ` fence in markdown, matching the convention used by
- * the legacy Traycer views editor. HTML output uses a `<div
- * data-type="ui-preview-block">` wrapper so cross-editor paste round-
- * trips.
- */
+/** Persists as a wireframe fence. HTML uses data-type=ui-preview-block so cross-editor paste round-trips. */
 export const WireframeNode = Node.create({
   name: "uiPreviewBlock",
 

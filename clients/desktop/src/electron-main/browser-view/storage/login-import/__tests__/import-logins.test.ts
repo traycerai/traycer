@@ -43,20 +43,6 @@ import { matchesDomainFilter } from "../../__tests__/cookie-jar-fixture";
 import { MAX_LOGIN_IMPORT_FILE_BYTES } from "../bounded-file";
 import { MAX_SQLITE_SNAPSHOT_BYTES } from "../sqlite-snapshot";
 
-/**
- * `LoginImportService` orchestration suite. Every dependency is faked: no
- * live browser, no OS keystore, no real cookie jar. The Chromium `Cookies`
- * SQLite fixtures are built with `node:sqlite` (the same driver the
- * production reader uses) so the snapshot-copy-and-read path in
- * `import-logins.ts` runs for real; only the keystore reads and the durable
- * jar are injected.
- *
- * `import()` only ever honours a domain that the LAST successful `scan()` of
- * that sourceId listed under `sites` (`LoginImportService`'s private
- * `scanned` map): every happy-path test below scans before it imports, and a
- * dedicated section covers the no-scan / stale-scan / filtered-to-nothing
- * outcomes that guard depends on.
- */
 
 vi.mock("../../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -65,7 +51,6 @@ vi.mock("../../../../app/logger", () => ({
 
 import { log } from "../../../../app/logger";
 
-// --- Chromium SQLite fixture -------------------------------------------------
 
 const WINDOWS_EPOCH_OFFSET_SECONDS = 11_644_473_600n;
 const FIXED_NOW_MS = Date.UTC(2026, 0, 1);
@@ -275,7 +260,6 @@ async function writeGarbageChromeSource(homeDir: string): Promise<void> {
   await writeFile(join(profileDir, "Cookies"), "not a sqlite database");
 }
 
-// --- Fake durable jar session -------------------------------------------------
 
 function cookieFixture(name: string, domain: string): Cookie {
   return {
@@ -314,23 +298,12 @@ class FakeLoginImportSession implements LoginImportJarSession {
     this.rejectSetNames.add(name);
   }
 
-  /** Rejects `cookies.set` for this name only when the incoming VALUE
-   * matches - unlike {@link rejectSet}, which rejects every call for the
-   * name. Lets a test fail one specific write (a source row) while a LATER
-   * `set` for the same name but a different value (a restore of the jar's
-   * original cookie) still succeeds. */
   rejectSetValue(name: string, value: string): void {
     const values = this.rejectSetValuesByName.get(name) ?? new Set<string>();
     values.add(value);
     this.rejectSetValuesByName.set(name, values);
   }
 
-  /** Like {@link rejectSetValue}, but lets the first `successfulCalls` calls
-   * for this exact name+value succeed before every later one is rejected.
-   * `writeSite`'s re-write pass calls `cookies.set` a second time with the
-   * SAME name and value as the first, successful write - so a plain
-   * `rejectSetValue` cannot fail only the re-write without also failing the
-   * first attempt. */
   rejectSetValueAfter(
     name: string,
     value: string,
@@ -342,10 +315,7 @@ class FakeLoginImportSession implements LoginImportJarSession {
     });
   }
 
-  /** Rejects `cookies.remove` for this name: the call throws and the jar is
-   * left untouched, as if the OS removal never completed - unlike
-   * `writeSite`'s recovery passes, which only see a name after its removal
-   * was ATTEMPTED (see `removedNames`), whether or not it actually took. */
+  /** Rejects `cookies.remove` for this name: the call throws and the jar is left untouched, as if the OS removal never completed. */
   rejectRemove(name: string): void {
     this.rejectRemoveNames.add(name);
   }
@@ -421,13 +391,6 @@ class FakeLoginImportSession implements LoginImportJarSession {
       if (this.rejectRemoveNames.has(name)) {
         return Promise.reject(new Error("cookies.remove rejected"));
       }
-      // Electron removes by {url, name}, which is WIDER than one cookie:
-      // every cookie of that name whose domain matches the URL's host is
-      // caught, not just the first one found - a domain cookie and a
-      // host-only cookie of the same name both match. Removing only the
-      // first match would hide exactly the collision `writeSite` is written
-      // to recover from (see `import-logins.ts`'s point 4), so this mimics
-      // Electron's wider removal rather than a single-item delete.
       const host = new URL(url).hostname;
       for (let index = this.jar.length - 1; index >= 0; index -= 1) {
         const cookie = this.jar[index];
@@ -471,7 +434,6 @@ class FakeLoginImportSession implements LoginImportJarSession {
   }
 }
 
-// --- Secret provider fakes -----------------------------------------------------
 
 function alwaysUnavailable(): (
   browser: ChromiumImportBrowser,
@@ -479,7 +441,6 @@ function alwaysUnavailable(): (
   return () => Promise.resolve({ ok: false, reason: "unavailable" });
 }
 
-// --- Service wiring ------------------------------------------------------------
 
 interface ServiceHarness {
   readonly service: LoginImportService;
@@ -498,12 +459,8 @@ interface ServiceHarness {
   readonly confirmations: LoginImportSummary[];
 }
 
-// A per-suite temp dir rather than a bogus path: every test that never
-// overrides `snapshotRoot` still gets somewhere real and writable, instead
-// of a path this process may have no permission to create ("/unused-…").
-// `buildHarness` stays synchronous - `join`/`randomUUID` are, and the
-// directory itself is created lazily by `withSqliteSnapshot`/
-// `sweepSqliteSnapshots` on first use, never by this module.
+// A per-suite temp dir rather than a bogus path: every test that never overrides `snapshotRoot` still gets somewhere real and writable, instead of a path this process may have no.
+// `buildHarness` stays synchronous - `join`/`randomUUID` are, and the directory itself is created lazily by `withSqliteSnapshot`/ `sweepSqliteSnapshots` on first use, never by this.
 const DEFAULT_SNAPSHOT_ROOT = join(
   tmpdir(),
   `login-import-default-snap-${randomUUID()}`,
@@ -570,7 +527,6 @@ function buildHarness(
   };
 }
 
-// --- Test lifecycle: temp dirs --------------------------------------------------
 
 let tempRoots: string[] = [];
 
@@ -605,9 +561,6 @@ async function scanChromeSource(
   return { sourceId, scan };
 }
 
-// =================================================================================
-// 1. listSources mints opaque ids, exposes no filesystem paths
-// =================================================================================
 
 describe("listSources", () => {
   it("mints opaque ids and never exposes a filesystem path", async () => {
@@ -638,9 +591,6 @@ describe("listSources", () => {
   });
 });
 
-// =================================================================================
-// 2. scan: grouping, counts, exclusion, unlock hint, no keystore touch
-// =================================================================================
 
 describe("scan", () => {
   async function scanFirstSource(
@@ -817,9 +767,6 @@ describe("scan", () => {
   });
 });
 
-// =================================================================================
-// 3. import: saved-logins-off is checked before any read
-// =================================================================================
 
 describe("import - saved logins off", () => {
   it("blocks before the source is even looked up", async () => {
@@ -828,11 +775,7 @@ describe("import - saved logins off", () => {
       new FakeLoginImportSession([]),
     );
 
-    // No listSources()/scan() call was ever made, so this id is not
-    // registered and has no recorded scan either. If the service checked
-    // the source or the scanned set before the saved-logins pref, this
-    // would come back "unreadable" (see below) instead - the exact reason
-    // proves the ordering.
+    // If the service checked the source or the scanned set before the saved-logins pref, this would come back "unreadable" (see below) instead - the exact reason proves the ordering.
     const result = await service.import({
       sourceId: "never-registered",
       scanId: "unused-scan-id",
@@ -845,9 +788,6 @@ describe("import - saved logins off", () => {
   });
 });
 
-// =================================================================================
-// 4. import: unknown/stale sourceId, no scan on record, and re-list invalidation
-// =================================================================================
 
 describe("import - source and scan bookkeeping", () => {
   it("blocks as unreadable for a sourceId the service never minted", async () => {
@@ -914,10 +854,6 @@ describe("import - source and scan bookkeeping", () => {
       { domain: "relist-site.com", cookieCount: 1, unlock: null },
     ]);
 
-    // The service is one per main process: a second window opening Settings
-    // re-lists while this window is still choosing. The profile is still
-    // there, so it keeps its id and the scan on record, and the import the
-    // first window sends afterwards goes through.
     const relisted = await service.listSources();
     expect(relisted.map((source) => source.id)).toContain(sourceId);
 
@@ -977,9 +913,6 @@ describe("import - source and scan bookkeeping", () => {
   });
 });
 
-// =================================================================================
-// 5. Per-domain replace
-// =================================================================================
 
 describe("import - per-domain replace", () => {
   it("removes only the chosen domain's existing cookies and reports replacedSites", async () => {
@@ -1028,9 +961,6 @@ describe("import - per-domain replace", () => {
   });
 });
 
-// =================================================================================
-// 6. A domain whose every imported cookie is invalid is not cleared
-// =================================================================================
 
 describe("import - a domain with only invalid cookies is not cleared", () => {
   it("leaves the jar's existing cookie for that domain untouched", async () => {
@@ -1098,9 +1028,6 @@ describe("import - a domain with only invalid cookies is not cleared", () => {
   });
 });
 
-// =================================================================================
-// 7. Google domains are ignored even when explicitly requested
-// =================================================================================
 
 describe("import - Google domains only with includeDeviceBound", () => {
   it("with includeDeviceBound: false, ignores a Google domain named in the request - neither imported nor replaced", async () => {
@@ -1208,9 +1135,6 @@ describe("import - Google domains only with includeDeviceBound", () => {
   });
 });
 
-// =================================================================================
-// 8. A cookies.set rejection is counted and does not abort the import
-// =================================================================================
 
 describe("import - a cookies.set rejection is counted, not fatal", () => {
   it("counts the rejected cookie as skippedInvalid and still writes the rest", async () => {
@@ -1257,9 +1181,6 @@ describe("import - a cookies.set rejection is counted, not fatal", () => {
   });
 });
 
-// =================================================================================
-// 8b. Every write for a site is rejected: the site is left untouched
-// =================================================================================
 
 describe("import - a site whose every write is rejected is left untouched", () => {
   // Pins: a domain whose every `cookies.set` fails writes nothing and
@@ -1311,15 +1232,8 @@ describe("import - a site whose every write is rejected is left untouched", () =
   });
 });
 
-// =================================================================================
-// 8c. A removal that catches a same-name cookie under another scope is undone
-// =================================================================================
 
 describe("import - a same-name cookie under another scope is re-written after the removal that caught it", () => {
-  // Pins: Electron's `remove(url, name)` also catches a just-written cookie
-  // of the same name under a different scope; `writeSite` detects that via
-  // `removedNames` and re-writes the row, so the site ends with the SOURCE's
-  // scope (a domain cookie), not silently missing it.
   it("ends with exactly one 'sid' cookie, under the domain-cookie scope the source wrote", async () => {
     const homeDir = await makeTempDir("login-import-scope-collision-");
     await createDarwinChromeSource(
@@ -1364,9 +1278,6 @@ describe("import - a same-name cookie under another scope is re-written after th
   });
 });
 
-// =================================================================================
-// 8d. The settle window still runs when the write loop throws
-// =================================================================================
 
 describe("import - the settle window still runs when the write loop throws", () => {
   async function waitForCondition(predicate: () => boolean): Promise<void> {
@@ -1377,10 +1288,6 @@ describe("import - the settle window still runs when the write loop throws", () 
     throw new Error("timed out waiting for condition");
   }
 
-  // Pins: the `finally` around the flush+sleep runs on the FAILURE path too
-  // (see `import-logins.ts`'s point 3 in the module doc comment) - the
-  // settle sleep still has to fire, and still has to fire BEFORE the
-  // suppressed action settles, even though the write loop itself threw.
   it("runs the settle sleep before the suppressed action settles, even when the write loop throws", async () => {
     const homeDir = await makeTempDir("login-import-throw-settle-");
     await createDarwinChromeSource(
@@ -1455,9 +1362,6 @@ describe("import - the settle window still runs when the write loop throws", () 
   });
 });
 
-// =================================================================================
-// 8e. serializeJarWrite wraps suppressDeltas, in that nesting order
-// =================================================================================
 
 describe("import - the jar write runs inside serializeJarWrite, and suppressDeltas inside that", () => {
   // Pins: the whole-jar barrier has to be OUTSIDE the delta-mute, not beside
@@ -1513,10 +1417,7 @@ describe("import - the jar write runs inside serializeJarWrite, and suppressDelt
     });
 
     expect(result.status).toBe("imported");
-    // `serialize-start` before `suppress-start`: the barrier is entered
-    // first. `suppress-end` before `serialize-end`: the mute lifts before the
-    // barrier's own action resolves, so the barrier's queue never sees the
-    // write mid-mute.
+    // `suppress-end` before `serialize-end`: the mute lifts before the barrier's own action resolves, so the barrier's queue never sees the write mid-mute.
     expect(events).toEqual([
       "serialize-start",
       "suppress-start",
@@ -1526,15 +1427,9 @@ describe("import - the jar write runs inside serializeJarWrite, and suppressDelt
   });
 });
 
-// =================================================================================
-// 8f. releaseHostOwnedKeys releases exactly the keys that were written
-// =================================================================================
 
 describe("import - releases host ownership of exactly the keys it wrote", () => {
-  // Pins: only a row that actually landed in the jar is released - a
-  // rejected `cookies.set` names no key at all, so a host that owned it stays
-  // the owner until a real write supersedes it. And the release runs AFTER
-  // the suppressed write has fully resolved, never inside it.
+  // And the release runs AFTER the suppressed write has fully resolved, never inside it.
   it("calls releaseHostOwnedKeys once, after the write, with only the written key", async () => {
     const homeDir = await makeTempDir("login-import-release-keys-");
     await createDarwinChromeSource(
@@ -1615,18 +1510,8 @@ describe("import - releases host ownership of exactly the keys it wrote", () => 
   });
 });
 
-// =================================================================================
-// 8g. The barrier's abort signal stops the write loop mid-import
-// =================================================================================
 
 describe("import - stops writing when the barrier's signal is aborted", () => {
-  // Pins: an abort raised while a site's cookies.set is in flight stops the
-  // write loop before the NEXT site starts (throwIfBarrierExpired at the top
-  // of writeSite), still runs the flush+settle in the write's `finally`, and
-  // answers `blocked`/`incomplete` - the first site's row landed before the
-  // abort, so this is an import that stopped part-way, not one that read
-  // nothing - and still pushes the jar once, rather than throwing out of
-  // `import()`.
   it("stops writing when the barrier's signal is aborted, still flushes and settles, and answers blocked", async () => {
     const homeDir = await makeTempDir("login-import-abort-signal-");
     await createDarwinChromeSource(
@@ -1681,10 +1566,6 @@ describe("import - stops writing when the barrier's signal is aborted", () => {
 
     expect(result).toEqual({ status: "blocked", reason: "incomplete" });
     expect(pushJarToHosts).toHaveBeenCalledTimes(1);
-    // Only the first site's set() ran; the second site's writeSite call hit
-    // throwIfBarrierExpired before it ever reached cookies.get/cookies.set -
-    // but that first row DID land in the jar, which is why the result is
-    // "incomplete" rather than "unreadable".
     expect(session.setCalls.length).toBe(1);
     expect(session.namesUnderDomain("abort-site-a.com")).toEqual(["sid"]);
     expect(session.flushes).toBe(1);
@@ -1697,11 +1578,6 @@ describe("import - stops writing when the barrier's signal is aborted", () => {
 // =================================================================================
 
 describe("import - releases host ownership inside the barrier, after the mute lifts", () => {
-  // Pins the ordering `LoginImportServiceDependencies.releaseHostOwnedKeys`
-  // documents: entered inside serializeJarWrite's action, after
-  // suppressDeltas has resolved, and before the barrier's own action
-  // resolves - so nothing queued behind the barrier can observe an older
-  // value for a key this import just wrote.
   it("releases host ownership inside the barrier, after the mute lifts and before the barrier's action resolves", async () => {
     const homeDir = await makeTempDir("login-import-release-inside-barrier-");
     await createDarwinChromeSource(
@@ -1767,9 +1643,6 @@ describe("import - releases host ownership inside the barrier, after the mute li
   });
 });
 
-// =================================================================================
-// 9. Keychain denied / unavailable
-// =================================================================================
 
 describe("import - keystore outcomes", () => {
   async function importWithMacosKeychain(
@@ -1838,9 +1711,6 @@ describe("import - keystore outcomes", () => {
   });
 });
 
-// =================================================================================
-// 10. The secret provider is invoked only when an encrypted row was selected
-// =================================================================================
 
 describe("import - the keystore is touched only for a selected encrypted row", () => {
   it("never calls the keychain when only plaintext cookies were chosen", async () => {
@@ -1885,9 +1755,6 @@ describe("import - the keystore is touched only for a selected encrypted row", (
   });
 });
 
-// =================================================================================
-// 11. A domain absent from the last scan is silently dropped
-// =================================================================================
 
 describe("import - a domain outside the last scan is dropped", () => {
   it("imports only the scanned domain when a new domain appears in the file afterwards", async () => {
@@ -1934,9 +1801,6 @@ describe("import - a domain outside the last scan is dropped", () => {
   });
 });
 
-// =================================================================================
-// 12. Every requested domain filtered out by the scanned-set check
-// =================================================================================
 
 describe("import - every requested domain is outside the last scan", () => {
   it("returns the all-zero imported result without reading the source or the keystore", async () => {
@@ -1961,11 +1825,6 @@ describe("import - every requested domain is outside the last scan", () => {
       { domain: "scanned-site.com", cookieCount: 1, unlock: null },
     ]);
 
-    // If the import fell through to reading the source anyway, this would
-    // turn the read into a failure (or a thrown error the outer catch would
-    // still have to convert to "unreadable") - either way NOT the all-zero
-    // "imported" result asserted below. Its absence is the proof that the
-    // scanned-set filter short-circuits before any read.
     await rm(cookiesPath, { force: true });
 
     const result = await service.import({
@@ -1990,9 +1849,6 @@ describe("import - every requested domain is outside the last scan", () => {
   });
 });
 
-// =================================================================================
-// 13. Every failure is a result value; the WARN log carries only {stage, code}
-// =================================================================================
 
 describe("import - failures never throw, and the log is shape-limited", () => {
   it("a corrupt (non-sqlite) source file blocks as unreadable without throwing or warning", async () => {
@@ -2100,9 +1956,6 @@ describe("import - failures never throw, and the log is shape-limited", () => {
   });
 });
 
-// =================================================================================
-// Suppression wraps the whole write, including the trailing settle sleep
-// =================================================================================
 
 describe("import - suppression wraps the whole write including the trailing sleep", () => {
   async function waitForCondition(predicate: () => boolean): Promise<void> {
@@ -2245,10 +2098,6 @@ describe("import - operations are serialized", () => {
     });
 
     await waitFor(() => sleepCalls.length === 1);
-    // Only the first call's write has run: its cookie is set, but the
-    // second call has not even started reading the source again, because
-    // `serialized()` chains it behind the first call's still-pending
-    // promise (the sleep has not resolved yet).
     expect(session.setCalls.map((call) => call.name)).toEqual(["sid"]);
     expect(sleepCalls).toEqual([5]);
 
@@ -2271,20 +2120,8 @@ describe("import - operations are serialized", () => {
   });
 });
 
-// =================================================================================
-// 15. source-changed: the prompt the Choose step promised is the only prompt
-//     Import may raise
-// =================================================================================
 
 describe("import - source-changed: a chosen site gained an encrypted row needing an unscanned keystore", () => {
-  // Pins: a chosen site that was all `v10` (peanuts, no keyring) at scan
-  // time and gains a `v11` row before Import is clicked would open a
-  // keystore prompt the Choose step never promised - `unlockFor` on the
-  // fresh candidates now says `linux-keyring`, but no chosen site's
-  // RECORDED scan said that, so the import blocks as source-changed and
-  // drops the scan. A second import without a re-scan then blocks as
-  // unreadable (no scan on record); a re-scan picks up the v11 row and lets
-  // the import proceed.
   it("blocks as source-changed when a chosen site gained an encrypted row since the scan, and drops the scan", async () => {
     const homeDir = await makeTempDir("login-import-source-changed-");
     await createLinuxChromeSource(
@@ -2376,10 +2213,6 @@ describe("import - source-changed: a chosen site gained an encrypted row needing
 });
 
 describe("import - source-changed: not raised when a chosen site already needed that keystore", () => {
-  // Pins: source-changed is only about a keystore prompt no CHOSEN site was
-  // scanned as needing. Here one of the two chosen sites (darwin-encrypted)
-  // was already scanned as needing macos-keychain, so the same prompt at
-  // Import time is not a surprise and the import proceeds normally.
   it("does not block as source-changed when some chosen site was scanned as needing that keystore", async () => {
     const homeDir = await makeTempDir("login-import-source-changed-ok-");
     await createDarwinChromeSource(
@@ -2443,9 +2276,6 @@ describe("import - source-changed: not raised when a chosen site already needed 
   });
 });
 
-// =================================================================================
-// 16. An import quotes the scan its window rendered
-// =================================================================================
 
 describe("import - quotes the scan its window rendered", () => {
   it("honours the earlier of two scans, refuses an unknown scanId, and refuses the scan's token against a different sourceId", async () => {
@@ -2515,9 +2345,6 @@ describe("import - quotes the scan its window rendered", () => {
   });
 });
 
-// =================================================================================
-// 17. Only RETAINED_SCAN_LIMIT scans are kept, oldest first
-// =================================================================================
 
 describe("import - keeps at most RETAINED_SCAN_LIMIT scans, oldest first", () => {
   it("evicts the oldest scan once more than RETAINED_SCAN_LIMIT have been taken", async () => {
@@ -2567,9 +2394,6 @@ describe("import - keeps at most RETAINED_SCAN_LIMIT scans, oldest first", () =>
   });
 });
 
-// =================================================================================
-// 18. releaseHostOwnedKeys releases exactly the keys written before an abort
-// =================================================================================
 
 describe("import - releases ownership of the keys written before the barrier aborts", () => {
   it("releases exactly the keys written before the barrier's signal aborts, and only once", async () => {
@@ -2707,9 +2531,6 @@ describe("import - takes the barrier before the keystore prompt", () => {
   });
 });
 
-// =================================================================================
-// 20. A jar cookie at a carried key survives a write that could not land
-// =================================================================================
 
 describe("import - keeps the jar's cookie at a key the source carries but could not write", () => {
   it("keeps the old cookie at the rejected key, writes the other row, and removes only the uncarried key", async () => {
@@ -2766,10 +2587,6 @@ describe("import - keeps the jar's cookie at a key the source carries but could 
   });
 });
 
-// =================================================================================
-// 20b. carriedBySite is collected from every classified row, before the
-// protected/partitioned skip - not just from the rows that became candidates
-// =================================================================================
 
 describe("import - keeps the jar's cookie at a key the source holds only as a protected row", () => {
   it("writes the plain row, removes the genuinely uncarried key, and leaves the protected key's cookie untouched", async () => {
@@ -2888,9 +2705,6 @@ describe("import - clears a written site's localStorage and leaves an unwritten 
   });
 });
 
-// =================================================================================
-// 22. confirmImport: main confirms the validated selection before any side effect
-// =================================================================================
 
 describe("import - confirmImport", () => {
   it("asks main to confirm the validated selection before reading the source", async () => {
@@ -3092,11 +2906,6 @@ describe("import - confirmImport", () => {
       notifiedHosts: 0,
     });
     const cookies = session.cookiesUnderDomain("restore-site.com");
-    // BOTH K1 and K2 survive, untouched: the source's "sid" row was refused
-    // on its FIRST write (not a re-write), so no landed row of the name
-    // "sid" ever existed - the name is orphaned from the start, and
-    // `writeSite` leaves the jar's cookies of that name alone under ANY
-    // scope, never even attempting a removal for them.
     expect(cookies.map((cookie) => cookie.name).sort()).toEqual([
       "fresh",
       "sid",
@@ -3110,19 +2919,8 @@ describe("import - confirmImport", () => {
   });
 });
 
-// =================================================================================
-// 22b. A same-name re-write refused: the jar's prior cookie is restored anyway
-// =================================================================================
 
 describe("import - a same-name re-write refused after removal falls back to the jar's prior cookie", () => {
-  // Pins: the first write of "sid" succeeds; the same-name removal that
-  // catches the uncarried, differently-scoped "sid" then triggers a re-write
-  // of the SAME row (same name, same value), and Chromium refuses THAT one.
-  // The refused re-write leaves the key out of `writtenKeyIds`, so no landed
-  // row of the name "sid" survives - the name is ORPHANED - and the restore
-  // pass puts back every prior cookie of that name the removal reached,
-  // carried or not: both K1 (the carried domain cookie, at its PRIOR value)
-  // and the uncarried host-only cookie the source never named at all.
   it("puts the prior cookie back when a same-name re-write is refused", async () => {
     const homeDir = await makeTempDir("login-import-rewrite-refused-");
     await createDarwinChromeSource(
@@ -3220,15 +3018,8 @@ describe("import - a same-name re-write refused after removal falls back to the 
   });
 });
 
-// =================================================================================
-// 23. saved-logins-off, re-checked inside the barrier
-// =================================================================================
 
 describe("import - refuses to write when saving is turned off during the prompt", () => {
-  // Pins: `readSaveLogins` is re-read INSIDE the barrier, after `resolveKeys`
-  // and the signal check - a window that turns saving off while this import
-  // sat on the keystore prompt (or, here, simply while the barrier is being
-  // entered) must not have its write land on the ephemeral jar's replacement.
   it("blocks with saved-logins-off, writes nothing, and releases no keys", async () => {
     const homeDir = await makeTempDir("login-import-off-during-prompt-");
     await createDarwinChromeSource(
@@ -3279,16 +3070,8 @@ describe("import - refuses to write when saving is turned off during the prompt"
   });
 });
 
-// =================================================================================
-// 24. clearSiteLocalStorage runs LAST; a rejection leaves the cookies whole
-// =================================================================================
 
 describe("import - a localStorage clear that fails leaves the site's cookies whole", () => {
-  // Pins: `clearSiteLocalStorage` runs after every stale removal, kept-cookie
-  // restore and same-name re-write - so a rejection there finds the site's
-  // cookie slice already fully recovered, and the outer catch answers
-  // blocked/incomplete (the "fresh" row landed before the clear failed) and
-  // still pushes the jar once, without undoing any of that recovery.
   it("keeps the restored kept cookie and the written row when the clear rejects", async () => {
     const homeDir = await makeTempDir("login-import-clear-fails-");
     await createDarwinChromeSource(
@@ -3341,11 +3124,6 @@ describe("import - a localStorage clear that fails leaves the site's cookies who
     expect(result).toEqual({ status: "blocked", reason: "incomplete" });
     expect(pushJarToHosts).toHaveBeenCalledTimes(1);
     const cookies = session.cookiesUnderDomain("clear-fails.com");
-    // BOTH K1 and K2 survive, untouched: the source's "sid" row was refused
-    // on its FIRST write (not a re-write), so no landed row of the name
-    // "sid" ever existed - the name is orphaned from the start, and
-    // `writeSite` leaves the jar's cookies of that name alone under ANY
-    // scope, never even attempting a removal for them.
     const sidCookies = cookies.filter((cookie) => cookie.name === "sid");
     expect(sidCookies).toHaveLength(2);
     for (const sidCookie of sidCookies) {
@@ -3363,21 +3141,10 @@ describe("import - a localStorage clear that fails leaves the site's cookies who
   });
 });
 
-// =================================================================================
-// 25. The saved-logins pref is re-read as the FIRST thing inside the barrier,
-//     before the source is ever opened.
-// =================================================================================
 
 describe("import - the saved-logins pref is re-checked inside the barrier, before the source is read", () => {
-  // Pins: `readSaveLogins` is the first thing `serializeJarWrite`'s action
-  // does. Flipping it false only once the barrier is entered - never before,
-  // so the outer pre-barrier check and `confirmImport` both still see it on -
-  // means a source that cannot be read is never even opened: the pref wins
-  // before any read is attempted. Under the pre-fix code (the source read
-  // outside the barrier, before it was ever called) this same corrupted
-  // source would fail the read first, answering "unreadable" with
-  // `serializeJarWrite` never called at all - not "saved-logins-off" with it
-  // called exactly once.
+  // Flipping it false only once the barrier is entered - never before, so the outer pre-barrier check and `confirmImport` both still see it on.
+  // Under the pre-fix code (the source read outside the barrier, before it was ever called) this same corrupted source would fail the read first, answering "unreadable" with.
   it("reads the source inside the barrier, after the confirmation", async () => {
     const homeDir = await makeTempDir("login-import-barrier-pref-order-");
     const cookiesPath = await createDarwinChromeSource(
@@ -3476,17 +3243,11 @@ describe("import - a source that cannot be read answers blocked from inside the 
     });
 
     expect(result).toEqual({ status: "blocked", reason: "unreadable" });
-    // The barrier was entered even though the read inside it failed. Under
-    // the pre-fix code (read outside the barrier) this would never be
-    // called at all - the failed read would have answered "unreadable"
-    // before `serializeJarWrite` was ever reached.
+    // Under the pre-fix code (read outside the barrier) this would never be called at all - the failed read would have answered "unreadable" before `serializeJarWrite` was ever reached.
     expect(serializeJarWriteCalls).toBe(1);
   });
 });
 
-// =================================================================================
-// 27. A failed stale-cookie removal no longer skips the recovery passes
-// =================================================================================
 
 describe("import - a failed stale-cookie removal still runs the recovery passes", () => {
   it("rewrites the imported cookie and restores the kept one when a later stale removal rejects", async () => {
@@ -3502,11 +3263,6 @@ describe("import - a failed stale-cookie removal still runs the recovery passes"
       23,
     );
     const session = new FakeLoginImportSession([
-      // A stale "sid" at an UNCARRIED scope (host-only): the source carries
-      // "sid" as a domain cookie, a different key, so this one is genuinely
-      // stale and due for removal - but Electron's {url, name} removal is
-      // wider than one cookie and also catches the just-written domain
-      // "sid".
       cookieFixture("sid", "stale-removal-fails.com"),
       // A second, unrelated stale cookie the source does not carry at all.
       cookieFixture("other", ".stale-removal-fails.com"),
@@ -3630,16 +3386,8 @@ describe("import - a failed stale-cookie removal still runs the recovery passes"
   });
 });
 
-// =================================================================================
-// 29. A re-write refused at an UNCARRIED key restores the jar's prior cookie
-// =================================================================================
 
 describe("import - a re-write refused restores the prior cookie at an UNCARRIED key", () => {
-  // Pins: the source carries only a domain "sid" row; the jar's PRIOR cookie
-  // at that name is host-only (a different key, one the source does not
-  // carry). The removal that catches it triggers a re-write of the source's
-  // row, which is refused - so the restore pass puts the jar's ORIGINAL
-  // host-only cookie back, and nothing else survives at that name.
   it("restores an uncarried prior cookie of the same name when its re-write is refused", async () => {
     const homeDir = await makeTempDir("login-import-restore-uncarried-");
     await createDarwinChromeSource(
@@ -3714,9 +3462,6 @@ describe("import - a re-write refused restores the prior cookie at an UNCARRIED 
   });
 });
 
-// =================================================================================
-// 30. A source row that fails its FIRST write keeps a prior cookie of that name
-// =================================================================================
 
 describe("import - keeps a prior cookie of a name whose source row failed its first write", () => {
   it("keeps a prior cookie of a name whose source row failed its first write", async () => {
@@ -3782,10 +3527,6 @@ describe("import - keeps a prior cookie of a name whose source row failed its fi
   });
 });
 
-// =================================================================================
-// 31. A site with nothing landed after every re-write is refused ends up
-//     exactly as it started
-// =================================================================================
 
 describe("import - a site with nothing landed after every re-write is refused", () => {
   it("puts the site back as it was when every re-write is refused", async () => {
@@ -3855,20 +3596,12 @@ describe("import - a site with nothing landed after every re-write is refused", 
     expect(oldCookie?.value).toBe("old-value");
     // Nothing landed: `writeSite` returns before the localStorage clear.
     expect(clearedSites).not.toContain("nothing-landed.com");
-    // The refused re-write also drops the key from `tally.writtenKeys` (not
-    // only `writtenKeyIds`), so nothing of the import's remains written - the
-    // jar is still pushed once, but only because the "old" removal recorded
-    // the forget ledger, never because a key survived.
     expect(pushJarToHosts).toHaveBeenCalledTimes(1);
     expect(releaseHostOwnedKeys).toHaveBeenCalledTimes(1);
     expect(releaseHostOwnedKeys).toHaveBeenCalledWith([]);
   });
 });
 
-// =================================================================================
-// 32. The forget ledger is recorded lazily, once, before the first removal -
-//     never for a site that has nothing to remove
-// =================================================================================
 
 describe("import - the forget ledger is recorded lazily, once, before the first removal", () => {
   it("records each site one at a time, immediately before its own first removal, and marks every revision cleared after", async () => {
@@ -4070,10 +3803,6 @@ describe("import - the forget ledger is recorded lazily, once, before the first 
   });
 });
 
-// =================================================================================
-// 32b. The barrier's abort after one site's removals never reaches a later
-//      site's ledger record
-// =================================================================================
 
 describe("import - an abort after one site's removals never records or clears a later site", () => {
   it("records only the first site, marks only its revision cleared, and answers incomplete", async () => {
@@ -4197,10 +3926,6 @@ describe("import - ends the deferred ledger digests before pushing the jar", () 
   });
 });
 
-// =================================================================================
-// 33. The ledger is still marked cleared, and the jar still pushed, when the
-//     write stops part-way
-// =================================================================================
 
 describe("import - the ledger is marked cleared and the jar is pushed even when the write stops part-way", () => {
   it("marks the ledger cleared and pushes even when the write stops part-way", async () => {
@@ -4256,9 +3981,6 @@ describe("import - the ledger is marked cleared and the jar is pushed even when 
   });
 });
 
-// =================================================================================
-// 34. The jar is pushed from INSIDE the barrier
-// =================================================================================
 
 describe("import - pushes the jar inside the barrier", () => {
   it("pushes the jar inside the barrier", async () => {
@@ -4378,9 +4100,6 @@ describe("import - does not push when nothing was written", () => {
   });
 });
 
-// =================================================================================
-// 28. A picked cookie-file source enforces the bounded-read limit
-// =================================================================================
 
 describe("import - a picked cookie-file source enforces the read bound", () => {
   it("answers file-too-large for a picked export over the bound", async () => {
@@ -4426,10 +4145,6 @@ describe("import - a picked cookie-file source enforces the read bound", () => {
   });
 });
 
-// =================================================================================
-// 28b. A chromium snapshot the sqlite layer refuses as too-large answers
-//      profile-too-large
-// =================================================================================
 
 describe("import - a chromium source over the sqlite snapshot bound answers profile-too-large", () => {
   it("answers profile-too-large when the live Cookies file has grown past the snapshot bound", async () => {
@@ -4469,22 +4184,8 @@ describe("import - a chromium source over the sqlite snapshot bound answers prof
   });
 });
 
-// =================================================================================
-// 36. An import naming more sites than the forget ledger can record is
-//     refused before the keystore prompt or the first write
-// =================================================================================
 
 describe("import - refuses an import past the forget ledger's domain cap", () => {
-  // Pins: `bySite.size > BROWSER_FORGET_LEDGER_MAX_DOMAINS` is checked right
-  // after grouping the source's candidates by site and BEFORE `resolveKeys` -
-  // so an import naming more sites than the forget ledger can record for one
-  // revision never opens a keystore and never writes a cookie. `too-many-sites`
-  // is a distinct reason from `source-changed`: the source read fine and the
-  // scan stays on record, so a smaller re-selection can retry without a
-  // fresh scan.
-  // A thousand-site source is a real SQLite jar written, snapshotted and
-  // read twice (scan, then import), which is seconds on a loaded CI runner
-  // and milliseconds here; the budget is for the runner, not the code.
   it(
     "refuses more sites than the forget ledger keeps, before the keystore or a write",
     { timeout: 120_000 },
@@ -4547,18 +4248,9 @@ describe("import - refuses an import past the forget ledger's domain cap", () =>
   );
 });
 
-// =================================================================================
-// 37. `writeSite`'s by-name keep also covers a name the source holds only as
-//     a row that never becomes a candidate (protected/partitioned)
-// =================================================================================
 
 describe("import - keeps a prior cookie of a name the source holds only as a protected row", () => {
-  // Pins: `namesBySite` (importInner) is built from EVERY classified row for
-  // a chosen site, including a protected one that never reaches `candidates`
-  // - so `writeSite`'s `sourceNames` parameter carries that name too, and the
-  // jar's cookie of that name under another scope is treated as orphaned
-  // (kept), not stale (removed), even though no row of that name was ever
-  // attempted.
+  // Pins: `namesBySite` (importInner) is built from EVERY classified row for a chosen site, including a protected one that never reaches `candidates`.
   it("keeps a prior cookie of a name the source holds only as a protected row", async () => {
     const homeDir = await makeTempDir("login-import-protected-name-kept-");
     await createDarwinChromeSource(
@@ -4618,21 +4310,12 @@ describe("import - keeps a prior cookie of a name the source holds only as a pro
     ]);
     const freshCookie = cookies.find((cookie) => cookie.name === "fresh");
     expect(freshCookie?.value).toBe("fresh-value");
-    // "old" was not carried and not orphaned (the source has no row named
-    // "old" at all) - genuinely stale, so it was removed.
-    // The host-only "sid" survives untouched at its prior value: the source
-    // DOES hold a "sid" (the protected row), so the name is not stale even
-    // though no "sid" row ever attempted a write.
     const sidCookie = cookies.find((cookie) => cookie.name === "sid");
     expect(sidCookie?.hostOnly).toBe(true);
     expect(sidCookie?.value).toBe("uncarried-value");
   });
 });
 
-// =================================================================================
-// 38. A `flushStore()` rejection after a successful write is folded into the
-//     incomplete path, like any other ending that leaves cookies written
-// =================================================================================
 
 describe("import - a flush that rejects after a write still answers incomplete and pushes", () => {
   it("answers incomplete and pushes when the store flush rejects after a write", async () => {

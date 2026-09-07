@@ -105,10 +105,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 /**
- * An in-process answer as host adapters actually build them: the `selection`
- * key is absent, not `null`. The predicate is the lie the type makes - the
- * schema says the key is present, but the reducer is the one that has to
- * survive objects built without it.
+ * An in-process answer as host adapters actually build them: the `selection` key is absent, not `null`.
  */
 function isProductionShapedAnswer(value: unknown): value is InterviewAnswer {
   if (!isRecord(value)) return false;
@@ -183,19 +180,8 @@ function runtimeAuthoritativeBlock(
 }
 
 /**
- * A settlement that cannot take the canonical slot but IS the block's own
- * settlement being re-applied - the shape an outbox delivery update actually
- * arrives in.
- *
- * The `settlementId` matches the block's authority deliberately. Delivery is
- * correlated to settlement authority, so a settlement with a DIFFERENT id
- * never merges delivery at all; using one here would make every cell of the
- * cross-product report `changed: false` and stop exercising the delivery
- * algebra entirely. The vacuity guard below catches exactly that, and did.
- *
- * Its payload still contradicts the block (a `failed` outcome, other answers,
- * drafts) so the matrix also proves a replay cannot rewrite canonical content
- * while its delivery is merged.
+ * A settlement that cannot take the canonical slot but IS the block's own settlement being re-applied - the shape an outbox delivery update actually arrives in.
+ * Its payload still contradicts the block (a `failed` outcome, other answers, drafts) so the matrix also proves a replay cannot rewrite canonical content while its delivery is merged.
  */
 function losingRuntimeSettlement(
   delivery: InterviewDeliveryProjection | null,
@@ -329,15 +315,8 @@ function runtimeFailed(
 }
 
 /**
- * A settlement that cannot take the canonical slot AND is not the block's
- * own settlement. Delivery is correlated to settlement authority, so this
- * shape must leave `block.delivery` exactly as found - including adopting
- * nothing onto a null slot. Contrast `losingRuntimeSettlement`, which is a
- * same-id replay and therefore may merge delivery.
- *
- * Diagnostic is null on purpose: the correlation cases assert `changed ===
- * false`, so the settlement must not contribute a diagnostic (or anything
- * else) that would independently report a write.
+ * A settlement that cannot take the canonical slot AND is not the block's own settlement.
+ * Delivery is correlated to settlement authority, so this shape must leave `block.delivery` exactly as found - including adopting nothing onto a null slot.
  */
 function distinctLosingRuntimeSettlement(
   delivery: InterviewDeliveryProjection,
@@ -400,9 +379,8 @@ function expectLegacy(
 
 describe("applyInterviewSettlement", () => {
   it("keeps GUI answers when a later runtime resolution arrives empty", () => {
-    // OpenCode's converter emits a second interview.resolved whose answers
-    // are empty. Empty must not regress a GUI-accepted submission to
-    // "No answer".
+    // OpenCode's converter emits a second interview.resolved whose answers are empty.
+    // Empty must not regress a GUI-accepted submission to "No answer".
     const gui = guiAnswered(10);
     const first = reduce(streamingBlock(), gui);
     expect(first.changed).toBe(true);
@@ -613,9 +591,7 @@ describe("applyInterviewSettlement", () => {
   });
 
   it("never lets a null delivery clear an existing projection", () => {
-    // Silence is not a retraction: the outbox is authoritative, and a
-    // settlement that does not report delivery must leave the projection
-    // already on the block alone.
+    // Silence is not a retraction: the outbox is authoritative, and a settlement that does not report delivery must leave the projection already on the block alone.
     const pending = reduce(streamingBlock(), guiAnswered(10));
     const silent = reduce(pending.block, {
       ...guiAnswered(10),
@@ -775,9 +751,8 @@ describe("settledInterviewBlockIds", () => {
   });
 
   it("counts a legacy terminal block with no canonical facts as settled", () => {
-    // Weak authority: status !== streaming blocks reopen but cannot
-    // manufacture an outcome. Hydration and notifications must still agree
-    // that the interview is not pending.
+    // Weak authority: status !== streaming blocks reopen but cannot manufacture an outcome.
+    // Hydration and notifications must still agree that the interview is not pending.
     const settled = settledInterviewBlockIds({
       blocks: [
         {
@@ -825,9 +800,7 @@ describe("overlayInterviewSettlementPatch", () => {
 
 describe("payload ownership", () => {
   it("keeps GUI answers when a later runtime resolution carries different non-empty answers", () => {
-    // The original data-loss bug: any non-empty incoming payload won, so a
-    // runtime resolution with different answers silently replaced the GUI
-    // submission the user actually accepted.
+    // The original data-loss bug: any non-empty incoming payload won, so a runtime resolution with different answers silently replaced the GUI submission the user actually accepted.
     const gui = reduce(streamingBlock(), guiAnswered(10));
     const runtime = reduce(
       gui.block,
@@ -927,13 +900,7 @@ describe("payload ownership", () => {
   });
 
   it("fills empty answers on an unowned block and does not replace answers the block already has when the incoming settlement is empty", () => {
-    // Unowned + empty: the incoming settlement wins the vacant slot and
-    // supplies the missing answers. Unowned + already filled + empty
-    // incoming: the winner's empty-vs-non-empty protection keeps what is
-    // recorded. A non-empty settlement against an unowned block WINS and
-    // replaces - there is no losing-and-unowned path to exercise, because
-    // `settlementWins` returns true whenever authority and outcome are both
-    // absent.
+    // Unowned + empty: the incoming settlement wins the vacant slot and supplies the missing answers.
     const filled = reduce(
       streamingBlock(),
       runtimeAnswered("runtime-fill", [makeAnswer(["inferred"])], 10),
@@ -952,9 +919,8 @@ describe("payload ownership", () => {
   });
 
   it("does not fill answers across stronger GUI skip authority", () => {
-    // A skipped card's answers are canonically []. A later runtime
-    // `answered` with real values must not sneak them in: fill is for
-    // unowned blocks, not for overwriting a stronger authority.
+    // A skipped card's answers are canonically [].
+    // A later runtime `answered` with real values must not sneak them in: fill is for unowned blocks, not for overwriting a stronger authority.
     const skipped = reduce(streamingBlock(), guiSkipped(10));
     expect(skipped.block.answers).toEqual([]);
     const drafts = skipped.block.draftAnswers;
@@ -1002,9 +968,8 @@ describe("selection normalization", () => {
   });
 
   it("treats a stored answer missing selection as equal to an incoming normalized null", () => {
-    // Blocks written before this normalizer exist in-process without the
-    // key. Comparing that absence to an explicit null must not look like a
-    // payload change, or a genuine replay would persist and re-broadcast.
+    // Blocks written before this normalizer exist in-process without the key.
+    // Comparing that absence to an explicit null must not look like a payload change, or a genuine replay would persist and re-broadcast.
     const stored = productionShapedAnswer(["date-fns"]);
     const first = reduce(
       streamingBlock(),
@@ -1095,10 +1060,6 @@ describe("delivery monotonicity", () => {
     );
   });
   it("lets a retryable failure requeue to pending at a strictly newer generation", () => {
-    // A retry is the one legitimate backwards move by status rank, and the
-    // generation is what makes it distinguishable from a STALE pending being
-    // replayed after the failure. The outbox increments the generation when it
-    // requeues; a replay does not.
     const failed = reduce(
       streamingBlock(),
       settlementWith(makeDeliveryProjection(BASE_ID, "failed", true, 0), 10),
@@ -1117,10 +1078,7 @@ describe("delivery monotonicity", () => {
   });
 
   it("refuses a same-generation pending after a retryable failure", () => {
-    // The stale-replay counterexample: identical to the requeue above except
-    // the generation did not move, which is exactly what a redelivered old
-    // update looks like. Accepting it would tell the user their answer was
-    // queued when the attempt had already failed.
+    // The stale-replay counterexample: identical to the requeue above except the generation did not move, which is exactly what a redelivered old update looks like.
     const failed = reduce(
       streamingBlock(),
       settlementWith(makeDeliveryProjection(BASE_ID, "failed", true, 0), 10),
@@ -1170,17 +1128,8 @@ describe("delivery monotonicity", () => {
   });
 
   it("reports a generation-only bump as changed, so a stale replay cannot outrank it", () => {
-    // `changed` is what tells a caller whether to persist, so a field omitted
-    // from `sameDelivery` is a field that can be silently dropped. `generation`
-    // was omitted once: `mergeDelivery` returned the newer generation, `changed`
-    // said false, a caller honouring it skipped the write, and the block kept
-    // the OLD generation - after which a stale update at the new generation
-    // outranked it.
-    //
-    // Pinned on `pending` rather than `delivered`, because `delivered` is now
-    // absorbing across generations (see the test below) and so can no longer
-    // exhibit this even if the equality regressed. `pending` is where a
-    // generation bump still has to be persisted to mean anything.
+    // `changed` is what tells a caller whether to persist, so a field omitted from `sameDelivery` is a field that can be silently dropped.
+    // Pinned on `pending` rather than `delivered`, because `delivered` is now absorbing across generations (see the test below) and so can no longer exhibit this even if the equality regressed.
     const first = reduce(
       streamingBlock(),
       settlementWith(makeDeliveryProjection(BASE_ID, "pending", false, 0), 10),
@@ -1206,9 +1155,7 @@ describe("delivery monotonicity", () => {
   });
 
   it("keeps delivered absorbing in both directions, across generations", () => {
-    // Existing delivered survives anything; an incoming delivered beats any
-    // stored non-delivered state whatever its generation. Delivery is
-    // terminal - the provider already has the answer.
+    // Existing delivered survives anything; an incoming delivered beats any stored non-delivered state whatever its generation.
     const delivered = reduce(
       streamingBlock(),
       settlementWith(
@@ -1248,9 +1195,8 @@ describe("delivery monotonicity", () => {
   });
 
   it("never decreases timestamp when delivered absorbs, in either arrival order", () => {
-    // Both permutations, crossed timestamps: reconnect/replay can deliver
-    // the older event after the newer one has landed. `delivered` stays
-    // terminal and the block's rendered position never walks backwards.
+    // Both permutations, crossed timestamps: reconnect/replay can deliver the older event after the newer one has landed.
+    // `delivered` stays terminal and the block's rendered position never walks backwards.
     const pending = makeDeliveryProjection(BASE_ID, "pending", false, 0);
     const delivered = makeDeliveryProjection(BASE_ID, "delivered", false, 0);
     const orders: ReadonlyArray<{
@@ -1366,10 +1312,7 @@ describe("delivery monotonicity", () => {
   });
 
   it("lets a strictly newer generation win even when that is backwards by status rank", () => {
-    // Already covered as failed(g0) → pending(g1). Pin the intermediate
-    // states around it: delivering(g0) → pending(g1) is the same backwards
-    // move from a higher rank, and delivered(g0) → pending(g1) is the
-    // retry after a completed attempt of an earlier generation.
+    // Already covered as failed(g0) → pending(g1).
     const fromDelivering = reduce(
       reduce(
         streamingBlock(),
@@ -1385,10 +1328,7 @@ describe("delivery monotonicity", () => {
       makeDeliveryProjection(BASE_ID, "pending", false, 1),
     );
 
-    // `delivered` is the exception, and it is absorbing ACROSS generations:
-    // once the provider has the answer, no later attempt bookkeeping - however
-    // new - can make that untrue. This is the un-delivery hazard, and it is
-    // refused structurally rather than by a rank comparison.
+    // `delivered` is the exception, and it is absorbing ACROSS generations: once the provider has the answer, no later attempt bookkeeping - however new - can make that untrue.
     const fromDelivered = reduce(
       reduce(
         streamingBlock(),
@@ -1406,10 +1346,7 @@ describe("delivery monotonicity", () => {
   });
 
   it("refuses a stale pending from an older generation after a newer attempt has moved on", () => {
-    // The counterexample generation exists to catch: a redelivered g0
-    // pending must not resurrect after g1 has already delivered or even
-    // just started delivering. Same-generation pending-after-delivered
-    // is covered above; this is the cross-generation form.
+    // The counterexample generation exists to catch: a redelivered g0 pending must not resurrect after g1 has already delivered or even just started delivering.
     const deliveredG1 = reduce(
       streamingBlock(),
       settlementWith(
@@ -1478,11 +1415,7 @@ describe("delivery monotonicity", () => {
   });
 
   it("converges equal-rank conflicting retryability on the conservative fact, in both orders", () => {
-    // `retryable: false` is the more terminal claim - it says no automatic
-    // retry is coming - so it wins whichever side it arrived on. Preferring
-    // "whatever landed first" would let two peers converge on DIFFERENT states
-    // from the same pair of updates, and would sometimes promise a retry the
-    // outbox had already ruled out.
+    // `retryable: false` is the more terminal claim - it says no automatic retry is coming - so it wins whichever side it arrived on.
     const trueFirst = reduce(
       reduce(
         streamingBlock(),
@@ -1511,9 +1444,7 @@ describe("delivery monotonicity", () => {
     expect(trueFirst.block.delivery).toStrictEqual(falseFirst.block.delivery);
   });
   it("never swaps a different deliveryId even when the incoming generation is newer", () => {
-    // Identity beats generation. Two outbox items carry no relative order;
-    // guessing would flap on reconnect. The authoritative outbox repairs
-    // it on the next subscribe.
+    // Identity beats generation.
     const recorded = reduce(
       streamingBlock(),
       settlementWith(makeDeliveryProjection(BASE_ID, "pending", false, 0), 10),
@@ -1532,12 +1463,7 @@ describe("delivery monotonicity", () => {
   });
 
   it("does not let a distinct losing settlement adopt a pending delivery onto a null slot", () => {
-    // mergeDelivery's first rule is "nothing recorded yet ⇒ take the incoming
-    // projection". Without correlating delivery to settlement authority, a
-    // GUI-answered block with `delivery: null` meeting an unrelated losing
-    // runtime settlement that carried a `pending` projection would ADOPT it -
-    // attaching an outbox identity that belongs to a different settlement,
-    // which then becomes the id every later update is ordered against.
+    // mergeDelivery's first rule is "nothing recorded yet ⇒ take the incoming projection".
     const block = guiAuthoritativeBlock(null);
     const foreign = makeDeliveryProjection(
       "delivery-foreign",
@@ -1555,11 +1481,7 @@ describe("delivery monotonicity", () => {
   });
 
   it("adopts a winning settlement's delivery wholesale, including a different deliveryId", () => {
-    // A winner REPLACES the canonical settlement, so it brings a different
-    // outbox item. Merging there is the bug this pins: stored {d1, delivered}
-    // plus winning {d2, pending} keeps d1 under mergeDelivery (mismatched
-    // ids), and the block goes on claiming DELIVERED for an answer the new
-    // settlement has not sent.
+    // A winner REPLACES the canonical settlement, so it brings a different outbox item.
     const stored = makeDeliveryProjection("delivery-1", "delivered", false, 0);
     const incoming = makeDeliveryProjection("delivery-2", "pending", false, 0);
     const result = applyInterviewSettlement(runtimeAuthoritativeBlock(stored), {
@@ -1576,11 +1498,8 @@ describe("delivery monotonicity", () => {
   });
 
   it("clears delivery when a winning settlement carries null", () => {
-    // Same adopt-on-win rule, null included. The new settlement has no
-    // outbox item; inheriting the old projection would attribute a stale
-    // delivery to a fresh answer. Contrast "never lets a null delivery
-    // clear an existing projection" above, which is a same-id replay
-    // (MERGE, silence is not a retraction).
+    // Same adopt-on-win rule, null included.
+    // Contrast "never lets a null delivery clear an existing projection" above, which is a same-id replay (MERGE, silence is not a retraction).
     const stored = makeDeliveryProjection("delivery-1", "delivered", false, 0);
     const result = applyInterviewSettlement(runtimeAuthoritativeBlock(stored), {
       ...guiAnswered(20),
@@ -1593,9 +1512,8 @@ describe("delivery monotonicity", () => {
 
 describe("draft/outcome relation", () => {
   it("drops drafts at the boundary of a winning answered or failed settlement", () => {
-    // Saved drafts exist only for an explicit Skip. A settlement that
-    // resolves or fails has no such thing; carrying them would render
-    // "saved" work the user never saved.
+    // Saved drafts exist only for an explicit Skip.
+    // A settlement that resolves or fails has no such thing; carrying them would render "saved" work the user never saved.
     const answered = applyInterviewSettlement(streamingBlock(), {
       ...guiAnswered(10),
       draftAnswers: [makeDraft(["lodash"])],
@@ -1640,10 +1558,8 @@ describe("draft/outcome relation", () => {
   });
 
   it("clears historical drafts on a losing write that still reports changed", () => {
-    // Historical row: answered/failed WITH non-empty drafts. A losing
-    // settlement that still reports `changed` (new diagnostic, or a delivery
-    // projection) must repair drafts on that write - gating the clear on
-    // `wins` left the contradiction in place indefinitely.
+    // Historical row: answered/failed WITH non-empty drafts.
+    // A losing settlement that still reports `changed` (new diagnostic, or a delivery projection) must repair drafts on that write - gating the clear on `wins` left the contradiction in place indefinitely.
     const drafts = [makeDraft(["lodash"])];
     const answeredHistorical: ReducibleInterviewBlock = {
       ...streamingBlock(),
@@ -1716,10 +1632,7 @@ describe("draft/outcome relation", () => {
 
 describe("terminal authority degradation", () => {
   it("treats a canonical outcome with null settlement as payload authority a runtime event cannot replace", () => {
-    // settlement.source is a closed enum with .catch(null). A newer writer
-    // adding a source value degrades provenance to null while leaving
-    // outcome intact. Treating that as unowned would let any runtime
-    // settlement destroy the skip.
+    // settlement.source is a closed enum with .catch(null).
     const drafts = [makeDraft(["lodash"])];
     const degradedSkip: ReducibleInterviewBlock = {
       ...streamingBlock(),
@@ -1884,11 +1797,7 @@ describe("settlementExtensions clearing boundary", () => {
   });
 
   it("keeps clearInterviewSettlement exhaustive against interviewBlockSchema settlement-owned keys", () => {
-    // Adding a new top-level field on the schema without classifying it here
-    // fails. Classifying it as settlement-owned without teaching the clearer
-    // to write it also fails. That is the loud failure a future terminal
-    // settlement key needs; putting the fact in `settlementExtensions`
-    // instead is how it stays invisible to this list on purpose.
+    // Adding a new top-level field on the schema without classifying it here fails.
     const schemaKeys = Object.keys(interviewBlockSchema.shape).sort();
     const classified = [
       ...SETTLEMENT_OWNED_BLOCK_KEYS,
@@ -1914,12 +1823,8 @@ describe("settlementExtensions clearing boundary", () => {
 
 describe("changed === false patch exhaustiveness", () => {
   it("returns ownedPatch(block) field-for-field whenever apply or clear reports no change", () => {
-    // `changed: false` is what suppresses persist and broadcast. A field
-    // omitted from the no-op patch is a field that can be silently dropped
-    // (the generation-omission hole in `sameDelivery` was this class of bug).
-    // Cross-product existing × incoming delivery so the guard is the algebra,
-    // not a handful of pinned cells. Readable generation regressions stay
-    // above; this one is the invariant.
+    // `changed: false` is what suppresses persist and broadcast.
+    // A field omitted from the no-op patch is a field that can be silently dropped (the generation-omission hole in `sameDelivery` was this class of bug).
     const universe = deliveryUniverse();
     expect(universe).toHaveLength(
       1 +
@@ -2014,9 +1919,7 @@ describe("reconcileInterviewDelivery", () => {
   });
 
   it("is a no-op when settlementId does not match", () => {
-    // Reconciliation runs against whatever the block happens to hold. A
-    // block that has since been re-settled is not the one this outbox item
-    // describes; repairing it would attach a delivery to the wrong answer.
+    // Reconciliation runs against whatever the block happens to hold.
     const block = reduce(streamingBlock(), guiAnswered(10)).block;
     const result = reconcileInterviewDelivery(block, {
       settlementId: "other-settlement",
@@ -2053,12 +1956,7 @@ describe("reconcileInterviewDelivery", () => {
   });
 
   it("clears historical answered and failed drafts on a matching settlement while still repairing delivery", () => {
-    // This is a write through the same persistence boundary as the reducer, so
-    // it owes the same invariant: drafts exist only for an explicit Skip. A
-    // historical row carrying `answered`/`failed` alongside drafts is repaired
-    // here too, otherwise a block could be reconciled repeatedly and keep its
-    // contradiction forever purely because the repair happened to arrive on
-    // this path rather than the reducer's.
+    // This is a write through the same persistence boundary as the reducer, so it owes the same invariant: drafts exist only for an explicit Skip.
     const drafts = [makeDraft(["lodash"])];
     const authoritative = makeDeliveryProjection(
       "delivery-repaired",
@@ -2119,10 +2017,7 @@ describe("reconcileInterviewDelivery", () => {
   });
 
   it("is a strict no-op on a contradictory block when settlementId does not match", () => {
-    // The no-op must stay strict - the reconciler does not repair blocks it
-    // does not own, including contradictory drafts. Repairing anyway would
-    // attach a delivery to the wrong answer, which is worse than leaving a
-    // stale projection that the next subscribe corrects.
+    // The no-op must stay strict - the reconciler does not repair blocks it does not own, including contradictory drafts.
     const drafts = [makeDraft(["lodash"])];
     const block: ReducibleInterviewBlock = {
       ...guiAuthoritativeBlock(makeDelivery("pending")),

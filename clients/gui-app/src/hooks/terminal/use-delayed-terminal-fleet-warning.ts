@@ -2,11 +2,7 @@ import { useEffect, useState } from "react";
 
 const TERMINAL_FLEET_WARNING_DELAY_MS = 750;
 
-/**
- * The fleet stream deliberately emits a local-only replacement before cloud
- * discovery starts. Delay that expected bootstrap state so it only becomes a
- * warning when remote coverage is genuinely unavailable.
- */
+/** The fleet stream deliberately emits a local-only replacement before cloud discovery starts. */
 export function useDelayedTerminalFleetWarning(
   incomplete: boolean,
   contextKey: string,

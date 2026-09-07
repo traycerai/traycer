@@ -1,17 +1,4 @@
-/**
- * FLOATING-EDGE geometry: where an undirected pair edge should meet each node.
- *
- * The previous canvas anchored every edge bottom-of-source → top-of-target,
- * which is only ever right when the target sits directly below the source. A
- * target beside or above its source produced a curve that looped back over the
- * node it started from. Fixed anchors also make no sense for an edge with no
- * direction: there is no "source side" to leave from.
- *
- * So the endpoints are computed instead - each end meets the border of its own
- * box on the side facing the other box. Pure geometry, kept out of the edge
- * component so it can be tested without mounting React Flow (which jsdom cannot
- * measure).
- */
+/** FLOATING-EDGE geometry: where an undirected pair edge should meet each node. */
 import { Position } from "@xyflow/react";
 
 export interface CommGraphEdgeBox {
@@ -35,14 +22,7 @@ function centreOf(box: CommGraphEdgeBox): { x: number; y: number } {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-/**
- * Where the segment between the two centres crosses `box`'s border.
- *
- * Scales the centre-to-centre vector down to the box's own half-extents, which
- * lands on whichever edge the vector actually exits through - no per-side
- * casework, and it degenerates gracefully when the boxes overlap (the scale
- * factor just clamps to the centre).
- */
+/** Where the segment between the two centres crosses `box`'s border. */
 function borderPoint(
   box: CommGraphEdgeBox,
   toward: { x: number; y: number },
@@ -61,8 +41,7 @@ function borderPoint(
 }
 
 /**
- * Which side of its own box a point sits on, so the bezier leaves perpendicular
- * to that face instead of curling around the node.
+ * Which side of its own box a point sits on, so the bezier leaves perpendicular to that face instead of curling around the node.
  */
 function sideOf(
   box: CommGraphEdgeBox,

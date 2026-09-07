@@ -24,9 +24,8 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { SearchRunTarget } from "@/lib/commands/sources/open/search-target";
 import type { UseWorkspaceSearchTextArgs } from "@/hooks/workspace/use-workspace-search-text-query";
 
-// Only the fields the component actually reads off a query result. `data` is
-// `unknown` so a test can hand it any response shape (vi.mock factories are
-// untyped, so the real hook's return type never has to be reconstructed).
+// Only the fields the component actually reads off a query result.
+// `data` is `unknown` so a test can hand it any response shape (vi.mock factories are untyped, so the real hook's return type never has to be reconstructed).
 interface MockQueryResult {
   readonly data: unknown;
   readonly isError: boolean;
@@ -47,18 +46,14 @@ interface MockState {
     (tabId: string, contentId: string, line: number, col: number | null) => void
   >;
   readonly toast: Mock<(message: string) => void>;
-  // Both targets now run through `workspace.searchText`; the mock returns the
-  // code result for a `{ root }` reference and the artifact result for a
-  // `{ kind: "epic-artifacts" }` reference.
+  // Both targets now run through `workspace.searchText`; the mock returns the code result for a `{ root }` reference and the artifact result for a `{ kind: "epic-artifacts" }` reference.
   codeResult: MockQueryResult;
   artifactResult: MockQueryResult;
   // The args the component last passed to the (mocked) text-search hook for each
   // reference kind, so a test can assert options reach the request/query key.
   lastCodeArgs: UseWorkspaceSearchTextArgs | null;
   lastArtifactArgs: UseWorkspaceSearchTextArgs | null;
-  // `<root>||<query>` (code) / `<query>` (artifact) recorded for every render
-  // where the hook would issue an RPC (enabled + non-empty query), so a
-  // debounce/coalescing test can assert intermediate keystrokes never fired.
+  // `<root>||<query>` (code) / `<query>` (artifact) recorded for every render where the hook would issue an RPC (enabled + non-empty query), so a debounce/coalescing test can assert intermediate keystrokes never fired.
   readonly codeIssued: string[];
   readonly artifactIssued: string[];
   // Logical-artifact-path -> authoritative identity, the live-Yjs resolution a
@@ -97,11 +92,6 @@ const state = vi.hoisted<MockState>(() => ({
   sessionHostId: "session-host",
 }));
 
-// Mocked at the hooks the component actually reads. It used to stub
-// `useHostClient` / `useAddressableHostId`, which resolved the APP-WIDE
-// pointer; those two now name modules this component no longer imports, so
-// they stubbed nothing and the suite stamped every opened tile with the
-// unknown-host placeholder while still passing.
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
@@ -179,10 +169,7 @@ const CODE_TARGET: SearchRunTarget = {
   root: "/ws",
 };
 
-// The <Command> onKeyDown fires only for keys that actually reach cmdk (i.e.
-// were NOT stopped at a focused control), so a test can assert isolation. cmdk
-// forwards this prop to its root, exactly as the real pane opener passes its own
-// onKeyDown.
+// The <Command> onKeyDown fires only for keys that actually reach cmdk (i.e. were NOT stopped at a focused control), so a test can assert isolation. cmdk forwards this prop to its root, exactly as the real pane opener passes its own onKeyDown.
 function renderView(target: SearchRunTarget, query: string) {
   return render(
     <Command
@@ -380,9 +367,7 @@ describe("SearchRunView - code target", () => {
   it("re-issues the request when an option changes (no stale prior-glob render)", () => {
     state.codeResult = codeReady([], false);
     renderView(CODE_TARGET, "foo");
-    // Every option feeds the request and thus the TanStack query key, so a
-    // change mints a new key: a response for the previous glob settings lands
-    // under the old key and can never render for the new one.
+    // Every option feeds the request and thus the TanStack query key, so a change mints a new key: a response for the previous glob settings lands under the old key and can never render for the new one.
     fireEvent.change(
       screen.getByRole("textbox", { name: /files to include/i }),
       { target: { value: "*.ts" } },
@@ -550,11 +535,7 @@ describe("SearchRunView - artifact target (workspace.searchText)", () => {
   });
 
   it("stamps the opened artifact with the EPIC SESSION's host, not the app-wide pointer", () => {
-    // A retained Epic stays bound to the machine its session runs on, while
-    // Settings ▸ Activate moves the app-wide pointer out from under it. The
-    // artifact mirror this result came from belongs to the session's host, so
-    // stamping the opened tile with the pointer hands the tab a host that
-    // never held the artifact.
+    // The artifact mirror this result came from belongs to the session's host, so stamping the opened tile with the pointer hands the tab a host that never held the artifact.
     state.sessionHostId = "session-host";
     state.artifactIndex = {
       "tickets/known": { id: "art-1", kind: "ticket", title: "Known" },
@@ -573,9 +554,7 @@ describe("SearchRunView - artifact target (workspace.searchText)", () => {
   });
 
   it("still opens before the Epic session resolves, with no host to stamp", () => {
-    // `useEpicSessionHostId` is null until the session handle exists. The
-    // placeholder is the honest answer there - what must NOT happen is falling
-    // back to whatever host the window happens to be pointing at.
+    // The placeholder is the honest answer there - what must NOT happen is falling back to whatever host the window happens to be pointing at.
     state.sessionHostId = null;
     state.artifactIndex = {
       "tickets/known": { id: "art-1", kind: "ticket", title: "Known" },
@@ -594,10 +573,7 @@ describe("SearchRunView - artifact target (workspace.searchText)", () => {
   });
 
   it("fails safe when re-resolution returns null (stale/deleted OR ambiguous)", () => {
-    // A path with no live identity - a deleted artifact, or an AMBIGUOUS path two
-    // live artifacts share (which the resolver fails closed to `null`) - both
-    // reach the component as a null resolution. The result must never open an
-    // artifact AND never fall through to a workspace-file (mirror) reveal.
+    // The result must never open an artifact AND never fall through to a workspace-file (mirror) reveal.
     state.artifactResult = artifactResponse(
       "ready",
       [artifactMatch("tickets/gone")],
@@ -675,9 +651,7 @@ describe("SearchRunView - query debounce", () => {
     root: "/ws-b",
   };
 
-  // Keyed on the target root so a target switch REMOUNTS, exactly as the pane
-  // opener does (its sub-page id changes), exercising the unmount-clears-timer
-  // path for the scope test.
+  // Keyed on the target root so a target switch REMOUNTS, exactly as the pane opener does (its sub-page id changes), exercising the unmount-clears-timer path for the scope test.
   function codeTree(query: string, target: SearchRunTarget) {
     return (
       <Command shouldFilter={false}>

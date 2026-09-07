@@ -66,9 +66,8 @@ describe("wireAvailabilityRecovery", () => {
     h.emit();
     expect(h.notify).toHaveBeenCalledTimes(1);
 
-    // A DISTINCT second recovery episode 3s later: the host stalled again
-    // and came back. Its newly-stranded queries have no other automatic
-    // signal, so the gate must defer this notify, not swallow it.
+    // A DISTINCT second recovery episode 3s later: the host stalled again and came back.
+    // Its newly-stranded queries have no other automatic signal, so the gate must defer this notify, not swallow it.
     now.value = 4_000;
     h.emit();
     expect(h.notify).toHaveBeenCalledTimes(1);
@@ -105,9 +104,8 @@ describe("wireAvailabilityRecovery", () => {
     h.emit();
     expect(h.notify).toHaveBeenCalledTimes(1);
 
-    // The event loop stalls - this feature's own scenario. The injected clock
-    // moves past the cooldown while the armed timer is still overdue, so the
-    // next evidence message is dispatched BEFORE the timer it already owes.
+    // The event loop stalls - this feature's own scenario.
+    // The injected clock moves past the cooldown while the armed timer is still overdue, so the next evidence message is dispatched BEFORE the timer it already owes.
     now.value = 20_000;
     h.emit();
     expect(h.notify).toHaveBeenCalledTimes(2);

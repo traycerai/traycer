@@ -27,15 +27,7 @@ export interface WorktreeCreateCommandOpts {
   readonly carryUncommittedChanges: boolean;
 }
 
-/**
- * Resolve the CLI flags into the host's branch-selection union. `--existing`
- * routes to the `existing` variant verbatim (no source / no carry); `--branch`
- * routes to the `new` variant, defaulting `source` to the workspace's current
- * branch (resolved from the host) when `--source-branch` is omitted - the
- * same branch the renderer picks. The empty-name and mutual-exclusion guards
- * run here, before any create call, so a misuse reports a clear CLI error
- * rather than a raw zod failure from the host.
- */
+/** Resolve the CLI flags into the host's branch-selection union. `--existing` routes to the `existing` variant verbatim (no source / no carry); `--branch` routes to the `new` variant, defaulting `source` to the workspace's current branch (resolved from the host) when `--source-branch` is omitted - the same branch the renderer picks. */
 export async function resolveWorktreeBranchSelection(
   opts: WorktreeCreateCommandOpts,
 ): Promise<WorktreeBranchSelection> {
@@ -61,10 +53,8 @@ export async function resolveWorktreeBranchSelection(
         exitCode: 1,
       });
     }
-    // Same rule, same reason: the `existing` selection carries no
-    // `carryUncommittedChanges` field, so this flag had been accepted and then
-    // silently dropped - the user asked for their work to come along and it
-    // did not. Refuse rather than quietly do nothing.
+    // Same rule, same reason: the `existing` selection carries no `carryUncommittedChanges` field, so this flag had been accepted and then silently dropped - the user asked for their work to come along and it did not.
+    // Refuse rather than quietly do nothing.
     if (opts.carryUncommittedChanges) {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -114,11 +104,7 @@ export async function resolveWorktreeBranchSelection(
   };
 }
 
-/**
- * Resolve the workspace's current branch: ask the host for its branch list
- * and take the one HEAD points at. This is the `source` a new branch forks from
- * when `--source-branch` is omitted, matching how the renderer resolves it.
- */
+/** Resolve the workspace's current branch: ask the host for its branch list and take the one HEAD points at. This is the `source` a new branch forks from when `--source-branch` is omitted, matching how the renderer resolves it. */
 async function resolveCurrentBranch(workspacePath: string): Promise<string> {
   const response = await toAgentCliError(
     callHostRpc("worktree.listBranches", {
@@ -163,18 +149,7 @@ export function buildWorktreeCreateCommand(
   };
 }
 
-/**
- * Human summary of a create. Pure so the layout is testable without a host, and
- * deliberately not the response object: `--json` still returns the protocol
- * shape verbatim for anyone parsing this, while a person gets the four facts
- * they came for - where it landed, on which branch, from what, and what to do
- * with it.
- *
- * The `branch` selection is threaded in rather than read back off the response
- * because it is the only place the *intent* survives: the wire response reports
- * a branch name, not whether that branch was created or checked out, nor
- * whether uncommitted changes were carried along.
- */
+/** Human summary of a create. Pure so the layout is testable without a host, and deliberately not the response object: `--json` still returns the protocol shape verbatim for anyone parsing this, while a person gets the four facts they came for - where it landed, on which branch, from what, and what to do with it. */
 export function formatWorktreeCreateResult(
   response: WorktreeCreatePathsResponse,
   branch: WorktreeBranchSelection,
@@ -191,9 +166,8 @@ export function formatWorktreeCreateResult(
       .join("\n\n");
   }
   if (response.entries.length === 0) {
-    // `perEntry` says every entry succeeded, so an empty `entries` is the host
-    // contradicting itself. Say so plainly instead of printing a confident
-    // summary of nothing.
+    // `perEntry` says every entry succeeded, so an empty `entries` is the host contradicting itself.
+    // Say so plainly instead of printing a confident summary of nothing.
     return "The host reported success but returned no worktree path. Run with --json to see the full response.";
   }
   const lines: string[] = [];
@@ -211,20 +185,8 @@ export function formatWorktreeCreateResult(
             : `${entry.repoIdentifier.owner}/${entry.repoIdentifier.repo}`,
         ],
         ["Mode", entry.mode],
-        // Only the `new` selection can carry work across, and
-        // `resolveWorktreeBranchSelection` rejects `--carry-uncommitted`
-        // alongside `--existing`, so an `existing` create has nothing to
-        // report here rather than a "no" a reader would have to interpret.
-        //
-        // The carrying case is reported as INTENT, not as an outcome, and the
-        // distinction is load-bearing. The response says a worktree was
-        // created; it does not say whether any WIP came with it. Carry is
-        // best-effort on the host - an unresolvable carry root, a failed stash
-        // replay, an unreadable untracked file - and none of those turn the
-        // create into a failed `perEntry`. Printing "carried" off the request
-        // flag would state as fact something this command cannot observe, which
-        // is the class of false human status CLI-020 exists to remove. The
-        // not-carrying case IS certain: nothing was asked for, so nothing moved.
+        // Only the `new` selection can carry work across, and `resolveWorktreeBranchSelection` rejects `--carry-uncommitted` alongside `--existing`, so an `existing` create has nothing to report here rather than a "no" a reader would have to interpret.
+        // The carrying case is reported as INTENT, not as an outcome, and the distinction is load-bearing.
         ...(branch.type === "existing"
           ? []
           : ([
@@ -243,19 +205,7 @@ export function formatWorktreeCreateResult(
   return lines.join("\n");
 }
 
-/**
- * The host's `branch` when it reported one, and an explicit "it did not" when
- * it did not.
- *
- * This used to fall back to `branch.name` - the name we ASKED for - and then
- * describe it with the same "(new branch, forked from x)" / "(checked out)"
- * confidence as a reported one. `worktreeCreatedPathEntrySchema` makes the
- * returned branch nullable, so a null is the host declining to state the
- * outcome, and echoing the request back dressed as a result is the same
- * false-status defect this file already fixed for the carry row. The requested
- * name is still shown, because it is the useful thing to print - it is just
- * labelled as the request rather than as what happened.
- */
+/** The host's `branch` when it reported one, and an explicit "it did not" when it did not. This used to fall back to `branch.name` - the name we ASKED for - and then describe it with the same "(new branch, forked from x)" / "(checked out)" confidence as a reported one. */
 function formatBranch(
   created: string | null,
   branch: WorktreeBranchSelection,

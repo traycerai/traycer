@@ -5,13 +5,7 @@ import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation"
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 
-/**
- * The one Open Externally wiring for a workspace file tile: the tab host's
- * `editor.openPaths` mutation plus the shared pressed-feedback window, keyed
- * to the caller's target (an editor id, or `"system"` for the OS default
- * app). The file lives on the TAB's host - opening it app-wide would ask
- * whichever machine the app is pointed at for a path it may not have.
- */
+/** The one Open Externally wiring for a workspace file tile: the tab host's `editor.openPaths` mutation plus the shared pressed-feedback window, keyed to the caller's target (an editor id, or `"system"` for the OS default app). */
 export function useWorkspaceFileOpenExternally(args: {
   readonly workspacePath: string;
   readonly filePath: string;

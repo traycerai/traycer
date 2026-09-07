@@ -32,12 +32,7 @@ import type { PrDetailSubscriptionResult } from "@/hooks/pr/use-pr-detail-subscr
 import { PrDiffTile } from "@/components/epic-canvas/renderers/pr-diff-tile";
 
 /**
- * Tile-level call-and-degrade, mid-session downgrade, and drift recovery.
- *
- * The body suite drives `PrLocalDiffBody` props directly and cannot prove the
- * tile never issues a monolith RPC on summary success, or that a same-key
- * `E_HOST_UNSUPPORTED` refetch actually flips a populated tile to monolith
- * mode. This harness uses a real QueryClient and a narrow `request` mock.
+ * The body suite drives `PrLocalDiffBody` props directly and cannot prove the tile never issues a monolith RPC on summary success, or that a same-key `E_HOST_UNSUPPORTED` refetch actually flips a populated tile to monolith mode.
  */
 
 const tabHostClient = vi.hoisted(() => ({
@@ -353,9 +348,8 @@ describe("PrDiffTile call-and-degrade", () => {
   });
 
   it("issues nothing while the tab client's readiness is unresolved", async () => {
-    // A non-null client whose active host has not resolved yet (startup,
-    // sign-in change, reconnect). Probing now would cache a transport error
-    // under `staleTime: Infinity` with `retry: false` - a wedged tile.
+    // A non-null client whose active host has not resolved yet (startup, sign-in change, reconnect).
+    // Probing now would cache a transport error under `staleTime: Infinity` with `retry: false` - a wedged tile.
     tabHostClient.getActiveHostId.mockReturnValue(null);
     tabHostClient.request.mockResolvedValue(summaryOk());
     renderTile(makeQueryClient());
@@ -434,12 +428,8 @@ describe("PrDiffTile call-and-degrade", () => {
   });
 
   it("falls back to monolith when the DOWNGRADE is first observed by a per-file call", async () => {
-    // The summary succeeded while the host still had the split methods; the
-    // downgrade (or reconnect to an older build) lands before any row is
-    // fetched. The cached summary never re-asks on its own at
-    // `staleTime: Infinity`, so the per-file E_HOST_UNSUPPORTED must route
-    // through the sections' drift report: the recovery's summary refetch
-    // fails unsupported, which is what flips the tile to monolith.
+    // The summary succeeded while the host still had the split methods; the downgrade (or reconnect to an older build) lands before any row is fetched.
+    // The cached summary never re-asks on its own at `staleTime: Infinity`, so the per-file E_HOST_UNSUPPORTED must route through the sections' drift report: the recovery's summary refetch fails unsupported, which is what flips the tile to monolith.
     let hostDowngraded = false;
     tabHostClient.request.mockImplementation((method: string) => {
       if (method === "pr.getLocalDiffSummary") {
@@ -461,9 +451,7 @@ describe("PrDiffTile call-and-degrade", () => {
       );
     });
     expect(methodCalls("pr.getLocalDiff")).toHaveLength(1);
-    // Every mounted row observed the downgrade, but the tile's once-per-range
-    // token must collapse that burst into ONE recovery refetch: the initial
-    // summary ask plus exactly one re-ask.
+    // Every mounted row observed the downgrade, but the tile's once-per-range token must collapse that burst into ONE recovery refetch: the initial summary ask plus exactly one re-ask.
     expect(methodCalls("pr.getLocalDiffSummary")).toHaveLength(2);
   });
 });
@@ -507,9 +495,7 @@ describe("PrDiffTile range-drift recovery", () => {
     });
     const afterFirstRecovery = summaryCalls;
 
-    // Quiescence: a still-mounted section must not re-report on render churn
-    // after the failed recovery released the token. The old remount-raced
-    // version could not pin this; the hot-loop defect passed it.
+    // Quiescence: a still-mounted section must not re-report on render churn after the failed recovery released the token.
     mounted.view.rerender(
       tileTree({
         queryClient,
@@ -558,11 +544,7 @@ describe("PrDiffTile range-drift recovery", () => {
   });
 
   it("permits a NEW recovery when a spent range returns after an intervening range", async () => {
-    // Range A drifts and spends its token; the PR advances to range D (which
-    // is healthy); a force-push returns the PR to A, whose summary and
-    // unavailable per-file answers are all still cached. The return is a new
-    // EPISODE of A - without the render-time token reset on range change,
-    // A's second death would be suppressed until a manual refresh.
+    // The return is a new EPISODE of A - without the render-time token reset on range change, A's second death would be suppressed until a manual refresh.
     const headA = "a".repeat(40);
     const headD = "d".repeat(40);
     let summaryCalls = 0;

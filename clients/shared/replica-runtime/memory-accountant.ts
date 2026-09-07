@@ -1,38 +1,14 @@
 /**
- * A process-wide memory accountant. There is no such thing today, anywhere.
- *
- * What exists instead is a set of uncoordinated per-plane constants: 8 MiB per
- * chat transcript window multiplied by an unbounded number of leased sessions,
- * a hot artifact-room cap of 32, a live-epic cap of 5. Each is defensible on
- * its own and none of them knows the others exist, so the renderer's actual
- * ceiling is a product nobody computed.
- *
- * Two rules govern this interface, and both are lessons already paid for:
- *
- * 1. **Budgets are SOFT, with protected regions.** A hard ceiling reproduces
- *    the hydrate/evict/refetch livelock the chat plane discovered: the server
- *    always serves the first requested row whatever it costs, so a single
- *    visible row larger than the whole budget is a legal response. Evict it as
- *    "over budget" and its gap is still on screen, the planner re-requests it,
- *    and the client hydrates, evicts and refetches that one row forever while
- *    it never renders once. Protecting what the reader is looking at bounds the
- *    overage by one viewport and ends when they scroll away.
- * 2. **Reclaiming zero bytes is a legal, non-exceptional answer.** It means
- *    everything left is protected. The accountant must record it and stop -
- *    retrying is the livelock with an extra step.
+ * A process-wide memory accountant.
+ * Evict it as "over budget" and its gap is still on screen, the planner re-requests it, and the client hydrates, evicts and refetches that one row forever while it never renders once.
  */
 import type { RuntimeEnvironment } from "./runtime-environment";
 
-/** Which budget a charge belongs to: `"epic-replicas"`, `"chat-windows"`, … */
 export type BudgetPlaneId = string;
 
 /**
- * What is being charged inside a plane - one transcript window, one
- * materialised doc, one replica's record tables.
- *
- * Charges are per holder rather than a single running total so eviction can be
- * targeted and so a leak is attributable. A plane with one aggregate number can
- * tell you it is over budget and nothing about why.
+ * What is being charged inside a plane - one transcript window, one materialised doc, one replica's record tables.
+ * Charges are per holder rather than a single running total so eviction can be targeted and so a leak is attributable.
  */
 export type BudgetHolderId = string;
 
@@ -45,25 +21,16 @@ export type BudgetPressure =
   | "over"
   /**
    * Over, and everything left is protected.
-   *
-   * The honest terminal state, and the one a caller must NOT respond to by
-   * asking again. Surface it, telemeter it, and let the protection expire on
-   * its own (the reader scrolls away, the lease is released, the required row
-   * stops being required).
+   * The honest terminal state, and the one a caller must not respond to by asking again.
    */
   | "over-protected";
 
-/**
- * Why a region cannot be evicted. Supplied by the plane, which is the only
- * component that knows; the accountant only needs to know that it exists so it
- * can report `"over-protected"` honestly rather than reporting a failure.
- */
-export type ProtectedRegionKind =
   /**
-   * Where a live turn happens and where every snapshot re-seats content.
-   * Re-hydratable: dropping it leaves a gap the planner or the next snapshot
-   * fills. Windowed live records and the tail span use this.
+   * Why a region cannot be evicted.
+   * Supplied by the plane, which is the only component that knows; the accountant only needs to know that it exists so it can report `"over-protected"` honestly rather than reporting a failure.
    */
+export type ProtectedRegionKind =
+  /** Where a live turn happens and where every snapshot re-seats content. */
   | "tail"
   /** On screen right now. */
   | "visible"
@@ -72,9 +39,8 @@ export type ProtectedRegionKind =
   /** Held by a lease - an editor is bound to it, by reference. */
   | "leased"
   /**
-   * The only copy. There is no cheaper representation and no range hydration
-   * that can restore it. The pre-windowed whole-transcript residency uses
-   * this: reclaiming it would drop the session's only messages/events.
+   * The only copy.
+   * The pre-windowed whole-transcript residency uses this: reclaiming it would drop the session's only messages/events.
    */
   | "sole-copy";
 
@@ -92,32 +58,18 @@ export interface EvictionOutcome {
   readonly protectedBytesByKind: readonly ProtectedBytes[];
 }
 
-/**
- * Registered by each plane. The accountant calls it when the plane is over its
- * soft limit and asks for a specific number of bytes back.
- *
- * The plane decides WHAT to drop and applies its own protection rules - the
- * accountant never names a holder to evict, because "coldest" means something
- * different for a span-based transcript window than for an LRU of materialised
- * docs.
- *
- * Synchronous by contract. An async eviction hook would let a second budget
- * check run against state the first one is still mutating, which is how a
- * double eviction of the same span becomes possible.
- */
 export type BudgetEvictionHook = (overBytes: number) => EvictionOutcome;
 
 export interface PlaneBudgetSpec {
   readonly planeId: BudgetPlaneId;
   /**
-   * SOFT. Crossing it triggers {@link evict}; it never causes a rejection, and
+   * soft. Crossing it triggers {@link evict}; it never causes a rejection, and
    * nothing in the runtime may refuse to hydrate because of it.
    */
   readonly softLimitBytes: number;
   /**
    * Fraction of {@link softLimitBytes} at which pressure becomes `"near"`.
-   * Planes use it to stop growing eagerly (drop a prefetch, shrink a read-ahead)
-   * before anything has to be thrown away.
+   * Planes use it to stop growing eagerly (drop a prefetch, shrink a read-ahead) before anything has to be thrown away.
    */
   readonly nearThresholdRatio: number;
   readonly evict: BudgetEvictionHook;
@@ -132,18 +84,11 @@ export interface BudgetRegistration {
 export interface PlaneUsage {
   readonly planeId: BudgetPlaneId;
   readonly softLimitBytes: number;
-  /** Bytes the plane has SETTLED - measured, authoritative. */
+  /** Bytes the plane has settled - measured, authoritative. */
   readonly settledBytes: number;
   /**
    * Bytes charged provisionally and not yet settled.
-   *
-   * Deferred settling exists because measuring is expensive relative to
-   * appending: a live turn appends continuously, and re-measuring per append
-   * would dominate the cost of the append itself. The plane charges an estimate
-   * and settles the real figure at a boundary. The consequence, which the
-   * accountant must not paper over: a window carrying a turn's worth of
-   * deferred growth reads as under budget until it settles, so anything that
-   * makes an eviction decision settles FIRST.
+   * The consequence, which the accountant must not paper over: a window carrying a turn's worth of deferred growth reads as under budget until it settles, so anything that makes an eviction decision settles first.
    */
   readonly provisionalBytes: number;
   readonly holderCount: number;
@@ -152,39 +97,20 @@ export interface PlaneUsage {
   readonly evictionsRequested: number;
   readonly bytesReclaimed: number;
   /**
-   * Times an eviction returned zero because everything left was protected AND
-   * nothing was dispatched to free it later.
-   *
-   * Read this together with {@link evictionsDeferred}: before the two were
-   * split, a plane whose tier lives off-thread incremented this on every
-   * breach — including the ones the tier resolved a millisecond later — and
-   * "refused" is the wrong word for that. Anything trending on this counter
-   * needs both.
+   * Times an eviction returned zero because everything left was protected and nothing was dispatched to free it later.
    */
   readonly evictionsRefused: number;
   /**
-   * Times an eviction returned zero because the freeing was DISPATCHED rather
-   * than declined — the plane's tier is off-thread and its settles arrive on
-   * their own schedule.
-   *
-   * Mutually exclusive with {@link evictionsRefused}: one breach increments
-   * exactly one of the two, never both.
+   * Times an eviction returned zero because the freeing was dispatched rather than declined - the plane's tier is off-thread and its settles arrive on their own schedule.
+   * Mutually exclusive with {@link evictionsRefused}: one breach increments exactly one of the two, never both.
    */
   readonly evictionsDeferred: number;
   /**
-   * Why the last reconcile could not reclaim more, empty when the plane is
-   * under its limit or simply had nothing more to give. Survives on the
-   * snapshot so `"over-protected"` is attributable.
+   * Why the last reconcile could not reclaim more, empty when the plane is under its limit or simply had nothing more to give.
    */
   readonly protectedBytesByKind: readonly ProtectedBytes[];
 }
 
-/**
- * Point-in-time telemetry. The exit criteria for putting a plane under the
- * accountant are stated in these terms - docs resident, bytes decoded,
- * projection row counts, eviction effectiveness, per-plane budget pressure -
- * so the snapshot is part of the contract rather than a debugging afterthought.
- */
 export interface AccountantSnapshot {
   readonly takenAtMs: number;
   readonly planes: readonly PlaneUsage[];
@@ -205,32 +131,16 @@ export interface MemoryAccountant {
   ): void;
 
   /**
-   * Record the measured size of a holder. REPLACES the holder's total - both
-   * its provisional and its previous settled figure - rather than adding to it,
-   * because the argument is the answer to "how big is this now", not "how much
-   * did it grow".
+   * Record the measured size of a holder.
+   * Replaces the holder's total - both its provisional and its previous settled figure - rather than adding to it, because the argument is the answer to "how big is this now", not "how much did it grow".
    */
   settle(planeId: BudgetPlaneId, holderId: BudgetHolderId, bytes: number): void;
 
   /** Forget a holder entirely (it was evicted, demoted, or disposed). */
   release(planeId: BudgetPlaneId, holderId: BudgetHolderId): void;
 
-  /**
-   * Settle-then-check, running the plane's eviction hook if it is over.
-   *
-   * Explicit rather than automatic on every charge: a plane knows where its
-   * consistent boundaries are, and evicting in the middle of applying a frame
-   * can drop a span the rest of that frame is about to reference.
-   */
-  /**
-   * Declare, from inside a plane's own `evict`, that the freeing was
-   * DISPATCHED rather than declined.
-   *
-   * A member rather than a field on `EvictionOutcome` deliberately: that type
-   * has ~30 construction sites across two packages, and every one of them
-   * would have had to name a concept only an off-thread tier can have. The
-   * signal belongs to the one caller that can raise it.
-   */
+  /** Settle-then-check; not automatic on every charge, because evicting mid-frame can drop a span the rest of that frame is about to reference. */
+  /** Declare from inside a plane's `evict` that freeing was dispatched rather than declined. A member, not a field on `EvictionOutcome` (~30 construction sites). */
   noteEvictionDeferred(planeId: BudgetPlaneId): void;
 
   reconcile(planeId: BudgetPlaneId): BudgetPressure;
@@ -242,19 +152,13 @@ export interface MemoryAccountant {
 
 export interface MemoryAccountantOptions {
   readonly environment: RuntimeEnvironment;
-  /**
-   * Total across all planes, for telemetry and for a future global arbitration
-   * pass. Deliberately NOT enforced here: the per-plane soft limits are what
-   * govern, and a global hard ceiling would reintroduce the livelock at a level
-   * where no plane can see which protection is blocking it.
-   */
+  /** Total across all planes, for telemetry and for a future global arbitration pass. */
   readonly observedCeilingBytes: number;
 }
 
 /**
- * The three planes Phase 1 puts under the accountant. `BudgetPlaneId` stays a
- * plain string so a later plane (canvas, comm-graph) can register without a
- * seam change; these constants are the names the known planes actually use.
+ * The three planes Phase 1 puts under the accountant.
+ * `BudgetPlaneId` stays a plain string so a later plane (canvas, comm-graph) can register without a seam change; these constants are the names the known planes actually use.
  */
 export const BUDGET_PLANE_IDS = {
   epicReplicas: "epic-replicas",
@@ -278,25 +182,16 @@ interface PlaneState {
   evictionsRefused: number;
   evictionsDeferred: number;
   /**
-   * Set by {@link MemoryAccountant.noteEvictionDeferred} DURING the plane's
-   * own `evict` call, and consumed by the reconcile that made it. Same shape
-   * and lifetime as `reconciling` above - a flag scoped to one pass, not
-   * state anyone reads across passes.
+   * Set by {@link MemoryAccountant.noteEvictionDeferred} during the plane's own `evict` call, and consumed by the reconcile that made it.
    */
   deferredInFlight: boolean;
   /**
-   * Set when a reconcile asked the plane to evict and the plane could not get
-   * back under the soft limit. Cleared by any later charge, settle, or
-   * release — those are the moments new evictable bytes (or expired
-   * protection) might have appeared. Reconcile while latched does not call
-   * the hook again: that retry is the hydrate/evict/refetch livelock with an
-   * extra step.
+   * Set when a reconcile asked the plane to evict and the plane could not get back under the soft limit.
    */
   protectedLatch: boolean;
   /**
-   * True while this plane's eviction hook is on the stack. Process-wide: one
-   * session's publish must not re-enter `evict` through another session's
-   * settle. Nested reconcile returns the current pressure without walking.
+   * True while this plane's eviction hook is on the stack.
+   * Process-wide: one session's publish must not re-enter `evict` through another session's settle.
    */
   reconciling: boolean;
   lastProtectedBytesByKind: readonly ProtectedBytes[];
@@ -367,12 +262,8 @@ function usageOf(plane: PlaneState): PlaneUsage {
 }
 
 /**
- * Process-wide memory accountant. Pure, worker-portable, no DOM.
- *
- * Charges are per holder and `settle` REPLACES the holder's total — the
- * argument is "how big is this now", not "how much did it grow". Eviction is
- * never automatic on charge: {@link MemoryAccountant.reconcile} is the
- * settle-then-check boundary, and reclaiming nothing is a legal answer.
+ * Process-wide memory accountant.
+ * Eviction is never automatic on charge: {@link MemoryAccountant.reconcile} is the settle-then-check boundary, and reclaiming nothing is a legal answer.
  */
 export function createMemoryAccountant(
   options: MemoryAccountantOptions,
@@ -494,9 +385,7 @@ export function createMemoryAccountant(
         if (stillOver) {
           plane.protectedLatch = true;
           if (outcome.reclaimedBytes === 0) {
-            // Exactly one of the two, never both: freeing that was dispatched
-            // is not freeing that was declined, and a telemetry reader cannot
-            // tell them apart after the fact.
+            // Exactly one of the two, never both: freeing that was dispatched is not freeing that was declined, and a telemetry reader cannot tell them apart after the fact.
             if (plane.deferredInFlight) plane.evictionsDeferred += 1;
             else plane.evictionsRefused += 1;
           }

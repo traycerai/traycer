@@ -15,7 +15,7 @@ describe("chat sharing in-flight gate", () => {
     expect(beginChatSharingInFlight("task-1", "viewer-1")).toBe(true);
     expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(true);
     // A later per-chat flip must not queue behind a master toggle (or vice
-    // versa) — the coordinator would let both run on different queues.
+    // versa) - the coordinator would let both run on different queues.
     expect(beginChatSharingInFlight("task-1", "viewer-1")).toBe(false);
     endChatSharingInFlight("task-1", "viewer-1");
     expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(false);

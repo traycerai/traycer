@@ -3,9 +3,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same seams as store.test.ts: temp home for the config file, pinned passwd
-// login shell so defaultShellPath() is deterministic. os.platform() stays real
-// (non-win32 on the runner).
 const h = vi.hoisted(() => ({ home: "", passwdShell: "/bin/zsh" }));
 vi.mock("node:os", async (importActual) => {
   const actual = await importActual<typeof import("node:os")>();
@@ -42,10 +39,7 @@ async function writeRaw(value: unknown): Promise<void> {
 
 describe("adversarial: canonicalisation on untouched entries", () => {
   it("FINDING: a write that touches only the selection persists a non-canonical entry verbatim", async () => {
-    // A hand-edited config with an entry whose args are DEEP-EQUAL to the family
-    // default (which the store's own writes would have stored as null). The
-    // contract's canonicalisation invariant is absolute: "no write may store
-    // entry args deep-equal to familyDefault". resetShell IS a write.
+    // A hand-edited config with an entry whose args are DEEP-EQUAL to the family default (which the store's own writes would have stored as null).
     await writeRaw({
       version: 1,
       shell: {

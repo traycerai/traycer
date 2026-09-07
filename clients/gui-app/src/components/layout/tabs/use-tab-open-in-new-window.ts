@@ -14,12 +14,8 @@ export interface TabNewWindowFlow {
   readonly epicFlow: EpicNewWindowFlow;
 }
 
-/**
- * Tab-kind-aware "Open in New Window" dispatcher. Per-kind dispatch lives
- * in `tabOpenInNewWindow` (registry) - adding a new kind plugs in there
- * without touching this hook. Strip never invokes `requestOpen` for tabs
- * whose `canOpenInNewWindow` is false.
- */
+/** Per-kind dispatch lives in `tabOpenInNewWindow` (registry) - adding a new kind plugs in there without
+ * touching this hook. Strip never invokes `requestOpen` for tabs whose `canOpenInNewWindow` is false. */
 export function useTabOpenInNewWindowFlow(): TabNewWindowFlow {
   const bridge = useWindowsBridge();
   const epicFlow = useEpicOpenInNewWindowFlow();

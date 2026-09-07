@@ -17,11 +17,7 @@ export interface AgentActivityHostEntry {
   >;
 }
 
-/**
- * Surface-test helper. Production receives an already-unioned replacement from
- * the host; this folds fixtures only so existing component tests can describe
- * multiple contributing hosts without constructing a transport.
- */
+/** Fold fixtures so tests can describe multiple hosts without a transport. Production receives an already-unioned replacement from the host. */
 export function publishAgentActivity(
   entries: readonly AgentActivityHostEntry[],
 ): void {

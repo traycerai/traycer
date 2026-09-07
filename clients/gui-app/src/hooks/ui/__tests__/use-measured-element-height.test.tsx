@@ -3,12 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 
-/**
- * Ticket 18 rider (review finding: the chat-tile ResizeObserver->prop
- * contract was previously pinned only via a hand-copied structural twin,
- * which could not fail for a real production lifecycle defect). This is the
- * SAME hook `chat-tile.tsx` consumes - not a duplicate re-implementation.
- */
+/** This is the SAME hook `chat-tile.tsx` consumes - not a duplicate re-implementation. */
 function MeasuredHeightProbe(props: { readonly mounted: boolean }): ReactNode {
   const { setElement, element, height } = useMeasuredElementHeight();
   return (
@@ -67,13 +62,7 @@ describe("useMeasuredElementHeight", () => {
     expect(screen.getByTestId("probe-height").textContent).toBe("150");
     restore();
 
-    // `height` state is independent of element identity - it survives the
-    // target unmounting. jsdom's ResizeObserver does not fire on a bare
-    // `getBoundingClientRect` change, so toggle the target off and back on
-    // (SAME hook instance, not a fresh render) to force the layout effect's
-    // initial measurement to re-run against the now-zero stub - the real
-    // regression this guards is `nextHeight <= 0` collapsing reserved
-    // layout space to zero instead of keeping the prior value.
+    // jsdom's ResizeObserver does not fire on a bare `getBoundingClientRect` change, so toggle the target off and back on (SAME hook instance, not a fresh render) to force the layout effect's initial measurement to re-run against the now-zero stub - the real regression this guards is `nextHeight <= 0` collapsing reserved layout space to zero instead of keeping the prior value.
     const restoreZero = stubHeight(0);
     act(() => {
       rerender(<MeasuredHeightProbe mounted={false} />);

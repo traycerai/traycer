@@ -23,11 +23,7 @@ const stores = new WeakMap<
   GlobalShortcutsStore
 >();
 
-/**
- * Reactive view of the desktop's `summon` global shortcut, pushed from the
- * Electron main process. `null` bridge/status on any shell without the
- * desktop global-shortcuts bridge (browser tab, pre-registry builds).
- */
+/** `null` bridge/status on any shell without the desktop global-shortcuts bridge (browser tab, pre-registry builds). */
 export function useSummonHotkey(): SummonHotkeyState {
   const runnerHost = use(RunnerHostContext);
   const bridge =

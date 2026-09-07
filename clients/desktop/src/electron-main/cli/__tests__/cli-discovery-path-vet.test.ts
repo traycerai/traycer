@@ -9,15 +9,6 @@ import {
   vetPathCliCandidate,
 } from "../cli-discovery";
 
-// PATH-candidate vetting (oss #872). `discoverCli` may only return a PATH
-// `traycer` after it answers `--version` - the name can be squatted by
-// something that is not our CLI at all (the field case: an AppImage
-// manager exposed the DESKTOP APP itself as `traycer`, which exits 0 with
-// console noise). These tests exec real fixture scripts through the real
-// probe, so they cover the execFile plumbing as well as the verdict.
-//
-// POSIX-only: the fixtures are `#!/bin/sh` scripts, and the desktop test
-// suite runs on POSIX CI.
 describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
   const tempDirs: string[] = [];
 
@@ -124,15 +115,6 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     expect(vetted).toEqual({ version: "1.2.3", source: "npm" });
   });
 
-  // `probeCliVersion` now returns a discriminated union, and the path-probe
-  // cache deliberately drops "timeout" verdicts - a `timeout` describes the
-  // probe's PATIENCE, not the binary, and the very slot-refresh that made a
-  // real packaged CLI's first `--version` slow is what repairs it for the
-  // next one. Caching it would pin a real CLI as unusable for the rest of
-  // the desktop session. Driven with a real `sleep`-based fixture past the
-  // probe's 2s timeout rather than a mocked `execFile`, so this exercises
-  // the actual kill/verdict plumbing - which costs a bit over 2 seconds per
-  // spawn. Accepted once, here, as the direct pin for this exact branch.
   it("a timed-out probe is not cached - the next vet re-probes", async () => {
     const dir = await makeTempDir();
     const candidate = join(dir, "traycer");
@@ -148,11 +130,6 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     );
     expect(first).toBeNull();
 
-    // A cached `timeout` verdict would answer this SECOND call from the
-    // cache without spawning again. Asserting on the exec count - not
-    // just the (identical, null) verdict - is what actually pins the
-    // non-caching: a same-verdict-twice check alone cannot distinguish
-    // "re-probed and timed out again" from "returned the cached one".
     const second = await vetPathCliCandidate(
       candidate,
       CLI_INVOCATION_PROBE_TIMEOUT_MS,
@@ -164,19 +141,9 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     expect(count).toBe(2);
   }, 10_000);
 
-  // "a not-a-cli verdict IS cached" is already pinned above by "caches a
-  // NEGATIVE verdict too (an unresponsive imposter is probed once, not per
-  // status poll)" - that test's fixture exits non-zero (the `not-a-cli`
-  // verdict) and asserts exactly one exec across two `vetPathCliCandidate`
-  // calls, which is this same property under a different name. Not
-  // duplicated here.
+  // "a not-a-cli verdict IS cached" is already pinned above by "caches a NEGATIVE verdict too (an unresponsive imposter is probed once, not per status poll)".
 
-  // The deadline belongs to the CALLER. Not caching a timeout was only half
-  // the fix: the launch reconcile's fall-through installs the bundled CLI
-  // and writes a Desktop-owned manifest, and a manifest outranks PATH in
-  // every later discovery - so for the one prober that can hand ownership
-  // away there is no "next time" to retry into. The same fixture that the
-  // impatient deadline condemns must vet CLEAN at the reconcile's.
+  // The same fixture that the impatient deadline condemns must vet CLEAN at the reconcile's.
   it("the patient deadline vets a slow-but-real CLI the impatient one drops", async () => {
     const dir = await makeTempDir();
     const candidate = join(dir, "traycer");
@@ -193,14 +160,7 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     ).toEqual({ version: "1.2.3" });
   }, 20_000);
 
-  // The same join, the other way round, and the direction that actually
-  // costs something. A status poll's 2s probe can be in flight when the
-  // detached reconcile arrives - on the very machine this matters for
-  // there is no manifest, so both paths walk PATH - and joining it would
-  // hand the reconcile a verdict about someone else's patience. Its
-  // verdicts are not recoverable: a dropped PATH candidate becomes a
-  // Desktop-owned manifest that outranks PATH from then on. It must get a
-  // probe that can actually run for 15s.
+  // It must get a probe that can actually run for 15s.
   it("a patient caller does not inherit a shorter in-flight deadline", async () => {
     const dir = await makeTempDir();
     const candidate = join(dir, "traycer");
@@ -230,12 +190,8 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     expect(count).toBe(2);
   }, 20_000);
 
-  // Patience must not leak onto the impatient path. The cache shares the
-  // in-flight PROMISE, so a status poll landing mid-reconcile would inherit
-  // the reconcile's 15s deadline and stall the invocation path for the
-  // whole of it unless it races its own. Started patient, joined impatient:
-  // the joiner must give up on its own schedule, well before the fixture
-  // answers.
+  // Patience must not leak onto the impatient path.
+  // Started patient, joined impatient: the joiner must give up on its own schedule, well before the fixture answers.
   it("an impatient joiner does not inherit an in-flight patient deadline", async () => {
     const dir = await makeTempDir();
     const candidate = join(dir, "traycer");

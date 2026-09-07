@@ -1,10 +1,5 @@
 import type { OutgoingHttpHeaders, RequestOptions } from "node:http";
 import { posix } from "node:path";
-// Value imports intentionally target electron-updater's concrete provider
-// module (not the package root) so this file keeps the *real* `Provider` base
-// class even in the updater unit tests, which mock the `electron-updater`
-// package root. electron-updater ships no `exports` map, so the deep path
-// resolves under both `moduleResolution: bundler` and the esbuild main bundle.
 import {
   getFileList,
   parseUpdateInfo,
@@ -20,18 +15,10 @@ import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import type { LinuxPackageType } from "./linux-update-guidance";
 import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
 
-// electron-updater's HTTP executor reads a `redirect` field the node `http`
-// `RequestOptions` type doesn't declare; model that augmentation locally rather
-// than depend on builder-util-runtime's internal types (not resolvable from
-// this workspace's module graph).
 type RedirectRequestOptions = RequestOptions & {
   redirect?: "manual" | "follow" | "error";
 };
 
-// A single GitHub release asset, reduced to the two fields the desktop feed
-// needs: the file name (to match channel manifests / installers) and the
-// authenticated `api.github.com/.../releases/assets/<id>` URL used to fetch it
-// on private repositories.
 export interface DesktopReleaseAsset {
   readonly name: string;
   readonly url: string;
@@ -46,10 +33,6 @@ export interface DesktopReleaseCandidate {
   readonly assets: readonly DesktopReleaseAsset[];
 }
 
-// electron-updater derives the platform channel manifest name the same way in
-// `Provider.getChannelFilePrefix`; we mirror it exactly (including the
-// `TEST_UPDATER_ARCH` override it honors) so discovery filters on, and the
-// private provider fetches, the identical file the updater will request.
 export function platformChannelFile(): string {
   if (process.platform === "linux") {
     const arch = process.env.TEST_UPDATER_ARCH ?? process.arch;
@@ -62,15 +45,6 @@ export function platformChannelFile(): string {
   return "latest.yml";
 }
 
-// Lower-cased suffix(es) of the installer artifact the *running* updater can
-// actually apply - not merely any installer electron-builder produced. This
-// gates discovery on an applicable release: a DMG-only macOS release, or a
-// `.deb` release on an `.rpm` host, is treated as incompatible so an older but
-// applicable candidate is chosen instead.
-//   - macOS: Squirrel.Mac updates from the ZIP; the DMG is install-only.
-//   - Windows: the NSIS `.exe`.
-//   - Linux: the artifact matching the detected package type - `.deb`/`.rpm`
-//     for a package install, else the AppImage.
 export function platformInstallerExtensions(
   linuxPackageType: LinuxPackageType | null,
 ): readonly string[] {
@@ -89,17 +63,8 @@ export function platformInstallerExtensions(
   return [".exe"];
 }
 
-// Projects a raw GitHub release into a desktop candidate, enforcing RC-only
-// consent: only stable `desktop-vX.Y.Z` and the exact `desktop-vX.Y.Z-rc.N`
-// form are accepted (alpha/beta/nightly/other prereleases are rejected), the
-// GitHub `prerelease` flag must agree with the tag form, and drafts are
-// dropped. Returns `[]` for anything that fails so it composes with `flatMap`.
-//
-// Each numeric identifier is strict SemVer: `0` or a non-zero-leading run of
-// digits (`0|[1-9]\d*`). This rejects malformed tags like `desktop-v01.2.3` or
-// `desktop-v1.2.3-rc.01` that a lenient `\d+` would smuggle through - a
-// leading-zero identifier is not a valid SemVer version and must not select a
-// feed.
+// Projects a raw GitHub release into a desktop candidate, enforcing RC-only consent: only stable `desktop-vX.Y.Z` and the exact `desktop-vX.Y.Z-rc.N` form are accepted.
+// This rejects malformed tags like `desktop-v01.2.3` or `desktop-v1.2.3-rc.01` that a lenient `\d+` would smuggle through.
 export function projectDesktopRelease(
   value: unknown,
 ): DesktopReleaseCandidate[] {
@@ -120,14 +85,6 @@ export function projectDesktopRelease(
     return [];
   }
   const version = match[1];
-  // The same canonical predicate the channel model derives implicit RC
-  // following from, rather than a local substring test: a tag this projection
-  // accepts as an RC is one the selector may later have to place on a release
-  // line, and two definitions of "is this an RC" is how the two would drift.
-  // EQUIVALENT, not a behavior change - the tag regex above already admits only
-  // `X.Y.Z` and `X.Y.Z-rc.N` with strict SemVer numerics, so both spellings
-  // accept exactly the same set here. The point is that there is now one
-  // definition rather than two.
   const isReleaseCandidate = isCanonicalReleaseCandidate(version);
   // Reject inconsistent metadata rather than trusting the tag: a stable tag
   // flagged `prerelease`, or an rc tag flagged stable, is a publishing mistake
@@ -140,10 +97,6 @@ export function projectDesktopRelease(
   ];
 }
 
-// A candidate is only usable on this machine when it carries both the
-// platform's channel manifest and the applicable installer artifact for the
-// running updater (see `platformInstallerExtensions`); otherwise selecting it
-// would 404 or fail to apply, masking an older usable candidate.
 export function isPlatformCompatibleRelease(
   candidate: DesktopReleaseCandidate,
   linuxPackageType: LinuxPackageType | null,
@@ -169,28 +122,8 @@ export type DesktopReleaseManifestValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };
 
-// Deep, network-informed compatibility check run during discovery: the cheap
-// `isPlatformCompatibleRelease` gate only proves the manifest/installer *assets
-// exist by name*, but the manifest itself can still be broken, describe a
-// different version than its tag, reference an installer that isn't published,
-// omit a checksum, or require a newer OS. electron-updater only discovers those
-// once it parses the manifest at check/download time - by which point discovery
-// has already committed the feed and cannot fall back. This mirrors the checks
-// electron-updater performs (`parseUpdateInfo`, `getFileList`'s checksum
-// requirement, `checkIfUpdateSupported`'s `minimumSystemVersion` gate,
-// `MacUpdater.filterFilesForArch`'s architecture filter) so an unusable
-// candidate is rejected up front and discovery falls back to an older applicable
-// release (cold-review finding 4).
-//
-// Architecture applicability is enforced exactly where electron-updater enforces
-// it: on macOS via `MacUpdater.filterFilesForArch` (an x64 Mac drops every
-// arm64 ZIP; an arm64 Mac - including Rosetta - keeps only arm64 ZIPs when any
-// exist, else a non-arm64/universal ZIP) followed by its requirement that a ZIP
-// survive, and on Linux via the arch-specific channel-manifest name
-// (`platformChannelFile`) plus the detected package type. Windows carries no
-// hard arch filter in electron-updater (`findFile` prefers a `process.arch`
-// match but falls back), so neither do we. `isArm64Mac` is resolved by the
-// caller consistently with `MacUpdater` and passed in so this stays pure.
+// electron-updater only discovers those once it parses the manifest at check/download time - by which point discovery has already committed the feed and cannot fall back.
+// `isArm64Mac` is resolved by the caller consistently with `MacUpdater` and passed in so this stays pure.
 export function validateDesktopReleaseManifest(
   rawManifest: string,
   channelFile: string,
@@ -214,10 +147,8 @@ export function validateDesktopReleaseManifest(
       reason: `channel manifest ${channelFile} carries no version`,
     };
   }
-  // Tag/version agreement: the release is pinned by its `desktop-v*` tag, but
-  // electron-updater installs whatever the manifest names. A mismatch is a
-  // publishing error - refuse it rather than install a version discovery never
-  // vetted for RC-only consent.
+  // Tag/version agreement: the release is pinned by its `desktop-v*` tag, but electron-updater installs whatever the manifest names.
+  // A mismatch is a publishing error - refuse it rather than install a version discovery never vetted for RC-only consent.
   if (version !== candidate.version) {
     return {
       ok: false,
@@ -260,11 +191,7 @@ export function validateDesktopReleaseManifest(
         reason: `referenced file ${fileName} is missing a checksum`,
       };
     }
-    // Every referenced file must actually be a published release asset, or the
-    // download 404s. The generic (public) provider resolves file URLs relative
-    // to the release download base and the custom (private) provider looks each
-    // file up in the asset set, so a referenced-but-unpublished file is fatal
-    // for both.
+    // Every referenced file must actually be a published release asset, or the download 404s.
     if (!assetNames.has(fileName)) {
       return {
         ok: false,
@@ -282,10 +209,6 @@ export function validateDesktopReleaseManifest(
   return { ok: true };
 }
 
-// Mirrors `electron-updater@6.8.9`'s `MacUpdater.filterFilesForArch`: on an
-// arm64 Mac (including Rosetta) arm64 files are preferred when any exist,
-// otherwise every arm64 file is dropped (an x64 Mac can't run an arm64 build).
-// Case-sensitive `arm64` match, matching MacUpdater's own substring test.
 export function filterMacFilesForArch(
   fileNames: readonly string[],
   isArm64Mac: boolean,
@@ -297,12 +220,6 @@ export function filterMacFilesForArch(
   return fileNames.filter((name) => !isArm64File(name));
 }
 
-// Whether the running updater could actually apply one of the manifest's
-// referenced files. On macOS this replays `MacUpdater`'s pipeline - filter the
-// files by architecture, then require a ZIP to survive (it throws
-// ERR_UPDATER_ZIP_FILE_NOT_FOUND otherwise) - so an arm64-only release is
-// rejected on an x64 Mac and discovery falls back. On other platforms the
-// applicable installer extension(s) alone decide.
 function releaseHasApplicableInstaller(
   fileNames: readonly string[],
   linuxPackageType: LinuxPackageType | null,
@@ -323,50 +240,20 @@ function releaseHasApplicableInstaller(
 }
 
 /**
- * THE one reading of `compatibilityEpoch` off an update document, wherever that
- * document reaches us.
- *
- * Two callers with genuinely different shapes in hand - the updater's
- * `update-available` / `update-downloaded` `info` object, and a channel manifest
- * this module fetched itself during the RC probe - and they must agree to the
- * letter, because a candidate the probe calls sufficient is one the updater will
- * later re-read at `update-available` and must not then call insufficient.
- *
- * `unknown` in, narrowed here, and NOT via a cast: `UpdateInfo` declares no such
- * member (the key survives as an unknown top-level YAML key, see
- * `parseUpdateInfo`), and this repo bans `as any` / `as unknown`. Same shape as
- * {@link readManifestString} directly below, deliberately.
- *
- * `null` is returned for absent, non-numeric, non-integer, and non-positive
- * alike, and the caller must treat all of them as INSUFFICIENT rather than as
- * "legacy". A build nobody has run yet has not asserted epoch 1 by omission -
- * only a client the host observed on the wire ever gets that reading.
+ * Two callers with genuinely different shapes in hand.
+ * `null` is returned for absent, non-numeric, non-integer, and non-positive alike, and the caller must treat all of them as INSUFFICIENT rather than as "legacy".
  */
 export function readCompatibilityEpoch(value: unknown): number | null {
   if (!isRecord(value)) {
     return null;
   }
   const candidate: unknown = value["compatibilityEpoch"];
-  // SCALAR VALIDITY comes from the protocol package, which is where the host's
-  // own admission gate reads it from. Re-deriving "positive safe integer" here
-  // is how the desktop and the CLI drifted into two copies of one rule; the
-  // record-field extraction above is the only part that is genuinely local to
-  // this carrier shape.
   return typeof candidate === "number" && isValidCompatibilityEpoch(candidate)
     ? candidate
     : null;
 }
 
-/**
- * The stamped epoch of a channel manifest, read through electron-updater's own
- * parser.
- *
- * Going through {@link parseManifest} rather than a local YAML read is the
- * point: the RC probe must see the document exactly as the updater would if the
- * feed were pointed at this release, custom-key survival included. A manifest
- * that does not parse reads `null` - the same conservative answer as one that
- * carries no stamp.
- */
+/** Going through {@link parseManifest} rather than a local YAML read is the point: the RC probe must see the document exactly as the updater would if the feed were pointed at this. */
 export function readManifestCompatibilityEpoch(
   rawManifest: string,
   channelFile: string,
@@ -396,11 +283,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// Parses a channel manifest with electron-updater's own `parseUpdateInfo` (the
-// same YAML load path it uses at check time), returning null on any parse
-// failure so discovery can fall back rather than throw. This is the sole
-// boundary where a manifest's malformed bytes are handled; every other consumer
-// works off the validated result.
 function parseManifest(
   rawManifest: string,
   channelFile: string,
@@ -460,11 +342,7 @@ function hasManifestChecksum(file: unknown): boolean {
   );
 }
 
-// Mirrors electron-updater's `checkIfUpdateSupported`: block a release only when
-// we can positively determine the running OS is older than its
-// `minimumSystemVersion`. An absent minimum, or a version pair we can't compare,
-// fails open (electron-updater catches the compare error and treats it as
-// supported), so this never invents an OS gate electron-updater would not apply.
+// An absent minimum, or a version pair we can't compare, fails open (electron-updater catches the compare error and treats it as supported), so this never invents an OS gate.
 function isOsVersionSupported(
   minimumSystemVersion: string | null,
   currentOsRelease: string,
@@ -504,10 +382,6 @@ function parseNumericTriplet(value: string): [number, number, number] | null {
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
-// The `provider: "custom"` config electron-updater's `createClient` routes to
-// `ExactReleaseAssetProvider`. Modelled locally (rather than importing
-// builder-util-runtime's `CustomPublishOptions`, unresolvable from this
-// workspace) - it structurally satisfies that type via its index signature.
 export interface ExactReleaseFeedConfig {
   readonly provider: "custom";
   readonly updateProvider: new (
@@ -524,13 +398,7 @@ export interface ExactReleaseFeedConfig {
   readonly repo: string;
 }
 
-/**
- * The tag a desktop release is published under.
- *
- * One definition of the convention, so the blockmap lookup below cannot drift
- * from it. `projectDesktopRelease`'s pattern is the parsing counterpart: this
- * builds a tag from a version, that recognizes a version in a tag.
- */
+/** One definition of the convention, so the blockmap lookup below cannot drift from it. */
 export function desktopReleaseTag(version: string): string {
   return `desktop-v${version}`;
 }
@@ -541,12 +409,7 @@ export type DesktopUpdateFeed =
   | { readonly provider: "generic"; readonly url: string }
   | ExactReleaseFeedConfig;
 
-// Builds the feed for a pinned desktop release. Public repos use the generic
-// exact-release provider - the `releases/download/<tag>/` browser URLs are
-// unauthenticated and resolve the channel manifest + installers by name.
-// Private/staging repos (token set) can't use those browser URLs (they need a
-// session cookie, not a token header), so they route through the authenticated
-// release-asset API via the custom provider.
+// Builds the feed for a pinned desktop release.
 export function buildDesktopReleaseFeed(
   owner: string,
   repo: string,
@@ -562,13 +425,6 @@ export function buildDesktopReleaseFeed(
   return privateExactReleaseFeed(release.assets, token, owner, repo);
 }
 
-// The URL + headers used to fetch a candidate's channel manifest during
-// discovery-time validation, mirroring `buildDesktopReleaseFeed`'s public/private
-// split: public repos read the unauthenticated `releases/download/<tag>/`
-// browser URL, private repos read the manifest asset's authenticated
-// `api.github.com/.../releases/assets/<id>` URL with `application/octet-stream`.
-// Returns null on a private feed whose manifest asset isn't published (nothing
-// to fetch → the candidate is unusable and discovery falls back).
 export function resolveDesktopManifestRequest(
   owner: string,
   repo: string,
@@ -611,13 +467,6 @@ function privateExactReleaseFeed(
   };
 }
 
-// Authenticated exact-release provider for private/staging desktop feeds. Unlike
-// electron-updater's built-in `PrivateGitHubProvider` (which always resolves the
-// *latest* release and so can't be trusted in a repo that also ships
-// `host-v*`/`cli-v*` prereleases), this provider is pinned to a specific
-// desktop release's asset set and resolves both the channel manifest and every
-// installer through their `api.github.com/.../releases/assets/<id>` URLs, which
-// is GitHub's supported authenticated download path.
 export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
   private readonly assets: readonly DesktopReleaseAsset[];
   private readonly token: string;
@@ -636,10 +485,6 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     this.repo = options.repo;
   }
 
-  // GitHub's asset API 302-redirects to a signed object-store URL; mirror
-  // `PrivateGitHubProvider` and redirect manually so the executor drops the
-  // `authorization` header on the cross-origin hop (it would otherwise leak the
-  // token to, or be rejected by, the object store).
   protected createRequestOptions(
     url: URL,
     headers: OutgoingHttpHeaders | null | undefined,
@@ -672,23 +517,7 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     return this.assetHeaders("application/octet-stream");
   }
 
-  /**
-   * The URLs this provider resolves are `api.github.com/.../releases/assets/<id>`
-   * - an opaque id, with NO filename and NO extension in the pathname. That is
-   * GitHub's only authenticated download path, so it is not negotiable here, but
-   * two pieces of electron-updater read a filename out of that pathname and
-   * quietly get nothing:
-   *
-   *   - `Provider.getBlockMapFiles` - overridden below.
-   *   - `findFile(files, extension, not)`, which each platform updater uses to
-   *     pick its installer. Its extension filter matches nothing AND its
-   *     exclusion list excludes nothing, so it falls through to `files[0]`.
-   *     `_DebUpdater` asking for `deb` therefore receives whatever is first in
-   *     the channel manifest, and `dpkg -i` is handed an AppImage.
-   *
-   * So this provider must never be pointed at a platform that publishes more
-   * than one installer format in one channel manifest.
-   */
+  /** So this provider must never be pointed at a platform that publishes more than one installer format in one channel manifest. */
   resolveFiles(updateInfo: UpdateInfo): ResolvedUpdateFileInfo[] {
     return getFileList(updateInfo).map((file) => {
       const name = posix.basename(file.url).replace(/ /g, "-");
@@ -702,29 +531,7 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     });
   }
 
-  /**
-   * Blockmap URLs for the differential downloader, resolved by ASSET NAME.
-   *
-   * The base implementation suffixes `baseUrl.pathname` with `.blockmap` and
-   * derives the old one by substituting the version *inside that pathname*.
-   * Both halves are inert against an asset-API URL: there is no filename to
-   * suffix and no version to substitute, so the base returns two identical,
-   * malformed URLs and the delta download dies parsing a JSON error body as
-   * gzip (`incorrect header check`).
-   *
-   * Resolving by name needs TWO asset sets, not one. This provider is pinned to
-   * a single release, and `artifactName` carries no version
-   * (`traycer-desktop-windows-${arch}.${ext}`), so the previous release's
-   * blockmap has exactly the SAME name as the new one. Looking the name up in
-   * the pinned set would hand back the new blockmap for both sides, and the
-   * downloader would then "reconstruct" a file it already has - wasting the
-   * round trip and failing its digest. So the old release's assets are fetched
-   * by tag, which is what `GitLabProvider` does for this same reason.
-   *
-   * Throwing when either side is missing is the intended outcome rather than a
-   * failure to avoid: `differentialDownloadInstaller` wraps this whole call and
-   * falls back to a full download.
-   */
+  /** Do not look the blockmap name up in the pinned set; that would hand back the new file for both sides. */
   async getBlockMapFiles(
     baseUrl: URL,
     oldVersion: string,

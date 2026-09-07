@@ -1,21 +1,6 @@
 /**
- * The transport: the controls that MOVE the epic's time cursor, and the single
- * playback tick.
- *
- * ONE OWNER, always. The tick lives with the controls, so the cursor cannot
- * double-step no matter how many things are watching it. That ownership used to
- * belong to the sidebar timeline panel; the panel is gone and the on-canvas
- * transport bar inherited it wholesale.
- *
- * LIVE IS `cursor === null`, not a flag beside the cursor. Everything here that
- * looks like a mode change is really just the cursor landing on, or leaving, the
- * newest row - which is why "scrub to the end", "play to the end" and "press
- * Live" all converge on the same state instead of three that must be kept in
- * agreement.
- *
- * The store outlives this hook (it is per epic, not per tile), so unmounting the
- * graph freezes playback where it stands rather than restarting it: `playing`
- * stays true and the next mount picks the tick back up.
+ * The tick lives with the controls, so the cursor cannot double-step no matter how many things are watching it.
+ * Everything here that looks like a mode change is really just the cursor landing on, or leaving, the newest row - which is why "scrub to the end", "play to the end" and "press Live" all converge on the same state instead of three that must be kept in agreement.
  */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
@@ -37,13 +22,8 @@ import {
 } from "@/stores/epics/comm-graph-timeline-store";
 
 /**
- * Playback is EVENT-PACED, not wall-clock-paced: replaying real inter-event
- * gaps would sit still for the minutes an agent spent thinking. One step per
- * tick, scaled by speed, keeps a long session watchable.
- *
- * Exported because an animated renderer has to fit a per-row animation inside
- * one step: reading the same constant is what keeps an envelope from still
- * being in flight when the cursor has moved two rows on.
+ * Playback is EVENT-PACED, not wall-clock-paced: replaying real inter-event gaps would sit still for the minutes an agent spent thinking.
+ * One step per tick, scaled by speed, keeps a long session watchable.
  */
 export const BASE_STEP_MS = 700;
 
@@ -59,10 +39,8 @@ export interface CommGraphTransport {
   readonly cycleSpeed: () => void;
   readonly followLive: () => void;
   /**
-   * Seek the cursor onto a row. Detaching is a CONSEQUENCE of landing on a row
-   * that is not the newest, not a separate action - which is what keeps "scrub
-   * back and you are detached" and "scrub to the end and you are live" from
-   * needing to agree with each other.
+   * Seek the cursor onto a row.
+   * Detaching is a CONSEQUENCE of landing on a row that is not the newest, not a separate action - which is what keeps "scrub back and you are detached" and "scrub to the end and you are live" from needing to agree with each other.
    */
   readonly seekToEvent: (event: CommGraphEvent) => void;
   readonly stepForward: () => void;
@@ -77,10 +55,8 @@ export function useCommGraphTransport(
   const playing = useCommGraphPlaying(epicId);
   const speed = useCommGraphSpeed(epicId);
 
-  // The playback timer must not restart every time a live frame lands, so the
-  // array it reads is reached through a ref and kept out of the effect's
-  // dependencies. Only the cursor moving, the speed changing, or play/pause
-  // reschedules a tick.
+  // The playback timer must not restart every time a live frame lands, so the array it reads is reached through a ref and kept out of the effect's dependencies.
+  // Only the cursor moving, the speed changing, or play/pause reschedules a tick.
   const eventsRef = useRef(events);
   useEffect(() => {
     eventsRef.current = events;
@@ -99,9 +75,7 @@ export function useCommGraphTransport(
       const current = readCommGraphTimelineEpicState(epicId).cursor;
       const next = nextCommGraphTimelineEvent(eventsRef.current, current);
       if (next === null) {
-        // Caught up: playback re-attaches to live rather than parking on the
-        // last row, so the graph keeps evolving instead of freezing one event
-        // behind whatever the agents do next.
+        // Caught up: playback re-attaches to live rather than parking on the last row, so the graph keeps evolving instead of freezing one event behind whatever the agents do next.
         store.setPlaying(epicId, false);
         store.setCursor(epicId, null);
         return;
@@ -111,7 +85,7 @@ export function useCommGraphTransport(
     return () => {
       clearTimeout(timer);
     };
-    // `cursorKey` is the schedule trigger: each landed step queues the next one.
+  // `cursorKey` is the schedule trigger: each landed step queues the next one.
   }, [cursorKey, epicId, playing, speed]);
 
   const followLive = useCallback(() => {
@@ -128,9 +102,8 @@ export function useCommGraphTransport(
     (event: CommGraphEvent) => {
       const store = useCommGraphTimelineStore.getState();
       const next = commGraphCursorForEvent(event);
-      // Landing on the newest row IS live. Setting a cursor there instead would
-      // pin the playhead to the right edge and then quietly refuse to advance
-      // when the next row arrived.
+      // Landing on the newest row IS live.
+      // Setting a cursor there instead would pin the playhead to the right edge and then quietly refuse to advance when the next row arrived.
       if (commGraphCursorAtEnd(eventsRef.current, next)) {
         store.setCursor(epicId, null);
         return;

@@ -110,10 +110,7 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   snapshot: DesktopAppUpdateSnapshot;
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
-  // Annotated with the full change type. Inference from this default narrows
-  // `outcome` to the literal `"changed"`, which then rejects a
-  // `mockResolvedValue` for `refused-update-pending` - the macOS standing
-  // refusal, which is exactly the case worth testing.
+  // Annotated with the full change type.
   readonly setAllowPrerelease = vi.fn(
     (): Promise<DesktopAppUpdateChannelChange> =>
       Promise.resolve({ outcome: "changed", snapshot: this.snapshot }),
@@ -424,14 +421,12 @@ describe("desktop app update UI", () => {
 
     fireEvent.click(button);
 
-    // The click IS the confirmation - no modal is opened in between. AWAITED
-    // because the install door now asks MAIN for the unsyncable set across
-    // every window before it authorizes a restart that quits the whole app.
+    // Awaited because the install door now asks main for the unsyncable set across every window before it
+    // authorizes a restart that quits the whole app.
     await waitFor(() => {
       expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
     });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
-    // The event the deleted modal used to own now rides the gesture.
     expect(track).toHaveBeenCalledWith(AnalyticsEvent.UpdateRestartRequested, {
       source: "direct_ui",
     });
@@ -771,9 +766,7 @@ describe("desktop app update UI", () => {
     });
 
     act(() => {
-      // Sonner also calls the old toast's `onDismiss` when a terminal toast
-      // replaces it. That callback must not leak dismissal into the next
-      // download.
+      // That callback must not leak dismissal into the next download.
       dismissProgress();
       bridge.emit(availableSnapshot(4));
     });
@@ -851,10 +844,8 @@ describe("desktop app update UI", () => {
     const restart = screen.getByRole("button", { name: "Restart" });
     fireEvent.click(restart);
     fireEvent.click(restart);
-    // The toast button is the confirmation - it installs once, with no modal.
-    // ONCE still holds now that the door is async, and not by luck: the
-    // content's `actionHandledRef` latch is set synchronously before
-    // `onAction()`, so the second click returns before any round trip starts.
+    // Once still holds now that the door is async, and not by luck: the content's `actionHandledRef` latch is set
+    // synchronously before `onAction`, so the second click returns before any round trip starts.
     await waitFor(() => {
       expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
     });
@@ -1093,9 +1084,8 @@ describe("desktop app update UI", () => {
       expect(bridge.subscriptionCount()).toBe(1);
     });
 
-    // Positive baseline first: the harness can show a toast at all when the
-    // narrator does not own the frame, so the assertion below isn't passing
-    // on a broken harness.
+    // Positive baseline first: the harness can show a toast at all when the narrator does not own the frame, so
+    // the assertion below isn't passing on a broken harness.
     act(() => {
       bridge.emit(availableSnapshot(1));
     });
@@ -1128,9 +1118,8 @@ describe("desktop app update UI", () => {
     });
     expect(toastMock).not.toHaveBeenCalled();
 
-    // Release: readiness flips to `ready` with no new snapshot arriving and
-    // no sequence bump - the effect's `narrated` dependency is the only thing
-    // that changes.
+    // Release: readiness flips to `ready` with no new snapshot arriving and no sequence bump - the effect's
+    // `narrated` dependency is the only thing that changes.
     harness.rerenderReadiness(READY_READINESS);
 
     await waitFor(() => {
@@ -1139,13 +1128,8 @@ describe("desktop app update UI", () => {
     const [message, options] = toastMock.mock.lastCall ?? [];
     expect(options?.id).toBe("traycer-app-update");
 
-    // The whole point of re-emitting rather than unfreezing in place is that
-    // the user gets an affordance at a moment they can act on it - the toast
-    // carries `cancel: null` everywhere in this controller, so Sonner's own
-    // close button does not exist on it, and the only way to clear it is the
-    // control this element renders itself. If the re-emitted payload didn't
-    // carry a working one, the premise behind choosing "re-emit" over
-    // "unfreeze" would be false even though the toast reappeared.
+    // The whole point of re-emitting rather than unfreezing in place is that the user gets an affordance at a
+    // moment they can act on it - the toast carries `cancel.
     if (message === undefined) {
       throw new Error("Expected the re-emitted toast to carry content");
     }

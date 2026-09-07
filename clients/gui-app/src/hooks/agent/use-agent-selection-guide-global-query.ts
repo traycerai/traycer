@@ -8,11 +8,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 // constant across renders.
 const GLOBAL_GUIDE_PARAMS = {};
 
-/**
- * Reads the global agent selection guide and the current provider-based
- * default for the active host. Device-scoped: the file lives at ~/.traycer/ on
- * whichever host is active, so the query rebinds when the active host changes.
- */
+/** Reads the global agent selection guide and the current provider-based default for the active host. */
 export function useAgentSelectionGuideGlobalQuery(): UseQueryResult<
   AgentSelectionGuideGlobalGetResponse,
   HostRpcError

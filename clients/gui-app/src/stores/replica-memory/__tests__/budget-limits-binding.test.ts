@@ -1,8 +1,6 @@
 /**
- * The leaf constants in `budget-limits.ts` must be the same binding the
- * window re-export, the tier policy, and the session-registry alias
- * consume. Value equality of two numbers is vacuous; a sentinel mock is
- * the guard that a second copy would fail.
+ * The leaf constants in `budget-limits.ts` must be the same binding the window re-export, the tier
+ * policy, and the session-registry alias consume.
  */
 import { describe, expect, it, vi } from "vitest";
 

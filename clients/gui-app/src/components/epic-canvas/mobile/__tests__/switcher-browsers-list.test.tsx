@@ -163,8 +163,7 @@ function seedCanvasTab(): void {
 }
 
 // The close action is a TanStack mutation, so these renders need a client.
-// ONE for the file's lifetime: a fresh client per render would leave existing
-// observers attached to the old one.
+// ONE for the file's lifetime: a fresh client per render would leave existing observers attached to the old one.
 const testQueryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: false, gcTime: 0 },
@@ -228,10 +227,7 @@ describe("SwitcherBrowsersList", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
-    // The double-tap test leaves a mutation deliberately unsettled, and the
-    // client is shared for the file's lifetime - so without this the pending
-    // count stays above zero and every later test finds the add button
-    // disabled.
+    // The double-tap test leaves a mutation deliberately unsettled, and the client is shared for the file's lifetime - so without this the pending count stays above zero and every later test finds the add button disabled.
     testQueryClient.getMutationCache().clear();
   });
 
@@ -288,9 +284,7 @@ describe("SwitcherBrowsersList", () => {
     openTab.mockResolvedValue({ sessionId: "sess-2", tabId: "tab-9" });
     renderList(onClose);
 
-    // A list with rows renders no empty state, so the header "+" is the only
-    // control carrying this name here - the two-match case is pinned by its own
-    // test below.
+    // A list with rows renders no empty state, so the header "+" is the only control carrying this name here - the two-match case is pinned by its own test below.
     await user.click(screen.getByRole("button", { name: "Add browser" }));
 
     await waitFor(() => {
@@ -303,10 +297,7 @@ describe("SwitcherBrowsersList", () => {
 
   it("opens one browser for two taps while the host is still answering", async () => {
     const user = userEvent.setup();
-    // A request that never settles is the whole of the window this guards: on a
-    // phone the host round-trip is long enough to be tapped through, and two
-    // answers would mean two tabs and two tiles with nothing downstream to
-    // collapse them.
+    // A request that never settles is the whole of the window this guards: on a phone the host round-trip is long enough to be tapped through, and two answers would mean two tabs and two tiles with nothing downstream to collapse them.
     openTab.mockImplementation(() => new Promise(() => undefined));
     renderList(() => undefined);
     const add = screen.getByRole<HTMLButtonElement>("button", {
@@ -408,10 +399,7 @@ describe("SwitcherBrowsersList", () => {
     renderList(() => undefined);
     const empty = screen.getByTestId("epic-browsers-panel-empty");
     expect(empty).toBeTruthy();
-    // On an empty list the header "+" and this labelled button are BOTH on
-    // screen and share an accessible name, which device verification caught as
-    // a two-match query waiting to happen. Pinned here so the ambiguity is a
-    // stated fact rather than a trap for the next name-only query.
+    // Pinned here so the ambiguity is a stated fact rather than a trap for the next name-only query.
     expect(screen.getAllByRole("button", { name: "Add browser" })).toHaveLength(
       2,
     );
@@ -421,10 +409,7 @@ describe("SwitcherBrowsersList", () => {
   });
 
   it("keeps the rows reachable when the session stream drops", () => {
-    // A stream that fails does not un-open the tabs, and these rows are the
-    // only route to them. Desktop renders the banner ABOVE its list for the
-    // same reason; replacing the list would strand a phone user with tabs they
-    // can see nothing of.
+    // A stream that fails does not un-open the tabs, and these rows are the only route to them.
     replaceSessions(sessionsState.value.items, "failed");
     renderList(() => undefined);
 
@@ -442,8 +427,7 @@ describe("SwitcherBrowsersList", () => {
 
   it("names the host update as the remedy, with no retry, when the host has no browsers", () => {
     // A host from before browsers existed refuses the stream at handshake.
-    // Retrying cannot change that, so the state carries the remedy instead of
-    // a button - and the "+" tells the same story rather than "not connected".
+    // Retrying cannot change that, so the state carries the remedy instead of a button - and the "+" tells the same story rather than "not connected".
     replaceSessions([], "unsupported");
     sessionsState.value = {
       ...sessionsState.value,

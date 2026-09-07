@@ -8,10 +8,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
 
-// The card's three content blocks are stubbed: each one reaches for the epic
-// store, the harness catalog and two host queries, none of which this file is
-// about. Stubbed as `span`s because `HoverCardContent` renders its children
-// inside one.
+// The card's three content blocks are stubbed: each one reaches for the epic store, the harness catalog and
+// two host queries, none of which this file is about.
 vi.mock("@/components/worktree/worktree-owner-settings-header", () => ({
   WorktreeOwnerSettingsHeader: () => <span data-testid="settings-header" />,
 }));
@@ -38,10 +36,8 @@ vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
     refresh: refreshSpy,
   }),
 }));
-// The card now derives its PR pills from `pr.subscribeListForEpic` via this
-// hook, not from `useWorktreeOwnerMetadata`'s worktree walk - unmocked, it
-// reaches for a real stream client and `useQueryClient()`, neither of which
-// this file provides a provider for.
+// The card now derives its PR pills from `pr.subscribeListForEpic` via this hook, not from
+// `useWorktreeOwnerMetadata`'s worktree walk.
 vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
   useOwnerListPrReferences: () => ({
     references: [],
@@ -59,7 +55,6 @@ function cardIsOpen(): boolean {
   return document.querySelector('[data-slot="hover-card-content"]') !== null;
 }
 
-/** Radix's trigger opens on a TIMER, and skips touch pointers outright. */
 function hoverIn(trigger: HTMLElement): void {
   fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
 }
@@ -135,12 +130,8 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
   });
 
   it("swallows an open that lands after the press (the reported race)", () => {
-    // THE BUG. Radix dismisses an open card on any outside pointerdown - but
-    // that dismissal lives on the content's `DismissableLayer`, which does not
-    // exist yet during the 500ms open delay. A click inside that window is
-    // therefore seen by nothing, and the card mounts afterwards over the tab
-    // the click just opened, anchored to a row that has moved out from under
-    // the pointer - so no pointer-leave is coming to close it either.
+    // Radix dismisses an open card on any outside pointerdown - but that dismissal lives on the content's
+    // `DismissableLayer`, which does not exist yet during the 500ms open delay.
     const trigger = renderTooltip(undefined);
 
     hoverIn(trigger);
@@ -151,23 +142,14 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
   });
 
   it("stays shut after click-then-leave, despite Radix's orphaned open timer", () => {
-    // THE REPORTED REGRESSION, and the reason the re-arm hangs off
-    // pointer-ENTER rather than pointer-leave.
-    //
-    // Radix's `handleOpen` assigns `openTimerRef.current` WITHOUT clearing the
-    // timer already there, and it runs on both `pointerenter` and `focus`. A
-    // real click fires pointerdown and then focuses the row - so two open
-    // timers are pending and only the focus one is tracked. Pointer-leave's
-    // `handleClose` cancels that one; the hover one survives and fires ~500ms
-    // later, with the pointer long gone and no pointer-leave left to close what
-    // it opens.
+    // Radix's `handleOpen` assigns `openTimerRef.current` without clearing the timer already there, and it runs on
+    // both `pointerenter` and `focus`.
     const trigger = renderTooltip(undefined);
 
     hoverIn(trigger);
     fireEvent.pointerDown(trigger);
-    // The focus a click delivers - this is what orphans the first timer.
-    // ONE dispatch: Testing Library already pairs `focusin` with `focus`, and
-    // firing both would manufacture extra timers rather than reproduce a click.
+    // The focus a click delivers - this is what orphans the first timer. One dispatch: Testing Library already
+    // pairs `focusin` with `focus`, and firing both would manufacture extra timers rather than reproduce a click.
     fireEvent.focus(trigger);
     fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
     settleOpenDelay();
@@ -176,9 +158,8 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
   });
 
   it("does not resurrect the swallowed card when the pointer leaves", () => {
-    // The reason the late open is swallowed rather than merely masked: a
-    // recorded `hoverOpen` would still be armed, and lifting the press gate on
-    // pointer-leave is exactly when it would spring open.
+    // The reason the late open is swallowed rather than merely masked: a recorded `hoverOpen` would still be
+    // armed, and lifting the press gate on pointer-leave is exactly when it would spring open.
     const trigger = renderTooltip(undefined);
     hoverIn(trigger);
     fireEvent.pointerDown(trigger);
@@ -191,9 +172,8 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
   });
 
   it("re-arms on the next pointer-enter, not on the leave", () => {
-    // The gate is held until a FRESH hover starts, so re-entering must release
-    // it - otherwise one click would kill the card for that row until it
-    // remounted.
+    // The gate is held until a fresh hover starts, so re-entering must release it - otherwise one click would kill
+    // the card for that row until it remounted.
     const trigger = renderTooltip(undefined);
     hoverIn(trigger);
     fireEvent.pointerDown(trigger);
@@ -207,11 +187,8 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
   });
 
   it("survives the pointer travelling from the row into the card", () => {
-    // The one thing this card must not lose: its Refresh button lives inside
-    // the content, so the pointer has to be able to cross the 4px gap. This is
-    // why the gate has no `onPointerLeave` that clears `hoverOpen` - Radix's
-    // own `closeDelay` owns the travel window, and a leave handler that closed
-    // eagerly would make the button unreachable.
+    // The one thing this card must not lose: its Refresh button lives inside the content, so the pointer has to be
+    // able to cross the 4px gap.
     const trigger = renderTooltip(undefined);
     hoverIn(trigger);
     settleOpenDelay();
@@ -228,9 +205,8 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
   });
 
   it("tears down the window R listener when a press closes the card", () => {
-    // `R` is bound at the WINDOW while the card is open, so if the press gate
-    // closed the card visually but left `open` true, a stray "r" typed into the
-    // composer would still fire a refresh.
+    // `R` is bound at the window while the card is open, so if the press gate closed the card visually but left
+    // `open` true, a stray "r" typed into the composer would still fire a refresh.
     const trigger = renderTooltip(undefined);
     hoverIn(trigger);
     settleOpenDelay();
@@ -248,9 +224,8 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
   });
 
   it("keeps the row's own click handler working", () => {
-    // The gate hangs off a `Slot.Root` nested inside `HoverCardTrigger asChild`,
-    // which COMPOSES with the row's handlers. If it ever replaced them instead,
-    // clicking a sidebar row would silently stop opening the chat.
+    // The gate hangs off a `Slot.Root` nested inside `HoverCardTrigger asChild`, which composes with the row's
+    // handlers. If it ever replaced them instead, clicking a sidebar row would silently stop opening the chat.
     const onClick = vi.fn();
     const trigger = renderTooltip(onClick);
 

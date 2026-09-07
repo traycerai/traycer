@@ -4,39 +4,14 @@ import { x as tarExtract } from "tar";
 import StreamZip from "node-stream-zip";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 
-// Stage a host archive into `targetDir`. Supports:
-//   - `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.txz` via the in-process `tar` package.
-//   - `.zip` via `node-stream-zip`.
-//   - bare directory or single executable: copied/linked as-is.
-//
-// Bare-file/dir support is what makes the local-file install path
-// usable today: a developer can point `--from` at a freshly built
-// host directory in the working tree and the installer treats it as
-// a pre-staged install. The registry path (NP-4) will always produce
-// a real archive.
-//
-// Both archive code paths fail closed on path traversal - any entry
-// whose name is absolute, contains a `..` segment, or escapes the
-// target dir through a symlink target is rejected with
-// HOST_INSTALL_FAILED before any bytes are written. Registry installs
-// are already covered by minisign verification; the
-// `host install --from <archive>` path bypasses minisign, so this is
-// the only line of defence against a malicious local archive.
+// Stage a host archive into `targetDir`.
+// Supports: - `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.txz` via the in-process `tar` package. - `.zip` via `node-stream-zip`. - bare directory or single executable: copied/linked as-is.
 
 export interface ExtractOptions {
   readonly source: string;
   readonly targetDir: string;
-  // Called once per entry as the source is unpacked - for tar from the
-  // `filter`, i.e. just BEFORE that entry is written, and for zip just
-  // after. The exact side of the write does not matter; what matters is
-  // that something fires while the work is running.
-  //
-  // Extraction of a ~800MB archive can run for minutes with nothing else to
-  // show for it, and two separate mechanisms treat that silence as death:
-  // Desktop's inactivity timer SIGKILLs a CLI that emits no NDJSON, and the
-  // download cache's idle rule lets another process take over a slot whose
-  // archive has stopped being touched (extraction only READS it, so its
-  // mtime stops advancing). Callers throttle.
+  // Called once per entry as the source is unpacked - for tar from the `filter`, i.e. just BEFORE that entry is written, and for zip just after.
+  // The exact side of the write does not matter; what matters is that something fires while the work is running.
   readonly onEntry: () => void;
 }
 
@@ -63,21 +38,14 @@ export async function extractHostSource(opts: ExtractOptions): Promise<void> {
     await extractZipArchive(opts.source, opts.targetDir, opts.onEntry);
     return;
   }
-  // Bare executable. Copy into the target dir keeping the basename so
-  // resolveExecutable() can find it.
-  //
-  // A single `copyFile` has no interior to report from, so the one tick
-  // goes out before it starts rather than after: a ~100MB host binary onto
-  // a slow disk is the case worth covering, and a tick that lands after the
-  // copy is a tick the watchers never needed.
+  // Bare executable.
+  // Copy into the target dir keeping the basename so resolveExecutable() can find it.
   opts.onEntry();
   await copyFile(opts.source, join(opts.targetDir, basename(opts.source)));
 }
 
-// Per top-level entry rather than one bulk `cp` of the whole tree: the bulk
-// form reports nothing for however long it runs, which is the silence both
-// watchers read as a dead process. Each entry is still copied recursively,
-// so the resulting tree is identical.
+// Per top-level entry rather than one bulk `cp` of the whole tree: the bulk form reports nothing for however long it runs, which is the silence both watchers read as a dead process.
+// Each entry is still copied recursively, so the resulting tree is identical.
 async function copyDirectoryShallow(
   source: string,
   target: string,
@@ -91,12 +59,8 @@ async function copyDirectoryShallow(
   }
 }
 
-// Reject any tar entry whose name is absolute, contains a `..` segment,
-// or whose symlink target points outside the target dir. The `tar`
-// package returns `false` from its `filter` callback to skip an entry -
-// but skipping is too quiet on a hostile archive (the caller still sees
-// "extract succeeded"). We instead throw from `onwarn` (mapped via a
-// captured flag) so the install fails closed.
+// Reject any tar entry whose name is absolute, contains a `..` segment, or whose symlink target points outside the target dir.
+// The `tar` package returns `false` from its `filter` callback to skip an entry - but skipping is too quiet on a hostile archive (the caller still sees "extract succeeded").
 async function extractTarArchive(
   source: string,
   targetDir: string,
@@ -106,13 +70,10 @@ async function extractTarArchive(
   await tarExtract({
     file: source,
     cwd: targetDir,
-    // Strip leading components are intentionally NOT enabled - the
-    // staged archive lays out the host at the top level by contract.
+    // Strip leading components are intentionally NOT enabled - the staged archive lays out the host at the top level by contract.
     // We use the filter to enforce traversal protection on every entry.
     filter: (path, entry) => {
-      // The filter is called for each archive entry - `entry` is a
-      // ReadEntry at runtime, but the public typing widens to
-      // `Stats | ReadEntry` (the same filter is reused for create).
+      // The filter is called for each archive entry - `entry` is a ReadEntry at runtime, but the public typing widens to `Stats | ReadEntry` (the same filter is reused for create).
       // Narrow by checking the readable shape we care about.
       let linkPath: string | null = null;
       if (
@@ -165,10 +126,7 @@ async function extractZipArchive(
         });
       }
     }
-    // node-stream-zip extracts every entry under the target dir; its
-    // internal path joiner uses Node `path.resolve`, which together with
-    // the pre-flight scan above is enough to keep traversal-shaped names
-    // from escaping.
+    // node-stream-zip extracts every entry under the target dir; its internal path joiner uses Node `path.resolve`, which together with the pre-flight scan above is enough to keep traversal-shaped names from escaping.
     await zip.extract(null, targetDir);
   } finally {
     await zip.close();
@@ -208,19 +166,13 @@ function unsafeEntryReason(
 }
 
 // Locate the host executable inside a staged install directory.
-// Strategy:
-//   1. Look for an expected executable name at the top level.
-//   2. Otherwise descend one level - registry tarballs typically wrap
-//      the binary in a versioned subdirectory.
+// Strategy: 1.
 export async function resolveHostExecutable(
   installDir: string,
   platform: NodeJS.Platform,
 ): Promise<string> {
-  // Production ships a real `traycer-host.exe` SEA binary; the `make
-  // dev-desktop` orchestrator stages a `traycer-host.cmd` wrapper that execs
-  // `node <bundle>` (Windows has no shebang, so a script wrapper is a `.cmd`,
-  // not the extensionless file the POSIX dev wrapper uses). Accept both, exe
-  // first.
+  // Production ships a real `traycer-host.exe` SEA binary; the `make dev-desktop` orchestrator stages a `traycer-host.cmd` wrapper that execs `node <bundle>` (Windows has no shebang, so a script wrapper is a `.cmd`, not the extensionless file the POSIX dev wrapper uses).
+  // Accept both, exe first.
   const expectedNames =
     platform === "win32"
       ? ["traycer-host.exe", "traycer-host.cmd", "traycer-host.bat"]
@@ -256,7 +208,5 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-// Exported for tests so a fixture archive built with the `tar` create
-// API can exercise the traversal protection without going through the
-// full install pipeline.
+// Exported for tests so a fixture archive built with the `tar` create API can exercise the traversal protection without going through the full install pipeline.
 export const __unsafeEntryReasonForTest = unsafeEntryReason;

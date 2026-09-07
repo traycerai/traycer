@@ -260,11 +260,6 @@ describe("desktop app updater", () => {
 
     updater.installDownloadedUpdate();
 
-    // A successful install emits nothing further - it ends the process - so
-    // this is the renderer's only signal that the restart it asked for is
-    // under way, and the only thing that disarms the restart affordances.
-    // Status stays "ready": the artifact is still staged, and the updater's
-    // own "ready" guards key on that.
     expect(updater.getAppUpdateSnapshot()).toMatchObject({
       sequence: readySequence + 1,
       status: "ready",
@@ -496,19 +491,10 @@ describe("desktop app updater", () => {
     );
   });
 
-  // On Windows a completed, sha512-verified download is thrown away whenever
-  // electron-updater's Authenticode check REJECTS - which its PowerShell call
-  // does routinely, because it carries a hardcoded 20s timeout and has to hash
-  // the whole ~138MB installer. The wrapper tolerates that. What it must not
-  // tolerate is the two rejections that are security verdicts rather than
-  // infrastructure failures.
+  // What it must not tolerate is the two rejections that are security verdicts rather than infrastructure failures.
   describe("tolerateUnrunnableSignatureCheck", () => {
     const SIGNED_OK = null;
 
-    // REAL `execFile` errors, not hand-built ones. The discriminator is a
-    // property Node stamps onto its own errors, so a fabricated `{ cmd: "…" }`
-    // would assert nothing beyond this test agreeing with the wrapper about
-    // what Node does - the exact shape of vacuous test both would pass.
     function failingChild(
       script: string,
       timeout: number | undefined,
@@ -731,12 +717,6 @@ describe("desktop app updater", () => {
   });
 
   it("surfaces a stable-feed 'no production release' 404 as a service error", async () => {
-    // The removed fallback (§"Compatibility recovery and dead paths"): this
-    // 404 used to be swallowed as "up to date" for any build whose version
-    // contained a `-`. A canonical RC build can no longer reach the stable
-    // feed at all - it derives `implicit-rc-line` and resolves through the
-    // namespaced selector - so the only builds that still see this error are
-    // ones for which a 404 from the release feed IS a service problem.
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       const err = new Error(
@@ -757,10 +737,6 @@ describe("desktop app updater", () => {
   });
 
   it("never queries the stable feed from a canonical RC build", async () => {
-    // The other half of the removal: the fallback is unreachable rather than
-    // merely unused. An RC build configures `allowPrerelease` from its mode, so
-    // every check resolves through the desktop-tag selector, and "nothing
-    // selectable" is a null feed (a genuine up-to-date) rather than a 404.
     const { autoUpdater, updater } = await loadUpdaterForVersion(
       NOT_LINUX_GUIDANCE,
       RC_APP_VERSION,
@@ -922,10 +898,7 @@ describe("desktop app updater", () => {
       downloadProgress: null,
     });
 
-    // The stuck-`downloading` flag must not survive the synchronous throw: a
-    // fresh check can surface "available" again, and a retry must actually
-    // reach `downloadUpdate` rather than silently no-op on a stale
-    // `downloadInProgress`.
+    // The stuck-`downloading` flag must not survive the synchronous throw: a fresh check can surface "available" again, and a retry must actually reach `downloadUpdate` rather than.
     autoUpdater.downloadUpdate.mockImplementation((): Promise<string[]> =>
       Promise.resolve([]),
     );
@@ -1072,10 +1045,6 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    // Exactly the two pagination pages were fetched - pagination correctly
-    // stopped once the short (non-full) second page signaled the end, and did
-    // not spin further pages. The manifest fetch for the winning candidate is
-    // a separate call, counted independently.
     expect(paginationCalls).toBe(2);
     expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
       provider: "generic",
@@ -1188,11 +1157,6 @@ describe("RC release discovery and channel safety", () => {
       {
         resolve: null,
       };
-    // The releases-list fetch is deferred so the test can control exactly
-    // when discovery observes the RC release; a manifest fetch for whichever
-    // candidate discovery lands on resolves immediately with a valid
-    // manifest, so the (now generation-stale) result still fully resolves
-    // rather than hanging on a second unresolved fetch.
     vi.stubGlobal(
       "fetch",
       vi.fn((input: unknown) => {
@@ -1356,10 +1320,7 @@ describe("RC release discovery and channel safety", () => {
 
     const change = await updater.setAllowPrereleaseUpdates(false);
 
-    // Rejected before persistence: channel unchanged, download untouched, and
-    // the stable feed is never configured (so no stale RC artifact can strand).
-    // The refusal is reported explicitly so the IPC layer raises it as an
-    // error instead of reading an unchanged snapshot as success.
+    // Rejected before persistence: channel unchanged, download untouched, and the stable feed is never configured (so no stale RC artifact can strand).
     expect(change.outcome).toBe("refused-update-pending");
     expect(change.snapshot.allowPrerelease).toBe(true);
     expect(preferences.allowPrerelease).toBe(true);
@@ -1752,10 +1713,6 @@ describe("channel-change queue ordering", () => {
 
     const [ra, rb] = await Promise.all([a, b]);
 
-    // Admission order equals call order, and the last-admitted request
-    // (false) is the final live state - it correctly saw the (now
-    // persisted) `true` and proceeded to change rather than reading a stale
-    // value and returning "unchanged".
     expect(persistControl.calls).toEqual([true, false]);
     expect(ra.outcome).toBe("changed");
     expect(rb.outcome).toBe("changed");
@@ -1952,10 +1909,6 @@ describe("compat recovery: staged-artifact policy", () => {
   }
 
   it("an idle updater on win32 does not disarm quit-install", async () => {
-    // The dialog's common case: nothing is staged and nothing is downloading.
-    // autoInstallOnAppQuit never comes back up within a process once lowered,
-    // so disarming here would cost a later, perfectly good update its
-    // quit-time install to defend against an artifact that does not exist.
     setPlatform("win32");
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     await updater.installAutoUpdater(true, makeDeps(true));
@@ -1972,11 +1925,6 @@ describe("compat recovery: staged-artifact policy", () => {
   });
 
   it("disarms quit-install for an insufficient candidate that is only available", async () => {
-    // The third of three quit-install outcomes on non-darwin, and the one with
-    // no other coverage: nothing is staged yet, but a candidate IS held. The
-    // artifact has not landed, so `updateArtifactStaged` is false and the
-    // staged-discard branch does not run - only `holdsCandidate` reaches the
-    // disarm. Deleting that branch keeps both neighbouring tests green.
     setPlatform("win32");
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     await updater.installAutoUpdater(true, makeDeps(true));
@@ -2186,12 +2134,8 @@ describe("compat recovery: RC probe", () => {
   });
 
   it("skips an RC that clears the floor but is not newer than the running build", async () => {
-    // The running build is `1.0.0` (see `STABLE_APP_VERSION`). A sufficient
-    // RC that is OLDER by SemVer is a real shape - a release line predating an
-    // epoch backport produces one - and this updater never sets
-    // `allowDowngrade`, so electron-updater would report it as not available
-    // AFTER the user had already consented to the RC channel. Offering it is
-    // therefore a promise that cannot be kept.
+    // A sufficient RC that is OLDER by SemVer is a real shape - a release line predating an epoch backport produces one.
+    // Offering it is therefore a promise that cannot be kept.
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     const plan = await probe(updater, autoUpdater, [
       { tag: "desktop-v1.0.0-rc.1", prerelease: true, epoch: 2 },
@@ -2201,10 +2145,6 @@ describe("compat recovery: RC probe", () => {
   });
 
   it("does not offer the RC hop while a download is in flight", async () => {
-    // `performChannelChange` refuses unconditionally while a transfer is
-    // active - no CancellationToken is plumbed - so an `enable-rc` button here
-    // could only ever return `refused-update-pending`, which the dialog shows
-    // as nothing happening at all.
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
@@ -2229,11 +2169,6 @@ describe("compat recovery: RC probe", () => {
   });
 
   it("short-circuits on the PERSISTED channel, not the snapshot's copy", async () => {
-    // `currentSnapshot.allowPrerelease` can lag `prereleaseUpdatesEnabled()` -
-    // `getAppUpdateSnapshot` reconciles them on every read for that reason.
-    // Reading the unreconciled field would let the probe run against the feed
-    // the user is ALREADY on and offer an opt-in they already have, whose
-    // `setAllowPrereleaseUpdates(true)` then answers `unchanged`.
     const persistControl: PersistPrereleaseControl = { calls: [], gate: null };
     const gateControl: { release: (() => void) | null } = { release: null };
     persistControl.gate = new Promise<void>((resolve) => {
@@ -2326,11 +2261,6 @@ describe("compat recovery: RC probe", () => {
   });
 
   it("does not offer an older sufficient RC when the post-opt-in selector chooses a newer insufficient stable", async () => {
-    // Enabling prereleases makes the shipping resolver sort stable and RC
-    // desktop tags together. The first usable build is therefore the stable
-    // one, even though its epoch does not clear the host floor. Skipping it in
-    // the probe would promise the older RC while the updater installs (or
-    // offers) a different build.
     setPlatform("darwin");
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     const plan = await probe(updater, autoUpdater, [
@@ -2368,7 +2298,7 @@ describe("compat recovery: RC probe", () => {
 
   it("already following RC has no second line: insufficient feed → manual, probe not started", async () => {
     // A sufficient RC exists in the listing. If the already-on-RC short-circuit
-    // were dropped, this would become enable-rc — opting into a channel the
+    // were dropped, this would become enable-rc  -  opting into a channel the
     // user is already on, to reach a build their feed already could not.
     setPlatform("darwin");
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
@@ -2447,15 +2377,6 @@ describe("compat recovery: RC probe", () => {
   });
 });
 
-/**
- * The three-mode channel model, exercised through the real selector.
- *
- * The mode derivation, the release-line vocabulary, and the
- * persist-vs-transition split are table-tested as pure functions in
- * `update-channel-mode.test.ts`; what these tests own is the wiring - that the
- * derived mode actually reaches `allowPrerelease`, the namespaced selector, the
- * channel-change choreography, and the recovery dialog.
- */
 describe("implicit RC-line following", () => {
   // Every release below carries the mac manifest + ZIP, so the only thing that
   // decides selection is the channel mode's candidate filter.
@@ -2536,11 +2457,6 @@ describe("implicit RC-line following", () => {
   });
 
   it("falls back to the highest usable later RC when the line's stable is unusable", async () => {
-    // "Prefer stable `X.Y.Z` IF USABLE, otherwise the highest later
-    // `X.Y.Z-rc.M`". Stable is still evaluated first (newest-first ordering),
-    // but a release whose manifest disagrees with its own tag is a publishing
-    // error the validate-and-skip loop rejects - and the fallback must be the
-    // NEWEST remaining same-line RC, not merely any of them.
     const { autoUpdater, updater } = await loadUpdaterForVersion(
       NOT_LINUX_GUIDANCE,
       RC_APP_VERSION,
@@ -2692,10 +2608,7 @@ describe("implicit RC-line following", () => {
   });
 
   it("never offers or persists enable-rc while following a line implicitly", async () => {
-    // The dialog's offer would change no current discovery behavior AND would
-    // write a broad prerelease preference the user never asked for - one that
-    // outlives the RC install. A sufficient RC on another line is published
-    // here precisely so a probe, if one ran, would have something to offer.
+    // The dialog's offer would change no current discovery behavior AND would write a broad prerelease preference the user never asked for - one that outlives the RC install.
     const { autoUpdater, preferences, updater } = await loadUpdaterForVersion(
       NOT_LINUX_GUIDANCE,
       RC_APP_VERSION,
@@ -2759,17 +2672,6 @@ interface LoadedUpdater {
   readonly updater: UpdaterModule;
 }
 
-/**
- * The app version every test that does not care about the channel model runs
- * as, and it is deliberately a STABLE SemVer.
- *
- * The suite used to mock `1.0.0-test`. Under the three-mode model that string
- * is not a canonical release candidate, so it still derives `stable-only` - but
- * a fixture one character away from `1.0.0-rc.1` silently deciding whether 80
- * tests run under implicit RC following is not a baseline anything should rest
- * on. RC behavior is now opted into explicitly, per test, via
- * {@link loadUpdaterForVersion}.
- */
 const STABLE_APP_VERSION = "1.0.0";
 
 // The canonical RC build the implicit-following tests run as. Its release line
@@ -2784,20 +2686,13 @@ interface DeferredHydrationControl {
   resolve: (() => void) | null;
 }
 
-// How the mocked `hydrateUpdatePreferences()` should behave for a given test:
-// resolve immediately (the default for almost every test), stay pending until
-// the test releases it via a `DeferredHydrationControl`, or reject to
-// exercise `installAutoUpdater`'s initialization-failure path (finding 1).
 type HydrationBehavior =
   | { readonly kind: "immediate" }
   | { readonly kind: "deferred"; readonly control: DeferredHydrationControl }
   | { readonly kind: "rejects"; readonly error: Error };
 
-// Lets a test observe/gate `setPrereleaseUpdatesEnabled` (the persistence
-// step `performChannelChange` awaits) without perturbing every other test,
-// which relies on it resolving synchronously. `calls` records admission order
-// (finding: last-admitted-request semantics for concurrent channel changes);
-// `gate`, when set, is awaited before the mock resolves.
+// Lets a test observe/gate `setPrereleaseUpdatesEnabled` (the persistence step `performChannelChange` awaits) without perturbing every other test, which relies on it resolving.
+// `calls` records admission order (finding: last-admitted-request semantics for concurrent channel changes); `gate`, when set, is awaited before the mock resolves.
 interface PersistPrereleaseControl {
   readonly calls: boolean[];
   gate: Promise<void> | null;
@@ -3022,11 +2917,7 @@ function macArm64ZipAssetName(tag: string): string {
   return `Traycer-${version}-arm64-mac.zip`;
 }
 
-// A macOS release publishing ONLY the arm64 ZIP (no x64/universal ZIP), so
-// `MacUpdater.filterFilesForArch` drops it on an x64 Mac and discovery must fall
-// back to an older release. It still carries the channel manifest + a `.zip`
-// asset, so it passes the cheap platform-compatibility gate and only fails once
-// the manifest is arch-filtered during validation.
+// A macOS release publishing ONLY the arm64 ZIP (no x64/universal ZIP), so `MacUpdater.filterFilesForArch` drops it on an x64 Mac and discovery must fall back to an older release.
 function macArm64OnlyReleaseFixture(
   tag: string,
   prerelease: boolean,
@@ -3114,12 +3005,6 @@ function macZipAssetName(tag: string): string {
   return `Traycer-${version}-mac.zip`;
 }
 
-// Builds a minimal, fully valid electron-updater channel manifest (the same
-// shape `validateDesktopReleaseManifest` parses via `parseUpdateInfo`) for a
-// release whose tag is `tag` and whose installer asset is named
-// `assetFileName`. `version` is derived from `tag` so it agrees with the
-// release by default; tests exercising the version-mismatch rejection pass a
-// different `assetFileName`/tag pairing or edit the returned string.
 function manifestYamlForTag(tag: string, assetFileName: string): string {
   const version = tag.replace(/^desktop-v/, "");
   return [
@@ -3134,15 +3019,6 @@ function manifestYamlForTag(tag: string, assetFileName: string): string {
   ].join("\n");
 }
 
-// Routes the desktop updater's two discovery-time fetch calls: the paginated
-// `GET /releases` listing (any URL carrying `per_page`) always serves
-// `releasesJson`, and a channel-manifest request (the public
-// `releases/download/<tag>/<channelFile>` browser URL or the private
-// `releases/assets/<tag>-manifest` asset URL used by `macReleaseFixture`) is
-// looked up by tag in `manifestByTag` - a 404 for any tag not present, so a
-// release intentionally left out of the map (e.g. one expected to be skipped
-// by the cheap platform-compatibility gate before any manifest fetch) still
-// fails safely if the production code fetches it unexpectedly.
 function fetchRouter(
   releasesJson: readonly unknown[],
   manifestByTag: Readonly<Record<string, string>>,
@@ -3166,11 +3042,6 @@ function fetchRouter(
   });
 }
 
-// A GitHub release payload carrying a Linux channel manifest + AppImage under
-// an explicit `channelFile`/`installerName` pair, so architecture-specific
-// discovery (`latest-linux-arm64.yml` vs `latest-linux.yml`) can be exercised
-// without a package-type install (mirrors the AppImage path - no `.deb`/
-// `.rpm`).
 function linuxReleaseFixture(
   tag: string,
   prerelease: boolean,

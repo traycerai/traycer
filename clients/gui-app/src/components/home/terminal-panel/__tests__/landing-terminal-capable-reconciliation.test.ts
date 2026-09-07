@@ -96,7 +96,6 @@ function freshCollection(
   );
 }
 
-/** An open stream that has not yet settled a snapshot in this connection episode. */
 function staleCollection(
   terminals: readonly PlainTerminalProjection[],
 ): PlainTerminalCollection {
@@ -195,13 +194,8 @@ describe("capable landing-terminal reconciliation", () => {
   });
 
   it("never imports a tab the sign-in registry claims, even though its ref lost the marker", async () => {
-    // The shape this arm cannot otherwise tell from legacy evidence: adopted
-    // while the host still read `legacy` (so no marker), and after the
-    // capability switch unacknowledged AND unprojected. `importLegacy` under
-    // its id would hand the plain registry a session the host's provider-login
-    // manager owns and it never spawned; the ref left unmarked then routes its
-    // tile to the durable bootstrap, which `terminal.plain.create`s a bare
-    // shell with none of the provider's spawn env.
+    // The shape this arm cannot otherwise tell from legacy evidence: adopted while the host still read `legacy`
+    // (so no marker), and after the capability switch unacknowledged and unprojected.
     const unmarked = tab({
       instanceId: "local-instance",
       terminalId: "signin-terminal",
@@ -371,12 +365,7 @@ describe("capable landing-terminal reconciliation", () => {
   });
 
   it("joins an in-flight close instead of racing the recovery bridge", async () => {
-    // A retained tombstone whose create lands late wakes BOTH this pass and
-    // `LandingTerminalTombstoneRecoveryBridge` on the same collection update.
-    // `terminal.plain.close` is fifo rather than coalescing, so going straight
-    // at the mutation is two real RPCs: the loser finds a terminal the winner
-    // already removed and raises "Couldn't close the terminal." for a close
-    // that succeeded.
+    // `terminal.plain.close` is fifo rather than coalescing, so going straight at the mutation is two real RPCs.
     const canonical = {
       ...tab({
         instanceId: "shared-close-instance",
@@ -435,20 +424,13 @@ describe("capable landing-terminal reconciliation", () => {
 
     expect(bridgeClose).toHaveBeenCalledTimes(1);
     expect(closeTerminal).not.toHaveBeenCalled();
-    // And it does NOT retire the record. The coordinator keys by the terminal's
-    // lifetime rather than by RPC, so a joined promise may belong to a
-    // `terminal.kill` - which answers an already-gone session with
-    // `killed: false` as data, the one answer a `pendingCreate` tombstone is
-    // deliberately kept for. Whoever owns the request owns that decision.
+    // The coordinator keys by the terminal's lifetime rather than by RPC, so a joined promise may belong to a
+    // `terminal.kill`.
     expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("joins an in-flight kill on the legacy arm too", async () => {
-    // Same class as the capable arm above, different RPC. `terminal.kill` does
-    // not throw for a session the winner already removed - it answers
-    // `killed: false`, which is the exact answer a `pendingCreate` reprieve has
-    // to keep treating as ambiguous, so an unmediated duplicate is both two
-    // `terminal.list` invalidations and a wasted reprieve answer.
+    // `terminal.kill` does not throw for a session the winner already removed.
     const pending: LandingTerminalPendingKill = {
       hostId: HOST_ID,
       sessionId: "terminal-legacy-shared",
@@ -479,8 +461,8 @@ describe("capable landing-terminal reconciliation", () => {
   });
 
   it("retains an unacknowledged tombstone the host's list does not mention", async () => {
-    // The other half of the legacy arm, and the rule the whole PR turns on:
-    // absence from the list retires an ACKNOWLEDGED record and nothing else.
+    // The other half of the legacy arm, and the rule the whole PR turns on: absence from the list retires an
+    // acknowledged record and nothing else.
     const acknowledged: LandingTerminalPendingKill = {
       hostId: HOST_ID,
       sessionId: "terminal-legacy-acked",
@@ -777,13 +759,8 @@ describe("capable landing-terminal reconciliation", () => {
   });
 
   it("never imports an ADOPTED provider-login tab as legacy evidence either", async () => {
-    // Built the way reconciliation actually produces one - through
-    // `reconcileLandingTerminalTabs`'s adoption path (an unmatched running
-    // session whose `providerLoginProviderFor` resolves a provider) - rather
-    // than hand-assembling the `origin`/`originProviderId` shape as the test
-    // above does. This is the tab a real reload-then-reconnect sequence would
-    // hand to this function: adopted while the host was legacy, then reaching
-    // the capable importLegacy pass on a later, capable reconciliation.
+    // This is the tab a real reload-then-reconnect sequence would hand to this function: adopted while the host
+    // was legacy, then reaching the capable importLegacy pass on a later, capable reconciliation.
     const signInSession: CanonicalTerminalSessionInfo = {
       sessionId: "terminal-signin-adopted",
       scope: { kind: "independent" },

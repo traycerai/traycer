@@ -60,8 +60,8 @@ export interface DesktopPerWindowStateUpdateAcknowledgement {
 export interface DesktopPerWindowLandingDraft {
   readonly id: string;
   /**
-   * Full editor JSON (hash-only image nodes, no base64). Crosses the IPC
-   * boundary as opaque `DesktopJsonValue`; validated on parse, not via casts.
+   * Full editor JSON (hash-only image nodes, no base64).
+   * Crosses the IPC boundary as opaque `DesktopJsonValue`; validated on parse, not via casts.
    */
   readonly content: DesktopJsonValue;
   /** Cursor position (from/to) as opaque JSON; parsed back to `{from,to}|null`. */
@@ -112,9 +112,8 @@ export interface DesktopAuthSessionSnapshot {
 }
 
 /**
- * Why main refused to adopt a renderer-pushed auth session. Every value is a
- * statement about the TOKEN, never about who sent it, so it is safe to log
- * and safe to show. See `electron-main/auth/bearer-verifier.ts`.
+ * Why main refused to adopt a renderer-pushed auth session.
+ * Every value is a statement about the TOKEN, never about who sent it, so it is safe to log and safe to show.
  */
 export type DesktopAuthSessionRefusalReason =
   | "malformed-token"
@@ -140,9 +139,8 @@ export type DesktopOpenEpicInNewWindowResult =
   | { readonly result: "queued-discard"; readonly windowId: string };
 
 /**
- * `not-found`: the main process's copy of the source window's snapshot holds
- * no such draft - the projection flush did not land, or the draft closed
- * mid-flight. Treated as a refused move; nothing was created.
+ * `not-found`: the main process's copy of the source window's snapshot holds no such draft - the projection flush did not land, or the draft closed mid-flight.
+ * Treated as a refused move; nothing was created.
  */
 export type DesktopOpenDraftInNewWindowResult =
   | { readonly result: "moved"; readonly windowId: string }
@@ -190,12 +188,8 @@ export interface DesktopZoomBridge {
   onChange(handler: (percent: number) => void): { dispose: () => void };
 }
 
-// Field-for-field match with main's `SupportLogTarget`
-// (`ipc-contracts/window-types.ts`). `browserTelemetry`/`browserTrace` name
-// the two browser diagnostic files - absence of the trace file is the
-// normal production state, so callers must go through the
-// existence-filtered `DesktopSupportSnapshot.logs` manifest rather than
-// assuming a browser target always resolves to a real file.
+// Field-for-field match with main's `SupportLogTarget` (`ipc-contracts/window-types.ts`).
+// `browserTelemetry`/`browserTrace` name the two browser diagnostic files - absence of the trace file is the normal production state, so callers must go through the existence-filtered `DesktopSupportSnapshot.logs` manifest rather than assuming a browser.
 export type DesktopSupportLogTarget =
   | "desktop"
   | "host"
@@ -263,8 +257,8 @@ export interface DesktopSupportLogTailResult {
 export interface DesktopSupportFreezeEvidenceInput {
   readonly draftId: number;
   /**
-   * Client-side defect fingerprint when known at report-open. Non-null
-   * records an install-local sighting for "Nth time on this install".
+   * Client-side defect fingerprint when known at report-open.
+   * Non-null records an install-local sighting for "Nth time on this install".
    */
   readonly fingerprint: string | null;
 }
@@ -292,10 +286,8 @@ export interface DesktopSupportSaveDiagnosticBundleResult {
 }
 
 /**
- * Field-for-field match with ticket 09's `SupportBugReportDraftFields`
- * (`ipc-contracts/window-types.ts`). Keys match the GitHub issue form's field
- * ids verbatim so `buildGitHubIssueUrl` (`@traycer-clients/shared/support/
- * issue-reporter`) can assemble `URLSearchParams` straight from this object.
+ * Field-for-field match with ticket 09's `SupportBugReportDraftFields` (`ipc-contracts/window-types.ts`).
+ * Keys match the GitHub issue form's field ids verbatim so `buildGitHubIssueUrl` (`@traycer-clients/shared/support/ issue-reporter`) can assemble `URLSearchParams` straight from this object.
  */
 export interface DesktopSupportBugReportDraftFields {
   readonly "what-happened": string;
@@ -319,10 +311,8 @@ export interface DesktopSupportGeneralDraftFields {
 }
 
 /**
- * Result of `support.buildPublicDraft`: the single main-process producer of
- * all public text, always behind the deep scrubber. Field-for-field match
- * with ticket 09/07's `SupportBuildPublicDraftResult` - a discriminated union
- * since bug/idea/other route to GitHub issue forms with different field ids.
+ * Result of `support.buildPublicDraft`: the single main-process producer of all public text, always behind the deep scrubber.
+ * Field-for-field match with ticket 09/07's `SupportBuildPublicDraftResult` - a discriminated union since bug/idea/other route to GitHub issue forms with different field ids.
  */
 export type DesktopSupportBuildPublicDraftResult =
   | {
@@ -344,10 +334,7 @@ export type DesktopSupportBuildPublicDraftResult =
       readonly truncated: boolean;
     };
 
-/**
- * Field-for-field match with ticket 05's `PrivateErrorCause`
- * (`@/lib/report-issue-draft-context`).
- */
+/** Field-for-field match with ticket 05's `PrivateErrorCause` (`@/lib/report-issue-draft-context`). */
 export interface DesktopPrivateDiagnosticsCause {
   readonly type: string;
   readonly message: string;
@@ -359,9 +346,7 @@ export interface DesktopPrivateDiagnosticsCause {
 }
 
 /**
- * Mirrors ticket 05's `CapturedField<T>` (`@/lib/support-context-registry`):
- * `known` is fresh, `stale` is a prior value no longer confirmed live,
- * `unavailable` means never observed this session.
+ * Mirrors ticket 05's `CapturedField<T>` (`@/lib/support-context-registry`): `known` is fresh, `stale` is a prior value no longer confirmed live, `unavailable` means never observed this session.
  */
 export type DesktopCapturedField<T> =
   | { readonly status: "known"; readonly value: T }
@@ -369,9 +354,8 @@ export type DesktopCapturedField<T> =
   | { readonly status: "unavailable" };
 
 /**
- * Field-for-field match with ticket 05's `SupportContextSnapshot`
- * (`@/lib/support-context-registry`). `hostId` here is the tab-bound host,
- * not necessarily the "local host" Electron main attaches logs from.
+ * Field-for-field match with ticket 05's `SupportContextSnapshot` (`@/lib/support-context-registry`).
+ * `hostId` here is the tab-bound host, not necessarily the "local host" Electron main attaches logs from.
  */
 export interface DesktopContextRegistrySnapshot {
   readonly routeTemplate: DesktopCapturedField<string>;
@@ -391,18 +375,14 @@ export interface DesktopContextRegistrySnapshot {
 }
 
 /**
- * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics`
- * (`serializeReportIssuePrivateDiagnostics` in
- * `@/lib/report-issue-draft-context`) - same five keys, always all present:
- * `registry` is never itself absent, `correlationId` is always a fresh id.
+ * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics` (`serializeReportIssuePrivateDiagnostics` in `@/lib/report-issue-draft-context`) - same five keys, always all present: `registry` is never itself absent, `correlationId` is always a fresh id.
  */
 export interface DesktopPrivateDiagnostics {
   readonly cause: DesktopPrivateDiagnosticsCause | null;
   readonly registry: DesktopContextRegistrySnapshot;
   readonly fingerprint: string | null;
   /**
-   * Normalized stack frame family, for maintainer-side sub-clustering ONLY -
-   * deliberately NOT part of `fingerprint`'s identity.
+   * Normalized stack frame family, for maintainer-side sub-clustering ONLY - deliberately NOT part of `fingerprint`'s identity.
    */
   readonly stackFamily: string | null;
   readonly correlationId: string;
@@ -434,13 +414,7 @@ export type DesktopAppUpdateStatus =
 
 export type DesktopAppUpdateCheckIntent = "automatic" | "manual";
 
-// Linux deb/rpm only: shown when a privileged install can't be applied for
-// the user automatically (WSL, or an install the package manager doesn't own
-// at the path we're running from) and the renderer needs actual steps to
-// follow, not just a tooltip label. `command` is the exact shell command to
-// run against the file already downloaded to `installerPath`-equivalent
-// storage; null only if guidance is somehow requested before a download
-// completed.
+// Linux deb/rpm only: shown when a privileged install can't be applied for the user automatically (WSL, or an install the package manager doesn't own at the path we're running from) and the renderer needs actual steps to follow, not just a tooltip label.
 export interface DesktopAppUpdateGuidance {
   readonly summary: string;
   readonly steps: readonly string[];
@@ -455,61 +429,28 @@ export interface DesktopAppUpdateSnapshot {
   readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
   /**
-   * The client-compatibility EPOCH the resolved candidate declares, stamped
-   * into the updater feed alongside its version. Same lifecycle as
-   * {@link latestVersion}: set when a candidate is found, carried through
-   * downloading and ready, cleared when there is no candidate.
-   *
-   * `null` means "this candidate declares no epoch we could read", and that is
-   * NOT the same as "epoch 1". A feed published before stamping existed, a
-   * feed that failed to parse, a candidate resolved by electron-updater's
-   * deep-validation fallback rather than the one the release gate proved - all
-   * arrive here as `null`, and all of them are cases where offering the update
-   * as a remedy for a compatibility rejection would restart the app straight
-   * back into the same rejection.
-   *
-   * So every consumer must treat `null` as INSUFFICIENT. The mapping of "no
-   * declared epoch" to the legacy generation is honest only for a client the
-   * host observed on the wire; here it would be a guess about a build nobody
-   * has run.
+   * The client-compatibility EPOCH the resolved candidate declares, stamped into the updater feed alongside its version.
+   * Same lifecycle as {@link latestVersion}: set when a candidate is found, carried through downloading and ready, cleared when there is no candidate.
    */
   readonly latestCompatibilityEpoch: number | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).
   readonly downloadProgress: number | null;
-  // Non-null when updates can't be installed from the current location (macOS
-  // app running outside /Applications). Carries the user-facing reason; the
-  // renderer disables the download affordance and shows it as a tooltip.
+  // Non-null when updates can't be installed from the current location (macOS app running outside /Applications).
+  // Carries the user-facing reason; the renderer disables the download affordance and shows it as a tooltip.
   readonly installBlockedReason: string | null;
-  // Non-null when a Linux deb/rpm install needs a manual step to finish
-  // (see `DesktopAppUpdateGuidance`). Unlike `installBlockedReason`, the
-  // renderer keeps the download/restart affordance clickable and opens a
-  // dialog with the steps instead of disabling it - the update can still be
-  // applied, just not fully automatically.
+  // Non-null when a Linux deb/rpm install needs a manual step to finish (see `DesktopAppUpdateGuidance`).
+  // Unlike `installBlockedReason`, the renderer keeps the download/restart affordance clickable and opens a dialog with the steps instead of disabling it - the update can still be applied, just not fully automatically.
   readonly installGuidance: DesktopAppUpdateGuidance | null;
-  // True from the moment the main process hands off to `quitAndInstall` until
-  // the install either ends the process or fails back to "error". The quit is
-  // not instant, so this is what every restart affordance reads to go pending -
-  // it's broadcast, so a second window can't fire a duplicate install either.
+  // True from the moment the main process hands off to `quitAndInstall` until the install either ends the process or fails back to "error".
+  // The quit is not instant, so this is what every restart affordance reads to go pending - it's broadcast, so a second window can't fire a duplicate install either.
   readonly installInFlight: boolean;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
 }
 
-/**
- * Outcome of a channel-preference mutation.
- *
- *   - `changed`   - persisted durably; the new channel is live.
- *   - `unchanged` - the requested channel was already selected.
- *   - `refused-update-pending` - a download is in flight, or a staged artifact
- *     could not be discarded on this platform. On macOS this is a STANDING
- *     outcome, not a transient one: a natively staged update cannot be
- *     withdrawn, so RC opt-in stays refused until it has applied and the app has
- *     relaunched. The recovery surface must sequence that rather than retry.
- *
- * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
- */
+/** Outcome of a channel-preference mutation. */
 export type DesktopAppUpdateChannelChangeOutcome =
   | "changed"
   | "unchanged"
@@ -521,24 +462,7 @@ export interface DesktopAppUpdateChannelChange {
 }
 
 /**
- * Where a compatibility-rejected app should send the user, decided in the main
- * process because the platform, the staged-artifact state, and the RC feed all
- * live there.
- *
- *   - `update-available`        the selected feed already holds a build that
- *                               clears the floor; the ordinary affordances
- *                               apply and no channel change is offered.
- *   - `enable-rc`               stable cannot help, the rejecting host is on the
- *                               RC line, and a bounded read-only probe found a
- *                               sufficient RC build.
- *   - `restart-to-clear-staged` macOS with an insufficient update natively
- *                               staged. It applies at the next quit whatever the
- *                               user does; recovery re-evaluates after that hop.
- *   - `manual`                  everything else, including the corner where the
- *                               only sufficient build is a stable release the
- *                               updater cannot resolve.
- *
- * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
+ * Where a compatibility-rejected app should send the user, decided in the main process because the platform, the staged-artifact state, and the RC feed all live there.
  */
 export type DesktopCompatRecoveryRoute =
   | "update-available"
@@ -551,14 +475,11 @@ export interface DesktopCompatRecoveryPlan {
   /** The RC build the probe found, on the `enable-rc` route only. */
   readonly rcCandidateVersion: string | null;
   /**
-   * The insufficient artifact still staged for install, on the
-   * `restart-to-clear-staged` route only - the build that WILL apply at the
-   * next quit whatever the user does.
+   * The insufficient artifact still staged for install, on the `restart-to-clear-staged` route only - the build that WILL apply at the next quit whatever the user does.
    */
   readonly stagedVersion: string | null;
-  // No snapshot: the discard a plan may perform is published through the
-  // ordinary change event the renderer already subscribes to. Mirrored from
-  // `desktop/src/ipc-contracts/app-update-types.ts`.
+  // No snapshot: the discard a plan may perform is published through the ordinary change event the renderer already subscribes to.
+  // Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
 }
 
 export interface DesktopAppUpdatesBridge {
@@ -571,15 +492,7 @@ export interface DesktopAppUpdatesBridge {
   ): Promise<DesktopAppUpdateChannelChange>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
-  /**
-   * Asks main where recovery from an epoch rejection should send this user.
-   *
-   * `hostAllowsRcRecovery` is the CALLER's interpretation of the rejection's
-   * `hostReleaseChannel`, via `hostReleaseChannelAllowsRcRecovery` in the
-   * protocol package - main is told the verdict, never the channel string, so
-   * there is exactly one place that decides whether an unknown future line
-   * authorizes an RC hop.
-   */
+  /** Asks main where recovery from an epoch rejection should send this user. */
   resolveCompatRecovery(request: {
     readonly minimumEpoch: number;
     readonly hostAllowsRcRecovery: boolean;
@@ -590,10 +503,8 @@ export interface DesktopAppUpdatesBridge {
 }
 
 /**
- * Wire snapshot pushed on `globalShortcutsChange` and returned by
- * `getSnapshot`. `sequence` guards against an out-of-order frame overwriting
- * a newer one in the renderer's store, the same monotonic pattern
- * `DesktopAppUpdateSnapshot` uses.
+ * Wire snapshot pushed on `globalShortcutsChange` and returned by `getSnapshot`.
+ * `sequence` guards against an out-of-order frame overwriting a newer one in the renderer's store, the same monotonic pattern `DesktopAppUpdateSnapshot` uses.
  */
 export interface DesktopGlobalShortcutsSnapshot {
   readonly sequence: number;
@@ -617,8 +528,7 @@ export interface DesktopHostControllerStatusBridge {
   };
 }
 
-// Ticket 07 (T4): "bug" routes to bug_report.yml, "idea" to
-// feature_request.yml, "other" to general.yml.
+// "bug" routes to bug_report.yml, "idea" to feature_request.yml, "other" to general.yml.
 export type DesktopReportType = "bug" | "idea" | "other";
 
 export type DesktopReportFrequency =
@@ -628,9 +538,8 @@ export type DesktopReportFrequency =
   | "not_sure";
 
 /**
- * Field-for-field match with ticket 08's `SupportImageAttachmentInput`
- * (`ipc-contracts/window-types.ts`). Bytes cross IPC as a raw `ArrayBuffer`,
- * never base64.
+ * Field-for-field match with ticket 08's `SupportImageAttachmentInput` (`ipc-contracts/window-types.ts`).
+ * Bytes cross IPC as a raw `ArrayBuffer`, never base64.
  */
 export interface DesktopImageAttachmentInput {
   readonly fileName: string;
@@ -638,10 +547,8 @@ export interface DesktopImageAttachmentInput {
   readonly bytes: ArrayBuffer;
 }
 
-// What (if anything) actually reached the private channel for this draft, as
-// known by the renderer at the moment it asks main to build a public draft.
-// "none" covers both "never attempted" (no-DSN) and a definite `failed`
-// result - neither left anything on the Sentry side to reference.
+// What (if anything) actually reached the private channel for this draft, as known by the renderer at the moment it asks main to build a public draft.
+// "none" covers both "never attempted" (no-DSN) and a definite `failed` result - neither left anything on the Sentry side to reference.
 export type DesktopPrivateOutcome = "delivered" | "unconfirmed" | "none";
 
 export interface DesktopReportIssueForm {
@@ -661,34 +568,25 @@ export interface DesktopReportIssueForm {
   // the private submission / diagnostic bundle when false.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
-  // One toggle covering both browser diagnostic files (plan D3, ticket 03):
-  // `browser-telemetry.jsonl` and `browser-trace.jsonl`. Default on, same
-  // shape as `includeDesktopLog`/`includeHostLog` - withholds both frozen
-  // tails when false. Field-for-field match with main's
-  // `SupportSubmitReportRequest.includeBrowserDiagnostics`.
+  // One toggle covering both browser diagnostic files (plan D3, ticket 03): `browser-telemetry.jsonl` and `browser-trace.jsonl`.
+  // Default on, same shape as `includeDesktopLog`/`includeHostLog` - withholds both frozen tails when false.
   readonly includeBrowserDiagnostics: boolean;
-  // Consent panel's diagnostics toggle: gates layer-0/process-metrics/
-  // version-platform-host tags+contexts on both the Sentry event and the
-  // bundle's environment block. Never gates the report's own identity
-  // (reportId/fingerprint/correlationId).
+  // Consent panel's diagnostics toggle: gates layer-0/process-metrics/ version-platform-host tags+contexts on both the Sentry event and the bundle's environment block.
+  // Never gates the report's own identity (reportId/fingerprint/correlationId).
   readonly includeDiagnostics: boolean;
   // Up to 3 screenshots (ticket 08 / T5) - always present, empty when none
   // attached.
   readonly images: readonly DesktopImageAttachmentInput[];
-  // `buildPublicDraft`-only (ignored by submit/bundle). The user's as-typed
-  // preview-title edit, re-scrubbed and re-fit through the same budget
-  // pipeline as a derived title on every "Open GitHub draft" re-invocation;
-  // null on the initial preview fetch.
+  // `buildPublicDraft`-only (ignored by submit/bundle).
+  // The user's as-typed preview-title edit, re-scrubbed and re-fit through the same budget pipeline as a derived title on every "Open GitHub draft" re-invocation; null on the initial preview fetch.
   readonly overrideTitle: string | null;
   // `buildPublicDraft`-only (ignored by submit/bundle).
   readonly privateOutcome: DesktopPrivateOutcome;
   readonly privateDiagnostics?: DesktopPrivateDiagnostics;
 }
 
-// Four states, not a nullable id: "no DSN" and "flush timed out" used to
-// collapse onto the same `reportId: null`, which claimed failure for reports
-// that may have arrived. `failed` is reserved for definite non-delivery;
-// `unconfirmed` never claims failure and never claims delivery.
+// Four states, not a nullable id: "no DSN" and "flush timed out" used to collapse onto the same `reportId: null`, which claimed failure for reports that may have arrived.
+// `failed` is reserved for definite non-delivery; `unconfirmed` never claims failure and never claims delivery.
 export type DesktopSubmitReportResult =
   | { readonly status: "delivered"; readonly reportId: string }
   | { readonly status: "unconfirmed"; readonly reportId: string }
@@ -744,11 +642,7 @@ export interface DesktopWindowsBridge {
     tabId: string,
   ): Promise<DesktopOpenEpicInNewWindowResult>;
   /**
-   * Optional + capability-probed, like `perWindowState.clear`: an older
-   * preload (built before draft moves existed) has no such method, and
-   * requiring it in `isDesktopWindowsBridge` would fail the WHOLE bridge on a
-   * renderer/preload version skew. Probe `typeof === "function"` at the call
-   * site (`use-draft-open-in-new-window`).
+   * Optional + capability-probed, like `perWindowState.clear`: an older preload (built before draft moves existed) has no such method, and requiring it in `isDesktopWindowsBridge` would fail the WHOLE bridge on a renderer/preload version skew.
    */
   requestOpenDraftInNewWindow?(
     draftId: string,
@@ -767,10 +661,8 @@ export interface DesktopWindowsBridge {
     update(
       patch: DesktopPerWindowStatePatch,
     ): Promise<DesktopPerWindowStateUpdateAcknowledgement | void>;
-    // Optional + capability-probed: a desktop shell built before the per-window
-    // `clear` RPC was added has no `clear`. Keeping it optional lets the wipe
-    // site probe `typeof clear === "function"` and degrade gracefully without
-    // forcing an older preload to fail the `isDesktopWindowsBridge` guard.
+    // Optional + capability-probed: a desktop shell built before the per-window `clear` RPC was added has no `clear`.
+    // Keeping it optional lets the wipe site probe `typeof clear === "function"` and degrade gracefully without forcing an older preload to fail the `isDesktopWindowsBridge` guard.
     clear?(): Promise<void>;
     onChange(handler: (snapshot: DesktopPerWindowSnapshot) => void): {
       dispose(): void;

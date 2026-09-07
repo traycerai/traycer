@@ -59,21 +59,7 @@ interface SwitcherListProps {
 }
 
 /**
- * Browsers category: every tab of every browser session the surface's host is
- * running, as a flat list.
- *
- * The rows, their settled identities, the search predicate, the four
- * load/unavailable/empty/no-results states and the close-and-retire-the-tile
- * action all come from the desktop Browsers panel's own layer, so the phone
- * lists exactly what the rail does and neither surface owns a private copy of
- * the rules. This file owns the touch chrome: 44px rows instead of the
- * desktop's 30px hover rows, the URL as a second line where desktop puts it in
- * a hover tooltip a finger can never summon, and the header's search / add /
- * host-filter cluster inline rather than in a rail header slot the sheet has
- * no room for.
- *
- * The host filter is the desktop panel's, reading and writing the same surface
- * pin, so a host chosen on either surface is the host both list from.
+ * This file owns the touch chrome: 44px rows instead of the desktop's 30px hover rows, the URL as a second line where desktop puts it in a hover tooltip a finger can never summon, and the header's search / add / host-filter cluster inline rather than in a rail header slot the sheet has no room for.
  */
 export function SwitcherBrowsersList(props: SwitcherListProps) {
   const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
@@ -92,13 +78,9 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
   const sessions = useBrowserSessionsContext();
   const surfaceKey = useTabSurfaceKey("browsers", tabId);
   const hostPin = useSurfaceHostPin(surfaceKey);
-  // Query state is the sheet's, not the panel-header search store's - see the
-  // Agents list for why a query must not outlive a sheet that closes on the
-  // first tap.
+  // Query state is the sheet's, not the panel-header search store's - see the Agents list for why a query must not outlive a sheet that closes on the first tap.
   const [searchQuery, setSearchQuery] = useState("");
-  // Built once for the list, as the desktop panel builds it once in
-  // `BrowsersPanelBodyLive` - a per-row map would redo the work for every
-  // visible row on every chat update.
+  // Built once for the list, as the desktop panel builds it once in `BrowsersPanelBodyLive` - a per-row map would redo the work for every visible row on every chat update.
   const chats = useEpicChatRecords();
   const chatById = useMemo(
     () => new Map(chats.map((chat) => [chat.id, chat])),
@@ -110,10 +92,7 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
     () => filterBrowserTabRows(tabs, searchQuery),
     [searchQuery, tabs],
   );
-  // Dismissing on the tile rather than on the tap: a refusal reports itself
-  // with a toast and opens nothing, and a sheet that left anyway would take the
-  // unavailable state's Retry with it. Same rule the Terminals row follows,
-  // which closes on `onLaunched`.
+  // Dismissing on the tile rather than on the tap: a refusal reports itself with a toast and opens nothing, and a sheet that left anyway would take the unavailable state's Retry with it.
   const { add: handleAdd, isAdding } = useAddBrowserAction(tabId, onClose);
 
   return (
@@ -196,11 +175,7 @@ function SwitcherBrowsersBody(props: {
   return (
     <>
       {isLoading ? <BrowsersPanelLoadingState /> : null}
-      {/* Rendered ABOVE the rows rather than instead of them, as the desktop
-          panel does: a stream that drops does not un-open the tabs, and the
-          rows are still the only way to reach them. Replacing the list with
-          the banner would strand a phone user with tabs they can see nothing
-          of. */}
+      {/* Rendered ABOVE the rows rather than instead of them, as the desktop panel does: a stream that drops does not un-open the tabs, and the rows are still the only way to reach them. */}
       {isUnavailable ? (
         <BrowsersPanelUnavailableState
           message={sessions.errorMessage}
@@ -251,9 +226,7 @@ function SwitcherBrowserRow(props: {
   const { row, epicId, tabId, onClose } = props;
   const { session, tab, identity } = row;
   const activate = useSwitcherActivate(tabId, onClose);
-  // One source for what this row POINTS AT; the refs below are both built from
-  // it, so the identity cannot drift between the one `isActive` is judged
-  // against and the one a tap opens.
+  // One source for what this row POINTS AT; the refs below are both built from it, so the identity cannot drift between the one `isActive` is judged against and the one a tap opens.
   const tileIdentity = useMemo(
     () => ({
       hostId: session.hostId,
@@ -269,10 +242,8 @@ function SwitcherBrowserRow(props: {
   // Host-scoped, like desktop: two fleet sessions sharing a tab id must not
   // both read as the current tile.
   const isActive = useIsActiveTile(tabId, tile.id, session.hostId);
-  // A fresh ref per activation, not the memoized one: `instanceId` keys the
-  // evicted-preview payloads a back navigation restores, so an open reusing a
-  // previous open's instance would write over its own history entry. Every
-  // sibling category mints one per tap for the same reason.
+  // A fresh ref per activation, not the memoized one: `instanceId` keys the evicted-preview payloads a back navigation restores, so an open reusing a previous open's instance would write over its own history entry.
+  // Every sibling category mints one per tap for the same reason.
   const onSelect = useCallback(() => {
     activate(() => makeBrowserSessionTileRef(tileIdentity));
   }, [activate, tileIdentity]);
@@ -281,11 +252,8 @@ function SwitcherBrowserRow(props: {
     <SwitcherListRow
       icon={
         <BrowserFavicon
-          // The settled identity survives a transient status, so mid-navigation
-          // it still holds the PREVIOUS document's favicon. Showing it beside
-          // the new URL would label the row with the site it just left, so the
-          // icon is withheld until the origins agree again - the same guard the
-          // desktop row applies.
+          // The settled identity survives a transient status, so mid-navigation it still holds the PREVIOUS document's favicon.
+          // Showing it beside the new URL would label the row with the site it just left, so the icon is withheld until the origins agree again - the same guard the desktop row applies.
           faviconUrl={
             browserTabOrigin(tab.url) === browserTabOrigin(identity.url)
               ? identity.faviconUrl
@@ -296,11 +264,7 @@ function SwitcherBrowserRow(props: {
         />
       }
       label={identity.title}
-      // Desktop's row carries the hostname inline and the full URL in a hover
-      // tooltip a finger cannot summon. With one secondary line to spend, the
-      // URL is the one to spend it on: it says everything the hostname does
-      // and separates two tabs of the same site, which is what desktop needs
-      // its tab-id suffix for.
+      // Desktop's row carries the hostname inline and the full URL in a hover tooltip a finger cannot summon.
       secondaryLabel={identity.url}
       badge={<SwitcherBrowserStateBadge status={tab.status} />}
       active={isActive}
@@ -323,10 +287,7 @@ function SwitcherBrowserRow(props: {
 }
 
 /**
- * The tab's own state, as a glyph inside the row button: crashed, or asleep.
- * Non-interactive by construction - the row button cannot nest another button
- * - so the one state that IS actionable on desktop, "driven by an agent", is
- * rendered as a real button in the actions slot beside it instead.
+ * Non-interactive by construction - the row button cannot nest another button - so the one state that IS actionable on desktop, "driven by an agent", is rendered as a real button in the actions slot beside it instead.
  */
 function SwitcherBrowserStateBadge(props: {
   readonly status: BrowserTabInfo["status"];
@@ -480,9 +441,8 @@ function SwitcherBrowserDriverButton(props: {
 }
 
 /**
- * The desktop panel's host filter, in the switcher's view-menu slot. The
- * desktop rail reaches it through a submenu because a rail has no width for
- * the host rows; the sheet has, so the choices are listed directly.
+ * The desktop panel's host filter, in the switcher's view-menu slot.
+ * The desktop rail reaches it through a submenu because a rail has no width for the host rows; the sheet has, so the choices are listed directly.
  */
 function SwitcherBrowserHostFilterMenu(props: {
   readonly surfaceKey: string;

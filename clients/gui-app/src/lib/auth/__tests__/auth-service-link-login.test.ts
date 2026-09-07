@@ -1,9 +1,5 @@
 /**
- * The link-login attempt fence: link claim/poll runs inside the SAME
- * `Attempt` lifecycle as device sign-in, so a link attempt superseded by a
- * newer sign-in is a silent no-op — its late approval can never overwrite
- * the newer session, and its late denial can never project a global
- * failure over it.
+ * The link-login attempt fence: link claim/poll runs inside the SAME `Attempt` lifecycle as device sign-in, so a link attempt superseded by a newer sign-in is a silent no-op - its late approval can never overwrite the newer session, and its late denial can.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -160,9 +156,7 @@ describe("link-login attempt fence", () => {
       // A newer sign-in supersedes the link attempt.
       const deviceSignIn = service.signIn();
 
-      // The next link poll would come back authorized — but the attempt is
-      // no longer current, so the tokens must be dropped without ever being
-      // validated or persisted.
+      // The next link poll would come back authorized - but the attempt is no longer current, so the tokens must be dropped without ever being validated or persisted.
       script.tokenResponse = () =>
         json(
           {
@@ -213,9 +207,8 @@ describe("link-login attempt fence", () => {
     try {
       script.claimResponse = () =>
         json({ status: "claimed", secret: "S".repeat(43), interval: 5 }, 200);
-      // A bare 429 — what a rate limiter answers when nothing along the way
-      // attaches a directive. Read as zero it would collapse the wait to the
-      // 1s floor and hammer the bucket that just rejected the poll.
+      // A bare 429 - what a rate limiter answers when nothing along the way attaches a directive.
+      // Read as zero it would collapse the wait to the 1s floor and hammer the bucket that just rejected the poll.
       script.tokenResponse = () => json({ error: "slow_down" }, 429);
       const linkResult = service.signInWithLinkCode("ABCDE-FGHJK");
 
@@ -236,23 +229,16 @@ describe("link-login attempt fence", () => {
   });
 
   /**
-   * A finalization that fails on the CURRENT attempt is a real failure, and
-   * must not be reported as somebody else's attempt. `superseded` exists to
-   * mean "this stopped being ours and nothing was projected"; these two paths
-   * DID project - the global sign-in error is already showing - so the result
-   * has to say so, or a caller reading it stays silent about a login that
-   * genuinely broke.
+   * A finalization that fails on the CURRENT attempt is a real failure, and must not be reported as somebody else's attempt.
+   * `superseded` exists to mean "this stopped being ours and nothing was projected"; these two paths DID project - the global sign-in error is already showing - so the result has to say so, or a caller reading it stays silent about a login that genuinely broke.
    */
   it("gives up on the approval window and reports timed-out", async () => {
-    // Nobody answers on the desktop. `LINK_LOGIN_APPROVAL_TIMEOUT_MS` and the
-    // `failCurrent({ kind: "timed-out" })` tail had no coverage, so a change
-    // to the deadline arithmetic would have failed nothing.
+    // Nobody answers on the desktop.
+    // `LINK_LOGIN_APPROVAL_TIMEOUT_MS` and the `failCurrent({ kind: "timed-out" })` tail had no coverage, so a change to the deadline arithmetic would have failed nothing.
     const { service } = makeService();
     const { script, restore } = installLinkFetch();
     try {
-      // A wide server-directed interval on purpose: the DEADLINE is what is
-      // under test, and pacing at the default 1s would drive 130 polls to
-      // reach it.
+      // A wide server-directed interval on purpose: the DEADLINE is what is under test, and pacing at the default 1s would drive 130 polls to reach it.
       script.claimResponse = () =>
         json({ status: "claimed", secret: "S".repeat(43), interval: 30 }, 200);
       script.tokenResponse = () =>
@@ -290,9 +276,7 @@ describe("link-login attempt fence", () => {
       expect(result.kind).not.toBe("superseded");
       expect(result.kind).toBe("failed");
       expect(useAuthStore.getState().status).toBe("signed-out");
-      // The global sign-in error is the SOLE presentation for this one: no
-      // code verdict is stored, because "invalid or expired" would misdescribe
-      // a network blip after an approval that did land.
+      // The global sign-in error is the SOLE presentation for this one: no code verdict is stored, because "invalid or expired" would misdescribe a network blip after an approval that did land.
       expect(service.getLastError()).not.toBeNull();
     } finally {
       restore();
@@ -387,7 +371,7 @@ describe("link-login attempt fence", () => {
       await vi.advanceTimersByTimeAsync(10);
       await deviceSignIn;
 
-      // A's paused write now lands — and must be undone, not persisted.
+      // A's paused write now lands - and must be undone, not persisted.
       releaseSave();
       const result = await linkResult;
       expect(result.kind).toBe("superseded");
@@ -404,9 +388,8 @@ describe("link-login attempt fence", () => {
     const { script, restore } = installLinkFetch();
     const realStore: ITokenStore = host.tokenStore;
     const { saveEnteredPromise, releaseSave } = pauseStoreSignIn(realStore);
-    // The undo's atomic conditional delete faults — the stale pair stays
-    // durable. That must fire the shared store-fault seam AND fence the
-    // recovery loop: until the delete lands, nothing durable may be adopted.
+    // The undo's atomic conditional delete faults - the stale pair stays durable.
+    // That must fire the shared store-fault seam AND fence the recovery loop: until the delete lands, nothing durable may be adopted.
     let deleteIfTokenBroken = true;
     const realDeleteIfToken = realStore.deleteIfToken.bind(realStore);
     Object.defineProperty(realStore, "deleteIfToken", {
@@ -447,14 +430,12 @@ describe("link-login attempt fence", () => {
       expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
       expect((await realStore.get())?.token).toBe("attempt-a-token");
 
-      // Recovery ticks while the conditional delete still fails: the stale
-      // token WOULD validate (the /user stub says 200), but the pending-undo
-      // fence must keep the loop from adopting it.
+      // Recovery ticks while the conditional delete still fails: the stale token WOULD validate (the /user stub says 200), but the pending-undo fence must keep the loop from adopting it.
       await vi.advanceTimersByTimeAsync(10_000);
       expect(useAuthStore.getState().status).not.toBe("signed-in");
 
       // The store heals. Recovery completes the pending conditional delete
-      // FIRST, then finds no stored session — the zombie never signs back in.
+      // FIRST, then finds no stored session - the zombie never signs back in.
       deleteIfTokenBroken = false;
       await vi.advanceTimersByTimeAsync(120_000);
       expect(await realStore.get()).toBeNull();
@@ -489,9 +470,7 @@ describe("link-login attempt fence", () => {
           },
           200,
         );
-      // STARTED service: the credentials-store change subscription is live,
-      // so the superseded save's own durable write fires the reconcile path
-      // — the adoption route the recovery-only fence used to miss.
+      // STARTED service: the credentials-store change subscription is live, so the superseded save's own durable write fires the reconcile path - the adoption route the recovery-only fence used to miss.
       await service.start();
       const linkResult = service.signInWithLinkCode("ABCDE-FGHJK");
       await vi.advanceTimersByTimeAsync(1_100);
@@ -508,9 +487,7 @@ describe("link-login attempt fence", () => {
       releaseSave();
       const result = await linkResult;
       expect(result.kind).toBe("superseded");
-      // The write's change notification has fired and the reconcile has had
-      // every chance to run — with the undo still failing, it must adopt
-      // NOTHING, even though the stale token would validate (stubbed 200).
+      // The write's change notification has fired and the reconcile has had every chance to run - with the undo still failing, it must adopt NOTHING, even though the stale token would validate (stubbed 200).
       await vi.advanceTimersByTimeAsync(5_000);
       expect(useAuthStore.getState().status).not.toBe("signed-in");
       expect((await realStore.get())?.token).toBe("attempt-a-token");
@@ -617,9 +594,8 @@ describe("link-login attempt fence", () => {
       await vi.advanceTimersByTimeAsync(10);
       await attemptC;
 
-      // A's write lands, then B's overwrites it. A's undo then compares and
-      // settles `kept` (B owns the file) — with a single-slot fence that
-      // settle used to null the record of B's STILL-FAILING delete.
+      // A's write lands, then B's overwrites it.
+      // A's undo then compares and settles `kept` (B owns the file) - with a single-slot fence that settle used to null the record of B's STILL-FAILING delete.
       slotFor("attempt-a-token").release();
       slotFor("attempt-b-token").release();
       expect((await linkA).kind).toBe("superseded");
@@ -631,7 +607,7 @@ describe("link-login attempt fence", () => {
       expect(useAuthStore.getState().status).not.toBe("signed-in");
       expect((await realStore.get())?.token).toBe("attempt-b-token");
 
-      // Heal: B's token was never lost — the drain deletes it and the
+      // Heal: B's token was never lost - the drain deletes it and the
       // zombie never signs in.
       bDeleteBroken = false;
       await vi.advanceTimersByTimeAsync(120_000);
@@ -644,11 +620,8 @@ describe("link-login attempt fence", () => {
 
   it("a SECOND window can never adopt a quarantined pair: shared store, real fan-out", async () => {
     const { service, host } = makeService();
-    // Window B: a second, independently STARTED AuthService over the SAME
-    // runner host — the same shared token store and the same change
-    // fan-out, exactly like a second Electron window. It has no local
-    // pending-undo record for A's token; only the store authority's
-    // quarantine can stop it.
+    // Window B: a second, independently STARTED AuthService over the SAME runner host - the same shared token store and the same change fan-out, exactly like a second Electron window.
+    // It has no local pending-undo record for A's token; only the store authority's quarantine can stop it.
     const windowB = new AuthService({ runnerHost: host });
     trackedServices.push(windowB);
     const { script, restore } = installLinkFetch();
@@ -687,9 +660,8 @@ describe("link-login attempt fence", () => {
       releaseSave();
       expect((await linkResult).kind).toBe("superseded");
 
-      // The write's fan-out reached BOTH windows. The raw entry is durable,
-      // but the store serves it to NO reader — so neither window adopts,
-      // even though the token would validate (stubbed 200).
+      // The write's fan-out reached BOTH windows.
+      // The raw entry is durable, but the store serves it to NO reader - so neither window adopts, even though the token would validate (stubbed 200).
       await vi.advanceTimersByTimeAsync(5_000);
       expect(useAuthStore.getState().status).not.toBe("signed-in");
       expect(host.tokenStoreEntries.get("traycer.token")?.token).toBe(
@@ -697,10 +669,7 @@ describe("link-login attempt fence", () => {
       );
       expect(await realStore.get()).toBeNull();
 
-      // Window B's proactive ROTATE against its older live same-user token,
-      // racing A's failed undo: the mutation view is quarantine-filtered
-      // like the read view, so the rotate is told the session is gone —
-      // never handed the zombie as `superseded`, and nothing is spent.
+      // Window B's proactive ROTATE against its older live same-user token, racing A's failed undo: the mutation view is quarantine-filtered like the read view, so the rotate is told the session is gone - never handed the zombie as `superseded`, and nothing is spent.
       const rotated = await realStore.rotate({
         userId: "user-1",
         token: "attempt-older-token",
@@ -728,10 +697,8 @@ describe("link-login attempt fence", () => {
       const result = await resultPromise;
       expect(result.kind).toBe("denied");
       expect(useAuthStore.getState().status).toBe("signed-out");
-      // The returned kind is what the surfaces render ("the sign-in was
-      // rejected on your computer"). A generic `lastError` beside it would put
-      // two explanations of one failure on the same screen, the weaker one
-      // telling the user to try again.
+      // The returned kind is what the surfaces render ("the sign-in was rejected on your computer").
+      // A generic `lastError` beside it would put two explanations of one failure on the same screen, the weaker one telling the user to try again.
       expect(service.getLastError()).toBeNull();
     } finally {
       restore();

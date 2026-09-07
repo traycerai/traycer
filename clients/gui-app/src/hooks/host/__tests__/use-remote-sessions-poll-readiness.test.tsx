@@ -1,12 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The hook's whole job is to turn the push-notified cache into a reactive
-// input, so the cache's two exports are the dependencies the test must
-// control: the readiness lookup itself, and the subscription that tells the
-// hook something may have changed (redesign P4.1: push replaces the old 1s
-// poll). A test-local listener set stands in for the cache's own listener
-// set, and the test fires it explicitly wherever the poll used to tick.
+// The hook's whole job is to turn the push-notified cache into a reactive input, so the cache's two exports are the dependencies the test must control: the readiness lookup itself, and the subscription that tells the hook something may have changed (redesign P4.1: push replaces the old 1s poll).
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
 const readinessListeners = vi.hoisted(() => ({
   value: new Set<() => void>(),

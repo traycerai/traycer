@@ -10,13 +10,7 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { worktreeMutationKeys } from "@/lib/query-keys";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
 
-/**
- * Per-folder mode flip. Only "local" is settable through this hook -
- * transitions into "worktree" go through the create/import worktree mutation
- * hooks, which already write per-entry mode and carry the branch /
- * worktreePath the entry needs. Sibling entries in the binding are preserved by
- * the orchestrator.
- */
+/** Per-folder mode flip. */
 export function useWorktreeSetEntryModeForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<

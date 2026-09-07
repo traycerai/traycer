@@ -21,8 +21,7 @@ import {
 } from "@/stores/chats/chat-transcript-jump-store";
 
 /**
- * The `hostSurface` destination family: a notification about a host-managed
- * resource opens a host surface, not a document inside an epic.
+ * The `hostSurface` destination family: a notification about a host-managed resource opens a host surface, not a document inside an epic.
  */
 describe("host surface notification routing", () => {
   beforeEach(async () => {
@@ -68,21 +67,15 @@ describe("host surface notification routing", () => {
       1_000,
     );
 
-    // Filters live in a panel-scoped store rather than the route, so
-    // activation returns the user to the list they had set up - the row must
-    // not smuggle a view reset in through navigation.
+    // Filters live in a panel-scoped store rather than the route, so activation returns the user to the list they had set up - the row must not smuggle a view reset in through navigation.
     const after = useWorktreesSettingsViewStore.getState();
     expect(after.searchText).toBe("acme/api");
     expect(after.sortMode).toBe(before.sortMode);
     expect([...after.tierFilters]).toEqual([...before.tierFilters]);
   });
 
-  // Forward-compatibility placeholder, NOT coverage of focus-resolution
-  // logic: `focus` is parsed and typed but no surface consumes it yet, and no
-  // producer emits one. The router dispatches on `surface` alone, so a hint it
-  // cannot use is structurally incapable of blocking navigation. This pins
-  // that property so the first surface to actually READ a hint has to keep
-  // the parent-surface fallback rather than inherit a dead-end activation.
+  // Forward-compatibility placeholder, NOT coverage of focus-resolution logic: `focus` is parsed and typed but no surface consumes it yet, and no producer emits one.
+  // The router dispatches on `surface` alone, so a hint it cannot use is structurally incapable of blocking navigation.
   it("ignores a focus hint it cannot use and still opens the parent surface", () => {
     const navigate = vi.fn();
     routeNotification(

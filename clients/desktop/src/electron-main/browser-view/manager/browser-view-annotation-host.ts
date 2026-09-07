@@ -32,11 +32,6 @@ interface BrowserViewAnnotationHostOptions {
   readonly debugSessions: BrowserViewDebugSessions;
 }
 
-/**
- * Owns the manager side of an annotation session: which entry has one, the
- * renderer round trip that acknowledges an attach, and the single teardown
- * every other subsystem calls when the page underneath changes.
- */
 export class BrowserViewAnnotationHost {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly send: BrowserViewSend;

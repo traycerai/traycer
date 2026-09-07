@@ -3,25 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonContent } from "../registry";
 import { jsonContentToMarkdown } from "../json-content-serializer";
 
-/**
- * GFM table-cell escaping must be mark-aware.
- *
- * A cell used to be escaped AFTER it was rendered: every `\` doubled, every
- * `|` became `\|`. Outside inline code that is the ordinary CommonMark escape
- * and the parser undoes it. Inside inline code CommonMark processes no
- * escapes, so the doubled backslash came back doubled and doubled again on
- * the next disk → doc → disk pass. One artifact row with three regex
- * backslashes in a code span reached 3 × 2^21 characters after ~40 agent
- * appends and blocked the host's event loop inside the markdown lexer for
- * good. Code text therefore keeps its backslashes and escapes only the pipe.
- *
- * The parser (marked's `splitCells`) treats a pipe as escaped when an ODD
- * number of backslashes precede it and then strips exactly one backslash from
- * each `\|`, which is why a pipe after an odd backslash run inside code gets
- * one extra backslash: GFM cannot represent a literal `\|` inside code, so
- * that one case is lossy by design, but it converges instead of splitting the
- * cell or growing.
- */
+/** GFM table-cell escaping must be mark-aware. */
 
 function text(
   value: string,
@@ -111,13 +93,8 @@ describe("table cell escaping inside inline code", () => {
   });
 
   it("carries backslash parity across a code span split by an unrendered mark", () => {
-    // A thread anchor renders nothing, but it splits one code span into two
-    // text nodes - here between a trailing `\` and a leading `|`. The span
-    // stays open across that boundary, so the pipe must be escaped against
-    // the run that ends the previous node: `\|` on its own would hand the
-    // parser `a\\|b`, an even run, and the cell would split. Falsification:
-    // escape each node separately (drop the segment coalescing at the top of
-    // `serializeTextRunWith`) and this reads "| `a\\\\|b` |".
+    // A thread anchor renders nothing, but it splits one code span into two text nodes - here between a trailing `\` and a leading `|`.
+    // The span stays open across that boundary, so the pipe must be escaped against the run that ends the previous node: `\|` on its own would hand the parser `a\\|b`, an even run, and the cell would split.
     const doc = tableDoc([
       text("a\\", [{ type: "code" }]),
       text("|b", [

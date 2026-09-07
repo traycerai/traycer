@@ -158,11 +158,7 @@ async function renderHarness(sourceData: EpicCanvasDragSourceData): Promise<{
   return { handleRef, source, target };
 }
 
-/**
- * The root DnD provider reads the app's query client (an RPC-committed
- * sidebar reparent invalidates the moved row's record query), so the harness
- * supplies one the way the app shell does.
- */
+/** The root DnD provider reads the app's query client (an RPC-committed sidebar reparent invalidates the moved row's record query), so the harness supplies one the way the app shell does. */
 const queryClient = new QueryClient();
 
 function Harness(props: {

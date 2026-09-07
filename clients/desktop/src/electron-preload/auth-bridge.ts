@@ -31,22 +31,10 @@ import type {
 } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
-/**
- * Eagerly subscribe at module load so a cold-start browser-return deep link
- * that arrives before `AuthService.start()` installs its subscription is
- * captured and replayed to the first subscriber. The signal is payload-free
- * (device flow is the only login - the token arrives over the poll, not here),
- * so we only track that it fired. Mirrors the `localHostChange` replay-safety
- * pattern in `host-bridge.ts`.
- */
 let authReturnSignalled = false;
 const authCallbackHandlers = new Set<Listener<void>>();
 
 ipcRenderer.on(RunnerHostEvent.authCallback, (): void => {
-  // No live subscriber yet (cold-start deep link): cache the signal as a
-  // one-time replay for the next subscriber. With live subscribers, deliver
-  // straight through and drop any stale cache so a later subscriber doesn't
-  // replay an already-handled return.
   if (authCallbackHandlers.size === 0) {
     authReturnSignalled = true;
     return;
@@ -186,12 +174,6 @@ export function buildAuthBridge(): AuthBridgeSurface {
   };
 }
 
-/**
- * Renderer-side `ITokenStore` backed by the main-process `FileTokenStore`
- * (tech plan §3). `rotate` performs the refresh spend in main under the file
- * lock; `subscribe` receives the owned-watcher change events (source lands in
- * §4). The renderer wraps this exactly as its `ITokenStore` implementation.
- */
 export interface AuthTokenStoreBridgeSurface {
   get(): Promise<StoredCredentials | null>;
   signIn(
@@ -251,10 +233,6 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
 
 export interface AuthSessionBridgeSurface {
   get(): Promise<DesktopAuthSessionSnapshot>;
-  /**
-   * Main verifies the bearer before adopting it, so a set can be REFUSED -
-   * the renderer is told why rather than silently believing it landed.
-   */
   set(
     snapshot: DesktopAuthSessionSnapshot,
   ): Promise<DesktopAuthSessionSetResult>;

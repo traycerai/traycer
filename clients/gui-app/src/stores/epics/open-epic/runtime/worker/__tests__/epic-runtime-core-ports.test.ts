@@ -1,23 +1,6 @@
 /**
- * The core ports, and one property that a defect proved is worth its own file.
- *
- * `attachments.read` must SETTLE for a hash the replica does not hold. The
- * runtime's own read waits indefinitely for a hash that has not synced and
- * resolves only when its abort signal fires; across the bridge there is no
- * signal to abort, so an unguarded read holds a call slot open for the life of
- * the worker and the caller's `attachment/read` never answers.
- *
- * That is not hypothetical. It SHIPPED in the first cut of this seam, which
- * called the runtime with a freshly constructed, never-aborted signal and
- * carried a comment explaining why the fresh signal was fine - the comment
- * reasoned about the response being dropped if the caller went away, and never
- * about the promise not settling at all. It was latent only because nothing
- * called `attachment/read` yet.
- *
- * So the pin below is written the way that defect would have failed it: a
- * runtime whose waiting read NEVER resolves, and an assertion that the port
- * answers anyway. A test that used a resolving fake would pass against the
- * defect.
+ * The core ports, and one property that a defect proved is worth its own file. `attachments.read`
+ * must SETTLE for a hash the replica does not hold.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,14 +8,7 @@ import type { EpicRuntimeCorePortSource } from "../epic-runtime-core-ports";
 import { buildEpicRuntimeCorePorts } from "../epic-runtime-core-ports";
 import type { EpicRuntimeCorePorts } from "../epic-runtime-core";
 
-/**
- * Ports with a no-op return leg.
- *
- * The leg carries a resident body's traffic back to main; nothing in this
- * file asserts on it, and threading two empty callbacks through eighteen call
- * sites would bury the argument that each test is actually about. A suite
- * that DOES care about the leg passes its own.
- */
+/** Ports with a no-op return leg. */
 function buildPorts(source: EpicRuntimeCorePortSource): EpicRuntimeCorePorts {
   return buildEpicRuntimeCorePorts(source, {
     onDocUpdate: () => {},
@@ -101,16 +77,13 @@ describe("attachments.read", () => {
     const source = createSource({ hasAttachmentBytes: () => false });
     const ports = buildPorts(source);
 
-    // `await` is the assertion. Against the parking version this line never
-    // returns and the test fails on the suite timeout rather than on a value,
-    // which is the honest shape for "it did not answer".
+    // `await` is the assertion. Against the parking version this line never returns and the test fails
+    // on the suite timeout rather than on a value, which is the honest shape for "it did not answer".
     await expect(ports.attachments.read("missing-hash")).resolves.toBeNull();
   });
 
   it("does not call the waiting read at all when the hash is not held", async () => {
-    // Stronger than the outcome: the guard must short-circuit BEFORE the
-    // waiting read, not race it. A version that started the read and then
-    // resolved null separately would leak a pending promise per miss.
+    // Stronger than the outcome: the guard must short-circuit BEFORE the waiting read, not race it.
     const readAttachmentBytes = vi.fn(neverResolves);
     const ports = buildPorts(
       createSource({ hasAttachmentBytes: () => false, readAttachmentBytes }),
@@ -137,9 +110,8 @@ describe("attachments.read", () => {
 
 describe("the shutdown order", () => {
   it("closes the transport before the durable store", () => {
-    // The core calls these in order; this pins that the ports map them onto
-    // the runtime's two teardown members the same way round. Disposing before
-    // detaching would let a frame arrive for a replica that is going away.
+    // The core calls these in order; this pins that the ports map them onto the runtime's two teardown
+    // members the same way round.
     const order: string[] = [];
     const ports = buildPorts(
       createSource({
@@ -170,17 +142,8 @@ describe("bodies.materialize", () => {
   });
 
   it("answers AWAITING for a doc key the tier cannot encode yet, never empty bytes", async () => {
-    // The conflation this arm exists to prevent: a zero-length update applies
-    // cleanly and produces an EMPTY body, so answering `{ update: new
-    // Uint8Array() }` here would replace a body with nothing. That property is
-    // unchanged - the answer states NO bytes.
-    //
-    // What changed is which no-bytes answer it is. A doc key EXISTS for this
-    // artifact and the tier simply has nothing for it yet, which on the lane
-    // arm is every cold open: the lease taken above is the `artifact.subscribe`
-    // open, so the bytes are on their way precisely because the demand is held.
-    // Answering `null` here (which this did) made main read `unavailable`, drop
-    // its release, and close the subscription that was about to deliver them.
+    // The conflation this arm exists to prevent: a zero-length update applies cleanly and produces an
+    // EMPTY body, so answering `{ update: new Uint8Array() }` here would replace a body with nothing.
     const ports = buildPorts(
       createSource({ bodyDocKey: () => "doc-1", encodeColdState: () => null }),
     );
@@ -193,10 +156,8 @@ describe("bodies.materialize", () => {
 
 describe("bodies.settle", () => {
   it("forwards the docGuid the caller materialized at", async () => {
-    // The identity check is the tier's, and it is a DIFFERENT refusal from the
-    // generation check: generation is the main thread's lifetime counter, guid
-    // is the doc's own identity. Dropping the guid here would let a body
-    // replaced underneath a live editor accept a settle from the old one.
+    // The identity check is the tier's, and it is a DIFFERENT refusal from the generation check:
+    // generation is the main thread's lifetime counter, guid is the doc's own identity.
     const settleColdState = vi.fn(() => ({
       accepted: true as const,
       settledBytes: 42,
@@ -218,12 +179,8 @@ describe("bodies.settle", () => {
   });
 
   it("reports settledBytes from what the TIER stored, not from the input", async () => {
-    // RE-HOMED from `in-process-runtime-port.test.ts`, which is retired: that
-    // suite pinned this on a port with no production caller, and the property
-    // belongs to whichever port actually serves a demote. The distinction is
-    // not cosmetic - the accountant's `settleCold` figure comes from this
-    // number, so reporting the input's length would charge the books for bytes
-    // the tier may have merged rather than stored.
+    // The distinction is not cosmetic - the accountant's `settleCold` figure comes from this number,
+    // so reporting the input's length would charge the books for bytes the tier may have merged rather
     const ports = buildPorts(
       createSource({
         settleColdState: () => ({ accepted: true as const, settledBytes: 512 }),
@@ -269,10 +226,7 @@ describe("bodies.settle", () => {
 
 describe("commands.apply", () => {
   it("routes every command kind to its own source member", () => {
-    // By name AND by argument, over the WHOLE vocabulary. A dispatch pin that
-    // spot-checked three kinds would stay green with two branches swapped,
-    // and a swapped branch here is silent: the projection still moves, just
-    // from the wrong input.
+    // By name AND by argument, over the WHOLE vocabulary.
     const calls: string[] = [];
     const record =
       (member: string) =>
@@ -366,9 +320,8 @@ describe("commands.apply", () => {
   });
 
   it("drops a pending-chat-creation whose payload is not one", () => {
-    // A pending creation with an invented id would put a row on screen that no
-    // create will ever resolve, so a foreign payload is DROPPED rather than
-    // defaulted into existence.
+    // A pending creation with an invented id would put a row on screen that no create will ever
+    // resolve, so a foreign payload is DROPPED rather than defaulted into existence.
     const begun: unknown[] = [];
     const ports = buildPorts(
       createSource({
@@ -437,10 +390,8 @@ describe("bodies.materialize — the lease it stands on", () => {
         };
       },
       bodyDocKey: (artifactId) => `room-${artifactId}`,
-      // The tier's real precondition: `encodeColdState` reads a `replicas`
-      // entry, and that entry exists only for a MATERIALIZED room. Modelling
-      // it is the whole point - a fixture that always returned bytes would
-      // pass against the read-only version that never leased.
+      // The tier's real precondition: `encodeColdState` reads a `replicas` entry, and that entry exists
+      // only for a MATERIALIZED room.
       encodeColdState: (docKey) =>
         held > 0
           ? {
@@ -465,30 +416,14 @@ describe("bodies.materialize — the lease it stands on", () => {
     expect(rig.leases).toEqual(["art-1"]);
     // Retained: the main thread now holds the doc this lease stands for.
     expect(rig.releases).toEqual([]);
-    // RE-HOMED from `in-process-runtime-port.test.ts`, which is retired: the
-    // granted answer carries the tier's OWN seed mode and watermark rather
-    // than defaults minted here. `seedMode` decides merge-vs-replace on main
-    // and `hostStateVector` is what a later reattach offers, so a port that
-    // substituted its own values for either would be silently lossy on the
-    // resume path.
     expect(materialized?.seedMode).toBe("full");
     expect(materialized?.hostStateVector).toBeNull();
     expect(materialized?.docGuid).toBe("guid-room-art-1");
   });
 
   it("RETAINS the demand when there is nothing to hand over yet", async () => {
-    // This pin used to assert the opposite, with the reasoning "no demote will
-    // ever come back to release this lease, and holding it would keep the body
-    // subscribed for the session". Both halves were right about `@1`, where a
-    // room arrives whether or not anything is looking, and exactly backwards
-    // about the lane arm - where the lease IS the subscribe, so releasing here
-    // closes the subscription that would have produced the bytes, and nothing
-    // ever asks again because the tile's effect keys on a docKey that does not
-    // move. Every artifact body on that arm was unreachable.
-    //
-    // The demand is held instead, and main is told so (`update: null` with a
-    // stated `docKey`), so it keeps a release to post and re-materializes when
-    // the projection says the room is ready.
+    // Both halves were right about `@1`, where a room arrives whether or not anything is looking, and
+    // exactly backwards about the lane arm - where the lease IS the subscribe, so releasing here
     const rig = leasedSource({ encodeColdState: () => null });
     const ports = buildPorts(rig.source);
 
@@ -504,10 +439,7 @@ describe("bodies.materialize — the lease it stands on", () => {
   });
 
   it("does not stack demand when an awaiting body is materialized again", async () => {
-    // The retry calls `body/materialize` a second time while the first demand
-    // is still retained. `bodies.release` decrements a REF-COUNT, so a second
-    // retained release would raise it with nothing left to lower it - the
-    // subscription would outlive every holder.
+    // The retry calls `body/materialize` a second time while the first demand is still retained.
     const rig = leasedSource({ encodeColdState: () => null });
     const ports = buildPorts(rig.source);
 
@@ -520,9 +452,8 @@ describe("bodies.materialize — the lease it stands on", () => {
   });
 
   it("releases retained demand when the awaiting holder unmounts", async () => {
-    // A tile that goes away while still waiting sends `body/release` like any
-    // other. The retained demand is the only thing holding that subscription
-    // open, so it comes off here or it never does.
+    // A tile that goes away while still waiting sends `body/release` like any other. The retained
+    // demand is the only thing holding that subscription open, so it comes off here or it never does.
     const rig = leasedSource({ encodeColdState: () => null });
     const ports = buildPorts(rig.source);
     await ports.bodies.materialize("art-1");
@@ -534,9 +465,8 @@ describe("bodies.materialize — the lease it stands on", () => {
   });
 
   it("releases retained demand at teardown, which no observer walk would reach", async () => {
-    // An awaiting body deliberately has NO observer - there is no materialized
-    // doc to watch - so a teardown that only detached observers would skip
-    // exactly these entries. That is why the corner is named for the HOLDS.
+    // An awaiting body deliberately has NO observer - there is no materialized doc to watch - so a
+    // teardown that only detached observers would skip exactly these entries.
     const rig = leasedSource({ encodeColdState: () => null });
     const ports = buildPorts(rig.source);
     await ports.bodies.materialize("art-1");
@@ -547,10 +477,7 @@ describe("bodies.materialize — the lease it stands on", () => {
   });
 
   it("promotes the RETAINED demand when the seed finally arrives", async () => {
-    // The awaiting -> resident transition. The retained release has held the
-    // subscription open continuously since the awaiting answer, so it becomes
-    // the resident hold and the retry's own lease is what comes off - demand
-    // goes two to one with no instant at zero.
+    // The awaiting -> resident transition.
     let seeded = false;
     const rig = leasedSource({
       encodeColdState: (docKey) =>
@@ -580,9 +507,8 @@ describe("bodies.materialize — the lease it stands on", () => {
   });
 
   it("does not stack leases for a docKey already held", async () => {
-    // `bodies.release` decrements a ref-count, and the main side sends ONE
-    // demote per doc - so a second retained release is never called and the
-    // body stream stays open for the session.
+    // `bodies.release` decrements a ref-count, and the main side sends ONE demote per doc - so a
+    // second retained release is never called and the body stream stays open for the session.
     const rig = leasedSource({});
     const ports = buildPorts(rig.source);
 
@@ -612,9 +538,8 @@ describe("bodies.materialize — the lease it stands on", () => {
   });
 
   it("KEEPS the lease when a demote is refused", async () => {
-    // The asymmetry that matters: a refusal means the main thread keeps its
-    // live doc, so the demand and tier lease it stands on are still in use.
-    // Releasing here unsubscribes a body the user still has open.
+    // The asymmetry that matters: a refusal means the main thread keeps its live doc, so the demand
+    // and tier lease it stands on are still in use.
     const rig = leasedSource({
       settleColdState: () => ({
         accepted: false as const,
@@ -637,12 +562,8 @@ describe("bodies.materialize — the lease it stands on", () => {
 
 describe("bodies.materialize — forward-only vs not-held", () => {
   /**
-   * The discrimination that matters, both directions.
-   *
-   * `encodeColdState` refuses for two reasons and only one of them may become
-   * a forward-only install. Giving an identity-STATED room the forward-only
-   * treatment would retire its settle path silently - the demote invariant
-   * dying for that room with nothing to say so.
+   * The discrimination that matters, both directions. `encodeColdState` refuses for two reasons and
+   * only one of them may become a forward-only install.
    */
   function coldRefusingSource(
     forwardOnly: Uint8Array | null,
@@ -656,9 +577,8 @@ describe("bodies.materialize — forward-only vs not-held", () => {
   }
 
   it("serves an identity-ABSENT room forward-only, with a null guid", async () => {
-    // The `@1` arm: its adapter states no identity by design, so cold state
-    // refuses and the live bytes are the only way across. Refusing here takes
-    // the whole arm dark.
+    // The `@1` arm: its adapter states no identity by design, so cold state refuses and the live bytes
+    // are the only way across. Refusing here takes the whole arm dark.
     const ports = buildPorts(coldRefusingSource(new Uint8Array([7])));
 
     const materialized = await ports.bodies.materialize("art-1");
@@ -669,20 +589,7 @@ describe("bodies.materialize — forward-only vs not-held", () => {
   });
 
   it("answers AWAITING when the source offers no forward-only bytes either", async () => {
-    // PLUMBING ONLY, and named that way deliberately. This drives
-    // `encodeForwardOnly` at the SOURCE, so it pins the ports' both-directions
-    // wiring and NOT the discrimination that decides which rooms get here.
-    //
-    // That discrimination - identity-absent serves forward-only, identity-
-    // STATED answers not-held - lives in `encodeArtifactBodyForwardOnly`
-    // (`epic-replica-runtime.ts`), which reads `tier.statedDocGuid`. Ablating
-    // that check leaves THIS suite green, which is how the gap was found. Its
-    // pin is owed at the runtime level, against a real tier.
-    //
-    // NEITHER path has bytes, and that is AWAITING rather than not-held: the
-    // artifact HAS a doc key, so this is a body whose seed has not arrived, not
-    // a body that does not exist. Only a `null` doc key is not-held now, and
-    // the pin above (`bodyDocKey: () => null`) is the one that covers it.
+    // PLUMBING ONLY, and named that way deliberately.
     const ports = buildPorts(coldRefusingSource(null));
 
     await expect(ports.bodies.materialize("art-1")).resolves.toMatchObject({
@@ -693,26 +600,12 @@ describe("bodies.materialize — forward-only vs not-held", () => {
 });
 
 /**
- * The return leg does not hand on the array it was GIVEN.
- *
- * Yjs delivers ONE freshly-encoded array to every `update` listener. On the
- * `@1` arm two listen: the tier's outbound observer, which turns it into an
- * `artifactRoomApplyUpdate` frame, and the body return leg. Both downstream
- * legs can eventually transfer a full-span standalone buffer IN PLACE, so
- * both copy before that handoff. Passing the shared array through from either
- * observer would detach it before every later observer can make its own copy.
- *
- * Pinned as IDENTITY rather than as a decode failure downstream: the property
- * is "we are not the owner, so we copy", and identity is what states it. A
- * behavioural pin would depend on which of the two observers happens to run
- * first, and would go quiet the day they are reordered.
+ * The return leg does not hand on the array it was GIVEN. Yjs delivers ONE freshly-encoded array
+ * to every `update` listener.
  */
 describe("the body return leg's ownership of its bytes", () => {
   it("copies the update rather than forwarding the array it was handed", async () => {
-    // A HOLDER, not a `let`. TypeScript narrows a `let` to its initializer
-    // and cannot see an assignment that happens inside a callback, so every
-    // later read is `null` and the call below is rejected. A property write
-    // has effects TS does not try to order, so the declared type survives.
+    // A HOLDER, not a `let`.
     const observer: { emit: ((update: Uint8Array) => void) | null } = {
       emit: null,
     };

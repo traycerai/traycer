@@ -32,15 +32,11 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostDirectory: () => hostDirectoryMock,
-  // `EpicSessionProvider` folds the host binding's owner identity into its
-  // rebuild decision; a null binding is the legitimate "directory not bound
-  // yet" state and keeps the identity key null.
+  // `EpicSessionProvider` folds the host binding's owner identity into its rebuild decision; a null binding is the legitimate "directory not bound yet" state and keeps the identity key null.
   useHostBinding: () => null,
 }));
 
-// Threw until `EpicSessionProvider` started opening its transport
-// unconditionally - see the fuller note in the sibling `comm-graph-tile`
-// suite for what the throw was pinning and what still pins it.
+// Threw until `EpicSessionProvider` started opening its transport unconditionally - see the fuller note in the sibling `comm-graph-tile` suite for what the throw was pinning and what still pins it.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -61,9 +57,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
 }));
 
-// The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// The Epic session resolves its host through the selection authority's derived pointer (selection model §1), not the active-host projection above - seed the decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -72,12 +66,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
-// Nodes render `WorktreeOwnerMetadataTooltip` for their hover card, which
-// derives PR pills from `pr.subscribeListForEpic` via this hook - unmocked,
-// it reaches for `useHostDirectoryEntryForHostId` (absent from the partial
-// host-client mock above) and a real stream client, neither of which this
-// file provides. This suite is about comm-graph timeline projection, not PR
-// pills, so an inert result suffices.
 vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
   useOwnerListPrReferences: () => ({
     references: [],
@@ -135,9 +123,7 @@ const LATE_CHAT_ID = "chat-late";
 const TUI_ID = "tui-1";
 const TUI_B_ID = "tui-b";
 const HOST_A = "host-a";
-// A second host makes the per-host initialization boundary observable: hosts
-// hand over their snapshots independently, so one host's history can arrive
-// long after another host is already live.
+// A second host makes the per-host initialization boundary observable: hosts hand over their snapshots independently, so one host's history can arrive long after another host is already live.
 const HOST_B = "host-b";
 const LATE_CREATED_AT = 5_000;
 
@@ -246,11 +232,6 @@ function created(
   };
 }
 
-/**
- * These cases assert on React Flow nodes, so the tile is opened in the
- * NODE-GRAPH mode explicitly. The tile's own default is the office floor, which
- * draws to a canvas and mounts no nodes at all.
- */
 function graphModeTileRef(): CommGraphTileRef {
   const ref = makeCommGraphTileRef(EPIC_ID);
   return { ...ref, view: { ...ref.view, mode: "graph" } };
@@ -309,10 +290,7 @@ function deliverEventFrom(
 }
 
 /**
- * A message whose counterpart is NOT on this canvas. Both-endpoints-on-canvas
- * rows pulse their edge, and React Flow edges do not mount in jsdom - so the
- * boundary tests below, whose subject is arrival-vs-history rather than which
- * element lights up, use a half-edge whose node pulse is observable.
+ * Both-endpoints-on-canvas rows pulse their edge, and React Flow edges do not mount in jsdom - so the boundary tests below, whose subject is arrival-vs-history rather than which element lights up, use a half-edge whose node pulse is observable.
  */
 function halfEdge(
   overrides: Partial<EpicCommunicationGraphEvent> & {
@@ -323,11 +301,6 @@ function halfEdge(
   return message({ receiverAgentId: "agent-outside-this-epic", ...overrides });
 }
 
-/**
- * Jump-to-source lives on the receiver endpoint in a DETAIL row (the timeline
- * list went with the sidebar panel), so reaching it means opening an agent's
- * detail first.
- */
 async function openAgentDetailJump(id: number): Promise<void> {
   await waitFor(() => {
     expect(screen.getByTestId(`comm-graph-node-${CHAT_ID}`)).toBeDefined();
@@ -354,10 +327,7 @@ async function track(): Promise<HTMLElement> {
 }
 
 /**
- * Seek to a zero-based position on the track through the REAL control path.
- * Pointer seeking needs a laid-out track, which jsdom does not have, so the
- * keyboard path is the one an integrated test can drive - and it is the same
- * seek the pointer performs.
+ * Pointer seeking needs a laid-out track, which jsdom does not have, so the keyboard path is the one an integrated test can drive - and it is the same seek the pointer performs.
  */
 async function seekToIndex(index: number): Promise<void> {
   const element = await track();
@@ -396,26 +366,8 @@ afterEach(() => {
 });
 
 /**
- * Integrated: real epic projection, real canvas store, real timeline state -
- * only the stream boundary and Virtuoso's layout engine are faked.
- *
- * KNOWN jsdom GAP (unchanged from the tile ticket): React Flow mounts an edge
- * only once BOTH endpoint nodes have been measured, and jsdom reports every box
- * as 0x0 with a ResizeObserver that never fires, so edges never render here.
- * NOTHING drawn on an edge is covered below - not the traveling message, not the
- * open-thread dash, not the "awaiting reply" chip, and not the base stroke's
- * uniformity under activity. What IS covered is every DECISION those visuals
- * spend: `commGraphPulseForEvent` and `commGraphEdgeTravel` (direction, kind,
- * and declining to animate) plus `aggregateCommGraphEdges`'s open-thread
- * lifecycle, all unit-tested under `lib/comm-graph/__tests__/`. The rendering
- * itself belongs to the dev-app pass, and is stated as unverified rather than
- * implied to be green.
- *
- * That gap extends to REACHING an edge at all: `getEdgePosition` bails unless
- * both endpoints carry DOM-measured `handleBounds`, so `EdgeWrapper` renders no
- * <g> here - nothing to dispatch at, no tab stop to land on. Everything in
- * `commGraphEdgeInteraction` is therefore a dev-app check, unlike its
- * `onNodeClick` twin below, which a mounted node wrapper does let us pin.
+ * Integrated: real epic projection, real canvas store, real timeline state - only the stream boundary and Virtuoso's layout engine are faked.
+ * KNOWN jsdom GAP (unchanged from the tile ticket): React Flow mounts an edge only once BOTH endpoint nodes have been measured, and jsdom reports every box as 0x0 with a ResizeObserver that never fires, so edges never render here.
  */
 describe("CommGraphTile projection", () => {
   it("reveals an agent only once the cursor reaches its createdAt", async () => {
@@ -489,9 +441,8 @@ describe("CommGraphTile projection", () => {
 
   it("pulses a row that ARRIVES while live, without flashing the initial snapshot", async () => {
     await renderTile();
-    // The snapshot draws this host's initialization line; it is history this
-    // client is learning, not activity. Flashing it would be "animate on event
-    // frame" by another name.
+    // The snapshot draws this host's initialization line; it is history this client is learning, not activity.
+    // Flashing it would be "animate on event frame" by another name.
     deliverSnapshot([message({ id: 1, timestamp: 100 })]);
     await waitFor(() => {
       expect(screen.getByTestId(markerTestId(1))).toBeDefined();
@@ -513,9 +464,7 @@ describe("CommGraphTile projection", () => {
 
   it("pulses the first live row of a FRESH epic, whose snapshot was empty", async () => {
     await renderTile();
-    // An empty snapshot is a real boundary, not a missing one. Treating it as
-    // "not initialized yet" would spend the epic's very first row on seeding,
-    // so a brand-new epic would never pulse its opening move.
+    // Treating it as "not initialized yet" would spend the epic's very first row on seeding, so a brand-new epic would never pulse its opening move.
     deliverSnapshot([]);
     deliverSnapshotFrom(HOST_B, []);
 
@@ -533,9 +482,8 @@ describe("CommGraphTile projection", () => {
       expect(screen.getByTestId(markerTestId(1))).toBeDefined();
     });
 
-    // Host B hands over its whole history LATE, and its rows sort above
-    // everything host A has. Against a single global mark this reads as a burst
-    // of activity; against host B's OWN boundary it is exactly what it is.
+    // Host B hands over its whole history LATE, and its rows sort above everything host A has.
+    // Against a single global mark this reads as a burst of activity; against host B's OWN boundary it is exactly what it is.
     deliverSnapshotFrom(HOST_B, [
       message({
         id: 1,
@@ -598,14 +546,7 @@ describe("CommGraphTile projection", () => {
       expect(screen.getByTestId(markerTestId(5))).toBeDefined();
     });
 
-    // ACCEPTED CONSEQUENCE, pinned here so it is a decision and not a surprise.
-    // The boundary is drawn at the snapshot handoff, so rows past the host's
-    // snapshot ceiling - which continue as event frames - land above it and
-    // pulse even though their timestamps are older. Only a >50k-row backlog
-    // reaches this path, one pulse is held at a time and it decays, so the cost
-    // is a brief flurry during the drain. Timestamp-based suppression was the
-    // alternative and it is what made the boundary global, which was wrong in
-    // both directions.
+    // Only a >50k-row backlog reaches this path, one pulse is held at a time and it decays, so the cost is a brief flurry during the drain.
     deliverEventFrom(HOST_A, halfEdge({ id: 6, timestamp: 50 }));
 
     expect(await screen.findByTestId(markerTestId(6))).toBeDefined();
@@ -710,9 +651,7 @@ describe("CommGraphTile projection", () => {
   it("parks a sender-side sent-message jump from the SENDER name", async () => {
     await renderTile();
     deliverSnapshot([
-      // Origin-less message: the receiver side has nothing to scroll to, but
-      // the SENDER is a projected GUI chat, so its own "Sent message" card is
-      // resolvable at jump time - receiver + verbatim text + capture clock.
+      // Origin-less message: the receiver side has nothing to scroll to, but the SENDER is a projected GUI chat, so its own "Sent message" card is resolvable at jump time - receiver + verbatim text + capture clock.
       message({ id: 1, timestamp: 100, messageText: "review this" }),
     ]);
 
@@ -998,9 +937,7 @@ describe("comm-graph subscription sharing", () => {
       ).toBe("false");
     });
 
-    // The surface goes away: the refcount drops to zero and the manager
-    // DETACHES (keeping events, cursors and per-host boundaries) rather than
-    // being disposed.
+    // The surface goes away: the refcount drops to zero and the manager DETACHES (keeping events, cursors and per-host boundaries) rather than being disposed.
     cleanup();
     expect(__commGraphSubscriptionRefCountForTests(EPIC_ID)).toBe(0);
 
@@ -1017,9 +954,7 @@ describe("comm-graph subscription sharing", () => {
 });
 
 /**
- * The canvas has ONE detail surface, reachable two ways: clicking a pair edge,
- * and clicking an agent node. Edges do not mount in jsdom (see the file header),
- * so the pair route is covered where it lives - `comm-graph-thread-panel.test`.
+ * Edges do not mount in jsdom (see the file header), so the pair route is covered where it lives - `comm-graph-thread-panel.test`.
  */
 describe("comm-graph agent detail", () => {
   it("opens an agent's activity when its node is clicked", async () => {
@@ -1127,13 +1062,7 @@ describe("comm-graph agent detail", () => {
   });
 
   /**
-   * INVERTED. This previously asserted the snippet was the literal source
-   * (`## Heading`) and called it "plain", which codified the bug: a reader
-   * scanning the timeline was shown markdown syntax, and the markers ate a
-   * budget already only one line wide.
-   *
-   * "Plain" means PROSE, not source. The timeline still renders no markdown -
-   * no element comes out of it - but the text it shows is the projection.
+   * This previously asserted the snippet was the literal source (`## Heading`) and called it "plain", which codified the bug: a reader scanning the timeline was shown markdown syntax, and the markers ate a budget already only one line wide. "Plain" means PROSE, not source.
    */
   /**
    * The lexer keeps character references encoded, so before this the snippet
@@ -1168,16 +1097,8 @@ describe("comm-graph agent detail", () => {
   });
 
   /**
-   * The node's own <button> is NOT the path a real browser takes. React Flow
-   * writes `pointerEvents: 'none'` onto `.react-flow__node` unless the node is
-   * selectable, draggable, or the canvas passes `onNodeClick` - and this canvas
-   * deliberately turns the first two off. jsdom ignores CSS pointer-events, so
-   * clicking the inner button passes either way and proved nothing.
-   *
-   * So this clicks React Flow's OWN node wrapper (`rf__node-<id>`, its testid).
-   * A click dispatched at the wrapper does not reach the descendant button, so
-   * the only handler that can run is React Flow's, which is exactly the path the
-   * browser uses.
+   * React Flow writes `pointerEvents: 'none'` onto `.react-flow__node` unless the node is selectable, draggable, or the canvas passes `onNodeClick` - and this canvas deliberately turns the first two off. jsdom ignores CSS pointer-events, so clicking the inner button passes either way and proved nothing.
+   * A click dispatched at the wrapper does not reach the descendant button, so the only handler that can run is React Flow's, which is exactly the path the browser uses.
    */
   it("opens the agent detail through React Flow's onNodeClick, not the inner button", async () => {
     await renderTile();
@@ -1187,9 +1108,8 @@ describe("comm-graph agent detail", () => {
     });
 
     const wrapper = screen.getByTestId(`rf__node-${CHAT_ID}`);
-    // Guard the mechanism itself: if this ever renders pointer-inert again, the
-    // click below would be dead in a browser even though jsdom still dispatches
-    // it. React Flow only sets an inline `pointer-events` when it wants none.
+    // Guard the mechanism itself: if this ever renders pointer-inert again, the click below would be dead in a browser even though jsdom still dispatches it.
+    // React Flow only sets an inline `pointer-events` when it wants none.
     expect(wrapper.style.pointerEvents).not.toBe("none");
 
     fireEvent.click(wrapper);
@@ -1198,12 +1118,8 @@ describe("comm-graph agent detail", () => {
   });
 
   /**
-   * The wrapper must be pointer-live but NOT focusable. React Flow gives it
-   * `tabIndex=0` whenever `nodesFocusable` is on, and its keydown handler only
-   * drives React Flow's own selection - which `elementsSelectable={false}` rules
-   * out. That is a tab stop that does nothing, in front of the real button, on
-   * every agent. The two properties are independent (`hasPointerEvents` keys off
-   * `onClick`, focusability off `isFocusable`), so both are asserted here.
+   * The wrapper must be pointer-live but NOT focusable.
+   * React Flow gives it `tabIndex=0` whenever `nodesFocusable` is on, and its keydown handler only drives React Flow's own selection - which `elementsSelectable={false}` rules out.
    */
   it("leaves no dead tab stop on the node wrapper", async () => {
     await renderTile();
@@ -1224,11 +1140,7 @@ describe("comm-graph agent detail", () => {
   });
 });
 
-/**
- * A detail panel lists RAW bodies, and an agent's real message is regularly a
- * full report. Long bodies collapse; short ones must not grow a chevron that
- * reveals nothing.
- */
+/** Long bodies collapse; short ones must not grow a chevron that reveals nothing. */
 describe("comm-graph detail row collapsing", () => {
   const LONG_BODY = `# Architecture report\n\n${"detail ".repeat(60)}`;
 
@@ -1267,11 +1179,6 @@ describe("comm-graph detail row collapsing", () => {
     ).toBeNull();
   });
 
-  /**
-   * ONE row species: a short row uses the same preview treatment as a long one,
-   * it just has no chevron. Rendering short bodies straight into the framed
-   * markdown made a mixed list read as two different kinds of object.
-   */
   it("shows a short body in the same preview treatment, with no toggle", async () => {
     await renderTile();
     deliverSnapshot([
@@ -1319,13 +1226,7 @@ describe("comm-graph detail row collapsing", () => {
   });
 
   /**
-   * The open set is keyed by `hostId:id`, not by list position, precisely so a
-   * row that moves as new rows sort in keeps its own expansion.
-   *
-   * The insertion has to come from the OTHER host to be honest: ids are
-   * monotonic per host, so host A can never emit a row that sorts behind one it
-   * already sent. Interleaving across hosts is the real way a row lands
-   * mid-array.
+   * The insertion has to come from the OTHER host to be honest: ids are monotonic per host, so host A can never emit a row that sorts behind one it already sent.
    */
   it("keeps a row expanded when a row from another host sorts in ahead of it", async () => {
     await renderTile();
@@ -1366,9 +1267,7 @@ describe("comm-graph detail row collapsing", () => {
     ]);
     await openAgentDetail();
 
-    // jsdom cannot lay out `position: sticky`, so assert the contract the CSS
-    // rests on: the heading is sticky to the top of the panel's scroller, and
-    // it is opaque so the body cannot bleed through it.
+    // jsdom cannot lay out `position: sticky`, so assert the contract the CSS rests on: the heading is sticky to the top of the panel's scroller, and it is opaque so the body cannot bleed through it.
     const toggle = screen.getByTestId(`comm-graph-detail-toggle-${HOST_A}-1`);
     const heading = toggle.parentElement;
     expect(heading?.className).toContain("sticky");
@@ -1378,10 +1277,7 @@ describe("comm-graph detail row collapsing", () => {
 });
 
 /**
- * The transport owns the cursor now, so these drive the REAL controls against
- * the real per-epic store. Pointer seeking needs a laid-out track, which jsdom
- * does not provide - the keyboard path is the same seek and is drivable here;
- * the pixel→fraction math is unit-tested in `lib/comm-graph/comm-graph-transport`.
+ * Pointer seeking needs a laid-out track, which jsdom does not provide - the keyboard path is the same seek and is drivable here; the pixel→fraction math is unit-tested in `lib/comm-graph/comm-graph-transport`.
  */
 describe("comm-graph transport", () => {
   async function renderWithEvents(count: number): Promise<void> {
@@ -1506,9 +1402,7 @@ describe("comm-graph transport", () => {
   });
 
   /**
-   * An empty epic has no positions to be at, so it must not expose a focusable
-   * slider at all - one declaring `min=0 max=0 valuenow=-1` would sit in the tab
-   * order announcing a value outside its own range and go nowhere when driven.
+   * An empty epic has no positions to be at, so it must not expose a focusable slider at all - one declaring `min=0 max=0 valuenow=-1` would sit in the tab order announcing a value outside its own range and go nowhere when driven.
    */
   it("exposes no focusable out-of-range slider when nothing is captured", async () => {
     await renderTile();

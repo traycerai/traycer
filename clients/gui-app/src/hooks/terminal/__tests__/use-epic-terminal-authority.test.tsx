@@ -243,10 +243,7 @@ describe("useEpicTerminalAuthority", () => {
   });
 
   it("does not re-import after a failed import just because the tile re-rendered", async () => {
-    // The mocked authority rebuilds `capability` on every render, as the real
-    // hook does. Before the import effect was keyed on primitives, the
-    // failure's own re-render re-fired it: one host RPC and one toast per
-    // round trip, for as long as the tile stayed mounted.
+    // The mocked authority rebuilds `capability` on every render, as the real hook does.
     const ref = legacyRef("terminal-storm", "instance-storm");
     authorityState.importLegacy.mockRejectedValue(
       new Error("ENOENT: no such file or directory, realpath '/legacy'"),
@@ -257,10 +254,7 @@ describe("useEpicTerminalAuthority", () => {
     await waitFor(() =>
       expect(authorityState.importLegacy).toHaveBeenCalledTimes(1),
     );
-    // Re-render several times, each round replacing the stored ref with a
-    // structurally identical object (a canvas write) on top of the mocked
-    // authority's per-render capability object. Neither identity change is
-    // new evidence, so neither may start another import.
+    // Re-render several times, each round replacing the stored ref with a structurally identical object (a canvas write) on top of the mocked authority's per-render capability object.
     for (let round = 0; round < 3; round += 1) {
       cloneStoredRef(viewTabId, ref.instanceId);
       rendered.rerender(<HookHarness instanceId={ref.instanceId} />);

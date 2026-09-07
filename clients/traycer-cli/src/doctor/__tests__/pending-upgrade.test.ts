@@ -11,23 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Pending CLI upgrade is staged by `traycer cli upgrade` when the
-// live binary is locked (Windows: the host supervisor holds the
-// .exe). These tests cover:
-//
-//   - Doctor surfaces a stable `CLI_UPGRADE_PENDING` issue while the
-//     pendingUpgrade manifest field is populated.
-//   - Doctor's fix action is `host-restart` (the only restart path
-//     that releases the binary lock; the GUI Doctor card already
-//     wires this through `management.restartHost`).
-//   - `finalizePendingCliUpgrade` swaps the staged binary in place
-//     when the live path is writable and clears the pending state
-//     (this is what `host restart` calls between stop/start, when
-//     the supervisor has just released the lock).
-//   - When the staged binary is gone, Doctor surfaces a recovery
-//     message without offering a Doctor auto-fix button.
-//   - When the live binary is still locked, finalize reports
-//     `still-locked` and preserves the pendingUpgrade manifest field.
+// Pending CLI upgrade is staged by `traycer cli upgrade` when the live binary is locked (Windows: the host supervisor holds the .exe).
+// These tests cover: - Doctor surfaces a stable `CLI_UPGRADE_PENDING` issue while the pendingUpgrade manifest field is populated. - Doctor's fix action is `host-restart` (the only restart path that releases the binary lock; the GUI Doctor card already wires this through `management.restartHost`). - `finalizePendingCliUpgrade` swaps the staged binary in place when the live path is writable and clears the pending state (this is what `host restart` calls between stop/start, when the supervisor has just released the lock). - When the staged binary is gone, Doctor surfaces a recovery message without offering a Doctor auto-fix button. - When the live binary is still locked, finalize reports `still-locked` and preserves the pendingUpgrade manifest field.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -250,19 +235,12 @@ describe("finalizePendingCliUpgrade", () => {
   });
 
   it("preserves pendingUpgrade when the live path's directory is not writable", async () => {
-    // Simulate the "supervisor holds the live binary" case by removing
-    // write permission on the parent directory. On POSIX, renameSync()
-    // into a non-writable directory fails with EACCES - one of the
-    // codes tryReplaceLiveBinary classifies as "locked".
-    //
-    // Skip on Windows where directory ACLs behave differently and the
-    // EACCES path is unreliable in test environments.
+    // Simulate the "supervisor holds the live binary" case by removing write permission on the parent directory.
+    // On POSIX, renameSync() into a non-writable directory fails with EACCES - one of the codes tryReplaceLiveBinary classifies as "locked".
     if (process.platform === "win32") {
       return;
     }
-    // Root bypasses POSIX directory permissions, so the EACCES branch
-    // is unreachable; skip rather than emit a false failure on CI
-    // images that happen to run as root.
+    // Root bypasses POSIX directory permissions, so the EACCES branch is unreachable; skip rather than emit a false failure on CI images that happen to run as root.
     if (typeof process.getuid === "function" && process.getuid() === 0) {
       return;
     }
@@ -285,9 +263,8 @@ describe("finalizePendingCliUpgrade", () => {
         reason: "binary-locked",
       }),
     );
-    // Strip write permission on the parent of the live binary so
-    // renameSync() reports EACCES. Always re-grant in finally so the
-    // workDir cleanup in afterEach() can succeed.
+    // Strip write permission on the parent of the live binary so renameSync() reports EACCES.
+    // Always re-grant in finally so the workDir cleanup in afterEach() can succeed.
     chmodSync(lockedDir, 0o555);
     try {
       const { finalizePendingCliUpgrade } =

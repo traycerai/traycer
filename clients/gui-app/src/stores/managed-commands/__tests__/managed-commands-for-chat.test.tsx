@@ -8,13 +8,7 @@ import {
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { useHeldManagedCommandsForChat } from "@/stores/managed-commands/managed-commands-for-chat";
 
-/**
- * The read side of the Deliver affordance: which shells this chat is holding,
- * and in what order. `useManagedCommandsForChat` /
- * `useRunningManagedCommandsForChat`'s own ordering (running-first,
- * most-recent-activity) has its coverage through the Background panel's own
- * suite; this hook's ordering is the opposite on purpose, so it gets its own.
- */
+/** The read side of the Deliver affordance: which shells this chat is holding, and in what order. */
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";

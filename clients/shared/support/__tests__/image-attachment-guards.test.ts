@@ -20,7 +20,6 @@ function pngBytes(length: number): Uint8Array {
   return bytes;
 }
 
-/** Minimal valid JPEG SOI + padding (magic needs first 3 bytes). */
 function jpegBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
   bytes[0] = 0xff;
@@ -29,7 +28,6 @@ function jpegBytes(length: number): Uint8Array {
   return bytes;
 }
 
-/** Minimal valid GIF header + padding (magic needs first 4 bytes). */
 function gifBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
   bytes[0] = 0x47;
@@ -39,7 +37,6 @@ function gifBytes(length: number): Uint8Array {
   return bytes;
 }
 
-/** Minimal valid WEBP (RIFF....WEBP) - needs at least 12 bytes. */
 function webpBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(Math.max(length, 12));
   bytes[0] = 0x52;
@@ -118,21 +115,21 @@ describe("matchesReportImageMagicBytes", () => {
   });
 
   it("rejects mismatched magic for a declared type", () => {
-    // PNG bytes declared as JPEG
+  // PNG bytes declared as jpeg
     expect(matchesReportImageMagicBytes(PNG(), "image/jpeg")).toBe(false);
-    // JPEG bytes declared as PNG
+    // jpeg bytes declared as PNG
     expect(matchesReportImageMagicBytes(JPEG(), "image/png")).toBe(false);
-    // GIF bytes declared as WEBP
+    // GIF bytes declared as webp
     expect(matchesReportImageMagicBytes(GIF(), "image/webp")).toBe(false);
   });
 
   it("requires at least 12 bytes for WEBP (RIFF....WEBP)", () => {
-    // 11-byte buffer with a valid RIFF prefix still fails the length gate
+  // 11-byte buffer with a valid riff prefix still fails the length gate
     const tooShort = webpBytes(12).subarray(0, 11);
     expect(tooShort.length).toBe(11);
     expect(matchesReportImageMagicBytes(tooShort, "image/webp")).toBe(false);
 
-    // Exactly 12 bytes with correct RIFF....WEBP is enough
+    // Exactly 12 bytes with correct riff....webp is enough
     expect(matchesReportImageMagicBytes(webpBytes(12), "image/webp")).toBe(
       true,
     );
@@ -140,15 +137,12 @@ describe("matchesReportImageMagicBytes", () => {
 
   it("rejects WEBP with wrong fourcc after the RIFF header", () => {
     const bytes = WEBP();
-    bytes[8] = 0x00; // corrupt WEBP fourcc
+    bytes[8] = 0x00; // corrupt webp fourcc
     expect(matchesReportImageMagicBytes(bytes, "image/webp")).toBe(false);
   });
 });
 
 describe("reportImagesExceedBudget", () => {
-  // Budget: imageBytesTotal + attachedLogCount * REPORT_LOG_TAIL_MAX_BYTES > TOTAL
-  // Max image total that still fits at the closed-world contract's full log
-  // count (ticket 03): TOTAL - 4 * LOG = 20*1024*1024 - 4*512_000 = 18_923_520
   const maxFittingImageTotal =
     TOTAL_ATTACHMENT_BUDGET_BYTES -
     MAX_REPORT_LOG_ATTACHMENTS * REPORT_LOG_TAIL_MAX_BYTES;
@@ -158,7 +152,7 @@ describe("reportImagesExceedBudget", () => {
   });
 
   it("returns false when image total is exactly at the budget boundary", () => {
-    // imageTotal + 4*LOG === TOTAL  =>  NOT greater than TOTAL  =>  false
+  // imageTotal + 4*LOG === total  =>  NOT greater than total  =>  false
     expect(maxFittingImageTotal).toBe(18_923_520);
     expect(
       maxFittingImageTotal +
@@ -191,10 +185,6 @@ describe("reportImagesExceedBudget", () => {
     ).toBe(false);
   });
 
-  // Ticket 03 / plan D3: the log share must scale with the ACTUAL count
-  // passed in, not a hardcoded literal - these pin the arithmetic at the
-  // three counts the codebase actually exercises (0 possible logs, the
-  // pre-ticket-03 desktop+host pair, and the post-ticket-03 four-log set).
   it.each([
     [0, TOTAL_ATTACHMENT_BUDGET_BYTES, false],
     [0, TOTAL_ATTACHMENT_BUDGET_BYTES + 1, true],

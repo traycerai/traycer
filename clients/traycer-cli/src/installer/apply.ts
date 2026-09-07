@@ -17,52 +17,29 @@ import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
 import { commitInstallFromSource, currentInstallPlatform } from "./install";
 
-// `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
-// commands" > `host apply`. Promotes the single-slot staged tree over the
-// current install: no download, no extraction - the stage was already
-// verified by `host download`. The stop -> swap -> start tail is
-// `commitInstallFromSource` (installer/install.ts), shared with
-// `installHost`.
-//
-// Concurrency: like `installHost`, this assumes the caller already holds
-// the environment's `cli-lock` (see `commands/host-apply.ts`) - reconcile,
-// the record reads, the no-op/busy checks, and the commit all run inside
-// ONE lock span, per the Tech Plan's "the final idle decision happens
-// inside an acquired lock immediately before the disruptive step".
+// `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed commands" > `host apply`.
+// Promotes the single-slot staged tree over the current install: no download, no extraction - the stage was already verified by `host download`.
 
 export interface ApplyHostOptions {
   readonly environment: Environment;
-  // Desktop receives this from its off-lane registry eligibility pass. The
-  // value is checked after reconcile, while the caller holds cli-lock.
-  // Null means "no fingerprint pin" - callers state that explicitly.
+  // Desktop receives this from its off-lane registry eligibility pass.
+  // The value is checked after reconcile, while the caller holds cli-lock.
   readonly expectedStageFingerprint: string | null;
-  // Skips the busy check. Does NOT affect `--no-service`'s own busy-check
-  // skip below - the two flags are independent knobs with the same effect
-  // on this one gate.
+  // Skips the busy check.
+  // Does NOT affect `--no-service`'s own busy-check skip below - the two flags are independent knobs with the same effect on this one gate.
   readonly force: boolean;
-  // Internal/hidden (desktop-owned packaged-macOS path): skips the busy
-  // check AND the service stop/start lifecycle entirely (a non-disruptive
-  // POSIX swap). Rejected on Windows, where the service stop is load-
-  // bearing for releasing file handles the rename needs.
+  // Internal/hidden (desktop-owned packaged-macOS path): skips the busy check AND the service stop/start lifecycle entirely (a non-disruptive POSIX swap).
+  // Rejected on Windows, where the service stop is load- bearing for releasing file handles the rename needs.
   readonly noService: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
   /** See `commitInstallFromSource` for the final-actuator contract. */
   readonly verifyMutationCapability: () => Promise<void>;
-  /**
-   * Published immediately before a lifecycle-controlled OS service launch.
-   * A parent contender supplies this one-shot supervisor adoption proof so
-   * `host start` does not deadlock trying to reacquire the same outer lock.
-   */
+  /** Published immediately before a lifecycle-controlled OS service launch. A parent contender supplies this one-shot supervisor adoption proof so `host start` does not deadlock trying to reacquire the same outer lock. */
   readonly publishHostStartAdoption?: HostStartAdoptionPublisher;
 }
 
-// The facts `createServiceInstallLifecycle` observed around the swap -
-// mirrors the same family of facts `host ensure`'s `serviceLifecycle`
-// payload already reports (Tech Plan: "Attested generation in results"),
-// so a caller (the controller, or `host update`'s legacy-projection
-// compat boundary) can attribute readiness without re-deriving it.
-// `postSwapError` stays a sibling on `ApplyHostOutcome` itself, not
-// nested here, matching this function's existing no-rollback contract.
+// The facts `createServiceInstallLifecycle` observed around the swap - mirrors the same family of facts `host ensure`'s `serviceLifecycle` payload already reports (Tech Plan: "Attested generation in results"), so a caller (the controller, or `host update`'s legacy-projection compat boundary) can attribute readiness without re-deriving it.
+// `postSwapError` stays a sibling on `ApplyHostOutcome` itself, not nested here, matching this function's existing no-rollback contract.
 export interface ApplyServiceLifecycleFacts {
   readonly priorServiceState: ServiceState;
   readonly stoppedBeforeSwap: boolean;
@@ -71,12 +48,8 @@ export interface ApplyServiceLifecycleFacts {
 
 export type ApplyHostOutcome =
   | {
-      // The ONLY reachable no-op path: reconcile (this function's own
-      // first step) already deletes a `comparable staged <= installed`
-      // stage via its own "stale-or-equal-version" deletion rule before
-      // this function ever reads it - so a distinct "not newer" no-op
-      // branch here would be unreachable dead code, not a second real
-      // outcome. See stage-reconcile.ts's `evaluateStageForDeletion`.
+      // The ONLY reachable no-op path: reconcile (this function's own first step) already deletes a `comparable staged <= installed` stage via its own "stale-or-equal-version" deletion rule before this function ever reads it - so a distinct "not newer" no-op branch here would be unreachable dead code, not a second real outcome.
+      // See stage-reconcile.ts's `evaluateStageForDeletion`.
       readonly outcome: "no-op";
       readonly installedVersion: string;
     }
@@ -84,25 +57,15 @@ export type ApplyHostOutcome =
       readonly outcome: "applied";
       readonly record: HostInstallRecord;
       readonly previous: HostInstallRecord | null;
-      // False whenever `--no-service` was set (no start was even
-      // attempted) or the post-swap start/restart failed. True means the
-      // start was REQUESTED and the request was accepted - NOT that the host
-      // is serving: `launchctl kickstart` returns as soon as launchd accepts,
-      // so an unspawnable job answers success. Nothing here probes health;
-      // `host update` does, and `host status` answers it directly.
+      // False whenever `--no-service` was set (no start was even attempted) or the post-swap start/restart failed.
+      // True means the start was REQUESTED and the request was accepted - NOT that the host is serving: `launchctl kickstart` returns as soon as launchd accepts, so an unspawnable job answers success.
       readonly runningActivated: boolean;
-      // The attested, committed canonical install-generation fingerprint -
-      // read from the record this call itself just wrote, never a later
-      // disk re-read, so callers never race a subsequent mutation.
+      // The attested, committed canonical install-generation fingerprint - read from the record this call itself just wrote, never a later disk re-read, so callers never race a subsequent mutation.
       readonly installGeneration: string;
-      // `null` iff `--no-service` skipped the lifecycle entirely - apply
-      // has no service facts to report, not a synthesized "not-installed"
-      // guess.
+      // `null` iff `--no-service` skipped the lifecycle entirely - apply has no service facts to report, not a synthesized "not-installed" guess.
       readonly serviceLifecycle: ApplyServiceLifecycleFacts | null;
-      // Non-null iff the post-swap start/restart threw. Per the Tech
-      // Plan's no-rollback contract, this is a WARNING alongside a
-      // successful "applied" outcome, never a thrown error - "installed,
-      // not converged", never "update ready".
+      // Non-null iff the post-swap start/restart threw.
+      // Per the Tech Plan's no-rollback contract, this is a WARNING alongside a successful "applied" outcome, never a thrown error - "installed, not converged", never "update ready".
       readonly postSwapError: string | null;
     }
   | {
@@ -141,13 +104,8 @@ export async function applyHost(
     });
   }
 
-  // Reconcile above already applies the Version Identity policy for us:
-  // its own "stale-or-equal-version" deletion rule removes a `comparable
-  // staged <= installed` stage before this read ever sees it, and its
-  // orphan rule guarantees a surviving stage never outlives its install
-  // record. So if a stage is still here, it's already either incomparable
-  // to `installed` (proceeds - D6 parity) or strictly newer - there is no
-  // separate "staged but not newer" case left to check.
+  // Reconcile above already applies the Version Identity policy for us: its own "stale-or-equal-version" deletion rule removes a `comparable staged <= installed` stage before this read ever sees it, and its orphan rule guarantees a surviving stage never outlives its install record.
+  // So if a stage is still here, it's already either incomparable to `installed` (proceeds - D6 parity) or strictly newer - there is no separate "staged but not newer" case left to check.
   const staged = await readHostStagedRecord(opts.environment);
   const expectedStageFingerprint = opts.expectedStageFingerprint;
   if (
@@ -177,19 +135,13 @@ export async function applyHost(
     await assertHostNotBusy(opts.environment);
   }
 
-  // `bootstrap: null` - apply is strictly an update over an existing,
-  // already-registered install (guaranteed by the `HOST_NOT_INSTALLED`
-  // check above), never a first registration; mirrors `host update`'s
-  // existing lifecycle construction.
+  // `bootstrap: null` - apply is strictly an update over an existing, already-registered install (guaranteed by the `HOST_NOT_INSTALLED` check above), never a first registration; mirrors `host update`'s existing lifecycle construction.
   const lifecycleHandle = opts.noService
     ? null
     : createServiceInstallLifecycle({
         environment: opts.environment,
         bootstrap: null,
-        // Threaded through to the pre-swap stop, not just the busy
-        // pre-check above: without it, a busy Desktop-managed host still
-        // denied the cooperative shutdown claim and `--force` aborted
-        // anyway.
+        // Threaded through to the pre-swap stop, not just the busy pre-check above: without it, a busy Desktop-managed host still denied the cooperative shutdown claim and `--force` aborted anyway.
         force: opts.force,
       });
   if (lifecycleHandle !== null && opts.publishHostStartAdoption !== undefined) {
@@ -216,11 +168,7 @@ export async function applyHost(
     verifyMutationCapability: opts.verifyMutationCapability,
   });
 
-  // `createServiceInstallLifecycle`'s `afterSwap` already swallows its own
-  // start/restart/register failures into `state.postSwapError` rather than
-  // throwing (see service/install-lifecycle.ts) - that existing swallow-
-  // into-field behavior IS this function's no-rollback contract; no
-  // separate try/catch needed here.
+  // `createServiceInstallLifecycle`'s `afterSwap` already swallows its own start/restart/register failures into `state.postSwapError` rather than throwing (see service/install-lifecycle.ts) - that existing swallow- into-field behavior IS this function's no-rollback contract; no separate try/catch needed here.
   const postSwapError = lifecycleHandle?.state.postSwapError ?? null;
   const runningActivated =
     lifecycleHandle !== null &&

@@ -1,17 +1,6 @@
 /**
- * Viewport-parity twin of `use-switcher-rename.test.tsx`: the wide-viewport
- * (desktop) tab-strip rename must stamp + retire the same optimistic overlay
- * as the mobile switcher does, so a resize never changes what feedback a
- * rename gets. See the module doc on `use-rename-canvas-tab.ts`.
- *
- * Mocks ONLY the network layer (the three rename mutation hooks);
- * `useOpenEpicHandle` is backed by a REAL `createOpenEpicStore` session and
- * `useEpicCanvasStore` is the real Zustand canvas store.
- *
- * Call sites use `void mutateAsync(vars).then(landed, failed)`, and
- * `retirePendingMutation` takes a required `outcome` argument. Mocks below
- * expose `mutateAsync` returning a controllable Promise instead of a
- * synchronous `mutate`.
+ * Viewport-parity twin of `use-switcher-rename.test.tsx`: the wide-viewport (desktop) tab-strip rename must stamp + retire the same optimistic overlay as the mobile switcher does, so a resize never changes what feedback a rename gets.
+ * Mocks ONLY the network layer (the three rename mutation hooks); `useOpenEpicHandle` is backed by a REAL `createOpenEpicStore` session and `useEpicCanvasStore` is the real Zustand canvas store.
  */
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,9 +40,7 @@ const mocks = vi.hoisted(() => ({
   }[],
   settleAs: "success",
   /**
-   * One settle function per `mutateAsync` call, in call order - a queue
-   * rather than a single slot, so a test firing two consecutive renames can
-   * settle each independently and assert BOTH stamps retire.
+   * One settle function per `mutateAsync` call, in call order - a queue rather than a single slot, so a test firing two consecutive renames can settle each independently and assert BOTH stamps retire.
    */
   pendingSettles: [] as (() => void)[],
 }));
@@ -152,14 +139,6 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-/**
- * A real `HostRequester` wired to an in-memory `MockHostMessenger`, in place
- * of the `mutateAsync` control the retired `use-epic-node-mutations` mock
- * used to hand tests. `epic.renameArtifact` is the one handler these suites
- * drive - `pendingSettles` and `artifactCalls` are the SAME hoisted queues
- * the chat/tui-agent mocks still push into, so a test that mixes tile types
- * sees one call-order queue regardless of which path produced each entry.
- */
 function buildCommandRequester(): HostRequester<HostRpcRegistry> {
   const entry: HostDirectoryEntry = {
     hostId: HOST_ID,
@@ -216,11 +195,7 @@ function newSession(): OpenedStoreForTest {
       close: () => undefined,
     };
   };
-  // The write command is dispatched on MAIN now - the queue is worker-side and
-  // the requester is the session's, so `main/write-command` crosses between
-  // them. The mock requester still drives the REAL dispatcher rather than a
-  // hand-rolled stub, so this suite keeps exercising the production mapping
-  // from intent to `epic.*` RPC.
+  // The mock requester still drives the REAL dispatcher rather than a hand-rolled stub, so this suite keeps exercising the production mapping from intent to `epic.*` RPC.
   const requester = buildCommandRequester();
   const handle = openStoreForTest({
     epicId: EPIC_ID,
@@ -239,11 +214,7 @@ function newSession(): OpenedStoreForTest {
       ),
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  // Transport must reach "open" BEFORE the root snapshot lands: the control
-  // replica clears `hasFreshRootSnapshotForOpenCycle` on every transport-status
-  // transition, including into "open" - so opening AFTER the snapshot would
-  // wipe the freshness the snapshot just set, and every enqueued write command
-  // would stall in "queued" behind `EpicWriteCommandTransportUnavailableError`.
+  // Transport must reach "open" BEFORE the root snapshot lands: the control replica clears `hasFreshRootSnapshotForOpenCycle` on every transport-status transition, including into "open" - so opening AFTER the snapshot would wipe the freshness the snapshot just set, and every enqueued write command would stall in "queued" behind `EpicWriteCommandTransportUnavailableError`.
   captured.value.onConnectionStatus("open", null);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
@@ -366,20 +337,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "  Trimmed title  ");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -406,11 +370,6 @@ describe("useRenameCanvasTab", () => {
       await flushMicrotasks();
     });
 
-    // A "landed" retire is NOT a deletion (item 8 of the contract): the
-    // entry survives until the doc visibly echoes the ack, so the row keeps
-    // showing the optimistic value here. If the hook wired success to
-    // `retirePendingMutation(id, "failed")` instead of `"landed"` by
-    // mistake, this would immediately revert to "New spec" and fail.
     expect(handle.store.getState().artifacts.byId[id].title).toBe(
       "Trimmed title",
     );
@@ -426,20 +385,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "Failed rename");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -459,31 +411,20 @@ describe("useRenameCanvasTab", () => {
   it("retire still fires after the hook's component UNMOUNTS before settle", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // An ERROR settle is used here (not the default success) because only
-    // a failed retire is immediately OBSERVABLE through the store (it
-    // deletes the entry outright) - a landed retire keeps the row showing
-    // the optimistic value either way, which would prove nothing about
-    // whether retire actually ran post-unmount.
+    // An ERROR settle is used here (not the default success) because only a failed retire is immediately OBSERVABLE through the store (it deletes the entry outright) - a landed retire keeps the row showing the optimistic value either way, which would prove nothing about whether retire actually ran post-unmount.
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
     const { result, unmount } = renderHook(() =>
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "Unmount-race rename");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -501,61 +442,33 @@ describe("useRenameCanvasTab", () => {
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
   });
 
-  // This replaces a stamp-order assertion (two RPCs genuinely concurrent,
-  // settling out of order). The write-command queue serializes sends on a
-  // single `sendingCommandId` (`command-overlay.ts:295`) - "the queue
-  // serializes calls in issue order" per `CommandQueueOptions.send`'s own
-  // doc, and `retryPending`'s comment spells out why: "two renames of one
-  // row applied out of order leave the wrong title." So the ordering hazard
-  // the old guard policed no longer needs a guard - the queue prevents two
-  // renames of one row from ever being IN FLIGHT together, by construction.
-  // What's left to pin is that guarantee itself: the second stamp lands
-  // immediately (so the user sees instant feedback for BOTH renames), but
-  // its RPC is not attempted until the first settles, and both stamps still
-  // retire once each is actually sent and answered.
   it("a second rename enqueued while the first is still in flight is stamped immediately but not SENT until the first settles, and both stamps still retire", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // ERROR settles for the same observability reason as the unmount test
-    // above: a failed retire deletes immediately, so reaching "New spec"
-    // after both settle proves BOTH stamps were retired, not just one.
+    // ERROR settles for the same observability reason as the unmount test above: a failed retire deletes immediately, so reaching "New spec" after both settle proves BOTH stamps were retired, not just one.
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
     const { result, unmount } = renderHook(() =>
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "First");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "Second");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -599,20 +512,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(chatTile(chatId), "New chat name");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -625,9 +531,7 @@ describe("useRenameCanvasTab", () => {
   it("routes a REGISTRY-backed terminal-agent tab rename through beginRenameMutation and the tui-agent mutation", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // A registry row (docResident: false) is what routes to the RPC; an
-    // agent absent from the union - or doc-resident - takes the doc-write
-    // branch instead, which the next test pins.
+    // A registry row (docResident: false) is what routes to the RPC; an agent absent from the union - or doc-resident - takes the doc-write branch instead, which the next test pins.
     handle.store
       .getState()
       .applyTuiAgentRecords([agentRecord("agent-1")], null);
@@ -635,20 +539,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(terminalAgentTile("agent-1"), "New agent name");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -660,11 +557,7 @@ describe("useRenameCanvasTab", () => {
   });
 
   it("routes a DOC-RESIDENT terminal agent through the doc write, never epic.renameTuiAgent", async () => {
-    // An agent whose title still lives in the epic Y.Doc (bound to an
-    // un-upgraded peer host) has no registry row on the serving host -
-    // `epic.renameTuiAgent` would refuse it (E_AGENT_NOT_LOCAL) and the
-    // overlay would only ever roll back. The hook routes it to the direct
-    // doc write instead, exactly as the reparent commit does.
+    // An agent whose title still lives in the epic Y.Doc (bound to an un-upgraded peer host) has no registry row on the serving host - `epic.renameTuiAgent` would refuse it (E_AGENT_NOT_LOCAL) and the overlay would only ever roll back.
     const handle = newSession();
     mocks.handle.current = handle;
     const agentId = createTerminalAgentInDocForTests(handle.doc);
@@ -672,20 +565,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(terminalAgentTile(agentId), "Doc agent name");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -704,20 +590,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(terminalTile("session-1"), "New terminal name");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -740,20 +619,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "New spec title");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -773,20 +645,13 @@ describe("useRenameCanvasTab", () => {
 
     renameArtifactInTabSpy.mockClear();
     mocks.settleAs = "error";
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "Rejected title");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -802,15 +667,7 @@ describe("useRenameCanvasTab", () => {
     unmount();
   });
 
-  // Replaces the old "race between two in-flight renames" test. That test's
-  // premise - two RPCs for the same node genuinely in flight together,
-  // settling in whichever order the network happens to deliver - is no
-  // longer reachable: the queue serializes sends on a single
-  // `sendingCommandId` (`command-overlay.ts:295`), so "C" cannot even be
-  // SENT while "B" is still outstanding. What replaces the race is strict
-  // sequencing: "B" completes (send AND settle) before "C" is attempted at
-  // all, so both writes happen, in issue order, and the final title is the
-  // last one issued.
+  // That test's premise - two RPCs for the same node genuinely in flight together, settling in whichever order the network happens to deliver - is no longer reachable: the queue serializes sends on a single `sendingCommandId` (`command-overlay.ts:295`), so "C" cannot even be SENT while "B" is still outstanding.
   it("two renames fired back-to-back both SUCCEED and both write, strictly in issue order - the queue never lets them race", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
@@ -823,37 +680,23 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "B");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "C");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -892,12 +735,7 @@ describe("useRenameCanvasTab", () => {
     unmount();
   });
 
-  // Replaces the old "resolving in STAMP order" test - the literal reverse
-  // ordering that test existed to rule out is likewise unreachable now (see
-  // the test above). What is still worth pinning under the new queue is a
-  // MIXED outcome: an older rename's OWN failure must not corrupt or block a
-  // newer rename issued right behind it - the newer one still sends (once
-  // the queue advances past the failed one) and still lands.
+  // What is still worth pinning under the new queue is a MIXED outcome: an older rename's OWN failure must not corrupt or block a newer rename issued right behind it - the newer one still sends (once the queue advances past the failed one) and still lands.
   it("an older rename's FAILURE does not block or corrupt a newer rename issued right behind it", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
@@ -911,37 +749,23 @@ describe("useRenameCanvasTab", () => {
     );
 
     mocks.settleAs = "error";
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "B");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "C");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -951,9 +775,7 @@ describe("useRenameCanvasTab", () => {
       mocks.pendingSettles[0]?.();
       await flushMicrotasks();
     });
-    // "B" failed - its failure arm reads the row, which still shows the
-    // pre-rename baseline ("New spec", never touched by either rename), so
-    // it correctly does not write.
+    // "B" failed - its failure arm reads the row, which still shows the pre-rename baseline ("New spec", never touched by either rename), so it correctly does not write.
     expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
     expect(mocks.pendingSettles).toHaveLength(2);
 
@@ -982,20 +804,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "B");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -1011,23 +826,14 @@ describe("useRenameCanvasTab", () => {
       "B",
     );
 
-    // Fired only AFTER the first fully settled, so the two chains never
-    // overlap - the second is trivially the only (and therefore latest)
-    // pending rename by the time it settles.
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
+    // Fired only AFTER the first fully settled, so the two chains never overlap - the second is trivially the only (and therefore latest) pending rename by the time it settles.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "C");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -1059,28 +865,17 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "B");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
-    // The artifact path stamps through `stampWriteCommand` (the queue's
-    // `onEnqueued` hook), not the exported `beginRenameMutation` the
-    // chat/terminal-agent paths call - so the stamp's request id is the
-    // QUEUE's own `commandId`, read off the pending write-command record
-    // rather than captured from a `beginRenameMutation` spy.
+    // The artifact path stamps through `stampWriteCommand` (the queue's `onEnqueued` hook), not the exported `beginRenameMutation` the chat/terminal-agent paths call - so the stamp's request id is the QUEUE's own `commandId`, read off the pending write-command record rather than captured from a `beginRenameMutation` spy.
     const pendingCommand = handle.store
       .getState()
       .writeCommands.find(
@@ -1094,10 +889,7 @@ describe("useRenameCanvasTab", () => {
     }
     const requestId = pendingCommand.commandId;
 
-    // The authoritative row echoes "B" - our own target - BEFORE the RPC
-    // promise settles. The chain has no landed member yet, so the row
-    // reaching our own target reads as off-anchor supersession (row-wins,
-    // not "our echo") and the dead sweep kills it.
+    // The authoritative row echoes "B" - our own target - BEFORE the RPC promise settles.
     const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
     if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
     const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
@@ -1111,23 +903,13 @@ describe("useRenameCanvasTab", () => {
       });
     });
 
-    // Confirms the chain actually died: nothing left to retire.
-    //
-    // AWAITED: `retirePendingMutation` is a bridge round trip now, so the bare
-    // call is a `Promise` - and a promise is not `false`, which is exactly what
-    // this read asserts. Left unawaited the assertion compares a Promise to
-    // `false` and can only fail.
+    // Left unawaited the assertion compares a Promise to `false` and can only fail.
     expect(
       await handle.store.getState().retirePendingMutation(requestId, "landed"),
     ).toBe(false);
 
-    // The RPC's own success arm runs now. Under the old CHAIN-based guard
-    // (`isLatestPendingRename`), a dead chain answered "not latest" here and
-    // the persisted-tab write - the only one a successful rename ever gets -
-    // was skipped. The tombstone (`isLatestRenameStamp`) survives the sweep,
-    // so the write goes through - even though the artifact hook path never
-    // reads `isLatestRenameStamp` itself, because there is only ONE command
-    // in this chain and the queue's own resolution is what carries the write.
+    // Under the old CHAIN-based guard (`isLatestPendingRename`), a dead chain answered "not latest" here and the persisted-tab write - the only one a successful rename ever gets - was skipped.
+    // The tombstone (`isLatestRenameStamp`) survives the sweep, so the write goes through - even though the artifact hook path never reads `isLatestRenameStamp` itself, because there is only ONE command in this chain and the queue's own resolution is what carries the write.
     await act(async () => {
       mocks.pendingSettles[0]?.();
       await flushMicrotasks();
@@ -1150,20 +932,13 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "B");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
@@ -1180,11 +955,8 @@ describe("useRenameCanvasTab", () => {
     }
     const requestId = pendingCommand.commandId;
 
-    // A PEER's write lands before our own RPC settles - a different title,
-    // so this is unambiguously not our echo. The dead sweep still kills the
-    // chain the same way it does for our own echo (the resolution alone
-    // cannot tell the two apart), but the row now carries the peer's title,
-    // not ours.
+    // A PEER's write lands before our own RPC settles - a different title, so this is unambiguously not our echo.
+    // The dead sweep still kills the chain the same way it does for our own echo (the resolution alone cannot tell the two apart), but the row now carries the peer's title, not ours.
     const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
     if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
     const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
@@ -1198,12 +970,7 @@ describe("useRenameCanvasTab", () => {
       });
     });
 
-    // Confirms the chain actually died: nothing left to retire.
-    //
-    // AWAITED: `retirePendingMutation` is a bridge round trip now, so the bare
-    // call is a `Promise` - and a promise is not `false`, which is exactly what
-    // this read asserts. Left unawaited the assertion compares a Promise to
-    // `false` and can only fail.
+    // Left unawaited the assertion compares a Promise to `false` and can only fail.
     expect(
       await handle.store.getState().retirePendingMutation(requestId, "landed"),
     ).toBe(false);
@@ -1212,10 +979,7 @@ describe("useRenameCanvasTab", () => {
       mocks.pendingSettles[0]?.();
       await flushMicrotasks();
     });
-    // The row now says "Peer title" but we sent "B" - the failure arm's own
-    // read of `artifacts.byId[id].title` disagrees with the trimmed title we
-    // asked for, so it must refuse to persist a snapshot that would silently
-    // overwrite a remote user's edit the moment a cold render reads it back.
+    // The row now says "Peer title" but we sent "B" - the failure arm's own read of `artifacts.byId[id].title` disagrees with the trimmed title we asked for, so it must refuse to persist a snapshot that would silently overwrite a remote user's edit the moment a cold render reads it back.
     expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
 
     renameArtifactInTabSpy.mockRestore();
@@ -1225,11 +989,7 @@ describe("useRenameCanvasTab", () => {
   it("a REJECTED rename must not write the persisted snapshot - the failure arm's read depends on the overlay stamp being retired BEFORE it runs", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // The fake commandRequester's handler rejects with a plain Error, which
-    // `MockHostMessenger.request` re-wraps as a `HostRpcError` before it ever
-    // reaches the write-command sender - the same shape a real host RPC
-    // failure takes, and what `classifyEpicWriteCommandFailure` classifies as
-    // "rejected" (its final, unconditional fallback arm).
+    // The fake commandRequester's handler rejects with a plain Error, which `MockHostMessenger.request` re-wraps as a `HostRpcError` before it ever reaches the write-command sender - the same shape a real host RPC failure takes, and what `classifyEpicWriteCommandFailure` classifies as "rejected" (its final, unconditional fallback arm).
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
     const renameArtifactInTabSpy = vi.spyOn(
@@ -1240,26 +1000,17 @@ describe("useRenameCanvasTab", () => {
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
 
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
     await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
+      // NOT awaited: the hook's callback is DECLARED void-returning, so awaiting it is awaiting a non-promise.
+      // The work it starts is driven by the pipe below instead.
       result.current(artifactTile(id), "B");
       await handle.flush();
     });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
+    // The write command travels store -> worker queue -> `main/write-command` -> the dispatcher, so the RPC lands a few hops after the commit resolves.
     await act(async () => {
       await handle.flush();
     });
-    // The REAL overlay store genuinely holds our optimistic title before the
-    // RPC settles - proof this exercises the retirement ordering the failure
-    // arm depends on, not a fixture that never populated the overlay.
+    // The REAL overlay store genuinely holds our optimistic title before the RPC settles - proof this exercises the retirement ordering the failure arm depends on, not a fixture that never populated the overlay.
     expect(handle.store.getState().artifacts.byId[id].title).toBe("B");
 
     await act(async () => {
@@ -1267,12 +1018,7 @@ describe("useRenameCanvasTab", () => {
       await flushMicrotasks();
     });
 
-    // The stamp is retired (rolled back, deleted from the overlay) BEFORE
-    // the failure arm's microtask reads `artifacts.byId[id].title` - so it
-    // reads the pre-rename baseline, not "B", and the equality check against
-    // our own trimmed title correctly fails. Were the retirement ever
-    // deferred past this read, the failure arm would read back its OWN
-    // optimistic "B" and persist a title the host explicitly rejected.
+    // The stamp is retired (rolled back, deleted from the overlay) BEFORE the failure arm's microtask reads `artifacts.byId[id].title` - so it reads the pre-rename baseline, not "B", and the equality check against our own trimmed title correctly fails.
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
     expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
 

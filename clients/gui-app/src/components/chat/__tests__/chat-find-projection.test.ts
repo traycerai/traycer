@@ -304,11 +304,7 @@ describe("chat find projection", () => {
     expect(joined).not.toContain("Copy reply");
   });
 
-  // Find indexes what the DOM paints. `UserMessageBody` renders a chip through
-  // `slashCommandLabelFromAttrs`, so a `$`-written skill reads as `$name` on
-  // screen even though it still serializes to `/name` for the provider and the
-  // clipboard. Indexing the serialized form instead would make the visible text
-  // unsearchable AND count a match the highlighter has no node to paint.
+  // Indexing the serialized form instead would make the visible text unsearchable AND count a match the highlighter has no node to paint.
   it("indexes a $-triggered chip by the label it renders, not its canonical form", () => {
     const user: ChatMessageModel = {
       ...makeMessage(1, "user"),
@@ -433,12 +429,8 @@ describe("chat find projection", () => {
     );
   });
 
-  // A completed block with no usable duration - persisted history with no
-  // `startedAt`, or a same-millisecond completion - used to sum to 0 and let
-  // the summary fall through to the generic "Ran activity". Since a lone
-  // reasoning block is now a group, and the group summary is what find indexes
-  // for it, that erased the word "Thought" from the index entirely: searching
-  // for the thinking you can plainly see would return nothing.
+  // A completed block with no usable duration - persisted history with no `startedAt`, or a same-millisecond completion - used to sum to 0 and let the summary fall through to the generic "Ran activity".
+  // Since a lone reasoning block is now a group, and the group summary is what find indexes for it, that erased the word "Thought" from the index entirely: searching for the thinking you can plainly see would return nothing.
   it("indexes a duration-less reasoning group as thought, not as generic activity", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
@@ -461,12 +453,8 @@ describe("chat find projection", () => {
     expect(text).not.toContain("Ran activity");
   });
 
-  // A unit id and an owning chain are both derived from the group a segment
-  // lands in, and the group id comes from the run's FIRST segment - so a tool
-  // promoted out of the run shifts every id behind it. The renderer promotes
-  // from the host's live set; if the projection ran on an empty one it would
-  // emit `activity:tool-1` ids for rows the DOM renders under `activity:
-  // reasoning-1`, counting matches that can never be painted or navigated to.
+  // A unit id and an owning chain are both derived from the group a segment lands in, and the group id comes from the run's FIRST segment - so a tool promoted out of the run shifts every id behind it.
+  // The renderer promotes from the host's live set; if the projection ran on an empty one it would emit `activity:tool-1` ids for rows the DOM renders under `activity: reasoning-1`, counting matches that can never be painted or navigated to.
   it("groups exactly as the renderer does when a tool is promoted by the live set", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(7, "assistant"),
@@ -511,9 +499,7 @@ describe("chat find projection", () => {
     )[0].units.map((unit) => unit.unitId);
 
     // The run starts at the reasoning block, because the tool stands alone.
-    // Probed through the group SUMMARY unit: the group's sole reasoning block
-    // renders unheaded, so it contributes no child unit of its own - but the
-    // group id is derived the same way and discriminates the same mistake.
+    // Probed through the group SUMMARY unit: the group's sole reasoning block renders unheaded, so it contributes no child unit of its own - but the group id is derived the same way and discriminates the same mistake.
     expect(unitIds).toContain(
       chatFindActivityGroupSummaryUnitId(
         deriveActivityGroupRenderId("reasoning-after-tool"),
@@ -527,10 +513,8 @@ describe("chat find projection", () => {
     );
   });
 
-  // A group that is NOTHING BUT one reasoning block renders it unheaded - the
-  // group summary is its label verbatim - so it must not also be projected as a
-  // child unit. A unit with no anchor counts a match the reveal can never
-  // paint, and here it would double-count the very same words.
+  // A group that is NOTHING BUT one reasoning block renders it unheaded - the group summary is its label verbatim - so it must not also be projected as a child unit.
+  // A unit with no anchor counts a match the reveal can never paint, and here it would double-count the very same words.
   it("does not index a lone reasoning child, whose header does not render", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
@@ -558,14 +542,8 @@ describe("chat find projection", () => {
     );
   });
 
-  // A group that SHRANK back to one reasoning block keeps its VISIBLE header -
-  // the renderer latches it so a completed trace does not unfold itself - but
-  // the projection is rebuilt from the model and sees only the shape, so it
-  // emits no unit. That asymmetry is deliberate and one-directional: a header
-  // that is not a find target. The words are still indexed once, on the group
-  // summary, which by definition says the same thing. The dangerous direction -
-  // a counted match with no anchor to paint - cannot arise, because the
-  // renderer drops the anchor whenever the projection drops the unit.
+  // A group that SHRANK back to one reasoning block keeps its VISIBLE header - the renderer latches it so a completed trace does not unfold itself - but the projection is rebuilt from the model and sees only the shape, so it emits no unit.
+  // That asymmetry is deliberate and one-directional: a header that is not a find target.
   it("stops indexing the reasoning child once its sibling is backgrounded", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
@@ -611,10 +589,7 @@ describe("chat find projection", () => {
     expect(countOccurrences(rowSearchText(row), "Thought for 2s")).toBe(1);
   });
 
-  // The moment the group holds anything else, its summary stops being that
-  // block's label ("Thought for 2s, ran 1 command"), the header comes back, and
-  // the unit must come back with it - or the row is unfindable and a reveal
-  // targeting it has no anchor to paint.
+  // The moment the group holds anything else, its summary stops being that block's label ("Thought for 2s, ran 1 command"), the header comes back, and the unit must come back with it - or the row is unfindable and a reveal targeting it has no anchor to paint.
   it("indexes a reasoning child that has a non-reasoning sibling", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
@@ -918,7 +893,6 @@ describe("chat find projection", () => {
     // The status badge LABEL is indexed, not the raw enum value.
     expect(rowSearchText(row)).toContain("Approved");
     expect(rowSearchText(row)).toContain("Split projection from rendering");
-    // The first four steps render on the card.
     expect(rowSearchText(row)).toContain("Plan step 0");
     expect(rowSearchText(row)).toContain("Plan step 3");
     // Steps beyond the preview limit live behind the unopened dialog.
@@ -944,10 +918,8 @@ describe("chat find projection", () => {
       inputDetail: null,
       decision,
     });
-    // A resolved approval on an assistant turn folds into an activity group and
-    // renders one child-header row (activityGroupChildHeaderSearchText). A
-    // pending approval is suppressed from the transcript entirely, so this header
-    // is the only place an approval's text is findable.
+    // A resolved approval on an assistant turn folds into an activity group and renders one child-header row (activityGroupChildHeaderSearchText).
+    // A pending approval is suppressed from the transcript entirely, so this header is the only place an approval's text is findable.
     const grouped: ChatMessageModel = {
       ...makeMessage(21, "assistant"),
       segments: [
@@ -966,9 +938,7 @@ describe("chat find projection", () => {
     // The verdict is part of the rendered header too, so it remains findable.
     expect(joined).toContain("Denied");
 
-    // The description lives only in the unanchored approval body
-    // (bodyFindUnitId=null), so indexing it would count a phantom match that can
-    // never paint; it must find nothing.
+    // The description lives only in the unanchored approval body (bodyFindUnitId=null), so indexing it would count a phantom match that can never paint; it must find nothing.
     expect(joined).not.toContain(descriptionOnly);
   });
 
@@ -1063,11 +1033,8 @@ describe("chat find projection", () => {
     expect(noticeUnit?.owningChain).toHaveLength(1);
   });
 
-  // A regular user message renders its whole body as ONE anchor
-  // (message:{id}:content) via UserMessageBody - it never renders per-segment
-  // anchors. Real user messages also carry a `text` segment mirroring their
-  // content, so also projecting that segment double-counts every match with a
-  // phantom that can never paint (the Cmd+F "N matches shows N+1" bug).
+  // A regular user message renders its whole body as ONE anchor (message:{id}:content) via UserMessageBody - it never renders per-segment anchors.
+  // Real user messages also carry a `text` segment mirroring their content, so also projecting that segment double-counts every match with a phantom that can never paint (the Cmd+F "N matches shows N+1" bug).
   it("projects a plain-content user message with a mirrored text segment as a single content unit", () => {
     const user: ChatMessageModel = {
       ...makeMessage(30, "user"),
@@ -1145,9 +1112,7 @@ describe("chat find projection", () => {
     expect(countOccurrences(rowSearchText(row), "app")).toBe(2);
   });
 
-  // Guard the fix's exception: a synthesized single-special-segment row
-  // (setup-card / forked-chat-link) renders that segment's OWN anchor and no
-  // content block, so the projection must keep emitting the segment unit.
+  // Guard the fix's exception: a synthesized single-special-segment row (setup-card / forked-chat-link) renders that segment's OWN anchor and no content block, so the projection must keep emitting the segment unit.
   it("still projects a synthesized single forked-chat-link segment as its own unit", () => {
     const synthesized: ChatMessageModel = {
       ...makeMessage(33, "system"),
@@ -1176,10 +1141,8 @@ describe("chat find projection", () => {
     expect(rowSearchText(row)).toContain("Forked from Legacy Thread");
   });
 
-  // The marker's anchor paints one line: the provider's DISPLAY name and the
-  // import date. Indexing the harness id or the source directory (tooltip-only,
-  // and rendered in a portal outside the anchor) would count matches the
-  // highlighter has no text to paint.
+  // The marker's anchor paints one line: the provider's DISPLAY name and the import date.
+  // Indexing the harness id or the source directory (tooltip-only, and rendered in a portal outside the anchor) would count matches the highlighter has no text to paint.
   it("indexes an imported-chat-marker by the line it renders, not the raw provider id or the source path", () => {
     const synthesized: ChatMessageModel = {
       ...makeMessage(34, "system"),

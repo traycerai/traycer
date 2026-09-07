@@ -12,21 +12,9 @@ export type LinuxPackageType = "deb" | "rpm";
 
 const DESKTOP_RELEASES_URL = "https://github.com/traycerai/traycer/releases";
 
-// Bounds `dpkg -S`/`rpm -qf` in `isRegisteredAtRunningLocation`, which runs
-// unconditionally on every cold Linux launch before update listeners are
-// registered - a hang here (lock contention, etc.) must not hang the updater
-// indefinitely. A timeout is treated the same as any other query failure:
-// conservatively "not registered" (see the function's own doc comment).
 const REGISTRATION_QUERY_TIMEOUT_MS = 5_000;
 
-/**
- * `package-type` is written by app-builder-lib's `FpmTarget` only for deb/rpm
- * (and pacman, which we don't currently ship - see `build.linux.target` in
- * `package.json`); AppImage never gets this file, so it correctly falls
- * through to `null` and stays on electron-updater's default silent-update
- * path. Mirrors `canCheckForUpdates`'s existing `resourcesPath` file-presence
- * pattern in `updater.ts`.
- */
+/** `package-type` is written by app-builder-lib's `FpmTarget` only for deb/rpm (and pacman, which we don't currently ship - see `build.linux.target` in `package.json`). */
 export function readLinuxPackageType(): LinuxPackageType | null {
   const path = join(process.resourcesPath, "package-type");
   if (!existsSync(path)) {
@@ -36,16 +24,6 @@ export function readLinuxPackageType(): LinuxPackageType | null {
   return value === "deb" || value === "rpm" ? value : null;
 }
 
-/**
- * Resolves whether the package manager that owns `packageType` actually
- * tracks the binary we're running from - i.e. whether an in-place
- * `dpkg -i`/`rpm -U` upgrade would replace this exact process. A manually
- * unpacked install (never registered) answers "no" here even though
- * `package-type` says deb/rpm. Runs the query asynchronously (not
- * `spawnSync`, unlike electron-updater's own install-time calls): this runs
- * unconditionally on every cold launch rather than only at user-initiated
- * install/quit time, so it must not block the main process event loop.
- */
 async function isRegisteredAtRunningLocation(
   packageType: LinuxPackageType,
 ): Promise<boolean> {
@@ -62,19 +40,6 @@ async function isRegisteredAtRunningLocation(
   );
 }
 
-/**
- * UX gate, not a safety net: `updater.ts` unconditionally disables
- * `autoInstallOnAppQuit` for any deb/rpm build regardless of this result, so
- * a wrong answer here only costs the user a manual step, never a silent
- * failure. WSLg sessions typically have no session polkit authentication
- * agent and no TTY for a GUI-launched `sudo`, so `dpkg -i`/`rpm -U` via
- * `LinuxUpdater.runCommandWithSudoIfNeeded` reliably fails there - hence the
- * `isWsl` exclusion. Deliberately does not probe for a live polkit agent
- * (fragile across desktop environments, and would risk spawning a spurious
- * auth prompt on every launch) - WSL exclusion plus the registration check
- * cover the realistic split between "normal desktop Linux" and "can't
- * self-update".
- */
 export async function resolveLinuxSilentInstallSupported(
   packageType: LinuxPackageType,
 ): Promise<boolean> {
@@ -109,19 +74,7 @@ export function buildLinuxUpdateGuidance(
   };
 }
 
-/**
- * `LinuxUpdater.spawnSyncLog` throws `Command <cmd> exited with code <n>`
- * (the real stderr is only logged, never included in the message) - `<cmd>`
- * is the escalation wrapper (`pkexec`/`sudo`/`gksudo`/`kdesudo`/`beesu`) when
- * not running as root, or the package manager itself
- * (`dpkg`/`apt-get`/`rpm`/`dnf`/`yum`/`zypper`) when already root or on a
- * fallback path. `DebUpdater` additionally hard-fails upfront with
- * "Neither dpkg nor apt command found" when neither binary exists.
- * Deliberately a separate list from `INSTALL_ERROR_HINTS` in `updater.ts`
- * (download/checksum failures) rather than folded into it - these are
- * install-time escalation failures, a different class of problem with a
- * different remedy (manual command, not "try again").
- */
+/** `LinuxUpdater.spawnSyncLog` throws `Command <cmd> exited with code <n>` (the real stderr is only logged, never included in the message). */
 const LINUX_ESCALATION_COMMANDS: readonly string[] = [
   "pkexec",
   "sudo",

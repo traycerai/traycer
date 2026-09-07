@@ -101,11 +101,7 @@ const MARKDOWN_VIEW_MODE_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * Host-binding gate for the file preview.
- *
- * Reads and writes resolve through the per-tab host client. An unreachable
- * host cannot service the tile, so the outer gate keeps the live renderer and
- * its edit mutation unmounted until that same host is reachable again.
+ * An unreachable host cannot service the tile, so the outer gate keeps the live renderer and its edit mutation unmounted until that same host is reachable again.
  */
 export function WorkspaceFileTile(props: {
   readonly node: WorkspaceFileRef;
@@ -115,17 +111,12 @@ export function WorkspaceFileTile(props: {
   const { node } = props;
   const tabHostId = useTabHostId();
   const reachability = useHostReachability(tabHostId);
-  // Read the target here (not just in the live body) so the dead-tile / inactive
-  // states - which return BEFORE the live preview mounts - can still evict a
-  // stranded entry. Scoped to this tab so a click meant for one tab's preview
-  // doesn't move another tab's preview of the same file (CL-6).
+  // Read the target here (not just in the live body) so the dead-tile / inactive states - which return BEFORE the live preview mounts - can still evict a stranded entry.
   const revealTarget = useWorkspaceFileRevealTarget(props.viewTabId, node.id);
   const isDeadTile = reachability.status === "unreachable";
 
-  // A reveal target on a dead / inactive tile can never be consumed: the live
-  // preview that runs the consume effect (G4) never mounts. Drop it so these
-  // states don't strand entries on the channel (CL-5). Keyed on the target so a
-  // fresh click while the tile stays dead still evicts.
+  // A reveal target on a dead / inactive tile can never be consumed: the live preview that runs the consume effect (G4) never mounts.
+  // Drop it so these states don't strand entries on the channel (CL-5).
   useEffect(() => {
     if (isDeadTile && revealTarget !== null) {
       clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
@@ -151,13 +142,6 @@ export function WorkspaceFileTile(props: {
   );
 }
 
-/**
- * Extension gate BEFORE any RPC (image-preview decision log, decision #6):
- * a non-image extension takes the untouched text path below unconditionally.
- * `.svg` is the one format with a source view - it defaults to image with a
- * per-tile, non-persisted toggle back to `WorkspaceFileTileLive`'s existing
- * (fully-functional, including editing) text path, matching decision #5.
- */
 function WorkspaceFileTileRouter(props: {
   readonly node: WorkspaceFileRef;
   readonly viewTabId: string;
@@ -169,13 +153,7 @@ function WorkspaceFileTileRouter(props: {
   const isSvg = isSvgAssetPath(node.filePath);
   const isPdf = isPdfAssetPath(node.filePath);
   const [viewAsSource, setViewAsSource] = useState(false);
-  // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the host
-  // `application/pdf`), and the STREAM's own negotiation is the only
-  // authority on that: stream methods never reach the unary openAck manifest
-  // the negotiated-version registry records, so no client-side version gate
-  // can ever positively know a host is old. The asset hook maps an old host's
-  // refusal to the shared fallback placeholder (honest copy + Open
-  // Externally) - that IS the old-host path.
+  // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the host `application/pdf`), and the STREAM's own negotiation is the only authority on that: stream methods never reach the unary openAck manifest the negotiated-version registry records, so no client-side version gate can ever positively know a host is old.
 
   if (isPdf) {
     return (
@@ -233,13 +211,7 @@ function WorkspaceFileTileRouter(props: {
   );
 }
 
-/**
- * Image mode for a workspace file tile: fetches over `useFileAsset` (never
- * `workspace.readFile`) and renders `ImagePreview`, or the shared
- * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
- * WHY the fetch fell back (image-preview decision log, decision #14).
- * Editing/drafts/markdown/find never mount here.
- */
+/** Editing/drafts/markdown/find never mount here. */
 function WorkspaceImageFileTile(props: {
   readonly node: WorkspaceFileRef;
   readonly viewTabId: string;
@@ -252,12 +224,8 @@ function WorkspaceImageFileTile(props: {
     workspacePath: node.workspacePath,
     filePath: node.filePath,
   });
-  // Magic-valid, header-parseable bytes can still fail to decode in the
-  // browser (pre-landing review, P1) - `<img onError>` has no other signal
-  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
-  // cache entry AND transitions the hook's own state to `fallback`, so this
-  // tile renders straight from `assetState.status` like every other
-  // failure - no local decode-failed flag to track or reset.
+  // Magic-valid, header-parseable bytes can still fail to decode in the browser (pre-landing review, P1) - `<img onError>` has no other signal path.
+  // `reportDecodeFailure` (re-review P1 follow-up) discards the exact cache entry AND transitions the hook's own state to `fallback`, so this tile renders straight from `assetState.status` like every other failure - no local decode-failed flag to track or reset.
   const handleDecodeError = assetState.reportDecodeFailure;
   const openTarget = useEffectiveDefaultEditor(node.hostId);
   const {
@@ -269,9 +237,7 @@ function WorkspaceImageFileTile(props: {
     target: openTarget,
   });
 
-  // No line-goto in image mode - a reveal target aimed at this file can never
-  // be consumed here, so evict it immediately rather than stranding it on the
-  // channel (mirrors `isSettledUnconsumableWorkspaceFile` below, CL-5).
+  // No line-goto in image mode - a reveal target aimed at this file can never be consumed here, so evict it immediately rather than stranding it on the channel (mirrors `isSettledUnconsumableWorkspaceFile` below, CL-5).
   useEffect(() => {
     if (revealTarget !== null) {
       clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
@@ -331,11 +297,8 @@ function WorkspaceImageFileTile(props: {
 }
 
 /**
- * PDF mode for a workspace file tile: same shape as the image mode above -
- * `useFileAsset` for the bytes, `BinaryPlaceholder` for any fallback,
- * uniformly - but the ready state hands the blob to the lazy-loaded pdf.js
- * viewer instead of an `<img>`. Only mounted behind the router's
- * `workspace.streamAsset >= 1.1` gate.
+ * PDF mode for a workspace file tile: same shape as the image mode above - `useFileAsset` for the bytes, `BinaryPlaceholder` for any fallback, uniformly - but the ready state hands the blob to the lazy-loaded pdf.js viewer instead of an `<img>`.
+ * Only mounted behind the router's `workspace.streamAsset >= 1.1` gate.
  */
 function WorkspacePdfFileTile(props: {
   readonly node: WorkspaceFileRef;
@@ -349,9 +312,7 @@ function WorkspacePdfFileTile(props: {
     filePath: node.filePath,
   });
   const handleRenderFailure = assetState.reportDecodeFailure;
-  // The viewer itself could not load or start on this device (old engine) -
-  // distinct from a decode failure: the bytes are fine, so the blob stays
-  // cached and Open Externally remains the way to read the file.
+  // The viewer itself could not load or start on this device (old engine) - distinct from a decode failure: the bytes are fine, so the blob stays cached and Open Externally remains the way to read the file.
   const [viewerUnavailable, setViewerUnavailable] = useState(false);
   const handleViewerUnavailable = useCallback(
     () => setViewerUnavailable(true),
@@ -404,9 +365,7 @@ function WorkspacePdfFileTile(props: {
   }
 
   if (assetState.status === "ready" && assetState.url !== null) {
-    // The viewer's toolbar is the tile's ONE bar: it carries the file path
-    // as its caption and the tile's Open Externally action - a second
-    // path/actions bar above it would repeat both.
+    // The viewer's toolbar is the tile's ONE bar: it carries the file path as its caption and the tile's Open Externally action - a second path/actions bar above it would repeat both.
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <PdfPreviewLazy
@@ -483,9 +442,8 @@ function OpenExternallyIconButton(props: {
 }
 
 /**
- * Toolbar for the MEDIA tile modes (image, and PDF outside its ready state -
- * the ready PDF viewer brings its own). Distinct from `WorkspaceFileToolbar`
- * below, the text/markdown tile's toolbar.
+ * Toolbar for the MEDIA tile modes (image, and PDF outside its ready state - the ready PDF viewer brings its own).
+ * Distinct from `WorkspaceFileToolbar` below, the text/markdown tile's toolbar.
  */
 function WorkspaceMediaFileToolbar(props: {
   readonly filePath: string;
@@ -541,13 +499,7 @@ function WorkspaceFileTileLive(props: {
     query.isError,
     query.error,
   );
-  // The current cached payload reporting an error (e.g. a permission-denied
-  // read) can still carry `content: ""` - empty-origin editing made "" a
-  // meaningful, editable value, so it can no longer stand in for "no
-  // content" the way `null` does. A payload error must never be treated as
-  // valid disk content to seed or reconcile editing from; a transport-only
-  // failure (query.isError with query.data retained from the last good
-  // fetch) is unaffected, since that retained payload's own error is null.
+  // A payload error must never be treated as valid disk content to seed or reconcile editing from; a transport-only failure (query.isError with query.data retained from the last good fetch) is unaffected, since that retained payload's own error is null.
   const validatedContent = payloadError === null ? rawContent : null;
   const reportContext = readFileReportContext(
     payloadError,
@@ -572,12 +524,8 @@ function WorkspaceFileTileLive(props: {
     [node.filePath, node.workspacePath, tabHostId, userId],
   );
   const editSurfaceId = `${props.viewTabId}:workspace-file:${node.instanceId}`;
-  // A later payload error must never yank ownership away from a surface that
-  // already owns this file's runtime (an active or dirty draft) - only gate
-  // the FIRST attach on payload validity. Read the registry directly (not
-  // `editSession.state` below, computed from THIS same decision) to break
-  // the circularity; `editSession`'s own subscription already guarantees a
-  // re-render whenever this ownership changes, so this read is never stale.
+  // A later payload error must never yank ownership away from a surface that already owns this file's runtime (an active or dirty draft) - only gate the FIRST attach on payload validity.
+  // Read the registry directly (not `editSession.state` below, computed from THIS same decision) to break the circularity; `editSession`'s own subscription already guarantees a re-render whenever this ownership changes, so this read is never stale.
   const editingProtected = isWorkspaceFileEditingProtected(
     fileEditRuntimeRegistry.get(editIdentity),
     editSurfaceId,
@@ -623,18 +571,10 @@ function WorkspaceFileTileLive(props: {
     onBlur: editSession.flush,
     onSaveShortcut: editSession.flush,
   });
-  // Stays byte-exact raw: this seeds the Diffs editor's own live buffer once
-  // it mounts editable, and onChange later submits that buffer's full
-  // content back for autosave. Normalizing it (or the fallback
-  // `validatedContent`) here would make the very first edit silently rewrite
-  // every CRLF/lone-CR line ending in the file. Only a read-only projection
-  // (markdown preview, find) may normalize - never what's rendered/seeded.
+  // Normalizing it (or the fallback `validatedContent`) here would make the very first edit silently rewrite every CRLF/lone-CR line ending in the file.
+  // Only a read-only projection (markdown preview, find) may normalize - never what's rendered/seeded.
   const renderedContent = editSession.state?.draftContent ?? validatedContent;
-  // Find offsets are computed against this normalized copy so CRLF/lone-CR
-  // don't throw off the match position, but it is never rendered or fed to
-  // Diffs - see `renderedContent` above. Memoized: `normalizeWorkspaceFileContent`
-  // scans the whole file with two regexes, and `renderedContent` changes on
-  // every keystroke while actively editing.
+  // Find offsets are computed against this normalized copy so CRLF/lone-CR don't throw off the match position, but it is never rendered or fed to Diffs - see `renderedContent` above.
   const findContent = useMemo(
     () =>
       renderedContent === null
@@ -667,11 +607,8 @@ function WorkspaceFileTileLive(props: {
     [],
   );
 
-  // The preview content has loaded into a state the consume effect never runs
-  // from - a host/payload error, or an empty/failed read (`renderedContent === null`).
-  // Neither mounts the Diffs source renderer, so evict any pending target here rather
-  // than strand it on the channel (CL-5). The loading state is excluded: the
-  // content may still resolve to code and consume the target normally.
+  // The preview content has loaded into a state the consume effect never runs from - a host/payload error, or an empty/failed read (`renderedContent === null`).
+  // Neither mounts the Diffs source renderer, so evict any pending target here rather than strand it on the channel (CL-5).
   const settledUnconsumable = isSettledUnconsumableWorkspaceFile({
     isLoading: query.isLoading,
     hasError: displayError !== null,
@@ -686,11 +623,7 @@ function WorkspaceFileTileLive(props: {
   const markdownPreviewDisabled =
     renderedContent !== null &&
     renderedContent.length > MAX_MARKDOWN_PREVIEW_CHARS;
-  // A pending line target forces source view so the line is addressable -
-  // rendered markdown has none (G5). Purely derived: the child consumes the
-  // target right after the scroll (G4), so a markdown file the user had on
-  // preview returns to preview once the one-shot reveal completes. Line links
-  // are almost always to code files, where source is the only view anyway.
+  // Line links are almost always to code files, where source is the only view anyway.
   const effectiveViewMode = editing
     ? "source"
     : computeViewMode(
@@ -733,9 +666,7 @@ function WorkspaceFileTileLive(props: {
     });
   }, [editSession.state?.lastSavedAt, queryClient, tabHostId]);
 
-  // This tile is kept alive (not remounted) across an inactive/active toggle,
-  // so `refetchOnMount` never re-fires when the user switches back to it -
-  // only the false→true edge should force one fresh read past `staleTime`.
+  // This tile is kept alive (not remounted) across an inactive/active toggle, so `refetchOnMount` never re-fires when the user switches back to it - only the false→true edge should force one fresh read past `staleTime`.
   const wasActiveRef = useRef(props.isActive);
   useEffect(() => {
     const wasActive = wasActiveRef.current;
@@ -895,11 +826,7 @@ function WorkspaceFileToolbar(props: {
   readonly status: ReactNode;
   readonly svgToggle: ReactNode;
 }) {
-  // The settings trigger is an `icon-sm` control - below the 44px touch-target
-  // guideline, and on a phone this toolbar is the tile's own chrome, outside
-  // the mobile shell's hit-slop scope (header, drawer, sheets). Opt in here,
-  // and only where the mobile layout is live, so desktop never carries the
-  // scope. Same arrangement as the diff tab header.
+  // Opt in here, and only where the mobile layout is live, so desktop never carries the scope.
   const isMobileViewport = useIsMobileViewport();
 
   return (
@@ -924,9 +851,7 @@ function WorkspaceFileToolbar(props: {
           onModeChange={props.onViewModeChange}
         />
       ) : null}
-      {/* Wrapping only describes the source surface. Rendered markdown reflows
-          on its own and has no line to wrap, so the control stays out of the
-          preview's toolbar rather than sitting there doing nothing. */}
+      {/* Wrapping only describes the source surface. Rendered markdown reflows on its own and has no line to wrap, so the control stays out of the preview's toolbar rather than sitting there doing nothing. */}
       {props.viewMode === "source" ? (
         <WorkspaceFileSettingsMenu
           wordWrap={props.wordWrap}
@@ -939,11 +864,8 @@ function WorkspaceFileToolbar(props: {
 }
 
 /**
- * The file viewer's view-options menu, mirroring the diff tab's settings
- * popover: an `icon-sm` trigger opening one switch row per option. It serves
- * both pointer classes - this toolbar is part of the tile body, so a phone
- * rendering the tile full-screen reaches the same menu the desktop chrome
- * shows, and there is no second placement to keep in step with this one.
+ * The file viewer's view-options menu, mirroring the diff tab's settings popover: an `icon-sm` trigger opening one switch row per option.
+ * It serves both pointer classes - this toolbar is part of the tile body, so a phone rendering the tile full-screen reaches the same menu the desktop chrome shows, and there is no second placement to keep in step with this one.
  */
 function WorkspaceFileSettingsMenu(props: {
   readonly wordWrap: boolean;
@@ -1041,14 +963,8 @@ function WorkspaceFilePreviewContent(props: {
     );
   }
 
-  // A background refetch (e.g. the post-save `workspace.readFile`
-  // invalidation) can fail while TanStack Query still holds the last good
-  // `content` and only flips `isError`. Content availability wins over that
-  // stale error: an active editor keeps the runtime's ownership regardless,
-  // so hiding it behind an error screen here would strand the tile
-  // unrenderable while another surface for the same file still gets routed
-  // to this invisible owner via `focus-owner`. A genuine load failure never
-  // has content to fall back on, so this never masks it.
+  // A background refetch (e.g. the post-save `workspace.readFile` invalidation) can fail while TanStack Query still holds the last good `content` and only flips `isError`.
+  // A genuine load failure never has content to fall back on, so this never masks it.
   if (props.content === null) {
     if (props.displayError !== null) {
       return (
@@ -1068,10 +984,7 @@ function WorkspaceFilePreviewContent(props: {
   if (props.viewMode === "preview") {
     return (
       <MarkdownFilePreview
-        // `props.content` is raw (see workspace-file-tile.tsx's
-        // renderedContent) so the Diffs editor never receives normalized
-        // text; the read-only markdown renderer still gets a normalized
-        // copy, matching its prior behavior.
+        // `props.content` is raw (see workspace-file-tile.tsx's renderedContent) so the Diffs editor never receives normalized text; the read-only markdown renderer still gets a normalized copy, matching its prior behavior.
         markdown={normalizeWorkspaceFileContent(props.content)}
         fileName={props.fileName}
         onRootChange={props.onMarkdownPreviewRootChange}
@@ -1102,17 +1015,8 @@ function transportErrorMessage(error: unknown): string {
 }
 
 /**
- * The preview fails in two unrelated ways, and the filed report has to say
- * which: a payload error means the host answered and named a file-level
- * problem, while a transport error means the request never reached a verdict
- * at all (host unreachable, session rejected, method unsupported). Reporting
- * the second as "could not be read" sent one field report's triage hunting an
- * `ENOENT` that never existed - the failure was an auth-plane outage.
- *
- * Neither arm may carry error text: `createReportIssueContext` deliberately
- * does not redact, the payload string can embed the user's absolute path, and
- * `HostRpcError.message` can carry host-supplied detail. Only fixed copy and
- * the stable wire code cross into a public issue.
+ * The preview fails in two unrelated ways, and the filed report has to say which: a payload error means the host answered and named a file-level problem, while a transport error means the request never reached a verdict at all (host unreachable, session rejected, method unsupported).
+ * Reporting the second as "could not be read" sent one field report's triage hunting an `ENOENT` that never existed - the failure was an auth-plane outage.
  */
 function readFileReportContext(
   payloadError: string | null,

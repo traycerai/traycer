@@ -12,7 +12,6 @@ import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { modLabel } from "@/lib/keybindings/platform";
 
 export interface RemoteFolderPickerHeaderProps {
-  /** Raw absolute path, exactly as browsing and Add will read it. */
   readonly pathValue: string;
   readonly onPathChange: (next: string) => void;
   /** Id of the highlighted row, or undefined when the listing is empty. */
@@ -22,22 +21,15 @@ export interface RemoteFolderPickerHeaderProps {
   readonly onAdd: () => void;
   readonly upDisabled: boolean;
   readonly onUp: () => void;
-  /**
-   * Bump to hand the keyboard back to the path field after an action
-   * elsewhere took focus. A token rather than a ref: the element belongs to
-   * this component, so nothing outside it needs to hold a handle on the DOM.
-   */
+  /** Bump to hand the keyboard back to the path field after an action elsewhere took focus. A token rather than a
+   * ref: the element belongs to this component, so nothing outside it needs to hold a handle on the DOM. */
   readonly focusPathToken: number;
-  /** Focus the path input on mount (fine pointers only - see the dialog). */
   readonly autoFocusPath: boolean;
   readonly onFieldKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
 }
 
-/**
- * The editable path is the stable header and the combobox input. Its final
- * segment filters the current listing; opening a row appends to the same
- * value, so the path never moves behind a secondary affordance.
- */
+/** Its final segment filters the current listing; opening a row appends to the same value, so the path never
+ * moves behind a secondary affordance. */
 export function RemoteFolderPickerHeader(
   props: RemoteFolderPickerHeaderProps,
 ): ReactNode {

@@ -8,24 +8,8 @@ import {
 import { NOISE_PROLOGUE } from "@traycer/protocol/host-transport/mux";
 
 /**
- * The client's end-to-end Noise-NK channel (T8 crypto; Architecture §4). A fresh
- * channel is built per session — including per full-attach resume — so each
- * session has its own forward-secret transport keys derived from fresh
- * ephemerals (a later host-static-key compromise cannot decrypt past sessions).
- *
- * The crypto state machine itself lives in `@traycer/protocol/crypto/noise`; this
- * class is only the client-side wiring: run the NK initiator handshake, then
- * seal/open mux frames over the resulting `NoiseSession`.
- *
- * NK handshake (2 messages): initiator → `msg0 (e, es)`, responder → `msg1 (e,
- * ee)`. The initiator is anonymous at the Noise layer; identity is proven later
- * in-channel via the mux `open{bearer}` frame (R4-A2). Associated data is empty
- * on the client leg — the relay owns/stamps `sid`, so there is no outer routing
- * metadata for the client to bind (the monotonic counter + replay window already
- * defeat replay). Pinned by
- * `@traycer/protocol/host-transport/__tests__/associated-data-invariant.test.ts`
- * — a future mux field externalized outside the ciphertext must be bound via
- * AD there, not left unbound like `sid`.
+ * The client's end-to-end Noise-NK channel (T8 crypto; Architecture §4).
+ * The crypto state machine itself lives in `@traycer/protocol/crypto/noise`; this class is only the client-side wiring: run the NK initiator handshake, then seal/open mux frames over the resulting `NoiseSession`.
  */
 
 const EMPTY_ASSOCIATED_DATA = new Uint8Array(0);
@@ -111,15 +95,6 @@ export class InvalidHostPublicKeyError extends Error {
   }
 }
 
-/**
- * Decodes the host's static public key from its `GET /hosts` DTO string form
- * (Architecture §5). The encoding authn-v3 publishes is not pinned in the
- * client contract, so this accepts hex (64 chars) or base64/base64url and
- * validates the decoded length is a 32-byte X25519 key — a wrong encoding is a
- * hard, surfaced failure (never a silent MITM-shaped mismatch).
- *
- * ⚠️ Reconcile the exact publish encoding with T3/T5 (authn-v3 registry).
- */
 export function decodeHostPublicKey(published: string): Uint8Array {
   const bytes = /^[0-9a-fA-F]+$/.test(published)
     ? hexToBytesStrict(published)

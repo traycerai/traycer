@@ -2,8 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useSetupTerminalRegistrationStore } from "@/stores/chats/setup-terminal-registration-store";
 
 describe("setup-terminal-registration-store", () => {
-  // Demonstrates the reset affordance: module-level store state would otherwise
-  // leak across cases, so every case starts from a clean registration set.
   afterEach(() => {
     useSetupTerminalRegistrationStore.getState().reset();
   });

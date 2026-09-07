@@ -11,14 +11,7 @@ import {
 } from "@traycer/protocol/host/lifecycle";
 import { TraycerCliError } from "../cli/traycer-cli";
 
-// Host-readiness + CLI-error helpers used by the post-auth host-ensure
-// flow (ipc/host-ensure-ipc.ts). The CLI's `host ensure` can report
-// success the moment the service is registered/started, but the OS service
-// manager still has to spawn the host and have it publish its pid metadata
-// + bind its WS port.
-// We poll that on-disk source of truth before telling the renderer the
-// host is ready, so the gate never flips to "ready" against a host that
-// hasn't actually bound its port yet.
+// We poll that on-disk source of truth before telling the renderer the host is ready, so the gate never flips to "ready" against a host that hasn't actually bound its port yet.
 
 // Sized to absorb a slow shell init + native-module/Prisma load on first
 // spawn (mirrors HostLifecycle.HOST_READY_TIMEOUT_MS).
@@ -41,19 +34,7 @@ export type HostReadinessResult =
       readonly reason: string;
     };
 
-// Poll the environment-scoped pid metadata file until the host publishes a
-// well-formed, reachable websocket URL or the timeout elapses. `pidPath`
-// and `pollIntervalMs` are explicit so callers (and tests) control the
-// filesystem dependency.
-//
-// `skipPid` is the respawn path's hook to distinguish the new host from
-// the still-running old one: SMAppService's `unregister` is asynchronous
-// to launchd's teardown, so for a brief window after we kick the cycle
-// the old process is still bound to its port and its still-on-disk
-// pid.json still validates. Passing the pre-respawn pid here makes the
-// poll skip matching snapshots so we only return `ready` once the new
-// host has actually published. Callers in the install/sign-in flow,
-// where there cannot be a stale pid yet, pass `null`.
+// Callers in the install/sign-in flow, where there cannot be a stale pid yet, pass `null`.
 export async function waitForHostReady(
   timeoutMs: number,
   pidPath: string,
@@ -99,10 +80,6 @@ export async function waitForHostReady(
   };
 }
 
-// Distinct from host-lifecycle's `readPidMetadata`: readiness does not
-// require `hostId` to be present yet - a freshly spawned host can publish
-// its port/version before the full identity record, and we only need
-// version/pid/websocketUrl to confirm the WS endpoint is up.
 async function readPidMetadataForReady(path: string): Promise<{
   readonly version: string;
   readonly pid: number;

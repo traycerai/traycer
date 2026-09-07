@@ -36,41 +36,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import "@/index.css";
 
 /**
- * THE BOOT-FAMILY GALLERY: every face a launch can show, one per page load,
- * selected by `?face=<name>` (and `?theme=dark` for the dark variant).
- *
- * WHY IT EXISTS. This family has been "unified" three times, and each time the
- * report was visual - "it looks very weird, non aligned", "a modal with only
- * the Open settings button". jsdom cannot see any of that: it has no layout
- * engine, so a card that is 64px wider than its neighbour, or 20px lower, or
- * empty but for one link, is invisible to every unit test in the tree. The
- * only instrument that sees the defect is a rendered screenshot, and this
- * fixture is what `scripts/host-boot-family-gallery-browser.mjs` renders to
- * take them - and to read the card's box on each face, so "one geometry" is a
- * measured claim rather than a described one.
- *
- * NOT wired into CI. It is a manual instrument for the person changing this
- * family: run the driver, look at the images, read the table. Wiring an
- * unrun screenshot lane into CI is a new gate with a false-pass default and
- * nobody watching it.
- *
- * WHAT IS REAL AND WHAT IS A STAND-IN, stated because a gallery that measures
- * its own scaffolding proves nothing:
- *  - Every CARD is the production component with production props:
- *    `HostRuntimeBootFallback`, `HostBootSurface`, `WindowHostStartupCard`,
- *    `SurfaceReadinessFallback`, `WindowHostModal`, and the bodies
- *    `buildBootBody` composes for the narrator (`LocalHostLoadingContent`,
- *    `LocalBootstrapAttempts` + `BootstrapLogDisclosure`).
- *  - The header BAND is a stand-in (`FrameHeaderBand`). The real `AppHeader`
- *    needs the app's provider stack; the band only has to occupy the header's
- *    exact height (`APP_HEADER_HEIGHT_CLASS`) so the box under it is the box
- *    the real frame has. The gate frame's column and `p-6` slot are copied
- *    from `DefaultHostReadyGate` / `AttachPendingCard` for the same reason.
- *
- * The `dialog` face is the gallery's own CONTROL: it is the one member drawn
- * at a different width on purpose (a dialog over a live app), so a report in
- * which every face measures the same width - dialog included - is a report
- * from an instrument that cannot see width.
+ * Boot-family gallery: one production card per `?face=`, not CI. Header band is a height stand-in; `dialog` is the control that must measure a different width.
  */
 const FACES = [
   "runtime",

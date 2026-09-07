@@ -141,9 +141,7 @@ describe("retryClosedChatSessions", () => {
       "wake-resume",
     );
 
-    // Both were attempted; the broken one is back in "closed" (NOT stranded in
-    // "connecting") with its fatal close preserved, so a later pulse can try
-    // again; the healthy one re-dialed despite the earlier throw.
+    // Both were attempted; the broken one is back in "closed" (NOT stranded in "connecting") with its fatal close preserved, so a later pulse can try again; the healthy one re-dialed despite the earlier throw.
     expect(attempted).toEqual([broken.handle, healthy.handle]);
     expect(broken.handle.store.getState().connectionStatus).toBe("closed");
     expect(broken.handle.store.getState().fatalClose?.code).toBe(
@@ -237,8 +235,7 @@ describe("subscribeChatSessionWakeRetry", () => {
     expect(harness.factoryRuns()).toBe(1);
 
     // Auth/endpoint recovery can resolve asynchronously after the wake pulse.
-    // If that path gives up terminally, the same wake episode must still rebuild
-    // the disposed stream instead of leaving the warm composer disabled.
+    // If that path gives up terminally, the same wake episode must still rebuild the disposed stream instead of leaving the warm composer disabled.
     driveTerminallyClosed(harness);
     expect(harness.factoryRuns()).toBe(2);
     expect(harness.handle.store.getState().connectionStatus).toBe("connecting");

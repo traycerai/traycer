@@ -61,10 +61,8 @@ export function ProfileUsageSidecar(
 
   useLayoutEffect(() => {
     if (anchor === null || sidecarNode === null) return;
-    // Gates `update()` until the anchor has a real Radix placement (not the
-    // off-screen measuring position) and its entrance animation, if any, has
-    // settled - so a measurement is never taken, and nothing ever painted,
-    // mid placement or mid transform. See `waitForAnchorReady` for why.
+    // Gates `update` until the anchor has a real Radix placement (not the off-screen measuring position) and its
+    // entrance animation, if any, has settled.
     let ready = false;
     const update = () => {
       if (!ready) return;

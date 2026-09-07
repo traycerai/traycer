@@ -23,10 +23,7 @@ vi.mock("@/lib/host", () => ({
 
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 
-/**
- * Fake directory whose `onChange` listeners the test fires by hand, standing
- * in for `HostDirectoryService`'s emit (local-host change or registry poll).
- */
+/** Fake directory whose `onChange` listeners the test fires by hand, standing in for `HostDirectoryService`'s emit (local-host change or registry poll). */
 function makeDirectory(entries: readonly HostDirectoryEntry[]) {
   const listeners = new Set<DirectoryListener>();
   let current = entries;
@@ -74,12 +71,7 @@ afterEach(() => {
 
 describe("useHostDirectoryList", () => {
   it("keeps the previous entries visible across a directory emit instead of blanking to undefined", async () => {
-    // REGRESSION: the directory revision used to be part of the query key, so
-    // every emit minted a FRESH cache entry - `data: undefined` + fetching -
-    // for every consumer at once. `useHostReachability` maps that to
-    // "checking", which swapped each terminal tile for a loading skeleton and
-    // unmounted its xterm subtree; the 15s registry poll made it a permanent
-    // ~15s flicker across the host picker, workspace selector and tiles.
+    // `useHostReachability` maps that to "checking", which swapped each terminal tile for a loading skeleton and unmounted its xterm subtree; the 15s registry poll made it a permanent ~15s flicker across the host picker, workspace selector and tiles.
     const fake = makeDirectory([mockRemoteHostEntry]);
     directoryRef.value = fake.directory;
     const queryClient = makeQueryClient();

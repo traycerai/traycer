@@ -8,13 +8,8 @@ import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 
-// The two inputs the pre-check reads. Defaults are a REMOTE host as the
-// transport actually reports one — `"unknown"` support and no client-wide
-// schema version for any method — which is the state that leaves the pre-check
-// unable to convict, and the state this mount has to survive.
-// Typed through the factory's RETURN annotation, not an `as` on the value:
-// `eslint --fix` strips a redundant-looking assertion here, and `support` then
-// widens to `string`, which quietly accepts a typo'd verdict.
+// Default remote: unknown support, no schema version. Type via the factory
+// return; eslint --fix would strip an as and widen support to string.
 const streamMock = vi.hoisted(
   (): {
     support: StreamMethodSupport;
@@ -100,12 +95,7 @@ describe("GlobalResourcesStreamMount", () => {
     expect(demands).toEqual(["background", "interactive", "background"]);
   });
 
-  /**
-   * The other side of the gate, and the reason it is still the PRE-STREAM
-   * verdict: when the pre-check CAN convict — a local host, where the
-   * client-wide capability cache is real — nothing is dialled at all. That is
-   * what the pre-check buys, and it is only visible as an absence.
-   */
+  /** Local host: the pre-check can convict, so nothing is dialled. Visible only as an absence. */
   it("never opens a stream when the pre-check already convicted the host", () => {
     streamMock.support = "supported";
     streamMock.version = { major: 1, minor: 0 };
@@ -121,18 +111,8 @@ describe("GlobalResourcesStreamMount", () => {
     expect(resourcesRegistry.getGlobal()).toBeNull();
   });
 
-  /**
-   * The mount gates on the PRE-STREAM verdict, never the full one the panel
-   * reads — and this is what that buys.
-   *
-   * Gating on the full verdict is a loop with no exit: acquire → the stream
-   * negotiates `@1.0` and reports `unsupported` → the effect re-runs and
-   * releases → the store holding the verdict is disposed with it → the verdict
-   * reverts to `unknown` → acquire again. It would re-dial a host forever, on
-   * the strength of having successfully learned something about it.
-   *
-   * Asserted as "built once and still held", because a single rebuild is the
-   * first lap of that loop, not a lesser symptom of it.
+    /**
+   * Gate on the pre-stream verdict, never the full one. Gating on the full verdict is an acquire/release loop.
    */
   it("keeps the stream it opened after that stream convicts its own host", () => {
     let captured: ResourcesStreamCallbacks | null = null;
@@ -161,16 +141,7 @@ describe("GlobalResourcesStreamMount", () => {
     );
   });
 
-  /**
-   * The escape hatch for the one verdict that cannot clear itself.
-   *
-   * A version verdict self-heals — its stream stays open, so a drop takes the
-   * negotiated version with it and the resume re-negotiates. A TERMINAL
-   * incompatible close does not: it fails only the stream while the shared
-   * session stays healthy, so the transport identity never changes and nothing
-   * above would rebuild. Without this, a host upgraded in place goes on being
-   * called incapable for as long as the surface stays mounted.
-   */
+  /** Terminal incompatible close does not change transport identity; this hatch re-probes so an in-place upgrade is not stuck incapable. */
   it("re-probes a terminal verdict when the transport reports the host came back", () => {
     let captured: ResourcesStreamCallbacks | null = null;
     let builds = 0;
@@ -200,10 +171,8 @@ describe("GlobalResourcesStreamMount", () => {
     expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe("unknown");
   });
 
-  // The re-probe is gated on `unsupported` for this reason. Recovery fires on
-  // every ordinary resume — and on `RemoteStreamClient` even on the clean first
-  // open — so an ungated version would tear down and rebuild a perfectly good
-  // stream on every blip, dropping its projection each time.
+  // Gate re-probe on unsupported. Recovery fires on every resume, including
+  // the first open.
   it("leaves a working stream alone when the transport merely reconnects", () => {
     let captured: ResourcesStreamCallbacks | null = null;
     let builds = 0;

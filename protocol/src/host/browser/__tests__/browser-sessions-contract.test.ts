@@ -53,9 +53,8 @@ function parsesSession(session: unknown): boolean {
 }
 
 /**
- * Structural view of one union variant. `.strict()` records itself as a
- * `ZodNever` catchall; a lenient variant leaves the catchall unset and would
- * silently drop fields a newer peer added.
+ * Structural view of one union variant.
+ * `.strict()` records itself as a `ZodNever` catchall; a lenient variant leaves the catchall unset and would silently drop fields a newer peer added.
  */
 interface FrameVariantIntrospection {
   readonly def: {
@@ -482,9 +481,7 @@ describe("browser.sessions@1.0 correlation", () => {
     ).toBe(false);
   });
 
-  // Cross-host mention previews (spec decision #10): a snapshot-only pair,
-  // deliberately nullable rather than optional on the wire, and with no
-  // `sessionId` - the owning host resolves the tab inside the stream's epic.
+  // Cross-host mention previews (spec decision #10): a snapshot-only pair, deliberately nullable rather than optional on the wire, and with no `sessionId` - the owning host resolves the tab inside the stream's epic.
   it("round-trips the captureTabPreview / tabPreviewResult pair", () => {
     const request = {
       kind: "captureTabPreview",
@@ -746,9 +743,7 @@ describe("browser.sessions@1.0 store-key handshake", () => {
   });
 
   it("rejects key material past the length cap on all four key fields", () => {
-    // A store key is 32 bytes and a wrapped blob a few hundred: the cap is
-    // slack. It exists so neither side can be made to buffer, or hand a
-    // keystore, an unbounded string named as key material.
+    // A store key is 32 bytes and a wrapped blob a few hundred: the cap is slack.
     const oversized = "A".repeat(4100);
     const frames = [
       { kind: "storeKeyWrapRequest", rawKey: oversized },
@@ -849,9 +844,8 @@ describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
   });
 
   it("has no server fan-out left: the ledger is the only forget channel", () => {
-    // universal-sign-in decision 6 retired `primaryProfileForgotten`. Two
-    // forget mechanisms must not coexist, so the arm is gone rather than
-    // deprecated - a peer that still sent one is refused here.
+    // universal-sign-in decision 6 retired `primaryProfileForgotten`.
+    // Two forget mechanisms must not coexist, so the arm is gone rather than deprecated - a peer that still sent one is refused here.
     expect(
       browserSessionsServerFrameSchema.safeParse({
         kind: "primaryProfileForgotten",
@@ -863,10 +857,7 @@ describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
 
 describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
   it("has no server evict frame left: the host cannot remove from a jar", () => {
-    // universal-sign-in ticket 08 retired `primaryProfileEvict`. It was the
-    // last host-driven removal primitive over the master jar, and the write
-    // channel is add-only without it, so the arm is gone rather than gated - a
-    // peer that still sent one is refused here.
+    // universal-sign-in ticket 08 retired `primaryProfileEvict`.
     const evict = {
       kind: "primaryProfileEvict",
       hasBinaryPayload: false,
@@ -988,12 +979,6 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
   };
 
   it("parses an observed frame without stripping the payload it validated", () => {
-    // `browserSessionsV1.serverFrameSchema` is the same object reference as
-    // this union - `defineStreamRpcContract` stores the schema as given - so
-    // parsing through it proves nothing extra and is not asserted twice. What
-    // this does pin is the chat-subscribe projection-strip class of bug: the
-    // whole payload has to survive the parse, with `partitionKey` defaulted
-    // rather than dropped.
     const parsed = browserSessionsServerFrameSchema.safeParse(OBSERVED);
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
@@ -1106,12 +1091,6 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
   });
 });
 
-/**
- * The two frame-kind sets are exported so main's dispatch, the direct
- * session's drop and the IPC send-gate can test MEMBERSHIP instead of each
- * keeping its own copy of the list. That only holds while the sets name kinds
- * the unions actually declare, which is what these check.
- */
 describe("browser.sessions@1.0 frame-kind sets", () => {
   it("names jar server frames the union declares, and only those", () => {
     for (const kind of BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS) {

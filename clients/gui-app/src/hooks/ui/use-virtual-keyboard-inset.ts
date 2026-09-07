@@ -1,37 +1,13 @@
 import * as React from "react";
 
-/**
- * Height (CSS px) of the layout viewport currently covered by the on-screen
- * keyboard, or 0 when no keyboard is up (or the browser resizes the layout
- * itself, e.g. Android with `interactive-widget=resizes-content`, which
- * leaves nothing covered). The installed iOS app ALSO overlays (`resize:
- * none`) and measures a real inset here - but its shell handles the lift
- * through the `--keyboard-inset` safe-height tokens, so consumers gate their
- * use of this measurement to the browser (`!isMobileApp()`).
- *
- * iOS Safari never resizes the page for the keyboard: it overlays it, so a
- * bar at the bottom of the `h-dvh` app shell disappears behind it. The
- * covered amount is layout-viewport height minus the visual viewport's height
- * and top offset (iOS shifts the visual viewport when it scrolls a focused
- * field into view). `document.documentElement.clientHeight` is the layout
- * anchor here - `window.innerHeight` is useless for this on iOS because it
- * tracks the visual viewport and shrinks with the keyboard.
- */
-/**
- * Differences below this are not a keyboard: no soft keyboard is this short,
- * while iOS toolbar expand/collapse can leave the layout and visual viewports
- * disagreeing by up to ~100px at rest. Without the floor that disagreement
- * would read as permanent phantom padding.
- */
+/** Overlay keyboard inset. Consumers gate on !isMobileApp(). Use documentElement.clientHeight, not window.innerHeight. */
+/** Differences below this are not a keyboard: no soft keyboard is this short, while iOS toolbar expand/collapse can leave the layout and visual viewports disagreeing by up to ~100px at rest. */
 const MIN_KEYBOARD_INSET_PX = 120;
 
 export function readVirtualKeyboardInset(): number {
   const viewport = window.visualViewport ?? null;
   if (viewport === null) return 0;
-  // Pinch zoom shrinks visualViewport.height (CSS px scale with zoom) while
-  // the layout viewport doesn't move - at 2x the formula would report half
-  // the screen as "keyboard". Zoom is deliberately reachable (accessibility
-  // pinch bypasses maximum-scale=1), so bail to 0 rather than mis-measure.
+  // Zoom is deliberately reachable (accessibility pinch bypasses maximum-scale=1), so bail to 0 rather than mis-measure.
   if (viewport.scale !== 1) return 0;
   const layoutHeight = document.documentElement.clientHeight;
   const inset = Math.round(layoutHeight - viewport.height - viewport.offsetTop);

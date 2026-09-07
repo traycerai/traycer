@@ -14,35 +14,12 @@ import {
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
- *
- * Each accepted WebSocket connection carries exactly one RPC call and the
- * preceding open/manifest dance. Frames are JSON text frames discriminated
- * by `kind`.
- *
- * This module is the authoritative home for the full WS session contract:
- * every frame type and the canonical Zod schema that validates it on the
- * wire lives here. Host-side dispatch, client-side transport, and any
- * future mirror implementations must parse frames through these schemas so
- * shapes on the wire stay byte-identical across sides.
+ * Host-side dispatch, client-side transport, and any future mirror implementations must parse frames through these schemas so shapes on the wire stay byte-identical across sides.
  */
 
-/**
- * Per-method version manifest exchanged on connection open.
- *
- * Each side advertises, per known method, its canonical (highest installed)
- * `{ major, minor }` plus every installed major. An omitted `supportedMajors`
- * is reserved for legacy peers that predate this additive field.
- */
 export type ConnectionManifest = Readonly<Record<string, ManifestMethodEntry>>;
 
-/**
- * Discriminated reason for a method being incompatible between two sides.
- *
- * - `client-missing-method`: host advertises the method; client does not.
- * - `host-missing-method`: client advertises the method; host does not.
- * - `no-bridge`: both sides advertise the method but neither side can bridge
- *   between the two canonicals using its installed upgrade/downgrade paths.
- */
+/** Discriminated reason for a method being incompatible between two sides. */
 export type IncompatibleMethodBlocking =
   | "client-missing-method"
   | "host-missing-method"
@@ -69,78 +46,32 @@ export type IncompatibilityUpgradeGuidance = {
 };
 
 /**
- * Fatal code emitted when the unary host sent `openAck` but did not observe the
- * client's `request` before its bounded post-open deadline. This is a transport
- * timeout, not an authentication rejection: the request was never dispatched,
- * so a client may safely retry even a non-idempotent method on a fresh socket.
+ * Fatal code emitted when the unary host sent `openAck` but did not observe the client's `request` before its bounded post-open deadline.
+ * This is a transport timeout, not an authentication rejection: the request was never dispatched, so a client may safely retry even a non-idempotent method on a fresh socket.
  */
 export const RPC_REQUEST_TIMEOUT_FATAL_CODE = "RPC_REQUEST_TIMEOUT";
 
 /**
- * Host-to-client unary capability: this exact host handshake accepts a stable
- * per-request idempotency key and deduplicates it for the authenticated user.
- *
- * Capability names are semantic versions. If the guarantee ever changes, a
- * new name must be introduced; this string must never be redefined in place.
+ * Host-to-client unary capability: this exact host handshake accepts a stable per-request idempotency key and deduplicates it for the authenticated user.
+ * If the guarantee ever changes, a new name must be introduced; this string must never be redefined in place.
  */
 export const UNARY_CAPABILITY_IDEMPOTENCY_KEY = "unary.idempotencyKey";
 
 /**
  * Client-to-host capability for the first write-path command contract.
- *
- * A host may emit write-path-specific typed errors only after the caller
- * advertises this name. As with every capability name, changed semantics get
- * a new name instead of silently widening this contract.
+ * As with every capability name, changed semantics get a new name instead of silently widening this contract.
  */
 export const CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1 = "epic.writePath/1";
 
 /**
- * Fatal code a host emits on every live connection when it is deliberately
- * standing itself down and expects to come back - the restart tombstone
- * (connection registry §3 / D5 / M1). Always paired with `retryable: true`
- * and a {@link FatalErrorDetails.restartIntent} payload.
- *
- * The code is stable and separate from the payload on purpose: the payload is
- * what a selection authority acts on, while the code is what a log line, a
- * support transcript, or a client that never grew the payload reads.
+ * Fatal code a host emits on every live connection when it is deliberately standing itself down and expects to come back - the restart tombstone (connection registry §3 / D5 / M1).
+ * The code is stable and separate from the payload on purpose: the payload is what a selection authority acts on, while the code is what a log line, a support transcript, or a client that never grew the payload reads.
  */
 export const HOST_RESTARTING_FATAL_CODE = "HOST_RESTARTING";
 
 /**
- * The restart tombstone a host publishes to every client attached to it, at
- * the moment it latches restart intent and before any teardown step runs.
- *
- * It rides {@link FatalErrorDetails} rather than a frame kind of its own
- * because that one payload is shared verbatim by all three host->client
- * planes - the unary `/rpc` `fatalError` frame, the `/stream` `fatalError`
- * frame, and the relay mux's `FATAL` on the session control stream - so one
- * additive field reaches every attached client whatever transport it holds.
- * The alternatives are both fail-closed against peers that predate them: a
- * new mux frame type throws `MuxFrameDecodeError` in `decodeMuxFrame`
- * (unknown type bytes are rejected, not skipped), and a new `/stream` control
- * kind falls through to the application-frame envelope, whose required
- * `hasBinaryPayload` is absent - tearing the socket down as malformed.
- *
- * A new METHOD name does not fit either, though the reason is narrower than
- * "the release invariant forbids it" - a new OPTIONAL stream method is
- * additive and degrades quietly, as this repo's own two-sided tests show. It
- * fails for a different reason: a method is something a client SUBSCRIBES to,
- * and this frame has to reach peers that already hold whatever sessions they
- * hold, at the instant the host is going down. A host cannot make an attached
- * client subscribe to a new method retroactively, so the ones that never did
- * would hear nothing. Putting it on the FLOOR instead - so every peer must
- * serve it - is what the release invariant genuinely bars, since a floor
- * addition breaks every host below the version bump.
- *
- * `tombstoneId` is minted once per teardown episode and is IDENTICAL on every
- * connection and both planes. That is what makes the authority's
- * (hostId, tombstoneId) episode key work: first receipt anchors one fixed
- * expected-outage episode and every duplicate - another window, the other
- * plane, a replay - is inert.
- *
- * `expiresAt` is the HOST's clock (epoch ms) and is display-only; an
- * authority bounds the episode with its own ceiling, never with a peer's
- * clock.
+ * The restart tombstone a host publishes to every client attached to it, at the moment it latches restart intent and before any teardown step runs.
+ * A host cannot make an attached client subscribe to a new method retroactively, so the ones that never did would hear nothing.
  */
 export type HostRestartIntent = {
   readonly tombstoneId: string;
@@ -148,47 +79,19 @@ export type HostRestartIntent = {
 };
 
 /**
- * Full detail payload carried by a fatal error frame prior to WebSocket
- * close. The subsequent close event is only the fatal signal - all rich
- * detail MUST travel inside this frame.
+ * Full detail payload carried by a fatal error frame prior to WebSocket close.
+ * The subsequent close event is only the fatal signal - all rich detail MUST travel inside this frame.
  */
 export type FatalErrorDetails = {
   readonly code: string;
   readonly reason: string;
   readonly incompatibleMethods: readonly IncompatibleMethodDetails[] | null;
   readonly upgradeGuidance: IncompatibilityUpgradeGuidance | null;
-  /**
-   * When `true`, the rejection is transient and host-side (e.g. the host's
-   * JWKS fetch timed out while verifying the bearer, or a post-open frame
-   * deadline elapsed while a process was suspended) - NOT a statement about the
-   * credential's authenticity. A client that understands this field should
-   * reconnect with plain backoff instead of running credential recovery or
-   * going terminal. Additive and optional: an older host omits it entirely and
-   * a newer client then reads "not retryable".
-   */
   readonly retryable?: boolean;
-  /**
-   * Present exactly when this connection is being closed by a host that is
-   * deliberately restarting - see {@link HostRestartIntent} and
-   * {@link HOST_RESTARTING_FATAL_CODE}. Additive and optional in both
-   * directions: an older host omits it and a newer client reads "no
-   * tombstone" (bouncing exactly as it does today), while an older client
-   * STRIPS it at the schema below and handles the frame as the ordinary
-   * retryable fatal it already understands.
-   */
   readonly restartIntent?: HostRestartIntent;
   /**
-   * Present exactly when this connection was refused by the host's CLIENT
-   * COMPATIBILITY EPOCH gate - see {@link ClientCompatibilityRequirement}.
-   *
-   * Additive and optional under the same rule as the two fields above, and it
-   * is what makes this rejection survivable for the population it targets: a
-   * released old app strips this member and is left with `code`, `reason`,
-   * `upgradeGuidance` and `retryable: false`, which it already handles as a
-   * terminal stop. That is precisely why the epoch rejection keeps the
-   * existing `INCOMPATIBLE` code and why its `reason` has to be independently
-   * actionable - the clients that most need to read it are the ones that
-   * cannot see this field at all.
+   * Present exactly when this connection was refused by the host's CLIENT COMPATIBILITY EPOCH gate - see {@link ClientCompatibilityRequirement}.
+   * That is precisely why the epoch rejection keeps the existing `INCOMPATIBLE` code and why its `reason` has to be independently actionable - the clients that most need to read it are the ones that cannot see this field.
    */
   readonly clientCompatibilityRequirement?: ClientCompatibilityRequirement;
 };
@@ -204,18 +107,12 @@ export type ClientOpenFrame = {
   readonly optionalManifest?: ConnectionManifest;
   /** Additive capabilities this client can classify or receive. */
   readonly capabilities?: readonly string[];
-  /**
-   * Who is connecting - see {@link ClientHandshakeIdentity}. Optional on the
-   * wire so an old client's omission reaches the host's deliberate
-   * legacy-epoch verdict instead of a generic parse failure.
-   */
+  /** Who is connecting - see {@link ClientHandshakeIdentity}. */
   readonly clientIdentity?: ClientHandshakeIdentity;
 };
 
 /**
- * Single request frame sent by the client after a successful ack from the
- * host and a successful client-side compatibility check against the host
- * manifest. Carries the envelope `dispatchRpc()` already accepts.
+ * Single request frame sent by the client after a successful ack from the host and a successful client-side compatibility check against the host manifest.
  */
 export type ClientRequestFrame = {
   readonly kind: "request";
@@ -224,11 +121,7 @@ export type ClientRequestFrame = {
   readonly schemaVersion: SchemaVersion;
   readonly params: unknown;
   /**
-   * Non-null only after this connection's host openAck advertised
-   * {@link UNARY_CAPABILITY_IDEMPOTENCY_KEY}. New clients send `null` for an
-   * ordinary or unnegotiated request; released clients omit the additive field
-   * and released hosts strip it. Only a negotiated non-null value claims retry
-   * safety.
+   * Non-null only after this connection's host openAck advertised {@link UNARY_CAPABILITY_IDEMPOTENCY_KEY}.
    */
   readonly idempotencyKey?: string | null;
 };
@@ -252,9 +145,7 @@ export type ClientFrame =
   | ClientFatalErrorFrame;
 
 /**
- * Host acknowledgement of a successful token + compatibility check, carrying
- * the host's selected per-method manifest so the client can run its own mirror
- * check.
+ * Host acknowledgement of a successful token + compatibility check, carrying the host's selected per-method manifest so the client can run its own mirror check.
  */
 export type HostOpenAckFrame = {
   readonly kind: "openAck";
@@ -264,11 +155,7 @@ export type HostOpenAckFrame = {
   readonly capabilities?: readonly string[];
 };
 
-/**
- * Single response frame emitted by the host. Mirrors the envelope
- * `dispatchRpc()` already emits; `result` and `error` are mutually exclusive
- * and exactly one is populated on any given frame.
- */
+/** Single response frame emitted by the host. */
 export type HostResponseFrame = {
   readonly kind: "response";
   readonly requestId: string;
@@ -310,9 +197,8 @@ export const schemaVersionSchema = z.object({
 });
 
 /**
- * Per-method manifest entry. This deliberately remains non-strict: a newer
- * peer's future additive keys must be stripped by an older peer rather than
- * rejecting an otherwise compatible connection.
+ * Per-method manifest entry.
+ * This deliberately remains non-strict: a newer peer's future additive keys must be stripped by an older peer rather than rejecting an otherwise compatible connection.
  */
 export const manifestMethodEntrySchema = schemaVersionSchema.extend({
   supportedMajors: z.array(z.number().int().nonnegative()).min(1).optional(),
@@ -353,60 +239,35 @@ export const incompatibilityUpgradeGuidanceSchema = z.object({
 /** Canonical schema for the restart tombstone carried on a fatal error frame. */
 export const hostRestartIntentSchema = z.object({
   tombstoneId: z.string().min(1),
-  // The host's own clock, and display-only - so a peer whose clock is absurd
-  // costs a wrong tooltip, never a wrong deadline. Nullable rather than
-  // omitted-when-unknown: "the host did not say" is a real answer here.
+  // The host's own clock, and display-only - so a peer whose clock is absurd costs a wrong tooltip, never a wrong deadline.
+  // Nullable rather than omitted-when-unknown: "the host did not say" is a real answer here.
   expiresAt: z.number().nullable(),
 });
 
-/**
- * Canonical schema for the full detail payload carried by a fatal error
- * frame.
- *
- * Deliberately NOT `.strict()`, and load-bearingly so: every additive field
- * below (`retryable`, `restartIntent`) is backward-safe precisely because a
- * peer that predates it parses the frame with its own older copy of this
- * schema, which STRIPS the unknown key instead of rejecting the frame. A
- * `.strict()` here would turn each future addition into a connection-killing
- * parse error on every older peer in the field.
- */
+/** Canonical schema for the full detail payload carried by a fatal error frame. */
 export const fatalErrorDetailsSchema = z.object({
   code: z.string().min(1),
   reason: z.string(),
   incompatibleMethods: z.array(incompatibleMethodDetailsSchema).nullable(),
   upgradeGuidance: incompatibilityUpgradeGuidanceSchema.nullable(),
-  // Additive/optional: an older host omits it, so a newer client parsing an
-  // older host's frame reads `undefined` (not retryable). Set `true` only for
-  // transient host-side rejections (e.g. a JWKS fetch or post-open frame
-  // timeout) that the client recovers from with plain reconnect backoff, not
-  // credential revalidation.
+  // Additive/optional: an older host omits it, so a newer client parsing an older host's frame reads `undefined` (not retryable).
   retryable: z.boolean().optional(),
   // Additive/optional, same rule as `retryable`: absent from every host that
   // predates the restart tombstone, and stripped by every client that does.
   restartIntent: hostRestartIntentSchema.optional(),
-  // Additive/optional, same rule again: absent from every host that predates
-  // the compatibility-epoch gate, and stripped by every client that does -
-  // which is exactly the population this rejection is aimed at, so the
-  // envelope's `reason` carries the whole remedy on its own.
   clientCompatibilityRequirement:
     clientCompatibilityRequirementSchema.optional(),
 });
 
-/** Canonical schema for the client `open` frame. */
 export const clientOpenFrameSchema = z.object({
   kind: z.literal("open"),
   token: z.string(),
   manifest: connectionManifestSchema,
   optionalManifest: connectionManifestSchema.optional(),
   capabilities: z.array(z.string()).optional(),
-  // Additive/optional in BOTH directions: a released old host's copy of this
-  // schema strips it (so a new client still connects), and a released old
-  // client omits it (so a new host sees "no identity" and applies its legacy
-  // epoch rule rather than rejecting the frame as malformed).
   clientIdentity: clientHandshakeIdentitySchema.optional(),
 });
 
-/** Canonical schema for the client `request` frame. */
 export const clientRequestFrameSchema = z.object({
   kind: z.literal("request"),
   requestId: z.string().min(1),
@@ -422,11 +283,7 @@ export const clientFatalErrorFrameSchema = z.object({
   details: fatalErrorDetailsSchema,
 });
 
-/**
- * Discriminated-union schema covering every frame the client may emit. Use
- * this from the host side to parse an inbound text frame directly into the
- * `ClientFrame` union type.
- */
+/** Discriminated-union schema covering every frame the client may emit. */
 export const clientFrameSchema = z.discriminatedUnion("kind", [
   clientOpenFrameSchema,
   clientRequestFrameSchema,
@@ -441,23 +298,15 @@ export const hostOpenAckFrameSchema = z.object({
   capabilities: z.array(z.string()).optional(),
 });
 
-/**
- * Canonical schema for the host `response` envelope's error payload. The
- * error `code` is intentionally an open string because resolvers can surface
- * arbitrary domain-specific codes; the client narrows to the known
- * `RpcErrorCode` set when it interprets the envelope.
- */
 export const hostResponseErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
-  // Typed `WORKTREE_BUSY` inventory. Malformed values are sanitized to
-  // absent rather than rejecting the envelope — adding this optional
-  // field must never fail a `{ code, message }` that parsed before it.
+  // Typed `WORKTREE_BUSY` inventory.
+  // Malformed values are sanitized to absent rather than rejecting the envelope - adding this optional field must never fail a `{ code, message }` that parsed before it.
   holders: worktreeBusyHoldersWireFieldSchema,
   holdersRevision: holdersRevisionWireFieldSchema,
 });
 
-/** Canonical schema for the host `response` frame. */
 export const hostResponseFrameSchema = z.object({
   kind: z.literal("response"),
   requestId: z.string().min(1),
@@ -473,11 +322,7 @@ export const hostFatalErrorFrameSchema = z.object({
   details: fatalErrorDetailsSchema,
 });
 
-/**
- * Discriminated-union schema covering every frame the host may emit. Use
- * this from the client side to parse an inbound text frame directly into the
- * `HostFrame` union type.
- */
+/** Discriminated-union schema covering every frame the host may emit. */
 export const hostFrameSchema = z.discriminatedUnion("kind", [
   hostOpenAckFrameSchema,
   hostResponseFrameSchema,

@@ -365,11 +365,8 @@ describe("<MenuCommandListener />", () => {
       "open-epic-in-new-window",
     );
     expect(runnerHost.windows.requestNew).toHaveBeenCalledWith(null);
-    // The "no menu command opens a host picker" half of this pin used to be an
-    // assertion on the shell-owned picker port. P1.2 deleted the port's last
-    // caller and P3.4 deleted the port itself, so the property is now
-    // structural - there is no picker for a command to open, and a revival
-    // would have to re-add the capability to `IRunnerHost` first.
+    // deleted the port's last caller and deleted the port itself, so the property is now structural - there is no
+    // picker for a command to open, and a revival would have to re-add the capability to `IRunnerHost` first.
   });
 
   it("gates the native report command on current support capability", () => {
@@ -642,10 +639,8 @@ describe("<MenuCommandListener />", () => {
     await waitFor(() => {
       expect(management.getHostControllerStatus).toHaveBeenCalled();
     });
-    // Being *called* only proves the query fired - the component reads
-    // `status` from the query's *result*, so the resolved promise and its
-    // resulting re-render must also land before dispatching, or the command
-    // is evaluated against the still-`undefined` initial status.
+    // Being *called* only proves the query fired - the component reads `status` from the query's *result*, so the
+    // resolved promise and its resulting re-render must also land before dispatching.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -694,10 +689,8 @@ describe("<MenuCommandListener />", () => {
     await waitFor(() => {
       expect(management.getHostControllerStatus).toHaveBeenCalled();
     });
-    // Being *called* only proves the query fired - the component reads
-    // `status` from the query's *result*, so the resolved promise and its
-    // resulting re-render must also land before dispatching, or the command
-    // is evaluated against the still-`undefined` initial status.
+    // Being *called* only proves the query fired - the component reads `status` from the query's *result*, so the
+    // resolved promise and its resulting re-render must also land before dispatching.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -866,13 +859,8 @@ describe("<MenuCommandListener />", () => {
     const navigation = latestNavigation();
     expect(navigation.to).toBe("/epics/$epicId/$tabId");
     expect(navigation.params).toEqual({ epicId: "e-a", tabId });
-    // T10: closing the draft now routes through
-    // `tabCommandCoordinator.closeRefAfterConfirmed`, which synchronously
-    // promotes the epic tab to `activeItemId` as part of the close itself
-    // (survivor-at-group-position). By the time the navigation controller
-    // runs, the epic is already the coordinator's active item, so it
-    // correctly resolves this as a replace (syncing the URL to already-
-    // settled layout state) rather than a push.
+    // By the time the navigation controller runs, the epic is already the coordinator's active item, so it
+    // correctly resolves this as a replace (syncing the URL to already- settled layout state) rather than a push.
     expect(navigation.replace).toBe(true);
     expect(navigation.state).toEqual(expect.any(Function));
     expect(navigation.search).toMatchObject({

@@ -95,13 +95,8 @@ function MermaidRenderSession(props: {
     void ensureMermaidReady();
   }, []);
 
-  /*
-   * Async parse + render. `AbortController` invalidates in-flight work on
-   * dependency change or unmount so a stale resolve can't race past a
-   * newer one and overwrite state. Standard async-effect cancellation
-   * idiom; integrates with `fetch` and `addEventListener` if those land
-   * here later.
-   */
+  // Abort in-flight parse/render on dep change or unmount so a stale resolve
+  // cannot overwrite.
   useEffect(() => {
     const ctrl = new AbortController();
     const isAborted = (): boolean => ctrl.signal.aborted;

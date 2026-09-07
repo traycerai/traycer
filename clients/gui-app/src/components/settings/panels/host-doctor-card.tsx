@@ -44,12 +44,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 export interface HostDoctorCardProps {
   readonly recurrenceState?: RecurrenceState;
   readonly onRecurrenceChange?: (next: RecurrenceState) => void;
-  /**
-   * The local host this console is recovering. Its fixes run THIS machine's
-   * CLI, so they carry the id for the same reason every other bridge call
-   * does - the console outlives the host it names, and a replaced host must
-   * not inherit the repairs (or the log) aimed at its predecessor.
-   */
+  /** Its fixes run this machine's CLI, so they carry the id for the same reason every other bridge call does. */
   readonly expectedHostId: string;
 }
 
@@ -122,16 +117,8 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       return runFixAction(management, issue, expectedHostId);
     },
     onSuccess: (result, issue, context) => {
-      // A declined fix is neither applied nor failed: it did not run for a
-      // self-clearing reason (the host was busy, a lock was held, or this
-      // machine's host is no longer the one this console opened on).
-      // Announce it as information and leave the recurrence model alone.
-      //
-      // WHICH action was refused decides the wording, for the same reason it
-      // does on the watched sheet: now that the lifecycle repairs are fenced,
-      // an Install host or Register service click can decline too, and
-      // reporting either as "Host not restarted" names an action nobody
-      // asked for.
+      // A declined fix is neither applied nor failed: it did not run for a self-clearing reason (the host was busy,
+      // a lock was held, or this machine's host is no longer the one this console opened on).
       if (result.kind === "declined") {
         const fixAction = issue.fixAction;
         if (fixAction === "host-start" || fixAction === "host-restart") {
@@ -245,30 +232,16 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
     );
   }
 
-  // A report that FAILED is not a report with no issues. Without this arm the
-  // `issues ?? []` default below renders "no issues detected" for a read that
-  // never produced one — an identity refusal, a CLI that could not run — which
-  // is the most dangerous thing this card could say.
+  // []` default below renders "no issues detected" for a read that never produced one - an identity refusal, a
+  // CLI that could not run - which is the most dangerous thing this card could say.
   if (reportError !== null) {
     return (
       <div className="space-y-2">
         <div className="rounded-md border border-rose-700/40 bg-rose-900/20 px-3 py-2 text-ui-sm text-rose-200">
           Doctor could not run: {reportError.message}
         </div>
-        {/* The retry belongs on THIS arm above all others. The commonest way
-            to land here is a momentary identity refusal, whose own message
-            says "try again in a moment" — an arm that says that while
-            offering no way to try again forces the sheet closed and reopened
-            to do what the text just asked for.
-
-            It carries no pending state, and that is not an oversight. This
-            report is a QUERY, and v5 clears the error when a refetch starts;
-            with no data to fall back on the status returns to `pending`, so
-            the click unmounts this whole arm and the spinner above becomes
-            the in-flight surface. A `disabled={reportFetching}` here could
-            never render — the button is gone by the time it would be true.
-            The RPC card's rerun row DOES take a pending flag because its run
-            is a mutation, whose pending state no arm swap can hide. */}
+        {/* It carries no pending state, and that is not an oversight. A `disabled={reportFetching}` here could never
+           render - the button is gone by the time it would be true. */}
         <div className="flex justify-end">
           <Button
             variant="secondary"

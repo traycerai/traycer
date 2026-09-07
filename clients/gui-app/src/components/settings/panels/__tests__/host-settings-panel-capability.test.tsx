@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -17,21 +15,8 @@ import { isConcealed } from "@/components/settings/host-scope/concealment-test-h
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
-/**
- * Overview owns three capabilities that do NOT travel over the scoped host's
- * RPC, and the redesign lost two of them by gating the whole page on
- * dialability:
- *
- *   - update policy is an account write (`PATCH /api/v3/hosts/:id`) the host
- *     applies on its next check-in. It needs no route to the machine, and
- *     `MyHostsList` — deleted by this branch — used to expose it.
- *   - the local service console runs over the CLI bridge, and is the recovery
- *     surface for a host that is DOWN.
- *   - only snapshots / Remove Traycer are host RPC.
- *
- * These cases pin the split, because the whole settings suite passed while it
- * was wrong.
- */
+/** Only snapshots / Remove Traycer are host RPC. These cases pin the split, because the whole settings suite
+ * passed while it was wrong. */
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() },
@@ -69,9 +54,8 @@ const REGISTRY_ITEM: HostListItem = {
 
 function renderOverview(overrides: Partial<HostScope>): void {
   scopeMocks.overrides = overrides;
-  // No `hostManagement` on the mock runner host (it defaults to null), so this
-  // is the web/mobile shell branch — the one that never mounted the registry
-  // controls at all.
+  // No `hostManagement` on the mock runner host (it defaults to null), so this is the web/mobile shell branch -
+  // the one that never mounted the registry controls at all.
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
@@ -114,20 +98,14 @@ describe("Overview capability split without host management", () => {
 
     renderOverview({ host, hostId: host.hostId, status: "unreachable" });
 
-    // The regression: the page-wide gate replaced this, so a registered host
-    // with no current route had no update-policy UI anywhere in the app.
-    //
-    // Behind the Advanced disclosure now — the policy is a preference, not an
-    // answer — but still PRESENT without a route, which is the whole claim.
+    // Behind the Advanced disclosure now - the policy is a preference, not an answer - but still present without a
+    // route, which is the whole claim.
     await openHostOverviewAdvanced();
     expect(
       screen.getByRole("switch", { name: "Turn on auto-update" }),
     ).not.toBeNull();
-    // ...while the genuinely RPC-dependent ROW stays gated — concealed (the
-    // gate preserves it hidden through the outage) or absent — and the gate
-    // says why. The zone itself still renders: its other row (Remove Traycer)
-    // runs over the local CLI bridge, so the gate belongs around the
-    // snapshots row, not around the region.
+    // ...while the genuinely RPC-dependent row stays gated - concealed (the gate preserves it hidden through the
+    // outage) or absent - and the gate says why.
     const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
     expect(clearRow === null || isConcealed(clearRow)).toBe(true);
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
@@ -145,22 +123,8 @@ describe("Overview capability split without host management", () => {
 
     renderOverview({ host, hostId: host.hostId, status: "unreachable" });
 
-    // The two tests this replaces pinned a free-text "Update to version…"
-    // popover: shown for `current`/`available`/`required`/`failed`, withheld
-    // while a `desiredVersion` write was already draining toward the host so a
-    // second one could not retarget it mid-flight.
-    //
-    // That control is gone. Choosing a version now means choosing one the HOST
-    // listed, over `host.update.check`, so it needs a route and correctly has
-    // none here — and the mid-flight guard moved to `HostVersionRows`, where an
-    // install in flight freezes every row rather than one state hiding an input.
-    //
-    // The trade is deliberate and this is the assertion that states its cost:
-    // an unreachable host can no longer be pinned to a version at all.
-    //
-    // Asserted with Advanced OPEN, so this is a real absence rather than the
-    // drawer merely being shut: everything the disclosure holds is mounted, and
-    // the picker still is not there.
+    // Asserted with Advanced open, so this is a real absence rather than the drawer merely being shut: everything
+    // the disclosure holds is mounted, and the picker still is not there.
     await openHostOverviewAdvanced();
     expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
     expect(screen.queryByTestId("host-overview-updates")).toBeNull();

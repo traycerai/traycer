@@ -12,14 +12,7 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { UseTerminalSessionHandleArgs } from "@/lib/registries/terminal-session-registry";
 
-// A live session handle must survive `terminal.list` REFETCHES. The handle
-// gate used to derive from `hostHasSession`, which degrades to `null`
-// whenever the list query is in flight - so any invalidation of
-// `terminal.list` released the handle (closing the PTY stream), reacquired
-// it when the refetch settled, and the fresh subscription's snapshot pushed
-// metadata that invalidated the list again: an endless subscribe/release
-// loop that left reattached terminals blank. The handle may only be
-// released on a SETTLED list that shows the session gone or exited.
+// The handle gate used to derive from `hostHasSession`, which degrades to `null` whenever the list query is in flight - so any invalidation of `terminal.list` released the handle (closing the PTY stream), reacquired it when the refetch settled, and the fresh subscription's snapshot pushed metadata that invalidated the list again: an endless subscribe/release loop that left reattached terminals blank.
 
 let mockList: {
   data: { sessions: ReadonlyArray<Record<string, unknown>> } | undefined;

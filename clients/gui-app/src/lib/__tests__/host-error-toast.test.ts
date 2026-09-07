@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("sonner", () => {
-  // `toast` is CALLABLE as well as a namespace: the transport-class notice
-  // deliberately uses the plain `toast(...)` rather than `toast.error(...)`,
-  // because a transient, self-healing condition must not be framed as a
-  // failure. A namespace-only mock would make that path throw rather than
-  // fail an assertion, which is the confusing kind of red.
+  // `toast` is CALLABLE as well as a namespace: the transport-class notice deliberately uses the plain `toast(...)` rather than `toast.error(...)`, because a transient, self-healing condition must not be framed as a failure.
   const base = vi.fn();
   return {
     toast: Object.assign(base, {
@@ -95,12 +91,8 @@ describe("toastFromHostError", () => {
     );
   });
 
-  // The host's epic role gates state the missing role in a fixed phrase
-  // (`auth-helpers.ts`: "User 'x' does not have editor|owner access to ...").
-  // Branching on it turns "You don't have permission to do that." - the toast
-  // a viewer got for clicking Clone on a shared agent, indistinguishable from
-  // a bug - into the reason. The raw ids in the host text stay out of the
-  // toast.
+  // The host's epic role gates state the missing role in a fixed phrase (`auth-helpers.ts`: "User 'x' does not have editor|owner access to ...").
+  // Branching on it turns "You don't have permission to do that." - the toast a viewer got for clicking Clone on a shared agent, indistinguishable from a bug - into the reason.
   it("names view-only access when the host's editor gate refused", () => {
     toastFromHostError(
       makeError(
@@ -250,13 +242,8 @@ describe("toastFromHostError", () => {
       "Couldn't load epics.",
     );
 
-    // Policy changed deliberately (T5 item 5b): a transport cause no longer
-    // renders through `reportableErrorToast` at all. The old assertion's
-    // `cancel: null` was an artifact of `reportIssueAvailable` defaulting to
-    // false under test - in the desktop app that flag is TRUE, so this path
-    // really did attach a "Report issue" button to ordinary network weather,
-    // across ~158 gesture call sites. The no-feed-entry half of this test
-    // still holds and is kept.
+    // Policy changed deliberately (T5 item 5b): a transport cause no longer renders through `reportableErrorToast` at all.
+    // The old assertion's `cancel: null` was an artifact of `reportIssueAvailable` defaulting to false under test - in the desktop app that flag is TRUE, so this path really did attach a "Report issue" button to ordinary network weather, across ~158 gesture call.
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledTimes(1);
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
@@ -327,10 +314,8 @@ describe("toastFromHostError", () => {
     );
   });
 
-  // Review #1297 finding 2: host detail is unbounded by construction. The
-  // producer that motivated forwarding it - `worktreeCreateFailed` - joins one
-  // line per failed workspace, each an absolute path plus raw git stderr, so
-  // appended verbatim it is an arbitrarily tall toast.
+  // Review #1297 finding 2: host detail is unbounded by construction.
+  // The producer that motivated forwarding it - `worktreeCreateFailed` - joins one line per failed workspace, each an absolute path plus raw git stderr, so appended verbatim it is an arbitrarily tall toast.
   describe("bounds free-form host detail", () => {
     it("keeps a realistic single-line worktree reason intact", () => {
       // The failure this whole change set exists for. Cutting it would drop
@@ -357,9 +342,8 @@ describe("toastFromHostError", () => {
         ),
         "Couldn't create agent.",
       );
-      // The count, not a silent first-line take: dropping the other folders
-      // without saying so is the quiet omission this change set removes. The
-      // trailing blank line must not be counted as a third entry.
+      // The count, not a silent first-line take: dropping the other folders without saying so is the quiet omission this change set removes.
+      // The trailing blank line must not be counted as a third entry.
       expect(toast.error).toHaveBeenCalledWith(
         "Couldn't create agent. first failed: fatal: a (+1 more)",
       );
@@ -389,9 +373,7 @@ describe("toastFromHostError", () => {
 
 describe("transport-class causes never reach a reportable toast", () => {
   beforeEach(() => {
-    // BEFORE, not after: `toast` is one shared mock function across this file
-    // and the suites above leave calls on it, so a count assertion that only
-    // cleared afterwards would inherit them.
+    // BEFORE, not after: `toast` is one shared mock function across this file and the suites above leave calls on it, so a count assertion that only cleared afterwards would inherit them.
     vi.clearAllMocks();
     __resetAppLocalNotificationsStoreForTests();
   });
@@ -414,9 +396,7 @@ describe("transport-class causes never reach a reportable toast", () => {
   it("renders a plain, non-reportable notice instead of an error toast", () => {
     toastFromHostError(transportFailure("terminal.create"), "Couldn't create.");
 
-    // The harm this replaces: `reportableErrorToast` drives `toast.error` AND
-    // attaches a Report Issue affordance, so every flap invited a support
-    // ticket for ordinary network weather across ~158 gesture call sites.
+    // The harm this replaces: `reportableErrorToast` drives `toast.error` AND attaches a Report Issue affordance, so every flap invited a support ticket for ordinary network weather across ~158 gesture call sites.
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledTimes(1);
   });
@@ -428,9 +408,8 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 
   it("collapses many gestures during one flap into a single toast id", () => {
-    // A session-wide condition, not a per-operation failure: five gestures
-    // colliding with one outage must read as one line. The default dedupe key
-    // is per-operation, which is right for genuine failures and wrong here.
+    // A session-wide condition, not a per-operation failure: five gestures colliding with one outage must read as one line.
+    // The default dedupe key is per-operation, which is right for genuine failures and wrong here.
     toastFromHostError(transportFailure("terminal.create"), "a");
     toastFromHostError(transportFailure("chat.rename"), "b");
     toastFromHostErrorWithDetail(transportFailure("agent.configure"), "c");
@@ -457,13 +436,8 @@ describe("transport-class causes never reach a reportable toast", () => {
   }
 
   it("only claims the request didn't go through when the host provably never dispatched it", () => {
-    // `RetryableTransportError` is the pre-send subclass: the request frame
-    // never reached the host, which is exactly what makes it safe to retry a
-    // non-idempotent method. A plain `HostTransportFailureError` is the
-    // AMBIGUOUS post-send drop - the host may well have executed the call and
-    // only the answer was lost - so telling the user it "didn't go through"
-    // invites them to repeat a side effect that already happened. Deleting a
-    // chat twice is the cheap version of that mistake.
+    // `RetryableTransportError` is the pre-send subclass: the request frame never reached the host, which is exactly what makes it safe to retry a non-idempotent method.
+    // A plain `HostTransportFailureError` is the AMBIGUOUS post-send drop - the host may well have executed the call and only the answer was lost - so telling the user it "didn't go through" invites them to repeat a side effect that already happened.
     toastFromHostError(retryableTransportFailure("terminal.create"), "a");
     toastFromHostError(transportFailure("epic.deleteChat"), "b");
 
@@ -480,10 +454,8 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 
   it("keeps the ambiguous notice on its own id so a pre-send notice cannot overwrite it", () => {
-    // One shared id is right for one shared statement. These are two different
-    // statements, and the ambiguous one is the load-bearing one - collapsing it
-    // under a later "that didn't go through" would restore the overclaim by
-    // the back door.
+    // One shared id is right for one shared statement.
+    // These are two different statements, and the ambiguous one is the load-bearing one - collapsing it under a later "that didn't go through" would restore the overclaim by the back door.
     toastFromHostError(transportFailure("epic.deleteChat"), "a");
     toastFromHostError(retryableTransportFailure("terminal.create"), "b");
 
@@ -498,12 +470,7 @@ describe("transport-class causes never reach a reportable toast", () => {
   function hostAttestedNoDispatchTimeout(
     method: string,
   ): HostTransportFailureError {
-    // Exactly what `ws-rpc-client.ts`'s `hostFatalError` mints for the host's
-    // typed `RPC_REQUEST_TIMEOUT` fatal: the RETRYABLE subclass, and yet
-    // carrying the host's fatal frame in `fatalDetails`. Both halves are
-    // deliberate upstream - the host ANSWERED, so there is a frame, and what it
-    // answered is "I never dispatched your request", which is precisely the
-    // no-dispatch guarantee that makes retrying a non-idempotent method safe.
+    // Exactly what `ws-rpc-client.ts`'s `hostFatalError` mints for the host's typed `RPC_REQUEST_TIMEOUT` fatal: the RETRYABLE subclass, and yet carrying the host's fatal frame in `fatalDetails`.
     return new RetryableTransportError({
       replaySafetyFromKey: false,
       code: "RPC_ERROR",
@@ -521,12 +488,8 @@ describe("transport-class causes never reach a reportable toast", () => {
   }
 
   it("reads a retryable attestation as transport even though it carries fatal details", () => {
-    // The discriminator cannot be `fatalDetails === null` alone. On this error
-    // `fatalDetails` is an ATTESTATION ("safe to retry, never dispatched"), not
-    // a VERDICT ("the host was reached and refused") - opposite meanings behind
-    // one field. Classifying it as a verdict is what turned a recoverable
-    // transport condition into a durable failure row with a Report Issue
-    // button, which is the exact shape this whole branch exists to remove.
+    // The discriminator cannot be `fatalDetails === null` alone.
+    // On this error `fatalDetails` is an ATTESTATION ("safe to retry, never dispatched"), not a VERDICT ("the host was reached and refused") - opposite meanings behind one field.
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
 
     toastFromHostError(
@@ -540,10 +503,7 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 
   it("keeps the no-dispatch guarantee in the copy for a retryable attestation", () => {
-    // Fixing the classifier alone would move the bug one layer down: the
-    // verdict branch keys on `code === "RPC_ERROR"` plus a non-empty reason,
-    // which this error ALSO matches, so it would have rendered the host's raw
-    // timeout reason as a terminal verdict.
+    // Fixing the classifier alone would move the bug one layer down: the verdict branch keys on `code === "RPC_ERROR"` plus a non-empty reason, which this error ALSO matches, so it would have rendered the host's raw timeout reason as a terminal verdict.
     toastFromHostError(
       hostAttestedNoDispatchTimeout("chat.delete"),
       "Couldn't delete chat.",
@@ -555,9 +515,8 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 
   function requestOnlyUnaryTimeout(method: string): HostTransportFailureError {
-    // What `RemoteSession.unaryTimeoutError` mints when ONE unary outlives its
-    // response deadline. `rejectUnary` tombstones that single stream and closes
-    // it; the session stays `ready` and no reconnect is scheduled.
+    // What `RemoteSession.unaryTimeoutError` mints when ONE unary outlives its response deadline.
+    // `rejectUnary` tombstones that single stream and closes it; the session stays `ready` and no reconnect is scheduled.
     return new HostTransportFailureError({
       code: "RPC_ERROR",
       message: `Remote unary '${method}' timed out awaiting a response`,
@@ -568,17 +527,8 @@ describe("transport-class causes never reach a reportable toast", () => {
   }
 
   it("never promises a reconnection that is not happening", () => {
-    // Neither of these errors proves session recovery is active, and one of
-    // them proves the opposite: a request-only unary timeout leaves the session
-    // ready with nothing redialling. Promising recovery there tells the user to
-    // wait for something that will never arrive.
-    //
-    // The ambiguous arm cannot be split, and that is stated rather than worked
-    // around: a post-send socket drop (session genuinely lost, redial running)
-    // and a unary timeout (session healthy) are both a plain
-    // `HostTransportFailureError` with null `fatalDetails`. With no fact to
-    // separate them, the honest copy is the one that claims neither. Narrating
-    // recovery is the session-level affordance's job, not this toast's.
+    // Neither of these errors proves session recovery is active, and one of them proves the opposite: a request-only unary timeout leaves the session ready with nothing redialling.
+    // Promising recovery there tells the user to wait for something that will never arrive.
     toastFromHostError(requestOnlyUnaryTimeout("chat.rename"), "a");
     toastFromHostError(hostAttestedNoDispatchTimeout("terminal.create"), "b");
     toastFromHostError(retryableTransportFailure("epic.create"), "c");
@@ -594,10 +544,7 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 
   function terminalTransportFailure(method: string): HostTransportFailureError {
-    // Exactly the shape `RemoteSession.notReadyRejection` mints for a request
-    // parked against a session that has gone terminal: the CLASS is transport,
-    // the `code` is the generic `RPC_ERROR`, and the real verdict rides in
-    // `fatalDetails`.
+    // Exactly the shape `RemoteSession.notReadyRejection` mints for a request parked against a session that has gone terminal: the CLASS is transport, the `code` is the generic `RPC_ERROR`, and the real verdict rides in `fatalDetails`.
     return new HostTransportFailureError({
       code: "RPC_ERROR",
       message: "Remote session is closed",
@@ -613,13 +560,8 @@ describe("transport-class causes never reach a reportable toast", () => {
   }
 
   it("keeps FATAL handling for a transport-class failure carrying a terminal verdict", () => {
-    // The mirror image of the mistake this whole branch exists to fix. A
-    // session closed by plan restriction, protocol incompatibility or revoked
-    // access settles its parked requests as `HostTransportFailureError` - so
-    // classifying on the class alone renders a FATAL as transport, promising a
-    // reconnect that is not scheduled and burying the one thing the user could
-    // act on. `fatalDetails` is the discriminator: a verdict means the host was
-    // reached and answered, which is never a connection statement.
+    // The mirror image of the mistake this whole branch exists to fix.
+    // A session closed by plan restriction, protocol incompatibility or revoked access settles its parked requests as `HostTransportFailureError` - so classifying on the class alone renders a FATAL as transport, promising a reconnect that is not scheduled and.
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
 
     toastFromHostError(
@@ -628,16 +570,12 @@ describe("transport-class causes never reach a reportable toast", () => {
     );
 
     expect(toast).not.toHaveBeenCalled();
-    // The copy states the CONDITION, not the operation. The caller's fallback
-    // ("Couldn't load epics.") names something that was never attempted, and
-    // the wire `code` is the generic `RPC_ERROR`, so routing on it alone would
-    // land there.
+    // The copy states the CONDITION, not the operation.
+    // The caller's fallback ("Couldn't load epics.") names something that was never attempted, and the wire `code` is the generic `RPC_ERROR`, so routing on it alone would land there.
     expect(vi.mocked(toast.error).mock.calls[0][0]).toBe(
       "Remote host connectivity requires a paid plan",
     );
-    // And it deposits the durable row, whose detail carries the remediation -
-    // the condition outlives the toast because, unlike a blip, it will not
-    // heal on its own.
+    // And it deposits the durable row, whose detail carries the remediation - the condition outlives the toast because, unlike a blip, it will not heal on its own.
     const state = useAppLocalNotificationsStore.getState();
     expect(state.orderedIds).toHaveLength(1);
     expect(state.byId[state.orderedIds[0]]).toMatchObject({
@@ -646,10 +584,7 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 
   it("stays completely silent for an aborted request", () => {
-    // `HostRequestAbortedError extends HostTransportFailureError`, but it is
-    // not a network condition at all - a caller-owned authority was replaced
-    // or disposed (tab closed, host rebound). Saying "reconnecting" for what
-    // was effectively a user navigation would be a NEW false statement.
+    // `HostRequestAbortedError extends HostTransportFailureError`, but it is not a network condition at all - a caller-owned authority was replaced or disposed (tab closed, host rebound).
     toastFromHostError(
       new HostRequestAbortedError({
         message: "authority replaced",
@@ -664,11 +599,7 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 
   it("leaves a retryable UNAUTHORIZED on its own reportable copy", () => {
-    // The reason the branch is `instanceof HostTransportFailureError` and NOT
-    // `isTransientHostRpcFailure`: the broader predicate also matches a
-    // host-side JWKS outage, where the host WAS reached and DID answer. That
-    // is not a connection statement and must keep its distinct copy rather
-    // than being swallowed into the generic reconnecting notice.
+    // The reason the branch is `instanceof HostTransportFailureError` and NOT `isTransientHostRpcFailure`: the broader predicate also matches a host-side JWKS outage, where the host WAS reached and DID answer.
     toastFromHostError(
       unauthorizedFatal("req-jwks", "epic.subscribe", "jwks unreachable", true),
       "Couldn't subscribe.",

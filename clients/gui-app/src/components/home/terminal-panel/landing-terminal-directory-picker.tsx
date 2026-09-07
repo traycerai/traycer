@@ -35,7 +35,6 @@ export interface LandingTerminalDirectoryPickerProps {
   readonly onCancel: () => void;
 }
 
-/** Inline chooser for the workspace directory a new landing terminal opens in. */
 export function LandingTerminalDirectoryPicker(
   props: LandingTerminalDirectoryPickerProps,
 ): ReactNode {
@@ -150,9 +149,8 @@ export function LandingTerminalDirectoryPicker(
                         </Badge>
                       ) : null}
                     </span>
-                    {/* Same reason as the worktree list: these rows disable
-                      themselves while a launch is in flight, and a disabled
-                      CommandItem drops pointer events for the whole row. */}
+                    {/* Same reason as the worktree list: these rows disable themselves while a launch is in flight, and a disabled
+                       CommandItem drops pointer events for the whole row. */}
                     <FilePathReveal content={workspacePath} side="bottom">
                       <StartTruncatedText className="pointer-events-auto block text-ui-xs text-muted-foreground">
                         {workspacePath}

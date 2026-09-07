@@ -20,21 +20,9 @@ interface FakeHostClient {
   readonly request: typeof hookMocks.request;
   readonly getActiveHostId: () => string;
   readonly onChange: (cb: () => void) => () => void;
-  /**
-   * Production resolves the app-wide host through the spine's id-pinned
-   * requester (redesign P4.2), and this fixture reaches that path
-   * transitively - `useAddressableHostId` calls it on whatever client the
-   * binding hands over. A stub missing it takes the subject down at first
-   * render rather than failing an assertion. One host here means the
-   * requester IS the client.
-   */
+  /** A stub missing it takes the subject down at first render rather than failing an assertion. */
   readonly createRequesterForHostId: (hostId: string | null) => FakeHostClient;
-  /**
-   * Read alongside the host id by `useReactiveHostReadiness`, which is what
-   * `useAddressableHostId` projects through since P4.2. Adding only the
-   * requester exposed this one: the two symbols are one shape, and a stub of
-   * a typed surface has to carry the whole shape production calls.
-   */
+  /** Adding only the requester exposed this one: the two symbols are one shape, and a stub of a typed surface has to carry the whole shape production calls. */
   readonly getRequestContextUserId: () => string | null;
 }
 
@@ -48,7 +36,6 @@ const fakeHostClient: FakeHostClient = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => fakeHostClient,
-  // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => fakeHostClient,
   useHostBinding: () => ({ hostClient: fakeHostClient }),
 }));
@@ -71,10 +58,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
     }),
 }));
 
-// `useEpicTileNavigation` itself stays REAL, so the test also proves the hook
-// commits through the nested-focus route boundary (T5) rather than mutating
-// the canvas behind it: the executor seam is captured and compared against the
-// epic's own `navigateNestedFocus`.
+// `useEpicTileNavigation` itself stays REAL, so the test also proves the hook commits through the nested-focus route boundary (T5) rather than mutating the canvas behind it: the executor seam is captured and compared against the epic's own `navigateNestedFocus`.
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => hookMocks.navigateNested,
 }));
@@ -100,13 +84,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-// Real `useHostSupportsMethod` fails closed (no negotiated manifest exists
-// under jsdom), which would silently skip the preflight in every test here.
-// Stubbed `true` by default so the ordering test below can actually exercise
-// the preflight-before-worktree path. Individual tests can override via
-// `useTuiForkProfileSupportedMock.mockReturnValue(false)` for the
-// capability-unsupported case. The hook is read on every render, so a
-// one-shot override would revert to `true` mid-test.
+// Real `useHostSupportsMethod` fails closed (no negotiated manifest exists under jsdom), which would silently skip the preflight in every test here.
 const useTuiForkProfileSupportedMock = vi.hoisted(() => vi.fn(() => true));
 vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
   VALIDATE_TUI_FORK_PROFILE_METHOD: "agent.tui.validateForkProfile",
@@ -641,10 +619,7 @@ describe("useCreateTuiAgent", () => {
     expect(persistPayload.title).toBe("Fork - Source terminal");
     expect(persistPayload.harnessSessionId).toBe("harness-session-1");
     expect(persistPayload.terminalAgentArgs).toBe("--allowedTools Edit");
-    // Renderer must thread the source into BOTH prepare and create - the
-    // host persists this create-side field as durable retry provenance
-    // (pendingForkSourceHarnessSessionId); if only prepare carried it, the
-    // direct-GUI fork would silently lose retry provenance again.
+    // Renderer must thread the source into BOTH prepare and create - the host persists this create-side field as durable retry provenance (pendingForkSourceHarnessSessionId); if only prepare carried it, the direct-GUI fork would silently lose retry provenance again.
     expect(persistPayload.forkSourceHarnessSessionId).toBe(
       "source-harness-session",
     );
@@ -783,14 +758,7 @@ describe("useCreateTuiAgent", () => {
   });
 
   it("amend-02: a tombstoned-source fork to ambient is ADMITTED by the real preflight and proceeds through the full create sequence", async () => {
-    // Host-verdict-driven, not a mocked-create-only assertion (T5 amend-02
-    // requirement #4): `sourceProfileId` is a raw, no-longer-live managed
-    // profile and `profileId` (the target) is ambient (`null`) - genuinely
-    // different, so `resolveForkProfilePreflightTarget` must NOT skip the
-    // preflight (unlike the same-profile case below). The mocked verdict
-    // mirrors exactly what `tui-fork-scope-guard-tombstoned-source-
-    // exemption.test.ts` proves the REAL host now returns for
-    // source=tombstoned-partial-overlay, target=ambient: `admitted: true`.
+    // Host-verdict-driven, not a mocked-create-only assertion (T5 amend-02 requirement #4): `sourceProfileId` is a raw, no-longer-live managed profile and `profileId` (the target) is ambient (`null`) - genuinely different, so `resolveForkProfilePreflightTarget` must NOT skip the preflight (unlike the same-profile case below).
     const calls: CapturedCall[] = [];
     hookMocks.request.mockImplementation((method, payload) => {
       calls.push({ method, payload });
@@ -893,10 +861,7 @@ describe("useCreateTuiAgent", () => {
   });
 
   it("capability-unsupported host skips preflight on cross-profile fork but still threads forkSourceTuiAgentId onto prepareLaunch", async () => {
-    // Host does not advertise agent.tui.validateForkProfile - client must
-    // fail closed (skip preflight) and defer entirely to prepareLaunch's
-    // authoritative guard. forkSourceTuiAgentId is still sent so the host
-    // can take the exact-id path.
+    // Host does not advertise agent.tui.validateForkProfile - client must fail closed (skip preflight) and defer entirely to prepareLaunch's authoritative guard.
     useTuiForkProfileSupportedMock.mockReturnValue(false);
     const { calls } = setupSequencedMock();
 
@@ -1003,10 +968,7 @@ describe("useCreateTuiAgent", () => {
     await waitFor(() => {
       expect(preflightState.resolve).not.toBeNull();
     });
-    // The preflight mutation is the ONLY one in flight at this point - if the
-    // composite excluded it, isPending would read false here even though a
-    // resubmission mid-preflight is exactly what the composite exists to
-    // prevent.
+    // The preflight mutation is the ONLY one in flight at this point - if the composite excluded it, isPending would read false here even though a resubmission mid-preflight is exactly what the composite exists to prevent.
     expect(result.current.isPending).toBe(true);
     expect(calls.map((c) => c.method)).toEqual([
       "agent.tui.validateForkProfile",
@@ -1041,13 +1003,7 @@ describe("useCreateTuiAgent", () => {
   });
 
   it("opens the canvas tab placeholder BEFORE agent.tui.prepareLaunch blocks on setup", async () => {
-    // Acceptance: "landing Worktree-mode terminal-agent navigates and
-    // opens/persists a terminal-agent placeholder before setup
-    // completion." The hook must call `openTile` before
-    // `agent.tui.prepareLaunch` resolves so the user has a visible
-    // terminal-agent canvas tab inside the Epic for the entire setup
-    // wait. We block `agent.tui.prepareLaunch` on a manual resolver
-    // and assert the placeholder is already open at that point.
+    // Acceptance: "landing Worktree-mode terminal-agent navigates and opens/persists a terminal-agent placeholder before setup completion." The hook must call `openTile` before `agent.tui.prepareLaunch` resolves so the user has a visible terminal-agent canvas tab inside the Epic for the entire setup wait.
     const calls: CapturedCall[] = [];
     const startResolvers: Array<(value: unknown) => void> = [];
     hookMocks.request.mockImplementation((method, payload) => {
@@ -1112,10 +1068,7 @@ describe("useCreateTuiAgent", () => {
       });
     });
 
-    // While `agent.tui.prepareLaunch` is still pending the placeholder
-    // canvas tab is already opened with the same id we will eventually
-    // persist. The harness has not started - `epic.createTuiAgent`
-    // is not yet on the wire.
+    // While `agent.tui.prepareLaunch` is still pending the placeholder canvas tab is already opened with the same id we will eventually persist.
     await waitFor(() => {
       expect(startResolvers.length).toBe(1);
     });
@@ -1289,10 +1242,7 @@ describe("useCreateTuiAgent", () => {
     // Harness never starts: the persisted record is never written when
     // prepareLaunch rejects.
     expect(methodOrder).not.toContain("epic.createTuiAgent");
-    // Placeholder canvas tab IS opened before launch preparation so the
-    // user is not stranded outside the Epic context on failure. The
-    // recovery surface is the placeholder + toast - no hidden
-    // unrecoverable owner state is created.
+    // Placeholder canvas tab IS opened before launch preparation so the user is not stranded outside the Epic context on failure.
     expect(hookMocks.openTile).toHaveBeenCalledTimes(1);
     const createCall = calls.find((c) => c.method === "worktree.create");
     expect(createCall).toBeDefined();
@@ -1402,10 +1352,7 @@ describe("useCreateTuiAgent", () => {
       wrapper: queryClientWrapper(queryClient),
     });
 
-    // Mode-only intent with no entries - prepareLaunch's host seam
-    // (`materializeDefaultBinding`) seeds the default owner-scoped Local binding
-    // from the epic's folders when it sees no row, so no per-entry worktree call
-    // needs to fire here.
+    // Mode-only intent with no entries - prepareLaunch's host seam (`materializeDefaultBinding`) seeds the default owner-scoped Local binding from the epic's folders when it sees no row, so no per-entry worktree call needs to fire here.
     const intent: WorktreeIntent = {
       entries: [],
     };
@@ -1577,11 +1524,7 @@ describe("useCreateTuiAgent", () => {
   });
 
   it("persists binding-derived workspaceFolders (primary first) onto the terminal-agent record", async () => {
-    // Host has already projected the binding entries into the
-    // `agent.tui.prepareLaunch` response with the primary worktree
-    // path at index 0. The hook must forward that array verbatim to
-    // `epic.createTuiAgent` so reopen and workspace-folder detection both
-    // run from the bound worktree path.
+    // The hook must forward that array verbatim to `epic.createTuiAgent` so reopen and workspace-folder detection both run from the bound worktree path.
     const calls: CapturedCall[] = [];
     hookMocks.request.mockImplementation((method, payload) => {
       calls.push({ method, payload });

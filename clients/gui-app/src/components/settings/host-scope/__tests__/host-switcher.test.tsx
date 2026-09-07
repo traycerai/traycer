@@ -4,14 +4,8 @@ import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
-/**
- * The switcher's empty state is the second consumer of the rule the gate
- * already enforces: a FAILED host list is not an empty account. These cases
- * exist because the rule was fixed at the gate and this consumer was missed —
- * the sidebar confidently said "No hosts yet" beside a panel saying the lists
- * failed, and its Add-host opener recorded an empty known-hosts snapshot that
- * a later successful retry turned into a false "your host just connected".
- */
+/** The switcher's empty state is the second consumer of the rule the gate already enforces: a failed host list
+ * is not an empty account. */
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -64,9 +58,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
       screen.getByTestId("settings-host-switcher-lists-failed"),
     ).not.toBeNull();
     expect(screen.queryByTestId("settings-host-switcher-empty")).toBeNull();
-    // Add host is withheld here on purpose: opening it now would snapshot an
-    // empty known-hosts list, and the arrival watcher would later announce a
-    // pre-existing host as the new machine.
+    // Add host is withheld here on purpose: opening it now would snapshot an empty known-hosts list, and the
+    // arrival watcher would later announce a pre-existing host as the new machine.
     expect(screen.queryByTestId("settings-host-switcher-empty-add")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
@@ -127,10 +120,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
   });
 
   it("surfaces a partial failure inside the popover while hosts are in hand", () => {
-    // One source list failed while the other still contributed rows: the
-    // union is nonempty, so the empty branch never runs — but presenting
-    // half an account as all of it is the same false claim. The rows stay
-    // usable; the footer names the gap and offers the retry.
+    // One source list failed while the other still contributed rows: the union is nonempty, so the empty branch
+    // never runs - but presenting half an account as all of it is the same false claim.
     const onRetryLists = vi.fn();
     render(
       <HostSwitcher
@@ -163,17 +154,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
   });
 
   it("labels a plan-gated host 'requires upgrade', not 'unreachable'", () => {
-    // Same `connectable: false`, different fact: one is fixed by an upgrade,
-    // the other maybe by waiting. One word covering both sent people
-    // debugging their network over a billing limit.
-    //
-    // The row's word comes from `health.state` now, not from `connectable` /
-    // `planRestricted` — those decide whether the row can be PICKED, which is
-    // a route question, while the word is a status question (P4.3's ruling D).
-    // So the fixture has to say what the host's health IS, and the route flags
-    // stay because pick legality is still theirs to decide. `unreachable` is
-    // no longer a row word at all, which makes the second assertion below
-    // stronger than it was rather than weaker.
+    // `unreachable` is no longer a row word at all, which makes the second assertion below stronger than it was
+    // rather than weaker.
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
@@ -266,13 +248,8 @@ describe("<HostSwitcher /> trigger status", () => {
 });
 
 describe("<HostSwitcher /> trailing action", () => {
-  // The two surfaces mounting this picker end the list differently on
-  // purpose: Settings owns the add-host dialog — the snapshot it takes and
-  // every failure state it can land in all live there — so its footer opens
-  // that flow directly. The header's usage popover only WATCHES a host; it
-  // has no business growing a second copy of that dialog, so its footer
-  // instead points back to Settings. The host rows above are identical
-  // either way — only this trailing row changes with `action.kind`.
+  // The header's usage popover only watches a host; it has no business growing a second copy of that dialog, so
+  // its footer instead points back to Settings.
   it("ends the list with Manage hosts…, not Add host…, for the manage-hosts kind", () => {
     const onSelect = vi.fn();
     render(
@@ -307,10 +284,8 @@ describe("<HostSwitcher /> trailing action", () => {
   });
 
   it("offers Manage hosts…, not Add host…, in the genuinely-empty branch", () => {
-    // Same rule at the empty branch's opener: a picker that ends in
-    // manage-hosts must not fall back to add-host just because `hosts` is
-    // empty — the empty state is still Settings-vs-popover, not a special
-    // third ending.
+    // Same rule at the empty branch's opener: a picker that ends in manage-hosts must not fall back to add-host
+    // just because `hosts` is empty - the empty state is still Settings-vs-popover, not a special third ending.
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
@@ -340,9 +315,8 @@ describe("<HostSwitcher /> trailing action", () => {
 
 describe("<HostSwitcher /> setting-up status word (M5)", () => {
   it("labels the LOCAL machine's row 'setting up' while a remote row keeps its own status", () => {
-    // `settingUp` is fed to each `HostScopeOption` individually (from the
-    // mutation lane), so the local row and a remote row can disagree even
-    // though they share the same picker.
+    // `settingUp` is fed to each `HostScopeOption` individually (from the mutation lane), so the local row and a
+    // remote row can disagree even though they share the same picker.
     render(
       <HostSwitcher
         hosts={[

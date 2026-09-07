@@ -1,8 +1,3 @@
-/**
- * T1 pure tests: layout v2 authority, ten invariants through every reducer,
- * v1/v2 migration repair, TAB_KINDS surface exhaustiveness, and multi-group
- * round-trips (ratios, active item, route backing).
- */
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   createEmptySplit,
@@ -69,9 +64,6 @@ import type {
   TabSurfaceDescriptor,
 } from "@/stores/tabs/types";
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
 
 const EPIC_A: TabRef = { kind: "epic", id: "epic-tab-a" };
 const EPIC_B: TabRef = { kind: "epic", id: "epic-tab-b" };
@@ -232,9 +224,6 @@ function resetTabsStore(): void {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Registry exhaustiveness
-// ---------------------------------------------------------------------------
 
 describe("TAB_KINDS surface exhaustiveness", () => {
   it("keeps registry keys, surface contract, and dispatcher aligned", () => {
@@ -310,11 +299,8 @@ describe("TAB_KINDS surface exhaustiveness", () => {
   });
 
   /**
-   * `duplication` / `newWindow` on the surface descriptor and
-   * `canDuplicate` / `canOpenInNewWindow` on the built `HeaderTab` describe
-   * the same capability from two places. They must never disagree: split
-   * commands read the descriptor while the strip reads the tab, so a drift
-   * would let one path offer an action the other refuses.
+   * `duplication` / `newWindow` on the surface descriptor and `canDuplicate` / `canOpenInNewWindow`
+   * on the built `HeaderTab` describe the same capability from two places.
    */
   it("surface capabilities agree with the built HeaderTab flags", () => {
     const cases = [
@@ -373,9 +359,6 @@ describe("tabs store transaction layout", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Invariants through every pure reducer
-// ---------------------------------------------------------------------------
 
 describe("layout reducers preserve invariants", () => {
   describe("createLayoutItem", () => {
@@ -584,7 +567,7 @@ describe("layout reducers preserve invariants", () => {
       );
       expect(blocked).toBe(filledUnavailable);
 
-      // EPIC_B already exists as a flat tab — fill must no-op (inv 1)
+      // EPIC_B already exists as a flat tab - fill must no-op (inv 1)
       const withSibling = createEmptySplit(
         withTabs([EPIC_A, EPIC_B]),
         {
@@ -1175,9 +1158,8 @@ describe("layout reducers preserve invariants", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Migration: valid + malformed v1 (stripOrder) and v2 (items)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Migration: valid +
+// malformed v1 (stripOrder) and v2 (items)
 
 describe("migrateTabsPersistedState", () => {
   it("returns an empty v2 layout for non-objects", () => {
@@ -1240,9 +1222,8 @@ describe("migrateTabsPersistedState", () => {
       stripOrder: [EPIC_A, DRAFT_A],
     });
 
-    // v1 persisted only stripOrder. activeTabId and activeDraftId belonged to
-    // the canvas / landing-draft payloads, whose hydrated values are consumed
-    // later by TabCommandCoordinator.
+    // v1 persisted only stripOrder. activeTabId and activeDraftId belonged to the canvas /
+    // landing-draft payloads, whose hydrated values are consumed later by TabCommandCoordinator.
     expect(migrated.activeItemId).toBe(tabItemId(DRAFT_A));
   });
 
@@ -1575,9 +1556,8 @@ describe("migrateTabsPersistedState", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Multi-group round-trip: ratios, active item, route backing + selectors
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Multi-group
+// round-trip: ratios, active item, route backing + selectors
 
 describe("multi-group round-trip", () => {
   afterEach(() => {

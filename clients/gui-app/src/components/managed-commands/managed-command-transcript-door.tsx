@@ -2,19 +2,11 @@ import { ExternalLink } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ManagedCommandOpenInTabButton } from "@/components/managed-commands/managed-command-open-in-tab-button";
 
-/**
- * Open-in-Tab as a transcript card offers it - the start card and every restart
- * card share this one door, so a deleted shell reads the same way from each.
- *
- * Disabled once the shell is gone rather than hidden: deleting a shell destroys
- * its log with it, so the tab would open onto nothing but a terminal notice -
- * the button says why instead of minting one, and the card keeps its shape.
- */
+/** Disabled once the shell is gone rather than hidden: deleting a shell destroys its log with it, so the tab
+ * would open onto nothing but a terminal notice. */
 export function ManagedCommandTranscriptDoor(props: {
   readonly commandId: string;
-  /** The host no longer has this shell. */
   readonly gone: boolean;
-  /** `null` outside a tile, where there is nowhere to open a tab. */
   readonly onOpen: ((commandId: string) => void) | null;
   readonly testId: string;
 }) {
@@ -27,11 +19,8 @@ export function ManagedCommandTranscriptDoor(props: {
         sideOffset={undefined}
         align={undefined}
       >
-        {/* `aria-disabled` rather than `disabled`: a disabled button takes no
-            pointer events and leaves the tab order, which would swallow the
-            very tooltip that explains why it cannot be pressed - so it stays
-            focusable and carries the reason in its own name, for anyone who
-            cannot hover. */}
+        {/* `aria-disabled` rather than `disabled`: a disabled button takes no pointer events and leaves the tab order,
+           which would swallow the very tooltip that explains why it cannot be pressed. */}
         <button
           type="button"
           aria-disabled

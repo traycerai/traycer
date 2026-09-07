@@ -13,13 +13,7 @@ export interface QuoteTextSnapshot {
 
 const LINE_BREAK_REGEX = /\r\n?|\n/;
 
-/**
- * Builds the `blockquote` node inserted into the composer for a quoted
- * selection. Plain text becomes one paragraph per line; a selection wholly
- * inside a code block becomes a single `codeBlock` child instead, keeping the
- * raw (untrimmed) lines - the host flattens either shape to plain text inside
- * `<user_quoted_section>`, so fence fidelity here is a client-visual concern.
- */
+/** Builds the `blockquote` node inserted into the composer for a quoted selection. Plain text becomes one paragraph per line; a selection wholly inside a code block becomes a single `codeBlock` child instead, keeping the raw (untrimmed) lines - the host flattens either shape to plain text inside `<user_quoted_section>`, so fence fidelity here is a client-visual concern. */
 export function buildQuoteBlockquote(snapshot: QuoteTextSnapshot): JsonContent {
   if (snapshot.fenceLanguage !== null) {
     return {
@@ -33,11 +27,7 @@ export function buildQuoteBlockquote(snapshot: QuoteTextSnapshot): JsonContent {
   };
 }
 
-/**
- * Appends `blocks` to a doc's top-level content, dropping a single existing
- * trailing empty paragraph first so repeat quotes don't accumulate blank gaps
- * between them.
- */
+/** Appends `blocks` to a doc's top-level content, dropping a single existing trailing empty paragraph first so repeat quotes don't accumulate blank gaps between them. */
 export function appendBlocks(
   doc: JsonContent,
   blocks: ReadonlyArray<JsonContent>,
@@ -49,13 +39,7 @@ export function appendBlocks(
   };
 }
 
-/**
- * Single reusable action for quoting into a chat tab's draft - a future
- * keybinding or command-palette entry calls this same function. Riding
- * `replaceDraft(taskId, next, null)` intentionally reuses the composer's
- * existing `setContent(..., null)` -> `focus("end")` path, so this adds no
- * focus code of its own.
- */
+/** Single reusable action for quoting into a chat tab's draft - a future keybinding or command-palette entry calls this same function. Riding `replaceDraft(taskId, next, null)` intentionally reuses the composer's existing `setContent(..., null)` -> `focus("end")` path, so this adds no focus code of its own. */
 export function appendQuoteToDraft(
   taskId: string,
   blockquoteNode: JsonContent,
@@ -79,12 +63,7 @@ function quoteCodeBlockNode(text: string, language: string): JsonContent {
   };
 }
 
-// A triple-click's captured `Selection.toString()` carries trailing
-// block-boundary blank lines the browser synthesizes at the selection's end
-// (one exact-last-paragraph triple-click observed 2 trailing LFs in real
-// Chromium). Left alone, each becomes a real empty paragraph inside the
-// blockquote - visible blank rows the user never selected. Internal blank
-// lines (between two real lines) stay: they're deliberate paragraph spacing.
+// Left alone, each becomes a real empty paragraph inside the blockquote - visible blank rows the user never selected.
 function normalizedQuoteLines(text: string): string[] {
   const lines = text
     .split(LINE_BREAK_REGEX)

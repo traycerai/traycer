@@ -11,37 +11,7 @@ import { NoiseDecryptError, NoiseNonceError, NoiseReplayError } from "./errors";
 import type { NoiseHandshakeState } from "./handshake-state";
 import { ReplayWindow } from "./replay-window";
 
-/**
- * The post-handshake transport. Unlike bare Noise transport (implicit,
- * strictly-sequential nonces that assume in-order reliable delivery), this
- * session carries an **explicit monotonic counter** in each frame and enforces
- * anti-replay with a sliding window — because the relay/mux underneath may
- * reorder, duplicate, or drop frames. That explicit counter is the reviewed
- * transport-path deviation from the "cipher-state counter only" wording: the
- * stateless cipher API still receives a single synchronously reserved counter,
- * and this session guards it so a future rekey/resume/refactor cannot rewind
- * and reuse a (key, nonce) pair.
- *
- * Frame wire format:  `[v:1][counter:8 big-endian][AES-GCM ciphertext‖tag]`
- *  - `v` (envelope suite version) enables suite agility.
- *  - `counter` doubles as the AEAD nonce input; it is authenticated (it is part
- *    of the AEAD associated data), so it cannot be tampered with.
- *
- * **Concurrency invariant (T8-F1).** A single session multiplexes N mux streams
- * (architecture §3), so both directions are exercised concurrently:
- *  - `encrypt` is concurrency-safe: the send counter is reserved *synchronously*
- *    (no await between read and increment) and the seal runs through the
- *    stateless `CipherState.sealWithNonce`, so every concurrent frame gets a
- *    unique nonce and no (key, nonce) pair is ever reused.
- *  - `decrypt` is serialized per session behind a mutex, so the check → open →
- *    commit against the shared replay window is atomic (a concurrent duplicate
- *    cannot slip past the window, and the receive nonce is never clobbered).
- *
- * Forward secrecy is per-session: the NK handshake derives these transport keys
- * from fresh ephemeral X25519 keys (the `ee` DH), so once a session ends and its
- * keys are wiped, later compromise of the host's static key cannot decrypt this
- * session's traffic.
- */
+/** The post-handshake transport. */
 export class NoiseSession {
   private readonly sendCipher: CipherState;
   private readonly receiveCipher: CipherState;
@@ -82,12 +52,7 @@ export class NoiseSession {
     return this.sendCounter;
   }
 
-  /**
-   * Seal `plaintext` into a transport frame. Safe to call concurrently: the
-   * counter is reserved synchronously before any await. `associatedData` lets a
-   * caller (e.g. the mux above) bind outer routing metadata to the frame; it is
-   * authenticated but not encrypted. Pass an empty array when there is none.
-   */
+  /** Seal `plaintext` into a transport frame. */
   async encrypt(
     plaintext: Uint8Array,
     associatedData: Uint8Array,
@@ -102,12 +67,7 @@ export class NoiseSession {
     return concatBytes([header, ciphertext]);
   }
 
-  /**
-   * Open a transport frame. Serialized per session so the counter is checked
-   * against the replay window, the frame is opened, and the window is advanced
-   * as one atomic step. The window advances *only after* the AEAD tag verifies,
-   * so a forged frame can neither be accepted nor poison the window.
-   */
+  /** Open a transport frame. */
   async decrypt(
     frame: Uint8Array,
     associatedData: Uint8Array,

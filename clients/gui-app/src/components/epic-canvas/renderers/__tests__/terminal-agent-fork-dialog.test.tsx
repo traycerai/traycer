@@ -26,16 +26,10 @@ import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
 
 const dialogMocks = vi.hoisted(() => ({
   create: vi.fn<(input: TerminalForkCreateInput) => Promise<string | null>>(),
-  // Keyed by the exact `client` reference `useHostQuery` was called with, so
-  // tests can assert the dialog reads `providers.list` from the RIGHT host
-  // client (its own `hostClient` prop) and never a decoy/other one.
+  // Keyed by the exact `client` reference `useHostQuery` was called with, so tests can assert the dialog reads `providers.list` from the RIGHT host client (its own `hostClient` prop) and never a decoy/other one.
   providersByClient: new Map<unknown, unknown>(),
   forkProfileSupported: true,
   toast: vi.fn<(message: string) => void>(),
-  // Stable identity across re-renders: a fresh `vi.fn()` per hook call would
-  // re-trigger the dialog's admission effect forever (mutateAsync is in the
-  // effect dep array), hanging any continue-mode test that waits for
-  // cross-profile settlement.
   validateMutateAsync: vi.fn().mockResolvedValue({ verdicts: [] }),
 }));
 
@@ -51,9 +45,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", async (importOriginal) => {
   };
 });
 
-// Bulk fork-admission preflight is stubbed so continue-mode tests that open
-// the dialog don't hit the partially-mocked `use-host-query` module below
-// (which only implements `useHostQuery`, not the mutation-lifecycle helper).
+// Bulk fork-admission preflight is stubbed so continue-mode tests that open the dialog don't hit the partially-mocked `use-host-query` module below (which only implements `useHostQuery`, not the mutation-lifecycle helper).
 vi.mock("@/hooks/agent/use-validate-tui-fork-profile-mutation", () => ({
   useValidateTuiForkProfile: () => ({
     mutateAsync: dialogMocks.validateMutateAsync,
@@ -71,13 +63,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// The dialog validates its seeded profileId against live `providers.list`
-// read from its OWN `hostClient` prop (see resolve-seeded-profile-id.ts /
-// use-resolved-seeded-profile-id.ts) via `useHostQuery` directly - not the
-// app-wide active host. Every case in this file passes `hostClient={null}`,
-// and `dialogMocks.providersByClient` has no entry for `null` unless a test
-// seeds one - so `useHostQuery` returns no data by default and every seed
-// holds its profileId verbatim (no profiles to judge against).
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
     readonly client: unknown;
@@ -307,11 +292,7 @@ describe("<TerminalAgentForkDialog />", () => {
   });
 
   it("does not bleed a CANCELLED fork's workspace into the next fork in the same epic", async () => {
-    // `pendingForkTerminalAgentStagingKey` is per-epic, so both forks below
-    // share one staging slot - and `readSeededLaunchWorkspace` prefers the
-    // live snapshot over the new target's own `workspaceSeed`. Cancelling
-    // must therefore drop this fork's scratch workspace, or fork B silently
-    // launches into fork A's folders and primary.
+    // Cancelling must therefore drop this fork's scratch workspace, or fork B silently launches into fork A's folders and primary.
     const stagingKey = pendingForkTerminalAgentStagingKey(
       "host-test",
       "epic-test",
@@ -334,9 +315,7 @@ describe("<TerminalAgentForkDialog />", () => {
       />,
     );
 
-    // The picker is mocked out in this file, so stand in for it: the user adds
-    // a second folder and promotes it to primary, which the real picker
-    // mirrors into exactly these two slots.
+    // The picker is mocked out in this file, so stand in for it: the user adds a second folder and promotes it to primary, which the real picker mirrors into exactly these two slots.
     act(() => {
       useSeededWorkspaceSnapshotStore.getState().setSnapshot(stagingKey, {
         folders: [REPO_A.path, REPO_A_EXTRA.path],
@@ -395,9 +374,7 @@ describe("<TerminalAgentForkDialog />", () => {
     await waitFor(() => {
       expect(dialogMocks.create).toHaveBeenCalledTimes(1);
     });
-    // Fork B launches into its OWN single folder. Without the cancel-time
-    // clear it would inherit fork A's two folders and A's `/repo-a-extra`
-    // primary out of the shared slot.
+    // Without the cancel-time clear it would inherit fork A's two folders and A's `/repo-a-extra` primary out of the shared slot.
     expect(dialogMocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceMode: "inherit",
@@ -861,9 +838,7 @@ describe("<TerminalAgentForkDialog />", () => {
       />,
     );
 
-    // The bulk fork-admission preflight is gated to settlement (amend-01 Fix
-    // 3), so a cross-profile pick must wait for the mocked mutation's
-    // microtask to resolve before the CTA will accept it.
+    // The bulk fork-admission preflight is gated to settlement (amend-01 Fix 3), so a cross-profile pick must wait for the mocked mutation's microtask to resolve before the CTA will accept it.
     await act(async () => {
       await Promise.resolve();
     });
@@ -909,10 +884,6 @@ describe("<TerminalAgentForkDialog />", () => {
       />,
     );
 
-    // This file's stub picker has no admission awareness of its own (real
-    // row-disabling is covered by `profile-dropdown.test.tsx`) - clicking it
-    // stands in for "some UI path reached a cross-profile pick", proving the
-    // dialog's OWN capability lock refuses the submit regardless.
     fireEvent.click(
       screen.getByRole("button", { name: "Select Work profile" }),
     );
@@ -1025,11 +996,7 @@ function expectButtonDisabled(name: RegExp): void {
 }
 
 /**
- * Deliberately a raw `document` scan, not `screen.getByRole`. These tests drive
- * buttons while a Radix dialog is open, which marks the background subtree
- * `aria-hidden` - so the buttons are correctly absent from the accessibility
- * tree and a role query cannot reach them. Their un-presented-but-still-mounted
- * state is the behaviour under test, so the query has to bypass the a11y tree.
+ * These tests drive buttons while a Radix dialog is open, which marks the background subtree `aria-hidden` - so the buttons are correctly absent from the accessibility tree and a role query cannot reach them.
  */
 function getDocumentButton(label: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll("button")).find(

@@ -39,10 +39,8 @@ function selectSlashSlice(state: {
 }): SlashPickerSlice {
   return {
     active: state.open && state.kind === "slash",
-    // Watched, not just reported: a swap to a session with an identical query
-    // and scope leaves every other input untouched, and `openPicker` has
-    // already dropped the rows. Without the id in the slice this effect never
-    // re-runs and the menu stays empty until the next keystroke.
+    // Watched, not just reported: a swap to a session with an identical query and scope leaves every other input untouched, and `openPicker` has already dropped the rows.
+    // Without the id in the slice this effect never re-runs and the menu stays empty until the next keystroke.
     sessionId: state.kind === "slash" ? state.sessionId : null,
     query: state.kind === "slash" ? state.query : "",
     slashScope: state.kind === "slash" ? state.slashScope : null,
@@ -86,9 +84,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
 
   useEffect(() => {
     if (!active || sessionId === null) return;
-    // `slashScope` is part of the published identity, not just an input: the
-    // store rejects this list if the caret has already flipped the scope since
-    // these items were built under it.
+    // `slashScope` is part of the published identity, not just an input: the store rejects this list if the caret has already flipped the scope since these items were built under it.
     pickerStore.getState().setItems({
       sessionId,
       kind: "slash",
@@ -97,9 +93,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
       step: STATIC_STEP,
       items,
       loading: isLoading,
-      // A failed catalog fetch must render as an error with a retry, never as
-      // "No matching commands" - an empty catalog and a dead provider are
-      // different states.
+      // A failed catalog fetch must render as an error with a retry, never as "No matching commands" - an empty catalog and a dead provider are different states.
       loadFailed: error !== null,
       retryLoad: error !== null ? retryLoad : null,
     });
@@ -121,22 +115,13 @@ export function useSlashItems(params: UseSlashItemsParams): void {
   }, [active, isFetching, pickerStore]);
 }
 
-/**
- * Projects the fetched catalog into rows for the caret's scope.
- *
- * Scope depends on position, never on which trigger opened the picker - `/` and
- * `$` list the same commands. Past the start of the prompt a native command
- * stays listed and explains itself rather than vanishing, because the user
- * asked for the catalog and a row disappearing mid-typing reads as a bug.
- */
+/** Scope depends on position, never on which trigger opened the picker - `/` and `$` list the same commands. Past the start of the prompt a native command stays listed and explains itself rather than vanishing, because the user asked for the catalog and a row disappearing mid-typing reads as a bug. */
 export function slashItemsForScope(
   commands: ReadonlyArray<SlashCommand>,
   slashScope: ComposerSlashScope | null,
 ): ReadonlyArray<ComposerPickerItem> {
   return commands.map((command: SlashCommand): ComposerPickerItem => {
-    // Native provider commands are parsed only at the very start of the prompt
-    // (the Claude CLI bails unless the trimmed prompt starts with `/`), so
-    // inline they stay listed but unselectable.
+    // Native provider commands are parsed only at the very start of the prompt (the Claude CLI bails unless the trimmed prompt starts with `/`), so inline they stay listed but unselectable.
     const disabled = slashScope === "skills" && command.kind !== "skill";
     return {
       id: `slash:${command.name}`,
@@ -149,11 +134,6 @@ export function slashItemsForScope(
 
 const STATIC_STEP = { kind: "root" as const };
 
-/**
- * Rendered twice for the highlighted row: as the preview panel's disabled
- * notice, and as the row's screen-reader-only text. Both prefix it with
- * "Disabled", so the wording has to read as a standalone sentence following
- * that word.
- */
+/** Rendered twice for the highlighted row: as the preview panel's disabled notice, and as the row's screen-reader-only text. Both prefix it with "Disabled", so the wording has to read as a standalone sentence following that word. */
 export const NATIVE_COMMAND_DISABLED_REASON =
   "This command is only allowed at the start of the message";

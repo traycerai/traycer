@@ -207,9 +207,7 @@ async function helper(): Promise<void> {
             join(barrierDir, "supervisor-bind"),
             JSON.stringify(message),
           );
-          // Exercise only the low-level rebind primitive: publish the
-          // actuator identity before granting the executor permission to
-          // start it. Production's C-envelope topology is tested separately.
+          // Exercise only the low-level rebind primitive: publish the actuator identity before granting the executor permission to start it.
           void rebindAttemptLockLiveness(outcome.handle, message.pid, {})
             .then(() => {
               executorProcess.stdin.write(

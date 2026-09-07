@@ -1,13 +1,4 @@
-/**
- * Push registration lifecycle properties.
- *
- * The plugin and the authn HTTP calls are faked at the package boundary; the
- * token source is a hand-rolled in-memory stand-in for `ITokenStore`'s
- * `get`/`subscribe` slice. The claims under test: registration follows the
- * login session (start-signed-in, sign-in, rotation, sign-out), permission
- * denial is respected without nagging, no failure ever escapes, and a tapped
- * push becomes the GUI's activation envelope - buffered across cold start.
- */
+/** Push registration lifecycle properties. */
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { PluginListenerHandle } from "@capacitor/core";
 import type {
@@ -91,7 +82,6 @@ async function drain(): Promise<void> {
   }
 }
 
-/** A hand-driven stand-in for the shell's foreground-resume edge. */
 class FakeSystemResume implements SystemResumeSource {
   private readonly handlers = new Set<(event: SystemResumeEvent) => void>();
 
@@ -108,7 +98,6 @@ class FakeSystemResume implements SystemResumeSource {
   }
 }
 
-/** For tests where the resume edge is not what is under test. */
 const NO_RESUME: SystemResumeSource = {
   onSystemResumed: () => ({ dispose: () => {} }),
 };
@@ -122,20 +111,17 @@ type PushPluginEvent =
   | PushRegistrationError
   | PushNotificationAction;
 
-/**
- * A class rather than an object literal: `addListener`'s single broad-param
- * implementation satisfies the slice's overloads only under method-position
- * bivariance, which strictFunctionTypes reserves for method declarations.
- */
+  /**
+   * A class rather than an object literal: `addListener`'s single broad-param implementation satisfies the slice's overloads only under method-position bivariance, which strictFunctionTypes reserves for method declarations.
+   */
 class FakePlugin implements PushNotificationsPluginSlice {
   private registration: ((token: PushRegistrationToken) => void) | null = null;
   private action: ((action: PushNotificationAction) => void) | null = null;
 
   readonly requestPermissions: Mock<() => Promise<PermissionResult>>;
   /**
-   * Set to make `register()` reject. That is the Android shape when Firebase
-   * never initialized (no `google-services.json`): the plugin call itself
-   * throws instead of reporting through the `registrationError` event.
+   * Set to make `register()` reject.
+   * That is the Android shape when Firebase never initialized (no `google-services.json`): the plugin call itself throws instead of reporting through the `registrationError` event.
    */
   registerError: Error | null = null;
   // The real OS answers `register()` through the `registration` event; the
@@ -145,9 +131,7 @@ class FakePlugin implements PushNotificationsPluginSlice {
   });
 
   /**
-   * Mutable on purpose: the late-grant tests flip this from "denied" to
-   * "granted" between start and resume, standing in for the person toggling
-   * Traycer on in the OS Settings app.
+   * Mutable on purpose: the late-grant tests flip this from "denied" to "granted" between start and resume, standing in for the person toggling Traycer on in the OS Settings app.
    */
   permission: CapacitorPushPermissionState;
 
@@ -216,7 +200,6 @@ interface FetchCalls {
   removed: Array<{ bearer: string; token: string }>;
 }
 
-/** The iOS-sandbox default; `controllerFor` when the pair is what is tested. */
 function controller(input: {
   readonly plugin: FakePlugin;
   readonly registerResult: PushTokenFetchResult;
@@ -528,9 +511,8 @@ describe("MobilePushRegistration", () => {
     await drain();
     expect(calls.registered).toHaveLength(1);
 
-    // Sign out while the register HTTP call is still on the wire, then let
-    // it resolve ok. The late success must not mark the pair as registered -
-    // the sign-out's remove just deleted (or will delete) that row.
+    // Sign out while the register HTTP call is still on the wire, then let it resolve ok.
+    // The late success must not mark the pair as registered - the sign-out's remove just deleted (or will delete) that row.
     await source.setSignedOut();
     releaseRegister.fn?.();
     await drain();
@@ -580,10 +562,8 @@ describe("MobilePushRegistration", () => {
 });
 
 /**
- * The `IRunnerHost.pushPermission` half: what the Settings row reads and what
- * its Enable button does. The fixtures start from `denied` so the sign-in path
- * settles without prompting - `ensureRegistered` only prompts on a `prompt`
- * state - which leaves the request under test as the only prompt in the test.
+ * The `IRunnerHost.pushPermission` half: what the Settings row reads and what its Enable button does.
+ * The fixtures start from `denied` so the sign-in path settles without prompting - `ensureRegistered` only prompts on a `prompt` state - which leaves the request under test as the only prompt in the test.
  */
 describe("MobilePushRegistration permission surface", () => {
   it("maps Capacitor's four states onto the shared three", () => {
@@ -682,9 +662,7 @@ describe("MobilePushRegistration permission surface", () => {
       removeResult: OK,
     });
 
-    // `start()` is what hands this object the token source; bootstrap always
-    // calls it before the GUI can mount, so this is the unreachable-by-design
-    // gate - pinned so it stays a silent stop rather than becoming a throw.
+    // `start()` is what hands this object the token source; bootstrap always calls it before the gui can mount, so this is the unreachable-by-design gate - pinned so it stays a silent stop rather than becoming a throw.
     await expect(push.requestPermission()).resolves.toBe("granted");
     expect(plugin.register).not.toHaveBeenCalled();
     expect(calls.registered).toEqual([]);
@@ -712,14 +690,6 @@ describe("MobilePushRegistration permission surface", () => {
   });
 });
 
-/**
- * The controller is platform-agnostic by construction, so these cover the
- * things that are genuinely Android-shaped rather than re-running the iOS
- * suite: the `(platform, environment)` pair authn receives, the two distinct
- * permission shapes API 33 draws a line between, and the way a build with no
- * Firebase config fails - `register()` rejecting outright, which is a
- * different path from the `registrationError` event iOS uses.
- */
 describe("MobilePushRegistration on Android", () => {
   function androidController(input: { readonly plugin: FakePlugin }): {
     push: MobilePushRegistration;
@@ -817,7 +787,7 @@ describe("MobilePushRegistration on Android", () => {
     expect(calls.registered).toEqual([]);
     expect(warn).toHaveBeenCalled();
 
-    // And a later signed-in app that DOES have the config still registers -
+    // And a later signed-in app that does have the config still registers -
     // the failure left no latch behind.
     plugin.registerError = null;
     await source.setSignedIn(credentials("user-1", "bearer-2"));

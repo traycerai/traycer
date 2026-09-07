@@ -1,19 +1,4 @@
-// The boot card's escape hatch must survive its own surface being replaced
-// mid-press.
-//
-// WHY A BROWSER GATE. The defect is an input-dispatch fact, not a React fact:
-// when the element a press started on leaves the document before release,
-// Chromium emits NO `click`, so an `onClick` handler never runs and the
-// navigation never happens. jsdom has no input pipeline - Testing Library
-// dispatches `click` directly - so every jsdom test of this button passes on
-// the broken build. This driver presses with `Input.dispatchMouseEvent`,
-// swaps the surface while the button is held, releases, and counts.
-//
-// Reproduced from a CDP capture of a real user press on the shipped card:
-// pointerdown/mousedown on `host-boot-open-settings`, mouseup 198ms later on
-// the tree that replaced it, and no click event at all.
-//
-//   bun scripts/boot-escape-hatch-press-browser.mjs
+// Boot-card escape hatch must survive a mid-press surface swap. Chromium emits no `click` if the press target is removed before release; jsdom dispatches `click` directly.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
@@ -110,11 +95,8 @@ try {
   );
   await settle(client);
 
-  // ── THE MEASURED PREMISE ────────────────────────────────────────────────
-  // An ordinary press and release, no swap: exactly one activation. This runs
-  // first because it is what makes the swap case meaningful - if the button
-  // never activated at all, "it activates across a swap" would be satisfied by
-  // a fixture that is simply broken, and a double-fire would hide here.
+  // Ordinary press, no swap: exactly one activation. Without this, a dead
+  // fixture would still pass the swap case.
   await reset(client);
   const centre = await rectCentre(client, BUTTON);
   await press(client, centre, "left");
@@ -179,10 +161,8 @@ try {
   process.exitCode = 1;
 } finally {
   client?.close();
-  // `terminateProcessTree` replaces the old `chrome.kill("SIGKILL")` plus a
-  // 300ms sleep: it takes down the whole process GROUP and verifies it is
-  // gone, so the profile below is removed from under a browser that is
-  // provably finished writing rather than one that has probably stopped.
+  // terminateProcessTree kills the group and verifies it is gone before rm
+  // of the profile.
   if (chrome !== undefined) {
     await terminateProcessTree(chrome);
   }

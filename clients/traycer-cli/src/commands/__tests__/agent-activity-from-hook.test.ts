@@ -154,10 +154,8 @@ describe("buildAgentActivityFromHookCommand - start edge (promptSubmitted)", () 
   });
 
   it("routes an opencode start through recordActivity, never promptSubmitted", async () => {
-    // OpenCode's in-process plugin consumes no hook stdout, so the pull path
-    // would let the host advance its roles cursor for a snapshot the model
-    // never receives. The start edge must stay a plain activity edge - with
-    // no stdout, since anything printed may surface back into the TUI.
+    // OpenCode's in-process plugin consumes no hook stdout, so the pull path would let the host advance its roles cursor for a snapshot the model never receives.
+    // The start edge must stay a plain activity edge - with no stdout, since anything printed may surface back into the TUI.
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ session_id: "ses-oc-live-2" })],
@@ -184,9 +182,7 @@ describe("buildAgentActivityFromHookCommand - start edge (promptSubmitted)", () 
   });
 
   it("never reads stdin for a session-id-keyed opencode hook", async () => {
-    // The shared-server plugin instance identifies the agent by session id and
-    // never pipes a payload; a stray one must not become an observed id (the
-    // host refuses resyncs from session-id-keyed requests anyway).
+    // The shared-server plugin instance identifies the agent by session id and never pipes a payload; a stray one must not become an observed id (the host refuses resyncs from session-id-keyed requests anyway).
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ session_id: "should-be-ignored" })],

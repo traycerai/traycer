@@ -221,9 +221,8 @@ describe("mention menu dismissal", () => {
     await flush();
     expect(pickerStore.getState().open).toBe(true);
 
-    // No flush between these: the comma queues the plugin exit on a
-    // microtask, and the second insert lands before it drains. The stale
-    // exit must not dismiss the @lib occurrence that superseded it.
+    // No flush between these: the comma queues the plugin exit on a microtask, and the second insert lands before it drains.
+    // The stale exit must not dismiss the @lib occurrence that superseded it.
     editor.commands.insertContent(", ");
     editor.commands.insertContent("@lib");
     await flush();
@@ -234,10 +233,7 @@ describe("mention menu dismissal", () => {
 
   it("does not let a stale queued exit close a mention activated by a selection restore", async () => {
     const { editor, pickerStore } = makeFixture();
-    // Production shape (applyContent): one transaction applies content whose
-    // trailing text is prose (queues the dismissal exit), the next restores
-    // a saved selection that activates a legitimate earlier @ - before the
-    // queued exit's microtask drains.
+    // Production shape (applyContent): one transaction applies content whose trailing text is prose (queues the dismissal exit), the next restores a saved selection that activates a legitimate earlier @ - before the queued exit's microtask drains.
     editor.commands.insertContent("@lib then @auth,");
     editor.commands.setTextSelection(5);
     await flush();
@@ -248,11 +244,7 @@ describe("mention menu dismissal", () => {
 
   it("reopens the SAME @ when a selection restore makes its query valid again", async () => {
     const { editor, pickerStore } = makeFixture();
-    // Literal applyContent shape: setContent leaves the caret at the end, so
-    // tiptap sees the dismissed prose query "lib, trailing" on the @ at
-    // from=1 and the dismissal exit is queued; the synchronous selection
-    // restore then truncates the SAME occurrence's query to a valid "lib"
-    // before the microtask drains.
+    // Literal applyContent shape: setContent leaves the caret at the end, so tiptap sees the dismissed prose query "lib, trailing" on the @ at from=1 and the dismissal exit is queued; the synchronous selection restore then truncates the SAME occurrence's query to a valid "lib" before the microtask drains.
     editor.commands.setContent("@lib, trailing");
     editor.commands.setTextSelection(5);
     await flush();

@@ -31,13 +31,6 @@ vi.mock("../secure-local-storage", () => {
   };
 });
 
-/**
- * Builds a fake preload bridge with the minimal behavior the
- * `DesktopRunnerHost` needs to exercise replay semantics. The fake
- * intentionally does NOT cache the current local-host snapshot, so the
- * renderer-side cache owned by `DesktopRunnerHost` is the sole path that
- * satisfies the "emit current value on subscribe" contract.
- */
 interface FakeBridgeHandle {
   readonly bridge: DesktopPreloadBridge;
   readonly ownershipClaims: ReadonlyArray<{
@@ -145,10 +138,7 @@ function buildFakeBridge(
       handler: (snapshot: LocalHostSnapshot | null) => void,
     ) => {
       handlers.add(handler);
-      // Mimic the preload bridge: synchronously replay the cached value on
-      // subscribe. We only replay it for the very first subscriber here so
-      // the test can prove the renderer-side cache - not the preload - is
-      // what serves later subscribers.
+      // Mimic the preload bridge: synchronously replay the cached value on subscribe.
       if (!firstSubscriberServed) {
         firstSubscriberServed = true;
         handler(lastEmitted);
@@ -159,10 +149,6 @@ function buildFakeBridge(
         },
       };
     },
-    // Matches `onLocalHostChange` above structurally (a `Set` of handlers
-    // plus a dispose closure), but WITHOUT the replay: production has no
-    // cache to replay from either (`host-bridge.ts` - "nothing for a cache
-    // or a first-subscribe pull to repair").
     onRegisteredHostsChange: (
       handler: (push: RegisteredHostsChange) => void,
     ) => {
@@ -940,11 +926,8 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
   });
 
   it("settles a cancelled session list without waiting for the main-process reply", async () => {
-    // Main keeps running the GET (bounded by the fetcher's own timeout) because
-    // the signal cannot cross the bridge. What must not happen is the caller
-    // waiting it out: `AuthService.fetchUserSessions()` follows a list with a
-    // repair that spends a single-use refresh rotation, so cancellation has to
-    // reach it now rather than seconds later.
+    // Main keeps running the GET (bounded by the fetcher's own timeout) because the signal cannot cross the bridge.
+    // What must not happen is the caller waiting it out: `AuthService.fetchUserSessions()` follows a list with a repair that spends a single-use refresh rotation, so cancellation has to.
     const fake = buildFakeBridge(null);
     fake.bridge.listUserSessions = vi.fn(
       () => new Promise<never>(() => undefined),
@@ -1117,10 +1100,7 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       signInUrl: "https://auth.example.invalid/sign-in",
     });
 
-    // `host.globalShortcuts` must be the actual preload bridge, not
-    // `undefined` - if `DesktopRunnerHost` ever again forgets to assign it in
-    // its constructor, this call throws instead of the Settings row just
-    // silently never appearing.
+    // `host.globalShortcuts` must be the actual preload bridge, not `undefined`.
     await expect(host.globalShortcuts.getSnapshot()).resolves.toEqual({
       sequence: 0,
       statuses: {

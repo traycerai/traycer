@@ -147,11 +147,8 @@ describe("CLI capability-consuming mutation facades", () => {
     expect(lease.cancel).toHaveBeenCalledTimes(1);
   });
 
-  // Change 7 (fixup ticket): the adoption cleanup used to `await
-  // adoption.cancel()` bare in `runWithHostStartAdoption`'s `finally` - a
-  // rejecting cancel() would then replace whatever the actuator itself
-  // threw or returned. It is now `.catch(() => undefined)`, so a lease
-  // that fails to cancel must never mask the primary outcome.
+  // Change 7 (fixup ticket): the adoption cleanup used to `await adoption.cancel()` bare in `runWithHostStartAdoption`'s `finally` - a rejecting cancel() would then replace whatever the actuator itself threw or returned.
+  // It is now `.catch(() => undefined)`, so a lease that fails to cancel must never mask the primary outcome.
   it("does not let a rejecting adoption cancel() mask the primary outcome", async () => {
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;

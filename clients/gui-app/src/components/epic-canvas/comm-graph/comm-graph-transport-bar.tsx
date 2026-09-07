@@ -1,26 +1,6 @@
 /**
- * The media-player transport docked under the graph: play/pause, speed, and a
- * scrubber whose track carries one marker per captured event.
- *
- * IT OWNS THE CURSOR, and it is the only thing that does. The sidebar panel that
- * used to own playback is gone; the per-epic cursor store survived it, so the
- * graph still remembers where it was left when the tile is closed and reopened.
- *
- * THE TRACK IS THE LOG. Markers are the events themselves, one per row, at their
- * own timestamps - not buckets, not a sample. Crowding IS the information: a
- * burst of traffic should look like a burst.
- *
- * LIVE IS THE RIGHT EDGE, not a mode. `cursor === null` puts the playhead at the
- * end of everything captured and lets new rows extend the track under it;
- * scrubbing back sets a cursor and detaches, exactly like the old scroller
- * detach did; scrubbing (or playing) to the end re-attaches. There is no
- * separate "live" rendering path that could disagree with the replayed one.
- *
- * SEEKING HAS A KEYBOARD PATH, and not only for accessibility: pointer seeking
- * needs a laid-out track (`getBoundingClientRect`), which jsdom does not
- * provide, so the arrow-key path is also the one an integrated test can drive
- * against the real store. All the positional math lives in
- * `lib/comm-graph/comm-graph-transport.ts` where it can be tested on numbers.
+ * IT OWNS THE CURSOR, and it is the only thing that does.
+ * SEEKING HAS A KEYBOARD PATH, and not only for accessibility: pointer seeking needs a laid-out track (`getBoundingClientRect`), which jsdom does not provide, so the arrow-key path is also the one an integrated test can drive against the real store.
  */
 import {
   useCallback,
@@ -54,9 +34,8 @@ const MARKER_PREVIEW_MAX_CHARS = 120;
 export interface CommGraphTransportBarProps {
   readonly epicId: string;
   /**
-   * The FULL merged array, not the as-of prefix: the track spans everything
-   * captured, and the playhead moves across it. Handing this the projection
-   * would shrink the track every time the user scrubbed back.
+   * The FULL merged array, not the as-of prefix: the track spans everything captured, and the playhead moves across it.
+   * Handing this the projection would shrink the track every time the user scrubbed back.
    */
   readonly events: ReadonlyArray<CommGraphEvent>;
 }
@@ -162,9 +141,8 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
 }
 
 /**
- * The scrubber itself. Split out so the bar stays a layout shell and the track's
- * one real subtlety - what it means when there is nothing to scrub - lives in
- * one place.
+ * The scrubber itself.
+ * Split out so the bar stays a layout shell and the track's one real subtlety - what it means when there is nothing to scrub - lives in one place.
  */
 function CommGraphTransportTrack(props: {
   readonly transport: CommGraphTransport;
@@ -181,9 +159,7 @@ function CommGraphTransportTrack(props: {
     const track = trackRef.current;
     if (track === null) return null;
     const rect = track.getBoundingClientRect();
-    // jsdom (and a track that has not been laid out yet) reports zero width;
-    // dividing by it would seek to NaN, so a pointer seek simply does not
-    // happen until there is a real track to seek along.
+    // jsdom (and a track that has not been laid out yet) reports zero width; dividing by it would seek to NaN, so a pointer seek simply does not happen until there is a real track to seek along.
     if (rect.width <= 0) return null;
     return (clientX - rect.left) / rect.width;
   }, []);
@@ -238,13 +214,9 @@ function CommGraphTransportTrack(props: {
 
   return (
     /*
-      WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports
-      nonsense. An empty epic has no positions to be at, so declaring
-      `min=0 max=0 valuenow=-1` would put a focusable control in the tab order
-      that announces a value outside its own range and moves nowhere when
-      driven. The empty track is inert scenery instead, matching the play
-      button, which is already disabled.
-    */
+     * WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports nonsense.
+     * An empty epic has no positions to be at, so declaring `min=0 max=0 valuenow=-1` would put a focusable control in the tab order that announces a value outside its own range and moves nowhere when driven.
+     */
     <div
       ref={trackRef}
       role={hasEvents ? "slider" : undefined}

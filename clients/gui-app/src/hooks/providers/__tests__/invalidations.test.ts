@@ -6,16 +6,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * The three paths that write `providers.list` DIRECTLY - the login-completion
- * echo and the two force-refreshes - bypass `useHostScopedMutation`'s
- * `invalidateMethods`, so for a while each of them hand-rolled its own harness
- * catalog invalidation on top of `commitAuthoritativeProvidersList`.
- *
- * That was redundant, and these tests are what pin the reason down:
- * `PROVIDER_INVALIDATIONS` already names both catalogs, and the commit helper
- * already invalidates every entry in it except the list it just wrote. The
- * extra call only re-stalled queries the helper had just refetched, costing a
- * second pair of RPCs on every sign-in and every refresh.
+ * Direct `providers.list` writes must not hand-roll catalog invalidation on top of `commitAuthoritativeProvidersList`; that re-stalls queries the helper just refetched.
  */
 describe("providers cache invalidation", () => {
   const guiKey = hostQueryKeys.method<
@@ -28,10 +19,7 @@ describe("providers cache invalidation", () => {
   >("host-1", "agent.tui.listHarnesses", {});
 
   it("PROVIDER_INVALIDATIONS names both harness catalogs", () => {
-    // The single source of truth for both mechanisms. Dropping either entry
-    // here silently un-invalidates the catalogs on every provider mutation AND
-    // on every direct write, since the commit helper derives its set from this
-    // list rather than naming methods itself.
+    // Dropping either entry here silently un-invalidates the catalogs on every provider mutation AND on every direct write, since the commit helper derives its set from this list rather than naming methods itself.
     expect(PROVIDER_INVALIDATIONS).toContain("agent.gui.listHarnesses");
     expect(PROVIDER_INVALIDATIONS).toContain("agent.tui.listHarnesses");
   });
@@ -71,11 +59,7 @@ describe("providers cache invalidation", () => {
   });
 
   it("does NOT invalidate the providers.list entry it just wrote", async () => {
-    // The whole point of the helper: it cancels the in-flight observer and
-    // publishes an authoritative snapshot, so invalidating that same key would
-    // immediately refetch over it. Callers whose payload cannot carry every
-    // field (the frozen @2.1 login echo) add that one invalidation themselves
-    // - see `use-providers-await-login-mutation`.
+    // Callers whose payload cannot carry every field (the frozen @2.1 login echo) add that one invalidation themselves
     const queryClient = new QueryClient();
     const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
       "host-1",

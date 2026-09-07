@@ -1,17 +1,4 @@
-/**
- * Walking routes across the office floor.
- *
- * Breadth-first over 4-neighbours, which on a grid of uniform-cost tiles is
- * already shortest-path - there is nothing for A* to improve on at this size,
- * and BFS has no heuristic to get wrong.
- *
- * THE GOAL TILE IS ALWAYS ENTERABLE, even though `walkable` says otherwise.
- * That is the whole reason chairs are marked blocked: a chair belongs to one
- * agent, so it must repel everyone routing PAST it while still being reachable
- * by the one agent routing TO it. Encoding the exception here rather than
- * handing the layout a per-agent grid keeps the floor plan a single shared
- * value.
- */
+/** Walking routes across the office floor. */
 import type {
   OfficeLayout,
   OfficeTilePos,
@@ -37,11 +24,8 @@ function inBounds(layout: OfficeLayout, tile: OfficeTilePos): boolean {
 }
 
 /**
- * The tiles to step through, `from` EXCLUSIVE and `to` INCLUSIVE, or `null`
- * when no route exists. An empty array means the walker is already there.
- *
- * `from` is not required to be walkable: a character standing on its own chair
- * is the normal case for leaving one.
+ * The tiles to step through, `from` EXCLUSIVE and `to` INCLUSIVE, or `null` when no route exists.
+ * An empty array means the walker is already there.
  */
 export function findOfficePath(
   layout: OfficeLayout,

@@ -21,9 +21,8 @@ export type PipOrigin = "manual" | "agent";
 export interface PipTarget extends BrowserViewNativeTabKey {
   readonly selectionId: string;
   /**
-   * Who asked for this PiP. The agent-surfacing pipeline never replaces a
-   * `manual` target (explicit user intent) but freely replaces `agent`
-   * targets latest-wins; see `hostOpenedTabSuppressReason`.
+   * Who asked for this PiP.
+   * The agent-surfacing pipeline never replaces a `manual` target (explicit user intent) but freely replaces `agent` targets latest-wins; see `hostOpenedTabSuppressReason`.
    */
   readonly origin: PipOrigin;
 }
@@ -209,10 +208,8 @@ export function getPipSnapshot(epicId: string): PipSnapshot {
 let visibilityBridgeRegistered = false;
 
 /**
- * Wires the "tile became visible again -> dismiss its PiP" bridge. Idempotent
- * and never unsubscribed (the registry outlives every PiP), but registered
- * from the PiP surface's mount rather than at import, so merely importing the
- * store leaves no global listener behind for a test to trip over.
+ * Wires the "tile became visible again -> dismiss its PiP" bridge.
+ * Idempotent and never unsubscribed (the registry outlives every PiP), but registered from the PiP surface's mount rather than at import, so merely importing the store leaves no global listener behind for a test to trip over.
  */
 export function initPipStore(): void {
   if (visibilityBridgeRegistered) return;

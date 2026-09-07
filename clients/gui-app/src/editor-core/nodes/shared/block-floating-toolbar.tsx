@@ -10,19 +10,7 @@ export interface BlockFloatingToolbarProps extends Omit<
 }
 
 /**
- * Shared chrome for the per-block floating toolbar used by mermaid and
- * wireframe NodeViews. The toolbar is an `role="toolbar"` absolutely
- * positioned above the top-right corner of its parent NodeView. It remains
- * hidden by default and becomes visible when the NodeView is hovered,
- * focused, or ProseMirror-selected. All of that transition logic lives in
- * `editor.css` (`.tc-node-block-toolbar`) so the JSX stays semantic and
- * identical across both block types.
- *
- * We deliberately avoid Floating UI here: the target is always the immediate
- * NodeView container, so CSS absolute positioning is sufficient and keeps
- * the bundle smaller. The selection-driven BubbleMenu in
- * `artifact-toolbar.tsx` is the right surface for a caret-following menu;
- * block actions follow the block.
+ * Per-block floating toolbar. Visibility lives in `editor.css`. CSS absolute positioning, not Floating UI: the target is always the NodeView container.
  */
 export function BlockFloatingToolbar(props: BlockFloatingToolbarProps) {
   const { label, children, className, ...rest } = props;

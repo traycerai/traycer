@@ -12,18 +12,6 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DesktopPreferredHostStore } from "../preferred-host-store";
 
-/**
- * `DesktopPreferredHostStore` tests (F3 persistence). Style follows
- * `desktop-selection-ports.test.ts`: real temp directories, real `fs`,
- * no mocking of the `node:fs` module.
- *
- * Write-failure injection seam: the store's `write()` does
- * `mkdirSync(dirname(filePath), { recursive: true })` on every call. Node's
- * `mkdirSync(..., { recursive: true })` throws `ENOTDIR` when a path
- * component that should be a directory already exists as a plain FILE - a
- * structural error, not a permission check, so it fails identically whether
- * the test runs as root or not (unlike a `chmod`-based seam).
- */
 
 const silentLog = { warn: (): void => undefined };
 
@@ -41,12 +29,6 @@ afterEach(() => {
   }
 });
 
-/**
- * Replaces the store's target directory with a plain file, so every future
- * `mkdirSync(dirname(filePath), { recursive: true })` inside `write()`
- * throws `ENOTDIR` - the store's write path becomes unconditionally broken
- * from this point on, regardless of process privileges.
- */
 function sabotageWriteDirectory(filePath: string): void {
   const storeDir = dirname(filePath);
   rmSync(storeDir, { recursive: true, force: true });
@@ -83,13 +65,7 @@ describe("DesktopPreferredHostStore", () => {
         reason: expect.any(String),
       });
 
-      // `load()` still refuses to serve the identity: a promised-wiped
-      // bucket is never handed back even while the disk write lags/fails,
-      // which is the store's actual guarantee (comment on `load()`) - this
-      // is NOT because the wipe reached disk (it did not; the write failed),
-      // but because `pendingWipes` forces the answer to `null` in memory
-      // regardless of disk state, so the next identity can never inherit a
-      // previous identity's choice through a stuck wipe.
+      // `load()` still refuses to serve the identity: a promised-wiped bucket is never handed back even while the disk write lags/fails, which is the store's actual guarantee (comment on.
       expect(store.load("user-a")).toBeNull();
     });
 
@@ -123,12 +99,6 @@ describe("DesktopPreferredHostStore", () => {
 
   describe("E2 (store level): the copy-vs-mutate latch", () => {
     it("a failed SET does not absorb into the cache, so an identical retry after the write path is restored actually writes and lands durable", () => {
-      // Pins `save()`'s COPY-PERSIST-SWAP order. If `read()`'s live cache were
-      // mutated before the write, a failed write would still leave the new
-      // value sitting in memory - and the identical retry below would then
-      // hit the `next.get(identityKey) === hostId` no-op short-circuit and
-      // report {ok:true} having written nothing, silently latching the
-      // failure until restart.
       const dir = makeTempDir();
       const filePath = join(dir, "prefs", "desktop-preferred-host.json");
       const store = new DesktopPreferredHostStore(filePath, silentLog);
@@ -139,12 +109,7 @@ describe("DesktopPreferredHostStore", () => {
         reason: expect.any(String),
       });
 
-      // THE load-bearing assertion: the cache must still be at the
-      // last-durable state (nothing, in this case), never the failed value -
-      // this is the assertion the copy-vs-mutate bug defeats. Without it,
-      // this test would still pass under the bug, because the retry below
-      // would ALSO return {ok:true} (from the short-circuit, not a real
-      // write) and look indistinguishable from success.
+      // THE load-bearing assertion: the cache must still be at the last-durable state (nothing, in this case), never the failed value.
       expect(store.load("user-a")).toBeNull();
 
       // Restore the write path, then retry the IDENTICAL save.
@@ -170,10 +135,7 @@ describe("DesktopPreferredHostStore", () => {
       sabotageWriteDirectory(filePath);
       expect(store.save("user-b", "host-2").ok).toBe(false);
 
-      // Saving the SAME value already on record for "user-a" must never
-      // reach `write()` - if it did, it would fail exactly like the
-      // "user-b" call above did. An `ok: true` here is only possible
-      // because the equality check short-circuited before any I/O.
+      // Saving the SAME value already on record for "user-a" must never reach `write()` - if it did, it would fail exactly like the "user-b" call above did.
       expect(store.save("user-a", "host-1")).toEqual({ ok: true });
     });
 
@@ -196,15 +158,6 @@ describe("DesktopPreferredHostStore", () => {
   });
 
   describe("an EXISTING but UNREADABLE state file", () => {
-    // Read-failure injection seam, distinct from the write-failure seam above:
-    // making `filePath` itself a DIRECTORY makes `readFileSync(filePath, ...)`
-    // throw `EISDIR`, which is NOT `ENOENT` - a structural error, so it fails
-    // identically whether the test runs as root or not (no chmod, no fs
-    // mocking). The store's `read()` used to cache an unreadable file as an
-    // authoritative EMPTY map, indistinguishable from a genuinely absent file -
-    // so a later sign-out wipe found the identity "already absent" and
-    // reported success without writing, and a later Activate would have
-    // written that false-empty set over every other identity's preference.
     it("a sign-out wipe is held pending, not reported done, and lands once the file is readable again", () => {
       const dir = makeTempDir();
       const filePath = join(dir, "prefs", "desktop-preferred-host.json");
@@ -254,14 +207,6 @@ describe("DesktopPreferredHostStore", () => {
       renameSync(filePath, parked);
       mkdirSync(filePath);
 
-      // A directory at `filePath` breaks BOTH `readFileSync(filePath, ...)`
-      // (EISDIR) and `renameSync(tmpPath, filePath)` inside `write()` (the
-      // rename target is a non-empty directory) - so under the OLD code,
-      // where `save()` did not refuse until it actually tried to write,
-      // `activate.ok === false` would pass for the wrong reason: the write
-      // failing, not the read being untrustworthy. A capturing logger (not
-      // `silentLog`) makes that distinction checkable by which message
-      // actually fired.
       const calls: string[] = [];
       const capturingLog = {
         warn: (message: string): void => {
@@ -279,24 +224,12 @@ describe("DesktopPreferredHostStore", () => {
       rmSync(filePath, { recursive: true, force: true });
       renameSync(parked, filePath);
 
-      // NOT cached as empty: the same store instance now sees the real
-      // durable set. OLD code cached {} at the first (failed) read, so
-      // "user-a" would come back null here and a pending Activate would go on
-      // to write "user-b" alone over every other identity's preference.
       expect(store.load("user-a")).toBe("host-1");
       expect(store.load("user-b")).toBeNull();
     });
   });
 
   describe("a state file written by a NEWER Traycer (rollback)", () => {
-    // Not a read-failure seam: the file is perfectly readable and perfectly
-    // valid - it is just in a format version this build does not know. That
-    // used to fall through `version !== PREFERRED_HOST_STATE_VERSION` into an
-    // authoritative, CACHED empty map, so after a rollback a sign-out found
-    // the identity "already absent" and reported the wipe honoured without
-    // touching the file, and an Activate wrote a v1 file holding ONE identity
-    // over the newer build's file - deleting every other identity's
-    // preference the user would get back on the next upgrade.
     const newerFile = JSON.stringify({
       version: 2,
       byIdentity: { "user-a": "host-1", "user-b": "host-2" },

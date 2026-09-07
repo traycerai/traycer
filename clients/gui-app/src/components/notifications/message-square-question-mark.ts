@@ -1,10 +1,7 @@
 import { createLucideIcon } from "lucide-react";
 
-/**
- * Lucide's message-square-question-mark glyph, assembled locally: the installed
- * lucide-react version does not ship it yet. Shared by the notification
- * indicator icon and the chat tree's descendant-status rollup badge.
- */
+/** Lucide's message-square-question-mark glyph, assembled locally: the installed lucide-react version does not
+ * ship it yet. */
 export const MessageSquareQuestionMark = createLucideIcon(
   "message-square-question-mark",
   [

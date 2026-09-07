@@ -16,16 +16,8 @@ import {
 import { latestForkableAssistantMessageId as rendererLatestForkableAssistantMessageId } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 
 /**
- * The host derives `latestForkableAssistantMessageId` (protocol
- * `fork-boundary.ts`) from the raw persisted transcript, while a
- * full-materialized renderer keeps computing the same answer itself by
- * scanning its own `renderedMessages` output (`chat-tile-session-state.ts`).
- * Both paths must agree - see the module doc on `fork-boundary.ts` for why the
- * derivation is shared code in the first place. These tests run a fixture
- * through BOTH paths and assert they land on the same id, so a change to
- * either the renderer's turn-lifecycle fold or the protocol derivation that
- * quietly diverges them fails here rather than as a user-visible fork-target
- * mismatch.
+ * The host derives `latestForkableAssistantMessageId` (protocol `fork-boundary.ts`) from the raw
+ * persisted transcript, while a full-materialized renderer keeps computing the same answer itself
  */
 
 const CONTENT: JsonContent = {
@@ -159,13 +151,8 @@ function activeTurn(turnId: string): ChatActiveTurn {
 }
 
 /**
- * Runs a fixture through BOTH the renderer's own scan and the protocol
- * derivation and returns both answers for comparison.
- *
- * The protocol side goes through `projectTranscriptRows` because that is what
- * the host feeds it (`chat-transcript-view.ts` → `chat-transcript-derived.ts`).
- * The two sides stay genuinely independent: the renderer never calls the
- * projection, it builds its own rows and sorts them itself.
+ * Runs a fixture through BOTH the renderer's own scan and the protocol derivation and returns both
+ * answers for comparison.
  */
 function bothForkBoundaries(input: Partial<RenderedMessagesInput>): {
   rendererResult: string | null;
@@ -180,9 +167,7 @@ function bothForkBoundaries(input: Partial<RenderedMessagesInput>): {
     messages: value.messages,
     events: value.events,
     activeTurnId,
-    // `ownerKind` is "chat" throughout this fixture set, so the owner id IS
-    // the chat id. It only reaches setup-card row ids, which no fixture here
-    // produces - but passing the real one keeps the projection honest.
+    // `ownerKind` is "chat" throughout this fixture set, so the owner id IS the chat id.
     chatId: value.ownerId,
   });
   return {
@@ -259,13 +244,9 @@ describe("latestForkableAssistantMessageId renderer/protocol equivalence", () =>
     expect(protocolResult).toBe(rendererResult);
   });
 
-  /*
-   * The shapes that drove the two orders apart. `upsertEntry` appends an
-   * unseen record at the array TAIL, so a checkpoint restore re-adds a record
-   * whose display position is historical. Before the fork boundary read
-   * projected rows these two disagreed: the protocol side scanned the record
-   * array and answered `a-1-restored` for the first and, given the canonical
-   * order its docstring asked for, `a-1-late` for the second.
+  /**
+   * The shapes that drove the two orders apart. `upsertEntry` appends an unseen record at the array
+   * TAIL, so a checkpoint restore re-adds a record whose display position is historical.
    */
 
   it("agree when a restored record of an OLDER turn sits at the projection tail", () => {
@@ -341,11 +322,8 @@ describe("latestForkableAssistantMessageId renderer/protocol equivalence", () =>
   });
 
   it("agree on a STOPPED steer-only turn, whose boundary row is synthesized", () => {
-    // The one turn shape that produces no assistant SLICE at all, so its
-    // trailing row is numbered `part:0` rather than "one past the last slice"
-    // (`row-projection.test.ts` pins that id string). Both sides read the same
-    // `nextChunkIndex` to synthesize it, which is why the projection assertion
-    // alone cannot catch renderer-side drift here and this half is needed too.
+    // The one turn shape that produces no assistant SLICE at all, so its trailing row is numbered
+    // `part:0` rather than "one past the last slice" (`row-projection.test.ts` pins that id string).
     const { rendererResult, protocolResult } = bothForkBoundaries({
       messages: [
         assistantMessage({

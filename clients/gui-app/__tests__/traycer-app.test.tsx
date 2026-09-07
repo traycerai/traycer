@@ -223,10 +223,8 @@ describe("<TraycerApp />", () => {
   it(
     "does not expose Switch host in the user menu after the chip rewire",
     async () => {
-      // Host switching now lives on the combined chip near the
-      // composer; the user-menu Switch host entry was removed alongside
-      // the host-status footer. The mobile-host-gate path still
-      // owns the auto-open picker for zero/many cardinalities.
+      // Host switching is the composer chip. Mobile-host-gate still auto-opens
+      // the picker for zero/many cardinalities.
       const host = buildHostWithLocalHost();
       render(
         <TraycerApp
@@ -483,11 +481,8 @@ describe("<TraycerApp />", () => {
     );
 
     expect(await screen.findByTestId("epics-list-empty")).not.toBeNull();
-    // Bucketed on the canonical `user-1`, not on the address it signed in
-    // with. This fixture is the only one in the suite whose seeded userId and
-    // email DIFFER, so it is the only place an assertion can tell the two
-    // apart - the per-bridge tests all seed `userId: email`, which is how the
-    // email-keyed scoping survived unnoticed in the first place.
+    // Seeded userId and email differ; bucket on canonical user-1, not the
+    // address. Other fixtures seed userId: email and cannot tell them apart.
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
         epicCanvasKey("user-1"),
@@ -538,8 +533,5 @@ describe("<TraycerApp />", () => {
     );
   });
 
-  // "routes a custom remoteFetcher through the mounted host picker" is
-  // deleted: its subject, the header `HostPicker` dialog (`host-picker`
-  // testid, `requestOpen`-driven mount), no longer exists - the header
-  // picker component was removed outright in this redesign phase.
+  // Header HostPicker dialog was removed; do not assert a host-picker testid.
 });

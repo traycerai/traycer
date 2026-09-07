@@ -111,12 +111,6 @@ function makeWsStreamClient(
   });
 }
 
-/**
- * Acks the open with the client's own manifest echoed back, except that
- * `resources.subscribe` is pinned to `resourcesVersion` when one is given -
- * which is how a host too old to carry a global projection is expressed, since
- * the negotiated version IS the whole signal.
- */
 function respondToOpen(
   socket: StubStreamWebSocket,
   resourcesVersion: { readonly major: number; readonly minor: number } | null,
@@ -145,13 +139,7 @@ function completeHandshakeAt(
   respondToOpen(socket, resourcesVersion);
 }
 
-/**
- * Records every scope verdict the client publishes, newest last — plus one
- * ORDERED log interleaving verdicts with connection statuses, because the
- * client documents that it publishes the verdict first and a consumer reacting
- * to `closed` depends on it. Recording only the verdicts would let a swap of
- * those two calls pass every test here.
- */
+/** Recording only the verdicts would let a swap of those two calls pass every test here. */
 function trackScopeSupport(): {
   readonly callbacks: ResourcesStreamCallbacks;
   readonly verdicts: ResourcesScopeSupport[];
@@ -184,9 +172,7 @@ function parseText(raw: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-// Fixtures carry the `@1.5` shape. A test that simulates an older host says so
-// by negotiating that minor - whose schema strips these keys on parse, which is
-// exactly the backfill path `toPayload` exists for.
+// Fixtures carry the `@1.5` shape.
 const NULL_DETAIL = { pssBytes: null, privateBytes: null } as const;
 
 const OWNER = {
@@ -470,9 +456,7 @@ describe("ResourcesStreamClient", () => {
     });
     completeHandshakeAt(sockets[0], { major: 1, minor: 2 });
 
-    // A host that negotiated `@1.2` emits an owner with NO harnessId. The
-    // `@1.2` schema strips the later minors' keys and `toPayload` normalizes
-    // the missing field to `null`, so downstream always reads a defined value.
+    // A host that negotiated `@1.2` emits an owner with NO harnessId.
     const { harnessId: _omit, ...ownerWithoutHarness } = OWNER;
     sockets[0].fireText({
       kind: "snapshot",
@@ -602,7 +586,7 @@ describe("ResourcesStreamClient", () => {
 
     expect(snapshots).toHaveLength(0);
     expect(updates).toHaveLength(0);
-    // A frame that fails the version this session NEGOTIATED is a protocol
+    // A frame that fails the version this session negotiated is a protocol
     // fault, not evidence that the host is speaking an older minor.
     expect(errors).toHaveBeenCalledTimes(1);
     errors.mockRestore();
@@ -626,9 +610,8 @@ describe("ResourcesStreamClient", () => {
     completeHandshakeAt(sockets[0], { major: 1, minor: 5 });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    // `rssBytes: null` is unparseable at every older minor, and a jittery
-    // negative CPU delta is exactly the field a tighter `@1.5` would have
-    // rejected. Both must ride through on the negotiated version.
+    // `rssBytes: null` is unparseable at every older minor, and a jittery negative CPU delta is exactly the field a tighter `@1.5` would have rejected.
+    // Both must ride through on the negotiated version.
     sockets[0].fireText({
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -661,14 +644,7 @@ describe("ResourcesStreamClient", () => {
 });
 
 /**
- * The scope verdict is what lets a surface say "this host cannot report its
- * processes" instead of waiting forever on a stream that will never carry one.
- * These cover it on the LOCAL transport because that is what this suite can
- * drive end to end - but every signal it reads (the session's own negotiated
- * version, and a terminal incompatible close) is `IStreamSession` surface that
- * `LogicalStream` implements identically, which is the entire point: the
- * client-wide capability cache the old pre-check read is the one thing a remote
- * session does NOT have.
+ * The scope verdict is what lets a surface say "this host cannot report its processes" instead of waiting forever on a stream that will never carry one.
  */
 describe("ResourcesStreamClient scope support", () => {
   it("clears a global scope on a host that negotiates a global-capable version", () => {
@@ -687,13 +663,8 @@ describe("ResourcesStreamClient scope support", () => {
     client.close();
   });
 
-  // The case that has no other tell. An `@1.0` host does not reject a global
-  // probe - the `@1.1` request keeps `epicId` on the wire so the downgrade
-  // succeeds - so it accepts, reads only `epicId`, and answers about an epic
-  // called `__global__` that does not exist. No error, no close, one empty
-  // projection, silence. Asserting the subscribe actually WENT OUT at `@1.0`
-  // with the scope field stripped is what proves the verdict came from the
-  // negotiation rather than from a failure that never happened.
+  // The case that has no other tell.
+  // Asserting the subscribe actually went out at `@1.0` with the scope field stripped is what proves the verdict came from the negotiation rather than from a failure that never happened.
   it("convicts a host whose global probe silently downgraded to @1.0", () => {
     const { factory, sockets } = makeFactory();
     const { callbacks, verdicts } = trackScopeSupport();
@@ -717,9 +688,7 @@ describe("ResourcesStreamClient scope support", () => {
     client.close();
   });
 
-  // Same host, same negotiation, opposite verdict: `@1.0` serves a per-epic
-  // subscription perfectly well, and that fallback is genuinely this machine's
-  // own data. A verdict that keyed on the version alone would blank it.
+  // Same host, same negotiation, opposite verdict: `@1.0` serves a per-epic subscription perfectly well, and that fallback is genuinely this machine's own data.
   it("clears an epic scope on that same @1.0 host", () => {
     const { factory, sockets } = makeFactory();
     const { callbacks, verdicts } = trackScopeSupport();
@@ -736,9 +705,7 @@ describe("ResourcesStreamClient scope support", () => {
     client.close();
   });
 
-  // The other half: a host that does not advertise a bridgeable method at all
-  // never negotiates a version to judge, and fails the mirror check instead.
-  // This is the close a REMOTE session produces for the same host.
+  // The other half: a host that does not advertise a bridgeable method at all never negotiates a version to judge, and fails the mirror check instead.
   it("convicts a host whose method cannot be bridged at all", () => {
     const { factory, sockets } = makeFactory();
     const { callbacks, verdicts } = trackScopeSupport();
@@ -749,7 +716,7 @@ describe("ResourcesStreamClient scope support", () => {
       callbacks,
     });
     // No cross-major stream bridge exists, so the mirror check fails and the
-    // client goes terminal with INCOMPATIBLE before any subscribe is sent.
+    // client goes terminal with incompatible before any subscribe is sent.
     completeHandshakeAt(sockets[0], { major: 2, minor: 0 });
 
     expect(verdicts).toEqual(["unsupported"]);
@@ -757,10 +724,8 @@ describe("ResourcesStreamClient scope support", () => {
     client.close();
   });
 
-  // Every fatal arrives through the one channel, and most of them say nothing
-  // about capability. Reading this one as incompatibility would accuse a host
-  // that is merely unauthorized of being too old - permanently, since nothing
-  // reconnects after a terminal close to correct it.
+  // Every fatal arrives through the one channel, and most of them say nothing about capability.
+  // Reading this one as incompatibility would accuse a host that is merely unauthorized of being too old - permanently, since nothing reconnects after a terminal close to correct it.
   it("does not read a non-capability fatal as incompatibility", () => {
     const { factory, sockets } = makeFactory();
     const { callbacks, verdicts } = trackScopeSupport();
@@ -788,9 +753,7 @@ describe("ResourcesStreamClient scope support", () => {
     client.close();
   });
 
-  // The client documents this ordering as load-bearing: a consumer reacting to
-  // the `closed` transition has to already see WHY, rather than reading the
-  // verdict from the previous round. Nothing but this asserts it.
+  // The client documents this ordering as load-bearing: a consumer reacting to the `closed` transition has to already see why, rather than reading the verdict from the previous round.
   it("publishes the verdict before the status it was derived from", () => {
     const { factory, sockets } = makeFactory();
     const { callbacks, events } = trackScopeSupport();
@@ -800,7 +763,7 @@ describe("ResourcesStreamClient scope support", () => {
       scope: { kind: "global" },
       callbacks,
     });
-    // Terminal INCOMPATIBLE: the transition that carries both a status and the
+    // Terminal incompatible: the transition that carries both a status and the
     // verdict explaining it, which is exactly where the order can be observed.
     completeHandshakeAt(sockets[0], { major: 2, minor: 0 });
 
@@ -809,9 +772,8 @@ describe("ResourcesStreamClient scope support", () => {
     client.close();
   });
 
-  // A verdict belongs to the connection that produced it. A reconnect may reach
-  // a NEW host incarnation - an upgrade is exactly how one stops being too old -
-  // so capability has to be re-probed, never remembered across the gap.
+  // A verdict belongs to the connection that produced it.
+  // A reconnect may reach a new host incarnation - an upgrade is exactly how one stops being too old - so capability has to be re-probed, never remembered across the gap.
   it("drops the verdict when the connection that negotiated it goes away", () => {
     const { factory, sockets } = makeFactory();
     const { callbacks, verdicts } = trackScopeSupport();

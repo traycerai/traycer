@@ -19,10 +19,7 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { Attachment } from "@/lib/composer/types";
 
-/**
- * `/btw` interception inside `useChatComposerSubmit`, modeled on
- * `chat-composer-submit-gate.test.tsx`'s `mountSubmitHook` helper.
- */
+/** `/btw` interception inside `useChatComposerSubmit`, modeled on `chat-composer-submit-gate.test.tsx`'s `mountSubmitHook` helper. */
 
 interface ChatComposerSubmitInput {
   readonly content: JsonContent;

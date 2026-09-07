@@ -84,12 +84,8 @@ vi.mock(
   }),
 );
 
-// The wiring test below only cares whether a real pointerdown/focus event on
-// a hosted record's DOM reaches `activateHostedTopLevelSurface` - not that
-// the real ChatTile/ChatMessages chain renders (that needs a real Epic
-// session handle the synthetic environment fixture cannot supply). Stub the
-// body the same way `stable-tile-surface-host.test.tsx` uses a synthetic
-// body renderer.
+// The wiring test below only cares whether a real pointerdown/focus event on a hosted record's DOM reaches
+// `activateHostedTopLevelSurface`.
 vi.mock(
   "@/components/epic-canvas/surface-host/hosted-chat-surface-body",
   () => ({
@@ -187,9 +183,7 @@ vi.mock("@/components/settings/settings-surface", () => ({
   SettingsSurface: () => <div data-testid="settings-surface-body" />,
 }));
 
-// The host wraps the panel in the gesture provider (the single live-value
-// reader); project the draft the host resolved onto the provider so this test
-// verifies the single-mount projection without the provider's live wiring.
+// The host wraps the panel in the gesture provider (the single live-value reader).
 vi.mock(
   "@/components/home/terminal-panel/landing-terminal-gesture-provider",
   () => ({
@@ -734,9 +728,8 @@ describe("<TopLevelTabHost />", () => {
 
     act(() => setSplit(DRAFT_A, DRAFT_B, "right"));
 
-    // The provider node survives the focus change: only the panel's DOM moves
-    // between panes, so the captured-gesture state the provider owns (pending
-    // gesture, generation, open-episode draft) is never destroyed mid-flight.
+    // The provider node survives the focus change: only the panel's DOM moves between panes, so the
+    // captured-gesture state the provider owns (pending gesture, generation.
     expect(screen.getByTestId("landing-terminal")).toBe(provider);
     expect(provider.dataset.draftId).toBe(DRAFT_B.id);
     expect(
@@ -880,18 +873,8 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
   });
 });
 
-/**
- * Design-review F3: `activateHostedTopLevelSurface`'s own unit tests above
- * prove its routing logic, but not that a real hosted pointerdown reaches it
- * at all - that depends on the `onPointerDownCapture`/`onFocusCapture` JSX
- * wiring on `TopLevelTabHost`'s hosted-plane wrapper (a sibling of every
- * physical top-level surface wrapper, so it cannot inherit their own
- * handlers). This renders the REAL `TopLevelTabHost` with the switch on and a
- * REAL hosted record (real membership + registry, synthetic environment -
- * the same fixture seam `stable-tile-surface-host.test.tsx` uses), then fires
- * a genuine `pointerdown` on it to prove the wiring itself, not just the
- * function it calls.
- */
+/** Design-review: `activateHostedTopLevelSurface`'s own unit tests above prove its routing logic, but not that
+ * a real hosted pointerdown reaches it at all. */
 describe("TopLevelTabHost hosted-plane wiring (design-review F3: real pointerdown reaches activateHostedTopLevelSurface)", () => {
   const EPIC_A: TabRef = { kind: "epic", id: "epic-a" };
   const EPIC_B: TabRef = { kind: "epic", id: "epic-b" };
@@ -932,11 +915,8 @@ describe("TopLevelTabHost hosted-plane wiring (design-review F3: real pointerdow
       id: `tab:${ref.kind}:${ref.id}`,
       ref,
     }));
-    // The MRU retention policy only retains a background surface once it has
-    // been active at least once (`advanceTopLevelSurfaceRecency` only adds
-    // active keys). Visit B first so it enters recency, matching how a real
-    // "open in background then switch away" sequence would leave B eligible
-    // for the surface-host membership while A is the focused surface.
+    // The mru retention policy only retains a background surface once it has been active at least once
+    // (`advanceTopLevelSurfaceRecency` only adds active keys).
     useTabsStore.setState((state) => ({
       ...state,
       items: stripItems,
@@ -1011,21 +991,8 @@ describe("TopLevelTabHost hosted-plane wiring (design-review F3: real pointerdow
   });
 });
 
-/**
- * "Reverse views" on a top-level split (`swapSplitSides`) exchanges the two
- * sides' `left` offsets while each side keeps its own width - at ratio 0.5
- * literally, and at any other ratio because `1 - leftRatio` on the other side
- * is the width it already had. A hosted chat body is positioned by rects the
- * geometry coordinator reads inside a ResizeObserver callback, and a
- * ResizeObserver reports SIZE changes only, so nothing about the swap reached
- * the coordinator: both hosted bodies stayed painted at their pre-swap rects
- * while the tab strips and sidebars around them had already crossed over,
- * overlapping the other side's sidebar. This pins the remeasure
- * `TopLevelTabHost` now performs on every placement change. The
- * `ControllableResizeObserver` installed above never fires unless triggered,
- * and this test deliberately never triggers it - that IS the real-world
- * condition for a position-only move.
- */
+/** The `ControllableResizeObserver` installed above never fires unless triggered, and this test deliberately
+ * never triggers it - that IS the real-world condition for a position-only move. */
 describe("TopLevelTabHost re-measures hosted geometry on a position-only placement change (Reverse views)", () => {
   const CHAT_A = "reverse-views-chat-a";
   const CHAT_B = "reverse-views-chat-b";

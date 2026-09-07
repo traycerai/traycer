@@ -49,33 +49,15 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
- * `agent.gui.listHarnesses@7.1` carries exactly one field over 7.0:
- * `authStatus`, the per-row auth verdict the picker dims a signed-out provider
- * with. The line is additive-only and fills nothing on upgrade - ABSENCE of
- * `authStatus` is itself the "this host publishes no verdict on the catalog
- * row" signal the client keys its `providers.list` fallback on, so a fill
- * anywhere in this chain is a real regression, not a convenience.
- *
- * The second half of this suite is the negative: enablement is a plain sticky
- * boolean on every wire, and the tri-state `enablementMode` /
- * `enablementSource` / `setEnabled` `mode` that briefly rode these same lines
- * are gone. Those are asserted absent rather than left untested, because
- * "someone re-adds a derived-enablement field to the live row" is precisely
- * how the behaviour comes back.
+ * `agent.gui.listHarnesses@7.1` carries exactly one field over 7.0: `authStatus`, the per-row auth verdict the picker dims a signed-out provider with.
  */
 
-// Derived from the schema rather than hand-written: a hand-written union
-// silently narrows (an earlier pass omitted `unavailable`, so no test ever
-// exercised it) and a future enum member would go untested by omission.
+// Derived from the schema rather than hand-written: a hand-written union silently narrows (an earlier pass omitted `unavailable`, so no test ever exercised it) and a future enum member would go untested by omission.
 interface HarnessOptionOverrides {
   readonly authStatus?: GuiHarnessOption["authStatus"];
 }
 
-// Built through the FROZEN 7.1 row rather than the live one: 7.1 is pinned to
-// the v7.0 id set (a released 7.0 forbids any minor of major 7 from growing the
-// enum), so the live row is strictly wider than anything this line serializes.
-// Parsing through the live shape here would let a post-7.0 id reach a v7 bridge
-// in a test and nowhere else.
+// Built through the FROZEN 7.1 row rather than the live one: 7.1 is pinned to the v7.0 id set (a released 7.0 forbids any minor of major 7 from growing the enum), so the live row is strictly wider than anything this line.
 function harnessOption(id: string, overrides: HarnessOptionOverrides) {
   return guiHarnessOptionSchemaV71.parse({
     id,
@@ -129,10 +111,7 @@ describe("agent.gui.listHarnesses@7.1 (authStatus row field)", () => {
     const upgraded =
       agentGuiListHarnessesUpgradeV70ToV71.upgradeResponse(v70Response);
     expect(upgraded.harnesses[0]).not.toHaveProperty("authStatus");
-    // Absence must be distinguishable from every concrete value - a v7.0 host
-    // is exactly the host the client's providers.list fallback exists for, and
-    // a fill here would fabricate a verdict the client then trusts over that
-    // fallback.
+    // Absence must be distinguishable from every concrete value - a v7.0 host is exactly the host the client's providers.list fallback exists for, and a fill here would fabricate a verdict the client then trusts over that.
     expect(listGuiHarnessesResponseSchemaV70.safeParse(upgraded).success).toBe(
       true,
     );
@@ -203,11 +182,7 @@ describe("agent.gui.listHarnesses@7.1 (authStatus row field)", () => {
   });
 
   it("guiHarnessOptionSchemaV21/V30/V40/V50/V60/V70 do not model authStatus at all - the freeze bug this line fixes", () => {
-    // Assert directly against the frozen row shapes' key sets, not merely
-    // through a downgrade-bridge fixture: before the freeze these were
-    // `guiHarnessOptionSchema.extend({ id })`, i.e. a pinned id over the LIVE
-    // body, so a field added to the live row would have silently widened all
-    // six shipped lines at once.
+    // Assert directly against the frozen row shapes' key sets, not merely through a downgrade-bridge fixture: before the freeze these were `guiHarnessOptionSchema.extend({ id })`, i.e. a pinned id over the LIVE body, so a.
     for (const schema of [
       guiHarnessOptionSchemaV21,
       guiHarnessOptionSchemaV30,
@@ -233,9 +208,7 @@ describe("agent.gui.listHarnesses@7.1 (authStatus row field)", () => {
           error: null,
           modes: ["gui" as const],
           requiresApiKey: false,
-          // A v7.0 wire payload would never carry this; a real host never sends
-          // it on this line, but a strict-schema parse must still strip it if
-          // it somehow arrived, exactly like every other frozen line does.
+          // A v7.0 wire payload would never carry this; a real host never sends it on this line, but a strict-schema parse must still strip it if it somehow arrived, exactly like every other frozen line does.
           authStatus: "unauthenticated",
         },
       ],
@@ -244,12 +217,6 @@ describe("agent.gui.listHarnesses@7.1 (authStatus row field)", () => {
   });
 
   it("forward tolerance: an unknown authStatus drops that field, not the row", () => {
-    // `.optional()` alone is not enough: nothing on the path to the array
-    // element catches, so a value a NEWER host minted would fail the whole
-    // response and empty the client's picker over one field it could have
-    // ignored. Negotiation is meant to make that unreachable (a newer host
-    // downgrades to the negotiated minor); this is the defense in depth behind
-    // that assumption, which this very line has already broken twice.
     const parsed = guiHarnessOptionSchema.parse({
       id: "claude",
       label: "claude",
@@ -271,10 +238,7 @@ describe("agent.gui.listHarnesses@7.1 (authStatus row field)", () => {
 
 describe("enablement carries no derived-mode field on any line", () => {
   it("no provider or harness row models enablementMode/enablementSource", () => {
-    // The pair rode `providerCliStateBaseShape` and the live harness row for
-    // one unreleased revision. Re-adding either is how the tri-state UI and the
-    // mid-session flipping come back, so the absence is pinned rather than
-    // merely deleted.
+    // The pair rode `providerCliStateBaseShape` and the live harness row for one unreleased revision.
     for (const schema of [
       providerCliStateSchema,
       guiHarnessOptionSchema,
@@ -296,9 +260,7 @@ describe("enablement carries no derived-mode field on any line", () => {
   });
 
   it("a stray enablement field on the wire is stripped, and the row survives", () => {
-    // The row must not vanish over a key from a build that still emits the
-    // retired pair - the same stripped-NOT-dropped distinction the v1.0
-    // downgrade trap turns on.
+    // The row must not vanish over a key from a build that still emits the retired pair - the same stripped-NOT-dropped distinction the v1.0 downgrade trap turns on.
     const response = providersListResponseSchema.parse({
       providers: [
         providerState("claude-code"),
@@ -379,10 +341,7 @@ describe("enablement carries no derived-mode field on any line", () => {
 // ── 3. providers.list keeps its v7 bridges after 7.1 went away ─────────────
 
 describe("providers.list major 7 downgrades still carry rows after the 7.1 line was removed", () => {
-  // The six v7 -> older bridges were declared `from: 7.1` while that minor
-  // existed; they now start at 7.0, which is what the registry's
-  // "a downgrade must start at the line's latest minor" load check enforces.
-  // These exercise the two ends of that range, plus the v1.0 strict-parse trap.
+  // The six v7 -> older bridges were declared `from: 7.1` while that minor existed; they now start at 7.0, which is what the registry's "a downgrade must start at the line's latest minor" load check enforces.
   it("7.0 -> v6.0 preserves the row and its effective enabled flag", () => {
     const v70Response = providersListResponseSchemaV70.parse({
       providers: [providerState("claude-code")],
@@ -414,14 +373,7 @@ describe("providers.list major 7 downgrades still carry rows after the 7.1 line 
     ).not.toThrow();
   });
 
-  // REGRESSION PIN for a defect this suite caught. `downgradeProviderCliStateToV10`
-  // destructures every post-v1.0 field off the row before the STRICT
-  // `providerCliStateSchemaV10` parse, and its own comment warns that a field
-  // left out of that destructure "does not fail loudly - it empties the provider
-  // list for v1.0 clients". The (now removed) enablement pair was duly forgotten
-  // on its first pass and the WHOLE ROW vanished. So this asserts
-  // stripped-NOT-vanished, which is the distinction the defect turned on and the
-  // one a future field will get wrong the same way.
+  // REGRESSION PIN for a defect this suite caught.
   it("7.0 -> v1.0 PRESERVES a decodable row, dropping only the post-v1.0 provider", () => {
     const result = providersListDowngradeV7ToV1.downgradeResponse(
       providersListResponseSchemaV70.parse({
@@ -443,10 +395,8 @@ describe("providers.list major 7 downgrades still carry rows after the 7.1 line 
 // ── 4. Registry loads with the expected latestMinor per line ───────────────
 
 describe("hostRpcRegistry loads with the catalog lines at their expected latestMinor", () => {
-  // Module-load validation already enforces "a downgrade must start at the
-  // line's latest minor" - importing the registry at all would throw if that
-  // were violated. This makes the expectation a legible, named assertion
-  // rather than relying on the import succeeding silently.
+  // Module-load validation already enforces "a downgrade must start at the line's latest minor" - importing the registry at all would throw if that were violated.
+  // This makes the expectation a legible, named assertion rather than relying on the import succeeding silently.
   it("agent.gui.listHarnesses major 7 -> latestMinor 1 (authStatus)", () => {
     expect(hostRpcRegistry["agent.gui.listHarnesses"][7].latestMinor).toBe(1);
     expect(

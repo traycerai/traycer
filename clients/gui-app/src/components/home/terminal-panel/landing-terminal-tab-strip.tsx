@@ -28,12 +28,8 @@ import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-auth
 export interface LandingTerminalTabStripProps {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
-  /**
-   * Why creating a terminal is currently unavailable, or `null` when the
-   * create affordances are live. Doubles as the disabled flag: the "+"
-   * button and the empty-strip double-click gate on it, and the button
-   * surfaces the string as a tooltip so the dead control explains itself.
-   */
+  /** Doubles as the disabled flag: the "+" button and the empty-strip double-click gate on it, and the button
+   * surfaces the string as a tooltip so the dead control explains itself. */
   readonly createDisabledReason: string | null;
   readonly onAdd: () => void;
   readonly onActivate: (instanceId: string) => void;
@@ -46,15 +42,8 @@ export interface LandingTerminalTabStripProps {
   >;
 }
 
-/**
- * Presentational, scrollable terminal tab strip mirroring epic tab chrome.
- *
- * Layout follows the header `TabStrip`: the scroller and the "+" share a
- * `flex-[0_1_auto]` wrapper, so "+" trails the last tab directly and only
- * parks against the right edge once the tabs fill the strip. The leftover
- * strip space is empty background - double-clicking it opens a terminal, the
- * same gesture the header strip uses for a new tab.
- */
+/** Layout follows the header `TabStrip`: the scroller and the "+" share a `flex-[0_1_auto]` wrapper, so "+"
+ * trails the last tab directly and only parks against the right edge once the tabs fill the strip. */
 export function LandingTerminalTabStrip(
   props: LandingTerminalTabStripProps,
 ): ReactNode {
@@ -62,9 +51,8 @@ export function LandingTerminalTabStrip(
   const canCreate = createDisabledReason === null;
   const handleStripDoubleClick = (event: MouseEvent<HTMLDivElement>): void => {
     if (!canCreate) return;
-    // Only the empty strip background opens a terminal. A double-click that
-    // lands on a tab (or on the "+"/close buttons, whose own click handler
-    // already fired twice) must not spawn a second one.
+    // Only the empty strip background opens a terminal. A double-click that lands on a tab (or on the "+"/close
+    // buttons, whose own click handler already fired twice) must not spawn a second one.
     if (
       event.target instanceof Element &&
       event.target.closest('[role="tab"], button') !== null
@@ -106,14 +94,8 @@ export function LandingTerminalTabStrip(
   );
 }
 
-/**
- * The strip's "+" affordance. While creation is unavailable the button is
- * `aria-disabled` rather than natively `disabled`, so it stays hoverable and
- * focusable and the reason is reachable as a tooltip - the same
- * disabled-with-hint convention as `ComposerSendButton` / the launch panel's
- * `StartButton` (a native `disabled` button emits no pointer events, so a
- * tooltip on it would never open).
- */
+/** While creation is unavailable the button is `aria-disabled` rather than natively `disabled`, so it stays
+ * hoverable and focusable and the reason is reachable as a tooltip. */
 function NewTerminalButton(props: {
   readonly disabledReason: string | null;
   readonly onAdd: () => void;
@@ -181,10 +163,8 @@ function LandingTerminalTab(props: {
     props.viewModel?.liveCwd ?? props.viewModel?.launchCwd ?? null;
   const tabRef = useRef<HTMLDivElement | null>(null);
 
-  // Keep the active tab on screen. A tab created past the right edge of the
-  // scroller mounts already-active, so this runs on mount too - without it,
-  // spamming "+" silently opens terminals nobody can see. `nearest` on both
-  // axes makes it a no-op when the tab is already fully visible.
+  // Keep the active tab on screen. A tab created past the right edge of the scroller mounts already-active, so
+  // this runs on mount too - without it, spamming "+" silently opens terminals nobody can see.
   useEffect(() => {
     if (!active) return;
     tabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -196,9 +176,7 @@ function LandingTerminalTab(props: {
     },
     [onRename, tab.instanceId],
   );
-  // The shared state machine the epic tab strips use. It owns the two things a
-  // hand-rolled rename gets wrong: focusing past the closing context menu's
-  // focus-restore, and settling commit/cancel exactly once.
+  // The shared state machine the epic tab strips use.
   const rename = useInlineRename({
     value: displayName,
     canEdit: props.canRename,
@@ -212,12 +190,7 @@ function LandingTerminalTab(props: {
   }, [isEditing, onActivate, tab.instanceId]);
 
   return (
-    // `modal={false}` is load-bearing for rename. A modal Radix menu keeps a
-    // TRAPPED focus scope while it closes: the rename input mounts and focuses
-    // inside the trigger (outside that scope), the scope yanks focus back, the
-    // input blurs, and `useInlineRename` blur-commits and unmounts it - so the
-    // edit box vanishes and you have to click the tab again. Un-trapped, the
-    // input keeps the focus it takes on mount.
+    // A modal Radix menu keeps a trapped focus scope while it closes.
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>
         <div

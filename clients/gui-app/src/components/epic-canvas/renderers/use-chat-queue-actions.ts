@@ -47,11 +47,7 @@ export interface ChatQueueActionsInput {
     timestamp: number,
   ) => void;
   /**
-   * Fire-and-forget durable sync of the chat's run settings to the host
-   * (`epic.updateChatRunSettings`), so a profile/model switch that is never
-   * followed by a send still governs headless turns (e.g. incoming
-   * agent-to-agent messages). Failures (old host: E_HOST_UNSUPPORTED) fall
-   * back to the legacy persist-on-next-send behavior.
+   * Fire-and-forget durable sync of the chat's run settings to the host (`epic.updateChatRunSettings`), so a profile/model switch that is never followed by a send still governs headless turns (e.g. incoming agent-to-agent messages).
    */
   readonly persistChatRunSettings: (settings: ChatRunSettings) => void;
 }
@@ -76,13 +72,8 @@ export interface ChatQueueActionsResult {
 }
 
 /**
- * Encapsulates the queue steer/edit/cancel/reorder action callbacks and the
- * pending-steer-restart confirmation state. The `handleComposerSettingsChange`
- * callback lives here because it drives `restampQueuedItemSettings` and the
- * live permission-mode update (both queue-scoped side effects).
- *
- * Callbacks stay memoized around stable queue/action inputs so memoized
- * children are not disturbed during streaming updates.
+ * Encapsulates the queue steer/edit/cancel/reorder action callbacks and the pending-steer-restart confirmation state.
+ * The `handleComposerSettingsChange` callback lives here because it drives `restampQueuedItemSettings` and the live permission-mode update (both queue-scoped side effects).
  */
 export function useChatQueueActions(
   input: ChatQueueActionsInput,
@@ -181,9 +172,7 @@ export function useChatQueueActions(
 
   const abortSteerQueuedItem = useCallback(
     (item: ChatQueuedItem): void => {
-      // Un-stage a still-pending steer: the host reverts it to a plain queued
-      // item. Rejected host-side if the steer already began folding into the
-      // turn - the row's affordance is only shown while it is safe to undo.
+      // Rejected host-side if the steer already began folding into the turn - the row's affordance is only shown while it is safe to undo.
       chatActions.queueAbortSteer(item.queueItemId);
     },
     [chatActions],
@@ -203,19 +192,13 @@ export function useChatQueueActions(
 
   const steerQueuedItemNow = useCallback(
     (item: ChatQueuedItem): void => {
-      // Read the live turn at call time instead of closing over `state.activeTurn`
-      // (the store assigns a fresh object every snapshot, so depending on it would
-      // re-create this callback every streamed token → lowerQueue → composerModel
-      // churn -> composer re-render).
+      // Read the live turn at call time instead of closing over `state.activeTurn` (the store assigns a fresh object every snapshot, so depending on it would re-create this callback every streamed token → lowerQueue → composerModel churn -> composer re-render).
       const decision = decideSteerSettings(
         handle.store.getState().activeTurn,
         currentComposerSettings,
       );
       if (decision.kind === "silent_inject") {
-        // No turn-start-baked setting changed: fold into the running turn at the
-        // next safe point. Pass the live toolbar settings explicitly (they match
-        // the running turn) so the host's mode decision can't race a lagging
-        // restamp of this item.
+        // Pass the live toolbar settings explicitly (they match the running turn) so the host's mode decision can't race a lagging restamp of this item.
         chatActions.queueSteerNow(item.queueItemId, currentComposerSettings);
         return;
       }
@@ -253,30 +236,17 @@ export function useChatQueueActions(
       // Durable sync: the host's per-chat settings must not lag the composer,
       // or a headless agent-to-agent turn runs on the previously sent profile.
       persistChatRunSettings(settings);
-      // Live-mirror: pending queued prompts always resolve the latest toolbar
-      // settings. Exclude the item open for editing (it commits on submit); the
-      // store also skips no-op updates and when there are no pending items.
+      // Live-mirror: pending queued prompts always resolve the latest toolbar settings.
+      // Exclude the item open for editing (it commits on submit); the store also skips no-op updates and when there are no pending items.
       chatActions.restampQueuedItemSettings(settings, activeEditingQueueItemId);
-      // Both live-turn forwards below read store state at call time (see
-      // steerQueuedItemNow): closing over per-snapshot objects would
-      // re-create this callback every streamed token → lowerComposer →
-      // composerModel churn → composer re-render. Both gate on `runStatus`
-      // rather than `activeTurn`: the pre-spawn window they target begins at
-      // accept, before an activeTurn is broadcast, and the host honors both
-      // updates through that whole window (`turnActivating` onward).
+      // Both gate on `runStatus` rather than `activeTurn`: the pre-spawn window they target begins at accept, before an activeTurn is broadcast, and the host honors both updates through that whole window (`turnActivating` onward).
       if (
         permissionModeChanged &&
         isChatRunInProgress(handle.store.getState().runStatus)
       ) {
         chatActions.updateActivePermissionMode(settings.permissionMode);
       }
-      // Narrow in-flight profile switch (same shape as the permission-mode
-      // update above): a same-harness profile change while a run is in
-      // progress is forwarded so a turn still parked on worktree setup
-      // adopts the switched profile before it spawns, instead of erroring
-      // on the rate-limited profile the user just moved off. A
-      // cross-harness change is NOT a profile switch (profile ids are
-      // harness-scoped) - the full tuple on the next send covers it.
+      // Narrow in-flight profile switch (same shape as the permission-mode update above): a same-harness profile change while a run is in progress is forwarded so a turn still parked on worktree setup adopts the switched profile before it spawns, instead of erroring on the rate-limited profile the user just moved off.
       if (
         profileChanged &&
         isChatRunInProgress(handle.store.getState().runStatus)

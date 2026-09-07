@@ -24,11 +24,7 @@ describe("computeReportIssueFingerprintV1", () => {
   });
 
   it("is completely unaffected by stack shape - stack never enters identity at all (C8)", () => {
-    // Stack family is not even part of this function's input type; the
-    // invariant that matters is that two defects sharing subtype/errorCode/
-    // operation/causalProvider always fingerprint identically, regardless of
-    // how differently they'd normalize under `normalizeStackFamily` (a
-    // one-frame refactor, a bundler line shift, an extra wrapper frame).
+    // Stack family is not even part of this function's input type; the invariant that matters is that two defects sharing subtype/errorCode/ operation/causalProvider always fingerprint identically, regardless of how differently they'd normalize under.
     const fpA = computeReportIssueFingerprintV1(BASE);
     const fpB = computeReportIssueFingerprintV1(BASE);
     expect(fpA).toBe(fpB);

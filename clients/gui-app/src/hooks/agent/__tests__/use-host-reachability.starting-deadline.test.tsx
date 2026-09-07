@@ -33,12 +33,7 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   };
 }
 
-/**
- * A REAL remote entry with `connectivity: "unknown"`, mapped through the
- * production `hostListItemToDirectoryEntry` rather than hand-rolled - the
- * `remoteStatus`/`isRemoteHostDirectoryEntry` shape `hostUnavailability`
- * switches on is exactly the thing a synthetic literal risks getting wrong.
- */
+/** A REAL remote entry with `connectivity: "unknown"`, mapped through the production `hostListItemToDirectoryEntry` rather than hand-rolled - the `remoteStatus`/`isRemoteHostDirectoryEntry` shape `hostUnavailability` switches on is exactly the thing a synthetic literal risks getting wrong. */
 function remoteEntryWithConnectivity(
   hostId: string,
   connectivity: "unknown" | "connectable",
@@ -80,14 +75,7 @@ afterEach(() => {
 });
 
 /**
- * F4/S2: `host-starting` was the one arm with no way out. These pin the
- * deadline that closes it - the fall to `unreachable` at the budget, that the
- * fall carries `basis: "starting-deadline"` (the field that gates the
- * persisted "Terminal permanently closed" notification, see
- * `terminal-tile-close-navigation.test.tsx`'s basis gate suite) - and that
- * every OTHER verdict this hook can produce keeps `basis: "directory"`, so a
- * future change cannot widen the weak-evidence label past the one arm that
- * earns it.
+ * `host-starting` falls to `unreachable` at the budget with `basis: "starting-deadline"`. Every other verdict keeps `basis: "directory"`.
  */
 describe("useHostReachability - starting-deadline basis", () => {
   it("falls from host-starting to unreachable at the budget, with unavailability offline and basis starting-deadline", () => {
@@ -130,10 +118,7 @@ describe("useHostReachability - starting-deadline basis", () => {
     expect(result.current.status).toBe("reachable");
     expect(result.current.basis).toBe("directory");
 
-    // Advancing past what WOULD have been the original deadline must not
-    // retroactively flip a now-reachable host to unreachable - the arm that
-    // re-checks `directoryVerdict.status !== "host-starting"` before
-    // applying the fall is what this asserts.
+    // Advancing past what WOULD have been the original deadline must not retroactively flip a now-reachable host to unreachable - the arm that re-checks `directoryVerdict.status !== "host-starting"` before applying the fall is what this asserts.
     act(() => {
       vi.advanceTimersByTime(HOST_STARTING_BUDGET_MS);
     });
@@ -164,12 +149,7 @@ describe("useHostReachability - starting-deadline basis", () => {
     },
   );
 
-  // S4(a): `indeterminate` connectivity means the cloud could not read
-  // liveness - we learned NOTHING - and the cost of guessing wrong is
-  // asymmetric (`use-host-reachability.ts:150-157`). Guessing dead replaces a
-  // working chat with a Clone offer and fires a PERSISTED terminal-closed
-  // notification; guessing alive costs one recoverable failed dial. This must
-  // never regress into a death claim off a single unreadable liveness probe.
+  // This must never regress into a death claim off a single unreadable liveness probe.
   it("reports reachable, never a death claim, for indeterminate connectivity", () => {
     list.value = {
       data: [remoteEntryWithConnectivity("host-a", "unknown", true)],
@@ -180,19 +160,7 @@ describe("useHostReachability - starting-deadline basis", () => {
     expect(result.current.unavailability).toBeNull();
   });
   /**
-   * The REASON, not just the verdict. `plan-restricted` and `offline` are both
-   * "this client cannot open a session", so a swap between them keeps every
-   * status assertion green while telling the reader the wrong thing: that a
-   * machine which is running perfectly well is off, and that the remedy is a
-   * restart rather than an upgrade. That is not hypothetical - it is the
-   * defect that made every plan-restricted host read as "offline" for months,
-   * and the reason `dead-tile-banner.tsx` carries a five-arm copy table and
-   * `tile-host-load-copy.ts` keys its table on the contract's own union.
-   *
-   * A wrong CONSTANT rather than a wrong verdict, and the narrowest thing in
-   * this suite - which is exactly why nothing else here would catch it.
-   * P4.3's lease-derivation sweep rewrites these surfaces, so this pin is what
-   * stops the swap being re-introduced silently.
+   * Assert the reason, not just the verdict: `plan-restricted` and `offline` both block a session but must not swap copy.
    */
   it("carries plan-restricted as its own reason, never collapsed to offline", () => {
     list.value = {

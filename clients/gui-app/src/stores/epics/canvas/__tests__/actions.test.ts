@@ -67,7 +67,6 @@ function openPinned(
   return openTile(state, node, false, null);
 }
 
-/** Preview open - `openTile` with `preview: true`. */
 function openPreview(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
@@ -126,11 +125,8 @@ describe("openTile (pinned open)", () => {
   });
 
   it("fills an active blank 'New tab' in place instead of stacking beside it", () => {
-    // Repro for the terminal-agent "phantom New tab": a fresh epic seeds a
-    // blank "New tab" placeholder (EmptyEpicBlankRoot) while the agent tile is
-    // still loading; when the agent tile then opens via `openTile`, it must
-    // REPLACE the active blank rather than append a second tab - matching
-    // `openTileInPane`'s fill-in-place semantics (browser new-tab behavior).
+    // Repro for the terminal-agent "phantom New tab": a fresh epic seeds a blank "New tab" placeholder
+    // (EmptyEpicBlankRoot) while the agent tile is still loading; when the agent tile then opens via
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
     state = openBlankTabInPane(state, paneId);
@@ -672,11 +668,8 @@ describe("splitPaneAtEdge", () => {
     expectCanvasInvariants(next);
   });
 
-  // Dropping a pane's ONLY tab on that pane's own edge is the common way to
-  // split a freshly opened Git Diff / Terminal, and the pane drop zone paints
-  // the half-pane split preview for it. The commit must produce that split -
-  // the dragged tile in the highlighted half, the source pane left behind as
-  // an empty opener pane - instead of silently discarding the drop.
+  // Dropping a pane's ONLY tab on that pane's own edge is the common way to split a freshly opened
+  // Git Diff / Terminal, and the pane drop zone paints the half-pane split preview for it.
   it("splits a sole tab onto its own pane edge, leaving an empty opener pane", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
@@ -1132,10 +1125,8 @@ describe("instanceId / content-id decoupling", () => {
   });
 
   it("keeps one tab per host for the same host-minted content id", () => {
-    // Host-minted ids (a chat, a shell) are unique per host, not globally: a
-    // cross-host clone carries the source's ids verbatim. Dedup on the id
-    // alone handed the second host back a tab bound to the FIRST - a window
-    // onto a machine that does not own that content and cannot stream it.
+    // Host-minted ids (a chat, a shell) are unique per host, not globally: a cross-host clone carries
+    // the source's ids verbatim.
     const onHostA = makeManagedCommandOutputTileRef({
       commandId: "cmd-1",
       hostId: TEST_HOST_ID,

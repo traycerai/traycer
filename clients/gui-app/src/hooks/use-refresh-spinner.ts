@@ -27,14 +27,7 @@ function clearTimerForRun(
 }
 
 /**
- * Drives the spinning/disabled state for a refresh affordance: while a refresh
- * is in flight `refreshing` is true and `trigger` is a no-op, re-enabling when
- * the refresh promise settles after a short visible minimum or after
- * `timeoutMs` as a safety cap so a hung refetch can't wedge the button. A run
- * id guards against a slow earlier run's completion clearing a newer run's
- * spinner. `externalRefreshing` folds in a backing query's own loading state
- * (e.g. the initial subscription load) so the same icon reflects both manual
- * refreshes and first paint.
+ * Spinner until the promise settles after a visible minimum, or `timeoutMs` as a hung-refetch cap. A run id so a slow earlier run cannot clear a newer spinner.
  */
 export function useRefreshSpinner(args: {
   readonly onRefresh: () => Promise<void>;

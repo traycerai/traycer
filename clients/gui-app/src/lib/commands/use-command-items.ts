@@ -1,14 +1,6 @@
 /**
- * React hook that aggregates items from every registered source
- * for the given `CommandContext`. Pure sources resolve through
- * `getAllItems`; React sources are consumed via their
- * `useItems(ctx)` hooks - each hook called explicitly here so the
- * rules of hooks are obvious to both React and eslint.
- *
- * Adding a React source:
- *   1. Append it to `REACT_SOURCES` in `./registry.ts`;
- *   2. Add a `const xItems = xSource.useItems(ctx)` line here;
- *   3. Include `xItems` in the merge memo.
+ * React hook that aggregates items from every registered source for the given `CommandContext`.
+ * Pure sources resolve through `getAllItems`; React sources are consumed via their `useItems(ctx)` hooks - each hook called explicitly here so the rules of hooks are obvious to both React and eslint.
  */
 import { useMemo } from "react";
 import { getAllItems } from "@/lib/commands/registry";

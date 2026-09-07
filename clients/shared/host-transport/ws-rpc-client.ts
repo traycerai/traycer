@@ -58,82 +58,30 @@ import type { TimerHandle } from "./timer-handle";
 import { recordNegotiatedHostManifest } from "./negotiated-manifest-registry";
 import { resolveUnavailableMethodDegrade } from "./unavailable-method-degrade";
 
-/**
- * Minimal endpoint shape the transport layer needs to dial a host. The
- * app-facing `HostDirectoryEntry` is a structural superset so existing
- * callers keep passing their directory entries unchanged - this narrow type
- * exists purely to keep `host-transport` free of any dependency on the
- * app-runtime host-directory module.
- */
 export type { HostTransportEndpoint } from "./host-messenger";
 
 /**
- * The complete reason emitted by hosts through 1.1.9 for the post-open timeout,
- * anchored at both ends so only the host's timeout value may vary.
- *
- * A prefix test is not good enough here. This match is what promotes an
- * `UNAUTHORIZED` - normally a hard credential rejection - into a no-dispatch
- * attestation that permits retrying a non-idempotent method, so it must
- * recognize the historical string and nothing that merely starts like it.
+ * The complete reason emitted by hosts through 1.1.9 for the post-open timeout, anchored at both ends so only the host's timeout value may vary.
  */
 const LEGACY_RPC_REQUEST_TIMEOUT_REASON =
   /^Timed out waiting for 'request' frame after openAck \(\d+ms\)$/;
 
-/**
- * Production value for `WsRpcClientOptions.hostAttestationWindowMs`.
- *
- * The host's own deadline is 30s (`DEFAULT_POST_OPEN_TIMEOUT_MS` in its RPC
- * server), but that timer only *starts* counting event-loop time - a stalled
- * host fires it late. Issue #726 measured awake stalls of 35.7-40.8s, and the
- * profiled stall class reaches roughly 45s; 50s covers that class and leaves
- * bounded slack for delivering the frame afterwards.
- */
 export const HOST_POST_OPEN_ATTESTATION_WINDOW_MS = 50_000;
 
-/**
- * Freshly-armed tail of every attestation grace, and the floor for a grace
- * whose window share is already spent.
- *
- * Both peers' deadlines are plain `setTimeout`s, so a suspend/resume or an
- * event-loop stall runs every overdue callback in a single wake batch. A client
- * timer that ends the call from inside that batch wins against nothing: the
- * host's equally overdue post-`openAck` timer has not run yet, let alone put its
- * no-dispatch fatal on the wire. So no client timer ends the wait directly - it
- * hands over to this tail, which was armed *after* that callback ran and
- * therefore measures awake time. Issue #726 recorded 114ms between the desktop's
- * `system resumed` line and the host firing its overdue post-open timer, so a
- * few seconds of awake time is generous slack for emitting and delivering the
- * frame.
- *
- * The same value floors the grace when the caller's own deadline already
- * consumed the whole window - `providers.awaitLogin`'s 16-minute long poll, or
- * any deadline that expired late because both processes were suspended. Such a
- * deadline proves nothing about whether the host consumed the request, so it
- * needs a delivery opportunity too; it just does not need a second full window.
- */
 const ATTESTATION_DELIVERY_SLACK_MS = 5_000;
 
 /**
- * Overshoot past a delivery leg's own duration that means the process was not
- * *running* for most of it, rather than merely busy.
- *
- * A healthy event loop fires a timer within milliseconds of its deadline, and
- * even a badly congested one is late by hundreds; issue #726 measured host
- * event-loop gaps of 34-41 *seconds* and suspension gaps of minutes. A second
- * cleanly separates ordinary jitter - which must still let the grace end - from
- * a scheduling gap that froze this process, and with it the host's ability to
- * emit and deliver its attestation.
+ * Overshoot past a delivery leg's own duration that means the process was not *running* for most of it, rather than merely busy.
+ * A second cleanly separates ordinary jitter - which must still let the grace end - from a scheduling gap that froze this process, and with it the host's ability to emit and deliver its attestation.
  */
 const SUSPENSION_OVERSHOOT_TOLERANCE_MS = 1_000;
 
 /**
- * Injectable source of the host endpoint the client should target. Returning
- * `null` means "no host currently bound" - the client rejects requests with
- * a `HostRpcError` rather than dialing.
+ * Injectable source of the host endpoint the client should target.
+ * Returning `null` means "no host currently bound" - the client rejects requests with a `HostRpcError` rather than dialing.
  */
 export type HostEndpointProvider = () => HostTransportEndpoint | null;
 
-/** Generates request IDs. */
 export type RequestIdProvider = () => string;
 
 export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
@@ -143,127 +91,24 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
   readonly dialTimeoutMs: number;
   readonly frameTimeoutMs: number;
   /**
-   * Where this transport's dial outcomes and per-host connectivity go
-   * (redesign P1.3). See {@link LocalHostLiveness} for why sessions here are
-   * refcounted connectivity episodes rather than one per RPC. Shells with no
-   * selection authority to feed pass `NO_TRANSPORT_EVIDENCE`.
+   * See {@link LocalHostLiveness} for why sessions here are refcounted connectivity episodes rather than one per RPC.
    */
   readonly evidence: TransportEvidenceReporter;
   /**
-   * How long after `openAck` this deployment's hosts are still expected to be
-   * sitting in `awaitingRequest`, and therefore still able to emit their
-   * no-dispatch attestation. Production clients pass
-   * `HOST_POST_OPEN_ATTESTATION_WINDOW_MS`; `0` disables the grace entirely.
-   *
-   * When the client's own response deadline expires first, the response wait is
-   * held open for whatever is left of this window instead of closing the socket
-   * over an ambiguous in-flight request - see `openSession`. Sizing the grace
-   * against this window rather than adding a fixed grace on top of the caller's
-   * deadline makes it shrink as the caller's deadline grows, so a long CLI wait
-   * never stacks a second full window on top of the first.
-   *
-   * It never shrinks to nothing, though: every post-send timeout keeps at least
-   * `ATTESTATION_DELIVERY_SLACK_MS`, because a caller deadline that expired late
-   * across a suspension - or a long-poll budget that outlasts this window
-   * outright - says nothing about whether the host ever consumed the request.
-   * `0` is the only way to opt out of the grace entirely, and means "this caller
-   * cannot act on an attestation even if it arrives" (see the CLI's fast-fail
-   * policy).
-   *
-   * The grace is a bound on *active* time, not on wall-clock time. Every leg is
-   * a `setTimeout`, so a suspend/resume can run any callback arbitrarily late;
-   * when that happens the wait gets a freshly measured delivery leg from
-   * whenever the callback actually ran, and total wall-clock can far exceed this
-   * window. That is the point - a resume is exactly when a host fires its
-   * overdue post-open timer. What is guaranteed is that a process running
-   * uninterrupted never waits longer than `hostAttestationWindowMs`, and that
-   * the grace always ends on the first delivery leg that gets its full duration
-   * of running time. Scheduling gaps neither peer could act through do not
-   * consume that bound - and are not counted, since a count of sleeps is not
-   * something the transport contract should encode.
+   * How long after `openAck` this deployment's hosts are still expected to be sitting in `awaitingRequest`, and therefore still able to emit their no-dispatch attestation.
+   * When the client's own response deadline expires first, the response wait is held open for whatever is left of this window instead of closing the socket over an ambiguous in-flight request - see `openSession`.
    */
   readonly hostAttestationWindowMs: number;
   /**
-   * WHO THIS CLIENT IS, sent on every `open` frame this transport writes.
-   *
-   * REQUIRED, not optional, and that is the whole safety property: a current
-   * first-party build must not be able to ship a connection that forgot to
-   * identify itself, because the host reads an absent identity as legacy
-   * epoch 1 and will terminally refuse it once a floor is active. A default
-   * here would let a new composition root silently produce that outcome; the
-   * compiler refuses instead.
-   *
-   * It is a PROCESS CONSTANT (kind, epoch, and build version are all fixed
-   * for the life of the process - updating the app restarts it), which is why
-   * it is a construction dependency rather than something resolved per call.
+   * Who this client IS, sent on every `open` frame this transport writes.
+   * It is a process constant (kind, epoch, and build version are all fixed for the life of the process - updating the app restarts it), which is why it is a construction dependency rather than something resolved per call.
    */
   readonly clientIdentity: FirstPartyClientIdentity;
 }
 
 /**
- * Concrete `IHostMessenger` that runs a single unary RPC over a freshly
- * dialed WebSocket connection per call.
- *
- * Per-request lifecycle:
- *   resolve bearer → dial → send `open { token, manifest }`
- *        → await `openAck { manifest }`
- *        → run client-side `checkCompatibility` against the host manifest
- *        → compute the asymmetric per-method on-wire schema version
- *        → transform caller's canonical params to on-wire shape
- *        → send `request` framed at the computed on-wire version
- *        → await `response` (correlated by `requestId`)
- *        → transform on-wire response back to caller's canonical shape
- *        → close (1000)
- *
- * Asymmetric per-method version-on-wire (specs/versioned-RPCs.yml, D-S6):
- *   - Same major, client newer minor: on-wire = host's older minor; request
- *     params are Zod-stripped to the older schema; response is upgraded from
- *     host's minor up to the client's canonical. If the caller's payload
- *     doesn't project onto the older schema at all (a newer-minor-only
- *     capability, e.g. a field the older schema requires non-null) this
- *     surfaces as `DOWNGRADE_UNSUPPORTED` before the request frame is sent -
- *     the same-major counterpart to the cross-major no-bridge case below.
- *   - Same major, client older minor: on-wire = caller's canonical; request
- *     and response flow unchanged (host handles the transforms).
- *   - Cross major, client newer: on-wire = host's canonical; the request is
- *     downgraded via `downgradeRequestAcrossMajors`; the response is upgraded
- *     via `upgradeResponseToVersion`. A missing direct downgrade bridge on
- *     the client surfaces as `DOWNGRADE_UNSUPPORTED` before the request frame
- *     is sent.
- *   - Cross major, client older: on-wire = caller's canonical; request and
- *     response flow unchanged.
- *
- * Failure mapping (Refactoring Approach D-N2):
- *   - dial timeout / transport unreachable / transport aborted / frame timeout
- *     → `HostTransportFailureError(code: "RPC_ERROR")` (the pre-send subset is
- *     a `RetryableTransportError`)
- *   - host post-open request timeout (including the exact legacy `UNAUTHORIZED`
- *     spelling) → `RetryableTransportError(code: "RPC_ERROR")`; the fatal is
- *     host attestation that the request was never dispatched. If the client's
- *     own response deadline expires first, the socket is held open for a
- *     bounded remainder of `hostAttestationWindowMs` so that attestation can
- *     still arrive; the ambiguous local timeout on its own stays non-retryable,
- *     and once it has been recorded every other non-abort terminal event
- *     reports it rather than its own error.
- *   - missing / released bearer before dial → `HostRpcError(code: "RPC_ERROR")`
- *   - every other host `fatalError { code }` (`INCOMPATIBLE`, `UNAUTHORIZED`,
- *     or a domain-specific code) → known RPC codes are preserved on
- *     `HostRpcError.code`; domain-specific codes become `RPC_ERROR` while
- *     the original code stays in `fatalDetails`.
- *   - client mirror compat failure (other than cross-major no-bridge on the
- *     called method) → emits a `fatalError` frame at the client, then
- *     surfaces the same details back as a thrown
- *     `HostRpcError(code: "INCOMPATIBLE")`.
- *   - cross-major no-bridge, or same-major request-projection failure, on
- *     the called method → no `fatalError` frame is emitted; surfaces as
- *     `HostRpcError(code: "DOWNGRADE_UNSUPPORTED")`.
- *   - response upgrade throw → `HostRpcError(code: "RPC_ERROR")` with the
- *     wrapped message.
- *
- * `WsRpcClient` deliberately holds no socket state across requests. Every call
- * to `request()` creates a fresh `WebSocketLike` through `webSocketFactory`
- * and discards it on completion - so cross-request leaks are impossible by
- * construction.
+ * Concrete `IHostMessenger` that runs a single unary RPC over a freshly dialed WebSocket connection per call.
+ * A missing direct downgrade bridge on the client surfaces as `DOWNGRADE_UNSUPPORTED` before the request frame is sent.
  */
 
 export class WsRpcClient<
@@ -278,9 +123,7 @@ export class WsRpcClient<
   private readonly evidence: TransportEvidenceReporter;
   private readonly liveness: LocalHostLiveness;
   /**
-   * Serialized ONCE at construction, not per request: every member is a
-   * process constant, so re-projecting it on each of this transport's
-   * per-request sockets would allocate an identical object per RPC.
+   * Serialized once at construction, not per request: every member is a process constant, so re-projecting it on each of this transport's per-request sockets would allocate an identical object per RPC.
    */
   private readonly clientIdentity: ClientHandshakeIdentity;
 
@@ -341,10 +184,7 @@ export class WsRpcClient<
     const session = openSession({
       socket: this.webSocketFactory.create(
         selected.websocketUrl,
-        // Classified here because here is where the method is known: the
-        // factory sees a URL, and every unary call in this app dials its own
-        // socket, so this is the only frame that can tell a catalog prefetch
-        // apart from a call a user is waiting on. See `dial-priority.ts`.
+        // See `dial-priority.ts`.
         dialPriorityForMethod(method),
       ),
       dialTimeoutMs: this.dialTimeoutMs,
@@ -375,9 +215,7 @@ export class WsRpcClient<
         clientIdentity: this.clientIdentity,
       });
 
-      // Handshake stays on the transport default even when the caller
-      // extended the response wait - a host that can't complete `openAck`
-      // quickly is unreachable, and long-poll patience must not mask that.
+      // Handshake stays on the transport default even when the caller extended the response wait - a host that can't complete `openAck` quickly is unreachable, and long-poll patience must not mask that.
       const ackFrame = await session.next(this.frameTimeoutMs);
 
       if (ackFrame.kind === "fatalError") {
@@ -401,11 +239,8 @@ export class WsRpcClient<
         ackFrame.manifest,
         ackFrame.optionalManifest,
       );
-      // Publish what this host advertised so UI layers can gate an optional
-      // (non-floor) affordance without calling the method to find out. Recorded
-      // BEFORE the compatibility check: an incompatible pairing still tells us
-      // truthfully which methods the host has, and the gate wants that fact
-      // even when this particular call is about to fail.
+      // Publish what this host advertised so UI layers can gate an optional (non-floor) affordance without calling the method to find out.
+      // Recorded before the compatibility check: an incompatible pairing still tells us truthfully which methods the host has, and the gate wants that fact even when this particular call is about to fail.
       recordNegotiatedHostManifest(selected.hostId, mergedHostManifest);
       const clientCanonical = mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];
@@ -415,21 +250,8 @@ export class WsRpcClient<
           true
           ? idempotencyKey
           : null;
-      // A REPLAY may not go out unkeyed. Stripping is right on a first attempt
-      // against a host that predates the capability - nothing was dispatched,
-      // so an unkeyed send is a first send - but this connection is not the one
-      // that earned the retry. That was granted because the PREVIOUS connection
-      // negotiated a key and the host was therefore deduplicating it; a
-      // reconnect onto an incarnation without the capability breaks the very
-      // premise the retry rests on, and the earlier attempt may already have
-      // committed.
-      //
-      // Ambiguous rather than retryable, and that is the point of failing here
-      // instead of dispatching: the outcome of the first attempt is genuinely
-      // unknown, so the honest answer is the one that makes a caller reconcile
-      // (`classifyEpicWriteCommandFailure` routes `HostTransportFailureError`
-      // to `unknown-outcome`) rather than one that invites a third attempt into
-      // the same hole.
+      // A replay may not go out unkeyed.
+      // Stripping is right on a first attempt against a host that predates the capability - nothing was dispatched, so an unkeyed send is a first send - but this connection is not the one that earned the retry.
       if (options.replayMustBeKeyed && wireIdempotencyKey === null) {
         throw new HostTransportFailureError({
           code: "RPC_ERROR",
@@ -600,7 +422,7 @@ async function executeUnavailableMethodDegrade<
   hostId: string,
   idempotencyKey: string | null,
 ): Promise<ResponseOfMethod<Registry, Method>> {
-  // Degrade POLICY is shared with the remote mux transport (see
+  // Degrade policy is shared with the remote mux transport (see
   // `unavailable-method-degrade.ts`); only the dispatch below is ws-specific.
   return (await resolveUnavailableMethodDegrade({
     registry,
@@ -632,12 +454,6 @@ interface PreparedRequest<Payload> {
   readonly onWirePayload: Payload;
 }
 
-/**
- * Applies the asymmetric per-method transform on the request leg. When the
- * client is the older side the caller's canonical payload travels unchanged;
- * when the client is the newer side we downgrade via `downgradeRequestAcrossMajors`
- * (cross-major) or Zod-strip on the older minor's request schema (same-major).
- */
 export function prepareRequestPayload<Payload>(
   methodRegistry: MethodVersionRegistry,
   clientCanonical: SchemaVersion,
@@ -666,12 +482,8 @@ export function prepareRequestPayload<Payload>(
     }
     const strippedParse = olderEntry.contract.requestSchema.safeParse(params);
     if (!strippedParse.success) {
-      // Same-major counterpart to the cross-major no-bridge case below: the
-      // caller's request genuinely doesn't fit the older peer's schema (a
-      // newer-minor-only capability, not an additive field the peer would
-      // just ignore). `DOWNGRADE_UNSUPPORTED` - not the generic `RPC_ERROR`
-      // transport/network code - lets a caller distinguish "this host is too
-      // old for what I just asked" from a real connectivity failure.
+      // Same-major counterpart to the cross-major no-bridge case below: the caller's request genuinely doesn't fit the older peer's schema (a newer-minor-only capability, not an additive field the peer would just ignore).
+      // `DOWNGRADE_UNSUPPORTED` - not the generic `RPC_ERROR` transport/network code - lets a caller distinguish "this host is too old for what I just asked" from a real connectivity failure.
       throw new HostRpcError({
         code: "DOWNGRADE_UNSUPPORTED",
         message: `Failed to project request params onto ${hostCanonical.major}.${hostCanonical.minor}: ${strippedParse.error.message}`,
@@ -714,12 +526,6 @@ export function prepareRequestPayload<Payload>(
   };
 }
 
-/**
- * Response counterpart to `prepareRequestPayload`. When the client is the older
- * side the frame payload already matches the caller's canonical and passes
- * through; when the client is the newer side we upgrade along the installed
- * chain via `upgradeResponseToVersion`.
- */
 export function decodeResponsePayload<Payload>(
   methodRegistry: MethodVersionRegistry,
   clientCanonical: SchemaVersion,
@@ -807,15 +613,7 @@ function upgradeResponseAlongChain<Payload>(
   context: { readonly request: unknown; readonly hostId: string } | null,
 ): Payload {
   try {
-    // The host is the older side here, so `result` is raw wire data framed at
-    // `fromVersion` - the one place old-host payloads enter the client. Parse
-    // it through that version's response schema before upgrading so the
-    // line's `.catch(...)` tolerances (fields added mid-line that old host
-    // builds omit, e.g. `providers.list@3.0`'s `profiles`) actually apply -
-    // otherwise the upgraded payload can violate the caller's canonical type
-    // and blow up deep in app code instead of at this boundary. A version
-    // absent from the registry falls through untouched and surfaces the
-    // chain's own not-installed error below.
+    // The host is the older side here, so `result` is raw wire data framed at `fromVersion` - the one place old-host payloads enter the client.
     const fromEntry =
       methodRegistry[fromVersion.major]?.versions[fromVersion.minor];
     let chainInput = result;
@@ -857,12 +655,8 @@ function upgradeResponseAlongChain<Payload>(
 }
 
 /**
- * Detects the cross-major no-bridge case where the client is the newer side
- * for the method being called. Returning a non-null string signals the caller
- * to surface `DOWNGRADE_UNSUPPORTED` instead of the broader `INCOMPATIBLE`
- * fatal-error path. Other incompatibilities (missing methods, same-major
- * breaks, or cross-major where host is newer) continue to flow through the
- * fatal-error emission.
+ * Detects the cross-major no-bridge case where the client is the newer side for the method being called.
+ * Returning a non-null string signals the caller to surface `DOWNGRADE_UNSUPPORTED` instead of the broader `incompatible` fatal-error path.
  */
 function classifyDowngradeFailure(
   details: FatalErrorDetails,
@@ -898,21 +692,15 @@ function hostFatalError(
   phase: "beforeRequest" | "afterRequest",
 ): HostRpcError {
   const details = frame.details;
-  // Before the request, every host-marked transient is safe to retry. After the
-  // local send, retry only the post-open timeout: that fatal is host attestation
-  // that it remained `awaitingRequest` and never dispatched the call. The legacy
-  // reason match lets new clients recover against hosts through 1.1.9, which
-  // mislabeled the timeout as UNAUTHORIZED and omitted `retryable`.
+  // Before the request, every host-marked transient is safe to retry.
+  // After the local send, retry only the post-open timeout: that fatal is host attestation that it remained `awaitingRequest` and never dispatched the call.
   if (
     (phase === "beforeRequest" && details.retryable === true) ||
     isRpcRequestTimeout(details)
   ) {
     return new RetryableTransportError({
       code: "RPC_ERROR",
-      // BOTH arms above are no-dispatch, which is why this is `false` and not
-      // a judgement call: one is `phase === "beforeRequest"`, the other is the
-      // host's own attestation that it stayed `awaitingRequest`. Neither owes
-      // the next attempt a key.
+      // Both arms above are no-dispatch, which is why this is `false` and not a judgement call: one is `phase === "beforeRequest"`, the other is the host's own attestation that it stayed `awaitingRequest`.
       replaySafetyFromKey: false,
       message: details.reason,
       requestId,
@@ -930,10 +718,7 @@ function hostFatalError(
 }
 
 /**
- * True for the one host fatal that attests the request was never dispatched:
- * the host's post-`openAck` deadline expired while it was still in
- * `awaitingRequest`. Matched in the typed `RPC_REQUEST_TIMEOUT` spelling and in
- * the exact legacy `UNAUTHORIZED` form emitted by hosts through 1.1.9.
+ * True for the one host fatal that attests the request was never dispatched: the host's post-`openAck` deadline expired while it was still in `awaitingRequest`.
  */
 function isPostOpenTimeoutAttestation(frame: HostFrame): boolean {
   return frame.kind === "fatalError" && isRpcRequestTimeout(frame.details);
@@ -982,12 +767,7 @@ function decodeResponseFrame(
 }
 
 /**
- * The two legs a post-send response timeout waits through before the call is
- * declared ambiguously failed. Splitting the grace is what makes it
- * resume-safe: the leg that finally gives up is always armed *after* the
- * previous timer callback actually ran, so an overdue client timer can never
- * end the call in the same wake batch that is about to deliver the host's
- * equally overdue no-dispatch fatal.
+ * The two legs a post-send response timeout waits through before the call is declared ambiguously failed.
  */
 interface AttestationGrace {
   /**
@@ -1014,35 +794,10 @@ interface SessionOptions {
 }
 
 /**
- * The local transport's connectivity, as the selection authority needs to see
- * it (redesign P1.3, Q3 ruling (c)).
- *
- * This transport opens a FRESH socket per RPC, so a naive per-socket
- * announcement would make the authority's session inventory flicker once per
- * request. That is not merely noisy - a live session is the authority's
- * strongest evidence class and suppresses death accumulation entirely, so
- * announcing and retracting it thousands of times a day would make death
- * suppression a race against RPC timing, at exactly the moments evidence
- * matters most.
- *
- * So sessions here track CONNECTIVITY, not requests: the client refcounts the
- * host's open sockets, announcing one logical session on the 0 -> 1 edge and
- * retracting it on 1 -> 0. Between those edges an idle gap of a few
- * milliseconds between two RPCs no longer reads as the host dying and coming
- * back. Dial ATTEMPTS stay per-socket - they are genuine per-attempt evidence,
- * and each carries the call's own request id.
+ * This transport opens a fresh socket per RPC, so a naive per-socket announcement would make the authority's session inventory flicker once per request.
  */
 /**
- * Monotonic source for local RPC session ids, PROCESS-scoped (module state)
- * rather than per client instance - the same shape `WsStreamClient` uses for
- * `local-stream:s<n>`. The evidence kernel it reports into is renderer-
- * lifetime and keys sessions by id: when the host runtime is rebuilt while an
- * old instance's socket is still open, a per-instance counter restarting at
- * zero made the replacement announce the SAME `local-ws:s1`, the authority
- * deduplicated the second establishment, and the old socket's eventual `lost`
- * deleted and tombstoned the shared id - retracting the replacement's live
- * evidence and letting later refusals deaden or fail over from a host that
- * still had a live socket.
+ * Monotonic source for local RPC session ids, process-scoped (module state) rather than per client instance - the same shape `WsStreamClient` uses for `local-stream:s<n>`.
  */
 let localRpcSessionSeq = 0;
 
@@ -1060,10 +815,6 @@ class LocalHostLiveness {
     this.openSocketsByHost.set(hostId, next);
     if (next > 1) return;
     localRpcSessionSeq += 1;
-    // Scoped to the process-wide counter rather than to the request id, so
-    // the id names the CONNECTIVITY episode it belongs to (not whichever RPC
-    // happened to open the first socket of it) and is unique across every
-    // client instance that ever reports into this renderer's kernel.
     const sessionId = `local-ws:s${localRpcSessionSeq}`;
     this.announcedByHost.set(hostId, sessionId);
     this.evidence.sessionEstablished(hostId, sessionId, "local-ws");
@@ -1088,16 +839,8 @@ class LocalHostLiveness {
 interface Session {
   dial(): Promise<void>;
   /**
-   * Waits up to `timeoutMs` for the next host frame. The budget is per wait,
-   * not per session: the handshake (`openAck`) wait passes the transport's
-   * default frame timeout, while the response wait may pass a caller-extended
-   * budget for long-poll methods.
-   *
-   * `timeoutMs` bounds when this wait can *succeed*, not always when it
-   * rejects: a post-send timeout keeps the socket open for the remainder of the
-   * host's attestation window (see `attestationGraceFor`). A frame that arrives
-   * in that window can no longer complete the call - only the host's
-   * no-dispatch fatal is surfaced, and every other frame keeps the timeout.
+   * Waits up to `timeoutMs` for the next host frame.
+   * A frame that arrives in that window can no longer complete the call - only the host's no-dispatch fatal is surfaced, and every other frame keeps the timeout.
    */
   next(timeoutMs: number): Promise<HostFrame>;
   send(frame: ClientFrame): void;
@@ -1105,13 +848,6 @@ interface Session {
   close(code: number, reason: string): void;
 }
 
-/**
- * Wires the per-request socket lifetime into promise-shaped accessors. All
- * timer/handler bookkeeping lives here so `WsRpcClient.request` reads as a
- * straight phase script and so failures from any source (dial timeout, frame
- * timeout, `onerror`, premature `onclose`) collapse into the same rejection
- * channel.
- */
 function openSession(options: SessionOptions): Session {
   const {
     socket,
@@ -1127,24 +863,10 @@ function openSession(options: SessionOptions): Session {
   let opened = false;
   let closed = false;
   /**
-   * Set by `onerror` when it fires before the socket ever opened. Under Blink
-   * a pre-open `error` event is followed by the awaiting caller's `finally`
-   * closing this session (setting `closed = true`) in the microtask
-   * checkpoint, and only THEN does `close` fire - so by the time `onclose`
-   * reads `closed` for `selfInitiated`, it is true even though the caller's
-   * teardown was itself downstream of a genuine refusal, not the cause of it.
-   * Without this flag that refusal is reported as `indeterminate` and
-   * silently dropped from death detection.
+   * Set by `onerror` when it fires before the socket ever opened.
+   * Without this flag that refusal is reported as `indeterminate` and silently dropped from death detection.
    */
   let erroredBeforeOpen = false;
-  /**
-   * Exactly-once bookkeeping for the two evidence duties this socket owes the
-   * selection authority. `livenessEnded` guards the refcount decrement, which
-   * must pair with its increment no matter which of the three teardown paths
-   * runs (`onclose`, the caller's `close()`, an authority `abort()`) - a
-   * missed decrement pins a phantom live session that suppresses every later
-   * death verdict for this host.
-   */
   let livenessStarted = false;
   let livenessEnded = false;
 
@@ -1154,12 +876,6 @@ function openSession(options: SessionOptions): Session {
     liveness.socketClosed(hostId);
   };
 
-  /**
-   * One dial outcome per socket, whichever event decides it first. The
-   * authority deduplicates by attempt id anyway, but reporting once keeps the
-   * call sites honest about what an ATTEMPT is: `onerror` is normally followed
-   * by `onclose`, and both describe the same failed dial.
-   */
   let dialOutcomeReported = false;
   const reportDialOutcome = (
     outcome: "success" | "refusal" | "timeout" | "indeterminate",
@@ -1174,46 +890,26 @@ function openSession(options: SessionOptions): Session {
       evidence.reportDialTimeout(hostId, requestId, "local-ws");
       return;
     }
-    // An attempt we abandoned ourselves. Inert by contract - it advances no
-    // counter - but still reported, because the attempt did happen and one
-    // attempt owes exactly one outcome. Staying silent would keep death
-    // detection honest too, yet it would lose the diagnostic and quietly
-    // invent a third convention next to the remote path, which already
-    // classifies its own teardowns this way.
+    // An attempt we abandoned ourselves.
     if (outcome === "indeterminate") {
       evidence.reportDialIndeterminate(hostId, requestId, "local-ws");
       return;
     }
-    // A close before the socket ever opened IS host-plane evidence: the
-    // connection was refused, or something answered and hung up before the
-    // handshake. `refusalDetail` is null - `plan-restricted` is a remote
-    // entitlement verdict with a single provenance and cannot arise here.
+    // A close before the socket ever opened IS host-plane evidence: the connection was refused, or something answered and hung up before the handshake.
+    // `refusalDetail` is null - `plan-restricted` is a remote entitlement verdict with a single provenance and cannot arise here.
     evidence.reportDialRefusal(hostId, requestId, "local-ws", null);
   };
-  // Flipped the instant the `request` frame is handed to `send`. Before this
-  // point every transient failure is provably pre-send (the host never saw the
-  // call), so it surfaces as a `RetryableTransportError`; after it, the same
-  // failure shapes stay a non-retryable `HostTransportFailureError` because a
-  // retry could re-execute a non-idempotent method. A negotiated idempotency
-  // key is the other safe case: the host replays the original result instead
-  // of dispatching twice. Without that negotiated key only the host itself can
-  // lift the ambiguity, by attesting it never dispatched the request - which
-  // is what the attestation grace below waits for.
+  // Flipped the instant the `request` frame is handed to `send`.
+  // A negotiated idempotency key is the other safe case: the host replays the original result instead of dispatching twice.
   let requestSent = false;
   let requestReplaySafe = false;
   let failure: HostRpcError | null = null;
-  // Non-null only for the duration of the attestation grace: the ambiguous
-  // post-send response timeout that will be raised unless the host attests,
-  // within the remainder of its post-`openAck` window, that it never dispatched
-  // the request. While it is set it is the session's decided outcome - see the
-  // sticky rule in `failAll`.
+  // While it is set it is the session's decided outcome - see the sticky rule in `failAll`.
   let ambiguousResponseTimeout: HostRpcError | null = null;
 
   /**
-   * Builds the failure for a transient transport/timeout event (dial timeout,
-   * handshake `onerror`/`onclose`, `openAck` frame timeout). It is retryable
-   * only while the request frame has not yet been sent; a malformed frame or a
-   * host-originated error never routes through here.
+   * Builds the failure for a transient transport/timeout event (dial timeout, handshake `onerror`/`onclose`, `openAck` frame timeout).
+   * It is retryable only while the request frame has not yet been sent; a malformed frame or a host-originated error never routes through here.
    */
   const transientFailure = (message: string): HostRpcError =>
     requestSent && !requestReplaySafe
@@ -1230,27 +926,14 @@ function openSession(options: SessionOptions): Session {
           requestId,
           method,
           fatalDetails: null,
-          // The ground for the retry, read straight off the branch that
-          // granted it: reaching here with `requestSent` means the key is the
-          // only thing making a replay safe, so the next attempt has to carry
-          // one. Pre-send needs no key - the host never saw the call.
+          // The ground for the retry, read straight off the branch that granted it: reaching here with `requestSent` means the key is the only thing making a replay safe, so the next attempt has to carry one.
+          // Pre-send needs no key - the host never saw the call.
           replaySafetyFromKey: requestSent,
         });
 
   /**
-   * The grace granted at the moment a frame wait times out, or `null` when
-   * there is nothing to wait for: the request frame was never sent (that
-   * failure is already provably no-dispatch and retryable on its own), or this
-   * caller opted out with a zero window.
-   *
-   * The response timer is armed immediately after `openAck` is consumed, so
-   * `waitTimeoutMs` is the share of the window this wait has nominally consumed
-   * - no clock reading needed. It is nominal rather than measured: if the
-   * response timer itself ran late (suspend/resume), more wall-clock has really
-   * elapsed than the window models. That is precisely when an attestation is
-   * about to arrive, which is why the remainder is floored at the delivery
-   * slack instead of collapsing to "no grace". The total stays bounded by
-   * `hostAttestationWindowMs` either way.
+   * The response timer is armed immediately after `openAck` is consumed, so `waitTimeoutMs` is the share of the window this wait has nominally consumed - no clock reading needed.
+   * That is precisely when an attestation is about to arrive, which is why the remainder is floored at the delivery slack instead of collapsing to "no grace".
    */
   const attestationGraceFor = (
     waitTimeoutMs: number,
@@ -1281,18 +964,6 @@ function openSession(options: SessionOptions): Session {
     readonly timer: TimerHandle;
   } | null = null;
 
-  /**
-   * Single terminal transition for the session. Every failing event routes
-   * here, which is also where the post-deadline outcome is made sticky:
-   * once `ambiguousResponseTimeout` is recorded, that error *is* the call's
-   * answer, because the request may already have been dispatched and only the
-   * host's no-dispatch attestation - which resolves the wait rather than
-   * failing it - can change that. A close, a transport error, a malformed
-   * frame, a late/unrelated frame, and grace expiry are all downstream of a
-   * fate already decided, so none of them may substitute its own error and make
-   * the reported failure race-dependent. An authority abort is the one
-   * caller-owned cancellation that still overrides.
-   */
   const failAll = (error: HostRpcError): void => {
     const ambiguous = ambiguousResponseTimeout;
     const settled =
@@ -1318,10 +989,8 @@ function openSession(options: SessionOptions): Session {
   };
 
   /**
-   * Ends a wait that is already inside its attestation grace. The sticky rule
-   * in `failAll` supplies the recorded timeout; this exists so the callers that
-   * merely observe "the grace produced nothing usable" don't have to invent an
-   * error the caller will never see.
+   * Ends a wait that is already inside its attestation grace.
+   * The sticky rule in `failAll` supplies the recorded timeout; this exists so the callers that merely observe "the grace produced nothing usable" don't have to invent an error the caller will never see.
    */
   const failWithAmbiguousTimeout = (): void => {
     const ambiguous = ambiguousResponseTimeout;
@@ -1332,11 +1001,8 @@ function openSession(options: SessionOptions): Session {
   };
 
   /**
-   * Re-arms the pending response wait for one leg of the grace, keeping the
-   * caller's resolvers attached so an attestation arriving in any leg still
-   * settles the original `next()` promise. The window leg hands over to the
-   * delivery leg instead of ending the call - see `ATTESTATION_DELIVERY_SLACK_MS`
-   * for why the last word must belong to a freshly armed timer.
+   * Re-arms the pending response wait for one leg of the grace, keeping the caller's resolvers attached so an attestation arriving in any leg still settles the original `next()` promise.
+   * The window leg hands over to the delivery leg instead of ending the call - see `ATTESTATION_DELIVERY_SLACK_MS` for why the last word must belong to a freshly armed timer.
    */
   const armAttestationLeg = (grace: AttestationGrace): void => {
     const resolver = frameResolver;
@@ -1359,26 +1025,8 @@ function openSession(options: SessionOptions): Session {
   };
 
   /**
-   * The one place the attestation grace is allowed to end the call, and the
-   * reason it is not simply `failWithAmbiguousTimeout`.
-   *
-   * Handing the window leg over to a freshly armed delivery leg only moves the
-   * resume hazard: if the machine suspends *inside* that delivery leg, its
-   * callback is overdue on wake too and would again beat the host's equally
-   * overdue no-dispatch fatal. So the last leg reads the wall clock. Firing on
-   * time means this process really was running for the whole leg and nothing
-   * arrived - the honest end of the grace. Firing far late means the leg
-   * measured a scheduling gap rather than host silence, so it is re-armed to
-   * become the running delivery opportunity it was meant to be.
-   *
-   * There is deliberately no cap on how often that can happen. A cap would
-   * write a count of sleeps into the transport contract, and the call would
-   * eventually fail for the single reason this whole mechanism exists to rule
-   * out: the client's timer callback won the wake. What bounds the grace is
-   * *active* time - the first delivery leg that actually gets its full duration
-   * of running time ends the call - not wall-clock time or how many scheduling
-   * gaps preceded it. Time in which neither process could make progress is not
-   * evidence about dispatch.
+   * The one place the attestation grace is allowed to end the call, and the reason it is not simply `failWithAmbiguousTimeout`.
+   * Firing far late means the leg measured a scheduling gap rather than host silence, so it is re-armed to become the running delivery opportunity it was meant to be.
    */
   const settleDeliveryLeg = (
     armedAt: number,
@@ -1395,9 +1043,7 @@ function openSession(options: SessionOptions): Session {
   socket.onopen = () => {
     opened = true;
     livenessStarted = true;
-    // Success first, then the announcement: the success clears this host's
-    // death streak, and the live session then makes later failures inert until
-    // it is retracted.
+    // Success first, then the announcement: the success clears this host's death streak, and the live session then makes later failures inert until it is retracted.
     reportDialOutcome("success");
     liveness.socketOpened(hostId);
     if (dialResolver !== null) {
@@ -1440,11 +1086,8 @@ function openSession(options: SessionOptions): Session {
     }
     const frame = frameParse.data;
     if (frameResolver !== null) {
-      // Once the caller's response deadline has elapsed no frame can still
-      // satisfy this call. Only the host's no-dispatch attestation changes the
-      // outcome - it is handed to the caller, which maps it to a
-      // `RetryableTransportError`. Anything else, including a `response` that
-      // merely arrived late, keeps the recorded response-timeout failure.
+      // Once the caller's response deadline has elapsed no frame can still satisfy this call.
+      // Only the host's no-dispatch attestation changes the outcome - it is handed to the caller, which maps it to a `RetryableTransportError`.
       if (
         ambiguousResponseTimeout !== null &&
         !isPostOpenTimeoutAttestation(frame)
@@ -1470,36 +1113,12 @@ function openSession(options: SessionOptions): Session {
   };
 
   socket.onclose = (event: WebSocketCloseEvent) => {
-    // `closed` is the ONLY thing that distinguishes a close we initiated -
-    // `abort()` and `close()` both set it before calling `socket.close()` -
-    // from one the host delivered. It has to be read BEFORE the assignment
-    // below overwrites it; that assignment used to be the first statement
-    // here, which destroyed the discriminator one line above the code that
-    // needs it. Reporting our own teardown as a refusal is not a cosmetic
-    // mislabel: refusals feed the selection authority's death detection, and
-    // a HEALTHY host was measured accumulating three suppressed refusals -
-    // exactly the death threshold - so there is no headroom for manufactured
-    // ones.
-    //
-    // This is the same defect the remote path already fixed and wrote down
-    // ("a client's own teardown request is self-evidence", `remote-session.ts`),
-    // where it let three app-driven reconnects reach the confirmed-death
-    // streak on a host that never stopped answering. The local leg never got
-    // the treatment; the classification below is deliberately the same one.
-    //
-    // `failAll` stays unconditional: the first failure wins and the resolvers
-    // are already settled, so it is a no-op on the paths that reach here
-    // having already failed, and this fix does not quietly change which error
-    // a caller sees.
+    // `closed` is the only thing that distinguishes a close we initiated - `abort()` and `close()` both set it before calling `socket.close()` - from one the host delivered.
+    // It has to be read before the assignment below overwrites it; that assignment used to be the first statement here, which destroyed the discriminator one line above the code that needs it.
     const selfInitiated = closed;
     closed = true;
     endLiveness();
     if (!opened) {
-      // `erroredBeforeOpen` overrides `selfInitiated`: an `error` event ahead
-      // of `close` is itself the refusal, and the caller's `finally`-driven
-      // `close()` that intervenes before this handler runs is a downstream
-      // reaction to it, not an independent teardown - see the flag's comment
-      // above the declaration.
       reportDialOutcome(
         erroredBeforeOpen || !selfInitiated ? "refusal" : "indeterminate",
       );
@@ -1558,14 +1177,7 @@ function openSession(options: SessionOptions): Session {
             failAll(ambiguous);
             return;
           }
-          // The caller's deadline is up, but the host's post-`openAck` deadline
-          // may not be - and if this callback itself ran late, neither peer's
-          // timeline is where the numbers say it is. Closing here would discard
-          // the one frame that can tell us whether the request was ever
-          // dispatched, so hold the socket for the rest of the window plus its
-          // delivery tail instead. Nothing is decided here: the wait still fails
-          // with this same ambiguous, non-retryable timeout unless the host's
-          // no-dispatch fatal lands first.
+          // The caller's deadline is up, but the host's post-`openAck` deadline may not be - and if this callback itself ran late, neither peer's timeline is where the numbers say it is.
           ambiguousResponseTimeout = ambiguous;
           armAttestationLeg(grace);
         }, timeoutMs);
@@ -1574,9 +1186,8 @@ function openSession(options: SessionOptions): Session {
     },
 
     send(frame: ClientFrame): void {
-      // Past this point a transient failure is safe to auto-retry only when
-      // this exact connection negotiated a non-null idempotency key. A key an
-      // older host stripped or never advertised never reaches this branch.
+      // Past this point a transient failure is safe to auto-retry only when this exact connection negotiated a non-null idempotency key.
+      // A key an older host stripped or never advertised never reaches this branch.
       if (frame.kind === "request") {
         requestSent = true;
         requestReplaySafe = typeof frame.idempotencyKey === "string";
@@ -1643,12 +1254,7 @@ export class MissingBearerTokenForOpenFrameError extends Error {
 
 /**
  * Final-boundary bearer extraction for host WS open frames.
- *
- * The transport layer is the ONLY client-side host layer permitted to read a
- * bearer from the `OpenFrameBearerSource` (`source.getBearerToken()`); every
- * consumer above threads the source itself. A `null` source, released / aborted
- * lease, or empty bearer is a caller-side lifecycle violation: the transport
- * must fail before dialing instead of sending `open { token: "" }`.
+ * The transport layer is the only client-side host layer permitted to read a bearer from the `OpenFrameBearerSource` (`source.getBearerToken()`); every consumer above threads the source itself.
  */
 export function extractBearerForOpenFrame(
   source: OpenFrameBearerSource | null,

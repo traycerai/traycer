@@ -4,15 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JSX, ReactNode } from "react";
 
 /**
- * Coverage for `useProvidersRefreshPackDiscovery`. The extended
- * `joinResponseTimeoutMs` the policy table advertises for
- * `providers.refreshPackDiscovery` is only a PERMISSION: it does nothing
- * unless the caller actually rides `useHostMutationWithResponseTimeout`,
- * which calls `client.requestWithResponseTimeout(method, params,
- * responseTimeoutMs)` rather than plain `client.request`. A hook that
- * quietly regressed to plain `useHostMutation` would still compile, still
- * pass every outcome-shaped test, and silently run on the transport's 30s
- * default.
+ * Must ride `useHostMutationWithResponseTimeout`. A silent regression to `useHostMutation` still compiles and still uses the transport's 30s default.
  */
 
 const HOST_ID = "host-1";
@@ -116,33 +108,7 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
   });
 
   it("declares exactly the budget the hook passes, and one longer than the transport's plain-request default", () => {
-    // TWO assertions answering two different questions. Keep both.
-    //
-    // EQUALITY guards a hard runtime reject that no suite exercises FOR THIS
-    // METHOD: `HostClient.requestWithResponseTimeout` rejects unless the row's
-    // `joinResponseTimeoutMs` equals the passed value EXACTLY
-    // (`expectedTimeout !== responseTimeoutMs -> Promise.reject`,
-    // clients/shared/host-client/host-client.ts). The guard itself is pinned
-    // generically (`host-request-coordinator.test.ts`,
-    // `local-maintenance-fallback-client.test.ts`), but against other
-    // methods; this suite mocks `@/lib/host` with a plain object, so nothing
-    // here ever runs it against `providers.refreshPackDiscovery`.
-    //
-    // It reads like a tautology today because the row imports the constant.
-    // It is not. Edit the row to `12 * 60 * 1000` - a plausible "give it more
-    // room" change that forgets the shared constant - and without this line
-    // EVERY suite stays green while EVERY real click rejects with "does not
-    // permit response timeout 660000": the mocked-client test still sees the
-    // hook pass the constant, the floor below still passes (720000 > 30000),
-    // and the sizing test reads the constant, not the row. Do not remove it
-    // again on the grounds that it cannot fail.
-    //
-    // The FLOOR is the non-vacuous half: it is the one that fails if the pair
-    // shrinks back toward the frame default in lockstep.
-    //
-    // The literal mirrors `DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS` in
-    // `lib/host/host-messenger.ts`, which is module-private - naming it here
-    // any other way would mean widening that module's surface.
+    // Equality: joinResponseTimeoutMs must match the row exactly or HostClient rejects. Floor: pair must stay above the frame default.
     const TRANSPORT_DEFAULT_FRAME_TIMEOUT_MS = 30_000;
     const declared = hostRpcSchedulingPolicy.joinResponseTimeoutMs(
       "providers.refreshPackDiscovery",
@@ -152,29 +118,7 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
   });
 
   it("is sized for a joined full-set tick, not shrunk back toward the transport default", () => {
-    // The check above cannot see this on its own: it only bounds the row
-    // against the transport default, not against the actual serial-poll cost.
-    // Shrinking the constant to something still above 30s but below one full
-    // tick would pass that check while silently restoring the failure mode
-    // the budget exists to prevent.
-    //
-    // This pins the FLOOR, not the derivation: gui-app is OSS and cannot
-    // import the internal `PROVIDERS.json` pack count or the host's registry
-    // timeout constant, so the factors below are forced literals fixed at
-    // today's pack count (15). A 16th pack raises the correct value past this
-    // floor rather than invalidating it, so this stays
-    // `toBeGreaterThanOrEqual` and does not need to move when the pack count
-    // does. The internal repo pins the other half - that `PROVIDERS.json`
-    // still has exactly this many packs - at
-    // `traycer-host/src/domain/providers/__tests__/provider-pack-count-fits-gui-discovery-check-budget.test.ts`.
-    //
-    // FOUR requests per pack, not two: `readLiveHead` calls `getSigned` twice
-    // (generation pointer, then head), and each `getSigned` fetches the object
-    // AND its `<path>.minisig` sequentially, each under its own timeout. The
-    // signature half lives inside the transport, so it is invisible at the
-    // call sites - this pin encoded the 2x-undersized figure until the
-    // constant was corrected, which is precisely why the factor is spelled out
-    // here rather than folded into one number.
+    // Floor, not derivation: OSS cannot import PROVIDERS.json. Four requests per pack (getSigned twice, object + minisig).
     const MANAGED_PACK_COUNT = 15; // traycer-host/resources/providers/PROVIDERS.json
     const SIGNED_READS_PER_PACK = 2; // reader.ts: generation pointer, then head
     const REQUESTS_PER_SIGNED_READ = 2; // registry-transport.ts: object + .minisig

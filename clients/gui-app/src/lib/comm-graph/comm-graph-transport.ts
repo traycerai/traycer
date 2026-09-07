@@ -1,20 +1,5 @@
 /**
- * Scrubber geometry for the on-canvas transport: where the playhead sits, where
- * each event's tick sits, and which event a click on the track means.
- *
- * PURE, and separated from the bar that draws it, because jsdom gives no layout
- * - a component test can prove a marker element exists but not that it is in the
- * right place. Everything positional is decided here, in functions that take
- * numbers and return numbers, and the component only spends the fractions.
- *
- * FRACTIONS, NOT PIXELS. The track is fluid, so positions are 0..1 along it and
- * the DOM turns them into percentages. Nothing here knows the track's width.
- *
- * THE TRACK IS EVENT TIME, NOT WALL TIME. It spans the first captured row to
- * the last, so a quiet epic does not render as a single tick pinned to one end,
- * and a long idle gap does not push every real exchange into a sliver. A degenerate
- * range (one row, or several sharing a millisecond) collapses to a single point
- * and every marker sits at the right edge - see `commGraphFractionForTimestamp`.
+ * Scrubber geometry for the on-canvas transport: where the playhead sits, where each event's tick sits, and which event a click on the track means.
  */
 import {
   commGraphEventKey,
@@ -32,9 +17,7 @@ export interface CommGraphTimeRange {
 }
 
 /**
- * `null` for an empty log - the caller renders a disabled track rather than
- * inventing a range, because "no events yet" and "events spanning zero time"
- * are different situations and only one of them is scrubbable.
+ * `null` for an empty log - the caller renders a disabled track rather than inventing a range, because "no events yet" and "events spanning zero time" are different situations and only one of them is scrubbable.
  */
 export function commGraphTimeRange(
   events: ReadonlyArray<CommGraphEvent>,
@@ -47,14 +30,7 @@ export function commGraphTimeRange(
   };
 }
 
-/**
- * 0 at the range start, 1 at its end, clamped outside.
- *
- * A ZERO-WIDTH RANGE RETURNS 1, deliberately: every row shares the newest
- * instant, so they all belong at the live edge. Returning 0 would park the
- * playhead at the left while the graph showed the newest state, which reads as
- * a broken scrubber rather than as a short session.
- */
+/** 0 at the range start, 1 at its end, clamped outside. */
 function clampFraction(fraction: number): number {
   if (fraction <= 0) return 0;
   if (fraction >= 1) return 1;
@@ -81,9 +57,8 @@ export interface CommGraphTransportMarker {
 }
 
 /**
- * One marker per event. NO BUCKETING, NO THINNING: the ticks are the log, and
- * dropping some because they crowd would quietly misreport how much happened.
- * Overlapping ticks at this size read as density, which is the honest picture.
+ * One marker per event.
+ * NO BUCKETING, NO THINNING: the ticks are the log, and dropping some because they crowd would quietly misreport how much happened.
  */
 export function commGraphTransportMarkers(
   events: ReadonlyArray<CommGraphEvent>,
@@ -97,9 +72,8 @@ export function commGraphTransportMarkers(
 }
 
 /**
- * Where the playhead sits. LIVE (`cursor === null`) is pinned to the right edge
- * - live is not a separate rendering mode, it is the playhead being at the end
- * of everything captured so far.
+ * Where the playhead sits.
+ * LIVE (`cursor === null`) is pinned to the right edge
  */
 export function commGraphPlayheadFraction(
   cursor: CommGraphTimeCursor | null,
@@ -111,13 +85,7 @@ export function commGraphPlayheadFraction(
 }
 
 /**
- * The row a click/drag at `fraction` means: the LAST event at or before that
- * point, so seeking is "show me the graph as of here" rather than "jump to the
- * nearest thing", and dragging left monotonically rewinds.
- *
- * Before the first event there is nothing to be as-of, so the first row is the
- * floor - a seek can land the cursor on row one but never behind it (that
- * position is what `followLive`/the right edge means, not an empty graph).
+ * The row a click/drag at `fraction` means: the LAST event at or before that point, so seeking is "show me the graph as of here" rather than "jump to the nearest thing", and dragging left monotonically rewinds.
  */
 export function commGraphEventAtFraction(
   events: ReadonlyArray<CommGraphEvent>,
@@ -128,9 +96,7 @@ export function commGraphEventAtFraction(
   const span = range.endMs - range.startMs;
   const clamped = clampFraction(fraction);
   const targetMs = range.startMs + span * clamped;
-  // Binary search on timestamp only: the cursor that comes out of this is built
-  // from a real row, so the `(timestamp, hostId, id)` tiebreak is inherited
-  // rather than guessed at.
+  // Binary search on timestamp only: the cursor that comes out of this is built from a real row, so the `(timestamp, hostId, id)` tiebreak is inherited rather than guessed at.
   let low = 0;
   let high = events.length;
   while (low < high) {
@@ -142,14 +108,7 @@ export function commGraphEventAtFraction(
   return events[low - 1];
 }
 
-/**
- * Whether a cursor names the newest captured row.
- *
- * This is what "scrubbing to the end re-attaches live" is decided by, and it is
- * a comparison against the LOG rather than against the track: a row landing
- * while the user sits at the old end must leave them detached, not silently
- * drag them forward.
- */
+/** Whether a cursor names the newest captured row. */
 export function commGraphCursorAtEnd(
   events: ReadonlyArray<CommGraphEvent>,
   cursor: CommGraphTimeCursor | null,
@@ -160,16 +119,7 @@ export function commGraphCursorAtEnd(
 }
 
 /**
- * The cursor's position in the array, as an index - what the slider reports and
- * what stepping arithmetic works in.
- *
- * LIVE IS THE LAST INDEX, not a sentinel: live means "as of the newest row", so
- * it occupies the same slot the newest row does. That is what makes stepping
- * forward off the end and re-attaching the same motion.
- *
- * A cursor naming a row that is not present (it never was, or the array has
- * been re-merged) resolves to the last row at or before it, matching the as-of
- * projection rather than reporting "not found".
+ * The cursor's position in the array, as an index - what the slider reports and what stepping arithmetic works in.
  */
 export function commGraphCursorIndex(
   events: ReadonlyArray<CommGraphEvent>,

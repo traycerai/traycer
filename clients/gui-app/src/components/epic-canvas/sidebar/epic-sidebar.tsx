@@ -1,11 +1,5 @@
 /**
- * This is the main orchestrator that composes extracted sub-components:
- * - epic-sidebar-header.tsx: header with collapse/drag
- * - epic-sidebar-chat-tree.tsx: chat panel tree
- * - epic-sidebar-artifact-tree.tsx: artifact panel tree
- * - epic-sidebar-context-menu.tsx: right-click menu
- * - epic-terminal-sidebar.tsx: raw terminals (pre-extracted)
- * - epic-sidebar-footer.tsx: footer placeholder
+ * This is the main orchestrator that composes extracted sub-components: - epic-sidebar-header.tsx: header with collapse/drag - epic-sidebar-chat-tree.tsx: chat panel tree - epic-sidebar-artifact-tree.tsx: artifact panel tree - epic-sidebar-context-menu.tsx: right-click menu - epic-terminal-sidebar.tsx: raw terminals (pre-extracted) - epic-sidebar-footer.tsx: footer placeholder
  */
 import { useDroppable } from "@dnd-kit/core";
 import {
@@ -256,16 +250,10 @@ interface FileTreeWorkspaceSelection {
   readonly workspaceRoots: ReadonlyArray<string>;
   /** True once the bindings read has answered (with roots or without). */
   readonly rootsResolved: boolean;
-  /**
-   * Non-null when the bindings read FAILED, as opposed to answering with no
-   * browsable roots. Both leave `selectedWorkspacePath` null, and the panel
-   * must not tell the same story about them.
-   */
+  /** Both leave `selectedWorkspacePath` null, and the panel must not tell the same story about them. */
   readonly failure: BindingsFailure | null;
   /**
-   * Re-runs the bindings read. The panel's only recovery: host-scoped queries
-   * disable retry, polling and focus/reconnect refetch, so an errored read
-   * stays errored until something asks again.
+   * The panel's only recovery: host-scoped queries disable retry, polling and focus/reconnect refetch, so an errored read stays errored until something asks again.
    */
   readonly retry: () => Promise<void>;
 }
@@ -297,16 +285,8 @@ function useFileTreeWorkspaceSelection(
     workspaceRoots,
     storedWorkspacePath,
   );
-  // Hold the last non-null resolved workspace path so transient refetches
-  // (which momentarily empty `workspacesQuery.data`) do not flip the
-  // selection to `null` and remount the file-tree state. Uses the
-  // React-recommended "adjust state during render" idiom.
-  //
-  // The sticky value is scoped to `hostId`: on a host swap it is
-  // reset to the new host's resolution (never carried over), so the
-  // panel can't briefly show the previous host's workspace path. It is
-  // also cleared once the query has finished with an explicitly empty
-  // result so a removed folder doesn't linger as the selection forever.
+  // Hold the last non-null resolved workspace path so transient refetches (which momentarily empty `workspacesQuery.data`) do not flip the selection to `null` and remount the file-tree state.
+  // The sticky value is scoped to `hostId`: on a host swap it is reset to the new host's resolution (never carried over), so the panel can't briefly show the previous host's workspace path.
   const queryResolved = workspacesQuery.data !== undefined;
   const [previousHostId, setPreviousHostId] = useState<string | null>(hostId);
   const [previousResolved, setPreviousResolved] = useState<string | null>(
@@ -329,10 +309,7 @@ function useFileTreeWorkspaceSelection(
       setStickyResolved(null);
     }
   }
-  // On the render where `hostId` just changed, `stickyResolved` still
-  // holds the *previous* host's path (its setState is not yet applied).
-  // Use the freshly-resolved value for that render so the panel never
-  // mounts against the old host's workspace, even for one frame.
+  // Use the freshly-resolved value for that render so the panel never mounts against the old host's workspace, even for one frame.
   const effectiveSticky = hostChanged ? resolvedPath : stickyResolved;
   const selectedWorkspacePath = queryResolved
     ? resolvedPath
@@ -373,28 +350,8 @@ function resolveFileTreeWorkspaceRoot(
 }
 
 /**
- * Routes a pending "Reveal in Sidebar" request to the panel the file lives
- * in. The request names the file's host and workspace root (a workspace-file
- * tab carries both for life); this panel may be showing another of either, so
- * the gesture re-points it the way the picker would: pin to the file's host,
- * then select its root. The row-level reveal - expand ancestors, select, scroll
- * - is the body's job once it is mounted for that host + workspace
- * (`epic-sidebar-file-tree.tsx`).
- *
- * Two requests cannot be served and are dropped, leaving the panel where it
- * was rather than pointed at something that does not exist:
- * - the file's host is pinned yet the panel still resolves elsewhere - a pin
- *   is a preference, and one whose host cannot serve (dead, or since
- *   deregistered so the fleet guard cleared it) resolves to `effective`;
- * - the file's root is not among the browsable roots this host offers - a
- *   synthesized out-of-root workspace (`workspaceFileRefFromAbsoluteFilePath`)
- *   or a binding since removed.
- *
- * `setSelection` is called without a one-shot guard on purpose: it is
- * idempotent on a same-value write, and the "pinned yet unresolved" check is
- * what terminates the dead-host case - so a StrictMode re-run of the effect,
- * which re-reads the SAME pre-write closure, just repeats the write instead of
- * mistaking the stale read for a refused one.
+ * Two requests cannot be served and are dropped, leaving the panel where it was rather than pointed at something that does not exist: - the file's host is pinned yet the panel still resolves elsewhere - a pin is a preference, and one whose host cannot serve (dead, or since deregistered so the fleet guard cleared it) resolves to `effective`; - the file's root is not among the browsable roots this host offers - a synthesized out-of-root workspace (`workspaceFileRefFromAbsoluteFilePath`) or a binding since removed.
+ * `setSelection` is called without a one-shot guard on purpose: it is idempotent on a same-value write, and the "pinned yet unresolved" check is what terminates the dead-host case - so a StrictMode re-run of the effect, which re-reads the SAME pre-write closure, just repeats the write instead of mistaking the stale read for a refused one.
  */
 function useFileTreeRevealRouting(args: {
   readonly tabId: string;
@@ -647,11 +604,7 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
-  // The SAME host the PR panel records presence under (`pr-panel-body.tsx`
-  // writes `recordPrPresence(useCanvasHostId(), …)`): a producer/consumer
-  // pair keyed by host must read one identity, or the PR icon vanishes for
-  // exactly the window a re-point is in flight - the panel writing under the
-  // session's host A while this rail read under the app-wide B.
+  // The SAME host the PR panel records presence under (`pr-panel-body.tsx` writes `recordPrPresence(useCanvasHostId(), …)`): a producer/consumer pair keyed by host must read one identity, or the PR icon vanishes for exactly the window a re-point is in flight - the panel writing under the session's host A while this rail read under the app-wide B.
   const hostId = useCanvasHostId();
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
@@ -694,9 +647,7 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
       data-left-panel-group-size={panels.length}
     >
       <ArtifactReadLifecycleBridge epicId={epicId} tabId={tabId} />
-      {/* A5a: the sidebar renders GitHub and markdown links (PR rows, comment
-          bodies) OUTSIDE `renderTile`, so without this they would have no
-          in-app destination and every one of them would open externally. */}
+      {/* A5a: the sidebar renders GitHub and markdown links (PR rows, comment bodies) OUTSIDE `renderTile`, so without this they would have no in-app destination and every one of them would open externally. */}
       <LinkTargetProvider epicId={epicId} viewTabId={tabId}>
         <PanelGroupBody epicId={epicId} tabId={tabId} panels={panels} />
       </LinkTargetProvider>
@@ -709,13 +660,9 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  // Same key as the live host above. Before the session handle registers this
-  // resolves the effective host (`useCanvasHostId`'s documented fallback),
-  // which is where a fresh open's session is about to be established.
+  // Before the session handle registers this resolves the effective host (`useCanvasHostId`'s documented fallback), which is where a fresh open's session is about to be established.
   const hostId = useCanvasHostId();
-  // The persisted PR baseline is readable before the epic's Y.doc resolves, so
-  // the loading rail already shows the same set of panels the live one will -
-  // no icon appears or disappears as the epic finishes opening.
+  // The persisted PR baseline is readable before the epic's Y.doc resolves, so the loading rail already shows the same set of panels the live one will - no icon appears or disappears as the epic finishes opening.
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
@@ -903,9 +850,7 @@ function GroupedPanelBody(props: {
 }
 
 /**
- * Synthetic group id for the section run's resize handles; the commit
- * callback maps fractions straight back to panel weights, so the id is only
- * surfaced on the handle's `data-resize-group-id` for tests.
+ * Synthetic group id for the section run's resize handles; the commit callback maps fractions straight back to panel weights, so the id is only surfaced on the handle's `data-resize-group-id` for tests.
  */
 const SECTION_RUN_GROUP_ID = "epic-left-panel-sections";
 /** Old `minSize="2rem"` floor, now enforced by the custom handle. */
@@ -960,10 +905,8 @@ function ResizableSectionRun(props: {
     (s) => s.panelSectionWeightsByPanelId,
   );
 
-  // Stored weights are an arbitrary-sum unit (legacy percent-ish numbers);
-  // the resize engine works on fractions. Normalize live - a handle drag
-  // mutates DOM only, then commits fractions which map back to weights
-  // preserving the run's current weight sum.
+  // Stored weights are an arbitrary-sum unit (legacy percent-ish numbers); the resize engine works on fractions.
+  // Normalize live - a handle drag mutates DOM only, then commits fractions which map back to weights preserving the run's current weight sum.
   const { fractions, referenceSum } = useMemo(() => {
     const fallback = 100 / panels.length;
     const weights = panels.map((panel) => {
@@ -1107,13 +1050,7 @@ function PanelGroupSectionContent(props: {
 }
 
 /**
- * Per-panel empty-space reparent drop target (`sidebar-reparent-panel`). The
- * tree rows sit INSIDE this droppable; the collision ladder picks a row when
- * the pointer is over a row and the panel only when it is over empty space, so
- * a drop here un-nests the dragged node to root (`parentId = null`). Filling
- * the panel's scroll area (`min-h-full`) makes the empty area below the rows
- * droppable. Highlighted (subtle inset ring) when this panel is the active
- * root target.
+ * The tree rows sit INSIDE this droppable; the collision ladder picks a row when the pointer is over a row and the panel only when it is over empty space, so a drop here un-nests the dragged node to root (`parentId = null`).
  */
 function SidebarReparentPanelDropZone(props: {
   readonly epicId: string;
@@ -1228,9 +1165,8 @@ function CommentsPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const activeArtifactId = useActiveEpicArtifactId(props.tabId);
-  // Normally unreachable - the panel is revealed by an artifact that has
-  // comments. Reachable once a user checks Comments in the rail context menu,
-  // which keeps the panel there regardless of what the canvas is showing.
+  // Normally unreachable - the panel is revealed by an artifact that has comments.
+  // Reachable once a user checks Comments in the rail context menu, which keeps the panel there regardless of what the canvas is showing.
   if (activeArtifactId === null) {
     return (
       <SidebarPanelEmptyState
@@ -1253,10 +1189,7 @@ function GitDiffPanelBody(props: LeftPanelBodyProps): ReactNode {
   return <GitDiffPanelBodyLive epicId={props.epicId} tabId={props.tabId} />;
 }
 
-// Exported (export-only, desktop-neutral) so the mobile "Switch tab" sheet can
-// embed the same file-tree body the desktop left panel renders, rather than
-// forking it. The `SnapshotGate` resolves against the canvas-side
-// `SnapshotLoadingProvider` that already wraps the mobile tile view.
+// Exported (export-only, desktop-neutral) so the mobile "Switch tab" sheet can embed the same file-tree body the desktop left panel renders, rather than forking it.
 export function FileTreePanelBody(props: LeftPanelBodyProps) {
   return (
     <SnapshotGate skeleton={FILE_TREE_PANEL_SKELETON}>
@@ -1268,18 +1201,13 @@ export function FileTreePanelBody(props: LeftPanelBodyProps) {
 function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
   const surfaceKey = useTabSurfaceKey("file-tree", props.tabId);
   const pin = useSurfaceHostPin(surfaceKey);
-  // No dead arm: a pinned host that dies resolves to `effective`, so this
-  // panel always has a host to browse. The workspace selection is stored per
-  // (epic, host) and reset on a host change, so the tree it shows is always
-  // the resolved host's own - never the dead one's paths against a live box.
+  // The workspace selection is stored per (epic, host) and reset on a host change, so the tree it shows is always the resolved host's own - never the dead one's paths against a live box.
   const selection = useFileTreeWorkspaceSelection(
     props.epicId,
     pin.resolvedHostId,
     pin.resolvedHostId !== null,
   );
-  // This panel's OWN client, for the "open in editor" opener: the button must
-  // dispatch on the host the workspace selection actually names, not the
-  // app-wide effective host.
+  // This panel's OWN client, for the "open in editor" opener: the button must dispatch on the host the workspace selection actually names, not the app-wide effective host.
   const hostClient = useSurfaceHostClient(pin.resolvedHostId);
   const resolvedHostEntry = useHostDirectoryEntryForHostId(pin.resolvedHostId);
   useFileTreeRevealRouting({ tabId: props.tabId, pin, selection });
@@ -1287,15 +1215,8 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
     pin.latchOnFirstUse();
     selection.setSelectedWorkspacePath(workspacePath);
   };
-  // The picker is OUTSIDE the selection branch, and that is load-bearing
-  // rather than cosmetic: its popover carries `WorktreePickerHostSection`, so
-  // while it lived in the `else` arm the empty state removed the only control
-  // that could change the host - and pinning this panel to a host that cannot
-  // answer resolves NO workspace roots, which lands exactly there. The pin is
-  // persisted, so that was a dead end that survived reloads. The git-diff
-  // panel had the identical shape; `NewTerminalPickerBody` never did, and it
-  // is the model here - host section first, unconditionally, whatever the body
-  // below it turns out to be.
+  // The picker is OUTSIDE the selection branch, and that is load-bearing rather than cosmetic: its popover carries `WorktreePickerHostSection`, so while it lived in the `else` arm the empty state removed the only control that could change the host - and pinning this panel to a host that cannot answer resolves NO workspace roots, which lands exactly there.
+  // The git-diff panel had the identical shape; `NewTerminalPickerBody` never did, and it is the model here - host section first, unconditionally, whatever the body below it turns out to be.
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 px-2 pb-1.5 pt-0.5">
@@ -1336,17 +1257,8 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
 }
 
 /**
- * The three states below the picker, in the order their conditions must be
- * asked - which is not the order they were written in.
- *
- * A FAILED bindings read is checked first, because it also leaves
- * `selectedWorkspacePath` null and would otherwise fall through to "No
- * workspace linked." That sentence is a claim about the agent ("you have not
- * linked one"), and here the truth is a fact about the connection ("we could
- * not ask") - the same wrong-remedy conflation the git-diff panel's empty
- * state had. It is also the only branch that offers a way out: host-scoped
- * queries disable every automatic recovery route, so nothing re-reads on its
- * own.
+ * The three states below the picker, in the order their conditions must be asked - which is not the order they were written in.
+ * A FAILED bindings read is checked first, because it also leaves `selectedWorkspacePath` null and would otherwise fall through to "No workspace linked." That sentence is a claim about the agent ("you have not linked one"), and here the truth is a fact about the connection ("we could not ask") - the same wrong-remedy conflation the git-diff panel's empty state had.
  */
 function fileTreePanelBody(input: {
   readonly epicId: string;
@@ -1392,10 +1304,7 @@ function SharingPanelBody(props: LeftPanelBodyProps) {
   return <SharingPanel epicId={props.epicId} />;
 }
 
-// Display title for a projection: artifacts carry a `kind`; every Agent
-// projection (Chat- or Terminal-interface) falls back to "Untitled agent" -
-// the durable Agent identity - when its stored title is empty, never
-// "Untitled chat" or the harness label.
+// Display title for a projection: artifacts carry a `kind`; every Agent projection (Chat- or Terminal-interface) falls back to "Untitled agent" - the durable Agent identity - when its stored title is empty, never "Untitled chat" or the harness label.
 function epicArtifactRecordDisplayTitle(
   record: EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection,
 ): string {
@@ -1414,9 +1323,7 @@ function CommentsPanelSubtitle(props: LeftPanelSlotProps) {
   );
 }
 
-// Root-create "+" reuses the same per-panel exclude lists as the row "+"
-// (derived from ADDABLE_TYPES in add-node-dropdown), so root and child menus
-// can't drift.
+// Root-create "+" reuses the same per-panel exclude lists as the row "+" (derived from ADDABLE_TYPES in add-node-dropdown), so root and child menus can't drift.
 
 type SidebarDeleteTargetKind = "artifact" | "chat" | "terminal-agent";
 
@@ -1440,9 +1347,7 @@ function SidebarBulkDeleteController(props: {
   const unmarkArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.unmarkArtifactSelfDeleted,
   );
-  // `null`: this controller deletes EVERY selected row, so there is no one
-  // artifact it speaks for. It reads its own `deletePending` off the
-  // selection store rather than the hook's flag.
+  // It reads its own `deletePending` off the selection store rather than the hook's flag.
   const deleteArtifact = useEpicDeleteArtifact(null);
   const deleteChat = useEpicDeleteChat();
   const deleteTerminalAgent = useEpicDeleteTuiAgent();
@@ -1462,11 +1367,7 @@ function SidebarBulkDeleteController(props: {
     cancelSelection,
   } = selection;
 
-  // The bulk path dispatches `epic.deleteChat` per row, so it needs the same
-  // gate the per-row menus have. It REFUSES AS A WHOLE rather than deleting
-  // what it can: a partial delete of a confirmed multi-select is the worse
-  // failure, because that is exactly where a user is least likely to notice
-  // the one row that silently remained.
+  // It REFUSES AS A WHOLE rather than deleting what it can: a partial delete of a confirmed multi-select is the worse failure, because that is exactly where a user is least likely to notice the one row that silently remained.
   const blockedDeleteReason = useMemo(() => {
     if (pendingDeleteIds === null) return null;
     const blockedTitles = rootmostSelectedSidebarIds({
@@ -1536,13 +1437,8 @@ function SidebarBulkDeleteController(props: {
         const failedIds = targets.flatMap((target, index) =>
           results[index].status === "rejected" ? [target.id] : [],
         );
-        // Closing several tabs is one focus-relevant change, not N: closing
-        // each through its own `prepareCloseCanvasTabFocusTarget` call would
-        // let an intermediate iteration's fallback focus (e.g. the next
-        // still-being-deleted tab) get pushed as a route entry. Instead,
-        // close every successfully-deleted open tab raw, then compute and
-        // commit the post-batch focus target exactly once.
-        // The chat mutation already closed exactly the owning host's tiles.
+        // Closing several tabs is one focus-relevant change, not N: closing each through its own `prepareCloseCanvasTabFocusTarget` call would let an intermediate iteration's fallback focus (e.g. the next still-being-deleted tab) get pushed as a route entry.
+        // Instead, close every successfully-deleted open tab raw, then compute and commit the post-batch focus target exactly once.
         const openTargets = targets.flatMap((target, index) => {
           if (target.kind === "chat" || results[index].status !== "fulfilled")
             return [];
@@ -1700,11 +1596,8 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
           const successfulRootIds = selectedRootIds.filter(
             (_id, index) => results[index].status === "fulfilled",
           );
-          // Checkboxes stay interactive while the batch is pending. Clear each
-          // successful root even if projection already removed it, plus only
-          // the descendants still beneath it in the latest committed tree.
-          // That includes collaborators' additions without clearing children
-          // they moved elsewhere while the request was in flight.
+          // Clear each successful root even if projection already removed it, plus only the descendants still beneath it in the latest committed tree.
+          // That includes collaborators' additions without clearing children they moved elsewhere while the request was in flight.
           const latestTree = latestTreeRef.current;
           const successfulSubtreeIds = new Set([
             ...successfulRootIds,
@@ -1715,10 +1608,7 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
             }),
           ]);
           selection.clearSelectedIds([...successfulSubtreeIds]);
-          // If a collaborator moves a selected row beneath this root after
-          // the response snapshot, the later archive projection can be the
-          // event that removes the final selection. Arm that one projection
-          // path so it exits instead of leaving a zero-selected toolbar.
+          // Arm that one projection path so it exits instead of leaving a zero-selected toolbar.
           if (successfulRootIds.length > 0) {
             selection.armSelectablePruneExit(successfulRootIds);
           }
@@ -1760,16 +1650,8 @@ function describeSidebarBulkDeleteTitle(
 }
 
 /**
- * Plural noun naming a panel's rows in user-facing copy.
- *
- * Deliberately NOT the panel `id`: the id is an internal identifier on the
- * compatibility boundary (`"chats"`), and interpolating it directly produced
- * "Delete 3 selected chats" - copy that silently drifts from the panel's own
- * title. A mixed Chat/Terminal selection summarizes as **agents**, because
- * Agent is the durable entity being deleted and the interface is incidental.
- *
- * `count` selects number: the delete button is enabled from one row, so a
- * plural-only noun produced "Delete 1 selected agents".
+ * Deliberately NOT the panel `id`: the id is an internal identifier on the compatibility boundary (`"chats"`), and interpolating it directly produced "Delete 3 selected chats" - copy that silently drifts from the panel's own title.
+ * `count` selects number: the delete button is enabled from one row, so a plural-only noun produced "Delete 1 selected agents".
  */
 function panelRowNoun(panelId: LeftPanelId, count: number): string {
   if (panelId === "chats") return count === 1 ? "agent" : "agents";
@@ -1800,12 +1682,7 @@ function usePanelRootIds(panelId: LeftPanelId): ReadonlyArray<string> {
     const recordById = new Map(
       liveRecords.map((record) => [record.id, record]),
     );
-    // Both panels derive root order from `yDocRootIds` (the projector's
-    // `rootIds`, already sorted by `createdAt`). For chats this keeps GUI
-    // chats and terminal-agents interleaved by time; iterating the record
-    // list instead would surface the slice order (all chats, then all
-    // terminal-agents). `yDocRootIds` only holds parentless nodes, so
-    // nested child agents are excluded for free.
+    // `yDocRootIds` only holds parentless nodes, so nested child agents are excluded for free.
     return yDocRootIds.filter((rootId) =>
       treeFilter(recordById.get(rootId)?.type),
     );
@@ -1869,12 +1746,8 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
   const epicHandle = useOpenEpicHandle();
-  // The SESSION's host, because this id becomes the created artifact's
-  // `fallbackHostId` and an ordinary artifact carries no intrinsic host - so it
-  // is what binds the opened tile, for life. `useEpicCreateArtifact` sends on
-  // the session client, so reading the ambient host here would have created on
-  // A and opened a B-bound tile for it: the create succeeds and the tile is
-  // wrong, which is the failure mode that looks like nothing went wrong.
+  // The SESSION's host, because this id becomes the created artifact's `fallbackHostId` and an ordinary artifact carries no intrinsic host - so it is what binds the opened tile, for life.
+  // `useEpicCreateArtifact` sends on the session client, so reading the ambient host here would have created on A and opened a B-bound tile for it: the create succeeds and the tile is wrong, which is the failure mode that looks like nothing went wrong.
   const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const { openTile } = useEpicTileNavigation();
   const createArtifact = useEpicCreateArtifact();
@@ -2288,9 +2161,7 @@ function ArtifactHeaderMoreMenu(props: {
           event.preventDefault();
         }}
       >
-        {/* Hidden when the Epic has NO artifacts or is open read-only - see
-            `useArtifactSearchAvailable` for why emptiness and write access gate
-            this and a size threshold does not. */}
+        {/* Hidden when the Epic has NO artifacts or is open read-only - see `useArtifactSearchAvailable` for why emptiness and write access gate this and a size threshold does not. */}
         {searchAvailable && !props.searching ? (
           <DropdownMenuItem
             onSelect={() => {

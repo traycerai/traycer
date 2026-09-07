@@ -30,10 +30,7 @@ function stagedDirFor(environment: Environment): string {
   return join(hostHomeFor(environment), "staged");
 }
 
-// Lets one test force `unlink`/`rm` to fail for a specific path (the exact
-// two operations round-1's aside-invalidation depended on entirely), while
-// every other path proxies straight through to the real implementation -
-// see the "forced double failure" test below.
+// Lets one test force `unlink`/`rm` to fail for a specific path (the exact two operations round-1's aside-invalidation depended on entirely), while every other path proxies straight through to the real implementation - see the "forced double failure" test below.
 const mocks = vi.hoisted(() => ({
   forceRenameFailureForPath: null as string | null,
   forceUnlinkFailureForPath: null as string | null,
@@ -91,15 +88,8 @@ vi.mock("../rename-retry", async (importOriginal) => {
   };
 });
 
-// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
-// load - any export this mock leaves un-overridden would otherwise resolve
-// against the REAL production `~/.traycer`, not this sandbox. Redirect the
-// `os` boundary itself so `vi.importActual`'s fresh module evaluation picks
-// up the sandbox (falling back to the real tmpdir, never the real home,
-// before the first `beforeEach` has set `sandboxRoot`).
-// `vi.mock` factories are hoisted above this file's own top-level `let
-// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
-// live value has to live in `vi.hoisted` instead.
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module load - any export this mock leaves un-overridden would otherwise resolve against the REAL production `~/.traycer`, not this sandbox.
+// Redirect the `os` boundary itself so `vi.importActual`'s fresh module evaluation picks up the sandbox (falling back to the real tmpdir, never the real home, before the first `beforeEach` has set `sandboxRoot`).
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -163,11 +153,8 @@ describe("aside invalidation authority", () => {
       if (verifyCalls === 2) throw new Error("mutation authority lost");
     };
 
-    // This `describe` has no `beforeEach`/`afterEach` of its own - the
-    // existing resets live in `reconcileHostStage`'s hooks below, which
-    // never run for this suite. Reset explicitly immediately before the
-    // call under test so this assertion is not merely riding the module's
-    // zero-valued initial state (CodeRabbit review of PR #1480).
+    // This `describe` has no `beforeEach`/`afterEach` of its own - the existing resets live in `reconcileHostStage`'s hooks below, which never run for this suite.
+    // Reset explicitly immediately before the call under test so this assertion is not merely riding the module's zero-valued initial state (CodeRabbit review of PR #1480).
     mocks.unlinkCalls = 0;
     mocks.rmCalls = 0;
     await expect(
@@ -314,9 +301,7 @@ describe("reconcileHostStage", () => {
 
   it("deletes a stage whose platform/arch doesn't match this machine", async () => {
     await writeInstall("1.0.0", {});
-    // A structurally VALID platform value that simply isn't this
-    // machine's - distinct from "invalid-sidecar", which covers a
-    // platform string the schema doesn't even recognize.
+    // A structurally VALID platform value that simply isn't this machine's - distinct from "invalid-sidecar", which covers a platform string the schema doesn't even recognize.
     const foreignPlatform =
       currentInstallPlatform() === "win32" ? "linux" : "win32";
     await writeStagedAt(stagedDirFor(ENV), "2.0.0", {
@@ -361,10 +346,7 @@ describe("reconcileHostStage", () => {
   });
 
   it("deletes a stage whose version is not valid SemVer as invalid-sidecar", async () => {
-    // The staged (registry) side of the version domain must always be
-    // valid SemVer - a non-parseable staged version is corrupt/foreign
-    // data, not a legitimate incomparable case (that policy applies only
-    // to the installed side - see the incomparable-INSTALLED test above).
+    // The staged (registry) side of the version domain must always be valid SemVer - a non-parseable staged version is corrupt/foreign data, not a legitimate incomparable case (that policy applies only to the installed side - see the incomparable-INSTALLED test above).
     await writeInstall("1.0.0", {});
     await writeStagedAt(stagedDirFor(ENV), "not-a-version", {});
     const result = await reconcileHostStage(ENV);
@@ -386,11 +368,7 @@ describe("reconcileHostStage", () => {
   });
 
   it("does not delete a valid stage on the version rule alone when the INSTALLED version is incomparable", async () => {
-    // Incomparability is a policy reserved for the installed side only -
-    // the staged (registry) side must always be valid SemVer (see the
-    // "invalid-sidecar" tests below), so this exercises the legitimate
-    // incomparable case: a local-file install with a genuinely
-    // SemVer-valid stage sitting alongside it.
+    // Incomparability is a policy reserved for the installed side only - the staged (registry) side must always be valid SemVer (see the "invalid-sidecar" tests below), so this exercises the legitimate incomparable case: a local-file install with a genuinely SemVer-valid stage sitting alongside it.
     await writeInstall("local-custom-build-2026", {});
     await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
     const result = await reconcileHostStage(ENV);
@@ -433,12 +411,8 @@ describe("reconcileHostStage", () => {
   });
 
   it("re-evaluates a step-4-restored aside against step 3 and deletes it again within the same pass if it fails", async () => {
-    // The aside is structurally VALID (step 4's own lighter check would
-    // happily restore it: parseable sidecar, matching platform/arch,
-    // executable present) but its version is stale against the CURRENT
-    // installed version - a rule step 4 doesn't itself apply. One
-    // reconcile pass must not end with a restored stage that violates
-    // step 3.
+    // The aside is structurally VALID (step 4's own lighter check would happily restore it: parseable sidecar, matching platform/arch, executable present) but its version is stale against the CURRENT installed version - a rule step 4 doesn't itself apply.
+    // One reconcile pass must not end with a restored stage that violates step 3.
     await writeInstall("2.0.0", {});
     const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
     await writeStagedAt(asideDir, "2.0.0", {});
@@ -450,12 +424,8 @@ describe("reconcileHostStage", () => {
   });
 
   it("never restores an aside whose sidecar was removed but the rest of the directory is intact (partial-delete litter)", async () => {
-    // Simulates the exact failure mode the sidecar-first deletion order
-    // guards against: the sidecar unlink succeeded, but the subsequent
-    // best-effort recursive removal did not (a lock, a transient error),
-    // leaving the rest of the aside - including the "executable" -
-    // fully intact. Without a sidecar, this candidate must never be
-    // mistaken for a valid stage and restored.
+    // Simulates the exact failure mode the sidecar-first deletion order guards against: the sidecar unlink succeeded, but the subsequent best-effort recursive removal did not (a lock, a transient error), leaving the rest of the aside - including the "executable" - fully intact.
+    // Without a sidecar, this candidate must never be mistaken for a valid stage and restored.
     await writeInstall("1.0.0", {});
     const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
     const record = await writeStagedAt(asideDir, "1.5.0", {});
@@ -468,16 +438,8 @@ describe("reconcileHostStage", () => {
   });
 
   it("invalidates a pure-litter aside even when the sidecar unlink AND the recursive removal both fail", async () => {
-    // Round-1's aside cleanup depended entirely on unlink+rm succeeding -
-    // if BOTH failed (e.g. a Windows open-file handle blocking both), a
-    // fully valid, restorable aside was left behind. Round-2's fix makes
-    // the rename-to-`.dead-*` the PRIMARY defense: it runs first and, on
-    // success, the candidate is already structurally invisible to step
-    // 4's restore path before unlink/rm are ever reached - so forcing
-    // exactly the two operations that were round-1's whole defense to
-    // fail no longer matters. `rename` itself is deliberately left real
-    // (not forced to fail) so this proves the NEW primary layer's success
-    // path, not the deepest accepted-residual fallback.
+    // Round-1's aside cleanup depended entirely on unlink+rm succeeding - if BOTH failed (e.g. a Windows open-file handle blocking both), a fully valid, restorable aside was left behind.
+    // Round-2's fix makes the rename-to-`.dead-*` the PRIMARY defense: it runs first and, on success, the candidate is already structurally invisible to step 4's restore path before unlink/rm are ever reached - so forcing exactly the two operations that were round-1's whole defense to fail no longer matters.
     await writeInstall("1.0.0", {});
     await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
     const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
@@ -490,10 +452,7 @@ describe("reconcileHostStage", () => {
     expect(result.stagedAsideOutcome).toBe("deleted");
     expect(existsSync(asideDir)).toBe(false);
 
-    // Not restorable by a SUBSEQUENT reconcile either: the candidate no
-    // longer exists under the `.old-*` prefix `reconcileStagedAside`
-    // scans for, so even if `staged/` were removed and reconcile ran
-    // again, there is nothing left to find.
+    // Not restorable by a SUBSEQUENT reconcile either: the candidate no longer exists under the `.old-*` prefix `reconcileStagedAside` scans for, so even if `staged/` were removed and reconcile ran again, there is nothing left to find.
     rmSync(stagedDirFor(ENV), { recursive: true, force: true });
     const second = await reconcileHostStage(ENV);
     expect(second.stagedAsideOutcome).toBe("none");
@@ -501,15 +460,8 @@ describe("reconcileHostStage", () => {
   });
 
   it("sweeps a .dead-* aside sibling even when there are no .old-* candidates at all", async () => {
-    // `.dead-*` is what `invalidateStagedAsideDir`'s layer-1 rename
-    // leaves behind - a structurally different prefix `.old-*` scanning
-    // never matches, so it can only be cleaned up by the unconditional
-    // sweep in `reconcileHostStage`, never by a call site nested inside
-    // `reconcileStagedAside`'s own pure-litter branch. No `.old-*`
-    // candidates at all is the ORDINARY case once a prior pass has
-    // already invalidated them - the call site this replaces was
-    // unreachable on exactly this path, so `.dead-*` trees accumulated
-    // forever across every completed replacement.
+    // `.dead-*` is what `invalidateStagedAsideDir`'s layer-1 rename leaves behind - a structurally different prefix `.old-*` scanning never matches, so it can only be cleaned up by the unconditional sweep in `reconcileHostStage`, never by a call site nested inside `reconcileStagedAside`'s own pure-litter branch.
+    // No `.old-*` candidates at all is the ORDINARY case once a prior pass has already invalidated them - the call site this replaces was unreachable on exactly this path, so `.dead-*` trees accumulated forever across every completed replacement.
     await writeInstall("1.0.0", {});
     await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
     const deadDir = `${stagedDirFor(ENV)}.dead-${Date.now()}`;

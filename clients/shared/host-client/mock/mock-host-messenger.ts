@@ -11,13 +11,6 @@ import {
   type ResponseOfMethod,
 } from "../../host-transport/host-messenger";
 
-/**
- * Resolver for a single method in the mock host runtime.
- *
- * Handlers receive the canonical request params and return the canonical
- * response body. Throwing inside a handler surfaces as a `HostRpcError`
- * with code `RPC_ERROR`, matching what a real host dispatcher would emit.
- */
 export type MockMethodHandler<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -35,15 +28,8 @@ export type MockHandlerMap<Registry extends VersionedRpcRegistry> = {
 };
 
 /**
- * Discriminated trace event mirroring the per-request WebSocket lifecycle so
- * tests and dev tooling can assert that the simulated messenger walks the same
- * `open → auth → manifest → request → response → close` phases as the real
- * `WsRpcClient`.
- *
- * Every event carries `method` and `requestId` so multi-call traces remain
- * attributable. `request` carries the canonical params; `response` carries
- * either the canonical result or the surfaced `HostRpcError` so callers can
- * inspect both happy and error paths without subscribing to handler internals.
+ * Every event carries `method` and `requestId` so multi-call traces remain attributable.
+ * `request` carries the canonical params; `response` carries either the canonical result or the surfaced `HostRpcError` so callers can inspect both happy and error paths without subscribing to handler internals.
  */
 export type MockPhaseEvent =
   | {
@@ -94,14 +80,7 @@ export interface MockHostMessengerOptions<
 
 /**
  * In-memory `IHostMessenger` used by dev, preview, and shared tests.
- *
- * Keeps the same typed surface as `WsRpcClient` so `gui-app` can bind to
- * either without branching in UI code. The mock only implements the unary
- * request path - streaming/push is deferred at the interface level.
- *
- * The `phases` log and `subscribe()` listener mirror the lifecycle of the
- * real WebSocket client so observability assertions work identically across
- * mock and prod transports.
+ * Keeps the same typed surface as `WsRpcClient` so `gui-app` can bind to either without branching in UI code.
  */
 export class MockHostMessenger<
   Registry extends VersionedRpcRegistry,
@@ -128,9 +107,8 @@ export class MockHostMessenger<
   }
 
   /**
-   * Subscribes to lifecycle phase events. Returns an unsubscribe function so
-   * callers (typically tests) can scope a listener to a single block without
-   * leaking subscriptions across cases.
+   * Subscribes to lifecycle phase events.
+   * Returns an unsubscribe function so callers (typically tests) can scope a listener to a single block without leaking subscriptions across cases.
    */
   subscribe(listener: MockPhaseListener): MockPhaseUnsubscribe {
     this.listeners.add(listener);
@@ -261,15 +239,8 @@ export class MockHostMessenger<
 }
 
 /**
- * Re-stamp a handler-thrown `HostRpcError` with THIS request's id/method while
- * preserving its class.
- *
- * The class is part of the contract, not decoration: `HostTransportFailureError`
- * is what tells a caller the host never answered, and `RetryableTransportError`
- * is what the retrying messenger and the compat gate branch on. Rebuilding
- * every throw as a plain `HostRpcError` silently downgraded those to
- * "the host answered with an error", so no test could reach the code paths that
- * exist precisely to tell the two apart.
+ * Re-stamp a handler-thrown `HostRpcError` with this request's id/method while preserving its class.
+ * The class is part of the contract, not decoration: `HostTransportFailureError` is what tells a caller the host never answered, and `RetryableTransportError` is what the retrying messenger and the compat gate branch on.
  */
 function restampHostRpcError(
   cause: HostRpcError,
@@ -285,10 +256,6 @@ function restampHostRpcError(
     holders: cause.holders,
   };
   if (cause instanceof RetryableTransportError) {
-    // Carried from the cause, not re-decided: the whole point of this restamp
-    // is to preserve the contract the caller's error already states, and
-    // `replaySafetyFromKey` is the part of it that decides whether a retry of
-    // this call may go out unkeyed.
     return new RetryableTransportError({
       ...details,
       replaySafetyFromKey: cause.replaySafetyFromKey,

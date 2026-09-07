@@ -2,41 +2,10 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { FileDiff, parsePatchFiles } from "@pierre/diffs";
 import { Editor } from "@pierre/diffs/edit";
 
-/**
- * Documents (against the real, unmocked @pierre/diffs@1.3.1 library) the
- * exact contract our diff-editing integration depends on:
- *
- * `parsePatchFiles()` always returns a `FileDiffMetadata` marked
- * `isPartial: true`. `@pierre/diffs` only attempts to hydrate a partial diff
- * once, at the moment an editor first attaches (`FileDiff.attachEditor` ->
- * `loadFilesIfNecessary`), and only for `change`/`rename-changed`/
- * `rename-pure` types. Handing it a *different* partial `FileDiffMetadata`
- * object for the same file afterward - which is exactly what re-parsing the
- * same patch produces - is "treated as a new partial render model" per the
- * library's own `FileDiffMetadata.isPartial` docs: the replacement never
- * gets a hydration attempt and stays partial forever.
- *
- * This is the mechanism behind the Diffs "click token to edit" bug: the
- * editor's content element only gets `contentEditable`/`role=textbox` set
- * inside `Editor.__syncRenderView`, which itself refuses to run against a
- * partial diff - so a stranded partial diff means the editor never attaches
- * a real editable surface, silently (no thrown render error, no page
- * error - `attachEditor`'s fire-and-forget hydration promise just never
- * resolves against the object anything still references).
- *
- * `DiffContentPrimitive` (see `hydrateFileDiffForEdit` in
- * diff-content-primitive.tsx) avoids this entirely by hydrating synchronously
- * before `edit` ever flips true, so `@pierre/diffs` never sees a partial
- * diff during an edit session.
- */
+/** This is the mechanism behind the Diffs "click token to edit" bug. */
 
-// jsdom has no canvas engine; @pierre/diffs' Editor needs a working 2D
-// context for text metrics, and its tokenizer schedules work through a
-// single-argument `window.postMessage` call that jsdom's stricter (2-arg)
-// implementation rejects. Real browsers always have both - these shims only
-// close jsdom-specific gaps so the real attach/edit code path can run. A fake
-// 2D context can't structurally satisfy `CanvasRenderingContext2D`, so this
-// replaces the descriptor directly rather than casting through it.
+// A fake 2D context can't structurally satisfy `CanvasRenderingContext2D`, so this replaces the descriptor
+// directly rather than casting through it.
 beforeAll(() => {
   Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
     configurable: true,
@@ -152,10 +121,8 @@ describe("@pierre/diffs partial-diff hydration contract (real, unmocked library)
 
     const editor = new Editor<undefined>({});
     const detach = editor.edit(instance);
-    // Mirrors DiffContentPrimitive re-rendering with a *different* fileDiff
-    // object in the same tick `edit` flips true - e.g. `displayedGitDiff()`
-    // switching `props.patch` from the live query diff to the pinned diff,
-    // which invalidates the parse memo and produces a brand-new object.
+    // Mirrors DiffContentPrimitive re-rendering with a *different* fileDiff object in the same tick `edit` flips
+    // true.
     instance.render({ fileDiff: pinnedFileDiff, forceRender: true });
     await new Promise((resolve) => setTimeout(resolve, 50));
 

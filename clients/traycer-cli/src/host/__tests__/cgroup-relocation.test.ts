@@ -3,12 +3,8 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// This module is Linux's first line of defence against the host stopping the
-// CLI that just asked it to stop (see the module's own top-of-file comment).
-// Every seam that could touch a real machine is stubbed: `node:os.platform`,
-// `node:fs/promises.readFile` (only for `/proc/self/cgroup`), `node:child_process.spawn`,
-// `isPackagedRun`, and the logger - so no test here can spawn a real
-// `systemd-run`, read a real cgroup file, or append to a live `cli.log`.
+// This module is Linux's first line of defence against the host stopping the CLI that just asked it to stop (see the module's own top-of-file comment).
+// Every seam that could touch a real machine is stubbed: `node:os.platform`, `node:fs/promises.readFile` (only for `/proc/self/cgroup`), `node:child_process.spawn`, `isPackagedRun`, and the logger - so no test here can spawn a real `systemd-run`, read a real cgroup file, or append to a live `cli.log`.
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -25,10 +21,8 @@ vi.mock("../../logger", () => ({
 
 const mocks = vi.hoisted(() => ({
   platform: "linux" as NodeJS.Platform,
-  // A string is the file's contents. `null` fails the read with ENOENT (no
-  // `/proc/self/cgroup`); an object names the errno to fail with instead.
-  // Both are "unreadable, so unanswerable": absence refuses like any other
-  // failure.
+  // A string is the file's contents.
+  // `null` fails the read with ENOENT (no `/proc/self/cgroup`); an object names the errno to fail with instead.
   cgroup: null as string | null | { readonly errno: string },
   packaged: false,
   // Recorded fd-3 writes from `acknowledgeRelocationEntry`.
@@ -91,10 +85,8 @@ interface RecordedSpawn {
   readonly options: SpawnOptions;
 }
 
-// The fake child, with the fd-3 ack pipe the production code reads through
-// `child.stdio[3]`. `ack.write(...)` is the relocated CLI saying it reached
-// `withRunner`; a responder that never writes to it is a `systemd-run` that
-// died before any CLI started.
+// The fake child, with the fd-3 ack pipe the production code reads through `child.stdio[3]`.
+// `ack.write(...)` is the relocated CLI saying it reached `withRunner`; a responder that never writes to it is a `systemd-run` that died before any CLI started.
 interface FakeChild {
   readonly child: ChildProcess;
   readonly ack: PassThrough;
@@ -103,13 +95,10 @@ interface FakeChild {
 const spawnMocks = vi.hoisted(() => ({
   recorded: [] as RecordedSpawn[],
   // Each queued responder drives the fake child once `spawn` has returned it.
-  // A `null` responder returns a child that never emits anything, which is how
-  // the "spawn threw synchronously" case is kept separate (`throwSync`).
+  // A `null` responder returns a child that never emits anything, which is how the "spawn threw synchronously" case is kept separate (`throwSync`).
   respond: null as ((fake: FakeChild) => void) | null,
   throwSync: null as Error | null,
-  // `undefined` mimics the spawn-failure shape where Node hands back a child
-  // with no pid at all - the case `relayTerminationSignals` refuses to
-  // install a relay for.
+  // `undefined` mimics the spawn-failure shape where Node hands back a child with no pid at all - the case `relayTerminationSignals` refuses to install a relay for.
   childPid: undefined as number | undefined,
   // The most recently created fake, for tests that drive the child by hand
   // (no `respond` queued) rather than through a scripted responder.
@@ -184,9 +173,8 @@ describe("findHostUnitCgroup", () => {
   });
 
   it("finds the host unit in a hybrid machine's v1 systemd line even though the v2 line is bare", () => {
-    // The unified line answers "not inside a host unit" on its own; only the
-    // v1 `name=systemd` hierarchy carries the real placement here. Every
-    // candidate line must be checked, not just the first.
+    // The unified line answers "not inside a host unit" on its own; only the v1 `name=systemd` hierarchy carries the real placement here.
+    // Every candidate line must be checked, not just the first.
     const hybrid = [
       "0::/",
       "1:name=systemd:/user.slice/.../ai.traycer.host.service",
@@ -216,11 +204,7 @@ describe("findHostUnitCgroup", () => {
     expect(findHostUnitCgroup("")).toBeNull();
   });
 
-  // Ablation: in `findHostUnitCgroup`, change `if (unit !== null) return { unit, path };`
-  // to `return { unit, path };` unconditionally inside the loop (i.e. return
-  // after the FIRST candidate line regardless of match) → the hybrid test
-  // above fails because the bare `0::/` first line short-circuits before the
-  // v1 `name=systemd` line is ever checked.
+  // Ablation: in `findHostUnitCgroup`, change `if (unit !== null) return { unit, path };` to `return { unit, path };` unconditionally inside the loop (i.e. return after the FIRST candidate line regardless of match) → the hybrid test above fails because the bare `0::/` first line short-circuits before the v1 `name=systemd` line is ever checked.
 });
 
 describe("relocationArgv", () => {
@@ -266,17 +250,12 @@ describe("relocationArgv", () => {
     ]);
   });
 
-  // Ablation: in `relocationArgv`, change the packaged branch to
-  // `[run.execPath, ...run.argv.slice(1)]` (the doubled binary token) → the
-  // packaged test above fails: it would see `/slot/traycer` twice at the
-  // front of the argv instead of once.
+  // Ablation: in `relocationArgv`, change the packaged branch to `[run.execPath, ...run.argv.slice(1)]` (the doubled binary token) → the packaged test above fails: it would see `/slot/traycer` twice at the front of the argv instead of once.
 });
 
 describe("relocateOutOfHostCgroupIfNeeded", () => {
-  // These tests hand the module a fake launch shape by writing to `process`
-  // itself. Captured once here and restored after every test: a leaked
-  // `execPath` of `/slot/traycer` would follow this worker into any other
-  // file that spawns something real.
+  // These tests hand the module a fake launch shape by writing to `process` itself.
+  // Captured once here and restored after every test: a leaked `execPath` of `/slot/traycer` would follow this worker into any other file that spawns something real.
   const originalArgv = process.argv;
   const originalExecPath = process.execPath;
   const originalExecArgv = process.execArgv;
@@ -296,10 +275,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     loggerMock.info.mockClear();
   });
 
-  // The relocated CLI reaching `withRunner`: one byte on fd 3, the channel
-  // closing behind it, and then whatever the command itself exits with: ack
-  // and channel end BEFORE process exit, one of the supported orderings (the
-  // exit-first ordering has its own test below).
+  // The relocated CLI reaching `withRunner`: one byte on fd 3, the channel closing behind it, and then whatever the command itself exits with: ack and channel end BEFORE process exit, one of the supported orderings (the exit-first ordering has its own test below).
   function acknowledgeThenExit(code: number | null): (fake: FakeChild) => void {
     return (fake) => {
       fake.child.emit("spawn");
@@ -313,9 +289,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.argv = originalArgv;
     process.execPath = originalExecPath;
     process.execArgv = originalExecArgv;
-    // A safety net for the relay tests below: each restores its own
-    // `process.kill` spy in a `finally`, but this catches one left standing
-    // by a test that throws before reaching it.
+    // A safety net for the relay tests below: each restores its own `process.kill` spy in a `finally`, but this catches one left standing by a test that throws before reaching it.
     vi.restoreAllMocks();
   });
 
@@ -366,17 +340,12 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       "inherit",
       "pipe",
     ]);
-    // The scope moves the CGROUP, not the SESSION: without `detached`
-    // (setsid at spawn), the child stays in a Traycer-hosted terminal's
-    // session, and the moment the stop closes that PTY master the kernel
-    // SIGHUPs the relocated updater along with it. Asserted alongside
-    // `stdio` so a future change cannot quietly pipe stdio (losing visible
-    // progress) or drop `detached` (losing survival) without failing here.
+    // The scope moves the CGROUP, not the SESSION: without `detached` (setsid at spawn), the child stays in a Traycer-hosted terminal's session, and the moment the stop closes that PTY master the kernel SIGHUPs the relocated updater along with it.
+    // Asserted alongside `stdio` so a future change cannot quietly pipe stdio (losing visible progress) or drop `detached` (losing survival) without failing here.
     expect(call?.options.detached).toBe(true);
     expect(call?.options.env?.[TRAYCER_CLI_RELOCATED_ENV]).toBe("1");
-    // The line the CLI docs tell an operator to look for in cli.log. It is
-    // written on the ACK, not on `spawn`: `systemd-run` starting proves
-    // nothing about a CLI existing in the new scope.
+    // The line the CLI docs tell an operator to look for in cli.log.
+    // It is written on the ACK, not on `spawn`: `systemd-run` starting proves nothing about a CLI existing in the new scope.
     expect(loggerMock.info).toHaveBeenCalledWith(
       "relocated host-stopping command into a transient scope",
       { command: "host update", unit: "ai.traycer.host.service" },
@@ -387,9 +356,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       call?.args.some((arg) => arg.startsWith("--expand-environment")),
     ).toBe(false);
 
-    // Ablation: in `runInTransientScope`, drop `detached: true` from the
-    // spawn options → this test fails: `call?.options.detached` is
-    // `undefined` instead of `true`.
+    // Ablation: in `runInTransientScope`, drop `detached: true` from the spawn options → this test fails: `call?.options.detached` is `undefined` instead of `true`.
   });
 
   it("forwards a non-zero exit code from a CLI that acknowledged - one result, no second envelope", async () => {
@@ -424,21 +391,15 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
   });
 
   it("rejects when systemd-run starts and exits WITHOUT the child ever acknowledging", async () => {
-    // The failure this exists for: `systemd-run` itself runs, then fails to
-    // reach a user bus or is refused its transient scope. `spawn` fires and
-    // `close` carries an ordinary non-zero code, indistinguishable from the
-    // command's own failure - except that no CLI ever wrote to fd 3. Without
-    // the ack this resolved `completed`, the parent took `finishAndExit`, and
-    // a `--json` caller got no error envelope from anyone: the relocated CLI
-    // that owed it never existed.
+    // The failure this exists for: `systemd-run` itself runs, then fails to reach a user bus or is refused its transient scope.
+    // `spawn` fires and `close` carries an ordinary non-zero code, indistinguishable from the command's own failure - except that no CLI ever wrote to fd 3.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
     process.execPath = "/slot/traycer";
     process.execArgv = [];
-    // Exit first, then the ack channel ends carrying nothing. Only an ENDED
-    // channel makes "no ack" final, so this is the ordering that proves the
-    // refusal rather than merely reaching it.
+    // Exit first, then the ack channel ends carrying nothing.
+    // Only an ENDED channel makes "no ack" final, so this is the ordering that proves the refusal rather than merely reaching it.
     spawnMocks.respond = (fake) => {
       fake.child.emit("spawn");
       fake.child.emit("exit", 1, null);
@@ -454,21 +415,12 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // And it is NOT reported as a successful relocation.
     expect(loggerMock.info).not.toHaveBeenCalled();
 
-    // Ablation: in `runInTransientScope`'s `settle`, replace everything after
-    // the `if (!exited) return` guard with an unconditional
-    // `resolve(exitCode ?? 1)` → this test fails: the call resolves
-    // `{kind:"completed", exitCode:1}` and the caller silently exits 1 with no
-    // error envelope, which is the bug this pin exists for.
+    // Ablation: in `runInTransientScope`'s `settle`, replace everything after the `if (!exited) return` guard with an unconditional `resolve(exitCode ?? 1)` → this test fails: the call resolves `{kind:"completed", exitCode:1}` and the caller silently exits 1 with no error envelope, which is the bug this pin exists for.
   });
 
   it("resolves when the ack arrives AFTER the process exit - Bun does not drain fd 3 before it reports the child gone", async () => {
-    // Bun 1.3.12 counts stdout/stderr toward its child close accounting but
-    // returns the extra descriptor from `net.connect({fd})` without adding it,
-    // so with stdio 0-2 inherited the process can be reported gone while fd 3
-    // still holds the ack. Deciding on that report alone rejects a relocation
-    // that had already acknowledged AND completed: a false "never started", a
-    // second terminal envelope over the child's own, and the real exit code
-    // lost. The tree and dev paths of this CLI run under Bun.
+    // Bun 1.3.12 counts stdout/stderr toward its child close accounting but returns the extra descriptor from `net.connect({fd})` without adding it, so with stdio 0-2 inherited the process can be reported gone while fd 3 still holds the ack.
+    // Deciding on that report alone rejects a relocation that had already acknowledged AND completed: a false "never started", a second terminal envelope over the child's own, and the real exit code lost.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
@@ -490,19 +442,12 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       { command: "host update", unit: "ai.traycer.host.service" },
     );
 
-    // Ablation: in `runInTransientScope`, decide on the child's `close` event
-    // alone again - `child.once("close", (code) => acknowledged ? resolve(code
-    // ?? 1) : reject(relocationNeverStarted(...)))`, with the fake emitting
-    // `close` in place of `exit` - → this test fails: the ack has not been
-    // delivered yet at that point, so a completed command is rejected as one
-    // that never started.
+    // Ablation: in `runInTransientScope`, decide on the child's `close` event alone again - `child.once("close", (code) => acknowledged ? resolve(code ?? 1) : reject(relocationNeverStarted(...)))`, with the fake emitting `close` in place of `exit` - → this test fails: the ack has not been delivered yet at that point, so a completed command is rejected as one that never started.
   });
 
   it("forwards SIGINT to the relocated child's PROCESS GROUP (-pid), and disposes the listener once settled", async () => {
-    // Only needed because of `detached`: while the child shared this
-    // process's group, a terminal's Ctrl-C reached both at once. Detached,
-    // it does not - so without this relay Ctrl-C would kill the waiting
-    // parent and leave the update running unattended.
+    // Only needed because of `detached`: while the child shared this process's group, a terminal's Ctrl-C reached both at once.
+    // Detached, it does not - so without this relay Ctrl-C would kill the waiting parent and leave the update running unattended.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
@@ -512,9 +457,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // No `respond` queued: this test drives the fake child by hand so it can
     // emit the signal BEFORE the child ever exits.
     spawnMocks.respond = null;
-    // Captured BEFORE the relay installs its own listener, so the "disposed"
-    // assertion below proves the count returns to what it actually was
-    // rather than to a baseline that already included the relay itself.
+    // Captured BEFORE the relay installs its own listener, so the "disposed" assertion below proves the count returns to what it actually was rather than to a baseline that already included the relay itself.
     const sigintBefore = process.listenerCount("SIGINT");
 
     const promise = relocateOutOfHostCgroupIfNeeded("host update", {});
@@ -527,10 +470,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // Spied BEFORE emitting: an unspied call would signal this test runner's
     // own process group.
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    // Settling the fake child lives in its own `finally`-reached step: if an
-    // assertion above throws, the relay's listener must still be disposed of
-    // before this test ends, or it leaks into every test that runs after -
-    // exactly what happened while running this round's ablation.
+    // Settling the fake child lives in its own `finally`-reached step: if an assertion above throws, the relay's listener must still be disposed of before this test ends, or it leaks into every test that runs after - exactly what happened while running this round's ablation.
     let settled = false;
     const settle = async (): Promise<void> => {
       if (settled) return;
@@ -552,26 +492,19 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
         kind: "completed",
         exitCode: 0,
       });
-      // The disposer removed the listener once the promise settled - a
-      // leaked one would still fire (and still try to signal a dead pid) on
-      // every SIGINT this test worker receives afterwards.
+      // The disposer removed the listener once the promise settled - a leaked one would still fire (and still try to signal a dead pid) on every SIGINT this test worker receives afterwards.
       expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
     } finally {
       await settle();
       killSpy.mockRestore();
     }
 
-    // Ablation: in `relayInterruptSignal`, change `process.kill(-pid,
-    // "SIGINT")` to `process.kill(pid, "SIGINT")` → this test fails:
-    // `killSpy` is called with the positive pid instead of `-pid`.
+    // Ablation: in `relayInterruptSignal`, change `process.kill(-pid, "SIGINT")` to `process.kill(pid, "SIGINT")` → this test fails: `killSpy` is called with the positive pid instead of `-pid`.
   });
 
   it("does NOT forward SIGTERM - unconditionally, because the likeliest sender is the host unit's own stop and relaying that would kill the update the child was sent away to finish", async () => {
-    // The P1 this test pins: `systemctl --user stop`'s default
-    // `KillMode=control-group` SIGTERMs every process in the host unit's
-    // cgroup, this waiting parent included. Forwarding that SIGTERM to the
-    // child's process group would hand the relocated update its own stop
-    // signal at exactly the moment relocation exists to survive it.
+    // The P1 this test pins: `systemctl --user stop`'s default `KillMode=control-group` SIGTERMs every process in the host unit's cgroup, this waiting parent included.
+    // Forwarding that SIGTERM to the child's process group would hand the relocated update its own stop signal at exactly the moment relocation exists to survive it.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
@@ -579,9 +512,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.execArgv = [];
     spawnMocks.childPid = 4242;
     spawnMocks.respond = null;
-    // Captured BEFORE the relay runs, so this proves no SIGTERM listener was
-    // installed AT ALL - the stronger pin, since a listener that merely
-    // chooses not to fire today is a bug waiting to come back.
+    // Captured BEFORE the relay runs, so this proves no SIGTERM listener was installed AT ALL - the stronger pin, since a listener that merely chooses not to fire today is a bug waiting to come back.
     const sigtermBefore = process.listenerCount("SIGTERM");
 
     const promise = relocateOutOfHostCgroupIfNeeded("host update", {});
@@ -590,11 +521,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     await Promise.resolve();
 
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    // Settling the fake child lives in its own `finally`-reached step, same
-    // as the SIGINT test above: if an assertion throws (as the ablation for
-    // THIS test is designed to make happen), the promise must still be
-    // driven to completion, or this test's own relay listeners leak into
-    // every test that runs after it.
+    // Settling the fake child lives in its own `finally`-reached step, same as the SIGINT test above: if an assertion throws (as the ablation for THIS test is designed to make happen), the promise must still be driven to completion, or this test's own relay listeners leak into every test that runs after it.
     let settled = false;
     const settle = async (): Promise<void> => {
       if (settled) return;
@@ -621,18 +548,13 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       killSpy.mockRestore();
     }
 
-    // Ablation (§ablation table): reinstate a SIGTERM listener/forwarding in
-    // `relayInterruptSignal` → this test reddens on the FIRST assertion
-    // (`listenerCount("SIGTERM")` grows by one the moment the relay
-    // installs), before the emitted-signal assertion even runs. Once the
-    // isolation fix above is in place, THIS is the only test that reddens -
-    // the "no pid" test below must not be collateral damage any more.
+    // Ablation (§ablation table): reinstate a SIGTERM listener/forwarding in `relayInterruptSignal` → this test reddens on the FIRST assertion (`listenerCount("SIGTERM")` grows by one the moment the relay installs), before the emitted-signal assertion even runs.
+    // Once the isolation fix above is in place, THIS is the only test that reddens - the "no pid" test below must not be collateral damage any more.
   });
 
   it("a child with no pid installs no relay - process.kill is never called", async () => {
-    // The spawn-failure shape: Node can hand back a `ChildProcess` with no
-    // pid at all. `relayInterruptSignal` refuses to install anything for it
-    // rather than signalling a pid that does not exist.
+    // The spawn-failure shape: Node can hand back a `ChildProcess` with no pid at all.
+    // `relayInterruptSignal` refuses to install anything for it rather than signalling a pid that does not exist.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
@@ -694,19 +616,12 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     }
     expect(caught).toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
 
-    // Ablation: in `runInTransientScope`, change the `error` handler's
-    // `reject(relocationFailed(...))` to `resolve(0)` → this test fails: the
-    // relocation reports `{kind:"completed", exitCode:0}`, so a `systemd-run`
-    // that never existed is recorded as a command that ran and succeeded.
+    // Ablation: in `runInTransientScope`, change the `error` handler's `reject(relocationFailed(...))` to `resolve(0)` → this test fails: the relocation reports `{kind:"completed", exitCode:0}`, so a `systemd-run` that never existed is recorded as a command that ran and succeeded.
   });
 
   it("resolves on a late ack without waiting for the ack channel to end", async () => {
-    // Liveness, not correctness: once the byte is in hand the answer is known,
-    // so nothing here depends on the channel ever ending. Both runtimes mark
-    // descriptors above the explicit stdio set close-on-exec, so the child is
-    // the only writer and `end` does follow its exit - but a future leak of fd
-    // 3 into a long-lived grandchild would stall a decision this code can
-    // already make.
+    // Liveness, not correctness: once the byte is in hand the answer is known, so nothing here depends on the channel ever ending.
+    // Both runtimes mark descriptors above the explicit stdio set close-on-exec, so the child is the only writer and `end` does follow its exit - but a future leak of fd 3 into a long-lived grandchild would stall a decision this code can already make.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
@@ -733,10 +648,8 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
   });
 
   it("host service install is in HOST_STOPPING_COMMANDS unconditionally: its rollback stops the live unit", async () => {
-    // `service/platforms/linux.ts` rolls a failed `enable --now` back with
-    // `disable --now` on the live unit. Run unrelocated from a Traycer-hosted
-    // terminal, that rollback kills the CLI with the host before the manifest
-    // is removed or the install's own error is reported.
+    // `service/platforms/linux.ts` rolls a failed `enable --now` back with `disable --now` on the live unit.
+    // Run unrelocated from a Traycer-hosted terminal, that rollback kills the CLI with the host before the manifest is removed or the install's own error is reported.
     expect(HOST_STOPPING_COMMANDS.get("host service install")?.({})).toBe(true);
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
@@ -750,23 +663,12 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     ).resolves.toEqual({ kind: "completed", exitCode: 0 });
     expect(spawnMocks.recorded).toHaveLength(1);
 
-    // Ablation: remove the `"host service install"` entry from
-    // `HOST_STOPPING_COMMANDS` → this test fails on the first assertion and
-    // the relocation resolves `not-needed` without spawning.
+    // Ablation: remove the `"host service install"` entry from `HOST_STOPPING_COMMANDS` → this test fails on the first assertion and the relocation resolves `not-needed` without spawning.
   });
 
   it("host maintenance-lease is deliberately NOT in HOST_STOPPING_COMMANDS: its caller shares its cgroup, so the guard's refusal is the right outcome", async () => {
-    // The lease serves `host-stop` and `host-uninstall-all` to the Desktop
-    // install/uninstall script, which spawned it and therefore sits in the
-    // same cgroup. From a Traycer-hosted terminal that is the host unit, and
-    // the stop the lease would perform kills the script mid-maintenance
-    // whether or not the lease itself is moved out; a relocated lease would
-    // also hide behind a waiting wrapper, so the script's cancellation (a
-    // signal to its direct child, that child's exit as proof) would prove
-    // nothing about the holder. `withStopIntent`'s guard refuses, and the
-    // refusal reaches the script as a `refused` frame with nothing touched.
-    // `cli-with-runner-relocation.test.ts` pins that the action never calls
-    // the relocation either.
+    // The lease serves `host-stop` and `host-uninstall-all` to the Desktop install/uninstall script, which spawned it and therefore sits in the same cgroup.
+    // From a Traycer-hosted terminal that is the host unit, and the stop the lease would perform kills the script mid-maintenance whether or not the lease itself is moved out; a relocated lease would also hide behind a waiting wrapper, so the script's cancellation (a signal to its direct child, that child's exit as proof) would prove nothing about the holder.
     expect(HOST_STOPPING_COMMANDS.has("host maintenance-lease")).toBe(false);
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     await expect(
@@ -774,9 +676,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     ).resolves.toEqual({ kind: "not-needed" });
     expect(spawnMocks.recorded).toHaveLength(0);
 
-    // Ablation: add `["host maintenance-lease", ALWAYS_STOPS]` to the map →
-    // this test fails on the first assertion, and the relocation spawns
-    // `systemd-run` for a lease whose caller is about to die with the host.
+    // Ablation: add `["host maintenance-lease", ALWAYS_STOPS]` to the map → this test fails on the first assertion, and the relocation spawns `systemd-run` for a lease whose caller is about to die with the host.
   });
 
   it("does nothing for a command outside HOST_STOPPING_COMMANDS, even inside a host unit", async () => {
@@ -789,10 +689,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     ).resolves.toEqual({ kind: "not-needed" });
     expect(spawnMocks.recorded).toHaveLength(0);
 
-    // Ablation: in `cgroup-relocation.ts`, add
-    // `"agent turn-ended-from-hook"` to `HOST_STOPPING_COMMANDS` → this test
-    // fails: the relocation would spawn `systemd-run` for a command that is
-    // supposed to die with its host agent process.
+    // Ablation: in `cgroup-relocation.ts`, add `"agent turn-ended-from-hook"` to `HOST_STOPPING_COMMANDS` → this test fails: the relocation would spawn `systemd-run` for a command that is supposed to die with its host agent process.
   });
 
   it("does nothing when TRAYCER_CLI_RELOCATED is already set, even inside a host unit", async () => {
@@ -814,12 +711,8 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
   });
 
   it("refuses BEFORE spawning when a composed argument contains a dollar sign", async () => {
-    // `host install --from '/tmp/${BUILD}/host.tar.gz'` is a supported input,
-    // and on systemd 258 a scope expands it - silently reading a different
-    // path, or failing because the variable is unset. `--expand-environment=no`
-    // cannot be passed unconditionally (rejected below 254) and probing the
-    // version would cost a process per relocation, so a `$` is refused instead
-    // of being rewritten by something we do not control.
+    // `host install --from '/tmp/${BUILD}/host.tar.gz'` is a supported input, and on systemd 258 a scope expands it - silently reading a different path, or failing because the variable is unset.
+    // `--expand-environment=no` cannot be passed unconditionally (rejected below 254) and probing the version would cost a process per relocation, so a `$` is refused instead of being rewritten by something we do not control.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = [
@@ -842,10 +735,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // The refusal happens before anything is started.
     expect(spawnMocks.recorded).toHaveLength(0);
 
-    // Ablation: in `relocateOutOfHostCgroupIfNeeded`, delete the
-    // `assertArgvSurvivesSystemdRun(argv, commandPath, inside);` call → this
-    // test fails: the relocation spawns and hands the dollar-bearing path to
-    // systemd-run.
+    // Ablation: in `relocateOutOfHostCgroupIfNeeded`, delete the `assertArgvSurvivesSystemdRun(argv, commandPath, inside);` call → this test fails: the relocation spawns and hands the dollar-bearing path to systemd-run.
   });
 
   it("relocates normally when no composed argument contains a dollar sign", async () => {
@@ -871,9 +761,8 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
   });
 
   it("refuses when the cgroup cannot be READ, rather than treating the failure as being outside the unit", async () => {
-    // EACCES says nothing about membership. Treating it as "not inside" is
-    // permission to stop: relocation is skipped, the guard passes, intent is
-    // written, and the stop kills the process issuing it.
+    // EACCES says nothing about membership.
+    // Treating it as "not inside" is permission to stop: relocation is skipped, the guard passes, intent is written, and the stop kills the process issuing it.
     mocks.cgroup = { errno: "EACCES" };
     await expect(
       relocateOutOfHostCgroupIfNeeded("host update", {}),
@@ -883,16 +772,12 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     });
     expect(spawnMocks.recorded).toHaveLength(0);
 
-    // Ablation: in `readHostUnitCgroup`, replace the `throw cliError(...)` in
-    // the catch with `return null` → this test fails: EACCES resolves
-    // `not-needed` and the command runs in the cgroup that is about to kill it.
+    // Ablation: in `readHostUnitCgroup`, replace the `throw cliError(...)` in the catch with `return null` → this test fails: EACCES resolves `not-needed` and the command runs in the cgroup that is about to kill it.
   });
 
   it("REFUSES an ABSENT /proc/self/cgroup (ENOENT, ENOTDIR) - absence says where we cannot look, not where we are", async () => {
-    // Codex on #1755 (post-merge): a mount namespace may hide procfs, or just
-    // this file, while the process is still in the cgroup it was born in and
-    // still reaches the user manager through `$XDG_RUNTIME_DIR`. "Not inside"
-    // there is the stop that kills its issuer. Membership is unknown; refuse.
+    // Codex on #1755 (post-merge): a mount namespace may hide procfs, or just this file, while the process is still in the cgroup it was born in and still reaches the user manager through `$XDG_RUNTIME_DIR`.
+    // "Not inside" there is the stop that kills its issuer.
     for (const errno of ["ENOENT", "ENOTDIR"]) {
       mocks.cgroup = { errno };
       await expect(
@@ -905,24 +790,15 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     }
     expect(spawnMocks.recorded).toHaveLength(0);
 
-    // Ablation: in `readHostUnitCgroup`, add `if (absent) return null;` right
-    // after `const absent = isAbsentPath(cause);` (the pre-#1755-follow-up
-    // behaviour) → this test fails: both errnos resolve `not-needed` and the
-    // command runs inside the cgroup its own stop is about to kill, while the
-    // EACCES test above stays green.
+    // Ablation: in `readHostUnitCgroup`, add `if (absent) return null;` right after `const absent = isAbsentPath(cause);` (the pre-#1755-follow-up behaviour) → this test fails: both errnos resolve `not-needed` and the command runs inside the cgroup its own stop is about to kill, while the EACCES test above stays green.
   });
 
-  // The four commands whose reachability now depends on the parsed options,
-  // not just the command path (Codex review on #1755: command path alone
-  // relocated bytes-only forms that never reach a stop, exposing them to the
-  // `$` refusal and the "scope never started" refusal for nothing). Each gets
-  // a positive (skips relocation) and a negative (still relocates) case.
+  // The four commands whose reachability now depends on the parsed options, not just the command path (Codex review on #1755: command path alone relocated bytes-only forms that never reach a stop, exposing them to the `$` refusal and the "scope never started" refusal for nothing).
+  // Each gets a positive (skips relocation) and a negative (still relocates) case.
   describe("option-gated commands", () => {
     it("host install --no-service-register: not-needed, no refusal, no spawn - even with a $ in --from", async () => {
-      // The exact form from the Codex report. A composed --from path with a
-      // `$` WOULD trip `assertArgvSurvivesSystemdRun` if this reached
-      // relocation - it must not, because `createBytesOnlyInstallLifecycle`
-      // never calls `controller.stop` on any platform.
+      // The exact form from the Codex report.
+      // A composed --from path with a `$` WOULD trip `assertArgvSurvivesSystemdRun` if this reached relocation - it must not, because `createBytesOnlyInstallLifecycle` never calls `controller.stop` on any platform.
       mocks.cgroup = V2_HOST_UNIT_CGROUP;
       mocks.packaged = true;
       process.argv = [
@@ -944,11 +820,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       ).resolves.toEqual({ kind: "not-needed" });
       expect(spawnMocks.recorded).toHaveLength(0);
 
-      // Ablation (§4): in `HOST_STOPPING_COMMANDS`, change the `host install`
-      // entry from `(options) => options.serviceRegister !== false` to
-      // `ALWAYS_STOPS` → this test fails: the `$` in `--from` now reaches
-      // `assertArgvSurvivesSystemdRun` and the call rejects with
-      // `E_SERVICE_CONTROL_FAILED` instead of resolving `not-needed`.
+      // Ablation (§4): in `HOST_STOPPING_COMMANDS`, change the `host install` entry from `(options) => options.serviceRegister !== false` to `ALWAYS_STOPS` → this test fails: the `$` in `--from` now reaches `assertArgvSurvivesSystemdRun` and the call rejects with `E_SERVICE_CONTROL_FAILED` instead of resolving `not-needed`.
     });
 
     it("host install without --no-service-register still relocates (positive control)", async () => {
@@ -1067,11 +939,7 @@ describe("acknowledgeRelocationEntry", () => {
 
   afterEach(() => {
     delete process.env[TRAYCER_CLI_RELOCATED_ENV];
-    // The function adds one 'error' listener to stdout/stderr per call and
-    // never removes it (there is nowhere left to report a later failure to,
-    // since the place we would report it to is what vanished) - a test file
-    // calling it repeatedly would otherwise accumulate listeners and trip
-    // Node's max-listeners warning.
+    // The function adds one 'error' listener to stdout/stderr per call and never removes it (there is nowhere left to report a later failure to, since the place we would report it to is what vanished) - a test file calling it repeatedly would otherwise accumulate listeners and trip Node's max-listeners warning.
     process.stdout.removeAllListeners("error");
     process.stderr.removeAllListeners("error");
   });
@@ -1086,9 +954,7 @@ describe("acknowledgeRelocationEntry", () => {
     acknowledgeRelocationEntry();
     expect(mocks.ackWrites).toEqual([]);
 
-    // Ablation: in `acknowledgeRelocationEntry`, drop the
-    // `TRAYCER_CLI_RELOCATED` early return → this test fails, and the CLI
-    // would write a stray byte into whatever fd 3 is on every ordinary run.
+    // Ablation: in `acknowledgeRelocationEntry`, drop the `TRAYCER_CLI_RELOCATED` early return → this test fails, and the CLI would write a stray byte into whatever fd 3 is on every ordinary run.
   });
 
   it("swallows a failed write - an older parent leaves no pipe on fd 3 (EBADF)", () => {
@@ -1103,10 +969,7 @@ describe("acknowledgeRelocationEntry", () => {
     const eio = Object.assign(new Error("write EIO"), { code: "EIO" });
     expect(() => process.stdout.emit("error", eio)).not.toThrow();
 
-    // Ablation: in `acknowledgeRelocationEntry`, remove the
-    // `process.stdout.on("error", ignore);` line → this test fails: an
-    // unhandled 'error' event on a stream throws, which would kill the
-    // update at exactly the moment relocation exists to survive.
+    // Ablation: in `acknowledgeRelocationEntry`, remove the `process.stdout.on("error", ignore);` line → this test fails: an unhandled 'error' event on a stream throws, which would kill the update at exactly the moment relocation exists to survive.
   });
 
   it("swallows an EIO write on stderr without throwing", () => {
@@ -1115,9 +978,7 @@ describe("acknowledgeRelocationEntry", () => {
     const eio = Object.assign(new Error("write EIO"), { code: "EIO" });
     expect(() => process.stderr.emit("error", eio)).not.toThrow();
 
-    // Ablation: in `acknowledgeRelocationEntry`, remove the
-    // `process.stderr.on("error", ignore);` line → this test fails the same
-    // way as its stdout twin above.
+    // Ablation: in `acknowledgeRelocationEntry`, remove the `process.stderr.on("error", ignore);` line → this test fails the same way as its stdout twin above.
   });
 });
 
@@ -1164,10 +1025,7 @@ describe("assertNotInsideHostUnit", () => {
   });
 
   it("REFUSES when /proc/self/cgroup is ABSENT (ENOENT) - the second line closes the hidden-procfs hole too", async () => {
-    // The guard shares `readHostUnitCgroup` with relocation, so a hidden
-    // cgroup file that slipped past relocation (or a CLI that never ran
-    // through `withRunner`, like `host maintenance-lease`) is refused here
-    // as well.
+    // The guard shares `readHostUnitCgroup` with relocation, so a hidden cgroup file that slipped past relocation (or a CLI that never ran through `withRunner`, like `host maintenance-lease`) is refused here as well.
     mocks.cgroup = { errno: "ENOENT" };
     await expect(assertNotInsideHostUnit()).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
@@ -1188,10 +1046,6 @@ describe("assertNotInsideHostUnit", () => {
       code: "E_SERVICE_CONTROL_FAILED",
     });
 
-    // Ablation: in `assertNotInsideHostUnit`, add an early
-    // `if (process.env.TRAYCER_CLI_RELOCATED) return;` before the cgroup
-    // re-read → this test fails: the guard would resolve instead of
-    // throwing, defeating the entire point of the second line of defence
-    // (a relocation that silently did nothing would go undetected).
+    // Ablation: in `assertNotInsideHostUnit`, add an early `if (process.env.TRAYCER_CLI_RELOCATED) return;` before the cgroup re-read → this test fails: the guard would resolve instead of throwing, defeating the entire point of the second line of defence (a relocation that silently did nothing would go undetected).
   });
 });

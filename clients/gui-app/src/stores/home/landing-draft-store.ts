@@ -54,18 +54,10 @@ import {
 import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 
-/**
- * In-flight "new epic" draft shown in the global tab strip. Multiple drafts
- * may coexist. `activeDraftId` tracks which one the landing-page composer
- * is currently editing.
- */
+/** In-flight "new epic" draft shown in the global tab strip. Multiple drafts may coexist. */
 export interface LandingDraftTab {
   readonly id: string;
-  /**
-   * Full editor JSON - the persisted source of truth for the draft. Replaces
-   * the former lossy `prompt: string`; the tab title is derived from it and the
-   * composer seeds the editor from it on mount.
-   */
+  /** Full editor JSON - the persisted source of truth for the draft. */
   readonly content: JsonContent;
   /** Cursor position (from/to), mirroring the in-epic composer draft. */
   readonly selection: DraftSelection | null;
@@ -89,18 +81,10 @@ export interface LandingDraftWorkspaceSnapshot {
 interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
-  /**
-   * Returns an active draft id. Desktop/browser: always creates a fresh
-   * draft and sets it active. In the INSTALLED MOBILE APP (`isMobileApp()`),
-   * returns the newest existing draft instead - the phone has one stable
-   * composer.
-   */
   createDraft: (settings: ChatRunSettings | null) => string;
   /**
-   * Coordinator-only stable-id source creation (restore/sync, landing
-   * null-draft mount key stability) - explicit ids always mint, on every
-   * shell. A new draft reads the composer's placement once for its workspace
-   * and default settings; non-null settings are an explicit caller override.
+   * Coordinator-only stable-id source creation (restore/sync, landing null-draft mount key
+   * stability) - explicit ids always mint, on every shell.
    */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
@@ -120,18 +104,14 @@ interface LandingDraftStoreState {
     selection: DraftSelection | null,
   ) => void;
   /**
-   * Persists a caret move alone, bumping `lastTouchedAt` without touching or
-   * comparing `content` - a selection-only echo must never re-serialize a
-   * (possibly multi-megabyte inline-image) document the way `setDraftContent`
-   * does.
+   * Persists a caret move alone, bumping `lastTouchedAt` without touching or comparing `content` - a
+   * selection-only echo must never re-serialize a (possibly multi-megabyte inline-image) document
    */
   setDraftSelection: (id: string, selection: DraftSelection | null) => void;
   /** Update the run settings of a specific draft. No-op when id not found. */
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
-  // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
-  // evicted) so callers can unstage any in-flight worktree intent for them.
   addDraftResolvedFolders: (
     id: string,
     folders: ReadonlyArray<WorkspaceFolderInfo>,
@@ -149,14 +129,7 @@ let localPersistenceEnabled = true;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
 let hasAppliedDesktopProjection = false;
-/**
- * Draft ids whose image-handoff adoption has been attempted this session.
- * Deliberately NOT "first projection only": adoption must run for whichever
- * projection first carries a given draft, and nothing guarantees that is the
- * first projection overall (subscription order vs the seeded snapshot is an
- * ordering fact, not an invariant). Adoption is already self-gating on
- * locally-missing hashes; this set only stops per-draft re-probing.
- */
+/** Draft ids whose image-handoff adoption has been attempted this session. */
 const imageAdoptionAttemptedDraftIds = new Set<string>();
 
 const landingDraftStorage: StateStorage = {
@@ -188,16 +161,7 @@ export function applyLandingDraftDesktopProjection(
   const drafts = uniqueLandingDrafts(readProjectedDrafts(snapshot));
   const activeDraftId = readProjectedActiveDraftId(snapshot, drafts);
   const currentState = useLandingDraftStore.getState();
-  // [B1] Empty-inbound clobber guard. The FIRST desktop projection is always
-  // authoritative, even when empty: pre-hydration in-memory drafts may be stale
-  // localStorage state from an earlier web-mode run. After that hydrate, landing
-  // drafts are per-window and this window's live in-memory state is authoritative,
-  // so a later EMPTY inbound snapshot must not replace NON-EMPTY live drafts.
-  // Left unguarded, a spurious clear (registry churn) would wipe an alive draft
-  // AND — via `markLandingDraftsReady` → reconcile with now-empty roots — reap
-  // its persisted image bytes. Re-project the in-memory truth outbound so disk
-  // reconverges, and do NOT flip the ready gate on this bad later inbound (its
-  // roots are wrong).
+  // [B1] Empty-inbound clobber guard.
   if (
     hasAppliedDesktopProjection &&
     drafts.length === 0 &&
@@ -208,7 +172,7 @@ export function applyLandingDraftDesktopProjection(
   }
   applyingDesktopProjection = true;
   // try/finally so a throw in setState/equality can never leave the flag stuck
-  // `true` — which would permanently suppress all outbound projections.
+  // `true` - which would permanently suppress all outbound projections.
   try {
     useLandingDraftStore.setState((state) => {
       if (
@@ -226,15 +190,8 @@ export function applyLandingDraftDesktopProjection(
     applyingDesktopProjection = false;
   }
   hasAppliedDesktopProjection = true;
-  // A draft MOVED here from another window arrives with hash-only content
-  // whose bytes live in the SOURCE window's partition; the source staged them
-  // in a per-draft handoff DB before the move. Adoption is self-gating (it
-  // only opens the handoff when a hash is actually missing locally), so this
-  // is a no-op for ordinary restores; the attempted-set just keeps it to one
-  // probe per draft per session. A FAILED probe releases its entry: an
-  // IndexedDB read that lost to a transient error must be retried on the next
-  // projection, otherwise a moved draft's images stay unavailable for the rest
-  // of the session even though the handoff is still sitting there.
+  // A draft MOVED here from another window arrives with hash-only content whose bytes live in the
+  // SOURCE window's partition; the source staged them in a per-draft handoff DB before the move.
   for (const draft of drafts) {
     if (imageAdoptionAttemptedDraftIds.has(draft.id)) continue;
     imageAdoptionAttemptedDraftIds.add(draft.id);
@@ -249,9 +206,8 @@ export function applyLandingDraftDesktopProjection(
       });
     });
   }
-  // [B2] A non-empty authoritative snapshot confirms the landing roots are real,
-  // so the GC's deleting sweep may run (reaping genuine orphans) without risking
-  // freshly-restored bytes.
+  // [B2] A non-empty authoritative snapshot confirms the landing roots are real, so the GC's
+  // deleting sweep may run (reaping genuine orphans) without risking freshly-restored bytes.
   if (drafts.length > 0) markLandingDraftsAuthoritativeNonEmpty();
   // [C1] Desktop drafts arrive asynchronously over IPC, so the orphan sweep is
   // gated until they do: the FIRST projection means the draft set is now known.
@@ -262,9 +218,7 @@ function readProjectedDrafts(
   snapshot: DesktopPerWindowSnapshot,
 ): ReadonlyArray<LandingDraftTab> {
   return snapshot.landingDrafts.flatMap((draft) => {
-    // T6: the desktop payload now carries real rich content (hash-only image
-    // nodes, mentions, marks). A draft whose `content` fails the doc-shape
-    // guard is dropped - strict, no fallback (no back-compat; dev feature).
+    // T6: the desktop payload now carries real rich content (hash-only image nodes, mentions, marks).
     const content = parseLandingDraftContent(draft.content);
     if (content === null) return [];
     return [
@@ -281,21 +235,14 @@ function readProjectedDrafts(
   });
 }
 
-/**
- * Accept only doc-shaped editor JSON as restorable content. Implemented as a
- * type guard (param `unknown`, predicate `value is JsonContent`) so the inbound
- * `DesktopJsonValue` narrows to `JsonContent` losslessly - no `as`. Anything
- * that is not a `{ type: "doc", ... }` record (a legacy prompt-only entry, a
- * primitive, an array) is rejected.
- */
+/** Accept only doc-shaped editor JSON as restorable content. */
 function parseLandingDraftContent(value: DesktopJsonValue): JsonContent | null {
   return isLandingDraftDocContent(value) ? value : null;
 }
 
 function isLandingDraftDocContent(value: unknown): value is JsonContent {
-  // Require `content` to be an array (or absent): a malformed `{ type: "doc",
-  // content: <non-array> }` would otherwise narrow to JsonContent and throw when
-  // `plainTextFromNodes` walks it during tab-strip render (`draftTabName`).
+  // Require `content` to be an array (or absent): a malformed `{ type: "doc", content: <non-array>
+  // }` would otherwise narrow to JsonContent and throw when `plainTextFromNodes` walks it during
   return (
     isRecord(value) &&
     value.type === "doc" &&
@@ -334,15 +281,6 @@ function readProjectedActiveDraftId(
     : null;
 }
 
-/**
- * Validate the localStorage-persisted `drafts` array on rehydration, mirroring
- * `readProjectedDrafts` (the desktop-projection path): each draft is rebuilt
- * field-by-field, a draft whose `content` fails the doc-shape guard is dropped,
- * and a missing/invalid `workspace` becomes the empty snapshot (so
- * `draft.workspace.folders` is always readable). Without this, the persist
- * middleware rehydrated `drafts` verbatim, so a legacy tab (pre-`content`
- * retype, or pre-`workspace`) crashed the landing render on `draft.workspace`.
- */
 function parsePersistedLandingDrafts(
   value: unknown,
 ): ReadonlyArray<LandingDraftTab> {
@@ -378,10 +316,7 @@ function parsePersistedActiveDraftId(
   return drafts.some((draft) => draft.id === value) ? value : null;
 }
 
-// Rehydration-safe composer-mode parse. Unlike `parseComposerMode` (which seeds
-// a missing value from the live settings store), this stays self-contained: the
-// persist `merge` runs during synchronous module-init rehydration, so it must
-// not reach into another store, and falls back to the static default.
+// Rehydration-safe composer-mode parse.
 function parsePersistedComposerMode(value: unknown): ComposerMode {
   return typeof value === "string" && isComposerMode(value)
     ? value
@@ -402,9 +337,8 @@ export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
 }
 
 /**
- * Newest existing landing draft, for the installed mobile app's single stable
- * composer: an id-less "new draft" activation reuses this instead of minting
- * (see `createDraft`). `null` when no draft exists yet.
+ * Newest existing landing draft, for the installed mobile app's single stable composer: an id-less
+ * "new draft" activation reuses this instead of minting (see `createDraft`).
  */
 export function newestLandingDraftId(): string | null {
   return newestDraft(useLandingDraftStore.getState().drafts);
@@ -413,9 +347,8 @@ export function newestLandingDraftId(): string | null {
 function newestDraft(drafts: ReadonlyArray<LandingDraftTab>): string | null {
   let newest: LandingDraftTab | null = null;
   for (const draft of drafts) {
-    // >= so the LATER array entry wins a millisecond tie: drafts are
-    // append-ordered, and same-ms timestamps are realistic (restore paths
-    // stamp several drafts in one tick).
+    // >= so the LATER array entry wins a millisecond tie: drafts are append-ordered, and same-ms
+    // timestamps are realistic (restore paths stamp several drafts in one tick).
     if (newest === null || draft.lastTouchedAt >= newest.lastTouchedAt) {
       newest = draft;
     }
@@ -430,14 +363,8 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       activeDraftId: null,
 
       createDraft: (settings) => {
-        // The installed mobile app has ONE stable composer: its header has
-        // no tab strip, so a second draft tab could never be closed. "New
-        // task" therefore lands back on the existing draft - whatever its
-        // content - instead of minting another. Keyed on the PRODUCT flag,
-        // never the viewport (see `@/lib/mobile-app`): a responsively-narrow
-        // desktop browser keeps normal multi-draft behavior. Explicit-id
-        // creation (`createDraftWithId`) is a restore/sync path and always
-        // mints exactly that draft.
+        // The installed mobile app has ONE stable composer: its header has no tab strip, so a second draft
+        // tab could never be closed.
         if (isMobileApp()) {
           const existing = newestDraft(get().drafts);
           if (existing !== null) {
@@ -479,13 +406,11 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         const { drafts, activeDraftId } = get();
         const next = drafts.filter((d) => d.id !== id);
         if (next.length === drafts.length) return;
-        // A close is the runtime cancellation boundary. It flushes this exact
-        // draft's pending writer and aborts only a pre-create attempt; another
-        // visible draft's mirror or submission is never consulted.
+        // A close is the runtime cancellation boundary.
         draftRuntimeRegistry.close(id);
         const nextActive = activeDraftId === id ? null : activeDraftId;
         set({ drafts: next, activeDraftId: nextActive });
-        // Closing a draft can orphan its image bytes — reclaim them (debounced).
+        // Closing a draft can orphan its image bytes - reclaim them (debounced).
         scheduleLandingImageReconcile();
       },
 
@@ -502,15 +427,8 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       setDraftContent: (id, content, selection) => {
         const draft = get().drafts.find((d) => d.id === id);
         if (!draft) return;
-        // The in-memory draft content is CANONICAL: it is both the source the
-        // serializers read AND the source `openDraft` re-seeds the keyed remount
-        // from, so it must keep a paste's still-pending b64 node verbatim — an
-        // in-session navigate-away-and-back re-ingests that node (mount-time
-        // re-entry in `landing-composer`). The "persisted landing drafts never
-        // carry base64" invariant [Mechanism A] is enforced at the two true
-        // serialization seams instead — the persist `partialize` and
-        // `projectLandingDraftForDesktop` — never here (a store that feeds a
-        // remount is not a serialization sink).
+        // The in-memory draft content is CANONICAL: it is both the source the serializers read AND the
+        // source `openDraft` re-seeds the keyed remount from, so it must keep a paste's still-pending b64
         if (
           sameJsonContent(draft.content, content) &&
           sameDraftSelection(draft.selection, selection)
@@ -611,16 +529,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     {
       ...basePersistOptions(LANDING_DRAFT_PERSIST_KEY),
       storage: createJSONStorage(() => landingDraftStorage),
-      // Serialization boundary [Mechanism A]: persisted landing drafts NEVER
-      // carry base64. The in-memory `drafts` array is canonical and DOES hold a
-      // paste's still-pending b64 node (so an in-session navigate-away-and-back
-      // re-ingests it — mount-time re-entry in `landing-composer`); the strip
-      // lives ONLY here, at the localStorage seam, and in
-      // `projectLandingDraftForDesktop` (the desktop seam). A hash-only node,
-      // whose bytes are durably stored, always survives.
-      // ACCEPTED IMPERFECTION: process exit (quit or crash) during the sub-second
-      // ingest window omits that paste's still-pending image from the serialized
-      // draft, because its b64 node has not yet converted to a hash.
+      // Serialization boundary [Mechanism A]: persisted landing drafts NEVER carry base64.
       partialize: (state) => ({
         drafts: state.drafts.map((draft) => ({
           ...draft,
@@ -628,11 +537,8 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         })),
         activeDraftId: state.activeDraftId,
       }),
-      // Sanitize the localStorage payload on rehydration the same way
-      // `readProjectedDrafts` sanitizes the desktop projection, so a legacy tab
-      // (pre-`content` retype / pre-`workspace`) can't rehydrate a shape whose
-      // `draft.workspace.folders` read throws. The default shallow merge took
-      // `drafts` verbatim.
+      // Sanitize the localStorage payload on rehydration the same way `readProjectedDrafts` sanitizes
+      // the desktop projection, so a legacy tab (pre-`content` retype / pre-`workspace`) can't rehydrate
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -652,8 +558,6 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 );
 
 // The registry intentionally has no import back into this persisted source.
-// Wiring it after store construction keeps the renderer-local runtime free of
-// store module cycles and makes recovery hydrate only this window's drafts.
 draftRuntimeRegistry.configure({
   read: (draftId) => {
     const draft = useLandingDraftStore
@@ -673,27 +577,12 @@ draftRuntimeRegistry.configure({
   },
 });
 
-// Same reasoning as the registry wiring above: `landing-image-budget.ts`
-// intentionally has no import back into this persisted source (it would
-// close a store → gc → budget → store cycle), so it reads drafts through
-// this registration instead.
+// Same reasoning as the registry wiring above: `landing-image-budget.ts` intentionally has no
+// import back into this persisted source (it would close a store → gc → budget → store cycle), so
 registerLandingDraftRootSource({
   drafts: () => useLandingDraftStore.getState().drafts,
 });
-/**
- * Render-stable projection of the active draft for the landing-page shell
- * (`HomePage`). Subscribes ONLY to the fields that affect layout/identity - the
- * draft `id`, its workspace folder list, and run settings - each of which keeps
- * a stable reference across a `setDraftContent` edit (the action spreads
- * `{ ...draft, content, selection, lastTouchedAt }`, leaving `workspace` and
- * `settings` references intact).
- *
- * The live `content` is deliberately excluded: it changes on every keystroke
- * and is only needed at composer mount time (`LandingComposer` reads it once,
- * keyed by draft id). Subscribing to it here would re-render the whole home
- * surface - hero, composer, toolbar, workspace row, epics list - per character,
- * which is exactly the flicker this selector removes.
- */
+/** Render-stable projection of the active draft for the landing-page shell (`HomePage`). */
 export function useActiveLandingDraftShell(): {
   readonly draftId: string | null;
   readonly workspaceFolders: ReadonlyArray<string> | null;
@@ -729,9 +618,6 @@ function areLandingDraftsEqual(
   for (let index = 0; index < left.length; index += 1) {
     if (left[index].id !== right[index].id) return false;
     // [Rev2/H2] Compare content + selection BY VALUE, excluding `lastTouchedAt`.
-    // The inbound desktop projection rebuilds `content` (and stamps a fresh
-    // timestamp) every echo; reference/timestamp comparison would never
-    // short-circuit, so every echo would replace state and re-derive titles.
     if (!sameJsonContent(left[index].content, right[index].content)) {
       return false;
     }
@@ -764,12 +650,7 @@ function uniqueLandingDrafts(
   });
 }
 
-// Project the current in-memory drafts to the desktop per-window store. Used by
-// the store subscription (on every local edit) AND by the [B1] empty-inbound
-// guard, which re-projects truth so a spurious empty snapshot on disk is
-// overwritten. Safe to call directly during a guard trip: it does not touch the
-// `applyingDesktopProjection` flag, and main suppresses the echo of a window's
-// own update, so no inbound loop results.
+// Project the current in-memory drafts to the desktop per-window store.
 function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
   if (desktopProjectionBridge === null) return;
   void desktopProjectionBridge.update({
@@ -789,13 +670,6 @@ function projectLandingDraftForDesktop(
   return {
     id: draft.id,
     // T6: emit the real hash-only editor JSON, the cursor, and the edit time.
-    // Desktop serialization seam [Mechanism A]: strip a paste's still-pending b64
-    // node first so the projected draft is hash-only — this covers BOTH the store
-    // subscription and the [B1] empty-inbound guard re-projection (both route
-    // through here). Same narrowed accepted imperfection as the persist
-    // `partialize`. `content` is plain JSON already; the walker reproduces it as a
-    // `DesktopJsonValue` without a cast (`JsonContent`'s `unknown`-valued attrs
-    // are not structurally assignable to `DesktopJsonValue`).
     content: landingDraftContentToDesktopValue(
       stripBase64ImageNodes(draft.content),
     ),
@@ -812,12 +686,7 @@ function projectLandingDraftForDesktop(
   };
 }
 
-/**
- * Reproduce the editor JSON as a `DesktopJsonValue`. The content is hash-only
- * plain JSON, but `JsonContent`'s `Record<string, unknown>` attrs make it
- * structurally unassignable to `DesktopJsonValue`, so walk it (mirroring the
- * desktop-side `parseJsonValue`) instead of casting. Bounded - no base64.
- */
+/** Reproduce the editor JSON as a `DesktopJsonValue`. */
 function landingDraftContentToDesktopValue(
   content: JsonContent,
 ): DesktopJsonValue {
@@ -846,10 +715,8 @@ function toDesktopJsonValue(value: unknown): DesktopJsonValue {
 
 function parseComposerMode(value: unknown): ComposerMode {
   if (typeof value === "string" && isComposerMode(value)) return value;
-  // Drafts persisted before `composerMode` existed (or carrying an unknown
-  // value) adopt the user's global last-used mode - the same seed a fresh
-  // draft gets in `createDraft`. The settings store hydrates synchronously
-  // from localStorage, so it is readable by the time drafts are restored.
+  // Drafts persisted before `composerMode` existed (or carrying an unknown value) adopt the user's
+  // global last-used mode - the same seed a fresh draft gets in `createDraft`.
   return useSettingsStore.getState().composerMode;
 }
 
@@ -995,20 +862,12 @@ export function removeLandingDraftWorkspaceFolder(
     ...workspace,
     folders: nextFolders,
     folderInfoByPath: nextInfoByPath,
-    // Deterministic fallback to the first remaining folder when the removed
-    // folder WAS the explicit primary; `resolvePrimaryPath` also covers the
-    // "no folders left" case (`null`).
+    // Deterministic fallback to the first remaining folder when the removed folder WAS the explicit
+    // primary; `resolvePrimaryPath` also covers the "no folders left" case (`null`).
     primaryPath: resolvePrimaryPath(nextFolders, workspace.primaryPath),
   };
 }
 
-/**
- * Sets the explicit primary folder for a draft/modal workspace snapshot,
- * matching the `mergeLandingDraftWorkspaceFolders` / `removeLandingDraft-
- * WorkspaceFolder` pure-helper pattern so every action (draft store, modal
- * store) routes through one implementation. No-op (same reference) when
- * `folderPath` isn't a member of the snapshot, or is already primary.
- */
 export function setLandingDraftWorkspacePrimary(
   workspace: LandingDraftWorkspaceSnapshot,
   folderPath: string,
@@ -1237,13 +1096,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// Strip pending base64 image nodes (and any `attachmentGroup` left empty) from
-// content at the two SERIALIZATION seams [Mechanism A] — the persist
-// `partialize` and `projectLandingDraftForDesktop` — NOT in `setDraftContent`
-// (in-memory draft content is canonical and may carry a paste's still-pending
-// b64 node). Hash-only image nodes (whose bytes are durably stored) are kept; a
-// still-pending b64 node is dropped from the serialized form until its background
-// job flips it to a hash and the next serialization captures the converted node.
+// Strip pending base64 image nodes (and any `attachmentGroup` left empty) from content at the two
+// SERIALIZATION seams [Mechanism A] - the persist `partialize` and `projectLandingDraftForDesktop`
 function stripBase64ImageNodes(content: JsonContent): JsonContent {
   return stripBase64ImageNode(content) ?? EMPTY_LANDING_DRAFT_CONTENT;
 }

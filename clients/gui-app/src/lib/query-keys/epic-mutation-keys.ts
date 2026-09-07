@@ -13,9 +13,8 @@ export const epicMutationKeys = {
   setCloudChatVisibility: () => ["epic.setCloudChatVisibility"] as const,
   setChatSharingDefault: () => ["epic.setChatSharingDefault"] as const,
   /**
-   * Shared family for both sharing writes so a per-chat flip and the
-   * master toggle are one in-flight scope per viewer. The coordinator
-   * does not serialize them; this key is the client-side gate's identity.
+   * Shared family for both sharing writes so a per-chat flip and the master toggle are one in-flight scope per viewer.
+   * The coordinator does not serialize them; this key is the client-side gate's identity.
    */
   chatSharing: (viewerUserId: string) =>
     ["epic.chatSharing", viewerUserId] as const,

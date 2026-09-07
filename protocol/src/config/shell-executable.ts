@@ -5,11 +5,7 @@ const WINDOWS_SHELL_EXECUTABLE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".cmd",
 ]);
 
-/**
- * Whether the target platform can launch `path` as a shell program. POSIX
- * relies on its executable bit; Windows treats X_OK as an existence check, so
- * it also needs one of the standard executable extensions.
- */
+/** Whether the target platform can launch `path` as a shell program. */
 export function isShellExecutablePathSupported(
   path: string,
   platform: NodeJS.Platform,

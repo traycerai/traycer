@@ -16,15 +16,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useEpicMentionEntries } from "../use-epic-mention-entries";
 
 /**
- * `useEpicMentionEntries` now takes its host `client` explicitly (S11: it no
- * longer resolves `useHostBinding()` internally) - a composer bound to a
- * non-default host must list THAT host's epics/specs, never the app-wide
- * default's. `HostClient` has private fields, so it can't be duck-typed; each
- * fixture builds a real instance over a `MockHostMessenger`, mirroring the
- * pattern in `use-gui-harness-catalog.test.tsx` / the picker's intent-RPC
- * suite. Method handlers delegate to per-fixture `vi.fn()`s so tests keep the
- * familiar `mockResolvedValueOnce` shape while assertions can tell exactly
- * WHICH fixture's transport a request reached (not just what came back).
+ * Pass an explicit host client; a bound composer must list that host's epics, never the app-wide default. Build real `HostClient`s so assertions can tell which fixture a request reached.
  */
 
 function epicSuggestion(id: string): EpicMentionEpicSuggestion {
@@ -207,10 +199,7 @@ describe("useEpicMentionEntries", () => {
     });
   });
 
-  // Coverage for the new required `client` param (S11): the composer's host
-  // is the ONE the request actually reaches - not a sibling host, and not the
-  // app-wide default - and a `null` client (the composer's host not resolved
-  // yet) issues nothing at all rather than silently falling back.
+  // Coverage for the new required `client` param (S11): the composer's host is the ONE the request actually reaches - not a sibling host, and not the app-wide default - and a `null` client (the composer's host not resolved yet) issues nothing at all rather than silently falling back.
   it("issues requests through the passed client, never a different host's transport", async () => {
     const fixtureA = buildMentionFixture("host-a");
     const fixtureB = buildMentionFixture("host-b");

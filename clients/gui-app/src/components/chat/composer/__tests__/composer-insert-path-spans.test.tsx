@@ -23,13 +23,7 @@ afterEach(() => {
   cleanup();
 });
 
-/**
- * Exercises `insertPathSpansCommand` (via `ComposerPromptEditorHandle.
- * beginPathInsertion`'s commit closure) against the real TipTap editor /
- * ProseMirror doc used by every composer surface, rather than a mocked
- * editor handle - a fully mocked handle would hide real insertion-order,
- * mark, and undo-step bugs.
- */
+/** Exercises `insertPathSpansCommand` (via `ComposerPromptEditorHandle. beginPathInsertion`'s commit closure) against the real TipTap editor / ProseMirror doc used by every composer surface, rather than a mocked editor handle - a fully mocked handle would hide real insertion-order, mark, and undo-step bugs. */
 describe("insertPathSpansCommand via the real composer editor", () => {
   it("inserts a single path as an inline-code span followed by a trailing plain space", async () => {
     const handleRef = await mountedHandle();
@@ -105,9 +99,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const editorDom = screen.getByTestId("composer-editor");
     fireEvent.keyDown(editorDom, { key: "z", code: "KeyZ", ctrlKey: true });
 
-    // A single undo fully reverts the insertion - proof it was dispatched as
-    // one ProseMirror transaction (one chain().insertContent(...).unsetMark(
-    // "code").run() call), not one transaction per span.
+    // A single undo fully reverts the insertion - proof it was dispatched as one ProseMirror transaction (one chain().insertContent(...).unsetMark( "code").run() call), not one transaction per span.
     expect(handleRef.current?.getJSON()).toEqual(before);
   });
 

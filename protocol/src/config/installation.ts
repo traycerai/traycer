@@ -4,14 +4,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 import type { Environment } from "./paths";
 
-/**
- * Shared on-disk installation contracts for the CLI and its host.
- *
- * These records are deliberately Node-only and therefore live under the
- * `@traycer/protocol/config` subpath, like the shared config store. The host
- * reads these exact records for RPC installation information while the CLI
- * remains the sole writer and lifecycle owner.
- */
+/** Shared on-disk installation contracts for the CLI and its host. */
 
 const TRAYCER_HOME_DIRNAME = ".traycer";
 const CLI_DIRNAME = "cli";
@@ -23,9 +16,7 @@ const HOST_STAGED_RECORD_FILENAME = "staged.json";
 const CLI_MANIFEST_FILENAME = "manifest.json";
 const DEV_DESKTOP_SLOT_ENV = "DEV_DESKTOP_SLOT";
 
-// The record schemas live in a browser-safe sibling (see its header). Re-exported
-// here so every existing `config/installation` importer is unaffected, and
-// imported by name because the readers below need them in local scope.
+// The record schemas live in a browser-safe sibling (see its header).
 export * from "./installation-records";
 import {
   hostInstallRecordSchema,
@@ -36,12 +27,7 @@ import {
   type StoredCliInstallManifest,
 } from "./installation-records";
 
-/**
- * The shared dev-desktop slot mapping. It is intentionally here rather than
- * in either consumer so every reader of an install record selects the same
- * physical CLI/host tree. Keep this byte-for-byte compatible with the
- * browser-safe shared-client helper until that helper can depend on protocol.
- */
+/** The shared dev-desktop slot mapping. */
 export function devDesktopSlotForEnvironment(
   environment: Environment,
 ): string | null {
@@ -102,9 +88,8 @@ export function hostStagedRecordPath(environment: Environment): string {
 }
 
 /**
- * Reads the installed-host record. A missing file is the unmanaged/tree-run
- * state; malformed present bytes reject so callers never mistake corruption
- * for an absent installation.
+ * Reads the installed-host record.
+ * A missing file is the unmanaged/tree-run state; malformed present bytes reject so callers never mistake corruption for an absent installation.
  */
 export async function readHostInstallRecord(
   environment: Environment,
@@ -112,24 +97,14 @@ export async function readHostInstallRecord(
   return readHostInstallRecordAtPath(hostInstallRecordPath(environment));
 }
 
-/**
- * Parses an installed-host record at an explicit path. The CLI passes its
- * injected path helper here (test and recovery seams); the host uses the
- * canonical slot-aware helper above. Both consumers therefore share the
- * schema and reader without forking their path authority.
- */
+/** Parses an installed-host record at an explicit path. */
 export function readHostInstallRecordAtPath(
   path: string,
 ): Promise<HostInstallRecord | null> {
   return readRecord(path, hostInstallRecordSchema);
 }
 
-/**
- * Reads a staged record if it is structurally valid and contained beneath its
- * staged directory. Unlike the installed record, this is a best-effort staging
- * hint: malformed/foreign sidecars return null so reconciliation can discard
- * them rather than wedging CLI mutations.
- */
+/** Reads a staged record if it is structurally valid and contained beneath its staged directory. */
 export async function readHostStagedRecord(
   environment: Environment,
 ): Promise<HostStagedRecord | null> {

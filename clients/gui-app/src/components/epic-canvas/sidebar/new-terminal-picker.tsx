@@ -1,16 +1,5 @@
 /**
- * Picker popover behind the Terminals panel "+" action. Top section picks
- * the host (machine); below it the shared worktree folder list shows
- * everything already bound to the epic. A default row is auto-selected on
- * open (primary workspace, skipping any the host disabled, falling back to the
- * first selectable row); selecting a folder stages it; the footer launch action
- * opens a raw terminal tab bound to that row's host, with the row's
- * `runningDir` persisted as the PTY working directory.
- *
- * Host+folder selection itself lives in `NewTerminalPickerBody`.
- * `PopoverContent` only mounts this body while `isOpen`, so its state
- * (explicit row, launch latch) starts fresh every open without an imperative
- * reset. CMD-T uses the inline opener's own fuzzy workspace sub-page.
+ * `PopoverContent` only mounts this body while `isOpen`, so its state (explicit row, launch latch) starts fresh every open without an imperative reset.
  */
 import { useCallback, useState } from "react";
 import { Plus } from "lucide-react";
@@ -39,11 +28,7 @@ interface NewTerminalPickerProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly onBeforeOpen: (() => void) | undefined;
-  /**
-   * Fired synchronously right after a terminal is launched (before the popover
-   * closes). The desktop sidebar passes `null`; the mobile switcher sheet uses
-   * it to close itself so the new terminal lands as the visible tile.
-   */
+  /** Fired synchronously right after a terminal is launched (before the popover closes). */
   readonly onLaunched: (() => void) | null;
 }
 
@@ -56,11 +41,8 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     (open: boolean) => setMenuOpen(tabId, "terminals", "create", open),
     [setMenuOpen, tabId],
   );
-  // The picker's `PopoverContent` (a modal Radix popover) un-presents by
-  // unmounting when its pane is backgrounded, which silently resets the cmdk
-  // folder-search query inside `WorktreeFolderListBody` while the root stays
-  // logically open. Dismiss the picker on focus loss (the approved semantic) so
-  // it never reappears as a logically-open root with reset content.
+  // The picker's `PopoverContent` (a modal Radix popover) un-presents by unmounting when its pane is backgrounded, which silently resets the cmdk folder-search query inside `WorktreeFolderListBody` while the root stays logically open.
+  // Dismiss the picker on focus loss (the approved semantic) so it never reappears as a logically-open root with reset content.
   const paneFocused = usePaneFocused();
   const [focusedLastRender, setFocusedLastRender] = useState(paneFocused);
   if (paneFocused !== focusedLastRender) {
@@ -71,9 +53,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      // `PopoverContent` mounts `NewTerminalPickerBody` only while open, so the
-      // explicit-row reset and double-launch latch that used to be reset here
-      // now start fresh with the body itself. Only the caller hook remains.
+      // Only the caller hook remains.
       if (open) onBeforeOpen?.();
       setIsOpen(open);
     },
@@ -114,18 +94,14 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         align="start"
         className="w-[min(90vw,28rem)] gap-0 p-0"
         data-testid="new-terminal-picker-popover"
-        // The host picker's list is a nested Radix popover: it portals OUTSIDE
-        // this content, so every click in it arrives here as an interaction
-        // from outside. Dismissing on those would close the panel the picker
-        // exists to scope, and no host could ever be chosen from it.
+        // The host picker's list is a nested Radix popover: it portals OUTSIDE this content, so every click in it arrives here as an interaction from outside.
+        // Dismissing on those would close the panel the picker exists to scope, and no host could ever be chosen from it.
         onInteractOutside={(event) => {
           if (isHostSwitcherListInteraction(event.target)) {
             event.preventDefault();
           }
         }}
-        // Keep Radix from focusing the first focusable element (a host row);
-        // the workspace search input auto-focuses itself instead so the user
-        // can immediately type/arrow through workspaces.
+        // Keep Radix from focusing the first focusable element (a host row); the workspace search input auto-focuses itself instead so the user can immediately type/arrow through workspaces.
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         {isOpen ? (

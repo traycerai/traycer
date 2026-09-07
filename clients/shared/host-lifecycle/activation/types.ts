@@ -4,8 +4,7 @@ import type { AttemptReadiness } from "../shared/host-process";
 
 /**
  * Code-level transcription of the cutover plan's phase × disk-shape table.
- * This is the only runtime phase list; every non-terminal phase names the
- * NEXT mutation and is durable before it runs.
+ * This is the only runtime phase list; every non-terminal phase names the next mutation and is durable before it runs.
  */
 export const ACTIVATION_PHASES = [
   "claiming-stop",
@@ -32,10 +31,10 @@ export type ActivationFailureClass =
   | "indeterminate"
   | "unknown";
 
-/**
- * Relative generations make the accepted disk states mechanically checkable
- * without coupling this pure package to the installer record implementation.
- */
+  /**
+   * Relative generations make the accepted disk states mechanically checkable
+   * without coupling this pure package to the installer record implementation.
+   */
 export type ActivationDiskState = {
   readonly install: "from" | "to" | "absent";
   readonly staged: "to" | "absent";
@@ -54,9 +53,8 @@ export type LifecycleActivationJournal = {
   readonly toGeneration: string;
   readonly phase: ActivationPhase;
   /**
-   * The host-issued shutdown authority that crosses the write-ahead boundary
-   * between `claiming-stop` and `committing-stop`. It is cleared immediately
-   * after commit, rollback, or terminal failure.
+   * The host-issued shutdown authority that crosses the write-ahead boundary between `claiming-stop` and `committing-stop`.
+   * It is cleared immediately after commit, rollback, or terminal failure.
    */
   readonly stopClaimToken: string | null;
   /**
@@ -102,11 +100,6 @@ export type StopCommitResult =
   | { readonly kind: "busy" }
   | { readonly kind: "stale-precondition" };
 
-/**
- * The machine owns sequencing; platform/CLI adapters own concrete process and
- * filesystem operations.  Renames are deliberately split to mirror the real
- * atomicSwap implementation's install-absent window.
- */
 export type ActivationActuators = {
   claimStop(): Promise<StopClaimResult>;
   commitStop(token: string): Promise<StopCommitResult>;

@@ -1,16 +1,4 @@
-/**
- * Tab navigation single-path guard (ticket 12).
- *
- * Every entry point that switches the active tab must funnel through
- * `navigateToTabIntent` so cross-cutting behavior (per-kind store
- * activation, route resolution) lands once. The ESLint rule from
- * ticket 05 blocks raw `setActiveTab` / `setActiveDraft` /
- * `epicTabRoute` outside the seam at compile time; this test locks
- * down the runtime contract: the seam itself wires
- * `descriptor.activate -> router.navigate`, and keybinding dispatch
- * funnels through the router seam (`router.navigateToTabIntent`)
- * instead of bypassing it.
- */
+/** Tab navigation single-path guard (ticket 12). */
 import type {
   NavigateOptions,
   UseNavigateResult,
@@ -54,9 +42,8 @@ function resetStores(): void {
   TabNav.__resetTabNavigationControllerForTesting();
 }
 
-// Fire Alt+digit through the leader-scope stack the way the provider does:
-// register the base scopes for this router, match the synthetic event,
-// run it, then unregister. Returns the dispatch result.
+// Fire Alt+digit through the leader-scope stack the way the provider does: register the base scopes for this router, match the synthetic event, run it, then unregister.
+// Returns the dispatch result.
 function dispatchEpicDigit(router: KeybindingRouter, digit: number): boolean {
   const unregister = registerBaseLeaderScope(router);
   try {
@@ -199,10 +186,7 @@ describe("tab navigation single-path contract", () => {
   });
 
   it("keybinding switch never invokes the seam directly when bypassing the router seam is impossible", () => {
-    // Cross-check: seam spy on the real `TabNav.navigateToTabIntent`
-    // must NOT fire when the recording router intercepts the call -
-    // proves the dispatch path goes through `router.navigateToTabIntent`
-    // (the seam injection point), not the seam function directly.
+    // Cross-check: seam spy on the real `TabNav.navigateToTabIntent` must NOT fire when the recording router intercepts the call - proves the dispatch path goes through `router.navigateToTabIntent` (the seam injection point), not the seam function directly.
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-3", "Gamma");
     useTabsStore.setState({
       stripOrder: [{ kind: "epic", id: tabId }],
@@ -217,9 +201,7 @@ describe("tab navigation single-path contract", () => {
     expect(recorded.intents).toHaveLength(1);
   });
 
-  // Cold review #4: empty/fillable focus must still allow strip digit +
-  // next/prev traversal, while member-specific close no-ops when host focus
-  // is not on a concrete epic member.
+  // Cold review #4: empty/fillable focus must still allow strip digit + next/prev traversal, while member-specific close no-ops when host focus is not on a concrete epic member.
   it("fillable empty focus still allows digit strip selection", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-4", "Delta");
     const epicRef = { kind: "epic" as const, id: tabId };

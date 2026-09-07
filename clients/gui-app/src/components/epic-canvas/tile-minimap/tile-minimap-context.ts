@@ -40,15 +40,8 @@ export interface RegisterTileMinimapInput {
 }
 
 /**
- * Publishes this tile's outline for the phone tile bar's minimap button.
- *
- * The bar is a sibling of the tile body, not an ancestor, so the outline
- * travels through the store rather than down through props - the shape
- * `TileFindScope` already uses for the find bar. The snapshot lives in a ref
- * rather than store state on purpose; see `TileMinimapSnapshot`.
- *
- * Outside a canvas tile (a test rendering the body alone) the context is
- * absent and this is inert.
+ * The bar is a sibling of the tile body, not an ancestor, so the outline travels through the store rather than down through props - the shape `TileFindScope` already uses for the find bar.
+ * The snapshot lives in a ref rather than store state on purpose; see `TileMinimapSnapshot`.
  */
 export function useRegisterTileMinimap(input: RegisterTileMinimapInput): void {
   const { title, items, currentIndex, onSelect } = input;
@@ -62,15 +55,7 @@ export function useRegisterTileMinimap(input: RegisterTileMinimapInput): void {
     onSelectRef.current = onSelect;
   }, [onSelect]);
 
-  // The bar stays subscribed while its drawer is closed, so a notify is a
-  // re-render of the bar and of whatever the open drawer is showing. It costs
-  // a section boundary, never a stream token - and a publisher above a
-  // streaming transcript derives `items` from an array that IS replaced per
-  // token. So the comparison is by outline, not by array identity: what the
-  // reader would see, not which array it came from. Holding the previous
-  // array when it compares equal is what keeps `getSnapshot` stable for
-  // `useSyncExternalStore`; the entries are value-equal either way, and
-  // `select` reaches the live callback through `onSelectRef`.
+  // It costs a section boundary, never a stream token - and a publisher above a streaming transcript derives `items` from an array that IS replaced per token.
   useEffect(() => {
     const previous = snapshotRef.current;
     if (

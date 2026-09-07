@@ -223,7 +223,7 @@ vi.mock("@/lib/host", () => ({
     directory: { selectById: mocks.selectHost },
   }),
   useHostClient: () => mocks.hostClient.current,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => mocks.hostClient.current,
 }));
 
@@ -253,17 +253,13 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-home",
 }));
 
-// Every host-scoped surface resolves its client through this hook now
-// (redesign P1.2). Mocked at that boundary rather than standing up a real
-// `<HostRuntimeProvider>`, matching how this suite already fakes the host
-// list and the workspace queries.
+// Mocked at that boundary rather than standing up a real `<HostRuntimeProvider>`, matching how this suite
+// already fakes the host list and the workspace queries.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => mocks.hostClient.current,
 }));
 
-// The composer's picker resolves `pin ?? effective` now (redesign P1.2). This
-// suite is about workspace/folder handling, not selection derivation, so the
-// effective host is mocked at the same boundary as the host list above.
+// The composer's picker resolves `pin ??
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => {
     const getSnapshot = () =>
@@ -303,10 +299,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
-// This suite is about the composer's workspace/folder handling, not the host
-// list, so it mocks `useHostOptions` at the boundary (the same pattern panel
-// suites use for `useHostScope`) rather than standing up the six hooks it
-// composes.
+// This suite is about the composer's workspace/folder handling, not the host list.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -321,11 +314,8 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   };
 });
 
-// `HostSection`'s embedded `HostSwitcher` ends its list with "Manage
-// hosts…", which calls this instead of navigating a real router. This suite
-// never opens that list, so a no-op stub is enough - standing up a
-// `RouterProvider` would pull the whole route tree in for a control this
-// suite never exercises.
+// This suite never opens that list, so a no-op stub is enough - standing up a `RouterProvider` would pull the
+// whole route tree in for a control this suite never exercises.
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: vi.fn(),
@@ -417,7 +407,6 @@ function renderControl(layout: "inline" | "stacked") {
   return queryClient;
 }
 
-/** The composer's resolved placement (P1.2), pointed at the mocked host. */
 function useTestPlacementTarget(): LandingPlacementTarget {
   return {
     resolvedHostId: "host-home",
@@ -1194,10 +1183,6 @@ describe("landing workspace summary empty state", () => {
     queryClient.clear();
   });
 
-  // Next-use-only contract for worktreeBranchPrefix:
-  // 1) a folder that resolves under the default seeds with traycer/<suffix>
-  // 2) changing the setting mid-session does NOT retrofit already-seeded names
-  // 3) a folder that resolves AFTER the change seeds with the new prefix
   it("applies worktree branch prefix next-use-only across mid-session resolves", async () => {
     const folderAPath = GIT_SUMMARY.workspacePath;
     const folderBPath = "/workspace/lib";
@@ -1291,8 +1276,6 @@ describe("landing workspace summary empty state", () => {
     });
 
     // Folder B resolves after the change → seeds under the new prefix.
-    // With two git folders present, composition inserts the repo slug
-    // (`lib-swift-otter`); folder A stays on its original single-folder seed.
     act(() => {
       mocks.resolvedWorkspace.current = {
         folders: [

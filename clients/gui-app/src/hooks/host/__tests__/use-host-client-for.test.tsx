@@ -229,12 +229,7 @@ describe("useHostClientFor", () => {
       throw new Error("Expected a host-pinned transient client");
     }
 
-    // Host A leaves the directory and B takes its place. This used to be
-    // spelled `globalClient.bind(hostB)`, which made A unresolvable only as a
-    // SIDE EFFECT of the slot moving - the staleness under test was always the
-    // directory's answer, not the binding's. P4.2 deleted the slot, so the
-    // fixture states the fact directly: `captureAuthority` re-resolves this
-    // requester's entry and refuses one the directory no longer has.
+    // This used to be spelled `globalClient.bind(hostB)`, which made A unresolvable only as a SIDE EFFECT of the slot moving - the staleness under test was always the directory's answer, not the binding's.
     knownHostEntries.delete(hostA.hostId);
     knownHostEntries.set(hostB.hostId, hostB);
     const request = client.request("terminal.kill", { sessionId: "session-a" });

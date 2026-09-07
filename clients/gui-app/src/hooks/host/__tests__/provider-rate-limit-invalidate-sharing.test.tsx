@@ -1,12 +1,5 @@
 /**
- * End-to-end proof that a `queryClient.invalidateQueries` call for an
- * httpFetch provider's query key (what `RateLimitRefreshAllButton` issues)
- * flips `isFetching` on an already-mounted `useHostProviderRateLimitsQuery`
- * observer for that same provider - the mechanism `RateLimitProviderBlock`'s
- * per-provider refresh icon depends on. Uses the shared harness's real
- * `HostClient` + `MockHostMessenger` and PRODUCTION QueryClient
- * configuration - a bare test client's staleTime-0 defaults exercise
- * different fetch semantics than the app runs.
+ * Invalidating an httpFetch provider key must flip `isFetching` on an already-mounted observer. Use the production QueryClient, not staleTime-0 test defaults.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";

@@ -1,13 +1,3 @@
-/**
- * T2 intermediate-state tests for the tab command coordinator.
- *
- * Every affected store and the transaction ledger are subscribed during
- * commands. Each subscription-visible snapshot must keep visible refs unique
- * and cover every temporarily unplaced source ref with the reservation ledger
- * (including depth-0 notifications after deferred repair). Ordinary outer
- * commands finalize with exactly one normalize + one project; nested dirty
- * repair is an in-boundary deferred pass before projection/clear.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
@@ -105,9 +95,8 @@ function assertLedgerSafeSnapshot(snapshot: IntermediateSnapshot): void {
   uniqueOrThrow(snapshot.placedKeys, "layout items");
   uniqueOrThrow(snapshot.stripKeys, "stripOrder");
 
-  // Coverage is required at every subscription-visible depth, including the
-  // EMPTY_LEDGER notify after deferred in-boundary repair. Skipping depth 0
-  // hid the pre-reconcile clear gap.
+  // Coverage is required at every subscription-visible depth, including the EMPTY_LEDGER notify
+  // after deferred in-boundary repair. Skipping depth 0 hid the pre-reconcile clear gap.
   for (const key of snapshot.sourceKeys) {
     const placed = snapshot.placedKeys.includes(key);
     const reserved = snapshot.reservedKeys.includes(key);
@@ -422,12 +411,8 @@ describe("tab command coordinator transactions", () => {
   });
 
   it("replaceDraftWithEpic re-reveals an epic tab that was closed but preserved", () => {
-    // Opening an epic from the history list resolves the epic's PRESERVED tab
-    // id (`closeTab` keeps the record and points `mostRecentTabIdByEpicId` at
-    // it), so the swap target is routinely a record that already exists while
-    // being absent from `openTabOrder`. If the source is not re-revealed here,
-    // reconciliation deletes the just-placed epic ref as unbacked and the
-    // draft's strip slot collapses instead of becoming the epic.
+    // Opening an epic from the history list resolves the epic's PRESERVED tab id (`closeTab` keeps the
+    // record and points `mostRecentTabIdByEpicId` at it), so the swap target is routinely a record
     const { tabId, ref } = openEpicSource("epic-reopened", "Reopened");
     expect(tabCommandCoordinator.closeRef(ref)).toBe(true);
     expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
@@ -483,11 +468,8 @@ describe("tab command coordinator transactions", () => {
 
   it("createSourceRefAtStripIndex rolls back the source createSource() minted when placement fails", () => {
     const collidingRef: TabRef = { kind: "epic", id: "collide-id" };
-    // collidingRef lives only inside a split side here (not yet an open
-    // tab) - a stale layout entry that reconciliation itself would prune,
-    // orthogonal to what this test exercises. It stands in for createSource()
-    // minting a ref that collides with one already occupying a split side,
-    // which is the only way createLayoutItem's placement can reject a ref.
+    // collidingRef lives only inside a split side here (not yet an open tab) - a stale layout entry
+    // that reconciliation itself would prune, orthogonal to what this test exercises.
     seedCommittedLayout({
       version: 2,
       items: [
@@ -507,9 +489,8 @@ describe("tab command coordinator transactions", () => {
 
     const session = captureSession();
     const placed = tabCommandCoordinator.createSourceRefAtStripIndex(0, () => {
-      // A split side is not a top-level strip position, so placing
-      // collidingRef at a strip index fails - this mimics createSource()
-      // minting a ref that collides with one already living inside a split.
+      // A split side is not a top-level strip position, so placing collidingRef at a strip index fails -
+      // this mimics createSource() minting a ref that collides with one already living inside a split.
       useEpicCanvasStore.setState((state) => ({
         tabsById: {
           ...state.tabsById,
@@ -532,9 +513,8 @@ describe("tab command coordinator transactions", () => {
 
     expect(placed).toBeNull();
     session.assertAllSafe();
-    // The source rolled back - createSource()'s mint never survives as a
-    // known source, so a later reconciliation pass has nothing left to
-    // re-adopt as an orphaned, active top-level tab.
+    // The source rolled back - createSource()'s mint never survives as a known source, so a later
+    // reconciliation pass has nothing left to re-adopt as an orphaned, active top-level tab.
     expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(
       collidingRef.id,
     );
@@ -590,11 +570,8 @@ describe("tab command coordinator transactions", () => {
       }),
     ).toBe(true);
 
-    // Fire the unexpected nested write specifically during applySources: when
-    // createDraftForSplit creates the draft source, synchronously open another
-    // epic. Production reclassifies by membership so the nested ref lands in
-    // reservedAdditions, dirty is set, and layout commit only drops reserved
-    // keys that were actually placed — nested stays covered until deferred reconcile.
+    // Fire the unexpected nested write specifically during applySources: when createDraftForSplit
+    // creates the draft source, synchronously open another epic.
     const nestedEpicTabIds: string[] = [];
     const unsubscribeNested = useLandingDraftStore.subscribe((next, prev) => {
       if (next.drafts === prev.drafts || nestedEpicTabIds.length > 0) return;
@@ -621,9 +598,8 @@ describe("tab command coordinator transactions", () => {
     expect(typeof nestedId).toBe("string");
     const nestedKey = `epic:${nestedId}`;
 
-    // At least one mid-transaction snapshot must show the nested ref reserved
-    // and dirty *while still unplaced* (proves applySources-phase coverage,
-    // not only post-clear re-reservation).
+    // At least one mid-transaction snapshot must show the nested ref reserved and dirty *while still
+    // unplaced* (proves applySources-phase coverage, not only post-clear re-reservation).
     expectSuppressedSnapshotWith(
       session,
       (snapshot) =>
@@ -636,9 +612,8 @@ describe("tab command coordinator transactions", () => {
     session.assertAllSafe();
 
     const delta = session.diagnosticsDelta();
-    // Dirty repair is in-boundary (before projection / EMPTY clear), so the
-    // outer command still finalizes once: one normalize, one deferred, one
-    // explicit compatibility projection.
+    // Dirty repair is in-boundary (before projection / EMPTY clear), so the outer command still
+    // finalizes once: one normalize, one deferred, one explicit compatibility projection.
     expect(delta.deferredReconciliationCount).toBe(1);
     expect(delta.normalizationCount).toBe(1);
     expect(delta.compatibilityProjectionCount).toBe(1);
@@ -670,10 +645,8 @@ describe("tab command coordinator transactions", () => {
       .getState()
       .drafts.map((d) => d.id);
 
-    // Simulate the review failure mode: Zustand draft state is committed, then
-    // the synchronous persistence write throws before layout apply. Wrapping
-    // createDraftWithId is more reliable than localStorage spies under the
-    // test env (and matches "in-memory source exists, applySources throws").
+    // Simulate the review failure mode: Zustand draft state is committed, then the synchronous
+    // persistence write throws before layout apply.
     const originalCreateDraftWithId =
       useLandingDraftStore.getState().createDraftWithId;
     let threwOnce = false;
@@ -793,10 +766,8 @@ describe("tab command coordinator transactions", () => {
   });
 
   it("persistent quota including fallback persistence releases a coherent coordinator", () => {
-    // Round-3 hazard: the recovery fallback writes all layout fields atomically,
-    // but public `useTabsStore.setState` is persist-wrapped too. Its own
-    // post-commit persistence failure used to escape finalization and retain
-    // the depth-one ledger forever.
+    // Round-3 hazard: the recovery fallback writes all layout fields atomically, but public
+    // `useTabsStore.setState` is persist-wrapped too.
     setLandingDraftDesktopProjectionBridge(null);
 
     const { ref: epicRef } = openEpicSource("epic-a", "A");
@@ -920,9 +891,8 @@ describe("tab command coordinator transactions", () => {
   });
 
   it("source background-open during projection reprojects final layout compatibility", () => {
-    // Round-3 hazard: membership repair after the first projection can make X
-    // the final active layout item, while source activeTabId remains the stale
-    // null written before the repair.
+    // Round-3 hazard: membership repair after the first projection can make X the final active layout
+    // item, while source activeTabId remains the stale null written before the repair.
     const a = openEpicSource("epic-a", "A");
     expect(useEpicCanvasStore.getState().activeTabId).toBe(a.tabId);
 
@@ -1103,9 +1073,7 @@ describe("tab command coordinator transactions", () => {
   it("handleEpicAccessLoss covers every affected ref in pendingRemovals for one finalize", () => {
     const a = openEpicSource("shared-epic", "A");
     const b = openEpicSource("shared-epic", "B");
-    // openEpicTab reuses? Actually openEpicTab always creates a new tab id for
-    // the same epicId. Ensure both tabs share epicId for access loss.
-    // openEpicTab(epicId) creates distinct tabIds - good.
+    // openEpicTab reuses? Actually openEpicTab always creates a new tab id for the same epicId.
     const session = captureSession();
     tabCommandCoordinator.handleEpicAccessLoss(["shared-epic"]);
     session.dispose();
@@ -1215,18 +1183,6 @@ describe("tab command coordinator transactions", () => {
     expect(remaining.map(tabRefKey)).toEqual([tabRefKey(left.ref)]);
   });
 
-  // Regression coverage for the fix: `resolveDraftActivation` (via
-  // `createDraftWithId`) now resolves a new draft's workspace AND default
-  // settings through `readComposerHostIdSnapshot()` - the composer's real
-  // resolved placement host (pin, or the app-wide effective host when
-  // unpinned or the pin is dead) - instead of the app-wide host alone.
-  // `createDraftForSplit` shares the same creation path and is fixed the
-  // same way. Every store here is real: `useWorkspaceFoldersStore`,
-  // `useComposerRunSettingsStore`, `useSelectionAuthorityStore`, and the
-  // actual per-WINDOW pin in `useSurfaceHostSelectionStore`, keyed by the
-  // real `browserTabId()` (no desktop bridge is set in this suite, so
-  // `readComposerHostIdSnapshot()` falls through to it exactly as
-  // production does outside Electron).
   describe("resolveDraftActivation resolves the composer's placement host (regression)", () => {
     const HOST_LOCAL = "host-local";
     const HOST_REMOTE = "host-remote";
@@ -1334,13 +1290,8 @@ describe("tab command coordinator transactions", () => {
     it("a new draft pinned to the remote host resolves workspace + default settings from the remote host, not the app-wide local host", () => {
       pinComposerTo(HOST_REMOTE);
 
-      // The REAL command-palette entry point, not a hardcoded `settings:
-      // null` - this is what actually catches `new-epic.ts` regressing to
-      // an eager `getGlobalRunSettings(activeHostIdOrNull())` read: that
-      // would hand this test a non-null LOCAL_SETTINGS intent, and the
-      // draft would then resolve LOCAL_SETTINGS instead of REMOTE_SETTINGS
-      // below, failing the assertion even though the coordinator itself is
-      // untouched.
+      // The REAL command-palette entry point, not a hardcoded `settings: null` - this is what actually
+      // catches `new-epic.ts` regressing to an eager `getGlobalRunSettings(activeHostIdOrNull())` read:
       const intent = openNewEpicIntent();
 
       const activation = tabCommandCoordinator.activateTab({
@@ -1456,9 +1407,8 @@ describe("tab command coordinator transactions", () => {
     });
 
     it("an empty remote bucket/settings never falls back to the local host's non-empty bucket", () => {
-      // Re-seed with the remote host having NOTHING - a real "just added
-      // this machine" state, not a mismatch that could resolve to the wrong
-      // data.
+      // Re-seed with the remote host having NOTHING - a real "just added this machine" state, not a
+      // mismatch that could resolve to the wrong data.
       useWorkspaceFoldersStore.setState({ byHost: {} });
       useWorkspaceFoldersStore
         .getState()

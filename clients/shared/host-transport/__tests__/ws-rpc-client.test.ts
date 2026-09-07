@@ -231,9 +231,7 @@ function makeClient(options: {
   readonly dialTimeoutMs: number;
   readonly frameTimeoutMs: number;
   /**
-   * `undefined` means `0` - no post-send attestation grace, so a response-wait
-   * timeout fails the call the moment the caller's deadline expires. Tests that
-   * exercise the grace pass a window explicitly.
+   * `undefined` means `0` - no post-send attestation grace, so a response-wait timeout fails the call the moment the caller's deadline expires.
    */
   readonly hostAttestationWindowMs: number | undefined;
 }): BoundWsRpcClient<typeof testRegistry> {
@@ -296,9 +294,8 @@ async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
   await flush();
   expect(expectRequestFrame(sockets[0].sent[1])).toBeDefined();
 
-  // The client locally sent its request after receiving the buffered openAck,
-  // but this fatal is host attestation that the host timed out first and never
-  // dispatched it. That makes a fresh attempt safe even for non-idempotent RPCs.
+  // The client locally sent its request after receiving the buffered openAck, but this fatal is host attestation that the host timed out first and never dispatched it.
+  // That makes a fresh attempt safe even for non-idempotent RPCs.
   sockets[0].socket.fireMessage(fatal);
   for (let attempt = 0; attempt < 10 && sockets.length < 2; attempt += 1) {
     await flush();
@@ -403,7 +400,6 @@ function openAckWithOnlyOptionalHostEcho(version: {
   };
 }
 
-/** One recorded call to a `TransportEvidenceReporter` method, keyed by name. */
 type RecordedEvidenceCall =
   | {
       readonly method: "sessionEstablished";
@@ -458,11 +454,9 @@ type RecordedEvidenceCall =
       readonly expiresAt: number | null;
     };
 
-/**
- * Records every call a transport makes into a `TransportEvidenceReporter`, in
- * arrival order, so a test can assert on sequences and per-method counts
- * rather than only on the latest call (the shape a plain `vi.fn` gives).
- */
+    /**
+     * Records every call a transport makes into a `TransportEvidenceReporter`, in arrival order, so a test can assert on sequences and per-method counts rather than only on the latest call (the shape a plain `vi.fn` gives).
+     */
 class RecordingEvidence implements TransportEvidenceReporter {
   readonly calls: RecordedEvidenceCall[] = [];
 
@@ -581,10 +575,6 @@ class RecordingEvidence implements TransportEvidenceReporter {
 
 describe("WsRpcClient", () => {
   it("puts the configured client identity on every open frame", async () => {
-    // EVERY open frame, not just the first: this transport dials a fresh
-    // socket per RPC, so an identity resolved anywhere other than
-    // construction would be sent inconsistently across a session's calls -
-    // and against a floored host, inconsistently ADMITTED.
     const { factory, sockets } = makeFactory();
     const client = makeClient({
       factory,
@@ -867,10 +857,6 @@ describe("WsRpcClient", () => {
     sockets[0].socket.fireError("connection dropped after dispatch");
 
     await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
-    // The CLASS on its own does not say why the retry is safe, and the two
-    // grounds are not interchangeable: this one is safe only while the host
-    // keeps deduplicating the key, which is what `createRetryingMessenger`
-    // reads to require a key on the next attempt.
     await expect(pending).rejects.toMatchObject({ replaySafetyFromKey: true });
   });
 
@@ -897,11 +883,7 @@ describe("WsRpcClient", () => {
         authority: authorityForToken("token-abc"),
       },
     );
-    // Captured BEFORE the first `flush()`, unlike the sibling tests above. The
-    // refusal lands while the openAck is being consumed, several microtask
-    // turns before an `expect(...).rejects` could attach - so deferring the
-    // handler leaves the tick in between with an unhandled rejection, and
-    // vitest fails the whole file on it while every assertion still passes.
+    // Captured before the first `flush()`, unlike the sibling tests above.
     const outcome = pending.then(
       () => null,
       (reason: unknown) => reason,
@@ -911,18 +893,13 @@ describe("WsRpcClient", () => {
     await flush();
     sockets[0].socket.fireMessage(
       openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
-        // The re-dial landed on an incarnation without unary idempotency. The
-        // sibling test above proves this same openAck strips the key and sends
-        // anyway on a FIRST attempt, which is correct there and a second
-        // undeduplicated execution here.
+        // The re-dial landed on an incarnation without unary idempotency.
         "future.capability",
       ]),
     );
     await flush();
 
-    // `sent[0]` is the open frame. Nothing followed it: the refusal is the
-    // point, so a rejection alone would not distinguish this from dispatching
-    // and then failing.
+    // `sent[0]` is the open frame.
     expect(sockets[0].sent).toHaveLength(1);
     const error: unknown = await outcome;
     expect(error).toBeInstanceOf(HostTransportFailureError);
@@ -973,15 +950,8 @@ describe("WsRpcClient", () => {
   });
 
   /**
-   * C5. A socket that never opened reports a dial REFUSAL on close, which is
-   * correct only when the host is the one that closed it. Every teardown we
-   * initiate - an authority abort, or the `finally` close - also produces a
-   * close event, and reporting those attributes our own decision to the host.
-   *
-   * The consequence is not cosmetic: refusals feed the selection authority's
-   * death detection, and a healthy host was measured accumulating three
-   * suppressed refusals - exactly the death threshold - so there is no
-   * headroom for manufactured ones.
+   * C5.
+   * A socket that never opened reports a dial refusal on close, which is correct only when the host is the one that closed it.
    */
   describe("self-closed sockets are not host refusals (C5)", () => {
     function makeDialScenario(requestId: string): {
@@ -1005,9 +975,8 @@ describe("WsRpcClient", () => {
     }
 
     /**
-     * Every dial verdict, in order. Asserting on the whole outcome list rather
-     * than on the absence of one method keeps a fix that merely swaps refusal
-     * for a different manufactured verdict from passing.
+     * Every dial verdict, in order.
+     * Asserting on the whole outcome list rather than on the absence of one method keeps a fix that merely swaps refusal for a different manufactured verdict from passing.
      */
     function dialOutcomes(recorder: RecordingEvidence): string[] {
       return recorder.calls
@@ -1056,15 +1025,12 @@ describe("WsRpcClient", () => {
       // one does. Nothing about it is evidence concerning the host.
       sockets[0].socket.fireClose(1000, "authority-aborted", true);
 
-      // Indeterminate, not silence: the attempt happened and owes one
-      // outcome, and the kernel documents this verdict as inert - it advances
-      // no counter - so it is diagnostics without death-detection weight.
+      // Indeterminate, not silence: the attempt happened and owes one outcome, and the kernel documents this verdict as inert - it advances no counter - so it is diagnostics without death-detection weight.
       expect(dialOutcomes(recorder)).toEqual(["reportDialIndeterminate"]);
     });
 
     // Boundary pin, not a defect repro: this one passes on the unfixed tree.
-    // It records WHY C5 is reachable only mid-dial, so a refactor that moves
-    // the early abort check reddens here instead of silently widening C5.
+    // It records why C5 is reachable only mid-dial, so a refactor that moves the early abort check reddens here instead of silently widening C5.
     it("an already-aborted authority never dials, so it cannot report against a host", async () => {
       const { sockets, recorder, client } = makeDialScenario("req-abort-early");
       const lifetime = new AbortController();
@@ -1073,9 +1039,7 @@ describe("WsRpcClient", () => {
       const pending = requestWithSignal(client, lifetime.signal);
       await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
 
-      // `throwIfAuthorityAborted` runs before the socket is built, so the
-      // synchronous `onAbort()` at session construction covers only the race
-      // between that check and the listener registration - never a fresh dial.
+      // `throwIfAuthorityAborted` runs before the socket is built, so the synchronous `onAbort()` at session construction covers only the race between that check and the listener registration - never a fresh dial.
       expect(sockets).toEqual([]);
       expect(dialOutcomes(recorder)).toEqual([]);
     });
@@ -1094,13 +1058,7 @@ describe("WsRpcClient", () => {
       expect(dialOutcomes(recorder)).toEqual(["reportDialRefusal"]);
     });
 
-    // Blink race, not a hypothetical: a pre-open `error` event fires, the
-    // rejection it produces is awaited by `request()`'s own `finally` (see
-    // `session.close(1000, "ok")` in `ws-rpc-client.ts`), and only THEN does
-    // `close` arrive for the same failed dial. `selfInitiated` reads as true
-    // at that point - our own `close()` ran first - so without
-    // `erroredBeforeOpen` this refusal is misreported as `indeterminate` and
-    // silently dropped from death detection.
+    // `selfInitiated` reads as true at that point - our own `close()` ran first - so without `erroredBeforeOpen` this refusal is misreported as `indeterminate` and silently dropped from death detection.
     it("a pre-open error, followed by our own close() reacting to it, is still reported as a refusal", async () => {
       const { sockets, recorder, client } = makeDialScenario(
         "req-error-then-own-close",
@@ -1110,9 +1068,7 @@ describe("WsRpcClient", () => {
       expect(sockets).toHaveLength(1);
 
       sockets[0].socket.fireError("connection refused");
-      // Awaiting the rejection lets `request()`'s `finally` run to completion,
-      // which calls `session.close()` and sets `closed = true` before the
-      // socket's own `close` event below ever fires.
+      // Awaiting the rejection lets `request()`'s `finally` run to completion, which calls `session.close()` and sets `closed = true` before the socket's own `close` event below ever fires.
       await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
 
       sockets[0].socket.fireClose(1006, "connection refused", false);
@@ -1137,7 +1093,7 @@ describe("WsRpcClient", () => {
     });
     const authority = authorityForToken("token-abc");
 
-    // Fire two overlapping RPCs to the SAME host - neither awaited before the
+    // Fire two overlapping RPCs to the same host - neither awaited before the
     // next is started, so both sockets are open at once.
     const pending1 = client.request(
       "host.echo",
@@ -1197,18 +1153,14 @@ describe("WsRpcClient", () => {
     });
     await expect(pending2).resolves.toEqual({ echoed: "TWO" });
 
-    // Only the 1 -> 0 edge (the LAST open socket closing) retracts - one pair
+    // Only the 1 -> 0 edge (the last open socket closing) retracts - one pair
     // total across both RPCs, not one pair per RPC.
     expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
     expect(recorder.callsNamed("sessionLost")).toHaveLength(1);
   });
 
   it("two client INSTANCES never announce the same local session id - a rebuilt runtime's socket is not retracted by the old socket's close", async () => {
-    // Codex #1243: the evidence kernel is renderer-lifetime and keys sessions
-    // by id. A per-instance counter restarting at zero made a replacement
-    // client announce the same `local-ws:s1` the old one held; the authority
-    // deduplicated it, and the old socket's `lost` then tombstoned the shared
-    // id - retracting the NEW socket's live evidence.
+    // Codex #1243: the evidence kernel is renderer-lifetime and keys sessions by id.
     const { factory, sockets } = makeFactory();
     const recorder = new RecordingEvidence();
     let nextRequestId = 0;
@@ -1324,9 +1276,7 @@ describe("WsRpcClient", () => {
     lifetime.abort("host-replaced");
     await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
 
-    // The socket had genuinely opened (raised the refcount) before the abort
-    // closed it - the abort path must still decrement it, or the count would
-    // stay stuck at 1 and no later RPC would ever re-announce.
+    // The socket had genuinely opened (raised the refcount) before the abort closed it - the abort path must still decrement it, or the count would stay stuck at 1 and no later RPC would ever re-announce.
     expect(recorder.callsNamed("sessionLost")).toHaveLength(1);
 
     const pending2 = client.request(
@@ -1653,36 +1603,20 @@ describe("WsRpcClient", () => {
   });
 
   /**
-   * Issue #726: when the client's response timer fires before the host's
-   * post-open no-dispatch attestation, the socket is held open for a bounded
-   * remainder of the host attestation window rather than closing over an
-   * ambiguous in-flight request. These cases pin the production CLI/GUI timer
-   * orderings and the safety boundary around the grace.
-   *
-   * The behaviour cases inject the window as a literal rather than importing
-   * HOST_POST_OPEN_ATTESTATION_WINDOW_MS, so they pin the contract instead of
-   * restating whatever production currently ships. The first case below is the
-   * one exception - it exists precisely to tie the shipped constant to the stall
-   * class the rest of the block models.
+   * These cases pin the production CLI/gui timer orderings and the safety boundary around the grace.
+   * The behaviour cases inject the window as a literal rather than importing HOST_POST_OPEN_ATTESTATION_WINDOW_MS, so they pin the contract instead of restating whatever production currently ships.
    */
   describe("post-open attestation grace (production ordering)", () => {
     const HOST_ATTESTATION_WINDOW_MS = 50_000;
     const HOST_POST_OPEN_DEADLINE_MS = 30_000;
     const CLI_FRAME_TIMEOUT_MS = 15_000;
     const GUI_FRAME_TIMEOUT_MS = 30_000;
-    /** Stalled-host attestation wall time modelled by issue #726 (~45s awake). */
     const STALLED_HOST_ATTESTATION_AT_MS = 45_000;
     const LONG_POLL_RESPONSE_TIMEOUT_MS = 16 * 60 * 1_000;
     /** Floor delivery leg after any post-send timeout (matches production slack). */
     const ATTESTATION_DELIVERY_SLACK_MS = 5_000;
-    /** Overshoot past a delivery leg that counts as suspension, not mere jitter. */
     const SUSPENSION_OVERSHOOT_TOLERANCE_MS = 1_000;
-    /** Wall-clock jump used to model suspend while a delivery timer is pending. */
     const SUSPEND_JUMP_MS = 10 * 60 * 1_000;
-    /**
-     * Late delivery re-arms have no count cap. Crossing the former limit of 3
-     * decisively (5+) pins that removal while still ending on active time.
-     */
     const REPEATED_SUSPENSION_CYCLES = 5;
 
     const typedPostOpenTimeoutFatal: HostFrame = {
@@ -1802,11 +1736,8 @@ describe("WsRpcClient", () => {
     });
 
     it("ships a window that outlasts the stall class the recovery cases model", () => {
-      // Every other case here injects its own window, so nothing else in this
-      // suite fails if the shipped constant is lowered - only the CLI's
-      // composition-root test would, and the GUI has no equivalent. A host that
-      // stalls past this window never gets to attest, and the call stays
-      // ambiguous: the value is a safety decision, not a tuning knob.
+      // Every other case here injects its own window, so nothing else in this suite fails if the shipped constant is lowered - only the CLI's composition-root test would, and the gui has no equivalent.
+      // A host that stalls past this window never gets to attest, and the call stays ambiguous: the value is a safety decision, not a tuning knob.
       expect(HOST_POST_OPEN_ATTESTATION_WINDOW_MS).toBeGreaterThan(
         STALLED_HOST_ATTESTATION_AT_MS,
       );
@@ -1891,7 +1822,7 @@ describe("WsRpcClient", () => {
         await flushFake();
       }
       expect(sockets).toHaveLength(2);
-      // Legacy UNAUTHORIZED spelling must not trigger auth revalidation.
+      // Legacy unauthorized spelling must not trigger auth revalidation.
       expect(authCalls.count).toBe(0);
 
       await completeRetriedSocket(sockets, 1);
@@ -1922,9 +1853,7 @@ describe("WsRpcClient", () => {
       expect(sockets).toHaveLength(1);
       expect(sockets[0].socket.closed).toBeNull();
 
-      // Stalled host: overdue post-open timer only runs on resume ~45s total
-      // (~15s into the 20s grace). Discriminates the 50s window from the old 35s
-      // window, under which grace would already have expired at 35s.
+      // Stalled host: overdue post-open timer only runs on resume ~45s total (~15s into the 20s grace).
       await vi.advanceTimersByTimeAsync(
         STALLED_HOST_ATTESTATION_AT_MS - GUI_FRAME_TIMEOUT_MS,
       );
@@ -2059,10 +1988,8 @@ describe("WsRpcClient", () => {
     });
 
     /**
-     * The exact-legacy no-dispatch matcher requires all three guards:
-     * code === "UNAUTHORIZED", reason start-anchor, and reason end-anchor.
-     * Promoting a near-miss into RetryableTransportError would redial a
-     * non-idempotent method. Each row kills one guard if removed.
+     * The exact-legacy no-dispatch matcher requires all three guards: code === "unauthorized", reason start-anchor, and reason end-anchor.
+     * Promoting a near-miss into RetryableTransportError would redial a non-idempotent method.
      */
     const EXACT_LEGACY_TIMEOUT_REASON =
       "Timed out waiting for 'request' frame after openAck (30000ms)";
@@ -2131,15 +2058,8 @@ describe("WsRpcClient", () => {
     );
 
     /**
-     * Models suspend after the response deadline has already armed grace, then
-     * a wake batch that runs the overdue *window* leg first. Before the
-     * two-leg fix that callback closed the socket immediately; now it only
-     * arms the delivery leg, so the host's equally overdue attestation can
-     * still land.
-     *
-     * CLI 15s wait / 50s window: window leg is 30s (fires at t=45s), delivery
-     * leg is 5s (would fail at t=50s). Advancing to the window-leg fire is the
-     * discriminator - the socket must still be open.
+     * Models suspend after the response deadline has already armed grace, then a wake batch that runs the overdue *window* leg first.
+     * Before the two-leg fix that callback closed the socket immediately; now it only arms the delivery leg, so the host's equally overdue attestation can still land.
      */
     it("suspend after grace armed: window-leg callback on wake keeps the socket open for typed attestation recovery", async () => {
       const { factory, sockets } = makeFactory();
@@ -2165,9 +2085,8 @@ describe("WsRpcClient", () => {
       expect(sockets).toHaveLength(1);
       expect(sockets[0].socket.closed).toBeNull();
 
-      // Window leg fires (t=45s). Models the wake batch running the overdue
-      // client callback first; the socket must still be open so the host's
-      // equally overdue attestation can still arrive on this connection.
+      // Window leg fires (t=45s).
+      // Models the wake batch running the overdue client callback first; the socket must still be open so the host's equally overdue attestation can still arrive on this connection.
       await vi.advanceTimersByTimeAsync(
         HOST_ATTESTATION_WINDOW_MS -
           CLI_FRAME_TIMEOUT_MS -
@@ -2186,11 +2105,11 @@ describe("WsRpcClient", () => {
 
       await completeRetriedSocket(sockets, 1);
       await expect(pending).resolves.toEqual({ echoed: "HI" });
-    }); /**
-     * Long-poll budgets (e.g. providers.awaitLogin at 16 min) outlast the 50s
-     * window. They no longer get zero grace: the response-timeout callback
-     * still arms a finite delivery floor so a late-firing host attestation can
-     * recover on a fresh socket when the client callback wins on wake.
+    });
+
+    /**
+     * Long-poll budgets outlast the 50s window.
+     * The response-timeout callback still arms a finite delivery floor so a late host attestation can recover on a fresh socket.
      */
     it("long-poll deadline overdue on wake keeps a delivery floor and recovers on typed attestation", async () => {
       const { factory, sockets } = makeFactory();
@@ -2545,7 +2464,7 @@ describe("WsRpcClient", () => {
       hostAttestationWindowMs: undefined,
     });
 
-    // The extended budget covers ONLY the response wait - a host that never
+    // The extended budget covers only the response wait - a host that never
     // answers `openAck` is unreachable and must still fail at the default.
     const pending = client.requestWithResponseTimeout(
       "host.echo",
@@ -3283,10 +3202,6 @@ describe("WsRpcClient", () => {
       },
     });
 
-    // A same-major minor whose new capability genuinely can't project onto
-    // the older schema - the pattern `workspace.prepareFolders` v1.1 uses to
-    // fail closed against a v1.0 host instead of silently stripping to a
-    // misleading empty request (see the RPC backward-compat decision log).
     const pingReqV10 = defineRpcContract({
       method: "host.ping",
       schemaVersion: { major: 1, minor: 0 } as const,
@@ -3614,10 +3529,6 @@ describe("WsRpcClient", () => {
       await expect(pending).resolves.toEqual({ echoed: "HI", volume: 4 });
     });
 
-    // Regression coverage for the pre-profiles `providers.list@3.0` crash:
-    // fields added mid-line to an old major carry `.catch(...)` tolerances in
-    // that line's frozen contract, but they only take effect if the client
-    // actually parses the old host's wire payload before upgrading it.
     describe("old-host response parsing on the upgrade path", () => {
       const echoWithTagsV10 = defineRpcContract({
         method: "host.echo",
@@ -3709,9 +3620,8 @@ describe("WsRpcClient", () => {
           requestId: "req-old-host-catch",
           method: "host.echo",
           schemaVersion: { major: 1, minor: 0 },
-          // Old 1.0 host build from before `tags` existed - no `tags` key on
-          // the wire. The identity 1.0→2.0 upgrade must still hand the caller
-          // a response matching the 2.0 contract (`tags: []`).
+          // Old 1.0 host build from before `tags` existed - no `tags` key on the wire.
+          // The identity 1.0→2.0 upgrade must still hand the caller a response matching the 2.0 contract (`tags: []`).
           result: { echoed: "HI" },
           error: null,
         });
@@ -3771,15 +3681,8 @@ describe("WsRpcClient negotiated-manifest publication", () => {
   });
 
   /**
-   * The LOCAL half of the capability gate, which had no pin of its own.
-   *
-   * `useHostSupportsMethod` fails closed: with nothing recorded it answers
-   * `null` ("not known"), and every UI gate built on it treats that as "keep
-   * trying the RPC". So deleting this publication does not break a gate
-   * loudly - it silently downgrades every local host to "unknown forever",
-   * and each consumer then attempts methods an old host does not have instead
-   * of taking its documented fallback. The remote transport is pinned in
-   * `remote/__tests__/remote-session.test.ts`; this is its local twin.
+   * The local half of the capability gate, which had no pin of its own.
+   * `useHostSupportsMethod` fails closed: with nothing recorded it answers `null` ("not known"), and every UI gate built on it treats that as "keep trying the RPC".
    */
   it("publishes the MERGED floor + optional manifest for the dialled host", async () => {
     const { factory, sockets } = makeFactory();
@@ -3802,7 +3705,7 @@ describe("WsRpcClient negotiated-manifest publication", () => {
     stub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
     await flush();
 
-    // `host.status` is floor, `host.echo` is optional: the gate needs BOTH, so
+    // `host.status` is floor, `host.echo` is optional: the gate needs both, so
     // publishing only one manifest would hide half the host's surface.
     const methods = getNegotiatedHostMethods(mockLocalHostEntry.hostId);
     expect(methods).not.toBeNull();
@@ -3819,12 +3722,7 @@ describe("WsRpcClient negotiated-manifest publication", () => {
     await expect(pending).resolves.toEqual({ echoed: "HI" });
   });
 
-  /**
-   * The refresh leg. A host upgraded in place keeps its id and re-handshakes
-   * on the next unary call, so a LATER ack must overwrite the earlier record -
-   * otherwise a capability answer taken once would outlive the host that gave
-   * it, and a gate that latched "absent" could never recover.
-   */
+  /** The refresh leg. */
   it("overwrites an earlier record when the same host re-handshakes", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -3886,10 +3784,8 @@ describe("WsRpcClient negotiated-manifest publication", () => {
   });
 
   /**
-   * The version half of the same publish. A2/critique finding 5: a V12
-   * request to a V11 host Zod-strips `sourceOwnerUserId` silently, so a
-   * caller needs the EXACT negotiated `{major, minor}` per method, not just
-   * presence, to gate on same-major feature support.
+   * The version half of the same publish.
+   * A2/critique finding 5: a V12 request to a V11 host Zod-strips `sourceOwnerUserId` silently, so a caller needs the exact negotiated `{major, minor}` per method, not just presence, to gate on same-major feature support.
    */
   it("records the exact negotiated version from the openAck manifest", async () => {
     const { factory, sockets } = makeFactory();

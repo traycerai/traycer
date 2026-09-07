@@ -1,13 +1,6 @@
 import { Children, isValidElement, type ReactNode } from "react";
 
-/**
- * Recursively flattens a React node tree to its visible text. Recurses into
- * element children (so a wrapped `<span>foo</span>` yields `"foo"`) and drops
- * boolean / null / undefined nodes. Shared by the markdown code-block renderer
- * and the agent-reference markdown plugin so both resolve node text the same
- * way. Lives in its own module (no component exports) so importing it never
- * trips React Fast Refresh.
- */
+/** Flatten React node text. Own module with no component exports so import never trips Fast Refresh. */
 export function extractText(children: ReactNode): string {
   if (typeof children === "string") return children;
   if (typeof children === "number") return String(children);

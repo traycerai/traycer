@@ -23,16 +23,7 @@ export type CloudNotificationsConnectionState =
   | "unavailable";
 
 export interface CloudNotificationsState {
-  /**
-   * Keyed by `entryId` ALONE. An entry is an immutable occurrence, so a key
-   * identifies one occurrence for its whole life - a reopen arrives as a
-   * different key, never as an edit of this one. `originHostId` is display
-   * metadata riding on the row and is deliberately not part of the key: the
-   * same feed is served whichever host relays it.
-   *
-   * Sparse on purpose: a snapshot can drop an id while a delayed native
-   * activation still asks for it.
-   */
+  /** Keyed by `entryId` ALONE. */
   readonly rows: Readonly<
     Partial<Record<string, HostNotificationsCloudFeedRowV11>>
   >;
@@ -40,30 +31,17 @@ export interface CloudNotificationsState {
   /** The cloud's per-user change sequence, as of the last snapshot. This is
    * what a bulk mutation names as the feed the user was looking at. */
   readonly version: number | null;
-  /** A cloud feed is authoritative only after this session has received a
-   * complete snapshot. Until then an in-progress retry must not masquerade as
-   * a usable feed. */
+  /**
+   * A cloud feed is authoritative only after this session has received a complete snapshot. Until
+   * then an in-progress retry must not masquerade as a usable feed.
+   */
   readonly hasSnapshot: boolean;
   /** Increments whenever ownership changes, so a late command from an old
    * host/session cannot change the replacement session's presentation. */
   readonly sessionEpoch: number;
-  /**
-   * Entries whose view-consumption mark-read the server ACCEPTED this session.
-   *
-   * Keyed on the outcome, not the attempt: a marker the server took is durable
-   * (set-once, min-merged), so re-sending it could only ever be a no-op - while
-   * a snapshot that keeps replaying the row as unread would otherwise re-arm
-   * the fan-out on every frame. Suppressing on success is what makes a lagging
-   * or replaying feed cost nothing; failures deliberately stay retryable.
-   */
+  /** Entries whose view-consumption mark-read the server ACCEPTED this session. */
   readonly entityReadSucceeded: ReadonlySet<string>;
-  /**
-   * Per-entry retry state for view-consumption marks that have NOT yet been
-   * accepted. An entry present here is either in flight
-   * (`nextEligibleAt === Infinity`) or waiting out its backoff, and in both
-   * cases is invisible to fresh discovery - which is what keeps at most one
-   * attempt per entry alive at a time.
-   */
+  /** Per-entry retry state for view-consumption marks that have NOT yet been accepted. */
   readonly entityReadRetries: Readonly<
     Partial<Record<string, CloudEntityReadRetry>>
   >;
@@ -73,16 +51,15 @@ export interface CloudNotificationsState {
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
   }): ReadonlyArray<HostNotificationsCloudFeedRowV11> | null;
-  /** Optimistic set-once marker application. A later authoritative snapshot
-   * reconciles the row, but the common successful mutation never waits on a
-   * wake or the relay's correctness poll to look read. */
+  /** Optimistic set-once marker application. */
   markReadLocally(entryId: string, readAt: number): void;
   /** Optimistically covers the whole raw snapshot summary, including unread
    * entries omitted from `rows` because this client cannot render them. */
   markAllReadLocally(readAt: number): void;
-  /** One atomic step for a view-consumption fan-out: claim every entry as
-   * in-flight and apply its optimistic marker in a single write, so no
-   * subscriber can observe the new rows before the claim is visible. */
+  /**
+   * One atomic step for a view-consumption fan-out: claim every entry as in-flight and apply its
+   * optimistic marker in a single write, so no subscriber can observe the new rows before the claim
+   */
   beginEntityRead(entryIds: ReadonlyArray<string>, readAt: number): void;
   /** The server took the marker: stop retrying it, and never rediscover it. */
   recordEntityReadSuccess(entryId: string): void;
@@ -106,19 +83,6 @@ export interface CloudEntityReadRetry {
 /**
  * The entries a visit to `entity` should mark read, mirroring the host's
  * `hostNotificationsMarkEntityRead` SQL exactly:
- *
- * - `severity IN ('needs_action','done','failure')` - looking at a chat
- *   acknowledges its notification rows without resolving the underlying
- *   approval or interview workflow.
- * - `read_at IS NULL` - set-once markers never re-fire.
- * - entity clause: a chat visit matches that chat plus its Task-level rows;
- *   an epic visit matches `epic_id = ? AND chat_id IS NULL`, i.e. epic-level
- *   rows ONLY. A focused child is inside its Task and therefore covers the
- *   Task row, while visiting a Task must not mark sibling chats read.
- *
- * Visibility needs no clause here: a cloud snapshot is already the visible set.
- * Entries already accepted, in flight, or waiting out a backoff are excluded -
- * those are driven by `selectCloudEntityReadRetries` instead.
  */
 export function selectCloudEntityReadTargets(
   state: Pick<
@@ -139,9 +103,7 @@ export function selectCloudEntityReadTargets(
     )
       continue;
     if (entry.readAt !== null) continue;
-    // A focused tile supplies its bound host and must only acknowledge that
-    // exact lineage. An epic-only surface has no host binding, so it retains
-    // the existing epic-level behavior across visible origins.
+    // A focused tile supplies its bound host and must only acknowledge that exact lineage.
     if (originHostId !== null && row.originHostId !== originHostId) continue;
     if (state.entityReadSucceeded.has(row.entryId)) continue;
     if (Object.hasOwn(state.entityReadRetries, row.entryId)) continue;
@@ -154,15 +116,7 @@ export function selectCloudEntityReadTargets(
   return targets;
 }
 
-/**
- * Entries whose backoff has elapsed and are due another attempt.
- *
- * Deliberately NOT filtered on the row's local `readAt`: the optimistic marker
- * was already applied when the attempt began, so re-deriving retries from the
- * rows would make every failure permanently invisible. Retry state is the
- * record of what the server has not yet accepted; the local marker only says
- * what the user has been shown.
- */
+/** Entries whose backoff has elapsed and are due another attempt. */
 export function selectCloudEntityReadRetries(
   state: Pick<CloudNotificationsState, "rows" | "entityReadRetries">,
   now: number,
@@ -362,18 +316,12 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
   }),
 );
 
-/** Opens the distinct cloud-feed stream. It deliberately owns a fresh-session
- * retry loop: a terminal stream close is otherwise permanent in the shared
- * transport and would leave the cloud-only surface stale until app restart. */
+/** Opens the distinct cloud-feed stream. */
 // eslint-disable-next-line max-params -- All five are semantically distinct: one reconnect policy, one transport, and three unrelated callbacks (auth, entitlement, snapshot) that no caller supplies together. The fifth arrived with P4.1's consolidation handing the policy IN rather than each store constructing its own; folding the callbacks into a bag would restructure this store's public surface across ten call sites for a consolidation ticket whose acceptance is "no behavior change at surfaces". Mirrors git-query-keys.ts's fileDiff.
 export function openCloudNotificationsStream(
   /**
-   * THE reconnect policy for this stream's host (redesign P4.1 /
-   * connection-registry §6), acquired from the connection registry by the one
-   * place that opens these streams. This store no longer constructs its own
-   * scheduler: the constants, the terminal-close classification and the
-   * backoff shape live once, in the engine, and each stream still gets its
-   * own independent lane so a sibling stream's refusal cannot pace it.
+   * THE reconnect policy for this stream's host (redesign P4.1 / connection-registry §6), acquired
+   * from the connection registry by the one place that opens these streams.
    */
   reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
@@ -388,9 +336,7 @@ export function openCloudNotificationsStream(
 ): () => void {
   let disposed = false;
   let currentSession: IStreamSession | null = null;
-  // Ownership is established when this relay controller opens. A replacement
-  // client resets the store before opening its controller; delayed callbacks
-  // from this one must never repopulate that new ownership epoch.
+  // Ownership is established when this relay controller opens.
   const sessionEpoch = useCloudNotificationsStore.getState().sessionEpoch;
   const reopenScheduler = reconnectEngine.openReopenLane(() => {
     currentSession?.close();
@@ -474,9 +420,7 @@ export function openCloudNotificationsStream(
         reason?.kind === "fatalError" &&
         reason.details.code === "FREE_TIER_NO_CLOUD_SYNC"
       ) {
-        // Dormant defense: today's server never emits this refusal. If a
-        // server-side entitlement gate appears later, translate it into a
-        // stable unavailable wall instead of an undefined terminal state.
+        // Dormant defense: today's server never emits this refusal.
         onEntitlementDenied?.();
       }
     });

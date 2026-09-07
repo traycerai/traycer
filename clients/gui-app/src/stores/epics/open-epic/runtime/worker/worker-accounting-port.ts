@@ -1,26 +1,4 @@
-/**
- * {@link EpicRuntimeAccountingPort} that PUSHES, for the runtime inside the
- * worker.
- *
- * The counterpart of `process-backed-accounting-port.ts`, which is the same
- * interface backed by T5's books directly. That module reaches a module-scoped
- * `let processRuntime`, and a worker importing it would get a second COPY of
- * the accountant rather than a second reference to one - so the worker gets
- * this instead, and the books stay on main where there is exactly one set.
- *
- * The interface survives the crossing unchanged because every reporting member
- * returns `void`. That was the design constraint 4e was built to satisfy, and
- * this module is where it pays: six members, six fire-and-forget pushes, no
- * shape change.
- *
- * **The inbound direction is the hard half, and it is not symmetric.** Main's
- * accountant asks four questions SYNCHRONOUSLY during a reconcile. Three are
- * pure reads, answered on main from the snapshot every settlement carries.
- * The fourth - `demoteColdestUnpinned` - performs work, so it cannot be
- * answered from a cache at all: main defers it, and {@link demote} below is
- * where the deferred request lands. What it frees comes back as ordinary
- * settlements, and main's next reconcile sees them.
- */
+/** {@link EpicRuntimeAccountingPort} that PUSHES, for the runtime inside the worker. */
 import type {
   RuntimeAccountingSettlement,
   RuntimeAccountingSnapshot,
@@ -34,14 +12,7 @@ import type {
 
 export interface WorkerAccountingPortHandle {
   readonly port: EpicRuntimeAccountingPort;
-  /**
-   * Serve one deferred `accounting/demote`.
-   *
-   * A no-op before `registerBooks` and after `unregisterBooks`, deliberately:
-   * a reconcile already in flight when the runtime tears down would otherwise
-   * reach a source mid-disposal, and "nothing to evict" is the honest answer
-   * from a runtime that no longer holds anything.
-   */
+  /** Serve one deferred `accounting/demote`. */
   demote(overBytes: number): void;
 }
 
@@ -49,10 +20,6 @@ export function createWorkerAccountingPort(
   emit: (event: WorkerToMainEvent) => void,
 ): WorkerAccountingPortHandle {
   let source: EpicRuntimeAccountingSource | null = null;
-  // What the LAST eviction refused to give up. Empty before the first one,
-  // which is the honest "nothing known yet" rather than a claim that nothing
-  // is pinned - the two read identically here and are distinguished on main by
-  // whether a demote has been dispatched at all.
   let lastProtectedBytesByKind: readonly ProtectedBytes[] = [];
 
   function snapshot(): RuntimeAccountingSnapshot {
@@ -82,14 +49,10 @@ export function createWorkerAccountingPort(
       const live = source;
       if (live === null) return;
       const outcome = live.demoteColdestUnpinned(overBytes);
-      // Recorded even when nothing was freed - ESPECIALLY then. A zero-reclaim
-      // eviction with a non-empty breakdown is "everything here is pinned",
-      // and that is the fact main cannot otherwise learn.
+      // Recorded even when nothing was freed - ESPECIALLY then. A zero-reclaim eviction with a non-empty
+      // breakdown is "everything here is pinned", and that is the fact main cannot otherwise learn.
       lastProtectedBytesByKind = outcome.protectedBytesByKind;
-      // No settlement is emitted here. What the eviction actually freed
-      // travels as the tier's own settles, which carry the refreshed snapshot
-      // with them; emitting a second report of the same bytes would double
-      // count against a plane that has already been told.
+      // No settlement is emitted here.
     },
 
     port: {
@@ -103,10 +66,8 @@ export function createWorkerAccountingPort(
       },
 
       unregisterBooks(): void {
-        // Source first, matching the process-backed port: the deregistration
-        // main performs on receipt can race a reconcile that is already
-        // walking the books, and an unregistered source answering emptily is
-        // safer than one answering from a runtime mid-teardown.
+        // Source first, matching the process-backed port: the deregistration main performs on receipt can
+        // race a reconcile that is already walking the books, and an unregistered source answering emptily
         source = null;
         lastProtectedBytesByKind = [];
         emit({ kind: "accounting/books", registered: false, snapshot: null });
@@ -131,10 +92,7 @@ export function createWorkerAccountingPort(
         settle({ kind: "hot-doc-release", artifactRoomId });
       },
       noteHotDocEvictionDeferred(): void {
-        // Deliberately nothing. The deferring tier is the MAIN-side bridge,
-        // which holds the process-backed port directly; a worker-resident
-        // runtime never dispatches a demote to itself, so there is no deferral
-        // here to report.
+        // Deliberately nothing.
       },
     },
   };

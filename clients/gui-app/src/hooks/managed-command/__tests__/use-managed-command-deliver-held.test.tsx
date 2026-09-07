@@ -13,25 +13,7 @@ import {
 import type { ManagedCommandDeliverHeldResponse } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 
-/**
- * `managedCommand.deliverHeld`, driven against a real `HostClient` and a mock
- * host.
- *
- * The behaviour this suite exists to pin: a response naming `unresolved`
- * holds is a RESOLVED success, never a rejection - that split is the whole
- * point of the response shape (see `unary-schemas.ts`), and a test asserting
- * the opposite would undo the design.
- *
- * Every `message` below is a fixture written HERE, deliberately never copied
- * from the host that authors them in production. The two live in different
- * repositories, so pinning the host's exact sentence would make each future
- * copy edit a two-repo change - and this suite is about what the client does
- * with a message, not about which words the host chose. The fixtures are kept
- * REPRESENTATIVE of real host copy (whole sentences naming a remedy, no raw
- * ids) so a reader can see the surface the assertions describe; what they pin
- * is that the string arrives verbatim as the toast's description, whatever it
- * says.
- */
+/** unresolved holds are a resolved success, never a rejection. Toast description is the host message verbatim. */
 
 const { toastError, toastWarning } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -63,14 +45,10 @@ import {
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 
-/**
- * The un-attributed headline, named so the "says nothing about shells" guard
- * below asserts against the same string the expectation pins.
- */
+/** The un-attributed headline, named so the "says nothing about shells" guard below asserts against the same string the expectation pins. */
 const UNATTRIBUTED_PERMANENT_TITLE =
   "Nothing was delivered — this host can't tell what it's holding for this chat.";
 
-/** The response the mock host answers `managedCommand.deliverHeld` with. */
 let deliverResponse: ManagedCommandDeliverHeldResponse = {
   released: [],
   unresolved: [],
@@ -388,10 +366,7 @@ describe("useManagedCommandDeliverHeld", () => {
     expect(toastError).toHaveBeenCalledWith(UNATTRIBUTED_PERMANENT_TITLE, {
       description: "This host couldn't load its delivery records; restart it.",
     });
-    // One of these is produced whether the chat holds one shell or four, so
-    // any number in this copy would count nothing a person can see. Asserted
-    // against the constant the expectation above pins, so a rewrite that
-    // reintroduces a shell count has to trip it.
+    // One of these is produced whether the chat holds one shell or four, so any number in this copy would count nothing a person can see.
     expect(UNATTRIBUTED_PERMANENT_TITLE).not.toContain("shell");
     expect(toastWarning).not.toHaveBeenCalled();
   });
@@ -421,10 +396,7 @@ describe("useManagedCommandDeliverHeld", () => {
   });
 
   it("reads un-attributed FIRST, so a released id beside it never reads as progress", async () => {
-    // The host cannot produce this - `released` is empty whenever nothing was
-    // determined - and that is exactly why the client must not depend on it.
-    // The ordering is the contract; a client that read `released`/`held` first
-    // would report a delivery the host never proved.
+    // The host cannot produce this - `released` is empty whenever nothing was determined - and that is exactly why the client must not depend on it.
     deliverResponse = {
       released: ["cmd-1"],
       unresolved: [

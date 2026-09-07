@@ -1,19 +1,5 @@
 /**
- * Opener "Files" sub-page (two-step): step 1 picks a source - the always-present
- * `Artifacts` source plus every browsable attached workspace/worktree -
- * and step 2 fuzz-searches that source's logical paths through the host
- * `workspace.searchPaths` RPC (host `rg --files` enumeration + Fuse ranking),
- * NOT a full renderer-side tree download + substring filter.
- *
- * There is no single-workspace shortcut: `Artifacts` is a first-class
- * source, so auto-skipping to a lone workspace would hide it. A code result
- * opens as a `WorkspaceFileRef`; an artifact result is resolved against the
- * authoritative open-epic Yjs projection and opens as an `EpicArtifactRef`
- * (stale/deleted disk results resolve to nothing and are dropped).
- *
- * The pane opener disables cmdk filtering for the result step so host Fuse
- * ranking, typo-tolerant matches, and search-state notices are preserved. The
- * source-picker step and unrelated opener pages keep cmdk filtering enabled.
+ * Opener "Files" sub-page (two-step): step 1 picks a source - the always-present `Artifacts` source plus every browsable attached workspace/worktree - and step 2 fuzz-searches that source's logical paths through the host `workspace.searchPaths` RPC (host `rg.
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -83,9 +69,8 @@ const EMPTY_ARTIFACT_PATH_INDEX: ReadonlyMap<string, ArtifactPathEntry> =
   new Map();
 
 /**
- * Non-actionable notice row for a distinct non-`ready` state (an unavailable
- * source, or a host without the search RPC). Keyed per-category so it never
- * collides with a result row.
+ * Non-actionable notice row for a distinct non-`ready` state (an unavailable source, or a host without the search RPC).
+ * Keyed per-category so it never collides with a result row.
  */
 function openerNotice(id: string, label: string): CommandItem {
   return {
@@ -370,9 +355,7 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
         gitStatus: undefined,
         item: openerActionLeaf({
           id: `open:files:artifacts:${entry.id}`,
-          // Ancestor-title path distinguishes duplicate leaf titles and reads
-          // better than the folder slug; the slug path rides in keywords so the
-          // host match survives cmdk's re-filter.
+          // Ancestor-title path distinguishes duplicate leaf titles and reads better than the folder slug; the slug path rides in keywords so the host match survives cmdk's re-filter.
           label: entry.titlePath.length > 0 ? entry.titlePath : entry.title,
           keywords: [result.relPath, result.name, entry.title, entry.titlePath],
           run: () => {
@@ -477,9 +460,7 @@ export function useFilesOpenerItems(
   );
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     if (ctx.activeEpicId === null) return [];
-    // `Artifacts` is always offered (even for an Epic with no attached
-    // code workspace); the old single-workspace shortcut is gone because it
-    // would hide this source.
+    // `Artifacts` is always offered (even for an Epic with no attached code workspace); the old single-workspace shortcut is gone because it would hide this source.
     return [
       openerSubpageLeaf({
         id: filesArtifactsResultSubpageId(),

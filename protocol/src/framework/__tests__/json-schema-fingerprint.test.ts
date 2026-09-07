@@ -13,24 +13,11 @@ function fingerprint(schema: z.ZodType) {
 }
 
 /**
- * Additivity = projection feasibility: the newer shape's payloads must
- * strip down through the older schema (unconditionally for old-form
- * payloads; new capabilities may refuse by design). Strict where
- * projection breaks unconditionally (removals, incompatible
- * replacements - at ANY depth), lenient where stripping or a designed
- * refusal handles it (additions and widenings - at ANY depth).
+ * Additivity = projection feasibility: the newer shape's payloads must strip down through the older schema (unconditionally for old-form payloads; new capabilities may refuse by design).
  */
 describe("toJsonSchemaFingerprint - the declared discriminator", () => {
-  // POSITIVE CONTROL for the one thing in this file that reads zod's internal
-  // `def`. `z.toJSONSchema` renders a discriminated union as `oneOf` and drops
-  // WHICH field was declared, so the fingerprint stamps it during conversion -
-  // and `findDiscriminatedSuccessor` needs it, because with two qualifying
-  // tags an edit and a replacement are structurally identical.
-  //
-  // The read degrades silently by design (an unrecognised shape leaves the
-  // node unstamped and identity falls back to the inferred tuple), so a zod
-  // upgrade that moves the field would quietly restore the old defect. This
-  // test is what makes that loud.
+  // POSITIVE CONTROL for the one thing in this file that reads zod's internal `def`.
+  // The read degrades silently by design (an unrecognised shape leaves the node unstamped and identity falls back to the inferred tuple), so a zod upgrade that moves the field would quietly restore the old defect.
   it("carries the field a discriminated union was declared on", () => {
     const declared = fingerprint(
       z.discriminatedUnion("kind", [
@@ -83,10 +70,7 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
     });
 
     it("accepts a new field inside a discriminated-union arm (array root)", () => {
-      // The agent.listRunConfigs shape: array-of-union at the root. An
-      // optional field added to one arm strips at projection, exactly
-      // like a nested object addition - the old exact-fingerprint rule
-      // wrongly priced this as breaking.
+      // The agent.listRunConfigs shape: array-of-union at the root.
       const previous = fingerprint(
         z.array(
           z.discriminatedUnion("surface", [
@@ -136,9 +120,7 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
     });
 
     it("treats the same addition identically under an object root and an array-union root", () => {
-      // The old checker's strictness depended on the ROOT shape (objects
-      // got a depth-1 check, array/union roots a full-depth one). The
-      // walk is now uniform: both placements of the same addition pass.
+      // The old checker's strictness depended on the ROOT shape (objects got a depth-1 check, array/union roots a full-depth one).
       const objectRootPrevious = fingerprint(
         z.object({ rows: z.array(z.object({ id: z.string() })) }),
       );
@@ -175,10 +157,6 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
   });
 
   describe("record values are walked, not compared as opaque leaves", () => {
-    // The regression: a z.record node classified `opaque`, so ANY evolution
-    // of its value schema - including a strip-clean field addition - was
-    // priced as a schema-kind change, in both modes. indicatorState@1.1's
-    // `pendingFork` addition inside record values is the shipped instance.
     it("accepts a required field added to record values, in both modes", () => {
       const previous = fingerprint(
         z.object({
@@ -285,9 +263,6 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
       const next = fingerprint(
         z.object({ agents: z.array(z.object({ id: z.string() })) }),
       );
-      // The array branch preserves the historical wrapping: violations
-      // beneath an array surface as `array-items`, with the inner
-      // violation (and its dotted path) in the description.
       expect(
         findAdditivityViolation(previous, next, "lenient", null, null),
       ).toEqual({
@@ -358,9 +333,7 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
 
   describe("widening lever", () => {
     it("accepts a nested field widening into a union that retains the old form", () => {
-      // The sanctioned prepareLaunch@1.1 forkSource evolution: object ->
-      // union-with-old-form. Previously legal only because the checker
-      // could not see it; now legal because it is verified safe.
+      // The sanctioned prepareLaunch@1.1 forkSource evolution: object -> union-with-old-form.
       const previous = fingerprint(
         z.object({ forkSource: z.object({ chatId: z.string() }) }),
       );
@@ -616,9 +589,7 @@ describe("findAdditivityViolation - no-value-growth mode (response lane)", () =>
 
 describe("findAdditivityViolation - review-hardening cases", () => {
   it("flags relaxing a required field to optional inside a union arm", () => {
-    // Compatibility-based variant matching must not lose requiredness: both
-    // arms keep identical `properties`, so only the `required` arrays differ,
-    // and a newer peer omitting the field fails the older schema outright.
+    // Compatibility-based variant matching must not lose requiredness: both arms keep identical `properties`, so only the `required` arrays differ, and a newer peer omitting the field fails the older schema outright.
     const previous = fingerprint(
       z.union([z.object({ kind: z.literal("a"), value: z.string() })]),
     );
@@ -649,10 +620,7 @@ describe("findAdditivityViolation - review-hardening cases", () => {
   });
 
   it("accepts annotation-only leaf changes (default/description)", () => {
-    // `default` and friends annotate a leaf without changing the value set
-    // it accepts, so a newer peer's payloads still project. Zod keeps a
-    // defaulted field in `required` (it emits the output shape), so this is
-    // purely a leaf-annotation question, not a requiredness one.
+    // `default` and friends annotate a leaf without changing the value set it accepts, so a newer peer's payloads still project.
     const previous = fingerprint(z.object({ id: z.string() }));
     const next = fingerprint(
       z.object({ id: z.string().default("x").describe("the id") }),
@@ -759,11 +727,6 @@ describe("findAdditivityViolation - review-hardening cases", () => {
   });
 
   it("accepts a union collapse where every old arm still projects", () => {
-    // Two DISTINCT arms that both genuinely project onto the replacement:
-    // every payload the collapsed schema can emit is still accepted by one
-    // of the old arms. (Note `[{id}, {name}]` -> `{id?, name?}` would NOT
-    // qualify - the collapsed form can emit `{}`, which neither old arm
-    // accepts - so it is correctly rejected rather than used here.)
     const previous = fingerprint(
       z.union([
         z.object({ id: z.string(), kind: z.literal("a") }),
@@ -1030,9 +993,7 @@ describe("strict objects reject growth", () => {
 
 describe("findBreakingChange - major-justification interplay", () => {
   it("still justifies a major for nested enum growth (shipped agent.list precedent)", () => {
-    // agent.list v1->v7 majors are justified purely by nested harnessId
-    // enum growth through the per-property structural comparison; the
-    // additivity rework must not invalidate that shipped history.
+    // agent.list v1->v7 majors are justified purely by nested harnessId enum growth through the per-property structural comparison; the additivity rework must not invalidate that shipped history.
     const previous = fingerprint(
       z.object({ agents: z.array(z.object({ harness: z.enum(["a"]) })) }),
     );
@@ -1105,9 +1066,7 @@ describe("findAdditivityViolation - second-round review hardening", () => {
   });
 
   it("rejects an added property whose values exceed a typed catchall, even in lenient mode", () => {
-    // The catchall comparison must be a subset test, not the caller's mode:
-    // lenient enum growth would otherwise admit "b", which the old catchall
-    // rejects.
+    // The catchall comparison must be a subset test, not the caller's mode: lenient enum growth would otherwise admit "b", which the old catchall rejects.
     const previousSchema = z.object({ id: z.string() }).catchall(z.enum(["a"]));
     const nextSchema = z
       .object({ id: z.string(), extra: z.enum(["a", "b"]) })
@@ -1140,9 +1099,6 @@ describe("findAdditivityViolation - second-round review hardening", () => {
   });
 
   it("accepts default -> optional, which the old input schema already tolerated", () => {
-    // The OUTPUT rendering marks a defaulted field required, so an
-    // output-derived requiredness check would wrongly reject this; the old
-    // INPUT schema accepts omission and fills the default.
     const previousSchema = z.object({ id: z.string().default("x") });
     const nextSchema = z.object({ id: z.string().optional() });
     expect(
@@ -1195,11 +1151,8 @@ describe("findAdditivityViolation - second-round review hardening", () => {
   });
 
   it("flags widening bounds on a ROOT array, not just a nested one", () => {
-    // Nested arrays keep their raw JSON Schema node (bounds intact), but the
-    // root is normalized through `convertJsonSchemaShape` - which used to drop
-    // the bound keywords, making this exact widening invisible.
-    // Root items must themselves be a supported shape, so this uses the
-    // array-of-objects form the registry actually carries.
+    // Nested arrays keep their raw JSON Schema node (bounds intact), but the root is normalized through `convertJsonSchemaShape` - which used to drop the bound keywords, making this exact widening invisible.
+    // Root items must themselves be a supported shape, so this uses the array-of-objects form the registry actually carries.
     const violation = findAdditivityViolation(
       fingerprint(z.array(z.object({ id: z.string() })).max(1)),
       fingerprint(z.array(z.object({ id: z.string() })).max(2)),
@@ -1211,9 +1164,7 @@ describe("findAdditivityViolation - second-round review hardening", () => {
   });
 
   it("accepts required -> defaulted, which the newer peer always emits", () => {
-    // Mirror image of `default -> optional`: the NEXT side must be read from
-    // the output tree, or its input rendering (which marks a defaulted field
-    // optional) would report a false `required-field`.
+    // Mirror image of `default -> optional`: the NEXT side must be read from the output tree, or its input rendering (which marks a defaulted field optional) would report a false `required-field`.
     const previousSchema = z.object({ id: z.string() });
     const nextSchema = z.object({ id: z.string().default("x") });
     expect(
@@ -1228,9 +1179,7 @@ describe("findAdditivityViolation - second-round review hardening", () => {
   });
 
   it("does not report a false required-field when only one input tree is available", () => {
-    // The payload-additivity guard compares a stored fingerprint (no schema to
-    // re-render) against a live one, so `previousInput` is null. Requiredness
-    // must stay symmetric in that case.
+    // The payload-additivity guard compares a stored fingerprint (no schema to re-render) against a live one, so `previousInput` is null.
     const schema = z.object({ id: z.string().default("x"), n: z.number() });
     expect(
       findAdditivityViolation(

@@ -1,21 +1,6 @@
 /**
- * Snapshot the newest released baseline's protocol surface into the in-tree
- * fixture used by `released-baseline-compat.test.ts`.
- *
- *   bun run protocol/scripts/compat/snapshot-released-baseline.ts [<remote-or-url>]
- *
- * Resolves the protected baseline set the same way `resolve-baselines.ts` does
- * (remote tags at/above the support floor), picks the newest version, dumps
- * that tag's surface via a detached worktree with the same dump-script
- * injection the protocol-compat workflow uses, and writes
- * `protocol/src/host/__tests__/__fixtures__/released-baseline-surface.json`
- * deterministically (`buildProtocolSurface` already stable-sorts keys; trailing
- * newline enforced).
- *
- * That fixture is the same artifact releases publish as `protocol-surface.json`.
- * The companion unit test is a fast local tripwire; the authoritative gate is
- * the protocol-compat workflow whose baselines come from immutable remote tags,
- * so editing this fixture cannot fool CI.
+ * Snapshot the newest released baseline's protocol surface into the in-tree fixture used by `released-baseline-compat.test.ts`.
+ * The companion unit test is a fast local tripwire; the authoritative gate is the protocol-compat workflow whose baselines come from immutable remote tags, so editing this fixture cannot fool CI.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -72,11 +57,6 @@ function compareVersions(
   return 0;
 }
 
-/**
- * SemVer-style precedence for one tag: major/minor/patch, then stable over
- * any release candidate at the same version, then the numeric RC ordinal
- * (so rc.10 outranks rc.9). `rcOrdinal` is 0 for stable tags.
- */
 type TagPrecedence = {
   readonly version: readonly number[];
   readonly stable: boolean;
@@ -249,9 +229,7 @@ try {
     "protocol/src/framework/surface-build.ts",
   );
 
-  // Same injection rule as protocol-compat.yml: only copy when the baseline
-  // predates the dump tooling. `wx` makes the existence check and the write a
-  // single exclusive-create syscall, so there is no check-to-use window.
+  // Same injection rule as protocol-compat.yml: only copy when the baseline predates the dump tooling.
   injectIfMissing(dumpScriptSrc, dumpScriptDest);
   injectIfMissing(surfaceBuildSrc, surfaceBuildDest);
 

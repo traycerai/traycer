@@ -8,9 +8,7 @@ import {
   wasEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 
-// `sessionCreatedEpics` is a module-scoped Map with no eviction other than the
-// explicit clears below - every test must start and end from an empty map or
-// an entry from one test leaks into the next.
+// `sessionCreatedEpics` is a module-scoped Map with no eviction other than the explicit clears below - every test must start and end from an empty map or an entry from one test leaks into the next.
 describe("session-created-epics", () => {
   beforeEach(() => {
     clearSessionCreatedEpics();
@@ -32,15 +30,11 @@ describe("session-created-epics", () => {
     vi.useFakeTimers();
     markEpicCreatedThisSession("epic-1", "host-a");
 
-    // Just past the TTL boundary (`> TTL`, not `>=`), so this proves the seed
-    // is actually gone rather than landing on an off-by-one that happens to
-    // still read as expired.
+    // Just past the TTL boundary (`> TTL`, not `>=`), so this proves the seed is actually gone rather than landing on an off-by-one that happens to still read as expired.
     vi.advanceTimersByTime(2 * 60 * 1000 + 1);
 
     expect(sessionCreatedEpicHostId("epic-1")).toBeNull();
-    // `wasEpicCreatedThisSession` is deliberately NOT TTL-gated - the
-    // existence reconciler and the access-coordinator's NOT_FOUND grace need
-    // the session-lifetime fact, not the placement seed.
+    // `wasEpicCreatedThisSession` is deliberately NOT TTL-gated - the existence reconciler and the access-coordinator's NOT_FOUND grace need the session-lifetime fact, not the placement seed.
     expect(wasEpicCreatedThisSession("epic-1")).toBe(true);
   });
 
@@ -79,10 +73,7 @@ describe("session-created-epics", () => {
 
     expect(wasEpicCreatedRecentlyThisSession("epic-1")).toBe(true);
 
-    // Just short of the TTL boundary (`< TTL`, not `<=`), mirroring the
-    // `sessionCreatedEpicHostId` "does not expire short of the TTL" test
-    // above - this is the create-race grace's own window, read through its
-    // own accessor.
+    // Just short of the TTL boundary (`< TTL`, not `<=`), mirroring the `sessionCreatedEpicHostId` "does not expire short of the TTL" test above - this is the create-race grace's own window, read through its own accessor.
     vi.advanceTimersByTime(2 * 60 * 1000 - 1);
 
     expect(wasEpicCreatedRecentlyThisSession("epic-1")).toBe(true);
@@ -96,10 +87,7 @@ describe("session-created-epics", () => {
     vi.advanceTimersByTime(2 * 60 * 1000 + 1);
 
     expect(wasEpicCreatedRecentlyThisSession("epic-1")).toBe(false);
-    // The contrast is the point: the access coordinator's create-race grace
-    // must stop trusting this epic's "just created" story, while the
-    // existence reconciler's session-lifetime fact - "did THIS renderer
-    // create it at all" - is never TTL-gated and must still read true.
+    // The contrast is the point: the access coordinator's create-race grace must stop trusting this epic's "just created" story, while the existence reconciler's session-lifetime fact - "did THIS renderer create it at all" - is never TTL-gated and must still.
     expect(wasEpicCreatedThisSession("epic-1")).toBe(true);
   });
 

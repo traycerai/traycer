@@ -7,48 +7,17 @@ import type { LogLevelControl } from "@/components/settings/panels/log-level-con
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 
-/**
- * Verbosity controls plus the "you left a level raised" reminder, over whatever
- * set of controls its caller hands it.
- *
- * It used to be one group holding all three scopes, and the mixed scope was the
- * problem: `desktop` describes this app window wherever it points, while `cli`
- * and `host` are fields of the selected host's config store. Rendering them
- * together meant the app row was re-drawn under every host in the account,
- * offering the same single setting N times. Splitting the PAGES rather than the
- * group is what let this component stop caring — each caller passes the
- * controls it owns, and the reset sweep walks them without knowing which is
- * which (see `LogLevelControl`: the transport is already resolved).
- *
- * With no controls AND no `emptyState` it renders nothing at all. A titled
- * "Log detail" card with an empty body is a promise the page cannot keep — and
- * once the desktop row moved out, that is exactly what the host page would show
- * whenever the host is too old for `config.logLevels.get` and the logs region
- * below is already saying so.
- */
+/** A titled "Log detail" card with an empty body is a promise the page cannot keep. */
 export function LogDetailGroup(props: {
   readonly controls: readonly LogLevelControl[];
-  /**
-   * Why there are no rows, in the caller's own words — or `null` to render
-   * nothing when something else on the page already explains it.
-   *
-   * The caller owns this because the two pages fail for unrelated reasons: the
-   * app page has no rows only outside the desktop shell, while the host page
-   * has none when the host predates the config RPC. The old shared copy ("only
-   * available on the desktop app") was wrong for the second case in the worst
-   * way — it told someone to install an app they were already running.
-   */
+  /** The caller owns this because the two pages fail for unrelated reasons: the app page has no rows only outside
+   * the desktop shell, while the host page has none when the host predates the config RPC. */
   readonly emptyState: ReactNode;
 }): ReactNode {
   const { controls } = props;
   const [resetPending, setResetPending] = useState(false);
-  // Focus-restoration target for when the reminder row (and the "Reset all to
-  // Info" button a keyboard/screen-reader user just activated) unmounts -
-  // without this, focus silently drops to `<body>`. Tracks the PRIOR
-  // visibility so it only fires on the true->false transition, never on
-  // initial mount (mirrors `host-settings-summary-card.tsx`'s
-  // `wasEditingRef` pattern for the analogous "the focused control
-  // disappears" case).
+  // Focus-restoration target for when the reminder row (and the "Reset all to Info" button a
+  // keyboard/screen-reader user just activated) unmounts - without this, focus silently drops to `<body>`.
   const groupContentRef = useRef<HTMLDivElement>(null);
   const reminderWasVisibleRef = useRef(false);
   const reminderHadFocusRef = useRef(false);
@@ -84,17 +53,13 @@ export function LogDetailGroup(props: {
       try {
         await control.set("info");
       } catch {
-        // The control's own transport already toasted this scope - keep
-        // going so one failure doesn't strand the remaining scopes
-        // un-attempted and silently still elevated.
+        // The control's own transport already toasted this scope - keep going so one failure doesn't strand the
+        // remaining scopes un-attempted and silently still elevated.
         failedCount += 1;
       }
     }
     setResetPending(false);
-    // Only the MULTI-control case earns an aggregate line: with one control
-    // its transport's own toast already said the same thing, and a second
-    // would double-report a single failure. The plural is unconditional
-    // because this branch cannot be reached with fewer than two controls.
+    // The plural is unconditional because this branch cannot be reached with fewer than two controls.
     if (failedCount > 0 && pending.length > 1) {
       toast.error(
         `Couldn't reset ${failedCount} of ${pending.length} log levels`,

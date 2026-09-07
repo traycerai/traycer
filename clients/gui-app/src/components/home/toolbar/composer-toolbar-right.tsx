@@ -23,7 +23,6 @@ interface ComposerToolbarRightProps {
   onStopTurn: (() => void) | null;
   composerDisabledHint: string | null;
   settingsLocked: boolean;
-  /** Voice-input control, or `null` when voice input is disabled/unavailable. */
   dictation: ComposerDictationControl | null;
   /** Non-null while the on-device model is downloading; renders a status chip. */
   dictationPreparing: DictationPreparingStatus | null;
@@ -53,11 +52,8 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
     runTargetHostId,
     terminalLoginSurface,
   } = props;
-  // Block sending until the model slug resolves to a concrete value - an
-  // empty slug is the transient "catalog still loading" marker and must never
-  // reach the wire as `model: ""`. Gating HERE (instead of in the host
-  // composer's `canSubmit`) keeps the composer from re-rendering when the
-  // catalog resolves; the submit handlers re-check via `store.getState()`.
+  // Block sending until the model slug resolves to a concrete value - an empty slug is the transient "catalog
+  // still loading" marker and must never reach the wire as `model: ""`.
   const modelResolved = useStore(
     store,
     (s) => s.selection.modelSlug.length > 0,

@@ -15,11 +15,7 @@ import {
 } from "@traycer/protocol/host/epic/snapshot-meta";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
-/**
- * `epic.subscribe@1.3` - delta-seeded reattach. Covers the two new optional
- * wire keys (`seedOffer` on the open request, `seededFromOffer` on the
- * snapshot frame's `meta`) and the registry/contract wiring around them.
- */
+/** `epic.subscribe@1.3` - delta-seeded reattach. */
 
 const baseMetaV10Fields = {
   schemaVersion: "1.0.0",

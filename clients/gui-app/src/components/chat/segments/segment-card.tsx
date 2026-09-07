@@ -19,9 +19,7 @@ interface SegmentCardProps {
   bodyOverflow: "hidden" | "visible";
   headerFindUnitId: string | null;
   bodyFindUnitId: string | null;
-  // When false the card is a static header with no toggle/chevron and no body -
-  // for segments whose collapsed header already says everything (e.g. a tool
-  // call whose summary captures the whole input).
+  // When false the card is a static header with no toggle/chevron and no body - for segments whose collapsed header already says everything (e.g. a tool call whose summary captures the whole input).
   expandable: boolean;
   className: string | undefined;
 }
@@ -32,12 +30,7 @@ const TONE_CLASS: Record<SegmentCardProps["tone"], string> = {
   primary: "border-primary/40 bg-primary/5",
 };
 
-/**
- * The cell a `headerAction` sits in: the header row is `items-stretch` (so
- * the whole header stays one click target), so a bare icon button dropped in
- * as the action rides its top edge. This centres it. No divider - the button
- * reads as part of the same card, and a rule there only adds noise.
- */
+/** The cell a `headerAction` sits in: the header row is `items-stretch` (so the whole header stays one click target), so a bare icon button dropped in as the action rides its top edge. This centres it. */
 export function SegmentCardHeaderActionCell(props: {
   readonly children: ReactNode;
 }) {
@@ -46,11 +39,7 @@ export function SegmentCardHeaderActionCell(props: {
   );
 }
 
-/**
- * Shared segment shell - chip→card chrome with a collapsible body. Header is
- * always visible; body slides in/out via Radix Collapsible. Does not render
- * its own toggle button - the entire header is the click target.
- */
+/** Does not render its own toggle button - the entire header is the click target. */
 export function SegmentCard(props: SegmentCardProps) {
   const {
     header,

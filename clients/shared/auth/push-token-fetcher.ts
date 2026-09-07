@@ -1,17 +1,6 @@
 /**
  * Device push-token registration against authn-v3 (`/api/v3/user/push-tokens`).
- *
- * The registration binds a provider push token (APNs/FCM) to the CALLER'S OWN
- * session family - authn rejects a caller whose credential carries no session
- * family, and revoking that session cascades the token row away server-side.
- * Removal is `POST ./remove` rather than a DELETE because the token is a
- * deliverable address that has no business in a URL.
- *
- * Both calls are best-effort from every caller's point of view: a shell that
- * cannot register simply gets no pushes (the in-app feed and its 30s poll are
- * unaffected), and a shell that cannot unregister at sign-out leans on the
- * server-side session-revocation cascade that removes the row anyway. That is
- * why the results collapse to coarse variants instead of surfacing bodies.
+ * Removal is `post ./remove` rather than a delete because the token is a deliverable address that has no business in a URL.
  */
 
 const PUSH_TOKEN_FETCH_TIMEOUT_MS = 10_000;
@@ -34,11 +23,10 @@ export type PushTokenFetchResult =
   | { readonly kind: "ok" }
   | { readonly kind: "unauthorized" }
   /** authn refused the request shape (e.g. android+sandbox) - a caller bug,
-   * not a transient; retrying the identical request cannot succeed. */
+   */
   | { readonly kind: "rejected" }
   | { readonly kind: "network-error" };
 
-/** Named function types so callers can inject fakes without `typeof` chains. */
 export type RegisterDevicePushTokenFn = (
   authnBaseUrl: string,
   bearerToken: string,

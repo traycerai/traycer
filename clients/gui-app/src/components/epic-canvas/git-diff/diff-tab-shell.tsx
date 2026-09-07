@@ -17,12 +17,8 @@ interface DiffTabShellProps {
 export function DiffTabShell(props: DiffTabShellProps) {
   const [headerAccessoryTarget, setHeaderAccessoryTarget] =
     useState<HTMLElement | null>(null);
-  // The whole diff toolbar - view mode, refresh, settings, collapse-all - is
-  // `icon-sm` controls sized for a mouse. Below md they are the tile's only
-  // affordances and the phone shell's hit-slop scope (header, drawer, sheets)
-  // does not reach a canvas tile, so this header opts into it directly. Scope
-  // only where the mobile layout is live, keeping the rule's "desktop never
-  // carries the scope" invariant intact.
+  // Below md they are the tile's only affordances and the phone shell's hit-slop scope (header, drawer, sheets) does not reach a canvas tile, so this header opts into it directly.
+  // Scope only where the mobile layout is live, keeping the rule's "desktop never carries the scope" invariant intact.
   const isMobileViewport = useIsMobileViewport();
 
   return (
@@ -59,9 +55,7 @@ export function DiffTabShell(props: DiffTabShellProps) {
             {props.toolbar}
           </div>
         </div>
-        {/* Ctrl/Cmd+A selects the diff body, not the whole window (#592). Shared
-            by the git, PR and snapshot diff tiles, so all three opt in here; the
-            title/toolbar header above stays out of the selection. */}
+        {/* Ctrl/Cmd+A selects the diff body, not the whole window (#592). Shared by the git, PR and snapshot diff tiles, so all three opt in here; the title/toolbar header above stays out of the selection. */}
         <div
           data-selection-root=""
           className="flex min-h-0 flex-1 flex-col overflow-hidden"

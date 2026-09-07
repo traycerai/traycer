@@ -1,7 +1,4 @@
-/**
- * Docs: see ../SETTINGS.md (Providers → Agent selection guide).
- * Update that file whenever this settings surface changes.
- */
+/** Update that file whenever this settings surface changes. */
 import type { ReactNode } from "react";
 import { useEffect, useReducer, useRef } from "react";
 import { Check, TriangleAlert } from "lucide-react";
@@ -105,40 +102,21 @@ export function AgentSelectionGuideSection() {
   const scope = useHostScope();
   const realBinding = useHostBinding();
 
-  // Only a fully-resolved scope re-provides the client — a still-connecting or
-  // vanished pick renders under the ambient context, where the gate keeps it
-  // inert instead of letting it read/write through the active-host client.
-  // `following` is usable but needs no re-provision either: the ambient client
-  // already IS the scoped host's, and building a second one would duplicate
-  // its socket for nothing.
-  //
-  // A GOVERNED SECOND COPY of `useScopedHostBinding`, narrowed to `ready` — see
-  // that hook's exception list, which names this one and why. `hostId` is what
-  // makes the re-provide reach `useHostClient()` at all, and the spread cannot
-  // be type-checked into supplying it: `...realBinding` satisfies the field
-  // with the app-wide `null`, so dropping it compiles clean and silently
-  // returns this section to the ambient host.
+  // `hostId` is what makes the re-provide reach `useHostClient` at all, and the spread cannot be type-checked
+  // into supplying it: `...realBinding` satisfies the field with the app-wide `null`.
   const scopedBinding =
     scope.status === "ready" && realBinding !== null && scope.client !== null
       ? { ...realBinding, hostClient: scope.client, hostId: scope.hostId }
       : null;
 
-  // ONE gate, wrapping everything that talks to the scoped host — including
-  // the guide query, which lives in the content component so it sits INSIDE
-  // the boundary. This section used to also early-return before mounting the
-  // content, because a mounted query hook under a non-usable scope fired
-  // against the ambient host and cached ITS guide here. The gate now holds
-  // non-usable children in a hidden `<Activity>`, which tears subscriptions
-  // down — the query cannot fire — while preserving the editor's state, so a
-  // transient same-host disconnect inside the save debounce no longer
-  // discards what was typed.
+  // The gate now holds non-usable children in a hidden `<Activity>`, which tears subscriptions down - the query
+  // cannot fire.
   const content = <AgentSelectionGuideSectionInner scope={scope} />;
   return (
     <div className="h-full min-h-0 p-5">
       <section className="flex h-full min-h-0 flex-col">
-        {/* This file is per-host, but neither the control that says WHICH host
-            nor the readout of it lives here: both are the sidebar's, one row
-            away and always on screen. */}
+        {/* This file is per-host, but neither the control that says which host nor the readout of it lives here: both
+           are the sidebar's, one row away and always on screen. */}
         <HostScopeGate
           scope={scope}
           skeleton={
@@ -162,12 +140,8 @@ export function AgentSelectionGuideSection() {
 
 function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
   const { scope } = props;
-  // Host-scoped file: remount the editor with fresh content whenever the
-  // scoped host changes so one host's edits never carry to another. The query
-  // mounts only inside the gate, so while the scope is not usable it is held
-  // unsubscribed (hidden Activity) and cannot fire; once the scope is usable
-  // the context above supplies the scoped client, so the result read here is
-  // the scoped host's.
+  // Host-scoped file: remount the editor with fresh content whenever the scoped host changes so one host's edits
+  // never carry to another.
   const query = useAgentSelectionGuideGlobalQuery();
 
   let body: ReactNode;
@@ -211,7 +185,6 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
   return body;
 }
 
-/** Heading + description for the states that render no editor surface. */
 function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
   return (
     <section

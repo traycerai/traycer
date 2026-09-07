@@ -1,35 +1,8 @@
 import { appLogger } from "@/lib/logger";
 
 /**
- * First-time load instrumentation for terminal and TUI (terminal-agent) tiles.
- *
- * Measures the wall-clock path a tile travels from mounting to its first
- * painted frame of content, broken into the phases that actually cost time:
- *
- *   mount         tile component mounted (user opened the tab)
- *   list-ready    `terminal.list` resolved (host-has-session predicate known)
- *   prepare-done  per-tile launch payload built (TUI: `prepareLaunch` RPC done)
- *   create-done   `terminal.create` RPC succeeded (skipped when reattaching)
- *   session-handle session store acquired + stream opening
- *   snapshot      first host frame (scrollback) arrived
- *   xterm-open    lazy `@xterm/*` chunk loaded, Terminal created + opened
- *   writer-ready  writer registered, pending bytes flushed (first content)
- *   first-render  xterm committed its first frame (first paint)
- *
- * The first four spans subdivide the network/RPC bootstrap leg, which in
- * practice dominates first-paint time; `xterm-open` onward is the (cheap)
- * view leg. The view leg runs partly concurrently with the data leg
- * (`snapshot`), so adjacent deltas across that boundary can read slightly
- * negative - that is effect-flush ordering, not a real regression.
- *
- * Each phase is recorded once (the first occurrence) per session, keyed by
- * `sessionId`, so re-renders and reattach frames don't perturb the numbers.
- * On `first-render` the timeline is logged as a structured renderer event and
- * a `performance.measure` is emitted for each span so the spans also show up in
- * the browser Performance panel.
- *
- * Gating: on by default in dev, off under test, and opt-in for production
- * builds via `localStorage["traycer:perf:terminal"] = "1"`.
+ * First-time terminal/TUI load spans, recorded once per `sessionId`.
+ * Adjacent view/data deltas can be slightly negative (effect-flush ordering).
  */
 
 // Ordered so the summary table and the adjacent-span measures read top-to-bottom
@@ -80,9 +53,8 @@ function markName(sessionId: string, phase: TerminalLoadPhase): string {
 }
 
 /**
- * Open a timeline for a tile's first load. Idempotent: the first call wins,
- * later calls (re-mounts, the sibling reachability gate) are ignored, and a
- * session that has already completed is never re-measured.
+ * Open a timeline for a tile's first load.
+ * Idempotent: the first call wins, later calls (re-mounts, the sibling reachability gate) are ignored, and a session that has already completed is never re-measured.
  */
 export function beginTerminalLoad(
   sessionId: string,
@@ -101,9 +73,8 @@ export function beginTerminalLoad(
 }
 
 /**
- * Record the first time `phase` is reached for `sessionId`. No-ops when the
- * timeline is closed/absent or the phase was already seen. Reaching
- * `first-render` finalizes and logs the timeline.
+ * Record the first time `phase` is reached for `sessionId`.
+ * No-ops when the timeline is closed/absent or the phase was already seen.
  */
 export function markTerminalLoad(
   sessionId: string,
@@ -167,9 +138,8 @@ function finishTerminalLoad(
 }
 
 /**
- * Log the one-time cost of fetching the lazy `@xterm/*` chunk. Only the first
- * terminal opened in a session pays this download; later tiles reuse the
- * cached module, so this is reported once and separately from per-tile spans.
+ * Log the one-time cost of fetching the lazy `@xterm/*` chunk.
+ * Only the first terminal opened in a session pays this download; later tiles reuse the cached module, so this is reported once and separately from per-tile spans.
  */
 export function markXtermChunkLoad(durationMs: number): void {
   if (!instrumentationEnabled()) return;

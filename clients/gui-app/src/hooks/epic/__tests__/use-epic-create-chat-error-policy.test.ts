@@ -75,13 +75,7 @@ function makeError(code: RpcErrorCode, message: string): HostRpcError {
   });
 }
 
-/**
- * Verbatim shape of what the host puts on the wire when the requested worktree
- * could not be made: `WorktreeCreateFailedError` joins each failed entry's own
- * `git worktree add` stderr, and `dispatchRpc` answers 409 `RPC_ERROR` with
- * that string as the message - no dedicated wire code, by design. The reason
- * exists NOWHERE else the user can reach, which is why this arm forwards it.
- */
+/** Verbatim shape of what the host puts on the wire when the requested worktree could not be made: `WorktreeCreateFailedError` joins each failed entry's own `git worktree add` stderr, and `dispatchRpc` answers 409 `RPC_ERROR` with that string as the message - no dedicated wire code, by design. */
 const WORKTREE_CREATE_FAILED_MESSAGE =
   "git worktree add failed for traycer/tidy-badger at " +
   "/Users/x/.traycer/worktrees/repo-tidy-badger: " +
@@ -113,10 +107,7 @@ function getCreateOnError(): (
   ).onError;
 }
 
-/**
- * The MANUAL fork dialog's request: a precise boundary the user picked. Nobody
- * retries it, so every refusal it earns is terminal and must be reported.
- */
+/** Nobody retries it, so every refusal it earns is terminal and must be reported. */
 const VARIABLES: CreateChatMutationInput = {
   hostId: "host-test",
   epicId: "e",
@@ -133,11 +124,7 @@ const VARIABLES: CreateChatMutationInput = {
   },
 };
 
-/**
- * The CLONE-on-host-switch request. `boundary: "latest"` has exactly one
- * producer in this app (`cloneChatOnHostSwitch`), and that producer is standing
- * by to narrate the history downgrade and retry without `forkSource`.
- */
+/** `boundary: "latest"` has exactly one producer in this app (`cloneChatOnHostSwitch`), and that producer is standing by to narrate the history downgrade and retry without `forkSource`. */
 const CLONE_VARIABLES: CreateChatMutationInput = {
   hostId: "host-test",
   epicId: "e",
@@ -219,10 +206,7 @@ describe("useEpicCreateChatForHostClient error policy", () => {
     );
   });
 
-  // Review #1297 finding 1. The clone flow recovers from both of these - it
-  // narrates the downgrade and retries without `forkSource` - so a toast here
-  // describes an attempt, not an outcome, and the detail policy above makes it
-  // read as a specific terminal failure moments before the clone succeeds.
+  // The clone flow recovers from both of these - it narrates the downgrade and retries without `forkSource` - so a toast here describes an attempt, not an outcome, and the detail policy above makes it read as a specific terminal failure moments before the clone succeeds.
   it.each([
     ["E_FORK_CHECKPOINT_UNAVAILABLE" as const, "no assistant checkpoint yet"],
     ["DOWNGRADE_UNSUPPORTED" as const, "epic.createChat@1.1 unavailable"],

@@ -77,10 +77,8 @@ describe("<ServiceTierToggle />", () => {
   });
 
   it("skips past the model's defaultServiceTier and surfaces the upgrade tier", () => {
-    // The two-tier shape: a literal "default" entry plus an upgrade. The
-    // toggle must NOT pick `supportedServiceTiers[0]` (that's the default);
-    // it should flip to the non-default tier so clicking ON actually
-    // upgrades the speed.
+    // The toggle must not pick `supportedServiceTiers[0]` (that's the default); it should flip to the non-default
+    // tier so clicking ON actually upgrades the speed.
     const onChange = vi.fn();
     renderToggle({
       selectedModel: makeModel({
@@ -127,12 +125,7 @@ describe("<ServiceTierToggle />", () => {
   });
 
   it("is hidden when the stored preference doesn't match the current model's tier id (sticky preference, no destructive overwrite)", () => {
-    // User had `priority` on Codex; now selected a non-Codex model with
-    // no tiers. Toggle hides - but the parent's `value` prop stays as
-    // `"priority"`. Switching back to a Codex model that advertises
-    // `priority` will re-show the toggle with aria-pressed=true. (This
-    // is the renderer half of the sticky-preference contract; the wire
-    // filter lives in the codex-adapter.)
+    // User had `priority` on Codex; now selected a non-Codex model with no tiers.
     const { container } = renderToggle({
       selectedModel: makeModel({
         slug: "claude-sonnet-4-6",

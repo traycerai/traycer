@@ -19,9 +19,7 @@ interface CommandSegmentProps {
   // Terminal outcome when the turn ended mid-run (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
   endState: SegmentEndState;
-  // True when the run ended because the host stopped it rather than because the
-  // command failed: the provider reports its own kill with a synthetic exit
-  // code, and showing that would blame the command for something we did.
+  // True when the run ended because the host stopped it rather than because the command failed: the provider reports its own kill with a synthetic exit code, and showing that would blame the command for something we did.
   stopped: boolean;
   // Latest progress line (null today; commands carry no progress signal yet).
   progress: string | null;
@@ -29,10 +27,8 @@ interface CommandSegmentProps {
   startedAt: number;
   variant: "card" | "row";
   headerFindUnitId: string | null;
-  // Seeds the disclosure at mount, once. Open state is local here, so the copy
-  // of this row inside the bounded live activity window cannot hand its own
-  // over: a click there promotes, and this is how the copy that replaces it
-  // knows it was the row asked for.
+  // Seeds the disclosure at mount, once.
+  // Open state is local here, so the copy of this row inside the bounded live activity window cannot hand its own over: a click there promotes, and this is how the copy that replaces it knows it was the row asked for.
   initiallyOpen: boolean;
 }
 
@@ -52,10 +48,7 @@ export function CommandSegment(props: CommandSegmentProps) {
   const { endState, stopped, progress, startedAt } = props;
   const errored = !stopped && exitCode !== null && exitCode !== 0;
   const [open, setOpen] = useState<boolean>(props.initiallyOpen);
-  // Progress line under a running command, when one exists.
-  // Progress only, and only when there is some. Commands carry no progress
-  // signal today, so in practice a running command now renders no footer at all
-  // - its heartbeat is the elapsed counter and pulse in the header row.
+  // Progress only, and only when there is some.
   const streamingFooter =
     isStreaming && progress !== null && progress.length > 0 ? (
       <StreamingActivityFooter progress={progress} />
@@ -105,19 +98,7 @@ export function CommandSegment(props: CommandSegmentProps) {
       >
         {commandLabelEl}
       </TooltipWrapper>
-      {/* Elapsed, then the pulse, then the outcome - the same trailing cluster
-          `GenericToolHeader` and the subagent rows build, so a mixed group lines
-          its right edge up. The counter used to sit in the streaming footer,
-          which gave a running command a second row holding nothing but "37s":
-          commands report no progress, so the footer existed only to carry it.
-
-          Only while it runs. A settled row shows no total, which is unchanged -
-          the counter only ever existed while streaming - and is a density call
-          for a list of finished rows, NOT a deferral to the group header, whose
-          summary carries a duration for thinking alone.
-
-          `data-find-skip` because it is inside the row's find anchor now, and
-          the projection indexes the command, not the ticking digits. */}
+      {/* A settled row shows no total, which is unchanged - the counter only ever existed while streaming - and is a density call for a list of finished rows, NOT a deferral to the group header, whose summary carries a duration for thinking alone. `data-find-skip` because it is inside the row's find anchor now, and the projection indexes the command, not the ticking digits. */}
       <span className="ml-auto flex shrink-0 items-center gap-1.5">
         {isStreaming ? (
           <span data-find-skip className="contents">
@@ -179,9 +160,8 @@ export function CommandSegment(props: CommandSegmentProps) {
       onOpenChange={setOpen}
       header={header}
       headerAction={null}
-      // The card variant is the promoted background command. Its heartbeat -
-      // elapsed and pulse - is in the shared header now, so this carries only a
-      // progress line, and only if one is ever reported.
+      // The card variant is the promoted background command.
+      // Its heartbeat - elapsed and pulse - is in the shared header now, so this carries only a progress line, and only if one is ever reported.
       collapsedPreview={streamingFooter}
       body={body}
       tone={commandCardTone(errored, isStreaming)}

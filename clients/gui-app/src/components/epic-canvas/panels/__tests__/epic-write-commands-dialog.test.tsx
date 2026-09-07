@@ -16,11 +16,6 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicWriteCommands: () => mocks.commands,
 }));
 
-/**
- * The dialog reads `retryWriteCommand` / `discardWriteCommand` off the epic
- * store as selector functions - this mock is the selector's whole state
- * object, not a store, so any selector the dialog passes resolves against it.
- */
 interface MockedOpenEpicState {
   readonly retryWriteCommand: (commandId: string) => void;
   readonly discardWriteCommand: (commandId: string) => void;

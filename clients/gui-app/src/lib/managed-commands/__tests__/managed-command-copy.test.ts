@@ -19,9 +19,8 @@ describe("managed command naming", () => {
   });
 
   it("drops the separator when a shell carries no description", () => {
-    // The " · " promises a name after it. One guard, here, so no surface has
-    // to remember to write its own - which is how the resource monitor ended
-    // up with a second spelling of this title.
+    // The " · " promises a name after it.
+    // One guard, here, so no surface has to remember to write its own - which is how the resource monitor ended up with a second spelling of this title.
     expect(managedCommandTitle({ description: "", monitoring: true })).toBe(
       "Monitor",
     );
@@ -43,9 +42,7 @@ describe("managed command naming", () => {
   });
 
   it("keeps the umbrella noun for copy that names no particular shell", () => {
-    // The container ("Shells"), the resource monitor's kind column and the
-    // output window's own name all speak about shells in general, where there
-    // is no flag to follow.
+    // The container ("Shells"), the resource monitor's kind column and the output window's own name all speak about shells in general, where there is no flag to follow.
     expect(MANAGED_COMMAND_NOUN).toBe("Shell");
     expect(managedCommandNoun(false)).toBe(MANAGED_COMMAND_NOUN);
     expect(managedCommandNoun(true)).toBe("Monitor");

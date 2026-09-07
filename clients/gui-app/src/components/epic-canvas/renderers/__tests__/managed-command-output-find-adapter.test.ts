@@ -320,9 +320,8 @@ describe("createManagedCommandOutputFindAdapter", () => {
       total: 2,
       activeUnitId: "tile-1:line-3",
     });
-    // Clamping is not a reveal. The tile drops follow mode whenever it is asked
-    // to reveal, so revealing here would take a reader who is tailing live
-    // output off the tail the moment their active match aged out of the window.
+    // Clamping is not a reveal.
+    // The tile drops follow mode whenever it is asked to reveal, so revealing here would take a reader who is tailing live output off the tail the moment their active match aged out of the window.
     expect(revealMatch).not.toHaveBeenCalled();
   });
 
@@ -381,9 +380,7 @@ describe("createManagedCommandOutputFindAdapter", () => {
     const listener = vi.fn();
     adapter.subscribe(listener);
 
-    // The tile re-pushes the environment on every streamed line. With no query
-    // typed, the recomputed snapshot is identical, so the find store must not
-    // be written once per line of output.
+    // With no query typed, the recomputed snapshot is identical, so the find store must not be written once per line of output.
     adapter.updateEnvironment(environment({ lines, revealMatch: vi.fn() }));
     adapter.updateEnvironment(environment({ lines, revealMatch: vi.fn() }));
 

@@ -12,12 +12,7 @@ const CLEAR = {
 } as const;
 
 describe("resolveTileFindOwnerBlocker", () => {
-  // The regression from traycerai/traycer#592: `TopLevelTabHost` mounts the
-  // restored Epic surface from the tabs store, and the router is only navigated
-  // when a tab is ACTIVATED. A restored window therefore sits at `/` with a
-  // focused Epic surface and an open file tile, and the old epic-path allow-list
-  // blocked ownership there - killing select-all AND find in the app's normal
-  // startup state.
+  // The regression from traycerai/traycer#592: `TopLevelTabHost` mounts the restored Epic surface from the tabs store, and the router is only navigated when a tab is ACTIVATED.
   it("does not block the restored canvas at the root pathname", () => {
     expect(resolveTileFindOwnerBlocker({ ...CLEAR, pathname: "/" })).toBe(null);
   });

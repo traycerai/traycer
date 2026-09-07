@@ -75,11 +75,6 @@ vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
   }),
 }));
 
-// The sidebar reads the Epic SESSION's host (it sits outside every tile's
-// `<TabHostProvider>`); no `EpicSessionContext` is mounted here, so pin it to
-// the fixture's host explicitly. This used to mock the app-wide reader the
-// component no longer imports - a `vi.mock` on an unresolved specifier is
-// silent, and the row was rendering under `UNKNOWN_HOST_PLACEHOLDER`.
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => HOST_ID,
 }));

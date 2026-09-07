@@ -13,43 +13,19 @@ import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 /**
- * The click handler a legacy `<traycer-*>` reference component runs, or `null`
- * when the reference is not openable. A `null` handler is the single signal the
- * component uses to fall back to plain label text - so missing ids, an absent
- * epic-session context, and a same-epic node that does not resolve all degrade
- * the chip to inert text rather than a dead click.
+ * null handler is the signal to render plain text, not a dead click.
  */
 export type TraycerReferenceOpenHandler =
   | ((event: MouseEvent<HTMLElement>) => void)
   | null;
 
-/**
- * What `useTraycerReferenceOpenHandler` resolves in a single render pass:
- *
- * - `onOpen` - the click handler (or `null` when the reference is not
- *   openable, the single signal the chip uses to degrade to plain text).
- * - `sameEpicNodeRef` - the resolved `EpicNodeRef` for a `same-epic-node`
- *   target, `null` for `navigate` (cross-epic) and `none`. This is the ONLY
- *   case a chip may become a drag source: drag eligibility is narrower than
- *   click (which is also non-null for cross-epic navigation), so the resolved
- *   ref is surfaced here for the chip to gate on.
- */
+/** onOpen is null when not openable. sameEpicNodeRef is the only drag-eligible case; click also works for cross-epic navigate. */
 export interface TraycerReferenceOpenState {
   readonly onOpen: TraycerReferenceOpenHandler;
   readonly sameEpicNodeRef: EpicNodeRef | null;
 }
 
-/**
- * What a click on the reference should do, resolved once in render:
- *
- * - `none` - not openable (missing ids, no epic-session context, a same-epic
- *   node that does not resolve / has no active host). The handler is `null` and
- *   the chip renders plain text.
- * - `same-epic-node` - open the resolved node as a replaceable preview tile in
- *   the open epic's current tab.
- * - `navigate` - navigate to the target epic and focus it, reusing
- *   `focusArtifactId` for a node (D1); `traycer-epic` carries `undefined`.
- */
+/** none: handler null, chip is plain text. same-epic-node: preview tile. navigate: target epic; traycer-epic carries undefined focusArtifactId. */
 type OpenTarget =
   | { readonly kind: "none" }
   | {
@@ -63,36 +39,11 @@ type OpenTarget =
       readonly focusArtifactId: string | undefined;
     };
 
-/**
- * Builds the open/navigate handler shared by every legacy `<traycer-*>`
- * reference component. The tags embed the real ids, so opening is render-time
- * only - there is no migration and no new route params.
- *
- * - `nodeId` is the embedded spec / ticket / chat id; pass `null` for
- *   `<traycer-epic>`, which focuses the epic without an artifact.
- * - SAME epic (`epicId` === the currently-open epic): resolve `nodeId` against
- *   the open-epic projection via `epicNodeRefForNodeId` and open it as a
- *   replaceable preview tile. A `null` ref (not yet projected / not openable)
- *   yields a `null` handler so the chip stays plain text.
- * - CROSS epic: navigate to the target epic and reuse `focusArtifactId =
- *   nodeId` (D1 - the auto-open path already opens chat tiles, so chats reuse
- *   `focusArtifactId`; no `focusChatId`) with a fresh `focusedAt` (G2) so a
- *   re-click after closing the tab re-opens it. `<traycer-epic>` passes no
- *   artifact id and only focuses the epic.
- *
- * These components live in the global `DEFAULT_COMPONENTS` map and may render
- * where no `<EpicSessionProvider>` exists. Without the handle (or an active
- * host for a node ref) the handler is `null` and the component renders plain
- * text.
- */
+/** Shared open handler for legacy `<traycer-*>` tags. Same epic: open a preview tile; cross epic: `focusArtifactId = nodeId` with a fresh `focusedAt`. Without an epic-session handle (or an active host for a node ref) the handler is `null` and the chip is plain text. */
 export function useTraycerReferenceOpenHandler(input: {
   readonly epicId: string | undefined;
   readonly nodeId: string | undefined;
-  /**
-   * Whether this reference type opens a node (spec / ticket / chat). When
-   * `true`, a missing or empty `nodeId` makes the reference non-openable. When
-   * `false` (`traycer-epic`), the reference focuses the epic with no node.
-   */
+  /** true: missing nodeId is non-openable. false (traycer-epic): focus epic with no node. */
   readonly requiresNode: boolean;
 }): TraycerReferenceOpenState {
   const handle = useMaybeOpenEpicHandle();
@@ -162,9 +113,7 @@ export function useTraycerReferenceOpenHandler(input: {
 }
 
 /**
- * Resolve, once in render, what a click should do. All "not openable" cases
- * collapse to `none`; the redundant guard layers the handler used to repeat are
- * encoded here a single time.
+ * Resolve click once in render. All not-openable cases collapse to none.
  */
 function resolveOpenTarget(input: {
   readonly epicId: string | undefined;
@@ -185,11 +134,8 @@ function resolveOpenTarget(input: {
   if (handle === null) return { kind: "none" };
   if (requiresNode && normalizedNodeId === null) return { kind: "none" };
 
-  // SAME-epic NODE: resolve the node against the open-epic projection and open
-  // it as a preview tile. A node that does not resolve (deleted / not yet
-  // projected / not openable) or a missing active host degrades to plain text.
-  // An epic-only reference (no node id) falls through to navigate even for the
-  // open epic, re-focusing it harmlessly rather than dead-clicking.
+  // Same-epic node: preview tile, or plain text if it does not resolve.
+  // Epic-only (no node id) falls through to navigate even for the open epic.
   if (epicId === handle.epicId && normalizedNodeId !== null) {
     if (activeHostId === null) return { kind: "none" };
     const ref = epicNodeRefForNodeId(

@@ -3,9 +3,8 @@ import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 /**
- * Per-host Project-scope workspace selection for provider MCP settings.
- * Avoids the B6 `folders[0]`-from-global-history misrouting: selection is
- * explicit and host-scoped.
+ * Per-host Project-scope workspace selection for provider MCP settings. Avoids the B6
+ * `folders[0]`-from-global-history misrouting: selection is explicit and host-scoped.
  */
 interface ProvidersWorkspaceSelectionStore {
   /** hostId → selected workspace root path */

@@ -1,12 +1,7 @@
 import type { ToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { SegmentPanel } from "./segment-panel";
 
-/**
- * Renders a precomputed `ToolInputDetail` (the host-side structured tool
- * input) as a `$ command` line or a clean label/value list - never raw JSON.
- * Shared by the tool-call card and the resolved-approval card so both read the
- * same persisted shape. The raw harness input is no longer stored.
- */
+/** Renders a precomputed `ToolInputDetail` (the host-side structured tool input) as a `$ command` line or a clean label/value list - never raw JSON. */
 export function ToolInputPanel({
   detail,
 }: {

@@ -5,35 +5,25 @@ import {
 } from "@/lib/brand/traycer-mark";
 
 /**
- * Marks the shareable region of a usage surface. Each surface puts the
- * bare attribute (`data-usage-export-region=""`) on its summary wrapper
- * and resolves it at click time, scoped under its own root node so two
- * mounted usage surfaces can never capture each other's region.
+ * Marks the shareable region of a usage surface.
+ * Each surface puts the bare attribute (`data-usage-export-region=""`) on its summary wrapper and resolves it at click time, scoped under its own root node so two mounted usage surfaces can never capture each other's region.
  */
 export const USAGE_EXPORT_REGION_SELECTOR = "[data-usage-export-region]";
 
 /**
- * Marks a node INSIDE the export region that must not appear in the
- * shared image (workspace-internal detail like the by-host split). The
- * live surface keeps rendering it; only the capture clone drops it.
+ * Marks a node INSIDE the export region that must not appear in the shared image (workspace-internal detail like the by-host split).
+ * The live surface keeps rendering it; only the capture clone drops it.
  */
 const USAGE_EXPORT_EXCLUDE_SELECTOR = "[data-usage-export-exclude]";
 
 /**
- * Marks a horizontal scroller INSIDE the export region whose full content
- * must appear in the shared image, scaled down to fit (the year-wide
- * activity heatmap). A shared image has no scrollbar, so capturing the
- * scroller as-is would silently crop the year to whatever slice the live
- * surface happened to be scrolled to.
+ * Marks a horizontal scroller INSIDE the export region whose full content must appear in the shared image, scaled down to fit (the year-wide activity heatmap).
+ * A shared image has no scrollbar, so capturing the scroller as-is would silently crop the year to whatever slice the live surface happened to be scrolled to.
  */
 export const USAGE_EXPORT_FIT_SELECTOR = "[data-usage-export-fit]";
 
 /**
- * Marks a node whose TEXT must be replaced in the shared image with the
- * attribute's value - for copy that is right on the live page but leaks
- * workspace-internal detail in a screenshot (a host's display name in the
- * cost figure's scope note). The live surface keeps the specific text;
- * only the capture clone is rewritten.
+ * Marks a node whose TEXT must be replaced in the shared image with the attribute's value - for copy that is right on the live page but leaks workspace-internal detail in a screenshot (a host's display name in the cost figure's scope note).
  */
 export const USAGE_EXPORT_REDACT_ATTRIBUTE = "data-usage-export-redact";
 
@@ -50,22 +40,7 @@ export interface UsageExportImageParams {
 }
 
 /**
- * Rasterise a usage summary region into a shareable PNG: padding around
- * the content, a heading row above it, and a Traycer branding footer
- * below, composed in an offscreen wrapper rather than drawn onto a canvas
- * so the frame uses the app's real fonts, theme tokens, and layout.
- *
- * The wrapper carries `usage-chart-root` (the class-scoped
- * series/harness palette variables) and `@container` (the loaded bodies' content
- * folds are container-keyed; without a container ancestor the hero would
- * collapse to its narrow layout), and its width is pinned to the live
- * region's so the clone lays out exactly as on screen.
- *
- * The region is deep-cloned, and every SVG presentation attribute holding
- * a CSS `var(...)` (the ECharts palette plumbing) is rewritten to the LIVE
- * node's computed value first - serialisation otherwise drops the charts
- * to black, since the clone's rasterising `<img>` document has no custom
- * properties to resolve against.
+ * Rasterise a usage summary region into a shareable PNG: padding around the content, a heading row above it, and a Traycer branding footer below, composed in an offscreen wrapper rather than drawn onto a canvas so the frame uses the app's real fonts, theme.
  */
 export async function captureUsageExportImageBlob(
   params: UsageExportImageParams,
@@ -86,9 +61,7 @@ export async function captureUsageExportImageBlob(
   wrapper.appendChild(cloneRegionWithResolvedPalette(region));
   wrapper.appendChild(buildBrandingFooter());
 
-  // Parked offscreen but still in the document: without these, keyboard
-  // and assistive tech can reach the clone's dead buttons while a slow
-  // rasterisation is in flight.
+  // Parked offscreen but still in the document: without these, keyboard and assistive tech can reach the clone's dead buttons while a slow rasterisation is in flight.
   wrapper.setAttribute("inert", "");
   wrapper.setAttribute("aria-hidden", "true");
   wrapper.style.pointerEvents = "none";
@@ -97,11 +70,7 @@ export async function captureUsageExportImageBlob(
     const blob = await toBlob(wrapper, {
       pixelRatio: 2,
       backgroundColor: background,
-      // The wrapper parks offscreen (`fixed; left: -100000px`) while it
-      // lays out, and html-to-image inlines COMPUTED styles - without
-      // this reset the clone keeps that offset, the canvas paints at
-      // (0,0), and the export is a solid background with every pixel of
-      // content 100000px off-canvas.
+      // The wrapper parks offscreen (`fixed; left: -100000px`) while it lays out, and html-to-image inlines COMPUTED styles - without this reset the clone keeps that offset, the canvas paints at (0,0), and the export is a solid background with every pixel of.
       style: { position: "static", left: "0", top: "0" },
     });
     if (blob === null) {
@@ -131,8 +100,7 @@ function buildHeader(heading: string, subheading: string | null): HTMLElement {
 }
 
 /**
- * The same lockup the onboarding wordmark renders - mark + lowercase
- * "traycer" in the heading face - with the site opposite it.
+ * The same lockup the onboarding wordmark renders - mark + lowercase "traycer" in the heading face - with the site opposite it.
  */
 function buildBrandingFooter(): HTMLElement {
   const footer = document.createElement("div");
@@ -164,22 +132,7 @@ function buildBrandingFooter(): HTMLElement {
   return footer;
 }
 
-/**
- * Deep-clone the region and fix up everything a bare `cloneNode` loses:
- *
- * - SVG presentation attributes carrying `var(...)` are rewritten to the
- *   source element's computed value (the ECharts palette plumbing).
- * - Marked scrollers are scaled down so their WHOLE content fits the
- *   region's width (see {@link USAGE_EXPORT_FIT_SELECTOR}). The export is
- *   deterministic - the same image whatever the live scroll position -
- *   because a still frame cannot offer the rest, so anything not captured
- *   is simply lost rather than one scroll away.
- *
- * Original and clone are walked in parallel - `cloneNode(true)` preserves
- * order, so index `i` in both lists is the same element. Node removals
- * (the exclude-strip) and text rewrites (redaction) run only AFTER the
- * walk, since removal desynchronizes the index pairing.
- */
+/** Deep-clone the region and fix up everything a bare `cloneNode` loses: */
 function cloneRegionWithResolvedPalette(region: HTMLElement): HTMLElement {
   const clone = region.cloneNode(true);
   if (!(clone instanceof HTMLElement)) {
@@ -224,17 +177,7 @@ function cloneRegionWithResolvedPalette(region: HTMLElement): HTMLElement {
 }
 
 /**
- * Shrink a marked scroller's clone until its whole scrollable content fits
- * the width it has on screen - the heatmap's full year rather than the ~3
- * visible months.
- *
- * Measurements come from the LIVE node: the clone is parked in an offscreen
- * wrapper and has not laid out yet, so its own metrics are meaningless.
- * `scale()` does not affect layout, so the clone's own height is set to the
- * scaled content height - otherwise the scroller keeps the unscaled box and
- * leaves a band of empty pixels under the shrunken grid. Content wider than
- * the viewport is the only case worth handling; `f` is capped at 1 so a
- * scroller that already fits is never blown up.
+ * Shrink a marked scroller's clone until its whole scrollable content fits the width it has on screen - the heatmap's full year rather than the ~3 visible months.
  */
 function fitScrollerToWidth(source: HTMLElement, target: HTMLElement): void {
   const { clientWidth, scrollWidth, scrollHeight } = source;
@@ -252,11 +195,7 @@ function fitScrollerToWidth(source: HTMLElement, target: HTMLElement): void {
 }
 
 /**
- * The nearest ancestor's opaque background, so a capture of a region whose
- * own background is transparent (most dialog bodies) doesn't export as a
- * transparent PNG that looks broken on light chat clients. Computed style
- * normalizes "no background" to `rgba(0, 0, 0, 0)`; anything else - solid
- * or alpha-tinted - is a deliberate surface color and wins as-is.
+ * The nearest ancestor's opaque background, so a capture of a region whose own background is transparent (most dialog bodies) doesn't export as a transparent PNG that looks broken on light chat clients.
  */
 function resolveOpaqueBackgroundColor(node: HTMLElement): string {
   let el: HTMLElement | null = node;

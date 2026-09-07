@@ -2,16 +2,8 @@ import { describe, expect, it } from "vitest";
 import { collabTileNotice } from "../collab-tile-availability-copy";
 
 /**
- * `unavailable` and `loading`(budget-elapsed) used to render byte-identical
- * markup - the same pulsing-bars placeholder, told apart only by a
- * `data-testid` suffix nothing visible carries. These pins are the whole
- * reason this module exists: the three outcomes must be three DISTINCT
- * strings, not one generic notice reused three ways.
- *
- * A fourth outcome hides inside `"unavailable"` itself: every layer below
- * collapses an artifact the body plane has not answered yet into the same
- * `"unavailable"` union member a genuine host refusal produces, so
- * `subscribeAnswered` is what tells the two apart here.
+ * `unavailable` and `loading`(budget-elapsed) used to render byte-identical markup - the same pulsing-bars placeholder, told apart only by a `data-testid` suffix nothing visible carries.
+ * These pins are the whole reason this module exists: the three outcomes must be three DISTINCT strings, not one generic notice reused three ways.
  */
 describe("collabTileNotice", () => {
   it("unanswered + unavailable + budget NOT elapsed: renders null - this is the lever. A tile that has not been asked yet must not speak a host-refusal verdict nobody gave", () => {

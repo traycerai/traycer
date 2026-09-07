@@ -25,15 +25,7 @@ import {
 import { WorkspaceFileIcon } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 
 /**
- * Single source of truth for rendering the icon of a tab/node anywhere in
- * the epic canvas surface (tab strip, DnD drag preview, etc). Dispatches on
- * the `EpicNodeRef` discriminator so consumers never re-implement the
- * chat / workspace-file / static-artifact split.
- *
- * - `variant="live"` (default): chat tabs render the progress spinner that
- *   tracks live chat state. Use inside the mounted tab strip.
- * - `variant="static"`: chat tabs render their static lucide icon. Use for
- *   drag previews and any place where live state isn't appropriate.
+ * Dispatches on the `EpicNodeRef` discriminator so consumers never re-implement the chat / workspace-file / static-artifact split. - `variant="live"` (default): chat tabs render the progress spinner that tracks live chat state.
  */
 export function EpicNodeTabIcon(props: {
   readonly node: EpicNodeRef;
@@ -56,9 +48,7 @@ export function EpicNodeTabIcon(props: {
 }
 
 /**
- * Live chat/TUI tab icon decoration. Kept in a leaf so non-archivable node
- * kinds do not subscribe to the epic projection, and provider-less drag
- * previews keep rendering through the registry-backed selector.
+ * Kept in a leaf so non-archivable node kinds do not subscribe to the epic projection, and provider-less drag previews keep rendering through the registry-backed selector.
  */
 function ArchiveAwareEpicNodeTabIcon(props: {
   readonly node: EpicNodeRef;
@@ -92,7 +82,6 @@ function EpicNodeTabIconContent(props: {
       <ChatProgressIcon
         epicId={props.epicId}
         chatId={props.node.id}
-        // The tab ref's bound host - tabs bind a host for life, so this is the
         // host whose session this tab's tile opened.
         hostId={props.node.hostId}
         className={props.className}
@@ -181,18 +170,7 @@ function TerminalNodeTabIcon(props: {
 }
 
 /**
- * Live TUI-agent tab icon: swaps the harness brand mark for the running
- * spinner while the agent is working, mirroring the sidebar's terminal-agent
- * row so both surfaces read the same. Epic-wide active-agent awareness is the
- * sole authority - a TUI agent's PTY runs host-side, so there is no renderer
- * run-status to smooth against and no background tier to distinguish.
- * Notification tones still outrank the spinner (see NotificationIndicatorIcon).
- *
- * Reads awareness through the registry rather than `useOpenEpicHandle`, so this
- * icon stays renderable outside an `<EpicSessionProvider>` (drag previews,
- * mount-lifecycle tests) - an unregistered Epic degrades to "not working"
- * instead of throwing. The plain-terminal path stays hook-free entirely: a
- * shell tab has no agent to be active.
+ * Reads awareness through the registry rather than `useOpenEpicHandle`, so this icon stays renderable outside an `<EpicSessionProvider>` (drag previews, mount-lifecycle tests) - an unregistered Epic degrades to "not working" instead of throwing.
  */
 function TuiAgentLiveTabIcon(props: {
   readonly nodeId: string;
@@ -223,12 +201,8 @@ function TuiAgentLiveTabIcon(props: {
 }
 
 /**
- * TUI-agent tab/node icon: the underlying harness's brand mark (Claude, Codex,
- * …) so a terminal agent reads as the tool driving it rather than a generic
- * bot. Falls back to the static bot glyph when the harness can't be resolved -
- * a legacy record, or the provider-less drag overlay (see
- * {@link useMaybeEpicTuiAgentHarnessId}). Brand marks render in their own
- * colors; they intentionally don't follow the per-type icon-color customization.
+ * TUI-agent tab/node icon: the underlying harness's brand mark (Claude, Codex, …) so a terminal agent reads as the tool driving it rather than a generic bot.
+ * Falls back to the static bot glyph when the harness can't be resolved - a legacy record, or the provider-less drag overlay (see {@link useMaybeEpicTuiAgentHarnessId}).
  */
 function TuiAgentTabIcon(props: {
   readonly nodeId: string;

@@ -1,11 +1,5 @@
 /**
- * Drag-overlay chips for the root DndContext. Content is derived purely
- * from the drag payload (tile ref resolved once at drag start, rail panel
- * definition, header tab) - the overlay mounts at the app shell, outside
- * any epic session provider, so chips must not read live epic projections.
- * Titles therefore show the payload's snapshot `name`, not the live title. The
- * one exception is a shell's output window, whose tile carries no name worth
- * showing at all - see `ManagedCommandOutputTileDragOverlay`.
+ * Content is derived purely from the drag payload (tile ref resolved once at drag start, rail panel definition, header tab) - the overlay mounts at the app shell, outside any epic session provider, so chips must not read live epic projections.
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
@@ -77,11 +71,8 @@ type CanvasOpenableDragSource = Exclude<
 >;
 
 /**
- * Rail drags never resolve an overlay tile (`resolveOverlayTileForSource`
- * returns null for them), so a non-null tile always pairs with a
- * canvas-openable source that carries an `epicId`. Narrowing once here lets
- * the node chip render from the narrowed type instead of an empty-string
- * epic sentinel.
+ * Rail drags never resolve an overlay tile (`resolveOverlayTileForSource` returns null for them), so a non-null tile always pairs with a canvas-openable source that carries an `epicId`.
+ * Narrowing once here lets the node chip render from the narrowed type instead of an empty-string epic sentinel.
  */
 function canvasOpenableDragSource(
   source: EpicCanvasDragSourceData | null,
@@ -92,11 +83,7 @@ function canvasOpenableDragSource(
   return source;
 }
 
-/**
- * Overlay content host: renders the chip matching the active drag payload.
- * Mounted inside the root `DragOverlay`. Subscribes to the drag store's
- * active fields only - preview ticks never re-render it.
- */
+/** Subscribes to the drag store's active fields only - preview ticks never re-render it. */
 export function EpicRootDragOverlayContent() {
   const overlayTile = useEpicDndStore((s) => s.activeOverlayTile);
   // A dragged TILE is the tab itself, so its overlay takes the tile's measured
@@ -112,9 +99,7 @@ export function EpicRootDragOverlayContent() {
     activeSource?.kind === WORKSPACE_FOLDER_DND_TYPE ? activeSource : null;
 
   return (
-    // One wrapper for every chip variant. dnd-kit's `<DragOverlay>` takes no
-    // ref of its own, so this is the outermost element we own; it exists only
-    // while a drag is active. `w-max` keeps the wrapper hugging the chip.
+    // One wrapper for every chip variant. dnd-kit's `<DragOverlay>` takes no ref of its own, so this is the outermost element we own; it exists only while a drag is active.
     <div
       data-testid="drag-overlay-marker"
       className="pointer-events-none w-max"
@@ -125,10 +110,8 @@ export function EpicRootDragOverlayContent() {
             style={
               tileSourceWidth === null ? undefined : { width: tileSourceWidth }
             }
-            // The chip itself is `w-max max-w-[min(80vw,24rem)]`, so a width on
-            // this wrapper alone does nothing - a 192px tile rendered a 360px
-            // chip. The child variants override both, which makes the dragged
-            // object the tile at its own measured width.
+            // The chip itself is `w-max max-w-[min(80vw,24rem)]`, so a width on this wrapper alone does nothing - a 192px tile rendered a 360px chip.
+            // The child variants override both, which makes the dragged object the tile at its own measured width.
             className={cn(
               tileSourceWidth === null
                 ? undefined
@@ -243,15 +226,8 @@ function EpicCanvasNodeDragOverlay(props: {
 }
 
 /**
- * The dragged output window has no label of its own (its tile is just the
- * command pointer), so the chip reads the shell's live title the way the tab it
- * came from does - dragging "Output" out of a strip that says "Monitor · deploy
- * watcher" is the chip disagreeing with the thing under the cursor.
- *
- * The exception to this module's no-live-projections rule (see the header): the
- * chat-session registry is a module singleton, not an epic-scoped provider, so
- * it is readable from the app shell. Falls back to the payload's snapshot name
- * when the owning chat has no live session, exactly as the tab does.
+ * The dragged output window has no label of its own (its tile is just the command pointer), so the chip reads the shell's live title the way the tab it came from does - dragging "Output" out of a strip that says "Monitor · deploy watcher" is the chip disagreeing with the thing under the cursor.
+ * The exception to this module's no-live-projections rule (see the header): the chat-session registry is a module singleton, not an epic-scoped provider, so it is readable from the app shell.
  */
 function ManagedCommandOutputTileDragOverlay(props: {
   readonly node: ManagedCommandOutputTileRef;

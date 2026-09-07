@@ -181,10 +181,7 @@ describe("useTaskDeleteWorktreeCandidates", () => {
   it("computes provenRemovable against the POST-delete state (owners emptied)", async () => {
     mockHostClient.request.mockResolvedValue({
       worktrees: [
-        // Clean, at the upstream tip (ahead 0), but still owned by the Task
-        // being deleted. On the always-on list this stays out of the green
-        // tiers (owners gate), yet here - modelling the post-delete state -
-        // it is proven-removable and defaults checked.
+        // Clean, at the upstream tip (ahead 0), but still owned by the Task being deleted.
         entry({
           worktreePath: "/wt/tip",
           owners: [owner("epic-1")],

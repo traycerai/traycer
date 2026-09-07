@@ -234,12 +234,7 @@ describe("didChatTimelineKeySequenceChange", () => {
     ).toBe(true);
   });
 
-  /**
-   * The baseline is what the list last RENDERED, so a render React discarded
-   * must not move it. Deriving it from a render-time cache would: a discarded
-   * [a,b,c] would leave the next real render comparing three keys against
-   * three and calling a genuine insertion settled content.
-   */
+  /** The baseline is what the list last RENDERED, so a render React discarded must not move it. Deriving it from a render-time cache would: a discarded [a,b,c] would leave the next real render comparing three keys against three and calling a genuine insertion settled content. */
   it("still reports the insertion when a discarded render already saw it", () => {
     const committed = chatTimelineKeySequence(rowsFor("a", "b"));
 

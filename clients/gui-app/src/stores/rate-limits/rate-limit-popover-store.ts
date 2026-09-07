@@ -5,10 +5,8 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
- * The Overview tab, one tab per connected host-RPC provider, and - when the
- * account is eligible - the GUI-sourced "traycer" tab. `"traycer"` is a
- * synthetic entry: it is NOT a `RateLimitProviderId` and does not flow through
- * `useConfiguredRateLimitProviders()`.
+ * The Overview tab, one tab per connected host-RPC provider, and - when the account is eligible -
+ * the GUI-sourced "traycer" tab.
  */
 export type RateLimitPopoverTab = "overview" | RateLimitProviderId | "traycer";
 
@@ -20,25 +18,7 @@ interface RateLimitPopoverSize {
 interface RateLimitPopoverStoreState {
   readonly activeTab: RateLimitPopoverTab;
   readonly size: RateLimitPopoverSize | null;
-  /**
-   * Which host's usage this surface is READING — never which host the window
-   * runs on. Picking here swaps a transient client and nothing else, exactly
-   * like the Settings sidebar switcher (`settings-host-scope-store.ts`); where
-   * new work lands is still `HostDirectoryService.selectById`'s answer alone.
-   *
-   * `null` means "follow the active host", which is not the same as "no host":
-   * keeping the unset case distinct is what lets a single-host user never see
-   * a stale id after their only host is re-registered.
-   *
-   * Unlike the Settings viewing scope this one IS persisted, and the reason the
-   * two differ is what each scope can do. Settings is an administration surface
-   * whose scope aims destructive verbs, so a pick that outlived a relaunch
-   * would point them at a machine last touched days ago. This surface only
-   * READS usage, and someone who watches one machine's limits wants that same
-   * machine on the next launch rather than a pick they must redo every time.
-   * A pick that no longer resolves is still never substituted silently — it
-   * surfaces as `vanished`/`unreachable` with a way back to the active host.
-   */
+  /** Which host's usage this surface is READING - never which host the window runs on. */
   readonly scopedHostId: string | null;
   readonly setActiveTab: (tab: RateLimitPopoverTab) => void;
   readonly setSize: (size: RateLimitPopoverSize | null) => void;
@@ -81,10 +61,8 @@ function persistedSize(persistedState: unknown): RateLimitPopoverSize | null {
 }
 
 /**
- * A host id is opaque to this layer, so the only checkable claim is "a
- * non-empty string someone could have picked". Whether it still names a host
- * this client can reach is `resolveScopedHost`'s question, answered against
- * the live host lists rather than guessed at rehydration time.
+ * A host id is opaque to this layer, so the only checkable claim is "a non-empty string someone
+ * could have picked".
  */
 function persistedScopedHostId(persistedState: unknown): string | null {
   if (typeof persistedState !== "object" || persistedState === null) {

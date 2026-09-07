@@ -531,9 +531,7 @@ describe("sidebar reparent preview fields", () => {
     });
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBe("node-a");
     expect(useEpicDndStore.getState().reparentRootPanelId).toBeNull();
-    // `null`, never `undefined`: the preview writes straight through to state
-    // typed `string | null`, so an absent view-tab has to arrive as the same
-    // empty value the readers and the drag-end reset compare against.
+    // `null`, never `undefined`: the preview writes straight through to state typed `string | null`, so an absent view-tab has to arrive as the same empty value the readers and the drag-end reset compare against.
     expect(useEpicDndStore.getState().reparentTargetViewTabId).toBeNull();
     expect(useEpicDndStore.getState().reparentRootViewTabId).toBeNull();
 

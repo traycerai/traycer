@@ -1,7 +1,6 @@
 /**
- * `buildCommandContext(router)` snapshots the app state every
- * source cares about. Called when the palette can't subscribe
- * reactively (test shells, unit tests).
+ * `buildCommandContext(router)` snapshots the app state every source cares about.
+ * Called when the palette can't subscribe reactively (test shells, unit tests).
  */
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { CommandContext, FocusedComposerKind } from "@/lib/commands/types";

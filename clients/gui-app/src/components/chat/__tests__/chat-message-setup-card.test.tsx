@@ -3,10 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 
-// Stub the card so the routing branch is exercised without the card's
-// host/query/terminal-liveness plumbing (that surface is covered by
-// setup-card-segment.test.tsx). The stub echoes the props the branch must pass
-// straight through.
+// Stub the card so the routing branch is exercised without the card's host/query/terminal-liveness plumbing (that surface is covered by setup-card-segment.test.tsx).
+// The stub echoes the props the branch must pass straight through.
 vi.mock("../segments/setup-card-segment", () => ({
   SetupCardSegment: (props: {
     model: SetupCardViewModel;

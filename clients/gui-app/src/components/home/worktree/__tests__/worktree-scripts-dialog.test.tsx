@@ -20,9 +20,8 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
-// Isolate the dialog's prefill + save-target logic: mock the set-repo-scripts
-// mutation and the listAllForHost query so no QueryClient/host client is
-// needed, and exercise the real staging store + the real shared modal.
+// Isolate the dialog's prefill + save-target logic: mock the set-repo-scripts mutation and the listAllForHost
+// query so no QueryClient/host client is needed, and exercise the real staging store + the real shared modal.
 const mocks = vi.hoisted(() => ({
   setRepoScriptsMutate: vi.fn<(variables: unknown, options: unknown) => void>(),
   setRepoBranchPrefixMutate:
@@ -48,10 +47,7 @@ const mocks = vi.hoisted(() => ({
       readonly isSuccess: boolean;
     }
   >(() => ({ data: undefined, isSuccess: false })),
-  // The source-branch scripts read. Defaults to "settled, no committed scripts"
-  // so most tests fall through to summary.scripts exactly as the create path does.
-  // The dialog now fetches this via `worktree.listByWorkspacePaths` v1.1; the
-  // useHostQuery mock below adapts this single-ref fixture into that shape.
+  // The source-branch scripts read.
   readScriptsAtRef: vi.fn<
     () => {
       readonly data:
@@ -61,9 +57,8 @@ const mocks = vi.hoisted(() => ({
       readonly isError: boolean;
     }
   >(() => ({ data: { scripts: null }, isSuccess: true, isError: false })),
-  // Captures the git ref the dialog requests in its `scriptRefs` point-read, so
-  // tests can pin that the SOURCE branch (new) / checkout branch is read - not
-  // just that the query fired.
+  // Captures the git ref the dialog requests in its `scriptRefs` point-read, so tests can pin that the source
+  // branch (new) / checkout branch is read - not just that the query fired.
   lastReadScriptsRef: { current: "" },
 }));
 
@@ -104,10 +99,8 @@ vi.mock(
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (opts: {
     readonly method: string;
-    // `scriptRefs` is required: the v1.1 request always carries it (empty when
-    // there is no source ref). Reading it without optional chaining below makes a
-    // regression where the dialog stops sending the field fail loudly instead of
-    // silently degrading to an empty request.
+    // Reading it without optional chaining below makes a regression where the dialog stops sending the field fail
+    // loudly instead of silently degrading to an empty request.
     readonly params: {
       readonly workspacePaths: ReadonlyArray<string>;
       readonly scriptRefs: ReadonlyArray<{
@@ -116,14 +109,11 @@ vi.mock("@/hooks/host/use-host-query", () => ({
       }>;
     };
   }) => {
-    // The source-branch preview rides `worktree.listByWorkspacePaths` v1.1 as a
-    // point-read (`scriptRefs: [{ workspacePath, ref }]` -> `scriptsAtRefs`).
-    // Adapt the single-ref `readScriptsAtRef` fixture into that response shape so
-    // the existing per-test fixtures keep working unchanged.
+    // Adapt the single-ref `readScriptsAtRef` fixture into that response shape so the existing per-test fixtures
+    // keep working unchanged.
     if (opts.method === "worktree.listByWorkspacePaths") {
-      // The preview is a pure point-read: it must list NO workspaces (empty
-      // `workspacePaths`) and carry the scripts read on `scriptRefs`. Fail loudly
-      // if the dialog ever regresses to a workspace-summary list.
+      // The preview is a pure point-read: it must list NO workspaces (empty `workspacePaths`) and carry the scripts
+      // read on `scriptRefs`.
       if (opts.params.workspacePaths.length > 0) {
         throw new Error(
           `worktree.listByWorkspacePaths preview must send workspacePaths: [], got ${JSON.stringify(
@@ -375,7 +365,7 @@ describe("<WorktreeScriptsDialog />", () => {
 
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
 
-    // A new worktree reads scripts at its fork SOURCE, not the new branch name.
+    // A new worktree reads scripts at its fork source, not the new branch name.
     expect(mocks.lastReadScriptsRef.current).toBe("main");
 
     fireEvent.change(setupDefaultField(), { target: { value: "bun install" } });
@@ -457,9 +447,7 @@ describe("<WorktreeScriptsDialog />", () => {
   });
 
   it("does not show 'Saved' (and keeps the dialog open) when the write fails", async () => {
-    // Regression: the dialog used to animate to "Saved" + close on a fixed timer
-    // regardless of the mutation outcome, so a failed setRepoScripts read as a
-    // false success. It must stay on "Save scripts" when the write rejects.
+    // It must stay on "Save scripts" when the write rejects.
     mocks.rejectSave.current = true;
     renderDialog(IN_EPIC_CONTEXT, summaryWith(null));
 
@@ -544,8 +532,8 @@ describe("<WorktreeScriptsDialog />", () => {
       isError: true,
     });
 
-    // summary.scripts is the stale primary-checkout value — it must NOT be
-    // seeded when the source-branch read fails.
+    // summary.scripts is the stale primary-checkout value - it must not be seeded when the source-branch read
+    // fails.
     renderDialog(
       PRE_CREATE_CONTEXT,
       summaryWith({
@@ -637,9 +625,8 @@ describe("<WorktreeScriptsDialog />", () => {
   });
 
   it("does not offer regenerate when the mutation resolves with updated: false", () => {
-    // A non-git no-op, or a checkout that vanished between render and click -
-    // either way the RPC call resolved, but nothing was actually persisted,
-    // so the offer (and any "saved" state) must not appear.
+    // A non-git no-op, or a checkout that vanished between render and click - either way the RPC call resolved,
+    // but nothing was actually persisted, so the offer (and any "saved" state) must not appear.
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
@@ -803,10 +790,8 @@ describe("<WorktreeScriptsDialog />", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
-    // Track whether "Use new prefix" ever asked for a NEW composition with a
-    // different suffix than the one already captured at Apply time. Preview
-    // re-renders may still call regenerate with the same stable suffix - that
-    // is fine; the regression is staging a freshly-picked different name.
+    // Track whether "Use new prefix" ever asked for a new composition with a different suffix than the one already
+    // captured at Apply time.
     const suffixesSeen = new Set<string>();
     const regenerate = vi.fn(
       (
@@ -845,9 +830,8 @@ describe("<WorktreeScriptsDialog />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Use new prefix" }));
 
-    // Staging uses the frozen candidate string - equal to what editing showed.
-    // Even if preview re-renders compose again, they must reuse the same suffix
-    // (stable per mount); a second random pick would enlarge suffixesSeen.
+    // Even if preview re-renders compose again, they must reuse the same suffix (stable per mount); a second
+    // random pick would enlarge suffixesSeen.
     expect(suffixesSeen.size).toBe(suffixesAtApply.size);
     const staged =
       useWorktreeIntentStagingStore.getState().intentByKey[KEY_STRING];
@@ -955,12 +939,8 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(readEffectiveBranchValue()).toBe("feat/login");
   });
 
-  // Item 5 (layered-settings review findings): while the post-save
-  // regeneration offer is active, Effective branch must show the CAPTURED
-  // candidate (not the old staged proposal), the offer must name that old
-  // proposal separately, Use new prefix stages exactly the visible candidate,
-  // and Keep current resumes ordinary proposal display. Apply and Remove
-  // share this shape.
+  // Item 5 (layered-settings review findings): while the post-save regeneration offer is active, Effective
+  // branch must show the captured candidate (not the old staged proposal).
   describe("post-save regeneration offer display identity (item 5)", () => {
     function presentCompose(
       prefixState: { readonly status: string; readonly value?: string },
@@ -999,8 +979,7 @@ describe("<WorktreeScriptsDialog />", () => {
       expect(shownWhileEditing.startsWith("team/")).toBe(true);
       applyRepoPrefixOverride();
 
-      // While the offer is active, Branch naming shows the CAPTURED candidate
-      // (not the old staged proposal).
+      // While the offer is active, Branch naming shows the captured candidate (not the old staged proposal).
       const offer = screen.getByTestId("repo-branch-prefix-regenerate-offer");
       expect(offer.textContent).toMatch(/This picker already proposed/);
       expect(offer.textContent).toContain("feat/login");
@@ -1158,11 +1137,7 @@ describe("<WorktreeScriptsDialog />", () => {
     });
   });
 
-  // Item 6 (layered-settings review findings): starting another repository-
-  // prefix edit while a regeneration offer is active must dismiss that stale
-  // offer immediately (before any draft typing). Dismissal is silent - not an
-  // implicit "Keep current" / stage. A later successful Apply may create a
-  // fresh offer; two actionable candidates must never coexist.
+  // A later successful Apply may create a fresh offer; two actionable candidates must never coexist.
   describe("re-entry dismisses stale regeneration offer (item 6)", () => {
     interface StageCall {
       readonly key: WorktreeStagingKey;
@@ -1259,7 +1234,7 @@ describe("<WorktreeScriptsDialog />", () => {
       const firstCandidate = applyAndShowOffer("team/");
       expect(readEffectiveBranchValue()).toBe(firstCandidate);
 
-      // Enter editing BEFORE any typing - offer must already be gone.
+      // Enter editing before any typing - offer must already be gone.
       fireEvent.click(screen.getByRole("button", { name: "Edit prefix" }));
       expect(
         screen.queryByTestId("repo-branch-prefix-regenerate-offer"),

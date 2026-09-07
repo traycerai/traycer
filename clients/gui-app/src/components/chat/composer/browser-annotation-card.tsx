@@ -22,9 +22,7 @@ export function BrowserAnnotationCard(props: {
   readonly sessionObjectUrl: (hash: string) => string | null;
 }) {
   const { record, onRemove, imageFetcher } = props;
-  // Resolved across every open coordinator, not the surrounding sessions
-  // context: an annotation taken on one host is attached to a chat that may be
-  // pinned to another (see `browserSessionAcrossCoordinators`).
+  // Resolved across every open coordinator, not the surrounding sessions context: an annotation taken on one host is attached to a chat that may be pinned to another (see `browserSessionAcrossCoordinators`).
   const session = useLiveBrowserSession(record.sessionId);
   const sessionUrl = props.sessionObjectUrl(record.imageHash);
   const blobUrl = useImageBlobUrl(record.imageHash, "image/png", imageFetcher);

@@ -181,7 +181,6 @@ describe("composer image attachment flow", () => {
     expect(imageIds(editor)).toEqual(["img-1", "img-3"]);
   });
 
-  // Round-4 in-place paste: rewrite b64 → hash by id, position preserved.
   it("rewriteImageAttachmentHashById flips a b64 node to hash in place", () => {
     const editor = makeEditor();
     editor.commands.setContent({

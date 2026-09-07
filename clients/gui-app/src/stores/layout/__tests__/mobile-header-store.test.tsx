@@ -6,13 +6,7 @@ import {
 } from "@/stores/layout/mobile-header-store";
 import { resolveMobileHeaderRightActionsKey } from "@/stores/layout/mobile-header-right-actions";
 
-/**
- * Registration is availability; display is resolution. Surfaces register their
- * controls under their own key for as long as they can serve them, and which
- * entry the header shows is a pure function of the presented surface - so
- * writes on different keys cannot race, and a surface presented again after
- * being backgrounded needs no re-publish.
- */
+/** Registration is availability; display is resolution. */
 describe("useMobileHeaderStore right-actions registry", () => {
   afterEach(() => {
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
@@ -56,14 +50,7 @@ describe("useMobileHeaderStore right-actions registry", () => {
   });
 });
 
-/**
- * The display policy: the presented surface picks the entry. A focused draft
- * owns ITS landing terminal entry - keyed per hosting page, so a focus move
- * between two start pages never resolves the departing page's toggle; an epic
- * tab owns its own keyed entry; History and Settings present no surface
- * actions, which is what keeps a retained surface's registration from leaking
- * into their header; no focus at all presents nothing.
- */
+/** The display policy: the presented surface picks the entry. */
 describe("resolveMobileHeaderRightActionsKey", () => {
   it("resolves a draft to that draft's landing terminal entry", () => {
     expect(

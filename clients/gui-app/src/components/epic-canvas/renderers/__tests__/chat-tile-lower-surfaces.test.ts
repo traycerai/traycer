@@ -42,18 +42,7 @@ describe("composerHasBlockingApprovals", () => {
 });
 
 /**
- * Ticket 18 rider (orchestrator, revised per review finding: the runtime
- * half previously mounted a hand-copied structural twin of the measurement
- * effect, which could not fail for a real production lifecycle defect -
- * only for a change to the twin itself). The measurement is now extracted
- * into `useMeasuredElementHeight` (`src/hooks/ui/use-measured-element-
- * height.ts`), which `chat-tile.tsx` actually imports and calls - its own
- * `__tests__/use-measured-element-height.test.tsx` is the REAL runtime
- * coverage (attach/detach, rounding, non-positive-reading guard, all against
- * the production hook, not a copy). This file pins only that `chat-tile.tsx`
- * wires that hook's output into `composerOverlayHeight` - full
- * `ChatTileSessionView` mount (session store + stream + composer) is still
- * out of scope for this gap-fill.
+ * This file pins only that `chat-tile.tsx` wires that hook's output into `composerOverlayHeight` - full `ChatTileSessionView` mount (session store + stream + composer) is still out of scope for this gap-fill.
  */
 describe("chat-tile lowerSurfacesHeight → composerOverlayHeight (ticket 18 rider)", () => {
   it("wires useMeasuredElementHeight's output into ChatSessionMessagesSurface as composerOverlayHeight", () => {

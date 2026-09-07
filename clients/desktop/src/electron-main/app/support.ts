@@ -50,32 +50,14 @@ import {
   reportImageMediaTypeForMimeType,
 } from "@traycer-clients/shared/support/image-attachment-guards";
 
-/**
- * How long a saved diagnostic bundle survives a later save. Long enough that a
- * user who saved one, opened the file manager, and then saved another still
- * has the first: the bundle is revealed for them to attach somewhere.
- */
 const DIAGNOSTIC_BUNDLE_RETENTION_MS = 60 * 60_000;
 
 const LOG_TAIL_LINES = 500;
-// Per attachment. Two logs stay well inside Sentry's envelope limits, and the
-// transport gzips before sending, so this is ~50 KB on the wire in practice.
-// Imported from the shared image-attachment-guards module (not redefined
-// here) since ticket 08's total attachment budget arithmetic depends on this
-// exact value staying in sync with the renderer's attach-time check.
 const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
 // The user is watching a spinner, but losing the report costs far more than
 // waiting: 2s was not enough to upload two log attachments on a slow link.
 const SENTRY_FLUSH_TIMEOUT_MS = 10_000;
-// `flush` reports the queue drained the instant our envelope's transport
-// promise settles, but the `afterSendEvent` hook that carries the real HTTP
-// outcome is chained off that same settlement through its own, separately
-// registered `.then()`s - close, but not guaranteed to fire before `flush`
-// resolves. This only bounds the (practically unreachable, since nothing in
-// this app's Sentry init samples or filters feedback events) case where the
-// hook never fires at all despite `flush` saying the queue is empty; in the
-// normal case the hook resolves within a handful of microtasks, nowhere near
-// this window.
+// This only bounds the (practically unreachable, since nothing in this app's Sentry init samples or filters feedback events) case where the hook never fires at all despite `flush`.
 const SEND_OUTCOME_GRACE_MS = 500;
 // A draft's frozen evidence is dropped explicitly on cancel/replacement; this
 // is only a backstop against a lost discard message (e.g. a window force-
@@ -95,24 +77,11 @@ interface FrozenEvidence {
   readonly reportId: string;
   readonly desktop: FrozenLogTail;
   readonly host: FrozenLogTail;
-  // Ticket 03 / plan D3: the always-on PII-free counter slice and the
-  // (env-gated) full self-verification trace. Unlike `desktop`/`host`, an
-  // absent source file is the normal state (production trace, or a fresh
-  // install with no browser activity yet) - `captureBrowserLogTail` returns
-  // an empty, non-truncated tail rather than throwing, so these are always
-  // present here even when nothing was ever written.
   readonly browserTelemetry: FrozenLogTail;
   readonly browserTrace: FrozenLogTail;
 }
 
-// The map key is scoped by sender (composed in support-ipc.ts), never a bare
-// draftId - a draftId is only unique within one renderer realm. `pending`
-// exists between the moment a freeze is admitted and its file reads
-// resolving, so a same-key freeze that arrives while one is already in
-// flight (React StrictMode's double-effect, a duplicate call) can await the
-// SAME operation and report instead of racing a second file read under a
-// second id, and so a discard that lands mid-read has something concrete to
-// cancel instead of racing an insert that hasn't happened yet.
+// The map key is scoped by sender (composed in support-ipc.ts), never a bare draftId - a draftId is only unique within one renderer realm.
 type FrozenEvidenceEntry =
   | { readonly kind: "pending"; readonly promise: Promise<FrozenEvidence> }
   | { readonly kind: "ready"; readonly evidence: FrozenEvidence };
@@ -125,13 +94,7 @@ export interface SupportAuthSessionProvider {
   get(): DesktopAuthSessionSnapshot;
 }
 
-/**
- * Survives `discardFrozenEvidence` so React StrictMode's
- * setup → cleanup(discard) → setup sequence records ONE sighting, not two.
- * Keyed by the frozen-evidence key (sender + draftId): a real second open
- * mints a new draftId, so it still counts. Bounded + TTL so a long-lived
- * process cannot grow the set forever.
- */
+/** Bounded + TTL so a long-lived process cannot grow the set forever. */
 const SIGHTING_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const SIGHTING_DEDUPE_MAX_ENTRIES = 200;
 
@@ -207,11 +170,6 @@ export class DesktopSupportService {
 
   async revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult> {
     const path = this.resolveSupportLogPath(target);
-    // `desktop`/`host` always exist (`ensureLogFile` creates them lazily,
-    // matching every prior release's behavior); a browser target must NEVER
-    // be created by a reveal - the snapshot manifest only ever offers Reveal
-    // for a browser entry that already exists, so this is the same file the
-    // user just saw listed, not a fabricated one (ticket 03 / plan D3).
     if (!isBrowserLogTarget(target)) {
       await ensureLogFile(path);
     } else if (!(await pathExists(path))) {
@@ -224,17 +182,7 @@ export class DesktopSupportService {
     return { target, path };
   }
 
-  /**
-   * Called at report-open, before the dialog renders. Reads both log tails
-   * and mints the draft's report id once; submit and every retry reuse both,
-   * so a crash-looping host that keeps writing while the dialog is open can't
-   * scroll the failing lines out of the window mid-session.
-   *
-   * Idempotent for a still-live key: a second call while the first is still
-   * reading (or already landed) returns the SAME report id rather than
-   * racing a second file read under a second one - React StrictMode's
-   * double-effect mount is exactly this case.
-   */
+  /** Called at report-open, before the dialog renders. */
   async freezeEvidence(
     frozenEvidenceKey: string,
     fingerprint: string | null,
@@ -246,15 +194,8 @@ export class DesktopSupportService {
       return { reportId: evidence.reportId };
     }
     const reportId = generateReportId();
-    // Sighting is recorded once per logical open of this frozen-evidence key,
-    // not per freeze-map admission. React StrictMode mounts under
-    // renderer-shell with setup → cleanup(discard) → setup, so the live-map
-    // check above alone is not enough - discard clears the key between the
-    // two setups and a second admission would inflate "Nth time on this
-    // install". The short-TTL recentSightingKeys set survives discard.
-    // Fire-and-forget onto the ledger mutation queue: a disk blip must never
-    // block freeze / dialog open. The queue is still scheduled synchronously
-    // so a later getFingerprintOccurrence (which awaits the queue) sees it.
+    // Fire-and-forget onto the ledger mutation queue: a disk blip must never block freeze / dialog open.
+    // The queue is still scheduled synchronously so a later getFingerprintOccurrence (which awaits the queue) sees it.
     if (
       fingerprint !== null &&
       fingerprint.length > 0 &&
@@ -269,10 +210,7 @@ export class DesktopSupportService {
     );
     this.setFrozenEvidence(frozenEvidenceKey, { kind: "pending", promise });
     const evidence = await promise;
-    // Only commit if this exact in-flight operation is still the current
-    // entry for the key. A discard mid-read deletes the entry; a second
-    // freeze race installs its own pending entry first. Either way, a late
-    // resolution here must not resurrect or overwrite it.
+    // Either way, a late resolution here must not resurrect or overwrite it.
     const current = this.frozenEvidenceByKey.get(frozenEvidenceKey);
     if (
       current !== undefined &&
@@ -284,12 +222,7 @@ export class DesktopSupportService {
     return { reportId };
   }
 
-  /**
-   * Returns true the first time `frozenEvidenceKey` is claimed within the
-   * dedupe window; false if a prior claim is still live. Survives discard so
-   * StrictMode's discard-between-setups cannot re-claim. A genuine second
-   * dialog open uses a new draftId (new key) and claims again.
-   */
+  /** Survives discard so StrictMode's discard-between-setups cannot re-claim. */
   private claimSightingSlot(frozenEvidenceKey: string): boolean {
     const nowMs = Date.now();
     for (const [key, claimedAt] of this.recentSightingKeys) {
@@ -310,10 +243,7 @@ export class DesktopSupportService {
     return true;
   }
 
-  /**
-   * Install-local occurrence info for the dialog's "Nth time on this install"
-   * strip. Backed by the report ledger (userData), never renderer localStorage.
-   */
+  /** Backed by the report ledger (userData), never renderer localStorage. */
   getFingerprintOccurrence(
     fingerprint: string,
   ): Promise<FingerprintOccurrence | null> {
@@ -325,10 +255,6 @@ export class DesktopSupportService {
     this.frozenEvidenceByKey.delete(frozenEvidenceKey);
   }
 
-  /**
-   * Serves the consent panel's "view" affordance from the frozen tail, not a
-   * live read - what the user reviews here is exactly what submit ships.
-   */
   async readFrozenLogTail(
     frozenEvidenceKey: string,
     target: SupportLogTarget,
@@ -373,12 +299,8 @@ export class DesktopSupportService {
     }
 
     const snapshot = await this.getSnapshot();
-    // Diagnostics toggle gates layer-0/process-metrics/version-platform-host
-    // tags+contexts - main computes these itself from its own snapshot, so
-    // the renderer omitting `privateDiagnostics` alone can never withhold
-    // them; this is the actual gate. `fingerprint`/`correlationId` are never
-    // gated by it - they are the report's own identity, not "diagnostics" in
-    // the privacy sense, and travel below independent of this flag.
+    // Diagnostics toggle gates layer-0/process-metrics/version-platform-host tags+contexts.
+    // `fingerprint`/`correlationId` are never gated by it - they are the report's own identity, not "diagnostics" in the privacy sense, and travel below independent of this flag.
     const includeDiagnostics = form.includeDiagnostics;
     const processMetrics = includeDiagnostics
       ? await handleGetMetrics().catch((err: unknown) => {
@@ -387,10 +309,6 @@ export class DesktopSupportService {
         })
       : null;
 
-    // Scrubbed as one composed string, not field-by-field: every piece
-    // (intent, location) is user- or error-derived free text, and
-    // `scrubSupportText` operates line-wise with no length cap either way, so
-    // there is no correctness difference - just one call instead of several.
     const message = scrubSupportText(
       [
         `Type: ${form.type}`,
@@ -404,30 +322,10 @@ export class DesktopSupportService {
         .join("\n\n"),
     );
 
-    // G1: identity is attached to the private report only when the user
-    // opted in via the contact checkbox - the checkbox itself only renders
-    // when a signed-in email exists, but the gate lives here too so a stale
-    // client can never smuggle identity past an unchecked box.
     const userEmail = form.allowContact ? snapshot.user.email : null;
     const privateDiagnostics = form.privateDiagnostics;
-    // Images ride to Sentry as opaque binary attachments, built directly from
-    // `form.images` below - deliberately never folded into `contexts` (the
-    // object passed to `deepScrubSupportValue`). The scrubber's deep walk
-    // treats a plain object's own enumerable keys as scrubbable fields; an
-    // `ArrayBuffer`/`Buffer` handed to it would be walked as if it were a
-    // record of numeric-string keys, corrupting the bytes for no privacy
-    // benefit (accepted trade-off, ticket 08: the scrubber does not touch
-    // image bytes).
     const imageAttachments = sentryAttachmentsForImages(form.images);
     const eventId = sentryEventIdFromReportId(frozen.reportId);
-    // Deep-scrubbed as a whole right before it rides in the Sentry event:
-    // `layer0.evidence`/`raw` are free text off a filesystem error and can
-    // carry absolute paths (host.log is unredacted at source), and
-    // `errorCause.stack`/`.message` are exactly the private strings this
-    // scrubber exists for. `registry` and `processMetrics` are opaque
-    // ids/numbers by contract - scrubbing them is a no-op, not a risk. All of
-    // it is diagnostics content, so the whole block is skipped when the
-    // consent toggle is off, not just individually omitted per-key.
     const contexts: Record<string, Record<string, unknown>> = includeDiagnostics
       ? deepScrubSupportValue({
           ...(snapshot.host.layer0 === null
@@ -440,16 +338,6 @@ export class DesktopSupportService {
                   main: { ...processMetrics.main },
                   cpuUsage: { ...processMetrics.cpuUsage },
                 },
-                // Promoted to its own top-level context, NOT nested under
-                // `processMetrics` - Sentry normalizes the whole `contexts`
-                // object under one shared depth budget (3, its default,
-                // unset here), and `processMetrics.appMetrics[i]` sits one
-                // level too deep for even a fully-flattened per-process
-                // object to survive that budget. Verified against the SDK's
-                // actual `normalize()`, not just this file's return value -
-                // a live delivered event still showed "[Object]" placeholders
-                // after the per-entry flattening alone (round 2 of this fix).
-                // One less level of nesting is what actually closes it.
                 appMetrics: flattenAppMetricsForSentry(
                   processMetrics.appMetrics,
                 ),
@@ -457,19 +345,12 @@ export class DesktopSupportService {
           ...(privateDiagnostics?.cause == null
             ? {}
             : { errorCause: { ...privateDiagnostics.cause } }),
-          // D10: the registry's `hostId` is the tab-bound host, which can
-          // differ from the "local host" this file attaches logs and
-          // version from below - named `registry`, never `host`, so the
-          // two can't be read as one.
           ...(privateDiagnostics === undefined
             ? {}
             : { registry: { ...privateDiagnostics.registry } }),
         })
       : {};
-    // Registered after context construction but before `captureFeedback`, so
-    // the listener is live when the envelope goes out and every later exit is
-    // covered by the `finally` below. `afterSendEvent` carries the transport's
-    // real response, which `flush` alone cannot distinguish from rejection.
+    // `afterSendEvent` carries the transport's real response, which `flush` alone cannot distinguish from rejection.
     const sendOutcome = watchSentrySendOutcome(eventId);
     try {
       try {
@@ -480,27 +361,14 @@ export class DesktopSupportService {
             message,
           },
           {
-            // Sentry's ingest dedupes on `event_id` within a time window,
-            // which is what makes a retry idempotent - the reportId's suffix
-            // already is a valid 32-hex-char event id (the uuid minus
-            // dashes), so reusing it here instead of a per-call id is the
-            // whole mechanism.
             event_id: eventId,
             captureContext: {
               tags: {
-                // The report's own identity - always attached regardless of
-                // the diagnostics toggle (not "diagnostics" in the privacy
-                // sense; without it a retry or a support conversation has
-                // nothing to key off).
                 reportId: frozen.reportId,
                 ...(includeDiagnostics
                   ? {
                       appVersion: snapshot.appVersion,
                       platform: `${snapshot.platform}/${snapshot.arch}`,
-                      // "local" because it names the traycer-host this
-                      // Electron process supervises, not necessarily the
-                      // (possibly remote) host a failing tab is bound to -
-                      // see the `registry` context.
                       localHostVersion: snapshot.host.version ?? "unknown",
                       electronVersion: snapshot.versions.electron ?? "unknown",
                       layer0Status: layer0StatusTag(snapshot.host.layer0),
@@ -509,11 +377,7 @@ export class DesktopSupportService {
                 ...(privateDiagnostics?.fingerprint == null
                   ? {}
                   : { fingerprint: privateDiagnostics.fingerprint }),
-                // Sub-clustering only - deliberately not part of
-                // `fingerprint` (a one-frame refactor must not re-identify a
-                // defect), and unlike fingerprint/correlationId this IS
-                // diagnostics content (stack shape), so it is gated with the
-                // rest.
+                // Sub-clustering only - deliberately not part of `fingerprint` (a one-frame refactor must not re-identify a defect), and unlike fingerprint/correlationId this IS diagnostics content.
                 ...(includeDiagnostics &&
                 privateDiagnostics?.stackFamily != null
                   ? { stackFamily: privateDiagnostics.stackFamily }
@@ -542,11 +406,6 @@ export class DesktopSupportService {
                     },
                   ]
                 : []),
-              // One toggle, two possible entries (ticket 03 / plan D3): each
-              // is skipped independently when its own tail is empty, same as
-              // the desktop/host logs above - an absent browser-trace.jsonl
-              // (the normal production state) never ships an empty
-              // attachment.
               ...(form.includeBrowserDiagnostics &&
               frozen.browserTelemetry.content
                 ? [
@@ -578,11 +437,6 @@ export class DesktopSupportService {
         return { status: "failed", reason: "error" };
       }
 
-      // `flush` resolves false when the queue did not drain inside the
-      // timeout. That is not the same as lost - the transport may still
-      // deliver it - so this maps to `unconfirmed`, never `failed`; a
-      // blanket "failed" would tell users a report failed that in fact
-      // arrived.
       const flushed = await Sentry.flush(SENTRY_FLUSH_TIMEOUT_MS).catch(
         (err: unknown) => {
           log.error("[support] sentry flush failed", {
@@ -598,11 +452,6 @@ export class DesktopSupportService {
         });
         return { status: "unconfirmed", reportId: frozen.reportId };
       }
-      // The queue draining only means our envelope reached the transport,
-      // not that Sentry's store accepted it - a 500 or a destroyed
-      // connection drains the queue exactly as cleanly as a real success.
-      // Resolve the actual per-event outcome the `afterSendEvent` hook
-      // captured before trusting "delivered".
       const outcome = await sendOutcome.awaitOutcome();
       if (outcome !== null && outcome.status === "failed") {
         log.error("[support] sentry rejected the report", {
@@ -611,11 +460,8 @@ export class DesktopSupportService {
         });
         return { status: "failed", reason: "error" };
       }
-      // Only confirmed deliveries land in the filed-report half of the
-      // ledger. unconfirmed/failed/unavailable must not - a phantom entry
-      // would inflate later router counts and fixed-in work. Fire-and-
-      // forget: ledger failure must not turn a successful upload into a
-      // failed submit result.
+      // unconfirmed/failed/unavailable must not - a phantom entry would inflate later router counts and fixed-in work.
+      // Fire-and- forget: ledger failure must not turn a successful upload into a failed submit result.
       const deliveredFingerprint = privateDiagnostics?.fingerprint;
       if (
         deliveredFingerprint !== null &&
@@ -630,20 +476,6 @@ export class DesktopSupportService {
     }
   }
 
-  /**
-   * Written on the unavailable path (Flow 4 Case B's "Save diagnostic
-   * bundle"). Every private string is scrubbed, and - now that ticket 09's
-   * scrubber exists - the bundle gains both frozen log tails (already
-   * scrubbed at freeze time, see `captureLogTail`): this is a local file the
-   * user can hand to anyone, so nothing in it may ship unscrubbed.
-   *
-   * Screenshots (`form.images`, ticket 08) are deliberately NOT included:
-   * this bundle is a single JSON file, and base64-inlining a few MB of image
-   * data into it would bloat an otherwise small diagnostic file for no real
-   * benefit - the user already reviewed the thumbnails in the dialog before
-   * choosing to save. Not "trivially includable" the way the already-text
-   * log tails are.
-   */
   async saveDiagnosticBundle(
     form: SupportSubmitReportRequest,
     frozenEvidenceKey: string,
@@ -686,19 +518,8 @@ export class DesktopSupportService {
       },
     };
     const dir = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
-    // Every save leaves an `mkdtemp` directory behind for the lifetime of the
-    // machine's `/tmp`, each one holding log tails and the browser trace. The
-    // bundle the user is looking at has to survive - it is the deliverable -
-    // so the sweep is of every OTHER one. Reading `/tmp` rather than
-    // remembering the last path is what makes the bound hold across relaunches:
-    // an in-memory field only ever cleans up within one process lifetime, and
-    // every restart used to orphan another bundle.
     await this.removeOtherDiagnosticBundles(dir);
     const path = join(dir, `${frozen?.reportId ?? "report"}.json`);
-    // Owner-only: this lands in a world-readable `/tmp` and holds whatever the
-    // consent panel's toggles admitted - the desktop and host log tails, and
-    // the browser trace. `mkdtemp` is already `0700`; the file inside it was
-    // taking the umask default.
     await writeFile(path, JSON.stringify(bundle, null, 2), {
       encoding: "utf8",
       mode: 0o600,
@@ -710,19 +531,6 @@ export class DesktopSupportService {
     return { path };
   }
 
-  /**
-   * Removes `traycer-diagnostic-bundle-*` directories in the temp dir, except
-   * `keep` and any written within {@link DIAGNOSTIC_BUNDLE_RETENTION_MS}.
-   *
-   * The age threshold is what makes this a sweep rather than a delete: a bundle
-   * is REVEALED to the user so they can attach it to an email or a ticket, so
-   * saving a second one while the first is still in an open file manager
-   * window must not pull it out from under them.
-   *
-   * Best-effort throughout: another user may own an entry we cannot remove or
-   * stat, the temp dir may not be listable, and a failed cleanup must never
-   * fail the save it is part of.
-   */
   private async removeOtherDiagnosticBundles(keep: string): Promise<void> {
     const root = tmpdir();
     const entries = await readdir(root).catch(() => []);
@@ -746,14 +554,6 @@ export class DesktopSupportService {
     );
   }
 
-  /**
-   * `support:buildPublicDraft` (ticket 09 / T6): the single main-process
-   * producer of all public (GitHub-bound) text, always behind the deep
-   * scrubber. Resolves its own frozen evidence rather than depending on a
-   * prior `submitReport` result, so it is callable regardless of delivery
-   * outcome (delivered/unconfirmed/unavailable/failed) - including when no
-   * submit was ever attempted (Flow 4 Case B's no-DSN "Open a GitHub issue").
-   */
   async buildPublicDraft(
     form: SupportSubmitReportRequest,
     frozenEvidenceKey: string,
@@ -800,10 +600,6 @@ export class DesktopSupportService {
     readonly tailLines: number;
   }): Promise<SupportLogTailResult> {
     const path = this.resolveSupportLogPath(input.target);
-    // Same no-create rule as `revealLog`: a browser target is never
-    // fabricated, and a race where the file disappears between the
-    // existence-filtered manifest and this call reads as an empty tail, not
-    // a thrown error (ticket 03 / plan D3).
     if (!isBrowserLogTarget(input.target)) {
       await ensureLogFile(path);
     }
@@ -873,15 +669,6 @@ function frozenLogTailForTarget(
   return frozen.browserTrace;
 }
 
-/**
- * The manifest entries `getSnapshot` advertises for the two browser
- * diagnostic files - existence-filtered, unlike `desktop`/`host` which are
- * always listed. Absence of `browser-trace.jsonl` is the normal production
- * state (off by default there, per plan D1); listing a path nobody can
- * open would make Reveal / the Recent-logs panel dead ends for most users.
- * `browser-telemetry.jsonl` is always-on, but a fresh install before any
- * browser activity has none written yet either.
- */
 async function existingBrowserLogDescriptors(
   hostLayout: HostFsLayout,
 ): Promise<readonly SupportLogDescriptor[]> {
@@ -911,13 +698,7 @@ async function existingBrowserLogDescriptors(
   ];
 }
 
-// Total: ANY error (missing file, a permission error, a mid-read failure -
-// not just ENOENT) resolves to `false` rather than throwing. This gates
-// whether a browser log entry is offered at all (manifest listing, reveal),
-// so a broken file must never be able to break report-issue itself; the one
-// caller that needs the narrow ENOENT distinction (`tailLog`, so a genuine
-// permission error still surfaces instead of reading as "empty tail") does
-// its own `isMissingPathError` check rather than going through this.
+// This gates whether a browser log entry is offered at all (manifest listing, reveal), so a broken file must never be able to break report-issue itself.
 async function pathExists(path: string): Promise<boolean> {
   try {
     const handle = await open(path, "r");
@@ -969,12 +750,8 @@ async function captureLogTail(
   const allLines = splitLogLines(content);
   const truncatedByLineCount = allLines.length > lines;
   const tail = allLines.slice(-lines).join("\n");
-  // Scrub BEFORE the byte cap below, never after: `host.log` is written with
-  // zero redaction at source, so this is the only point that ever sees the
-  // raw tail. Truncating first could cut a token/path mid-match so the
-  // scrubber's regexes miss the remainder, and the byte budget itself must
-  // measure what will actually ship (the scrubbed text), not the raw text -
-  // ticket 09's "field bounds enforced after scrubbing, never before".
+  // Scrub BEFORE the byte cap below, never after: `host.log` is written with zero redaction at source, so this is the only point that ever sees the raw tail.
+  // Truncating first could cut a token/path mid-match so the scrubber's regexes miss the remainder, and the byte budget itself must measure what will actually ship (the scrubbed.
   const scrubbed = scrubSupportText(tail);
   const truncatedByByteCount = Buffer.byteLength(scrubbed, "utf8") > maxBytes;
   return {
@@ -983,21 +760,6 @@ async function captureLogTail(
   };
 }
 
-/**
- * Ticket 03 / plan D3: `browser-telemetry.jsonl` and `browser-trace.jsonl`
- * are append-only and can run unbounded between rotations, so unlike
- * `captureLogTail` above (which reads the whole file, then keeps the last
- * `LOG_TAIL_LINES` lines) this seeks straight to a bounded trailing BYTE
- * window - shape of `readLogTailWindow` in `traycer-host/src/transport/rpc/
- * resolvers/diagnostics/diagnostics-resolvers.ts` (internal repo, cannot be
- * imported from this OSS submodule; duplicated by hand, same precedent as
- * `image-attachment-guards.ts`'s magic-byte patterns). `rotatedPath` (the
- * writer's `.1` sibling, plan D2) is read first, then `livePath`, so the
- * window is taken from the trailing bytes of the two concatenated IN THAT
- * ORDER - exactly what a reader who cat'd `file.jsonl.1 file.jsonl` would
- * see. Missing files (either or both) resolve to an empty tail, never a
- * throw - absence of `browser-trace.jsonl` is the normal production state.
- */
 async function captureBrowserLogTail(
   rotatedPath: string,
   livePath: string,
@@ -1031,12 +793,6 @@ interface JsonlTailWindow {
   readonly headIsPartial: boolean;
 }
 
-/**
- * Reads at most `maxBytes` from the tail of (`rotatedPath` content followed
- * by `livePath` content), without ever reading either file beyond what that
- * trailing window needs: the live file's own tail is read first, and only
- * the remaining budget (if any) is spent on the rotated file's tail.
- */
 async function readConcatenatedJsonlTailWindow(
   rotatedPath: string,
   livePath: string,
@@ -1053,13 +809,6 @@ async function readConcatenatedJsonlTailWindow(
     rotated.bytes.length > 0
       ? rotated.bytes.length < rotated.size
       : live.bytes.length < live.size;
-  // A crash or kill mid-write can leave the rotation's last flush torn - no
-  // trailing newline - which would otherwise fuse its last (partial) record
-  // onto the live file's first line. `readTailBytes` always reads through to
-  // the rotated file's real end, so its last byte is the file's actual last
-  // byte regardless of windowing; insert the missing record separator
-  // ourselves whenever the rotated tail is non-empty and doesn't already end
-  // in one.
   const rotatedEndsInNewline =
     rotated.bytes.length === 0 ||
     rotated.bytes[rotated.bytes.length - 1] === 0x0a;
@@ -1121,11 +870,6 @@ function isMissingPathError(error: unknown): boolean {
   );
 }
 
-// A line count is not a size bound: one host log line can carry a multi-KB
-// JSON payload, so 500 lines can run to megabytes. Sentry rejects oversized
-// envelopes, and that rejection surfaces as a delivered event whose attachment
-// silently vanished - exactly the failure mode this file is fixing. Keep the
-// trailing bytes; the tail is where the failure being reported lives.
 function truncateToTrailingBytes(text: string, maxBytes: number): string {
   const encoded = Buffer.from(text, "utf8");
   if (encoded.byteLength <= maxBytes) return text;
@@ -1135,15 +879,6 @@ function truncateToTrailingBytes(text: string, maxBytes: number): string {
   return firstNewline === -1 ? kept : kept.slice(firstNewline + 1);
 }
 
-/**
- * Builds Sentry's `attachments` entries straight from the already-validated
- * `form.images` (ticket 08 / T5) - never routed through `scrubSupportText`
- * or `deepScrubSupportValue`, since both operate on text/JSON, not opaque
- * binary. `support-ipc.ts`'s parser already enforced the MIME allowlist,
- * magic bytes, per-image size, and the total attachment budget, so
- * `reportImageMediaTypeForMimeType` here can never legitimately return
- * `null`; a defensive throw beats silently mislabeling the content type.
- */
 function sentryAttachmentsForImages(
   images: readonly SupportImageAttachmentInput[],
 ): ReadonlyArray<{
@@ -1186,24 +921,8 @@ interface SentrySendOutcome {
 }
 
 /**
- * Watches for the real transport outcome of the event `submitReport` is about
- * to send with `eventId`, via the SDK's `afterSendEvent` client hook - the
- * only place the actual HTTP response (status code, or nothing at all on a
- * network-level failure) is available. Must be constructed before
- * `Sentry.captureFeedback` is called, so the listener is live before the send
- * it needs to observe starts.
- *
- * `awaitOutcome` is only meaningful to call once `Sentry.flush` has already
- * reported the queue drained; before that point the outcome legitimately has
- * not happened yet, and `flush`'s own timeout remains the source of truth for
- * `unconfirmed`. `SEND_OUTCOME_GRACE_MS` bounds the case where the hook never
- * fires despite `flush` saying the queue is empty - it resolves `null`, and
- * the caller falls back to `flush`'s own "delivered" determination rather
- * than guessing.
- *
- * Callers must call `unsubscribe` exactly once, on every exit path, whether
- * or not `awaitOutcome` was ever called - otherwise every `submitReport` call
- * leaks one more permanent listener on the shared Sentry client.
+ * Must be constructed before `Sentry.captureFeedback` is called, so the listener is live before the send it needs to observe starts.
+ * `SEND_OUTCOME_GRACE_MS` bounds the case where the hook never fires despite `flush` saying the queue is empty.
  */
 function watchSentrySendOutcome(eventId: string): {
   readonly awaitOutcome: () => Promise<SentrySendOutcome | null>;
@@ -1244,31 +963,9 @@ function watchSentrySendOutcome(eventId: string): {
   };
 }
 
-/**
- * `app.getAppMetrics()` entries carry `cpu`/`memory` as nested sub-objects.
- * Round 1 of this fix flattened each entry to scalar fields, which is
- * necessary but not sufficient: Sentry's SDK normalizes the WHOLE `contexts`
- * object under one shared depth budget (`normalizeDepth`, default 3, unset
- * here), and `contexts.processMetrics.appMetrics[i]` sits one level too deep
- * for even a fully-flattened per-process object to survive it - verified
- * against the SDK's own `normalize()` (not just this function's return
- * value): a live delivered event still showed `appMetrics` as four
- * unusable "[Object]" placeholders after round 1 landed. `appMetrics` is
- * therefore promoted to its own top-level context (a sibling of
- * `processMetrics`, not nested inside it) - one less level of nesting is
- * what actually keeps it inside the budget. This does not raise the SDK's
- * global `normalizeDepth`, which would affect every event the app sends,
- * not just this one.
- */
 function flattenAppMetricsForSentry(
   appMetrics: ReadonlyArray<Electron.ProcessMetric>,
 ): Record<string, unknown> {
-  // Spread into a fresh object literal (numeric-string keys: "0", "1", ...)
-  // rather than returning the mapped array directly - Sentry's `Contexts`
-  // type requires every named context to be a plain record, and the two
-  // shapes normalize identically (verified against the SDK's own
-  // `normalize()`): depth-counting treats an array and an object the same
-  // way, so this is a typing accommodation, not a behavior change.
   return {
     ...appMetrics.map((metric) => ({
       type: metric.type,
@@ -1282,24 +979,13 @@ function flattenAppMetricsForSentry(
   };
 }
 
-/**
- * A bounded enum for Sentry tags (filterable), never the free-text
- * cause/evidence - those go in `contexts.layer0` below, which Sentry does
- * not index or limit the length of the way it does tags.
- */
+/** A bounded enum for Sentry tags (filterable), never the free-text cause/evidence. */
 function layer0StatusTag(
   layer0: SupportHostLayer0Snapshot | null,
 ): "acquired" | "degraded" | "unrecognized" | "absent" {
   return layer0 === null ? "absent" : layer0.status;
 }
 
-/**
- * Surfaces the degradation in the message body itself - the first thing a
- * support engineer reads, before they think to open `contexts.layer0` or
- * grep the host.log attachment. Silent for `acquired` (nothing to flag) and
- * for `null` (nothing recorded to report, per the "absence is not healthy
- * but also not a finding" contract `readHostLayer0Record` returns).
- */
 function layer0MessageLine(
   layer0: SupportHostLayer0Snapshot | null,
 ): string | false {

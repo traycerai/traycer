@@ -71,14 +71,7 @@ interface StreamState {
   useClientSupport: boolean;
 }
 
-/**
- * Drives `useNotificationsServingHostEntry`'s fallback selection independent
- * of `hostState` (the LOCAL host). `hasLocalHost: null` means "no
- * `RunnerHostProvider` in the tree", which is the default every case here
- * starts from - the local-host path must behave identically under it.
- * `boundHostId` stands in for `useAddressableHostId()`, which is what a
- * relay-only shell's serving host resolves through.
- */
+/** hasLocalHost null is no RunnerHostProvider. boundHostId stands in for useAddressableHostId on a relay-only shell. */
 interface ServingHostFallbackState {
   hasLocalHost: boolean | null;
   boundHostId: string | null;
@@ -95,13 +88,7 @@ const servingHostFallbackState = vi.hoisted<ServingHostFallbackState>(() => ({
   boundHostId: null,
 }));
 
-/**
- * Forces `useHostStreamClientBindingFor`'s mocked owner identity away from
- * the value the real formula would compute for the entry under test - the
- * one lever a test needs to reproduce a binding that has not caught up with
- * a serving-host change yet. `null` ("no override") is the default: every
- * case that never touches this field gets the real, drift-proof formula.
- */
+/** Override mocked owner identity to reproduce a binding that has not caught up. null means use the real formula. */
 interface StreamBindingOverrideState {
   ownerIdentity: string | null;
 }
@@ -135,12 +122,8 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
       : streamState.cloudFeedSupport,
 }));
 
-// Per the G8 decision the provider binds to the LOCAL host, not the app-wide
-// active one, so these two hooks replace `useAddressableHostId` +
-// `useWsStreamClient` as the harness's steering wheel. The `hostState.id` /
-// `streamState.client` pair keeps its old meaning: `id === null` means "no
-// local host", and assigning a NEW `streamState.client` object is what the
-// provider reads as a respawn that must teardown and reopen.
+// Provider binds the local host. hostState.id null is no local host; a new
+// streamState.client object is a respawn that must teardown and reopen.
 vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
   useReactiveLocalHostEntry: (): HostDirectoryEntry | null =>
     hostState.id === null
@@ -149,11 +132,8 @@ vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
-  // Dynamic import (not a top-level static one): `vi.mock` factories run
-  // before the module's own imports are evaluated, so reaching the real
-  // key-computation function has to go through `await import(...)` here
-  // rather than a normal `import` binding. Keeps this mock's transport key
-  // in lockstep with the production formula instead of hand-rolling it.
+  // Dynamic import: vi.mock factories run before module imports. Keep the
+  // transport key in lockstep with production rather than hand-rolling it.
   const { remoteAwareOwnerIdentityKey: computeOwnerIdentityKey } =
     await import("@/lib/host/transport-key");
   return {
@@ -268,11 +248,8 @@ vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
     useMergedNotificationsActions: () => ({
       markAsRead: markAsReadMock,
       markAllAsRead: vi.fn(),
-      // Cloud view-consumption fan-out. These cases never reach it (jsdom
-      // reports the document blurred, so the locally-read focus signal stays
-      // null), but the provider holds a reference to it - leaving it off the
-      // mock would make any future focus stub here a TypeError, not a
-      // behaviour change.
+      // Stub the cloud fan-out even though jsdom is blurred. Leaving it off
+      // the mock would make a future focus stub a TypeError.
       markEntityAsRead: vi.fn(),
       loadMoreHost: vi.fn(),
       canLoadMoreHost: false,
@@ -637,12 +614,8 @@ function createHostClient(
   client.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
-  // Post-slot the window holds a requester PINNED to a host id rather than a
-  // client carrying an active slot (redesign P4.1 Leg D; P4.2 deletes
-  // `bind()`). It resolves the same row this factory always bound, so every
-  // request below still addresses `mockLocalHostEntry` - including while
-  // `hostState.id` names some other host, which is exactly what the bound slot
-  // did before.
+  // Requester is pinned to a host id. Requests still address mockLocalHostEntry
+  // even when hostState.id names another host.
   return client.createRequesterForHostId(mockLocalHostEntry.hostId);
 }
 
@@ -772,11 +745,8 @@ describe("<NotificationsSessionProvider />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     hostState.id = "host-a";
-    // A real client with a fixed test identity, not `null`: production
-    // `useHostClient()` never returns `null`, and the provider reads
-    // `getRequestContextUserId()` unconditionally on every render, so a
-    // `null` default here would fail every case in this suite rather than
-    // only the ones that care about the host client.
+    // Real client with a fixed identity. useHostClient never returns null, and
+    // getRequestContextUserId is read on every render.
     hostState.client = createHostClient([]);
     streamState.client = null;
     streamState.cloudFeedSupport = "unsupported";
@@ -1668,10 +1638,8 @@ describe("<NotificationsSessionProvider />", () => {
   });
 
   it("resets collaboration and host replicas on a same-email different-userId switch", async () => {
-    // Two distinct canonical userIds sharing one email: an email-keyed
-    // identity comparison would misclassify this as an idle re-render and
-    // leave user-a's collaboration/host rows visible to user-b. The provider
-    // must key off `contextMetadata.userId`, not `profile.email`.
+    // Key off contextMetadata.userId, not profile.email. Shared email with
+    // different ids would leak user-a's rows to user-b.
     const queryClient = new QueryClient();
     const streams: ControlledStream[] = [];
     __setNotificationsStreamFactoryForTests((_callbacks) => {
@@ -1749,10 +1717,8 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streams[0].closeCount).toBe(1);
       expect(useNotificationsStore.getState().entries).toEqual([]);
       expect(useHostNotificationsStore.getState().byId).toEqual({});
-      // The provider does not own the app-local bucket: retargeting it by
-      // userId is `AppLocalNotificationsPersistLifecycleBridge`'s
-      // responsibility (see its own dedicated test file), so this replica
-      // must be left untouched by the session provider itself.
+      // Session provider must not retarget the app-local bucket; that is
+      // AppLocalNotificationsPersistLifecycleBridge.
       expect(
         Object.keys(useAppLocalNotificationsStore.getState().byId),
       ).not.toHaveLength(0);
@@ -1979,36 +1945,14 @@ describe("<NotificationsSessionProvider />", () => {
     expect(collabEntryBefore.id).toBe("collab-host-switch");
   });
 
-  // THE SINGLE-OWNERSHIP PIN (redesign P4.1 / connection-registry §6).
-  //
-  // The acceptance is "exactly one reconnection policy per transport kind",
-  // and this provider is the single wiring point that makes it true: it
-  // acquires ONE lease for the local host and hands that lease's engine to
-  // every stream it opens. Nothing else in this file - or in the four store
-  // suites - can fail if that ownership is re-scattered, because four stores
-  // each constructing their OWN engine still reconnects perfectly well. That
-  // is exactly what makes the regression silent, and why the acceptance needs
-  // an instrument rather than an assertion in a comment.
-  //
-  // Measured, not argued: the probe that replaces the handed-down engine with
-  // a per-store `createHostReconnectEngine()` leaves all 119 cases across the
-  // provider + store suites green and fails only here.
-  //
-  // Scope, stated so it cannot be over-read: this pins the four PER-LEASE
-  // stream owners. R12's chat-session wake retry is deliberately outside it -
-  // its subject is a handle, not a host, so it uses the process-scoped engine
-  // by ruling D1. "One engine per host" is the claim; "one engine in the
-  // process" is not.
+  // One reconnect engine per host lease: this provider acquires one lease and hands that engine to every stream it opens. Chat-session wake retry is a handle, not a host.
   it("opens every stream's reopen lane off the ONE per-lease reconnect engine", async () => {
     const lease = acquireHostConnection(mockLocalHostEntry.hostId);
     const openReopenLane = vi.spyOn(lease.reconnect, "openReopenLane");
     try {
       await renderHostNotificationsProvider();
-      // Host mode opens three streams - host notifications, collaboration
-      // notifications, agent activity - and each takes its OWN lane off the
-      // SHARED engine. Both halves matter: a single call would mean the
-      // streams had been folded onto one timer (the behavior change ruling D1
-      // forbids), and zero would mean each store built its own engine.
+      // Three streams, each its own lane off the shared engine. One call would
+      // fold timers; zero would mean each store built its own engine.
       expect(openReopenLane).toHaveBeenCalledTimes(3);
     } finally {
       openReopenLane.mockRestore();
@@ -2288,10 +2232,8 @@ describe("<NotificationsSessionProvider />", () => {
       useHostNotificationsStore.getState().byId["host-a-row"],
     ).toBeDefined();
 
-    // A different host appears after the disconnect gap: the replica must
-    // reset against "host-a" (the ref's last known non-null value), not
-    // against the disconnect's transient `null` - otherwise host-a's stale
-    // rows would render for one frame as if they belonged to host-b.
+    // After a disconnect gap, reset against the last non-null host, not
+    // transient null, or host-a's rows flash on host-b.
     act(() => {
       hostState.id = "host-b";
       view.rerender(
@@ -2356,10 +2298,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(useNotificationsStore.getState().entries).toHaveLength(1);
     });
 
-    // Same host + same user: ONLY the stream client is replaced - the
-    // app-wide liveness rebuild after the old client was closed underneath
-    // the provider. Both notification streams must rebind to the new client
-    // (the old client's sessions are dead), and the replica must survive.
+    // Same host+user, new client: rebind streams, keep the replica.
     const secondClient = new MockWsStreamClient();
     act(() => {
       streamState.client = secondClient;
@@ -3365,11 +3304,8 @@ describe("<NotificationsSessionProvider />", () => {
     });
     const openedSessions = streamClient.subscribedMethods.length;
 
-    // This provider has no dependency on the app-wide active host, so a
-    // re-render triggered by an active-host switch elsewhere in the tree is
-    // indistinguishable, from here, from any other unrelated re-render: the
-    // local host entry (and therefore the resolved stream client) stays the
-    // same object, and the stream must not be torn down or reopened.
+    // App-wide host switch must not tear down or reopen the local stream; the
+    // local entry and client stay the same object.
     act(() => {
       view.rerender(
         <QueryClientProvider client={queryClient}>
@@ -3424,12 +3360,8 @@ describe("<NotificationsSessionProvider />", () => {
     expect(useNotificationsStore.getState().entries).toEqual([]);
   });
 
-  // ---------------------------------------------------------------------
-  // Relay-only fallback: a shell with NO local host serves notifications from
-  // the BOUND host instead (`useNotificationsServingHostEntry`). The
-  // local-host rule covered above must hold identically whether or not this
-  // fallback exists - it is reachable only where that rule has no subject.
-  // ---------------------------------------------------------------------
+  // Relay-only: no local host, serve from the bound host. Local-host rules
+  // above must hold identically; this fallback is only where they have no subject.
   describe("relay-only serving-host fallback", () => {
     it("a local host wins over the bound host even on a local-capable shell, and a bound-host switch alone neither reopens nor tears down the stream", async () => {
       const queryClient = new QueryClient();
@@ -3458,10 +3390,7 @@ describe("<NotificationsSessionProvider />", () => {
       });
       const openedSessions = streamClient.subscribedMethods.length;
 
-      // The bound host switches elsewhere in the app while a local host is
-      // present. `useNotificationsServingHostEntry` keeps returning the
-      // local entry regardless, so the resolved serving host - and
-      // therefore the stream - must not change.
+      // Bound-host switch elsewhere must not change the local serving stream.
       act(() => {
         servingHostFallbackState.boundHostId = "host-c";
         view.rerender(
@@ -3786,11 +3715,8 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     it("a relay-only shell in cloud feed mode opens the cloud feed and the collaboration replica against the bound host, landing rows into the cloud store", async () => {
-      // This is the branch a production relay-only shell actually takes: once
-      // the bound host advertises cloud-feed support, `useNotificationFeedMode`
-      // resolves to "cloud" and the provider takes the cloud branch instead of
-      // `host.notifications.feed.subscribe` (cases (b)-(d) above only exercise
-      // the local/v1 branch).
+      // Bound host advertises cloud-feed: take the cloud branch, not
+      // host.notifications.feed.subscribe.
       const queryClient = new QueryClient();
       const streamClient = new MockWsStreamClient();
       hostState.id = null;
@@ -3811,11 +3737,8 @@ describe("<NotificationsSessionProvider />", () => {
         resetAuth("signed-in", "alice@example.com", "alice@example.com");
       });
 
-      // The cloud branch deliberately keeps the collaboration
-      // (`notifications.subscribe`) replica live alongside the relay, and
-      // opens `host.notifications.cloudFeed.subscribe` rather than
-      // `host.notifications.feed.subscribe` - both against the BOUND host's
-      // client, exactly as case (b) does for the local branch.
+      // Cloud keeps the collaboration replica live and opens cloudFeed on the
+      // bound host, not feed.subscribe.
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
           "agent.activity.subscribe",
@@ -3900,14 +3823,8 @@ describe("<NotificationsSessionProvider />", () => {
       }
       const subscribedBeforeSwitch = firstClient.subscribedMethods.length;
 
-      // The serving host moves to host-c while the binding still carries
-      // host-b's client AND host-b's owner identity - the shape a shared
-      // relay session produces once `RemoteStreamClient.close()` has
-      // released only this consumer's reference: the underlying session
-      // stays open for other references (or the keep-warm linger), so
-      // `isClosed()` keeps reporting `false` even though this view no
-      // longer owns it. Forcing the override reproduces that combination
-      // directly instead of racing the real effect-timing gap.
+      // Serving host-c while the binding still carries host-b's client and
+      // owner: close released this consumer; isClosed stays false for linger.
       act(() => {
         streamBindingOverrideState.ownerIdentity = hostBIdentity;
         servingHostFallbackState.boundHostId = "host-c";

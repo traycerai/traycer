@@ -7,15 +7,8 @@ import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
- * `epic.subscribe@1.3` delta-seeded reattach - gui-app store side.
- *
- * `doc` (the local replica) always merges via `Y.applyUpdate`, so it is safe
- * either way a snapshot is routed. `hostCoverageDoc` is the dangerous one: a
- * FULL snapshot rebuilds it from scratch (safe - full snapshots are
- * self-sufficient), but a DELTA deliberately omits everything the host knows
- * this client already had, so routing a delta to the rebuild arm would
- * silently collapse coverage down to the handful of bytes that changed. This
- * suite is the seam `applyRootSeedToHostCoverage` protects.
+ * `epic.subscribe@1.3` delta-seeded reattach - gui-app store side. `doc` (the local replica)
+ * always merges via `Y.applyUpdate`, so it is safe either way a snapshot is routed.
  */
 
 interface FakeStreamHandle {
@@ -111,11 +104,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -138,9 +127,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
     expect(offerAfterFull).not.toBeNull();
     if (offerAfterFull === null) throw new Error("expected an offer");
 
-    // Cycle 2: the host adds content Y and answers a reattach with a DELTA
-    // computed against the offer above - exactly what the real resolver does
-    // (`encodeRootSeed` in `epic-stream-resolver.ts`).
+    // Cycle 2: the host adds content Y and answers a reattach with a DELTA computed against the offer
+    // above - exactly what the real resolver does (`encodeRootSeed` in `epic-stream-resolver.ts`).
     originDoc.getMap("epic").set("y", "content-y");
     const deltaBytes = Y.encodeStateAsUpdate(
       originDoc,
@@ -156,12 +144,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
       deltaBytes,
     );
 
-    // Prove coverage holds BOTH X and Y: diffing the true origin doc against
-    // the NEW offer's state vector must be the empty update. If the delta had
-    // instead been routed to the rebuild arm, coverage would only reflect Y
-    // (or nothing X-related would have integrated at all, since the delta's
-    // clock range for `originDoc`'s clientID has no predecessor in a fresh
-    // doc), and this diff would come back non-empty.
+    // Prove coverage holds BOTH X and Y: diffing the true origin doc against the NEW offer's state
+    // vector must be the empty update.
     const offerAfterDelta = handle().seedOfferProvider();
     expect(offerAfterDelta).not.toBeNull();
     if (offerAfterDelta === null) throw new Error("expected an offer");
@@ -179,11 +163,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -203,11 +183,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -236,11 +212,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -267,11 +239,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -307,11 +275,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -354,9 +318,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
       staleDeltaBytes,
     );
 
-    // If the guard had not fired, this merge would have set a roomId (and
-    // corrupted the empty post-revocation doc). No offer means no room id
-    // was taken - the merge was skipped.
+    // If the guard had not fired, this merge would have set a roomId (and corrupted the empty
+    // post-revocation doc). No offer means no room id was taken - the merge was skipped.
     expect(handle().seedOfferProvider()).toBeNull();
 
     opened.dispose();
@@ -367,11 +330,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -407,9 +366,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
       deltaBytes,
     );
 
-    // Merge succeeded: coverage now reflects BOTH x and y, proven the same
-    // way as the base safety test - diffing the true origin doc against the
-    // new offer's vector comes back empty.
+    // Merge succeeded: coverage now reflects BOTH x and y, proven the same way as the base safety test
+    // - diffing the true origin doc against the new offer's vector comes back empty.
     const offerAfterDelta = handle().seedOfferProvider();
     expect(offerAfterDelta).not.toBeNull();
     if (offerAfterDelta === null) throw new Error("expected an offer");
@@ -427,11 +385,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
     const opened = openStoreForTest({
       epicId: "epic-a",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -453,9 +407,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
     if (offer === null) throw new Error("expected an offer");
     const svAfterFullSnapshot = decodeBase64(offer.stateVectorBase64);
 
-    // Ordinary forward movement: an `onUpdate` frame merges into coverage
-    // via `Y.applyUpdate` directly - it must NOT bump the generation, since
-    // this is the same doc, just further along.
+    // Ordinary forward movement: an `onUpdate` frame merges into coverage via `Y.applyUpdate` directly
+    // - it must NOT bump the generation, since this is the same doc, just further along.
     originDoc.getMap("epic").set("y", "content-y");
     const ordinaryUpdateBytes = Y.encodeStateAsUpdate(
       originDoc,
@@ -463,10 +416,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
     );
     handle().callbacks.onUpdate(ordinaryUpdateBytes);
 
-    // A late delta computed against the ORIGINAL offer (predating y) still
-    // arrives and must still merge - it is a superset of what coverage
-    // needs, and coverage moving forward under an in-flight offer is the
-    // harmless direction the guard deliberately does not reject.
+    // A late delta computed against the ORIGINAL offer (predating y) still arrives and must still
+    // merge - it is a superset of what coverage needs, and coverage moving forward under an in-flight
     originDoc.getMap("epic").set("z", "content-z");
     const deltaBytes = Y.encodeStateAsUpdate(originDoc, svAfterFullSnapshot);
     handle().callbacks.onSnapshot(
@@ -479,9 +430,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
       deltaBytes,
     );
 
-    // Coverage must now hold x, y AND z - proof the delta was not silently
-    // dropped by a guard that (wrongly) treated forward movement as
-    // staleness.
+    // Coverage must now hold x, y AND z - proof the delta was not silently dropped by a guard that
+    // (wrongly) treated forward movement as staleness.
     const offerAfterDelta = handle().seedOfferProvider();
     expect(offerAfterDelta).not.toBeNull();
     if (offerAfterDelta === null) throw new Error("expected an offer");

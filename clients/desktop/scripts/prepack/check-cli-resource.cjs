@@ -3,27 +3,8 @@
 "use strict";
 
 /**
- * Precheck invoked before `electron-builder`. Replaces the previous
- * `check-host-resource.cjs` - Desktop no longer bundles a host. The CLI
- * (single-file SEA, per platform/arch) is the only native asset Desktop
- * ships, staged into `resources/cli/` and mapped to `extraResources/cli/`.
- *
- * NP-7 publishes per-platform/arch binaries (`traycer-darwin-arm64`,
- * `traycer-win32-x64.exe`, ...). The desktop release workflows rename and
- * place each binary into a matching `resources/cli/<platform>-<arch>/`
- * directory so the renderer can resolve the binary for the current
- * `process.platform`/`process.arch` at runtime. `package.json` maps ONLY
- * `resources/cli/<platform>-${arch}/` into the bundle (electron-builder's
- * per-arch file macro, so an arm64 app never carries the x64 SEA - see
- * traycerai/traycer#1528). A binary dropped flat at `resources/cli/<traycer>`
- * is therefore never packaged, and this precheck refuses it rather than
- * reporting a green that ships no CLI.
- *
- * Pass `--platform <darwin|linux|win32>` and `--arch <arm64|x64|...>`
- * (each can be repeated) to require specific platform/arch binaries
- * - release workflows pin the matrix they expect to ship. Without
- * those flags the precheck only verifies SOMETHING usable exists for
- * the current host (sufficient for `make install-desktop`).
+ * `package.json` maps ONLY `resources/cli/<platform>-${arch}/` into the bundle (electron-builder's per-arch file macro, so an arm64 app never carries the x64 SEA.
+ * A binary dropped flat at `resources/cli/<traycer>` is therefore never packaged, and this precheck refuses it rather than reporting a green that ships no CLI.
  */
 
 const {
@@ -80,14 +61,7 @@ function isExecutable(path) {
   }
 }
 
-/**
- * Validate the bundled CLI `version.json` staged next to the SEA binary.
- * Returns an empty string when the metadata is valid, otherwise a human-
- * readable failure reason that the caller surfaces in the matrix-mode
- * failure list. We accept any non-empty `version` string; the release
- * workflow writes the resolved `cli-v<version>` tag derivative and the
- * local installer writes a `0.0.0-local` sentinel - both are valid.
- */
+/** Returns an empty string when the metadata is valid, otherwise a human- readable failure reason that the caller surfaces in the matrix-mode failure list. */
 function validateVersionMetadata(path) {
   let raw;
   try {
@@ -130,12 +104,8 @@ if (!existsSync(CLI_DIR)) {
 
 const { platforms, archs } = parseArgs(process.argv.slice(2));
 
-// Explicit-matrix mode: every (platform, arch) pair must have a real
-// executable at resources/cli/<platform>-<arch>/<binary> AND a sibling
-// `version.json` so Desktop's `readBundledCliVersion()` resolves to the
-// actual bundled release version instead of the `0.0.0-local` fallback.
-// Release workflows drive this - both the rename step and the
-// version-metadata staging must land before electron-builder runs.
+// Explicit-matrix mode: every (platform, arch) pair must have a real executable at resources/cli/<platform>-<arch>/<binary> AND a sibling `version.json` so Desktop's.
+// Release workflows drive this - both the rename step and the version-metadata staging must land before electron-builder runs.
 if (platforms.length > 0 && archs.length > 0) {
   const problems = [];
   for (const p of platforms) {
@@ -170,11 +140,7 @@ if (platforms.length > 0 && archs.length > 0) {
   process.exit(0);
 }
 
-// Host-mode: at minimum the current host needs a usable binary in the
-// arch-scoped layout (`make install-desktop` and the release workflows both
-// stage it there). The flat layout is deliberately NOT accepted: the
-// packager's `${arch}`-scoped mapping never copies it, so a green here
-// would ship an app with no CLI.
+// The flat layout is deliberately NOT accepted: the packager's `${arch}`-scoped mapping never copies it, so a green here would ship an app with no CLI.
 const hostBinary = cliBinaryName(process.platform);
 const archScoped = join(
   CLI_DIR,
@@ -184,15 +150,6 @@ const archScoped = join(
 const flat = join(CLI_DIR, hostBinary);
 const flatPresent = isExecutable(flat);
 if (isExecutable(archScoped)) {
-  // A flat binary alongside the arch-scoped one does not make the pack
-  // wrong - the flat path sits outside the `from` root of every mapping in
-  // `package.json`, so it cannot reach the bundle and the app still ships
-  // the correct CLI. Refusing here would fail a build whose output is
-  // perfectly good. It IS worth saying out loud though: someone who staged
-  // the flat copy expecting it to ship, next to an arch dir left over from
-  // an older build, would otherwise ship the stale arch-scoped binary and
-  // never learn which one they packaged (host mode has no version check to
-  // catch that - only the release matrix mode above validates version.json).
   if (flatPresent) {
     console.warn(
       `[desktop] warning: a flat-layout CLI binary is also staged at ${flat}.\n` +

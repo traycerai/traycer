@@ -114,11 +114,8 @@ function openSlash(
   });
 }
 
-// Several suggestion plugins (`/`, `$`, `@`) drive one store, and replacing one
-// trigger with another over a selection stops the old session and starts the
-// new one in a single transaction - new `onStart` first, old `onExit` after.
-// Without ownership the departing session's teardown shuts the picker that just
-// opened, and the menu stays invisible while its plugin is still active.
+// Several suggestion plugins (`/`, `$`, `@`) drive one store, and replacing one trigger with another over a selection stops the old session and starts the new one in a single transaction - new `onStart` first, old `onExit` after.
+// Without ownership the departing session's teardown shuts the picker that just opened, and the menu stays invisible while its plugin is still active.
 describe("composer picker store session ownership", () => {
   it("ignores a close from a session that no longer owns the store", () => {
     const store = createComposerPickerStore();
@@ -432,10 +429,7 @@ describe("composer picker store", () => {
     expect(store.getState().activeIndex).toBe(2);
   });
 
-  // A scope flip rewrites every row's enabled/disabled policy, so rows built
-  // under the old scope must not survive it - otherwise a native command
-  // published while the caret was leading stays committable after the caret
-  // makes the position skills-scoped.
+  // A scope flip rewrites every row's enabled/disabled policy, so rows built under the old scope must not survive it - otherwise a native command published while the caret was leading stays committable after the caret makes the position skills-scoped.
   it("drops published items when the slash scope flips", () => {
     const store = createComposerPickerStore();
     store.getState().openPicker({
@@ -628,12 +622,8 @@ describe("composer picker store", () => {
   });
 });
 
-// A held GitHub row (see `GithubMentionSectionContext.rowsHeld` and
-// `GITHUB_MENTION_HELD_ROWS_DISABLED_REASON` in providers.tsx) carries its
-// disabled reason on the ENTRY, not on the wrapping picker item the way a
-// disabled slash command does. `pickerItemDisabledReason` used to hard-return
-// null for every mention item, which let a held row's chip commit anyway;
-// this pins that it now defers to the entry.
+// A held GitHub row (see `GithubMentionSectionContext.rowsHeld` and `GITHUB_MENTION_HELD_ROWS_DISABLED_REASON` in providers.tsx) carries its disabled reason on the ENTRY, not on the wrapping picker item the way a disabled slash command does.
+// `pickerItemDisabledReason` used to hard-return null for every mention item, which let a held row's chip commit anyway; this pins that it now defers to the entry.
 describe("pickerItemDisabledReason", () => {
   it("returns a mention item's own disabledReason instead of hard-returning null", () => {
     const heldEntry: MentionMenuEntry = {
@@ -659,10 +649,8 @@ describe("pickerItemDisabledReason", () => {
   });
 });
 
-// A same-query refresh can reorder rows as slower mention sources land (the
-// flat root search re-ranks every arrival). Once the user has moved the
-// highlight off the top row, it must follow the item they chose, not the index
-// it sat at; at index 0 the highlight keeps tracking the best match.
+// A same-query refresh can reorder rows as slower mention sources land (the flat root search re-ranks every arrival).
+// Once the user has moved the highlight off the top row, it must follow the item they chose, not the index it sat at; at index 0 the highlight keeps tracking the best match.
 describe("composer picker store selection stickiness", () => {
   function publish(store: ComposerPickerStore, ids: ReadonlyArray<string>) {
     store.getState().setItems({
@@ -713,10 +701,8 @@ describe("composer picker store selection stickiness", () => {
     expect(store.getState().activeIndex).toBe(1);
   });
 
-  // Navigation deliberately highlights disabled slash rows (their disabled
-  // reason stays visible; commit refuses). A same-query catalog refresh must
-  // keep the highlight on that row - skipping it to an enabled neighbor would
-  // let a following Enter commit a command the user never selected.
+  // Navigation deliberately highlights disabled slash rows (their disabled reason stays visible; commit refuses).
+  // A same-query catalog refresh must keep the highlight on that row - skipping it to an enabled neighbor would let a following Enter commit a command the user never selected.
   it("carries a highlighted DISABLED slash row by id across a same-query refresh", () => {
     const store = createComposerPickerStore();
     openSlash(store, NOOP_COMMIT);

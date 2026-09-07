@@ -37,15 +37,8 @@ vi.mock("@pierre/diffs/react", () => ({
   EditProvider: (props: { readonly children: unknown }) => props.children,
 }));
 
-/**
- * A fake `WorkerPoolManager`. The real class has ~90 members, so a literal
- * with three of them does not overlap enough for a direct `as`, and
- * `as unknown as` is lint-forbidden here. The same seam the diagnostics test
- * support uses instead: a prototype-less object asserted to the class type,
- * then the three members the gates actually call assigned onto it. Only the
- * demand store's `manager` field (typed against the real class) ever sees
- * it; every assertion in this file reads the fake object directly.
- */
+/** Only the demand store's `manager` field (typed against the real class) ever sees it; every assertion in this
+ * file reads the fake object directly. */
 function fakeWorkerPoolManager(): FakeWorkerPoolManager {
   return {
     setRenderOptions: vi.fn(() => Promise.resolve()),
@@ -187,9 +180,8 @@ describe("useDiffs highlight gates", () => {
   it("keeps both the file and diff gates closed once a creator is registered but the context has not caught up yet", async () => {
     const manager = fakeWorkerPoolManager();
     registerDiffWorkerPoolCreator(() => asWorkerPoolManager(manager));
-    // `poolState.pool` stays undefined on purpose: the store already built the
-    // manager, but the provider that would carry it into context has not
-    // re-rendered in this test, so `useWorkerPool()` still answers undefined.
+    // `poolState.pool` stays undefined on purpose: the store already built the manager, but the provider that
+    // would carry it into context has not re-rendered in this test, so `useWorkerPool` still answers undefined.
 
     render(<FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />);
     expect(screen.getByTestId("ready").textContent).toBe("pending");
@@ -296,9 +288,8 @@ describe("useDiffs highlight gates", () => {
   });
 
   it("requests the pool from a disabled gate that has work, but holds release until the pool reaches context", () => {
-    // The file gate's demand signal is `useDiffWorkerPoolAvailability(true)` -
-    // always has work, independent of `enabled` - so a disabled gate still
-    // asks for the pool instead of skipping the request.
+    // The file gate's demand signal is `useDiffWorkerPoolAvailability(true)` - always has work, independent of
+    // `enabled` - so a disabled gate still asks for the pool instead of skipping the request.
     const manager = asWorkerPoolManager(fakeWorkerPoolManager());
     registerDiffWorkerPoolCreator(() => manager);
 
@@ -346,10 +337,8 @@ describe("useDiffs highlight gates", () => {
     expect(screen.getByTestId("ready").textContent).toBe("ready");
     expect(manager.primeFileHighlightCache).not.toHaveBeenCalled();
 
-    // The regression this pins: an editor that mounted disabled (an edit
-    // session in progress) and is later enabled (the session ends) must stay
-    // released - never close the gate again and replace the mounted editor
-    // with DiffHighlightLoading.
+    // The regression this pins: an editor that mounted disabled (an edit session in progress) and is later enabled
+    // (the session ends) must stay released.
     rendered.rerender(
       <FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />,
     );

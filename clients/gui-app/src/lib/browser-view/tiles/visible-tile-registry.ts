@@ -5,11 +5,7 @@ import { compositeKey } from "./browser-view-keys";
 
 /**
  * GUI-local on-screen registry for real browser tiles.
- * Keyed host + session + tab. The PiP consults this, never the host `viewed`
- * flag (that conflates screencast viewers with tiles).
- *
- * Refcounted so a session tile and its native/peek child can both report
- * without flickering on remount.
+ * Keyed host + session + tab.
  */
 interface VisibleBrowserTileState {
   readonly countsByKeyId: Partial<Record<string, number>>;

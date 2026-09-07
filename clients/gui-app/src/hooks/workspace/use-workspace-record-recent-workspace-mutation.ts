@@ -30,15 +30,7 @@ export function writeRecentWorkspacesCache(
 }
 
 /**
- * Append a folder to the host's recent-workspaces list.
- *
- * New picks use this as fire-and-forget bookkeeping. Moving an active folder
- * awaits the same mutation before removing it from context, because that user
- * action must either complete both halves or leave the active folder intact.
- *
- * No `mutationKey`: `workspaceMutationKeys.prepareFolders()` is what
- * `useWorkspaceFolderActions` counts to drive its `isPreparing` flag, and
- * recording a recent is not preparing folders.
+ * No `mutationKey`: `workspaceMutationKeys.prepareFolders()` drives `isPreparing`, and recording a recent is not preparing folders.
  */
 export function useWorkspaceRecordRecentWorkspace(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -60,11 +52,7 @@ export function useWorkspaceRecordRecentWorkspace(args: {
     }),
     options: {
       retry: false,
-      // The host is the only owner of recents order, so current hosts return
-      // the authoritative post-write list for a cache write-through. Older
-      // hosts return null and fall back to one exact invalidation. Host is
-      // captured before dispatch because the picker closes immediately and
-      // the active host can move before this lands.
+      // Host is captured before dispatch because the picker closes immediately and the active host can move before this lands.
       onMutate: () => ({ hostId: args.client?.getActiveHostId() ?? null }),
       onSuccess: async (result, _variables, context) => {
         if (writeRecentWorkspacesCache(queryClient, context.hostId, result))

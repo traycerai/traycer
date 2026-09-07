@@ -1,12 +1,7 @@
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 
-/**
- * Structural-sharing state for the chat timeline: the last row array handed
- * to LegendList plus a lookup from message id to the row object it produced.
- * Kept separate from the component so row-reference stability is explicit
- * and unit-testable.
- */
+/** Structural-sharing state for the chat timeline: the last row array handed to LegendList plus a lookup from message id to the row object it produced. Kept separate from the component so row-reference stability is explicit and unit-testable. */
 export interface StableChatTimelineRowsState {
   readonly byId: ReadonlyMap<string, ChatMessage>;
   readonly result: ReadonlyArray<ChatMessage>;
@@ -25,19 +20,7 @@ export function chatTimelineKeySequence(
   return rows.map((row) => row.id);
 }
 
-/**
- * Whether `rows` presents a different sequence of row KEYS than `committed` -
- * a row inserted, removed, or moved, as opposed to a row whose content changed
- * in place. A streaming reply produces a continuous run of the latter, and
- * `ChatTimeline` reads this to decide whether that commit needs MVCP's data
- * channel.
- *
- * `committed` must be the sequence the list last actually RENDERED, never one
- * a render merely computed: React discards renders, and a baseline advanced by
- * a discarded one makes a real insertion that follows it look like settled
- * content. `undefined` is a first population, which no reader is positioned
- * within and so cannot have shifted.
- */
+/** `committed` must be the sequence the list last actually RENDERED, never one a render merely computed: React discards renders, and a baseline advanced by a discarded one makes a real insertion that follows it look like settled content. `undefined` is a first population, which no reader is positioned within and so cannot have shifted. */
 export function didChatTimelineKeySequenceChange(
   committed: ReadonlyArray<string> | undefined,
   rows: ReadonlyArray<ChatMessage>,
@@ -49,14 +32,7 @@ export function didChatTimelineKeySequenceChange(
   return rows.some((row, index) => committed[index] !== row.id);
 }
 
-/**
- * Reuses the previous message object reference wherever a message is
- * unchanged, so `ChatMessage`'s `memo` boundary (and LegendList's own item
- * diffing) can skip re-rendering rows a given store update didn't touch -
- * the store rebuilds the `messages` array wholesale on every change, so
- * without this every row would otherwise see a fresh object identity on
- * every keystroke of a streaming reply.
- */
+/** Reuses the previous message object reference wherever a message is unchanged, so `ChatMessage`'s `memo` boundary (and LegendList's own item diffing) can skip re-rendering rows a given store update didn't touch - the store rebuilds the `messages` array wholesale on every change, so without this every row would otherwise see a fresh object identity on every keystroke of a streaming reply. */
 export function computeStableChatTimelineRows(
   rows: ReadonlyArray<ChatMessage>,
   previous: StableChatTimelineRowsState,
@@ -82,24 +58,7 @@ export function computeStableChatTimelineRows(
 
 type ChatMessageComparableField = Exclude<keyof ChatMessage, "id">;
 
-/**
- * One `===` check per `ChatMessage` field except `id` (the dedup key, which
- * the caller has already matched via the `byId` lookup before this runs).
- * Keyed as a mapped-type record - not a bare array - so the compiler
- * enforces coverage: adding, removing, or renaming a `ChatMessage` field
- * fails this file's build until the table is updated. Mirrors the
- * `Record<U, true>` idiom `makeLiteralGuard` uses in `lib/type-guard.ts`,
- * adapted to comparators so `Object.values` below stays fully typed with no
- * cast (`Object.keys` widens to `string[]` and would need one).
- *
- * Deliberate audit disposition: keep this table because this codebase's
- * giant, heterogeneous assistant rows need per-field row-reference
- * stability. The compile-time
- * exhaustiveness this table buys (a field add/remove/rename fails the build
- * until this table is updated) is worth the upkeep, since silently missing a
- * field here would make an actually-changed row look unchanged to LegendList
- * and freeze a row's rendered content mid-stream.
- */
+/** Keyed as a mapped-type record - not a bare array - so the compiler enforces coverage: adding, removing, or renaming a `ChatMessage` field fails this file's build until the table is updated. The compile-time exhaustiveness this table buys (a field add/remove/rename fails the build until this table is updated) is worth the upkeep, since silently missing a field here would make an actually-changed row look unchanged to LegendList and freeze a row's rendered content mid-stream. */
 const CHAT_MESSAGE_FIELD_UNCHANGED: {
   readonly [K in ChatMessageComparableField]: (
     a: ChatMessage,
@@ -146,17 +105,8 @@ function isChatMessageUnchanged(a: ChatMessage, b: ChatMessage): boolean {
   );
 }
 
-// ---------------------------------------------------------------------------
-// The windowed line: the same structural sharing over rows that may be
-// placeholders.
-//
-// Added ALONGSIDE the `ChatMessage` functions above rather than replacing
-// them. The field table is the part that must not be disturbed - it is
-// compile-time exhaustive, and its whole purpose is that a missed field
-// freezes a row's content mid-stream. So the hydrated case still runs through
-// `isChatMessageUnchanged` unchanged, and this layer only decides which rows
-// are comparable in the first place.
-// ---------------------------------------------------------------------------
+// Added ALONGSIDE the `ChatMessage` functions above rather than replacing them.
+// The field table is the part that must not be disturbed - it is compile-time exhaustive, and its whole purpose is that a missed field freezes a row's content mid-stream.
 
 export interface StableTranscriptListRowsState {
   readonly byKey: ReadonlyMap<string, TranscriptListRow>;
@@ -186,16 +136,7 @@ export function didTranscriptListKeySequenceChange(
   return rows.some((row, index) => committed[index] !== row.key);
 }
 
-/**
- * Whether two rows under the same key describe the same thing.
- *
- * The `kind` check is the load-bearing one and it comes first: a placeholder
- * that hydrated is NEVER unchanged, however its fields compare. That is the
- * whole reason a placeholder is its own row type - the alternative, a
- * `ChatMessage` whose content merely filled in, is a row the field table can
- * legitimately call unchanged, and LegendList would keep rendering the empty
- * one.
- */
+/** The `kind` check is the load-bearing one and it comes first: a placeholder that hydrated is NEVER unchanged, however its fields compare. That is the whole reason a placeholder is its own row type - the alternative, a `ChatMessage` whose content merely filled in, is a row the field table can legitimately call unchanged, and LegendList would keep rendering the empty one. */
 function isTranscriptListRowUnchanged(
   a: TranscriptListRow,
   b: TranscriptListRow,
@@ -207,9 +148,7 @@ function isTranscriptListRowUnchanged(
     return isChatMessageUnchanged(a.model, b.model);
   }
   if (b.kind !== "placeholder") return false;
-  // Skeleton entries arrive whole and are never mutated in place, so reference
-  // equality is the right test - and a redelivered chunk that genuinely
-  // replaces an entry SHOULD re-render the row it describes.
+  // Skeleton entries arrive whole and are never mutated in place, so reference equality is the right test - and a redelivered chunk that genuinely replaces an entry SHOULD re-render the row it describes.
   return a.entry === b.entry;
 }
 

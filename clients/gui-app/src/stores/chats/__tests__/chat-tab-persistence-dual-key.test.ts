@@ -1,18 +1,3 @@
-/**
- * Ticket 15 (decision #29): dual-key persistence pins - unit-level coverage
- * for the scroll cache, the other five registries, eviction, multi-view, and
- * stale-anchor nearest-neighbor. Component-level streaming / composer-resize
- * / restore-first pins live in chat-messages.test.tsx.
- *
- * Ticket 15 review round 3 (mandated simplification): the durable COMMIT
- * moved from per-hook/component unmounts to the canvas close sweep's
- * promotion choke point (store.ts - see its own tests in
- * `store-scroll-anchor-eviction.test.ts` for the end-to-end path through
- * the REAL sweep). This file's "reopen-after-close" pins simulate that
- * promotion directly via each registry's own `promoteXToDurable` function
- * (unit-level, no canvas store involved) - complementary to, not a
- * duplicate of, the canvas-level integration test.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
@@ -118,20 +103,12 @@ function createNoopAdapter(tileInstanceId: string): TileFindAdapter {
   };
 }
 
-// Every non-eviction test in this file shares (EPIC, CHAT) for its durable
-// key - the two dedicated eviction/tombstone tests below use their OWN
-// chatId so a tombstone they set never blocks any other test's writes
-// (`evictChatTabPersistenceForChat` tombstones by EXACT chat-key, terminal
-// until something re-opens that exact identity - ticket 15 review round 3).
 const DELETE_SINGLE_CHAT = "chat-t15-delete-single";
 const DELETE_ALL_REGISTRIES_CHAT = "chat-t15-delete-all-registries";
 
 function clearEpicDurableStateForTests(epicId: string): void {
-  // Ticket 15 review round 3: uses the individual (non-tombstoning) evict
-  // functions - `evictChatTabPersistenceForEpic` is now a TERMINAL
-  // deletion (it tombstones the epic prefix), which would permanently
-  // block every other test sharing this epicId if used for mere
-  // test-isolation cleanup.
+  // uses the individual (non-tombstoning) evict functions - `evictChatTabPersistenceForEpic` is now
+  // a TERMINAL deletion (it tombstones the epic prefix), which would permanently block every other
   evictChatTabStateForEpic(epicId);
   evictA2AOpenStoresForEpic(epicId);
   evictActivityGroupOpenStoresForEpic(epicId);
@@ -373,15 +350,6 @@ describe("ticket 15 dual-key scroll cache", () => {
     ).toBe("following-end");
     expect(peekSavedChatTabState(reopened) !== null).toBe(false);
 
-    // Terminal regardless of who writes DURABLE state after the delete -
-    // the whole point of the tombstone (round-3 finding: a late-arriving
-    // sweep promotion used to resurrect a just-deleted chat). A save while
-    // this identity is still live legitimately writes the ephemeral
-    // tab-key entry (real-time scroll tracking for whatever view is
-    // showing "reopened" right now - `saveChatTabState` is not the mount
-    // path that clears the tombstone), but the durable half of that same
-    // save is fenced, so once that view ALSO closes without a genuine
-    // chat-messages remount, nothing durable survives to restore from.
     saveChatTabState({
       identity: reopened,
       mode: "free-scrolling",
@@ -590,11 +558,8 @@ describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", (
     });
     useTileFindStore.getState().setQuery(closedId, "needle");
     useTileFindStore.getState().openForTile(closedId);
-    // Production order: the canvas sweep's promotion (reading
-    // `uiByTileInstanceId` directly - round 3 dropped the
-    // `targetsByTileInstanceId` dependency the F1/F2/F3 round had) runs
-    // BEFORE `evictTileFindUi`, which itself runs BEFORE the adapter's own
-    // `unregister()` (React unmount, fires last).
+    // Production order: the canvas sweep's promotion (reading `uiByTileInstanceId` directly - round 3
+    // dropped the `targetsByTileInstanceId` dependency the F1/F2/F3 round had) runs BEFORE
     promoteTileFindUiToDurable(chatIdIdentity(closedId));
     evictTileFindUi([closedId]);
     unregister();
@@ -657,9 +622,8 @@ describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", (
     promoteActivityGroupOpenStoreToDurable(id);
     toolOpenDurableCache.set(id, new Set(["t"]));
     subagentOpenDurableCache.set(id, new Set(["u"]));
-    // tile-find durable is chat-keyed by (epicId, contentId) - contentId is
-    // `id.chatId` for a chat tile; register a real target so the sweep's
-    // promotion has something to read.
+    // tile-find durable is chat-keyed by (epicId, contentId) - contentId is `id.chatId` for a chat
+    // tile; register a real target so the sweep's promotion has something to read.
     const findAdapter = createNoopAdapter(id.tileInstanceId);
     useTileFindStore.getState().registerTarget({
       tileInstanceId: id.tileInstanceId,
@@ -761,9 +725,8 @@ describe("ticket 15 review round 3: useChatScopedOpenStoreDualKeySeed (F2)", () 
         .openIds.has(`${closed.tileInstanceId}\0seg-1`),
     ).toBe(true);
 
-    // Production order (round 3): the sweep promotes THEN resets, all
-    // synchronously, before this tab's own component (if any) ever
-    // unmounts - simulate exactly that here, with no hook cleanup involved.
+    // Production order (round 3): the sweep promotes THEN resets, all synchronously, before this tab's
+    // own component (if any) ever unmounts - simulate exactly that here, with no hook cleanup
     promoteToolOpenToDurable(closed);
     useToolOpenStore.getState().reset(closed.tileInstanceId);
     toolOpenInitializedScopes.delete(closed.tileInstanceId);
@@ -830,17 +793,13 @@ describe("ticket 15 review round 3: useChatScopedOpenStoreDualKeySeed (F2)", () 
       useToolOpenStore.getState().openIds.has(`${viewA.tileInstanceId}\0a`),
     ).toBe(true);
 
-    // THEN B genuinely closes - the sweep promotes B's state, overwriting
-    // the shared durable chat-key entry with 'b' (last-writer-wins is
-    // correct: B's close really is the most recent event).
+    // THEN B genuinely closes - the sweep promotes B's state, overwriting the shared durable chat-key
+    // entry with 'b' (last-writer-wins is correct: B's close really is the most recent event).
     promoteToolOpenToDurable(viewB);
     useToolOpenStore.getState().reset(viewB.tileInstanceId);
     toolOpenInitializedScopes.delete(viewB.tileInstanceId);
 
-    // A remounts (switch-away-then-back, SAME tileInstanceId, still holding
-    // its own intact live 'a'). Without the "fresh scope only" seed guard,
-    // this reseed would read the shared durable entry (now 'b', from B's
-    // later promotion) and union it on top of A's still-live 'a'.
+    // A remounts (switch-away-then-back, SAME tileInstanceId, still holding its own intact live 'a').
     renderHook(() =>
       useChatScopedOpenStoreDualKeySeed(
         useToolOpenStore,
@@ -905,18 +864,8 @@ describe("ticket 15 review round 3: useChatScopedOpenStoreDualKeySeed (F2)", () 
   });
 });
 
-// Ticket 15 review round 4 (finding 5): the round-3 version of this test
-// invoked each registry's `promoteXToDurable` MANUALLY, in the order the
-// sweep is supposed to call them - it proved every registry's own
-// last-write-wins property, but never actually drove the canvas's real
-// close action, so it could not catch a regression that severed the
-// canvas-to-promotion link (e.g. the sweep silently dropping its promotion
-// loop, or reordering it after eviction - see `store.ts`'s own comment on
-// why promotion must run BEFORE eviction). This version drives
-// `useEpicCanvasStore.getState().closeTabsForEpics(...)` - the SAME action
-// a real tab close uses - twice, at genuinely different times, so "B
-// closes, A closes LAST" is two separate sweep invocations, not two
-// promotions manually ordered by the test.
+// the round-3 version of this test invoked each registry's `promoteXToDurable` MANUALLY, in the
+// order the sweep is supposed to call them - it proved every registry's own last-write-wins
 function closeOrderChatRef(instanceId: string, chatId: string): EpicNodeRef {
   return {
     id: chatId,
@@ -995,18 +944,8 @@ describe("ticket 15 review round 4: real close order drives the canvas sweep (F3
 
     useEpicCanvasStore.getState().closeTabsForEpics([epicId]);
 
-    // --- View A opens LATER (a new tab, same epic+chat), writes, then
-    // closes via the REAL canvas close path too - its close is the
-    // temporally LAST event, so its promotion must win.
-    //
-    // A's own `getOrCreate*`/seed calls below legitimately INHERIT B's
-    // just-closed state (restore-first, decision #29 - the whole point of
-    // this ticket) - a fresh A2A/activity-group/tool/subagent store for the
-    // SAME chat starts from B's durable snapshot, not empty. So proving A's
-    // LATER close wins isn't "does B's key vanish" (it wouldn't, even under
-    // correct behavior, since A never touched it) - it's "does A's own
-    // EXPLICIT undo of what it inherited survive its close." A closes each
-    // of B's toggles it just inherited, then opens its own.
+    // --- View A opens LATER (a new tab, same epic+chat), writes, then closes via the REAL canvas
+    // close path too - its close is the temporally LAST event, so its promotion must win.
     const tabA = useEpicCanvasStore.getState().openEpicTab(epicId, "View A");
     useEpicCanvasStore
       .getState()
@@ -1044,10 +983,8 @@ describe("ticket 15 review round 4: real close order drives the canvas sweep (F3
       ),
     );
     act(() => {
-      // Same restore-first inheritance as A2A/activity-group above - A's
-      // fresh seed inherits B's just-promoted "tool-b"/"sub-b" segments, so
-      // proving A's own close wins means explicitly closing what it
-      // inherited before opening its own.
+      // Same restore-first inheritance as A2A/activity-group above - A's fresh seed inherits B's
+      // just-promoted "tool-b"/"sub-b" segments, so proving A's own close wins means explicitly closing
       useToolOpenStore
         .getState()
         .setOpen(viewA.tileInstanceId, "tool-b", false);
@@ -1073,9 +1010,8 @@ describe("ticket 15 review round 4: real close order drives the canvas sweep (F3
 
     useEpicCanvasStore.getState().closeTabsForEpics([epicId]);
 
-    // A's own final promotion - driven by the REAL canvas close action, not
-    // a manual promote call - wins on every registry, not B's, even though
-    // B ALSO wrote and closed.
+    // A's own final promotion - driven by the REAL canvas close action, not a manual promote call -
+    // wins on every registry, not B's, even though B ALSO wrote and closed.
     const reopenedA = identity("close-order-reopen", epicId, chatId);
     expect(
       restoreChatTabState(

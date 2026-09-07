@@ -10,13 +10,7 @@ import {
 } from "@/lib/chats/cloud-chat-part-cache";
 
 /**
- * jsdom has no Cache API, so the storage is a stand-in - but a FAITHFUL one:
- * it keys on the request string, returns a real `Response`, and answers
- * `undefined` for a miss, which is the whole surface this adapter uses.
- *
- * The assertions are on the stand-in's own state, not on whether a method was
- * called. "Did `put` run" is satisfied by an adapter that stores the wrong
- * bytes under the wrong key; "what is in the store, under what key" is not.
+ * jsdom has no Cache API, so the storage is a stand-in - but a FAITHFUL one: it keys on the request string, returns a real `Response`, and answers `undefined` for a miss, which is the whole surface this adapter uses.
  */
 
 class FakeCache implements ChatPartCacheStore {
@@ -178,11 +172,7 @@ describe("clearing", () => {
   });
 
   it("drops the ADAPTER too, not just the storage entry", async () => {
-    // jsdom has no Cache API, so `activeChatPartCache()` resolves the in-memory
-    // fallback - the environment the storage-only clear could never reach, since
-    // `CacheStorage` never knew about that store. The Cache-API case fails the
-    // same way for a different reason: `delete` unlinks a NAME, and an adapter
-    // that already resolved its `Cache` keeps serving the deleted object.
+    // jsdom has no Cache API, so `activeChatPartCache()` resolves the in-memory fallback - the environment the storage-only clear could never reach, since `CacheStorage` never knew about that store.
     const before = activeChatPartCache();
     await before.put(DIGEST, new Uint8Array([1]));
     expect(await before.get(DIGEST)).toEqual(new Uint8Array([1]));

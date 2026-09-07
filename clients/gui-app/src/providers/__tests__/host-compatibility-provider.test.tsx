@@ -260,11 +260,7 @@ function CompatibilityStatusProbe(): ReactNode {
   );
 }
 
-/**
- * The two flags a status alone cannot carry: whether a `compatible` verdict is
- * being HELD through a failed refetch, and whether a `failed` probe ever
- * reached the host at all.
- */
+/** Status cannot say whether a compatible verdict is held through a failed refetch, or whether a failed probe ever reached the host. */
 function compatibilityDetail(compatibility: HostCompatibility): string {
   if (compatibility.status === "compatible") {
     return compatibility.degraded ? "degraded" : "live";
@@ -275,28 +271,14 @@ function compatibilityDetail(compatibility: HostCompatibility): string {
   return "n/a";
 }
 
-/**
- * Surfaces the host.status payload fields carried on a `compatible` verdict
- * (busy / busySessionCount / hostVersion). Non-compatible arms never hold one.
- */
+/** Surfaces the host.status payload fields carried on a `compatible` verdict (busy / busySessionCount / hostVersion). Non-compatible arms never hold one. */
 function hostStatusDetail(compatibility: HostCompatibility): string {
   if (compatibility.status !== "compatible") return "none";
   const snapshot = compatibility.hostStatus;
   return `busy=${String(snapshot.busy)};count=${String(snapshot.busySessionCount)};version=${snapshot.hostVersion}`;
 }
 
-/**
- * The selection authority's verdict for the local host, read out of the store
- * the bridge writes.
- *
- * WHY THESE TESTS ASSERT HERE RATHER THAN ON THE STATUS TEXT. An incompatible
- * host is `dead("incompatible")` FOR SELECTION (D13/C4), so the authority
- * drops it from derivation the moment the probe reports and `effectiveHostId`
- * goes null. `useHostCompatibility()` is keyed on the bound host, so with
- * nothing bound it has no verdict left to render and the status text falls
- * back to `checking`. The verdict is not lost - it moved to the layer that
- * acts on it, and that is where it is now checked.
- */
+/** Assert the store verdict, not status text: an incompatible host is dropped from derivation, so the bound-host hook falls back to checking. */
 function authorityIncompatibleCode(hostId: string): string | null {
   const lease = useSelectionAuthorityStore
     .getState()
@@ -349,10 +331,8 @@ function epicTask(epicId: string): ListTaskLight {
   };
 }
 
-// Resolves every requested id, returning a `found` row for confirmed ids and a
-// positive absence confirmation for the rest. Mirrors the host contract: the
-// response is keyed by the requested task ids, so a caller learns nothing
-// about ids it did not ask about.
+// Response keyed by requested ids: found or positive absence. Nothing about
+// ids not asked.
 function taskContextsFor(
   confirmedEpicIds: ReadonlyArray<string>,
 ): (params: GetTaskContextsRequest) => GetTaskContextsResponse {
@@ -458,20 +438,11 @@ describe("HostCompatibilityProvider startup consumers", () => {
   beforeEach(() => {
     restoreFetch = installAuthFetch();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
-    // `EpicTabExistenceReconciler` now closes stale epics through
-    // `tabCommandCoordinator.handleEpicAccessLoss`, which derives its
-    // affected refs from the coordinator's OWN layout (`useTabsStore`), not
-    // from the canvas store directly. Install the real source-reconciliation
-    // subscription so every `openEpicTab*` call this file makes below is
-    // reflected into that layout exactly as it is in the running app,
-    // instead of hand-mirroring each auto-generated tab id into a second
-    // fixture.
+    // handleEpicAccessLoss reads useTabsStore layout, not the canvas store.
+    // Install the real source-reconciliation subscription.
     tabCommandCoordinator.installSourceReconciliation();
-    // `EpicTabExistenceReconciler` gates on the OPTIONAL (non-floor)
-    // `epic.getTaskContexts` being advertised by this host. The real transport
-    // records that from every `openAck`; `MockHostMessenger` has no handshake,
-    // so the manifest is seeded here - without it the reconciler correctly
-    // refuses to run and every prune assertion below would pass vacuously.
+    // Seed epic.getTaskContexts on the manifest. MockHostMessenger has no
+    // handshake; without it the reconciler refuses and prune assertions pass vacuously.
     recordNegotiatedHostMethods(localSnapshot.hostId, [
       "host.status",
       "epic.getTaskContexts",
@@ -618,10 +589,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
   });
 
   it("a still-dialing probe yields checking, not failed", async () => {
-    // D5.1: a pending-class transport error with no held data is not a
-    // settled verdict. Treating `RetryableTransportError` as `failed` is what
-    // put a full-screen "Traycer Host is not responding" in front of a remote
-    // host that was seconds from ready.
+    // RetryableTransportError with no held data is not a settled verdict.
     const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
     const listHarnesses = vi.fn((): ListHarnessesResponse => ({
       harnesses: [],
@@ -708,10 +676,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
   });
 
   it("verdict for A survives bind A→B→A from the session-lived cache", async () => {
-    // D2: gcTime: Infinity keeps the probe entry after it is re-keyed away, so
-    // A → B → A within a session is render-instant from the held verdict. The
-    // whole point of the pin is that the UI must not bounce through
-    // "checking" on the way back to A.
+    // gcTime Infinity: A->B->A must not bounce through checking.
     const hostB: HostDirectoryEntry = {
       hostId: "desktop-host-b",
       label: "Host B",
@@ -778,11 +743,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
             })}
             invalidator={null}
             requestId={null}
-            // B must be a real directory row from the start: `findHostById`
-            // (what `createRequesterForHostId` resolves through, redesign
-            // P4.2) is wired straight to `directory.findById`, so a switch to
-            // an id the directory has never listed resolves to an unbound
-            // requester rather than "B".
+            // B must be a directory row from the start; findHostById is
+            // directory.findById, so an unlisted id is unbound.
             remoteFetcher={() =>
               Promise.resolve({ kind: "hosts", entries: [hostB] })
             }
@@ -803,12 +765,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
     expect(
       queryClient.getQueryData(hostStatusProbeQueryKey(hostA.hostId)),
     ).toBeDefined();
-    // The retention itself, asserted directly. Garbage collection is
-    // TIME-based: under the 5-minute default the entry would still be present
-    // milliseconds later, so the A -> B -> A round trip below CANNOT
-    // discriminate `gcTime: Infinity` on its own - it would pass just as
-    // happily against the bug. This is the assertion that fails if the pin is
-    // dropped; the round trip pins the behavior the pin exists to produce.
+    // Assert retention directly. Default 5-minute gcTime still holds the entry
+    // milliseconds later, so A->B->A cannot discriminate Infinity.
     expect(
       queryClient
         .getQueryCache()
@@ -816,11 +774,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
         .gcTime,
     ).toBe(Infinity);
 
-    // Switch to B: post-slot, an in-app host switch is the app-wide POINTER
-    // moving (redesign P4.2 deleted `HostClient.bind` and the active slot it
-    // mutated), so it is simulated the same way the real selection-authority
-    // bridge would land it - by writing a fresh kernel snapshot into the
-    // store `useHostClient()` derives from.
+    // In-app switch is the app-wide pointer moving. Write a fresh kernel
+    // snapshot into the store useHostClient derives from.
     act(() => {
       useSelectionAuthorityStore.getState().applyKernelSnapshot({
         attached: true,
@@ -858,36 +813,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
     queryClient.clear();
   });
 
-  /**
-   * D2 pin: `useHostStatusReprobeOnRepoint` invalidates EXACTLY the incoming
-   * host's `host.status` probe entry on a re-point, and the held verdict
-   * keeps rendering while that refetch is in flight.
-   *
-   * WHY THE EXISTING `verdict for A survives bind A→B→A` CASE ABOVE CANNOT BE
-   * REUSED FOR THIS - measured, not assumed. Mutating the production hook's
-   * `invalidateQueries` call to `resetQueries` left that case green, twice
-   * (once immediately, once re-run after a 2s gap to rule out a same-second
-   * transform-cache staleness false survival). The reason: its mock
-   * `host.status` handler resolves inside the same `act()` flush the pointer
-   * move runs in, so any refetch it triggers completes before a post-`act`
-   * assertion can ever observe an intermediate state - `reset` and
-   * `invalidate` are indistinguishable once the settle already happened. This
-   * case makes the incoming host's SECOND refetch (the B→A leg, where A
-   * already holds a verdict from its opening probe) resolve on a promise the
-   * test controls, so "compatible, no checking, while pending" is asserted
-   * against a genuinely in-flight request.
-   *
-   * INSTRUMENT CAUTION, stated here because it governs how the absence
-   * assertions below must be read: the `queryClient.invalidateQueries` spy is
-   * self-controlling for its two ABSENCE halves (no invalidation at the
-   * opening derivation; no invalidation for the OUTGOING host on either leg)
-   * only because the PRESENCE assertions - one invalidation for B on the
-   * A→B leg, one for A on the B→A leg, both riding the SAME spy - prove the
-   * instrument actually observes a call when one happens. An absence proven
-   * by a spy that might just not be wired up is not proven at all; that is
-   * why this case checks presence and absence together rather than trusting
-   * "the spy saw nothing" on its own.
-   */
+    /** Incoming host.status is invalidated on re-point; held verdict keeps rendering while that refetch is in flight. Hold the B->A refetch on a controlled promise. */
   it("D2: a re-point invalidates exactly the incoming host's probe entry and holds the verdict while it refetches", async () => {
     const hostA: HostDirectoryEntry = {
       hostId: localSnapshot.hostId,
@@ -911,11 +837,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
       "agent.gui.listHarnesses",
     ]);
 
-    // Call-indexed: A's opening probe (1) and B's opening probe (2) settle
-    // immediately: this case is not about either FIRST fetch, and holding
-    // them pending would make the intermediate assertions below ambiguous
-    // about which fetch they are watching. A's REPROBE (3, the B→A leg,
-    // where A already holds a verdict) is the one the test controls by hand.
+    // Opening probes 1 and 2 settle immediately. Probe 3 (A's reprobe after
+    // B->A, where A already holds a verdict) is hand-controlled.
     const aReprobe = createDeferred<HostStatusResponse>();
     let hostStatusCalls = 0;
     const hostStatus = (): Promise<HostStatusResponse> | HostStatusResponse => {
@@ -1014,10 +937,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
       expect(getCompatibilityStatusText()).toBe("compatible");
     });
 
-    // 2 (A->B leg). B is the INCOMING host: exactly one invalidation, scoped
-    // to its exact probe key. Nothing for A (the OUTGOING host), and no
-    // broader ["host"]-scope sweep - `exact: true` on the call the hook makes
-    // is what a wider filter shape would violate.
+    // Incoming B: one invalidation on its exact probe key. Nothing for A, no
+    // broader ["host"] sweep.
     expect(hostStatusInvalidations()).toEqual([
       [{ queryKey: hostStatusProbeQueryKey(hostB.hostId), exact: true }],
     ]);
@@ -1048,10 +969,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
       expect(hostStatusCalls).toBe(3);
     });
 
-    // 1. WHILE the reprobe is pending, the rendered verdict is still the HELD
-    // one - "compatible", never "checking". A `reset` would have dropped
-    // `data` here and reproduced the traycer#860 regression this hook exists
-    // to prevent.
+    // While the reprobe is pending, render the held compatible verdict, not
+    // checking.
     expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
       hostA.hostId,
     );
@@ -1067,10 +986,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
     queryClient.clear();
   });
 
-  // traycer#860: the host was alive and completing agent turns for the whole
-  // session. A stream availability recovery invalidated the host-scoped
-  // queries, the compat refetch failed under machine load, and the gate tore
-  // the entire workspace down and told the user the host had not started.
+  // A failed compat refetch on stream recovery must not tear the workspace
+  // down as if the host had not started.
   it("holds a compatible verdict when a later host.status refetch fails", async () => {
     let probes = 0;
     const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
@@ -1230,12 +1147,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
       await queryClient.invalidateQueries();
     });
 
-    // Holding a prior verdict must never swallow a real one: a host that was
-    // replaced or updated under the same id says INCOMPATIBLE, and that wins.
-    // Read at the authority, which is what acts on it - the rendered status
-    // reverts to `checking` once the host leaves selection, so asserting the
-    // text here would be asserting the surface's loss of a host rather than
-    // the verdict that caused it.
+    // A replacement under the same id that is incompatible wins. Assert at the
+    // authority; status text falls back to checking once unbound.
     await waitFor(() => {
       expect(authorityIncompatibleCode(localSnapshot.hostId)).toBe(
         "INCOMPATIBLE",
@@ -1279,12 +1192,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
   it("keeps a freshly-created epic tab unconfirmed by the host but protected by an active initial-chat handoff", async () => {
     const { queryClient } = mountReconcilerHarness();
 
-    // FRESH_EPIC_ID models a just-created epic: unconfirmed by the host
-    // (cloud reads lag epic.create) but carrying an active initial-chat
-    // handoff. STALE_EPIC_ID is a genuinely-stale persisted tab with no
-    // protection. Both are opened before the reconciler run captures
-    // openEpicIds (host.status resolves on a later microtask, so this
-    // synchronous block wins).
+    // FRESH_EPIC_ID is unconfirmed but has an initial-chat handoff; STALE_EPIC_ID
+    // has none. Open both before host.status's later microtask.
     act(() => {
       useEpicCanvasStore.getState().openEpicTab(FRESH_EPIC_ID, "Fresh");
       useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale");

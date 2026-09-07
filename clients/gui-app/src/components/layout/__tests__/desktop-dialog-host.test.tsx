@@ -154,14 +154,8 @@ const snapshot: DesktopSupportSnapshot = {
 
 const EPIC_A = { id: "e-a", name: "A", draft: false };
 
-// A faithful-enough stand-in for `support:buildPublicDraft` (ticket 09/07):
-// echoes the form back the way the real builder would with no
-// `privateDiagnostics.cause` (these tests never attach one) - the derived
-// title falls back to the user's own intent text (unmodified, since these
-// fixtures never contain anything the scrubber would touch), always routed
-// to the bug template. Good enough for assertions that check the opened
-// URL's `title`/`what-happened` params; it does not model scrubbing or the
-// 8 KiB truncation budget.
+// A faithful-enough stand-in for `support:buildPublicDraft` (ticket 09/07): echoes the form back the way the
+// real builder would with no `privateDiagnostics.cause` (these tests never attach one).
 function echoPublicDraft(
   form: DesktopReportIssueForm,
 ): Promise<DesktopSupportBuildPublicDraftResult> {
@@ -472,8 +466,8 @@ function createDirtyEpicHandle(
     // Empty is this field's TRUE value on a legacy connection - the `@1` wire
     // carries no comment records at all - so the poll remains the source there.
     commentThreads: EMPTY_COMMENT_THREADS_SLICE,
-    // Keyed by ARTIFACT id since the cutover - a room hosts many bodies, and
-    // `artifact.subscribe` has no rooms at all.
+    // Keyed by artifact id since the cutover - a room hosts many bodies, and `artifact.subscribe` has no rooms at
+    // all.
     artifactRooms: { stateByArtifactId: {} },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
@@ -517,10 +511,7 @@ function createDirtyEpicHandle(
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
     retryMigration: () => undefined,
-    // These became ASYNC when the replica moved: the queue mints ids and the
-    // mutations stamp the overlay on the worker thread, so every one of them
-    // answers over the bridge. The stub keeps its verdicts and only changes
-    // shape.
+    // The stub keeps its verdicts and only changes shape.
     enqueueWriteCommand: () => Promise.resolve(null),
     waitForWriteCommand: () => Promise.reject(new Error("unused in this test")),
     retryWriteCommand: () => undefined,
@@ -550,8 +541,8 @@ function createDirtyEpicHandle(
     reparentArtifact: () => Promise.resolve(false),
     readAttachmentBytes: () => Promise.resolve(null),
     hasAttachmentBytes: () => false,
-    // The WAITING leg, distinct from the prompt read above - see
-    // `epic-replica-reads.ts`, whose headers say the two must not be merged.
+    // The waiting leg, distinct from the prompt read above - see `epic-replica-reads.ts`, whose headers say the
+    // two must not be merged.
     awaitAttachmentBytes: () => Promise.resolve(null),
     heldAttachmentHashes: [],
     bodyResidencyVersion: 0,
@@ -571,9 +562,8 @@ function createDirtyEpicHandle(
     epicId,
     userId: null,
     hostId: "test-host",
-    // No `doc` / `awareness`: a production handle has neither, because the
-    // replica lives on the worker thread and a `Y.Doc` cannot cross a
-    // structured clone.
+    // No `doc` / `awareness`: a production handle has neither, because the replica lives on the worker thread and
+    // a `Y.Doc` cannot cross a structured clone.
     store,
     projection: {
       accept: () => null,
@@ -762,11 +752,8 @@ describe("<DesktopDialogHost />", () => {
     });
   });
 
-  // Deeper interaction coverage (gate focus behavior, consent toggles,
-  // type-chip routing, all four delivery states, confirmation persistence,
-  // preview flow) lives in report-issue-capture-dialog.test.tsx - these are
-  // wire-level smoke tests proving the store <-> dialog <-> support bridge
-  // round trip still works after the ticket 07 rewrite.
+  // Deeper interaction coverage (gate focus behavior, consent toggles, type-chip routing, all four delivery
+  // states, confirmation persistence, preview flow) lives in report-issue-capture-dialog.test.tsx.
 
   it("opens a true manual report with type chips and an empty intent field", async () => {
     useDesktopDialogStore.getState().openReportIssue();
@@ -831,9 +818,8 @@ describe("<DesktopDialogHost />", () => {
     renderDesktopDialogHost(createRunnerHost([], [], []), "/");
     await flushDialogEffects();
 
-    // Before KB2, the machine text above trivially satisfied the gate with
-    // zero human signal - now that it's not in `form.intent`, Send with no
-    // user-typed text must still be blocked.
+    // Before KB2, the machine text above trivially satisfied the gate with zero human signal - now that it's not
+    // in `form.intent`, Send with no user-typed text must still be blocked.
     fireEvent.click(screen.getByRole("button", { name: "Send report" }));
 
     expect(
@@ -1123,12 +1109,8 @@ describe("<DesktopDialogHost />", () => {
   });
 
   describe("update-unsynced confirmation: Confirm re-checks before installing", () => {
-    // The wiring half of `confirmAppUpdateInstall`'s contract: the dialog's
-    // Confirm must route through the door (which re-runs the cross-window
-    // check) and never call `installUpdate()` off the captured rows itself.
-    // The unit suite proves the door's predicate; this proves the button
-    // reaches it. The cross-window answer is stubbed at the seam the door
-    // reads (`window.runnerHost.appLifecycle`).
+    // The wiring half of `confirmAppUpdateInstall`'s contract: the dialog's Confirm must route through the door
+    // (which re-runs the cross-window check) and never call `installUpdate` off the captured rows itself.
     const IDLE: DesktopAppUpdateSnapshot = {
       sequence: 0,
       status: "idle",

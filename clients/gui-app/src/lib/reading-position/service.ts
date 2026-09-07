@@ -257,10 +257,8 @@ export function saveReadingPosition(
   ensureCurrentAccount();
   const durableWriteAllowed =
     !isEpicTombstoned(identity) && !isContentTombstoned(identity);
-  // A deletion fence blocks durable resurrection, not renderer-local
-  // continuity. This mirrors the established chat cache: a late live view
-  // can still hand off within the renderer, while no durable fallback is
-  // recreated after access loss/deletion.
+  // A deletion fence blocks durable resurrection, not renderer-local continuity.
+  // This mirrors the established chat cache: a late live view can still hand off within the renderer, while no durable fallback is recreated after access loss/deletion.
   saveSlot(identity, surfaceKind, {
     slot: "view",
     anchor,
@@ -401,10 +399,8 @@ export function deleteReadingPositionView(viewKey: string): void {
 }
 
 /**
- * A successful cross-window move removes the source canvas records but keeps
- * the same serialized tile instance ids in the destination. Arm a one-shot
- * exception for that source removal so the ordinary permanent-close sweep
- * does not erase the exact-view anchors the destination is about to read.
+ * A successful cross-window move removes the source canvas records but keeps the same serialized tile instance ids in the destination.
+ * Arm a one-shot exception for that source removal so the ordinary permanent-close sweep does not erase the exact-view anchors the destination is about to read.
  */
 export function preserveReadingPositionViewsForMove(
   viewKeys: ReadonlyArray<string>,
@@ -597,10 +593,8 @@ function pruneStorage(): void {
 
 export function activateReadingPositionAccount(accountId: string): void {
   if (activeAccountId === accountId) return;
-  // A renderer can publish its first position before the passive account
-  // lifecycle bridge has mounted. Preserve those anonymous-session records
-  // when binding the service to its initial signed-in account. Records from a
-  // previous signed-in account are never carried across an account switch.
+  // A renderer can publish its first position before the passive account lifecycle bridge has mounted.
+  // Preserve those anonymous-session records when binding the service to its initial signed-in account.
   const sessionRecords =
     activeAccountId === null
       ? [...records.values()].filter((record) =>

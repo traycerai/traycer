@@ -16,10 +16,7 @@ import { captureDictationFailure } from "@/lib/report-issue-error-capture";
 
 interface UseComposerDictationArgs {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
-  /**
-   * True when this composer is the focused/visible one - gates the global
-   * dictation hotkey so two mounted composers don't both react to it.
-   */
+  /** True when this composer is the focused/visible one - gates the global dictation hotkey so two mounted composers don't both react to it. */
   readonly isActive: boolean;
 }
 
@@ -28,11 +25,7 @@ export interface ComposerDictation {
   readonly dictationPreparing: DictationPreparingStatus | null;
 }
 
-/**
- * Everything a composer needs for voice dictation: the recorder, error
- * toasts, on-device-model availability gating, and the tap/hold hotkey.
- * Shared by the chat composer and the landing composer.
- */
+/** Everything a composer needs for voice dictation: the recorder, error toasts, on-device-model availability gating, and the tap/hold hotkey. */
 export function useComposerDictation(
   args: UseComposerDictationArgs,
 ): ComposerDictation {
@@ -66,10 +59,7 @@ export function useComposerDictation(
             },
           }
         : undefined,
-      // `code` carries the failure class into the PUBLIC prefill: it is a fixed
-      // app-defined identifier, so a filed issue names the failing path itself
-      // (#945 and #1003 both arrived with nothing but the toast title). The
-      // real error text stays in the private capture.
+      // `code` carries the failure class into the PUBLIC prefill: it is a fixed app-defined identifier, so a filed issue names the failing path itself (#945 and #1003 both arrived with nothing but the toast title).
       createReportIssueDraftContext({
         title: "Dictation failed",
         message: dictationPermissionDenied
@@ -93,10 +83,7 @@ export function useComposerDictation(
     runnerHost,
   ]);
 
-  // Only offer dictation once the on-device model is installed - this also
-  // self-heals a missing model and keeps the mic (and the OS permission prompt)
-  // hidden where the engine/model isn't available. While it downloads, a
-  // preparing indicator shows in the mic slot.
+  // Only offer dictation once the on-device model is installed - this also self-heals a missing model and keeps the mic (and the OS permission prompt) hidden where the engine/model isn't available.
   const dictationAvailability = useDictationAvailability(voiceInputEnabled);
   const dictationActive = dictationAvailability.ready;
   // If availability drops mid-session (model evicted / host swap), the mic +

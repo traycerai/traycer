@@ -18,14 +18,7 @@ export interface ApplyStagedVariables {
   readonly force: boolean;
 }
 
-/**
- * Applies the currently-staged host version via `IHostManagement.applyStaged`.
- * Resolves the raw `MutationOutcome` (never throws for a settled outcome -
- * "wait-never-reject") so callers (update banner, Settings → Host) branch on
- * every `kind` themselves: `"ok"` toasts success, `"busy"` opens the
- * Force/Defer dialog, everything else is a terminal per-intent convergence
- * failure the caller renders inline.
- */
+/** Resolves the raw `MutationOutcome` (never throws for a settled outcome - "wait-never-reject") so callers (update banner, Settings → Host) branch on every `kind` themselves: `"ok"` toasts success, `"busy"` opens the Force/Defer dialog, everything else is a terminal per-intent convergence failure the caller renders inline. */
 export function useRunnerApplyStaged(): UseMutationResult<
   MutationOutcome<ApplyStagedOk>,
   Error,

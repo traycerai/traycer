@@ -1,17 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseSafariBinaryCookies } from "../safari-binarycookies";
 
-/**
- * Hand-builds a Safari `Cookies.binarycookies` fixture per the layout
- * documented at the top of `safari-binarycookies.ts`:
- *
- *   file:   "cook" · pageCount (u32 BE) · pageSize[pageCount] (u32 BE) · pages
- *   page:   0x00000100 · cookieCount (u32 LE) · cookieOffset[cookieCount] (u32 LE)
- *   cookie: size (u32 LE) · 4 unknown · flags (u32 LE) · 4 unknown ·
- *           urlOffset · nameOffset · pathOffset · valueOffset (u32 LE each) ·
- *           8 bytes end-of-header · expiry (f64 LE) · created (f64 LE) ·
- *           NUL-terminated strings at the offsets
- */
 
 const COOKIE_HEADER_LENGTH = 56;
 const FLAG_SECURE = 0x1;

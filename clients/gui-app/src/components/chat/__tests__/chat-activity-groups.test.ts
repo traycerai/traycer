@@ -22,9 +22,8 @@ import {
 
 const EMPTY_PROMOTED_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
-// Mirror the host accumulator: the raw input is not persisted, so a tool
-// segment carries precomputed display fields. Computed via the same protocol
-// helpers the host uses so the fixtures stay faithful.
+// Mirror the host accumulator: the raw input is not persisted, so a tool segment carries precomputed display fields.
+// Computed via the same protocol helpers the host uses so the fixtures stay faithful.
 function toolInputFields(toolName: string, input: unknown) {
   return {
     inputSummary: deriveToolInputSummary(toolName, input),
@@ -191,12 +190,7 @@ describe("chat activity grouping", () => {
     expect(timeline[1].segment.kind).toBe("text");
   });
 
-  // The invariant the whole design rests on: a reasoning block occupies the
-  // SAME container before and after it stops streaming. #597 shipped the
-  // opposite (standalone while streaming, folded once complete) and had to be
-  // reverted, because the fold happened into a COLLAPSED group - so a block
-  // that had grown for seconds vanished whole in one frame and snapped the run
-  // indicator up behind it.
+  // The invariant the whole design rests on: a reasoning block occupies the SAME container before and after it stops streaming. #597 shipped the opposite (standalone while streaming, folded once complete) and had to be reverted, because the fold happened into a COLLAPSED group - so a block that had grown for seconds vanished whole in one frame and snapped the run indicator up behind it.
   it("keeps a streaming reasoning block in the group it will still be in once complete", () => {
     const streamingTimeline = buildCompleteTimeline([
       commandSegment("command-1", "pwd", false, null),
@@ -237,11 +231,8 @@ describe("chat activity grouping", () => {
     );
   });
 
-  // A lone reasoning block is the commonest shape there is (think, then
-  // answer). #597 special-cased it to a standalone segment to avoid a duplicate
-  // "Thought for Xs" header, but that decision flips the instant a tool call
-  // joins it - another mid-turn container change. It is a group from the first
-  // token; the duplicate header is suppressed at render time instead.
+  // A lone reasoning block is the commonest shape there is (think, then answer). #597 special-cased it to a standalone segment to avoid a duplicate "Thought for Xs" header, but that decision flips the instant a tool call joins it - another mid-turn container change.
+  // It is a group from the first token; the duplicate header is suppressed at render time instead.
   it("groups a lone reasoning block, streaming and completed alike", () => {
     const streaming = buildCompleteTimeline([
       reasoningSegment("reasoning-1", true, null),
@@ -262,19 +253,7 @@ describe("chat activity grouping", () => {
     expect(completed[0].group.summary).toBe("Thought for 3s");
   });
 
-  // `completedDurationMs` yields null for a block with no `startedAt` (any
-  // persisted history predating that field) and 0 for one that began and ended
-  // inside the same millisecond. Both summed to 0, and a summary built only
-  // from counts then fell through to the generic "Ran activity" - so a lone
-  // reasoning block advertised itself as an unspecified tool run, and the word
-  // "Thought" it used to render for itself vanished from the find index too.
-  //
-  // The two are NOT the same label. 0 is a measurement, and the block renders
-  // it as "Thought for 1s" because "Thought for 0s" describes nothing; null is
-  // the absence of one. Summing collapsed the distinction, so the group said
-  // "Thought" over a child saying "Thought for 1s" - and `hidesSoleReasoningHeader`
-  // then deleted the child's header on the strength of the two being identical,
-  // taking the only "Thought for 1s" in the transcript, and its find unit, with it.
+  // The two are NOT the same label. 0 is a measurement, and the block renders it as "Thought for 1s" because "Thought for 0s" describes nothing; null is the absence of one.
   it.each([
     ["no duration at all", null, "Thought"],
     ["a zero duration", 0, "Thought for 1s"],
@@ -311,12 +290,8 @@ describe("chat activity grouping", () => {
     },
   );
 
-  // The clause moves forward only. A new block starting to stream says nothing
-  // about what the run has already done, and letting it lead made the header
-  // shuttle - reported from the running app, fixed once for the duration case,
-  // and still live here: with no `startedAt` in persisted history the total
-  // stays 0, so a duration-only guard never fired and `Thought` went back to
-  // `Thinking` on the next block.
+  // The clause moves forward only.
+  // A new block starting to stream says nothing about what the run has already done, and letting it lead made the header shuttle - reported from the running app, fixed once for the duration case, and still live here: with no `startedAt` in persisted history the total stays 0, so a duration-only guard never fired and `Thought` went back to `Thinking` on the next block.
   it("never returns to thinking once a block has completed, even with no durations", () => {
     const completed = reasoningSegment("reasoning-1", false, null);
     expect(soleGroupLabel(buildActiveTimeline([completed]))).toBe("Thought");
@@ -334,11 +309,8 @@ describe("chat activity grouping", () => {
     expect(soleGroupLabel(bothDone)).toBe("Thought");
   });
 
-  // A finished block with no duration is NOT only a history artifact: an
-  // interrupted, superseded or errored block is finished and unmeasurable too
-  // (`completedDurationMs` returns null because its timestamp is the turn-end),
-  // so a run can mix measured and unmeasurable blocks live. The sum is then a
-  // floor, and saying "Thought for 5s" claims a total nobody measured.
+  // A finished block with no duration is NOT only a history artifact: an interrupted, superseded or errored block is finished and unmeasurable too (`completedDurationMs` returns null because its timestamp is the turn-end), so a run can mix measured and unmeasurable blocks live.
+  // The sum is then a floor, and saying "Thought for 5s" claims a total nobody measured.
   it("marks a duration that is only a floor when a finished block was unmeasurable", () => {
     const timeline = buildActiveTimeline([
       reasoningSegment("reasoning-1", false, 5_000),
@@ -348,10 +320,8 @@ describe("chat activity grouping", () => {
     expect(soleGroupLabel(timeline)).toBe("Thought for 5s+");
   });
 
-  // The reason it is a "+" and not a fallback to the duration-less "Thought":
-  // that fallback walks the label BACKWARDS the moment an unmeasurable block
-  // joins a run that had already measured one - which is the exact shuttle
-  // `thinkingCompleted` was added to stop, one field over. A floor only grows.
+  // The reason it is a "+" and not a fallback to the duration-less "Thought": that fallback walks the label BACKWARDS the moment an unmeasurable block joins a run that had already measured one - which is the exact shuttle `thinkingCompleted` was added to stop, one field over.
+  // A floor only grows.
   it("never drops a measured duration when an unmeasurable block joins", () => {
     const measured = reasoningSegment("reasoning-1", false, 5_000);
     expect(soleGroupLabel(buildActiveTimeline([measured]))).toBe(
@@ -372,10 +342,7 @@ describe("chat activity grouping", () => {
     expect(soleGroupLabel(grown)).toBe("Thought for 11s+");
   });
 
-  // The "+" has no analogue in `reasoningSummaryLabel`, so it would break the
-  // equality `hidesSoleReasoningHeader` bets on if it could ever appear on a
-  // sole block. It cannot: it needs one measured block AND one unmeasurable
-  // one, and that is two segments. Asserted rather than argued.
+  // It cannot: it needs one measured block AND one unmeasurable one, and that is two segments. Asserted rather than argued.
   it.each([null, 0, 5_000])(
     "never marks a sole reasoning block as a floor (%s ms)",
     (ms) => {
@@ -390,9 +357,8 @@ describe("chat activity grouping", () => {
     },
   );
 
-  // A block still STREAMING is not a finished-but-unmeasurable one. It carries
-  // no duration either, but counting it as a floor marker would put a "+" on
-  // every run that is merely still thinking.
+  // A block still STREAMING is not a finished-but-unmeasurable one.
+  // It carries no duration either, but counting it as a floor marker would put a "+" on every run that is merely still thinking.
   it("does not mark a floor for a block that is still streaming", () => {
     const timeline = buildActiveTimeline([
       reasoningSegment("reasoning-1", false, 5_000),
@@ -402,19 +368,11 @@ describe("chat activity grouping", () => {
     expect(soleGroupLabel(timeline)).toBe("Thought for 5s");
   });
 
-  // The header-suppression rule is keyed on the group's SHAPE, and the shape is
-  // NOT append-only: a backgrounded command and a matched question tool both
-  // leave the run they were in. The group id comes from the first segment, so
-  // the list shrinks under an unchanged id on a mounted component - and a
-  // shape-only rule would flip back to headerless there and unfold a completed
-  // trace nobody opened.
+  // The header-suppression rule is keyed on the group's SHAPE, and the shape is NOT append-only: a backgrounded command and a matched question tool both leave the run they were in.
+  // The group id comes from the first segment, so the list shrinks under an unchanged id on a mounted component - and a shape-only rule would flip back to headerless there and unfold a completed trace nobody opened.
   describe("shape removals", () => {
-    // The removal itself, at the model level: same group id, one member fewer,
-    // and the shape rule duly flips back to headerless. That flip is REAL and is
-    // not corrected here - `ActivityGroupSegment` latches the header on its own
-    // render history, because two of the three removal paths are invisible from
-    // this file (`buildAssistantSegments` suppresses subagent spawn tools and
-    // edit tool calls before this builder ever runs).
+    // The removal itself, at the model level: same group id, one member fewer, and the shape rule duly flips back to headerless.
+    // That flip is REAL and is not corrected here - `ActivityGroupSegment` latches the header on its own render history, because two of the three removal paths are invisible from this file (`buildAssistantSegments` suppresses subagent spawn tools and edit tool calls before this builder ever runs).
     it("shrinks a group in place when its command is promoted to the background", () => {
       const segments = [
         reasoningSegment("reasoning-1", false, 2000),
@@ -460,11 +418,8 @@ describe("chat activity grouping", () => {
       expect(after.segments).toHaveLength(1);
     });
 
-    // A run that STARTS after a promoted card is a different group with a
-    // different id, so it is a fresh component with no header to preserve. An
-    // earlier revision marked it as a remnant anyway, which put the duplicate
-    // `Thinking` header back on every message beginning with a background
-    // command - reinstating the exact defect the rule exists to remove.
+    // A run that STARTS after a promoted card is a different group with a different id, so it is a fresh component with no header to preserve.
+    // An earlier revision marked it as a remnant anyway, which put the duplicate `Thinking` header back on every message beginning with a background command - reinstating the exact defect the rule exists to remove.
     it("gives the run after a promoted segment its own id", () => {
       const timeline = buildCompleteTimelineWithPromoted(
         [
@@ -495,18 +450,12 @@ describe("chat activity grouping", () => {
     expect(soleGroupLabel(timeline)).toBe("Thinking");
   });
 
-  // A streaming block contributes no duration even when it carries one:
-  // `ReasoningSegment` labels a streaming block "Thinking" and ignores the
-  // number, so counting it would let the group read "Thought for 3s" over a
-  // child still reading "Thinking" - and the header-suppression rule would then
-  // hide a header that did NOT say the same thing.
+  // A streaming block contributes no duration even when it carries one: `ReasoningSegment` labels a streaming block "Thinking" and ignores the number, so counting it would let the group read "Thought for 3s" over a child still reading "Thinking" - and the header-suppression rule would then hide a header that did NOT say the same thing.
   it("ignores a streaming block's duration so the group cannot outrun the child", () => {
     const timeline = buildActiveTimeline([
       reasoningSegment("reasoning-1", true, 3000),
     ]);
-    // "Thinking" is what `ReasoningSegment` renders for any streaming block,
-    // whatever its duration - so this is the label equality again, for the one
-    // case `reasoningSummaryLabel` is not consulted.
+    // "Thinking" is what `ReasoningSegment` renders for any streaming block, whatever its duration - so this is the label equality again, for the one case `reasoningSummaryLabel` is not consulted.
     expect(soleGroupLabel(timeline)).toBe("Thinking");
   });
 
@@ -522,12 +471,8 @@ describe("chat activity grouping", () => {
     expect(timeline[0].group.summary).toBe("Thought, ran 1 command");
   });
 
-  // The accumulated duration OUTRANKS a still-streaming block, so the clause
-  // only ever grows. Leading with a bare "thinking" whenever anything streamed
-  // made the header shuttle - "Thought for 4s, read 1 file" -> "Thinking" ->
-  // "Thought for 9s, read 1 file" - on every new block, and the middle state
-  // was a run that had demonstrably read a file describing itself as nothing
-  // but a thought.
+  // The accumulated duration OUTRANKS a still-streaming block, so the clause only ever grows.
+  // Leading with a bare "thinking" whenever anything streamed made the header shuttle - "Thought for 4s, read 1 file" -> "Thinking" -> "Thought for 9s, read 1 file" - on every new block, and the middle state was a run that had demonstrably read a file describing itself as nothing but a thought.
   it("keeps the accumulated duration in the summary while a later block streams", () => {
     const timeline = buildCompleteTimeline([
       reasoningSegment("reasoning-1", false, 4000),
@@ -685,9 +630,7 @@ describe("chat activity grouping", () => {
         command: "sleep 60",
         run_in_background: true,
       }),
-      // The accumulator stamps `backgroundTask` at birth from `run_in_background`;
-      // that sticky marker - not the transient streaming state - is what keeps a
-      // background command promoted while it runs.
+      // The accumulator stamps `backgroundTask` at birth from `run_in_background`; that sticky marker - not the transient streaming state - is what keeps a background command promoted while it runs.
       backgroundTask: true,
       isStreaming: true,
     };
@@ -714,11 +657,8 @@ describe("chat activity grouping", () => {
   });
 
   it("promotes host-stamped shell calls (run_shell / restart_shell) out of activity groups for their whole life", () => {
-    // A shell the agent ran outlives the turn, like a backgrounded Bash - and
-    // its card is the shell's own surface (live status, the door to its
-    // output), so it must never fold into "Used N tools". The durable signal
-    // is the host-stamped correlation payload on the block, which holds after
-    // reload and once the call has long settled.
+    // A shell the agent ran outlives the turn, like a backgrounded Bash - and its card is the shell's own surface (live status, the door to its output), so it must never fold into "Used N tools".
+    // The durable signal is the host-stamped correlation payload on the block, which holds after reload and once the call has long settled.
     const started = {
       ...toolSegment("tool-1", "mcp__traycer_a2a__traycer_run_shell", {
         command: "tail -f deploy.log",
@@ -805,10 +745,7 @@ describe("chat activity grouping", () => {
   });
 
   it("promotes a backgrounded command block out of the activity group for its whole life", () => {
-    // Codex decides at the parent turn's end that a still-running exec is
-    // backgrounded and stamps the block; the marker is what keeps the card
-    // standalone while it runs AND after it settles (command stdout is never
-    // persisted, so there is no output fallback to fall back on).
+    // Codex decides at the parent turn's end that a still-running exec is backgrounded and stamps the block; the marker is what keeps the card standalone while it runs AND after it settles (command stdout is never persisted, so there is no output fallback to fall back on).
     const running = buildCompleteTimeline([
       commandSegment("command-0", "pwd", false, null),
       commandSegment("command-1", "npm run dev", true, true),
@@ -884,10 +821,8 @@ describe("chat activity grouping", () => {
   });
 
   it("keeps a completed background command promoted via the persistent marker (no live item, no output)", () => {
-    // The exact recurring regression: at completion the host removes the live
-    // background item, and several terminal paths set neither backgroundOutput
-    // nor error. The persistent `backgroundTask` marker must keep the card a
-    // standalone card so it never collapses back into the activity group.
+    // The exact recurring regression: at completion the host removes the live background item, and several terminal paths set neither backgroundOutput nor error.
+    // The persistent `backgroundTask` marker must keep the card a standalone card so it never collapses back into the activity group.
     const bash = {
       ...toolSegment("tool-1", "Bash", {
         command: "sleep 60",
@@ -923,9 +858,7 @@ describe("chat activity grouping", () => {
         command: "sleep 60",
         run_in_background: true,
       }),
-      // A backgrounded command that errors keeps its sticky `backgroundTask`
-      // marker, so it stays a standalone card (an errored *foreground* command,
-      // which has no marker, folds into the activity group instead).
+      // A backgrounded command that errors keeps its sticky `backgroundTask` marker, so it stays a standalone card (an errored *foreground* command, which has no marker, folds into the activity group instead).
       backgroundTask: true,
       error: "stopped: user requested stop",
       endState: null,
@@ -953,11 +886,8 @@ describe("chat activity grouping", () => {
   });
 
   it("never promotes a foreground command tool - it folds into the activity group while streaming and after it completes or errors", () => {
-    // Regression: a normal foreground command carries no `backgroundTask`
-    // marker, never lands in `promotedToolBlockIds`, and captures no
-    // `backgroundOutput`. It must stay inside the activity group through its
-    // whole life - it must not flash into a standalone card while it runs and
-    // collapse back on completion.
+    // Regression: a normal foreground command carries no `backgroundTask` marker, never lands in `promotedToolBlockIds`, and captures no `backgroundOutput`.
+    // It must stay inside the activity group through its whole life - it must not flash into a standalone card while it runs and collapse back on completion.
     const streamingForeground = {
       ...toolSegment("tool-1", "Bash", { command: "ls" }),
       isStreaming: true,
@@ -1043,9 +973,7 @@ describe("chat activity grouping", () => {
   });
 
   it("promotes image_generation tools from the started frame by exact toolName", () => {
-    // Promotion must fire on toolName alone so the card owns its row from the
-    // first started frame (empty imageResults, still streaming) - not only after
-    // results land.
+    // Promotion must fire on toolName alone so the card owns its row from the first started frame (empty imageResults, still streaming) - not only after results land.
     const started: Extract<MessageSegment, { kind: "tool" }> = {
       ...toolSegment("tool-img", "image_generation", {
         prompt: "a misty pier at dawn",
@@ -1266,9 +1194,7 @@ describe("chat activity grouping", () => {
   });
 
   it("dedupes edits keyed by Claude's snake_case file_path field", () => {
-    // Claude's Edit/Write tools emit `file_path` (not `path`); the extractor
-    // must read it so two edits + the correlated file_change collapse to one
-    // file instead of counting as distinct entries keyed by tool id.
+    // Claude's Edit/Write tools emit `file_path` (not `path`); the extractor must read it so two edits + the correlated file_change collapse to one file instead of counting as distinct entries keyed by tool id.
     expect(
       activityGroupSummary([
         toolSegment("tool-1", "edit_file", { file_path: "/repo/a.ts" }),
@@ -1326,16 +1252,7 @@ function soleGroup(
   timeline: ReadonlyArray<ChatActivityTimelineItem>,
   index: number,
 ): ActivityGroupModel {
-  // Range-checked BEFORE the read. An out-of-range index is the likeliest way
-  // a caller gets this wrong, and reading `.kind` off the undefined it returns
-  // throws a TypeError that names neither the index nor the helper.
-  //
-  // Checked on the length rather than on `item === undefined`, which is the
-  // obvious spelling: this repo does not set `noUncheckedIndexedAccess`, so the
-  // element type excludes undefined and `no-unnecessary-condition` rejects a
-  // comparison the type system believes can never be true. The runtime
-  // disagrees with the type here, and the length is the part of that both agree
-  // on.
+  // Checked on the length rather than on `item === undefined`, which is the obvious spelling: this repo does not set `noUncheckedIndexedAccess`, so the element type excludes undefined and `no-unnecessary-condition` rejects a comparison the type system believes can never be true.
   if (index < 0 || index >= timeline.length) {
     throw new Error(
       `Expected an activity group at index ${index}, but the timeline holds ${timeline.length}`,

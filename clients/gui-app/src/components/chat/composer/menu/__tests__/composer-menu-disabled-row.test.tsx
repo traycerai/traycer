@@ -86,9 +86,7 @@ function openWith(
   openTriggered(store, items, "/", "skills");
 }
 
-// Mirrors `openTriggered`, but for a MENTION-kind picker session - the shape
-// `renderPickerItem` actually sees for a mention row (a slash-kind session
-// never carries one).
+// Mirrors `openTriggered`, but for a MENTION-kind picker session - the shape `renderPickerItem` actually sees for a mention row (a slash-kind session never carries one).
 function openMentionWith(
   store: ComposerPickerStore,
   items: ReadonlyArray<ComposerPickerItem>,
@@ -149,10 +147,8 @@ function openTriggered(
   });
 }
 
-// The reason a row is unavailable lives in the side preview panel, which is
-// `aria-hidden` and disappears when it cannot fit. `aria-disabled` alone says
-// a row is unavailable but never why, so the row itself has to carry the
-// explanation or assistive tech never receives it.
+// The reason a row is unavailable lives in the side preview panel, which is `aria-hidden` and disappears when it cannot fit.
+// `aria-disabled` alone says a row is unavailable but never why, so the row itself has to carry the explanation or assistive tech never receives it.
 describe("<ComposerMenu /> disabled rows", () => {
   it("puts the disabled reason in the row's accessible name", () => {
     const store = createComposerPickerStore();
@@ -182,10 +178,7 @@ describe("<ComposerMenu /> disabled rows", () => {
     expect(option.textContent).not.toContain("Disabled.");
   });
 
-  // `renderPickerItem` used to hardcode `disabledReason: null` for mention
-  // rows, so a held mention entry (e.g. a GitHub row shown during a filter
-  // swap) rendered as actionable even though the store's own commit gate
-  // reads `entry.disabledReason` and would have refused it.
+  // `renderPickerItem` used to hardcode `disabledReason: null` for mention rows, so a held mention entry (e.g. a GitHub row shown during a filter swap) rendered as actionable even though the store's own commit gate reads `entry.disabledReason` and would have refused it.
   it("puts the disabled reason in a mention row's accessible name", () => {
     const store = createComposerPickerStore();
     act(() => {
@@ -217,9 +210,8 @@ describe("<ComposerMenu /> disabled rows", () => {
   });
 });
 
-// The menu has to echo the character the user actually typed. Rendering a `$`
-// list as `/name` contradicts both the composer and the chip the row inserts,
-// which reads back as `$name`.
+// The menu has to echo the character the user actually typed.
+// Rendering a `$` list as `/name` contradicts both the composer and the chip the row inserts, which reads back as `$name`.
 describe("<ComposerMenu /> trigger echo", () => {
   it("prefixes rows with $ when the picker was opened with $", () => {
     const store = createComposerPickerStore();

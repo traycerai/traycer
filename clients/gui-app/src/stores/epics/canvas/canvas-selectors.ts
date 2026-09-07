@@ -1,10 +1,4 @@
-/**
- * Selector / hook layer over `useEpicCanvasStore`. Per-id selector
- * factories are documented in `selector_usage_readme.md`: construct once
- * per id with `useMemo(() => makeSelectX(id), [id])`, then pass that
- * selector to `useEpicCanvasStore`. Re-exported from `store.ts` so existing
- * import sites keep working.
- */
+/** Selector / hook layer over `useEpicCanvasStore`. */
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
@@ -52,12 +46,7 @@ export function useActiveEpicId(): string | null {
   });
 }
 
-/**
- * Distinct epic ids that currently have at least one open tab, in tab order.
- * Imperative read (not a hook) shared by app-level reconcilers that walk the
- * open set on store/registry events - keeps the openTabOrder→epicId derivation
- * in one place instead of each provider re-deriving it.
- */
+/** Distinct epic ids that currently have at least one open tab, in tab order. */
 export function collectOpenEpicIds(): ReadonlyArray<string> {
   const state = useEpicCanvasStore.getState();
   const seen = new Set<string>();
@@ -71,11 +60,8 @@ export function collectOpenEpicIds(): ReadonlyArray<string> {
 }
 
 /**
- * Best-available display name for an epic from its open tabs, preferring the
- * active/MRU tab via `resolveTabIdForEpic` so it matches what the strip
- * highlights (a naive first-in-order walk could surface a stale name when the
- * epic has several tabs). Imperative read shared by app-level reconcilers.
- * Returns `null` when the epic has no open tab with a non-empty name.
+ * Best-available display name for an epic from its open tabs, preferring the active/MRU tab via
+ * `resolveTabIdForEpic` so it matches what the strip highlights (a naive first-in-order walk could
  */
 export function epicTabName(epicId: string): string | null {
   const state = useEpicCanvasStore.getState();
@@ -115,31 +101,8 @@ export function useEpicArtifactRecords(
 }
 
 /**
- * Whether `ref`'s backing artifact record is still live: not a record-backed
- * kind at all (terminal, workspace-file, git-diff - nothing to go stale),
- * still within the optimistic-create window (`pendingCreateArtifactIds`,
- * before a just-created record has projected), or `hasLiveRecord` finds it.
- *
- * `hasLiveRecord` is a caller-supplied presence check rather than a fixed
- * records array, because the two consumers reach live record data through
- * genuinely different paths: `useEpicRouteSynchronization`'s cleanup effect
- * (closes an OPEN tile whose record disappeared) has a React-context-bound
- * live records array in hand, while the back/forward preview-reopen path
- * (must not resurrect a CLOSED tile whose record disappeared while it was
- * closed) has only an epicId and looks the session up imperatively via the
- * open-Epic session registry. Sharing this predicate keeps the "record-
- * backed + pending-create-exempt" decision itself from drifting between the
- * two - only the presence lookup differs.
- *
- * `isCloudKnown` is the same shape, added for the SAME-host counterpart of
- * the cross-host exemption above (chat-sync-v2 ticket 36): a chat can be
- * bound to THIS device's active host and still have no local record - a
- * leased identity that never adopted its rows - which is a different chat
- * than one this host's registry has genuinely tombstoned. `epic.listCloudChats`
- * already excludes locally-tombstoned rows (the host-side filter is the
- * source of truth for "deleted"; this predicate does not re-derive it), so
- * "still cloud-known" is sufficient here without a separate local-tombstone
- * check.
+ * Whether `ref`'s backing artifact record is still live: not a record-backed kind at all
+ * (terminal, workspace-file, git-diff - nothing to go stale), still within the optimistic-create
  */
 export interface TileRefLivenessCheck {
   readonly hasLiveRecord: (id: string) => boolean;
@@ -148,19 +111,8 @@ export interface TileRefLivenessCheck {
 }
 
 /**
- * Whether this ref's record is HOST-AUTHORITATIVE - owned by one host's own
- * registry rather than by the shared epic document.
- *
- * The two populations answer "my projection does not have this row"
- * differently, and that is the whole distinction the cross-host exemption
- * turns on. A doc-shared record (an artifact) is replicated to every
- * participant, so its absence is evidence of deletion wherever it is observed.
- * A host-authoritative record is only ever complete on its OWN host, so its
- * absence from another device's projection is evidence of nothing at all.
- *
- * Exported so both liveness gates read the same predicate rather than each
- * spelling the ref-type list out - the comment on each says they must move
- * together, and this is what makes that structural instead of aspirational.
+ * Whether this ref's record is HOST-AUTHORITATIVE - owned by one host's own registry rather than
+ * by the shared epic document.
  */
 export function isHostAuthoritativeRef(ref: EpicCanvasTileRef): boolean {
   return ref.type === "chat" || ref.type === "terminal-agent";
@@ -178,21 +130,6 @@ export function isTileRefRecordLive(
   // ref as same-host or cross-host and therefore cannot prove it disappeared.
   if (isHostAuthoritativeRef(ref) && projectionHostId === null) return true;
   // A ref bound to ANOTHER host is not policed by this device's projection.
-  // Its record is HOST-AUTHORITATIVE - it lives in the owner host's own
-  // registry - so a cross-host live tab legitimately has no local record, and
-  // reaping it here is what turned those clicks into silent no-ops.
-  //
-  // Terminal agents joined that population in the roster's phase 2. Before it
-  // they were doc-shared, so a projection miss really did mean deleted on any
-  // host; now this device may hold a REPLICA of an agent bound to another of
-  // the user's machines, and a replica arrives on the feed's schedule - so a
-  // cold open, or any window before the inbox has caught up, would read as
-  // "remotely deleted" and auto-close a tile whose agent is alive on its own
-  // host. Artifacts are still doc-shared and still excluded.
-  //
-  // Mirrors `isRemotelyDeleted` in `tab-group-view.tsx`: the two
-  // record-liveness gates must agree, or a click opens a tile the surface
-  // then refuses to mount.
   if (
     isHostAuthoritativeRef(ref) &&
     projectionHostId !== null &&
@@ -236,18 +173,10 @@ export function useActiveEpicArtifactId(
 }
 
 /**
- * Same active-tile resolution and filtering as
- * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
- * than just its id - callers that need to discriminate the active tile's
- * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
- * otherwise have to re-walk the pane tree.
+ * Same active-tile resolution and filtering as {@link makeSelectActiveEpicArtifactId}, but returns
+ * the ref itself rather than just its id - callers that need to discriminate the active tile's
  */
-/**
- * The tile showing in `tabId`'s ACTIVE pane, or `null`. The one place the
- * active-pane walk lives, shared by every selector below it - the rules for
- * "which tile is the user looking at" must not be able to drift between the
- * record-backed and renderer-only answers.
- */
+/** The tile showing in `tabId`'s ACTIVE pane, or `null`. */
 function activeTileRef(
   state: EpicCanvasStore,
   tabId: string | undefined,
@@ -264,12 +193,7 @@ export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
   return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
     const active = activeTileRef(state, tabId);
     if (active === null) return null;
-    // Only record-backed tiles are resolvable artifacts. Renderer-only tiles -
-    // workspace file, git-diff, comm-graph, and the PR detail/diff pair -
-    // carry synthetic ids that cannot be restored from artifact records, so
-    // they must never become the persisted `lastFocusedArtifactId` (route
-    // sync writes whatever this returns). `isTileRefRecordBacked` covers
-    // every one of them and any future kind.
+    // Only record-backed tiles are resolvable artifacts.
     if (!isTileRefRecordBacked(active)) return null;
     return active;
   };
@@ -285,14 +209,7 @@ export function useActiveEpicArtifactRef(
   return useEpicCanvasStore(selector);
 }
 
-/**
- * Whether `nodeId` is the active artifact in `tabId`, as a boolean. Sidebar tree
- * nodes subscribe per-node via this instead of receiving the tab-wide
- * `activeArtifactId` as a prop: with the id threaded to every node, selecting an
- * artifact gave all ~20 nodes a new prop and re-rendered the whole tree (+ each
- * node's dropdown/context menus). Selecting on a per-node BOOLEAN means Zustand
- * re-renders only the two nodes whose active state actually flips.
- */
+/** Whether `nodeId` is the active artifact in `tabId`, as a boolean. */
 export function makeSelectIsActiveEpicArtifact(
   tabId: string | undefined,
   nodeId: string,
@@ -313,23 +230,8 @@ export function useIsActiveEpicArtifact(
 }
 
 /**
- * Whether `tileId` is the tile showing in `tabId`'s active pane - the
- * NON-record-backed counterpart to {@link makeSelectIsActiveEpicArtifact}.
- *
- * Renderer-only tiles (workspace file, git-diff, PR detail) are deliberately
- * invisible to `makeSelectActiveEpicArtifactId`, which returns `null` for them
- * so their synthetic ids never reach the persisted `lastFocusedArtifactId`.
- * They still need to light up their own list row, and their ids ARE stable
- * (derived from host + coordinates), so matching on the tile id directly is
- * safe here in a way that persisting it would not be.
- *
- * `null` tileId means "this row has no tile" (an unknown-base PR) and is never
- * active. When `hostId` is provided, the active ref must match both id and
- * owner host so two fleet terminals that share a terminalId do not highlight
- * together. `hostId: null` preserves id-only matching for PR/published-chat
- * rows. Selects a per-row BOOLEAN for the same reason the artifact variant
- * does: threading the active id to every row re-renders the whole list on
- * every selection change.
+ * Whether `tileId` is the tile showing in `tabId`'s active pane - the NON-record-backed
+ * counterpart to {@link makeSelectIsActiveEpicArtifact}.
  */
 export function makeSelectIsActiveTile(
   tabId: string | undefined,
@@ -357,15 +259,7 @@ export function useIsActiveTile(
   return useEpicCanvasStore(selector);
 }
 
-/**
- * Whether `paneId` is the globally-active pane in `tabId`, as a boolean. Every
- * pane view subscribes per-pane via this instead of reading the raw
- * `activePaneId`: with the raw id, opening/switching the active pane changed
- * the selector output for EVERY pane and re-rendered all of them (each one's
- * tab strip, context menus, and framer-motion layout) even though only two
- * panes' active state actually flipped. The per-pane boolean re-renders only
- * those two. Mirrors `makeSelectIsActiveEpicArtifact`.
- */
+/** Whether `paneId` is the globally-active pane in `tabId`, as a boolean. */
 export function makeSelectIsActivePane(
   tabId: string | undefined,
   paneId: string,
@@ -399,18 +293,7 @@ const TAB_ACTIVATION_NONE: TabActivation = {
   isGloballyActive: false,
 };
 
-/**
- * Per-tab activation flags for one tile tab, as a shallow-compared bag. Each
- * `TabItem` subscribes via this instead of receiving `isActive`/`isPreview`/
- * `isGloballyActive` as props derived from the pane's `activeTabId` inside the
- * strip's `tabs.map(...)`: those pane-level scalars were map-closure deps, so
- * React Compiler re-ran the whole map on any active/preview change and
- * re-rendered every tab (+ its context menu, tooltip, and layout frame) even
- * for a pure active-switch where the pane's tabs identity is unchanged. Reading
- * the flags per tab means the map only re-runs on real structural change
- * (add/remove/reorder) and an active-switch re-renders just the two tabs whose
- * flags flip. Use through `useTabActivation` (wrapped in `useShallow`).
- */
+/** Per-tab activation flags for one tile tab, as a shallow-compared bag. */
 export function makeSelectTabActivation(
   tabId: string | undefined,
   paneId: string,
@@ -444,12 +327,7 @@ export function useTabActivation(
 
 const EMPTY_TILE_REFS: ReadonlyArray<EpicCanvasTileRef> = [];
 
-/**
- * A pane's tab payloads in strip order, subscribed with shallow comparison.
- * Tile payloads live in `tilesByInstanceId` (decoupled from the tree), so a
- * pane view resolves its OWN refs here and re-renders only when one of them
- * changes - payload churn in other panes never touches it.
- */
+/** A pane's tab payloads in strip order, subscribed with shallow comparison. */
 export function usePaneTabRefs(
   tabId: string | undefined,
   pane: TilePane,
@@ -478,17 +356,8 @@ export function getCanvasRootForTab(tabId: string): TileLayoutNode | null {
 const EMPTY_CONTENT_IDS: ReadonlySet<string> = new Set();
 
 /**
- * Content ids of every tile open in `tabId`'s canvas - the "what is already
- * on screen here" question, for surfaces that offer to open something.
- *
- * Reads `tilesByInstanceId` rather than walking the pane tree: the store keeps
- * the two in step (every payload has a tree tab and vice versa, see
- * `reconcileCanvasInvariants`), so the payload map is the cheaper half of the
- * same fact. Background strip tabs count as open - they are a click away, not
- * somewhere else.
- *
- * Content ids, not instance ids: the same chat can be open in two tiles, and
- * a caller asking "is this chat open" wants one answer.
+ * Content ids of every tile open in `tabId`'s canvas - the "what is already on screen here"
+ * question, for surfaces that offer to open something.
  */
 export function useOpenTileContentIds(
   tabId: string | undefined,
@@ -503,10 +372,8 @@ export function useOpenTileContentIds(
 }
 
 /**
- * Locate an open tab for a REF in `tabId`'s canvas - id and bound host both,
- * the same identity `openTile` dedups on. Host-bound kinds (a chat, a shell's
- * output) can have two tabs sharing one id across a cross-host clone, and
- * "activate the one already open" must not hand back the other machine's.
+ * Locate an open tab for a REF in `tabId`'s canvas - id and bound host both, the same identity
+ * `openTile` dedups on.
  */
 export function findOpenTileInTab(
   tabId: string,
@@ -520,11 +387,8 @@ export function findOpenTileInTab(
 }
 
 /**
- * Locate an open tab by content id in `tabId`'s canvas. Returns the holding
- * pane's id plus the tab's `instanceId` (activation/close key on instanceId).
- *
- * Id only: for host-bound kinds prefer {@link findOpenTileInTab}, which also
- * matches the host.
+ * Locate an open tab by content id in `tabId`'s canvas. Returns the holding pane's id plus the
+ * tab's `instanceId` (activation/close key on instanceId).
  */
 export function findOpenArtifactInTab(
   tabId: string,

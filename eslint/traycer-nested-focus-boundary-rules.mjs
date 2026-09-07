@@ -1,47 +1,6 @@
 /**
- * Bans raw, focus-mutating `useEpicCanvasStore` action access from outside
- * the nested-focus-opener boundary (`useEpicTileNavigation` /
- * `useEpicNestedFocusNavigation` -> `prepare...FocusTarget` +
- * `navigateNested`). Calling one of these actions directly mutates the
- * canvas but never writes the TanStack route search params
- * (`focusPaneId` / `focusTileInstanceId`) that back/forward navigation and
- * reload rely on - the desync this rule exists to prevent shipped six times.
- *
- * Every action here has a `prepare<Name>FocusTarget` counterpart on
- * `EpicCanvasStore` (see `src/stores/epics/canvas/store.ts`) that performs
- * the same mutation AND returns the resulting `NestedFocusTarget` for the
- * boundary to commit to the route. Calling the raw action instead of its
- * `prepare*` counterpart is exactly the bypass this rule bans.
- *
- * Covered access shapes are direct selector picks (including selectors wrapped
- * by helpers such as `useShallow`), block-bodied selector returns, direct
- * `getState().action()` calls (dot and literal-computed access), and object
- * destructuring directly from `getState()`. Alias flow such as
- * `const state = useEpicCanvasStore.getState(); state.closeCanvasTab()` is not
- * expressible soundly with esquery alone because it requires scope/value-flow
- * tracking; keep that as a known limit rather than adding a broad selector
- * that would flag unrelated variables. The inverse limit also holds: inside a
- * block-bodied selector, a `return x.action` in a locally-declared nested
- * function still matches (the ReturnStatement is a descendant of the anchored
- * arrow) - a false positive accepted deliberately, since tightening to
- * top-level returns would miss real conditional returns of a banned action.
- *
- * Deliberately EXCLUDED (verified against store.ts/actions.ts, not just the
- * initial audit brief):
- * - `promotePreviewInTab`: its reducer (`promotePreview`) only clears
- *   `previewTabId`; it never touches `activeTabId`/`activePaneId` and has no
- *   `prepare*FocusTarget` counterpart at all, so it never needs a route
- *   write. Called directly today from `epic-sidebar-artifact-tree.tsx`,
- *   `epic-sidebar-chat-tree.tsx`, `tab-group-view.tsx`, and
- *   `root-dnd-provider.tsx`.
- * - `resizeSplitInTab`: `prepareResizeSplitFocusTarget` always returns
- *   `null` (pure layout, never focus) and is called directly from
- *   `tile-canvas.tsx` today.
- * - `openTileInNewTab` / `tearOffTabIntoNewHeaderTab`: header-tab creation,
- *   not nested-tile focus - no `prepare*FocusTarget` counterpart exists.
- * - `openTile` (the bare reducer in `actions.ts`): not exposed on the store
- *   instance/interface at all, so it is unreachable via either AST form
- *   below.
+ * Ban raw focus-mutating `useEpicCanvasStore` actions outside the nested-focus opener; they skip the route search params back/forward and reload need.
+ * Alias flow is a known esquery limit. `promotePreviewInTab`, `resizeSplitInTab`, and header-tab creation are excluded: they do not write nested focus.
  */
 
 export const NESTED_FOCUS_BOUNDARY_ACTION_NAMES = [
@@ -121,14 +80,7 @@ const RAW_TAB_ACTIVATION_RESTRICTIONS = [
     message: TAB_ACTIVATE_ACCESS_MESSAGE,
   },
   {
-    // ANY destructuring that extracts a `tabActivate` binding - declaration
-    // (`const { tabActivate } = ...`), assignment (`({ tabActivate } = ...)`),
-    // OR function parameter (`function f({ tabActivate }) {}`). `ObjectPattern`
-    // only occurs in destructuring positions, so anchoring on it (not on
-    // VariableDeclarator/AssignmentExpression) covers every context at once.
-    // Matches shorthand and renamed-binding forms; `key.name` is the extracted
-    // property, never a renamed local, so `{ x: tabActivate }` (binding named
-    // tabActivate, extracting `x`) is correctly NOT flagged.
+    // ObjectPattern covers declaration, assignment, and parameter destructuring. key.name is the extracted property, so `{ x: tabActivate }` is not flagged.
     selector:
       "ObjectPattern > Property[key.type='Identifier'][key.name='tabActivate']",
     message: TAB_ACTIVATE_DESTRUCTURE_MESSAGE,
@@ -203,12 +155,6 @@ function storeActionRestrictions(storeName, actionNames, message) {
   ];
 }
 
-/**
- * Builds the `no-restricted-syntax` selectors banning raw access to
- * `EpicCanvasStore`'s focus-mutating actions, for the names NOT listed in
- * `allowedNames`. Pass `[]` for the fully-restricted general case; pass the
- * specific names a file legitimately needs for a scoped override.
- */
 export function nestedFocusBoundaryRestrictions(allowedNames) {
   const restrictedNames = NESTED_FOCUS_BOUNDARY_ACTION_NAMES.filter(
     (name) => !allowedNames.includes(name),

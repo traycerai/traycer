@@ -197,10 +197,8 @@ describe("composer mention flow", () => {
   });
 
   it("commit after typing query replaces the entire @query span (no leftover text)", async () => {
-    // Regression: the suggestion plugin builds a fresh `props` per
-    // view.update with `command` bound to the *current* state.range.
-    // Capturing onStart's props leaves the typed query in the doc
-    // because the bound range covers only the trigger char.
+    // Regression: the suggestion plugin builds a fresh `props` per view.update with `command` bound to the *current* state.range.
+    // Capturing onStart's props leaves the typed query in the doc because the bound range covers only the trigger char.
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("@pla");
     await flush();

@@ -11,13 +11,7 @@ export interface ToolbarButtonProps extends Omit<
   readonly ref?: Ref<HTMLButtonElement>;
 }
 
-/**
- * Structural-only formatting button. The package does not ship its own
- * shadcn or Tailwind classes because consumers wire in their own design
- * tokens - we only supply the `data-active` / `data-disabled` hooks and
- * the semantic markup. A small utility style lives in `editor.css` via the
- * `tc-editor-toolbar` scope.
- */
+/** data-active / data-disabled only; consumers supply tokens. Utility styles live in editor.css under tc-editor-toolbar. */
 export function ToolbarButton(props: ToolbarButtonProps) {
   const { icon, label, active, disabled, type, className, ...rest } = props;
   return (

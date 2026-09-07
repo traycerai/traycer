@@ -1,38 +1,23 @@
-// Machine-readable error codes the runner emits in NDJSON `error` events
-// and on the human stderr line. The codebase should always raise CliError
-// with one of these so downstream consumers (Desktop, CI, scripts) can
-// switch on `code` rather than parsing free-form messages.
-//
-// Keep this list authoritative: add new codes here as new failure modes
-// surface in CLI commands. Don't reuse codes for unrelated meanings.
+// Machine-readable error codes the runner emits in NDJSON `error` events and on the human stderr line.
+// The codebase should always raise CliError with one of these so downstream consumers (Desktop, CI, scripts) can switch on `code` rather than parsing free-form messages.
 export const CLI_ERROR_CODES = {
   // --- Generic ---
   UNEXPECTED: "E_UNEXPECTED",
   INVALID_ARGUMENT: "E_INVALID_ARGUMENT",
   NOT_FOUND: "E_NOT_FOUND",
-  // Authenticated but not authorized - the caller is signed in but lacks
-  // access to the requested resource (e.g. the host's 403 "does not have
-  // required permission for task"). Distinct from NOT_FOUND ("doesn't
-  // exist") and AUTH_REJECTED ("not signed in / bad token").
+  // Authenticated but not authorized - the caller is signed in but lacks access to the requested resource (e.g. the host's 403 "does not have required permission for task").
+  // Distinct from NOT_FOUND ("doesn't exist") and AUTH_REJECTED ("not signed in / bad token").
   FORBIDDEN: "E_FORBIDDEN",
 
-  // --- Agent roles (mirror the host's typed role-surface wire codes 1:1) ---
-  // Absent and foreign-account agents share ONE code and template - no
-  // existence oracle across the account boundary.
+  // --- Agent roles (mirror the host's typed role-surface wire codes 1:1) --- Absent and foreign-account agents share ONE code and template - no existence oracle across the account boundary.
   AGENT_NOT_FOUND: "E_AGENT_NOT_FOUND",
   // The caller's own agent lives on another host; the message names it.
   AGENT_NOT_LOCAL: "E_AGENT_NOT_LOCAL",
-  // A claim held by another of the caller's own agents - role-specific copy,
-  // NOT the generic epic-access denial (whose "check Task access" guidance
-  // would mislead here).
+  // A claim held by another of the caller's own agents - role-specific copy, NOT the generic epic-access denial (whose "check Task access" guidance would mislead here).
   ROLE_FORBIDDEN: "E_ROLE_FORBIDDEN",
 
-  // --- Agent archive (`epic.setChatArchived`) ---
-  // The host folds both conditions below into a generic `RPC_ERROR` with a
-  // reason prefix on the message (`AGENT_BUSY:` / `RECORD_NOT_FOUND:`) rather
-  // than a typed wire code - see `epic-set-chat-archived-resolver.ts`. The CLI
-  // detects those prefixes and remaps them to these codes so callers can
-  // switch on `code` instead of parsing message text.
+  // --- Agent archive (`epic.setChatArchived`) --- The host folds both conditions below into a generic `RPC_ERROR` with a reason prefix on the message (`AGENT_BUSY:` / `RECORD_NOT_FOUND:`) rather than a typed wire code - see `epic-set-chat-archived-resolver.ts`.
+  // The CLI detects those prefixes and remaps them to these codes so callers can switch on `code` instead of parsing message text.
   AGENT_ARCHIVE_BUSY: "E_AGENT_ARCHIVE_BUSY",
   AGENT_RECORD_NOT_FOUND: "E_AGENT_RECORD_NOT_FOUND",
 
@@ -48,23 +33,14 @@ export const CLI_ERROR_CODES = {
 
   // --- Host supervisor + lifecycle ---
   HOST_NOT_RUNNING: "E_HOST_NOT_RUNNING",
-  // A running host reported (or, fail-safe, was assumed to have) work in
-  // progress, so the CLI refused to reinstall/restart it. The desktop maps
-  // this to its "host busy" flow (surface the host, run the renderer's
-  // compat probe) rather than treating it as a hard failure. Cleared with
-  // `--force`.
+  // A running host reported (or, fail-safe, was assumed to have) work in progress, so the CLI refused to reinstall/restart it.
+  // The desktop maps this to its "host busy" flow (surface the host, run the renderer's compat probe) rather than treating it as a hard failure.
   HOST_BUSY: "E_HOST_BUSY",
-  // A durable schema-v2 update attempt owns the mutation boundary. This is
-  // deliberately NOT HOST_BUSY: retrying with --force can override a live
-  // workload's cooperative stop, but it can never override attempt
-  // admission. Desktop uses this distinction to attach/yield rather than
-  // offering an ineffective force action.
+  // A durable schema-v2 update attempt owns the mutation boundary.
+  // This is deliberately NOT HOST_BUSY: retrying with --force can override a live workload's cooperative stop, but it can never override attempt admission.
   HOST_UPDATE_ATTEMPT_ACTIVE: "E_HOST_UPDATE_ATTEMPT_ACTIVE",
-  // The host is reachable but its RPC protocol is incompatible with this
-  // CLI (version skew): the host answered with INCOMPATIBLE /
-  // DOWNGRADE_UNSUPPORTED, or returned a response shape this CLI could not
-  // parse. Distinct from HOST_NOT_RUNNING - the host *answered*.
-  // Actionable via `traycer host restart` or updating the CLI.
+  // The host is reachable but its RPC protocol is incompatible with this CLI (version skew): the host answered with INCOMPATIBLE / DOWNGRADE_UNSUPPORTED, or returned a response shape this CLI could not parse.
+  // Distinct from HOST_NOT_RUNNING - the host *answered*.
   HOST_INCOMPATIBLE: "E_HOST_INCOMPATIBLE",
   // The host is reachable and compatible on the floor protocol, but it does
   // not support the specific feature/method this CLI tried to use.
@@ -72,35 +48,18 @@ export const CLI_ERROR_CODES = {
   HOST_BUNDLE_MISSING: "E_HOST_BUNDLE_MISSING",
   HOST_SHELL_MISSING: "E_HOST_SHELL_MISSING",
   HOST_SPAWN_FAILED: "E_HOST_SPAWN_FAILED",
-  // A stop/restart/uninstall could not record its intent on disk, on a
-  // platform where that record is the ONLY thing telling the host supervisor
-  // the death was deliberate (win32: `schtasks /End` never signals the
-  // orphaned supervisor). The operation is REFUSED rather than performed,
-  // because performing it would kill a host the supervisor then relaunches
-  // while the command reports success. Retryable once the directory is
-  // writable.
+  // A stop/restart/uninstall could not record its intent on disk, on a platform where that record is the ONLY thing telling the host supervisor the death was deliberate (win32: `schtasks /End` never signals the orphaned supervisor).
+  // The operation is REFUSED rather than performed, because performing it would kill a host the supervisor then relaunches while the command reports success.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
 
-  // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
-  // All three replace what used to be an `exitCode: 0` result carrying a
-  // `killError` string (audit finding CLI-011). A port-conflict repair that
-  // did not free the port is a failed repair, and the restart variant used to
-  // restart the host anyway - so Doctor and Desktop reported success over an
-  // unresolved conflict, and the user was told to look elsewhere.
-  //
-  // The confirmed owner could not be signalled at all: EPERM (another user's
-  // process), or ESRCH (it exited between the identity check and the signal).
+  // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`) All three replace what used to be an `exitCode: 0` result carrying a `killError` string (audit finding CLI-011).
+  // A port-conflict repair that did not free the port is a failed repair, and the restart variant used to restart the host anyway - so Doctor and Desktop reported success over an unresolved conflict, and the user was told to look elsewhere.
   HOST_PORT_KILL_FAILED: "E_HOST_PORT_KILL_FAILED",
-  // SIGTERM was delivered and the process is STILL the listener at the
-  // verification deadline - it traps or ignores the signal. Nothing escalates
-  // to SIGKILL: the user confirmed terminating this process, not force-killing
-  // it, so the remedy stays theirs.
+  // SIGTERM was delivered and the process is STILL the listener at the verification deadline - it traps or ignores the signal.
+  // Nothing escalates to SIGKILL: the user confirmed terminating this process, not force-killing it, so the remedy stays theirs.
   HOST_PORT_STILL_HELD: "E_HOST_PORT_STILL_HELD",
-  // SIGTERM was delivered but the ownership probe could not say whether the
-  // port was released (`lsof`/`netstat` missing, hung, or over its output
-  // budget). Deliberately NOT folded into the two above: "we could not check"
-  // is not "it failed", and it is emphatically not "it worked" - the same
-  // refuse-to-act-blind rule that guards the pre-kill identity check.
+  // SIGTERM was delivered but the ownership probe could not say whether the port was released (`lsof`/`netstat` missing, hung, or over its output budget).
+  // Deliberately NOT folded into the two above: "we could not check" is not "it failed", and it is emphatically not "it worked" - the same refuse-to-act-blind rule that guards the pre-kill identity check.
   HOST_PORT_RELEASE_UNVERIFIED: "E_HOST_PORT_RELEASE_UNVERIFIED",
 
   // --- Host install + registry (NP-2 / NP-4) ---
@@ -110,19 +69,12 @@ export const CLI_ERROR_CODES = {
   HOST_VERIFY_FAILED: "E_HOST_VERIFY_FAILED",
   HOST_SOURCE_MISSING: "E_HOST_SOURCE_MISSING",
   HOST_ALREADY_RUNNING: "E_HOST_ALREADY_RUNNING",
-  // `host update`'s post-swap local health probe (service/health-probe.ts)
-  // exhausted its retry budget - the new host never proved itself alive on
-  // its own loopback port. Distinct from HOST_INSTALL_FAILED (a
-  // stage/verify/extract/swap failure with the OLD host untouched): this
-  // fires AFTER a successful swap, so the command has already attempted a
-  // rollback to the previous version (or, with nothing to roll back to on
-  // a first-ever install, left the marker as `failed` without one).
+  // `host update`'s post-swap local health probe (service/health-probe.ts) exhausted its retry budget - the new host never proved itself alive on its own loopback port.
+  // Distinct from HOST_INSTALL_FAILED (a stage/verify/extract/swap failure with the OLD host untouched): this fires AFTER a successful swap, so the command has already attempted a rollback to the previous version (or, with nothing to roll back to on a first-ever install, left the marker as `failed` without one).
   HOST_UPDATE_HEALTH_CHECK_FAILED: "E_HOST_UPDATE_HEALTH_CHECK_FAILED",
   HOST_UPDATE_NOT_NEWER: "E_HOST_UPDATE_NOT_NEWER",
-  // The selected host version declares a `requiredCliVersion` this CLI does
-  // not meet (or one it cannot parse). Distinct from HOST_INCOMPATIBLE, which
-  // is a RUNNING host answering a handshake: this fires before anything is
-  // downloaded, and the remedy is to update Traycer rather than the host.
+  // The selected host version declares a `requiredCliVersion` this CLI does not meet (or one it cannot parse).
+  // Distinct from HOST_INCOMPATIBLE, which is a RUNNING host answering a handshake: this fires before anything is downloaded, and the remedy is to update Traycer rather than the host.
   HOST_CLIENT_FLOOR_UNMET: "E_HOST_CLIENT_FLOOR_UNMET",
   REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
   REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
@@ -158,9 +110,7 @@ export interface CliErrorInit {
   readonly exitCode: number;
 }
 
-// A CLI-layer error carrying a stable machine-readable code, a human
-// message, optional structured details (surfaced as `details` on the
-// NDJSON error event), and the process exit code to use.
+// A CLI-layer error carrying a stable machine-readable code, a human message, optional structured details (surfaced as `details` on the NDJSON error event), and the process exit code to use.
 export class CliError extends Error {
   readonly code: CliErrorCode;
   readonly details: Record<string, unknown> | null;
@@ -179,18 +129,16 @@ export function cliError(init: CliErrorInit): CliError {
   return new CliError(init);
 }
 
-// Narrow an unknown thrown value to a NodeJS.ErrnoException. Centralised
-// here so the dozen platform/store/installer files that need to branch on
-// `err.code` don't each define their own copy.
+// Narrow an unknown thrown value to a NodeJS.ErrnoException.
+// Centralised here so the dozen platform/store/installer files that need to branch on `err.code` don't each define their own copy.
 export function isErrnoException(
   value: unknown,
 ): value is NodeJS.ErrnoException {
   return value instanceof Error && "code" in value;
 }
 
-// Coerce an unknown thrown value into a CliError so the runner has a
-// uniform shape to emit. Preserves a CliError as-is; wraps Errors with
-// their message and a generic UNEXPECTED code; falls back to String().
+// Coerce an unknown thrown value into a CliError so the runner has a uniform shape to emit.
+// Preserves a CliError as-is; wraps Errors with their message and a generic UNEXPECTED code; falls back to String().
 export function toCliError(err: unknown): CliError {
   if (err instanceof CliError) return err;
   if (err instanceof Error) {

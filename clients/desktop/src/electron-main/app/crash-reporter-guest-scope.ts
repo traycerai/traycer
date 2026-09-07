@@ -1,35 +1,6 @@
 /**
- * The egress policy for `@sentry/electron`'s native crash channel, and the
- * scrubbing hooks for everything else the main process sends.
- *
- * ## No renderer minidump ever uploads
- *
- * `sentryMinidumpIntegration` (the SDK's first default integration) takes one
- * option - `maxMinidumpsPerSession` - and nothing else. It registers a single
- * process-wide `app.on('render-process-gone')` handler and calls
- * `sendNativeCrashes`, which loads *every* pending dump from the crashpad
- * directory - completed and pending, whoever wrote them - and captures each
- * one with the event built from the `WebContents` of the crash that just
- * fired. So a browser guest's dump sitting on disk when the app shell
- * crashes uploads under the app shell's identity.
- *
- * Per-dump attribution would be the way out, and it does not exist: the only
- * per-dump fact the SDK has is the crashpad `process_type` annotation, which
- * says `renderer` and never which renderer. `getRendererName(contents)` is
- * handed the currently crashed contents, not the dump's, so it cannot tell
- * the two apart either - which is why this module no longer registers app
- * shell renderers at all.
- *
- * A browser guest renderer is the process that decrypted the cookie jar. Its
- * minidump is that process's heap: cookie values in the clear, the live DOM,
- * localStorage, anything typed into a form. Since a renderer dump cannot be
- * proven to be ours, none of them go. `browser`, `gpu` and `utility` dumps
- * still upload - no guest page memory ever lived in those processes - and the
- * app shell's own JavaScript errors still report in full through the renderer
- * SDK (`renderer-shell/main.tsx`), which is where its crashes are actionable
- * anyway.
- *
- * Deliberately not keyed on the URL: `crashed_url` is page-controlled text.
+ * Per-dump attribution would be the way out, and it does not exist: the only per-dump fact the SDK has is the crashpad `process_type` annotation, which says `renderer` and never.
+ * `getRendererName(contents)` is handed the currently crashed contents, not the dump's, so it cannot tell the two apart either.
  */
 
 import {
@@ -46,14 +17,8 @@ export interface DesktopSentryEventHint {
 const NON_RENDERER_PROCESSES = new Set(["browser", "gpu", "utility"]);
 
 /**
- * Whether the event would carry process memory off the machine. Three
- * independent markers, any one of which is enough: the `native` platform and
- * the `event.environment` tag, both stamped by `sentryMinidumpIntegration` on
- * every event it produces, and a `.dmp` attachment on the hint - the dump
- * itself, checked so that an SDK version that stops stamping either marker
- * cannot silently reopen the channel. Each marker only ever adds drops, so
- * over-matching costs a crash report and never a leaked jar. A JavaScript
- * error event has none of the three and is never in scope here.
+ * Three independent markers, any one of which is enough: the `native` platform and the `event.environment` tag, both stamped by `sentryMinidumpIntegration` on every event it.
+ * Each marker only ever adds drops, so over-matching costs a crash report and never a leaked jar.
  */
 function carriesMinidump(
   event: ClientSentryEvent,
@@ -68,11 +33,7 @@ function carriesMinidump(
   );
 }
 
-/**
- * True for a minidump-bearing event that is not one of the three processes
- * that never hosted a guest page. Every renderer dump - ours, a guest's, or
- * the `renderer`/`unknown` of a dump found at startup - goes.
- */
+/** True for a minidump-bearing event that is not one of the three processes that never hosted a guest page. */
 export function shouldDropNativeCrashEvent(
   event: ClientSentryEvent,
   hint: DesktopSentryEventHint,
@@ -82,13 +43,6 @@ export function shouldDropNativeCrashEvent(
   return typeof process !== "string" || !NON_RENDERER_PROCESSES.has(process);
 }
 
-/**
- * `beforeSend` for the desktop main process: the minidump drop, then the
- * shared Sentry scrub (`@traycer-clients/shared/platform/sentry-scrub.ts`),
- * which the app-shell renderer and the mobile shell run too and which detects
- * through the same `@traycer/protocol/utils/text/redaction` leaf the services
- * use.
- */
 export function desktopSentryBeforeSend<TEvent extends ClientSentryEvent>(
   event: TEvent,
   hint: DesktopSentryEventHint,

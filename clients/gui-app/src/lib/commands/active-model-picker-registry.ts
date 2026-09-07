@@ -1,16 +1,6 @@
 /**
- * Stack registry for the active composer's model-picker toggle. Each enabled
- * composer picker (surface-active, not disabled, `registerActivation`) pushes a
- * controller while mounted and pops on unmount / deactivation; the TOP entry is
- * the active target. The `composer.model-picker.toggle` keybinding and the
- * palette's "Change model…" command call `toggleActiveModelPicker`; the palette
- * reads `getActiveModelPicker` for the current-selection subtitle.
- *
- * A stack (not a single slot like `composer-controls-registry`) so an overlay
- * picker layering on top - e.g. the new-chat modal over a chat composer - pops
- * cleanly and hands the target back to the composer beneath, instead of leaving
- * the shortcut dead after the overlay closes. See `useRegisterActiveModelPicker`
- * for the React entry point.
+ * Stack registry for the active composer's model-picker toggle.
+ * Each enabled composer picker (surface-active, not disabled, `registerActivation`) pushes a controller while mounted and pops on unmount / deactivation; the TOP entry is the active target.
  */
 export interface ActiveModelPickerController {
   /** Open the picker if closed, close it if open. */
@@ -68,8 +58,7 @@ export function toggleActiveModelPicker(): boolean {
  */
 export function resetActiveModelPickerForTests(): void {
   stack.length = 0;
-  // Wipe subscribers too, so a test that subscribed without disposing can't
-  // keep firing into the next test. Clearing the set makes `notify()` a no-op,
-  // so there is nothing left to notify.
+  // Wipe subscribers too, so a test that subscribed without disposing can't keep firing into the next test.
+  // Clearing the set makes `notify()` a no-op, so there is nothing left to notify.
   listeners.clear();
 }

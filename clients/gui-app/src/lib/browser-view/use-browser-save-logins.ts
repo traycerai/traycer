@@ -8,25 +8,13 @@ import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser
 import { browserMutationKeys, browserQueryKeys } from "@/lib/query-keys";
 
 /**
- * Does this machine keep browser logins across restarts? On by default,
- * Chrome-style; Settings ▸ Browser is the only surface that reads or writes it.
- *
- * Read on mount, every mount. The pref is machine-wide but each window has its
- * own bridge, and the pivot deleted the fan-out that used to push a change to
- * the others - so a cached read would leave a second window's toggle showing a
- * value that has been wrong since another window changed it. `staleTime: 0` is
- * that contract in Query's terms - the entry is stale the moment it lands - and
- * `refetchOnMount: "always"` states it a second way that no staleTime default
- * can quietly take back.
+ * Does this machine keep browser logins across restarts?
+ * On by default, Chrome-style; Settings ▸ Browser is the only surface that reads or writes it.
  */
 
 /**
- * Key and fetch together, so the bridge the read depends on is named in the
- * key rather than closed over. The bridge is a shell singleton - built once at
- * bootstrap and handed down through `RunnerHostContext` - so this factory
- * returns a stable key across renders, and a method-only bridge hashes to `{}`
- * anyway (see {@link browserQueryKeys.saveLogins}), which keeps the
- * machine-wide pref in one entry.
+ * Key and fetch together, so the bridge the read depends on is named in the key rather than closed over.
+ * The bridge is a shell singleton - built once at bootstrap and handed down through `RunnerHostContext` - so this factory returns a stable key across renders, and a method-only bridge hashes to `{}` anyway (see {@link browserQueryKeys.saveLogins}), which.
  */
 function saveLoginsQueryOptions(browserView: BrowserViewBridge | null) {
   return queryOptions<boolean>({
@@ -42,13 +30,7 @@ function saveLoginsQueryOptions(browserView: BrowserViewBridge | null) {
     enabled: browserView !== null,
     staleTime: 0,
     refetchOnMount: "always",
-    // And on focus, against the app-wide client's default: a mount is not
-    // enough for a surface that stays up - the tour's login-import act, the
-    // announcement toast - while another window flips the pref. The user
-    // who flipped it there and comes back here is the refetch, so the act
-    // and the toast follow the machine's setting rather than the value this
-    // window read when it opened. A window that never regains focus keeps
-    // its read, which is the residual the deleted fan-out leaves.
+    // And on focus, against the app-wide client's default: a mount is not enough for a surface that stays up - the tour's login-import act, the announcement toast - while another window flips the pref.
     refetchOnWindowFocus: true,
     // One machine-local read: a retry would only delay the toggle's answer.
     retry: false,
@@ -64,10 +46,8 @@ export interface BrowserSaveLoginsController {
 }
 
 /**
- * The read half on its own, for surfaces that only ask whether saving is on
- * (the tour's login-import act, the announcement toast) and have no toggle
- * to write it with. Same query entry as the controller, so a toggle flipped
- * in Settings is what these read next.
+ * The read half on its own, for surfaces that only ask whether saving is on (the tour's login-import act, the announcement toast) and have no toggle to write it with.
+ * Same query entry as the controller, so a toggle flipped in Settings is what these read next.
  */
 export function useBrowserSaveLoginsEnabled(
   browserView: BrowserViewBridge | null,
@@ -99,9 +79,7 @@ export function useBrowserSaveLogins(
         settled,
       );
     },
-    // A refused write settled nothing, so the toggle goes back to whatever the
-    // machine still holds - re-read rather than reconstructed here, which is
-    // what keeps this hook from carrying a second copy of the truth.
+    // A refused write settled nothing, so the toggle goes back to whatever the machine still holds - re-read rather than reconstructed here, which is what keeps this hook from carrying a second copy of the truth.
     onError: () => {
       void queryClient.invalidateQueries({
         queryKey: browserQueryKeys.saveLogins(browserView),

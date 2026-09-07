@@ -1,17 +1,4 @@
-/**
- * `traycer agent role` command functions and Commander registration.
- *
- * Command-function tests pin: protocol-schema request validation BEFORE
- * transport (normalization, UUID checks, ZERO RPC calls on invalid input),
- * env-var defaulting with flag precedence, typed request construction, and
- * human output through the SHARED protocol formatters (byte-identical to the
- * GUI tool rendering for the same response).
- *
- * `buildProgram().parseAsync` tests pin the real Commander surface:
- * registration of all three subcommands, required-flag enforcement, help
- * discovery, and that `role list` accepts NO --agent-id (the wire request has
- * no agent field - a dead flag would be accepted-and-ignored).
- */
+/** `traycer agent role` command functions and Commander registration. Command-function tests pin: protocol-schema request validation BEFORE transport (normalization, UUID checks, ZERO RPC calls on invalid input), env-var defaulting with flag precedence, typed request construction, and human output through the SHARED protocol formatters (byte-identical to the GUI tool rendering for the same response). */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatClaimRoleResponseV11,
@@ -157,9 +144,7 @@ describe("agent role claim command function", () => {
       scope: " auth   migration ",
     })(makeCtx());
 
-    // NFC + whitespace fold + trim happened CLIENT-side: the wire carries the
-    // normalized text, so both surfaces persist identical claims for
-    // identical raw input.
+    // NFC + whitespace fold + trim happened CLIENT-side: the wire carries the normalized text, so both surfaces persist identical claims for identical raw input.
     expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.claim", {
       epicId: "epic-1",
       claimantAgentId: "agent-1",

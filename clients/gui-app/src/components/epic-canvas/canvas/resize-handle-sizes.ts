@@ -1,17 +1,13 @@
 /**
- * Adjacent-pair fraction math for split-container resize handles. A handle
- * between children `index` and `index + 1` redistributes ONLY that pair's
- * summed fraction - every other child keeps its committed fraction, so a
- * drag never reflows unrelated siblings.
+ * A handle between children `index` and `index + 1` redistributes ONLY that pair's summed fraction - every other child keeps its committed fraction, so a drag never reflows unrelated siblings.
  */
 interface ComputeResizeHandleSizesArgs {
   readonly sizes: ReadonlyArray<number>;
   readonly index: number;
   readonly deltaRatio: number;
   /**
-   * Per-child minimum fraction for this drag. Callers derive it from
-   * `max(MIN_SPLIT_SIZE, MIN_PANE_PX / containerPx)` so the px floor follows
-   * the live container size.
+   * Per-child minimum fraction for this drag.
+   * Callers derive it from `max(MIN_SPLIT_SIZE, MIN_PANE_PX / containerPx)` so the px floor follows the live container size.
    */
   readonly minSize: number;
 }

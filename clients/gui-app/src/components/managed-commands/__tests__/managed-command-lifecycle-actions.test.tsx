@@ -3,12 +3,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-/**
- * The human capability set (`UI.md` §2): watch plus lifecycle, plus the one
- * setting a person edits - relaunch after a host restart. Start only where
- * there is nothing running, stop where there is, and delete behind a
- * confirmation that names what dies with it.
- */
+/** The human capability set (`UI.md` §2): watch plus lifecycle, plus the one setting a person edits - relaunch
+ * after a host restart. */
 
 const startMutate = vi.fn();
 const stopMutate = vi.fn();
@@ -34,19 +30,15 @@ vi.mock(
   }),
 );
 
-/**
- * The shared per-command state other surfaces contribute: a write in flight
- * elsewhere, and the value a write already answered with (null = none newer
- * than the stream).
- */
+/** The shared per-command state other surfaces contribute: a write in flight elsewhere, and the value a write
+ * already answered with (null = none newer than the stream). */
 const configureState: {
   pendingElsewhere: boolean;
   settledValue: boolean | null;
 } = { pendingElsewhere: false, settledValue: null };
 
-// The host's negotiated method set, as the relaunch switch reads it. A
-// primitive slot rather than a nullable one so the tests below can flip it
-// without a cast (`let x = false` narrows to `false` under this repo's rules).
+// A primitive slot rather than a nullable one so the tests below can flip it without a cast (`let x = false`
+// narrows to `false` under this repo's rules).
 const hostMethods = { configure: true };
 const supportsMethodSpy = vi.fn(
   (_hostId: string | null, method: string) =>
@@ -176,12 +168,8 @@ describe("managed-command lifecycle actions", () => {
   });
 
   it("disables the switch while another surface's write for this command is in flight", () => {
-    // The same command sits in the list row and the output window header. A
-    // press in one leaves the other showing the OLD streamed value; if it
-    // stayed enabled, a press there would compute the same inverse again and
-    // send a duplicate write instead of the on-then-off the person meant.
-    // This instance's own mutation is idle - the pending signal comes from
-    // the shared per-command read.
+    // A press in one leaves the other showing the old streamed value; if it stayed enabled, a press there would
+    // compute the same inverse again and send a duplicate write instead of the on-then-off the person meant.
     configureState.pendingElsewhere = true;
     renderActions(RUNNING);
 
@@ -198,10 +186,8 @@ describe("managed-command lifecycle actions", () => {
   });
 
   it("shows and inverts the value a write already answered with, not the stale streamed one", () => {
-    // Between a configure write resolving and the chat stream carrying the
-    // new record, the prop still says off. A surface that read the prop
-    // would show "stays down" and send `true` again - the duplicate write
-    // the shared pending read cannot catch once the write has answered.
+    // A surface that read the prop would show "stays down" and send `true` again - the duplicate write the shared
+    // pending read cannot catch once the write has answered.
     configureState.settledValue = true;
     renderActions(RUNNING);
 
@@ -222,10 +208,8 @@ describe("managed-command lifecycle actions", () => {
   });
 
   it("hides the relaunch switch on a host that did not negotiate managedCommand.configure", () => {
-    // The method is off the released floor, so an older host negotiates it
-    // away; a switch against it could only fail. The rest of the row stays -
-    // asserted positively, since "switch absent" is also true of a row that
-    // failed to render at all.
+    // The method is off the released floor, so an older host negotiates it away; a switch against it could only
+    // fail.
     hostMethods.configure = false;
     renderActions({ ...RUNNING, relaunchOnHostRestart: true });
 

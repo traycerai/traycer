@@ -6,14 +6,6 @@ import { MAX_LOGIN_IMPORT_FILE_BYTES, readBoundedFile } from "./bounded-file";
 import type { ChromiumImportBrowser } from "./chromium-browsers";
 import { errnoCode } from "./errno-code";
 
-/**
- * Discovery of the cookie jars on this machine. Pure over `platform`,
- * `homeDir` and `env`, so one suite runs every OS layout against a fixture
- * tree on whatever CI runner it lands on.
- *
- * Nothing here opens a jar: discovery is `stat` and a `Local State` /
- * `profiles.ini` read, so it prompts for nothing and holds no cookie.
- */
 
 export type LoginImportSourceLocation =
   | {
@@ -39,13 +31,6 @@ export interface LoginImportDiscoveryEnvironment {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
-/**
- * Where an install came from, when a machine can hold more than one of the
- * same browser: on Linux a distribution package, a Flatpak and a Snap each
- * keep their own profiles, and two of them show the same `Default`. The
- * flavour is part of the label so the picker and the confirmation name one
- * install, not two indistinguishably.
- */
 type BrowserInstall = "native" | "flatpak" | "snap";
 
 interface ChromiumRoot {
@@ -127,7 +112,6 @@ function compareSources(
   return left.profileLabel.localeCompare(right.profileLabel);
 }
 
-// --- Chromium family -------------------------------------------------------
 
 function chromiumRoots(
   environment: LoginImportDiscoveryEnvironment,
@@ -281,21 +265,12 @@ async function discoverChromiumProfiles(
   return sources.filter((source) => source !== null);
 }
 
-/**
- * The profile directories under a User Data root, labelled from
- * `Local State`'s `profile.info_cache` when it can be read, and from the
- * directory names (`Default`, `Profile N`) when it cannot.
- */
 async function chromiumProfileDirectories(
   userDataDir: string,
   localStatePath: string,
 ): Promise<readonly { readonly directory: string; readonly label: string }[]> {
   const localState = await readJson(localStatePath, localStateSchema);
   const infoCache = localState?.profile?.info_cache ?? null;
-  // A key names a directory DIRECTLY under the root, and the file is on disk
-  // for anyone to edit: one with a separator or a dot segment would join to
-  // a path outside User Data and point discovery at any Cookies file on the
-  // machine, so it is dropped, whatever the file says.
   const cached =
     infoCache === null
       ? []
@@ -324,11 +299,6 @@ function isPlainDirectoryName(name: string): boolean {
   );
 }
 
-/**
- * Two profiles can share a display name (Chrome lets a person name each
- * profile after themselves); the directory is what tells them apart in the
- * picker, and it is appended only when it has to be.
- */
 function disambiguateLabels(
   profiles: readonly { readonly directory: string; readonly label: string }[],
 ): readonly { readonly directory: string; readonly label: string }[] {
@@ -343,10 +313,6 @@ function disambiguateLabels(
   );
 }
 
-/**
- * The cookie DB is `Cookies` or `Network/Cookies` under the profile, by
- * Chromium era and platform; when both exist the newer one is the live jar.
- */
 async function newestCookieDatabase(
   profileDir: string,
 ): Promise<{ readonly path: string; readonly mtimeMs: number } | null> {
@@ -365,7 +331,6 @@ async function newestCookieDatabase(
   return newest;
 }
 
-// --- Firefox ---------------------------------------------------------------
 
 function firefoxRoots(
   environment: LoginImportDiscoveryEnvironment,
@@ -450,10 +415,6 @@ export function parseFirefoxProfilesIni(
     const path = section.Path;
     if (path !== undefined && path.length > 0) {
       profiles.push({
-        // The name becomes the picker's label, which crosses to the renderer.
-        // Without one - absent OR a bare `Name=`, which the ini parser reads
-        // as "" - the LAST segment stands in, never the path itself, which
-        // for `IsRelative=0` is absolute and starts at the home dir.
         name:
           section.Name !== undefined && section.Name.length > 0
             ? section.Name
@@ -480,17 +441,11 @@ export function parseFirefoxProfilesIni(
   return profiles;
 }
 
-/**
- * The last segment of a `profiles.ini` path, whichever separator wrote it:
- * an absolute `Path` on Windows carries backslashes even when this code runs
- * elsewhere, so `node:path`'s platform basename would keep the whole thing.
- */
 function profileDirectoryName(path: string): string {
   const segments = path.split(/[\\/]+/u).filter((segment) => segment !== "");
   return segments[segments.length - 1] ?? "Profile";
 }
 
-// --- Safari ----------------------------------------------------------------
 
 async function discoverSafari(
   environment: LoginImportDiscoveryEnvironment,
@@ -526,7 +481,6 @@ async function discoverSafari(
   return [];
 }
 
-// --- Filesystem helpers ----------------------------------------------------
 
 type MtimeResult =
   | { readonly kind: "found"; readonly mtimeMs: number }
@@ -547,10 +501,6 @@ async function statMtime(path: string): Promise<MtimeResult> {
   }
 }
 
-/**
- * Bounded like every other file read of the import: a `Local State` or
- * `profiles.ini` is kilobytes, and one that is not is not read into main.
- */
 async function readTextQuietly(path: string): Promise<string | null> {
   const file = await readBoundedFile(path, MAX_LOGIN_IMPORT_FILE_BYTES);
   return file.ok ? file.bytes.toString("utf8") : null;

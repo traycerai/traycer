@@ -15,10 +15,8 @@ import { createDesktopSupportBridgeStub } from "./support-bridge-stub";
 import type { ReactNode } from "react";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
-/**
- * Every link surface below reaches the external-link bridge mutation, which
- * needs a `QueryClientProvider` above it.
- */
+/** Every link surface below reaches the external-link bridge mutation, which needs a `QueryClientProvider`
+ * above it. */
 function render(ui: ReactNode): RenderResult {
   return renderUi(ui, { wrapper: WithTestQueryClient });
 }

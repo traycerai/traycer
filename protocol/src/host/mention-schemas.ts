@@ -1,10 +1,4 @@
-/**
- * Wire shapes for GitHub pull-request and issue mentions in the composer.
- *
- * The catalog is cache-backed and stale-first; typed search is fetch-through.
- * Both expose the same lightweight row union so callers can merge cached and
- * remote results by GitHub identity without inventing a second client model.
- */
+/** Wire shapes for GitHub pull-request and issue mentions in the composer. */
 import { z } from "zod";
 import {
   prActorSchema,
@@ -107,9 +101,7 @@ const githubMentionRequestBaseSchema = z.object({
 export const mentionGithubCatalogRequestSchema =
   githubMentionRequestBaseSchema.extend({
     section: githubMentionSectionSchema,
-    // This is deliberately a three-way intent, not a boolean. `auto` stays
-    // in the interactive lane while an explicit user click gets manual
-    // admission; collapsing them would defeat the scheduler's budget floor.
+    // This is deliberately a three-way intent, not a boolean.
     refresh: githubCatalogRefreshSchema,
   });
 export type MentionGithubCatalogRequest = z.infer<

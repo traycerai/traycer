@@ -6,18 +6,6 @@ import {
 } from "../app/sleep-blocker";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
-/**
- * Backs `runnerHost.power.setSleepBlocked(blocked)`. The renderer recomputes
- * `preventSleepWhileRunning && anyLocalAgentActive` and pushes the result here;
- * main holds a single `powerSaveBlocker` while any window wants it (see
- * `app/sleep-blocker`).
- *
- * Keyed by the sender's `webContents.id` so multiple windows compose with OR
- * semantics. Each sender gets a one-time `destroyed` listener so a window
- * closed in menu-bar mode or whose renderer process disappears releases its
- * hold instead of pinning the machine awake forever - once the renderer is gone
- * it can no longer send `false` itself.
- */
 export function registerPowerIpc(bridge: RunnerIpcBridge): void {
   const guarded = new Set<number>();
   bridge.handleInvoke(

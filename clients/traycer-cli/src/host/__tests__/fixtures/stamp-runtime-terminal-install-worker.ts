@@ -1,11 +1,7 @@
 import { spawn } from "node:child_process";
 
-// Worker process for the genuine two-process attested-generation CAS race
-// test in `stamp-runtime.test.ts` (ticket-2 review round 1, Finding 5).
-// Spawned as a real, separate OS process (via `bun run`) so "a terminal
-// install lands between the command's returned attested generation and the
-// stamp call" exercises the actual terminal command, not a direct record
-// writer that could bypass command-result attestation behavior.
+// Worker process for the genuine two-process attested-generation CAS race test in `stamp-runtime.test.ts` (ticket-2 review round 1, Finding 5).
+// Spawned as a real, separate OS process (via `bun run`) so "a terminal install lands between the command's returned attested generation and the stamp call" exercises the actual terminal command, not a direct record writer that could bypass command-result attestation behavior.
 async function main(): Promise<void> {
   const cliRoot = process.env.WORKER_CLI_ROOT;
   const home = process.env.WORKER_HOME;

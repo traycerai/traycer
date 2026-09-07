@@ -12,14 +12,7 @@ import {
 
 export type EditorIconComponent = ComponentType<EditorIconProps>;
 
-/**
- * What a surface may open a path WITH, and remember as the user's default.
- *
- * Finder sits alongside the editors here and nowhere else: it is not an
- * `EDITORS` entry (no URL scheme, no install probe) and not `OpenPathsTarget`
- * either, which also carries `"system"` - a PDF-only routing decision no user
- * picks. This union is exactly the set a person can choose from a menu.
- */
+/** What a surface may open a path WITH, and remember as the user's default. */
 export const FINDER_TARGET = "finder" as const;
 export type DefaultOpenTarget = EditorId | typeof FINDER_TARGET;
 
@@ -43,9 +36,8 @@ export interface OpenTargetEntry {
 const FINDER_ENTRY: OpenTargetEntry = { id: FINDER_TARGET, label: "Finder" };
 
 /**
- * How a surface with no menu names the action it performs. Generic for an
- * editor because the id is not worth spelling out on a one-line button, and
- * specific for Finder because "Open in editor" would name the wrong app.
+ * How a surface with no menu names the action it performs.
+ * Generic for an editor because the id is not worth spelling out on a one-line button, and specific for Finder because "Open in editor" would name the wrong app.
  */
 export function openTargetActionLabel(target: DefaultOpenTarget): string {
   return target === FINDER_TARGET ? "Reveal in Finder" : "Open in editor";
@@ -65,14 +57,8 @@ export function withFinderTarget(
 }
 
 /**
- * The target a surface with no menu sends - one that simply opens "the user's
- * choice". `catalog` is what this host may be offered: a stored target missing
- * from it falls back to the first one that is, which is how a Finder default
- * behaves on a non-Mac and how an editor default behaves on a host too old for
- * its id.
- *
- * Deliberately NOT intersected with the installed-editor probe; these surfaces
- * open whatever is stored, installed or not.
+ * The target a surface with no menu sends - one that simply opens "the user's choice".
+ * `catalog` is what this host may be offered: a stored target missing from it falls back to the first one that is, which is how a Finder default behaves on a non-Mac and how an editor default behaves on a host too old for its id.
  */
 export function resolveEffectiveDefaultEditor(
   catalog: ReadonlyArray<OpenTargetEntry>,
@@ -95,11 +81,7 @@ export interface OpenMenuState {
 }
 
 /**
- * Which rows a menu lists and which one its primary half opens, from three
- * narrowings: `catalog` is what the HOST accepts, `availableEditorIds` what is
- * INSTALLED here (`null` while that probe is in flight), and `finderAvailable`
- * the Finder gate. Finder is exempt from the install probe - it ships with the
- * OS - so it is appended after the surviving editors.
+ * Which rows a menu lists and which one its primary half opens, from three narrowings: `catalog` is what the HOST accepts, `availableEditorIds` what is INSTALLED here (`null` while that probe is in flight), and `finderAvailable` the Finder gate.
  */
 export function resolveOpenMenuState(args: {
   readonly catalog: ReadonlyArray<EditorEntry>;

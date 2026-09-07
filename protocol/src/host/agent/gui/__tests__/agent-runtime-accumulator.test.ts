@@ -284,9 +284,7 @@ describe("accumulateEvent", () => {
     });
     expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
 
-    // task_started's retroactive re-stamp does not always re-send
-    // backgroundTask:true on every subsequent event - the sticky merge must
-    // hold the confirmed true regardless.
+    // task_started's retroactive re-stamp does not always re-send backgroundTask:true on every subsequent event - the sticky merge must hold the confirmed true regardless.
     blocks = accumulateEvent(blocks, {
       type: "tool_call.completed",
       blockId: "tc1",
@@ -365,11 +363,8 @@ describe("accumulateEvent", () => {
   });
 
   it("tool_call.completed stamps a managedCommand payload onto the block, and a later re-completion without it keeps the identity", () => {
-    // The shell id is minted once, inside the call, and only comes back on
-    // the successful RESULT - so completion is the only place this can land.
-    // A re-completion (e.g. a retried terminal event) that omits the field
-    // must not erase what the first one established, exactly like
-    // `agentMessageSend` beside it.
+    // The shell id is minted once, inside the call, and only comes back on the successful RESULT - so completion is the only place this can land.
+    // A re-completion (e.g. a retried terminal event) that omits the field must not erase what the first one established, exactly like `agentMessageSend` beside it.
     const restarted: ToolCallManagedCommandRestarted = {
       event: "restarted",
       commandId: "cmd-1",
@@ -749,19 +744,14 @@ describe("accumulateEvent", () => {
     // turn boundary must NOT force-complete it.
     expect(blocks[3].status).toBe("streaming");
     expect(blocks[4].type).toBe("subagent");
-    // Option B: a subagent still streaming at a CLEAN turn end is a backgrounded
-    // subagent that outlives the turn - its card stays "running" until its own
-    // completion finalizes it (unlike the turn-scoped tool_call above).
     expect(blocks.find((block) => block.blockId === "sa1")?.status).toBe(
       "streaming",
     );
   });
 
   it("turn.completed with a degraded reason (max_tokens) finalizes a streaming subagent (no lying 'running')", () => {
-    // A degraded ending is a REAL termination: the host does not keep the query
-    // alive for it, so a backgrounded subagent would never continue. Unlike a
-    // CLEAN completion (which keeps the card "running" via the detached
-    // execution), a degraded completion must finalize the card.
+    // A degraded ending is a REAL termination: the host does not keep the query alive for it, so a backgrounded subagent would never continue.
+    // Unlike a CLEAN completion (which keeps the card "running" via the detached execution), a degraded completion must finalize the card.
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
       type: "subagent.started",
@@ -897,11 +887,6 @@ describe("accumulateEvent", () => {
   });
 
   it("approval deny pair (requested→resolved) yields one denied block carrying toolName", () => {
-    // The interactive approval flow (canUseTool → user/policy deny) emits a
-    // requested+resolved pair on the same blockId so the card renders
-    // "Denied <tool>: <reason>" rather than a tool-less sparse card. (Auto-denies
-    // surfaced only in the turn-final result take the separate `tool_call.errored`
-    // path on the attempted tool's own block - see claude-converter.)
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
       type: "approval.requested",
@@ -1013,10 +998,8 @@ describe("accumulateEvent", () => {
       },
       delta: "1. Inspect protocol\n",
     });
-    // A plan left streaming when the turn ends never received an explicit
-    // plan.completed. The finalizer must flip it to completed AND advance
-    // planStatus out of "drafting" so the card stops showing a "Drafting"
-    // spinner forever.
+    // A plan left streaming when the turn ends never received an explicit plan.completed.
+    // The finalizer must flip it to completed AND advance planStatus out of "drafting" so the card stops showing a "Drafting" spinner forever.
     blocks = accumulateEvent(blocks, {
       type: "turn.completed",
       blockId: "turn-1",
@@ -1535,11 +1518,7 @@ describe("accumulateEvent", () => {
     expect((blocks[0] as CompactionBlock).postTokens).toBe(400);
   });
 
-  // A compaction cut short (user hit Stop, harness died) never reports a
-  // boundary, so it folded nothing. Finalizing it as "completed" would render
-  // the success bar - "Compacted" with no error line to contradict it - and
-  // persist that claim to the transcript, while the context chip still reads
-  // full. It must finalize as a failure instead.
+  // A compaction cut short (user hit Stop, harness died) never reports a boundary, so it folded nothing.
   it("turn.interrupted finalizes an in-flight compaction as errored, not completed", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
@@ -1741,10 +1720,8 @@ describe("accumulateEvent", () => {
     expect((blocks[0] as InterviewBlock).questions).toHaveLength(1);
   });
   it("keeps a schema-degraded skipped outcome payload-authoritative through later runtime events", () => {
-    // A future/malformed settlement.source .catch(null)s while outcome
-    // survives. Feeding that parsed block through the accumulator must not
-    // treat the missing provenance as "unowned" and let a runtime event
-    // replace the skip.
+    // A future/malformed settlement.source .catch(null)s while outcome survives.
+    // Feeding that parsed block through the accumulator must not treat the missing provenance as "unowned" and let a runtime event replace the skip.
     const draft = {
       questionId: null,
       question: "Which library?",
@@ -1899,8 +1876,7 @@ describe("accumulateEvent", () => {
   });
 
   it("lets a runtime settlement repair a genuinely ambiguous legacy terminal block", () => {
-    // outcome null + settlement null + legacy terminal status is the
-    // unowned reading: a crash before projection, or a pre-1.7 row.
+    // outcome null + settlement null + legacy terminal status is the unowned reading: a crash before projection, or a pre-1.7 row.
     // A runtime resolution MUST be allowed to fill that hole.
     const parsed = interviewBlockSchema.parse({
       blockId: "interview1",
@@ -1956,11 +1932,8 @@ describe("accumulateEvent", () => {
   });
 
   it("treats two same-type runtime events at the same blockId and timestamp as a replay", () => {
-    // Runtime events have no event id. The derived settlement id collides
-    // when type, blockId and timestamp match, so the second reads as a
-    // replay of the first. Containment: it cannot install its own
-    // answers/outcome/drafts/delivery, and a colliding diagnostic does
-    // not multiply.
+    // Runtime events have no event id.
+    // Containment: it cannot install its own answers/outcome/drafts/delivery, and a colliding diagnostic does not multiply.
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
       type: "interview.requested",
@@ -3268,10 +3241,6 @@ describe("turn-end finalization of streaming blocks", () => {
       timestamp: 5,
       turnId: "turn",
     });
-    // Option B: the subagent (pos 0) is still streaming at a clean turn end, so it
-    // is a backgrounded subagent that outlives the turn - its card stays "running"
-    // until its own completion finalizes it. file_change/tool_call/command are
-    // turn-scoped and finalize.
     expect(blocks.map((b) => b.status)).toEqual([
       "streaming",
       "completed",
@@ -3742,21 +3711,13 @@ describe("accumulateEvent - provider_notice.upsert", () => {
     });
 
     const block = expectProviderNoticeTextBlock(blocks[0]);
-    // text/reasoning content is always finalized "completed" regardless of the
-    // terminal turn outcome - a provider notice must never surface as a
-    // misleading "interrupted"/"superseded" action status.
+    // text/reasoning content is always finalized "completed" regardless of the terminal turn outcome - a provider notice must never surface as a misleading "interrupted"/"superseded" action status.
     expect(block.status).toBe("completed");
     expect(block.timestamp).toBe(5);
     expect(block.providerNotice).not.toBeNull();
   });
 
   // ── steer provenance ────────────────────────────────────────
-  //
-  // The steered USER row is the primary record of who sent a steered message,
-  // but it and this block are not equally durable (the block is rewritten on
-  // every checkpoint; the row is written once). So the block carries the sender
-  // too, and a renderer holding only the block can still tell an agent-to-agent
-  // steer from a human one instead of rendering it as user-authored text.
   it("carries an agent sender from the steer.submitted event onto the steer block", () => {
     const blocks = accumulateEvent(makeBlocks(), {
       type: "steer.submitted",
@@ -3807,9 +3768,7 @@ describe("accumulateEvent - provider_notice.upsert", () => {
   });
 
   it("leaves the block sender null for an event from a host that predates the field", () => {
-    // `steerSubmittedEventSchema.sender` is nullable/.default(null), so an old
-    // host's event parses to null - and the renderer's orphan fallback then
-    // renders the plain user row it always did.
+    // `steerSubmittedEventSchema.sender` is nullable/.default(null), so an old host's event parses to null - and the renderer's orphan fallback then renders the plain user row it always did.
     const parsed = steerSubmittedEventSchema.parse({
       type: "steer.submitted",
       blockId: "steer:q3",

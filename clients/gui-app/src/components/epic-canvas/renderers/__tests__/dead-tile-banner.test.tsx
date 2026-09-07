@@ -6,10 +6,7 @@ import {
   TerminalDeadTileBanner,
 } from "../dead-tile-banner";
 
-// Surfaced rather than stubbed to null: the report context is what a support
-// ticket carries, and it is the one part of this banner a reader never sees on
-// screen - so nothing but a test can catch it contradicting the sentence it
-// sits beside.
+// Surfaced rather than stubbed to null: the report context is what a support ticket carries, and it is the one part of this banner a reader never sees on screen - so nothing but a test can catch it contradicting the sentence it sits beside.
 vi.mock("@/components/report-issue/report-issue-action", () => ({
   ReportIssueAction: (props: {
     readonly context: {
@@ -28,14 +25,7 @@ vi.mock("@/components/report-issue/report-issue-action", () => ({
 afterEach(cleanup);
 
 /**
- * `TerminalDeadTileBanner` is shared by two owners with OPPOSITE durability
- * semantics, so the copy is owner-aware rather than one shared string:
- *
- *   - a raw Terminal really is gone when its Host goes away
- *   - an Agent on the Terminal interface is durable and returns with its Host
- *
- * Telling an Agent's owner the session is "permanently closed" would say the
- * opposite of the Edge-state contract, so each variant is pinned here.
+ * `TerminalDeadTileBanner` is shared by two owners with OPPOSITE durability semantics, so the copy is owner-aware rather than one shared string: - a raw Terminal really is gone when its Host goes away - an Agent on the Terminal interface is durable and returns with its Host Telling an Agent's owner the session is "permanently closed" would say the opposite of the Edge-state contract, so each variant is pinned here.
  */
 describe("<TerminalDeadTileBanner />", () => {
   it("tells a raw Terminal owner the session is permanently gone", () => {
@@ -117,10 +107,6 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).not.toContain("Continue this thread");
   });
 
-  // ticket 35: a reachable host can still have nothing to serve for this
-  // chat (`chat.subscribe` terminated CHAT_NOT_VISIBLE) - "is offline" would
-  // be false here, so this variant must say something else while keeping
-  // the same Clone offer and two-Agents disclosure.
   it("does NOT claim the host is offline when the chat itself is confirmed absent", () => {
     render(
       <ChatDeadTileBanner
@@ -146,12 +132,6 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).toContain("mac-mini");
   });
 
-  // tickets 47/48: the same "not here" answer, from the host this device is
-  // CONNECTED to. Both sentences above would print the reader's own machine
-  // as somewhere their history is unavailable / stays bound to - the copy
-  // that sent two live debugging sessions after a healthy host on
-  // 2026-08-11. This variant names no host and promises no return, because
-  // the host already answered.
   it("names no host, and no bound-host disclosure, when this device's own host answered that the chat is not here", () => {
     render(
       <ChatDeadTileBanner
@@ -179,15 +159,8 @@ describe("<ChatDeadTileBanner />", () => {
     expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
   });
 
-  // The banner appears (and swaps between reasons) mid-session with no focus
-  // move, and WHICH of the three truths is on screen lives only in this
-  // sentence. A state a screen reader is never told about is a state that
-  // does not exist for that reader - so the copy has to reach the accessible
-  // tree as a live region, not just as pixels.
-  // multi-host-chats record layer: the taxonomy's final member. The only one
-  // that is not about a HOST at all - the chat exists, its host is fine, and
-  // what changed is this viewer's entitlement. Naming a host here would send
-  // the reader to inspect a perfectly healthy machine.
+  // The banner appears (and swaps between reasons) mid-session with no focus move, and WHICH of the three truths is on screen lives only in this sentence.
+  // A state a screen reader is never told about is a state that does not exist for that reader - so the copy has to reach the accessible tree as a live region, not just as pixels. multi-host-chats record layer: the taxonomy's final member.
   it("says the agent is no longer shared, names no host, and offers no clone", () => {
     render(
       <ChatDeadTileBanner
@@ -209,10 +182,6 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).not.toContain("mac-mini");
     expect(text).not.toContain("is offline");
     expect(text).not.toContain("stays bound to");
-    // Every OTHER reason ends in "clone it and carry on". This one cannot: the
-    // clone would have to read a transcript the server just stopped serving
-    // this viewer, so the button would be an invitation to a failure.
-    // Ablation: render the Clone button unconditionally and this goes red.
     expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
     // The reason still reaches the DOM for the canvas tests to key on.
     expect(banner.getAttribute("data-reason")).toBe("chat-no-longer-shared");
@@ -244,12 +213,7 @@ describe("<ChatDeadTileBanner />", () => {
     },
   );
 
-  // Shared-chat support: a collaborator's chat reaches this banner because the
-  // owner's machine can never appear in the viewer's host directory - every
-  // "unreachable" verdict for it is a fact about THIS account's fleet, not
-  // evidence the machine is off. The pre-existing copy asserted exactly that
-  // liveness ("is offline") about a raw host id, which is the misleading
-  // banner this arm exists to replace.
+  // Shared-chat support: a collaborator's chat reaches this banner because the owner's machine can never appear in the viewer's host directory - every "unreachable" verdict for it is a fact about THIS account's fleet, not evidence the machine is off.
   describe("collaborator-owned chat (ownedByViewer=false)", () => {
     it("says whose agent it is, claims no liveness, and names no host", () => {
       render(
@@ -295,17 +259,12 @@ describe("<ChatDeadTileBanner />", () => {
 
       const text = screen.getByTestId("chat-dead-foreign-viewer").textContent;
       expect(text).toContain("belongs to another collaborator");
-      // The reason the button is absent, in the sentence - the alternative
-      // was a button whose click died on a bare "You don't have permission"
-      // toast, which is the defect this gate exists to remove.
+      // The reason the button is absent, in the sentence - the alternative was a button whose click died on a bare "You don't have permission" toast, which is the defect this gate exists to remove.
       expect(text).toContain("view-only access");
       expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
     });
 
-    // Cold-review finding: the first cut claimed "showing the last published
-    // copy" unconditionally, but the live tile mounts this banner above a
-    // load state or a cached live session - the claim must follow the
-    // mounting surface's presentation, not the reason.
+    // Cold-review finding: the first cut claimed "showing the last published copy" unconditionally, but the live tile mounts this banner above a load state or a cached live session - the claim must follow the mounting surface's presentation, not the reason.
     it("claims no published copy when the mounting surface shows none", () => {
       render(
         <ChatDeadTileBanner
@@ -327,10 +286,7 @@ describe("<ChatDeadTileBanner />", () => {
       expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
     });
 
-    // Cold-review finding: `chat-not-visible` / `chat-not-on-this-host` are
-    // picked only after a reachable host ANSWERED, so the foreign sentence
-    // must keep the missing-history fact there - "isn't connected" would
-    // invert the evidence.
+    // Cold-review finding: `chat-not-visible` / `chat-not-on-this-host` are picked only after a reachable host ANSWERED, so the foreign sentence must keep the missing-history fact there - "isn't connected" would invert the evidence.
     it("keeps the missing-history fact - not a connectivity claim - when a host answered", () => {
       for (const reason of [
         "chat-not-visible",
@@ -382,9 +338,8 @@ describe("<ChatDeadTileBanner />", () => {
     });
   });
 
-  // The own-chat viewer edge: a chat the viewer created before their role was
-  // downgraded. The reason copy still ends in "clone it and carry on", so the
-  // button's absence must be explained rather than silent.
+  // The own-chat viewer edge: a chat the viewer created before their role was downgraded.
+  // The reason copy still ends in "clone it and carry on", so the button's absence must be explained rather than silent.
   it("withholds Clone on the viewer's own chat when the role can't create agents, and says why", () => {
     render(
       <ChatDeadTileBanner
@@ -406,10 +361,7 @@ describe("<ChatDeadTileBanner />", () => {
     expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
   });
 
-  // Every clone-offering sentence ENDS in the promise ("continuing here creates
-  // a new agent", "cloning creates a new agent from it"). Appending the denial
-  // to one of those produced a banner that offered and refused the same action
-  // in consecutive sentences, so the no-clone variant must not carry it at all.
+  // Appending the denial to one of those produced a banner that offered and refused the same action in consecutive sentences, so the no-clone variant must not carry it at all.
   it("never promises cloning in the same breath as refusing it", () => {
     for (const reason of [
       "host-offline",
@@ -442,9 +394,7 @@ describe("<ChatDeadTileBanner />", () => {
     }
   });
 
-  // The report rides along invisibly, so it can drift from the sentence
-  // without anyone noticing. For the two reasons a host ANSWERED on, claiming
-  // a disconnected host would file a ticket contradicting the screen.
+  // The report rides along invisibly, so it can drift from the sentence without anyone noticing.
   it("files a foreign-owner report that matches the reason on screen", () => {
     for (const reason of [
       "chat-not-visible",

@@ -17,26 +17,17 @@ import type {
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
-// The ONE comparator. The host numbers rows with it to build the windowed
-// transcript's skeleton, and this is where those ordinals get drawn - so a
-// second, locally-written `a.createdAt - b.createdAt` here would be a silent
-// way for the two sides to disagree about which row an ordinal names.
+// The ONE comparator.
 import {
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
   importedChatMarkerRowSource,
   notificationAnchorRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
-// Identity of the assistant turn a record contributes to (records sharing a key
-// accumulate into ONE rendered turn). Shared rather than local because the
-// host's fork-boundary derivation groups by the same key, and a chat must not
-// change where it forks depending on which side computed it.
+// Identity of the assistant turn a record contributes to (records sharing a key accumulate into
+// ONE rendered turn).
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
-// The row ENUMERATION - which rows a chat has, and in what order. The host
-// numbers ordinals from these exact functions, so every decision that changes a
-// row's existence, id, or position is consumed from here rather than restated:
-// the steer split, the trailing-boundary rule, steered-user suppression, the
-// stopped-turn fold, and every row id.
+// The row ENUMERATION - which rows a chat has, and in what order.
 import {
   assistantRowId,
   assistantRowTurnKey,
@@ -106,17 +97,13 @@ import {
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
 /**
- * Fallback React row key for the pre-turn assistant placeholder when the host
- * reports `running` before exposing an active turn id. As soon as a turn id is
- * known, in-progress and persisted assistant rows use `assistant:<turnId>` so
- * the message list updates completion in place instead of replacing the row.
+ * Fallback React row key for the pre-turn assistant placeholder when the host reports `running`
+ * before exposing an active turn id.
  */
 const LIVE_ASSISTANT_ROW_ID = "assistant:live";
 
 function isRenderablePlanBlock(block: PlanContentBlock): boolean {
-  // Render a plan only once it carries content. A status-only block (e.g. an
-  // empty `ready` finalizer) must NOT render as a blank card. `planStatus` is
-  // deliberately NOT a render trigger - a content-less plan is never shown.
+  // Render a plan only once it carries content. A status-only block (e.g.
   return (
     block.markdownPreview.length > 0 ||
     block.steps.length > 0 ||
@@ -142,25 +129,11 @@ export interface RenderedMessagesInput {
   readonly messages: ReadonlyArray<Message>;
   readonly events: ReadonlyArray<ChatEvent>;
   /**
-   * `ChatSessionState.transcriptRowContext` - what the host says each hydrated
-   * row renders WITH, by row id (`row-context.ts`).
-   *
-   * The derivations below that look at the rows AROUND the one they are drawing
-   * cannot answer from a bounded window, so on the windowed line they read this
-   * instead and fall back to their own walk only where it says nothing. Empty on
-   * the legacy line, where the whole transcript is materialized and every walk
-   * is already correct.
+   * `ChatSessionState.transcriptRowContext` - what the host says each hydrated row renders WITH, by
+   * row id (`row-context.ts`).
    */
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
-  /**
-   * `ChatSessionState.setupCardWindows` - the host's WHOLE-LOG setup partition.
-   *
-   * Separate from {@link rowContext} because the repair it makes possible
-   * cannot be keyed by row id: a setup card's row id contains the very window
-   * index the client would be looking the correction up to obtain. Empty on the
-   * legacy line, where the local partition already sees every event. See
-   * `adoptWholeLogIdentity`.
-   */
+  /** `ChatSessionState.setupCardWindows` - the host's WHOLE-LOG setup partition. */
   readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
@@ -169,61 +142,28 @@ export interface RenderedMessagesInput {
   readonly pendingFileEditApprovals?: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   /**
-   * Drives the in-progress indicator on the active assistant turn's row
-   * (`running` → "Working…", `stopping` → "Stopping…"). `idle` leaves every
-   * row indicator-free.
-   *
-   * NOT the raw host `runStatus` - that also reads `"running"` while a
-   * queued item is pending or visible background work (Bash
-   * `run_in_background` / a subagent / Monitor) outlives the turn, neither of
-   * which this indicator belongs to. Passing it raw synthesizes a duplicate,
-   * live "Working…" row alongside the real turn's already-settled "done"
-   * footer. Pass the caller's narrowed turn-status derivation instead (see
-   * `resolvedTurnStatus` in `chat-tile-session-state.ts`), mapping its
-   * `null` to `"idle"`.
+   * Drives the in-progress indicator on the active assistant turn's row (`running` → "Working…",
+   * `stopping` → "Stopping…"). `idle` leaves every row indicator-free.
    */
   readonly runStatus: ChatRunStatus;
   /**
-   * Chat-tile binding identity, threaded straight into `buildSetupCardRows` so
-   * a synthesized setup-card row can route its per-workspace retry mutation and
-   * scope the terminal-liveness query. These are tile-owned and stable across
-   * renders (they never change for a mounted chat), so they make churn-free
-   * memo deps.
+   * Chat-tile binding identity, threaded straight into `buildSetupCardRows` so a synthesized
+   * setup-card row can route its per-workspace retry mutation and scope the terminal-liveness query.
    */
   readonly epicId: string;
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
-  /**
-   * Tab-scoped id the setup card needs for its focus-terminal path. Carried on
-   * the synthesized (never-persisted) setup-card segment rather than as a
-   * per-row prop so it doesn't bust the message-virtualizer cache.
-   */
+  /** Tab-scoped id the setup card needs for its focus-terminal path. */
   readonly viewTabId: string;
 }
 
-/*
- * Per-Message cache for user rows. `Message` references are stable across
- * snapshot deltas (the protocol re-issues the same object identity), so a
- * WeakMap keyed on the message gives O(1) reuse without invalidation logic.
- */
+/** Per-Message cache for user rows. */
 const renderCache = new WeakMap<
   RenderedMessagesDisplayContext,
   WeakMap<Message, ChatMessageModel>
 >();
 
-/*
- * Per-assistant-turn cache. Unlike user messages, assistant turns are
- * synthesized by coalescing one-or-more `Message`s sharing a `turnId` (plus
- * optional live-blocks injection), so there's no single `Message` reference
- * to key on. Instead we hash the turn's blocks into a `signature` and reuse
- * the cached `ChatMessageModel` whenever the signature matches the last
- * call. During streaming the live turn's signature changes on block status,
- * timestamp, or renderable text updates, so it recomputes; every other
- * persisted turn returns a reference-stable model that lets `React.memo` on
- * `ChatMessage` skip rendering. Without this cache, all visible rows
- * re-render per delta because the assistant model is rebuilt fresh each
- * call.
- */
+/** Per-assistant-turn cache. */
 interface AssistantTurnCacheEntry {
   cacheKey: string;
   models: ReadonlyArray<ChatMessageModel>;
@@ -272,9 +212,8 @@ function turnSignature(blocks: ReadonlyArray<ContentBlock>): string {
 }
 
 function blockContentVersion(block: ContentBlock): number {
-  // `text.delta` / `reasoning.delta` only ever append to `text` / `content`, so
-  // length alone catches every accumulator update. Avoid hashing the full body
-  // — this signature runs once per block per render during streaming.
+  // `text.delta` / `reasoning.delta` only ever append to `text` / `content`, so length alone catches
+  // every accumulator update.
   switch (block.type) {
     case "text":
       return textBlockContentVersion(block);
@@ -290,10 +229,8 @@ function blockContentVersion(block: ContentBlock): number {
 }
 
 /**
- * A provider-notice text block is upserted atomically (its rendered fields
- * replace in place, they never append), so `text.length` alone can't catch a
- * same-length title/message/detail update. Hash the rendered fields instead;
- * an ordinary text block (no notice) keeps the cheap length signature.
+ * A provider-notice text block is upserted atomically (its rendered fields replace in place, they
+ * never append), so `text.length` alone can't catch a same-length title/message/detail update.
  */
 function textBlockContentVersion(
   block: Extract<ContentBlock, { type: "text" }>,
@@ -316,9 +253,8 @@ function planBlockContentVersion(
   hash = hashStringField(hash, planContentIdentity(block));
   hash = hashStringField(hash, block.title ?? "");
   hash = hashStringField(hash, block.summary ?? "");
-  // Hash the full preview, not just its length: a same-length edit (no
-  // fullContentRef/revision change, e.g. a short inline plan) would otherwise
-  // reuse a stale cached segment.
+  // Hash the full preview, not just its length: a same-length edit (no fullContentRef/revision
+  // change, e.g. a short inline plan) would otherwise reuse a stale cached segment.
   hash = hashStringField(hash, block.markdownPreview);
   hash = hashStringField(hash, block.approvalId ?? "");
   hash = hashStringField(hash, block.supersededByPlanId ?? "");
@@ -378,19 +314,7 @@ function checkpointSignature(view: CheckpointManifestView | null): string {
   ].join(";");
 }
 
-/**
- * Pure event-log projection of a `turn.stopped` event - everything
- * `turnStoppedInfoByTurnKey` can know without looking at the turn's
- * rendered rows. `withTurnCompletion` upgrades this into the UI-facing
- * `ChatMessageStoppedInfo` (adding `turnHadOutput`) once it has row
- * visibility, which this pure scan does not.
- */
-/*
- * `turn.stopped` folding lives in the shared row projection: a stopped turn can
- * ADD a row (the synthesized boundary after a trailing steer) and can BE a row
- * (a Stop that landed before any assistant record), so the host numbers
- * ordinals from this exact fold. Consumed here rather than mirrored.
- */
+/** Pure event-log projection of `turn.stopped` - everything `turnStoppedInfoByTurnKey` can know without looking at rendered rows. */
 type TurnStoppedEventInfo = TurnStoppedInfo;
 
 interface TurnLifecycleTiming {
@@ -398,22 +322,7 @@ interface TurnLifecycleTiming {
   readonly endedAt: number | null;
 }
 
-/**
- * Durable evidence and timing for provider turns, keyed by `turnId`.
- *
- * An autonomous-resume block can be persisted before the provider resumes: it
- * first serves as the visible background-completion notification and is only
- * later adopted if the adapter emits autonomous activity. A lifecycle entry
- * proves the row crossed the provider-turn boundary; its timestamps keep a
- * silent resume's elapsed interval separate from the earlier notification.
- *
- * The entry is the turn's LATEST attempt window, not a min/max collapse:
- * safe-point steering continuations legitimately reuse a turnId, so a later
- * `turn.started` opens a fresh window — retaining the earliest start would
- * stretch a silent resume's elapsed interval across the pre-steer attempt. A
- * terminal event closes the open window; a duplicate terminal after a closed
- * window is ignored (the host's terminal latch makes that defensive only).
- */
+/** Durable evidence and timing for provider turns, keyed by `turnId`. */
 function turnLifecycleTimingFromEvents(
   events: ReadonlyArray<ChatEvent>,
 ): ReadonlyMap<string, TurnLifecycleTiming> {
@@ -447,12 +356,8 @@ function turnLifecycleTimingFromEvents(
 }
 
 /**
- * Whether the turn's latest attempt window is provably finished: both the
- * matching `turn.started` and a terminal event exist. A start alone is not
- * completion evidence — a fatal connection close clears the active turn
- * while the provider may still be running, and fabricating a completion
- * there would render a zero-length "Resumed" footer for a turn that never
- * ended.
+ * Whether the turn's latest attempt window is provably finished: both the matching `turn.started`
+ * and a terminal event exist.
  */
 function hasCompletedProviderTurn(timing: TurnLifecycleTiming | null): boolean {
   return (
@@ -562,23 +467,8 @@ function profileLabelFromSessionAnchor(
 }
 
 /**
- * Associate the immutable profile label on each provider-session anchor with
- * every assistant turn that follows it. Continuation messages do not carry a
- * new anchor, so the last anchor remains in effect until the host mints the
- * next one. The active turn needs an explicit mapping before its first
- * assistant record exists; its `userMessageId` identifies the initiating row.
- *
- * The running `currentAnchor` is exactly the "look at the rows around this one"
- * derivation a bounded window cannot make: a turn whose anchor was established
- * by a user record outside the hydrated span starts the walk with none and
- * silently loses its saved label. `contextByTurnKey` is the host's own answer
- * for that turn and outranks the walk wherever it speaks - the walk stays as
- * the fallback for the legacy line and for any turn the projection said nothing
- * about.
- *
- * The `harnessId` agreement gate applies either way. It is what stops a label
- * minted for one provider from being shown against another's turn, and that is
- * a property of the anchor rather than of where the anchor came from.
+ * Associate the immutable profile label on each provider-session anchor with every assistant turn
+ * that follows it.
  */
 function profileLabelsByTurnKeyFromMessages(input: {
   readonly messages: ReadonlyArray<Message>;
@@ -799,14 +689,7 @@ function pauseAccountingFromMergedIntervals(
   return { pausedDurationMs, pausedSinceMs, intervals: merged };
 }
 
-/**
- * Clip whole-turn pause accounting to the displayed lifecycle window. Pause
- * intervals accumulate per turnId across every attempt, but a row rendered
- * from its latest attempt window (an adopted autonomous resume) measures only
- * that window - subtracting an earlier attempt's user-wait would under-report
- * the resumed attempt's duration. The persisted-timing path passes `null` and
- * keeps whole-turn accounting.
- */
+/** Clip whole-turn pause accounting to the displayed lifecycle window. */
 function pauseScopedToWindow(
   pause: TurnPauseAccounting,
   windowStartedAt: number | null,
@@ -861,19 +744,13 @@ export function useRenderedMessages(
   input: RenderedMessagesInput,
   displayContext: RenderedMessagesDisplayContext,
 ): ReadonlyArray<ChatMessageModel> {
-  // The store assigns a fresh `activeTurn` object on every snapshot, so depend
-  // on its stable primitive fields (not the object identity) to avoid busting
-  // this memo each frame. These are all set at turn-start and never rewritten
-  // per delta, so they make safe, churn-free deps.
+  // The store assigns a fresh `activeTurn` object on every snapshot, so depend on its stable
+  // primitive fields (not the object identity) to avoid busting this memo each frame.
   const activeTurnId = input.activeTurn?.turnId ?? null;
   const activeTurnUserMessageId = input.activeTurn?.userMessageId ?? null;
   const activeTurnHarnessId = input.activeTurn?.harnessId ?? null;
   const activeTurnProfileId = input.activeTurn?.profileId ?? null;
-  // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
-  // carries the same context object, so the map is at most one entry per
-  // hydrated turn, and the derivations below all hold a turn key rather than a
-  // row id. Non-assistant rows drop out here and are read by row id where they
-  // are needed.
+  // Re-keyed from ROW ids to TURN keys once per publish.
   const contextByTurnKey = useMemo(() => {
     const byTurnKey = new Map<string, TranscriptRowContext>();
     for (const rowId of Object.keys(input.rowContext)) {
@@ -952,9 +829,8 @@ export function useRenderedMessages(
     () => turnLifecycleTimingFromEvents(input.events),
     [input.events],
   );
-  // The setup card row(s) are derived from the same event log, keyed on events
-  // plus the (stable) binding identity, so a streamed delta doesn't re-scan or
-  // re-partition the setup lifecycle windows.
+  // The setup card row(s) are derived from the same event log, keyed on events plus the (stable)
+  // binding identity, so a streamed delta doesn't re-scan or re-partition the setup lifecycle
   const epicId = input.epicId;
   const ownerId = input.ownerId;
   const ownerKind = input.ownerKind;
@@ -969,15 +845,13 @@ export function useRenderedMessages(
       ),
     [input.events, epicId, ownerId, ownerKind, setupCardWindows],
   );
-  // Project each row into its transcript card PLUS the placement signals the
-  // final merge needs (anchor target + genesis-pin discriminator), so that merge
-  // never has to index `setupCardRows` positionally in parallel with the cards.
+  // Project each row into its transcript card PLUS the placement signals the final merge needs
+  // (anchor target + genesis-pin discriminator), so that merge never has to index `setupCardRows`
   const setupCardEntries = useMemo(
     () =>
       setupCardRows.map((row) => ({
-        // The HOST's window index, not this array's position - see
-        // `adoptWholeLogIdentity`. Indexing positionally here is what made the
-        // card compute a row id the skeleton never published.
+        // The HOST's window index, not this array's position - see `adoptWholeLogIdentity`. Indexing
+        // positionally here is what made the card compute a row id the skeleton never published.
         message: buildSetupCardMessage(row, ownerId, viewTabId),
         anchorId: row.triggeringMessageId,
         hasCreatingEvent: row.hasCreatingEvent,
@@ -998,21 +872,13 @@ export function useRenderedMessages(
     [input.events],
   );
 
-  // The live row's blocks merge INTO a persisted turn only when a persisted
-  // assistant message already shares its `turnId` (multi-record / post-snapshot
-  // turns). The store routes streamed deltas to EITHER `messages` or
-  // `liveAssistantMessage`, never both, so in the common streaming case the
-  // live row stands alone and the persisted render is independent of it.
+  // The live row's blocks merge INTO a persisted turn only when a persisted assistant message
+  // already shares its `turnId` (multi-record / post-snapshot turns).
   const liveAssistant = input.liveAssistantMessage;
   const liveTurnKey = liveAssistant === null ? null : liveAssistant.turnId;
 
-  // Head/tail partition for the merge case: carve the live turn's records out
-  // of the settled walk so a streaming delta re-derives ONLY the active turn
-  // (the tail), leaving the settled head untouched per tick. The final memo
-  // re-interleaves the partitions through the shared `createdAt` sort, so the
-  // split never changes row ids or order. Per-tick stability: every dep here
-  // changes on snapshots or turn boundaries, never on streamed deltas. An
-  // empty `activeTurn` means the live row (if any) stands alone.
+  // Head/tail partition for the merge case: carve the live turn's records out of the settled walk so
+  // a streaming delta re-derives ONLY the active turn (the tail), leaving the settled head untouched
   const partition = useMemo((): {
     readonly settled: ReadonlyArray<Message>;
     readonly activeTurn: ReadonlyArray<Message>;
@@ -1033,9 +899,8 @@ export function useRenderedMessages(
   }, [input.messages, liveTurnKey]);
   const liveMergesIntoPersisted = partition.activeTurn.length > 0;
 
-  // User records can be referenced from either partition (steer rows render
-  // inside their nesting turn); build the lookup once per snapshot and thread
-  // it everywhere instead of letting each walk rebuild it.
+  // User records can be referenced from either partition (steer rows render inside their nesting
+  // turn); build the lookup once per snapshot and thread it everywhere instead of letting each walk
   const userMessagesById = useMemo(
     () => userMessagesByIdFromMessages(input.messages),
     [input.messages],
@@ -1131,10 +996,7 @@ export function useRenderedMessages(
     ownerId,
   ]);
 
-  // The tail: re-derives per streamed delta, but walks only the active turn's
-  // records. The live turn always carries `startedAt` (set at turn start), so
-  // the settled walk's `lastUserTimestamp` legacy anchor fallback is not
-  // needed here.
+  // The tail: re-derives per streamed delta, but walks only the active turn's records.
   const activeTurn = useMemo(
     () =>
       partition.activeTurn.length === 0
@@ -1216,27 +1078,8 @@ export function useRenderedMessages(
   );
 
   return useMemo(() => {
-    // Pre-turn window: the host reports `running`/`stopping` (a send was
-    // accepted) but no assistant row exists yet - provider-session/worktree
-    // setup runs before the turn materializes. Synthesize a pending-assistant
-    // row so the response area shows "Working…" immediately. It shares the live
-    // row's key, so when the real turn arrives it swaps in place (no flicker).
-    // `pending` (the optimistic user messages, timestamped `Date.now()`) is
-    // included so the indicator's `createdAt` floor sits above them and the row
-    // sorts BELOW the just-sent message instead of jumping above it.
-    // Suppress the pre-turn "Working…" indicator only while the LIVE setup
-    // lifecycle is in flight: the open (current) window has a workspace still
-    // `setting-up`, so the card itself stands in for the awaited turn. Two
-    // guards matter:
-    //  - `row.isActive` (NOT the row state): a window closed by a boundary
-    //    (`worktree.missing` / re-bind) can be stranded at `setting-up` when the
-    //    worktree vanished mid-setup, and that historical card must never gate a
-    //    later normal turn.
-    //  - per-workspace `setting-up` (NOT the rolled-up `aggregate.state`): the
-    //    rollup ranks `failed` above `setting-up`, so a multi-repo window with
-    //    one failed + one still-running repo rolls up to `failed`; keying off the
-    //    aggregate would wrongly un-suppress the indicator while a repo is still
-    //    in flight (a stray "Working…" beside the live card).
+    // Pre-turn window: the host reports `running`/`stopping` (a send was accepted) but no assistant
+    // row exists yet - provider-session/worktree setup runs before the turn materializes.
     const setupGating = setupCardRows.some(
       (row) =>
         row.isActive &&
@@ -1255,13 +1098,8 @@ export function useRenderedMessages(
           rendered: [...persisted, ...activeTurn, ...pending, ...live],
         });
 
-    // Drop a pending optimistic echo whose `messageId` is already persisted.
-    // The optimistic "pending" user row and its persisted counterpart share an
-    // `id` (the messageId). Setup-gating's long accepted-but-not-running window
-    // lets the persisted message arrive (via snapshot) while the pending slot is
-    // already orphaned, so without this guard BOTH render (the "double message"
-    // bug). The invariant is "pending = not yet persisted" - once a message is
-    // persisted, its pending echo is stale and must drop.
+    // Drop a pending optimistic echo whose `messageId` is already persisted. The optimistic "pending"
+    // user row and its persisted counterpart share an `id` (the messageId).
     const persistedIds = new Set(
       [...persisted, ...activeTurn].map((message) => message.id),
     );
@@ -1269,10 +1107,8 @@ export function useRenderedMessages(
       (message) => !persistedIds.has(message.id),
     );
 
-    // `baseRows` = everything that sorts by `createdAt`. Assembled before the
-    // cards so the common case can early-out without the anchor machinery. The
-    // imported-chat markers are deliberately NOT here - they are pinned (see
-    // `pinImportedChatMarkers`), so sorting them would only file them wrongly.
+    // `baseRows` = everything that sorts by `createdAt`. Assembled before the cards so the common case
+    // can early-out without the anchor machinery.
     const baseRows = [
       ...persisted,
       ...activeTurn,
@@ -1284,9 +1120,8 @@ export function useRenderedMessages(
       ...trailing,
     ];
 
-    // Overwhelmingly common case - this chat has no worktree setup card: a plain
-    // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
-    // memo re-runs on every streamed delta, so the no-card path must stay cheap.
+    // Overwhelmingly common case - this chat has no worktree setup card: a plain `createdAt` sort.
+    // Skips the per-render anchor Set/Map/weave entirely.
     if (setupCardEntries.length === 0) {
       return pinImportedChatMarkers(
         importedChatMarkerMessages,
@@ -1294,34 +1129,18 @@ export function useRenderedMessages(
       );
     }
 
-    // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is
-    // genuinely the initial worktree, not a creation that happened mid-chat. The
-    // discriminator is `hasCreatingEvent`: a window with a `setup.creating` event
-    // was announced LIVE during a conversation send. A window with NO creating
-    // event is the back-filled genesis worktree (epic-create / catch-up at
-    // chat-attach), whose `createdAt` can be stamped late, so it pins to the top
-    // where the genesis belongs.
+    // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is genuinely the initial
+    // worktree, not a creation that happened mid-chat.
     const pinGenesisCard = !setupCardEntries[0].hasCreatingEvent;
 
-    // Every OTHER (mid-chat) setup card anchors DIRECTLY above the user message
-    // whose send created it - by message id (`anchorId`), NOT `createdAt`. The
-    // card is broadcast before the slow `git worktree add` while its message
-    // persists only AFTER the add, so a timestamp sort would drop the card below
-    // the message and then jump it above once the persisted message lands.
-    // Anchoring by id keeps the card pinned immediately above its message across
-    // the optimistic-echo -> persisted-message swap (both share the id).
+    // Every OTHER (mid-chat) setup card anchors DIRECTLY above the user message whose send created it
+    // - by message id (`anchorId`), NOT `createdAt`.
     const baseIds = new Set(baseRows.map((message) => message.id));
     const cardsByAnchor = new Map<string, ChatMessageModel[]>();
     const floatingCards: ChatMessageModel[] = [];
     setupCardEntries.forEach((entry, index) => {
       if (pinGenesisCard && index === 0) return;
-      // Anchor only when the triggering message is an actual transcript row. It
-      // is NOT for: a send still QUEUED behind an active turn (rendered as a
-      // queue item, not a row), a STEERED send (nested inside its turn), or a
-      // message later BRANCHED/DELETED away. Those fall back to a `createdAt`
-      // float so the card still renders - near the tail for a fresh creation,
-      // chronologically for a historical one - rather than vanishing, and it
-      // re-anchors on its own once/if the message becomes a transcript row.
+      // Anchor only when the triggering message is an actual transcript row.
       if (entry.anchorId !== null && baseIds.has(entry.anchorId)) {
         const list = cardsByAnchor.get(entry.anchorId);
         if (list === undefined) {
@@ -1393,25 +1212,15 @@ function projectActiveTurn(
 }
 
 /**
- * Project one `SetupCardRow` into a `role: "system"` transcript row carrying the
- * synthetic `setup-card` segment. The row id is keyed on `ownerId` + the
- * window's ordinal (its position in the chronological window list) so it is
- * stable across streamed deltas AND unique even if two lifecycle windows share
- * the same genesis `createdAt` (the genesis alone would collide on the React /
- * virtualizer key). Windows are append-only, so a window's ordinal never shifts.
- * `createdAt` (the window genesis) still drives the stable sort so the card
- * drops at the genesis / re-bind point. Every other `ChatMessage` field is
- * null/empty - the card owns its own rendering.
+ * Project one `SetupCardRow` into a `role: "system"` transcript row carrying the synthetic
+ * `setup-card` segment.
  */
 function buildSetupCardMessage(
   row: SetupCardRow,
   ownerId: string,
   viewTabId: string,
 ): ChatMessageModel {
-  // THROUGH the shared builder, not a matching template literal beside it. The
-  // id has to be byte-identical to the one the host published or the card is
-  // unplaceable, and a second copy of the format is exactly the drift
-  // `row-projection.ts` keeps this builder exported to prevent.
+  // THROUGH the shared builder, not a matching template literal beside it.
   const id = setupCardRowId(ownerId, row.windowIndex, row.createdAt);
   return {
     id,
@@ -1423,9 +1232,6 @@ function buildSetupCardMessage(
         kind: "setup-card",
         model: row.model,
         viewTabId,
-        // Ticket 13 (decision #28): same predicate the merge below uses for
-        // `pinGenesisCard` (`!setupCardEntries[0].hasCreatingEvent`) - only
-        // window 0 can ever be genesis-pinned, so this is exact, not a guess.
         anchorMessageId: row.triggeringMessageId,
         isGenesisPin: row.windowIndex === 0 && !row.hasCreatingEvent,
       },
@@ -1453,10 +1259,8 @@ function buildForkedChatLinkMessages(
   viewTabId: string,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
-    // Through the shared predicate, not beside it: this decides whether the
-    // event OCCUPIES AN ORDINAL, and the host numbers rows from the same
-    // function. A second copy that agreed by inspection is what put an
-    // empty-string guard on one side only.
+    // Through the shared predicate, not beside it: this decides whether the event OCCUPIES AN ORDINAL,
+    // and the host numbers rows from the same function.
     const source = forkedChatLinkRowSource(event);
     if (source === null) return [];
     const { sourceChatId, sourceHostId } = source;
@@ -1498,15 +1302,8 @@ function buildForkedChatLinkMessages(
 }
 
 /**
- * Pin the imported-chat provenance markers above everything else.
- *
- * Two reasons they cannot sort by `createdAt` like ordinary rows. Their
- * timestamp is the IMPORT time, which is later than every message they
- * introduce, so a chronological sort files them at the very bottom - under the
- * transcript they are meant to introduce. And what they say ("Imported from
- * Claude Code") is about the whole chat's origin, which is why they sit above
- * even a pinned genesis setup card: the workspace that card describes was
- * bound to this chat after the transcript already existed elsewhere.
+ * Pin the imported-chat provenance markers above everything else. Two reasons they cannot sort by
+ * `createdAt` like ordinary rows.
  */
 function pinImportedChatMarkers(
   markers: ReadonlyArray<ChatMessageModel>,
@@ -1515,15 +1312,7 @@ function pinImportedChatMarkers(
   return markers.length === 0 ? rows : [...markers, ...rows];
 }
 
-/**
- * Project a `chat.imported` event into the transcript's provenance row.
- *
- * Filtered and identified THROUGH the projection's own helpers: the host
- * numbers this row's ordinal from `importedChatMarkerRowSource`, and a row that
- * existed here but not there is exactly what the windowed transcript used to
- * lose - an event no row needs is never served on reopen (spec
- * `session-import.md` §8e).
- */
+/** Project a `chat.imported` event into the transcript's provenance row. */
 function buildImportedChatMarkerMessages(
   events: ReadonlyArray<ChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
@@ -1565,12 +1354,7 @@ function buildImportedChatMarkerMessages(
   });
 }
 
-/**
- * Some failures happen before a queued message is accepted, so no message row
- * can own the error. The durable `send.failed` event is still part of chat
- * history; project only explicitly marked occurrences into an assistant error
- * row so notification activation has an exact, stable transcript destination.
- */
+/** Some failures happen before a queued message is accepted, so no message row can own the error. */
 function buildNotificationAnchorMessages(
   events: ReadonlyArray<ChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
@@ -1613,12 +1397,6 @@ function buildNotificationAnchorMessages(
   });
 }
 
-/**
- * Build the run-metadata for the pre-turn pending indicator from the active
- * turn's primitive fields, mirroring what `renderAssistantTurnSlice` derives
- * for the live/persisted row so the provider icon + hover tooltip are present
- * during setup too. `null` when no active turn is known yet.
- */
 function pendingTurnMeta(
   turn: PendingTurnMetaInput,
   ctx: RenderedMessagesDisplayContext,
@@ -1644,13 +1422,8 @@ function pendingTurnMeta(
       turn.reasoningEffort,
     ),
     serviceTier: turn.serviceTier,
-    // Every field above is settings-derived - what the user PICKED - which is
-    // all that exists pre-turn. The credential a spawn actually used is not
-    // knowable yet (this indicator renders during setup, before the provider
-    // has been spawned), and unlike the others it is a claim about what
-    // happened rather than what was requested. So it stays null here and
-    // arrives with the turn's own record, which is the only thing that ever
-    // knows it. Nothing is lost: the annotation belongs to the turn-end footer.
+    // Every field above is settings-derived - what the user PICKED - which is all that exists
+    // pre-turn.
     envCredentialVar: null,
     // Cost is unknown until the turn completes; the pending/live footer omits it.
     costUsd: null,
@@ -1660,50 +1433,26 @@ function pendingTurnMeta(
 interface AssistantTurnAccumulator {
   messageId: string;
   sender: AgentSender;
-  /**
-   * Earliest wall-clock the host attributed to this turn. Sourced from
-   * `message.startedAt` (schema field, never rewritten); when multiple
-   * `AssistantMessage` records share one `turnId`, we take the min so the
-   * turn start anchors at the FIRST record, not the most recently coalesced.
-   * Null if every contributing record predates the `startedAt` schema field.
-   */
+  /** Earliest wall-clock the host attributed to this turn. */
   startedAt: number | null;
-  /**
-   * Latest wall-clock attributed to this turn. Host rewrites per delta on
-   * the active record, and may also bump across multiple records sharing a
-   * `turnId`; we take the max so `completedAt` reflects the actual turn end,
-   * not just the first record's last delta.
-   */
+  /** Latest wall-clock attributed to this turn. */
   timestamp: number;
   blocks: ContentBlock[];
-  /**
-   * False while `blocks` still ALIASES a contributing record's own array.
-   * Every mutation goes through `ownedTurnBlocks` first, so the common
-   * single-record turn never pays an array copy on a render pass - which it
-   * used to, once per turn, making each pass O(blocks in the transcript).
-   */
+  /** False while `blocks` still ALIASES a contributing record's own array. */
   blocksOwned: boolean;
-  /**
-   * One signature fragment per contributing record (plus one for appended
-   * live blocks). Each fragment is derived per record and memoized on that
-   * record's object identity, so a settled turn costs nothing to re-sign and
-   * the pass is O(records in the turn) rather than O(blocks in the turn).
-   */
+  /** One signature fragment per contributing record (plus one for appended live blocks). */
   signatureParts: string[];
   /** Profile label captured on the user message that initiated this turn. */
   profileLabel: string | null;
   /**
-   * Per-turn run metadata mirrored from the contributing `AssistantMessage`
-   * records (identical across records of one turn). Drives the elapsed
-   * footer's info tooltip. `null` for turns persisted before these fields
-   * existed.
+   * Per-turn run metadata mirrored from the contributing `AssistantMessage` records (identical
+   * across records of one turn). Drives the elapsed footer's info tooltip.
    */
   reasoningEffort: string | null;
   serviceTier: string | null;
   /**
-   * Env variable whose credential authenticated the turn, recorded by the host
-   * at spawn time; `null` when the profile sign-in was used. See
-   * `AssistantTurnMeta.envCredentialVar`.
+   * Env variable whose credential authenticated the turn, recorded by the host at spawn time; `null`
+   * when the profile sign-in was used. See `AssistantTurnMeta.envCredentialVar`.
    */
   envCredentialVar: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
@@ -1749,10 +1498,8 @@ interface PersistedMessagesRenderInput {
     TurnLifecycleTiming
   >;
   /**
-   * Turn keys to retain in the per-context assistant-turn cache; entries for
-   * any other turn are evicted after the walk. Non-null only on the
-   * settled-head walk (once per snapshot) - the per-delta tail walk passes
-   * `null` so streaming never pays or races the sweep.
+   * Turn keys to retain in the per-context assistant-turn cache; entries for any other turn are
+   * evicted after the walk.
    */
   readonly sweepRetainedTurnKeys: ReadonlySet<string> | null;
   readonly ctx: RenderedMessagesDisplayContext;
@@ -1766,9 +1513,8 @@ interface RenderLiveAssistantInput {
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
   /** Immutable profile-label snapshots keyed by assistant turn identity. */
   readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
-  // Whether a persisted assistant message already shares the live turnId; the
-  // hook derives this once from the head/tail partition and threads it in so
-  // we don't re-scan the snapshot for the same predicate every streamed frame.
+  // Whether a persisted assistant message already shares the live turnId; the hook derives this once
+  // from the head/tail partition and threads it in so we don't re-scan the snapshot for the same
   readonly mergesIntoPersisted: boolean;
   readonly checkpointViews: ReadonlyMap<string, CheckpointManifestView>;
   readonly activeRunState: ChatMessageRunState | null;
@@ -1801,20 +1547,13 @@ function renderPersistedMessages(
 
   const emittedTurns = new Set<string>();
   const out: ChatMessageModel[] = [];
-  // Prefer `assistantMessage.startedAt` (schema field, set at turn-start and
-  // never overwritten). Legacy records persisted before that field exists come
-  // through as null; for those we fall back to the most recent user-send
-  // timestamp (set once at submit, also never rewritten) so the elapsed footer
-  // has a meaningful anchor instead of collapsing onto the (per-delta
-  // rewritten) `acc.timestamp`. `acc.timestamp` is the last-resort floor.
+  // Prefer `assistantMessage.startedAt` (schema field, set at turn-start and never overwritten).
   let lastUserTimestamp: number | null = null;
   for (const message of input.messages) {
     if (message.role === "user") {
       if (nestedSteeredMessageIds.has(message.messageId)) {
-        // A steered user message is a mid-turn interjection rendered INSIDE its
-        // assistant turn, not the user-send that triggers a following turn.
-        // Updating the fallback anchor here would mis-anchor a later turn's
-        // startedAt on the steer instant, so skip it entirely.
+        // A steered user message is a mid-turn interjection rendered INSIDE its assistant turn, not the
+        // user-send that triggers a following turn.
         continue;
       }
       lastUserTimestamp = message.timestamp;
@@ -1839,13 +1578,7 @@ function renderPersistedMessages(
   return out;
 }
 
-/**
- * Evict cached turn models whose turns left the transcript (branch edits,
- * deleted messages). Runs once per snapshot, at the end of the settled-head
- * walk (the only caller passing non-null retain keys); without it the
- * per-context cache retains one rendered model array for every turn ever
- * seen, for the tile's whole lifetime.
- */
+/** Evict cached turn models whose turns left the transcript (branch edits, deleted messages). */
 function sweepAssistantTurnCache(
   ctx: RenderedMessagesDisplayContext,
   retainTurnKeys: ReadonlySet<string>,
@@ -1857,12 +1590,8 @@ function sweepAssistantTurnCache(
 }
 
 /**
- * Stable content key for the steered user ids nested inside the active turn
- * (its records plus the live blocks). Those user rows render inside the
- * turn's tail partition, so the settled walk must skip them exactly as if
- * the nesting turn were local. String-keyed so a plain text delta leaves the
- * derived set referentially stable; only a newly landed steer (a rare,
- * discrete event) invalidates the settled head.
+ * Stable content key for the steered user ids nested inside the active turn (its records plus the
+ * live blocks).
  */
 function activeTurnSteeredIdsContentKey(
   activeTurnRecords: ReadonlyArray<Message>,
@@ -1894,38 +1623,7 @@ function userMessagesByIdFromMessages(
   return usersById;
 }
 
-/*
- * Steered-user suppression decides whether a persisted user record occupies a
- * top-level row, so it decides an ordinal. Shared with the host - see
- * `row-projection.ts`.
- */
-/**
- * Which user rows render the completed-steer badge.
- *
- * The local fold over whatever events this client holds, WIDENED by the rows
- * the host marked. Both halves are load-bearing and neither subsumes the other:
- *
- * - The local fold is the only answer for the live tail, whose `queue.*` events
- *   arrive as deltas rather than through a range.
- * - The carried flag is the only answer for cold history. `rowRecordIds` serves
- *   a user row its message and no events at all, so this fold sees nothing to
- *   badge it with - the badge was present all session and vanished the moment
- *   the row was evicted and re-hydrated.
- *
- * A union rather than a preference, and the asymmetry is deliberate: the host
- * speaks only when the answer is TRUE (see `completedSteer` on the schema), so
- * there is no "host says no" to honour - absence is the projection declining to
- * speak, and this fold is the fallback the schema's contract asks for.
- *
- * The one case the union gets arguably wrong is a `queue.fallback` RETRACTING a
- * badge for a row whose carried context predates the retraction: the local fold
- * drops it, the stale flag re-adds it. That is bounded rather than permanent -
- * a retraction lands on a row in the live tail, which is re-published with fresh
- * context on the next snapshot - and it is the same context-staleness every
- * field on this channel has, since `TranscriptRowContext` rides the RANGE and a
- * context-only change moves no skeleton field. The alternative is dropping the
- * badge from all cold history, which is the bug.
- */
+/** Which user rows render the completed-steer badge: local fold over held events, widened by rows the host marked. */
 function completedSteerMessageIds(
   events: ReadonlyArray<ChatEvent>,
   rowContext: Readonly<Record<string, TranscriptRowContext>>,
@@ -1989,13 +1687,7 @@ function hasOnlyAutonomousResumeAssistantBlocks(
   return foundAutonomousResume;
 }
 
-/**
- * Whether the turn began as an autonomous resume: its first non-steer block
- * is the resume divider. Unlike `hasOnlyAutonomousResumeAssistantBlocks` this
- * stays true after the resumed provider turn produces response blocks, so an
- * adopted resume keeps measuring from its provider start instead of jumping
- * back to the pre-resume persisted timestamp once output arrives.
- */
+/** Whether the turn began as an autonomous resume: its first non-steer block is the resume divider. */
 function turnInitiatedByAutonomousResume(
   blocks: ReadonlyArray<ContentBlock>,
 ): boolean {
@@ -2016,16 +1708,7 @@ function autonomousResumeNotifiedAt(
   return null;
 }
 
-/**
- * The lifecycle window as evidence for the row's resume state. A reused
- * `turnId` can carry a completed attempt from BEFORE the resume divider was
- * persisted (an interrupted pre-steer run whose notification landed later);
- * that window predates the thing it would prove, so it can neither adopt the
- * notification nor lend it timing — discard it. A same-timestamp start stays:
- * the host stamps the divider before launching the adopting provider turn.
- * Non-resume turns and windows without a start pass through unchanged (a
- * bare terminal event is already rejected by `hasCompletedProviderTurn`).
- */
+/** The lifecycle window as evidence for the row's resume state. */
 function lifecycleWindowSinceResume(
   timing: TurnLifecycleTiming | null,
   blocks: ReadonlyArray<ContentBlock>,
@@ -2053,16 +1736,8 @@ interface AssistantTurnTimingInput {
   readonly blocks: ReadonlyArray<ContentBlock>;
   readonly persistedStartedAt: number | null;
   /**
-   * The projection's own anchor for a turn persisted before `startedAt`
-   * existed, when it carried one - see `TranscriptRowContext`.
-   *
-   * Ahead of {@link AssistantTurnTimingInput.lastUserTimestamp} because that is
-   * the re-derivation this replaces: the walk's running user stamp is `null` in
-   * a span that does not reach the preceding user row, and the anchor then
-   * collapses onto the assistant record's COMPLETION stamp, shrinking the
-   * displayed elapsed time - often to zero. Behind `persistedStartedAt` only
-   * for symmetry: the host carries this exclusively when `startedAt` is absent,
-   * so the two are never both present.
+   * The projection's own anchor for a turn persisted before `startedAt` existed, when it carried one
+   * - see `TranscriptRowContext`.
    */
   readonly legacyRowAnchorAt: number | null;
   readonly lastUserTimestamp: number | null;
@@ -2076,10 +1751,8 @@ interface AssistantTurnTiming {
   readonly completedAt: number;
   readonly cacheToken: string;
   /**
-   * Start of the lifecycle window the row displays, when timing selected one;
-   * `null` on the persisted-timing path. Pause accounting is clipped to this
-   * so an earlier attempt's user-wait never subtracts from the resumed
-   * attempt's duration.
+   * Start of the lifecycle window the row displays, when timing selected one; `null` on the
+   * persisted-timing path.
    */
   readonly lifecycleWindowStartedAt: number | null;
 }
@@ -2108,9 +1781,8 @@ function assistantTurnTiming(
   }
   const elapsedStartedAt = input.lifecycle.startedAt;
   const terminalAt = input.stoppedAt ?? input.lifecycle.endedAt;
-  // A start without terminal proof adopts the live timer only: completion
-  // stays anchored to persisted state, and the classification keeps such a
-  // row footerless until the matching terminal event lands.
+  // A start without terminal proof adopts the live timer only: completion stays anchored to
+  // persisted state, and the classification keeps such a row footerless until the matching terminal
   if (terminalAt === null) {
     return {
       rowAnchorAt: fallbackStartedAt,
@@ -2139,13 +1811,7 @@ function assistantCompletionCacheToken(
   return `${state}:${timestamp}`;
 }
 
-/**
- * The projection's own anchor for this turn, or `null` when it carried none.
- *
- * A named lookup rather than an inline chain: the turn renderer is at its
- * complexity budget, and two more branches inside it is what a lint gate reads
- * rather than what a reader does.
- */
+/** The projection's own anchor for this turn, or `null` when it carried none. */
 function legacyRowAnchorFor(
   contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
   turnKey: string,
@@ -2164,10 +1830,6 @@ function renderPersistedAssistantMessageTurn(
   emittedTurns.add(turnKey);
 
   const checkpointView = input.checkpointViews.get(turnKey) ?? null;
-  // The "Changes" group is held back until the assistant turn completes, so
-  // the cache key must distinguish active (streaming) from complete turns —
-  // otherwise a turn that finishes without a block-status flip keeps the
-  // group suppressed.
   const turnComplete = input.activeTurnId !== turnKey;
   const runState = turnComplete ? null : input.activeRunState;
   const stopped = input.turnStoppedByTurnKey.get(turnKey) ?? null;
@@ -2193,10 +1855,8 @@ function renderPersistedAssistantMessageTurn(
     input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE,
     timing.lifecycleWindowStartedAt,
   );
-  // Signature includes the persisted timing plus the lifecycle timing token,
-  // so either a canonicalized snapshot timestamp or a later terminal event
-  // invalidates the cached model. Without both, a stale `completedAt`/elapsed
-  // would be served for the lifetime of the ctx.
+  // Signature includes the persisted timing plus the lifecycle timing token, so either a
+  // canonicalized snapshot timestamp or a later terminal event invalidates the cached model.
   const completionToken = assistantCompletionCacheToken(
     turnComplete,
     notificationOnlyAutonomousResume,
@@ -2213,11 +1873,8 @@ function renderPersistedAssistantMessageTurn(
     String(timing.rowAnchorAt),
     String(timing.elapsedStartedAt),
     acc.profileLabel ?? "profile:none",
-    // Listed for the same reason `profileLabel` is: a tooltip-only field that
-    // no other part of this key covers. It is also stamped mid-turn (the row
-    // exists before `turn.started` lands), so the cached model can predate it -
-    // and the annotation it drives is a security disclosure, which must not be
-    // the thing a stale render drops.
+    // Listed for the same reason `profileLabel` is: a tooltip-only field that no other part of this
+    // key covers.
     acc.envCredentialVar ?? "envcred:none",
     turnPauseSignature(pause),
     stoppedSignature(stopped),
@@ -2231,9 +1888,7 @@ function renderPersistedAssistantMessageTurn(
     turnKey,
     checkpointView,
     turnComplete,
-    // A plain completion/interruption without a matching start remains a
-    // notification-only row. A user Stop is itself a transcript boundary and
-    // must retain its stopped marker even when it lands before `turn.started`.
+    // A plain completion/interruption without a matching start remains a notification-only row.
     showCompletionFooter: !notificationOnlyAutonomousResume || stopped !== null,
     completedAt: timing.completedAt,
     runState,
@@ -2268,12 +1923,8 @@ function addAssistantMessageToAccumulator(
       })),
     );
     existing.signatureParts.push(assistantRecordSignature(message));
-    // A turn split across multiple AssistantMessage records (subagent flows,
-    // legacy/migrated snapshots) must merge timestamps, not keep the FIRST
-    // record's: completedAt = max(timestamp) so the elapsed reflects the real
-    // turn end, and startedAt = min(startedAt) so the anchor is the earliest
-    // recorded turn-start. Null `startedAt` (legacy records) loses to a real
-    // value via `minNullable`.
+    // A turn split across multiple AssistantMessage records (subagent flows, legacy/migrated
+    // snapshots) must merge timestamps, not keep the FIRST record's: completedAt = max(timestamp) so
     if (message.timestamp > existing.timestamp) {
       existing.timestamp = message.timestamp;
     }
@@ -2283,17 +1934,13 @@ function addAssistantMessageToAccumulator(
     existing.reasoningEffort =
       existing.reasoningEffort ?? message.reasoningEffort;
     existing.serviceTier = existing.serviceTier ?? message.serviceTier;
-    // Same first-non-null rule, and it matters more here: every record of one
-    // turn came from one spawn, so they cannot honestly disagree - but the row
-    // is created before `turn.started` lands, so the FIRST record can carry a
-    // not-yet-stamped null while a sibling has the real value. Overwriting with
-    // a later null would turn a recorded bypass back into "signed in normally".
+    // Same first-non-null rule, and it matters more here: every record of one turn came from one
+    // spawn, so they cannot honestly disagree - but the row is created before `turn.started` lands, so
     existing.envCredentialVar =
       existing.envCredentialVar ?? message.envCredentialVar;
     existing.profileLabel = existing.profileLabel ?? profileLabel;
-    // `costUsd` is cumulative-to-turn-end and lands on the completing record,
-    // which may be processed after an earlier sibling. Take the LATEST non-null
-    // (last-wins) so the final cumulative cost is not pinned to a stale partial.
+    // `costUsd` is cumulative-to-turn-end and lands on the completing record, which may be processed
+    // after an earlier sibling.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
     existing.messageId = message.messageId;
     return;
@@ -2404,11 +2051,7 @@ function addLiveAssistantImageProjection(
   );
 }
 
-/**
- * Clone-on-first-write for a turn's block list. Until something appends, the
- * accumulator aliases the contributing record's own array; aliasing is safe
- * only because every mutation site routes through here.
- */
+/** Clone-on-first-write for a turn's block list. */
 function ownedTurnBlocks(acc: AssistantTurnAccumulator): ContentBlock[] {
   if (acc.blocksOwned) return acc.blocks;
   acc.blocks = [...acc.blocks];
@@ -2417,33 +2060,12 @@ function ownedTurnBlocks(acc: AssistantTurnAccumulator): ContentBlock[] {
 }
 
 /**
- * Signature for one contributing record.
- *
- * `blocksVersion` is the host's own monotonic marker and is free when present.
- * Otherwise the block list is hashed once and memoized against the record's
- * OBJECT IDENTITY - which is the correct invalidation key here even though a
- * settled turn is not strictly immutable: detached backgrounded-subagent
- * events and snapshot replacement both write settled turns, and both mint a
- * new message object rather than mutating in place. Keying on "the turn is
- * complete" would have been wrong; keying on identity is not.
+ * Signature for one contributing record. `blocksVersion` is the host's own monotonic marker and is
+ * free when present.
  */
 const assistantRecordSignatureCache = new WeakMap<AssistantMessage, string>();
 
-/**
- * Stable per-array identity token.
- *
- * `blocksVersion` alone is not sufficient even for a single record: an
- * authoritative snapshot can replace a record's blocks while preserving its
- * `messageId`, its timestamp AND its persisted counter (counters restart at 0
- * on a rebuild), which produces an identical key for different content and
- * serves the previous render indefinitely. Hashing the blocks instead would
- * reintroduce the O(blocks-in-transcript) work per pass that keying on a
- * counter exists to avoid.
- *
- * A replacement always mints a NEW array, so array identity separates the two
- * cases at O(1): same array plus same counter really is the same content;
- * a new array is a replacement regardless of what the counter says.
- */
+/** Stable per-array identity token. */
 let blocksIdentityCounter = 0;
 const blocksIdentity = new WeakMap<ReadonlyArray<ContentBlock>, number>();
 function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
@@ -2454,48 +2076,17 @@ function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
   return blocksIdentityCounter;
 }
 
-/**
- * The empty list every record without `imageResolutions` shares.
- *
- * One module-level array, deliberately not a fresh `[]` per call:
- * `imageResolutionsIdentityToken` keys a WeakMap on this value to build a memo
- * signature, so a new array per read would change that signature on every
- * projection and defeat the cache it exists to feed.
- *
- * Distinct from `NO_IMAGE_RESOLUTIONS` below, which is the empty PROJECTION
- * (`AssistantMarkdownImageResolution`, entries already paired with their owning
- * message id). This one is the empty PERSISTED list a record carries.
- */
+/** The empty list every record without `imageResolutions` shares. */
 const NO_PERSISTED_IMAGE_RESOLUTIONS: AssistantMessage["imageResolutions"] = [];
 
 /**
- * `imageResolutions` for a persisted assistant record, tolerating one that
- * never carried the field.
- *
- * The type says it is always present, and for a record parsed off the wire it
- * is. A snapshot on the live schema line takes `ChatStreamClient`'s SHALLOW
- * parse path, which validates `chat.messages` with
- * `z.custom<Message>(isStructuralRecord)` - a structural check only, so none of
- * the zod defaults run and `imageResolutions: z.array(...).default([])` never
- * fills. A host replaying a record stored before the field existed hands it
- * straight through, typed as present and genuinely `undefined`. Reading it
- * blind threw "Invalid value used as weak map key" out of
- * `imageResolutionsIdentityToken` and took the whole chat tile down through its
- * error boundary.
- *
- * The tolerance belongs here and not in the transport: the shallow path is
- * structural by design - that is what makes it cheap - and a contract test in
- * `chat-stream-client.test.ts` pins it to hand a live snapshot's message
- * through structurally unchanged.
+ * `imageResolutions` for a persisted assistant record, tolerating one that never carried the
+ * field. The type says it is always present, and for a record parsed off the wire it is.
  */
 function assistantImageResolutions(
   message: AssistantMessage,
 ): AssistantMessage["imageResolutions"] {
-  // Read through `unknown` deliberately. The declared field type is not
-  // optional, so annotating a local `| undefined` does not survive: TypeScript
-  // narrows a `const` to its initializer's type and `no-unnecessary-condition`
-  // then rejects the `??` as dead. `unknown` is the honest declaration here -
-  // the type system cannot express the runtime shape this guards against.
+  // Read through `unknown` deliberately.
   const resolutions: unknown = message.imageResolutions;
   return Array.isArray(resolutions)
     ? message.imageResolutions
@@ -2535,21 +2126,7 @@ function assistantRecordSignature(message: AssistantMessage): string {
   return computed;
 }
 
-/**
- * Cache key for a turn's merged block list.
- *
- * A single-record turn keys on that record's signature, which pairs its
- * `blocksVersion` with its blocks' array identity so a replacement is caught
- * even when the counter is preserved (see `assistantRecordSignature`).
- *
- * A MULTI-record turn needs more than that. Records are minted at
- * `blocksVersion: 0`, so joining per-record parts positionally is only as
- * strong as the weakest part, and the merged list is what the render actually
- * consumes: two different merges can be assembled from parts that each look
- * unchanged. So the moment a second record joins, hash the merged list. That
- * is what the pre-accumulator code did, and it is what makes this class of
- * stale-cache miss impossible rather than merely unlikely.
- */
+/** Cache key for a turn's merged block list. */
 function turnBlocksSignature(acc: AssistantTurnAccumulator): string {
   if (acc.signatureParts.length === 1) return acc.signatureParts[0];
   return `h:${turnSignature(acc.blocks)}#records:${acc.signatureParts.join("|")}`;
@@ -2578,16 +2155,6 @@ interface AssistantTurnRenderInput {
   readonly chatId: string;
 }
 
-/**
- * Renders one turn's rows from the SHARED plan.
- *
- * The plan - which blocks group into which slice, where the steer bubbles fall,
- * whether an empty turn still draws a row - is `planAssistantTurnRows` in
- * `@traycer/protocol`, because it decides this turn's row COUNT and the host
- * numbers ordinals from the same function. This body renders the plan; it does
- * not re-derive it. A chunking loop here that agreed with that one by
- * inspection is precisely the drift the projection exists to prevent.
- */
 function renderAssistantTurnRows(
   input: AssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
@@ -2601,9 +2168,8 @@ function renderAssistantTurnRows(
       if (block.type !== "steer") {
         throw new Error("rendered-messages: plan named a non-steer block");
       }
-      // Anchor the nested steer row at the turn start too, so it stays
-      // contiguous with its surrounding slices under the stable `createdAt`
-      // sort instead of jumping out by its own block timestamp.
+      // Anchor the nested steer row at the turn start too, so it stays contiguous with its surrounding
+      // slices under the stable `createdAt` sort instead of jumping out by its own block timestamp.
       return {
         ...renderSteerBlockUserMessage(
           block,
@@ -2642,14 +2208,8 @@ function renderAssistantTurnRows(
 }
 
 /**
- * Stamp `completedAt`, footer visibility, and (when the turn ended via a user
- * Stop) `stopped` onto the LAST assistant row of a completed turn. This gives
- * every completed row terminal state while allowing a notification-only row
- * to suppress the elapsed footer. When visible, the footer renders once on
- * the turn's final slice and measures from that row's separate
- * `elapsedStartedAt`. Live turns get `null` for terminal fields until
- * completion - `input.stopped` is looked up unconditionally by the caller, but
- * only takes effect here behind the same `turnComplete` gate as `completedAt`.
+ * Stamp `completedAt`, footer visibility, and (when the turn ended via a user Stop) `stopped` onto
+ * the LAST assistant row of a completed turn.
  */
 function withTurnCompletion(
   rows: ReadonlyArray<ChatMessageModel>,
@@ -2658,14 +2218,8 @@ function withTurnCompletion(
   if (!input.turnComplete) return rows;
   const lastAssistantIndex = lastAssistantRowIndex(rows);
   if (lastAssistantIndex === -1) return rows;
-  // The stamped row is sometimes a content-less boundary marker (synthesized
-  // after a trailing steer bubble by `attachRunStateToTrailingAssistantSlice`),
-  // so both "did the turn produce response output", "is this a silent
-  // autonomous resume", and "what is the turn's copyable reply text" must be
-  // derived across every row of the turn, not just the one being stamped -
-  // otherwise a turn that DID answer before the steer would misreport as
-  // having produced nothing, and its copy button would have no text to copy
-  // (the boundary row's own segments are empty).
+  // The stamped row is sometimes a content-less boundary marker (synthesized after a trailing steer
+  // bubble by `attachRunStateToTrailingAssistantSlice`), so both "did the turn produce response
   const turnReplySegments = rows.flatMap((row) =>
     row.role === "assistant" ? row.segments : [],
   );
@@ -2697,9 +2251,8 @@ function withTurnCompletion(
 }
 
 /**
- * Which row each block ended up on, for in-turn block targeting (jump-to-block,
- * image resolution). Read straight off the plan so it cannot disagree with the
- * rows actually rendered from it.
+ * Which row each block ended up on, for in-turn block targeting (jump-to-block, image resolution).
+ * Read straight off the plan so it cannot disagree with the rows actually rendered from it.
  */
 function assistantRowIdsByBlockId(
   plan: AssistantTurnRowPlan,
@@ -2788,9 +2341,8 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
-    // Assistant rows render no provider/model label above the bubble (it moved
-    // to the elapsed-footer hover, which reads `assistantMeta`), so there's no
-    // sender label to carry here.
+    // Assistant rows render no provider/model label above the bubble (it moved to the elapsed-footer
+    // hover, which reads `assistantMeta`), so there's no sender label to carry here.
     senderLabel: null,
     assistantMeta,
     statusLabel: null,
@@ -2834,11 +2386,8 @@ function attachRunStateToTrailingAssistantSlice(
   plan: AssistantTurnRowPlan,
   rowIdByBlockId: ReadonlyMap<string, string>,
 ): ReadonlyArray<ChatMessageModel> {
-  // Whether this turn gains a trailing row is a ROW-COUNT decision, so it is
-  // the shared projection's to make (`assistantTurnNeedsTrailingRow`) - it is
-  // also the reason a turn's durable row count depends on an event and not
-  // only on its records. The `hasRunState` arm is the live half, which the
-  // durable projection passes as `false`.
+  // Whether this turn gains a trailing row is a ROW-COUNT decision, so it is the shared projection's
+  // to make (`assistantTurnNeedsTrailingRow`) - it is also the reason a turn's durable row count
   const needsTrailingRow = assistantTurnNeedsTrailingRow({
     plan,
     turnComplete: input.turnComplete,
@@ -2846,23 +2395,15 @@ function attachRunStateToTrailingAssistantSlice(
     hasRunState: input.runState !== null,
   });
   if (!needsTrailingRow) {
-    // No row is added - but a LIVE turn whose last row is already an assistant
-    // row still takes the indicator in place. That combination is the only way
-    // to reach here with a run state, and it guarantees the last row is the
-    // assistant one, so no empty-result guard is needed (or reachable).
+    // No row is added - but a LIVE turn whose last row is already an assistant row still takes the
+    // indicator in place.
     if (input.runState === null) return rows;
     const lastIndex = lastAssistantRowIndex(rows);
     return rows.map((row, index) =>
       index === lastIndex ? { ...row, runState: input.runState } : row,
     );
   }
-  // Live case (unchanged): bump past every existing row so the trailing
-  // indicator sorts last.
-  // Stopped case: every other row in this turn already anchors `createdAt` to
-  // `input.rowAnchorAt` (see the steer-row comment below) and relies on push
-  // order + the stable `createdAt` sort for position, not on a numerically
-  // later value - reuse that anchor exactly. Elapsed timing is carried
-  // separately by `elapsedStartedAt`.
+  // Live case (unchanged): bump past every existing row so the trailing indicator sorts last.
   const createdAt =
     input.runState !== null
       ? rows.reduce((latest, row) => Math.max(latest, row.createdAt), 0) + 1
@@ -2896,19 +2437,6 @@ function lastAssistantRowIndex(rows: ReadonlyArray<ChatMessageModel>): number {
   return -1;
 }
 
-/**
- * Renders a `steer` block's message row. The steered USER row (`block.messageId`)
- * is the preferred source - it carries the full message, its sender, and its
- * session anchor.
- *
- * The fallback below runs when that row is absent: the block and the row have
- * asymmetric durability (the block is rewritten on every checkpoint, the row is
- * written once), so a mid-turn reload can leave the block orphaned. It renders
- * from the block alone, and `block.sender` is what keeps provenance intact - an
- * orphaned agent-to-agent steer must still render as an agent card, never as a
- * plain user-authored bubble. Blocks persisted before that field carry `null`
- * and render as a "you" row exactly as before.
- */
 function renderSteerBlockUserMessage(
   block: Extract<ContentBlock, { type: "steer" }>,
   ctx: RenderedMessagesDisplayContext,
@@ -2979,11 +2507,8 @@ function renderSteeredUserMessage(input: {
 }
 
 /**
- * Surface inter-agent provenance for a `role: "user"` row whose sender
- * is another agent (via `agent.sendMessage`). The receiver GUI uses
- * this to style the row distinctly from a human-authored message and
- * to render the "from agent / reply with `traycer agent send`" footer.
- * Returns `null` for human senders.
+ * Surface inter-agent provenance for a `role: "user"` row whose sender is another agent (via
+ * `agent.sendMessage`).
  */
 function agentSenderInfoFromSender(
   sender: UserMessageSender,
@@ -3044,9 +2569,8 @@ function renderPendingUserMessage(
 ): ChatMessageModel {
   const text = extractPlainTextFromComposerJSONContent(message.content);
   return {
-    // Key by `messageId` (not `clientActionId`) so a pending/seeded message and
-    // its persisted counterpart share a row key - the snapshot reconciliation
-    // then updates the row in place instead of remounting it (no flicker).
+    // Key by `messageId` (not `clientActionId`) so a pending/seeded message and its persisted
+    // counterpart share a row key - the snapshot reconciliation then updates the row in place instead
     id: message.messageId,
     role: "user",
     content: text,
@@ -3108,11 +2632,8 @@ function renderLiveAssistant(
       input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
-    // Same reasoning as `costUsd` below, and the same for the same structural
-    // reason: the live row is built from `LiveAssistantMessage`, which mirrors
-    // the turn's SETTINGS. The credential a spawn used is a host-recorded fact
-    // that only reaches the persisted record, so it surfaces when this turn
-    // re-renders through that path rather than being guessed here.
+    // Same reasoning as `costUsd` below, and the same for the same structural reason: the live row is
+    // built from `LiveAssistantMessage`, which mirrors the turn's SETTINGS.
     envCredentialVar: null,
     // A live turn has no final cost yet; it surfaces once the turn completes
     // and re-renders via the persisted path. The live footer is suppressed.
@@ -3125,7 +2646,7 @@ function renderLiveAssistant(
     acc,
     turnKey: liveAssistant.turnId,
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
-    // Live turn is by definition still streaming — hold back the group.
+    // Live turn is by definition still streaming - hold back the group.
     turnComplete: false,
     showCompletionFooter: true,
     // Unused while `turnComplete` is false; keep the input total and explicit.
@@ -3133,22 +2654,16 @@ function renderLiveAssistant(
     // Track the host's run state exactly: a live row lingering for one frame
     // after the turn completes (runStatus idle) must not show a spinner.
     runState: input.activeRunState,
-    // Scoped to the live attempt's own start: a steer continuation reuses the
-    // turnId, and an earlier attempt's user-wait must not subtract from an
-    // elapsed measured from this attempt's start.
+    // Scoped to the live attempt's own start: a steer continuation reuses the turnId, and an earlier
+    // attempt's user-wait must not subtract from an elapsed measured from this attempt's start.
     pause: pauseScopedToWindow(
       input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
       liveAssistant.startedAt,
     ),
-    // A live turn is never `turnComplete`, so `withTurnCompletion` never stamps
-    // this - the persisted re-render (once the `turn.stopped` event lands)
-    // owns the stopped marker.
+    // A live turn is never `turnComplete`, so `withTurnCompletion` never stamps this - the persisted
+    // re-render (once the `turn.stopped` event lands) owns the stopped marker.
     stopped: null,
     userMessagesById: input.userMessagesById,
-    // Anchor on the turn-start (mirrors `ChatActiveTurn.startedAt`, set once at
-    // turn-start) so the live row sorts at the same `createdAt` the persisted
-    // form will use post-swap - prevents a sort-position jump at
-    // live→persisted reconciliation.
     rowAnchorAt: liveAssistant.startedAt,
     elapsedStartedAt: liveAssistant.startedAt,
     ctx: input.ctx,
@@ -3162,12 +2677,8 @@ function renderLiveAssistant(
 }
 
 /**
- * Synthesizes the trailing pending-assistant row for the pre-turn window - when
- * the host's `runStatus` is `running`/`stopping` but no assistant turn has
- * materialized yet. Returns `[]` once any in-progress assistant row exists (the
- * live row or a persisted active turn already carries the indicator) or when
- * the chat is idle. It uses the active turn id when available, falling back to
- * `LIVE_ASSISTANT_ROW_ID` only for the short window before the turn id lands.
+ * Synthesizes the trailing pending-assistant row for the pre-turn window - when the host's
+ * `runStatus` is `running`/`stopping` but no assistant turn has materialized yet.
  */
 function renderPendingRunIndicator(input: {
   readonly activeRunState: ChatMessageRunState | null;
@@ -3227,17 +2738,8 @@ function renderPendingRunIndicator(input: {
 }
 
 /**
- * A Stop can settle during the accepted pre-turn setup window, before either
- * the snapshot or live stream has materialized an assistant record. The
- * durable event must still own a transcript boundary; otherwise the pending
- * "Stopping…" row disappears at idle and leaves the user message unanswered.
- *
- * Existing assistant/live records remain the authoritative render path. A
- * retained triggering-user id anchors the otherwise record-less event and
- * prevents append-only events from resurrecting turns removed by a branch
- * edit. The active-turn guard preserves the snapshot-race contract: if the
- * event arrives while that turn is still active, keep rendering the
- * live/pending state until the snapshot clears it.
+ * A Stop can settle during the accepted pre-turn setup window, before either the snapshot or live
+ * stream has materialized an assistant record.
  */
 function renderStoppedTurnsWithoutAssistantRecords(
   stoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>,
@@ -3341,29 +2843,24 @@ function buildAssistantSegments(
     }
   }
   const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
-  // Auth errors (`code: "auth"`) deliberately render as normal error segments:
-  // suppressing them made a headless (A2A-triggered) auth failure completely
-  // invisible after the transient re-auth banner cleared. Like rate-limit
-  // errors, the transcript row and the composer banner now coexist.
+  // Auth errors (`code: "auth"`) deliberately render as normal error segments: suppressing them made
+  // a headless (A2A-triggered) auth failure completely invisible after the transient re-auth banner
   const visible = suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested));
-  // The card's merged change rides on the `artifact_operation` block itself
-  // (set at emit from the turn's checkpoint builder), so no manifest enrichment
-  // is needed for the card - it's available the moment the edit completes.
+  // The card's merged change rides on the `artifact_operation` block itself (set at emit from the
+  // turn's checkpoint builder), so no manifest enrichment is needed for the card - it's available
   return groupFileChangeRuns(visible, checkpointView, turnComplete);
 }
 
-// Artifact rows for a turn's "Changes" group, from the manifest's tagged
-// entries (one entry per artifact index.md). One row per artifact, carrying the
-// merged before/after hashes for a click → diff.
+// Artifact rows for a turn's "Changes" group, from the manifest's tagged entries (one entry per
+// artifact index.md).
 function artifactChangeRowsFromManifest(
   manifest: TurnCheckpointManifest | null,
 ): ArtifactChangeRow[] {
   if (manifest === null) return [];
   return manifest.entries.flatMap((entry) => {
     if (!entry.artifact) return [];
-    // A net-zero artifact (touched but left byte-identical this turn) is not a
-    // change - drop it so the "Changes" group matches the Undo modal / restore,
-    // mirroring the equal-hash drop the file side does in mergeFileChangesByPath.
+    // A net-zero artifact (touched but left byte-identical this turn) is not a change - drop it so the
+    // "Changes" group matches the Undo modal / restore, mirroring the equal-hash drop the file side
     if (isNoOpCheckpointEntry(entry)) return [];
     return [
       {
@@ -3382,14 +2879,8 @@ function artifactChangeRowsFromManifest(
 function isSubagentChildSegment(
   segment: MessageSegment,
 ): segment is SubagentChildSegment {
-  // artifact_operation is intentionally excluded — artifact cards stay
-  // top-level (see the BLOCK_HANDLERS["artifact_operation"] handler). A nested
-  // subagent (fan-out at any depth) IS eligible - see nestSubagentChildren.
-  // provider_notice IS eligible too - a notice on a subagent's own thread
-  // nests under that card instead of interrupting the top-level transcript;
-  // one with no matching parent (or none) falls through to topLevel below.
-  // Image-generation cards stay top-level so SubagentChildrenSection cannot
-  // swallow a nested generation while rendering only child agents.
+  // artifact_operation is intentionally excluded - artifact cards stay top-level (see the
+  // BLOCK_HANDLERS["artifact_operation"] handler).
   return (
     (segment.kind === "tool" && segment.toolName !== "image_generation") ||
     segment.kind === "file_change" ||
@@ -3400,14 +2891,8 @@ function isSubagentChildSegment(
 }
 
 /**
- * Fold subagent-owned segments into the `children` of their owning subagent
- * segment so the renderer nests them under that block - RECURSIVELY, since a
- * nested agent can itself own further nested agents (any spawn depth).
- * Segments whose `parentId` matches a known subagent segment (top-level OR
- * already-nested) are removed from the top-level flow; everything else -
- * including a subagent-owned segment whose `parentId` matches no block (the
- * subagent.started that owned it was dropped) - stays top-level rather than
- * being silently lost. Order is preserved at every level.
+ * Fold subagent-owned segments into the `children` of their owning subagent segment so the
+ * renderer nests them under that block - RECURSIVELY, since a nested agent can itself own further
  */
 function nestSubagentChildren(
   flat: ReadonlyArray<MessageSegment>,
@@ -3439,13 +2924,8 @@ function nestSubagentChildren(
   }
   if (childrenByParent.size === 0) return flat;
 
-  // A parentId cycle (host invariants rule it out, but a malformed/replayed
-  // chain must never hang OR disappear) buckets every member under some other
-  // member's children, so none of them ever lands in `topLevel` for
-  // `resolveSubagentChildren`'s ancestor guard to run on - the whole island
-  // would otherwise vanish silently. Walk reachability from the real
-  // top-level subagents first, then surface any subagent left unreached as
-  // its own top-level fallback.
+  // A parentId cycle (host invariants rule it out, but a malformed/replayed chain must never hang OR
+  // disappear) buckets every member under some other member's children, so none of them ever lands
   const reached = new Set<string>();
   const markReached = (id: string): void => {
     if (reached.has(id)) return;
@@ -3469,12 +2949,8 @@ function nestSubagentChildren(
 }
 
 /**
- * Recursively resolve one subagent segment's `children`, descending into any
- * nested subagent children to resolve THEIR children too. `ancestors` guards
- * against a `parentId` cycle (which the host invariants rule out, but a
- * malformed/replayed chain must never hang the renderer) - a segment already
- * on the ancestor path is left with whatever children it already has instead
- * of recursing again.
+ * Recursively resolve one subagent segment's `children`, descending into any nested subagent
+ * children to resolve THEIR children too.
  */
 function resolveSubagentChildren(
   segment: SubagentSegment,
@@ -3494,12 +2970,8 @@ function resolveSubagentChildren(
 }
 
 /**
- * Prepare a subagent's nested activity for display: drop raw edit tool_calls
- * superseded by their file_change card, then collapse repeated edits to the
- * same file into one row (first edit's pre-state -> last edit's post-state, the
- * net diff) using the same `mergeFileChangesByPath` that powers the top-level
- * "Changes" block. Tool calls and denied/failed edits keep their order and
- * position; the merged file rows land where the first real edit appeared.
+ * Prepare a subagent's nested activity for display: drop raw edit tool_calls superseded by their
+ * file_change card, then collapse repeated edits to the same file into one row (first edit's
  */
 function coalesceSubagentChildren(
   children: ReadonlyArray<SubagentChildSegment>,
@@ -3528,10 +3000,8 @@ function coalesceSubagentChildren(
 }
 
 /**
- * Drop `tool` segments that a sibling segment has superseded - shared by the
- * file-edit and sub-agent-spawn suppression policies so both apply the identical
- * rule. `shouldDrop` decides per tool-call id. Operates on whatever segment list
- * it is given (the top level, or a sub-agent's nested children).
+ * Drop `tool` segments that a sibling segment has superseded - shared by the file-edit and
+ * sub-agent-spawn suppression policies so both apply the identical rule.
  */
 function rejectToolSegments<T extends MessageSegment>(
   segments: ReadonlyArray<T>,
@@ -3543,22 +3013,8 @@ function rejectToolSegments<T extends MessageSegment>(
 }
 
 /**
- * When a backgrounded command/monitor/subagent settles while its own turn is
- * still streaming, the host appends the resume trigger right after that
- * block's own segment (see chat-session-manager.ts
- * `appendAutonomousResumeNotificationToActiveTurn`). With nothing else
- * streamed in between, the "X completed" marker lands directly under the
- * card that already shows its own completed status - pure duplication. Drop
- * a trigger whose blockId is the immediately preceding segment.
- *
- * Must run on the post-`nestSubagentChildren` (visible) order, not the raw
- * flat block order: a subagent's own trigger's `blockId` targets the
- * subagent segment itself, but in raw order the block right before the
- * trigger is often the subagent's *last child* (its own activity streamed
- * after the subagent block started). Comparing against that child would
- * never match the subagent's id, so the redundant marker would leak through
- * under the parent card the user actually sees. A resume segment left with
- * zero triggers is removed outright.
+ * When a backgrounded command/monitor/subagent settles while its own turn is still streaming, the
+ * host appends the resume trigger right after that block's own segment (see
  */
 function suppressRedundantResumeMarkers(
   nested: ReadonlyArray<MessageSegment>,
@@ -3577,12 +3033,8 @@ function suppressRedundantResumeMarkers(
 }
 
 /**
- * A file-edit tool produces both a `tool_call` block (the raw Edit/Write/
- * apply_patch invocation) and a `file_change` block (the rendered diff /
- * status). We surface the edit through the `file_change` only - uniform across
- * harnesses (Codex never emits the tool_call) and avoids showing the same edit
- * twice. The coordinator names the file_change block `${toolCallId}:...`, so a
- * tool_call is dropped when some file_change's id is prefixed by it.
+ * A file-edit tool produces both a `tool_call` block (the raw Edit/Write/ apply_patch invocation)
+ * and a `file_change` block (the rendered diff / status).
  */
 function suppressEditToolCalls<T extends MessageSegment>(
   flat: ReadonlyArray<T>,
@@ -3597,18 +3049,8 @@ function suppressEditToolCalls<T extends MessageSegment>(
 }
 
 /**
- * Claude's `Task`/`Agent` spawn tool surfaces BOTH a `tool_call` block (the raw
- * spawn invocation) and a `subagent` block (the card). We surface the spawn
- * through the card only - the same policy `suppressEditToolCalls` applies to
- * file-edit tool calls, and parity with Codex/OpenCode which emit no separate
- * spawn tool call. The subagent block carries its spawning tool_call id as
- * `spawnToolCallId`, so a tool segment owning that id is dropped at ANY nesting
- * depth: a nested agent's own spawning tool call is a sibling inside its
- * PARENT's children (both carry the parent's `parentId`), so both the id
- * collection and the drop must walk the already-folded tree, not just the top
- * level and one level of children. Only suppresses when the card actually
- * renders (a non-rendering subagent leaves no segment, so its spawn tool stays
- * visible as the lone signal).
+ * Claude's `Task`/`Agent` spawn tool surfaces BOTH a `tool_call` block (the raw spawn invocation)
+ * and a `subagent` block (the card).
  */
 function suppressSubagentSpawnToolCalls(
   flat: ReadonlyArray<MessageSegment>,
@@ -3655,27 +3097,7 @@ interface CheckpointManifestView {
   readonly hasLaterOverlappingChanges: boolean;
 }
 
-/**
- * The restore affordance's per-turn view, and the ONE derivation here that a
- * window can get wrong.
- *
- * `hasLaterOverlappingChanges` is a whole-history fact: it asks whether a LATER
- * checkpoint rewrites a file this one touches. Deriving it from `events` is
- * correct on the legacy line, where that array is the whole log, and wrong on
- * the windowed line, where it is whatever is hydrated - a span holding an old
- * turn but none of the later checkpoints concludes `false` and the restore
- * dialog silently drops its warning that later turns' files will also be
- * rewound. On an irreversible action.
- *
- * So the projection carries the answer per row and it wins here. The local
- * derivation is kept, not replaced, because it is still the only answer on the
- * legacy line - and it runs through the SHARED `overlappingCheckpointIds`, so
- * the two lines cannot reach different verdicts from the same input.
- *
- * Reading `=== true` rather than a truthy check is the row-context contract:
- * an ABSENT field is the projection declining to speak, not an assertion of
- * `false`, so absence falls through to the derivation below.
- */
+/** The restore affordance's per-turn view, and the ONE derivation here that a window can get wrong. */
 function checkpointManifestViewsFromEvents(
   events: ReadonlyArray<ChatEvent>,
   contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
@@ -3723,27 +3145,21 @@ function groupFileChangeRuns(
   turnComplete: boolean,
 ): ReadonlyArray<MessageSegment> {
   const files = flat.flatMap(fileChangesFromSegment);
-  // Artifact rows come from the manifest's tagged entries (no inline
-  // file_change segments exist for artifacts), so a turn that only touched
-  // artifacts still gets a "Changes" group.
+  // Artifact rows come from the manifest's tagged entries (no inline file_change segments exist for
+  // artifacts), so a turn that only touched artifacts still gets a "Changes" group.
   const artifactRows = artifactChangeRowsFromManifest(
     checkpointView?.manifest ?? null,
   );
   if (files.length === 0 && artifactRows.length === 0) {
     return flat;
   }
-  // The aggregated "Changes" block only appears once the turn completes; while
-  // streaming the inline file_change rows / artifact cards show the in-progress
-  // edits.
+  // The aggregated "Changes" block only appears once the turn completes; while streaming the inline
+  // file_change rows / artifact cards show the in-progress edits.
   if (!turnComplete) {
     return flat;
   }
-  // The file_change rows stay inline (as the per-edit activity); the aggregated
-  // "Changes" block is appended in addition. Only *actual* changes are grouped
-  // - denied/failed edits never changed the file, so they're not counted as
-  // changes (they still show inline with their status). Repeated edits to the
-  // same file are merged into a single row whose diff spans the first edit's
-  // pre-state to the last edit's post-state.
+  // The file_change rows stay inline (as the per-edit activity); the aggregated "Changes" block is
+  // appended in addition. Only *actual* changes are grouped
   const realChanges = mergeFileChangesByPath(files.filter(isRealFileChange));
   if (realChanges.length === 0 && artifactRows.length === 0) {
     return flat;
@@ -3791,13 +3207,11 @@ function mergeFileChangesByPath(
     byPath.set(file.filePath, {
       ...file,
       id: `${existing.id}+${file.id}`,
-      // The merged row spans the path's earliest before → latest after (the
-      // `...file` spread already carries `afterHash`); keep the first snapshot's
-      // `beforeHash` so an expand reconstructs the full first→last diff.
+      // The merged row spans the path's earliest before → latest after (the `...file` spread already
+      // carries `afterHash`); keep the first snapshot's `beforeHash` so an expand reconstructs the full
       beforeHash: existing.beforeHash,
-      // Approximate the merged counts by summing the per-edit counts. The exact
-      // net diff is recomputed from content when the row is expanded; the
-      // collapsed header only needs an indicative magnitude.
+      // Approximate the merged counts by summing the per-edit counts. The exact net diff is recomputed
+      // from content when the row is expanded; the collapsed header only needs an indicative magnitude.
       additions: existing.additions + file.additions,
       deletions: existing.deletions + file.deletions,
       sourceBlockIds: mergeSnapshotSourceBlockIds(
@@ -3805,37 +3219,25 @@ function mergeFileChangesByPath(
         file.sourceBlockIds,
       ),
       isStreaming: existing.isStreaming || file.isStreaming,
-      // The merged row shows the path's FINAL outcome, so the later edit's
-      // end-state wins (the `...file` spread already carries it; stated
-      // explicitly here alongside isStreaming so the merge rule is unambiguous).
       endState: file.endState,
     });
   }
   return order.flatMap((path) => {
     const merged = byPath.get(path);
     if (merged === undefined) return [];
-    // Net no-op (edited back to the original, or created-then-deleted): the
-    // content-addressed endpoints match, so drop the row from the "Changes"
-    // group. Equal hashes (incl. both null) ⇒ identical content.
+    // Net no-op (edited back to the original, or created-then-deleted): the content-addressed
+    // endpoints match, so drop the row from the "Changes" group. Equal hashes (incl.
     return merged.beforeHash === merged.afterHash ? [] : [merged];
   });
 }
 
-/**
- * True when the file was actually changed (so it belongs in the aggregated
- * "Changes" block). "denied" / "capture_failed" edits never touched the file
- * and stay inline with their status instead.
- */
+/** True when the file was actually changed (so it belongs in the aggregated "Changes" block). */
 function isRealFileChange(segment: FileChangeSegment): boolean {
   return segment.reason !== "denied" && segment.reason !== "capture_failed";
 }
 
-// Surface the terminal `interrupted`/`superseded` status to action segments so
-// they render a neutral "stopped"/"superseded" badge instead of a spinner (the
-// turn ended before the block's own completion event arrived). The normal
-// streaming/completed/errored lifecycle carries no end-state. Exhaustive switch
-// (no default): adding a new block status fails to compile here until it is
-// explicitly classified, so a new terminal state can't silently render nothing.
+// Surface the terminal `interrupted`/`superseded` status to action segments so they render a
+// neutral "stopped"/"superseded" badge instead of a spinner (the turn ended before the block's own
 function segmentEndState(status: ContentBlock["status"]): SegmentEndState {
   switch (status) {
     case "interrupted":
@@ -3849,13 +3251,8 @@ function segmentEndState(status: ContentBlock["status"]): SegmentEndState {
 }
 
 /**
- * Total run duration of a finished action block: its immutable `startedAt` (the
- * first event) to its `timestamp` (completion). Only a cleanly COMPLETED block
- * has a meaningful total - a force-finalized (interrupted/superseded) or errored
- * block's `timestamp` is the turn-end, not the real finish, so it returns null
- * and the end-state badge conveys the outcome instead. Null while streaming or
- * for blocks persisted before `startedAt` existed. Shared by the reasoning and
- * sub-agent handlers so their duration semantics stay identical.
+ * Total run duration of a finished action block: its immutable `startedAt` (the first event) to
+ * its `timestamp` (completion).
  */
 function completedDurationMs(
   status: ContentBlock["status"],
@@ -3877,9 +3274,8 @@ function backgroundToolDurationMs(
 }
 
 /**
- * Todo-block → item mapping for the rendered todo segment, including the
- * synthetic `${blockId}:item:${index}` id fallback for items persisted
- * without ids.
+ * Todo-block → item mapping for the rendered todo segment, including the synthetic
+ * `${blockId}:item:${index}` id fallback for items persisted without ids.
  */
 function todoItemsFromBlock(
   block: Extract<ContentBlock, { type: "todo" }>,
@@ -4000,10 +3396,8 @@ const BLOCK_HANDLERS: {
           endState: segmentEndState(block.status),
           stopped: block.stopped,
           startedAt: block.startedAt,
-          // While streaming the card ticks live from `startedAt`; once cleanly
-          // completed it shows the spawn->completion total. An interrupted/
-          // superseded card shows only its end-state badge, not a (turn-end-
-          // inflated) duration - see completedDurationMs.
+          // While streaming the card ticks live from `startedAt`; once cleanly completed it shows the
+          // spawn->completion total.
           durationMs: completedDurationMs(
             block.status,
             block.startedAt,
@@ -4074,9 +3468,8 @@ const BLOCK_HANDLERS: {
     kind: "interview",
     status: block.status,
     toolName: block.toolName,
-    // The block's card-level `title` / `description` are persisted for
-    // history but deliberately not projected: the GUI renders only the
-    // per-question header, so nothing downstream reads them.
+    // The block's card-level `title` / `description` are persisted for history but deliberately not
+    // projected: the GUI renders only the per-question header, so nothing downstream reads them.
     questions: block.questions,
     answers: block.answers,
     draftAnswers: block.draftAnswers,
@@ -4086,27 +3479,15 @@ const BLOCK_HANDLERS: {
     delivery: block.delivery,
     forkedWithoutAnswer: block.metadata?.["forkedWithoutAnswer"] === true,
   }),
-  // Artifact-operation cards render top-level regardless of the authoring agent
-  // (main or subagent) and are intentionally NOT folded into a subagent's
-  // children. Subagent children are summary-only / non-rendered (SubagentSegment
-  // does not render them; chat-activity-groups only counts isActivitySegment
-  // kinds, which excludes artifact_operation), so nesting would make the card
-  // vanish — and these cards are meant to be prominent + clickable semantic
-  // outcomes. The block's `parentBlockId` is therefore intentionally not
-  // propagated to the segment (it would be dead state).
+  // Artifact-operation cards render top-level regardless of the authoring agent (main or subagent)
+  // and are intentionally NOT folded into a subagent's children.
   artifact_operation: (block) => ({
     kind: "artifact_operation",
     operation: block.operation,
-    // `kind` is the segment discriminant, so the artifact's own kind rides as
-    // `artifactKind`. Title / status / tombstone are resolved live in the card;
-    // block.title is only a fallback for the brief delete tombstone gap.
+    // `kind` is the segment discriminant, so the artifact's own kind rides as `artifactKind`.
     artifactKind: block.kind,
     artifactId: block.artifactId,
     title: block.title,
-    // The merged change (first-before → last-after) rides on the block itself,
-    // set at emit time from the turn's checkpoint builder - so the diff toggle
-    // appears the moment the edit completes, not at turn end. Null when
-    // uncaptured (bash delete / post-hoc edit).
     change:
       hasSnapshotHash(block.beforeHash) || hasSnapshotHash(block.afterHash)
         ? {

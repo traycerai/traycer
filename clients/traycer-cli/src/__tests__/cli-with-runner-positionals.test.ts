@@ -19,29 +19,16 @@ const loggerMock = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
-// This test exercises the real runner through Commander. Its logger is not
-// part of the positional-forwarding contract, and must not append to a live
-// per-environment CLI log as a side effect.
+// This test exercises the real runner through Commander.
+// Its logger is not part of the positional-forwarding contract, and must not append to a live per-environment CLI log as a side effect.
 vi.mock("../logger", () => ({
   createCliLogger: () => loggerMock,
   errorFromUnknown: (value: unknown) =>
     value instanceof Error ? value : new Error(String(value)),
 }));
 
-// `host install` accepts a registry version via the `--release`
-// flag (defaults to `latest`) or a local archive via `--from`; the
-// two are mutually exclusive. We pin two layers of behaviour:
-//
-// 1. `extractActionPositionals` - the unit boundary that converts
-//    commander's loose `(...positional, opts, command)` args into the
-//    typed positional slice. Still exercised exhaustively because the
-//    helper is shared with other commands that DO use positionals.
-//
-// 2. End-to-end: parse a `host install` invocation through
-//    `buildProgram()` with `installHostModule` mocked, and assert
-//    that `buildHostInstallCommand` is called with the right
-//    `versionRequest` + `fromPath` combination - including the
-//    mutex rejection when both flags are supplied.
+// `host install` accepts a registry version via the `--release` flag (defaults to `latest`) or a local archive via `--from`; the two are mutually exclusive.
+// We pin two layers of behaviour: 1.
 
 describe("extractActionPositionals", () => {
   it("returns [] when no positionals were declared (opts + command only)", () => {
@@ -108,10 +95,8 @@ function expectCommand(program: Command, path: readonly string[]): Command {
 }
 
 describe("traycer host install - --release / --from handling", () => {
-  // `runCommand` records its code on `process.exitCode` and lets the loop
-  // drain (runner/exit.ts); it no longer calls `process.exit`. The spy stays
-  // so a regression back to an abrupt exit is caught rather than silently
-  // tolerated - the assertions below check it was NOT called.
+  // `runCommand` records its code on `process.exitCode` and lets the loop drain (runner/exit.ts); it no longer calls `process.exit`.
+  // The spy stays so a regression back to an abrupt exit is caught rather than silently tolerated - the assertions below check it was NOT called.
   let exitSpy: MockInstance;
   beforeEach(() => {
     exitSpy = vi
@@ -129,9 +114,8 @@ describe("traycer host install - --release / --from handling", () => {
   });
 
   function setupSpy(): MockInstance {
-    // Replace the real install pipeline with a no-op that captures the
-    // args. We can't run the real installer in a unit test (it would
-    // touch the filesystem, registry, and OS service).
+    // Replace the real install pipeline with a no-op that captures the args.
+    // We can't run the real installer in a unit test (it would touch the filesystem, registry, and OS service).
     return vi
       .spyOn(hostInstallModule, "buildHostInstallCommand")
       .mockImplementation(() => async () => ({
@@ -150,9 +134,8 @@ describe("traycer host install - --release / --from handling", () => {
       await program.parseAsync(argv as string[], { from: "user" });
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        // Was a silent `return`. The runner records `process.exitCode` and
-        // drains (int#4840), so nothing here should reach `process.exit` -
-        // swallowing it would hide exactly the regression that matters.
+        // Was a silent `return`.
+        // The runner records `process.exitCode` and drains (int#4840), so nothing here should reach `process.exit` - swallowing it would hide exactly the regression that matters.
         throw new Error(
           `${err.message.replace("__test_exit_", "process.exit(")}) was called while parsing ${argv.join(" ")}`,
         );
@@ -228,10 +211,8 @@ describe("traycer host install - --release / --from handling", () => {
       "/tmp/host.tgz",
       "--json",
     ]);
-    // The check now lives inside the returned CommandFn, so the runner
-    // catches it (CliError → NDJSON error envelope → exit code 1) instead
-    // of letting a raw throw escape parseAsync. The install pipeline is
-    // never built.
+    // The check now lives inside the returned CommandFn, so the runner catches it (CliError → NDJSON error envelope → exit code 1) instead of letting a raw throw escape parseAsync.
+    // The install pipeline is never built.
     expect(spy).not.toHaveBeenCalled();
     // Asserted on `process.exitCode`, not on the `process.exit` spy: the
     // runner records the code and lets the loop drain (see runner/exit.ts).

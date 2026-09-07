@@ -108,9 +108,8 @@ describe("retainedPaneChatInstanceIds", () => {
       activeTabId: "gone",
       activationHistory: [],
     });
-    // The fallback tab has no activation record, so only the shown-tab seed
-    // can rescue it - which is exactly why the seed is not read off
-    // `activationHistory[0]`.
+    // The fallback tab has no activation record, so only the shown-tab seed can rescue it - which is
+    // exactly why the seed is not read off `activationHistory[0]`.
     expect(retained(pane, RETAINED_PANE_CHAT_CAP)).toEqual(["chat-a"]);
   });
 

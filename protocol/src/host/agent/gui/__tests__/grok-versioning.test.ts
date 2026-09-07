@@ -84,10 +84,6 @@ import {
   providersListResponseSchemaV70,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
-// Importing from the registry runs `defineVersionedRpcRegistry` (full structural
-// + schema-compatibility validation) at module load, so this import alone
-// asserts the new v2.0/v3.0/v4.0/v5.0/v6.0/v7.0 lines and their upgrade/downgrade
-// bridges are well-formed.
 import {
   providersAwaitLoginDowngradeV21ToV10,
   providersListDowngradeV2ToV1,
@@ -612,12 +608,7 @@ describe("post-v3.0 Devin/Pi downgrade bridges (agent.gui.listHarnesses/agent.li
 });
 
 describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () => {
-  // These three catalog methods each opened a new major when a release froze
-  // their previous line: `huggingface` could not ride v6.0 and opened v7.0,
-  // and `reasonix` cannot ride ANY minor of major 7 - the v1.2.0 tags shipped
-  // 7.0, and `versioned-rpc.ts` refuses a minor that grows a response enum
-  // over its predecessor - so the live shape now sits on v8.0 and every older
-  // caller gets the ids it predates filtered out.
+  // These three catalog methods each opened a new major when a release froze their previous line: `huggingface` could not ride v6.0 and opened v7.0, and `reasonix` cannot ride ANY minor of major 7 - the v1.2.0 tags shipped.
   it("drops Hugging Face/Reasonix from agent.gui.listHarnesses for every released caller down to v1.0", () => {
     const v8Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
@@ -757,9 +748,8 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
       ],
     });
 
-    // v7.0 shipped with Hugging Face, so that row survives; only Reasonix
-    // goes. `runConfig` survives too - it is a v7.0 field, unlike every hop
-    // below, where the frozen shape predates it and the reparse drops it.
+    // v7.0 shipped with Hugging Face, so that row survives; only Reasonix goes.
+    // `runConfig` survives too - it is a v7.0 field, unlike every hop below, where the frozen shape predates it and the reparse drops it.
     const toV7 = agentListDowngradeV8ToV7.downgradeResponse(v8Response);
     expect(toV7.ok).toBe(true);
     if (!toV7.ok) return;
@@ -865,10 +855,7 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
   });
 
   it("drops Hugging Face/Reasonix from providers.list for every released caller down to v1.0", () => {
-    // `cli-v1.1.9` shipped v6.0 and `cli-v1.2.0` shipped v7.0, so neither
-    // `huggingface` nor `reasonix` could join the line below it. Driven from
-    // v8.0, the newest line, which carries both because it is still
-    // unreleased.
+    // `cli-v1.1.9` shipped v6.0 and `cli-v1.2.0` shipped v7.0, so neither `huggingface` nor `reasonix` could join the line below it.
     const v8Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),

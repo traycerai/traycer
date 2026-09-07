@@ -5,9 +5,7 @@ import type {
 
 /**
  * Promotes shared/persisted folder intents into the current create RPC shape.
- * Intents written before collision policy existed are intentionally exact-name
- * (`fail`): only a fresh generated proposal carries the retry identity needed
- * for random collision retries.
+ * Intents written before collision policy existed are intentionally exact-name (`fail`): only a fresh generated proposal carries the retry identity needed for random collision retries.
  */
 export function worktreeCreateEntries(
   entries: ReadonlyArray<WorktreeFolderIntent>,

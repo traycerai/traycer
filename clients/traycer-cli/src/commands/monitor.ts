@@ -54,40 +54,7 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
-/**
- * `traycer monitor` — long-running background command spawned inside a Claude
- * Code TUI session by the Traycer plugin. It subscribes to the host's
- * `agent.inbox.subscribe` stream for one agent id and prints every inbound
- * inter-agent message to stdout, where Claude Code's background-command surface
- * shows it to the agent.
- *
- * The transport is the shared `WsStreamClient` (the same client the Desktop
- * renderer uses for its streams): it owns dial / handshake / ping-pong /
- * reconnect-with-backoff. This command only layers on the inbox-frame printing
- * and the refresh-on-`UNAUTHORIZED` recovery.
- *
- * stdout carries inbox messages only; all connection/diagnostic noise goes to
- * stderr so it never pollutes the agent-facing stream.
- *
- * NOT read-only, despite "stream" (CLI-021). Three durable effects, all of them
- * required for the stream to be correct rather than incidental:
- *
- *  1. Delivery acknowledgement - a message confirmed onto stdout advances the
- *     agent's inbox server-side, so the at-least-once inbox stops redelivering
- *     it on reconnect. From the negotiated `@1.2` this CLI enqueues the
- *     `agent.inbox.ack` itself; below that there is no event id on the frame
- *     and the host retires the row on its own (see `handleServerFrame`).
- *  2. Credential maintenance - the store-backed revalidator rotates and
- *     PERSISTS this machine's credentials, proactively before expiry and
- *     reactively on `UNAUTHORIZED`. A rotation spends a single-use refresh
- *     token, which is why it goes through the locked store.
- *  3. Host-credential provisioning - a host reporting `missing` gets a
- *     delegated credential minted for it, so it keeps serving after this
- *     process exits.
- *
- * On the readonly agent surface this command is hidden but NOT refused; see
- * `MONITOR_SURFACE_NOTE` in `../agent-surface.ts` for that decision.
- */
+/** Long-running inbox monitor. Observational; stays on the readonly surface. */
 const SUBSCRIBE_METHOD = "agent.inbox.subscribe" as const;
 const OPEN_ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 25_000;
@@ -96,22 +63,11 @@ const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 30_000;
 /** Re-read the host pid metadata so reconnects pick up a restarted host's port. */
 const ENDPOINT_POLL_MS = 2_000;
-/**
- * Once a connection has stayed open this long without a fatal close, treat the
- * subscription as accepted and reset the auth-refresh spin counter. `open` alone
- * isn't proof — `WsStreamClient` emits it right after sending the subscribe
- * frame, before the host accepts it — so a host that rejects at the
- * subscribe stage must not be allowed to reset the counter every cycle.
- */
+/** Once a connection has stayed open this long without a fatal close, treat the subscription as accepted and reset the auth-refresh spin counter. `open` alone isn't proof - `WsStreamClient` emits it right after sending the subscribe frame, before the host accepts it - so a host that rejects at the subscribe stage must not be allowed to reset the counter every cycle. */
 const HEALTHY_OPEN_MS = 10_000;
 /** Backoff before re-subscribing after a transient (network-error) auth refresh. */
 const AUTH_RETRY_DELAY_MS = 5_000;
-/**
- * Consecutive bearer refreshes (each rotating to a genuinely new token) without
- * the subscription ever becoming healthy, before we give up — bounds a
- * refresh/reject spin when a freshly-refreshed bearer is still rejected
- * (cloud/host desync).
- */
+/** Consecutive bearer refreshes (each rotating to a genuinely new token) without the subscription ever becoming healthy, before we give up - bounds a refresh/reject spin when a freshly-refreshed bearer is still rejected (cloud/host desync). */
 const MAX_CONSECUTIVE_AUTH_REFRESHES = 3;
 
 export type MonitorArgs = {
@@ -168,12 +124,8 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   });
 
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  // Reactive (on-UNAUTHORIZED) and proactive (pre-TTL) refreshes both route
-  // through the locked `rotate` (§7) so a monitor refresh and a concurrent
-  // desktop refresh can never double-spend the single-use refresh token. One
-  // store for the monitor's lifetime - its background continuation timer can
-  // land a `commit-failed` spend while the monitor keeps running - disposed in
-  // the `finally` below.
+  // Reactive (on-UNAUTHORIZED) and proactive (pre-TTL) refreshes both route through the locked `rotate` (§7) so a monitor refresh and a concurrent desktop refresh can never double-spend the single-use refresh token.
+  // One store for the monitor's lifetime - its background continuation timer can land a `commit-failed` spend while the monitor keeps running - disposed in the `finally` below.
   const store = createCliCredentialsStore();
   // `signal: null`: the monitor's revalidator lives as long as the command
   // itself - there is no earlier deadline to cancel a rotation against.
@@ -183,12 +135,8 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     signal: null,
   });
 
-  // The shared client reads `endpoint()` on every (re)connect, so a poller that
-  // refreshes the cached endpoint is the CLI's equivalent of the renderer's
-  // host directory — reconnects survive a host restart on a new port. Polls
-  // are serialized (no out-of-order clobber) and a good endpoint is never
-  // overwritten with `null` (a momentarily-absent pid file keeps the last-known
-  // URL; dials simply retry until a fresh one appears).
+  // The shared client reads `endpoint()` on every (re)connect, so a poller that refreshes the cached endpoint is the CLI's equivalent of the renderer's host directory - reconnects survive a host restart on a new port.
+  // Polls are serialized (no out-of-order clobber) and a good endpoint is never overwritten with `null` (a momentarily-absent pid file keeps the last-known URL; dials simply retry until a fresh one appears).
   const endpointResolutionLogState: EndpointResolutionLogState = {
     value: null,
   };
@@ -225,25 +173,17 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
 
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
-    // The host this endpoint resolves to, or `null` while it has resolved none
-    // yet - which simply declines the seed. Safe even where `endpoint` is
-    // re-resolved later in the run: the seed is consulted only before this
-    // client's first handshake, which is while this id is still the current
-    // one, and the latch closes it for good after that.
+    // The host this endpoint resolves to, or `null` while it has resolved none yet - which simply declines the seed.
+    // Safe even where `endpoint` is re-resolved later in the run: the seed is consulted only before this client's first handshake, which is while this id is still the current one, and the latch closes it for good after that.
     hostId: endpoint?.hostId ?? null,
     endpoint: () => endpoint,
     bearer: () => lease,
-    // `auth: null` opts out of the WsStreamClient's built-in stream-auth
-    // recovery: the monitor runs its OWN refresh-on-UNAUTHORIZED loop in
-    // `runInboxSubscription` (revalidate, then re-subscribe on `rotated` /
-    // back off and re-subscribe on `network-error`), so wiring the client
-    // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
+    // `auth: null` opts out of the WsStreamClient's built-in stream-auth recovery: the monitor runs its OWN refresh-on-UNAUTHORIZED loop in `runInboxSubscription` (revalidate, then re-subscribe on `rotated` / back off and re-subscribe on `network-error`), so wiring the client handler too would double up.
+    // Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
     clock: null,
-    // Delegated host-credential provisioning. `monitor` is the CLI command that
-    // most needs it: the host it watches should keep serving after this process
-    // exits. Provisioning is silent, so this works the same whether `monitor` is
-    // run from a terminal or as the background command it usually is.
+    // Delegated host-credential provisioning.
+    // `monitor` is the CLI command that most needs it: the host it watches should keep serving after this process exits.
     hostCredentialMint: createCliHostCredentialMintFlow({
       authnBaseUrl: auth.authnBaseUrl,
       bearer: () => readLeaseBearer(lease),
@@ -269,21 +209,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
-  // Proactively refresh the bearer shortly before its ~4h TTL so a long-running
-  // monitor never carries a dead token into a reconnect (or hands the host a
-  // stale credential it would 401 on). The reactive refresh-on-`UNAUTHORIZED`
-  // loop in `runInboxSubscription` stays as the safety net; this just rotates
-  // ahead of expiry. The scheduler shares the same single-flight `revalidator`,
-  // so a proactive and reactive refresh can't race into a double rotation.
+  // Proactively refresh the bearer shortly before its ~4h TTL so a long-running monitor never carries a dead token into a reconnect (or hands the host a stale credential it would 401 on).
+  // The reactive refresh-on-`UNAUTHORIZED` loop in `runInboxSubscription` stays as the safety net; this just rotates ahead of expiry.
   const refreshScheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
     getToken: () => readLeaseBearer(lease),
     revalidate: async () => {
       const outcome = await revalidator.revalidateCurrentContext();
       if (outcome === "rotated") {
-        // Push the fresh bearer onto the open inbox stream so the host updates
-        // its captured credential in place - no reconnect. The reactive
-        // UNAUTHORIZED path already re-dials with the fresh token, so it needs
-        // no push.
+        // Push the fresh bearer onto the open inbox stream so the host updates its captured credential in place - no reconnect.
+        // The reactive UNAUTHORIZED path already re-dials with the fresh token, so it needs no push.
         client.notifyBearerRotated();
       }
       return outcome;
@@ -328,18 +262,7 @@ type InboxRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
 };
 
-/**
- * Drives the inbox subscription until a terminal failure. Resolves never on a
- * healthy stream (the command runs forever); rejects on a non-recoverable close
- * so `traycer monitor` exits non-zero.
- *
- * Recovery on a host `UNAUTHORIZED` fatal switches on the refresh OUTCOME:
- *   - `rotated`       → re-subscribe immediately (bounded by the spin guard);
- *   - `network-error` → transient; keep the bearer and re-subscribe after a
- *                       delay (don't kill a long-running monitor on a flaky link);
- *   - `rejected`      → terminal (the host re-spawns monitor after re-auth).
- * Any non-`UNAUTHORIZED` fatal (e.g. `INCOMPATIBLE`) is terminal.
- */
+/** Drives the inbox subscription until a terminal failure. Resolves never on a healthy stream (the command runs forever); rejects on a non-recoverable close so `traycer monitor` exits non-zero. */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   revalidator: InboxRevalidator,
@@ -388,7 +311,7 @@ function runInboxSubscription(
       reject(error);
     };
 
-    // The subscription is demonstrably accepted — reset the auth-spin guard.
+    // The subscription is demonstrably accepted - reset the auth-spin guard.
     const markHealthy = (): void => {
       authRefreshCount = 0;
     };
@@ -475,14 +398,8 @@ function runInboxSubscription(
       if (outcome === "rotated") {
         authRefreshCount += 1;
         if (authRefreshCount > MAX_CONSECUTIVE_AUTH_REFRESHES) {
-          // The bearer genuinely rotated on every attempt yet the host
-          // still rejected the freshly-minted token. The `/stream` fatal
-          // frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see
-          // `FatalErrorDetails` in ws-protocol), so it can't tell us
-          // whether this is an auth failure or an authz one. A new token
-          // being rejected points at authz, not a stale token — surface
-          // that the agent/epic may be invalid or inaccessible instead of
-          // blaming the bearer.
+          // The bearer genuinely rotated on every attempt yet the host still rejected the freshly-minted token.
+          // The `/stream` fatal frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see `FatalErrorDetails` in ws-protocol), so it can't tell us whether this is an auth failure or an authz one.
           fail(
             new Error(
               `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
@@ -518,13 +435,7 @@ function runInboxSubscription(
   });
 }
 
-/**
- * Coalesces durable inbox acknowledgements into bounded unary RPCs. A replay
- * may deliver many frames concurrently; opening one authenticated RPC per
- * printed message otherwise creates a connection storm and turns a transient
- * hiccup into another replay. Failed batches remain pending and retry locally;
- * the inbox's at-least-once contract also redelivers them after reconnect.
- */
+/** Coalesces durable inbox acknowledgements into bounded unary RPCs. A replay may deliver many frames concurrently; opening one authenticated RPC per printed message otherwise creates a connection storm and turns a transient hiccup into another replay. */
 class InboxAcknowledgementQueue {
   private static readonly MAX_EVENT_IDS_PER_ACK = 500;
   private static readonly INITIAL_RETRY_DELAY_MS = 1_000;
@@ -622,14 +533,7 @@ class InboxAcknowledgementQueue {
   }
 }
 
-/**
- * A server frame normalized to the shape `handleServerFrame` acts on,
- * independent of which minor it was parsed against. `eventId` is `null` for
- * a "message" parsed against the `@1.0`/`@1.1` trees - those have no
- * `eventId` field at all, so there is nothing this monitor could ack; the
- * host applies its own compatibility ack for a connection at that minor
- * (see `agentInboxSubscribeServerFrameSchemaV12`'s doc comment).
- */
+/** A server frame normalized to the shape `handleServerFrame` acts on, independent of which minor it was parsed against. `eventId` is `null` for a "message" parsed against the `@1.0`/`@1.1` trees - those have no `eventId` field at all, so there is nothing this monitor could ack; the host applies its own compatibility ack for a connection at that minor (see `agentInboxSubscribeServerFrameSchemaV12`'s doc comment). */
 type NormalizedServerFrame =
   | {
       readonly kind: "message";
@@ -646,13 +550,7 @@ function noticeWithoutStopProvenance(
   return { ...notice, stopInitiator: null };
 }
 
-/**
- * Parses against the schema tree matching the NEGOTIATED minor, not always
- * the latest one this build knows. A new monitor talking to an old host
- * negotiates `@1.0`/`@1.1`; parsing its frames against the latest `@1.2`
- * schema would fail outright (`eventId` is required there) and silently
- * drop every message - the exact bug this guards against.
- */
+/** Parses against the schema tree matching the NEGOTIATED minor, not always the latest one this build knows. A new monitor talking to an old host negotiates `@1.0`/`@1.1`; parsing its frames against the latest `@1.2` schema would fail outright (`eventId` is required there) and silently drop every message - the exact bug this guards against. */
 function parseServerFrame(
   envelope: StreamFrameEnvelope,
   negotiated: SchemaVersion | null,
@@ -757,21 +655,14 @@ async function handleServerFrame(
     });
     const printed = printInboxMessage(frame.item);
     if (frame.eventId === null) {
-      // Negotiated below @1.2 - no eventId to ack; the host retires this
-      // row itself (server-side compatibility ack). Still await the print
-      // so this frame's output has landed before the next one is handled.
+      // Negotiated below @1.2 - no eventId to ack; the host retires this row itself (server-side compatibility ack).
+      // Still await the print so this frame's output has landed before the next one is handled.
       await printed.confirmation;
       return;
     }
     const eventId = frame.eventId;
-    // The durable row must only be acknowledged once THIS write was
-    // CONFIRMED to reach the OS - not merely handed to `process.stdout`
-    // (asynchronous whenever stdout is a pipe - see `std-write.ts`), and not
-    // merely "flushStdio resolved": that helper is deliberately
-    // non-rejecting and can resolve after its own bounded timeout with the
-    // write still incomplete or failed, which previously let an ack fire for
-    // text that was never actually written. `writeStdoutForAck` reports
-    // this exact write's own outcome instead.
+    // The durable row must only be acknowledged once THIS write was CONFIRMED to reach the OS - not merely handed to `process.stdout` (asynchronous whenever stdout is a pipe - see `std-write.ts`), and not merely "flushStdio resolved": that helper is deliberately non-rejecting and can resolve after its own bounded timeout with the write still incomplete or failed, which previously let an ack fire for text that was never actually written.
+    // `writeStdoutForAck` reports this exact write's own outcome instead.
     const delivered = await printed.confirmation;
     if (!delivered) {
       void printed.eventualOutcome.then((eventuallyDelivered) => {
@@ -866,11 +757,7 @@ function logEndpointResolution(
   write();
 }
 
-/**
- * Returns both the bounded confirmation used for timely diagnostics and the
- * write's eventual outcome. A callback that succeeds after the bound still
- * permits the caller to acknowledge the durable row; an error never does.
- */
+/** Returns both the bounded confirmation used for timely diagnostics and the write's eventual outcome. A callback that succeeds after the bound still permits the caller to acknowledge the durable row; an error never does. */
 function printInboxMessage(item: AgentInboxMessage): {
   readonly confirmation: Promise<boolean>;
   readonly eventualOutcome: Promise<boolean>;
@@ -888,11 +775,7 @@ function printInboxMessage(item: AgentInboxMessage): {
   return writeStdoutForAck(`${output}\n`);
 }
 
-/**
- * Reason-specific lead line for an inactivity notice. The wording tells
- * the sender how much to trust the signal - `quiet` is advisory (the
- * receiver may still be working), the others are definitive for this run.
- */
+/** Reason-specific lead line for an inactivity notice. The wording tells the sender how much to trust the signal - `quiet` is advisory (the receiver may still be working), the others are definitive for this run. */
 function inactivityHeadline(
   notice: AgentInboxNotice,
   receiverLabel: string,
@@ -951,11 +834,7 @@ function printInboxNotice(notice: AgentInboxNotice): void {
   writeStdout(`${lines.join("\n")}\n`);
 }
 
-/**
- * Role awareness is ambient coordination state, not a message — a single
- * compact line informs the transcript without crowding it. Role and scope are
- * normalized non-empty text by schema, so both always render.
- */
+/** Role awareness is ambient coordination state, not a message - a single compact line informs the transcript without crowding it. Role and scope are normalized non-empty text by schema, so both always render. */
 function printRoleAwareness(event: RoleAwarenessEvent): void {
   const verb =
     event.kind === "role-claimed" ? "claimed role" : "relinquished role";
@@ -964,12 +843,7 @@ function printRoleAwareness(event: RoleAwarenessEvent): void {
   );
 }
 
-/**
- * Renders a `receiver-cancelled` notice. Lists every dropped thread when the
- * sender lost more than one in the same stop; otherwise uses the
- * single-thread headline. The guidance is identical either way: do not
- * retry, wait on the user or escalate to the agent you work for.
- */
+/** Renders a `receiver-cancelled` notice. Lists every dropped thread when the sender lost more than one in the same stop; otherwise uses the single-thread headline. */
 function printReceiverCancelledNotice(
   notice: AgentInboxNotice,
   receiverLabel: string,

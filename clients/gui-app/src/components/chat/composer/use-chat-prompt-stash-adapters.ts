@@ -13,12 +13,7 @@ import {
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
-/**
- * Chat surface prompt-stash source: reads/clears the canonical `taskId`
- * draft in `useComposerDraftStore`. `onCancelQueueEdit` is gated behind the
- * same compare-and-swap as the draft clear - a stale capture must not cancel
- * whatever queue edit is active now (H1).
- */
+/** Chat surface prompt-stash source: reads/clears the canonical `taskId` draft in `useComposerDraftStore`. `onCancelQueueEdit` is gated behind the same compare-and-swap as the draft clear - a stale capture must not cancel whatever queue edit is active now (H1). */
 export function useChatPromptStashSource(
   taskId: string,
   onCancelQueueEdit: (() => void) | null,
@@ -54,13 +49,7 @@ export function useChatPromptStashSource(
   );
 }
 
-/**
- * Chat surface prompt-stash destination: restore requires the exact ready
- * editor incarnation captured at restore start, and appends against the
- * draft store's latest content at insertion time (not a pre-materialization
- * snapshot). Selection is intentionally reset so the editor applies the
- * replacement with its focus-at-end behavior.
- */
+/** Chat surface prompt-stash destination: restore requires the exact ready editor incarnation captured at restore start, and appends against the draft store's latest content at insertion time (not a pre-materialization snapshot). Selection is intentionally reset so the editor applies the replacement with its focus-at-end behavior. */
 export function useChatPromptStashDestination(
   taskId: string,
   editorRef: RefObject<ComposerPromptEditorHandle | null>,

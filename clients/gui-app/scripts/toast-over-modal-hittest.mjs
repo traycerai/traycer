@@ -1,9 +1,5 @@
-// Measurement, not a regression test: can a Sonner toast's buttons be clicked
-// while a Radix `modal` Dialog is open? Driven in real Chrome because the answer
-// is a hit-test question and jsdom has no hit testing.
-//
-// Structure copied from `diff-edit-browser-regression.mjs` (vite + headless
-// Chrome over CDP).
+// Real-Chrome hit test: can a Sonner toast be clicked while a Radix modal Dialog
+// is open? jsdom has no hit testing.
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -164,11 +160,8 @@ try {
     `document.querySelector('[data-sonner-toast]') !== null`,
   );
 
-  // CONTROL ARM. Without it, "the click did not register" is indistinguishable
-  // from a broken harness - the failure mode this whole audit keeps finding.
-  // Close the dialog through a button INSIDE it (that one is on the layer, so
-  // it is clickable by construction), then click the same toast button at its
-  // own live coordinates and require the counter to move.
+  // Control: close via an inside-dialog button, then click the toast at live
+  // coords. Without this, a miss is indistinguishable from a broken harness.
   const dismissPoint = await evaluate(
     client,
     `(() => {
@@ -230,11 +223,8 @@ try {
   process.exitCode = 1;
 } finally {
   client?.close();
-  // `terminateProcessTree` replaces the old `chrome.kill("SIGKILL")` plus a
-  // 300ms sleep: it takes down the whole process GROUP and verifies it is
-  // gone, so the profile below is removed from under a browser that is
-  // provably finished writing rather than one that has probably stopped -
-  // which is what the `rm` up here used to need its own `catch` for.
+  // terminateProcessTree kills the group and verifies it is gone before rm
+  // of the profile.
   if (chrome !== undefined) {
     await terminateProcessTree(chrome);
   }

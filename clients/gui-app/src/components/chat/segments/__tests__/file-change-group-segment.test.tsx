@@ -34,12 +34,7 @@ vi.mock("@/components/diff/diff-content-primitive", () => ({
   ),
 }));
 
-// The inline diff lazy-fetches before/after by hash; stub the query so the
-// expanded diff renders synchronously without a HostRuntimeProvider.
-// The transcript renders inside a chat TILE, so its file-change rows resolve
-// the snapshot store on the TAB's host (D15). The query itself is mocked just
-// below, so `null` is enough here - what matters is that the seam exists and is
-// this one, not the app-wide read it replaced.
+// The query itself is mocked just below, so `null` is enough here - what matters is that the seam exists and is this one, not the app-wide read it replaced.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -348,9 +343,7 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
   });
 
   it("hides net-zero entries from the modal and excludes them from the count", () => {
-    // A file the turn touched but left byte-identical (before === after) is not
-    // a change of this turn: the "Changes" group already drops it on the file
-    // side, so the modal must not list it or count it either.
+    // A file the turn touched but left byte-identical (before === after) is not a change of this turn: the "Changes" group already drops it on the file side, so the modal must not list it or count it either.
     renderGroup({
       ...baseInput(vi.fn(() => "action-1")),
       manifest: {
@@ -390,9 +383,7 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
   });
 
   it("offers no Undo button when every entry is a net-zero no-op", () => {
-    // Defensive: a turn whose manifest holds only no-op touches has nothing to
-    // undo, so the action must not render at all (it normally wouldn't even
-    // reach a "Changes" group, but enablement must agree regardless).
+    // Defensive: a turn whose manifest holds only no-op touches has nothing to undo, so the action must not render at all (it normally wouldn't even reach a "Changes" group, but enablement must agree regardless).
     renderGroup({
       ...baseInput(vi.fn(() => "action-1")),
       manifest: {
@@ -425,10 +416,8 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
     if (fileHeader === null) throw new Error("Missing file-change row header");
     fireEvent.click(fileHeader);
 
-    // The sticky treatment sits on the header WRAPPER, not the trigger: the
-    // trigger's containing block is only as tall as the header, so a sticky
-    // trigger would have nothing to travel within. The wrapper's containing
-    // block is the row, whose body is what scrolls past.
+    // The sticky treatment sits on the header WRAPPER, not the trigger: the trigger's containing block is only as tall as the header, so a sticky trigger would have nothing to travel within.
+    // The wrapper's containing block is the row, whose body is what scrolls past.
     const stickyHeader = fileHeader.parentElement;
     if (stickyHeader === null) throw new Error("Missing sticky header wrapper");
     expect(stickyHeader.className).toContain("sticky");

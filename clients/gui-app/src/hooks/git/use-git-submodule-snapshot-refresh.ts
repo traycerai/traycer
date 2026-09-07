@@ -19,23 +19,7 @@ export interface GitSubmoduleSnapshotRefreshResult {
   readonly isRefreshing: boolean;
 }
 
-/**
- * Manual refresh of the active root's nested snapshot slot (the panel's
- * source of truth for parent files + submodules). Shared by the panel toolbar
- * refresh and the reference-row refresh so both surfaces refresh the same
- * cache slot.
- *
- * This is an EXPLICIT generation-aware unary fetch, not `invalidateQueries`:
- * under stream ownership the passive unary query is DISABLED, and
- * invalidating a disabled query does not refetch it. The fetch works in both
- * ownership states (it also serves "I suspect the host is wedged"), and its
- * write is arbitrated by the rich-slot ordering - a response that raced a
- * newer stream write is dropped, never clobbering the stream-fed value.
- *
- * `staleTime: 0` is explicit and load-bearing: `fetchQuery` inherits the
- * QueryClient's global default (60s in this app), which would silently no-op
- * a manual refresh against `Infinity`-fresh stream-fed data.
- */
+/** Generation-aware unary fetch, not invalidateQueries (stream ownership disables the unary query). staleTime 0 so fetchQuery cannot no-op. */
 export function useGitSubmoduleSnapshotRefresh(args: {
   readonly hostId: string | null;
   readonly rootRunningDir: string | null;
@@ -103,13 +87,7 @@ export function useGitSubmoduleSnapshotRefresh(args: {
       withHostQueryErrorBoundary("git.listChangedFiles", () =>
         richSlotRequest(context),
       );
-    // Cancel any fetch already in flight for this key first: `fetchQuery`
-    // otherwise JOINS an existing in-flight promise instead of starting a
-    // fresh request, so a click while an earlier fetch is hung would silently
-    // await that same hung promise - defeating this refresh's documented
-    // "I suspect the host is wedged" use case. `revert: false` for the same
-    // stream-write-preservation reason as the ownership-transition cancel in
-    // `useGitListChangedFilesWithSubmodules`.
+    // Cancel any fetch already in flight for this key first: `fetchQuery` otherwise JOINS an existing in-flight promise instead of starting a fresh request, so a click while an earlier fetch is hung would silently await that same hung promise - defeating this refresh's documented "I suspect the host is wedged" use case.
     await queryClient.cancelQueries({ queryKey }, { revert: false });
     getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(queryKey);
     // Failures land in the query's error state (surfaced by the passive

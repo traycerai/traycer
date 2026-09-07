@@ -13,9 +13,8 @@ import type {
 import { AuthService, AUTH_ERROR_LAUNCH_FAILED } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-// Mirrors `provisional-session-snapshot.ts`'s module-private key. Not exported
-// there on purpose (nothing but `AuthService` should address the slot), so the
-// literal is duplicated here rather than imported.
+// Mirrors `provisional-session-snapshot.ts`'s module-private key.
+// Not exported there on purpose (nothing but `AuthService` should address the slot), so the literal is duplicated here rather than imported.
 const SNAPSHOT_KEY = "traycer.auth.provisionalSession.v1";
 
 type FetchHandler = (
@@ -193,11 +192,8 @@ function validSnapshotEnvelope(
 }
 
 /**
- * A local variant of {@link authenticatedUserRawPayload} that parameterizes
- * `user.name`, for A5/A6 below - the same-user re-projection pins. A separate
- * function rather than a new parameter on the shared helper, so every
- * existing call site of `authenticatedUserRawPayload` / `authenticatedUser` /
- * `okWithUser` keeps working unchanged.
+ * A local variant of {@link authenticatedUserRawPayload} that parameterizes `user.name`, for A5/A6 below - the same-user re-projection pins.
+ * A separate function rather than a new parameter on the shared helper, so every existing call site of `authenticatedUserRawPayload` / `authenticatedUser` / `okWithUser` keeps working unchanged.
  */
 function authenticatedUserRawPayloadWithName(
   userId: string,
@@ -286,9 +282,7 @@ interface RawTeam {
 }
 
 /**
- * A local variant of {@link authenticatedUserRawPayload} that parameterizes
- * `teamSubscriptions`, for C.8 - the reorder-vs-change pin on
- * `reprojectSameUserIdentity`'s teams comparison.
+ * A local variant of {@link authenticatedUserRawPayload} that parameterizes `teamSubscriptions`, for C.8 - the reorder-vs-change pin on `reprojectSameUserIdentity`'s teams comparison.
  */
 function authenticatedUserRawPayloadWithTeams(
   userId: string,
@@ -528,9 +522,7 @@ describe("AuthService provisional boot session", () => {
       deferred.resolve(await okWithUserNamed("user-1", "FREE", "New Name"));
       await flush();
 
-      // THE REDDENING ONE - today the same-user `valid` branch only commits
-      // the subscription and re-writes the snapshot; it never re-projects
-      // profile/context metadata/teams, so this stays "Old Name".
+      // THE REDDENING ONE - today the same-user `valid` branch only commits the subscription and re-writes the snapshot; it never re-projects profile/context metadata/teams, so this stays "Old Name".
       expect(useAuthStore.getState().profile?.userName).toBe("New Name");
     });
 
@@ -554,18 +546,12 @@ describe("AuthService provisional boot session", () => {
       deferred.resolve(await okWithUserNamed("user-1", "FREE", "Stable Name"));
       await flush();
 
-      // `setSignedIn` always builds a fresh `safeProfile` object, so object
-      // identity is the in-band observable for "the reducer did not run" -
-      // no spy needed.
+      // `setSignedIn` always builds a fresh `safeProfile` object, so object identity is the in-band observable for "the reducer did not run" - no spy needed.
       expect(useAuthStore.getState().profile).toBe(before);
       expect(useAuthStore.getState().shareableTeams).toBe(teamsBefore);
     });
 
-    // C.8 - `reprojectSameUserIdentity`'s `unchanged` check (auth-service.ts
-    // :3820-3828) compares `shareableTeams` INDEX-BY-INDEX, and
-    // `projectShareableTeams` preserves server order verbatim - so the same
-    // team set returned in a different order reads as "changed" and fires a
-    // spurious re-projection (and, in production, `Analytics.identify`).
+    // C.8 - `reprojectSameUserIdentity`'s `unchanged` check (auth-service.ts :3820-3828) compares `shareableTeams` INDEX-BY-INDEX, and `projectShareableTeams` preserves server order verbatim - so the same team set returned in a different order reads as "changed".
     it("A7: THE REDDENING ONE - same teams in a different order is treated as unchanged", async () => {
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");
@@ -597,9 +583,7 @@ describe("AuthService provisional boot session", () => {
       );
       await flush();
 
-      // Red today - the index compare finds index 0 and 1 both changed and
-      // calls `setSignedIn`, replacing both objects even though the set is
-      // identical.
+      // Red today - the index compare finds index 0 and 1 both changed and calls `setSignedIn`, replacing both objects even though the set is identical.
       expect(useAuthStore.getState().shareableTeams).toBe(teamsBefore);
       expect(useAuthStore.getState().profile).toBe(profileBefore);
     });
@@ -709,15 +693,7 @@ describe("AuthService provisional boot session", () => {
       await assertRefusesToTheAwaitedPath(service);
     });
 
-    // Two guards can refuse a mismatched account, and BOTH compare against the
-    // credentials file's id rather than against each other: the envelope's
-    // `userId`, and - after the payload is parsed - the payload's own
-    // `user.id`. B10 above names "someone-else" in both, so it trips both at
-    // once and can isolate neither; removing either guard leaves the other to
-    // refuse (verified - ablating the envelope check alone reddens nothing).
-    //
-    // So each fixture below must make exactly one of the two DISAGREE with the
-    // credentials while the other AGREES.
+    // Two guards can refuse a mismatched account, and BOTH compare against the credentials file's id rather than against each other: the envelope's `userId`, and - after the payload is parsed - the payload's own `user.id`.
 
     it("B10a: only the envelope check can refuse - the envelope names another account while its payload agrees with the credentials file", async () => {
       const { service, host } = makeService();
@@ -823,28 +799,7 @@ describe("AuthService provisional boot session", () => {
       expect(useAuthStore.getState().status).toBe("signed-out");
     });
 
-    // Pins: a background settle straggling from an aborted provisional boot
-    // cannot disturb the state an interactive sign-in FAILURE already
-    // established (no rotate call, `AUTH_ERROR_LAUNCH_FAILED` stays put).
-    //
-    // What carries it: `signIn()` bumps `identityGeneration` as its very first
-    // statement, before it can even reach the launch failure, and
-    // `applyInteractiveFailure` -> `applySignedOut()` nulls the live bearer.
-    // Either fence alone already makes `settleProvisionalSession`'s entry
-    // checks (`shouldStopStartFlow`'s generation compare, and separately
-    // `currentBearerIs(stored.token)`) refuse the stale verdict - three
-    // independent guards catch this one stimulus.
-    //
-    // What this does NOT pin: `start()`'s own `settlesInBackground` guard
-    // (`if (!settlesInBackground) { this.starting = false; }` in the
-    // `finally`). Reverting it to an unconditional `this.starting = false`
-    // leaves this test green - none of the three guards above depend on
-    // `starting`/`authResolvedDuringStart` for this particular recipe. That
-    // guard is defence-in-depth for what `authResolvedDuringStart` is
-    // documented to mean elsewhere, not something this recipe can isolate:
-    // doing so would need the device flow to land the exact bearer already on
-    // disk, which is contrived enough to be pinning the fixture rather than
-    // the behaviour. Do not read this test as covering that guard.
+    // Pins: a background settle straggling from an aborted provisional boot cannot disturb the state an interactive sign-in FAILURE already established (no rotate call, `AUTH_ERROR_LAUNCH_FAILED` stays put).
     it("C15: an interactive sign-in that fails at launch fences off the background settle, so a later rejected verdict does not further disturb the launch-failure state", async () => {
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");
@@ -876,10 +831,7 @@ describe("AuthService provisional boot session", () => {
       expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
     });
 
-    // C.7 - `revalidateCurrentContextOnce`'s same-user `valid` arm (auth-service.ts
-    // :2303-2316) is the exact predicate A5/A6 pin at BOOT, unapplied at the
-    // mid-session revalidation this reactive 401 path drives. It commits
-    // subscription status only and never calls `reprojectSameUserIdentity`.
+    // C.7 - `revalidateCurrentContextOnce`'s same-user `valid` arm (auth-service.ts :2303-2316) is the exact predicate A5/A6 pin at BOOT, unapplied at the mid-session revalidation this reactive 401 path drives.
     it("C16: a mid-session same-user valid verdict re-projects a profile that changed since the last projection", async () => {
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");
@@ -902,24 +854,13 @@ describe("AuthService provisional boot session", () => {
       const outcome = await service.revalidateCurrentContext();
       expect(outcome?.kind).toBe("valid");
 
-      // THE REDDENING ONE - today this arm only commits the subscription
-      // status, so this stays "Old Name" instead of picking up the changed
-      // display name.
+      // THE REDDENING ONE - today this arm only commits the subscription status, so this stays "Old Name" instead of picking up the changed display name.
       expect(useAuthStore.getState().profile?.userName).toBe("New Name");
     });
 
     it("C19: the re-projection also moves the SERVICE's own profile copy, not just the store's", async () => {
-      // C16 pins the store; this pins the other half of the same write. The
-      // service keeps `currentProfile` beside `currentBearer` as one live
-      // credential pair, and `getCurrentSessionSnapshot()` - the persistence
-      // boundary the windows bridge projects to every other window - reads the
-      // profile from THERE, not from the store. Left behind, it is also
-      // self-perpetuating: the rotation path re-commits `this.currentProfile`
-      // verbatim, so every later refresh re-writes the stale name.
-      //
-      // Asserted through the snapshot rather than the store for the reason C18
-      // gives about its own read: the store says "New Name" under the bug, so
-      // an assertion there is green either way.
+      // C16 pins the store; this pins the other half of the same write.
+      // The service keeps `currentProfile` beside `currentBearer` as one live credential pair, and `getCurrentSessionSnapshot()` - the persistence boundary the windows bridge projects to every other window - reads the profile from THERE, not from the store.
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");
       seedSnapshot(
@@ -952,10 +893,8 @@ describe("AuthService provisional boot session", () => {
     });
 
     it("C20: the re-projection reaches session-snapshot subscribers, so other windows do not keep the old identity", async () => {
-      // The pushed half of C19. The windows bridge holds a copy delivered
-      // through `onSessionSnapshotChange`, so a fix that repaired only the
-      // pull-side read would leave every other window painting the old name
-      // until something unrelated emitted.
+      // The pushed half of C19.
+      // The windows bridge holds a copy delivered through `onSessionSnapshotChange`, so a fix that repaired only the pull-side read would leave every other window painting the old name until something unrelated emitted.
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");
       seedSnapshot(
@@ -988,15 +927,8 @@ describe("AuthService provisional boot session", () => {
     });
 
     it("C18: a mid-session same-user re-projection also PERSISTS, so the next launch does not repaint the old identity", async () => {
-      // C16 pins the projection; this pins the durable half, and the store
-      // write alone is not it. `applySignedIn` is the only other writer of
-      // this snapshot and this path deliberately avoids it, so on this branch
-      // nothing else persists anything: the next launch paints the cached
-      // identity again, and if that launch's validation takes the accepted
-      // network-error path (C13) the stale name and avatar stand for the whole
-      // session. `settleProvisionalSession` pairs the projection and the write
-      // for exactly this reason; the live-revalidation path had only the first
-      // half.
+      // C16 pins the projection; this pins the durable half, and the store write alone is not it.
+      // `applySignedIn` is the only other writer of this snapshot and this path deliberately avoids it, so on this branch nothing else persists anything: the next launch paints the cached identity again, and if that launch's validation takes the accepted.
       const { service, host } = makeService();
       await signInStoredCredentials(host, "user-1", "persisted-token");
       seedSnapshot(
@@ -1025,10 +957,8 @@ describe("AuthService provisional boot session", () => {
         throw new Error("expected a provisional snapshot to have been written");
       }
       const decoded: unknown = JSON.parse(raw);
-      // Read through the SNAPSHOT rather than the store: the store already
-      // says "New Name" under the bug (C16 made sure of that), so asserting
-      // there would be green either way. The persisted name is the only thing
-      // the next launch reads.
+      // Read through the SNAPSHOT rather than the store: the store already says "New Name" under the bug (C16 made sure of that), so asserting there would be green either way.
+      // The persisted name is the only thing the next launch reads.
       const envelope = z
         .object({
           userId: z.string(),
@@ -1057,9 +987,7 @@ describe("AuthService provisional boot session", () => {
       const outcome = await service.revalidateCurrentContext();
       expect(outcome?.kind).toBe("valid");
 
-      // CONTROL, green both sides - what stops pin C16 being satisfied by an
-      // unconditional write, which would fire one `Analytics.identify` per
-      // revalidation instead of only when identity actually moved.
+      // CONTROL, green both sides - what stops pin C16 being satisfied by an unconditional write, which would fire one `Analytics.identify` per revalidation instead of only when identity actually moved.
       expect(useAuthStore.getState().profile).toBe(before);
     });
   });

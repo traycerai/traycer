@@ -45,16 +45,6 @@ export type DisplayChangeReason =
   | "display-removed"
   | "display-metrics-changed";
 
-/**
- * Subscribes to OS display add/remove/metrics events and pushes a fresh
- * topology snapshot to the renderer. Useful for window-state persistence
- * (a window restored onto a now-disconnected display needs to be moved)
- * and any layout code that branches on display count or scale factor.
- *
- * `metrics-changed` covers resolution changes, DPI shifts, rotation, and
- * primary-display swaps - basically any state the renderer would need to
- * re-read.
- */
 export function installScreenMonitor(
   emit: (reason: DisplayChangeReason, topology: DisplayTopology) => void,
 ): void {

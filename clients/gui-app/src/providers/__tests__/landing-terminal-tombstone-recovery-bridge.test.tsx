@@ -12,10 +12,8 @@ const mocks = vi.hoisted(() => {
   const initialAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   const terminalsById: Readonly<Record<string, unknown>> = {};
-  // Whether the registry has answered for the fleet, held in a cell so
-  // `binding` can stay one stable object: it sits in a dependency list, and a
-  // fresh identity per render would recompute on every commit. The fleet ITSELF
-  // is `entries`, exactly as the bridge reads it.
+  // Registry-answered flag in a cell so binding stays stable. The fleet is
+  // entries.
   const fleetSettled: { current: boolean } = { current: false };
   const directoryListeners = new Set<() => void>();
   return {
@@ -140,11 +138,7 @@ vi.mock(
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
+/** Account axis stamped at projection. Fixtures are an entitled account unless a case says otherwise. */
 const PLAN_ALLOWS_REMOTE = true;
 
 const offlineHost: HostDirectoryEntry = {
@@ -156,11 +150,7 @@ const offlineHost: HostDirectoryEntry = {
   transportDialability: "not-dialable",
 };
 
-/**
- * This machine's own host. It reaches a snapshot through the local arm alone,
- * so it is present with or without a registry listing - which is what makes a
- * row count useless as evidence that the fleet is known.
- */
+/** Local host is present with or without a registry listing. Row count is not evidence the fleet is known. */
 const localHost: HostDirectoryEntry = {
   hostId: "host-local",
   label: "This Mac",
@@ -379,18 +369,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("keeps retrying a kill the host resolved without killing anything", async () => {
-    // `terminal.kill` reports an already-gone session as DATA (`killed: false`),
-    // and the kill mutation deliberately KEEPS the tombstone for the one shape
-    // where that answer means "not created yet" rather than "gone" - a session
-    // whose `terminal.plain.create` had not settled, whose terminal lands
-    // afterwards under this same client-supplied id.
-    //
-    // The bridge used to read ANY resolution as success and clear the retry, so
-    // nothing was left to send the kill: the reject arm never runs for a
-    // resolved promise, and the drain skips a key it has already attempted on
-    // this arm. The PTY then outlived its tab until an unrelated route or
-    // capability flap. An outstanding record after a resolved close is a kill
-    // that is still owed.
+    // terminal.kill reports already-gone as killed:false; keep the tombstone when
+    // create has not settled. A resolved close with an outstanding record still owes a kill.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -425,12 +405,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("switches to the plain arm the moment the projection appears, without waiting out the kill backoff", async () => {
-    // An unacknowledged tombstone routes to `terminal.kill` while its create is
-    // still in flight. When that create lands and the terminal is published,
-    // the correct arm becomes `plain` - but the host has been `capable`
-    // throughout, so a mark keyed on CAPABILITY read "already attempted" and
-    // the new arm sat out the old one's backoff, up to the 300s ceiling, with
-    // the PTY running the whole time.
+    // Create landing switches the arm to plain; a capability-keyed mark still
+    // says already-attempted and the new arm sits out the old backoff.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -472,15 +448,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("sends terminal.kill on a capable host whose listing is merely stale", async () => {
-    // `canMutate` tracks LIST-STREAM freshness, not terminal liveness, and only
-    // one arm reads a listing: `terminal.plain.close` names a row in the
-    // projection, while `terminal.kill` is unary and never consults it. Gating
-    // BOTH on freshness parked exactly the tombstones that never needed it -
-    // and cancelled their retry records on the way past, so nothing was left to
-    // wake when the stream recovered.
-    //
-    // The acknowledged case above still waits: `plain` is its arm, and that arm
-    // genuinely needs a fresh listing.
+    // canMutate is list-stream freshness. terminal.kill is unary and must not
+    // wait on it; terminal.plain.close still needs a fresh listing.
     mocks.entries = [
       {
         ...offlineHost,
@@ -515,12 +484,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("leaves a joined close's tombstone to whoever owns the request", async () => {
-    // The coordinator keys by the terminal's LIFETIME, not by RPC, so this
-    // plain close can join an in-flight `terminal.kill` sent by the panel's
-    // fast path. That kill answers an already-gone session with `killed: false`
-    // as data, and for a `pendingCreate` record the kill mutation deliberately
-    // KEEPS the tombstone. Clearing here off the joined promise would overrule
-    // the owner and strand the PTY the create is about to produce.
+    // Lifetime-keyed join can share an in-flight kill that keeps the tombstone
+    // for pendingCreate. Clearing off the joined promise would strand the PTY.
     mocks.entries = [
       {
         ...offlineHost,
@@ -573,14 +538,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("re-arms the plain close after joining a kill that kept the tombstone", async () => {
-    // Declining to conclude is only HALF of what a joiner owes. It learned
-    // nothing about its own arm, and the drain admits a key on exactly three
-    // things: a drainability edge, FIRST SIGHT of the arm, or a due retry. A
-    // joiner that returned having dropped its retry - while `attemptedRef`
-    // still carried the `plain` mark - produced none of the three, so no close
-    // was ever sent and the PTY the create is about to produce outlived its
-    // tombstone. The test above stops at the settlement and passes either way;
-    // the strand is only visible past it.
+    // A joiner that drops its retry while attemptedRef still marks plain produces
+    // no drain stimulus, so the PTY outlives the tombstone.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -648,12 +607,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("wakes a plain close when listing freshness returns", async () => {
-    // The plain arm's first close rejects while the list stream happens to be
-    // stale. No retry can be scheduled for an arm that is undrainable, so the
-    // ONLY way back is the drainability edge - and keying that edge on `kill`
-    // lost it, because `kill` stayed true the whole time. The mark still named
-    // `plain`, so the drain skipped this key forever and the PTY outlived its
-    // tombstone.
+    // Stale-list reject cannot retry. Drainability edge must not be keyed on
+    // kill, which stayed true while the mark still named plain.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -700,11 +655,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("retires a pending-create tombstone once its reprieve is spent", async () => {
-    // `pendingCreate` makes `killed: false` ambiguous, so the kill mutation
-    // keeps the record. Nothing here can ever falsify it: the tile that
-    // dispatched the create is unmounted and its lifecycle hook drops the
-    // settlement, so a create that REJECTED leaves a tombstone no answer can
-    // retire - an RPC and an invalidation every five minutes, forever.
+    // pendingCreate keeps killed:false. Unmounted tile drops settlement, so a
+    // rejected create leaves a tombstone no answer can retire.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -761,10 +713,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("does not spend the pending-create reprieve on rejected kills", async () => {
-    // A rejection is the transport failing to ask, not the host reporting the
-    // session absent. Both settlement arms schedule a retry, so an
-    // ATTEMPT-counted budget burned down on pure rejections and discarded a
-    // tombstone nobody had answered for - leaking the PTY if the create landed.
+    // Rejection is transport failing to ask. An attempt budget would discard
+    // a tombstone nobody answered for.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -916,10 +866,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("retries a LEGACY kill after a transient rejection", async () => {
-    // The legacy arm used to be a bare `mutate` with no rejection handling.
-    // That was survivable only while an offline close was impossible; now this
-    // is the path a legacy host's deferred kill travels, so a single transient
-    // failure would otherwise strand the PTY until a route flap or a reload.
+    // Legacy deferred kill must handle rejection. A transient failure must
+    // not strand the PTY until reload.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -1088,13 +1036,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("fires the kill on offline -> connectable even when the offline stretch sat inside the relay-fuse window", async () => {
-    // Production-shaped entries: a registry-`offline` REMOTE host carries the
-    // shared relay `websocketUrl`, and inside the fuse window
-    // `dialableHostEndpoint` is non-null - PERMISSION to attempt a recovery
-    // dial, not availability. Recording that permission as "available" made
-    // the later genuine offline -> connectable recovery a `true -> true`
-    // non-edge: `terminal.kill` never fired and the supposedly-closed PTY
-    // stayed alive until relaunch (only mutation success clears a tombstone).
+    // dialableHostEndpoint is permission to attempt, not availability. Recording
+    // it as available made offline->connectable a non-edge so kill never fired.
     const remoteItem = (
       connectivity: HostConnectivity,
       lastSeenAt: string,
@@ -1171,12 +1114,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("treats a READY remote session as confirmed recovery while the registry stays offline", async () => {
-    // The registry never leaves `offline` for the whole credential-plane
-    // incident, so the directory alone can never provide the recovery edge.
-    // The recovery dial the fuse window kept open SUCCEEDS instead - the
-    // resulting ready session is both the proof of recovery and the route the
-    // kill travels, and the bridge learns about it through its readiness
-    // subscription (the session cache is pull-only and emits nothing).
+    // Registry stays offline; recovery is the fuse-window dial succeeding.
+    // Learn it from the readiness subscription; the session cache emits nothing.
     vi.useFakeTimers();
     try {
       const remoteItem = (lastSeenAt: string): HostListItem => ({
@@ -1240,11 +1179,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("withholds the authority probe for a host that left the account, and keeps its tombstone", async () => {
-    // host-b stays listed (the default fixture); the tombstone below names a
-    // DIFFERENT host that has left the account entirely - deregistration, not
-    // merely offline. Nothing is destroyed: deregistration revokes a credential
-    // and leaves the machine untouched, so the record that its shell needs
-    // killing has to outlive the probe that would have delivered it.
+    // Tombstone names a deregistered host, not merely offline. The kill record
+    // must outlive the probe that would have delivered it.
     mocks.entries = [offlineHost];
     mocks.fleetSettled.current = true;
     useLandingTerminalStore.getState().addTab({
@@ -1272,10 +1208,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("probes again, and drains, when a deregistered host is re-enrolled under the same id", async () => {
-    // `host-deregister-fetcher` documents that removal revokes the credential
-    // and nothing else - "the hostId survives" and "re-enrollment re-adopts the
-    // SAME id". Deleting the tombstone would have destroyed the kill record at
-    // the exact moment it became useful again.
+    // Deregistration revokes the credential; hostId survives re-enrollment.
+    // Do not delete the tombstone.
     mocks.entries = [offlineHost];
     mocks.fleetSettled.current = true;
     useLandingTerminalStore.getState().addTab({
@@ -1302,11 +1236,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("probes every tombstoned host while the registry is unanswered, even though a local host keeps the snapshot non-empty", async () => {
-    // Absence from a fleet nobody has answered for is not evidence of
-    // anything. A directory snapshot is `localEntry` + `remoteEntries`, so a
-    // machine running a local host renders one ordinary row whether the
-    // registry answered or not - scoping on row count would strand host-b's
-    // drain at every launch that started offline.
+    // A local host is one row whether the registry answered. Scoping on row
+    // count would strand host-b's drain on an offline launch.
     mocks.entries = [localHost];
     mocks.fleetSettled.current = false;
     useLandingTerminalStore.getState().addTab({
@@ -1363,10 +1294,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("withholds probes for an ANSWERED empty fleet without discarding the tombstones", async () => {
-    // An answered `[]` is knowledge - it is how a single-host account
-    // deregisters - so the probe is withheld. The tombstone is still not
-    // destroyed, because that same account can re-enroll the machine under the
-    // id the tombstone already names.
+    // Answered [] is knowledge: withhold the probe, keep the tombstone for
+    // re-enrollment under the same id.
     mocks.entries = [];
     mocks.fleetSettled.current = true;
     useLandingTerminalStore.getState().addTab({
@@ -1394,11 +1323,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("dispatches a tombstone recorded while its host was ALREADY drainable", async () => {
-    // No route transition to ride in on, and no retry record yet. The two
-    // conditions the drain gates on would both be false, so without a
-    // first-sight rule this kill waits for the host to flap - and a close under
-    // an unresolved probe dispatches nothing itself, so the bridge is the only
-    // thing that would ever send it.
+    // No route transition and no retry yet. Without first-sight, this kill
+    // waits for a flap; an unresolved-probe close dispatches nothing.
     mocks.entries = [
       {
         ...offlineHost,
@@ -1452,12 +1378,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("rescopes probes when settlement flips without the directory rows changing", async () => {
-    // TanStack's structural sharing hands back the SAME `data` array when a
-    // fetch produces deeply-equal rows - a desktop whose one local host is the
-    // whole snapshot, with an empty remote listing. A derivation keyed on the
-    // rows would never observe the flag move, so settlement is subscribed
-    // through `onChange` instead. `mocks.entries` is deliberately NOT touched
-    // here; only the flag moves.
+    // Structural sharing keeps the same data array; subscribe onChange for the
+    // flag move. Do not touch mocks.entries.
     mocks.entries = [localHost];
     mocks.fleetSettled.current = false;
     useLandingTerminalStore.getState().addTab({
@@ -1492,13 +1414,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("re-dispatches with the NEW capability when authority flips during an in-flight close", async () => {
-    // A `terminal.plain.close` incompatibility can drop a host back to legacy
-    // while it stays dialable. The capable request then rejects, but
-    // `closeRetryStillWarranted` refuses a retry because the capability no
-    // longer matches the one that dispatched - and the authority-change render
-    // had already skipped this key for being in flight. Clearing that ref
-    // renders nothing, so without a capability-aware mark plus a signal on
-    // settlement the correct close is never sent.
+    // Capability drop while in flight skips retry and skips the authority-change
+    // render; without a capability-aware mark plus settlement signal, close never sends.
     mocks.entries = [
       {
         ...offlineHost,
@@ -1554,10 +1471,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("re-dispatches the other way too: legacy in flight, authority becomes capable", async () => {
-    // The mirror of the case above. Same suppression in
-    // `closeRetryStillWarranted`, same invisible `finally`, so the capability
-    // -keyed mark has to work in both directions rather than only capable ->
-    // legacy.
+    // Capability-keyed mark must work both capable->legacy and legacy->capable.
     mocks.entries = [
       {
         ...offlineHost,
@@ -1611,10 +1525,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   });
 
   it("backs a permanently failing kill off to a long interval, and never gives up", async () => {
-    // The cost this guards is a permanent failure retrying every 8s for as long
-    // as the app is open. It is answered by GROWING the interval rather than by
-    // an attempt budget: a budget reaches a state the drain cannot leave, and a
-    // tombstone is a kill that is still owed.
+    // Grow the interval; do not use an attempt budget. A tombstone is a kill
+    // still owed.
     vi.useFakeTimers();
     mocks.entries = [
       {

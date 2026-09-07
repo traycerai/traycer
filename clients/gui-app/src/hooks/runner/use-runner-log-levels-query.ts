@@ -5,12 +5,7 @@ import {
   type LogLevelsSnapshot,
 } from "@/lib/desktop-log-levels";
 
-/**
- * Reads the three configurable log thresholds (desktop / cli / host) from the
- * desktop platform bridge. Disabled — and so a permanent no-op — outside the
- * desktop shell, where there is no bridge to read. `getLogLevelsBridge()` is
- * resolved inside the fetcher (not captured) so the cache key stays primitive.
- */
+/** Disabled - and so a permanent no-op - outside the desktop shell, where there is no bridge to read. */
 export function useRunnerLogLevelsQuery() {
   return useQuery(
     queryOptions<LogLevelsSnapshot>({

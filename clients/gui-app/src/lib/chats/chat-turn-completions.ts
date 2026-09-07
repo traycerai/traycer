@@ -31,10 +31,8 @@ export function toChatTurnPhase(state: ChatRunInputs): ChatTurnPhase {
   return {
     runningTurn: state.runStatus === "running" && state.activeTurn !== null,
     stopping: state.runStatus === "stopping",
-    // A turn is complete once the host has stopped running it. Do not require
-    // the queue to be empty: an errored turn deliberately parks queued
-    // messages in `paused`, and completion-driven usage/profile refreshes must
-    // still observe the provider failure that caused the pause.
+    // A turn is complete once the host has stopped running it.
+    // Do not require the queue to be empty: an errored turn deliberately parks queued messages in `paused`, and completion-driven usage/profile refreshes must still observe the provider failure that caused the pause.
     turnEnded: state.runStatus === "idle" && state.activeTurn === null,
     connectionClosed: state.connectionStatus === "closed",
   };

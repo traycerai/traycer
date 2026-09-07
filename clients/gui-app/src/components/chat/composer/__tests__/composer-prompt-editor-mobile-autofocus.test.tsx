@@ -1,17 +1,4 @@
-/**
- * Keyboard-summoning contract for the composer editor.
- *
- * On the installed mobile app a software keyboard costs half the screen, so it
- * must be summoned by a tap and never by a composer mounting active. On
- * desktop the same mount takes the caret, because a hardware keyboard makes
- * that free.
- *
- * The assertion is on ProseMirror's `EditorView.focus` - the single funnel for
- * both routes into the editor (Tiptap's `autofocus` option and the composer
- * focus registry) - because jsdom does not focus a contenteditable node, so
- * `editor.isFocused` reads false even where production would have raised the
- * keyboard.
- */
+/** On the installed mobile app a software keyboard costs half the screen, so it must be summoned by a tap and never by a composer mounting active. The assertion is on ProseMirror's `EditorView.focus` - the single funnel for both routes into the editor (Tiptap's `autofocus` option and the composer focus registry) - because jsdom does not focus a contenteditable node, so `editor.isFocused` reads false even where production would have raised the keyboard. */
 import { useState } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -125,9 +112,7 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
     const mounted = await mountComposer(true);
     const handle = readyHandle(mounted);
 
-    // Cleared so the assertion pins the explicit request itself - without
-    // this, a regression that re-enables mount autofocus would satisfy the
-    // final expectation before focusAtEnd ever ran.
+    // Cleared so the assertion pins the explicit request itself - without this, a regression that re-enables mount autofocus would satisfy the final expectation before focusAtEnd ever ran.
     mounted.viewFocus.mockClear();
     act(() => {
       handle.focusAtEnd();

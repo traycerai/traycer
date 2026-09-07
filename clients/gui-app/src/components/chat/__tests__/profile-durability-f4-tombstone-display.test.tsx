@@ -11,15 +11,7 @@ import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
-/**
- * F4 (durability audit), tombstone-display surface: a user message's
- * `sessionAnchor.labelSnapshot` is a snapshot taken at anchor-mint time - it
- * can carry whatever hostile content a profile label held back then, and
- * `chat-message-user-body.tsx` renders it verbatim as
- * "Ran on {label} (removed)" with no truncate/escape wrapper of its own
- * (only plain JSX text interpolation - see the `dangerouslySetInnerHTML`
- * grep note in the sibling `profile-durability-f4-hostile-labels.test.tsx`).
- */
+/** F4 (durability audit), tombstone-display surface: a user message's `sessionAnchor.labelSnapshot` is a snapshot taken at anchor-mint time - it can carry whatever hostile content a profile label held back then, and `chat-message-user-body.tsx` renders it verbatim as "Ran on {label} (removed)" with no truncate/escape wrapper of its own (only plain JSX text interpolation - see the `dangerouslySetInnerHTML` grep note in the sibling `profile-durability-f4-hostile-labels.test.tsx`). */
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => null,
@@ -85,10 +77,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
-    // The provider HAS enumerated profiles (non-empty, so
-    // `resolveTombstonedProfileLabel` doesn't bail out as "flag off / not
-    // enumerated") - the removed profile is simply absent from that list,
-    // which is exactly what makes it tombstoned.
+    // The provider HAS enumerated profiles (non-empty, so `resolveTombstonedProfileLabel` doesn't bail out as "flag off / not enumerated") - the removed profile is simply absent from that list, which is exactly what makes it tombstoned.
     profiles: [ambient],
   };
 }

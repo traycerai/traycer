@@ -5,31 +5,12 @@ import { cn } from "@/lib/utils";
 import { placeholderRowHeight } from "@/components/chat/chat-transcript-placeholder-height";
 import type { ChatTranscriptRowHeightMemory } from "@/components/chat/chat-transcript-row-height-memory";
 
-/**
- * A row the transcript knows exists but holds no body for.
- *
- * Its job is to occupy the right ordinal at roughly the right height so the
- * scrollbar describes the whole chat rather than the loaded part of it, and so
- * the viewport has something to report when the reader scrolls into unhydrated
- * history. Its loading treatment mirrors the shared usage skeleton: a few
- * restrained lines inside the normal chat column, never a slab stretched to
- * the row's estimated height. The estimate still reserves scroll geometry,
- * while the visible placeholder reads as loading rather than missing content.
- *
- * "Roughly the right height" is the whole difficulty, and it is
- * `heightMemory`'s job rather than this component's - see that module. The
- * height is read once per mount and never subscribed to: a placeholder that
- * corrected itself while the reader was looking at it would be the same jump
- * this is here to avoid.
- */
+/** Its loading treatment mirrors the shared usage skeleton: a few restrained lines inside the normal chat column, never a slab stretched to the row's estimated height. The height is read once per mount and never subscribed to: a placeholder that corrected itself while the reader was looking at it would be the same jump this is here to avoid. */
 
 interface ChatTranscriptPlaceholderRowProps {
   readonly entry: RowSkeletonEntry | null;
   readonly ordinal: number;
-  /**
-   * What this transcript has measured so far. `null` on a surface with no
-   * memory of its own, which falls back to the raw byte estimate.
-   */
+  /** What this transcript has measured so far. `null` on a surface with no memory of its own, which falls back to the raw byte estimate. */
   readonly heightMemory: ChatTranscriptRowHeightMemory | null;
 }
 

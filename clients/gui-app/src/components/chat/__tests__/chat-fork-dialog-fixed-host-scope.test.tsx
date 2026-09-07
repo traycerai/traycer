@@ -8,24 +8,7 @@ import {
 } from "@traycer/protocol/host/index";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 
-/**
- * Regression for `chat-fork-dialog.tsx`: the dialog used to pass
- * `hostScope={{ kind: "active" }}` to `ActiveHostWorkspaceControls`, which
- * lets its host picker call `selectById` - a window-global host rebind. A
- * chat fork dialog is tab-bound (its `createChat` call always targets the
- * TAB's host via `useTabHostId()`/`useTabHostClient()`), so picking a
- * "different" host from a fork dialog must never move the tab, or any other
- * tab, onto that host. The fix passes
- * `buildFixedHostWorkspaceControlsScope({ hostId: tabHostId, hostClient:
- * tabHostClient })` instead, matching `terminal-agent-fork-dialog.tsx` and
- * `new-conversation-modal.tsx`'s tab-bound pickers.
- *
- * `host-workspace-selector.tsx`'s `handleSelectHost` only ever reaches
- * `binding.directory.selectById` when `hostScope.kind !== "fixed"` - so
- * proving the dialog always hands the picker a `"fixed"` scope, pinned to the
- * tab's own host and host client, is a complete proof that this dialog's
- * picker can never fire that global rebind.
- */
+/** A chat fork dialog is tab-bound (its `createChat` call always targets the TAB's host via `useTabHostId()`/`useTabHostClient()`), so picking a "different" host from a fork dialog must never move the tab, or any other tab, onto that host. `host-workspace-selector.tsx`'s `handleSelectHost` only ever reaches `binding.directory.selectById` when `hostScope.kind !== "fixed"` - so proving the dialog always hands the picker a `"fixed"` scope, pinned to the tab's own host and host client, is a complete proof that this dialog's picker can never fire that global rebind. */
 
 const dialogMocks = vi.hoisted(() => ({
   createMutate: vi.fn(),
@@ -37,9 +20,8 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutate: dialogMocks.createMutate,
     isPending: false,
   }),
-  // #1227 creates on the SELECTED host's client. Full UseMutationResult
-  // surface: a partial stub fails every case at once on a member the test
-  // never mentions (see chat-tile.test.tsx's identical note).
+  // 1227 creates on the SELECTED host's client.
+  // Full UseMutationResult surface: a partial stub fails every case at once on a member the test never mentions (see chat-tile.test.tsx's identical note).
   useEpicCreateChatForHostClient: () => ({
     mutate: dialogMocks.createMutate,
     isPending: false,
@@ -88,9 +70,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
-// #1227's dialog resolves the picked target's own requester and reads the
-// cloud-owner row through the app-wide client; neither seam matters to the
-// scope-routing claims this suite makes.
+// 1227's dialog resolves the picked target's own requester and reads the cloud-owner row through the app-wide client; neither seam matters to the scope-routing claims this suite makes.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -161,9 +141,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
-// The regression's exact surface: capture the `hostScope` prop the dialog
-// actually hands its host/workspace picker instead of stubbing it away, so
-// the assertions below see what the dialog passed, not a decoy.
+// The regression's exact surface: capture the `hostScope` prop the dialog actually hands its host/workspace picker instead of stubbing it away, so the assertions below see what the dialog passed, not a decoy.
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
@@ -249,16 +227,14 @@ describe("<ChatForkDialog /> host/workspace picker scope", () => {
       />,
     );
 
-    // #1227 made the scope dialog-local (`selected`): the picker owns its
-    // target and the DEFAULT is the tab's own host. The protected property is
-    // unchanged - the dialog never hands the picker the app-wide scope.
+    // 1227 made the scope dialog-local (`selected`): the picker owns its target and the DEFAULT is the tab's own host.
+    // The protected property is unchanged - the dialog never hands the picker the app-wide scope.
     expect(dialogMocks.capturedHostScope).toMatchObject({
       kind: "selected",
       hostId: TAB_HOST_ID,
     });
-    // The regressed shape - `{ kind: "active" }` - is what let the picker
-    // call `selectById` and rebind the app-wide active host. Guard against a
-    // partial revert as much as against the original bug.
+    // The regressed shape - `{ kind: "active" }` - is what let the picker call `selectById` and rebind the app-wide active host.
+    // Guard against a partial revert as much as against the original bug.
     expect(dialogMocks.capturedHostScope?.kind).not.toBe("active");
   });
 

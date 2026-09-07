@@ -15,10 +15,8 @@ import {
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * PiP against the REAL module-scoped registry - the point of the ticket is
- * that PiP is a second consumer of the tile's entry, so a fake registry would
- * assert nothing. Only the peer connection is stood in (jsdom has no
- * `RTCPeerConnection`), through the registry's own `createPeer` seam.
+ * PiP against the REAL module-scoped registry - the point of the ticket is that PiP is a second consumer of the tile's entry, so a fake registry would assert nothing.
+ * Only the peer connection is stood in (jsdom has no `RTCPeerConnection`), through the registry's own `createPeer` seam.
  */
 const peers: Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }> =
   [];
@@ -74,10 +72,8 @@ interface TileHandle {
 }
 
 /**
- * The tile's acquire. It has to happen before PiP's in every case here: the
- * record keeps the FIRST acquirer's peer factory, and PiP hands over the real
- * `createBrowserMediaPeer` (identical to the tile's in production, but jsdom
- * has no `RTCPeerConnection` to build).
+ * The tile's acquire.
+ * It has to happen before PiP's in every case here: the record keeps the FIRST acquirer's peer factory, and PiP hands over the real `createBrowserMediaPeer` (identical to the tile's in production, but jsdom has no `RTCPeerConnection` to build).
  */
 function tileAcquire(key: {
   readonly hostId: string;
@@ -170,9 +166,8 @@ describe("PiP shared video stream", () => {
   });
 
   it("keeps its JPEG path when no stream exists", () => {
-    // No tile ever negotiated for this key, so the registry record PiP creates
-    // is idle. Nothing here builds a peer - `createBrowserMediaPeer` would
-    // throw in jsdom if the passive attacher ever called `acceptOffer`.
+    // No tile ever negotiated for this key, so the registry record PiP creates is idle.
+    // Nothing here builds a peer - `createBrowserMediaPeer` would throw in jsdom if the passive attacher ever called `acceptOffer`.
     render(<PipProbe hostId="host-c" sessionId="session-c" tabId="tab-c" />);
 
     expect(probeStreamId()).toBe("");
@@ -180,11 +175,8 @@ describe("PiP shared video stream", () => {
   });
 
   it("never paints the previous tab's track for one render after a tab switch", async () => {
-    // M12: React reads the snapshot during a render whose key has already
-    // changed but whose subscription effect has not re-run yet, so `entryRef`
-    // still holds the OUTGOING tab's entry. Mutation: dropping the
-    // `held.key !== key` guard in `readStream` - the committed DOM still ends
-    // up empty, so only the per-render trace catches the wrong tab's pixels.
+    // M12: React reads the snapshot during a render whose key has already changed but whose subscription effect has not re-run yet, so `entryRef` still holds the OUTGOING tab's entry.
+    // Mutation: dropping the `held.key !== key` guard in `readStream` - the committed DOM still ends up empty, so only the per-render trace catches the wrong tab's pixels.
     const live = { hostId: "host-e", sessionId: "session-e", tabId: "tab-e" };
     const idle = { hostId: "host-e", sessionId: "session-e", tabId: "tab-f" };
     const tile = await tileWithLiveTrack({ key: live, streamId: "track-e" });
@@ -213,12 +205,8 @@ describe("PiP shared video stream", () => {
     const view = render(<PipProbe {...key} />);
     expect(probeStreamId()).toBe("track-d");
 
-    // Tile closed, PiP remains: the refcount keeps the entry (and its peer
-    // connection object) alive past the grace window, and nobody negotiates a
-    // new round on it. In production the HOST then closes the capture helper
-    // that has no non-idle viewer left, the track ends, and the registry's own
-    // failure path drops PiP back to JPEG (asserted below) with no gap, since
-    // PiP's own JPEG pump was never capture-disabled.
+    // Tile closed, PiP remains: the refcount keeps the entry (and its peer connection object) alive past the grace window, and nobody negotiates a new round on it.
+    // In production the HOST then closes the capture helper that has no non-idle viewer left, the track ends, and the registry's own failure path drops PiP back to JPEG (asserted below) with no gap, since PiP's own JPEG pump was never capture-disabled.
     act(() => {
       tile.release();
       vi.advanceTimersByTime(5_000);

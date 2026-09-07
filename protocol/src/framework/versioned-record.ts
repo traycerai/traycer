@@ -41,21 +41,7 @@ export type {
   VersionedRecordRegistry,
 } from "./versioned-record-types";
 
-/**
- * Public authoring and traversal helpers for versioned record registries.
- *
- * Typical flow:
- * 1. Define contracts with `defineRecordContract()`.
- * 2. Define transforms with `defineRecordUpgradePath()` and
- *    `defineRecordDowngradePath()`.
- * 3. Build static registries with `defineVersionedRecordRegistry()`, or
- *    validate dynamic registries with `validateVersionedRecordRegistry()`.
- * 4. Use traversal helpers only with validated registries.
- *
- * The shape mirrors `versioned-rpc.ts`, but every contract carries a single
- * `schema` instead of a request/response pair - persistence records live on
- * disk on their own, not as two halves of a call.
- */
+/** Public authoring and traversal helpers for versioned record registries. */
 
 export function defineRecordContract<
   const Name extends string,
@@ -100,16 +86,8 @@ export function defineVersionedRecordRegistry(
 }
 
 /**
- * Promotes a raw registry to the validated brand after checking every
- * invariant the framework cares about in a single pass. Mirrors
- * `validateVersionedRpcRegistry()`:
- *
- * 1. Structural: `latestMinor` points at the highest installed minor; contracts
- *    match their slots; non-initial versions define an upgrade from the
- *    previous installed version; direct downgrades originate at a latest and
- *    target an older latest.
- * 2. Zod-schema: minors within a major line are purely additive; major bumps
- *    must carry at least one breaking change on the latest minor of each side.
+ * Promotes a raw registry to the validated brand after checking every invariant the framework cares about in a single pass.
+ * Zod-schema: minors within a major line are purely additive; major bumps must carry at least one breaking change on the latest minor of each side.
  */
 export function validateVersionedRecordRegistry<
   Registry extends UncheckedVersionedRecordRegistry,
@@ -262,10 +240,7 @@ function assertSchemaCompatibility(
         const previous = schemas[name][major][previousMinor];
         const current = schemas[name][major][currentMinor];
 
-        // Persisted readers can outlive or roll back behind writers. Growing a
-        // closed enum/union within a major therefore breaks a shipped reader
-        // just like removing a field does; require a major with explicit
-        // migration/downgrade behavior.
+        // Persisted readers can outlive or roll back behind writers.
         const violation = findAdditivityViolation(
           previous,
           current,
@@ -324,11 +299,6 @@ function assertSchemaCompatibility(
 }
 
 // ---- Zod-aware registry helpers ---------------------------------------- //
-//
-// Fingerprint types and structural-diff helpers live in the shared
-// `json-schema-fingerprint` module so the versioned-record and
-// versioned-rpc frameworks can't drift on what counts as a breaking
-// change.
 
 export type {
   AnyOfJsonSchema,
@@ -353,11 +323,7 @@ export type RegistryJsonSchemas = Readonly<
   >
 >;
 
-/**
- * Converts every installed contract's schema to a normalized fingerprint.
- * Throws when a schema is neither an object, an enum/literal-union, an
- * array, nor a generic `anyOf`.
- */
+/** Converts every installed contract's schema to a normalized fingerprint. */
 export function toRecordJsonSchemas(
   registry: UncheckedVersionedRecordRegistry,
 ): RegistryJsonSchemas {
@@ -404,13 +370,6 @@ type LatestMajorContract<
     : never
   : never;
 
-/**
- * Returns the latest installed contract for the entire record registry
- * when `major` is `undefined`, or for a specific major line when a
- * literal major key is supplied. The `major` argument is required at
- * every call site so "give me the latest installed major" is always an
- * explicit choice rather than a forgotten default.
- */
 export function getLatestRecordContract<Registry extends RecordVersionRegistry>(
   registry: Registry,
   major: undefined,
@@ -433,51 +392,23 @@ export function getLatestRecordContract<
   return line.versions[line.latestMinor].contract;
 }
 
-/**
- * Type-level alias for the runtime value of a record at the latest
- * installed version. Use this at consumer call sites instead of
- * defining plain TS shapes that could drift from the schema:
- *
- *     type Epic = RecordValue<typeof persistenceRecordRegistry, "epic">;
- */
+/** Type-level alias for the runtime value of a record at the latest installed version. */
 export type RecordValue<
   Registry extends VersionedRecordRegistry,
   Name extends keyof Registry & string,
 > = ValueOf<LatestRecordContract<Registry[Name]>>;
 
-/**
- * Sentinel for "I don't pin to a historical version - give me the
- * record's latest installed shape". Required at every
- * `getRecordSchema(...)` call site so picking the latest is always an
- * explicit choice rather than a forgotten default.
- */
+/** Sentinel for "I don't pin to a historical version - give me the record's latest installed shape". */
 export type LatestVersion = "latest";
 
 /**
- * Version selector accepted by `getRecordSchema(...)` and
- * `loadRecord(...)`: either the literal `"latest"` or an explicit
- * `SchemaVersion`.
+ * Version selector accepted by `getRecordSchema(...)` and `loadRecord(...)`: either the literal `"latest"` or an explicit `SchemaVersion`.
  */
 export type VersionSelector = LatestVersion | SchemaVersion;
 
 /**
  * Returns the schema for `name` at the requested version.
- *
- * The approved entry point for code outside the owning registry that
- * needs a record schema at runtime - the privacy boundary forbids
- * importing raw schema modules directly.
- *
- * `version` is required: pass `"latest"` to bind to the record's
- * latest installed shape, or a `SchemaVersion` to pin to a specific
- * installed version. The required argument is intentional - it makes
- * "I want the latest" an explicit choice rather than a forgotten
- * default that silently breaks when a new minor lands.
- *
- * When a specific `version` is supplied and that version is not
- * installed, this throws; consumers carrying data of an older version
- * should use `loadRecord(...)` (parse + migrate to latest) or compose
- * `getRecordSchema(...)` with `upgradeRecordToVersion` /
- * `downgradeRecordAcrossMajors` themselves.
+ * The required argument is intentional - it makes "I want the latest" an explicit choice rather than a forgotten default that silently breaks when a new minor lands.
  */
 export function getRecordSchema<
   Registry extends VersionedRecordRegistry,
@@ -509,14 +440,7 @@ export function getRecordSchema<
     .schema;
 }
 
-/**
- * Parses `data` against the latest installed schema for `name`. One-step
- * convenience over `getRecordSchema(registry, name, "latest").parse(...)`.
- *
- * For data persisted at an older known version, use `loadRecord(...)`
- * which parses against the historical schema and then runs the
- * registry's upgrade chain forward to the latest version.
- */
+/** Parses `data` against the latest installed schema for `name`. */
 export function parseRecord<
   Registry extends VersionedRecordRegistry,
   Name extends keyof Registry & string,
@@ -525,21 +449,6 @@ export function parseRecord<
   return schema.parse(data) as RecordValue<Registry, Name>;
 }
 
-/**
- * Parses `data` (assumed to be at `fromVersion`) against the
- * historical schema, then migrates the parsed value forward to the
- * latest installed version through the registry's upgrade chain.
- *
- * Throws when:
- * - `fromVersion` is not an installed version of `name`
- * - any required upgrade step is missing - see
- *   `upgradeRecordToVersion`'s preconditions
- *
- * For backward migration (when `fromVersion` is on a newer major than
- * the caller can handle), use
- * `downgradeRecordAcrossMajors(registry, fromMajor, toMajor, ...)`
- * directly: this helper only walks the installed-minor chain forward.
- */
 export function loadRecord<
   Registry extends VersionedRecordRegistry,
   Name extends keyof Registry & string,
@@ -638,10 +547,7 @@ export function downgradeRecordAcrossMajors<
   record: ValueOf<LatestMajorContract<Registry, FromMajor>>,
 ): DowngradeResult<ValueOf<LatestMajorContract<Registry, ToMajor>>> {
   if (Number(fromMajor) === Number(toMajor)) {
-    // Re-parse against the target major's record schema so the
-    // narrowing happens at runtime instead of through a chained type
-    // assertion. With `fromMajor === toMajor` the schemas resolve to
-    // the same instance, so parse is an effective identity check.
+    // Re-parse against the target major's record schema so the narrowing happens at runtime instead of through a chained type assertion.
     const targetLine = getMajorLine(registry, toMajor);
     const targetContract = targetLine.versions[targetLine.latestMinor].contract;
     type ToValue = ValueOf<LatestMajorContract<Registry, ToMajor>>;

@@ -28,9 +28,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
     onSelect,
   } = props;
 
-  // Search is scoped to the active harness, so rows render identically whether
-  // browsing or searching: the `browseLabel` (which drops the OpenCode upstream
-  // prefix now carried by the group header) and no redundant harness context.
+  // Search is scoped to the active harness, so rows render identically whether browsing or searching.
   const capacityLabel =
     showCapacity && row.capacityLabel !== null ? row.capacityLabel : null;
   // Same "has a notice" predicate TooltipWrapper uses (null or empty string is
@@ -44,9 +42,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
   );
 
   return (
-    // Anchored to the row button so capability/deprecation details are reachable
-    // by hover and keyboard focus. Radix merges the tooltip handlers with the
-    // button via `asChild`; `label={null}` is a transparent pass-through.
+    // Anchored to the row button so capability/deprecation details are reachable by hover and keyboard focus.
     <TooltipWrapper
       label={tooltipLabel}
       side="top"
@@ -65,8 +61,6 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
           // Hover/keyboard active: subtle, transient feedback.
           active && "bg-accent/30",
           // Selected: the prominent persistent state (matches the primary Check).
-          // Listed last so tailwind-merge lets it win when you hover the selected
-          // row - the selection stays loud, hover just adds nothing extra.
           selected && "bg-accent/70",
         )}
         onMouseEnter={() => {

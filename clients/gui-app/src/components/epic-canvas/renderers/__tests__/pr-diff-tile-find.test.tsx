@@ -284,15 +284,8 @@ function tileTree(args: {
   );
 }
 
-// Awaits the mocked Virtuoso mounting before returning: the summary fetch
-// resolves asynchronously, and `PrLocalDiffFilesView` (and with it, the real
-// bundle-find adapter registration) does not exist in the tree until that
-// resolves. Touching the tile-find store beforehand only ever reaches the
-// scope's default "unavailable" adapter — see `TileFindScope`'s registration
-// effect — and a `waitFor` retry loop built on that never converges: each
-// retry mutates the DOM, which re-wakes the loop before the pending summary
-// promise's microtask ever gets a turn, so it spins until the surrounding
-// test's own timeout kills it rather than `waitFor`'s much shorter one.
+// Awaits the mocked Virtuoso mounting before returning: the summary fetch resolves asynchronously, and `PrLocalDiffFilesView` (and with it, the real bundle-find adapter registration) does not exist in the tree until that resolves.
+// Touching the tile-find store beforehand only ever reaches the scope's default "unavailable" adapter - see `TileFindScope`'s registration effect - and a `waitFor` retry loop built on that never converges: each retry mutates the DOM, which re-wakes the loop before the pending summary promise's microtask ever gets a turn, so it spins until the surrounding test's own timeout kills it rather than `waitFor`'s much shorter one.
 async function renderTile(args: {
   readonly queryClient: QueryClient;
   readonly collapsedFileKeys: readonly string[] | null;
@@ -322,17 +315,8 @@ async function renderTile(args: {
   return { view, node, tabId };
 }
 
-// A single, non-retrying search. Deliberately NOT a `waitFor(() => { search();
-// expect(...) })` retry loop: every `search()` call publishes a new snapshot
-// to the tile-find store's subscribers, which re-renders `TileFindBar` and
-// mutates the DOM. Wrapping that in `waitFor` lets its own MutationObserver
-// re-invoke the callback before the real async work this test is waiting on
-// (a summary or per-file fetch settling) ever gets a turn on the microtask
-// queue - the retries never stop timing out, they just spin as fast as the
-// JS engine allows, hard enough that even the surrounding test's own timeout
-// can starve. Callers instead await a concrete DOM signal that the async
-// work is done (`screen.findBy*`, which never touches the store) and then
-// call `search` exactly once.
+// Wrapping that in `waitFor` lets its own MutationObserver re-invoke the callback before the real async work this test is waiting on (a summary or per-file fetch settling) ever gets a turn on the microtask queue - the retries never stop timing out, they just spin as fast as the JS engine allows, hard enough that even the surrounding test's own timeout can starve.
+// Callers instead await a concrete DOM signal that the async work is done (`screen.findBy*`, which never touches the store) and then call `search` exactly once.
 function search(instanceId: string, query: string): void {
   act(() => {
     const store = useTileFindStore.getState();
@@ -365,10 +349,7 @@ describe("<PrDiffTile /> bundle find", () => {
     tabHostClient.getActiveHostId.mockReturnValue("host-1");
     tabHostClient.getRequestContextUserId.mockReturnValue("user-1");
     detailSubscription.current = populatedSubscription();
-    // jsdom has no `Element.prototype.scrollTo` - a revealed FILE-level (metadata)
-    // match with no paintable line element falls back to it (see
-    // `revealDiffFindMatches`), which is exactly what a collapsed file's
-    // metadata-only match hits.
+    // jsdom has no `Element.prototype.scrollTo` - a revealed FILE-level (metadata) match with no paintable line element falls back to it (see `revealDiffFindMatches`), which is exactly what a collapsed file's metadata-only match hits.
     originalElementScrollTo = Object.getOwnPropertyDescriptor(
       Element.prototype,
       "scrollTo",
@@ -536,9 +517,7 @@ describe("<PrDiffTile /> bundle find", () => {
     });
     await screen.findByTestId("diff-content");
 
-    // A query that matches both files' metadata (both live under `src/`)
-    // still counts the byte-keyed file as "collapsed" - the reveal below,
-    // which targets it specifically, is what expands it.
+    // A query that matches both files' metadata (both live under `src/`) still counts the byte-keyed file as "collapsed" - the reveal below, which targets it specifically, is what expands it.
     search(node.instanceId, "src");
     expect(tileSnapshot(node.instanceId).coverageMessage ?? "").toMatch(
       /1 collapsed file/u,
@@ -657,22 +636,13 @@ describe("<PrDiffTile /> bundle find", () => {
       status: "ready",
       total: 1,
     });
-    // Close the find session before collapsing: the adapter's `reveal` keeps
-    // the active match's file expanded (see `useBundleDiffFindNavigation`'s
-    // `reveal` - `if (collapsedFileIds.has(fileId)) expandFile(fileId)`), and
-    // that reveal replays whenever the renderer identity changes, which a
-    // `collapsedFileKeys` toggle causes. Leaving the session open would have
-    // the tile silently re-expand the file out from under the toggle below.
+    // Close the find session before collapsing: the adapter's `reveal` keeps the active match's file expanded (see `useBundleDiffFindNavigation`'s `reveal` - `if (collapsedFileIds.has(fileId)) expandFile(fileId)`), and that reveal replays whenever the renderer identity changes, which a `collapsedFileKeys` toggle causes.
+    // Leaving the session open would have the tile silently re-expand the file out from under the toggle below.
     act(() => {
       useTileFindStore.getState().close(node.instanceId);
     });
 
-    // Collapse: the load approval is held at the files-view level (keyed by
-    // comparison + path), not on the row, so it must survive the row
-    // unmounting - collapse then expand exercises exactly that. `PrDiffTile`
-    // reads `node.view` from its prop, not reactively from the store, so
-    // each toggle is followed by a rerender with the store's current node
-    // (mirroring `pr-diff-tile.test.tsx`'s `tileOnTab` + rerender pattern).
+    // Collapse: the load approval is held at the files-view level (keyed by comparison + path), not on the row, so it must survive the row unmounting - collapse then expand exercises exactly that.
     act(() => {
       useEpicCanvasStore
         .getState()
@@ -706,12 +676,7 @@ describe("<PrDiffTile /> bundle find", () => {
   });
 
   it("drops a retained truncated patch from find when 'Load Full' fails", async () => {
-    // A retained loaded patch outranks any coverage state in the coverage
-    // counts, and the session keeps it past the section's unmount on purpose.
-    // So when the "Load Full" re-ask (a NEW query key: byteBudget null) fails,
-    // the section must unregister the truncated bytes it no longer renders -
-    // otherwise find keeps matching text that is not in the DOM and reports
-    // the file as truncated instead of failed.
+    // So when the "Load Full" re-ask (a NEW query key: byteBudget null) fails, the section must unregister the truncated bytes it no longer renders - otherwise find keeps matching text that is not in the DOM and reports the file as truncated instead of failed.
     const TRUNCATED_TOKEN = "TruncatedToken";
     const files = [summaryFile({ path: "src/cut.ts" })];
     tabHostClient.request.mockImplementation(
@@ -756,11 +721,8 @@ describe("<PrDiffTile /> bundle find", () => {
   });
 
   it("drops a retained truncated patch from find while 'Load Full' is still pending", async () => {
-    // Past "Load Full" the section will never render the truncated bytes
-    // again (the approval only moves forward), so they are dead for find
-    // from the moment the new query key is pending - not only once it fails.
-    // The tail token appears ONLY in the full patch, so the counts tell the
-    // three phases apart: 1 (truncated shown) → 0 (skeleton) → 2 (full).
+    // Past "Load Full" the section will never render the truncated bytes again (the approval only moves forward), so they are dead for find from the moment the new query key is pending - not only once it fails.
+    // The tail token appears ONLY in the full patch, so the counts tell the three phases apart: 1 (truncated shown) → 0 (skeleton) → 2 (full).
     const TRUNCATED_TOKEN = "SharedToken";
     const TAIL_TOKEN = "TailOnlyToken";
     const files = [summaryFile({ path: "src/slow.ts" })];

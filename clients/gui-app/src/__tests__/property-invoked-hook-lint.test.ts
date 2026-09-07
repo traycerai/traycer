@@ -6,27 +6,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * `handle.store(selector)` - a zustand bound-store hook reached through a
- * property name - is not recognizable as a hook to the React Compiler
- * (`vitest.react-compiler.config.ts`, `@rolldown/plugin-babel` +
- * `reactCompilerPreset()` in the desktop renderer's real build). The
- * compiler memoizes the call on the receiver and, on a later render with the
- * same receiver, skips it entirely instead of re-invoking the real hook -
- * silently going stale, or shifting the hook order. `use-epic-node-mutations.ts`
- * reintroduced this after it had already been fixed and documented twice
- * (`use-terminal-crash-notification.ts`, `chat-progress-icon.tsx`). The fix
- * is always `useStore(handle.store, selector)` from `zustand` - a plain
- * identifier call the compiler DOES recognize as a hook.
- *
- * Scope: every production file under `src/`, not just `.tsx` - the defect
- * lived entirely in a `.ts` hooks file with no JSX in it.
+ * Ban `handle.store(selector)`: the React Compiler does not treat a property-invoked hook as a hook. Use `useStore(handle.store, selector)`.
  */
 const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/**
- * A member call on a `store`/`Store`-suffixed property, given a selector
- * argument (an inline arrow, or a `use...` reference passed through).
- */
+/** A member call on a `store`/`Store`-suffixed property, given a selector argument (an inline arrow, or a `use...` reference passed through). */
 const PROPERTY_INVOKED_HOOK = /\.\w*[sS]tore\(\s*(\(|use[A-Z])/;
 
 /** Per-line waiver, same line as the offending call. */

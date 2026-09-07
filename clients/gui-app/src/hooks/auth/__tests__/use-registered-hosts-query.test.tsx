@@ -118,10 +118,7 @@ describe("useRegisteredHosts", () => {
 
     await waitFor(() => expect(result.current.data).toEqual(userAHosts));
 
-    // Switch to a different signed-in account. The bearer/era rotate to
-    // user-b, and the registry fetch for user-b never resolves — the only
-    // way `data` could show a host list is if the (unkeyed) cache entry from
-    // user-a leaked through.
+    // The bearer/era rotate to user-b, and the registry fetch for user-b never resolves - the only way `data` could show a host list is if the (unkeyed) cache entry from user-a leaked through.
     useAuthStore.setState({
       status: "signed-in",
       profile: userBProfile,
@@ -164,7 +161,7 @@ describe("useRegisteredHosts", () => {
 
     await waitFor(() => expect(result.current.data).toEqual(userAHosts));
 
-    // Bearer is still user-a's, but the registry 401s the refresh — modeled
+    // Bearer is still user-a's, but the registry 401s the refresh - modeled
     // by AuthService's unauthorized -> null contract.
     fetchRegisteredHosts.mockResolvedValue(null);
 

@@ -1,18 +1,6 @@
 /**
- * The office's floor, drawn once and blitted thereafter.
- *
- * A floor is one sprite per TILE. On a large office that is thousands of
- * `drawImage` calls per frame, each one preceded by a cache lookup, to produce
- * an image identical to the one already on screen - and it is the single
- * largest thing the renderer was doing. The floor changes only when the LAYOUT
- * does, which is when the set of agents changes, so it is painted into an
- * offscreen canvas and copied under the camera transform instead.
- *
- * Kept in SPRITE space at 1x rather than at the camera's scale, so panning and
- * zooming never invalidate it. Smoothing is off on the way out, which is what
- * a per-sprite draw at the same transform would have done anyway.
- *
- * ONE per mounted office canvas, released on unmount.
+ * The floor changes only when the LAYOUT does, which is when the set of agents changes, so it is painted into an offscreen canvas and copied under the camera transform instead.
+ * Kept in SPRITE space at 1x rather than at the camera's scale, so panning and zooming never invalidate it.
  */
 import type {
   OfficeDrawable,
@@ -20,16 +8,8 @@ import type {
 } from "@/lib/comm-graph/office/office-types";
 
 /**
- * Whether a floor drawable is baked into the static layer.
- *
- * THE partition, used by both halves: the offscreen paints exactly the
- * drawables this admits, and the per-frame path draws exactly the ones it
- * does not. Sharing one predicate is what makes the two routes the same
- * floor - a label emitted onto the floor is drawn either way, rather than
- * appearing only when there is no offscreen surface to bake into.
- *
- * Only sprites qualify. Labels are drawn later in SCREEN space, clocks need
- * hands over them, and an envelope or a logo is not static by nature.
+ * Sharing one predicate is what makes the two routes the same floor - a label emitted onto the floor is drawn either way, rather than appearing only when there is no offscreen surface to bake into.
+ * Only sprites qualify.
  */
 export function officeBakesIntoStaticFloor(
   drawable: OfficeDrawable,
@@ -97,10 +77,7 @@ export class OfficeStaticLayer {
   private surface: OfficeStaticSurface | null = null;
   private key: OfficeStaticLayerKey | null = null;
   /**
-   * Set once the factory has answered `null` for a real size: a platform with
-   * no offscreen 2D context does not grow one between frames, so asking again
-   * at frame cadence would only allocate a canvas per frame to throw away.
-   * `release()` forgets it, in case the layer is reused somewhere it works.
+   * Set once the factory has answered `null` for a real size: a platform with no offscreen 2D context does not grow one between frames, so asking again at frame cadence would only allocate a canvas per frame to throw away.
    */
   private unsupported = false;
   /** Counts repaints, so a test can prove a frame did NOT cause one. */
@@ -116,9 +93,7 @@ export class OfficeStaticLayer {
 
   /**
    * The layer's canvas for this frame, repainting it only if `key` changed.
-   *
-   * `paint` receives a context in sprite space with the previous contents
-   * already cleared, and is called only when a repaint is actually needed.
+   * `paint` receives a context in sprite space with the previous contents already cleared, and is called only when a repaint is actually needed.
    */
   sync(
     key: OfficeStaticLayerKey,
@@ -134,9 +109,7 @@ export class OfficeStaticLayer {
     ) {
       return this.surface.canvas;
     }
-    // The surface is REUSED unless the floor's size changed: a theme flip or a
-    // re-layout at the same size repaints the pixels it already has rather
-    // than allocating a second bitmap to throw the first one away.
+    // The surface is REUSED unless the floor's size changed: a theme flip or a re-layout at the same size repaints the pixels it already has rather than allocating a second bitmap to throw the first one away.
     const sizeChanged =
       this.surface === null ||
       current === null ||

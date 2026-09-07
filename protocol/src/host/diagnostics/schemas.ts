@@ -28,8 +28,6 @@ export type DiagnosticsLogsListResponse = z.infer<
 >;
 
 // The host clamps this finite value to the desktop-established 1..500 range.
-// Keeping the request wider makes the server-side safety guarantee real rather
-// than relying on a conforming renderer.
 export const diagnosticsLogsTailRequestSchema = z.object({
   target: diagnosticsLogTargetSchema,
   tailLines: z.number().finite(),
@@ -46,17 +44,8 @@ const diagnosticsLogsTailAvailableResponseSchema = z.object({
   truncated: z.boolean(),
 });
 /**
- * CLI-only, and the narrow `target` literal is the point rather than an
- * oversight.
- *
- * The two targets fail differently. The CLI log is written by a separate
- * process that may never have run on this machine, so "there is no such file"
- * is a real answer about a real absence. The host log belongs to the process
- * answering this very call: it is running, so an unwritten file means "nothing
- * logged yet", which is an EMPTY tail, not an unavailable one. Widening this
- * to `diagnosticsLogTargetSchema` would let a host report its own logs
- * missing, and the panel would tell the user their connected host has no log
- * file while that host is talking to them.
+ * CLI-only, and the narrow `target` literal is the point rather than an oversight.
+ * The CLI log is written by a separate process that may never have run on this machine, so "there is no such file" is a real answer about a real absence.
  */
 const diagnosticsLogsTailUnavailableResponseSchema = z.object({
   status: z.literal("unavailable"),

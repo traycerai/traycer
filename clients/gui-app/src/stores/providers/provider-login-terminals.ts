@@ -6,30 +6,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
-/**
- * Which terminal sessions the HOST created for a provider sign-in.
- *
- * The tile ref records this too (`origin: "provider-login"`), but a tile is the
- * wrong place for it to LIVE: the sidebar, the command palette and a drag-drop
- * all mint fresh refs straight from `terminal.list`, which carries no origin,
- * so a sign-in terminal reopened from any of them becomes an ordinary tile that
- * believes it owns the session. When the host later loses the PTY that tile
- * dispatches `terminal.create` for the id and spawns a bare shell with none of
- * the provider's spawn env - a prompt that looks like the sign-in terminal and
- * cannot sign anyone in.
- *
- * Keyed by host + session because session ids are only unique within a host.
- *
- * Persisted, and deliberately so: the whole point is to answer the question
- * after the originating tile is gone, which includes after a renderer reload.
- * Bounded to {@link MAX_TRACKED_SESSIONS} most-recent entries - a sign-in
- * terminal is short-lived, ids are uuids so a stale entry can never be
- * re-matched, and an unbounded map in localStorage would grow forever.
- *
- * The durable home for this is a field on `terminal.list` itself, so the host
- * answers it for every client and every open path. That is a wire change with
- * a frozen-line bump; this store closes the same hole client-side until then.
- */
+/** Which terminal sessions the HOST created for a provider sign-in. */
 const MAX_TRACKED_SESSIONS = 32;
 
 const PROVIDER_LOGIN_TERMINALS_PERSIST_KEY = persistKey(
@@ -43,21 +20,8 @@ interface ProviderLoginTerminalsState {
   /** Most-recent-first, the eviction order for the bound above. */
   readonly recentKeys: ReadonlyArray<string>;
   /**
-   * Bumped on every change to the records, by whichever path made it - this
-   * window's own `record()` or a peer window's `storage` event.
-   *
-   * The reconciliation passes that CLASSIFY tabs read this store imperatively
-   * (`providerLoginTerminalProviderId` is a plain function, called from inside
-   * an effect keyed on host state), so nothing else would re-run them when
-   * provenance arrives. Without a wake, a session another window listed and
-   * adopted before its record arrived stays an ordinary tab - importable,
-   * recreatable as a bare shell - until some unrelated host event happens to
-   * re-run the pass. Every reconciliation key folds this in.
-   *
-   * Global rather than per host, deliberately: records change when a sign-in
-   * STARTS, which is rare, and a per-host counter would have to attribute a
-   * merged peer payload key by key. Not persisted - it is a fact about this
-   * window's memory, not about the records.
+   * Bumped on every change to the records, by whichever path made it - this window's own `record()`
+   * or a peer window's `storage` event.
    */
   readonly revision: number;
   readonly record: (args: {
@@ -87,23 +51,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * A persisted payload, validated entry by entry.
- *
- * Nothing here is trusted: this reads a value another process wrote, so a
- * malformed one must degrade to "no records" rather than reach the store. The
- * shape matters as much as the values - a persisted `providerBySessionKey:
- * null` merged in verbatim would make `providerLoginTerminalProviderId` index
- * `null` and THROW at the very moment it is asked whether a live session is a
- * sign-in. Session ids are uuids, so a dropped entry can never be re-matched
- * and costs nothing.
- */
+/** A persisted payload, validated entry by entry. */
 function sanitizeRecords(state: unknown): SharedProviderLoginRecords {
   if (!isRecord(state)) return NO_SHARED_RECORDS;
-  // Bounded and de-duplicated HERE, not only on the write path: this is what
-  // hydration merges in, and a current-version payload can carry any number of
-  // valid entries. The bound is the store's invariant, so every entry point
-  // holds it.
+  // Bounded and de-duplicated HERE, not only on the write path: this is what hydration merges in,
+  // and a current-version payload can carry any number of valid entries.
   const recentKeys = Array.isArray(state.recentKeys)
     ? [
         ...new Set(
@@ -219,18 +171,10 @@ export const useProviderLoginTerminalsStore =
         record: ({ hostId, sessionId, providerId }) =>
           set((state) => {
             // Merged against what is ON DISK, not just this window's memory.
-            // Persist writes the whole map, so two windows completing sign-ins
-            // before either sees the other's `storage` event would have the
-            // second write drop the first session - and the listener below
-            // then rehydrates from that already-overwritten value, so the lost
-            // origin never comes back. The consequence is not cosmetic: an
-            // unclassified live session is one a tile recreates as a bare
-            // shell.
             const shared = readSharedRecords();
             const key = sessionKey(hostId, sessionId);
-            // This window's own order first (it is the one that just acted),
-            // then the other window's, so the bound evicts the globally
-            // least-recently-seen rather than everything the peer knew.
+            // This window's own order first (it is the one that just acted), then the other window's, so the
+            // bound evicts the globally least-recently-seen rather than everything the peer knew.
             const recentKeys = [
               key,
               ...state.recentKeys.filter((entry) => entry !== key),
@@ -265,11 +209,8 @@ export const useProviderLoginTerminalsStore =
           providerBySessionKey: state.providerBySessionKey,
           recentKeys: state.recentKeys,
         }),
-        // The default merge is a shallow spread, so a persisted
-        // `providerBySessionKey: null` would REPLACE the map and the next read
-        // would throw on `null[key]`. Version-gating does not cover it - a
-        // malformed value can carry the current version - so the merge itself
-        // validates.
+        // The default merge is a shallow spread, so a persisted `providerBySessionKey: null` would REPLACE
+        // the map and the next read would throw on `null[key]`.
         merge: (persisted, current) => ({
           ...current,
           ...sanitizeRecords(persisted),
@@ -279,62 +220,14 @@ export const useProviderLoginTerminalsStore =
     ),
   );
 
-// Another window started a sign-in: follow it. Hydration alone is not enough
-// because the window that has to ANSWER this question is usually already open -
-// a second window lists the same host's independent sessions and would adopt
-// the sign-in session as an ordinary terminal, which is exactly the bare-shell
-// failure above. The `storage` event fires only in OTHER same-origin windows,
-// never the one that wrote, so this cannot loop with `record`.
-//
-// A peer's `localStorage.clear()` (`event.key === null`) is deliberately NOT
-// followed, which is where this departs from `feature-announcements-store`. A
-// session that was opened as a sign-in did not stop being one because storage
-// was wiped, and the two failure directions are not symmetric: a record kept
-// past its usefulness costs nothing (keys are host + uuid, bounded at 32, and
-// can never re-match), while a record dropped for a LIVE session is the
-// bare-shell recreation this store exists to prevent. The next `record()` in
-// this window writes the in-memory set back out, so the peer's wipe does not
-// even win the disk for long.
-//
-// This closes the window-to-window gap, not the general one: the durable answer
-// is still an origin field on `terminal.list`, which would also cover a client
-// that never saw the write at all.
+// Another window started a sign-in: follow it.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key !== PROVIDER_LOGIN_TERMINALS_PERSIST_KEY) return;
-    // MERGED from the event's own payload, not re-read from storage. Two
-    // windows can each read before either writes, so the value on disk may
-    // already have dropped one of the two records - rehydrating from it would
-    // adopt that loss, while the event still carries what the peer wrote. The
-    // union keeps every origin this window has ever been told about, which is
-    // what the classifier actually reads.
-    //
-    // A `removeItem` arrives with `newValue: null` and merges as "nothing
-    // new", for the same reason a `clear()` is ignored above.
+    // MERGED from the event's own payload, not re-read from storage.
     const current = useProviderLoginTerminalsStore.getState();
     const peer = parsePersistedPayload(event.newValue);
     const merged = mergeRecords(current, peer);
-    // `setState` goes through persist, which writes the WHOLE payload back to
-    // storage, and that write is a `storage` event in the peer - so every
-    // write here must be one the peer cannot answer with another. Two windows
-    // holding the same set in different orders (each put its own record
-    // first) would otherwise trade it forever: A's write fires B's event, B's
-    // merge keeps B's order and writes it, which fires A's event, and so on -
-    // every hop bumping `revision` and re-running each reconciliation keyed
-    // on it. The peer's ORDER is not something this window needs: the union
-    // is what the classifier reads, and the bound evicts by this window's own
-    // recency.
-    //
-    // So: learn what the peer has (and write the union), or, when there is
-    // nothing to learn but the peer wrote a strict SUBSET of it, republish
-    // the union without changing anything here. A subset on disk is a stale
-    // concurrent write, and a window opened later hydrates from disk - it
-    // would lack the omitted records and recreate their live sessions as
-    // bare shells. Strict subset rather than "differs": at the bound two
-    // windows can hold sets neither can absorb without evicting, and each
-    // republishing its own would be the same loop by another name. A learn
-    // strictly grows this window's set (bounded), and a republish is
-    // answered only by a learn or by silence, so the exchange terminates.
     if (!sameRecords(current, merged)) {
       useProviderLoginTerminalsStore.setState({
         ...merged,
@@ -361,9 +254,10 @@ export function recordProviderLoginTerminal(args: {
   useProviderLoginTerminalsStore.getState().record(args);
 }
 
-/** The provider this session was opened to sign in to, or `null` for an
- *  ordinary terminal. Read outside React - the ref builders that need it are
- *  plain functions. */
+/**
+ * The provider this session was opened to sign in to, or `null` for an ordinary terminal. Read
+ * outside React - the ref builders that need it are plain functions.
+ */
 export function providerLoginTerminalProviderId(
   hostId: string,
   sessionId: string,

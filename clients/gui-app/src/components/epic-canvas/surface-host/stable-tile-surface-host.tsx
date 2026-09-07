@@ -1,42 +1,6 @@
 /**
- * Ticket 21 slice 3: the fixed connected overlay plane itself.
- *
- * One flat host, keyed by `instanceId`, above every retained top-level
- * surface and below the app-wide `DndContext` (mounted inside
- * `TopLevelTabHost`, itself inside `RootDndProvider`). A member's record is
- * a stable, permanently connected DOM container; structural moves reassign
- * its rect/environment, never its React parent or DOM parent - see
- * `design/index.md`'s "Why the host must be above EpicSurface".
- *
- * `renderRecordBody` is the seam the design calls a "synthetic ready
- * slot/body seam": nothing in production supplies a real one yet (slice 4
- * routes chats through it), so `TopLevelTabHost` passes a no-op and only
- * the permanent jsdom lifecycle suite - and a future dev-desktop
- * synthetic-body check - ever supply a real renderer.
- *
- * Layer contract (`design/index.md` "Permanent surface plane and geometry",
- * design-review finding 9): the plane is `pointer-events:none` at the root
- * auto/zero stacking layer; each record is `pointer-events:auto`,
- * `overflow:hidden`, and gets NO positive z-index of its own, so pane
- * drag shields/drop previews and document portals (which DO carry positive
- * z-index) always paint above every record without depending on DOM order.
- *
- * Presentation contract (slice-3 review finding 1): the PLANE ROOT carries
- * no `aria-hidden` of its own - an aria-hidden ancestor hides every
- * descendant regardless of the descendant's own `aria-hidden` value, which
- * would erase every future visible hosted body from the accessibility tree.
- * Visibility is a per-RECORD concern only. A record that is not PRESENTED
- * (`isTileSurfacePresented`: its top level is hidden, or its pane has another
- * tab selected while it is merely retained) is `aria-hidden`, `inert`,
- * AND non-painted via `visibility:hidden` (Tailwind's `invisible`) rather
- * than `display:none`: `visibility:hidden` keeps the box's layout - and
- * this module's own geometry-coordinator-applied `transform`/`width`/
- * `height` - intact while hidden, so a later re-show needs no re-measure or
- * reflow; `display:none` would collapse the box out of layout entirely and
- * force one on re-show. The explicit focus-relinquishment protocol
- * (`runPresentationLossBlur`, design-review finding 5) is slice 4's
- * "presentation-loss blur" - `inert` alone does not reliably force a browser
- * to blur a focused descendant, so this module does not claim it does.
+ * A member's record is a stable, permanently connected DOM container; structural moves reassign its rect/environment, never its React parent or DOM parent - see `design/index.md`'s "Why the host must be above EpicSurface".
+ * Visibility is a per-RECORD concern only.
  */
 import {
   useCallback,
@@ -168,15 +132,8 @@ function TileSurfaceRecord(props: {
     if (element === null) return undefined;
     return registerTileSurfaceGeometrySlot(instanceId, slotElement, (rect) => {
       const hasUsableRect = isUsableTileSurfaceRect(rect);
-      // A hidden top-level tab's slot lives below a display:none ancestor and
-      // therefore reports 0x0 when any shared ResizeObserver target changes.
-      // Keep this record's last usable geometry while hidden so its still-
-      // mounted body cannot reflow at zero width and publish bogus item sizes.
-      // Visible records must still accept a real zero rect (for example when a
-      // pane is collapsed) so they do not leave an interactive stale overlay.
-      // A retained-but-deselected chat is the same case arriving from the
-      // pane instead of the header, hence the shared presented predicate
-      // rather than `topLevelVisible` alone.
+      // A hidden top-level tab's slot lives below a display:none ancestor and therefore reports 0x0 when any shared ResizeObserver target changes.
+      // Keep this record's last usable geometry while hidden so its still- mounted body cannot reflow at zero width and publish bogus item sizes.
       const currentlyVisible = isTileSurfacePresented(
         getTileSurfaceEnvironment(instanceId),
       );
@@ -184,17 +141,11 @@ function TileSurfaceRecord(props: {
       applyRectToElement(element, rect);
       if (currentlyVisible || hasUsableRect) setCanMountBody(true);
     });
-    // Re-register on a visibility transition. Registration synchronously
-    // delivers the current rect, which opens the sticky mount latch for a
-    // visible 0x0 birth without a separate set-state effect. Only records born
-    // hidden wait for usable geometry; once mounted, the body stays mounted.
+        // Re-register on a visibility transition.
+  // Registration synchronously delivers the current rect, which opens the sticky mount latch for a visible 0x0 birth without a separate set-state effect.
   }, [instanceId, slotElement, visible]);
 
-  // A hosted record going hidden is a physically distant sibling of
-  // `SurfacePresentationBoundary`'s own portal container, so that
-  // boundary's own presentation-loss blur (scoped to ITS container) never
-  // reaches a focused descendant here. Reuse the same protocol directly
-  // rather than reimplementing it - see design-review finding 5.
+  // A hosted record going hidden is a physically distant sibling of `SurfacePresentationBoundary`'s own portal container, so that boundary's own presentation-loss blur (scoped to ITS container) never reaches a focused descendant here.
   useEffect(() => {
     if (visible) return;
     const element = elementRef.current;
@@ -215,10 +166,7 @@ function TileSurfaceRecord(props: {
       inert={!visible}
       className={cn(
         "pointer-events-auto absolute left-0 top-0 overflow-hidden",
-        // `visibility: hidden` can leave independently composited descendant
-        // layers painted for several frames in Electron. Opacity makes the
-        // retained record an atomic invisible compositor group while keeping
-        // its last usable geometry available to the mounted body.
+        // `visibility: hidden` can leave independently composited descendant layers painted for several frames in Electron.
         !visible && "invisible opacity-0",
       )}
       data-testid={`stable-tile-surface-record-${instanceId}`}
@@ -232,14 +180,8 @@ function TileSurfaceRecord(props: {
         : {})}
     >
       {environment !== null && canMountBody ? (
-        // The boundary sits OUTSIDE Suspense so a throw from a lazily loaded
-        // body module is caught here too. Its reset key is the slot's anchor
-        // element - the one field that changes exactly when the record is
-        // re-hosted in a different slot (transfer) - and deliberately NOT the
-        // environment object: the slot republishes a fresh environment on
-        // every presentation change (tab select, pane focus), which would turn
-        // a deterministic crash into a fresh throw and Sentry capture per
-        // focus toggle. Same-slot recovery is the user's Retry.
+        // The boundary sits OUTSIDE Suspense so a throw from a lazily loaded body module is caught here too.
+        // Its reset key is the slot's anchor element - the one field that changes exactly when the record is re-hosted in a different slot (transfer) - and deliberately NOT the environment object: the slot republishes a fresh environment on every presentation change (tab select, pane focus), which would turn a deterministic crash into a fresh throw and Sentry capture per focus toggle.
         <HostedTileBodyBoundary
           instanceId={instanceId}
           resetKey={environment.services.geometryAnchorElement}

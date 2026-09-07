@@ -1,34 +1,6 @@
 /**
- * Proves that the three sidebar open/close flows fixed for the back/forward
- * navigation regression commit through the route-aware opener boundary
- * (`useEpicNestedFocusNavigation` -> `prepareOpen.../prepareClose...`)
- * instead of calling raw canvas store actions directly. See the decision
- * artifact "Nested Focus Opener Boundary".
- *
- * `useEpicNestedFocusNavigation` is mocked with a spy that still invokes the
- * `prepare` callback (mirrors `file-row-navigation.test.tsx`), so each
- * assertion checks both that the boundary was called AND that the
- * underlying prepare/close logic ran with the right arguments.
- *
- * Root-create and single-delete still route through a `prepare*FocusTarget`
- * store action per item - root-create through the tile-open seam
- * (`openTile` -> `resolveTileOpen` -> `executeTileOpen` ->
- * `prepareOpenTileInTabFocusTargetFromSource`, since the freshly-created
- * tile lands on a canvas with no pane to anchor into yet), single-delete
- * through `prepareCloseCanvasTabFocusTarget` - so the canvas store mock
- * deliberately omits raw `openTileInTab`: a regression back to calling it
- * directly throws instead of silently passing.
- *
- * Bulk delete batches every close into ONE boundary call instead of one per
- * item - closing each tab through its own `prepareCloseCanvasTabFocusTarget`
- * would let an intermediate iteration's fallback focus (itself also being
- * deleted) get pushed as a route entry. Its mock backs `closeCanvasTab` /
- * `canvasByTabId` with the REAL `closeTab` reducer and the REAL
- * `getCurrentNestedFocusTarget` reader (both unmocked production code), so
- * the assertions check an actual post-batch focus target rather than a
- * canned stand-in. Revert-proofing here comes from asserting `navigateNested`
- * fires exactly ONCE per batch (a per-item loop fires N times) with a target
- * that is a genuine survivor / the unchanged current focus.
+ * Proves that the three sidebar open/close flows fixed for the back/forward navigation regression commit through the route-aware opener boundary (`useEpicNestedFocusNavigation` -> `prepareOpen.../prepareClose...`) instead of calling raw canvas store actions directly.
+ * Root-create and single-delete still route through a `prepare*FocusTarget` store action per item - root-create through the tile-open seam (`openTile` -> `resolveTileOpen` -> `executeTileOpen` -> `prepareOpenTileInTabFocusTargetFromSource`, since the freshly-created tile lands on a canvas with no pane to anchor into yet), single-delete through `prepareCloseCanvasTabFocusTarget` - so the canvas store mock deliberately omits raw `openTileInTab`: a regression back to calling it directly throws instead of silently passing.
  */
 import {
   cleanup,
@@ -115,9 +87,7 @@ const testState = vi.hoisted<TestState>(() => ({
       prepare: () => NestedFocusTarget | null,
     ) => prepare(),
   ),
-  // The freshly-created root has no canvas yet (`canvasByTabId[TAB_ID]` is
-  // unseeded), so `resolveTileOpen` lands on the empty-canvas plan and the
-  // executor dispatches this one specifically - see the file header.
+  // The freshly-created root has no canvas yet (`canvasByTabId[TAB_ID]` is unseeded), so `resolveTileOpen` lands on the empty-canvas plan and the executor dispatches this one specifically - see the file header.
   prepareOpenTileInTabFocusTargetFromSource: vi.fn((): NestedFocusTarget => ({
     paneId: "pane-new",
     tileInstanceId: "instance-new",
@@ -155,13 +125,6 @@ const testState = vi.hoisted<TestState>(() => ({
   permissionRole: "owner",
 }));
 
-// The panel re-provides its own `StreamRuntimeContext` for the host its pin
-// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
-// to the ambient binding this suite supplies - the client every assertion here
-// is about. Which transport the pin resolves to is a different question, and
-// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
-// The hook returns the value to PROVIDE: the ambient binding while following
-// (this suite's), the pin's own once built, null while pending. Following here.
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
   const { use } = await import("react");
   const { StreamRuntimeContext } =
@@ -420,19 +383,15 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  // The chat write-routing gate reads the session through the
-  // NON-throwing accessor. `null` here is the honest double: this suite
-  // mounts no epic store, and no session means no epic write path to gate.
+  // The chat write-routing gate reads the session through the NON-throwing accessor.
+  // `null` here is the honest double: this suite mounts no epic store, and no session means no epic write path to gate.
   useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => ({
     epicId: "epic-1",
     store: {
       getState: () => ({
         deleteArtifact: testState.localDeleteArtifact,
-        // The unread marker computes its variant from BOTH stores, reading
-        // the tree non-reactively through this handle so a body-write stamp
-        // cannot re-render the row. That makes `tree` part of the state this
-        // double has to carry.
+        // The unread marker computes its variant from BOTH stores, reading the tree non-reactively through this handle so a body-write stamp cannot re-render the row.
         tree: testState.tree,
         renameArtifact: vi.fn(),
         chats: { byId: {} },
@@ -452,12 +411,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   }),
 }));
 
-// Deliberately omits raw `openTileInTab`: a regression back to calling it
-// directly instead of the `prepare*FocusTarget` boundary throws (`... is not
-// a function`) instead of silently passing. `closeCanvasTab` IS present here
-// (the bulk-delete boundary batches through it deliberately - see file
-// header), backed by the real `closeTab` reducer against `canvasByTabId` so
-// `getCurrentNestedFocusTarget` in production code computes a real result.
+// Deliberately omits raw `openTileInTab`: a regression back to calling it directly instead of the `prepare*FocusTarget` boundary throws (`... is not a function`) instead of silently passing.
 vi.mock("@/stores/epics/canvas/store", () => ({
   trackOpenedCanvasTile: testState.trackOpenedCanvasTile,
   findOpenArtifactInTab: (tabId: string, nodeId: string) => {
@@ -499,13 +453,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
         unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
       }),
     {
-      // `openTileWithNavigation` (the tile-open seam) reads this imperative
-      // form: `canvasByTabId` for the resolver, `tabsById[tabId].epicId` to
-      // decide whether to wrap the prepare in `navigateNested`, and the
-      // `prepare*FromSource` actions the executor dispatches into. Only the
-      // `*FromSource` boundary functions are exposed here - never a raw
-      // `openTileInTab` mutation - so a regression back to mutating the
-      // canvas directly throws instead of silently passing (see file header).
+      // Only the `*FromSource` boundary functions are exposed here - never a raw `openTileInTab` mutation - so a regression back to mutating the canvas directly throws instead of silently passing (see file header).
       getState: () => ({
         canvasByTabId: testState.canvasByTabId,
         tabsById: { [TAB_ID]: { epicId: EPIC_ID } },
@@ -588,9 +536,8 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicConnectionStatus: () => "open",
   useEpicNodeHostId: () => "host-1",
-  // Archive/delete bulk actions pair this array with selected ids. Chat tile
-  // teardown stays hook-owned; this suite's navigateNested assertions cover
-  // artifact closes only.
+  // Archive/delete bulk actions pair this array with selected ids.
+  // Chat tile teardown stays hook-owned; this suite's navigateNested assertions cover artifact closes only.
   useEpicNodeHostIds: (nodeIds: ReadonlyArray<string>) =>
     nodeIds.map(
       (nodeId) =>
@@ -611,12 +558,8 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: true,
-      // The tree index, because the row-level tree reads subscribe HERE now
-      // rather than through `useEpicTreeIndex`. A row that used to take the
-      // whole slice re-rendered on every record change; it now selects its own
-      // answer out of the store, so this fake has to carry what production
-      // reads. Same object the `epic-selectors` fake hands back, so the two
-      // mocks cannot disagree about the shape of the tree.
+      // The tree index, because the row-level tree reads subscribe HERE now rather than through `useEpicTreeIndex`.
+      // Same object the `epic-selectors` fake hands back, so the two mocks cannot disagree about the shape of the tree.
       tree: testState.tree,
       artifacts: {
         allIds: testState.records
@@ -669,12 +612,7 @@ vi.mock("@/stores/epics/artifact-read-state-store", () => ({
   useArtifactReadStateStore: useArtifactReadStateStoreMock,
 }));
 
-// `importOriginal` rather than a fixed replacement: `resolveTileOpen` (the
-// tile-open seam's placement resolver) imports the real, pure
-// `tilePlacementForCategory` / `DEFAULT_TILE_PLACEMENT_SETTINGS` straight from
-// this module, and `openTileWithNavigation` reads
-// `useSettingsStore.getState().tilePlacement` imperatively - a fixed factory
-// that dropped either would leave the resolver calling `undefined(...)`.
+// `importOriginal` rather than a fixed replacement: `resolveTileOpen` (the tile-open seam's placement resolver) imports the real, pure `tilePlacementForCategory` / `DEFAULT_TILE_PLACEMENT_SETTINGS` straight from this module, and `openTileWithNavigation` reads `useSettingsStore.getState().tilePlacement` imperatively - a fixed factory that dropped either would leave the resolver calling `undefined(...)`.
 vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/stores/settings/settings-store")>();
@@ -735,23 +673,12 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
     expect(testState.createArtifactMutate).toHaveBeenCalledWith(
       expect.objectContaining({ epicId: EPIC_ID, parentId: null }),
     );
-    // The boundary must be the thing that opens the freshly-created tile -
-    // asserting only on `prepareOpenTileInTabFocusTargetFromSource` would
-    // also pass a raw `openTileInTab(...)` call reached via some other path,
-    // so both the boundary call and the prepare call underneath it are
-    // checked.
+    // The boundary must be the thing that opens the freshly-created tile - asserting only on `prepareOpenTileInTabFocusTargetFromSource` would also pass a raw `openTileInTab(...)` call reached via some other path, so both the boundary call and the prepare call underneath it are checked.
     expect(testState.navigateNested).toHaveBeenCalledWith(
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
     );
-    // `TAB_ID` has no seeded canvas (`canvasByTabId[TAB_ID]` is unset), so
-    // `openTileWithNavigation` resolves against the empty canvas
-    // `createEmptyCanvas()` falls back to. `resolveTileOpen`'s
-    // `anchorPaneId` is `null` for a root-less canvas, so the plan is
-    // `open-in-pane` with `paneId: null` and the executor dispatches
-    // `prepareOpenTileInTabFocusTargetFromSource` (the empty-canvas opener),
-    // not the pane-targeted variant.
     expect(
       testState.prepareOpenTileInTabFocusTargetFromSource,
     ).toHaveBeenCalledWith(
@@ -823,20 +750,13 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       });
     });
 
-    // Exactly ONE route write for the whole batch - a per-item loop through
-    // `prepareCloseCanvasTabFocusTarget` would fire 3 times and let an
-    // intermediate iteration's fallback (itself also being deleted) leak
-    // into history.
     expect(testState.navigateNested).toHaveBeenCalledTimes(1);
     expect(testState.navigateNested).toHaveBeenCalledWith(
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
     );
-    // All 3 deleted tabs are gone; only the untouched 4th tile (D) survives,
-    // and the single prepared target - read from real post-batch canvas
-    // state via `getCurrentNestedFocusTarget`, not a per-item fallback -
-    // must point at that survivor, never at a deleted id.
+    // All 3 deleted tabs are gone; only the untouched 4th tile (D) survives, and the single prepared target - read from real post-batch canvas state via `getCurrentNestedFocusTarget`, not a per-item fallback - must point at that survivor, never at a deleted id.
     const finalCanvas = testState.canvasByTabId[TAB_ID];
     expect(finalCanvas.tilesByInstanceId["tab-a"]).toBeUndefined();
     expect(finalCanvas.tilesByInstanceId["tab-b"]).toBeUndefined();
@@ -876,11 +796,7 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
     });
 
     expect(testState.navigateNested).toHaveBeenCalledTimes(1);
-    // Neither closed tab was active, so the post-batch current focus equals
-    // what it already was - the boundary still fires once (closes did
-    // happen), and this unchanged target is what lets the real
-    // `navigateNestedFocus` duplicate-suppression turn it into a no-op
-    // route write; the sidebar code must not special-case this itself.
+    // Neither closed tab was active, so the post-batch current focus equals what it already was - the boundary still fires once (closes did happen), and this unchanged target is what lets the real `navigateNestedFocus` duplicate-suppression turn it into a no-op route write; the sidebar code must not special-case this itself.
     expect(testState.navigateNested.mock.results[0]?.value).toEqual({
       paneId: "pane-1",
       tileInstanceId: "tab-d",
@@ -938,9 +854,9 @@ interface CanvasTileFixture {
   readonly name: string;
 }
 
-/** Builds a real single-pane `EpicCanvasState` (all `tiles` in one pane) so
- * `closeTab` / `getCurrentNestedFocusTarget` (both real, unmocked production
- * code) compute genuine results against it. */
+/**
+ * Builds a real single-pane `EpicCanvasState` (all `tiles` in one pane) so `closeTab` / `getCurrentNestedFocusTarget` (both real, unmocked production code) compute genuine results against it.
+ */
 function buildCanvasWithTiles(
   tiles: ReadonlyArray<CanvasTileFixture>,
   activeInstanceId: string,

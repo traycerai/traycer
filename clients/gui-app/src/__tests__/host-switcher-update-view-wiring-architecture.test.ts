@@ -7,23 +7,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
- * The Q3 ruling (Ticket 06) is a WIRING decision, not a rendering one: fleet
- * update state lives in Settings, and every other host picker on the shared
- * `<HostSwitcher>` row passes `updateViewForHost: null` on purpose (see
- * `HostOptionRow`'s doc comment — "opt-in by data, not a flag"). Neither the
- * hook-level isolation test (`use-fleet-update-views.test.tsx`) nor the
- * row-level one (`host-option-row.test.tsx`) can see this: both exercise the
- * component directly with props they chose, so a NEW `<HostSwitcher>` call
- * site that wires a real resolver — the header rate-limit popover, say —
- * would sail through both and silently reverse the product decision. Only a
- * scan over every call site catches that, which is why this is a static
- * gate over the source and not a render test.
- *
- * The gate is a COUNT, not a list of the four known paths: enumerating them
- * would make a legitimate fifth `null` call site (a new picker surface) fail
- * this test for no reason. Exactly one call site may pass a non-null
- * resolver, and it must be the Settings sidebar — adding a second live
- * resolver anywhere is the leak this test exists to catch.
+ * Fleet update views are Settings-only. Exactly one `<HostSwitcher>` call site may pass a non-null `updateViewForHost`, and it must be the Settings sidebar.
  */
 
 const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,12 +50,7 @@ function findAttribute(
   );
 }
 
-/**
- * Every `<HostSwitcher .../>` or `<HostSwitcher>...</HostSwitcher>` element
- * in the tree, real JSX elements only — an AST walk rather than a text match
- * so `<HostSwitcherTrigger>` / `<HostSwitcherRow>` (both real, unrelated
- * components) can never be mistaken for a call site by prefix.
- */
+/** AST walk for HostSwitcher elements. Prefix match would also hit HostSwitcherTrigger / HostSwitcherRow. */
 function collectHostSwitcherCallSites(root: string): HostSwitcherCallSite[] {
   const sites: HostSwitcherCallSite[] = [];
   for (const file of collectTsxFiles(root)) {

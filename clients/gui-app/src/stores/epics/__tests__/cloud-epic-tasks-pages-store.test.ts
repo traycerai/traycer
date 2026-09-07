@@ -112,12 +112,8 @@ describe("useCloudEpicTasksPagesStore", () => {
     const userId = "user-a";
     const identity = `${hostId}|${userId}|recent`;
 
-    // `fetchNextPage` starting the FIRST "Show more" request for an identity
-    // that has never appended a page or been reset before: it must register
-    // the identity before capturing the generation it hands to the request,
-    // or a reset landing during this exact window has nothing to advance.
-    // This is the precise gap the review reproduced as
-    // `{"captured":0,"afterReset":0,"accepted":1}`.
+    // `fetchNextPage` starting the FIRST "Show more" request for an identity that has never appended a
+    // page or been reset before: it must register the identity before capturing the generation it
     registerCloudEpicTasksPageIdentity(identity);
     const capturedGeneration = cloudEpicTasksPageGeneration(identity);
     expect(capturedGeneration).toBe(0);
@@ -197,11 +193,6 @@ describe("useCloudEpicTasksPagesStore", () => {
 
     const scopedPage = pagesFor(scopedIdentity)?.[0];
     expect(scopedPage?.tasks.map((task) => task.pinned)).toEqual([true, true]);
-    // The page's non-task fields and the untouched scope keep their
-    // identities, and the patch action itself is generation-neutral -
-    // discarding the scope's tails after the pin commits is the mutation's
-    // success handler's job (via resetCloudEpicTasksPagesForScope), not
-    // this action's.
     expect(scopedPage?.nextCursor).toBe("next");
     expect(pagesFor(otherUserIdentity)).toBe(untouchedBefore);
     expect(cloudEpicTasksPageGeneration(scopedIdentity)).toBe(0);

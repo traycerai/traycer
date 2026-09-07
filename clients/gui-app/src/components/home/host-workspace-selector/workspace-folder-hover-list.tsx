@@ -6,17 +6,8 @@ import type { WorkspaceRunItem } from "./workspace-run-item";
 import { stagedFolderApplyHint, workspaceRunPath } from "./workspace-run-item";
 import { WorkspaceModeIcon } from "./workspace-mode-icon";
 
-/**
- * Hover preview of every linked folder: `repo · branch` over the full path.
- * The path is where the chat actually runs — the adopted worktree for worktree
- * mode, the folder for local — not the source folder.
- *
- * Renders on the shared hover-preview card surface (`HoverPreviewCard`), so its
- * tones are the card's own foreground/muted pair, matching the composer's
- * @mention preview panel. A HoverCard (not a Tooltip) holds this content, so
- * the per-folder copy-path button is safe here — there is no visually-hidden
- * accessible clone to duplicate it in the tab order.
- */
+/** The path is where the chat actually runs - the adopted worktree for worktree mode, the folder for local -
+ * not the source folder. */
 export function WorkspaceFolderHoverList(props: {
   readonly items: ReadonlyArray<WorkspaceRunItem>;
 }) {
@@ -27,10 +18,8 @@ export function WorkspaceFolderHoverList(props: {
         HOVER_PREVIEW_SCROLL_CLASS,
       )}
       data-testid="workspace-folder-hover-list"
-      // Chromium treats an actually-overflowing scroll container as a
-      // sequential (implicit) tab stop even though its React/DOM tabIndex is
-      // never set - jsdom does not model this. `tabIndex={-1}` removes it
-      // from the Tab order while pointer/wheel scrolling stays unaffected.
+      // Chromium treats an actually-overflowing scroll container as a sequential (implicit) tab stop even though its
+      // React/DOM tabIndex is never set - jsdom does not model this.
       tabIndex={-1}
     >
       {props.items.map((item) => {

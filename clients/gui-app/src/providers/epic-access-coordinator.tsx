@@ -23,43 +23,12 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 
-/**
- * App-level coordinator that force-closes an epic tab when the user loses
- * access to it, and redirects to the landing page when the closed tab was the
- * one being viewed. It is the single reactor to three "this epic is gone"
- * signals:
- *
- *  - **Revoke** - `permissionChanged(null)` → `accessLost` on the session.
- *  - **Delete** - a remote `epicDeleted` frame → `epicDeleted` on the session.
- *  - **Unavailable on open** - a `snapshotFetchError` with the `NOT_FOUND`
- *    protocol code (deleted/removed room discovered when the
- *    session reconnects or is opened offline). Because that signal cannot tell
- *    a delete apart from a revoke, it gets a neutral "no longer available"
- *    toast rather than asserting either cause.
- *
- * It generalizes the former `useCloseUnavailableEpicTab`: it observes EVERY
- * live session through the module-scoped session registry, not just the active
- * route, so a background tab whose epic is revoked/deleted closes live too.
- *
- * Behavior (see the revoke/delete decision log):
- *  - Active tab → `closeTabsForEpics` + redirect to the landing page + toast.
- *  - Background tab → silent close + toast, no navigation.
- *  - A role downgrade (editor/owner → viewer) is NOT a loss of access: the
- *    session keeps the tab open read-only and never raises these signals, so a
- *    downgrade never reaches this coordinator.
- *
- * Must be mounted INSIDE the router subtree - it calls `navigate`. Live
- * background close is guaranteed only for sessions resident in the registry's
- * MRU window; a session pruned out of that window has no live stream and is
- * caught by the same signals on its next open.
- */
+/** Force-close epic tabs on revoke, delete, or unavailable-on-open. Mount inside the router; observes every live registry session. A role downgrade is not a loss of access. Live background close is only for sessions still in the MRU window. */
 export function EpicAccessCoordinator() {
   const navigate = useNavigate();
   const queryClient = use(QueryClientContext);
-  // Track which epic (if any) the user is currently viewing, off the route -
-  // read at close time to decide whether to redirect. Kept in a ref so the
-  // long-lived subscriptions below see the latest value without re-running the
-  // effect on every navigation.
+  // Viewing epic in a ref so close-time redirect sees the latest without
+  // re-running subscriptions on every navigation.
   const activeEpicId = useRouterState({
     select: (state) => readActiveEpicIdFromPath(state.location.pathname),
   });
@@ -72,19 +41,11 @@ export function EpicAccessCoordinator() {
     const registry = getOpenEpicRegistry();
     const perHandleUnsub = new Map<string, () => void>();
     const handled = new Set<string>();
-    // Set by the effect's cleanup. `evaluate` defers its verdict to a
-    // microtask, so a signal that lands just before unmount can fire that
-    // microtask AFTER teardown - where acting would navigate/mutate stores
-    // from a dead coordinator, or park a grace timer in a map teardown has
-    // already swept. The replacement coordinator instance re-walks every open
-    // session on mount (`reconcile` + its dead-at-subscribe catch), so a
-    // bailed verdict is re-derived, never lost.
+    // evaluate is a microtask; bail after unmount. The replacement re-walks
+    // sessions on mount so a bailed verdict is re-derived.
     let disposed = false;
-    // Attempts already spent (and the pending timer, if any) of the
-    // created-this-session `unavailable` grace. Attempts are deliberately
-    // never reset on recovery: the budget exists to absorb ONE create's
-    // replication lag, and a session that later turns `unavailable` again
-    // with the budget spent gets the ordinary eject.
+    // Grace budget is never reset on recovery. A later unavailable with the
+    // budget spent gets the ordinary eject.
     const createGraceAttempts = new Map<string, number>();
     const createGraceTimers = new Map<string, number>();
     const clearCreateGraceTimer = (epicId: string): void => {
@@ -98,14 +59,8 @@ export function EpicAccessCoordinator() {
     // short-circuit instead of re-walking every open session.
     let lastResidentSignature: string | null = null;
 
-    // Toast + composer-settings bookkeeping only - no layout/source mutation.
-    // Kept separate from the mutation so a genuine multi-epic batch (see
-    // `applyDeletedEpicNotification`) can announce each epic individually
-    // while still routing the mutation through ONE coordinated
-    // `handleEpicAccessLoss` call. Two sequential single-epic calls would
-    // placeholder each side of a shared split independently, leaving BOTH
-    // sides stuck as `unavailable` instead of collapsing the group - only a
-    // single call carrying every lost epicId resolves both sides at once.
+    // Toast/bookkeeping only. Multi-epic loss must be one handleEpicAccessLoss
+    // call or a shared split leaves both sides unavailable.
     const announceEpicLoss = (epicId: string, reason: DeadEpicReason): void => {
       // One channel per epic, so a duplicate "epic is gone" signal (e.g. a
       // delete that also trips the unavailable-on-reconnect path) replaces the
@@ -169,23 +124,15 @@ export function EpicAccessCoordinator() {
           title: readEpicTitle(epicTitlesById, epicId),
         });
       }
-      // `announceEpicLoss` above already cleared run settings for the
-      // resident epics (it's the deleted-reason branch's job). A deleted
-      // epic without a resident tab never reaches that call, but its run
-      // settings still need to go - it must not silently survive the epic
-      // it belonged to, matching `useEpicBatchDelete`'s unconditional clear
-      // over its whole batch.
+      // Deleted epic without a resident tab never hits announceEpicLoss; still
+      // clear its run settings.
       if (withoutResidentTab.length > 0) {
         useComposerRunSettingsStore
           .getState()
           .clearEpicRunSettings(withoutResidentTab);
       }
-      // One coordinated call over the WHOLE notification batch - not a loop
-      // of single-epic calls - so a pair of Epics that are both sides of the
-      // same split (or that duplicate a ref across groups) collapse in one
-      // coordinator transaction instead of firing a separate transaction
-      // (and a separate persistence flush) per epic for what is semantically
-      // one event.
+      // One handleEpicAccessLoss over the whole batch so a shared split
+      // collapses in one transaction.
       tabCommandCoordinator.handleEpicAccessLoss(epicIds);
       if (anyWasActive) {
         useEpicCanvasStore.setState({ activeTabId: null });
@@ -204,11 +151,8 @@ export function EpicAccessCoordinator() {
       // re-entrantly inside the emit that triggered it.
       queueMicrotask(() => {
         if (disposed) return;
-        // Re-derive at fire time: the tab may have been closed by the user, the
-        // session released, or a TRANSIENT `unavailable` error cleared on a
-        // successful reconnect between scheduling and now. Acting on the stale
-        // captured reason would force-close a tab that recovered (or toast for
-        // one already gone). Drop the latch so a fresh signal re-evaluates.
+        // Re-derive at fire time. A recovered or already-gone tab must not get
+        // the stale captured close. Drop the latch so a fresh signal re-evaluates.
         const current = registry.peek(epicId);
         const currentState = current === null ? null : current.store.getState();
         const reason =
@@ -218,21 +162,7 @@ export function EpicAccessCoordinator() {
           handled.delete(epicId);
           return;
         }
-        // Create-race grace: an `unavailable` (cloud NOT_FOUND) on an epic
-        // this renderer created SECONDS AGO is far more likely the create
-        // host's background cloud connect still in flight than a real
-        // delete, so spend the bounded retry schedule re-subscribing before
-        // believing it. The latch is dropped so the retry's own failure (a
-        // fresh `snapshotFetchError`) re-enters this evaluation and takes
-        // the next slot; past the last slot, the eject below runs as usual.
-        //
-        // Scoped to the race window, not the session: `requestFreshSnapshot`
-        // is DESTRUCTIVE (it clears the unsynced queue and replaces the
-        // replica), and an epic created hours ago has had every chance to
-        // accumulate work a transient NOT_FOUND must not silently erase.
-        // `holdsUnsyncedWork` is the second half of that guarantee - inside
-        // the window there is nothing to lose yet, and if there somehow is,
-        // the ordinary announced close runs instead of a silent discard.
+        // Create-race grace: a recent-create NOT_FOUND retries before eject. `requestFreshSnapshot` is destructive, so only the race window, and never if `holdsUnsyncedWork`.
         if (
           reason.kind === "unavailable" &&
           wasEpicCreatedRecentlyThisSession(epicId) &&
@@ -262,11 +192,8 @@ export function EpicAccessCoordinator() {
               if (liveReason === null || liveReason.kind !== "unavailable") {
                 return;
               }
-              // Re-check the destructive precondition too: local work can
-              // appear during the delay (an offline edit, a dirty artifact
-              // room), and `requestFreshSnapshot` would discard it with no
-              // trace. Hand the verdict back to the announced close instead -
-              // what this epic would have got without the grace.
+              // Re-check: local work can appear during the delay, and
+              // requestFreshSnapshot would discard it. Hand back to announced close.
               if (holdsUnsyncedWork(liveState)) {
                 if (!collectOpenEpicIds().includes(epicId)) return;
                 // Re-arm the latch the grace dropped, so `runClose` stays
@@ -396,22 +323,14 @@ function deadEpicReason(state: OpenEpicState): DeadEpicReason | null {
   return null;
 }
 
-/**
- * Whether the replica holds local work that has not reached the host -
- * offline-buffered ops (`unsyncedQueueSize`) or an un-flushed dirty signal
- * over the root doc or any artifact room (`isDirty`). Both are exactly what
- * `requestFreshSnapshot` throws away, so the create-race grace refuses to run
- * while either is set. `null` (no live handle) holds nothing by definition.
- */
+/** Create-race grace must not run while unsyncedQueueSize or isDirty is set; requestFreshSnapshot would throw that work away. */
 function holdsUnsyncedWork(state: OpenEpicState | null): boolean {
   if (state === null) return false;
   return state.isDirty || state.unsyncedQueueSize > 0;
 }
 
 /**
- * Best-available live title for an epic: the projected Y.Doc/snapshot title,
- * else the active/MRU open-tab name (via the canvas store, so it matches the
- * strip), else `null` when nothing resolves.
+ * Projected title, else canvas-store tab name, else null.
  */
 function resolveEpicTitle(epicId: string): string | null {
   return (

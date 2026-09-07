@@ -2,19 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
 import { fatalCloseToCliError } from "../worktree-delete";
 
-/**
- * WHAT A CLI USER READS when a worktree-delete stream closes fatally.
- *
- * The epoch rejection's `reason` is authored by the host and says, verbatim,
- * "Updating the host again will not help." This mapper used to append
- * "- update the host or CLI so their worktree delete versions match" to every
- * INCOMPATIBLE, producing one sentence that told the user two opposite things
- * and made the wrong one look actionable.
- *
- * The generic tail is still correct for every OTHER incompatibility - a
- * manifest disagreement genuinely can be either side's fault - so these specs
- * pin both arms rather than just the new one.
- */
+/** WHAT A CLI USER READS when a worktree-delete stream closes fatally. The epoch rejection's `reason` is authored by the host and says, verbatim, "Updating the host again will not help." This mapper used to append "- update the host or CLI so their worktree delete versions match" to every INCOMPATIBLE, producing one sentence that told the user two opposite things and made the wrong one look actionable. */
 
 const EPOCH_REASON =
   "This Traycer client is too old for this host. Update the Traycer app or " +

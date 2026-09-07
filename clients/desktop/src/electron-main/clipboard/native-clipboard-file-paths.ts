@@ -28,12 +28,6 @@ type BinaryPlistValue = string | readonly BinaryPlistValue[];
 
 const MAX_BINARY_PLIST_DEPTH = 64;
 
-/**
- * Reads only the native formats that carry local file selections on macOS.
- * Chromium deliberately omits VS Code's `code/file-list` flavor from DOM
- * paste events, so this remains an explicit user-paste fallback in the
- * renderer rather than a general clipboard inspection API.
- */
 export function readNativeClipboardFilePaths(
   clipboard: NativeClipboardBufferReader,
 ): readonly string[] {

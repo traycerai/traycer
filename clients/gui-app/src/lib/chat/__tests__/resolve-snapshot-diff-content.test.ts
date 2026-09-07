@@ -192,10 +192,8 @@ describe("resolveSnapshotSegmentHashes - segment", () => {
   });
 
   /**
-   * The windowed-transcript case, and the whole reason the capture exists: the
-   * tile outlived the hydration of the row it was opened from. Before this it
-   * rendered source-unavailable and there was no way back - a canvas reopened
-   * a week later showed nothing for an edit that is still on disk.
+   * The windowed-transcript case, and the whole reason the capture exists: the tile outlived the hydration of the row it was opened from.
+   * Before this it rendered source-unavailable and there was no way back - a canvas reopened a week later showed nothing for an edit that is still on disk.
    */
   it("falls back to the captured endpoints once the row is no longer hydrated", () => {
     expect(
@@ -238,9 +236,8 @@ describe("resolveSnapshotSegmentHashes - segment", () => {
   });
 
   /**
-   * Order matters, and this is the case that fixes it: a streaming edit's
-   * `afterHash` moves, and the capture was taken at the first frame of it. The
-   * blocks win wherever they resolve, so the open tile keeps updating.
+   * Order matters, and this is the case that fixes it: a streaming edit's `afterHash` moves, and the capture was taken at the first frame of it.
+   * The blocks win wherever they resolve, so the open tile keeps updating.
    */
   it("prefers the live blocks over a capture that has gone stale", () => {
     expect(

@@ -25,10 +25,8 @@ export const cloudQueryKeys = {
 };
 
 /**
- * True for the cloud-tasks history query key. The history is manual-refresh-only
- * (`staleTime: Infinity`), so broad host-scope invalidations must skip it -
- * force-refetching it drops optimistically-inserted local-first epics that the
- * cloud `listTasks` response does not contain yet.
+ * True for the cloud-tasks history query key.
+ * The history is manual-refresh-only (`staleTime: Infinity`), so broad host-scope invalidations must skip it - force-refetching it drops optimistically-inserted local-first epics that the cloud `listTasks` response does not contain yet.
  */
 export function isCloudEpicTasksQueryKey(
   queryKey: readonly unknown[],

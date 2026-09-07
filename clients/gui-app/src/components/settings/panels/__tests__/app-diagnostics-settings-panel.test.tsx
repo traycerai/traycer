@@ -43,17 +43,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-/**
- * Application -> Diagnostics: the app's own log verbosity, log tail and heap.
- *
- * No host scope anywhere in this file, and that absence is the point. The three
- * surfaces here used to render on the host-scoped page, where every one of them
- * was drawn once per host in the account while describing a single window. The
- * pin that keeps that from coming back is the panel's own shape — it takes no
- * scope, mocks no `useHostScope`, and stands up no `HostClient`. If any of that
- * becomes necessary to render this page, something host-varying has moved back
- * onto it.
- */
+/** Application -> Diagnostics: the app's own log verbosity, log tail and heap. */
 function renderPanel(host: IRunnerHost): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -102,9 +92,8 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
   });
 
   it("carries no host-scoped rows or logs, whatever the bridges return", async () => {
-    // The whole reason this page exists. `readySupportSnapshot` includes the
-    // `host` entry the real bridge always returns, so this asserts the page
-    // FILTERS to its own log rather than simply having nothing else to show.
+    // `readySupportSnapshot` includes the `host` entry the real bridge always returns, so this asserts the page
+    // filters to its own log rather than simply having nothing else to show.
     installLogLevelsBridge(defaultSnapshot());
     renderPanel(makeHost(makeSupportBridge({})));
 
@@ -599,8 +588,8 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     // Worker row: both out-of-heap columns are null.
     expect(workerCells[3].textContent).toBe("—");
     expect(workerCells[4].textContent).toBe("—");
-    // Footer: Embedder totals the one isolate that reported a number;
-    // Backing stays — because every isolate reported null for it.
+    // Footer: Embedder totals the one isolate that reported a number; Backing stays - because every isolate
+    // reported null for it.
     expect(footerCells[3].textContent).toBe(formatMemoryBytes(5 * 1024 * 1024));
     expect(footerCells[4].textContent).toBe("—");
   });
@@ -629,9 +618,8 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
 
   it("serializes the heap snapshot and the JS heap measurement through their shared mutation scope", async () => {
     installLogLevelsBridge(defaultSnapshot());
-    // Seeded with a callable rather than `null`: the executor runs
-    // synchronously, but TypeScript cannot see that and narrows a
-    // `null`-initialised binding to `null` for the rest of the test.
+    // Seeded with a callable rather than `null`: the executor runs synchronously, but TypeScript cannot see that
+    // and narrows a `null`-initialised binding to `null` for the rest of the test.
     let resolveCapture: (path: string | null) => void = () => undefined;
     const capturePromise = new Promise<string | null>((resolve) => {
       resolveCapture = resolve;
@@ -656,15 +644,13 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
       expect(takeHeapSnapshot).toHaveBeenCalledTimes(1);
     });
 
-    // The measure button is its own mutation observer - it is not disabled by
-    // capture being pending, so this click genuinely fires
-    // `measureMutation.mutate()` rather than being a no-op the panel refuses.
+    // The measure button is its own mutation observer - it is not disabled by capture being pending, so this click
+    // genuinely fires `measureMutation.mutate` rather than being a no-op the panel refuses.
     expect(measureButton.hasAttribute("disabled")).toBe(false);
     fireEvent.click(measureButton);
 
-    // Let the click's mutate() call and TanStack Query's shared-scope check
-    // settle before asserting the negative: the bridge fn itself must not
-    // have run yet, because it is queued behind the still-pending capture.
+    // Let the click's mutate call and TanStack Query's shared-scope check settle before asserting the negative:
+    // the bridge fn itself must not have run yet, because it is queued behind the still-pending capture.
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });

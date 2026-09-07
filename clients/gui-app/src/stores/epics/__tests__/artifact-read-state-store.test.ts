@@ -70,9 +70,8 @@ describe("artifact-read-state-store", () => {
       .getState()
       .seedEpicArtifacts("epic-a", [{ id: "artifact-b", updatedAt: 1_100 }]);
 
-    // artifact-b never entered the baseline -> unread, even though its updatedAt
-    // (1_100) and even a stale-clock value (500, below the 1_000 seed time) sit
-    // at/under the seed wall-clock. No timestamp comparison can hide it.
+    // artifact-b never entered the baseline -> unread, even though its updatedAt (1_100) and even a
+    // stale-clock value (500, below the 1_000 seed time) sit at/under the seed wall-clock.
     expect(
       unread({ epicId: "epic-a", artifactId: "artifact-b", updatedAt: 1_100 }),
     ).toBe(true);

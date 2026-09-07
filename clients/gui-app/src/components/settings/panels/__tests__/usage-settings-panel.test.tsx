@@ -45,8 +45,6 @@ function makeUsageSummaryResponse(): UsageSummaryResponse {
         timezone: "UTC",
         windowDays: 30,
         // A real 30-day window whose last included day is 2026-08-09.
-        // `endAtExclusive` is the first instant OUTSIDE it - local midnight
-        // tomorrow - which is what the x-axis and range label anchor on.
         startAtInclusive: Date.parse("2026-07-11T00:00:00Z"),
         endAtExclusive: Date.parse("2026-08-10T00:00:00Z"),
       },
@@ -176,9 +174,8 @@ describe("<UsageSettingsPanel />", () => {
     expect(screen.getByTestId("usage-harness-split-row-claude")).toBeTruthy();
     expect(screen.getByTestId("usage-stat-tiles")).toBeTruthy();
     expect(screen.queryByTestId("usage-cost-quality-panel")).toBeNull();
-    // Anchored on the RESPONSE's own window, not on a mount-time clock -
-    // this panel outlives a local midnight, and a later refetch would
-    // otherwise render new-day buckets against a stale axis.
+    // Anchored on the response's own window, not on a mount-time clock - this panel outlives a local midnight, and
+    // a later refetch would otherwise render new-day buckets against a stale axis.
     expect(screen.getByTestId("usage-date-range-label").textContent).toBe(
       "Jul 11 – Aug 9, 2026",
     );

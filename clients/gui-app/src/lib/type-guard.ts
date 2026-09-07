@@ -1,7 +1,6 @@
 /**
- * Builds a type-guard from a `Record<U, true>` membership table. The
- * record key coverage is checked by TypeScript, so adding or removing a
- * union member fails compilation until the table is updated.
+ * Builds a type-guard from a `Record<U, true>` membership table.
+ * The record key coverage is checked by TypeScript, so adding or removing a union member fails compilation until the table is updated.
  */
 export function makeLiteralGuard<U extends string>(
   members: Readonly<Record<U, true>>,

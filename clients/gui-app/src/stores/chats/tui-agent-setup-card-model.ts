@@ -12,32 +12,8 @@ import type {
 import { rollupState } from "./setup-card-rows";
 
 /**
- * Build the setup-card view-model for a terminal (TUI) agent from its current
- * worktree binding, so the tile can render the SAME `SetupCardSegment` a chat
- * shows - the "Worktree ready / Setting up worktree / Setup failed" notice -
- * without a chat transcript of `setup.*` events to derive from.
- *
- * A terminal-agent never subscribes to `chat.subscribe`, so there are no setup
- * events; `worktree.getBinding` is the only source. Every field the card needs
- * (state, branch, worktree path, exit code, setup terminal id) already rides on
- * each binding entry, so this is a pure projection - no protocol change.
- *
- * Only a worktree this agent CREATED gets a card: Local folders (no
- * create/setup step) and IMPORTED (adopted, pre-existing) worktrees are both
- * skipped. `isImported` is the reliable discriminator - the create paths that
- * make a fresh worktree (`orchestrator.resolveIntent`) persist
- * `isImported: false`, while adopting an on-disk worktree persists
- * `isImported: true`, and neither is recomputed on reopen. This mirrors the
- * chat deriver, which likewise suppresses imported entries
- * (`bindingTransitionEvent` returns null for `isImported`), so an agent bound
- * to a pre-existing worktree shows no "creation" notice.
- *
- * There is also no `creating` state: by the time a binding row exists the
- * `git worktree add` has finished (it runs host-side before the agent record,
- * often as `not_required` setup), so the card opens at `setting-up`/`ready`.
- *
- * Returns null when there is nothing to show (no binding, or no created
- * worktree entry), so the caller can render nothing.
+ * Build the setup-card view-model for a terminal (TUI) agent from its current worktree binding, so
+ * the tile can render the SAME `SetupCardSegment` a chat shows - the "Worktree ready / Setting up
  */
 export function buildTuiAgentSetupCardModel(
   binding: WorktreeBinding | null,
@@ -85,20 +61,14 @@ function toSetupCardWorkspace(entry: WorktreeBindingEntry): SetupCardWorkspace {
     terminalSessionId: entry.setupTerminalSessionId,
     worktreePath: entry.worktreePath,
     branch: entry.branch,
-    // Binding entries carry no failure reason or attempted intent - those live
-    // on the chat's `setup.failed` events, which this binding-derived model
-    // never sees. Script failures here surface the exit code + terminal.
+    // Binding entries carry no failure reason or attempted intent - those live on the chat's
+    // `setup.failed` events, which this binding-derived model never sees.
     errorMessage: null,
     retryFolderIntent: null,
   };
 }
 
-/**
- * Map the persisted `WorktreeSetupState` onto the card's `SetupWorkspaceState`.
- * `pending`/`running` both read as the script phase (`setting-up`); a worktree
- * with no setup script (`not_required`) is simply ready. `creating` is never
- * produced here - see the module doc.
- */
+/** Map the persisted `WorktreeSetupState` onto the card's `SetupWorkspaceState`. */
 function setupWorkspaceStateFor(
   setupState: WorktreeSetupState,
 ): SetupWorkspaceState {

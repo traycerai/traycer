@@ -210,13 +210,8 @@ describe("classifyProviderRateLimits", () => {
   });
 });
 
-// The distinction is load-bearing on both sides of the wire (see
-// `isTransientRateLimitUnavailableReason`'s doc comment): `usage_fetch_failed`
-// / `timeout` / `connection_failed` describe a failed ATTEMPT and must not
-// replace a previously retained reading; every other reason is authoritative.
-// Iterating the live v2 enum (rather than a fixed local list) means a reason
-// added to the enum later is automatically exercised here too - it cannot go
-// silently unclassified.
+// The distinction is load-bearing on both sides of the wire (see `isTransientRateLimitUnavailableReason`'s doc comment): `usage_fetch_failed` / `timeout` / `connection_failed` describe a failed ATTEMPT and must not.
+// Iterating the live v2 enum (rather than a fixed local list) means a reason added to the enum later is automatically exercised here too - it cannot go silently unclassified.
 const TRANSIENT_REASONS: ReadonlySet<RateLimitUnavailableReason> = new Set([
   "usage_fetch_failed",
   "timeout",
@@ -225,9 +220,7 @@ const TRANSIENT_REASONS: ReadonlySet<RateLimitUnavailableReason> = new Set([
 
 describe("isTransientRateLimitUnavailableReason / isTransientProviderRateLimitFailure", () => {
   it("classifies every value of the v2 reason enum", () => {
-    // Positive control: a loop over an empty/miscollected list would pass
-    // vacuously and prove nothing - guard against that before trusting the
-    // loop below.
+    // Positive control: a loop over an empty/miscollected list would pass vacuously and prove nothing - guard against that before trusting the loop below.
     expect(rateLimitUnavailableReasonSchemaV2.options.length).toBeGreaterThan(
       0,
     );

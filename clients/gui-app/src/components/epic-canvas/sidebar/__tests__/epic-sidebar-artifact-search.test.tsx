@@ -69,16 +69,7 @@ vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
     return harness.result;
   },
 }));
-// The two host reads this box makes, mocked as DISTINGUISHABLE pairs. The
-// search box is a sidebar - outside every tile `TabHostProvider` - and both of
-// its reads belong to the Epic SESSION: the client the search runs on, and the
-// id that binds every opened hit's tile for life. They used to come from two
-// different sources (`useHostClient()` and `useAddressableHostId()` beside
-// it), so a re-point that left the sidebar live searched one machine and
-// opened the results as tiles bound to another.
-//
-// The ambient pair is still mocked, with different values, so a regression to
-// either one fails on the VALUE rather than on an absence.
+// The ambient pair is still mocked, with different values, so a regression to either one fails on the VALUE rather than on an absence.
 const clients = vi.hoisted(() => ({
   ambient: { label: "ambient-client" },
   session: { label: "session-client" },
@@ -101,9 +92,7 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   epicNodeRefForNodeId: () => harness.epicNodeRef,
-  // Writable role: the availability gate withholds search from viewers, and
-  // this suite covers the shell/box behaviour, not the role gate (that lives
-  // in artifact-search-availability.test.tsx).
+  // Writable role: the availability gate withholds search from viewers, and this suite covers the shell/box behaviour, not the role gate (that lives in artifact-search-availability.test.tsx).
   useEpicPermissionRole: () => "editor",
 }));
 vi.mock("@/hooks/use-epic-store", () => ({
@@ -120,9 +109,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   useArtifactFilter: () => harness.artifactFilter,
 }));
 vi.mock("@/stores/epics/artifact-read-state-store", () => {
-  // Stable state object so the component's `useShallow` selector returns a
-  // stable reference across renders (a fresh object each call would churn the
-  // results memo and loop the render-time reset).
+  // Stable state object so the component's `useShallow` selector returns a stable reference across renders (a fresh object each call would churn the results memo and loop the render-time reset).
   const READ_STATE = { seedAtByEpic: {}, lastSeenByArtifact: {} };
   return {
     isArtifactUnread: (args: { artifactId: string }) =>
@@ -201,11 +188,7 @@ function ready(
 }
 
 /**
- * The `openTile` intent a resolved hit opens with - every field the box's
- * `openHit` builds, so a regression to any one of them (wrong tab, a dropped
- * `dedupe`, a modifier that should stay `null` for a keyboard/mouse trigger
- * with no real event behind it) fails here rather than passing on a
- * `toHaveBeenCalled()`-only check.
+ * The `openTile` intent a resolved hit opens with - every field the box's `openHit` builds, so a regression to any one of them (wrong tab, a dropped `dedupe`, a modifier that should stay `null` for a keyboard/mouse trigger with no real event behind it) fails here rather than passing on a `toHaveBeenCalled()`-only check.
  */
 function openTileIntent(
   tabId: string,
@@ -254,11 +237,6 @@ function HeaderSearchSlot(props: {
   return <div ref={setSlotRef} data-testid={props.testId} />;
 }
 
-/**
- * The box portals its input into the header's slot, so every render needs a
- * registered slot for the input to exist at all. This stands in for
- * `PanelHeaderSearchRow`.
- */
 function BoxHarness(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -388,9 +366,7 @@ describe("ArtifactSearchBox", () => {
       debouncedQuery: "auth",
       epicId: "epic-1",
     });
-    // Identity, and both directions: the second line is what fails if someone
-    // restores `useHostClient()` here, since that mock returns a real object
-    // and would satisfy a bare "a client was passed" assertion.
+    // Identity, and both directions: the second line is what fails if someone restores `useHostClient()` here, since that mock returns a real object and would satisfy a bare "a client was passed" assertion.
     expect(harness.lastArgs?.client).toBe(clients.session);
     expect(harness.lastArgs?.client).not.toBe(clients.ambient);
   });
@@ -482,9 +458,7 @@ describe("ArtifactSearchBox", () => {
       "true",
     );
     fireEvent.keyDown(input, { key: "Enter" });
-    // Enter opens the active hit through the authoritative tile-navigation
-    // route (the resolved ref is mocked identically for every hit here), as
-    // an "explicit" gesture - a keyboard activation, not a click.
+    // Enter opens the active hit through the authoritative tile-navigation route (the resolved ref is mocked identically for every hit here), as an "explicit" gesture - a keyboard activation, not a click.
     expect(harness.openMock).toHaveBeenCalledWith(
       openTileIntent("tab-1", { id: "a1", type: "ticket" }, "explicit"),
     );
@@ -908,9 +882,8 @@ describe("ArtifactPanelSearchShell", () => {
     expect(screen.getByLabelText("Search artifacts")).toBeTruthy();
   });
 
-  // Regression: search was once gated on the Epic holding >= 10 artifacts,
-  // which silently removed both this path and the header menu item from most
-  // Epics. The only threshold now is emptiness - a ONE-artifact Epic searches.
+  // Regression: search was once gated on the Epic holding >= 10 artifacts, which silently removed both this path and the header menu item from most Epics.
+  // The only threshold now is emptiness - a ONE-artifact Epic searches.
   it("enters search mode on an Epic holding a single artifact", () => {
     harness.artifactIds = ["art-0"];
     render(
@@ -925,9 +898,7 @@ describe("ArtifactPanelSearchShell", () => {
     expect(searchQueryInStore(DEFAULT_TAB_ID)).toBe("a");
   });
 
-  // The other half of that boundary: an Epic with nothing to match offers no
-  // way in, so typing at its "No artifacts yet." tree cannot open a search
-  // whose header item is not there either.
+  // The other half of that boundary: an Epic with nothing to match offers no way in, so typing at its "No artifacts yet." tree cannot open a search whose header item is not there either.
   it("ignores type-to-filter on an Epic with no artifacts", () => {
     harness.artifactIds = [];
     render(
@@ -941,9 +912,7 @@ describe("ArtifactPanelSearchShell", () => {
     expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
   });
 
-  // Regression: the gate first only blocked ENTERING search. An Epic whose last
-  // artifact was deleted while search was already open kept `searchOpen` true,
-  // so the header went on advertising a search over "No artifacts yet."
+  // Regression: the gate first only blocked ENTERING search.
   it("closes an already-open search when the last artifact disappears", () => {
     harness.artifactIds = ["art-0"];
     openArtifactsSearch(DEFAULT_TAB_ID, "");
@@ -1019,7 +988,7 @@ describe("ArtifactPanelSearchShell", () => {
     expect(region.className).not.toContain("hidden");
 
     typeAndSettle(input, "auth");
-    // Tree is still in the DOM (mounted), just hidden — expansion/scroll survive.
+    // Tree is still in the DOM (mounted), just hidden - expansion/scroll survive.
     expect(screen.getByTestId("tree-stub")).toBeTruthy();
     expect(screen.getByTestId("epic-artifact-tree-region").className).toContain(
       "hidden",

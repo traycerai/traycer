@@ -16,20 +16,7 @@ import {
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 
-// Minimal harness for reaching the "file-tree" left panel's load-error state.
-// Mirrors the mocking approach in epic-sidebar-selection-mode.test.tsx (dnd
-// context, sidebar UI primitives, add-node-dropdown, git-diff, terminal
-// sidebar, comments icon are all irrelevant noise for this panel and are
-// stubbed the same way), plus the file-tree-specific hooks that test file
-// does not need.
 
-// The panel re-provides its own `StreamRuntimeContext` for the host its pin
-// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
-// to the ambient binding this suite supplies - the client every assertion here
-// is about. Which transport the pin resolves to is a different question, and
-// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
-// The hook returns the value to PROVIDE: the ambient binding while following
-// (this suite's), the pin's own once built, null while pending. Following here.
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
   const { use } = await import("react");
   const { StreamRuntimeContext } =
@@ -128,10 +115,6 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-1",
 }));
 
-// `usePinnedSurfaceDead`/its dead-state screen are gone (D6: a pinned host
-// that dies auto-follows to `effective` instead). These two mocks are now
-// vestigial for this suite's own render tree, but are left in place as
-// harmless stubs in case a sibling hook in the chain still reaches them.
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({
     status: "reachable",
@@ -147,11 +130,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
-// `useSurfaceHostClient` (also reached from `FileTreePanelBodyLive`, same
-// P0.2 pin chain) resolves via this hook's real implementation, which needs
-// a full `HostClient` shape (`resolveHostById`, `getActiveHost`) this
-// suite's `@/lib/host/runtime` stub never carried - stub it directly, same
-// pattern the sibling picker suites use.
+// `useSurfaceHostClient` (also reached from `FileTreePanelBodyLive`, same P0.2 pin chain) resolves via this hook's real implementation, which needs a full `HostClient` shape (`resolveHostById`, `getActiveHost`) this suite's `@/lib/host/runtime` stub never carried - stub it directly, same pattern the sibling picker suites use.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
   // The failure state names the host it could not reach, so the panel reads
@@ -350,13 +329,8 @@ vi.mock("@/stores/settings/settings-store", () => ({
     }),
 }));
 
-// File-tree-panel-specific dependencies.
-// Configurable so one arm can drive the ZERO-ROW read a host that cannot
-// answer produces - the state `useFileTreeWorkspaceSelection` resolves to a
-// null workspace path from, and therefore the panel's empty state.
-// `error` carries the CLASS, not just the fact of failure: only
-// `HostTransportFailureError` means the host never answered, and the panel
-// tells a different story for anything else.
+// Configurable so one arm can drive the ZERO-ROW read a host that cannot answer produces - the state `useFileTreeWorkspaceSelection` resolves to a null workspace path from, and therefore the panel's empty state.
+// `error` carries the CLASS, not just the fact of failure: only `HostTransportFailureError` means the host never answered, and the panel tells a different story for anything else.
 const fileTreeBindingsState = vi.hoisted(() => ({
   rows: [] as Array<{
     readonly runningDir: string;
@@ -392,13 +366,8 @@ vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
   }),
 }));
 
-// The path-search hook is replaced with a real, permanently-disabled TanStack
-// query: this panel test only exercises the browse/error state, and standing up
-// the true hook would need a full `HostClient` (readiness snapshot + change
-// subscription), not this harness's minimal stub. Delegating to `useQuery`
-// yields a COMPLETE idle `UseQueryResult` - status, isPending, refetch and the
-// rest - so the mock cannot drift from the production query contract the way a
-// hand-listed subset would. The module's real echo guard stays in the graph.
+// The path-search hook is replaced with a real, permanently-disabled TanStack query: this panel test only exercises the browse/error state, and standing up the true hook would need a full `HostClient` (readiness snapshot + change subscription), not this harness's minimal stub.
+// Delegating to `useQuery` yields a COMPLETE idle `UseQueryResult` - status, isPending, refetch and the rest - so the mock cannot drift from the production query contract the way a hand-listed subset would.
 vi.mock(
   "@/hooks/workspace/use-workspace-search-paths-query",
   async (importOriginal) => {
@@ -435,20 +404,13 @@ vi.mock("@pierre/trees/react", () => ({
   }),
 }));
 
-// Rendered rather than nulled: whether this survives the panel's empty state
-// is the assertion, and a stub that renders nothing cannot make it. It still
-// renders its `picker` slot so the inner picker's presence is observable too -
-// that is the one carrying `WorktreePickerHostSection`.
+// Rendered rather than nulled: whether this survives the panel's empty state is the assertion, and a stub that renders nothing cannot make it.
 vi.mock("@/components/worktree/workspace-picker-with-opener", () => ({
   WorkspacePickerWithOpener: (props: { readonly picker: ReactNode }) => (
     <div data-testid="mock-workspace-picker-with-opener">{props.picker}</div>
   ),
 }));
 
-// `data-selected-path` distinguishes a NULL selection from an empty string:
-// collapsing both to "" would make the "renders with no workspace chosen"
-// assertion below unable to tell them apart, and "" is a path the picker could
-// in principle be handed.
 vi.mock("@/components/epic-canvas/sidebar/file-tree-workspace-picker", () => ({
   FileTreeWorkspacePicker: (props: {
     readonly selectedPath: string | null;
@@ -535,9 +497,7 @@ describe("epic sidebar file-tree workspace picker persistence", () => {
     fileTreeBindingsState.error = null;
     fileTreeBindingsState.refetch.mockReset();
     fileTreeBindingsState.refetch.mockResolvedValue(undefined);
-    // The selected workspace is STORE state, not fixture state, so without
-    // this the second test inherits whatever the first resolved and the order
-    // of these cases becomes load-bearing.
+    // The selected workspace is STORE state, not fixture state, so without this the second test inherits whatever the first resolved and the order of these cases becomes load-bearing.
     useFileTreeStore.setState({ selectedWorkspaceByEpicAndHost: {} });
   });
 
@@ -556,12 +516,8 @@ describe("epic sidebar file-tree workspace picker persistence", () => {
   }
 
   it("keeps the picker when NO workspace resolves", () => {
-    // Zero rows is what a host that cannot answer resolves to, so the panel
-    // falls to "No workspace linked." The picker used to live in that
-    // conditional's OTHER arm, which meant choosing a host that could not
-    // answer removed the control that could choose a different one - and the
-    // pin is persisted, so it survived a reload. Same defect the git-diff
-    // panel had; `NewTerminalPickerBody` never had it.
+    // Zero rows is what a host that cannot answer resolves to, so the panel falls to "No workspace linked." The picker used to live in that conditional's OTHER arm, which meant choosing a host that could not answer removed the control that could choose a different one - and the pin is persisted, so it survived a reload.
+    // Same defect the git-diff panel had; `NewTerminalPickerBody` never had it.
     fileTreeBindingsState.rows = [];
 
     renderPanel();
@@ -577,10 +533,7 @@ describe("epic sidebar file-tree workspace picker persistence", () => {
   });
 
   it("does not claim 'No workspace linked' when the host never ANSWERED", () => {
-    // A failed read and an answered-but-empty read both leave the selection
-    // null, so the panel used to tell one story for both. "No workspace
-    // linked." is a claim about the agent; this is a fact about the
-    // connection, and only one of them has a remedy the user can act on.
+    // A failed read and an answered-but-empty read both leave the selection null, so the panel used to tell one story for both. "No workspace linked." is a claim about the agent; this is a fact about the connection, and only one of them has a remedy the user can act on.
     fileTreeBindingsState.rows = [];
     fileTreeBindingsState.error = new HostTransportFailureError({
       code: "RPC_ERROR",

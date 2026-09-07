@@ -135,18 +135,12 @@ describe("<EpicRootDragOverlayContent />", () => {
   });
 
   /**
-   * One shared wrapper around every chip variant. Guest tiles are ordinary
-   * DOM now, so this is stacking rather than native-view occlusion, but the
-   * wrapper still has to be a single ancestor: a per-chip marker nested a
-   * second surface for the same chip, which is the shape the published-chat
-   * miss came from.
+   * Guest tiles are ordinary DOM now, so this is stacking rather than native-view occlusion, but the wrapper still has to be a single ancestor: a per-chip marker nested a second surface for the same chip, which is the shape the published-chat miss came from.
    */
   describe("drag overlay wrapper", () => {
     function overlayMarker(): HTMLElement {
       const markers = screen.getAllByTestId("drag-overlay-marker");
-      // Exactly one: a per-chip marker re-added under this wrapper would nest a
-      // second occlusion surface for the same chip, which is the shape the
-      // published-chat miss came from.
+      // Exactly one: a per-chip marker re-added under this wrapper would nest a second occlusion surface for the same chip, which is the shape the published-chat miss came from.
       expect(markers.length).toBe(1);
       return markers[0];
     }

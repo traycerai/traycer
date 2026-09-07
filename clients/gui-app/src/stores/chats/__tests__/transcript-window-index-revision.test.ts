@@ -13,22 +13,8 @@ import {
 } from "@/stores/chats/transcript-window";
 
 /**
- * `indexRevision` gap detection.
- *
- * `TranscriptWindow.indexRevision` is the one signal that an `updated`-only
- * index delta was lost without the stream dying (see that field's doc). A
- * same-epoch `windowedSnapshot` whose `indexRevision` ran AHEAD of the held
- * one is proof of exactly that loss, and `applyWindowedSnapshot` reacts by
- * declaring the window invalid so a resnapshot repairs it.
- *
- * `indexRevision: null` is a different thing entirely - the host saying it
- * holds no index for this subscriber and a full skeleton is on its way
- * (bootstrap or post-resnapshot rebuild). Treating that as a gap would
- * invalidate the window the incoming chunks are about to fill and re-request
- * another resnapshot for it, which is a loop. These tests pin the `null`
- * suppression AND prove a steady-state frame - which always carries a real
- * number - can never reach that suppressing branch: every numeric relation
- * between the incoming and held revision is covered on its own.
+ * `indexRevision` gap detection. `TranscriptWindow.indexRevision` is the one signal that an
+ * `updated`-only index delta was lost without the stream dying (see that field's doc).
  */
 
 const CONTENT: JsonContent = {
@@ -86,13 +72,8 @@ function rangeResponse(input: {
 }
 
 /**
- * A 10-row window at epoch 4, complete skeleton, one hydrated span, stamped
- * at the given `indexRevision`.
- *
- * No wire frame carries an arbitrary `indexRevision` on its own - it only
- * ever advances by one via `applyIndexChange` - so stamping it directly is
- * what lets a fixture start at a chosen revision without replaying the whole
- * delta sequence that would normally produce it.
+ * A 10-row window at epoch 4, complete skeleton, one hydrated span, stamped at the given
+ * `indexRevision`.
  */
 function windowAtRevision(revision: number): TranscriptWindow {
   const seeded = applyWindowedSnapshot(
@@ -123,11 +104,8 @@ function windowAtRevision(revision: number): TranscriptWindow {
     null,
     null,
   );
-  // `indexRevisionRebuilding: false` because this models a client that has
-  // ALREADY reached `revision` - which only happens by applying frames, and
-  // every applied frame spends the rebuild boundary. Leaving it armed would
-  // model a client permanently exempt from the direction rules these suites
-  // exist to pin, so every steady-state case below would pass vacuously.
+  // `indexRevisionRebuilding: false` because this models a client that has ALREADY reached
+  // `revision` - which only happens by applying frames, and every applied frame spends the rebuild
   return {
     ...hydrated,
     indexRevision: revision,
@@ -152,24 +130,13 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
     );
 
     expect(result.invalidated).toBe(false);
-    // The `?? window.indexRevision` branch: a restreaming snapshot names no
-    // revision, so the client's place in the delta sequence must survive it -
-    // overwriting it with 0 here would be indistinguishable from a real gap.
+    // The `??
     expect(result.indexRevision).toBe(5);
   });
 
   /**
-   * The other half of the same rule, and the reason retaining is not merely
-   * tidy: the host's counter is per-VIEW, not per-subscriber.
-   * `TranscriptViewCache` holds one per chat session and restarts it only on an
-   * epoch change, so the FIRST delta after a rebuild carries the sequence
-   * forward from where it was - `6` here, not `1`.
-   *
-   * Reset the client to 0 at the rebuild boundary and that delta reads as a gap
-   * (`6 !== 0 + 1`), which voids the coordinate and asks for a resnapshot,
-   * which answers `null` again, which resets again. This asserts the delta
-   * lands instead, so the loop cannot be reintroduced by a change that only
-   * looks symmetric.
+   * The other half of the same rule, and the reason retaining is not merely tidy: the host's counter
+   * is per-VIEW, not per-subscriber.
    */
   it("accepts the next delta after a rebuild, because the host's counter carried on", () => {
     const rebuilt = applyWindowedSnapshot(
@@ -201,17 +168,6 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
     expect(delta.indexRevision).toBe(6);
   });
 
-  /**
-   * A rebuild re-streams the whole skeleton INTO the array the previous stream
-   * left, so a dropped chunk of the replacement lands on ordinals that are
-   * already occupied: the array has no holes and `coversEveryOrdinal` vouches
-   * for entries this stream never sent. The client then declares the delivery
-   * complete while holding the previous stream's metadata - and the missing
-   * chunk is exactly the one carrying whatever changed while it was away.
-   *
-   * Completeness therefore has to be answered per STREAM, which is what
-   * `skeletonStreamCoveredThrough` is for.
-   */
   it("detects a dropped chunk of a REPLACEMENT stream that old entries would mask", () => {
     const complete = windowAtRevision(5);
     // Sanity: the fixture really is complete and has no holes, so the masking
@@ -257,14 +213,8 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
   });
 
   /**
-   * The negative, and the constraint that shaped the fix: `indexRevision: null`
-   * also covers the host state in which `reconcileWindowedIndex` returns early
-   * and emits NO skeleton at all. Clearing the entries there would blank the
-   * transcript to detect a chunk that was never going to arrive.
-   *
-   * So the entries stay renderable and only the completeness claim drops -
-   * which is also what arms the recovery, since `chunkedDeliveryIncomplete()`
-   * reads exactly this boolean and the stream-completion watchdog reads that.
+   * The negative, and the constraint that shaped the fix: `indexRevision: null` also covers the host
+   * state in which `reconcileWindowedIndex` returns early and emits NO skeleton at all.
    */
   it("keeps the entries renderable when a rebuild snapshot has no stream behind it", () => {
     const rebuilt = applyWindowedSnapshot(
@@ -290,10 +240,7 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
 });
 
 describe("applyWindowedSnapshot: a steady-state frame always carries a real number", () => {
-  // The suppression above fires only on `indexRevision: null`. A live frame
-  // never carries that - it always names a concrete revision - so every
-  // relation that number can have to the held one is covered here, to pin
-  // that the `null` branch is reachable only from an actual bootstrap.
+  // The suppression above fires only on `indexRevision: null`.
 
   it("GREATER than the held revision sets invalidated and resets the window", () => {
     const window = windowAtRevision(5);
@@ -343,11 +290,8 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
   });
 
   it("LESS than the held revision, with no rebuild between, is REFUSED whole", () => {
-    // This assertion used to read "accepted without invalidating", and it was
-    // silent on the held revision - which is the only part that matters. A
-    // straggler describes an index the host has moved past, so taking any of
-    // its transcript half is a rewind: the revision, the `rowCount`, and a tail
-    // seated at the newest `servedAt` that would outrank the copy held here.
+    // A straggler describes an index the host has moved past, so taking any of its transcript half is
+    // a rewind: the revision, the `rowCount`, and a tail seated at the newest `servedAt` that would
     const window = windowAtRevision(5);
     const heldSpanCount = window.spans.length;
     expect(heldSpanCount).toBeGreaterThan(0);
@@ -364,20 +308,13 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
       null,
     );
 
-    // Referential identity: nothing of the transcript half was taken. The
-    // snapshot's AUXILIARY half is applied by the caller regardless, because
-    // those fields are last-write-wins and self-correct on the next broadcast.
+    // Referential identity: nothing of the transcript half was taken.
     expect(result).toBe(window);
   });
 
   /**
-   * ## The two readings of a LOWER non-null revision, driven rather than argued
-   *
-   * The test above pins that such a snapshot is accepted; it says nothing about
-   * what the held REVISION does next, which is the whole question. Both
-   * readings below are reachable, and they want opposite behaviour - so they
-   * are driven together, and whichever way the rule lands the repo enforces the
-   * disagreement rather than a comment claiming one of them cannot happen.
+   * The test above pins that such a snapshot is accepted; it says nothing about what the held
+   * REVISION does next, which is the whole question.
    */
   it("REWIND: refusing the straggler is what keeps the next delta applicable", () => {
     const window = windowAtRevision(5);
@@ -395,10 +332,8 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     );
     expect(straggler.indexRevision).toBe(5);
 
-    // The host's counter never went back, so its next delta is 6 - the
-    // immediate successor of what this client actually holds. Against a window
-    // rewound to 3 it would not have been, and a VALID index would have been
-    // declared lost.
+    // The host's counter never went back, so its next delta is 6 - the immediate successor of what
+    // this client actually holds.
     const next = applyIndexChange(straggler, {
       activeTurnId: null,
       epoch: 4,
@@ -417,16 +352,8 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
   });
 
   it("ADOPTION: a host-side counter restart resyncs through the null boundary", () => {
-    // The other reading, and why Codex's remedy - "ignore the transcript
-    // portion of a lower-revision snapshot" - cannot simply be taken.
-    //
-    // Driven as the host actually produces it. A restart meets a FRESH
-    // subscriber, whose index state is not `held`, so the snapshot is stamped
-    // `null` and the whole skeleton is restreamed BEFORE any concrete revision
-    // arrives (`chat-session-manager.ts:34710-34717`). The epoch does not move:
-    // a fresh `TranscriptViewCache` starts at 0 and a chat that never reindexed
-    // is already there, so the client keeps its window and the host's revision
-    // is genuinely below the one held.
+    // The other reading, and why Codex's remedy - "ignore the transcript portion of a lower-revision
+    // snapshot" - cannot simply be taken. Driven as the host actually produces it.
     const window = { ...windowAtRevision(5), epoch: 0 };
 
     const announced = applyWindowedSnapshot(
@@ -480,17 +407,14 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
       ],
     });
 
-    // Applied, not dropped. Had the window kept 5, `applyIndexChange`'s
-    // `indexRevision <= window.indexRevision` guard would have discarded this
-    // delta - and every delta until the host climbed past 5.
+    // Applied, not dropped.
     expect(next.invalidated).toBe(false);
     expect(next.indexRevision).toBe(1);
   });
 
   it("EXPIRY: the boundary exempts exactly ONE frame, then gap detection is live", () => {
-    // A suppression with no pinned lifetime is how a one-frame allowance
-    // becomes a standing hole. The frame AFTER the rebuild is compared
-    // normally, so a genuine loss is still caught.
+    // A suppression with no pinned lifetime is how a one-frame allowance becomes a standing hole. The
+    // frame AFTER the rebuild is compared normally, so a genuine loss is still caught.
     const announced = applyWindowedSnapshot(
       windowAtRevision(5),
       {
@@ -547,9 +471,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
   });
 
   it("EPOCH: discards an older-epoch snapshot carrying a concrete revision", () => {
-    // A reordered straggler from a coordinate space this client has already
-    // left. Treated as a rebase it replaces the skeleton, the spans and the
-    // epoch with obsolete ordinals, and on an idle chat nothing repairs that.
+    // A reordered straggler from a coordinate space this client has already left.
     const window = windowAtRevision(5);
     expect(window.spans.length).toBeGreaterThan(0);
 
@@ -570,13 +492,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
   });
 
   it("EPOCH: ACCEPTS an older-epoch snapshot announcing a rebuild", () => {
-    // The other direction, and the reason the guard is not a bare epoch
-    // comparison. A fresh `TranscriptViewCache` restarts `epoch` AND
-    // `indexRevision` together, so a host restart hands a client sitting at
-    // epoch 4 a snapshot at epoch 0 - and a fresh cache means a fresh
-    // subscriber, so that frame necessarily carries `indexRevision: null`
-    // (`chat-session-manager.ts:34710-34717`). Discarding it would strand this
-    // client on a dead epoch for the life of the connection.
+    // The other direction, and the reason the guard is not a bare epoch comparison.
     const window = windowAtRevision(5);
 
     const result = applyWindowedSnapshot(
@@ -598,13 +514,6 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
   });
 
   it("RE-ARMS at a void, so the resnapshot that follows can resync downward", () => {
-    // Checked rather than assumed: a void takes its shape from
-    // `emptyTranscriptWindow()`, which is armed - so the client comes out of an
-    // H-path invalidation with no counter it trusts, exactly as it comes out of
-    // construction. Were it to come out DISARMED, a void followed by a
-    // restarted host would leave the resnapshot's lower revision refused, which
-    // is the failure this whole flag exists to prevent, reached by the one path
-    // that looks like it has already been handled.
     const voided = applyIndexChange(windowAtRevision(5), {
       activeTurnId: null,
       epoch: 4,
@@ -723,20 +632,8 @@ describe("applyIndexChange: revision continuity on the append/delta path", () =>
   });
 
   /**
-   * The two no-ops above both carry `updated`-only changes, so `rowCount` never
-   * moves and the append-count consistency check passes trivially on its way to
-   * the revision guard. A duplicate carrying `appended` entries does not: this
-   * client already applied them, so its `rowCount` ALREADY includes them and
-   * the frame's own count matches it exactly - which reads to a count check as
-   * "rows appeared that this frame does not account for", the signature of a
-   * LOST frame.
-   *
-   * So the guards have to run in the order their questions nest. "Is this frame
-   * news at all" is answerable from the revision alone and settles the frame;
-   * "are these changes internally consistent with the count" is only meaningful
-   * about a frame that IS news. Asking the second one first turns the most
-   * harmless thing a stream can do - deliver something twice - into a blanked
-   * transcript and a full refetch.
+   * The two no-ops above both carry `updated`-only changes, so `rowCount` never moves and the
+   * append-count consistency check passes trivially on its way to the revision guard.
    */
   const appendedFrame = (
     indexRevision: number,
@@ -778,12 +675,7 @@ describe("applyIndexChange: revision continuity on the append/delta path", () =>
     expect(applyIndexChange(held, appendedFrame(6, 12, 10, 2))).toBe(held);
   });
 
-  /**
-   * The other half, so the reordering above cannot be mistaken for "the count
-   * check is gone". A frame that IS the immediate successor still has its
-   * appended entries reconciled against `rowCount`, and a mismatch there is
-   * still the lost-frame signal it always was.
-   */
+  /** The other half, so the reordering above cannot be mistaken for "the count check is gone". */
   it("still voids when a SUCCESSOR frame's rowCount outruns its appended rows", () => {
     const window = windowAtRevision(5);
     expect(window.spans.length).toBeGreaterThan(0);

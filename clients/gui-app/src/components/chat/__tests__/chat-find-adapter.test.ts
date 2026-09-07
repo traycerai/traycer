@@ -54,12 +54,7 @@ describe("chat find coverage message", () => {
 
   it("groups a long chat's digits", () => {
     // These counts run to five figures on the chats this feature exists for.
-    //
-    // The expectation is DERIVED, not the `en-US` literal it used to be:
-    // `chatFindCoverageMessage` calls `toLocaleString()` with no locale
-    // deliberately - the grouping a reader sees should be the reader's - and
-    // Vitest pins no locale, so a runtime defaulting to `de-DE` ("12.400") or
-    // `hi-IN` ("12,400" only by coincidence) failed a correct implementation.
+    // The expectation is DERIVED, not the `en-US` literal it used to be: `chatFindCoverageMessage` calls `toLocaleString()` with no locale deliberately - the grouping a reader sees should be the reader's - and Vitest pins no locale, so a runtime defaulting to `de-DE` ("12.400") or `hi-IN` ("12,400" only by coincidence) failed a correct implementation.
     expect(chatFindCoverageMessage(12_400)).toContain(
       `${(12_400).toLocaleString()} older messages`,
     );
@@ -458,9 +453,8 @@ describe("chat find adapter", () => {
     void adapter.search({ requestId: 10, query: "needle", matchCase: false });
     expect(activeHighlightParent(registry)).toBe(earlier);
 
-    // Second match: the target unit. Its per-unit ordinal is 0, but its
-    // message-wide ordinal is 1 - the fallback must paint the SECOND DOM
-    // occurrence, not re-highlight the earlier matching unit.
+    // Second match: the target unit.
+    // Its per-unit ordinal is 0, but its message-wide ordinal is 1 - the fallback must paint the SECOND DOM occurrence, not re-highlight the earlier matching unit.
     void adapter.next();
     expect(adapter.getSnapshot()).toMatchObject({
       current: 2,
@@ -589,9 +583,8 @@ describe("chat find adapter", () => {
     });
 
     reconcileMatch.mockClear();
-    // A streamed progress line containing the query streams in BEFORE the active
-    // occurrence. Its per-unit ordinal shifts 0 -> 1, so the old exact-ordinal
-    // identity would have yanked the active match onto the inserted occurrence.
+    // A streamed progress line containing the query streams in BEFORE the active occurrence.
+    // Its per-unit ordinal shifts 0 -> 1, so the old exact-ordinal identity would have yanked the active match onto the inserted occurrence.
     setRows([
       testRowWithChain(
         "row-1",
@@ -715,11 +708,8 @@ describe("chat find adapter", () => {
 
     reconcileMatch.mockClear();
     const closedGetRowsCalls = getRowsCalls();
-    // Simulate streaming tokens after the bar closed: notifyRowsChanged runs
-    // from a layout effect on every messages change. With scanning ended it
-    // must neither pull rows from the supplier (no transcript projection /
-    // markdown tokenization) nor re-run findMatches, so matches stay empty and
-    // nothing is reconciled.
+    // Simulate streaming tokens after the bar closed: notifyRowsChanged runs from a layout effect on every messages change.
+    // With scanning ended it must neither pull rows from the supplier (no transcript projection / markdown tokenization) nor re-run findMatches, so matches stay empty and nothing is reconciled.
     setRows([
       testRow("row-1", "unit-1", "alpha alpha alpha"),
       testRow("row-2", "unit-2", "alpha"),
@@ -820,16 +810,14 @@ interface ChatFindAdapterCallbacks {
 
 interface ChatFindTestAdapter {
   readonly adapter: ChatFindAdapter;
-  // Publish a new transcript projection and notify the adapter, mirroring the
-  // renderer's per-message layout effect. The adapter only rebuilds matches
-  // while a find session is active, so this is a no-op for a closed bar.
+  // Publish a new transcript projection and notify the adapter, mirroring the renderer's per-message layout effect.
+  // The adapter only rebuilds matches while a find session is active, so this is a no-op for a closed bar.
   readonly setRows: (rows: ReadonlyArray<ChatFindRow>) => void;
   // Number of times the adapter has pulled rows from the supplier - used to
   // prove a closed find session does no projection work.
   readonly getRowsCalls: () => number;
-  // Stand in for a windowed transcript that only partly hydrated. Mirrors the
-  // renderer, which recomputes the caveat from the CURRENT window every time
-  // the adapter asks.
+  // Stand in for a windowed transcript that only partly hydrated.
+  // Mirrors the renderer, which recomputes the caveat from the CURRENT window every time the adapter asks.
   readonly setCoverageMessage: (next: string | null) => void;
   readonly getCoverageCalls: () => number;
 }

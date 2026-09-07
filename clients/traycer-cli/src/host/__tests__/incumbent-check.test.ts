@@ -1,15 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// `findLiveIncumbentHost` decides whether the supervisor defers to a host
-// that is already serving this data dir. Both directions are load-bearing
-// and they are NOT symmetric:
-//
-//   - a false "present" makes the supervisor decline and leaves the machine
-//     with NO host, which is far worse than
-//   - a false "absent", which merely stacks a duplicate.
-//
-// So endpoint reachability is the positive signal and process identity only
-// ever REMOVES an incumbent that is positively proven to be an impostor.
+// `findLiveIncumbentHost` decides whether the supervisor defers to a host that is already serving this data dir.
+// Both directions are load-bearing and they are NOT symmetric: - a false "present" makes the supervisor decline and leaves the machine with NO host, which is far worse than - a false "absent", which merely stacks a duplicate.
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataMock: vi.fn(),
@@ -91,20 +83,16 @@ describe("findLiveIncumbentHost", () => {
       version: "1.1.8",
       websocketUrl: "ws://127.0.0.1:58036/rpc",
     });
-    // The kernel creation stamp, NOT `startedAt`. Passing the publication
-    // timestamp here is what made this verdict answer "mismatch" for healthy
-    // hosts whose machine adjusted its clock (traycerai/traycer#740), so the
-    // operand itself is worth pinning.
+    // The kernel creation stamp, NOT `startedAt`.
+    // Passing the publication timestamp here is what made this verdict answer "mismatch" for healthy hosts whose machine adjusted its clock (traycerai/traycer#740), so the operand itself is worth pinning.
     expect(mocks.identityVerdictMock).toHaveBeenCalledWith(
       4242,
       "linux:boot-a 4242",
     );
   });
 
-  // The bias that matters. `isProcessAlive` would have reported `true` here
-  // too, but for the wrong reason - it collapses "indeterminate" into alive.
-  // The point is that an UNREADABLE os probe must not be read as evidence
-  // that a healthy, answering endpoint is down.
+  // The bias that matters.
+  // `isProcessAlive` would have reported `true` here too, but for the wrong reason - it collapses "indeterminate" into alive.
   it("keeps the incumbent when process identity is indeterminate", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
     mocks.identityVerdictMock.mockResolvedValue("indeterminate");
@@ -113,9 +101,7 @@ describe("findLiveIncumbentHost", () => {
     await expect(findLiveIncumbentHost("production")).resolves.not.toBeNull();
   });
 
-  // The case bare `isProcessAlive` could not see: the pid outlived its host
-  // and was recycled onto an unrelated process, so whatever answered that
-  // port is not this record's host.
+  // The case bare `isProcessAlive` could not see: the pid outlived its host and was recycled onto an unrelated process, so whatever answered that port is not this record's host.
   it("returns null when the recorded pid was recycled onto another process", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
     mocks.identityVerdictMock.mockResolvedValue("mismatch");

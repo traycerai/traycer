@@ -79,9 +79,7 @@ describe("trimFoldersPreservingPrimary", () => {
   });
 
   it("with no stored primary, still preserves the implicit folders[0] primary over a newer secondary", () => {
-    // A null `primaryPath` resolves to `folders[0]` - the SAME fallback used
-    // everywhere else - so eviction must still spare that slot rather than
-    // reverting to naive front-trimming.
+    // A null `primaryPath` resolves to `folders[0]` - the SAME fallback used everywhere else - so eviction must still spare that slot rather than reverting to naive front-trimming.
     expect(trimFoldersPreservingPrimary(["/a", "/b", "/c"], null, 2)).toEqual([
       "/a",
       "/c",

@@ -47,11 +47,7 @@ function parseCanonicalSearch(rawSearch: string): Record<string, unknown> {
   );
 }
 
-// Only the history is faked, and only because the notification TIMING is the
-// subject under test: `@tanstack/history`'s `tryNavigation` is `async` and
-// reaches the notifying task without executing an `await` only when blockers
-// are skipped or none are registered. The controller and the persistence
-// module are the real ones.
+// Only the history is faked, and only because the notification timing is the subject under test.
 const testState = vi.hoisted(() => ({
   hydrated: true,
   subscriber: null as ((input: HistoryObserverInput) => void) | null,
@@ -73,12 +69,8 @@ vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({
     navigate: testState.navigate,
     options: { parseSearch: testState.parseSearch },
-    // A GETTER, because the real router's `state.location` is live: reading it
-    // twice across a navigation must not hand back the first value. Capturing
-    // the object once let a test mutate `testState.routerLocation` and still be
-    // served the stale location - a shape production cannot produce, and one
-    // that hid whether the marker below was really being read off the current
-    // location.
+    // A getter, because the real router's `state.location` is live: reading it twice across a navigation must not
+    // hand back the first value.
     get state() {
       return { location: testState.routerLocation };
     },
@@ -144,13 +136,8 @@ afterEach(() => {
   __resetTabNavigationControllerForTesting();
 });
 
-/**
- * Models the real module's ONE-SHOT semantics: `consumeDesktopRestoredRoute`
- * nulls `pendingRestoredRoute` as it reads it. A stub that answered the same
- * route on every call could not tell "the token was spent" from "the token is
- * still pending", which is exactly the distinction the remount case below is
- * about.
- */
+/** A stub that answered the same route on every call could not tell "the token was spent" from "the token is
+ * still pending", which is exactly the distinction the remount case below is about. */
 function seedRestoredRoute(route: string | null): void {
   let pending = route;
   vi.spyOn(
@@ -165,11 +152,8 @@ function seedRestoredRoute(route: string | null): void {
 
 describe("TabNavigationRouteBridge restored-route replacement", () => {
   it("keeps the bookkeeping replace unobserved even with a navigation blocker registered", async () => {
-    // The skip flag is a synchronous window: raised, `replace` called, lowered.
-    // A registered blocker makes `tryNavigation` await before it notifies, so
-    // an unguarded replace would deliver REPLACE after the window closed and
-    // the restored entry would reach the controller as an external commit -
-    // losing the `preserveStartupFocus` handling used for startup work.
+    // A registered blocker makes `tryNavigation` await before it notifies, so an unguarded replace would deliver
+    // replace after the window closed and the restored entry would reach the controller as an external commit.
     testState.blockerRegistered = true;
     seedRestoredRoute("/restored?tab=1");
     const observed = vi.spyOn(tabNavigationController, "observeLocation");
@@ -185,11 +169,8 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
   });
 
   it("observes a genuine post-hydration entry with the parsed search shape", async () => {
-    // Novelty guard for the assertion above - the subscription has to be live,
-    // or "never observed" would hold against a bridge that never subscribed.
-    // Also pins the shape contract: history hands the bridge a raw query
-    // STRING, and the controller must receive a parsed object. A lossy
-    // re-serializer here previously dropped every non-string param.
+    // Novelty guard for the assertion above - the subscription has to be live, or "never observed" would hold
+    // against a bridge that never subscribed.
     testState.blockerRegistered = true;
     seedRestoredRoute(null);
     const observed = vi.spyOn(tabNavigationController, "observeLocation");
@@ -223,16 +204,12 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
   });
 
   it("lets an escape-hatch navigation made before hydration outrank the desktop restored route", () => {
-    // THE REGRESSION, in the arm where this bridge DOES see the commit: the
-    // press landed after it mounted but before Windows hydration. The restored
-    // route must stand down for a navigation that declares itself. (The arm
-    // where the press happens on the first boot surface - before this bridge
-    // exists at all - is the case below it, which never observes anything.)
+    // The regression, in the arm where this bridge does see the commit: the press landed after it mounted but
+    // before Windows hydration. The restored route must stand down for a navigation that declares itself.
     testState.hydrated = false;
     seedRestoredRoute("/epics/epic-1/tab-1?focusPaneId=p1");
-    // `rerender`, never a second `render`: a second mount is a second bridge
-    // with fresh refs, which would consume the restored route for reasons that
-    // have nothing to do with the behaviour under test.
+    // `rerender`, never a second `render`: a second mount is a second bridge with fresh refs, which would consume
+    // the restored route for reasons that have nothing to do with the behaviour under test.
     const { rerender } = render(<TabNavigationRouteBridge />);
 
     // The press commits `/settings/host` while Windows hydration is still in
@@ -247,9 +224,8 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
       testState.subscriber?.({
         location: {
           pathname: "/settings/host",
-          // The escape hatch DECLARES itself (see `TraycerApp`); the marker is
-          // what separates it from the routing traffic a launch makes on its
-          // own, and it is why the restore below stands down.
+          // The escape hatch declares itself (see `TraycerApp`); the marker is what separates it from the routing
+          // traffic a launch makes on its own, and it is why the restore below stands down.
           state: { [STARTUP_NAVIGATION_INTENT_KEY]: true },
           search: "",
         },
@@ -274,18 +250,7 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
   });
 
   it("still restores the desktop route when a cold launch redirects itself to / before hydration", () => {
-    // THE COUNTER-CASE, and the reason intent is DECLARED rather than inferred.
-    // A cold launch REPLACES to `/` with no user input at all: every protected
-    // route runs `requireSignedIn` (`src/lib/router-auth.ts`), which redirects
-    // while the auth store is still `signed-out` and stored tokens validate.
-    // An earlier attempt latched on ANY pre-hydration commit, which vetoed the
-    // restore and stranded the window on the landing page instead of the tab it
-    // had at shutdown. `persistent-history.ts` refuses to persist that same
-    // transient `/` for exactly this reason.
-    //
-    // It is pinned here even though this bridge mounts too late to see that
-    // redirect today, because "mount it earlier" is a standing temptation on
-    // this file - and it is the change that makes this reachable.
+    // The counter-case, and the reason intent is declared rather than inferred.
     testState.hydrated = false;
     seedRestoredRoute("/epics/epic-1/tab-1?focusPaneId=p1");
 
@@ -319,10 +284,7 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
   });
 
   it("honours the escape-hatch marker on the current location even if the commit was never observed", () => {
-    // The subscription is installed in a passive effect, so there is a gap
-    // between first paint and it going live. The marker rides in history
-    // state, so the decision does not depend on having watched the commit go
-    // by - it is read off the location itself.
+    // The subscription is installed in a passive effect, so there is a gap between first paint and it going live.
     testState.hydrated = false;
     seedRestoredRoute("/epics/epic-1/tab-1");
     const { rerender } = render(<TabNavigationRouteBridge />);
@@ -343,13 +305,7 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
   });
 
   it("spends the launch route even when the escape hatch wins, so a later remount cannot replay it", () => {
-    // Raised in review (#1328). Declining to APPLY the restored route is not a
-    // reason to leave it PENDING: `pendingRestoredRoute` is cleared only by
-    // `WindowsBridgeProvider`'s cleanup, and that provider outlives auth
-    // changes, while `RootComponent` unmounts and remounts this bridge on
-    // sign-out/sign-in. A stale token surviving that gap gets spent by the
-    // later mount - after the location has lost the marker - and replaces
-    // whatever the user is looking at with an epic from the previous session.
+    // Declining to apply the restored route is not a reason to leave it pending.
     seedRestoredRoute("/epics/stale-epic/stale-tab");
     testState.routerLocation = {
       pathname: "/settings/host",

@@ -15,20 +15,12 @@ interface NativeScrollMetrics {
 }
 
 interface NativeDivScrollRestoration {
-  /** Callback ref - attach to the scrolling element's `ref`. */
   readonly scrollContainerRef: (element: HTMLDivElement | null) => void;
   readonly onScroll: (event: UIEvent<HTMLDivElement>) => void;
 }
 
 /**
- * Scroll preservation for a native overflow-scroll `<div>` tile body (artifact
- * editors, single-file diffs, file viewers). Spread the returned `ref` and
- * `onScroll` onto the scrolling element. `contentReady` should be false while
- * the body shows a loading/skeleton state so restore waits for real content.
- *
- * Captures both axes; vertical-only surfaces simply restore `scrollLeft` 0.
- * Exposes a callback ref (not a ref object) so it can be forwarded into shared
- * primitives without tripping the "no refs during render" rule.
+ * Native overflow-scroll restore. Callback ref so it can be forwarded without a render-time ref read. `contentReady` false while the body is a skeleton.
  */
 export function useNativeDivScrollRestoration(
   instanceId: string,
@@ -110,14 +102,7 @@ export function useNativeDivScrollRestoration(
   return { scrollContainerRef, onScroll };
 }
 
-/**
- * Clamp a saved offset to the current scroll extent. `currentMax` is the largest
- * valid offset (`scrollHeight - clientHeight`), NOT the full `scrollHeight`:
- * comparing against the full extent would accept an offset the browser then
- * silently clamps to the bottom. When the content reflowed shorter/narrower than
- * when captured, fall back to the same proportional depth (clamped to the new
- * max) instead of pinning to the new end.
- */
+/** `currentMax` is the largest valid offset (`scrollHeight - clientHeight`), NOT the full `scrollHeight`: comparing against the full extent would accept an offset the browser then silently clamps to the bottom. */
 function resolveOffset(
   savedOffset: number,
   savedExtent: number,

@@ -1,10 +1,5 @@
 /**
- * Stable, nested view menus for the Agents and Artifacts section headers.
- *
- * The trigger is always visible and always last in its header action cluster.
- * Root rows summarize the current view; supported details open to the right via
- * Radix submenus. When there is not enough room for two menu columns, the same
- * root drills into a detail page with Back instead of flipping left.
+ * When there is not enough room for two menu columns, the same root drills into a detail page with Back instead of flipping left.
  */
 import { ChevronLeft, ChevronRight, ListFilter, RotateCcw } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
@@ -295,9 +290,7 @@ export function ChatFilterMenu(props: {
     base: "Filter agents",
     filterCount,
     sort,
-    // Gated on `canArchive` alongside the Show detail itself: a stored
-    // preference outlives the permission that set it, and announcing a setting
-    // the menu can no longer expose names something the user cannot go change.
+    // Gated on `canArchive` alongside the Show detail itself: a stored preference outlives the permission that set it, and announcing a setting the menu can no longer expose names something the user cannot go change.
     visibilityLabel:
       props.canArchive && archiveVisibilityChanged
         ? archiveVisibilityLabel(archiveVisibility)
@@ -452,7 +445,6 @@ export function ArtifactFilterMenu(props: {
     base: "Filter artifacts",
     filterCount,
     sort,
-    // The artifacts panel has no archive-visibility control.
     visibilityLabel: null,
   });
 

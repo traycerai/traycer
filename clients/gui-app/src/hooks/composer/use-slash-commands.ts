@@ -26,13 +26,7 @@ export interface UseSlashCommandsParams {
   readonly harnessId: GuiHarnessId;
   readonly workingDirectories: ReadonlyArray<string>;
   readonly enabled: boolean;
-  /**
-   * Renderer-handled commands listed AHEAD of the provider catalog and winning
-   * the name dedupe below, so a local `/btw` shadows a provider's same-named
-   * command in the picker and in the raw-text converter alike - the local one
-   * is the one this surface will actually honor. Pass
-   * {@link NO_LOCAL_SLASH_COMMANDS} (a stable empty list) where none apply.
-   */
+  /** Renderer-handled commands listed AHEAD of the provider catalog and winning the name dedupe below, so a local `/btw` shadows a provider's same-named command in the picker and in the raw-text converter alike - the local one is the one this surface will actually honor. */
   readonly localCommands: ReadonlyArray<SlashCommand>;
 }
 
@@ -84,10 +78,7 @@ export function useSlashCommands(
   };
 }
 
-/**
- * The full command description plus its usage hint (when the command takes
- * arguments), as the preview panel's single named field for a slash entry.
- */
+/** The full command description plus its usage hint (when the command takes arguments), as the preview panel's single named field for a slash entry. */
 function slashCommandPreview(command: GuiAgentCommandOption): MentionPreview {
   const usage = command.argumentHint;
   return {

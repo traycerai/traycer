@@ -3,17 +3,11 @@ import { createContext, use } from "react";
 export interface ChatPlanActionsContextValue {
   readonly epicId: string;
   readonly chatId: string;
-  // Implement is a SEND (see onImplement), so its enablement is the chat's
-  // send eligibility - access, no stopping turn, no blocking approval - not
-  // bare access. Named for what it gates so a consumer cannot read it as a
-  // permission bit.
+  // Implement is a SEND (see onImplement), so its enablement is the chat's send eligibility - access, no stopping turn, no blocking approval - not bare access.
+  // Named for what it gates so a consumer cannot read it as a permission bit.
   readonly canSend: boolean;
   readonly pending: boolean;
-  // Sends a follow-up user message asking the harness to implement the plan.
-  // Plan mode is non-blocking and uniform across harnesses: a plan card never
-  // carries a pending approval to resolve (the plan turn already completed), so
-  // the Implement action always sends a fresh "implement the plan" message.
-  // Returns true when the message was accepted.
+  // Plan mode is non-blocking and uniform across harnesses: a plan card never carries a pending approval to resolve (the plan turn already completed), so the Implement action always sends a fresh "implement the plan" message.
   readonly onImplement: () => boolean;
 }
 

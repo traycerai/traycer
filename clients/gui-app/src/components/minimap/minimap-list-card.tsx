@@ -23,7 +23,6 @@ export interface MinimapListCardProps {
   readonly title: string;
 }
 
-/** Shared, single-active-row navigator used by chat turns and artifact headings. */
 export function MinimapListCard({
   className,
   currentIndex,
@@ -92,9 +91,8 @@ export function MinimapListCard({
               <button
                 aria-current={current ? "location" : undefined}
                 className={cn(
-                  // A coarse pointer gets a full touch target. `min-h`, not a
-                  // pseudo-element slop area: these rows stack directly on one
-                  // another, so slop would overlap the neighbours.
+                  // `min-h`, not a pseudo-element slop area: these rows stack directly on one another, so slop would overlap the
+                  // neighbours.
                   "w-full cursor-pointer rounded-lg py-1.5 pr-3 text-left text-ui-xs font-medium leading-5 transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 pointer-coarse:min-h-11",
                   item.level === 1 ? "pl-3" : "pl-7",
                   current

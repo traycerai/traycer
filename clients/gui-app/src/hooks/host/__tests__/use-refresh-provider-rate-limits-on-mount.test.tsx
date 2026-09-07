@@ -109,16 +109,7 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
     expect(refetch).not.toHaveBeenCalled();
   });
 
-  // --- The skip-vs-enqueue matrix -------------------------------------
-  //
-  // The hook now skips ONLY when BOTH the host-persisted summary
-  // (`usageUpdatedAt`) is within the freshness window AND a successful
-  // detailed value is already cached in this renderer. Either condition
-  // failing on its own must still enqueue: a stale/absent summary (managed
-  // profiles the app-shell interval cannot assume are already represented
-  // in this renderer's cache) and a cold detailed cache (a fresh popover
-  // mount that has never observed this exact provider/profile key) are each
-  // independently sufficient to trigger a pull.
+  // Skip only when the host-persisted summary is fresh AND a successful detailed value is already cached. Either miss still enqueues.
 
   it("skips when the summary is fresh AND a detailed value is already cached", () => {
     setup("codex", Date.now(), true);

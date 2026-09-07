@@ -26,16 +26,7 @@ export type RateLimitUsageResponse = ResponseOfMethod<
 >;
 
 /**
- * Whether a provider-pull failure is transient - a fetch problem on THIS
- * attempt, not a statement about the account's capability to ever report usage
- * - so a retained last-good reading may survive alongside it.
- *
- * Delegates to the protocol's own classifier rather than repeating the reason
- * set: the host's gauge cache retains its last known reading under exactly this
- * rule, and a renderer that disagreed about which reasons are transient would
- * dim a reading the host had already replaced (or blank one it still holds).
- * Re-exported under this module's name so the retention rule reads locally at
- * the call sites below.
+ * Whether a provider-pull failure is transient - a fetch problem on THIS attempt, not a statement about the account's capability to ever report usage
  */
 export const isTransientUnavailableReason =
   isTransientRateLimitUnavailableReason;
@@ -53,12 +44,8 @@ function canRetainPreviousRateLimits(
 }
 
 /**
- * Some Codex refreshes report the authoritative reset-credit count without
- * repeating the optional per-credit detail list. Keep the last detailed list
- * only while that count is unchanged: `credits: null` means "details omitted",
- * whereas `credits: []` is an explicit detailed response. A changed count can
- * mean a reset was granted, consumed, or expired, so retaining the old list in
- * that case would be actively misleading.
+ * Some Codex refreshes report the authoritative reset-credit count without repeating the optional per-credit detail list.
+ * Keep the last detailed list only while that count is unchanged: `credits: null` means "details omitted", whereas `credits: []` is an explicit detailed response.
  */
 function retainCodexResetCreditDetails(
   previous: ProviderRateLimitEnvelope | undefined,
@@ -92,22 +79,7 @@ function retainCodexResetCreditDetails(
 }
 
 /**
- * Renderer-memory envelope the `host.getRateLimitUsage` provider-pull query
- * cache entry holds (replacing the raw wire response as the cached `data`),
- * so a transient fetch failure (Core Flows: "couldn't fetch usage - will
- * retry") doesn't blank a real, recent reading the way replacing `data`
- * outright would.
- *
- * - `latest`: the most recent provider snapshot exactly as the wire reported
- *   it (its own `available` arm decides what the CURRENT attempt says).
- * - `lastGood`: the most recent `available: true` snapshot, retained across a
- *   transient failure. `null` once an authoritative unavailable reason
- *   arrives (that reason replaces the picture entirely - see
- *   `buildProviderRateLimitEnvelope`) or before any successful read has ever
- *   happened (cold start / after a reload - this is renderer-memory only).
- * - `lastGoodAt` / `lastFailureAt`: epoch-ms timestamps for the two events
- *   above, `null` until they've happened at least once in this envelope's
- *   lifetime.
+ * Renderer-memory envelope the `host.getRateLimitUsage` provider-pull query cache entry holds (replacing the raw wire response as the cached `data`), so a transient fetch failure (Core Flows: "couldn't fetch usage - will retry") doesn't blank a real, recent.
  */
 export interface ProviderRateLimitEnvelope {
   readonly latest: ProviderRateLimits | null;
@@ -117,13 +89,8 @@ export interface ProviderRateLimitEnvelope {
 }
 
 /**
- * Whether `response` carries a snapshot for a provider whose `providers.list`
- * profile rows report cached `rateLimitStatus`: claude-code, codex, or grok.
- * Openrouter/kilocode/traycer-aperture reads gate out here so a convergence
- * invalidation isn't spent on a provider that could never affect the
- * switch-prompt banner. Failed probes (`available: false` - timeout,
- * cli_not_found, ...) gate out too: they carry no usage the host's gauge cache
- * could have captured, so `providers.list` has nothing new to converge on.
+ * Whether `response` carries a snapshot for a provider whose `providers.list` profile rows report cached `rateLimitStatus`: claude-code, codex, or grok.
+ * Openrouter/kilocode/traycer-aperture reads gate out here so a convergence invalidation isn't spent on a provider that could never affect the switch-prompt banner.
  */
 function isManagedProfileCapableRateLimitsResponse(
   response: RateLimitUsageResponse,
@@ -139,18 +106,7 @@ function isManagedProfileCapableRateLimitsResponse(
 }
 
 /**
- * Converges the composer's rate-limit switch-prompt banner (which reads
- * `providers.list`) with whatever this `host.getRateLimitUsage` fetch just
- * learned: a profile the popover/queue just observed crossing into (or out
- * of) near/hard limit should not wait for `providers.list`'s own unrelated
- * refetch cadence to reflect that.
- *
- * Invalidated by a broad key-prefix predicate rather than one exact `hostId`:
- * this fetch's own host (the default host, or whichever host the ephemeral
- * queue is bound to) is not necessarily the tab host the banner's
- * `providers.list` query is scoped to, and `providers.list` is a cheap
- * cache-only host read (no subprocess, no account probe), so invalidating it
- * across every currently-cached host scope is safe.
+ * Converges the composer's rate-limit switch-prompt banner (which reads `providers.list`) with whatever this `host.getRateLimitUsage` fetch just learned: a profile the popover/queue just observed crossing into (or out of) near/hard limit should not wait for.
  */
 function invalidateProvidersListForConvergence(
   queryClient: QueryClient,
@@ -164,23 +120,7 @@ function invalidateProvidersListForConvergence(
 }
 
 /**
- * Pure accumulator: folds a fresh wire response into the envelope built from
- * `previous` (the envelope this same query key held before this fetch, or
- * `undefined` on a cold cache - the first fetch ever, or after a reload, since
- * this envelope is renderer-memory only).
- *
- * - `available: true` -> becomes the new `lastGood` outright.
- * - `available: false` with a transient reason -> `latest` reflects the
- *   failure, but `lastGood`/`lastGoodAt` carry over unchanged from `previous`
- *   (retention). OpenCode retains only a matching credential generation.
- *   `lastFailureAt` advances to `now`.
- * - `available: false` with an authoritative reason (`rate_limits_not_available`
- *   and friends), or no provider snapshot at all (`providerRateLimits: null` -
- *   an aperture-only call; never expected for the provider-pull branch this
- *   envelope serves, but handled the same way defensively) -> replaces the
- *   picture entirely: `lastGood`/`lastGoodAt`/`lastFailureAt` all reset to
- *   `null`. An authoritative "this account can't see usage" reading must
- *   never be shown dimmed alongside a stale good one.
+ * Pure accumulator: folds a fresh wire response into the envelope built from `previous` (the envelope this same query key held before this fetch, or `undefined` on a cold cache - the first fetch ever, or after a reload, since this envelope is renderer-memory.
  */
 export function buildProviderRateLimitEnvelope(
   previous: ProviderRateLimitEnvelope | undefined,
@@ -223,30 +163,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
 }
 
 /**
- * The shared fetch wrapper both `host.getRateLimitUsage` provider-pull write
- * lanes fold their fresh response through before handing it to TanStack as
- * the cached `data`: the `ephemeralProcess` serial queue
- * (`ephemeral-fetch-queue.ts`, which fetches via its own `queryClient.fetchQuery`
- * call) and the `httpFetch` lane (`use-host-provider-rate-limits-query.ts` /
- * `use-header-rate-limit-bars.ts` / the popover's "Refresh all" button, all via
- * `useHostQueryWithResponseMap` / `useHostQueriesWithResponseMap`). Both write
- * into the same query-key family, so routing every write through this one
- * function is what keeps the envelope shape consistent no matter which lane's
- * fetch actually lands - see those hooks' own doc comments for why a bespoke
- * wrapper was necessary instead of the plain `useHostQuery` path.
- *
- * Reads `previous` from the exact cache slot the caller is about to write
- * (`queryClient.getQueryData(queryKey)`) - synchronous, and always up to date
- * for this purpose because it runs inside the same queryFn invocation that
- * will overwrite that slot.
- *
- * Also the single point where a resolved codex/claude-code/grok fetch converges
- * `providers.list` (`invalidateProvidersListForConvergence`) - every real
- * `host.getRateLimitUsage` fetch for those two providers folds through this
- * function (the ephemeral queue's own `queryFn`; every other observer of
- * these providers' query key stays `enabled: false`), so this is exactly
- * "whenever a rate-limit usage fetch resolves" without duplicating the
- * invalidation at each call site.
+ * The shared fetch wrapper both `host.getRateLimitUsage` provider-pull write lanes fold their fresh response through before handing it to TanStack as the cached `data`: the `ephemeralProcess` serial queue (`ephemeral-fetch-queue.ts`, which fetches via its.
  */
 export function mapResponseToProviderRateLimitEnvelope(args: {
   readonly response: RateLimitUsageResponse;
@@ -261,13 +178,7 @@ export function mapResponseToProviderRateLimitEnvelope(args: {
 }
 
 /**
- * What a consumer should currently render for a provider: the retained
- * `lastGood` reading when the latest attempt is a transient failure with one
- * available, otherwise exactly what the latest attempt reported (a good
- * reading, an authoritative unavailable reason, or `null` if no provider
- * snapshot has ever arrived). Shared by both resolvers in
- * `provider-rate-limit-content.ts` and by the header glyph bars
- * (`use-header-rate-limit-bars.ts`), so all three surfaces retain identically.
+ * What a consumer should currently render for a provider: the retained `lastGood` reading when the latest attempt is a transient failure with one available, otherwise exactly what the latest attempt reported (a good reading, an authoritative unavailable.
  */
 export function resolveRetainedProviderRateLimits(
   envelope: ProviderRateLimitEnvelope | null,
@@ -283,13 +194,7 @@ export function resolveRetainedProviderRateLimits(
 }
 
 /**
- * Whether the CURRENT retained view (`resolveRetainedProviderRateLimits`) is a
- * dimmed last-known-good reading rather than a fresh one - true only when the
- * latest attempt itself is a transient failure and a `lastGood` reading is
- * being shown in its place. Distinct from a query-level `isError` degrade
- * (TanStack retaining old data across a thrown fetch exception): that case
- * has no specific wire reason to report and stays the caller's own generic
- * "refresh failed" treatment.
+ * Whether the CURRENT retained view (`resolveRetainedProviderRateLimits`) is a dimmed last-known-good reading rather than a fresh one - true only when the latest attempt itself is a transient failure and a `lastGood` reading is being shown in its place.
  */
 export function envelopeDegradedReason(
   envelope: ProviderRateLimitEnvelope | null,

@@ -1,22 +1,4 @@
-/**
- * Per-epic ephemeral UI state for the comments surface. Server-state (the
- * actual `CommentThread[]` payloads) is owned by TanStack Query and read via
- * `use-epic-comment-threads` - this store holds only the bits that drive the
- * editor decoration plugin and the floating draft popover:
- *
- *   - `activeThreadId`  - currently expanded thread in the sidebar
- *   - `hoverThreadId`   - anchor under the cursor (for the hover popover)
- *   - `flashThread`     - transient visual ping when navigation reveals an
- *                          anchor without selecting text
- *   - `draftRange`      - saved selection range + owning tile/artifact while
- *                          the draft popover is open (so the user can
- *                          interact with the composer without losing the
- *                          original target range)
- *   - `currentArtifactId` - which artifact's threads the sidebar is showing
- *
- * Keyed by `epicId` so opening multiple epics in different windows /
- * tabs keeps each one's UI state isolated. Not persisted - pure ephemeral.
- */
+/** Per-epic ephemeral UI state for the comments surface. */
 import { create } from "zustand";
 
 export interface FlashThread {

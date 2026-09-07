@@ -11,17 +11,13 @@ export interface UsageActivityCell {
   /** The selected metric's total for the day - what sets `level`. */
   readonly value: number;
   /**
-   * Both metrics, regardless of which one is selected: the tile's hover
-   * states the day's cost AND tokens, not just the one coloring it.
+   * Both metrics, regardless of which one is selected: the tile's hover states the day's cost AND tokens, not just the one coloring it.
    */
   readonly costUsd: number;
   readonly tokens: number;
   /**
-   * Turns recorded that day, independent of `value`. A day can hold real
-   * work whose cost could not be priced: under the Cost metric its `value`
-   * is 0, and treating that as an empty day would report unpriced work as
-   * inactivity - breaking streaks and dropping it from the table. Presence
-   * is a fact about the data; `value` only sets the intensity.
+   * Turns recorded that day, independent of `value`.
+   * A day can hold real work whose cost could not be priced: under the Cost metric its `value` is 0, and treating that as an empty day would report unpriced work as inactivity - breaking streaks and dropping it from the table.
    */
   readonly factCount: number;
   readonly level: 0 | 1 | 2 | 3 | 4;
@@ -31,8 +27,7 @@ export interface UsageActivityWeek {
   /** The week's earliest in-window day - a stable render key for the column. */
   readonly firstDay: string;
   /**
-   * Always 7 slots, Sunday-first; `null` pads the partial first and last
-   * weeks so every column renders the same 7-row shape.
+   * Always 7 slots, Sunday-first; `null` pads the partial first and last weeks so every column renders the same 7-row shape.
    */
   readonly cells: ReadonlyArray<UsageActivityCell | null>;
 }
@@ -74,12 +69,8 @@ const MONTH_ABBR = [
 ];
 
 /**
- * Folds the summary's day×harness×model buckets into one calendar of
- * per-day tiles for the activity heatmap. `days` must be the response
- * window's own oldest-first calendar-day list (`lastNCalendarDays` over the
- * RESPONSE window, same discipline as the daily chart - never a client
- * clock), so a day with no usage still gets a level-0 tile instead of
- * compressing the grid.
+ * Folds the summary's day×harness×model buckets into one calendar of per-day tiles for the activity heatmap.
+ * `days` must be the response window's own oldest-first calendar-day list (`lastNCalendarDays` over the RESPONSE window, same discipline as the daily chart - never a client clock), so a day with no usage still gets a level-0 tile instead of compressing the grid.
  */
 export function buildUsageActivityCalendar(
   days: readonly string[],
@@ -130,9 +121,7 @@ export function buildUsageActivityCalendar(
 }
 
 /**
- * Quartiles over the NONZERO day values (GitHub's approach): a single
- * enormous day must not wash every ordinary day down to the faintest step,
- * which a linear-to-max scale does to any long-tailed usage history.
+ * Quartiles over the NONZERO day values (GitHub's approach): a single enormous day must not wash every ordinary day down to the faintest step, which a linear-to-max scale does to any long-tailed usage history.
  */
 function quartileThresholds(
   nonZeroValues: readonly number[],
@@ -150,10 +139,8 @@ function quartileThresholds(
 }
 
 /**
- * Descending comparisons so a degenerate distribution (every active day
- * equal) reads as full intensity, not the faintest step. A day that has
- * turns but no measurable value (unpriced work under the Cost metric)
- * still gets the faintest STEP rather than the empty one - it happened.
+ * Descending comparisons so a degenerate distribution (every active day equal) reads as full intensity, not the faintest step.
+ * A day that has turns but no measurable value (unpriced work under the Cost metric) still gets the faintest STEP rather than the empty one - it happened.
  */
 function levelFor(
   value: number,
@@ -200,10 +187,8 @@ function intoWeeks(
 }
 
 /**
- * A label sits above the column where a month BEGINS. The window's first
- * month gets none - its start lies outside the window, and its stub column
- * would collide with the first real transition's label anyway. Transitions
- * are ≥4 weeks apart by construction, so labels never overlap.
+ * A label sits above the column where a month BEGINS.
+ * The window's first month gets none - its start lies outside the window, and its stub column would collide with the first real transition's label anyway.
  */
 function monthLabelsFor(
   cells: readonly UsageActivityCell[],
@@ -227,8 +212,7 @@ function monthLabelsFor(
 }
 
 /**
- * Counts back from the newest day, but an inactive TODAY (the last cell -
- * the day is not over yet) doesn't zero the streak.
+ * Counts back from the newest day, but an inactive TODAY (the last cell - the day is not over yet) doesn't zero the streak.
  */
 function currentStreak(cells: readonly UsageActivityCell[]): number {
   let current = 0;
@@ -266,10 +250,8 @@ function buildStats(cells: readonly UsageActivityCell[]): UsageActivityStats {
     }
   }
   const current = currentStreak(cells);
-  // Value first; fact counts break the all-zero case. An all-unpriced year
-  // (every active month sums to $0 under the Cost metric) must still name
-  // its busiest month - the tiles, streaks and table all recognize that
-  // work, and "—" beside them reads as a contradiction.
+  // Value first; fact counts break the all-zero case.
+  // An all-unpriced year (every active month sums to $0 under the Cost metric) must still name its busiest month - the tiles, streaks and table all recognize that work, and "-" beside them reads as a contradiction.
   let mostActiveMonth: string | null = null;
   let bestMonth = { value: 0, factCount: 0 };
   for (const [month, totals] of byMonth) {
@@ -298,32 +280,17 @@ function buildStats(cells: readonly UsageActivityCell[]): UsageActivityStats {
 }
 
 /**
- * The heatmap reads a fixed year of days regardless of the page's 7/30/90
- * picker - an activity calendar over one month is all padding. Exported so
- * the panel and tests share the constant.
+ * The heatmap reads a fixed year of days regardless of the page's 7/30/90 picker - an activity calendar over one month is all padding.
+ * Exported so the panel and tests share the constant.
  */
 export const USAGE_ACTIVITY_WINDOW_DAYS = 365;
 
-/**
- * What the calendar falls back to when a host refuses the year.
- *
- * Hosts update independently of the app, and every host released before
- * ticket 15 caps `windowDays` at 90 - so a year request there fails
- * outright ("windowDays must be an integer between 1 and 90"). 90 is that
- * ceiling, so this is the widest calendar such a host can answer, and the
- * section degrades to a shorter calendar instead of an error card.
- */
+/** What the calendar falls back to when a host refuses the year. */
 export const USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS = 90;
 
 /**
- * Recognizes the ONE failure the 90-day fallback exists for: a host whose
- * shared validator still caps `windowDays` (pre-ticket-15 releases cap at
- * 90) rejecting the year read. Matched on the validator's message shape
- * because the rejection reaches the client as a generic RPC error - and
- * deliberately NOT on "any error at all": a transient transport failure on
- * the year read followed by a lucky 90-day success would otherwise
- * silently present a quarter of the calendar as if it were the whole
- * thing. Other errors surface through the section's error card instead.
+ * Recognizes the ONE failure the 90-day fallback exists for: a host whose shared validator still caps `windowDays` (pre-ticket-15 releases cap at 90) rejecting the year read.
+ * Matched on the validator's message shape because the rejection reaches the client as a generic RPC error - and deliberately NOT on "any error at all": a transient transport failure on the year read followed by a lucky 90-day success would otherwise.
  */
 export function isWindowTooWideError(
   error: { readonly message: string } | null,

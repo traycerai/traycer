@@ -13,18 +13,8 @@ import type { ImportLoginsFrame } from "@/components/settings/import-logins-fram
 import { browserMutationKeys } from "@/lib/query-keys";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
-/**
- * Settings › Browser › Saved logins › "Import logins from another browser":
- * the headless {@link ImportLoginsFlow} in a dialog. The steps, their copy and
- * every explainer live in the flow; this wrapper owns only the window - when
- * it may close, and what a step's chrome renders as.
- *
- * Closing is refused while an import is in flight: the desktop is mid-write
- * (and may be showing a Keychain prompt), and the Done step is where the
- * outcome will land. The in-flight state is read off the mutation cache
- * rather than owned here, because the mutation is the flow's; the key is the
- * one `useLoginImportRun` registers under.
- */
+/** The in-flight state is read off the mutation cache rather than owned here, because the mutation is the
+ * flow's; the key is the one `useLoginImportRun` registers under. */
 export function ImportLoginsDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;

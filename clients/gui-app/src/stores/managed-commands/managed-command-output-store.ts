@@ -18,14 +18,8 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
- * The renderer side of `managedCommand.subscribeOutput@1.0`: one store per open
- * output window, holding the timeline the tile renders.
- *
- * The retained log runs to tens of megabytes, so the window holds only what it
- * has actually been served - the opening tail plus whatever the human scrolled
- * back to. While following, old frames are trimmed at host-positioned
- * boundaries; `start` advances with the cut, so the discarded gap remains
- * reachable through the ordinary load-older path.
+ * The renderer side of `managedCommand.subscribeOutput@1.0`: one store per open output window,
+ * holding the timeline the tile renders.
  */
 
 export type ManagedCommandOutputStreamClientHandle = Pick<
@@ -33,11 +27,8 @@ export type ManagedCommandOutputStreamClientHandle = Pick<
   "loadOlder" | "resnapshot" | "close"
 > & {
   /**
-   * Where this window reads what its bound host can serve: the negotiated
-   * method support of the very client the subscription rides on. The app's
-   * default-host client is the wrong place to ask - a tab is bound to its
-   * host for life, and that host can be a different machine on a different
-   * version. `null` when a test stub stands in for the transport.
+   * Where this window reads what its bound host can serve: the negotiated method support of the very
+   * client the subscription rides on.
    */
   readonly streamMethodSupport: StreamMethodSupportSource<HostStreamRpcRegistry> | null;
 };
@@ -55,15 +46,7 @@ export const MANAGED_COMMAND_OLDER_PAGE_LINES = 500;
 export const MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES = 20_000;
 export const MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES = 15_000;
 
-/**
- * A log line plus the identity the viewer needs and the wire does not carry.
- * Log lines have no id and repeat verbatim, so a row is identified by its
- * place in the timeline: the opening tail is numbered from zero, live output
- * counts up from the end, and a scroll-up page counts down below the start.
- * Position alone (an array index) would not do - prepending a page of older
- * lines renumbers every row after it, remounting the whole list under the
- * viewer.
- */
+/** A log line plus the identity the viewer needs and the wire does not carry. */
 export interface ManagedCommandTimelineLine extends ManagedCommandLogLine {
   readonly seq: number;
   /** Present only on the first row of a host-positioned wire frame. */
@@ -78,11 +61,7 @@ export interface ManagedCommandOutputState {
   readonly lines: readonly ManagedCommandTimelineLine[];
   /** Where the held lines begin; handed back verbatim to page up. */
   readonly start: ManagedCommandLogPosition | null;
-  /**
-   * The host has said the oldest held line is the oldest it retains. Only the
-   * host says so - a deletion stops paging by other means, and must not claim
-   * a cached tail was ever the start of anything.
-   */
+  /** The host has said the oldest held line is the oldest it retains. */
   readonly reachedStart: boolean;
   readonly loadingOlder: boolean;
   /** The held window no longer reaches the live tail and needs a resnapshot. */
@@ -95,12 +74,7 @@ export interface ManagedCommandOutputState {
   readonly timelineGeneration: number;
   /** The command was deleted while this window was open. */
   readonly deleted: boolean;
-  /**
-   * The host closed the stream for good rather than dropping it, and this is
-   * its account of why. Kept verbatim: which code it carries decides whether
-   * the shell is gone, the viewer lost access, or the stream merely failed -
-   * and that reading belongs to the window, not to this store.
-   */
+  /** The host closed the stream for good rather than dropping it, and this is its account of why. */
   readonly fatalClose: FatalErrorDetails | null;
   readonly loadOlder: () => void;
   /** Reader intent controls whether head retention is allowed to advance. */
@@ -125,9 +99,8 @@ export interface ManagedCommandOutputStoreHandle {
 const EMPTY_LINES: readonly ManagedCommandTimelineLine[] = [];
 
 /**
- * A fatal close is remembered until a fresh connection clears it - it is the
- * only account the window has of why nothing is arriving. A caller-initiated
- * close (the tab going away) says nothing about the command and leaves it.
+ * A fatal close is remembered until a fresh connection clears it - it is the only account the
+ * window has of why nothing is arriving.
  */
 function nextFatalClose(
   current: FatalErrorDetails | null,
@@ -204,9 +177,7 @@ export function createManagedCommandOutputStore(
         reachedStart: false,
       };
     }
-    // A single wire frame is indivisible: retaining it is the only way to keep
-    // the cursor honest. The host bounds live frames, so this overflow is also
-    // bounded and the next positioned frame supplies a cut point.
+    // A single wire frame is indivisible: retaining it is the only way to keep the cursor honest.
     return null;
   };
 
@@ -219,18 +190,14 @@ export function createManagedCommandOutputStore(
     ) {
       return state;
     }
-    // A detached reader is paging toward older output. Keep the oldest side
-    // they just asked for and evict the stale newest side; returning to live
-    // replaces the entire window with a fresh positioned snapshot anyway.
+    // A detached reader is paging toward older output.
     return {
       ...state,
       lines: state.lines.slice(
         0,
         MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES,
       ),
-      // Even a quiet command is now missing its retained tail. There is no
-      // forward-page cursor, so returning live must replace this history
-      // window exactly like returning after discarded live output.
+      // Even a quiet command is now missing its retained tail.
       detached: true,
     };
   };
@@ -266,9 +233,8 @@ export function createManagedCommandOutputStore(
       if (state.reachedStart || state.loadingOlder || state.resyncPending) {
         return;
       }
-      // Nothing can be paged in behind a shell the host has dropped or a
-      // stream it has closed for good; asking would send a frame into a dead
-      // session and leave the spinner waiting on a reply that never comes.
+      // Nothing can be paged in behind a shell the host has dropped or a stream it has closed for good;
+      // asking would send a frame into a dead session and leave the spinner waiting on a reply that
       if (state.deleted || state.fatalClose !== null) return;
       const before = state.start;
       if (before === null || streamClient === null) return;
@@ -297,9 +263,8 @@ export function createManagedCommandOutputStore(
     onSnapshot: (snapshot) => {
       if (disposed) return;
       pendingOlderRequestId = null;
-      // A replacement snapshot (reconnect or explicit resnapshot) restores
-      // live-follow intent. The first snapshot preserves any reading anchor
-      // the tile restored before it arrived.
+      // A replacement snapshot (reconnect or explicit resnapshot) restores live-follow intent. The first
+      // snapshot preserves any reading anchor the tile restored before it arrived.
       if (receivedSnapshot) following = true;
       receivedSnapshot = true;
       store.setState((state) => ({
@@ -329,10 +294,7 @@ export function createManagedCommandOutputStore(
           ...state,
           lines: [...state.lines, ...numberForward(frame.lines, frame.start)],
         };
-        // A stalled backward page must not suspend the live-window bound. If
-        // output crosses the ceiling while that request is in flight, abandon
-        // the page before advancing `start`; accepting its old-before window
-        // afterward would splice a gap into the retained timeline.
+        // A stalled backward page must not suspend the live-window bound.
         const trimmable =
           appended.loadingOlder &&
           appended.lines.length > MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES
@@ -372,9 +334,8 @@ export function createManagedCommandOutputStore(
     },
     onDeleted: () => {
       if (disposed) return;
-      // The history went with the shell; a page in flight has nothing to land
-      // on. `reachedStart` is left alone - it is the host's word about the
-      // retained log, and a deletion is not that word.
+      // The history went with the shell; a page in flight has nothing to land on. `reachedStart` is left
+      // alone - it is the host's word about the retained log, and a deletion is not that word.
       pendingOlderRequestId = null;
       store.setState({ deleted: true, loadingOlder: false });
     },

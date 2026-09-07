@@ -1,26 +1,3 @@
-/**
- * The worker learns WHO IS SIGNED IN before it is asked to re-derive for them.
- *
- * The worker's projector folds on `getCurrentUserId()`, which is fed by the
- * `current-user` event and by nothing else. Two properties follow, and this
- * file pins both because each fails silently and in the FAIL-OPEN direction -
- * a null or stale user does not hide another account's chats and terminal
- * agents, it shows them.
- *
- *  1. The push happens at CONSTRUCTION. A session built before the auth
- *     profile hydrates would otherwise project its first frames for nobody.
- *  2. On a user change the push happens BEFORE the re-derive commands.
- *     `republish-records-for-current-user` rebuilds the record slices for
- *     "the current user", and the worker's answer to that question is
- *     whatever this last pushed - so an emitter ordered after it rebuilds
- *     them for the identity being replaced, which is the exact staleness the
- *     command exists to clear.
- *
- * Pinned at the BINDING rather than through the worker: the ordering is this
- * store's, the binding is the seam it acts through, and a recording binding
- * states the property directly instead of inferring it from a projection two
- * hops away.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import { createOpenEpicStore } from "@/stores/epics/open-epic/store";
 import type { EpicRuntimeBinding } from "@/stores/epics/open-epic/store";
@@ -82,17 +59,6 @@ afterEach(() => {
 describe("the current-user push", () => {
   it("pushes the AUTH user at construction, not the persistence identity", () => {
     // THE distinguishing case, and the reason this pin exists in this shape.
-    //
-    // `options.userId` and the auth profile carry the SAME VALUE in production
-    // and are not the same FACT: the option is the identity persisted state is
-    // namespaced under, while the projector's question is who is signed in
-    // right now. This pushed the option once, so every caller that namespaces
-    // by nothing started its worker with no viewer - and a null viewer hides
-    // nothing, which is the fail-OPEN direction.
-    //
-    // The two are deliberately DIFFERENT here. A refactor that reads the
-    // option again - reasonable-looking, since they match in production - goes
-    // red on this line rather than in a projection nobody is watching.
     useAuthStore.setState({
       profile: {
         userId: "auth-user",
@@ -111,9 +77,8 @@ describe("the current-user push", () => {
   });
 
   it("pushes null when nobody is signed in, rather than staying silent", () => {
-    // `null` is a REPRESENTED answer - "no viewer" - and the worker's fold
-    // needs it stated. Silence is indistinguishable from a push that was
-    // never wired, which is exactly the defect this event had.
+    // `null` is a REPRESENTED answer - "no viewer" - and the worker's fold needs it stated. Silence is
+    // indistinguishable from a push that was never wired, which is exactly the defect this event had.
     const opened = openWithRecording(null);
 
     expect(opened.calls[0]).toBe("current-user:null");
@@ -145,10 +110,7 @@ describe("the current-user push", () => {
     expect(pushIndex).toBeGreaterThanOrEqual(0);
     expect(republishIndex).toBeGreaterThanOrEqual(0);
     expect(reprojectIndex).toBeGreaterThanOrEqual(0);
-    // ...and the identity landed FIRST. Ablate by moving the push below the
-    // commands in `store.ts` and this goes red while every other assertion
-    // in this file still passes - which is the point: the ordering is the
-    // property, not the presence.
+    // ...and the identity landed FIRST.
     expect(pushIndex).toBeLessThan(republishIndex);
     expect(pushIndex).toBeLessThan(reprojectIndex);
 

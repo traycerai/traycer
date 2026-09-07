@@ -110,8 +110,7 @@ describe("relativizeToWorkspaceRoot", () => {
   });
 
   // Finding 6: POSIX paths may legally contain a literal `\` in a filename.
-  // Strip/relativize must not treat that `\` as a separator (pathe's normalize
-  // would fold it into `/` and split the filename into nested segments).
+  // Strip/relativize must not treat that `\` as a separator (pathe's normalize would fold it into `/` and split the filename into nested segments).
   it("preserves a literal backslash in a POSIX filename under a POSIX root", () => {
     expect(relativizeToWorkspaceRoot(["/repo"], "/repo/foo\\bar.txt")).toBe(
       "foo\\bar.txt",

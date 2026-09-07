@@ -20,14 +20,8 @@ import {
 import { useRespondLinkLoginMutation } from "@/hooks/auth/use-respond-link-login-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * Seconds until the query's interval mints the next code. The rotation
- * happens `expiresIn − LINK_LOGIN_REMINT_MS/1000` seconds before the shown
- * code's expiry, so the target derives from the mint response the panel
- * already holds — no extra requests, just a local 1s clock. It is stated as a
- * quiet text line only: a frame draining around the QR read as "hurry", and
- * the code rotates on its own.
- */
+/** The rotation happens `expiresIn - LINK_LOGIN_REMINT_MS/1000` seconds before the shown code's expiry, so the
+ * target derives from the mint response the panel already holds - no extra requests, just a local 1s clock. */
 function useRotationCountdown(props: {
   readonly expiresAtEpochSeconds: number;
   readonly expiresInSeconds: number;
@@ -46,7 +40,6 @@ function useRotationCountdown(props: {
   return Math.max(0, Math.ceil((nextCodeAtMs - nowMs) / 1_000));
 }
 
-/** `m:ss` from a millisecond remainder, clamped at zero. */
 function formatRemaining(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -54,13 +47,8 @@ function formatRemaining(remainingMs: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-/**
- * Seconds left before the pending claim expires unanswered, ticking once a
- * second against the SERVER's deadline (`claimExpiresAt`) — the panel holds
- * no copy of the claim window, so what it shows is what the server honours.
- * Clamped at zero: the moment it hits zero the status poll's `gone` (or the
- * hook's own local guard) retires the card; the clock never counts up.
- */
+/** Seconds left before the pending claim expires unanswered, ticking once a second against the server's
+ * deadline (`claimExpiresAt`). */
 function useClaimCountdown(expiresAtMs: number): string {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -86,14 +74,10 @@ function ClaimCountdown(props: { readonly expiresAtMs: number }) {
   );
 }
 
-/** The verdict whose respond round-trip is in flight, if any. */
 type PendingVerdict = "approve" | "reject" | null;
 
-/**
- * Attributes the in-flight respond to the button that fired it: the PRESSED
- * button shows the inline spinner, the other one only disables — a Reject
- * click must never put Approve into a loading state.
- */
+/** Attributes the in-flight respond to the button that fired it: the pressed button shows the inline spinner,
+ * the other one only disables - a Reject click must never put Approve into a loading state. */
 function pendingRespondVerdict(
   isPending: boolean,
   variables: { readonly approve: boolean } | undefined,
@@ -104,23 +88,8 @@ function pendingRespondVerdict(
   return variables.approve ? "approve" : "reject";
 }
 
-/**
- * The question the approver is actually asked, one of three.
- *
- * With a match code, the question is the code: the phone in the user's hand
- * shows the same two digits, and agreement between the two screens proves
- * the prompt belongs to that phone — which the self-reported device
- * description cannot, since the claimant chooses it. The description then
- * drops to secondary context.
- *
- * When the server says the phone presented NO code, the card is a warning,
- * and deliberately the loudest of the three: a legitimate older app looks
- * exactly like a leaked-QR holder withholding the code to dodge the check,
- * and the whole point is that this reads differently from a normal claim.
- *
- * Without any word on it (a server that predates the code) the description
- * IS the prompt, exactly as before.
- */
+/** With a match code, the question is the code: the phone in the user's hand shows the same two digits, and
+ * agreement between the two screens proves the prompt belongs to that phone. */
 function ConfirmClaimHeadline(props: { readonly claim: LiveClaim }) {
   const device = claimantDeviceLabel(props.claim.userAgent);
   const matchCode = props.claim.matchCode;
@@ -152,9 +121,8 @@ function ConfirmClaimHeadline(props: { readonly claim: LiveClaim }) {
     <>
       <p className="text-ui-sm font-medium text-foreground">
         Does your phone show{" "}
-        {/* Digits read out as a number ("forty-seven"), which is how a
-            person will say them to themselves while comparing screens;
-            the tabular figures keep "11" and "77" the same width. */}
+        {/* Digits read out as a number ("forty-seven"), which is how a person will say them to themselves while
+           comparing screens; the tabular figures keep "11" and "77" the same width. */}
         <span
           className="font-mono text-title-md tabular-nums"
           data-testid="link-phone-match-code"
@@ -176,8 +144,8 @@ function ConfirmClaimCard(props: {
   readonly respondFailed: boolean;
   readonly onDecide: (approve: boolean) => void;
 }) {
-  // Unknown metadata is simply absent — an "unknown" admission reads worse
-  // than nothing, and "just now" always anchors the line.
+  // Unknown metadata is simply absent - an "unknown" admission reads worse than nothing, and "just now" always
+  // anchors the line.
   const detailLine = [props.claim.address, props.claim.location, "just now"]
     .filter((part): part is string => part !== null)
     .join(" · ");
@@ -189,10 +157,8 @@ function ConfirmClaimCard(props: {
     >
       <QrCode aria-hidden="true" className="text-muted-foreground" />
       <div className="flex flex-col items-center gap-1 text-center">
-        {/* The QR is swapped for this prompt with no user action on this
-            surface, and it is only answerable inside the claim window — a
-            screen-reader user has to hear about it, code included, or the
-            window expires undiscovered. */}
+        {/* The QR is swapped for this prompt with no user action on this surface, and it is only answerable inside the
+           claim window - a screen-reader user has to hear about it, code included, or the window expires undiscovered. */}
         <div
           className="flex flex-col items-center gap-1"
           role="status"
@@ -213,11 +179,7 @@ function ConfirmClaimCard(props: {
             </p>
           )}
         </div>
-        {/* Outside the live region: a status region announces every change
-            beneath it, and a clock that changes once a second would have a
-            screen reader repeating it over the code and the instructions the
-            person is trying to hear. The countdown is still in the reading
-            order right under the prompt, just never announced on its own. */}
+        {/* The countdown is still in the reading order right under the prompt, just never announced on its own. */}
         {props.claim.claimExpiresAt === null ? null : (
           <ClaimCountdown expiresAtMs={props.claim.claimExpiresAt} />
         )}
@@ -271,17 +233,8 @@ function ConfirmClaimCard(props: {
   );
 }
 
-/**
- * This surface answered second. The server takes a repeat of the SAME
- * decision as idempotent and the OPPOSITE one as a conflict, so
- * `already-decided` always means the other answer won — and which one that
- * was is the inverse of the button just pressed.
- *
- * Stated plainly because the two outcomes differ in what happened to the
- * phone: an approval elsewhere signed it in, a rejection elsewhere did not.
- * Reporting either as this window's own success would be a false
- * confirmation on a security-sensitive decision.
- */
+/** Reporting either as this window's own success would be a false confirmation on a security-sensitive
+ * decision. */
 function DecidedElsewhereCard(props: {
   readonly decision: "approved" | "rejected";
   readonly retrying: boolean;
@@ -323,12 +276,7 @@ function DecidedElsewhereCard(props: {
   );
 }
 
-/**
- * A claim is live somewhere, but not on this panel's code: minting came back
- * `claim-pending`, meaning another surface (portal, CLI, second window) owns
- * the claim awaiting this user's decision. A state, not an error — and no
- * QR: any code this panel held is dead behind the server's claim lock.
- */
+/** A state, not an error - and no QR: any code this panel held is dead behind the server's claim lock. */
 function AwaitingElsewhereCard() {
   return (
     <div
@@ -346,12 +294,8 @@ function AwaitingElsewhereCard() {
   );
 }
 
-/**
- * The displayed code was terminated externally (superseded by a mint on
- * another surface, expired, denied elsewhere). Restart is USER-driven only:
- * an automatic re-mint here would supersede the other surface's fresh code
- * and ping-pong mints between open surfaces until the rate limit.
- */
+/** Restart is user-driven only: an automatic re-mint here would supersede the other surface's fresh code and
+ * ping-pong mints between open surfaces until the rate limit. */
 const DEAD_CARD_COPY: Record<
   LinkLoginDeadKind,
   { readonly testId: string; readonly title: string; readonly detail: string }
@@ -429,20 +373,14 @@ function ApprovedCard(props: { readonly onRestart: () => void }) {
   );
 }
 
-/**
- * The typeable code's box. Shared by the live code and the state that is
- * waiting for one, so both occupy exactly one line of the same type — the
- * panel cannot change height as a code arrives or rotates away.
- */
+/** Shared by the live code and the state that is waiting for one, so both occupy exactly one line of the same
+ * type - the panel cannot change height as a code arrives or rotates away. */
 const CODE_BOX_CLASS =
   // muted-fill-ok: weak tint delimited by its own border-border/60
   "w-full rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-center font-mono text-ui-xs break-all select-all";
 
-/**
- * Everything the code state shows around the tile. Both the live code and the
- * regenerating one render through here, which is what makes their footprints
- * identical by construction rather than by two layouts kept in agreement.
- */
+/** Both the live code and the regenerating one render through here, which is what makes their footprints
+ * identical by construction rather than by two layouts kept in agreement. */
 function CodeSurface(props: {
   readonly tile: ReactElement;
   readonly codeSlot: ReactElement;
@@ -473,16 +411,8 @@ function CodeSurface(props: {
   );
 }
 
-/**
- * The origin the QR's universal link addresses, from the SAME deploy this
- * panel is minting against — so a dev build prints a dev link and a phone
- * that follows it reaches the deploy that issued the code.
- *
- * `null` when the shell reports no usable origin, and the tile then draws no
- * symbol at all. A QR is not a page the user can back out of: whoever scans it
- * sends a LIVE claim code to whatever host it names, so "no QR, use the code
- * printed below it" is the only safe answer to not knowing the deployment.
- */
+/** A QR is not a page the user can back out of: whoever scans it sends a live claim code to whatever host it
+ * names, so "no QR, use the code printed below it" is the only safe answer to not knowing the deployment. */
 function usePlatformBaseUrl(): string | null {
   return platformOriginFromSignInUrl(useRunnerHost().signInUrl);
 }
@@ -514,11 +444,8 @@ function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {
   );
 }
 
-/**
- * A code is on its way — the first mint, a rotation, or a user-driven
- * restart. It holds the code state's exact footprint so the surrounding
- * panel never resizes; only the tile and the code line themselves go quiet.
- */
+/** It holds the code state's exact footprint so the surrounding panel never resizes; only the tile and the code
+ * line themselves go quiet. */
 function PendingCodeCard() {
   const platformBaseUrl = usePlatformBaseUrl();
   return (
@@ -570,40 +497,17 @@ function MintErrorCard(props: {
   );
 }
 
-/**
- * Settings → Link mobile app, confirm-gated. Shows the rotating public code
- * (QR + typeable text); when a phone claims it the QR swaps for an
- * Approve/Reject confirmation carrying the claimant's server-observed
- * metadata. Approval — never the scan — is what signs the phone in, and it
- * releases the session only to the claimant the user just reviewed.
- *
- * The server enforces ONE live code per user: each mint atomically
- * supersedes the previous unclaimed record, and minting is refused while a
- * claim awaits this decision — so the displayed code is the only one that
- * can ever be claimed, and the panel watches exactly it.
- */
+/** Approval - never the scan - is what signs the phone in, and it releases the session only to the claimant the
+ * user just reviewed. */
 export function LinkPhonePanel() {
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const [approvedDone, setApprovedDone] = useState(false);
-  /**
-   * The code whose decision never landed, or `null`. Stored by CODE rather
-   * than as a flag: a bare boolean survives the claim it described, so the
-   * next phone's confirmation card would open already complaining about a
-   * failure that belonged to the previous one.
-   */
+  /** Stored by code rather than as a flag: a bare boolean survives the claim it described, so the next phone's
+   * confirmation card would open already complaining about a failure that belonged to the previous one. */
   const [respondFailedCode, setRespondFailedCode] = useState<string | null>(
     null,
   );
-  /**
-   * What the OTHER surface decided, when this one's answer arrived second.
-   *
-   * The server is idempotent per DIRECTION: repeating a decision is 200, and
-   * the opposite decision is 409 `already_decided` (authn's respond route).
-   * So `already-decided` never means "your answer was applied" - it means the
-   * other answer won, and which one it was is the inverse of what was just
-   * clicked. Approving a claim the CLI already rejected must not report a
-   * phone signed in.
-   */
+  /** Approving a claim the CLI already rejected must not report a phone signed in. */
   const [decidedElsewhere, setDecidedElsewhere] = useState<
     "approved" | "rejected" | null
   >(null);
@@ -615,28 +519,16 @@ export function LinkPhonePanel() {
     restart: restartCode,
   } = useLinkLoginWatch(signedIn && !approvedDone);
 
-  /**
-   * A code this panel has already answered for.
-   *
-   * `restartCode()` evicts the MINT query, not the status cache, so a claim
-   * the user just rejected stays in cached status data until the next poll -
-   * up to the poll interval of a fully interactive Approve/Reject card for a
-   * decision already made. A second Approve on it comes back
-   * `already-decided`, which this panel reads as approval and would show a
-   * "signed in" state for a phone the user rejected.
-   */
+  /** `restartCode` evicts the mint query, not the status cache, so a claim the user just rejected stays in cached
+   * status data until the next poll. */
   const [decidedCode, setDecidedCode] = useState<string | null>(null);
   const claim =
     watchedClaim !== null && watchedClaim.code === decidedCode
       ? null
       : watchedClaim;
   const minted = code.data ?? null;
-  // `claim-pending` is a state, not an error: the user's single live claim
-  // is awaiting the decision on ANOTHER surface. Rendered only when this
-  // panel has no live code of its own (nothing minted yet, or its code is
-  // dead) — with a live displayed code the pending claim may be THIS code's
-  // own scan racing the rotation mint, and the next status poll surfaces it
-  // as the confirm card; flashing "elsewhere" for it would be wrong.
+  // `claim-pending` is a state, not an error: the user's single live claim is awaiting the decision on another
+  // surface.
   const awaitingElsewhere =
     code.isError &&
     code.error instanceof LinkLoginMintError &&
@@ -649,22 +541,7 @@ export function LinkPhonePanel() {
     restartCode();
   };
 
-  /**
-   * "Show a new code", from every terminal card.
-   *
-   * Clears the PRESENTATION state that made a terminal card render, before
-   * the re-mint. `restartCode()` alone only evicts the mint query, and these
-   * cards replaced the controls that would otherwise have cleared it - so a
-   * terminal card would sit on screen over a code already replaced behind it,
-   * with no way back except unmounting the panel.
-   *
-   * `decidedCode` is deliberately NOT cleared. It is not presentation state:
-   * it is what keeps the answered claim suppressed while the status cache
-   * still holds it, and the polls are two seconds apart. Clearing it here
-   * would resurrect the spent claim with live Approve/Reject controls for
-   * that window. It needs no clearing anyway - it names a code, so it retires
-   * itself the moment a different one is watched.
-   */
+  /** Clearing it here would resurrect the spent claim with live Approve/Reject controls for that window. */
   const showNewCode = () => {
     setDecidedElsewhere(null);
     setRespondFailedCode(null);
@@ -687,28 +564,19 @@ export function LinkPhonePanel() {
             return;
           }
           if (outcome === "already-decided") {
-            // The opposite decision reached the server first. Report what
-            // actually happened to the phone - the inverse of this click -
-            // and retire the code; it is spent either way.
+            // The opposite decision reached the server first.
             setDecidedElsewhere(approve ? "rejected" : "approved");
             setDecidedCode(decidedOn);
             restartCode();
             return;
           }
           if (outcome === "failed") {
-            // The decision never reached the server, so the claim is still
-            // sitting there waiting for it. Restarting here would answer a
-            // network problem by silently replacing the QR - the user tapped
-            // Approve and got a different code back, with nothing said. Keep
-            // the card, say what happened, let them tap again.
+            // The decision never reached the server, so the claim is still sitting there waiting for it.
             setRespondFailedCode(decidedOn);
             return;
           }
-          // Rejected (or the record vanished): resume with a fresh code.
-          // The user's own click authorizes the re-mint; the evicting
-          // restart guarantees the dead code cannot be re-served from cache.
-          // Suppressed locally FIRST, because the restart does not reach the
-          // status cache the claim card reads from.
+          // The user's own click authorizes the re-mint; the evicting restart guarantees the dead code cannot be
+          // re-served from cache.
           setDecidedCode(decidedOn);
           restartCode();
         },
@@ -773,11 +641,10 @@ function LinkPhonePanelBody(props: {
   readonly respondVerdict: PendingVerdict;
   /** A decision the transport lost; the claim is still live and retryable. */
   readonly respondFailed: boolean;
-  /** What another surface decided, when this one's answer arrived second. */
   readonly decidedElsewhere: "approved" | "rejected" | null;
   readonly onDecide: (approve: boolean) => void;
   readonly onRestart: () => void;
-  /** The evicting restart — the ONLY way a dead code is replaced. */
+  /** The evicting restart - the only way a dead code is replaced. */
   readonly onShowNew: () => void;
 }) {
   if (!props.signedIn) {
@@ -790,10 +657,7 @@ function LinkPhonePanelBody(props: {
   if (props.approvedDone) {
     return <ApprovedCard onRestart={props.onRestart} />;
   }
-  // Ahead of the claim card and of `approvedDone`: this outcome means the
-  // decision on screen was NOT the one that took effect, so continuing to
-  // offer it - or reporting success for it - would be describing something
-  // that did not happen.
+  // Ahead of the claim card and of `approvedDone`.
   if (props.decidedElsewhere !== null) {
     return (
       <DecidedElsewhereCard

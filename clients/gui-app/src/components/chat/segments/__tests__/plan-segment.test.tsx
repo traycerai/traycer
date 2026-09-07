@@ -54,13 +54,7 @@ vi.mock("@/hooks/agent/use-agent-plan-query", () => ({
   },
 }));
 
-/**
- * The PUBLISHED plan's content channel.
- *
- * `isError` and an "unavailable" answer are separate controls on purpose: both
- * leave the modal with no full markdown, and the whole point of the published
- * failure state is that the modal must not describe them the same way.
- */
+/** The PUBLISHED plan's content channel. `isError` and an "unavailable" answer are separate controls on purpose: both leave the modal with no full markdown, and the whole point of the published failure state is that the modal must not describe them the same way. */
 const cloudPayload = vi.hoisted<{ isError: boolean; refetches: number }>(
   () => ({
     isError: false,
@@ -371,9 +365,8 @@ describe("PlanSegment", () => {
   });
 
   it("offers a retry when a published plan's full content read FAILED", () => {
-    // Error is not absence. The exhausted-retry case used to render "Full plan
-    // content is unavailable", which tells the reader their plan is gone when
-    // only the network was missing - and offers them nothing to do about it.
+    // Error is not absence.
+    // The exhausted-retry case used to render "Full plan content is unavailable", which tells the reader their plan is gone when only the network was missing - and offers them nothing to do about it.
     cloudPayload.isError = true;
     renderPublishedPlan();
 
@@ -437,8 +430,7 @@ describe("PlanSegment", () => {
     );
 
     // The card IS the find-unit anchor; reach it from the visible headline.
-    // Its mounted text must equal what the projection indexes - headline,
-    // status label, subtitle, first four steps.
+    // Its mounted text must equal what the projection indexes - headline, status label, subtitle, first four steps.
     const card = screen
       .getByRole("heading", { name: "Refactor the search index" })
       .closest<HTMLElement>("[data-chat-find-unit]");

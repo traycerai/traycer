@@ -9,17 +9,7 @@ import {
 } from "@traycer-clients/shared/support/image-attachment-guards";
 
 /**
- * Renderer-side ingest for the report-issue dialog's attachment target
- * (ticket 08 / tech-plan T5). Reuses the composer's ingest RULES (image/*
- * only, 5 MiB per image, 15s read timeout - see `use-composer-paste.ts`) but
- * not its hook: that hook inserts into a tiptap editor document, while this
- * one holds a flat list of up to 3 images for a thumbnail strip with
- * per-item remove, read as raw `ArrayBuffer` (never base64 - the bytes cross
- * IPC as a byte array).
- *
- * Every rejection here is a UI-visible, attach-time decision (count, type,
- * per-image size, running-total budget) - never a silent drop at submit
- * time (ticket 08 guardrail G5).
+ * Same ingest rules as composer paste (image/*, 5 MiB, 15s) but a flat list of up to 3 `ArrayBuffer`s. Every rejection is attach-time, never a silent drop at submit.
  */
 
 export interface ReportIssueAttachmentImage {
@@ -91,16 +81,7 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 }
 
 /**
- * ADV-I4: the MIME allowlist and (main-side) magic-byte check only inspect a
- * file's header, so a truncated file with a valid header - a real screenshot
- * cut off mid-write, a partial drag payload - sails through both and reaches
- * triage as a corrupt attachment the user believed was sent whole. Actually
- * decoding the image is the only check that catches this; `createImageBitmap`
- * decodes every format the MIME allowlist admits and rejects on a truncated
- * or otherwise malformed body. The bitmap itself is never used for anything
- * but this decodability proof - the thumbnail strip renders straight from
- * the `File` via its own object URL - so it is closed immediately to free
- * the decoded pixels rather than held onto.
+ * Decode with `createImageBitmap` so a truncated file with a valid header cannot attach. Close the bitmap immediately; the thumbnail uses the `File`.
  */
 async function assertImageDecodes(file: File): Promise<void> {
   const bitmap = await withTimeout(
@@ -165,15 +146,7 @@ interface IngestFileContext {
   readonly setRejection: (rejection: ReportIssueAttachmentRejection) => void;
 }
 
-/**
- * Validates and ingests exactly one candidate file, in isolation from the
- * batch loop that calls it (kept as its own function so the loop itself -
- * `ingest()` below - stays under the repo's cyclomatic-complexity budget).
- * Returns `true` when the 3-image cap was hit (pre- or post-decode/read) and
- * the calling batch should stop trying further files; `false` for every
- * other outcome (committed, or skipped with its own per-file rejection),
- * where the batch should still try the next candidate.
- */
+/** Returns `true` when the 3-image cap was hit (pre- or post-decode/read) and the calling batch should stop trying further files; `false` for every other outcome (committed, or skipped with its own per-file rejection), where the batch should still try the next candidate. */
 async function ingestOneFile(
   file: File,
   ctx: IngestFileContext,
@@ -216,16 +189,7 @@ async function ingestOneFile(
     return false;
   }
   if (!ctx.isActive()) return true;
-  // Re-checked synchronously here, immediately before the commit below with
-  // no `await` in between: a concurrent `addFiles` batch (paste landing
-  // mid-drop) can only have advanced past its own await and mutated
-  // `imagesRef.current` on some EARLIER microtask turn, never during this
-  // synchronous stretch, so this recheck-then-commit pair is atomic with
-  // respect to every other ingest loop. Closes the TOCTOU window the
-  // pre-await checks above leave open: two loops can both pass the
-  // pre-await count check against the same prior count, then both resolve
-  // their reads and race to commit - only the recheck here, not the
-  // pre-await one, can see the OTHER loop's commit and back off.
+  // Re-check count synchronously immediately before commit, with no await between. Two loops can both pass the pre-await check, then race to commit.
   if (ctx.imagesRef.current.length >= MAX_REPORT_IMAGES) {
     ctx.setRejection(rejectionFor("count", ""));
     return true;
@@ -257,20 +221,10 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
   const [isIngesting, setIsIngesting] = useState(false);
   const [rejection, setRejection] =
     useState<ReportIssueAttachmentRejection | null>(null);
-  // Ingest runs one file at a time inside an async loop; a `setImages` call
-  // is not synchronously readable within that loop, so the count/budget
-  // checks for file N+1 read from this ref (kept in lockstep with `images`
-  // via `commitImage`/`removeImage` below) rather than a stale closure.
+  // Ingest runs one file at a time inside an async loop; a `setImages` call is not synchronously readable within that loop, so the count/budget checks for file N+1 read from this ref (kept in lockstep with `images` via `commitImage`/`removeImage` below) rather than a stale closure.
   const imagesRef = useRef<ReadonlyArray<ReportIssueAttachmentImage>>(images);
   const activeRef = useRef(true);
-  // A second concurrent `addFiles` call (paste landing mid-drop, or two
-  // drops in quick succession) spawns its own `ingest()` loop with its own
-  // try/finally - a plain boolean `isIngesting` set independently by each
-  // loop would flip back to `false` the instant the FIRST loop to finish
-  // returns, even while a second loop is still mid-read and about to commit
-  // an image the dialog's submit snapshot would then silently miss. Count
-  // concurrently-active loops instead: `isIngesting` is true from the first
-  // loop's start until the LAST one settles.
+  // A second concurrent `addFiles` call (paste landing mid-drop, or two drops in quick succession) spawns its own `ingest()` loop with its own try/finally - a plain boolean `isIngesting` set independently by each loop would flip back to `false` the instant the FIRST loop to finish returns, even while a second loop is still mid-read and about to commit an image the dialog's submit snapshot would then silently miss.
   const pendingIngestCountRef = useRef(0);
 
   useEffect(() => {
@@ -299,13 +253,7 @@ export function useReportIssueAttachments(): UseReportIssueAttachmentsResult {
       }
       setRejection(null);
 
-      // Read through a function call rather than `activeRef.current` directly
-      // at each checkpoint below: `activeRef.current` can be mutated by the
-      // unmount cleanup effect while an `await` in this loop is in flight, but
-      // TypeScript's control-flow narrowing does not model that concurrent
-      // mutation - narrowing the property directly would make the compiler
-      // (wrongly) treat a later check as always the same value as an earlier
-      // one, which is exactly the unmount race this guards against.
+      // Read through a function call rather than `activeRef.current` directly at each checkpoint below: `activeRef.current` can be mutated by the unmount cleanup effect while an `await` in this loop is in flight, but TypeScript's control-flow narrowing does not model that concurrent mutation - narrowing the property directly would make the compiler (wrongly) treat a later check as always the same value as an earlier one, which is exactly the unmount race this guards against.
       const isActive = (): boolean => activeRef.current;
 
       const ctx: IngestFileContext = {

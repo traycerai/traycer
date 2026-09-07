@@ -84,10 +84,6 @@ describe("compareHostVersions", () => {
     });
   });
 
-  // The whole point of this module over the legacy number-returning
-  // comparator it replaces: unparseable input is explicitly incomparable,
-  // not silently "equal" - callers decide what that means (skip an
-  // automatic stage, or proceed on an explicit user action).
   it("returns comparable:false for unparseable input instead of collapsing to equal", () => {
     expect(compareHostVersions("not-a-version", "1.0.0")).toEqual({
       comparable: false,
@@ -127,7 +123,7 @@ describe("compareHostVersions", () => {
       comparable: false,
     });
     // "0" alone is a valid numeric identifier - only a leading zero
-    // BEFORE another digit is rejected.
+    // before another digit is rejected.
     expect(compareHostVersions("0.0.0", "0.0.1")).toEqual({
       comparable: true,
       ordering: "less",
@@ -147,9 +143,7 @@ describe("compareHostVersions", () => {
   });
 
   it("compares numeric pre-release identifiers with arbitrary precision, not double-precision float", () => {
-    // 2^53 and 2^53+1 - a genuine `Number`/`Number.parseInt` collision (see
-    // the core-triplet test below for why this exact pair, not an
-    // arbitrary huge/huger pair, is what actually pins the invariant).
+    // 2^53 and 2^53+1 - a genuine `Number`/`Number.parseInt` collision (see the core-triplet test below for why this exact pair, not an arbitrary huge/huger pair, is what actually pins the invariant).
     const huge = "9007199254740992";
     const huger = "9007199254740993";
     expect(compareHostVersions(`1.0.0-${huge}`, `1.0.0-${huger}`)).toEqual({
@@ -169,12 +163,7 @@ describe("compareHostVersions", () => {
   });
 
   it("compares core-triplet components with arbitrary precision too, not just pre-release", () => {
-    // 2^53 and 2^53+1 - a genuine `Number`/`Number.parseInt` collision
-    // (IEEE-754 doubles can't represent odd integers past 2^53, so
-    // `Number("9007199254740993")` rounds DOWN to the same value as
-    // `Number("9007199254740992")`). A prior version of this test used a
-    // non-colliding pair (…993/…994, which round to distinct doubles) -
-    // a flawed Number-based comparator would have passed it anyway.
+    // 2^53 and 2^53+1 - a genuine `Number`/`Number.parseInt` collision (ieee-754 doubles can't represent odd integers past 2^53, so `Number("9007199254740993")` rounds down to the same value as `Number("9007199254740992")`).
     const huge = "9007199254740992";
     const huger = "9007199254740993";
     expect(compareHostVersions(`${huge}.0.0`, `${huger}.0.0`)).toEqual({
@@ -185,9 +174,7 @@ describe("compareHostVersions", () => {
       comparable: true,
       ordering: "equal",
     });
-    // A 400-digit core component overflows `Number.parseInt` to `Infinity`
-    // and would be wrongly rejected as unparseable; it's still a valid,
-    // comparable SemVer core per the grammar's unbounded `\d+`.
+    // A 400-digit core component overflows `Number.parseInt` to `Infinity` and would be wrongly rejected as unparseable; it's still a valid, comparable SemVer core per the grammar's unbounded `\d+`.
     const longDigits = "1".repeat(400);
     expect(
       compareHostVersions(`${longDigits}.0.0`, `${longDigits}.0.0`),
@@ -196,9 +183,7 @@ describe("compareHostVersions", () => {
       comparable: true,
       ordering: "greater",
     });
-    // A longer digit string (no leading zero) is always numerically larger
-    // - exercises the digit-length branch directly on the core, not just
-    // pre-release.
+    // A longer digit string (no leading zero) is always numerically larger - exercises the digit-length branch directly on the core, not just pre-release.
     expect(compareHostVersions("9.0.0", "10.0.0")).toEqual({
       comparable: true,
       ordering: "less",

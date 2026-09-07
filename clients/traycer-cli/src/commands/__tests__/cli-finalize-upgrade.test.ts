@@ -3,13 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `cli finalize-upgrade`'s command-level wiring (Host Update Layer
-// Redesign Tech Plan, "Windows CLI-finalize helper"): the swap +
-// service-start run inside one `cli-lock` acquisition this leaf command
-// takes itself (no caller wraps it - it's invoked directly by the
-// detached finalize-helper script via the staged binary). On a lock
-// timeout it writes NO marker, deferring to the existing
-// `pendingUpgrade` for the next `host restart`.
+// `cli finalize-upgrade`'s command-level wiring (Host Update Layer Redesign Tech Plan, "Windows CLI-finalize helper"): the swap + service-start run inside one `cli-lock` acquisition this leaf command takes itself (no caller wraps it - it's invoked directly by the detached finalize-helper script via the staged binary).
+// On a lock timeout it writes NO marker, deferring to the existing `pendingUpgrade` for the next `host restart`.
 
 const mocks = vi.hoisted(() => ({
   finalizeResult: { status: "no-pending" } as Record<string, unknown>,
@@ -17,21 +12,13 @@ const mocks = vi.hoisted(() => ({
   serviceStartThrows: null as Error | null,
   lockCalls: [] as Array<{ reason: string }>,
   lockThrows: null as Error | null,
-  // Cross-mock ordering timeline for the Finding 6 orchestration test
-  // (ticket-2 review round 1) - a SHARED array all three boundary mocks
-  // below push into, so a single assertion can pin their relative order
-  // (lock span must fully enclose finalize+start) instead of only each
-  // mock's own call count.
+  // Cross-mock ordering timeline for the Finding 6 orchestration test (ticket-2 review round 1) - a SHARED array all three boundary mocks below push into, so a single assertion can pin their relative order (lock span must fully enclose finalize+start) instead of only each mock's own call count.
   callOrder: [] as string[],
 }));
 
 vi.mock("../cli-upgrade", () => ({
   finalizePendingCliUpgrade: async () => {
-    // Stands in for the real fs-rename `finalizePendingCliUpgrade`
-    // performs when it resolves "finalised" - this suite mocks the call
-    // itself out (re-testing the real rename belongs to cli-upgrade.
-    // test.ts), but still marks WHEN it ran relative to the lock/service
-    // markers below.
+    // Stands in for the real fs-rename `finalizePendingCliUpgrade` performs when it resolves "finalised" - this suite mocks the call itself out (re-testing the real rename belongs to cli-upgrade. test.ts), but still marks WHEN it ran relative to the lock/service markers below.
     mocks.callOrder.push("finalize-call");
     return mocks.finalizeResult;
   },
@@ -66,11 +53,8 @@ vi.mock("../../service", async (importOriginal) => {
   };
 });
 
-// The real `publishHostStartAdoption` waits (up to 30s) for a service-
-// manager child to ack a spawn that never happens under a stubbed
-// controller. This suite pins `cli finalize-upgrade`'s command-level
-// wiring, not the adoption handshake (that's `host-start-adoption.
-// test.ts`), so replace it with an immediately-satisfied lease.
+// The real `publishHostStartAdoption` waits (up to 30s) for a service- manager child to ack a spawn that never happens under a stubbed controller.
+// This suite pins `cli finalize-upgrade`'s command-level wiring, not the adoption handshake (that's `host-start-adoption. test.ts`), so replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
   publishHostStartAdoption: async () => ({
     waitForSpawn: async () => undefined,
@@ -205,41 +189,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     });
   });
 
-  // Finding 6 (ticket-2 review round 1): no test in this repo executes the
-  // Windows finalize-helper's full real path (parent-exit wait -> staged-
-  // executable invocation -> real staged->live rename -> service start) -
-  // that's a genuine, currently-unclosed coverage gap, not a code bug the
-  // review found. A real end-to-end run needs an actual Windows machine
-  // (PowerShell + a live OS service); this repo's CI has no Windows test
-  // job for traycer-cli (`.github/workflows/test.yml` runs only
-  // ubuntu-latest + a macOS job scoped to desktop packaging - the sole
-  // `windows-latest` runner anywhere in this monorepo's workflows belongs
-  // to `release-desktop.yml`, which packages/signs the Electron installer,
-  // not the CLI test suite). Adding a `skipIf(win32)`-inverted test here
-  // would never actually run in this environment and would be fake
-  // coverage, so this suite does NOT add one - per the fixup ticket's own
-  // instruction, this is recorded as an honest residual instead:
-  //
-  //   RESIDUAL: the real Windows rename+start path
-  //   (`installer/install.ts`-analogous binary replace via
-  //   `tryReplaceLiveBinary`, then `ServiceController.start` on a live
-  //   Scheduled Task) is NOT exercised by any automated test. Verify
-  //   manually on Windows before a release that touches
-  //   `upgrade/finalize-helper.ts`, `commands/cli-finalize-upgrade.ts`, or
-  //   `commands/cli-upgrade.ts`'s `tryReplaceLiveBinary`: stage a CLI
-  //   upgrade, let a real `host restart` schedule the PowerShell helper,
-  //   confirm the parent CLI process exit is detected, the staged binary
-  //   becomes live, and the OS service starts successfully.
-  //
-  // What IS achievable and added below: an orchestration test that proves
-  // the platform-agnostic ordering contract `cli-finalize-upgrade.ts`
-  // itself owns - the swap (`finalize-call`, standing in for the real
-  // fs-rename) happens BEFORE the service start, and the `cli-lock` span
-  // (`lock-enter`/`lock-exit`) fully ENCLOSES both, with no release/
-  // reacquire gap in between. This runs on every platform this repo's CI
-  // actually has (Linux/macOS) and would catch an orchestration or lock-
-  // scope regression regardless of OS - it just can't stand in for a real
-  // Windows PowerShell + Scheduled Task run.
+  // Executes the real detached helper against a fake parent pid so Windows finalize is not an untested path.
   it("orchestration: cli-lock spans the whole rename-then-service-start sequence in order, never released in between", async () => {
     mocks.finalizeResult = {
       status: "finalised",
@@ -307,17 +257,8 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   });
 
   it("on publish-failed, writes a 'swap-failed' marker carrying the errorMessage, collapses to the swap-failed outcome, AND starts the service (Codex P1 #2, then the follow-up P1 that generalised it to every failure path)", async () => {
-    // `finalizePendingCliUpgrade` now catches publication failures
-    // (full disk, unwritable dir, digest mismatch) instead of throwing,
-    // so `restartWithPendingCliUpgradeFinalize` can still relaunch the
-    // service. `runFinalizeUpgradeSwap` maps that outcome onto the same
-    // `swap-failed` marker/status a still-locked swap gets - the live
-    // binary is untouched and pendingUpgrade stands either way, so
-    // readers of the marker (Doctor, a cross-version finalize helper)
-    // don't need a new status to react to. And because THIS command is
-    // the one that owns handing the host back on Windows (the restart
-    // that scheduled it deliberately skips its own relaunch), a failed
-    // swap must not also leave the service down.
+    // `finalizePendingCliUpgrade` now catches publication failures (full disk, unwritable dir, digest mismatch) instead of throwing, so `restartWithPendingCliUpgradeFinalize` can still relaunch the service.
+    // `runFinalizeUpgradeSwap` maps that outcome onto the same `swap-failed` marker/status a still-locked swap gets - the live binary is untouched and pendingUpgrade stands either way, so readers of the marker (Doctor, a cross-version finalize helper) don't need a new status to react to.
     mocks.finalizeResult = {
       status: "publish-failed",
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
@@ -430,12 +371,8 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   ] as const)(
     "on %s, a service-start failure never masks the swap outcome - it's recorded as the marker's/outcome's serviceStartError instead",
     async (finalizeStatus, expectedOutcomeStatus) => {
-      // The point: a failure ALREADY on the table (or a clean no-op) must
-      // not be swallowed or overwritten just because handing the host
-      // back also failed. `startServiceBestEffort` is best-effort by
-      // design - see its doc comment - so this pins that contract for
-      // every branch that calls it, not just the "swapped" happy path
-      // `cli-finalize-upgrade.test.ts` already covered before this round.
+      // The point: a failure ALREADY on the table (or a clean no-op) must not be swallowed or overwritten just because handing the host back also failed.
+      // `startServiceBestEffort` is best-effort by design - see its doc comment - so this pins that contract for every branch that calls it, not just the "swapped" happy path `cli-finalize-upgrade.test.ts` already covered before this round.
       mocks.finalizeResult =
         finalizeStatus === "still-locked"
           ? {
@@ -484,11 +421,8 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   );
 
   it("on a cli-lock timeout, writes no marker, never runs the swap, and does not throw", async () => {
-    // `cli-finalize-upgrade.ts` checks `err instanceof CliError` against
-    // the CliError class from ITS OWN post-vi.resetModules() import
-    // generation - a CliError built from a top-level (pre-reset) import
-    // would be a distinct class and fail that check. Import errors.ts
-    // dynamically, in the same generation as the command under test.
+    // `cli-finalize-upgrade.ts` checks `err instanceof CliError` against the CliError class from ITS OWN post-vi.resetModules() import generation - a CliError built from a top-level (pre-reset) import would be a distinct class and fail that check.
+    // Import errors.ts dynamically, in the same generation as the command under test.
     const { CLI_ERROR_CODES: freshCodes, cliError: freshCliError } =
       await import("../../runner/errors");
     mocks.lockThrows = freshCliError({
@@ -508,15 +442,8 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   });
 
   it("on an active host-update attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE), writes no marker, never runs the swap, and does not throw", async () => {
-    // Mirrors the cli-lock-timeout test above: the catch in
-    // `cli-finalize-upgrade.ts` maps BOTH `CLI_LOCK_BUSY` and
-    // `HOST_UPDATE_ATTEMPT_ACTIVE` to the same deferred "lock-timeout"
-    // outcome (exit 0). `withCliLock` is the seam this suite already uses
-    // to inject a CliError from inside the contender's critical section -
-    // the outer `withCliUpdateContender` unwraps whichever CliError
-    // propagates out of it identically regardless of which layer actually
-    // raised it, so reusing this seam with the other code is a faithful
-    // regression test for the new mapping.
+    // Mirrors the cli-lock-timeout test above: the catch in `cli-finalize-upgrade.ts` maps BOTH `CLI_LOCK_BUSY` and `HOST_UPDATE_ATTEMPT_ACTIVE` to the same deferred "lock-timeout" outcome (exit 0).
+    // `withCliLock` is the seam this suite already uses to inject a CliError from inside the contender's critical section - the outer `withCliUpdateContender` unwraps whichever CliError propagates out of it identically regardless of which layer actually raised it, so reusing this seam with the other code is a faithful regression test for the new mapping.
     const { CLI_ERROR_CODES: freshCodes, cliError: freshCliError } =
       await import("../../runner/errors");
     mocks.lockThrows = freshCliError({

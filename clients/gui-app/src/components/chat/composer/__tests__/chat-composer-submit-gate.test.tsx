@@ -20,18 +20,7 @@ import {
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 
-/**
- * Chat-composer submit gate (finding 3).
- *
- * `chat-composer.tsx` feeds `attachmentPreparationPending` into
- * `useChatComposerSubmit` from `isAttachmentIngestPending({isIngestingImages,
- * isResolvingFilePaths})`. Mounting the full ChatComposer surface is heavy;
- * this tests the exact submit path the surface uses, plus the pure-path
- * composition of the pending helper.
- *
- * Also covers the isReady() submit gate and multi-surface clear broadcast
- * that fix the "queued message reappears in the composer" bug.
- */
+/** Chat-composer submit gate (finding 3). `chat-composer.tsx` feeds `attachmentPreparationPending` into `useChatComposerSubmit` from `isAttachmentIngestPending({isIngestingImages, isResolvingFilePaths})`. */
 
 const DIRTY: JsonContent = {
   type: "doc",
@@ -130,12 +119,7 @@ describe("chat-composer submit gate (path resolution)", () => {
   });
 });
 
-/**
- * Root cause 1: the imperative handle exists from first commit, before async
- * useEditor resolves. Old submit only checked `editor !== null`, so it could
- * submit stale fallback JSON, clear the store, no-op clear(), then the editor
- * would init from the same stale captured initial content and resurrect text.
- */
+/** Root cause 1: the imperative handle exists from first commit, before async useEditor resolves. Old submit only checked `editor !== null`, so it could submit stale fallback JSON, clear the store, no-op clear(), then the editor would init from the same stale captured initial content and resurrect text. */
 describe("chat-composer submit gate (editor readiness)", () => {
   it("blocks submit while the handle is not ready and leaves the draft uncleared", () => {
     const taskId = "task-not-ready-submit";
@@ -272,11 +256,7 @@ describe("chat-composer submit gate (editor readiness)", () => {
   });
 });
 
-/**
- * Root cause 2: multiple composers share one draft-store entry per taskId.
- * Submit clears only the submitting editor's local Tiptap doc via clear();
- * siblings must observe clearDraft's resetEpoch and syncContent(empty).
- */
+/** Root cause 2: multiple composers share one draft-store entry per taskId. Submit clears only the submitting editor's local Tiptap doc via clear(); siblings must observe clearDraft's resetEpoch and syncContent(empty). */
 describe("chat-composer submit multi-surface clear", () => {
   it("clears a sibling composer's Tiptap document when A submits for the same taskId", () => {
     const taskId = "task-multi-submit";

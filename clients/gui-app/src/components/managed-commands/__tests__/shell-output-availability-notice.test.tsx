@@ -6,12 +6,7 @@ import {
   type ShellOutputNoticeAvailability,
 } from "@/components/managed-commands/shell-output-availability-notice";
 
-/**
- * The one place the output window's fallback states get their words, tone and
- * action - pinned directly against the component so a copy change or a
- * dropped action shows up here, not as a mystery three layers up in a
- * renderer test.
- */
+/** The one place the output window's fallback states get their words, tone and action. */
 
 function renderNotice(
   over: Partial<ShellOutputAvailabilityNoticeProps> & {

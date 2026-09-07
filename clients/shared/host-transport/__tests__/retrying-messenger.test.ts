@@ -47,10 +47,7 @@ function retryableError(): RetryableTransportError {
 }
 
 /**
- * The other ground for the same class: a POST-SEND failure that is retryable
- * only because the connection negotiated the idempotency key. Distinct from
- * `retryableError`'s pre-dispatch ground in exactly the field the wrapper
- * latches on.
+ * The other ground for the same class: a post-send failure that is retryable only because the connection negotiated the idempotency key.
  */
 function keyEarnedRetryableError(): RetryableTransportError {
   return new RetryableTransportError({
@@ -73,10 +70,6 @@ function fatalError(): HostRpcError {
   });
 }
 
-/**
- * Inner messenger that throws the queued outcomes (in order) then resolves with
- * `{ echoed }`. Records how many times `request` was called.
- */
 function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
   readonly messenger: IHostMessenger<typeof testRegistry>;
   calls: () => number;
@@ -85,11 +78,7 @@ function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
 } {
   let call = 0;
   const replayRequirements: boolean[] = [];
-  // Written as a `vi.fn()` rather than a hand-rolled `request<Method>(…)`
-  // method: the interface promises `ResponseOfMethod<Registry, Method>` for an
-  // unresolved `Method`, which a concrete `{ echoed }` literal cannot satisfy
-  // (the real wrapper only type-checks because it *delegates*, preserving the
-  // type parameter). The mock stays loosely typed and assignable.
+  // The mock stays loosely typed and assignable.
   const request = vi
     .fn()
     .mockImplementation(
@@ -264,12 +253,7 @@ describe("createRetryingMessenger", () => {
   });
 
   it("latches the replay-must-be-keyed requirement once a key earns a retry, and a later pre-dispatch failure does not clear it", async () => {
-    // Three attempts, and the MIDDLE one is the discriminator. Attempt 2's
-    // failure is pre-dispatch (`replaySafetyFromKey: false`), so a wrapper that
-    // recomputed the requirement per attempt - rather than latching it - would
-    // hand attempt 3 a `false` and license exactly the unkeyed replay of a call
-    // that attempt 1 may already have committed. Two attempts could not tell
-    // the two implementations apart: both would report `[false, true]`.
+    // Three attempts, and the middle one is the discriminator.
     const { messenger, calls, replayRequirements } = fakeInner([
       keyEarnedRetryableError(),
       retryableError(),
@@ -292,10 +276,8 @@ describe("createRetryingMessenger", () => {
   });
 
   it("leaves the requirement off when every failure is pre-dispatch", async () => {
-    // The negative half of the pin above: `true` must be EARNED. Without this,
-    // an implementation that latched on any `RetryableTransportError` at all
-    // would pass the test above and quietly refuse legitimate first-send
-    // downgrades against hosts that predate the capability.
+    // The negative half of the pin above: `true` must be earned.
+    // Without this, an implementation that latched on any `RetryableTransportError` at all would pass the test above and quietly refuse legitimate first-send downgrades against hosts that predate the capability.
     const { messenger, replayRequirements } = fakeInner([
       retryableError(),
       retryableError(),

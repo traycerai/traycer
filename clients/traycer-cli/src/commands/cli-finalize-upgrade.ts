@@ -13,20 +13,8 @@ import type { UpdateMutationCapability } from "@traycer-clients/shared/host-upda
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
 
-// `traycer cli finalize-upgrade` - hidden, internal-only command the
-// Windows/POSIX detached finalize-helper script invokes (via the
-// STAGED CLI binary, once the parent CLI process has exited) to
-// complete a pending self-upgrade. See upgrade/finalize-helper.ts's
-// module doc comment for the full handoff design.
-//
-// This is a leaf command: nothing else wraps it in a lock, so it
-// acquires `cli-lock` itself (Host Update Layer Redesign Tech Plan,
-// "Windows CLI-finalize helper") - own PID + start-time identity, since
-// this runs as its own OS process distinct from both the original CLI
-// process (already exited) and the wrapping helper script. On lock
-// timeout it writes NO marker: `pendingUpgrade` stays populated in the
-// manifest, so the next `host restart` retries the whole flow - "defers
-// to the existing pending-upgrade marker for the next restart".
+// `traycer cli finalize-upgrade` - hidden, internal-only command the Windows/POSIX detached finalize-helper script invokes (via the STAGED CLI binary, once the parent CLI process has exited) to complete a pending self-upgrade.
+// See upgrade/finalize-helper.ts's module doc comment for the full handoff design.
 export const cliFinalizeUpgradeCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
@@ -56,11 +44,8 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
       exitCode: 0,
     };
   } catch (err) {
-    // Both refusals defer the same way: no marker is written, so
-    // `pendingUpgrade` stays populated and the next `host restart` retries.
-    // An active durable attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE from the
-    // nonterminal-attempt admission verdict) is a scheduling refusal exactly
-    // like a busy cli-lock, not a finalization failure.
+    // Both refusals defer the same way: no marker is written, so `pendingUpgrade` stays populated and the next `host restart` retries.
+    // An active durable attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE from the nonterminal-attempt admission verdict) is a scheduling refusal exactly like a busy cli-lock, not a finalization failure.
     if (
       err instanceof CliError &&
       (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
@@ -88,11 +73,8 @@ export type FinalizeSwapOutcome =
       readonly errorMessage: string;
       readonly serviceStartError: string | null;
     }
-  // The manifest still records a pendingUpgrade, but the file it points
-  // at is gone (audit CLI-015). Kept distinct from `no-pending`: the two
-  // describe opposite persisted states, and collapsing them reported
-  // "nothing to finalize" while the manifest was still asking every
-  // future restart to finalize a file that no longer exists.
+  // The manifest still records a pendingUpgrade, but the file it points at is gone (audit CLI-015).
+  // Kept distinct from `no-pending`: the two describe opposite persisted states, and collapsing them reported "nothing to finalize" while the manifest was still asking every future restart to finalize a file that no longer exists.
   | {
       readonly status: "staged-binary-missing";
       readonly stagedVersion: string;
@@ -105,11 +87,8 @@ export type FinalizeSwapOutcome =
     }
   | { readonly status: "lock-timeout" };
 
-// Core: assumes the caller already holds cli-lock (matches the
-// "core assumes caller holds lock" pattern used throughout this ticket
-// - installer/apply.ts, restartWithPendingCliUpgradeFinalize). Kept
-// separate from the command wrapper so tests can exercise it without
-// lock machinery.
+// Core: assumes the caller already holds cli-lock (matches the "core assumes caller holds lock" pattern used throughout this ticket - installer/apply.ts, restartWithPendingCliUpgradeFinalize).
+// Kept separate from the command wrapper so tests can exercise it without lock machinery.
 export async function runFinalizeUpgradeSwap(
   opts: {
     readonly environment: Environment;
@@ -148,26 +127,7 @@ async function runFinalizeUpgradeSwapWithStart(
     status: swap.status,
   });
 
-  // The service was stopped by the `host restart` that scheduled this
-  // helper, and on Windows that restart deliberately skips its own
-  // relaunch (`helperOwnsServiceStart`) - so THIS process owns bringing
-  // the host back, on every path, not just the one where the swap
-  // succeeded. Any outcome that returns without starting it leaves the
-  // machine with no running host because a CLI self-upgrade did not
-  // complete, which is a strictly worse failure than the un-upgraded CLI
-  // it was trying to avoid.
-  //
-  // This holds even for `no-pending`: the restart stops the service and
-  // schedules the helper WITHOUT first checking that there will still be
-  // something to finalize, so "nothing pending" here means another actor
-  // cleared it in between - not that the service is up. The only
-  // production callers are the two helper scripts in
-  // `upgrade/finalize-helper.ts`, both of which run in exactly that
-  // state; the command is hidden and has no other invocation path.
-  //
-  // The single exception is `lock-timeout` (handled by the caller):
-  // another actor holds the CLI lock, and it owns the service lifecycle
-  // for the duration of its own critical section.
+  // Service was stopped by the `host restart` that scheduled this helper; this process starts it after the swap.
   if (swap.status === "no-pending" || swap.status === "no-manifest") {
     const serviceStartError = await startServiceBestEffort(
       startService,
@@ -175,10 +135,8 @@ async function runFinalizeUpgradeSwapWithStart(
       logger,
     );
     if (serviceStartError !== null) {
-      // The helper runs detached with output redirected away. Preserve a
-      // failed hand-back in the cross-version marker format even though no
-      // upgrade identity remains; reconciliation's no-pending/no-manifest
-      // branch intentionally consumes this without identity correlation.
+      // The helper runs detached with output redirected away.
+      // Preserve a failed hand-back in the cross-version marker format even though no upgrade identity remains; reconciliation's no-pending/no-manifest branch intentionally consumes this without identity correlation.
       await writePostFinalizeMarkerFile(markerPath, {
         status: "swap-failed",
         attemptedAt: new Date().toISOString(),
@@ -193,21 +151,8 @@ async function runFinalizeUpgradeSwapWithStart(
   }
 
   if (swap.status === "staged-binary-missing") {
-    // The pending record outlived the file it points at (cleanup, AV,
-    // a wiped tmpdir). `pendingUpgrade` is deliberately RETAINED rather
-    // than cleared: it is the only remaining evidence that the user
-    // asked for an upgrade they never received, and Doctor already
-    // renders it as "CLI upgrade staged but staged binary is missing"
-    // with `traycer cli upgrade` as the recovery command. Clearing it
-    // here would silently erase that request; re-downloading here would
-    // turn the finalize helper - which runs detached, after its parent
-    // exited - into a network operation nobody is watching.
-    //
-    // The marker reuses the `swap-failed` status on purpose. Marker
-    // files cross CLI versions (the STAGED binary writes one, the
-    // still-LIVE older binary reads it), and an unrecognised status
-    // reads as `marker-invalid` on every already-installed CLI. The
-    // errorMessage carries the distinction that matters.
+    // The pending record outlived the file it points at (cleanup, AV, a wiped tmpdir).
+    // `pendingUpgrade` is deliberately RETAINED rather than cleared: it is the only remaining evidence that the user asked for an upgrade they never received, and Doctor already renders it as "CLI upgrade staged but staged binary is missing" with `traycer cli upgrade` as the recovery command.
     const serviceStartError = await startServiceBestEffort(
       startService,
       opts.environment,
@@ -229,9 +174,8 @@ async function runFinalizeUpgradeSwapWithStart(
     };
   }
 
-  // `publish-failed` and `still-locked` are the same shape of outcome:
-  // the swap did not happen, the live binary is untouched, and
-  // `pendingUpgrade` stands. Both must still hand the host back.
+  // `publish-failed` and `still-locked` are the same shape of outcome: the swap did not happen, the live binary is untouched, and `pendingUpgrade` stands.
+  // Both must still hand the host back.
   if (swap.status === "publish-failed" || swap.status === "still-locked") {
     const serviceStartError = await startServiceBestEffort(
       startService,
@@ -294,16 +238,10 @@ async function runFinalizeUpgradeSwapWithStart(
   };
 }
 
-// Hand the host back. Best-effort by design: this runs on paths that are
-// already reporting a failure, and a service-start error must be recorded
-// rather than replace the outcome the caller needs to see. The returned
-// message goes into the marker's `serviceStartError` so the next CLI
-// invocation's reconcile can surface it.
+// Hand the host back.
+// Best-effort by design: this runs on paths that are already reporting a failure, and a service-start error must be recorded rather than replace the outcome the caller needs to see.
 async function startServiceBestEffort(
-  // The INJECTED start, never a raw controller call: under the maintenance
-  // capability the thunk is `startHostServiceWithAttempt`, and a raw start
-  // here would hand the host back outside the attempt gate on exactly the
-  // paths that report failures.
+  // The INJECTED start, never a raw controller call: under the maintenance capability the thunk is `startHostServiceWithAttempt`, and a raw start here would hand the host back outside the attempt gate on exactly the paths that report failures.
   startService: () => Promise<void>,
   environment: Environment,
   logger: ILogger,

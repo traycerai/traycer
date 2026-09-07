@@ -41,9 +41,7 @@ const RUNNING_SHELL: ManagedCommand = {
   updatedAtMs: 1,
 };
 
-// Awareness reports a TIER per working agent, not bare membership: a host that
-// classifies its agents distinguishes an active turn from background-only work,
-// and one that does not reports every working agent as "turn".
+// Awareness reports a TIER per working agent, not bare membership: a host that classifies its agents distinguishes an active turn from background-only work, and one that does not reports every working agent as "turn".
 const mockSessionState = vi.hoisted<{
   readonly activityTiers: Map<string, "turn" | "background">;
   existingHandle: ChatSessionStoreHandle | null;
@@ -275,10 +273,8 @@ describe("<ChatProgressIcon />", () => {
   });
 
   it("shows the background glyph for an UNOPENED chat the host reports as background-only", () => {
-    // No session handle, so awareness is the only authority. Reading it as a
-    // bare id set could not express this: every working chat got the turn
-    // spinner, which put an unopened background-only chat at odds with the
-    // calm glyph the sidebar's descendant rollup showed for that same chat.
+    // No session handle, so awareness is the only authority.
+    // Reading it as a bare id set could not express this: every working chat got the turn spinner, which put an unopened background-only chat at odds with the calm glyph the sidebar's descendant rollup showed for that same chat.
     mockSessionState.activityTiers.set(CHAT_ID, "background");
 
     renderIcon();
@@ -292,9 +288,7 @@ describe("<ChatProgressIcon />", () => {
   });
 
   it("still shows the turn spinner when the host has not classified its agents", () => {
-    // A host that omits the turn field leaves every working agent at "turn" -
-    // the conservative pre-tier reading - so this arm must not regress into
-    // presenting unclassified work as background.
+    // A host that omits the turn field leaves every working agent at "turn" - the conservative pre-tier reading - so this arm must not regress into presenting unclassified work as background.
     mockSessionState.activityTiers.set(CHAT_ID, "turn");
 
     renderIcon();

@@ -30,38 +30,20 @@ interface TerminalLaunchPanelProps {
    *  carries back to chat and vice-versa. */
   readonly store: ComposerToolbarStore;
   readonly pending: boolean;
-  /**
-   * When non-null the launch is blocked (e.g. no workspace folder): the Start
-   * button renders disabled with this string as its tooltip. `null` means the
-   * workspace is ready.
-   */
+  /** When non-null the launch is blocked (e.g. no workspace folder): the Start button renders disabled with this
+   * string as its tooltip. */
   readonly disabledHint: string | null;
-  /**
-   * The host the terminal agent launches on: the picker's harnesses / models
-   * / profiles and this panel's own saved-args read (`providers.list`) all
-   * resolve against it. `null` follows the app-wide default (the landing
-   * composer); the new-conversation modal passes its pinned host.
-   */
+  /** The host the terminal agent launches on: the picker's harnesses / models / profiles and this panel's own
+   * saved-args read (`providers.list`) all resolve against it. */
   readonly hostId: string | null;
   /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
-  /**
-   * Fires on Start with the fully-assembled launch (harness/model/effort/agent
-   * mode + CLI args). The panel owns assembly so the caller only gates the
-   * workspace and dispatches.
-   */
+  /** The panel owns assembly so the caller only gates the workspace and dispatches. */
   readonly onStart: (launch: TerminalAgentLaunch) => void;
 }
 
-// Body for the landing composer's "terminal" mode. Reuses the same
-// harness/model/effort picker and agent-mode toggle the chat toolbar uses (the
-// selection is shared via the toolbar store) and adds an optional CLI-args
-// field plus a Start button.
-//
-// Layout mirrors the chat composer (a `min-h-20` body over a toolbar row) so
-// the input box keeps a stable height when switching modes. The text editor is
-// intentionally absent - terminal agents launch empty.
+// Body for the landing composer's "terminal" mode.
 function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const {
     store,
@@ -74,12 +56,8 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
   const reasoning = useStore(store, (s) => s.reasoning);
-  // Launch capability is the runtime `modes` the host advertises for the
-  // selected harness - the same signal the store uses to reroute off non-TUI
-  // harnesses, not the schema id (`isTuiHarnessId`). Gating on `modes` keeps
-  // Start in lockstep with the store's reroute and stays disabled until the
-  // catalog confirms capability, instead of briefly enabling a pre-reroute
-  // selection that can't back a terminal agent.
+  // Gating on `modes` keeps Start in lockstep with the store's reroute and stays disabled until the catalog
+  // confirms capability, instead of briefly enabling a pre-reroute selection that can't back a terminal agent.
   const selectionIsTuiCapable = useStore(
     store,
     (s) =>
@@ -87,13 +65,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
         ?.find((harness) => harness.id === s.selection.harnessId)
         ?.modes.includes("tui") ?? false,
   );
-  // CLI args pre-fill from the selected provider's saved Settings value. Typing
-  // marks the field `touched` (a per-launch override); leaving it untouched
-  // forwards `null` so the host resolves the current saved default itself -
-  // which also avoids sending a stale "" before `providers.list` has loaded.
-  // Read from the launch host - the same host the picker below offers
-  // harnesses/profiles from - so the pre-filled args are the ones that host's
-  // provider settings actually hold.
+  // CLI args pre-fill from the selected provider's saved Settings value.
   const launchHostClient = useHostClientForHostId(hostId);
   const providersQuery = useProvidersListForClient(launchHostClient, {
     enabled: activityEnabled,
@@ -111,9 +83,8 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
     draft: savedArgs,
     touched: false,
   }));
-  // Re-seed on harness switch, and adopt the saved value if it arrives (async
-  // `providers.list`) before the user edits. setState-during-render is the
-  // sanctioned same-component "adjust state on prop change" pattern.
+  // Re-seed on harness switch, and adopt the saved value if it arrives (async `providers.list`) before the user
+  // edits.
   const needsReseed =
     argsState.harnessId !== selection.harnessId ||
     (!argsState.touched && argsState.draft !== savedArgs);
@@ -127,20 +98,15 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const argsDraft = needsReseed ? savedArgs : argsState.draft;
   const argsTouched = needsReseed ? false : argsState.touched;
 
-  // Managed-pack gate. Derived from the `providers.list` response this panel
-  // already holds, so gating costs no extra query. A terminal agent bypasses
-  // the chat composer entirely, which is exactly why it needs its own gate:
-  // the host resolver would refuse the launch, but the user would only find
-  // out after pressing Start.
+  // Managed-pack gate. A terminal agent bypasses the chat composer entirely, which is exactly why it needs its
+  // own gate: the host resolver would refuse the launch, but the user would only find out after pressing Start.
   const packPreparingHint = terminalPackPreparingHint(
     harnessId,
     providersQuery.data?.providers,
   );
 
-  // The harness/model picker lists every GUI harness, including ones that can't
-  // back a terminal agent. Block Start (rather than silently no-op) unless the
-  // shared selection is runtime-TUI-capable, and likewise while its managed
-  // pack is still being readied.
+  // Block Start (rather than silently no-op) unless the shared selection is runtime-TUI-capable, and likewise
+  // while its managed pack is still being readied.
   const launchHint =
     disabledHint ??
     (selectionIsTuiCapable
@@ -188,9 +154,8 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           lockedHarnessId={null}
           disabled={pending}
           registerActivation
-          // The launch host - same scope as this panel's own `providers.list`
-          // read above (`null` = the app-wide default, for the landing
-          // composer, which has no tab to bind to yet).
+          // The launch host - same scope as this panel's own `providers.list` read above (`null` = the app-wide default,
+          // for the landing composer, which has no tab to bind to yet).
           createProfileHostId={hostId}
           runTargetHostId={hostId}
           terminalLoginSurface={terminalLoginSurface}
@@ -244,10 +209,8 @@ function StartButton(props: StartButtonProps) {
       type="button"
       size="sm"
       variant="secondary"
-      // Match the chat composer's `size-8` (h-8) send button so the terminal
-      // toolbar row is the same height as the chat toolbar (no switch flicker).
-      // Traycer Green gives popovers and secondary buttons the same color, so
-      // add dialog-local contrast without changing the landing-page treatment.
+      // Traycer Green gives popovers and secondary buttons the same color, so add dialog-local contrast without
+      // changing the landing-page treatment.
       className="h-8 in-data-[slot=dialog-content]:bg-input/60 in-data-[slot=dialog-content]:hover:bg-input/80"
       aria-label="Start agent"
       aria-keyshortcuts="Meta+Enter Control+Enter"
@@ -275,21 +238,8 @@ function StartButton(props: StartButtonProps) {
   );
 }
 
-/**
- * Managed-pack hint for the selected terminal harness, or null when it can run
- * (or is not a terminal harness at all - `selectionIsTuiCapable` owns that case
- * and reports it more precisely).
- *
- * A terminal agent launch bypasses the chat composer entirely, so it needs its
- * own gate rather than inheriting one: the host resolver would refuse the
- * launch either way, but without this the user only finds out after pressing
- * Start.
- *
- * Returns null for a NON-BLOCKING install for the same reason the composer
- * gate does: this string is the panel's disabled-hint, and the host would
- * resolve the bundled/PATH/custom binary and launch. A hint here would turn a
- * background download into a refused launch.
- */
+/** A terminal agent launch bypasses the chat composer entirely, so it needs its own gate rather than inheriting
+ * one. */
 function terminalPackPreparingHint(
   harnessId: GuiHarnessId,
   providers: ReadonlyArray<ProviderCliState> | undefined,

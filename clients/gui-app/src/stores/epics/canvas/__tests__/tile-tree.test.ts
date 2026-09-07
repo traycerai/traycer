@@ -73,9 +73,8 @@ describe("normalizeSizes", () => {
   });
 
   it("falls back to even sizes when all weights collapse to 0", () => {
-    // After sanitization every entry becomes 1, never 0, so the only way to
-    // hit the zero-total branch is an empty-yet-counted request padded to 1s;
-    // verify the padded path still produces a valid distribution.
+    // After sanitization every entry becomes 1, never 0, so the only way to hit the zero-total branch
+    // is an empty-yet-counted request padded to 1s; verify the padded path still produces a valid
     expectSizesCloseTo(normalizeSizes([], 3), [1 / 3, 1 / 3, 1 / 3]);
   });
 });
@@ -476,11 +475,8 @@ describe("insertPaneAtEdge - rejections", () => {
 });
 
 /**
- * Ticket 20: read-only dissolve predictor used by close/move/tear-off action
- * creators to know which surviving panes' painted chats remount when a pane
- * removal dissolves its 2-child parent. Must mirror `removePaneFromTree`'s
- * single-survivor branch exactly - a multi-pane promoted survivor remounts
- * EVERY descendant pane, not just the direct sibling.
+ * read-only dissolve predictor used by close/move/tear-off action creators to know
+ * which surviving panes' painted chats remount when a pane removal dissolves its 2-child parent.
  */
 describe("paneRemovalDissolveHandoffTargets", () => {
   it("returns the survivor's active tab when the parent group has exactly 2 children", () => {
@@ -568,15 +564,8 @@ describe("paneRemovalDissolveHandoffTargets", () => {
   });
 
   /**
-   * Review round 1, finding 4: the original version of this test only
-   * checked `result.root?.kind` (pane vs group) - it would stay green even
-   * if the helper flushed the WRONG pane's tabs, or missed panes nested
-   * under a multi-pane survivor, as long as the root's shape matched.
-   * Compares the EXACT set of active-tab ids `paneRemovalDissolveHandoffTargets`
-   * predicts against `removePaneFromTree`'s REAL post-removal tree - walking
-   * to wherever the survivor actually landed (found independently via
-   * `findPanePath`/`getNodeAtPath`, not by re-deriving the helper's own
-   * `parentPath` logic) and collecting every pane grafted in there.
+   * Compares the EXACT set of active-tab ids `paneRemovalDissolveHandoffTargets` predicts against
+   * `removePaneFromTree`'s REAL post-removal tree - walking to wherever the survivor actually landed
    */
   function exactSurvivorActiveTabIds(
     root: TileLayoutNode,
@@ -616,9 +605,8 @@ describe("paneRemovalDissolveHandoffTargets", () => {
       "a",
     );
     expect(dissolved?.root?.kind).toBe("pane");
-    // 2-child, remove index 1 (reversed): the OTHER child is now the
-    // survivor - catches an off-by-one/reversed-index bug the index-0-only
-    // case above cannot.
+    // 2-child, remove index 1 (reversed): the OTHER child is now the survivor - catches an
+    // off-by-one/reversed-index bug the index-0-only case above cannot.
     expect(paneRemovalDissolveHandoffTargets(twoChild, "b")).toEqual(
       exactSurvivorActiveTabIds(twoChild, { g: [0.5, 0.5] }, "b"),
     );
@@ -649,9 +637,6 @@ describe("paneRemovalDissolveHandoffTargets", () => {
   });
 
   it("agrees with removePaneFromTree when the dissolving group is nested (not the tree root)", () => {
-    // Removing "a" dissolves "inner" (2 -> 1 child), promoting "b" into
-    // inner's slot - but "inner" itself is a child of "outer", so the
-    // helper must locate the RIGHT parent path, not assume it is the root.
     const tree = group("outer", "horizontal", [
       pane("x", ["t-x"]),
       group("inner", "vertical", [pane("a", ["t-a"]), pane("b", ["t-b"])]),

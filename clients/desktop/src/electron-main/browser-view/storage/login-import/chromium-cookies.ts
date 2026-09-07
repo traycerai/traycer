@@ -15,19 +15,8 @@ import {
   type SqliteRow,
 } from "./sqlite-columns";
 
-/**
- * Reader for a Chromium-family `Cookies` database (Chrome, Edge, Brave, Arc,
- * Vivaldi, Opera, Chromium itself). Metadata only: the value column is
- * carried as bytes plus its version prefix and decrypted later, by
- * `chromium-crypto.ts`, and only for the rows the user chose.
- */
 
 export interface ChromiumCookieDatabase {
-  /**
-   * `meta.version`, Chromium's own schema number. From 24 on, every encrypted
-   * value carries a SHA-256 of its `host_key` in front of the plaintext; the
-   * decryptor needs to know which side of that line the jar is on.
-   */
   readonly metaVersion: number;
   readonly rows: readonly ImportCookieRow[];
 }
@@ -130,11 +119,7 @@ function readExpires(row: SqliteRow, hasHasExpires: boolean): number {
   );
 }
 
-/**
- * Chromium's `CookieSameSite`: -1 unspecified, 0 none, 1 lax, 2 strict. An
- * unspecified cookie is enforced as Lax by every current browser, so that is
- * what it becomes here rather than a `None` it never had.
- */
+/** An unspecified cookie is enforced as Lax by every current browser, so that is what it becomes here rather than a `None` it never had. */
 function readSameSite(row: SqliteRow): ImportCookieSameSite {
   const value = readInteger(row, "samesite");
   if (value === 0) return "None";

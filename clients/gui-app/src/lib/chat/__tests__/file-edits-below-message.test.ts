@@ -172,9 +172,7 @@ describe("resolveRevertScope", () => {
   ];
 
   /**
-   * The legacy line hands over no window, and `messages`/`events` there are the
-   * whole transcript - so the scope is always known and the two scans answer
-   * exactly as they always have.
+   * The legacy line hands over no window, and `messages`/`events` there are the whole transcript - so the scope is always known and the two scans answer exactly as they always have.
    */
   it("answers from the records when there is no window", () => {
     expect(
@@ -210,11 +208,8 @@ describe("resolveRevertScope", () => {
   });
 
   /**
-   * The regression this exists for. `u1` is rendered - the user is editing it -
-   * but the rows below it are not hydrated, so `messages`/`events` carry
-   * neither the later turn nor its checkpoint. Both scans would report a clean
-   * history: no prompt, and no artifact opt-out for an artifact the host is
-   * about to revert.
+   * The regression this exists for.
+   * `u1` is rendered - the user is editing it - but the rows below it are not hydrated, so `messages`/`events` carry neither the later turn nor its checkpoint.
    */
   it("refuses to answer when the rows below the edit point are cold", () => {
     const window = applyWindowedSnapshot(
@@ -265,9 +260,8 @@ describe("editSubmitNeedsRevertPrompt", () => {
   });
 
   /**
-   * Skipping the prompt is not neutral - it submits `revertFileChanges: false`,
-   * choosing "Don't revert" for the user over edits they never saw. An unknown
-   * scope therefore asks.
+   * Skipping the prompt is not neutral - it submits `revertFileChanges: false`, choosing "Don't revert" for the user over edits they never saw.
+   * An unknown scope therefore asks.
    */
   it("prompts rather than deciding for the user on an unknown scope", () => {
     expect(editSubmitNeedsRevertPrompt({ known: false })).toBe(true);
@@ -296,9 +290,8 @@ describe("revertPromptArtifactCount", () => {
   });
 
   /**
-   * The collapse this exists to prevent. `0` would hide an opt-out that
-   * defaults to CHECKED, so artifacts would be reverted with nothing on screen
-   * having offered the choice.
+   * The collapse this exists to prevent.
+   * `0` would hide an opt-out that defaults to CHECKED, so artifacts would be reverted with nothing on screen having offered the choice.
    */
   it("does not collapse an unknown count to zero", () => {
     expect(revertPromptArtifactCount({ known: false })).toBeNull();

@@ -14,34 +14,17 @@ import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
 
-// `node:sea` is absent under interpreter runs (bun, tsx); `isPackagedRun` in
-// `cli-binary.ts` treats an import failure as "not packaged". Mock it with
-// mutable state so individual tests can flip "packaged" on and off - vitest
-// intercepts the dynamic `await import("node:sea")` through this mock.
+// `node:sea` is absent under interpreter runs (bun, tsx); `isPackagedRun` in `cli-binary.ts` treats an import failure as "not packaged".
+// Mock it with mutable state so individual tests can flip "packaged" on and off - vitest intercepts the dynamic `await import("node:sea")` through this mock.
 const seaState = vi.hoisted(() => ({ current: false }));
 vi.mock("node:sea", () => ({ isSea: () => seaState.current }));
 
-// `stagedSlotInvocation` verifies that the path it is about to register can
-// actually be EXECUTED, which is the only way to detect a home directory
-// mounted `noexec`: there the copy and the chmod both succeed and only
-// `execve` refuses. Simulated by refusing the listed paths with EACCES, the
-// same errno that mount flag produces, and letting every other path "run".
-//
-// Callback-style deliberately: `cli-binary.ts` builds its probe with
-// `promisify(execFile)`, and without `util.promisify.custom` on this mock
-// promisify wraps it by the ordinary callback convention. A promise-returning
-// mock would never resolve.
-// `versionForPath` also drives `resolveNodeOnPath`, which now checks that the
-// `node` it is about to pin into a unit file actually reports a supported
-// version. The default is a supported one, so every test that only cares
-// about WHICH candidate is chosen keeps expressing exactly that.
+// `stagedSlotInvocation` verifies that the path it is about to register can actually be EXECUTED, which is the only way to detect a home directory mounted `noexec`: there the copy and the chmod both succeed and only `execve` refuses.
+// Simulated by refusing the listed paths with EACCES, the same errno that mount flag produces, and letting every other path "run".
 const execControl = vi.hoisted(() => ({
   refuseWithEaccesForPaths: [] as string[],
-  // A failure that is NOT a spawn refusal - ETIMEDOUT here, standing in for
-  // the whole family (a loaded machine, a non-zero exit). `canExecute`'s
-  // conservative arm answers "yes" for these, and that arm needs its own
-  // control: without one, only the EACCES side of the errno split is ever
-  // exercised, and a `catch { return false }` rewrite would stay green.
+  // A failure that is NOT a spawn refusal - ETIMEDOUT here, standing in for the whole family (a loaded machine, a non-zero exit).
+  // `canExecute`'s conservative arm answers "yes" for these, and that arm needs its own control: without one, only the EACCES side of the errno split is ever exercised, and a `catch { return false }` rewrite would stay green.
   failWithEtimedoutForPaths: [] as string[],
   versionForPath: new Map<string, string>(),
   defaultVersion: "v22.11.0\n",
@@ -85,12 +68,8 @@ vi.mock("node:child_process", async (importOriginal) => {
     callback(error, stdout, "");
     return {};
   };
-  // The real `child_process.execFile` carries `util.promisify.custom`, which
-  // is why `promisify(execFile)` resolves `{ stdout, stderr }` rather than a
-  // bare string. Without it here, promisify would fall back to the plain
-  // callback convention and hand production's `const { stdout } = ...`
-  // destructure an undefined - i.e. the mock would be testing a DIFFERENT
-  // contract than the one that ships, and would fail code that is correct.
+  // The real `child_process.execFile` carries `util.promisify.custom`, which is why `promisify(execFile)` resolves `{ stdout, stderr }` rather than a bare string.
+  // Without it here, promisify would fall back to the plain callback convention and hand production's `const { stdout } = ...` destructure an undefined - i.e. the mock would be testing a DIFFERENT contract than the one that ships, and would fail code that is correct.
   Object.defineProperty(mockExecFile, promisify.custom, {
     value: (file: string) =>
       new Promise<{ stdout: string; stderr: string }>(
@@ -104,24 +83,15 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, execFile: mockExecFile };
 });
 
-// `store/paths` binds its home root from `os.homedir()` at module load -
-// mirror the established pattern
-// (`commands/__tests__/cli-finalize-upgrade.test.ts`) so each test's dynamic
-// imports of the modules under test bind to a fresh tmp HOME instead of the
-// real one.
+// `store/paths` binds its home root from `os.homedir()` at module load - mirror the established pattern (`commands/__tests__/cli-finalize-upgrade.test.ts`) so each test's dynamic imports of the modules under test bind to a fresh tmp HOME instead of the real one.
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
 
-// Lets the win32 slot-exists-after-a-failed-publish test (Fix 3's "stale
-// slot survives a failed staging attempt" branch) intercept exactly ONE
-// `rename()` call by its 1-based call number - the identical technique
-// `store/__tests__/well-known-cli.test.ts` uses for the same underlying
-// `stageWellKnownCliBinary` win32 rename-aside/restore path. Every other
-// test in this file leaves `failOnCallNumber` null, so every `rename()`
-// call is a plain passthrough.
+// Lets the win32 slot-exists-after-a-failed-publish test (Fix 3's "stale slot survives a failed staging attempt" branch) intercept exactly ONE `rename()` call by its 1-based call number - the identical technique `store/__tests__/well-known-cli.test.ts` uses for the same underlying `stageWellKnownCliBinary` win32 rename-aside/restore path.
+// Every other test in this file leaves `failOnCallNumber` null, so every `rename()` call is a plain passthrough.
 const renameControl = vi.hoisted(() => ({
   callCount: 0,
   failOnCallNumber: null as number | null,
@@ -140,11 +110,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-// `stagedSlotInvocation`'s "staging failed and nothing is staged" branch
-// reports through the real CLI logger, which appends to the invoking user's
-// `~/.traycer` log file. Stub it so the suite stays hermetic and that
-// warning is assertable - mirrors
-// `service/__tests__/install-lifecycle.test.ts`'s identical stub.
+// `stagedSlotInvocation`'s "staging failed and nothing is staged" branch reports through the real CLI logger, which appends to the invoking user's `~/.traycer` log file.
+// Stub it so the suite stays hermetic and that warning is assertable - mirrors `service/__tests__/install-lifecycle.test.ts`'s identical stub.
 const mocks = vi.hoisted(() => ({
   cliLoggerWarnMock: vi.fn(),
 }));
@@ -211,10 +178,7 @@ afterEach(() => {
   rmSync(workHome, { recursive: true, force: true });
 });
 
-// `npmInterpreterInvocation`'s PATH fallback (Fix 4) resolves an absolute
-// `node` off `process.env.PATH` - tests that want a deterministic answer
-// point PATH at a directory they fully control rather than trusting
-// whatever the host machine happens to have installed.
+// `npmInterpreterInvocation`'s PATH fallback (Fix 4) resolves an absolute `node` off `process.env.PATH` - tests that want a deterministic answer point PATH at a directory they fully control rather than trusting whatever the host machine happens to have installed.
 function withPath<T>(pathValue: string, run: () => Promise<T>): Promise<T> {
   const original = process.env.PATH;
   process.env.PATH = pathValue;
@@ -227,9 +191,7 @@ function withPath<T>(pathValue: string, run: () => Promise<T>): Promise<T> {
   });
 }
 
-// A minimal stand-in `node`/`node.exe` on PATH: `resolveNodeOnPath` only
-// checks that the candidate exists and is executable
-// (`access(candidate, X_OK)`), so the file's actual contents never run.
+// A minimal stand-in `node`/`node.exe` on PATH: `resolveNodeOnPath` only checks that the candidate exists and is executable (`access(candidate, X_OK)`), so the file's actual contents never run.
 function writeFakeExecutableNode(dir: string): string {
   const name = process.platform === "win32" ? "node.exe" : "node";
   const path = join(dir, name);
@@ -240,11 +202,7 @@ function writeFakeExecutableNode(dir: string): string {
   return path;
 }
 
-// A directory named `node`/`node.exe` on a PATH entry: execute permission on
-// a directory means "searchable", not "runs as a program" - the regression
-// this guards against is `resolveNodeOnPath` accepting it via
-// `access(candidate, X_OK)` alone, ahead of a real interpreter sitting on a
-// later PATH entry.
+// A directory named `node`/`node.exe` on a PATH entry: execute permission on a directory means "searchable", not "runs as a program" - the regression this guards against is `resolveNodeOnPath` accepting it via `access(candidate, X_OK)` alone, ahead of a real interpreter sitting on a later PATH entry.
 function writeNodeLookingDirectory(dir: string): string {
   const name = process.platform === "win32" ? "node.exe" : "node";
   const path = join(dir, name);
@@ -289,11 +247,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // A path that EXISTS is not a path that can be run. `access()` succeeds on
-  // a directory, so an existence test would hand a directory straight through
-  // to the service definition, producing a unit systemd and launchd both
-  // accept and neither can ever start. Every path this resolver returns has
-  // to be a regular file, and an override is the one a user types.
+  // A path that EXISTS is not a path that can be run.
+  // `access()` succeeds on a directory, so an existence test would hand a directory straight through to the service definition, producing a unit systemd and launchd both accept and neither can ever start.
   it("throws SERVICE_CLI_PATH_UNRESOLVED when the override is a DIRECTORY", async () => {
     const overridePath = join(workHome, "a-directory-not-a-binary");
     mkdirSync(overridePath, { recursive: true });
@@ -317,12 +272,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // Manifest branch, source !== "npm": the registered command must be the
-  // well-known slot (`<cliInstallHomeDir>/bin/traycer`), staged as a COPY of
-  // the manifest binary's bytes - not the manifest's binaryPath directly.
-  // The host daemon's own CLI discovery reads ONLY that slot, so a
-  // registration naming any other path leaves it reporting
-  // `cli-unavailable` even while the service runs.
+  // Manifest branch, source !== "npm": the registered command must be the well-known slot (`<cliInstallHomeDir>/bin/traycer`), staged as a COPY of the manifest binary's bytes - not the manifest's binaryPath directly.
+  // The host daemon's own CLI discovery reads ONLY that slot, so a registration naming any other path leaves it reporting `cli-unavailable` even while the service runs.
   it("stages the well-known slot from the CLI manifest's binaryPath and returns the slot path", async () => {
     const binaryPath = join(workHome, "manifest-binary");
     const binaryBytes = "manifest binary bytes";
@@ -353,11 +304,8 @@ describe("resolveServiceCliInvocation", () => {
     expect(readFileSync(wellKnownPath, "utf8")).toBe(binaryBytes);
   });
 
-  // Re-anchor regression: `cli re-anchor` rewrites the manifest's
-  // binaryPath in place (e.g. after a manual re-anchor to a different
-  // binary). Both resolutions must register the SAME well-known slot path
-  // - the host's discovery never changes - and the slot's bytes must track
-  // the newest manifest binary, not whichever one staged it first.
+  // Re-anchor regression: `cli re-anchor` rewrites the manifest's binaryPath in place (e.g. after a manual re-anchor to a different binary).
+  // Both resolutions must register the SAME well-known slot path - the host's discovery never changes - and the slot's bytes must track the newest manifest binary, not whichever one staged it first.
   it("re-anchoring the manifest to a different binaryPath re-stages the SAME well-known slot with the new bytes", async () => {
     const { writeCliManifest } = await import("../../manifest/cli-manifest");
     const { wellKnownCliBinaryPath } =
@@ -405,9 +353,7 @@ describe("resolveServiceCliInvocation", () => {
     );
   });
 
-  // Staging is best-effort (see `stagedSlotInvocation` in cli-binary.ts):
-  // when it fails, the service must still be registered against the real
-  // manifest binary rather than left unresolved.
+  // Staging is best-effort (see `stagedSlotInvocation` in cli-binary.ts): when it fails, the service must still be registered against the real manifest binary rather than left unresolved.
   it("falls back to the manifest's binaryPath directly when staging the well-known slot fails", async () => {
     const binaryPath = join(workHome, "manifest-binary-staging-fails");
     writeFileSync(binaryPath, "binary bytes");
@@ -422,10 +368,7 @@ describe("resolveServiceCliInvocation", () => {
     const { cliInstallHomeDir } = await import("../../store/paths");
     const parentDir = cliInstallHomeDir(ENVIRONMENT);
     const binDirPath = join(parentDir, "bin");
-    // A REGULAR FILE at the `bin` directory path makes
-    // `stageWellKnownCliBinary`'s `mkdir(dirname(wellKnownPath), { recursive: true })`
-    // fail, forcing the staging outcome to "failed" - same technique the
-    // well-known-cli suite uses.
+    // A REGULAR FILE at the `bin` directory path makes `stageWellKnownCliBinary`'s `mkdir(dirname(wellKnownPath), { recursive: true })` fail, forcing the staging outcome to "failed" - same technique the well-known-cli suite uses.
     writeFileSync(binDirPath, "not a directory");
     const { resolveServiceCliInvocation } = await import("../cli-binary");
 
@@ -438,14 +381,8 @@ describe("resolveServiceCliInvocation", () => {
     expect(result).toEqual({ command: binaryPath, args: [] });
   });
 
-  // Native Packaging system-marker fallback: `readCliManifest` SYNTHESIZES a
-  // manifest from `/var/lib/traycer/source.{apt,rpm}` on Linux prod when no
-  // per-user manifest file exists yet (first invocation after an
-  // unattended apt/rpm install). That manifest's source is "apt"/"rpm", not
-  // "npm", so it must take the staging branch end-to-end exactly like a
-  // hand-written manifest would. `process.platform` is stubbed (rather than
-  // `it.runIf`-gated) so this exercises the real Linux code path on every
-  // CI runner, not just Linux ones.
+  // Native Packaging system-marker fallback: `readCliManifest` SYNTHESIZES a manifest from `/var/lib/traycer/source.{apt,rpm}` on Linux prod when no per-user manifest file exists yet (first invocation after an unattended apt/rpm install).
+  // That manifest's source is "apt"/"rpm", not "npm", so it must take the staging branch end-to-end exactly like a hand-written manifest would.
   it("stages the well-known slot end-to-end from a synthesized apt/rpm system-source manifest", async () => {
     const { __setSystemSourceMarkerDirForTest } =
       await import("../../manifest/cli-manifest");
@@ -525,14 +462,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // The npm distribution ships a shebanged Node bundle with no install
-  // hook: `readCliManifest` SYNTHESIZES an npm-source manifest from the
-  // `TRAYCER_CLI_DISTRIBUTION=npm` env shim (binaryPath = process.argv[1])
-  // when no manifest file exists on disk. Registering that script directly
-  // makes the service depend on `node` being on the service manager's PATH
-  // (false for nvm under systemd), so the resolver pins the absolute
-  // interpreter instead - but only when the RESOLVING process is that same
-  // npm bundle (env shim set, not packaged).
+  // The npm distribution ships a shebanged Node bundle with no install hook: `readCliManifest` SYNTHESIZES an npm-source manifest from the `TRAYCER_CLI_DISTRIBUTION=npm` env shim (binaryPath = process.argv[1]) when no manifest file exists on disk.
+  // Registering that script directly makes the service depend on `node` being on the service manager's PATH (false for nvm under systemd), so the resolver pins the absolute interpreter instead - but only when the RESOLVING process is that same npm bundle (env shim set, not packaged).
   it("pins the interpreter when a persisted manifest's source is npm and the distribution shim env is set", async () => {
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
@@ -554,22 +485,14 @@ describe("resolveServiceCliInvocation", () => {
     });
 
     expect(result).toEqual({ command: process.execPath, args: [binaryPath] });
-    // npm never gets an executable slot: it ships a shebanged script, not a
-    // binary, and staging it into the well-known slot would leave the host
-    // trying to exec JavaScript directly.
+    // npm never gets an executable slot: it ships a shebanged script, not a binary, and staging it into the well-known slot would leave the host trying to exec JavaScript directly.
     const { wellKnownCliBinaryPath } =
       await import("../../store/well-known-cli");
     expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
   });
 
-  // Fix 4 (`npmInterpreterInvocation`'s PATH fallback): a PERSISTED npm
-  // manifest resolved by a DIFFERENT process than the one that wrote it (no
-  // distribution shim env) no longer falls back to the raw bundle path
-  // directly - it pins the first executable `node` it finds on the
-  // resolving user's PATH, so the eventual service unit never depends on the
-  // SERVICE MANAGER's PATH containing `node` (false for nvm/asdf under
-  // systemd). PATH is pointed at a directory this test fully controls so the
-  // answer does not depend on whatever the host machine has installed.
+  // Fix 4 (`npmInterpreterInvocation`'s PATH fallback): a PERSISTED npm manifest resolved by a DIFFERENT process than the one that wrote it (no distribution shim env) no longer falls back to the raw bundle path directly - it pins the first executable `node` it finds on the resolving user's PATH, so the eventual service unit never depends on the SERVICE MANAGER's PATH containing `node` (false for nvm/asdf under systemd).
+  // PATH is pointed at a directory this test fully controls so the answer does not depend on whatever the host machine has installed.
   it("pins the first executable node found on PATH when source is npm and the distribution shim env is unset", async () => {
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
@@ -603,11 +526,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // Same PATH fallback, but for a resolving process that IS packaged (a SEA
-  // binary sharing the machine with an npm install). The shim env being set
-  // is irrelevant once `isPackagedRun()` is true - `process.execPath` is the
-  // SEA binary's own bytes, not a node interpreter, so this must still go
-  // through the PATH scan rather than pin `process.execPath`.
+  // Same PATH fallback, but for a resolving process that IS packaged (a SEA binary sharing the machine with an npm install).
+  // The shim env being set is irrelevant once `isPackagedRun()` is true - `process.execPath` is the SEA binary's own bytes, not a node interpreter, so this must still go through the PATH scan rather than pin `process.execPath`.
   it("pins the first executable node found on PATH when source is npm, the shim env is set, but the resolving run is packaged", async () => {
     seaState.current = true;
     const binaryPath = join(workHome, "npm-bundle.js");
@@ -635,9 +555,7 @@ describe("resolveServiceCliInvocation", () => {
       );
 
       expect(result).toEqual({ command: fakeNode, args: [binaryPath] });
-      // Even a PACKAGED run must never stage the slot on the npm source
-      // branch - that branch returns before the packaged self-invocation
-      // path is ever reached.
+      // Even a PACKAGED run must never stage the slot on the npm source branch - that branch returns before the packaged self-invocation path is ever reached.
       const { wellKnownCliBinaryPath } =
         await import("../../store/well-known-cli");
       expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
@@ -646,17 +564,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // No `node` reachable anywhere on PATH: the scan comes back empty and
-  // `npmInterpreterInvocation` returns null. POSIX no longer refuses here -
-  // it registers the bare script directly, with a warning, because this
-  // process's PATH is not authoritative for the unit: a re-registration
-  // driven by the host, or a stripped shell, can resolve here with a
-  // minimal PATH while the systemd user manager's own environment holds a
-  // perfectly good node. Refusing would convert installs that launched
-  // fine yesterday into hard errors on the next re-registration. Only
-  // win32 still throws - a `.js` cannot execute there under any PATH - so
-  // this is skipped there rather than faked, per the module's own
-  // platform-at-import contract.
+  // No `node` reachable anywhere on PATH: the scan comes back empty and `npmInterpreterInvocation` returns null.
+  // POSIX no longer refuses here - it registers the bare script directly, with a warning, because this process's PATH is not authoritative for the unit: a re-registration driven by the host, or a stripped shell, can resolve here with a minimal PATH while the systemd user manager's own environment holds a perfectly good node.
   it.skipIf(process.platform === "win32")(
     "registers the bare script with a warning when no node executable exists anywhere on PATH (POSIX fallback)",
     async () => {
@@ -695,12 +604,8 @@ describe("resolveServiceCliInvocation", () => {
     },
   );
 
-  // Fix: `resolveNodeOnPath` used to accept any PATH candidate that passed
-  // `access(candidate, X_OK)` alone. Execute permission on a DIRECTORY means
-  // "searchable", not "runs as a program" - so a directory named `node`
-  // sitting on an earlier PATH entry used to satisfy that check and win over
-  // the real interpreter sitting on a later entry. The fix `stat`s first and
-  // requires `isFile()`, continuing the scan past a directory instead.
+  // Fix: `resolveNodeOnPath` used to accept any PATH candidate that passed `access(candidate, X_OK)` alone.
+  // Execute permission on a DIRECTORY means "searchable", not "runs as a program" - so a directory named `node` sitting on an earlier PATH entry used to satisfy that check and win over the real interpreter sitting on a later entry.
   it("skips a directory named node on an earlier PATH entry and pins the real executable on a later entry", async () => {
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
@@ -741,14 +646,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // Being executable is not being USABLE. The npm package declares
-  // `engines.node >= 20.18.1`, and npm enforces that at INSTALL time only -
-  // which says nothing about the interpreter a service definition written
-  // later will name. The configuration this protects is ordinary rather than
-  // exotic: an nvm or asdf user installs under a current Node while
-  // `/usr/bin/node` 18 sits earlier on the SERVICE manager's PATH. Pinning
-  // the 18 rewrites a working registration into a unit that dies at every
-  // start, on a definition nothing rewrites afterwards.
+  // Being executable is not being USABLE.
+  // The npm package declares `engines.node >= 20.18.1`, and npm enforces that at INSTALL time only - which says nothing about the interpreter a service definition written later will name.
   it("skips a too-old node on an earlier PATH entry and pins a supported one later", async () => {
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
@@ -786,11 +685,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // The floor used to be enforced by refusing outright. It no longer is:
-  // POSIX registers the bare script with a warning even when every `node` on
-  // PATH is too old, for the same reason as the empty-PATH case above - this
-  // process's PATH is not authoritative for the unit the service manager
-  // will actually launch from.
+  // The floor used to be enforced by refusing outright.
+  // It no longer is: POSIX registers the bare script with a warning even when every `node` on PATH is too old, for the same reason as the empty-PATH case above - this process's PATH is not authoritative for the unit the service manager will actually launch from.
   it.skipIf(process.platform === "win32")(
     "registers the bare script with a warning when every node on PATH is below the required version (POSIX fallback)",
     async () => {
@@ -829,10 +725,8 @@ describe("resolveServiceCliInvocation", () => {
     },
   );
 
-  // The boundary itself. `20.18.1` is the declared floor, so it must be
-  // ACCEPTED - a `>` where `>=` belongs would reject the exact version the
-  // package says it supports, and a test that only ever checked 18 vs 22
-  // could not tell the two comparisons apart.
+  // The boundary itself.
+  // `20.18.1` is the declared floor, so it must be ACCEPTED - a `>` where `>=` belongs would reject the exact version the package says it supports, and a test that only ever checked 18 vs 22 could not tell the two comparisons apart.
   it("accepts a node at exactly the declared minimum version", async () => {
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
@@ -864,9 +758,7 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // One patch below the floor, which no major-only comparison can see - and,
-  // like the other two node-version tests above, no longer a refusal on
-  // POSIX: the bare script is registered with a warning instead.
+  // One patch below the floor, which no major-only comparison can see - and, like the other two node-version tests above, no longer a refusal on POSIX: the bare script is registered with a warning instead.
   it.skipIf(process.platform === "win32")(
     "registers the bare script with a warning for a node one patch below the declared minimum version (POSIX fallback)",
     async () => {
@@ -905,10 +797,7 @@ describe("resolveServiceCliInvocation", () => {
     },
   );
 
-  // A directory named `node` is not a usable interpreter, so the scan still
-  // comes back empty here too - and, like every other "no usable node" shape
-  // above, POSIX now registers the bare script with a warning rather than
-  // refusing.
+  // A directory named `node` is not a usable interpreter, so the scan still comes back empty here too - and, like every other "no usable node" shape above, POSIX now registers the bare script with a warning rather than refusing.
   it.skipIf(process.platform === "win32")(
     "registers the bare script with a warning when PATH contains only a directory named node (POSIX fallback)",
     async () => {
@@ -1024,23 +913,12 @@ describe("resolveServiceCliInvocation", () => {
     });
   });
 
-  // Headline regression test: the old code returned
-  // `args: [process.argv[1]]` for a packaged (SEA) run too, baking the raw
-  // invocation spelling (e.g. "traycer") into service units as a bogus
-  // entry-script argument - a SEA binary has no entry script, so replaying
-  // that arg produces "error: unknown command". The fix stages the
-  // well-known slot as a COPY of `process.execPath`'s bytes and points the
-  // service at THAT path with no leading args, regardless of
-  // `allowSelfInvocation`.
+  // Headline regression test: the old code returned `args: [process.argv[1]]` for a packaged (SEA) run too, baking the raw invocation spelling (e.g.
+  // "traycer") into service units as a bogus entry-script argument - a SEA binary has no entry script, so replaying that arg produces "error: unknown command".
   it("stages a copy of process.execPath at the well-known slot and returns empty args when packaged, even with allowSelfInvocation false", async () => {
     seaState.current = true;
-    // Staging copies `process.execPath`'s BYTES, and under vitest that used
-    // to be the real ~100MB Node binary: on a loaded CI runner pushing it
-    // through the copy+rename staging pipeline blew the 5s test timeout.
-    // The contract is "a copy of whatever execPath names lands in the
-    // slot", not "100MB copies in 5s" - point execPath at a small stand-in,
-    // exactly as the refresh test below does, which also upgrades the
-    // size-only comparison to full byte equality.
+    // Staging copies `process.execPath`'s BYTES, and under vitest that used to be the real ~100MB Node binary: on a loaded CI runner pushing it through the copy+rename staging pipeline blew the 5s test timeout.
+    // The contract is "a copy of whatever execPath names lands in the slot", not "100MB copies in 5s" - point execPath at a small stand-in, exactly as the refresh test below does, which also upgrades the size-only comparison to full byte equality.
     const fakeExecPath = join(workHome, "fake-packaged-binary");
     // Raw non-UTF-8 bytes: a text fixture round-trips through a utf8 decode
     // and would miss corruption that only shows on binary content.
@@ -1076,11 +954,7 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // winget's portable installer replaces process.execPath's bytes in place
-  // with no post-install hook, so an already-staged slot from a PRIOR
-  // version must be refreshed from the running binary rather than trusted
-  // as-is - this is why the packaged branch runs BEFORE the existing-slot
-  // check (see the discovery-order comment in cli-binary.ts).
+  // winget's portable installer replaces process.execPath's bytes in place with no post-install hook, so an already-staged slot from a PRIOR version must be refreshed from the running binary rather than trusted as-is - this is why the packaged branch runs BEFORE the existing-slot check (see the discovery-order comment in cli-binary.ts).
   it("refreshes an already-staged, stale well-known slot from the running binary when packaged", async () => {
     seaState.current = true;
     const fakeExecPath = join(workHome, "fake-packaged-binary");
@@ -1115,20 +989,13 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // Fix 3's "slot absent" branch: staging failed AND no slot binary exists
-  // to fall back to, so the real (unstable, version-scoped) binary path gets
-  // registered instead - and that degradation is logged, so the eventual
-  // breakage has a recorded cause rather than presenting as a service that
-  // mysteriously stopped launching.
+  // Fix 3's "slot absent" branch: staging failed AND no slot binary exists to fall back to, so the real (unstable, version-scoped) binary path gets registered instead - and that degradation is logged, so the eventual breakage has a recorded cause rather than presenting as a service that mysteriously stopped launching.
   it("falls back to process.execPath with empty args and logs a warning when packaged but staging the well-known slot fails and no slot exists", async () => {
     seaState.current = true;
     const { cliInstallHomeDir } = await import("../../store/paths");
     const parentDir = cliInstallHomeDir(ENVIRONMENT);
     const binDirPath = join(parentDir, "bin");
-    // A REGULAR FILE at the parent dir path makes `stageWellKnownCliBinary`'s
-    // `mkdir(dirname(wellKnownPath), { recursive: true })` fail, so staging
-    // returns "failed" - and the well-known path itself can never exist
-    // either, since its parent directory is a file, not a directory.
+    // A REGULAR FILE at the parent dir path makes `stageWellKnownCliBinary`'s `mkdir(dirname(wellKnownPath), { recursive: true })` fail, so staging returns "failed" - and the well-known path itself can never exist either, since its parent directory is a file, not a directory.
     mkdirSync(parentDir, { recursive: true });
     writeFileSync(binDirPath, "not a directory");
     const { resolveServiceCliInvocation } = await import("../cli-binary");
@@ -1147,13 +1014,8 @@ describe("resolveServiceCliInvocation", () => {
     );
   });
 
-  // Fix 3's "slot exists" branch: staging fails on the PUBLISH step (the
-  // win32 rename-aside/restore path - the identical technique used in
-  // `store/__tests__/well-known-cli.test.ts`), but the restore leaves a
-  // functional slot binary in place. That slot must be registered directly
-  // (stale-but-functional, stable, host-visible) rather than falling back to
-  // `process.execPath`'s own path, and WITHOUT logging the "unstaged"
-  // warning - the slot IS staged, just with older bytes.
+  // Fix 3's "slot exists" branch: staging fails on the PUBLISH step (the win32 rename-aside/restore path - the identical technique used in `store/__tests__/well-known-cli.test.ts`), but the restore leaves a functional slot binary in place.
+  // That slot must be registered directly (stale-but-functional, stable, host-visible) rather than falling back to `process.execPath`'s own path, and WITHOUT logging the "unstaged" warning - the slot IS staged, just with older bytes.
   it("registers the existing slot path without warning when staging fails but a slot binary is already present", async () => {
     seaState.current = true;
     const platformDescriptor = Object.getOwnPropertyDescriptor(
@@ -1167,9 +1029,7 @@ describe("resolveServiceCliInvocation", () => {
       value: "win32",
       configurable: true,
     });
-    // Call #1 is the rename-aside (real move); call #2 is the publish,
-    // which must fail here; call #3 is the failure-path restore, left
-    // un-intercepted so the module's real recovery actually runs.
+    // Call #1 is the rename-aside (real move); call #2 is the publish, which must fail here; call #3 is the failure-path restore, left un-intercepted so the module's real recovery actually runs.
     renameControl.failOnCallNumber = 2;
     try {
       const { wellKnownCliBinaryPath } =
@@ -1198,13 +1058,8 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // A hardened Linux install with `/home` mounted `noexec`: the copy into
-  // `~/.traycer/cli/bin` succeeds, the chmod succeeds, staging reports
-  // success - and the unit built from it dies at `ExecStart` even though the
-  // package manager's own binary was runnable all along. `access(X_OK)`
-  // cannot see this (Linux answers it from the permission bits and the
-  // refusal appears only at `execve`), which is why the check is an actual
-  // execution.
+  // A hardened Linux install with `/home` mounted `noexec`: the copy into `~/.traycer/cli/bin` succeeds, the chmod succeeds, staging reports success - and the unit built from it dies at `ExecStart` even though the package manager's own binary was runnable all along.
+  // `access(X_OK)` cannot see this (Linux answers it from the permission bits and the refusal appears only at `execve`), which is why the check is an actual execution.
   it("registers the source binary when the staged slot cannot execute but the source can", async () => {
     const binaryPath = join(workHome, "system-binary");
     writeFileSync(binaryPath, "the package manager's runnable binary");
@@ -1237,13 +1092,8 @@ describe("resolveServiceCliInvocation", () => {
     );
   });
 
-  // The conservative arm of the same probe, which the two EACCES tests around
-  // this one cannot see: an error that is NOT a spawn refusal must keep the
-  // slot registered. A timeout on a loaded machine (or a non-zero exit from a
-  // binary that ran fine and disliked `--version`) is not evidence the
-  // supervisor cannot start the slot, and demoting on it would trade the one
-  // upgrade-stable path away over an unrelated hiccup. Without this case a
-  // `catch { return false }` rewrite of `canExecute` would stay green.
+  // The conservative arm of the same probe, which the two EACCES tests around this one cannot see: an error that is NOT a spawn refusal must keep the slot registered.
+  // A timeout on a loaded machine (or a non-zero exit from a binary that ran fine and disliked `--version`) is not evidence the supervisor cannot start the slot, and demoting on it would trade the one upgrade-stable path away over an unrelated hiccup.
   it("keeps the slot registered when the probe fails with a NON-refusal error (ETIMEDOUT)", async () => {
     const binaryPath = join(workHome, "system-binary");
     writeFileSync(binaryPath, "the package manager's runnable binary");
@@ -1274,10 +1124,8 @@ describe("resolveServiceCliInvocation", () => {
     );
   });
 
-  // The other half of the same rule. When the source cannot run either,
-  // demoting to it trades away the one property the slot exists for - a path
-  // that survives upgrades - and buys nothing, since the registration would
-  // still name something that does not execute.
+  // The other half of the same rule.
+  // When the source cannot run either, demoting to it trades away the one property the slot exists for - a path that survives upgrades - and buys nothing, since the registration would still name something that does not execute.
   it("keeps the slot when NEITHER it nor the source can execute", async () => {
     const binaryPath = join(workHome, "system-binary");
     writeFileSync(binaryPath, "a binary that does not run either");
@@ -1305,17 +1153,8 @@ describe("resolveServiceCliInvocation", () => {
     expect(mocks.cliLoggerWarnMock).not.toHaveBeenCalled();
   });
 
-  // The failed-staging fallback prefers an EXISTING slot over the real binary
-  // path, because the slot is the one path that survives an upgrade. But
-  // "existing" has to mean a regular file. A slot replaced by a DIRECTORY -
-  // a botched install, or a hand-rolled `mkdir ~/.traycer/bin/traycer` - is
-  // also exactly why staging failed in the first place, since the publish
-  // `rename` cannot land on it. Preferring it would answer a staging failure
-  // by registering something no supervisor can execute, on a path nothing
-  // rewrites afterwards.
-  //
-  // No rename interception here: the directory makes the real publish fail on
-  // its own, which is the point - this is the failure as it actually occurs.
+  // The failed-staging fallback prefers an EXISTING slot over the real binary path, because the slot is the one path that survives an upgrade.
+  // But "existing" has to mean a regular file.
   it.skipIf(process.platform === "win32")(
     "does not register the slot when staging fails because the slot path is a DIRECTORY",
     async () => {
@@ -1335,9 +1174,7 @@ describe("resolveServiceCliInvocation", () => {
 
       expect(result).toEqual({ command: process.execPath, args: [] });
       expect(result.command).not.toBe(wellKnownPath);
-      // Registering a version-scoped path is the recorded worst case, so it
-      // must be logged rather than left to surface later as a service that
-      // mysteriously stopped launching.
+      // Registering a version-scoped path is the recorded worst case, so it must be logged rather than left to surface later as a service that mysteriously stopped launching.
       expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
         "service CLI registered against an unstaged binary path",
         expect.objectContaining({ wellKnownPath }),

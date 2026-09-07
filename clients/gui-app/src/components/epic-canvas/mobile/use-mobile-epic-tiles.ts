@@ -17,14 +17,8 @@ export interface MobileEpicTilesApi {
 }
 
 /**
- * Tile-switch contract for the mobile epic view. The current-tile bar and
- * Phase 2's "Switch tab" bottom sheet both read `tiles` + `currentInstanceId`
- * and switch via `selectTile` from here, so there is one source of truth for
- * "which tiles exist and which is current".
- *
- * `currentInstanceId` is derived from the SAME {@link selectMobileTile} rule
- * that `MobileEpicTileView` renders, so the bar/sheet highlight always matches
- * the tile on screen.
+ * Tile-switch contract for the mobile epic view.
+ * The current-tile bar and Phase 2's "Switch tab" bottom sheet both read `tiles` + `currentInstanceId` and switch via `selectTile` from here, so there is one source of truth for "which tiles exist and which is current".
  */
 export function useMobileEpicTiles(tabId: string): MobileEpicTilesApi {
   const canvas = useEpicCanvas(tabId);
@@ -42,14 +36,7 @@ export function useMobileEpicTiles(tabId: string): MobileEpicTilesApi {
 
   const selectTile = useCallback(
     (paneId: string, instanceId: string) => {
-      // Reuse desktop tab-selection exactly (same call TabGroupView makes):
-      // `setActiveTab` sets the pane's active tab AND makes that pane the
-      // globally-active one, and `navigateNested` commits the resulting focus
-      // to the route. Accepted tradeoff (user-approved): this moves desktop's
-      // active pane/tab too, so a tile picked on a phone is where the desktop
-      // reopens ("resume where you left off"). It writes activation only - the
-      // split-tree shape and `sizesByGroupId` are never touched, so the
-      // persisted desktop layout is unchanged.
+      // It writes activation only - the split-tree shape and `sizesByGroupId` are never touched, so the persisted desktop layout is unchanged.
       const prepare = () =>
         prepareSetActiveTileTabFocusTarget(tabId, paneId, instanceId);
       if (epicId === null) {

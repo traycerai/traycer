@@ -8,9 +8,8 @@ import { cn } from "@/lib/utils";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
-// Match the tooltip's 500ms hover-in; give a small grace on the way out so the
-// pointer can travel from the trigger into the card to reach its actions
-// (copy-path, links) without it dismissing mid-move.
+// Match the tooltip's 500ms hover-in; give a small grace on the way out so the pointer can travel from the
+// trigger into the card to reach its actions (copy-path, links) without it dismissing mid-move.
 const HOVER_CARD_OPEN_DELAY_MS = 500;
 const HOVER_CARD_CLOSE_DELAY_MS = 150;
 
@@ -37,18 +36,8 @@ function HoverCardTrigger({
   );
 }
 
-// Rich hover preview surface, shared verbatim with the composer's @mention
-// preview panel (`HOVER_PREVIEW_SURFACE_CLASS`) so every hover preview in the
-// app reads as the same card.
-//
-// Interactive actions here (copy-path button, PR link) are POINTER-operable
-// previews, not keyboard-navigable. Unlike a Tooltip, HoverCard mounts no
-// visually-hidden a11y clone, so an action exists once in the DOM rather than
-// duplicated - but Radix keeps hover-card content out of the sequential tab
-// order (it opens on hover/focus, yet Tab from the trigger moves past it and
-// closes it). So any action placed here must also have a keyboard-reachable
-// home elsewhere: copy-path lives on the click-open folder rows (`FolderRow`),
-// and the PR link is also in the Epic history list.
+// So any action placed here must also have a keyboard-reachable home elsewhere: copy-path lives on the
+// click-open folder rows (`FolderRow`), and the PR link is also in the Epic history list.
 function HoverCardContent({
   ref,
   className,
@@ -57,14 +46,10 @@ function HoverCardContent({
   collisionPadding,
   ...props
 }: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
-  // Concealed region (see `portal-concealment-context`): un-present with the
-  // region — the anchor is display:none and cannot deliver the close events.
+  // Concealed region (see `portal-concealment-context`): un-present with the region - the anchor is display:none
+  // and cannot deliver the close events.
   const concealed = usePortalConcealed();
   // Read above the early return so hook order does not depend on concealment.
-  // The insets are the DEFAULT collision padding; a caller may replace it (see
-  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`). The card's width
-  // comes from its callers, so the cap matters here more than on the primitives
-  // that size themselves.
   const safeAreaInsets = useSafeAreaCollisionPadding();
   if (concealed) return null;
   return (

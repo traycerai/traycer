@@ -13,7 +13,6 @@ interface PickerOptionButtonProps {
   readonly id: string;
   readonly option: WorktreeBranchPickerRow | WorktreeBranchPickerPinnedRow;
   readonly active: boolean;
-  /** `-1` keeps the option out of the Tab order (listbox is arrow-navigated). */
   readonly tabIndex: number;
   readonly onActive: () => void;
   readonly onSelect: () => void;
@@ -49,9 +48,8 @@ export function PickerOptionButton(props: PickerOptionButtonProps) {
     >
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1.5">
-          {/* Full branch name on hover — the label truncates in the fixed-width
-              row, so a Radix tooltip (not a native `title`, which the picker
-              test forbids) surfaces the complete name. */}
+          {/* Full branch name on hover - the label truncates in the fixed-width row, so a Radix tooltip (not a native
+             `title`, which the picker test forbids) surfaces the complete name. */}
           <TooltipWrapper
             label={option.primaryLabel}
             side="top"

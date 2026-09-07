@@ -1,51 +1,3 @@
-/**
- * A sidebar row must not re-render because a DIFFERENT row's `updatedAt` moved.
- *
- * ## The defect this pins (epic-sync-overhaul finding 12)
- *
- * The host stamps an artifact record's `updatedAt` on every body write batch -
- * roughly 4/s under typing-shaped load. `TreeNode` carries `updatedAt`
- * (`types.ts:285-293`), so the stamped node legitimately changes, `nodeById`
- * legitimately re-mints, and the whole `tree` slice gets a new identity. That
- * much is correct and is NOT what this pins: `replaceEqualDeep` is right to
- * refuse to reuse a slice whose content moved.
- *
- * What it pins is who reacts. Every row subscribed to the WHOLE slice -
- * `useEpicTreeIndex()`, i.e. `useEpicStore((s) => s.tree)` - directly in
- * `ArtifactNode` and transitively through `useFilteredPanelChildIds`, which
- * `ChatNode` uses too. Zustand re-renders every subscriber whose selector
- * output changed identity, so one stamp re-rendered all forty rows and their
- * whole subtrees (row button, status dot, per-row menus).
- *
- * `memo` cannot help here and never could. It only blocks a re-render
- * propagated from a PARENT with equal props; a store subscription inside the
- * component is an independent trigger. So this is not a memo defeated by a
- * churning prop - it is a memo bypassed entirely.
- *
- * ## Why it regressed exactly here
- *
- * The per-node subscriptions beside it (`useIsActiveEpicArtifact`,
- * `useEpicArtifactStatus`) were added to fix this same shape for CHAT TOKEN
- * churn, and the comment above the read states the premise out loud: "The tree
- * index is stable while streaming." That was true for chat tokens, which never
- * touch an artifact tree node. Body writes falsified it silently, because they
- * move `updatedAt` and the node carries it. The optimization outlived the
- * premise that made it correct.
- *
- * ## The probe, and why it is a leaf
- *
- * Each probe calls the real `useFilteredPanelChildIds` - the production hook,
- * not a restatement of it - for a LEAF artifact. A leaf has no children, so the
- * hook returns the shared empty array and provably needs nothing from the
- * bumped node. A row that demonstrably wants none of the changed data is the
- * starkest form of the defect: if it re-renders, nothing about the data
- * explains it, only the subscription does.
- *
- * The default sort is deliberate. Under a RECENCY comparator an `updatedAt`
- * bump can genuinely reorder siblings, and rows whose order moved must
- * re-render - that is correct O(k) behaviour this must not suppress. Asserting
- * O(1) under a recency sort would be asserting something false.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { act, cleanup, render } from "@testing-library/react";
@@ -137,14 +89,7 @@ function artifactsMap(handle: OpenedStoreForTest): Y.Map<unknown> {
 }
 
 /**
- * One artifact's record changes, and nothing else does.
- *
- * `renameArtifact` is the store's own write and moves exactly one record - its
- * title and its `updatedAt`. No probe below reads either field, so a re-render
- * here cannot be explained by the data a row displays; only by what it
- * subscribed to. A nested `updatedAt` poke straight into `handle.doc` would be
- * closer to the host's stamp in shape, but it does not reach the projection in
- * this harness at all, and a stimulus that changes nothing pins nothing.
+ * No probe below reads either field, so a re-render here cannot be explained by the data a row displays; only by what it subscribed to.
  */
 async function renameOne(
   handle: OpenedStoreForTest,
@@ -193,13 +138,6 @@ function makeCounts(): RenderCounts {
   };
 }
 
-/**
- * One sidebar row's tree subscription, and nothing else.
- *
- * Renders its answer in order, so a case can assert WHICH ids the row resolved
- * and not merely how many - what separates a re-render caused by a real
- * reordering from one caused by residual slice churn.
- */
 function RowProbe({ nodeId }: { nodeId: string }) {
   const childIds = useFilteredPanelChildIds(nodeId, ARTIFACT_FILTER);
   return <span data-testid={`row-${nodeId}`}>{childIds.join(",")}</span>;
@@ -252,9 +190,7 @@ describe("a sidebar row's tree subscription", () => {
       await renameOne(handle, BUMPED_ID, "Stamped again");
     });
 
-    // THE PIN. These rows are leaves: their `useFilteredPanelChildIds` answer
-    // is the shared empty array before and after, and none of them reads the
-    // stamped row at all. Any re-render here is the subscription, not the data.
+    // These rows are leaves: their `useFilteredPanelChildIds` answer is the shared empty array before and after, and none of them reads the stamped row at all.
     for (const id of ROW_IDS.filter((candidate) => candidate !== BUMPED_ID)) {
       expect({ id, renders: counts.counts.get(id) ?? 0 }).toEqual({
         id,
@@ -264,10 +200,7 @@ describe("a sidebar row's tree subscription", () => {
   });
 
   it("still re-renders the row whose own children changed", () => {
-    // The counterpart, and the reason this is a scoping fix rather than a
-    // stop-reacting one: a fix that simply severed the subscription would pass
-    // the case above and leave every row frozen. This is the same guard the
-    // suite next door applies to its `rootIds` subscriber.
+    // The counterpart, and the reason this is a scoping fix rather than a stop-reacting one: a fix that simply severed the subscription would pass the case above and leave every row frozen.
     const handle = sessionUnderTest();
     const counts = renderRows(handle);
     const before = counts.counts.get(ROW_IDS[1]) ?? 0;
@@ -285,16 +218,7 @@ describe("a sidebar row's tree subscription", () => {
   });
 
   it("DOES re-render under a recency sort when a stamp reorders siblings", () => {
-    // The other half of the contract, and the reason the first case pins under
-    // the default order. `useFilteredPanelChildIds` re-sorts whenever the panel
-    // carries a non-default comparator, and a recency comparator reads the very
-    // field the host stamps - so under one, an `updatedAt` bump genuinely
-    // changes a parent row's answer and that row MUST re-render.
-    //
-    // A fix that suppressed this would be over-suppressing: the row would keep
-    // rendering its children in a stale order. So this is the guard that keeps
-    // the first case honest about what it is asking for - subscribe to your own
-    // answer, not stop reacting.
+    // `useFilteredPanelChildIds` re-sorts whenever the panel carries a non-default comparator, and a recency comparator reads the very field the host stamps - so under one, an `updatedAt` bump genuinely changes a parent row's answer and that row MUST re-render.
     const handle = sessionUnderTest();
     const parent = ROW_IDS[1];
     // Two children, because `sortNodeIds` passes a shorter list straight
@@ -322,29 +246,18 @@ describe("a sidebar row's tree subscription", () => {
       </EpicSessionContext.Provider>,
     );
     const row = view.getByTestId(`row-${parent}`);
-    // OLDEST first, and deliberately so. The projector already orders children
-    // with `makeNodeComparator(DEFAULT_SORT_MODE)` - recency, most recent on
-    // top (`projection-helpers.ts:1298`) - so a DESCENDING comparator here
-    // would reproduce the order the row receives and this case would pass
-    // whether or not `sortNodeIds` ever ran. Ascending is the strict reverse of
-    // the projector's own order, so every assertion below fails if the
-    // comparator stops being applied.
     expect(row.textContent).toBe("kid-a,kid-b");
     const before = counts.counts.get(parent) ?? 0;
     expect(before).toBeGreaterThan(0);
 
-    // Re-set the whole entry rather than poking `updatedAt` on the nested map:
-    // a top-level set is what reaches the projection in this harness, and it is
-    // the same stimulus the case above uses.
+    // Re-set the whole entry rather than poking `updatedAt` on the nested map: a top-level set is what reaches the projection in this harness, and it is the same stimulus the case above uses.
     act(() => {
       handle.doc.transact(() => {
         artifactsMap(handle).set("kid-a", artifactEntry("kid-a", parent, 9));
       });
     });
 
-    // Both halves, so a pass cannot come from churn that happened to re-render
-    // the row while leaving its order stale. `kid-a` is now the most recent, so
-    // ascending puts it last - the reverse of what the projector hands over.
+    // Both halves, so a pass cannot come from churn that happened to re-render the row while leaving its order stale.
     expect(row.textContent).toBe("kid-b,kid-a");
     expect(counts.counts.get(parent) ?? 0).toBeGreaterThan(before);
   });

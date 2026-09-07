@@ -37,13 +37,8 @@ function isAbsolutePath(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
 }
 
-/**
- * One options builder for both probe callers — the live status line's query and
- * the imperative `fetchQuery` after a Browse pick — so the two can never land on
- * different cache slots for the same path. The key comes from the source, not
- * from here: a local-bridge answer and a per-host RPC answer are different
- * facts about different machines.
- */
+/** One options builder for both probe callers - the live status line's query and the imperative `fetchQuery`
+ * after a Browse pick - so the two can never land on different cache slots for the same path. */
 function shellProbeQueryOptions(
   source: ShellProbeSource,
   path: string,
@@ -59,14 +54,8 @@ function shellProbeQueryOptions(
   });
 }
 
-/**
- * The concrete rows below "System default": detected ∪ added, plus a transient
- * row for a `value` that is neither (e.g. set via the CLI by hand) so the picker
- * never shows an unrepresented choice. Sorted purely alphabetically - the
- * "System default" row carries the auto concept, so default-first ordering no
- * longer means anything here. `matched` is the row (if any) the current value
- * pins to.
- */
+/** The concrete rows below "System default": detected ∪ added, plus a transient row for a `value` that is
+ * neither (e.g. set via the CLI by hand) so the picker never shows an unrepresented choice. */
 function buildEntryList(
   shells: readonly ConfigDetectedShell[],
   value: string,
@@ -88,37 +77,19 @@ function buildEntryList(
   return { entries, matched };
 }
 
-/**
- * The Settings → Shell picker: a first "System default" row (the auto option),
- * followed by one alphabetical list of concrete shells (detected plus the
- * user's remembered "added" ones) and an "Add a shell" section with a
- * live-validated path input and a native Browse action.
- *
- * "System default" is the single place the auto state lives: it is checked when
- * `synthesised`, and picking it clears the selection (returns to the login shell)
- * via `onUseSystemDefault` - remembered shells and their flags are kept, so it
- * stays checked even when the login shell has its own flag entry. A concrete row
- * is checked only when a shell is explicitly stored (`!synthesised`) and its path
- * matches. Selecting a concrete row auto-saves via `onSelect`; adding (Enter on a
- * green path, or a Browse pick that probes executable) auto-saves via `onAdd`;
- * the hover ✕ on an added row removes it via `onRemove` without closing the
- * popover.
- */
+/** A concrete row is checked only when a shell is explicitly stored (`!synthesised`) and its path matches. */
 export function ShellProgramCombobox(props: {
   readonly value: string;
   readonly synthesised: boolean;
   readonly shells: readonly ConfigDetectedShell[];
   readonly disabled: boolean;
-  /**
-   * Where "does this path exist and can it run?" is asked — the machine being
-   * configured, which is not necessarily this one. See `ShellProbeSource`.
-   */
+  /** Where "does this path exist and can it run?" is asked - the machine being configured, which is not
+   * necessarily this one. */
   readonly probeSource: ShellProbeSource;
   readonly onSelect: (path: string) => void;
   readonly onAdd: (path: string) => void;
   readonly onRemove: (path: string) => void;
   readonly onUseSystemDefault: () => void;
-  /** Re-runs detection on the target machine; see `refreshShells`. */
   readonly onRefresh: () => void;
   readonly refreshing: boolean;
 }) {
@@ -141,11 +112,8 @@ export function ShellProgramCombobox(props: {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [debounced, setDebounced] = useState("");
-  // The Settings modal is a Radix dialog that scroll-locks everything outside
-  // its content shard (react-remove-scroll), so a body-portaled popover list is
-  // un-scrollable by wheel/touch. Portaling into the dialog content puts the
-  // list inside that shard; outside a dialog (Settings-as-tab) this stays null
-  // and the popover falls back to the default body portal.
+  // The Settings modal is a Radix dialog that scroll-locks everything outside its content shard
+  // (react-remove-scroll), so a body-portaled popover list is un-scrollable by wheel/touch.
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
     null,
@@ -191,9 +159,8 @@ export function ShellProgramCombobox(props: {
   };
 
   const commitSelect = (path: string) => {
-    // While synthesised, `value` already equals the default path, but an
-    // explicit pick still needs storing - it pins the shell so it no longer
-    // follows the login shell.
+    // While synthesised, `value` already equals the default path, but an explicit pick still needs storing - it
+    // pins the shell so it no longer follows the login shell.
     if (synthesised || !samePath(path, value)) onSelect(path);
     closeAndReset();
   };
@@ -268,10 +235,7 @@ export function ShellProgramCombobox(props: {
               label="System default"
               labelMono={false}
               detail={`${defaultEntry.name} · ${defaultEntry.path}`}
-              // The OS default is `%COMSPEC%` on Windows, which a user can
-              // point at wsl.exe - so this row can be a broken WSL too, and
-              // must refuse exactly like its concrete twin rather than
-              // resetting the config to a shell that cannot start.
+              // The OS default is `%COMSPEC%` on Windows, which a user can point at wsl.exe.
               notice={shellRowNotice(defaultEntry)}
               selectable={defaultEntry.wslHealth === undefined}
               testId="settings-shell-reset"
@@ -292,10 +256,8 @@ export function ShellProgramCombobox(props: {
               labelMono
               detail={entry.path}
               notice={shellRowNotice(entry)}
-              // A missing added row stays selectable (reinstalling the shell
-              // heals it in place), but a broken-WSL row is refused outright:
-              // selecting it yields a terminal that prints wsl.exe usage text
-              // and dies, which reads as "terminals don't start at all".
+              // A missing added row stays selectable (reinstalling the shell heals it in place), but a broken-wsl row is
+              // refused outright.
               selectable={entry.wslHealth === undefined}
               testId={null}
               onSelect={() => commitSelect(entry.path)}
@@ -399,13 +361,8 @@ function TriggerLabel(props: {
   );
 }
 
-/**
- * The explicit freshness control under the shell list. Detection is otherwise
- * per-panel-visit, deliberately never focus-driven (unreliable desktop focus
- * signals, a wsl.exe probe spawn per run, and window focus says nothing about
- * a remote host) - this button is what lets a user who just ran `wsl --install`
- * verify the picker now agrees.
- */
+/** Detection is otherwise per-panel-visit, deliberately never focus-driven (unreliable desktop focus signals, a
+ * wsl.exe probe spawn per run, and window focus says nothing about a remote host). */
 function RedetectShellsFooter(props: {
   readonly disabled: boolean;
   readonly refreshing: boolean;
@@ -429,12 +386,8 @@ function RedetectShellsFooter(props: {
   );
 }
 
-/**
- * The amber annotation on a row, when it has one: a vanished added shell reads
- * "not found" (echoing the add-time probe), a WSL that cannot host a terminal
- * names why. One slot - `missing` and `wslHealth` never coincide, since only
- * detected rows carry health and detected rows are never missing.
- */
+/** The amber annotation on a row, when it has one: a vanished added shell reads "not found" (echoing the
+ * add-time probe), a wsl that cannot host a terminal names why. */
 function shellRowNotice(entry: ConfigDetectedShell): string | null {
   if (entry.missing) return "not found";
   if (entry.wslHealth === "not-installed") return "WSL not installed";
@@ -442,14 +395,8 @@ function shellRowNotice(entry: ConfigDetectedShell): string | null {
   return null;
 }
 
-/**
- * A single selectable option row (the System default row and every concrete
- * shell share this shape). A row that commits a selection and a nested remove
- * control cannot both be `<button>`, so the row is a `div[role=option]` (click +
- * Enter/Space) and the ✕ is a real `<button>` with `stopPropagation`. An
- * unselectable row (broken WSL) stays listed with its notice - hiding it would
- * read as "Traycer doesn't support WSL" - but commits nothing.
- */
+/** A row that commits a selection and a nested remove control cannot both be `<button>`, so the row is a
+ * `div[role=option]` (click + Enter/Space) and the ✕ is a real `<button>` with `stopPropagation`. */
 function ShellOptionRow(props: {
   readonly checked: boolean;
   readonly disabled: boolean;

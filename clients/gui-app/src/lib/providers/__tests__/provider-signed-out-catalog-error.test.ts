@@ -29,9 +29,7 @@ describe("isProviderSignedOutCatalogError", () => {
     ).toBe(false);
   });
 
-  // Older hosts pin a protocol from before Reasonix got its own signed-out
-  // sentence and still send this generic form for it - the renderer has to
-  // keep recognizing it or those hosts fall back to the report-issue row.
+  // Older hosts pin a protocol from before Reasonix got its own signed-out sentence and still send this generic form for it - the renderer has to keep recognizing it or those hosts fall back to the report-issue row.
   it("is true for the legacy generic 'is signed out. Reconnect to continue.' form for reasonix", () => {
     expect(
       isProviderSignedOutCatalogError("reasonix", {

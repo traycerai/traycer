@@ -22,15 +22,7 @@ export interface FormatAgentMessageInput {
   readonly body: string;
 }
 
-/**
- * One body for both channels. Every A2A-capable agent — GUI turn or terminal
- * launch — is handed the same host-owned `traycer_a2a` MCP catalog, so the
- * reply instruction names `traycer_send_message` on both. The `cli` channel
- * discriminator survives for transport-specific recovery: terminal background
- * notifications can be truncated, so their footer retains the durable inbox
- * read command. Reply mechanics remain MCP-only; the CLI is not advertised as
- * a second A2A control surface.
- */
+/** One body for both channels. */
 export function formatAgentMessage(input: FormatAgentMessageInput): string {
   switch (input.receiverChannel) {
     case "gui":

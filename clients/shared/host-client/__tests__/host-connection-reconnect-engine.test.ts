@@ -12,9 +12,7 @@ import {
   type HostReconnectEngine,
 } from "../host-connection-reconnect-engine";
 
-// The module holds a PROCESS-scoped singleton (`processReconnectEngine`), and
-// it is exercised directly below - clear it after every test so a leftover
-// instance never leaks into an unrelated suite in this same file.
+// The module holds a process-scoped singleton (`processReconnectEngine`), and it is exercised directly below - clear it after every test so a leftover instance never leaks into an unrelated suite in this same file.
 afterEach(() => {
   resetProcessReconnectEngineForTest();
 });
@@ -93,14 +91,12 @@ describe("rebuild pacer (R9)", () => {
   });
 
   it("does NOT clear the streak when adopting the FIRST identity", () => {
-    // The opening observation: a client already closed before anything was
-    // ever built (no `markBuilt` call yet). This must be counted, not erased
-    // by the very rebuild it triggers - so the first `markBuilt` (identity
-    // moving from null to a real value) must not reset the streak.
+    // The opening observation: a client already closed before anything was ever built (no `markBuilt` call yet).
+    // This must be counted, not erased by the very rebuild it triggers - so the first `markBuilt` (identity moving from null to a real value) must not reset the streak.
     const pacer = engine.createRebuildPacer();
     expect(pacer.nextRebuildDelayMs(0)).toBe(0); // pre-build close: quick close #1
 
-    pacer.markBuilt(0, "endpoint-a"); // adopting the FIRST identity
+    pacer.markBuilt(0, "endpoint-a"); // adopting the first identity
     expect(pacer.nextRebuildDelayMs(0)).toBe(1_000); // streak continued to #2, not reset
   });
 });
@@ -215,9 +211,7 @@ describe("reopen lanes (R10)", () => {
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
     expect(reopen).toHaveBeenCalledTimes(1);
 
-    // Without a reset the next close would wait the DOUBLED backoff. Assert
-    // the exact initial delay to prove the reset actually happened, not just
-    // that a reopen eventually fires.
+    // Without a reset the next close would wait the doubled backoff.
     lane.resetBackoff();
     lane.scheduleAfterClose(fatalClose("INTERNAL"));
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS - 1);
@@ -239,7 +233,7 @@ describe("reopen lanes (R10)", () => {
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS * 2);
     expect(reopenA).toHaveBeenCalledTimes(2);
 
-    // Lane B's FIRST close still waits only the initial backoff. Folding both
+    // Lane B's first close still waits only the initial backoff. Folding both
     // lanes onto one shared timer would let A's escalation pace B.
     laneB.scheduleAfterClose(fatalClose("INTERNAL"));
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS - 1);

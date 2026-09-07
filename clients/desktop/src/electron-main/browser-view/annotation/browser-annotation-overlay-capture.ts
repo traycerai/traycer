@@ -4,10 +4,7 @@ import {
 } from "./browser-element-picker-script";
 import { boundedString } from "../guards";
 
-/**
- * Guest-side per-element capture. Limits and curated style names come
- * from the picker sanitizer so the overlay cannot drift from main.
- */
+/** Limits and curated style names come from the picker sanitizer so the overlay cannot drift from main. */
 export function captureOverlayElement(el: Element): Record<string, unknown> {
   const rect = el.getBoundingClientRect().toJSON();
   return {

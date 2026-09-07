@@ -183,9 +183,8 @@ function renderDialog(): void {
 describe("SweepWorktreesDialog ergonomics", () => {
   afterEach(() => {
     cleanup();
-    // Sessions are keyed by host + epic set, and most cases here reuse
-    // "host-1" + ["epic-1"] - so a proof parked or left proving by one test
-    // would otherwise bleed into the next.
+    // Sessions are keyed by host + epic set, and most cases here reuse "host-1" + ["epic-1"] - so a proof parked
+    // or left proving by one test would otherwise bleed into the next.
     useSweepSessionStore.getState().reset();
     testState.mutate.mockReset();
     testState.lastVariables = { worktrees: [] };
@@ -1758,9 +1757,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
   });
 
   it("does not inherit host A's uncertain outcome onto host B's same path", async () => {
-    // A host switch is a retarget (session identity is hostId + epic set,
-    // matching sweepWorktreeCandidates). Switching back to A does not restore
-    // A's session — it is gone.
+    // Switching back to A does not restore A's session - it is gone.
     const path = "/repo/wt";
     const onA = {
       entry: worktreeEntry({

@@ -28,16 +28,7 @@ export type CompatibilityCheckResult =
   | { readonly ok: false; readonly details: FatalErrorDetails };
 
 /**
- * Pure compatibility oracle shared by the host-side open-frame validator and
- * the client-side mirror check.
- *
- * Decides, for every method present in either manifest, whether the caller
- * (`selfRole`) can continue the connection. Relies solely on the already-
- * validated structural invariants of the caller's registry - specifically the
- * within-major `upgradeFromPreviousVersion` chain and the
- * `downgradePathsFromLatest` map - so no new compatibility logic lives here.
- *
- * The function performs no I/O, no asynchronous work, and retains no state.
+ * Pure compatibility oracle shared by the host-side open-frame validator and the client-side mirror check.
  */
 export function check(
   myRegistry: VersionedRpcRegistry,
@@ -101,10 +92,7 @@ export function check(
 }
 
 /**
- * Answers "can my registry bridge between my canonical and their canonical for
- * this method?" under the asymmetric per-method protocol: the older side never
- * transforms, the newer side walks the within-major upgrade chain (same major)
- * or the cross-major `downgradePathsFromLatest` bridge (different major).
+ * Answers "can my registry bridge between my canonical and their canonical for this method?" under the asymmetric per-method protocol: the older side never transforms, the newer side walks the within-major upgrade chain.
  */
 function canBridgeFromMySide(
   myRegistry: VersionedRpcRegistry,

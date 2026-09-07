@@ -106,9 +106,7 @@ function findRecord(
 
 describe("presentEpicWriteCommand", () => {
   it("presents a queued (not yet sent) command with no retry or discard, and never claims it is saved", async () => {
-    // The queue serializes sends: the first command occupies the in-flight
-    // slot forever, which is what keeps the second one genuinely "queued"
-    // rather than "sending".
+    // The queue serializes sends: the first command occupies the in-flight slot forever, which is what keeps the second one genuinely "queued" rather than "sending".
     const queue = makeQueue(neverSettles);
     const first = queue.enqueue({
       intent: renameIntent("a1", "First"),
@@ -245,9 +243,7 @@ describe("presentEpicWriteCommand", () => {
     await settleQueueMicrotasks();
 
     const record = findRecord(queue.list(), command.commandId);
-    // The wire code is still a rejection at the queue's own state level -
-    // "read-only" is a presentation-layer distinction, not a new
-    // `CommandState`.
+    // The wire code is still a rejection at the queue's own state level - "read-only" is a presentation-layer distinction, not a new `CommandState`.
     expect(record.state).toBe("rejected");
 
     const presentation = presentEpicWriteCommand(record);

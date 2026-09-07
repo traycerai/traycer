@@ -67,14 +67,7 @@ export class ProviderNativeRpcError extends HostRpcError {
   }) {
     super({
       code: "RPC_ERROR",
-      // `nativeErrorMessage`, not `detail ?? code`. The panels render
-      // `error.message` directly, so a protocol-valid `{ detail: null }` put
-      // the raw enum member on screen ("Native provider error:
-      // config_unreadable") and the friendly copy map was never consulted on
-      // the list path at all. Building the message here fixes every code at
-      // once rather than the one that happened to surface it, and
-      // `nativeErrorMessage` already prefers a non-blank trimmed `detail`, so
-      // a whitespace-only detail falls back too.
+      // The panels render `error.message` directly, so a protocol-valid `{ detail: null }` put the raw enum member on screen ("Native provider error: config_unreadable") and the friendly copy map was never consulted on the list path at all.
       message: nativeErrorMessage(args.code, args.detail),
       requestId: "native-error",
       method: args.method,
@@ -156,13 +149,7 @@ export function mapProvidersListToMcpDiscover(args: {
   return { server: native.server };
 }
 
-/**
- * An icon is decoration: a host that cannot produce one answers
- * `{ dataUri: null }` rather than failing, and this mapper keeps that shape
- * instead of throwing. It DOES throw on a native error result or a mismatched
- * arm, because those mean the request itself did not do what was asked - an
- * older host that has never heard of `pluginIcon`, for instance.
- */
+/** An icon is decoration: a host that cannot produce one answers `{ dataUri: null }` rather than failing, and this mapper keeps that shape instead of throwing. */
 export function mapProvidersListToPluginIcon(args: {
   readonly response: ProvidersListWireResponse;
 }): PluginIconData {
@@ -244,11 +231,7 @@ export function mapMcpAuthResponse(args: {
   return { result };
 }
 
-/**
- * Feature detection for native tabs: `nativeCapabilities.mcp|plugins|skills`
- * is null when the host/provider does not support the surface (old hosts get
- * DEFAULT via `.catch`, which sets all three to null).
- */
+/** Feature detection for native tabs: `nativeCapabilities.mcp|plugins|skills` is null when the host/provider does not support the surface (old hosts get DEFAULT via `.catch`, which sets all three to null). */
 export function isNativeSurfaceSupported(
   caps:
     | {

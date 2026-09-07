@@ -1,14 +1,3 @@
-/**
- * Tests for the abort-aware boundary auth helpers in `shared/auth/`:
- * `exchangeCodeForTokens` (PKCE code → token pair, single-attempt, no retry) and
- * `refreshOnceAbortable` (the single-attempt, ~10s, lock-budgeted refresh the
- * credentials mutation store injects as its `RefreshFn` — the ONLY /auth/refresh
- * spend primitive; its status mapping + single-attempt budget are pinned below).
- * The access-only `validateAuthTokenIdentity*` validators are consumed (and
- * mocked) by the CLI/runner-host store paths; their live `/api/v3/user` behaviour
- * runs against a faked fetch in the desktop file-token-store and gui-app
- * auth-service suites.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   exchangeCodeForTokens,
@@ -69,9 +58,7 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
   return calls;
 }
 
-// A real `Response` (so it stays `Response`-typed with no casts) whose body read
-// rejects with a `TimeoutError` - mirrors `AbortSignal.timeout` firing during
-// `response.json()`, after the status/headers have already arrived.
+// A real `Response` (so it stays `Response`-typed with no casts) whose body read rejects with a `TimeoutError` - mirrors `AbortSignal.timeout` firing during `response.json()`, after the status/headers have already arrived.
 function responseWithAbortingBody(status: number): Response {
   const response = new Response("{}", { status });
   Object.defineProperty(response, "json", {
@@ -197,10 +184,7 @@ describe("refreshOnceAbortable", () => {
   });
 
   it("returns network-error when the caller supplies a pre-aborted AbortSignal", async () => {
-    // Production currently only passes `signal: null` (FileTokenStore + mock),
-    // so the `AbortSignal.any([caller, timeout])` combine branch is otherwise
-    // dormant. A pre-aborted signal exercises that path: fetch throws →
-    // network-error (nothing spent).
+    // Production currently only passes `signal: null` (FileTokenStore + mock), so the `AbortSignal.any([caller, timeout])` combine branch is otherwise dormant.
     let fetchCalls = 0;
     globalThis.fetch = (async (
       _input: RequestInfo | URL,
@@ -227,7 +211,7 @@ describe("refreshOnceAbortable", () => {
 
     expect(result).toEqual({ kind: "network-error" });
     // The aborted signal may short-circuit before fetch is invoked, or fetch
-    // may be called and reject — either way nothing is spent (no refreshed pair).
+    // may be called and reject - either way nothing is spent (no refreshed pair).
     expect(fetchCalls === 0 || fetchCalls === 1).toBe(true);
   });
 
@@ -252,7 +236,7 @@ describe("refreshOnceAbortable", () => {
       token: "rotated-bearer",
       refreshToken: "rotated-refresh",
     });
-    // Exactly one POST to /auth/refresh — the single-spend budget.
+    // Exactly one POST to /auth/refresh - the single-spend budget.
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(REFRESH_ENDPOINT);
     expect(calls[0].method).toBe("POST");
@@ -264,11 +248,8 @@ describe("refreshOnceAbortable", () => {
   });
 
   it("maps a 409 refresh-grace race to network-error WITHOUT retrying", async () => {
-    // A 409 means a concurrent refresher won the grace window: transient
-    // (retriable under a FRESH lock), NOT a dead credential — it must map to
-    // network-error, never `rejected` (which would sign the session out). And
-    // unlike the retired multi-attempt helper, this single-attempt primitive must
-    // NOT re-POST: a retry inside the lock would blow the lock-hold budget.
+    // A 409 means a concurrent refresher won the grace window: transient (retriable under a fresh lock), not a dead credential - it must map to network-error, never `rejected` (which would sign the session out).
+    // And unlike the retired multi-attempt helper, this single-attempt primitive must not re-post: a retry inside the lock would blow the lock-hold budget.
     installMockFetch([{ status: 409, body: { error: "in progress" } }]);
 
     const result = await refreshOnceAbortable({
@@ -299,9 +280,7 @@ describe("refreshOnceAbortable", () => {
   });
 
   it("makes exactly one attempt on a transient 5xx (no retry → no double-spend)", async () => {
-    // installMockFetch replays the last spec for every call, so a retry would
-    // surface as calls.length > 1. The single-attempt property is what keeps a
-    // refresh inside the lock-hold budget.
+    // installMockFetch replays the last spec for every call, so a retry would surface as calls.length > 1.
     installMockFetch([{ status: 503, body: { error: "unavailable" } }]);
 
     const result = await refreshOnceAbortable({

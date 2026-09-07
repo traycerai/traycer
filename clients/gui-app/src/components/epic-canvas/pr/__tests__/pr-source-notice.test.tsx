@@ -33,9 +33,8 @@ describe("prSourceNoticeMessageFor", () => {
   });
 
   it("promises no resume time when the host has not learned one", () => {
-    // `retryAt: null` is precisely the case where the host is holding back
-    // BECAUSE it does not know when GitHub's window resets. Naming a time
-    // there would present a guess as a fact.
+    // `retryAt: null` is precisely the case where the host is holding back BECAUSE it does not know when GitHub's window resets.
+    // Naming a time there would present a guess as a fact.
     const message = prSourceNoticeMessageFor(
       { kind: "rate-limited", retryAt: null },
       null,
@@ -57,11 +56,7 @@ describe("prSourceNoticeMessageFor", () => {
   });
 
   it("never claims what is on screen, whatever the kind", () => {
-    // The pause says nothing about whether anything was ever fetched: a PR
-    // rate-limited before its first successful sweep has no "last data" to be
-    // showing, and the freshness stamp beside the icon is what answers that.
-    // Claiming it here made the tooltip contradict "Not yet fetched" sitting
-    // one element away.
+    // The pause says nothing about whether anything was ever fetched: a PR rate-limited before its first successful sweep has no "last data" to be showing, and the freshness stamp beside the icon is what answers that.
     for (const notice of [
       { kind: "rate-limited", retryAt: null },
       { kind: "rate-limited", retryAt: 1_000 },
@@ -86,23 +81,14 @@ describe("prSourceNoticeMessageFor", () => {
 
 describe("PrSourceNoticeHint", () => {
   it("puts the sentence in the live region's TEXT, which is what gets announced", () => {
-    // One dialect, one place: the host sends structure and no prose, so the
-    // pointer affordance and the screen-reader affordance must not be able to
-    // drift into saying different things.
-    //
-    // It has to be text content, not the region's `aria-label`. A live region
-    // announces its accessible CONTENT when that content changes; an
-    // `aria-label` on an otherwise-empty region leaves nothing to announce, so
-    // the pause would appear on screen and say nothing at all.
+    // One dialect, one place: the host sends structure and no prose, so the pointer affordance and the screen-reader affordance must not be able to drift into saying different things.
     renderHint({ kind: "rate-limited", retryAt: null });
     const expected = prSourceNoticeMessageFor(
       { kind: "rate-limited", retryAt: null },
       null,
       "pull-requests",
     );
-    // Selected by ROLE, which is the accessible contract itself rather than a
-    // proxy for it: if the live region stops being a `status`, this query
-    // fails instead of a separate attribute assertion doing so.
+    // Selected by ROLE, which is the accessible contract itself rather than a proxy for it: if the live region stops being a `status`, this query fails instead of a separate attribute assertion doing so.
     const region = screen.getByRole("status");
     expect(region.textContent).toContain(expected);
   });
@@ -124,11 +110,8 @@ describe("PrSourceNoticeHint", () => {
   });
 
   it("is reachable by keyboard, since the tooltip is the only place the full explanation exists", () => {
-    // A hover-only trigger hands the explanation to pointer users while
-    // leaving sighted keyboard users looking at an icon they cannot open. The
-    // trigger is a real button rather than a focusable live region: the latter
-    // is what `jsx-a11y/no-noninteractive-tabindex` rejects, and it is right -
-    // a status region is not a control.
+    // A hover-only trigger hands the explanation to pointer users while leaving sighted keyboard users looking at an icon they cannot open.
+    // The trigger is a real button rather than a focusable live region: the latter is what `jsx-a11y/no-noninteractive-tabindex` rejects, and it is right - a status region is not a control.
     renderHint({ kind: "rate-limited", retryAt: null });
     const trigger = screen.getByTestId("pr-source-notice-trigger");
     expect(trigger.tagName).toBe("BUTTON");

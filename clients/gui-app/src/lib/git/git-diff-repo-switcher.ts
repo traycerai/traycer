@@ -79,11 +79,7 @@ function rootDisabledLabel(
   row: WorktreeBindingSelectorRowV12,
   pending: boolean,
 ): string | null {
-  // Unverified placeholder facts (cold resolve on the host still in flight):
-  // "checking" instead of the lying "not git" / "missing" - the host's sweep
-  // pushes the resolved row and this converges on the refetch. `pending` is
-  // computed once by the caller so the row's `pending` flag and this label
-  // cannot disagree.
+  // Unverified placeholder facts (cold resolve on the host still in flight): "checking" instead of the lying "not git" / "missing" - the host's sweep pushes the resolved row and this converges on the refetch.
   if (pending) return "checking";
   if (!row.isGitRepo) return "not git";
   return formatWorktreeFolderDisabledReason(row);

@@ -31,10 +31,7 @@ const storeMocks = vi.hoisted(() => ({
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
-/**
- * Optional delayed materialize for destination-race tests. When `impl` is set,
- * restore uses it instead of the real blob-read path.
- */
+/** When `impl` is set, restore uses it instead of the real blob-read path. */
 const materializeMocks = vi.hoisted(() => ({
   impl: null as null | ((entry: PromptStashEntry) => Promise<JsonContent>),
 }));
@@ -510,11 +507,7 @@ describe("usePromptStash capture/source CAS", () => {
     });
 
     it("uses the latest render's source for post-save clearIfUnchanged (sync sourceRef)", async () => {
-      // sourceRef is assigned during layout (not a passive effect), so a
-      // mid-flight source swap must resolve clearIfUnchanged on the NEW
-      // adapter. Capture still used owner-1; the token is owner-1's, so the
-      // owner-2 adapter correctly refuses to clear (identity mismatch) -
-      // proving a stash for owner-1 never erases owner-2.
+      // Capture still used owner-1; the token is owner-1's, so the owner-2 adapter correctly refuses to clear (identity mismatch) - proving a stash for owner-1 never erases owner-2.
       let resolveSave: (() => void) | undefined;
       storeMocks.save.mockImplementationOnce(
         () =>
@@ -586,11 +579,7 @@ describe("usePromptStash capture/source CAS", () => {
     });
 
     it("skips source clear, pulse, toast, and setSaving after unmount while save is in flight (retiredRef)", async () => {
-      // A fire-and-forget stash can still be awaiting IndexedDB when the
-      // composer unmounts. Without retiredRef, post-save clearIfUnchanged
-      // would run against a retired adapter and could ABA-clear a reopened
-      // occupant of the same identity+revision; setSaving(false) would also
-      // warn about a state update on an unmounted component.
+      // Without retiredRef, post-save clearIfUnchanged would run against a retired adapter and could ABA-clear a reopened occupant of the same identity+revision; setSaving(false) would also warn about a state update on an unmounted component.
       let resolveSave: (() => void) | undefined;
       storeMocks.save.mockImplementationOnce(
         () =>
@@ -655,10 +644,8 @@ describe("usePromptStash capture/source CAS", () => {
     });
 
     it("suppresses toast.error after unmount when save rejects (retiredRef catch)", async () => {
-      // Sibling of the resolve-path retiredRef test above: a retired instance
-      // must also suppress failure feedback. "Could not stash this prompt" is
-      // meaningless once the composer is gone; the durable save already
-      // settled independently (here: rejected).
+      // Sibling of the resolve-path retiredRef test above: a retired instance must also suppress failure feedback.
+      // "Could not stash this prompt" is meaningless once the composer is gone; the durable save already settled independently (here: rejected).
       let rejectSave: ((error: Error) => void) | undefined;
       storeMocks.save.mockImplementationOnce(
         () =>
@@ -721,22 +708,7 @@ describe("usePromptStash capture/source CAS", () => {
     });
 
     it("still runs a live stash under StrictMode double-invoke of the retiredRef layout effect", async () => {
-      // React 18 Strict Mode double-invokes mount effects (setup → cleanup →
-      // setup) for a still-mounted instance. The retiredRef layout effect
-      // must reset to false in setup; without that, the simulated cleanup
-      // would leave every live instance permanently retired and turn every
-      // post-save clear/pulse/toast into a silent no-op.
-      //
-      // Convention: same StrictMode wrapper pattern as
-      // stream-runtime.test.tsx / route-error-component.test.tsx.
-      //
-      // HARNESS LIMITATION: this vitest/jsdom setup does not double-invoke
-      // mount layout effects under <StrictMode> (verified with a probe:
-      // setup fires once even with NODE_ENV=development; same observation
-      // as worktrees-enrichment.test.tsx). Mutation-removing
-      // `retiredRef.current = false` therefore still leaves this test green
-      // here. It remains a canary for the production shape and becomes a
-      // real regression net if the harness gains dev-mode double-invocation.
+      // Production resets `retiredRef` on Strict Mode remount. This harness does not double-invoke layout effects, so the test is a canary, not a regression net.
       const strictWrapper = (props: {
         readonly children: ReactNode;
       }): ReactNode => <StrictMode>{props.children}</StrictMode>;

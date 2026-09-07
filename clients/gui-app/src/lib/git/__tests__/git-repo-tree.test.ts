@@ -101,9 +101,7 @@ describe("buildSubmoduleParentReferences", () => {
   });
 
   it("has no divergence for an unenriched pointer (checkout HEAD never read)", () => {
-    // A dirty submodule the host could not inspect keeps the parser defaults
-    // (`submoduleHeadSha: null, diverged: false`) - that must not read as a
-    // verified "matches".
+    // A dirty submodule the host could not inspect keeps the parser defaults (`submoduleHeadSha: null, diverged: false`) - that must not read as a verified "matches".
     const references = buildSubmoduleParentReferences(
       [
         file("traycer", {

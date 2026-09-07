@@ -240,20 +240,16 @@ function registerEpicHeader(
   );
 }
 
-/**
- * Agent activity now arrives on the per-user notification room, so the epic
- * handle only supplies the live projection (the liveness filter) while the
- * working set is published as host presence.
- */
+/** Agent activity now arrives on the per-user notification room, so the epic handle only supplies the live
+ * projection (the liveness filter) while the working set is published as host presence. */
 const headerActivityByEpic = new Map<string, ReadonlyArray<string>>();
 
 function publishHeaderActivity(
   tab: EpicTab,
   activeAgentIds: ReadonlyArray<string>,
 ): void {
-  // Accumulate: one host publishes ONE entry carrying every epic it is working
-  // on, so republishing only the latest tab would silently clear the activity
-  // an earlier call established.
+  // Accumulate: one host publishes one entry carrying every epic it is working on, so republishing only the
+  // latest tab would silently clear the activity an earlier call established.
   headerActivityByEpic.set(tab.id, activeAgentIds);
   const byEpic: Record<
     string,
@@ -286,11 +282,8 @@ function registerLiveEpicHeader(
   );
 }
 
-/**
- * Presence naming an agent the epic's live projection no longer holds. The
- * session IS registered, so its (empty) projection is authoritative and the
- * liveness filter must drop the stale id.
- */
+/** The session IS registered, so its (empty) projection is authoritative and the liveness filter must drop the
+ * stale id. */
 function registerStaleActiveEpicHeader(
   tab: EpicTab,
   permissionRole: PermissionRole,
@@ -354,7 +347,7 @@ function buildHeaderEpicHandle(
   return {
     epicId: tab.id,
     userId: null,
-    // The HANDLE's own host, distinct from the per-chat `hostId` above.
+    // The handle's own host, distinct from the per-chat `hostId` above.
     hostId: "test-host",
     // A production handle has no `doc` / `awareness`: the replica lives on the
     // worker thread and a `Y.Doc` cannot cross a structured clone.
@@ -616,9 +609,8 @@ describe("<TabStrip />", () => {
         },
         120,
       );
-      // Dragging rightward onto B: the dragged tab's centre is on B's
-      // approach (left) half, so the merge is live immediately with the
-      // dragged tab taking the pair's left side.
+      // Dragging rightward onto B: the dragged tab's centre is on B's approach (left) half, so the merge is live
+      // immediately with the dragged tab taking the pair's left side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 0,
@@ -632,9 +624,8 @@ describe("<TabStrip />", () => {
       });
     });
 
-    // The merge is an approach-half highlight, not an insertion line: a line
-    // beside a highlighted merge target would advertise two outcomes for one
-    // release.
+    // The merge is an approach-half highlight, not an insertion line: a line beside a highlighted merge target
+    // would advertise two outcomes for one release.
     expect(screen.queryByTestId("tab-drop-indicator")).toBeNull();
     const mergePreview = screen.getByTestId("tab-strip-pair-preview-epic-e-b");
     expect(mergePreview.dataset.side).toBe("left");
@@ -692,9 +683,8 @@ describe("<TabStrip />", () => {
         },
         120,
       );
-      // Dragging leftward back onto B: the dragged tab's centre is on B's
-      // approach (right) half, so the dragged tab would take the pair's
-      // right side.
+      // Dragging leftward back onto B: the dragged tab's centre is on B's approach (right) half, so the dragged tab
+      // would take the pair's right side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 1,
@@ -804,11 +794,8 @@ describe("<TabStrip />", () => {
     expect(closeSlot.className).not.toContain("group-hover/tab:w-5");
     expect(hoverChrome?.className).toContain("rounded-md");
     expect(hoverChrome?.className).toContain("group-hover/tab:opacity-100");
-    // :focus-visible (keyboard-only), NOT :focus-within - a mouse-drag reorder
-    // focuses the tab div without activating it, and :focus-within would leave
-    // this accent chrome stuck lit on the inactive tab. The has-[:focus-visible]
-    // gate keeps it lit when the separate close button (a descendant tab stop)
-    // takes keyboard focus. See tab-strip-item.tsx.
+    // :focus-visible (keyboard-only), not:focus-within - a mouse-drag reorder focuses the tab div without
+    // activating it, and:focus-within would leave this accent chrome stuck lit on the inactive tab.
     expect(hoverChrome?.className).toContain(
       "group-focus-visible/tab:opacity-100",
     );
@@ -819,10 +806,8 @@ describe("<TabStrip />", () => {
   });
 
   it("separates a split group from the next strip item like any other tab", async () => {
-    // A split group is one strip item, so the separator rule ("hairline unless
-    // this item or the next one is active") has to apply to it too. It didn't:
-    // the rule was restated inside the plain-tab branch only, so a group drew
-    // no trailing hairline and the group-to-tab boundary read as a blank gap.
+    // A split group is one strip item, so the separator rule ("hairline unless this item or the next one is
+    // active") has to apply to it too.
     const tabD = epicFixture(4);
     const tabE = epicFixture(5);
     for (const epic of [EPIC_A, EPIC_B, EPIC_C, tabD, tabE]) {
@@ -849,9 +834,8 @@ describe("<TabStrip />", () => {
         { kind: "tab", id: tabItemId(refD), ref: refD },
         { kind: "tab", id: tabItemId(refE), ref: refE },
       ],
-      // Last item active, so the group and C both have an inactive successor -
-      // the only arrangement that exercises the positive and both negative
-      // branches of the rule in one render.
+      // Last item active, so the group and C both have an inactive successor - the only arrangement that exercises
+      // the positive and both negative branches of the rule in one render.
       activeItemId: tabItemId(refE),
       stripOrder: [refA, refB, refC, refD, refE],
       systemTabs: { history: null, settings: null },
@@ -953,11 +937,8 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    // Purely cosmetic geometry (frame width, underline thickness, member
-    // padding) is not asserted via Tailwind class strings - those break on
-    // any restyle without proving behavior. The focus semantics that matter
-    // are the data-focused-side/data-focused attributes and bg-primary state
-    // asserted below.
+    // Purely cosmetic geometry (frame width, underline thickness, member padding) is not asserted via Tailwind
+    // class strings - those break on any restyle without proving behavior.
     await screen.findByTestId("split-tab-group-split-a");
     const trigger = screen.getByTestId("split-quick-actions-split-a");
     const indicator = screen.getByTestId("split-focus-indicator-split-a");
@@ -1512,10 +1493,7 @@ describe("<TabStrip />", () => {
     });
     await flushNav();
 
-    // Cmd-T now opens a blank tab in the active group (`tab.new`); `epic.new`
-    // moved to Cmd-N. So Cmd-T no longer spawns a landing draft, and the
-    // following Cmd-W closes that blank - leaving the previous epic canvas tab
-    // and its real tabs untouched.
+    // Cmd-T now opens a blank tab in the active group (`tab.new`); `epic.new` moved to Cmd-N.
     expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
     expect(screen.queryByTestId(`tab-epic-${epicTabId}`)).not.toBeNull();
     expect(canvasTabIds(epicTabId)).toEqual(before);

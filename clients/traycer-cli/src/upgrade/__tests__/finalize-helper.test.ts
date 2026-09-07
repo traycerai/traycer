@@ -10,21 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Coverage for the detached pending-CLI-upgrade finalize helper:
-//
-//  - scheduleFinalizationHelper writes a platform-appropriate script,
-//    invokes the spawn stub with detached/ignored stdio flags, and
-//    returns a structured result identifying the helper pid.
-//  - The rendered script body contains the parent pid + live/staged
-//    binary paths and, once the parent exits, hands off to the staged
-//    binary's own hidden `cli finalize-upgrade` command (tested
-//    separately in commands/__tests__/cli-finalize-upgrade*.test.ts) -
-//    we don't actually execute the rendered script here, but the
-//    contract is asserted on the rendered body.
-//  - reconcilePostFinalizeMarker folds a "swapped" marker into the
-//    CLI install manifest (clears pendingUpgrade, promotes version),
-//    leaves the manifest unchanged on "swap-failed"/"parent-still-
-//    alive", and consumes the marker either way.
+// Coverage for the detached pending-CLI-upgrade finalize helper: - scheduleFinalizationHelper writes a platform-appropriate script, invokes the spawn stub with detached/ignored stdio flags, and returns a structured result identifying the helper pid. - The rendered script body contains the parent pid + live/staged binary paths and, once the parent exits, hands off to the staged binary's own hidden `cli finalize-upgrade` command (tested separately in commands/__tests__/cli-finalize-upgrade*.test.ts) - we don't actually execute the rendered script here, but the contract is asserted on the rendered body. - reconcilePostFinalizeMarker folds a "swapped" marker into the CLI install manifest (clears pendingUpgrade, promotes version), leaves the manifest unchanged on "swap-failed"/"parent-still- alive", and consumes the marker either way.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -145,10 +131,7 @@ describe("scheduleFinalizationHelper", () => {
     // The parked-still-alive marker write (only reachable path owned by
     // this script now) still targets post-finalize.json.
     expect(body).toContain("post-finalize.json");
-    // Binary swap + service start hand off to the staged binary's own
-    // hidden `cli finalize-upgrade` command - it acquires cli-lock
-    // under its own PID + start-time identity (Host Update Layer
-    // Redesign Tech Plan, "Windows CLI-finalize helper").
+    // Binary swap + service start hand off to the staged binary's own hidden `cli finalize-upgrade` command - it acquires cli-lock under its own PID + start-time identity (Host Update Layer Redesign Tech Plan, "Windows CLI-finalize helper").
     expect(body).toContain("$StagedBinary cli finalize-upgrade");
     expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
     expect(body).not.toContain("Start-Service");
@@ -317,16 +300,8 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(reread.pendingUpgrade).toBeNull();
   });
 
-  // The corruption this correlation exists to prevent. A helper that swapped
-  // 1.5.0 can leave its marker behind unconsumed; a later `cli upgrade` then
-  // records pendingUpgrade 1.6.0 next to it. Applying the stale marker would
-  // promote 1.6.0 to installed and clear the pending record without 1.6.0's
-  // staged binary ever reaching the live path - the manifest would claim a
-  // version the bytes on disk are not, with nothing left to detect it from.
-  //
-  // Doctor refuses the same stale marker and routes the user to `host
-  // restart`, i.e. straight into this function, so the read side alone would
-  // not have been enough.
+  // The corruption this correlation exists to prevent.
+  // A helper that swapped 1.5.0 can leave its marker behind unconsumed; a later `cli upgrade` then records pendingUpgrade 1.6.0 next to it.
   it("on a 'swapped' marker for a DIFFERENT staged upgrade, discards it without touching the manifest", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const pendingStagedPath = join(workHome, "bin", "traycer-1.6.0");
@@ -376,12 +351,8 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 
-  // The staged filename carries the version, so it alone defeats a stale-
-  // VERSION marker - but not a re-anchor. `cli re-anchor` repoints
-  // `manifest.binaryPath` without deleting the marker, so a SAME-version retry
-  // produces the same deterministic staged filename and would match on staged
-  // path alone, promoting a version whose bytes never reached the re-anchored
-  // destination.
+  // The staged filename carries the version, so it alone defeats a stale- VERSION marker - but not a re-anchor.
+  // `cli re-anchor` repoints `manifest.binaryPath` without deleting the marker, so a SAME-version retry produces the same deterministic staged filename and would match on staged path alone, promoting a version whose bytes never reached the re-anchored destination.
   it("discards a same-version marker whose livePath predates a 'cli re-anchor'", async () => {
     const reanchoredLivePath = join(workHome, "bin", "traycer-cli");
     const oldLivePath = join(workHome, "bin", "traycer");
@@ -425,11 +396,7 @@ describe("reconcilePostFinalizeMarker", () => {
   });
 
   // BOTH paths are reusable by design, so matching them is not identity.
-  // `cli re-anchor` supports replacing the binary at the same path, and
-  // `cli upgrade` derives the staged filename deterministically from the
-  // version - so retrying the same version reproduces the exact tuple a prior
-  // marker carries. Only the ordering separates them: a marker written BEFORE
-  // the pending upgrade was staged cannot be describing it.
+  // `cli re-anchor` supports replacing the binary at the same path, and `cli upgrade` derives the staged filename deterministically from the version - so retrying the same version reproduces the exact tuple a prior marker carries.
   it("discards a path-identical marker that predates the pending upgrade's staging", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");

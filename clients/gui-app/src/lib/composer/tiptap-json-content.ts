@@ -25,16 +25,7 @@ import {
 } from "@traycer/protocol/common/composer-plain-text";
 
 /**
- * The plain-text projection and the mention-attribute decode it runs on now
- * live in `@traycer/protocol/common` - `composer-plain-text.ts` and
- * `composer-mention-attrs.ts` - because the host builds a transcript row's
- * minimap preview with the SAME projection, and a preview computed from a
- * second copy would drift from the label the renderer draws.
- *
- * They are re-exported here under their original names deliberately: this
- * module has ~20 importers across the GUI, and the point of the move was to
- * share one implementation, not to rename every call site. Import either path;
- * they are the same function object.
+ * The plain-text projection and the mention-attribute decode it runs on now live in `@traycer/protocol/common` - `composer-plain-text.ts` and `composer-mention-attrs.ts` - because the host builds a transcript row's minimap preview with the SAME projection.
  */
 export {
   extractPlainTextFromComposerJSONContent,
@@ -47,40 +38,16 @@ export {
   stringValue,
 };
 
-// Recognizes both picker triggers. This is only the LEXICAL shape - `$` in
-// particular matches far more prose than it should (`$20`, `$PATH`), so what a
-// match becomes is decided by the catalog, not here. Callers gate on that; see
-// `buildSubmittedChatJSONContent`.
-//
-// The captured trigger rides along to the node for display only: the node still
-// serializes to the canonical `/name`, so nothing downstream of the composer has
-// to learn about `$`.
+// Recognizes both picker triggers.
+// This is only the LEXICAL shape - `$` in particular matches far more prose than it should (`$20`, `$PATH`), so what a match becomes is decided by the catalog, not here.
 const LEADING_SLASH_COMMAND_REGEX =
   /^([ \t]*)([/$])([A-Za-z0-9][A-Za-z0-9:_-]*)(?=$|\s)/;
 
-// A text node the scan reads through rather than stopping on. Deliberately the
-// same class the regex above accepts as indent, so "what counts as leading" has
-// one definition whether the indent shares the trigger's node or not.
+// A text node the scan reads through rather than stopping on.
+// Deliberately the same class the regex above accepts as indent, so "what counts as leading" has one definition whether the indent shares the trigger's node or not.
 const INDENT_ONLY_REGEX = /^[ \t]*$/;
 
-/**
- * Whether the leading-token scan reads THROUGH this node instead of settling
- * its leading token on it.
- *
- * Every member projects to nothing the regex above would refuse in front of a
- * trigger: an indent-only text node is the `[ \t]*` the regex itself accepts,
- * and the attachment atoms project to `""` outright (`composer-plain-text.ts`
- * returns the empty string for both). So passing over one cannot change what
- * the prompt reads at its leading position - which is why the scan may, and
- * must, keep going.
- *
- * Exported because `content-recovery` has to answer the same question about a
- * slash chip - "is it in the position the converter rebuilds from?" - and
- * answering it by hand-mirroring this scan has now drifted TWICE: a chip in a
- * leading blockquote, then a chip behind an indent-only text node, which the
- * classifier called lost while this scan happily chipped it. A mirror drifts;
- * a shared predicate cannot. Consume this rather than restating it.
- */
+/** Whether the leading-token scan reads THROUGH this node instead of settling its leading token on it. */
 export function isTransparentToLeadingScan(node: JsonContent): boolean {
   if (node.type === "imageAttachment" || node.type === "attachmentGroup") {
     return true;
@@ -89,40 +56,13 @@ export function isTransparentToLeadingScan(node: JsonContent): boolean {
 }
 
 /**
- * The catalog a raw-text converter resolves a written command against, keyed by
- * lowercased name. `null` means "not loaded" - see
- * {@link buildSubmittedChatJSONContent} for what each converter does then.
+ * The catalog a raw-text converter resolves a written command against, keyed by lowercased name.
+ * `null` means "not loaded" - see {@link buildSubmittedChatJSONContent} for what each converter does then.
  */
 export type SlashCommandCatalog = ReadonlyMap<string, SlashCommand>;
 
 /**
- * Normalizes composer content for submission, turning a leading `/command` or
- * `$skill` written as plain text into a chip.
- *
- * `catalog` is what keeps this from rewriting ordinary prose. The two triggers
- * are deliberately not symmetric here:
- *
- * - `$` chips **only** on a catalog hit. `$` leads real prose constantly -
- *   `$20 for the migration`, `$PATH is wrong` - and every one of those bodies
- *   fits the command-name grammar. Gating is the only thing that tells them
- *   apart, so with a `null` catalog a `$` prompt stays text.
- *
- *   That is safe to do, and this is the load-bearing part: the host's
- *   `parseProviderSlashPrompt` accepts a leading `$name` as well as `/name` and
- *   validates it against the real catalog. So a `$skill` left as prose here -
- *   because the catalog was still loading, or failed - is still resolved by the
- *   host, and `$20` still finds no command and stays prose. An unresolved
- *   catalog costs the user the pill, never the skill. Without that fallback
- *   every submit path in the app would have to await this catalog.
- * - `/` keeps its long-standing ungated lexical fallback, because a message that
- *   opens with `/word` is already a command by convention and the provider
- *   parses it that way regardless of what we chip.
- *
- * On a hit either trigger builds the chip from the resolved option, so a chip
- * born from raw text carries the same `kind`/`path`/`harnessId` as one the
- * picker inserted. That matters twice over: the host reads skills structurally
- * off `kind`, and the editor's leading guard deletes a kindless chip that sits
- * anywhere but the prompt start.
+ * Normalizes composer content for submission, turning a leading `/command` or `$skill` written as plain text into a chip.
  */
 export function buildSubmittedChatJSONContent(
   promptContent: JsonContent,
@@ -211,10 +151,8 @@ export function mentionAttrsFromAttachment(
   if (isGithubMentionAttachment(mention)) {
     return {
       contextType: mention.contextType,
-      // The entity token doubles as the node id, exactly as it does for every
-      // other entity mention. `org/repo#123` alone is NOT unique - the same
-      // one can be served by two GitHub hosts - so the token carries the host
-      // whenever it is not the default. See `githubMentionToken`.
+      // The entity token doubles as the node id, exactly as it does for every other entity mention.
+      // `org/repo#123` alone is NOT unique - the same one can be served by two GitHub hosts - so the token carries the host whenever it is not the default.
       id: mention.path,
       path: mention.path,
       pathKind: null,
@@ -293,8 +231,8 @@ interface LeadingSlashScanState {
   complete: boolean;
   changed: boolean;
   /**
-   * Whether the sibling after the node being scanned terminates a token that
-   * ends exactly at that node's edge. See {@link closesLeadingToken}.
+   * Whether the sibling after the node being scanned terminates a token that ends exactly at that node's edge.
+   * See {@link closesLeadingToken}.
    */
   nextClosesToken: boolean;
   readonly catalog: SlashCommandCatalog | null;
@@ -330,18 +268,7 @@ function nodesWithLeadingSlashCommandNode(
 }
 
 /**
- * Whether the siblings after a token that ends exactly at a node boundary leave
- * it terminated - i.e. the prompt still reads `/name` followed by whitespace or
- * nothing, which is what `LEADING_SLASH_COMMAND_REGEX` requires.
- *
- * Formatting splits a run, so the character that decides this usually lives in
- * a LATER node: a bold `$review` can be followed by a plain `-code`, a plain
- * `.`, or an image atom that serializes to nothing at all. Answering per node
- * type kept getting this wrong in a new way each time, so the question is
- * delegated to the same serializer that builds the prompt - if the remainder
- * starts with whitespace or is empty, the token is closed. Attachments drop out
- * for free (they serialize to `""`), a hard break contributes a newline, and a
- * mention or another chip contributes text that correctly refuses the boundary.
+ * Whether the siblings after a token that ends exactly at a node boundary leave it terminated - i.e. the prompt still reads `/name` followed by whitespace or nothing, which is what `LEADING_SLASH_COMMAND_REGEX` requires.
  */
 function closesLeadingToken(rest: ReadonlyArray<JsonContent>): boolean {
   const text = extractPlainTextFromComposerNodes(rest);
@@ -349,28 +276,22 @@ function closesLeadingToken(rest: ReadonlyArray<JsonContent>): boolean {
 }
 
 /**
- * Splits the document's leading text node into a chip plus its remainder, when
- * that text opens with a trigger the catalog can back. Reaching a non-empty text
- * node ends the scan either way: whatever it starts with is the leading token.
+ * Splits the document's leading text node into a chip plus its remainder, when that text opens with a trigger the catalog can back.
+ * Reaching a non-empty text node ends the scan either way: whatever it starts with is the leading token.
  */
 function textWithLeadingSlashCommandNode(
   node: JsonContent,
   state: LeadingSlashScanState,
 ): JsonContent[] {
-  // Indent-only text never reaches here - the caller reads through it via
-  // `isTransparentToLeadingScan`, which owns that rule for every node kind at
-  // once. So a text node arriving here carries something, and whatever it
-  // starts with IS the leading token.
+  // Indent-only text never reaches here - the caller reads through it via `isTransparentToLeadingScan`, which owns that rule for every node kind at once.
+  // So a text node arriving here carries something, and whatever it starts with IS the leading token.
   const text = node.text ?? "";
   state.complete = true;
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return [node];
   const rest = text.slice(parsed.end);
-  // The token only LOOKS complete because this node ends. Chipping it is worse
-  // than not converting at all: the chip is sent structurally as `review` while
-  // the text still reads `/review-code` or `/review.`, so a command the user
-  // never wrote runs - whereas leaving it as prose lets the host resolve the
-  // full concatenated text lexically, or refuse it exactly as we did.
+  // The token only LOOKS complete because this node ends.
+  // Chipping it is worse than not converting at all: the chip is sent structurally as `review` while the text still reads `/review-code` or `/review.`, so a command the user never wrote runs - whereas leaving it as prose lets the host resolve the full.
   if (rest.length === 0 && !state.nextClosesToken) return [node];
   const resolved = state.catalog?.get(parsed.name.toLowerCase()) ?? null;
   // `$` is meaningless without a catalog hit - see the note on
@@ -394,9 +315,8 @@ function nodeWithLeadingSlashCommandNode(
   state: LeadingSlashScanState,
 ): JsonContent[] {
   if (state.complete) return [node];
-  // Read through, don't settle on. One predicate for both members - the atoms
-  // that project to nothing and the indent the regex accepts - so the text
-  // branch below never has to re-ask.
+  // Read through, don't settle on.
+  // One predicate for both members - the atoms that project to nothing and the indent the regex accepts - so the text branch below never has to re-ask.
   if (isTransparentToLeadingScan(node)) return [node];
   if (node.type === "slashCommand") {
     state.complete = true;
@@ -405,10 +325,7 @@ function nodeWithLeadingSlashCommandNode(
   if (node.type === "text") return textWithLeadingSlashCommandNode(node, state);
 
   // A leading `/command` only becomes a chip in the document's first paragraph.
-  // Other leading blocks (code blocks, list items, etc.) are not command
-  // contexts, so end the scan instead of recursing - otherwise a leading
-  // ```/plan``` fence or `- /plan` list item would get a slashCommand node
-  // spliced inside it, producing schema-invalid submitted content.
+  // Other leading blocks (code blocks, list items, etc.) are not command contexts, so end the scan instead of recursing - otherwise a leading ```/plan``` fence or `- /plan` list item would get a slashCommand node spliced inside it, producing schema-invalid.
   if (node.type !== "doc" && node.type !== "paragraph") {
     state.complete = true;
     return [node];
@@ -441,10 +358,8 @@ function sameJsonContentArray(
 }
 
 /**
- * The last-resort chip: a lexically valid `/name` we could not resolve, because
- * the catalog had not loaded. It carries no `kind`, so the host falls back to
- * re-resolving the name itself and the editor's leading guard will only tolerate
- * it at the prompt start. Never produced for `$`.
+ * The last-resort chip: a lexically valid `/name` we could not resolve, because the catalog had not loaded.
+ * It carries no `kind`, so the host falls back to re-resolving the name itself and the editor's leading guard will only tolerate it at the prompt start.
  */
 function slashCommandNodeFromName(
   name: string,
@@ -460,10 +375,8 @@ function slashCommandNodeFromName(
 }
 
 /**
- * The chip a resolved command produces. Deliberately the same attribute set
- * `commitSlashInsertion` writes, so a chip is indistinguishable whether it was
- * picked from the popover, pasted, or spliced out of a next-step prompt - keep
- * the two in step.
+ * The chip a resolved command produces.
+ * Deliberately the same attribute set `commitSlashInsertion` writes, so a chip is indistinguishable whether it was picked from the popover, pasted, or spliced out of a next-step prompt - keep the two in step.
  */
 function slashCommandNodeFromCommand(
   command: SlashCommand,
@@ -486,24 +399,15 @@ function slashCommandNodeFromCommand(
   };
 }
 
-// Builds a paragraph node for a leading `/command` or `$skill` paste (e.g. a
-// next-step prompt copied as plain text). The command becomes a slashCommand
-// chip and the remainder is kept as literal text (split on newlines into
-// hardBreaks) so command arguments are not markdown-transformed - matching what
-// the user gets when typing the command and picking it from the suggestion
-// popover. The caller passes the resolved catalog option so the chip carries the
-// popover's casing, kind and path, and the trigger the paste actually led with
-// so it reads back as what was pasted.
+// Builds a paragraph node for a leading `/command` or `$skill` paste (e.g. a next-step prompt copied as plain text).
+// The command becomes a slashCommand chip and the remainder is kept as literal text (split on newlines into hardBreaks) so command arguments are not markdown-transformed - matching what the user gets when typing the command and picking it from the suggestion.
 export function slashCommandParagraph(
   command: SlashCommand,
   remainder: string,
   trigger: SlashCommandTrigger,
 ): JsonContent {
-  // A bare `/command` paste (empty remainder) gets a trailing space so the chip
-  // stays a separate token if the user types arguments right after it. Without
-  // it the prompt serializes as `/commandargs` and the host - which only routes
-  // a slash command followed by whitespace or end-of-string - drops it. Mirrors
-  // the typed suggestion-commit path, which also appends a space after the chip.
+  // A bare `/command` paste (empty remainder) gets a trailing space so the chip stays a separate token if the user types arguments right after it.
+  // Without it the prompt serializes as `/commandargs` and the host - which only routes a slash command followed by whitespace or end-of-string - drops it.
   const inlineText = remainder.length === 0 ? " " : remainder;
   return {
     type: "paragraph",

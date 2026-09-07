@@ -22,13 +22,8 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
-/**
- * The wizard is stubbed exactly as `onboarding-page.test.tsx` and
- * `session-import-wizard.test.tsx` do it: this suite is about which surface
- * (wizard vs. notice) the dialog chooses and what it hands `useSessionImportScan`,
- * not about the wizard's own row/selection behaviour (covered by
- * `session-import-wizard.test.tsx`).
- */
+/** The wizard is stubbed exactly as `onboarding-page.test.tsx` and `session-import-wizard.test.tsx` do it: this
+ * suite is about which surface (wizard vs. */
 vi.mock("@/components/session-import/session-import-wizard", () => ({
   SessionImportWizard: (props: { readonly scan: SessionImportScanHandle }) => (
     <div
@@ -38,12 +33,7 @@ vi.mock("@/components/session-import/session-import-wizard", () => ({
   ),
 }));
 
-/**
- * A recording stub rather than a bare mock: the dialog's own gate
- * (`runIdle && hostReady && scanSupported`) is exactly what this suite has to
- * prove, and the only way to see it from outside is the `active` argument this
- * hook was last called with.
- */
+/** A recording stub rather than a bare mock. */
 const scanTrackerMock = vi.hoisted(() => {
   const calls: boolean[] = [];
   return {
@@ -78,11 +68,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
   useRegisteredHostsPollLiveness: () => undefined,
 }));
 
-/**
- * The scope the dialog sees, over the selection the dialog itself owns — so a
- * pick made through the real `HostSwitcher` really does re-point the dialog,
- * the same shape `onboarding-page.test.tsx`'s `tourScope` uses.
- */
+/** The scope the dialog sees, over the selection the dialog itself owns. */
 const hostsMock = vi.hoisted(() => ({
   hosts: [{ hostId: "host-a", connectable: true }] as ReadonlyArray<{
     readonly hostId: string;
@@ -91,7 +77,6 @@ const hostsMock = vi.hoisted(() => ({
   activeHostId: "host-a" as string | null,
 }));
 
-/** Overrides the derived status for an explicit pick, for the vanished/unreachable cases. */
 const scopeStatusOverrideMock = vi.hoisted(() => ({
   value: null as HostScopeStatus | null,
 }));
@@ -100,7 +85,6 @@ const hostScopeCallsMock = vi.hoisted(() => ({
   scopedHostIds: [] as Array<string | null>,
 }));
 
-/** The status the fixture reports for a pick: the same ladder the real scope walks. */
 function scopeStatusFor(
   explicitPick: boolean,
   picked: HostScopeOption | null,
@@ -113,7 +97,6 @@ function scopeStatusFor(
   return picked.connectable ? "ready" : "unreachable";
 }
 
-/** What the picker strip prints: the host's name, or the id a vanished pick still names. */
 function scopeLabelFor(
   picked: HostScopeOption | null,
   scopedHostId: string | null,
@@ -167,12 +150,8 @@ vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
   useScopedHostBinding: () => null,
 }));
 
-/**
- * The stream half is this suite's subject alongside the scan gate: it answers
- * only once the transport genuinely names the picked host — `null` (still
- * "connecting", from the picker's point of view) otherwise, reproducing the
- * commit-after-a-pick gap `scoped-host-readiness.ts` documents.
- */
+/** The stream half is this suite's subject alongside the scan gate: it answers only once the transport
+ * genuinely names the picked host. */
 const streamOnHostMock = vi.hoisted(() => ({ hostId: null as string | null }));
 
 const streamBindings = new Map<string, StreamRuntimeBinding>();
@@ -352,10 +331,7 @@ describe("<SessionImportDialog />", () => {
     ];
     hostsMock.activeHostId = "host-a";
 
-    // Reached the way Settings' Host Overview opens this dialog directly on a
-    // machine, not through the switcher — a non-connectable row is refused
-    // there (see the refusal test below), so `initialHostId` is the only path
-    // onto an explicitly-picked host that is not reachable.
+    // Reached the way Settings' Host Overview opens this dialog directly on a machine, not through the switcher.
     renderDialog({ initialHostId: "host-b", onClose: undefined });
 
     await waitFor(() => {

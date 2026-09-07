@@ -3,25 +3,6 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/**
- * Regression guard for `make dev-desktop` startup.
- *
- * The desktop renderer's vite config consumes `@traycer-clients/gui-app` as a
- * workspace library. `gui-app` reaches into sibling workspaces via bare
- * specifiers (`@traycer/protocol/*`,
- * `@traycer-clients/shared/*`, `@traycer-clients/gui-app/*`) and into its own
- * `src/` via the `@/` alias. Vite only resolves these when a matching entry
- * lives in the renderer config's `resolve.alias` block. A missing alias
- * surfaces at dev-server startup as `Failed to run dependency scan ... could
- * not be resolved` - exactly how the notifications-store /
- * notification-formatter / notification-room imports broke the stack
- * previously.
- *
- * Rather than rely on an in-browser reproducer, this test parses the vite
- * config, walks every production source file under `gui-app/src`, and
- * asserts each workspace-prefixed specifier has an alias that would match
- * it under vite's prefix-with-slash-boundary rule.
- */
 
 const DESKTOP_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,11 +15,7 @@ const VITE_RENDERER_CONFIG = path.resolve(
   "vite.renderer.config.ts",
 );
 
-/**
- * Prefixes that imply the import crosses a workspace boundary that vite
- * must resolve through the alias table. Pure `@radix-ui/*`, `@tanstack/*`,
- * etc. flow through node_modules and are intentionally excluded.
- */
+/** Prefixes that imply the import crosses a workspace boundary that vite must resolve through the alias table. */
 const WORKSPACE_SCOPE_PREFIXES = [
   "@/",
   "@traycerai/",
@@ -114,13 +91,6 @@ function extractAliasKeys(viteConfigSource: string): string[] {
   return keys;
 }
 
-/**
- * Vite matches a string alias against a specifier when
- * `specifier === alias || specifier.startsWith(alias + "/")`. We deliberately
- * sort longest-first so a more specific alias like `@traycer-clients/gui-app`
- * wins over a shorter one like `@traycer-clients/shared` even if both were
- * viable prefixes.
- */
 function findMatchingAlias(
   specifier: string,
   aliases: readonly string[],

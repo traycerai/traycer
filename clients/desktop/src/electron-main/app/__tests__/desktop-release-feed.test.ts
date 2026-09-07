@@ -772,11 +772,8 @@ describe("ExactReleaseAssetProvider", () => {
     );
   });
 
-  // The differential downloader asks for the blockmap of the release being
-  // installed AND of the one already installed. Artifact names carry no
-  // version, so both blockmaps are called `<installer>.blockmap` - and this
-  // provider is pinned to a single release's assets. Resolving the old one
-  // therefore cannot be a lookup in `assets`; it has to fetch that release.
+  // Artifact names carry no version, so both blockmaps are called `<installer>.blockmap` - and this provider is pinned to a single release's assets.
+  // Resolving the old one therefore cannot be a lookup in `assets`; it has to fetch that release.
   describe("getBlockMapFiles", () => {
     const newBlockMapUrl =
       "https://api.github.com/repos/traycerai/private-traycer/releases/assets/1003";

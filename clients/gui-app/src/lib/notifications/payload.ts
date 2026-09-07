@@ -1,9 +1,4 @@
 // Notification payload contract consumed by `NotificationFocusBridge`.
-//
-// Payloads travel from the runner (desktop / mobile) as `unknown`. The GUI
-// decides how to interpret them. Parsing is total - unrecognized shapes
-// produce `null` instead of throwing, so a bad payload cannot break the
-// mounted runtime.
 
 import type { UseNavigateResult } from "@tanstack/react-router";
 import {
@@ -99,10 +94,8 @@ export interface TerminalNotificationPayload {
 }
 
 /**
- * A parked browser session's tile. `sessionId`/`tabId` address the tile
- * deterministically (its canvas node id is `browser-session:<sessionId>:<tabId>`),
- * and the session is host-local for life - so this routes only to a tile bound
- * to the row's origin host, never to a same-id tile on another machine.
+ * A parked browser session's tile.
+ * `sessionId`/`tabId` address the tile deterministically (its canvas node id is `browser-session:<sessionId>:<tabId>`), and the session is host-local for life - so this routes only to a tile bound to the row's origin host, never to a same-id tile on another.
  */
 export interface BrowserSessionNotificationPayload {
   readonly kind: "browserSession";
@@ -111,21 +104,7 @@ export interface BrowserSessionNotificationPayload {
   readonly tabId: string;
 }
 
-/**
- * A host-managed surface rather than a document inside an epic.
- *
- * One destination FAMILY, not one payload kind per operation: the notification
- * model is expected to grow to test boxes, development environments, and other
- * host-owned resources, and each of those would otherwise add a transport type
- * for what is really the same navigation shape. `surface` grows here in client
- * code - it is never persisted in a notification row, because a durable route
- * would freeze today's UI into data that outlives it.
- *
- * `focus` is a HINT. A surface must always be reachable without it: the
- * resource a row describes may be gone by the time the row is read (a deleted
- * worktree, by construction), and failing to resolve a focus target must never
- * turn into a dead-end activation.
- */
+/** A host-managed surface rather than a document inside an epic. */
 export interface HostSurfaceNotificationPayload {
   readonly kind: "hostSurface";
   readonly surface: "worktreeSettings";
@@ -260,10 +239,8 @@ function parseBrowserSessionPayload(
 }
 
 /**
- * The already-normalized shape, as it rides a native activation envelope's
- * `route`. `parseBrowserSessionPayload` above reads the RAW host payload
- * (`browser.human.needed`); this reads what that produced, because
- * `parseEnvelopeV1` re-parses its own route on the way back in.
+ * The already-normalized shape, as it rides a native activation envelope's `route`.
+ * `parseBrowserSessionPayload` above reads the RAW host payload (`browser.human.needed`); this reads what that produced, because `parseEnvelopeV1` re-parses its own route on the way back in.
  */
 function parseNormalizedBrowserSessionPayload(
   value: Record<string, unknown>,
@@ -316,10 +293,8 @@ function parseInterviewPayload(
 }
 
 /**
- * Total parse of a host-surface destination. An unknown `surface` yields
- * `null` (degrade to opening the centre) rather than a payload the router
- * would have to guess at - a native envelope can arrive from a NEWER build
- * that knows surfaces this one does not.
+ * Total parse of a host-surface destination.
+ * An unknown `surface` yields `null` (degrade to opening the centre) rather than a payload the router would have to guess at - a native envelope can arrive from a NEWER build that knows surfaces this one does not.
  */
 function parseHostSurfacePayload(
   value: Record<string, unknown>,
@@ -371,9 +346,8 @@ export function parseNotificationPayload(
 }
 
 /**
- * Derives a typed `NotificationPayload` from a `NotificationEvent` stored in
- * the shared notification-room schema. Comment-thread events carry epic +
- * artifact + thread context; permission events carry only the epic.
+ * Derives a typed `NotificationPayload` from a `NotificationEvent` stored in the shared notification-room schema.
+ * Comment-thread events carry epic + artifact + thread context; permission events carry only the epic.
  */
 export function buildPayloadFromEvent(
   event: NotificationEvent,
@@ -399,11 +373,8 @@ export function buildPayloadFromEvent(
 export type NotificationNavigate = UseNavigateResult<string>;
 
 /**
- * Pure predicate mirroring `routeNotification`'s no-op branches, without
- * navigating. Lets a caller (native click routing) decide upfront whether an
- * activation will actually go anywhere, so a non-navigable payload (a
- * `session` kind, or an `artifact`/`approval` missing the ids it needs) can
- * fall back to opening the center instead of activating silently.
+ * Pure predicate mirroring `routeNotification`'s no-op branches, without navigating.
+ * Lets a caller (native click routing) decide upfront whether an activation will actually go anywhere, so a non-navigable payload (a `session` kind, or an `artifact`/`approval` missing the ids it needs) can fall back to opening the center instead of.
  */
 export function isNotificationPayloadRoutable(
   payload: NotificationPayload,
@@ -428,9 +399,8 @@ export function isNotificationPayloadRoutable(
 }
 
 /**
- * Single routing entry point used by both `NotificationFocusBridge` (OS toast
- * clicks) and the in-app notifications popover. Keeps the route-target
- * contract in one place so the two surfaces cannot drift.
+ * Single routing entry point used by both `NotificationFocusBridge` (OS toast clicks) and the in-app notifications popover.
+ * Keeps the route-target contract in one place so the two surfaces cannot drift.
  */
 export function routeNotification(
   navigate: NotificationNavigate,
@@ -451,13 +421,8 @@ export interface NotificationHostRouteContext {
 }
 
 /**
- * Routes a notification and answers whether it reached the required
- * host-bound target. Approval/interview rows require their feed origin;
- * chat lifecycle rows may name the chat's distinct durable host in payload.
- *
- * `false` means the route fell through to a hostless intent, which resolves
- * through the ambient effective host - fine for an epic or a plain chat, wrong
- * for an approval or interview that only its origin host can serve.
+ * Routes a notification and answers whether it reached the required host-bound target.
+ * Approval/interview rows require their feed origin; chat lifecycle rows may name the chat's distinct durable host in payload.
  */
 export function routeNotificationForHost(
   navigate: NotificationNavigate,
@@ -566,12 +531,7 @@ export function routeNotificationForHost(
 }
 
 /**
- * The tab intent shared by every "focus a specific tile, or fall back to just
- * opening the epic" route: prepare the tile's nested focus and activate its
- * tab when a match was found on the canvas, else fall back to the hostless
- * epic intent. `routeTerminalNotification` and `routeBrowserSessionNotification`
- * differ only in how they locate `match` (a terminal row names its tab
- * directly; a browser row searches the canvas for its parked tile).
+ * The tab intent shared by every "focus a specific tile, or fall back to just opening the epic" route: prepare the tile's nested focus and activate its tab when a match was found on the canvas, else fall back to the hostless epic intent.
  */
 function focusTileIntent(input: {
   readonly epicId: string;
@@ -607,10 +567,8 @@ function focusTileIntent(input: {
 }
 
 /**
- * Focuses the parked browser tile, or opens its epic when no such tile is on a
- * canvas. `false` when it fell through to the hostless epic intent, so the
- * caller can decline to credit an activation that never reached the parked
- * host.
+ * Focuses the parked browser tile, or opens its epic when no such tile is on a canvas.
+ * `false` when it fell through to the hostless epic intent, so the caller can decline to credit an activation that never reached the parked host.
  */
 function routeBrowserSessionNotification(
   navigate: NotificationNavigate,
@@ -645,18 +603,7 @@ function routeBrowserSessionNotification(
   return match !== undefined;
 }
 
-/**
- * Opens the host-managed surface a row points at.
- *
- * Goes through `ensureSettingsTab` rather than navigating to the route
- * directly so the Settings tab exists, is focused, and REMEMBERS worktrees as
- * its last section - the same path the command palette and header take. Panel
- * state that lives outside the route (search text, tier filters, sort) is
- * therefore untouched: the user lands back on the list they had set up.
- *
- * Worktree deletion passes no focus hint on purpose. The row it would point at
- * has just been deleted, so the only honest destination is the list.
- */
+/** Opens the host-managed surface a row points at. */
 function routeHostSurfaceNotification(
   navigate: NotificationNavigate,
   payload: HostSurfaceNotificationPayload,
@@ -671,15 +618,7 @@ function routeHostSurfaceNotification(
   );
 }
 
-/**
- * Every host surface, mapped to the Settings section that hosts it.
- *
- * A `Record` keyed by the surface union rather than a switch: it is exhaustive
- * by construction, so adding a surface fails to compile here until it declares
- * a destination. A future surface that is NOT a Settings section (a dedicated
- * route, say) is the point at which this becomes a real dispatch rather than a
- * table - which is a change to make then, not a switch to guess at now.
- */
+/** Every host surface, mapped to the Settings section that hosts it. */
 const HOST_SURFACE_SETTINGS_SECTION: Record<
   HostSurfaceNotificationPayload["surface"],
   SettingsSectionId
@@ -693,11 +632,8 @@ function routeTerminalNotification(
   receivedAt: number,
 ): void {
   const tab = useEpicCanvasStore.getState().tabsById[payload.tabId];
-  // The payload names the EXACT tab that owns the terminal. Prepare THAT tab's
-  // nested focus and activate it - never resolve by epic, which would pick an
-  // active/MRU same-epic sibling and land on the wrong tab. A retained,
-  // currently-closed tab is reopened by the controller's legacy projection
-  // (`setActiveTab` reinserts it into `openTabOrder`).
+  // The payload names the EXACT tab that owns the terminal.
+  // Prepare THAT tab's nested focus and activate it - never resolve by epic, which would pick an active/MRU same-epic sibling and land on the wrong tab.
   const match =
     tab?.epicId === payload.epicId
       ? {
@@ -785,22 +721,16 @@ function routeEpicChatNotification(
     parkChatTranscriptJump(payload, context);
     return true;
   }
-  // A fresh tile is opened through a hostless epic intent. Park its jump only
-  // when the window is already addressing the chat's target host; a
-  // different-host tile with the same chat id must never consume the target.
+  // A fresh tile is opened through a hostless epic intent.
+  // Park its jump only when the window is already addressing the chat's target host; a different-host tile with the same chat id must never consume the target.
   if (
     context.targetHostId !== null &&
     context.targetHostId === context.effectiveHostId
   ) {
     parkChatTranscriptJump(payload, context);
   }
-  // Everything above matched a target BOUND to `targetHostId`. The fallback
-  // below does not: `openOrFocusEpicIntent` is hostless by construction, so it
-  // resolves through whichever host is effective. Reported as `false` so an
-  // ORIGIN-REQUIRED activation can decline to ACKNOWLEDGE a prompt it did not
-  // open on its own host - see `useNotificationActivationWithNavigate`. The
-  // navigation still happens: opening the epic is useful either way, and
-  // suppressing it would strand every row whose origin cannot be established.
+  // Everything above matched a target BOUND to `targetHostId`.
+  // The fallback below does not: `openOrFocusEpicIntent` is hostless by construction, so it resolves through whichever host is effective.
   navigateToTabIntent(
     navigate,
     openOrFocusEpicIntent({

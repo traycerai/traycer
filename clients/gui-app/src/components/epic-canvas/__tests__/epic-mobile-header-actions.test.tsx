@@ -37,21 +37,12 @@ const mutateAsyncSpy = vi.hoisted(() =>
   vi.fn<(vars: RenameVariables) => Promise<void>>(),
 );
 
-/**
- * Default is NO session, which is what every pre-existing test in this file
- * runs under - the app-wide fallback path - so adding this seam leaves them
- * on the arm they were written against.
- */
 const session = vi.hoisted(() => ({
   registered: false,
   /** A registered session whose serving client is momentarily gone. */
   hasHostClient: false,
   /**
-   * The handle's stable transport binding. `null` is the cold-restore shape -
-   * a registered session that never announced a host because the provider
-   * that stamps identity is unmounted. No longer selects a routing ARM (there
-   * is only one, post-T11: enqueue on the session's own store) - it is read
-   * for the cloud-cache-update call only.
+   * `null` is the cold-restore shape - a registered session that never announced a host because the provider that stamps identity is unmounted.
    */
   hostId: null as string | null,
 }));
@@ -64,14 +55,7 @@ interface FakeWriteCommandRecord {
   readonly resolution: FakeWriteCommandResolution | null;
 }
 /**
- * The session store's write-command seam post-T11 (`enqueueWriteCommand` +
- * `waitForWriteCommand`), faked directly rather than backed by a real
- * `createOpenEpicStore` session: these tests are about WHICH requester a
- * registered session's rename reaches (session-scoped vs. app-wide), not
- * about the command queue's own lifecycle (FIFO ordering, dead-sweep
- * reconciliation, ...) - that is covered by `use-rename-canvas-tab.test.tsx`
- * and `use-switcher-rename.test.tsx`. A thin fake keeps the routing claim
- * legible without dragging in queue plumbing this file has no opinion about.
+ * A thin fake keeps the routing claim legible without dragging in queue plumbing this file has no opinion about.
  */
 const enqueueWriteCommand = vi.hoisted(() =>
   vi.fn<
@@ -103,9 +87,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({ mutateAsync: mutateAsyncSpy, isPending: false }),
 }));
-// Whole-module, deliberately not a `...actual` partial: the component imports
-// exactly these two, and a partial would quietly hand any export added later
-// its real module-scoped registry.
+// Whole-module, deliberately not a `...actual` partial: the component imports exactly these two, and a partial would quietly hand any export added later its real module-scoped registry.
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   getOpenEpicRegistry: () => ({
     peek: () =>
@@ -131,10 +113,7 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: reportableErrorToastSpy,
 }));
-// Only the SINGLETON is replaced. `AnalyticsEvent` stays the real enum on
-// purpose: asserting against a literal the test invented would keep passing
-// if the shipped member changed, which is the whole thing this test exists
-// to pin.
+// Only the SINGLETON is replaced.
 vi.mock("@/lib/analytics", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/analytics")>();
   return { ...actual, Analytics: { getInstance: () => ({ track: trackSpy }) } };
@@ -168,9 +147,7 @@ describe("<EpicMobileSwitcherTrigger />", () => {
 });
 
 /**
- * `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
- * success arm's cloud-cache patch, so it must render under a provider - the
- * mocked mutation hook used to hide that dependency.
+ * `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host success arm's cloud-cache patch, so it must render under a provider - the mocked mutation hook used to hide that dependency.
  */
 function renderWithQueryClient(element: ReactElement) {
   return render(
@@ -220,9 +197,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     const variables = mutateAsyncSpy.mock.calls[0][0];
     expect(variables.epicDelta.id).toBe("epic-1");
     expect(variables.epicDelta.title).toBe("Renamed epic");
-    // Flush the retire `.then` arms so no unhandled-promise warning bleeds
-    // into the next test - there is no session registered under "epic-1"
-    // here, so the retire itself is a no-op, but the promise still settles.
+    // Flush the retire `.then` arms so no unhandled-promise warning bleeds into the next test - there is no session registered under "epic-1" here, so the retire itself is a no-op, but the promise still settles.
     await Promise.resolve();
   });
 
@@ -266,12 +241,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     expect(enqueuedRename.kind).toBe("update-epic-title");
     expect(enqueuedRename.title).toBe("Renamed epic");
     expect(typeof enqueuedRename.updatedAt).toBe("number");
-    // Post-T11 this arm's success is `command.state === "committed"`,
-    // resolved through `waitForWriteCommand` rather than an RPC promise this
-    // component awaits directly - it still bypasses `useEpicUpdateTitle`'s
-    // own `onSuccess`, which is the only other place the event is emitted.
-    // It is also the NORMAL case - an epic with a live session - so losing
-    // it here would zero out mobile rename analytics rather than dent them.
+    // It is also the NORMAL case - an epic with a live session - so losing it here would zero out mobile rename analytics rather than dent them.
     await waitFor(() => {
       expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.TaskRenamed, {
         source: "direct_ui",
@@ -280,30 +250,8 @@ describe("<MobileEpicHeaderTitle />", () => {
     expect(mutateAsyncSpy).not.toHaveBeenCalled();
   });
 
-  // Replaces "refuses the rename when the session names a host the app-wide
-  // client is not on". Nothing refuses anymore - the host-comparison branch
-  // that used to guard this was deleted at T11 (`0d4f8e1c`) because the
-  // hazard it guarded against became unreachable by construction:
-  // `epic-session-provider.tsx` resolves a registered session's
-  // `commandRequester` for THAT session's own host
-  // (`useHostClientForHostId(session?.hostId ?? targetHostId)`), so there is
-  // no longer any path from a registered session to the app-wide client at
-  // all. What replaces the refusal is the positive property it existed to
-  // protect, asserted directly with the two requesters kept distinct
-  // (`enqueueWriteCommand` vs. `mutateAsyncSpy`): a registered session's
-  // rename reaches the session's own requester, and never the app-wide one -
-  // pinned even under the exact host-mismatch shape the deleted branch used
-  // to special-case, so a future regression that re-routes a registered
-  // session's rename back through the app-wide mutation still fails here,
-  // where the old test could only ever have caught a broken comparison in
-  // logic that no longer exists.
-  // Scope note: this pins the COMPONENT's half - the rename is enqueued on
-  // the session's own store and never on the app-wide mutation. The other
-  // half, that the session's queue then sends on the session's host, is
-  // `epic-session-provider`'s binding (`commandRequester:
-  // useHostClientForHostId(session.hostId)`) and is pinned where that binding
-  // lives. Naming this test for the whole property would claim coverage this
-  // file does not provide.
+  // `mutateAsyncSpy`): a registered session's rename reaches the session's own requester, and never the app-wide one - pinned even under the exact host-mismatch shape the deleted branch used to special-case, so a future regression that re-routes a registered session's rename back through the app-wide mutation still fails here, where the old test could only ever have caught a broken comparison in logic that no longer exists.
+  // Scope note: this pins the COMPONENT's half - the rename is enqueued on the session's own store and never on the app-wide mutation.
   it("a registered session's rename is enqueued on the SESSION's own store, never through the app-wide mutation - even when the session names a different host", () => {
     session.registered = true;
     session.hasHostClient = false;
@@ -322,10 +270,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     expect(mutateAsyncSpy).not.toHaveBeenCalled();
   });
 
-  // Replaces "still renames through the app-wide mutation when the session
-  // names no host". Retargeted onto the guarantee that now delivers the
-  // rename for EVERY registered session regardless of host shape: it
-  // enqueues on its own store, never on the app-wide mutation.
+  // Retargeted onto the guarantee that now delivers the rename for EVERY registered session regardless of host shape: it enqueues on its own store, never on the app-wide mutation.
   it("a registered session enqueues on its own store even when it announces no host (cold-restore)", () => {
     session.registered = true;
     session.hasHostClient = false;
@@ -336,10 +281,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "Renamed epic" } });
     fireEvent.blur(input);
-    // The cold-restore shape: a registered session whose provider is
-    // unmounted, so it never announced a host. There is no separate
-    // app-wide arm to fall back to post-T11 - the session's own store still
-    // enqueues.
+    // The cold-restore shape: a registered session whose provider is unmounted, so it never announced a host.
     expect(enqueueWriteCommand).toHaveBeenCalledTimes(1);
     expect(mutateAsyncSpy).not.toHaveBeenCalled();
     expect(reportableErrorToastSpy).not.toHaveBeenCalled();
@@ -370,9 +312,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "Renamed epic" } });
     fireEvent.blur(input);
-    // No handle means no stamp to strand, so this is a substitution of
-    // nothing - it is all this surface ever had before sessions carried a
-    // host, and the refusal above must not have swallowed it.
+    // No handle means no stamp to strand, so this is a substitution of nothing - it is all this surface ever had before sessions carried a host, and the refusal above must not have swallowed it.
     expect(mutateAsyncSpy).toHaveBeenCalledTimes(1);
     expect(reportableErrorToastSpy).not.toHaveBeenCalled();
   });
@@ -413,11 +353,7 @@ describe("<MobileEpicHeaderActionsBinder />", () => {
     expect(useMobileHeaderStore.getState().rightActionEntries.size).toBe(0);
   });
 
-  // Launching a task hands the header from the start page to the epic the
-  // launch created, and the two halves of that handoff are not ordered: the
-  // start page's terminal panel follows its pane anchor, so it is torn down a
-  // commit after this binder has already registered. Teardowns on other keys
-  // cannot touch this tab's entry.
+  // Teardowns on other keys cannot touch this tab's entry.
   it("keeps its entry when another surface unregisters afterwards", () => {
     holder.mobile = true;
     useMobileHeaderStore

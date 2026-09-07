@@ -16,14 +16,7 @@ import {
 const SAVE_DEBOUNCE_MS = 500;
 const SAVED_FLASH_MS = 1600;
 
-/**
- * Matches a Tailwind `order-*` utility in a SINGLE class token, with or
- * without a variant prefix and with or without the negative marker - Tailwind
- * spells a backwards reorder `-order-1`, so a pattern anchored on the letters
- * alone reads the leading `-` as context and lets it past. Anchoring on token
- * start or a variant colon, with the marker optional, is what closes that.
- * `border-*` and friends never match: their `order-` begins mid-token.
- */
+/** `border-*` and friends never match: their `order-` begins mid-token. */
 const ORDER_UTILITY = /(?:^|:)-?order-/;
 
 function resetStore(): void {
@@ -309,8 +302,8 @@ describe("WorktreeBranchPrefixSection", () => {
   });
 
   it("shows the reset button for an invalid in-progress draft while saved is still the default", () => {
-    // Reset is driven by the ACTIVE DRAFT, not the committed store value, so
-    // a pending invalid edit still has a way back to the default.
+    // Reset is driven by the active draft, not the committed store value, so a pending invalid edit still has a
+    // way back to the default.
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();
 
@@ -381,10 +374,7 @@ describe("WorktreeBranchPrefixSection", () => {
   });
 
   it("spans the wrapped control row below md and flexes the input into it", () => {
-    // jsdom does no layout - assert the class contract only. Below md the
-    // cluster has wrapped onto a line of its own, so it takes that line's full
-    // width and the input flexes into it instead of keeping its desktop size
-    // with dead space beside it.
+    // jsdom does no layout - assert the class contract only.
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();
 
@@ -401,17 +391,8 @@ describe("WorktreeBranchPrefixSection", () => {
   });
 
   it("keeps visual order aligned with DOM order in the control cluster", () => {
-    // Focus order follows the DOM; visual order follows `order-*`. Splitting
-    // them puts the keyboard and a screen reader on a control the eye reads
-    // somewhere else - here that would announce "Reset" before the field it
-    // acts on (WCAG 2.4.3 Focus Order, 1.3.2 Meaningful Sequence). The slot
-    // holds a labelled button, so no `order-*` may appear in this cluster at
-    // any breakpoint, and the reset slot leads at every width.
-    //
-    // What that costs is a small leading inset below md, where the slot's
-    // reservation sits ahead of the field. That reservation is the point: it
-    // is why the input does not jump when the button appears mid-edit, and a
-    // steady inset beats a gap opening under the caret.
+    // Splitting them puts the keyboard and a screen reader on a control the eye reads somewhere else - here that
+    // would announce "Reset" before the field it acts on (WCAG 2.4.3 Focus Order, 1.3.2 Meaningful Sequence).
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();
 
@@ -431,11 +412,7 @@ describe("WorktreeBranchPrefixSection", () => {
     expect(resetSlot instanceof HTMLElement).toBe(true);
     expect(field).toBe(input);
 
-    // The guard's own language, pinned - a sweep that never fires is
-    // indistinguishable from a sweep that cannot. Every spelling of a reorder
-    // must be rejected, INCLUDING the negative one: `-order-1` reverses two
-    // controls exactly as `order-last` does, and it is the spelling a pattern
-    // anchored on the bare letters silently admits.
+    // The guard's own language, pinned - a sweep that never fires is indistinguishable from a sweep that cannot.
     expect("order-last").toMatch(ORDER_UTILITY);
     expect("max-md:order-first").toMatch(ORDER_UTILITY);
     expect("-order-1").toMatch(ORDER_UTILITY);
@@ -446,11 +423,8 @@ describe("WorktreeBranchPrefixSection", () => {
   });
 
   it("truncates the description only from md up, so it wraps below", () => {
-    // The single-line clamp is a two-column affordance: beside the input there
-    // is one line to spend. Once the control wraps away the sentence owns the
-    // width and should use as many lines as it needs. Scoped as `md:truncate`
-    // rather than an override of `truncate`, so which rule applies below md is
-    // not a question of utility source order.
+    // Scoped as `md:truncate` rather than an override of `truncate`, so which rule applies below md is not a
+    // question of utility source order.
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();
 
@@ -605,14 +579,8 @@ describe("WorktreeBranchPrefixSection", () => {
   });
 
   it("still adopts idle external writes after a whitespace-padded commit", async () => {
-    // Regression: inferring "no local edit" from draft === prevSaved broke after
-    // any trimmed commit, because raw draft never equaled the trimmed store.
-    // hasLocalEdit must clear on commit so a later idle external write is adopted
-    // (not stuck on Saving…) and a stray focus+blur cannot clobber it.
-    //
-    // Flash fix: an adopted external value that differs from the value just
-    // flashed must clear the "Saved ✓" indicator immediately - it must not
-    // linger over a value it never described.
+    // Flash fix: an adopted external value that differs from the value just flashed must clear the "Saved ✓"
+    // indicator immediately - it must not linger over a value it never described.
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();
 
@@ -666,10 +634,8 @@ describe("WorktreeBranchPrefixSection", () => {
   });
 
   it("still flashes save feedback for a normalization-only commit (no store write)", async () => {
-    // Regression: saving/justSaved used to key off isDirty (draft.trim() !==
-    // saved). A pure whitespace edit that trims to the already-saved value
-    // never wrote the store and never showed spinner/check. hasLocalEdit now
-    // drives both indicators so any resolved local edit flashes the check.
+    // A pure whitespace edit that trims to the already-saved value never wrote the store and never showed
+    // spinner/check.
     useSettingsStore.setState({ worktreeBranchPrefix: "feat-" });
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();

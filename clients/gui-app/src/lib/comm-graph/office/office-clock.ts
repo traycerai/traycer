@@ -1,11 +1,4 @@
-/**
- * Clock-hand geometry, in radians clockwise from twelve.
- *
- * Pure and separate from the drawing so it can be checked: the hands are the
- * one part of the wall clock that can be subtly wrong - an hour hand that
- * jumps between hours instead of creeping, or a minute hand a quarter-turn
- * out - and none of that is visible to a test that only asserts nothing threw.
- */
+/** Clock-hand geometry, in radians clockwise from twelve. */
 export interface OfficeClockAngles {
   readonly hour: number;
   readonly minute: number;

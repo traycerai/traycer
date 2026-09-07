@@ -95,11 +95,7 @@ const KEYBINDING_ROUTER: KeybindingRouter = {
   canGoForward: () => false,
 };
 
-// A REAL per-Epic store handle on a no-op stream client (the same factory
-// shape `test-epic-session-harness.ts` installs, minus the snapshot frame):
-// honestly typed with zero casts. The column only checks handle presence and
-// the session-bound selectors are mocked above, so no snapshot ever needs to
-// arrive on this stream.
+// The column only checks handle presence and the session-bound selectors are mocked above, so no snapshot ever needs to arrive on this stream.
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
   awareness: () => undefined,
@@ -113,9 +109,7 @@ function buildSessionHandle(epicId: string): OpenedStoreForTest {
   return openStoreForTest({
     epicId: epicId,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,

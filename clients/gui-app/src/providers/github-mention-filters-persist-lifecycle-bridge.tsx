@@ -15,14 +15,7 @@ export interface GithubMentionFiltersPersistLifecycleBridgeProps {
   readonly children: ReactNode;
 }
 
-/**
- * Binds the mention-filter store's persistence to the signed-in identity,
- * exactly like the composer run-settings bridge above it in the tree. The
- * store's rows are not account-neutral view state: a repository selection
- * names a GitHub host, owner and repo, and for a private repository those
- * coordinates are themselves private - so sign-out WIPES the bucket rather
- * than leaving it readable to the next account on this profile.
- */
+/** Wipe GitHub host/owner/repo selection on sign-out; the next account on this profile must not read them. */
 export function GithubMentionFiltersPersistLifecycleBridge(
   props: GithubMentionFiltersPersistLifecycleBridgeProps,
 ): ReactNode {

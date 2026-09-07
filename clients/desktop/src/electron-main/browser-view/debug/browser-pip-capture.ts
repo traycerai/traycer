@@ -22,10 +22,6 @@ interface ActivePipCapture {
 
 type PipCaptureWebContents = Pick<BrowserViewWebContents, "capturePage">;
 
-/**
- * Polls `capturePage()` into PiP frames. Owns nothing else: no debugger, no
- * CDP, no frame routes.
- */
 export class BrowserPipCapture {
   private readonly webContents: PipCaptureWebContents;
   private active: ActivePipCapture | null = null;

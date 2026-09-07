@@ -1,10 +1,4 @@
-/**
- * ONE rendering for role responses, shared verbatim by the host GUI tools and
- * the CLI. These tests pin the CONTENT contract: idempotent-retry wording,
- * overlap discouragement, explicit partial-delivery summary that never implies
- * registry failure, the empty-registry line, deterministic order preservation
- * (the formatter must not re-sort), and the no-oracle relinquish rendering.
- */
+/** ONE rendering for role responses, shared verbatim by the host GUI tools and the CLI. */
 import { describe, expect, it } from "vitest";
 import {
   formatClaimRoleResponse,

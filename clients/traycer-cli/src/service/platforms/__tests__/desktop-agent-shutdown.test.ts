@@ -4,11 +4,8 @@ import {
   requestCooperativeShutdown,
 } from "../desktop-agent-shutdown";
 
-// The cooperative flow's own contract: claim -> commit -> wait for REAL
-// exit, with every failure mode mapped to a distinct outcome the caller
-// can route on. The dangerous directions are pinned explicitly: a denied
-// claim must never commit, unknown/unreachable must never read as
-// "stopped", and "stopped" is only earned by an observed pid exit.
+// The cooperative flow's own contract: claim -> commit -> wait for REAL exit, with every failure mode mapped to a distinct outcome the caller can route on.
+// The dangerous directions are pinned explicitly: a denied claim must never commit, unknown/unreachable must never read as "stopped", and "stopped" is only earned by an observed pid exit.
 
 const MOCKS = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
@@ -25,16 +22,12 @@ vi.mock("../../../host/pid-metadata", async (importOriginal) => {
   return {
     ...actual,
     readHostPidMetadata: MOCKS.readHostPidMetadata,
-    // `forceStopHostProcess` removes pid.json on the host's behalf after a
-    // confirmed SIGKILL - override it too so that path never touches a real
-    // one, the same discipline `readHostPidMetadata` already gets here.
+    // `forceStopHostProcess` removes pid.json on the host's behalf after a confirmed SIGKILL - override it too so that path never touches a real one, the same discipline `readHostPidMetadata` already gets here.
     removeHostPidMetadata: MOCKS.removeHostPidMetadata,
   };
 });
 
-// `getPublishedProcessIdentityVerdict` is the seam `incumbent-check.test.ts`
-// stubs the identical way for the identical reason: it shells out to a real
-// OS process probe, which has no place in a hermetic unit suite.
+// `getPublishedProcessIdentityVerdict` is the seam `incumbent-check.test.ts` stubs the identical way for the identical reason: it shells out to a real OS process probe, which has no place in a hermetic unit suite.
 vi.mock("../../../store/process-identity", () => ({
   getPublishedProcessIdentityVerdict: MOCKS.getPublishedProcessIdentityVerdict,
 }));
@@ -70,10 +63,7 @@ const LIVE_METADATA = {
   websocketUrl: "ws://127.0.0.1:51234/rpc",
   startedAt: "2026-07-12T00:00:00.000Z",
   layer0: null,
-  // A pre-identity pid.json: every existing test in this file exercises the
-  // liveness-gate fallback (`processStartIdentity === null`), NOT the
-  // identity-verdict path - that path gets its own dedicated tests below
-  // with a real identity string staged.
+  // A pre-identity pid.json: every existing test in this file exercises the liveness-gate fallback (`processStartIdentity === null`), NOT the identity-verdict path - that path gets its own dedicated tests below with a real identity string staged.
   processStartIdentity: null,
 };
 
@@ -147,9 +137,7 @@ describe("requestCooperativeShutdown", () => {
       .mockResolvedValueOnce({ granted: { token: "tok-intent-shutdown" } })
       .mockResolvedValueOnce({ committed: true });
 
-    // Positive control in the same test: a plain stop must still carry
-    // "shutdown" - an implementation that hardcoded "restart" on the params
-    // would pass the assertion above but fail this one.
+    // Positive control in the same test: a plain stop must still carry "shutdown" - an implementation that hardcoded "restart" on the params would pass the assertion above but fail this one.
     await requestCooperativeShutdown("production", "stop", "shutdown");
 
     const [, stopClaimParams] = MOCKS.callHostRpcAtEndpoint.mock.calls[0];
@@ -157,12 +145,8 @@ describe("requestCooperativeShutdown", () => {
     expect(stopClaimParams.intent).not.toBe(restartClaimParams.intent);
   });
 
-  // Unreadable metadata and a proven-dead pid are DIFFERENT machines and must
-  // not share an answer. Absence proves only that nothing published an
-  // endpoint - a host that is still booting under a loaded agent looks
-  // exactly like this. Reporting it as `no-host` let callers treat it as a
-  // completed stop: `host stop` returned success over a host that kept
-  // serving, and an install swapped bytes underneath it.
+  // Unreadable metadata and a proven-dead pid are DIFFERENT machines and must not share an answer.
+  // Absence proves only that nothing published an endpoint - a host that is still booting under a loaded agent looks exactly like this.
   it("reports no-metadata - never the proven-absent answer - when pid metadata cannot be read", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
     const outcome = await requestCooperativeShutdown(
@@ -277,12 +261,7 @@ describe("requestCooperativeShutdown", () => {
   });
 });
 
-// `forceStopHostProcess`'s own contract: kill the pid directly (SIGTERM,
-// then SIGKILL after the exit grace) with no RPC involved at any point, and
-// map every outcome the way `requestCooperativeShutdown` does for the
-// outcomes they share (`no-metadata`/`no-host`/`stopped`/`hung`), plus the
-// two kill-failure shapes unique to signalling: ESRCH (already gone) versus
-// anything else (must propagate, never read as a false "stopped").
+// `forceStopHostProcess`'s own contract: kill the pid directly (SIGTERM, then SIGKILL after the exit grace) with no RPC involved at any point, and map every outcome the way `requestCooperativeShutdown` does for the outcomes they share (`no-metadata`/`no-host`/`stopped`/`hung`), plus the two kill-failure shapes unique to signalling: ESRCH (already gone) versus anything else (must propagate, never read as a false "stopped").
 describe("forceStopHostProcess", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -311,9 +290,8 @@ describe("forceStopHostProcess", () => {
 
     expect(outcome).toEqual({ kind: "no-host" });
     expect(killSpy).not.toHaveBeenCalled();
-    // A stale pid.json naming a dead pid is exactly the state the desktop
-    // health monitor reads as "crashed" once its own endpoint probe fails -
-    // metadata present + endpoint dead = resurrect. Purge it.
+    // A stale pid.json naming a dead pid is exactly the state the desktop health monitor reads as "crashed" once its own endpoint probe fails - metadata present + endpoint dead = resurrect.
+    // Purge it.
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
   });
 
@@ -329,11 +307,7 @@ describe("forceStopHostProcess", () => {
     expect(outcome).toEqual({ kind: "stopped" });
     expect(killSpy).toHaveBeenCalledTimes(1);
     expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
-    // The purge is class-complete on the OUTCOME, not on how "stopped" was
-    // reached: a graceful SIGTERM exit still leaves a race where the host's
-    // own unlink and this check interleave, so the wrapper purges (best
-    // effort, idempotent) on every "stopped"/"no-host" outcome regardless of
-    // which signal actually landed.
+    // The purge is class-complete on the OUTCOME, not on how "stopped" was reached: a graceful SIGTERM exit still leaves a race where the host's own unlink and this check interleave, so the wrapper purges (best effort, idempotent) on every "stopped"/"no-host" outcome regardless of which signal actually landed.
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
   });
 
@@ -352,19 +326,14 @@ describe("forceStopHostProcess", () => {
     MOCKS.isProcessAlive.mockImplementation(() => !sigkillSent);
 
     const pending = forceStopHostProcess("production", "stop");
-    // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus
-    // slack for the final poll - same margin the cooperative "hung" case
-    // above uses for the identical wait helper.
+    // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus slack for the final poll - same margin the cooperative "hung" case above uses for the identical wait helper.
     await vi.advanceTimersByTimeAsync(40_000);
 
     await expect(pending).resolves.toEqual({ kind: "stopped" });
     expect(killSpy).toHaveBeenCalledTimes(2);
     expect(killSpy).toHaveBeenNthCalledWith(1, 4242, "SIGTERM");
     expect(killSpy).toHaveBeenNthCalledWith(2, 4242, "SIGKILL");
-    // SIGKILL never lets the host's own shutdown handler unlink pid.json -
-    // the CLI must finish that contract itself, or a dead pid with pid.json
-    // still present reads as a crash to the desktop's health watchdog and
-    // gets auto-respawned, undoing the stop the user just forced.
+    // SIGKILL never lets the host's own shutdown handler unlink pid.json - the CLI must finish that contract itself, or a dead pid with pid.json still present reads as a crash to the desktop's health watchdog and gets auto-respawned, undoing the stop the user just forced.
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
     // The null-identity fallback skips revalidation entirely, before SIGTERM
     // AND before SIGKILL - a pre-identity pid.json never calls the verdict.
@@ -372,9 +341,7 @@ describe("forceStopHostProcess", () => {
   });
 
   it("still reports stopped even when removing pid.json after a confirmed SIGKILL fails", async () => {
-    // Best-effort: the stop itself already succeeded (the process is
-    // observed gone), so a failure tidying up pid.json must not turn a
-    // successful forced stop into an error.
+    // Best-effort: the stop itself already succeeded (the process is observed gone), so a failure tidying up pid.json must not turn a successful forced stop into an error.
     vi.useFakeTimers();
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
     let sigkillSent = false;
@@ -436,12 +403,8 @@ describe("forceStopHostProcess", () => {
     );
   });
 
-  // Identity-before-signal: a pid.json that survived a crash can name a
-  // RECYCLED pid, so once a start identity is recorded, liveness alone is no
-  // longer enough to justify a signal - see the identical rule in
-  // `getPublishedProcessIdentityVerdict`'s own doc comment. These pin the
-  // three verdicts that reach `forceStopHostProcess`, plus the fallback for
-  // pid.json files written before the field existed.
+  // Identity-before-signal: a pid.json that survived a crash can name a RECYCLED pid, so once a start identity is recorded, liveness alone is no longer enough to justify a signal - see the identical rule in `getPublishedProcessIdentityVerdict`'s own doc comment.
+  // These pin the three verdicts that reach `forceStopHostProcess`, plus the fallback for pid.json files written before the field existed.
   describe("process identity verification", () => {
     const IDENTITY_METADATA = {
       ...LIVE_METADATA,
@@ -490,9 +453,7 @@ describe("forceStopHostProcess", () => {
       // The legacy liveness gate is bypassed entirely once an identity is
       // recorded - it must not run a second, contradictory check.
       expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
-      // A recycled-pid impostor is exactly the resurrection risk: the
-      // record still names a pid, the endpoint behind it is dead, and the
-      // desktop health monitor would read that combination as a crash.
+      // A recycled-pid impostor is exactly the resurrection risk: the record still names a pid, the endpoint behind it is dead, and the desktop health monitor would read that combination as a crash.
       expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
     });
 
@@ -517,24 +478,15 @@ describe("forceStopHostProcess", () => {
 
       const outcome = await forceStopHostProcess("production", "stop");
 
-      // The error directions are not symmetric: a refused force stop is
-      // retryable, but a SIGKILL delivered to a recycled pid's unrelated
-      // occupant is not - so "cannot tell" must never fall through to a
-      // signal.
+      // The error directions are not symmetric: a refused force stop is retryable, but a SIGKILL delivered to a recycled pid's unrelated occupant is not - so "cannot tell" must never fall through to a signal.
       expect(outcome).toEqual({ kind: "identity-unverified", pid: 4242 });
       expect(killSpy).not.toHaveBeenCalled();
-      // "Cannot tell" must not purge either - a live, unverifiable occupant
-      // may still be the real host, and removing pid.json out from under it
-      // is its own resurrection risk if the real host later exits cleanly.
+      // "Cannot tell" must not purge either - a live, unverifiable occupant may still be the real host, and removing pid.json out from under it is its own resurrection risk if the real host later exits cleanly.
       expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
     });
 
-    // The FIRST identity check only proves the occupant was ours at the
-    // moment before SIGTERM. The host can exit in the last instants of the
-    // ~32s exit grace and the OS can hand the pid to a stranger before the
-    // final liveness poll observes it - so the same invariant has to be
-    // re-proven immediately before the irreversible SIGKILL, not assumed to
-    // still hold from ~32s earlier.
+    // The FIRST identity check only proves the occupant was ours at the moment before SIGTERM.
+    // The host can exit in the last instants of the ~32s exit grace and the OS can hand the pid to a stranger before the final liveness poll observes it - so the same invariant has to be re-proven immediately before the irreversible SIGKILL, not assumed to still hold from ~32s earlier.
     describe("pre-SIGKILL revalidation", () => {
       it("second call 'mismatch': the host already exited after SIGTERM - stopped, SIGKILL is NEVER sent, and the stale pid.json IS purged", async () => {
         vi.useFakeTimers();
@@ -558,10 +510,7 @@ describe("forceStopHostProcess", () => {
         );
         expect(killSpy).toHaveBeenCalledTimes(1);
         expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
-        // The purge is keyed on the FINAL outcome, not on which signal (if
-        // any) actually landed: "stopped" here means the host exited on its
-        // own after SIGTERM, and the wrapper purges on every "stopped"/
-        // "no-host" outcome regardless of how it was reached.
+        // The purge is keyed on the FINAL outcome, not on which signal (if any) actually landed: "stopped" here means the host exited on its own after SIGTERM, and the wrapper purges on every "stopped"/ "no-host" outcome regardless of how it was reached.
         expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
       });
 
@@ -591,9 +540,7 @@ describe("forceStopHostProcess", () => {
       it("second call 'current': the escalation proceeds and SIGKILL is sent", async () => {
         vi.useFakeTimers();
         MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
-        // Both the pre-SIGTERM check and the pre-SIGKILL revalidation answer
-        // "current" - the occupant is proven to still be the host at each
-        // gate.
+        // Both the pre-SIGTERM check and the pre-SIGKILL revalidation answer "current" - the occupant is proven to still be the host at each gate.
         MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
         let sigkillSent = false;
         const killSpy = vi
@@ -627,19 +574,8 @@ describe("forceStopHostProcess", () => {
     });
   });
 
-  // Instance-matched purge: the wrapper's purge fires only when a FRESH
-  // re-read of pid.json (taken AFTER the outcome settles) still names the
-  // exact instance the signals were aimed at (same pid, same
-  // processStartIdentity). A supervisor relaunched mid-stop can snapshot the
-  // pre-existing stop intent as already served and publish a REPLACEMENT
-  // pid.json in the window between the signal and this re-read -
-  // unconditionally unlinking would delete the replacement's record,
-  // leaving that host running but undiscoverable. `readHostPidMetadata` is
-  // mocked with `mockResolvedValueOnce` per call here: the FIRST call is
-  // `signalHostForForcedStop`'s own read (which becomes `actedOn`), the
-  // SECOND is the wrapper's post-outcome re-read - exactly two calls total
-  // regardless of how many identity checks ran in between, since metadata is
-  // read once at the top and reused for the rest of the signal flow.
+  // Instance-matched purge: the wrapper's purge fires only when a FRESH re-read of pid.json (taken AFTER the outcome settles) still names the exact instance the signals were aimed at (same pid, same processStartIdentity).
+  // A supervisor relaunched mid-stop can snapshot the pre-existing stop intent as already served and publish a REPLACEMENT pid.json in the window between the signal and this re-read - unconditionally unlinking would delete the replacement's record, leaving that host running but undiscoverable.
   describe("instance-matched purge", () => {
     it("does NOT purge when the re-read pid.json names a DIFFERENT pid (a replacement instance published mid-stop) - outcome is still stopped", async () => {
       MOCKS.readHostPidMetadata

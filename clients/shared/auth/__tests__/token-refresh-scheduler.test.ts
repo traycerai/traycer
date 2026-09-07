@@ -11,7 +11,6 @@ function base64url(value: string): string {
   return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** A JWS-shaped token whose payload carries `exp` (epoch ms → seconds). */
 function tokenExpiringAtMs(expMs: number): string {
   const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const payload = base64url(
@@ -37,9 +36,7 @@ function makeFakeClock() {
       timers = timers.filter((t) => t.id !== id);
     },
     pendingCount: (): number => timers.length,
-    // Advance the wall clock WITHOUT firing any timer - models an OS suspend,
-    // where `Date.now()` keeps moving but the monotonic `setTimeout` countdown
-    // is frozen, so an armed timer does not fire while the device sleeps.
+    // Advance the wall clock without firing any timer - models an OS suspend, where `Date.now()` keeps moving but the monotonic `setTimeout` countdown is frozen, so an armed timer does not fire while the device sleeps.
     jump(ms: number): void {
       now += ms;
     },
@@ -122,9 +119,7 @@ describe("createProactiveRefreshScheduler", () => {
 
   it("retries on the min-delay floor when a refresh leaves the bearer unchanged", async () => {
     const clock = makeFakeClock();
-    // The token never rotates - models a network-error refresh that leaves the
-    // bearer untouched, so each fire stays inside the lead window and must
-    // re-arm on the floor rather than refreshing immediately in a tight spin.
+    // The token never rotates - models a network-error refresh that leaves the bearer untouched, so each fire stays inside the lead window and must re-arm on the floor rather than refreshing immediately in a tight spin.
     const token: string = tokenExpiringAtMs(4 * HOUR_MS);
     const revalidate = vi.fn(async () => {});
 
@@ -158,11 +153,7 @@ describe("createProactiveRefreshScheduler", () => {
   it("does not re-arm when stopped while a refresh is in flight", async () => {
     const clock = makeFakeClock();
     const token: string = tokenExpiringAtMs(4 * HOUR_MS);
-    // Held open so the refresh can be suspended mid-flight, then settled after
-    // `stop()`. A `let resolve … = null` captured inside the executor is not
-    // narrowed by control-flow analysis (the assignment happens in a callback),
-    // so calling it later reads as `never`; `withResolvers` keeps the resolver
-    // plainly typed and callable.
+    // Held open so the refresh can be suspended mid-flight, then settled after `stop()`.
     const refresh = Promise.withResolvers<void>();
     const revalidate = vi.fn(() => refresh.promise);
 
@@ -261,15 +252,12 @@ describe("createProactiveRefreshScheduler", () => {
     scheduler.start();
     expect(clock.pendingCount()).toBe(1);
 
-    // The device sleeps until the token is inside the lead window. The armed
-    // timer's monotonic countdown is frozen, so it never fires - the bearer just
-    // rots in place (the overnight-session bug).
+    // The device sleeps until the token is inside the lead window.
+    // The armed timer's monotonic countdown is frozen, so it never fires - the bearer just rots in place (the overnight-session bug).
     clock.jump(4 * HOUR_MS - DEFAULT_REFRESH_LEAD_MS + 60_000);
     expect(revalidate).not.toHaveBeenCalled();
 
-    // Wake: re-evaluate against the wall clock → token inside the lead window →
-    // refresh now. The stale frozen timer is dropped and a fresh one armed off
-    // the rotated token (so the count stays at exactly one).
+    // Wake: re-evaluate against the wall clock → token inside the lead window → refresh now.
     scheduler.notifyResumed();
     for (let i = 0; i < 8; i++) {
       await Promise.resolve();

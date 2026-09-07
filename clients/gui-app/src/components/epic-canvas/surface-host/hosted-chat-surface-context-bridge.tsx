@@ -70,19 +70,8 @@ export function HostedChatSurfaceContextBridge(props: {
 }
 
 /**
- * Header tear-off moves a tile's canvas entry to its destination top-level
- * tab in one synchronous `EpicCanvasStore` write, before the destination
- * `TileSurfaceSlot` mounts and republishes a fresh environment - `useTabsStore`'s
- * header strip catches up moments later, in the same transaction (see
- * `tile-surface-membership.ts`'s transaction-aware retention doc comment).
- * During that gap, `environment.placement.viewTabId` still names the SOURCE
- * tab, so looking the node up there returns `undefined` and unmounts the real
- * `renderTile()` subtree (finding 1). Scanning every open canvas by
- * `instanceId` instead - not just the environment's last-published tab -
- * finds the tile immediately once the canvas write lands, regardless of
- * which tab currently owns it. Placement/providers deliberately stay on the
- * last-ready environment until the destination publish replaces them; only
- * the node CONTENT needs to survive the gap.
+ * Header tear-off moves a tile's canvas entry to its destination top-level tab in one synchronous `EpicCanvasStore` write, before the destination `TileSurfaceSlot` mounts and republishes a fresh environment - `useTabsStore`'s header strip catches up moments later, in the same transaction (see `tile-surface-membership.ts`'s transaction-aware retention doc comment).
+ * Placement/providers deliberately stay on the last-ready environment until the destination publish replaces them; only the node CONTENT needs to survive the gap.
  */
 function useCurrentCanvasTile(
   instanceId: string,

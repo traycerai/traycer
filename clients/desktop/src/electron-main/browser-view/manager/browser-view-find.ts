@@ -19,11 +19,6 @@ interface BrowserViewFindOptions {
   readonly send: BrowserViewSend;
 }
 
-/**
- * Find-in-page. Electron allocates its own request id per `findInPage` call
- * and reports results against it, so the app's request id is carried in a
- * per-entry session map rather than assumed to be the latest one.
- */
 export class BrowserViewFind {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly send: BrowserViewSend;

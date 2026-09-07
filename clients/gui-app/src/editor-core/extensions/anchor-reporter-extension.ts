@@ -1,17 +1,5 @@
 /**
- * AnchorReporter - Tiptap extension that pushes the live `threadAnchor`
- * mark positions out of the editor every time the doc changes. Replaces
- * the previous imperative `useEffect(editor.on('update'), ...)` wiring in
- * `collab-tile-body.tsx` with a declarative ProseMirror plugin so the
- * subscription lives next to the editor instance and tears down with it.
- *
- * The reporter does NOT touch the Y.Doc directly - it inspects the local
- * ProseMirror state, which is what comment overlays must align to. Any
- * change to the live `threadAnchor` mark set (insert / delete / move via
- * upstream Y update or local edit) is surfaced here.
- *
- * Output is keyed by `(epicId, artifactId)` so multiple tiles for sibling
- * artifacts in the same Epic don't collide.
+ * Push live `threadAnchor` positions from ProseMirror state (not Y.Doc). Keyed by `(epicId, artifactId)`.
  */
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
@@ -54,11 +42,8 @@ export const AnchorReporter = Extension.create<AnchorReporterOptions>({
       new Plugin({
         key: PLUGIN_KEY,
         view: () => {
-          // Initial push so the receiver sees current anchors before the
-          // first edit even arrives.
-          // (Editor view is not exposed here; the plugin's `view` factory
-          //  receives the EditorView, but we want state.doc - read it via
-          //  the closure created below.)
+          // Push current anchors before the first edit. Read state.doc via the
+          // closure below; the view factory has EditorView but we want the doc.
           return {
             update: (view, prevState) => {
               if (prevState.doc === view.state.doc) return;

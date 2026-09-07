@@ -17,11 +17,7 @@ export type OwnerTeardownSnapshotArgs = {
   readonly ptyLive: boolean;
 };
 
-/**
- * Gesture-time snapshot getter. Shells are read from live stores at call
- * time (not picker-open time) so disclosure content is never stale relative
- * to the click.
- */
+/** Shells are read from live stores at call time (not picker-open time) so disclosure content is never stale relative to the click. */
 export function useOwnerTeardownSnapshot(
   args: OwnerTeardownSnapshotArgs,
 ): (droppedRunDirectories: readonly string[]) => OwnerTeardownSnapshot {

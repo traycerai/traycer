@@ -7,15 +7,8 @@ import {
 } from "@traycer-clients/shared/host-lifecycle";
 import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 
-// The v1.1.8 field lockout, as a doctor probe: launchd reports the host's
-// label as *loaded*, so every registration-keyed check reads "healthy",
-// while the job itself is wedged (spawn failed / EX_CONFIG last exit /
-// LWCR mismatch) and no host process ever starts. Registration presence is
-// not health - this probe reads the job's actual run state from the same
-// `launchctl print` bytes the ownership checks already parse, through the
-// shared depth-enforced parser and the shared positive-evidence wedge
-// predicate. Only positive wedge markers report; "loaded and quiet" stays
-// silent so the probe can never become noise on a healthy machine.
+// The v1.1.8 field lockout, as a doctor probe: launchd reports the host's label as *loaded*, so every registration-keyed check reads "healthy", while the job itself is wedged (spawn failed / EX_CONFIG last exit / LWCR mismatch) and no host process ever starts.
+// Registration presence is not health - this probe reads the job's actual run state from the same `launchctl print` bytes the ownership checks already parse, through the shared depth-enforced parser and the shared positive-evidence wedge predicate.
 
 const execFileAsync = promisify(execFile);
 
@@ -23,9 +16,8 @@ export type LaunchdPrintRunner = (
   serviceTarget: string,
 ) => Promise<ProbeCommandResult>;
 
-// execFile's rejection shape: launchctl's non-zero exit carries a numeric
-// `code` plus captured output; a spawn failure carries a string errno; a
-// timeout kill carries `killed` + the signal. Every field may be absent.
+// execFile's rejection shape: launchctl's non-zero exit carries a numeric `code` plus captured output; a spawn failure carries a string errno; a timeout kill carries `killed` + the signal.
+// Every field may be absent.
 type ExecFileFailure = {
   readonly code: string | number | undefined;
   readonly stdout: string | undefined;
@@ -92,9 +84,7 @@ export async function probeMacosWedgedJob(
     const probe = classifyLaunchctlPrintResult(result, null, labelId);
     if (probe.kind !== "observed") continue;
     const verdict = deriveWedgeVerdict(probe, {
-      // Login-item enablement is not observable from the CLI; leaving it
-      // null keeps the loaded-but-no-pid heuristic disarmed, so only the
-      // positive markers (spawn failed / EX_CONFIG / LWCR) can report.
+      // Login-item enablement is not observable from the CLI; leaving it null keeps the loaded-but-no-pid heuristic disarmed, so only the positive markers (spawn failed / EX_CONFIG / LWCR) can report.
       loginItemEnabled: null,
       hasPidMetadata: input.hasPidMetadata,
       hasAttemptProgress: false,
@@ -131,11 +121,8 @@ export async function probeMacosWedgedJob(
           "cannot fix this: it kickstarts the definition launchd already has " +
           "cached, and that definition is the one that will not spawn - only " +
           "a bootout/bootstrap cycle replaces it.",
-      // `service-install` is the register cycle (bootout -> bootstrap ->
-      // kickstart), which is what a wedged job needs. `host-start` and
-      // `host-restart` both resolve to `restartHost()` in the GUI, i.e. the
-      // kickstart that already failed - the button and the copyable command
-      // would both return the user to this same card.
+      // `service-install` is the register cycle (bootout -> bootstrap -> kickstart), which is what a wedged job needs.
+      // `host-start` and `host-restart` both resolve to `restartHost()` in the GUI, i.e. the kickstart that already failed - the button and the copyable command would both return the user to this same card.
       fixAction: desktopOwned ? null : "service-install",
       terminalCommand: desktopOwned
         ? "traycer host service uninstall"

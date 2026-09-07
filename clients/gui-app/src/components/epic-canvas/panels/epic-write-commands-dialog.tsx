@@ -23,18 +23,8 @@ export interface EpicWriteCommandsDialogProps {
 }
 
 /**
- * The outstanding write commands, and the two things a user can do about one.
- *
- * This surface exists because a terminal record STAYS in the queue until it is
- * acknowledged. Without a way to clear it, an epic that had one rejected write
- * could never legitimately show a green sync indicator again - and hiding it to
- * get the green back is precisely what the freshness contract forbids. Dismiss
- * is therefore not a convenience; it is the other end of the sync pill.
- *
- * Retry is OFFERED, never taken. The one state where that matters most is
- * `unknown-outcome`: the write may already have been applied, and the queue
- * deliberately does not auto-retry it, so the decision to re-issue is the
- * user's alone.
+ * Without a way to clear it, an epic that had one rejected write could never legitimately show a green sync indicator again - and hiding it to get the green back is precisely what the freshness contract forbids.
+ * Retry is OFFERED, never taken.
  */
 export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
   const commands = useEpicWriteCommands();
@@ -43,14 +33,7 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      {/*
-       * `sm:` and no width of its own: `DialogContent` already supplies
-       * `w-full` plus the safe-area cap, and its own note says an UNMODIFIED
-       * `max-w-*` from a caller DISPLACES that cap. `max-w-lg` did exactly
-       * that, which is what the `w-[min(92vw,…)]` beside it was compensating
-       * for. A modified `sm:max-w-lg` overrides only the primitive's
-       * `sm:max-w-sm` and leaves the cap standing.
-       */}
+      {/* A modified `sm:max-w-lg` overrides only the primitive's `sm:max-w-sm` and leaves the cap standing. */}
       <DialogContent
         className="sm:max-w-lg"
         data-testid="epic-write-commands-dialog"
@@ -92,9 +75,8 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
 }
 
 /**
- * Tone per stage. A raised surface, so fills are an alpha of the foreground
- * rather than `bg-muted`, which collapses into the dialog's own background in
- * every preset dark theme and most flat light ones.
+ * Tone per stage.
+ * A raised surface, so fills are an alpha of the foreground rather than `bg-muted`, which collapses into the dialog's own background in every preset dark theme and most flat light ones.
  */
 const STAGE_TONE: Record<EpicWriteCommandStage, string> = {
   queued: "text-muted-foreground",

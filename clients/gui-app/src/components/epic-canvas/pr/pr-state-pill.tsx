@@ -5,15 +5,8 @@ import { formatPrStateLabel } from "@/lib/pr/pr-list-projection";
 import { cn } from "@/lib/utils";
 
 /**
- * The outlined, labelled PR pill this panel renders — deliberately its own
- * palette, not the worktree hover card's. That surface dropped its label and
- * moved state onto a leading glyph (`worktree-pr-state-palette.ts`), which
- * suits a chip sitting beside a PR number; a PR list needs the word.
- *
- * The light text is `-800`, not `-700`: over the pill's own 10% tint, `-700`
- * drops to 3.23:1 (green) on Tokyo Night light, whose surfaces are the darkest
- * of the light presets. `-800` clears 4.5:1 across every preset and surface;
- * dark `-300` already does.
+ * The outlined, labelled PR pill this panel renders - deliberately its own palette, not the worktree hover card's.
+ * That surface dropped its label and moved state onto a leading glyph (`worktree-pr-state-palette.ts`), which suits a chip sitting beside a PR number; a PR list needs the word.
  */
 const PR_PILL_CLASS: Record<PrState, string> = {
   open: "border-green-600/30 bg-green-500/10 text-green-800 dark:border-green-400/30 dark:text-green-300",

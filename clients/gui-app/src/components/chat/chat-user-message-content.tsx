@@ -35,12 +35,7 @@ interface ChatUserMessageContentProps {
   readonly attachments: ReadonlyArray<Attachment>;
 }
 
-/**
- * Renders user-message text with composer-style mention chips. Memoized
- * so the minimap overlay's per-row instance and the bubble's instance
- * skip the segment-split + Map rebuild when their `(content, attachments)`
- * pair is reference-equal across renders.
- */
+/** Renders user-message text with composer-style mention chips. Memoized so the minimap overlay's per-row instance and the bubble's instance skip the segment-split + Map rebuild when their `(content, attachments)` pair is reference-equal across renders. */
 export const ChatUserMessageContent = memo(ChatUserMessageContentImpl);
 
 function ChatUserMessageContentImpl({
@@ -93,11 +88,8 @@ function ChatUserMessageMentionChipImpl({
   mention,
 }: ChatUserMessageMentionChipProps): ReactNode {
   const pathKind = mention.pathKind ?? inferPathKind(mention.path);
-  // A GitHub mention's `path` is a synthetic token (`github-pr:org/repo#12`),
-  // not a filesystem path: taking its basename would read `repo#12`, and
-  // showing it as the tooltip would put the raw token in front of the user.
-  // Both facts it needs are already on the attachment - the `#12` / `repo#12`
-  // label the composer chip used, and the `org/repo#12 · title` description.
+  // A GitHub mention's `path` is a synthetic token (`github-pr:org/repo#12`), not a filesystem path: taking its basename would read `repo#12`, and showing it as the tooltip would put the raw token in front of the user.
+  // Both facts it needs are already on the attachment - the `#12` / `repo#12` label the composer chip used, and the `org/repo#12 · title` description.
   const isGithub = isGithubMentionContextType(mention.contextType);
   const isBrowserTab = mention.contextType === "browser-tab";
   const usesLabel =
@@ -159,9 +151,7 @@ function MentionChipIcon({
   if (mention.contextType === "epic") {
     return <Layers className={MENTION_ICON_CLASS} aria-hidden />;
   }
-  // Untinted, unlike the composer row's state-coloured icon: a sent message is
-  // a record of what was referenced, and a PR that has merged since would have
-  // this chip asserting a state that went stale on the reader.
+  // Untinted, unlike the composer row's state-coloured icon: a sent message is a record of what was referenced, and a PR that has merged since would have this chip asserting a state that went stale on the reader.
   if (mention.contextType === "github_pull_request") {
     return <GitPullRequest className={MENTION_ICON_CLASS} aria-hidden />;
   }

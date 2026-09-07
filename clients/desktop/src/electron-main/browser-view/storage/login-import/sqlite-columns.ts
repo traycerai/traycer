@@ -1,19 +1,6 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 
-/**
- * Typed reads over `node:sqlite` rows. A browser's schema is not ours: a
- * column may be missing on an old profile, or hold a type the current
- * Chromium would never write, and a reader that trusted the shape would throw
- * on the one row it did not expect. These helpers answer with a default
- * instead, so the row is dropped or degraded rather than the whole jar.
- *
- * Two facts about `node:sqlite` shape them. A statement with
- * `setReadBigInts(true)` hands EVERY integer column over as a bigint, not
- * only the wide one it was set for, so each integer reader accepts both. And
- * a BLOB arrives as a `Uint8Array` that may belong to another realm (a
- * jsdom test environment, a VM context), where `instanceof` is false; the
- * byte reader asks `ArrayBuffer.isView` instead.
- */
+/** A browser's schema is not ours: a column may be missing on an old profile, or hold a type the current Chromium would never write, and a reader that trusted the shape would throw. */
 
 export type SqliteRow = Record<string, SQLOutputValue>;
 
@@ -37,10 +24,6 @@ export function readInteger(row: SqliteRow, column: string): number | null {
   return null;
 }
 
-/**
- * For a column that may hold an integer past 2^53 - Chromium's microseconds
- * since 1601 are - read with `setReadBigInts(true)` and convert here.
- */
 export function readBigInteger(row: SqliteRow, column: string): bigint | null {
   const value = row[column];
   if (typeof value === "bigint") return value;
@@ -62,12 +45,6 @@ export function readFlag(row: SqliteRow, column: string): boolean {
 }
 
 /** The column names of one table, so a SELECT can be built for the schema at hand. */
-/**
- * The most rows one cookie table read materialises. Every browser caps its
- * jar - Chromium at 3 300 cookies, Firefox at 3 000 - so a table past this
- * is not a bigger profile, it is a corrupt or hand-made file, and `.all()`
- * on it would build that many objects in Electron main.
- */
 export const MAX_SQLITE_COOKIE_ROWS = 50_000;
 
 /** Thrown by {@link assertRowBudget}; the snapshot answers it as `too-large`. */
@@ -79,10 +56,6 @@ export class SqliteRowBudgetError extends Error {
   }
 }
 
-/**
- * Refuses `table` before a reader selects from it, by count alone: a count
- * touches no row's value, so the refusal costs nothing on a real jar.
- */
 export function assertRowBudget(database: DatabaseSync, table: string): void {
   const counted = database
     .prepare(`SELECT count(*) AS rows FROM ${table}`)

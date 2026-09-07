@@ -1,10 +1,5 @@
-/**
- * Pure-CSS preview of the effective shell invocation, reusing the
- * `--term-ansi-*` palette so it tracks the active theme (mirrors the
- * Appearance panel's terminal preview). Shows exactly what every new terminal
- * launches. Whether the config is the synthesised system default is surfaced by
- * the picker's "System default" row, not repeated here.
- */
+/** Pure-CSS preview of the effective shell invocation, reusing the `--term-ansi-*` palette so it tracks the
+ * active theme (mirrors the Appearance panel's terminal preview). */
 export function EffectiveCommandPreview(props: {
   readonly path: string;
   readonly args: readonly string[];

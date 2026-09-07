@@ -140,9 +140,7 @@ describe("seriesKeysByTotalCost / buildUsageSeriesScaleForBuckets (cost ranking)
         knownCostUsd: 6,
       }),
     ];
-    // codex totals 1 + 6 = 7, still less than claude's single 10 - and codex
-    // appears FIRST in the input/day order, so a first-appearance or
-    // input-order sort would wrongly rank it ahead of claude.
+    // codex totals 1 + 6 = 7, still less than claude's single 10 - and codex appears FIRST in the input/day order, so a first-appearance or input-order sort would wrongly rank it ahead of claude.
     expect(seriesKeysByTotalCost(buckets, "harness")).toEqual([
       "claude",
       "codex",
@@ -245,9 +243,8 @@ describe("seriesKeysByTotalCost / buildUsageSeriesScaleForBuckets (cost ranking)
   });
 
   it("keeps each series' color when a refetch merely reorders magnitudes", () => {
-    // The regression this decoupling exists for: B overtakes A between two
-    // responses while both stay well inside the cap. Ranking the SLOTS by
-    // spend would swap their colors under a mounted surface.
+    // The regression this decoupling exists for: B overtakes A between two responses while both stay well inside the cap.
+    // Ranking the SLOTS by spend would swap their colors under a mounted surface.
     const before = buildUsageSeriesScaleForBuckets(
       [
         bucket({ harnessId: "a-series", knownCostUsd: 10 }),
@@ -268,9 +265,7 @@ describe("seriesKeysByTotalCost / buildUsageSeriesScaleForBuckets (cost ranking)
   });
 
   it("still SELECTS by spend, so an alphabetically-early but cheap key folds into Other", () => {
-    // 16 expensive keys sorting AFTER "aaa-cheap" alphabetically: if
-    // selection followed the alphabetical slot order rather than spend, the
-    // cheap key would take a slot and an expensive one would fold.
+    // 16 expensive keys sorting AFTER "aaa-cheap" alphabetically: if selection followed the alphabetical slot order rather than spend, the cheap key would take a slot and an expensive one would fold.
     const expensive = Array.from(
       { length: 16 },
       (_, index) => `zz-${String(index).padStart(2, "0")}`,

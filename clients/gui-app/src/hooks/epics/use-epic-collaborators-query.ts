@@ -53,29 +53,14 @@ export interface UseEpicCollaboratorsQueryResult {
 }
 
 export interface UseEpicCollaboratorsQueryOptions {
-  /**
-   * The host to ask, explicitly. Inside an Epic tab this must be the Epic
-   * session's client (`useEpicSessionHostClient()`), never the app-active
-   * host — a retained tab whose owning host is still connected would
-   * otherwise answer from whichever host the app moved to. `null` disables
-   * the query until a client exists.
-   */
+  /** Inside an Epic tab this must be the Epic session's client (`useEpicSessionHostClient()`), never the app-active host - a retained tab whose owning host is still connected would otherwise answer from whichever host the app moved to. */
   readonly client: HostRequester<HostRpcRegistry> | null;
   readonly poll: boolean | undefined;
   readonly staleTime: number | undefined;
 }
 
 /**
- * TanStack-Query-backed collaborators list, keyed off the caller-chosen host.
- * Returned data keeps direct-user grants separate from team grants so callers
- * can mutate the actual grant source instead of flattening team access into
- * person rows.
- *
- * Pass `poll: true` while the Sharing panel is open so out-of-band collaborator
- * changes converge on the table-owned five-minute cadence; the panel also
- * exposes a manual refresh control for on-demand updates. The fixed builder
- * keeps polling focus-gated. The default remains a relaxed 30 s stale window
- * with no polling.
+ * Keyed on the caller-chosen host. `poll: true` while Sharing is open; default is a 30s stale window with no polling.
  */
 export function useEpicCollaboratorsQuery(
   epicId: string,

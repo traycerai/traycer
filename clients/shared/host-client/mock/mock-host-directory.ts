@@ -1,9 +1,8 @@
 import type { HostDirectoryEntry } from "../host-directory";
 
 /**
- * Prebuilt mock host directory entries used by `gui-app` dev and preview
- * flows and by shared tests. Exposes "local", "remote", and "mock" kinds so
- * picker UX can be exercised without a real runner or backend registry.
+ * Prebuilt mock host directory entries used by `gui-app` dev and preview flows and by shared tests.
+ * Exposes "local", "remote", and "mock" kinds so picker UX can be exercised without a real runner or backend registry.
  */
 export const mockLocalHostEntry: HostDirectoryEntry = {
   hostId: "mock-local",

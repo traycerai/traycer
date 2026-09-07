@@ -15,27 +15,18 @@ export interface CommentSidebarPanelProps {
   readonly activeArtifactId: string;
 }
 
-/**
- * The comments body with its data wiring attached: the artifact record and its
- * kind, the Epic session's host client, the live anchor positions and the
- * signed-in user. `CommentSidebar` itself takes all of that as props so it stays
- * mountable anywhere; this is the one place that resolves it, so the desktop
- * left panel and the mobile switcher sheet mount the same surface with the same
- * host scope rather than two wirings that can drift.
- */
+/** `CommentSidebar` itself takes all of that as props so it stays mountable anywhere. */
 export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   const { epicId, activeArtifactId } = props;
   const artifactRecord = useEpicArtifact(activeArtifactId);
-  // The sidebar is a sibling of the canvas, deliberately outside every
-  // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
-  // one, which re-points under it while this Epic keeps rendering (D15).
+  // The sidebar is a sibling of the canvas, deliberately outside every `<TabHostProvider>`, so its host is the
+  // Epic session's - not the app-wide one, which re-points under it while this Epic keeps rendering.
   const hostClient = useEpicSessionHostClient();
   // The state lane's comment records, resolved here for the same reason the
   // host client is: `CommentSidebar` reads no ambient context of its own.
   const laneThreads = useEpicLaneCommentThreads(activeArtifactId);
-  // Resolved beside the rows, not inside `CommentSidebar`: the ambient reads
-  // belong to this wiring layer, which is what keeps the panel mountable on
-  // the mobile switcher, outside any epic session.
+  // Resolved beside the rows, not inside `CommentSidebar`: the ambient reads belong to this wiring layer, which
+  // is what keeps the panel mountable on the mobile switcher, outside any epic session.
   const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);

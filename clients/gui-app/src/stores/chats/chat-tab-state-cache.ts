@@ -57,10 +57,8 @@ export function peekSavedChatTabState(
 }
 
 /**
- * @param rowKeys The LIST's row keys in render order - `TranscriptListRow.key`
- * values (which on the windowed line include unhydrated placeholder rows, so a
- * saved anchor deep in cold history resolves without waiting for its body),
- * or message ids on the legacy line where the two are the same sequence.
+ * values (which on the windowed line include unhydrated placeholder rows, so a saved anchor deep
+ * in cold history resolves without waiting for its body), or message ids on the legacy line where
  */
 export function restoreChatTabState(
   identity: ChatTabPersistenceIdentity,

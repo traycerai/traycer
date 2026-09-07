@@ -6,12 +6,6 @@ import {
   SqliteRowBudgetError,
 } from "../sqlite-columns";
 
-/**
- * Builds an in-memory table with exactly `rowCount` rows, inserted through a
- * single recursive-CTE INSERT rather than one statement per row - a loop of
- * MAX_SQLITE_COOKIE_ROWS individual inserts would dominate the suite's
- * runtime for no reason `assertRowBudget` cares about (it only ever counts).
- */
 function makeTableWithRows(rowCount: number): DatabaseSync {
   const database = new DatabaseSync(":memory:");
   database.exec("CREATE TABLE cookies (id INTEGER PRIMARY KEY)");

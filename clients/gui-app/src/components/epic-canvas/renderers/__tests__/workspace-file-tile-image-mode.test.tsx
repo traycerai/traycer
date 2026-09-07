@@ -68,10 +68,7 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
+// These tiles resolve the user's default open target, which asks whether the tile's host is the LOCAL one before it may offer Finder.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -79,11 +76,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest) => {
     state.assetRequests.push(request);
-    // `state.asset` stays the module-level source of truth (tests mutate it
-    // directly before a `rerender()`, as before); this counter exists only
-    // so `reportDecodeFailure` - which the real hook fires synchronously
-    // from a callback, not a prop change - can force ITS OWN re-render
-    // without every test needing an explicit `rerender()` call.
+    // `state.asset` stays the module-level source of truth (tests mutate it directly before a `rerender()`, as before); this counter exists only so `reportDecodeFailure` - which the real hook fires synchronously from a callback, not a prop change - can force ITS OWN re-render without every test needing an explicit `rerender()` call.
     const [, forceRender] = useState(0);
     const reportDecodeFailure = () => {
       state.asset = {
@@ -197,10 +190,6 @@ vi.mock("@/stores/settings/settings-store", () => ({
     selector({ defaultEditor: "cursor" }),
 }));
 
-// The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
-// mocked hook ignores the client it is handed; what this repoint pins is that
-// the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpenForClient: () => ({
     mutate: state.openPaths,

@@ -51,11 +51,7 @@ export type LiveProbeContext = {
   readonly serviceLabel: string;
 };
 
-/**
- * Consume exactly one 4-byte BE length-prefixed frame. `spawn(..., stdio[3])`
- * is a Unix-domain socket on macOS, so chunks may be arbitrarily split or
- * coalesced; one `data` event is never assumed to be a complete frame.
- */
+/** Consume exactly one 4-byte BE length-prefixed frame. `spawn(..., stdio[3])` is a Unix-domain socket on macOS, so chunks may be arbitrarily split or coalesced; one `data` event is never assumed to be a complete frame. */
 export function readLayer0Frame(
   stream: Readable,
   timeoutMs: number,
@@ -125,11 +121,7 @@ export async function writeProbeMarkerAtomically(
   await writeJsonAtomically(hostTransitionProbeMarkerPath(environment), marker);
 }
 
-/**
- * Attest from inside the live supervisor.  The reconciler intentionally never
- * repeats this query: a fast Layer-0 decline exits before a later reader could
- * observe the supervisor pid.
- */
+/** Attest from inside the live supervisor. The reconciler intentionally never repeats this query: a fast Layer-0 decline exits before a later reader could observe the supervisor pid. */
 export async function attestLaunchdSupervisorPid(
   serviceLabel: string,
   supervisorPid: number,
@@ -176,12 +168,7 @@ export async function readProbeMarker(
   return parseProbeMarker(raw);
 }
 
-/**
- * Why the journal did not grant probe authority. Every arm is a state the
- * reader positively established, so `absent` is knowledge (`no-journal`) and
- * never gets folded in with "could not know" - that lives on the separate
- * `indeterminate` arm of `LiveProbeContextRead`.
- */
+/** reader positively established, so `absent` is knowledge (`no-journal`) and never gets folded in with "could not know" - that lives on the separate `indeterminate` arm of `LiveProbeContextRead`. */
 export type ProbeAuthorityDenial =
   | "no-journal"
   | "not-a-reclaim"
@@ -194,23 +181,10 @@ export type ProbeAuthorityDenial =
 export type LiveProbeContextRead =
   | { readonly kind: "authorised"; readonly context: LiveProbeContext }
   | { readonly kind: "unauthorised"; readonly reason: ProbeAuthorityDenial }
-  /**
-   * The journal could not be decoded at all - corrupt bytes, an unreadable
-   * file, or a schema version a newer desktop wrote. Behaviourally identical
-   * to `unauthorised` (no bypass either way, which is the safe direction),
-   * but kept a distinct arm so a v2 journal is a diagnosis rather than a
-   * probe that silently never runs.
-   */
+  /** The journal could not be decoded at all - corrupt bytes, an unreadable file, or a schema version a newer desktop wrote. Behaviourally identical to `unauthorised` (no bypass either way, which is the safe direction), but kept a distinct arm so a v2 journal is a diagnosis rather than a probe that silently never runs. */
   | { readonly kind: "indeterminate"; readonly cause: string };
 
-/**
- * The incumbent bypass is legal only for the journal's own authorised label.
- * A stale marker/context therefore cannot turn an ordinary service start into
- * a probe that races a healthy raw incumbent.
- *
- * `now` is the ISO instant to judge `probeDeadlineAt` against, supplied by
- * the caller so the bound is testable.
- */
+/** The incumbent bypass is legal only for the journal's own authorised label. A stale marker/context therefore cannot turn an ordinary service start into a probe that races a healthy raw incumbent. */
 export async function readLiveProbeContext(
   environment: Environment,
   input: LiveProbeContext,
@@ -230,13 +204,7 @@ export async function readLiveProbeContext(
   return { kind: "authorised", context: input };
 }
 
-/**
- * Installed launchd registrations intentionally carry only their immutable
- * service label.  The write-ahead `reclaim-awaiting-probe` journal supplies
- * per-attempt authority before the probe is launched, avoiding stale
- * transition ids in a plist while still bypassing the incumbent guard for
- * the journal's own label.
- */
+/** Installed launchd registrations intentionally carry only their immutable service label. The write-ahead `reclaim-awaiting-probe` journal supplies per-attempt authority before the probe is launched, avoiding stale transition ids in a plist while still bypassing the incumbent guard for the journal's own label. */
 export async function readLiveProbeContextForServiceLabel(
   environment: Environment,
   serviceLabel: string,
@@ -257,19 +225,7 @@ export async function readLiveProbeContextForServiceLabel(
   };
 }
 
-/**
- * The authority checks both entrypoints share, `probeDeadlineAt` included.
- *
- * The deadline is not decoration: probe mode makes `host start` skip the
- * incumbent check entirely, and recovery from an interrupted reclaim is
- * trigger-bounded, so a journal stranded at `reclaim-awaiting-probe` would
- * otherwise re-authorise that bypass at every single login, indefinitely,
- * stacking a fresh supervisor onto the live fallback host each time. The
- * reconciler already fails an elapsed probe as `indeterminate`
- * (transition/reconciler.ts) - this applies the same bound at the login-time
- * path that actually grants the bypass, with the same lexicographic ISO
- * comparison so the two cannot disagree about an edge instant.
- */
+/** The authority checks both entrypoints share, `probeDeadlineAt` included. The deadline is not decoration: probe mode makes `host start` skip the incumbent check entirely, and recovery from an interrupted reclaim is trigger-bounded, so a journal stranded at `reclaim-awaiting-probe` would otherwise re-authorise that bypass at every single login, indefinitely, stacking a fresh supervisor onto the live fallback host each time. */
 function probeAuthorityDenial(
   journal: LifecycleTransitionJournal,
   serviceLabel: string,
@@ -349,12 +305,7 @@ export function createTransitionJournalStore(
   };
 }
 
-/**
- * Concrete activation persistence.  This is deliberately unwired: T8 owns
- * consumer/command cutover, while T7 establishes the crash-safe store that
- * those consumers will use.  Every journal write uses the exact temp+rename
- * convention as transition.json.
- */
+/** Concrete activation persistence. This is deliberately unwired: T8 owns consumer/command cutover, while T7 establishes the crash-safe store that those consumers will use. */
 export function createActivationJournalStore(
   environment: Environment,
 ): ActivationJournalStore {
@@ -391,18 +342,7 @@ export function createActivationJournalStore(
   };
 }
 
-/**
- * One read path for every durable lifecycle record this module owns.
- *
- * The CLI used to carry a second, lossier reader beside the store adapters:
- * it returned `T | null`, so *no journal*, *corrupt journal* and *a journal at
- * a schema version a newer desktop wrote* all arrived as the same value, and
- * a v2 file made the reclaim probe silently never run with nothing anywhere
- * to say why. Routing every read through the shared total decoder
- * (`decodeDurableRecord`, the same one `shared/host-lifecycle/macos/probe.ts`
- * uses against this same `transition.json`) keeps the plan's five-arm algebra
- * intact and leaves exactly one place that turns bytes into a record.
- */
+/** One read path for every durable lifecycle record this module owns. The CLI used to carry a second, lossier reader beside the store adapters: it returned `T | null`, so *no journal*, *corrupt journal* and *a journal at a schema version a newer desktop wrote* all arrived as the same value, and a v2 file made the reclaim probe silently never run with nothing anywhere to say why. */
 async function readDurableBytes(path: string): Promise<DurableBytes> {
   let result: FileReadResult;
   try {
@@ -418,10 +358,8 @@ async function readDurableBytes(path: string): Promise<DurableBytes> {
 function decodeTransitionJournalBytes(
   bytes: DurableBytes,
 ): DurableRecord<LifecycleTransitionJournal> {
-  // The shared `decodeTransitionJournal` decodes the T3 world-probe
-  // projection, which drops `kind`, `probeDeadlineAt` and `terminal` - the
-  // three fields probe authority is decided on. Same total decoder, same
-  // version gate, richer parser.
+  // The shared `decodeTransitionJournal` decodes the T3 world-probe projection, which drops `kind`, `probeDeadlineAt` and `terminal` - the three fields probe authority is decided on.
+  // Same total decoder, same version gate, richer parser.
   return decodeDurableRecord(
     bytes,
     TRANSITION_SUPPORTED_VERSIONS,
@@ -527,10 +465,8 @@ function parseIncumbentEvidence(
 function parseUnavailableCause(
   value: unknown,
 ): Extract<Layer0Frame, { readonly layer0: "degraded" }>["cause"] | null {
-  // Every string cause the host can emit. Enumerated rather than pattern
-  // matched so a new one arriving from a newer host decodes as `null` (the
-  // frame is ignored, the probe stays inconclusive) rather than as a
-  // confidently-wrong cause the CLI then reports to a user.
+  // Every string cause the host can emit.
+  // Enumerated rather than pattern matched so a new one arriving from a newer host decodes as `null` (the frame is ignored, the probe stays inconclusive) rather than as a confidently-wrong cause the CLI then reports to a user.
   if (
     value === "addon-load-failed" ||
     value === "fs-unsupported" ||
@@ -655,9 +591,7 @@ function parseLayer0Degradation(
   return cause === null ? undefined : { cause, evidence: value.evidence };
 }
 
-// `v` is already gated by `decodeDurableRecord` against
-// TRANSITION_SUPPORTED_VERSIONS, which is why an unsupported version reaches
-// the caller as its own arm instead of being flattened into "corrupt" here.
+// `v` is already gated by `decodeDurableRecord` against TRANSITION_SUPPORTED_VERSIONS, which is why an unsupported version reaches the caller as its own arm instead of being flattened into "corrupt" here.
 function parseTransitionJournalPayload(
   value: Readonly<Record<string, unknown>>,
 ): LifecycleTransitionJournal | null {
@@ -709,12 +643,8 @@ function parseActivationJournalPayload(
   if (
     typeof value.fromGeneration !== "string" ||
     typeof value.toGeneration !== "string" ||
-    // The host-issued shutdown authority that has to survive the crash window
-    // the `committing-stop` record deliberately opens between `claimStop` and
-    // `commitStop`. Field-by-field parsers DROP what they do not name, and a
-    // resume that reads a journal whose token silently vanished re-commits
-    // with dead authority and fails at the one phase the journal promised was
-    // resumable - so this is required, not tolerated as absent.
+    // The host-issued shutdown authority that has to survive the crash window the `committing-stop` record deliberately opens between `claimStop` and `commitStop`.
+    // Field-by-field parsers DROP what they do not name, and a resume that reads a journal whose token silently vanished re-commits with dead authority and fails at the one phase the journal promised was resumable - so this is required, not tolerated as absent.
     !isStringOrNull(value.stopClaimToken) ||
     !isRecord(value.governor)
   ) {
@@ -885,10 +815,8 @@ function parseActivationTerminal(
   ) {
     return undefined;
   }
-  // `failurePhase` names the non-terminal phase that produced the outcome, so
-  // a failed activation reports where it died rather than just that it did.
-  // Parsed, never defaulted - dropping it here would leave the caller with a
-  // terminal record that cannot say what failed.
+  // `failurePhase` names the non-terminal phase that produced the outcome, so a failed activation reports where it died rather than just that it did.
+  // Parsed, never defaulted - dropping it here would leave the caller with a terminal record that cannot say what failed.
   const failurePhase =
     value.failurePhase === null
       ? null

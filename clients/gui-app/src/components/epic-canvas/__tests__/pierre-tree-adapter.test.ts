@@ -6,10 +6,7 @@ import {
 } from "@/components/epic-canvas/pierre-tree-adapter";
 
 /**
- * Locks the `@pierre/trees` integration contract: we read the tree path
- * for a row out of the `data-item-path` attribute that Pierre stamps on
- * every row. Any Pierre upgrade that renames this attribute must update
- * the adapter here first, not the sidebar component.
+ * Any Pierre upgrade that renames this attribute must update the adapter here first, not the sidebar component.
  */
 describe("pierre-tree-adapter", () => {
   it("uses the documented `data-item-path` attribute name", () => {

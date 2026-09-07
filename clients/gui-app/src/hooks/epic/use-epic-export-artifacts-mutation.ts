@@ -46,17 +46,7 @@ export function useEpicExportArtifacts() {
       if (firstArtifact === undefined) {
         throw new Error("Select at least one artifact to export.");
       }
-      // Artifact-room docs are only materialized while leased, and export is
-      // the one fragment reader with no editor mounted behind it. Take a lease
-      // per artifact for the duration of the read - without one, exporting a
-      // body nobody has opened in this session reads as "still loading".
-      //
-      // ONE lease at a time, and the body is serialized before the next is
-      // materialized. Holding them all was the byte spike the accountant
-      // exists to prevent: a lease is what keeps a room resident, so retaining
-      // every hold until the build made the whole selection hot at once, with
-      // no bound on how much a user may select. Sequential MATERIALIZATION was
-      // never the property that mattered - sequential RETENTION is.
+      // One lease at a time and serialize the body before the next materializes. Holding every lease until the build made the whole selection resident at once.
       const serialized: Array<{
         readonly id: string;
         readonly title: string;
@@ -66,12 +56,7 @@ export function useEpicExportArtifacts() {
         const hold = await holdArtifactBody(
           epicHandle,
           artifact.id,
-          // NO LINGER. The release below was already ordered before the next
-          // materialize, but the lease bridge answers a last release by arming
-          // the 60s cooldown - a bet that the user is coming back to this
-          // body. An export reads each body once and moves on, so that bet is
-          // known wrong here, and taking it left every already-serialized body
-          // hot behind the one this loop thought was the only resident.
+          // An export reads each body once and moves on, so that bet is known wrong here, and taking it left every already-serialized body hot behind the one this loop thought was the only resident.
           "immediate",
         ).catch((cause: unknown) => {
           // The seam names the artifact by id; the user knows it by title.
@@ -86,11 +71,7 @@ export function useEpicExportArtifacts() {
             markdown: serializeArtifactMarkdown(hold.fragment),
           });
         } finally {
-          // Before the next materialize, so at most one body is resident -
-          // including on the throw path, where the loop is abandoned. The
-          // `"immediate"` retention above is the other half of that claim:
-          // ordering the release early bounds nothing on its own if the
-          // release only arms a cooldown.
+          // Before the next materialize, so at most one body is resident - including on the throw path, where the loop is abandoned.
           hold.release();
         }
       }
@@ -100,11 +81,8 @@ export function useEpicExportArtifacts() {
         archive: input.archive,
         archiveTitle: input.archiveTitle ?? firstArtifact.title,
       });
-      // No leases are held here any more - each was released as its body was
-      // serialized - so `saveBlobToDisk` can block on native OS UI (a save
-      // dialog, a share sheet) the user leaves open for minutes without
-      // pinning a single room. That wait is why holding leases across the
-      // build was worth removing rather than merely bounding.
+      // That wait is why holding leases across the build was worth removing rather than merely bounding.
+      // No leases are held here any more - each was released as its body was serialized - so `saveBlobToDisk` can block on native OS UI (a save dialog, a share sheet) the user leaves open for minutes without pinning a single room.
       return saveBlobToDisk(output.blob, output.suggestedName, fileSave);
     },
     onSuccess: (saved, input) => {
@@ -113,10 +91,7 @@ export function useEpicExportArtifacts() {
           format: input.format,
           artifact_count: input.artifacts.length,
         });
-        // No Share/Download split on this surface, deliberately: its controls
-        // promise an "Export", which a share sheet honours as truthfully as a
-        // save dialog does, so there is no mislabelled control to correct -
-        // only a confirmation that must not claim a save the sheet never made.
+        // No Share/Download split on this surface, deliberately: its controls promise an "Export", which a share sheet honours as truthfully as a save dialog does, so there is no mislabelled control to correct - only a confirmation that must not claim a save the sheet never made.
         toastSavedFile(
           saved,
           openSaved.mutate,

@@ -53,9 +53,7 @@ describe("sourceToTileRef - chat-artifact branch", () => {
 
 describe("canDropOnHeaderStrip - chat-artifact", () => {
   it("accepts a chat-artifact source so the header tab strip is not a dead zone", () => {
-    // Collision already offers chat-artifact the header slot (top priority), so
-    // this predicate must accept it - otherwise the header strip previews and
-    // commits nothing, unlike the sibling sidebar-node / workspace-file sources.
+    // Collision already offers chat-artifact the header slot (top priority), so this predicate must accept it - otherwise the header strip previews and commits nothing, unlike the sibling sidebar-node / workspace-file sources.
     expect(canDropOnHeaderStrip(CHAT_ARTIFACT_SOURCE)).toBe(true);
   });
 
@@ -95,24 +93,10 @@ describe("sourceToTileRef - sidebar-node branch", () => {
   });
 
   it("mints the ref against the payload's bound host, not the app-wide one", () => {
-    // Chats and artifacts carry no intrinsic host id, so the fallback IS the
-    // tile's host for life: the root DndContext mounts at the app shell, so
-    // during an A->B re-point the app-wide client already answers B while the
-    // dragged row still belongs to the A-backed Epic. `sourceToTileRef` used
-    // to resolve that fallback from the app-wide active host instead of
-    // `source.hostId` (the payload's bound host, stamped by the sidebar
-    // producers from the Epic SESSION host) - in a test environment with no
-    // app host client mounted, that fallback resolves to
-    // `UNKNOWN_HOST_PLACEHOLDER`, which is exactly what this arm rules out.
     const registry = __getOpenEpicRegistryForTests();
     const handle = openStoreForTest({
       epicId: "epic-dnd",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
       factories: {
         streamClientFactory: noopStreamClientFactory,
         laneSelection: null,

@@ -6,14 +6,8 @@ const KINDS_DIR = resolve(__dirname, "../../stores/tabs/kinds");
 const WARMER = resolve(__dirname, "../warm-route-chunks.ts");
 
 /**
- * Every top-level surface is reached through `tabSurfaceDescriptor(kind).render()`,
- * which returns a `lazy()` component, so no static import chain reaches these
- * modules. If one is missing from `warmRouteChunks()`, the first open of that tab
- * kind pays a cold dynamic import behind `Suspense fallback={null}` - a blank pane
- * for as long as the chunk takes, which is a multi-second ESM transform waterfall
- * in dev. That regression shipped once already: the epic canvas graph moved out of
- * `epic-tab-route-components` (which was warmed) into `epic-surface` (which was
- * not), and nothing failed.
+ * Every top-level surface is reached through `tabSurfaceDescriptor(kind).render()`, which returns a `lazy()` component, so no static import chain reaches these modules.
+ * If one is missing from `warmRouteChunks()`, the first open of that tab kind pays a cold dynamic import behind `Suspense fallback={null}` - a blank pane for as long as the chunk takes, which is a multi-second ESM transform waterfall in dev.
  */
 function lazyImportSpecifiers(): ReadonlyArray<{
   readonly file: string;

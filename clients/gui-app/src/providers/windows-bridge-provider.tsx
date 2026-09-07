@@ -43,11 +43,8 @@ import type {
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
-// One `app_opened` per renderer process, emitted when hydration settles (the
-// earliest point this window knows whether it restored content). Secondary
-// windows are separate renderer processes and count too; the `restored_tabs`
-// flag plus PostHog sessions keep launch analyses honest enough without any
-// cross-window coordination.
+// One app_opened per renderer at hydration. Secondary windows count too;
+// restored_tabs plus PostHog sessions keep launch analyses honest.
 let appOpenedTracked = false;
 
 function trackAppOpenedOnce(restoredTabs: boolean): void {
@@ -77,13 +74,8 @@ interface DesktopSnapshotObservation {
   latest: DesktopPerWindowSnapshot | null;
 }
 
-// Module-level hydration gate. The tab-sync coordinator subscribes
-// against the canvas / landing-draft stores at install time; without a
-// gate, the per-window snapshot's async arrival would scramble the
-// persisted strip order via filter-then-append. We hand the coordinator
-// a one-shot promise here BEFORE it installs subscriptions so handlers
-// stay suppressed until the first snapshot has been applied (or until
-// the renderer confirms there is no desktop bridge to wait on).
+// Hand the tab-sync coordinator a one-shot hydration promise before it
+// subscribes, or the snapshot's async arrival scrambles strip order.
 let resolveHydrationPromise: (() => void) | null = null;
 const hydrationPromise = new Promise<void>((resolve) => {
   resolveHydrationPromise = resolve;
@@ -122,16 +114,7 @@ function markHydrated(): void {
 }
 
 /**
- * Resolves the desktop windows bridge from the runner host and wires the
- * per-window projection (open epic tabs, landing drafts, ownership) to it.
- *
- * Auth-session cross-window projection used to live here too, but it has
- * moved into `WindowsBridgeAuthSessionBridge` - that component lives inside
- * `HostRuntimeProvider` where it can talk to `AuthService` directly
- * (`onSessionSnapshotChange` / `ingestProjectedSessionSnapshot`) instead of
- * reading and writing a raw bearer through `useAuthStore`. Host / runtime
- * consumers must NOT read the bearer here; the live runtime auth authority
- * is the `RequestContext` produced by `AuthService.getRequestContextProvider()`.
+ * Desktop windows-bridge projection (tabs, drafts, ownership). Do not read the bearer here; auth authority is `AuthService.getRequestContextProvider()`.
  */
 export function WindowsBridgeProvider(
   props: WindowsBridgeProviderProps,
@@ -173,11 +156,8 @@ export function WindowsBridgeProvider(
 function installMissingDesktopWindowsBridge(): () => void {
   clearDesktopWindowsBridge();
   configureBrowserTabsPersistence();
-  // No desktop bridge here (web/browser path), so `installDesktopWindowsBridge`
-  // below never runs and its `pagehide`/`beforeunload` flush never installs
-  // either. File-edit drafts still need that flush independent of the bridge:
-  // without it, a reload within the 100ms recovery debounce after typing loses
-  // the draft (only in renderer memory, never reaching the IndexedDB journal).
+  // Web path has no pagehide flush. Still flush file-edit drafts or a reload
+  // within the 100ms debounce loses them.
   const flushFileEditRecovery = (): void => {
     void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
   };
@@ -208,18 +188,8 @@ function installDesktopWindowsBridge(
     bridge.perWindowState,
     DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
   );
-  // Best-effort flush on document teardown (reload / navigation / a window close
-  // that does NOT route through the quit intercept). Unlike the `before-quit`
-  // fresh-snapshot path - which AWAITS this same flush before answering main -
-  // unload handlers cannot await a promise, so we can only kick the flush and
-  // return. `flush()` enqueues the pending patch's `perWindowState.update` IPC
-  // send on the microtask queue, which the browser drains before it proceeds
-  // with the unload, so the send does leave the renderer. Residual gap: if a
-  // prior projection `update` is still in flight when this fires, the new patch
-  // is chained behind it and may not send before teardown; and main is not
-  // guaranteed to finish processing an in-flight send before the renderer dies.
-  // The deliberate quit path (Cmd+Q / "Quit Traycer") does not rely on this - it
-  // uses the awaited fresh-snapshot flush - so this remains a fallback only.
+  // Unload cannot await; kick flush so the microtask send leaves.
+  // Deliberate quit uses the awaited fresh-snapshot path instead.
   const flushProjection = (): void => {
     void projectionBridge.flush().catch(() => undefined);
     void drainDesktopTabsPersistence().catch(() => undefined);
@@ -287,10 +257,7 @@ function installDesktopWindowsBridge(
       );
     } catch (error) {
       if (isCancelled()) return;
-      // Fall back to not applying a snapshot (empty/absent snapshot
-      // semantics) rather than leaving hydration permanently pending - a
-      // route gated on `useWindowsBridgeHydrated()` (e.g. `/draft/new`) would
-      // otherwise spin forever.
+      // Do not leave hydration pending. /draft/new would spin forever.
       appLogger.error(
         "[windows-bridge] per-window snapshot hydration failed",
         {},
@@ -421,10 +388,8 @@ function hasFunctions(
   return true;
 }
 
-// `requestOpenDraftInNewWindow` is intentionally NOT listed: it is optional and
-// capability-probed at its call site (`use-draft-open-in-new-window`), for the
-// same skew reason as `perWindowState.clear` below - requiring it would fail
-// the whole bridge guard against a preload built before draft moves existed.
+// requestOpenDraftInNewWindow is optional and probed at the call site.
+// Requiring it here would fail the whole bridge on an older preload.
 const ROOT_FN_KEYS = [
   "list",
   "onChange",
@@ -434,13 +399,8 @@ const ROOT_FN_KEYS = [
   "requestOpenEpicInNewWindow",
 ] as const;
 const OWNERSHIP_FN_KEYS = ["snapshot", "claim", "release", "onChange"] as const;
-// `clear` is intentionally NOT listed here. It is an optional, capability-probed
-// method (see `DesktopWindowsBridge.perWindowState.clear?` in lib/windows/types).
-// Requiring it in this guard would make an older preload (built before the
-// per-window `clear` RPC existed) fail the WHOLE bridge guard on a
-// renderer/preload version skew -> silent fallback to web-mode localStorage,
-// reverting canvas/landing-draft persistence. It is probed at the wipe call site
-// (`typeof perWindowState.clear === "function"`) instead.
+// clear is optional and probed at the wipe call site. Requiring it here would
+// fail the whole bridge on an older preload and fall back to localStorage.
 const PER_WINDOW_FN_KEYS = ["get", "update", "onChange"] as const;
 const AUTH_FN_KEYS = ["get", "set", "onChange"] as const;
 

@@ -71,24 +71,8 @@ import {
   type FolderPickerIntent,
 } from "@/stores/workspace/remote-folder-picker-store";
 
-/**
- * Folder picker for hosts the client cannot open a native OS dialog for
- * (remote hosts - phone/browser clients, or a desktop pointed at another
- * machine). Browses the HOST's filesystem via `workspace.browseFolders`.
- *
- * The path field is the single source of truth: everything up to the last
- * `/` is the directory being browsed, the segment after it live-filters the
- * listing. Choosing a row appends `name/` (descending); deleting characters
- * past a `/` naturally walks back up. Consent-gated folders look and pick
- * like any other row - selecting needs no read. Listing one either raises
- * the consent prompt on the host (surfaced here as the host's bounded
- * timeout message with Retry) or reports the denial as a short no-access
- * line.
- *
- * Globally mounted (AppShell); opened through the promise-based
- * `useRemoteFolderPickerStore.requestPick()` so imperative flows await it
- * exactly like the native dialog.
- */
+/** Folder picker for hosts the client cannot open a native OS dialog for (remote hosts - phone/browser clients,
+ * or a desktop pointed at another machine). */
 export function RemoteFolderPickerDialog(): ReactNode {
   const open = useRemoteFolderPickerStore((state) => state.open);
   const requestId = useRemoteFolderPickerStore((state) => state.requestId);
@@ -103,9 +87,8 @@ export function RemoteFolderPickerDialog(): ReactNode {
       <DialogContent
         className="top-[18svh] flex h-[min(80dvh,36rem,calc(100dvh-18svh-var(--safe-area-inset-bottom)))] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
         data-testid="remote-folder-picker-dialog"
-        // Phone-facing portal outside HomePage's touch scope: re-apply the
-        // coarse-pointer hit-slop rules (home-touch-targets.css) so every
-        // control hits >=44px.
+        // Phone-facing portal outside HomePage's touch scope: re-apply the coarse-pointer hit-slop rules
+        // (home-touch-targets.css) so every control hits >=44px.
         data-home-touch-scope=""
         showCloseButton={false}
       >
@@ -113,9 +96,8 @@ export function RemoteFolderPickerDialog(): ReactNode {
         <DialogDescription className="sr-only">
           Browse the host machine and pick a folder to add.
         </DialogDescription>
-        {/* Mounted only while open, keyed per request: a second requestPick
-            while already open must not inherit the first request's path or
-            in-flight query. */}
+        {/* Mounted only while open, keyed per request: a second requestPick while already open must not inherit the
+           first request's path or in-flight query. */}
         {open ? <RemoteFolderPickerBody key={requestId} /> : null}
       </DialogContent>
     </Dialog>
@@ -140,11 +122,9 @@ function RemoteFolderPickerBody(): ReactNode {
   // null = not edited yet; the field then shows the host home once known.
   const [rawInput, setRawInput] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(UNSET_SELECTION);
-  /** Long-press target: the one path shown in full, verbatim. */
   const [fullPath, setFullPath] = useState<string | null>(null);
   // The host's home, learned from the root (null-path) response; anchors `~`.
   const [homePath, setHomePath] = useState<string | null>(null);
-  /** Bumped to pull focus back to the path field; see the header. */
   const [focusPathToken, setFocusPathToken] = useState(0);
   // Mount focus is for a keyboard, not a thumb: on a phone it raises the
   // on-screen keyboard over the listing the dialog was opened to read.
@@ -162,16 +142,7 @@ function RemoteFolderPickerBody(): ReactNode {
     enabled: true,
   });
 
-  // Where `~` points. The root browse response is preferred - it is the
-  // directory actually being shown - and `getHomeDir` is the fallback that
-  // keeps `~` working when home is UNLISTABLE, so the root browse never
-  // answers and can never teach it. Add needs no listing, so picking out of an
-  // unlistable home still works. Null when neither answered (a v1.0 host fails
-  // `getHomeDir` closed); `~` then simply does not expand.
-  //
-  // Deliberately inline rather than extracted into a helper: routing it
-  // through a function makes `parsed` opaque to the React Compiler, which then
-  // bails out of preserving the `matches` memo below.
+  // The root browse response is preferred - it is the directory actually being shown.
   const effectiveHome = homePath ?? homeDirQuery.data?.homeDir ?? null;
 
   const parsed = parseBrowseInput(rawInput, effectiveHome);
@@ -181,12 +152,7 @@ function RemoteFolderPickerBody(): ReactNode {
     enabled: parsed.valid,
   });
   const data = parsed.valid ? browseQuery.data : undefined;
-  // A FAILED REFETCH keeps the last successful `data` in the cache (this
-  // query is `staleTime: 10_000`, so stepping back into a directory serves
-  // cache and refetches behind it). The listing renders no rows at all while
-  // this is set, so navigation has to agree with what is on screen - counting
-  // the stale rows below would let the arrow keys address option ids that are
-  // not rendered and let Enter open a directory the user cannot see.
+  // The listing renders no rows at all while this is set, so navigation has to agree with what is on screen.
   const listingError = parsed.valid ? browseQuery.error : null;
 
   // Derived-state adjustment during render (React's sanctioned pattern):
@@ -306,11 +272,8 @@ function RemoteFolderPickerBody(): ReactNode {
           homePath={effectiveHome}
           onShowFullPath={setFullPath}
           onPick={(path) => {
-            // Picking a recent makes the field non-pristine, which unmounts
-            // the whole row - including the button that was just activated.
-            // `onMouseDown` keeps focus for a pointer, but a keyboard user
-            // (Enter/Space) never triggers that, so focus would land nowhere
-            // and the field would stop accepting typing, arrows and cmd+Enter.
+            // `onMouseDown` keeps focus for a pointer, but a keyboard user (Enter/Space) never triggers that, so focus
+            // would land nowhere and the field would stop accepting typing, arrows and cmd+Enter.
             setPath(path);
             requestPathFocus();
           }}
@@ -388,9 +351,8 @@ function readFolderPickerAddState(args: {
 }
 
 function supportsCreateDirectory(version: NegotiatedMethodVersion): boolean {
-  // `createAndPrepare` is a v1 extension of this exact contract. A future
-  // major may redefine the operation envelope, so do not treat it as
-  // create-capable until that major has an explicit renderer gate.
+  // A future major may redefine the operation envelope, so do not treat it as create-capable until that major
+  // has an explicit renderer gate.
   return (
     version !== null &&
     version !== false &&
@@ -590,21 +552,12 @@ function RemoteFolderPickerFooter(props: {
   );
 }
 
-/**
- * States the base a group of rows shares, so no row has to repeat it. Falls
- * back to a plain group label when there is no base worth naming — the rows
- * then carry their own full paths and this line would be a lie.
- */
+/** Falls back to a plain group label when there is no base worth naming - the rows then carry their own full
+ * paths and this line would be a lie. */
 function PathGroupHeader(props: {
   readonly label: string;
-  /**
-   * The ABSOLUTE shared base. Collapsing happens here rather than in the
-   * caller so the tooltip keeps the raw path while the line abbreviates it —
-   * handing this component an already-collapsed base would make the hover
-   * repeat the visible text and reveal nothing.
-   */
+  /** The absolute shared base. */
   readonly basePath: string | null;
-  /** Where `~` points, for the visible line only. */
   readonly homePath: string | null;
   readonly fallback: string;
 }): ReactNode {
@@ -629,27 +582,12 @@ function PathGroupHeader(props: {
   );
 }
 
-/**
- * One folder row: the name, and nothing else.
- *
- * A second dimmed line carrying each row's own path was tried and dropped —
- * inside one folder every such line repeats the same prefix, so a column of
- * them is duplication rather than information, and each row truncating at a
- * different character makes the block read as noise. The heading above states
- * the location once; hover (or long-press on touch) produces the absolute
- * path on demand.
- */
+/** A second dimmed line carrying each row's own path was tried and dropped. */
 function PickerRow(props: {
   readonly name: string;
   readonly ranges: ReadonlyArray<FuzzyRange>;
-  /** Absolute path the row stands for: what hover and long-press both reveal. */
   readonly fullPath: string;
-  /**
-   * Which end survives when the label will not fit. A recent shows a PATH,
-   * whose leaf is its identity and whose prefix repeats down the column, so it
-   * loses its front; a directory shows a bare folder name, which reads from
-   * the front like any other word.
-   */
+  /** Which end survives when the label will not fit. */
   readonly truncateFrom: "start" | "end";
   /** Listbox options carry an id and selection; the recents strip does not. */
   readonly option: { readonly id: string; readonly selected: boolean } | null;
@@ -663,9 +601,8 @@ function PickerRow(props: {
     disabled: false,
   });
   return (
-    // Hover is the pointer's half of the long-press: `useLongPress` is touch
-    // only by design, so without this a mouse has no way at all to reach the
-    // absolute path behind an abbreviated row.
+    // Hover is the pointer's half of the long-press: `useLongPress` is touch only by design, so without this a
+    // mouse has no way at all to reach the absolute path behind an abbreviated row.
     <FilePathTooltip content={props.fullPath} side="bottom">
       <Button
         type="button"
@@ -709,16 +646,7 @@ function PickerRow(props: {
   );
 }
 
-/**
- * Recently-opened workspaces on the host, as one-tap shortcuts.
- *
- * Deliberately OUTSIDE the listbox: the combobox's keyboard model (arrows
- * move through directories, Enter descends) stays exactly as it was, and
- * these stay plain tab-reachable buttons. Picking one fills the field with
- * that path rather than adding it outright - the field is the picker's single
- * source of truth, so this arms Add with the recent while still showing it in
- * context (its parent, filtered to it) and leaving it editable.
- */
+/** Picking one fills the field with that path rather than adding it outright. */
 function RemoteFolderPickerRecents(props: {
   readonly entries: ReadonlyArray<WorkspaceRecentEntry>;
   readonly homePath: string | null;
@@ -740,8 +668,8 @@ function RemoteFolderPickerRecents(props: {
       />
       <ul className="flex flex-col">
         {props.entries.map((entry) => {
-          // Relative when it sits under the shared base, otherwise the whole
-          // path — a row is never shown a name it does not own.
+          // Relative when it sits under the shared base, otherwise the whole path - a row is never shown a name it does
+          // not own.
           const relative = base === null ? null : relativeTo(entry.path, base);
           return (
             <li key={entry.path} role="presentation">
@@ -777,11 +705,8 @@ function RemoteFolderPickerListing(props: {
   readonly matches:
     | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>>
     | undefined;
-  /**
-   * Where `..` leads, or null when there is no up row. One nullable prop
-   * rather than a path beside a boolean: the row and its destination appear
-   * and disappear together, so a present row with no path is not a state.
-   */
+  /** Where `..` leads, or null when there is no up row. One nullable prop rather than a path beside a boolean:
+   * the row and its destination appear and disappear together, so a present row with no path is not a state. */
   readonly upPath: string | null;
   readonly selectedIndex: number;
   readonly filtering: boolean;
@@ -791,15 +716,11 @@ function RemoteFolderPickerListing(props: {
   readonly onShowFullPath: (path: string) => void;
   readonly onRetry: () => void;
 }): ReactNode {
-  // The `..` option renders in every state (error/loading included): the
-  // combobox always references this listbox, and backing out of an
-  // unlistable folder must stay one tap away.
+  // The `..` option renders in every state (error/loading included): the combobox always references this
+  // listbox, and backing out of an unlistable folder must stay one tap away.
   const rows: ReactNode[] = [];
-  // role/id/aria-selected live on the BUTTON: assistive tech flattens option
-  // descendants, so the option element must itself be the actionable node.
-  // The <li> wrappers are therefore `role="presentation"` - a listbox must own
-  // its options directly, and an <li> sitting between the two is an invalid
-  // owned-element hop.
+  // role/id/aria-selected live on the button: assistive tech flattens option descendants, so the option element
+  // must itself be the actionable node.
   if (props.upPath !== null) {
     rows.push(
       <li key=".." role="presentation">
@@ -908,9 +829,8 @@ function RemoteFolderPickerListingStatus(props: {
     );
   }
   if (props.error !== null) {
-    // The host's filesystem answers each get a short line; a too-old host
-    // gets upgrade guidance; anything else (transport failure, disconnect)
-    // is not a filesystem answer and stays retryable.
+    // The host's filesystem answers each get a short line; a too-old host gets upgrade guidance; anything else
+    // (transport failure, disconnect) is not a filesystem answer and stays retryable.
     if (isPermissionDenied(props.error)) {
       return (
         <p
@@ -1037,14 +957,7 @@ interface RowSelection {
   readonly clampedIndex: number;
 }
 
-/**
- * Resolve which row is highlighted.
- *
- * An untouched selection rests on the first real FOLDER, never on `..`: "go
- * up" is a poor default for Enter, and on a touch device the resting fill is
- * the only thing that highlight communicates - pointing it at the parent row
- * reads as though something had already been chosen.
- */
+/** Untouched selection rests on the first real folder, never `..` - on touch the resting fill is the only highlight, and pointing at the parent reads as already chosen. */
 function readRowSelection(args: {
   readonly selectedIndex: number;
   readonly upRowPresent: boolean;
@@ -1107,7 +1020,6 @@ function handlePickerFieldKeys(
 interface ParsedBrowseInput {
   /** False when the field holds something that is not a browsable path yet. */
   readonly valid: boolean;
-  /** RPC path of the directory segment; null = the host's home. */
   readonly directoryPath: string | null;
   /** Live filter: the segment after the last `/`. */
   readonly filter: string;
@@ -1121,8 +1033,7 @@ const INVALID_INPUT: ParsedBrowseInput = {
 
 /** Descending appends a separator; a root already ends in one. */
 function withTrailingSeparator(path: string): string {
-  // Only the path's OWN separator counts as already-terminated: a POSIX
-  // folder named `foo\` still needs its `/`.
+  // Only the path's own separator counts as already-terminated: a POSIX folder named `foo\` still needs its `/`.
   const separator = separatorOf(path);
   return path.endsWith(separator) ? path : path + separator;
 }
@@ -1135,11 +1046,8 @@ function startsWithTilde(path: string): boolean {
   return path.startsWith("~/") || path.startsWith("~\\");
 }
 
-/**
- * Split the field into the directory to browse (up to the last separator) and
- * the live filter after it, expanding a leading `~` against the host home. An
- * unedited field (null) browses the home directory unfiltered.
- */
+/** Split the field into the directory to browse (up to the last separator) and the live filter after it,
+ * expanding a leading `~` against the host home. */
 function parseBrowseInput(
   rawInput: string | null,
   homePath: string | null,
@@ -1147,10 +1055,8 @@ function parseBrowseInput(
   if (rawInput === null) {
     return { valid: true, directoryPath: null, filter: "" };
   }
-  // Trailing whitespace is SIGNIFICANT: a POSIX directory may legitimately end
-  // in one, so only the leading side is forgiven (nothing absolute starts with
-  // whitespace). Emptiness and tilde-only are judged on a fully-trimmed copy -
-  // whitespace alone is still "no path yet", not a filter.
+  // Trailing whitespace is significant: a POSIX directory may legitimately end in one, so only the leading side
+  // is forgiven (nothing absolute starts with whitespace).
   const raw = rawInput.trimStart();
   const collapsed = raw.trimEnd();
   if (collapsed === "" || isTildeOnly(collapsed)) {
@@ -1158,9 +1064,8 @@ function parseBrowseInput(
   }
   let path = raw;
   if (startsWithTilde(path)) {
-    // Home not learned yet: keep the root browse running (it is the only
-    // request that can teach us home), unfiltered; the next render reparses
-    // once the response lands.
+    // Home not learned yet: keep the root browse running (it is the only request that can teach us home),
+    // unfiltered; the next render reparses once the response lands.
     if (homePath === null) {
       return { valid: true, directoryPath: null, filter: "" };
     }
@@ -1170,12 +1075,8 @@ function parseBrowseInput(
   const lastSlash = lastSeparatorIndex(path);
   const rootLength = rootLengthOf(path);
   if (lastSlash < rootLength) {
-    // Still inside the root itself, so the root IS the directory and whatever
-    // follows it is the filter. This cannot be derived from the last
-    // separator: `/` and `C:\` end in theirs so the two happen to agree, but
-    // a UNC share root does not - `\\server\share` would take its filter from
-    // the separator before `share` and filter the share by its own name,
-    // hiding every row.
+    // This cannot be derived from the last separator: `/` and `C:\` end in theirs so the two happen to agree, but
+    // a unc share root does not.
     return {
       valid: true,
       directoryPath: path.slice(0, rootLength),
@@ -1189,13 +1090,8 @@ function parseBrowseInput(
   };
 }
 
-/**
- * Recent-workspace shortcuts to offer: only on the PRISTINE field - the "just
- * opened the picker" moment they are for - because once the user types, the
- * listing is the subject and the shortcuts would only crowd it. Empty when the
- * host did not answer the operation (v1.0 fails it closed), which renders
- * nothing rather than an error.
- */
+/** Recent-workspace shortcuts to offer: only on the pristine field - the "just opened the picker" moment they
+ * are for - because once the user types, the listing is the subject and the shortcuts would only crowd it. */
 function readRecentShortcuts(
   rawInput: string | null,
   recentsData:
@@ -1214,7 +1110,6 @@ function parentOf(path: string): string {
   return index < rootLength ? path.slice(0, rootLength) : path.slice(0, index);
 }
 
-/** Field text when unedited: the current location with a trailing separator. */
 function readShownInput(
   rawInput: string | null,
   data: WorkspaceBrowseFoldersResponseV11 | undefined,
@@ -1222,18 +1117,13 @@ function readShownInput(
 ): string {
   if (rawInput !== null) return rawInput;
   if (data !== undefined) return withTrailingSeparator(data.directoryPath);
-  // The root listing FAILED but `getHomeDir` answered - the supported
-  // unlistable-home case. Add is armed with that home, so it has to be
-  // visible: showing a blank field under an enabled Add would submit a path
-  // the user was never shown. `readAddTarget` falls back the same way.
+  // Add is armed with that home, so it has to be visible: showing a blank field under an enabled Add would
+  // submit a path the user was never shown.
   return homePath === null ? "" : withTrailingSeparator(homePath);
 }
 
-/**
- * Up-navigation target. While a directory is unlistable (loading, or no
- * access) the response carries no parent - fall back to the lexical parent
- * so the user can still back out with the button or the `..` row.
- */
+/** While a directory is unlistable (loading, or no access) the response carries no parent - fall back to the
+ * lexical parent so the user can still back out with the button or the `..` row. */
 function readUpPath(
   data: WorkspaceBrowseFoldersResponseV11 | undefined,
   parsed: ParsedBrowseInput,
@@ -1245,12 +1135,7 @@ function readUpPath(
   return null;
 }
 
-/**
- * Rank the listing against the active filter. The host sends hidden (dot)
- * directories too; they surface only while the filter itself starts with "."
- * — a rule that has to be applied BEFORE matching, because a subsequence
- * match would otherwise pull dotfiles in on any query sharing their letters.
- */
+/** The host sends hidden (dot) directories too; they surface only while the filter itself starts with ".". */
 function matchEntries(
   entries: ReadonlyArray<WorkspaceBrowseFolderEntryV11> | undefined,
   filter: string,
@@ -1264,21 +1149,16 @@ function matchEntries(
   return fuzzyMatchNames(visible, (entry) => entry.name, filter);
 }
 
-/**
- * What Add picks: exactly what the field shows (with `~` expanded and any
- * trailing `/` dropped), whether or not that folder was ever listed -
- * selecting a folder needs no read. An unedited field picks the home the
- * field displays; a field the user explicitly cleared picks nothing.
- */
+/** What Add picks: exactly what the field shows (with `~` expanded and any trailing `/` dropped), whether or
+ * not that folder was ever listed - selecting a folder needs no read. */
 function readAddTarget(
   rawInput: string | null,
   homePath: string | null,
   data: WorkspaceBrowseFoldersResponseV11 | undefined,
 ): string | null {
   if (rawInput === null) return data?.directoryPath ?? homePath;
-  // Same discipline as `parseBrowseInput`: trailing whitespace stays part of
-  // the path - `/srv/project ` and `/srv/project` are distinct siblings, and
-  // Add must submit exactly what the field shows.
+  // Same discipline as `parseBrowseInput`: trailing whitespace stays part of the path - `/srv/project ` and
+  // `/srv/project` are distinct siblings, and Add must submit exactly what the field shows.
   const raw = rawInput.trimStart();
   const collapsed = raw.trimEnd();
   if (collapsed === "") return null;
@@ -1290,8 +1170,8 @@ function readAddTarget(
   }
   if (!isAbsolutePath(path)) return null;
   const rootLength = rootLengthOf(path);
-  // Same discipline as `withTrailingSeparator`: strip only this path's own
-  // separator, so a POSIX folder named `foo\` keeps its backslash.
+  // Same discipline as `withTrailingSeparator`: strip only this path's own separator, so a POSIX folder named
+  // `foo\` keeps its backslash.
   const separator = separatorOf(path);
   while (path.length > rootLength && path.endsWith(separator)) {
     path = path.slice(0, -1);

@@ -22,30 +22,7 @@ type NoopReason =
   | "host-too-old"
   | "host-unreachable";
 
-/**
- * `traycer agent session-observed-from-hook --provider <provider>` - invoked
- * by the Claude Code `SessionStart` hook and by the OpenCode plugin when the
- * TUI's sighted root session changes. It reports the live session id (stamped
- * on the hook's stdin payload) to the host so the stored `harnessSessionId`
- * resyncs to whatever the user currently sees in the PTY.
- *
- * This closes the gap the `start`/`stop` activity hooks leave open: when the
- * user rewinds/forks/switches sessions then immediately closes or forks the
- * tab WITHOUT another prompt, this still fires at the drift moment and pushes
- * the fresh id. It is deliberately NOT an activity edge - it rides
- * `agent.tui.recordActivity@1.1` with `event: "resync"`, which the host
- * resolver treats as a pure session write-back that never touches the
- * activity oracle. (A dedicated CLI command keeps the activity command clean;
- * a new RPC method name is impossible - it would fatally break the frozen
- * `/rpc` handshake against a shipped v1.0 host.)
- *
- * Like the other hook commands it is intentionally lenient: an unknown
- * provider, missing `TRAYCER_EPIC_ID` / `TRAYCER_AGENT_ID`, an unreadable
- * `session_id`, or a host-not-running condition all exit cleanly (exit 0,
- * `accepted: false`) with no stderr noise. Only Claude and OpenCode drive
- * resync (Codex ships no hook surface), so other providers read no id and
- * no-op.
- */
+/** Hook stdin is untrusted provider JSON. Never treat its session id as a host id. */
 export function buildAgentSessionObservedFromHookCommand(opts: {
   readonly provider: string;
   readonly epicId: string | null;
@@ -62,10 +39,8 @@ export function buildAgentSessionObservedFromHookCommand(opts: {
       return noop("missing-context");
     }
 
-    // Resync providers: Claude (SessionStart pipes the live id) and OpenCode
-    // (the per-TUI plugin pipes the sighted root-session id; the host rekeys
-    // its session registry in lockstep). Codex ships no hook surface; for any
-    // other provider there is nothing to observe, so skip the read and no-op.
+    // Resync providers: Claude (SessionStart pipes the live id) and OpenCode (the per-TUI plugin pipes the sighted root-session id; the host rekeys its session registry in lockstep).
+    // Codex ships no hook surface; for any other provider there is nothing to observe, so skip the read and no-op.
     const observedHarnessSessionId =
       harnessId === "claude" || harnessId === "opencode"
         ? await readObservedHarnessSessionId()
@@ -83,17 +58,8 @@ export function buildAgentSessionObservedFromHookCommand(opts: {
       observedHarnessSessionId,
     });
 
-    // Two benign version-skew / liveness conditions degrade to a quiet no-op;
-    // everything else (auth, genuine host errors) still surfaces:
-    //   • host-too-old: a newer CLI vs a host that only speaks
-    //     recordActivity@1.0 has no `event: "resync"`, so the transport fails to
-    //     project this request onto the host's older minor locally, before it is
-    //     sent (unlike the additive `observedHarnessSessionId` field, an unknown
-    //     enum value can't be stripped). A resync against a pre-1.1 host is
-    //     meaningless, so it must not surface as hook noise. Caught on the raw
-    //     transport error, before `toAgentCliError` buckets it as UNEXPECTED.
-    //   • host-unreachable: the hook fires unconditionally and the host may
-    //     simply not be up.
+    // Two benign version-skew / liveness conditions degrade to a quiet no-op; everything else (auth, genuine host errors) still surfaces: • host-too-old: a newer CLI vs a host that only speaks recordActivity@1.0 has no `event: "resync"`, so the transport fails to project this request onto the host's older minor locally, before it is sent (unlike the additive `observedHarnessSessionId` field, an unknown enum value can't be stripped).
+    // A resync against a pre-1.1 host is meaningless, so it must not surface as hook noise.
     const rpcResult = await toAgentCliError(
       callHostRpcFastFail("agent.tui.recordActivity", request).catch(
         (err: unknown) => {

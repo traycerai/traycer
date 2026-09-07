@@ -2,11 +2,6 @@ import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The cohort ships static shadow (`update-executor-cohort.ts`), so the
-// executor is unreachable in production. Forced past that gate here with
-// the same `vi.importActual` + `mockImplementation` pattern the CLI's own
-// executor suite uses (`traycer-cli/src/host/__tests__/update-executor-cohort.test.ts`
-// and `update-executor.test.ts:31-38`) - never a shipped bypass.
 const cohortMock = vi.hoisted(() => ({ decide: vi.fn() }));
 vi.mock("../update-executor-cohort", async () => {
   const actual = await vi.importActual<
@@ -129,12 +124,8 @@ function baseDeps(
 }
 
 /**
- * `action: "activate"` is now the only claim action this executor's type
- * accepts - `start` was made unrepresentable at the type level after the
- * `DesktopActivationRequest.action` narrowing (a fresh `create` lands with
- * `continuation: null`, which can never satisfy the active-target rule any
- * advance here requires). Every test therefore seeds a genuinely parked
- * attempt first and resumes it - the one path the transition core allows.
+ * `action: "activate"` is now the only claim action this executor's type accepts.
+ * Every test therefore seeds a genuinely parked attempt first and resumes it - the one path the transition core allows.
  */
 async function seedParkedAttempt(
   layout: HostFsLayout,
@@ -198,10 +189,8 @@ async function seedParkedAttempt(
 }
 
 /**
- * Seeds an ACTIVE (not parked) record - as if a prior executor died
- * mid-`applying` without ever settling it. Used both for the
- * `requires-recovery` test and to give the cohort-gate/refused-segment tests
- * a syntactically legal `expected` identity they never actually reach.
+ * Seeds an ACTIVE (not parked) record - as if a prior executor died mid-`applying` without ever settling it.
+ * Used both for the `requires-recovery` test and to give the cohort-gate/refused-segment tests a syntactically legal `expected` identity they never actually reach.
  */
 async function seedOrphanedActiveAttempt(
   layout: HostFsLayout,
@@ -264,29 +253,12 @@ describe("runDesktopActivationSegment - cohort gate", () => {
     );
   }
 
-  // RETARGETED by Ticket 07 Finding 2, and the retarget is the point rather
-  // than a repair - read this before assuming the old assertion was simply
-  // re-baselined.
-  //
-  // This test used to seed a PARKED attempt and assert `cohort-disabled`,
-  // under the claim "the executor is unreachable under the shipped verdict".
-  // That claim is deliberately no longer true for a parked attempt: a parked
-  // `activate` record IS an adopted continuation, and the ruled kill-switch
-  // semantics are "stops admitting NEW attempts; never abandons an ADOPTED
-  // one". Leaving the old fixture would have pinned the stranding as correct.
-  //
-  // So the assertion is preserved exactly, and the FIXTURE moves to the case
-  // where the original claim still holds: nothing adopted on disk. The pair
-  // below pins both halves of that sentence, and each half is what makes the
-  // other non-vacuous.
+  // This test used to seed a PARKED attempt and assert `cohort-disabled`, under the claim "the executor is unreachable under the shipped verdict".
+  // That claim is deliberately no longer true for a parked attempt: a parked `activate` record IS an adopted continuation, and the ruled kill-switch semantics are "stops admitting NEW.
   it("rejects with cohort-disabled under the shipped cohort when NOTHING is adopted", async () => {
     await useShippedCohort();
 
     const layout = await freshLayout();
-    // No seed: an empty host home has no adopted continuation, so the gate is
-    // the thing that decides. `cohort-disabled` is reachable from nowhere else
-    // in this function, which is what makes it a gate assertion rather than a
-    // "something refused" assertion.
     const outcome = await runDesktopActivationSegment(
       activateRequest(
         { attemptId: "no-such-attempt", generation: 1, sequence: 1 },
@@ -306,10 +278,7 @@ describe("runDesktopActivationSegment - cohort gate", () => {
       activateRequest(identity, {}),
       baseDeps(layout, join(layout.rootDir, "cli-lock"), {}),
     );
-    // The specific negative matters more than the positive here: whatever the
-    // segment goes on to do, it must not be refused BY THE GATE. Asserting a
-    // concrete success shape instead would couple this to the drain/actuator
-    // defaults and start failing for reasons unrelated to the gate.
+    // The specific negative matters more than the positive here: whatever the segment goes on to do, it must not be refused BY THE GATE.
     expect(outcome).not.toEqual({
       kind: "rejected",
       reason: "cohort-disabled",
@@ -557,11 +526,6 @@ describe("runDesktopActivationSegment - requires-recovery is not Desktop's to an
     const layout = await freshLayout();
     const lockPath = join(layout.rootDir, "cli-lock");
 
-    // Seed an orphaned ACTIVE record, as if a prior executor died
-    // mid-`applying`. A subsequent claim naming exactly THIS attempt still
-    // finds it active (lock free), which is `requires-recovery` by design
-    // (`transition.ts` checks recovery before target comparison, for EVERY
-    // active record).
     const identity = await seedOrphanedActiveAttempt(layout, {
       targetVersion: "1.9.0",
     });
@@ -745,10 +709,7 @@ describe("runDesktopActivationSegment - refused segment (outer contention)", () 
         admission: "attempt-executor",
       },
       async () => {
-        // The lock is held by this very callback, so `seedParkedAttempt`
-        // (which acquires the same lock) cannot run here - a syntactically
-        // legal but never-consulted identity is enough, since the outer
-        // contention refuses before any claim is attempted.
+        // The lock is held by this very callback, so `seedParkedAttempt` (which acquires the same lock) cannot run here.
         const dummyIdentity: HostUpdateAttemptIdentity = {
           attemptId: "never-reached",
           generation: 1,

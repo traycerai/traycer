@@ -15,16 +15,8 @@ import {
 import { withCredentialsLock } from "./credentials-lock";
 
 /**
- * Write-ahead log for credentials mutations (credentials-file token-store tech
- * plan, §2). The sidecar `credentials.meta.json` is token-free and mutated only
- * under the lock. Every mutation runs prepare -> apply -> finalize, so any crash
- * between the credentials file and the sidecar is recoverable: the next lock
- * acquirer finds the `pending` record and either completes it (the apply
- * provably landed) or rolls it back (it did not).
- *
- * The sidecar also carries the sign-out tombstone (`lastMutation: "signOut"`)
- * and the monotonic mtime floor that survives a delete->recreate, so the host's
- * mtime-equality owner cache can never serve a stale owner.
+ * Write-ahead log for credentials mutations (credentials-file token-store tech plan, §2).
+ * The sidecar also carries the sign-out tombstone (`lastMutation: "signOut"`) and the monotonic mtime floor that survives a delete->recreate, so the host's mtime-equality owner cache can never serve a stale owner.
  */
 export type MutationKind = "signIn" | "rotate" | "signOut" | "updateProfile";
 
@@ -89,10 +81,7 @@ export function digestCredentials(credentials: StoredCredentials): string {
 }
 
 /**
- * Sign-out and interactive sign-in are tombstone transitions and take a fresh
- * epoch; rotate and profile updates preserve the session identity and its
- * epoch. The epoch is what a first-write migration continuation pins to detect
- * a sign-out landing under it (§2).
+ * Sign-out and interactive sign-in are tombstone transitions and take a fresh epoch; rotate and profile updates preserve the session identity and its epoch.
  */
 function nextEpochFor(op: MutationKind, currentEpoch: number): number {
   return op === "signOut" || op === "signIn" ? currentEpoch + 1 : currentEpoch;
@@ -135,12 +124,8 @@ export async function writeSidecarState(
 }
 
 /**
- * Runs prepare -> apply -> finalize for one mutation, all under a lock the
- * caller already holds. Returns `committed` with the new sidecar state, or
- * `commit-failed` after a bounded in-place retry of the local chain (the minted
- * pair, if any, stays with the caller for the continuation retry). A finalize
- * that never lands is not lost data: the apply already put the target on disk,
- * so recovery replays the finalize on the next acquisition.
+ * Runs prepare -> apply -> finalize for one mutation, all under a lock the caller already holds.
+ * A finalize that never lands is not lost data: the apply already put the target on disk, so recovery replays the finalize on the next acquisition.
  */
 export async function commitMutation(args: {
   readonly paths: CommitPaths;
@@ -211,16 +196,8 @@ export async function commitMutation(args: {
 }
 
 /**
- * Completes or rolls back a `pending` record deterministically (§2). Must be
- * called under the lock, with a state whose `pending` is non-null. Returns the
- * recovered committed state.
- *
- *   - pending signOut       -> complete the delete (ENOENT-tolerant), finalize
- *                              the tombstone including the floor candidate.
- *   - pending write + F     -> if F matches the target digest, the apply landed:
- *     matches digest           replay the mtime bump and finalize.
- *   - pending write + F      -> the apply never landed: roll back (clear pending,
- *     absent/mismatch          keep the committed state); the caller retries.
+ * Completes or rolls back a `pending` record deterministically (§2).
+ * Must be called under the lock, with a state whose `pending` is non-null.
  */
 export async function recoverPending(args: {
   readonly paths: CommitPaths;
@@ -259,10 +236,7 @@ export async function recoverPending(args: {
   }
 
   // Apply never landed -> roll back to the committed base, dropping the intent.
-  // If that base is a sign-out tombstone, F must be absent: a stale/foreign
-  // writer may have left a *different* valid file that the sidecar-blind host
-  // would otherwise adopt, resurrecting the logged-out session. Restore absence,
-  // carrying the floor above any stray file's mtime so a later sign-in outranks.
+  // If that base is a sign-out tombstone, F must be absent: a stale/foreign writer may have left a *different* valid file that the sidecar-blind host would otherwise adopt, resurrecting the logged-out session.
   if (state.lastMutation === "signOut") {
     const strayFloor = await fileMtimeMsOrZero(paths.credentialsPath);
     await deleteCredentialsFile(paths.credentialsPath);
@@ -275,15 +249,7 @@ export async function recoverPending(args: {
   return finalize(paths.metaPath, { ...state, pending: null });
 }
 
-/**
- * Store-initialization gate (§2). Acquires the lock and completes any pending
- * recovery, resolving:
- *   - `ready`             -> lock acquired, recovery done (or nothing pending).
- *   - `recovery-deferred` -> a live holder kept the lock within the bounded
- *                            wait; reads proceed lock-free, mutations recover at
- *                            their own acquisition, a background retry re-runs.
- *   - `unavailable`       -> an I/O failure; the store surfaces unavailable.
- */
+/** Store-initialization gate (§2). */
 export async function runInitGate(args: {
   readonly paths: CommitPaths;
   readonly lockPath: string;
@@ -301,9 +267,7 @@ export async function runInitGate(args: {
       },
       async () => {
         const read = await readSidecar(args.paths.metaPath);
-        // A missing sidecar is fresh/pre-refactor; a malformed one is left for
-        // fail-closed handling at mutation time. Only a readable pending record
-        // is recovered here.
+        // A missing sidecar is fresh/pre-refactor; a malformed one is left for fail-closed handling at mutation time.
         if (read.kind === "present" && read.state.pending !== null) {
           await recoverPending({ paths: args.paths, state: read.state });
         }
@@ -341,10 +305,7 @@ function parseSidecar(raw: string): SidecarState | null {
   }
   if (parsed === null || typeof parsed !== "object") return null;
   const obj = parsed as Record<string, unknown>;
-  // Range-validate the numeric fields, not just `typeof number`: a corrupt
-  // sidecar with a huge/NaN epoch or floor must be classified malformed here
-  // (fail-closed before any spend, rebuildable by an interactive sign-in), never
-  // returned `present` only to break later at `utimes` as a post-spend fault.
+  // Range-validate the numeric fields, not just `typeof number`: a corrupt sidecar with a huge/NaN epoch or floor must be classified malformed here (fail-closed before any spend, rebuildable by an interactive sign-in).
   if (
     !isEpoch(obj.epoch) ||
     !isMtimeMs(obj.mtimeFloorMs) ||
@@ -406,12 +367,8 @@ function isMutationKindOrNull(value: unknown): value is MutationKind | null {
   return value === null || isMutationKind(value);
 }
 
-// The largest mtime floor we accept from the sidecar. Bounded by the maximum
-// valid JS Date MINUS headroom for the largest post-parse bump (`bumpMtimeAbove`
-// escalates up to 16s for coarse clocks; the write path adds +1ms), so a
-// validated floor can never make `floor + bump` overflow Date and fault at
-// `utimes` AFTER a spend. A floor above this parses malformed (fail-closed
-// before any spend) rather than surfacing later as a post-spend commit fault.
+// The largest mtime floor we accept from the sidecar.
+// A floor above this parses malformed (fail-closed before any spend) rather than surfacing later as a post-spend commit fault.
 const MAX_MTIME_FLOOR_MS = 8_640_000_000_000_000 - 16_000;
 
 function isEpoch(value: unknown): value is number {

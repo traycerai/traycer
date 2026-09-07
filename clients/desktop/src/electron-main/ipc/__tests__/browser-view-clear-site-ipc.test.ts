@@ -2,16 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserPrimaryProfileCaptureResult } from "../../browser-view/storage/browser-storage-state";
 
-/**
- * Which jars "clear cookies for this site" and its host-driven twin reach.
- *
- * The durable `persist:` jar outlives the saved-logins pref, so a clear taken
- * while saving is OFF has to reach it anyway - otherwise the login stays on
- * disk and turning the pref back on restores the site the user cleared. The
- * jar the tiles are actually on has to be cleared too, or the open tile keeps
- * showing the site signed in. These pin both, plus the snapshot memory the
- * clear has to prune with them.
- */
 
 interface ClearCall {
   readonly domain: string;
@@ -40,21 +30,12 @@ const fixture = vi.hoisted(() => ({
   confirmations: [] as string[],
   /** The same confirmations' body copy, which is where the domain is named. */
   confirmationMessages: [] as string[],
-  /**
-   * Holds every confirmation open until the test releases it, so the answer's
-   * arrival - not a timer - is what orders the assertions around it.
-   */
   deferConfirmations: false,
   /** Answers the confirmation currently held open, when there is one. */
   releaseConfirmation: null as (() => void) | null,
   /** Frames the handlers asked the jar-plane registry to put on a host. */
   hostFrames: [] as string[],
   trustedCertificates: [] as string[],
-  /**
-   * The `jar.capturePrimaryProfile` callback registration handed the jar-plane
-   * registry - the ledgered wrapper under test is otherwise unreachable from
-   * here, since the registry mock below does not drive it on its own.
-   */
   capturePrimaryProfile: null as
     | (() => Promise<BrowserPrimaryProfileCaptureResult>)
     | null,
@@ -64,27 +45,10 @@ const fixture = vi.hoisted(() => ({
     storageState: { cookies: [], origins: [] },
     reason: null,
   } as BrowserPrimaryProfileCaptureResult,
-  /**
-   * Holds the whole-jar capture read open, so a test can run a clear to
-   * completion WHILE that read is still in flight - the race
-   * `captureLedgeredPrimaryProfile` brackets with a before-and-after mask.
-   * `null` means the read resolves immediately, as every other test wants.
-   */
   captureGate: null as Promise<void> | null,
-  /**
-   * Holds a site's jar clear open, so a test can read a capture from INSIDE
-   * the window between the ledger write and the clear actually finishing.
-   */
   deferSiteClears: false,
   /** Resolves the site clear currently held open, when there is one. */
   releaseSiteClear: null as (() => void) | null,
-  /**
-   * A fresh userData directory per test. The forget ledger is the REAL module
-   * here, and it persists: a test that leaves a clear pending (the ones that
-   * make a jar fail) would otherwise have the NEXT test's registration re-run
-   * that forget as its boot reconciliation, and every count below would be
-   * measuring the previous test.
-   */
   userDataDir: "/tmp/traycer-desktop-test-0",
 }));
 
@@ -101,13 +65,6 @@ vi.mock("electron", () => {
     BrowserWindow,
     dialog: {
       showSaveDialogSync: () => undefined,
-      /**
-       * The destructive handlers ask ASYNCHRONOUSLY. A dialog answered while
-       * main's event loop keeps turning is the point: main owns every
-       * `browser.sessions` socket, and a modal that froze the loop for as long
-       * as the dialog was up dropped every jar stream on the machine past the
-       * pong timeout.
-       */
       showMessageBox: (options: {
         readonly title: string;
         readonly message: string;
@@ -123,13 +80,7 @@ vi.mock("electron", () => {
           };
         });
       },
-      /**
-       * Present, because the download prompt genuinely cannot await its
-       * answer - and loud, because nothing under test here may use it. A
-       * destructive browser action that fell back to the blocking dialog would
-       * pass every assertion below while freezing main, so the fall back is
-       * failed here rather than measured.
-       */
+      /** Present, because the download prompt genuinely cannot await its answer - and loud, because nothing under test here may use it. */
       showMessageBoxSync: (): number => {
         throw new Error(
           "A destructive browser action must not block main with a synchronous dialog",
@@ -179,11 +130,7 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
   },
 }));
 
-/**
- * A jar here is just its partition name: what matters is WHICH one each clear
- * was handed. Memoised per partition, as the real module is - the handler tells
- * the two jars apart by object identity, so equal names must be one object.
- */
+/** Memoised per partition, as the real module is - the handler tells the two jars apart by object identity, so equal names must be one object. */
 vi.mock("../../browser-view/browser-session", () => {
   interface FakeSession {
     readonly partition: string;
@@ -239,12 +186,6 @@ vi.mock("../../browser-view/browser-session", () => {
   };
 });
 
-/**
- * The jar plane's registry, as a recorder: what matters here is WHICH host
- * frames each handler produces. Clearing one site produces none - the ledger
- * write is what reaches the hosts, including the ones that are not attached -
- * while forget-all still fans out.
- */
 vi.mock("../../browser-sessions/browser-sessions-owner", () => ({
   BrowserSessionsRegistry: class {
     constructor(options: {
@@ -365,10 +306,6 @@ function makeBridge() {
     safeSendToWindow: vi.fn(),
     fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
-    // The jar-plane registry is built during registration (H10), so a bridge
-    // double now has to answer for the host snapshot it subscribes to and the
-    // auth session its bearer comes from. Nothing here dials: no stream is
-    // opened unless a renderer asks for one.
     options: {
       authnBaseUrl: "https://authn.test",
       host: {
@@ -419,10 +356,6 @@ type DestructiveChannel =
   | "browserViewForgetLogins"
   | "browserViewTrustCertificate";
 
-/**
- * The registered handler itself, so a test can start it and hold it mid-flight.
- * Registration is asynchronous; the handler's own path to the dialog is not.
- */
 async function handlerFor(channel: DestructiveChannel): Promise<InvokeHandler> {
   const { registerBrowserViewIpc } = await import("../browser-view-ipc");
   const { RunnerHostInvoke } =
@@ -448,12 +381,7 @@ function flushMicrotasks(): Promise<void> {
 
 const LEDGER_HOST_ID = "host-1";
 
-/**
- * The forget ledger as the hosts see it: the revision every clear must bump,
- * and the digest each live stream pushes when that revision moves. The
- * subscription is the very edge the streams hang off, so a clear that pushed
- * nothing records nothing here.
- */
+/** The forget ledger as the hosts see it: the revision every clear must bump, and the digest each live stream pushes when that revision moves. */
 async function watchForgetLedger(): Promise<{
   readonly pushedDomains: string[][];
   readonly revision: () => number;
@@ -552,11 +480,7 @@ describe("clear-site IPC jar targeting", () => {
   });
 
   it("confirms in main before clearing ONE saved login, and refuses a cancelled dialog", async () => {
-    // H05's residual, closed by H10: a renderer looping the saved-sites list
-    // used to reproduce forget-all one domain at a time with no dialog, because
-    // it minted the `clearSite` frames itself. Main owns them now, so the ask
-    // and the act are separated by a native dialog the renderer cannot draw
-    // over.
+    // Main owns them now, so the ask and the act are separated by a native dialog the renderer cannot draw over.
     fixture.confirmAnswer = 0;
 
     const cancelled = await invokeHandler("browserViewClearSavedLoginSite", {
@@ -624,10 +548,7 @@ describe("clear-site IPC jar targeting", () => {
     expect(fixture.tabRecreations).toBe(1);
   });
 
-  // Root cause C: both of these were renderer-callable with nothing between
-  // the invoke and the irreversible act. Main asks now, and a refusal has to
-  // leave the world untouched - including the forget LEDGER, which is written
-  // before the first cookie goes and is what tells every host to prune.
+  // Main asks now, and a refusal has to leave the world untouched - including the forget LEDGER, which is written before the first cookie goes and is what tells every host to prune.
   it("forgets nothing, and records nothing, when the confirmation is declined", async () => {
     fixture.confirmAnswer = 0;
 
@@ -669,11 +590,6 @@ describe("clear-site IPC jar targeting", () => {
     expect(fixture.forgottenOrigins).toEqual(["example.com"]);
   });
 
-  // Settings' row and the tile menu are ONE act with one implementation. The
-  // row used to send `clearSite` to whichever hosts happened to be attached
-  // and touch neither the ledger nor this machine's jar, so the cookies were
-  // still here and the next whole-jar capture taught every host the login
-  // back. Three effects, and no frame.
   it("empties the jar, bumps the ledger and pushes a digest when Settings clears one site", async () => {
     const ledger = await watchForgetLedger();
     const before = ledger.revision();
@@ -701,11 +617,7 @@ describe("clear-site IPC jar targeting", () => {
     ledger.dispose();
   });
 
-  // The gap `withoutUnclearedForgets` exists for: the ledger write is the
-  // FIRST step of a clear, well before the jar operation it queues actually
-  // finishes, so a whole-jar capture taken from inside that window must not
-  // carry the site back to a host - it would re-teach exactly the login the
-  // clear is in the middle of removing.
+  // The gap `withoutUnclearedForgets` exists for: the ledger write is the FIRST step of a clear, well before the jar operation it queues actually finishes, so a whole-jar capture.
   it("omits a site's cookies from a whole-jar capture taken while its clear is recorded but still queued", async () => {
     fixture.deferSiteClears = true;
     const clearHandler = await handlerFor("browserViewClearSavedLoginSite");
@@ -742,10 +654,6 @@ describe("clear-site IPC jar targeting", () => {
     };
 
     const pending = clearHandler({}, { domain: "example.com" });
-    // The ledger write, the serializer queue and the jar call each add their
-    // own microtask hops before `clearBrowserSite` is reached and held open -
-    // polled rather than counted, since that hop count is an implementation
-    // detail of the serializer, not a contract of this test.
     for (let i = 0; i < 50 && fixture.clears.length === 0; i += 1) {
       await flushMicrotasks();
     }
@@ -800,10 +708,6 @@ describe("clear-site IPC jar targeting", () => {
     ledger.dispose();
   });
 
-  // The tile menu was the one destructive door with no dialog: a compromised
-  // renderer could navigate a tile it owns to any site and call this, signing
-  // the user out of it on every machine with nothing on screen. Main names the
-  // domain in the copy, from the tile's own current URL - not the caller's.
   it("names the domain in the tile clear's confirmation and mutates nothing when it is cancelled", async () => {
     fixture.confirmAnswer = 0;
     const ledger = await watchForgetLedger();
@@ -839,10 +743,6 @@ describe("clear-site IPC jar targeting", () => {
     ledger.dispose();
   });
 
-  // The confirmation is a BOUND on when the first mutation may happen, not a
-  // decoration in front of one. Nothing runs between the answer and the act
-  // because the handler awaits the answer and mutates next - so an answer that
-  // has not arrived has to leave the world exactly as it was.
   it("mutates nothing while the confirmation is still unanswered", async () => {
     fixture.deferConfirmations = true;
     const ledger = await watchForgetLedger();
@@ -876,15 +776,8 @@ describe("clear-site IPC jar targeting", () => {
     ledger.dispose();
   });
 
-  // The gap `captureLedgeredPrimaryProfile` closes: the mask is taken from
-  // BOTH sides of the asynchronous read (before AND after, unioned), because
-  // a site's whole clear - record, jar clear, mark cleared - can run to
-  // completion entirely inside the window the read is pending in. A mask
-  // taken only before the read would have seen nothing forgotten yet; one
-  // taken only after would have missed a clear that started and finished
-  // inside the window. The captureResult below still holds the cookie as if
-  // it were read before the clear, and the assertion is that the RETURNED
-  // capture omits it anyway.
+  // A mask taken only before the read would have seen nothing forgotten yet; one taken only after would have missed a clear that started and finished inside the window.
+  // The captureResult below still holds the cookie as if it were read before the clear, and the assertion is that the RETURNED capture omits it anyway.
   it("masks a site whose entire clear runs to completion while the whole-jar read that started before it was recorded is still pending", async () => {
     const clearHandler = await handlerFor("browserViewClearSavedLoginSite");
     fixture.captureResult = {

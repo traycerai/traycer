@@ -11,14 +11,8 @@ import type { HostOverviewUpdatesSummary } from "@/components/settings/panels/ho
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 
-/**
- * The card body's whole update surface: one sentence and up to two buttons.
- *
- * This is what the released layout got right and the restructure lost — the
- * answer in the card, the decisions behind a disclosure. Update now is primary
- * and appears only when there is a newer version to move to; Check now is quiet
- * and always available.
- */
+/** Update now is primary and appears only when there is a newer version to move to; Check now is quiet and
+ * always available. */
 export function HostOverviewUpdatesRegion(props: {
   readonly summary: HostOverviewUpdatesSummary;
   readonly degrade: OverviewDegradeReason | null;
@@ -42,9 +36,8 @@ export function HostOverviewUpdatesRegion(props: {
           SETTINGS_ROW_STACK.container,
         )}
       >
-        {/* `role="status"`: the check runs on its own now, so this sentence
-            changes with no user action to anchor it — a live region is the
-            only way a screen-reader user learns a check started or failed. */}
+        {/* `role="status"`: the check runs on its own now, so this sentence changes with no user action to anchor it -
+           a live region is the only way a screen-reader user learns a check started or failed. */}
         <span
           role="status"
           className={cn(

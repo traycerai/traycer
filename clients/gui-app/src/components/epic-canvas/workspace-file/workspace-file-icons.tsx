@@ -19,17 +19,10 @@ const workspaceFileIconResolver = createFileTreeIconResolver({
 });
 const WORKSPACE_FILE_ICON_SPRITE_SHEET = getBuiltInSpriteSheet("complete");
 
-// Sprite sheet hosts the `<symbol>` defs that every `WorkspaceFileIcon`
-// references via `<use href="#...">`. It must live in the DOM for the lifetime
-// of every consumer (tab strip, DnD overlay, file-tree panel). Mounted once at
-// the epic-canvas root (see `epic-shell.tsx`) so consumers never need to think
-// about it.
+// It must live in the DOM for the lifetime of every consumer (tab strip, DnD overlay, file-tree panel).
+// Mounted once at the epic-canvas root (see `epic-shell.tsx`) so consumers never need to think about it.
 export function WorkspaceFileIconSpriteSheet() {
-  // `trustedMarkupToReactNodes` runs DOMPurify.sanitize + a full DOM walk over
-  // the (large, STATIC) sprite-sheet markup. The input is a module constant, so
-  // the output never changes - memoize it so a re-render of this component (when
-  // `EpicShell` re-renders) doesn't re-sanitize the whole sheet (~19ms self in a
-  // tile-open commit).
+  // The input is a module constant, so the output never changes - memoize it so a re-render of this component (when `EpicShell` re-renders) doesn't re-sanitize the whole sheet (~19ms self in a tile-open commit).
   const spriteSheet = useMemo(
     () => trustedMarkupToReactNodes(WORKSPACE_FILE_ICON_SPRITE_SHEET, "svg"),
     [],

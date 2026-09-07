@@ -16,29 +16,14 @@ import {
 import { createUpdateMutationCapabilityAdoption } from "../contender";
 import { randomUUID } from "node:crypto";
 
-// F10/F4/F8/F12 (Ticket 05 review, round 5) need to substitute a predictable
-// nonce for exactly one call without disturbing every OTHER `randomUUID()`
-// caller this suite's production code paths reach (`store.ts`'s commit tmp
-// files, `consumeUpdateAttemptAdoption`'s own claim-path nonce). Wrapping the
-// real implementation and using `mockReturnValueOnce` per test - never a
-// blanket `mockReturnValue` - is what keeps every other call in this file
-// genuinely random, exactly as production runs it.
+// Wrapping the real implementation and using `mockReturnValueOnce` per test - never a blanket `mockReturnValue` - is what keeps every other call in this file genuinely random, exactly as production runs it.
 vi.mock("node:crypto", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:crypto")>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
 });
 
-// These tests certify the SHARED transport, deliberately not the CLI adapter
-// that re-exports its consume half. A suite left pointing at the adapter would
-// certify a pass-through while the real implementation sat unexercised - the
-// same "certifies a subset that reads as a total" failure this epic has hit
-// more than once.
-//
-// `publishUpdateAttemptAdoption` no longer exists as a function: minting is now
-// a two-line composition at each call site, so this local helper is exactly
-// what a production minter does. The forged-capability case below therefore
-// still exercises the REAL `createUpdateMutationCapabilityAdoption` refusal
-// rather than a stub of it.
+// These tests certify the shared transport, deliberately not the CLI adapter that re-exports its consume half.
+// The forged-capability case below therefore still exercises the real `createUpdateMutationCapabilityAdoption` refusal rather than a stub of it.
 async function publishUpdateAttemptAdoption(
   capability: UpdateMutationCapability,
   hostHomeDir: string,
@@ -51,12 +36,7 @@ async function publishUpdateAttemptAdoption(
   return writeAdoptionProof(adoption, hostHomeDir, nowMs);
 }
 
-// The parent-to-child transport for Ruling 1's adoption proof (design §3.2
-// "Transport"): nonce-named, user-private, age-bounded, and consumed on
-// read so a proof cannot be replayed. `consumeUpdateAttemptAdoption` is
-// total - every failure resolves to `absent` rather than throwing, which is
-// what lets a solo CLI invocation with no `--attempt-adoption` fall back to
-// ordinary acquisition unchanged.
+// `consumeUpdateAttemptAdoption` is total - every failure resolves to `absent` rather than throwing, which is what lets a solo CLI invocation with no `--attempt-adoption` fall back to ordinary acquisition unchanged.
 
 const roots: string[] = [];
 
@@ -105,9 +85,6 @@ async function writeRawAdoptionFile(
   );
 }
 
-// A real `FileHandle`'s prototype, obtained through a throwaway open/close so
-// the `sync` spy below wraps the ACTUAL class every `open()` call returns an
-// instance of, rather than a hand-built stand-in that only resembles one.
 let fileHandlePrototypeCache: object | null = null;
 async function realFileHandlePrototype(): Promise<object> {
   if (fileHandlePrototypeCache !== null) return fileHandlePrototypeCache;
@@ -307,9 +284,7 @@ describe("consumeUpdateAttemptAdoption - hand-authored proof edge cases", () => 
 
   it("resolves absent/nonce-mismatch when the file's own nonce field disagrees with the requested one", async () => {
     const hostHomeDir = await freshHome();
-    // A proof correctly named on disk for REAL_NONCE, but whose CONTENT
-    // claims a different nonce - the shape a copy-to-another-path attack
-    // would produce.
+    // A proof correctly named on disk for REAL_NONCE, but whose content claims a different nonce - the shape a copy-to-another-path attack would produce.
     await writeRawAdoptionFile(hostHomeDir, REAL_NONCE, {
       nonce: "22222222-2222-2222-2222-222222222222",
       issuedAtMs: 0,
@@ -354,10 +329,7 @@ describe("consumeUpdateAttemptAdoption - hand-authored proof edge cases", () => 
 
   it("resolves absent/expired for a FUTURE-dated issuedAtMs beyond the window, symmetric with the backward case above", async () => {
     const hostHomeDir = await freshHome();
-    // A proof issued far in the future relative to `nowMs` - a backward
-    // wall-clock step on the writer, or a corrupted stamp - is not a grant
-    // anyone can still use, exactly like the too-old case above. The
-    // `Math.abs()` check treats both directions identically.
+    // A proof issued far in the future relative to `nowMs` - a backward wall-clock step on the writer, or a corrupted stamp - is not a grant anyone can still use, exactly like the too-old case above.
     await writeRawAdoptionFile(hostHomeDir, REAL_NONCE, {
       nonce: REAL_NONCE,
       issuedAtMs: UPDATE_ADOPTION_MAX_AGE_MS + 1,
@@ -415,11 +387,7 @@ describe("consumeUpdateAttemptAdoption - hand-authored proof edge cases", () => 
   });
 });
 
-// F10 (round 5 review): the existing suite exercised the round trip but never
-// bound mode, O_EXCL, or fsync to the file `writeAdoptionProof` actually
-// produces - each one could be silently removed and every test above would
-// stay green. These three tests read the PRODUCTION-written file's real
-// on-disk properties (or observe the real syscall), not a fixture's.
+// These three tests read the production-written file's real on-disk properties (or observe the real syscall), not a fixture's.
 describe("writeAdoptionProof - properties the file itself must carry", () => {
   it("writes the proof file with mode 0600 - stat'd on the file writeAdoptionProof itself created", async () => {
     const hostHomeDir = await freshHome();
@@ -431,9 +399,7 @@ describe("writeAdoptionProof - properties the file itself must carry", () => {
     const info = await stat(adoptionFilePath(hostHomeDir, published.nonce));
     expect(info.mode & 0o777).toBe(0o600);
 
-    // Ablated: changed the production `open()` call's mode argument from
-    // `0o600` to `0o644` and re-ran this test alone - it went red
-    // (`0o644 !== 0o600`). Reverted immediately.
+    // Ablated: changed the production `open()` call's mode argument from `0o600` to `0o644` and re-ran this test alone - it went red (`0o644 !== 0o600`).
     await published.cancel();
   });
 
@@ -460,10 +426,7 @@ describe("writeAdoptionProof - properties the file itself must carry", () => {
       "someone else's live proof",
     );
 
-    // Ablated: dropped `constants.O_EXCL` from the production `open()` flags
-    // (kept `O_WRONLY | O_CREAT`) and re-ran this test alone - it went red on
-    // BOTH assertions: the write no longer threw, and the pre-existing
-    // content was replaced with the new proof's JSON. Reverted immediately.
+    // Reverted immediately.
   });
 
   it("fsyncs the proof before returning - the real FileHandle.sync() is actually invoked", async () => {
@@ -478,17 +441,12 @@ describe("writeAdoptionProof - properties the file itself must carry", () => {
     );
 
     expect(syncSpy).toHaveBeenCalled();
-    // Ablated: commented out `await handle.sync();` in production and
-    // re-ran this test alone - it went red (`syncSpy` never called).
-    // Reverted immediately.
+    // Ablated: commented out `await handle.sync();` in production and re-ran this test alone - it went red (`syncSpy` never called).
     await published.cancel();
   });
 });
 
-// F4 (HIGH, round 5): the existing round-trip test replays sequentially, so
-// it cannot see a race between concurrent consumers. The reviewer measured
-// the real one: 32 parallel `consumeUpdateAttemptAdoption` calls against one
-// proof, 8 accepted under the old read-then-`rm` implementation.
+// F4 (high, round 5): the existing round-trip test replays sequentially, so it cannot see a race between concurrent consumers.
 describe("consumeUpdateAttemptAdoption - concurrent consumption is one-shot", () => {
   it("exactly one of 32 parallel consumers adopts; every other one is absent", async () => {
     const hostHomeDir = await freshHome();
@@ -511,28 +469,14 @@ describe("consumeUpdateAttemptAdoption - concurrent consumption is one-shot", ()
     expect(adopted).toHaveLength(1);
     expect(absent).toHaveLength(CONCURRENCY - 1);
 
-    // Ablated: reverted production to the prior read-then-`rm` sequence
-    // (open, readFile, then `rm(path)`) and re-ran this exact test. All 32
-    // parallel calls returned `adopted` (`toHaveLength(1)` failed with
-    // length 32) - this suite's single-process event loop interleaves the
-    // 32 `open()`s before any of them gets to `rm`, so every one of them
-    // observes the file still present and reads a still-live proof. Worse
-    // than the reviewer's own 8/32 (their run presumably had rm() calls
-    // interleaved in), but the same class of bug and unambiguously red.
+    // Ablated: reverted production to the prior read-then-`rm` sequence (open, readFile, then `rm(path)`) and re-ran this exact test.
     // Reverted before committing anything.
   });
 });
 
-// F8 (MEDIUM, round 5): a nonce is a caller-supplied string
-// (`--attempt-adoption <nonce>`), never validated as a path. Before the
-// `NONCE_PATTERN` gate, a traversal nonce reached `join()` directly and both
-// opened AND deleted a real file outside the host home before any validation
-// ran - this deleted a file outside the host home during the reviewer's own
-// testing.
+// F8 (medium, round 5): a nonce is a caller-supplied string (`--attempt-adoption <nonce>`), never validated as a path.
 describe("consumeUpdateAttemptAdoption - nonce path traversal cannot escape the host home", () => {
-  // Every one of these fails `NONCE_PATTERN` (which requires a bare
-  // `[A-Za-z0-9][A-Za-z0-9-]*` token) and must be rejected before any
-  // filesystem call - this is the broad alphabet-gate coverage.
+  // Every one of these fails `NONCE_PATTERN` (which requires a bare `[A-Za-z0-9][A-Za-z0-9-]*` token) and must be rejected before any filesystem call - this is the broad alphabet-gate coverage.
   const REJECTED_NONCES = [
     "../../../victim",
     "../victim",
@@ -555,14 +499,7 @@ describe("consumeUpdateAttemptAdoption - nonce path traversal cannot escape the 
     },
   );
 
-  // Mirrors the EXACT (unguarded) naming scheme `adoptionPath` builds -
-  // `.update-attempt-adoption.<nonce>.json` joined onto the host home - so a
-  // victim placed here sits precisely where a `NONCE_PATTERN` bypass would
-  // reach. Confirmed by direct computation that `../../../victim` and
-  // `foo/../../victim` both walk past the host home's own parent through
-  // this exact construction (the concatenated `.update-attempt-adoption.`
-  // prefix consumes one `..` level before the nonce's own `../..` still
-  // escapes further).
+  // Mirrors the exact (unguarded) naming scheme `adoptionPath` builds - `.update-attempt-adoption.<nonce>.json` joined onto the host home - so a victim placed here sits precisely where a `NONCE_PATTERN` bypass would reach.
   function vulnerableNonceTargetPath(
     hostHomeDir: string,
     nonce: string,
@@ -575,18 +512,10 @@ describe("consumeUpdateAttemptAdoption - nonce path traversal cannot escape the 
     async (escapingNonce) => {
       const hostHomeDir = await freshHome();
       const victimPath = vulnerableNonceTargetPath(hostHomeDir, escapingNonce);
-      // Sanity: this nonce's unguarded target really is outside the host
-      // home - if this ever stops being true (e.g. the naming scheme
-      // changes), the test's premise is gone and it must be revisited
-      // rather than silently proving nothing.
       expect(resolve(victimPath).startsWith(resolve(hostHomeDir) + "/")).toBe(
         false,
       );
       const victimContents = "do not touch me";
-      // `dirname(victimPath)` lands inside this test's own mkdtemp `root`
-      // (already tracked by `freshHome()`'s `roots` push), never a real
-      // machine path - the escape is real relative to the host home, but
-      // stays fully contained within this test's disposable temp tree.
       await mkdir(dirname(victimPath), { recursive: true });
       await writeFile(victimPath, victimContents);
 
@@ -601,28 +530,14 @@ describe("consumeUpdateAttemptAdoption - nonce path traversal cannot escape the 
       const { readFile } = await import("node:fs/promises");
       await expect(readFile(victimPath, "utf8")).resolves.toBe(victimContents);
 
-      // Ablated: reverted `adoptionPath` to the prior unguarded
-      // `join(resolve(hostHomeDir), ...)` construction (no `NONCE_PATTERN`
-      // check, no dirname belt-and-braces) and re-ran this test with both
-      // nonces. Both went red on the FIRST assertion (`cause: "malformed"`,
-      // not `"malformed-nonce"` - the unguarded resolver let the call reach
-      // the real file and try to JSON.parse its plain-text content) and,
-      // separately confirmed with a throwaway repro script, the victim was
-      // truly gone afterward (`readFile` rejected ENOENT): the fixed
-      // `consumeUpdateAttemptAdoption` RENAMES the resolved path to a
-      // private claim name before reading it, so under the unguarded
-      // resolver this moved the real victim file out from under itself and
-      // unlinked the claim copy in its `finally` regardless of the parse
-      // outcome. Reverted before committing anything.
+      // Ablated: reverted `adoptionPath` to the prior unguarded `join(resolve(hostHomeDir), ...)` construction (no `NONCE_PATTERN` check, no dirname belt-and-braces) and re-ran this test with both nonces.
+      // Reverted before committing anything.
     },
   );
 });
 
-// F12 (LOW, round 5): the caller of `writeAdoptionProof` never receives the
-// `cancel()` handle on a throw path - the promise rejects - so it has no way
-// to clean up. Production now `rm`s the created path itself before
-// re-throwing. Prove a failure AFTER the file exists (write succeeded, sync
-// did not) still leaves nothing behind.
+// F12 (low, round 5): the caller of `writeAdoptionProof` never receives the `cancel()` handle on a throw path - the promise rejects - so it has no way to clean up.
+// Production now `rm`s the created path itself before re-throwing.
 describe("writeAdoptionProof - a write/sync failure leaves no file behind", () => {
   it("a failing sync() removes the partially-written proof rather than leaking it", async () => {
     const hostHomeDir = await freshHome();
@@ -647,10 +562,6 @@ describe("writeAdoptionProof - a write/sync failure leaves no file behind", () =
     // No file left behind at all - not a truncated one, not a stale one.
     await expect(stat(targetPath)).rejects.toThrow();
 
-    // Ablation performed against a scratch copy: removing the `catch`
-    // block's `await rm(path, { force: true })` (so the function just
-    // re-threw) and re-running this test reproduced exactly the leak the
-    // finding describes - `stat(targetPath)` resolved instead of rejecting.
     // Reverted before committing anything.
   });
 });

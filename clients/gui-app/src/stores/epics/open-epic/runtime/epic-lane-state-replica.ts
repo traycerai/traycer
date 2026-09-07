@@ -1,63 +1,6 @@
 /**
- * The records lane's read model: `epic.state.subscribe@1.0` rows in, the same
- * raw populations the `@1` root doc produces out.
- *
- * This is the second HEAD of one projection, not a second projection. The `@1`
- * head reads artifacts, tombstones, the epic header and the role claims out of
- * a `Y.Doc`; this one decodes them from typed rows. Both hand
- * `EpicRawProjectionSources` to `composeEpicProjection`, which owns the unions,
- * the dead-mutation sweep, the role-claim visibility filter, the optimistic
- * overlay and the tree. That is what makes the cutover's exit line -
- * "indistinguishable to the projection layer from the legacy adapter on
- * identical epic content" - a structural property rather than an aspiration:
- * the only thing two adapters CAN differ on is what they put in, which is
- * exactly what the equivalence test compares.
- *
- * ## One keyed set, one reconciliation
- *
- * The lane carries five populations and the seam gives them one map from
- * `rowId` to row, so this composes ONE `createRecordTable` over the whole
- * `EpicStateRow` union rather than one table per population. That is not a
- * convenience: a `remove` change carries a bare `rowId`, so a per-population
- * table would have to parse the key prefix back apart to decide which table
- * owns it - and `epic-state-rows.ts` states plainly that the prefixes are
- * opaque to the replica and are never parsed by it. One table keyed by the
- * seam's own `rowId` never asks the question.
- *
- * `buildSlice` is where the union is demultiplexed, by `row.kind`, once per
- * recompute. Everything above it sees five ordinary slices.
- *
- * ## `epic-meta-patch` is merged BEFORE the table sees it
- *
- * The table's upsert REPLACES the row it holds, which is right for every other
- * population and wrong for exactly one: a delta's `epicMeta` carries only the
- * fields that commit changed, and installing it wholesale drops the field the
- * host deliberately did not restate. So a patch is folded onto the held whole
- * value here and handed down as a whole `epic-meta` row at the patch's own
- * revision. The alternative - teaching the shared table to merge - would put a
- * population-specific rule inside the one algorithm every plane shares.
- *
- * A patch with nothing held is dropped rather than installed as if it were
- * whole: a partial `EpicMeta` is not an `EpicMeta`, and the snapshot that
- * establishes the entity is the only thing that may create it.
- *
- * ## What this replica does NOT do
- *
- * It does not consume `epic.listCommentThreads`. The seam's
- * `RecordPollAnswerEvent` is in the union because the same replica shape serves
- * a polled plane elsewhere, but that unary answers PER ARTIFACT, and feeding a
- * one-artifact answer through a whole-set snapshot would retract every artifact
- * row, every claim and the epic header along with the threads it did not carry.
- * A scoped-snapshot arm is a second reconciliation algorithm by another name.
- * The poll therefore stays where it is - `epic.listCommentThreads` is on the
- * released floor, so it is the source on EVERY host and the cold-read path on
- * both arms - and consumers prefer whichever source has spoken about the
- * artifact in hand.
- *
- * It also does not decide replacement. A frame whose epoch is not this
- * replica's answers `"requires-replacement"` and the RUNTIME drives the
- * rebuild, so two lanes reporting one epoch change coalesce into a single
- * replacement instead of racing two.
+ * One record table over the whole EpicStateRow union; prefixes are opaque.
+ * Merge epic-meta-patch before the table sees it; a patch with nothing held is dropped.
  */
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { EpicMeta } from "@traycer/protocol/host/epic/state-subscribe";
@@ -94,26 +37,8 @@ import { artifactProjectionsEq, arrayShallowEq } from "../projection-helpers";
 import { createRecordTable, type RecordTable } from "./record-table";
 
 /**
- * Whether a reset means the next snapshot may come from a store that never saw
- * this session's removals.
- *
- * The question the absorbing-retraction rule turns on. Rule 3 of
- * `record-table.ts` justifies keeping a tombstone for the life of the session
- * with an ordering argument about ONE store - "the host applies a removal
- * before it emits one, so a response that still carries the row was
- * necessarily issued before the retraction". Four of the six replacement
- * reasons end that argument, and the two that do not are the ones where the
- * SAME authority re-serves the SAME epoch:
- *
- *  - `resume-too-old` - the history was compacted past our cursor. Same host,
- *    same store, and a poll answer issued before a removal can still be in
- *    flight, which is exactly what the tombstone is for.
- *  - `security-epoch-changed` - authorization moved, the store did not.
- *
- * A CLIENT-origin reset is a user hitting a recovery affordance against the
- * authority already serving them, so it keeps them too. Enumerated rather than
- * defaulted: a reason added later is a compile error here, which is the point -
- * getting this wrong in the retaining direction hides a row for a whole session.
+ * Whether a reset means the next snapshot may come from a store that never saw this session's
+ * removals. The question the absorbing-retraction rule turns on.
  */
 function replacesThePositionSpace(cause: ReplicaResetCause): boolean {
   if (cause.origin === "client") return false;
@@ -129,26 +54,14 @@ function replacesThePositionSpace(cause: ReplicaResetCause): boolean {
   }
 }
 
-/**
- * A lane row as the table holds it: the seam's envelope, flattened.
- *
- * The revision is lifted out of `RecordRow` and onto the held row because the
- * shared table's staleness test is `(candidate, held) => boolean` over the ROW,
- * not over the envelope - so a row that kept its revision one level up could
- * not be judged at all.
- */
+/** A lane row as the table holds it: the seam's envelope, flattened. */
 interface HeldLaneRow {
   readonly rowId: string;
   readonly revision: number;
   readonly row: EpicStateRow;
 }
 
-/**
- * The populations this lane produces, in the shape the shared composition
- * consumes. A subset of `EpicRawProjectionSources` - the doc arms are not this
- * head's to produce - plus the comment threads, which the `@1` head has no
- * source for at all.
- */
+/** The populations this lane produces, in the shape the shared composition consumes. */
 export interface EpicLaneStateSlices {
   readonly artifacts: ArtifactsSlice;
   readonly deletedArtifacts: DeletedArtifactsSlice;
@@ -157,12 +70,7 @@ export interface EpicLaneStateSlices {
   readonly commentThreads: CommentThreadsSlice;
 }
 
-/**
- * The lane head's populations before its first snapshot. Exported because the
- * records replica holds this as its starting value on the lane arm - one shared
- * reference, so a session that has not yet heard from the lane publishes the
- * same empty projection every time it recomputes.
- */
+/** The lane head's populations before its first snapshot. */
 export const EMPTY_LANE_STATE_SLICES: EpicLaneStateSlices = Object.freeze({
   artifacts: EMPTY_PROJECTED_SLICES.artifacts,
   deletedArtifacts: EMPTY_PROJECTED_SLICES.deletedArtifacts,
@@ -182,26 +90,11 @@ export interface EpicLaneStateReplica {
   apply(event: EpicStateLaneEvent): ReplicaApplyOutcome;
   /** The populations, as last recomputed. */
   slices(): EpicLaneStateSlices;
-  /**
-   * The furthest point on this lane this replica has fully APPLIED, or `null`
-   * when it holds nothing.
-   *
-   * This is what the state adapter's `readAppliedCursor` must be wired to, and
-   * the distinction is the whole reason it lives on the replica: an
-   * adapter-held arrival counter would advance on a delta the replica ignored -
-   * a stale revision, an absorbed tombstone, a torn apply - and the next resume
-   * would ask the host to continue from work this client never finished. It
-   * moves only after the envelope is fully applied, never before.
-   */
+  /** The furthest point on this lane this replica has fully APPLIED, or `null` when it holds nothing. */
   appliedCursor(): LaneCursor | null;
   /** The epoch this replica's rows belong to, or `null` before the first lead. */
   authorityEpoch(): string | null;
-  /**
-   * The serving host's trust in the rows it sent, or `null` before any lead.
-   * Current-session state: a restart under the same epoch surfaces `false`
-   * only via a fresh lead, and there is never a mid-session `trustChanged`
-   * carrying `false`.
-   */
+  /** The serving host's trust in the rows it sent, or `null` before any lead. */
   trust(): SeedTrust | null;
   reset(cause: ReplicaResetCause): void;
 }
@@ -210,29 +103,7 @@ function applied(cursor: LaneCursor | null): ReplicaApplyOutcome {
   return { kind: "applied", cursor };
 }
 
-/**
- * Give every artifact the lane knows about, and has no threads for, an
- * AUTHORITATIVELY EMPTY list.
- *
- * `selectLaneCommentThreads` already draws the distinction this fills in: a
- * missing key means "the lane has said nothing about this artifact" and sends
- * the caller to the poll, while an empty array means "the lane says there are
- * none". Only the SELECTOR knew that. The builder emitted a key exclusively for
- * artifacts that HAD threads, so the two states were indistinguishable coming
- * out of it - and a collaborator deleting an artifact's last thread took its
- * key away, which read as lane silence and fell the surface back to whatever
- * the last poll had said. The deleted thread stayed on screen until an
- * unrelated refresh.
- *
- * Called AFTER the ingest loop, never before: that loop pushes into these
- * arrays, so a shared constant seeded ahead of it would let one artifact's
- * thread land in every other artifact's list. A fresh `[]` each time is free
- * for the change gate - `commentThreadsEq` compares length first, so two
- * empties are equal without being the same object.
- *
- * A sibling of the builder rather than a block inside it because the builder is
- * already at the complexity ceiling, and this is one self-contained decision.
- */
+/** Give every artifact the lane knows about, and has no threads for, an AUTHORITATIVELY EMPTY list. */
 function seedAuthoritativeEmptyThreadLists(
   threadsByArtifactId: Record<string, CommentThreadWire[]>,
   artifactIds: readonly string[],
@@ -257,9 +128,8 @@ function commentThreadsEq(
     const right = b.byArtifactId[key];
     if (left === right) return true;
     if (left.length !== right.length) return false;
-    // Reference equality per thread: every thread object on this lane is
-    // rebuilt only when its own row is re-ingested, so a recompute that
-    // re-groups untouched threads hands back the same objects.
+    // Reference equality per thread: every thread object on this lane is rebuilt only when its own row
+    // is re-ingested, so a recompute that re-groups untouched threads hands back the same objects.
     return left.every((thread, index) => thread === right[index]);
   });
 }
@@ -304,15 +174,7 @@ function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
   );
 }
 
-/**
- * Demultiplex the one keyed set into the five populations.
- *
- * The `@1` head's own field-for-field mapping, applied to typed rows instead of
- * `Y.Map` reads - so a field that means one thing in one head cannot mean
- * another in the other. Where the wire row already IS the projection's shape
- * (comment threads), it is passed through by reference rather than copied, so a
- * recompute that touched one artifact does not churn every thread object.
- */
+/** Demultiplex the one keyed set into the five populations. */
 function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   const artifactsById: Record<string, ArtifactProjection> = {};
   const artifactIds: string[] = [];
@@ -333,16 +195,8 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
           title: record.title,
           folderName: record.folderName,
           parentId: record.parentId,
-          // ALWAYS `null` on this head, and structurally so: the lane's
-          // artifact row OMITS `artifactRoomId` (`epicArtifactRecordSchema`
-          // strips it from every arm), because room routing is not this
-          // wire's addressing model - a body is attached by ARTIFACT ID over
-          // `artifact.subscribe`, under an authority epoch, and there is no
-          // room name to carry. Synthesising one would be a fabricated
-          // authority-side fact; leaving it null says exactly what the lane
-          // knows. This is the one projected field the two heads cannot agree
-          // on, and the equivalence test states it rather than papering over
-          // it.
+          // ALWAYS `null` on this head, and structurally so: the lane's artifact row OMITS `artifactRoomId`
+          // (`epicArtifactRecordSchema` strips it from every arm), because room routing is not this wire's
           artifactRoomId: null,
           createdAt: record.createdAt,
           updatedAt: record.updatedAt,
@@ -374,10 +228,8 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       }
       case "comment-thread": {
         const record = row.record;
-        // The wire row extends `commentThreadWireSchema` verbatim, so the
-        // thread the surface reads IS this row minus the two fields the lane
-        // wrapped it in. Passed by reference - a copy here would hand every
-        // consumer a fresh object on every unrelated recompute.
+        // The wire row extends `commentThreadWireSchema` verbatim, so the thread the surface reads IS this
+        // row minus the two fields the lane wrapped it in.
         if (Object.hasOwn(threadsByArtifactId, record.artifactId)) {
           threadsByArtifactId[record.artifactId].push(record);
         } else {
@@ -392,11 +244,8 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
         epicHeader = { title: row.meta.title, updatedAt: row.meta.updatedAt };
         break;
       case "epic-meta-patch":
-        // Unreachable: a patch is folded onto the held whole value before the
-        // table ever sees it (see the module doc), so nothing of this shape is
-        // ever HELD. Kept as an explicit arm rather than a default so a future
-        // row kind is a compile error here instead of a silently dropped
-        // population.
+        // Unreachable: a patch is folded onto the held whole value before the table ever sees it (see the
+        // module doc), so nothing of this shape is ever HELD.
         break;
     }
   }
@@ -421,15 +270,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   };
 }
 
-/**
- * This head's populations, in the shape the shared composition consumes.
- *
- * The doc arms are EMPTY here and that is structural rather than a stub: a lane
- * connection has no root `Y.Doc`, so there is no doc-side chat or terminal-agent
- * entry to union in, and the record plane covers both populations on any host
- * that serves the lanes at all. Production and the equivalence test go through
- * this one function so the test cannot prove a mapping the runtime does not use.
- */
+/** This head's populations, in the shape the shared composition consumes. */
 export function laneRawProjectionSources(
   slices: EpicLaneStateSlices,
 ): EpicRawProjectionSources {
@@ -452,20 +293,9 @@ export function createEpicLaneStateReplica(
     createRecordTable(
       {
         rowKey: (row) => row.rowId,
-        /**
-         * The same key the row is held by. A lane `remove` names one `rowId`
-         * exactly, so the shared algorithm's coarser-removal arm has nothing to
-         * hit here - unlike the chat plane, whose removal frame carries no owner.
-         */
+        /** The same key the row is held by. */
         retractionIdOf: (row) => row.rowId,
-        /**
-         * Every row on this lane is visible to whoever can see the epic. Artifacts,
-         * tombstones and comment threads have no owner at all, and the role-claim
-         * SET is filtered per viewer downstream, inside the shared composition,
-         * where the chats and terminal agents it is filtered against are also in
-         * hand. Filtering here would need a claim set this table cannot see the
-         * inputs for.
-         */
+        /** Every row on this lane is visible to whoever can see the epic. */
         isVisibleToUser: () => true,
         supersedesOnSnapshot: (candidate, held) =>
           candidate.revision > held.revision,
@@ -477,10 +307,6 @@ export function createEpicLaneStateReplica(
       },
       {
         getCurrentUserId,
-        // This plane holds no optimistic stand-ins and no provenance marks: the
-        // overlay's record-plane marks are the chat and terminal planes' concern,
-        // and an artifact's optimistic rename rides the metadata overlay, which
-        // reads the composed projection rather than this table.
         onBeforePublish: () => {},
         onRowServed: () => {},
         onUpsertAdmitted: () => {},
@@ -499,13 +325,7 @@ export function createEpicLaneStateReplica(
     return { title: header.title, updatedAt: header.updatedAt };
   }
 
-  /**
-   * A row as the table should hold it, with a metadata patch already folded.
-   *
-   * `null` means the change must be dropped: a patch with nothing held is a
-   * partial `EpicMeta`, and a partial is not an `EpicMeta`. Only a snapshot may
-   * establish the entity.
-   */
+  /** A row as the table should hold it, with a metadata patch already folded. */
   function heldRowFor(row: RecordRow<EpicStateRow>): HeldLaneRow | null {
     if (row.row.kind !== "epic-meta-patch") {
       return { rowId: row.rowId, revision: row.revision, row: row.row };
@@ -522,13 +342,6 @@ export function createEpicLaneStateReplica(
   function applyChange(change: RecordChange<EpicStateRow>): boolean {
     if (change.kind === "remove") {
       // The shared table types its removal reason as `ChatRecordRemovalReason`
-      // - a chat-plane enum on the one algorithm every plane shares, which is a
-      // seam wart rather than a statement about this lane. It is carried into a
-      // retraction map that THIS plane never publishes (only the chat and
-      // terminal planes surface `chatRetractions`), so the mapping is lossless
-      // in effect; the adapter's own closed constant
-      // (`ARTIFACT_TOMBSTONE_REMOVE_REASON` / `COMMENT_THREAD_REMOVE_REASON`)
-      // stays the diagnostic, and both of them ARE deletions.
       return table.applyRemoval(change.rowId, "deleted") !== null;
     }
     const held = heldRowFor(change.row);
@@ -541,19 +354,14 @@ export function createEpicLaneStateReplica(
   ): ReplicaApplyOutcome {
     epoch = event.watermark.authorityEpoch;
     seedTrust = event.trust;
-    // The fence is "everything currently held is older than this answer",
-    // which is exactly true for a lane snapshot: it is the authority's
-    // complete row set at a watermark the client has not reached. Passing
-    // the poll's `null` would use the previous answer's fence and retain
-    // rows this snapshot deliberately omits.
+    // The fence is "everything currently held is older than this answer", which is exactly true for a
+    // lane snapshot: it is the authority's complete row set at a watermark the client has not reached.
     const fence = table.ingestSeq();
     const rows: HeldLaneRow[] = [];
     for (const row of event.rows) {
       const held = heldRowFor(row);
-      // A snapshot never carries a patch - the contract restates the
-      // metadata whole - so `null` here would be a contract violation
-      // rather than a drop worth tolerating silently. Skipping it keeps
-      // the apply total; the row simply does not exist.
+      // A snapshot never carries a patch - the contract restates the metadata whole - so `null` here
+      // would be a contract violation rather than a drop worth tolerating silently.
       if (held !== null) rows.push(held);
     }
     const publication = table.applySnapshot(rows, fence);
@@ -566,9 +374,8 @@ export function createEpicLaneStateReplica(
     event: Extract<EpicStateLaneEvent, { kind: "record-transaction" }>,
   ): ReplicaApplyOutcome {
     if (epoch !== null && event.cursor.authorityEpoch !== epoch) {
-      // The epoch moved. The replica does not rebuild itself: the runtime
-      // does, so two lanes reporting one change coalesce into one
-      // replacement instead of racing.
+      // The epoch moved. The replica does not rebuild itself: the runtime does, so two lanes reporting
+      // one change coalesce into one replacement instead of racing.
       return {
         kind: "requires-replacement",
         reason: "authority-epoch-changed",
@@ -581,10 +388,8 @@ export function createEpicLaneStateReplica(
     for (const change of event.changes) {
       if (applyChange(change)) moved = true;
     }
-    // The cursor advances ONLY here, after every change in the envelope
-    // has been offered to the replica - never per change, and never on
-    // arrival. A position persisted mid-envelope would let a resume ask
-    // the host to continue past a tombstone this client had not absorbed.
+    // The cursor advances ONLY here, after every change in the envelope has been offered to the
+    // replica - never per change, and never on arrival.
     cursor = event.cursor;
     if (moved) onChanged();
     return applied(cursor);
@@ -596,11 +401,8 @@ export function createEpicLaneStateReplica(
     if (epoch !== null && event.authorityEpoch !== epoch) {
       return { kind: "ignored", reason: "epoch-mismatch" };
     }
-    // OVERWRITE, with no revision guard: trust is not an entity, the host
-    // is its sole writer, and there is nothing to be stale against. It
-    // arrives from the `trustChanged` transition AND from every `resumed`
-    // lead, because a resuming client cannot inherit it - the serving
-    // host may have restarted seed-only since the cursor was persisted.
+    // OVERWRITE, with no revision guard: trust is not an entity, the host is its sole writer, and
+    // there is nothing to be stale against.
     seedTrust = event.trust;
     onChanged();
     return applied(cursor);
@@ -617,9 +419,8 @@ export function createEpicLaneStateReplica(
         case "record-trust":
           return applyRecordTrust(event);
         case "record-poll-answer":
-          // Never emitted by this lane's adapter, and deliberately not wired -
-          // see the module doc. Ignored with a reason rather than dropped, so a
-          // replay that produces one is a diagnosable event.
+          // Never emitted by this lane's adapter, and deliberately not wired - see the module doc. Ignored
+          // with a reason rather than dropped, so a replay that produces one is a diagnosable event.
           return { kind: "ignored", reason: "before-fence" };
       }
     },
@@ -630,24 +431,12 @@ export function createEpicLaneStateReplica(
     trust: () => seedTrust,
 
     reset(cause: ReplicaResetCause): void {
-      // Everything goes, including the epoch and the trust: a replica that kept
-      // its watermark would offer a resume for a position space that has been
-      // replaced, and one that kept `reconciled-with-cloud` would label the
-      // next host's seed bytes with the previous host's verdict.
+      // Everything goes, including the epoch and the trust: a replica that kept its watermark would
+      // offer a resume for a position space that has been replaced, and one that kept
       cursor = null;
       epoch = null;
       seedTrust = null;
-      // ...and, for a REPLACEMENT, the absorbed retractions with them. Emptying
-      // the table drops its rows but leaves the tombstone filter every later
-      // snapshot is admitted through, so the replacement's first authoritative
-      // snapshot was being censored by the replica it replaced: a row removed
-      // in the old epoch and served again under the same id by the new one
-      // stayed absent for the rest of the session, with nothing anywhere
-      // saying why.
-      //
-      // Ordered before the snapshot deliberately - `applySnapshot` consults the
-      // filter, and here it is being handed the empty set anyway, but a later
-      // reader must not have to know that to see this is right.
+      // ...and, for a REPLACEMENT, the absorbed retractions with them.
       if (replacesThePositionSpace(cause)) table.forgetRetractions();
       table.applySnapshot([], table.ingestSeq());
       onChanged();

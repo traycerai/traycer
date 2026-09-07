@@ -6,20 +6,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * F4 (durability audit), settings surface: `ProviderProfileScopedSection` /
- * `ProviderProfileCard` (provider-profile-scoped-section.tsx,
- * provider-profile-card.tsx) render a profile's `label` and `identity.email`
- * as plain JSX text (`profileDisplayLabel`, `ProfileCardIdentityLine`) - no
- * `dangerouslySetInnerHTML` anywhere in either file (grepped). This proves
- * the runtime half: a hostile label/email renders as literal text with no
- * injected elements, and the panel doesn't crash.
- */
+/** This proves the runtime half: a hostile label/email renders as literal text with no injected elements, and
+ * the panel doesn't crash. */
 
-// Render the profile dropdown inline + always-open so the test can select
-// the hostile-labeled row without fighting Radix's pointerdown-based open
-// gesture in jsdom (mirrors the established mock in
-// worktrees-settings-panel.test / folder-controls.test).
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
@@ -36,9 +25,8 @@ const providerMocks = vi.hoisted(() => ({
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
 }));
-// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
-// goes through TanStack Query. Mocked here alongside the other provider
-// mutations so this panel test keeps rendering without a QueryClientProvider.
+// Mocked here alongside the other provider mutations so this panel test keeps rendering without a
+// QueryClientProvider.
 vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
   useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
 }));
@@ -204,10 +192,8 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
 }));
-// The refresh button resolves a client PINNED to its host id rather than the
-// app-wide one, and that resolution dereferences `useHostClient()` during
-// render - which the `@/lib/host` stub below makes `null`. Stub the pinned
-// resolution too, matching the other host-less panel suites.
+// The refresh button resolves a client pinned to its host id rather than the app-wide one, and that resolution
+// dereferences `useHostClient` during render - which the `@/lib/host` stub below makes `null`.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -216,7 +202,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => null };
 });
 
-// Panels depend on the host SCOPE, not on the hooks it composes.
+// Panels depend on the host scope, not on the hooks it composes.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -361,10 +347,8 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
     };
     const { container } = renderProvidersSettingsPanel();
 
-    // The section defaults to the ambient profile - select the hostile one to
-    // bring its details (and the raw label) into the DOM. It then also
-    // labels the (mocked, always-open) dropdown trigger, so more than one
-    // element carries the raw label - assert presence, not a single match.
+    // It then also labels the (mocked, always-open) dropdown trigger, so more than one element carries the raw
+    // label - assert presence, not a single match.
     fireEvent.click(screen.getByRole("menuitem", { name: VERY_LONG_LABEL }));
 
     expect(screen.getAllByText(VERY_LONG_LABEL).length).toBeGreaterThan(0);
@@ -387,10 +371,8 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
     };
     const { container } = renderProvidersSettingsPanel();
 
-    // The section defaults to the ambient profile - select the hostile one to
-    // bring its details (and the raw label) into the DOM. It then also
-    // labels the (mocked, always-open) dropdown trigger, so more than one
-    // element carries the raw label - assert presence, not a single match.
+    // It then also labels the (mocked, always-open) dropdown trigger, so more than one element carries the raw
+    // label - assert presence, not a single match.
     fireEvent.click(screen.getByRole("menuitem", { name: HTML_LOOKING_LABEL }));
 
     expect(screen.getAllByText(HTML_LOOKING_LABEL).length).toBeGreaterThan(0);

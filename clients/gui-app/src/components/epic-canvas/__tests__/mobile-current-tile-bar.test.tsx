@@ -61,16 +61,11 @@ function makeMutateAsync<TVariables>(
   };
 }
 
-// `useSwitcherRename` (the hook this bar's title delegates rename commits to)
-// now reads a REAL session handle for the optimistic overlay
-// (`beginRenameMutation` / `retirePendingMutation`), so it is backed by a real
-// `createOpenEpicStore` session rather than a fake shape. The mutation hooks
-// stay mocked (rather than the `useSwitcherRename` mapping itself), which
-// exercises the real kind -> mutation mapping in `use-switcher-rename.ts`.
+// `useSwitcherRename` (the hook this bar's title delegates rename commits to) now reads a REAL session handle for the optimistic overlay (`beginRenameMutation` / `retirePendingMutation`), so it is backed by a real `createOpenEpicStore` session rather than a fake shape.
+// The mutation hooks stay mocked (rather than the `useSwitcherRename` mapping itself), which exercises the real kind -> mutation mapping in `use-switcher-rename.ts`.
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  // The chat write-routing gate reads the session through the
-  // NON-throwing accessor. `null` is the honest double here: this suite
-  // mounts no epic store, and no session means no epic write path to gate.
+  // The chat write-routing gate reads the session through the NON-throwing accessor.
+  // `null` is the honest double here: this suite mounts no epic store, and no session means no epic write path to gate.
   useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => {
     if (mocks.handle.current === null) throw new Error("no handle seeded");
@@ -162,9 +157,9 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-/** A live session for "epic-1" - no nodes seeded, since these tests only
- * assert on the RPC call args, and `useSwitcherRename` fires the RPC
- * regardless of whether `beginRenameMutation` finds a row to overlay. */
+/**
+ * A live session for "epic-1" - no nodes seeded, since these tests only assert on the RPC call args, and `useSwitcherRename` fires the RPC regardless of whether `beginRenameMutation` finds a row to overlay.
+ */
 function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
@@ -181,11 +176,6 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-1",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,

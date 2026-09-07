@@ -17,10 +17,8 @@ export type NotificationLifecycleClassification =
   | { readonly section: "recent" };
 
 /**
- * The single lifecycle classifier: every feed row belongs to Attention or
- * Recent, never both. Attention membership is unread host prompts,
- * unread host failures, and unread app-local failures - collaboration rows
- * are never attention-eligible.
+ * The single lifecycle classifier: every feed row belongs to Attention or Recent, never both.
+ * Attention membership is unread host prompts, unread host failures, and unread app-local failures - collaboration rows are never attention-eligible.
  */
 export function classifyNotificationLifecycle(
   row: NotificationLifecycleInput,
@@ -52,9 +50,9 @@ export interface AttentionOrderCandidate {
   readonly feedId: string;
 }
 
-/** Deterministic byte-order ascending comparison, matching SQLite's `id ASC`
- * tie-break - never locale-sensitive, so ordering can't drift by ICU version
- * or system locale. */
+/**
+ * Deterministic byte-order ascending comparison, matching SQLite's `id ASC` tie-break - never locale-sensitive, so ordering can't drift by ICU version or system locale.
+ */
 export function compareFeedIdAscending(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;

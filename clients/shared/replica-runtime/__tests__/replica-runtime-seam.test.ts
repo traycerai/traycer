@@ -1,17 +1,4 @@
-/**
- * Behavioural coverage for the replica-runtime interface seam (T2 of the
- * epic-sync-overhaul story).
- *
- * Two halves:
- *  1. The pure helpers' invariants — the ones a naive re-implementation is
- *     most likely to get wrong (epoch replacement vs advance, transaction
- *     buffering, generation-guard suppression, NUL-separated keys).
- *  2. A conformance smoke test: minimal in-memory implementations of
- *     `Replica`, `LaneAdapter`, `AdapterHost`, `SessionRegistryPolicy` and
- *     `LeaseMaterializer`, proving the interfaces are implementable with no
- *     DOM and no real timers — the worker-portability requirement made
- *     executable.
- */
+/** Behavioural coverage for the replica-runtime interface seam (T2 of the epic-sync-overhaul story). */
 import { describe, it, expect, vi, type Mock } from "vitest";
 
 import {
@@ -92,17 +79,13 @@ describe("compareLaneCursors", () => {
   });
 
   it("is incomparable across differing epochs, never an ordering", () => {
-    // Same lane, same position, different epoch — a naive comparator would
+  // Same lane, same position, different epoch - a naive comparator would
     // fold this to "same" by comparing only position.
     expect(compareLaneCursors(cursor("e1", "a", 5), cursor("e2", "a", 5))).toBe(
       "incomparable",
     );
-    // "e2" vs "e10": string-lexicographic order says "e10" < "e2", numeric
-    // order (if the epoch were mistakenly parsed as a number) says 2 < 10.
-    // Neither ordering is legal — only equality is — so this pair would slip
-    // through as "after" or "before" if `compareLaneCursors` were ever
-    // "fixed" into a lexicographic or numeric comparison instead of an
-    // equality check.
+    // "e2" vs "e10": string-lexicographic order says "e10" < "e2", numeric order (if the epoch were mistakenly parsed as a number) says 2 < 10.
+    // Neither ordering is legal - only equality is - so this pair would slip through as "after" or "before" if `compareLaneCursors` were ever "fixed" into a lexicographic or numeric comparison instead of an equality check.
     expect(
       compareLaneCursors(cursor("e2", "a", 5), cursor("e10", "a", 100)),
     ).toBe("incomparable");
@@ -139,11 +122,8 @@ describe("advancesLaneCursor", () => {
   });
 
   it("rejects an epoch change as an advance — replacement, not advance", () => {
-    // The one a naive implementation is most likely to "fix" into true: a
-    // far-ahead position under a bumped, opaque, NON-sequential epoch still
-    // must not read as an advance. "room-a" -> "room-b" cannot be satisfied
-    // by accidental lexicographic or numeric ordering the way "e1" -> "e2"
-    // could be.
+    // The one a naive implementation is most likely to "fix" into true: a far-ahead position under a bumped, opaque, non-sequential epoch still must not read as an advance.
+    // "room-a" -> "room-b" cannot be satisfied by accidental lexicographic or numeric ordering the way "e1" -> "e2" could be.
     expect(
       advancesLaneCursor(cursor("room-a", "a", 5), cursor("room-b", "a", 100)),
     ).toBe(false);
@@ -252,7 +232,7 @@ describe("createGenerationGuard / guardHandler", () => {
 
     wrapped("frame");
 
-    // Vacuous "no error thrown" proves nothing here — assert the inner
+    // Vacuous "no error thrown" proves nothing here - assert the inner
     // handler was never invoked.
     expect(inner).not.toHaveBeenCalled();
   });
@@ -286,23 +266,16 @@ describe("sessionKeyOf", () => {
   });
 
   it("does not collide when a part itself contains the printable ':' separator", () => {
-    // The original reason to abandon a `:`-joined key: it would fold these two
-    // distinct tuples onto the same string ("a:b:c"). Kept as a control - the
-    // length-prefixed encoding must still satisfy the property that motivated
-    // the NUL one it replaced.
+    // The original reason to abandon a `:`-joined key: it would fold these two distinct tuples onto the same string ("a:b:c").
+    // Kept as a control - the length-prefixed encoding must still satisfy the property that motivated the nul one it replaced.
     const left = sessionKeyOf(["a:b", "c"]);
     const right = sessionKeyOf(["a", "b:c"]);
     expect(left).not.toBe(right);
   });
 
   it("does not collide when a part contains a NUL either", () => {
-    // THE REDDENING ONE. A NUL-joined key folds these two exactly as a
-    // `:`-joined key folds the pair above, and the argument its doc made for
-    // NUL ("no id can contain a NUL") is the same unenforced claim that doc
-    // rejects for `:` one line earlier. Nothing excludes U+0000: the protocol
-    // fields are bare `z.string()`, JSON carries it, and a `hostId` is adopted
-    // verbatim from `~/.traycer/host-id` with only a `trim()`, which does not
-    // strip NUL because NUL is not whitespace.
+    // The reddening one.
+    // A nul-joined key folds these two exactly as a `:`-joined key folds the pair above, and the argument its doc made for nul ("no id can contain a nul") is the same unenforced claim that doc rejects for `:` one line earlier.
     const left = sessionKeyOf(["a\u0000b", "c"]);
     const right = sessionKeyOf(["a", "b\u0000c"]);
     expect(left).not.toBe(right);
@@ -333,11 +306,7 @@ describe("unknownFreshness", () => {
   });
 });
 
-// ─── Conformance smoke test ─────────────────────────────────────────────────
-//
-// Minimal in-memory implementations proving the seam is implementable with
-// no DOM and no real timers. A fake `RuntimeEnvironment` drives a fake
-// `LaneAdapter` feeding a fake `Replica` through a fake `AdapterHost`.
+// ─── Conformance smoke test ───────────────────────────────────────────────── Minimal in-memory implementations proving the seam is implementable with no DOM and no real timers.
 
 interface FakeRow {
   readonly label: string;
@@ -361,32 +330,19 @@ type FakeProjection = readonly {
   readonly row: FakeRow;
 }[];
 
-/** A controllable clock/scheduler with no real timers and no DOM. */
 interface FakeTimerEntry {
   readonly fireAt: number;
   readonly callback: () => void;
 }
 
 /**
- * The injected environment, with the clock and the scheduler independently
- * controllable — a suite has to be able to advance timers without moving the
- * clock, and move the clock without letting a timer fire, or the early-fire
- * re-check can never be exercised.
- *
- * **Firing is the fake's job, never a test's.** A timer fires only by leaving
- * this object's pending list, so an entry can never fire twice. That is not
- * tidiness: a test that hand-invokes a captured `schedule` callback leaves the
- * fake's own entry live, and the STALE entry then fires on the next
- * `advanceClock` — so an assertion meant to prove a re-armed timer did the work
- * is satisfied by the original one, and stays green with the re-arm removed
- * entirely. {@link fireDueTimerEarly} is the sanctioned way to simulate a
- * throttled background tab.
+ * **Firing is the fake's job, never a test's.** A timer fires only by leaving this object's pending list, so an entry can never fire twice.
  */
 function createFakeEnvironment(): RuntimeEnvironment & {
   advanceClock(ms: number): void;
   drainMicrotasks(): void;
   /**
-   * Fire the earliest live timer WITHOUT moving the clock, and remove it —
+   * Fire the earliest live timer without moving the clock, and remove it -
    * exactly what a throttled tab does. Returns false when nothing is pending.
    */
   fireDueTimerEarly(): boolean;
@@ -435,11 +391,8 @@ function createFakeEnvironment(): RuntimeEnvironment & {
     },
     advanceClock(ms: number): void {
       nowMs += ms;
-      // Collect, remove, then invoke — a callback that re-arms must not be
-      // fired again by the same pass, and the re-armed entry must be judged
-      // against the clock as it now stands rather than mid-iteration. Bounded
-      // so a pathological immediately-due re-arm surfaces as a failed test
-      // rather than a hung suite.
+      // Collect, remove, then invoke - a callback that re-arms must not be fired again by the same pass, and the re-armed entry must be judged against the clock as it now stands rather than mid-iteration.
+      // Bounded so a pathological immediately-due re-arm surfaces as a failed test rather than a hung suite.
       for (let pass = 0; pass < 100; pass += 1) {
         const due = pendingTimers.filter((entry) => entry.fireAt <= nowMs);
         if (due.length === 0) return;
@@ -470,7 +423,6 @@ function createFakeEnvironment(): RuntimeEnvironment & {
   };
 }
 
-/** A minimal in-memory `Replica<FakeEvent, FakeProjection>` for one records plane. */
 function createFakeReplica(planeId: string): Replica<
   FakeEvent,
   FakeProjection
@@ -544,7 +496,6 @@ function createFakeReplica(planeId: string): Replica<
   };
 }
 
-/** A minimal in-memory `AdapterHost<FakeEvent>` wrapping a replica. */
 function createFakeAdapterHost(
   environment: RuntimeEnvironment,
   replica: Replica<FakeEvent, FakeProjection> & {
@@ -565,13 +516,8 @@ function createFakeAdapterHost(
       // Smoke test does not exercise connection status.
     },
     requestReplacement(reason: ReplicaReplacementReason): void {
-      // `transition` is accepted and ignored here on purpose: it is the
-      // RUNTIME's coalescing key, and this smoke fake has no coalescer.
-      // The runtime side of the seam: `AdapterHost.requestReplacement` is
-      // deliberately narrow — an adapter can only hand it an authority
-      // reason — and it is the runtime, not the adapter, that turns that
-      // into the ONE reset entry point. A client-requested reseed can never
-      // reach the replica through this path.
+      // `transition` is accepted and ignored here on purpose: it is the runtime's coalescing key, and this smoke fake has no coalescer.
+      // A client-requested reseed can never reach the replica through this path.
       replica.reset({ origin: "authority", reason });
     },
   };
@@ -612,10 +558,6 @@ function createFakeLaneAdapter(laneId: string): LaneAdapter<FakeEvent> & {
       transition: ReplicaTransitionToken,
     ): void {
       if (host === null) throw new Error("adapter not attached");
-      // `AdapterHost.requestReplacement` is the only path an adapter has to
-      // this — its signature accepts a `ReplicaReplacementReason`, never a
-      // `ReplicaResetCause`, so a client-origin cause cannot even be
-      // constructed at this call site.
       host.requestReplacement(reason, transition);
     },
   };
@@ -629,7 +571,7 @@ describe("Replica / LaneAdapter / AdapterHost conformance smoke test", () => {
     const adapter = createFakeLaneAdapter("epic.state.subscribe@1.0");
 
     adapter.attach(host);
-    // The cursored-lane arm of the `ResumeOffer` union — a records/log
+    // The cursored-lane arm of the `ResumeOffer` union - a records/log
     // adapter's offer, distinct from the doc class's `doc-seed` arm below.
     expect(adapter.resumeOffer()).toEqual({
       kind: "cursor",
@@ -637,7 +579,7 @@ describe("Replica / LaneAdapter / AdapterHost conformance smoke test", () => {
     });
     adapter.pushFrame([
       { kind: "upsert", rowId: "row-1", revision: 2, row: { label: "second" } },
-      // Same or lower revision than what was just applied — must be dropped,
+      // Same or lower revision than what was just applied - must be dropped,
       // not merged and not thrown.
       { kind: "upsert", rowId: "row-1", revision: 1, row: { label: "stale" } },
     ]);
@@ -729,12 +671,7 @@ describe("SessionRegistryPolicy conformance", () => {
   });
 });
 
-// ─── createSessionRegistry ──────────────────────────────────────────────────
-//
-// The unified registry behind chats, terminals, and open-epic sessions. These
-// cases target the policy knobs new to the unification — the ones an
-// implementation that hardcoded one plane's answer, or dropped a knob
-// entirely, would still pass every OTHER test here while getting wrong.
+// ─── createSessionRegistry ────────────────────────────────────────────────── The unified registry behind chats, terminals, and open-epic sessions.
 
 interface RegSession {
   readonly id: string;
@@ -759,14 +696,7 @@ interface PolicyConfig {
     session: RegSession,
     cause: SessionDisposeCause,
   ) => SessionDisposeVerdict;
-  /**
-   * What `onRevived` throws, or `null` for the ordinary revival.
-   *
-   * Not hypothetical: the terminal plane's `onRevived` retags the session
-   * `presentation`, and that `setViewer` reconstructs the stream
-   * SYNCHRONOUSLY - which throws when the captured transport or directory has
-   * since disappeared.
-   */
+  /** What `onRevived` throws, or `null` for the ordinary revival. */
   readonly onRevivedError: Error | null;
 }
 
@@ -900,12 +830,7 @@ describe("createSessionRegistry", () => {
       // also pass on a registry that never called `onRevived` at all.
       expect(policy.onRevivedSpy).toHaveBeenCalledTimes(1);
 
-      // THE REDDENING ASSERTION. By the time `onRevived` throws, the demand
-      // transition has already happened: demand incremented, `parkedAtMs`
-      // cleared, idle timer cancelled. The throw escapes `attach` with no
-      // handle returned, so no caller owes a release - and the entry can
-      // neither expire (no timer, not parked) nor be pruned (the warm
-      // population excludes anything with demand).
+      // The reddening assertion.
       expect(registry.peek("s")).toBeNull();
       expect(policy.disposeSpy).toHaveBeenCalledWith("s");
 
@@ -918,9 +843,8 @@ describe("createSessionRegistry", () => {
     });
 
     it("keeps the session when the revival SUCCEEDS - the teardown is scoped to the failure", () => {
-      // The control. Without it the assertions above are satisfied by a
-      // registry that discards every revived session, which would be a far
-      // worse bug than the one being fixed.
+      // The control.
+      // Without it the assertions above are satisfied by a registry that discards every revived session, which would be a far worse bug than the one being fixed.
       const environment = createFakeEnvironment();
       const policy = createTrackedPolicy(defaultPolicyConfig());
       const registry = createSessionRegistry({ environment, policy });
@@ -997,9 +921,7 @@ describe("createSessionRegistry", () => {
       });
       registry.release("busy-2", "warm");
 
-      // Positive premise: both really are busy, and there are two of them —
-      // "counting them would let N running agents flush every lingering
-      // shell immediately" is the bug this knob prevents.
+      // Positive premise: both really are busy, and there are two of them - "counting them would let N running agents flush every lingering shell immediately" is the bug this knob prevents.
       expect(policy.hasActiveWork(busy1)).toBe(true);
       expect(policy.hasActiveWork(busy2)).toBe(true);
       expect(registry.peek("idle-1")).not.toBeNull();
@@ -1074,9 +996,7 @@ describe("createSessionRegistry", () => {
       registry.release("s1", "warm");
       expect(scheduleSpy).toHaveBeenCalledTimes(1);
 
-      // Each 1000ms tick re-arms because the busy session has not yet been
-      // parked for the full 5000ms defer window.
-      environment.advanceClock(1000); // 1000ms since park
+      // Each 1000ms tick re-arms because the busy session has not yet been parked for the full 5000ms defer window.
       expect(session.disposed).toBe(false);
       environment.advanceClock(1000); // 2000ms since park
       expect(session.disposed).toBe(false);
@@ -1085,21 +1005,13 @@ describe("createSessionRegistry", () => {
       environment.advanceClock(1000); // 4000ms since park
       expect(registry.peek("s1")).toBe(session);
 
-      // The 5th tick crosses the 5000ms defer window measured from park —
-      // not from the previous check — and the session is finally disposed.
-      environment.advanceClock(1000); // 5000ms since park
+      // The 5th tick crosses the 5000ms defer window measured from park - not from the previous check - and the session is finally disposed.
       expect(session.disposed).toBe(true);
       expect(registry.peek("s1")).toBeNull();
     });
 
     it("caps a LATE re-arm at what is left of the defer window, so drift cannot push disposal past it", () => {
-      // The case above advances in exact TTL steps, so every check lands on the
-      // cap's grid and a full-TTL re-arm happens to end exactly at 5000. A
-      // callback that runs LATE — which browser timer throttling causes as a
-      // matter of course — takes every later check off that grid, and a re-arm
-      // of a fresh `ttlMs` then overshoots the cap by up to a full window. At
-      // production's 10-minute TTL under a 60-minute cap that is nine extra
-      // minutes of retained transcript and websocket, from one late callback.
+      // The case above advances in exact ttl steps, so every check lands on the cap's grid and a full-ttl re-arm happens to end exactly at 5000.
       const environment = createFakeEnvironment();
       const config: PolicyConfig = {
         ...defaultPolicyConfig(),
@@ -1116,16 +1028,14 @@ describe("createSessionRegistry", () => {
       // 2500ms in one step: the timer armed for 1000 fires at 2500, late.
       environment.advanceClock(2500);
       expect(session.disposed).toBe(false);
-      // Still a full TTL, not the whole 2500ms remainder — the cap bounds the
+      // Still a full TTL, not the whole 2500ms remainder - the cap bounds the
       // re-arm, it does not replace the polling interval.
       expect(environment.nextTimerFireAt()).toBe(3500);
 
       environment.advanceClock(1000); // check at 3500
       expect(environment.nextTimerFireAt()).toBe(4500);
 
-      // THE REDDENING ASSERTION. 500ms of the cap is left at this check, so the
-      // next one lands ON the cap. A fresh `ttlMs` here answers 5500.
-      environment.advanceClock(1000); // check at 4500
+      // The reddening assertion.
       expect(environment.nextTimerFireAt()).toBe(5000);
 
       // And the session is gone AT the cap rather than 500ms after it.
@@ -1160,7 +1070,7 @@ describe("createSessionRegistry", () => {
       registry.acquire("A", "scope", () => sessionA);
       registry.acquire("B", "scope", () => sessionB);
       registry.release("B", "warm"); // released first
-      registry.release("A", "warm"); // released last — triggers the cap check
+      registry.release("A", "warm"); // released last - triggers the cap check
       return { sessionA, sessionB };
     }
 
@@ -1233,7 +1143,7 @@ describe("createSessionRegistry", () => {
       expect(registry.peekEntry("s1")?.demand).toBe(1);
       expect(session.disposed).toBe(false);
 
-      registry.release("s1", "warm"); // last unit — retainWhenIdle defaults true
+      registry.release("s1", "warm"); // last unit - retainWhenIdle defaults true
       expect(session.disposed).toBe(false);
       expect(registry.peek("s1")).toBe(session);
     });
@@ -1250,7 +1160,7 @@ describe("createSessionRegistry", () => {
       expect(policy.onParkedSpy).not.toHaveBeenCalled();
       expect(policy.onRevivedSpy).not.toHaveBeenCalled();
 
-      registry.acquire("s1", "scope", () => session); // second unit of demand — never was warm
+      registry.acquire("s1", "scope", () => session); // second unit of demand - never was warm
       expect(policy.onRevivedSpy).not.toHaveBeenCalled();
 
       registry.release("s1", "warm"); // demand 2 -> 1, still held
@@ -1261,7 +1171,7 @@ describe("createSessionRegistry", () => {
       expect(policy.onParkedSpy).toHaveBeenCalledWith("s1");
       expect(policy.onRevivedSpy).not.toHaveBeenCalled();
 
-      registry.acquire("s1", "scope", () => session); // re-acquiring the WARM session — a revival
+      registry.acquire("s1", "scope", () => session); // re-acquiring the warm session - a revival
       expect(policy.onRevivedSpy).toHaveBeenCalledTimes(1);
       expect(policy.onRevivedSpy).toHaveBeenCalledWith("s1");
     });
@@ -1304,17 +1214,7 @@ describe("createSessionRegistry", () => {
     });
 
     it("returns what its operation returned, so a plane method can batch AND answer in one call", () => {
-      // Every plane that batches also answers - `acquireMounted` hands back the
-      // handle it attached, `replaceMounted` whether it won the race - so the
-      // value has to flow out through the transaction rather than be swallowed
-      // at the boundary.
-      //
-      // Pinned at RUNTIME deliberately, because the way this broke was
-      // type-only: the interface declared `transact(op: () => void): void` over
-      // a generic implementation, a `() => T` is assignable to a `() => void`,
-      // and every caller's own `return` silently became `void`. A transpiling
-      // test runner sees none of that, so 1,266 green tests said nothing about
-      // it. This assertion is what a runner CAN see.
+      // A transpiling test runner sees none of that, so 1,266 green tests said nothing about it.
       const environment = createFakeEnvironment();
       const policy = createTrackedPolicy(defaultPolicyConfig());
       const registry = createSessionRegistry({ environment, policy });
@@ -1346,15 +1246,13 @@ describe("createSessionRegistry", () => {
       const registry = createSessionRegistry({ environment, policy });
 
       registry.materialize("mat-1", "scope", () => makeSession("mat-1"));
-      // Zero demand from the start — no acquire ever happened for it.
+      // Zero demand from the start - no acquire ever happened for it.
       expect(registry.peekEntry("mat-1")?.demand).toBe(0);
 
       registry.acquire("acq-1", "scope", () => makeSession("acq-1"));
       registry.release("acq-1", "warm");
 
-      // The cap check on acq-1's release finds two demand-free entries under
-      // maxWarm 1 — mat-1 was cap-eligible from the moment it was
-      // materialized, so it is the one that gets evicted.
+      // The cap check on acq-1's release finds two demand-free entries under maxWarm 1 - mat-1 was cap-eligible from the moment it was materialized, so it is the one that gets evicted.
       expect(registry.peek("mat-1")).toBeNull();
       expect(registry.peek("acq-1")).not.toBeNull();
     });
@@ -1384,9 +1282,7 @@ describe("createSessionRegistry", () => {
       // Re-parked: the old timer was cancelled and a fresh one armed.
       expect(scheduleSpy).toHaveBeenCalledTimes(2);
 
-      // The window is fresh from the rekey, not inherited from the original
-      // park — 900ms is short of the 1000ms TTL measured from either point,
-      // but this proves the new timer (not a stale leftover) is what governs.
+      // The window is fresh from the rekey, not inherited from the original park - 900ms is short of the 1000ms ttl measured from either point, but this proves the new timer (not a stale leftover) is what governs.
       environment.advanceClock(900);
       expect(registry.peek("new-key")).toBe(session);
     });
@@ -1489,10 +1385,8 @@ describe("createSessionRegistry", () => {
       expect(scheduleSpy).toHaveBeenCalledTimes(1);
       expect(environment.nextTimerFireAt()).toBe(1000);
 
-      // 400ms of the window really has elapsed, and then the timer fires
-      // early — the throttled-background-tab scenario the re-check exists to
-      // guard against. A suite that only ever advances clock and timers
-      // together never exercises this branch.
+      // 400ms of the window really has elapsed, and then the timer fires early - the throttled-background-tab scenario the re-check exists to guard against.
+      // A suite that only ever advances clock and timers together never exercises this branch.
       environment.advanceClock(400);
       expect(environment.fireDueTimerEarly()).toBe(true);
 
@@ -1501,13 +1395,8 @@ describe("createSessionRegistry", () => {
       expect(session.disposed).toBe(false);
       expect(scheduleSpy).toHaveBeenCalledTimes(2);
 
-      // THE assertion. The re-armed timer must carry what is LEFT of the
-      // window — 600ms from t=400, i.e. the original t=1000 deadline — not a
-      // fresh full TTL, which would push eviction out to t=1400 and turn every
-      // early fire into an almost-doubled warm window. Asserting the DEADLINE
-      // rather than "something was scheduled" is what makes this test able to
-      // fail: a full re-arm schedules a timer too, and every other assertion
-      // here passes under it.
+      // The assertion.
+      // Asserting the deadline rather than "something was scheduled" is what makes this test able to fail: a full re-arm schedules a timer too, and every other assertion here passes under it.
       expect(scheduleSpy.mock.calls[1][0]).toBe(600);
       expect(environment.nextTimerFireAt()).toBe(1000);
       expect(environment.pendingTimerCount()).toBe(1);
@@ -1517,9 +1406,8 @@ describe("createSessionRegistry", () => {
       environment.advanceClock(599);
       expect(session.disposed).toBe(false);
 
-      // The 1000ms mark, on the nose. The re-armed timer — the only one left —
-      // fires, the re-check finds the window genuinely elapsed, and the
-      // session goes.
+      // The 1000ms mark, on the nose.
+      // The re-armed timer - the only one left - fires, the re-check finds the window genuinely elapsed, and the session goes.
       environment.advanceClock(1);
       expect(session.disposed).toBe(true);
       expect(registry.peek("s1")).toBeNull();
@@ -1527,10 +1415,7 @@ describe("createSessionRegistry", () => {
     });
 
     it("never lengthens the window past one full TTL when the clock steps BACKWARD", () => {
-      // The case the `Math.max(0, elapsed)` clamp exists for. A backward clock
-      // adjustment makes the elapsed term negative, and an unclamped
-      // `ttl - elapsed` would schedule LONGER than the window the session was
-      // ever promised — repeatedly, since each early fire re-reads the clock.
+      // The case the `Math.max(0, elapsed)` clamp exists for.
       const environment = createFakeEnvironment();
       const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
       const policy = createTrackedPolicy({
@@ -1592,13 +1477,7 @@ describe("LeaseMaterializer conformance", () => {
   });
 });
 
-// ─── Doc-class Replica conformance ──────────────────────────────────────────
-//
-// The four rules `DocSnapshotEvent`/`DocUpdateEvent`/`DocCoverageAckEvent`/
-// `DocUnavailableEvent` exist to protect. Content is modelled as a set of
-// opaque string tokens rather than real CRDT bytes — the point here is the
-// replica's DECISION per event kind, not Yjs merge semantics, which this seam
-// deliberately keeps out of the runtime's own dependency surface.
+// ─── Doc-class Replica conformance ────────────────────────────────────────── The four rules `DocSnapshotEvent`/`DocUpdateEvent`/`DocCoverageAckEvent`/ `DocUnavailableEvent` exist to protect.
 
 type DocProjection = readonly string[];
 
@@ -1615,10 +1494,7 @@ function updateOf(...tokens: readonly string[]): Uint8Array {
 
 /**
  * A minimal in-memory `Replica<DocReplicaEvent, DocProjection>`.
- *
- * `markLocalDivergence` is test-only scaffolding standing in for the local
- * unsynced-edit tracking a real doc replica would own — the point under test
- * is which event retires it, not how it is set.
+ * `markLocalDivergence` is test-only scaffolding standing in for the local unsynced-edit tracking a real doc replica would own - the point under test is which event retires it, not how it is set.
  */
 function createFakeDocReplica(planeId: string): Replica<
   DocReplicaEvent,
@@ -1649,12 +1525,11 @@ function createFakeDocReplica(planeId: string): Replica<
           heldGuid = event.docGuid;
           const incoming = tokensOf(event.update);
           if (event.seed === "full") {
-            // Self-sufficient: safe, and REQUIRED, to install wholesale.
+          // Self-sufficient: safe, and required, to install wholesale.
             tokens = new Set(incoming);
           } else {
-            // A delta against this replica's own offer — merging is the only
-            // correct move. Installing it wholesale would silently drop
-            // every token the delta legitimately omitted.
+            // A delta against this replica's own offer - merging is the only correct move.
+            // Installing it wholesale would silently drop every token the delta legitimately omitted.
             for (const token of incoming) tokens.add(token);
           }
           return { kind: "applied", cursor: null };
@@ -1662,15 +1537,13 @@ function createFakeDocReplica(planeId: string): Replica<
         case "doc-update": {
           if (event.docGuid !== heldGuid) {
             // The bytes describe a document this replica does not hold.
-            // Deliberately NOT `"stale-generation"`: the frame is current,
-            // the DOCUMENT was replaced underneath it.
             return { kind: "ignored", reason: "guid-mismatch" };
           }
           for (const token of tokensOf(event.update)) tokens.add(token);
           return { kind: "applied", cursor: null };
         }
         case "doc-coverage-ack": {
-          // The ONLY event that retires local divergence — nothing else
+        // The only event that retires local divergence - nothing else
           // touches it below.
           divergent = false;
           return { kind: "applied", cursor: null };
@@ -1687,9 +1560,7 @@ function createFakeDocReplica(planeId: string): Replica<
               reason: "authority-epoch-changed",
             };
           }
-          // "artifact-not-found" and "body-unavailable" (terminal or not)
-          // are availability facts about THIS body, not a replica-identity
-          // change — the replica stays and just records the state.
+          // "artifact-not-found" and "body-unavailable" (terminal or not) are availability facts about this body, not a replica-identity change - the replica stays and just records the state.
           return { kind: "applied", cursor: null };
         }
       }
@@ -1705,10 +1576,6 @@ function createFakeDocReplica(planeId: string): Replica<
       return unknownFreshness(planeId, "doc");
     },
     reset(): void {
-      // The doc fake does not assert on reset provenance itself — the
-      // records fake and the AdapterHost-wiring test below cover
-      // `ReplicaResetCause`; this signature change is exercised here only to
-      // prove the doc class implements the same one entry point.
       heldGuid = null;
       tokens = new Set();
       divergent = false;
@@ -1756,7 +1623,7 @@ describe("doc-class Replica conformance", () => {
     expect(appliedOutcome).toEqual({ kind: "applied", cursor: null });
 
     replica.project();
-    // "c" from the wrong-guid update never lands — only the matching one does.
+    // "c" from the wrong-guid update never lands - only the matching one does.
     expect(replica.sink.read()).toEqual(["a", "b", "c"]);
   });
 
@@ -1782,9 +1649,7 @@ describe("doc-class Replica conformance", () => {
       seed: "delta-against-offer",
     });
     replica.project();
-    // The delta carried only "d" — "a", "b", "c" survive because a delta
-    // MERGES. Installing it wholesale (the bug this field exists to
-    // prevent) would have dropped them silently.
+    // The delta carried only "d" - "a", "b", "c" survive because a delta merges.
     expect(replica.sink.read()).toEqual(["a", "b", "c", "d"]);
 
     replica.apply({
@@ -1797,7 +1662,7 @@ describe("doc-class Replica conformance", () => {
       seed: "full",
     });
     replica.project();
-    // A full snapshot REPLACES — none of the prior tokens survive.
+    // A full snapshot replaces - none of the prior tokens survive.
     expect(replica.sink.read()).toEqual(["x", "y"]);
   });
 
@@ -1863,7 +1728,7 @@ describe("doc-class Replica conformance", () => {
   });
 });
 
-// ─── Replica.reset — one entry point, provenance in the argument ───────────
+// ─── Replica.reset - one entry point, provenance in the argument ───────────
 
 describe("Replica.reset provenance", () => {
   it("distinguishes an authority reset from a client reset after the fact, with the same empty end state", () => {
@@ -1894,15 +1759,13 @@ describe("Replica.reset provenance", () => {
     replica.project();
 
     replica.reset({ origin: "client", intent: "fresh-snapshot-requested" });
-    // Distinguishable after the fact — the whole point of moving provenance
+    // Distinguishable after the fact - the whole point of moving provenance
     // into the argument instead of a second reset method.
     expect(replica.resetCauses).toEqual([
       { origin: "authority", reason: "resume-too-old" },
       { origin: "client", intent: "fresh-snapshot-requested" },
     ]);
-    // Provenance changes what may be CLAIMED, never what HAPPENS: the client
-    // reset leaves the replica in exactly the same empty state as the
-    // authority reset did above.
+    // Provenance changes what may be claimed, never what happens: the client reset leaves the replica in exactly the same empty state as the authority reset did above.
     expect(replica.sink.read()).toEqual([]);
     expect(replica.watermark()).toBeNull();
     expect(replica.freshness().status).toBe("unknown");
@@ -1915,9 +1778,7 @@ describe("Replica.reset provenance", () => {
     const adapter = createFakeLaneAdapter("epic.state.subscribe@1.0");
     adapter.attach(host);
 
-    // `AdapterHost.requestReplacement` is deliberately narrow — it accepts
-    // only a `ReplicaReplacementReason` — so there is no call an adapter can
-    // make here that reaches the replica as a client-origin reset.
+    // `AdapterHost.requestReplacement` is deliberately narrow - it accepts only a `ReplicaReplacementReason` - so there is no call an adapter can make here that reaches the replica as a client-origin reset.
     adapter.triggerReplacementRequest(
       "resume-too-old",
       resumeTooOldTransition("e1/0"),
@@ -1929,20 +1790,13 @@ describe("Replica.reset provenance", () => {
   });
 });
 
-// ─── LeaseRegistry / LeaseGrant conformance — demand vs residency ──────────
-//
-// The rule: a lease is a statement of DEMAND, not a handle on bytes, and
-// there is exactly one demand book. `leaseCount` tracks demand;
-// `materializedIds` tracks residency; the two disagree for exactly as long
-// as a resource is "awaiting-seed".
+// ─── LeaseRegistry / LeaseGrant conformance - demand vs residency ────────── The rule: a lease is a statement of demand, not a handle on bytes, and there is exactly one demand book.
 
 function createSeedableLeaseMaterializer<
   TResource,
 >(): LeaseMaterializer<TResource> & {
   seed(resourceId: string, resource: TResource): void;
-  // `Mock`, not `ReturnType<typeof vi.fn>` — the repo's type-safety lint bans
-  // `ReturnType<...>` in every `.ts` file, and this package grants no test
-  // exemption.
+  // `Mock`, not `ReturnType<typeof vi.fn>` - the repo's type-safety lint bans `ReturnType<...>` in every `.ts` file, and this package grants no test exemption.
   readonly demote: Mock;
 } {
   const seeded = new Map<string, TResource>();
@@ -1957,7 +1811,6 @@ function createSeedableLeaseMaterializer<
   };
 }
 
-/** A minimal in-memory `LeaseRegistry<TResource>` driving a `LeaseMaterializer`. */
 function createFakeLeaseRegistry<TResource>(
   materializer: LeaseMaterializer<TResource>,
 ): LeaseRegistry<TResource> {
@@ -1992,7 +1845,7 @@ function createFakeLeaseRegistry<TResource>(
         // The only arm with no lease: no demand was registered.
         return { kind: "unavailable", reason: "disposed" };
       }
-      // Demand is counted BEFORE materialisation completes, and stays
+      // Demand is counted before materialisation completes, and stays
       // counted whether or not anything comes back below.
       leaseCounts.set(resourceId, currentCount(resourceId) + 1);
       const lease = makeLease(resourceId);
@@ -2067,10 +1920,7 @@ describe("LeaseRegistry / LeaseGrant conformance", () => {
     expect(registry.materializedIds()).toContain("doc-cold");
     expect(registry.leaseCount("doc-cold")).toBe(2);
 
-    // The bug this seam exists to prevent: a resource that has just
-    // materialised under demand that was already counted must not be
-    // treated as idle and cooled. Assert with a spy, not merely that a
-    // value came back.
+    // The bug this seam exists to prevent: a resource that has just materialised under demand that was already counted must not be treated as idle and cooled.
     expect(materializer.demote).not.toHaveBeenCalled();
 
     firstGrant.lease.release();

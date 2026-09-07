@@ -3,18 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeAttemptRecordForEnvironment } from "./attempt-record-test-support";
-// Type-only, so it is erased before `vi.hoisted` runs. Annotating the fixture
-// with the PRODUCER's contract rather than a hand-copied structural twin is
-// what makes this mock fail to compile - instead of silently going stale -
-// when `KillConflictingPortOwnerResult` grows a field the command must handle.
+// Type-only, so it is erased before `vi.hoisted` runs.
+// Annotating the fixture with the PRODUCER's contract rather than a hand-copied structural twin is what makes this mock fail to compile - instead of silently going stale - when `KillConflictingPortOwnerResult` grows a field the command must handle.
 import type { KillConflictingPortOwnerResult } from "../../host/free-port-kill";
 
-// `host free-port-and-restart`'s command-level wiring (Host Update Layer
-// Redesign Tech Plan, "Lifecycle lock coverage"): the kill (when a pid
-// is given) and the restart both execute inside ONE `cli-lock`
-// acquisition. The kill/probe logic itself lives in
-// `host/free-port-kill.ts` and is exercised there; this file only
-// proves the command's own wiring and ordering.
+// `host free-port-and-restart`'s command-level wiring (Host Update Layer Redesign Tech Plan, "Lifecycle lock coverage"): the kill (when a pid is given) and the restart both execute inside ONE `cli-lock` acquisition.
+// The kill/probe logic itself lives in `host/free-port-kill.ts` and is exercised there; this file only proves the command's own wiring and ordering.
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
@@ -57,11 +51,8 @@ vi.mock("../../service", async (importOriginal) => {
   };
 });
 
-// The real `publishHostStartAdoption` waits (up to 30s) for a service-
-// manager child to ack a spawn that never happens under a stubbed
-// controller. This suite pins `host free-port-and-restart`'s command-level
-// wiring, not the adoption handshake (that's `host-start-adoption.
-// test.ts`), so replace it with an immediately-satisfied lease.
+// The real `publishHostStartAdoption` waits (up to 30s) for a service- manager child to ack a spawn that never happens under a stubbed controller.
+// This suite pins `host free-port-and-restart`'s command-level wiring, not the adoption handshake (that's `host-start-adoption. test.ts`), so replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
   publishHostStartAdoption: async () => ({
     waitForSpawn: async () => undefined,
@@ -76,9 +67,7 @@ vi.mock("../../host/free-port-kill", () => ({
     commandName: string;
     verifyMutationCapability: () => Promise<void>;
   }) => {
-    // Recorded WITHOUT the capability callback so the `toEqual` assertions
-    // below stay value-comparisons; the callback's wiring is exercised by
-    // the revalidation tests, not by identity on this record.
+    // Recorded WITHOUT the capability callback so the `toEqual` assertions below stay value-comparisons; the callback's wiring is exercised by the revalidation tests, not by identity on this record.
     mocks.killCalls.push({
       pid: opts.pid,
       port: opts.port,
@@ -107,11 +96,8 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
 import { buildHostFreePortAndRestartCommand } from "../host-free-port-and-restart";
 import type { CommandContext } from "../../runner/runner";
 
-// `store/paths` binds its home root from `os.homedir()` at module load, and
-// the shared contender layer's real, unmocked attempt lock/record live
-// under it - without redirecting this, every test in this file would read
-// and lock-contend the actual operator's `~/.traycer/host-home`, not a
-// sandbox. Mirrors `host-restart.test.ts`'s identical fixture.
+// `store/paths` binds its home root from `os.homedir()` at module load, and the shared contender layer's real, unmocked attempt lock/record live under it - without redirecting this, every test in this file would read and lock-contend the actual operator's `~/.traycer/host-home`, not a sandbox.
+// Mirrors `host-restart.test.ts`'s identical fixture.
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -157,9 +143,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
     osHome.current = workHome;
     process.env.HOME = workHome;
     process.env.USERPROFILE = workHome;
-    // `store/paths` captures `homedir()` once at module load - drop the
-    // module cache so each test (and its dynamic import below) sees its
-    // own tmp HOME, matching `host-restart.test.ts`'s identical pattern.
+    // `store/paths` captures `homedir()` once at module load - drop the module cache so each test (and its dynamic import below) sees its own tmp HOME, matching `host-restart.test.ts`'s identical pattern.
     vi.resetModules();
   });
 
@@ -281,11 +265,8 @@ describe("buildHostFreePortAndRestartCommand", () => {
     mocks.killThrows = null;
   });
 
-  // Inverted from the pre-CLI-011 contract, kept in place rather than deleted
-  // so the diff shows the flip: a failed SIGTERM used to proceed to restart
-  // the host into a port a foreign process still held. It must now throw
-  // BEFORE the restart is ever attempted - the single most important
-  // assertion in this file is the restart mock's zero call count below.
+  // Inverted from the pre-CLI-011 contract, kept in place rather than deleted so the diff shows the flip: a failed SIGTERM used to proceed to restart the host into a port a foreign process still held.
+  // It must now throw BEFORE the restart is ever attempted - the single most important assertion in this file is the restart mock's zero call count below.
   it("a failed SIGTERM throws E_HOST_PORT_KILL_FAILED and never calls restart", async () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
@@ -335,10 +316,8 @@ describe("buildHostFreePortAndRestartCommand", () => {
     expect(mocks.controllerCalls).toEqual([]);
   });
 
-  // Same `still-held` verdict, different situation, and the recovery advice
-  // has to differ: the pid we signalled is gone, so "stop pid <original>"
-  // names a process that no longer exists and cannot free the port. The
-  // holder is almost always something being restarted by a supervisor.
+  // Same `still-held` verdict, different situation, and the recovery advice has to differ: the pid we signalled is gone, so "stop pid <original>" names a process that no longer exists and cannot free the port.
+  // The holder is almost always something being restarted by a supervisor.
   it("names the replacement holder - not the dead original - when a new pid took the port", async () => {
     mocks.controllerCalls = [];
     mocks.killResult = {
@@ -369,10 +348,8 @@ describe("buildHostFreePortAndRestartCommand", () => {
     expect(mocks.controllerCalls).toEqual([]);
   });
 
-  // The ESRCH race AND a replacement listener at once: the signal failed
-  // because the target had already exited, and verification then identified a
-  // different holder. Shaping the error off `killError` first would name the
-  // dead original and discard the only actionable fact we have.
+  // The ESRCH race AND a replacement listener at once: the signal failed because the target had already exited, and verification then identified a different holder.
+  // Shaping the error off `killError` first would name the dead original and discard the only actionable fact we have.
   it("prefers the verified replacement holder over the signal error when both are present", async () => {
     mocks.controllerCalls = [];
     mocks.killResult = {
@@ -427,12 +404,8 @@ describe("buildHostFreePortAndRestartCommand", () => {
     expect(mocks.controllerCalls).toEqual([]);
   });
 
-  // Same `--defer-if-parked` contract as `host restart` (round-2
-  // revalidation redesign): this command reaches the identical `stop-only`
-  // branch from the port-conflict repair, so it is the same
-  // stop-without-relaunch hazard by another entry point. Driven by a real
-  // attempt record on disk, read by the real, unmocked shared contender
-  // layer - not a stubbed `recoveryAction`.
+  // Same `--defer-if-parked` contract as `host restart` (round-2 revalidation redesign): this command reaches the identical `stop-only` branch from the port-conflict repair, so it is the same stop-without-relaunch hazard by another entry point.
+  // Driven by a real attempt record on disk, read by the real, unmocked shared contender layer - not a stubbed `recoveryAction`.
   describe("--defer-if-parked", () => {
     it("a stop-only record + --defer-if-parked refuses WITHOUT ever stopping the service", async () => {
       mocks.controllerCalls = [];
@@ -489,20 +462,13 @@ describe("buildHostFreePortAndRestartCommand", () => {
       });
     });
 
-    // Regression for the `killError` warning composing with whichever
-    // action actually ran, instead of a hardcoded "restart requested"
-    // claim: before this fix, a failed SIGTERM on a stop-only outcome
-    // still told the caller a restart was requested even though the
-    // service was only stopped.
+    // Regression for the `killError` warning composing with whichever action actually ran, instead of a hardcoded "restart requested" claim: before this fix, a failed SIGTERM on a stop-only outcome still told the caller a restart was requested even though the service was only stopped.
     it("a stop-only record with a failed SIGTERM composes the warning with the action that actually ran (stop), not a hardcoded restart claim", async () => {
       mocks.controllerCalls = [];
       mocks.lockCalls = [];
       mocks.killCalls = [];
-      // A failed SIGTERM whose port was verified free regardless: the only
-      // failed-signal shape that still reaches the service action, now that
-      // an unverified release throws before it (CLI-011). The composition
-      // under test is the same - the kill sentence must attach to the action
-      // that actually ran (stop), not to a hardcoded restart claim.
+      // A failed SIGTERM whose port was verified free regardless: the only failed-signal shape that still reaches the service action, now that an unverified release throws before it (CLI-011).
+      // The composition under test is the same - the kill sentence must attach to the action that actually ran (stop), not to a hardcoded restart claim.
       mocks.killResult = {
         killed: false,
         killError: "EPERM",

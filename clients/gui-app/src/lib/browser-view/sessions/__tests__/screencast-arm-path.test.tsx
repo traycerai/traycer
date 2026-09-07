@@ -104,9 +104,7 @@ describe("screencast arm path", () => {
     controller.noteArmed(1);
     firePointerMove(overlay, { clientX: 200, clientY: 120 });
 
-    // The host claim is real - that is the whole point of pre-arm - but the
-    // pointer crossing the tile must not drive the remote cursor, and nothing
-    // in the render may say "Controlling".
+    // The host claim is real - that is the whole point of pre-arm - but the pointer crossing the tile must not drive the remote cursor, and nothing in the render may say "Controlling".
     expect(controller.activeArmEpoch()).toBe(1);
     expect(engaged).toEqual([]);
     expect(pointerTypes(sent)).toEqual([]);

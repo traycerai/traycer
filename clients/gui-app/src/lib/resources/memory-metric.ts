@@ -26,8 +26,7 @@ export interface ResourceMemoryProjection {
 
 /**
  * PSS is selected only when the complete displayed host scope can support it.
- * Electron's metrics are working-set values, so including Desktop deliberately
- * selects the compatible RSS/working-set view for every row and total.
+ * Electron's metrics are working-set values, so including Desktop deliberately selects the compatible RSS/working-set view for every row and total.
  */
 export function selectResourceMemoryMetric(
   projection: ResourceMemoryProjection,
@@ -82,9 +81,8 @@ export function resourceMemoryLabel(
 }
 
 /**
- * The one rendering of an unavailable reading. Split deliberately: the dash is
- * decoration (`aria-hidden`) wherever a row shows it, and the words are what a
- * screen reader or a tooltip gets - never `0 B`, which is a real measurement.
+ * The one rendering of an unavailable reading.
+ * Split deliberately: the dash is decoration (`aria-hidden`) wherever a row shows it, and the words are what a screen reader or a tooltip gets - never `0 B`, which is a real measurement.
  */
 export const UNAVAILABLE_DASH = "\u2014";
 

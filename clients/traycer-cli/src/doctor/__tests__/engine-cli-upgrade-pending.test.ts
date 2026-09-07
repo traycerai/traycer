@@ -10,17 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Doctor must emit a stable `CLI_UPGRADE_PENDING` issue whenever the
-// CLI install manifest has a non-null pendingUpgrade - Settings and
-// Desktop's failure card key off this code to render the staged
-// upgrade and offer a `host restart` fix that releases the binary
-// lock.
-//
-// This test isolates the doctor engine from the host supervisor /
-// service-controller checks (which require a real host install +
-// platform service manager) by mocking the supporting reads. We only
-// care here that the pending-upgrade issue is produced and shaped
-// correctly.
+// Doctor must emit a stable `CLI_UPGRADE_PENDING` issue whenever the CLI install manifest has a non-null pendingUpgrade - Settings and Desktop's failure card key off this code to render the staged upgrade and offer a `host restart` fix that releases the binary lock.
+// This test isolates the doctor engine from the host supervisor / service-controller checks (which require a real host install + platform service manager) by mocking the supporting reads.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -64,9 +55,7 @@ afterEach(() => {
 
 function stageDoctorMocks() {
   // Pretend no host is installed and no service is registered.
-  // That suppresses every other doctor issue except the install-record
-  // one, which is acceptable noise for this test - we just assert
-  // that the pending-upgrade issue is also produced.
+  // That suppresses every other doctor issue except the install-record one, which is acceptable noise for this test - we just assert that the pending-upgrade issue is also produced.
   vi.doMock("../../manifest/host-install", () => ({
     readHostInstallRecord: () => null,
   }));
@@ -96,9 +85,8 @@ function stageDoctorMocks() {
   }));
 }
 
-// Same isolation as `stageDoctorMocks`, but with the OS service reporting
-// `running`. Used by the recovered-host case: doctor's marker-derived
-// service-start report has to key off current state, not just the marker.
+// Same isolation as `stageDoctorMocks`, but with the OS service reporting `running`.
+// Used by the recovered-host case: doctor's marker-derived service-start report has to key off current state, not just the marker.
 function stageDoctorMocksWithRunningService() {
   vi.doMock("../../manifest/host-install", () => ({
     readHostInstallRecord: () => null,
@@ -129,10 +117,8 @@ function stageDoctorMocksWithRunningService() {
   }));
 }
 
-// `stageDoctorMocks` with a bootstrap history: the host is DOWN now, but the
-// log shows it started after a given moment. Used to prove the finalize
-// marker's service-start report keys off recovery history and not only current
-// liveness - the two differ once the host comes up and later stops again.
+// `stageDoctorMocks` with a bootstrap history: the host is DOWN now, but the log shows it started after a given moment.
+// Used to prove the finalize marker's service-start report keys off recovery history and not only current liveness - the two differ once the host comes up and later stops again.
 function stageDoctorMocksWithStartAt(startedAt: string) {
   vi.doMock("../../manifest/host-install", () => ({
     readHostInstallRecord: () => null,
@@ -253,9 +239,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
     expect(issue).toBeDefined();
     expect(issue?.severity).toBe("warning");
-    // No Doctor auto-fix button - Desktop's failure card doesn't proxy
-    // `cli upgrade` through the host management IPC, so we leave
-    // recovery to the user via the terminal command.
+    // No Doctor auto-fix button - Desktop's failure card doesn't proxy `cli upgrade` through the host management IPC, so we leave recovery to the user via the terminal command.
     expect(issue?.fixAction).toBeNull();
     expect(issue?.terminalCommand).toMatch(/traycer cli upgrade/);
     expect(issue?.title).toContain("missing");
@@ -305,12 +289,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     ).toBeUndefined();
   });
 
-  // CLI-007: doctor used to fold a "swapped" marker into the manifest and
-  // delete it (`reconcilePostFinalizeMarker`), so a second `host doctor` run
-  // over the same disk state gave a different answer than the first - a
-  // diagnostic that destroys the evidence it reports. It now only READS the
-  // marker (`readPostFinalizeMarker`) and reports what it finds; folding the
-  // marker into the manifest is `host restart`'s job.
+  // CLI-007: doctor used to fold a "swapped" marker into the manifest and delete it (`reconcilePostFinalizeMarker`), so a second `host doctor` run over the same disk state gave a different answer than the first - a diagnostic that destroys the evidence it reports.
+  // It now only READS the marker (`readPostFinalizeMarker`) and reports what it finds; folding the marker into the manifest is `host restart`'s job.
   it("reports a 'swapped' post-finalize marker as CLI_UPGRADE_FINALIZED_UNRECONCILED without touching the marker or the manifest", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
@@ -352,9 +332,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(settled?.severity).toBe("info");
     expect(settled?.fixAction).toBe("host-restart");
     expect(settled?.terminalCommand).toMatch(/traycer host restart/);
-    // `host doctor`'s exit code is keyed off error/fatal severities
-    // (commands/host-doctor.ts) - an `info` issue for an already-applied
-    // upgrade must not itself flip a doctor run to failing.
+    // `host doctor`'s exit code is keyed off error/fatal severities (commands/host-doctor.ts) - an `info` issue for an already-applied upgrade must not itself flip a doctor run to failing.
     expect(settled?.severity).not.toBe("error");
     expect(settled?.severity).not.toBe("fatal");
     // Read-only: the marker and the manifest are untouched.
@@ -407,10 +385,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(readFileSync(markerPath, "utf8")).toBe(markerBody);
   });
 
-  // The finding CLI-007 exists to prove: a diagnostic that destroys the
-  // evidence it reports cannot be trusted, and cannot be run twice. Running
-  // `runDoctor` twice back to back over the same real temp-dir marker and
-  // manifest files must leave both byte-identical.
+  // The finding CLI-007 exists to prove: a diagnostic that destroys the evidence it reports cannot be trusted, and cannot be run twice.
+  // Running `runDoctor` twice back to back over the same real temp-dir marker and manifest files must leave both byte-identical.
   it("running runDoctor twice leaves the marker file and the CLI manifest byte-identical", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
@@ -463,12 +439,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     );
   });
 
-  // A marker carries no version - only the paths it operated on - so "a marker
-  // exists" is not evidence about the upgrade the manifest is CURRENTLY
-  // pending. A helper that swapped 1.5.0 can leave its marker behind, and a
-  // later `cli upgrade` overwrites pendingUpgrade with 1.6.0 without clearing
-  // it. Believing the stale marker would tell the user 1.6.0 was already
-  // applied - the opposite of true, and unfalsifiable from the card.
+  // A marker carries no version - only the paths it operated on - so "a marker exists" is not evidence about the upgrade the manifest is CURRENTLY pending.
+  // A helper that swapped 1.5.0 can leave its marker behind, and a later `cli upgrade` overwrites pendingUpgrade with 1.6.0 without clearing it.
   it("ignores a post-finalize marker that belongs to a DIFFERENT staged upgrade", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
@@ -514,9 +486,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
   });
 
   // A matching `swap-failed` marker must not mask the missing-stage recovery.
-  // `host restart` - the fix the finalize-failed card offers - would consume
-  // the marker, find no bytes to finalize, and leave the upgrade pending
-  // exactly as it was. Only the re-stage guidance actually recovers this.
+  // `host restart` - the fix the finalize-failed card offers - would consume the marker, find no bytes to finalize, and leave the upgrade pending exactly as it was.
   it("prefers the re-stage guidance over the finalize-failed card when the staged binary is gone", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
@@ -561,11 +531,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     );
   });
 
-  // The NORMAL on-disk state for "helper swapped the CLI, then could not start
-  // the service": `finalizePendingCliUpgrade` clears pendingUpgrade on success
-  // and the marker recording the service-start failure is written afterwards.
-  // Gating marker interpretation on `pendingUpgrade !== null` therefore lost
-  // the helper's error in exactly the case it exists to explain.
+  // The NORMAL on-disk state for "helper swapped the CLI, then could not start the service": `finalizePendingCliUpgrade` clears pendingUpgrade on success and the marker recording the service-start failure is written afterwards.
+  // Gating marker interpretation on `pendingUpgrade !== null` therefore lost the helper's error in exactly the case it exists to explain.
   it("reports a swapped marker's serviceStartError even though the pending upgrade is already cleared", async () => {
     stageDoctorMocks();
     const cliDir = join(workHome, ".traycer", "cli");
@@ -696,12 +663,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     );
   });
 
-  // The marker records what happened at `attemptedAt` and then persists until
-  // some later `host restart` reconciles it. On a machine whose supervisor
-  // already recovered the host, warning that "the host is down" would assert
-  // something this very doctor run has evidence against - the failure mode
-  // this whole PR is about, arriving via a stale file instead of a return
-  // value.
+  // The marker records what happened at `attemptedAt` and then persists until some later `host restart` reconciles it.
+  // On a machine whose supervisor already recovered the host, warning that "the host is down" would assert something this very doctor run has evidence against - the failure mode this whole PR is about, arriving via a stale file instead of a return value.
   it("downgrades the service-start failure to non-actionable history once the host is running again", async () => {
     stageDoctorMocksWithRunningService();
     const cliDir = join(workHome, ".traycer", "cli");
@@ -757,12 +720,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(issue?.message).toContain("Input/output error");
   });
 
-  // History QUALIFIES the report; it does not suppress it. A `starting` marker
-  // is written before the child is even spawned, so it proves another attempt
-  // began - not that it succeeded - and the host is observably down right now,
-  // which is the actionable part. So: still a warning with a fix, but the copy
-  // says a start has happened since, and the two facts stay in separate
-  // details fields so nothing can read one as the other.
+  // History QUALIFIES the report; it does not suppress it.
+  // A `starting` marker is written before the child is even spawned, so it proves another attempt began - not that it succeeded - and the host is observably down right now, which is the actionable part.
   it("keeps the service-start failure actionable while the host is down, but notes a start since", async () => {
     // Host is DOWN now (service "stopped", no pid metadata) but the bootstrap
     // log shows a start AFTER the marker was written.
@@ -813,9 +772,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     // that any later attempt succeeded.
     expect(issue?.severity).toBe("warning");
     expect(issue?.fixAction).toBe("host-restart");
-    // ...but the two facts must not be conflated. Claiming "running now" while
-    // the service and pid probes both say otherwise is the contradiction this
-    // separation exists to prevent.
+    // ...but the two facts must not be conflated.
+    // Claiming "running now" while the service and pid probes both say otherwise is the contradiction this separation exists to prevent.
     expect(issue?.details?.hostRunningNow).toBe(false);
     expect(issue?.details?.startAttemptedSinceFailure).toBe(true);
     expect(issue?.message).not.toContain("The host is running now");
@@ -823,12 +781,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(issue?.message).toContain("may have a different cause");
   });
 
-  // The other arrangement that loses the causal error: an OLD swapped marker
-  // carrying a serviceStartError survives while a LATER `cli upgrade` records
-  // a new pending upgrade. `postFinalizeMarkerIssue` correctly rejects that
-  // marker as stale, so gating this report on "nothing pending" meant nobody
-  // reported the failure at all - while the host stayed down for exactly the
-  // reason the marker names.
+  // The other arrangement that loses the causal error: an OLD swapped marker carrying a serviceStartError survives while a LATER `cli upgrade` records a new pending upgrade.
+  // `postFinalizeMarkerIssue` correctly rejects that marker as stale, so gating this report on "nothing pending" meant nobody reported the failure at all - while the host stayed down for exactly the reason the marker names.
   it("still reports a stale marker's service-start error when a NEWER upgrade is pending", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
@@ -878,13 +832,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     ).toBeUndefined();
   });
 
-  // `invalid` (read the bytes, they were nonsense) and `unreadable` (could not
-  // read the bytes at all) license different advice. Reconciliation unlinks
-  // the first but returns without unlinking on a read failure, so offering
-  // `host restart` for the second promises a repair that cannot happen.
-  // A directory at the marker path makes `readFile` fail deterministically
-  // (EISDIR) regardless of which user runs the suite - a chmod-based fixture
-  // would silently not apply under root.
+  // `invalid` (read the bytes, they were nonsense) and `unreadable` (could not read the bytes at all) license different advice.
+  // Reconciliation unlinks the first but returns without unlinking on a read failure, so offering `host restart` for the second promises a repair that cannot happen.
   it("offers no repair when the marker cannot be read at all, only when it cannot be parsed", async () => {
     stageDoctorMocks();
     const cliDir = join(workHome, ".traycer", "cli");
@@ -922,11 +871,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(issue?.message).toContain("permissions");
   });
 
-  // `readPostFinalizeMarker` separates `invalid` from `absent` precisely so the
-  // fault can be reported. Consulting that only inside the pending-upgrade
-  // branch would mean a corrupt marker on a manifest with nothing pending
-  // produces silence, and doctor calls the CLI-upgrade state clean while a file
-  // it could not parse sits on disk shaping the next `host restart`.
+  // `readPostFinalizeMarker` separates `invalid` from `absent` precisely so the fault can be reported.
+  // Consulting that only inside the pending-upgrade branch would mean a corrupt marker on a manifest with nothing pending produces silence, and doctor calls the CLI-upgrade state clean while a file it could not parse sits on disk shaping the next `host restart`.
   it("reports an unreadable finalize marker even when no upgrade is pending", async () => {
     stageDoctorMocks();
     const cliDir = join(workHome, ".traycer", "cli");
@@ -956,11 +902,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
       portConflictDeps: null,
     });
 
-    // Its OWN code, not the read-failure one: reconciliation unlinks an
-    // unparseable marker, so `host restart` genuinely clears it, whereas a
-    // marker it cannot read at all is left in place. Opposite remediations
-    // must not share a code, or a consumer grouping by `code` has to parse
-    // message prose to tell which advice applies.
+    // Its OWN code, not the read-failure one: reconciliation unlinks an unparseable marker, so `host restart` genuinely clears it, whereas a marker it cannot read at all is left in place.
+    // Opposite remediations must not share a code, or a consumer grouping by `code` has to parse message prose to tell which advice applies.
     const unparseable = result.issues.find(
       (i) => i.code === "CLI_UPGRADE_MARKER_UNPARSEABLE",
     );
@@ -969,10 +912,8 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(
       result.issues.find((i) => i.code === "CLI_UPGRADE_MARKER_UNREADABLE"),
     ).toBeUndefined();
-    // The fixture creates the marker directory 0o700 under the test user, so
-    // it IS writable and this branch must offer the repair that works.
-    // Pinning both sides of that conditional, since probing writability
-    // existed precisely to stop advertising a deletion that cannot happen.
+    // The fixture creates the marker directory 0o700 under the test user, so it IS writable and this branch must offer the repair that works.
+    // Pinning both sides of that conditional, since probing writability existed precisely to stop advertising a deletion that cannot happen.
     expect(unparseable?.fixAction).toBe("host-restart");
     expect(unparseable?.terminalCommand).toMatch(/traycer host restart/);
     expect(unparseable?.details?.markerDirWritable).toBe(true);

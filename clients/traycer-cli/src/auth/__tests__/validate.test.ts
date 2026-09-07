@@ -8,11 +8,7 @@ import { readCredentials } from "../../store/credentials";
 import { validateStoredCredentials } from "../validate";
 
 // Access-only validation (§3/§7): the spend/write goes through the locked store.
-// Keep the real (pure) identity projection, stub the network probe, and inject a
-// fake store through the store-facing helpers `validate` imports directly. Mocking
-// `createCliCredentialsStore` alone would NOT work: `runWithCliStore` calls it
-// intra-module, so we mock `runWithCliStore` / `withCommitRetry` instead and steer
-// `updateProfile` / `rotate` per-test.
+// Keep the real (pure) identity projection, stub the network probe, and inject a fake store through the store-facing helpers `validate` imports directly.
 const { fakeStore, updateProfileMock, rotateMock } = vi.hoisted(() => {
   const updateProfileMock = vi.fn();
   const rotateMock = vi.fn();
@@ -60,12 +56,8 @@ vi.mock("../../store/credentials", async (importOriginal) => {
   return { ...actual, readCredentials: vi.fn() };
 });
 
-// Mirrors the real `withCommitRetry`'s retry-on-`commit-failed` shape (see
-// `store/credentials-store.ts`) closely enough to exercise it: re-drive `op`
-// while the outcome is `commit-failed`, capped, no artificial delay. A flat
-// `(op) => op()` would call `store.rotate` at most once per test and could
-// never reproduce "a retried continuation lands and resurfaces as
-// `superseded`" - exactly the case the fix under test depends on.
+// Mirrors the real `withCommitRetry`'s retry-on-`commit-failed` shape (see `store/credentials-store.ts`) closely enough to exercise it: re-drive `op` while the outcome is `commit-failed`, capped, no artificial delay.
+// A flat `(op) => op()` would call `store.rotate` at most once per test and could never reproduce "a retried continuation lands and resurfaces as `superseded`" - exactly the case the fix under test depends on.
 const RETRY_CAP = 3;
 vi.mock("../../store/credentials-store", () => ({
   createCliCredentialsStore: () => fakeStore,
@@ -164,12 +156,8 @@ describe("validateStoredCredentials", () => {
 
   it("reports effect='none' and keeps the file's own savedAt when the advisory write is superseded (never attempted, not merely unconfirmed)", async () => {
     identityMock.mockResolvedValue({ kind: "valid", user: changedUser });
-    // `superseded` always carries the FILE's current pair - never `null` (see
-    // `protocol/src/config/credentials-mutation.ts`). A `null` fixture here
-    // would be an impossible shape that could hide a real bug in this branch
-    // (Codex review, PR #1501): give it a realistic sibling pair - a
-    // different token and a later `savedAt` than `storedCreds`, exactly what
-    // a sibling's rotation would leave in the file.
+    // `superseded` always carries the FILE's current pair - never `null` (see `protocol/src/config/credentials-mutation.ts`).
+    // A `null` fixture here would be an impossible shape that could hide a real bug in this branch (Codex review, PR #1501): give it a realistic sibling pair - a different token and a later `savedAt` than `storedCreds`, exactly what a sibling's rotation would leave in the file.
     updateProfileMock.mockResolvedValue({
       outcome: "superseded",
       credentials: {
@@ -183,10 +171,7 @@ describe("validateStoredCredentials", () => {
     const outcome = await validateStoredCredentials();
 
     expect(outcome).toMatchObject({ kind: "valid", effect: "none" });
-    // A write that never ran must not report a save that did not happen -
-    // the timestamp has to stay the file's own, not a freshly minted one, and
-    // NOT the sibling's pair above (this branch ignores `result.credentials`
-    // entirely on a non-`applied` outcome).
+    // A write that never ran must not report a save that did not happen - the timestamp has to stay the file's own, not a freshly minted one, and NOT the sibling's pair above (this branch ignores `result.credentials` entirely on a non-`applied` outcome).
     if (outcome.kind === "valid") {
       expect(outcome.credentials.savedAt).toBe(storedCreds.savedAt);
     }
@@ -201,9 +186,7 @@ describe("validateStoredCredentials", () => {
 
     const outcome = await validateStoredCredentials();
 
-    // This is the distinction the fix exists for: `superseded` above is a
-    // certainty (`none`) because the write never ran; `commit-failed` here
-    // cannot claim either way, so it must NOT collapse to the same `none`.
+    // This is the distinction the fix exists for: `superseded` above is a certainty (`none`) because the write never ran; `commit-failed` here cannot claim either way, so it must NOT collapse to the same `none`.
     expect(outcome).toMatchObject({
       kind: "valid",
       effect: "profile-refresh-unconfirmed",
@@ -306,10 +289,8 @@ describe("validateStoredCredentials", () => {
     });
   });
 
-  // `refresh-network` is spend-AMBIGUOUS on its own: the refresh POST left the
-  // process and the reply was lost, so the server may have rotated. The store
-  // keeps its spent-base marker armed for that reason, and `none` is defined
-  // here as a certainty - so this outcome must never report it.
+  // `refresh-network` is spend-AMBIGUOUS on its own: the refresh POST left the process and the reply was lost, so the server may have rotated.
+  // The store keeps its spent-base marker armed for that reason, and `none` is defined here as a certainty - so this outcome must never report it.
   it("maps a lost refresh reply to network-error with an UNCONFIRMED rotation, never 'none'", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({
@@ -337,9 +318,8 @@ describe("validateStoredCredentials", () => {
   );
 
   it("maps user-mismatch to rejected WITHOUT reporting the foreign account", async () => {
-    // rotate carries the OTHER account's pair on user-mismatch; whoami must NOT
-    // surface it as valid. This switch is independent of the host-rpc
-    // revalidator's, so its cross-user safety needs its own guard here.
+    // rotate carries the OTHER account's pair on user-mismatch; whoami must NOT surface it as valid.
+    // This switch is independent of the host-rpc revalidator's, so its cross-user safety needs its own guard here.
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({
       outcome: "user-mismatch",
@@ -376,11 +356,8 @@ describe("validateStoredCredentials", () => {
 
   it("reports effect='token-rotation-unconfirmed' on a terminal commit-failed - the spend happened but whether it landed is unknowable, not false", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
-    // Retries are exhausted (every attempt keeps failing the commit), so this
-    // is the terminal case: `withCommitRetry` gives up still holding
-    // `commit-failed`. `commitMutation` writes the file at its apply step and
-    // only then finalizes the sidecar, so a `commit-failed` here does NOT mean
-    // the pair never reached disk - it means this process cannot tell.
+    // Retries are exhausted (every attempt keeps failing the commit), so this is the terminal case: `withCommitRetry` gives up still holding `commit-failed`.
+    // `commitMutation` writes the file at its apply step and only then finalizes the sidecar, so a `commit-failed` here does NOT mean the pair never reached disk - it means this process cannot tell.
     rotateMock.mockResolvedValue({
       outcome: "commit-failed",
       credentials: {
@@ -398,12 +375,8 @@ describe("validateStoredCredentials", () => {
   });
 
   it("reports effect='token-rotated' when a retried continuation lands and resurfaces as superseded", async () => {
-    // The bug Codex caught: `withCommitRetry` re-drives `rotate` after a
-    // `commit-failed`, and a landed continuation resurfaces as `superseded` -
-    // identical to the outcome a process that spent NOTHING gets when a
-    // sibling rotated first. The effect must come from whether THIS process
-    // spent (tracked across the retried attempts), not from the final
-    // outcome alone.
+    // The bug Codex caught: `withCommitRetry` re-drives `rotate` after a `commit-failed`, and a landed continuation resurfaces as `superseded` - identical to the outcome a process that spent NOTHING gets when a sibling rotated first.
+    // The effect must come from whether THIS process spent (tracked across the retried attempts), not from the final outcome alone.
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock
       .mockResolvedValueOnce({ outcome: "commit-failed", credentials: null })
@@ -427,11 +400,8 @@ describe("validateStoredCredentials", () => {
     });
   });
 
-  // A failure can arrive AFTER a spend: the first attempt mints a pair and
-  // loses the commit, and by the retry a concurrent logout/account switch has
-  // turned the file into something this rotate refuses. The command failed, but
-  // it did not fail without consuming the refresh token - and a caller auditing
-  // what this invocation touched has no other way to learn that.
+  // A failure can arrive AFTER a spend: the first attempt mints a pair and loses the commit, and by the retry a concurrent logout/account switch has turned the file into something this rotate refuses.
+  // The command failed, but it did not fail without consuming the refresh token - and a caller auditing what this invocation touched has no other way to learn that.
   it.each([
     ["deleted", "rejected"],
     ["tombstoned", "rejected"],

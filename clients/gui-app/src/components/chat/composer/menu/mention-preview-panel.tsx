@@ -30,9 +30,7 @@ import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
 const PANEL_GUTTER_PX = 6;
 const PANEL_BOUNDARY_PADDING_PX = 8;
-// The root row absorbs the full relative-path prefix as one string; past
-// this many characters it stops fitting the panel's fixed width on one
-// line, so it gets middle-elided instead of left to CSS tail-truncate.
+// The root row absorbs the full relative-path prefix as one string; past this many characters it stops fitting the panel's fixed width on one line, so it gets middle-elided instead of left to CSS tail-truncate.
 const ROOT_LABEL_CHAR_BUDGET = 42;
 // Tree rows never exceed 4 (root + up to 2 mid dirs + leaf) by construction
 // of `mentionPathTree`'s hierarchy algorithm.
@@ -43,22 +41,11 @@ export interface MentionPreviewPanelProps {
   readonly listRef: RefObject<HTMLDivElement | null>;
   readonly activeIndex: number;
   readonly preview: MentionPreview | null;
-  /**
-   * Why the highlighted row cannot be committed, or null when it can be.
-   * Rendered above the preview body and separated from it, so the reason
-   * reads first rather than as a footnote to the description.
-   */
+  /** Why the highlighted row cannot be committed, or null when it can be. Rendered above the preview body and separated from it, so the reason reads first rather than as a footnote to the description. */
   readonly disabledReason: string | null;
 }
 
-/**
- * Info-only preview panel pinned beside the composer's @mention/slash menu.
- * Anchored to the active row (via a floating-ui virtual reference reading
- * its live rect), so it tracks the highlighted row vertically as selection
- * changes. Placement prefers the right; `flip` falls back to the left; the
- * `size` gate hides the panel entirely once neither side has room, rather
- * than letting it render past the viewport edge or overlap the list.
- */
+/** Placement prefers the right; `flip` falls back to the left; the `size` gate hides the panel entirely once neither side has room, rather than letting it render past the viewport edge or overlap the list. */
 export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
   const { panelRef, listRef, activeIndex, preview, disabledReason } = props;
   const [fits, setFits] = useState(false);
@@ -67,17 +54,7 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     const panel = panelRef.current;
     if (panel === null) return;
 
-    // Scroll the active row into view before measuring/positioning below.
-    // The menu's own scrollIntoView (composer-menu.tsx) runs in a *passive*
-    // effect that fires after paint, while this positioning effect runs
-    // before paint - on keyboard nav past the list's visible edge, that
-    // ordering would otherwise measure the pre-scroll rect and paint one
-    // frame at the stale spot before autoUpdate catches the scroll and
-    // jumps. Doing it here settles scroll and position in the same
-    // pre-paint pass. Keep the menu's own effect: it's still needed for
-    // rows with no preview, where this component returns null below before
-    // ever running. `block: "nearest"` no-ops once already visible, so the
-    // duplicate scroll for preview rows is harmless.
+    // The menu's own scrollIntoView (composer-menu.tsx) runs in a *passive* effect that fires after paint, while this positioning effect runs before paint - on keyboard nav past the list's visible edge, that ordering would otherwise measure the pre-scroll rect and paint one frame at the stale spot before autoUpdate catches the scroll and jumps.
     listRef.current
       ?.querySelector<HTMLElement>('[data-active="true"]')
       ?.scrollIntoView({ block: "nearest" });
@@ -94,12 +71,8 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     };
 
     const reposition = (): void => {
-      // A zero rect means there is no active row to anchor to (the row is
-      // not rendered yet, or the query missed). Anchoring to it would make
-      // floating-ui measure availability from the viewport ORIGIN - a point
-      // has a whole viewport of room beside it, so the fit gate passes and
-      // the panel paints over whatever occupies the corner. No anchor, no
-      // panel.
+      // A zero rect means there is no active row to anchor to (the row is not rendered yet, or the query missed).
+      // Anchoring to it would make floating-ui measure availability from the viewport ORIGIN - a point has a whole viewport of room beside it, so the fit gate passes and the panel paints over whatever occupies the corner.
       const anchorRect = activeRowRect();
       if (anchorRect.width === 0 && anchorRect.height === 0) {
         setFits(false);
@@ -303,13 +276,7 @@ function PathTreeRows(props: { readonly tree: MentionPathTree }): ReactElement {
   );
 }
 
-/**
- * The root row absorbs the full relative prefix as one string, which can
- * overflow the panel's fixed width for deep trees. Elide the middle instead
- * of letting CSS truncate the tail, so the outermost root segment and the
- * deepest (nearest-to-leaf) directory - the two ends a reader orients from -
- * stay visible.
- */
+/** The root row absorbs the full relative prefix as one string, which can overflow the panel's fixed width for deep trees. Elide the middle instead of letting CSS truncate the tail, so the outermost root segment and the deepest (nearest-to-leaf) directory - the two ends a reader orients from - stay visible. */
 function middleElideRootLabel(rootLabel: string): string {
   if (rootLabel.length <= ROOT_LABEL_CHAR_BUDGET) return rootLabel;
   const isAbsolute = rootLabel.startsWith("/");

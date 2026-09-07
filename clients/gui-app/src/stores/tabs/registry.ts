@@ -11,19 +11,7 @@ import type {
   TabSurfaceDescriptor,
 } from "@/stores/tabs/types";
 
-/**
- * Registry of every tab kind. Adding a new kind:
- * 1. Implement a `TabKindModule` in `kinds/<name>.tsx`.
- * 2. Add it here under its kind key.
- * 3. `HeaderTabKind` is auto-derived from this registry - no manual union edits.
- *    `HeaderTab` and `TabNavigationIntent` still require explicit union variants
- *    in `types.ts` and `intents.ts` respectively (TypeScript cannot infer the
- *    full field shapes from the registry alone).
- *
- * All kind-dispatched behaviors (close, duplicate, navigate) go through the
- * per-concern dispatch functions exported below. Switches are centralized here
- * - consumers call `tabRequestClose(tab)`, `tabDuplicate(tab)`, etc.
- */
+/** Registry of every tab kind. Adding a new kind: */
 export const TAB_KINDS = {
   epic: epicTabModule,
   draft: draftTabModule,
@@ -37,11 +25,7 @@ export const TAB_KINDS = {
  */
 export type HeaderTabKind = keyof typeof TAB_KINDS;
 
-/**
- * Compile-time audit over the existing registry itself. It creates no second
- * registry: the value is the same `TAB_KINDS` object, checked to ensure every
- * registered kind exposes the full surface contract.
- */
+/** Compile-time audit over the existing registry itself. */
 export const TAB_KINDS_SURFACE_CONTRACT = TAB_KINDS satisfies Record<
   HeaderTabKind,
   { readonly descriptor: { readonly surface: TabSurfaceCapabilities } }
@@ -94,9 +78,8 @@ export function tabSurfaceDescriptor(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Per-concern dispatch functions (spec D28 - all switches live here)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Per-concern dispatch
+// functions (spec D28 - all switches live here)
 
 /**
  * Calls the per-kind `requestClose` behavior for `tab`.
@@ -149,10 +132,6 @@ export function tabResolveIntent(tab: HeaderTab): TabNavigationIntent {
   }
 }
 
-/**
- * Builds the TanStack `NavigateOptions` for `intent`.
- * Route-shape knowledge stays in one file per kind.
- */
 export function tabRouteOptions(intent: TabNavigationIntent): NavigateOptions {
   switch (intent.kind) {
     case "epic":
@@ -183,12 +162,6 @@ export function tabActivate(intent: TabNavigationIntent): void {
   }
 }
 
-/**
- * Returns `true` when closing `tab` should prompt the user first
- * (e.g., an epic tab with unsynced edits). Returns `false` when the
- * close is safe to perform silently. Drives bulk-close skip logic
- * and the single-close confirmation prompt.
- */
 export function tabRequiresCloseConfirm(tab: HeaderTab): boolean {
   switch (tab.kind) {
     case "epic":
@@ -202,11 +175,6 @@ export function tabRequiresCloseConfirm(tab: HeaderTab): boolean {
   }
 }
 
-/**
- * Returns the epic id associated with `tab` when the tab is an epic tab,
- * `null` otherwise. Used by the unsynced-close dialog to subscribe to epic
- * registry changes without leaking kind knowledge into the dialog component.
- */
 export function tabEpicId(tab: HeaderTab): string | null {
   switch (tab.kind) {
     case "epic":
@@ -218,16 +186,7 @@ export function tabEpicId(tab: HeaderTab): string | null {
   }
 }
 
-/**
- * Opens `tab` in a new desktop window via the per-kind descriptor's
- * `openInNewWindow` method. Caller MUST guard on `tab.canOpenInNewWindow`
- * first - a kind that does not support new-window implements the method
- * as a no-op for exhaustiveness.
- *
- * The kind-specific logic (ownership MOVE for epic, record MOVE + image
- * handoff for draft, `requestNew(route)` for system tabs) lives in the kind
- * module's descriptor. This dispatch is mechanical delegation only.
- */
+/** Opens `tab` in a new desktop window via the per-kind descriptor's `openInNewWindow` method. */
 export function tabOpenInNewWindow(
   tab: HeaderTab,
   deps: OpenInNewWindowDeps,
@@ -244,11 +203,6 @@ export function tabOpenInNewWindow(
   }
 }
 
-/**
- * Returns `true` when the strip should highlight `tab` for the current
- * `pathname`. Delegates to the kind's `matchesPath` so each kind owns
- * its own activeness logic (exact match vs prefix for sub-routes).
- */
 export function tabMatchesPath(tab: HeaderTab, pathname: string): boolean {
   switch (tab.kind) {
     case "epic":

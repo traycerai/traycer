@@ -9,9 +9,7 @@ import { PrDetailChecks } from "@/components/epic-canvas/pr/pr-detail-sections";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
 /**
- * The Checks tab. The reported problems, in order: a flat ungrouped wall, no
- * app icons, job names shown without the workflow that disambiguates them,
- * and a separate trailing button doing what the name itself should do.
+ * The reported problems, in order: a flat ungrouped wall, no app icons, job names shown without the workflow that disambiguates them, and a separate trailing button doing what the name itself should do.
  */
 
 function check(overrides: Partial<PrCheckContext>): PrCheckContext {

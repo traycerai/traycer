@@ -37,13 +37,6 @@ function optionalString(raw: unknown, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/**
- * Reads a `readonly string[] | null` field off the IPC payload. Returns
- * `null` only when the field is explicitly absent or set to `null`; an empty
- * array is preserved (it's the explicit-empty-args case). Throws on a
- * malformed shape - the renderer types are strict, so anything else is a
- * bug worth surfacing instead of papering over.
- */
 function optionalStringArray(
   raw: unknown,
   key: string,
@@ -63,51 +56,12 @@ function optionalStringArray(
   );
 }
 
-/**
- * IPC handlers that subprocess-invoke the `traycer` CLI. The renderer
- * (via TanStack Query in the future Shell&Environment settings page,
- * and the host-failure card) reaches the on-disk SQLite + bootstrap.log
- * through these. Host-independent - works whether the host is up,
- * starting, or stuck.
- *
- * Each handler maps to a single CLI subcommand. Inputs are validated
- * here at the IPC boundary; the CLI itself re-validates (commander's
- * required-option enforcement, env-key regex, shell-args array shape).
- */
 export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
-  // `host status` is a runner-aware command (Native Packaging cutover): it
-  // emits the shared NDJSON envelope.
-  //
-  // `--no-bootstrap` is KEPT, and the reason is version skew rather than the
-  // CLI's current behavior. host-status from Desktop is informational only
-  // (the renderer's boot card reads it for its `Show details` bootstrap.log
-  // tail), with the launch reconciler (`HostController`) and Settings → Host
-  // driving the install pipeline explicitly; it must never implicitly install
-  // the host.
-  //
-  // The CLI in THIS repo no longer needs the flag - `host status` is now
-  // observational by construction (audit finding CLI-001) and the token
-  // survives only as a hidden deprecated no-op. But `runTraycerCliJson`
-  // resolves the binary through `discoverCli()` (manifest → PATH → bundled),
-  // which is explicitly NOT version-matched with this app -
-  // `runBundledTraycerCliJson` is the version-matched one. So a Desktop build
-  // carrying this commit can still drive a CLI from BEFORE it, and that CLI
-  // will happily download the host, register its service and start it in
-  // response to a status read unless the flag is passed.
-  //
-  // Dropping the flag is therefore safe in exactly one skew direction and
-  // unsafe in the other. Keeping it is safe in both: a new CLI ignores it, an
-  // old CLI obeys it.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostStatus, async () => {
     return runTraycerCliJson(["host", "status", "--no-bootstrap"]);
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerConfigShellGet, async () => {
-    // `config shell get` is now a runner-aware command (Native Packaging
-    // legacy-JSON migration). The shared NDJSON envelope means we use
-    // `runTraycerCliJson` here so the helper unwraps `result.data` for
-    // the renderer - no more plain-JSON compatibility path on this
-    // surface.
     return runTraycerCliJson(["config", "shell", "get"]);
   });
 
@@ -122,10 +76,6 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
         if (args.length === 0) {
           cliArgs.push("--clear-args");
         } else {
-          // Pass shell flags as separate argv entries after `--` so any
-          // leading-dash flags (e.g. "-i", "-l") aren't interpreted as
-          // commander options. No shell quoting required - we're spawning
-          // the CLI directly, not through a shell.
           cliArgs.push("--", ...args);
         }
       }
@@ -188,10 +138,6 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  // Native existence/executability probe for the "Add a shell" live validation.
-  // Runs directly in main (fs access) so it can be debounced per keystroke
-  // without paying a CLI subprocess spawn each time; mirrors the protocol's
-  // `X_OK` detection check.
   bridge.handleInvoke(
     RunnerHostInvoke.traycerConfigShellProbe,
     async (_event, raw: unknown): Promise<TraycerShellProbeResult> => {

@@ -101,9 +101,7 @@ describe("credentials WAL", () => {
     });
 
     it("reports malformed for an mtime floor inside the max-Date bump headroom", async () => {
-      // The top 16s below max-Date must be rejected: a validated floor plus the
-      // largest post-parse bump (bumpMtimeAbove escalates up to 16s) would
-      // otherwise overflow Date and fault at utimes AFTER a spend.
+      // The top 16s below max-Date must be rejected: a validated floor plus the largest post-parse bump (bumpMtimeAbove escalates up to 16s) would otherwise overflow Date and fault at utimes AFTER a spend.
       writeFileSync(
         paths.metaPath,
         JSON.stringify({
@@ -419,9 +417,8 @@ describe("credentials WAL", () => {
     });
 
     it("restores absence on a digest mismatch under a committed sign-out (no resurrection)", async () => {
-      // Committed base is a sign-out (F must be absent), but a stale/foreign
-      // writer left a *different* valid file mid sign-in. Recovery must delete F
-      // so the sidecar-blind host cannot adopt it and undo the logout.
+      // Committed base is a sign-out (F must be absent), but a stale/foreign writer left a *different* valid file mid sign-in.
+      // Recovery must delete F so the sidecar-blind host cannot adopt it and undo the logout.
       await writeCredentialsFile(
         paths.credentialsPath,
         { ...CREDS, token: "stray" },

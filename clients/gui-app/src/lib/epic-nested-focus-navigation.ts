@@ -96,8 +96,7 @@ function navigateNestedFocusWithDomRestore(
 }
 
 /**
- * A background epic surface must not yank the router to its own route, so a
- * focus-param write is gated on the router already being on this epic tab.
+ * A background epic surface must not yank the router to its own route, so a focus-param write is gated on the router already being on this epic tab.
  * Exported because `use-epic-route-synchronization` gates the same write.
  */
 export function isCurrentEpicTabRoute(

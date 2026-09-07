@@ -17,26 +17,13 @@ async function waitForFile(path: string): Promise<void> {
   throw new Error(`cli-lock-worker: timed out waiting for ${path}`);
 }
 
-// Worker process for the genuine multiprocess break-arbitration regression
-// test in `cli-lock.test.ts`. Spawned as a real, separate OS process (via
-// `bun run`) so the test exercises actual cross-process contention on the
-// lock file, not an in-process simulation. Reads its configuration from env
-// vars (there is no other channel into a freshly-spawned process) and
-// implements a "held marker" protocol: while it believes it holds the
-// lock, it writes `held-<label>.marker` into `WORKER_MARKER_DIR` and
-// checks for any OTHER `held-*` marker already there - if one exists, both
-// processes believe they hold the lock simultaneously, which is exactly
-// the bug this regression test guards against.
+// Worker process for the genuine multiprocess break-arbitration regression test in `cli-lock.test.ts`.
+// Spawned as a real, separate OS process (via `bun run`) so the test exercises actual cross-process contention on the lock file, not an in-process simulation.
 async function main(): Promise<void> {
   const lockPath = process.env.WORKER_LOCK_PATH;
   const markerDir = process.env.WORKER_MARKER_DIR;
   const label = process.env.WORKER_LABEL;
-  // Optional: when set, this worker signals `<dir>/held` once it is holding
-  // the lock and has written its marker, then blocks until `<dir>/release`
-  // appears before releasing - letting a test resume a DIFFERENT, paused
-  // contender while this worker's fresh lock is still genuinely on disk
-  // and it is still inside its critical section, rather than only after it
-  // has fully exited.
+  // Optional: when set, this worker signals `<dir>/held` once it is holding the lock and has written its marker, then blocks until `<dir>/release` appears before releasing - letting a test resume a DIFFERENT, paused contender while this worker's fresh lock is still genuinely on disk and it is still inside its critical section, rather than only after it has fully exited.
   const holdBarrierDir = process.env.WORKER_HOLD_BARRIER_DIR;
   if (
     lockPath === undefined ||

@@ -28,25 +28,10 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
-/**
- * Landing-surface durability for the rate-limit switch banner.
- *
- * Mirrors landing-composer.tsx wiring:
- * - real `useProfileRateLimitSwitchPrompt` (default-host providers list)
- * - real `ProfileRateLimitSwitchBanner`
- * - real landing `ComposerToolbarStore` + `commitProfileSelection`
- * - real shared dismissal store
- * - `affectedChatCount: 0`, `runTargetHostId: null`
- * - submit-time settings via `buildChatRunSettings` (same builder the landing
- *   actions path uses for `epic.create`)
- *
- * Fakes only the host providers-list transport and usage presentation
- * (external boundary / nondeterministic gauges). Does not mock the prompt
- * seam under test (closes T2 review P3-1).
- */
+/** Mirrors landing-composer.tsx wiring: - real `useProfileRateLimitSwitchPrompt` (default-host providers list)
+ * - real `ProfileRateLimitSwitchBanner` - real landing `ComposerToolbarStore` + `commitProfileSelection`. */
 
 const mocks = vi.hoisted(() => ({
-  /** `undefined` = still loading; array = settled providers.list payload. */
   providers: undefined as ProviderCliState[] | undefined,
 }));
 
@@ -180,10 +165,8 @@ function createLandingToolbarStore(
   });
 }
 
-/**
- * Landing-composer-like mount: toolbar store selection drives the real prompt;
- * switch commits through `commitProfileSelection` exactly as landing does.
- */
+/** Landing-composer-like mount: toolbar store selection drives the real prompt; switch commits through
+ * `commitProfileSelection` exactly as landing does. */
 function LandingRateLimitBannerHarness(props: {
   readonly toolbarStore: ComposerToolbarStore;
   readonly selectedModel: ModelOption | null;
@@ -206,9 +189,8 @@ function LandingRateLimitBannerHarness(props: {
     client: null,
   });
   const visible = prompt.kind === "visible";
-  // Mirror submit-time settings construction in use-landing-composer-actions:
-  // read the live toolbar state and run it through buildChatRunSettings so a
-  // switch is observable on the epic.create payload shape.
+  // Mirror submit-time settings construction in use-landing-composer-actions: read the live toolbar state and
+  // run it through buildChatRunSettings so a switch is observable on the epic.create payload shape.
   const toolbarState = props.toolbarStore.getState();
   const submitSettings = buildChatRunSettings({
     selection: {
@@ -405,9 +387,8 @@ describe("Landing rate-limit banner durability", () => {
 
   describe("1. no banner flash while providers.list loads / seed validates", () => {
     it("never mounts the banner while the default-host providers list is loading, across re-renders", async () => {
-      // Seeded limited profileId, but the list has not settled - the shared
-      // prompt must stay hidden (profiles.length < 2 / no match) so landing
-      // never flashes a warning for an unvalidated seed.
+      // Seeded limited profileId, but the list has not settled - the shared prompt must stay hidden (profiles.length
+      // < 2 / no match) so landing never flashes a warning for an unvalidated seed.
       mocks.providers = undefined;
       const { rerender } = render(
         <LoadingSeedHarness profileId="work" selectedModel={SONNET} />,
@@ -469,9 +450,8 @@ describe("Landing rate-limit banner durability", () => {
       );
       expect(screen.getByTestId("banner-visible").textContent).toBe("false");
 
-      // Settled: only ambient + work. The dead seed is not a limited live
-      // profile, so the banner must remain unmounted (landing seed hygiene
-      // would also null it; the prompt alone already refuses to project).
+      // Settled: only ambient + work. The dead seed is not a limited live profile, so the banner must remain
+      // unmounted (landing seed hygiene would also null it; the prompt alone already refuses to project).
       mocks.providers = limitedAmbientAndWork();
       rerender(
         <LoadingSeedHarness

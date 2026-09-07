@@ -1,22 +1,4 @@
-/**
- * Periodic renderer resource sampler.
- *
- * Retention bugs in this app are not visible as a spike - they show up as a
- * heap that correlates with how long the window has been open. A single
- * reading cannot show that, so every sample carries a session-age bucket and a
- * heap slope computed over a rolling window; the pair is what distinguishes
- * "this user has a lot open" from "this session is accumulating".
- *
- * Two channels, deliberately different frequencies:
- *   - PostHog (here): one sample every 15 min, plus a pressure event when the
- *     JS heap crosses a tier. Low volume, aggregate-queryable across users.
- *   - `lib/perf/perf-telemetry.ts`: high-frequency, opt-in, local ndjson for
- *     when a single machine needs to be dissected.
- *
- * The desktop process metrics are best-effort: a browser build (or a bridge
- * failure) reports `null` for them rather than suppressing the sample, because
- * the JS heap is the primary signal and is available either way.
- */
+/** Periodic renderer resource sampler. */
 
 import {
   Analytics,
@@ -40,16 +22,7 @@ const MIN_SLOPE_SAMPLES = 3;
 const PRESSURE_REPEAT_THROTTLE_MS = MS_PER_HOUR;
 
 /**
- * Tiers are on the JS heap, not the working set, and are expressed as a
- * FRACTION of the measured ceiling rather than as absolute megabytes.
- *
- * The absolute values these replace (3072/2304/1536) were derived from the
- * desktop's 4 GB old-space limit, but Chromium sizes `jsHeapSizeLimit` from
- * device memory, so a low-memory client can OOM around 2 GB - below two of the
- * three thresholds. The tiers meant to fire before an allocation failure were
- * exactly the ones that could never fire, for exactly the population most
- * likely to hit one. The fractions reproduce the old thresholds at a 4 GB
- * limit and keep their meaning everywhere else.
+ * Tiers are on the JS heap, not the working set, and are expressed as a FRACTION of the measured ceiling rather than as absolute megabytes.
  */
 const PRESSURE_TIERS: ReadonlyArray<{
   readonly tier: AnalyticsResourcePressureTier;
@@ -123,9 +96,8 @@ export function sessionAgeBucket(ageMs: number): AnalyticsSessionAgeBucket {
 }
 
 /**
- * Least-squares slope of heap against time, in MB/hour. `null` until the
- * window holds enough points to mean anything, and when every sample landed at
- * the same instant (a zero-variance x, which would divide by zero).
+ * Least-squares slope of heap against time, in MB/hour.
+ * `null` until the window holds enough points to mean anything, and when every sample landed at the same instant (a zero-variance x, which would divide by zero).
  */
 export function heapSlopeMbPerHour(
   samples: ReadonlyArray<HeapSample>,
@@ -163,9 +135,7 @@ export function pressureTierFor(
 }
 
 /**
- * `performance.memory` is a non-standard Chromium surface, so it is narrowed
- * locally rather than assumed present - a browser build without it reports no
- * heap and the sampler stays silent instead of shipping `NaN`.
+ * `performance.memory` is a non-standard Chromium surface, so it is narrowed locally rather than assumed present - a browser build without it reports no heap and the sampler stays silent instead of shipping `NaN`.
  */
 export function readJsHeap(): JsHeapReading | null {
   if (typeof performance === "undefined") return null;
@@ -189,19 +159,7 @@ export function readJsHeap(): JsHeapReading | null {
   };
 }
 
-/*
- * Process CPU and working set are deliberately NOT sampled here.
- *
- * The only renderer-side source is `app.getAppMetrics()`, whose
- * `percentCPUUsage` is a delta against the last call and is accumulated per
- * pid in the main process - one shared bookmark for every caller. Sampling it
- * would corrupt the Resource Monitor's live reading (its next 1 Hz tick would
- * measure a sub-second window) and would itself report an interval defined by
- * whichever other poller ran last, not the 15 minutes this sampler implies.
- * A number that cannot be compared across samples or aggregated across users
- * is worse than no number, and the JS heap is the signal this event exists
- * for. Restoring CPU here needs a sampler-owned delta source, not this one.
- */
+/** Process CPU and working set are deliberately NOT sampled here. */
 
 export function createResourceTelemetrySampler(
   deps: ResourceTelemetryDeps,
@@ -210,10 +168,8 @@ export function createResourceTelemetrySampler(
   let lastPressureAtMs: number | null = null;
   let lastPressureTier: AnalyticsResourcePressureTier | null = null;
 
-  // Dropping the process-metrics read left this path fully synchronous, so
-  // there is no longer an await window a teardown could slip through. The
-  // `stopped` latch stays as the explicit guarantee: a sample must never emit
-  // for a renderer that is being torn down, whatever the path grows back into.
+  // Dropping the process-metrics read left this path fully synchronous, so there is no longer an await window a teardown could slip through.
+  // The `stopped` latch stays as the explicit guarantee: a sample must never emit for a renderer that is being torn down, whatever the path grows back into.
   let stopped = false;
 
   const sampleOnce = (): void => {
@@ -281,19 +237,7 @@ export function startResourceTelemetry(
   collectContext: () => ResourceTelemetryContext,
 ): () => void {
   const analytics = Analytics.getInstance();
-  // `performance.now()` rather than `Date.now()`: both the session-age bucket
-  // and the least-squares heap slope are differences between stamps, and the
-  // wall clock can step backwards (NTP correction, manual change, resume from
-  // sleep). A backward step makes a day-old session report `under_1h` - the
-  // one axis the event exists to correlate heap against - and makes the slope
-  // regression's x-axis non-monotonic, which can flip its sign and report a
-  // leaking session as releasing memory.
-  //
-  // Anchored at 0, the document's time origin, NOT at `performance.now()` when
-  // this bridge mounts. The event reports the age of the renderer session, so
-  // it has to include app boot - and anchoring at mount would additionally
-  // reset the age to zero on any remount, which is precisely when a long-lived
-  // window is most interesting.
+  // `performance.now()` rather than `Date.now()`: both the session-age bucket and the least-squares heap slope are differences between stamps, and the wall clock can step backwards (NTP correction, manual change, resume from sleep).
   const startedAtMs = 0;
   const sampler = createResourceTelemetrySampler({
     now: () => performance.now(),

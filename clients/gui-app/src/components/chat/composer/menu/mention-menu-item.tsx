@@ -6,13 +6,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { formatCompactRelativeTime } from "@/lib/relative-time";
 export type { MentionMenuEntry } from "@/lib/composer/mentions";
 
-/**
- * The row's trailing last-activity time, on the sidebar's compact ladder
- * (`now` / `10m` / `4h` / `1d` / `1w` / short date) but deliberately OFF the
- * shared tick clock: a menu row's timestamp reads once when the row mounts
- * and does not need to tick live while the picker is up, so the label is
- * sampled once (state initializers may be impure) instead of subscribing.
- */
+/** The row's trailing last-activity time, on the sidebar's compact ladder (`now` / `10m` / `4h` / `1d` / `1w` / short date) but deliberately OFF the shared tick clock: a menu row's timestamp reads once when the row mounts and does not need to tick live while the picker is up, so the label is sampled once (state initializers may be impure) instead of subscribing. */
 function MentionRowTime(props: { readonly timestamp: number }) {
   const [label] = useState(() =>
     formatCompactRelativeTime(props.timestamp, Date.now()),
@@ -45,19 +39,15 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
         {entry.label}
       </span>
       {entry.archived ? (
-        // Mirrors the sidebar's archived marker (semibold, muted). A separate
-        // element rather than text inside `detail`, so it can never truncate
-        // away with the detail string.
+        // Mirrors the sidebar's archived marker (semibold, muted).
+        // A separate element rather than text inside `detail`, so it can never truncate away with the detail string.
         <span className="shrink-0 text-ui-xs font-semibold text-muted-foreground">
           Archived
         </span>
       ) : null}
       {entry.dormant ? (
-        // Mirrors the sidebar's dormant marker (`epic-browser-sidebar-row.tsx`'s
-        // `BrowserTabStateSlot`): a small muted Moon, same slot as `Archived`.
-        // The row stays fully mentionable while dormant (attach auto-wakes
-        // it) - this only sets the expectation that the first message pays a
-        // wake cost.
+        // Mirrors the sidebar's dormant marker (`epic-browser-sidebar-row.tsx`'s `BrowserTabStateSlot`): a small muted Moon, same slot as `Archived`.
+        // The row stays fully mentionable while dormant (attach auto-wakes it) - this only sets the expectation that the first message pays a wake cost.
         <TooltipWrapper
           label="Browser asleep"
           side="top"
@@ -85,10 +75,7 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
         </TooltipWrapper>
       ) : null}
       {entry.updatedAt !== null ? (
-        // Keyed by the entry, not the row position: the menu keys rows by
-        // index, so a ranked reorder reuses this component instance for a
-        // DIFFERENT Agent - without the key, the frozen label would keep the
-        // previous occupant's time.
+        // Keyed by the entry, not the row position: the menu keys rows by index, so a ranked reorder reuses this component instance for a DIFFERENT Agent - without the key, the frozen label would keep the previous occupant's time.
         <MentionRowTime key={entry.id} timestamp={entry.updatedAt} />
       ) : null}
     </div>

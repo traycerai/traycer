@@ -10,29 +10,13 @@ import {
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
-/**
- * The landing composer's host picker is a SURFACE PIN (redesign P1.2,
- * selection model §2/§54), not the app-wide selection.
- *
- * The behaviour under test is the one the redesign exists to fix: before this,
- * placing a single chat on another machine moved the whole window - the picker
- * called `HostDirectoryService.selectById`, which is now the selection
- * authority bridge's alone. What has to be true instead is that a pick writes
- * this window's composer pin, that the chip resolves `pin ?? effective`, and
- * that the FIXED arm (fork dialogs, tab-context composers) still writes
- * nothing at all (§55).
- */
+/** The landing composer's host picker is a surface pin, not the app-wide selection. */
 
-// The composer key is the BROWSER TAB's identity now, not the literal
-// `"browser"` every tab used to share - two tabs on one origin would otherwise
-// hydrate each other's placement pin out of localStorage. Pinned to a known id
-// so this suite asserts against the key the hook actually builds.
+// Pinned to a known id so this suite asserts against the key the hook actually builds.
 vi.mock("@/lib/browser-tab-identity", () => ({
   browserTabId: () => "tab-test",
-  // The hook SUBSCRIBES to identity regeneration; a wholesale mock that omits
-  // this throws on import rather than failing an assertion. This tab's id
-  // never changes here, so the subscription is inert - see
-  // `composer-surface-key-per-tab.test.tsx` for the arm that drives it.
+  // This tab's id never changes here, so the subscription is inert - see `composer-surface-key-per-tab.test.tsx`
+  // for the arm that drives it.
   subscribeBrowserTabId: () => () => {},
 }));
 
@@ -67,7 +51,7 @@ const HOST_ENTRIES = [
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ directory: { selectById: mocks.selectById } }),
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => null,
 }));
 
@@ -383,11 +367,8 @@ describe("composer host picker writes a surface pin", () => {
     renderComposerPicker({ kind: "active" });
     pickBuildHost();
 
-    // ONE key for this window, whichever composer instance wrote it: a
-    // per-component key would let the app-wide new-conversation modal
-    // contradict the landing chip behind it. Outside desktop the "window" is
-    // the browser tab, which is why the key carries a tab identity rather
-    // than a constant.
+    // Outside desktop the "window" is the browser tab, which is why the key carries a tab identity rather than a
+    // constant.
     expect(
       Object.keys(useSurfaceHostSelectionStore.getState().selections),
     ).toEqual([COMPOSER_KEY]);
@@ -400,7 +381,7 @@ describe("composer host picker writes a surface pin", () => {
     pickBuildHost();
     expect(chipLabel()).toBe("Build Box");
 
-    // Derivation moves the effective host; a PINNED surface keeps its own (D6).
+    // Derivation moves the effective host; a pinned surface keeps its own.
     cleanup();
     mocks.effectiveHostId.current = "host-home";
     renderComposerPicker({ kind: "active" });
@@ -425,9 +406,7 @@ describe("composer host picker writes a surface pin", () => {
       .setSelection(COMPOSER_KEY, "host-retired");
     renderComposerPicker({ kind: "active" });
 
-    // "Local" is the pre-directory default for a FOLLOWING surface. The
-    // shared picker keeps identity and status separate, then combines both in
-    // the accessible name.
+    // "Local" is the pre-directory default for a following surface.
     expect(chipLabel()).toBe("Unavailable");
     expect(
       screen.getByRole("button", { name: "Host: Unavailable, offline" }),

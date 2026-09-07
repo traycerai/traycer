@@ -1,21 +1,5 @@
-// Same boundary as `host-overview-mutations.test.tsx`: mock `@/lib/host`'s
-// `useHostBinding` narrowly, spreading the real module so `hostRpcRegistry`
-// (which `buildOverviewHostFixture` needs) and every other real export stay
-// intact. Two more hooks are mocked equally narrowly, at their OWN leaf
-// modules rather than through a wider barrel: `useHostDirectoryList` (which
-// host id, if any, resolves as "the local machine") and
-// `useHostClientForHostId` (which `HostClient`, if any, that id resolves
-// to). Both already have their own dedicated resolution-algorithm suites
-// (`use-host-client-for-host-id.test.ts`, `host-directory-service.test.ts`);
-// this file is about `LocalHostRestartFlow`'s branching given their answers,
-// not about re-proving how those answers are derived. There is no capability
-// gate left to mock: the component no longer consults the negotiated-manifest
-// registry at all, so whether a host supports `host.restart` is settled only
-// by actually dialing it. `useHostRestart` stays REAL, dispatching against a
-// real `HostClient` built by `buildOverviewHostFixture` (same fixture
-// host-overview-mutations.test.tsx uses) - so the cooperative dispatch in
-// these tests is a genuine RPC over an in-memory messenger, not a mocked
-// call.
+// There is no capability gate left to mock: the component no longer consults the negotiated-manifest registry
+// at all, so whether a host supports `host.restart` is settled only by actually dialing it.
 interface HostBindingFixture {
   readonly directory: {
     readonly getLocalEntry: () => HostDirectoryEntry | null;
@@ -102,11 +86,8 @@ function busyMessage(subject: string): string {
   return `${subject} still keeping this host busy. Nothing was interrupted; try again when the work finishes. Force restart ends it immediately.`;
 }
 
-// A local host that resolves but is NOT dialable - `websocketUrl: null` and
-// `transportDialability: "not-dialable"` - unlike `localEntry` above, which is
-// always dialable. A dedicated helper rather than a parameter on `localEntry`
-// itself, so every existing call site keeps its current (dialable) meaning
-// unchanged.
+// A dedicated helper rather than a parameter on `localEntry` itself, so every existing call site keeps its
+// current (dialable) meaning unchanged.
 function nonDialableLocalEntry(hostId: string): HostDirectoryEntry {
   return {
     hostId,
@@ -118,9 +99,8 @@ function nonDialableLocalEntry(hostId: string): HostDirectoryEntry {
   };
 }
 
-// Copied verbatim from `local-host-restart-flow.tsx` (neither constant is
-// exported) so a change to the production copy breaks these assertions
-// instead of silently drifting from what the user actually sees.
+// Copied verbatim from `local-host-restart-flow.tsx` (neither constant is exported) so a change to the
+// production copy breaks these assertions instead of silently drifting from what the user actually sees.
 const UNREACHABLE_CLIENT_MESSAGE =
   "Traycer couldn't open a connection to ask this host to stop cleanly - you " +
   "may be signed out, or its credentials may be refreshing. Force restart " +
@@ -135,14 +115,8 @@ function makeQueryClient(): QueryClient {
   });
 }
 
-/**
- * Both the menu and tray listeners hold `requested`/`onClose` state
- * themselves and hand it to `LocalHostRestartFlow` as controlled props; this
- * harness is that same shape, with a button standing in for "the surface
- * asked to restart" so a test can invoke, dismiss, and re-invoke without
- * unmounting the flow (which is exactly what a real re-open sequence does -
- * `armedRestartIdRef` lives inside the flow instance and must survive it).
- */
+/** Both the menu and tray listeners hold `requested`/`onClose` state themselves and hand it to
+ * `LocalHostRestartFlow` as controlled props. */
 function RestartFlowHarness(): ReactNode {
   const [requested, setRequested] = useState(false);
   return (
@@ -206,9 +180,8 @@ describe("<LocalHostRestartFlow /> - no host runtime binding (ForceOnly arm)", (
     await waitFor(() => {
       expect(requestHostRespawn).toHaveBeenCalledTimes(1);
     });
-    // The ForceOnly arm must never even ASK "which host does this id
-    // resolve to" - a regression that started resolving one anyway would be
-    // invisible to a mere "respawn was called" assertion.
+    // The ForceOnly arm must never even ask "which host does this id resolve to" - a regression that started
+    // resolving one anyway would be invisible to a mere "respawn was called" assertion.
     expect(clientResolver).not.toHaveBeenCalled();
   });
 
@@ -291,10 +264,8 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
   it("dispatches the host.restart RPC with a non-empty transitionId and never calls requestHostRespawn", async () => {
     hostBindingMock.current = PRESENT_BINDING;
     directoryListMock.current = { data: [localEntry("host-a")] };
-    // No `overrideHandlers` here, deliberately: the fixture's OWN default
-    // `host.restart` handler already answers `accepted` and is what feeds
-    // `restartCalls()` / `restartTransitionIds()` below - an override would
-    // replace that handler wholesale and silently untrack every call.
+    // No `overrideHandlers` here, deliberately: the fixture's own default `host.restart` handler already answers
+    // `accepted` and is what feeds `restartCalls` / `restartTransitionIds` below.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -449,11 +420,8 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     directoryListMock.current = { data: [localEntry("host-a")] };
     const hostATransitionIds: string[] = [];
     const hostBTransitionIds: string[] = [];
-    // Host A's `host.restart` never answers definitively - it rejects, which
-    // is the one outcome that keeps `armedRestartIdRef` armed rather than
-    // clearing it (see "an RPC rejection offers force ... SAME transitionId"
-    // above). That armed id is exactly what a dispatch to host B must refuse
-    // to adopt.
+    // Host A's `host.restart` never answers definitively - it rejects, which is the one outcome that keeps
+    // `armedRestartIdRef` armed rather than clearing it (see "an RPC rejection offers force...
     const hostAFixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -483,14 +451,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    // A fresh element tree (not a reused reference) on every call: React's
-    // reconciler bails out of an update entirely - without re-invoking any
-    // function component below it - when a fiber's incoming props are
-    // REFERENTIALLY identical to its previous props and nothing scheduled a
-    // state update in that subtree. Reusing one `harness` element for both
-    // `render` and `rerender` would hit exactly that bailout, since mutating
-    // `hostBindingMock.current` is invisible to React - so this is a fresh
-    // JSX evaluation each call, not a cosmetic difference.
+    // A fresh element tree (not a reused reference) on every call.
     function buildHarness(): ReactNode {
       return (
         <QueryClientProvider client={queryClient}>
@@ -516,9 +477,8 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
 
-    // The machine's local host is now host-b. Both resolution sources have to
-    // agree, or the live entry would simply win and the test would not
-    // exercise the directory-list side of the switch.
+    // Both resolution sources have to agree, or the live entry would simply win and the test would not exercise
+    // the directory-list side of the switch.
     liveEntry = localEntry("host-b");
     directoryListMock.current = { data: [localEntry("host-b")] };
     result.rerender(buildHarness());
@@ -528,9 +488,8 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       expect(hostBTransitionIds).toHaveLength(1);
     });
 
-    // The armed id from host A's ambiguous rejection must NOT have been
-    // handed to host B - that would ask host B to adopt a claim it never
-    // granted.
+    // The armed id from host A's ambiguous rejection must not have been handed to host B - that would ask host B
+    // to adopt a claim it never granted.
     expect(hostBTransitionIds[0]).not.toBe(hostATransitionIds[0]);
     expect(requestHostRespawn).not.toHaveBeenCalled();
   });
@@ -606,12 +565,8 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     await screen.findByTestId("host-busy-force-defer-dialog");
     expect(transitionIds).toHaveLength(1);
 
-    // Force, unlike a mere deferral, is a definitive end to the action the
-    // armed id names - the process it identified is gone - so
-    // `useForceHostRespawn`'s `onRestarted` callback nulls
-    // `armedRestartIdRef`. Contrast with "an RPC rejection offers force ...
-    // carries the SAME transitionId" above, which defers instead and keeps
-    // the id armed.
+    // Force, unlike a mere deferral, is a definitive end to the action the armed id names - the process it
+    // identified is gone - so `useForceHostRespawn`'s `onRestarted` callback nulls `armedRestartIdRef`.
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
       expect(requestHostRespawn).toHaveBeenCalledTimes(1);
@@ -644,9 +599,8 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     });
     clientForHostIdMock.current = (hostId) =>
       hostId === "host-a" ? fixture.client : null;
-    // `declined` performed nothing - the host was removed, or another
-    // process holds the management lock - so it must NOT be treated as the
-    // definitive end that a real respawn is in the test above.
+    // `declined` performed nothing - the host was removed, or another process holds the management lock - so it
+    // must not be treated as the definitive end that a real respawn is in the test above.
     const requestHostRespawn = vi.fn(() =>
       Promise.resolve({
         kind: "declined" as const,
@@ -679,11 +633,8 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
   it("attempts the cooperative RPC even when the host rejects it (too old for host.restart), offering force only after the explicit click", async () => {
     hostBindingMock.current = PRESENT_BINDING;
     directoryListMock.current = { data: [localEntry("host-a")] };
-    // No capability gate is consulted anymore, so there is nothing left to
-    // record on the negotiated-manifest registry to steer this test: the
-    // cooperative RPC is dialed unconditionally, and a host too old to have
-    // `host.restart` proves that by rejecting the dial itself rather than by
-    // a cached manifest saying so up front.
+    // No capability gate is consulted anymore, so there is nothing left to record on the negotiated-manifest
+    // registry to steer this test.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -744,11 +695,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     hostBindingMock.current = {
       directory: { getLocalEntry: () => localEntry("host-live") },
     };
-    // The query is deliberately stale here - it still serves a DIFFERENT
-    // `kind: "local"` entry, the shape `useHostDirectoryList` can be in right
-    // after a local host identity change, since it retains previous data
-    // across a refetch. Dispatching there would ask one host to stand down
-    // while the force leg kills another.
+    // Dispatching there would ask one host to stand down while the force leg kills another.
     directoryListMock.current = { data: [localEntry("host-stale")] };
     const liveFixture = buildOverviewHostFixture({
       hostId: "host-live",
@@ -810,14 +757,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    // A fresh element tree (not a reused reference) on every call: React's
-    // reconciler bails out of an update entirely - without re-invoking any
-    // function component below it - when a fiber's incoming props are
-    // REFERENTIALLY identical to its previous props and nothing scheduled a
-    // state update in that subtree. Reusing one `harness` element for both
-    // `render` and `rerender` would hit exactly that bailout, since mutating
-    // `hostBindingMock.current` is invisible to React - so this is a fresh
-    // JSX evaluation each call, not a cosmetic difference.
+    // A fresh element tree (not a reused reference) on every call.
     function buildHarness(): ReactNode {
       return (
         <QueryClientProvider client={queryClient}>
@@ -851,10 +791,6 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
   });
 
   it("a Force click after the live host changed under an open offer refuses and explains, instead of killing the new host", async () => {
-    // A mutable (non-readonly) local type so the SAME object the component
-    // captures via `hostBindingMock.current` can have its `getLocalEntry`
-    // swapped out from under it, without a re-render - reproducing a click
-    // processed against a previously committed render.
     const mutableBinding: {
       directory: { getLocalEntry: () => HostDirectoryEntry | null };
     } = {
@@ -892,11 +828,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
     await screen.findByTestId("host-busy-force-defer-dialog");
     expect(restartCallCount).toBe(1);
 
-    // Mutate the SAME binding object the component already captured, WITHOUT
-    // re-rendering. `onForce` closes over `mutableBinding` (via
-    // `hostBindingMock.current`, read during render) and re-reads
-    // `getLocalEntry()` live at click time, so this changes what the click
-    // sees without the component ever re-rendering against host-b.
+    // Mutate the same binding object the component already captured, without re-rendering.
     mutableBinding.directory.getLocalEntry = () => localEntry("host-b");
 
     fireEvent.click(screen.getByTestId("host-busy-force"));
@@ -919,11 +851,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
 
 describe("<LocalHostRestartFlow /> - confirm re-reads the live local host (Finding 1)", () => {
   it("a host identity change between render and confirm refuses instead of dispatching", async () => {
-    // A mutable (non-readonly) local binding object - NOT the shared
-    // `PRESENT_BINDING` - so its `getLocalEntry` can be swapped out from
-    // under the component after the confirm dialog is already open, without
-    // a re-render: `onConfirm` re-reads `getLocalEntry()` live at click time
-    // via `liveHostIdNow()`, exactly like the Force click already did.
+    // A mutable (non-readonly) local binding object - not the shared `PRESENT_BINDING`.
     const mutableBinding: {
       directory: { getLocalEntry: () => HostDirectoryEntry | null };
     } = {
@@ -931,10 +859,8 @@ describe("<LocalHostRestartFlow /> - confirm re-reads the live local host (Findi
     };
     hostBindingMock.current = mutableBinding;
     directoryListMock.current = { data: [localEntry("host-a")] };
-    // No `overrideHandlers` here, deliberately: the fixture's OWN default
-    // `host.restart` handler is what `restartCalls()` below tracks - if the
-    // confirm dispatched cooperatively despite the host change, this would
-    // catch it.
+    // No `overrideHandlers` here, deliberately: the fixture's own default `host.restart` handler is what
+    // `restartCalls` below tracks.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -952,8 +878,8 @@ describe("<LocalHostRestartFlow /> - confirm re-reads the live local host (Findi
     fireEvent.click(screen.getByRole("button", { name: "Open restart" }));
     await screen.findByTestId("confirm-destructive-dialog");
 
-    // Mutate the SAME binding object the component already captured,
-    // WITHOUT re-rendering, so `getLocalEntry()` now answers host-b.
+    // Mutate the same binding object the component already captured, without re-rendering, so `getLocalEntry` now
+    // answers host-b.
     mutableBinding.directory.getLocalEntry = () => localEntry("host-b");
 
     fireEvent.click(screen.getByTestId("confirm-action"));
@@ -983,9 +909,8 @@ describe("<LocalHostRestartFlow /> - a dialable host with no client is offered f
     const entry = localEntry("host-a");
     expect(entry.websocketUrl).not.toBeNull();
     expect(entry.transportDialability).toBe("dialable");
-    // Simulates a renderer with no authenticated request context (signed
-    // out, or a credential lease being released): the host resolves and
-    // looks reachable, but no client could be built for it.
+    // Simulates a renderer with no authenticated request context (signed out, or a credential lease being
+    // released): the host resolves and looks reachable, but no client could be built for it.
     clientForHostIdMock.current = () => null;
     const requestHostRespawn = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
@@ -1013,9 +938,8 @@ describe("<LocalHostRestartFlow /> - a dialable host with no client is offered f
       directory: { getLocalEntry: () => nonDialableLocalEntry("host-a") },
     };
     directoryListMock.current = { data: [nonDialableLocalEntry("host-a")] };
-    // Same "no client could be built" resolver as the dialable case above -
-    // the only difference is dialability, which is what must decide between
-    // an explicit force offer and the one-click down-host recovery path.
+    // Same "no client could be built" resolver as the dialable case above - the only difference is dialability,
+    // which is what must decide between an explicit force offer and the one-click down-host recovery path.
     clientForHostIdMock.current = () => null;
     const requestHostRespawn = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),

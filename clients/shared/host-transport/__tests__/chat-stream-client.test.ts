@@ -125,18 +125,7 @@ function completeHandshake(socket: StubStreamWebSocket): void {
 }
 
 /**
- * Same handshake as `completeHandshake`, except the echoed manifest's
- * `chat.subscribe` entry is overridden to `schemaVersion` instead of being
- * echoed back verbatim. `WsStreamClient` negotiates to the OLDER of the
- * client's own canonical version and whatever the host's `openAck` manifest
- * advertises (`prepareStreamSubscribeRequest` in `ws-stream-client.ts`), so
- * this is how a black-box test forces a down-negotiated session without
- * touching production code.
- */
-/**
- * The full-snapshot chat.subscribe line. Named here because the canonical
- * version moved to the windowed 1.8 line: a test that wants the full-snapshot
- * shape has to say so, or it silently gets the windowed one.
+ * Same handshake as `completeHandshake`, except the echoed manifest's `chat.subscribe` entry is overridden to `schemaVersion` instead of being echoed back verbatim.
  */
 const FULL_SNAPSHOT_VERSION: {
   readonly major: number;
@@ -161,12 +150,7 @@ function completeHandshakeAtVersion(
 }
 
 /**
- * A `chat.subscribe@1.5`-shaped assistant message: no `imageResolutions` key
- * at all, matching how a pre-image host actually persisted/emitted it (see
- * `chat-subscribe.test.ts`'s "stays frozen without image fields on every
- * released minor 1.0-1.5"). Only the deep schema's compatibility default
- * (`imageResolutions: []`) up-converts this; the shallow schema is
- * structural-only and leaves it exactly as sent.
+ * Only the deep schema's compatibility default (`imageResolutions: []`) up-converts this; the shallow schema is structural-only and leaves it exactly as sent.
  */
 function frozenPreImageAssistantMessage(): Record<string, unknown> {
   return {
@@ -201,11 +185,7 @@ function frozenPreImageAssistantMessage(): Record<string, unknown> {
 }
 
 /**
- * A `chat.subscribe@1.6` assistant message carrying a pre-settlement
- * interview block: no outcome/drafts/settlement/diagnostics/delivery, and
- * answers without `selection`. A 1.6 shallow parse leaves those keys
- * absent; `normalizeV16MessagesInShallowSnapshot` is what fills them.
- * Also omits `imageResolutions` so the test can tell shallow from deep.
+ * A `chat.subscribe@1.6` assistant message carrying a pre-settlement interview block: no outcome/drafts/settlement/diagnostics/delivery, and answers without `selection`.
  */
 function frozenV16InterviewAssistantMessage(): Record<string, unknown> {
   return {
@@ -378,9 +358,8 @@ function parseText(raw: string): Record<string, unknown> {
 }
 
 /**
- * The five windowed callbacks as no-ops, for the tests that are not about
- * them. Spread rather than repeated so adding a sixth is one edit here, not
- * one per literal.
+ * The five windowed callbacks as no-ops, for the tests that are not about them.
+ * Spread rather than repeated so adding a sixth is one edit here, not one per literal.
  */
 const NOOP_WINDOWED_CALLBACKS = {
   onWindowedSnapshot: () => undefined,
@@ -509,28 +488,15 @@ describe("ChatStreamClient", () => {
       chatId: "chat-1",
       callbacks,
     });
-    // Pinned to the FULL-SNAPSHOT line this test is about. `completeHandshake`
-    // echoes the client's own manifest, so it negotiates whatever the canonical
-    // chat.subscribe is - and since the windowed line opened as 1.8 that is a
-    // snapshot with no inline `chat.messages` at all, which is not the shape
-    // asserted below. The full-snapshot line is still a released line the
-    // client must serve, so this keeps testing it rather than being retargeted.
+    // Pinned to the full-snapshot line this test is about.
+    // The full-snapshot line is still a released line the client must serve, so this keeps testing it rather than being retargeted.
     completeHandshakeAtVersion(sockets[0], FULL_SNAPSHOT_VERSION);
 
-    // The advertised version is the NEGOTIATED one, not the client's canonical
-    // - which is the point worth pinning: a client whose registry says 1.8 must
-    // still subscribe at 1.7 to a host that only offers 1.7.
+    // The advertised version is the negotiated one, not the client's canonical - which is the point worth pinning: a client whose registry says 1.8 must still subscribe at 1.7 to a host that only offers 1.7.
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "chat.subscribe",
-      // Deliberately NOT read off the manifest, which main's side of this
-      // merge changed to `buildStreamManifest(registry,
-      // CLIENT_SERVED_STREAM_MAJORS)`. That restriction covers
-      // `epic.subscribe` only, so it would still answer `chat.subscribe` with
-      // the client's canonical - which is now the windowed `1.8`, while
-      // `completeHandshakeAtVersion` above deliberately stands up a `1.7`
-      // host. Asserting the manifest here would assert the client's canonical
-      // and quietly stop testing the down-negotiation this case is named for.
+      // Deliberately not read off the manifest, which main's side of this merge changed to `buildStreamManifest(registry, CLIENT_SERVED_STREAM_MAJORS)`.
       schemaVersion: FULL_SNAPSHOT_VERSION,
       params: { epicId: "epic-1", chatId: "chat-1" },
     });
@@ -611,9 +577,7 @@ describe("ChatStreamClient", () => {
         },
       ],
     });
-    // The set going empty is how a chat's last command goes away; a frame that
-    // omits the field entirely is what a host sends when it has none, and the
-    // schema's default has to make both read identically here.
+    // The set going empty is how a chat's last command goes away; a frame that omits the field entirely is what a host sends when it has none, and the schema's default has to make both read identically here.
     sockets[0].fireText({
       kind: "managedCommandsChanged",
       hasBinaryPayload: false,
@@ -621,10 +585,6 @@ describe("ChatStreamClient", () => {
       chatId: "chat-1",
     });
 
-    // Routed to `onHeldUpdatesChanged` and nothing else - this frame was a
-    // deliberate no-op until the Deliver affordance landed, and the switch it
-    // rides has no exhaustiveness guard, so only this assertion catches a
-    // regression back to silently dropping it.
     sockets[0].fireText({
       kind: "heldUpdatesChanged",
       hasBinaryPayload: false,
@@ -784,9 +744,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
 
     expect(deliveredMessages).toHaveLength(1);
     const [assistant] = deliveredMessages;
-    // The deep schema's compatibility default filled the field the frozen
-    // 1.5 wire shape never carried - proof the deep parse ran, not the
-    // structural-only shallow one, which would have left it absent.
+    // The deep schema's compatibility default filled the field the frozen 1.5 wire shape never carried - proof the deep parse ran, not the structural-only shallow one, which would have left it absent.
     expect(assistant).toMatchObject({
       messageId: "assistant-1",
       imageResolutions: [],
@@ -807,11 +765,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
         deliveredMessages.push(...frame.snapshot.chat.messages);
       }),
     });
-    // Pinned rather than defaulted: the default handshake negotiates the
-    // CANONICAL chat.subscribe, which is the windowed 1.8 line now, and a
-    // windowed snapshot carries no inline `chat.messages`. This test is about
-    // the full-snapshot shallow path, so it names that line. The shallow path
-    // does NOT run the 1.6 interview normalizer.
+    // Pinned rather than defaulted: the default handshake negotiates the canonical chat.subscribe, which is the windowed 1.8 line now, and a windowed snapshot carries no inline `chat.messages`.
     completeHandshakeAtVersion(sockets[0], FULL_SNAPSHOT_VERSION);
 
     sockets[0].fireText(
@@ -820,21 +774,14 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
 
     expect(deliveredMessages).toHaveLength(1);
     const [assistant] = deliveredMessages;
-    // No deep parse ran, so no compatibility default filled the field: the
-    // structural-only shallow schema hands the message through exactly as
-    // sent, `imageResolutions` genuinely absent.
+    // No deep parse ran, so no compatibility default filled the field: the structural-only shallow schema hands the message through exactly as sent, `imageResolutions` genuinely absent.
     expect(assistant).not.toHaveProperty("imageResolutions");
     expect(assistant).toMatchObject({ messageId: "assistant-1" });
 
     client.close();
   });
 
-  // `1.6` is a RELEASED line that is not the live one, and it emits live-SHAPED
-  // frames. Gating the shallow path on exact equality with
-  // `chatSubscribeFullSnapshotSchemaVersion` would silently deep-parse every snapshot
-  // from a current `1.6` host the moment `1.7` opened - "seconds of
-  // render-thread CPU per snapshot" by the shallow schema's own doc, on the
-  // routine new-app-before-new-host pairing. Hence the per-line fast path.
+  // `1.6` is a released line that is not the live one, and it emits live-shaped frames.
   it("takes the 1.6 shallow path and delivers a normalized interview snapshot", () => {
     const { factory, sockets } = makeFactory();
     const deliveredMessages: unknown[] = [];
@@ -938,23 +885,8 @@ describe("ChatStreamClient.sendAction interview projection", () => {
 });
 
 /**
- * # Driving the windowed line without a windowed peer
- *
- * These tests inject the session rather than handshaking through
- * `WsStreamClient`, and the reason is structural rather than convenience.
- *
- * Negotiation settles on the LOWER of the two canonical versions:
- * `prepareStreamSubscribeRequest` declares my canonical only while the peer's
- * is at least as new (`myCanonical.minor <= theirCanonical.minor` →
- * `onWireVersion: myCanonical`), and that value is what the session reports as
- * negotiated. So reaching `1.8` needs a peer that also advertises `1.8`, and
- * the stubs in `WsStreamClient`'s own harness stand in for a `1.7` host — a
- * handshake against one of those negotiates **1.7** no matter what this client
- * supports, and `getNegotiatedSchemaVersion()` never returns `1.8`.
- *
- * `IStreamClient` is the documented seam for standing a different transport in
- * (`RemoteStreamClient` does), so a stub here tests the unit at a boundary that
- * already exists rather than one invented for the test.
+ * These tests inject the session rather than handshaking through `WsStreamClient`, and the reason is structural rather than convenience.
+ * `IStreamClient` is the documented seam for standing a different transport in (`RemoteStreamClient` does), so a stub here tests the unit at a boundary that already exists rather than one invented for the test.
  */
 class StubStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -1115,20 +1047,15 @@ function windowedSnapshotFrame(): StreamFrameEnvelope {
       heldUpdates: [],
       transcriptEpoch: 3,
       rowCount: 0,
-      // Nullable but NOT optional, exactly like `pinnedTodo` below: `null` is
-      // the bootstrap value, and omitting it fails the parse - which drops the
-      // frame before routing and reads as a routing bug.
+      // Nullable but not optional, exactly like `pinnedTodo` below: `null` is the bootstrap value, and omitting it fails the parse - which drops the frame before routing and reads as a routing bug.
       indexRevision: null,
       tail: { fromOrdinal: 0, messages: [], events: [] },
       derived: {
         latestAssistantUsage: null,
-        // `pinnedTodo`, singular - the fold's SELECTED result, not a list. It
-        // is nullable but NOT optional, so a fixture that omits it fails the
-        // parse, which is what caught the name here.
+        // `pinnedTodo`, singular - the fold's selected result, not a list.
+        // It is nullable but not optional, so a fixture that omits it fails the parse, which is what caught the name here.
         pinnedTodo: null,
-        // The fold's other half, and neither optional nor nullable: the task
-        // accumulator is an array that is simply empty when the chat used no
-        // task tools. Omitting it fails the parse the same way.
+        // The fold's other half, and neither optional nor nullable: the task accumulator is an array that is simply empty when the chat used no task tools.
         pinnedTaskTodoItems: [],
         latestForkableAssistantMessageId: null,
         restorableSetupInterruption: null,
@@ -1167,8 +1094,7 @@ describe("ChatStreamClient windowed line", () => {
       chatId: "chat-1",
       epoch: 3,
       rowCount: 41,
-      // Required and NOT nullable on an index-change frame - unlike the
-      // snapshot's, which may be `null` while a full skeleton is on its way.
+      // Required and not nullable on an index-change frame - unlike the snapshot's, which may be `null` while a full skeleton is on its way.
       // It is the number the client compares to notice a delta it never got.
       indexRevision: 1,
       changes: [{ type: "reindexed" }],
@@ -1194,9 +1120,7 @@ describe("ChatStreamClient windowed line", () => {
       hasBinaryPayload: false,
       epicId: "epic-1",
       chatId: "chat-1",
-      // `generation` distinguishes a re-stream from an extension: without it a
-      // client's only gap test is `fromIndex > assembled.length`, measured
-      // against the PREVIOUS generation's array.
+      // `generation` distinguishes a re-stream from an extension: without it a client's only gap test is `fromIndex > assembled.length`, measured against the previous generation's array.
       chunk: {
         epoch: 3,
         generation: 0,
@@ -1226,23 +1150,15 @@ describe("ChatStreamClient windowed line", () => {
     expect(recorded.ranges).toEqual(["req-7"]);
     expect(recorded.accumulatedChanges).toEqual([5]);
     expect(recorded.blockDeltas).toEqual(["text.delta"]);
-    // The windowed snapshot went to its OWN callback. Routing it to
-    // `onSnapshot` would hand a consumer typed for `chat.messages` a record
-    // that has no such key.
+    // The windowed snapshot went to its own callback.
     expect(recorded.legacySnapshots).toEqual([]);
 
     client.close();
   });
 
   it("does not take the windowed parse path off the windowed line", () => {
-    // The two lines share the `snapshot` kind and disagree about its shape, so
-    // this is not a tidiness gate: parsing a legacy snapshot against the
-    // windowed union fails, and the frame would be dropped silently.
-    //
-    // Driven at `1.7` rather than `1.6` because `1.7` is the ADJACENT line -
-    // the live, full-snapshot one - and an off-by-one in the windowed
-    // predicate lands exactly there. `1.6` would pass with the bound set
-    // either way.
+    // The two lines share the `snapshot` kind and disagree about its shape, so this is not a tidiness gate: parsing a legacy snapshot against the windowed union fails, and the frame would be dropped silently.
+    // Driven at `1.7` rather than `1.6` because `1.7` is the adjacent line - the live, full-snapshot one - and an off-by-one in the windowed predicate lands exactly there.
     const { wsStreamClient, session } = stubClientAtVersion({
       major: 1,
       minor: 7,
@@ -1294,12 +1210,8 @@ describe("ChatStreamClient windowed line", () => {
       "resnapshot",
     ]);
 
-    // `1.7` is the highest NON-windowed line - it shipped as the
-    // interview-settlement full-snapshot line, which is why `isOnWindowedLine`
-    // bounds at `>= 8` rather than the `>= 7` it was drafted with. Such a
-    // host's client-frame union has no case for either request, so the frame
-    // would fail its parse and be dropped. Not sending it is the same outcome
-    // without the round trip - and without a client that believes it asked.
+    // `1.7` is the highest non-windowed line - it shipped as the interview-settlement full-snapshot line, which is why `isOnWindowedLine` bounds at `>= 8` rather than the `>= 7` it was drafted with.
+    // Not sending it is the same outcome without the round trip - and without a client that believes it asked.
     const legacy = stubClientAtVersion({ major: 1, minor: 7 });
     const legacyClient = new ChatStreamClient({
       wsStreamClient: legacy.wsStreamClient,
@@ -1335,26 +1247,11 @@ describe("ChatStreamClient windowed line", () => {
   });
 });
 
-/**
- * Browser payloads on the frames that arrive OUTSIDE a snapshot.
- *
- * A snapshot from a `1.6` host is parsed against the FROZEN `1.6` schemas
- * first, so a browser payload on it is stripped as an unknown key. Every other
- * frame kind takes the LIVE union whatever line was negotiated - so without a
- * normalize pass, a mislabeled, stale or hostile "1.6" peer's browser payload
- * arrives VALIDATED on `messageAccepted` / `queueChanged` and is written into
- * history as canonical. Same smuggling the snapshot path refuses, through the
- * door beside it.
- *
- * Both directions are pinned here: neutralized to `[]` on `1.6`, passed through
- * on the live line. `[]` and not `undefined` matters as much as the stripping -
- * consumers are typed as if the array is present.
- */
 function smuggledBrowserPayload(): Record<string, unknown> {
   return {
     kind: "user",
     content: { type: "doc", content: [] },
-    // Deliberately VALID records: the point is that they survive the live
+    // Deliberately valid records: the point is that they survive the live
     // parse, so only a normalize pass can keep them off a 1.6 consumer.
     browserAnnotations: [
       {

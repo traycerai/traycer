@@ -47,10 +47,7 @@ import {
 import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
- * The browsers panel's header cluster lives in
- * `epic-browser-sidebar-header.tsx`; it is re-exported here because
- * `left-panel-registry` and this panel's tests address both slots through this
- * one module.
+ * The browsers panel's header cluster lives in `epic-browser-sidebar-header.tsx`; it is re-exported here because `left-panel-registry` and this panel's tests address both slots through this one module.
  */
 export { BrowsersPanelActions } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-header";
 
@@ -263,9 +260,8 @@ export function BrowsersPanelNoResultsState() {
 }
 
 /**
- * `onRetry` is `null` when retrying cannot change the answer - a host with no
- * browser support at all. The message then carries the remedy (update the
- * host), and offering a Retry would only promise what the phone cannot do.
+ * `onRetry` is `null` when retrying cannot change the answer - a host with no browser support at all.
+ * The message then carries the remedy (update the host), and offering a Retry would only promise what the phone cannot do.
  */
 export function BrowsersPanelUnavailableState(props: {
   readonly message: string | null;

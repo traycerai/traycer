@@ -64,14 +64,7 @@ function sameIds(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
   return a.every((id, index) => id === b[index]);
 }
 
-/**
- * Owns the replaceable Y.Doc plus the cached projection tuple for the
- * notifications singleton. Kept inside an IIFE closure so no module-level
- * `let` bindings leak; production callers interact only with the exported
- * zustand store and `openNotificationsStream`. `reset()` swaps the doc and
- * the projection cache atomically, matching the "fresh replica on identity
- * change" invariant the session provider relies on.
- */
+/** Owns the replaceable Y.Doc plus the cached projection tuple for the notifications singleton. */
 interface NotificationsProjection {
   readonly entries: ReadonlyArray<NotificationEntry>;
   readonly entryIds: ReadonlyArray<string>;
@@ -245,31 +238,18 @@ function createNotificationsStore(
   return store;
 }
 
-// Module-local singleton. The replica + store are co-owned - no mutable
-// module-level bindings are exposed; all lifecycle mutation happens through
-// the store's `reset()` action or the exported `openNotificationsStream`.
+// Module-local singleton.
 const replica: NotificationsReplica = createNotificationsReplica();
 export const useNotificationsStore = createNotificationsStore(replica);
 
 /**
- * Opens the notifications stream via the injected factory. The returned
- * disposer tears the stream down and detaches the local-update forwarder.
- *
- * Local mutations tag their transactions with origin `"local"`; the forwarder
- * filters on that so only user-driven writes travel upstream, never snapshot
- * or remote-update applications which are tagged `"stream"`.
- *
- * The Y.Doc is deliberately not reset here: a reconnect's snapshot merges into
- * the existing local replica.
+ * Opens the notifications stream via the injected factory. The returned disposer tears the stream
+ * down and detaches the local-update forwarder.
  */
 export function openNotificationsStream(
   /**
-   * THE reconnect policy for this stream's host (redesign P4.1 /
-   * connection-registry §6), acquired from the connection registry by the one
-   * place that opens these streams. This store no longer constructs its own
-   * scheduler: the constants, the terminal-close classification and the
-   * backoff shape live once, in the engine, and each stream still gets its
-   * own independent lane so a sibling stream's refusal cannot pace it.
+   * THE reconnect policy for this stream's host (redesign P4.1 / connection-registry §6), acquired
+   * from the connection registry by the one place that opens these streams.
    */
   reconnectEngine: HostReconnectEngine,
   factory: NotificationsStreamClientFactory,
@@ -294,25 +274,18 @@ export function openNotificationsStream(
     // or the status projection its successor now owns.
     const isCurrent = (): boolean =>
       !disposed && clientGeneration === generation;
-    // Bound per generation so the reconcile send below targets THIS client
-    // rather than re-reading the module-scoped `currentClient`, whose value
-    // depends on assignment ordering around `factory`.
+    // Bound per generation so the reconcile send below targets THIS client rather than re-reading the
+    // module-scoped `currentClient`, whose value depends on assignment ordering around `factory`.
     let client: NotificationsStreamClientHandle | null = null;
     client = factory({
       onSnapshot: (meta, snapshotBytes) => {
         if (!isCurrent()) return;
-        // `Y.applyUpdate` fires the doc's "update" listener synchronously, so
-        // the entries/unreadCount projection runs without us having to call it
-        // here. Only `snapshotMeta` needs an explicit setState.
+        // `Y.applyUpdate` fires the doc's "update" listener synchronously, so the entries/unreadCount
+        // projection runs without us having to call it here.
         Y.applyUpdate(targetDoc, snapshotBytes, STREAM_ORIGIN);
         useNotificationsStore.setState({ snapshotMeta: meta });
-        // Reconcile: local transactions made while no usable session existed
-        // (terminal gap, mid-reconnect, pre-snapshot) were dropped by the
-        // fire-and-forget send and would otherwise stay local-only forever.
-        // The snapshot bytes encode exactly what the host had at snapshot
-        // time, so the delta against their state vector is everything the
-        // host is missing. The notifications room is the user's own — no
-        // viewer-role gate applies (unlike the epic reconcile path).
+        // Reconcile: local transactions made while no usable session existed (terminal gap, mid-reconnect,
+        // pre-snapshot) were dropped by the fire-and-forget send and would otherwise stay local-only
         const reconcileUpdate = Y.encodeStateAsUpdate(
           targetDoc,
           Y.encodeStateVectorFromUpdate(snapshotBytes),
@@ -320,10 +293,8 @@ export function openNotificationsStream(
         if (isNonTrivialYUpdate(reconcileUpdate)) {
           client?.applyUpdate(reconcileUpdate);
         }
-        // A snapshot — not the raw transport `open` — is the proof the
-        // stream is actually usable: the host resolver's async init can
-        // still fail after `open`, and resetting there would pin the reopen
-        // backoff at its floor through an init-failure loop.
+        // A snapshot - not the raw transport `open` - is the proof the stream is actually usable: the host
+        // resolver's async init can still fail after `open`, and resetting there would pin the reopen
         reopenScheduler.resetBackoff();
       },
       onUpdate: (updateBytes) => {
@@ -367,9 +338,6 @@ export function openNotificationsStream(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Selectors
-// ---------------------------------------------------------------------------
 
 export function useNotificationEntries(): ReadonlyArray<NotificationEntry> {
   return useNotificationsStore((state) => state.entries);

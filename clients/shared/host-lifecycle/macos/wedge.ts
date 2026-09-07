@@ -7,7 +7,7 @@ import type {
 
 /**
  * Positive wedge predicate derived from the same print bytes as ownership
- * (annex §1.3). Used by planner arms — not a fourth ownership kind.
+ * (annex §1.3). Used by planner arms - not a fourth ownership kind.
  */
 export function deriveWedgeVerdict(
   print: LaunchctlPrintProbe,
@@ -64,17 +64,8 @@ function isSpawnFailedJobState(run: LaunchdRunState): boolean {
 }
 
 /**
- * `EX_CONFIG` (78) wedge evidence — annex "Loaded-but-dead wedge evidence":
- * matched on the **exit-reason field**, not a bare `"config"` substring.
- *
- * The previous predicate was `r.includes("ex_config") || r.includes("config")`.
- * The first term is subsumed by the second, and bare `"config"` is far too
- * loose for a signal that routes to a destructive transition — the field is
- * free text that can name a configuration daemon, a config path, or a
- * jetsam reason mentioning configuration. Sampling every live job on a
- * healthy Mac, the real values are `JETSAM_REASON_MEMORY_IDLE_EXIT` and
- * `JETSAM_REASON_MEMORY_PERPROCESSLIMIT`, so today's exposure is low — that
- * is luck, not a guard.
+ * `EX_CONFIG` (78) wedge evidence - annex "Loaded-but-dead wedge evidence": matched on the **exit-reason field**, not a bare `"config"` substring.
+ * Sampling every live job on a healthy Mac, the real values are `JETSAM_REASON_MEMORY_IDLE_EXIT` and `JETSAM_REASON_MEMORY_PERPROCESSLIMIT`, so today's exposure is low - that is luck, not a guard.
  */
 function isExConfigLastExit(run: LaunchdRunState): boolean {
   if (run.lastExitCode.kind === "observed" && run.lastExitCode.value === 78) {

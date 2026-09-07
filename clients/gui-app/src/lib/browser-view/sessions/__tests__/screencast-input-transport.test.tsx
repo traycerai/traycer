@@ -28,9 +28,8 @@ interface ChannelRecorder {
 }
 
 /**
- * The DataChannel sink, recording what the host would receive. The payload is
- * parsed through the SAME schema the host parses it with, so a frame that only
- * looks right as a JS object still fails here.
+ * The DataChannel sink, recording what the host would receive.
+ * The payload is parsed through the SAME schema the host parses it with, so a frame that only looks right as a JS object still fails here.
  */
 function channelRecorder(): ChannelRecorder {
   const recorder: ChannelRecorder = {
@@ -204,9 +203,8 @@ describe("screencast input transport", () => {
     armViaGesture(mounted, 1);
 
     pointerDown(mounted.overlay);
-    // The channels come up mid-drag. Adopting here would let the moves and
-    // the up overtake the press still in flight on the mux, and the host
-    // would stale-reject it - a drag silently becomes a hover.
+    // The channels come up mid-drag.
+    // Adopting here would let the moves and the up overtake the press still in flight on the mux, and the host would stale-reject it - a drag silently becomes a hover.
     mounted.controller.setInputTransport(channels.transport);
     pointerMove(mounted.overlay, 100);
     pointerUp(mounted.overlay);

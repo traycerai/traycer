@@ -121,11 +121,8 @@ export function createArtifactEditorFindAdapter(
         },
         currentMatch === null ? null : currentMatch.from,
       );
-      // Passive repaint: recompute highlights/decorations as the doc changes,
-      // but never move the viewport. Only explicit user actions (search via the
-      // find box, next, previous) scroll the current match into view. Mirrors
-      // the chat adapter's "passive streaming/sync repaints must never yank the
-      // scroll position" rule.
+      // Passive repaint: recompute highlights/decorations as the doc changes, but never move the viewport.
+      // Only explicit user actions (search via the find box, next, previous) scroll the current match into view.
       publish();
     }, ARTIFACT_FIND_RESCAN_DEBOUNCE_MS);
   };
@@ -233,12 +230,7 @@ export function createArtifactEditorFindAdapter(
   return {
     tileInstanceId,
     tileKind,
-    // The artifact editor is the one replace-capable find surface, but
-    // editability is dynamic. Expose the replace boundary only while the editor
-    // is editable so it agrees with the find-only `capabilities` a read-only
-    // editor publishes - the store then refuses replace before `prepareRequest`
-    // instead of routing into a no-op. The dispatchers keep their own
-    // `!editor.isEditable` guard as defense in depth.
+    // Expose the replace boundary only while the editor is editable so it agrees with the find-only `capabilities` a read-only editor publishes - the store then refuses replace before `prepareRequest` instead of routing into a no-op.
     get replace(): TileFindReplace | null {
       if (!editor.isEditable) return null;
       return {

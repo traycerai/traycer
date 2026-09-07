@@ -59,10 +59,8 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
   const { hasLaterOverlappingChanges, manifest, onOpenChange, open } = props;
   const submittedCheckpointIdRef = useRef<string | null>(null);
   const restore = useChatRestoreContext();
-  // No-op entries (a path touched but left net-unchanged this turn) are not
-  // changes of this turn: the restore plan drops them, and the per-turn
-  // "Changes" group never shows them. List / count exactly the same set here so
-  // the modal can't promise to restore files the turn never actually changed.
+  // No-op entries (a path touched but left net-unchanged this turn) are not changes of this turn: the restore plan drops them, and the per-turn "Changes" group never shows them.
+  // List / count exactly the same set here so the modal can't promise to restore files the turn never actually changed.
   const entries = manifest.entries.filter(
     (entry) => !isNoOpCheckpointEntry(entry),
   );
@@ -89,15 +87,8 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
   return (
     <Dialog open={open} onOpenChange={state.pending ? undefined : onOpenChange}>
       <DialogContent
-        // Inline `maxWidth` instead of a Tailwind arbitrary-value class:
-        // the comma inside `min(92vw, 32rem)` defeats Tailwind v4's
-        // class-extractor regex, so the utility silently never reaches
-        // the stylesheet. `min-w-0` neutralizes the grid's intrinsic
-        // `min-content` minimum so an unbreakable file path can't push
-        // the modal past the cap. The default X close button is
-        // suppressed - Cancel in the footer already covers dismissal
-        // (alongside Esc / overlay click) without the corner-spacing
-        // mismatch that comes with the corner-anchored icon.
+        // Inline `maxWidth` instead of a Tailwind arbitrary-value class: the comma inside `min(92vw, 32rem)` defeats Tailwind v4's class-extractor regex, so the utility silently never reaches the stylesheet.
+        // `min-w-0` neutralizes the grid's intrinsic `min-content` minimum so an unbreakable file path can't push the modal past the cap.
         className="w-full min-w-0 gap-0 overflow-hidden p-0"
         style={{ maxWidth: "min(92vw, 32rem)" }}
         showCloseButton={false}
@@ -151,12 +142,8 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
         </div>
 
         <DialogFooter
-          // `mx-0 mb-0` neutralizes shadcn's default `-mx-4 -mb-4` on
-          // DialogFooter - those negatives are tuned for the primitive's
-          // `p-4` content padding, but we use `p-0` here, so they leak
-          // 16px past the bottom edge and get clipped by
-          // `overflow-hidden`. Result: buttons hug the bottom edge with
-          // no breathing room.
+          // `mx-0 mb-0` neutralizes shadcn's default `-mx-4 -mb-4` on DialogFooter - those negatives are tuned for the primitive's `p-4` content padding, but we use `p-0` here, so they leak 16px past the bottom edge and get clipped by `overflow-hidden`.
+          // Result: buttons hug the bottom edge with no breathing room.
           className="mx-0 mb-0 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4"
         >
           <Button
@@ -338,9 +325,8 @@ function RestoreFileRow(props: {
     >
       <OperationDot operation={entry.operation} />
       {entry.artifact ? (
-        // Artifacts show their title, not the internal `index.md` path. The
-        // resolution lives in a child so the open-epic projection hooks run
-        // ONLY for artifact rows - a plain file row needs no epic context.
+        // Artifacts show their title, not the internal `index.md` path.
+        // The resolution lives in a child so the open-epic projection hooks run ONLY for artifact rows - a plain file row needs no epic context.
         <RestoreArtifactTitle
           artifact={entry.artifact}
           operation={entry.operation}
@@ -357,13 +343,7 @@ function RestoreFileRow(props: {
   );
 }
 
-/**
- * Live artifact title for a restore row: re-resolves by id from the open-epic
- * projection (with the captured tag as fallback), so a rename after capture - or
- * a null captured title - shows the current title rather than a stale/generic
- * one. Split from {@link RestoreFileRow} so the projection hooks run only for
- * artifact rows.
- */
+/** Live artifact title for a restore row: re-resolves by id from the open-epic projection (with the captured tag as fallback), so a rename after capture - or a null captured title - shows the current title rather than a stale/generic one. Split from {@link RestoreFileRow} so the projection hooks run only for artifact rows. */
 function RestoreArtifactTitle(props: {
   readonly artifact: CheckpointArtifactTag;
   readonly operation: CheckpointFileOperation;

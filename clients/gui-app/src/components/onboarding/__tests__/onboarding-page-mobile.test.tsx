@@ -35,21 +35,15 @@ vi.mock("@/components/onboarding/onboarding-diorama", () => ({
   OnboardingDiorama: () => <div data-testid="onboarding-diorama-stub" />,
 }));
 
-// The phone tour never lists the session-import act, but the page still
-// imports its stage and capability hook; stub both so this suite neither
-// loads the wizard tree nor needs a negotiated stream runtime.
+// The phone tour never lists the session-import act, but the page still imports its stage and capability hook;
+// stub both so this suite neither loads the wizard tree nor needs a negotiated stream runtime.
 vi.mock("@/components/onboarding/onboarding-session-import-stage", () => ({
   OnboardingSessionImportStage: () => (
     <div data-testid="session-import-stage-stub" />
   ),
 }));
 
-/**
- * The tour re-provides the picked host's runtimes above itself. The phone tour
- * stubs both surfaces that show the picker, so all this suite needs from the
- * host layer is a scope that resolves - mocked at the same boundary the
- * Settings panel suites use rather than standing up the six hooks behind it.
- */
+/** The tour re-provides the picked host's runtimes above itself. */
 vi.mock(
   "@/components/settings/host-scope/use-host-scope",
   async (importOriginal) => ({
@@ -68,8 +62,8 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
 
-// Advertised as AVAILABLE on purpose: the phone tour omits the act regardless,
-// and the eager scan must follow the tour, not the capability.
+// Advertised as available on purpose: the phone tour omits the act regardless, and the eager scan must follow
+// the tour, not the capability.
 vi.mock("@/hooks/session-import/use-session-import-available", () => ({
   useSessionImportAvailable: () => true,
 }));
@@ -100,10 +94,7 @@ vi.mock("@/components/onboarding/onboarding-phone-diorama", () => ({
   ),
 }));
 
-// The real pane is a CodeMirror surface - a `[contenteditable]` div, not a
-// `textarea` - so the mock renders both: the textarea drives the existing
-// value-plumbing tests, and the contenteditable sibling is what exercises the
-// swipe recognizer's `[contenteditable]` exemption arm.
+// The real pane is a CodeMirror surface - a `[contenteditable]` div, not a `textarea`.
 vi.mock("@/components/onboarding/onboarding-agent-guide-pane", () => ({
   OnboardingAgentGuidePane: (props: {
     readonly agentGuide: OnboardingAgentGuideState;
@@ -157,9 +148,8 @@ vi.mock("@/hooks/agent/use-agent-selection-guide-set-global-mutation", () => ({
   }),
 }));
 
-// Only the SINGLETON is replaced. `AnalyticsEvent` stays the real enum, so a
-// swipe is pinned to the member the buttons actually emit rather than to a
-// literal this file invented.
+// Only the singleton is replaced. `AnalyticsEvent` stays the real enum, so a swipe is pinned to the member the
+// buttons actually emit rather than to a literal this file invented.
 const trackSpy = vi.hoisted(() =>
   vi.fn<(event: string, properties: unknown) => void>(),
 );
@@ -205,10 +195,8 @@ import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import type { ReactNode } from "react";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
-/**
- * Every link surface below reaches the external-link bridge mutation, which
- * needs a `QueryClientProvider` above it.
- */
+/** Every link surface below reaches the external-link bridge mutation, which needs a `QueryClientProvider`
+ * above it. */
 function render(ui: ReactNode): RenderResult {
   return renderUi(ui, { wrapper: WithTestQueryClient });
 }
@@ -221,7 +209,6 @@ function renderPage() {
   );
 }
 
-/** Which act is on screen, read from its rendered title. */
 function currentStage(): number {
   return onboardingActsFor({
     sessionImportAvailable: false,
@@ -253,11 +240,8 @@ interface PointerPosition {
   readonly clientY: number;
 }
 
-/**
- * jsdom has no usable `PointerEvent` constructor, so - the same trick the
- * shell's gesture suites use - a plain `Event` wearing exactly the fields the
- * recognizer reads.
- */
+/** jsdom has no usable `PointerEvent` constructor, so - the same trick the shell's gesture suites use - a plain
+ * `Event` wearing exactly the fields the recognizer reads. */
 function dispatchPointer(
   target: EventTarget,
   type: "pointerdown" | "pointermove" | "pointerup",
@@ -280,11 +264,8 @@ function dispatchPointer(
   target.dispatchEvent(event);
 }
 
-/**
- * A whole drag: down on `target`, a move at the halfway point, then the release.
- * The intermediate move matters - the vertical guard is judged while the drag
- * is happening, not from where it finished.
- */
+/** The intermediate move matters - the vertical guard is judged while the drag is happening, not from where it
+ * finished. */
 function drag(
   target: EventTarget,
   from: PointerPosition,
@@ -301,7 +282,6 @@ function drag(
   });
 }
 
-/** The stage content the tour's swipe surface wraps. */
 function stage(container: HTMLElement): HTMLElement {
   const content = container.querySelector(".onboarding-stage-content");
   if (!(content instanceof HTMLElement)) {

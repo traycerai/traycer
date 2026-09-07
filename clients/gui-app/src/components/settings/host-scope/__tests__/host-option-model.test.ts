@@ -13,24 +13,8 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-/**
- * The picker row's status word, which had NO coverage at all — and that is
- * half of why it survived P3.4's vocabulary census as a third, unnamed status
- * vocabulary.
- *
- * What it used to do was answer a ROUTE question in STATUS words: `connectable`
- * decided whether to speak, and the word was `unreachable` or `requires
- * upgrade`. The incoherence that produced is the reason this file exists: a
- * registry-only host whose health line read "Reported reachable" carried the
- * word "unreachable" in the same row, because two layers were answering
- * different questions in one voice.
- *
- * The split ruled for this pass: ROUTE decides interactivity
- * (`isHostOptionSelectable`), STATUS decides words (`hostOptionStatusWord`,
- * keyed on the lease-derived `health.state`). Both halves are pinned here, and
- * the crossing test at the bottom is the one that would have caught the
- * original defect.
- */
+/** Both halves are pinned here, and the crossing test at the bottom is the one that would have caught the
+ * original defect. */
 
 function option(overrides: {
   readonly state?: HostHealthState;
@@ -68,11 +52,8 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     ).toBe(word);
   });
 
-  /**
-   * Silence is a decision here, not a gap, and each of the four has its own
-   * reason — which is why they are asserted rather than left to the absence of
-   * a test.
-   */
+  /** Silence is a decision here, not a gap, and each of the four has its own reason - which is why they are
+   * asserted rather than left to the absence of a test. */
   it.each([
     // Nothing to add: the dot carries it.
     ["online"],
@@ -81,8 +62,8 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     ["reported-reachable"],
     // A blind cloud read is not something a person acts on from a picker.
     ["unknown"],
-    // A WINDOW-scope fact the global narrator owns — repeating it on every
-    // row is the layered-narration class this epic deletes.
+    // A window-scope fact the global narrator owns - repeating it on every row is the layered-narration class this
+    // epic deletes.
     ["viewer-offline"],
   ] as const)("stays silent for %s", (state) => {
     expect(
@@ -90,11 +71,8 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     ).toBeNull();
   });
 
-  /**
-   * M5, ruled at P3.1. A machine mid-install is not "offline" in any sense a
-   * person can act on, and `settingUp` is a MUTATION-LANE fact rather than a
-   * status one — which is why it sits outside the table instead of in it.
-   */
+  /** A machine mid-install is not "offline" in any sense a person can act on, and `settingUp` is a mutation-lane
+   * fact rather than a status one - which is why it sits outside the table instead of in it. */
   it("lets setting up outrank every health state", () => {
     expect(
       hostOptionStatusWord(
@@ -110,15 +88,7 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     ).toBe("setting up");
   });
 
-  /**
-   * THE regression, stated directly.
-   *
-   * A registry-only host: the account reports it reachable, this client has no
-   * route to it. The old word for that row was "unreachable" while its health
-   * line said "Reported reachable" — one row, two vocabularies, contradicting
-   * each other. The row is now silent about the route and INERT for the intents
-   * where picking it could only fail, which is the ruled partition.
-   */
+  /** A registry-only host: the account reports it reachable, this client has no route to it. */
   it("no longer contradicts its own health line on an undialable reported-reachable host", () => {
     const host = option({ state: "reported-reachable", connectable: false });
 
@@ -141,10 +111,7 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     ).toBe(true);
   });
 
-  /**
-   * Route and status are now INDEPENDENT, which is the whole ruling. The word
-   * must not move when only dialability moves.
-   */
+  /** The word must not move when only dialability moves. */
   it("keeps the word fixed to health while the route varies underneath it", () => {
     for (const connectable of [true, false]) {
       expect(
@@ -162,12 +129,8 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     }
   });
 
-  /**
-   * `local-only` names the REMEDY, not the symptom. One word covering both
-   * this and `offline` is what sent free-tier users to debug a network fault
-   * over a billing limit — and it must not depend on the client-side
-   * `planRestricted` flag, which is only one of the two ways to learn it.
-   */
+  /** One word covering both this and `offline` is what sent free-tier users to debug a network fault over a
+   * billing limit. */
   it("names the upgrade for local-only regardless of the client-side plan flag", () => {
     for (const planRestricted of [true, false]) {
       expect(
@@ -202,23 +165,14 @@ describe("hostOptionKindLabel — unchanged, and deliberately route-side", () =>
   });
 });
 
-// G4: the selector row's update badge, decorated from `FleetUpdateView` alone.
-// The `unknown`-with-`lastKnownKind` case is the one the independent cold
-// review's finding 4 named directly: a pre-`@1.3` peer (`unknown`, no
-// retained phase) must render NOTHING — the noise case a blank badge exists
-// to avoid claiming.
+// The `unknown`-with-`lastKnownKind` case is the one the independent cold review's finding 4 named directly: a
+// pre-`@1.3` peer (`unknown`, no retained phase) must render nothing.
 describe("hostOptionUpdateBadge", () => {
   function viewOf(overrides: Partial<FleetUpdateView>): FleetUpdateView {
     return { ...UNKNOWN_FLEET_UPDATE_VIEW, ...overrides };
   }
 
-  // `qualified: false` explicitly here — `viewOf`'s base
-  // (`UNKNOWN_FLEET_UPDATE_VIEW`) carries `qualified: true`, and production
-  // change 7 (`hostOptionUpdateBadge` now retains-badges ANY qualified view,
-  // not only a `kind: "unknown"` one) means a live-phase fixture that forgot
-  // to override `qualified` would silently exercise the RETAINED arm instead
-  // of the live one, reading "last seen updating" where the test's own title
-  // promises "updating".
+  // `qualified: false` explicitly here - `viewOf`'s base (`UNKNOWN_FLEET_UPDATE_VIEW`) carries `qualified.
   it("a LIVE updating phase reads 'updating'", () => {
     expect(
       hostOptionUpdateBadge(viewOf({ kind: "downloading", qualified: false })),
@@ -247,13 +201,8 @@ describe("hostOptionUpdateBadge", () => {
     ).toBe("update failed");
   });
 
-  // Production change 7: a QUALIFIED view carrying a non-`unknown` kind (a
-  // stale-but-not-yet-decayed read - `projectFleetUpdateView`'s `qualified`
-  // flag is deliberately independent of `kind`) must retain-badge exactly
-  // like the `kind: "unknown"` case above, not render the present-tense live
-  // word. This is the case `viewOf`'s own default (`qualified: true`) was
-  // silently exercising in the two "LIVE" fixtures above before they pinned
-  // `qualified: false` explicitly.
+  // This is the case `viewOf`'s own default (`qualified: true`) was silently exercising in the two "live"
+  // fixtures above before they pinned `qualified: false` explicitly.
   it("a QUALIFIED (stale-but-not-decayed) downloading view reads 'last seen updating', never the present-tense word", () => {
     expect(
       hostOptionUpdateBadge(viewOf({ kind: "downloading", qualified: true })),
@@ -281,9 +230,7 @@ describe("hostOptionUpdateBadge", () => {
     expect(hostOptionUpdateBadge(viewOf({ kind: "idle" }))).toBeNull();
   });
 
-  // The coarse `kind: "updating"` view — the legacy update path's own signal,
-  // which names no finer phase. It collapses into the same "updating" /
-  // "last seen updating" vocabulary as every other mid-update phase.
+  // The coarse `kind: "updating"` view - the legacy update path's own signal, which names no finer phase.
   it("a LIVE 'updating' view reads 'updating'", () => {
     expect(
       hostOptionUpdateBadge(viewOf({ kind: "updating", qualified: false })),

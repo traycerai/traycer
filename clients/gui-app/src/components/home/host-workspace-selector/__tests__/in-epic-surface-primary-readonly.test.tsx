@@ -28,9 +28,7 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
-// ── Hook mocks: the real InEpicSurface pulls host/query/mutation hooks; every
-// one is stubbed inert so the surface renders its REAL row-item mapping (the
-// thing under test: bound rows must hand `canChangePrimary: false`). ──────────
+// ── Hook mocks: the real InEpicSurface pulls host/query/mutation hooks.
 
 const FAKE_CLIENT = {
   request: () => new Promise(() => undefined),
@@ -523,8 +521,8 @@ describe.each(["chat", "terminal-agent"] as const)(
         screen.getByRole("button", { name: /^beta/ }).textContent,
       ).toContain("beta");
 
-      // No atomic set-primary RPC exists for a live binding - the action
-      // must be absent on EVERY row of a bound surface.
+      // No atomic set-primary RPC exists for a live binding - the action must be absent on every row of a bound
+      // surface.
       expect(screen.queryByTestId("folder-make-primary")).toBeNull();
       // The other row actions are still there (the rows are editable).
       expect(

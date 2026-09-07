@@ -1,14 +1,4 @@
-/**
- * Shared identity for the opener's text-search sub-flow.
- *
- * The two-step search flow reuses the generic opener sub-page stack: step 1 (a
- * normal cmdk list) picks a target; selecting it pushes a step-2 sub-page whose
- * `id` is built here. `PaneOpener` recognizes that id and renders the bespoke
- * `SearchRunView` (query input + options + results) instead of the generic
- * fuzzy-filtered list, because content search is literal/regex - never a cmdk
- * fuzzy filter. The target is carried IN the id (rather than a new field on the
- * shared `CommandSubpage` type) so no other sub-page constructor has to change.
- */
+/** Shared identity for the opener's text-search sub-flow. */
 
 export type SearchRunTarget =
   | { readonly kind: "artifact" }
@@ -19,9 +9,8 @@ const ARTIFACT_ID = `${RUN_PREFIX}:artifact`;
 const CODE_PREFIX = `${RUN_PREFIX}:code:`;
 
 /**
- * The step-2 sub-page id for a target. `hostId`/`root` are `encodeURIComponent`d
- * (which escapes `:`, so a Windows `C:\…` root cannot collide with the field
- * separator) and reconstructed by {@link parseSearchRunSubpageId}.
+ * The step-2 sub-page id for a target.
+ * `hostId`/`root` are `encodeURIComponent`d (which escapes `:`, so a Windows `C:\…` root cannot collide with the field separator) and reconstructed by {@link parseSearchRunSubpageId}.
  */
 export function searchRunSubpageId(target: SearchRunTarget): string {
   if (target.kind === "artifact") return ARTIFACT_ID;

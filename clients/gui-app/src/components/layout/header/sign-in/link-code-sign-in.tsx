@@ -49,15 +49,8 @@ function noticeCopy(notice: Exclude<EntryNotice, null>): string {
   }
 }
 
-/**
- * The notice this surface shows: its own, or — when it has none — the outcome
- * of a claim `LinkLoginDeepLinkBridge` ran for a QR the SYSTEM camera scanned.
- * Those kinds are the SAME kinds a scan here produces, so they get the same
- * copy; a stale QR has to read as "expired", never as "try again".
- *
- * A local notice wins because it describes something the user just did, and
- * their own attempt is the more recent answer.
- */
+/** Those kinds are the same kinds a scan here produces, so they get the same copy; a stale QR has to read as
+ * "expired", never as "try again". */
 function useEntryNotice(local: EntryNotice): EntryNotice {
   const fromDeepLink = useLinkLoginDeepLinkOutcomeStore(
     (state) => state.notice,
@@ -65,19 +58,7 @@ function useEntryNotice(local: EntryNotice): EntryNotice {
   return local ?? fromDeepLink;
 }
 
-/**
- * What a settled claim should say inline, or `null` for the three kinds that
- * say nothing here.
- *
- * A completed sign-in speaks for itself. A SUPERSEDED attempt belongs to
- * whoever replaced it — its complaint would land under the successor's
- * progress and describe a request nobody is waiting on. And a `failed`
- * finalization — the desktop approved, then validation or persistence went
- * wrong — is already showing as the global sign-in error; repeating it here
- * would be a second message, in code-verdict words that misdescribe it
- * ("that code is invalid or expired" is the wrong sentence for a network
- * blip after approval).
- */
+/** What a settled claim should say inline, or `null` for the three kinds that say nothing here. */
 function noticeForResult(result: LinkLoginSignInResult): EntryNotice {
   if (
     result.kind === "signed-in" ||
@@ -89,40 +70,14 @@ function noticeForResult(result: LinkLoginSignInResult): EntryNotice {
   return result.kind;
 }
 
-/**
- * Whether a sign-in attempt is running at all — this surface's own redeem, or
- * one `LinkLoginDeepLinkBridge` started for a QR the SYSTEM camera scanned,
- * possibly before this surface was mounted. The user waiting on an approval is
- * the same user either way, so the condition is "an attempt is running", not
- * "I started one".
- *
- * The global `signing-in` status is what covers the CLAIM leg. Poll progress
- * only appears once the claim has already succeeded and the loop begins, so
- * gating on it alone leaves the scan and submit controls live through the
- * device-description and claim round trips — long enough for a tap to start a
- * second attempt that supersedes the camera-launched one, which then reports
- * ITS failure under the replacement's wait. It also correctly disables the
- * link path while a browser device sign-in is running, which is the same
- * mutual exclusion from the other direction.
- */
+/** The global `signing-in` status is what covers the claim leg. */
 function useLinkLoginClaimInFlight(isRedeeming: boolean): boolean {
   const progress = useAuthLinkLoginProgress(useAuthService());
   const status = useAuthStore((state) => state.status);
   return isRedeeming || status === "signing-in" || progress !== null;
 }
 
-/**
- * QR link-code sign-in: redeems a one-time code minted by the desktop's
- * Settings → Link mobile app panel. The camera is a capability
- * (`runnerHost.linkCodeScanner`), not an assumption — where it is absent
- * (browser dev shell) or denied, the typed-code field IS the flow, so every
- * failure lands as an inline notice above a still-usable field.
- *
- * Two presentations, both mobile-app-only (the caller gates on the product
- * signal): `cta` is the sign-in screen's emphasized full-width "Scan QR code"
- * action with manual entry as a tertiary link beneath it; `link` is the
- * compact header's quiet text entry that expands in place.
- */
+/** QR link-code sign-in: redeems a one-time code minted by the desktop's Settings → Link mobile app panel. */
 export function LinkCodeSignIn(props: {
   readonly isHero: boolean;
   readonly presentation: "cta" | "link";
@@ -186,11 +141,7 @@ export function LinkCodeSignIn(props: {
         }
       })
       .catch(() => {
-        // The adapter maps every native outcome to a `kind`, so a REJECTION
-        // here is the host itself failing - the plugin missing, the bridge
-        // gone. Same answer as `error` either way: the user asked for a
-        // camera, so they get told it did not open and the typed-code field
-        // they can still use. Silence would read as a tap that did nothing.
+        // Silence would read as a tap that did nothing.
         setNotice("scan-error");
         setOpen(true);
       });
@@ -292,16 +243,10 @@ export function LinkCodeSignIn(props: {
         ) : (
           <>
             {noticeLine}
-            {/* A real button in the hero's stack, not a bare text line
-                wedged between two buttons — outline keeps it clearly
-                subordinate to the Scan primary. The hero paints white text
-                over its backdrop while `outline` sets a surface with no text
-                color of its own, so the label pins its foreground - otherwise
-                it inherits the hero's white onto the light surface. */}
-            {/* Gated like Scan: a claim is one attempt, and opening the
-                entry form mid-claim offers a second one with nothing useful
-                to type — no approver surface shows a code while a claim
-                awaits its decision. */}
+            {/* A real button in the hero's stack, not a bare text line wedged between two buttons - outline keeps it
+               clearly subordinate to the Scan primary. */}
+            {/* Gated like Scan: a claim is one attempt, and opening the entry form mid-claim offers a second one with
+               nothing useful to type - no approver surface shows a code while a claim awaits its decision. */}
             <Button
               type="button"
               size="lg"

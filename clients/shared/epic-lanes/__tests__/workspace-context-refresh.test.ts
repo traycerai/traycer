@@ -11,13 +11,7 @@ import {
 } from "../workspace-context-refresh";
 
 /**
- * `epic.getWorkspaceContext@1.0` fetch-and-refetch policy - the coalescing
- * contract, the transport/control-event/authority-epoch triggers, and
- * dispose semantics.
- *
- * A deferred promise (not fake timers) is used throughout to control exactly
- * when a fetch resolves, since the coalescing guarantee is about ORDER of
- * triggers relative to a fetch's resolution, not about elapsed time.
+ * `epic.getWorkspaceContext@1.0` fetch-and-refetch policy - the coalescing contract, the transport/control-event/authority-epoch triggers, and dispose semantics.
  */
 
 interface Deferred<T> {
@@ -176,12 +170,7 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
   });
 
   it("retries a FAILED initial read on the first 'open' - the one trigger with no successor", async () => {
-    // `"initial"` is the only cause that never recurs. A reconnect needs a drop
-    // first, permission and migration frames keep arriving, the epoch moves
-    // again - but a first read that failed transiently while the status lane
-    // was still making its first connection had nothing left to recover it, and
-    // a healthy epic with a quiet control lane emits no frame at all. The epic
-    // kept empty `snapshotMeta` for the whole session.
+    // `"initial"` is the only cause that never recurs.
     const { fetch, calls } = createFakeFetch();
     const { sources, onContextCalls } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
@@ -192,7 +181,7 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
 
     policy.noteTransportStatus("open");
 
-    // THE REDDENING ASSERTION: previously the first `"open"` was discarded
+    // the reddening assertion: previously the first `"open"` was discarded
     // wholesale, because it is normally the tab opening that `start` covered.
     expect(calls()).toHaveLength(2);
 
@@ -203,9 +192,7 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
   });
 
   it("retries when the failure lands AFTER the first 'open' - either can be second", async () => {
-    // The other ordering, and it is the likelier one: the unary is issued at
-    // tab open and the status lane reaches `"open"` while it is still in
-    // flight. Keying the retry on the `"open"` alone would miss this entirely.
+    // The other ordering, and it is the likelier one: the unary is issued at tab open and the status lane reaches `"open"` while it is still in flight.
     const { fetch, calls } = createFakeFetch();
     const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
@@ -221,11 +208,7 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
   });
 
   it("does NOT retry after a SUCCESSFUL initial read - the cold open stays single", async () => {
-    // The control that matters most. Retrying on "no context yet" rather than
-    // on "the read failed" would fire while the first fetch is still in
-    // flight, coalesce into `pendingCause`, and issue a second fetch the
-    // instant the first resolved - doubling every cold open, which is the
-    // regression this module's header exists to prevent.
+    // The control that matters most.
     const { fetch, calls } = createFakeFetch();
     const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
@@ -244,11 +227,8 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
   });
 
   it("retries the initial read exactly ONCE, however many times it fails", async () => {
-    // The second control: without a one-shot latch the retry re-enters from
-    // its own rejection handler and spins as fast as the host can refuse. Two
-    // attempts total, then the `onError` degrade - a transport that is open
-    // and a lane that is quiet, still refusing, is a host not serving this
-    // method rather than something to hammer.
+    // The second control: without a one-shot latch the retry re-enters from its own rejection handler and spins as fast as the host can refuse.
+    // Two attempts total, then the `onError` degrade - a transport that is open and a lane that is quiet, still refusing, is a host not serving this method rather than something to hammer.
     const { fetch, calls } = createFakeFetch();
     const { sources, onErrorCalls } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
@@ -272,7 +252,7 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
   });
 
   it("a drop and return still refetches after two failed initial reads", async () => {
-    // The one-shot latch bounds the RETRY, never the ordinary triggers. A real
+  // The one-shot latch bounds the retry, never the ordinary triggers. A real
     // reconnect is still a reconnect.
     const { fetch, calls } = createFakeFetch();
     const { sources } = createSources(fetch, undefined);

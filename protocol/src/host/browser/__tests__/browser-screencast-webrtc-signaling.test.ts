@@ -292,9 +292,6 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
         iceCandidatePairType: "srflx",
       }),
     ).toBe(true);
-    // Nonnegative, like every other timing on this frame: a negative reading
-    // means the two endpoints were not on one clock, which is not a sample.
-    // (Mutation: dropping `.nonnegative()` off `networkPlusJitterMs`.)
     expect(
       parsesClient({
         kind: "videoStats",
@@ -332,9 +329,6 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
   });
 
   it("bounds the SDP and candidate wire strings", () => {
-    // Mutation: dropping any of the four `.max()` bounds - an unbounded SDP,
-    // candidate string, or candidate array is a memory amplifier on a frame
-    // either end can send.
     expect(
       parsesServer({
         kind: "sdpOffer",
@@ -447,9 +441,8 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
         detail: null,
       }),
     ).toBe(false);
-    // The reason vocabulary is CLOSED. Mutation: widening the enum back to a
-    // free string - "ice-timeout" is a plausible-looking code that is not in
-    // it, and a host that switched on it would silently get "other".
+    // The reason vocabulary is CLOSED.
+    // Mutation: widening the enum back to a free string - "ice-timeout" is a plausible-looking code that is not in it, and a host that switched on it would silently get "other".
     expect(
       parsesClient({
         kind: "videoPlaneState",
@@ -540,9 +533,7 @@ describe("browser.screencast@1.0 viewport-epoch hit-testing", () => {
   });
 
   it("rejects a negative or non-integer viewport epoch on input", () => {
-    // Mutation: dropping `.int()` or `.nonnegative()` off the input token -
-    // a fractional epoch never equals a minted one, so every input would be
-    // silently discarded as stale.
+    // Mutation: dropping `.int()` or `.nonnegative()` off the input token - a fractional epoch never equals a minted one, so every input would be silently discarded as stale.
     expect(
       parsesClient({ ...POINTER, castSequence: null, viewportEpoch: -1 }),
     ).toBe(false);

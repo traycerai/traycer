@@ -39,30 +39,16 @@ export interface RegistryYankLookup {
   isVersionYanked(version: string): Promise<boolean>;
 }
 
-// Real registry client. Replaces the NP-2 stub now that NP-4 ships the
-// hosted versions.json fetcher, asset resolver, and minisign + sha256
-// verification chain.
-//
-// Lifecycle is unchanged for callers:
-//
-//   client.fetchManifest()             → versions.json (validated)
-//   client.resolveAsset(ver, platKey)  → manifest entry + platform asset
-//   client.downloadAndVerify(entry, a) → archive on disk, verified
-//
-// The installer (src/installer/install.ts) keeps owning the staging
-// directory + atomic swap; this module owns the trust + network layer.
+// Real registry client.
+// Replaces the NP-2 stub now that NP-4 ships the hosted versions.json fetcher, asset resolver, and minisign + sha256 verification chain.
 
 export interface CreateRegistryClientOptions {
   readonly environment: Environment;
-  // Optional override so tests / scripts can inject a fake fetcher
-  // without monkey-patching globals. Null = use the default
-  // `fetchText` / `downloadToFile`.
+  // Optional override so tests / scripts can inject a fake fetcher without monkey-patching globals.
+  // Null = use the default `fetchText` / `downloadToFile`.
   readonly transport: RegistryTransport | null;
-  // Whether construction must fail if no trusted minisign keys are
-  // configured. Production callers (`createDefaultRegistryClient`)
-  // pass `true` so an accidentally-shipped binary without baked keys
-  // fails loudly at construction; tests pass `false` because the fake
-  // transport substitutes the verify chain wholesale.
+  // Whether construction must fail if no trusted minisign keys are configured.
+  // Production callers (`createDefaultRegistryClient`) pass `true` so an accidentally-shipped binary without baked keys fails loudly at construction; tests pass `false` because the fake transport substitutes the verify chain wholesale.
   readonly requireTrustedKeys: boolean;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
 }
@@ -113,12 +99,8 @@ export async function createRegistryClient(
     manifestUrl: manifestUrlInfo.url,
   });
 
-  // Fail loudly at construction time, not at the first verify call:
-  // if no trusted keys are configured for a real environment, every
-  // signature verify would fail anyway and the user-facing error would
-  // come *after* an unnecessary network round-trip. Callers opt out via
-  // `requireTrustedKeys: false` (only legitimate in unit tests that
-  // substitute the verify chain via a fake transport).
+  // Fail loudly at construction time, not at the first verify call: if no trusted keys are configured for a real environment, every signature verify would fail anyway and the user-facing error would come *after* an unnecessary network round-trip.
+  // Callers opt out via `requireTrustedKeys: false` (only legitimate in unit tests that substitute the verify chain via a fake transport).
   if (trustedKeySet.keys.length === 0 && opts.requireTrustedKeys) {
     logger.error(
       "Registry client missing trusted signing keys",
@@ -249,9 +231,8 @@ export async function createRegistryClient(
           requestedLatest,
           hasDeprecationReason: entry.deprecationReason !== null,
         });
-        // Yanked versions are refused for install. The Tech Plan reserves
-        // a future `--force` repair path; until that lands we fail with
-        // a clean code so Desktop can route to the failure card.
+        // Yanked versions are refused for install.
+        // The Tech Plan reserves a future `--force` repair path; until that lands we fail with a clean code so Desktop can route to the failure card.
         throw cliError({
           code: CLI_ERROR_CODES.REGISTRY_VERSION_NOT_FOUND,
           message: `host registry: version '${resolvedVersion}' is yanked${entry.deprecationReason !== null ? ` (${entry.deprecationReason})` : ""}; pick a non-yanked version`,
@@ -262,21 +243,15 @@ export async function createRegistryClient(
           exitCode: 1,
         });
       }
-      // The client floor, checked HERE because this is the one place a host
-      // version is selected - both `install` and `download-stage` come
-      // through it, so neither can acquire a path around it. Ordered after
-      // the yank refusal (a withdrawn version's floor is beside the point)
-      // and before the platform-asset lookup, so the answer is about the CLI
-      // rather than about which archives happened to publish.
+      // The client floor, checked HERE because this is the one place a host version is selected - both `install` and `download-stage` come through it, so neither can acquire a path around it.
+      // Ordered after the yank refusal (a withdrawn version's floor is beside the point) and before the platform-asset lookup, so the answer is about the CLI rather than about which archives happened to publish.
       const floor = evaluateHostClientFloor({
         cliVersion: resolveCliVersion(process.env),
         requiredCliVersion: entry.requiredCliVersion,
       });
       if (floor.kind === "unreleased-cli") {
-        // Named exemption, and loud on purpose: a dev build IS below every
-        // floor by SemVer, and refusing it would leave `make dev-desktop`
-        // unable to install a floored host at all. The machine that hits this
-        // is the one best placed to understand the consequence.
+        // Named exemption, and loud on purpose: a dev build IS below every floor by SemVer, and refusing it would leave `make dev-desktop` unable to install a floored host at all.
+        // The machine that hits this is the one best placed to understand the consequence.
         logger.warn("Registry client floor waived for an unreleased CLI", {
           environment: opts.environment,
           resolvedVersion,
@@ -359,11 +334,8 @@ export async function createRegistryClient(
           exitCode: 1,
         });
       }
-      // The archive path is stable across CLI invocations (keyed by
-      // version + sha256) so a re-spawned CLI resumes the previous
-      // process's partial file instead of starting from zero - the whole
-      // point of traycer#585/#588. `acquireDownloadSlot` owns the
-      // concurrency + sweep policy for that shared location.
+      // The archive path is stable across CLI invocations (keyed by version + sha256) so a re-spawned CLI resumes the previous process's partial file instead of starting from zero - the whole point of traycer#585/#588.
+      // `acquireDownloadSlot` owns the concurrency + sweep policy for that shared location.
       const slot = await acquireDownloadSlot({
         environment: opts.environment,
         version: entry.version,
@@ -375,19 +347,8 @@ export async function createRegistryClient(
         environment: opts.environment,
         resumable: slot.resumable,
       });
-      // The `finally` has to tell three outcomes apart, and it needs BOTH
-      // of these to do it. `transferred` says the bytes are complete and
-      // sha256-verified; `failure` says whether what went wrong afterwards
-      // condemns them.
-      //
-      // Only a TRUST failure condemns an archive: a bad signature, or a
-      // keyId that does not match the manifest. Those reproduce on every
-      // retry, so the file must go. Everything else after the transfer -
-      // above all fetching the sub-1KB `.minisig`, which gives up after
-      // four attempts and would fail routinely on the throttled links this
-      // work exists for - is a transport failure, and deleting a fully
-      // verified 700MB archive because a tiny signature fetch flaked is
-      // exactly the "downloads forever, never finishes" loop being fixed.
+      // The `finally` has to tell three outcomes apart, and it needs BOTH of these to do it.
+      // `transferred` says the bytes are complete and sha256-verified; `failure` says whether what went wrong afterwards condemns them.
       let succeeded = false;
       let transferred = false;
       let failure: unknown = null;
@@ -413,9 +374,7 @@ export async function createRegistryClient(
           signatureSourceLabel: asset.signatureUrl,
           trustedKeys: trustedKeySet.keys,
         });
-        // The publicKeyId pinned in the manifest must match the keyId of
-        // the signature itself - otherwise the publisher could swap the
-        // signing key after the fact without changing the manifest.
+        // The publicKeyId pinned in the manifest must match the keyId of the signature itself - otherwise the publisher could swap the signing key after the fact without changing the manifest.
         if (verifyResult.keyId !== asset.publicKeyId) {
           logger.error(
             "Registry signature key mismatch",
@@ -449,20 +408,11 @@ export async function createRegistryClient(
         failure = err;
         throw err;
       } finally {
-        // On success the caller owns the verified archive until it has
-        // extracted it, and releases the slot itself.
-        //
-        // Both releases are `.catch`-guarded. Today neither can reject -
-        // download-cache.ts swallows its own fs errors - but that is its
-        // internal detail, and an unguarded await in a `finally` would let a
-        // future change there replace the error being propagated. Callers
-        // route on `REGISTRY_UNAVAILABLE` vs `HOST_VERIFY_FAILED`; losing
-        // that code to a cleanup failure would turn a retryable download
-        // into an unrecognized one.
+        // On success the caller owns the verified archive until it has extracted it, and releases the slot itself.
+        // Both releases are `.catch`-guarded.
         if (!succeeded && transferred && isTrustFailure(failure)) {
-          // Complete bytes that the trust chain rejected. Resuming into
-          // them would just reproduce the same verdict, so drop the file
-          // with the claim.
+          // Complete bytes that the trust chain rejected.
+          // Resuming into them would just reproduce the same verdict, so drop the file with the claim.
           await releaseDownloadSlot(opts.environment, archivePath).catch(
             () => undefined,
           );
@@ -470,13 +420,8 @@ export async function createRegistryClient(
             environment: opts.environment,
           });
         } else if (!succeeded) {
-          // Keep whatever landed on disk and drop only the ownership
-          // claim, so the next invocation resumes it. Covers both a failed
-          // transfer (the case a throttled connection hits over and over)
-          // and a post-transfer transport failure, where the archive is
-          // complete and sha256-verified and only the signature fetch has
-          // yet to succeed - the next run re-verifies it over one 416
-          // round-trip instead of re-downloading it.
+          // Keep whatever landed on disk and drop only the ownership claim, so the next invocation resumes it.
+          // Covers both a failed transfer (the case a throttled connection hits over and over) and a post-transfer transport failure, where the archive is complete and sha256-verified and only the signature fetch has yet to succeed - the next run re-verifies it over one 416 round-trip instead of re-downloading it.
           await releaseDownloadSlotOwnership(
             opts.environment,
             archivePath,
@@ -491,16 +436,8 @@ export async function createRegistryClient(
   };
 }
 
-// Production call-site helper: build a registry client wired to the
-// real `process.env` and the default fetch/download transport. This
-// exists as its own export (rather than as default values on
-// CreateRegistryClientOptions) because the project style forbids
-// default parameter values and "pseudo-optional" rest-tuple shims -
-// every argument must be passed explicitly. Forcing call-sites to
-// thread `environment` here keeps the prod/dev distinction visible and
-// prevents an accidental no-arg construction from typing as
-// `RegistryClient` and crashing later when the transport sentinel is
-// dereferenced.
+// Production call-site helper: build a registry client wired to the real `process.env` and the default fetch/download transport.
+// This exists as its own export (rather than as default values on CreateRegistryClientOptions) because the project style forbids default parameter values and "pseudo-optional" rest-tuple shims - every argument must be passed explicitly.
 export async function createDefaultRegistryClient(
   environment: Environment,
   onProgress: ((info: ProgressInfo) => void) | null,
@@ -513,10 +450,8 @@ export async function createDefaultRegistryClient(
   });
 }
 
-// Create one lookup per provisioning run. It shares only a manifest promise
-// and its result; every state snapshot still asks whether its installed
-// version is yanked. This read is advisory, unlike installer manifest fetches:
-// offline, malformed, and timed-out responses all intentionally fail open.
+// Create one lookup per provisioning run.
+// It shares only a manifest promise and its result; every state snapshot still asks whether its installed version is yanked.
 export function createRegistryYankLookup(
   environment: Environment,
 ): RegistryYankLookup {
@@ -575,11 +510,8 @@ function emitRegistryHeartbeat(
     stage: `registry-${resource}-${heartbeat.phase}`,
     message: registryHeartbeatMessage(resourceLabel, heartbeat),
     percent: null,
-    // Attempt counters belong in the message, not in the byte fields. A
-    // heartbeat is a liveness tick, not a transfer measurement: putting
-    // `attempt`/`maxAttempts` here made Desktop's progress bar redraw as
-    // "1 byte of 4" every time a retry fired mid-download. All three
-    // numeric fields stay null so the renderer holds the last real values.
+    // Attempt counters belong in the message, not in the byte fields.
+    // A heartbeat is a liveness tick, not a transfer measurement: putting `attempt`/`maxAttempts` here made Desktop's progress bar redraw as "1 byte of 4" every time a retry fired mid-download.
     bytes: null,
     totalBytes: null,
     workUnits: null,
@@ -591,9 +523,7 @@ function registryHeartbeatMessage(
   heartbeat: NetworkHeartbeat,
 ): string {
   if (heartbeat.phase === "attempt") {
-    // No denominator when the counter has no ceiling worth quoting - an
-    // archive download is bounded by consecutive stalls, not by attempts,
-    // so "attempt 41/200" would read as a countdown that is not running.
+    // No denominator when the counter has no ceiling worth quoting - an archive download is bounded by consecutive stalls, not by attempts, so "attempt 41/200" would read as a countdown that is not running.
     const of =
       heartbeat.maxAttempts === null ? "" : `/${heartbeat.maxAttempts}`;
     return `fetching ${resourceLabel} (attempt ${heartbeat.attempt}${of})`;
@@ -604,11 +534,8 @@ function registryHeartbeatMessage(
   return `retrying ${resourceLabel} shortly`;
 }
 
-// Whether a post-transfer failure condemns the bytes on disk. The verify
-// chain reports `HOST_VERIFY_FAILED` for everything that makes an archive
-// untrustworthy (a signature that does not check out, a keyId the manifest
-// does not pin); a network failure fetching the signature reports
-// `REGISTRY_UNAVAILABLE` and says nothing about the archive itself.
+// Whether a post-transfer failure condemns the bytes on disk.
+// The verify chain reports `HOST_VERIFY_FAILED` for everything that makes an archive untrustworthy (a signature that does not check out, a keyId the manifest does not pin); a network failure fetching the signature reports `REGISTRY_UNAVAILABLE` and says nothing about the archive itself.
 function isTrustFailure(err: unknown): boolean {
   return (
     err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_VERIFY_FAILED
@@ -616,9 +543,8 @@ function isTrustFailure(err: unknown): boolean {
 }
 
 function archiveBasenameFromUrl(url: string): string {
-  // Best-effort: pull the last path segment from the URL so the temp
-  // file name reflects the publisher's archive name (helps debugging
-  // when an install fails mid-flight). Falls back to a generic name.
+  // Best-effort: pull the last path segment from the URL so the temp file name reflects the publisher's archive name (helps debugging when an install fails mid-flight).
+  // Falls back to a generic name.
   try {
     const parsed = new URL(url);
     const segments = parsed.pathname.split("/");

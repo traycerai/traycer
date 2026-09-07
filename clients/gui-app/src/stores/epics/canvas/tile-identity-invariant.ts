@@ -1,24 +1,6 @@
 /**
- * Canvas-store-wide immutable tile identity: once an `instanceId` is
- * observed, its `{tile kind, content id, epic id, host id}` tuple must never
- * change. `epicId` is not stored on most tile refs - it is derived from
- * whichever tab currently owns the tile (`tabsById[tabId].epicId`), so every
- * check here takes a canvas-wide `canvasByTabId` snapshot plus an epicId
- * resolver rather than a single tile in isolation. A repoint under an
- * unchanged `instanceId` is the exact hazard `ChatMessages` cannot survive -
- * it freezes `(instanceId, epicId, chatId)` once per mount.
- *
- * This module is strict, full stop - no ingress may commit an epicId change
- * under a retained `instanceId`. The one sanctioned resolution
- * (`store.ts`'s `resolveTabEpicIdentity`) does not pass through here at all:
- * it is the sole caller of the module-private raw setter, so provenance is
- * enforced by module privacy rather than a parameter this module has to
- * understand.
- *
- * Pure detection lives here; the dev/test-throws-vs-production-fails-closed
- * policy is applied by `enforceTileIdentityInvariant`, and committing (or
- * rejecting) a candidate state is the caller's job - this module never
- * touches the store.
+ * Canvas-store-wide immutable tile identity: once an `instanceId` is observed, its `{tile kind,
+ * content id, epic id, host id}` tuple must never change.
  */
 import { appLogger, type AppLogFields } from "@/lib/logger";
 import type { EpicCanvasState, EpicCanvasTileRef } from "./types";
@@ -80,13 +62,7 @@ function tileIdentityTupleLogFields(tuple: TileIdentityTuple): AppLogFields {
   };
 }
 
-/**
- * Canvas-wide `instanceId -> tuple` snapshot, scanning every tab's tiles.
- * Callers pass an ALREADY-VALIDATED `canvasByTabId` (the store's committed
- * state) to build the `previous` baseline a candidate is checked against -
- * `findTileIdentityViolation` is what validates a candidate before it is
- * ever folded into that baseline.
- */
+/** Canvas-wide `instanceId -> tuple` snapshot, scanning every tab's tiles. */
 export function collectTileIdentityRegistry(
   canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
   epicIdForTabId: EpicIdForTabId,
@@ -105,12 +81,8 @@ export function collectTileIdentityRegistry(
 }
 
 /**
- * Scans a CANDIDATE `canvasByTabId` (canvas-wide) for the first `instanceId`
- * whose tuple conflicts with either (a) another tab in the same candidate
- * snapshot, or (b) `previous`, the last known-valid registry. An
- * `instanceId` absent from `previous` (a fresh mint) or absent from the
- * candidate (a close) is never a violation; a RETAINED `instanceId` with a
- * CHANGED tuple is always a violation.
+ * Scans a CANDIDATE `canvasByTabId` (canvas-wide) for the first `instanceId` whose tuple conflicts
+ * with either (a) another tab in the same candidate snapshot, or (b) `previous`, the last
  */
 export function findTileIdentityViolation(
   previous: ReadonlyMap<string, TileIdentityTuple>,
@@ -142,15 +114,7 @@ export function findTileIdentityViolation(
   return null;
 }
 
-/**
- * Enforces the invariant at one ingress. Always emits a diagnostic on
- * violation. `throwOnViolation` is the dev/test-vs-production policy switch -
- * production callers pass `import.meta.env.DEV`; tests drive it directly
- * rather than stubbing Vite's static env. Returns whether the candidate
- * `canvasByTabId` may be committed: a `false` result means the caller must
- * retain its last valid state (drop the candidate patch entirely) - this
- * function never commits or mutates anything itself.
- */
+/** Enforces the invariant at one ingress. Always emits a diagnostic on violation. */
 export function enforceTileIdentityInvariant(
   previous: ReadonlyMap<string, TileIdentityTuple>,
   ingress: TileIdentityIngress,

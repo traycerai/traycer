@@ -5,14 +5,8 @@ import {
   type InstallationDetailsRecord,
 } from "@/components/settings/panels/host-settings-installation-details";
 
-/**
- * `InstallationDetailsDisclosure` gained `signatureKeyId` on its record, and
- * the Verification caption now reads it ALONGSIDE `signatureVerifiedAt` rather
- * than that field alone. No suite renders this component directly yet, so
- * this is the small, focused component test the field's own doc comment
- * describes: a plain render + open, not the full `<HostSettingsPanel />`
- * harness the RPC-backed Overview suites use.
- */
+/** `InstallationDetailsDisclosure` gained `signatureKeyId` on its record, and the Verification caption now
+ * reads it alongside `signatureVerifiedAt` rather than that field alone. */
 
 afterEach(() => {
   cleanup();
@@ -23,10 +17,8 @@ function installRecord(
 ): InstallationDetailsRecord {
   return {
     version: "1.5.0",
-    // Set explicitly rather than left to the spread: an OMITTED field would be
-    // `undefined`, not `null`, and the panel's `runtimeVersion === null` guard
-    // reads those differently — a fixture that skipped it would exercise the
-    // wrong branch while looking like the default one.
+    // Set explicitly rather than left to the spread: an omitted field would be `undefined`, not `null`, and the
+    // panel's `runtimeVersion === null` guard reads those differently.
     runtimeVersion: null,
     installedAt: "2026-08-01T00:00:00Z",
     source: { kind: "registry", value: "1.5.0" },
@@ -49,9 +41,8 @@ function renderOpenVerification(
       emptyMessage="unused"
     />,
   );
-  // Closed by default (`HostSettingsDisclosure`'s own `defaultOpen={false}`) —
-  // Radix does not mount `CollapsibleContent` while closed, so the caption
-  // only reaches the DOM once this fires.
+  // Closed by default (`HostSettingsDisclosure`'s own `defaultOpen={false}`) - Radix does not mount
+  // `CollapsibleContent` while closed, so the caption only reaches the DOM once this fires.
   fireEvent.click(
     screen.getByRole("button", { name: /Installation details/i }),
   );
@@ -60,11 +51,8 @@ function renderOpenVerification(
 
 describe("<InstallationDetailsDisclosure /> Verification caption", () => {
   it("reads 'Unsigned local build' in amber for the CLI's unsigned sentinel key, never a green Verified", () => {
-    // Pins the regression `signatureKeyId` exists to fix: an unsigned
-    // local-file install stamps `signatureVerifiedAt` with the install time
-    // anyway (`stageLocalSource` / `remote-host-staging.js`), so reading that
-    // field alone captioned every hand-installed or tree-run host with a
-    // green "Verified <date>" for a signature that was never checked.
+    // Pins the regression `signatureKeyId` exists to fix: an unsigned local-file install stamps
+    // `signatureVerifiedAt` with the install time anyway (`stageLocalSource` / `remote-host-staging.js`).
     const field = renderOpenVerification(
       installRecord({
         signatureKeyId: "local-file:unsigned",

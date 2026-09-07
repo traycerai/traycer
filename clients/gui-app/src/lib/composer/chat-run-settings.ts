@@ -40,34 +40,14 @@ export function buildChatRunSettings(input: {
     // Trim before sentinel collapse so a whitespace-only stored preference
     // ("   ", "\n", etc.) never reaches the host as a bogus tier id.
     serviceTier: trimmedServiceTier.length === 0 ? null : trimmedServiceTier,
-    // Epic Mode was removed from the product. The protocol's persisted
-    // `ChatRunSettings` still carries the field, so state the one remaining
-    // mode; nothing reads it back.
+    // Epic Mode was removed from the product.
+    // The protocol's persisted `ChatRunSettings` still carries the field, so state the one remaining mode; nothing reads it back.
     agentMode: "regular",
     profileId: selection.profileId,
   };
 }
 
-/**
- * The composer seed for an imported chat whose own `ChatRunSettings` is null.
- *
- * An imported chat belongs to the provider it was imported FROM, and the host
- * says so in its settings tuple - except when it could not, because the source
- * provider listed no model at import time. The composer would then fall back to
- * whatever the user last ran, and answer a Codex transcript with Claude. This
- * puts the provenance back in charge of that one field.
- *
- * The model is left empty on purpose: the toolbar resolves a provider's own
- * default from its catalog for any seed that carries none, so naming one here
- * would only be a second, staler guess. `profileId` is cleared for the same
- * reason the toolbar clears it when it reroutes a provider - a remembered
- * profile belongs to the provider it was remembered for.
- *
- * Permission, reasoning, and tier are carried through untouched. So is the
- * unavailable-provider case: a source provider that is not authenticated on
- * this host is rerouted by the toolbar's own availability pass, exactly as an
- * unavailable default would be.
- */
+/** The composer seed for an imported chat whose own `ChatRunSettings` is null. */
 export function importedChatSettingsSeed(
   rememberedSettings: ChatRunSettings | null,
   defaultSettings: ChatRunSettings,
@@ -87,9 +67,7 @@ export function selectionFromChatRunSettings(
   return {
     harnessId: settings.harnessId,
     modelSlug: settings.model,
-    // `??` guards a pre-profile persisted blob (the field is missing, not
-    // `null`, on an old serialized `ChatRunSettings`) so it resolves to
-    // ambient instead of leaking `undefined` into a `string | null` field.
+    // `??` guards a pre-profile persisted blob (the field is missing, not `null`, on an old serialized `ChatRunSettings`) so it resolves to ambient instead of leaking `undefined` into a `string | null` field.
     profileId: settings.profileId ?? null,
   };
 }

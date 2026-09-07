@@ -10,13 +10,7 @@ export interface GitPanelEpicState {
   readonly changesSectionCollapsed: boolean;
 }
 
-/**
- * The workspace currently selected in the Git Diff panel. `rootRunningDir` is
- * the bound workspace/root repo and the only root whose nested
- * `git.listChangedFiles@1.1` snapshot is fetched. `repoRoot` is retained for
- * persisted v2 compatibility; current UI writes it equal to `rootRunningDir`,
- * and legacy submodule values are normalized back to the workspace root.
- */
+/** The workspace currently selected in the Git Diff panel. */
 export interface GitPanelSelectedRepo {
   readonly hostId: string;
   readonly rootRunningDir: string;
@@ -89,12 +83,7 @@ function parsePersistedBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
-// Rebuild one epic's persisted entry into the current shape. The v1 blob carried
-// `selectedWorktree` (a `{ hostId, runningDir }` that no longer maps to a
-// persisted `selectedRepo` workspace shape); it is dropped - `selectedRepo`
-// resets to null and the panel re-picks a default root. Every other field is
-// kept when valid, else defaulted, so the result can never surface an
-// `undefined` field.
+// Rebuild one epic's persisted entry into the current shape.
 function migratePersistedEpicState(value: unknown): GitPanelEpicState {
   if (!isRecord(value)) return defaultEpicState;
   return {
@@ -120,14 +109,8 @@ interface GitPanelPersistedState {
 }
 
 /**
- * v1 -> v2 migration. v1 persisted the per-epic selection as `selectedWorktree`
- * (`{ hostId, runningDir }`); v2 renamed it to `selectedRepo`
- * (`{ hostId, rootRunningDir, repoRoot }`). A v1 blob therefore has no
- * `selectedRepo` key, so without this a legacy per-epic object rehydrates with
- * `selectedRepo === undefined`, defeating the panel's `selectedRepo !== null`
- * guard (`undefined !== null`) and throwing on `selectedRepo.hostId`. Every
- * entry is rebuilt into the current shape and the dead `selectedWorktree` is
- * dropped.
+ * v1 -> v2 migration. v1 persisted the per-epic selection as `selectedWorktree` (`{ hostId,
+ * runningDir }`); v2 renamed it to `selectedRepo` (`{ hostId, rootRunningDir, repoRoot }`).
  */
 export function migrateGitPanelPersistedState(
   persisted: unknown,
@@ -203,9 +186,8 @@ export const useGitPanelStore = create<GitPanelStore>()(
     }),
     {
       ...basePersistOptions(GIT_PANEL_PERSIST_KEY),
-      // v2 renamed the persisted per-epic selection `selectedWorktree` ->
-      // `selectedRepo` (and retyped it); bump + migrate so a v1 blob is rebuilt
-      // rather than rehydrating an entry whose `selectedRepo` is `undefined`.
+      // v2 renamed the persisted per-epic selection `selectedWorktree` -> `selectedRepo` (and retyped
+      // it); bump + migrate so a v1 blob is rebuilt rather than rehydrating an entry whose
       version: 2,
       storage: createJSONStorage(() => window.localStorage),
       partialize: (state) => ({
@@ -230,9 +212,8 @@ function sectionCollapseKey(
 }
 
 export function selectGitPanelEpicState(epicId: string) {
-  // Spread over `defaultEpicState` (not `?? defaultEpicState`) so a persisted
-  // entry that predates a field - e.g. a legacy blob with no `selectedRepo` -
-  // can never surface an `undefined` field to a `!== null` consumer guard.
+  // Spread over `defaultEpicState` (not `?? defaultEpicState`) so a persisted entry that predates a
+  // field - e.g.
   return (s: GitPanelStore): GitPanelEpicState => ({
     ...defaultEpicState,
     ...s.stateByEpicId[epicId],

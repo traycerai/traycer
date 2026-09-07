@@ -62,13 +62,6 @@ describe("buildPrOwnerTree identity", () => {
     expect(flatten(forest)).toEqual(["chat:n-1", "chat:n-2"]);
   });
 
-  /**
-   * The caller counts `+N` and slices its visible chips off the array it was
-   * handed, keyed on `ownerKind:ownerId` - the same identity the host dedupes
-   * its own owner set on. Collapsing on `ownerId` alone would be a NARROWER
-   * key than the producer's, so a row would vanish from the popover while the
-   * trigger still promised it.
-   */
   it("keeps two owners that share a node id under different kinds", () => {
     const forest = buildPrOwnerTree(
       [chat("n-1"), agent("n-1")],

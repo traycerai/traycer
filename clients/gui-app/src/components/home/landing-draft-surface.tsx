@@ -25,27 +25,16 @@ import {
 } from "@/stores/home/landing-terminal-store";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 
-/**
- * Route-independent landing body. Its exact draft runtime remains the T6
- * boundary; this surface only supplies a keyed shell for the top-level host.
- */
+/** Its exact draft runtime remains the T6 boundary; this surface only supplies a keyed shell for the top-level
+ * host. */
 export function LandingDraftSurface() {
   const draftId = useDraftSurfaceId();
   const { workspaceFolders, settings } = useLandingDraftShell(draftId);
   const activity = useTabSurfaceActivity();
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
-  // Pre-mint the mount identity for the null-draft landing so the first
-  // substantive edit (which creates a draft and flips this surface's id
-  // null->id) does not remount the Tiptap editor and throw the caret to the
-  // document end. Switching between existing drafts still remounts via a
-  // changing key.
-  //
-  // Bound->null rotation is a render-phase state adjustment (React docs
-  // pattern): a passive effect would leave one committed frame still keyed by
-  // the retired draft id (a stale interactive editor). Adjusting here
-  // re-renders synchronously before commit, so the new pending id is the first
-  // key after the transition - exactly one remount, no stale frame.
+  // Bound->null rotation is a render-phase state adjustment (React docs pattern): a passive effect would leave
+  // one committed frame still keyed by the retired draft id (a stale interactive editor).
   const [pendingDraftId, setPendingDraftId] = useState(() => uuidv4());
   const [prevDraftId, setPrevDraftId] = useState<string | null>(draftId);
   if (draftId !== prevDraftId) {
@@ -61,9 +50,8 @@ export function LandingDraftSurface() {
       return overlay.settingsOverlay || overlay.historyOverlay;
     },
   });
-  // Phones drop the embedded list entirely: the hamburger drawer already
-  // carries "Recent tasks" + "View all" off the same `useHistoryQuery`, so an
-  // inline copy is pure duplication at this width.
+  // Phones drop the embedded list entirely: the hamburger drawer already carries "Recent tasks" + "View all" off
+  // the same `useHistoryQuery`, so an inline copy is pure duplication at this width.
   const isMobile = useIsMobileViewport();
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
   const workspaceSurface = useMemo(
@@ -91,10 +79,8 @@ export function LandingDraftSurface() {
         lastFocusedElementRef.current = event.target;
       }
     };
-    // Native focus events follow the DOM tree. The landing terminal is owned
-    // by a sibling React root and portaled into this surface's anchor, so a
-    // React onFocusCapture here cannot observe it even though its DOM lives
-    // below this node.
+    // The landing terminal is owned by a sibling React root and portaled into this surface's anchor, so a React
+    // onFocusCapture here cannot observe it even though its DOM lives below this node.
     document.addEventListener("focusin", rememberFocusedElement);
     return () =>
       document.removeEventListener("focusin", rememberFocusedElement);
@@ -111,12 +97,8 @@ export function LandingDraftSurface() {
     if (!newlyFocused || paneActivationFocusIntent.shouldYieldAutoFocus()) {
       return;
     }
-    // The surface becoming focused is not a user gesture, and on the installed
-    // mobile app that alone must not raise the software keyboard - the same
-    // rule the composer's own autofocus obeys, restated here because this path
-    // reaches the composer and the terminal through their focus REGISTRIES and
-    // therefore never runs their guards. Explicit focus (tapping the composer,
-    // tapping the terminal) is unaffected: it is the gesture the rule asks for.
+    // The surface becoming focused is not a user gesture, and on the installed mobile app that alone must not
+    // raise the software keyboard.
     if (isMobileApp()) return;
     restoreLandingSurfaceFocus(
       draftId,
@@ -133,20 +115,9 @@ export function LandingDraftSurface() {
       data-primary-focus-scope="true"
       data-testid="landing-draft-surface"
     >
-      {/* The column track must be minmax(0,1fr), not the implicit `auto`: an
-          auto track's minimum is its items' min-content, so the composer
-          toolbar's intrinsic width would lock the whole column wider than a
-          narrow viewport (or the space left beside the terminal panel) and
-          the outer overflow-hidden would clip the right edge instead of
-          letting content reflow. */}
-      {/* Row 2 bottom-aligns the hero and row 3 top-anchors the composer, so
-          the boundary between them is where the pair sits. An even 1fr/1fr
-          split (desktop, where the epics list fills row 3) centres it; below md
-          the list is gone, so row 3 is weighted heavier to lift the pair just
-          above the midpoint, where it reads better on a tall phone. Both rows
-          stay fractional on purpose - an intrinsic row 3 would let a grown
-          composer (attachments, several folders, keyboard open) squeeze row 2
-          to zero and then clip against this container's overflow-hidden. */}
+      {/* The column track must be minmax(0,1fr), not the implicit `auto`. */}
+      {/* Both rows stay fractional on purpose - an intrinsic row 3 would let a grown composer (attachments, several
+         folders, keyboard open) squeeze row 2 to zero and then clip against this container's overflow-hidden. */}
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)]">
         <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
@@ -156,9 +127,8 @@ export function LandingDraftSurface() {
           <HomeHero workspaceFolders={workspaceFolders} />
         </section>
 
-        {/* Composer + recent epics share one row so the composer is top-anchored:
-            adding a folder grows it downward into the (scrollable) epics list
-            below instead of recentering and shoving the hero up. */}
+        {/* Composer + recent epics share one row so the composer is top-anchored: adding a folder grows it downward
+           into the (scrollable) epics list below instead of recentering and shoving the hero up. */}
         <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 max-md:px-4">
           <div className="shrink-0">
             <SurfaceActivityProvider
@@ -175,11 +145,8 @@ export function LandingDraftSurface() {
           </div>
 
           {isMobile ? (
-            /* Recent tasks live in the hamburger drawer at this width, which is
-               not discoverable from a landing page that is otherwise empty
-               below the composer. `mt-auto` drops this into that dead space at
-               the bottom of the row; the bottom inset keeps it clear of the
-               home indicator. */
+            /* Recent tasks live in the hamburger drawer at this width, which is not discoverable from a landing page that
+               is otherwise empty below the composer. */
             <button
               type="button"
               data-testid="home-view-history"
@@ -214,15 +181,8 @@ export function LandingDraftSurface() {
   );
 }
 
-/**
- * Puts the caret back where this surface last had it, in the order the surface
- * itself ranks its endpoints: a maximized terminal owns the pane outright, then
- * the element that actually held focus, then the active composer.
- *
- * A module function rather than an inline effect body so the effect above stays
- * a list of GUARDS - who may restore, and when - with the ranking read on its
- * own.
- */
+/** A module function rather than an inline effect body so the effect above stays a list of guards - who may
+ * restore, and when - with the ranking read on its own. */
 function restoreLandingSurfaceFocus(
   draftId: string | null,
   surface: HTMLDivElement | null,
@@ -256,10 +216,8 @@ function restoreLandingSurfaceFocus(
       return;
     }
   }
-  // The local Tiptap editor may not have registered yet
-  // (`immediatelyRender: false`). Never fall back to a retained inactive split
-  // partner here; if no active endpoint exists, the local editor's own
-  // autofocus effect will run as soon as it registers.
+  // Never fall back to a retained inactive split partner here; if no active endpoint exists, the local editor's
+  // own autofocus effect will run as soon as it registers.
   focusRegisteredActiveComposer();
 }
 

@@ -26,9 +26,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The sidebar's host group is headed by the one host switcher, which composes
-// several host-runtime hooks. This suite is about NAVIGATION, so it mocks at
-// the scope boundary rather than standing up a host runtime.
+// The sidebar's host group is headed by the one host switcher, which composes several host-runtime hooks. This
+// suite is about navigation, so it mocks at the scope boundary rather than standing up a host runtime.
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: { client: null },
 }));
@@ -44,33 +43,14 @@ vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,
 }));
 
-// The sidebar now opts into the liveness poll directly (see
-// `useRegisteredHostsPollLiveness` in `settings-sidebar.tsx`). This suite
-// mocks `useHostScope` wholesale and renders no `QueryClientProvider`, so the
-// real hook — which calls `useQuery` unconditionally — would throw for want
-// of a query client. It is also irrelevant to navigation, which is what this
-// suite is about.
+// This suite mocks `useHostScope` wholesale and renders no `QueryClientProvider`, so the real hook - which
+// calls `useQuery` unconditionally - would throw for want of a query client.
 vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
   useRegisteredHostsPollLiveness: () => undefined,
 }));
 
-// Same reasoning, one hook later: the picker now resolves each row's update
-// badge through `useFleetUpdateViews`, which owns a `useQuery` for the fleet
-// sweep and therefore needs a query client this navigation suite deliberately
-// does not mount. Stubbed to the "nothing observed" answer — which is also the
-// honest production answer for a fleet with no borrowable sessions, so the
-// rows this suite asserts on render exactly as they would there.
-//
-// The badge's OWN behaviour is covered where it belongs (the host-option row
-// and per-host isolation suites); stubbing it here keeps a navigation test from
-// silently becoming a fleet-polling test.
-// Returns the SHARED constant rather than a literal spelled out here. A mock
-// factory is not type-checked against the module it replaces, so a hand-written
-// view silently loses any field added later — and `undefined` is not `null`, so
-// the row's badge would have read "last seen undefined" on every host while
-// this navigation suite went on passing. The whole point of exporting
-// `UNKNOWN_FLEET_UPDATE_VIEW` is that no caller, test or otherwise, writes one
-// of these by hand.
+// The badge's own behaviour is covered where it belongs (the host-option row and per-host isolation suites);
+// stubbing it here keeps a navigation test from silently becoming a fleet-polling test.
 vi.mock("@/hooks/host/use-fleet-update-views", async () => {
   const { UNKNOWN_FLEET_UPDATE_VIEW } =
     await import("@/lib/host/fleet-update/fleet-update-view");
@@ -137,8 +117,8 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(screen.queryByRole("link", { name: "Keybindings" })).toBeNull();
   });
 
-  // The panel is the DISPLAY end of a pairing whose scanner end is the mobile
-  // app itself, so that build does not offer it either.
+  // The panel is the display end of a pairing whose scanner end is the mobile app itself, so that build does not
+  // offer it either.
   it("omits the Link mobile app entry in the installed mobile app", async () => {
     setMobileApp(true);
     const router = buildRouter("/settings/general");
@@ -183,9 +163,8 @@ describe("<SettingsSidebar /> leader hints", () => {
     ).toBeDefined();
   });
 
-  // The machine console is labelled "Overview" now - it sits under the host
-  // switcher, which supplies the machine's name, so repeating "Host" in the
-  // entry would name the container twice. Its `id` and route are unchanged.
+  // The machine console is labelled "Overview" now - it sits under the host switcher, which supplies the
+  // machine's name, so repeating "Host" in the entry would name the container twice.
   it("renders the machine Overview entry and not the legacy Service entry", async () => {
     const router = buildRouter("/settings/general");
     render(
@@ -268,11 +247,8 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(screen.getByTestId("settings-section-digit-1")).toBeDefined();
   });
 
-  // Guards the `requiresLocalHost` removal: Shell and Diagnostics used to be
-  // dimmed for a remote host (the on-disk config store the local CLI bridge
-  // read could only ever describe THIS computer). `config.*` / `diagnostics.*`
-  // made both sections work for whichever host the picker names, so a remote
-  // pick must render them identically to any other always-available section.
+  // `config.*` / `diagnostics.*` made both sections work for whichever host the picker names, so a remote pick
+  // must render them identically to any other always-available section.
   it("does not dim the Shell and Diagnostics rows while a remote host is scoped", async () => {
     const { hostScopeOptionFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
@@ -295,28 +271,18 @@ describe("<SettingsSidebar /> leader hints", () => {
     const diagnosticsLink = screen.getByTestId(
       "settings-sidebar-item-diagnostics",
     );
-    // Neither active (not the current route) - so an undimmed, inactive row
-    // is exactly the plain `text-foreground/70` class every other section's
-    // inactive row carries, not a dimmed variant of it.
+    // Neither active (not the current route) - so an undimmed, inactive row is exactly the plain
+    // `text-foreground/70` class every other section's inactive row carries, not a dimmed variant of it.
     for (const link of [shellLink, diagnosticsLink]) {
       expect(link.className).not.toContain("text-foreground/40");
       expect(link.className).toContain("text-foreground/70");
     }
-    // Deliberately NOT `expect(shellLink.className).toBe(diagnosticsLink
-    // .className)`. The two assertions above already pin the property under
-    // test; whole-class-string equality additionally demands the two rows stay
-    // byte-identical forever, so any row-specific class either gains later
-    // would fail this test for a reason it does not care about.
+    // The two assertions above already pin the property under test.
   });
 });
 
-// The two variants want OPPOSITE history semantics from the same Link: the
-// rail's sections are peers on one screen, so switching sections must not
-// grow the stack (back leaves settings in one step); the mobile list is a
-// drill-down, so entering a section must push (back returns to the list, not
-// to whatever preceded settings). These assert through the history itself -
-// the user-observable anchor is where back() lands - rather than through the
-// Link's props.
+// The two variants want opposite history semantics from the same Link: the rail's sections are peers on one
+// screen, so switching sections must not grow the stack (back leaves settings in one step).
 describe("<SettingsSidebar /> section navigation history", () => {
   function buildVariantRouter(
     initialEntries: Array<string>,
@@ -378,9 +344,8 @@ describe("<SettingsSidebar /> section navigation history", () => {
     expect(router.state.location.pathname).toBe("/settings");
   });
 
-  // Byte-symmetric with the mobile-list case above: same initial entries,
-  // same clicked link - the only variable is the variant, so the two tests
-  // together pin that the variant alone flips the history semantics.
+  // Byte-symmetric with the mobile-list case above: same initial entries, same clicked link - the only variable
+  // is the variant, so the two tests together pin that the variant alone flips the history semantics.
   it("rail replaces the section entry, so back leaves settings in one step", async () => {
     const router = buildVariantRouter(["/task-stub", "/settings"], "rail");
     render(
@@ -389,11 +354,8 @@ describe("<SettingsSidebar /> section navigation history", () => {
       </KeybindingProvider>,
     );
 
-    // Clicked through a fresh query on every poll: the rail re-renders its
-    // rows as it settles (an exiting copy can coexist with the live one for
-    // a frame), so a node captured once can be detached by the time the
-    // click lands. Clicking the LAST currently-rendered instance until the
-    // navigation commits keeps the test on the real Link.
+    // Clicked through a fresh query on every poll: the rail re-renders its rows as it settles (an exiting copy can
+    // coexist with the live one for a frame), so a node captured once can be detached by the time the click lands.
     await waitFor(() => {
       const links = screen.getAllByTestId("settings-sidebar-item-general");
       fireEvent.click(links[links.length - 1]);

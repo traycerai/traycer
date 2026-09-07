@@ -18,9 +18,8 @@ export interface ManagedCommandOutputFindMatch {
 export interface ManagedCommandOutputFindEnvironment {
   readonly lines: readonly ManagedCommandTimelineLine[];
   /**
-   * `true` when the loaded log can be searched. `false` uses the default
-   * unavailable copy; a string is that copy (no snapshot yet, or the panel
-   * replaced the log).
+   * `true` when the loaded log can be searched.
+   * `false` uses the default unavailable copy; a string is that copy (no snapshot yet, or the panel replaced the log).
    */
   readonly available: boolean | string;
   readonly reachedStart: boolean;
@@ -29,9 +28,7 @@ export interface ManagedCommandOutputFindEnvironment {
 }
 
 export interface ManagedCommandOutputFindAdapter extends TileFindAdapter {
-  // Every command here settles against the already-loaded window, so nothing
-  // is ever awaited. Narrowing the contract's `void | Promise<void>` to `void`
-  // says so, and spares callers laundering a promise that is never created.
+  // Narrowing the contract's `void | Promise<void>` to `void` says so, and spares callers laundering a promise that is never created.
   search(input: TileFindInput): void;
   next(): void;
   previous(): void;
@@ -73,13 +70,7 @@ export function createManagedCommandOutputFindAdapter(args: {
   let activeIndex = 0;
   const listeners = new Set<() => void>();
 
-  // The find store subscribes to this adapter for as long as the tile is
-  // registered, open bar or not, and `updateEnvironment` re-runs on every
-  // streamed line. Publishing an identical snapshot each time would write that
-  // store once per line of output on the highest-volume surface in the app.
-  // Matches are compared by reference rather than deeply: a live query rebuilds
-  // the array on every scan, so only the empty-query case -- a tailing log with
-  // nothing typed, which is the common one -- actually skips.
+  // Matches are compared by reference rather than deeply: a live query rebuilds the array on every scan, so only the empty-query case -- a tailing log with nothing typed, which is the common one -- actually skips.
   const publish = (next: TileFindStateSnapshot): void => {
     if (publishedMatches === matches && snapshotsEqual(snapshot, next)) return;
     snapshot = next;
@@ -142,12 +133,8 @@ export function createManagedCommandOutputFindAdapter(args: {
     });
     activeIndex = preservedActiveIndex(matches, previous);
     const activeMatch = matchAt(matches, activeIndex);
-    // Only a command the human gave reveals. A re-scan is not one, even when
-    // it lands on a different match: `updateEnvironment` runs on every append,
-    // prepend and rebase, and revealing there would scroll the tile and drop
-    // follow mode with nobody having asked. Someone tailing live output with a
-    // query still in the bar would silently stop following the moment the line
-    // holding their active match aged out of the window.
+    // Only a command the human gave reveals.
+    // Someone tailing live output with a query still in the bar would silently stop following the moment the line holding their active match aged out of the window.
     if (activeMatch !== null && run.reveal) {
       environment.revealMatch(activeMatch);
     }
@@ -370,9 +357,7 @@ function matchAt(
   return nextMatches.at(index) ?? null;
 }
 
-// Capabilities are the two module-level sets, so reference equality is the
-// right comparison for that field; everything else on the snapshot is a
-// primitive.
+// Capabilities are the two module-level sets, so reference equality is the right comparison for that field; everything else on the snapshot is a primitive.
 function snapshotsEqual(
   left: TileFindStateSnapshot,
   right: TileFindStateSnapshot,

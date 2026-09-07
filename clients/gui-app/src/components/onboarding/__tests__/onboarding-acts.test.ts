@@ -72,10 +72,7 @@ describe("onboardingActsFor", () => {
     expect(onboardingActsFor(NO_IMPORTS)).toBe(onboardingActsFor(FULL_TOUR));
   });
 
-  // The Capacitor entry sets the flag in its bootstrap, which runs AFTER
-  // gui-app's static module graph - including this module - has been
-  // evaluated. A list captured at module scope would pin the desktop tour on
-  // every phone.
+  // A list captured at module scope would pin the desktop tour on every phone.
   it("resolves the platform per call rather than at module evaluation", () => {
     const beforeFlag = onboardingActsFor(FULL_TOUR);
 

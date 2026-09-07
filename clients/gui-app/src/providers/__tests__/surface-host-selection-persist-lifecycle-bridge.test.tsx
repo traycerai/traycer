@@ -10,10 +10,8 @@ const GIT_KEY = gitDiffPanelSurfaceKey("tab-1");
 
 const ALICE_EMAIL = "a@b.com";
 const BOB_EMAIL = "b@b.com";
-// userId and email deliberately DIFFER: a fixture that equates them cannot
-// detect email-keyed scoping. Unlike the other bridges, this store was ADDED
-// in this release (TASK 2) - there is no legacy email-keyed predecessor, so
-// no arm here seeds under the raw email key.
+// userId and email differ. No legacy email-keyed predecessor; do not seed
+// under the raw email key.
 const ALICE_ID = `user:${ALICE_EMAIL}`;
 const BOB_ID = `user:${BOB_EMAIL}`;
 

@@ -36,18 +36,7 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 
-/**
- * The reconciler's only action is destructive: it force-closes epic tabs whose
- * epics it believes are gone. `epic.getTaskContexts` is an OPTIONAL (non-floor)
- * method, so a pre-1.1.7 host rejects it client-side with
- * `E_HOST_UNSUPPORTED`. Every test here pins the same invariant from a
- * different failure direction: absent evidence must close NOTHING.
- *
- * The happy path (a confirmed tab survives, an unconfirmed one is pruned) is
- * covered in host-compatibility-provider.test.tsx; these are its complements,
- * and they only discriminate because that test proves pruning does happen
- * under the same fixture shape.
- */
+/** Absent evidence closes nothing: epic.getTaskContexts is optional, so E_HOST_UNSUPPORTED must not prune tabs. */
 
 const OPEN_EPIC_ID = "epic-open-persisted";
 
@@ -187,13 +176,7 @@ let nextRequestId = 1;
 
 interface MountedReconciler {
   readonly queryClient: QueryClient;
-  /**
-   * Mounts / unmounts ONLY the reconciler, keeping this window's host runtime
-   * and query cache. A whole-tree remount would restart the runtime, and
-   * `HostClient.setRequestContext` invalidates the entire `["host"]` scope on
-   * every start - a deliberate credential fence, and not the shape a route
-   * change produces.
-   */
+  /** Remount only the reconciler. A whole-tree remount invalidates ["host"] via setRequestContext, which a route change does not. */
   readonly setReconcilerMounted: (mounted: boolean) => void;
 }
 
@@ -426,11 +409,8 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
   });
 
   it("reuses the completed batch across a remount inside the stale window", async () => {
-    // The churn this pins: the run used to suffix its cache key with a
-    // process-global `attempt`, so every remount minted a brand-new key and
-    // re-fanned the batch - one `POST /tasks/context` per open tab, per
-    // remount, forever. Key stability alone is not enough either: with the
-    // default zero stale time react-query refetches a remounted observer.
+    // Cache key must not include a process-global attempt, or every remount
+    // re-fans POST /tasks/context. Zero staleTime also refetches on remount.
     recordNegotiatedHostMethods(localSnapshot.hostId, [
       "host.status",
       "epic.getTaskContexts",

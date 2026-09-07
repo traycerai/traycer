@@ -9,32 +9,7 @@ import type {
   DesktopAuthSessionSnapshot,
 } from "@/lib/windows/types";
 
-/**
- * Cross-window auth-projection bridge for the desktop windows bridge.
- *
- * This is the explicit persistence-boundary path for raw bearer material
- * between sibling windows. It MUST live below `HostRuntimeProvider` so it
- * can talk to `AuthService` directly through the boundary surface
- * (`getCurrentSessionSnapshot` / `onSessionSnapshotChange` /
- * `ingestProjectedSessionSnapshot`) instead of routing the bearer through
- * the public `useAuthStore` runtime state.
- *
- * Behavior:
- *
- *   - Outbound (this window → bridge): subscribes to
- *     `auth.onSessionSnapshotChange` and projects each snapshot into
- *     `bridge.authSession.set(...)`. Same-user refresh and signed-out
- *     transitions are forwarded so sibling windows stay in sync.
- *   - Inbound (bridge → this window): subscribes to
- *     `bridge.authSession.onChange` and forwards each inbound snapshot to
- *     `auth.ingestProjectedSessionSnapshot(...)`. The auth service
- *     re-validates the bearer through AuthnV3 before minting a fresh
- *     `RequestContext`, then writes only `status / profile / contextMetadata`
- *     into the public store.
- *
- * The component renders its `children` so it can sit transparently inside
- * the host-runtime children tree.
- */
+/** Cross-window bearer projection. Must live below `HostRuntimeProvider` and talk to `AuthService` directly, not `useAuthStore`. Inbound snapshots are re-validated through AuthnV3 before minting a fresh `RequestContext`. */
 export interface WindowsBridgeAuthSessionBridgeProps {
   readonly children: ReactNode;
 }
@@ -64,11 +39,8 @@ export function WindowsBridgeAuthSessionBridge(
       void bridge.authSession.set(desktopSnapshot).then(
         (result) => {
           if (result.outcome !== "refused") return;
-          // The latch is an echo suppressor, not a record of what the bridge
-          // holds: a refused write left nothing there, so keeping it latched
-          // makes the very next projection of the SAME snapshot a no-op and
-          // the window never re-attempts. Cleared only while the latch is
-          // still this write's - a newer projection has already superseded it.
+          // Clear the echo latch on refusal so the next same snapshot is
+          // retried. Skip if a newer projection already superseded it.
           if (lastWrittenSerialized === serialized)
             lastWrittenSerialized = null;
           authSessionRefusedToast.warning(
@@ -76,11 +48,8 @@ export function WindowsBridgeAuthSessionBridge(
           );
         },
         (cause: unknown) => {
-          // An IPC invoke that REJECTS - the main handler threw, the channel is
-          // absent, the window is being destroyed - leaves exactly the stuck
-          // latch the refusal branch above exists to prevent, plus an unhandled
-          // rejection. Same clearing rule, so the next projection of the same
-          // snapshot is attempted again.
+          // IPC reject leaves the same stuck latch. Clear it so the next same
+          // snapshot is retried.
           if (lastWrittenSerialized === serialized)
             lastWrittenSerialized = null;
           appLogger.warn("[auth] could not write the desktop auth session", {
@@ -104,12 +73,8 @@ export function WindowsBridgeAuthSessionBridge(
     };
 
     const inboundSubscription = bridge.authSession.onChange(ingestInbound);
-    // HostRuntimeProvider has already awaited auth.start(), restoring the
-    // shared credentials file. Subscribing synchronously replays that session
-    // to main. Do not read main's initial projection back: its signed-in write
-    // awaits bearer verification, so a concurrent get can still return the
-    // default signed-out snapshot and undo the restore until verification ends.
-    // Listen first so subsequent cross-window transitions remain observable.
+    // Subscribe to replay the restored session. Do not read main's get() back:
+    // it can still be signed-out while bearer verification is pending.
     const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
 
     return () => {

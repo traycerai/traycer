@@ -45,24 +45,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 
 const DOCTOR_LOG_TAIL_LINES = 200;
 
-/**
- * Host Doctor over the host's own RPC — the same report for a machine on this
- * desk and a machine in a datacenter.
- *
- * Two things make the report trustworthy over a connection, and both come from
- * the host rather than being guessed here:
- *
- *  1. **Vantage.** The host says which issue codes its transport already
- *     disproves. A `SERVICE_STOPPED` in a report that arrived over a live local
- *     WebSocket is describing the process that just answered; presenting it as
- *     an issue sends someone to fix a host that is demonstrably running. Over a
- *     relay the set is empty — the relay proves the relay, not the daemon's
- *     loopback listener — so the same code stays a real issue for a remote host.
- *  2. **Structured failure arms.** `cli-unavailable` / `cli-failed` /
- *     `invalid-output` are ANSWERS, not errors. The host reached us fine; it is
- *     reporting what happened when it tried to shell its CLI. Only a transport
- *     failure is an error, so only that gets error treatment.
- */
+/** Two things make the report trustworthy over a connection, and both come from the host rather than being
+ * guessed here: 1. */
 export function HostDoctorRpcCard(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostName: string;
@@ -71,37 +55,18 @@ export function HostDoctorRpcCard(props: {
   readonly hasLocalBridge: boolean;
   /** `host.doctor` capability; `null` (no handshake yet) is NOT a degrade. */
   readonly degrade: OverviewDegradeReason | null;
-  /**
-   * Whether `host.restart` can actually be served for this host — the
-   * capability alone. `false` for ANY host whose handshake refused it,
-   * remote ones included; see `doctorFixRoute`.
-   */
+  /** Whether `host.restart` can actually be served for this host - the capability alone. */
   readonly rpcRestartSupported: boolean;
-  /**
-   * Whether a refused `host.restart` has the page's bridge respawn to stand
-   * in. Threaded from the page (the same fact its restart confirm's dispatch
-   * leg branches on) rather than re-derived here from
-   * `isLocalMachine && hasLocalBridge` — the readings could tear.
-   */
+  /** Threaded from the page (the same fact its restart confirm's dispatch leg branches on) rather than re-derived
+   * here from `isLocalMachine && hasLocalBridge` - the readings could tear. */
   readonly bridgeRestartRoute: boolean;
-  /**
-   * Opens the page's restart confirm for a restart fix that routed to the
-   * local bridge; the confirm's dispatch shares the page's restart mutation
-   * (and therefore its lifecycle gate, its click-time identity guard and the
-   * cross-surface dedup), unlike `onLocalFix`.
-   */
+  /** Opens the page's restart confirm for a restart fix that routed to the local bridge. */
   readonly onBridgeRestart: () => void;
   /** True while the page's restart write is in flight; disables the fix. */
   readonly bridgeRestartPending: boolean;
-  /**
-   * Whether `diagnostics.logs.tail` is servable for this host. `false` reads
-   * the log over the local bridge instead — the same file, on this machine.
-   * Released hosts below the maintenance floor have no `diagnostics.*` family
-   * at all, and this fallback is what ENABLES their Doctor sheet, so the
-   * report would otherwise carry a Show logs button nothing can answer.
-   */
+  /** Released hosts below the maintenance floor have no `diagnostics.*` family at all, and this fallback is what
+   * enables their Doctor sheet, so the report would otherwise carry a Show logs button nothing can answer. */
   readonly rpcLogsSupported: boolean;
-  /** Reads the local host's log tail over the CLI bridge, newest last. */
   readonly onBridgeLogs: () => Promise<readonly string[]>;
   /** True while that bridge read is in flight. */
   readonly bridgeLogsPending: boolean;
@@ -110,28 +75,19 @@ export function HostDoctorRpcCard(props: {
   readonly localFixPendingCode: string | null;
 }): ReactNode {
   const { client, hostName } = props;
-  // The bridge reads THIS computer's log, so it may stand in for
-  // `diagnostics.logs.tail` only when the host being shown IS this computer.
-  // Without the local check a remote host that advertises `host.doctor` but
-  // not the independently-optional logs method would render this machine's
-  // log under its name — the misattribution the whole route taxonomy exists
-  // to prevent (see `DoctorSheetSource`). A remote host with no logs method
-  // has no honest source, so the action is withheld rather than answered
-  // wrongly.
+  // Without the local check a remote host that advertises `host.doctor` but not the independently-optional logs
+  // method would render this machine's log under its name.
   const logsViaBridge =
     !props.rpcLogsSupported && props.isLocalMachine && props.hasLocalBridge;
   const logsServable = props.rpcLogsSupported || logsViaBridge;
   const doctorRun = useHostDoctorRun(client);
   const [report, setReport] = useState<HostDoctorResponse | null>(null);
   const [logTail, setLogTail] = useState<readonly string[] | null>(null);
-  // The id of a Doctor-fix restart whose DISPATCH OUTCOME IS UNKNOWN - the
-  // transport threw after the host may already have granted the claim. Retained
-  // so the retry can adopt that claim, cleared on every definitive answer.
+  // The id of a Doctor-fix restart whose dispatch outcome IS unknown - the transport threw after the host may
+  // already have granted the claim.
   const armedFixRestartIdRef = useRef<string | null>(null);
-  // The one local fix that ENDS things — it kills the process holding the port
-  // and restarts the host. The bridge Doctor has always confirmed it, and
-  // routing it through this card must not quietly drop that: the RPC route
-  // changed which report we are reading, not how destructive the repair is.
+  // The bridge Doctor has always confirmed it, and routing it through this card must not quietly drop that: the
+  // RPC route changed which report we are reading, not how destructive the repair is.
   const [freePortIssue, setFreePortIssue] = useState<HostDoctorIssue | null>(
     null,
   );
@@ -176,11 +132,8 @@ export function HostDoctorRpcCard(props: {
     }),
     options: {
       mutationKey: hostMaintenanceMutationKeys.logsTail(),
-      // No arm-time capture: the host-swap rule exists so `onSuccess` /
-      // `onError` act on the host the request was ARMED against, and this
-      // mutation's callbacks are supplied per `mutate` call and read only the
-      // response. A context nothing consumes reads as a guarantee that isn't
-      // there.
+      // No arm-time capture: the host-swap rule exists so `onSuccess` / `onError` act on the host the request was
+      // armed against, and this mutation's callbacks are supplied per `mutate` call and read only the response.
       onMutate: () => undefined,
     },
   });
@@ -194,9 +147,8 @@ export function HostDoctorRpcCard(props: {
     });
   }, [runDoctor]);
 
-  // Run once when the sheet mounts. The sheet only mounts this on open, so
-  // "opened the sheet" IS the request — but the effect must not re-fire on
-  // every render, and `run` changing identity would do exactly that.
+  // The sheet only mounts this on open, so "opened the sheet" IS the request - but the effect must not re-fire
+  // on every render, and `run` changing identity would do exactly that.
   const hasRunRef = useRef(false);
   useEffect(() => {
     if (hasRunRef.current || props.degrade !== null || client === null) return;
@@ -211,12 +163,8 @@ export function HostDoctorRpcCard(props: {
       </DoctorMessage>
     );
   }
-  // A failed run leaves `report` null forever, and the toast that announced it
-  // is gone within seconds - so without this the card sits on "Running Doctor…"
-  // for the life of the sheet, spinning at a request that already finished, and
-  // offers no way to try again from inside the card.
-  // `isError` already excludes pending in the mutation's discriminated state,
-  // so testing that too would be dead weight the linter can prove redundant.
+  // `isError` already excludes pending in the mutation's discriminated state, so testing that too would be dead
+  // weight the linter can prove redundant.
   if (report === null && doctorRun.isError) {
     return (
       <div className="space-y-3" data-testid="host-doctor-run-failed">
@@ -283,13 +231,8 @@ export function HostDoctorRpcCard(props: {
           localFixPending={props.localFixPendingCode === issue.code}
           logTail={logTail}
           onRestart={() => {
-            // Minted when the button is armed and REUSED across every attempt
-            // at that same action, including a retry after an ambiguous
-            // transport failure. The host adopts a claim it already granted
-            // only when the id matches, so a fresh id per attempt turns the
-            // idempotent retry this contract exists for into a busy refusal
-            // against a claim the host is still holding. Mirrors the Overview
-            // panel's confirm path; see `newTransitionId`.
+            // The host adopts a claim it already granted only when the id matches, so a fresh id per attempt turns the
+            // idempotent retry this contract exists for into a busy refusal against a claim the host is still holding.
             const transitionId =
               armedFixRestartIdRef.current ?? newTransitionId();
             armedFixRestartIdRef.current = transitionId;
@@ -315,9 +258,8 @@ export function HostDoctorRpcCard(props: {
           }}
           onShowLogs={() => {
             if (logsViaBridge) {
-              // No `diagnostics.*` on this host. The bridge reads the same
-              // file from this machine, so the button keeps its meaning
-              // rather than becoming a refusal.
+              // The bridge reads the same file from this machine, so the button keeps its meaning rather than becoming a
+              // refusal.
               void props.onBridgeLogs().then(
                 (lines) => setLogTail(lines),
                 (error: unknown) =>
@@ -340,13 +282,8 @@ export function HostDoctorRpcCard(props: {
               setFreePortIssue(issue);
               return;
             }
-            // A restart routed here (rather than to the RPC) is the fallback
-            // lane's, and it must dispatch through the page's own restart
-            // write — NOT the generic local-fix mutation, whose key is
-            // `hostRunDoctor` and which therefore sits outside the lifecycle
-            // gate every other restart on this page answers to. Without this
-            // the button stays live beside an active lifecycle intent, and
-            // `restartHost` queues behind it rather than being refused.
+            // A restart routed here (rather than to the RPC) is the fallback lane's, and it must dispatch through the
+            // page's own restart write.
             if (
               issue.fixAction === "host-restart" ||
               issue.fixAction === "host-start"
@@ -404,12 +341,8 @@ export function HostDoctorRpcCard(props: {
         isPending={props.localFixPendingCode === freePortIssue?.code}
         onConfirm={() => {
           if (freePortIssue === null) return;
-          // Re-read at CONFIRM, not only at open: the close above lands in
-          // the arming commit, but a gate that arms between this click and
-          // that render would otherwise dispatch anyway. `freePortAndRestart`
-          // QUEUES, so what gets through here is a process kill and a forced
-          // restart landing after the competing write - the one outcome this
-          // gate exists to prevent.
+          // Re-read at confirm, not only at open: the close above lands in the arming commit, but a gate that arms
+          // between this click and that render would otherwise dispatch anyway.
           if (props.bridgeRestartPending) return;
           props.onLocalFix(freePortIssue);
           setFreePortIssue(null);
@@ -425,7 +358,6 @@ function DoctorRpcIssueCard(props: {
   readonly route: DoctorFixRoute;
   readonly restartPending: boolean;
   readonly bridgeRestartPending: boolean;
-  /** False when neither the RPC nor the bridge can honestly read this log. */
   readonly logsServable: boolean;
   readonly logsPending: boolean;
   readonly localFixPending: boolean;
@@ -534,9 +466,8 @@ function DoctorFixControl(props: {
   readonly restartPending: boolean;
   readonly logsPending: boolean;
   readonly localFixPending: boolean;
-  /** True while the page's restart write — or any lifecycle intent — is armed. */
+  /** True while the page's restart write - or any lifecycle intent - is armed. */
   readonly bridgeRestartPending: boolean;
-  /** False when neither the RPC nor the bridge can honestly read this log. */
   readonly logsServable: boolean;
   readonly onRestart: () => void;
   readonly onShowLogs: () => void;
@@ -548,17 +479,11 @@ function DoctorFixControl(props: {
   // Three destinations, and the fix action decides which: showing a log is the
   // one RPC route that is not a restart, so it is asked first.
   const isLogs = issue.fixAction === "host-logs";
-  // A remote host with no `diagnostics.logs.tail` has no honest source for
-  // this action — the bridge would read a different machine's log — so the
-  // button is withheld rather than wired to something that answers wrongly.
+  // A remote host with no `diagnostics.logs.tail` has no honest source for this action - the bridge would read a
+  // different machine's log - so the button is withheld rather than wired to something that answers wrongly.
   if (isLogs && !props.logsServable) return null;
   const isRpcRestart = !isLogs && route === "rpc";
-  // EVERY bridge-routed repair is a controller LIFECYCLE write, not just the
-  // restart pair: `host-install-latest` converges to latest and
-  // `service-install` adds a service cycle. None of them belongs to a mutation
-  // any lifecycle gate reads — the local-fix key is `hostRunDoctor` — so
-  // without this they render live while the page is armed and their click is
-  // then refused, which is a worse answer than a disabled control.
+  // None of them belongs to a mutation any lifecycle gate reads - the local-fix key is `hostRunDoctor`.
   const isBridgeLifecycle = !isLogs && route === "local-bridge";
   let pending = props.localFixPending;
   let onClick = props.onLocalFix;

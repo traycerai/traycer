@@ -476,16 +476,8 @@ function DesktopZoomSettingsRow() {
   );
 }
 
-/**
- * Pure-CSS-var preview of the active terminal palette. Renders no xterm
- * instance - the fake prompt + ANSI-colored output reads `--term-ansi-*`
- * directly so the cascade re-paints in lockstep with the Preset picker
- * above. Decorative; `aria-hidden` because the surrounding rows already
- * convey the same information textually. Font family/size are applied
- * inline rather than through the `font-mono`/`text-code-sm` utilities,
- * which track the Code font - this preview must reflect the effective
- * TERMINAL font, which `useEffectiveTerminalFont` resolves.
- */
+/** Font family/size are applied inline rather than through the `font-mono`/`text-code-sm` utilities, which
+ * track the Code font. */
 function TerminalPreview() {
   const cursorStyle = useSettingsStore((state) => state.terminalCursorStyle);
   const cursorBlink = useSettingsStore((state) => state.terminalCursorBlink);
@@ -530,9 +522,8 @@ function TerminalPreview() {
   );
 }
 
-// Live cursor glyph for the preview - mirrors the chosen shape/blink so the
-// setting is tangible without spinning up an xterm instance. The lit rect uses
-// the terminal foreground token so it tracks the active theme.
+// Live cursor glyph for the preview - mirrors the chosen shape/blink so the setting is tangible without
+// spinning up an xterm instance.
 const PREVIEW_CURSOR_SHAPE_CLASS: Record<TerminalCursorStyle, string> = {
   block: "inset-0",
   bar: "top-0 bottom-0 left-0 w-[2px]",

@@ -14,10 +14,8 @@ export type AnalyticsSource =
   | "history"
   | "deep_link"
   | "restored_session"
-  // The app moved itself: the selected host stopped being dialable and the
-  // directory re-homed the window (or handed it back when that host
-  // returned). Distinct from every other source here because there was no
-  // gesture at all behind it.
+  // The app moved itself: the selected host stopped being dialable and the directory re-homed the window (or handed it back when that host returned).
+  // Distinct from every other source here because there was no gesture at all behind it.
   | "host_failover";
 
 export type AnalyticsWorkspaceSurface =
@@ -85,18 +83,15 @@ export type AnalyticsSettingsSection =
 
 export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
 
-/** Which usage surface ran the image export. Deliberately NOT
- * `AnalyticsSource`: that union names the UI gesture that reached a feature
- * (menu, palette, shortcut), while this names the surface whose region was
- * captured - an export is always a direct button press, so the gesture axis
- * carries no signal here. */
+/**
+ * Which usage surface ran the image export.
+ * Deliberately NOT `AnalyticsSource`: that union names the UI gesture that reached a feature (menu, palette, shortcut), while this names the surface whose region was captured - an export is always a direct button press, so the gesture axis carries no signal.
+ */
 export type AnalyticsUsageImageExportSource = "epic_dialog" | "settings";
 
 /**
- * Mirrors the protocol's `EditorId` registry. Spelled out rather than derived
- * so a wire-level addition is a deliberate analytics decision: the union is a
- * reported dimension, and widening it silently would put a value into the
- * warehouse that no dashboard was built to expect.
+ * Mirrors the protocol's `EditorId` registry.
+ * Spelled out rather than derived so a wire-level addition is a deliberate analytics decision: the union is a reported dimension, and widening it silently would put a value into the warehouse that no dashboard was built to expect.
  */
 export type AnalyticsEditor =
   | "cursor"
@@ -127,15 +122,16 @@ export type AnalyticsHarness =
   | "reasonix"
   | "traycer";
 
-/** Product vocabulary only - never the internal host/app-local/global source
- * seam. Callers pass `MergedNotificationRow.category`, already mapped at the
- * projection boundary by `categoryForNotificationSource`. */
+/**
+ * Product vocabulary only - never the internal host/app-local/global source seam.
+ * Callers pass `MergedNotificationRow.category`, already mapped at the projection boundary by `categoryForNotificationSource`.
+ */
 export type AnalyticsNotificationCategory = "task" | "collaboration" | "system";
 
-/** Bounded count buckets for every notification-analytics count. `unknown`
- * is legal only when an exact composite count cannot be formed (host
- * summary unavailable) - never as a generic "didn't bother computing it"
- * escape hatch. */
+/**
+ * Bounded count buckets for every notification-analytics count.
+ * `unknown` is legal only when an exact composite count cannot be formed (host summary unavailable) - never as a generic "didn't bother computing it" escape hatch.
+ */
 export type AnalyticsCountBucket =
   | "unknown"
   | "0"
@@ -165,10 +161,10 @@ export type AnalyticsNotificationAcknowledgmentSource =
 
 export type AnalyticsNotificationOutcome = "success" | "failure";
 
-/** Maps a count to one of the fixed buckets `0`, `1`, `2-5`, `6-20`, `21+`.
- * Pass `null` when the exact composite count cannot be formed (e.g. the host
- * summary is unavailable) to get `"unknown"` - never derive `"unknown"` from
- * the numeric value itself. */
+/**
+ * Maps a count to one of the fixed buckets `0`, `1`, `2-5`, `6-20`, `21+`.
+ * Pass `null` when the exact composite count cannot be formed (e.g. the host summary is unavailable) to get `"unknown"` - never derive `"unknown"` from the numeric value itself.
+ */
 export function analyticsCountBucket(
   count: number | null,
 ): AnalyticsCountBucket {
@@ -180,9 +176,10 @@ export function analyticsCountBucket(
   return "21+";
 }
 
-/** Session age of the renderer process at sample time. Resource retention
- * bugs show up as heap correlating with this bucket, so it is the axis every
- * resource sample must carry. */
+/**
+ * Session age of the renderer process at sample time.
+ * Resource retention bugs show up as heap correlating with this bucket, so it is the axis every resource sample must carry.
+ */
 export type AnalyticsSessionAgeBucket =
   | "under_1h"
   | "1_to_4h"
@@ -193,9 +190,10 @@ export type AnalyticsSessionAgeBucket =
  * 4 GB old-space ceiling with room to still report before an OOM. */
 export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 
-/** Every act id either tour can show, desktop and mobile alike. Mirrors
- * `OnboardingActId` - a step the union does not carry is dropped by the
- * allowed-values pinning below. */
+/**
+ * Every act id either tour can show, desktop and mobile alike.
+ * Mirrors `OnboardingActId` - a step the union does not carry is dropped by the allowed-values pinning below.
+ */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
@@ -354,9 +352,7 @@ export enum AnalyticsEvent {
   WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
-  // A PDF hit the 20 MiB asset-stream cap and fell back to "Open
-  // Externally" - the metric that decides whether the cap needs a
-  // per-type raise or range streaming (PDF preview design, Q6).
+  // A PDF hit the 20 MiB asset-stream cap and fell back to "Open Externally" - the metric that decides whether the cap needs a per-type raise or range streaming (PDF preview design, Q6).
   PdfPreviewTooLarge = "pdf_preview_too_large",
   WorktreeCreated = "worktree_created",
   WorktreeImported = "worktree_imported",
@@ -456,10 +452,8 @@ type BlockedProperties = SourceProperties & {
   readonly blocker: AnalyticsBlocker;
 };
 /**
- * Shared body of both resource events, so a periodic sample and a pressure
- * crossing are directly comparable in one query. A `null` measurement means
- * the runtime cannot report it (no desktop bridge, or a build without
- * `performance.memory`) - never "we skipped computing it".
+ * Shared body of both resource events, so a periodic sample and a pressure crossing are directly comparable in one query.
+ * A `null` measurement means the runtime cannot report it (no desktop bridge, or a build without `performance.memory`) - never "we skipped computing it".
  */
 type ResourceMeasurementProperties = {
   readonly js_heap_mb: number;
@@ -525,9 +519,7 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.SignInStarted]: SourceProperties;
   readonly [AnalyticsEvent.SignInApprovalOpened]: SourceProperties;
   readonly [AnalyticsEvent.SignInSucceeded]: null;
-  // Deliberately source-less: success/failure are emitted from the terminal
-  // auth transition inside AuthService, where the originating UI gesture is
-  // unknown; funnels take `source` from `sign_in_started`.
+  // Deliberately source-less: success/failure are emitted from the terminal auth transition inside AuthService, where the originating UI gesture is unknown; funnels take `source` from `sign_in_started`.
   readonly [AnalyticsEvent.SignInFailed]: {
     readonly blocker: AnalyticsBlocker;
   };
@@ -543,12 +535,8 @@ export interface AnalyticsEventProperties {
     readonly host_kind: "local" | "remote";
   };
   /**
-   * The DERIVATION moved the app, with no gesture behind it - the selection
-   * authority's `failover` / `recovery` cause (redesign P1.2). Property-less
-   * on purpose: what happened is the whole event, and a host id here would be
-   * an identifier for a machine, attached to a signal nobody segments by.
-   * `HostSelected` stays the INTENT event, fired only by Settings ▸ Activate,
-   * so the two can never be conflated again.
+   * The DERIVATION moved the app, with no gesture behind it - the selection authority's `failover` / `recovery` cause (redesign P1.2).
+   * Property-less on purpose: what happened is the whole event, and a host id here would be an identifier for a machine, attached to a signal nobody segments by.
    */
   readonly [AnalyticsEvent.HostFailover]: null;
   readonly [AnalyticsEvent.HostRecovered]: null;
@@ -575,10 +563,8 @@ export interface AnalyticsEventProperties {
     readonly theme: AnalyticsTheme;
   };
   /**
-   * A user submitted the session-import wizard. The counts are what the
-   * feature is judged on - how much work people actually bring over, and from
-   * how many repos - and `surface` separates first-run adoption from the
-   * later Settings path.
+   * A user submitted the session-import wizard.
+   * The counts are what the feature is judged on - how much work people actually bring over, and from how many repos - and `surface` separates first-run adoption from the later Settings path.
    */
   readonly [AnalyticsEvent.SessionImportStarted]: {
     readonly surface: AnalyticsSessionImportSurface;
@@ -879,33 +865,12 @@ export interface AnalyticsEventProperties {
     readonly blocker: AnalyticsBlocker;
   };
   /**
-   * `source` is the ENTRY POINT (which affordance was used); `surface` is
-   * WHICH in-app button, from the report context's own fixed vocabulary
-   * ("Host startup", "App update", "Git changes"…).
-   *
-   * The two are separate on purpose. Every in-app Report button files under
-   * `source: "direct_ui"`, so the moment one of them is gated - and
-   * `18aef324` now suppresses the app-update toast while a window narration
-   * owns the frame - that series cannot distinguish "people used the other
-   * button" from "people stopped reporting". Re-valuing `direct_ui` per
-   * surface would have answered it by breaking the entry-point series
-   * instead, and `AnalyticsSource` is shared with a dozen unrelated events.
-   * A new dimension costs nothing; a re-valued one costs the history.
-   *
-   * `null` where there is no in-app surface (the native menu). Safe to send:
-   * `host-failure-report.ts` states the contract these values are built to -
-   * categorical phase names, "never paths, error text or anything the user
-   * has to redact" - and all 145 `createReportIssueContext` call sites pass a
-   * string literal.
+   * `source` is the ENTRY POINT (which affordance was used); `surface` is WHICH in-app button, from the report context's own fixed vocabulary ("Host startup", "App update", "Git changes"…).
    */
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties & {
     readonly surface: string | null;
   };
-  // Which report type's gate blocked the attempt (ticket 07's evidence gate,
-  // Flow 2 manual opens only) - downstream funnels join this against a later
-  // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
-  // `blocked_action` (review round N1) - the gate guards every report-
-  // producing action, not just Send, so this says which one the user hit.
+  // Which report type's gate blocked the attempt (ticket 07's evidence gate, Flow 2 manual opens only) - downstream funnels join this against a later `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
   readonly [AnalyticsEvent.ReportIssueBlocked]: {
     readonly report_type: "bug" | "idea" | "other";
     readonly blocked_action:
@@ -1084,14 +1049,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
 ]);
 
 /**
- * Built from a `satisfies Record<AnalyticsSettingsSection, true>` rather than
- * a bare string list, because the bare list is a seam that fails SILENTLY:
- * this set is what `sanitizeAnalyticsProperties` validates `section` against,
- * and a value in the union but missing here makes `Analytics.track` return
- * `false` and drop the event — no type error, no runtime error, just a
- * section whose navigation is never recorded. Both `devices` and `usage` had
- * already gone missing that way. The `satisfies` makes adding a section to
- * the union without listing it here a COMPILE error instead.
+ * Built from a `satisfies Record<AnalyticsSettingsSection, true>` rather than a bare string list, because the bare list is a seam that fails SILENTLY: this set is what `sanitizeAnalyticsProperties` validates `section` against, and a value in the union but.
  */
 const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
   Object.keys({
@@ -1202,10 +1160,10 @@ const ANALYTICS_COUNT_BUCKETS = new Set<string>([
   "21+",
 ]);
 
-/** `unknown` is reserved for a composite count that genuinely cannot be
- * formed (e.g. the host summary is unavailable). A completed page load and a
- * revealed arrival count are always derived from local, exact data, so
- * neither may report `unknown`. */
+/**
+ * `unknown` is reserved for a composite count that genuinely cannot be formed (e.g. the host summary is unavailable).
+ * A completed page load and a revealed arrival count are always derived from local, exact data, so neither may report `unknown`.
+ */
 const ANALYTICS_EXACT_COUNT_BUCKETS = new Set<string>(
   [...ANALYTICS_COUNT_BUCKETS].filter((bucket) => bucket !== "unknown"),
 );
@@ -1879,11 +1837,8 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
 ]);
 
 /**
- * Resource gauges, as distinct from `COUNT_PROPERTY_KEYS`. A count is a
- * non-negative integer tally; a measure is a sampled magnitude that is
- * legitimately fractional (CPU percent), legitimately negative (a heap slope
- * while memory is being released), and legitimately absent (`null` when the
- * runtime cannot report it).
+ * Resource gauges, as distinct from `COUNT_PROPERTY_KEYS`.
+ * A count is a non-negative integer tally; a measure is a sampled magnitude that is legitimately fractional (CPU percent), legitimately negative (a heap slope while memory is being released), and legitimately absent (`null` when the runtime cannot report it).
  */
 const MEASURE_PROPERTY_KEYS = new Set<string>([
   "heap_slope_mb_per_h",
@@ -1915,9 +1870,10 @@ function isAnalyticsCount(value: unknown): boolean {
   return count >= 0 && count <= 10_000;
 }
 
-/** `null` is a first-class value here: it records "this runtime cannot
- * measure it", which is different from a zero reading. Non-finite values are
- * a sampling bug and are rejected rather than shipped as `NaN`. */
+/**
+ * `null` is a first-class value here: it records "this runtime cannot measure it", which is different from a zero reading.
+ * Non-finite values are a sampling bug and are rejected rather than shipped as `NaN`.
+ */
 function isAnalyticsMeasure(value: unknown): boolean {
   if (value === null) return true;
   if (typeof value !== "number" || !Number.isFinite(value)) return false;
@@ -1925,10 +1881,8 @@ function isAnalyticsMeasure(value: unknown): boolean {
 }
 
 /**
- * Keys whose validity depends on which event carries them - each admits
- * `null` only for the specific events where the absence is meaningful. Held
- * as one set so the validator and `analyticsPropertyHasValidator` cannot
- * drift apart on which keys are event-scoped.
+ * Keys whose validity depends on which event carries them - each admits `null` only for the specific events where the absence is meaningful.
+ * Held as one set so the validator and `analyticsPropertyHasValidator` cannot drift apart on which keys are event-scoped.
  */
 const EVENT_SCOPED_PROPERTY_KEYS = new Set<string>([
   "blocker",
@@ -2060,12 +2014,7 @@ export function sanitizeAnalyticsProperties(
   const record: Record<string, unknown> = { ...properties };
   const expectedKeys = eventPropertyKeys(event);
   if (expectedKeys === null) return null;
-  // The notification event family rejects rather than silently strips: a
-  // property outside its exact allowlist is a caller bug (e.g. an
-  // accidentally attached feed/host identifier), not extra data to discard
-  // quietly. Other events keep the historical strip-only behavior other call
-  // sites already rely on (see "strips identifiers, paths, content, queries,
-  // and raw errors at runtime").
+  // The notification event family rejects rather than silently strips: a property outside its exact allowlist is a caller bug (e.g. an accidentally attached feed/host identifier), not extra data to discard quietly.
   if (
     NOTIFICATION_STRICT_EVENTS.has(event) &&
     Object.keys(record).length !== expectedKeys.length
@@ -2158,9 +2107,8 @@ function safeAppGlobals(
 }
 
 /**
- * PostHog session/window ids are SDK-generated opaque UUIDs. Passing them
- * through keeps session-based analyses (paths, session funnels, duration)
- * working without exposing any user content.
+ * PostHog session/window ids are SDK-generated opaque UUIDs.
+ * Passing them through keeps session-based analyses (paths, session funnels, duration) working without exposing any user content.
  */
 function safeSessionProperties(
   properties: Record<string, unknown>,
@@ -2184,9 +2132,8 @@ function captureResult(
 }
 
 /**
- * Person properties are limited to the user's email, deliberately sent so
- * PostHog dashboards can look a user up. Everything else the SDK stages in
- * `$set`/`$set_once` (referrer, campaign, URL data) is dropped.
+ * Person properties are limited to the user's email, deliberately sent so PostHog dashboards can look a user up.
+ * Everything else the SDK stages in `$set`/`$set_once` (referrer, campaign, URL data) is dropped.
  */
 function safePersonProperties(
   setProperties: Record<string, unknown> | undefined,
@@ -2198,10 +2145,7 @@ function safePersonProperties(
 }
 
 /**
- * A repeat `identify()` for an already-identified distinct id makes the SDK
- * emit a `$set` event instead of `$identify`; the staged person properties
- * then live in the event's `properties.$set` rather than the result's
- * top-level `$set`. Read both so email refreshes survive either shape.
+ * A repeat `identify()` for an already-identified distinct id makes the SDK emit a `$set` event instead of `$identify`; the staged person properties then live in the event's `properties.$set` rather than the result's top-level `$set`.
  */
 function stagedPersonProperties(
   result: CaptureResult,
@@ -2220,9 +2164,7 @@ export function sanitizePostHogCaptureResult(
   if (result === null) return null;
   const rawProperties: Record<string, unknown> = { ...result.properties };
   if (result.event === "$identify") {
-    // The identity events carry the same app globals as declared events -
-    // "which surface emitted this" holds for a sign-in exactly as it does
-    // for a click, and the globals allowlist bounds what passes.
+    // The identity events carry the same app globals as declared events - "which surface emitted this" holds for a sign-in exactly as it does for a click, and the globals allowlist bounds what passes.
     const identity = safeIngestionProperties(rawProperties, true);
     const identifyGlobals = safeAppGlobals(rawProperties);
     if (identity === null || identifyGlobals === null) return null;
@@ -2363,18 +2305,8 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
 }
 
 /**
- * Maps the four-state delivery result onto private-submit analytics
- * outcomes. `unconfirmed` never claims failure and never claims delivery -
- * it gets its own outcome rather than collapsing onto `confirmed` or
- * `failed`. A structured `failed` result (capture threw, DSN rejected) has no
- * `Error` to classify, so it gets a fixed `unknown` blocker; a thrown
- * exception from the mutation itself still goes through
- * `analyticsBlockerFromError` on the `onError` path.
- *
- * `attachmentCount` (ticket 08 / T5) is the number of images on the request
- * that produced `result` - a low-cardinality integer the count-property
- * validator already accepts, so it rides along on every outcome rather than
- * needing its own event.
+ * Maps the four-state delivery result onto private-submit analytics outcomes.
+ * `unconfirmed` never claims failure and never claims delivery - it gets its own outcome rather than collapsing onto `confirmed` or `failed`.
  */
 export function reportIssuePrivateSubmitPropertiesFromResult(
   result:
@@ -2433,10 +2365,7 @@ export function reportIssuePrivateSubmitPropertiesFromResult(
 }
 
 /**
- * Host-update analytics trio shared by every install/update surface
- * (the in-app banner and the system-tray listener): `host_update_started`
- * on mutate, `host_update_succeeded` on success, `host_update_failed` on
- * error - differing only by `source`.
+ * Host-update analytics trio shared by every install/update surface (the in-app banner and the system-tray listener): `host_update_started` on mutate, `host_update_succeeded` on success, `host_update_failed` on error - differing only by `source`.
  */
 export function hostUpdateAnalyticsCallbacks(source: AnalyticsSource): {
   readonly onStarted: () => void;
@@ -2473,9 +2402,8 @@ export function trackSettingChanged(
 }
 
 /**
- * Wraps a settings-store setter so every call tracks `setting_changed` for
- * the given section before writing through. Shared by the Appearance and
- * General settings panels so both stay on one tracking contract.
+ * Wraps a settings-store setter so every call tracks `setting_changed` for the given section before writing through.
+ * Shared by the Appearance and General settings panels so both stay on one tracking contract.
  */
 export function trackedSettingSetter<Value>(
   section: AnalyticsSettingsSection,
@@ -2489,8 +2417,8 @@ export function trackedSettingSetter<Value>(
 }
 
 /**
- * Which product shell is emitting events. A phone-narrow desktop window is
- * still `desktop`: this is the install target, not the viewport.
+ * Which product shell is emitting events.
+ * A phone-narrow desktop window is still `desktop`: this is the install target, not the viewport.
  */
 export function analyticsAppSurface(): "desktop" | "mobile" {
   return isMobileApp() ? "mobile" : "desktop";
@@ -2504,9 +2432,7 @@ export function analyticsPlatform():
   | "other"
   | "windows" {
   if (isMobileApp()) {
-    // `navigator.platform` reads "iPhone"/"Linux armv8l" inside the mobile
-    // WebViews, which the desktop branches below would misfile as other or
-    // linux; the user agent names the OS directly.
+    // `navigator.platform` reads "iPhone"/"Linux armv8l" inside the mobile WebViews, which the desktop branches below would misfile as other or linux; the user agent names the OS directly.
     if (/iphone|ipad|ipod/i.test(navigator.userAgent)) return "ios";
     if (/android/i.test(navigator.userAgent)) return "android";
     return "other";
@@ -2547,8 +2473,7 @@ export class Analytics {
   }
 
   /**
-   * Telemetry is best-effort and many call sites run product-critical work
-   * after a capture, so no SDK exception may escape this adapter.
+   * Telemetry is best-effort and many call sites run product-critical work after a capture, so no SDK exception may escape this adapter.
    */
   private guarded<Result>(operation: () => Result): Result | null {
     if (!this.enabled) return null;
@@ -2577,9 +2502,8 @@ export class Analytics {
   }
 
   /**
-   * The SDK persists identity across renderer restarts, so the in-memory id
-   * alone cannot see a cross-account transition on a cold start. Anonymous
-   * state is `distinct_id === $device_id` (the SDK's own proxy for it).
+   * The SDK persists identity across renderer restarts, so the in-memory id alone cannot see a cross-account transition on a cold start.
+   * Anonymous state is `distinct_id === $device_id` (the SDK's own proxy for it).
    */
   private persistedIdentifiedUserId(): string | null {
     const distinctId = this.guarded(() => posthog.get_distinct_id());
@@ -2601,9 +2525,7 @@ export class Analytics {
     const knownUserId =
       this.identifiedUserId ?? this.persistedIdentifiedUserId();
     if (knownUserId !== null && knownUserId !== userId) {
-      // Cross-account transition (including a cold start on another account's
-      // persisted state): drop the previous identity and session before the
-      // new identify so the two accounts' streams cannot blend.
+      // Cross-account transition (including a cold start on another account's persisted state): drop the previous identity and session before the new identify so the two accounts' streams cannot blend.
       this.guarded(() => posthog.reset());
       this.registerGlobals();
     }

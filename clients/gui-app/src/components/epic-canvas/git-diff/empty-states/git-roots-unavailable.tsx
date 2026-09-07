@@ -9,13 +9,7 @@ import { cn } from "@/lib/utils";
 const GIT_ROOTS_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * Shown when EVERY Git workspace bound to the chat probes unavailable (all
- * worktrees deleted or broken while their bindings still list them). Distinct
- * from `NoGitWorktrees`: there the chat has no Git workspaces at all, so "add
- * workspaces" is the right nudge; here the user HAS workspaces that simply could
- * not be read, and that same nudge would be wrong. A visible degrade with a
- * retry that clears the probed-unavailable set and re-probes each root, never an
- * indefinite loading skeleton (which would read as "still loading" forever).
+ * A visible degrade with a retry that clears the probed-unavailable set and re-probes each root, never an indefinite loading skeleton (which would read as "still loading" forever).
  */
 export function GitRootsUnavailable(props: {
   readonly onRetry: () => void;

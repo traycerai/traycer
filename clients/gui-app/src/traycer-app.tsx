@@ -85,18 +85,7 @@ const ReactQueryDevtools = import.meta.env.DEV
     )
   : null;
 
-// Evaluation-only canvas fixture seeding. The guard is statically analysable
-// and the module is reached ONLY through this dynamic import, so a production
-// build eliminates both the branch and the module - which is checked by
-// grepping the built artifact for `SEED_FIXTURE_SENTINEL`, after first proving
-// the grep can find it on a build where the seeder is deliberately retained.
-// A runtime flag would leave the seeder present-but-dormant, and dormancy is a
-// claim about invocation that has to be re-proven for every path ever added.
-// `import.meta.env.MODE !== "test"` keeps it out of Vitest, where `DEV` is also
-// true: a module-scope floating import there pulls the canvas and landing-draft
-// stores in asynchronously, mid-test, for no benefit. The `DEV` conjunct is what
-// the production build eliminates on, so narrowing does not weaken the bundle
-// exclusion - proven separately by the sentinel grep with a positive control.
+// Dev-only canvas seeder via dynamic import. `MODE !== "test"` keeps it out of Vitest, where `DEV` is also true.
 if (import.meta.env.DEV && import.meta.env.MODE !== "test") {
   void import("@/dev/seed-canvas-fixture")
     .then((module) => {
@@ -113,41 +102,17 @@ if (import.meta.env.DEV && import.meta.env.MODE !== "test") {
 export interface TraycerAppProps {
   readonly runnerHost: IRunnerHost;
   readonly registry: HostRpcRegistry;
-  /**
-   * Remote-host fetcher forwarded into the GUI-owned
-   * `HostDirectoryService`. Production shells pass `null` so the shared
-   * stubbed `fetchRemoteHosts` is used; the dev runner
-   * (`gui-app-dev`) injects a custom fetcher so zero/one/many scenario
-   * fixtures drive the mounted picker/list without depending on the
-   * removed `IRunnerHost.remoteHosts` surface.
-   */
+  /** Production passes null (stubbed fetchRemoteHosts). Dev injects a fetcher so fixtures drive the picker without IRunnerHost.remoteHosts. */
   readonly remoteFetcher: RemoteHostFetcher | null;
   readonly initialRoute?: string | null;
   /**
-   * Dev-runner / test injection seam for the host messenger.
-   *
-   * Production shells (desktop, mobile) omit this prop so
-   * `HostRuntimeProvider` falls back to a real `WsRpcClient`. The
-   * `gui-app-dev` harness and shared tests pass a factory that returns a
-   * `MockHostMessenger`, which lets the GUI exercise the signed-in
-   * `/epics` path without a real host on the other end of a WebSocket.
+   * Test/dev factory; omitted in production so HostRuntimeProvider uses WsRpcClient.
    */
   readonly messengerFactory?: MessengerFactory<HostRpcRegistry> | null;
 }
 
 /**
- * Public shell-agnostic entry point for the Traycer GUI.
- *
- * Mounts the documented provider stack - outer to inner -
- *   RunnerHostProvider → QueryClientProvider → ThemeProvider →
- *   TooltipProvider → HostRuntimeProvider → HostCompatibilityProvider →
- *   auth-scoped lifecycle providers → RunnerHostBridges →
- *   HostReadinessControllerProvider → RouterProvider → Toaster.
- *
- * Concrete shells (Electron, Capacitor, gui-app-dev preview) construct a
- * `IRunnerHost` at bootstrap and pass it alongside the shared
- * `hostRpcRegistry`. The shell owns the React root and the renderer
- * entry - this component is a plain React element.
+ * Shell-agnostic GUI entry. Shells pass an `IRunnerHost`; this component is a plain React element.
  */
 export function TraycerApp(props: TraycerAppProps): ReactNode {
   const desktopWindowId = readDesktopWindowId(props.runnerHost);
@@ -155,12 +120,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
     () => createAppRouter(props.initialRoute ?? null, desktopWindowId),
     [desktopWindowId, props.initialRoute],
   );
-  // Both escape hatches DECLARE themselves as user intent in history state.
-  // They can be taken on a boot surface, before the app or the route bridge
-  // exists, and the marker is what stops the desktop's restored-route replay
-  // from overwriting them - without it that replay cannot tell a user's
-  // navigation from the transient `/` a cold launch redirects to on its own.
-  // See `startup-navigation-intent.ts`.
+  // Escape hatches declare user intent in history state so restored-route replay cannot overwrite them.
   const configureShell = useCallback(() => {
     void router.navigate({
       to: "/settings/shell",
@@ -170,10 +130,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
       }),
     });
   }, [router]);
-  // The host-unavailable card's escape hatch. `/settings/host` rather than the
-  // settings index: the card is shown when no host can be reached, and that is
-  // the page that manages them. Settings bypasses the readiness gate, so this
-  // stays reachable from inside a full-screen block.
+  // Host-unavailable escape hatch. `/settings/host` bypasses the readiness gate.
   const openSettings = useCallback(() => {
     void router.navigate({
       to: "/settings/host",
@@ -183,9 +140,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
       }),
     });
   }, [router]);
-  // THE FIRST of a launch's three boot surfaces - see
-  // `HostRuntimeBootFallback` for why it is the same card as the other two and
-  // why it reserves the header's slot.
+  // First of a launch's three boot surfaces. Same card as the other two; reserves the header slot.
   const hostRuntimeFallback = useMemo(
     () => (
       <HostRuntimeBootFallback
@@ -284,11 +239,8 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                 <ProvidersChangedStreamMount />
                                 <ChatRecordsStreamMount />
                               </HostScopeReady>
-                              {/* Above the shell split on purpose: the onboarding tour
-                                  renders through `StandaloneShell`, not `AppShell`, so a
-                                  mount inside the app shell left the tour's Import button
-                                  with no run handle to call. This is the lowest node both
-                                  shells share that still has the host stream. */}
+                              {/* Above the shell split: onboarding uses StandaloneShell.
+                                  Lowest node both shells share that still has the host stream. */}
                               <SessionImportRunController />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
@@ -322,10 +274,7 @@ interface TraycerAppRuntimeSurfaceProps {
 }
 
 function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
-  // The host-readiness gate now lives INSIDE the router (around the routed
-  // page, in `RootComponent`'s `HostReadyGate`), so `RouterProvider` mounts
-  // unconditionally here. That keeps the root-route bridges - the menu command
-  // listener and the dialog host - alive while the host is still being set up.
+  // Host-readiness gate lives inside the router, so `RouterProvider` mounts unconditionally and root-route bridges stay alive during setup.
   return (
     <>
       <RunnerHostBridges />
@@ -340,13 +289,8 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <RateLimitQueueProvider />
       <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
-      {/*
-        Ticket 12's chat cost line: mounted ONCE app-wide (not per-tab) since
-        the tab strip's "Usage" context-menu item can target any open chat's
-        `hostId`, which may differ from the active host - needs
-        `useHostClientForHostId`, so it lives inside `HostRuntimeProvider`
-        rather than beside `ReportIssueDialogHost` (which sits outside it).
-      */}
+      {/* App-wide chat cost line: Usage can target any chat hostId, so this
+          sits inside HostRuntimeProvider for useHostClientForHostId. */}
       <ChatUsageDialog />
     </>
   );

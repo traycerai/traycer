@@ -15,14 +15,7 @@ import {
 
 export type { HostEndpointReachabilityProbe } from "./host-endpoint-reachability";
 
-// Observed on-disk state readers + derived readiness/activation logic for
-// `HostController` (Host Update Layer Redesign Tech Plan, "Desktop main:
-// HostController" > "State model"). Desktop cannot import the CLI's
-// `HostInstallRecord`/`HostStagedRecord` types (they live in
-// `clients/traycer-cli`, not `clients/shared`, and this ticket must not
-// modify that workspace) - these are desktop-local mirrors of the on-disk
-// JSON shapes the CLI writes, read directly rather than duplicating the
-// CLI's own reader/writer logic.
+// Desktop cannot import the CLI's `HostInstallRecord`/`HostStagedRecord` types (they live in `clients/traycer-cli`, not `clients/shared`, and this ticket must not modify that.
 
 export type HostInstallPlatform = "darwin" | "win32" | "linux";
 export type HostInstallArch = "arm64" | "x64";
@@ -61,12 +54,6 @@ async function readJsonFile(path: string): Promise<unknown | null> {
   }
 }
 
-/**
- * Reads `install.json` directly. Tolerant (returns `null` on any structural
- * defect, mirroring the CLI's own reconcile-oriented tolerant readers) - a
- * missing/malformed install record just means "not installed" for the
- * controller's derivation, not a hard failure.
- */
 export async function readDesktopHostInstallRecord(
   layout: HostFsLayout,
 ): Promise<DesktopHostInstallRecord | null> {
@@ -107,13 +94,6 @@ export async function readDesktopHostStagedRecord(
   };
 }
 
-/**
- * Desktop interpretation of the host's Layer 0 single-writer (I1) verdict
- * from `pid.json`. The known degraded cause is owned by `@traycer/protocol`;
- * `unrecognized` exists so a desktop build older than its host reports "I
- * cannot confirm the guarantee" rather than dropping a newer record and
- * reporting nothing, which is the same silence this type exists to remove.
- */
 export type DesktopHostLayer0Record =
   | { readonly status: "acquired"; readonly attemptId: string }
   | {
@@ -124,12 +104,7 @@ export type DesktopHostLayer0Record =
     }
   | { readonly status: "unrecognized"; readonly raw: string };
 
-/**
- * Fail-open decoder for the host's record. A malformed record, including a
- * degraded record carrying a cause this desktop does not know yet, decodes to
- * `unrecognized` with its raw JSON intact rather than `null`. That keeps
- * "could not interpret" distinct from "this host predates the field".
- */
+/** A malformed record, including a degraded record carrying a cause this desktop does not know yet, decodes to `unrecognized` with its raw JSON intact rather than `null`. */
 export function decodeHostLayer0Record(
   value: unknown,
 ): DesktopHostLayer0Record | null {
@@ -173,12 +148,6 @@ type GuardedLayer0UnavailableObjectKind = "os-error";
 
 type AssertNever<TValue extends never> = TValue;
 
-/**
- * Compile-time-only, bidirectional coverage tripwires for the runtime guard
- * below. A guarded literal outside the protocol union, or a protocol string
- * cause/object kind missing from the guard, fails the desktop compile. Runtime
- * decoding remains fail-open for version skew.
- */
 type _Layer0UnavailableStringGuardCoverage = [
   AssertNever<
     Exclude<GuardedLayer0UnavailableStringCause, Layer0UnavailableStringCause>
@@ -217,15 +186,6 @@ function isLayer0UnavailableCause(
   );
 }
 
-/**
- * The host's Layer 0 verdict straight off `pid.json`, read independently of
- * `HostLifecycle`'s renderer-facing snapshot (`DesktopLocalHostSnapshot`),
- * which deliberately drops it - same rationale as `RunningHostIdentity`
- * above. `null` covers both "no host running" (no `pid.json`) and "this
- * host predates the field" (a `pid.json` with no `layer0` key); the support
- * report must render both as explicitly unknown, never as the healthy
- * `acquired` case.
- */
 export async function readHostLayer0Record(
   layout: HostFsLayout,
 ): Promise<DesktopHostLayer0Record | null> {
@@ -234,26 +194,6 @@ export async function readHostLayer0Record(
   return decodeHostLayer0Record(parsed.layer0);
 }
 
-/**
- * The runtime identity the live host is currently publishing, or `null`
- * when there is no reachable running host. Fixup A3: `readPidMetadataState`
- * is a STRUCTURAL parse only (pid.json well-formed) - it says nothing about
- * whether the process it names is still alive. A crash/OOM/Task-Manager
- * kill leaves a stale-but-well-formed `pid.json` behind, which a
- * structural-only read reports as "running" - the exact bug that made
- * `recoverIfDown` skip restarting a genuinely dead host (it read this same
- * function and short-circuited to `ok`). Every "is the host running"
- * decision in `HostController` (`getStatus`, `recoverIfDown`,
- * `convergeReadyPackagedMac`, `applyPendingLoginItemRevisionIfIdle`) goes
- * through this one function, so a real liveness probe here fixes all of
- * them at once: the pid must belong to a live OS process AND the websocket
- * endpoint must actually accept a connection, matching the same two checks
- * `HostLifecycle.reloadSnapshot`'s `toReachableSnapshot` already applies to
- * the renderer-facing snapshot. `reachabilityProbe` is threaded in (not
- * imported directly) so tests can substitute a deterministic stub instead
- * of depending on a real TCP listener bound to the fixture's `websocketUrl`
- * - production callers pass `canReachHostWebsocketUrl` from `./host-lifecycle`.
- */
 export async function readRunningRuntimeVersion(
   layout: HostFsLayout,
   reachabilityProbe: HostEndpointReachabilityProbe,
@@ -264,21 +204,6 @@ export async function readRunningRuntimeVersion(
   );
 }
 
-/**
- * The reachable host's `{ pid, version }`, or `null` when none is reachable.
- *
- * Same two checks as {@link readRunningRuntimeVersion} — this is its
- * implementation — but it keeps the pid, which callers need whenever "a host
- * is reachable" is not a strong enough question. After a bootout-and-register
- * cycle, for instance, a reachable host might be the OUTGOING one that
- * outlived its eviction, and treating that as proof the cycle worked would
- * report an activation that never happened. The pid is what distinguishes
- * them.
- *
- * Distinct from {@link readRunningHostIdentity}, which is a STRUCTURAL read of
- * `pid.json` for `host stamp-runtime`'s CAS and deliberately proves no
- * liveness at all. This one answers "is a host serving right now".
- */
 export async function readReachableHostIdentity(
   layout: HostFsLayout,
   reachabilityProbe: HostEndpointReachabilityProbe,
@@ -296,12 +221,7 @@ export async function readReachableHostIdentity(
     : null;
 }
 
-/**
- * Registry-domain readiness: comparable `staged > installed`. Incomparable
- * versions (e.g. `local-*` builds) never advertise as ready - the same
- * comparator both the CLI and this controller consume, so update/apply
- * decisions never diverge (Tech Plan, "Version identity").
- */
+/** Incomparable versions (e.g. `local-*` builds) never advertise as ready. */
 export function deriveUpdateReady(
   installedVersion: string | null,
   stagedVersion: string | null,
@@ -316,13 +236,7 @@ export type HostActivationState =
   | "activationUnknown"
   | "unavailable";
 
-/**
- * Runtime-domain activation state, equality-only (Tech Plan, "Version
- * identity" > "Unknown runtime identity"). Never SemVer-orders runtime
- * stamps. `unavailable` (no live running identity) is `convergeReady`'s
- * domain - every surface gates activation-debt UI on the other three
- * reachable values.
- */
+/** Never SemVer-orders runtime stamps. */
 export function deriveActivationState(
   installedRuntimeVersion: string | null,
   runningRuntimeVersion: string | null,
@@ -335,13 +249,8 @@ export function deriveActivationState(
 }
 
 /**
- * The attested install-generation fingerprint for a record captured from
- * disk (the `activateInstalled` / pre-existing-record path, per the Tech
- * Plan's "stamp-runtime CAS": "when activating a pre-existing record...
- * the controller captures it from disk before the cycle"). A
- * controller-driven create-and-cycle command (apply/install/ensure) must
- * instead use the fingerprint carried on THAT command's own result, never
- * this disk-derived one - see `host-controller.ts`.
+ * the controller captures it from disk before the cycle").
+ * A controller-driven create-and-cycle command (apply/install/ensure) must instead use the fingerprint carried on THAT command's own result, never this disk-derived one.
  */
 export function attestedInstallGenerationFromDisk(
   record: DesktopHostInstallRecord,
@@ -359,15 +268,6 @@ export function attestedInstallGenerationFromDisk(
  * outside plain "is X ready" checks, e.g. the yank-vs-apply guard). */
 export { compareHostVersions, isStrictlyNewerHostVersion };
 
-/**
- * The running host's full identity triple straight off `pid.json`,
- * including `startedAt` - `HostLifecycle`'s `DesktopLocalHostSnapshot` (the
- * renderer-facing projection) deliberately drops that field, but
- * `host stamp-runtime`'s CAS needs it verbatim as `--observed-started-at`
- * (paired with the observed pid/runtime-version) to attest the fresh
- * process it is backfilling against. Read directly here rather than
- * widening the renderer-facing snapshot type for one internal caller.
- */
 export interface RunningHostIdentity {
   readonly pid: number;
   readonly version: string;
@@ -395,17 +295,6 @@ export async function readRunningHostIdentity(
 
 export type HostBusyVerdict = "no-host" | "idle" | "busy";
 
-/**
- * Desktop-side mirror of the CLI's `assertHostNotBusy` restart-verdict probe
- * (`host/busy-check.ts`) - deliberately duplicated rather than imported:
- * this ticket must not modify `clients/traycer-cli/`, and the probe itself
- * (`probeHostActivityBusy`) already lives in `clients/shared` so both sides
- * share the actual HTTP check; only the "is there a live host to protect at
- * all" liveness gate is repeated here. Used by the desktop-held lock
- * sections (packaged-macOS activation/removal) immediately before a
- * disruptive SMAppService cycle, mirroring the CLI's in-lock busy probe on
- * CLI-owned platforms.
- */
 export async function probeHostBusyVerdict(
   layout: HostFsLayout,
 ): Promise<HostBusyVerdict> {

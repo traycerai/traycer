@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { useNotificationSystemSettingsOpenMutation } from "@/hooks/runner/use-notification-system-settings-open-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
-/** Desktop pointer to native banner, badge and delivery preferences. */
 export function SystemNotificationSettingsSection(): ReactNode {
   const systemSettings = useRunnerHost().notifications.systemSettings;
   const openSettings = useNotificationSystemSettingsOpenMutation();

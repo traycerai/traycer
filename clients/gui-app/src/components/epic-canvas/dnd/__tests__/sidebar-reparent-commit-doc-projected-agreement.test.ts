@@ -1,31 +1,6 @@
 /**
- * Task 4.3: the one live pairing where `canReparentProjected` (the projected
- * TREE) and the doc write used to disagree - a doc-only terminal agent
- * dropped onto a RECORD-BACKED chat. Both nodes sit in the projected tree,
- * same family ("agent"), no cycle, so the projected gate in
- * `commitSidebarReparentDrop` says yes. Before 4.3, the chat had no Y.Doc
- * `chats` entry (chat-sync-v2: creation no longer writes one), so the
- * doc-based `reparentArtifact` validated against the doc's maps and threw
- * `MissingNodeError` for a parent it could not see - see the git history of
- * this file (formerly "...-divergence.test.ts") for that failure pinned.
- *
- * 4.3 moved `reparentArtifactAction`'s validation onto the SAME projected
- * tree the gate above already consulted, and split "validate" from "resolve
- * where to write": the write now resolves the NODE's own doc entry
- * (`resolveReparentNode`), not the evaluator's own lookup of both node and
- * parent. The dragged terminal agent has a doc entry (it is doc-only); only
- * the new PARENT (the chat) lacks one. So the doc write now succeeds: this
- * file asserts the drop lands instead of silently reverting.
- *
- * A live `createOpenEpicStore` (not the routing suite's store stub) drives
- * the real write: `chat-records-union.test.ts` already proves
- * `applyChatRecords` puts a chat in `state.tree` with no doc entry ("gives a
- * swept chat back its record, its tree row and its parent"), and this reuses
- * exactly that seam - the chat here just never had a doc entry to begin
- * with. The terminal agent is seeded straight into the doc's `tuiAgents` map
- * (`projectTerminalAgent` always stamps `docResident: true` for a doc entry -
- * see `root-dnd-commits.ts`'s `isDocOnlyTerminalAgent`), mirroring
- * `epic-projector.test.ts`'s `makeTerminalAgentEntry`.
+ * Task 4.3: the one live pairing where `canReparentProjected` (the projected TREE) and the doc write used to disagree - a doc-only terminal agent dropped onto a RECORD-BACKED chat.
+ * Before 4.3, the chat had no Y.Doc `chats` entry (chat-sync-v2: creation no longer writes one), so the doc-based `reparentArtifact` validated against the doc's maps and threw `MissingNodeError` for a parent it could not see - see the git history of this file (formerly "...-divergence.test.ts") for that failure pinned. 4.3 moved `reparentArtifactAction`'s validation onto the SAME projected tree the gate above already consulted, and split "validate" from "resolve where to write": the write now resolves the NODE's own doc entry (`resolveReparentNode`), not the evaluator's own lookup of both node and parent.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -108,11 +83,6 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-1",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -128,11 +98,7 @@ function newSession(): OpenedStoreForTest {
 }
 
 /**
- * A doc-only terminal-agent entry, minimal enough for `projectTerminalAgent`
- * to accept it (`harnessId: "codex"` tolerates a null `harnessSessionId`).
- * Mirrors `epic-projector.test.ts`'s `makeTerminalAgentEntry` - there is no
- * exported shim for this, unlike `createArtifactInDocForTests` for
- * artifacts/chats.
+ * A doc-only terminal-agent entry, minimal enough for `projectTerminalAgent` to accept it (`harnessId: "codex"` tolerates a null `harnessSessionId`).
  */
 function makeTerminalAgentEntry(id: string, title: string): Y.Map<unknown> {
   const agent = new Y.Map<unknown>();
@@ -196,17 +162,13 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
   it("commits a doc-only terminal agent dropped onto a record-backed chat, and the projected tree agrees with the outcome", async () => {
     const handle = newSession();
 
-    // The source: a doc-only terminal agent. No `epic.listTuiAgents` row for
-    // it, so `projectTerminalAgent`'s doc projection is the only source and
-    // `docResident` reads true.
+    // The source: a doc-only terminal agent.
+    // No `epic.listTuiAgents` row for it, so `projectTerminalAgent`'s doc projection is the only source and `docResident` reads true.
     const tuiAgents = new Y.Map<unknown>();
     tuiAgents.set("agent-1", makeTerminalAgentEntry("agent-1", "Agent"));
     handle.doc.getMap("epic").set("tuiAgents", tuiAgents);
 
-    // The new parent: a RECORD-backed chat with no Y.Doc `chats` entry at
-    // all - the ordinary post-chat-sync-v2 shape. `applyChatRecords` is the
-    // same real store action `chat-records-union.test.ts` uses to prove a
-    // record-only chat lands in `state.tree`.
+    // `applyChatRecords` is the same real store action `chat-records-union.test.ts` uses to prove a record-only chat lands in `state.tree`.
     handle.store
       .getState()
       .applyChatRecords([chatRecord({ chatId: "chat-parent" })], null);
@@ -218,10 +180,7 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
     expect(before.tree.nodeById["chat-parent"]).toBeDefined();
     expect(before.tree.nodeById["agent-1"].parentId).toBeNull();
 
-    // The DnD preview gate (`canReparentProjected`, the same call
-    // `updateSidebarReparentPreview` makes) already reads this drop as legal
-    // before the commit runs - preview and commit consult the identical
-    // projected tree, so there is nothing for them to disagree about.
+    // The DnD preview gate (`canReparentProjected`, the same call `updateSidebarReparentPreview` makes) already reads this drop as legal before the commit runs - preview and commit consult the identical projected tree, so there is nothing for them to disagree about.
     expect(canReparentProjected(before.tree, "agent-1", "chat-parent").ok).toBe(
       true,
     );
@@ -229,14 +188,8 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
     const expand = vi.spyOn(useEpicSidebarExpansionStore.getState(), "expand");
     const errorSpy = vi.spyOn(appLogger, "error");
 
-    // AWAITED. `commitSidebarReparentDrop` returns `Promise<void>`, and the
-    // reveal this test asserts on (`expand`) runs past an await inside it. The
-    // old `expect(() => …).not.toThrow()` only ever checked the SYNCHRONOUS
-    // prefix - which is why every assertion below it passed while the `expand`
-    // one saw zero calls: the doc write is synchronous, the reveal is not.
-    // `.not.toThrow()` on a promise-returning call is also the wrong
-    // instrument, since a rejection would surface as an unhandled rejection
-    // rather than a failure; `resolves` is the form that actually catches one.
+    // The old `expect(() => …).not.toThrow()` only ever checked the SYNCHRONOUS prefix - which is why every assertion below it passed while the `expand` one saw zero calls: the doc write is synchronous, the reveal is not.
+    // `.not.toThrow()` on a promise-returning call is also the wrong instrument, since a rejection would surface as an unhandled rejection rather than a failure; `resolves` is the form that actually catches one.
     await expect(
       commitSidebarReparentDrop({
         epicId: "epic-1",
@@ -248,15 +201,9 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
       }),
     ).resolves.toBeUndefined();
 
-    // Neither of the two RPCs this branch could reach fires: this node's
-    // pointer lives in the doc (`epic.reparentChat` is the registry-backed
-    // fast path, and this agent is doc-only), and the dual-write
-    // (`epic.reparentArtifact`) is artifact-family only.
     expect(seam.request).not.toHaveBeenCalled();
 
-    // The doc write landed: the agent's own doc entry (`tuiAgents`) now
-    // points at the chat, and the projected tree - the surface the sidebar
-    // renders - agrees.
+    // The doc write landed: the agent's own doc entry (`tuiAgents`) now points at the chat, and the projected tree - the surface the sidebar renders - agrees.
     const after = handle.store.getState();
     expect(after.tree.nodeById["agent-1"].parentId).toBe("chat-parent");
     expect(after.tree.childrenByParent["chat-parent"]).toContain("agent-1");

@@ -18,12 +18,6 @@ function state(
   };
 }
 
-/**
- * The office splits one notification signal into two pictures - a crashed
- * screen and a "!" bubble - and the split has to agree with `attentionTone`,
- * which is what decides an agent is flagged at all. Each case below asserts
- * BOTH: that the tone still fires, and which picture it resolves to.
- */
 describe("officeFlagKind", () => {
   it("reads a non-terminal failure as a crash", () => {
     const failing = state({

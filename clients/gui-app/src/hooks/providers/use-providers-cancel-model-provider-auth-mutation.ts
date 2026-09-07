@@ -19,23 +19,7 @@ interface CancelModelProviderAuthContext {
   readonly hostId: string | null;
 }
 
-/**
- * Abandons an in-flight OAuth attempt. Best-effort and LOCAL: upstream exposes
- * no OAuth-cancel endpoint, so this discards the host's pending attempt and
- * releases its server lease. It never claims to have revoked anything at the
- * provider.
- *
- * `cancelled: false` is not a failure - it means the attempt had already
- * settled, expired or been superseded, and `result` describes what it settled
- * as.
- *
- * That distinction is exactly what decides whether anything is invalidated. A
- * successful teardown reports `{ cancelled: true, result: done }`, where `done`
- * describes the CANCEL and not a credential - nothing changed upstream, so
- * refetching would re-lease a managed server the user just asked to be let go
- * of. Only the `cancelled: false` race - the browser callback landing while the
- * click was in flight - actually wrote a credential.
- */
+/** Local cancel only. Invalidate only on cancelled false (credential already wrote). cancelled true must not refetch. */
 export function useProvidersCancelModelProviderAuth(): UseMutationResult<
   ProvidersCancelModelProviderAuthResponse,
   HostRpcError,
@@ -70,10 +54,7 @@ export function useProvidersCancelModelProviderAuth(): UseMutationResult<
           providerId: variables.providerId,
         });
       },
-      // No `onError` toast. The only consumer renders this failure inline, in
-      // the waiting panel the attempt still owns, and a toast would report the
-      // same failure a second time somewhere the attempt is not - the
-      // inline-error exemption the gui-app guidelines carve out.
+      // No `onError` toast.
     },
   });
 }

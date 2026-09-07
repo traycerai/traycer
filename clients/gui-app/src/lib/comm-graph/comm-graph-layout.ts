@@ -1,32 +1,4 @@
-/**
- * Layered auto-layout for the agents-only communication graph, via dagre.
- *
- * Replaces a hand-rolled "one row per lineage depth, columns in order" pass that
- * placed nodes without ever considering who talks to whom: conversing agents
- * landed at opposite ends of a row and read as unrelated, while the drawn edges
- * had to cross the whole canvas to reach them.
- *
- * TWO EDGE SETS GO IN, ONLY ONE COMES OUT ON SCREEN:
- *
- * - LINEAGE (`parentId` → child) is a layout constraint, never a drawn edge. It
- *   is what gives the graph its depth ranking - creators above what they
- *   created. It stays undrawn because it is mutable via reparent and already
- *   visualized by the sidebar tree, so drawing it would duplicate the tree and
- *   imply a message that never happened.
- * - PAIR edges (the undirected A2A folds) are fed in so dagre pulls agents that
- *   actually talk to each other close together. These ARE the drawn edges.
- *
- * dagre resolves any cycle between the two sets itself (it reverses edges
- * internally for ranking), so a child messaging its own parent is fine.
- *
- * Positions are recomputed from the node and pair sets on every data change and
- * are never persisted: an agent created, archived, or reparented would strand a
- * stored coordinate. Only the viewport is remembered (see
- * `CommGraphTileViewState`).
- *
- * Coordinates are React Flow FLOW-space units, not CSS layout - the canvas
- * surface itself stays fluid.
- */
+/** Layered auto-layout for the agents-only communication graph, via dagre. */
 import dagre from "@dagrejs/dagre";
 import {
   commGraphPairId,
@@ -51,9 +23,7 @@ export interface CommGraphLayoutEdge {
 }
 
 /**
- * Insertion order decides dagre's tie-breaks, so it is pinned to
- * `(createdAt, id)` rather than left to the projection's iteration order - two
- * renders of the same graph must not shuffle.
+ * Insertion order decides dagre's tie-breaks, so it is pinned to `(createdAt, id)` rather than left to the projection's iteration order - two renders of the same graph must not shuffle.
  */
 function orderedForLayout(
   nodes: ReadonlyArray<CommGraphAgentNode>,
@@ -97,11 +67,8 @@ export function layoutCommGraphNodes(
     if (!known.has(node.parentId)) continue;
     graph.setEdge(node.parentId, node.id, { weight: 2 });
   }
-  // Sorted by the CANONICAL PAIR ID, a topology-only key. The aggregation hands
-  // these over in Map insertion order, which is "whichever pair spoke first" -
-  // so a late row on an existing pair can reorder an otherwise IDENTICAL
-  // topology and swap two nodes' positions under the user. Insertion order is a
-  // dagre tie-break, so the same graph must always be inserted the same way.
+  // Sorted by the CANONICAL PAIR ID, a topology-only key.
+  // The aggregation hands these over in Map insertion order, which is "whichever pair spoke first" - so a late row on an existing pair can reorder an otherwise IDENTICAL topology and swap two nodes' positions under the user.
   const orderedEdges = [...edges].sort((left, right) => {
     const leftKey = commGraphPairId(left.agentAId, left.agentBId);
     const rightKey = commGraphPairId(right.agentAId, right.agentBId);

@@ -58,9 +58,6 @@ export function createBundleDiffFindSource(args: {
   readonly files: ReadonlyArray<BundleDiffFindFileInput>;
   readonly loadedPatches: ReadonlyMap<string, BundleDiffFindLoadedPatchInput>;
 }): BundleDiffFindSourceResult {
-  // Build the index grouped by file in visual (document) order: each file's
-  // metadata units followed by its loaded patch units, so find-next walks files
-  // top-to-bottom instead of all-metadata-then-all-loaded-patches.
   const index: DiffFindIndex = {
     units: args.files.flatMap((file) => {
       const fileMetadataUnits = buildDiffFindMetadataUnits(file.metadataUnits);

@@ -8,44 +8,17 @@ import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
- * Streaming-transport seam. The single `IHostStreamClient<HostStreamRpcRegistry>`
- * exposed here rides next to the unary host runtime and powers every
- * Epic / notifications subscription the GUI opens — a `WsStreamClient` for a
- * local active host, a `RemoteStreamClient` for a remote one (T14). Tests
- * bypass this entire provider by mounting the per-Epic / notifications stores
- * with injected stream-client factories.
+ * Streaming-transport seam.
+ * The single `IHostStreamClient<HostStreamRpcRegistry>` exposed here rides next to the unary host runtime and powers every Epic / notifications subscription the GUI opens - a `WsStreamClient` for a local active host, a `RemoteStreamClient` for a remote one.
  */
 export interface StreamRuntimeBinding {
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   /**
-   * The host `wsStreamClient` is dialing, carried HERE rather than looked up
-   * beside it so the transport and its name are one value that changes once.
-   *
-   * A reader that labels this stream's output with a host id fetched from
-   * anywhere else — the active-host hook, a scope model, a directory row — is
-   * reading a second answer to "which machine is this" that updates on its own
-   * schedule. Those two answers disagree for the commit between a host swap and
-   * the effect that rebuilds this binding, which is long enough to render one
-   * machine's processes under another's name and aim an action at the wrong
-   * one. Take the name from the binding you took the client from.
-   *
-   * `null` only when the owner genuinely cannot name one.
+   * The host `wsStreamClient` is dialing, carried HERE rather than looked up beside it so the transport and its name are one value that changes once.
    */
   readonly hostId: string | null;
   /**
-   * Pins the transport for a consumer that outlives the surface this binding
-   * was read from, returning the matching release.
-   *
-   * A run started from a host-scoped panel keeps streaming after the panel
-   * closes, and the scoped transport is reference-counted: without a pin it
-   * closes at that panel's unmount and takes the run's subscription with it.
-   * The returned release must be called exactly once, when the run's own need
-   * for the transport ends.
-   *
-   * `null` when the transport never closes under its consumers - the app-wide
-   * binding, which lives for the window. A `null` here is a promise, not an
-   * absence: it says "nothing to pin", so a caller writes `retain?.()` and is
-   * done rather than guessing which kind of binding it holds.
+   * Pins the transport for a consumer that outlives the surface this binding was read from, returning the matching release.
    */
   readonly retain: (() => () => void) | null;
 }
@@ -55,9 +28,8 @@ export const StreamRuntimeContext = createContext<StreamRuntimeBinding | null>(
 );
 
 /**
- * Returns only a live app-wide stream client. A closed client is hidden
- * immediately while `HostStreamProvider` rebuilds it, so consumers detach from
- * dead sessions and rebind when the replacement reaches context.
+ * Returns only a live app-wide stream client.
+ * A closed client is hidden immediately while `HostStreamProvider` rebuilds it, so consumers detach from dead sessions and rebind when the replacement reaches context.
  */
 export function useWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> | null {
   const value = use(StreamRuntimeContext);
@@ -81,10 +53,8 @@ export function useWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> | 
 }
 
 /**
- * The host the LIVE stream client in context is bound to — `null` whenever
- * `useWsStreamClient` is also `null`, so a caller can never name a host it has
- * no working stream to. Both values come off the same binding object, which is
- * what makes the pair atomic (see `StreamRuntimeBinding.hostId`).
+ * The host the LIVE stream client in context is bound to - `null` whenever `useWsStreamClient` is also `null`, so a caller can never name a host it has no working stream to.
+ * Both values come off the same binding object, which is what makes the pair atomic (see `StreamRuntimeBinding.hostId`).
  */
 export function useStreamHostId(): string | null {
   const value = use(StreamRuntimeContext);
@@ -93,15 +63,7 @@ export function useStreamHostId(): string | null {
 }
 
 /**
- * The whole binding a surface sits under, for the callers that must HAND IT
- * ON rather than read from it: starting an import or a migration aims a run at
- * one machine, and the target travels with the request as a single value -
- * transport, host name and transport lease together. Reading those three from
- * three hooks is how a run ends up filed under one host and executed on
- * another.
- *
- * `null` whenever `useWsStreamClient` is, for the reason `useStreamHostId`
- * gives: no caller may name a host it has no working stream to.
+ * The whole binding a surface sits under, for the callers that must HAND IT ON rather than read from it: starting an import or a migration aims a run at one machine, and the target travels with the request as a single value - transport, host name and.
  */
 export function useStreamRuntimeBinding(): StreamRuntimeBinding | null {
   const value = use(StreamRuntimeContext);
@@ -110,17 +72,13 @@ export function useStreamRuntimeBinding(): StreamRuntimeBinding | null {
 }
 
 /**
- * The host-registry specialisation of the shared method-support slice - all
- * `useStreamMethodSupportFor` needs, and what a session handle exposes so its
- * consumers can read the bound host's capabilities without the whole transport.
+ * The host-registry specialisation of the shared method-support slice - all `useStreamMethodSupportFor` needs, and what a session handle exposes so its consumers can read the bound host's capabilities without the whole transport.
  */
 export type StreamMethodSupportSource =
   SharedStreamMethodSupportSource<HostStreamRpcRegistry>;
 
-// Both method-support readers ride the same `subscribeMethodSupport` store and
-// null-client handling; only the per-snapshot read differs. The readers are
-// module-level constants so `getSnapshot`'s identity stays keyed on
-// `[client, method]` alone.
+// Both method-support readers ride the same `subscribeMethodSupport` store and null-client handling; only the per-snapshot read differs.
+// The readers are module-level constants so `getSnapshot`'s identity stays keyed on `[client, method]` alone.
 function useStreamMethodValueForClient<
   TClient extends StreamMethodSupportSource,
   T,
@@ -181,12 +139,8 @@ export function useStreamMethodSchemaVersion(
 }
 
 /**
- * Method-support reader for an EXPLICIT client instance, not the app-wide
- * default-host `StreamRuntimeContext`. A per-tab tile (`useHostStreamClientFor`,
- * or a session store's own durable transport) dials a client for its bound
- * host, which may not be the app's default/active host -
- * `useStreamMethodSupport` would read the wrong client's negotiated
- * capabilities in that case.
+ * Method-support reader for an EXPLICIT client instance, not the app-wide default-host `StreamRuntimeContext`.
+ * A per-tab tile (`useHostStreamClientFor`, or a session store's own durable transport) dials a client for its bound host, which may not be the app's default/active host - `useStreamMethodSupport` would read the wrong client's negotiated capabilities in that.
  */
 export function useStreamMethodSupportFor(
   client: StreamMethodSupportSource | null,

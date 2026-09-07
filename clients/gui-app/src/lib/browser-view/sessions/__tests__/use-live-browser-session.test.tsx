@@ -7,10 +7,8 @@ import type {
 import { useLiveBrowserSession } from "@/lib/browser-view/sessions/use-live-browser-session";
 
 /**
- * The registry stands in, but its SUBSCRIBE is real: listeners are held and
- * fired, so `useSyncExternalStore` re-reads the snapshot exactly as it does
- * against the live coordinators. That is what makes the memo observable - a
- * mocked no-op subscribe never re-reads, so any memo would look correct.
+ * The registry stands in, but its SUBSCRIBE is real: listeners are held and fired, so `useSyncExternalStore` re-reads the snapshot exactly as it does against the live coordinators.
+ * That is what makes the memo observable - a mocked no-op subscribe never re-reads, so any memo would look correct.
  */
 const registry = vi.hoisted(() => ({
   session: null as BrowserSessionInfo | null,
@@ -45,9 +43,7 @@ function tab(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
 }
 
 /**
- * A fresh session object every call - the host mints one per frame, bumping
- * `lastActivityAt`, which is exactly the churn the content key exists to
- * absorb.
+ * A fresh session object every call - the host mints one per frame, bumping `lastActivityAt`, which is exactly the churn the content key exists to absorb.
  */
 function session(input: {
   readonly lastActivityAt: number;
@@ -84,9 +80,7 @@ afterEach(cleanup);
 
 describe("useLiveBrowserSession", () => {
   it("keeps one reference across a frame that changes nothing mention-relevant", () => {
-    // Mutation: dropping the content-key cache and returning the raw session -
-    // the host bumps `lastActivityAt` on essentially every frame, so every
-    // mention chip would re-render at frame rate.
+    // Mutation: dropping the content-key cache and returning the raw session - the host bumps `lastActivityAt` on essentially every frame, so every mention chip would re-render at frame rate.
     render(<Probe />);
     const first = seen.at(-1);
     expect(first).not.toBeNull();

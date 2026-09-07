@@ -1,24 +1,5 @@
 /**
- * Pure view-model for Git Diff submodule presentation: workspace switcher
- * summaries, parent gitlink reference descriptors, and grouped module bodies.
- *
- * The host returns one nested `git.listChangedFiles@1.1` snapshot per root repo
- * (the parent changeset - each parent file carrying a nullable `gitlink`
- * descriptor - plus a `submodules[]` array of working-tree changesets, no
- * commits-ahead). This module turns that snapshot into:
- *
- * - a split of the parent's files into ordinary text-diff files and gitlink
- *   pointer files (deduped by path - a dual-stage `MM S.M.` gitlink emits two
- *   rows sharing one descriptor);
- * - one parent-reference descriptor per gitlink, reading pins/flags straight off
- *   the enriched pointer (no join) and carrying the matching submodule section
- *   when the host supplied one;
- * - one summary node per initialized submodule for workspace rows and module
- *   groups (working-tree file count, an "unavailable" flag, branch/HEAD label,
- *   and whether the module has any visible non-clean state).
- *
- * Framework-free so the rules are exhaustively unit-testable; the React
- * components are thin renderers over this output.
+ * Pure view-model for Git Diff submodule presentation: workspace switcher summaries, parent gitlink reference descriptors, and grouped module bodies.
  */
 import type {
   GitChangedFileV11,
@@ -35,8 +16,7 @@ function shortSha(sha: string): string {
 }
 
 /**
- * `branch` when the checkout is on a branch, else `detached @ <short-sha>`, else
- * `detached` (an unborn/unknown HEAD).
+ * `branch` when the checkout is on a branch, else `detached @ <short-sha>`, else `detached` (an unborn/unknown HEAD).
  */
 export function formatRepoHeadLabel(
   branch: string | null,
@@ -61,9 +41,8 @@ export interface ParentFileSplit {
 }
 
 /**
- * Separate ordinary text-diff files from the parent's gitlink pointer rows. A
- * gitlink may appear twice (staged + unstaged) with one identical descriptor, so
- * gitlink rows dedup by path while ordinary files pass through untouched.
+ * Separate ordinary text-diff files from the parent's gitlink pointer rows.
+ * A gitlink may appear twice (staged + unstaged) with one identical descriptor, so gitlink rows dedup by path while ordinary files pass through untouched.
  */
 export function splitParentFiles(
   files: ReadonlyArray<GitChangedFileV11>,
@@ -84,17 +63,8 @@ export function splitParentFiles(
 }
 
 /**
- * Parent gitlink reference facts used to annotate the owning submodule module
- * header. `pointer` carries the raw pointer facts (enriched pins + flags, or
- * the conflict base/ours/theirs triple) read straight off the parent row - no
- * join. `repoRoot` is the matching submodule section when present, or `null`
- * when there is no matching section (a conflicted pointer earns none; an old
- * host downgraded to `submodules: []` returns none). `divergence` surfaces the
- * enriched `pointer.diverged` fact as human copy so the user need not compare
- * SHAs (`null` for a conflicted pointer, which has no single pin).
- * `detailsUnavailable` flags a "dirty pointer but no usable details" degrade -
- * the section is either missing (old-host downgrade / partial failure) or
- * present-but-`unavailable`.
+ * Parent gitlink reference facts used to annotate the owning submodule module header.
+ * `pointer` carries the raw pointer facts (enriched pins + flags, or the conflict base/ours/theirs triple) read straight off the parent row - no join.
  */
 export interface SubmoduleParentReferenceView {
   readonly parentPath: string;
@@ -108,11 +78,8 @@ export interface SubmoduleParentReferenceView {
 }
 
 /**
- * Human-readable pin-vs-checkout divergence from the enriched pointer, so the
- * user need not compare SHAs. `null` for a conflicted pointer (no single pin)
- * and for an unenriched pointer (`submoduleHeadSha` unknown — the host never
- * read the submodule HEAD, so `diverged: false` is a parser default, not a
- * verified match).
+ * Human-readable pin-vs-checkout divergence from the enriched pointer, so the user need not compare SHAs.
+ * `null` for a conflicted pointer (no single pin) and for an unenriched pointer (`submoduleHeadSha` unknown - the host never read the submodule HEAD, so `diverged: false` is a parser default, not a verified match).
  */
 function pointerDivergence(
   pointer: SubmodulePointer,
@@ -156,8 +123,7 @@ function parentReferenceSummary(pointer: SubmodulePointer): string {
 }
 
 /**
- * Build parent-reference descriptors from the parent's gitlink files, joining
- * each to its submodule section by `path` <-> `parentPath`.
+ * Build parent-reference descriptors from the parent's gitlink files, joining each to its submodule section by `path` <-> `parentPath`.
  */
 export function buildSubmoduleParentReferences(
   gitlinkFiles: ReadonlyArray<GitChangedFileV11>,
@@ -180,11 +146,8 @@ export function buildSubmoduleParentReferences(
         summary: parentReferenceSummary(pointer),
         divergence: pointerDivergence(pointer),
         repoRoot: changeset === null ? null : changeset.repoRoot,
-        // A conflicted pointer is intentionally section-less (pointer-only), so a
-        // missing section is expected there, not a degrade. A dirty `normal`
-        // pointer degrades when the host surfaced no usable details: either no
-        // section (old-host downgrade / partial failure) or a section the host
-        // could not inspect (`availability: unavailable`).
+        // A conflicted pointer is intentionally section-less (pointer-only), so a missing section is expected there, not a degrade.
+        // A dirty `normal` pointer degrades when the host surfaced no usable details: either no section (old-host downgrade / partial failure) or a section the host could not inspect (`availability: unavailable`).
         detailsUnavailable:
           submodulePointerIsDirty(pointer) &&
           (changeset === null ||
@@ -195,11 +158,8 @@ export function buildSubmoduleParentReferences(
 }
 
 /**
- * One initialized submodule summary. `changeCount` is the submodule's own
- * working-tree file count, while `hasChanges` also includes pointer-only
- * states such as parent-reference mismatch or conflicts so workspace row subtext
- * can say a module changed without inflating the changed-file badge.
- * `unavailable` marks a submodule the host could not inspect.
+ * One initialized submodule summary.
+ * `changeCount` is the submodule's own working-tree file count, while `hasChanges` also includes pointer-only states such as parent-reference mismatch or conflicts so workspace row subtext can say a module changed without inflating the changed-file badge.
  */
 export interface GitSubmoduleSummary {
   readonly repoRoot: string;

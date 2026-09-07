@@ -44,9 +44,7 @@ export function PinnedStackSections(props: {
   readonly separated: boolean;
 }) {
   const { restore, todo } = props;
-  // The same predicate `hasChatPinnedStackContent` gates the whole stack on -
-  // shared rather than restated, because a stack that mounts and a section
-  // that renders nothing is an empty bordered box.
+  // The same predicate `hasChatPinnedStackContent` gates the whole stack on - shared rather than restated, because a stack that mounts and a section that renders nothing is an empty bordered box.
   const showChanges = chatChangesPanelHasContent(restore);
   if (todo === null && !showChanges) return null;
 

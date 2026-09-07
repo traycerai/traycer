@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -114,11 +112,8 @@ const DOCTOR_WITHOUT_RESTART = [
   "host.update.install",
 ] as const;
 
-// Both lists above omit `diagnostics.logs.tail`; only DOCTOR_WITHOUT_RESTART
-// also omits `host.restart`, which is the axis the remote-restart builder
-// varies. The alias keeps that call site readable — selecting a constant
-// named for what it lacks (logs) to mean "restart present" made readers check
-// the list twice.
+// Both lists above omit `diagnostics.logs.tail`; only DOCTOR_WITHOUT_RESTART also omits `host.restart`, which
+// is the axis the remote-restart builder varies.
 const DOCTOR_WITH_RESTART = DOCTOR_WITHOUT_LOGS;
 
 const RECENT_CRASH_MARKERS: HostDoctorIssue = {
@@ -141,10 +136,8 @@ const CLI_UPGRADE_PENDING: HostDoctorIssue = {
   details: null,
 };
 
-/**
- * The one doctor fix that ENDS things: it asks the process holding the port to
- * exit, then restarts the host — killing in-flight work on both counts.
- */
+/** The one doctor fix that ends things: it asks the process holding the port to exit, then restarts the host -
+ * killing in-flight work on both counts. */
 const FREE_PORT_ISSUE: HostDoctorIssue = {
   code: "PORT_CONFLICT",
   severity: "error",
@@ -155,13 +148,7 @@ const FREE_PORT_ISSUE: HostDoctorIssue = {
   details: { port: 8765, conflictingPid: 4242, conflictingProcess: "node" },
 };
 
-/**
- * The one place these suites mount the panel. Everything the three scenario
- * builders used to repeat — the fixture, the negotiated-method record, the
- * scope override, the host binding, the runner host, the QueryClient and the
- * render tree — lives here exactly once; each wrapper below supplies only
- * what its scenario varies.
- */
+/** The one place these suites mount the panel. */
 function renderDoctorPanel(options: {
   readonly hostId: string;
   readonly isLocalMachine: boolean;
@@ -195,8 +182,8 @@ function renderDoctorPanel(options: {
   const runnerHost: IRunnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
-    // A live snapshot, so a local variant is a RUNNING local host and gets
-    // the RPC page rather than the recovery console.
+    // A live snapshot, so a local variant is a running local host and gets the RPC page rather than the recovery
+    // console.
     localHost: options.isLocalMachine
       ? {
           hostId: options.hostId,
@@ -253,10 +240,7 @@ function renderDoctor(options: {
         return {
           status: "ok" as const,
           issues: [FREE_PORT_ISSUE],
-          // Empty on purpose: the vantage taxonomy is the host's call, and an
-          // empty set is what a relay-served report carries. Putting
-          // PORT_CONFLICT in here would filter the issue out and make every
-          // assertion below vacuous.
+          // Putting PORT_CONFLICT in here would filter the issue out and make every assertion below vacuous.
           triviallyGreenIssueCodes: [],
         };
       },
@@ -269,12 +253,8 @@ function renderDoctor(options: {
 
 describe("Overview doctor — the three local-only repairs", () => {
   it("still confirms before freeing a port and restarting, on the RPC route", async () => {
-    // The regression this pins is a QUIET one. Moving Doctor onto the host's
-    // own RPC changed which report is being read; it did not make the repair
-    // any less destructive. The bridge Doctor has always put a confirmation in
-    // front of this one — it ends the conflicting process and restarts the
-    // host — and the first RPC card shipped without it, so a single click
-    // killed a process with no warning.
+    // The bridge Doctor has always put a confirmation in front of this one - it ends the conflicting process and
+    // restarts the host.
     const { management } = renderDoctor({
       isLocalMachine: true,
       withBridge: true,
@@ -291,7 +271,7 @@ describe("Overview doctor — the three local-only repairs", () => {
     // say which process is about to be ended.
     expect(dialog.textContent).toContain("8765");
     expect(dialog.textContent).toContain("node");
-    // Nothing has happened yet — the click ARMED the action, it did not run it.
+    // Nothing has happened yet - the click armed the action, it did not run it.
     expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
     expect(management.freePortAndRestart).not.toHaveBeenCalled();
 
@@ -308,11 +288,8 @@ describe("Overview doctor — the three local-only repairs", () => {
   });
 
   it("offers the command instead of a fix button for a host on another machine", async () => {
-    // Not a missing RPC — a deliberate scope drop. Freeing a port and
-    // restarting repairs a host that is typically not answering RPCs at all,
-    // and nothing here can reach another machine's ports or service manager.
-    // The honest affordance is the command to run there, so the fix BUTTON
-    // must be absent rather than present-and-broken.
+    // Not a missing RPC - a deliberate scope drop. The honest affordance is the command to run there, so the fix
+    // button must be absent rather than present-and-broken.
     renderDoctor({
       isLocalMachine: false,
       withBridge: true,
@@ -332,9 +309,7 @@ describe("Overview doctor — the three local-only repairs", () => {
   });
 
   it("offers the command for THIS computer too when the shell has no CLI bridge", async () => {
-    // Web and mobile shells administer a host perfectly well over RPC but have
-    // no local CLI to run a repair with. The route keys on the BRIDGE being
-    // present, not on the host being local — keying on locality alone would
+    // The route keys on the bridge being present, not on the host being local - keying on locality alone would
     // render a fix button here that can only throw.
     renderDoctor({
       isLocalMachine: true,
@@ -352,10 +327,7 @@ describe("Overview doctor — the three local-only repairs", () => {
   });
 
   it("offers a re-run when the Doctor request itself fails", async () => {
-    // The failure path only toasted, and the toast is gone in seconds. `report`
-    // stayed null, so the card sat on "Running Doctor…" for the life of the
-    // sheet - spinning at a request that had already finished, with no way to
-    // try again from inside the card.
+    // The failure path only toasted, and the toast is gone in seconds.
     renderDoctor({
       isLocalMachine: true,
       withBridge: false,
@@ -372,10 +344,8 @@ describe("Overview doctor — the three local-only repairs", () => {
   });
 
   it("arming the page lifecycle gate closes an open free-port dialog, and a confirm after that dispatches nothing", async () => {
-    // Discriminator: gating the issue card's button never reached a dialog
-    // that was ALREADY open, so a confirm after an install/restart armed
-    // queued a process kill behind that write. Red against f705b8eb^ (the
-    // dialog stayed answerable).
+    // Discriminator: gating the issue card's button never reached a dialog that was already open, so a confirm
+    // after an install/restart armed queued a process kill behind that write.
     let releaseExternal: (() => void) | null = null;
     const externalGate = new Promise<void>((resolve) => {
       releaseExternal = resolve;
@@ -514,10 +484,7 @@ describe("Overview doctor — Show logs stays on an honest source", () => {
   });
 
   it("withholds Show logs on a remote host that advertises doctor but not diagnostics.logs.tail", async () => {
-    // Discriminator: round 4 routed on `!rpcLogsSupported` alone, so a remote
-    // host's Show logs button read THIS computer's log via the bridge and
-    // rendered it under the remote name. The button must be absent, not
-    // present-and-wrong. Red against 390d05c2^.
+    // The button must be absent, not present-and-wrong.
     const { management, rpcLogCalls } = renderDoctorLogs({
       isLocalMachine: false,
       withBridge: true,
@@ -596,9 +563,8 @@ function renderRemoteDoctorRestart(options: {
         triviallyGreenIssueCodes: [],
       }),
     },
-    // Always bridged, unlike the two builders above: these scenarios pin the
-    // RPC-capability split on a REMOTE host, where the local bridge existing
-    // must not matter.
+    // Always bridged, unlike the two builders above: these scenarios pin the RPC-capability split on a remote
+    // host, where the local bridge existing must not matter.
     management: buildOverviewManagement({
       installedRecord: vi.fn(() =>
         Promise.resolve(makeInstalledRecord("1.5.0")),
@@ -611,9 +577,8 @@ function renderRemoteDoctorRestart(options: {
 
 describe("Overview doctor — remote restart capability", () => {
   it("offers the copy-command on a remote host that advertises doctor but not host.restart", async () => {
-    // Discriminator: `rpcRestartSupported: !restartViaForceFallback` misread
-    // a remote refusal as "the RPC works" and rendered a live Restart button
-    // that dispatched the refused method. Red against 563d9035^.
+    // Discriminator: `rpcRestartSupported: !restartViaForceFallback` misread a remote refusal as "the RPC works"
+    // and rendered a live Restart button that dispatched the refused method.
     const { fixture } = renderRemoteDoctorRestart({
       advertiseRestart: false,
     });

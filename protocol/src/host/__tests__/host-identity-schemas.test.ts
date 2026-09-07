@@ -117,12 +117,6 @@ describe("hostIdentitySetRequestSchema", () => {
     ).toBe(false);
   });
 
-  // The set request and `hostIdentitySchema` deliberately disagree about `""`,
-  // and it is worth pinning which way: the RESPONSE requires `min(1)` or
-  // null, while the request accepts an empty string and lets the host's
-  // `normalizeCustomHostName` trim it to `null` - the same clear that `null`
-  // asks for. Rejecting it at the wire would make a client that binds an
-  // empty text input fail its request instead of clearing the override.
   it("accepts an empty customName on the set request, which the host normalizes to a clear", () => {
     expect(
       hostIdentitySetRequestSchema.safeParse({ customName: "" }).success,

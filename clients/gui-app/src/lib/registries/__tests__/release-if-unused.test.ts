@@ -8,23 +8,8 @@ import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
- * The registry is keyed by EPIC and the UI is keyed by TAB, and one window can
- * legitimately show the same epic in two tabs. `registry.release(epicId)`
- * disposes unconditionally, so every path that has finished with ONE tab has to
- * ask whether another still holds the epic - otherwise it takes the live
- * session out from under a tab that was never closed.
- *
- * The ownership-denial path did not ask. Its own comment says a denial is about
- * a tab id and that "two windows CAN hold the same epic live at once with
- * different tab ids", and the next line released by epic.
- *
- * ⚠ WHY THIS ASKS THE TAB STORE AND NOT `mountedRefs`. The registry keeps a
- * real mount refcount, which looks like the obvious authority and is the wrong
- * one HERE: the denied tab's own provider is still mounted when it runs, so its
- * ref is live and a `mountedRefs > 0` guard would make the release a permanent
- * no-op - the opposite defect, and one that reads as a fix. The callers reach
- * this helper only AFTER removing their own tab from the store, so the question
- * it asks is exactly "does a DIFFERENT tab still hold this epic".
+ * The registry is keyed by EPIC and the UI is keyed by TAB, and one window can legitimately show the same epic in two tabs.
+ * `registry.release(epicId)` disposes unconditionally, so every path that has finished with ONE tab has to ask whether another still holds the epic - otherwise it takes the live session out from under a tab that was never closed.
  */
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -40,9 +25,7 @@ function mountSession(epicId: string): void {
     openStoreForTest({
       epicId: epicId,
       userId: null,
-      // The factories go to the COMPOSITION now: the store stopped
-      // constructing a runtime, so a `streamClientFactory` has nowhere
-      // else to go.
+      // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
       factories: {
         streamClientFactory: noopStreamClientFactory,
         laneSelection: null,
@@ -52,14 +35,7 @@ function mountSession(epicId: string): void {
   );
 }
 
-/**
- * Opens a real tab for `epicId` through the store's own API.
- *
- * Not a hand-rolled `tabsById` literal: `EpicViewTab` carries fields this test
- * does not care about, and a partial literal type-checks nowhere while RUNNING
- * fine - vitest transpiles without checking, so the first version of this file
- * was 3/3 green against a shape `tsc` rejected.
- */
+/** Opens a real tab for `epicId` through the store's own API. */
 function openTabFor(epicId: string): void {
   useEpicCanvasStore.getState().resolveTargetTabForEpic(epicId, "Test epic");
 }
@@ -86,9 +62,8 @@ describe("releaseOpenEpicSessionIfUnused", () => {
   });
 
   /**
-   * THE PAIRED POSITIVE. Without it, the arm above passes just as happily
-   * against a helper that never releases anything - which would leak every
-   * session in the app and satisfy "the other tab survived" perfectly.
+   * THE PAIRED POSITIVE.
+   * Without it, the arm above passes just as happily against a helper that never releases anything - which would leak every session in the app and satisfy "the other tab survived" perfectly.
    */
   it("releases once no tab shows it, which is what makes the guard a guard", () => {
     mountSession("epic-1");

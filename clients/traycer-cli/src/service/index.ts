@@ -24,13 +24,8 @@ export { serviceLabelFor, serviceManifestPath, windowsTaskName } from "./label";
 export type { CliInvocation } from "./cli-binary";
 export { resolveServiceCliInvocation } from "./cli-binary";
 
-// `externally-managed` (macOS only): the label is loaded in launchd from an
-// SMAppService in-bundle plist - Traycer Desktop owns the registration, not
-// the CLI. A registration EXISTS (so auto-bootstrap must not select "service
-// repair" and doctor must not render a not-registered error), but every CLI
-// service mutation (bootstrap/bootout/manifest rewrite) must leave it alone;
-// `installService` refuses it outright. Run-state is deliberately not folded
-// in: liveness checks key off pid metadata (`busy-check.ts`), never off this.
+// `externally-managed` (macOS only): the label is loaded in launchd from an SMAppService in-bundle plist - Traycer Desktop owns the registration, not the CLI.
+// A registration EXISTS (so auto-bootstrap must not select "service repair" and doctor must not render a not-registered error), but every CLI service mutation (bootstrap/bootout/manifest rewrite) must leave it alone; `installService` refuses it outright.
 export type ServiceState =
   | "running"
   | "stopped"
@@ -46,13 +41,11 @@ export interface ServiceStatus {
 
 export interface InstallServiceOptions {
   readonly label: ServiceLabel;
-  // Resolved CLI invocation the manifest will reference. The supervisor
-  // is always `<cli.command> <cli.args...> host start` (no slot flag -
-  // the CLI build bakes the slot via `config.environment`).
+  // Resolved CLI invocation the manifest will reference.
+  // The supervisor is always `<cli.command> <cli.args...> host start` (no slot flag - the CLI build bakes the slot via `config.environment`).
   readonly cli: CliInvocation;
-  // Whether to attempt `loginctl enable-linger $USER` on Linux so the
-  // host survives logout. Silent failure (logged as a doctor issue
-  // later) is acceptable per Flow 1.
+  // Whether to attempt `loginctl enable-linger $USER` on Linux so the host survives logout.
+  // Silent failure (logged as a doctor issue later) is acceptable per Flow 1.
   readonly enableLinger: boolean;
 }
 
@@ -60,39 +53,11 @@ export interface UninstallServiceOptions {
   readonly label: ServiceLabel;
 }
 
-// Outcome of `ServiceController.retireCompetingRegistration`.
-//
-//   - `not-applicable` - there is nothing to repair, either because the
-//     platform has no SMAppService at all (Linux/Windows) or because
-//     Desktop does not own registration on this machine. Also the answer
-//     when the CLI label ITSELF is SMAppService-owned: that is Desktop's
-//     own registration on a pre-label-split machine, not a competitor, and
-//     the CLI must never bootout/delete it.
-//   - `retired` - Desktop owns registration under the agent label AND a
-//     competing CLI-label registration existed; it has now been booted out
-//     and/or its manifest removed. `bootedOut` / `manifestRemoved` say
-//     which halves actually applied, and `agentStartRequested` whether the
-//     surviving agent job was asked to start after an eviction. "Requested",
-//     not "started": `launchctl kickstart` returns once launchd accepts the
-//     request, so a job that is registered but unspawnable (e.g. wedged by a
-//     stale BTM code requirement) still reports success here.
-//   - `nothing-to-retire` - Desktop owns registration and the CLI label is
-//     already clean. The healthy post-split steady state.
-//   - `retire-failed` - there WAS something to retire and an operation on it
-//     failed hard. Distinct from `nothing-to-retire` on purpose: a loaded job
-//     whose manifest is already gone (now a normal steady state, since
-//     Desktop's launch repair removes manifests without booting out) plus a
-//     failed bootout would otherwise be indistinguishable from a clean
-//     machine.
+// Competing-registration repair outcome. A partial removal still invalidates the invocation record.
 export type CompetingRegistrationRetirement =
   | { readonly kind: "not-applicable" }
-  // Desktop owns registration, but its agent is loaded and (possibly)
-  // unspawnable - so the competing CLI registration may be the only host
-  // this machine can run and is deliberately KEPT. Distinct from
-  // `not-applicable` on purpose: that means "nothing here to repair", this
-  // means "there was, and repairing it would have been the damage".
-  // `probe` carries which arm fired, since an unreadable probe and positive
-  // wedge markers are different machines with the same safe answer.
+  // Desktop owns registration, but its agent is loaded and (possibly) unspawnable - so the competing CLI registration may be the only host this machine can run and is deliberately KEPT.
+  // Distinct from `not-applicable` on purpose: that means "nothing here to repair", this means "there was, and repairing it would have been the damage".
   | {
       readonly kind: "kept-agent-possibly-wedged";
       readonly probe: "wedged" | "unknown";
@@ -104,17 +69,8 @@ export type CompetingRegistrationRetirement =
       readonly manifestRemoved: boolean;
       readonly agentStartRequested: boolean;
     }
-  // A failed repair still reports what it DID: `bootedOut` / `manifestRemoved`
-  // are the halves that succeeded before or beside the one that failed, and
-  // together with `bootoutIndeterminate` they decide whether the
-  // registration may have been touched at all. `bootoutFailed` alone cannot:
-  // it is also set when no bootout was attempted (an owner that could not be
-  // read), and when one WAS attempted and failed, "not confirmed" is not
-  // "did not happen" - a `bootout --wait` timeout kills the waiter after
-  // launchd may already have accepted the eviction. So a bootout that was
-  // attempted and did not confirm is `bootoutIndeterminate`, and counts as
-  // a possible removal; one never attempted, beside a manifest that was
-  // already absent, provably removed nothing.
+  // A failed repair still reports what it DID: `bootedOut` / `manifestRemoved` are the halves that succeeded before or beside the one that failed, and together with `bootoutIndeterminate` they decide whether the registration may have been touched at all.
+  // `bootoutFailed` alone cannot: it is also set when no bootout was attempted (an owner that could not be read), and when one WAS attempted and failed, "not confirmed" is not "did not happen" - a `bootout --wait` timeout kills the waiter after launchd may already have accepted the eviction.
   | {
       readonly kind: "retire-failed";
       readonly bootoutFailed: boolean;
@@ -129,11 +85,7 @@ export type DesktopRegistrationTakeover =
   | {
       readonly kind: "took-over";
       readonly agentLabelId: string;
-      // How the running host was handled: "stopped" through its own
-      // lifecycle RPCs, "no-host" when nothing was running,
-      // "skipped-unreachable" when the host could not be asked (it is the
-      // broken part - the takeover IS the recovery) and the job was booted
-      // out underneath it.
+      // How the running host was handled: "stopped" through its own lifecycle RPCs, "no-host" when nothing was running, "skipped-unreachable" when the host could not be asked (it is the broken part - the takeover IS the recovery) and the job was booted out underneath it.
       readonly cooperativeStop: "stopped" | "no-host" | "skipped-unreachable";
     }
   | { readonly kind: "not-applicable" };
@@ -141,21 +93,13 @@ export type DesktopRegistrationTakeover =
 // Carried from `stopForRestart` to `relaunchAfterRestart` so the relaunch
 // knows whether the old process was actually asked to exit.
 export interface RestartStop {
-  // True when the host could not be asked to stand down - its RPC endpoint
-  // was unreachable, or it acknowledged the claim and then outlived its own
-  // force-exit watchdog. The old process may still be running, so the
-  // relaunch has to RECYCLE the job rather than kickstart it: launchd treats
-  // a kickstart of an already-running job as satisfied and no-ops, which
-  // would leave the host up on the old bytes after a "successful" restart.
+  // True when the host could not be asked to stand down - its RPC endpoint was unreachable, or it acknowledged the claim and then outlived its own force-exit watchdog.
+  // The old process may still be running, so the relaunch has to RECYCLE the job rather than kickstart it: launchd treats a kickstart of an already-running job as satisfied and no-ops, which would leave the host up on the old bytes after a "successful" restart.
   readonly forcedRecycle: boolean;
 }
 
-// How a stop route treats a host with work in progress. `force: false` is
-// cooperative-or-nothing (a busy host denies and the denial surfaces as
-// E_HOST_BUSY); `force: true` kills the host process outright - the user
-// explicitly accepted losing running sessions and in-flight agent work, so
-// no busy gate runs. Explicit at every call site on purpose: which stops in
-// this codebase can destroy live work should be answerable by grep.
+// How a stop route treats a host with work in progress.
+// `force: false` is cooperative-or-nothing (a busy host denies and the denial surfaces as E_HOST_BUSY); `force: true` kills the host process outright - the user explicitly accepted losing running sessions and in-flight agent work, so no busy gate runs.
 export interface StopServiceOptions {
   readonly force: boolean;
 }
@@ -167,71 +111,29 @@ export interface ServiceController {
   stop(label: ServiceLabel, options: StopServiceOptions): Promise<void>;
   start(label: ServiceLabel): Promise<void>;
   restart(label: ServiceLabel): Promise<void>;
-  /**
-   * The identity that the OS service manager will actually launch for this
-   * start edge.  It is deliberately distinct from `ServiceLabel.id`: on a
-   * Desktop-managed Mac the CLI owns `ai.traycer.host`, while launchd starts
-   * the bundle-owned `ai.traycer.host.agent` job.  An adoption grant is a
-   * one-shot capability for the latter process, so publishing it for the
-   * logical CLI label would make the real supervisor refuse it.
-   */
+  /** The identity that the OS service manager will actually launch for this start edge. It is deliberately distinct from `ServiceLabel.id`: on a Desktop-managed Mac the CLI owns `ai.traycer.host`, while launchd starts the bundle-owned `ai.traycer.host.agent` job. */
   hostStartAdoptionLabel(label: ServiceLabel): Promise<string>;
-  // The two halves of a restart, for the one caller that needs to do work
-  // between them: `host restart` finalises a pending CLI upgrade while the
-  // supervisor's lock on the binary is released, which only happens after
-  // the stop and before the relaunch.
-  //
-  // This exists because that command may NOT be spelled `stop()` then
-  // `start()`. On a Desktop-managed machine `stop()` treats a host that
-  // cannot be asked to stand down as a terminal error, so the command would
-  // exit before ever relaunching - which is precisely the broken-host state
-  // an explicit `host restart` is supposed to repair. `restart()` handles it
-  // (by recycling the job) but leaves no window in the middle. So the halves
-  // are named, and the recycle decision stays inside the platform.
-  //
-  // `stopForRestart` still throws on a busy host unless `force` is set: an
-  // explicit restart never escalates over live work on its own - only the
-  // user's own `--force` does.
+  // The two halves of a restart, for the one caller that needs to do work between them: `host restart` finalises a pending CLI upgrade while the supervisor's lock on the binary is released, which only happens after the stop and before the relaunch.
+  // This exists because that command may NOT be spelled `stop()` then `start()`.
   stopForRestart(
     label: ServiceLabel,
     options: StopServiceOptions,
   ): Promise<RestartStop>;
   relaunchAfterRestart(label: ServiceLabel, stop: RestartStop): Promise<void>;
-  // Explicit-consent counterpart to `install`'s SMAppService refusal
-  // (macOS): move host management from the Desktop app to the CLI. Stops
-  // the Desktop-managed host cooperatively first (a busy denial throws
-  // E_HOST_BUSY - never a takeover over live work), boots out the agent
-  // registration with a verify-after re-probe, and leaves the machine
-  // ready for a plain `install`. Resolves `not-applicable` on platforms
-  // without SMAppService and on machines where Desktop does not own an
-  // agent registration. Throws E_SERVICE_INSTALL_FAILED on
-  // pre-label-split machines where the CLI label IS Desktop's own
-  // registration (bootout there corrupts the BTM state the app manages;
-  // `service uninstall` is the intended route).
+  // Explicit-consent counterpart to `install`'s SMAppService refusal (macOS): move host management from the Desktop app to the CLI.
+  // Stops the Desktop-managed host cooperatively first (a busy denial throws E_HOST_BUSY - never a takeover over live work), boots out the agent registration with a verify-after re-probe, and leaves the machine ready for a plain `install`.
   takeoverDesktopRegistration(
     label: ServiceLabel,
   ): Promise<DesktopRegistrationTakeover>;
-  // Repair, not refusal: remove a CLI-label registration that would run a
-  // SECOND host beside Desktop's SMAppService agent. The v1.1.7 label split
-  // let both coexist, and until v1.1.8 the ownership probe was blind to the
-  // current `launchctl print` format - so machines in the field carry a
-  // dual registration that nothing else removes (`installService` now
-  // refuses to CREATE one, but a refusal cannot clean up what already
-  // exists, and Desktop's `retireLegacyLabelRegistrations` only runs inside
-  // a full SMAppService register cycle).
-  //
-  // Best-effort by contract: never throws. A launchctl that hangs or cannot
-  // spawn reads as "not loaded" and the repair is skipped, exactly like the
-  // advisory probes in `uninstallService` / `assertNotDesktopAgentManaged`.
+  // Repair, not refusal: remove a CLI-label registration that would run a SECOND host beside Desktop's SMAppService agent.
+  // The v1.1.7 label split let both coexist, and until v1.1.8 the ownership probe was blind to the current `launchctl print` format - so machines in the field carry a dual registration that nothing else removes (`installService` now refuses to CREATE one, but a refusal cannot clean up what already exists, and Desktop's `retireLegacyLabelRegistrations` only runs inside a full SMAppService register cycle).
   retireCompetingRegistration(
     label: ServiceLabel,
   ): Promise<CompetingRegistrationRetirement>;
 }
 
-// Shared human-readable warning suffix for the host install/update
-// commands when the post-swap service action (start/restart/install)
-// fails. The host bytes are in place but the OS service didn't come
-// back up cleanly - direct the operator at the doctor.
+// Shared human-readable warning suffix for the host install/update commands when the post-swap service action (start/restart/install) fails.
+// The host bytes are in place but the OS service didn't come back up cleanly - direct the operator at the doctor.
 export function formatServiceLifecycleWarning(
   action: "restart" | "start" | "install" | "none",
   error: string,
@@ -239,30 +141,9 @@ export function formatServiceLifecycleWarning(
   return `warning: service ${action} failed: ${error} - run 'traycer host doctor'`;
 }
 
-// Cross-platform service-controller facade. Lifted from the Desktop
-// implementation and re-shaped around the CLI's "manifest invokes the
-// CLI binary with `host start`" model - there is no Electron
-// `SMAppService` path here. The dispatch is fixed at construction time
-// so callers don't re-resolve per call.
-/**
- * Announce a deliberate stop before it happens, and withdraw the announcement
- * only when the host turns out to have SURVIVED it.
- *
- * Wrapped HERE, at the single production factory, rather than inside each
- * platform backend: every stop route in the CLI (`host stop`, `host restart`,
- * the install swap's `beforeSwap`, `host uninstall`) resolves its controller
- * through `createServiceController`, so one decorator covers all of them and no
- * future stop path can be added that silently skips it.
- *
- * The supervisor relaunches a child that dies abnormally; without this it would
- * undo every one of those stops. See `host/stop-intent.ts` for why the signal
- * has to be an explicit file rather than an inference from the child's exit.
- *
- * Applied on every platform even though only Windows strictly needs it - there
- * the supervisor survives `schtasks /End` as an orphan, while launchd and
- * systemd kill it outright. Uniform is cheaper than conditional, and it keeps
- * the mechanism exercisable on any developer's machine.
- */
+// Cross-platform service-controller facade.
+// Lifted from the Desktop implementation and re-shaped around the CLI's "manifest invokes the CLI binary with `host start`" model - there is no Electron `SMAppService` path here.
+/** Announce a deliberate stop before it happens, and withdraw the announcement only when the host turns out to have SURVIVED it. Wrapped HERE, at the single production factory, rather than inside each platform backend: every stop route in the CLI (`host stop`, `host restart`, the install swap's `beforeSwap`, `host uninstall`) resolves its controller through `createServiceController`, so one decorator covers all of them and no future stop path can be added that silently skips it. */
 // What a refused operation leaves behind, said accurately per reason - the
 // message is the only thing telling the caller whether the host is still up.
 const FAILED_STOP_CONSEQUENCE: Readonly<
@@ -274,37 +155,12 @@ const FAILED_STOP_CONSEQUENCE: Readonly<
   uninstall: "The host has NOT been uninstalled.",
 };
 
-/**
- * Record the intent, and refuse the stop if the record did not land AND this
- * platform depends on it.
- *
- * On POSIX the sentinel is belt-and-braces: launchd and systemd signal the
- * supervisor directly, so it latches `shuttingDown` and never relaunches. A
- * failed write there costs nothing.
- *
- * On win32 it is the ONLY channel - `schtasks /End` never signals the
- * orphaned supervisor. Proceeding with an unwritten intent means the kill
- * lands, the supervisor reads a nonzero exit as a crash, and it relaunches a
- * host the user asked to stop, while `host stop` reports success. Failing
- * loudly is the honest outcome: the stop genuinely could not be guaranteed,
- * and it is retryable.
- *
- * Every route that kills the host goes through here, INCLUDING `restart`. A
- * restart's kill is just as unattributable to the orphaned supervisor as a
- * stop's, and it is followed immediately by a start: the supervisor relaunching
- * on its own schedule while `/Run` brings up another host is how one restart
- * becomes two hosts. "It comes back anyway" is not a reason to skip the record.
- */
+/** Refuse the stop if intent did not land and this platform needs it (win32). */
 async function announceStop(
   environment: ServiceLabel["environment"],
   reason: "stop" | "restart" | "uninstall",
-  // A FORCED stop makes the record load-bearing on every platform, not just
-  // win32. The POSIX "proceed on a failed write" rationale is that launchd/
-  // systemd signal the supervisor directly - but the force path kills only
-  // the host CHILD, so the supervisor is never signalled and the file is the
-  // only thing telling it the death was asked for. Proceeding without it
-  // means the kill lands, the supervisor reads a crash, and the host comes
-  // back while `--force` reports success - the win32 failure mode, imported.
+  // A FORCED stop makes the record load-bearing on every platform, not just win32.
+  // The POSIX "proceed on a failed write" rationale is that launchd/ systemd signal the supervisor directly - but the force path kills only the host CHILD, so the supervisor is never signalled and the file is the only thing telling it the death was asked for.
   force: boolean,
 ): Promise<void> {
   const persisted = await writeStopIntent(environment, reason);
@@ -321,30 +177,7 @@ async function announceStop(
   });
 }
 
-/**
- * Withdraw the announcement, but ONLY if the host is still serving.
- *
- * The question a failed stop has to answer is "did the kill land?", and the
- * honest instrument for that is the same one the supervisor itself uses: is
- * something actually answering the recorded endpoint. Not the error type - a
- * `HOST_BUSY` refusal happens before anything is touched, but `stopService`
- * throwing because the pid outlived its exit wait happens strictly AFTER the
- * kill, and both arrive here as an exception.
- *
- * Live host: the operation did not remove it, so the record must go - otherwise
- * a refused stop would suppress that live host's own crash recovery for the
- * whole freshness window, and a machine left hostless is the failure this
- * ticket exists to end.
- *
- * Nothing live: the kill landed and only the cleanup failed. The record is now
- * the only evidence that the child's death was asked for, and clearing it would
- * let the orphaned supervisor read a deliberate kill as a crash and bring the
- * host back - after a `host uninstall`, possibly with its task already deleted.
- *
- * An unreachable probe reads as "nothing live" and therefore KEEPS the record,
- * which is the safe half here: the cost is a bounded recovery pause, against
- * resurrecting a host the user explicitly asked to remove.
- */
+/** Withdraw the announcement only if the host is still serving. */
 async function retireIntentIfHostSurvived(
   environment: ServiceLabel["environment"],
 ): Promise<void> {
@@ -352,31 +185,15 @@ async function retireIntentIfHostSurvived(
   await clearStopIntent(environment);
 }
 
-/**
- * Persist the exact structured CLI invocation used for registration, and
- * remove it only after a confirmed matching uninstall. Wrapped HERE, at the
- * production factory, so Linux/macOS/Windows emitters stay unchanged and no
- * future install/uninstall path can skip the transaction.
- *
- * Inner relative to `withStopIntent`: a stop-intent write still precedes the
- * OS uninstall, and the invocation record is removed only after that
- * uninstall resolves.
- */
+/** Persist the exact structured CLI invocation used for registration, and remove it only after a confirmed matching uninstall. Wrapped HERE, at the production factory, so Linux/macOS/Windows emitters stay unchanged and no future install/uninstall path can skip the transaction. */
 export function withCliInvocationRecord(
   controller: ServiceController,
 ): ServiceController {
   return {
     ...controller,
     install: async (options) => {
-      // The Linux self-protection guard runs BEFORE the record transaction
-      // here too, for the mirror image of the `uninstall` reason below: a
-      // throw from `register` is treated as an OS registration that may be
-      // half-done and marks the live record stale, and a refusal that touched
-      // nothing must not do that to an intact registration. The guard is on
-      // `install` at all because the Linux install's failure path is a stop:
-      // `installService` rolls a failed `enable --now` back with
-      // `disable --now` on the unit, which stops the live host - and the CLI
-      // with it, if the relocation silently left it inside the unit.
+      // The Linux self-protection guard runs BEFORE the record transaction here too, for the mirror image of the `uninstall` reason below: a throw from `register` is treated as an OS registration that may be half-done and marks the live record stale, and a refusal that touched nothing must not do that to an intact registration.
+      // The guard is on `install` at all because the Linux install's failure path is a stop: `installService` rolls a failed `enable --now` back with `disable --now` on the unit, which stops the live host - and the CLI with it, if the relocation silently left it inside the unit.
       await assertNotInsideHostUnit();
       return runServiceRegistrationWithInvocationRecord({
         environment: options.label.environment,
@@ -389,15 +206,8 @@ export function withCliInvocationRecord(
       });
     },
     uninstall: async (options) => {
-      // The Linux self-protection guard runs BEFORE the record transaction,
-      // not only inside `withStopIntent` beneath it. Inside the transaction a
-      // refusal is indistinguishable from an OS uninstall that threw, and
-      // `runServiceRemovalWithInvocationRecord` rightly treats that as "the
-      // service may be half-gone" and marks the live record stale - for a
-      // preflight that touched nothing, that would send every later host read
-      // through OS recovery for an intact registration. The inner guard stays:
-      // it is `withStopIntent`'s own contract for any composition that lacks
-      // this decorator, and a second cgroup read costs nothing.
+      // The Linux self-protection guard runs BEFORE the record transaction, not only inside `withStopIntent` beneath it.
+      // Inside the transaction a refusal is indistinguishable from an OS uninstall that threw, and `runServiceRemovalWithInvocationRecord` rightly treats that as "the service may be half-gone" and marks the live record stale - for a preflight that touched nothing, that would send every later host read through OS recovery for an intact registration.
       await assertNotInsideHostUnit();
       return runServiceUninstallWithInvocationRecord({
         environment: options.label.environment,
@@ -408,22 +218,8 @@ export function withCliInvocationRecord(
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
       });
     },
-    // The competing-registration repair removes THIS label's registration -
-    // the one a live record describes - on macOS when Desktop owns host
-    // registration, so it runs inside the same transaction as an uninstall.
-    // `removed` is decided from what the result says HAPPENED or MAY have
-    // happened, not from its kind alone: `retired` always took the
-    // registration away, and a `retire-failed` did so when one of its
-    // halves succeeded (a half-retired registration is as gone for the
-    // record's purposes as a deleted one) or when the eviction was attempted
-    // and never confirmed - the record must not outlive a bootout launchd
-    // may have accepted. Only a repair that provably touched nothing (no
-    // bootout attempted, manifest already absent) leaves the record alone,
-    // since invalidating a valid record for it would send every later
-    // maintenance run through OS recovery for an intact service. Every
-    // other outcome touched nothing and leaves the record alone. Desktop's
-    // own `<label>.agent` registration is never what the host recovers or
-    // records, so `takeoverDesktopRegistration` stays outside.
+    // The competing-registration repair removes THIS label's registration - the one a live record describes - on macOS when Desktop owns host registration, so it runs inside the same transaction as an uninstall.
+    // `removed` is decided from what the result says HAPPENED or MAY have happened, not from its kind alone: `retired` always took the registration away, and a `retire-failed` did so when one of its halves succeeded (a half-retired registration is as gone for the record's purposes as a deleted one) or when the eviction was attempted and never confirmed - the record must not outlive a bootout launchd may have accepted.
     retireCompetingRegistration: (label) =>
       runServiceRemovalWithInvocationRecord<CompetingRegistrationRetirement>({
         environment: label.environment,
@@ -448,39 +244,7 @@ export function withStopIntent(
 ): ServiceController {
   return {
     ...controller,
-    // Intent is written BEFORE the operation - that ordering is the contract,
-    // since the supervisor has to be able to see it before anything is killed.
-    //
-    // Nothing withdraws it on the ordinary path, and that is not an oversight.
-    // `hasActionableStopIntent` filters by the READER's invocation time, so the
-    // record already answers each supervisor differently: the one that predates
-    // it (the process being retired) is silenced, and the one started after it
-    // treats it as served and spawns normally. It then expires on its own.
-    //
-    // The starts used to clear it in `finally`, on the reasoning that "a
-    // leftover intent would suppress the NEXT crash's recovery". The invocation
-    // cutoff had already made that false, and the clear was doing real damage:
-    // on win32 the killed host's supervisor SURVIVES as an orphan, and
-    // `restartService` returns once the replacement's `starting` marker is
-    // written - before it has spawned a child or published `pid.json`. Clearing
-    // there hands the old supervisor a window in which it sees neither intent
-    // nor an incumbent, and it relaunches. One restart, two hosts.
-    //
-    // Each route also carries the Linux self-protection guard, BEFORE its
-    // announcement so a refusal leaves no record of a stop that never happened.
-    // This is the second line behind the relocation in `withRunner`
-    // (host/cgroup-relocation.ts): it re-reads the cgroup, so a machine with no
-    // `systemd-run`, no user manager, or a scope that failed to move us is
-    // refused here instead of killing the process issuing the stop. `restart`
-    // is included because it is a real actuator - `systemctl --user restart`
-    // goes through it, not through `stop` - and leaving it out would leave one
-    // allowlisted command with no second line. `install` carries the guard for
-    // the same reason and nothing else: it is not a stop and announces no
-    // intent, but the Linux `installService` rolls a failed `enable --now`
-    // back with `disable --now` on the unit, and that rollback stops the live
-    // host. Every route into it - `host service install`, and the
-    // registration inside `host install` / `ensure` / `apply` / `update` -
-    // reaches this decorator through the production factory.
+    // Write stop intent before the operation. On win32 a failed write still kills, so the caller must care.
     install: async (options) => {
       await assertNotInsideHostUnit();
       return controller.install(options);
@@ -528,21 +292,7 @@ export function withStopIntent(
   };
 }
 
-/**
- * Decorator order is load-bearing: the invocation-record decorator is the
- * OUTER one. Its uninstall first validates the state directory and acquires
- * the record transaction, and either can fail before the OS backend is ever
- * called. Were the stop-intent decorator outside it, that failure would
- * happen with a stop intent already published - and `retireIntentIfHostSurvived`
- * deliberately keeps the intent when the host cannot be reached, so a
- * supervisor would sit silenced for the intent's lifetime with no uninstall
- * having occurred. Inside the transaction, the intent is announced only once
- * the backend uninstall is actually about to run.
- *
- * The one thing that runs before BOTH is the Linux cgroup guard: the outer
- * decorator's uninstall re-runs it ahead of acquiring the transaction, so a
- * refusal neither publishes an intent nor invalidates the record.
- */
+/** Decorator order is load-bearing: the invocation-record decorator is the OUTER one. Its uninstall first validates the state directory and acquires the record transaction, and either can fail before the OS backend is ever called. */
 export function createServiceController(): ServiceController {
   const platform = osPlatform();
   const logger = createCliLogger(config.environment);

@@ -1,17 +1,3 @@
-/**
- * The `epic.subscribe@1` ↔ lanes mid-session replacement, asserted as a value.
- *
- * This is the path T6 declined by an approved scope split and the ticket makes
- * "an explicitly tested path". The seam's own doc says why it deserves a test
- * of its own rather than a line in a bigger one: *every long-lived tab hits this
- * exactly once*, which makes it the single most likely path to ship untested.
- *
- * Asserted on the ORDERED step list rather than on spy call order, because the
- * order IS the contract - a reset before a detach lets the outgoing set's next
- * frame land in the rebuilt replica, and an attach before the reset seeds a
- * replica that is about to be emptied. A test that read spies could pass with
- * the right calls in the wrong order.
- */
 import { describe, expect, it } from "vitest";
 import {
   MANIFEST_CHANGED_RESET,
@@ -34,10 +20,7 @@ describe("mid-session host upgrade: legacy -> lanes", () => {
 
   it("resets with AUTHORITY provenance and the manifest-changed reason", () => {
     const [, reset] = planEpicAdapterTransition("legacy", "lanes").steps;
-    // Not a client intent. The host's manifest changed under us, so a
-    // `{origin: "client"}` cause here would put a fabricated provenance into
-    // logs, telemetry and the replay harness, where nothing downstream could
-    // tell it from a real authority event.
+    // Not a client intent.
     expect(reset).toEqual({
       kind: "reset",
       cause: { origin: "authority", reason: "manifest-changed" },
@@ -57,9 +40,7 @@ describe("mid-session host upgrade: legacy -> lanes", () => {
 
 describe("what must NOT be a replacement", () => {
   it("the first install detaches nothing, resets nothing and bumps nothing", () => {
-    // A cold open is not a replacement. Emitting an authority reset before the
-    // first frame would be a fabricated authority event on the most ordinary
-    // path there is - and it would bump a generation nobody has observed.
+    // A cold open is not a replacement.
     for (const arm of ["lanes", "legacy"] as const) {
       expect(planEpicAdapterTransition(null, arm).steps).toEqual([
         { kind: "attach", arm },
@@ -73,11 +54,7 @@ describe("what must NOT be a replacement", () => {
   });
 
   it("an undecided verdict produces NO steps and holds what is installed", () => {
-    // The reconnect window. `resetMethodSupport` clears the whole support map
-    // on every reconnect, so a healthy reconnect on a lane host passes through
-    // a moment where every lane method reads `"unknown"`. Emitting a
-    // replacement there would tear the replica down and rebuild it twice for a
-    // link that never changed.
+    // The reconnect window.
     const held = planEpicAdapterTransition("lanes", "undecided");
     expect(held.steps).toEqual([]);
     expect(held.installed).toBe("lanes");
@@ -109,10 +86,8 @@ describe("the fingerprint moves only when the arm does", () => {
   });
 
   it("never emits steps without moving the fingerprint, or vice versa", () => {
-    // The invariant behind the whole design, over every reachable pair: a
-    // replacement is exactly a fingerprint change. If these ever came apart,
-    // either a replica would be rebuilt for nothing or a real upgrade would be
-    // swapped in under a live replica.
+    // The invariant behind the whole design, over every reachable pair: a replacement is exactly a
+    // fingerprint change.
     const arms = [null, "legacy", "lanes"] as const;
     const verdicts = ["legacy", "lanes", "undecided"] as const;
     for (const installed of arms) {
@@ -126,9 +101,8 @@ describe("the fingerprint moves only when the arm does", () => {
         const isReplacement = transition.steps.some(
           (step) => step.kind === "reset",
         );
-        // A reset happens iff the fingerprint moved AND something was
-        // installed to replace. The first-install case moves the fingerprint
-        // without a reset, which is the one deliberate asymmetry.
+        // A reset happens iff the fingerprint moved AND something was installed to replace. The
+        // first-install case moves the fingerprint without a reset, which is the one deliberate asymmetry.
         expect(isReplacement).toBe(fingerprintMoved && installed !== null);
       }
     }

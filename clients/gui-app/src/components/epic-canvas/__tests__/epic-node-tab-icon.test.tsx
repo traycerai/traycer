@@ -208,18 +208,15 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
     expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
   });
 
-  // The shared icon renders outside an open-epic session too (drag previews,
-  // mount-lifecycle tests); an Epic with no presence must read as idle, not
-  // throw.
+  // The shared icon renders outside an open-epic session too (drag previews, mount-lifecycle tests); an Epic with no presence must read as idle, not throw.
   it("renders the idle icon with no registered Epic session", () => {
     renderTuiAgentTabIcon();
 
     expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
   });
 
-  // The defect this whole signal move fixes: activity for an Epic this window
-  // has NEVER opened. There is no session and no per-epic room here, so the
-  // spinner can only come from the host-selected activity view.
+  // The defect this whole signal move fixes: activity for an Epic this window has NEVER opened.
+  // There is no session and no per-epic room here, so the spinner can only come from the host-selected activity view.
   it("spins for an Epic that was never opened in this window", () => {
     renderTuiAgentTabIcon();
 
@@ -240,17 +237,13 @@ function publishWorking(agentIds: readonly string[]): void {
   ]);
 }
 
-// Returns what the REGISTRY returns, which is the production handle type -
-// the registry narrows whatever it is handed. The only caller discards it, so
-// nothing here needs the harness's extra members.
+// The only caller discards it, so nothing here needs the harness's extra members.
 function registerEpicSession(epicId: string): OpenEpicStoreHandle {
   return __getOpenEpicRegistryForTests().acquire(epicId, () =>
     openStoreForTest({
       epicId: epicId,
       userId: null,
-      // The factories go to the COMPOSITION now: the store stopped
-      // constructing a runtime, so a `streamClientFactory` has nowhere
-      // else to go.
+      // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
       factories: {
         streamClientFactory: fakeStreamClientFactory,
         laneSelection: null,

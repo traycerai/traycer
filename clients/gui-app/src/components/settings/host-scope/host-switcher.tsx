@@ -33,17 +33,10 @@ import { useHostBinding } from "@/lib/host";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
 
-/**
- * Search stops being decoration and starts being necessary somewhere around a
- * screenful of rows. Below this, a filter box is one more thing to skip past
- * on the way to a list you can already see whole.
- */
+/** Below this, a filter box is one more thing to skip past on the way to a list you can already see whole. */
 const SEARCH_THRESHOLD = 6;
 
-/**
- * The trigger's accessible name. A `view` surface keeps the wording it has had
- * since it was Settings' own control; a `bind` surface says what it is.
- */
+/** The trigger's accessible name. */
 function hostSwitcherLabel(
   intent: HostPickIntent,
   selected: HostScopeOption | null,
@@ -57,17 +50,8 @@ function hostSwitcherLabel(
 
 export type HostSwitcherActionKind = "add-host" | "manage-hosts";
 
-/**
- * The picker's trailing action — a prop rather than a constant because only
- * Settings owns the add-host flow; every other surface points back to it.
- *
- * Settings owns ADD: the dialog, the known-hosts snapshot it takes and every
- * failure state it can land in all live there, and this footer is its only
- * opener. A surface that merely WATCHES a host (the header's usage popover) has
- * no business growing a second copy of that flow, so it ends the list by
- * pointing at Settings instead. The rows above are identical either way, which
- * is the point: one picker, one row vocabulary, two endings.
- */
+/** The picker's trailing action - a prop rather than a constant because only Settings owns the add-host flow;
+ * every other surface points back to it. */
 export interface HostSwitcherAction {
   readonly kind: HostSwitcherActionKind;
   readonly onSelect: () => void;
@@ -84,56 +68,18 @@ interface HostSwitcherActionPresentation {
   readonly emptyTestId: string;
 }
 
-/**
- * Where this picker sits, which decides how its list ATTACHES — the second
- * thing that cannot be one constant for both surfaces.
- *
- * - `rail`: a control among navigation (Settings' sidebar). The trigger is a
- *   filled, rounded row and the list floats below it at its own comfortable
- *   width, because the rail is far too narrow to read host names in.
- * - `field`: one control among other controls, inside a panel that is already
- *   open (the workspace and worktree pickers, where a search field sits right
- *   under it). A quiet fill is not enough there: everything around it is flat,
- *   so the row read as a heading with a stray chevron rather than something you
- *   could open. It borrows the search field's own border and fill, which is
- *   what makes the two read as siblings instead of as a label above a control.
- * - `inline`: a compact peer of other ghost controls below a composer. It
- *   shares their muted resting text and foreground-alpha hover, while its
- *   list still uses the same full host-row vocabulary as every other surface.
- * - `panel-header`: the picker IS the top strip of the card it heads (the
- *   header's usage popover). Here a floating list is actively wrong: a rounded
- *   panel inset inside a rounded panel puts two borders a few pixels apart on
- *   every edge, and the result reads as an unrelated menu that happened to land
- *   there rather than as this row's choices. So the trigger goes full-bleed and
- *   square, and the list drops flush from its bottom edge at exactly its width
- *   — one shared edge, one continuous surface.
- */
+/** Where this picker sits, which decides how its list attaches - the second thing that cannot be one constant
+ * for both surfaces. */
 export type HostSwitcherSurface = "rail" | "panel-header" | "field" | "inline";
 
 interface HostSwitcherSurfacePresentation {
-  /**
-   * On the rail: a filled row, not a bordered card. It has to read as a CONTROL
-   * among navigation — the sections below it are transparent rows, so a quiet
-   * fill separates "this thing opens" from "this thing navigates" without
-   * adding a second vertical edge beside the rail's own border, which is what
-   * made the earlier bordered version look like a panel wedged into the
-   * sidebar. Muted, never accent: the accent is spoken for by the selected
-   * section.
-   *
-   * As a panel header: no resting fill and no radius. The strip already has the
-   * card's own edges around it and a divider under it, so a second rounded fill
-   * inside them is the "panel wedged into a panel" problem again, one level in.
-   * The hover fill still says it opens.
-   */
+  /** On the rail: a filled row, not a bordered card. Muted, never accent: the accent is spoken for by the
+   * selected section. */
   readonly trigger: string;
   /** Squares off the two corners that would cut back in under the strip. */
   readonly list: string;
-  /**
-   * Flush against the trigger's bottom edge as a panel header, so the list's
-   * own top edge lands ON the strip's divider instead of drawing a second line
-   * a few pixels under it. On the rail the usual float is right — there is no
-   * card edge for it to double up against.
-   */
+  /** Flush against the trigger's bottom edge as a panel header, so the list's own top edge lands ON the strip's
+   * divider instead of drawing a second line a few pixels under it. */
   readonly sideOffsetPx: number;
 }
 
@@ -189,80 +135,33 @@ const HOST_SWITCHER_ACTIONS: Record<
   },
 };
 
-/**
- * THE host selector. Settings, monitoring surfaces, worktree pickers, and the
- * composer all mount this component. They may write different selections, but
- * host rows, states, keyboard behavior, and menu layout stay identical.
- *
- * It replaced four separate `Select`s (Providers' header, Worktrees' toolbar,
- * the snapshots row, the agent-instructions strip) that differed in width,
- * placement and scoping mechanism while doing one job — and, in an earlier
- * pass, a whole second "Hosts" page that duplicated every host verb.
- *
- * The caller's `intent` owns the consequence of choosing; it never changes the
- * picker anatomy or invents a second status vocabulary.
- */
+/** The caller's `intent` owns the consequence of choosing; it never changes the picker anatomy or invents a
+ * second status vocabulary. */
 export function HostSwitcher(props: {
   readonly hosts: readonly HostScopeOption[];
   readonly selected: HostScopeOption | null;
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
-  /** How this list ends — see `HostSwitcherAction`. */
-  /**
-   * `null` for a surface with nowhere to send host management - the onboarding
-   * tour renders outside the app shell, so the Settings overlay it would open
-   * has no surface to appear on, and a row that does nothing is worse than no
-   * row. The empty-list branch then states the fact and offers no verb.
-   */
+  /** `null` for a surface with nowhere to send host management. */
   readonly action: HostSwitcherAction | null;
-  /** Where this picker sits — see `HostSwitcherSurface`. */
   readonly surface: HostSwitcherSurface;
-  /**
-   * What choosing a host here DOES. `bind` surfaces (the composer, the worktree
-   * pickers) and `pin` surfaces (the composer and scoped tools) require a host
-   * this client can dial; `view` surfaces may point at one regardless. See
-   * `HostPickIntent`.
-   */
+  /** `bind` surfaces (the composer, the worktree pickers) and `pin` surfaces (the composer and scoped tools)
+   * require a host this client can dial; `view` surfaces may point at one regardless. */
   readonly intent: HostPickIntent;
-  /**
-   * Per-host reasons THIS surface cannot use a host, keyed by `hostId` — the
-   * fork dialog's "needs update" for a target that does not speak the fork RPC
-   * at the required minor. `NO_HOST_OPTION_REFUSALS` for every surface that has
-   * none, which is all of them but that one.
-   */
+  /** Per-host reasons this surface cannot use a host, keyed by `hostId` - the fork dialog's "needs update" for a
+   * target that does not speak the fork RPC at the required minor. */
   readonly refusalByHostId: ReadonlyMap<string, string>;
-  /**
-   * Every row but this one is inert with NO explanation on it — the calling
-   * surface owns the sentence. `null` imposes nothing. See `HostSection`.
-   */
+  /** Every row but this one is inert with NO explanation on it - the calling surface owns the sentence. */
   readonly inertExceptHostId: string | null;
-  /**
-   * The surface owns the selection right now — a submission is in flight, or it
-   * is pinned to one host. The trigger goes inert rather than opening a list
-   * whose every row would be refused.
-   */
+  /** The trigger goes inert rather than opening a list whose every row would be refused. */
   readonly disabled: boolean;
   /** Keep a disabled trigger focusable so its explanatory tooltip is reachable. */
   readonly keepFocusableWhenDisabled?: boolean;
   readonly isLoading: boolean;
-  /** A host list request FAILED, so an empty `hosts` proves nothing. */
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
-  /**
-   * Resolves each row's projected update state, or `null` for a picker that
-   * does not show update badges.
-   *
-   * `null` for three of the four callers — the landing workspace selector, the
-   * header rate-limit popover, the resource monitor — because the settled
-   * product decision puts fleet update state in **Settings**, and `intent` is
-   * not a proxy for that (those popovers are `view` surfaces too). Only
-   * `SettingsSidebar` passes a resolver.
-   *
-   * Passing the RESOLVER rather than a flag is what keeps this honest: a
-   * surface can only badge state it already has, so no picker can turn badges
-   * on and reach for a per-row query to feed them — which is the "Settings
-   * does not silently connect to other hosts to improve their badges" rule.
-   */
+  /** Passing the resolver rather than a flag is what keeps this honest: a surface can only badge state it already
+   * has, so no picker can turn badges on and reach for a per-row query to feed them. */
   readonly updateViewForHost: ((hostId: string) => FleetUpdateView) | null;
 }): ReactNode {
   const [open, setOpen] = useState(false);
@@ -282,22 +181,10 @@ export function HostSwitcher(props: {
         };
   const surface = HOST_SWITCHER_SURFACES[props.surface];
 
-  // The empty state keys on the LIST, not on the selection.
-  //
-  // Keying it on `selected === null` conflated two opposite situations: "you
-  // own no hosts" and "the host you were viewing was deregistered". The second
-  // one still has hosts, and this early return replaced the picker with a dead
-  // div — removing the only way back to a working host, and taking Settings'
-  // `Add host…` with it, since that footer is its sole opener. So the one moment
-  // a person most needs the picker was the one moment it disappeared.
+  // The second one still has hosts, and this early return replaced the picker with a dead div.
   if (hosts.length === 0) {
-    // A FAILED list is not an empty account, here as much as in the gate — the
-    // same rule, at its second consumer. This branch used to claim "No hosts
-    // yet" and offer the trailing action over a union that was empty because a
-    // request never came back: contradicting the panel beside it, and letting
-    // Add record an empty known-hosts snapshot that a later successful retry
-    // turned into "your existing host just connected". Retry is the honest
-    // action; the rest returns the moment the claim can be made.
+    // A failed list is not an empty account, here as much as in the gate - the same rule, at its second consumer.
+    // Retry is the honest action; the rest returns the moment the claim can be made.
     if (props.listsFailed && !props.isLoading) {
       return (
         <div
@@ -326,9 +213,6 @@ export function HostSwitcher(props: {
         <span className="text-ui-xs text-muted-foreground">
           {props.isLoading ? "Finding your hosts…" : "No hosts yet"}
         </span>
-        {/* Genuinely zero hosts is exactly when this action matters most, and
-            it used to be unreachable here — the only opener lived in a popover
-            this branch returned before rendering. */}
         {props.isLoading || trailingAction === null ? null : (
           <button
             type="button"
@@ -357,12 +241,8 @@ export function HostSwitcher(props: {
       <PopoverContent
         align="start"
         sideOffset={surface.sideOffsetPx}
-        // Never narrower than the row it drops out of. A list floating at its
-        // own width under a wider trigger reads as an unrelated panel that
-        // happened to land there — the connection between "this row" and "these
-        // choices" is carried by the shared left edge AND the shared width. The
-        // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
-        // too narrow to read host names in), not a size.
+        // Never narrower than the row it drops out of. The 20rem is a floor for the narrow case (the rail, whose
+        // trigger is far too narrow to read host names in), not a size.
         className={cn(
           "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)] p-0",
           surface.list,
@@ -370,9 +250,8 @@ export function HostSwitcher(props: {
         data-testid="settings-host-switcher-list"
         {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
         ref={contentRef}
-        // Only the search input is worth declining for; below the threshold
-        // there is no input and Radix's default lands on a host row, which
-        // summons nothing.
+        // Only the search input is worth declining for; below the threshold there is no input and Radix's default
+        // lands on a host row, which summons nothing.
         onOpenAutoFocus={
           hosts.length >= SEARCH_THRESHOLD ? coarseOpenAutoFocus : undefined
         }
@@ -426,12 +305,8 @@ export function HostSwitcher(props: {
             )}
           </CommandList>
         </Command>
-        {/* The same "a FAILED list is not an empty account" rule, at its third
-            consumer — the non-empty case. When one source list fails while the
-            other still contributes rows, `hosts` is nonempty, so the empty
-            branch above never runs and nothing said the picture was partial:
-            the sidebar presented half an account as all of it. The rows stay
-            usable; this footer says what is missing and offers the retry. */}
+        {/* When one source list fails while the other still contributes rows, `hosts` is nonempty, so the empty branch
+           above never runs and nothing said the picture was partial. */}
         {props.listsFailed && !props.isLoading ? (
           <div
             className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
@@ -473,13 +348,8 @@ function HostSwitcherTrigger(props: {
 
   return (
     <PopoverTrigger
-      // The DESTINATION belongs in the accessible name, not just the role.
-      // A bare "Host" would tell a screen-reader user what the control is
-      // for while withholding the one thing it displays.
-      // Named for what choosing DOES here. "Settings host" is the viewing
-      // scope; a `bind` surface is choosing the host the window runs on, and
-      // a screen reader that hears "Settings host" in the composer is being
-      // told about a different control than the one it is on.
+      // A bare "Host" would tell a screen-reader user what the control is for while withholding the one thing it
+      // displays.
       aria-label={hostSwitcherLabel(props.intent, selected, triggerStatus)}
       aria-disabled={keepFocusableWhenDisabled ? true : undefined}
       disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
@@ -523,22 +393,15 @@ function HostSwitcherTrigger(props: {
   );
 }
 
-/**
- * The combobox's interaction shell around the shared row: a cmdk item, its
- * search keywords, and the assistive-tech mark for "this is the one you are
- * viewing". Everything the row SAYS lives in `HostOptionRow`, which the
- * embedded sections and the Select host dialog draw too.
- */
+/** Everything the row says lives in `HostOptionRow`, which the embedded sections and the Select host dialog
+ * draw too. */
 function HostSwitcherRow(props: {
   readonly host: HostScopeOption;
   readonly scoped: boolean;
   readonly active: boolean;
   readonly intent: HostPickIntent;
-  /** This surface's own refusal for the host — see `HostSwitcher`'s prop. */
   readonly surfaceRefusal: string | null;
-  /** Inert with no word on the row — see `HostSwitcher`'s `inertExceptHostId`. */
   readonly surfaceInert: boolean;
-  /** This row's projected update state, or `null` for a non-badging picker. */
   readonly updateView: FleetUpdateView | null;
   readonly onSelect: () => void;
 }): ReactNode {
@@ -552,9 +415,8 @@ function HostSwitcherRow(props: {
   return (
     <CommandItem
       value={host.hostId}
-      // One predicate, asked here exactly as the button list asks it, so a row
-      // that explains why it cannot be picked is also a row that cannot be
-      // picked — on both kinds of container.
+      // One predicate, asked here exactly as the button list asks it, so a row that explains why it cannot be picked
+      // is also a row that cannot be picked - on both kinds of container.
       disabled={!isHostOptionSelectable(host, props.intent, surfaceState)}
       keywords={[
         host.name,
@@ -565,9 +427,8 @@ function HostSwitcherRow(props: {
       data-testid={`settings-host-switcher-option-${host.hostId}`}
       data-scoped={props.scoped ? "true" : "false"}
       data-checked={props.scoped ? "true" : undefined}
-      // The check mark inside the row is aria-hidden and `data-scoped` reaches
-      // no assistive tech, so without this a screen reader heard the scoped row
-      // and every other row as the same text.
+      // The check mark inside the row is aria-hidden and `data-scoped` reaches no assistive tech, so without this a
+      // screen reader heard the scoped row and every other row as the same text.
       aria-current={props.scoped ? "true" : undefined}
       className="text-ui-sm"
     >

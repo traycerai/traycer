@@ -20,10 +20,8 @@ export interface MobileEpicTile {
 const EMPTY_TILES: ReadonlyArray<MobileEpicTile> = [];
 
 /**
- * Every open tile across every pane, in tree order, as
- * `{ paneId, instanceId, ref }`. InstanceIds with no resolved payload are
- * skipped. Read-only - the Phase-2 "Switch tab" sheet and the current-tile bar
- * list from this.
+ * Every open tile across every pane, in tree order, as `{ paneId, instanceId, ref }`.
+ * InstanceIds with no resolved payload are skipped.
  */
 export function flattenMobileTiles(
   canvas: EpicCanvasState,
@@ -39,15 +37,8 @@ export function flattenMobileTiles(
 }
 
 /**
- * Deterministic "the one tile to show on mobile" rule. Read-only: it inspects
- * `activePaneId` / `root` / `tilesByInstanceId` and NEVER writes `root` or
- * `sizesByGroupId`, so viewing an epic on a phone leaves the persisted desktop
- * split layout untouched.
- *
- * Rule: the active pane's active tab, else the first pane's active tab, else
- * that pane's first tab instance. Panes are walked in tree order (active pane
- * first) and the first one that still resolves a live tile wins, so an emptied
- * active pane still yields a tile instead of a blank screen.
+ * Read-only: it inspects `activePaneId` / `root` / `tilesByInstanceId` and NEVER writes `root` or `sizesByGroupId`, so viewing an epic on a phone leaves the persisted desktop split layout untouched.
+ * Panes are walked in tree order (active pane first) and the first one that still resolves a live tile wins, so an emptied active pane still yields a tile instead of a blank screen.
  */
 export function selectMobileTile(
   canvas: EpicCanvasState,

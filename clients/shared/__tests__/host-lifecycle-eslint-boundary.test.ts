@@ -8,30 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Lives outside host-lifecycle/** so this harness may import child_process
 // to *invoke* eslint.
 
-// Every case below is a real `spawnSync` of the eslint binary, and the
-// config-applies-here case spawns it THREE times (a clean control, a violator,
-// and an outside-the-glob control). Vitest's default 5s budget does not
-// describe that work: that case was measured at 6139ms on a loaded CI runner
-// and timed out, on a commit touching only `.github/`. Its being the most
-// expensive row is exactly why it is the one that tips. This states the real
-// cost instead, with enough headroom for a slow runner while still catching a
-// genuine hang.
-//
-// The budget is the fix for the flake, not for the waste: 18 spawns pay
-// eslint's config-resolution and rule-loading cost 18 times over. Materializing
-// every violator up front and linting them in ONE invocation - asserting
-// per-file messages rather than a per-run exit status - would cut this to a
-// single spawn. Left alone deliberately: this file is a gate, and a subtle
-// error while restructuring it would weaken the boundary it exists to prove.
+// Every case below is a real `spawnSync` of the eslint binary, and the config-applies-here case spawns it three times (a clean control, a violator, and an outside-the-glob control).
+// Materializing every violator up front and linting them in one invocation - asserting per-file messages rather than a per-run exit status - would cut this to a single spawn.
 vi.setConfig({ testTimeout: 30_000 });
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 const SHARED_ROOT = join(THIS_DIR, "..");
 const ESLINT_CONFIG_PATH = join(SHARED_ROOT, "eslint.config.mjs");
-// Resolve the repo's own eslint rather than `bunx eslint`: the sandbox below
-// has no node_modules, so `bunx` would resolve eslint from the network on
-// every case — slow, offline-hostile, and it writes a lockfile into the temp
-// dir.
 const ESLINT_BIN = join(
   SHARED_ROOT,
   "..",
@@ -42,29 +25,8 @@ const ESLINT_BIN = join(
 );
 
 /**
- * Violators are materialized in an **OS temp directory, outside the linted
- * tree** — never under `clients/shared/`.
- *
- * They used to be written to `host-lifecycle/.boundary-tmp/`, which is inside
- * the tree `eslint .` walks and is not in the config's `ignores`. So for the
- * duration of every case in this file the package did **not** lint clean *by
- * design*, and any concurrent `eslint .` — precisely what a CI job running
- * lint and test in parallel does — exited 1 on a file whose entire purpose is
- * to be a violation. Whoever opened that job would read it as a real boundary
- * breach and go hunting for an import that does not exist.
- *
- * That is the verification standard's own failure mode from the other side: a
- * gate that cannot distinguish "the code violates the boundary" from "the
- * boundary test is mid-flight" is not a gate. `eslint .` in this package is
- * now clean as a *property*, not as a sampling result.
- *
- * The sandbox still exercises the real config against the real rule. ESLint
- * flat-config `files` globs resolve relative to the **working directory**, not
- * to the config file, so running with `cwd` set to the sandbox and the
- * violator at `<sandbox>/host-lifecycle/…` matches `host-lifecycle/**\/*.ts`
- * exactly as an in-tree file would. Measured, not assumed: with `cwd` at the
- * package root and an absolute path outside it, eslint answers "File ignored
- * because outside of base path" and the rule never runs.
+ * Violators are materialized in an **OS temp directory, outside the linted tree** - never under `clients/shared/`.
+ * That is the verification standard's own failure mode from the other side: a gate that cannot distinguish "the code violates the boundary" from "the boundary test is mid-flight" is not a gate.
  */
 let sandbox = "";
 
@@ -75,9 +37,8 @@ type EslintOutcome = {
 };
 
 /**
- * Materialize a file at `relativePath` inside the sandbox and run the package
- * eslint config against it. Returns the real exit status and the real rule
- * messages — never a read of the config's own source text.
+ * Materialize a file at `relativePath` inside the sandbox and run the package eslint config against it.
+ * Returns the real exit status and the real rule messages - never a read of the config's own source text.
  */
 function lintViolator(relativePath: string, lines: string[]): EslintOutcome {
   const violatorPath = join(sandbox, relativePath);
@@ -99,15 +60,7 @@ function lintViolator(relativePath: string, lines: string[]): EslintOutcome {
   );
 
   // A gate that could not run must not be reported as a gate that passed.
-  //
-  // The positive assertions do already catch a spawn failure on their own -
-  // `status` is null, `messages` is empty, and both `toBe(0)` and the message
-  // regex fail on that. What they do NOT do is say why, so a missing or
-  // non-executable `ESLINT_BIN` (deps not hoisted to the repo root) surfaces
-  // as fifteen confusing assertion diffs instead of one cause. The `git`
-  // sweep at the bottom of this file is the case that genuinely needs this:
-  // it asserts an ABSENCE, so an unspawnable `git` yields empty stdout and
-  // passes vacuously.
+  // What they do not do is say why, so a missing or non-executable `ESLINT_BIN` (deps not hoisted to the repo root) surfaces as fifteen confusing assertion diffs instead of one cause.
   if (result.error !== undefined) {
     throw new Error(
       `eslint failed to launch at ${ESLINT_BIN}: ${result.error.message}`,
@@ -144,13 +97,8 @@ function expectBoundaryError(outcome: EslintOutcome): void {
 }
 
 /**
- * Boundary must *fire*, not merely exist as config text. Each case writes a
- * real violator and asserts eslint reports it.
- *
- * The four dynamic/sibling rows below were measured as **0 errors** before
- * this config change: `await import(...)`, `require(...)`, a `clients/shared`
- * sibling that itself spawns, and anything under `desktop/`. They are the
- * evasions, so they are the cases.
+ * Boundary must *fire*, not merely exist as config text.
+ * The four dynamic/sibling rows below were measured as **0 errors** before this config change: `await import(...)`, `require(...)`, a `clients/shared` sibling that itself spawns, and anything under `desktop/`.
  */
 describe("host-lifecycle read-only import boundary", () => {
   beforeEach(() => {
@@ -161,10 +109,7 @@ describe("host-lifecycle read-only import boundary", () => {
     rmSync(sandbox, { recursive: true, force: true });
   });
 
-  // The sandbox must be a faithful stand-in for an in-tree file, or every
-  // assertion below is vacuous. This proves the config block actually applies
-  // there: the negative control lints clean, and the same path with a
-  // violating import does not.
+  // The sandbox must be a faithful stand-in for an in-tree file, or every assertion below is vacuous.
   it("applies the host-lifecycle config block inside the sandbox", () => {
     const clean = lintViolator("host-lifecycle/sanity-clean.ts", [
       "export function clean(value: string): string {",
@@ -181,8 +126,8 @@ describe("host-lifecycle read-only import boundary", () => {
     ]);
     expect(dirty.status).not.toBe(0);
 
-    // A file at the same depth but OUTSIDE host-lifecycle/ must not be
-    // governed by the block — otherwise the glob is not what is being tested.
+    // A file at the same depth but outside host-lifecycle/ must not be
+    // governed by the block - otherwise the glob is not what is being tested.
     const outside = lintViolator("elsewhere/not-governed.ts", [
       'import { execFile } from "node:child_process";',
       "export function boom(): void {",
@@ -236,10 +181,6 @@ describe("host-lifecycle read-only import boundary", () => {
     );
   });
   it("reports an error for importing desktop electron-main", () => {
-    // Deliberately NOT `host-login-item`: that path is already covered by the
-    // pre-existing `**/host-login-item*` glob, so using it here would have
-    // made this case pass without the `**/desktop/**` group existing at all —
-    // the same fixture-level vacuity this changeset is fixing elsewhere.
     // `host-removal-state` is desktop-only and matches no other pattern.
     expectBoundaryError(
       lintViolator("host-lifecycle/desktop-import.ts", [
@@ -275,10 +216,8 @@ describe("host-lifecycle read-only import boundary", () => {
     );
   });
   it("still enforces the package type-safety selectors inside host-lifecycle", () => {
-    // The host-lifecycle block re-states `no-restricted-syntax`, and flat
-    // config replaces rule options rather than merging them. Without the
-    // re-state, `as any` and friends would be silently unenforced in exactly
-    // the module that most needs them.
+    // The host-lifecycle block re-states `no-restricted-syntax`, and flat config replaces rule options rather than merging them.
+    // Without the re-state, `as any` and friends would be silently unenforced in exactly the module that most needs them.
     const outcome = lintViolator("host-lifecycle/type-safety.ts", [
       "export function boom(value: unknown): number {",
       "  return value as any;",
@@ -313,9 +252,8 @@ describe("host-lifecycle read-only import boundary", () => {
     );
   });
 
-  // The property this file must not break: while it runs, the package it
-  // belongs to still lints clean. Asserted directly rather than left to a
-  // concurrent CI job to discover.
+  // The property this file must not break: while it runs, the package it belongs to still lints clean.
+  // Asserted directly rather than left to a concurrent CI job to discover.
   it("never leaves a violator inside the linted tree", () => {
     lintViolator("host-lifecycle/static-import.ts", [
       'import { execFile } from "node:child_process";',
@@ -330,10 +268,8 @@ describe("host-lifecycle read-only import boundary", () => {
       ["status", "--porcelain", "-uall", "host-lifecycle"],
       { cwd: SHARED_ROOT, encoding: "utf8" },
     );
-    // This is the one assertion in the file that checks an ABSENCE, so it is
-    // the one that passes for free when the subprocess never runs: a `git`
-    // that fails to spawn returns empty stdout, which matches nothing. Prove
-    // the probe ran before trusting what it did not find.
+    // This is the one assertion in the file that checks an absence, so it is the one that passes for free when the subprocess never runs: a `git` that fails to spawn returns empty stdout, which matches nothing.
+    // Prove the probe ran before trusting what it did not find.
     expect(stray.error).toBeUndefined();
     expect(stray.status).toBe(0);
     expect(stray.stdout ?? "").not.toMatch(

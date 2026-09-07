@@ -365,14 +365,8 @@ describe("prompt-stash-repository blob corruption", () => {
   });
 
   /**
-   * Cases 1-2 below exercise the save cursor visitor over retained malformed
-   * blob records. Under the pre-fix code a null `bytes` threw inside the
-   * visitor (DOM event handler), hanging `savePromptStashSnapshot` forever;
-   * a plain-array `bytes` NaN-poisoned kept-byte accounting. Settlement still
-   * must be deterministic; malformed retained records are now reclaimed
-   * (deleted) rather than left uncounted, so they cannot hide unbounded
-   * storage outside the budget. Sibling entries that still reference the
-   * reclaimed hash surface as unavailable/missing on load/restore.
+   * Cases 1-2 below exercise the save cursor visitor over retained malformed blob records.
+   * Under the pre-fix code a null `bytes` threw inside the visitor (DOM event handler), hanging `savePromptStashSnapshot` forever; a plain-array `bytes` NaN-poisoned kept-byte accounting.
    */
   it("referenced blob with null bytes is reclaimed on save, not counted toward budget, sibling becomes unavailable", async () => {
     const repo = await loadRepo();
@@ -589,10 +583,8 @@ describe("prompt-stash-repository blob corruption", () => {
     const bytes = pngBytesOf([0x11, 0x22, 0x33, 0x44]);
     const hash = await sha256Hex(bytes);
 
-    // Internally self-consistent wrong content: genuine PNG Uint8Array with
-    // matching byteLength/mimeType, but not the bytes this hash key claims.
-    // Only the SHA-256-vs-key check would fail on restore - the pre-fix
-    // cursor pass would treat this as "already present" and suppress repair.
+    // Internally self-consistent wrong content: genuine PNG Uint8Array with matching byteLength/mimeType, but not the bytes this hash key claims.
+    // Only the SHA-256-vs-key check would fail on restore - the pre-fix cursor pass would treat this as "already present" and suppress repair.
     const wrongBytes = pngBytesOf([0xff, 0xff]);
     {
       const db = await openDb(DB_NAME, undefined, undefined);

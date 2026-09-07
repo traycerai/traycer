@@ -57,9 +57,7 @@ interface ProfileRateLimitSwitchBannerProps {
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
   readonly primaryTarget: ProfileRateLimitDestination | null;
-  /** First authenticated unknown-usage destination, set only when no known
-   * strictly-better destination exists. The banner spends exactly one
-   * automatic non-forced usage check on it per mounted warning episode. */
+  /** First authenticated unknown-usage destination, set only when no known strictly-better destination exists. The banner spends exactly one automatic non-forced usage check on it per mounted warning episode. */
   readonly probeTarget: ProfileRateLimitDestination | null;
   readonly runTargetHostId: string | null;
   /** User-confirmed only. Commits the picked profile for the next turn. */
@@ -195,11 +193,7 @@ function handleUsageMenuKeyDown(
   void entry.refresh();
 }
 
-/**
- * Compact, composer-scoped rate-limit advisory. Target eligibility and scope
- * are derived each render; its only state is the banner checkbox. The keyed
- * composer boundary resets that state whenever the warning condition changes.
- */
+/** Compact, composer-scoped rate-limit advisory. Target eligibility and scope are derived each render; its only state is the banner checkbox. */
 export function ProfileRateLimitSwitchBanner(
   props: ProfileRateLimitSwitchBannerProps,
 ) {
@@ -215,15 +209,7 @@ export function ProfileRateLimitSwitchBanner(
     providerId: props.providerId,
     profiles: props.profiles,
   });
-  // One automatic, NON-forced usage check per mounted warning episode, and
-  // only for the single probeTarget the hook nominated (no known
-  // strictly-better destination exists, this one is unknown). `ensureFresh`
-  // skips still-fresh cache and honors the usage-fetch cool-down, so this
-  // can never burst-probe or re-trip a 429. A successful reading lands in
-  // the gauge and the next providers.list snapshot promotes the profile to
-  // a real primary target; a failure leaves it unknown - no retry, no next
-  // candidate. The keyed composer boundary remounts this banner when the
-  // warning condition changes, which is what re-arms the single attempt.
+  // `ensureFresh` skips still-fresh cache and honors the usage-fetch cool-down, so this can never burst-probe or re-trip a 429.
   const autoCheckSpentRef = useRef(false);
   const probeEntry =
     props.probeTarget === null
@@ -236,9 +222,7 @@ export function ProfileRateLimitSwitchBanner(
   useEffect(() => {
     if (!probeReady || autoCheckSpentRef.current) return;
     autoCheckSpentRef.current = true;
-    // Fire-and-forget at the boundary: a rejected probe (host/queue error) must
-    // not surface as an unhandled rejection - a failure just leaves the profile
-    // unknown, exactly as the no-retry contract above intends.
+    // Fire-and-forget at the boundary: a rejected probe (host/queue error) must not surface as an unhandled rejection - a failure just leaves the profile unknown, exactly as the no-retry contract above intends.
     probeEntry.ensureFresh().catch(() => undefined);
   }, [probeEntry, probeReady]);
   const executeSwitch = (profileId: string | null): void => {
@@ -443,12 +427,8 @@ function ProfileRateLimitMenuTrigger({
   }
   const label = switchLabel(primaryTarget.profile);
   return (
-    // `w-full` below `sm`, where the banner is a single column: the group is
-    // `w-fit` by default, which would leave the chevron trigger mid-row and
-    // make the menu's `align="end"` measure from a left-of-centre edge. Spanning
-    // the row puts the trigger back on the row's end, so one alignment is
-    // correct at every width - and the primary action's `flex-1` finally has
-    // room to do what it was written for.
+    // `w-full` below `sm`, where the banner is a single column: the group is `w-fit` by default, which would leave the chevron trigger mid-row and make the menu's `align="end"` measure from a left-of-centre edge.
+    // Spanning the row puts the trigger back on the row's end, so one alignment is correct at every width - and the primary action's `flex-1` finally has room to do what it was written for.
     <ButtonGroup
       aria-label="Profile switch actions"
       className="w-full min-w-0 max-w-full sm:w-fit sm:justify-self-end"
@@ -511,17 +491,8 @@ function ProfileRateLimitMenuContent({
   readonly onSwitchProfile: (profileId: string | null) => void;
 }): ReactNode {
   return (
-    // `side="top"` is a preference, not a pin: the menu wants to open over the
-    // transcript rather than down across the composer it belongs to, and it
-    // keeps the usage sidecar's preferred right-hand space clear of the send
-    // controls. Collisions stay ON so that preference yields when the space is
-    // not actually there - a pinned placement on a phone put a 24rem menu off
-    // the left edge, and a surface the viewport has clipped protects nothing.
-    // The sidecar is unaffected: it re-measures its anchor once Radix's real
-    // placement lands (`waitForAnchorPlacement`), which a shifted or flipped
-    // placement satisfies exactly as a static one does, and it hides itself
-    // when neither side has room. `collisionPadding` comes from the primitive,
-    // which defaults it to the device insets.
+    // `side="top"` is a preference, not a pin: the menu wants to open over the transcript rather than down across the composer it belongs to, and it keeps the usage sidecar's preferred right-hand space clear of the send controls.
+    // Collisions stay ON so that preference yields when the space is not actually there - a pinned placement on a phone put a 24rem menu off the left edge, and a surface the viewport has clipped protects nothing.
     <DropdownMenuContent
       align="end"
       side="top"
@@ -533,12 +504,8 @@ function ProfileRateLimitMenuContent({
       onKeyDownCapture={(event) => {
         if (!PREVIEW_NAVIGATION_KEYS.has(event.key)) return;
         onKeyboardNavigation();
-        // A single-row menu auto-focuses its only item on open, so Radix's
-        // roving focus group wraps back onto the already-active item and
-        // never calls `.focus()` again - no second `focus` event ever
-        // fires to drive the usual onFocus-triggered preview. Detect that
-        // degenerate case here and preview the sole row directly instead
-        // of waiting on a focus event that will never come.
+        // A single-row menu auto-focuses its only item on open, so Radix's roving focus group wraps back onto the already-active item and never calls `.focus()` again - no second `focus` event ever fires to drive the usual onFocus-triggered preview.
+        // Detect that degenerate case here and preview the sole row directly instead of waiting on a focus event that will never come.
         if (rows.length !== 1) return;
         const activeElement = document.activeElement;
         if (activeElement instanceof HTMLElement) {

@@ -1,8 +1,3 @@
-/**
- * Direct projector parity + identity tests. Drives the projector by
- * mutating a Y.Doc through the public store API and asserting the
- * projected slices match a reference projection of the live doc.
- */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
@@ -151,8 +146,7 @@ function makeRoleClaimEntry(args: {
 
 /**
  * Build a deleted-artifact tombstone entry exactly as the host writes it into
- * `epic.deletedArtifacts`. `status` is only set for ticket/story (spec/review
- * pass null), mirroring `projectDeletedArtifact`.
+ * `epic.deletedArtifacts`.
  */
 function makeTombstone(args: {
   id: string;
@@ -310,12 +304,7 @@ describe("epic-projector", () => {
     const a = createArtifactInDocForTests(handle.doc, "spec", null);
     const b = createArtifactInDocForTests(handle.doc, "ticket", a);
     const c = createArtifactInDocForTests(handle.doc, "chat", null);
-    // Written to the DOC, not stamped as an overlay. This test asserts PARITY
-    // between the store's projection and a fresh full projection of the doc,
-    // and an optimistic overlay breaks that by construction - it is precisely
-    // a value the store shows and the doc does not yet have. `setEpicTitle`
-    // (which this replaced) was a doc write, so writing the doc is what keeps
-    // the test asserting what it always asserted.
+    // Written to the DOC, not stamped as an overlay.
     handle.doc.getMap("epic").set("title", "Parity Check");
     await handle.store.getState().renameArtifact(b, "Ticket B");
     void a;
@@ -799,9 +788,8 @@ describe("epic-projector", () => {
     });
 
     const after = handle.store.getState();
-    // Tombstones are not tree nodes, so the change must not set
-    // structuralTreeDirty: the tree slice and the live-artifact table keep
-    // their refs (no rebuild), down to the individual artifact slot.
+    // Tombstones are not tree nodes, so the change must not set structuralTreeDirty: the tree slice
+    // and the live-artifact table keep their refs (no rebuild), down to the individual artifact slot.
     expect(after.tree).toBe(treeBefore);
     expect(after.artifacts).toBe(artifactsBefore);
     expect(after.artifacts.byId).toBe(byIdBefore);

@@ -1,25 +1,5 @@
 /**
- * Route-bookkeeping regression: a same-tab search-only replace the epic
- * canvas fires to record tile focus (`replaceNestedFocusRoute` in
- * `use-epic-route-synchronization.ts`) carries no activation envelope, so it
- * used to be indistinguishable from a genuine external navigation. Issued
- * `void navigate(...)` from an effect, it can commit LATE - after the user
- * activated another tab - and the controller then read it as the user going
- * back to the epic, re-activating it and silently swallowing whatever the
- * user had just done (the staging 2026-08-31 "Start Page click does
- * nothing" defect).
- *
- * The fix marks that replace's history state
- * (`applyRouteBookkeeping`/`isRouteBookkeepingState`,
- * `@/lib/tab-navigation/route-bookkeeping`) so the controller can classify
- * "this tab recording its own view state" apart from "the user went
- * somewhere" - see `TabNavigationController.observeLocation`'s bookkeeping
- * branch, checked after history-step classification and before envelope
- * matching, and `resolveBookkeepingLocation`.
- *
- * Drives the real controller, coordinator, and stores; fakes only the router
- * commit boundary - same harness shape as
- * `external-resolution-backing-correction.test.ts`.
+ * Route-bookkeeping regression: a same-tab search-only replace the epic canvas fires to record tile focus (`replaceNestedFocusRoute` in `use-epic-route-synchronization.ts`) carries no activation envelope, so it used to be indistinguishable from a genuine.
  */
 import type {
   HistoryState,
@@ -214,9 +194,9 @@ function commitMarked(args: {
   );
 }
 
-/** Commits the exact envelope-carrying state the router would have applied
- * for a pending navigation's recorded options - the round trip the real
- * router does via its own state updater, reused here verbatim. */
+/**
+ * Commits the exact envelope-carrying state the router would have applied for a pending navigation's recorded options - the round trip the real router does via its own state updater, reused here verbatim.
+ */
 function commitAcknowledgement(args: {
   readonly navigate: UseNavigateResult<string>;
   readonly pathname: string;
@@ -282,9 +262,9 @@ function createDraft(id: string): TabRef {
   return { kind: "draft", id: draftId };
 }
 
-/** Activates a draft tab through the controller and commits the router-side
- * acknowledgement, matching the real activate -> navigate -> observe cycle
- * (case 2's flow), so cases 3-5 can start from an acknowledged draft. */
+/**
+ * Activates a draft tab through the controller and commits the router-side acknowledgement, matching the real activate -> navigate -> observe cycle (case 2's flow), so cases 3-5 can start from an acknowledged draft.
+ */
 function activateDraftAndAcknowledge(
   nav: DeferredNavigate,
   draftRef: TabRef,
@@ -483,10 +463,8 @@ describe("route bookkeeping: a marked replace cannot swallow user intent", () =>
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // Re-activating the ALREADY-ACTIVE tab issues a `focus-replace`, so a
-  // bookkeeping commit for that same tab arrives with a navigation pending.
-  // Seizing authority there would supersede it, and its own commit would then
-  // read as stale and be repaired away - losing the search it was carrying.
+  // Re-activating the ALREADY-ACTIVE tab issues a `focus-replace`, so a bookkeeping commit for that same tab arrives with a navigation pending.
+  // Seizing authority there would supersede it, and its own commit would then read as stale and be repaired away - losing the search it was carrying.
   it("a marked replace does not supersede a pending navigation to that same tab", () => {
     const a = openEpic("epic-a", "A");
     seedCommittedLayout({

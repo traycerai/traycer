@@ -22,9 +22,7 @@ import {
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * The tile's plane machine driven against the REAL media registry (ticket 09),
- * with only the peer connection faked - jsdom has none, and the seam the
- * registry offers for exactly this is its `createPeer` factory.
+ * The tile's plane machine driven against the REAL media registry (ticket 09), with only the peer connection faked - jsdom has none, and the seam the registry offers for exactly this is its `createPeer` factory.
  */
 interface FakePeer extends MediaPeer {
   readonly handlers: MediaPeerHandlers;
@@ -164,9 +162,7 @@ function setupWithRtt(readControlPlaneRttMs: () => number | null): PlaneState {
         statsReport: null,
         answerOffer: (sdp) => {
           peer.offers.push(sdp);
-          // Models gathering finishing before the answer settles, same as
-          // `webrtc-media-registry.test.ts`'s default harness - the A12
-          // batching mechanics are that module's own to pin.
+          // Models gathering finishing before the answer settles, same as `webrtc-media-registry.test.ts`'s default harness - the A12 batching mechanics are that module's own to pin.
           handlers.onIceGatheringComplete();
           return Promise.resolve(`answer-for:${sdp}`);
         },
@@ -225,10 +221,8 @@ function iceFrame(
 }
 
 /**
- * The host's answer to a DataChannel ping. NOT `pong`: that kind belongs to
- * the stream transport's heartbeat, which swallows it client-side before this
- * handler ever runs (ticket 18 - it is why this measurement read null in
- * production while this test was green against the wrong frame).
+ * The host's answer to a DataChannel ping.
+ * NOT `pong`: that kind belongs to the stream transport's heartbeat, which swallows it client-side before this handler ever runs (ticket 18 - it is why this measurement read null in production while this test was green against the wrong frame).
  */
 function inputPongFrame(): BrowserScreencastServerFrame {
   return { kind: "inputPong", hasBinaryPayload: false };
@@ -328,10 +322,8 @@ describe("video plane session", () => {
   });
 
   it("delegates duplicate and stale rounds to the registry", async () => {
-    // The session forwards every offer verbatim; the round rules live in the
-    // registry. Mutation: adding a same-id or monotonic guard HERE - the
-    // second copy would drift from the registry's and silently drop a
-    // legitimate same-id ICE-restart re-offer (the case below).
+    // The session forwards every offer verbatim; the round rules live in the registry.
+    // Mutation: adding a same-id or monotonic guard HERE - the second copy would drift from the registry's and silently drop a legitimate same-id ICE-restart re-offer (the case below).
     const plane = setup();
     plane.session.handleServerFrame(offerFrame(4, "offer-sdp"));
     plane.session.handleServerFrame(offerFrame(4, "offer-again"));
@@ -352,9 +344,7 @@ describe("video plane session", () => {
     plane.session.noteVideoFrame(null);
     expect(plane.states).toHaveLength(1);
 
-    // The host restarts ICE on the SAME negotiationId; its restart deadline
-    // is cancelled only by a fresh `live`, so the first decoded frame after
-    // the restart must re-report it - and only once.
+    // The host restarts ICE on the SAME negotiationId; its restart deadline is cancelled only by a fresh `live`, so the first decoded frame after the restart must re-report it - and only once.
     plane.session.handleServerFrame(offerFrame(3, "restart-sdp"));
     await settle();
     plane.session.noteVideoFrame(null);
@@ -526,9 +516,7 @@ describe("video plane session", () => {
     await settle();
     const sampledOnRoundOne = plane.statsFrames.length;
 
-    // The read is in flight (the interval fired, the promise has not settled)
-    // when the next round replaces it - and with it the latency window the
-    // continuation would otherwise summarize.
+    // The read is in flight (the interval fired, the promise has not settled) when the next round replaces it - and with it the latency window the continuation would otherwise summarize.
     vi.advanceTimersByTime(5_000);
     plane.session.handleServerFrame(offerFrame(2, "second"));
     await settle();
@@ -612,10 +600,7 @@ describe("video plane session", () => {
   });
 
   /**
-   * Ticket 17's telemetry (glass-to-glass latency + DataChannel RTT), driven
-   * over the same real `createVideoPlaneSession` harness above. The
-   * stale/duplicate-round rule itself is pinned once, at the registry layer
-   * (`webrtc-media-registry.test.ts`) - nothing here re-pins it.
+   * The stale/duplicate-round rule itself is pinned once, at the registry layer (`webrtc-media-registry.test.ts`) - nothing here re-pins it.
    */
   describe("telemetry (ticket 17)", () => {
     it("carries the real glass-to-glass median/p95 once frames report timings", async () => {
@@ -676,9 +661,7 @@ describe("video plane session", () => {
       const firstPayload: unknown = JSON.parse(reliable.sent[0] ?? "");
       expect(firstPayload).toEqual({ kind: "ping", hasBinaryPayload: false });
 
-      // Tick 2: the ping from tick 1 is still outstanding - abandoned, not
-      // replaced, since a late pong next to a fresh ping could not be told
-      // apart (no correlation id on the wire).
+      // Tick 2: the ping from tick 1 is still outstanding - abandoned, not replaced, since a late pong next to a fresh ping could not be told apart (no correlation id on the wire).
       vi.advanceTimersByTime(5_000);
       await settle();
       expect(reliable.sent).toHaveLength(1);
@@ -739,8 +722,7 @@ describe("video plane session", () => {
 const STALE_AFTER_MS = 8_000;
 
 /**
- * The post-occlusion window: the tile was hidden for minutes, came back at
- * `visibleSince`, and the last PRESENTED frame predates the whole stretch.
+ * The post-occlusion window: the tile was hidden for minutes, came back at `visibleSince`, and the last PRESENTED frame predates the whole stretch.
  */
 const RETURN = {
   visibleSince: 100_000,

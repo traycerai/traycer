@@ -12,10 +12,8 @@ import {
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 
 /**
- * `epic.setChatArchived` is a new ADDITIVE unary method. It must ride the
- * optional-capabilities channel, not the released floor: entering the floor
- * would be handshake-fatal for every peer that shipped before this method
- * existed (see the doc comment on `epicSetChatArchivedV10` in contracts.ts).
+ * `epic.setChatArchived` is a new ADDITIVE unary method.
+ * It must ride the optional-capabilities channel, not the released floor: entering the floor would be handshake-fatal for every peer that shipped before this method existed (see the doc comment on.
  */
 describe("epic.setChatArchived is optional, not floor", () => {
   it("is absent from RELEASED_FLOOR_METHOD_NAMES", () => {

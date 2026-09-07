@@ -307,11 +307,8 @@ function backingRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
 }
 
 /**
- * The ref the active item is FOCUSED on, which is what an activation of that
- * ref would already have produced. It differs from `backingRefOfLayout` in
- * exactly one state - a split focused on its EMPTY side, where the route is
- * still backed by the populated one - and there an activation is a real move,
- * not a no-op.
+ * The ref the active item is FOCUSED on, which is what an activation of that ref would already have produced.
+ * It differs from `backingRefOfLayout` in exactly one state - a split focused on its EMPTY side, where the route is still backed by the populated one - and there an activation is a real move, not a no-op.
  */
 function focusedRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
   const active = layout.items.find((item) => item.id === layout.activeItemId);
@@ -429,11 +426,8 @@ function intentForRef(
 }
 
 /**
- * The pathname `intentForRef` should read when deriving an intent from the REF
- * alone - the tab's own route, never whatever the caller happens to be looking
- * at. Settings is the one kind that keeps view state in its path, and the
- * strip already remembers that path; every other kind derives its intent from
- * the ref and its source store, so the pathname it is handed is inert.
+ * The pathname `intentForRef` should read when deriving an intent from the REF alone - the tab's own route, never whatever the caller happens to be looking at.
+ * Settings is the one kind that keeps view state in its path, and the strip already remembers that path; every other kind derives its intent from the ref and its source store, so the pathname it is handed is inert.
  */
 function refOwnPathname(ref: TabRef): string {
   if (ref.kind !== "settings") return "/";
@@ -585,10 +579,8 @@ export class TabNavigationController {
   }
 
   /**
-   * Commits a structural pair while the navigation controller still has the
-   * pre-pair selection. The ordinary activation path deliberately samples the
-   * layout itself; doing that after `pairTabs` would turn a cross-item visit
-   * into a focus-replace and make Back skip the original item.
+   * Commits a structural pair while the navigation controller still has the pre-pair selection.
+   * The ordinary activation path deliberately samples the layout itself; doing that after `pairTabs` would turn a cross-item visit into a focus-replace and make Back skip the original item.
    */
   activatePreparedPair(
     navigate: NavigateFn,
@@ -672,19 +664,13 @@ export class TabNavigationController {
 
     if (action === "BACK" || action === "FORWARD" || action === "GO") {
       this.establishExternalAuthority();
-      // The one caller that is a STEP: the user moved through their own
-      // history. Every other path into the resolver is the app arriving
-      // somewhere (a launch, a synchronization, an external commit), and the
-      // difference decides what the landing means - see the resolver's landing
-      // branch.
+      // The one caller that is a STEP: the user moved through their own history.
+      // Every other path into the resolver is the app arriving somewhere (a launch, a synchronization, an external commit), and the difference decides what the landing means - see the resolver's landing branch.
       this.resolveExternalLocation(location, false, true, navigate);
       return;
     }
 
-    // Bookkeeping commits carry no activation envelope, so they must be told
-    // apart BEFORE the external split - and a bookkeeping replace of an entry
-    // that carried an envelope inherits that stale envelope through its
-    // `state` spread, so this check also has to precede envelope matching.
+    // Bookkeeping commits carry no activation envelope, so they must be told apart BEFORE the external split - and a bookkeeping replace of an entry that carried an envelope inherits that stale envelope through its `state` spread, so this check also has to.
     if (isRouteBookkeepingState(location.state)) {
       this.resolveBookkeepingLocation(location, navigate);
       return;
@@ -862,10 +848,7 @@ export class TabNavigationController {
     }
 
     const activationTarget = this.activationTarget(requestedIntent);
-    // Same convention as `activateExternalTarget` below: `activateTab` can
-    // throw for a migrated-epic target whose identity resolution was raced
-    // out from under it (see `resolveMigratedEpicActivation` in
-    // tab-command-coordinator.ts) - treat that the same as a `null` result.
+    // Same convention as `activateExternalTarget` below: `activateTab` can throw for a migrated-epic target whose identity resolution was raced out from under it (see `resolveMigratedEpicActivation` in tab-command-coordinator.ts) - treat that the same as a.
     let activation: CoordinatedTabActivation | null;
     try {
       activation = tabCommandCoordinator.activateTab(activationTarget);
@@ -999,10 +982,8 @@ export class TabNavigationController {
   }
 
   /**
-   * History is the only top-level tab whose view state is carried in route
-   * search. Reactivating it must start from its last committed search, not the
-   * unrelated route we are leaving. A caller reducer (for example, clearing a
-   * modal overlay) is therefore applied to that committed snapshot.
+   * History is the only top-level tab whose view state is carried in route search.
+   * Reactivating it must start from its last committed search, not the unrelated route we are leaving.
    */
   private activationSearch(
     intent: TabNavigationIntent,
@@ -1029,9 +1010,7 @@ export class TabNavigationController {
     if (preparation === null) return null;
     const canvas = useEpicCanvasStore.getState();
     if (preparation.kind === "open-tile") {
-      // `commitWithoutNavigation`: this target is folded into the tab
-      // navigation envelope being built here, so the open must not issue a
-      // route write of its own.
+      // `commitWithoutNavigation`: this target is folded into the tab navigation envelope being built here, so the open must not issue a route write of its own.
       return openTileWithNavigation(
         tileIntent(
           preparation.node,
@@ -1212,9 +1191,8 @@ export class TabNavigationController {
       }
     }
     this.rememberAcknowledgedRoute(pending, location);
-    // Once the exact entry is acknowledged, rollback and one-shot placement
-    // are complete. The session+serial envelope classifies any later delivery,
-    // so the full record can compact even if TanStack's promise settles later.
+    // Once the exact entry is acknowledged, rollback and one-shot placement are complete.
+    // The session+serial envelope classifies any later delivery, so the full record can compact even if TanStack's promise settles later.
     this.pending.delete(pending.envelope.token);
   }
 
@@ -1362,17 +1340,7 @@ export class TabNavigationController {
     };
   }
 
-  /**
-   * The intent for `ref` when no remembered or pending route named one.
-   *
-   * `intentForRef` derives part of its answer from the pathname and search it
-   * is handed - the Settings SECTION comes from the path, an Epic's `focus*`
-   * from the search - so seeding it with a location that routes SOMEWHERE ELSE
-   * copies one tab's view state onto another tab's route. Every correction
-   * reaches here holding the location that just failed to resolve, so that
-   * seed is trusted only while it actually routes to `ref`; otherwise the
-   * intent is built from the ref and its source stores alone.
-   */
+  /** The intent for `ref` when no remembered or pending route named one. */
   private canonicalRefIntent(ref: TabRef): TabNavigationIntent | null {
     const location = this.currentLocation;
     if (location !== null) {
@@ -1457,11 +1425,7 @@ export class TabNavigationController {
   }
 
   /**
-   * @param historyStep - whether this location was reached by the user STEPPING
-   * through their own history (back, forward, or a controller `go`), as opposed
-   * to the app arriving somewhere: a launch, a synchronization, or an external
-   * commit. Only the landing branch reads it, and only because those two cases
-   * want opposite things from the same pathname.
+   * @param historyStep - whether this location was reached by the user STEPPING through their own history (back, forward, or a controller `go`), as opposed to the app arriving somewhere: a launch, a synchronization, or an external commit.
    */
   private resolveExternalLocation(
     location: TabNavigationLocation,
@@ -1503,17 +1467,8 @@ export class TabNavigationController {
   }
 
   /**
-   * A commit `use-epic-route-synchronization` marked as same-tab bookkeeping:
-   * a replace recording tile-focus search onto the route its tab was already
-   * showing. While that tab is still the focused one this IS the ordinary
-   * external fast path, so it is delegated verbatim. But the replace is
-   * issued fire-and-forget from an effect, so it can commit LATE - after the
-   * user activated another tab - and then it is stale by construction, never
-   * user intent. Treating it as external is what silently swallowed a draft
-   * activation (staging 2026-08-31): the external authority superseded the
-   * pending activation, the epic tab was re-activated, and the activation's
-   * own commit then read as stale and was repaired away - a dead click with
-   * nothing on screen or in diagnostics to show for it.
+   * A commit `use-epic-route-synchronization` marked as same-tab bookkeeping: a replace recording tile-focus search onto the route its tab was already showing.
+   * While that tab is still the focused one this IS the ordinary external fast path, so it is delegated verbatim.
    */
   private resolveBookkeepingLocation(
     location: TabNavigationLocation,
@@ -1524,24 +1479,14 @@ export class TabNavigationController {
       routed !== null &&
       refsEqual(focusedRefOfLayout(currentLayout()), routed.ref)
     ) {
-      // Seizing authority is for commits that REPLACE what the app is doing,
-      // and bookkeeping never is - so it is taken only when nothing is in
-      // flight. A pending navigation to this same tab (re-activating the
-      // active tab issues a `focus-replace`) would otherwise be superseded
-      // here, and its own commit would then arrive with a lower serial, read
-      // as stale, and be repaired away - losing the search / nested-focus
-      // state it was carrying. The delegate below needs no authority of its
-      // own: for the focused ref it is the #1474 fast path, which only
-      // remembers the route.
+      // Seizing authority is for commits that REPLACE what the app is doing, and bookkeeping never is - so it is taken only when nothing is in flight.
+      // A pending navigation to this same tab (re-activating the active tab issues a `focus-replace`) would otherwise be superseded here, and its own commit would then arrive with a lower serial, read as stale, and be repaired away - losing the search /.
       if (this.pending.size === 0) this.establishExternalAuthority();
       this.resolveExternalLocation(location, false, false, navigate);
       return;
     }
-    // Stale. A pending user navigation will re-assert the URL when its own
-    // commit lands, so touching the authority here would only supersede it -
-    // the exact failure this branch exists to prevent. With nothing pending,
-    // the URL is left naming a tab the layout is not showing; repair it back
-    // toward what the strip renders, the same aim every correction takes.
+    // Stale.
+    // A pending user navigation will re-assert the URL when its own commit lands, so touching the authority here would only supersede it - the exact failure this branch exists to prevent.
     if (this.pending.size > 0) return;
     const backing = this.backingNavigation();
     if (destinationMatches(backing.destination, location)) return;
@@ -1562,15 +1507,7 @@ export class TabNavigationController {
     if (ref.kind !== "epic") return;
     const tab = useEpicCanvasStore.getState().tabsById[ref.id];
     if (tab !== undefined && tab.epicId === routed.epicId) {
-      // The layout is already focused on this exact tab, so there is nothing
-      // to activate - this is the same tab committing a new `search` (a
-      // tile-focus replace, say), which is the highest-traffic external path
-      // there is. Taking it through the command coordinator anyway is what
-      // makes it fail while a transaction is open ("Tab commands cannot be
-      // re-entered"), and a failure here corrects the URL away from a
-      // perfectly good epic route. Deliberately keyed on the FOCUSED ref
-      // rather than the backing one: a split focused on its empty side still
-      // backs this route, and re-focusing it there is a real move.
+      // The layout is already focused on this exact tab, so there is nothing to activate - this is the same tab committing a new `search` (a tile-focus replace, say), which is the highest-traffic external path there is.
       if (refsEqual(focusedRefOfLayout(currentLayout()), ref)) {
         const intent = intentForRef(ref, location.pathname, location.search);
         if (intent !== null) this.rememberRoute(ref, intent, location.search);
@@ -1670,21 +1607,7 @@ export class TabNavigationController {
     useTabsStore.getState().rememberSystemTabPath(kind, location.pathname);
   }
 
-  /**
-   * The landing, reached because the user STEPPED here rather than because the
-   * app arrived here.
-   *
-   * Home on this shell is the landing DRAFT surface, so "show me Home" is an
-   * activation like any other, not the absence of one - a populated strip
-   * always has exactly one active item (`repairLayout` restores that invariant
-   * after every commit), and a step that activated nothing left the previous
-   * tab on screen while the route moved underneath it.
-   *
-   * IDEMPOTENT, which is what makes it safe to run on every step. The existing
-   * landing draft is named explicitly, so repeated steps back to `/` re-activate
-   * the one Home instead of stacking a new draft per press; only a session that
-   * has never had one mints, through the same activation `/draft/new` runs.
-   */
+  /** The landing, reached because the user STEPPED here rather than because the app arrived here. */
   private resolveSteppedLanding(): void {
     this.activateExternalTarget({
       kind: "draft",
@@ -1745,16 +1668,8 @@ export class TabNavigationController {
   }
 
   /**
-   * The correction for a location the resolver could not land on. It aims at
-   * what the strip is actually SHOWING, not at the literal landing: the tab
-   * strip renders from the layout, so replacing a live tab route with `/` over
-   * a populated layout moves the URL somewhere nothing on screen agrees with,
-   * and the drift stays invisible until the next thing to read the URL - a
-   * modal push and its `history.back()` - resolves against it.
-   *
-   * `backingNavigation()` already degrades to `/` when the layout has no
-   * backing ref or no intent for it, so a genuinely empty state still lands
-   * on Home.
+   * The correction for a location the resolver could not land on.
+   * It aims at what the strip is actually SHOWING, not at the literal landing: the tab strip renders from the layout, so replacing a live tab route with `/` over a populated layout moves the URL somewhere nothing on screen agrees with, and the drift stays.
    */
   private issueLandingCorrection(
     location: TabNavigationLocation,

@@ -93,16 +93,10 @@ function recordPrepareVersion(hostId: string, minor: number): void {
   });
 }
 
-/**
- * Captured before any test overrides `requestPick`, so each test starts from
- * the real store rather than from whatever the previous one installed.
- */
+/** Captured before any test overrides `requestPick`, so each test starts from the real store rather than from whatever the previous one installed. */
 const INITIAL_PICKER_STATE = useRemoteFolderPickerStore.getState();
 
-/**
- * The picker is handed a requester PINNED to the dispatch host, not the
- * caller's client, so identity is asserted by which host it is bound to.
- */
+/** The picker is handed a requester PINNED to the dispatch host, not the caller's client, so identity is asserted by which host it is bound to. */
 function pickedHostIdOf(requestPick: Mock): string | null {
   const passed = requestPick.mock.calls[0]?.[0] as
     | HostClient<HostRpcRegistry>

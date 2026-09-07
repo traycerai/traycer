@@ -7,23 +7,8 @@ import {
 } from "../host/pid-metadata";
 import { isProcessAlive } from "../store/cli-lock";
 
-// Bounded, purely-local health probe `commands/host-update.ts` runs after
-// the install-dir swap + service restart to decide whether the new host
-// is actually alive before it deletes the update-progress marker - and,
-// on failure, whether to roll back to the previous version.
-//
-// Deliberately narrower than Doctor's `probeHostRpc` (`doctor/engine.ts`):
-// it never resolves auth credentials, never opens an authenticated RPC
-// round-trip, and never talks to anything but 127.0.0.1. That is the
-// binary-health / coordination-server(CS)-reachability separation the
-// rollback decision depends on - a CS blip (or an auth/token-refresh
-// hiccup, which would otherwise dial `authnBaseUrl` on an UNAUTHORIZED
-// retry) must never look like "the new binary is broken" and trigger an
-// unnecessary rollback. This module makes ZERO network calls beyond a
-// loopback TCP dial: it reads local pid metadata, checks the pid is
-// alive, and opens a raw TCP connection to the host's own loopback port.
-// It does not import `internal/host-rpc.ts`, `internal/host-auth.ts`, or
-// anything that could reach `authnBaseUrl` / the coordination server.
+// Bounded, purely-local health probe `commands/host-update.ts` runs after the install-dir swap + service restart to decide whether the new host is actually alive before it deletes the update-progress marker - and, on failure, whether to roll back to the previous version.
+// Deliberately narrower than Doctor's `probeHostRpc` (`doctor/engine.ts`): it never resolves auth credentials, never opens an authenticated RPC round-trip, and never talks to anything but 127.0.0.1.
 
 export interface HealthProbeResult {
   readonly healthy: boolean;

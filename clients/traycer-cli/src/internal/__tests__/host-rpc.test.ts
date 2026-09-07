@@ -32,13 +32,7 @@ import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host"
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { worktreeDeleteByPathServerFrameSchemaV12 } from "@traycer/protocol/host/worktree-delete-stream";
 
-/**
- * Mirrors `getLatestContract`'s traversal (highest major -> its
- * `latestMinor`) for a stream method registry - there is no shared helper
- * because `hostStreamRpcRegistry`'s validated shape carries no
- * `downgradePathsFromLatest`, so it fails `getLatestContract`'s
- * `MethodVersionRegistry` constraint outright.
- */
+/** Mirrors `getLatestContract`'s traversal (highest major -> its `latestMinor`) for a stream method registry - there is no shared helper because `hostStreamRpcRegistry`'s validated shape carries no `downgradePathsFromLatest`, so it fails `getLatestContract`'s `MethodVersionRegistry` constraint outright. */
 function latestStreamServerFrameSchema<
   Registry extends UncheckedStreamMethodVersionRegistry,
 >(registry: StreamMethodVersionRegistry<Registry>): ZodType {
@@ -51,15 +45,8 @@ function latestStreamServerFrameSchema<
   return majorLine.versions[majorLine.latestMinor].contract.serverFrameSchema;
 }
 
-// Mock the WS transport + the credentials-store FACTORY; exercise the real
-// store-backed revalidator + withCommitRetry + shared auth-aware wrapper so this
-// verifies the CLI wiring (auth resolution, on-401 → locked `rotate` → lease
-// rotate → retry) end-to-end without a socket. The rotate spend itself (the
-// locked WAL commit) is covered in the protocol `credentials-mutation` tests.
-//
-// `requestMock` is declared via `vi.hoisted` so it exists when the hoisted
-// `vi.mock` factory below captures it. `WsRpcClient` is mocked as a class so
-// `new WsRpcClient(...)` is constructable; every instance shares `requestMock`.
+// Mock the WS transport + the credentials-store FACTORY; exercise the real store-backed revalidator + withCommitRetry + shared auth-aware wrapper so this verifies the CLI wiring (auth resolution, on-401 → locked `rotate` → lease rotate → retry) end-to-end without a socket.
+// The rotate spend itself (the locked WAL commit) is covered in the protocol `credentials-mutation` tests.
 const { requestMock, rpcClientConstructorMock } = vi.hoisted(() => ({
   requestMock: vi.fn(),
   rpcClientConstructorMock: vi.fn(),
@@ -88,9 +75,7 @@ vi.mock(
         typeof import("../../../../shared/host-transport/ws-rpc-client")
       >();
     return {
-      // Only `WsRpcClient` is replaced; the real
-      // `HOST_POST_OPEN_ATTESTATION_WINDOW_MS` stays, so the constructor
-      // assertion below reads the value the CLI actually ships.
+      // Only `WsRpcClient` is replaced; the real `HOST_POST_OPEN_ATTESTATION_WINDOW_MS` stays, so the constructor assertion below reads the value the CLI actually ships.
       ...actual,
       WsRpcClient: class {
         constructor(options: unknown) {
@@ -107,9 +92,7 @@ vi.mock("../host-auth", () => ({
   resolveHostAuth: vi.fn(),
 }));
 
-// Mock only the store FACTORY; the real store-backed revalidator + withCommitRetry
-// run, so `rotate`'s outcome (driven per-test) flows through the actual on-401
-// mapping and lease rotation.
+// Mock only the store FACTORY; the real store-backed revalidator + withCommitRetry run, so `rotate`'s outcome (driven per-test) flows through the actual on-401 mapping and lease rotation.
 vi.mock("../../store/credentials-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../store/credentials-store")>();
@@ -231,12 +214,8 @@ describe("callHostRpc", () => {
       scope: "user",
     });
 
-    // The CLI gives up on a response after 15s, but a stalled host only attests
-    // that it never dispatched the request once its own 30s post-`openAck`
-    // timer finally runs - measured at 35.7-40.8s in issue #726, and up to
-    // ~45s for the profiled stall class. Without a window that outlasts that,
-    // the CLI closes the socket early and the recoverable stall surfaces as an
-    // ambiguous, non-retryable failure.
+    // The CLI gives up on a response after 15s, but a stalled host only attests that it never dispatched the request once its own 30s post-`openAck` timer finally runs - measured at 35.7-40.8s in issue #726, and up to ~45s for the profiled stall class.
+    // Without a window that outlasts that, the CLI closes the socket early and the recoverable stall surfaces as an ambiguous, non-retryable failure.
     expect(rpcClientConstructorMock).toHaveBeenCalledTimes(1);
     const options: unknown = rpcClientConstructorMock.mock.calls[0]?.[0];
     expect(options).toMatchObject({
@@ -254,9 +233,8 @@ describe("callHostRpc", () => {
       scope: "user",
     });
 
-    // Latency-bound IDE hooks never redial, so waiting for an attestation they
-    // cannot act on would only inflate time-to-failure. The policy therefore
-    // opts out of the window entirely while keeping the same 15s frame budget.
+    // Latency-bound IDE hooks never redial, so waiting for an attestation they cannot act on would only inflate time-to-failure.
+    // The policy therefore opts out of the window entirely while keeping the same 15s frame budget.
     expect(rpcClientConstructorMock).toHaveBeenCalledTimes(1);
     const options: unknown = rpcClientConstructorMock.mock.calls[0]?.[0];
     expect(options).toMatchObject({
@@ -469,22 +447,14 @@ describe("parseCanonicalHostResponse", () => {
     expect(parsed).toEqual(value);
   });
 
-  // This is the one case the type system cannot catch: `...Schema` (no
-  // version suffix) is the LIVE-line alias, redefined onto each new major as
-  // the previous one freezes. It is STRUCTURALLY IDENTICAL to `...SchemaV5`
-  // today, so it satisfies `ZodType<ResponseOfMethod<...>>` and compiles at
-  // the call site - but it is a DIFFERENT object, free to stop tracking
-  // canonical the moment a v6 line ships. Only the runtime identity check in
-  // `assertCanonicalResponseSchema` catches that drift; a type-level
-  // assertion would pass this call unchanged.
+  // This is the one case the type system cannot catch: `...Schema` (no version suffix) is the LIVE-line alias, redefined onto each new major as the previous one freezes.
+  // It is STRUCTURALLY IDENTICAL to `...SchemaV5` today, so it satisfies `ZodType<ResponseOfMethod<...>>` and compiles at the call site - but it is a DIFFERENT object, free to stop tracking canonical the moment a v6 line ships.
   it("throws when handed a schema that is structurally identical to canonical but not the same object (the runtime backstop)", () => {
     const value = {
       rateLimits: { provider: "codex", available: false, reason: "timeout" },
       usageUpdatedAt: null,
     };
-    // Sanity: the base alias really does accept the same payload as V5 today -
-    // otherwise this test would be catching a type/shape bug, not the
-    // identity backstop it exists to prove.
+    // Sanity: the base alias really does accept the same payload as V5 today - otherwise this test would be catching a type/shape bug, not the identity backstop it exists to prove.
     expect(
       agentGetProviderProfileRateLimitsResponseSchema.safeParse(value).success,
     ).toBe(true);
@@ -499,12 +469,8 @@ describe("parseCanonicalHostResponse", () => {
 });
 
 describe("parseHostResponse creep guard", () => {
-  // Empty, as intended: #1508 carved out `workspace-list.ts` and
-  // `worktree-create.ts` while PR #1505 held them, and #1505 converted both to
-  // `parseCanonicalHostResponse` on landing. Do not add to it without
-  // justification - use `parseCanonicalHostResponse` instead. A call site that
-  // genuinely means a specific historical version (monitor.ts's frame decode)
-  // lives outside this directory.
+  // Empty, as intended: #1508 carved out `workspace-list.ts` and `worktree-create.ts` while PR #1505 held them, and #1505 converted both to `parseCanonicalHostResponse` on landing.
+  // Do not add to it without justification - use `parseCanonicalHostResponse` instead.
   const ALLOWLIST = new Set<string>([]);
 
   it("no command calls the un-canonical parseHostResponse", () => {
@@ -535,20 +501,11 @@ describe("canonical stream frame pairing (worktree.deleteByPath)", () => {
     ).toBe(worktreeDeleteByPathServerFrameSchemaV12);
   });
 
-  // The v1.0 -> v1.1 diff on this method is an OPTIONAL field
-  // (`worktreeBusyHoldersWireFieldSchema` is `.optional().catch(undefined)`)
-  // added to one arm of a discriminated union, not a new required field on
-  // the whole response. A `ZodType<...>` compile-time constraint would not
-  // reject the v1.0 schema in that shape, so this identity check (mirroring
-  // `canonicalResponseSchemaFor`'s unary-registry traversal, but over
-  // `hostStreamRpcRegistry`) is the only thing that would have caught this
-  // specific skew.
+  // The v1.0 -> v1.1 diff on this method is an OPTIONAL field (`worktreeBusyHoldersWireFieldSchema` is `.optional().catch(undefined)`) added to one arm of a discriminated union, not a new required field on the whole response.
+  // A `ZodType<...>` compile-time constraint would not reject the v1.0 schema in that shape, so this identity check (mirroring `canonicalResponseSchemaFor`'s unary-registry traversal, but over `hostStreamRpcRegistry`) is the only thing that would have caught this specific skew.
   it("scans commands/*.ts for hand-picked ServerFrameSchemaV<N> usage outside the negotiated-dispatch allowlist", () => {
-    // `monitor.ts` parses agentInboxSubscribeServerFrameSchemaV10/V11/V12 (plus
-    // the base envelope) ON PURPOSE - that is per-connection negotiated-version
-    // dispatch (try newest, fall back), not a stale call site. `worktree-delete.ts`
-    // names `worktreeDeleteByPathServerFrameSchemaV12` explicitly, verified
-    // canonical by the assertion above.
+    // `monitor.ts` parses agentInboxSubscribeServerFrameSchemaV10/V11/V12 (plus the base envelope) ON PURPOSE - that is per-connection negotiated-version dispatch (try newest, fall back), not a stale call site.
+    // `worktree-delete.ts` names `worktreeDeleteByPathServerFrameSchemaV12` explicitly, verified canonical by the assertion above.
     const ALLOWLIST = new Set(["monitor.ts", "worktree-delete.ts"]);
     const versionedFrameSchemaPattern = /[A-Za-z]+ServerFrameSchemaV\d+/;
     const offenders: string[] = [];

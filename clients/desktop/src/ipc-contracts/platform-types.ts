@@ -29,12 +29,6 @@ export interface ProcessMetricsSnapshot {
   readonly cpuUsage: { readonly user: number; readonly system: number };
 }
 
-/**
- * One V8 isolate inside the renderer process: the page itself, or one of the
- * dedicated workers it has spawned. `url` is the isolate's script URL - for a
- * worker, the chunk it was started from, which is what tells an epic runtime
- * worker apart from a diff highlighter worker.
- */
 export interface RendererJsHeapIsolate {
   readonly kind: "page" | "worker";
   readonly url: string;
@@ -42,27 +36,11 @@ export interface RendererJsHeapIsolate {
   readonly usedBytes: number;
   /** `Runtime.getHeapUsage` - pages V8 has committed for this isolate. */
   readonly totalBytes: number;
-  /**
-   * `Runtime.getHeapUsage` - memory the embedder (Blink) holds for this
-   * isolate, outside the JS heap the two fields above measure. `null` when the
-   * protocol build does not report it (both fields are experimental).
-   */
   readonly embedderBytes: number | null;
-  /**
-   * `Runtime.getHeapUsage` - backing stores for `ArrayBuffer`s and WebAssembly
-   * memory. A diff highlighter worker's Oniguruma engine lives here, not in
-   * `usedBytes`, so a row without it undercounts exactly the off-main-thread
-   * memory this readout exists to attribute.
-   */
   readonly backingStorageBytes: number | null;
 }
 
-/**
- * The renderer's JS heaps, one row per isolate. A main-thread heap snapshot
- * sees the page's isolate only; a renderer that runs a dozen dedicated workers
- * can hold most of its memory where that snapshot cannot look. This is the
- * readout that says where.
- */
+/** A main-thread heap snapshot sees the page's isolate only; a renderer that runs a dozen dedicated workers can hold most of its memory where that snapshot cannot look. */
 export interface RendererJsHeapBreakdown {
   readonly capturedAt: number;
   /** The whole renderer process's working set, or `null` if it has no metric. */
@@ -104,16 +82,7 @@ export interface PendingCertificateError {
   readonly observedAt: number;
 }
 
-/**
- * A host whose registry-published Noise static key no longer matches the one
- * this client pinned on first sight (browser-security-hardening H11).
- *
- * The host has ALREADY been refused in main by the time this is emitted -
- * nothing a surface does re-admits it - so this exists to say so rather than
- * to ask. `remedy` carries the one honest recovery there is: delete the pin
- * record at `pinLocation`. Structured-clone-safe by construction; the typed
- * `HostKeyPinMismatchError` does not cross the boundary.
- */
+/** A host whose registry-published Noise static key no longer matches the one this client pinned on first sight (browser-security-hardening H11). */
 export interface HostKeyPinMismatch {
   readonly hostId: string;
   readonly pinnedKey: string;
@@ -145,22 +114,12 @@ export interface FileSaveInput {
   readonly bytes: ArrayBuffer;
 }
 
-/**
- * What `fileSave` hands back once the bytes are on disk. `name` is the base
- * name the user settled on in the save dialog (display copy for the toast);
- * `path` is the absolute location, which is the only thing `fileOpenSaved`
- * accepts - the renderer never composes or edits it.
- */
 export interface FileSaveResult {
   readonly name: string;
   readonly path: string;
 }
 
-/**
- * Which surface a trust grant applies to. Grants are scope-specific: trusting
- * a cert for an in-app browser tab never grants it to the app shell itself,
- * so listing and revoking must carry the scope too.
- */
+/** Grants are scope-specific: trusting a cert for an in-app browser tab never grants it to the app shell itself, so listing and revoking must carry the scope too. */
 export type CertificateTrustScope = "app-shell" | "browser";
 
 export interface TrustedCertificateEntry {

@@ -8,14 +8,7 @@ import {
   epicSubscribeV10,
 } from "@traycer/protocol/host/epic/subscribe";
 
-/**
- * `epic.subscribe@1.0` frame fixtures.
- *
- * Covers every frame kind the contract declares, including the binary-bearing
- * frames (`hasBinaryPayload: true`) that ride a paired binary payload and the
- * pure-text frames (`pong`, `permissionChanged`, `ping`) whose
- * `hasBinaryPayload` is pinned to the `false` literal.
- */
+/** `epic.subscribe@1.0` frame fixtures. */
 
 describe("epic.subscribe@1.0 server frames", () => {
   it("parses a binary-bearing snapshot frame", () => {
@@ -175,14 +168,8 @@ describe("epic.subscribe@1.2 snapshot room identity (@1.0/@1.1 meta frozen)", ()
   });
 
   it("parses a snapshot frame with no roomId at all under @1.2", () => {
-    // Pins `.optional()` on `roomId`. The GUI client parses every server
-    // frame with the LATEST schema regardless of the negotiated minor
-    // (`epic-stream-client.ts`), so an @1.0/@1.1 host's snapshot frame -
-    // which never carries this key - must stay parseable at a @1.2-capable
-    // client. If `roomId` were ever tightened to required, that frame would
-    // fail to parse, and the client's parse-failure path returns silently,
-    // leaving the canvas stuck on its loading skeleton forever. This test is
-    // what catches a future "tighten roomId to required" edit.
+    // Pins `.optional()` on `roomId`.
+    // If `roomId` were ever tightened to required, that frame would fail to parse, and the client's parse-failure path returns silently, leaving the canvas stuck on its loading skeleton forever.
     const parsed = epicSubscribeServerFrameSchemaV12.parse({
       kind: "snapshot",
       epicId: "epic-1",
@@ -766,9 +753,7 @@ describe("epic.subscribe dirtySnapshot + dirty deltas version gate (@1.0 frozen,
       expect(() =>
         epicSubscribeServerFrameSchemaV11.parse(fixture),
       ).not.toThrow();
-      // The @1.2 union was built by splicing a new snapshot frame in front of
-      // the shared non-snapshot frames - this proves nothing was lost in
-      // that splice.
+      // The @1.2 union was built by splicing a new snapshot frame in front of the shared non-snapshot frames - this proves nothing was lost in that splice.
       expect(() =>
         epicSubscribeServerFrameSchemaV12.parse(fixture),
       ).not.toThrow();

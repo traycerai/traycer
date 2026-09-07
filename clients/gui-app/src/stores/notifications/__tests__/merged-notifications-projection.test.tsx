@@ -720,9 +720,8 @@ describe("cloud feed projection authority", () => {
       });
     });
 
-    // Nothing was un-read: the read marker still belongs to `entry-a`, which
-    // is simply no longer visible. The reopen is a different entry with its
-    // own null markers, so it is unread by construction.
+    // Nothing was un-read: the read marker still belongs to `entry-a`, which is simply no longer
+    // visible.
     expect(result.current.ids).toEqual([cloudNotificationFeedId("entry-b")]);
     expect(result.current.reopened?.readAt).toBeNull();
     expect(result.current.superseded).toBeNull();
@@ -844,9 +843,8 @@ describe("Recent filters leave Attention invariant", () => {
   });
 
   it("drops a global row from Recent immediately after store markAsRead while unreadOnly is active", () => {
-    // Regression for the T03 review: reading global entries via the store
-    // must invalidate the filtered Recent projection. Going through
-    // useMergedNotificationsActions would mask a missing entries dep.
+    // Regression for the T03 review: reading global entries via the store must invalidate the filtered
+    // Recent projection. Going through useMergedNotificationsActions would mask a missing entries dep.
     seedGlobal([globalEntry("collab-unread", 60, null)]);
 
     act(() => {
@@ -944,7 +942,7 @@ describe("useNotificationBellState", () => {
       readonly state: NotificationBellState;
       readonly expected: string;
     }> = [
-      // unknown shares clear's label — both render a plain bell with no indicator.
+      // unknown shares clear's label - both render a plain bell with no indicator.
       { state: { kind: "unknown" }, expected: "Notifications" },
       { state: { kind: "clear" }, expected: "Notifications" },
       {

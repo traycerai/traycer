@@ -86,9 +86,8 @@ function readinessController(
   return {
     readinessFor: () => readiness,
     defaultHostPresentation: READINESS_STUB_PRESENTATION,
-    // Post-latch: the app has been ready at least once this window, so a
-    // narrator-owned kind (loading-host) suppresses the toast behind its
-    // dead-pointer-events overlay rather than blocking the app from mounting.
+    // Post-latch: the app has been ready at least once this window, so a narrator-owned kind (loading-host)
+    // suppresses the toast behind its dead-pointer-events overlay rather than blocking the app from mounting.
     hasBeenDefaultHostReady: true,
   };
 }
@@ -123,12 +122,7 @@ function resetStores(): void {
   window.localStorage.clear();
 }
 
-/**
- * Minimal `SystemTabModalApi`. Published by default so the existing suite
- * keeps testing gates other than `settingsReachable` - the controller only
- * ever reads it through `useSystemTabModalApiPublished()`, never calls a
- * method on it, since `@/lib/settings-navigation` is mocked above.
- */
+/** Published by default so the existing suite keeps testing gates other than `settingsReachable`. */
 function buildFakeSystemTabModalApi(): SystemTabModalApi {
   return {
     active: null,
@@ -155,10 +149,8 @@ describe("<LoginImportAnnouncementController />", () => {
     cleanup();
     resetStores();
     setSystemTabModalApi(null);
-    // "the primary action..." test spies on the real
-    // useBrowserFocusStore.getState().requestImportLogins with
-    // mockImplementation; nothing here auto-restores it, so a leaked spy
-    // would silently swallow that store's real action in every later test.
+    // "the primary action..." test spies on the real useBrowserFocusStore.getState.requestImportLogins with
+    // mockImplementation.
     vi.restoreAllMocks();
     navigateToSettingsSectionMock.mockReset();
   });
@@ -331,9 +323,8 @@ describe("<LoginImportAnnouncementController />", () => {
     );
     expect(toastMock).toHaveBeenCalledTimes(1);
 
-    // The narrator gate is transient - a toast under its dialog is inert
-    // rather than wrong, and comes back live when the dialog goes. It must
-    // not take the toast down the way saving-off, sign-out and the tour do.
+    // The narrator gate is transient - a toast under its dialog is inert rather than wrong, and comes back live
+    // when the dialog goes. It must not take the toast down the way saving-off, sign-out and the tour do.
     harness.rerenderReadiness(LOADING_HOST_READINESS);
 
     expect(toastMock.dismiss).not.toHaveBeenCalled();

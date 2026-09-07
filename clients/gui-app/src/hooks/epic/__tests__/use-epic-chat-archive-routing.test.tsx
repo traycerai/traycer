@@ -1,11 +1,4 @@
-/**
- * Archive and delete must address the chat's owning host, not the viewing
- * epic session. A local epic list can include foreign replicas; writing those
- * through the session host is the defect this suite pins.
- *
- * Drives the real hooks against a real `HostClient` over `MockHostMessenger`,
- * a real `QueryClient`, and a real open-epic store.
- */
+/** Archive and delete must address the chat's owning host, not the viewing epic session. */
 import { type ReactNode, useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";

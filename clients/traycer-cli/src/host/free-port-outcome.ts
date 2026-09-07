@@ -1,40 +1,18 @@
 import type { KillConflictingPortOwnerResult } from "./free-port-kill";
 import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 
-// Shared failure shaping for the two port-conflict repairs (`host free-port`
-// and `host free-port-and-restart`).
-//
-// Both commands used to return `exitCode: 0` whenever `killConflictingPortOwner`
-// came back with a `killError`, demoting a failed repair to a warning string
-// inside a success envelope; `free-port-and-restart` additionally restarted
-// the host while the foreign listener was still bound. Doctor and Desktop
-// could therefore report a completed port-conflict repair over a conflict
-// that was never resolved (audit finding CLI-011).
-//
-// The shaping lives here rather than in either command because the two must
-// not drift: they are the same repair, and Desktop picks between them purely
-// on whether it is also driving the restart itself
-// (`host-controller.ts#freePortAndRestart`). One place to change means one
-// contract for both, and one set of codes for callers to switch on.
+// Shared failure shaping for the two port-conflict repairs (`host free-port` and `host free-port-and-restart`).
+// Both commands used to return `exitCode: 0` whenever `killConflictingPortOwner` came back with a `killError`, demoting a failed repair to a warning string inside a success envelope; `free-port-and-restart` additionally restarted the host while the foreign listener was still bound.
 
-// Maps a non-`released` verification verdict onto the structured CLI error
-// that ends the command. Returns `null` when the repair genuinely succeeded,
-// so callers read as `const failure = portRepairFailure(...); if (failure !== null) throw failure;`.
-//
-// Every message names the pid and port, states what was and was not achieved,
-// and ends with something the reader can do. `host free-port-and-restart` is a
-// documented public command whose exact invocation `host doctor` prints for
-// people to copy, so these strings have a human audience, not just Desktop's
-// error toast.
+// Maps a non-`released` verification verdict onto the structured CLI error that ends the command.
+// Returns `null` when the repair genuinely succeeded, so callers read as `const failure = portRepairFailure(...); if (failure !== null) throw failure;`.
 export function portRepairFailure(opts: {
   readonly result: KillConflictingPortOwnerResult;
   readonly pid: number;
   readonly port: number;
   readonly commandName: string;
-  // Whether the caller would have restarted the host after a successful
-  // repair. Only affects copy: the reader needs to know the restart did NOT
-  // happen, because the previous behaviour was to restart regardless and the
-  // difference is the whole point of the fix.
+  // Whether the caller would have restarted the host after a successful repair.
+  // Only affects copy: the reader needs to know the restart did NOT happen, because the previous behaviour was to restart regardless and the difference is the whole point of the fix.
   readonly restartWasSkipped: boolean;
 }): CliError | null {
   const { result, pid, port, commandName } = opts;
@@ -54,19 +32,8 @@ export function portRepairFailure(opts: {
     restartSkipped: opts.restartWasSkipped,
   };
 
-  // A VERIFIED REPLACEMENT HOLDER OUTRANKS THE SIGNAL ERROR, and the order
-  // here is the whole point.
-  //
-  // These two conditions co-occur in the ESRCH race: the original owner exits
-  // between the ownership probe and the SIGTERM (so `killError` is set) while
-  // a supervisor has already replaced it (so verification identified a
-  // different holder). Checking `killError` first - as this did - emitted
-  // "could not terminate pid <original>, terminate it yourself", naming a
-  // process that is already gone and silently discarding the one piece of
-  // evidence that could act on: the pid actually holding the port now.
-  //
-  // The signal error is still reported in `details.killError`; it is simply
-  // not the most useful thing to say when we know who holds the port.
+  // A VERIFIED REPLACEMENT HOLDER OUTRANKS THE SIGNAL ERROR, and the order here is the whole point.
+  // These two conditions co-occur in the ESRCH race: the original owner exits between the ownership probe and the SIGTERM (so `killError` is set) while a supervisor has already replaced it (so verification identified a different holder).
   const replacementHolder =
     result.holderPid !== null && result.holderPid !== pid
       ? result.holderPid
@@ -83,23 +50,11 @@ export function portRepairFailure(opts: {
     });
   }
 
-  // AN UNVERIFIED PORT OUTRANKS THE SIGNAL ERROR, for the same reason the
-  // replacement holder does: it is the more accurate statement about the thing
-  // the caller has to act on.
-  //
-  // The combination is reachable - the owner exits just before the SIGTERM
-  // (ESRCH) and the follow-up probe is then unavailable or times out, leaving
-  // no holder. Checking `killError` first told the user to terminate the
-  // already-dead original pid and threw away the probe-specific recovery,
-  // which is the only advice that could change the next result. Saying "we
-  // could not determine whether the port is free" is both true and useful; the
-  // signal's fate rides along in the message and in `details.killError`.
+  // AN UNVERIFIED PORT OUTRANKS THE SIGNAL ERROR, for the same reason the replacement holder does: it is the more accurate statement about the thing the caller has to act on.
+  // The combination is reachable - the owner exits just before the SIGTERM (ESRCH) and the follow-up probe is then unavailable or times out, leaving no holder.
   if (result.release === "unverified") {
     // The probe advice has to name the probe this platform actually runs.
-    // `pidOwnsPort` dispatches on `process.platform`: Windows never invokes
-    // `lsof`, so telling a Windows user to install it cannot change the next
-    // result and leaves the repair stuck with a recovery that reads as
-    // actionable and is not.
+    // `pidOwnsPort` dispatches on `process.platform`: Windows never invokes `lsof`, so telling a Windows user to install it cannot change the next result and leaves the repair stuck with a recovery that reads as actionable and is not.
     const probeAdvice =
       process.platform === "win32"
         ? " Re-run 'traycer host doctor' to re-check the port; if it keeps failing, check that 'netstat -ano' runs and returns output for this user, since that is what verifies ownership here."
@@ -142,11 +97,8 @@ export function portRepairFailure(opts: {
   });
 }
 
-// The replacement-listener message, shared by the two orderings that reach it
-// (a delivered SIGTERM whose target was replaced, and the ESRCH race where the
-// target had already exited). Split out so both cases give byte-identical
-// guidance: the reader's situation is the same either way, and only the
-// signal's own fate differs - which is what `details.killError` is for.
+// The replacement-listener message, shared by the two orderings that reach it (a delivered SIGTERM whose target was replaced, and the ESRCH race where the target had already exited).
+// Split out so both cases give byte-identical guidance: the reader's situation is the same either way, and only the signal's own fate differs - which is what `details.killError` is for.
 function replacementHolderError(opts: {
   readonly commandName: string;
   readonly pid: number;

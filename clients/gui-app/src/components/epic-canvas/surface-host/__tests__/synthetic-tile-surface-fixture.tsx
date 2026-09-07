@@ -1,10 +1,5 @@
 /**
- * Ticket 21 slice 3's "synthetic ready slot/body seam" (design/index.md,
- * slice-3 row): a test-only `ReadyTileSurfaceEnvironment` builder and a
- * mount/unmount-counting body component, used to drive `StableTileSurfaceHost`
- * with REAL membership/registry/store state but a fake body - proving the
- * jsdom-expressible half of the lifecycle contract without claiming a real
- * `ChatTile`/`ChatMessages` integration (that's slice 4+).
+ * Ticket 21 slice 3's "synthetic ready slot/body seam" (design/index.md, slice-3 row): a test-only `ReadyTileSurfaceEnvironment` builder and a mount/unmount-counting body component, used to drive `StableTileSurfaceHost` with REAL membership/registry/store state but a fake body - proving the jsdom-expressible half of the lifecycle contract without claiming a real `ChatTile`/`ChatMessages` integration (that's slice 4+).
  */
 import { useEffect, type ReactNode } from "react";
 import type {
@@ -14,16 +9,8 @@ import type {
 import { TEST_HOST_ID } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 
 /**
- * jsdom reports every unstubbed element's `getBoundingClientRect()` as all
- * zeros. `TileSurfaceRecord` now gates its hosted body on the FIRST usable
- * (positive width/height) rect from `services.geometryAnchorElement` - a
- * default anchor that stays 0x0 forever would make every test that doesn't
- * explicitly override `geometryAnchorElement` see a body that never mounts,
- * which is truthful for a real detached slot but not what most of this
- * fixture's callers are testing. Stamp a real, positive rect on the default
- * anchor so "ready" means ready the way it did before the gate existed;
- * tests exercising the born-hidden/still-zero contract pass their own 0x0
- * anchor via `overrides.services` instead of relying on this default.
+ * jsdom reports every unstubbed element's `getBoundingClientRect()` as all zeros.
+ * `TileSurfaceRecord` now gates its hosted body on the FIRST usable (positive width/height) rect from `services.geometryAnchorElement` - a default anchor that stays 0x0 forever would make every test that doesn't explicitly override `geometryAnchorElement` see a body that never mounts, which is truthful for a real detached slot but not what most of this fixture's callers are testing.
  */
 function createDefaultGeometryAnchor(): HTMLDivElement {
   const anchor = document.createElement("div");

@@ -1,22 +1,6 @@
 /**
- * Emits the released `/stream` method-name set for the streaming host RPC
- * registry - the sorted `Object.keys(hostStreamRpcRegistry)` (the
- * handshake-visible method names, without serializing every method's
- * schemas).
- *
- * The committed snapshot
- * (`src/host/__tests__/__fixtures__/released-stream-method-names.ts`)
- * freezes the released method-name set. Stream compatibility is negotiated per
- * method, so the guard rejects removals while allowing additive names. It also
- * freezes the browser namespace to `browser.sessions` and
- * `browser.screencast`: new browser capabilities evolve those methods within
- * major 1 rather than minting parallel stream names.
- *
- * Regenerate ONLY for a coordinated stream baseline change. The resulting diff
- * is the reviewable record of that release decision:
- *
- *   bun run protocol/scripts/snapshot-released-stream-method-names.ts > \
- *     protocol/src/host/__tests__/__fixtures__/released-stream-method-names.ts
+ * Emits the released `/stream` method-name set. Guard rejects removals; browser namespace is `browser.sessions` and `browser.screencast`.
+ * Regenerate only for a coordinated stream baseline change.
  */
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 

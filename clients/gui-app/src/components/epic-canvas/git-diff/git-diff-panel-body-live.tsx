@@ -161,11 +161,8 @@ export function GitDiffPanelBodyLive(
   // The value to PROVIDE: ambient while following, the pin's own binding once
   // built, null while pending - never the ambient socket for a pinned host.
   const pinnedStreamBinding = useSurfaceHostStreamBinding(pin.resolvedHostId);
-  // No dead arm: a pinned host that dies resolves to `effective`, so the panel
-  // re-points instead of blanking. The selected repo is (hostId, path), so the
-  // default-pick effect below finds it absent from the new host's rows and
-  // re-picks - the panel can never render the dead host's repo against a live
-  // one's diffs.
+  // No dead arm: a pinned host that dies resolves to `effective`, so the panel re-points instead of blanking.
+  // The selected repo is (hostId, path), so the default-pick effect below finds it absent from the new host's rows and re-picks - the panel can never render the dead host's repo against a live one's diffs.
   const bindingsQuery = useWorktreeListBindingsForEpicForClient({
     client,
     epicId: props.epicId,
@@ -174,9 +171,7 @@ export function GitDiffPanelBodyLive(
   const selectedRepo = useGitPanelStore(
     (s) => selectGitPanelEpicState(props.epicId)(s).selectedRepo,
   );
-  // Host-proven-missing rows are hidden (no git surface can use them); the
-  // current selection is exempt so a just-deleted selected root routes through
-  // the existing unavailable-roots machinery instead of vanishing.
+  // Host-proven-missing rows are hidden (no git surface can use them); the current selection is exempt so a just-deleted selected root routes through the existing unavailable-roots machinery instead of vanishing.
   const rows = useMemo(
     () =>
       withoutResolvedMissingRows(
@@ -222,10 +217,7 @@ export function GitDiffPanelBodyLive(
     selectedRootRow === null ? null : worktreeRowKey(selectedRootRow);
   const selectedCapabilityData =
     selectedRootRow === null ? null : (selectedCapabilityQuery.data ?? null);
-  // Worktrees the host reports as no longer usable git repos (e.g. deleted out
-  // from under us). This render-time adjustment follows React's guarded
-  // "adjust state from props" pattern so the terminal empty-state check and the
-  // default-pick effect see the same unavailable-root set before commit.
+  // This render-time adjustment follows React's guarded "adjust state from props" pattern so the terminal empty-state check and the default-pick effect see the same unavailable-root set before commit.
   const unavailableGitRootKeys = useUnavailableGitRootKeys(
     selectedRootKey,
     selectedCapabilityData?.available ?? null,
@@ -288,10 +280,8 @@ export function GitDiffPanelBodyLive(
     latchOnFirstUse,
   ]);
 
-  // Clear the probed-unavailable set and re-probe every root's capability, so a
-  // fully-degraded panel can recover once a broken worktree is restored. The
-  // retry also re-picks a root so the freshly invalidated capability query runs
-  // against a candidate again.
+  // Clear the probed-unavailable set and re-probe every root's capability, so a fully-degraded panel can recover once a broken worktree is restored.
+  // The retry also re-picks a root so the freshly invalidated capability query runs against a candidate again.
   const retryUnavailableRoots = useCallback(() => {
     const cleared = unavailableGitRootKeys.reset();
     void queryClient.invalidateQueries({
@@ -327,38 +317,15 @@ export function GitDiffPanelBodyLive(
     latchOnFirstUse,
   ]);
 
-  // The pin moves the STREAM too, not just the unary reads above.
-  // `git.subscribeStatus` is opened by `GitDiffPanelLoaded` below out of
-  // `StreamRuntimeContext`, so before this the panel sent the pinned host's
-  // name as a subscribe PARAM over the APP-WIDE host's socket - watching the
-  // wrong machine's working tree while every unary read beside it was
-  // correctly pinned. One swap here re-targets the whole subtree.
-  //
-  // Re-dial the host this panel resolves to. Host-scoped queries deliberately
-  // disable every automatic recovery route (no retry, no polling, no
-  // focus/reconnect refetch - see `lib/host/availability-recovery.ts`), so an
-  // errored bindings read stays errored until something asks again. This is
-  // the only thing in the panel that can ask.
-  // Returns the query's own promise rather than firing and forgetting: the
-  // retry affordance keeps its pending state for exactly as long as the read
-  // is in flight, which is only true if the caller can await it.
+  // `git.subscribeStatus` is opened by `GitDiffPanelLoaded` below out of `StreamRuntimeContext`, so before this the panel sent the pinned host's name as a subscribe PARAM over the APP-WIDE host's socket - watching the wrong machine's working tree while every unary read beside it was correctly pinned.
+  // This is the only thing in the panel that can ask.
   const { refetch: refetchBindings } = bindingsQuery;
   const retryBindings = useCallback(async (): Promise<void> => {
     await refetchBindings();
   }, [refetchBindings]);
 
-  // Returning the surface to following by clearing the pin - the recovery the
-  // panel can perform on its own, rather than waiting on the authority to
-  // reach a death verdict it may never reach. Offered only when it would
-  // actually MOVE the panel.
-  //
-  // The comparison is against `resolvedHostId`, NOT the raw `selection`. A pin
-  // whose host the authority HAS declared dead is already deposed, so the
-  // panel is on `followingHostId` and reads through to it - and if that host's
-  // own bindings read then fails, comparing the raw preference would offer
-  // "Use active host" while the active host is precisely what already failed.
-  // Clicking would drop the sticky pin, move nothing and change no error,
-  // which is the no-op-that-reads-like-a-fix this guard exists to prevent.
+  // Returning the surface to following by clearing the pin - the recovery the panel can perform on its own, rather than waiting on the authority to reach a death verdict it may never reach.
+  // Offered only when it would actually MOVE the panel.
   const { setSelection } = pin;
   const canUseActiveHost =
     pin.selection !== null &&
@@ -370,12 +337,7 @@ export function GitDiffPanelBodyLive(
 
   const resolvedHostEntry = useHostDirectoryEntryForHostId(pin.resolvedHostId);
 
-  // Rendered UNCONDITIONALLY, as `ResourceMonitorPopover` is and for the same
-  // reason: mounting the provider only when a pinned binding exists changes
-  // the element type at this position the instant a pick resolves, and React
-  // would unmount the subtree - discarding the panel's selection and scroll
-  // the moment a host is chosen. `null` means "following", where the ambient
-  // binding is already this host's.
+  // Rendered UNCONDITIONALLY, as `ResourceMonitorPopover` is and for the same reason: mounting the provider only when a pinned binding exists changes the element type at this position the instant a pick resolves, and React would unmount the subtree - discarding the panel's selection and scroll the moment a host is chosen.
   return (
     <StreamRuntimeContext.Provider value={pinnedStreamBinding}>
       {renderGitDiffPanelBody({
@@ -439,21 +401,8 @@ function renderGitDiffPanelBody(input: {
     );
   }
 
-  // EVERY degraded branch keeps the header, and that is the whole point of
-  // this shape rather than a tidier early-return chain.
-  //
-  // The host picker lives in the repo switcher's `hostSection`, which used to
-  // render only inside `GitDiffPanelLoaded`. So each of the states below -
-  // reached BY choosing a host - removed the one control that could choose a
-  // different one. Pinning to a host that could not answer produced "No git
-  // workspaces available" with no picker, no auto-follow (the pin is deposed
-  // only on a lease death that needs a refusal streak nothing here re-dials to
-  // produce) and no refetch (host queries disable every automatic recovery
-  // route), so the panel stayed there across reloads: the pin is persisted.
-  //
-  // The shared host-option model keeps an indeterminate route selectable: a
-  // dial that fails is recoverable where an un-pickable row is not. That only
-  // helps while the picker outlives the failure.
+  // EVERY degraded branch keeps the header, and that is the whole point of this shape rather than a tidier early-return chain.
+  // The host picker lives in the repo switcher's `hostSection`, which used to render only inside `GitDiffPanelLoaded`.
   return (
     <GitDiffPanelDegraded
       surfaceKey={input.surfaceKey}
@@ -479,11 +428,7 @@ function degradedGitDiffBody(input: {
   readonly resolvedHostName: string | null;
 }): ReactNode {
   if (input.bindingsPending) return <DiffLoadingSkeleton variant="panel" />;
-  // Both arms are distinct from `NoGitWorktrees`, which tells the user to add
-  // workspaces - the wrong remedy, on the wrong machine, and indistinguishable
-  // from a host that answered with nothing. They are also distinct from EACH
-  // OTHER, which is the finer point: "did not answer" and "answered with a
-  // refusal" have different fixes, and only the first is about reachability.
+  // They are also distinct from EACH OTHER, which is the finer point: "did not answer" and "answered with a refusal" have different fixes, and only the first is about reachability.
   if (input.bindingsFailure !== null) {
     if (input.bindingsFailure.kind === "answered") {
       return (
@@ -502,20 +447,14 @@ function degradedGitDiffBody(input: {
     );
   }
   if (input.gitRows.length === 0) {
-    // Rows whose git facts are still unverified placeholders (cold-resolve
-    // timeout on the host, or a pre-@1.2 host) are pending, not dead: keep
-    // the skeleton instead of declaring "no git workspaces" - the host's
-    // sweep pushes `worktree.changed` and the refetch settles this either
-    // way within a tick.
+    // Rows whose git facts are still unverified placeholders (cold-resolve timeout on the host, or a pre-@1.2 host) are pending, not dead: keep the skeleton instead of declaring "no git workspaces" - the host's sweep pushes `worktree.changed` and the refetch settles this either way within a tick.
     if (input.rows.some(isWorkspaceResolvePending)) {
       return <DiffLoadingSkeleton variant="panel" />;
     }
     return <NoGitWorktrees />;
   }
   if (allRowsKnownUnavailable(input.gitRows, input.unavailableGitRootKeys)) {
-    // Every bound root probed unavailable: an explicit, recoverable degrade -
-    // never the transient skeleton, which with zero available roots would
-    // never resolve and read as "still loading" forever.
+    // Every bound root probed unavailable: an explicit, recoverable degrade - never the transient skeleton, which with zero available roots would never resolve and read as "still loading" forever.
     return <GitRootsUnavailable onRetry={input.retryUnavailableRoots} />;
   }
   // Default-pick is resolving the initial selection (one commit).
@@ -532,21 +471,8 @@ interface GitDiffPanelDegradedProps {
 }
 
 /**
- * The panel's chrome for every state that is not fully loaded: the same
- * workspace/host picker the loaded header carries, above whatever the degraded
- * body is.
- *
- * It is a REDUCED header rather than the loaded one because the facts the
- * loaded header renders do not exist here - there is no selected root, so no
- * change counts, no submodule tree and no watcher status to qualify. The
- * switcher already models exactly this: `selected: null` renders "Select
- * workspace", and an empty `roots` renders "No workspaces found." in its list.
- * What survives is the part that matters - the host section, and any rows the
- * host DID return, so a pick can move the panel out of this state.
- *
- * `openTarget` is null throughout: with no selected workspace there is no path
- * to open in an editor, and the opener renders inert rather than aiming at a
- * host that just failed to answer.
+ * It is a REDUCED header rather than the loaded one because the facts the loaded header renders do not exist here - there is no selected root, so no change counts, no submodule tree and no watcher status to qualify.
+ * `openTarget` is null throughout: with no selected workspace there is no path to open in an editor, and the opener renders inert rather than aiming at a host that just failed to answer.
  */
 function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
@@ -593,11 +519,8 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection surfaceKey={props.surfaceKey} />
                 }
-                // Opening the switcher is a tap to pick a workspace, not to
-                // type. A touch pointer would pay for the search's focus with
-                // a software keyboard over the list; a fine one gets
-                // type-to-filter for free. Focus stays on the still-mounted
-                // trigger either way.
+                // Opening the switcher is a tap to pick a workspace, not to type.
+                // A touch pointer would pay for the search's focus with a software keyboard over the list; a fine one gets type-to-filter for free.
                 autoFocusSearch={coarsePointer ? false : repoSwitcherOpen}
                 triggerClassName={undefined}
                 contentClassName={undefined}
@@ -609,18 +532,12 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
             hostClient={props.client}
           />
         </div>
-        {/* Degraded keeps the overflow menu for the same reason it keeps the
-            picker: desktop's panel header carries it in every state, and the
-            phone has no other home for it. */}
+        {/* Degraded keeps the overflow menu for the same reason it keeps the picker: desktop's panel header carries it in every state, and the phone has no other home for it. */}
         {isMobileViewport ? (
           <GitDiffPanelInlineActions epicId={epicId} />
         ) : null}
       </div>
-      {/* The bodies below are written as `h-full` blocks (they used to be the
-          panel's ONLY child). A percentage height needs a definite parent, so
-          they get a flex slot of their own rather than being dropped straight
-          into the column beside the header, where `h-full` would resolve to
-          the full panel and overflow it. */}
+      {/* A percentage height needs a definite parent, so they get a flex slot of their own rather than being dropped straight into the column beside the header, where `h-full` would resolve to the full panel and overflow it. */}
       <div className="flex min-h-0 flex-1 flex-col">{props.children}</div>
     </div>
   );
@@ -641,9 +558,7 @@ interface GitDiffPanelLoadedProps {
   readonly epicId: string;
   readonly viewTabId: string;
   /**
-   * Every binding for the epic, selectable or not - disabled rows (non-git
-   * folders, setup states) render greyed with their reason instead of
-   * silently vanishing from the panel.
+   * Every binding for the epic, selectable or not - disabled rows (non-git folders, setup states) render greyed with their reason instead of silently vanishing from the panel.
    */
   readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
   readonly selected: GitPanelSelectedRepo;
@@ -663,10 +578,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
-  // Below md the epic sidebar - and with it this panel's header Actions slot -
-  // is never mounted; the tab switcher shows the body alone. The overflow menu
-  // moves into the body header there so the layout toggle and the manual
-  // refresh stay reachable, and stays out of it wherever the header exists.
+  // Below md the epic sidebar - and with it this panel's header Actions slot - is never mounted; the tab switcher shows the body alone.
   const isMobileViewport = useIsMobileViewport();
 
   // Live parent status for the active root: drives the nested-snapshot refetch
@@ -696,9 +608,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
     [selected],
   );
 
-  // Reactive read of every root's cached v1.0 change count for switcher badges.
-  // `combine` keeps the counts array referentially stable across unrelated
-  // re-renders, so the memoized `roots` below only rebuilds when a count changes.
+  // `combine` keeps the counts array referentially stable across unrelated re-renders, so the memoized `roots` below only rebuilds when a count changes.
   const rootCounts = useQueries({
     queries: props.rows.map((row) =>
       queryOptions({
@@ -772,9 +682,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
     setSelectedRepo,
   ]);
 
-  // Explicit generation-aware unary fetch (works under stream ownership too,
-  // where the passive unary query is disabled) - see
-  // `useGitSubmoduleSnapshotRefresh`.
+  // Explicit generation-aware unary fetch (works under stream ownership too, where the passive unary query is disabled) - see `useGitSubmoduleSnapshotRefresh`.
   const { refresh: handleRefresh, isRefreshing } =
     useGitSubmoduleSnapshotRefresh({
       hostId: selectedRootRow.hostId,
@@ -802,10 +710,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 pt-1.5 pb-1">
-        {/* `min-w-0 flex-1` on the WRAPPER, not the picker: the picker's own
-            `flex-1` governs its inner layout only, so as a bare flex item it
-            would shrink to its content and leave the header half empty -
-            most visibly when the watcher is healthy and renders nothing. */}
+        {/* `min-w-0 flex-1` on the WRAPPER, not the picker: the picker's own `flex-1` governs its inner layout only, so as a bare flex item it would shrink to its content and leave the header half empty - most visibly when the watcher is healthy and renders nothing. */}
         <div className="min-w-0 flex-1">
           <WorkspacePickerWithOpener
             picker={
@@ -819,11 +724,8 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection surfaceKey={surfaceKey} />
                 }
-                // Opening the switcher is a tap to pick a workspace, not to
-                // type. A touch pointer would pay for the search's focus with
-                // a software keyboard over the list; a fine one gets
-                // type-to-filter for free. Focus stays on the still-mounted
-                // trigger either way.
+                // Opening the switcher is a tap to pick a workspace, not to type.
+                // A touch pointer would pay for the search's focus with a software keyboard over the list; a fine one gets type-to-filter for free.
                 autoFocusSearch={coarsePointer ? false : repoSwitcherOpen}
                 triggerClassName={undefined}
                 contentClassName={undefined}

@@ -20,10 +20,7 @@ async function enqueueAndWait(
   intent: EpicWriteCommandIntent,
 ): Promise<CommandRecord<EpicWriteCommandIntent>> {
   const state = handle.store.getState();
-  // AWAITED: the queue is worker-side now, so it mints the id over the bridge.
-  // A `Promise<string | null>` here is TRUTHY, so the `=== null` refusal check
-  // below would pass for a refused write and hand a promise to
-  // `waitForWriteCommand` as if it were an id.
+  // Await: a Promise is truthy, so skipping await would treat a refused write as an id.
   const commandId = await state.enqueueWriteCommand(intent);
   if (commandId === null) {
     throw new Error("The write was refused by the current epic projection");
@@ -36,59 +33,8 @@ async function enqueueAndWait(
   throw new Error("A newer authoritative change superseded this write");
 }
 
-/**
- * EVERY MUTATION HERE ADDRESSES THE EPIC SESSION'S HOST, never the app-wide
- * one, because an artifact is a row IN an Epic and the Epic is projected from
- * exactly one machine.
- *
- * These used to resolve `useHostClient()`. That is the ambient effective host,
- * and it and the session host disagree for a bounded but entirely reachable
- * window: `EpicSessionProvider` keeps the previous handle registered and
- * RENDERED while its replacement establishes, and after a re-point that
- * failed. Only the canvas is made inert for that window (`epic-shell.tsx`
- * passes `readOnly` to the tile subtree alone) - the sidebar is hoisted beside
- * it and stays fully interactive. So a Delete clicked on a row projected from
- * host A was sent to host B: at best a not-found failure, at worst a delete
- * applied to whatever B has under that id.
- *
- * Every call site of these four hooks is inside the Epic shell (sidebar tree,
- * artifact tiles, the canvas tab rename), so there is no consumer for which
- * "the surrounding session" is the wrong question - checked rather than
- * assumed.
- *
- * A null client (no surrounding session) is REFUSED by `useHostMutation`
- * rather than silently redirected, which is the difference that matters here:
- * `useHostClientForHostId(null)` would have followed the effective host and
- * reproduced the defect on the exact render where the session is absent.
- *
- * ## Why the three command-backed hooks take an `artifactId`
- *
- * `isPending` is a per-AFFORDANCE flag - every consumer feeds it to one row's
- * `disabled` and one row's spinner (`ticket-tile`, `story-tile`,
- * `switcher-row-actions`, `epic-sidebar-artifact-tree`). Matching on the
- * command KIND alone made it epic-wide: one artifact's in-flight status change
- * disabled and spun every status pill in the epic, and an offline-RETAINED
- * command held all of them for as long as the queue retained it
- * (`command-overlay.ts`). So each hook is told which artifact it speaks for
- * and matches the intent's own `artifactId`, which every artifact-shaped
- * intent already carries.
- *
- * `string | null`, not `string`, because THREE of the nine production callers
- * genuinely speak for no single artifact: the sidebar's bulk-delete controller
- * (`epic-sidebar.tsx`), which dispatches one `mutateAsync` per selected row,
- * and the two rename commit hooks - `useSwitcherRename` and its desktop twin
- * `useRenameCanvasTab` - whose node id arrives as an argument to the returned
- * callback rather than as a value at hook-call time. None of the three reads
- * `isPending`; the bulk dialog has its own `deletePending`. `null` reports
- * `false` rather than "any", so a caller that starts reading it gets an inert
- * flag instead of a resurrected epic-wide one.
- */
+/** Mutations address the epic session host, never the app-wide one. Null client is refused, not redirected. */
 
-/**
- * Mutation hook for epic.createArtifact.
- * Pending state is on the affordance; success is silent (the Y.Doc
- * stream delivers the new row); failure shows a toast.
- */
 export function useEpicCreateArtifact() {
   const client = useEpicSessionHostClient();
   return useHostMutation({
@@ -108,11 +54,6 @@ export function useEpicCreateArtifact() {
   });
 }
 
-/**
- * Mutation hook for epic.deleteArtifact.
- * Caller opens a confirm dialog first; on Delete the button enters
- * pending state; success is silent.
- */
 export function useEpicDeleteArtifact(artifactId: string | null) {
   const handle = useOpenEpicHandle();
   const isPending = useStore(handle.store, (state) =>
@@ -157,10 +98,8 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
     ...callbackList: CommandMutationCallbacks<Response, Variables>[]
   ): void {
     const callbacks = callbackList.length > 0 ? callbackList[0] : undefined;
-    // The trailing `.catch` covers the CALLBACKS, not the mutation. Both arms
-    // call into caller-supplied `onSuccess` / `onError`, and a throw from
-    // either rejects the promise `.then` returns - which `void` then discards.
-    // The two-arm form handles the mutation's own rejection and nothing else.
+    // The trailing `.catch` covers the CALLBACKS, not the mutation.
+    // Both arms call into caller-supplied `onSuccess` / `onError`, and a throw from either rejects the promise `.then` returns - which `void` then discards.
     void mutateAsync(variables)
       .then(
         (response) => callbacks?.onSuccess?.(response, variables),
@@ -175,11 +114,6 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
   return { mutate, mutateAsync, isPending };
 }
 
-/**
- * Mutation hook for epic.updateArtifactStatus.
- * Only valid for ticket and story artifacts.
- * Pill enters pending state; success is silent.
- */
 export function useEpicUpdateArtifactStatus(artifactId: string | null) {
   const handle = useOpenEpicHandle();
   const isPending = useStore(handle.store, (state) =>
@@ -222,13 +156,7 @@ export function useEpicUpdateArtifactStatus(artifactId: string | null) {
     }
   };
   const mutate = (variables: Variables): void => {
-    // CONSUMED, exactly as the delete wrapper above consumes it. `mutateAsync`
-    // toasts and then RETHROWS, and a refusal here is ordinary rather than
-    // exceptional - `enqueueAndWait` throws on a refused write, a host
-    // rejection and a supersede alike - so a bare `void` leaves a rejection
-    // nobody handles on every one of them. This is the imitation gap against
-    // TanStack's `mutate`, which swallows by design; the toast the AGENTS.md
-    // rule mandates already fired inside `mutateAsync`.
+    // `mutateAsync` toasts then rethrows; swallow here so `mutate` matches TanStack.
     void mutateAsync(variables).then(undefined, () => {});
   };
   return { mutate, mutateAsync, isPending };
@@ -240,10 +168,6 @@ function analyticsTicketStatus(status: number): 0 | 1 | 2 {
   return 0;
 }
 
-/**
- * Mutation hook for epic.renameArtifact.
- * Input/title enters pending (read-only) state; success is silent.
- */
 export function useEpicRenameArtifact(
   artifactId: string | null,
   trackUserIntent: boolean,

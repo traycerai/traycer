@@ -6,66 +6,33 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-/**
- * The branded QR tile for the link-mobile-app code, drawn here rather than by a
- * QR-styling library. `qrcode` hands back the raw module matrix synchronously,
- * so the whole symbol is plain SVG: it renders identically under jsdom (a test
- * can compare every drawn module against the encoder's matrix), it takes the
- * brand mark as the inline SVG the app already has instead of loading an image
- * the test environment can never resolve, and it costs no dependency.
- *
- * The tile owns a fixed square footprint whether or not a code is in hand, so
- * a rotation never reflows the panel around it.
- */
+/** `qrcode` hands back the raw module matrix synchronously, so the whole symbol is plain SVG. */
 
-/**
- * The spec's minimum silent margin is 4 modules. A fifth is carried because
- * the frame's stroke covers the paper's outermost fraction (see below), and
- * the four light modules have to survive that.
- */
+/** A fifth is carried because the frame's stroke covers the paper's outermost fraction (see below), and the
+ * four light modules have to survive that. */
 const QUIET_ZONE_MODULES = 5;
-/** Finder patterns are 7x7 modules at three corners, drawn as styled eyes. */
 const FINDER_SIZE_MODULES = 7;
-/** Gap between adjacent modules, in module units, that gives the dot look. */
 const MODULE_INSET = 0.04;
 const MODULE_RADIUS = 0.32;
 
-/**
- * Frame geometry, in percent of the tile's side — the unit both the SVG frame
- * (a 100x100 viewBox) and the loading state's CSS can express exactly.
- *
- * The paper's edge is placed ON the frame's centre line, with the same corner
- * radius, so the stroke straddles it: half the band covers the paper's own
- * antialiased boundary, half falls outside onto the app background. Nothing
- * light can survive beyond the band's outer edge, which is what keeps the
- * white tile from speckling through the frame's curves in dark mode. Two
- * independently rounded boxes stacked on each other cannot promise that.
- */
+/** Two independently rounded boxes stacked on each other cannot promise that. */
 const FRAME_STROKE_PERCENT = 2.8;
 /** Exported so a test asserts against this geometry rather than restating it. */
 export const FRAME_CENTRE_INSET_PERCENT = FRAME_STROKE_PERCENT / 2;
 export const FRAME_RADIUS_PERCENT = 4;
 
-/**
- * A QR scans by luminance contrast, not by palette, so the symbol keeps a
- * fixed near-black on white in both app themes and the tile stays light in
- * dark mode. These are deliberately not theme tokens.
- */
+/** These are deliberately not theme tokens. */
 const QR_INK = "#0B0B0F";
 const QR_PAPER = "#FFFFFF";
 
 interface QrSymbol {
   readonly size: number;
-  /** Row-major module bits, `size * size` of them. */
   readonly bits: readonly boolean[];
   readonly version: number;
 }
 
-/**
- * Encodes the panel's public code as the universal-link payload. Returns null
- * when the encoder refuses the input — the caller shows the loading tile
- * rather than a broken symbol.
- */
+/** Returns null when the encoder refuses the input - the caller shows the loading tile rather than a broken
+ * symbol. */
 function encodeQrSymbol(
   platformBaseUrl: string,
   code: string,
@@ -88,7 +55,6 @@ function encodeQrSymbol(
   }
 }
 
-/** The three finder corners own their modules; the dot pass skips them. */
 function isFinderModule(row: number, col: number, size: number): boolean {
   const nearTop = row < FINDER_SIZE_MODULES;
   const nearBottom = row >= size - FINDER_SIZE_MODULES;
@@ -99,12 +65,8 @@ function isFinderModule(row: number, col: number, size: number): boolean {
   );
 }
 
-/**
- * A finder pattern drawn as three concentric rounded squares, each inset one
- * module from the last. Sized from `FINDER_SIZE_MODULES` rather than from
- * literals, so the eye and the region the dot pass skips can never disagree
- * about how big a finder is.
- */
+/** Sized from `FINDER_SIZE_MODULES` rather than from literals, so the eye and the region the dot pass skips can
+ * never disagree about how big a finder is. */
 function FinderEye(props: { readonly row: number; readonly col: number }) {
   const x = props.col + QUIET_ZONE_MODULES;
   const y = props.row + QUIET_ZONE_MODULES;
@@ -134,11 +96,8 @@ function FinderEye(props: { readonly row: number; readonly col: number }) {
   );
 }
 
-/**
- * Memoized because the panel around it re-renders once a second for the
- * countdown text while the symbol itself cannot change - rebuilding several
- * hundred `<rect>` elements per tick for an identical result.
- */
+/** Memoized because the panel around it re-renders once a second for the countdown text while the symbol itself
+ * cannot change - rebuilding several hundred `<rect>` elements per tick for an identical result. */
 const QrSymbolSvg = memo(function QrSymbolSvg(props: {
   readonly symbol: QrSymbol;
 }) {
@@ -194,16 +153,7 @@ const QrSymbolSvg = memo(function QrSymbolSvg(props: {
   );
 });
 
-/**
- * The tile's static frame. A plain band, deliberately: it does not move with
- * the code's remaining life. The text line beneath the tile carries the
- * countdown, and a frame that visibly drained read as "hurry" — the code
- * rotates on its own, so there is nothing to hurry for.
- *
- * The band still owns the tile's edge geometry (see the constants above): it
- * straddles the paper's boundary so no antialiased sliver of white survives
- * beyond it in dark mode.
- */
+/** A plain band, deliberately: it does not move with the code's remaining life. */
 function TileFrame() {
   const side = 100 - FRAME_CENTRE_INSET_PERCENT * 2;
   return (
@@ -226,10 +176,8 @@ function TileFrame() {
   );
 }
 
-/**
- * The square the tile always occupies. Both states render it, so the panel's
- * height is the same before and after a code arrives.
- */
+/** The square the tile always occupies. Both states render it, so the panel's height is the same before and
+ * after a code arrives. */
 function TileFootprint(props: {
   readonly state: "code" | "loading";
   readonly children: ReactElement;
@@ -247,15 +195,10 @@ function TileFootprint(props: {
 }
 
 export function LinkPhoneQrTile(props: {
-  /** Null while a code is being minted — the footprint is held either way. */
+  /** Null while a code is being minted - the footprint is held either way. */
   readonly code: string | null;
-  /**
-   * Origin the encoded universal link points at, from the panel's active
-   * deploy. Passed in rather than derived here so the tile stays a pure
-   * renderer and a dev build's QR can never address production. `null` — no
-   * known deployment — draws the placeholder instead of a symbol, because a
-   * QR pointed at a guess would hand a live claim code to the wrong host.
-   */
+  /** Passed in rather than derived here so the tile stays a pure renderer and a dev build's QR can never address
+   * production. */
   readonly platformBaseUrl: string | null;
 }) {
   const platformBaseUrl = props.platformBaseUrl;

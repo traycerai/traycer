@@ -21,12 +21,7 @@ export interface ArtifactRowDisplay {
   readonly openArtifact: () => void;
 }
 
-/**
- * Shared resolution for an artifact change row (per-turn group + accumulated
- * panel): live title/kind from the open-epic projection by id, with the
- * captured tag as fallback, plus an opener that adds the artifact tile to the
- * canvas. A deleted artifact (or one whose id has not resolved) is not openable.
- */
+/** Shared resolution for an artifact change row (per-turn group + accumulated panel): live title/kind from the open-epic projection by id, with the captured tag as fallback, plus an opener that adds the artifact tile to the canvas. A deleted artifact (or one whose id has not resolved) is not openable. */
 export function useArtifactRowDisplay(input: {
   readonly artifactId: string | null;
   readonly artifactKind: EpicArtifactKind | null;

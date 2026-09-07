@@ -1,11 +1,7 @@
 import type { ReactNode } from "react";
 
 interface ComposerWorkspaceRowProps {
-  /**
-   * The collapsed workspace-controls cluster: Location / Mode+branch /
-   * Environment chips (and any trailing chip such as context usage). The
-   * caller composes the chips; this row only lays them out.
-   */
+  /** The caller composes the chips; this row only lays them out. */
   readonly workspaceControls: ReactNode;
 }
 

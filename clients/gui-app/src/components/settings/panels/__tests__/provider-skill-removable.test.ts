@@ -23,9 +23,8 @@ describe("skillRemovability", () => {
   it.each(["plugin", "managed"] as const)(
     "blocks a %s skill even though the contract advertises remove",
     (source) => {
-      // The host's `assertRemovableSkill` throws for these sources, so offering
-      // the button would be offering a guaranteed failure. Advertising the verb
-      // is NOT on its own a licence to delete this skill's files.
+      // The host's `assertRemovableSkill` throws for these sources, so offering the button would be offering a
+      // guaranteed failure. Advertising the verb is not on its own a licence to delete this skill's files.
       const result = skillRemovability({
         removeScopes: [...BOTH],
         source,
@@ -39,9 +38,8 @@ describe("skillRemovability", () => {
   );
 
   it("hides the affordance entirely when no remove scope is advertised", () => {
-    // Distinct from `blocked`: the provider has no removal capability at all,
-    // so a per-skill explanation would be noise on every row rather than
-    // information about this one.
+    // Distinct from `blocked`: the provider has no removal capability at all, so a per-skill explanation would be
+    // noise on every row rather than information about this one.
     expect(
       skillRemovability({
         removeScopes: [],
@@ -55,10 +53,8 @@ describe("skillRemovability", () => {
   });
 
   it("hides removal when only `project` is advertised and viewing global", () => {
-    // The tab mutates at the selected scope. A provider advertising only
-    // `project` satisfies "some remove scope exists" while a Global-view
-    // request is one the host must refuse - which is the always-fails button
-    // this module exists to prevent.
+    // A provider advertising only `project` satisfies "some remove scope exists" while a Global-view request is
+    // one the host must refuse - which is the always-fails button this module exists to prevent.
     expect(
       skillRemovability({
         removeScopes: ["project"],

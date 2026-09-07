@@ -15,23 +15,8 @@ import {
   type ResponseOfMethod,
 } from "./host-messenger";
 
-/**
- * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
- * "UNAUTHORIZED"` triggers `auth.revalidateCurrentContext()` before the error
- * propagates. The host never refreshes tokens itself - it only signals
- * `UNAUTHORIZED` - so this wrapper is the single client-side place that closes
- * the refresh loop for unary RPC, shared by the renderer and the CLI.
- *
- * With a `retry` policy, a revalidation that rotated the bearer is followed by
- * one more `request` attempt; otherwise (and always, on a second failure) the
- * original error propagates.
- */
-/**
- * Reads the current bearer string for the retry gate, tolerating every "no
- * bearer" shape (no retry policy, no source, or a released/empty lease whose
- * `getBearerToken()` throws) by returning `null`. The gate then compares
- * before/after: equal-or-null means "no rotation happened", so don't retry.
- */
+/** Wraps an `IHostMessenger` so `unauthorized` triggers `auth.revalidateCurrentContext()`; the host never refreshes tokens itself. */
+/** Current bearer for the retry gate; every "no bearer" shape is `null`. Equal-or-null means no rotation, so do not retry. */
 function readBearer(source: OpenFrameBearerSource): string | null {
   try {
     return source.getBearerToken();
@@ -55,10 +40,8 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (!(cause instanceof HostRpcError) || cause.code !== "UNAUTHORIZED") {
         throw cause;
       }
-      // A transient, host-side rejection (e.g. a JWKS fetch timeout) rides in
-      // as `code: "UNAUTHORIZED"` with `fatalDetails.retryable === true`. Our
-      // bearer is fine, so revalidating it can't help - rethrow the transient
-      // failure and let the caller retry the request instead of churning authn.
+      // A transient, host-side rejection (e.g. a jwks fetch timeout) rides in as `code: "unauthorized"` with `fatalDetails.retryable === true`.
+      // Our bearer is fine, so revalidating it can't help - rethrow the transient failure and let the caller retry the request instead of churning authn.
       if (cause.fatalDetails?.retryable === true) {
         throw cause;
       }

@@ -6,17 +6,7 @@ import {
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
- * The reader for the two trust refusals the shell already surfaces and nobody
- * consumed: a host key that no longer matches its pin, and a certificate this
- * machine does not trust. Both are decided in main and are already final by
- * the time they arrive - the connection is refused either way - so this exists
- * to SAY so, with the one recovery there is, rather than to ask.
- *
- * Desktop-only by construction: the surfaces hang off the Electron preload
- * bridge, so on the web and mobile shells this resolves to `null` and mounts
- * nothing. Probed structurally for the same reason the windows bridge is - a
- * preload built before either surface existed must degrade to silence, not
- * throw.
+ * Surface host-key and certificate refusals. Desktop-only; missing preload surfaces degrade to silence.
  */
 export function HostTrustAlertBridge(): null {
   const runnerHost = useRunnerHostOrNull();

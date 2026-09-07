@@ -3,9 +3,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppHeader } from "@/components/layout/header/app-header";
 
-// Drive the viewport switch directly; the desktop-only header children need
-// host/query/auth providers, so stub them (and both branch markers) to keep
-// the test to the switch itself.
+// Drive the viewport switch directly; the desktop-only header children need host/query/auth providers, so stub
+// them (and both branch markers) to keep the test to the switch itself.
 const mobileState = vi.hoisted(() => ({ value: false }));
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => mobileState.value,

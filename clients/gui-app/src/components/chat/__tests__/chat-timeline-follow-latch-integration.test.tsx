@@ -1,24 +1,4 @@
-/**
- * Real-`@legendapp/list` integration coverage for the chat-timeline follow
- * latch wiring (fixup: callback-synchronous-follow).
- *
- * The pure/hook-level latch suite (`chat-timeline-follow-latch.test.ts`) already
- * proves the latch itself is sound against a hand-constructed `LegendListRef`.
- * This file mounts the real `LegendList` via `ChatTimeline` and asserts the
- * production wiring at actual callback boundaries - especially the review's
- * no-rerender item/footer/viewport ordering that the rejected render-gated
- * design could not close.
- *
- * Assertions target real DOM geometry (scrollTop at/away from the true end),
- * never `scrollToEnd` call counts. Production may skip a redundant
- * `scrollToEnd` when already at the strict edge (destructive-clamp contract).
- * The latch ResizeObserver is a maintain trigger. It may reconcile a fresh
- * strict-bottom landing, but non-bottom geometry never grants permission or
- * moves a detached reader.
- *
- * Do not duplicate the hook-level numeric sequences; only real-library wiring
- * proofs belong here.
- */
+/** Assertions target real DOM geometry (scrollTop at/away from the true end), never `scrollToEnd` call counts. Do not duplicate the hook-level numeric sequences; only real-library wiring proofs belong here. */
 import { act, cleanup, render } from "@testing-library/react";
 import { createRef, type ReactNode, type RefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,12 +54,7 @@ function parkAtStrictBottom(node: HTMLElement): number {
   return node.scrollTop;
 }
 
-/**
- * Detach via recognized wheel intent, a real DOM scrollTop write, and a
- * native scroll event.
- * Deliberately no React re-render - this is the review's silent-detach
- * ordering that must leave the latch denying follow on the next callback.
- */
+/** Detach via recognized wheel intent, a real DOM scrollTop write, and a native scroll event. Deliberately no React re-render - this is the review's silent-detach ordering that must leave the latch denying follow on the next callback. */
 function detachReader(node: HTMLElement, scrollTop: number): number {
   node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
   node.scrollTop = scrollTop;
@@ -97,13 +72,8 @@ function expectAtTrueEnd(node: HTMLElement): void {
   expect(node.scrollTop).toBeGreaterThanOrEqual(maxScrollTop(node) - 1);
 }
 
-// --- Controllable ResizeObserver ------------------------------------------
-// The global MockResizeObserver from test-browser-apis is a total no-op.
-// The latch installs its OWN observer on the scroll node for the viewport-
-// layout trigger; we need that callback to fire on demand. LegendList also
-// uses a module-scoped global observer for footer/header layout - when this
-// controllable class is installed before the first LegendList mount in the
-// file, that singleton is controllable too.
+// --- Controllable ResizeObserver ------------------------------------------ The global MockResizeObserver from test-browser-apis is a total no-op.
+// The latch installs its OWN observer on the scroll node for the viewport- layout trigger; we need that callback to fire on demand.
 
 interface ControllableResizeObserverInstance extends ResizeObserver {
   readonly callback: ResizeObserverCallback;
@@ -143,11 +113,7 @@ function installControllableResizeObserver(): void {
   });
 }
 
-/**
- * Fire every captured ResizeObserver. Prefer entry-shaped payloads for
- * observers that care about contentRect (LegendList footer/header layout);
- * the latch's own callback ignores entries entirely.
- */
+/** Fire every captured ResizeObserver. Prefer entry-shaped payloads for observers that care about contentRect (LegendList footer/header layout); the latch's own callback ignores entries entirely. */
 function fireAllResizeObservers(
   buildEntry: (target: Element) => ResizeObserverEntry | null,
 ): void {
@@ -187,12 +153,7 @@ function makeResizeEntry(
   };
 }
 
-/**
- * Instance-level clientHeight override. The shared viewport-metrics shim
- * spies the prototype; an own-property getter on the node wins, so this is
- * how a single scroll container can report unmeasurable 0x0 geometry without
- * restacking the prototype spy (which recurses).
- */
+/** Instance-level clientHeight override. The shared viewport-metrics shim spies the prototype; an own-property getter on the node wins, so this is how a single scroll container can report unmeasurable 0x0 geometry without restacking the prototype spy (which recurses). */
 function setNodeClientHeight(node: HTMLElement, height: number): void {
   Object.defineProperty(node, "clientHeight", {
     configurable: true,
@@ -351,9 +312,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     controllableObservers = [];
   });
 
-  // -----------------------------------------------------------------------
-  // 1. Production-order owned correction and reader reattachment
-  // -----------------------------------------------------------------------
+  // ----------------------------------------------------------------------- 1.
+  // Production-order owned correction and reader reattachment -----------------------------------------------------------------------
 
   it("converges through a no-settle user/assistant/reasoning/text/tool/inset burst, then honors reader detach and strict-end reacquisition", async () => {
     const rowCount = 36;
@@ -537,10 +497,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     });
     expect(scrollToEnd).toHaveBeenCalled();
 
-    // LegendList's deferred web shrink/MVCP path may report a lower
-    // scrollTop after the disclosure's non-publishing pointer preflight has
-    // cancelled correction ownership. This is still layout motion, not a
-    // reader departure.
+    // LegendList's deferred web shrink/MVCP path may report a lower scrollTop after the disclosure's non-publishing pointer preflight has cancelled correction ownership.
+    // This is still layout motion, not a reader departure.
     act(() => {
       followLatchRef.current?.noteReaderGesture({
         direction: "indeterminate",
@@ -584,9 +542,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     scrollToEnd.mockRestore();
   });
 
-  // -----------------------------------------------------------------------
-  // 2. Core no-rerender proof (review's central finding)
-  // -----------------------------------------------------------------------
+  // ----------------------------------------------------------------------- 2.
+  // Core no-rerender proof (review's central finding) -----------------------------------------------------------------------
 
   describe("silent detach then layout callbacks with no ChatTimeline rerender", () => {
     it("attaches the latch when an initially empty transcript receives its first rows", async () => {
@@ -661,10 +618,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       const parked = detachReader(node, 220);
       onListMetricsChange.mockClear();
 
-      // Fire LegendList's footer/header layout observers with a NEW size so
-      // setFooterSize/setHeaderSize change and onMetricsChange (our
-      // handleMetricsChange → followEndIfPermitted) runs - still no React
-      // re-render of ChatTimeline.
+      // Fire LegendList's footer/header layout observers with a NEW size so setFooterSize/setHeaderSize change and onMetricsChange (our handleMetricsChange → followEndIfPermitted) runs - still no React re-render of ChatTimeline.
       act(() => {
         fireAllResizeObservers((target) => {
           // Skip the scroll container itself here; the next test covers it.
@@ -689,10 +643,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       parkAtStrictBottom(node);
       const parked = detachReader(node, 150);
 
-      // Latch's own ResizeObserver is a maintain TRIGGER only (does not
-      // refresh permission from post-resize geometry). With permission
-      // already false from the detach scroll, a pure container resize must
-      // not yank - and no ChatTimeline re-render accompanies it.
+      // Latch's own ResizeObserver is a maintain TRIGGER only (does not refresh permission from post-resize geometry).
+      // With permission already false from the detach scroll, a pure container resize must not yank - and no ChatTimeline re-render accompanies it.
       act(() => {
         fireAllResizeObservers((target) =>
           target === node
@@ -706,13 +658,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     });
 
     it("setItemSize while strictly at bottom retains follow so a subsequent append lands at the newest end", async () => {
-      // Item-layout alone is the no-rerender trigger under test; a pure
-      // setItemSize against the DOM scrollHeight override does not give the
-      // library's scrollToEnd a new measurable end that matches our shim, so
-      // the discriminating proof here is: (1) item-size at the edge does not
-      // clear permission / yank the reader off the edge, and (2) the next
-      // data-change maintain trigger still follows. Detached setItemSize is
-      // covered above; full growth-follow for data is covered by the matrix.
+      // Item-layout alone is the no-rerender trigger under test; a pure setItemSize against the DOM scrollHeight override does not give the library's scrollToEnd a new measurable end that matches our shim, so the discriminating proof here is: (1) item-size at the edge does not clear permission / yank the reader off the edge, and (2) the next data-change maintain trigger still follows.
+      // Detached setItemSize is covered above; full growth-follow for data is covered by the matrix.
       const rowCount = 40;
       const baseHeight = contentHeightForRowCount(rowCount);
       setLegendListScrollContainerScrollHeightOverride(baseHeight);
@@ -744,9 +691,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     });
   });
 
-  // -----------------------------------------------------------------------
-  // 2. Mutation matrix: append / in-place / footer-inset / short-height
-  // -----------------------------------------------------------------------
+  // ----------------------------------------------------------------------- 2.
+  // Mutation matrix: append / in-place / footer-inset / short-height -----------------------------------------------------------------------
 
   describe("mutation matrix: detached pixel-stable; strict-bottom follows", () => {
     type MutationKind =
@@ -794,9 +740,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
           setLegendListScrollContainerScrollHeightOverride(
             contentHeightForRowCount(rowCount) + 180,
           );
-          // In-place content change is a data identity change for the stable-
-          // rows cache, so ChatTimeline re-renders; also remeasure the row
-          // the way a real streaming card resize would.
+          // In-place content change is a data identity change for the stable- rows cache, so ChatTimeline re-renders; also remeasure the row the way a real streaming card resize would.
           rerenderMessages(next, undefined);
           act(() => {
             listRef.current?.setItemSize(targetId, {
@@ -807,9 +751,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
           break;
         }
         case "footer-inset": {
-          // contentInsetEndAdjustment is a real prop path (layout effect
-          // wiring in chat-timeline.tsx) covering the footer/inset maintain
-          // trigger that production uses for the composer overlay.
+          // contentInsetEndAdjustment is a real prop path (layout effect wiring in chat-timeline.tsx) covering the footer/inset maintain trigger that production uses for the composer overlay.
           rerenderMessages(messages, {
             contentInsetEndAdjustment: 180,
             initialScrollAtEnd: undefined,
@@ -887,18 +829,15 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
           rowCount,
         });
 
-        // After follow, geometry must be at the true end. For mutations that
-        // do not grow max-scroll (item-size alone with fixed scrollHeight
-        // override), "at end" still means the same max; for growth cases the
-        // end has moved and we must have moved with it.
+        // After follow, geometry must be at the true end.
+        // For mutations that do not grow max-scroll (item-size alone with fixed scrollHeight override), "at end" still means the same max; for growth cases the end has moved and we must have moved with it.
         expectAtTrueEnd(node);
       });
     }
   });
 
-  // -----------------------------------------------------------------------
-  // 3. Hidden 0x0 → reveal restored free-reading → growth
-  // -----------------------------------------------------------------------
+  // ----------------------------------------------------------------------- 3.
+  // Hidden 0x0 → reveal restored free-reading → growth -----------------------------------------------------------------------
 
   describe("hidden 0x0 reveal restored free-reading", () => {
     it("does not overwrite a restored non-bottom position after reveal, and growth stays parked", async () => {
@@ -906,9 +845,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       const fullHeight = contentHeightForRowCount(rowCount);
       setLegendListScrollContainerScrollHeightOverride(fullHeight);
 
-      // Mount as free-reading (not following-end). initialScrollAtEnd=false
-      // seeds the latch permission as false - the restored free-reading
-      // intent the review requires.
+      // Mount as free-reading (not following-end). initialScrollAtEnd=false seeds the latch permission as false - the restored free-reading intent the review requires.
       const { listRef, rerenderMessages } = renderTimeline({
         messages: makeMessages(rowCount),
         initialScrollAtEnd: false,
@@ -917,10 +854,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
 
       const node = requireScrollNode(listRef);
 
-      // Simulate the inactive display:none pane reporting 0x0. Unmeasurable
-      // geometry must not be treated as a confirmed edge. Scroll while 0x0 is
-      // ignored by the latch (clientHeight===0); ResizeObserver is trigger-
-      // only and never rewrites permission from post-resize geometry.
+      // Unmeasurable geometry must not be treated as a confirmed edge.
+      // Scroll while 0x0 is ignored by the latch (clientHeight===0); ResizeObserver is trigger- only and never rewrites permission from post-resize geometry.
       setNodeClientHeight(node, 0);
       setLegendListScrollContainerScrollHeightOverride(0);
       node.scrollTop = 0;
@@ -966,9 +901,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     });
   });
 
-  // -----------------------------------------------------------------------
-  // 4. Downward scroll that stops short of true bottom cannot reacquire
-  // -----------------------------------------------------------------------
+  // ----------------------------------------------------------------------- 4.
+  // Downward scroll that stops short of true bottom cannot reacquire -----------------------------------------------------------------------
 
   describe("downward-but-not-bottom cannot reacquire follow", () => {
     it("real native scroll steps that never reach the edge leave append growth parked", async () => {
@@ -983,9 +917,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       const node = requireScrollNode(listRef);
       parkAtStrictBottom(node);
 
-      // Detach far above, then crawl downward with real native scroll events
-      // at each step - still hundreds of px from the true end (review's
-      // counter-example against a numeric baseline heuristic).
+      // Detach far above, then crawl downward with real native scroll events at each step - still hundreds of px from the true end (review's counter-example against a numeric baseline heuristic).
       detachReader(node, 200);
       for (const top of [400, 700, 1000, 1500]) {
         node.scrollTop = top;
@@ -1005,9 +937,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     });
   });
 
-  // -----------------------------------------------------------------------
-  // 5. MVCP / virtualization coordinate remap does not grant permission
-  // -----------------------------------------------------------------------
+  // ----------------------------------------------------------------------- 5.
+  // MVCP / virtualization coordinate remap does not grant permission -----------------------------------------------------------------------
 
   describe("virtualization / MVCP coordinate remap", () => {
     it("a large structural data remap that moves scrollTop does not re-enable follow on its own", async () => {
@@ -1023,11 +954,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       parkAtStrictBottom(node);
       const parked = detachReader(node, 300);
 
-      // Large prepend-like rewrite: replace the data array with a different
-      // identity set of the same length so LegendList recalculates item
-      // positions (MVCP/virtualization path) while the reader is free.
-      // maintainVisibleContentPosition may adjust scrollTop; that adjustment
-      // must not be read as "reader returned to the edge".
+      // Large prepend-like rewrite: replace the data array with a different identity set of the same length so LegendList recalculates item positions (MVCP/virtualization path) while the reader is free. maintainVisibleContentPosition may adjust scrollTop; that adjustment must not be read as "reader returned to the edge".
       const remapped = messages.map((message, index) => ({
         ...message,
         id: `remapped-${index}`,
@@ -1039,9 +966,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       rerenderMessages(remapped, undefined);
       await settleLegendList();
 
-      // Whatever MVCP did to scrollTop, we must not be yanked to the true
-      // end. A follow would land within 1px of max; free-reading after a
-      // remap stays clearly away from it.
+      // Whatever MVCP did to scrollTop, we must not be yanked to the true end.
+      // A follow would land within 1px of max; free-reading after a remap stays clearly away from it.
       const afterRemap = node.scrollTop;
       expect(afterRemap).toBeLessThan(maxScrollTop(node) - 1);
 
@@ -1076,9 +1002,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       parkAtStrictBottom(node);
 
       act(() => {
-        // Non-bottom navigation declares its destination explicitly. Bare
-        // scrollTop movement is not reader intent because MVCP and layout use
-        // the same browser signal.
+        // Non-bottom navigation declares its destination explicitly. Bare scrollTop movement is not reader intent because MVCP and layout use the same browser signal.
         followLatchRef.current?.beginOwnedFreeNavigation();
         void listRef.current?.scrollToOffset({ offset: 350, animated: false });
         // Mirror production: programmatic navigation also lands a real DOM

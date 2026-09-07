@@ -62,12 +62,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 const defaultStreamBindingRef = vi.hoisted(() => ({
-  // Memoized per `wsStreamClientRef.value` (not rebuilt on every call) - the
-  // real `useHostStreamClientBindingFor` returns a REFERENCE-STABLE binding
-  // across renders via React state, and `useFileAsset`'s effect now
-  // depends on this binding directly. A mock returning a fresh object every
-  // call would make that dependency change on EVERY render, re-running the
-  // effect forever (caught as an OOM crash, not a normal test failure).
+  // A mock returning a fresh object every call would make that dependency change on EVERY render, re-running the effect forever (caught as an OOM crash, not a normal test failure).
   client: null as WsStreamClient<HostStreamRpcRegistry> | null,
   binding: null as {
     readonly client: WsStreamClient<HostStreamRpcRegistry>;
@@ -79,16 +74,9 @@ const defaultStreamBindingRef = vi.hoisted(() => ({
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => wsStreamClientRef.value,
-  // `useFileAsset` now takes the full binding (Codex re-review, transport
-  // pin/unpin) - `pin`/`unpin` are no-ops here since the mock's single
-  // shared `wsStreamClientRef.value` never actually tears down regardless;
-  // tests exercising the pin/unpin CONTRACT itself construct their own
-  // per-hook bindings instead of relying on this default.
+  // `useFileAsset` now takes the full binding (Codex re-review, transport pin/unpin) - `pin`/`unpin` are no-ops here since the mock's single shared `wsStreamClientRef.value` never actually tears down regardless; tests exercising the pin/unpin CONTRACT itself construct their own per-hook bindings instead of relying on this default.
   useHostStreamClientBindingFor: () => {
-    // The early-returns this replaced used to skip the `useEffect` call
-    // below on some renders (rules-of-hooks violation: a hook can't be
-    // called conditionally) - resolving the binding into a local instead,
-    // falling through to an UNCONDITIONAL `useEffect` call every render.
+    // The early-returns this replaced used to skip the `useEffect` call below on some renders (rules-of-hooks violation: a hook can't be called conditionally) - resolving the binding into a local instead, falling through to an UNCONDITIONAL `useEffect` call every render.
     const bindingRef = useRef<TestStreamBinding | null>(null);
     if (bindingRef.current === null) {
       const factory = perHookBindingFactoryRef.value;
@@ -406,14 +394,7 @@ async function flushPromises(): Promise<void> {
   });
 }
 
-// One row per DISTINCT plumbing path through `emitFailure` below - not one
-// per `AssetStreamFailureReason` value. `unsupported-method` is covered by
-// its own dedicated test in asset-stream-client.test.ts; the other five
-// `assetError`-reason values (not-image, mismatch, too-large, too-many-
-// pixels, read-failed) share the exact same `case "assetError"` plumbing as
-// `not-found` below and only differ in a `FAILURE_MESSAGES` string, which
-// `Record<AssetStreamFailureReason, string>` already makes exhaustive at
-// compile time.
+// One row per DISTINCT plumbing path through `emitFailure` below - not one per `AssetStreamFailureReason` value.
 const FALLBACK_CASES = [
   {
     reason: "fatal",
@@ -494,11 +475,7 @@ afterEach(async () => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(10_000);
   });
-  // "session"-retention entries (immutable git object identities) never
-  // revoke on their own - advancing timers above only clears grace-retention
-  // ones. This is the shared app-wide singleton, so a leftover session entry
-  // from one test would otherwise leak into every later test's size()/URL
-  // assertions.
+  // "session"-retention entries (immutable git object identities) never revoke on their own - advancing timers above only clears grace-retention ones.
   imageBlobCache.clear();
   wsStreamClientRef.value = null;
   vi.restoreAllMocks();
@@ -589,11 +566,7 @@ describe("useFileAsset", () => {
 
     expect(first.result.current.url).toBe("blob:image/1");
     expect(second.result.current.url).toBe("blob:image/1");
-    // `first` owns the fetch (its header triggered the fetcher that
-    // `emitBytes` above feeds); `second` resolves from the shared cache
-    // without ever invoking its own fetcher - a genuine cache hit, and
-    // exactly the case a fresh `<img>` remount can't detect via
-    // `img.complete` (ticket 07 closing E2E item).
+    // `first` owns the fetch (its header triggered the fetcher that `emitBytes` above feeds); `second` resolves from the shared cache without ever invoking its own fetcher - a genuine cache hit, and exactly the case a fresh `<img>` remount can't detect via `img.complete` (ticket 07 closing E2E item).
     expect(first.result.current.servedFromCache).toBe(false);
     expect(second.result.current.servedFromCache).toBe(true);
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
@@ -1106,11 +1079,7 @@ describe("useFileAsset", () => {
     unmount();
   });
 
-  // Over-cap telemetry is recorded in the SHARED entry's single failure path
-  // (`acquireSharedAssetSubscription`), not in each mounted consumer's own
-  // `onFailure` listener - two coalesced consumers of the same too-large PDF
-  // stream must therefore record exactly one `PdfPreviewTooLarge` event, not
-  // one per consumer.
+  // Over-cap telemetry is recorded in the SHARED entry's single failure path (`acquireSharedAssetSubscription`), not in each mounted consumer's own `onFailure` listener - two coalesced consumers of the same too-large PDF stream must therefore record exactly one `PdfPreviewTooLarge` event, not one per consumer.
   it("tracks exactly one PdfPreviewTooLarge event for two coalesced consumers", async () => {
     const track = vi.spyOn(Analytics.getInstance(), "track");
     const pdfRequest: FileAssetRequest = {

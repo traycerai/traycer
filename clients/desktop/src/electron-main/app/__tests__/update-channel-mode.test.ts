@@ -6,14 +6,6 @@ import {
   type DesktopUpdateChannelMode,
 } from "../update-channel-mode";
 
-// The release-line vocabulary itself (canonical `X.Y.Z-rc.N` detection, line
-// extraction, same-line equality) is owned and table-tested by
-// `@traycer-clients/shared/host-version/release-line`. What is tested here is
-// the Desktop policy layered on it: which mode a build runs in, which
-// candidates that mode may select, and what a preference change may disturb.
-// The version tables below still span the near-miss shapes, because the wiring
-// that matters is that a `2.0.0-beta.1` build does NOT acquire implicit
-// following.
 describe("resolveUpdateChannelMode", () => {
   it.each([
     // Explicit preference OFF: the installed version decides.
@@ -107,11 +99,7 @@ describe("isSelectableCandidate", () => {
   });
 });
 
-// A CHANGED PREFERENCE ALWAYS CHANGES THE MODE, which is what makes a
-// "persisted moved, mode did not" branch unreachable and is why neither that
-// branch nor a helper deciding it exists. Pinned here so the invariant
-// `performChannelChange` relies on fails loudly if the derivation gains a mode
-// both preference values can select.
+// Pinned here so the invariant `performChannelChange` relies on fails loudly if the derivation gains a mode both preference values can select.
 describe("preference-to-mode invariant", () => {
   it.each([
     "2.0.0",

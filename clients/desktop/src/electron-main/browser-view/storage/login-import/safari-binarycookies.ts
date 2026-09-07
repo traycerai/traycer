@@ -1,28 +1,6 @@
 import type { ImportCookieRow } from "./cookie-rows";
 
-/**
- * Parser for Safari's `Cookies.binarycookies`.
- *
- * Layout, all offsets relative to the structure they sit in:
- *
- * ```
- * file:   "cook" · pageCount (u32 BE) · pageSize[pageCount] (u32 BE) · pages
- * page:   0x00000100 · cookieCount (u32 LE) · cookieOffset[cookieCount] (u32 LE)
- * cookie: size (u32 LE) · 4 unknown · flags (u32 LE) · 4 unknown ·
- *         urlOffset · nameOffset · pathOffset · valueOffset (u32 LE each) ·
- *         8 bytes end-of-header · expiry (f64 LE) · created (f64 LE) ·
- *         NUL-terminated strings at the offsets
- * ```
- *
- * Flags: bit 0 secure, bit 2 HttpOnly. Dates are Mac absolute time, seconds
- * since 2001-01-01. Safari stores no SameSite, so every cookie is `Lax`, the
- * default every browser enforces for an unspecified one.
- *
- * Every offset is bounds-checked and a cookie that fails a check is skipped,
- * not thrown on; a whole-file structural failure throws and the caller
- * reports the source as unreadable. Values are plaintext - the file's only
- * protection is the TCC-gated container it lives in.
- */
+/** Every offset is bounds-checked and a cookie that fails a check is skipped, not thrown on; a whole-file structural failure throws and the caller reports the source as unreadable. */
 
 const FILE_MAGIC = "cook";
 const PAGE_HEADER = 0x00000100;

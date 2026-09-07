@@ -114,9 +114,7 @@ describe("formatResetDateTime", () => {
     const formatted = formatResetDateTime(
       Date.parse("2026-07-11T10:35:00.000Z"),
     );
-    // Exact weekday/time is TZ/locale-dependent, so assert structure rather
-    // than a literal string: a three-letter weekday, then a time with an
-    // AM/PM designator, and no year/date digits leaking back in.
+    // Exact weekday/time is TZ/locale-dependent, so assert structure rather than a literal string: a three-letter weekday, then a time with an AM/PM designator, and no year/date digits leaking back in.
     expect(formatted).toMatch(/^[A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i);
     expect(formatted).not.toContain("2026");
   });

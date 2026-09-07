@@ -5,9 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 
-// Display-only components for the chat tile's pre-snapshot states (loading and
-// fatal-close error). Kept separate from chat-tile.tsx so Fast Refresh stays
-// intact.
+// Display-only components for the chat tile's pre-snapshot states (loading and fatal-close error).
 
 export function ChatTileLoading(): ReactNode {
   return (
@@ -25,12 +23,7 @@ export function ChatTileLoading(): ReactNode {
 }
 
 /**
- * Shown when the host terminates `chat.subscribe` with a fatal error before
- * any snapshot - the chat will never load on this attempt, so we surface the
- * reason and a retry instead of spinning forever. The wire collapses
- * CHAT_INVALID / CHAT_NOT_VISIBLE / etc. into one UNAUTHORIZED code; the
- * human-readable `reason` carries the real cause, so we drop the redundant
- * `CODE: ` prefix for display.
+ * Shown when the host terminates `chat.subscribe` with a fatal error before any snapshot - the chat will never load on this attempt, so we surface the reason and a retry instead of spinning forever.
  */
 export function ChatTileError(props: {
   readonly details: { readonly reason: string };

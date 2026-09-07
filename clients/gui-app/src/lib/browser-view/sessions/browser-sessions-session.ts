@@ -36,9 +36,8 @@ export interface BrowserSessionsSession {
 export interface BrowserSessionsSessionArgs {
   readonly key: BrowserSessionsStreamKey;
   /**
-   * Whether this renderer knows who it is signed in as yet. NOT sent to main,
-   * which reads the signed-in user from the desktop auth session it owns; it
-   * only decides whether asking is worth an IPC.
+   * Whether this renderer knows who it is signed in as yet.
+   * NOT sent to main, which reads the signed-in user from the desktop auth session it owns; it only decides whether asking is worth an IPC.
    */
   readonly userId: string | null;
   readonly browserView: BrowserViewBridge | null;
@@ -46,31 +45,15 @@ export interface BrowserSessionsSessionArgs {
   readonly callbacks: BrowserSessionsSessionCallbacks;
 }
 
-/**
- * One `browser.sessions` stream as this renderer sees it.
- *
- * Two implementations, and which one you get is decided by whether this shell
- * has a desktop bridge:
- *
- *  - DESKTOP: main owns the socket and every cookie-bearing frame on it, and
- *    this renderer holds an IPC-backed view of the UX projection (H10).
- *  - EVERY OTHER SHELL (mobile, dev/browser): there is no main process and no
- *    jar on this machine, so the renderer opens the stream itself. It cannot
- *    receive a jar frame: the host only sends those to a subscriber that sent
- *    `electronTabLifecycleReady` and answered a desktop identity challenge,
- *    which needs a keystore this shell does not have. The projection below
- *    drops any it somehow saw rather than relying on that argument.
- */
+/** One `browser.sessions` stream as this renderer sees it. */
 export function openBrowserSessionsSession(
   args: BrowserSessionsSessionArgs,
 ): BrowserSessionsSession {
   const browserView = args.browserView;
   if (browserView === null) return openDirectSession(args);
   if (args.userId === null) {
-    // UX only: main reads the signed-in user itself and would simply answer
-    // nothing, so asking before this renderer knows who it is would spend an
-    // IPC and show `connecting` either way. The coordinator restarts when the
-    // identity arrives.
+    // UX only: main reads the signed-in user itself and would simply answer nothing, so asking before this renderer knows who it is would spend an IPC and show `connecting` either way.
+    // The coordinator restarts when the identity arrives.
     return { send: () => undefined, close: () => undefined };
   }
   return openIpcSession(browserView, args);
@@ -99,11 +82,8 @@ function openIpcSession(
         args.callbacks.onTabReleased(event.capability);
         return;
       default: {
-        // A new envelope kind is a COMPILE error here, not a tab release. The
-        // old `default` read `event.capability` off whatever arrived, so an
-        // added kind was delivered as a release and failed only if it happened
-        // to lack that field. Same discipline the coordinator's frame router
-        // states for the server-frame union.
+        // A new envelope kind is a COMPILE error here, not a tab release.
+        // The old `default` read `event.capability` off whatever arrived, so an added kind was delivered as a release and failed only if it happened to lack that field.
         const unreachable: never = event;
         void unreachable;
       }
@@ -113,11 +93,7 @@ function openIpcSession(
     appLogger.warn("[browser] could not open the sessions stream", {
       cause: cause instanceof Error ? cause.message : String(cause),
     });
-    // Gated on `closed` the way the event handler above is: the open is an IPC
-    // round trip, so its rejection can land after the coordinator closed this
-    // session - and the coordinator reuses one `onStatus` closure across
-    // incarnations, so a late `failed` from a dead session would be reported
-    // against the live one that replaced it.
+    // Gated on `closed` the way the event handler above is: the open is an IPC round trip, so its rejection can land after the coordinator closed this session - and the coordinator reuses one `onStatus` closure across incarnations, so a late `failed` from a dead.
     if (closed) return;
     args.callbacks.onStatus("failed", "Browser sessions stream failed.");
   });
@@ -163,10 +139,7 @@ function openDirectSession(
     throw cause;
   }
   const opened = stream;
-  // The same post-close contract the IPC path has: a `send` after close is
-  // ignored rather than pushed into a closed client, and a second `close` is a
-  // no-op rather than a second close of the client and the transport. Both
-  // implementations satisfy one interface, so they answer the same way.
+  // The same post-close contract the IPC path has: a `send` after close is ignored rather than pushed into a closed client, and a second `close` is a no-op rather than a second close of the client and the transport.
   let closed = false;
   return {
     send: (frame) => {
@@ -183,16 +156,13 @@ function openDirectSession(
 }
 
 /**
- * The one narrowing on the direct path. A jar frame here would mean a host
- * treated a shell with no keystore as jar-authorized; it is dropped rather
- * than handled, because this shell has no jar to put it in.
+ * The one narrowing on the direct path.
+ * A jar frame here would mean a host treated a shell with no keystore as jar-authorized; it is dropped rather than handled, because this shell has no jar to put it in.
  */
 function asUxServerFrame(
   frame: BrowserSessionsServerFrame,
 ): BrowserSessionsUxServerFrame | null {
-  // Membership in the protocol's own exclusion set, not a second copy of it:
-  // the predicate narrows to exactly what `BrowserSessionsUxServerFrame`
-  // excludes, so a new jar frame is dropped here the moment it is listed there.
+  // Membership in the protocol's own exclusion set, not a second copy of it: the predicate narrows to exactly what `BrowserSessionsUxServerFrame` excludes, so a new jar frame is dropped here the moment it is listed there.
   if (isBrowserSessionsJarServerFrame(frame)) {
     appLogger.warn("[browser] dropped a jar frame on a shell with no jar", {
       frameKind: frame.kind,

@@ -29,10 +29,8 @@ interface ComposerClipboardCopyArgs {
 
 export interface ComposerClipboardCopyResult {
   /**
-   * True when the structured (rich HTML) payload reached the clipboard; false
-   * when the write degraded to plain text only. Image attachment nodes serialize
-   * to no plain text, so on a `false` result any images in `content` were
-   * dropped — the caller surfaces that instead of reporting a clean copy.
+   * True when the structured (rich HTML) payload reached the clipboard; false when the write degraded to plain text only.
+   * Image attachment nodes serialize to no plain text, so on a `false` result any images in `content` were dropped - the caller surfaces that instead of reporting a clean copy.
    */
   readonly richContentWritten: boolean;
 }
@@ -46,11 +44,8 @@ interface ComposerClipboardPayload {
 interface ClipboardTextContext {
   readonly listDepth: number;
   /**
-   * How a `slashCommand` chip serializes. Copy and provider text use the
-   * canonical `/name`; the chat-find index uses the chip's on-screen label, so a
-   * `$`-written skill is searchable by the text actually rendered. Getting this
-   * wrong is invisible until you search: the index and the DOM disagree, so a
-   * match is either unfindable or counted with no node to highlight.
+   * How a `slashCommand` chip serializes.
+   * Copy and provider text use the canonical `/name`; the chat-find index uses the chip's on-screen label, so a `$`-written skill is searchable by the text actually rendered.
    */
   readonly slashText: (attrs: Record<string, unknown> | undefined) => string;
 }
@@ -94,10 +89,8 @@ export function composerClipboardPlainText(content: JsonContent): string {
 }
 
 /**
- * The same projection as {@link composerClipboardPlainText}, but rendering each
- * chip as it reads on screen rather than as it serializes. Chat find indexes
- * this so a `$`-written skill chip matches what the user sees; everything that
- * leaves the app (clipboard, provider prompt) keeps the canonical form.
+ * The same projection as {@link composerClipboardPlainText}, but rendering each chip as it reads on screen rather than as it serializes.
+ * Chat find indexes this so a `$`-written skill chip matches what the user sees; everything that leaves the app (clipboard, provider prompt) keeps the canonical form.
  */
 export function composerDisplayPlainText(content: JsonContent): string {
   return normalizeClipboardText(
@@ -109,11 +102,8 @@ export function composerDisplayPlainText(content: JsonContent): string {
 }
 
 /**
- * `clipboardTextSerializer` for the chat composer editor. ProseMirror's default
- * serializer emits node `textContent` joined by blank lines, which drops list
- * markers and double-spaces every block. Routing the copied slice through the
- * composer's structured plain-text serializer instead keeps `-` / `1.` markers,
- * mentions, and slash commands intact on Cmd+C / Cmd+X.
+ * `clipboardTextSerializer` for the chat composer editor.
+ * ProseMirror's default serializer emits node `textContent` joined by blank lines, which drops list markers and double-spaces every block.
  */
 export function composerClipboardTextSerializer(slice: Slice): string {
   const doc = sliceToDocJson(slice);

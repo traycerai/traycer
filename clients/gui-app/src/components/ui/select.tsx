@@ -12,22 +12,8 @@ import {
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
-/**
- * Un-presents in a background split pane by forcing the root CLOSED, not by
- * unmounting `SelectContent` the way the other modal-family wrappers do.
- *
- * Select is the one primitive whose content does work while closed. Radix
- * renders closed content into a detached DocumentFragment
- * (`SelectContentFragment`), and `SelectItemText` portals the SELECTED item's
- * text out of it into the trigger's value node. Unmounting the content
- * therefore blanks the trigger's label - and the placeholder cannot cover for
- * it, because Radix suppresses the placeholder whenever `value` is set. That
- * shipped as a background pane losing its host name from the composer.
- *
- * Closing instead drops exactly what the guard is for: the focus trap,
- * `hideOthers` and scroll lock all live in `SelectContentImpl`, which Radix
- * only mounts while open. The closed fragment has no document-wide reach.
- */
+/** Unmounting the content therefore blanks the trigger's label - and the placeholder cannot cover for it,
+ * because Radix suppresses the placeholder whenever `value` is set. */
 function Select({
   open,
   defaultOpen = false,
@@ -38,11 +24,8 @@ function Select({
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
   const [wasPaneFocused, setWasPaneFocused] = React.useState(paneFocused);
 
-  // Adjust during render rather than in an effect (the pattern `useMountedSurfaceKeys`
-  // uses): settling the remembered state on blur makes backgrounding a real close, so
-  // the menu does not spring back open when the pane is refocused. An effect here would
-  // be a cascading render, and Radix does not call `onOpenChange` for a controlled
-  // close, so nothing else would clear it.
+  // An effect here would be a cascading render, and Radix does not call `onOpenChange` for a controlled close,
+  // so nothing else would clear it.
   if (wasPaneFocused !== paneFocused) {
     setWasPaneFocused(paneFocused);
     if (!paneFocused && uncontrolledOpen) setUncontrolledOpen(false);
@@ -54,9 +37,7 @@ function Select({
     <SelectPrimitive.Root
       data-slot="select"
       {...props}
-      // Explicit ternary, not `paneFocused && requestedOpen`:
-      // `react/jsx-no-leaked-render` autofixes that `&&` to `... : null`, which
-      // would hand Radix a null `open` and silently make the root uncontrolled.
+      // : null`, which would hand Radix a null `open` and silently make the root uncontrolled.
       open={paneFocused ? requestedOpen : false}
       onOpenChange={(next) => {
         if (!controlled) setUncontrolledOpen(next);
@@ -122,23 +103,14 @@ function SelectContent({
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
-  // Deliberately NOT `if (!paneFocused) return null` like the sibling wrappers:
-  // the closed content is what feeds the trigger's label (see `Select` above).
-  // The root forces itself closed in a background pane, which is what actually
-  // drops the focus trap / `hideOthers` / scroll lock.
+  // The root forces itself closed in a background pane, which is what actually drops the focus trap /
+  // `hideOthers` / scroll lock.
   const { handleCloseAutoFocus } = usePaneAwareContentGuard(onCloseAutoFocus);
-  // Concealment DOES unmount, unlike the pane decision above: an unfocused
-  // pane stays visible, so the closed content must keep feeding the trigger's
-  // label — but a concealed region is display:none in its entirety, nothing
-  // reads the label, and remount on return restores it atomically (see
-  // `portal-concealment-context`).
+  // Concealment does unmount, unlike the pane decision above: an unfocused pane stays visible, so the closed
+  // content must keep feeding the trigger's label.
   const concealed = usePortalConcealed();
-  // Read above the early return so hook order does not depend on concealment.
-  // The insets are the DEFAULT collision padding and `max-w-safe-dvw` the
-  // default width cap; both are displaceable by a caller (see
-  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`). Popper-only on
-  // Radix's side - an `item-aligned` list positions itself over the trigger and
-  // ignores collision geometry - so the width cap is what carries that case.
+  // Popper-only on Radix's side - an `item-aligned` list positions itself over the trigger and ignores collision
+  // geometry - so the width cap is what carries that case.
   const safeAreaInsets = useSafeAreaCollisionPadding();
   // Read above the early return, like the hooks above it: hook order must
   // not depend on concealment.
@@ -191,24 +163,8 @@ function SelectLabel({
   );
 }
 
-/**
- * An item owns its coarse-pointer target through its own height
- * (`pointer-coarse:min-h-11`), not through the invisible `::after` slop the
- * `[data-*-touch-scope]` files give buttons and select TRIGGERS. Either half of
- * the reason decides it alone:
- *
- * - `SelectContent` renders through `SelectPrimitive.Portal`, so an item is
- *   never a descendant of the surface that opened it. A scope attribute cannot
- *   reach it, and a rule written as if it could is silently dead - which is how
- *   a trigger ends up with a larger hit area than the rows it opens.
- * - Items stack flush, so slop that overhangs by design would reach into the
- *   neighbouring row and hand it the tap. `mobile-shell-touch-targets.css`
- *   makes the same call for `command-item`, for the same geometry.
- *
- * The row grows on touch only; `items-center` keeps the label and the check
- * indicator centred in whatever height that yields, and pointer devices keep
- * the dense list.
- */
+/** A scope attribute cannot reach it, and a rule written as if it could is silently dead - which is how a
+ * trigger ends up with a larger hit area than the rows it opens. */
 function SelectItem({
   className,
   children,

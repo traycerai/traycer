@@ -1,11 +1,7 @@
 import { runCommand } from "../../runner";
 
-// Worker for `std-write.test.ts`. Emits a `result` payload of
-// `WORKER_PAYLOAD_BYTES` through the REAL runner - `createOutput` ->
-// `emitResult` -> `process.exit()` - so the test exercises the actual
-// write-then-exit sequence rather than a hand-rolled imitation of it.
-//
-// `runCommand` owns the exit, so nothing after it runs.
+// Worker for `std-write.test.ts`.
+// Emits a `result` payload of `WORKER_PAYLOAD_BYTES` through the REAL runner - `createOutput` -> `emitResult` -> `process.exit()` - so the test exercises the actual write-then-exit sequence rather than a hand-rolled imitation of it.
 const payloadBytes = Number(process.env.WORKER_PAYLOAD_BYTES);
 if (!Number.isInteger(payloadBytes) || payloadBytes <= 0) {
   throw new Error(

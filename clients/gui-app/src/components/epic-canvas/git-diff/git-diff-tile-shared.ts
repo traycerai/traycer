@@ -13,9 +13,8 @@ export type GitBundleDiffTileRef = Omit<GitDiffTileRef, "diff"> & {
   readonly diff: GitDiffBundleTilePayload;
 };
 
-// Find coverage messages shared between the single-file panel and the bundle
-// find machinery. Co-located so both surfaces describe partial coverage with
-// identical copy.
+// Find coverage messages shared between the single-file panel and the bundle find machinery.
+// Co-located so both surfaces describe partial coverage with identical copy.
 export const GIT_DIFF_LOADING_FIND_MESSAGE = "Diff content is still loading.";
 export const GIT_DIFF_MISSING_FIND_MESSAGE = "This file is no longer changed.";
 export const GIT_DIFF_BINARY_FIND_MESSAGE =
@@ -26,9 +25,7 @@ export const GIT_DIFF_TRUNCATED_FIND_MESSAGE =
 export const GIT_BUNDLE_DIFF_LOADING_FIND_MESSAGE =
   "Bundle diff content is still loading.";
 
-// Identity of a "load the full diff" request for a single file. Shared so the
-// single-file panel and a bundle's inline section compute the cache identity
-// the same way before flipping the byte budget off.
+// Shared so the single-file panel and a bundle's inline section compute the cache identity the same way before flipping the byte budget off.
 export function fileDiffLoadFullIdentity(args: {
   readonly runningDir: string;
   readonly filePath: string;

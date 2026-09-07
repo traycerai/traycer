@@ -14,18 +14,7 @@ export interface ActivateCommentThreadTarget {
 }
 
 /**
- * "Bring this thread forward": select it, ping its anchor in the document, and
- * put the comments surface on screen.
- *
- * Which surface that is depends on the viewport, because the two mount the
- * comments panel in different places. A desktop viewport has the left sidebar
- * beside the canvas, so selecting the panel and expanding the sidebar is enough.
- * A narrow viewport has no sidebar mounted at all - the panel lives in the
- * tab-switcher sheet's Comments category - so the sheet has to be opened too;
- * selecting the panel alone would write a selection nothing on screen reads, and
- * the tap would look like it did nothing. Both branches select through the same
- * left-panel store the sheet reads its category from, so there is one selection
- * either way.
+ * Select the thread and put comments on screen. Narrow viewports must also open the tab-switcher sheet; the sidebar is not mounted there.
  */
 export function useActivateCommentThread(
   target: ActivateCommentThreadTarget,

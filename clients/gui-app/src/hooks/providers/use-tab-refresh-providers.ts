@@ -19,13 +19,7 @@ type ProvidersListResponse = ResponseOfMethod<
   "providers.list"
 >;
 
-/**
- * Tab-scoped twin of `useRefreshProviders`: force-refreshes provider auth on the
- * CURRENT tab's host (not the app-wide active host) and writes the result
- * under that host's `providers.list` key, so the re-auth gate reflects the
- * host the composer actually runs turns on. The tab host is fixed for the
- * tab's life, so there is no host-swap race to capture in `onMutate`.
- */
+/** Tab-scoped twin of `useRefreshProviders`: force-refreshes provider auth on the CURRENT tab's host (not the app-wide active host) and writes the result under that host's `providers.list` key, so the re-auth gate reflects the host the composer actually runs turns on. */
 export function useTabRefreshProviders(): () => Promise<void> {
   const client = useTabHostClient();
   const tabHostId = useTabHostId();
@@ -37,14 +31,7 @@ export function useTabRefreshProviders(): () => Promise<void> {
     options: {
       mutationKey: providersMutationKeys.refresh(),
       onSuccess: async (data: ProvidersListResponse) => {
-        // This is the TERMINAL-login completion edge in practice: a terminal
-        // sign-in has no client-observable completion event, so the user's
-        // "Check sign-in status" press (and the token-paste form's refresh) is
-        // what tells the client the account exists now. Under auto-enablement
-        // that can flip `available`, so the catalogs have to move with the
-        // list or the picker keeps serving its cached "No account detected"
-        // row - which the commit helper does, by invalidating every
-        // `PROVIDER_INVALIDATIONS` entry except the list it just wrote.
+        // This is the TERMINAL-login completion edge in practice: a terminal sign-in has no client-observable completion event, so the user's "Check sign-in status" press (and the token-paste form's refresh) is what tells the client the account exists now.
         await commitAuthoritativeProvidersList({
           queryClient,
           hostId: tabHostId,

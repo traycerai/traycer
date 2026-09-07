@@ -1,23 +1,3 @@
-/**
- * Desktop IPC binding for the selection authority (P1.1), following the
- * ownership-claim pattern (`ownership-ipc.ts` + `electron-preload/
- * ownership-bridge.ts`). The settled binding rules live in
- * `ipc-contracts/selection-authority-ipc.ts`; this module is their
- * implementation plus the main-process composition of the engine's ports.
- *
- * Three properties of this file are load-bearing:
- *
- *  - REPORTER IDENTITY comes from the IPC sender (`resolveSenderWindowId`),
- *    never from a payload, so no renderer can report as another window.
- *  - The ATTACH HANDLER is the contract's exact choreography: pure parses
- *    first, then EXACTLY ONE state-testing engine call per seq-parseable
- *    request - and ZERO engine calls when the seq itself does not parse. Main
- *    is single-threaded across the parse and the call, which is what makes
- *    the claim race-free without a lock.
- *  - EVENT FAN-OUT is unconditional. A window that has not attached yet is
- *    either buffering or disposed, so a blind broadcast is harmless and
- *    avoids a per-window registry that could drift from the engine's.
- */
 import { app } from "electron";
 import {
   parseSelectionAttachRequest,
@@ -64,14 +44,7 @@ const authorityLog: AuthorityLog = {
   },
 };
 
-/**
- * A crashed renderer whose window survives. The attach fence already retires
- * the dead generation the moment the reloaded preload allocates its seq, but
- * a renderer that never comes back would otherwise leave its announced
- * sessions counted as LIVE forever - and a live session suppresses the death
- * counter for that host (invariant 5). So the crash is reported as a detach
- * in its own right, exactly as the binding rules require.
- */
+/** The attach fence already retires the dead generation the moment the reloaded preload allocates its seq, but a renderer that never comes back would otherwise leave its announced. */
 function subscribeRenderProcessGone(
   listener: (webContentsId: number) => void,
 ): () => void {
@@ -157,25 +130,8 @@ function registerAttachSeqSync(
 }
 
 /**
- * The membership edge (P1.2 cold review F6). Deliberately takes no argument
- * and returns nothing: the renderer is not telling main WHAT changed - it has
- * no authority over membership - only that main's copy is now stale. Main goes
- * and reads the registry itself, publishing one atomic snapshot through the
- * ordinary fleet path, so every existing race rule (generation stamping,
- * revision monotonicity, one-snapshot-one-transaction) applies unchanged.
- *
- * Failures never reach the caller, and the containment lives in
- * `DesktopHostFleetSource.refresh()`, which is TOTAL by contract - deliberately
- * NOT duplicated here.
- *
- * The first fix put a try/catch at this handler, which was correct for this
- * path and wrong as a design: `refresh()` has THREE owners (startup's
- * fire-and-forget call, the identity-change subscription, and this invoke), and
- * wrapping one of them left the other two able to leak an unhandled rejection
- * in main. Containment belongs to whoever owns the promise, once, so the
- * guarantee cannot depend on each caller remembering. A second catch here would
- * now be unreachable, and unreachable defence reads as a live guard to the next
- * person who moves the first one.
+ * Failures never reach the caller, and the containment lives in `DesktopHostFleetSource.refresh()`, which is TOTAL by contract - deliberately NOT duplicated here.
+ * Containment belongs to whoever owns the promise, once, so the guarantee cannot depend on each caller remembering.
  */
 function registerFleetRefresh(
   bridge: RunnerIpcBridge,
@@ -208,10 +164,6 @@ function registerInvokes(
       }
       const request = parseSelectionAttachRequest(rawRequest);
       if (request === null) {
-        // Exactly one guarded call: for the latest unconsumed seq this
-        // consumes it and retires the previous attachment, terminating the
-        // generation - the same seq can never be replayed with a corrected
-        // envelope.
         const claimed = engine.refuseMalformedAttach(reporterId, attachSeq);
         return { ok: false, kind: "malformed-request", claimed };
       }
@@ -279,11 +231,6 @@ function registerFanOut(
   });
 }
 
-/**
- * Hard-teardown detach. Soft replacement (reload, navigation, HMR re-mount)
- * is covered by the attach claim itself, so only destruction and crashes are
- * reported here.
- */
 function registerDetachSignals(
   bridge: RunnerIpcBridge,
   engine: SelectionAuthorityEngineImpl,

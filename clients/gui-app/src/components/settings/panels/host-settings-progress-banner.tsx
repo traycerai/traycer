@@ -6,15 +6,7 @@ interface HostProgressBannerProps {
   readonly progress: HostProgressState;
 }
 
-/**
- * Settings' live host-mutation banner.
- *
- * Reads the SAME copy table as the window narrator (F19). These two surfaces
- * used to phrase one install two ways - "Setting up host" here against
- * "Setting up Traycer Host…" there, MiB here against MB there - so watching a
- * download from Settings and from the boot surface showed different words and
- * different sizes for the same bytes.
- */
+/** Settings' live host-mutation banner. */
 export function HostProgressBanner(props: HostProgressBannerProps) {
   const view = buildHostProgressView(props.progress);
   if (view === null) return null;

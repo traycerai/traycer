@@ -8,66 +8,29 @@ import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { hostPidMetadataPath } from "../store/paths";
 
-// Mirror of the writer contract owned by the host (the external
-// Traycer Host). Read by string path so
-// the CLI keeps zero imports on the host package. Tolerate unknown legacy
-// keys (e.g. the removed `httpUrl` field) by parsing as a wider record and
-// projecting only the keys we need.
+// Mirror of the writer contract owned by the host (the external Traycer Host).
+// Read by string path so the CLI keeps zero imports on the host package.
 export interface HostPidMetadata {
   readonly pid: number;
   readonly hostId: string;
   readonly version: string;
   readonly websocketUrl: string;
   readonly startedAt: string;
-  /**
-   * The publishing process's kernel-recorded creation stamp, `null` when this
-   * pid.json predates the field. Absence is "cannot compare identity" and
-   * must never be read as a mismatch.
-   */
+  /** The publishing process's kernel-recorded creation stamp, `null` when this pid.json predates the field. Absence is "cannot compare identity" and must never be read as a mismatch. */
   readonly processStartIdentity: ProcessStartIdentity | null;
-  /**
-   * The host's Layer 0 single-writer (I1) verdict, `null` when this pid.json
-   * carries none. Absence is "not recorded" - every file written before the
-   * field shipped lacks it - and must never be read as "guaranteed".
-   */
+  /** The host's Layer 0 single-writer (I1) verdict, `null` when this pid.json carries none. Absence is "not recorded" - every file written before the field shipped lacks it - and must never be read as "guaranteed". */
   readonly layer0: HostLayer0Record | null;
-  /**
-   * The SLOT home's Layer 0 verdict, present only on a dev identity-pool
-   * host, which takes TWO locks - slot home and identity home - where every
-   * other host takes one.
-   *
-   * `null` on every ordinary host and on every pid.json written before the
-   * field shipped. Absence is "there was no second lock, or it was not
-   * recorded" and, exactly like {@link layer0}, must never be read as
-   * "guaranteed": until the host started writing this, a slot lock that
-   * degraded WITHOUT holding was discarded before any record existed, so
-   * {@link layer0}'s clean `acquired` was the only thing published and it
-   * described the other home.
-   */
+  /** The SLOT home's Layer 0 verdict, present only on a dev identity-pool host, which takes TWO locks - slot home and identity home - where every other host takes one. `null` on every ordinary host and on every pid.json written before the field shipped. */
   readonly layer0Slot: HostLayer0Record | null;
 }
 
-/**
- * Mirror of the host's `HostLayer0Record`. A host that could not take the
- * single-writer lock starts anyway (refusing would trade a rare corruption for
- * a routine outage) and records why, because nothing else it writes survives:
- * the framed status pipe usually has no reader, and the stderr line falls out
- * of the log tail the support attachment captures.
- *
- * `unrecognized` exists so a CLI older than its host reports "I cannot confirm
- * the guarantee" rather than dropping the record and reporting nothing, which
- * is the same silence the field was added to remove.
- */
+/** Mirror of the host's `HostLayer0Record`. A host that could not take the single-writer lock starts anyway (refusing would trade a rare corruption for a routine outage) and records why, because nothing else it writes survives: the framed status pipe usually has no reader, and the stderr line falls out of the log tail the support attachment captures. */
 export type HostLayer0Record =
   | { readonly status: "acquired"; readonly attemptId: string }
   | {
       readonly status: "degraded";
       readonly attemptId: string;
-      /**
-       * Display form of the host's cause. String causes pass through verbatim;
-       * the structured `os-error` cause is JSON-rendered rather than dropped,
-       * so an unfamiliar shape still reaches the report.
-       */
+      /** Display form of the host's cause. String causes pass through verbatim; the structured `os-error` cause is JSON-rendered rather than dropped, so an unfamiliar shape still reaches the report. */
       readonly cause: string;
       readonly evidence: string;
     }
@@ -148,12 +111,7 @@ export async function readHostPidMetadata(
   };
 }
 
-/**
- * Additive and fail-open on shape: a malformed record must not make the whole
- * pid.json unreadable (that would cost the user host discovery over a
- * diagnostic field), but it must not read as healthy either - hence
- * `unrecognized` rather than `null` for anything present and unexpected.
- */
+/** Additive and fail-open on shape: a malformed record must not make the whole pid.json unreadable (that would cost the user host discovery over a diagnostic field), but it must not read as healthy either - hence `unrecognized` rather than `null` for anything present and unexpected. */
 export function decodeLayer0Record(value: unknown): HostLayer0Record | null {
   if (value === null || value === undefined) {
     return null;
@@ -181,17 +139,7 @@ export function decodeLayer0Record(value: unknown): HostLayer0Record | null {
   return { status: "unrecognized", raw: JSON.stringify(record) };
 }
 
-/**
- * Purge the published pid metadata on the host's behalf.
- *
- * The writer contract says the HOST removes pid.json on graceful shutdown -
- * but a Windows stop is a `taskkill /T /F`, which never lets the host's
- * shutdown handler run, so the file survives every deliberate stop there.
- * That matters because "pid.json present but endpoint dead" is the signal
- * clients read as *the host died unexpectedly* (the desktop's health
- * watchdog auto-respawns on it); a deliberately stopped host must leave no
- * metadata behind or it gets resurrected against the user's intent.
- */
+/** Purge the published pid metadata on the host's behalf. The writer contract says the HOST removes pid.json on graceful shutdown - but a Windows stop is a `taskkill /T /F`, which never lets the host's shutdown handler run, so the file survives every deliberate stop there. */
 export async function removeHostPidMetadata(
   environment: Environment | undefined,
 ): Promise<void> {

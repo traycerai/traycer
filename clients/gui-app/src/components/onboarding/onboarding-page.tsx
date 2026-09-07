@@ -417,62 +417,26 @@ const ONBOARDING_STYLE = `
   }
 }`;
 
-/**
- * How far a drag must travel sideways before it changes act. Absolute, like
- * every other touch threshold in this app: a thumb covers the same distance on
- * a small phone as on a tablet, so a fraction of the viewport would be a flick
- * on one and a haul on the other.
- */
+/** How far a drag must travel sideways before it changes act. */
 const ACT_SWIPE_COMMIT_PX = 56;
 
-/**
- * How decisively the horizontal travel must beat the vertical at the release.
- * The stage carries the tour's only scrolling surfaces - the provider catalog
- * and the agent-guide editor - so "mostly sideways" is not enough: a diagonal a
- * scroller could plausibly own stays with the scroller.
- */
+/** How decisively the horizontal travel must beat the vertical at the release. */
 const ACT_SWIPE_DOMINANCE = 1.5;
 
-/**
- * Cross-axis travel that abandons the gesture, judged on every MOVE rather than
- * only at the release. A finger that has already scrolled the providers list is
- * not owed an act change because it happened to drift back to level on its way
- * out, and reading the endpoints alone cannot tell those two drags apart.
- */
+/** Cross-axis travel that abandons the gesture, judged on every move rather than only at the release. */
 const ACT_SWIPE_CROSS_FAIL_PX = 24;
 
-/**
- * The strip at each side of the screen the platform's own back/forward swipes
- * own - the same 32px `use-edge-nav-swipe.ts` reserves, measured the same way
- * (from the app surface, so a landscape sensor housing moves the zone rather
- * than swallowing it). The platform's own navigation must keep working over
- * the tour, so the tour never answers a swipe that starts in its strip.
- */
+/** The platform's own navigation must keep working over the tour, so the tour never answers a swipe that starts
+ * in its strip. */
 const ACT_SWIPE_EDGE_ZONE_PX = 32;
 
-/**
- * Targets a swipe is never taken from: the keyboard handler's guard
- * (`button, a, input, textarea, select`) plus `[contenteditable]`. The extra
- * arm is the agent-guide act, whose editor is a CodeMirror surface rather than
- * a `textarea` - a horizontal drag inside it is the caret being pulled through
- * the text, not a request for the next act.
- */
+/** Targets a swipe is never taken from: the keyboard handler's guard (`button, a, input, textarea, select`)
+ * plus `[contenteditable]`. */
 const ACT_SWIPE_EXEMPT_TARGETS =
   "button, a, input, textarea, select, [contenteditable]";
 
-/**
- * What Skip / Back / Continue are worth in height on the shell they are playing
- * in: nothing on desktop, which keeps its own tiers, and iOS's 44pt floor on
- * the installed app, where 36px is under what a thumb can reliably hit.
- *
- * The tall-viewport tier is restated rather than left to cascade. A modern
- * phone clears `min-height: 920px` in portrait, and `tailwind-merge` only
- * displaces a class whose modifiers match - so without it exactly those phones
- * would fall through to the desktop's 40px bump.
- *
- * Resolved once and handed to all three buttons, rather than branched at each
- * of them: the page answers the platform question in one place per concern.
- */
+/** A modern phone clears `min-height: 920px` in portrait, and `tailwind-merge` only displaces a class whose
+ * modifiers match - so without it exactly those phones would fall through to the desktop's 40px bump. */
 function actionHeightClass(mobileApp: boolean): string {
   return mobileApp ? "h-11 [@media(min-height:920px)]:h-11" : "";
 }
@@ -487,42 +451,14 @@ interface ActSwipeTracking {
   abandoned: boolean;
 }
 
-/** Whether a touch landed in the strip the platform's navigation swipes own. */
 function withinActSwipeEdgeZone(clientX: number): boolean {
   const insets = readSafeAreaInsets();
   if (clientX <= insets.left + ACT_SWIPE_EDGE_ZONE_PX) return true;
   return clientX >= window.innerWidth - insets.right - ACT_SWIPE_EDGE_ZONE_PX;
 }
 
-/**
- * Horizontal swipe across the stage: left for the next act, right for the
- * previous one. The tour teaches a swipe-native app, so it should answer one.
- *
- * It reports a DIRECTION and nothing else. What that leads to is the page's
- * business, and the page spends it on the very callbacks the Back and Continue
- * buttons call - so the agent-guide save gate, the finish-on-the-last-act
- * branch and the navigation analytics all hold with no second copy of any of
- * them. Nothing here is lower-level than the buttons.
- *
- * Mobile only, and inert rather than merely quiet on desktop: the effect
- * installs no listeners at all there. A narrow desktop window renders the same
- * stacked layout, and a horizontal drag in one is a trackpad scroll.
- *
- * The recognizer is deliberately small. It never calls `preventDefault`, so it
- * takes nothing from the scrollers underneath it and nothing from text
- * selection; the price is that it cannot reserve a gesture from the web view's
- * scroller the way the shell's edge swipe must, which it does not need to -
- * there is nothing on the stage that pans sideways to lose the race to.
- *
- * A pointer passes through two states. It is undecided until the release,
- * except that a move whose vertical travel dominates abandons it outright: that
- * is what keeps a scroll of the provider catalog from ending as an act change,
- * and it is judged while the drag is happening rather than from where it
- * finished.
- *
- * Down on the surface, move and release on the window, so a swipe that leaves
- * the stage mid-flight still completes rather than being stranded.
- */
+/** It never calls `preventDefault`, so it takes nothing from the scrollers underneath it and nothing from text
+ * selection. */
 function useActSwipe(
   surfaceRef: RefObject<HTMLDivElement | null>,
   enabled: boolean,
@@ -606,7 +542,6 @@ function useActSwipe(
   }, [enabled, surfaceRef]);
 }
 
-/** What an act puts in the stage's second column on the shell it plays in. */
 type OnboardingMiniature =
   | { readonly kind: "desktop"; readonly actId: DesktopOnboardingActId }
   | { readonly kind: "phone"; readonly scene: OnboardingPhoneSceneId }
@@ -614,19 +549,8 @@ type OnboardingMiniature =
   | { readonly kind: "login-import" }
   | { readonly kind: "none" };
 
-/**
- * The tour's ONE diorama branch (the act list itself is the other platform
- * read). Narrowing happens per case, so the desktop miniature only ever
- * receives an id it can draw - no cast, and a new act id fails to compile until
- * it says what it shows.
- *
- * The two acts that do real setup work drop the miniature on a phone: providers
- * already stacked to its list-only layout below `lg`, and the agent guide moves
- * its editor into the copy rail, where a phone keyboard can reach it. Session
- * import and login import are desktop-only (the mobile tour never lists
- * them), and show no miniature at all - their stages are the live wizard and
- * the live import flow.
- */
+/** Session import and login import are desktop-only (the mobile tour never lists them), and show no miniature
+ * at all - their stages are the live wizard and the live import flow. */
 function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
   const mobile = isMobileApp();
   switch (actId) {
@@ -652,13 +576,8 @@ function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
   }
 }
 
-/**
- * The stage's miniature column. The live miniature follows the user's real
- * theme on every act, so the preview always matches what the app looks like
- * for them - it renders with the same semantic tokens as the real shell.
- * Session import has no mock-up to preview: its window holds the real wizard,
- * reading the user's real machine.
- */
+/** The live miniature follows the user's real theme on every act, so the preview always matches what the app
+ * looks like for them - it renders with the same semantic tokens as the real shell. */
 function OnboardingMiniatureColumn(props: {
   readonly actId: OnboardingActId;
   readonly addon: OnboardingAct["addon"];
@@ -696,13 +615,10 @@ function OnboardingMiniatureColumn(props: {
     <div
       className={cn(
         "onboarding-diorama-wrap mx-auto w-full min-w-0 self-start lg:mx-0 lg:self-center",
-        // The providers list carries the act on its own; drop the mini-app
-        // when stacked. (Command-theme keeps its diorama, which itself shows
-        // just the Cmd+K palette when stacked.)
+        // The providers list carries the act on its own; drop the mini-app when stacked.
         addon === "agents" && "max-lg:hidden",
-        // The phone frame is container-led: the grid row it sits in is its
-        // height budget, so it can never run under the actions bar the way a
-        // viewport-led height could.
+        // The phone frame is container-led: the grid row it sits in is its height budget, so it can never run under
+        // the actions bar the way a viewport-led height could.
         phone && "h-full min-h-0 self-stretch",
       )}
     >
@@ -721,13 +637,8 @@ function OnboardingMiniatureColumn(props: {
   );
 }
 
-/**
- * Stacked screens: blur + fade the desktop mini-app's lower edge behind the
- * actions bar so it reads as a clean footer, not a cut-off pane. The phone
- * frame is height-contained by its grid row and never reaches this band, so
- * the band would only smear its bottom bezel - the desktop miniature and the
- * session-import wizard window only.
- */
+/** The phone frame is height-contained by its grid row and never reaches this band, so the band would only
+ * smear its bottom bezel - the desktop miniature and the session-import wizard window only. */
 function OnboardingStageEdgeFade(props: { readonly visible: boolean }) {
   if (!props.visible) return null;
   return (
@@ -787,9 +698,8 @@ function ActCopy(props: {
           <OnboardingDetectedAgents />
         </div>
       ) : null}
-      {/* No `onboarding-addon` width cap here: the editor is the act on a
-          phone, so it takes the rail's full width and whatever height the
-          stretched layout leaves it. */}
+      {/* No `onboarding-addon` width cap here: the editor is the act on a phone, so it takes the rail's full width
+         and whatever height the stretched layout leaves it. */}
       {act.addon === "agent-guide" ? (
         <div className="flex min-h-0 w-full flex-1 flex-col self-stretch overflow-hidden pt-1 text-left">
           {/* The phone rail has no mini-app window to carry the picker as its
@@ -837,9 +747,8 @@ function ProgressRail(props: {
   );
 }
 
-// The intro's own key cap - tuned to the diorama's palette rather than the
-// app's `components/ui/kbd`. It only ever advertises the tour's navigation
-// chords, so the whole component gates rather than each of its call sites.
+// It only ever advertises the tour's navigation chords, so the whole component gates rather than each of its
+// call sites.
 function Kbd(props: {
   readonly children: ReactNode;
   readonly tone: "light" | "dark";
@@ -871,14 +780,8 @@ function OnboardingWordmark() {
   );
 }
 
-/**
- * The session scan starts with the tour, not with its last act: reading every
- * session on the machine takes a while, and the acts before the import one are
- * exactly that while. Only a tour that will actually show the act pays for it -
- * the phone tour never lists it, capability or not - and it pauses while a run
- * is in flight. A finished run does not hold it back: a replayed tour after an
- * earlier import would otherwise wait for the whole scan at the last act.
- */
+/** Only a tour that will actually show the act pays for it - the phone tour never lists it, capability or not -
+ * and it pauses while a run is in flight. */
 function useOnboardingSessionImportScan(
   acts: ReadonlyArray<OnboardingAct>,
 ): SessionImportScanHandle {
@@ -895,51 +798,12 @@ function useOnboardingSessionImportScan(
   );
 }
 
-/**
- * The tour, scoped to ONE host of the user's choosing.
- *
- * Both host-dependent acts read a real machine - the session scan lists what
- * is on it, the agent guide is stored on it - and a person with several hosts
- * should not have to replay the tour once per machine. The pick is held here,
- * in page state rather than a store, because it belongs to this tour: it must
- * not leak into Settings' own scope or outlive the tour.
- *
- * Both runtimes are re-provided, and both are needed: the guide draft is a
- * unary host RPC (`HostRuntimeContext`), while the session scan and every run
- * started from the wizard ride the STREAM (`StreamRuntimeContext`). Swapping
- * only one is how a surface reads host B's sessions over host A's transport.
- * They wrap `OnboardingTour` rather than sitting inside it because the hooks
- * that must move - the scan gate, the guide query and its mutation - are the
- * tour's own.
- *
- * Rendering both providers UNCONDITIONALLY is load-bearing (the pattern
- * `ResourceMonitorPopover` documents): mounting them only once a pick resolves
- * changes the element type at this position, so React would remount the whole
- * tour - and reset the act the user is on - the instant a host was chosen.
- *
- * Safe to re-provide here because the tour contains no composer and therefore
- * no microphone path: `useDictationAvailability` / `useVoiceDictation` are
- * app-wide by design (see `useScopedHostBinding`), and a grep of the
- * onboarding and session-import trees finds neither.
- */
+/** The pick is held here, in page state rather than a store, because it belongs to this tour: it must not leak
+ * into Settings' own scope or outlive the tour. */
 export function OnboardingPage(props: { readonly replay: boolean }) {
   const [scopedHostId, setScopedHostId] = useState<string | null>(null);
   const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
-  // The tour this shell can run, not the full catalog: the installed app plays
-  // the phone tour, an AMBIENT host that cannot scan sessions never reaches the
-  // session-import act, whose stage is the live wizard, and a machine that
-  // cannot import logins (no browser bridge, or saving off) never reaches the
-  // login-import act, whose stage is the live import flow. Everything below
-  // counts acts off this list, so an omitted act is unreachable rather than
-  // merely blank.
-  //
-  // Read HERE, above the re-providers, so the tour's length is a fact about
-  // this app and not about the machine the picker happens to point at. Read
-  // below them it would move with a pick, retiring the act a user is standing
-  // on - the displacement the act re-seating in `OnboardingTour` exists to
-  // stop. The cost of that choice is that the act can outlive its capability
-  // on a PICKED host, so the session-import stage asks the same question again
-  // of the client the import would run on and refuses there.
+  // The tour this shell can run, not the full catalog.
   const sessionImportAvailable = useSessionImportAvailable();
   const loginImportAvailable = useLoginImportAvailable();
   const acts = useMemo(
@@ -967,27 +831,16 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   );
 }
 
-/**
- * The tour's host pick as the stages see it, and the one way to change it.
- *
- * Save FIRST, then commit the pick. The mutation `saveAgentGuideDraft` calls is
- * bound to the host the tour is on at this moment, so a pick committed ahead
- * of it would write the departing host's draft onto the arriving one. A failed
- * save keeps the current host selected and leaves the pane's own "Not saved"
- * status showing, rather than silently dropping an edit.
- */
+/** A failed save keeps the current host selected and leaves the pane's own "Not saved" status showing, rather
+ * than silently dropping an edit. */
 function useOnboardingHostPicker(input: {
   readonly scope: HostScope;
   /** `null` while the tour follows the host it opened on. */
   readonly scopedHostId: string | null;
   readonly setScopedHostId: (hostId: string) => void;
   readonly saveAgentGuideDraft: () => Promise<boolean>;
-  /**
-   * Whether there is an edit to carry AND a host to carry it to. A save that
-   * cannot succeed must not be the thing standing between the user and the
-   * pick: a host that went away mid-tour would otherwise refuse every write,
-   * and with it every attempt to leave it.
-   */
+  /** A save that cannot succeed must not be the thing standing between the user and the pick: a host that went
+   * away mid-tour would otherwise refuse every write, and with it every attempt to leave it. */
   readonly hasDraftToSaveBeforeSwitch: () => boolean;
   readonly resetAgentGuideDraftForNextHost: () => void;
 }): OnboardingHostPicker {
@@ -1015,13 +868,8 @@ function useOnboardingHostPicker(input: {
         setScopedHostId(hostId);
         return;
       }
-      // LATEST PICK WINS. `saveAgentGuideDraft` reports `false` for two
-      // opposite things - the write was refused, and a write is already in
-      // flight - and treating both as "stay put" dropped the second pick of
-      // any B-then-C pair: the tour landed on B, which the user had already
-      // moved off. The destination is a ref the settling save reads, so a
-      // pick made mid-write REPLACES the one being carried instead of
-      // starting a second write of the same draft.
+      // The destination is a ref the settling save reads, so a pick made mid-write replaces the one being carried
+      // instead of starting a second write of the same draft.
       pendingHostPickRef.current = hostId;
       if (hostPickSaveInFlightRef.current) return;
       if (!hasDraftToSaveBeforeSwitch()) {
@@ -1036,8 +884,8 @@ function useOnboardingHostPicker(input: {
         hostPickSaveInFlightRef.current = false;
         const destination = pendingHostPickRef.current;
         pendingHostPickRef.current = null;
-        // A REFUSED write keeps the tour where it is - moving on would leave
-        // the edit nowhere - and the pane's own "Not saved" status says so.
+        // A refused write keeps the tour where it is - moving on would leave the edit nowhere - and the pane's own
+        // "Not saved" status says so.
         if (!saved || destination === null) return;
         resetAgentGuideDraftForNextHost();
         setScopedHostId(destination);
@@ -1053,22 +901,13 @@ function useOnboardingHostPicker(input: {
     ],
   );
 
-  // Read INSIDE the providers, so it is the transport the stages actually use.
-  // `useScopedStreamBinding` fills its binding in an effect, so the scope can
-  // say `ready` for host B while this still names host A - the stages must not
-  // render live content through that gap. The UNARY half needs no twin: under
-  // an explicit pick `deriveHostScopeStatus` only answers `ready` once the
-  // transient client exists, and that client is built synchronously by
-  // `useHostClientFor`'s `useMemo`, so there is no commit where the scope is
-  // usable and `HostRuntimeContext` is still the ambient binding.
+  // `useScopedStreamBinding` fills its binding in an effect, so the scope can say `ready` for host B while this
+  // still names host A - the stages must not render live content through that gap.
   const streamBinding = useStreamRuntimeBinding();
   const streamOnPickedHost =
     streamBinding !== null && streamBinding.hostId === scope.hostId;
-  // Memoised because it is threaded through four layers - the miniature
-  // column, the diorama, its scene and the guide pane - and a fresh object per
-  // render defeats any memo one of them grows later. (It cannot hold its
-  // identity yet: `useHostScopeFor` builds a new `scope` every render, so this
-  // memo only starts paying once the scope is memoised at its source.)
+  // (It cannot hold its identity yet: `useHostScopeFor` builds a new `scope` every render, so this memo only
+  // starts paying once the scope is memoised at its source.)
   return useMemo<OnboardingHostPicker>(
     () => ({
       scope,
@@ -1082,7 +921,6 @@ function useOnboardingHostPicker(input: {
 
 function OnboardingTour(props: {
   readonly replay: boolean;
-  /** The tour being played - see `OnboardingPage` for why it is decided there. */
   readonly acts: ReadonlyArray<OnboardingAct>;
   readonly scope: HostScope;
   /** `null` while the tour follows the host it opened on. */
@@ -1090,9 +928,8 @@ function OnboardingTour(props: {
   readonly setScopedHostId: (hostId: string) => void;
 }) {
   const { acts, scope, scopedHostId, setScopedHostId } = props;
-  // Draft + provider-derived default live in one state object so the
-  // query-sync effect mirrors them through a single trailing setState call
-  // (React's effect-sync rule only permits the final statement to set state).
+  // Draft + provider-derived default live in one state object so the query-sync effect mirrors them through a
+  // single trailing setState call (React's effect-sync rule only permits the final statement to set state).
   const [agentGuide, setAgentGuide] = useState<{
     readonly draft: string | null;
     readonly default: string;
@@ -1105,24 +942,20 @@ function OnboardingTour(props: {
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
   const stageRef = useRef<HTMLDivElement | null>(null);
-  // The page's other platform read (`miniatureForAct` has the first): the
-  // interaction polish the installed app gets and a desktop window must not -
-  // swipe between acts, and controls a thumb can actually hit.
+  // The page's other platform read (`miniatureForAct` has the first): the interaction polish the installed app
+  // gets and a desktop window must not - swipe between acts, and controls a thumb can actually hit.
   const mobileApp = isMobileApp();
   const actionHeight = actionHeightClass(mobileApp);
   const navigate = useNavigate();
   const router = useRouter();
   const { replay } = props;
   const sessionImportScan = useOnboardingSessionImportScan(acts);
-  // An import the login-import act started is a desktop write that may be
-  // sitting on a keystore prompt; Continue holds until it settles so the
-  // stage is there to show the outcome. Skip does not: the write finishes
-  // either way, and the user can always leave.
+  // An import the login-import act started is a desktop write that may be sitting on a keystore prompt; Continue
+  // holds until it settles so the stage is there to show the outcome.
   const loginImportPending =
     useIsMutating({ mutationKey: browserMutationKeys.importLogins() }) > 0;
-  // Read the raw step and clamp here: negotiation can retire an act while the
-  // user is already past its new end, and the clamp is what keeps the page on
-  // a real act until the next move re-seats the store.
+  // Read the raw step and clamp here: negotiation can retire an act while the user is already past its new end,
+  // and the clamp is what keeps the page on a real act until the next move re-seats the store.
   const storedStep = useOnboardingStore((state) => state.step);
   const step = clampOnboardingStep(storedStep, acts.length);
   const isLastAct = isLastOnboardingStep(storedStep, acts.length);
@@ -1144,16 +977,8 @@ function OnboardingTour(props: {
   } = agentGuideSetMutation;
 
   const act = acts[step];
-  // The act list can change under the user: session import resolving
-  // `unsupported` drops its act, and login import resolving available
-  // inserts one right after it (`useLoginImportAvailable` is false until the
-  // save-logins read answers). The store's position is an INDEX, so either
-  // would move a user past that point onto whichever act now sits at their
-  // index - a user on the agent guide would find themselves on the login
-  // import. Re-seated by act id instead: the ref carries the act of the
-  // previous commit, and the layout effect below runs before this commit
-  // paints, so the user stays on the act they can see. An act that vanished
-  // under the user leaves the clamped index in place, as before.
+  // The store's position is an index, so either would move a user past that point onto whichever act now sits at
+  // their index - a user on the agent guide would find themselves on the login import.
   const seatedActIdRef = useRef<OnboardingAct["id"]>(act.id);
   useLayoutEffect(() => {
     const seated = seatedActIdRef.current;
@@ -1254,19 +1079,12 @@ function OnboardingTour(props: {
 
   const saveAgentGuideDraft = useCallback(async (): Promise<boolean> => {
     if (agentGuideSaving) return false;
-    // A picked host that cannot be reached has nothing to save to. The
-    // providers above fall back to the ambient binding in that state, so a
-    // write here would land the picked host's draft on the ambient host's
-    // guide. Report success so Skip and Finish can still leave the tour.
+    // A picked host that cannot be reached has nothing to save to. The providers above fall back to the ambient
+    // binding in that state, so a write here would land the picked host's draft on the ambient host's guide.
     if (scopedHostId !== null && !isHostScopeUsable(scope.status)) {
       return true;
     }
-    // The guide is optional. When it has not loaded, or still reflects an
-    // in-flight generated default with no saved content yet, there is no
-    // stable draft to persist. Report success so Skip/Escape and the final
-    // action can always leave onboarding; the host can seed the fully
-    // resolved default later. An existing saved guide the user edited must
-    // still persist even while providers are still settling.
+    // An existing saved guide the user edited must still persist even while providers are still settling.
     if (
       agentGuideQueryData === undefined ||
       agentGuideWaitingForProviderSettlement
@@ -1310,9 +1128,8 @@ function OnboardingTour(props: {
     agentGuideLastDefaultRef.current = "";
     agentGuideDraftRef.current = null;
   }, []);
-  // Read at switch time, not render time: the dirty bit is a ref the editor
-  // flips on every keystroke, and whether the departing host can still take
-  // a write is `scope.status` as of the click.
+  // Read at switch time, not render time: the dirty bit is a ref the editor flips on every keystroke, and
+  // whether the departing host can still take a write is `scope.status` as of the click.
   const scopeStatus = scope.status;
   const hasDraftToSaveBeforeSwitch = useCallback(
     (): boolean => agentGuideDirtyRef.current && isHostScopeUsable(scopeStatus),
@@ -1340,12 +1157,6 @@ function OnboardingTour(props: {
     ((isAgentGuideAct || isLastAct) && agentGuideSaving) || loginImportPending;
 
   // Finishing the tour must never leave the app on the tabless landing.
-  // Replay-from-settings sets `?replay=true` (and pushed /onboarding onto the
-  // per-window history), so going back returns to the exact route the user came
-  // from. A first-run (entered via a `replace` redirect from "/", no flag) has
-  // no real back target, so we open a fresh draft tab. Either way the user
-  // lands on a real tab. The /onboarding + / route guards bounce a completed
-  // user onward as needed.
   const finish = useCallback(
     (outcome: "completed" | "skipped"): void => {
       void saveAgentGuideDraft().then((saved) => {
@@ -1356,19 +1167,8 @@ function OnboardingTour(props: {
             : AnalyticsEvent.OnboardingSkipped,
           { last_step: act.id },
         );
-        // The tour is this release's announcement surface, so finishing it -
-        // completed or skipped, act reached or not - consumes the
-        // announcement: the release toast is for a user who finished
-        // onboarding BEFORE the feature existed, and whoever leaves this
-        // tour is not that user. Unconditional on purpose, since every
-        // narrower rule had a hole: the act's availability is `false` while
-        // the saved-logins read is still pending, so an immediate Skip saw
-        // no act; an act the list held can be dropped again before it is
-        // reached; and on a shell with no bridge the toast never shows, so
-        // consuming costs nothing. Before `complete()`, which is what makes
-        // the toast eligible. `session-import` is deliberately NOT consumed
-        // here: its toast exists to reach the user who never saw the import
-        // act, and the wizard consumes the id itself on mount.
+        // Unconditional on purpose, since every narrower rule had a hole: the act's availability is `false` while the
+        // saved-logins read is still pending, so an immediate Skip saw no act.
         consumeAnnouncement("login-import");
         complete();
         if (replay) {
@@ -1390,11 +1190,7 @@ function OnboardingTour(props: {
   );
 
   const retreatWithAnalytics = useCallback((): void => {
-    // Back holds for the same reason Continue does: leaving the act unmounts
-    // the flow while the desktop's write goes on, so its Done step could
-    // never show what the import did, and coming back would offer a fresh
-    // flow over logins already replaced. Skip stays open - the write
-    // finishes either way, and the user can always leave the tour.
+    // Back holds for the same reason Continue does.
     if (loginImportPending) return;
     const destination = acts[Math.max(0, step - 1)] ?? act;
     retreat(acts.length);
@@ -1455,9 +1251,8 @@ function OnboardingTour(props: {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // The same two callbacks the Back and Continue buttons are wired to, so a
-  // swipe is those buttons - save gate, finish branch and analytics included -
-  // rather than a second route into the store.
+  // The same two callbacks the Back and Continue buttons are wired to, so a swipe is those buttons - save gate,
+  // finish branch and analytics included - rather than a second route into the store.
   useActSwipe(stageRef, mobileApp, (direction) => {
     if (direction === "forward") {
       advance();
@@ -1482,18 +1277,8 @@ function OnboardingTour(props: {
       />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(14,27,24,0.88),rgba(14,27,24,0.88)),radial-gradient(120%_90%_at_50%_-18%,rgba(95,125,113,0.18),transparent_58%)]" />
 
-      {/* The content layer of a full-bleed surface, so it carries every inset
-          the standalone shell deliberately does not. The shell is `fixed`, so
-          it escapes ALL THREE of `#root`'s reservations at once - the status
-          bar and both landscape sides - and the backdrop siblings above are
-          meant to keep that. Everything the user reads or taps hangs off this
-          grid: the Skip control in the header row, the stage, the progress and
-          action rails, and the footer links.
-          The bottom is this surface's own call rather than something `#root`
-          gave up, and it is taken: the last grid row centres its footer line
-          box, so the row's height stands the ROW off the screen edge while
-          leaving the text inside it much closer. Padding the grid moves the
-          whole band instead, and the flexible middle row absorbs it. */}
+      {/* The shell is `fixed`, so it escapes all three of `#root`'s reservations at once - the status bar and both
+         landscape sides - and the backdrop siblings above are meant to keep that. */}
       <div className="relative z-10 grid h-full w-full grid-rows-[var(--onboarding-shell-rows)] overflow-hidden pt-safe-top pr-safe-right pb-safe-bottom pl-safe-left">
         <header className="relative z-10">
           <div className="relative flex h-full items-center justify-center px-10 max-sm:px-5">

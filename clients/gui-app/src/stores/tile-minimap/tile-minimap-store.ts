@@ -38,9 +38,6 @@ export const useTileMinimapStore = create<TileMinimapState>((set, get) => ({
   unregisterTarget: (tileInstanceId, registeredAt) => {
     set((state) => {
       const existing = state.targetsByTileInstanceId[tileInstanceId];
-      // A later registration under the same instance id already replaced this
-      // record - React runs the new effect's setup before the old cleanup on a
-      // dependency change, so dropping the slot here would evict the live one.
       if (existing === undefined || existing.registeredAt !== registeredAt) {
         return state;
       }
@@ -51,11 +48,7 @@ export const useTileMinimapStore = create<TileMinimapState>((set, get) => ({
   },
 }));
 
-/**
- * The adapter for one tile, or `null` when that tile has no navigable content.
- * Returns the registered adapter itself, never a fresh object, so an inline
- * selector stays referentially stable across renders.
- */
+/** The adapter for one tile, or `null` when that tile has no navigable content. */
 export function selectTileMinimapAdapter(
   tileInstanceId: string,
 ): (state: TileMinimapState) => TileMinimapAdapter | null {

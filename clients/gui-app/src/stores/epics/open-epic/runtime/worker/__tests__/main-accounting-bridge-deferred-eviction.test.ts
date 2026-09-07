@@ -1,26 +1,6 @@
 /**
- * `createMainAccountingBridge`'s `demoteColdestUnpinned` proxy
- * (`main-accounting-bridge.ts:83-93`) dispatches the demote and answers
- * `reclaimedBytes: 0` - a DEFERRED eviction, not a refused one. But it never
- * tells the accountant that: the split counter
- * (`deferred-eviction-contract.test.ts`) shows the accountant only counts a
- * deferral when the tier itself calls `MemoryAccountant.noteEvictionDeferred`
- * during the evict call, and this proxy never does. So every breach the
- * bridge defers is counted as a REFUSAL, which is wrong on its own terms and
- * also poisons the telemetry surface a memory-pressure affordance would read.
- *
- * Post-fix, the proxy calls `options.port.noteHotDocEvictionDeferred()`
- * immediately before `options.dispatchDemote(overBytes)`. That member does
- * not exist on `EpicRuntimeAccountingPort` yet, so the test double below adds
- * it as an extra property - safe at runtime, and accepted by the type system
- * because an object satisfying a wider shape is assignable to the narrower
- * parameter type.
- *
- * Built directly against `createMainAccountingBridge` with a REAL
- * `MemoryAccountant` and a real `HotDocBudgetBook` - not the in-process
- * worker's "sync" test harness, whose demote is served re-entrantly inside
- * the same `evict` call and would make this pin pass identically before and
- * after the fix.
+ * `createMainAccountingBridge`'s `demoteColdestUnpinned` proxy (`main-accounting-bridge.ts:83-93`)
+ * dispatches the demote and answers `reclaimedBytes: 0` - a DEFERRED eviction, not a refused one.
  */
 import { describe, expect, it } from "vitest";
 import type {
@@ -63,16 +43,8 @@ function environmentStub(): RuntimeEnvironment {
 }
 
 /**
- * A minimal, REAL `EpicRuntimeAccountingPort`: `registerBooks` attaches the
- * given source straight into a real `HotDocBudgetBook`, and `settleHotDocBytes`
- * settles into a real `MemoryAccountant` and reconciles - exactly what
- * `process-backed-accounting-port.ts` does, minus the host/epic identity
- * plumbing this pin has no need of.
- *
- * `noteHotDocEvictionDeferred` is the member this pin exists for: the bridge
- * raises it from inside its `evict` closure, and this port answers by raising
- * the accountant's own flag - which is what makes the zero return readable as
- * a deferral rather than a refusal.
+ * A minimal, REAL `EpicRuntimeAccountingPort`: `registerBooks` attaches the given source straight
+ * into a real `HotDocBudgetBook`, and `settleHotDocBytes` settles into a real `MemoryAccountant`
  */
 function createTestPort(
   book: HotDocBudgetBook,
@@ -170,9 +142,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
     const plane = accountant
       .snapshot()
       .planes.find((usage) => usage.planeId === BUDGET_PLANE_IDS.hotDocs);
-    // Red today as `evictionsDeferred: 0, evictionsRefused: 1` - the proxy
-    // never calls `noteHotDocEvictionDeferred`, so the accountant has no way
-    // to tell this apart from a tier that genuinely declined.
+    // Red today as `evictionsDeferred: 0, evictionsRefused: 1` - the proxy never calls
+    // `noteHotDocEvictionDeferred`, so the accountant has no way to tell this apart from a tier that
     expect(plane?.evictionsDeferred).toBe(1);
     expect(plane?.evictionsRefused).toBe(0);
   });
@@ -189,10 +160,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
       nearThresholdRatio: 0.8,
       evict: (overBytes) => book.evict(overBytes),
     });
-    // No bridge at all here - a tier attached directly, answering the same
-    // zero-reclaim shape the proxy does, but never calling
-    // `noteEvictionDeferred`. Keeps pin 1 honest: without this, "deferred is
-    // always 1" could be satisfied by a bridge that always reports deferred.
+    // No bridge at all here - a tier attached directly, answering the same zero-reclaim shape the
+    // proxy does, but never calling `noteEvictionDeferred`.
     book.attach({
       key: "book-1",
       materializedIds: () => [],
@@ -218,22 +187,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
   });
 
   it("stops deferring while its last demote is unanswered, so a later pass gets PAST it", () => {
-    // A deferral is a promise, and a tier holding only pinned documents cannot
-    // keep it: `worker-accounting-port`'s `demote` emits no settlement of its
-    // own, so a demotion that frees nothing produces no event at all - and the
-    // bridge would go on offering a fresh promise on every pass, dispatching a
-    // second and third demotion into a runtime that has answered none of them.
-    //
-    // Bounding the ask is what made that matter. `HotDocBudgetBook.evict`
-    // subtracts `deferredBytes`, so a tier claiming the whole overage ENDS the
-    // walk, and a tier that claims it every time it is reached is a wall.
-    //
-    // THREE passes, deliberately, because the rotating cursor is a partial
-    // mitigation and a two-pass stimulus cannot tell the two apart. Rotation
-    // moves the START by one per pass, so pass 2 begins at the cold tier and
-    // reaches it either way. Pass 3 begins at the bridge's tier again - and
-    // that is the pass where absorbing-versus-declining decides whether
-    // anything after it is asked at all.
+    // A deferral is a promise, and a tier holding only pinned documents cannot keep it:
+    // `worker-accounting-port`'s `demote` emits no settlement of its own, so a demotion that frees
     const book = createHotDocBudgetBook();
     const accountant = createMemoryAccountant({
       environment: environmentStub(),
@@ -260,10 +215,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
       protectedBytesByKind: PROTECTED,
       projectionCounts: null,
     };
-    // ORDER MATTERS, and only because the walk rotates: the bridge's tier is
-    // registered first so it sits at index 0 and pass 1 starts on it. Attaching
-    // the cold tier first would put pass 1 on the cold tier and make the first
-    // assertion below trivially true.
+    // ORDER MATTERS, and only because the walk rotates: the bridge's tier is registered first so it
+    // sits at index 0 and pass 1 starts on it.
     bridge.handle({
       kind: "accounting/books",
       registered: true,
@@ -301,29 +254,19 @@ describe("createMainAccountingBridge's demote proxy", () => {
     expect(coldAsks.length).toBe(0);
 
     // Passes 2 and 3, driven WITHOUT any settlement from the deferring runtime
-    // - the whole point, since a demote that freed nothing emits none. In
-    // production the driver is a settle from some other holder; here it is the
-    // same thing, straight through the port.
     port.settleHotDocBytes("room-2", SOFT_LIMIT_BYTES * 2);
     port.settleHotDocBytes("room-3", SOFT_LIMIT_BYTES * 2);
 
-    // THE REDDENING ASSERTIONS.
-    //
-    // Two asks, not one: pass 2 started at the cold tier (rotation), and pass 3
-    // started at the bridge's tier and got PAST it. Before the fix this is 1 -
-    // pass 3 was absorbed by a tier making its third unkept promise.
+    // THE REDDENING ASSERTIONS. Two asks, not one: pass 2 started at the cold tier (rotation), and
+    // pass 3 started at the bridge's tier and got PAST it.
     expect(coldAsks.length).toBe(2);
-    // And exactly one demotion was ever dispatched. Before the fix this is 3:
-    // one per pass that reached the tier, each into a runtime that had answered
-    // none of the previous ones.
+    // And exactly one demotion was ever dispatched. Before the fix this is 3: one per pass that
+    // reached the tier, each into a runtime that had answered none of the previous ones.
     expect(dispatched.length).toBe(1);
   });
 
   it("re-arms on any settlement from its runtime, not only on the demotion's own", () => {
-    // The control for the clause above. A latch that never lifted would pass
-    // the previous case and then refuse forever - a tier that freed documents,
-    // or simply changed shape, must be offered a deferral again, because
-    // "there is nothing here to free" was a fact about the tier as it WAS.
+    // The control for the clause above.
     const book = createHotDocBudgetBook();
     const accountant = createMemoryAccountant({
       environment: environmentStub(),
@@ -362,9 +305,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
     });
     expect(dispatched.length).toBe(1);
 
-    // A settlement arrives from this runtime - here a release, which is what a
-    // demotion that DID free something produces. That re-arms the deferral, and
-    // this event drives its own reconcile through the port.
+    // A settlement arrives from this runtime - here a release, which is what a demotion that DID free
+    // something produces.
     bridge.handle({
       kind: "accounting/settle",
       settlement: { kind: "hot-doc-release", artifactRoomId: "room-1" },

@@ -1,26 +1,6 @@
 /**
- * Semantic payload schemas for `HostNotifications.json_data` — the single
- * source of truth for what consumers (renderer presentation/navigation,
- * webhook projection) may rely on once a row's payload is complete.
- *
- * These schemas describe the POST-ENRICHMENT consumer contract, not the
- * persisted shape: a host may persist an ID-only partial (titles omitted,
- * joined in from a host-local title index at read time) and enrich it into
- * one of these shapes before it reaches a strict consumer. They are a
- * SECOND-STAGE parse, never a transport gate — the wire entry
- * (`hostNotificationEntrySchema`) and SQLite persistence keep the payload an
- * open record on purpose: rows outlive code in both directions (upgrades
- * read old rows, downgrades read future rows), so the compatibility
- * boundary must accept unknown shapes and let consumers degrade per row
- * instead of dropping or failing a frame.
- *
- * EVOLUTION RULE (additive-only):
- *   - never rename or retype an existing field;
- *   - new fields must be optional;
- *   - a new shape is a NEW payload `kind` — consumers that don't know it
- *     degrade to generic rendering, they do not error.
- * A breaking reshape requires a deliberate compatibility window
- * (dual-write / read-new-fallback-old), not an in-place redefinition.
+ * Semantic payload schemas for `HostNotifications.json_data` - the single source of truth for what consumers (renderer presentation/navigation, webhook projection) may rely on once a row's payload is complete.
+ * EVOLUTION RULE (additive-only): - never rename or retype an existing field; - new fields must be optional; - a new shape is a NEW payload `kind` - consumers that don't know it degrade to generic rendering, they do not.
  */
 import { z } from "zod";
 import {
@@ -49,14 +29,8 @@ export type HostNotificationStoppedReason =
   (typeof HOST_NOTIFICATION_STOPPED_REASONS)[number];
 
 /**
- * Central normalization for the stable runtime codes that are safe to explain
- * in a durable notification. Unknown, ambiguous, configuration, and
- * provider-controlled errors deliberately return `null`: consumers must use
- * generic failure copy rather than infer semantics from raw text.
- *
- * New rows persist the result at the host notification boundary. Consumers may
- * also call this only as a compatibility fallback for rows minted before the
- * additive `reason` field existed.
+ * Central normalization for the stable runtime codes that are safe to explain in a durable notification.
+ * Unknown, ambiguous, configuration, and provider-controlled errors deliberately return `null`: consumers must use generic failure copy rather than infer semantics from raw text.
  */
 export function deriveHostNotificationStoppedReason(
   code: string | null,
@@ -123,12 +97,7 @@ export type HostNotificationChatStoppedPayload = z.infer<
   typeof hostNotificationChatStoppedPayloadSchema
 >;
 
-/**
- * TUI `agent.stopped` payload: the "epic" shape. `agentName` is the
- * terminal-agent name — NOT a chat title. The row itself is chat-scoped to
- * `tuiAgentId` (hosts minted these rows without a chat binding before that
- * change, so entries from older rows may still carry a null `chatId`).
- */
+/** TUI `agent.stopped` payload: the "epic" shape. */
 export const hostNotificationEpicStoppedPayloadSchema = z
   .object({
     kind: z.literal("epic"),
@@ -150,11 +119,7 @@ export type HostNotificationEpicStoppedPayload = z.infer<
   typeof hostNotificationEpicStoppedPayloadSchema
 >;
 
-/**
- * `agent.stalled` payload. `agentName` carries the chat title. `reason` is
- * deliberately an open string (not a closed enum) so a future stall reason
- * degrades to generic copy instead of failing the parse.
- */
+/** `agent.stalled` payload. */
 export const hostNotificationAgentStalledPayloadSchema = z
   .object({
     kind: z.literal("agent_stalled"),
@@ -173,11 +138,7 @@ export type HostNotificationAgentStalledPayload = z.infer<
   typeof hostNotificationAgentStalledPayloadSchema
 >;
 
-/**
- * `workspace.operation.failed` payload. `operation` stays open so a newer host
- * can add workspace lifecycle operations without making an older renderer drop
- * the row's typed chat navigation and generic failure presentation.
- */
+/** `workspace.operation.failed` payload. */
 export const hostNotificationWorkspaceOperationFailedPayloadSchema = z
   .object({
     kind: z.literal("workspace_operation_failed"),
@@ -231,20 +192,8 @@ export type HostNotificationInterviewPayload = z.infer<
 >;
 
 /**
- * The common field convention EVERY `host.operation.finished` payload arm
- * must satisfy, read leniently as an open record.
- *
- * This is the middle degradation tier, and the whole reason the outer arm can
- * stay frozen while operations keep being added: a client that knows
- * `host.operation.finished` but not the newest operation's payload arm still
- * gets host-composed, display-safe copy instead of "a host operation
- * finished". `operation` is an open identifier (first value
- * `worktree.deletion`), never a closed enum - the precedent is
- * `workspace_operation_failed.operation`.
- *
- * Deliberately NOT a member of `hostNotificationKnownPayloadSchema`: this is a
- * shape every arm conforms to, not an arm of its own, so it must never win a
- * discriminated-union match against a real operation payload.
+ * The common field convention EVERY `host.operation.finished` payload arm must satisfy, read leniently as an open record.
+ * `operation` is an open identifier (first value `worktree.deletion`), never a closed enum - the precedent is `workspace_operation_failed.operation`.
  */
 export const hostOperationCommonPayloadSchema = z
   .object({
@@ -258,9 +207,8 @@ export type HostOperationCommonPayload = z.infer<
 >;
 
 /**
- * Total lenient parse of the common fields, or `null` when the payload does
- * not carry them. `null` means "fall through to generic copy" - never an
- * error, since rows outlive code in both directions.
+ * Total lenient parse of the common fields, or `null` when the payload does not carry them.
+ * `null` means "fall through to generic copy" - never an error, since rows outlive code in both directions.
  */
 export function parseHostOperationCommonPayload(
   value: unknown,
@@ -270,13 +218,7 @@ export function parseHostOperationCommonPayload(
 }
 
 /**
- * The stable `operation` identifier of the first (and so far only)
- * `host.operation.finished` producer.
- *
- * Deliberately NOT the `worktree.delete` RPC method name: this names a
- * user-authorized deletion COMMAND over N targets, which is a different thing
- * from the released single-target endpoint, and a durable row must not read
- * as if it were an RPC trace.
+ * The stable `operation` identifier of the first (and so far only) `host.operation.finished` producer.
  */
 export const HOST_OPERATION_WORKTREE_DELETION = "worktree.deletion";
 
@@ -299,10 +241,7 @@ const hostNotificationWorktreeDeletionFailureCountSchema = z
   .positive();
 
 /**
- * Known failure counts, represented as an object with optional known keys
- * instead of an enum-keyed `z.record`. Besides making partial aggregates
- * natural, `z.object` strips unknown keys by default: a future host can add a
- * category without making an older client reject the entire durable payload.
+ * Known failure counts, represented as an object with optional known keys instead of an enum-keyed `z.record`.
  */
 export const hostNotificationWorktreeDeletionFailureKindsSchema = z.object({
   busy: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
@@ -316,21 +255,8 @@ export type HostNotificationWorktreeDeletionFailureKinds = z.infer<
 >;
 
 /**
- * `host.operation.finished` payload for a worktree-deletion command - the
- * first operation arm, and the template for every later one.
- *
- * Carries the common `operation`/`title`/`message` convention (so a client
- * that knows the outer kind but not this arm still renders host-composed
- * copy) plus exactly the structured fields presentation and routing need:
- * the command's identity, where the user started it, and the aggregate
- * counts.
- *
- * What it deliberately EXCLUDES is as much of the contract as what it
- * carries: no worktree paths, no teardown output, no raw command text, no
- * arbitrary error strings. A notification row is durable, is delivered to
- * email and webhooks, and outlives the filesystem it describes - a path in it
- * is both a leak and a lie. It is also why no retry action exists: a safe
- * retry would need exactly the paths this must not persist.
+ * `host.operation.finished` payload for a worktree-deletion command - the first operation arm, and the template for every later one.
+ * It is also why no retry action exists: a safe retry would need exactly the paths this must not persist.
  */
 export const hostNotificationWorktreeDeletionPayloadSchema = z
   .object({
@@ -344,7 +270,6 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
     source: idSchema,
     /** Task that initiated a single-Task sweep. */
     epicId: idSchema.optional(),
-    /** Read-time title for a single-Task sweep. */
     taskTitle: z.string().optional(),
     requestedCount: z.number().int().nonnegative(),
     deletedCount: z.number().int().nonnegative(),
@@ -358,14 +283,8 @@ export type HostNotificationWorktreeDeletionPayload = z.infer<
 >;
 
 /**
- * `browser.human.needed` payload: the parked session's tile plus the agent's
- * own reason for parking.
- *
- * `reason` is model-authored prose and is the only copy this row has, so it is
- * rendered as the body and never as a title or an identifier. `sessionId` and
- * `tabId` address the tile the click deep-links to; they are host-local by
- * construction (browser sessions never move hosts), so the row's originHostId
- * is what says where to open it.
+ * `browser.human.needed` payload: the parked session's tile plus the agent's own reason for parking.
+ * `reason` is model-authored prose and is the only copy this row has, so it is rendered as the body and never as a title or an identifier.
  */
 export const hostNotificationBrowserHumanNeededPayloadSchema = z
   .object({
@@ -399,7 +318,7 @@ export type HostNotificationKnownPayloadKind =
 
 /**
  * Total second-stage parse: a known, well-formed payload or `null`.
- * `null` means "degrade to generic rendering" — it is never an error.
+ * `null` means "degrade to generic rendering" - it is never an error.
  */
 export function parseKnownHostNotificationPayload(
   value: unknown,
@@ -409,13 +328,8 @@ export function parseKnownHostNotificationPayload(
 }
 
 /**
- * Kind-coupled second-stage parse: a payload is trusted only when its shape
- * matches the enclosing notification kind (`agent.stopped` → chat | epic,
- * `agent.stalled` → agent_stalled, approval/interview → their own arm). A
- * cross-kind payload is malformed row data - it must take the generic/null
- * degradation path, not mint contradictory presentation, navigation, or
- * webhook output. Semantic consumers that know the row kind should use this
- * over `parseKnownHostNotificationPayload`.
+ * Kind-coupled second-stage parse: a payload is trusted only when its shape matches the enclosing notification kind (`agent.stopped` → chat | epic, `agent.stalled` → agent_stalled, approval/interview → their own arm).
+ * A cross-kind payload is malformed row data - it must take the generic/null degradation path, not mint contradictory presentation, navigation, or webhook output.
  */
 export function parseKnownHostNotificationPayloadForKind(
   notificationKind: HostNotificationKind,
@@ -445,10 +359,7 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "approval";
     case "interview.requested":
       return payloadKind === "interview";
-    // One operation arm exists so far. A FUTURE operation adds its arm above
-    // and its kind to this list; until a client learns that kind, its rows
-    // degrade to the common-field tier rather than failing - which is the
-    // property the whole payload tier exists to provide.
+    // One operation arm exists so far.
     case "host.operation.finished":
       return payloadKind === "worktree_deletion";
     case "browser.human.needed":

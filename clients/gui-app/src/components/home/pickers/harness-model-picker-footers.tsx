@@ -95,10 +95,8 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
       {showGroupSeparator ? (
         <div className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
       ) : null}
-      {/* Gated on the option count, not just on `reasoning`: the group owns a
-          scroller whose listeners are wired from its own mount, so it must not
-          mount without the strip. A model with no levels renders nothing here
-          and the next model that has them mounts the group afresh. */}
+      {/* Gated on the option count, not just on `reasoning`: the group owns a scroller whose listeners are wired from
+         its own mount, so it must not mount without the strip. */}
       {reasoning === null || !hasReasoningOptions ? null : (
         <ReasoningFooterGroup config={reasoning} />
       )}
@@ -123,10 +121,7 @@ function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
       aria-label="Thinking effort"
       className="m-0 flex min-w-0 flex-1 items-center border-0 p-0"
     >
-      {/* Levels are harness-reported per model, so their number is unbounded:
-          the strip scrolls rather than clipping the tail off-screen, and the
-          mask fades whichever edge still hides a level so the overflow reads
-          as "there is more" instead of a silent cut. */}
+      {/* Levels are harness-reported per model, so their number is unbounded. */}
       <div
         ref={scrollerRef}
         data-testid="model-reasoning-scroller"
@@ -135,10 +130,8 @@ function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
           horizontalScrollFadeClass(edges),
         )}
       >
-        {/* `w-max min-w-full` keeps the even spread while the levels fit and
-            switches to natural width once they overflow - `justify-around` on
-            an overflowing scroller splits the deficit across both ends, and
-            content pushed past the start edge cannot be scrolled back to. */}
+        {/* `w-max min-w-full` keeps the even spread while the levels fit and switches to natural width once they
+           overflow. */}
         <div
           ref={optionsRef}
           className="flex w-max min-w-full items-center justify-around gap-1"
@@ -167,20 +160,14 @@ interface ReasoningLevelButtonProps {
   readonly onChange: (next: ReasoningLevel) => void;
 }
 
-// One thinking-level pill. Split out so each can call the leader hook. The
-// ⌥-digit badge floats just past the label (absolute, out of flow) so revealing
-// it never reflows the footer; changing the level is pure state, so the search
-// box keeps focus.
+// The ⌥-digit badge floats just past the label (absolute, out of flow) so revealing it never reflows the
+// footer; changing the level is pure state, so the search box keeps focus.
 function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
   const { option, index, selected, disabled, onChange } = props;
   const leaderModifier = usePickerReasoningLeaderForIndex(index);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  // Keep the selected level on screen. A level past the scroller's right edge
-  // mounts already-selected when the picker opens, so this runs on open too -
-  // without it, a level set on a previous visit would be invisible, and seeing
-  // the strip already scrolled is itself the hint that it scrolls. `nearest`
-  // on both axes makes it a no-op once the pill is fully visible.
+  // Keep the selected level on screen.
   useEffect(() => {
     if (!selected) return;
     buttonRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });

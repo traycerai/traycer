@@ -59,23 +59,15 @@ interface ResourceUsageChipProps {
   readonly rssBytes: number | null;
   readonly pssBytes: number | null;
   readonly processCount: number;
-  /** Prefix for the accessible label / hover title, e.g. "Resource usage". */
   readonly label: string;
   readonly className: string | undefined;
 }
 
-/**
- * Compact, non-interactive CPU / memory / process readout. Restrained by
- * design: an icon plus three tabular values, with the full labelled breakdown
- * carried on the accessible name + hover title so the inline form can stay
- * terse in tight sidebar rows.
- */
+/** Compact, non-interactive CPU / memory / process readout. */
 export function ResourceUsageChip(props: ResourceUsageChipProps) {
   const cpu = formatCpuPercent(props.cpuPercent);
-  // One row is its own scope, so the popover's complete-scope rule reduces to
-  // "PSS when this row has one". The metric is named in the VISIBLE text, not
-  // only in the accessible one: two chips on screen otherwise show numbers
-  // that are not comparable with nothing to tell them apart.
+  // The metric is named in the visible text, not only in the accessible one: two chips on screen otherwise show
+  // numbers that are not comparable with nothing to tell them apart.
   const memoryMetric = props.pssBytes === null ? "RSS" : "PSS";
   const memoryBytes = props.pssBytes ?? props.rssBytes;
   const memory =
@@ -112,10 +104,8 @@ export interface OwnerResourceChipProps {
   readonly className: string | undefined;
 }
 
-/**
- * Owner-scoped chip. Renders nothing when there is no live snapshot for the
- * owner - absent means "not currently tracked" (unknown), never zero use.
- */
+/** Renders nothing when there is no live snapshot for the owner - absent means "not currently tracked"
+ * (unknown), never zero use. */
 export function OwnerResourceChip(props: OwnerResourceChipProps) {
   const usage = useOwnerResourceUsage(
     props.epicId,
@@ -141,10 +131,8 @@ export interface EpicResourceChipProps {
   readonly className: string | undefined;
 }
 
-/**
- * Epic-aggregate chip for the local host. Renders nothing when the epic has no
- * tracked owner roots (a valid quiet state), distinct from a zero-total sample.
- */
+/** Renders nothing when the epic has no tracked owner roots (a valid quiet state), distinct from a zero-total
+ * sample. */
 export function EpicResourceChip(props: EpicResourceChipProps) {
   const usage = useEpicResourceUsage(props.epicId);
   if (usage === null) return null;

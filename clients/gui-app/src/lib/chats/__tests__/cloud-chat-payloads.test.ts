@@ -12,14 +12,7 @@ import {
   type CloudChatPayloadBytes,
 } from "@/lib/chats/cloud-chat-payloads";
 
-/**
- * Driven with REAL digests throughout.
- *
- * The verification under test is "are these the bytes the ref names", so a
- * fixture that made up a digest would only ever exercise the mismatch arm. Each
- * case hashes its own content and asks for it by that address, which is what
- * the reader does.
- */
+/** Driven with REAL digests throughout. */
 
 function okResponse(
   bytes: Uint8Array,
@@ -113,10 +106,8 @@ describe("bounding the work before doing it", () => {
   });
 
   it("refuses an oversized ENCODED body even when it declares a tiny length", async () => {
-    // The attack the declared-length check alone does not stop: claim ten
-    // bytes, carry a body far past the ceiling, and let `atob` expand all of it
-    // before anyone disagrees. Bounding the string in hand is what caps the
-    // work; the declared length only ever describes what SHOULD be there.
+    // The attack the declared-length check alone does not stop: claim ten bytes, carry a body far past the ceiling, and let `atob` expand all of it before anyone disagrees.
+    // Bounding the string in hand is what caps the work; the declared length only ever describes what SHOULD be there.
     const oversized = "A".repeat(MAX_ENCODED_PAYLOAD_CHARS + 4);
 
     const result = await decodeCloudChatPayload(

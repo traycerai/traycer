@@ -43,14 +43,8 @@ export interface HistoryItem {
   updatedBucket: HistoryRecencyBucket;
   linkedRepos: ReadonlyArray<string>;
   linkedWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
-  /**
-   * Hosts owning the signed-in user's OWN chats in this task, or `null` when
-   * the serving peer predates the field.
-   *
-   * `null` is not `[]`. An empty array truthfully says "none of my chats live
-   * on any host", which a host filter acts on by excluding the row; `null`
-   * says the row cannot answer at all.
-   */
+  /** An empty array truthfully says "none of my chats live on any host", which a host filter acts on by excluding
+   * the row; `null` says the row cannot answer at all. */
   chatHostIds: ReadonlyArray<string> | null;
   pullRequestNumbers: ReadonlyArray<string>;
   worktreeBranches: ReadonlyArray<string>;
@@ -154,11 +148,8 @@ function buildHistoryItem(args: {
     id: itemId(light.id, taskType, index),
     epicId: light.id,
     taskType,
-    // Epics keep the RAW title - it flows into tab-store mutations via
-    // `openEpicFromList` -> `resolveTargetTabForEpic`, so the empty-title
-    // fallback must be applied at the render site only. Phases render verbatim
-    // downstream, so the fallback is baked here (single-sourced via
-    // `displayTitle`).
+    // Epics keep the raw title - it flows into tab-store mutations via `openEpicFromList` ->
+    // `resolveTargetTabForEpic`, so the empty-title fallback must be applied at the render site only.
     title:
       taskType === "epic" ? light.title : displayTitle(light.title, "phase"),
     initialUserPrompt,
@@ -177,12 +168,8 @@ function buildHistoryItem(args: {
   };
 }
 
-/**
- * Adds the PR numbers, branch names, and worktree paths discovered from the
- * task's local worktrees to history items. Worktree activity is deliberately
- * fetched separately from cloud task history, so this stays a pure projection
- * that can update as probes finish.
- */
+/** Adds the PR numbers, branch names, and worktree paths discovered from the task's local worktrees to history
+ * items. */
 export function withHistoryItemWorktreeMetadata(
   items: ReadonlyArray<HistoryItem>,
   worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>,
@@ -215,20 +202,8 @@ function historyWorktreeBranches(
   );
 }
 
-/**
- * Epic ids of tasks whose local worktrees match the query as a superproject
- * branch name or worktree-directory string. Those strings live only in local
- * worktree metadata, never in the cloud task index, so matching tasks are
- * fetched by id (`epic.getTaskContexts`) and unioned into the search results -
- * a cloud text search for them would return nothing. Matching is deliberately
- * narrow (the branch name, the worktree's leaf directory name, and - for
- * path-shaped queries - the full path): matching anywhere in the full path
- * would trip on common ancestors like the user's home directory and union
- * unrelated tasks into ordinary title searches.
- *
- * Expects entries from the cheap (non-activity) host index; see the filter
- * body for why owned-submodule branches are deliberately not matched here.
- */
+/** Those strings live only in local worktree metadata, never in the cloud task index, so matching tasks are
+ * fetched by id (`epic.getTaskContexts`) and unioned into the search results. */
 export function historyWorktreeSearchEpicIds(
   query: string,
   worktrees: readonly WorktreeHostEntryV12[],
@@ -237,13 +212,8 @@ export function historyWorktreeSearchEpicIds(
   if (normalized.length < 2) return [];
   return ownerEpicIds(
     worktrees.filter((worktree) => {
-      // Superproject branch only. Callers feed this the CHEAP host index,
-      // whose `submodules` is contractually `[]` (populated only under
-      // `includeActivity`), so reading submodule branches here would match
-      // nothing in production however the fixtures are written. Enriching
-      // this path instead would fire host-wide `gh` probes on every
-      // keystroke; owned-submodule branches still reach search through
-      // `worktreeBranches` on rows whose enriched metadata is loaded.
+      // Callers feed this the cheap host index, whose `submodules` is contractually `[]` (populated only under
+      // `includeActivity`).
       if (
         worktree.branch !== null &&
         worktree.branch.toLowerCase().includes(normalized)
@@ -257,7 +227,6 @@ export function historyWorktreeSearchEpicIds(
   );
 }
 
-/** The PR number of a PR-shaped query (`84`, `#84`, `PR #84`), else null. */
 export function historyPullRequestQueryNumber(query: string): number | null {
   const match = /^(?:pr\s*)?#?(\d+)$/i.exec(query.trim());
   if (match === null) return null;
@@ -265,11 +234,7 @@ export function historyPullRequestQueryNumber(query: string): number | null {
   return Number.isNaN(prNumber) ? null : prNumber;
 }
 
-/**
- * Epic ids of tasks whose local worktrees (superproject or an owned
- * submodule) carry the PR number. Requires activity-enriched worktree entries
- * - `prNumber`/`submodules` are null/empty on the cheap base index.
- */
+/** Epic ids of tasks whose local worktrees (superproject or an owned submodule) carry the PR number. */
 export function historyPullRequestSearchEpicIds(
   prNumber: number,
   worktrees: readonly WorktreeHostEntryV12[],
@@ -362,26 +327,8 @@ function matchesRepoFilter(
   return repoNames.some((repoName) => item.linkedRepos.includes(repoName));
 }
 
-/**
- * Whether a row satisfies the chat-host filter.
- *
- * A row whose `chatHostIds` is `null` is EXCLUDED while a host is selected,
- * because nothing about that row has been checked against the filter. This
- * predicate runs on rows from three sources and only one of them is
- * pre-filtered by the server: settled `epic.listTasks` pages. The other two -
- * tasks fetched by id for a branch/worktree/PR match, and cached rows still
- * showing while a new request is in flight - never passed through it, so
- * keeping an unverifiable row there renders an unfiltered result as a
- * filtered one.
- *
- * Abstaining was the earlier choice, on the reasoning that excluding would
- * silently empty the list against an older peer. That case cannot reach here:
- * a peer too old to report the field is caught by the version gate in
- * `useHistoryQuery`, which withholds every row behind an explicit
- * "can't filter by host here" state. A settled row from a peer that CAN report
- * always carries the field - `[]` at minimum. So the only rows this exclusion
- * can reach are the unverified ones, which is exactly the intent.
- */
+/** That case cannot reach here: a peer too old to report the field is caught by the version gate in
+ * `useHistoryQuery`, which withholds every row behind an explicit "can't filter by host here" state. */
 function matchesChatHostFilter(
   item: HistoryItem,
   chatHosts: ReadonlyArray<string>,
@@ -466,9 +413,8 @@ export function sortHistoryItems(
               BUCKET_ORDER[right.updatedBucket],
         );
     case "last-viewed":
-      // The central list endpoint already returns the complete eligible set in
-      // last-viewed order. Preserve that order while still projecting an
-      // optimistic pin bit into its pinned-first partition.
+      // The central list endpoint already returns the complete eligible set in last-viewed order. Preserve that
+      // order while still projecting an optimistic pin bit into its pinned-first partition.
       return prioritizePinnedHistoryItems(items);
     case "oldest":
       return items
@@ -501,7 +447,6 @@ export function sortHistoryItems(
   }
 }
 
-/** Stable pinned-first partition for relevance-ranked search results. */
 export function prioritizePinnedHistoryItems(
   items: ReadonlyArray<HistoryItem>,
 ): ReadonlyArray<HistoryItem> {

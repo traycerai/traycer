@@ -92,9 +92,7 @@ vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
 }));
 
-// The tile header's agent-controls subsystem has its own tests; stub it so
-// these cwd tests don't pull in the epic-tree selectors + agent.list query it
-// depends on.
+// The tile header's agent-controls subsystem has its own tests; stub it so these cwd tests don't pull in the epic-tree selectors + agent.list query it depends on.
 vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
   useAgentStopControls: () => ({ self: null, descendants: [] }),
 }));
@@ -132,9 +130,7 @@ vi.mock(
   }),
 );
 
-// The real probe mounts the xterm engine, which cannot measure in jsdom (no
-// layout); stub it to report a grid immediately so the measure-gated create
-// dispatches, as it would in the app.
+// The real probe mounts the xterm engine, which cannot measure in jsdom (no layout); stub it to report a grid immediately so the measure-gated create dispatches, as it would in the app.
 vi.mock(
   "@/components/epic-canvas/renderers/terminal-grid-measure-probe",
   async () => {
@@ -307,9 +303,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
       terminalAgentArgs: null,
       terminalShellCommand: null,
       terminalShellArgs: null,
-      // The persisted record may carry stale workspace folders the
-      // first time a binding lands; the live PTY cwd must come from the
-      // resolver's binding-aware response, not from this array.
+      // The persisted record may carry stale workspace folders the first time a binding lands; the live PTY cwd must come from the resolver's binding-aware response, not from this array.
       workspaceFolders: ["/tmp/legacy-root"],
       model: null,
       reasoningEffort: null,
@@ -369,9 +363,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
     ];
     expect(request.cwd).toBe("/tmp/worktrees/feature-x");
     expect(request.desiredSessionId).toBe("agent-1");
-    // Multi-repo busy-path acceptance: the resolver-returned set must be
-    // forwarded verbatim to `terminal.create` so the host-side active-run
-    // busy registry covers every bound worktree path, not just cwd.
+    // Multi-repo busy-path acceptance: the resolver-returned set must be forwarded verbatim to `terminal.create` so the host-side active-run busy registry covers every bound worktree path, not just cwd.
     expect(request.worktreeBusyPaths).toEqual([
       "/tmp/worktrees/feature-x",
       "/tmp/worktrees/sibling-y",
@@ -379,11 +371,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
   });
 
   it("routes a Claude initial launch through agent.startTerminalSession and uses the resolver's bound cwd", async () => {
-    // Acceptance criterion: a Claude terminal-agent with a worktree binding
-    // launches in the primary bound worktree cwd, not in the persisted
-    // root workspace. Every harness - including Claude - now goes through
-    // the host-prepared launch path so the resolver re-reads the binding
-    // before each launch.
+    // Every harness - including Claude - now goes through the host-prepared launch path so the resolver re-reads the binding before each launch.
     mockAgent = {
       id: "agent-claude",
       harnessId: "claude",
@@ -468,10 +456,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
   });
 
   it("uses the resolver-returned cwd on Claude reopen, ignoring stale persisted workspaceFolders", async () => {
-    // Reopen path: the persisted record carries the original cwd in
-    // `workspaceFolders[0]`. After a re-bind those values are stale until
-    // the next snapshot lands, so the renderer must take cwd from the
-    // resolver response (which re-reads the live binding row).
+    // After a re-bind those values are stale until the next snapshot lands, so the renderer must take cwd from the resolver response (which re-reads the live binding row).
     mockAgent = {
       id: "agent-claude",
       harnessId: "claude",
@@ -572,11 +557,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
   });
 
   it("uses the resolver-returned Local cwd, ignoring stale persisted workspaceFolders", async () => {
-    // The renderer always forwards the resolver's authoritative
-    // `workingDirectory` (a Local-mode bind here) and never the persisted
-    // record's stale `workspaceFolders`. (A bound worktree gone from disk is no
-    // longer silently demoted to Local — the resolver rejects with
-    // WORKTREE_MISSING; that reject path is covered by the setup-banner test.)
+    // The renderer always forwards the resolver's authoritative `workingDirectory` (a Local-mode bind here) and never the persisted record's stale `workspaceFolders`. (A bound worktree gone from disk is no longer silently demoted to Local - the resolver rejects with WORKTREE_MISSING; that reject path is covered by the setup-banner test.)
     mockAgent = {
       id: "agent-claude",
       harnessId: "claude",

@@ -35,28 +35,18 @@ export const useToolOpenStore = create<ToolOpenState>((set) => ({
     }),
 }));
 
-// Ticket 15 (decision #29): durable chat-key mirror of each tab's open tool
-// segment ids - survives the tab-key entries being reset on close, so a
-// reopened chat's expanded tool cards come back.
+// durable chat-key mirror of each tab's open tool segment ids - survives
+// the tab-key entries being reset on close, so a reopened chat's expanded tool cards come back.
 export const toolOpenDurableCache =
   createChatDurableCache<ReadonlySet<string>>(200);
 
-// Ticket 15 review round 3: tracks which tab scopes have actually been
-// seeded/touched this session - see `chat-scoped-open-store-dual-key.ts`'s
-// doc comment. Distinguishes "genuinely empty, already initialized" from
-// "never touched (e.g. an inactive tab that never mounted)" for BOTH the
-// seed hook and the canvas sweep's promotion below. Cleared by the sweep
-// when the tab actually closes.
+// tracks which tab scopes have actually been seeded/touched this session - see
+// `chat-scoped-open-store-dual-key.ts`'s doc comment.
 export const toolOpenInitializedScopes = new Set<string>();
 
 /**
- * Ticket 15 review round 3: promotes this tab's CURRENT scoped ids to
- * durable - called from the canvas close sweep, BEFORE `reset()` wipes the
- * live scope, for every removed chat tile (active or never-mounted alike).
- * A no-op for a tab that was never initialized (inactive tab closed without
- * ever mounting) - there is nothing of this session's to promote, and
- * writing an empty set would incorrectly clobber a prior session's durable
- * snapshot for the same chat.
+ * promotes this tab's CURRENT scoped ids to durable - called from the canvas close sweep, BEFORE
+ * `reset()` wipes the live scope, for every removed chat tile (active or never-mounted alike).
  */
 export function promoteToolOpenToDurable(
   identity: ChatTabPersistenceIdentity,

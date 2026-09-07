@@ -34,10 +34,8 @@ function pullRequest(
     buckets: ["recent"],
     state: "open",
     isDraft: false,
-    // Present-and-nullable, never absent. The wire schema requires all four;
-    // making them optional here compiles as `T | undefined` and only fails at
-    // `bun run compile`, which vitest never runs - a green suite proves
-    // nothing about this.
+    // Present-and-nullable, never absent.
+    // The wire schema requires all four; making them optional here compiles as `T | undefined` and only fails at `bun run compile`, which vitest never runs - a green suite proves nothing about this.
     baseRefName: null,
     headRefName: null,
     reviewDecision: null,
@@ -134,11 +132,8 @@ describe("githubMentionRowsForSection", () => {
   });
 
   /**
-   * Same composition the open section uses in `use-github-mention-sections`
-   * (`openRows`): both catalog and search are narrowed BEFORE merge. A
-   * keepPreviousData leak hands the Issues section PR rows on the search arm;
-   * without the search-side filter those PRs survive into the list and can
-   * insert a `github_pull_request` chip from Issues.
+   * Same composition the open section uses in `use-github-mention-sections` (`openRows`): both catalog and search are narrowed BEFORE merge.
+   * A keepPreviousData leak hands the Issues section PR rows on the search arm; without the search-side filter those PRs survive into the list and can insert a `github_pull_request` chip from Issues.
    */
   it("merge seam: both inputs narrowed the way openRows does so a PR cannot leak into issues", () => {
     const cachedIssue = issue({
@@ -181,10 +176,7 @@ describe("githubMentionRowsForSection", () => {
 });
 
 /**
- * The scope boundary is case-insensitive because the two sides of the
- * comparison have different provenance: rows carry the API's canonical
- * casing, while a scope's repositories are parsed from the folder's
- * configured remote - whatever casing the user happened to type there.
+ * The scope boundary is case-insensitive because the two sides of the comparison have different provenance: rows carry the API's canonical casing, while a scope's repositories are parsed from the folder's configured remote - whatever casing the user happened.
  */
 describe("githubMentionRowsWithinScope", () => {
   it("keeps a row when the scope's repository differs from the row only in casing", () => {
@@ -267,9 +259,7 @@ describe("mergeGithubMentionRows", () => {
     expect(merged[1]).toBe(remoteOnly);
   });
 
-  // The failure this guards is silent and looks like "search found nothing":
-  // a state-filtered search returns a row the sweep still records as `open`,
-  // the stale copy wins the merge, and the filter downstream then drops it.
+  // The failure this guards is silent and looks like "search found nothing": a state-filtered search returns a row the sweep still records as `open`, the stale copy wins the merge, and the filter downstream then drops it.
   it("lets a state-filtered search survive its own merge against a stale cache", () => {
     const staleOpen = pullRequest({
       number: 77,
@@ -343,9 +333,8 @@ describe("mergeGithubMentionRows", () => {
     const only = pullRequest({ number: 1, title: "Only" });
     const cached = [only];
 
-    // The host re-answered with a row the cache already holds. Nothing to
-    // append and nothing to refresh, so the list must not churn identity -
-    // that churn is what re-keys the picker mid-typing.
+    // The host re-answered with a row the cache already holds.
+    // Nothing to append and nothing to refresh, so the list must not churn identity - that churn is what re-keys the picker mid-typing.
     const merged = mergeGithubMentionRows(cached, [only]);
     expect(merged).toBe(cached);
   });
@@ -364,11 +353,8 @@ describe("mergeGithubMentionRows", () => {
     expect(mergeGithubMentionRows(cached, [])).toBe(cached);
   });
 
-  // The identity key folds host/owner/repo casing (see `githubMentionRowKey`),
-  // because a cached sweep and a live search can spell the same repository
-  // differently. Compared verbatim, the remote hit would append as a second
-  // row instead of refreshing the stale one, and either copy could then be
-  // committed as a mention.
+  // The identity key folds host/owner/repo casing (see `githubMentionRowKey`), because a cached sweep and a live search can spell the same repository differently.
+  // Compared verbatim, the remote hit would append as a second row instead of refreshing the stale one, and either copy could then be committed as a mention.
   it("merges a cached row and a remote hit naming the same artifact with different casing", () => {
     const cached = pullRequest({
       number: 4917,
@@ -467,10 +453,7 @@ describe("parseGithubReferenceQuery", () => {
     });
   });
 
-  // A bare digit query is exact-number intent exactly like its `#`-prefixed
-  // twin - `numberMatchScore` already treated bare digits that way, and the
-  // parser must agree, or a bare `4917` scores as a number match but earns
-  // neither a `Resolve in ...` row nor the zero-match dismissal exemption.
+  // A bare digit query is exact-number intent exactly like its `#`-prefixed twin - `numberMatchScore` already treated bare digits that way, and the parser must agree, or a bare `4917` scores as a number match but earns neither a `Resolve in ...` row nor the.
   it("recognizes a bare digit query as a number reference, matching the #-prefixed form", () => {
     expect(parseGithubReferenceQuery("4917")).toEqual({
       kind: "number",
@@ -493,9 +476,7 @@ describe("parseGithubReferenceQuery", () => {
   });
 
   it("recognizes host/owner/repo#number as a host-qualified repository reference", () => {
-    // Three segments parse as the host-qualified form - the exact identity
-    // the UI prints when a scope holds the same owner/repo on two hosts, so
-    // typing that displayed form back must parse into the reference it is.
+    // Three segments parse as the host-qualified form - the exact identity the UI prints when a scope holds the same owner/repo on two hosts, so typing that displayed form back must parse into the reference it is.
     expect(
       parseGithubReferenceQuery("ghe.example.test/acme/widgets#7"),
     ).toEqual({
@@ -536,7 +517,7 @@ describe("parseGithubReferenceQuery", () => {
   it("rejects non-references", () => {
     expect(parseGithubReferenceQuery("#")).toBeNull();
     expect(parseGithubReferenceQuery("#abc")).toBeNull();
-    // Eight digits exceeds the 1–7 digit reference window.
+    // Eight digits exceeds the 1-7 digit reference window.
     expect(parseGithubReferenceQuery("12345678")).toBeNull();
     expect(parseGithubReferenceQuery("#12345678")).toBeNull();
     expect(parseGithubReferenceQuery("fix the busy loop")).toBeNull();
@@ -546,9 +527,7 @@ describe("parseGithubReferenceQuery", () => {
   });
 
   // A bare digit query is number-intent ONLY when the whole query is digits.
-  // Anything else - trailing letters, a leading letter, a digit sitting
-  // inside a sentence - stays prose, exactly as it did before bare digits
-  // were recognized at all.
+  // Anything else - trailing letters, a leading letter, a digit sitting inside a sentence - stays prose, exactly as it did before bare digits were recognized at all.
   it("keeps a query with digits AND other characters as prose, not a reference", () => {
     expect(parseGithubReferenceQuery("4917x")).toBeNull();
     expect(parseGithubReferenceQuery("v123")).toBeNull();
@@ -556,9 +535,7 @@ describe("parseGithubReferenceQuery", () => {
   });
 
   it("rejects a zero-valued number in every reference shape", () => {
-    // `\d{1,7}` matches these, but the wire row schema requires a positive
-    // number - so classifying them as references suppresses root's zero-match
-    // auto-close and offers a Resolve row for an item that cannot exist.
+    // `\d{1,7}` matches these, but the wire row schema requires a positive number - so classifying them as references suppresses root's zero-match auto-close and offers a Resolve row for an item that cannot exist.
     expect(parseGithubReferenceQuery("#0")).toBeNull();
     expect(parseGithubReferenceQuery("#000")).toBeNull();
     // Same positivity rule on the bare (no `#`) form the parser now accepts.
@@ -611,10 +588,8 @@ describe("githubMentionMatchScore", () => {
   });
 
   it("does not treat a pull-request URL as an exact match for an issue", () => {
-    // GitHub numbers PRs and issues from one sequence, so issue 4917 can exist
-    // beside pull request 4917. A URL says which KIND it names; scoring the
-    // wrong-kind row 0 floated it to the top of the Issues section and let
-    // Enter insert a `github_issue` chip for a `/pull/` link.
+    // GitHub numbers PRs and issues from one sequence, so issue 4917 can exist beside pull request 4917.
+    // A URL says which KIND it names; scoring the wrong-kind row 0 floated it to the top of the Issues section and let Enter insert a `github_issue` chip for a `/pull/` link.
     const wrongKind = issue({ number: 4917, title: "Stop the busy-loop" });
 
     expect(
@@ -653,9 +628,7 @@ describe("githubMentionMatchScore", () => {
   });
 
   it("keeps a kind-agnostic reference matching both kinds", () => {
-    // The other control, and the reason the check is URL-only: `#123` and
-    // `org/repo#123` genuinely can name either, so narrowing them by kind
-    // would break the bare-number lookup this feature is built around.
+    // The other control, and the reason the check is URL-only: `#123` and `org/repo#123` genuinely can name either, so narrowing them by kind would break the bare-number lookup this feature is built around.
     expect(
       githubMentionMatchScore(
         issue({ number: 812, title: "Magic link" }),
@@ -671,10 +644,8 @@ describe("githubMentionMatchScore", () => {
   });
 
   it("matches a pasted URL whose host differs only in case", () => {
-    // Hostnames are case-insensitive, and `owner`/`repo` are already compared
-    // case-folded. A host compared exactly would drop this URL out of the
-    // exact-reference rank and leave it to score as ordinary text - so the row
-    // the user pasted the link for stops sitting first.
+    // Hostnames are case-insensitive, and `owner`/`repo` are already compared case-folded.
+    // A host compared exactly would drop this URL out of the exact-reference rank and leave it to score as ordinary text - so the row the user pasted the link for stops sitting first.
     const row = pullRequest({ number: 4917, title: "Stop the busy-loop" });
 
     expect(
@@ -686,10 +657,7 @@ describe("githubMentionMatchScore", () => {
   });
 
   it("matches a host-qualified query naming the row's own enterprise host", () => {
-    // The UI prints `host/owner/repo` when a scope holds the same owner/repo
-    // on two hosts (see `githubRepositoryQualification`), so a matcher that
-    // cannot re-match the identity the row DISPLAYS would drop the row the
-    // moment the user types back what they see.
+    // The UI prints `host/owner/repo` when a scope holds the same owner/repo on two hosts (see `githubRepositoryQualification`), so a matcher that cannot re-match the identity the row DISPLAYS would drop the row the moment the user types back what they see.
     const enterprise = pullRequest({
       number: 1,
       title: "Enterprise PR",
@@ -704,9 +672,8 @@ describe("githubMentionMatchScore", () => {
   });
 
   it("does not match a different host's identical owner/repo against a host-qualified query", () => {
-    // The control. Without it, the qualified haystack could quietly widen
-    // into matching ANY host sharing the same owner/repo rather than only the
-    // host actually named in the query.
+    // The control.
+    // Without it, the qualified haystack could quietly widen into matching ANY host sharing the same owner/repo rather than only the host actually named in the query.
     const githubCom = pullRequest({
       number: 2,
       title: "Public PR",
@@ -743,9 +710,7 @@ describe("githubMentionMatchScore", () => {
   });
 
   it("ranks a host-qualified reference query 0 for only the row on that host", () => {
-    // A host-qualified `host/owner/repo#number` names ONE host's row, exactly
-    // like a pasted URL does - the two-segment `owner/repo#number` form stays
-    // host-agnostic, but three segments say which host.
+    // A host-qualified `host/owner/repo#number` names ONE host's row, exactly like a pasted URL does - the two-segment `owner/repo#number` form stays host-agnostic, but three segments say which host.
     const enterprise = pullRequest({
       number: 7,
       title: "Enterprise PR",
@@ -896,10 +861,7 @@ describe("filterGithubMentionRows", () => {
   });
 
   it("matches a repository selection that differs from the row only in casing", () => {
-    // The row is API-cased; the selection is parsed from the folder's
-    // configured remote, which can be spelled with different casing for the
-    // same repository - so the comparison must fold case like the scope
-    // boundary above it.
+    // The row is API-cased; the selection is parsed from the folder's configured remote, which can be spelled with different casing for the same repository - so the comparison must fold case like the scope boundary above it.
     const row = pullRequest({
       number: 100,
       title: "Casing",
@@ -1042,11 +1004,7 @@ describe("githubMentionBucketRank", () => {
 });
 
 /**
- * The coercions repair a filter persisted by an older build, or written by the
- * OTHER section - the two arms are not interchangeable (only PRs have
- * `review-requested`, only issues have `mentions`). Untested, a regression
- * that dropped the `find` fallback stayed green here and surfaced only as a
- * malformed wire request at runtime.
+ * The coercions repair a filter persisted by an older build, or written by the OTHER section - the two arms are not interchangeable (only PRs have `review-requested`, only issues have `mentions`).
  */
 describe("filter coercion", () => {
   const REPOSITORY = {
@@ -1073,10 +1031,8 @@ describe("filter coercion", () => {
   });
 
   it("returns the SAME filter object when there is nothing to coerce", () => {
-    // Identity, not equality. This runs inside a store selector, whose result
-    // is compared by reference to decide whether to re-render: a fresh-but-
-    // equal object on every read is an unbroken render loop, not a wasted
-    // allocation. (It was exactly that, once.)
+    // Identity, not equality.
+    // This runs inside a store selector, whose result is compared by reference to decide whether to re-render: a fresh-but- equal object on every read is an unbroken render loop, not a wasted allocation.
     const valid = {
       state: "merged",
       involvement: "review-requested",
@@ -1137,11 +1093,8 @@ describe("filter coercion", () => {
 });
 
 /**
- * The row store is one app-wide zustand store holding answers to a per-host,
- * per-epic question, so the key has to carry both. Keyed on folders alone, a
- * second tab reads the first one's rows - and because root rows are
- * immediately insertable, the user can commit a reference belonging to
- * another host or task before their own catalog answer replaces it.
+ * The row store is one app-wide zustand store holding answers to a per-host, per-epic question, so the key has to carry both.
+ * Keyed on folders alone, a second tab reads the first one's rows - and because root rows are immediately insertable, the user can commit a reference belonging to another host or task before their own catalog answer replaces it.
  */
 describe("githubMentionScopeKey", () => {
   const PATHS = ["/a", "/b"];

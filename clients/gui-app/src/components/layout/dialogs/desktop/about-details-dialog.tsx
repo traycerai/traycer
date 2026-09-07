@@ -157,10 +157,8 @@ interface DetailsGridProps {
   readonly snapshot: DesktopSupportSnapshot;
 }
 
-/**
- * Copies the whole details grid as `Label: value` lines - the shape a user is
- * asked to paste into a support thread or bug report.
- */
+/** Copies the whole details grid as `Label: value` lines - the shape a user is asked to paste into a support
+ * thread or bug report. */
 function CopyDetailsButton(props: {
   readonly snapshot: DesktopSupportSnapshot;
 }): ReactNode {

@@ -13,12 +13,8 @@ import type { ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 
 /**
- * User-configured keyboard shortcuts. `bindings[id] === null` means the
- * action is explicitly unbound and will not fire from any chord.
- *
- * Persisted to `localStorage` with `version: 1`. Hydration preserves custom
- * user bindings, while `mergePersistedKeybindings` carries forward narrow
- * default corrections that should apply to existing default users.
+ * User-configured keyboard shortcuts. `bindings[id] === null` means the action is explicitly
+ * unbound and will not fire from any chord.
  */
 export interface KeybindingState {
   readonly bindings: Readonly<Record<ActionId, ChordString | null>>;
@@ -67,14 +63,8 @@ export const useKeybindingStore = create<KeybindingState>()(
   ),
 );
 
-// Cross-window sync: zustand's `persist` middleware only writes on this
-// window's own changes and reads once at module load, so without this a
-// second window's rebind never reaches window A's in-memory `bindings` -
-// conflict checks there (both directions with the desktop global summon
-// shortcut) would keep validating against a stale snapshot. The browser
-// `storage` event only fires in OTHER same-origin windows, never the one
-// that wrote, so this can't loop with `setBinding`/`clearBinding`/`resetAll`.
-// `event.key === null` covers an explicit `localStorage.clear()`.
+// Cross-window sync: zustand's `persist` middleware only writes on this window's own changes and
+// reads once at module load, so without this a second window's rebind never reaches window A's
 window.addEventListener("storage", (event) => {
   if (event.key === null || event.key === KEYBINDING_STORE_KEY) {
     void useKeybindingStore.persist.rehydrate();
@@ -138,14 +128,8 @@ function mergePersistedKeybindings(
   persistedState: unknown,
   currentState: KeybindingState,
 ): KeybindingState {
-  // `persistedState === undefined` means the storage key is genuinely
-  // missing (removed, `localStorage.clear()`'d, or first launch) - zustand's
-  // persist passes `undefined` rather than skipping `merge` in that case.
-  // Reset to defaults rather than keeping whatever is in memory, so a
-  // cross-window "clear local data"/reset doesn't leave this window on a
-  // stale custom map that a later edit could persist right back
-  // (distinct from malformed-but-present data, which still falls back to
-  // `currentState` below).
+  // `persistedState === undefined` means the storage key is genuinely missing (removed,
+  // `localStorage.clear()`'d, or first launch) - zustand's persist passes `undefined` rather than
   if (persistedState === undefined) {
     return { ...currentState, bindings: getDefaultBindings() };
   }

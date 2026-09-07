@@ -174,9 +174,7 @@ function mountProvisioningLifecycle(host: MockRunnerHost): {
     readonly lifecycle: HostProvisioningLifecycle;
   }): ReactNode {
     const { lifecycle } = props;
-    // Published from the commit phase, not during render (react-hooks/globals):
-    // every assertion runs after an `act`/`waitFor`, by which point effects
-    // have flushed, so `readLifecycle` still sees the latest committed value.
+    // Published from the commit phase, not during render (react-hooks/globals).
     useEffect(() => {
       latest = lifecycle;
     });
@@ -228,11 +226,8 @@ describe("HostProvisioningController - staged wait and localHostState derivation
     vi.useFakeTimers();
     const { readLifecycle } = mountProvisioningLifecycle(makeHost(null));
 
-    // `IRunnerHost.onLocalHostChange` is required to fire synchronously on
-    // subscribe, so by the time effects settle the state has already moved
-    // past `unknown` (`state === null`) to the derived `unavailable`. See
-    // the next test for the genuinely-unknown window on a runner that
-    // defers its first emission.
+    // `IRunnerHost.onLocalHostChange` is required to fire synchronously on subscribe, so by the time effects
+    // settle the state has already moved past `unknown` (`state === null`) to the derived `unavailable`.
     expect(readLifecycle()?.localHostState).toBe("unavailable");
     expect(readLifecycle()?.slowStartStage).toBe("loading");
   });
@@ -324,12 +319,7 @@ describe("HostProvisioningController - staged wait and localHostState derivation
   });
 
   it("restarts the staged wait at loading on a Ready -> not-ready transition", () => {
-    // The stage must be `slow` BEFORE the host comes up, or this proves
-    // nothing: a wait that never left `loading` reads `loading` afterwards
-    // whether or not anything restarts it, and the assertion passes on the
-    // null hypothesis. So: stall a start until it promotes, let the host
-    // arrive, then take it away - now `loading` can only be explained by the
-    // restart, and deleting that line leaves this reading `slow`.
+    // The stage must be `slow` before the host comes up, or this proves nothing.
     vi.useFakeTimers();
     const host = makeHost(null);
     const { readLifecycle } = mountProvisioningLifecycle(host);
@@ -355,10 +345,8 @@ describe("HostProvisioningController - staged wait and localHostState derivation
   });
 
   it("replays the current snapshot to a subscriber that mounts after the host already has a value", async () => {
-    // Simulates the desktop bridge timing: the runner host received its
-    // initial local-host snapshot before the controller mounted. The
-    // subscription must still see the current value synchronously so the
-    // lifecycle does not stall at `unknown`.
+    // The subscription must still see the current value synchronously so the lifecycle does not stall at
+    // `unknown`.
     const host = makeHost(null);
     host.setLocalHost(validSnapshot);
 
@@ -386,9 +374,8 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
     vi.restoreAllMocks();
   });
 
-  // The forced-update GESTURE. What this component owns - and what a user's
-  // data depends on - is that the forced path asks for force, and the
-  // ordinary Retry path does not.
+  // What this component owns - and what a user's data depends on - is that the forced path asks for force, and
+  // the ordinary Retry path does not.
   it("the forced-update gesture calls convergeReady with force=true; plain Retry does not", async () => {
     useAuthStore.getState().setSignedIn(
       {
@@ -417,12 +404,7 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
     });
     const { readLifecycle } = mountProvisioningLifecycle(host);
 
-    // THE AUTHORITY CONVERGES TOO, and through this same spy. D14 wants a
-    // never-dialed local host, so the in-process authority requests an ensure
-    // at construction and `MockRunnerHost` routes it to
-    // `hostManagement.convergeReady` exactly as the real desktop port does.
-    // Settling it here is what makes the counts below describe the GESTURES
-    // rather than a race between two actors.
+    // Settling it here is what makes the counts below describe the gestures rather than a race between two actors.
     await waitFor(() => {
       expect(convergeReady).toHaveBeenCalledTimes(1);
     });
@@ -444,9 +426,8 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
     expect(convergeReady).toHaveBeenLastCalledWith(false);
   });
 
-  // The busy-keep LATCH: a "busy" convergeReady outcome must keep the caller
-  // off the still-unprobed busy host, and that must survive both a plain
-  // Refresh and a forced update.
+  // The busy-keep latch: a "busy" convergeReady outcome must keep the caller off the still-unprobed busy host,
+  // and that must survive both a plain Refresh and a forced update.
   it("a busy convergeReady latches busy-keep, and the latch survives both a plain Refresh and a forced update", async () => {
     useAuthStore.getState().setSignedIn(
       {
@@ -489,9 +470,8 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
     });
     expect(convergeReady).toHaveBeenLastCalledWith(false);
 
-    // Refresh: re-check the busy status without forcing. LATCHED - the point
-    // of `markBusyKeep` is that only a success clears it, so a second busy
-    // answer must not read as recovery.
+    // Refresh: re-check the busy status without forcing. Latched - the point of `markBusyKeep` is that only a
+    // success clears it, so a second busy answer must not read as recovery.
     act(() => {
       readLifecycle()?.provisioning.retry();
     });
@@ -510,10 +490,8 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
     expect(convergeReady).toHaveBeenLastCalledWith(true);
   });
 
-  // Kills: dropping the `toastFromRunnerError` in `reinstall()`'s rejection
-  // handler. The state restore below is NOT the feedback - the Reinstall
-  // button reappearing is indistinguishable from a click that never
-  // registered, which is the whole defect.
+  // The state restore below is not the feedback - the Reinstall button reappearing is indistinguishable from a
+  // click that never registered, which is the whole defect.
   it("reinstall() says so when the sentinel could not be cleared, and restores removed", async () => {
     const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>
       Promise.resolve({ kind: "ok", value: { running: false, version: null } }),
@@ -552,8 +530,8 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
     await waitFor(() => {
       expect(runnerToastSpy).toHaveBeenCalledTimes(1);
     });
-    // The REJECTION REASON reaches the shared handler, not a swallowed
-    // generic: a typed bridge error keeps its own message there.
+    // The rejection reason reaches the shared handler, not a swallowed generic: a typed bridge error keeps its own
+    // message there.
     expect(runnerToastSpy.mock.calls[0]?.[0]).toBe(failure);
 
     // And the surface is back where it was, so a retry is possible.
@@ -603,9 +581,8 @@ describe("HostProvisioningController - removed-by-user latch", () => {
       queryClient.getQueryData(runnerQueryKeys.hostRemovalState(management)),
     ).toEqual({ removedByUser: true });
 
-    // A later settle with running:true (e.g. after a successful reinstall)
-    // clears the latch and its cache mirror - it must not survive an
-    // unrelated success the way the busy-keep latch's own settle would.
+    // A later settle with running:true (e.g. after a successful reinstall) clears the latch and its cache mirror -
+    // it must not survive an unrelated success the way the busy-keep latch's own settle would.
     convergeReady.mockImplementationOnce(() =>
       Promise.resolve({
         kind: "ok",
@@ -624,9 +601,8 @@ describe("HostProvisioningController - removed-by-user latch", () => {
     ).toEqual({ removedByUser: false });
   });
 
-  // Kills: dropping the optimistic `setRemoved(false)` / cache write in
-  // `reinstall()`, or calling `run()` before `clearRemoval()` resolves
-  // instead of after.
+  // Kills: dropping the optimistic `setRemoved(false)` / cache write in `reinstall`, or calling `run` before
+  // `clearRemoval` resolves instead of after.
   it("reinstall() optimistically drops removed, then clears the sentinel and re-runs convergeReady with force:false", async () => {
     const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>
       Promise.resolve({ kind: "ok", value: { running: false, version: null } }),
@@ -687,10 +663,8 @@ describe("HostProvisioningController - removed-by-user latch", () => {
     expect(convergeReady).toHaveBeenLastCalledWith(false);
   });
 
-  // Kills: dropping the `clearRemoval()` rejection handler in `reinstall()`,
-  // or leaving `removed`/its cache mirror on the optimistic `false` after a
-  // failed clear - the arm most likely to rot silently, since the happy path
-  // never exercises it.
+  // Kills: dropping the `clearRemoval` rejection handler in `reinstall`, or leaving `removed`/its cache mirror
+  // on the optimistic `false` after a failed clear.
   it("a rejected clearRemoval() restores removed and its cache mirror instead of leaving a resolved spinner", async () => {
     const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>
       Promise.resolve({ kind: "ok", value: { running: false, version: null } }),
@@ -698,9 +672,8 @@ describe("HostProvisioningController - removed-by-user latch", () => {
     const baseManagement = makeHostManagement(convergeReady);
     const clearRemovalRejection = new Error("clearRemoval failed");
     const clearRemovalPromise = Promise.reject<void>(clearRemovalRejection);
-    // Attach a no-op catch immediately so the still-pending assertion promise
-    // below is not the first handler and vitest never reports this as an
-    // unhandled rejection while it is in flight.
+    // Attach a no-op catch immediately so the still-pending assertion promise below is not the first handler and
+    // vitest never reports this as an unhandled rejection while it is in flight.
     clearRemovalPromise.catch(() => undefined);
     const clearRemoval = vi.fn(() => clearRemovalPromise);
     const management: IHostManagement = {
@@ -750,11 +723,7 @@ describe("HostProvisioningController - hostManagement gating", () => {
     vi.restoreAllMocks();
   });
 
-  // Returns an ACCESSOR, like `mountProvisioningLifecycle` above, rather than
-  // the captured value: the capture happens inside an effect closure, so a
-  // narrowed local read straight after `render` is `null` as far as the type
-  // flow is concerned - which turns its own guard into a comparison that is
-  // always true, and a guard that cannot fail is not a guard.
+  // Returns an accessor, like `mountProvisioningLifecycle` above, rather than the captured value.
   function mountLifecycleWithEnabled(
     host: MockRunnerHost,
     enabled: boolean,
@@ -801,14 +770,8 @@ describe("HostProvisioningController - hostManagement gating", () => {
     }
   });
 
-  // THE DISCRIMINATOR. With no management, `hasManagement` and `canProvision`
-  // are both false, so the test above cannot tell which one the field is
-  // gated on - swapping them is invisible to it (measured: that mutation
-  // survived it twice). Management PRESENT with `enabled` false is the only
-  // shape where the two disagree, and it is the shape production actually
-  // hits: `canProvision` collapses the instant a busy host is surfaced, and
-  // gating there would hide Retry/forced-update progress and swallow their
-  // errors on a machine this app manages.
+  // With no management, `hasManagement` and `canProvision` are both false, so the test above cannot tell which
+  // one the field is gated on - swapping them is invisible to it (measured: that mutation survived it twice).
   it("reports canManageHost from management ALONE - true even when provisioning is not enabled", () => {
     const convergeReady = vi.fn(() =>
       Promise.resolve({
@@ -833,11 +796,7 @@ describe("HostProvisioningController - hostManagement gating", () => {
   });
 });
 
-// Producer-level coverage for `useHostProvisioning`'s retained progress
-// (traycer#862 / #4747). Live progress is sourced from the shared
-// HostControllerStatus mutation lane (pushed the same way production's
-// HostControllerStatusListener does). lastProgress is retained only for the
-// current attempt and exposed only after that attempt FAILS.
+// lastProgress is retained only for the current attempt and exposed only after that attempt fails.
 const EXTRACT_PROGRESS: MutationProgress = {
   stage: "extract",
   percent: 80,
@@ -1054,10 +1013,8 @@ describe("useHostProvisioning lastProgress producer", () => {
       );
     });
 
-    // Drop the prior attempt's status push BEFORE retry so the new attempt
-    // does not re-absorb the old ensure progress the moment isPending flips
-    // true (progress is only live while pending; clearing now is a no-op for
-    // live progress and only prevents a stale re-feed).
+    // Drop the prior attempt's status push before retry so the new attempt does not re-absorb the old ensure
+    // progress the moment isPending flips true (progress is only live while pending.
     act(() => {
       queryClient.setQueryData<HostControllerStatus>(
         runnerQueryKeys.hostControllerStatus(management),
@@ -1090,10 +1047,7 @@ describe("useHostProvisioning lastProgress producer", () => {
     expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
   });
 
-  // The desktop status push can land in the same React commit as the
-  // mutation settlement: progress never becomes a render-observed value
-  // while isPending (it arrives as isPending flips false). Capture must
-  // read the status query cache at onError, not a prior render/effect.
+  // Capture must read the status query cache at onError, not a prior render/effect.
   it("captures progress that arrives in the same commit as the failure", async () => {
     const deferred = createDeferredConverge();
     const convergeReady = vi.fn(
@@ -1150,9 +1104,8 @@ describe("useHostProvisioning lastProgress producer", () => {
     );
   });
 
-  // Uncleared leftover ensure lane: run() records that lane's startedAt as
-  // the attempt baseline, so a retry that fails before its own progress
-  // event must report nothing - not the previous attempt's stage.
+  // Uncleared leftover ensure lane: run records that lane's startedAt as the attempt baseline, so a retry that
+  // fails before its own progress event must report nothing - not the previous attempt's stage.
   it("ignores a leftover lane from a previous attempt on retry", async () => {
     const settles: DeferredConverge[] = [];
     const convergeReady = vi.fn(
@@ -1204,8 +1157,8 @@ describe("useHostProvisioning lastProgress producer", () => {
       );
     });
 
-    // Deliberately leave the ensure lane CACHED with firstLaneStartedAt.
-    // run() must record that identity as the baseline and refuse to re-report it.
+    // Deliberately leave the ensure lane cached with firstLaneStartedAt. run must record that identity as the
+    // baseline and refuse to re-report it.
     act(() => {
       readLifecycle()?.provisioning.retry();
     });
@@ -1229,23 +1182,8 @@ describe("useHostProvisioning lastProgress producer", () => {
   });
 });
 
-/**
- * THE STAGED WAIT VERSUS LIVE PROGRESS.
- *
- * `slow` is what puts Retry in front of the user, and its threshold's own doc
- * justifies 10s against a healthy bundled-host BOOT - "typically well under a
- * second", so a 10x margin. The same timer also governs the first-run
- * download/install, a population that doc never contemplates, and there 10s is
- * routine. A threshold justified against one population silently governed every
- * other population sharing its timer.
- *
- * Progress is read from the MUTATION LANE, not from `provisioning.progress`.
- * That is not a style choice: a first launch is driven by the desktop's own
- * reconciler, so a renderer-side mutation observer sees no episode at all and
- * `isProvisioning` is false throughout - see `useHostProvisioningProgress`,
- * which exists because of exactly that. Keying this on the renderer's own
- * mutation state would have fixed nothing for the only population that hits it.
- */
+/** The same timer also governs the first-run download/install, a population that doc never contemplates, and
+ * there 10s is routine. */
 const DOWNLOAD_AT = (percent: number, bytes: number): MutationProgress => ({
   stage: "download",
   percent,
@@ -1294,8 +1232,6 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     expect(readLifecycle()?.slowStartStage).toBe("loading");
 
     // A real download: advancing events, wall-clock well past the threshold.
-    // Nothing has failed, the progress bar is on screen, and the user is being
-    // told to Retry - which is the complaint that started this whole epic.
     for (const [percent, bytes] of [
       [10, 25_000_000],
       [30, 75_000_000],
@@ -1313,27 +1249,15 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
       });
     }
 
-    // Total elapsed is ~36s, far beyond the threshold, and the snapshot is still
-    // unavailable - so the ONLY thing that may keep this out of `slow` is the
-    // progress itself.
+    // Total elapsed is ~36s, far beyond the threshold, and the snapshot is still unavailable - so the only thing
+    // that may keep this out of `slow` is the progress itself.
     expect(readLifecycle()?.localHostState).toBe("unavailable");
     expect(readLifecycle()?.slowStartStage).toBe("loading");
   });
 
   it("STILL promotes to slow when the lane is chatty but stuck at the same point", () => {
-    // The over-suppression guard, and the reason the predicate keys on the lane
-    // reaching a NEW POSITION rather than on a progress event ARRIVING. A stalled
-    // download that keeps re-emitting the same percent would reset an
-    // arrival-keyed timer for ever, and the escape hatch would never appear for
-    // the user who most needs it.
-    //
-    // THE ARITHMETIC IS THE TEST. No single gap here reaches the threshold, so an
-    // arrival-keyed timer never fires; the total time since the lane last MOVED
-    // does, so a position-keyed one does. Measured while building this: the first
-    // observed position is itself a real advance (null is not a position), so the
-    // clock that matters starts at the first event and not at mount - an earlier
-    // version of this test assumed otherwise and failed for that reason rather
-    // than for the behaviour it was checking.
+    // A stalled download that keeps re-emitting the same percent would reset an arrival-keyed timer for ever, and
+    // the escape hatch would never appear for the user who most needs it.
     vi.useFakeTimers();
     const { queryClient, management, readLifecycle } = mountWithLane();
     expect(readLifecycle()?.slowStartStage).toBe("loading");
@@ -1350,9 +1274,8 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
       act(() => {
         vi.advanceTimersByTime(gapMs);
       });
-      // Guard against the assertion below passing because ONE gap was long
-      // enough: that would make this test pass on the arrival-keyed build it
-      // exists to reject.
+      // Guard against the assertion below passing because one gap was long enough: that would make this test pass on
+      // the arrival-keyed build it exists to reject.
       expect(gapMs).toBeLessThan(LOCAL_HOST_SLOW_START_THRESHOLD_MS);
     }
 
@@ -1360,24 +1283,13 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
   });
 
   it("DEMOTES back to loading when a promoted install starts advancing again", () => {
-    // `slow` used to be ABSORBING: the timer effect returns early on
-    // `stage === "slow"`, so once the wait promoted, no later event could take
-    // it back down - only reaching `ready` ever cleared it. An install that
-    // went quiet for eleven seconds and then resumed kept Retry and the
-    // emphasized recovery controls on screen for the rest of a healthy run.
-    //
-    // Reachable in production, and by the ordinary path: `verify` hashes ~800MB
-    // emitting one constant position, so a first launch crosses the threshold
-    // before extraction's per-entry heartbeat starts moving at all.
+    // Reachable in production, and by the ordinary path: `verify` hashes ~800MB emitting one constant position, so
+    // a first launch crosses the threshold before extraction's per-entry heartbeat starts moving at all.
     vi.useFakeTimers();
     const { queryClient, management, readLifecycle } = mountWithLane();
 
-    // A pushed position is not an OBSERVED one: the query notifies on its own
-    // schedule, so without settling here the first advance would still be
-    // arriving on the render the promotion timer triggers - and this arm would
-    // then be measuring that coincidence rather than the demotion. Measured,
-    // not assumed: instrumenting the controller showed the first advance and
-    // `stage === "slow"` reaching the same render.
+    // A pushed position is not an observed one: the query notifies on its own schedule, so without settling here
+    // the first advance would still be arriving on the render the promotion timer triggers.
     const settleObservation = (): void => {
       act(() => {
         vi.advanceTimersByTime(1);
@@ -1392,9 +1304,8 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     );
     settleObservation();
     advancePastSlowStartThreshold();
-    // Premise: it really did promote, on a position the wait had already seen.
-    // Without this the demotion below is satisfied by a build that never
-    // promoted in the first place.
+    // Premise: it really did promote, on a position the wait had already seen. Without this the demotion below is
+    // satisfied by a build that never promoted in the first place.
     expect(readLifecycle()?.slowStartStage).toBe("slow");
 
     pushEnsureProgress(
@@ -1406,18 +1317,15 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     settleObservation();
     expect(readLifecycle()?.slowStartStage).toBe("loading");
 
-    // And the detection is UNWEAKENED - the demotion re-arms the timer from
-    // the new position rather than disabling it. Without this arm, "never
-    // promote again" would pass just as happily as the fix.
+    // And the detection is unweakened - the demotion re-arms the timer from the new position rather than disabling
+    // it. Without this arm, "never promote again" would pass just as happily as the fix.
     advancePastSlowStartThreshold();
     expect(readLifecycle()?.slowStartStage).toBe("slow");
   });
 
   it("STILL promotes to slow for a lane accepted but silent", () => {
-    // `useHostProvisioningProgress` is explicit that a null `progress` on a
-    // RUNNING lane means "accepted but has not pushed an event" rather than "no
-    // progress yet" - so an install that was accepted and then said nothing for
-    // the whole threshold is precisely the stall this stage exists to surface.
+    // `useHostProvisioningProgress` is explicit that a null `progress` on a running lane means "accepted but has
+    // not pushed an event" rather than "no progress yet".
     vi.useFakeTimers();
     const { queryClient, management, readLifecycle } = mountWithLane();
 
@@ -1427,26 +1335,7 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
   });
 
   it("does NOT promote during a bundled first launch - the local-source path the desktop actually takes", () => {
-    // The payloads below are the REAL first-launch emissions, not a synthetic
-    // lane. Quoted from the producer, which never runs `download` on this path:
-    //
-    //   installer/bundled-host.ts:6-11  - production desktop bundles ship the
-    //     archive beside the CLI, so `host ensure` takes the LOCAL-SOURCE path.
-    //     `download` - the only stage that emits an advancing position - never
-    //     runs at all.
-    //   installer/install.ts:709-714    - verify: stage "verify", percent null,
-    //     bytes null, totalBytes = the archive size. `totalBytes` is excluded
-    //     from the position key by design (a size is not a position), so this is
-    //     CONSTANT while it hashes ~800 MB.
-    //   installer/install.ts:236-241    - extract announce, all comparable
-    //     fields null.
-    //   installer/extract-heartbeat.ts:41-47 - every 2s, throttled, per archive
-    //     entry: stage "extract", message `extracting host <version>`, percent
-    //     null, bytes null, totalBytes null. CONSTANT for the whole extract,
-    //     which that file's own comment says "can run for minutes".
-    //
-    // So the position key is "verify||" for the whole hash and "extract||" for
-    // the whole extract: two advances in total, minutes apart.
+    // `download` - the only stage that emits an advancing position - never runs at all.
     vi.useFakeTimers();
     const { queryClient, management, readLifecycle } = mountWithLane();
 
@@ -1459,9 +1348,8 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
       );
     };
 
-    // verify: announce, then hash an 800MB archive, reporting the position the
-    // stream already knew. Chunked so the wall clock passes the threshold with no
-    // single gap reaching it - the same arithmetic as the chatty arm.
+    // verify: announce, then hash an 800MB archive, reporting the position the stream already knew. Chunked so the
+    // wall clock passes the threshold with no single gap reaching it - the same arithmetic as the chatty arm.
     push({
       stage: "verify",
       message: "hashing /Applications/Traycer.app/…/host-runtime.tar.gz",
@@ -1493,9 +1381,8 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
       totalBytes: null,
       workUnits: null,
     });
-    // The throttled heartbeat, every 2s, carrying a RISING entry count - the only
-    // field that differs between two of them. Every other field is byte-identical
-    // by construction.
+    // The throttled heartbeat, every 2s, carrying a rising entry count - the only field that differs between two
+    // of them.
     for (let i = 0; i < 30; i += 1) {
       push({
         stage: "extract",
@@ -1515,19 +1402,8 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
   });
 
   it("STILL promotes to slow when NO lane event ever arrives - the wait is baselined at mount", () => {
-    // THE MOST IMPORTANT ARM ON THIS SURFACE, and the one whose failure direction
-    // is unacceptable to leave inferred.
-    //
-    // A host process that never spawns is the commonest hard failure, and it
-    // produces a boot with no lane event at all - so there is never a "first
-    // position" to start a clock from. If the wait were baselined only by the
-    // first advance, this shape would NEVER promote: no Retry, no Report issue,
-    // just a screen that sits there. That is strictly worse than the defect this
-    // fix addresses, and silent where that one at least showed a button.
-    //
-    // So the timer is armed from MOUNT and progress RESETS it, rather than
-    // progress arming it. Asserted rather than reasoned about: the mutation that
-    // arms it on first advance instead reddens exactly this test.
+    // If the wait were baselined only by the first advance, this shape would never promote: no Retry, no Report
+    // issue, just a screen that sits there.
     vi.useFakeTimers();
     const { readLifecycle } = mountWithLane();
 
@@ -1539,26 +1415,6 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     expect(readLifecycle()?.localHostState).toBe("unavailable");
   });
 
-  /**
-   * DECLARED GAP: `laneProgressAdvanceKey`'s "all comparable fields null" branch
-   * is NOT pinned by anything above, and three attempts at an arm for it were
-   * each vacuous. Recorded rather than left to read as covered.
-   *
-   *   attempt 1 - `progress: null` (the arm above): short-circuits on the key's
-   *     FIRST guard, so the all-null branch is never evaluated.
-   *   attempt 2 - a repeating message-only event: the mutated key is a CONSTANT,
-   *     exactly as stable as `null`, so the wait restarts once at t≈0 either way
-   *     and promotes on the same schedule.
-   *   attempt 3 - a LATE message-only event, which should have distinguished
-   *     them: instrumented and confirmed the lane lands and the mutated key is
-   *     live, yet the promotion time did not move. Whatever absorbs it is in the
-   *     effect/fake-timer interaction, not in the predicate.
-   *
-   * So the branch is DEFENSIVE and unproven: mutating it to report an advance
-   * passes this whole suite. It is kept because a message is genuinely not
-   * evidence of movement and the alternative fails toward withholding the escape
-   * hatch - but nobody should read the green suite as having checked it. Anyone
-   * touching it should reach for a real-browser or integration-level measurement
-   * rather than trusting these arms.
-   */
+  /** attempt 1 - `progress: null` (the arm above): short-circuits on the key's first guard, so the all-null
+   * branch is never evaluated. */
 });

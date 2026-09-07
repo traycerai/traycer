@@ -56,10 +56,6 @@ describe("epic left panel registry", () => {
   });
 
   it("always exposes non-contextual panels", () => {
-    // `git-diff` and `file-tree` stay in the registry so persisted
-    // layouts keep resolving to a valid definition, but they are gated
-    // until a real backend RPC lands. They are intentionally excluded
-    // from the always-visible set.
     const alwaysVisiblePanelIds: ReadonlyArray<LeftPanelId> = [
       "chats",
       "terminals",

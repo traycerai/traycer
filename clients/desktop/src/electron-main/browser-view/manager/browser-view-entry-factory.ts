@@ -40,12 +40,6 @@ interface BrowserViewEntryFactoryOptions {
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
 
-/**
- * Builds one guest record and wires its `webContents` events to the modules
- * that care. Everything a guest can report on its own - navigation, title,
- * paint, popups, find results, crashes, reserved chords - is routed from here;
- * the coordinator only owns what a caller asks for.
- */
 export class BrowserViewEntryFactory {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly annotations: BrowserViewAnnotationHost;
@@ -101,10 +95,6 @@ export class BrowserViewEntryFactory {
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
         },
-        // The page-initiated half of the guest scheme gate (browser security
-        // review, root cause C). `navigate` in the manager covers what this
-        // process asks for; these cover what the page asks for on its own -
-        // a link, a scripted `location =`, a server redirect, a subframe.
         ...guestNavigationGuards(() =>
           this.popups.hadRecentGuestGesture(webContents),
         ),
@@ -200,13 +190,7 @@ export class BrowserViewEntryFactory {
     url: string,
   ): void {
     if (entry.internalNavigation) return;
-    // The renderer-owned guest is born at `about:blank`, and that birth
-    // navigation commits on this listener after the entry already carries the
-    // host's intended `requestedUrl`. Recording it here would overwrite that
-    // intent with `about:blank`, so the accepted initial navigation would then
-    // load `about:blank` and the tile would hang. Guest-driven navigations
-    // only count once the host has accepted the tab and issued its intended
-    // navigation.
+    // The renderer-owned guest is born at `about:blank`, and that birth navigation commits on this listener after the entry already carries the host's intended `requestedUrl`.
     if (!entry.identity.lifecycle.accepted) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
@@ -243,10 +227,6 @@ export class BrowserViewEntryFactory {
     detail: string,
   ): void {
     this.annotations.end(entry, "crash");
-    // A crashed guest is reported as a plain `dead` tab status and its
-    // renderer guest is released. There is nothing to capture from a gone
-    // renderer and nothing to hand off - the host re-materializes the durable
-    // tab later.
     this.setStatus(entry, "dead", detail);
     this.closeEntry(entry);
   }
@@ -257,17 +237,10 @@ export class BrowserViewEntryFactory {
     input: Input,
   ): void {
     if (input.type !== "keyDown") return;
-    // The guest seam runs BEFORE the macOS app-menu accelerator and is the
-    // only place in the chain that knows a browser tile has focus, so the
-    // whole focus-scoped input policy is decided here. `preventDefault` is
-    // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
+    // The guest seam runs BEFORE the macOS app-menu accelerator and is the only place in the chain that knows a browser tile has focus, so the whole focus-scoped input policy is decided.
     const reserved = this.chords.match(input);
     if (reserved !== null) {
       event.preventDefault();
-      // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open
-      // (and split for) a tab per repeat - but the repeat is still CLAIMED
-      // above, or it walks straight into the menu equivalent while the first
-      // press's asynchronous close is still in flight.
       if (!input.isAutoRepeat) this.chords.dispatch(entry.surface, reserved);
       return;
     }
@@ -281,9 +254,8 @@ export class BrowserViewEntryFactory {
 }
 
 /**
- * Applies a zoom factor unless an annotation session has the page pinned
- * (its overlay geometry is computed in page pixels). Reports whether the guest
- * actually changed, so the caller knows whether to re-emit status.
+ * Applies a zoom factor unless an annotation session has the page pinned (its overlay geometry is computed in page pixels).
+ * Reports whether the guest actually changed, so the caller knows whether to re-emit status.
  */
 export function applyEntryZoom(
   entry: BrowserViewEntry,

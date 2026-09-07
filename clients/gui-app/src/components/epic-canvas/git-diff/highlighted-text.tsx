@@ -11,11 +11,6 @@ export interface HighlightedTextProps {
 // foreground filename span and the muted directory span.
 const MATCH_CLASS_NAME = "rounded-[2px] bg-primary/25 text-foreground";
 
-/**
- * Renders `text` with the given ranges wrapped in highlight `<mark>`s. Empty
- * ranges render the plain string, so callers can always use this component
- * regardless of whether a filter is active.
- */
 export function HighlightedText(props: HighlightedTextProps): ReactNode {
   const { text, ranges } = props;
   if (ranges.length === 0) return text;

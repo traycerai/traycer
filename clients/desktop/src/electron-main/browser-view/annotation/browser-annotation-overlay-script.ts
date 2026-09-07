@@ -24,11 +24,6 @@ import {
 export const ANNOTATION_WORLD_NAME = "traycer-annotation";
 export const ANNOTATION_BINDING_NAME = "__traycerAnnotation";
 
-/**
- * One expression shape for every guest hook: resolve `globalThis[name]`, call
- * it with JSON-encoded arguments, and report whether it ran. Callers that need
- * confirmation read the `true`; best-effort callers ignore the result.
- */
 export function callGuestHook(name: string, args: readonly unknown[]): string {
   const encodedArgs = args
     .map((arg) => JSON.stringify(arg).replace(/</g, "\\u003c"))
@@ -64,10 +59,6 @@ export const ANNOTATION_LIMITS = {
 
 const ATTACH_RECT_MAX = 1_000_000;
 
-/**
- * Trust boundary for `__traycerAnnotation` payloads. Guest-supplied
- * `annotationId` / `screenshot` fields are dropped (ticket 03 trust model).
- */
 export function sanitizeAnnotationBindingPayload(
   value: unknown,
 ): BrowserAnnotationSessionEvent | null {

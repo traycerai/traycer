@@ -14,23 +14,13 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * A live chat session whose only faked boundary is its socket, registered so
- * the managed-command surfaces find it exactly as they do in the app.
- *
- * The commands a chat owns ride its `chat.subscribe` stream, so a suite that
- * used to install a list-stream stub now feeds real `managedCommandsChanged`
- * frames through a real chat session store: the reducer, the registry lookup
- * and the ordering are all the production ones.
+ * A live chat session whose only faked boundary is its socket, registered so the managed-command
+ * surfaces find it exactly as they do in the app.
  */
 export interface ManagedCommandChatSessionStub {
   /**
-   * The chat's whole set, as the host sends it - never a delta. Passing `[]`
-   * is how a chat's last command goes away.
-   *
-   * Delivers the chat's SNAPSHOT the first time, and a `managedCommandsChanged`
-   * frame after that, which is the order a real stream sends them in. That
-   * order matters to any surface that waits for the host's first word before
-   * reading an empty set as "deleted".
+   * The chat's whole set, as the host sends it - never a delta. Passing `[]` is how a chat's last
+   * command goes away.
    */
   readonly setCommands: (commands: readonly ManagedCommand[]) => void;
   /**
@@ -41,11 +31,8 @@ export interface ManagedCommandChatSessionStub {
     commands: readonly ManagedCommand[],
   ) => void;
   /**
-   * The chat's whole set of held updates, as the host sends it on a
-   * `heldUpdatesChanged` frame - never a delta. Unlike {@link setCommands} this
-   * needs no snapshot-first ordering: the store's `onHeldUpdatesChanged`
-   * handler is a plain assignment gated only on chat identity, the same as
-   * {@link setCommandsWithoutSnapshot}'s frame.
+   * The chat's whole set of held updates, as the host sends it on a `heldUpdatesChanged` frame -
+   * never a delta.
    */
   readonly setHeldUpdates: (
     heldUpdates: readonly HeldManagedCommandUpdate[],
@@ -159,13 +146,7 @@ export function installManagedCommandChatSession(args: {
   };
 }
 
-/**
- * The smallest chat a snapshot frame can describe, carrying the command set.
- * Every other field is the empty/idle value: these suites are about the
- * commands, and the snapshot is here so the session reaches the state a real
- * one does - `snapshotLoaded`, which is what tells an empty set apart from a
- * set that has not arrived.
- */
+/** The smallest chat a snapshot frame can describe, carrying the command set. */
 function emptyChatSnapshot(args: {
   readonly chatId: string;
   readonly hostId: string;

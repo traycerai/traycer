@@ -16,18 +16,11 @@ function createFixture(initialContent: string) {
   let content = initialContent;
   let calls = 0;
   let requestSeq = 0;
-  // The SPINE: it owns the messenger, coordinator and request context, and
-  // addresses no host of its own. The subject gets a requester pinned to a
-  // host id below, which is how every consumer reaches a host since P4.2
-  // deleted the active slot.
+  // The SPINE: it owns the messenger, coordinator and request context, and addresses no host of its own.
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
-    // REQUIRED, not decoration. `captureAuthority` re-resolves a requester's
-    // entry against the live directory and refuses one it cannot find, so a
-    // requester built without this rejects every request as a stale binding.
-    // `bind()` used to satisfy that lookup through the client's own
-    // slot-reading fallback; with the slot gone the fixture supplies it.
+    // `captureAuthority` re-resolves a requester's entry against the live directory and refuses one it cannot find, so a requester built without this rejects every request as a stale binding.
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({

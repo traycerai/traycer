@@ -6,17 +6,7 @@ import type { NoiseKeyPair } from "../types";
 
 /**
  * Security-gate bar #1: official Noise `NK` test vectors pass.
- *
- * Source: the canonical Cacophony test-vector corpus, as published in the
- * `snow` reference implementation:
- *   https://raw.githubusercontent.com/mcginty/snow/main/tests/vectors/cacophony.txt
- * (Cacophony is the Haskell Noise implementation whose vectors the Noise
- * community treats as authoritative; noise-c ships the same corpus.)
- *
- * The single object below is the verbatim `Noise_NK_25519_AESGCM_SHA256` entry
- * from that file. `messages[0..1]` are the two NK handshake messages; the
- * remaining entries are post-handshake transport messages alternating
- * initiator->responder / responder->initiator.
+ * `messages[0..1]` are the two NK handshake messages; the remaining entries are post-handshake transport messages alternating initiator->responder / responder->initiator.
  */
 const NK_VECTOR = {
   protocol_name: "Noise_NK_25519_AESGCM_SHA256",
@@ -152,9 +142,6 @@ describe("Noise_NK_25519_AESGCM_SHA256 official vector", () => {
     const responderCiphers = responder.getTransportCiphers();
     const emptyAd = new Uint8Array(0);
 
-    // Transport messages alternate direction; each direction's nonce increments
-    // independently (msg 2/4 share the initiator->responder cipher, msg 3/5 the
-    // responder->initiator cipher).
     const transport = NK_VECTOR.messages.slice(2);
     const senders = [
       initiatorCiphers.send,

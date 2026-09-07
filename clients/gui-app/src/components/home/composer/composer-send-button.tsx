@@ -14,11 +14,8 @@ interface ComposerSendButtonProps {
   activeTurnStatus: ChatActiveTurn["status"] | null;
   stopDisabled: boolean;
   onStopTurn: (() => void) | null;
-  /**
-   * When non-null (send mode only), the button is disabled and shows this
-   * string as its tooltip - e.g. "Select a workspace folder to start." `null`
-   * leaves the normal "Send" affordance.
-   */
+  /** When non-null (send mode only), the button is disabled and shows this string as its tooltip - e.g. "Select a
+   * workspace folder to start." `null` leaves the normal "Send" affordance. */
   disabledHint: string | null;
 }
 
@@ -35,10 +32,8 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
     onStopTurn,
     disabledHint,
   } = props;
-  // On a phone-width viewport Return inserts a newline (`chat-list-keymap`),
-  // so this button is the only way to queue a message mid-turn: Stop renders
-  // beside Send there instead of replacing it. Same VIEWPORT signal as the
-  // keymap, so the two can never disagree.
+  // On a phone-width viewport Return inserts a newline (`chat-list-keymap`), so this button is the only way to
+  // queue a message mid-turn: Stop renders beside Send there instead of replacing it.
   const stopBesideSend = useIsMobileViewport();
 
   if (activeTurnStatus === null) {
@@ -91,11 +86,7 @@ interface SendButtonProps {
 function SendButton(props: SendButtonProps) {
   const { canSubmit, attachmentPending, onSubmit, disabledHint, queueing } =
     props;
-  // Hint mode (e.g. no workspace) marks the button `aria-disabled` rather than
-  // using the `disabled` attribute, so it stays focusable and the styled
-  // TooltipWrapper's hint is reachable by hover and keyboard focus (a native
-  // `title` is suppressed on a disabled <button>). Other disabled states keep
-  // the real `disabled` attribute and the native title.
+  // Other disabled states keep the real `disabled` attribute and the native title.
   const hintActive = disabledHint !== null;
   const label = queueing ? "Queue" : "Send";
 

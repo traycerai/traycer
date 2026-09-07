@@ -48,14 +48,8 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   };
 }
 
-/**
- * The tooltip used to be one hardcoded sentence - "Sign in requires a local
- * host with browser sign-in available" - shown for every reason the button was
- * disabled. On a local host, which is most of them, that sentence is false, and
- * it is the same misdirection class `providerCliNotFoundMessage` exists to
- * kill: the user reads a precondition they already satisfy and has nowhere to
- * go.
- */
+/** On a local host, which is most of them, that sentence is false, and it is the same misdirection class
+ * `providerCliNotFoundMessage` exists to kill. */
 describe("providerSignInUnavailableHint", () => {
   it("is null when sign-in actually works", () => {
     expect(providerSignInUnavailableHint(providerState({}), true)).toBeNull();
@@ -90,9 +84,7 @@ describe("providerSignInUnavailableHint", () => {
   });
 
   it("reports a blocking managed pack rather than a false host precondition", () => {
-    // The case the old sentence got most wrong: a local host, a provider that
-    // does support sign-in, and a pack that has not arrived. The user was told
-    // to find a local host while sitting at one.
+    // The user was told to find a local host while sitting at one.
     const hint = providerSignInUnavailableHint(
       providerState({
         candidates: [],
@@ -117,9 +109,8 @@ describe("providerSignInUnavailableHint", () => {
     ).toBeNull();
   });
 
-  // Row 1 of the terminal-login contract table (this consumer's half): the
-  // hint must point at the terminal sign-in flow, not the generic
-  // "does not support browser sign-in" message.
+  // Row 1 of the terminal-login contract table (this consumer's half): the hint must point at the terminal
+  // sign-in flow, not the generic "does not support browser sign-in" message.
   it("points at the terminal sign-in flow for a terminal-login provider, not 'browser sign-in'", () => {
     const hint = providerSignInUnavailableHint(
       providerState({
@@ -136,10 +127,8 @@ describe("providerSignInUnavailableHint", () => {
     expect(hint).not.toContain("browser sign-in");
   });
 
-  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
-  // `terminalLogin` with `oauthArgs: null` - there is no headless command.
-  // The terminal branch must win over the "no browser sign-in, use its own
-  // CLI" one: Traycer opens that CLI for the user.
+  // The terminal branch must win over the "no browser sign-in, use its own CLI" one: Traycer opens that CLI for
+  // the user.
   it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
     "points at the terminal sign-in flow for a terminal-login provider with no oauthArgs (%o)",
     ({ oauthArgs }) => {
@@ -181,15 +170,8 @@ describe("providerSupportsTerminalLogin", () => {
     expect(providerSupportsTerminalLogin(NO_TERMINAL_LOGIN_CAP)).toBe(false);
   });
 
-  // The real source of a "no key to check" capability is the optional chain
-  // over `loginCapability` itself, not an old host's echo: the v6 -> v7
-  // upgrade bridge (`registry.ts`) fills `terminalLogin: null` for exactly
-  // that case, so a pre-terminal-login host's payload decodes with the key
-  // present and `null` (the `NO_TERMINAL_LOGIN_CAP` case above), never absent.
-  // `loginCapability` reads `null` for an API-key-only provider (Cursor,
-  // Traycer) and `undefined` for one not yet loaded (a map lookup before
-  // `providers.list` resolves) - both must read as "does not support terminal
-  // login".
+  // `loginCapability` reads `null` for an API-key-only provider (Cursor, Traycer) and `undefined` for one not
+  // yet loaded (a map lookup before `providers.list` resolves).
   it("is false when loginCapability itself is null", () => {
     expect(providerSupportsTerminalLogin(null)).toBe(false);
   });
@@ -198,12 +180,7 @@ describe("providerSupportsTerminalLogin", () => {
     expect(providerSupportsTerminalLogin(undefined)).toBe(false);
   });
 
-  // The command the terminal runs is host-owned, not `oauthArgs` - that is
-  // the HEADLESS command, and the providers whose sign-in lives inside their
-  // own TUI (Qwen, Droid, OMP, OpenCode) ship `terminalLogin` with
-  // `oauthArgs: null` so a client predating the field never offers them a
-  // headless button. This helper once required `oauthArgs` too, which hid
-  // the terminal button for exactly those four.
+  // The command the terminal runs is host-owned, not `oauthArgs`.
   it("is true when terminalLogin is present even though oauthArgs is null or empty", () => {
     expect(
       providerSupportsTerminalLogin({

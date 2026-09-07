@@ -5,9 +5,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
-// `host purge-stage` is a destructive yanked-release handoff. This uses a
-// real foreign process holding the actual lock file: a passthrough lock mock
-// would still pass if the command stopped acquiring the lock entirely.
+// `host purge-stage` is a destructive yanked-release handoff.
+// This uses a real foreign process holding the actual lock file: a passthrough lock mock would still pass if the command stopped acquiring the lock entirely.
 const mocks = vi.hoisted(() => ({ purgeCalls: 0 }));
 
 vi.mock("../../installer/stage-reconcile", () => ({

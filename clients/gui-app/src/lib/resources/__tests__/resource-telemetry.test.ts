@@ -119,9 +119,7 @@ describe("pressureTierFor", () => {
   });
 
   it("scales the tiers to a smaller heap ceiling", () => {
-    // On a 2 GB ceiling the old absolute thresholds put `high` and `critical`
-    // ABOVE the limit, so the tiers meant to fire before an allocation failure
-    // could never fire at all.
+    // On a 2 GB ceiling the old absolute thresholds put `high` and `critical` ABOVE the limit, so the tiers meant to fire before an allocation failure could never fire at all.
     expect(pressureTierFor(768, 2048)).toBe("elevated");
     expect(pressureTierFor(1152, 2048)).toBe("high");
     expect(pressureTierFor(1536, 2048)).toBe("critical");
@@ -150,10 +148,7 @@ describe("createResourceTelemetrySampler", () => {
   });
 
   it("carries no process-metric fields", () => {
-    // Process CPU/working set are sourced from a main-process accumulator that
-    // is shared with the Resource Monitor pollers, so reading it here both
-    // corrupts their numbers and yields an interval this sampler did not
-    // define. The event deliberately ships neither field.
+    // Process CPU/working set are sourced from a main-process accumulator that is shared with the Resource Monitor pollers, so reading it here both corrupts their numbers and yields an interval this sampler did not define.
     const harness = createHarness();
     harness.sampleOnce();
 

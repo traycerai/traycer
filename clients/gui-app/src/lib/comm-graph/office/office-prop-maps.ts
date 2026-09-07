@@ -1,18 +1,9 @@
 /**
- * Everything on the floor that is not a character: furniture, fixtures, tiles
- * and the two travelling sprites (envelope, sparkle).
- *
- * Fixed color keys only - these maps never see an `OfficeAppearance`. `Z` is
- * the per-draw tint, so one envelope map serves every accent color.
+ * Everything on the floor that is not a character: furniture, fixtures, tiles and the two travelling sprites (envelope, sparkle).
  */
 import type { SpriteMap } from "@/lib/comm-graph/office/office-sprite-maps";
 
 // ---- Desk and screen ------------------------------------------------- //
-//
-// Two tiles wide, with the keyboard over the LEFT tile because the chair sits
-// below that tile. The mug beside the keyboard is what keeps a bare desk from
-// reading as an unoccupied slab; it stays on the LEFT half because the right
-// half carries the nameplate and the harness logo drawn over it.
 
 export const DESK_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
@@ -50,9 +41,8 @@ export const MONITOR_ON_MAP: SpriteMap = [
 ];
 
 /**
- * The second lit frame. The code lines sit on the rows `MONITOR_ON_MAP` leaves
- * blank and carry different lengths, so alternating the two frames reads as
- * text scrolling up rather than as a screen blinking.
+ * The second lit frame.
+ * The code lines sit on the rows `MONITOR_ON_MAP` leaves blank and carry different lengths, so alternating the two frames reads as text scrolling up rather than as a screen blinking.
  */
 export const MONITOR_ON_B_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOO",
@@ -85,11 +75,6 @@ export const MONITOR_OFF_MAP: SpriteMap = [
 ];
 
 // ---- Screens for the other model tiers -------------------------------- //
-//
-// Three chassis, one per tier, all standing on the SAME desk row: their maps
-// differ in height, so the scene lifts each by its own offset rather than
-// sharing one. Every lit map spends its bright pixels on ragged `b` code lines
-// over a `c` field, which is the one thing that reads as work at 1x.
 
 /** A laptop: a hinged lid over a keyboard deck, sized for the small tier. */
 export const MONITOR_SMALL_ON_MAP: SpriteMap = [
@@ -117,9 +102,8 @@ export const MONITOR_SMALL_OFF_MAP: SpriteMap = [
 ];
 
 /**
- * Two screens on one stand, for the large tier. The panes are separate boxes
- * meeting at a doubled bezel down the middle: a single wide pane would read as
- * one enormous television rather than as a two-monitor rig.
+ * Two screens on one stand, for the large tier.
+ * The panes are separate boxes meeting at a doubled bezel down the middle: a single wide pane would read as one enormous television rather than as a two-monitor rig.
  */
 export const MONITOR_WIDE_ON_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOOOOOOOOOO",
@@ -137,10 +121,7 @@ export const MONITOR_WIDE_ON_MAP: SpriteMap = [
 ];
 
 /**
- * The second lit frame, on the same terms as `MONITOR_ON_B_MAP`: the code lines
- * move to the rows the first frame leaves blank and change length, so the pair
- * reads as text scrolling rather than as the rig blinking. The chassis rows are
- * pinned to the first frame's - a moving bezel would read as a twitch.
+ * The second lit frame, on the same terms as `MONITOR_ON_B_MAP`: the code lines move to the rows the first frame leaves blank and change length, so the pair reads as text scrolling rather than as the rig blinking.
  */
 export const MONITOR_WIDE_ON_B_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOOOOOOOOOO",
@@ -173,14 +154,8 @@ export const MONITOR_WIDE_OFF_MAP: SpriteMap = [
 ];
 
 /**
- * A crashed screen: the medium chassis, its field flooded `notice` red with a
- * sad face in the palette's brightest color. One map serves every tier - a
- * crash is a state, not a hardware size, and three red screens would be three
- * chances for them to drift apart.
- *
- * The face carries NO `screenLit` pixel: "the screen is on and something is
- * wrong" has to be legible as one glance at the color, before any glyph is
- * read.
+ * A crashed screen: the medium chassis, its field flooded `notice` red with a sad face in the palette's brightest color.
+ * One map serves every tier - a crash is a state, not a hardware size, and three red screens would be three chances for them to drift apart.
  */
 export const MONITOR_CRASH_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOO",
@@ -198,11 +173,6 @@ export const MONITOR_CRASH_MAP: SpriteMap = [
 ];
 
 // ---- Desk clutter ----------------------------------------------------- //
-//
-// Unanswered requests, as a pile that grows. The three maps share ONE face and
-// differ only by how many 2px front edges are stacked below it, so the scene
-// can swap between them bottom-anchored and the face rises a fixed step each
-// time instead of the whole pile redrawing itself.
 
 const ENVELOPE_STACK_FACE: SpriteMap = [
   "OOOOOOOOOO",
@@ -230,9 +200,8 @@ export const ENVELOPE_STACK_3_MAP: SpriteMap = [
 ];
 
 /**
- * The seat only. A back-rest is deliberately absent: the scene draws the chair
- * and then the seated character on top of it, so a rest would be hidden behind
- * the shoulders anyway and only cost silhouette clarity.
+ * The seat only.
+ * A back-rest is deliberately absent: the scene draws the chair and then the seated character on top of it, so a rest would be hidden behind the shoulders anyway and only cost silhouette clarity.
  */
 export const CHAIR_MAP: SpriteMap = [
   "..OOOOOOOOOOOO..",
@@ -256,12 +225,8 @@ export const CHAIR_MAP: SpriteMap = [
 // ---- Desk plate, divider and wall sign -------------------------------- //
 
 /**
- * The plate that stands on the desk's right half. Deliberately featureless: the
- * renderer draws a 12x12 harness logo over its top edge, so anything engraved
- * on the face would read as noise behind the logo. What survives the overlay is
- * the BASE - the dark bevel and the wood shadow on the last two rows - which is
- * all the plate has to contribute for the logo to look like it is standing on
- * something.
+ * The plate that stands on the desk's right half.
+ * Deliberately featureless: the renderer draws a 12x12 harness logo over its top edge, so anything engraved on the face would read as noise behind the logo.
  */
 export const NAMEPLATE_MAP: SpriteMap = [
   ".OOOOOOOOOO.",
@@ -273,10 +238,8 @@ export const NAMEPLATE_MAP: SpriteMap = [
 ];
 
 /**
- * A frosted divider between two desk clusters in one cabin, seen top-down: a
- * 4px glass band with a metal foot. The glass is two tones split down the
- * middle rather than one flat fill, which is what makes a 4px band read as a
- * pane catching light instead of as a painted stripe.
+ * A frosted divider between two desk clusters in one cabin, seen top-down: a 4px glass band with a metal foot.
+ * The glass is two tones split down the middle rather than one flat fill, which is what makes a 4px band read as a pane catching light instead of as a painted stripe.
  */
 export const PARTITION_MAP: SpriteMap = [
   ".....OOOOOO.....",
@@ -298,12 +261,8 @@ export const PARTITION_MAP: SpriteMap = [
 ];
 
 /**
- * The cabin's wall sign, two tiles wide. The field is one flat ink slab with a
- * metal frame, because the renderer draws the cabin's name across it as a
- * label: any pattern inside the frame would fight the text at this size.
- *
- * The field is DARK in both themes, so a label drawn on it takes a light color
- * of its own rather than the palette's theme-following `text`.
+ * The cabin's wall sign, two tiles wide.
+ * The field is one flat ink slab with a metal frame, because the renderer draws the cabin's name across it as a label: any pattern inside the frame would fight the text at this size.
  */
 export const SIGN_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
@@ -353,15 +312,7 @@ export const PLANT_MAP: SpriteMap = [
   "....OOOOOOOO....",
 ];
 
-/**
- * The cafeteria's coffee machine.
- *
- * Legible at 16px is the whole requirement, and a plain metal box is not: the
- * cup under the nozzle is what says "coffee" rather than "vending machine" or
- * "server rack". So the alcove is dark to set the cup off, the cup is bright
- * with a `woodDark` fill for what is in it, two pixels of steam rise between
- * the nozzle and the rim, and a `metalLight` drip tray closes the recess.
- */
+/** The cafeteria's coffee machine. */
 export const COFFEE_MACHINE_MAP: SpriteMap = [
   "..OOOOOOOOOOOO..",
   "..OMMMMMMMMMMO..",
@@ -390,12 +341,7 @@ export const COFFEE_MACHINE_MAP: SpriteMap = [
 ];
 
 /**
- * The cafeteria's water cooler: a `sky` bottle over a metal column, the tap
- * recessed into the column's face, and one cup standing beside it on the floor.
- *
- * The cup is what makes the fixture read as a cooler rather than as a tall blue
- * cabinet at 1x, so it is part of the art rather than a second prop the layout
- * would have to find a tile for.
+ * The cafeteria's water cooler: a `sky` bottle over a metal column, the tap recessed into the column's face, and one cup standing beside it on the floor.
  */
 export const WATER_COOLER_MAP: SpriteMap = [
   "...OOOOOOOO.....",
@@ -425,10 +371,8 @@ export const WATER_COOLER_MAP: SpriteMap = [
 ];
 
 /**
- * A round cafeteria table seen from above, two tiles wide, with a cup set at
- * each of the two seats. The pedestal is drawn under the top rather than legs at
- * the corners: a round table's legs would read as noise at this size, and the
- * seats are floor tiles beside it rather than furniture of their own.
+ * A round cafeteria table seen from above, two tiles wide, with a cup set at each of the two seats.
+ * The pedestal is drawn under the top rather than legs at the corners: a round table's legs would read as noise at this size, and the seats are floor tiles beside it rather than furniture of their own.
  */
 export const CAFE_TABLE_MAP: SpriteMap = [
   "................................",
@@ -450,9 +394,8 @@ export const CAFE_TABLE_MAP: SpriteMap = [
 ];
 
 /**
- * The vending machine: a lit glass front over four shelves of stock, with the
- * delivery slot dark at the bottom. The stock rows take four different palette
- * colors because a single-colored grid reads as a bookshelf.
+ * The vending machine: a lit glass front over four shelves of stock, with the delivery slot dark at the bottom.
+ * The stock rows take four different palette colors because a single-colored grid reads as a bookshelf.
  */
 export const VENDING_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOO",
@@ -482,10 +425,8 @@ export const VENDING_MAP: SpriteMap = [
 ];
 
 /**
- * The cafeteria's menu board, two tiles wide, mounted on the break room's wall
- * face the way a cabin's sign is. Unlike the sign it carries its OWN content -
- * three chalk lines and a cup glyph - because nothing is ever drawn over it: the
- * renderer has no cafeteria name to write.
+ * The cafeteria's menu board, two tiles wide, mounted on the break room's wall face the way a cabin's sign is.
+ * Unlike the sign it carries its OWN content - three chalk lines and a cup glyph - because nothing is ever drawn over it: the renderer has no cafeteria name to write.
  */
 export const MENU_BOARD_MAP: SpriteMap = [
   "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
@@ -526,15 +467,8 @@ export const WHITEBOARD_MAP: SpriteMap = [
 ];
 
 /**
- * The wall clock's FACE only. The renderer draws the hands over it from a
- * `clock` drawable, so the centre four-by-four is left transparent: hands are
- * the one part of a clock that has to be redrawn every minute, and baking a hub
- * into the art would mean the art and the hands could disagree about where the
- * pivot is.
- *
- * Only the quarter ticks are marked. Twelve ticks on a 12px dial is a ring of
- * noise; four is enough to tell which way is up, which is all a wall clock in
- * the background has to say.
+ * The wall clock's FACE only.
+ * The renderer draws the hands over it from a `clock` drawable, so the centre four-by-four is left transparent: hands are the one part of a clock that has to be redrawn every minute, and baking a hub into the art would mean the art and the hands could.
  */
 export const CLOCK_MAP: SpriteMap = [
   "...OOOOOO...",
@@ -552,13 +486,8 @@ export const CLOCK_MAP: SpriteMap = [
 ];
 
 /**
- * A cloth thrown over an archived agent's desk. Exactly the desk's own footprint
- * so the scene can draw it at the desk's top-left and cover it whole - a sheet
- * that had to be positioned would be a second offset to keep in sync with the
- * desk's.
- *
- * Opaque edge to edge for the same reason: the point is that the desk beneath
- * has STOPPED being readable, so anything showing through would undo it.
+ * A cloth thrown over an archived agent's desk.
+ * Exactly the desk's own footprint so the scene can draw it at the desk's top-left and cover it whole - a sheet that had to be positioned would be a second offset to keep in sync with the desk's.
  */
 const SHEET_EDGE = "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO";
 const SHEET_FLAT = "ObbbbbbbbbbbbbbbbbbbbbbbbbbbbbbO";
@@ -609,10 +538,8 @@ export const BOX_MAP: SpriteMap = [
 ];
 
 /**
- * The lobby counter, two tiles wide: a light top over a panelled wood front,
- * with a call bell standing on the right of the top. The bell is three pixels
- * and is the whole reason the counter reads as reception rather than as a
- * second desk seen from the front.
+ * The lobby counter, two tiles wide: a light top over a panelled wood front, with a call bell standing on the right of the top.
+ * The bell is three pixels and is the whole reason the counter reads as reception rather than as a second desk seen from the front.
  */
 const RECEPTION_FRONT = "OwwwwwwwWwwwwwwwWwwwwwwwWwwwwwwO";
 const RECEPTION_BAND = "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO";
@@ -637,10 +564,8 @@ export const RECEPTION_MAP: SpriteMap = [
 ];
 
 /**
- * The stairwell, seen from above like everything else on the floor: six treads
- * separated by a dark riser line, with a rail running down the right side. The
- * riser is what carries the read - a flight of flat treads with no line between
- * them is a ramp.
+ * The stairwell, seen from above like everything else on the floor: six treads separated by a dark riser line, with a rail running down the right side.
+ * The riser is what carries the read - a flight of flat treads with no line between them is a ramp.
  */
 const STAIR_TREAD = "OlllllllllllllllllllllllllOmMmOO";
 const STAIR_RISER = "OLLLLLLLLLLLLLLLLLLLLLLLLLOmMmOO";
@@ -720,10 +645,6 @@ export const DOOR_MAP: SpriteMap = [
 ];
 
 // ---- Tiles ----------------------------------------------------------- //
-//
-// No `O` here. An outlined floor tile draws a grid over the whole room and the
-// office stops reading as a room. The two variants are an inversion of the same
-// two tones, which is subtle enough to tint a checker without striping.
 
 export const FLOOR_A_MAP: SpriteMap = [
   "FFFFFFFFFFFFFFFF",
@@ -869,9 +790,6 @@ export const SPARKLE_MAP: SpriteMap = [
 ];
 
 // ---- Bubbles --------------------------------------------------------- //
-//
-// 14x12, with a 2px tail at the bottom centre (columns 6-7, rows 10-11). The
-// scene anchors a bubble by that tail, so every bubble shares one offset.
 
 export const BUBBLE_AWAITING_MAP: SpriteMap = [
   "..OOOOOOOOOO..",
@@ -950,9 +868,7 @@ export const BUBBLE_SLEEP_MAP: SpriteMap = [
 ];
 
 /**
- * A two-tile cafeteria sofa, seen from above like every other piece of
- * furniture here: the backrest is the darker band along the TOP edge, two
- * cushions fill the seat, and the wooden legs peek out at the bottom corners.
+ * A two-tile cafeteria sofa, seen from above like every other piece of furniture here: the backrest is the darker band along the TOP edge, two cushions fill the seat, and the wooden legs peek out at the bottom corners.
  */
 export const SOFA_MAP: SpriteMap = [
   "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
@@ -974,8 +890,7 @@ export const SOFA_MAP: SpriteMap = [
 ];
 
 /**
- * The waste bin: a grey drum with a rim, and one sheet of paper sticking out
- * over the lip - the paper is what stops it reading as a plant pot at 16px.
+ * The waste bin: a grey drum with a rim, and one sheet of paper sticking out over the lip - the paper is what stops it reading as a plant pot at 16px.
  */
 export const BIN_MAP: SpriteMap = [
   "................",
@@ -1012,9 +927,8 @@ export const WATERING_CAN_MAP: SpriteMap = [
 ];
 
 /**
- * The break room's ping-pong table, seen from above: a green bed with a white
- * net across the middle and a paddle resting at each end. The net is what
- * separates it from any other two-tile table at this size.
+ * The break room's ping-pong table, seen from above: a green bed with a white net across the middle and a paddle resting at each end.
+ * The net is what separates it from any other two-tile table at this size.
  */
 export const PINGPONG_TABLE_MAP: SpriteMap = [
   "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
@@ -1036,8 +950,7 @@ export const PINGPONG_TABLE_MAP: SpriteMap = [
 ];
 
 /**
- * An arcade cabinet: dark shell, a lit screen carrying two colour pixels so it
- * reads as a game rather than a monitor, and a joystick panel below it.
+ * An arcade cabinet: dark shell, a lit screen carrying two colour pixels so it reads as a game rather than a monitor, and a joystick panel below it.
  */
 export const ARCADE_MAP: SpriteMap = [
   "..OOOOOOOOOOOO..",
@@ -1067,9 +980,8 @@ export const ARCADE_MAP: SpriteMap = [
 ];
 
 /**
- * The two floor tiles of a sub-team POD: the ordinary checker shifted a few
- * shades toward the glass tones, so a region of them reads as one area
- * without a border drawn round it. No outline - a pod is a tint, not a box.
+ * The two floor tiles of a sub-team POD: the ordinary checker shifted a few shades toward the glass tones, so a region of them reads as one area without a border drawn round it.
+ * No outline - a pod is a tint, not a box.
  */
 export const FLOOR_POD_A_MAP: SpriteMap = [
   "ffffffffvfffffff",
@@ -1110,9 +1022,7 @@ export const FLOOR_POD_B_MAP: SpriteMap = [
 ];
 
 /**
- * The horizontal partition: the same frosted band as {@link PARTITION_MAP}
- * turned across the tile, with a base line under it so it reads as standing
- * rather than lying on the floor.
+ * The horizontal partition: the same frosted band as {@link PARTITION_MAP} turned across the tile, with a base line under it so it reads as standing rather than lying on the floor.
  */
 export const PARTITION_H_MAP: SpriteMap = [
   "................",
@@ -1134,8 +1044,7 @@ export const PARTITION_H_MAP: SpriteMap = [
 ];
 
 /**
- * A pod's name plate: a dark field with a light border, sized so the renderer
- * can draw the pod's name across it the way a cabin sign carries a room name.
+ * A pod's name plate: a dark field with a light border, sized so the renderer can draw the pod's name across it the way a cabin sign carries a room name.
  */
 export const POD_PLATE_MAP: SpriteMap = [
   "..OOOOOOOOOOOO..",
@@ -1149,9 +1058,8 @@ export const POD_PLATE_MAP: SpriteMap = [
 ];
 
 /**
- * The WARM sibling of the pod checker: the same floor shifted a few shades
- * toward the wood tones. Two tinted pairs are what let two neighbouring pods
- * read as different areas without either gaining a border.
+ * The WARM sibling of the pod checker: the same floor shifted a few shades toward the wood tones.
+ * Two tinted pairs are what let two neighbouring pods read as different areas without either gaining a border.
  */
 export const FLOOR_POD_WARM_A_MAP: SpriteMap = [
   "ffffffffwfffffff",
@@ -1215,8 +1123,8 @@ export const PLANTER_MAP: SpriteMap = [
 ];
 
 /**
- * A low bookshelf on a pod's edge, seen from above: a wooden carcass with
- * coloured spines standing in it. The vertical run.
+ * A low bookshelf on a pod's edge, seen from above: a wooden carcass with coloured spines standing in it.
+ * The vertical run.
  */
 export const SHELF_MAP: SpriteMap = [
   "....OOOOOOOO....",
@@ -1334,9 +1242,8 @@ export const BOOKCASE_MAP: SpriteMap = [
 ];
 
 /**
- * The garden's grass checker. Built from the leaf tones rather than a new
- * palette letter - the letter budget is nearly spent, and a lawn is leaf
- * colour by definition.
+ * The garden's grass checker.
+ * Built from the leaf tones rather than a new palette letter - the letter budget is nearly spent, and a lawn is leaf colour by definition.
  */
 export const FLOOR_GRASS_A_MAP: SpriteMap = [
   "gggggggggggggggg",

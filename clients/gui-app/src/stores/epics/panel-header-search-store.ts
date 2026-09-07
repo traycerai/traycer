@@ -1,20 +1,4 @@
-/**
- * Ephemeral per-tab, per-panel "header search" state for the Epic left sidebar.
- *
- * A panel that opts in (`supportsHeaderSearch`) trades its whole header row -
- * chevron, icon, title, actions - for a search input while searching, instead
- * of stacking a permanently-visible box underneath it. That keeps the resting
- * panel one row taller and stops a rarely-used mode from carrying constant
- * visual weight.
- *
- * State lives here rather than in `left-panel-store` because none of it should
- * persist: reopening the app should land you in browse mode, never in a
- * half-typed search. Each retained top-level tab owns a distinct open flag,
- * query, and live portal target, so a hidden Epic can never steal or clear the
- * visible Epic's header. The owning search component can still keep its input,
- * results, refs, and combobox ARIA wiring in ONE component while the input's DOM
- * renders up in the header.
- */
+/** Ephemeral per-tab, per-panel "header search" state for the Epic left sidebar. */
 import { create } from "zustand";
 import type { LeftPanelId } from "@/stores/epics/left-panel-store";
 
@@ -25,11 +9,7 @@ interface PanelHeaderSearchStore {
   readonly queryBySurfaceKey: SurfaceRecord<string>;
   readonly slotBySurfaceKey: SurfaceRecord<HTMLElement>;
 
-  /**
-   * Enter search mode. `seed` is the character that triggered it for the
-   * type-to-filter path (the keystroke would otherwise be swallowed by the
-   * focus handoff), or "" when opened from the header icon.
-   */
+  /** Enter search mode. */
   readonly openSearch: (
     tabId: string,
     panelId: LeftPanelId,

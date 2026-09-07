@@ -69,41 +69,12 @@ interface TileFindAdapterSubscription {
 
 const adapterSubscriptions = new Map<string, TileFindAdapterSubscription>();
 
-// Per-tile callback that runs the bar's pending (debounced) chat search now,
-// returning true when one was flushed. Kept as a module-level side-channel (like
-// `adapterSubscriptions`) so `next`/`previous` can flush before advancing -
-// covering the desktop-menu Find Next/Previous path, which calls the store
-// directly and never goes through the bar's own `handleNavigate` flush.
+// Per-tile callback that runs the bar's pending (debounced) chat search now, returning true when
+// one was flushed.
 const pendingSearchFlushes = new Map<string, () => boolean>();
 
-// Ticket 15 (decision #29): durable chat-key mirror of a tile's find session
-// (query + bar state only), keyed by `(epicId, contentId)` - the same
-// generic identity `resolveActiveOwner` already carries for every tile kind,
-// not chat-specific. Survives the tab-key `uiByTileInstanceId` entry being
-// dropped on close (via `evictTileFindUi`), so reopening restores the find
-// bar mid-session. `currentRequestId` is carried through so the existing
-// `replayRegisteredAdapterSearch` re-runs the search unmodified once a fresh
-// adapter registers.
-//
-// Ticket 15 review round (F3): committed explicitly by `evictTileFindUi`
-// (the close point), not mirrored continuously on every mutation. A
-// switch-away remount does not need a durable round-trip at all - the
-// tab-key `uiByTileInstanceId` entry survives it untouched (only a real
-// close wipes it, via this exact function), so continuous mirroring only
-// bought "last-mutation-wins" instead of decision #29's literal
-// "last-CLOSED-wins", with no benefit for the case it wasn't needed for.
-//
-// Ticket 15 review round 4: round 3 also carried `current`/`activeUnitId`
-// here and restored to that exact occurrence on reopen. Deleted - the real
-// adapter keys a match as `messageId:unitId:occurrenceInUnit`, but the
-// snapshot only ever exposes `unitId`, so "same activeUnitId" silently
-// landed on the WRONG occurrence whenever a unit had more than one match
-// (see chat-find-adapter.test.ts:43-66). Reopening a closed find session now
-// restores the query and bar-open state only; the replayed search lands
-// wherever it naturally lands (its own first match), exactly like a fresh
-// search. Tab-switch fidelity (the SAME live tab, never closed) is
-// unaffected - `uiByTileInstanceId`'s own `lastSnapshot` still carries
-// whatever the adapter last published, untouched by this durable shape.
+// durable chat-key mirror of a tile's find session (query + bar state
+// only), keyed by `(epicId, contentId)` - the same generic identity `resolveActiveOwner` already
 interface DurableTileFindUiSnapshot {
   readonly isOpen: boolean;
   readonly query: string;
@@ -131,15 +102,7 @@ export function evictTileFindUiForEpic(epicId: string): void {
   durableTileFindUiCache.deleteEpic(epicId);
 }
 
-/**
- * Ticket 15 review round 3: promotes one tile's CURRENT ui state to durable
- * - called from the canvas close sweep, BEFORE `evictTileFindUi` drops the
- * tab-key entry, for every removed CHAT tile (the sweep already resolved
- * `identity` from the canvas tree, so this no longer depends on
- * `targetsByTileInstanceId` still holding a live target - the round-2
- * version's no-op-when-unregistered bug). A no-op if the tile has no ui
- * state (never opened its find bar this session).
- */
+/** promotes one tile's CURRENT ui state to durable */
 export function promoteTileFindUiToDurable(
   identity: ChatTabPersistenceIdentity,
 ): void {
@@ -382,10 +345,8 @@ export const useTileFindStore = create<TileFindState>((set, get) => ({
   next: (tileInstanceId) => {
     const target = get().targetsByTileInstanceId[tileInstanceId];
     if (target === undefined) return;
-    // A pending debounced search means the adapter still holds the previous
-    // query's matches; flush it first (which reveals the first match) and skip
-    // the advance, mirroring the bar's own "flush reveals first match, skip
-    // advance" behavior so the menu path can't advance stale matches.
+    // A pending debounced search means the adapter still holds the previous query's matches; flush it
+    // first (which reveals the first match) and skip the advance, mirroring the bar's own "flush
     if (flushPendingSearch(tileInstanceId)) return;
     runAdapterCommand(tileInstanceId, () => target.adapter.next(), null);
   },
@@ -468,10 +429,6 @@ export const useTileFindStore = create<TileFindState>((set, get) => ({
     adapterSubscriptions.forEach((subscription) => subscription.unsubscribe());
     adapterSubscriptions.clear();
     pendingSearchFlushes.clear();
-    // Ticket 15: the durable chat-key cache lives outside this store, so
-    // resetting store state alone leaves a prior test's find session
-    // behind for any later test reusing the same (epicId, contentId) -
-    // seeding a phantom search into a fresh registration.
     durableTileFindUiCache.clearForTests();
     set(INITIAL_TILE_FIND_STATE);
   },
@@ -484,37 +441,8 @@ function flushPendingSearch(tileInstanceId: string): boolean {
   return flush !== undefined && flush();
 }
 
-// Reclaim a tile's per-tile `ui` entry once its target is gone, so closed tiles
-// don't leak `lastSnapshot` for the session lifetime. The reclaim is deferred:
-// the store can't tell a permanent teardown from a transient adapter swap /
-// keep-alive remount synchronously, because a swap unregisters then re-registers
-// the same tile within one tick (see TileFindScope.registerAdapterTarget). By
-// waiting a microtask and only dropping `ui` when no registration re-created the
-// target, re-registration keeps its per-tile session state (query, replace text,
-// open/expanded flags) intact.
-//
-// Ticket 5: the SAME chat tile instance can still fully remount - evicted past
-// its pane's chat retention cap, evicted with its owning top-level surface, or
-// losing and regaining hosted eligibility (no longer on every inner tab switch;
-// decision #17 was reversed by pane chat retention - see
-// `stores/epics/canvas/retained-pane-chats.ts`). Across such a remount its
-// adapter unregisters far more than one microtask apart from coming back, so
-// the swap-window check above never catches it. An inner tab switch no longer
-// unregisters at all - the tile stays mounted - so it never reaches this path.
-// Also requiring the
-// tile to be gone from the canvas (a real close, not a live-but-unmounted
-// switch-away) is what makes the find session (query, open state, active
-// match) survive that remount: a live tile's fresh adapter re-registers on
-// return and `replayRegisteredAdapterSearch` (below) restores the session
-// onto it.
-//
-// F4 (ticket 5 review): this liveness check means a tile that unregisters
-// WHILE live is skipped here and never revisited - if that tile is later
-// closed without ever remounting (closed directly from an inactive tab, no
-// switch-back), nothing calls `scheduleUiReclaim` again and `ui` would leak
-// for the rest of the session. `evictTileFindUi` below is the complementary
-// proactive path: the canvas store's tile-removal subscriber calls it
-// alongside the other per-tab registry evictions on every real close.
+// Reclaim a tile's per-tile `ui` entry once its target is gone, so closed tiles don't leak
+// `lastSnapshot` for the session lifetime.
 function scheduleUiReclaim(tileInstanceId: string): void {
   queueMicrotask(() => {
     const state = useTileFindStore.getState();
@@ -533,12 +461,8 @@ function scheduleUiReclaim(tileInstanceId: string): void {
 }
 
 /**
- * F4 (ticket 5 review): drops `ui` entries outright for tiles removed from
- * the canvas for good - called from the canvas store's tile-removal
- * subscriber, the same sweep that evicts the other per-tab registries.
- * Complements `scheduleUiReclaim`'s deferred, liveness-gated path: that path
- * alone never revisits a tile that unregistered while still live (a chat tab
- * switched away, not closed) if it is later closed without ever remounting.
+ * F4 (ticket 5 review): drops `ui` entries outright for tiles removed from the canvas for good -
+ * called from the canvas store's tile-removal subscriber, the same sweep that evicts the other
  */
 export function evictTileFindUi(tileInstanceIds: ReadonlyArray<string>): void {
   useTileFindStore.setState((state) => {
@@ -596,10 +520,8 @@ function getUiState(
   );
 }
 
-// Ticket 15 review round 5 (item 1, decision #19 re-amended): restores
-// query + bar state only, everywhere (tab switch AND reopen-after-close) -
-// the replayed search always lands on the adapter's own default match, by
-// design, not a chased occurrence.
+// restores query + bar state only, everywhere (tab switch AND reopen-after-close) - the replayed
+// search always lands on the adapter's own default match, by design, not a chased occurrence.
 function replayRegisteredAdapterSearch(
   tileInstanceId: string,
   adapter: TileFindAdapter,
@@ -610,13 +532,8 @@ function replayRegisteredAdapterSearch(
   const ui = state.uiByTileInstanceId[tileInstanceId];
   if (target === undefined || target.adapter !== adapter) return;
   if (ui === undefined) return;
-  // Replay exists to restore an OPEN search when a tile's adapter is swapped
-  // (e.g. a diff tile going loading -> loaded). A closed bar has nothing to
-  // restore: close() keeps query/currentRequestId so reopening remembers the
-  // last query, but does not reset them - so without this guard a fresh adapter
-  // (requestId 0) registering after close (e.g. on an isActive flip) would
-  // replay the stale query and re-run search, re-painting chat highlights with
-  // no visible find bar.
+  // Replay exists to restore an OPEN search when a tile's adapter is swapped (e.g. a diff tile going
+  // loading -> loaded).
   if (!ui.isOpen) return;
   if (ui.currentRequestId <= adapterSnapshot.requestId) return;
 

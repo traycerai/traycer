@@ -1,16 +1,4 @@
-/**
- * Adversarial navigation verification (frozen provenance-design §9).
- *
- * Net-new race/ledger tests only — no production edits. Drives the real
- * controller, coordinator, and stores; fakes only the navigate promise /
- * router-commit boundaries.
- *
- * Out of scope (parent addendum): user-navigation 15s timeout / blocker
- * cancel-hang machinery — gui-app has no navigation blockers. Every case
- * below maps to a reachable current-app trigger (header/list activation,
- * history observe, Windows hydration release, prepared empty-draft swap,
- * repair/corrective replace, coordinator activateTab/restoreTabActivation).
- */
+/** Adversarial navigation verification (frozen provenance-design §9). */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
@@ -367,11 +355,8 @@ function recordLedgerSnapshot(source: LedgerSnapshot["source"]): void {
   activeLedgerCaptures.forEach((snapshots) => snapshots.push(snapshot));
 }
 
-// These subscriptions are installed at module evaluation, before any test
-// installs the production reconciliation subscriber. That ordering is
-// intentional: an arbitrary source-store observer can run before the
-// coordinator's repair listener, so the permanent guard must see the raw
-// source callback rather than a post-repair sample.
+// These subscriptions are installed at module evaluation, before any test installs the production reconciliation subscriber.
+// That ordering is intentional: an arbitrary source-store observer can run before the coordinator's repair listener, so the permanent guard must see the raw source callback rather than a post-repair sample.
 useTabsStore.subscribe(() => recordLedgerSnapshot("tabs"));
 useEpicCanvasStore.subscribe(() => recordLedgerSnapshot("canvas"));
 useLandingDraftStore.subscribe(() => recordLedgerSnapshot("drafts"));
@@ -546,11 +531,8 @@ function resetStores(): void {
 }
 
 /**
- * Pre-hydration suite start. The live app constructs the controller with
- * hydrationReady=false until Windows snapshot hydration calls
- * setHydrationReady(true). Prefer resetForTesting() leaves ready=false so
- * these tests share the same gate; when reset forces ready=true the first
- * materialization/navigate assertion fails for that reason.
+ * Pre-hydration suite start.
+ * The live app constructs the controller with hydrationReady=false until Windows snapshot hydration calls setHydrationReady(true).
  */
 function resetForPreHydration(): void {
   resetStores();
@@ -1767,19 +1749,7 @@ describe("adversarial navigation: coordinator ledger & structural restore", () =
     });
     const layoutBefore = useTabsStore.getState().items;
     const activeBefore = useEpicCanvasStore.getState().activeTabId;
-    // `execute`'s listeners fire before `applySources` (see execute() in
-    // tab-command-coordinator.ts), so this racer wins BEFORE this
-    // activation's own resolution call ever runs - its own resolution then
-    // finds a stale `expectedCurrentEpicId` and rejects at that precondition.
-    // This is the pre-commit window (closed since round 1/2), not the
-    // round-3 window - see the pin below this one for a listener that races
-    // the commit itself via a raw `useEpicCanvasStore.subscribe`. Both are
-    // real, both must hold: this one still exercises "must not silently
-    // succeed" end to end. Unlike the ledger-snapshot-safety pins above
-    // (which drive a call that eventually places its source), this one
-    // deliberately throws and never places anything -
-    // `expectLedgerReleased()` below is the applicable contract here,
-    // matching "fresh source failure preserves T2 error precedence".
+    // `execute`'s listeners fire before `applySources` (see execute() in tab-command-coordinator.ts), so this racer wins BEFORE this activation's own resolution call ever runs - its own resolution then finds a stale `expectedCurrentEpicId` and rejects at that.
     const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
       const current = useEpicCanvasStore.getState().tabsById[phase.tabId];
       if (current?.epicId === "phase-race") {
@@ -1806,17 +1776,7 @@ describe("adversarial navigation: coordinator ledger & structural restore", () =
   });
 
   it("migrated-epic activation throws (no focus, no placement) when a raw store subscriber supersedes the resolution DURING its own commit", () => {
-    // The round-3 window: `rawPublicSetState` inside `resolveTabEpicIdentity`
-    // notifies zustand subscribers SYNCHRONOUSLY, mid-commit - a listener
-    // observing the just-landed epicId can call the same authorized action
-    // AGAIN before the outer `resolveTabEpicIdentity` call ever returns to
-    // its caller. The precondition passes (the outer write already landed),
-    // so a claim recorded at write time would be wrong; the fix reads
-    // `getState()` back AFTER the write instead. The listener is
-    // self-limiting: it only fires while the tab's epicId still equals the
-    // outer target, which stops being true once the racer's own write lands
-    // (including on the racer's own re-entrant notification), so this
-    // terminates without a manual guard.
+    // The round-3 window: `rawPublicSetState` inside `resolveTabEpicIdentity` notifies zustand subscribers SYNCHRONOUSLY, mid-commit - a listener observing the just-landed epicId can call the same authorized action AGAIN before the outer `resolveTabEpicIdentity`.
     const phase = openEpic("phase-race-commit", "Phase");
     useEpicCanvasStore.getState().closeTab(phase.tabId);
     seedCommittedLayout({
@@ -2239,11 +2199,7 @@ describe("adversarial navigation: Resource Monitor nested + Phase completion", (
     });
     const focusedBefore = focusedRefKey();
     const nav = makeDeferredNavigate();
-    // Same interleaving as the coordinator-level pin above, driven this time
-    // through the public `activateTabIntent` entry point that a real Phase
-    // completion trigger goes through - `executeActivation`
-    // (tab-navigation.ts) must convert the coordinator's throw into a clean
-    // `false`, not an uncaught exception.
+    // Same interleaving as the coordinator-level pin above, driven this time through the public `activateTabIntent` entry point that a real Phase completion trigger goes through - `executeActivation` (tab-navigation.ts) must convert the coordinator's throw into.
     const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
       const current = useEpicCanvasStore.getState().tabsById[first.tabId];
       if (current?.epicId === "epic-phase") {

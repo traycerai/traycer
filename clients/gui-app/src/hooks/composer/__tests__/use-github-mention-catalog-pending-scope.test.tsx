@@ -14,14 +14,7 @@ import { useGithubMentionCatalog } from "@/hooks/composer/use-github-mention-cat
 import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-catalog";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * "Checking" means THIS scope is being refreshed, not that something is.
- *
- * One mutation observer outlives every scope the section is rendered for, so
- * an unscoped `isPending` let a refresh issued for the old folders make the new
- * ones claim they were checking - and disable their own Refresh button until a
- * request they never issued came back.
- */
+/** One mutation observer outlives every scope the section is rendered for, so an unscoped `isPending` let a refresh issued for the old folders make the new ones claim they were checking - and disable their own Refresh button until a request they never issued came back. */
 
 const request = vi.fn();
 
@@ -76,10 +69,7 @@ const REPO_B: GithubMentionScope = {
   workspacePaths: ["/repo-b"],
 };
 
-// Two paths, one scope: an order-only difference between these two is what
-// `canonicalWorkspacePaths` exists to collapse. A single-path scope can never
-// exercise that - there is nothing to reorder - so the reorder test below
-// needs its own pair of scopes.
+// A single-path scope can never exercise that - there is nothing to reorder - so the reorder test below needs its own pair of scopes.
 const TWO_PATH_SCOPE: GithubMentionScope = {
   epicId: "epic-1",
   workspacePaths: ["/repo-a", "/repo-b"],
@@ -104,13 +94,7 @@ function renderCatalog(initialProps: { readonly scope: GithubMentionScope }) {
   );
 }
 
-/**
- * Answers every cache-only READ and holds the manual refresh open, so the
- * scope can change while exactly one request is in flight. `issued` must be
- * awaited before asserting - `mutateAsync` does not reach `mutationFn`
- * synchronously - and the resolver THROWS if the refresh never arrived, so a
- * mis-ordered harness fails as itself rather than as a wrong verdict.
- */
+/** `issued` must be awaited before asserting - `mutateAsync` does not reach `mutationFn` synchronously - and the resolver THROWS if the refresh never arrived, so a mis-ordered harness fails as itself rather than as a wrong verdict. */
 function pendingManualRefresh(): { readonly issued: Promise<void> } {
   let markIssued: () => void = () => undefined;
   const issued = new Promise<void>((resolve) => {
@@ -127,11 +111,7 @@ function pendingManualRefresh(): { readonly issued: Promise<void> } {
   return { issued };
 }
 
-/**
- * One controllable manual refresh per workspace path, so two scopes' requests
- * can be settled in a chosen order. Reads answer immediately; only the manual
- * lane is held.
- */
+/** One controllable manual refresh per workspace path, so two scopes' requests can be settled in a chosen order. */
 function manualRefreshesByPath(): {
   readonly issued: (path: string) => Promise<void>;
   readonly settle: (path: string) => void;
@@ -221,11 +201,7 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
   });
 
   it("keeps checking when a departed scope's refresh settles first", async () => {
-    // Two refreshes open at once: the scope change does not cancel the request
-    // the old folders issued, and the new folders can start their own while it
-    // is still running. Clearing the pending key unconditionally let whichever
-    // finished FIRST clear it - so the departed scope landing early took the
-    // spinner off the current scope's still-running refresh.
+    // Two refreshes open at once: the scope change does not cancel the request the old folders issued, and the new folders can start their own while it is still running.
     const refreshes = manualRefreshesByPath();
     const { result, rerender } = renderCatalog({ scope: REPO_A });
     await waitFor(() => expect(result.current.scopeResolved).toBe(true));
@@ -281,11 +257,7 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
   });
 
   it("still reports checking after walking scope A -> B -> A while both refreshes remain unsettled", async () => {
-    // `pendingRefreshKeys` is a SET, not a single latest key. A refreshes,
-    // then B refreshes while A is still open, then the folders go back to A -
-    // a single-key slot would have been overwritten by B's key on the way
-    // through, so A's return would wrongly read as settled and its Refresh
-    // button would re-enable mid-flight.
+    // `pendingRefreshKeys` is a SET, not a single latest key.
     const refreshes = manualRefreshesByPath();
     const { result, rerender } = renderCatalog({ scope: REPO_A });
     await waitFor(() => expect(result.current.scopeResolved).toBe(true));
@@ -315,10 +287,7 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
   });
 
   it("settling A's refresh clears only A's isChecking, leaving B's still-pending refresh reported as checking", async () => {
-    // The control for the test above: the Set must remove exactly the
-    // settling request's own key, not every key or none of them - otherwise
-    // either scope could report the wrong spinner state once a sibling's
-    // request lands.
+    // The control for the test above: the Set must remove exactly the settling request's own key, not every key or none of them - otherwise either scope could report the wrong spinner state once a sibling's request lands.
     const refreshes = manualRefreshesByPath();
     const { result, rerender } = renderCatalog({ scope: REPO_A });
     await waitFor(() => expect(result.current.scopeResolved).toBe(true));
@@ -356,13 +325,7 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
   });
 
   it("still reports checking for the older scope once a newer scope's refresh settles, even though the observer's own isPending has gone false", async () => {
-    // `refreshMutation.isPending` is the OBSERVER's state, and the observer
-    // tracks only the LATEST `mutate()` call: once B's refresh settles it is
-    // the observer's tracked mutation, so `isPending` reads false even though
-    // A's refresh - issued first, replaced as the observer's "current" one by
-    // B's - is still open. The old code ANDed the pending-keys set with that
-    // observer flag, so the walk back to A read `isChecking` as false right
-    // when the user's still-running refresh most needed to keep spinning.
+    // `refreshMutation.isPending` is the OBSERVER's state, and the observer tracks only the LATEST `mutate()` call: once B's refresh settles it is the observer's tracked mutation, so `isPending` reads false even though A's refresh - issued first, replaced as the observer's "current" one by B's - is still open.
     const refreshes = manualRefreshesByPath();
     const { result, rerender } = renderCatalog({ scope: REPO_A });
     await waitFor(() => expect(result.current.scopeResolved).toBe(true));
@@ -398,13 +361,7 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
   });
 
   it("treats a reordered folder set as the same scope's pending refresh", async () => {
-    // The wire request sorts `workspacePaths` (`canonicalWorkspacePaths`), so
-    // the cache-only read and the pending-refresh key it hashes must be
-    // IDENTICAL for the same folder set regardless of the order the caller
-    // hands it in. Unsorted, the reordered render forked a second cache slot
-    // whose pending-refresh set never learned about the manual refresh the
-    // first ordering had just issued - so the button's spinner vanished
-    // mid-refresh purely because the caller's array order changed.
+    // The wire request sorts `workspacePaths` (`canonicalWorkspacePaths`), so the cache-only read and the pending-refresh key it hashes must be IDENTICAL for the same folder set regardless of the order the caller hands it in.
     let cacheOnlyReads = 0;
     let markManualIssued: () => void = () => undefined;
     const manualIssued = new Promise<void>((resolve) => {

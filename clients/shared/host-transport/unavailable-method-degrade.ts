@@ -8,28 +8,8 @@ import type {
 import { HostRpcError } from "./host-messenger";
 
 /**
- * The ONE implementation of "this host does not advertise that method", shared
- * by both transports.
- *
- * A method kept off the released floor is negotiated away by a peer that
- * lacks it, so every transport must answer the same way: apply the registry's
- * DECLARED degrade rather than inventing an error. Callers key off that
- * outcome - `E_HOST_UNSUPPORTED` specifically, which surfaces as "this
- * feature needs a newer host" and which several call sites suppress to fall
- * back to legacy behavior (e.g. the run-settings write queue's
- * persist-on-next-send). A generic `RPC_ERROR` here reads as a real failure
- * and breaks those fallbacks.
- *
- * It lives here rather than inside either transport because the remote mux
- * session originally had no degrade path at all: its handshake fataled on any
- * method-set skew, so "host lacks an optional method" was unreachable, and
- * when the floor/optional split made it reachable the behavior had to be
- * written twice or shared once. Shared once - a third transport inherits it.
- *
- * Transport-specific execution (framing, timeouts, session plumbing) is
- * injected as {@link UnavailableMethodDegradeOptions.execute}; everything
- * else - which degrade applies, whether a fallback target is usable, and how
- * the fallback's request/response are adapted - is identical by construction.
+ * The one implementation of "this host does not advertise that method", shared by both transports.
+ * A method kept off the released floor is negotiated away by a peer that lacks it, so every transport must answer the same way: apply the registry's declared degrade rather than inventing an error.
  */
 export interface UnavailableMethodDegradeOptions<
   Registry extends VersionedRpcRegistry,
@@ -43,7 +23,7 @@ export interface UnavailableMethodDegradeOptions<
   readonly hostManifest: ConnectionManifest;
   readonly params: unknown;
   readonly requestId: string;
-  /** Transport-specific dispatch of an ALREADY-negotiated method. */
+  /** Transport-specific dispatch of an already-negotiated method. */
   readonly execute: (input: {
     readonly method: string;
     readonly methodRegistry: MethodVersionRegistry;
@@ -78,12 +58,6 @@ export function unsupportedHostMethodError(
   });
 }
 
-/**
- * Resolves a call to a method the host did not advertise, per the registry's
- * declared degrade. Throws `E_HOST_UNSUPPORTED` for an `unsupported` degrade
- * (or none declared beyond that), and otherwise routes through the declared
- * floor fallback.
- */
 export async function resolveUnavailableMethodDegrade<
   Registry extends VersionedRpcRegistry,
 >(options: UnavailableMethodDegradeOptions<Registry>): Promise<unknown> {

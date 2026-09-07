@@ -1,11 +1,5 @@
 /**
- * Keep a per-handle subscription map in lockstep with a changing set of store
- * handles: drop subscriptions for handles that disappeared, add one for each
- * new handle via `subscribeOne`, and leave survivors untouched (no churn).
- *
- * Shared by the agent-activity monitor and the chat turn-completion subscribers so
- * the registry-membership diff lives in exactly one place. `subscribeOne` owns
- * whatever per-handle state and listener it needs and returns its unsubscribe.
+ * Keep a per-handle subscription map in lockstep with a changing set of store handles: drop subscriptions for handles that disappeared, add one for each new handle via `subscribeOne`, and leave survivors untouched (no churn).
  */
 export function reconcileStoreSubscriptions<H>(
   handles: readonly H[],

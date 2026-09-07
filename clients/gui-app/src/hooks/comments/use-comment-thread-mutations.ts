@@ -11,30 +11,7 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { commentThreadsQueryKey } from "./use-epic-comment-threads";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
-/**
- * Mutation hooks for the host comment-thread RPC surface.
- *
- * After every successful mutation the cached
- * `epic.listCommentThreads` query for the targeted artifact is invalidated,
- * so the sidebar + decoration plugin re-render against the host's
- * authoritative thread snapshot. We don't apply optimistic updates: the
- * host ack is fast and the underlying Y.Doc state propagates through the
- * `/stream` transport anyway, so optimistic mutation would just race the
- * incoming CRDT update.
- *
- * Each mutation captures the active host id in `onMutate` and reuses that
- * captured id for cache writes/invalidation. Reading `getActiveHostId()`
- * at success time would target whichever host is bound at that moment -
- * if the user switches hosts mid-flight, the in-flight ack would land on
- * the new host's cache while the original host's thread list stays
- * stale.
- *
- * Every hook here takes its `client` from the caller and there is no app-wide
- * wrapper: both mount contexts are Epic-scoped (the collab tile's floating
- * draft, the Epic sidebar's thread cards). An app-wide read wrote the comment
- * to whichever host the app was pointed at, and then invalidated THAT host's
- * cache key - so the surface the user was looking at never refreshed (D15).
- */
+/** Capture hostId in onMutate; invalidate that host's listCommentThreads. Caller supplies the epic-session client. No optimistic updates. */
 interface MutationContext {
   readonly hostId: string | null;
 }

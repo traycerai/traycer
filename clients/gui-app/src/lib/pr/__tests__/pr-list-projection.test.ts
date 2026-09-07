@@ -135,11 +135,8 @@ describe("groupPrItemsByRepo", () => {
   });
 
   it("keeps a group whose parent is itself a submodule of another group", () => {
-    // `traycer` is a submodule under /w/outer AND the superproject that owns
-    // `docs` under /w/inner. Expanding followers one level deep emitted
-    // `traycer` as a follower of `traycer-internal` and then dropped `docs`
-    // entirely - its `pulled` entry kept it out of the first-seen pass and
-    // nothing re-emitted it.
+    // `traycer` is a submodule under /w/outer AND the superproject that owns `docs` under /w/inner.
+    // Expanding followers one level deep emitted `traycer` as a follower of `traycer-internal` and then dropped `docs` entirely - its `pulled` entry kept it out of the first-seen pass and nothing re-emitted it.
     const groups = groupPrItemsByRepo([
       item({ linkGroupKey: "/w/outer" }),
       submoduleItem({ linkGroupKey: "/w/outer" }),
@@ -260,9 +257,8 @@ describe("prChecksSummary", () => {
 
 describe("prRowTitleText / formatPrRowTitle", () => {
   it("reports NO title for a never-swept row rather than inventing one", () => {
-    // An unswept row genuinely has no title. The previous shape filled the
-    // gap with an "Untitled pull request" placeholder, which rendered a blank
-    // second line on every such row and claimed a fact the host never sent.
+    // An unswept row genuinely has no title.
+    // The previous shape filled the gap with an "Untitled pull request" placeholder, which rendered a blank second line on every such row and claimed a fact the host never sent.
     expect(prRowTitleText(item({ title: null }))).toBeNull();
     expect(prRowTitleText(item({ title: "" }))).toBeNull();
   });

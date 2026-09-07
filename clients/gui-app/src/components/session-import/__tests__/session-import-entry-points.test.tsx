@@ -16,11 +16,8 @@ import {
 
 const HOST = "host-test";
 
-/**
- * A stub satisfying `IHostStreamClient` honestly rather than casting - the
- * section never calls through to it, since every host RPC it drives is mocked
- * separately below.
- */
+/** A stub satisfying `IHostStreamClient` honestly rather than casting - the section never calls through to it,
+ * since every host RPC it drives is mocked separately below. */
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => {
@@ -44,21 +41,16 @@ function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   };
 }
 
-// PROVIDED rather than mocked: the section reads its binding from
-// `StreamRuntimeContext`, exactly as it does beneath the Host Overview's own
-// re-provider, so the tests below exercise that read instead of replacing it.
+// Provided rather than mocked: the section reads its binding from `StreamRuntimeContext`, exactly as it does
+// beneath the Host Overview's own re-provider, so the tests below exercise that read instead of replacing it.
 const STREAM_BINDING: StreamRuntimeBinding = {
   wsStreamClient: fakeWsStreamClient(),
   hostId: HOST,
   retain: null,
 };
 
-/**
- * The two seams the settings entry point sits on. Mocked at module level so
- * these tests drive "is the feature available" and "what does the host say
- * the status is" directly, instead of standing up the stream transport that
- * backs the real hook.
- */
+/** Mocked at module level so these tests drive "is the feature available" and "what does the host say the
+ * status is" directly, instead of standing up the stream transport that backs the real hook. */
 const sessionImportAvailableMock = vi.hoisted(() => ({ value: true }));
 const sessionImportStatusMock = vi.hoisted(
   (): { data: SessionImportStatusResponse | undefined } => ({

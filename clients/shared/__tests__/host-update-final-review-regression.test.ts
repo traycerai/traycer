@@ -39,7 +39,6 @@ function isNoAttemptExport(name: string): boolean {
   );
 }
 
-/** Resolve import → alias/namespace → call, including re-exports. */
 function noAttemptBypass(source: string): boolean {
   const file = ts.createSourceFile(
     "fixture.ts",
@@ -170,12 +169,6 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       true,
       ts.ScriptKind.TS,
     );
-    // Widened past the bare `.spawn(...)` property-access shape: a
-    // production spawn can equally arrive as a bare imported identifier
-    // (`spawn(...)`, `spawnSync(...)`, `execFile(...)`, `fork(...)`), and a
-    // detector that only matched the property-access form would silently
-    // stop covering an admission bypass the moment a call site switched
-    // shapes.
     const SPAWN_LIKE_NAMES = new Set([
       "spawn",
       "spawnSync",
@@ -292,12 +285,6 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       readFile(join(CLI_ROOT, "service", "platforms", "macos.ts"), "utf8"),
     ]);
 
-    // `end: null` slices to end-of-file (both functions below are the last
-    // export in their file) while still failing loudly - via `sliceFrom`'s
-    // own start-marker assertion - if the marker text is ever renamed or
-    // moved, rather than silently degrading to `.slice(-1)`'s
-    // last-character sliver the way a bare `indexOf` + single-arg `.slice`
-    // would on a missing marker.
     const retryLoop = sliceFrom(
       renameRetry,
       "export async function renameWithRetryPlan(",
@@ -402,10 +389,6 @@ describe("Ticket 02 final-review OSS enforcement", () => {
     for (const [route, end] of routes) {
       const body = sliceFrom(controller, `async ${route}(`, end);
       if (route === "activateInstalledCliOwned") {
-        // Was three inline CLI_LOCK_BUSY/HOST_UPDATE_ATTEMPT_ACTIVE/HOST_BUSY
-        // branches; now routes through the one shared classifier table like
-        // every other mutation route, so the pin follows the call site
-        // rather than the retired inline codes.
         expect(body).toContain("classifyMutationSubprocessError");
       } else {
         const usesCentralRecoveryClassifier =
@@ -428,11 +411,6 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       "private async completeServiceStart(",
     );
     expect(stamp).toMatch(/stamp-runtime/);
-    // No try/catch wraps the CLI call: a typed contender refusal must
-    // propagate UNCHANGED so the caller's central classifier keeps its
-    // attach/yield guidance - wrapping it in `Error` here would collapse an
-    // active-attempt refusal into a generic activation failure and
-    // advertise the wrong recovery.
     expect(stamp).toContain("No try/catch here on purpose");
     expect(stamp).not.toMatch(/catch\s*\(err\)/);
     const completion = sliceFrom(
@@ -488,19 +466,8 @@ describe("Ticket 02 final-review OSS enforcement", () => {
     expect(classifier).toContain("lockBusyOutcome");
   });
 
-  // Security finding (aside-dirs no-op verifiers): `legacyMutationVerifier`
-  // and `renameWithRetryLegacy` both exist to intentionally SKIP the live
-  // update-attempt-capability revalidation the rest of this suite enforces
-  // everywhere else. They are legitimate for non-contender metadata
-  // maintenance ONLY - a new caller reaching for either one is choosing to
-  // bypass the exact protection this whole file certifies, so the importer
-  // set is pinned to an explicit allowlist rather than left open to grow
-  // silently.
-  //
-  // Shrinking this list (a caller stops using the no-op path) requires only
-  // updating it here. GROWING it requires justifying, in the PR that adds
-  // the new caller, why that caller is not a contender for the mandatory
-  // verifier it is opting out of.
+  // Shrinking this list (a caller stops using the no-op path) requires only updating it here.
+  // Growing it requires justifying, in the PR that adds the new caller, why that caller is not a contender for the mandatory verifier it is opting out of.
   it("pins the exact importer set of the aside-dirs no-op verifiers - shrinking updates this list, growing needs justification", async () => {
     const files = await sourceFiles(CLI_ROOT);
     const productionFiles = files.filter(
@@ -522,9 +489,7 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       }
     }
 
-    // Verified against the actual tree with:
-    //   grep -rl legacyMutationVerifier clients/traycer-cli/src
-    //   grep -rl renameWithRetryLegacy clients/traycer-cli/src
+    // Verified against the actual tree with: grep -rl legacyMutationVerifier clients/traycer-cli/src grep -rl renameWithRetryLegacy clients/traycer-cli/src
     expect(legacyMutationVerifierImporters.sort()).toEqual(
       [
         "host/host-log-rotation.ts", // its own local const of the same name

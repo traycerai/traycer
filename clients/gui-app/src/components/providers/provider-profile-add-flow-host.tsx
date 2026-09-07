@@ -31,11 +31,8 @@ function ProviderProfileAddFlowSession({
   onProfileCreated,
 }: {
   readonly harnessId: GuiHarnessId;
-  /** The host scope captured when "Create new profile" was clicked - a tab's
-   *  host id, or `null` for the app-wide default. This host mounts outside
-   *  any `<TabHostProvider>` (it's rendered once at the app root), so a
-   *  non-null `hostId` is resolved into a transient client the same way
-   *  `useTabHostClient()` does, rather than read from tab context. */
+  /** The host scope captured when "Create new profile" was clicked - a tab's host id, or `null` for the app-wide
+   * default. */
   readonly hostId: string | null;
   /** The opening picker's own callback, captured alongside `harnessId`/
    *  `hostId` at the same "Create new profile" click. */

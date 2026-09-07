@@ -21,7 +21,7 @@ import {
 import { promoteTileFindUiToDurable } from "@/stores/tile-find/tile-find-store";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 
-// Ticket 5: scheduleUiReclaim also checks canvas liveness. Default false
+// scheduleUiReclaim also checks canvas liveness. Default false
 // preserves existing "permanently torn down" reclaim coverage (empty canvas).
 const tileLiveness = vi.hoisted(() => ({ live: false }));
 
@@ -337,9 +337,8 @@ describe("useTileFindStore", () => {
     expect(uiAfterClose?.query).toBe("needle");
     expect(uiAfterClose?.currentRequestId).toBe(1);
 
-    // The tile's adapter is re-created while the bar is closed (real trigger: an
-    // isActive flip changes tileFindContext identity -> chat re-runs its adapter
-    // effect). A fresh adapter starts at requestId 0.
+    // The tile's adapter is re-created while the bar is closed (real trigger: an isActive flip changes
+    // tileFindContext identity -> chat re-runs its adapter effect).
     unregisterFirst();
     const freshAdapter = createTestAdapter({
       tileInstanceId: "tile-a",
@@ -659,8 +658,7 @@ describe("useTileFindStore", () => {
       useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.isOpen,
     ).toBe(true);
 
-    // Live in the canvas (switched-away chat tile will remount with the same
-    // instanceId) - Ticket 5 must NOT reclaim ui after the deferred microtask.
+    // Live canvas tile must not reclaim ui after the deferred microtask.
     tileLiveness.live = true;
     unregister();
     await Promise.resolve();
@@ -695,12 +693,8 @@ describe("useTileFindStore", () => {
         useTileFindStore.getState().uiByTileInstanceId["tile-live-then-closed"],
       ).toBeDefined();
 
-      // The tab is later closed directly (never switched back to, so the
-      // adapter never re-registers) - the canvas store's tile-removal
-      // subscriber calls evictTileFindUi with the closed instanceId. This is
-      // the ONLY path that can ever reclaim this tile's ui now: nothing else
-      // re-fires scheduleUiReclaim for an instanceId that never unregisters
-      // again.
+      // The tab is later closed directly (never switched back to, so the adapter never re-registers) -
+      // the canvas store's tile-removal subscriber calls evictTileFindUi with the closed instanceId.
       evictTileFindUi(["tile-live-then-closed"]);
 
       expect(
@@ -721,11 +715,8 @@ describe("useTileFindStore", () => {
     useTileFindStore.getState().setMatchCase("tile-a", true);
     useTileFindStore.getState().setQuery("tile-a", "needle");
     useTileFindStore.getState().search("tile-a");
-    // The reader had navigated to the 3rd match before the tab switch - this
-    // is the tab-switch analogue of round 3/4's now-deleted durable
-    // occurrence-restore: no mechanism ever consumed this position for
-    // restoration (only for live rendering of the CURRENT adapter's own
-    // snapshot), so it must NOT influence where the swapped-in adapter lands.
+    // The reader had navigated to the 3rd match before the tab switch - this is the tab-switch
+    // analogue of round 3/4's now-deleted durable occurrence-restore: no mechanism ever consumed this
     firstAdapter.publish(
       makeSnapshot({
         requestId: 1,
@@ -764,9 +755,6 @@ describe("useTileFindStore", () => {
     ]);
     expect(secondAdapter.nextMock.mock.calls).toHaveLength(0);
 
-    // ...and lands wherever the fresh adapter's own search naturally
-    // resolves - NOT chased back to the 3rd-match position the reader had
-    // reached on the old adapter.
     secondAdapter.publish(
       makeSnapshot({
         requestId: 1,
@@ -829,9 +817,8 @@ describe("useTileFindStore", () => {
     const flush = vi.fn(() => true);
     useTileFindStore.getState().registerPendingSearchFlush("active", flush);
 
-    // The desktop menu drives navigation through advanceActiveOwner -> next /
-    // previous, which must flush the pending (new-query) search instead of
-    // advancing the prior query's stale matches.
+    // The desktop menu drives navigation through advanceActiveOwner -> next / previous, which must
+    // flush the pending (new-query) search instead of advancing the prior query's stale matches.
     expect(useTileFindStore.getState().advanceActiveOwner(1)).toBe(true);
     expect(flush).toHaveBeenCalledTimes(1);
     expect(adapter.nextMock.mock.calls).toHaveLength(0);
@@ -874,11 +861,6 @@ describe("ticket 15 review round 4 (F5 deletion): reopen-after-close restores qu
     useTileFindStore.getState().setQuery("f5-closed", "needle");
     useTileFindStore.getState().setMatchCase("f5-closed", true);
     useTileFindStore.getState().search("f5-closed");
-    // The reader had navigated to the 3rd of 5 matches before closing - round
-    // 4 deleted the machinery that used to chase this specific occurrence
-    // back on reopen (it restored the wrong OCCURRENCE within a unit that had
-    // more than one match, since the snapshot only ever exposes `unitId`,
-    // never `occurrenceInUnit` - see chat-find-adapter.test.ts:43-66).
     closedAdapter.publish(
       makeSnapshot({
         requestId: 1,
@@ -931,9 +913,8 @@ describe("ticket 15 review round 4 (F5 deletion): reopen-after-close restores qu
     expect(restoredUi?.isOpen).toBe(true);
     expect(restoredUi?.query).toBe("needle");
     expect(restoredUi?.matchCase).toBe(true);
-    // ...but round 4 deleted the auto-advance entirely: the replayed
-    // search's own default landing (whatever the adapter itself returns
-    // first) is final, never nudged toward the closed session's occurrence.
+    // ...but round 4 deleted the auto-advance entirely: the replayed search's own default landing
+    // (whatever the adapter itself returns first) is final, never nudged toward the closed session's
     expect(reopenedAdapter.nextMock.mock.calls).toHaveLength(0);
   });
 

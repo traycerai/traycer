@@ -7,14 +7,7 @@ import {
   workspaceSubscribeFileListV10,
 } from "@traycer/protocol/host/workspace/subscribe";
 
-/**
- * `workspace.subscribeFileList@1.0` contract fixtures + registry membership.
- *
- * Guards the two properties the rest of the feature is built on: the frames are
- * single-level by construction (no depth field can be smuggled in), and the
- * method stays OFF the released floor so its degrade-to-`workspace.listFileTree`
- * story remains the only compatibility path.
- */
+/** `workspace.subscribeFileList@1.0` contract fixtures + registry membership. */
 
 const ENTRY_FIXTURE = {
   path: "src/index.ts",

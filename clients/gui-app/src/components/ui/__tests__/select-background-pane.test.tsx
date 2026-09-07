@@ -27,12 +27,8 @@ function HostSelect(): React.JSX.Element {
 
 describe("<Select /> inside a background split pane", () => {
   it("keeps the selected value's label on the trigger while the pane is unfocused", () => {
-    // Radix renders CLOSED content into a DocumentFragment and portals the
-    // selected `SelectItemText` out of it into the trigger's value node. A
-    // background pane that un-presents by unmounting the content therefore
-    // blanks the trigger - and the placeholder cannot cover it, because Radix
-    // suppresses the placeholder whenever `value` is set. That is how a split
-    // pane lost its host name while still showing the chevron.
+    // A background pane that un-presents by unmounting the content therefore blanks the trigger - and the
+    // placeholder cannot cover it, because Radix suppresses the placeholder whenever `value` is set.
     render(
       <SurfacePresentationBoundary visible focused={false}>
         <HostSelect />
@@ -58,10 +54,8 @@ describe("<Select /> inside a background split pane", () => {
   });
 
   it("does not present an open menu from a background pane", () => {
-    // The reason the guard exists: an open Select drives a focus trap,
-    // `hideOthers` and a scroll lock document-wide, which must not survive the
-    // pane going to the background. Closing achieves that; the label above
-    // proves it does so without unmounting the closed content.
+    // The reason the guard exists: an open Select drives a focus trap, `hideOthers` and a scroll lock
+    // document-wide, which must not survive the pane going to the background.
     render(
       <SurfacePresentationBoundary visible focused={false}>
         <Select defaultOpen value="host-a" onValueChange={() => undefined}>
@@ -81,10 +75,8 @@ describe("<Select /> inside a background split pane", () => {
   });
 
   it("does not spring back open when the pane regains focus", () => {
-    // The reason `wasPaneFocused` exists: settling the remembered open state
-    // to closed on blur makes backgrounding a real close, so a later refocus
-    // must not restore it - Radix never calls `onOpenChange` for this
-    // controlled close, so nothing else would clear the uncontrolled state.
+    // The reason `wasPaneFocused` exists: settling the remembered open state to closed on blur makes backgrounding
+    // a real close.
     const { rerender } = render(
       <SurfacePresentationBoundary visible focused>
         <Select defaultOpen value="host-a" onValueChange={() => undefined}>

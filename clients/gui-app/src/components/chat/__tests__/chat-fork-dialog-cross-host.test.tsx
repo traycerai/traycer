@@ -27,10 +27,7 @@ import { emptyLandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-
 import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 
-/**
- * Cross-host fork dialog: the reported bug was that picking a host called
- * `directory.selectById` (app-wide rebind) while submit hardcoded `tabHostId`.
- */
+/** Cross-host fork dialog: the reported bug was that picking a host called `directory.selectById` (app-wide rebind) while submit hardcoded `tabHostId`. */
 
 const TAB_HOST_ID = "tab-host-id";
 const OTHER_HOST_ID = "other-host-id";
@@ -90,14 +87,7 @@ const dialogMocks = vi.hoisted(() => ({
     dialogMocks.createError = null;
     dialogMocks.createVariables = null;
   }),
-  /**
-   * Which hosts have a live capability probe this render.
-   *
-   * A set rather than a single boolean, because the dialog mounts one probe per
-   * non-supported candidate: "is SOME probe on" cannot distinguish the row that
-   * healed from the ones still refused, and would read `true` for the wrong
-   * reason after an upgrade.
-   */
+  /** Which hosts have a live capability probe this render. A set rather than a single boolean, because the dialog mounts one probe per non-supported candidate: "is SOME probe on" cannot distinguish the row that healed from the ones still refused, and would read `true` for the wrong reason after an upgrade. */
   capabilityProbeHostIds: new Set<string>(),
   /** False models the window after a retarget, before the catalog answers. */
   modelsLoaded: true,
@@ -254,10 +244,8 @@ vi.mock("@/hooks/host/use-host-query", () => ({
     if (args.method === "epic.chatPublicationState") {
       const enabled = args.options?.enabled ?? false;
       dialogMocks.publicationQueryEnabled = enabled;
-      // TanStack retains cached data when the observer is disabled, the
-      // refetch errors, OR a stale query is refetching. The hook, not
-      // the query object, must treat those as unknown — handing
-      // `undefined` here would make those gates untestable.
+      // TanStack retains cached data when the observer is disabled, the refetch errors, OR a stale query is refetching.
+      // The hook, not the query object, must treat those as unknown - handing `undefined` here would make those gates untestable.
       return {
         data: dialogMocks.publicationQuery.data,
         isError: dialogMocks.publicationQueryIsError,
@@ -317,8 +305,7 @@ vi.mock(
                 disabled={disabled}
                 onClick={() => {
                   if (disabled) return;
-                  // If the dialog regresses to `kind: "active"`, a pick must
-                  // hit the directory spy — that is the reported bug.
+                  // If the dialog regresses to `kind: "active"`, a pick must hit the directory spy - that is the reported bug.
                   if (props.hostScope.kind === "selected") {
                     props.hostScope.onSelect(entry.hostId);
                     return;
@@ -361,9 +348,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     isPending: false,
   }),
   useGuiHarnessModelsQueryForClient: () => ({
-    // `undefined` is how the toolbar store learns the catalog is still LOADING
-    // (`modelsLoaded = modelsQuery.data !== undefined`), which is the state a
-    // retarget lands in before the new host's models arrive.
+    // `undefined` is how the toolbar store learns the catalog is still LOADING (`modelsLoaded = modelsQuery.data !== undefined`), which is the state a retarget lands in before the new host's models arrive.
     data: dialogMocks.modelsLoaded
       ? {
           models: [
@@ -730,9 +715,7 @@ describe("ChatForkDialog cross-host routing", () => {
       screen.getByTestId(`fork-host-refusal-${ABSENT_HOST_ID}`).textContent,
     ).toContain("needs update");
     expect(forkButton().disabled).toBe(false);
-    // hostRefused is per-row: the remote CLASS stays selectable. Folding
-    // this into unselectableExceptHostId would disable every remote for one
-    // old host.
+    // hostRefused is per-row: the remote CLASS stays selectable. Folding this into unselectableExceptHostId would disable every remote for one old host.
     expect(selectedUnselectableExceptHostId()).toBeNull();
   });
 
@@ -835,8 +818,7 @@ describe("ChatForkDialog cross-host routing", () => {
     );
 
     fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
-    // Ablation: a manufactured-per-visit empty seed would pass "some seed
-    // exists" and fail this — B's folder must still be the seed.
+    // Ablation: a manufactured-per-visit empty seed would pass "some seed exists" and fail this - B's folder must still be the seed.
     expect(dialogMocks.lastWorkspace?.workspaceSeed?.folders).toEqual([
       "/repo/on-b",
     ]);
@@ -856,9 +838,7 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("A → B → A restores the source host's retained folders, not the chat seed", async () => {
-    // A folder the source chat never had. Re-deriving from
-    // `target.workspaceSeed` on the way back would restore `/repo/source`
-    // and this would fail.
+    // A folder the source chat never had. Re-deriving from `target.workspaceSeed` on the way back would restore `/repo/source` and this would fail.
     seedHostSlot(TAB_HOST_ID, "/repo/added-on-a");
     renderDialog(forkTarget({}), ignoreOpenChange);
 
@@ -891,17 +871,14 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("a loading catalog blocks a CROSS-HOST fork but not a same-host one", () => {
-    // The retarget window: the toolbar store still carries the source host's
-    // slug while the newly-selected host's models are in flight. Submitting
-    // there sends a model the target may not provide.
+    // The retarget window: the toolbar store still carries the source host's slug while the newly-selected host's models are in flight.
+    // Submitting there sends a model the target may not provide.
     dialogMocks.modelsLoaded = false;
     renderDialog(forkTarget({}), ignoreOpenChange);
     fillTitle();
 
-    // Same-host is unaffected - the slug came from THIS host's memory, and the
-    // memory write gate is catalog confirmation itself, so it was confirmed when
-    // it was recorded. Requiring confirmation again here would disable a fork
-    // whenever the models query merely detaches, with no way back.
+    // Same-host is unaffected - the slug came from THIS host's memory, and the memory write gate is catalog confirmation itself, so it was confirmed when it was recorded.
+    // Requiring confirmation again here would disable a fork whenever the models query merely detaches, with no way back.
     expect(forkButton().disabled).toBe(false);
 
     const scope = dialogMocks.lastWorkspace?.hostScope;
@@ -919,16 +896,7 @@ describe("ChatForkDialog cross-host routing", () => {
     renderDialog(forkTarget({}), ignoreOpenChange);
     fillTitle();
 
-    // Live from the moment the dialog opens, against a row nobody selected.
-    //
-    // This is the whole fix: a refused row is `aria-disabled`, so it can NEVER
-    // become `selectedHostId` - a probe gated on the selected host's refusal
-    // could only ever re-ask about the source host, and the target wearing the
-    // "needs update" word would keep it forever, because the reads that would
-    // re-handshake are the ones its own refusal turned off. The previous
-    // spelling of this test had to reach past the UI and call `onSelect`
-    // directly to see the probe at all, which was the defect stated as a
-    // workaround.
+    // This is the whole fix: a refused row is `aria-disabled`, so it can NEVER become `selectedHostId` - a probe gated on the selected host's refusal could only ever re-ask about the source host, and the target wearing the "needs update" word would keep it forever, because the reads that would re-handshake are the ones its own refusal turned off.
     expect(dialogMocks.capabilityProbeHostIds.has(OLD_HOST_ID)).toBe(true);
     // The 1.1 host is not re-asked about - only the ones with something to
     // learn - so this is a bounded refresh rather than a read per row.
@@ -940,10 +908,8 @@ describe("ChatForkDialog cross-host routing", () => {
       screen.getByTestId(`fork-host-refusal-${OLD_HOST_ID}`).textContent,
     ).toContain("needs update");
 
-    // Cleared so the next render's probes repopulate it, and the assertions
-    // below describe what is live AFTER the upgrade rather than ever having
-    // been live. Unmounting cannot retract an entry on its own: a probe that
-    // stops rendering simply stops calling the mocked hook.
+    // Cleared so the next render's probes repopulate it, and the assertions below describe what is live AFTER the upgrade rather than ever having been live.
+    // Unmounting cannot retract an entry on its own: a probe that stops rendering simply stops calling the mocked hook.
     dialogMocks.capabilityProbeHostIds.clear();
     act(() => {
       recordNegotiatedHostManifest(OLD_HOST_ID, {
@@ -958,8 +924,7 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(screen.queryByTestId(`fork-host-refusal-${OLD_HOST_ID}`)).toBeNull();
     expect(forkButton().disabled).toBe(false);
     // The healed row stops being re-asked about; the still-refused one does not.
-    // A single "is any probe live" flag could not tell these apart, and would
-    // read as `true` here for the wrong reason.
+    // A single "is any probe live" flag could not tell these apart, and would read as `true` here for the wrong reason.
     expect(dialogMocks.capabilityProbeHostIds.has(OLD_HOST_ID)).toBe(false);
     expect(dialogMocks.capabilityProbeHostIds.has(ABSENT_HOST_ID)).toBe(true);
   });
@@ -974,9 +939,8 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog {...dialogProps(target, onOpenChange, true)} />,
     );
 
-    // Default selection is the tab host. The refusal was earned against the
-    // other host, so the notice must not appear here — a same-host fork is
-    // served from the local store and no publication is involved.
+    // Default selection is the tab host.
+    // The refusal was earned against the other host, so the notice must not appear here - a same-host fork is served from the local store and no publication is involved.
     expect(screen.queryByTestId("chat-fork-boundary-not-published")).toBeNull();
 
     fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
@@ -1138,9 +1102,7 @@ describe("ChatForkDialog cross-host routing", () => {
       true,
     );
     expect(tabRow instanceof HTMLButtonElement && tabRow.disabled).toBe(false);
-    // Selection is still the tab host. A local fork is served from the store
-    // tier, so Fork stays enabled — blocking it would be a cloud fact
-    // refusing a local submit.
+    // Selection is still the tab host. A local fork is served from the store tier, so Fork stays enabled - blocking it would be a cloud fact refusing a local submit.
     expect(forkButton().disabled).toBe(false);
 
     // An inert remote cannot become the target. fireEvent still delivers
@@ -1152,15 +1114,8 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("boundarySyncing: notice speaks, rows stay selectable, submit is blocked", () => {
-    // Clicking OTHER_HOST_ID makes this a CROSS-HOST fork, and
-    // `chatForkTargetVerdict` only reaches the `boundaryUncovered` arm (→
-    // `boundarySyncing`) when `isCrossHost` is true — a same-host fork
-    // short-circuits to `allowed` before this check ever runs (see the
-    // sibling first-paint test below, which stays same-host). `boundarySyncing`
-    // is no longer exempt from `verdictAllowsSubmit`: the host's coverage
-    // check is presence-only, so an uncovered boundary can be ACCEPTED and
-    // seed a truncated turn, and submit must block on it like every other
-    // refusal now.
+    // Clicking OTHER_HOST_ID makes this a CROSS-HOST fork, and `chatForkTargetVerdict` only reaches the `boundaryUncovered` arm (→ `boundarySyncing`) when `isCrossHost` is true - a same-host fork short-circuits to `allowed` before this check ever runs (see the sibling first-paint test below, which stays same-host).
+    // `boundarySyncing` is no longer exempt from `verdictAllowsSubmit`: the host's coverage check is presence-only, so an uncovered boundary can be ACCEPTED and seed a truncated turn, and submit must block on it like every other refusal now.
     advertiseSourcePublication();
     dialogMocks.publicationQuery = {
       data: {
@@ -1181,10 +1136,7 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(selectedUnselectableExceptHostId()).toBeNull();
     expect(selectedRefusalWord(OTHER_HOST_ID)).toBeUndefined();
 
-    // The distinction this state carries is over the ROW, not the button:
-    // the row stays selectable because nothing is wrong with the host and
-    // the wait is seconds long, so killing the row would throw away the
-    // configuration the user is about to be allowed to submit.
+    // The distinction this state carries is over the ROW, not the button: the row stays selectable because nothing is wrong with the host and the wait is seconds long, so killing the row would throw away the configuration the user is about to be allowed to submit.
     const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
     expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
       false,
@@ -1196,18 +1148,8 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("boundarySyncing sentence is on first paint with no host selected", () => {
-    // Sibling of the unpublished first-paint case. The class resolver
-    // (`chatForkRemoteClassState`) returns `syncing` with no `isCrossHost`
-    // input, so the sentence must not wait for a highlight.
-    //
-    // No host is selected here, so the highlighted target is the tab's own
-    // host and this is a SAME-HOST fork. `chatForkTargetVerdict` short-
-    // circuits `!isCrossHost` to `{ kind: "allowed" }` before it ever looks
-    // at `publication` (chat-fork-target.ts:403), so the submit gate never
-    // sees `boundarySyncing` here and the button stays enabled — unlike the
-    // sibling test above, which selects OTHER_HOST_ID, makes the fork
-    // cross-host, and gets blocked. The two are not contradicting each
-    // other: this pair is what pins the same-host exemption.
+    // The class resolver (`chatForkRemoteClassState`) returns `syncing` with no `isCrossHost` input, so the sentence must not wait for a highlight.
+    // `chatForkTargetVerdict` short- circuits `!isCrossHost` to `{ kind: "allowed" }` before it ever looks at `publication` (chat-fork-target.ts:403), so the submit gate never sees `boundarySyncing` here and the button stays enabled - unlike the sibling test above, which selects OTHER_HOST_ID, makes the fork cross-host, and gets blocked.
     advertiseSourcePublication();
     dialogMocks.publicationQuery = {
       data: {
@@ -1232,9 +1174,7 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("a source host that does not advertise the method issues no request and stays post-A4", async () => {
-    // Ablation: the mock is primed with unpublished. If a request were
-    // issued, remotes would go inert and this submit would fail. Passing
-    // therefore credits the capability gate, not "data happened to be unknown".
+    // If a request were issued, remotes would go inert and this submit would fail.
     advertiseSourceWithoutPublication();
     dialogMocks.publicationQuery = {
       data: {
@@ -1263,10 +1203,8 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("unpublished is known on first paint with no remote host selected", () => {
-    // Ablation: the old gate keyed `enabled` on `isCrossHost`, so this
-    // moment — default selection is the tab host — would have
-    // `publicationQueryEnabled === false` and no notice. Passing here
-    // credits `hasRemoteHostOption`, not a later click.
+    // Ablation: the old gate keyed `enabled` on `isCrossHost`, so this moment - default selection is the tab host - would have `publicationQueryEnabled === false` and no notice.
+    // Passing here credits `hasRemoteHostOption`, not a later click.
     advertiseSourcePublication();
     dialogMocks.publicationQuery = {
       data: {
@@ -1310,11 +1248,8 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("a single-host account does not ask publication and does not inert anything", () => {
-    // Ablation: primed unpublished. If `enabled` were only
-    // `activeWorkspaceTarget !== null`, the query would fire and this
-    // would still look quiet only because the same-host verdict
-    // short-circuits — `publicationQueryEnabled === false` is the
-    // half that pins the RPC staying off.
+    // Ablation: primed unpublished.
+    // If `enabled` were only `activeWorkspaceTarget !== null`, the query would fire and this would still look quiet only because the same-host verdict short-circuits - `publicationQueryEnabled === false` is the half that pins the RPC staying off.
     advertiseSourcePublication();
     dialogMocks.publicationQuery = {
       data: {
@@ -1447,10 +1382,8 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("titled source: prefills 'Fork - <title>' and clearing the field disables submit", () => {
-    // The default title is only computed on an open TRANSITION (`if (open
-    // !== dialogState.open)`), not on an initial mount that is already
-    // `open`. Mounting closed and then flipping to open, like the
-    // boundary-notice tests above, is what actually exercises the prefill.
+    // The default title is only computed on an open TRANSITION (`if (open !== dialogState.open)`), not on an initial mount that is already `open`.
+    // Mounting closed and then flipping to open, like the boundary-notice tests above, is what actually exercises the prefill.
     const target = forkTarget({ sourceChatTitle: "Source chat" });
     const view = render(
       <ChatForkDialog {...dialogProps(target, ignoreOpenChange, false)} />,
@@ -1471,9 +1404,7 @@ describe("ChatForkDialog cross-host routing", () => {
   });
 
   it("a target with initialHostId set to the remote host opens the picker on that host", () => {
-    // The default title is only computed on an open TRANSITION, same as the
-    // prefill test above - mount closed, then flip to open, so the seeding
-    // branch (`target?.initialHostId ?? tabHostId`) actually runs.
+    // The default title is only computed on an open TRANSITION, same as the prefill test above - mount closed, then flip to open, so the seeding branch (`target?.initialHostId ?? tabHostId`) actually runs.
     const remoteTarget = forkTarget({ initialHostId: OTHER_HOST_ID });
     const view = render(
       <ChatForkDialog
@@ -1485,9 +1416,7 @@ describe("ChatForkDialog cross-host routing", () => {
     );
 
     expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
-    // Cross-host, since the seeded host differs from the tab host - the
-    // notices block only renders bare (no publication/boundary notice primed
-    // here) when `isCrossHost` is true.
+    // Cross-host, since the seeded host differs from the tab host - the notices block only renders bare (no publication/boundary notice primed here) when `isCrossHost` is true.
     expect(screen.getByTestId("chat-fork-target-notices")).not.toBeNull();
   });
 
@@ -1503,9 +1432,7 @@ describe("ChatForkDialog cross-host routing", () => {
     );
     expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
 
-    // Close, then reopen on a DIFFERENT target with no preselection - the
-    // ordinary per-message fork entry point, which must not inherit the
-    // host-switch gesture's remote host.
+    // Close, then reopen on a DIFFERENT target with no preselection - the ordinary per-message fork entry point, which must not inherit the host-switch gesture's remote host.
     view.rerender(
       <ChatForkDialog
         {...dialogProps(remoteTarget, ignoreOpenChange, false)}

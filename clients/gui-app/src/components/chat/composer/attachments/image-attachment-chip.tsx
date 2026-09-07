@@ -37,17 +37,13 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
     atom.b64content === null
       ? null
       : `data:${atom.mimeType};base64,${atom.b64content}`;
-  // Priority: a same-session paste's synchronous object-URL (no flash), then the
-  // async blob stream for a restored hash, then chat's inline base64. The hook is
-  // called unconditionally; for a base64-only atom (`hash === null`) it returns
-  // null, so the `dataUrl` fallback keeps chat paste instant.
+  // Priority: a same-session paste's synchronous object-URL (no flash), then the async blob stream for a restored hash, then chat's inline base64.
+  // The hook is called unconditionally; for a base64-only atom (`hash === null`) it returns null, so the `dataUrl` fallback keeps chat paste instant.
   const sessionUrl = atom.hash === null ? null : sessionObjectUrl(atom.hash);
   const blob = useImageBlobUrlState(atom.hash, atom.mimeType, fetcher, null);
   const src = sessionUrl ?? blob.url ?? dataUrl;
-  // A restored hash's bytes are typed by the serving host's sniff, which can
-  // disagree with the stored claim and decides whether Copy is offered at all.
-  // The claim only stands where it IS the source: a same-session paste or
-  // inline base64.
+  // A restored hash's bytes are typed by the serving host's sniff, which can disagree with the stored claim and decides whether Copy is offered at all.
+  // The claim only stands where it IS the source: a same-session paste or inline base64.
   const mediaType =
     sessionUrl === null && blob.status === "ready"
       ? blob.mediaType
@@ -72,9 +68,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
         >
           {label.badgeLabel}
         </span>
-        {/* Scoped to the open/zoom trigger, not the chip: the chip also
-              holds the Remove button, and a chip-wide trigger meant focusing
-              Remove surfaced the filename tooltip. */}
+        {/* Scoped to the open/zoom trigger, not the chip: the chip also holds the Remove button, and a chip-wide trigger meant focusing Remove surfaced the filename tooltip. */}
         <TooltipWrapper
           label={label.title}
           side="top"

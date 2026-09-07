@@ -86,11 +86,8 @@ describe("useLandingTerminalKill", () => {
     expect(mocks.defaultRequest).not.toHaveBeenCalled();
   });
 
-  // Both ways of failing to resolve the tab's host. Neither may degrade into
-  // "kill this session id on whatever host is handy" - a kill is destructive and
-  // session ids are not host-unique, so a fallback could destroy a stranger's
-  // PTY. Failing the mutation is the only safe outcome: the tombstone survives
-  // and reconciliation retries once the real host is reachable again.
+  // Failing the mutation is the only safe outcome: the tombstone survives and reconciliation retries once the
+  // real host is reachable again.
   it("fails the kill instead of falling back when the tab's host has left the directory", async () => {
     mocks.findById.mockReturnValue(null);
     const { result } = renderHook(() => useLandingTerminalKill(), {

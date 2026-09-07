@@ -1,14 +1,4 @@
-/**
- * The output window (`UI.md` §4): a read-only view of one managed command's
- * log. Deliberately NOT a terminal - managed commands are spawned over pipes
- * with no PTY, so there are no escape sequences to emulate and the lines arrive
- * already framed. A text view is truer and cheaper than an xterm.
- *
- * One interleaved timeline (stdout, tinted stderr, and lifecycle records as
- * distinct rows) with timestamps on by default, opened at the tail and paged
- * backwards on demand. Follow mode is the default and pauses the moment the
- * human scrolls away from the newest line.
- */
+/** The output window (`UI.md` §4): a read-only view of one managed command's log. */
 import {
   memo,
   useCallback,
@@ -84,19 +74,16 @@ import {
 } from "@/lib/reading-position";
 
 /**
- * How close to the newest line still counts as "following". A few pixels of
- * slack keeps sub-pixel scroll positions and a mid-flight append from reading
- * as the human deliberately scrolling away.
+ * How close to the newest line still counts as "following".
+ * A few pixels of slack keeps sub-pixel scroll positions and a mid-flight append from reading as the human deliberately scrolling away.
  */
 const FOLLOW_SLACK_PX = 24;
 /** Distance from the top that asks for the next page of older lines. */
 const LOAD_OLDER_THRESHOLD_PX = 48;
 const OUTPUT_VIRTUAL_OVERSCAN = 12;
 const OUTPUT_VIRTUAL_INITIAL_RECT = { width: 0, height: 600 } as const;
-// The terminal tiles' search decorations, so a hit looks the same on both
-// surfaces. Both set a foreground as well as a fill: a match keeps its row's
-// colour otherwise, and `text-destructive` on a stderr line over dark amber is
-// barely readable.
+// The terminal tiles' search decorations, so a hit looks the same on both surfaces.
+// Both set a foreground as well as a fill: a match keeps its row's colour otherwise, and `text-destructive` on a stderr line over dark amber is barely readable.
 const FIND_MATCH_STYLE = {
   backgroundColor: "#854d0e",
   color: "#fafaf9",
@@ -183,11 +170,8 @@ export interface ManagedCommandOutputTileProps {
 }
 
 /**
- * Three layers, because each one gates the hooks of the next: the host has to
- * be reachable before a stream is dialled, and the stream's store has to exist
- * before it can be read. Every layer answers with the same
- * `ShellOutputAvailability` vocabulary and the same notice, so the reader
- * cannot tell where the seam is - only which wait, or which ending, this is.
+ * Three layers, because each one gates the hooks of the next: the host has to be reachable before a stream is dialled, and the stream's store has to exist before it can be read.
+ * Every layer answers with the same `ShellOutputAvailability` vocabulary and the same notice, so the reader cannot tell where the seam is - only which wait, or which ending, this is.
  */
 export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
   const { epicId, node } = props;
@@ -219,10 +203,7 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
       />
     );
   }
-  // Below the availability gate, not instead of it: the gate answers for
-  // the HOST (unreachable / starting, in the shared shell vocabulary); this
-  // bounds the remaining load window so a reachable host's slow read can
-  // never hold the tile on a bare skeleton (the F4 class).
+  // Below the availability gate, not instead of it: the gate answers for the HOST (unreachable / starting, in the shared shell vocabulary); this bounds the remaining load window so a reachable host's slow read can never hold the tile on a bare skeleton (the F4 class).
   if (hostLoad.kind !== "ready") {
     return (
       <TileHostLoadState
@@ -308,11 +289,8 @@ function ManagedCommandOutputTileBody(props: {
   );
   const loadOlder = useStore(store, (state) => state.loadOlder);
   const setOutputFollowing = useStore(store, (state) => state.setFollowing);
-  // Asked of the client this window's own subscription rides on. The app-wide
-  // reader answers for the DEFAULT host, and a tab is bound to its own host for
-  // life - when the two differ, the default host's answer is about the wrong
-  // machine, and this window would either call a capable host too old or take
-  // an old host's refusal for a deletion.
+  // Asked of the client this window's own subscription rides on.
+  // The app-wide reader answers for the DEFAULT host, and a tab is bound to its own host for life - when the two differ, the default host's answer is about the wrong machine, and this window would either call a capable host too old or take an old host's refusal for a deletion.
   const streamSupport = useStreamMethodSupportFor(
     session.streamMethodSupport,
     "managedCommand.subscribeOutput",
@@ -362,9 +340,7 @@ function ManagedCommandOutputTileBody(props: {
     (index: number) => lines[index]?.seq ?? index,
     [lines],
   );
-  // `useVirtualizer` returns fresh function identities each render; the React
-  // Compiler already treats the hook as incompatible, while this component's
-  // own inputs and derived callbacks remain memoized.
+  // `useVirtualizer` returns fresh function identities each render; the React Compiler already treats the hook as incompatible, while this component's own inputs and derived callbacks remain memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
   const outputVirtualizer = useVirtualizer({
     count: lines.length,
@@ -373,18 +349,10 @@ function ManagedCommandOutputTileBody(props: {
     getItemKey: getOutputRowKey,
     overscan: OUTPUT_VIRTUAL_OVERSCAN,
     initialRect: OUTPUT_VIRTUAL_INITIAL_RECT,
-    // The first snapshot scrolls to an estimated tail. Wrapped rows at that
-    // tail are measured after the scroll and can grow the virtual document;
-    // end anchoring carries that growth into scrollTop so the fresh window
-    // stays live. This does not turn every focus into "jump to live": TanStack
-    // applies the end correction only while the viewport is already at the
-    // end, so a restored reader parked in history keeps their position.
+    // This does not turn every focus into "jump to live": TanStack applies the end correction only while the viewport is already at the end, so a restored reader parked in history keeps their position.
     anchorTo: "end",
-    // Row measurement can land while the follow/prepend layout effects are
-    // committing. TanStack's synchronous default calls React `flushSync` from
-    // that ResizeObserver path, which React rejects and which turns a burst of
-    // output into repeated main-thread stalls. A normal scheduled rerender is
-    // sufficient: the estimate is already the exact height for ordinary rows.
+    // Row measurement can land while the follow/prepend layout effects are committing.
+    // TanStack's synchronous default calls React `flushSync` from that ResizeObserver path, which React rejects and which turns a burst of output into repeated main-thread stalls.
     useFlushSync: false,
   });
   const virtualRows = outputVirtualizer.getVirtualItems();
@@ -408,10 +376,8 @@ function ManagedCommandOutputTileBody(props: {
 
   const revealMatch = useCallback(
     (match: ManagedCommandOutputFindMatch) => {
-      // Follow pins the viewport to the tail; drop it before the jump or the
-      // next append immediately undoes the scroll-to-match. Only ever reached
-      // for a find command the human gave -- the adapter does not reveal on a
-      // re-scan -- so this never takes a tailing reader off the live tail.
+      // Follow pins the viewport to the tail; drop it before the jump or the next append immediately undoes the scroll-to-match.
+      // Only ever reached for a find command the human gave -- the adapter does not reveal on a re-scan -- so this never takes a tailing reader off the live tail.
       setFollowMode(false);
       outputVirtualizerRef.current.scrollToIndex(match.lineIndex, {
         align: "center",
@@ -494,9 +460,7 @@ function ManagedCommandOutputTileBody(props: {
     restoredReadingPositionRef.current = true;
   }, [captureReadingPosition, lines.length, readingIdentity, visible]);
 
-  // The first snapshot participates in reading-position restore. Every later
-  // snapshot is a deliberate rebase (resnapshot or reconnect), so it restores
-  // the live latch and pins the replacement tail before paint.
+  // Every later snapshot is a deliberate rebase (resnapshot or reconnect), so it restores the live latch and pins the replacement tail before paint.
   useLayoutEffect(() => {
     const previousGeneration = lastTimelineGenerationRef.current;
     if (timelineGeneration === previousGeneration) return;
@@ -561,17 +525,13 @@ function ManagedCommandOutputTileBody(props: {
       event.preventDefault();
       event.currentTarget.scrollTop =
         event.key === "Home" ? 0 : event.currentTarget.scrollHeight;
-      // Programmatic scrolling emits a browser scroll event, but applying the
-      // latch synchronously keeps Home/End deterministic and makes returning
-      // to a detached live tail request its resnapshot immediately.
+      // Programmatic scrolling emits a browser scroll event, but applying the latch synchronously keeps Home/End deterministic and makes returning to a detached live tail request its resnapshot immediately.
       onScroll();
     },
     [onScroll],
   );
 
-  // Derived here, after the scroll machinery above, and read only by the JSX
-  // below: what the window shows is a pure function of the store's signals
-  // and the bound host's capability, computed once per render.
+  // Derived here, after the scroll machinery above, and read only by the JSX below: what the window shows is a pure function of the store's signals and the bound host's capability, computed once per render.
   const availability = shellOutputStreamAvailability({
     streamSupport,
     connectionStatus,
@@ -596,11 +556,7 @@ function ManagedCommandOutputTileBody(props: {
   if (newOutputAvailable) jumpLiveLabel = "New output available";
   if (resyncPending) jumpLiveLabel = "Loading live output…";
 
-  // A terminal state, or a host that cannot serve the stream: the panel is the
-  // sentence, and nothing of the log survives under it. Whatever this window
-  // had read is not the history any more - the host destroyed or withdrew
-  // that - and a ghost of it contradicted every other surface's account of a
-  // deleted shell.
+  // A terminal state, or a host that cannot serve the stream: the panel is the sentence, and nothing of the log survives under it.
   if (isShellOutputPanelReplacement(availability)) {
     return (
       <ShellOutputAvailabilityNotice
@@ -626,20 +582,10 @@ function ManagedCommandOutputTileBody(props: {
       ) : null}
 
       <div className="relative min-h-0 flex-1">
-        {/*
-         * Present whenever a snapshot has said what this shell is - including
-         * under a failed stream. Process status and stream status are two
-         * different facts: a broken output stream must never hide Stop for a
-         * process that is still running.
-         */}
+        {/* Process status and stream status are two different facts: a broken output stream must never hide Stop for a process that is still running. */}
         {command === null ? null : (
           <>
-            {/*
-             * The fade the floating cluster is legible against. Sits under the
-             * cluster and over the log, and is painted in the tile's own
-             * surface token so every preset theme dissolves scrolling text
-             * into its own background rather than into a grey of ours.
-             */}
+            {/* Sits under the cluster and over the log, and is painted in the tile's own surface token so every preset theme dissolves scrolling text into its own background rather than into a grey of ours. */}
             <div
               aria-hidden
               data-testid="managed-command-output-scrim"
@@ -666,25 +612,13 @@ function ManagedCommandOutputTileBody(props: {
           aria-label={
             command === null ? "Output" : MANAGED_COMMAND_OUTPUT_WINDOW_TITLE
           }
-          // Command output is terminal output, so it follows the Terminal
-          // typography settings the way a terminal tile does. `font-mono` and
-          // the `text-*` scales would silently track the Code font instead,
-          // leaving a Terminal override with no effect on the one surface
-          // whose whole content is a program's stdout. Colours stay the log
-          // view's own (stderr tint, lifecycle rows).
+          // `font-mono` and the `text-*` scales would silently track the Code font instead, leaving a Terminal override with no effect on the one surface whose whole content is a program's stdout.
           style={{
             fontFamily: terminalFont.fontFamily,
             fontSize: `${terminalFont.fontSize}px`,
           }}
-          // The log keeps the full width of the pane. The cluster used to buy
-          // its clearance with a reserved right lane, which cost every line a
-          // share of the width for a collision that only ever happens in the
-          // top row - and cost most on a split pane, where the log is already
-          // narrow. Clearance is bought vertically instead: the log starts
-          // below the cluster, so nothing is under it at rest, and a line
-          // scrolled up dissolves into the scrim rather than colliding with
-          // the label. Only the flow of the log moves; the cluster is still
-          // lifted out of it.
+          // The cluster used to buy its clearance with a reserved right lane, which cost every line a share of the width for a collision that only ever happens in the top row - and cost most on a split pane, where the log is already narrow.
+          // Clearance is bought vertically instead: the log starts below the cluster, so nothing is under it at rest, and a line scrolled up dissolves into the scrim rather than colliding with the label.
           className={cn(
             "h-full w-full overflow-y-auto px-3 leading-relaxed focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
             command === null ? "py-2" : "pt-9.5 pb-2",
@@ -771,24 +705,8 @@ function ManagedCommandOutputTileBody(props: {
 }
 
 /**
- * The window's whole chrome, floating over the log's top-right corner instead
- * of sitting in a bar above it.
- *
- * The bar this replaces spent a permanent row of every shell window restating
- * what the TAB beside it already said - the same glyph, the same
- * "Monitor · deploy watcher" - so the log, which is the only thing here a
- * person came to read, started one line lower for nothing. Identity lives in
- * the tab; what stays is the pair of facts the tab cannot carry: what the shell
- * is doing right now, and the two verbs that change it.
- *
- * Bare text and icons - no card, no border, no fill. A box here read as chrome
- * pasted onto the log; without one the pair of facts sits in the window's air.
- * What makes that legible is not this component: the log's own top fade
- * (rendered beside it, one layer below) is what the label is read against, and
- * the log starting below this row is what keeps a line from ever resting under
- * it. Neither can be removed without giving the box back. The buttons keep
- * their ghost hover fill, which is now the only affordance saying they are
- * pressable.
+ * The window's whole chrome, floating over the log's top-right corner instead of sitting in a bar above it.
+ * The bar this replaces spent a permanent row of every shell window restating what the TAB beside it already said - the same glyph, the same "Monitor · deploy watcher" - so the log, which is the only thing here a person came to read, started one line lower for nothing.
  */
 function ManagedCommandOutputControls(props: {
   readonly command: ManagedCommand;
@@ -798,11 +716,7 @@ function ManagedCommandOutputControls(props: {
 }) {
   return (
     <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-0.5">
-      {/*
-       * Stays pointer-transparent: it is a readout, and it sits permanently
-       * over a corner of a scrollable log, so a wheel turn there has to reach
-       * the log rather than land on a label that cannot do anything with it.
-       */}
+      {/* Stays pointer-transparent: it is a readout, and it sits permanently over a corner of a scrollable log, so a wheel turn there has to reach the log rather than land on a label that cannot do anything with it. */}
       <span
         className="flex shrink-0 items-center gap-1.5 px-1.5 py-1 text-ui-xs text-foreground/85"
         data-testid="managed-command-output-status"
@@ -831,19 +745,8 @@ function ManagedCommandOutputControls(props: {
 }
 
 /**
- * Everything about this shell that is not its output, one click away.
- *
- * The window used to answer "what exactly is this running, and where?" with
- * nothing at all - you went to the agent's transcript and found the tool call.
- * That is the surface refusing to say what it plainly knows, and it is the
- * question a person reading a log at 3am actually has.
- *
- * Every field here is CURRENT, not historical, and says so. The retained log
- * spans every run of this shell, and a restart can re-spec both the command and
- * its directory - so these describe the shell as it stands now rather than
- * whatever produced the lines being read. The transcript's start card is the
- * other half of that pair: it holds the command the creating call asked for,
- * frozen.
+ * The retained log spans every run of this shell, and a restart can re-spec both the command and its directory - so these describe the shell as it stands now rather than whatever produced the lines being read.
+ * The transcript's start card is the other half of that pair: it holds the command the creating call asked for, frozen.
  */
 function ManagedCommandOutputDetails(props: {
   readonly command: ManagedCommand;
@@ -852,9 +755,7 @@ function ManagedCommandOutputDetails(props: {
 }) {
   const { command } = props;
   const pid = command.status.state === "running" ? command.status.pid : null;
-  // The same derived value the switch beside this popover shows: a configure
-  // write that already answered beats a streamed record that has not caught
-  // up, so the row and the switch cannot disagree during that gap.
+  // The same derived value the switch beside this popover shows: a configure write that already answered beats a streamed record that has not caught up, so the row and the switch cannot disagree during that gap.
   const relaunchOnHostRestart = useManagedCommandRelaunchOnHostRestart(
     { hostId: props.hostId, commandId: command.id },
     command,
@@ -887,9 +788,7 @@ function ManagedCommandOutputDetails(props: {
       >
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
           <DetailRow label="Command">
-            {/* Wrapping, not truncated: a shell command is the one value here
-                worth reading in full, and it is the reason someone opened this.
-                Copyable for the "run it myself" move. */}
+            {/* Wrapping, not truncated: a shell command is the one value here worth reading in full, and it is the reason someone opened this. Copyable for the "run it myself" move. */}
             <span className="flex items-start gap-1">
               <span
                 className="min-w-0 font-mono wrap-anywhere"
@@ -958,9 +857,7 @@ function DetailRow(props: {
 }
 
 /**
- * The pacing in one short line. Whoever opened this popover already knows what
- * a monitor is; each number gets a one-word tag and no more, so the row reads
- * at a glance instead of as a paragraph.
+ * Whoever opened this popover already knows what a monitor is; each number gets a one-word tag and no more, so the row reads at a glance instead of as a paragraph.
  */
 function managedCommandCadenceSentence(cadence: ManagedCommandCadence): string {
   const duration = (ms: number): string =>
@@ -1076,14 +973,7 @@ function managedCommandOutputFindAvailability(
 }
 
 /**
- * Wall-clock time of day, seconds included: a human reading a shell at 3am is
- * matching lines against something else that happened, and the date is already
- * carried by the window they are in. `null` is a line the host could not read a
- * timestamp from - a partial record left by a crash.
- *
- * 24-hour regardless of locale, like every other log this one is read beside:
- * a fixed-width column of eight characters instead of a locale's eleven, in a
- * gutter that repeats on every line of the pane.
+ * `null` is a line the host could not read a timestamp from - a partial record left by a crash. 24-hour regardless of locale, like every other log this one is read beside: a fixed-width column of eight characters instead of a locale's eleven, in a gutter that repeats on every line of the pane.
  */
 function formatLineTime(atMs: number | null): string {
   if (atMs === null) return "--:--:--";

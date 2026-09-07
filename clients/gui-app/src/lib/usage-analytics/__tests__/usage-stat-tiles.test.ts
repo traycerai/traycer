@@ -120,8 +120,7 @@ describe("buildUsageStatTiles", () => {
   });
 
   it("carries savings as a standalone figure - no raw-cost ratio field", () => {
-    // Ticket 18: catalog-derived savings added to provider-reported cost
-    // mixes bases, so the "Nx raw cost" counterfactual was dropped whole.
+    // Catalog-derived savings added to provider-reported cost mixes bases, so the "Nx raw cost" counterfactual was dropped whole.
     const tiles = buildUsageStatTiles(
       totals({ knownCostUsd: 4, knownCacheSavingsUsd: 1 }),
       [],

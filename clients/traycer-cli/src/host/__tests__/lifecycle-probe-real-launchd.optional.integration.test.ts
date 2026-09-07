@@ -20,59 +20,16 @@ import {
   type ProbeSupervisorAttestation,
 } from "@traycer-clients/shared/host-lifecycle";
 
-/*
- * T6-owned real-launchd scaffolding for the macOS annex §4 cases the
- * execution log moved here: M8 (fallback label provision + bootstrap +
- * attempt-scoped readiness marker), M9 (spawn-probe fast decline with
- * producer-side attestation), M10 (logout/login I5 simulation), and M3's
- * live-wedge arm.
- *
- * M9's core claim — producer-side attestation (`attestLaunchdSupervisorPid`)
- * validates a real supervisor pid against a real scoped launchd job, and a
- * label/pid mismatch is rejected — IS exercised for real below; this is the
- * one piece of the four annex cases with an already-landed, safely-testable
- * production function (see T6's "production contracts now present" message).
- * M3-live remains wired-but-unrun: a real CDHash-invalidating registration is
- * not safely constructible (M3-live specifically never should be:
- * see the inline note below). Every scenario feature-detects its own
- * precondition and returns early rather than failing on a gap outside this
- * suite's job to fix.
- *
- * Isolation rules (annex §4.1), unchanged from the existing M1-M12 suite:
- * scoped labels (`ai.traycer.host.test.<pid>.<runId>[...]`), scoped temp
- * dirs, macOS-only, manual/opt-in (never default PR CI).
- */
+/** Real-launchd scaffolding for macOS annex cases the in-process fakes cannot reproduce. */
 
 const ENABLED = process.env.TRAYCER_RUN_REAL_SUPERVISOR_MACOS === "1";
 
-/**
- * `not-internal-checkout` used to be **computed and dropped**.
- *
- * `layer0Availability()` returned it, `assertRealLaunchdReady` pushed a problem
- * only for `kind === "broken"`, and a repo-wide grep for the string found
- * exactly two hits: the type declaration and the return statement. So on an OSS
- * checkout — the only repository that runs the workflow owning these rows — the
- * readiness gate passed and the Layer-0 rows ran against a module that is not
- * there, failing on a 20 s deadline with no diagnostic naming the cause.
- *
- * Now the value is read in two places and neither is silent:
- *
- * - the rows that need it **skip visibly**, with a banner saying so;
- * - a job that declares `TRAYCER_REQUIRE_LAYER0=1` — the internal monorepo's
- *   `real-supervisor-internal.yml`, where `traycer-host/` exists — **fails**
- *   instead, because there the absence is a broken checkout, not a fact of
- *   the repository.
- */
+/** `not-internal-checkout` used to be **computed and dropped**. `layer0Availability()` returned it, `assertRealLaunchdReady` pushed a problem only for `kind === "broken"`, and a repo-wide grep for the string found exactly two hits: the type declaration and the return statement. */
 const LAYER0 = layer0Availability();
 const LAYER0_MISSING = LAYER0.kind === "not-internal-checkout";
 const REQUIRE_LAYER0 = process.env.TRAYCER_REQUIRE_LAYER0 === "1";
 
-/**
- * Setting the opt-in claims this machine can host the real-launchd rows. If it
- * cannot, that is a failure, not a skip — a CI job that flips the opt-in on
- * and then silently skips proves nothing, which is the exact defect the
- * cutover verification standard §2 exists to remove.
- */
+/** Setting the opt-in claims this machine can host the real-launchd rows. If it cannot, that is a failure, not a skip - a CI job that flips the opt-in on and then silently skips proves nothing, which is the exact defect the cutover verification standard §2 exists to remove. */
 async function assertRealLaunchdReady(): Promise<void> {
   const problems: string[] = [];
   if (process.platform !== "darwin") {
@@ -105,12 +62,7 @@ async function assertRealLaunchdReady(): Promise<void> {
     }
     if (LAYER0_MISSING && !REQUIRE_LAYER0) {
       // Standard §8: report what did not run.
-      //
-      // `process.stderr.write`, not `console.warn`: vitest's reporter
-      // **swallows console output written from a hook** — measured, a
-      // `console.warn` here produced no output at all while a direct stderr
-      // write from the same hook printed. A banner nobody sees is the same
-      // defect as the dropped `not-internal-checkout` value it replaces.
+      // `process.stderr.write`, not `console.warn`: vitest's reporter swallows console output written from a hook** - measured, a `console.warn` here produced no output at all while a direct stderr write from the same hook printed.
       process.stderr.write(
         "\n[real-launchd] Layer-0 rows NOT EXECUTED: this is an OSS " +
           `checkout, and ${layer0ModulePath()} exists only in the internal ` +
@@ -143,21 +95,7 @@ afterEach(async () => {
   cleanupTargets = [];
 });
 
-/**
- * Teardown for a scoped launchd job, shared by every `withScoped*` helper so the
- * two hazards below are answered once rather than re-derived per copy.
- *
- * A `throw` from `finally` REPLACES whatever the body was already throwing, so a
- * teardown complaint would silently overwrite the actual row failure - the one
- * thing the row exists to report. The leak is only escalated when the body
- * itself succeeded; on the failing path the original error wins.
- *
- * Staying in `cleanupTargets` is what makes that concession safe. A job is only
- * dropped from the suite-level sweep once launchd confirms it is gone, so a job
- * that survived `bootout` is retried in `afterEach` whichever way the body went.
- * Dropping it here would leak it loaded with its plist already unlinked, and the
- * next run of this suite would fail to bootstrap the label it just poisoned.
- */
+/** Teardown for a scoped launchd job, shared by every `withScoped*` helper so the two hazards below are answered once rather than re-derived per copy. A `throw` from `finally` REPLACES whatever the body was already throwing, so a teardown complaint would silently overwrite the actual row failure - the one thing the row exists to report. */
 async function releaseScopedTarget(release: {
   readonly bodyCompleted: boolean;
   readonly leakDescription: string;
@@ -216,9 +154,8 @@ describe.skipIf(!ENABLED)(
             expect(marker.attestation.supervisorPid).toBe(marker.supervisorPid);
             expect(marker.outcome.kind).toBe("lock-declined");
 
-            // The reconciler starts only after the supervisor is gone. It must
-            // validate the producer's embedded attestation, never query this
-            // short-lived job after the fact.
+            // The reconciler starts only after the supervisor is gone.
+            // It must validate the producer's embedded attestation, never query this short-lived job after the fact.
             await runCommand("launchctl", ["bootout", "--wait", target]);
             const postExitPrint = await runCommand("launchctl", [
               "print",
@@ -242,25 +179,14 @@ describe.skipIf(!ENABLED)(
       20_000,
     );
 
-    /*
-     * The `--layer0-status-fd` contract, end to end.
-     *
-     * Both halves of this contract were verified against their own mock and
-     * never against each other: the host side proved "absent flag is a hard
-     * no-op" with a synthetic fd, and the supervisor side proved "the flag is
-     * passed exactly when the pipe is opened" with a synthetic host. Two sides
-     * each correct about their own idea of the other is the classic way a
-     * contract fails, and this one is a blocker fix.
-     */
+    /** The `--layer0-status-fd` contract, end to end. Both halves of this contract were verified against their own mock and never against each other: the host side proved "absent flag is a hard no-op" with a synthetic fd, and the supervisor side proved "the flag is passed exactly when the pipe is opened" with a synthetic host. */
     it.skipIf(LAYER0_MISSING)(
       "layer0-status-fd (needs the internal checkout): a host launched WITHOUT the flag writes nothing, even when fd 3 is a Node IPC channel",
       async () => {
         const result = await runLayer0Producer({ passStatusFdFlag: false });
 
-        // The bug this row exists for: raw length-prefixed frames written into an
-        // fd 3 that belongs to someone else's protocol. Node's IPC decoder dies on
-        // them with "Unable to deserialize cloned data", corrupting a channel the
-        // Layer-0 code does not own. Authorization is the flag, never the fd type.
+        // The bug this row exists for: raw length-prefixed frames written into an fd 3 that belongs to someone else's protocol.
+        // Node's IPC decoder dies on them with "Unable to deserialize cloned data", corrupting a channel the Layer-0 code does not own.
         expect(result.ipcMessages).toEqual([{ layer0ProducerFinished: true }]);
         expect(result.stderr).not.toContain("Unable to deserialize");
         expect(result.ipcError).toBeNull();
@@ -269,21 +195,7 @@ describe.skipIf(!ENABLED)(
       30_000,
     );
 
-    /*
-     * The producer's frame is the CURRENT Layer-0 contract, not the one this
-     * row was written against.
-     *
-     * `unavailable` used to be a terminal outcome: no lock, no host. That made
-     * a new safety mechanism a new outage class - every machine that cannot
-     * load the native addon loses its host entirely - so the outcome was
-     * renamed `degraded` and the host now continues without the I1 guarantee.
-     * Asserting the old kind here would have kept a released gate green on a
-     * frame production can no longer emit.
-     *
-     * The frame is asserted whole rather than by discriminant alone: `cause`
-     * is what tells a reader *which* guarantee was lost, and `evidence` is the
-     * only human-readable trace of why.
-     */
+    /** The producer's frame is the CURRENT Layer-0 contract, not the one this row was written against. `unavailable` used to be a terminal outcome: no lock, no host. */
     it.skipIf(LAYER0_MISSING)(
       "layer0-status-fd (needs the internal checkout): the same host WITH the flag writes exactly one framed degraded record to the pipe it names",
       async () => {
@@ -411,29 +323,16 @@ describe.skipIf(!ENABLED)(
             pidPath,
             supervisorMarker,
           }) => {
-            // Baseline is captured before provisioning. The supervisor evidence is
-            // its real production `starting` log marker, not child-authored state.
-            // The child contributes only later pid/endpoint rungs as the contract
-            // requires.
+            // Baseline is captured before provisioning.
+            // The supervisor evidence is its real production `starting` log marker, not child-authored state.
             const install = JSON.parse(
               await readFile(installRecordPath, "utf8"),
             ) as {
               readonly installId: string;
             };
 
-            // The poll is inlined rather than driven through
-            // `waitForAttemptReadiness`. That helper had zero production
-            // callers and went with the parked decision layer; what M8 proves
-            // does not depend on it. The SUBJECT here is live: a real
-            // fallback-provisioned LaunchAgent publishing a real `pid.json`
-            // whose generation matches the install record, on a socket that
-            // really answers. `highestRung: "endpoint"` is that whole chain.
-            //
-            // Its previous budgets could never have run: 30 s initial / 90 s
-            // maximum inside a 15 s vitest deadline, so the extension path was
-            // unreachable by construction and anything slower than 15 s died
-            // on the deadline before the policy decided anything. One bound
-            // now, comfortably inside one deadline.
+            // The poll is inlined rather than driven through `waitForAttemptReadiness`.
+            // That helper had zero production callers and went with the parked decision layer; what M8 proves does not depend on it.
             const readiness = await pollForEndpointReadiness({
               deadlineMs: READINESS_BUDGET_MS,
               pollIntervalMs: 500,
@@ -453,10 +352,7 @@ describe.skipIf(!ENABLED)(
 
             expect(
               readiness.rung,
-              // On failure this is the difference between "the harness is
-              // slow" and "R3 reproduced on a clean machine", so the message
-              // has to carry the evidence rather than make someone re-run it
-              // with logging added.
+              // On failure this is the difference between "the harness is slow" and "R3 reproduced on a clean machine", so the message has to carry the evidence rather than make someone re-run it with logging added.
               `fallback host never reached the endpoint rung within ${READINESS_BUDGET_MS}ms. ` +
                 `Highest rung: ${readiness.rung}${readiness.detail === undefined ? "" : ` (${readiness.detail})`}. ` +
                 `attemptId=${supervisorMarker.attemptId} launchdPid=${supervisorMarker.launchdPid} ` +
@@ -473,37 +369,11 @@ describe.skipIf(!ENABLED)(
       READINESS_BUDGET_MS + 20_000,
     );
 
-    /*
-     * M10 — REMOVED with the parked decision layer.
-     *
-     * These rows drove `beginTransition` / `reconcileTransition` and asserted
-     * I5 under a real SIGKILL at each write-ahead phase. That choreography has
-     * zero production callers and was archived to the epic's
-     * `parked-decision-layer` artifact, so I5-under-SIGKILL is a property OF
-     * the parked reconciler: its coverage is parked by construction.
-     *
-     * They are recorded here because of HOW they broke rather than why they
-     * went. The worker was generated at runtime and imported the reconciler
-     * through a CONSTRUCTED path — `join(sharedRoot, "transition/reconciler.ts")`
-     * — which no import-statement scan can see. The carve's closure analysis
-     * called the module dead, deleted it, and every local gate stayed green
-     * because this suite is opt-in; the first real macOS runner failed it as a
-     * bare `expect(worker.killed).toBe(true)`, naming nothing about the cause.
-     *
-     * The rule that follows: a dependency expressed as DATA is invisible to
-     * static analysis, so generated-worker fixtures are exactly the shape a
-     * dead-code carve will get wrong. The remaining constructed paths in this
-     * file (the Layer-0 module) keep their existence preflight for that
-     * reason.
-     */
+    /** Parked decision layer removed; this case is no longer a launchd wedge. */
 
     it.skip("M3 (live arm): a real CDHash-invalidating registration reaches the wedge verdict — deliberately never attempted, see below", async () => {
-      // Deliberately never attempted, even under opt-in: forcing a real
-      // CDHash-invalidating wedge means re-signing (or corrupting the
-      // signature of) a real bundled binary registered with launchd — that
-      // is destructive to whatever signing identity runs the suite. The
-      // parse-only arm (golden "spawn failed" / EX_CONFIG 78 / LWCR-marker
-      // text) is already covered by T3/T5 fixtures per the ticket.
+      // Deliberately never attempted, even under opt-in: forcing a real CDHash-invalidating wedge means re-signing (or corrupting the signature of) a real bundled binary registered with launchd - that is destructive to whatever signing identity runs the suite.
+      // The parse-only arm (golden "spawn failed" / EX_CONFIG 78 / LWCR-marker text) is already covered by T3/T5 fixtures per the ticket.
     });
   },
 );
@@ -547,12 +417,7 @@ async function runCommand(
   });
 }
 
-/**
- * M8's raw fallback is intentionally independent from the reclaim probe.
- * It provisions a scoped `.fallback` launchd registration, bootstraps the
- * real CLI supervisor, reads that supervisor's production starting marker,
- * and lets its child provide only the later pid metadata and endpoint rungs.
- */
+/** M8's raw fallback is intentionally independent from the reclaim probe. It provisions a scoped `.fallback` launchd registration, bootstraps the real CLI supervisor, reads that supervisor's production starting marker, and lets its child provide only the later pid metadata and endpoint rungs. */
 async function withScopedFallbackReadiness(
   work: (result: {
     readonly baseline: {
@@ -582,11 +447,8 @@ async function withScopedFallbackReadiness(
   const domain = `gui/${uid}`;
   const target = `${domain}/${label}`;
   const plistPath = join(root, "fallback.plist");
-  // launchd gives a job no stdio unless the plist asks for it, so a
-  // supervisor that dies before its first log line leaves NOTHING anywhere:
-  // `host.log` empty, `launchctl print` happily exit 0 on a loaded label, and
-  // the temp root deleted on the way out. That is exactly the state the
-  // hosted runner reported, and it is unclassifiable without these.
+  // launchd gives a job no stdio unless the plist asks for it, so a supervisor that dies before its first log line leaves NOTHING anywhere: `host.log` empty, `launchctl print` happily exit 0 on a loaded label, and the temp root deleted on the way out.
+  // That is exactly the state the hosted runner reported, and it is unclassifiable without these.
   const supervisorStdoutPath = join(root, "supervisor.out");
   const supervisorStderrPath = join(root, "supervisor.err");
   const hostScript = join(bin, "fallback-ready-host.ts");
@@ -752,11 +614,8 @@ async function waitForSupervisorStart(
     }
     await sleep(50);
   }
-  // A bare "timed out" here is unclassifiable: it looks identical whether the
-  // runner was starving on cold I/O or the shipped `host start` genuinely
-  // fails to bootstrap under a LaunchAgent. The temp root is deleted on the
-  // way out, so whatever is not captured now is gone - dump the job state and
-  // the log the supervisor was supposed to write into the failure itself.
+  // A bare "timed out" here is unclassifiable: it looks identical whether the runner was starving on cold I/O or the shipped `host start` genuinely fails to bootstrap under a LaunchAgent.
+  // The temp root is deleted on the way out, so whatever is not captured now is gone - dump the job state and the log the supervisor was supposed to write into the failure itself.
   const stdio = await Promise.all(
     stdioPaths.map(
       async (stdioPath) => `${stdioPath}:\n${await tailFile(stdioPath, 40)}`,
@@ -772,31 +631,12 @@ async function waitForSupervisorStart(
   );
 }
 
-// Budgets live together so the vitest deadline is always derived from them
-// rather than drifting apart, which is how M8 ended up with a 30 s policy
-// budget inside a 15 s deadline. Generous on purpose: a hosted runner can
-// spend tens of seconds on cold module resolution alone before the CLI's
-// first line of work, and a slow machine must read as slow, not as broken.
+// Budgets live together so the vitest deadline is always derived from them rather than drifting apart, which is how M8 ended up with a 30 s policy budget inside a 15 s deadline.
+// Generous on purpose: a hosted runner can spend tens of seconds on cold module resolution alone before the CLI's first line of work, and a slow machine must read as slow, not as broken.
 const SUPERVISOR_START_BUDGET_MS = 60_000;
 const READINESS_BUDGET_MS = 60_000;
 
-/**
- * The interpreter the scoped LaunchAgents must run, resolved to an absolute
- * path because launchd gives a job only `/usr/bin:/bin:/usr/sbin:/sbin`.
- *
- * This used to fall back to `process.execPath`, which is wrong in the one
- * environment that matters: these suites run under vitest, and **vitest runs
- * on Node**, so `process.execPath` is the Node binary. The plists were
- * therefore launching `node src/index.ts` - Node cannot execute TypeScript
- * with workspace imports, so the supervisor died before its first line and
- * the row timed out with an empty log. It passed on developer machines only
- * because bun's installer exports `BUN_INSTALL`, so the fallback was never
- * taken there. Green locally, red in CI, and unfalsifiable from the failure
- * message.
- *
- * Now: fail loudly rather than silently launch the wrong interpreter. A
- * fixture that cannot run the thing it claims to test must say so.
- */
+/** The interpreter the scoped LaunchAgents must run, resolved to an absolute path because launchd gives a job only `/usr/bin:/bin:/usr/sbin:/sbin`. This used to fall back to `process.execPath`, which is wrong in the one environment that matters: these suites run under vitest, and **vitest runs on Node**, so `process.execPath` is the Node binary. */
 function resolveBunPath(): string {
   const candidates: string[] = [];
   if (process.env.BUN_INSTALL !== undefined) {
@@ -851,11 +691,7 @@ type ReadinessRungObservation = {
   readonly detail?: string;
 };
 
-/**
- * Bounded poll to the endpoint rung, reporting the HIGHEST rung reached
- * rather than a boolean. A timeout that says "never got past `pid`" is a
- * different bug report from one that says "never published pid.json".
- */
+/** Bounded poll to the endpoint rung, reporting the HIGHEST rung reached rather than a boolean. A timeout that says "never got past `pid`" is a different bug report from one that says "never published pid.json". */
 async function pollForEndpointReadiness(input: {
   readonly deadlineMs: number;
   readonly pollIntervalMs: number;
@@ -924,12 +760,7 @@ async function readFallbackPidMetadata(
   };
 }
 
-/**
- * A scoped launchd job that runs the real CLI supervisor from source. Its
- * temporary host executable imports T1's production `writeLayer0Frame`, so
- * this is an actual launchd supervisor → socket fd 3 → frame reader →
- * attestation → marker path, not a hand-built marker around `/bin/sleep`.
- */
+/** A scoped launchd job that runs the real CLI supervisor from source. Its temporary host executable imports T1's production `writeLayer0Frame`, so this is an actual launchd supervisor → socket fd 3 → frame reader → attestation → marker path, not a hand-built marker around `/bin/sleep`. */
 async function withScopedSupervisorProbe(
   options: {
     readonly argvLabel: "matching" | "mismatched";
@@ -957,8 +788,7 @@ async function withScopedSupervisorProbe(
   const bunPath = resolveBunPath();
   const layer0Module = layer0ModulePath();
   // This source checkout is a dev-slot CLI (`config.environment === "dev"`).
-  // Keep every lifecycle byte inside the scoped dev data root rather than
-  // assuming a production-baked executable.
+  // Keep every lifecycle byte inside the scoped dev data root rather than assuming a production-baked executable.
   const hostRoot = join(home, ".traycer", "host", "dev");
   const markerPath = join(hostRoot, "transition-probe.json");
   const installRecordPath = join(hostRoot, "install", "install.json");
@@ -971,31 +801,7 @@ async function withScopedSupervisorProbe(
   await mkdir(bin, { recursive: true });
   await mkdir(layer0LockDir, { recursive: true });
 
-  /*
-   * The host program is a real Layer-0 participant, not a frame emitter.
-   *
-   * It used to call `writeLayer0Frame({layer0: "declined", incumbentEvidence:
-   * <hard-coded>})` and never touch the lock, so breaking production
-   * acquisition entirely left this suite green — it proved transport and
-   * attestation, never "fast decline from the Layer-0 decision".
-   *
-   * Now it acquires through the real `acquireLayer0Lock` against a directory a
-   * real incumbent process already holds, so the decline and its
-   * `incumbentEvidence` (including a real `observedForMs` measured across the
-   * real retry window) are produced by production code. The addon is loaded
-   * explicitly because discovery is a separate concern with its own
-   * packaged-SEA gate; the *lock* is real — a real `flock` on a real inode,
-   * contended across real processes.
-   *
-   * This harness deliberately has no second arm. It used to accept
-   * `layer0: "unavailable"` — an `acquireHostLayer0Lock` path that fails addon
-   * discovery from a source checkout — and no caller ever passed it, so the
-   * branch sat here naming an outcome production had already renamed. An
-   * unexercised arm named after a status is how a probe "passes" against a
-   * union member that no longer exists. The degraded/`addon-load-failed` path
-   * has its own row above (`runLayer0Producer`), which really does drive
-   * `acquireHostLayer0Lock`, and its own packaged-SEA gate.
-   */
+  /** Real Layer-0 host program, not a frame emitter. */
   await writeFile(
     hostScript,
     `import { createRequire } from "node:module";
@@ -1082,9 +888,8 @@ setTimeout(() => process.exit(0), 500);
     "utf8",
   );
   cleanupTargets = [...cleanupTargets, target];
-  // A real incumbent must already hold the kernel lock, or the challenger
-  // would acquire it and there would be no decline to observe. This is the
-  // contention the row's name has always claimed.
+  // A real incumbent must already hold the kernel lock, or the challenger would acquire it and there would be no decline to observe.
+  // This is the contention the row's name has always claimed.
   const incumbent = await startLayer0Incumbent(
     root,
     layer0LockDir,
@@ -1096,9 +901,8 @@ setTimeout(() => process.exit(0), 500);
     await runCommand("launchctl", ["bootstrap", `gui/${uid}`, plistPath]);
     const marker = await waitForProbeMarker(
       markerPath,
-      // A first real launch can compile the source CLI/host fixture before
-      // it reaches fd 3. This remains a bounded test-only wait; the probe
-      // protocol itself has its own, shorter frame deadline.
+      // A first real launch can compile the source CLI/host fixture before it reaches fd 3.
+      // This remains a bounded test-only wait; the probe protocol itself has its own, shorter frame deadline.
       options.argvLabel === "matching" ? 12_000 : 1_000,
     );
     if (marker === null && options.argvLabel === "matching") {
@@ -1137,12 +941,7 @@ type Layer0ProducerResult = {
   readonly exitCode: number | null;
 };
 
-/**
- * Run the real `writeLayer0Frame` in a child whose fd 3 is a Node IPC channel
- * when the flag is withheld, and a dedicated pipe when it is passed. Both arms
- * run the *same* producer program, so the only variable is the flag — which is
- * the contract under test.
- */
+/** Run the real `writeLayer0Frame` in a child whose fd 3 is a Node IPC channel when the flag is withheld, and a dedicated pipe when it is passed. Both arms run the *same* producer program, so the only variable is the flag - which is the contract under test. */
 async function runLayer0Producer(options: {
   readonly passStatusFdFlag: boolean;
 }): Promise<Layer0ProducerResult> {
@@ -1167,11 +966,8 @@ setTimeout(() => process.exit(0), 100);
       "utf8",
     );
 
-    // `resolveBunPath` rather than a local fallback: falling back to
-    // `process.execPath` is precisely what that helper's error message
-    // forbids, because under vitest it is Node, which cannot run the
-    // entrypoint this row spawns. A silent wrong-interpreter spawn fails in a
-    // way that looks like the behaviour under test.
+    // `resolveBunPath` rather than a local fallback: falling back to `process.execPath` is precisely what that helper's error message forbids, because under vitest it is Node, which cannot run the entrypoint this row spawns.
+    // A silent wrong-interpreter spawn fails in a way that looks like the behaviour under test.
     const bunPath = resolveBunPath();
     const args = [script, "--layer0-attempt-id", "status-fd-contract"];
     if (options.passStatusFdFlag) args.push("--layer0-status-fd=3");
@@ -1233,12 +1029,7 @@ setTimeout(() => process.exit(0), 100);
   }
 }
 
-/**
- * The Layer-0 lock lives in `traycer-host`, which is **not part of the OSS
- * repository** — it exists only in the internal monorepo checkout. Rows that
- * contend on the real lock therefore cannot run from an OSS-only clone, and
- * they say so rather than passing.
- */
+/** The Layer-0 lock lives in `traycer-host`, which is **not part of the OSS repository** - it exists only in the internal monorepo checkout. Rows that contend on the real lock therefore cannot run from an OSS-only clone, and they say so rather than passing. */
 function layer0ModulePath(): string {
   return resolve(
     process.cwd(),
@@ -1253,11 +1044,7 @@ function layer0AddonPath(): string {
   );
 }
 
-/**
- * Null when this checkout cannot host the real-lock rows at all (OSS-only), a
- * reason string when it should be able to but something is missing (internal
- * checkout with an unbuilt addon — a hard failure, not a skip).
- */
+/** Null when this checkout cannot host the real-lock rows at all (OSS-only), a reason string when it should be able to but something is missing (internal checkout with an unbuilt addon - a hard failure, not a skip). */
 function layer0Availability():
   | { readonly kind: "available" }
   | { readonly kind: "not-internal-checkout" }
@@ -1278,12 +1065,7 @@ function layer0Availability():
   return { kind: "available" };
 }
 
-/**
- * A real second process holding the real kernel lock on `lockDir`. Resolves
- * only once it has actually acquired — starting the challenger before the
- * incumbent holds the lock would let the challenger win and silently turn the
- * decline row into an acquisition row.
- */
+/** A real second process holding the real kernel lock on `lockDir`. Resolves only once it has actually acquired - starting the challenger before the incumbent holds the lock would let the challenger win and silently turn the decline row into an acquisition row. */
 async function startLayer0Incumbent(
   root: string,
   lockDir: string,
@@ -1353,17 +1135,7 @@ async function waitForProbeMarker(
   return null;
 }
 
-/**
- * POSIX single-quote for the `/bin/sh` wrappers these rows write.
- *
- * This carried the exact defect `posixShellQuote` documents as already fixed
- * in `service/platforms/host-start-script.ts`: `"'\\\"'\\\"'"` is the JS
- * string `'\"'\"'`, which is neither `'\''` nor `'"'"'` and leaves the quote
- * unterminated, so `sh` dies with "unexpected EOF" before anything runs.
- * Unreachable with today's tmp paths, which contain no quotes - but a fixture
- * whose wrapper cannot be parsed is a row that proves nothing, and this file
- * is the one place a real launchd job is actually spawned.
- */
+/** POSIX single-quote for the `/bin/sh` wrappers these rows write. This carried the exact defect `posixShellQuote` documents as already fixed in `service/platforms/host-start-script.ts`: `"'\\\"'\\\"'"` is the JS string `'\"'\"'`, which is neither `'\''` nor `'"'"'` and leaves the quote unterminated, so `sh` dies with "unexpected EOF" before anything runs. */
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }

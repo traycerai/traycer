@@ -1,7 +1,5 @@
 /**
- * Pins the frozen on-disk CLI invocation contract that the OSS CLI writer
- * and the host reader must share: filenames relative to the host runtime
- * home, schemaVersion 1 parse, platform mapping, and bounds.
+ * Pins the frozen on-disk CLI invocation contract that the OSS CLI writer and the host reader must share: filenames relative to the host runtime home, schemaVersion 1 parse, platform mapping, and bounds.
  */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -477,10 +475,7 @@ describe("cliInvocationTransactionAbandonedByAge", () => {
         now,
       ),
     ).toBe(false);
-    // A clock stepped back after the marker was written: the marker is not
-    // old, and the observers that reach this window are the ones that could
-    // not verify the owner's liveness, so it must keep blocking rather than
-    // let a second writer elect around a running owner.
+    // A clock stepped back after the marker was written: the marker is not old, and the observers that reach this window are the ones that could not verify the owner's liveness, so it must keep blocking rather than let a.
     expect(
       cliInvocationTransactionAbandonedByAge(
         now + CLI_INVOCATION_TXN_ABANDON_AFTER_MS,
@@ -501,10 +496,6 @@ describe("parseCliInvocationLifecycle", () => {
   });
 
   it("tolerates unknown keys", () => {
-    // Spread the WIRE-shaped (serialized-then-parsed) form, not the typed
-    // LIFECYCLE_SAMPLE directly: the typed object carries `legacyMarkerEvidence`,
-    // not the wire's `supersededLegacyMarkerDigest`, and the parser reads the
-    // latter.
     const wireShaped = JSON.parse(
       serializeCliInvocationLifecycle(LIFECYCLE_SAMPLE),
     );
@@ -620,9 +611,7 @@ describe("parseCliInvocationLifecycle", () => {
   });
 
   it("never confuses a 64-hex digest with the 'unreadable' literal", () => {
-    // "unreadable" is not valid hex, and a genuine 64-hex digest (even one
-    // built entirely from hex-looking characters like repeated "f") must
-    // never be misread as the literal marker for the unreadable state.
+    // "unreadable" is not valid hex, and a genuine 64-hex digest (even one built entirely from hex-looking characters like repeated "f") must never be misread as the literal marker for the unreadable state.
     const digest = "f".repeat(64);
     expect(
       parseCliInvocationLifecycle({
@@ -748,12 +737,7 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
   });
 
   it("returns false when the digest differs even though `at` is LATER than the marker", () => {
-    // A non-null digest is evidence AGAINST supersession when it names a
-    // different marker incarnation, not absence of evidence - so it must
-    // not fall back to the timestamp rule even when the timestamp alone
-    // would say "later, therefore superseded". Falling back here would let
-    // a backward clock step on an older CLI discharge a transaction that
-    // started after this lifecycle was written.
+    // A non-null digest is evidence AGAINST supersession when it names a different marker incarnation, not absence of evidence - so it must not fall back to the timestamp rule even when the timestamp alone would say "later.
     expect(
       cliInvocationLifecycleSupersedesLegacyExactMarker(
         { parsed: TXN_SAMPLE, digest },
@@ -767,11 +751,7 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
   });
 
   it("falls back to the timestamp rule when evidence is unknown (pre-field lifecycle) and `at` is later", () => {
-    // Renamed from the old "field is null" framing: `null` on the wire is now
-    // `none` evidence, which never falls back to the clock (see the sibling
-    // test below). Only `unknown` - a lifecycle written by a CLI that
-    // predates the field - has no causal evidence at all and falls back to
-    // comparing timestamps.
+    // Renamed from the old "field is null" framing: `null` on the wire is now `none` evidence, which never falls back to the clock (see the sibling test below).
     expect(
       cliInvocationLifecycleSupersedesLegacyExactMarker(
         { parsed: TXN_SAMPLE, digest },
@@ -785,11 +765,7 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
   });
 
   it("an UNPARSEABLE marker (`parsed: null`) is discharged by a matching digest, and by nothing else", () => {
-    // The digest is over the marker's bytes, so a corrupt legacy marker the
-    // CLI elected around is still one its lifecycle can name. The timestamp
-    // fallback has no start to order and refuses. Without the first half a
-    // corrupt marker - which no writer unlinks - kept every host off a
-    // record the CLI had just reported committing.
+    // The digest is over the marker's bytes, so a corrupt legacy marker the CLI elected around is still one its lifecycle can name.
     const corruptDigest = cliInvocationTransactionMarkerDigest(
       Buffer.from("not json{", "utf8"),
     );
@@ -826,9 +802,7 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
   });
 
   it("returns false for `none` evidence even when `at` is later than the marker", () => {
-    // `none` means a CURRENT CLI acquired and positively saw no legacy
-    // marker - so any legacy marker present now was created afterwards, by
-    // an older CLI, and must never be discharged whatever the clocks say.
+    // `none` means a CURRENT CLI acquired and positively saw no legacy marker - so any legacy marker present now was created afterwards, by an older CLI, and must never be discharged whatever the clocks say.
     // Unlike `unknown`, this never falls back to the timestamp rule.
     expect(
       cliInvocationLifecycleSupersedesLegacyExactMarker(
@@ -843,9 +817,7 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
   });
 
   it("returns false for `unknown` evidence when `at` is earlier than the marker", () => {
-    // The `unknown` fallback still applies the timestamp rule, and that rule
-    // requires `at` strictly after the marker - an earlier `at` is not
-    // supersession.
+    // The `unknown` fallback still applies the timestamp rule, and that rule requires `at` strictly after the marker - an earlier `at` is not supersession.
     expect(
       cliInvocationLifecycleSupersedesLegacyExactMarker(
         { parsed: TXN_SAMPLE, digest },
@@ -859,14 +831,8 @@ describe("cliInvocationLifecycleSupersedesLegacyExactMarker", () => {
   });
 
   it("`unreadable` evidence never discharges the legacy marker, even when `at` is later", () => {
-    // `unreadable` is causal evidence like `none`, not an absence of it: a
-    // legacy marker was positively present and abandoned when this
-    // transaction acquired, but its bytes could not be read - there is no
-    // digest to compare, and unlike `unknown` (a pre-field lifecycle that
-    // recorded nothing) it must never fall back to the clock either. Falling
-    // back would let a later transaction's unreadable evidence discharge a
-    // marker it never proved postdates it, exactly the hazard `none` guards
-    // against.
+    // `unreadable` is causal evidence like `none`, not an absence of it: a legacy marker was positively present and abandoned when this transaction acquired, but its bytes could not be read - there is no digest to compare.
+    // Falling back would let a later transaction's unreadable evidence discharge a marker it never proved postdates it, exactly the hazard `none` guards against.
     expect(
       cliInvocationLifecycleSupersedesLegacyExactMarker(
         { parsed: TXN_SAMPLE, digest },

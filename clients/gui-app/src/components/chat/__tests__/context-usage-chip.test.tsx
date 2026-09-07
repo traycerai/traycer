@@ -179,9 +179,8 @@ describe("percentLeft", () => {
   });
 
   it("uses adapter-normalized contextTokens (OpenAI-style subset)", () => {
-    // Cursor adapter sets contextTokens = inputTokens (cache_read is a
-    // SUBSET of input, not additive). Without this normalization the
-    // renderer's old additive math read past 100% used.
+    // Cursor adapter sets contextTokens = inputTokens (cache_read is a SUBSET of input, not additive).
+    // Without this normalization the renderer's old additive math read past 100% used.
     expect(
       percentLeft({
         inputTokens: 50_000,
@@ -301,10 +300,8 @@ describe("ContextUsageChip", () => {
   });
 
   it("hides when contextWindow is absent (Cursor)", () => {
-    // Cursor's SDK exposes `TurnEndedUpdate.usage` but no contextWindow on
-    // any public surface, so % can't be computed. We don't fall back to
-    // raw token counts - showing tokens without a denominator is
-    // misleading, and any hardcoded window would lie. Chip just hides.
+    // Cursor's SDK exposes `TurnEndedUpdate.usage` but no contextWindow on any public surface, so % can't be computed.
+    // We don't fall back to raw token counts - showing tokens without a denominator is misleading, and any hardcoded window would lie.
     const { container } = render(
       <ContextUsageChip
         usage={{

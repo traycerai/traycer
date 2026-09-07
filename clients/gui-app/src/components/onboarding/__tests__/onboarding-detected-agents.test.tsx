@@ -36,13 +36,8 @@ type AwaitLoginCompletion = {
     // The host's "my auth probe has not answered yet" flag. Carried here
     // because the button's decision depends on it, not just on `status`.
     readonly authPending: boolean;
-    // REQUIRED, exactly as on the wire: `providerCliStateBaseShapeV40` gives
-    // `profiles` a `.catch([])`, so a parsed response always carries an array,
-    // and the hook that consumes this response already maps over it
-    // unguarded. Optional here would let a fixture omit the ambient ROW that
-    // the button's verdict reconciles against the top-level status - the
-    // divergence between these two signals is the whole subject of the
-    // `isProviderAmbientAuthenticated` tests below.
+    // Required, exactly as on the wire: `providerCliStateBaseShapeV40` gives `profiles` a `.catch([])`, so a
+    // parsed response always carries an array.
     readonly profiles: readonly {
       readonly kind: string;
       readonly auth: { readonly status: string };
@@ -63,11 +58,8 @@ type SetEnabledMutate = (variables: {
   readonly profileAction: unknown;
 }) => void;
 
-// `codex` is disabled with a DETECTED candidate, so it's the one row that
-// satisfies `providerNeedsSignInToEnable` (`!state.enabled && installDetected`)
-// and renders `SignInToEnableButton` - every other provider's row has no
-// cached `ProviderCliState` at all, so its trailing content is null and
-// cannot collide with the role queries below.
+// `codex` is disabled with a detected candidate, so it's the one row that satisfies
+// `providerNeedsSignInToEnable` (`!state.enabled && installDetected`) and renders `SignInToEnableButton`.
 const fixtures = vi.hoisted(() => {
   const signInProvider: ProviderCliState = {
     providerId: "codex",
@@ -98,9 +90,8 @@ const fixtures = vi.hoisted(() => {
       oauthArgs: ["auth", "login"],
       token: null,
       codePaste: null,
-      // Present but no terminal command: `providerSignInUnavailableHint`
-      // requires this so the button (not the "Not signed in" tooltip
-      // fallback) is what actually renders.
+      // Present but no terminal command: `providerSignInUnavailableHint` requires this so the button (not the "Not
+      // signed in" tooltip fallback) is what actually renders.
       terminalLogin: null,
     },
     availabilityPending: false,
@@ -125,11 +116,8 @@ const fixtures = vi.hoisted(() => {
     startLoginData: undefined as StartLoginData | undefined,
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
     awaitLoginReset: vi.fn(),
-    // Modelled for the same reason `startLogin`'s are: the component derives
-    // its "did not authenticate" row message from the mutation RESULT rather
-    // than from local state, so a mock that carried only `mutate` would leave
-    // that message permanently unrenderable - and the test asserting it
-    // permanently vacuous.
+    // Modelled for the same reason `startLogin`'s are: the component derives its "did not authenticate" row
+    // message from the mutation result rather than from local state.
     awaitLoginSuccess: false,
     awaitLoginData: undefined as AwaitLoginCompletion | undefined,
     setEnabledMutate: vi.fn<SetEnabledMutate>(),
@@ -169,9 +157,8 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
     isPending: false,
     isSuccess: fixtures.awaitLoginSuccess,
     data: fixtures.awaitLoginData,
-    // Modelled as the real one behaves - clearing the result - rather than as a
-    // bare spy, so a test can assert the CONSEQUENCE (no stale verdict on the
-    // next attempt) instead of merely that a function was called.
+    // Modelled as the real one behaves - clearing the result - rather than as a bare spy, so a test can assert the
+    // consequence (no stale verdict on the next attempt) instead of merely that a function was called.
     reset: () => {
       fixtures.awaitLoginReset();
       fixtures.awaitLoginSuccess = false;
@@ -220,11 +207,8 @@ function signInButton(): HTMLElement {
   return screen.getByRole("button", { name: /sign in & enable/i });
 }
 
-/**
- * The whole mutable surface of `fixtures`, back to its declared state. Shared
- * by every block below: this suite mocks its hooks at module scope, so a value
- * left set by one test is read by the next one that renders.
- */
+/** Shared by every block below: this suite mocks its hooks at module scope, so a value left set by one test is
+ * read by the next one that renders. */
 function resetFixtures(): void {
   cleanup();
   fixtures.providers = [];
@@ -241,13 +225,7 @@ function resetFixtures(): void {
   fixtures.toastError.mockReset();
 }
 
-/**
- * Render the codex row and drive it to the point where the login started.
- *
- * `strict` renders under `<StrictMode>`, which is how the desktop and mobile
- * dev builds actually mount this act - and the one place an effect runs
- * setup -> cleanup -> setup.
- */
+/** Render the codex row and drive it to the point where the login started. */
 function startSignInAttempt(strict: boolean): RenderResult {
   fixtures.providers = [fixtures.signInProvider];
   const tree = <OnboardingDetectedAgents />;
@@ -289,9 +267,8 @@ describe("OnboardingDetectedAgents", () => {
       "Reasonix",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
-    // Longest match, not first match: display names overlap ("Pi" is a
-    // substring of "Oh My Pi"), so a first-match probe would label the Oh My Pi
-    // row "Pi" and silently pass a wrong order.
+    // Longest match, not first match: display names overlap ("Pi" is a substring of "Oh My Pi"), so a first-match
+    // probe would label the Oh My Pi row "Pi" and silently pass a wrong order.
     const longestMatch = (text: string): string =>
       expectedNames
         .filter((name) => text.includes(name))
@@ -309,12 +286,8 @@ describe("OnboardingDetectedAgents", () => {
   });
 
   it("shows only the toggle for a disabled traycer row - no sign-in affordance, no 'Not signed in' fallback", () => {
-    // Traycer seeds disabled on purpose (its inference bills credits), and its
-    // account IS the host session - there is nothing to sign into. Without the
-    // traycer guard in `providerNeedsSignInToEnable`, the row would fall
-    // through `providerSignInUnavailableHint` to a muted "Not signed in",
-    // which is exactly backwards for the one provider that is always signed
-    // in. The enable toggle is the whole gesture.
+    // Without the traycer guard in `providerNeedsSignInToEnable`, the row would fall through
+    // `providerSignInUnavailableHint` to a muted "Not signed in".
     fixtures.providers = [
       {
         ...fixtures.signInProvider,
@@ -333,15 +306,10 @@ describe("OnboardingDetectedAgents", () => {
     ).toBeTruthy();
   });
 
-  // "Off" is not evidence that an account is missing. These two rows carry
-  // POSITIVE evidence of credentials that needs no probe, so the sign-in
-  // affordance is wrong on both - the row is one toggle away from working.
+  // "Off" is not evidence that an account is missing.
   it("shows only the toggle for a disabled provider whose API key is already configured", () => {
-    // The actively wrong case, not merely the redundant one. An API-key-only
-    // provider ships no `oauthArgs`, so it fell to
-    // `providerSignInUnavailableHint`'s first branch and rendered a muted "Not
-    // signed in" over a key the user had already set - under a hint telling
-    // them to go set one.
+    // An API-key-only provider ships no `oauthArgs`, so it fell to `providerSignInUnavailableHint`'s first branch
+    // and rendered a muted "Not signed in" over a key the user had already set.
     fixtures.providers = [
       {
         ...fixtures.signInProvider,
@@ -359,15 +327,7 @@ describe("OnboardingDetectedAgents", () => {
   });
 
   it("enables directly, without a login, for a disabled provider that is already signed in", () => {
-    // A provider the user deliberately switched off keeps its account, so the
-    // remaining gesture is the ENABLE. Starting an OAuth round trip would
-    // arrive exactly where they already were - and a CLI that refuses to start
-    // a login while signed in answers `started: false`, so the press would
-    // report a failure for a state that is not one.
-    //
-    // The row still MOUNTS: the auth verdict decides what a press does, never
-    // whether the row exists. Keying mounting on it is what strands the enable
-    // (see the mid-attempt test below).
+    // The row still mounts: the auth verdict decides what a press does, never whether the row exists.
     fixtures.providers = [
       {
         ...fixtures.signInProvider,
@@ -388,10 +348,8 @@ describe("OnboardingDetectedAgents", () => {
   });
 });
 
-// A disabled row's "Sign in & enable" button and enable switch live in the
-// same trailing area the dim treatment recedes around them, not over them -
-// a row-level opacity would ghost an outline button to near invisibility. The
-// dim belongs to the identity pieces (icon, label, badge) alone.
+// A disabled row's "Sign in & enable" button and enable switch live in the same trailing area the dim
+// treatment recedes around them, not over them.
 describe("OnboardingDetectedAgents row dimming", () => {
   afterEach(resetFixtures);
 
@@ -412,11 +370,7 @@ describe("OnboardingDetectedAgents row dimming", () => {
   });
 });
 
-// Regression coverage for the declined-sign-in path: the GUI rules
-// (`clients/gui-app/AGENTS.md`, "Backend calls -> TanStack Query") forbid
-// ad-hoc `toast.error` in components, so a `providers.startLogin` success with
-// `started: false` must render as an inline row error DERIVED from the
-// mutation result, not a toast and not `useState`.
+// Declined sign-in (`started: false`) is an inline row error from the mutation result, not a toast.
 describe("SignInToEnableButton declined sign-in", () => {
   afterEach(resetFixtures);
 
@@ -480,9 +434,8 @@ describe("SignInToEnableButton declined sign-in", () => {
     }
     const [, awaitOptions] = awaitCall;
 
-    // A cancelled/failed login (null state) and a signed-out completion must
-    // both leave the sticky choice alone - the button is "sign in TO enable",
-    // and only a completed, authenticated login is that gesture.
+    // A cancelled/failed login (null state) and a signed-out completion must both leave the sticky choice alone -
+    // the button is "sign in TO enable", and only a completed, authenticated login is that gesture.
     act(() => {
       awaitOptions.onSuccess({ state: null });
       awaitOptions.onSuccess({
@@ -526,9 +479,8 @@ describe("SignInToEnableButton declined sign-in", () => {
     view.rerender(<OnboardingDetectedAgents />);
     expect(screen.getByRole("alert")).toBeTruthy();
 
-    // A fresh `mutate()` resets `isSuccess` synchronously, before the new
-    // attempt resolves - the derived `declined` flag must clear at that
-    // point, not only once the retry succeeds.
+    // A fresh `mutate` resets `isSuccess` synchronously, before the new attempt resolves - the derived `declined`
+    // flag must clear at that point, not only once the retry succeeds.
     fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     act(() => {
       fixtures.startLoginPending = true;
@@ -568,18 +520,14 @@ describe("SignInToEnableButton declined sign-in", () => {
   });
 });
 
-// The window where `providers.awaitLogin` has settled but the host's ambient
-// auth probe has not. It is not a verdict, and a button whose whole promise is
-// "Sign in & enable" must not silently decline to enable on one.
+// It is not a verdict, and a button whose whole promise is "Sign in & enable" must not silently decline to
+// enable on one.
 describe("SignInToEnableButton unsettled auth verdict", () => {
   afterEach(resetFixtures);
 
   it("re-polls an unsettled ambient verdict instead of reading it as a failed sign-in", () => {
-    // The host's `providers.awaitLogin` can settle before its auth probe does
-    // (the login runner evicts the ambient cache when the child closes; older
-    // hosts always assemble the response from a non-blocking probe). Reading
-    // that window as "not authenticated" would make a button called "Sign in
-    // to enable" complete a successful sign-in and then silently not enable.
+    // Reading that window as "not authenticated" would make a button called "Sign in to enable" complete a
+    // successful sign-in and then silently not enable.
     vi.useFakeTimers();
     try {
       startSignInAttempt(false);
@@ -595,9 +543,8 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
         });
       });
       expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
-      // Still this button's work, so it stays busy: neither mutation is in
-      // flight during the gap, and an idle-looking button invites a second
-      // login child for a sign-in that is about to land.
+      // Still this button's work, so it stays busy: neither mutation is in flight during the gap, and an
+      // idle-looking button invites a second login child for a sign-in that is about to land.
       expect(signInButton()).toHaveProperty("disabled", true);
 
       act(() => {
@@ -662,9 +609,8 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
   });
 
   it("treats a DEFINITIVE unauthenticated verdict as final, pending flag or not", () => {
-    // `authPending` alone does not buy time - only an unsettled STATUS does.
-    // A host that reports a settled `unauthenticated` while some other probe
-    // is still running has already answered this question.
+    // `authPending` alone does not buy time - only an unsettled status does. A host that reports a settled
+    // `unauthenticated` while some other probe is still running has already answered this question.
     vi.useFakeTimers();
     try {
       startSignInAttempt(false);
@@ -692,9 +638,6 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
   });
 });
 
-// The attempt that ends without an account used to end SILENTLY: the spinner
-// stopped, the switch had not moved, and nothing said the enable this button
-// promises had not happened.
 describe("SignInToEnableButton unauthenticated outcome", () => {
   afterEach(resetFixtures);
 
@@ -718,15 +661,8 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     },
   ];
 
-  /**
-   * Settle the attempt and re-render.
-   *
-   * The mock has to advance the way the real hook does - `isSuccess`/`data`
-   * carry the completion once the mutation resolves, and the message is DERIVED
-   * from them. The explicit re-render is not ceremony: `handleCompletion` ends
-   * these paths with `setSettling(false)` while `settling` is ALREADY false, so
-   * React bails out and nothing re-reads the fixtures on its own.
-   */
+  /** The explicit re-render is not ceremony: `handleCompletion` ends these paths with `setSettling(false)` while
+   * `settling` is already false, so React bails out and nothing re-reads the fixtures on its own. */
   function settleWith(
     view: RenderResult,
     completion: AwaitLoginCompletion,
@@ -766,12 +702,8 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   });
 
   it("retries the ENABLE, not the login, after an authenticated sign-in whose enable failed", () => {
-    // Sign-in succeeded; the enable is what did not take, so the row is still
-    // off and this button is still rendered. Pressing it again must resume at
-    // the failed step. Restarting the login is not just wasted work: a CLI that
-    // refuses to start one while already signed in answers `started: false`, so
-    // the retry would report "sign-in did not start" and the button could never
-    // do what it advertises.
+    // Restarting the login is not just wasted work: a CLI that refuses to start one while already signed in
+    // answers `started.
     const view = startSignInAttempt(false);
     settleWith(view, {
       state: {
@@ -790,12 +722,8 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   });
 
   it("does not carry a settled verdict into an attempt that never started", () => {
-    // The two messages are only mutually exclusive because each attempt RESETS
-    // the await mutation. Without that, attempt 1's completion outlives it: a
-    // retry whose `startLogin` comes back `started: false` never calls
-    // `awaitLogin`, ends pending, and the row renders "did not start" AND "did
-    // not complete" together - the second describing an attempt the user has
-    // already moved on from.
+    // Without that, attempt 1's completion outlives it: a retry whose `startLogin` comes back `started: false`
+    // never calls `awaitLogin`, ends pending, and the row renders "did not start" and "did not complete" together.
     const view = startSignInAttempt(false);
     settleWith(view, { state: null });
     expect(screen.getByRole("alert").textContent).toContain("did not complete");
@@ -819,9 +747,8 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   });
 
   it("hides the previous verdict while a fresh attempt is running", () => {
-    // `startLogin.mutate` does not touch `awaitLogin`, so its `data` survives
-    // into the retry it is no longer about. Without the pending gate the row
-    // would accuse the attempt that is currently spinning.
+    // `startLogin.mutate` does not touch `awaitLogin`, so its `data` survives into the retry it is no longer
+    // about. Without the pending gate the row would accuse the attempt that is currently spinning.
     const view = startSignInAttempt(false);
     settleWith(view, { state: null });
     expect(screen.getByRole("alert").textContent).toContain("did not complete");
@@ -834,15 +761,11 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  // The completion carries TWO views of the same ambient login - the top-level
-  // summary and the ambient profile ROW - and they converge at different
-  // times. Deciding on the summary alone is wrong in both directions, so both
-  // directions are pinned here.
+  // The completion carries two views of the same ambient login - the top-level summary and the ambient profile
+  // row - and they converge at different times.
   it("enables on an ambient PROFILE row that authenticates before the summary does", () => {
-    // Summary still lagging at a non-definitive `unavailable`, and no probe in
-    // flight (`authPending: false`), so nothing re-polls. Reading only the
-    // top-level status calls a successful sign-in a failure and states "did not
-    // complete" over an account that is in fact signed in.
+    // Reading only the top-level status calls a successful sign-in a failure and states "did not complete" over an
+    // account that is in fact signed in.
     settleWith(startSignInAttempt(false), {
       state: {
         auth: { status: "unavailable" },
@@ -858,11 +781,7 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   });
 
   it("refuses to enable when the ambient row definitively contradicts a stale top-level authenticated", () => {
-    // Signed-out wins. The auth poison and the probe-less `providers.list`
-    // path stamp a definitive `unauthenticated` on the ambient ROW the instant
-    // a credential fails, while the summary can still be carrying the previous
-    // `authenticated`. Enabling on the stale half hands the user a provider
-    // whose next turn cannot run.
+    // Enabling on the stale half hands the user a provider whose next turn cannot run.
     settleWith(startSignInAttempt(false), {
       state: {
         auth: { status: "authenticated" },
@@ -876,10 +795,7 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   });
 
   it("reads the AMBIENT row only - a managed profile is not the terminal account", () => {
-    // This button always signs in ambiently (`profileId: null`), so a healthy
-    // MANAGED profile says nothing about whether the terminal account got an
-    // account. A verdict that scanned every row would enable here on the
-    // strength of a login this attempt never performed.
+    // A verdict that scanned every row would enable here on the strength of a login this attempt never performed.
     settleWith(startSignInAttempt(false), {
       state: {
         auth: { status: "unauthenticated" },
@@ -893,18 +809,14 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
   });
 });
 
-// Two ways the button can look done while it is not: an unmount latch that
-// StrictMode leaves stuck on, and a spinner that stops at the AUTHENTICATION
-// boundary rather than the enable this button actually promises.
+// Two ways the button can look done while it is not: an unmount latch that StrictMode leaves stuck on, and a
+// spinner that stops at the authentication boundary rather than the enable this button actually promises.
 describe("SignInToEnableButton pending lifecycle", () => {
   afterEach(resetFixtures);
 
   it("still enables under StrictMode, whose effects run setup - cleanup - setup", () => {
-    // The dev builds mount this act inside `<StrictMode>`, so the unmount
-    // latch is set by that first throwaway cleanup. A latch that is only ever
-    // SET would then make every completion return early for the life of the
-    // button - the sign-in completes and the provider silently stays off,
-    // exactly where a developer would be looking at it.
+    // A latch that is only ever set would then make every completion return early for the life of the button - the
+    // sign-in completes and the provider silently stays off, exactly where a developer would be looking at it.
     startSignInAttempt(true);
 
     act(() => {
@@ -925,10 +837,8 @@ describe("SignInToEnableButton pending lifecycle", () => {
   });
 
   it("stays pending through the enable, not just through the authentication", () => {
-    // `providers.setEnabled` is the parent's mutation and the row only flips
-    // once its refresh lands, so between those two moments the button would
-    // otherwise re-arm - long enough for a second press to spawn a redundant
-    // login child for a provider already being turned on.
+    // `providers.setEnabled` is the parent's mutation and the row only flips once its refresh lands, so between
+    // those two moments the button would otherwise re-arm.
     const view = startSignInAttempt(false);
 
     act(() => {
@@ -964,14 +874,8 @@ describe("SignInToEnableButton mount survival", () => {
   afterEach(resetFixtures);
 
   it("stays mounted when the authenticated echo lands before the completion callback", () => {
-    // `awaitLogin`'s own `onSuccess` overlays the authenticated echo into
-    // `providers.list` and AWAITS that invalidation before TanStack runs the
-    // per-`mutate` `onSuccess` this button enables from - and TanStack drops
-    // those per-call callbacks once the observer unmounts
-    // (`use-host-scoped-mutation.ts`). So a mount gate that reads the ambient
-    // auth verdict deletes this row in exactly that window: the account
-    // authenticates and the provider stays OFF, which is the single outcome
-    // this button exists to prevent.
+    // `awaitLogin`'s own `onSuccess` overlays the authenticated echo into `providers.list` and awaits that
+    // invalidation before TanStack runs the per-`mutate` `onSuccess` this button enables from.
     const view = startSignInAttempt(false);
 
     // The overlay: authenticated now, still disabled.
@@ -1009,18 +913,13 @@ describe("SignInToEnableButton mount survival", () => {
   });
 });
 
-// Sign-in AVAILABILITY and sign-in NECESSITY are different questions, and the
-// row asked the first one first. For an account that needs no login the answer
-// is irrelevant, and letting it win renders a false status over a working
-// account while withholding the only action left.
+// For an account that needs no login the answer is irrelevant, and letting it win renders a false status over
+// a working account while withholding the only action left.
 describe("SignInToEnableButton already-authenticated with sign-in unavailable", () => {
   afterEach(resetFixtures);
 
   it("enables an authenticated provider that cannot start a browser sign-in", () => {
-    // No `oauthArgs`, so `providerSignInUnavailableHint` is non-null and its
-    // early return used to win - rendering the muted "Not signed in" fallback
-    // over an authenticated account. The same shape is reached by a
-    // terminal-login provider and by any OAuth provider on a remote host.
+    // The same shape is reached by a terminal-login provider and by any OAuth provider on a remote host.
     fixtures.providers = [
       {
         ...fixtures.signInProvider,
@@ -1044,9 +943,8 @@ describe("SignInToEnableButton already-authenticated with sign-in unavailable", 
   });
 
   it("still shows the unavailable hint when the account is NOT signed in", () => {
-    // The gate is skipped only for an authenticated account. Without this
-    // control the fix above would read as "the hint never renders", which
-    // would be a different bug wearing the same green.
+    // The gate is skipped only for an authenticated account. Without this control the fix above would read as "the
+    // hint never renders", which would be a different bug wearing the same green.
     fixtures.providers = [
       { ...fixtures.signInProvider, loginCapability: null },
     ];

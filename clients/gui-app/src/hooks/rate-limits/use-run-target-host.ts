@@ -7,20 +7,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { RateLimitQueueConfig } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 /**
- * The host scope one profile-usage-comparison consumer (the model picker's
- * profile selector) needs to observe and refresh rate-limit data for the host
- * that will actually execute the next run - never the app-wide default host
- * substituted in its place.
- *
- * - `hostId`/`isReady` come from `useReactiveHostReadiness` bound to the
- *   SAME client `queueScope` closes over, so a query key built from `hostId`
- *   and an enqueue routed through `queueScope` always agree on which host
- *   they target, even while the client is still resolving (both read `null`
- *   until the same client reports ready).
- * - `queueScope` is `null` whenever `client` is `null` or not yet ready - the
- *   same "no scope, no enqueue" contract `enqueueRateLimitFetchForScope`
- *   already treats as a safe no-op, so a caller can enqueue unconditionally
- *   without its own readiness gate.
+ * Observe the host that will run the next turn, never the app-wide default. `hostId`/`isReady` and `queueScope` close over the same client so they cannot disagree.
  */
 export interface RunTargetHost {
   readonly hostId: string | null;
@@ -29,15 +16,7 @@ export interface RunTargetHost {
   readonly queueScope: RateLimitQueueConfig | null;
 }
 
-/**
- * Resolves the explicit run-target host - a tab's lifetime-bound host id, or
- * `null` for the app-wide default host - to the client/readiness/queue-scope
- * trio every profile-usage-comparison hook needs, all derived from the SAME
- * `useHostClientForHostId` resolution so they can never disagree about which
- * host is being observed. `useHostClientForHostId` never substitutes the
- * default host for a non-null `runTargetHostId`: an unresolved tab host keeps
- * an identity requester, but has no ready queue scope until its row appears.
- */
+/** Resolves the explicit run-target host - a tab's lifetime-bound host id, or `null` for the app-wide default host - to the client/readiness/queue-scope trio every profile-usage-comparison hook needs, all derived from the SAME `useHostClientForHostId` resolution so they can never disagree about which host is being observed. */
 export function useRunTargetHost(
   runTargetHostId: string | null,
 ): RunTargetHost {

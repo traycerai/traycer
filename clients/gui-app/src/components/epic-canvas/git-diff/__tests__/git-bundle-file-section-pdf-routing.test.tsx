@@ -1,9 +1,3 @@
-/**
- * PDF routing in BUNDLE diff rows: the aggregated view composes the same
- * per-type views as the single-file tile (the image branch is the
- * precedent), so a .pdf row renders the compact summary block by extension
- * alone - there is no host-version gate on this routing decision.
- */
 import type { ReactNode } from "react";
 import {
   afterEach,
@@ -58,11 +52,6 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
   },
 }));
 
-// `git-bundle-file-section.tsx` no longer imports `useHostMethodSchemaVersion`
-// - `routeToPdfCards` is decided purely by `gitRoutesToPdfDiffCards(file)`.
-// `useHostSupportsMethod` stays mocked defensively; nothing in this render
-// tree currently calls it, but `PdfDiffView` shares the module with code
-// paths that do.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => false,
 }));
@@ -258,10 +247,6 @@ afterEach(() => {
 });
 
 describe("<BundleFileSection /> PDF routing", () => {
-  // No host-version gate remains here: `routeToPdfCards` is decided purely
-  // by `gitRoutesToPdfDiffCards(file)`, so this single test now covers what
-  // used to be split across a known-1.1, an unknown-handshake, and a
-  // known-1.0 case.
   it("routes a binary PDF row to the summary cards", () => {
     renderSection(file({ path: "docs/report.pdf", isBinary: true }));
 

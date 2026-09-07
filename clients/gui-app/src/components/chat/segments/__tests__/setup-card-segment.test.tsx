@@ -120,9 +120,8 @@ function workspace(
   };
 }
 
-// The live (still-open) lifecycle by default. Stranded-historical cases spread
-// `{ ...viewModel(...), isActive: false }` to model a window closed by a
-// boundary while a workspace was still setting up.
+// The live (still-open) lifecycle by default.
+// Stranded-historical cases spread `{ ...viewModel(...), isActive: false }` to model a window closed by a boundary while a workspace was still setting up.
 function viewModel(
   state: SetupWorkspaceState,
   workspaces: ReadonlyArray<SetupCardWorkspace>,
@@ -409,9 +408,7 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
   });
 
   it("toasts the per-entry error when the re-provision resolves with a failed entry", () => {
-    // A failed entry does NOT reject the RPC - it rides `perEntry` on a
-    // successful response - so the hook-level onError toast never fires and
-    // the per-call onSuccess must surface it instead.
+    // A failed entry does NOT reject the RPC - it rides `perEntry` on a successful response - so the hook-level onError toast never fires and the per-call onSuccess must surface it instead.
     const folderIntent = {
       kind: "worktree" as const,
       workspacePath: "/repo",
@@ -655,7 +652,6 @@ describe("<SetupCardSegment /> multi-repo", () => {
       ownerKind: "chat",
       workspacePath: "/worker",
     });
-    // The succeeded sibling exposes no retry affordance.
     const apiRow = screen.getByTestId("setup-card-workspace-/api");
     expect(
       within(apiRow).queryByRole("button", { name: "Retry setup" }),
@@ -739,9 +735,7 @@ describe("<SetupCardSegment /> in-flight vs stranded (isActive)", () => {
         ]),
       );
 
-      // aggregate rolled up to "failed", but a repo is still in flight, so the
-      // header keeps the live timer (keyed on any-workspace-setting-up, NOT the
-      // rollup, which would have hidden it).
+      // aggregate rolled up to "failed", but a repo is still in flight, so the header keeps the live timer (keyed on any-workspace-setting-up, NOT the rollup, which would have hidden it).
       expect(screen.getByText("5s")).toBeTruthy();
     } finally {
       vi.useRealTimers();

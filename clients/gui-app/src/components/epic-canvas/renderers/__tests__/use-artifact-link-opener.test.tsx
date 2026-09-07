@@ -42,10 +42,7 @@ const mocks = vi.hoisted(() => {
     navigate: vi.fn(),
     openTile,
     epicHandle: { store: {} },
-    // A STABLE object reference returned on every call, matching how the
-    // real hook (context/Zustand-backed) behaves - a fresh literal per call
-    // would destabilize every memo/callback downstream of it for reasons
-    // that don't exist in production.
+    // A STABLE object reference returned on every call, matching how the real hook (context/Zustand-backed) behaves - a fresh literal per call would destabilize every memo/callback downstream of it for reasons that don't exist in production.
     tileNavigation: { openTile },
     candidateWorkspaceFileRefsForRelativeLinkPath: vi.fn<
       (
@@ -91,13 +88,7 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
 vi.mock("@/lib/epic-selectors", () => ({
   useArtifactFolderChain: (artifactId: string) => mocks.folderChain(artifactId),
 }));
-// `buildChatLinkPolicy` (used for the ABSOLUTE-href branch, and internally
-// for the shared workspace-file/artifact-open primitives the RELATIVE-href
-// race reuses) is mocked ONLY at its `buildChatLinkPolicy` export;
-// `firstEagerlyTrueIndex`/`openResolvedArtifact`/`openResolvedWorkspaceTarget`
-// stay REAL - they're independently covered in build-chat-link-policy.test.ts,
-// and the race logic under test here depends on their actual behavior, not a
-// stand-in.
+// `buildChatLinkPolicy` (used for the ABSOLUTE-href branch, and internally for the shared workspace-file/artifact-open primitives the RELATIVE-href race reuses) is mocked ONLY at its `buildChatLinkPolicy` export; `firstEagerlyTrueIndex`/`openResolvedArtifact`/`openResolvedWorkspaceTarget` stay REAL - they're independently covered in build-chat-link-policy.test.ts, and the race logic under test here depends on their actual behavior, not a stand-in.
 vi.mock("@/components/chat/build-chat-link-policy", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -171,18 +162,13 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => mocks.epicHandle,
 }));
 vi.mock("@tanstack/react-router", () => ({
-  // A STABLE reference across renders, matching the real `useNavigate`'s
-  // behavior (it doesn't change identity when the router context doesn't) -
-  // an unstable mock here would destabilize every memo/callback downstream
-  // of `navigate` for reasons that don't exist in production.
+  // A STABLE reference across renders, matching the real `useNavigate`'s behavior (it doesn't change identity when the router context doesn't) - an unstable mock here would destabilize every memo/callback downstream of `navigate` for reasons that don't exist in production.
   useNavigate: () => mocks.navigate,
 }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 
 function QueryWrapper(props: { readonly children: ReactNode }) {
-  // A STABLE client across rerenders - constructing `new QueryClient()`
-  // inline in the render body would hand `useQueryClient()` a different
-  // instance on every rerender, destabilizing anything memoized on it.
+  // A STABLE client across rerenders - constructing `new QueryClient()` inline in the render body would hand `useQueryClient()` a different instance on every rerender, destabilizing anything memoized on it.
   const [queryClient] = useState(() => new QueryClient());
   return (
     <QueryClientProvider client={queryClient}>
@@ -599,9 +585,7 @@ describe("useArtifactLinkOpener", () => {
         fallbackHostId: "tab-host",
       }),
     );
-    // Nothing opens until the projection lands - the destination tab now
-    // rides on the `openNode` closure rather than a `tabId` arg, so drive it
-    // to prove the wait still targets this tab.
+    // Nothing opens until the projection lands - the destination tab now rides on the `openNode` closure rather than a `tabId` arg, so drive it to prove the wait still targets this tab.
     expect(mocks.openTile).not.toHaveBeenCalled();
     expect(mocks.runPolicy).not.toHaveBeenCalled();
     const waitArgs =
@@ -653,10 +637,7 @@ describe("useArtifactLinkOpener", () => {
     );
     await flush();
 
-    // The own-directory artifact wins even though a same-named workspace file
-    // also exists - own-directory resolution is the corpus's majority case,
-    // so it must not be shadowed by a coincidentally-matching file elsewhere
-    // in the chat's bound roots.
+    // The own-directory artifact wins even though a same-named workspace file also exists - own-directory resolution is the corpus's majority case, so it must not be shadowed by a coincidentally-matching file elsewhere in the chat's bound roots.
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).toHaveBeenCalledWith(

@@ -15,14 +15,8 @@ export function AuthLandingPage() {
     <main className="relative isolate flex min-h-full flex-1 overflow-hidden bg-zinc-950 text-white">
       <PhotoBloom />
 
-      {/* The content layer of a full-bleed surface: the backdrop above is
-          meant to run under the status bar and the sensor housing, and this is
-          not. Each edge takes its own gutter or the device inset, whichever is
-          larger - `max()` rather than a sum, so a device with no inset renders
-          the layout unchanged. Stated per edge rather than left to the gutters
-          being generous enough: they are today, by margins small enough that
-          retuning one would silently put the sign-in control under the
-          housing. */}
+      {/* Stated per edge rather than left to the gutters being generous enough: they are today, by margins small
+         enough that retuning one would silently put the sign-in control under the housing. */}
       <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading">
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
           <BrandMark className="h-auto w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />

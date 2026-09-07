@@ -10,61 +10,7 @@ import {
   ensureCliInstallHomeDir,
 } from "../store/paths";
 
-// Pending CLI upgrade finalize - detached helper path.
-//
-// `traycer cli upgrade` stages a new CLI binary on disk and records
-// `pendingUpgrade` in the install manifest when it can't atomically
-// replace the live binary (Windows: the live `.exe` is held open by
-// the current CLI process or its supervisor; cross-platform: the
-// install dir is read-only). `traycer host restart` then tries to
-// finalise the swap in-process between service stop and service start.
-//
-// That in-process attempt is sufficient on POSIX, where rename
-// succeeds even on an open file. On Windows the *current* CLI process
-// that's running `host restart` is itself running from the live
-// .exe, so even after the host supervisor releases its lock the
-// MoveFileEx in renameSync fails with EBUSY. We can't release that
-// lock without exiting the CLI process.
-//
-// The detached helper closes that gap:
-//
-//   1. The CLI writes a short PowerShell (Windows) or POSIX shell
-//      script to a temp path and launches it detached with the parent
-//      CLI's pid as an argument.
-//   2. The CLI returns its result to the caller with status
-//      "scheduled-helper" and exits, releasing its lock on the live
-//      binary.
-//   3. The helper polls the parent pid (sub-second). Once the CLI
-//      process is gone it hands off to the STAGED binary's own hidden
-//      `cli finalize-upgrade` command (`commands/cli-finalize-upgrade.ts`)
-//      rather than swapping the binary and starting the service itself.
-//      The staged binary is a complete, independently-runnable
-//      executable distinct from the live path being replaced, so
-//      invoking it gives the swap its own PID + start-time identity to
-//      acquire the SAME `cli-lock` every other actor uses (Host Update
-//      Layer Redesign Tech Plan, "Windows CLI-finalize helper") -
-//      reimplementing the lock's breaking-arbitration protocol in raw
-//      PowerShell/shell would duplicate correctness-critical logic with
-//      no way to test it. The swap + service start can therefore never
-//      race another actor's apply/install/activation critical section.
-//   4. `cli finalize-upgrade` writes a marker file at
-//      `~/.traycer/cli/post-finalize.json` describing the outcome
-//      (swapped / swap-failed), or writes nothing if it timed out
-//      waiting for the lock - `pendingUpgrade` stays populated in that
-//      case, so the next `host restart` retries the whole flow. The
-//      wrapping script writes its own "parent-still-alive" marker
-//      directly (the staged binary is never invoked in that case).
-//   5. The next CLI invocation - Doctor, `host restart`, etc. -
-//      calls `reconcilePostFinalizeMarker(environment)`, which folds the
-//      marker into the install manifest (clearing pendingUpgrade and
-//      updating version on success) and deletes the marker.
-//
-// Fail-safe: if the helper cannot complete (the script fails to
-// schedule, the swap fails, the lock times out, the OS service start
-// fails), the marker either isn't written or records "swap-failed", and
-// `pendingUpgrade` stays populated. Doctor continues to emit
-// `CLI_UPGRADE_PENDING` and Settings/Doctor surface it via the existing
-// card.
+// Windows: the current CLI holds its own .exe, so finalize after stop still EBUSY. Hand off to a detached helper that invokes the staged binary's `cli finalize-upgrade` under cli-lock.
 
 export interface ScheduleHelperOptions {
   readonly environment: Environment;
@@ -76,9 +22,8 @@ export interface ScheduleHelperOptions {
   // Maximum seconds the helper will wait for parent exit before giving
   // up and writing a "parent-still-alive" marker.
   readonly parentExitTimeoutSeconds: number;
-  // Platform the helper script targets. Threaded through explicitly
-  // (instead of reading os.platform()) so tests can validate the
-  // Windows code path from a POSIX dev machine.
+  // Platform the helper script targets.
+  // Threaded through explicitly (instead of reading os.platform()) so tests can validate the Windows code path from a POSIX dev machine.
   readonly platform: NodeJS.Platform;
   // Test seam - replace the actual spawn() / writeFileSync() calls
   // with stubs that record arguments instead of touching the OS.
@@ -105,9 +50,8 @@ export interface ScheduleHelperResult {
   readonly errorMessage: string | null;
 }
 
-// Real implementations used by `host restart` in production. Exposed
-// for tests that want to round-trip a real helper invocation; the
-// scheduling tests substitute their own.
+// Real implementations used by `host restart` in production.
+// Exposed for tests that want to round-trip a real helper invocation; the scheduling tests substitute their own.
 export const defaultSpawnImpl: SpawnImpl = (command, args, options) => {
   const child = spawn(command, [...args], options);
   return {
@@ -121,11 +65,8 @@ export const defaultWriteImpl: WriteImpl = async (path, body) => {
   await writeFile(path, body, { encoding: "utf8", mode: 0o700 });
 };
 
-// Schedule the detached helper. Returns a structured result so the
-// host-restart command can surface scheduling outcomes in its
-// NDJSON payload without throwing on best-effort failures. Throws
-// only for programmer errors (e.g. an unsupported platform reached
-// this path).
+// Schedule the detached helper.
+// Returns a structured result so the host-restart command can surface scheduling outcomes in its NDJSON payload without throwing on best-effort failures.
 export async function scheduleFinalizationHelper(
   opts: ScheduleHelperOptions,
 ): Promise<ScheduleHelperResult> {
@@ -249,11 +190,8 @@ function buildSpawnDescriptor(opts: {
   return { command: "/bin/sh", args: [opts.scriptPath] };
 }
 
-// PowerShell helper. Polls `Get-Process -Id <pid>` until the parent CLI
-// exits, then hands off the binary swap + service start to the staged
-// CLI's own hidden `cli finalize-upgrade` command - see the module doc
-// comment above for why (own PID + start-time identity for the cli-lock
-// acquisition).
+// PowerShell helper.
+// Polls `Get-Process -Id <pid>` until the parent CLI exits, then hands off the binary swap + service start to the staged CLI's own hidden `cli finalize-upgrade` command - see the module doc comment above for why (own PID + start-time identity for the cli-lock acquisition).
 function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
@@ -309,20 +247,13 @@ exit 0
 }
 
 function psString(value: string): string {
-  // Single-quoted PowerShell strings are literal; escape embedded
-  // single quotes by doubling them. The helper paths come from
-  // process.pid / tmpdir() / manifest fields so this is defensive.
+  // Single-quoted PowerShell strings are literal; escape embedded single quotes by doubling them.
+  // The helper paths come from process.pid / tmpdir() / manifest fields so this is defensive.
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-// POSIX helper. We don't strictly need a detached helper on POSIX
-// (rename succeeds on open files there), but the same shape is
-// useful for read-only-install cases and lets test rigs exercise
-// the marker reconciler on a POSIX dev machine. Once the parent CLI
-// exits, the binary swap + service start hand off to the staged CLI's
-// own hidden `cli finalize-upgrade` command - see the module doc
-// comment above for why (own PID + start-time identity for the
-// cli-lock acquisition).
+// POSIX helper.
+// We don't strictly need a detached helper on POSIX (rename succeeds on open files there), but the same shape is useful for read-only-install cases and lets test rigs exercise the marker reconciler on a POSIX dev machine.
 function renderPosixHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
@@ -446,61 +377,26 @@ function isPostFinalizeMarker(value: unknown): value is PostFinalizeMarker {
   return true;
 }
 
-// Narrow a validated payload to the declared `PostFinalizeMarker`, collapsing
-// an OMITTED `serviceStartError` to `null`.
-//
-// The validator above deliberately accepts the field being absent, because
-// legacy markers (and the Windows helper's `parent-still-alive` branch) never
-// wrote it. That tolerance quietly made the type a lie: the interface says
-// `string | null`, so every reader is entitled to test `=== null` for "no
-// error", and an `undefined` slipping through fails that test. Doctor's
-// `swapped` card did exactly that and rendered "the helper could not start
-// the host service afterwards: undefined" for a perfectly clean legacy
-// marker. `reconcilePostFinalizeMarker` had been papering over the same gap
-// with `?? null` at each use site; normalising once, here, means no future
-// reader has to remember.
+// Narrow a validated payload to the declared `PostFinalizeMarker`, collapsing an OMITTED `serviceStartError` to `null`.
+// The validator above deliberately accepts the field being absent, because legacy markers (and the Windows helper's `parent-still-alive` branch) never wrote it.
 function toPostFinalizeMarker(value: PostFinalizeMarker): PostFinalizeMarker {
   return { ...value, serviceStartError: value.serviceStartError ?? null };
 }
 
 // What a read-only caller learns from the post-finalize marker.
-// `"absent"` and `"invalid"` are kept distinct because they license
-// different statements: absent means the helper wrote nothing (it never
-// ran, or it is still running), while invalid means it wrote something
-// this CLI cannot interpret - a fault worth naming rather than silence.
+// `"absent"` and `"invalid"` are kept distinct because they license different statements: absent means the helper wrote nothing (it never ran, or it is still running), while invalid means it wrote something this CLI cannot interpret - a fault worth naming rather than silence.
 export type PostFinalizeMarkerRead =
   | { readonly status: "absent" }
-  // The file was READ but its contents are not a marker (bad JSON, wrong
-  // shape). `reconcilePostFinalizeMarker` unlinks this, so a lifecycle command
-  // genuinely clears it.
+  // The file was READ but its contents are not a marker (bad JSON, wrong shape).
+  // `reconcilePostFinalizeMarker` unlinks this, so a lifecycle command genuinely clears it.
   | { readonly status: "invalid"; readonly errorMessage: string }
   // The file could not be read AT ALL (EACCES, EIO, an unsearchable parent).
-  // Split from `invalid` because the two license different advice: nothing in
-  // the CLI can clear this one - reconciliation's own `readFile` fails the
-  // same way and returns without unlinking - so telling someone to run a
-  // lifecycle command would promise a repair that cannot happen. The auth and
-  // identity probes in `doctor/engine.ts` draw exactly this line for the same
-  // reason (`HOST_AUTH_DIR_INACCESSIBLE`).
+  // Split from `invalid` because the two license different advice: nothing in the CLI can clear this one - reconciliation's own `readFile` fails the same way and returns without unlinking - so telling someone to run a lifecycle command would promise a repair that cannot happen.
   | { readonly status: "unreadable"; readonly errorMessage: string }
   | { readonly status: "present"; readonly marker: PostFinalizeMarker };
 
 // Read the marker WITHOUT consuming it or touching the manifest.
-//
-// This exists because `reconcilePostFinalizeMarker` below is a mutation, and
-// two very different callers wanted the same information. `host restart` is
-// entitled to mutate - it is a lifecycle command, and folding the helper's
-// outcome into the manifest between stop and start is part of its job.
-// `host doctor` is not: a command whose entire contract is "look at the
-// machine and tell me what you see" was deleting the marker file and
-// rewriting the CLI install manifest as a side effect of being asked a
-// question (audit finding CLI-007). A diagnostic that mutates the state it
-// diagnoses cannot be run twice and be trusted, and cannot be run at all by
-// someone who only wanted to look.
-//
-// So doctor reads through here and reports what it finds; reconciliation
-// stays in `host restart`, which is also the fix doctor points at.
-//
-// Never throws.
+// This exists because `reconcilePostFinalizeMarker` below is a mutation, and two very different callers wanted the same information.
 export async function readPostFinalizeMarker(opts: {
   readonly environment: Environment;
 }): Promise<PostFinalizeMarkerRead> {
@@ -512,9 +408,8 @@ export async function readPostFinalizeMarker(opts: {
     if (isErrnoException(err) && err.code === "ENOENT") {
       return { status: "absent" };
     }
-    // Could not read the bytes - distinct from "read them and they were
-    // nonsense". See `PostFinalizeMarkerRead` for why the caller needs these
-    // apart.
+    // Could not read the bytes - distinct from "read them and they were nonsense".
+    // See `PostFinalizeMarkerRead` for why the caller needs these apart.
     return {
       status: "unreadable",
       errorMessage: err instanceof Error ? err.message : String(err),
@@ -547,24 +442,7 @@ export interface MarkerUpgradeIdentity {
 }
 
 // Does this marker describe THIS pending upgrade?
-//
-// Lives here, exported, because two callers need the identical answer and the
-// cost of them drifting is concrete rather than theoretical: doctor reporting
-// an upgrade as already applied while `host restart` discards the same marker
-// as stale was an actual defect in this PR's history, found in review. Two
-// copies of the predicate put that one edit away from returning.
-//
-// Both paths are compared, and the ORDERING too, because neither path is
-// identity on its own: `cli re-anchor` deliberately keeps a path across
-// binaries, and `cli upgrade` derives the staged filename from the version, so
-// a same-version retry reproduces the exact tuple an older marker carries. A
-// marker written before the upgrade was staged cannot be describing it.
-//
-// Timestamps are compared as instants, never as strings: the Windows helper
-// writes `(Get-Date).ToUniversalTime().ToString("o")` (7 fractional digits)
-// against `toISOString()`'s 3, so lexicographic ordering mis-sorts the same
-// moment. An unparseable timestamp answers `false` - the conservative
-// direction, which retries an upgrade rather than falsely completing one.
+// Lives here, exported, because two callers need the identical answer and the cost of them drifting is concrete rather than theoretical: doctor reporting an upgrade as already applied while `host restart` discards the same marker as stale was an actual defect in this PR's history, found in review.
 export function markerDescribesUpgrade(
   marker: PostFinalizeMarker,
   pending: MarkerUpgradeIdentity,
@@ -589,18 +467,13 @@ export type ReconcileOutcome =
   | {
       readonly status: "applied-swap-failed";
       readonly errorMessage: string;
-      // Why the host is still stopped, when the finalizer's own attempt
-      // to restart the service also failed. The marker is deleted as it
-      // is read, so dropping this here would destroy the only durable
-      // record of that - leaving the next invocation able to report the
-      // failed swap but not the down host it caused.
+      // to restart the service also failed.
+      // The marker is deleted as it is read, so dropping this here would destroy the only durable record of that - leaving the next invocation able to report the failed swap but not the down host it caused.
       readonly serviceStartError: string | null;
     }
   | { readonly status: "applied-parent-still-alive" }
-  // The marker on disk describes a DIFFERENT staged upgrade than the one the
-  // manifest is currently pending, so it was not evidence about this
-  // operation and nothing was applied from it. The marker is removed, because
-  // it refers to a swap nobody is waiting on any more.
+  // The marker on disk describes a DIFFERENT staged upgrade than the one the manifest is currently pending, so it was not evidence about this operation and nothing was applied from it.
+  // The marker is removed, because it refers to a swap nobody is waiting on any more.
   | {
       readonly status: "stale-marker-discarded";
       readonly markerStagedBinaryPath: string;
@@ -611,18 +484,8 @@ export type ReconcileOutcome =
       readonly pendingStagedAt: string;
     };
 
-// Read any pending post-finalize marker the detached helper wrote and
-// fold its outcome into the CLI install manifest. Idempotent - the
-// marker is unlinked after a successful read, so repeated invocations
-// are no-ops.
-//
-// Called ONLY from the host-restart command, to apply marker effects before
-// the next stop/start cycle. The Doctor engine used to call it too, so its
-// report would reflect the most recent helper outcome - but that made a
-// diagnostic delete the marker and rewrite the manifest as a side effect of
-// being asked a question (audit finding CLI-007). Doctor now uses the
-// read-only `readPostFinalizeMarker` above and reports what it sees, naming
-// `traycer host restart` - i.e. this function - as the thing that applies it.
+// Read any pending post-finalize marker the detached helper wrote and fold its outcome into the CLI install manifest.
+// Idempotent - the marker is unlinked after a successful read, so repeated invocations are no-ops.
 export async function reconcilePostFinalizeMarker(opts: {
   readonly environment: Environment;
 }): Promise<ReconcileOutcome> {
@@ -658,9 +521,8 @@ export async function reconcilePostFinalizeMarker(opts: {
   }
   const manifest = await readCliManifest(opts.environment);
   if (manifest === null || manifest.pendingUpgrade === null) {
-    // The helper completed but the manifest no longer references a
-    // pending upgrade - either another finalize path beat us to it or
-    // the manifest was rewritten. Drop the marker either way.
+    // The helper completed but the manifest no longer references a pending upgrade - either another finalize path beat us to it or the manifest was rewritten.
+    // Drop the marker either way.
     await safeUnlink(markerPath);
     if (parsed.status === "swapped") {
       // No manifest change to make, but report success so callers can
@@ -682,44 +544,7 @@ export async function reconcilePostFinalizeMarker(opts: {
   }
   const pending = manifest.pendingUpgrade;
 
-  // CORRELATE BEFORE ACTING - this path MUTATES, so getting it wrong is worse
-  // here than in doctor's read.
-  //
-  // A marker names the two paths it operated on and no version, so it is only
-  // evidence about the upgrade it was actually written for. Nothing guarantees
-  // it was consumed: a helper that swapped 1.5.0 can leave its marker behind,
-  // and a later `cli upgrade` then records `pendingUpgrade` 1.6.0 alongside
-  // it. The `swapped` branch below would promote 1.6.0 to installed and clear
-  // the pending record on the strength of the 1.5.0 marker - stamping the
-  // manifest with a version whose staged binary was never swapped onto the
-  // live path. The CLI would report itself as 1.6.0 while running 1.5.0
-  // bytes, with nothing left on disk to detect it from.
-  //
-  // Doctor now refuses the same stale marker when reporting (doctor/engine.ts)
-  // and routes the user to `traycer host restart` - i.e. straight into this
-  // function - so leaving the correlation out on this side would have made the
-  // diagnostic a delivery mechanism for the corruption.
-  //
-  // `stagedBinaryPath` discriminates because `cli upgrade` stamps the target
-  // version into the staged filename (`traycer-<version>-<platform>`). A
-  // mismatched marker is DISCARDED rather than applied: it describes a
-  // completed operation nobody is waiting on, and leaving it would re-pose the
-  // same question to every future caller.
-  // BOTH paths are compared, not just the staged one. The staged filename
-  // carries the version, which defeats the stale-version case - but not the
-  // re-anchor one: `cli re-anchor` can repoint `manifest.binaryPath` at a
-  // different filename without deleting this marker, and if a SAME-version
-  // upgrade then becomes pending, the deterministic staged filename matches
-  // the stale marker while its `livePath` still names the old binary.
-  // Accepting it there would promote a version whose bytes never reached the
-  // re-anchored destination. The marker only describes this operation if it
-  // agrees about where the bytes came FROM and where they went TO.
-  //
-  // Identity is decided by the shared `markerDescribesUpgrade` predicate above
-  // rather than inline, so this path and doctor's read path cannot drift - a
-  // divergence that already happened once in this PR's history and produced
-  // doctor announcing an upgrade as applied while this function correctly
-  // discarded the same marker as stale.
+  // Correlate the marker with this pending upgrade before mutating. A foreign marker is discarded, not applied.
   if (
     !markerDescribesUpgrade(parsed, {
       stagedBinaryPath: pending.stagedBinaryPath,
@@ -740,10 +565,8 @@ export async function reconcilePostFinalizeMarker(opts: {
   }
 
   if (parsed.status === "swapped") {
-    // The helper completed the swap; promote the manifest's
-    // pendingUpgrade.version to the top-level fields and clear
-    // pendingUpgrade. Helper has already moved the staged binary
-    // onto the live path on disk, so binaryPath stays the same.
+    // The helper completed the swap; promote the manifest's pendingUpgrade.version to the top-level fields and clear pendingUpgrade.
+    // Helper has already moved the staged binary onto the live path on disk, so binaryPath stays the same.
     const previousVersion = manifest.version;
     await clearPendingUpgrade(opts.environment, {
       version: pending.version,
@@ -759,11 +582,8 @@ export async function reconcilePostFinalizeMarker(opts: {
     };
   }
   if (parsed.status === "swap-failed") {
-    // Helper tried and the swap itself failed. Leave pendingUpgrade
-    // in place so Doctor still surfaces it; consume the marker.
-    // `serviceStartError` rides along because consuming the marker
-    // destroys it - and on this path it is the only thing that explains
-    // a host that is still down rather than merely un-upgraded.
+    // Helper tried and the swap itself failed.
+    // Leave pendingUpgrade in place so Doctor still surfaces it; consume the marker.
     await safeUnlink(markerPath);
     return {
       status: "applied-swap-failed",

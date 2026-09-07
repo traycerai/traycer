@@ -17,18 +17,7 @@ const checkpointArtifactKindSchema = getRecordSchema(
   "latest",
 );
 
-/**
- * Tags a manifest entry whose `filePath` is a Traycer artifact `index.md`. The
- * presence of this tag (non-null) is what marks an entry as an artifact change:
- * the renderer shows it as a titled artifact row (click → open / diff) instead
- * of a raw file path, and the bulk-revert opt-out filters on it. Resolved at
- * turn-end manifest finalization via the storage mapping; `artifactId`/`kind`/
- * `title` are all null when the id is not yet minted (a just-created artifact
- * whose EpicFileSync ingest has not completed) - the entry is still an artifact
- * for revert/grouping, the GUI just falls back to a generic label until the id
- * resolves. The GUI re-resolves the live title from the open-epic projection by
- * `artifactId`; `title` here is only the fallback.
- */
+/** Tags a manifest entry whose `filePath` is a Traycer artifact `index.md`. */
 export const checkpointArtifactTagSchema = z.object({
   artifactId: z.string().nullable(),
   kind: checkpointArtifactKindSchema.nullable(),
@@ -43,11 +32,7 @@ export const turnCheckpointManifestEntrySchema = z.object({
   afterHash: z.string().nullable(),
   undoable: z.boolean(),
   reason: z.string().nullable(),
-  // Present + non-null ⇒ this entry is an artifact `index.md` change. Optional
-  // (`.nullish()`) so manifests persisted before artifacts entered the
-  // checkpoint flow parse cleanly (the field is absent → undefined → "not an
-  // artifact"), and so the many manifest-entry constructors don't each have to
-  // spell out `artifact: null`. Read it with a falsy check (`!entry.artifact`).
+  // Present + non-null ⇒ this entry is an artifact `index.md` change.
   artifact: checkpointArtifactTagSchema.nullish(),
 });
 export type TurnCheckpointManifestEntry = z.infer<
@@ -55,26 +40,8 @@ export type TurnCheckpointManifestEntry = z.infer<
 >;
 
 /**
- * True when an entry records no actual change to its path — the file was touched
- * during the turn but ended byte-identical to its pre-turn state, so
- * `beforeHash === afterHash`. Two shapes qualify:
- *   - a net-zero edit (`{beforeHash: X, afterHash: X}`): edited then reverted,
- *     or an idempotent rewrite, within the turn.
- *   - a created-then-deleted file (`{beforeHash: null, afterHash: null}` with
- *     `undoable: true`): created and removed within the same turn.
- *
- * Restoring such an entry is a guaranteed no-op, and the turn did not actually
- * change the file. The per-turn "Changes" group already hides these on the file
- * side (it merges repeated edits per path and drops equal-hash endpoints); this
- * predicate lets every OTHER manifest consumer — the Undo modal, the per-turn
- * restore plan, the revert-on-edit checks, the artifact rows, the
- * later-overlap note — apply the same rule uniformly (including to artifacts),
- * so what is shown, counted, and restored stays in lockstep.
- *
- * The `undoable` guard is load-bearing: a denied / binary / not-intercepted
- * edit also carries `beforeHash === afterHash === null`, but it represents a
- * real (unrevertable) change attempt and must stay visible as a "Skipped" row.
- * Those entries are `undoable: false`, so they are NOT treated as no-ops here.
+ * True when an entry records no actual change to its path - the file was touched during the turn but ended byte-identical to its pre-turn state, so `beforeHash === afterHash`.
+ * The `undoable` guard is load-bearing: a denied / binary / not-intercepted edit also carries `beforeHash === afterHash === null`, but it represents a real (unrevertable) change attempt and must stay visible as a.
  */
 export function isNoOpCheckpointEntry(
   entry: TurnCheckpointManifestEntry,
@@ -84,39 +51,11 @@ export function isNoOpCheckpointEntry(
 
 /**
  * Which checkpoints have a file they touch touched AGAIN by a later checkpoint.
- *
- * Drives the restore dialog's "files modified in later turns will also be
- * rewound" warning, which is the note this module's `isNoOpCheckpointEntry`
- * doc lists among the consumers that must apply one rule uniformly.
- *
- * ## Why it is here and not beside its consumer
- *
- * It has two callers on two sides of the wire and they must not disagree. The
- * renderer derived it from the events it holds, which on the windowed line is
- * whatever subset happens to be hydrated - a span without the LATER
- * checkpoints concludes `false` and the warning silently disappears from a
- * destructive dialog. So the projection now computes it over whole history and
- * carries the answer per row (`TranscriptRowContext.hasLaterOverlappingChanges`),
- * and the renderer keeps its own derivation only for the legacy line where
- * `events` really is the whole log. Two derivations of one rule is exactly the
- * drift this file already exists to prevent; one function, two callers.
- *
- * @param manifests Every checkpoint manifest in the range being judged, in
- * capture order. Order is the whole input - "later" means "later in this
- * array" - so a caller passing a partial or unsorted set gets a partial or
- * wrong answer, which is the bug above.
+ * It has two callers on two sides of the wire and they must not disagree.
  */
 export function overlappingCheckpointIds(
   manifests: ReadonlyArray<TurnCheckpointManifest>,
 ): ReadonlySet<string> {
-  // Only real changes drive the note: a no-op entry isn't part of this turn's
-  // change set and isn't restored, so an overlap with one would make the
-  // cumulative warning misleading.
-  //
-  // Record, per file path, the index of the last checkpoint that touches it. A
-  // checkpoint then overlaps iff any path it touches is touched again by a
-  // later one - one forward pass plus one scan, rather than the quadratic
-  // pairwise comparison this started as.
   const lastTouchIndexByPath = new Map<string, number>();
   manifests.forEach((manifest, index) => {
     manifest.entries
@@ -138,11 +77,8 @@ export function overlappingCheckpointIds(
 }
 
 /**
- * Current `TurnCheckpointManifest` shape version. Bumped whenever the
- * manifest payload changes in a non-backwards-compatible way. Writers
- * always emit this value; readers reject manifests whose `schemaVersion`
- * does not match (the restore path treats a mismatch as "cannot restore"
- * rather than silently producing wrong results).
+ * Current `TurnCheckpointManifest` shape version.
+ * Writers always emit this value; readers reject manifests whose `schemaVersion` does not match (the restore path treats a mismatch as "cannot restore" rather than silently producing wrong results).
  */
 export const TURN_CHECKPOINT_MANIFEST_SCHEMA_VERSION = 1;
 

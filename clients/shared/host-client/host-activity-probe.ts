@@ -1,24 +1,11 @@
-// The host's unauthenticated, loopback-only `GET /activity` side-channel:
-// "is any work in progress?" Both restart paths probe it before tearing a
-// running host down on a desktop update - the CLI before it reinstalls the
-// bytes, and the desktop before its SMAppService unregister->register cycle on
-// the macOS host-owned path (where the actual teardown happens after the CLI
-// has already returned) - so neither drops in-progress chat/terminal/CLI work.
-//
-// Fail-safe: any reachable-but-unprobeable outcome (a pre-feature host's 404,
-// a malformed body, a connect error, or a timeout) counts as BUSY, so an
-// indeterminate answer never green-lights a teardown. Only an explicit
-// `busy:false` is treated as idle. This is a plain HTTP GET - no WsRpcClient,
-// manifest, or bearer - so an unauthenticated caller can always make the call.
+// Fail-safe: any reachable-but-unprobeable outcome (a pre-feature host's 404, a malformed body, a connect error, or a timeout) counts as busy, so an indeterminate answer never green-lights a teardown.
+// Only an explicit `busy:false` is treated as idle.
 
 const ACTIVITY_PROBE_TIMEOUT_MS = 1_500;
 
 /**
- * Returns `true` when the host at `websocketUrl` reports work in progress, or
- * when its idle/busy state can't be determined (fail-safe). Returns `false`
- * only on an explicit `{ "busy": false }`. Callers must already know the host
- * is live (a stale/absent host has nothing to protect and should not be
- * probed).
+ * Returns `true` when the host at `websocketUrl` reports work in progress, or when its idle/busy state can't be determined (fail-safe).
+ * Returns `false` only on an explicit `{ "busy": false }`.
  */
 export async function probeHostActivityBusy(
   websocketUrl: string,
@@ -46,15 +33,8 @@ export async function probeHostActivityBusy(
 }
 
 /**
- * Returns `true` when SOMETHING is serving HTTP on the host's loopback
- * endpoint - any status code counts, including a pre-feature host's 404.
- * Connect errors, malformed URLs, and timeouts return `false`.
- *
- * Deliberately NOT `probeHostActivityBusy`: that one folds "unreachable"
- * into "busy" so an indeterminate answer can never green-light a teardown.
- * Reachability needs the opposite bias - callers use it to decide whether an
- * incumbent host is really there, and treating an unreachable host as
- * present would strand the machine with no host at all.
+ * Returns `true` when something is serving HTTP on the host's loopback endpoint - any status code counts, including a pre-feature host's 404.
+ * Deliberately not `probeHostActivityBusy`: that one folds "unreachable" into "busy" so an indeterminate answer can never green-light a teardown.
  */
 export async function probeHostReachable(
   websocketUrl: string,
@@ -69,9 +49,7 @@ export async function probeHostReachable(
   }
 }
 
-// `ws://127.0.0.1:<port>/rpc` -> `http://127.0.0.1:<port>/activity`. The host
-// binds loopback HTTP (not TLS). A malformed URL throws and is caught above as
-// the busy fail-safe.
+// `ws://127.0.0.1:<port>/rpc` -> `http://127.0.0.1:<port>/activity`.
 function toActivityUrl(websocketUrl: string): string {
   const url = new URL(websocketUrl);
   return `http://${url.host}/activity`;

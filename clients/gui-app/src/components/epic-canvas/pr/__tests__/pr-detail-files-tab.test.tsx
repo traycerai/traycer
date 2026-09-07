@@ -17,20 +17,8 @@ vi.mock("@/lib/links/open-link", () => ({
 }));
 
 /**
- * The Files tab keeps the GitHub-sourced file list; the DIFF is a tile the
- * list opens.
- *
- * The list is what is always available (it comes off the `pr.subscribeDetail`
- * sweep), while the diff needs a local checkout - so the tab must render fully
- * without one, and the button must open the tile regardless, because "is there
- * a checkout?" costs a host round-trip and a silently-disabled button reads as
- * a broken one.
- *
- * Drives the REAL canvas store (a real tab, opened via `openEpicTab`) rather
- * than mocking it, so these assertions exercise the same content-id dedupe
- * `openTile` uses for every other tile kind - only the nested-focus-navigation
- * hook is faked, since its own async scroll/focus behavior is unrelated to
- * whether the diff tile actually landed in the canvas.
+ * The list is what is always available (it comes off the `pr.subscribeDetail` sweep), while the diff needs a local checkout - so the tab must render fully without one, and the button must open the tile regardless, because "is there a checkout?" costs a host round-trip and a silently-disabled button reads as a broken one.
+ * Drives the REAL canvas store (a real tab, opened via `openEpicTab`) rather than mocking it, so these assertions exercise the same content-id dedupe `openTile` uses for every other tile kind - only the nested-focus-navigation hook is faked, since its own async scroll/focus behavior is unrelated to whether the diff tile actually landed in the canvas.
  */
 
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
@@ -204,9 +192,7 @@ describe("PrDetailFilesTab", () => {
   });
 
   it("routes the GitHub footer link through the link seam as a `github` open", () => {
-    // One egress seam, no shell-dependent fork: there is no longer a
-    // "bridge bound → intercept, else native new tab" pair to keep in sync,
-    // so the footer link honours the `github` setting everywhere (A1, A6).
+    // One egress seam, no shell-dependent fork: there is no longer a "bridge bound → intercept, else native new tab" pair to keep in sync, so the footer link honours the `github` setting everywhere (A1, A6).
     const viewTabId = openRealTab();
     renderTab({ core: core({}), hostId: "host-1", viewTabId });
 

@@ -437,11 +437,7 @@ describe("<WorkspaceFileTile /> editing", () => {
     });
 
     it("retains an unsaved draft typed from empty across an unmount/remount of the tile", async () => {
-      // The runtime's autosave debounce (FILE_EDIT_AUTOSAVE_DELAY_MS, real
-      // timers - this file doesn't fake them) would otherwise race this
-      // test's own real-clock `waitFor`/unmount/remount sequence: a write
-      // that completes mid-test would clear `isDirty` out from under the
-      // very assertions proving the draft survives untouched.
+      // The runtime's autosave debounce (FILE_EDIT_AUTOSAVE_DELAY_MS, real timers - this file doesn't fake them) would otherwise race this test's own real-clock `waitFor`/unmount/remount sequence: a write that completes mid-test would clear `isDirty` out from under the very assertions proving the draft survives untouched.
       state.writeFile.mockReturnValue(new Promise(() => undefined));
       const { unmount } = renderTile();
       fireEvent.click(screen.getByRole("button", { name: "Activate empty" }));
@@ -458,9 +454,7 @@ describe("<WorkspaceFileTile /> editing", () => {
       expect(state.writeFile).not.toHaveBeenCalled();
 
       unmount();
-      // The runtime is keyed by file identity, not by tile lifetime - a
-      // dirty draft is never disposed just because its surface unmounted
-      // (`FileEditRuntime.canDispose` refuses while `isDirty`).
+      // The runtime is keyed by file identity, not by tile lifetime - a dirty draft is never disposed just because its surface unmounted (`FileEditRuntime.canDispose` refuses while `isDirty`).
       expect(currentRuntimeState()).toMatchObject({
         draftContent: "X",
         isDirty: true,

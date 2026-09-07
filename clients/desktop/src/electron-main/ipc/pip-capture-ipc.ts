@@ -8,10 +8,6 @@ import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { browserViewIpcPayload } from "./browser-view-ipc-payload";
 
-/**
- * Native-tab PiP capture IPC. Capture commands stay off the host CDP dispatch
- * path and go directly to `BrowserDebugSession`.
- */
 export function registerPipCaptureIpc(
   bridge: RunnerIpcBridge,
   manager: BrowserViewManager,

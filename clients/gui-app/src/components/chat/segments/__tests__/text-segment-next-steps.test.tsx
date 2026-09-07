@@ -139,11 +139,8 @@ describe("TextSegment next steps rendering", () => {
     epicHandle = openStoreForTest({
       epicId: "epic-1",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: noopStreamClientFactory,
         laneSelection: null,
@@ -228,10 +225,8 @@ describe("TextSegment next steps rendering", () => {
   });
 
   it("spaces next-steps away from a preceding body that ends in a horizontal rule", () => {
-    // Body markdown and next-steps prose are separate `.md-prose` trees. The
-    // Tailmark first/last margin zeroing collapses both sides of that boundary,
-    // so without an explicit wrapper the next-steps prose sits flush on the
-    // trailing `---`.
+    // Body markdown and next-steps prose are separate `.md-prose` trees.
+    // The Tailmark first/last margin zeroing collapses both sides of that boundary, so without an explicit wrapper the next-steps prose sits flush on the trailing `---`.
     render(
       <TextSegment
         findUnitId={null}

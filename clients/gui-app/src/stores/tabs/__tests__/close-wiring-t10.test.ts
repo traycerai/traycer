@@ -1,16 +1,3 @@
-/**
- * T10 Area 1: every `TabKindModule.requestClose` used to mutate its own
- * source store directly (`useEpicCanvasStore.closeTab`,
- * `useLandingDraftStore.closeDraft`, `useTabsStore.closeSystemTab`),
- * bypassing the coordinator entirely. Layout removal then happened later,
- * asynchronously, through the coordinator's generic source-reconciliation
- * pass - not through the precise `removeLayoutRef` algebra that implements
- * survivor-promotion / active-preservation. These tests dispatch through the
- * REAL `tabRequestClose` registry function (exactly what
- * `use-close-tab-flow.tsx` calls) against real store state and assert on the
- * resulting `useTabsStore` layout, so a regression back to the direct-source
- * bypass shows up here.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import { tabRequestClose } from "@/stores/tabs/registry";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";

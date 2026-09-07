@@ -41,9 +41,8 @@ export function exactTerminalListQueryKey(
 }
 
 /**
- * Direct `terminal.list` RPC. Must not touch QueryClient: a shared-cache
- * refetch can resolve after a failed request and leave retained rows that
- * look like a successful create.
+ * Direct `terminal.list` RPC.
+ * Must not touch QueryClient: a shared-cache refetch can resolve after a failed request and leave retained rows that look like a successful create.
  */
 export async function fetchIsolatedTerminalList(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -105,8 +104,8 @@ function withListSessionFields(
 }
 
 /**
- * Upserts the authoritative `terminal.create` session into the exact
- * host/scope list cache. Preserves top-level list metadata such as `homeCwd`.
+ * Upserts the authoritative `terminal.create` session into the exact host/scope list cache.
+ * Preserves top-level list metadata such as `homeCwd`.
  */
 export function upsertCreatedSessionIntoExactTerminalList(
   queryClient: QueryClient,

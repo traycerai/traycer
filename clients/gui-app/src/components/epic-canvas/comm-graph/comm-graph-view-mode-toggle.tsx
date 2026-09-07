@@ -1,11 +1,5 @@
 /**
- * Picks which renderer draws the communication graph: the office floor or the
- * node graph.
- *
- * A segmented control rather than an icon that cycles: both renderings are
- * first-class and neither is a "detail" of the other, so the control names them
- * and shows which one is live. It floats over the canvas in BOTH modes - the
- * way back has to be visible from wherever you are.
+ * A segmented control rather than an icon that cycles: both renderings are first-class and neither is a "detail" of the other, so the control names them and shows which one is live.
  */
 import { Building2, Waypoints } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -56,14 +50,10 @@ export function CommGraphViewModeToggle(props: CommGraphViewModeToggleProps) {
             type="button"
             size="xs"
             variant="ghost"
-            // `aria-pressed` rather than a radio group: each button is a toggle
-            // whose pressed state is the whole state, and assistive tech reads
-            // the pair correctly without a group label to invent.
+            // `aria-pressed` rather than a radio group: each button is a toggle whose pressed state is the whole state, and assistive tech reads the pair correctly without a group label to invent.
             aria-pressed={active}
             data-testid={option.testId}
-            // An alpha of the foreground, so the active segment stays visible
-            // on every preset - `--muted` collapses into `--popover` in the
-            // dark and flat-light presets, which is exactly this surface.
+            // An alpha of the foreground, so the active segment stays visible on every preset - `--muted` collapses into `--popover` in the dark and flat-light presets, which is exactly this surface.
             className={cn(active && "bg-foreground/8 text-foreground")}
             onClick={() => onModeChange(option.mode)}
           >

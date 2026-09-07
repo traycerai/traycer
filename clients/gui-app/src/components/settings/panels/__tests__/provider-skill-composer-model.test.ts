@@ -87,9 +87,8 @@ describe("skillAuthoring", () => {
     });
   });
 
-  // The load-bearing case: the tab lists and mutates at the selected scope, so
-  // a provider that advertises just "project" must NOT get a button while the
-  // user is viewing Global. `length > 0` would wrongly pass this.
+  // The load-bearing case: the tab lists and mutates at the selected scope, so a provider that advertises just
+  // "project" must not get a button while the user is viewing Global. `length > 0` would wrongly pass this.
   it("treats a project-only verb as closed when viewing global", () => {
     expect(
       skillAuthoring(capsWith(["project"], ["project"], undefined), "global"),

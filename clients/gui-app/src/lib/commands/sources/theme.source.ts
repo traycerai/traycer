@@ -1,8 +1,6 @@
 /**
- * Root: one "Change theme" entry. Sub-page: Light / Dark / System.
- * Collapsed behind a sub-page because theme flips are rare enough
- * that surfacing three rows on the palette root pushes more
- * valuable items off screen.
+ * Root: one "Change theme" entry.
+ * Sub-page: Light / Dark / System.
  */
 import {
   useSettingsStore,

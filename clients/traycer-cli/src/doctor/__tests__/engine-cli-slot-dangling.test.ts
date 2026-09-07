@@ -9,16 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The stable CLI path (`~/.traycer/cli/bin/traycer`) is a symlink the
-// Desktop app points into its own bundle; removing or replacing the bundle
-// leaves it dangling. `ls` (lstat) still shows the file while executing it
-// fails with ENOENT, and the only repair runs at the app's next
-// *successful* launch - a state users cannot self-diagnose from the shell.
-// Doctor must name that state, and must stay silent for a healthy link or
-// a regular-file binary so the probe never becomes noise.
-//
-// Skipped on Windows: creating symlinks there requires elevation, and the
-// desktop stages a real file (not a symlink) into the Windows slot.
+// The stable CLI path (`~/.traycer/cli/bin/traycer`) is a symlink the Desktop app points into its own bundle; removing or replacing the bundle leaves it dangling.
+// `ls` (lstat) still shows the file while executing it fails with ENOENT, and the only repair runs at the app's next successful* launch - a state users cannot self-diagnose from the shell.
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.

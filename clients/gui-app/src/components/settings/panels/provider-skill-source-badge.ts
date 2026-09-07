@@ -1,11 +1,7 @@
 import type { ProviderSkillSourceBadge } from "@traycer/protocol/host/provider-native-schemas";
 
-/**
- * How a skill's origin is named and toned. Shared by the list row and the
- * expanded dialog: the same skill must not be "Shared" in one and something
- * else in the other, and a badge that changes color when you open it reads as
- * a different object.
- */
+/** Shared by the list row and the expanded dialog: the same skill must not be "Shared" in one and something
+ * else in the other, and a badge that changes color when you open it reads as a different object. */
 export const SKILL_SOURCE_LABEL: Record<ProviderSkillSourceBadge, string> = {
   shared: "Shared",
   provider: "Provider-only",
@@ -22,7 +18,6 @@ export const SKILL_SOURCE_TONE: Record<ProviderSkillSourceBadge, string> = {
   managed: "border-border bg-muted/60 text-muted-foreground",
 };
 
-/** Display order for source badges wherever they are enumerated (filter menu). */
 export const SKILL_SOURCE_ORDER: readonly ProviderSkillSourceBadge[] = [
   "shared",
   "provider",

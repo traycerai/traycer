@@ -1,14 +1,5 @@
-/**
- * Round-5 landing paste lifecycle seams.
- *
- * Drives the REAL LandingComposer + REAL per-window draft-runtime registry
- * (`draftRuntimeRegistry`) + REAL landing-draft-store through the HomePage
- * mount-key boundary (pre-minted id while `activeDraftId` is null; the mount
- * key only changes when switching between existing drafts, so the null→id
- * flip does not remount the editor). Fakes only idb-keyval timing (putImage
- * durable write). Does NOT re-implement ingest on a bare Editor — that is
- * exactly why round 4 missed the store/remount defect.
- */
+/** Drives the real LandingComposer + real per-window draft-runtime registry (`draftRuntimeRegistry`) + real
+ * landing-draft-store through the HomePage mount-key boundary (pre-minted id while `activeDraftId` is null. */
 import {
   act,
   cleanup,
@@ -62,9 +53,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
-  // Host-backed readiness hook, stubbed to its fail-open answer - the same
-  // treatment this suite already gives every other host-dependent hook. It
-  // renders `LandingComposer`, which now consults the managed-pack gate.
+  // Host-backed readiness hook, stubbed to its fail-open answer - the same treatment this suite already gives
+  // every other host-dependent hook. It renders `LandingComposer`, which now consults the managed-pack gate.
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
@@ -143,10 +133,8 @@ vi.mock("idb-keyval", () => {
   };
 });
 
-// Capture the real editor handle so tests can assert rewrite return values and
-// drive remove-by-id without re-implementing paste ingest on a bare Editor.
-// Forward a wrapped handle to LandingComposer so rewrite return values are
-// observed on the same object the production code calls.
+// Capture the real editor handle so tests can assert rewrite return values and drive remove-by-id without
+// re-implementing paste ingest on a bare Editor.
 vi.mock(
   "@/components/chat/composer/composer-prompt-editor",
   async (importActual) => {
@@ -209,8 +197,7 @@ vi.mock(
   },
 );
 
-// Peripheral LandingComposer deps — NOT the stores under test, and NOT the
-// editor / paste / draft write path.
+// Peripheral LandingComposer deps - not the stores under test, and not the editor / paste / draft write path.
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
     selection: {
@@ -260,7 +247,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => null,
 }));
 
@@ -316,10 +303,7 @@ vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({ isPending: false }),
 }));
-// P1.2: the composer resolves its placement (pin ?? effective) through this
-// one hook. These suites are about paste/gating/banner behaviour, not
-// selection derivation, so it is stubbed at that single boundary - the same
-// treatment the other host-backed hooks above get.
+// : the composer resolves its placement (pin ??
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => ({
     pin: {
@@ -363,7 +347,7 @@ vi.mock("@/components/home/composer/composer-workspace-mode-row", () => ({
   ComposerWorkspaceRow: () => null,
 }));
 
-// Import AFTER mocks so LandingComposer sees the wrapped editor + idb gates.
+// Import after mocks so LandingComposer sees the wrapped editor + idb gates.
 import { LandingComposer } from "../landing-composer";
 
 let urlCounter = 0;
@@ -425,12 +409,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/**
- * Pre-mint only — covers the null→id seam for real Tiptap (the draft is
- * created under the SAME id used as the `pendingCreateId` mount key, so the
- * editor is not remounted). Bound→null rotation is pinned against production
- * HomePage in home-page.test.tsx (not duplicated here).
- */
+/** Pre-mint only - covers the null→id seam for real Tiptap (the draft is created under the same id used as the
+ * `pendingCreateId` mount key, so the editor is not remounted). */
 function KeyedLandingComposerHarness(): ReactElement {
   const draftId = useLandingDraftStore((state) => state.activeDraftId);
   const [pendingCreateId] = useState(() => uuidv4());
@@ -447,9 +427,7 @@ function KeyedLandingComposerHarness(): ReactElement {
 }
 
 describe("landing paste lifecycle (real draft-runtime registry + keyed LandingComposer)", () => {
-  // Pre-mint mount identity: the null→id activeDraftId flip must not remount
-  // the editor. Assert DOM node identity survives the first image-atom
-  // snapshot that creates the draft (the exact seam the pre-mint fix targets).
+  // Pre-mint mount identity: the null→id activeDraftId flip must not remount the editor.
   it("preserves the editor DOM node across the null→id activeDraftId flip", async () => {
     render(<KeyedLandingComposerHarness />);
     await waitForEditorReady();
@@ -471,13 +449,11 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     expect(editorAfter).toBe(editorBefore);
   });
 
-  // Seam 1: null-bound paste → pre-minted draft create (no remount) →
-  // pending survives → resolve write → hash-only in editor, draft store, and
-  // both serializers.
+  // Seam 1: null-bound paste → pre-minted draft create (no remount) → pending survives → resolve write →
+  // hash-only in editor, draft store, and both serializers.
   it("null-bound mixed paste creates a draft without remounting and converges to hash-only everywhere", async () => {
-    // localStorage is only written when NO desktop bridge is installed
-    // (`setLandingDraftDesktopProjectionBridge` disables local persistence).
-    // Exercise localStorage first, then the desktop seam, then settle.
+    // localStorage is only written when NO desktop bridge is installed (`setLandingDraftDesktopProjectionBridge`
+    // disables local persistence).
     const bytes1 = bytesOf([1, 1, 1]);
     const bytes2 = bytesOf([2, 2, 2]);
     const hash1 = await sha256Hex(bytes1);
@@ -497,9 +473,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     const draftId = useLandingDraftStore.getState().activeDraftId;
     expect(draftId).not.toBeNull();
 
-    // The pre-minted id becomes the draft's real id (no remount): the
-    // in-memory draft is written directly from the live edit and keeps the
-    // still-pending b64 nodes verbatim (canonical in-memory content).
+    // The pre-minted id becomes the draft's real id (no remount): the in-memory draft is written directly from the
+    // live edit and keeps the still-pending b64 nodes verbatim (canonical in-memory content).
     await waitFor(() => {
       const draft = useLandingDraftStore
         .getState()
@@ -736,8 +711,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     // we don't race a deleting sweep against the still-pending remount.
     mocks.scheduleLandingImageReconcile.mockClear();
 
-    // Remount on the same draft id (navigate-back) — the registry runtime
-    // (and the real draft store it mirrors) still holds the pending b64 node.
+    // Remount on the same draft id (navigate-back) - the registry runtime (and the real draft store it mirrors)
+    // still holds the pending b64 node.
     render(
       <LandingComposer
         key={draftId}
@@ -816,9 +791,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     );
     await waitForEditorReady();
 
-    // Settle only A. Its original job must release A's anonymous share before
-    // the remounted job reserves the hash-aware share; B remains fully pending
-    // and keeps its own reservation throughout.
+    // Settle only A. Its original job must release A's anonymous share before the remounted job reserves the
+    // hash-aware share; B remains fully pending and keeps its own reservation throughout.
     setGates.get(hashA)?.release();
     await waitFor(() => {
       const atoms = collectImageAtoms(
@@ -1032,9 +1006,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
         source: "Chat composer",
       },
     );
-    // No pending image was admitted — read back through the live editor
-    // handle (a null-bound paste never attaches a registry runtime to
-    // inspect, since no draft was created for it).
+    // No pending image was admitted - read back through the live editor handle (a null-bound paste never attaches
+    // a registry runtime to inspect, since no draft was created for it).
     const handle = mocks.capturedHandle.current;
     expect(handle).not.toBeNull();
     expect(collectImageAtoms(handle?.getJSON() ?? emptyDoc())).toHaveLength(0);
@@ -1042,8 +1015,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
   });
 
-  // Seam 6: restart simulation — rehydrate from stripped serialized state;
-  // the pending image is absent (accepted imperfection: process exit mid-ingest).
+  // Seam 6: restart simulation - rehydrate from stripped serialized state; the pending image is absent (accepted
+  // imperfection: process exit mid-ingest).
   it("restart from serialized stripped state drops the pending image (accepted imperfection)", async () => {
     const bytes = bytesOf([7, 7, 7]);
 
@@ -1060,7 +1033,7 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
       ).not.toBeNull();
     });
 
-    // Capture the serialized (stripped) payload — process-exit durable form.
+    // Capture the serialized (stripped) payload - process-exit durable form.
     await waitFor(() => {
       const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
       expect(raw).not.toBeNull();
@@ -1089,9 +1062,7 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
   });
 });
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 async function waitForEditorReady(): Promise<void> {
   await waitFor(() => {

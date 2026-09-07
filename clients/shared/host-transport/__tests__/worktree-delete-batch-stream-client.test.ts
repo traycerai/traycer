@@ -102,7 +102,6 @@ function makeClient(
   });
 }
 
-/** Mirrors the host: echo the client's own manifest so the method negotiates. */
 function completeHandshake(socket: StubStreamWebSocket): void {
   socket.fireOpen();
   const open = JSON.parse(socket.textSent[0]) as {
@@ -282,9 +281,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     const client = makeClient(factory);
     const batch = openBatchClient(client);
 
-    // Dies during the dial: the subscribe frame never went out, so nothing was
-    // started and re-issuing the user's actual request is both safe and what
-    // they asked for.
+    // Dies during the dial: the subscribe frame never went out, so nothing was started and re-issuing the user's actual request is both safe and what they asked for.
     expect(sockets[0].textSent).toHaveLength(0);
     sockets[0].fireClose(1006, "abnormal");
     vi.advanceTimersByTime(50);

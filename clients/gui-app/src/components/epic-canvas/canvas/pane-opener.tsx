@@ -1,16 +1,6 @@
 /**
- * Inline opener rendered directly inside an empty tile pane (no modal). The
- * empty pane IS the opener: it shows the search input + opener categories and
- * drills into sub-pages in place. Each pane mounts its own instance with
- * independent query + sub-page stack, so multiple empty panes are live at once.
- *
- * Builds a pane-scoped `CommandContext` (`targetGroupId = this pane's group`,
- * `activeTabId`/`activeEpicId` = this pane's tab/epic), so leaves open into
- * THIS pane via `openTileInPane`. Host-dependent hooks work directly -
- * the pane renders within the app provider stack (unlike the app-root modal).
- *
- * Precedent for inline cmdk (Command outside a Dialog): worktree-picker.tsx,
- * shell-program-combobox.tsx.
+ * Inline opener rendered directly inside an empty tile pane (no modal).
+ * The empty pane IS the opener: it shows the search input + opener categories and drills into sub-pages in place.
  */
 import {
   useEffect,
@@ -50,9 +40,7 @@ export interface PaneOpenerProps {
   readonly tabId: string;
   readonly groupId: string;
   /**
-   * Whether this pane is the globally-active group. When it becomes active
-   * (e.g. a keyboard split makes the new empty pane active) the search input
-   * is focused so the user can type into the opener without a mouse click.
+   * When it becomes active (e.g. a keyboard split makes the new empty pane active) the search input is focused so the user can type into the opener without a mouse click.
    */
   readonly active: boolean;
 }
@@ -65,11 +53,7 @@ export function PaneOpener(props: PaneOpenerProps) {
   const coarsePointer = useCoarsePointer();
 
   useEffect(() => {
-    // Suppress autofocus on coarse pointers: opening an empty pane on a touch
-    // device would otherwise pop the soft keyboard over the very list of
-    // things to open. A fine pointer is unchanged, including a desktop window
-    // narrow enough to look like a phone - what decides is whether focusing
-    // costs screen space, not how wide the window is.
+    // Suppress autofocus on coarse pointers: opening an empty pane on a touch device would otherwise pop the soft keyboard over the very list of things to open.
     if (!active || coarsePointer) return;
     const input = containerRef.current?.querySelector<HTMLInputElement>(
       'input[data-slot="command-input"]',
@@ -100,20 +84,13 @@ export function PaneOpener(props: PaneOpenerProps) {
   const openerItems = useMemo(() => getOpenerItems(ctx), [ctx]);
   const { activeSubpage, runItem, popSubpage } = controller;
 
-  // The text-search step-2 sub-page is rendered by a bespoke view (query +
-  // options + results) rather than the generic fuzzy list, and cmdk's own
-  // filtering is disabled for it: content search is literal/regex, so the
-  // pattern must never fuzzy-filter the result rows.
+  // The text-search step-2 sub-page is rendered by a bespoke view (query + options + results) rather than the generic fuzzy list, and cmdk's own filtering is disabled for it: content search is literal/regex, so the pattern must never fuzzy-filter the result rows.
   const searchRunTarget =
     activeSubpage !== null && isSearchRunSubpageId(activeSubpage.id)
       ? parseSearchRunSubpageId(activeSubpage.id)
       : null;
 
-  // The Files step-2 result lists come pre-ranked from `workspace.searchPaths`
-  // (host Fuse, typo/transposition tolerant). cmdk's own filter must NOT
-  // re-score/re-order them or drop typo matches, and must not hide the typed
-  // notice/truncation rows under a non-matching query. Its filtering stays ON
-  // for the Files step-1 source picker and every other opener page.
+  // The Files step-2 result lists come pre-ranked from `workspace.searchPaths` (host Fuse, typo/transposition tolerant). cmdk's own filter must NOT re-score/re-order them or drop typo matches, and must not hide the typed notice/truncation rows under a non-matching query.
   const hostRankedResultSubpage =
     activeSubpage !== null && isFilesResultSubpageId(activeSubpage.id);
 
@@ -177,9 +154,7 @@ export function PaneOpener(props: PaneOpenerProps) {
       data-group-id={groupId}
       className="flex h-full min-h-0 w-full flex-col"
     >
-      {/* `label` is what actually names the search box: cmdk points the input's
-          `aria-labelledby` at its own hidden label element, so without this the
-          input's `aria-label` is overridden by an empty name. */}
+      {/* `label` is what actually names the search box: cmdk points the input's `aria-labelledby` at its own hidden label element, so without this the input's `aria-label` is overridden by an empty name. */}
       <Command
         filter={paletteFilter}
         label="Open into pane"

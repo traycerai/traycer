@@ -1,41 +1,6 @@
 /**
- * `resources.subscribe@1.0` / `@1.1` / `@1.2` - versioned streaming-RPC contract for
- * live process-resource snapshots.
- *
- * Subscribing opens a per-epic view over the host's `ResourceTracker`: the
- * owner snapshots (chats, terminals, terminal-agents) whose `epicId` matches
- * the requested epic, plus the epic-level aggregate for the local host. All
- * values are host-local; cross-host aggregation is a later protocol/UI layer,
- * not implied here.
- *
- * Frame shape (v1): every server frame carries the FULL current projection for
- * the epic - the complete owner set plus the epic aggregate. The client
- * replaces its view wholesale on each frame, so an owner dropping out of
- * `owners` (or `epic` going `null`) is exactly "no longer tracked". This keeps
- * removal semantics implicit and the host free of per-owner diffing, at the
- * cost of resending unchanged owners; acceptable for the small owner counts a
- * single epic holds. Deferred to future minors: cross-host fields and richer app
- * process categories (add as new optional fields / frame variants, never by
- * narrowing these).
- *
- * A missing owner snapshot means "not currently tracked", NOT zero use; a
- * `null` epic aggregate (owners empty) is a quiet, valid state. The host emits
- * one initial `snapshot`, then an `update` only when the epic's projection
- * actually changes - so an epic with no tracked roots stays silent after its
- * initial (empty) snapshot.
- *
- * Server frames:
- *
- * - `snapshot` - initial projection for the epic, emitted once on subscribe.
- * - `update`   - a later projection, emitted when the epic's owners or
- *                aggregate changed since the last emitted frame.
- * - `pong`     - heartbeat response.
- *
- * Client frames:
- *
- * - `ping`      - heartbeat.
- * - `setDemand` - `@1.5+` visibility hint: background while mounted,
- *                 interactive only while the monitor is actually visible.
+ * `resources.subscribe@1.0` / `@1.1` / `@1.2` - versioned streaming-RPC contract for live process-resource snapshots.
+ * Deferred to future minors: cross-host fields and richer app process categories (add as new optional fields / frame variants, never by narrowing these).
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -103,11 +68,7 @@ export type ResourceProcessSnapshotWire = z.infer<
   typeof resourceProcessSnapshotSchema
 >;
 
-/**
- * Live resource use for one owner at a single sample. `cpuPercent` is derived
- * from CPU-time deltas over wall time and may exceed 100 on multi-core hosts;
- * `rssBytes` is summed resident set across the owner's process tree.
- */
+/** Live resource use for one owner at a single sample. */
 export const ownerResourceSnapshotSchema = z.object({
   owner: resourceOwnerRefSchema,
   sampledAt: z.number(),
@@ -123,11 +84,8 @@ export type OwnerResourceSnapshotWire = z.infer<
 >;
 
 /**
- * Frozen `@1.3` owner snapshot: adds `harnessId`, the provider that owns the
- * tree (`claude`, `codex`, …) so the client can render the provider icon
- * instead of a generic "GUI agent" / "TUI agent" label. `null` for a
- * harness-less owner (a plain terminal shell). Additive-only: the `@1.0`–`@1.2`
- * `ownerResourceSnapshotSchema` above stays frozen.
+ * Frozen `@1.3` owner snapshot: adds `harnessId`, the provider that owns the tree (`claude`, `codex`, …) so the client can render the provider icon instead of a generic "GUI agent" / "TUI agent" label.
+ * Additive-only: the `@1.0`-`@1.2` `ownerResourceSnapshotSchema` above stays frozen.
  */
 export const ownerResourceSnapshotSchemaV13 = z.object({
   ...ownerResourceSnapshotSchema.shape,
@@ -172,11 +130,7 @@ export type HostTreeResourceSnapshotWire = z.infer<
   typeof hostTreeResourceSnapshotSchema
 >;
 
-/**
- * Host-tree processes that are not charged to an owner. Process readings are
- * self values only; consumers derive inclusive subtree totals from the process
- * parent/root relationships.
- */
+/** Host-tree processes that are not charged to an owner. */
 export const otherResourceSnapshotSchema = z.object({
   sampledAt: z.number(),
   rootPids: z.array(z.number().int().nonnegative()),
@@ -273,9 +227,8 @@ export type ResourcesSubscribeDemand = z.infer<
 >;
 
 /**
- * `@1.5` adds client-controlled sampling demand. The server always starts a
- * subscription at background cadence, so an older/newer peer combination is
- * safe: absence of this frame means lower refresh frequency, never extra work.
+ * `@1.5` adds client-controlled sampling demand.
+ * The server always starts a subscription at background cadence, so an older/newer peer combination is safe: absence of this frame means lower refresh frequency, never extra work.
  */
 export const resourcesSubscribeClientFrameSchemaV15 = z.discriminatedUnion(
   "kind",
@@ -356,12 +309,8 @@ export const resourcesSubscribeV13 = defineStreamRpcContract({
 });
 
 /**
- * `@1.4` grows the owner vocabulary by `managed-command` - the host's
- * supervised long-running commands (shells). Their trees were
- * always tracked; before `@1.4` the host folded them into `other` because the
- * wire had no kind for them, and it still does that for any peer negotiated
- * below `@1.4`. The `@1.0`-`@1.3` enum stays frozen: a kind is not an additive
- * field, so an old peer must never receive one it cannot name.
+ * `@1.4` grows the owner vocabulary by `managed-command` - the host's supervised long-running commands (shells).
+ * The `@1.0`-`@1.3` enum stays frozen: a kind is not an additive field, so an old peer must never receive one it cannot name.
  */
 export const resourceOwnerKindSchemaV14 = z.enum([
   "chat",
@@ -380,20 +329,8 @@ export const resourceOwnerRefSchemaV14 = z.object({
 export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
 
 /**
- * What a `managed-command` owner row needs beyond the generic owner fields: the
- * human description the command was created with, and whether it is monitoring -
- * the same state its row in the Shells list renders, so one process tree is not
- * labelled two different ways. `commandId` repeats `owner.ownerId` - the same
- * value by construction - so a client joining this row to the managed-command
- * list stream does it through a named field rather than a convention.
- *
- * `createdByAgentId` names the shell's creator - the agent whose tool call made
- * it, which is what lets a client nest the row under that agent instead of
- * listing it beside one. The owner list stays flat on the wire: the creator is
- * an id, and whether it currently has an owner row of its own is a question
- * only the client's own view can answer. It defaults rather than requires: a
- * host from before the field exists must degrade to today's flat list, not
- * fail the whole frame's parse and blank the panel.
+ * What a `managed-command` owner row needs beyond the generic owner fields: the human description the command was created with, and whether it is monitoring - the same state its row in the Shells list renders, so one.
+ * It defaults rather than requires: a host from before the field exists must degrade to today's flat list, not fail the whole frame's parse and blank the panel.
  */
 export const managedCommandOwnerSchema = z.object({
   commandId: z.string(),
@@ -404,11 +341,8 @@ export const managedCommandOwnerSchema = z.object({
 export type ManagedCommandOwnerWire = z.infer<typeof managedCommandOwnerSchema>;
 
 /**
- * `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind and
- * `managedCommand`, which is non-null exactly when the kind is
- * `managed-command`. Not yet frozen: the v2 surface is staging-only with
- * matched fleets, so this shape is still edited in place (see the shell
- * unification ADR) - additions must default so an older host still parses.
+ * `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind and `managedCommand`, which is non-null exactly when the kind is `managed-command`.
+ * Not yet frozen: the v2 surface is staging-only with matched fleets, so this shape is still edited in place (see the shell unification ADR) - additions must default so an older host still parses.
  */
 export const ownerResourceSnapshotSchemaV14 = z.object({
   ...ownerResourceSnapshotSchemaV13.shape,
@@ -454,11 +388,7 @@ export const resourcesSubscribeV14 = defineStreamRpcContract({
 });
 
 /**
- * `@1.5` adds truthful nullable memory readings and a bounded semantic
- * descriptor for Chromium processes. A memory null means unavailable or
- * incomplete; descriptor null means the process has no safely joined semantic
- * label. Older minors keep their numeric RSS field and receive zero only at
- * the host's explicit legacy-projection boundary.
+ * `@1.5` adds truthful nullable memory readings and a bounded semantic descriptor for Chromium processes.
  */
 const nullableMemoryDetailFields = {
   pssBytes: z.number().int().nonnegative().nullable(),
@@ -466,9 +396,7 @@ const nullableMemoryDetailFields = {
 } as const;
 
 const resourceReadingFieldsV15 = {
-  // Deliberately the frozen minors' `z.number()`: tightening a field a client
-  // has to parse turns a jittery host reading into an unparseable frame, and
-  // the client has no cheaper recovery than dropping the projection.
+  // Deliberately the frozen minors' `z.number()`: tightening a field a client has to parse turns a jittery host reading into an unparseable frame, and the client has no cheaper recovery than dropping the projection.
   cpuPercent: z.number(),
   rssBytes: z.number().int().nonnegative().nullable(),
   ...nullableMemoryDetailFields,
@@ -552,13 +480,7 @@ export type OtherResourceSnapshotWireV15 = z.infer<
   typeof otherResourceSnapshotSchemaV15
 >;
 
-/**
- * Aggregate-only usage whose process identity cannot safely appear in this
- * subscription. Global views use it for unauthorized owner trees; an epic
- * view also uses it for otherwise-authorized owners outside that epic. It has
- * deliberately no pid, root, command, descriptor, owner, epic, or account
- * fields, so host-wide totals can reconcile without leaking the hidden tree.
- */
+/** Aggregate-only usage whose process identity cannot safely appear in this subscription. */
 export const restrictedResourceSnapshotSchemaV15 = z
   .object({
     sampledAt: z.number(),
@@ -610,13 +532,8 @@ export const resourcesSubscribeV15 = defineStreamRpcContract({
   clientFrameSchema: resourcesSubscribeClientFrameSchemaV15,
 });
 
-// ── `resources.kill@1.0` — unary ────────────────────────────────────────────
-// Terminates the entire process subtree beneath each requested pid (graceful
-// SIGTERM, then SIGKILL escalation for survivors). Brand-new method, NOT on the
-// released floor: an old host simply lacks it. The host re-derives which pids
-// are killable from its own live sample (tracked owner/other trees, minus the
-// app + host process trees), so a stale or stray pid is silently skipped rather
-// than trusted. `killed` echoes the subset the host actually acted on.
+// ── `resources.kill@1.0` - unary ──────────────────────────────────────────── Terminates the entire process subtree beneath each requested pid (graceful SIGTERM, then SIGKILL escalation for survivors).
+// Brand-new method, NOT on the released floor: an old host simply lacks it.
 export const resourcesKillRequestSchema = z.object({
   pids: z.array(z.number().int().nonnegative()),
 });
@@ -634,10 +551,7 @@ export const resourcesKillV10 = defineRpcContract({
   responseSchema: resourcesKillResponseSchema,
 });
 
-// ── `resources.listLocalServers@1.0` — unary ───────────────────────────────
-// Lists listening TCP ports owned by process trees already attributed to one
-// epic. Discovery is intentionally on demand rather than part of the resource
-// stream: port scans are useful only while a blank browser tab is visible.
+// ── `resources.listLocalServers@1.0` - unary ─────────────────────────────── Lists listening TCP ports owned by process trees already attributed to one epic.
 export const resourcesListLocalServersRequestSchema = z.object({
   epicId: z.string(),
 });

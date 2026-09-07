@@ -1,22 +1,6 @@
 /**
- * Preload half of the selection-authority binding (P1.1).
- *
- * The preload is where the contract's client instance lives: it reads a fresh
- * engine-issued `attachSeq` over the sync channel at every load, registers the
- * `ipcRenderer` listeners, buffers, and hands the renderer a stable client
- * that rotates its instance on `reattachRequired`. The choreography itself is
- * shared code (`RotatingSelectionAuthorityClient`) so the desktop and
- * browser/dev bindings cannot drift; this module only supplies the transport.
- *
- * PARSER BOUNDARY: every raw value crossing INTO the renderer goes through
- * the contract's parsers here - the three event envelopes, the attach result
- * (including its nested snapshot) and the activate result. Domain code in the
- * renderer never sees unparsed input, so same-major skew safety is
- * structural. Main runs the matching parsers on the inbound direction.
- *
- * The `contextBridge` surface is a plain object of arrow functions: a class
- * instance's prototype methods do not cross the bridge, so the client is
- * wrapped rather than exposed.
+ * The choreography itself is shared code (`RotatingSelectionAuthorityClient`) so the desktop and browser/dev bindings cannot drift; this module only supplies the transport.
+ * PARSER BOUNDARY: every raw value crossing INTO the renderer goes through the contract's parsers here.
  */
 import { ipcRenderer } from "electron";
 import {
@@ -56,10 +40,7 @@ const preloadLog: AuthorityLog = {
   },
 };
 
-/**
- * Subscribes to an event channel, parsing every envelope and dropping the
- * ones that do not parse (the next event, or a re-attach, corrects).
- */
+/** Subscribes to an event channel, parsing every envelope and dropping the ones that do not parse (the next event, or a re-attach, corrects). */
 function subscribeParsed<T>(
   channel: string,
   parse: (raw: unknown) => T | null,
@@ -78,13 +59,6 @@ function subscribeParsed<T>(
   };
 }
 
-/**
- * The membership edge (F6), exposed BESIDE the authority client rather than on
- * it: the settled client contract is the window's attach/evidence/activate
- * surface, and "the registry changed" is neither - it is a shell capability
- * that only exists where the authority runs in another process. A shell whose
- * authority is in-window refreshes its own directory and needs no channel.
- */
 export function buildSelectionFleetRefresh(): () => Promise<void> {
   return () =>
     ipcRenderer.invoke(
@@ -143,12 +117,6 @@ function createIpcTransport(): SelectionAuthorityClientTransport {
   };
 }
 
-/**
- * The renderer-facing client. One `RotatingSelectionAuthorityClient` per
- * preload load; each of its instances reads its OWN seq from the sync
- * channel, so a rotation after an identity transition is a genuinely new
- * generation rather than a replay of the old one.
- */
 export function buildSelectionAuthorityBridge(): SelectionAuthorityClient {
   const transport = createIpcTransport();
   const client = new RotatingSelectionAuthorityClient(

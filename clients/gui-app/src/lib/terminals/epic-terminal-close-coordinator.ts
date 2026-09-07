@@ -21,9 +21,8 @@ function lifetimeKey(hostId: string, terminalId: string): string {
 }
 
 /**
- * The one semantic close boundary for every epic terminal surface. Calls for
- * the same lifetime share the exact in-flight promise even if the initiating
- * component unmounts; either settlement releases the key so failure can retry.
+ * The one semantic close boundary for every epic terminal surface.
+ * Calls for the same lifetime share the exact in-flight promise even if the initiating component unmounts; either settlement releases the key so failure can retry.
  */
 export function requestEpicTerminalLifetimeClose(
   authority: EpicTerminalLifetimeCloseAuthority,
@@ -47,10 +46,8 @@ export function requestEpicTerminalLifetimeClose(
 }
 
 /**
- * Canvas tab-close gestures remove local presentations only. They never
- * invoke a terminal-lifetime mutation, including for durable terminals that
- * are still starting or already running. Explicit sidebar/overlay delete uses
- * `requestEpicTerminalLifetimeClose` instead.
+ * Canvas tab-close gestures remove local presentations only.
+ * They never invoke a terminal-lifetime mutation, including for durable terminals that are still starting or already running.
  */
 export function requestEpicTerminalClose(
   refs: readonly EpicCanvasTileRef[],

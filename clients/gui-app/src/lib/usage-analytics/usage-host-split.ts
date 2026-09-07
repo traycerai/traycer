@@ -5,24 +5,12 @@ import type { UsageCostProvenance } from "@/lib/usage-analytics/usage-breakdown"
 type UsageHostBucket = UsageSummaryResponse["summary"]["hostBuckets"][number];
 
 /**
- * Characters of a host id kept when nothing can name it. Long enough to tell
- * two of an account's hosts apart at a glance, short enough not to look like
- * a name.
+ * Characters of a host id kept when nothing can name it.
+ * Long enough to tell two of an account's hosts apart at a glance, short enough not to look like a name.
  */
 const FALLBACK_ID_CHARS = 8;
 
-/**
- * A host id with no entry in the client's host directory renders as a
- * truncated id, NEVER as a blank cell.
- *
- * The two lists disagree by design and both disagreements are ordinary: the
- * cloud plane summarizes every host on the ACCOUNT, including one that has
- * since been removed or that this client cannot dial, while the directory
- * only holds what this client knows about right now. A blank in that gap
- * reads as a rendering fault; a short id reads as "a host, not one of the
- * ones you have here" - and is still enough to match against the same prefix
- * elsewhere in the app.
- */
+/** A host id with no entry in the client's host directory renders as a truncated id, NEVER as a blank cell. */
 export function usageHostFallbackName(hostId: string): string {
   return hostId.length <= FALLBACK_ID_CHARS
     ? hostId
@@ -55,14 +43,7 @@ export interface UsageHostSplitRow {
 }
 
 /**
- * The window's `hostBuckets`, named and sorted by cost descending - the
- * per-host equivalent of `buildUsageHarnessSplitRows`, and deliberately its
- * twin so the two lists read as one vocabulary.
- *
- * Unlike the harness split there is no folding to do: the aggregator already
- * emits one bucket per host. `shareOfCost` is still computed against the sum
- * of these rows' OWN costs rather than `totals.knownCostUsd`, so the shares
- * foot to 100% whatever the coverage looks like upstream.
+ * The window's `hostBuckets`, named and sorted by cost descending - the per-host equivalent of `buildUsageHarnessSplitRows`, and deliberately its twin so the two lists read as one vocabulary.
  */
 export function buildUsageHostSplitRows(
   buckets: readonly UsageHostBucket[],
@@ -90,15 +71,7 @@ export function buildUsageHostSplitRows(
 }
 
 /**
- * "No host filter", as a value a Radix `Select` will accept: it refuses an
- * empty-string item value and has no concept of `null`.
- *
- * The sentinel and its two mapping functions live HERE rather than beside
- * the control, for two reasons: a component module that also exports plain
- * functions breaks Fast Refresh, and this round trip is worth testing
- * without driving a popover through jsdom - where a click on a
- * pointer-inert trigger can pass for reasons that have nothing to do with
- * the mapping being right.
+ * "No host filter", as a value a Radix `Select` will accept: it refuses an empty-string item value and has no concept of `null`.
  */
 export const USAGE_ALL_HOSTS_VALUE = "__usage_all_hosts__";
 
@@ -117,21 +90,7 @@ export interface UsageHostFilterOption {
   readonly nameIsFallback: boolean;
 }
 
-/**
- * The hosts the filter offers, sorted by name.
- *
- * Union of three sources rather than any one of them, because each alone
- * loses a real host:
- *
- *   - the DIRECTORY alone drops a host that has usage on the account but is
- *     no longer listed here (removed, or not dialable from this client);
- *   - the current response's HOST BUCKETS alone collapse the moment a filter
- *     is applied - picking one host would leave a picker holding only that
- *     host, with no way back to any other;
- *   - `selectedHostId` keeps the active pick present even when it resolved to
- *     an empty window, so the control never shows a selection it cannot
- *     re-offer.
- */
+/** The hosts the filter offers, sorted by name. */
 export function buildUsageHostFilterOptions(input: {
   readonly hostNames: ReadonlyMap<string, string>;
   readonly hostIdsWithUsage: readonly string[];
@@ -153,9 +112,8 @@ export function buildUsageHostFilterOptions(input: {
     })
     .sort(
       (a, b) =>
-        // Named hosts first, as a block. Interleaving them by locale order
-        // scatters the unnameable ids through the list, so the reader has to
-        // scan every row to find the machine they actually recognize.
+        // Named hosts first, as a block.
+        // Interleaving them by locale order scatters the unnameable ids through the list, so the reader has to scan every row to find the machine they actually recognize.
         Number(a.nameIsFallback) - Number(b.nameIsFallback) ||
         a.name.localeCompare(b.name) ||
         a.hostId.localeCompare(b.hostId),

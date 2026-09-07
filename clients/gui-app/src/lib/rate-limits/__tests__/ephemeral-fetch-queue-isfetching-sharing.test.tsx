@@ -1,13 +1,5 @@
 /**
- * End-to-end proof that an `enqueueRateLimitFetch` call actually flips
- * `isFetching` on an already-mounted `useHostProviderRateLimitsQuery`
- * observer for the same provider - the mechanism `RateLimitProviderBlock`'s
- * per-provider refresh icon and `RateLimitRefreshAllButton` both depend on to
- * stay in sync. Uses the shared harness's real `HostClient` +
- * `MockHostMessenger` and PRODUCTION QueryClient configuration: this exact
- * flow - disabled observer mounted, first snapshot loaded by the queue, then
- * a force:true enqueue - is where the inherited global staleTime silently
- * no-oped the real app's refresh while a bare staleTime-0 test client passed.
+ * End-to-end proof that an `enqueueRateLimitFetch` call actually flips `isFetching` on an already-mounted `useHostProviderRateLimitsQuery` observer for the same provider - the mechanism `RateLimitProviderBlock`'s per-provider refresh icon and.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -25,12 +17,7 @@ import {
   createRateLimitSharingHarness,
 } from "@/lib/rate-limits/__tests__/provider-rate-limit-sharing-harness";
 
-// The queue's queryFn now wraps the mock messenger's raw response (always
-// `providerRateLimits: null` here - see the harness's own `response()` doc
-// comment: only fetch timing matters to these tests) into the provider-pull
-// envelope before TanStack caches it - a disabled passive `useHostQuery`
-// observer of this key family sees whatever's actually in the cache, so its
-// `.data` reflects the envelope shape too.
+// The queue's queryFn now wraps the mock messenger's raw response (always `providerRateLimits: null` here - see the harness's own `response()` doc comment: only fetch timing matters to these tests) into the provider-pull envelope before TanStack caches it -.
 const EXPECTED_RATE_LIMIT_ENVELOPE = {
   latest: null,
   lastGood: null,

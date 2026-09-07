@@ -9,15 +9,6 @@ import {
   type UserMessage,
 } from "@traycer/protocol/persistence/epic/messages";
 
-/**
- * The selection BOTH lines run - the renderer over a legacy peer's full record
- * array, the host over the whole transcript - so a chat mounts the re-auth
- * banner identically whichever host serves it.
- *
- * These pin the shape of the answer, not just its truth value: the key is what
- * the store dedupes on, and getting it wrong turns "nudge once per failure"
- * into either a nudge storm or a single nudge for the lifetime of the store.
- */
 
 const AGENT_SENDER = {
   type: "agent" as const,
@@ -96,10 +87,6 @@ describe("latestAssistantAuthFailureTurnKey", () => {
   });
 
   it("is not hidden by trailing user rows", () => {
-    // The exact shape the windowed line breaks on: the failing assistant
-    // record sits several rows back, so it is the first thing an inline tail
-    // drops - and the legacy suite already covers it, which is why the two
-    // lines have to answer the same.
     expect(
       latestAssistantAuthFailureTurnKey([
         assistantMessage({
@@ -162,9 +149,8 @@ describe("latestAssistantAuthFailureTurnKey", () => {
   });
 
   it("falls back to the record id for a turnId-less record", () => {
-    // NOT `assistantTurnKey`'s `ts:<timestamp>` fallback. The key exists to
-    // dedupe against the LIVE path's marker, which is the turn the runtime
-    // named; a record that never had one dedupes by identity instead.
+    // NOT `assistantTurnKey`'s `ts:<timestamp>` fallback.
+    // The key exists to dedupe against the LIVE path's marker, which is the turn the runtime named; a record that never had one dedupes by identity instead.
     expect(
       latestAssistantAuthFailureTurnKey([
         assistantMessage({

@@ -23,33 +23,8 @@ import { runLegacyCredentialsMigration } from "./credentials-migration";
 import { describeLogError, log } from "../app/logger";
 
 /**
- * Main-process owner of the single machine-local credentials file
- * (`~/.traycer/cli/<env>/credentials`), the store half of the credentials-file
- * token-store tech plan (§3 + §4). It wraps the cross-process mutation store
- * (§2) — lock + WAL + typed outcomes — and injects the one-shot abortable
- * refresh, so every token *spend* runs inside the file lock, immediately
- * followed by its commit. The renderer reaches this through the token-store
- * IPC channels; the host reads the same file independently to pin its owner
- * gate.
- *
- * The path is ENV-scoped (never slot-scoped): all `make dev-desktop` slots and
- * the CLI share one file per environment, which is the whole point — sign in
- * once, signed in everywhere. The file carries no authn URL: every refresh and
- * probe targets THIS process's configured `authnBaseUrl` (baked, with the
- * dev-slot env override), so a pair written by one dev slot stays refreshable
- * from every other slot instead of chasing the writer's (possibly dead) port.
- *
- * §4 owns the file watcher: directory watch + basename filter, debounced
- * revisioned `TokenStoreChange` fan-out (external writes AND self-writes).
- * Reconcile never writes/spends, so self-write echoes are fine (sibling
- * windows adopt; origin re-reads to the same state).
- */
-/**
- * The directory-watch factory `installWatcher` uses. Injected because the
- * failure the self-healing reinstall exists for - an FSEvents stream error
- * AFTER a successful install - cannot be provoked through the real fs in a
- * test, and module-mocking node builtins does not reach transitive imports
- * under vitest. `undefined` -> the real `node:fs` `watch`.
+ * The path is ENV-scoped (never slot-scoped): all `make dev-desktop` slots and the CLI share one file per environment, which is the whole point - sign in once, signed in everywhere.
+ * Reconcile never writes/spends, so self-write echoes are fine (sibling windows adopt; origin re-reads to the same state).
  */
 export type WatchImpl = (
   dir: string,
@@ -83,26 +58,10 @@ const WATCHER_DEBOUNCE_MS = 50;
 // adoption), so it is retried forever rather than given up on.
 const WATCHER_REINSTALL_INITIAL_MS = 1_000;
 const WATCHER_REINSTALL_MAX_MS = 30_000;
-// A watcher that survived this long was healthy: its NEXT failure starts a
-// fresh backoff. Anything shorter is the same incident still failing - the
-// delay keeps doubling. (Resetting on mere construction success would pin an
-// install-ok/error-later FSEvents loop at the initial delay forever.)
 const WATCHER_STABILITY_MS = 30_000;
 
-// The reinstall's catch-up read is the ONLY delivery of everything written
-// while the watch was down - unlike an ordinary watch event, no further
-// filesystem event is coming to try again. A transient read fault (EIO,
-// EACCES, a briefly unavailable mount) would otherwise strand this process on
-// a stale session forever, so the catch-up alone retries on backoff until it
-// gets a snapshot or a real event supersedes it.
 const CATCH_UP_RETRY_INITIAL_MS = 1_000;
 const CATCH_UP_RETRY_MAX_MS = 30_000;
-// §6 migration: overall abort deadline threaded through the probes, lock waits,
-// and the in-lock refresh. Set above one healthy probe + one refresh timeout
-// (~10s each is the inner bound) so a slow-but-alive rotate finishes on its own
-// network timeout instead of being cut into the post-dispatch response-loss
-// window; a truly black-hole network trips it → `retryable`, and start()
-// proceeds against F.
 const MIGRATION_DEADLINE_MS = 15_000;
 // Bounded re-entry for superseded / mid-flight state changes (§6).
 const MIGRATION_MAX_ATTEMPTS = 3;
@@ -134,10 +93,6 @@ export class FileTokenStore {
   private catchUpPending = false;
   private catchUpRetryTimer: NodeJS.Timeout | null = null;
   private catchUpRetryDelayMs: number = CATCH_UP_RETRY_INITIAL_MS;
-  // §6 single-flight: every window reads the same shared localStorage pair, so
-  // the first migration call drives it and all concurrent/later calls adopt the
-  // same result (retained for the process lifetime; a `retryable` outcome
-  // re-migrates on the NEXT launch, which is a fresh process).
   private migrationInFlight: Promise<CredentialsMigrationOutcome> | null = null;
   private readonly watchImpl: WatchImpl;
 
@@ -163,7 +118,7 @@ export class FileTokenStore {
       continuationRetryMs: CONTINUATION_RETRY_MS,
     });
     // Kick the gate immediately; do not block the constructor / IPC install.
-    // The first `get()` (and every subsequent one — a settled promise is free)
+    // The first `get()` (and every subsequent one  -  a settled promise is free)
     // awaits completion so the initial auth check reflects recovered state.
     this.recoveryGate = this.runRecoveryGate({
       credentialsPath,
@@ -197,19 +152,7 @@ export class FileTokenStore {
       });
     }
     try {
-      // Drain any quarantined conditional deletes BEFORE the first read is
-      // served: a pair whose delete was pending when the app died must be
-      // removed — not rehydrated — on this launch. Reads suppress the pair
-      // regardless; the drain (retried on the store's own cadence on
-      // failure) is what actually completes the delete.
-      //
-      // Bounded like the init gate above, and for the same reason: an
-      // unbounded drain waits out the store's full lock timeout, so a
-      // contended lock delays the first credential read by that long. An
-      // aborted acquisition comes back `lock-busy`, which returns false and
-      // re-arms the store's own retry - and reads stay suppressed by the
-      // quarantine record in the meantime, so nothing is served that
-      // shouldn't be.
+      // Drain any quarantined conditional deletes BEFORE the first read is served: a pair whose delete was pending when the app died must be removed - not rehydrated - on this launch.
       const clean = await this.store.drainQuarantine(
         AbortSignal.timeout(INIT_GATE_WAIT_MS),
       );
@@ -225,16 +168,6 @@ export class FileTokenStore {
     }
   }
 
-  /**
-   * Directory watch + basename filter (same pattern as host-lifecycle pid
-   * metadata watcher). More reliable than watching the file path itself, which
-   * drops when the file is deleted and recreated.
-   *
-   * Self-healing: an FSEvents stream error (or a failed install) schedules a
-   * backoff reinstall instead of leaving the store blind for the rest of the
-   * process lifetime, and a successful REinstall emits a catch-up change so
-   * anything written while the watch was down is reconciled immediately.
-   */
   private installWatcher(): void {
     if (this.disposed || this.watcher !== null) {
       return;
@@ -297,11 +230,6 @@ export class FileTokenStore {
       if (this.watcherWasInterrupted) {
         this.watcherWasInterrupted = false;
         log.info("[file-token-store] credentials watcher reinstalled");
-        // Catch up on anything written while the watch was down - a change
-        // event is a hint and the reconcile re-reads the store, so a spurious
-        // one is harmless while a missed one is a stale-session hazard. Marked
-        // as the catch-up so a failed read retries: nothing else will redeliver
-        // it.
         this.catchUpPending = true;
         this.catchUpRetryDelayMs = CATCH_UP_RETRY_INITIAL_MS;
         this.scheduleEmitChange();
@@ -364,7 +292,7 @@ export class FileTokenStore {
     let file: StoredCredentials | null;
     try {
       // Through the store, not a raw file read: the change fan-out must be
-      // quarantine-aware — a pair whose conditional delete is pending is
+      // quarantine-aware  -  a pair whose conditional delete is pending is
       // never advertised as present to any window.
       file = await this.store.read();
     } catch (error) {
@@ -410,23 +338,14 @@ export class FileTokenStore {
   }
 
   /**
-   * Current credentials (with the store's process-local commit-failed overlay),
-   * or `null` when signed out. Never locks. Awaits the bounded init recovery
-   * gate first so a cold-start rehydration cannot race a mid-sign-out WAL
-   * completion (ghost sign-in). Rejects on a genuine I/O fault (EACCES, EIO, …);
-   * the renderer maps that to a UI-only signed-out state and never a write.
+   * Never locks.
+   * Awaits the bounded init recovery gate first so a cold-start rehydration cannot race a mid-sign-out WAL completion (ghost sign-in).
    */
   get(): Promise<StoredCredentials | null> {
     return this.recoveryGate.then(() => this.store.read());
   }
 
-  /**
-   * Interactive create/replace — the device-flow sign-in. The renderer supplies
-   * only the freshly-minted pair and the validated identity; this process stamps
-   * `savedAt`. Rejects on a non-`applied` outcome (a persistent local failure)
-   * so the sign-in surfaces as failed rather than a signed-in state the next
-   * launch cannot rehydrate.
-   */
+  /** Rejects on a non-`applied` outcome (a persistent local failure) so the sign-in surfaces as failed rather than a signed-in state the next launch cannot rehydrate. */
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
@@ -445,11 +364,7 @@ export class FileTokenStore {
     });
   }
 
-  /**
-   * The locked adopt-or-refresh+commit. The refresh HTTP spend happens here, in
-   * main, inside the file lock — so at most one process ever spends a given
-   * refresh token. Returns the typed outcome + the pair the caller should act on.
-   */
+  /** Returns the typed outcome + the pair the caller should act on. */
   rotate(expected: {
     readonly userId: string;
     readonly token: string;
@@ -465,12 +380,7 @@ export class FileTokenStore {
     });
   }
 
-  /**
-   * Sign-out delete. Reachable only from `AuthService.signOut()` / `traycer
-   * logout` per the governing principle (only explicit user intent destroys the
-   * shared file). Rejects if the delete cannot land, so a failed sign-out stays
-   * signed in rather than falsely reporting success.
-   */
+  /** Rejects if the delete cannot land, so a failed sign-out stays signed in rather than falsely reporting success. */
   delete(): Promise<void> {
     return this.enqueue(async () => {
       const result = await this.store.signOut(null);
@@ -481,14 +391,8 @@ export class FileTokenStore {
   }
 
   /**
-   * Conditional delete for a renderer undoing a superseded sign-in save. The
-   * comparison and the delete run inside ONE locked mutation
-   * (`signOutIfToken`), so a sibling window's sign-in — or an external CLI
-   * writer — serializes wholly before the comparison (its pair is kept) or
-   * wholly after the landed delete; the renderer never composes this from
-   * `get()` + `delete()`. Rejects when the store cannot decide (lock-busy)
-   * or the delete cannot land, so a still-durable stale pair is never
-   * reported as cleaned up.
+   * The comparison and the delete run inside ONE locked mutation (`signOutIfToken`), so a sibling window's sign-in - or an external CLI writer.
+   * Rejects when the store cannot decide (lock-busy) or the delete cannot land, so a still-durable stale pair is never reported as cleaned up.
    */
   deleteIfToken(expectedToken: string): Promise<"deleted" | "kept"> {
     return this.enqueue(async () => {
@@ -505,11 +409,7 @@ export class FileTokenStore {
     });
   }
 
-  /**
-   * Change subscription. The owned watcher (§4) fires revisioned
-   * `TokenStoreChange` events for external and self-writes; consumers re-read
-   * the store (disk is the truth). Reconcile never writes/spends.
-   */
+  /** Reconcile never writes/spends. */
   subscribe(listener: ChangeListener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -518,12 +418,8 @@ export class FileTokenStore {
   }
 
   /**
-   * One-time legacy→file credentials migration (§6). The renderer reads and
-   * decrypts the legacy per-window localStorage token pair and hands it here;
-   * this single-flights the reconcile across windows and NEVER deletes the file.
-   * The caller wipes the legacy slots per `shouldWipeLegacyCredentials(outcome)`
-   * and then runs its normal file rehydrate — the file, not this outcome,
-   * establishes the resulting session.
+   * The renderer reads and decrypts the legacy per-window localStorage token pair and hands it here; this single-flights the reconcile across windows and NEVER deletes the file.
+   * The caller wipes the legacy slots per `shouldWipeLegacyCredentials(outcome)` and then runs its normal file rehydrate.
    */
   migrateLegacyCredentials(
     legacy: StoredAuthTokens,
@@ -531,12 +427,6 @@ export class FileTokenStore {
     if (this.migrationInFlight === null) {
       const run = this.runMigration(legacy);
       this.migrationInFlight = run;
-      // Re-arm on a TRANSIENT result so a later window (or a reconnect) re-runs
-      // instead of re-serving a cached deadline/network miss for the process
-      // lifetime — with F absent that would strand the user signed-out until an
-      // app restart. Committed / terminal / commit-failed stay cached
-      // (idempotent; commit-failed already has a background continuation). The
-      // `=== run` guard only clears our own promise, never a newer migration.
       void run.then(
         (outcome) => {
           if (outcome === "retryable" && this.migrationInFlight === run) {
@@ -565,8 +455,8 @@ export class FileTokenStore {
       signal: AbortSignal.timeout(MIGRATION_DEADLINE_MS),
       maxAttempts: MIGRATION_MAX_ATTEMPTS,
     });
-    // Telemetry (§6): the outcome mix — especially the measured-rare
-    // `identity-unknown` — is watched during rollout. Never logs tokens.
+    // Telemetry (§6): the outcome mix  -  especially the measured-rare
+    // `identity-unknown`  -  is watched during rollout. Never logs tokens.
     log.info("[file-token-store] legacy credentials migration", { outcome });
     return outcome;
   }

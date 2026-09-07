@@ -1,11 +1,6 @@
 /**
  * What the floor's signals mean.
- *
- * COLLAPSED BY DEFAULT, and deliberately so: the office exists to be readable
- * at a glance, and a key permanently covering a corner of it would be an
- * admission that it is not. It is here for the first look and for the two
- * signals that are genuinely arbitrary - which envelope colour is a reply, and
- * which bubble means a person is needed.
+ * COLLAPSED BY DEFAULT, and deliberately so: the office exists to be readable at a glance, and a key permanently covering a corner of it would be an admission that it is not.
  */
 import { useState } from "react";
 import { Info } from "lucide-react";
@@ -24,9 +19,7 @@ interface LegendSection {
 }
 
 /**
- * Every representation the floor uses, grouped by WHERE you look for it.
- * A key that documents only the newest additions is worse than none: the
- * reader cannot tell which of the things they are looking at are in it.
+ * A key that documents only the newest additions is worse than none: the reader cannot tell which of the things they are looking at are in it.
  */
 const SECTIONS: ReadonlyArray<LegendSection> = [
   {
@@ -86,9 +79,7 @@ const SECTIONS: ReadonlyArray<LegendSection> = [
 ];
 
 /**
- * The four envelope colours. A swatch rather than a colour name: the name
- * would only be checkable against the floor by eye anyway, and these come from
- * the same constants the renderer tints with.
+ * A swatch rather than a colour name: the name would only be checkable against the floor by eye anyway, and these come from the same constants the renderer tints with.
  */
 const ENVELOPE_ENTRIES: ReadonlyArray<{
   readonly tint: string;
@@ -107,9 +98,7 @@ export function OfficeLegend() {
       {!open ? null : (
         <div
           className={cn(
-            // Capped against the TILE and the viewport, never a fixed width:
-            // the key floats over a floor that is itself resizable, and a
-            // 16rem card is wider than the tile on a split canvas.
+            // Capped against the TILE and the viewport, never a fixed width: the key floats over a floor that is itself resizable, and a 16rem card is wider than the tile on a split canvas.
             "max-h-80 max-w-[min(100%,30vw)] overflow-y-auto",
             "rounded-md border border-border",
             "bg-popover p-2",

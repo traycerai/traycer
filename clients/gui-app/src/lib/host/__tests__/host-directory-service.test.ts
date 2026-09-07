@@ -24,9 +24,7 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 
 const PLAN_ALLOWS_REMOTE = true;
 
-// Matches the production constant of the same name in `host-directory-service.ts`
-// — the app's ONE background cadence for `GET /api/v3/hosts`, moved from 15s to
-// 60s to actually match the Settings observer's poll (see that file's comment).
+// Matches the production constant of the same name in `host-directory-service.ts` - the app's ONE background cadence for `GET /api/v3/hosts`, moved from 15s to 60s to actually match the Settings observer's poll (see that file's comment).
 const HOST_DIRECTORY_REFRESH_POLL_MS = 60_000;
 const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
 
@@ -71,14 +69,7 @@ function makeHost(localHost: LocalHostSnapshot | null): MockRunnerHost {
 }
 
 /**
- * `MockRunnerHost.onRegisteredHostsChange` always answers `null` (it models
- * no shell registry cadence - see the mock's own doc comment), which is
- * exactly right for every OTHER test in this file but wrong for the P4.1/F22
- * push-cadence arms below, which need to drive a real subscription. The
- * override matches how other tests in this codebase substitute a single
- * bridge method on an otherwise-real double (e.g.
- * `desktop-runner-host.test.ts`'s `fake.bridge.listUserSessions = ...`)
- * rather than hand-rolling a whole second `IRunnerHost`.
+ * `MockRunnerHost.onRegisteredHostsChange` always answers `null` (it models no shell registry cadence - see the mock's own doc comment), which is exactly right for every OTHER test in this file but wrong for the P4.1/F22 push-cadence arms below, which need.
  */
 function makeHostWithRegistryPush(localHost: LocalHostSnapshot | null): {
   readonly host: MockRunnerHost;
@@ -115,10 +106,7 @@ function makeDirectory(
   options: Omit<HostDirectoryServiceOptions, "onRegistryPollTick"> &
     Partial<Pick<HostDirectoryServiceOptions, "onRegistryPollTick">>,
 ): HostDirectoryService {
-  // Defaulted here rather than at every call site: these cases are about the
-  // directory's own behavior, and the poll-tick callback is the F22 wiring
-  // that belongs to whoever composes the service. A case that cares passes
-  // its own.
+  // Defaulted here rather than at every call site: these cases are about the directory's own behavior, and the poll-tick callback is the F22 wiring that belongs to whoever composes the service.
   const directory = new HostDirectoryService({
     onRegistryPollTick: null,
     ...options,
@@ -194,17 +182,12 @@ function deferredOutcome(): {
   const promise = new Promise<RemoteHostFetchOutcome>((resolve) => {
     resolveOutcome = resolve;
   });
-  // Through a wrapper rather than handing `resolveOutcome` out directly: the
-  // assignment happens inside the executor, so a direct reference reads as
-  // the initializer to control-flow analysis.
+  // Through a wrapper rather than handing `resolveOutcome` out directly: the assignment happens inside the executor, so a direct reference reads as the initializer to control-flow analysis.
   return { promise, settle: (outcome) => resolveOutcome(outcome) };
 }
 
 /**
- * A `RemoteHostFetcher` where each call returns a promise the test resolves
- * explicitly, by call index - for pinning identity-scoping ordering (a caller
- * mid-flight, an identity switch, a late resolution) that `queuedFetcher`'s
- * synchronous resolution can't express.
+ * A `RemoteHostFetcher` where each call returns a promise the test resolves explicitly, by call index - for pinning identity-scoping ordering (a caller mid-flight, an identity switch, a late resolution) that `queuedFetcher`'s synchronous resolution can't.
  */
 function deferredFetcher(): {
   readonly fetcher: RemoteHostFetcher;
@@ -261,16 +244,7 @@ describe("HostDirectoryService", () => {
   });
 
   it("P2 FIX - tells listeners when the shell seed adopts a local host id, on a machine whose host has not announced", async () => {
-    // The seed is the ONE `adoptLocalHostId` caller with no emit behind it -
-    // `onLocalHostChange` emits immediately after its own call, and the poll
-    // path's `emitIfSnapshotChanged` can decline. It is also a real state
-    // change: `snapshot()` reads `lastKnownLocalHostId` to neutralise this
-    // machine's registry twin into a `bootingLocalEntry`.
-    //
-    // A machine with NO local snapshot is the population that matters, and it
-    // is also the cold start: nothing has announced, so the durable id is the
-    // only thing that can answer "which host is mine" - and a consumer that
-    // subscribed and was never told still believes the answer is null.
+    // The seed is the ONE `adoptLocalHostId` caller with no emit behind it - `onLocalHostChange` emits immediately after its own call, and the poll path's `emitIfSnapshotChanged` can decline.
     const host = makeHost(null);
     const directory = makeDirectory({
       authContextId: null,
@@ -288,13 +262,7 @@ describe("HostDirectoryService", () => {
   });
 
   it("P2 FIX - and on the POLL reseed, where the merged snapshot is unchanged and emitIfSnapshotChanged would otherwise decline", async () => {
-    // The start path happens to be covered already (the local-host
-    // subscription emits right after the seed), so this is the arm that
-    // actually needs the emit: the host announces itself to the SHELL later,
-    // the poll picks the id up, and nothing else about the merged snapshot
-    // moves - no local entry, no remote rows - so the poll's own
-    // change-gated emit correctly declines and every consumer is left
-    // believing this machine has no id.
+    // The start path happens to be covered already (the local-host subscription emits right after the seed), so this is the arm that actually needs the emit: the host announces itself to the SHELL later, the poll picks the id up, and nothing else about the.
     vi.useFakeTimers();
     const host = makeHost(null);
     let seededId: string | null = null;
@@ -460,10 +428,8 @@ describe("HostDirectoryService", () => {
   });
 
   it("does NOT auto-default to a remote entry when the mobile directory has multiple entries (Flow 6)", async () => {
-    // Regression: previously `getDefaultEntry()` fell through to
-    // `remoteEntries[0]`, which silently bound the first remote on mobile
-    // and bypassed the mounted `<HostPicker />` UX. Mobile must wait for
-    // an explicit pick when cardinality is "many".
+    // Regression: previously `getDefaultEntry()` fell through to `remoteEntries[0]`, which silently bound the first remote on mobile and bypassed the mounted `<HostPicker />` UX.
+    // Mobile must wait for an explicit pick when cardinality is "many".
     const host = makeHost(null);
     const secondRemote: HostDirectoryEntry = {
       hostId: "mock-remote-2",
@@ -506,10 +472,7 @@ describe("HostDirectoryService", () => {
   });
 
   it("reports cardinality 'unknown' until a registry listing has actually been delivered", async () => {
-    // The relay-only launch bug: a first fetch that FAILED left the merged
-    // directory empty, and an empty directory read as "you own no hosts" - so
-    // a phone whose Mac was registered and online was told to go connect one,
-    // until the 15s poll silently replaced the screen.
+    // The relay-only launch bug: a first fetch that FAILED left the merged directory empty, and an empty directory read as "you own no hosts" - so a phone whose Mac was registered and online was told to go connect one, until the 15s poll silently replaced the.
     const host = makeHost(null);
     const { fetcher } = queuedFetcher([
       { kind: "failed" },
@@ -534,16 +497,13 @@ describe("HostDirectoryService", () => {
     await directory.refresh();
 
     expect(directory.getCardinality()).toBe("zero");
-    // The FIRST listing changes no entry when the registry is empty, so the
-    // snapshot-equality guard would swallow the one emit that moves the
-    // readiness gate off its searching state.
+    // The FIRST listing changes no entry when the registry is empty, so the snapshot-equality guard would swallow the one emit that moves the readiness gate off its searching state.
     expect(emits).toEqual([0]);
   });
 
   it("does not treat a bearer-less 'signed-out' fetch as a delivered listing", async () => {
-    // `signed-out` is the fetcher saying it had nothing to ask WITH. On a
-    // shell whose auth is still settling that is a race, not the registry's
-    // answer - so the directory stays unknown rather than claiming empty.
+    // `signed-out` is the fetcher saying it had nothing to ask WITH.
+    // On a shell whose auth is still settling that is a race, not the registry's answer - so the directory stays unknown rather than claiming empty.
     const host = makeHost(null);
     const { fetcher } = queuedFetcher([
       { kind: "signed-out" },
@@ -566,11 +526,8 @@ describe("HostDirectoryService", () => {
   });
 
   it("withholds a settled fleet while the registry is unanswered, even though the local host makes the snapshot non-empty", async () => {
-    // The distinction `list()` cannot draw, for callers that destroy durable
-    // state on absence. A machine running a local host renders one ordinary
-    // row whether or not the registry was ever reached, so a FAILED first
-    // fetch looks exactly like a one-host account - and every remote host
-    // reads as deregistered.
+    // The distinction `list()` cannot draw, for callers that destroy durable state on absence.
+    // A machine running a local host renders one ordinary row whether or not the registry was ever reached, so a FAILED first fetch looks exactly like a one-host account - and every remote host reads as deregistered.
     const host = makeHost(localSnapshot);
     const { fetcher } = queuedFetcher([
       { kind: "failed" },
@@ -599,9 +556,7 @@ describe("HostDirectoryService", () => {
   });
 
   it("withdraws the settled fleet when a later fetch comes back signed-out", async () => {
-    // Same rule as the cardinality arm below: a bearer rotating out is not the
-    // registry saying those hosts are gone, so the fleet re-closes rather than
-    // presenting its cleared remote set as an answer.
+    // Same rule as the cardinality arm below: a bearer rotating out is not the registry saying those hosts are gone, so the fleet re-closes rather than presenting its cleared remote set as an answer.
     const host = makeHost(null);
     const { fetcher } = queuedFetcher([
       { kind: "hosts", entries: [mockRemoteHostEntry] },
@@ -624,10 +579,7 @@ describe("HostDirectoryService", () => {
   });
 
   it("un-settles the directory when a later fetch comes back signed-out", async () => {
-    // The other side of the race above: a bearer that rotates out from under
-    // a directory that has already seen a real listing must not report
-    // "zero" - that told a user with a live, registered Mac "No host
-    // connected" over what is really a mid-rotation 401.
+    // The other side of the race above: a bearer that rotates out from under a directory that has already seen a real listing must not report "zero" - that told a user with a live, registered Mac "No host connected" over what is really a mid-rotation 401.
     const host = makeHost(null);
     const { fetcher } = queuedFetcher([
       { kind: "hosts", entries: [mockRemoteHostEntry] },
@@ -697,11 +649,7 @@ describe("HostDirectoryService", () => {
   });
 
   it("ends the refresh-pending window when the in-flight request is invalidated", async () => {
-    // Dropping the in-flight request on a credential rotation is the OTHER way
-    // `isRefreshing()` goes false, and the manual Refresh affordance is driven
-    // by this subscription alone - without the emit it stays locked in its
-    // pending state until the orphaned request happens to settle, which is a
-    // fetch timeout away.
+    // Dropping the in-flight request on a credential rotation is the OTHER way `isRefreshing()` goes false, and the manual Refresh affordance is driven by this subscription alone - without the emit it stays locked in its pending state until the orphaned request.
     const host = makeHost(null);
     const deferred = deferredOutcome();
     let calls = 0;
@@ -837,11 +785,8 @@ describe("HostDirectoryService", () => {
   });
 
   it("reflects the current local snapshot even when start() runs after the host already has one", async () => {
-    // Mirrors the desktop-bridge timing where the preload has captured the
-    // current snapshot before `gui-app` starts the directory service. The
-    // service must observe the replay emitted by `onLocalHostChange` on
-    // subscribe and list the local entry immediately - without any separate
-    // `getLocalHost()` accessor.
+    // Mirrors the desktop-bridge timing where the preload has captured the current snapshot before `gui-app` starts the directory service.
+    // The service must observe the replay emitted by `onLocalHostChange` on subscribe and list the local entry immediately - without any separate `getLocalHost()` accessor.
     const host = makeHost(null);
     host.setLocalHost(localSnapshot);
 
@@ -960,9 +905,7 @@ describe("HostDirectoryService", () => {
     await directory.start();
     expect(fetchCalls).toBe(1);
 
-    // Resume/visibility-change fires partway through the poll window - this
-    // should rearm the interval from this point, not just refresh once while
-    // leaving the original schedule armed.
+    // Resume/visibility-change fires partway through the poll window - this should rearm the interval from this point, not just refresh once while leaving the original schedule armed.
     await vi.advanceTimersByTimeAsync(HOST_DIRECTORY_REFRESH_POLL_MS / 2);
     document.dispatchEvent(new Event("visibilitychange"));
     await flushPromises();
@@ -981,11 +924,8 @@ describe("HostDirectoryService", () => {
     const host = makeHost(null);
     const { fetcher } = queuedFetcher([
       { kind: "hosts", entries: [mockRemoteHostEntry] },
-      // Fresh object literals, field-identical to the previous batch - what a
-      // real 15s poll produces when nothing about the registry changed. An
-      // unconditional emit here re-rendered/refetched every `onChange`
-      // consumer app-wide on every tick (terminal tiles unmounted through
-      // the reachability gate and reset to "Starting terminal session…").
+      // Fresh object literals, field-identical to the previous batch - what a real 15s poll produces when nothing about the registry changed.
+      // An unconditional emit here re-rendered/refetched every `onChange` consumer app-wide on every tick (terminal tiles unmounted through the reachability gate and reset to "Starting terminal session…").
       { kind: "hosts", entries: [{ ...mockRemoteHostEntry }] },
       {
         kind: "hosts",
@@ -1022,16 +962,7 @@ describe("HostDirectoryService", () => {
     expect(observed[1]).toHaveLength(2);
   });
 
-  // R-1's key-rotation sweep (`host-key-rotation-sweep.ts`) can only ever see
-  // a rotation if THIS emit happens at all: `hostDirectoryEntriesEqual`'s
-  // `remotePublicKeyOf(a) === remotePublicKeyOf(b)` comparison is the single
-  // line that makes a key-only change observable rather than swallowed as a
-  // field-identical poll tick. Nothing states that outside the source
-  // comment, and every suite pinning the sweep itself supplies its own
-  // directory double - none of them would notice this comparison deleted.
-  // The REAL projection (`hostListItemToDirectoryEntry`), not a hand-built
-  // `RemoteHostDirectoryEntry`, so a change to what the projector reads as
-  // "the key" is caught here too.
+  // R-1's key-rotation sweep (`host-key-rotation-sweep.ts`) can only ever see a rotation if THIS emit happens at all: `hostDirectoryEntriesEqual`'s `remotePublicKeyOf(a) === remotePublicKeyOf(b)` comparison is the single line that makes a key-only change.
   it("fans out onChange when a poll's ONLY change is a remote entry's public key", async () => {
     const item = {
       hostId: "rotating-registry-host",
@@ -1056,10 +987,7 @@ describe("HostDirectoryService", () => {
       relayUrl,
       PLAN_ALLOWS_REMOTE,
     );
-    // Same row in every other respect - `connectable`, so the derived
-    // unavailability verdict and the relay-fuse-grace flag (always `false`
-    // off `offline`) cannot be what moves the comparison. Only `publicKey`
-    // differs between the two projections below.
+    // Same row in every other respect - `connectable`, so the derived unavailability verdict and the relay-fuse-grace flag (always `false` off `offline`) cannot be what moves the comparison.
     const afterRotation = hostListItemToDirectoryEntry(
       { ...item, publicKey: "pk-generation-2" },
       relayUrl,
@@ -1174,14 +1102,8 @@ describe("HostDirectoryService", () => {
   });
 
   it("notifies onChange when an offline row's ONLY change is its relay-fuse grace aging past the cap", async () => {
-    // The registry row itself never changes: same host, same `offline`
-    // verdict, same `lastSeenAt`. What changes is the clock - the projection
-    // recomputes `relayFuseGrace` from recency on every fetch, so once
-    // `lastSeenAt` ages past RELAY_FUSE_MAX_ATTACH_MS the flag flips while
-    // every other compared field (including the derived verdict) stays
-    // identical. Swallowing that emission left every consumer holding
-    // `relayFuseGrace: true` forever - recovery dials permitted indefinitely
-    // past the documented 4h cap.
+    // The registry row itself never changes: same host, same `offline` verdict, same `lastSeenAt`.
+    // What changes is the clock - the projection recomputes `relayFuseGrace` from recency on every fetch, so once `lastSeenAt` ages past RELAY_FUSE_MAX_ATTACH_MS the flag flips while every other compared field (including the derived verdict) stays identical.
     const lastSeenAt = "2026-07-03T12:00:00.000Z";
     const lastSeenMs = Date.parse(lastSeenAt);
     const item = {
@@ -1201,9 +1123,7 @@ describe("HostDirectoryService", () => {
       },
       updatePolicy: "manual",
     } as const;
-    // The SAME registry row projected at two moments, by the REAL projection
-    // (not hand-flipped flags): one minute after last-seen, then one tick
-    // past the fuse cap.
+    // The SAME registry row projected at two moments, by the REAL projection (not hand-flipped flags): one minute after last-seen, then one tick past the fuse cap.
     const nowSpy = vi.spyOn(Date, "now");
     nowSpy.mockReturnValue(lastSeenMs + 60_000);
     const inGrace = hostListItemToDirectoryEntry(
@@ -1254,11 +1174,8 @@ describe("HostDirectoryService", () => {
   });
 
   it("retains the last-known remote entries when a refresh fails (T20 / audit P4)", async () => {
-    // This used to also assert the bound SELECTION survived the failed
-    // refresh (`selectById` / `getSelected()` / `onSelectionChange`). P4.2
-    // deleted selection from `HostDirectoryService` - that half of the claim
-    // has no post-slot equivalent here and is dropped; entry retention is
-    // the surviving contract.
+    // This used to also assert the bound SELECTION survived the failed refresh (`selectById` / `getSelected()` / `onSelectionChange`).
+    // P4.2 deleted selection from `HostDirectoryService` - that half of the claim has no post-slot equivalent here and is dropped; entry retention is the surviving contract.
     const host = makeHost(null);
     const { fetcher } = queuedFetcher([
       { kind: "hosts", entries: [mockRemoteHostEntry] },
@@ -1373,12 +1290,8 @@ describe("HostDirectoryService", () => {
 
   describe("machine-owned host id vs the registry twin", () => {
     /**
-     * The registry also lists this machine's own host. During a local restart
-     * (reinstall/update) the local snapshot is null, so the registry's
-     * remote-kind twin - "available" by presence lease, dialable on paper, but
-     * reached through the relay - is the only entry carrying that id. Binding
-     * it renders the dead-end unavailable card and disables the local
-     * provisioning lifecycle.
+     * The registry also lists this machine's own host.
+     * During a local restart (reinstall/update) the local snapshot is null, so the registry's remote-kind twin - "available" by presence lease, dialable on paper, but reached through the relay - is the only entry carrying that id.
      */
     const ownRegistryTwin: HostDirectoryEntry = {
       hostId: localSnapshot.hostId,
@@ -1418,10 +1331,7 @@ describe("HostDirectoryService", () => {
         kind: "local",
         websocketUrl: null,
         version: "1.2.2",
-        // Not the twin's presence lease: `not-dialable` is the truth, and it
-        // is what leaves a `not-dialable -> dialable` edge for dialability
-        // subscribers (e.g. landing-terminal tombstone recovery) when the real
-        // host finally publishes.
+        // Not the twin's presence lease: `not-dialable` is the truth, and it is what leaves a `not-dialable -> dialable` edge for dialability subscribers (e.g. landing-terminal tombstone recovery) when the real host finally publishes.
         transportDialability: "not-dialable",
       });
       expect(entries[1]).toEqual(secondRemoteHostEntry);
@@ -1488,11 +1398,7 @@ describe("HostDirectoryService", () => {
     });
 
     /**
-     * Regression (Codex P1 on OSS #913): the FIRST launch of the build that
-     * introduced the persisted key has nothing stored, and that launch is
-     * exactly the reinstall this guard exists for - the host is down, so no
-     * snapshot seeds it either. Without the shell's durable pid metadata the
-     * twin would go unrecognised on the one launch that needed it most.
+     * Regression (Codex P1 on OSS #913): the FIRST launch of the build that introduced the persisted key has nothing stored, and that launch is exactly the reinstall this guard exists for - the host is down, so no snapshot seeds it either.
      */
     it("seeds the id from the shell's pid metadata when nothing is persisted yet", async () => {
       expect(
@@ -1530,12 +1436,7 @@ describe("HostDirectoryService", () => {
     });
 
     /**
-     * Regression (Codex P2 on OSS #913): seeding introduced an await BEFORE
-     * the local-host subscription is installed, so a provider unmounting or
-     * swapping its runner mid-flight can `dispose()` while nothing is
-     * registered. Resuming past that point would install a listener no
-     * `dispose()` can remove - an orphan dispatching stale callbacks for the
-     * life of the page.
+     * Regression (Codex P2 on OSS #913): seeding introduced an await BEFORE the local-host subscription is installed, so a provider unmounting or swapping its runner mid-flight can `dispose()` while nothing is registered.
      */
     it("abandons startup when disposed while the shell seed is in flight", async () => {
       let releaseSeed: () => void = () => undefined;
@@ -1573,10 +1474,8 @@ describe("HostDirectoryService", () => {
     });
 
     /**
-     * Regression (CodeRabbit P2 on OSS #913): the host can be re-enrolled while
-     * the renderer is not running. Treating the persisted value as
-     * authoritative would neutralise the OBSOLETE twin while this machine's
-     * current registry entry stayed remote-kind and relay-dialable.
+     * Regression (CodeRabbit P2 on OSS #913): the host can be re-enrolled while the renderer is not running.
+     * Treating the persisted value as authoritative would neutralise the OBSOLETE twin while this machine's current registry entry stayed remote-kind and relay-dialable.
      */
     it("prefers the shell's id over a stale persisted one after re-enrollment", async () => {
       window.localStorage.setItem(
@@ -1608,9 +1507,7 @@ describe("HostDirectoryService", () => {
     });
 
     it("migrates a pinned Settings scope of the old local id on re-enrollment", async () => {
-      // The Settings viewing scope is a holder like the persisted and live
-      // selections: left behind, it keeps administering the dead registry
-      // twin, then reads `vanished` once the twin deregisters.
+      // The Settings viewing scope is a holder like the persisted and live selections: left behind, it keeps administering the dead registry twin, then reads `vanished` once the twin deregisters.
       window.localStorage.setItem(
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
         localSnapshot.hostId,
@@ -1715,9 +1612,8 @@ describe("HostDirectoryService", () => {
       const aRefreshJoined = directory.refresh();
       expect(callCount()).toBe(1);
 
-      // The account switch. B's refresh must NOT join A's still-pending
-      // flight just because one is in flight - the memo is keyed by identity,
-      // not by "is anything in flight".
+      // The account switch.
+      // B's refresh must NOT join A's still-pending flight just because one is in flight - the memo is keyed by identity, not by "is anything in flight".
       currentAccount = "account-b";
       const bRefresh = directory.refresh();
       expect(callCount()).toBe(2);
@@ -1728,17 +1624,14 @@ describe("HostDirectoryService", () => {
         accountBHostEntry.hostId,
       ]);
 
-      // A third caller under B, after B's own flight has settled and cleared
-      // its slot, gets a fresh fetch - proving the slot was cleared by B's OWN
-      // settle, not left dangling or falsely reused.
+      // A third caller under B, after B's own flight has settled and cleared its slot, gets a fresh fetch - proving the slot was cleared by B's OWN settle, not left dangling or falsely reused.
       const bRefreshAgain = directory.refresh();
       expect(callCount()).toBe(3);
       resolve(2, { kind: "hosts", entries: [accountBHostEntry] });
       await bRefreshAgain;
 
       // Let A's stale flight resolve too, late, so nothing is left dangling.
-      // Its outcome must never have reached the directory - covered precisely
-      // by the next test, asserted lightly here for completeness.
+      // Its outcome must never have reached the directory - covered precisely by the next test, asserted lightly here for completeness.
       resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
       await aRefresh;
       await aRefreshJoined;
@@ -1772,10 +1665,8 @@ describe("HostDirectoryService", () => {
         accountBHostEntry.hostId,
       ]);
 
-      // A's fetch NOW resolves - after the switch, carrying A's hosts. A
-      // keyed memo alone would not stop this: `performRefresh` must re-check
-      // the identity at commit time and discard the write, because the read
-      // was issued for an identity that is no longer current.
+      // A's fetch NOW resolves - after the switch, carrying A's hosts.
+      // A keyed memo alone would not stop this: `performRefresh` must re-check the identity at commit time and discard the write, because the read was issued for an identity that is no longer current.
       resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
       await aRefresh;
 
@@ -1803,10 +1694,8 @@ describe("HostDirectoryService", () => {
         accountAHostEntry.hostId,
       ]);
 
-      // Direct A -> B switch; B's FIRST read fails. "Retain last-known on
-      // failure" is only safe for the SAME identity - keeping the list here
-      // would show A's machines (and keep A's selection bindable) under B's
-      // signed-in session until some later read happened to succeed.
+      // Direct A -> B switch; B's FIRST read fails.
+      // "Retain last-known on failure" is only safe for the SAME identity - keeping the list here would show A's machines (and keep A's selection bindable) under B's signed-in session until some later read happened to succeed.
       currentAccount = "account-b";
       const bRefresh = directory.refresh();
       resolve(1, { kind: "failed" });
@@ -1832,11 +1721,8 @@ describe("HostDirectoryService", () => {
     });
 
     it("un-settles the directory when it drops a previous account's hosts", async () => {
-      // The drop empties the directory without the registry having answered
-      // for the NEW identity, so the emptiness is `unknown` - the searching
-      // surface - not `zero`. Reporting `zero` here tells an account that has
-      // never been read that it owns no hosts, which is the same lie the
-      // unknown state exists to prevent, reached through the identity door.
+      // The drop empties the directory without the registry having answered for the NEW identity, so the emptiness is `unknown` - the searching surface - not `zero`.
+      // Reporting `zero` here tells an account that has never been read that it owns no hosts, which is the same lie the unknown state exists to prevent, reached through the identity door.
       let currentAccount: string | null = "account-a";
       const { fetcher, resolve } = deferredFetcher();
       const directory = makeDirectory({
@@ -1863,9 +1749,7 @@ describe("HostDirectoryService", () => {
       await bRefresh;
 
       expect(directory.getCardinality()).toBe("unknown");
-      // The gate moves between two surfaces over a directory that is empty
-      // either way, so the snapshot-equality guard must not swallow the emit
-      // that redraws it.
+      // The gate moves between two surfaces over a directory that is empty either way, so the snapshot-equality guard must not swallow the emit that redraws it.
       expect(emits).toEqual([0]);
 
       const bRetry = directory.refresh();
@@ -1875,11 +1759,8 @@ describe("HostDirectoryService", () => {
     });
 
     it("un-settles the directory when the previous account owned no hosts at all", async () => {
-      // The empty-list boundary. An account that legitimately owns NOTHING
-      // commits `{hosts: []}`: there are no rows to drop, so a reset keyed on
-      // row count never runs - and its OBSERVATION survives into the next
-      // account, which then reads an unanswered registry as "you own no
-      // hosts". The observed listing is foreign state exactly as the rows are.
+      // The empty-list boundary.
+      // An account that legitimately owns NOTHING commits `{hosts: []}`: there are no rows to drop, so a reset keyed on row count never runs - and its OBSERVATION survives into the next account, which then reads an unanswered registry as "you own no hosts".
       let currentAccount: string | null = "account-a";
       const { fetcher, resolve } = deferredFetcher();
       const directory = makeDirectory({
@@ -1939,10 +1820,8 @@ describe("HostDirectoryService", () => {
         accountBHostEntry.hostId,
       ]);
 
-      // A's expired bearer earns a 401 - `signed-out` - and resolves late,
-      // after the switch. Without the commit guard this clears the directory
-      // exactly as a successful empty `hosts` result would, erasing the list
-      // B had just legitimately loaded.
+      // A's expired bearer earns a 401 - `signed-out` - and resolves late, after the switch.
+      // Without the commit guard this clears the directory exactly as a successful empty `hosts` result would, erasing the list B had just legitimately loaded.
       resolve(0, { kind: "signed-out" });
       await aRefresh;
 
@@ -1953,17 +1832,7 @@ describe("HostDirectoryService", () => {
   });
 
   describe("credential-scoped destructive commits (same-user bearer rotation)", () => {
-    // The counter these fence on is the REAL one, driven by a real rotation
-    // through `DefaultRequestContextProvider` — not a local variable the test
-    // increments where it thinks a rotation would be.
-    //
-    // That distinction is the reason this pair is here at all. The previous
-    // version of these tests hand-drove a number, so they passed while
-    // production was wired to an identity-transition counter that does not
-    // move on a rotation at all: they proved the fence works GIVEN a credential
-    // counter, never that the thing wired into it is one. What they still do
-    // not reach is the wiring from `AuthService` down to the credential a fetch
-    // actually uses — `auth-era-composition.test.ts` covers that end to end.
+    // The counter these fence on is the REAL one, driven by a real rotation through `DefaultRequestContextProvider` - not a local variable the test increments where it thinks a rotation would be.
     function signedInProvider(): DefaultRequestContextProvider {
       const provider = new DefaultRequestContextProvider({
         origin: "renderer",
@@ -2003,20 +1872,15 @@ describe("HostDirectoryService", () => {
       const oldBearerPoll = directory.refresh();
       expect(callCount()).toBe(2);
 
-      // Rotation: same user, new credential, through the real provider - the
-      // generation moves because a bearer was replaced, not because the test
-      // said so. `HostRuntime.onBearerRotated` drops the in-flight memo: a
-      // joined promise from the OLD bearer must not satisfy a caller under
-      // the new one.
+      // Rotation: same user, new credential, through the real provider - the generation moves because a bearer was replaced, not because the test said so.
+      // `HostRuntime.onBearerRotated` drops the in-flight memo: a joined promise from the OLD bearer must not satisfy a caller under the new one.
       directory.invalidateInFlightRefresh();
       provider.rotateCurrentBearer({
         userId: "account-a",
         bearerToken: "bearer-a2",
       });
 
-      // A refresh issued right after rotation must be a NEW fetcher call,
-      // not a join onto the old bearer's dropped flight - proving the memo
-      // was actually cleared, not merely rekeyed.
+      // A refresh issued right after rotation must be a NEW fetcher call, not a join onto the old bearer's dropped flight - proving the memo was actually cleared, not merely rekeyed.
       const newBearerPoll = directory.refresh();
       expect(callCount()).toBe(3);
       resolve(2, { kind: "hosts", entries: [accountAHostEntry] });
@@ -2025,12 +1889,8 @@ describe("HostDirectoryService", () => {
         accountAHostEntry.hostId,
       ]);
 
-      // The old bearer's poll NOW resolves, late, with the 401 its expired
-      // token earned. The user id still matches ("account-a" throughout), so
-      // a user-id-only fence would let this clear the directory the new
-      // credential just legitimately filled. The credential fence must
-      // discard it instead: the generation this refresh was issued under no
-      // longer matches the one the rotation left behind.
+      // The old bearer's poll NOW resolves, late, with the 401 its expired token earned.
+      // The user id still matches ("account-a" throughout), so a user-id-only fence would let this clear the directory the new credential just legitimately filled.
       resolve(1, { kind: "signed-out" });
       await oldBearerPoll;
       expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
@@ -2052,11 +1912,8 @@ describe("HostDirectoryService", () => {
       const oldEraRefresh = directory.refresh();
       expect(callCount()).toBe(1);
 
-      // Deliberately NOT calling `invalidateInFlightRefresh()` - that is the
-      // runtime's rotation hook, and this asserts the memo KEY on its own.
-      // Both guards cover this, and either alone is enough; the key is what
-      // holds if a future caller reaches the directory without going through
-      // the rotation listener.
+      // Deliberately NOT calling `invalidateInFlightRefresh()` - that is the runtime's rotation hook, and this asserts the memo KEY on its own.
+      // Both guards cover this, and either alone is enough; the key is what holds if a future caller reaches the directory without going through the rotation listener.
       provider.rotateCurrentBearer({
         userId: "account-a",
         bearerToken: "bearer-a2",
@@ -2081,12 +1938,7 @@ describe("HostDirectoryService", () => {
         remoteFetcher: fetcher,
       });
 
-      // Issued under the pre-rotation generation, and deliberately NOT dropped
-      // by `invalidateInFlightRefresh()` here - this is the case the asymmetry
-      // is about: a rotation happens while this refresh is in flight, but it
-      // still describes the right account's hosts, so it must not be fenced
-      // the way a `signed-out` clear is. (The ordering watermark does not bite
-      // either: no newer-generation commit has landed for it to be beneath.)
+      // Issued under the pre-rotation generation, and deliberately NOT dropped by `invalidateInFlightRefresh()` here - this is the case the asymmetry is about: a rotation happens while this refresh is in flight, but it still describes the right account's hosts, so.
       const inFlight = directory.refresh();
       provider.rotateCurrentBearer({
         userId: "account-a",
@@ -2116,9 +1968,7 @@ describe("HostDirectoryService", () => {
       const oldBearerPoll = directory.refresh();
       expect(callCount()).toBe(1);
 
-      // Same-user rotation through the real provider, with the runtime's
-      // rotation hook dropping the in-flight memo - the same sequence the
-      // destructive-fence test drives.
+      // Same-user rotation through the real provider, with the runtime's rotation hook dropping the in-flight memo - the same sequence the destructive-fence test drives.
       directory.invalidateInFlightRefresh();
       provider.rotateCurrentBearer({
         userId: "account-a",
@@ -2139,10 +1989,8 @@ describe("HostDirectoryService", () => {
         accountBHostEntry.hostId,
       ]);
 
-      // NOW the old bearer's read resolves - constructive, same user, but a
-      // snapshot from before the newer commit. An identity-only fence lets it
-      // through, silently dropping the newly registered host until the next
-      // poll. The ordering watermark must discard it instead.
+      // NOW the old bearer's read resolves - constructive, same user, but a snapshot from before the newer commit.
+      // An identity-only fence lets it through, silently dropping the newly registered host until the next poll.
       resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
       await oldBearerPoll;
       expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
@@ -2235,10 +2083,7 @@ describe("HostDirectoryService", () => {
     });
 
     it("a push arriving while the window is HIDDEN is held, and acted on once when the window becomes visible", async () => {
-      // The push path returned from `start()` before `visibilityDocument` was
-      // assigned, so `isDocumentHidden()` was permanently false on desktop and
-      // every background window refetched `GET /api/v3/hosts` on each of
-      // main's ticks - the fetch the removed per-window timer used to skip.
+      // The push path returned from `start()` before `visibilityDocument` was assigned, so `isDocumentHidden()` was permanently false on desktop and every background window refetched `GET /api/v3/hosts` on each of main's ticks - the fetch the removed per-window.
       const { host, push } = makeHostWithRegistryPush(null);
       let fetchCalls = 0;
       const fetcher: RemoteHostFetcher = () => {
@@ -2349,29 +2194,7 @@ describe("HostDirectoryService", () => {
   });
 });
 
-/**
- * Boot-ordering convergence (int #48).
- *
- * The 2026-08-11 lock was not reproducible on demand: one launch of the same
- * install came up locked and STAYED locked through a renderer reload, the next
- * came up clean. That is the signature of a startup race whose bad outcome
- * LATCHES - and the latch here is an ask that happens exactly once.
- *
- * `start()` asks the shell for this machine's durable host id a single time.
- * The ask crosses an IPC boundary with `retry: false`, its answer is cacheable
- * for a minute, and on a fresh profile there is no persisted fallback - so
- * `null` is an ordinary outcome, and it used to be permanent for the life of
- * the app instance. A null id means `snapshot()` cannot recognise the
- * registry's twin of this machine, so the twin is published verbatim:
- * `kind: "remote"`, relay URL, and whatever its presence lease says. Right
- * after the host was down - precisely when this path runs - that lease reads
- * expired, and the row for the user's own working machine is a remote host
- * marked unavailable. Every chat it owns locks to a published copy, and
- * nothing re-asks.
- *
- * These tests pin CONVERGENCE rather than ordering: whichever input is late,
- * the directory has to arrive at the truth on its own.
- */
+/** Boot-ordering convergence (int #48). */
 describe("HostDirectoryService boot-ordering convergence", () => {
   const LOCAL_HOST_ID = "desktop-pid-123";
 
@@ -2400,10 +2223,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
 
     await directory.start();
 
-    // The latched state: our own machine, presented as an unavailable REMOTE
-    // row. Both of `useHostReachability`'s protections miss this shape - the
-    // directory is not empty, and the row is not a local one - so it reports
-    // `unreachable` and locks the user's chats.
+    // The latched state: our own machine, presented as an unavailable REMOTE row.
+    // Both of `useHostReachability`'s protections miss this shape - the directory is not empty, and the row is not a local one - so it reports `unreachable` and locks the user's chats.
     const beforeReseed = await directory.list();
     expect(beforeReseed).toHaveLength(1);
     expect(beforeReseed[0].kind).toBe("remote");
@@ -2416,10 +2237,7 @@ describe("HostDirectoryService boot-ordering convergence", () => {
 
     const afterReseed = await directory.list();
     expect(afterReseed).toHaveLength(1);
-    // Recognised as this machine: non-dialable (so nothing can reach for the
-    // relay against our own host) and LOCAL, which is the shape
-    // `useHostReachability` reads as "not published yet" rather than "dead",
-    // and which keeps the local provisioning lifecycle armed.
+    // Recognised as this machine: non-dialable (so nothing can reach for the relay against our own host) and LOCAL, which is the shape `useHostReachability` reads as "not published yet" rather than "dead", and which keeps the local provisioning lifecycle armed.
     expect(afterReseed[0].kind).toBe("local");
     expect(afterReseed[0].websocketUrl).toBeNull();
   });
@@ -2473,16 +2291,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
   });
 
   it("projects a busy shell verdict into a DIALABLE local entry", async () => {
-    // A host that lost a probe is still the host: dialable URL, `busy`
-    // availability. Publishing it as anything else is what put the registry
-    // twin - and its hardcoded `unavailable` - in front of the user in the
-    // first place.
-    //
-    // The entry no longer carries the shell's three-valued availability; it
-    // carries the projection (`toLocalEntry`), which is the one seam where a
-    // `HostAvailability` becomes a `HostTransportDialability`. Pinning it here
-    // is what keeps `busy` from ever reaching a consumer as death: every
-    // downstream reason (`hostUnavailability`) derives from this field.
+    // A host that lost a probe is still the host: dialable URL, `busy` availability.
+    // Publishing it as anything else is what put the registry twin - and its hardcoded `unavailable` - in front of the user in the first place.
     const host = makeHost(null);
     const directory = makeDirectory({
       authContextId: null,

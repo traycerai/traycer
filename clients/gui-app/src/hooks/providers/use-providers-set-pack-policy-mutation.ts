@@ -23,10 +23,7 @@ interface SetPackPolicyMutationContext {
   readonly hostId: string | null;
 }
 
-/**
- * Set per-pack auto-download policy. Echoes the durable value on success.
- * Policy write failures have no typed-refusal arm — toast a host error.
- */
+/** Set per-pack auto-download policy. */
 export function useProvidersSetPackPolicy(): SetPackPolicyMutationResult {
   return useProvidersSetPackPolicyForClient(useHostClient());
 }

@@ -13,9 +13,7 @@ import {
   parseTaskTodoToolPayloads,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 
-// Mirror the host accumulator: raw input is not persisted, so a tool segment
-// carries precomputed display fields - including the parsed task-todo items the
-// pinned-todo stack now reads straight off the segment.
+// Mirror the host accumulator: raw input is not persisted, so a tool segment carries precomputed display fields - including the parsed task-todo items the pinned-todo stack now reads straight off the segment.
 function toolInputFields(toolName: string, input: unknown) {
   return {
     inputSummary: deriveToolInputSummary(toolName, input),
@@ -26,10 +24,7 @@ function toolInputFields(toolName: string, input: unknown) {
   };
 }
 
-// The rendered rows are the FULL chat history, so `buildPinnedTodoRenderState`
-// both DERIVES the pinned snapshot (latest-todo selection, task-tool parsing,
-// the reset-after-user rule) and STRIPS the inline todo/task-tool segments
-// that the pinned stack replaces.
+// The rendered rows are the FULL chat history, so `buildPinnedTodoRenderState` both DERIVES the pinned snapshot (latest-todo selection, task-tool parsing, the reset-after-user rule) and STRIPS the inline todo/task-tool segments that the pinned stack replaces.
 describe("buildPinnedTodoRenderState", () => {
   describe("snapshot derivation", () => {
     it("pins the latest non-empty todo segment", () => {
@@ -373,9 +368,7 @@ describe("buildPinnedTodoRenderState", () => {
 
   describe("host authority (windowed line)", () => {
     it("over completed rows only, returns the host todo verbatim and strips task-tool segments, even though the local fold would find nothing", () => {
-      // No semantic todo segment and no task-tool call in these messages, so
-      // `derivePinnedTodo` would answer `null` - the host's snapshot is the
-      // only reason a todo is pinned here.
+      // No semantic todo segment and no task-tool call in these messages, so `derivePinnedTodo` would answer `null` - the host's snapshot is the only reason a todo is pinned here.
       const messages = [
         makeAssistantMessage("assistant-1", [textSegment("text-1")], null),
         makeAssistantMessage(
@@ -392,9 +385,8 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, {
         kind: "host",
         todo: hostTodo,
-        // The accumulator behind the host's selection. Here it IS that
-        // selection's items; `a semantic todo does not seed the task fold`
-        // below is the case where the two differ.
+        // The accumulator behind the host's selection.
+        // Here it IS that selection's items; `a semantic todo does not seed the task fold` below is the case where the two differ.
         taskItems: hostTodo.items,
         activeTurnId: null,
       });
@@ -436,13 +428,7 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("a live turn that only ADVANCES a host-known task still moves the dock", () => {
-      // The task tools are a delta protocol: a `TaskComplete` carries the task
-      // id and nothing else. Folded onto an empty state it names a task the
-      // fold has never seen and is dropped, so the live fold produced no todo
-      // at all and the dock sat on the host's baseline - showing `in_progress`
-      // for a task the running turn had already finished - until the next
-      // turn-boundary snapshot. Seeding the fold from the host's items is what
-      // lets the delta land.
+      // Folded onto an empty state it names a task the fold has never seen and is dropped, so the live fold produced no todo at all and the dock sat on the host's baseline - showing `in_progress` for a task the running turn had already finished - until the next turn-boundary snapshot.
       const messages = [
         makeAssistantMessage(
           "assistant-1",
@@ -462,9 +448,8 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, {
         kind: "host",
         todo: hostTodo,
-        // The accumulator behind the host's selection. Here it IS that
-        // selection's items; `a semantic todo does not seed the task fold`
-        // below is the case where the two differ.
+        // The accumulator behind the host's selection.
+        // Here it IS that selection's items; `a semantic todo does not seed the task fold` below is the case where the two differ.
         taskItems: hostTodo.items,
         activeTurnId: null,
       });
@@ -484,21 +469,8 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("a semantic todo does not seed the task fold", () => {
-      // The two halves of the host's fold are genuinely different lists, and
-      // this is the case that proves the client must be told both.
-      //
-      // `foldPinnedTodo` lets a semantic `todo` block outrank the task list for
-      // DISPLAY while the accumulator keeps running underneath it. So the
-      // host's selected `pinnedTodo` here is the semantic checklist, and the
-      // task item the live turn is about to complete is only in
-      // `pinnedTaskTodoItems`.
-      //
-      // Seeding from the selection instead - the shape this store shipped
-      // once - fails in one of two ways depending on the ids: the delta names
-      // an item the seed does not hold and is dropped, or it collides with a
-      // semantic item and rewrites THAT. Both leave the dock on a checklist
-      // that is not the one the turn is advancing, which is worse than the
-      // freeze the seeding exists to prevent.
+      // Seeding from the selection instead - the shape this store shipped once - fails in one of two ways depending on the ids: the delta names an item the seed does not hold and is dropped, or it collides with a semantic item and rewrites THAT.
+      // Both leave the dock on a checklist that is not the one the turn is advancing, which is worse than the freeze the seeding exists to prevent.
       const messages = [
         makeAssistantMessage(
           "assistant-1",
@@ -536,11 +508,8 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("a live turn that CREATES replaces the host's list rather than merging into it", () => {
-      // The seeded fold arms its reset for the same reason the whole-history
-      // fold does: the user row that started this turn is outside the filtered
-      // subset by construction, so the first `create` after it must clear the
-      // seeded items. Without the arming, seeding would append the new
-      // checklist to the previous turn's.
+      // The seeded fold arms its reset for the same reason the whole-history fold does: the user row that started this turn is outside the filtered subset by construction, so the first `create` after it must clear the seeded items.
+      // Without the arming, seeding would append the new checklist to the previous turn's.
       const messages = [
         makeAssistantMessage(
           "assistant-1",
@@ -570,10 +539,7 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("a still-streaming row's own todo outranks the host's baseline", () => {
-      // The live row is delta-built and therefore strictly fresher than
-      // whatever the host's last snapshot emit folded - `runState` non-null
-      // marks it as still streaming, and the overlay's fold runs over ONLY
-      // those rows, ignoring the completed row entirely.
+      // The live row is delta-built and therefore strictly fresher than whatever the host's last snapshot emit folded - `runState` non-null marks it as still streaming, and the overlay's fold runs over ONLY those rows, ignoring the completed row entirely.
       const messages = [
         makeAssistantMessage(
           "assistant-1",
@@ -598,19 +564,16 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, {
         kind: "host",
         todo: hostTodo,
-        // The accumulator behind the host's selection. Here it IS that
-        // selection's items; `a semantic todo does not seed the task fold`
-        // below is the case where the two differ.
+        // The accumulator behind the host's selection.
+        // Here it IS that selection's items; `a semantic todo does not seed the task fold` below is the case where the two differ.
         taskItems: hostTodo.items,
         activeTurnId: null,
       });
 
       expect(state.todo?.id).toBe("task-create-live:task-todo");
       expect(state.todo?.items.map((item) => item.text)).toEqual(["Live task"]);
-      // Both task-tool segments are stripped (a todo is pinned). The completed
-      // row (assistant-1) is left with no segments and is dropped entirely;
-      // the still-streaming row (assistant-2) is kept even though it too ends
-      // up empty, since only a COMPLETED empty assistant row is dropped.
+      // Both task-tool segments are stripped (a todo is pinned).
+      // The completed row (assistant-1) is left with no segments and is dropped entirely; the still-streaming row (assistant-2) is kept even though it too ends up empty, since only a COMPLETED empty assistant row is dropped.
       expect(state.messages.map((message) => message.id)).toEqual([
         "assistant-2",
       ]);
@@ -618,16 +581,7 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("keeps a steer-split turn's PRE-STEER slice, which carries the create", () => {
-      // The `activeTurnId` branch of `liveTurnSlice`, and the only thing that
-      // reaches it: every other host-mode case here passes `activeTurnId: null`
-      // and so decides membership on `runState` alone.
-      //
-      // A safe-point steer splits one turn across two rows and the renderer
-      // puts `runState` on the TRAILING one only. When the task was created
-      // before the steer, the `TaskCreate` is in the slice without it - so a
-      // `runState`-only filter drops the create and the trailing `TaskUpdate`
-      // then names a task the fold never heard of. Membership by turn key is
-      // what keeps the pair together.
+      // When the task was created before the steer, the `TaskCreate` is in the slice without it - so a `runState`-only filter drops the create and the trailing `TaskUpdate` then names a task the fold never heard of.
       const messages = [
         makeAssistantMessage(
           "assistant:turn-1:part:0",
@@ -683,9 +637,7 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, { kind: "derive" });
 
       expect(state.todo?.id).toBe("todo-1");
-      // Both segments are suppressed (the todo unconditionally, the task tool
-      // because a snapshot is now pinned), leaving the assistant row empty -
-      // and an empty completed assistant row is dropped entirely.
+      // Both segments are suppressed (the todo unconditionally, the task tool because a snapshot is now pinned), leaving the assistant row empty - and an empty completed assistant row is dropped entirely.
       expect(state.messages).toEqual([]);
     });
   });

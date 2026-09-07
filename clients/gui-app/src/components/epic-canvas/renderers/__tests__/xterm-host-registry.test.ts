@@ -33,9 +33,7 @@ function makeEntry(sessionId: string, hostId: string | null): XtermHostEntry {
     term,
     fitAddon: new FitAddon(),
     searchAddon: new SearchAddon(),
-    // Canvas-free engine: this suite is about engine identity across rekeys,
-    // not renderer lifetime, so the controller's loader reports the renderer
-    // unavailable and it stays permanently DOM-rendered.
+    // Canvas-free engine: this suite is about engine identity across rekeys, not renderer lifetime, so the controller's loader reports the renderer unavailable and it stays permanently DOM-rendered.
     rendererController: createXtermRendererController({
       loadCanvasAddon: () => null,
       refreshAllRows: () => undefined,

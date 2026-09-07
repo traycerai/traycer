@@ -6,23 +6,13 @@ import {
 import { cn } from "@/lib/utils";
 
 const CYCLE_MS = 1000;
-/** The ring grows and fades over the first three quarters of the cycle, then rests. */
 const ACTIVE_FRACTION = 0.75;
 
 function easeOut(t: number): number {
   return 1 - (1 - t) * (1 - t);
 }
 
-/**
- * The expanding, fading ring behind a live dot - Tailwind's `animate-ping`
- * look (scale 1 -> 2, opacity `peakOpacity` -> 0 each second) written as
- * inline styles from the shared status animation clock instead of a CSS
- * animation; see `status-animation-clock.ts` for why. The `status-ping`
- * class is a marker for tests and reduced-motion styling, not an animation.
- *
- * Position it inside a `relative inline-flex` box the same size as the dot it
- * sits behind; `toneClass` carries the fill.
- */
+/** The expanding, fading ring behind a live dot. */
 export function PingRing(props: {
   readonly toneClass: string;
   readonly peakOpacity: number;
@@ -38,9 +28,8 @@ export function PingRing(props: {
     },
     [peakOpacity],
   );
-  // Back to the resting look the element mounts with (the JSX `style`
-  // below): React only rewrites `style` when the prop changes, so the
-  // cleanup has to restore it, not blank it.
+  // Back to the resting look the element mounts with (the JSX `style` below): React only rewrites `style` when
+  // the prop changes, so the cleanup has to restore it, not blank it.
   const clear = useCallback(
     (element: HTMLSpanElement) => {
       element.style.transform = "";

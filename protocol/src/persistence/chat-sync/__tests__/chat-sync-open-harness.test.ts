@@ -35,19 +35,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-/**
- * Harness ids in this contract are open strings.
- *
- * The epic tree spells them as a closed enum, which is right for a record read
- * by the host that wrote it. Here it would mean that shipping a new harness
- * makes every chat on it unreadable to every already-shipped cloud renderer and
- * clone target: the message `role` is known, so the passthrough carrier hands
- * the message to the known schema, which then rejects on the enum and takes the
- * whole shard with it.
- *
- * These tests pin both halves of the fix - that an unrecognized id parses and
- * round-trips, and that no closed harness-id leaf sneaks back in.
- */
+/** Harness ids in this contract are open strings. */
 
 const chatHeadSchema = getRecordSchema(
   persistenceRecordRegistry,
@@ -321,14 +309,7 @@ describe("chat-sync open harness ids", () => {
 });
 
 /**
- * Session anchors are session-chain state, so the partition puts them in the
- * opaque `hostPrivate` section rather than the presentation core.
- *
- * The anchor union discriminates on `harnessId` with a per-variant literal, so
- * it could not be reopened without forking every variant - and while it sat on
- * the core user message, a NON-NULL anchor from a newly added harness rejected
- * the whole record: `role: "user"` is known, so the passthrough hands the
- * message to the known schema, which fails on the discriminator.
+ * Session anchors are session-chain state, so the partition puts them in the opaque `hostPrivate` section rather than the presentation core.
  */
 describe("chat-sync session anchors", () => {
   const futureAnchor: JsonObject = {
@@ -424,12 +405,7 @@ describe("chat-sync harness-id leaf sweep", () => {
     }
   }
 
-  /**
-   * Structural check: any property NAMED for a harness must be an open string.
-   * Deliberately value-blind - an earlier version keyed off the literal
-   * `"claude"`, so a future closed subset (or a bare `z.literal("codex")`)
-   * would have walked straight past it.
-   */
+  /** Structural check: any property NAMED for a harness must be an open string. */
   it("spells every harness-named property as an open string", () => {
     const closed: string[] = [];
     const inspected: string[] = [];
@@ -447,17 +423,10 @@ describe("chat-sync harness-id leaf sweep", () => {
     });
 
     expect(closed).toEqual([]);
-    // Non-vacuity: a rename or a restructure that stopped the walker finding
-    // any harness property at all would otherwise leave this guard green while
-    // guarding nothing.
     expect(inspected.length).toBeGreaterThan(4);
   });
 
-  /**
-   * Value-based backstop for a harness enum hiding at a property NOT named for
-   * a harness. Expects zero: with session anchors in `hostPrivate`, neither
-   * record has any closed harness vocabulary left.
-   */
+  /** Value-based backstop for a harness enum hiding at a property NOT named for a harness. */
   it("carries no closed harness vocabulary anywhere in either record", () => {
     const leaves: string[] = [];
 
@@ -472,17 +441,9 @@ describe("chat-sync harness-id leaf sweep", () => {
 });
 
 describe("chat-sync derived schema forks", () => {
-  // Two bases carry `superRefine` checks, which blocks Zod's own derivation
-  // helpers for a WIDENING replacement, so both spread the base's live shape
-  // into a fresh object and re-apply the check. These assertions pin that the
-  // spread really is from the live shape - names AND schemas - so an upstream
-  // field type change cannot leave a same-named fork stale.
+  // Two bases carry `superRefine` checks, which blocks Zod's own derivation helpers for a WIDENING replacement, so both spread the base's live shape into a fresh object and re-apply the check.
+  // These assertions pin that the spread really is from the live shape - names AND schemas - so an upstream field type change cannot leave a same-named fork stale.
 
-  /**
-   * Asserts a fork carries exactly the base's fields minus `dropped`, and that
-   * every field outside `replaced` is the SAME schema object as the base's -
-   * which is the property a name-only comparison misses.
-   */
   function expectDerivedFrom(
     fork: object,
     base: object,
@@ -626,9 +587,8 @@ describe("chat-sync content-block union parity", () => {
   }
 
   it("mirrors every member of the epic content-block union", () => {
-    // The chat-sync union re-lists members so three of them can be reopened. A
-    // new epic block type must be added to that list too, or it silently
-    // degrades to unknown-variant passthrough here.
+    // The chat-sync union re-lists members so three of them can be reopened.
+    // A new epic block type must be added to that list too, or it silently degrades to unknown-variant passthrough here.
     expect(unionDiscriminants(snapshotContentBlockSchema, "type")).toEqual(
       unionDiscriminants(contentBlockSchema, "type"),
     );

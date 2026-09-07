@@ -1,41 +1,19 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
 
-// Mirrors `local-host-restart-flow.test.tsx`'s boundary exactly, because
-// `HostUpdateBanner`'s bound arm pulls in the SAME split
-// (`useHostBinding`) plus `useLocalHostUpdateOperation`'s own two leaf
-// hooks (`useReactiveLocalHostId` / `useReactiveHostReadiness`, both built on
-// `useHostBinding().directory` and a real `HostClient`) and, for the Force
-// restart modal, `LocalHostRestartFlow`'s cooperative arm (`useHostDirectoryList`,
-// `useHostClientForHostId`). `useHostRestart`/`host.status` stay REAL RPCs
-// dispatched against a real `HostClient` from `buildOverviewHostFixture` over
-// an in-memory messenger - not mocked calls - so this exercises the genuine
-// wiring, not a stand-in for it.
-//
-// The existing `host-update-banner.test.tsx` renders WITHOUT a host binding at
-// all, so `useHostBinding()` resolves `null` and every one of its 3 test files
-// / 68 tests takes the UNBOUND arm exclusively. None of them touch
-// `BoundHostUpdateBanner`, `OperationContent`, `describeUpdateOperation`, or
-// `LocalHostRestartFlow`'s cooperative arm - this file is what actually
-// exercises that code, which is the coverage gap the ticket flagged.
+// The existing `host-update-banner.test.tsx` renders without a host binding at all, so `useHostBinding`
+// resolves `null` and every one of its 3 test files / 68 tests takes the unbound arm exclusively.
 interface HostBindingFixture {
   readonly directory: {
     readonly getLocalEntry: () => HostDirectoryEntry | null;
     readonly getLocalHostId: () => string | null;
     readonly onChange: (cb: () => void) => { dispose: () => void };
   };
-  /**
-   * G8's isolation test additionally mounts the REAL `HostOverviewPanel`
-   * (`@/lib/host`'s `useHostBinding` re-exports from `./runtime`, so this
-   * mock covers both call sites) — which reads `binding.hostClient`, not
-   * `binding.directory`. One fixture object carries both shapes so the
-   * banner and the Overview panel can be mounted together against it.
-   */
+  /** G8's isolation test additionally mounts the real `HostOverviewPanel` (`@/lib/host`'s `useHostBinding`
+   * re-exports from `./runtime`, so this mock covers both call sites). */
   readonly hostClient: unknown;
 }
 const hostBindingMock = vi.hoisted(
@@ -91,12 +69,8 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// G7: the banner's Diagnostics button now routes through the in-app Settings
-// modal (`useSystemTabModalActions().openSettings`), which needs a mounted
-// `<RouterProvider>` this file's harness does not stand up. Mocked rather than
-// wired for the same reason `use-host-directory-list-query` and
-// `use-host-client-for-host-id` are above: this suite's whole point is the
-// banner's OWN wiring, not the router's.
+// Mocked rather than wired for the same reason `use-host-directory-list-query` and
+// `use-host-client-for-host-id` are above.
 const openSettingsMock = vi.hoisted(() => vi.fn());
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
@@ -241,7 +215,6 @@ function localEntry(): HostDirectoryEntry {
   };
 }
 
-/** Sets up the bound arm: a host binding + a real client resolving to a fixture. */
 function bindLocalHost(
   overrideHandlers: MockHandlerMap<HostRpcRegistry> | undefined,
 ) {
@@ -329,14 +302,8 @@ async function findPhaseText(): Promise<string> {
   return el.textContent;
 }
 
-/**
- * G8's isolation replacement: the REAL production composition — this
- * computer's `HostOverviewPanel` (Restart, Diagnostics and the overflow menu
- * all live on it) mounted beside the real `HostUpdateBanner`, both reading the
- * SAME fixture. Any regression that made the failing attempt inert
- * outside the banner would show up here as a genuinely disabled production
- * control, not as an arbitrary sibling button's `.disabled` property.
- */
+/** Any regression that made the failing attempt inert outside the banner would show up here as a genuinely
+ * disabled production control, not as an arbitrary sibling button's `.disabled` property. */
 function renderBannerWithRealOverview(
   client: HostClient<HostRpcRegistry>,
 ): void {
@@ -469,12 +436,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     },
   );
 
-  // The coarse `updateProgress` marker beside `updateOperation:
-  // {kind:"none"}` - the shipped legacy `traycer host update` path's whole
-  // signal for "in flight", with no attempt record at all. Before this field
-  // reached the projection, a @1.3 local host running that path showed no
-  // operation branch here whatsoever while a real download/swap/restart was
-  // under way.
+  // The coarse `updateProgress` marker beside `updateOperation: {kind:"none"}` - the shipped legacy `traycer
+  // host update` path's whole signal for "in flight", with no attempt record at all.
   it("a local host reporting {kind:'none'} with coarse updateProgress {state:'updating'} shows the operation branch with 'Updating host'", async () => {
     bindLocalHost({
       "host.status": () => ({
@@ -487,14 +450,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     expect(text).toMatch(/Updating host/);
   });
 
-  // `restarting`-while-disconnected ("reconnecting") is a projection-level
-  // rule (`connected` from `useReactiveHostReadiness`), already pinned
-  // directly against `projectFleetUpdateView` in subject D's table-driven
-  // suite - simulating "bound, resolvable host id, but no live route" through
-  // the REAL `HostClient` this file wires up would need deeper surgery on the
-  // client's connection state than the seam here exposes cleanly. Not
-  // re-covered here; the `restarting` (connected) case above already proves
-  // the live wiring reaches `phaseKind`'s connected branch.
+  // `restarting`-while-disconnected ("reconnecting") is a projection-level rule (`connected` from
+  // `useReactiveHostReadiness`).
 
   // 2. Determinate vs indeterminate progress.
   it("active with progress.percent: null renders the INDETERMINATE bar and no percentage text", async () => {
@@ -535,7 +492,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     expect(percentEl.textContent).toBe("55%");
   });
 
-  // G5 — measured byte progress, independently of percentage.
+  // G5 - measured byte progress, independently of percentage.
   it("bytes-only (no percent measured) renders the byte text AND keeps the bar indeterminate", async () => {
     bindLocalHost({
       "host.status": () =>
@@ -706,18 +663,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // 5. The banner never blocks host controls.
-  //
-  // G8 (independent cold review, finding 7): the ORIGINAL version of this
-  // test mounted two arbitrary sibling `<button>`s and asserted their
-  // `.disabled` property. That renders neither Restart, Diagnostics,
-  // Activate nor the overflow menu — none of the production controls the
-  // rule is actually about — so a regression that made the REAL Overview
-  // inert (or overlaid it) while these two fixture buttons stayed enabled
-  // would sail through green. Replaced with the real production composition:
-  // this computer's `HostOverviewPanel`, mounted beside the real banner
-  // against the SAME fixture, with its own Restart/Diagnostics/overflow
-  // controls checked directly.
+  // The banner never blocks host controls.
   const ISOLATION_CASES: ReadonlyArray<{
     readonly name: string;
     readonly operation: HostStatusUpdateOperation | null;
@@ -726,8 +672,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     {
       name: "failed",
       operation: baseAttempt({ phase: "downloading", liveness: "interrupted" }),
-      // No coarse mirror for a terminal outcome — a failed attempt was never
-      // the shape Ticket 04's mapping locked on.
+      // No coarse mirror for a terminal outcome - a failed attempt was never the shape Ticket 04's mapping locked
+      // on.
       updateProgress: null,
     },
     {
@@ -736,13 +682,6 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         phase: "waiting-to-activate",
         execution: "parked",
       }),
-      // A @1.3 host still mirrors the rich attempt into the legacy coarse
-      // field for pre-@1.3 siblings mid-fleet-update, and Ticket 04's mapping
-      // reads ANY non-terminal attempt — parked included — as `"updating"`.
-      // Without this mirrored alongside `updateOperation`, this case cannot
-      // tell `holdsLifecycleGate(operationView)` (the fix) apart from the
-      // coarse `view.updateProgress?.state === "updating"` fallback it
-      // replaced (the defect) — both would read this attempt as not holding.
       updateProgress: { state: "updating", error: null },
     },
     {
@@ -783,10 +722,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         "diagnostics.logs.tail",
       ]);
       renderBannerWithRealOverview(fixture.client);
-      // The banner itself has nothing to show for the coarse-fallback
-      // "unknown" case (`operationSupersedesControllerStatus` is false), so
-      // synchronize on the Overview mounting rather than the banner's phase
-      // text, which the other two cases in this table DO produce.
+      // The banner itself has nothing to show for the coarse-fallback "unknown" case
+      // (`operationSupersedesControllerStatus` is false).
       await screen.findByTestId("host-overview-edit-name");
 
       // The Overview's Restart AND Run doctor live in its `⋯` menu.
@@ -802,12 +739,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           .getAttribute("aria-disabled"),
       ).not.toBe("true");
 
-      // Positive control: the assertions above CAN fail — mutate the
-      // element to the disabled state, then assert the ORIGINAL negative
-      // expectation now throws. Asserting the mutated value against itself
-      // was self-referential and could never fail; re-running the actual
-      // `.not.toBe("true")` check is what proves it is not vacuous against
-      // whatever this harness happens to render.
+      // Asserting the mutated value against itself was self-referential and could never fail; re-running the actual
+      // `.not.toBe("true")` check is what proves it is not vacuous against whatever this harness happens to render.
       screen
         .getByTestId("host-overview-restart")
         .setAttribute("aria-disabled", "true");
@@ -840,13 +773,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     );
     forceButton.focus();
     expect(document.activeElement).toBe(forceButton);
-    // `userEvent.keyboard` simulates the BROWSER'S OWN default action for a
-    // focused native `<button>` (keydown → click → keyup on Enter/Space),
-    // unlike `fireEvent.keyDown`, which only dispatches the keydown event and
-    // synthesizes nothing further. No manual `fireEvent.click` follows this —
-    // if the control regressed to a focusable, click-only element with no
-    // real keyboard activation, this line alone would fail to open the
-    // dialog. See the ablation below for the proof that this test can fail.
+    // No manual `fireEvent.click` follows this - if the control regressed to a focusable, click-only element with
+    // no real keyboard activation, this line alone would fail to open the dialog.
     await userEvent.keyboard("{Enter}");
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     await waitFor(() => {
@@ -854,9 +782,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // G7. Terminal lifecycle: Retry / Diagnostics / Dismiss for a failed rich
-  // attempt, evidence retention on the Overview, dismissal re-arming on a
-  // newer attempt, and complete's auto-collapse.
+  // G7.
   describe("G7 — terminal lifecycle", () => {
     it("a rich FAILED attempt offers Retry, Diagnostics and Dismiss, all present together", async () => {
       bindLocalHost({
@@ -934,10 +860,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         expect(screen.queryByTestId("host-update-banner")).toBeNull();
       });
 
-      // THE OVERVIEW CARD ignores landing dismissal by design (it is its own
-      // seam, "the failure remains discoverable in the selected-host Overview
-      // until host-side expiry or a newer attempt supersedes it"). It reads
-      // no store at all — its input is only the projected view.
+      // It reads no store at all - its input is only the projected view.
       expect(
         useHostUpdateBannerStore
           .getState()
@@ -982,7 +905,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         expect(screen.queryByTestId("host-update-banner")).toBeNull();
       });
 
-      // A NEWER attempt arrives (a fresh retry), with a different id.
+      // A newer attempt arrives (a fresh retry), with a different id.
       currentAttempt = baseAttempt({
         attemptId: "attempt-new",
         phase: "downloading",
@@ -1075,15 +998,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
   });
 
-  // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).
-  //
-  // The projector's record arm always returns `kind: "unknown"` carrying
-  // `lastKnownKind`, and this banner's supersede predicate rejected `unknown`
-  // outright — so every record-backed view was suppressed here and the landing
-  // page went blank while a local update sat half-finished behind an
-  // unreachable host. These drive the REAL leg: `host.status` fails (the host
-  // is not answering) and Desktop's controller status carries the durable
-  // facts, exactly as production composes them.
+  // The projector's record arm always returns `kind: "unknown"` carrying `lastKnownKind`, and this banner's
+  // supersede predicate rejected `unknown` outright.
   describe("host-down window — retained phase on the landing banner", () => {
     const HOST_DOWN_STATUS: HostControllerStatus = {
       ...UP_TO_DATE_STATUS,
@@ -1123,15 +1039,15 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     it("renders the retained phase when the host is unreachable and the controller has nothing concrete", async () => {
       bindUnreachableHost();
       renderWithControllerStatus(HOST_DOWN_STATUS);
-      // `Last seen: …` — the sentence `primarySentence` has always been able to
-      // build and this surface could never reach.
+      // `Last seen: …` - the sentence `primarySentence` has always been able to build and this surface could never
+      // reach.
       await waitFor(async () => {
         expect(await findPhaseText()).toBe(
           "Last seen: Preparing update to v2.1.0",
         );
       });
-      // Qualified INLINE, so no second marker: the assertion that this is the
-      // retained-phase rendering and not a live one.
+      // Qualified inline, so no second marker: the assertion that this is the retained-phase rendering and not a
+      // live one.
       expect(screen.queryByTestId("host-update-banner-qualified")).toBeNull();
       // A remembered phase holds no lifecycle affordance.
       expect(
@@ -1163,9 +1079,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
 
     it("a BARE unknown still loses — no record, nothing rendered", async () => {
       bindUnreachableHost();
-      // Same unreachable host, but no durable attempt: `lastKnownKind` is null
-      // and there is nothing to say. This is the arm the predicate must keep
-      // rejecting, and it is what stops the widening from turning every
+      // This is the arm the predicate must keep rejecting, and it is what stops the widening from turning every
       // unreadable poll into an "Update state unknown" banner.
       renderWithControllerStatus({ ...HOST_DOWN_STATUS, localAttempt: null });
       await waitFor(() => {
@@ -1289,27 +1203,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
 
     it("retries by ACTIVATING while the host reads unavailable and the live view still says failed", async () => {
-      // SCOPE, stated because it is narrower than it looks. This covers the
-      // window where the controller already reports `activation: "unavailable"`
-      // (no running runtime identity) while the LIVE attempt view is still
-      // `failed` — the interval right after a packaged-macOS activation fails
-      // and takes the host down with it.
-      //
-      // It does NOT cover the SUSTAINED host-down state. Once the live read
-      // expires, `useLocalHostUpdateOperation` falls back to the durable
-      // record, which `projectFleetUpdateView` projects as `kind: "unknown"`
-      // with `lastKnownKind: "failed"` — and Retry renders only for
-      // `view.kind === "failed"`, so this callback is not reachable there at
-      // all. That gap is real and is recorded rather than fixed here; binding a
-      // local host below is what keeps this test inside the window it names,
-      // and removing that binding would not extend the fix, it would just stop
-      // rendering the button.
-      //
-      // `deriveActivationState` returns `unavailable`, not a debt state, when
-      // there is no running runtime identity. `ACTIVATION_DEBT_STATES`
-      // deliberately excludes it, so routing this retry off debt sent even this
-      // window to `applyStaged`, against a stage the failed attempt had already
-      // consumed.
+      // `deriveActivationState` returns `unavailable`, not a debt state, when there is no running runtime identity.
       const { applyStaged, activateInstalled } =
         failedAttemptWithControllerStatus({
           ...UP_TO_DATE_STATUS,

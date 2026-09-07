@@ -1,14 +1,6 @@
 /**
- * Shared so `KeybindingProvider` and `CommandPaletteProvider` expose
- * the same narrow `KeybindingRouter` seam. Kept here (not in the
- * framework-free `dispatch.ts`) because this module is the only
- * place that knows about the concrete TanStack `AppRouter` shape.
- *
- * `navigateToEpicList` / `navigateSettings` / `navigateSettingsSection`
- * route through the system-tab modal bridge first when the modal host
- * has published its API. That preserves the modal-first UX for
- * keybindings + palette commands without coupling those framework-free
- * call sites to React hooks.
+ * Shared so `KeybindingProvider` and `CommandPaletteProvider` expose the same narrow `KeybindingRouter` seam.
+ * Kept here (not in the framework-free `dispatch.ts`) because this module is the only place that knows about the concrete TanStack `AppRouter` shape.
  */
 import type { RouterHistory, UseNavigateResult } from "@tanstack/react-router";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -39,9 +31,7 @@ export interface KeybindingRouterSource {
       readonly search?: Readonly<Record<string, unknown>>;
     };
   };
-  // Full `RouterHistory` (not just `subscribe`): the history-navigation seam
-  // reads the persistent-history controller brand off it (`getHistoryController`)
-  // and walks it via the shared `goBack`/`goForward` actions.
+  // Full `RouterHistory` (not just `subscribe`): the history-navigation seam reads the persistent-history controller brand off it (`getHistoryController`) and walks it via the shared `goBack`/`goForward` actions.
   readonly history: RouterHistory;
   readonly navigate: UseNavigateResult<string>;
 }
@@ -82,10 +72,8 @@ export function routerAdapterFor(
       if (api === null) return;
       api.openHistory();
     },
-    // When the modal is open, sub-leader / palette section picks update the
-    // in-modal section without leaving the underlying tab. Otherwise: focus or
-    // open the settings surface (modal or tab) on the requested section. Shared
-    // with the in-panel call sites so the two cannot drift apart.
+    // When the modal is open, sub-leader / palette section picks update the in-modal section without leaving the underlying tab.
+    // Otherwise: focus or open the settings surface (modal or tab) on the requested section.
     navigateSettingsSection,
     navigateToTabIntent: (intent) => {
       const api = getSystemTabModalApi();
@@ -131,9 +119,8 @@ export function routerAdapterFor(
     // when the history carries no controller brand (browser/web build).
     goBack: () => goBackAction(router),
     goForward: () => goForwardAction(router),
-    // History-navigation availability + boundary state off the live router's
-    // controller brand. The palette source reads these through `ctx.router`
-    // (it mounts above `<RouterProvider>`, where TanStack router context is null).
+    // History-navigation availability + boundary state off the live router's controller brand.
+    // The palette source reads these through `ctx.router` (it mounts above `<RouterProvider>`, where TanStack router context is null).
     isHistoryNavAvailable: () => historyNavChromeAvailable(router.history),
     canGoBack: () => {
       const controller = getHistoryController(router.history);

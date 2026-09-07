@@ -100,9 +100,8 @@ describe("registerDeepLinkHandling (demoted return-signal handler)", () => {
 });
 
 /**
- * Multi-run dev: each slot registers its own suffixed scheme so the OS never
- * routes another run's auth callback here. Mirrors the renderer's redirect-URI
- * derivation in `renderer-shell/sign-in-url.ts` - the two must agree.
+ * Multi-run dev: each slot registers its own suffixed scheme so the OS never routes another run's auth callback here.
+ * Mirrors the renderer's redirect-URI derivation in `renderer-shell/sign-in-url.ts` - the two must agree.
  */
 describe("registerDeepLinkHandling under a dev-desktop slot", () => {
   beforeEach(() => {

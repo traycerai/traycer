@@ -41,60 +41,12 @@ import { z } from "zod";
 
 /**
  * The `chat-head` record: the small, mutable pointer that IS a published chat.
- *
- * One head per chat lives as opaque JSON on the chat's cloud row, swapped by
- * CAS. It states the chat's identity, metadata, lifecycle and settings, and it
- * names - in order - the immutable `chat-shard` parts that hold the
- * transcript. Everything else about the publication is derivable from it: the
- * server drives part deletion from the address list and interprets nothing
- * else, and a reader needs the head and nothing else to fetch and assemble the
- * whole chat.
- *
- * ## Part addresses are content addresses
- *
- * The tenant envelope names a part by `(sha256, byteLength)` and by nothing
- * else. There is no key, no storage generation: the key layout is derived from
- * the hash under a `(task, tenant kind)` prefix and is a versioned spec readers
- * never parse. That is what makes a publish a hash-diff against the previous
- * head - unchanged cohorts keep their addresses and are not re-uploaded - and
- * what makes retries converge on the same object with no session state.
- *
- * The payload's message / event cohort entries carry the same address plus
- * the last-write extrema they cover (`firstSeq` / `lastSeq`) and the
- * exact membership key (`recordCount`, `firstRecordId`, `lastRecordId`).
- * That cut plan is chat-domain data and MUST NOT leak into the envelope -
- * the sync layer interprets nothing but the address. `hostPrivate` stays
- * address-only.
- *
- * ## Graduation
- *
- * Events and `hostPrivate` start INSIDE the head, because they are small and a
- * head is rewritten every publish anyway. Each graduates to its own part when
- * it alone outgrows the shard target: events cohort-style (they are id-keyed
- * like messages), `hostPrivate` whole. The head represents that as a
- * `null` inline section paired with a non-empty part list, and
- * `refineChatHeadSections` enforces the exclusivity - a head that states a
- * section twice would let a reader assemble two different chats from the same
- * bytes depending on which it believed.
- *
- * ## Lineage
- *
- * `parentHeadSha256` chains each publication to the one it superseded.
- * Continuity and ancestry are proven by IDENTITY, never by sequence ordering:
- * two forked histories both number their turns, so a seq comparison permits
- * exactly the dangerous "local is ahead, overwrite the cloud" case. The chain
- * is what makes a fork visible on first contact instead of after a silent
- * last-write-wins.
+ * That cut plan is chat-domain data and MUST NOT leak into the envelope - the sync layer interprets nothing but the address.
  */
 
 // ---- Part addresses and the cut plan ----------------------------------- //
 
-/**
- * The tenant-envelope address: content hash and length, nothing else.
- *
- * This is the only shape the sync server reads. Domain fields (seq ranges,
- * CDC params) stay on the payload.
- */
+/** The tenant-envelope address: content hash and length, nothing else. */
 export const chatHeadAddressPartSchema = z.object({
   /** Lowercase hex SHA-256 of the part's canonical bytes. Its whole address. */
   sha256: sha256HexSchema,
@@ -102,20 +54,7 @@ export const chatHeadAddressPartSchema = z.object({
 });
 export type ChatHeadAddressPart = z.infer<typeof chatHeadAddressPartSchema>;
 
-/**
- * A head-named part as the payload carries it.
- *
- * 1.1 extends the address with an optional last-write seq range and the
- * exact membership key (`recordCount` + first/last record ids) so a
- * publisher can plan the next cut from the predecessor head. The five
- * fields are present together or absent together
- * (`refineChatHeadPartRanges`). 1.0 heads omit them; the 1.1 writer
- * requires them on message / event cohorts.
- *
- * `firstSeq` / `lastSeq` are last-write extrema, not a membership
- * interval. Tail membership is the `recordCount` records from
- * `firstRecordId` through `lastRecordId` in section order.
- */
+/** A head-named part as the payload carries it. */
 export const chatHeadPartSchema = chatHeadAddressPartSchema.extend({
   firstSeq: z.number().int().nonnegative().optional(),
   lastSeq: z.number().int().nonnegative().optional(),
@@ -149,13 +88,7 @@ export type ChatHeadCohortPart = z.infer<typeof chatHeadCohortPartSchema>;
 export const CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1 =
   "fastcdc-gear-v1" as const;
 
-/**
- * Content-defined-chunking parameters the writer used to cut this head.
- *
- * `mask` is the unsigned integer AND-mask of the rolling hash: a record
- * boundary is a cut candidate when `(hash & mask) === 0`. `min` / `target`
- * / `max` are cohort sizes in bytes; `min <= target <= max`.
- */
+/** Content-defined-chunking parameters the writer used to cut this head. */
 export const chatHeadCdcParamsSchema = z
   .object({
     algorithm: z.literal(CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1),
@@ -191,58 +124,25 @@ export function chatHeadPartAddress(part: ChatHeadPart): ChatHeadAddressPart {
 
 export const chatHeadRecordShape = {
   /**
-   * Self-describing record version, carried inside the head rather than beside
-   * it: the head is the row's opaque JSON, so there is no second place to put
-   * it. Pinned to a literal (see `version.ts`) so a payload cannot claim to be
-   * anything other than the contract that accepted it.
+   * Self-describing record version, carried inside the head rather than beside it: the head is the row's opaque JSON, so there is no second place to put it.
+   * Pinned to a literal (see `version.ts`) so a payload cannot claim to be anything other than the contract that accepted it.
    */
   schemaVersion: chatSyncSchemaVersionSchema,
-  /**
-   * Canonical sha256 of the head this publication supersedes, or `null` for a
-   * chat's first head.
-   *
-   * The publication lineage chain. A reader (or a reconciling host) proves
-   * ancestry by walking identities, not by comparing `throughRecordSeq`: a
-   * disk restore or a cloned host identity produces two histories that both
-   * number their turns, and seq ordering cannot tell "I am ahead" from "I am a
-   * fork". Consumed by the continuity verdict that arbitrates a fork.
-   */
+  /** Canonical sha256 of the head this publication supersedes, or `null` for a chat's first head. */
   parentHeadSha256: sha256HexSchema.nullable(),
   /**
-   * Record sequence this publication was pinned at. The publisher must have
-   * captured state exactly through this seq - never a projection already past
-   * it, relabelled. A watermark, not an ordering authority: see
-   * `parentHeadSha256`.
+   * Record sequence this publication was pinned at.
+   * The publisher must have captured state exactly through this seq - never a projection already past it, relabelled.
    */
   throughRecordSeq: z.number().int().nonnegative(),
   /** Wall-clock ms the head was serialized. */
   capturedAt: z.number(),
   /**
-   * Lowest record version a reader must support to interpret this publication
-   * SAFELY, or `null` when every same-major reader can.
-   *
-   * `null` is the normal case and the one this contract is designed for: a
-   * minor that only adds passthrough-preserved vocabulary (a content-block
-   * type, a message role, an event type) is readable by every shipped
-   * same-major reader, which renders what it knows and round-trips the rest.
-   * Gating those on `schemaVersion` would defeat the passthrough entirely -
-   * the reader would bounce at the head and never reach the tolerant codec.
-   *
-   * A writer sets this only for a change an older reader cannot safely
-   * INTERPRET - not one it merely fails to render or does not model.
-   * Preservation is never a reason to set it: unmodeled fields ride the
-   * residual bags and unknown variants ride the passthrough, so an older
-   * reader re-publishes both untouched. Setting it is a deliberate, justified
-   * act (see COMPATIBILITY.md). Defaulted so a head written before the field
-   * existed parses as "no restriction".
+   * Lowest record version a reader must support to interpret this publication SAFELY, or `null` when every same-major reader can.
+   * A writer sets this only for a change an older reader cannot safely INTERPRET - not one it merely fails to render or does not model.
    */
   minReaderVersion: schemaVersionSchema.nullable().default(null),
-  /**
-   * CDC parameters that produced this head's cut plan.
-   *
-   * Optional on the shared / reader shape so a 1.0 head still parses. The
-   * 1.1 writer requires it (`chatHeadWriterRecordShape`).
-   */
+  /** CDC parameters that produced this head's cut plan. */
   cdc: chatHeadCdcParamsSchema.optional(),
   core: chatHeadCoreSchema,
   /**
@@ -263,43 +163,10 @@ export const chatHeadRecordShape = {
   hostPrivateShard: chatHeadAddressPartSchema.nullable(),
 } as const;
 
-/**
- * The 1.1 line's reader floor, as a value, for the day one is deliberately
- * imposed. **No writer stamps it today**, and that is the policy, not an
- * omission: the 1.1 reshape is additive and read-safe, so per
- * `minReaderVersion`'s own doc (and `COMPATIBILITY.md` §4) there is nothing to
- * gate. A 1.0 reader admits a 1.1 head, reads each part entry as the address it
- * is, ignores the membership fields beside it, and re-derives its own cut plan
- * from its op log - so it renders and re-publishes the chat correctly without
- * modelling any of it. (Head-level `cdc` additionally rides the head's residual
- * bag; the per-part fields have no capture site, deliberately - see the
- * publisher-derived-levels rule in `captured-levels.ts`. The floor is
- * unnecessary either way, but for re-derivation, not for preservation.)
- *
- * Pinned literally rather than derived from `CHAT_SYNC_SCHEMA_VERSION` so
- * that raising the floor stays a DELIBERATE act. Deriving it made "every
- * minor bump locks out every older reader" the structural default, which is
- * exactly the bug this constant's existence is meant to prevent: a publisher
- * that stamps its own version refuses readers for additive changes it was
- * designed to survive.
- *
- * Also the threshold `refineClaimedCutPlanCompleteness` reads as "1.1 or
- * later", which is the one place it is load-bearing today.
- */
 export const CHAT_SYNC_1_1_READER_FLOOR = { major: 1, minor: 1 } as const;
 
 /**
- * Writer shape for the registered 1.1 contract: CDC params and per-cohort
- * seq ranges plus membership are required. The reader shape above stays
- * additive so a 1.0 head still opens.
- *
- * `minReaderVersion` is deliberately NOT narrowed here. It inherits the
- * shared shape's nullable default, because `null` is the value a correct 1.1
- * publisher stamps: the floor belongs to a change an older reader cannot
- * safely INTERPRET, and a nullable inheritance is also what keeps the next
- * additive minor publishable - a literal pin on this build's own version
- * would make `toChatHeadRecord`'s own stamp unparseable the moment
- * `CHAT_SYNC_SCHEMA_VERSION` moves to 1.2.
+ * Writer shape for the registered 1.1 contract: CDC params and per-cohort seq ranges plus membership are required.
  */
 export const chatHeadWriterRecordShape = {
   ...chatHeadRecordShape,
@@ -308,14 +175,7 @@ export const chatHeadWriterRecordShape = {
   eventShards: z.array(chatHeadCohortPartSchema),
 } as const;
 
-/**
- * A section is either inline or graduated, never both and never neither.
- *
- * Without this a head could state its events twice - once inline, once in
- * parts - and two readers could assemble two different chats from the same
- * bytes. It also rejects the degenerate "graduated to nothing" head, which
- * would present as a chat that lost its event log.
- */
+/** A section is either inline or graduated, never both and never neither. */
 export function refineChatHeadSections(
   head: {
     readonly events: readonly unknown[] | null;
@@ -360,20 +220,7 @@ export function refineChatHeadSections(
   }
 }
 
-/**
- * A head may not name the same part twice, anywhere across its lists.
- *
- * This is the payload half of the tenant envelope's one obligation. The sync
- * server refuses a head that names a part more than once, because "displaced =
- * previous minus current" stops being well-defined at exactly the moment that
- * set drives deletion - so a head with a repeated address is a head that cannot
- * be committed. Catching it at parse rather than at CAS means the publisher
- * sees it where the mistake is, not at the far end of a swap.
- *
- * It is also the more honest reading of the record: two message cohorts with
- * identical canonical bytes are the same object, so a chat naming one twice is
- * claiming the same messages appear twice in its own transcript.
- */
+/** A head may not name the same part twice, anywhere across its lists. */
 export function refineChatHeadPartUniqueness(
   head: {
     readonly messageShards: readonly { readonly sha256: string }[];
@@ -407,15 +254,7 @@ export function refineChatHeadPartUniqueness(
   }
 }
 
-/**
- * Coherence of a `minReaderVersion` against the version it guards.
- *
- * A minimum on a different major is unopenable by construction: every reader
- * on the head's major is "below" it, and every reader on the minimum's major
- * rejects the head's major, so the head would name a chat no build can ever
- * read. A minimum newer than the head contradicts the ritual: the change that
- * forces a higher minimum is the change that cuts the record's own minor.
- */
+/** Coherence of a `minReaderVersion` against the version it guards. */
 export function refineMinReaderVersion(
   head: {
     readonly schemaVersion: SchemaVersion;
@@ -444,14 +283,7 @@ export function refineMinReaderVersion(
   }
 }
 
-/**
- * Cut-plan fields on a part are present together, ordered, and never
- * appear on hostPrivate.
- *
- * A 1.0 head omits them; a 1.1 writer requires them on message / event
- * cohorts via `chatHeadCohortPartSchema`. Either way a lone bound, a
- * reversed range, or a host-private part carrying membership is corrupt.
- */
+/** Cut-plan fields on a part are present together, ordered, and never appear on hostPrivate. */
 export function refineChatHeadPartRanges(
   head: {
     readonly messageShards: readonly ChatHeadPart[];
@@ -515,19 +347,7 @@ export function refineChatHeadPartRanges(
   }
 }
 
-/**
- * A head CLAIMING 1.1 or later must actually carry the 1.1 cut plan.
- *
- * The reader schema keeps `cdc` and the per-cohort membership fields optional
- * so a 1.0 head still opens - but that tolerance is FOR 1.0. A payload whose
- * own `schemaVersion` says 1.1+ while omitting them is not a head any 1.1
- * writer produced: downstream would hold a nominal-1.1 head it cannot
- * reproduce cuts for, and every consumer of the claimed minor would have to
- * re-check field presence itself. Such a head decodes as schema-rejected, not
- * ok. Per-part all-or-none and ordering stay with
- * {@link refineChatHeadPartRanges}; this adds only the version-conditional
- * PRESENCE obligation.
- */
+/** A head CLAIMING 1.1 or later must actually carry the 1.1 cut plan. */
 export function refineClaimedCutPlanCompleteness(
   head: {
     readonly schemaVersion: SchemaVersion;
@@ -585,21 +405,13 @@ function refineChatHead(
   refineClaimedCutPlanCompleteness(head, ctx);
 }
 
-/**
- * The registered writer schema's inner value. `_internal/chat-sync-schemas.ts`
- * owns the single registered instance; this is the same construction, exported
- * so the reader schema below can mirror it without re-declaring the shape.
- */
+/** The registered writer schema's inner value. */
 export const chatHeadSchema = withResidualCapture(
   "head",
   chatHeadWriterRecordShape,
 ).superRefine(refineChatHead);
 
-/**
- * The forward-compatible READER schema: same major, any minor, everything else
- * identical. Built through `reprojectResidualCapture`, which does NOT register
- * a capture site - this is the same `head` level, only more accepting.
- */
+/** The forward-compatible READER schema: same major, any minor, everything else identical. */
 export const chatHeadReaderSchema = reprojectResidualCapture({
   ...chatHeadRecordShape,
   schemaVersion: chatSyncReaderVersionSchema,
@@ -624,11 +436,6 @@ export type ChatHeadRecord = {
   readonly minReaderVersion: SchemaVersion | null;
   readonly cdc?: ChatHeadCdcParams;
   readonly core: ChatHeadCore;
-  // Array element types match what Zod infers from the registered schema
-  // exactly, not a `readonly` narrowing of it: `chat-sync-record-shape.test.ts`
-  // asserts the mirror and the registered value are MUTUALLY assignable, and a
-  // `readonly T[]` is not assignable to a `T[]`. The properties are readonly,
-  // which is the part callers see.
   readonly messageShards: ChatHeadPart[];
   readonly events: PreservedChatEvent[] | null;
   readonly eventShards: ChatHeadPart[];
@@ -640,16 +447,7 @@ export type ChatHeadRecord = {
 
 /**
  * Domain head -> canonical persisted JSON for the PAYLOAD.
- *
- * Same guarantees as `encodeChatShard`: the major is stamped from the constant,
- * the minor is carried, every residual bag merges back beside its declared
- * fields, and encoding is idempotent.
- *
- * This is a building block, not a publication API. It is the payload half of a
- * head document and carries no `parts` envelope, so it is neither what gets
- * stored nor what a head is addressed by - `encodeChatHeadDocument` wraps it,
- * and `serializeChatHeadDocument` produces the bytes that travel. Nothing may
- * hash the result of this function.
+ * Same guarantees as `encodeChatShard`: the major is stamped from the constant, the minor is carried, every residual bag merges back beside its declared fields, and encoding is idempotent.
  */
 export function encodeChatHead(record: ChatHeadRecord): JsonObject {
   const { core, events, hostPrivate, residual, cdc, ...declared } = record;
@@ -729,18 +527,7 @@ function encodeSimpleLevel(level: {
   return mergeResidual({ ...declared }, residual);
 }
 
-// There is deliberately NO `serializeChatHead`. A payload serializer sitting
-// beside `serializeChatHeadDocument` is a trap: both return canonical bytes of
-// a head, only one is stored, and hashing the wrong one produces a lineage
-// digest naming bytes nobody has - a publisher that chained on it would report
-// a fork on its own next sync. The first version of this module had one, with a
-// comment saying not to hash it, and this package's own fixture chained on it
-// anyway. So the misuse is removed structurally rather than warned about: there
-// is exactly one way to turn a head into bytes, and it is the right one.
-//
-// Payload-level assertions (canonical key order, lossless re-emission) compose
-// `canonicalJsonStringify(encodeChatHead(record))` explicitly, which reads as
-// the deliberate act it is.
+// There is deliberately NO `serializeChatHead`.
 
 /** Every part a head names, in the order assembly consumes them. */
 export function listChatHeadParts(head: {
@@ -769,61 +556,10 @@ export function listChatHeadPartAddresses(head: {
 
 // ---- The head DOCUMENT: tenant envelope + opaque payload ---------------- //
 
-/**
- * The one key the sync layer reads inside a head document.
- *
- * **Reserved.** No modeled field of the `chat-head` record may ever be called
- * this, and the decoder strips it before parsing so it can never land in a
- * residual bag either - a re-published head must derive its envelope afresh,
- * never re-emit a stale index it happened to carry through.
- */
+/** The one key the sync layer reads inside a head document. */
 export const CHAT_HEAD_PARTS_KEY = "parts";
 
-/**
- * The stored head DOCUMENT: this record's canonical payload plus one derived
- * envelope.
- *
- * ## The tenancy seam, stated at the byte level
- *
- * The sync server is tenant-generic. Enrolling in it costs exactly one
- * obligation: a top-level `parts` array of `{sha256, byteLength}`. That is not
- * a stylistic concession - it is the minimum a DELETION mechanism can be built
- * on. When a head is swapped, the parts the old head named and the new one does
- * not are owed a deletion, and nothing but the head knows which those are.
- *
- * So the document is two layers with a hard line between them:
- *
- * - the **envelope** (`parts`) is the server's, derived mechanically from the
- *   payload and read by nothing else;
- * - the **payload** is the chat's, and the server interprets none of it -
- *   cohorts, sections, ordering, versions and lineage are all present in the
- *   bytes it stores and none of them is ever looked at.
- *
- * The envelope is DERIVED, never authored. A head that stated its part list
- * independently of its shard lists could disagree with itself, and the
- * disagreement would surface as either a stranded object or a deleted live one.
- * `decodeChatHeadDocument` re-derives and compares rather than trusting.
- *
- * ## One digest identity
- *
- * `sha256(serializeChatHeadDocument(record))` is simultaneously the CAS witness
- * a publisher presents, the digest the chat row holds, and the value the NEXT
- * head carries as its `parentHeadSha256`. Over the DOCUMENT, not the payload:
- * the document is what is stored, and a chain anchored on anything else would
- * name bytes nobody has.
- *
- * Consequently the document bytes are the identity, and nothing may
- * re-serialize them on the way to a hash. Callers that hold a document hold the
- * string.
- *
- * ## The part ceiling
- *
- * The server caps a head at 4,096 parts (a p99 chat measures ~165, so that is
- * headroom, not a working limit). It is deliberately NOT re-asserted here: it
- * is a server-side bound on work an authenticated caller can request, and a
- * second copy of the constant would drift from the one that enforces it. A
- * publisher that exceeds it is refused at CAS.
- */
+/** The stored head DOCUMENT: this record's canonical payload plus one derived envelope. */
 export function encodeChatHeadDocument(record: ChatHeadRecord): JsonObject {
   // Envelope wins on collision, which is what makes a stale `parts` carried in
   // a hand-built record's residual bag unable to survive into the document.
@@ -891,25 +627,7 @@ function corruptDocument(
 
 /**
  * Stored document bytes -> head record.
- *
- * The order is the contract:
- *
- * 1. parse the bytes as JSON;
- * 2. read the `parts` envelope;
- * 3. **strip** it - so it can never reach the record's residual bag, where a
- *    re-publication would re-emit a stale index beside a freshly derived one;
- * 4. parse the payload through the forward-compatible reader schema;
- * 5. re-derive the part list from the parsed record and require the envelope to
- *    match it exactly, in order.
- *
- * Step 5 fails CLOSED. An envelope that has lost an entry describes a swap that
- * strands an object; one that has gained an entry describes a swap that deletes
- * a live one; one that has merely been reordered is a document no honest
- * publisher produces. None of them is a chat this reader may act on.
- *
- * Takes the string rather than parsed JSON on purpose: the document bytes are
- * the digest identity, so the type that reaches this function is the type the
- * caller must have hashed.
+ * Takes the string rather than parsed JSON on purpose: the document bytes are the digest identity, so the type that reaches this function is the type the caller must have hashed.
  */
 export function decodeChatHeadDocument(
   documentBytes: string,
@@ -967,11 +685,6 @@ export function decodeChatHeadDocument(
 
 const chatHeadPartsEnvelopeSchema = z.array(chatHeadAddressPartSchema);
 
-/**
- * Every own key of the document except the envelope, rebuilt with
- * `Object.defineProperty` onto a null-prototype object so a legal own
- * `__proto__` survives the strip (see `json.ts`).
- */
 function withoutPartsEnvelope(document: JsonObject): JsonObject {
   const payload: JsonObject = Object.create(null);
 
@@ -1032,29 +745,7 @@ export type ChatHeadVersionGate =
 
 /**
  * Decides whether a reader may assemble the chat a head describes.
- *
- * Called on the HEAD - which a reader already holds after one row read -
- * before any part is fetched, so a publication the reader cannot interpret
- * costs no part egress and is never half-materialized. That guarantee is worth
- * more here than it was for a single-object layout: a refused chat would
- * otherwise have cost every shard's egress.
- *
- * The rule, deliberately: **the major is the reject boundary.** A same-major
- * publication is admitted whatever its minor, because that is what makes the
- * unknown-variant passthrough worth having - a 1.0 renderer meeting a 1.4 chat
- * renders the blocks it knows and re-emits the rest intact, which is strictly
- * better than refusing the chat outright. Rejecting any newer minor would
- * guarantee the passthrough never fires in the field: the minor bump that
- * introduces a new block type is exactly the one that would bounce.
- *
- * `minReaderVersion` is the escape hatch for the case that rule cannot cover -
- * a change an older reader cannot safely INTERPRET. Preservation is not that
- * case. Reserve the minimum for a change that would make an old reader act on
- * a chat WRONGLY; when a writer sets it, the gate turns strict for that
- * publication alone.
- *
- * There is no ref-kind check to make: v2 has exactly one publication layout,
- * so the tagged-union gate the v1 design needed has nothing left to decide.
+ * `minReaderVersion` is the escape hatch for the case that rule cannot cover - a change an older reader cannot safely INTERPRET.
  */
 export function gateChatHeadVersion(
   head: {

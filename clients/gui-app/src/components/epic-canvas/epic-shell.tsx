@@ -1,9 +1,6 @@
 /**
- * Canvas-only since the sidebar hoist: the left sidebar is ONE app-level
- * instance mounted by the `/epics` layout route (`epic-sidebar-column.tsx`),
- * not part of each keep-alive pane. This shell renders the status row + tile
- * canvas for its pane, so sidebar collapse/resize can never remount canvas
- * content.
+ * Canvas-only since the sidebar hoist: the left sidebar is ONE app-level instance mounted by the `/epics` layout route (`epic-sidebar-column.tsx`), not part of each keep-alive pane.
+ * This shell renders the status row + tile canvas for its pane, so sidebar collapse/resize can never remount canvas content.
  */
 import { use, useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
@@ -36,10 +33,8 @@ interface EpicShellProps {
 }
 
 /**
- * Mounted by `/epics/$epicId/$tabId`. A full permission revoke or remote delete
- * is handled app-level by `EpicAccessCoordinator`, which force-closes the tab
- * (and redirects an active tab to the epic list) - so this shell no longer
- * renders an in-place access-lost banner.
+ * Mounted by `/epics/$epicId/$tabId`.
+ * A full permission revoke or remote delete is handled app-level by `EpicAccessCoordinator`, which force-closes the tab (and redirects an active tab to the epic list) - so this shell no longer renders an in-place access-lost banner.
  */
 export function EpicShell(props: EpicShellProps) {
   const { epicId, tabId, active } = props;
@@ -65,34 +60,7 @@ export function EpicShell(props: EpicShellProps) {
           )
         }
       >
-        {/*
-         * The failure is surfaced OVER a mounted body, never in place of it.
-         * Swapping `EpicShellSessionBody` out for the card unmounted
-         * `TileCanvas` and every tile with it, discarding scroll positions,
-         * drafts and editor state that a Retry one click away would have
-         * restored for free - and it did so on a path where nothing is
-         * necessarily wrong with the session at all (see the deadline trigger
-         * below).
-         *
-         * The pattern was already one line away: `establishing` keeps the body
-         * mounted and degrades it to read-only. `failed` differed only in
-         * destroying it, and that asymmetry was the whole defect.
-         *
-         * BOTH triggers are covered here because neither releases the handle,
-         * which is what makes one fix sufficient - checked rather than assumed:
-         *  - the ∅-host arm (`epic-session-provider.tsx`) only calls
-         *    `presentSession`; it disposes nothing;
-         *  - the establishing-deadline arm calls `disposePending()`, which
-         *    disposes the PENDING replacement and leaves the current session
-         *    standing.
-         * So `EpicSessionGate` stays resolved through both and the body below
-         * still has a session to render. Scope the fix to what `failed`
-         * RENDERS, not to which condition produced it.
-         *
-         * The gate's FALLBACK arm keeps rendering the card full-bleed, and
-         * that stays correct: there is no handle there, so there is no canvas
-         * to preserve and nothing is being destroyed.
-         */}
+        {/* The failure is surfaced OVER a mounted body, never in place of it. `failed` differed only in destroying it, and that asymmetry was the whole defect. */}
         <>
           <EpicShellSessionBody
             epicId={epicId}
@@ -102,17 +70,8 @@ export function EpicShell(props: EpicShellProps) {
           />
           {failure === null ? null : (
             /*
-             * ⚠ `z-50` is a MEASURED floor, not a default. The canvas subtree
-             * carries positioned elements up to `z-40` and `tile-canvas.tsx`
-             * establishes no `isolate` boundary between them and this shell,
-             * so they share a stacking context with this overlay and anything
-             * at or below `z-40` would otherwise paint OVER the failure card.
-             *
-             * No test on this branch can see that: jsdom has no layout or
-             * paint engine, so a card rendered completely behind a tile
-             * satisfies every assertion in the suite below. Recorded here
-             * because the arms are green either way, and raise this if the
-             * canvas ever grows a higher layer.
+             * The canvas subtree carries positioned elements up to `z-40` and `tile-canvas.tsx` establishes no `isolate` boundary between them and this shell, so they share a stacking context with this overlay and anything at or below `z-40` would otherwise paint OVER the failure card.
+             * No test on this branch can see that: jsdom has no layout or paint engine, so a card rendered completely behind a tile satisfies every assertion in the suite below.
              */
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/70 p-6">
               <EpicRepointFailureCard presentation={failure} />
@@ -149,12 +108,7 @@ function EpicShellSessionBody(
         }
         canvas={
           <div
-            // `h-full min-h-0` is load-bearing, not decoration: `TileCanvas`
-            // sizes itself with `h-full`, so every element between it and
-            // `CanvasColumn`'s `min-h-0 flex-1` slot must carry a definite
-            // height forward. A wrapper left at `height: auto` gives that
-            // percentage nothing to resolve against, and the canvas collapses
-            // to its tab strip (~36px) with the tile body at 0.
+            // `h-full min-h-0` is load-bearing, not decoration: `TileCanvas` sizes itself with `h-full`, so every element between it and `CanvasColumn`'s `min-h-0 flex-1` slot must carry a definite height forward.
             className={cn(
               "h-full min-h-0",
               props.readOnly && "pointer-events-none select-none",
@@ -197,15 +151,12 @@ interface EpicShellStatusRowProps {
 }
 
 /**
- * Top-right status row: keep the connection pill present while a live session
- * establishes, but defer host-backed usage/sweep controls until its snapshot
- * makes their data dependencies valid.
+ * Top-right status row: keep the connection pill present while a live session establishes, but defer host-backed usage/sweep controls until its snapshot makes their data dependencies valid.
  */
 function EpicShellStatusRow(props: EpicShellStatusRowProps) {
   return (
     <output
       data-testid="epic-shell-status-row"
-      // The phone single-tile design has no status row; the global mobile
       // header carries app-wide status instead. Desktop (>=768px) is unchanged.
       className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground max-md:hidden"
     >
@@ -227,10 +178,8 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
 }
 
 /**
- * The full-bleed presentation, for the gate's FALLBACK arm only - there is no
- * session handle there, so the card is legitimately the whole content. The
- * resolved arm overlays {@link EpicRepointFailureCard} on a mounted body
- * instead; see the comment at that call site.
+ * The full-bleed presentation, for the gate's FALLBACK arm only - there is no session handle there, so the card is legitimately the whole content.
+ * The resolved arm overlays {@link EpicRepointFailureCard} on a mounted body instead; see the comment at that call site.
  */
 function EpicRepointFailure(props: {
   readonly presentation: EpicSessionPresentation;
@@ -243,10 +192,7 @@ function EpicRepointFailure(props: {
 }
 
 /**
- * The card itself, carrying the `epic-repoint-failure` test id so "the failure
- * is being shown" is ONE query whichever arm rendered it - a second id per arm
- * is how a test comes to assert the copy appeared while missing that the
- * canvas behind it did not survive.
+ * The card itself, carrying the `epic-repoint-failure` test id so "the failure is being shown" is ONE query whichever arm rendered it - a second id per arm is how a test comes to assert the copy appeared while missing that the canvas behind it did not survive.
  */
 function EpicRepointFailureCard(props: {
   readonly presentation: EpicSessionPresentation;

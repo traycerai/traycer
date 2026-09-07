@@ -1,8 +1,6 @@
 /**
- * Insertion-ordered `Set` with FIFO eviction: drop the oldest entry once
- * `capacity` is reached, then add `value`. Mutates `set` in place. Skip
- * the eviction when `value` is already present (caller is expected to
- * have checked, but the guard keeps the helper safe on its own).
+ * Insertion-ordered `Set` with FIFO eviction: drop the oldest entry once `capacity` is reached, then add `value`.
+ * Mutates `set` in place.
  */
 export function addWithFifoEviction<T>(
   set: Set<T>,

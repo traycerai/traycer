@@ -56,11 +56,7 @@ interface ChatComposerEditorSlotProps {
   readonly onFocus: () => void;
 }
 
-/**
- * Bound to the narrow context exposed by `<ComposerShell>` so the chat
- * composer can swap placeholders without ChatComposer re-rendering on
- * width changes.
- */
+/** Bound to the narrow context exposed by `<ComposerShell>` so the chat composer can swap placeholders without ChatComposer re-rendering on width changes. */
 export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
   const {
     ref,
@@ -84,9 +80,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
   const isNarrow = useIsComposerNarrow();
   const basePlaceholder = isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER;
   let placeholder = basePlaceholder;
-  // The steer hint is entirely a naming of two keys, so where shortcut hints
-  // are suppressed there is nothing left of it to show - the composer keeps
-  // its ordinary placeholder rather than a hint stripped of its chord.
+  // The steer hint is entirely a naming of two keys, so where shortcut hints are suppressed there is nothing left of it to show - the composer keeps its ordinary placeholder rather than a hint stripped of its chord.
   if (steerHintActive && shortcutHintsVisible()) {
     placeholder = isNarrow
       ? NARROW_STEER_HINT_PLACEHOLDER

@@ -81,10 +81,7 @@ export interface MutableSource extends PromptStashSourceAdapter {
   getIdentity: () => string;
 }
 
-/**
- * Controllable fake adapter for hook-level tests. `clearIfUnchanged` defaults
- * to a real CAS against the live revision so race tests can bump it mid-save.
- */
+/** Controllable fake adapter for hook-level tests. */
 export function makeSource(
   options:
     | {
@@ -151,10 +148,7 @@ export interface MutableDestination extends PromptStashDestinationAdapter {
     | undefined;
   setIdentity: (identity: string | null) => void;
   setSurface: (surface: string) => void;
-  /**
-   * Replaces the ready editor incarnation token (simulates remount under the
-   * same owner id). Import against a previously captured incarnation is stale.
-   */
+  /** Replaces the ready editor incarnation token (simulates remount under the same owner id). */
   setEditorIncarnation: (incarnation: ComposerEditorIncarnation) => void;
   getEditorIncarnation: () => ComposerEditorIncarnation;
   setLatestContent: (content: JsonContent) => void;
@@ -162,13 +156,7 @@ export interface MutableDestination extends PromptStashDestinationAdapter {
   getInserts: () => readonly InsertedPayload[];
 }
 
-/**
- * Controllable destination for Ticket 2/3. Default path mirrors production
- * chat/modal adapters: surface + identity + same editor incarnation, append
- * against latest content, and place the caret at the end. Materialization
- * defaults to the hook's `materializePromptStashEntry` unless `materialize`
- * is passed.
- */
+/** Default path mirrors production chat/modal adapters: surface + identity + same editor incarnation, append against latest content, and place the caret at the end. */
 export function makeDestination(
   options:
     | {

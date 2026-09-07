@@ -69,13 +69,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   };
 });
 
-// The handoff's canvas opens are routed through the nested-focus navigation
-// boundary. Mocking it to synchronously invoke `prepare()` (mirroring
-// `bundle-open-button.test.tsx`) keeps the real canvas-store mutation while
-// letting these tests count navigation attempts directly - the observable
-// signal for the re-entrant re-open regression (the underlying canvas
-// mutation is itself idempotent when the tile is already open, so asserting
-// on canvas state alone cannot detect a duplicate open/navigate attempt).
+// Mocking it to synchronously invoke `prepare()` (mirroring `bundle-open-button.test.tsx`) keeps the real canvas-store mutation while letting these tests count navigation attempts directly - the observable signal for the re-entrant re-open regression (the underlying canvas mutation is itself idempotent when the tile is already open, so asserting on canvas state alone cannot detect a duplicate open/navigate attempt).
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => testState.navigateNested,
 }));
@@ -104,12 +98,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
-// `EpicSessionProvider` opens its own durable transport via this factory, and
-// UNCONDITIONALLY now: the stream-factory override that used to short-circuit
-// before `openTransport` ran is gone, so a stub that threw here - which was
-// this file's shape, safe only because it was never reached - would now fail
-// every test. The fake supplies "no socket in tests" at the opener instead.
-// What this suite drives the session's stream with is the WORKER factory.
+// `EpicSessionProvider` opens its own durable transport via this factory, and UNCONDITIONALLY now: the stream-factory override that used to short-circuit before `openTransport` ran is gone, so a stub that threw here - which was this file's shape, safe only because it was never reached - would now fail every test.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -127,9 +116,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => HOST_ID,
 }));
 
-// The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// The Epic session resolves its host through the selection authority's derived pointer (selection model §1), not the active-host projection above - seed the decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => HOST_ID,
 }));
@@ -187,10 +174,7 @@ function registerPendingHandoff(): void {
 }
 
 /**
- * `createdAt` is load-bearing: the coordinator gives up on a chat that never
- * projects at `createdAt + CHAT_PROJECTION_DEADLINE_MS`. A live handoff is
- * registered "now" so that deadline stays far outside every test below; the
- * give-up path is exercised by registering one whose deadline already passed.
+ * `createdAt` is load-bearing: the coordinator gives up on a chat that never projects at `createdAt + CHAT_PROJECTION_DEADLINE_MS`.
  */
 function registerPendingHandoffCreatedAt(createdAt: number): void {
   useInitialChatHandoffStore.getState().register({
@@ -282,11 +266,7 @@ describe("initial chat handoff route coordinator", () => {
       contextMetadata: { userId: USER_ID, username: "Owner" },
     });
     previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
-    // A FRESH helper per spawn, supplied at the WORKER seam: a stream factory
-    // built on MAIN cannot cross `postMessage` to a runtime living in the
-    // worker, so it goes to the worker's own composition. The factory body is
-    // unchanged, and it still records `epic.subscribe` on the same
-    // `testState.events` timeline the handoff assertions read.
+    // A FRESH helper per spawn, supplied at the WORKER seam: a stream factory built on MAIN cannot cross `postMessage` to a runtime living in the worker, so it goes to the worker's own composition.
     __setEpicRuntimeWorkerFactoryForTests(() =>
       createInProcessEpicRuntimeWorker({
         streamClientFactory: (_epicId, nextCallbacks) => {
@@ -309,9 +289,7 @@ describe("initial chat handoff route coordinator", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    // RESTORED to the jsdom setup file's coreless worker, never nulled: `null`
-    // means "use the production constructor", which is `new Worker(new
-    // URL(...))` - the one form jsdom cannot execute.
+    // RESTORED to the jsdom setup file's coreless worker, never nulled: `null` means "use the production constructor", which is `new Worker(new URL(...))` - the one form jsdom cannot execute.
     __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     __getOpenEpicRegistryForTests().disposeAll();
     useInitialChatHandoffStore.getState().resetForTests();
@@ -454,10 +432,6 @@ describe("initial chat handoff route coordinator", () => {
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
 
-    // The coordinator's first transition opens the tile as soon as it
-    // mounts (handoffChatId is registered pre-render) - through the
-    // injected opener exactly once, via the nested-focus navigation
-    // boundary.
     await waitFor(() => {
       expect(testState.navigateNested).toHaveBeenCalledTimes(1);
     });
@@ -470,11 +444,6 @@ describe("initial chat handoff route coordinator", () => {
       1,
     );
 
-    // Landing the chat's projection drives further transitions of the
-    // canvas-handoff effect: the projection itself (projectedChatId /
-    // projectedChatTitle change) and the follow-on pending -> waitingChat
-    // status advance. Neither may re-open / re-navigate the already-open
-    // tile.
     const donor = new Y.Doc();
     seedDocWithChat(donor);
     act(() => {
@@ -495,16 +464,7 @@ describe("initial chat handoff route coordinator", () => {
   });
 
   it("stamps the seeded chat's tile with the host the handoff RECORD names, not the window's host", async () => {
-    // Codex #1243 T-46: the handoff's lookup key already ignores the host
-    // (`initialChatHandoffKey`), but the tile it opens is stamped with a
-    // separately-read host id and carries that binding for life. Read
-    // app-wide it stamped a chat created on the landing composer's PLACEMENT
-    // host (B, pinned) with whichever host the window had moved to (A). The
-    // record's `hostId` is where `epic.create` actually ran, so it wins.
-    //
-    // Discriminating fixture: every app-wide/effective read in this suite
-    // answers HOST_ID; only the record says "host-placement". A hook that
-    // stamps from any of those reads turns this red at the hostId assertion.
+    // Discriminating fixture: every app-wide/effective read in this suite answers HOST_ID; only the record says "host-placement".
     useInitialChatHandoffStore.getState().register({
       ...HANDOFF_SCOPE,
       hostId: "host-placement",
@@ -538,12 +498,7 @@ describe("initial chat handoff route coordinator", () => {
   });
 
   it("gives up on a folded chat that never projects and releases its pending-create mark", async () => {
-    // A create that produced NO chat (a host that dropped the folded seed, or
-    // a create that failed after the tab was already eager-opened) leaves this
-    // tab around a chat id that exists on no host and in no cloud row. The
-    // pending-create mark is what exempts it from the record-liveness sweep in
-    // `use-epic-route-synchronization`, so without a deadline that tab is
-    // permanent - blank forever, with nothing to load into it.
+    // The pending-create mark is what exempts it from the record-liveness sweep in `use-epic-route-synchronization`, so without a deadline that tab is permanent - blank forever, with nothing to load into it.
     registerPendingHandoffCreatedAt(Date.now() - 120_000);
     const queryClient = renderWithProviders(
       <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
@@ -586,16 +541,7 @@ describe("initial chat handoff route coordinator", () => {
   });
 
   it("does not fail a handoff that REPLACED the one whose deadline expired", async () => {
-    // A second create can re-register under the same {host,user,epic} scope in
-    // the gap between the store write and the deadline effect's cleanup - the
-    // timer callback is a macrotask, React's effect cleanup lands on commit.
-    // The scope-keyed `markFailed` would then kill the replacement's fresh,
-    // still-pending handoff. To pin that interleaving deterministically the
-    // epic mounts under REAL timers with the connection still closed (the
-    // deadline effect gates on `epicReady`, so nothing is armed yet), then the
-    // open transition arms the already-expired deadline under FAKE timers, and
-    // the replacement lands and the original deadline fires inside one act
-    // block - before any effect cleanup can run.
+    // To pin that interleaving deterministically the epic mounts under REAL timers with the connection still closed (the deadline effect gates on `epicReady`, so nothing is armed yet), then the open transition arms the already-expired deadline under FAKE timers, and the replacement lands and the original deadline fires inside one act block - before any effect cleanup can run.
     registerPendingHandoffCreatedAt(Date.now() - 120_000);
     const queryClient = renderWithProviders(
       <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
@@ -607,10 +553,6 @@ describe("initial chat handoff route coordinator", () => {
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
 
-    // Snapshot only - the connection stays closed so `epicReady` holds the
-    // deadline back while the session gate settles on real timers. The
-    // eager-open of the canvas tab has no readiness gate, so it doubles as the
-    // "coordinator is mounted and its effects ran" signal.
     act(() => {
       epicCallbacks.onSnapshot(
         makeMeta("owner"),
@@ -624,9 +566,7 @@ describe("initial chat handoff route coordinator", () => {
     });
     expect(handoffStatus()).toBe("pending");
 
-    // Arm the expired deadline under fake timers: the open transition re-runs
-    // the deadline effect, which sees an already-passed deadline and arms a
-    // 0ms timer this test now controls.
+    // Arm the expired deadline under fake timers: the open transition re-runs the deadline effect, which sees an already-passed deadline and arms a 0ms timer this test now controls.
     vi.useFakeTimers();
     act(() => {
       epicCallbacks.onConnectionStatus("open", null);
@@ -656,10 +596,7 @@ describe("initial chat handoff route coordinator", () => {
   });
 
   it("releases the pending-create mark when the handoff leaves this scope", async () => {
-    // The handoff can vanish from {host,user,epic} without ever going
-    // terminal - consumed elsewhere, signed-out user, active-host swap. The
-    // mark is this hook's to release; nobody else knows the tile is still
-    // exempt from the sweep.
+    // The handoff can vanish from {host,user,epic} without ever going terminal - consumed elsewhere, signed-out user, active-host swap.
     registerPendingHandoff();
     const queryClient = renderWithProviders(
       <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
@@ -698,10 +635,7 @@ describe("initial chat handoff route coordinator", () => {
   });
 
   it("reload-style: ref cleared but tile already in the tab skips a duplicate open", async () => {
-    // Simulate a reload: the canvas layout already carries the handoff
-    // chat's tile (persisted from a prior session) before this fresh
-    // coordinator instance mounts - a fresh mount always starts with a
-    // null `openedChatIdRef`.
+    // Simulate a reload: the canvas layout already carries the handoff chat's tile (persisted from a prior session) before this fresh coordinator instance mounts - a fresh mount always starts with a null `openedChatIdRef`.
     useEpicCanvasStore.getState().openTileInTab(EPIC_ID, {
       id: CHAT_ID,
       instanceId: "preexisting-instance",
@@ -720,10 +654,6 @@ describe("initial chat handoff route coordinator", () => {
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
 
-    // Wait for the coordinator to mount and its canvas-handoff effect to
-    // run at least once - the pending-create mark fires regardless of
-    // whether the tile-open guard trips, so it is a reliable "mounted and
-    // ran" signal independent of the behavior under test.
     await waitFor(() => {
       expect(
         useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),

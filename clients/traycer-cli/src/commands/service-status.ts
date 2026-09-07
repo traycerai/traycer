@@ -6,11 +6,8 @@ import {
   windowsTaskName,
 } from "../service";
 
-// `traycer host service status [--json]` - read-only snapshot of the OS
-// service state for the current environment. The `data` payload is the
-// raw ServiceStatus the controller returns; the human path renders a
-// terse summary so a user can tell at a glance whether the service is
-// registered + running.
+// `traycer host service status [--json]` - read-only snapshot of the OS service state for the current environment.
+// The `data` payload is the raw ServiceStatus the controller returns; the human path renders a terse summary so a user can tell at a glance whether the service is registered + running.
 export const serviceStatusCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {

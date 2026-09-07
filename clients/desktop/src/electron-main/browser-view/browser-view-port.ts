@@ -11,32 +11,12 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageSession } from "./storage/browser-storage-state";
 
-/**
- * One `createElectronTab` frame on its way into the native manager.
- *
- * MAIN-side only, and that is the point (H10): the frame is consumed by the
- * process that owns the jar, so the seed never crosses an IPC boundary and no
- * renderer can inject one. Every check the seed goes through - domain
- * re-derivation against the tab's own origin, expiry, the bound, the ledger
- * gate, the serializer - is unchanged (H05 item 1).
- */
+/** MAIN-side only, and that is the point (H10): the frame is consumed by the process that owns the jar, so the seed never crosses an IPC boundary and no renderer can inject one. */
 export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
   readonly requestedUrl: string;
-  /**
-   * Which jar the guest is born into. It travels from the host's
-   * `createElectronTab` frame; `isolated` selects the session's own in-memory
-   * partition and never carries a seed.
-   */
+  /** It travels from the host's `createElectronTab` frame; `isolated` selects the session's own in-memory partition and never carries a seed. */
   readonly profile: BrowserSessionProfileKind;
   readonly seedStorageState: BrowserStorageState | null;
-  /**
-   * The live stream incarnation the `createElectronTab` frame arrived on - the
-   * SAME provenance `primaryProfileObserved` carries, and for the same reason:
-   * the seed is a host->jar write, so it is priced against the connection that
-   * sent it (the forget ledger's per-connection ack watermark and the observed
-   * rate budget both key on this). Null off-connection, which fails the ledger
-   * gate closed.
-   */
   readonly connectionId: string | null;
 }
 
@@ -85,15 +65,7 @@ export interface BrowserViewWindowOpenDetails {
   readonly disposition: string;
 }
 
-/**
- * The window-open options Electron hands to a {@link WindowOpenHandlerResponse}
- * `createWindow` callback. `webContents` is the popup contents Chromium has
- * already created for a scripted `window.open`; it is present at runtime but
- * absent from the published `electron.d.ts`, so it is re-declared here. It is
- * optional because Chromium omits it for the dispositions that never reach the
- * allow path (Cmd/Ctrl-click), and keeping it optional is what lets this stay
- * assignable to Electron's own `createWindow(options)` parameter.
- */
+/** It is optional because Chromium omits it for the dispositions that never reach the allow path (Cmd/Ctrl-click), and keeping it optional is what lets this stay assignable to. */
 export interface BrowserViewPopupCreateWindowOptions extends BrowserWindowConstructorOptions {
   readonly webContents?: WebContents;
 }
@@ -104,14 +76,6 @@ export type BrowserViewWindowOpenResult =
       readonly action: "allow";
       readonly overrideBrowserWindowOptions: BrowserWindowConstructorOptions;
       readonly outlivesOpener: boolean;
-      /**
-       * Called instead of `new BrowserWindow` so the popup ADOPTS the contents
-       * Chromium pre-created (`options.webContents`). Adopting them - rather
-       * than constructing fresh contents - is what preserves `window.opener`
-       * and the inherited session that OAuth/SSO popups relay their params
-       * through, and it is why `did-create-window` is not emitted for these
-       * windows. Returns the adopted contents, as Electron's contract requires.
-       */
       readonly createWindow: (
         options: BrowserViewPopupCreateWindowOptions,
       ) => WebContents;
@@ -193,12 +157,6 @@ export interface BrowserViewWebContents {
   off: NodeJS.EventEmitter["off"];
 }
 
-/**
- * Main-owned mint of a renderer `<webview>` guest.
- * `onAttached` runs seed/CDP while the request gate is still up.
- * The mint's `ready` Promise settles after that gate is disposed, or
- * rejects on timeout/terminal drop. It is not a renderer payload.
- */
 export interface BrowserViewGuestAttachRequest {
   readonly partition: string;
   readonly onAttached: (guest: BrowserViewWebContents) => Promise<void>;
@@ -214,11 +172,6 @@ export type BrowserViewInputModifier = "meta" | "control" | "shift" | "alt";
 export interface BrowserViewHostWebContents {
   on: NodeJS.EventEmitter["on"];
   off: NodeJS.EventEmitter["off"];
-  /**
-   * Move OS keyboard focus off a focused guest and onto the host renderer.
-   * Focusing a host DOM element is not enough by itself - the caret would
-   * render while keystrokes still went to the guest `webContents`.
-   */
   focus(): void;
   sendInputEvent(event: {
     readonly type: "keyDown";

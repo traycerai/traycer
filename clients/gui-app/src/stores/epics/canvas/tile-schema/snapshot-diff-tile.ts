@@ -1,8 +1,4 @@
-/**
- * Schema for chat snapshot diff tiles. Snapshot payloads are chat-owned:
- * they reference file_change blocks or accumulated file paths by chat id,
- * then re-read before/after content from the chat session at render time.
- */
+/** Schema for chat snapshot diff tiles. */
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import {
   normalizeSnapshotBundleFilePaths,
@@ -67,8 +63,6 @@ function parseSnapshotDiffPayload(
     sourceBlockIds,
     filePath: value.filePath,
     // Absent on every tile persisted before the captured endpoints existed.
-    // `null` is the right reading of that: no fallback recorded, resolve from
-    // the blocks or not at all - which is what those tiles already did.
     beforeHash: typeof value.beforeHash === "string" ? value.beforeHash : null,
     afterHash: typeof value.afterHash === "string" ? value.afterHash : null,
   };

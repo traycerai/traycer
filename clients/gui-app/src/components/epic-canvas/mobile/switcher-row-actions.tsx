@@ -48,15 +48,7 @@ const RENAME_TITLE: Record<SwitcherRowKind, string> = {
   terminal: "Rename terminal",
 };
 
-/**
- * The per-row "…" actions for the switcher's flat lists: Rename + Delete for
- * agents/artifacts (delete confirmed), Rename + Close for PTY terminals (Close
- * is immediate, matching desktop parity). Reuses the exact desktop mutation
- * hooks and the shared row-menu item renderer; the whole affordance is
- * editor-gated (a viewer gets no menu at all, so no dead-end mutations). Delete
- * also closes the item's open canvas tile so the mobile view never lands on a
- * dead tile.
- */
+/** Delete also closes the item's open canvas tile so the mobile view never lands on a dead tile. */
 export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const { epicId, tabId, kind, nodeId, name, cascadeSummary } = props;
   const canMutate = isEditableRole(useEpicPermissionRole());

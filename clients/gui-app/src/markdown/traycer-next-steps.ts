@@ -106,11 +106,8 @@ function parseTraycerNextStepsMarkdownWithTags(
     } else {
       parts.push({
         kind: "next_steps",
-        // Keyed on the open-tag offset only: it is unique per block and frozen
-        // the moment the tag arrives. `block.end` must stay out of the id - for
-        // an incomplete streaming block it is `markdown.length`, which grows
-        // every frame and would remount the part (prose markdown + action
-        // buttons) on every streamed token.
+        // Key on the open-tag offset only. block.end is markdown.length while
+        // streaming and would remount the part every token.
         id: `next:${block.start}`,
         prose: parsed.prose,
         options: parsed.options,

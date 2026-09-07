@@ -1,17 +1,6 @@
 /**
- * Workspace picker for the file-tree panel. Its popover shares the same
- * building blocks as the git diff and terminal pickers - an editable
- * `WorktreePickerHostSection` (selecting a host writes this panel's
- * surface pin; folder queries resolve through that host) above the flat
- * searchable `WorktreeFolderList`.
- *
- * Data comes from the epic binding list so the file tree shows the same
- * chat/terminal-agent workspace set as terminals and git diff. The picker does
- * NOT expose "Add folder…" (file-tree is a consumer, not a folder editor -
- * folder management lives on the home / chat surfaces).
- *
- * Selection state is owned by `useFileTreeStore` keyed by
- * `[epicId, hostId]` so multi-host users keep distinct selections.
+ * Workspace picker for the file-tree panel.
+ * Its popover shares the same building blocks as the git diff and terminal pickers - an editable `WorktreePickerHostSection` (selecting a host writes this panel's surface pin; folder queries resolve through that host) above the flat searchable `WorktreeFolderList`.
  */
 import { useMemo, useState } from "react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
@@ -33,10 +22,7 @@ export interface FileTreeWorkspacePickerProps {
 }
 
 export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
-  // Controlled so a folder/worktree pick closes the popover. Left
-  // uncontrolled, the popover stays open over the file tree after a
-  // selection - the first click on a tree row then only dismisses the
-  // popover instead of opening the file.
+  // Left uncontrolled, the popover stays open over the file tree after a selection - the first click on a tree row then only dismisses the popover instead of opening the file.
   const [open, setOpen] = useState(false);
   const client = useSurfaceHostClient(props.hostId);
   const listQuery = useWorktreeListBindingsForEpicForClient({
@@ -44,9 +30,7 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
     epicId: props.epicId,
     enabled: props.hostId !== null,
   });
-  // Host-proven-missing rows are hidden (nothing to browse); the current
-  // selection is exempt so a just-deleted selected root keeps its labeled row
-  // until the user picks a live one.
+  // Host-proven-missing rows are hidden (nothing to browse); the current selection is exempt so a just-deleted selected root keeps its labeled row until the user picks a live one.
   const rows = useMemo(
     () =>
       withoutResolvedMissingRows(
@@ -86,7 +70,6 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
         rows={rows}
         selectedRow={selectedRow}
         // Secondary line per row = its full path, preserving the path info
-        // the previous folder-row UI showed.
         secondaryLabel={(row) => row.runningDir}
         onSelect={(row) => {
           props.onSelectPath(row.runningDir);

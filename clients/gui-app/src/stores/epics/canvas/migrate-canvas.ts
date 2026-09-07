@@ -1,18 +1,4 @@
-/**
- * Canvas (de)serialization for the current N-ary shape.
- *
- * One persisted shape flows through here (via `parseEpicCanvasState`, the
- * single parse entry point for BOTH the zustand persist path and the desktop
- * per-window projection path):
- *
- * **N-ary shape**: `{kind:"pane", tabInstanceIds}` leaves under
- * `{kind:"group", direction, children}` containers, with `activePaneId`,
- * `tilesByInstanceId`, and `sizesByGroupId` at the state level.
- *
- * Parsing is total (never throws): any salvageable subtree is preserved.
- * Per-tab drop rules: an unparsable tab is dropped without evicting its
- * siblings; a pane whose every tab failed is collapsed into its sibling.
- */
+/** Canvas (de)serialization for the current N-ary shape. */
 import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { EpicCanvasState, EpicCanvasTileRef } from "./types";
@@ -38,9 +24,6 @@ interface ParseContext {
   readonly sizes: Record<string, ReadonlyArray<number>>;
 }
 
-// ---------------------------------------------------------------------------
-// Current N-ary nodes
-// ---------------------------------------------------------------------------
 
 function parsePane(
   value: Record<string, unknown>,
@@ -150,9 +133,6 @@ function parseCurrentTileNode(
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// State level
-// ---------------------------------------------------------------------------
 
 function parsePersistedTiles(
   value: unknown,
@@ -188,12 +168,7 @@ function parsePersistedSizes(
   return out;
 }
 
-/**
- * Parse a persisted canvas (current N-ary shape) into `EpicCanvasState`.
- * Returns `null` only for non-object input; any salvageable subtree is
- * preserved and the result always satisfies the tiles/tree/sizes invariants
- * (via {@link reconcileCanvasInvariants}).
- */
+/** Parse a persisted canvas (current N-ary shape) into `EpicCanvasState`. */
 export function parseEpicCanvasState(value: unknown): EpicCanvasState | null {
   if (!isRecord(value)) return null;
   const ctx: ParseContext = {
@@ -224,9 +199,8 @@ export function parseCanvasByTabId(
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Serialization (always writes the current N-ary shape)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Serialization
+// (always writes the current N-ary shape)
 
 export function serializeTileNode(node: TileLayoutNode): DesktopJsonValue {
   if (node.kind === "pane") {
@@ -280,17 +254,12 @@ export function serializeCanvasByTabId(
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Structural equality (desktop echo suppression)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Structural equality
+// (desktop echo suppression)
 
 /**
- * Structural equality of two canvas states, compared through the canonical
- * serializer so the definition of "same canvas" stays in one place. Used by
- * the desktop projection apply to keep the EXISTING state reference when the
- * sync round-trip echoes our own write back as freshly-parsed objects -
- * without this, every echo would hand new identities to every pane and
- * cascade re-renders through the tiled canvas.
+ * Structural equality of two canvas states, compared through the canonical serializer so the
+ * definition of "same canvas" stays in one place.
  */
 export function epicCanvasStatesEqual(
   a: EpicCanvasState,

@@ -73,11 +73,7 @@ describe("deriveWedgeVerdict", () => {
     });
   });
 
-  // Finding 15 — the predicate was `includes("ex_config") || includes("config")`,
-  // whose first term is subsumed by the second, and whose second term is far
-  // too loose for a signal that routes to a destructive transition. Sampling
-  // every live job on a healthy Mac, the real `last exit reason` values are
-  // JETSAM_REASON_MEMORY_IDLE_EXIT / JETSAM_REASON_MEMORY_PERPROCESSLIMIT.
+  // Finding 15 - the predicate was `includes("ex_config") || includes("config")`, whose first term is subsumed by the second, and whose second term is far too loose for a signal that routes to a destructive transition.
   it.each([
     "JETSAM_REASON_MEMORY_IDLE_EXIT",
     "JETSAM_REASON_MEMORY_PERPROCESSLIMIT",

@@ -1,22 +1,13 @@
 /**
- * Maps a raw `RTCPeerConnection.getStats()` report to the getStats-derived half
- * of the wire's `videoStats` shape (ticket 11). Pure and DOM-report-shaped only
- * - no peer connection, no timers - so it is testable against a fake
- * `RTCStatsReport` built from a plain `Map`.
- *
- * The timing half of the payload does not come from `getStats()` at all:
- * glass-to-glass and its two legs are read off `requestVideoFrameCallback`
- * metadata (`video-frame-latency.ts`) and the DataChannel RTT off a `ping`, so
- * both are the session's to add (`video-plane-session.ts`) rather than this
- * mapper's to invent.
+ * Maps a raw `RTCPeerConnection.getStats()` report to the getStats-derived half of the wire's `videoStats` shape (ticket 11).
+ * Pure and DOM-report-shaped only
  */
 import { browserScreencastIcePairTypeSchema } from "@traycer/protocol/host/browser/contracts";
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * The subset `getStats()` alone can answer; see the module comment. The full
- * payload is `WebrtcVideoStatsSample`, defined with the rest of the wire shape
- * in `webrtc-media-registry.ts`.
+ * The subset `getStats()` alone can answer; see the module comment.
+ * The full payload is `WebrtcVideoStatsSample`, defined with the rest of the wire shape in `webrtc-media-registry.ts`.
  */
 type WebrtcVideoStatsReportFields = Omit<
   WebrtcVideoStatsSample,
@@ -48,9 +39,8 @@ function inboundVideoRtp(report: RTCStatsReport): StatRecord | null {
 }
 
 /**
- * The inbound video RTP stat's jitter, in milliseconds - `null` when the report
- * carries none yet (pre-first-sample). Read by the registry's adaptive
- * jitter-buffer tuning, which needs this one field and not the whole shape.
+ * The inbound video RTP stat's jitter, in milliseconds - `null` when the report carries none yet (pre-first-sample).
+ * Read by the registry's adaptive jitter-buffer tuning, which needs this one field and not the whole shape.
  */
 export function inboundVideoJitterMs(report: RTCStatsReport): number | null {
   const jitter = inboundVideoRtp(report)?.jitter;
@@ -61,11 +51,7 @@ export function inboundVideoJitterMs(report: RTCStatsReport): number | null {
 interface CollectedStats {
   transport: StatRecord | null;
   /**
-   * Only consulted when no `transport` stat names the selected pair (older
-   * Chrome, or a synthetic report in a test): after an ICE restart more than
-   * one pair can carry `nominated: true`, so `state === "succeeded"` narrows
-   * it further - a still-checking pair from a fresh restart must not win over
-   * a genuinely connected one.
+   * Only consulted when no `transport` stat names the selected pair (older Chrome, or a synthetic report in a test): after an ICE restart more than one pair can carry `nominated: true`, so `state === "succeeded"` narrows it further - a still-checking pair from.
    */
   nominatedPair: StatRecord | null;
   inboundRtp: StatRecord | null;
@@ -132,11 +118,7 @@ export function mapWebrtcVideoStats(
   return {
     framesDecoded: numberField(inboundRtp, "framesDecoded"),
     framesDropped: numberField(inboundRtp, "framesDropped"),
-    // Spec-signed (duplicate/late packets go negative) - routine on a lossy
-    // path - but the wire field is nonnegative, so a raw negative would fail
-    // the resolver's parse every cadence tick. Clamped here, not upstream:
-    // the mapper is the seam between "what the DOM reports" and "what the
-    // wire contract promises".
+    // Spec-signed (duplicate/late packets go negative) - routine on a lossy path - but the wire field is nonnegative, so a raw negative would fail the resolver's parse every cadence tick.
     packetsLost: Math.max(0, numberField(inboundRtp, "packetsLost")),
     jitterMs: numberField(inboundRtp, "jitter") * 1000,
     roundTripTimeMs:

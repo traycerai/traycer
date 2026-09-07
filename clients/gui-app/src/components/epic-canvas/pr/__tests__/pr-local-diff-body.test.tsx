@@ -28,23 +28,8 @@ import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
 import type { PrLocalDiffTarget } from "@/hooks/pr/use-pr-local-diff";
 
 /**
- * The PR diff tile's body: the drift banner, per-file collapse, and the
- * sentence shown when there is no local diff to read.
- *
- * `@pierre/diffs` is stubbed - it renders through a worker-backed highlight
- * pipeline that has no place in a jsdom assertion about which branch was
- * taken. The stub still proves the patch text reached the renderer.
- *
- * Drives the REAL canvas store (a real tab, with the tile actually inserted
- * into it) rather than mocking `useEpicCanvasStore`: the collapse toggle is
- * dispatched by the tile's deterministic `id`, matched against every tile in
- * the tab's canvas, and a hand-rolled mock that ignores the id argument
- * cannot tell a correctly-keyed toggle from one that hits the wrong tile.
- *
- * Virtuoso renders zero rows in jsdom unless `VirtuosoMockContext` supplies a
- * viewport. Split-mode sections resolve the host via `useTabHostClient`; that
- * hook is stubbed narrowly (not a whole-module factory over a class) so
- * `HostRpcError instanceof` checks stay real.
+ * `@pierre/diffs` is stubbed - it renders through a worker-backed highlight pipeline that has no place in a jsdom assertion about which branch was taken.
+ * Drives the REAL canvas store (a real tab, with the tile actually inserted into it) rather than mocking `useEpicCanvasStore`: the collapse toggle is dispatched by the tile's deterministic `id`, matched against every tile in the tab's canvas, and a hand-rolled mock that ignores the id argument cannot tell a correctly-keyed toggle from one that hits the wrong tile.
  */
 
 const tabHostClient = vi.hoisted(() => ({
@@ -239,9 +224,8 @@ function renderBody(args: {
   readonly onRangeDrift: (() => void) | undefined;
   readonly preferences: DiffViewerPreferences | undefined;
 }): RenderResult {
-  // The body needs a QueryClient even though nothing in the monolith cases
-  // fetches - other host queries in the tree depend on one. In the app it
-  // always has one.
+  // The body needs a QueryClient even though nothing in the monolith cases fetches - other host queries in the tree depend on one.
+  // In the app it always has one.
   return render(
     bodyTree({
       ...args,
@@ -355,9 +339,7 @@ describe("PrLocalDiffBody (monolith fallback)", () => {
       target: localDiffTarget(),
     });
 
-    // The collapse control is a real `<button aria-expanded>`, so drive it by
-    // role and accessible name: that pins the semantics a keyboard/screen
-    // reader user depends on, which a test-id click would let regress.
+    // The collapse control is a real `<button aria-expanded>`, so drive it by role and accessible name: that pins the semantics a keyboard/screen reader user depends on, which a test-id click would let regress.
     const toggle = screen.getByRole("button", { name: /src\/a\.ts/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(toggle);
@@ -465,12 +447,7 @@ describe("PrLocalDiffBody (monolith fallback)", () => {
   });
 
   it("falls back to the no-checkout line when the host is too old for the method", () => {
-    // A host that predates even the MONOLITH `pr.getLocalDiff` answers
-    // E_HOST_UNSUPPORTED to the summary probe and the fallback call alike -
-    // an error with no reason to name. (A host that merely predates the
-    // split pair never lands here: its monolith fallback succeeds and
-    // renders.) The tile then lands on this body with both frames null; the
-    // sentence is the same "no checkout" line as a genuine miss.
+    // A host that predates even the MONOLITH `pr.getLocalDiff` answers E_HOST_UNSUPPORTED to the summary probe and the fallback call alike - an error with no reason to name. (A host that merely predates the split pair never lands here: its monolith fallback succeeds and renders.) The tile then lands on this body with both frames null; the sentence is the same "no checkout" line as a genuine miss.
     const node = tile();
     const tabId = openRealTabWithTile(node);
     renderMonolith({
@@ -527,10 +504,6 @@ describe("PrLocalDiffBody (split)", () => {
   });
 
   it("keeps two lossy-name-colliding files as distinct rows, each fetching with its own pathBytes token", async () => {
-    // Both files decode to the SAME lossy display path ("bad-�.txt") but
-    // carry different raw-byte tokens (bytes of "bad-\xff.txt" and
-    // "bad-\xfe.txt" respectively) - the exact collision the tagged key space
-    // exists to keep apart.
     const TOKEN_A = "YmFkLf8udHh0";
     const TOKEN_B = "YmFkLf4udHh0";
     const node = tile();
@@ -697,18 +670,13 @@ describe("PrLocalDiffBody (split)", () => {
       }),
     );
 
-    // The section renders its ordinary error block while the TILE recovery
-    // (a summary refetch that will itself fail unsupported and flip the tile
-    // to monolith) is in flight - and reports exactly once.
+    // The section renders its ordinary error block while the TILE recovery (a summary refetch that will itself fail unsupported and flip the tile to monolith) is in flight - and reports exactly once.
     expect(await screen.findByText("Diff Loading Error")).toBeTruthy();
     await waitFor(() => {
       expect(onRangeDrift).toHaveBeenCalledTimes(1);
     });
 
-    // A new callback identity re-runs the report effect - the exact path a
-    // tile re-render takes after a failed recovery releases its token. The
-    // once-per-episode ref must keep the same cached error from re-reporting
-    // through it.
+    // The once-per-episode ref must keep the same cached error from re-reporting through it.
     const onRangeDriftNext = vi.fn();
     view.rerender(
       bodyTree({

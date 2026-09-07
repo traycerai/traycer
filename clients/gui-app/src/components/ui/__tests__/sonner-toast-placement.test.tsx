@@ -6,13 +6,8 @@ import { Toaster } from "@/components/ui/sonner";
 import type { TileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
 import { registerTileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
 
-// Ticket 06: the toaster picks the least-overlapping of sonner's six fixed
-// anchors against live registered tile rects, and freezes that choice while
-// a toast is visible. `sonner`'s real `Toaster` only mounts an
-// `<ol data-sonner-toaster>` while a toast exists (see sonner.tsx's
-// selector comment) - this stub reproduces exactly that, with a real
-// `getBoundingClientRect`, so the wrapper's own visibility/measurement
-// logic runs unmodified against real DOM nodes.
+// Ticket 06: the toaster picks the least-overlapping of sonner's six fixed anchors against live registered
+// tile rects, and freezes that choice while a toast is visible.
 type SonnerToasterSpy = (props: ToasterProps) => void;
 
 const sonnerToasterProps = vi.hoisted(() => vi.fn<SonnerToasterSpy>());
@@ -85,9 +80,8 @@ function makeTileKey(id: string): BrowserViewTileKey {
   };
 }
 
-// Rects for each of sonner's six anchors, matching the jsdom default
-// 1200x800 viewport, the stub's 356x120 toaster size, and the wrapper's
-// 24px edge offset (sonner's own unoverridden `VIEWPORT_OFFSET` default).
+// Rects for each of sonner's six anchors, matching the jsdom default 1200x800 viewport, the stub's 356x120
+// toaster size, and the wrapper's 24px edge offset (sonner's own unoverridden `VIEWPORT_OFFSET` default).
 const TOP_LEFT_RECT: TileRect = {
   left: 24,
   top: 24,
@@ -222,17 +216,14 @@ describe("<Toaster /> toast placement", () => {
       await flush();
     });
 
-    // A tile now covers the anchor the visible toast is already using, but
-    // invariant 10 only reduces future overlap - it never moves a toaster
-    // out from under an already-showing toast.
+    // A tile now covers the anchor the visible toast is already using, but invariant 10 only reduces future
+    // overlap - it never moves a toaster out from under an already-showing toast.
     expect(lastSonnerToasterProps().position).toBe("bottom-right");
   });
 });
 
-/** Shows and hides the stubbed toast list once so the wrapper measures a
- * real toaster rect before a test starts registering tiles - without this,
- * `pickToasterAnchor` has no size to compare tile rects against and always
- * keeps the default. */
+/** Shows and hides the stubbed toast list once so the wrapper measures a real toaster rect before a test starts
+ * registering tiles. */
 async function primeMeasurement(
   rerender: (ui: React.ReactElement) => void,
 ): Promise<void> {

@@ -41,9 +41,6 @@ describe("host.update.check v1.1 request", () => {
   });
 
   it("rejects null, the shape that cannot cross to a v1.0 peer", () => {
-    // The third state is an omitted key precisely because `null` fails the
-    // v1.0 projection below; accepting it here would let a client build a
-    // request that dies at `prepareRequestPayload` against a shipped host.
     expect(
       hostUpdateCheckRequestSchemaV11.safeParse({ includePreReleases: null })
         .success,
@@ -52,9 +49,7 @@ describe("host.update.check v1.1 request", () => {
 });
 
 /**
- * What `prepareRequestPayload` does when a v1.1 client negotiates v1.0: it
- * PARSES the v1.1 params with the v1.0 request schema and sends the result.
- * These three cases are the whole documented old-host contract.
+ * What `prepareRequestPayload` does when a v1.1 client negotiates v1.0: it PARSES the v1.1 params with the v1.0 request schema and sends the result.
  */
 describe("v1.1 request projected onto a negotiated v1.0 peer", () => {
   it("sends the stable-only default for a derive request", () => {
@@ -73,9 +68,7 @@ describe("v1.1 request projected onto a negotiated v1.0 peer", () => {
   });
 
   it("collapses explicit exclude onto the same stable-only ask", () => {
-    // The v1.1-only distinction between "excluded" and "not stated" is not
-    // sent to an old peer; both mean stable-only there, which is what that
-    // peer has always done.
+    // The v1.1-only distinction between "excluded" and "not stated" is not sent to an old peer; both mean stable-only there, which is what that peer has always done.
     expect(
       hostUpdateCheckRequestSchema.parse({ includePreReleases: false }),
     ).toEqual({ includePreReleases: false });
@@ -129,13 +122,8 @@ describe("v1.0 -> v1.1 upgrade", () => {
   });
 
   it("maps a v1.0 false to derive, not to explicit exclude", () => {
-    // An old client's `false` was the stable-only DEFAULT, not a deliberate
-    // filter - it had no way to express one. Reading it as explicit exclude
-    // would pin every old client to stable-only even on an RC host.
-    //
-    // `toStrictEqual`, NOT `toEqual`: `toEqual` ignores undefined-valued keys,
-    // so it passes for `{ includePreReleases: undefined }` too and cannot see
-    // the distinction this whole assertion is about.
+    // An old client's `false` was the stable-only DEFAULT, not a deliberate filter - it had no way to express one.
+    // `toStrictEqual`, NOT `toEqual`: `toEqual` ignores undefined-valued keys, so it passes for `{ includePreReleases: undefined }` too and cannot see the distinction this whole assertion is about.
     expect(
       upgradeRequestToVersion(REGISTRY, V10, V11, {
         includePreReleases: false,
@@ -161,9 +149,7 @@ describe("v1.0 -> v1.1 upgrade", () => {
   });
 
   it("never claims installed-rc provenance from an old host", () => {
-    // The old peer derived nothing. `stable-default` is what its contract
-    // actually meant; `installed-rc` would fabricate the Settings copy that
-    // keys off it.
+    // The old peer derived nothing.
     expect(
       upgradeResponseToVersionWithContext(
         REGISTRY,
@@ -204,17 +190,7 @@ describe("v1.0 -> v1.1 upgrade", () => {
   });
 });
 
-/**
- * The representation a resolver actually receives for the derive state.
- *
- * A resolver has to distinguish three requests, and the third is spelled by an
- * absence - so HOW that absence is represented is part of the contract, not an
- * implementation detail. Two paths deliver it: a v1.1 client's request parsed
- * off the wire, and a v1.0 request bridged up. If they disagreed on key
- * presence, `"includePreReleases" in params` would classify one logical state
- * two different ways depending on the peer, and only against an old client -
- * the worst possible place to find out.
- */
+/** The representation a resolver actually receives for the derive state. */
 describe("the derive state as a resolver sees it", () => {
   it("has no own key when parsed from a v1.1 client's request", () => {
     const parsed = hostUpdateCheckRequestSchemaV11.parse({});
@@ -231,9 +207,7 @@ describe("the derive state as a resolver sees it", () => {
   });
 
   it("reads as undefined under the documented value test, from either path", () => {
-    // `=== undefined` is the rule resolvers must use: it is correct whether or
-    // not the own key is present, so it survives a future bridge that spells
-    // the absence the other way.
+    // `=== undefined` is the rule resolvers must use: it is correct whether or not the own key is present, so it survives a future bridge that spells the absence the other way.
     const fromWire = hostUpdateCheckRequestSchemaV11.parse({});
     const fromBridge = upgradeRequestToVersion(REGISTRY, V10, V11, {
       includePreReleases: false,

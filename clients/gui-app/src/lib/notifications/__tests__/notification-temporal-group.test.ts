@@ -37,9 +37,8 @@ describe("temporalGroupForTimestamp", () => {
   });
 
   it("splits at local midnight, not elapsed 24h duration", () => {
-    // 11:59pm yesterday and 12:01am today are ~2 minutes apart but live in
-    // opposite calendar-day buckets. A naive "24h elapsed" check would put
-    // both in "today" relative to a mid-afternoon `now`.
+    // 11:59pm yesterday and 12:01am today are ~2 minutes apart but live in opposite calendar-day buckets.
+    // A naive "24h elapsed" check would put both in "today" relative to a mid-afternoon `now`.
     const almostMidnightYesterday = todayStart - 60_000; // 23:59 previous day
     const justAfterMidnightToday = todayStart + 60_000; // 00:01 today
 
@@ -60,10 +59,8 @@ describe("temporalGroupForTimestamp", () => {
   });
 
   it("classifies just-under-24h-ago timestamps by calendar day, not elapsed time", () => {
-    // At 15:00 local "now", a timestamp from 15:30 yesterday is < 24h old, but
-    // it belongs to yesterday's calendar day. A duration-based implementation
-    // that only checks `now - timestamp < DAY_MS` would incorrectly return
-    // "today".
+    // At 15:00 local "now", a timestamp from 15:30 yesterday is < 24h old, but it belongs to yesterday's calendar day.
+    // A duration-based implementation that only checks `now - timestamp < DAY_MS` would incorrectly return "today".
     const afternoonYesterday = yesterdayStart + 15 * 3_600_000 + 30 * 60_000;
     expect(now - afternoonYesterday).toBeLessThan(86_400_000);
     expect(temporalGroupForTimestamp(afternoonYesterday, now)).toBe(

@@ -3,13 +3,7 @@ import { chatSchema, chatSchemaPreInReplyTo } from "../chat";
 
 /**
  * `chatSchema.archivedAt` back-compat + totality guard.
- *
- * Archiving is a rolling-update addition (see the "Archive Mechanism" in the
- * chat-sidebar redesign plan): records persisted before this field existed
- * must still parse, defaulting to not-archived. The frozen
- * `chat.subscribe@1.0-1.3` wire copy (`chatSchemaPreInReplyTo`) is a
- * hand-maintained snapshot of the shipped wire shape and was deliberately not
- * given the field - it must never surface it, even when present on the input.
+ * Archiving is a rolling-update addition (see the "Archive Mechanism" in the chat-sidebar redesign plan): records persisted before this field existed must still parse, defaulting to not-archived.
  */
 
 const baseChat = {

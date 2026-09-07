@@ -1,12 +1,4 @@
-/**
- * `DialFailureLog` exists between two failure modes, and both are real bugs
- * that shipped: logging every attempt of a forever-retrying loop (~120
- * lines/hour of the same line), and logging nothing at all (the staging
- * desktop dialed a relay hostname with no DNS record for weeks and wrote not
- * one diagnostic line). These tests pin both edges, plus the recovery line.
- * Mirrors the host-side `UplinkFailureLog` suite - the two halves of the
- * tunnel log under the same contract.
- */
+/** These tests pin both edges, plus the recovery line. */
 import { describe, expect, it } from "vitest";
 import { DialFailureLog } from "../dial-failure-log";
 
@@ -15,7 +7,6 @@ interface Captured {
   readonly infos: string[];
 }
 
-/** A hand-cranked clock, so "5 minutes later" costs no wall time. */
 function clock(): { now: () => number; advance: (ms: number) => void } {
   let value = 1_000;
   return {
@@ -99,7 +90,7 @@ describe("DialFailureLog", () => {
     }
     expect(captured.warns).toHaveLength(1);
 
-    // Crossing the interval re-states it, WITH the outage's shape.
+    // Crossing the interval re-states it, with the outage's shape.
     advance(REPEAT_MS);
     log.recordFailure({
       cause: "the relay socket closed (code=1006)",
@@ -184,9 +175,7 @@ describe("DialFailureLog", () => {
     advance(90_000);
     log.recordFailure({ cause: "mint failed", context: "", retryInMs: 30_000 });
 
-    // The cache retired the session (linger expiry / supersession) while the
-    // loop was still failing: without a terminal line the tail reads
-    // "...retrying in 30000ms" then nothing - the log's own failure mode 2.
+    // The cache retired the session (linger expiry / supersession) while the loop was still failing: without a terminal line the tail reads "...retrying in 30000ms" then nothing - the log's own failure mode 2.
     log.recordAbandoned();
     expect(captured.warns).toHaveLength(2);
     expect(captured.warns[1]).toContain(

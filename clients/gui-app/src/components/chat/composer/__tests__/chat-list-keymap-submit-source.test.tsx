@@ -9,12 +9,7 @@ import {
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import { ROOT_MENTION_STEP } from "@/lib/composer/mentions";
 
-/**
- * Real ChatListKeymap source wiring (decisions 12, 16).
- *
- * Exercises the Tiptap keymap path - not a direct `submitDraft("mod-enter")`
- * call - so Enter/Mod-Enter and the picker commit-then-submit chord stay pinned.
- */
+/** Real ChatListKeymap source wiring (decisions 12, 16). Exercises the Tiptap keymap path - not a direct `submitDraft("mod-enter")` call - so Enter/Mod-Enter and the picker commit-then-submit chord stay pinned. */
 
 const editors: Editor[] = [];
 const elements: HTMLElement[] = [];
@@ -187,9 +182,8 @@ describe("ChatListKeymap submit source", () => {
   });
 
   describe("open picker owns Enter and Mod-Enter when it cannot commit (F4)", () => {
-    // An open picker keys off state.open only (not items.length). Empty,
-    // loading, and refusing active rows all absorb both chords; only a
-    // successful commit lets Mod-Enter proceed to submit.
+    // An open picker keys off state.open only (not items.length).
+    // Empty, loading, and refusing active rows all absorb both chords; only a successful commit lets Mod-Enter proceed to submit.
     const cases: ReadonlyArray<{
       readonly name: string;
       readonly prepare: (pickerStore: ComposerPickerStore) => void;
@@ -417,7 +411,7 @@ describe("ChatListKeymap on a mobile-width viewport", () => {
 
     expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
     expect(sources).toEqual([]);
-    // splitBlock: the one paragraph became two — the visible newline.
+    // splitBlock: the one paragraph became two - the visible newline.
     expect(editor.state.doc.childCount).toBe(2);
   });
 

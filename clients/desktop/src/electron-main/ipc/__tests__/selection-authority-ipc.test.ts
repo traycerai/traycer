@@ -32,17 +32,6 @@ import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
 import type { WindowSummary } from "../../../ipc-contracts/window-types";
 
-/**
- * Main-process binding tests for the selection authority (P1.1). Harness
- * style copied from `runner-ipc.test.ts`: a plain-JS `ipcMain` double behind
- * the `electron` mock, `ipcMainState`, `sender()`, `FakeWindowRegistry`,
- * `FakeHost`, `FakeHostController`, `buildWindow()`.
- *
- * `fetchRegisteredHostsViaHttp` is hard-wired into `registerSelectionAuthorityIpc`
- * (main composes `DesktopHostFleetSource` with the real HTTP fetcher, not an
- * injected one) so fleet membership is driven here by mocking that module -
- * the only seam available without touching production wiring.
- */
 
 const fetchRegisteredHostsMock = vi.hoisted(() => vi.fn());
 vi.mock(
@@ -83,11 +72,6 @@ const ipcMainState = {
 
 type AppEventListener = (event: unknown, contents: { id: number }) => void;
 
-/**
- * B1: the `render-process-gone` subscription lives on `app`, not `ipcMain`.
- * Captured here (unlike the inert double in `runner-ipc.test.ts`) so this
- * suite can fire the handler and assert `app.off` on teardown.
- */
 const appState = {
   listeners: new Map<string, Set<AppEventListener>>(),
 };
@@ -485,22 +469,6 @@ function flushIo(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 10));
 }
 
-/**
- * The registry-fetch count once the module's OWN seed refresh has actually
- * reached the fetcher.
- *
- * `flushIo()` is a fixed 10ms sleep, and the seed's path to the fetcher runs a
- * real `readLastKnownLocalHostId` fs read first. On a loaded runner that does
- * not finish inside 10ms, so a baseline taken after `flushIo()` read ZERO and
- * the seed's late call then landed inside the window under test - the delta
- * came out one too high and the suite failed in CI while passing everywhere
- * else. Waiting on the observable rather than on a clock is what makes the
- * baseline mean "the seed is done".
- *
- * Deliberately asserts the seed HAPPENED: if registration ever stops seeding,
- * this times out loudly instead of silently handing back a zero that makes the
- * delta assertions look satisfied.
- */
 async function settledSeedFetchCount(): Promise<number> {
   await vi.waitFor(() => {
     expect(fetchRegisteredHostsMock.mock.calls.length).toBeGreaterThan(0);
@@ -598,20 +566,7 @@ async function buildBridge(options: {
   return { bridge, registry, authSession };
 }
 
-/**
- * The LAST message on `channel` this window has received, waiting for one to
- * exist first.
- *
- * The fan-out crosses a scheduling boundary: an awaited invoke resolves when
- * the ENGINE has applied the change, which is not when the broadcast has
- * reached the other windows. Reading `sentMessages` synchronously right after
- * therefore passes on a fast machine and fails under CI load - three separate
- * tests in this file have failed that way.
- *
- * Waits only for the message to EXIST. Callers assert its payload themselves,
- * unchanged: waiting on the payload would make those assertions true by
- * construction, which is the opposite of what they are for.
- */
+/** Reading `sentMessages` synchronously right after therefore passes on a fast machine and fails under CI load - three separate tests in this file have failed that way. */
 async function lastMessageOn(
   window: CapturingWindow,
   channel: string,
@@ -628,19 +583,6 @@ async function lastMessageOn(
   return found;
 }
 
-/**
- * Waits until `window` has seen the fleet-membership fan-out naming `hostId`.
- *
- * Fleet membership is published by an async seed pipeline (`void
- * fleet.refresh()` at install: a real fs identity read, then the registry
- * fetch, then the engine publish). Every write the engine directory-validates
- * misbehaves when it runs before that pipeline lands - `activate` refuses
- * with `unknown-host`, and dial evidence is silently DROPPED for hosts
- * outside the fleet - and gating on the fixed `flushIo()` sleep lost exactly
- * that race in CI (`unknown-host` from a fleet that did not hold the host
- * yet). Wait for the observable fact instead: a `selectionLeasesChanged`
- * fan-out carrying the host.
- */
 async function awaitFleetMembership(
   window: CapturingWindow,
   hostId: string,
@@ -965,9 +907,6 @@ describe("selection authority IPC binding", () => {
         activate(sender(101), staleIncarnationId, "some-host"),
       ).resolves.toEqual({ ok: false, reason: "not-attached" });
 
-      // P1.2: the write is directory-validated at the engine, so a live
-      // incarnation naming a host the fleet does not hold is refused with
-      // `unknown-host` - the arm that stops a stale id being re-asserted.
       await expect(
         activate(sender(101), second.incarnationId, "some-host"),
       ).resolves.toEqual({ ok: false, reason: "unknown-host" });
@@ -1005,10 +944,7 @@ describe("selection authority IPC binding", () => {
         activate(sender(101), attachA.incarnationId, "shared-host"),
       ).resolves.toEqual({ ok: true });
 
-      // Both windows - not just the one that called Activate - see the SAME
-      // re-derived effective host over their own selectionChanged fan-out.
-      // There is exactly one authority; a second window's view is never a
-      // separately-derived answer.
+      // There is exactly one authority; a second window's view is never a separately-derived answer.
       for (const window of [windowA, windowB]) {
         const selectionMessage = await lastMessageOn(
           window,
@@ -1091,12 +1027,6 @@ describe("selection authority IPC binding", () => {
         .filter((message) => revisionedChannels.has(message.channel))
         .map((message) => (message.payload as { revision: number }).revision);
 
-    // The registry fetch that puts seam-host in the fleet settles on its own
-    // schedule, and until it does there is nothing to fan out: window A holds
-    // ZERO revisioned messages and `Math.max()` over that empty list is
-    // -Infinity, which is what this compared against under CI load. Wait for
-    // the FACT that the fleet publish reached A before attaching late; the
-    // assertion below is unchanged and still reads both sides for real.
     await vi.waitFor(() => {
       expect(revisionsSeenBy(windowA).length).toBeGreaterThan(0);
     });
@@ -1108,12 +1038,6 @@ describe("selection authority IPC binding", () => {
       { hostId: "seam-host", sessionId: "sess-b", transportKind: "local-ws" },
     ]);
 
-    // ...and when it does, that event reaches A across a scheduling boundary
-    // too, so the snapshot would otherwise be compared against a fan-out that
-    // has not finished. Wait on the MONOTONIC fact (A caught up to at least
-    // the snapshot's revision) rather than on the equality itself - waiting on
-    // the equality would make the assertion below true by construction, and an
-    // overshooting fan-out would stop being observable.
     await vi.waitFor(() => {
       expect(Math.max(...revisionsSeenBy(windowA))).toBeGreaterThanOrEqual(
         late.snapshot.revision,
@@ -1231,12 +1155,7 @@ describe("selection authority IPC binding", () => {
       });
     }
 
-    // Several leasesChanged events fire across the close + refusal sequence;
-    // the final one is the one that must show `dead`. The fan-out crosses a
-    // scheduling boundary the awaited ingest does not cover, so wait for the
-    // FACT (a lease message arrived) with a bounded poll rather than assuming
-    // delivery landed by the time the awaits return - under CI load it has
-    // not (this went red on the darwin job while green in every local run).
+    // Several leasesChanged events fire across the close + refusal sequence; the final one is the one that must show `dead`.
     await vi.waitFor(() => {
       expect(
         windowB.sentMessages.some(
@@ -1297,9 +1216,6 @@ describe("selection authority IPC binding", () => {
     expect(windowA.sentMessages).toEqual([]);
   });
 
-  // ---------------------------------------------------------------------
-  // P1.1 fixup round: reviewer-named coverage gaps (B1-B3).
-  // ---------------------------------------------------------------------
 
   describe("render-process-gone detachment (B1)", () => {
     it("detaches the reporter on render-process-gone: its announced session no longer suppresses the other window's death counter", async () => {
@@ -1477,13 +1393,7 @@ describe("selection authority IPC binding", () => {
       // change - the engine retires A's incarnation via reporterDetached.
       registry.remove("window-a");
 
-      // A report stamped with A's now-void incarnation is dropped: it never
-      // reaches the engine at all, because the same registry removal that
-      // triggers `reporterDetached` also makes window-a's webContents id
-      // untrusted for every subsequent invoke (defense-in-depth check
-      // shared by all IPC invokes, `isTrustedIpcSender`). The invoke
-      // rejects rather than silently resolving - which is itself proof A's
-      // incarnation cannot be replayed post-close.
+      // The invoke rejects rather than silently resolving - A's incarnation cannot be replayed post-close.
       const evidence = evidenceHandler();
       expect(() =>
         evidence(sender(101), incarnationA, {
@@ -1523,16 +1433,7 @@ describe("selection authority IPC binding", () => {
     });
   });
 
-  // ---------------------------------------------------------------------
-  // F6 main-side fleet-refresh edge (Suite G). The renderer's own caller
-  // for this channel does not exist yet, so only the main-side contract is
-  // testable here: invoking `refreshFleet` calls `DesktopHostFleetSource
-  // .refresh()`, and calling it never turns a transient registry blip into
-  // a rejected invoke. `fetchRegisteredHostsMock` is the only observable
-  // proxy for "refresh() ran" available to this suite (per the file header,
-  // `fetchRegisteredHostsViaHttp` is main's hard-wired registry fetcher),
-  // so call counts on it stand in for refresh() call counts.
-  // ---------------------------------------------------------------------
+  // The renderer's own caller for this channel does not exist yet, so only the main-side contract is testable here: invoking `refreshFleet` calls `DesktopHostFleetSource .refresh()`.
 
   describe("refreshFleet invoke (F6 main-side fleet-refresh edge)", () => {
     it("G1: invoking the channel calls refresh() on the fleet source exactly once", async () => {
@@ -1591,16 +1492,8 @@ describe("selection authority IPC binding", () => {
     });
 
     it("G3: a rejecting refresh() is CONTAINED at the invoke handler - the invoke resolves, and the failure is not silent (a warn is logged)", async () => {
-      // `registerFleetRefresh`'s doc comment says failures are swallowed into
-      // the fleet source's own logging. `DesktopHostFleetSource.refresh()`
-      // only does that for a RESOLVED non-ok `HostListFetchResult`; a genuine
-      // REJECTION from `listRegisteredHosts` used to propagate straight
-      // through the un-wrapped handler into `bridge.handleInvoke`'s generic
-      // wrapper, which re-throws - reaching the caller as a rejected invoke
-      // on an operation (e.g. a deregistration) that had already succeeded.
-      // The handler now wraps `fleet.refresh()` in its own try/catch, so
-      // containment lives at the one seam that owns this promise, rather
-      // than relying on every future caller remembering to `.catch()`.
+      // `DesktopHostFleetSource.refresh()` only does that for a RESOLVED non-ok `HostListFetchResult`.
+      // The handler now wraps `fleet.refresh()` in its own try/catch, so containment lives at the one seam that owns this promise, rather than relying on every future caller remembering.
       electronLogWarnMock.mockClear();
 
       fetchRegisteredHostsMock.mockResolvedValue({
@@ -1613,10 +1506,6 @@ describe("selection authority IPC binding", () => {
       const windowA = buildWindow();
       registry.add("window-a", 101, windowA);
       bridge.install();
-      // The one-shot rejection below is meant for the EXPLICIT refresh; a
-      // clock gate here let a slow seed refresh land late and swallow it,
-      // handing the explicit refresh the resolved value instead. Wait for
-      // the seed's fetch to have actually happened before arming it.
       await settledSeedFetchCount();
 
       fetchRegisteredHostsMock.mockRejectedValueOnce(

@@ -4,11 +4,7 @@ import { TILE_KIND_PR_DIFF } from "@/stores/epics/canvas/tile-kinds";
 import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
 
 /**
- * Deterministic tile id derived from the host + PR base coordinates - the same
- * construction as {@link prDetailTileId}, under a different kind prefix, so a
- * PR's detail tile and its diff tile are two distinct tiles that each dedupe
- * against themselves. Opening the diff twice reuses one tile; opening the diff
- * never replaces the detail view it was opened from.
+ * Deterministic tile id derived from the host + PR base coordinates - the same construction as {@link prDetailTileId}, under a different kind prefix, so a PR's detail tile and its diff tile are two distinct tiles that each dedupe against themselves.
  */
 export function prDiffTileId(args: {
   readonly hostId: string;

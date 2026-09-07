@@ -1,17 +1,5 @@
-/**
- * T10: grouped-move adapter (renderer-only; the move IPC itself is
- * UNCHANGED - `requestOpenEpicInNewWindow` stays exactly as it was). Drives
- * the real `useEpicOpenInNewWindowFlow` hook against real
- * `useTabsStore`/`useEpicCanvasStore` state and a REAL
- * `installDesktopTabsPersistence` controller (not a bare-function proxy),
- * with a controllable ownership bridge, to prove the adapter's race
- * guarantees at the actual production callsite:
- *  - cancel/wait-never-separates
- *  - separate-before-flush-before-move ordering (the T4 move barrier)
- *  - abort-on-ref-change-during-await
- *  - non-moved/failure leaves two valid ordinary tabs
- *  - post-success removal routes through the coordinator
- */
+/** Drives the real `useEpicOpenInNewWindowFlow` hook against real `useTabsStore`/`useEpicCanvasStore` state and
+ * a real `installDesktopTabsPersistence` controller (not a bare-function proxy). */
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -78,9 +66,8 @@ function registerDirtySession(epicId: string): void {
   const handle = openStoreForTest({
     epicId: epicId,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the composition now: the store stopped constructing a runtime, so a
+    // `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: fakeStreamClientFactory,
       laneSelection: null,
@@ -108,10 +95,8 @@ interface DeferredWrite {
   readonly reject: (error: Error) => void;
 }
 
-/** A real, controllable T4 persistence bridge - `update()` stays pending
- * until the test explicitly resolves or rejects it, so ordering against the
- * move IPC - and genuine write-failure handling - can be observed directly
- * instead of inferred from timing. */
+/** A real, controllable T4 persistence bridge - `update` stays pending until the test explicitly resolves or
+ * rejects it, so ordering against the move IPC - and genuine write-failure handling. */
 function installControllableDesktopTabsPersistence(): DeferredWrite {
   let resolveLatest:
     | ((ack: DesktopPerWindowStateUpdateAcknowledgement) => void)
@@ -134,11 +119,8 @@ function installControllableDesktopTabsPersistence(): DeferredWrite {
     },
     0,
   );
-  // The controller only schedules a write when the active route is
-  // coherent with the current layout (`isProjectionCoherent`) - match the
-  // harness's route so `separateBeforeMove`'s mutation genuinely engages
-  // the debounce/flush machinery instead of the barrier silently
-  // no-opping.
+  // The controller only schedules a write when the active route is coherent with the current layout
+  // (`isProjectionCoherent`).
   updateDesktopTabsActiveRoute(MOVING_ROUTE);
   return {
     resolve: (ack) => resolveLatest?.(ack),
@@ -601,13 +583,8 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
       { kind: "tab", id: "tab:epic:partner-tab", ref: PARTNER },
     ]);
 
-    // A later main-pushed snapshot - even one carrying a revision far
-    // beyond anything ever acknowledged - must never be eligible for
-    // application. The controller permanently desyncs its sequence
-    // counters after a failed write, which is exactly what stops a stale
-    // snapshot from echoing the pre-separation pairing back through
-    // `windows-bridge-provider.tsx`'s `shouldApplyDesktopTabsSnapshot`
-    // gate.
+    // A later main-pushed snapshot - even one carrying a revision far beyond anything ever acknowledged - must
+    // never be eligible for application.
     const staleSnapshot: DesktopPerWindowSnapshot = {
       ...emptySnapshot(),
       revision: 999,
@@ -660,9 +637,7 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
     await flush();
     expect(windows.openInNewWindowCalls).toEqual([]);
 
-    // Step 2 separated MOVING into a bare tab item. Something else re-pairs
-    // it into a brand-new split with a third tab while the flush await is
-    // still in flight.
+    // Something else re-pairs it into a brand-new split with a third tab while the flush await is still in flight.
     const THIRD: TabRef = { kind: "epic", id: "third-tab" };
     act(() => {
       useEpicCanvasStore.setState({
@@ -716,12 +691,8 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
     seedPairedSplit();
     const windows = createControllableWindowsBridge();
     setDesktopEpicOwnershipBridge(windows.bridge);
-    // Deliberately no persistence controller here: `separateBeforeMove`
-    // refuses without mutating `useTabsStore`, so there is nothing this
-    // test needs flushed - installing a controllable one (whose deferred
-    // write is never resolved) would make the adapter hang on the flush
-    // await instead, which would make this test pass vacuously rather than
-    // by actually exercising step 4's grouped-ref check.
+    // Deliberately no persistence controller here: `separateBeforeMove` refuses without mutating `useTabsStore`,
+    // so there is nothing this test needs flushed.
     const unregister = registerTabStructuralLockPredicate(
       (ref) => ref.kind === PARTNER.kind && ref.id === PARTNER.id,
     );
@@ -738,9 +709,8 @@ describe("T10: grouped-move adapter (use-epic-open-in-new-window-flow)", () => {
     });
     await flush();
 
-    // `separateBeforeMove` refused (the locked partner blocks it) - the
-    // split is still intact, and the move never reaches the flush barrier
-    // or the move IPC.
+    // `separateBeforeMove` refused (the locked partner blocks it) - the split is still intact, and the move never
+    // reaches the flush barrier or the move IPC.
     expect(useTabsStore.getState().items).toEqual([
       {
         kind: "split",

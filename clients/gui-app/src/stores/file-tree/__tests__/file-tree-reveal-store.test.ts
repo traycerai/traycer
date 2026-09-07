@@ -67,7 +67,7 @@ describe("file-tree-reveal-store", () => {
 
   it("leaves a newer request intact when clearing with a stale nonce", () => {
     requestFileTreeReveal(TAB_1, TARGET_A); // nonce 1
-    requestFileTreeReveal(TAB_1, TARGET_B); // nonce 2 - replaces target A
+    requestFileTreeReveal(TAB_1, TARGET_B);
     clearFileTreeRevealRequest(TAB_1, 1); // stale - a consumer that read nonce 1
     expect(requestFor(TAB_1)).toEqual({ ...TARGET_B, nonce: 2 });
   });

@@ -3,14 +3,10 @@ export const authMutationKeys = {
   signInWithLinkCode: () => ["auth", "signInWithLinkCode"] as const,
   respondLinkLogin: () => ["auth", "respondLinkLogin"] as const,
   openVerificationPage: () => ["auth", "openVerificationPage"] as const,
-  // Remote Host Support (§13, T16): "Update now" / auto-policy toggle /
-  // "Apply now — ends N sessions", scoped per host so concurrent writes to
-  // different rows never share a pending state.
+  // Remote Host Support (§13, T16): "Update now" / auto-policy toggle / "Apply now - ends N sessions", scoped per host so concurrent writes to different rows never share a pending state.
   updateHostVersionPolicy: (hostId: string) =>
     ["auth", "updateHostVersionPolicy", hostId] as const,
-  // "Remove from account" — per host for the same reason as the policy write
-  // above, and never named "deregister" outside the transport layer (the GUI
-  // uses that word for OS-service deregistration).
+  // "Remove from account" - per host for the same reason as the policy write above, and never named "deregister" outside the transport layer (the GUI uses that word for OS-service deregistration).
   deregisterHostFromAccount: (hostId: string) =>
     ["auth", "deregisterHostFromAccount", hostId] as const,
   revokeUserSession: (familyId: string) =>

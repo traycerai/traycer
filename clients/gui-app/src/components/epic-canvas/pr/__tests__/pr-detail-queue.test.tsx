@@ -9,9 +9,7 @@ import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
 /**
- * The Overview hero. Two things it must NOT do: shout its own caveat louder
- * than the work it is listing, and offer a second route to GitHub next to
- * every row when the header already carries one.
+ * Two things it must NOT do: shout its own caveat louder than the work it is listing, and offer a second route to GitHub next to every row when the header already carries one.
  */
 
 function item(overrides: Partial<PrAttentionItem>): PrAttentionItem {
@@ -61,8 +59,6 @@ afterEach(cleanup);
 
 describe("PrDetailQueue", () => {
   it("keeps the window caveat as an icon rather than a bright banner", () => {
-    // It used to be a full-width warning-toned row: the least urgent thing on
-    // the page was the first thing the eye reached.
     renderQueue(queue({ isWindowTruncated: true }), () => undefined);
 
     const note = screen.getByTestId("pr-detail-queue-truncated");

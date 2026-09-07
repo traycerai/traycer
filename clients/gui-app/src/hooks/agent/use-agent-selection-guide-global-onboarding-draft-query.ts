@@ -6,11 +6,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 
 const GLOBAL_ONBOARDING_DRAFT_PARAMS = {};
 
-/**
- * Reads the global guide for onboarding without creating the file when it is
- * missing. Null content means onboarding should keep the provider-derived
- * default as an in-memory draft until the user exits the flow.
- */
+/** Reads the global guide for onboarding without creating the file when it is missing. */
 export function useAgentSelectionGuideGlobalOnboardingDraftQuery(): UseQueryResult<
   AgentSelectionGuideGlobalOnboardingDraftGetResponse,
   HostRpcError

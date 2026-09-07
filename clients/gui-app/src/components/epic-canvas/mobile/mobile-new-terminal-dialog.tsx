@@ -21,20 +21,13 @@ interface MobileNewTerminalDialogProps {
   readonly tabId: string;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  /**
-   * Fired right after a terminal launches, before the dialog closes. The
-   * switcher sheet uses it to close itself so the new terminal lands as the
-   * visible tile.
-   */
+  /** Fired right after a terminal launches, before the dialog closes. */
   readonly onLaunched: (() => void) | null;
 }
 
 /**
- * Dialog shell around the shared raw-terminal picker body (the same host +
- * folder picker the Terminals panel "+" popover uses). A dialog rather than the
- * desktop popover because the phone entry points - a bottom sheet row - have no
- * usable anchor for one. Mounted only while open, so picker state and its
- * bindings query reset per open.
+ * A dialog rather than the desktop popover because the phone entry points - a bottom sheet row - have no usable anchor for one.
+ * Mounted only while open, so picker state and its bindings query reset per open.
  */
 export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
   const { epicId, tabId, open, onOpenChange, onLaunched } = props;
@@ -42,9 +35,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
   // dialog and the desktop popover remember one host pick per tab.
   const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
   const { openTile } = useEpicTileNavigation();
-  // Same launch wiring as the sidebar "+" popover (`NewTerminalPicker`): the
-  // shared body only reports the picked target; opening the tile is the
-  // shell's job.
+  // Same launch wiring as the sidebar "+" popover (`NewTerminalPicker`): the shared body only reports the picked target; opening the tile is the shell's job.
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
       openTile(
@@ -60,26 +51,18 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
     },
     [openTile, tabId, onOpenChange, onLaunched],
   );
-  // A touch pointer is the one that pays for a focused text field: focusing
-  // the picker's workspace search raises a software keyboard nobody asked for,
-  // over a dialog whose whole job is a two-tap host-then-folder pick. The
-  // pointer, not the viewport and not the build, is what decides that - a
-  // narrow desktop window still has a hardware keyboard and wants the search
-  // focused, and a tablet at desktop width does not.
+  // A touch pointer is the one that pays for a focused text field: focusing the picker's workspace search raises a software keyboard nobody asked for, over a dialog whose whole job is a two-tap host-then-folder pick.
+  // The pointer, not the viewport and not the build, is what decides that - a narrow desktop window still has a hardware keyboard and wants the search focused, and a tablet at desktop width does not.
   const coarsePointer = useCoarsePointer();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        // Header / scroller / Launch bar, under the shared height cap. The
-        // picker's own body supplies the scroller and the bar; the cap is what
-        // keeps the bar above a soft keyboard, since both mobile shells shrink
-        // the layout viewport to make room for one.
+        // Header / scroller / Launch bar, under the shared height cap.
+        // The picker's own body supplies the scroller and the bar; the cap is what keeps the bar above a soft keyboard, since both mobile shells shrink the layout viewport to make room for one.
         className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0"
         data-testid="mobile-epic-new-terminal-dialog"
-        // With the search input focusing itself, Radix's own open-autofocus
-        // would land on the first host row instead and take it away. With the
-        // search input standing down, Radix has to run: preventing it would
-        // strand focus on the trigger, outside the focus scope.
+        // With the search input focusing itself, Radix's own open-autofocus would land on the first host row instead and take it away.
+        // With the search input standing down, Radix has to run: preventing it would strand focus on the trigger, outside the focus scope.
         onOpenAutoFocus={
           coarsePointer ? undefined : (event) => event.preventDefault()
         }

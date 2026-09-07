@@ -1,13 +1,6 @@
 import { create } from "zustand";
 
-/**
- * A transient "scroll to + highlight this line" request for a workspace-file
- * preview tile.
- *
- * The `nonce` is a monotonic counter so a repeat request - the SAME line
- * re-clicked, or a different line on an already-open tab - still re-fires the
- * reveal effect even though the `{ line, col }` values may be unchanged.
- */
+/** A transient "scroll to + highlight this line" request for a workspace-file preview tile. */
 export interface WorkspaceFileRevealTarget {
   /** 1-based line to scroll into view and highlight. */
   readonly line: number;
@@ -18,30 +11,13 @@ export interface WorkspaceFileRevealTarget {
 }
 
 interface WorkspaceFileRevealState {
-  /**
-   * Keyed by a composite `<viewTabId>\u0000<contentId>` (see `revealKey`), NOT
-   * by content id alone. A preview of the same file can be open in more than
-   * one Epic view tab at once; `openTile` dedups on the content id WITHIN a
-   * tab, so `(viewTabId, contentId)` names exactly one tile. Keying on the
-   * content id alone made a `:line` click in one tab scroll/highlight every
-   * open preview of that file across tabs (CL-6). The content id is itself the
-   * `WorkspaceFileRef.id` (`workspace-file:<host>:<workspace>:<file>`), NEVER
-   * the click-time `instanceId`: `openTile` discards the click-time instance,
-   * so the tile that renders only knows its content id and its `viewTabId`.
-   */
+  /** Keyed by a composite `<viewTabId>\u0000<contentId>` (see `revealKey`), NOT by content id alone. */
   readonly targetsByKey: Readonly<
     Record<string, WorkspaceFileRevealTarget | undefined>
   >;
 }
 
-/**
- * Hard cap on live reveal entries. The happy path consumes its entry on reveal
- * (G4), but the dead-tile / error / null-content states never mount the
- * consuming preview, so a stranded entry can survive until the tile clears it.
- * This bounds the worst case - a flood of clicks landing on failing tiles -
- * regardless of any single clear path firing (CL-5 / pin G4). Far above any
- * realistic count of simultaneously-pending reveals.
- */
+/** Hard cap on live reveal entries. */
 const MAX_REVEAL_TARGETS = 64;
 
 /**
@@ -58,16 +34,7 @@ export const useWorkspaceFileRevealStore = create<WorkspaceFileRevealState>(
   }),
 );
 
-/**
- * Records a reveal request for a `(viewTabId, contentId)` pair. Call this
- * IMMEDIATELY BEFORE opening/focusing the tile so the channel entry is present
- * by the time the (possibly new) tile mounts and reads it. The line is
- * transient and never persisted - it is consumed on reveal and gone on reload.
- *
- * `viewTabId` is the Epic view tab the file opens into (the same id passed to
- * `openTilePreviewInTab`); it scopes the entry to the one tile that should
- * react, not every open preview of the file.
- */
+/** Records a reveal request for a `(viewTabId, contentId)` pair. */
 export function setWorkspaceFileRevealTarget(
   viewTabId: string,
   contentId: string,
@@ -78,9 +45,8 @@ export function setWorkspaceFileRevealTarget(
   useWorkspaceFileRevealStore.setState((state) => {
     const previous = state.targetsByKey[key];
     const nonce = previous === undefined ? 1 : previous.nonce + 1;
-    // Drop any existing entry first so the fresh write lands at the END of the
-    // insertion order: the cap evicts the OLDEST keys, never the target we just
-    // wrote for an imminent open.
+    // Drop any existing entry first so the fresh write lands at the END of the insertion order: the
+    // cap evicts the OLDEST keys, never the target we just wrote for an imminent open.
     const { [key]: _previous, ...rest } = state.targetsByKey;
     return {
       targetsByKey: capRevealTargets({ ...rest, [key]: { line, col, nonce } }),
@@ -88,14 +54,7 @@ export function setWorkspaceFileRevealTarget(
   });
 }
 
-/**
- * Drops the reveal entry for a `(viewTabId, contentId)` pair. The tile CONSUMES
- * its target this way after scrolling (G4); the dead-tile / error / null-content
- * states clear it the same way when they settle without mounting the consuming
- * preview, so a failing click leaves no residual entry. Clearing both bounds the
- * map and prevents a tab-switch remount from re-scrolling to a stale line. A
- * fresh click writes a new entry with a bumped nonce.
- */
+/** Drops the reveal entry for a `(viewTabId, contentId)` pair. */
 export function clearWorkspaceFileRevealTarget(
   viewTabId: string,
   contentId: string,
@@ -108,11 +67,6 @@ export function clearWorkspaceFileRevealTarget(
   });
 }
 
-/**
- * Per-tile selector hook: subscribes a `WorkspaceFileTile` to just its own
- * reveal target by `(viewTabId, contentId)`, so unrelated reveal requests - for
- * the same file in another tab, or any other file - don't re-render it.
- */
 export function useWorkspaceFileRevealTarget(
   viewTabId: string,
   contentId: string,

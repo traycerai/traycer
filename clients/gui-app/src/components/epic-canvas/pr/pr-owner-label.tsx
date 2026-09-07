@@ -48,11 +48,8 @@ const DELETED_OWNER_LABEL: Record<PrOwnerRef["ownerKind"], string> = {
 };
 
 /**
- * The resolution `PrOwnerBadge` and `PrOwnerRow` must agree on, in one place:
- * the two gated lookups, the legacy host fallback, the display label, the
- * kind's icon, and the tile-open payload. The two surfaces render differently
- * (pill vs. menu row) but have to decide "can this be opened, and as what?"
- * identically - kept as two copies they could only drift.
+ * The resolution `PrOwnerBadge` and `PrOwnerRow` must agree on, in one place: the two gated lookups, the legacy host fallback, the display label, the kind's icon, and the tile-open payload.
+ * The two surfaces render differently (pill vs. menu row) but have to decide "can this be opened, and as what?" identically - kept as two copies they could only drift.
  */
 function usePrOwnerResolution(args: {
   readonly owner: PrOwnerRef;
@@ -72,10 +69,7 @@ function usePrOwnerResolution(args: {
   const tuiAgent = useEpicTerminalAgent(
     args.owner.ownerKind === "terminal-agent" ? args.owner.ownerId : null,
   );
-  // A chat predating the per-node `hostId` field falls back to the host the
-  // CALLER nominated, exactly as the sidebar's own node opener does - a tile
-  // ref has no null host, and refusing to open would be worse than the fallback
-  // the rest of the app already relies on.
+  // A chat predating the per-node `hostId` field falls back to the host the CALLER nominated, exactly as the sidebar's own node opener does - a tile ref has no null host, and refusing to open would be worse than the fallback the rest of the app already relies on.
   const nodeHostId = useEpicNodeHostId(args.owner.ownerId);
   const hostId = nodeHostId ?? args.fallbackHostId;
   const { openTile } = useEpicTileNavigation();
@@ -119,9 +113,7 @@ function resolvePrOwnerLabel(args: {
 }
 
 /**
- * The owning chat/terminal-agent title as plain text - the PR detail view's
- * sidebar, where the surrounding list is read-only prose and a row of buttons
- * would be noise. The panel row uses {@link PrOwnerBadges} instead.
+ * The owning chat/terminal-agent title as plain text - the PR detail view's sidebar, where the surrounding list is read-only prose and a row of buttons would be noise.
  */
 export function PrOwnerLabel(props: {
   readonly owner: PrOwnerRef | null;
@@ -150,60 +142,26 @@ export function PrOwnerLabel(props: {
 }
 
 /**
- * How many owner chips a card shows inline before the rest collapse behind
- * `+N`.
- *
- * A PR on a large epic can be derived from dozens of chats. Rendering them all
- * turned this wrapping row into tens of lines and broke the panel row's
- * fixed-height four-band block (see `PrRow`), so the row no longer scanned as a
- * list. Three is what fits one line at the sidebar's narrowest useful width
- * while still showing enough to recognise the PR's origin without opening
- * anything.
+ * How many owner chips a card shows inline before the rest collapse behind `+N`.
+ * Three is what fits one line at the sidebar's narrowest useful width while still showing enough to recognise the PR's origin without opening anything.
  */
 const VISIBLE_PR_OWNER_COUNT = 3;
 
 /**
- * The chats/terminal agents a PR was derived from, as badges that open their
- * own tile - the same affordance the Worktrees panel gives a worktree's owning
- * Task, so "which conversation produced this?" is one click away rather than a
- * name you have to go find. Past {@link VISIBLE_PR_OWNER_COUNT} the tail
- * collapses behind a `+N` chip so a large epic cannot turn one card into tens
- * of wrapped rows.
+ * The chats/terminal agents a PR was derived from, as badges that open their own tile - the same affordance the Worktrees panel gives a worktree's owning Task, so "which conversation produced this?" is one click away rather than a name you have to go find.
+ * Past {@link VISIBLE_PR_OWNER_COUNT} the tail collapses behind a `+N` chip so a large epic cannot turn one card into tens of wrapped rows.
  */
 export function PrOwnerBadges(props: {
   readonly owners: readonly PrOwnerRef[];
   readonly epicId: string;
   /**
-   * Host to open a legacy owner on when its own `hostId` predates the field.
-   *
-   * Passed in rather than read here, because the right answer depends on WHERE
-   * this renders. An app-wide surface (the panel) wants the reactive active
-   * host; a canvas tile must use its own bound `useTabHostId()` - per CLAUDE.md
-   * a tab is bound to a host for life and may never consult the reactive
-   * global, or a host swap would silently re-point the tile's links.
+   * Host for a legacy owner whose record predates `hostId`. Caller-supplied: tiles pass `useTabHostId()`.
    */
   readonly fallbackHostId: string | null;
   readonly className: string | undefined;
 }): ReactNode {
   if (props.owners.length === 0) return null;
-  // EVERY hook below this line reads the epic projection, and every one of them
-  // throws when the session handle is not there yet. `EpicSessionProvider`
-  // renders its children before it has one (desktop ownership claim, then
-  // acquire) and says so: "session-bound slots see a null context and show
-  // their own loading content". This row is one of those slots and did not know
-  // it - the PR list arrives on its OWN host stream, which waits for no epic
-  // session, so rows paint inside that window and took the route's error
-  // boundary down with them. Nothing is the right loading content for a chip
-  // row: the chips appear on the render after the session lands.
-  //
-  // "Session lands" is the gate, NOT "the doc syncs". Since chats-off-YJS the
-  // titles these chips resolve come from `OpenEpicState.chats`, which is the
-  // host's store-backed record plane (`epic.listChatRecords` /
-  // `host.chatRecords.subscribe`) unioned with `docChats` - and that doc half
-  // is not-yet-swept residue serving hosts that predate the record methods,
-  // not the live plane. So the handle existing is necessary but not
-  // sufficient: chips can stay absent against a live session until the records
-  // are served.
+  // `EpicSessionProvider` renders its children before it has one (desktop ownership claim, then acquire) and says so: "session-bound slots see a null context and show their own loading content".
   return (
     <EpicSessionGate fallback={null}>
       <ResolvedPrOwnerBadges {...props} />
@@ -253,10 +211,8 @@ function ResolvedPrOwnerBadges(props: {
 }
 
 /**
- * The `+N` chip and the popover behind it, listing EVERY owner - not just the
- * hidden ones. Once a reader has opened the overflow they are looking for one
- * specific chat, and splitting the set across "shown above" and "in here"
- * would make them look in two places for it.
+ * The `+N` chip and the popover behind it, listing EVERY owner - not just the hidden ones.
+ * Once a reader has opened the overflow they are looking for one specific chat, and splitting the set across "shown above" and "in here" would make them look in two places for it.
  */
 function PrOwnerOverflow(props: {
   readonly owners: readonly PrOwnerRef[];
@@ -294,38 +250,13 @@ function PrOwnerOverflow(props: {
         // own handler and opens the PR tile as well as the chat.
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
-        // Both axes are CAPPED, never SIZED: the same popover serves the narrow
-        // sidebar row and the wider detail card, and a PR on a large epic can
-        // list dozens of owners at several levels of nesting.
-        //
-        // Height: the space Radix measured between the trigger and the viewport
-        // edge, floored against `60vh` - not a rem, which would hold a long list
-        // to the same few rows on a display with room for twice as many.
-        //
-        // Width: `w-max` so the box tracks its widest row instead of painting a
-        // fixed column. A short list of short titles stops being a mostly-empty
-        // 20rem panel, and a deep lineage - whose indent eats the title column
-        // that IS the reason to open this list - gets the room a wide display
-        // already has. The rem survives only as the last term of a `max-w`,
-        // which is the fluid pattern (clients/gui-app/AGENTS.md), not a width.
-        // Each var carries a fallback: an unmeasured var invalidates the whole
-        // `min()`, and a dropped `max-w` would let a long title size the popover
-        // off-screen.
-        //
-        // `overflow-hidden` is what makes the height cap bite - without it the
-        // list paints straight past the popover's box.
+        // Cap both axes (`max-h`/`max-w`); `w-max` tracks content. `overflow-hidden` makes the height cap bite.
         className="max-h-[min(var(--radix-popover-content-available-height,100vh),60vh)] w-max max-w-[min(80vw,var(--radix-popover-content-available-width,100vw),28rem)] gap-0 overflow-hidden p-0"
       >
         <p className="shrink-0 border-b px-3 py-2 text-ui-xs text-muted-foreground">
           {`${nouns.capitalized} this PR came from`}
         </p>
-        {/* Rendered as its own component so the agent-tree read below happens
-            only while the popover is OPEN. Radix mounts content on open and
-            unmounts it on close, so a hook placed here costs nothing until a
-            reader asks for the list - whereas the same hook in the parent
-            subscribes every collapsed `+N` chip on the surface to the tree and
-            rebuilds its forest on every rename, reparent and agent
-            create/delete, for a list nobody is looking at. */}
+        {/* Rendered as its own component so the agent-tree read below happens only while the popover is OPEN. */}
         <PrOwnerTreeList
           owners={props.owners}
           label={`${nouns.capitalized} this PR came from`}
@@ -341,16 +272,8 @@ function PrOwnerOverflow(props: {
 }
 
 /**
- * The owner forest itself. Split from its containers purely so its tree
- * subscription is scoped to the OPEN surface - mount it only inside content a
- * Radix primitive unmounts on close (`PrOwnerOverflow`'s popover, the row hover
- * card's content), never in a collapsed trigger. See the popover call site for
- * what that costs when it leaks.
- *
- * `testId` and `className` are parameterised because the two containers differ
- * exactly there and nowhere else: a popover sized by its own `max-h` cap versus
- * a hover card that caps this list directly, and two surfaces that must stay
- * separately addressable in tests.
+ * Split from its containers purely so its tree subscription is scoped to the OPEN surface - mount it only inside content a Radix primitive unmounts on close (`PrOwnerOverflow`'s popover, the row hover card's content), never in a collapsed trigger.
+ * `testId` and `className` are parameterised because the two containers differ exactly there and nowhere else: a popover sized by its own `max-h` cap versus a hover card that caps this list directly, and two surfaces that must stay separately addressable in tests.
  */
 export function PrOwnerTreeList(props: {
   readonly owners: readonly PrOwnerRef[];
@@ -361,22 +284,13 @@ export function PrOwnerTreeList(props: {
   readonly testId: string;
   readonly className: string | undefined;
 }): ReactNode {
-  // The same `parentId` links the sidebar's agent tree nests by, so a chat and
-  // the sub-agents it spawned read as one lineage here too instead of as the
-  // same title repeated once per child.
+  // The same `parentId` links the sidebar's agent tree nests by, so a chat and the sub-agents it spawned read as one lineage here too instead of as the same title repeated once per child.
   const tree = useEpicTreeIndex();
   const { owners } = props;
   const forest = useMemo(() => buildPrOwnerTree(owners, tree), [owners, tree]);
   return (
-    // `min-h-0` so this flex child may shrink below its content height - the
-    // default `min-height: auto` would push the list back out to full height
-    // and defeat the popover's cap.
-    //
-    // A plain nested list, NOT `role="tree"`. That role advertises a composite
-    // widget - roving focus, arrow-key navigation, selection - and this list
-    // has none of it: every row is a plain button, the forest is permanently
-    // expanded, and nothing is ever selected. The nesting is the whole
-    // message, and `<ul>`/`<li>` already carry it.
+    // `min-h-0` so this flex child may shrink below its content height - the default `min-height: auto` would push the list back out to full height and defeat the popover's cap.
+    // A plain nested list, NOT `role="tree"`.
     <ul
       aria-label={props.label}
       className={cn(
@@ -418,17 +332,10 @@ function PrOwnerBadge(props: {
     [openOwner],
   );
 
-  // A deleted owner renders NOTHING. `usePresentPrOwners` already dropped it
-  // upstream, so this is the belt to that braces - reachable only if the
-  // projection changes between the filter and this resolve. Rendering the old
-  // "Removed chat" text here would put an untitled, unclickable entry back in a
-  // row of pills, which is what it was removed for.
+  // `usePresentPrOwners` already dropped it upstream, so this is the belt to that braces - reachable only if the projection changes between the filter and this resolve.
   if (label === null) return null;
 
-  // Different cause, still a non-pill: `fallbackHostId` is nullable, so a legacy owner
-  // on a surface with no host bound still HAS a name worth showing but
-  // nothing to open it on. `openOwner` would return early, leaving a badge
-  // that looks clickable and silently isn't.
+  // `openOwner` would return early, leaving a badge that looks clickable and silently isn't.
   if (hostId === null) {
     return (
       <span
@@ -467,21 +374,12 @@ function PrOwnerBadge(props: {
 
 /**
  * How deep the popover keeps indenting before levels start sharing a column.
- *
- * The popover's width is capped, so an unbounded indent would eventually leave
- * a lineage's deepest rows with no room for their own title - the thing the
- * reader opened this list to read. Sizing to content buys those rows width up
- * to the cap but cannot buy them more than the cap. A spawn chain this deep is
- * already past what indentation alone can disambiguate; the guide rails still
- * stack.
+ * Sizing to content buys those rows width up to the cap but cannot buy them more than the cap.
  */
 const MAX_OWNER_TREE_INDENT_DEPTH = 5;
 
 /**
- * One owner and its owner-descendants, nested with the sidebar agent tree's
- * rail and indent arithmetic so the two surfaces render one hierarchy rather
- * than two dialects of it. The sidebar's `role="tree"` is deliberately NOT
- * carried over - see the list element for why.
+ * One owner and its owner-descendants, nested with the sidebar agent tree's rail and indent arithmetic so the two surfaces render one hierarchy rather than two dialects of it.
  */
 function PrOwnerTreeItem(props: {
   readonly node: PrOwnerTreeNode;
@@ -522,13 +420,7 @@ function PrOwnerTreeItem(props: {
 }
 
 /**
- * One owner inside the overflow popover, shaped like a chats-menu row (kind
- * icon + title on one line) rather than a pill, because a vertical list of
- * pills reads as tags while this list is being scanned for a specific chat.
- *
- * Shares `PrOwnerBadge`'s resolution rules exactly: a deleted owner is not
- * rendered at all, and an owner with no resolvable host has a name but nothing
- * to open it on, so it demotes to muted, non-interactive text.
+ * One owner inside the overflow popover, shaped like a chats-menu row (kind icon + title on one line) rather than a pill, because a vertical list of pills reads as tags while this list is being scanned for a specific chat.
  */
 function PrOwnerRow(props: {
   readonly owner: PrOwnerRef;

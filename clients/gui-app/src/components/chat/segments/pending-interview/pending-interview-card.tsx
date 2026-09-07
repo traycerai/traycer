@@ -22,18 +22,11 @@ interface PendingInterviewCardProps {
   chatId: string;
   blockId: string;
   questions: ReadonlyArray<InterviewQuestion>;
-  // Whether this card's chat tab is the active one in its pane - gates focus
-  // for multi-pane layouts (see useInterviewCard).
   isActive: boolean;
-  // True while a Submit/Skip for this interview block is in flight or accepted
-  // but unresolved (from the chat session's pending/accepted actions). Locks
-  // every affordance so the action cannot be double-sent; clears on a
-  // rejected/failed ack so the retained draft becomes retryable.
+  // True while a Submit/Skip for this interview block is in flight or accepted but unresolved (from the chat session's pending/accepted actions).
+  // Locks every affordance so the action cannot be double-sent; clears on a rejected/failed ack so the retained draft becomes retryable.
   isBusy: boolean;
-  /**
-   * `null` disables the Submit/Skip affordances while the chat cannot send.
-   * The card still paginates so the pending question remains readable.
-   */
+  /** `null` disables the Submit/Skip affordances while the chat cannot send. The card still paginates so the pending question remains readable. */
   onSubmit:
     | ((
         blockId: string,
@@ -47,16 +40,7 @@ interface PendingInterviewCardProps {
         draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
       ) => string | null)
     | null;
-  /**
-   * Opens the fork dialog to branch the chat at this question:
-   * `"cross-question"` forks on this chat's own workspace with the question
-   * carried as reference (interrogate the assistant), `"ab-worktree"` forks
-   * into new worktrees carrying the working tree with the question re-opened
-   * (proceed with different answers in parallel). `null` hides both
-   * affordances (the chat cannot act, or the owning message is not a stable
-   * fork boundary). The original chat stays paused with this question still
-   * pending either way.
-   */
+  /** `null` hides both affordances (the chat cannot act, or the owning message is not a stable fork boundary). */
   onFork: ((mode: ChatForkMode) => void) | null;
 }
 
@@ -146,11 +130,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           </m.div>
         </AnimatePresence>
       )}
-      {/* The left cluster keeps its NATURAL width: `min-w-0 flex-1` here let
-          the cluster's box shrink while its shrink-0 children could not, so a
-          narrow card overflowed the fork actions under Skip/Submit instead of
-          ever triggering the row's wrap. Natural width makes the wrap real -
-          too narrow, and Skip/Submit drop to their own right-aligned line. */}
+      {/* The left cluster keeps its NATURAL width: `min-w-0 flex-1` here let the cluster's box shrink while its shrink-0 children could not, so a narrow card overflowed the fork actions under Skip/Submit instead of ever triggering the row's wrap. Natural width makes the wrap real - too narrow, and Skip/Submit drop to their own right-aligned line. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <InterviewQuestionPager

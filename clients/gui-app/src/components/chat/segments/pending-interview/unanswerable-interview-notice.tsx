@@ -3,11 +3,7 @@ import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import type { UnanswerableInterviewView } from "@/components/epic-canvas/renderers/chat-tile-types";
 
-/**
- * Recorded as the durable `interview.errored` reason, so it becomes the settled
- * block's error text in the transcript. Written to read as a user action rather
- * than a failure - the question really did go unanswered.
- */
+/** Recorded as the durable `interview.errored` reason, so it becomes the settled block's error text in the transcript. Written to read as a user action rather than a failure - the question really did go unanswered. */
 export const UNANSWERABLE_INTERVIEW_DISMISS_REASON =
   "Dismissed by the user: this question could no longer be answered.";
 
@@ -16,26 +12,13 @@ interface UnanswerableInterviewNoticeProps {
   readonly interviews: ReadonlyArray<UnanswerableInterviewView>;
   /** True while a dismissal for any of these blocks is in flight. */
   readonly isBusy: boolean;
-  /**
-   * Sends the local interview Skip action for one block. `null` disables the
-   * affordance while
-   * the chat cannot act (viewer, or the stream is not open) - the notice still
-   * renders so the deadlock is at least legible.
-   */
+  /** Sends the local interview Skip action for one block. `null` disables the affordance while the chat cannot act (viewer, or the stream is not open) - the notice still renders so the deadlock is at least legible. */
   readonly onDismiss:
     | ((blockId: string, reason: string) => string | null)
     | null;
 }
 
-/**
- * Last-resort escape hatch for a chat the host has send-locked on an interview
- * that renders no card (see `UnanswerableInterviewView`). Dismissing settles
- * every stuck block as errored, which clears the host's pending wait and
- * unblocks the composer.
- *
- * One button dismisses all of them: the user's intent here is "get me unstuck",
- * and leaving even one behind keeps the chat locked.
- */
+/** Last-resort escape hatch for a chat the host has send-locked on an interview that renders no card (see `UnanswerableInterviewView`). Dismissing settles every stuck block as errored, which clears the host's pending wait and unblocks the composer. */
 export function UnanswerableInterviewNotice({
   interviews,
   isBusy,

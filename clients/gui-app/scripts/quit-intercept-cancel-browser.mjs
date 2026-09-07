@@ -1,14 +1,5 @@
-// Browser regression for the quit intercept's Cancel path: after Cancel, is the
-// window actually usable again?
-//
-// jsdom cannot answer that - it has no hit testing, so a click reaches a node
-// whether or not a real user could reach it, and the best a jsdom fixture can do
-// is assert Radix released its `body { pointer-events: none }` lock, which is a
-// proxy. This clicks a button behind the modal in a real layout engine.
-//
-// Structure follows `diff-edit-browser-regression.mjs` (vite + headless Chrome
-// over CDP); both are wired into `scripts/run-tests.ts` behind
-// RUN_DIFF_EDIT_BROWSER_REGRESSION, which CI sets for this package.
+// Real-layout Cancel-path hit test: jsdom cannot tell whether a click behind
+// the quit modal is actually reachable.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
@@ -104,10 +95,8 @@ try {
     `Boolean(document.querySelector("#app-button")) && typeof window.__probeEmitQuit === "function"`,
   );
 
-  // The retention is the premise of the whole fixture. Assert it POSITIVELY
-  // before anything that depends on it: a fixture whose premise silently did
-  // not happen proves nothing, and every later assertion here would still pass
-  // on an empty registry.
+  // Assert retention first. An empty registry would still pass later
+  // assertions.
   const retainedRows = await evaluate(client, `window.__probeRetainedRows()`);
   assert.equal(
     retainedRows,
@@ -124,19 +113,12 @@ try {
     "the app button must be clickable BEFORE the modal opens, or this fixture cannot tell a released modal from a broken click",
   );
 
-  // ── Arm 1: the outside-click dismissal path ──────────────────────────────
-  //
-  // Clicking the app button while the dialog is open is unavoidably ALSO an
-  // outside pointer-down on the dialog, so this one gesture measures two
-  // things, and both are wanted: the app button must not receive the click
-  // (the modal blocks) and the dialog must answer main rather than just
-  // vanishing (a dismissal without a decision parks main for ever).
+  // Outside click: the app button must not receive it, and the dialog must
+  // answer main rather than vanish (dismissal without a decision parks main).
   await emitQuit(client);
 
-  // Opening focus must not sit on the destructive control. This dialog is
-  // summoned by a keyboard shortcut, so a default of "Quit and discard" means
-  // Cmd+Q then Enter destroys every unsynced edit - and jsdom cannot see focus
-  // the way a real focus scope resolves it.
+  // Must not open focused on the destructive control. Cmd+Q then Enter would
+  // discard unsynced work.
   assert.equal(
     await evaluate(
       client,
@@ -178,11 +160,8 @@ try {
     "Radix's body pointer-events lock must be released after a cancel",
   );
 
-  // ── Arm 2: the Cancel BUTTON, on a second quit after the first was cancelled
-  //
-  // Also the second-quit-after-cancel case: quitting is now a state the shell
-  // enters and leaves deliberately, so a request arriving after a cancel has to
-  // be serviced with its own id rather than swallowed by the resolved one.
+  // Cancel button, then a second quit: the new request needs its own id, not
+  // the resolved first one.
   await evaluate(
     client,
     `document.querySelector("#probe-state").setAttribute("data-decision", "")`,
@@ -227,10 +206,8 @@ try {
   process.exitCode = 1;
 } finally {
   client?.close();
-  // `terminateProcessTree` replaces the old `chrome.kill("SIGKILL")` plus a
-  // 300ms sleep: it takes down the whole process GROUP and verifies it is
-  // gone, so the profile below is removed from under a browser that is
-  // provably finished writing rather than one that has probably stopped.
+  // terminateProcessTree kills the group and verifies it is gone before rm
+  // of the profile.
   if (chrome !== undefined) {
     await terminateProcessTree(chrome);
   }

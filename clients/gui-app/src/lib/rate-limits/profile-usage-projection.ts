@@ -214,11 +214,7 @@ function openRouterCreditProjection(
   };
 }
 
-// Hugging Face's only computable percentage is against the included
-// allowance - the same pair the settings credit bar renders - so an account
-// without one projects no window at all rather than a fabricated zero. `used`
-// can exceed the allowance once an account spends past it, so the consumed
-// figure is clamped to keep the projected percentage inside 0-100.
+// Hugging Face's only computable percentage is against the included allowance - the same pair the settings credit bar renders - so an account without one projects no window at all rather than a fabricated zero.
 function huggingFaceCreditProjection(
   rateLimits: Extract<
     ProviderRateLimits,
@@ -331,11 +327,7 @@ function projectedLiveWindows(
       return credits === null ? [] : [credits];
     }
     case "grok":
-      // Grok rides the shared window path via its synthesized billing-period
-      // window - not the OpenRouter-style credit projection - so its severity
-      // and compact bar come straight from `classifyProviderRateLimits` with
-      // no special-casing. A period-less snapshot (tier + dates only) carries
-      // no window.
+      // Grok rides the shared window path via its synthesized billing-period window - not the OpenRouter-style credit projection - so its severity and compact bar come straight from `classifyProviderRateLimits` with no special-casing.
       return [
         windowProjection({
           id: "period",
@@ -374,17 +366,7 @@ function projectedLiveWindows(
       return credits === null ? [] : [credits];
     }
     case "cursor":
-      // Cursor rides the shared window path via its synthesized billing-cycle
-      // bucket windows, exactly like grok - NOT the credit projection its
-      // money-shaped fields might suggest - so severity and the compact bar
-      // come straight from `classifyProviderRateLimits`. This is also why
-      // cursor is absent from the credit-provider severity exception below:
-      // that exception exists for providers whose `providerRateLimitWindows`
-      // is empty by design, and cursor's is not.
-      //
-      // The two windows mirror Cursor's Spending page buckets; the compact
-      // bar picks the most consumed of the two via `mostConstrainedWindow`,
-      // so the headline number always matches one of the dashboard's bars.
+      // Cursor rides the shared window path via its synthesized billing-cycle bucket windows, exactly like grok - NOT the credit projection its money-shaped fields might suggest - so severity and the compact bar come straight from `classifyProviderRateLimits`.
       return [
         windowProjection({
           id: "cursor-models",
@@ -432,25 +414,8 @@ function emptyDetailProjection(
   input: ProfileUsageProjectionInput,
 ): ProfileUsageProjection {
   const checkedAt = envelope.lastGoodAt ?? input.usageUpdatedAt;
-  // Grok's zero-usage snapshot is `available` with tier + billing-period bounds
-  // but no usage percentage, so it synthesizes no `period` window. That is
-  // "unmeasured", not "unavailable": the account is reachable and healthy, it
-  // just reports nothing to meter this period (the same snapshot the Settings
-  // card renders as tier + billing period, no severity). Project it as the
-  // percentage-free unmeasured state so its severity stays `unknown` -
-  // consistent with protocol `classifyProviderRateLimits` and the (parallel)
-  // host-gauge fix - instead of the alarming unavailable/`missing_windows`
-  // framing, which reads as a fetch/account failure. A grok snapshot whose
-  // period merely rolled (window present but expired) still falls through to
-  // `expired` below, the correct stale framing.
-  //
-  // Cursor is the same case for the same reason: its bucket windows are
-  // synthesized only when the payload reports the bucket percentages, and
-  // proto3 JSON omits zero-valued fields, so a reachable account can
-  // legitimately arrive with both windows null. Without this arm that account
-  // renders as unavailable (`missing_windows`) purely because Cursor reported
-  // nothing to meter. A cursor snapshot whose cycle merely rolled still falls
-  // through to `expired`, exactly as grok's does.
+  // Grok's zero-usage snapshot is `available` with tier + billing-period bounds but no usage percentage, so it synthesizes no `period` window.
+  // That is "unmeasured", not "unavailable": the account is reachable and healthy, it just reports nothing to meter this period (the same snapshot the Settings card renders as tier + billing period, no severity).
   if (
     (rateLimits.provider === "grok" && rateLimits.period === null) ||
     (rateLimits.provider === "cursor" &&
@@ -507,10 +472,8 @@ function isStaleDetail(
 }
 
 /**
- * Pure picker-facing projection of one profile's cached usage evidence. It
- * never synthesizes a percentage: only `detail`/`stale` states carry a compact
- * window, while semantic-only, not-checked, and unavailable states remain
- * explicitly percentage-free.
+ * Pure picker-facing projection of one profile's cached usage evidence.
+ * It never synthesizes a percentage: only `detail`/`stale` states carry a compact window, while semantic-only, not-checked, and unavailable states remain explicitly percentage-free.
  */
 export function projectProfileUsage(
   input: ProfileUsageProjectionInput,
@@ -539,10 +502,7 @@ export function projectProfileUsage(
     return emptyDetailProjection(retained, envelope, input);
   }
 
-  // The credit providers derive severity from the PROJECTED window, not from
-  // `classifyProviderRateLimits`: that helper reads `providerRateLimitWindows`,
-  // which is empty for a credit provider by design, so it answers "unknown" and
-  // the branch below would discard the credit bar we just projected.
+  // The credit providers derive severity from the PROJECTED window, not from `classifyProviderRateLimits`: that helper reads `providerRateLimitWindows`, which is empty for a credit provider by design, so it answers "unknown" and the branch below would discard.
   const severity =
     retained.provider === "openrouter" || retained.provider === "huggingface"
       ? compactWindow.severity

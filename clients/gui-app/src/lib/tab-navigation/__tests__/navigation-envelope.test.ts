@@ -1,10 +1,4 @@
-/**
- * T3 TabNavigationController envelope lifecycle.
- *
- * Drives the controller directly via `activateTabIntent` /
- * `tabNavigationController.observeLocation` — no production edits, no
- * full AppShell. Fakes only the navigate promise boundary.
- */
+/** T3 TabNavigationController envelope lifecycle. */
 import type {
   HistoryState,
   NavigateOptions,
@@ -60,9 +54,8 @@ interface TabSelectionSnapshot {
 const HISTORY_ENVELOPE_KEY = "__traycerTabNavigation";
 
 /**
- * Mirror of `@tanstack/history` ParsedHistoryState. The router stamps
- * `__TSR_index` on every entry; NavigateOptions state updaters accept this
- * shape. Not re-exported from `@tanstack/react-router`.
+ * Mirror of `@tanstack/history` ParsedHistoryState.
+ * The router stamps `__TSR_index` on every entry; NavigateOptions state updaters accept this shape.
  */
 type ParsedHistoryState = HistoryState & {
   readonly key: string | undefined;
@@ -156,7 +149,7 @@ function envelopeFromNavigateOptions(
   if (typeof state !== "function") {
     throw new Error("expected navigate state updater function");
   }
-  // Call with a typed ParsedHistoryState fixture — same shape the router
+  // Call with a typed ParsedHistoryState fixture - same shape the router
   // supplies. No cast: state is already a function on NavigateOptions.
   const nextState: HistoryState = state(emptyParsedHistoryState());
   const envelope = isRecord(nextState)
@@ -582,9 +575,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()?.startsWith("draft:")).toBe(true);
 
     await nav.reject(1);
-    // Restore also runs the legacy compat projection (round 4): focus lands
-    // back on Settings, and the just-created draft is no longer the active
-    // source-projection draft, without crashing.
+    // Restore also runs the legacy compat projection (round 4): focus lands back on Settings, and the just-created draft is no longer the active source-projection draft, without crashing.
     expect(focusedRefKey()).toBe("settings:settings");
     expect(activeSelection()).toEqual(priorSelection);
     expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
@@ -631,7 +622,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     activateTabIntent(nav.asNavigate, epicIntent("epic-c", c.tabId), undefined);
     expect(focusedRefKey()).toBe(tabRefKey(c.ref));
 
-    // First activation cancelled after supersession — must not restore A.
+    // First activation cancelled after supersession - must not restore A.
     await nav.reject(0);
     expect(focusedRefKey()).toBe(tabRefKey(c.ref));
   });
@@ -803,9 +794,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     });
     expect(getTabNavigationDiagnostics().pendingTokenCount).toBe(0);
 
-    // History still carries the now-retired envelope; Back must
-    // external-focus A regardless - a POP is unconditionally external, live
-    // token or not.
+    // History still carries the now-retired envelope; Back must external-focus A regardless - a POP is unconditionally external, live token or not.
     tabNavigationController.observeLocation(
       {
         pathname: a.pathname,
@@ -836,9 +825,8 @@ describe("TabNavigationController envelope lifecycle", () => {
       sessionId: diagnostics.sessionId,
       token: "tab-navigation-ghost",
       serial: diagnostics.authoritySerial,
-      // Deliberately disagree with the committed B URL. Only external
-      // classification focuses B; a naive "current-session = owned ACK"
-      // implementation would accept the ghost as A and leave A focused.
+      // Deliberately disagree with the committed B URL.
+      // Only external classification focuses B; a naive "current-session = owned ACK" implementation would accept the ghost as A and leave A focused.
       destination: { kind: "tab", refKey: tabRefKey(a.ref) },
       targetRefKey: tabRefKey(a.ref),
       intentKind: "activate-push",
@@ -896,7 +884,7 @@ describe("TabNavigationController envelope lifecycle", () => {
   });
 
   // Cold review #1: newer intent must supersede acknowledged-but-unsettled,
-  // and a later commit of that superseded token must repair — not re-apply B.
+  // and a later commit of that superseded token must repair - not re-apply B.
   it("newer intent supersedes acknowledged unsettled token; later same/second-key commits repair", () => {
     const a = openEpic("epic-a", "A");
     const b = openEpic("epic-b", "B");
@@ -931,7 +919,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     // B must be superseded even though it was already acknowledged.
 
     // Same-key re-delivery of the superseded acknowledged entry must repair
-    // back to A — not process B as external and steal focus.
+    // back to A - not process B as external and steal focus.
     const repairBeforeSameKey = getTabNavigationDiagnostics().repairCount;
     // Same-key redelivery of the exact same committed entry - not a new
     // logical push, so it reuses that entry's own index (1).
@@ -1087,9 +1075,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     );
   });
 
-  // F2 (closure): open-epic-from-list must resolve/create INSIDE the controller,
-  // after its snapshot, so a rejected navigation restores the genuine prior tab
-  // - not the just-opened epic.
+  // F2 (closure): open-epic-from-list must resolve/create INSIDE the controller, after its snapshot, so a rejected navigation restores the genuine prior tab
   it("rejecting an open-epic-from-list navigation restores the genuine prior tab", async () => {
     const prior = openEpic("epic-prior", "Prior");
     seedCommittedLayout({
@@ -1100,9 +1086,8 @@ describe("TabNavigationController envelope lifecycle", () => {
     });
     const nav = makeDeferredNavigate();
 
-    // The epic list opens a not-yet-open epic; the controller resolves + selects
-    // it. Fail-before: with pre-resolution outside the controller the snapshot
-    // captured the already-selected epic, so this rejection "restored" the epic.
+    // The epic list opens a not-yet-open epic; the controller resolves + selects it.
+    // Fail-before: with pre-resolution outside the controller the snapshot captured the already-selected epic, so this rejection "restored" the epic.
     activateTabIntent(
       nav.asNavigate,
       openEpicFromListIntent({
@@ -1121,9 +1106,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(prior.ref));
   });
 
-  // F3 (closure): repair must replay the EXACT committed route - including the
-  // committed search (overlay-cleared / canonically normalized) - not a
-  // freshly-derived tabRouteOptions(intent) that reintroduces stale search.
+  // F3 (closure): repair must replay the EXACT committed route - including the committed search (overlay-cleared / canonically normalized) - not a freshly-derived tabRouteOptions(intent) that reintroduces stale search.
   it("stale superseded commit repairs to the exact committed search, not a stale one", () => {
     seedCommittedLayout({
       version: 2,
@@ -1180,9 +1163,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(repairCall.to).toBe("/settings/providers");
   });
 
-  // F6 (closure, most serious): an envelope-free external PUSH must supersede a
-  // still-PENDING internal token, so a late internal commit repairs to the
-  // external authority instead of acknowledging - URL and layout must agree.
+  // F6 (closure, most serious): an envelope-free external PUSH must supersede a still-PENDING internal token, so a late internal commit repairs to the external authority instead of acknowledging - URL and layout must agree.
   it("external PUSH supersedes a pending internal token; late internal commit repairs (no URL/layout divergence)", () => {
     const a = openEpic("epic-a", "A");
     const b = openEpic("epic-b", "B");
@@ -1213,10 +1194,8 @@ describe("TabNavigationController envelope lifecycle", () => {
     });
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
 
-    // B's internal entry commits late, carrying the (lower) index its own
-    // entry was originally created at (0, before A's external push).
-    // Because the external PUSH superseded it, it must repair to A (the
-    // authority), not acknowledge and leave URL=B with layout=A.
+    // B's internal entry commits late, carrying the (lower) index its own entry was originally created at (0, before A's external push).
+    // Because the external PUSH superseded it, it must repair to A (the authority), not acknowledge and leave URL=B with layout=A.
     const repairBefore = getTabNavigationDiagnostics().repairCount;
     commitInternal({
       navigate: nav.asNavigate,
@@ -1237,10 +1216,8 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // F1a: supersession compacts B's full record immediately. Its entry remains
-  // self-classifying because B's envelope serial is lower than A's authority
-  // serial; promise settlement cannot turn the delayed entry into an external
-  // focus steal. Each distinct stale observation gets one correlated repair.
+  // F1a: supersession compacts B's full record immediately.
+  // Its entry remains self-classifying because B's envelope serial is lower than A's authority serial; promise settlement cannot turn the delayed entry into an external focus steal.
   it("F1a: compacted superseded token remains self-classifying after settle and repairs each stale observation", async () => {
     const a = openEpic("epic-a", "A");
     const b = openEpic("epic-b", "B");
@@ -1298,9 +1275,8 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // F1b: a rejected repair receives the one finite retry. A later distinct
-  // stale observation can supersede that retry and start its own correction;
-  // no permanent repaired/in-flight latch may swallow it.
+  // F1b: a rejected repair receives the one finite retry.
+  // A later distinct stale observation can supersede that retry and start its own correction; no permanent repaired/in-flight latch may swallow it.
   it("F1b: a rejected repair does not latch stale delivery correction", async () => {
     const a = openEpic("epic-a", "A");
     const b = openEpic("epic-b", "B");
@@ -1354,13 +1330,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // F6/remount: a bridge (re)mount must treat a LIVE-but-uncommitted internal
-  // token the same way a mid-session external PUSH does - supersede it, adopt
-  // the external location as authority, and repair any later stale commit to
-  // that authority instead of acknowledging it internally (which would leave
-  // URL=B, layout=A). A naive remount handler that skips
-  // `supersedePending()` for pending-but-uncommitted tokens would instead let
-  // B's late commit acknowledge internally and steal focus back to B.
+  // F6/remount: a bridge (re)mount must treat a LIVE-but-uncommitted internal token the same way a mid-session external PUSH does - supersede it, adopt the external location as authority, and repair any later stale commit to that authority instead of.
   it("F6/remount: a live pending token across a bridge remount supersedes and repairs to the external authority", () => {
     const a = openEpic("epic-a", "A");
     const b = openEpic("epic-b", "B");
@@ -1381,9 +1351,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     const envB = nav.envelopeAt(0);
     expect(focusedRefKey()).toBe(tabRefKey(b.ref));
 
-    // The bridge remounts: the router's live location is now an ENTIRELY
-    // external entry (envelope-free) sitting on A, at a strictly higher index
-    // than anything this controller instance has observed.
+    // The bridge remounts: the router's live location is now an ENTIRELY external entry (envelope-free) sitting on A, at a strictly higher index than anything this controller instance has observed.
     tabNavigationController.setLocationReader(() => ({
       pathname: a.pathname,
       state: locationState(null, "key-remount", 1),
@@ -1393,10 +1361,8 @@ describe("TabNavigationController envelope lifecycle", () => {
 
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
 
-    // B's own entry finally commits late, carrying its own (lower,
-    // pre-remount) index. It must repair to A - not acknowledge internally
-    // and steal focus back to B, which would leave the URL (B) and layout (A)
-    // disagreeing.
+    // B's own entry finally commits late, carrying its own (lower, pre-remount) index.
+    // It must repair to A - not acknowledge internally and steal focus back to B, which would leave the URL (B) and layout (A) disagreeing.
     const repairBefore = getTabNavigationDiagnostics().repairCount;
     commitInternal({
       navigate: nav.asNavigate,
@@ -1412,11 +1378,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // F3 (rejected route-cache): a REJECTED same-ref request must never poison
-  // the route cache repair reads from - `rememberRoute` is only ever called
-  // from `acknowledge()` (a successful commit), never speculatively on
-  // request. A controller that cached search on REQUEST rather than ACK would
-  // leak the rejected request's search into the next repair.
+  // F3 (rejected route-cache): a REJECTED same-ref request must never poison the route cache repair reads from - `rememberRoute` is only ever called from `acknowledge()` (a successful commit), never speculatively on request.
   it("F3: a rejected same-ref request does not poison the repair route cache", async () => {
     const nav = makeDeferredNavigate();
 
@@ -1488,9 +1450,7 @@ describe("empty focus / startup preservation", () => {
     resetStores();
   });
 
-  // Cold review #6: startup / same-location layout sync may preserve empty
-  // focus; later envelope-free PUSH/REPLACE is real external navigation and
-  // must focus the backing member (Core Flow 4).
+  // Cold review #6: startup / same-location layout sync may preserve empty focus; later envelope-free PUSH/REPLACE is real external navigation and must focus the backing member (Core Flow 4).
   it.each([
     { action: "PUSH" as const, key: "key-empty-push" },
     { action: "REPLACE" as const, key: "key-empty-replace" },
@@ -1577,7 +1537,7 @@ describe("empty focus / startup preservation", () => {
     });
     const nav = makeDeferredNavigate();
     // Seed currentLocation via a prior observe, then re-assert empty focus
-    // so retry is a same-location layout/render sync — not a new external nav.
+    // so retry is a same-location layout/render sync - not a new external nav.
     tabNavigationController.observeLocation(
       {
         pathname: a.pathname,
@@ -1660,9 +1620,7 @@ describe("empty focus / startup preservation", () => {
       activeItemId: "split-empty",
       systemTabs: { history: null, settings: null },
     });
-    // A bridge (re)mount replays the current committed location as a startup
-    // sync; because that location still backs the empty side's member, saved
-    // empty focus must survive.
+    // A bridge (re)mount replays the current committed location as a startup sync; because that location still backs the empty side's member, saved empty focus must survive.
     tabNavigationController.setLocationReader(() => ({
       pathname: a.pathname,
       state: locationState(null, "key-start", 0),
@@ -1866,17 +1824,7 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
   });
 });
 
-// T10 Area 3: a new desktop window opened via
-// `deps.bridge.requestNew(tab.route)` for a History/Settings tab boots with
-// a truly EMPTY layout (`resetStores()` below matches that exactly) and an
-// initial router location equal to the source tab's route. That is
-// architecturally identical to any other cold external navigation this
-// controller already resolves - `resolveExternalSystem` (reached through
-// the same `observeLocation` classification `TabNavigationRouteBridge` uses
-// at boot) materializes the system tab and focuses it. These tests prove
-// that path exists and stays wired for history/settings specifically -
-// "copy" new-window semantics need no new production code, only this
-// coverage.
+// T10 Area 3: a new desktop window opened via `deps.bridge.requestNew(tab.route)` for a History/Settings tab boots with a truly EMPTY layout (`resetStores()` below matches that exactly) and an initial router location equal to the source tab's route.
 describe("T10 Area 3: external boot into a system-tab route (new-window copy)", () => {
   beforeEach(async () => {
     resetStores();

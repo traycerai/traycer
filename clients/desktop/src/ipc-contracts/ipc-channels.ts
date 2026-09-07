@@ -1,13 +1,3 @@
-/**
- * IPC channel names shared between the Electron main process and the preload
- * bridge. Keeping them in one module avoids drift between `ipcMain.handle`
- * registrations and the `ipcRenderer.invoke` call sites in the preload.
- *
- * `invoke` channels are request/response (renderer -> main). `event` channels
- * are one-way pushes (main -> renderer via `webContents.send`). `sync`
- * channels are synchronous renderer -> main reads used at preload load for
- * values the renderer needs before constructing its `IRunnerHost`.
- */
 import type {
   SelectionAuthorityEventMap,
   SelectionAuthorityInvokeMap,
@@ -16,22 +6,11 @@ import type {
 
 export const RunnerHostInvoke = {
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
-  // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
-  // runs `/device/authorize` + the `/device/token` poll loop in main (CORS-safe,
-  // resilient to renderer sleep) and returns the authorization; the terminal
-  // outcome is pushed on `deviceFlowResult`. The attempt is owned by the window
-  // that started it: when that `webContents` is destroyed the attempt is
-  // cancelled, so closing a window mid device-flow never leaks the poll loop.
-  // `pollNow` nudges the named attempt's loop to poll immediately (the
-  // browser-return deep link uses it). `cancel` aborts the named attempt's loop.
+  // The attempt is owned by the window that started it: when that `webContents` is destroyed the attempt is cancelled, so closing a window mid device-flow never leaks the poll loop.
   deviceFlowStart: "runnerHost:auth:deviceFlowStart",
   deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
   deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
   refreshAuthToken: "runnerHost:auth:refreshToken",
-  // Credentials-file token store (tech plan §3). `get`/`signIn`/`rotate`/`delete`
-  // route the renderer's `ITokenStore` through the main-process `FileTokenStore`,
-  // which owns the single machine-local credentials file + its lock/WAL. `rotate`
-  // performs the refresh HTTP spend in main, inside the file lock.
   authTokenStoreGet: "runnerHost:auth:tokenStore:get",
   authTokenStoreSignIn: "runnerHost:auth:tokenStore:signIn",
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
@@ -39,7 +18,7 @@ export const RunnerHostInvoke = {
   authTokenStoreDeleteIfToken: "runnerHost:auth:tokenStore:deleteIfToken",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
   // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
-  // main for the same CORS reason as the token validators — authn-v3's CORS
+  // main for the same CORS reason as the token validators  -  authn-v3's CORS
   // allow-list is the web dashboard origin, not the app renderer.
   listRegisteredHosts: "runnerHost:hosts:list",
   // Devices & Sessions account-security surface. These authn-v3 calls run in
@@ -56,14 +35,10 @@ export const RunnerHostInvoke = {
   // them; main holds the single registry every window claims against.
   requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
   verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
-  // Remote Host Support (§13, T16): `PATCH /api/v3/hosts/:hostId` — "Update
-  // now" / auto-policy toggle / "Apply now — ends N sessions". Same CORS
+  // Remote Host Support (§13, T16): `PATCH /api/v3/hosts/:hostId`  -  "Update
+  // now" / auto-policy toggle / "Apply now  -  ends N sessions". Same CORS
   // reason as `listRegisteredHosts`.
   updateHostVersionPolicy: "runnerHost:hosts:updateVersionPolicy",
-  // "Remove from account": `POST /api/v3/hosts/:hostId/deregister`. Same CORS
-  // reason as the two above — and, like them, a registry-only write that needs
-  // no route to the machine, which is why it does not live on the host-
-  // management bridge next to the OS-service verbs it must not be confused with.
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
@@ -80,30 +55,13 @@ export const RunnerHostInvoke = {
   fileDropReadNativeClipboardPaths:
     "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
-  // Opens a file `fileSave` wrote earlier in this process lifetime with the
-  // OS default app (the "Open file" action on the saved toast). Main keeps
-  // the allowlist of paths it saved, so the renderer can only ever open what
-  // the user just chose in the native save dialog - never an arbitrary path.
+  // Main keeps the allowlist of paths it saved, so the renderer can only ever open what the user just chose in the native save dialog - never an arbitrary path.
   fileOpenSaved: "runnerHost:file:openSaved",
   clipboardWriteImage: "runnerHost:clipboard:writeImage",
   requestHostRespawn: "runnerHost:host:requestRespawn",
-  // The `hostId` in `pid.json`, read as a pure structural parse with no
-  // reachability requirement. `localHostChange` only ever emits a snapshot
-  // for a host that is actually dialable, so while the host is down the
-  // renderer has no way to recognise this machine's own registry entry.
-  // This is that durable identity, and the renderer needs it precisely when
-  // no snapshot exists.
   lastKnownLocalHostId: "runnerHost:host:lastKnownLocalHostId",
-  // PULL for the same snapshot `localHostChange` pushes.
-  //
-  // The push side is edge-triggered onto a renderer-side cache that starts at
-  // `null`, so every delivery hazard between the two processes - a window that
-  // registers after the fan-out, a `webContents` reload that resets the preload
-  // cache, a send dropped while the renderer navigates - is INDISTINGUISHABLE
-  // in the renderer from "this machine has no host", and stays that way until
-  // the main process happens to emit a change. On a steady-state host that
-  // change may never come. This channel removes the whole class: a subscriber
-  // asks for the current value instead of hoping it was told.
+  // The push side is edge-triggered onto a renderer-side cache that starts at `null`, so every delivery hazard between the two processes.
+  // On a steady-state host that change may never come.
   localHostSnapshot: "runnerHost:host:localHostSnapshot",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
@@ -113,10 +71,6 @@ export const RunnerHostInvoke = {
   respondToQuitRequest: "runnerHost:appLifecycle:respondToQuitRequest",
   freshUnsyncedSnapshotResponse:
     "runnerHost:appLifecycle:freshUnsyncedSnapshotResponse",
-  // The CROSS-WINDOW unsyncable set, which no renderer can compute: each one
-  // holds only its own Epic session registry, while `appUpdateInstall`
-  // restarts the whole app and its quit path deliberately skips the
-  // unsynced-edits interception. Asked before authorizing that install.
   unsyncableWorkAcrossWindows:
     "runnerHost:appLifecycle:unsyncableWorkAcrossWindows",
   windowsList: "runnerHost:windows:list",
@@ -149,8 +103,6 @@ export const RunnerHostInvoke = {
   // filed reports write on delivered submit - neither is renderer-writable.
   supportGetFingerprintOccurrence:
     "runnerHost:support:ledger:fingerprintOccurrence:get",
-  // Ticket 09 / T6: the sole main-process producer of public (GitHub-bound)
-  // text, always behind the deep scrubber.
   supportBuildPublicDraft: "runnerHost:support:publicDraft:build",
   serviceInstall: "runnerHost:service:install",
   serviceUninstall: "runnerHost:service:uninstall",
@@ -244,14 +196,6 @@ export const RunnerHostInvoke = {
   // `preventSleepWhileRunning && anyLocalAgentActive` and pushes the boolean
   // here; main holds a single `powerSaveBlocker` while any window wants it.
   powerSetSleepBlocked: "runnerHost:power:setSleepBlocked",
-  // Host management - Settings → Host, Doctor failure card, registry
-  // update notice. Each handler invokes a `traycer host …` subcommand
-  // (NDJSON) and projects the terminal `result.data` payload to the
-  // renderer. Long-running invokes also fan out progress on
-  // `cliOperationProgress` keyed by `operationId`.
-  // Two-lane canonical `HostController` status (Host Update Layer Redesign
-  // Tech Plan). Read once on mount; live updates arrive on
-  // `hostControllerStatusChange`.
   traycerHostControllerStatusGet:
     "runnerHost:traycer:host:controllerStatus:get",
   // Idempotent "converge the host to reachable" (post-auth provisioning,
@@ -288,20 +232,11 @@ export const RunnerHostInvoke = {
     "runnerHost:traycer:freePortAndRestartIfIdle",
   traycerDoctorRepairQueued: "runnerHost:traycer:doctorRepairQueued",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
-  // The `maintenance:*` channels answer the v1.2.0 host maintenance RPCs for
-  // the GUI's local fallback (a local host ≤ 1.1.11 negotiated the family
-  // away). Each handler projects the same CLI JSON / on-disk records the
-  // host's own resolvers project, and resolves PROTOCOL response shapes — CLI
-  // failures are classified into the wire taxonomy in main, because an invoke
-  // rejection loses its error shape at the context-bridge boundary.
   traycerMaintenanceUpdateCheck: "runnerHost:traycer:maintenance:updateCheck",
   traycerMaintenanceDoctor: "runnerHost:traycer:maintenance:doctor",
   traycerMaintenanceInstallationInfo:
     "runnerHost:traycer:maintenance:installationInfo",
-  // Separate from `host:installVersion` because the lane refusal must be
-  // ATOMIC with the submission: main tests the exclusive mutation lane and
-  // enqueues in one synchronous stretch, which a renderer reading status and
-  // then submitting cannot do.
+  // Separate from `host:installVersion` because the lane refusal must be ATOMIC with the submission: main tests the exclusive mutation lane and enqueues in one synchronous stretch.
   traycerMaintenanceInstallVersion:
     "runnerHost:traycer:maintenance:installVersion",
   // Same atomicity, for the respawn. `host:restart` keeps its queueing
@@ -311,11 +246,6 @@ export const RunnerHostInvoke = {
   traycerDoctorRepairIfIdle: "runnerHost:traycer:doctor:repairIfIdle",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
-  // Selection authority (host-lifecycle redesign, D16 / P1.1). The engine
-  // lives in main; windows claim an attach generation, report connection
-  // evidence, and write Activate through these. Binding rules and the
-  // request/result shapes are in `selection-authority-ipc.ts`; the constants
-  // below are type-linked to its maps by `SelectionAuthorityChannels`.
   selectionAttach: "runnerHost:selection:attach",
   selectionReportEvidence: "runnerHost:selection:reportEvidence",
   selectionActivate: "runnerHost:selection:activate",
@@ -325,12 +255,6 @@ export const RunnerHostInvoke = {
   zoomStepIn: "runnerHost:zoom:stepIn",
   zoomStepOut: "runnerHost:zoom:stepOut",
   zoomReset: "runnerHost:zoom:reset",
-  // The main-owned `browser.sessions` stream (browser-security-hardening H10).
-  // The renderer says WHICH stream should exist and relays the three
-  // user-initiated requests; the socket, and with it every cookie-bearing
-  // frame on it, lives in main. `...Open` carries a host ID and no directory
-  // row - main resolves the row itself, because the row carries the host's
-  // static Noise key.
   browserViewSessionsOpen: "runnerHost:browserView:sessions:open",
   browserViewSessionsClose: "runnerHost:browserView:sessions:close",
   browserViewSessionsSend: "runnerHost:browserView:sessions:send",
@@ -344,31 +268,14 @@ export const RunnerHostInvoke = {
   browserViewTrustCertificate: "runnerHost:browserView:trustCertificate",
   browserViewCapturePage: "runnerHost:browserView:capturePage",
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
-  // Clear cookies for one site (keychain refactor ticket 07): the user's
-  // tile-menu action, which reports the emptied slice to the host. There is no
-  // receiving half - universal-sign-in ticket 08 retired the host-driven
-  // eviction along with the `primaryProfileEvict` frame that drove it.
   browserViewClearSite: "runnerHost:browserView:primaryProfile:clearSite",
   // Saved browser logins: on by default, off only if the user says so in
   // Settings. `...Set` switches the partition and brings the live tiles back.
   browserViewSaveLoginsGet: "runnerHost:browserView:saveLogins:get",
   browserViewSaveLoginsSet: "runnerHost:browserView:saveLogins:set",
-  // "Forget all browser logins" (keychain refactor ticket 08). Driven by
-  // Settings, alongside the `forgetLogins` frame that shreds each connected
-  // host's slice: this half empties the local jars and records the forget in
-  // the ledger, which is what reaches the hosts that were not connected
-  // (universal-sign-in decision 6).
   browserViewForgetLogins: "runnerHost:browserView:forgetLogins",
-  // "Clear" on one row of Settings > Browser. Main confirms it and main sends
-  // the `clearSite` frames: it is forget-all one domain at a time as far as a
-  // host's slice is concerned, so a renderer may ask for it and may not
-  // perform it (H05's residual for H10).
   browserViewClearSavedLoginSite: "runnerHost:browserView:clearSavedLoginSite",
-  // Import logins from another browser on this machine. `listSources` and
-  // `scan` read metadata only; `pickFile` opens the native dialog from main
-  // so the renderer never names a path; `run` is the one call that opens the
-  // OS keystore and writes the durable jar, and the one that pushes it to the
-  // hosts. None of the four rejects.
+  // `listSources` and `scan` read metadata only; `pickFile` opens the native dialog from main so the renderer never names a path.
   browserViewLoginImportListSources:
     "runnerHost:browserView:loginImport:listSources",
   browserViewLoginImportPickFile: "runnerHost:browserView:loginImport:pickFile",
@@ -388,19 +295,11 @@ export const RunnerHostInvoke = {
 
 export const RunnerHostEvent = {
   authCallback: "runnerHost:event:authCallback",
-  // Credentials-file change broadcast (tech plan §3/§4). Fired by the main
-  // `FileTokenStore`'s owned watcher on every observed change (external writes
-  // AND self-writes) so each renderer's reconcile worker re-reads the file. The
-  // watcher itself lands in §4; the channel + preload subscription ship now.
   authTokenStoreChange: "runnerHost:event:auth:tokenStore:change",
   // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",
   localHostChange: "runnerHost:event:localHostChange",
-  // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
-  // renderer so it force-reconnects its host streams - re-registering the
-  // live request context within seconds of wake instead of waiting out the
-  // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
   systemResumed: "runnerHost:event:systemResumed",
   notificationClick: "runnerHost:event:notificationClick",
   notificationForegroundDisplay:
@@ -416,11 +315,7 @@ export const RunnerHostEvent = {
   migrationRunChange: "runnerHost:event:migration:runChange",
   accessibilityThemeChange: "runnerHost:event:accessibilityTheme:change",
   certificateErrorPending: "runnerHost:event:cert:errorPending",
-  // A host answered the registry with a different Noise static key than the
-  // one this client pinned on first sight (browser-security-hardening H11).
-  // Same shape of channel as the certificate refusal above, and for the same
-  // reason: the refusal has already happened in main, and this is how a
-  // surface gets to say so.
+  // A host answered the registry with a different Noise static key than the one this client pinned on first sight (browser-security-hardening H11).
   hostKeyPinMismatch: "runnerHost:event:hostKeyPin:mismatch",
   appUpdateChange: "runnerHost:event:appUpdate:change",
   displayTopologyChange: "runnerHost:event:display:topologyChange",
@@ -428,19 +323,7 @@ export const RunnerHostEvent = {
   // `HostTrayCommandListener`. Payloads match the shared
   // `HostTrayCommand` union.
   hostTrayCommand: "runnerHost:event:host:trayCommand",
-  // Canonical two-lane `HostController` status broadcast (Host Update Layer
-  // Redesign Tech Plan). Fired on every mutation-lane progress/status
-  // change (push) and on a download-lane poll tick while a download is
-  // active (see `host-controller-status-broadcast.ts`), so every open
-  // window's gate/banner/Settings/tray stay in lockstep.
   hostControllerStatusChange: "runnerHost:event:host:controllerStatusChange",
-  // ONE registry read per app, fanned out to every window (redesign P4.1/F22,
-  // connection registry §1b/§6). The 60s `GET /api/v3/hosts` cadence used to
-  // be a per-window renderer timer, so N windows meant N timers and N fetches
-  // against one endpoint; main owns the cadence now and pushes the rows it
-  // already fetches for the selection authority's fleet port. The renderer
-  // keeps its own timer ONLY where there is no main process to own one
-  // (browser/dev, the single-window topology D16 names).
   registeredHostsChange: "runnerHost:event:host:registeredHostsChange",
   zoomChange: "runnerHost:event:zoom:change",
   browserViewGuestMountRequested:
@@ -457,19 +340,10 @@ export const RunnerHostEvent = {
   browserViewTileFocused: "runnerHost:event:browserView:tileFocused",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
-  // Ticket 04 exit-edge handshake: fired once the un-parked native view's
-  // first composited frame lands, telling the renderer it may now drop the
-  // stand-in it kept mounted since occlusion. Only for tiles that were
-  // actually parked; a tile released without ever parking keeps answering
-  // through `restoredTiles` on the occlude/release return value.
   browserViewOverlayRestored: "runnerHost:event:browserView:overlayRestored",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
-  // Everything main forwards from a window's `browser.sessions` stream: the
-  // UX frame projection, the stream's lifecycle, and the identity-only tab
-  // bindings. No cookie array, storage state or key material can appear here -
-  // the payload's frame type is the protocol's `BrowserSessionsUxServerFrame`.
   browserViewSessionsEvent: "runnerHost:event:browserView:sessions:event",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
@@ -482,11 +356,6 @@ export const RunnerHostEvent = {
   selectionReattachRequired: "runnerHost:event:selection:reattachRequired",
 } as const;
 
-/**
- * Synchronous preload -> main reads. The preload calls
- * `ipcRenderer.sendSync` at module load to snapshot values the renderer
- * exposes as plain `readonly` strings on its `IRunnerHost`.
- */
 export const RunnerHostSync = {
   authnBaseUrl: "runnerHost:sync:authnBaseUrl",
   authRedirectUri: "runnerHost:sync:authRedirectUri",
@@ -505,14 +374,6 @@ type RunnerHostEventChannel =
 type RunnerHostSyncChannel =
   (typeof RunnerHostSync)[keyof typeof RunnerHostSync];
 
-/**
- * The selection-authority channel set, TYPE-LINKED to the binding maps in
- * `selection-authority-ipc.ts`: the `satisfies` clause below requires exactly
- * one channel constant per map member, so renaming or adding a member there
- * fails this module's compile instead of drifting into a channel that no
- * handler serves. Both the main registration and the preload bridge read the
- * names from here rather than from a second list.
- */
 export const SelectionAuthorityChannels = {
   sync: {
     selectionAttachSeq: RunnerHostSync.selectionAttachSeq,

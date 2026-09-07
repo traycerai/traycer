@@ -1,24 +1,8 @@
 import { win32 } from "node:path";
 import type { CommandRunner } from "./run-command";
 
-/**
- * The Windows half of Chromium's `v10` key. `Local State` holds
- * `os_crypt.encrypted_key`: base64 of the literal bytes `DPAPI` followed by
- * the AES-256 key sealed to the current user with DPAPI. Unsealing needs the
- * Win32 `CryptUnprotectData`, which this shell reaches through PowerShell's
- * `ProtectedData` rather than a native module.
- *
- * The sealed blob goes to PowerShell on **stdin**. On argv it would sit in
- * the process table for every other process on the machine to read.
- */
 
-/**
- * Windows PowerShell by its absolute path, never by lookup: `spawn` would
- * search `PATH` in order, and a writable directory ahead of System32 could
- * supply a `powershell.exe` that receives the sealed key on stdin and answers
- * a key of its own. `SystemRoot` is what Windows itself sets for the
- * installation; the literal is its documented default.
- */
+/** Windows PowerShell by its absolute path, never by lookup: `spawn` would search `PATH` in order, and a writable directory ahead of System32 could supply a `powershell.exe` that. */
 export function windowsPowerShellPath(env: NodeJS.ProcessEnv): string {
   return win32.join(
     env.SystemRoot ?? "C:\\Windows",
@@ -41,10 +25,6 @@ const UNPROTECT_SCRIPT = [
   "[Console]::Out.Write([Convert]::ToBase64String($key))",
 ].join("; ");
 
-/**
- * The AES-256-GCM key, or `null` when the blob is not one this user can
- * open: another account's profile, a missing prefix, or PowerShell refusing.
- */
 export async function unprotectChromiumWindowsKey(
   encryptedKeyBase64: string,
   run: CommandRunner,

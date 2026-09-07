@@ -108,9 +108,7 @@ describe("rateLimitScopeAffectsModel", () => {
   });
 
   it("does not match through provider-generic tokens", () => {
-    // "Claude Opus" must not gate a Fable model just because every Claude
-    // slug contains "claude" - that would both over-warn and wrongly reject
-    // healthy destinations.
+    // "Claude Opus" must not gate a Fable model just because every Claude slug contains "claude" - that would both over-warn and wrongly reject healthy destinations.
     expect(
       rateLimitScopeAffectsModel(
         "Claude Opus",

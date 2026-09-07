@@ -20,24 +20,10 @@ import { useManagedCommandOutputDragSource } from "@/components/epic-canvas/dnd/
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
 
 /**
- * A drag and a scroll are one gesture on a touch pointer, so a live drag
- * source on a phone eats the list scroll the user asked for. Both arms are
- * pinned everywhere: the coarse arm never runs on a developer's machine, so a
- * suite that only asserted the fine arm would keep passing after the gate was
- * deleted, and a suite that only asserted the coarse arm would keep passing
- * after someone disabled desktop drag outright.
- *
- * What is asserted is `listeners` - the pointer handlers dnd-kit actually
- * attaches to the element. That is the difference between "no drag starts"
- * and "no handler is attached at all"; only the second lets the browser
- * scroll natively, with no sensor to out-race.
+ * Both arms are pinned everywhere: the coarse arm never runs on a developer's machine, so a suite that only asserted the fine arm would keep passing after the gate was deleted, and a suite that only asserted the coarse arm would keep passing after someone disabled desktop drag outright.
+ * That is the difference between "no drag starts" and "no handler is attached at all"; only the second lets the browser scroll natively, with no sensor to out-race.
  */
 
-/**
- * The global test shim answers every media query with `matches: false`, which
- * is the fine-pointer arm. This narrows the coarse-pointer query alone so the
- * rest of the app's queries keep the shim's answer.
- */
 function stubCoarsePointer(coarse: boolean): void {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -76,9 +62,7 @@ function RootSensorRow() {
     data: { kind: "probe" },
   });
   return (
-    // A button, like the real chat and background rows this stands in for -
-    // the sensor's only element-level condition is the left-button press it
-    // already checks, so the tag does not change what is under test.
+    // A button, like the real chat and background rows this stands in for - the sensor's only element-level condition is the left-button press it already checks, so the tag does not change what is under test.
     <button ref={setNodeRef} {...listeners} type="button">
       row
     </button>
@@ -115,12 +99,7 @@ function pressAndDrag(pointerType: string): void {
 }
 
 describe("root pointer sensor", () => {
-  /**
-   * The device gate cannot answer this one. A HYBRID machine - a fine-primary
-   * laptop with a touchscreen - reports `(pointer: coarse)` false, so its rows
-   * keep their listeners and their mouse drag, and a finger on the glass still
-   * reaches the sensor. The veto is therefore per gesture, not per device.
-   */
+  /** The device gate cannot answer this one. */
   it("activates on a mouse press", () => {
     const onDragStart = vi.fn();
     render(<RootSensorProbe onDragStart={onDragStart} />);
@@ -204,9 +183,7 @@ describe("artifact drag source", () => {
   });
 
   it("reports itself non-draggable on a coarse pointer", () => {
-    // `isDraggable` and not only `listeners`: callers hang their grab cursor
-    // and drag chrome off it, and an affordance that cannot be reached is
-    // worse than none.
+    // `isDraggable` and not only `listeners`: callers hang their grab cursor and drag chrome off it, and an affordance that cannot be reached is worse than none.
     stubCoarsePointer(true);
     const { result } = renderHook(() => useArtifactDragSource(args), {
       wrapper: DndWrapper,
@@ -255,9 +232,7 @@ describe("queued-message reorder handle", () => {
   };
 
   it("keeps its listeners on a coarse pointer", () => {
-    // The exemption: these listeners sit on a dedicated grip, never the row,
-    // so pressing one is explicit drag intent and cannot be a scroll. Gating
-    // it would take queue reordering away on touch with nothing replacing it.
+    // The exemption: these listeners sit on a dedicated grip, never the row, so pressing one is explicit drag intent and cannot be a scroll.
     stubCoarsePointer(true);
     const { result } = renderHook(() => useQueuedMessageRowSortable(options), {
       wrapper: SortableWrapper,

@@ -54,17 +54,8 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
 /**
- * Conversation surfaces: the description and the Feedback feed.
- *
- * The shape here is a STACK OF CARDS, not GitHub's timeline. GitHub threads
- * every entry onto a 2px connector line through an avatar gutter, which buys
- * one thing - a visual claim that these events are one continuous sequence -
- * and costs a fixed 2.75rem indent on every row plus an avatar-sized column of
- * whitespace down the whole page. We do not need the claim: the entries are
- * already in order, and the feed is a triage inbox rather than a negotiation
- * transcript. Dropping the line returns the full column width to the text and
- * lets each entry be a self-contained card in the same language as the rest of
- * the app.
+ * GitHub threads every entry onto a 2px connector line through an avatar gutter, which buys one thing - a visual claim that these events are one continuous sequence - and costs a fixed 2.75rem indent on every row plus an avatar-sized column of whitespace down the whole page.
+ * We do not need the claim: the entries are already in order, and the feed is a triage inbox rather than a negotiation transcript.
  */
 
 const REVIEW_EVENT: Record<
@@ -217,9 +208,7 @@ function PrConversationRow(props: {
         </>
       }
     >
-      {/* A review that posted findings but wrote no summary gets its findings
-          and nothing else - "No content." beneath five real objections would
-          be actively wrong. */}
+      {/* A review that posted findings but wrote no summary gets its findings and nothing else - "No content." beneath five real objections would be actively wrong. */}
       {item.body.trim().length > 0 || threads.length === 0 ? (
         <PrCardBody body={item.body} emptyBody="No content." density="card" />
       ) : null}
@@ -234,13 +223,8 @@ function PrConversationRow(props: {
 }
 
 /**
- * A review's inline findings: open ones in full, resolved ones as one
- * collapsed row each.
- *
- * The split is the tab's whole premise - Feedback answers "what is blocking
- * this" - but a resolved finding keeps a one-line footprint naming the file it
- * pointed at, because "was this already dealt with?" is the next question a
- * reader asks and the file is usually enough to answer it.
+ * A review's inline findings: open ones in full, resolved ones as one collapsed row each.
+ * The split is the tab's whole premise - Feedback answers "what is blocking this" - but a resolved finding keeps a one-line footprint naming the file it pointed at, because "was this already dealt with?" is the next question a reader asks and the file is usually enough to answer it.
  */
 function PrReviewThreadList(props: {
   readonly threads: readonly PrReviewThread[];
@@ -272,14 +256,7 @@ function PrReviewThreadList(props: {
 }
 
 /**
- * A resolved finding: a collapsed row that expands in place into the full
- * thread card.
- *
- * Collapsed is a real unmount, not `<details>` CSS hiding: every expanded
- * thread mounts a diff renderer that parses and highlights its hunk off the
- * main thread, and a bot pass with fifteen resolved findings must not pay for
- * fifteen highlight jobs nobody has asked to see. Per-row expansion keeps the
- * bill itemised - opening one finding mounts one renderer.
+ * Collapsed is a real unmount, not `<details>` CSS hiding: every expanded thread mounts a diff renderer that parses and highlights its hunk off the main thread, and a bot pass with fifteen resolved findings must not pay for fifteen highlight jobs nobody has asked to see.
  */
 function PrResolvedThreadRow(props: {
   readonly thread: PrReviewThread;
@@ -288,14 +265,8 @@ function PrResolvedThreadRow(props: {
   const [isOpen, setIsOpen] = useState(false);
   const swapRef = useRef<HTMLDivElement | null>(null);
   const movesFocus = useRef(false);
-  // Toggling unmounts the control the keyboard was on - row and chevron are
-  // different elements - so focus would fall back to <body> and the next Tab
-  // would restart at the top of the page instead of entering the thread. Hand
-  // focus to whichever control replaced it, found by the `aria-expanded` that
-  // defines a disclosure and reached through the DOM rather than a ref crossing
-  // into the card, which would read to the React Compiler as this card
-  // touching a ref mid-render. Only on a toggle: the same effect runs on mount,
-  // where stealing focus for every resolved row would be its own bug.
+  // Toggling unmounts the control the keyboard was on - row and chevron are different elements - so focus would fall back to <body> and the next Tab would restart at the top of the page instead of entering the thread.
+  // Hand focus to whichever control replaced it, found by the `aria-expanded` that defines a disclosure and reached through the DOM rather than a ref crossing into the card, which would read to the React Compiler as this card touching a ref mid-render.
   useLayoutEffect(() => {
     if (!movesFocus.current) {
       return;
@@ -348,8 +319,7 @@ function PrResolvedThreadRow(props: {
 
 /**
  * One finding: where it points, the hunk it points at, and the discussion.
- * `onCollapse` is non-null when the card was expanded from a resolved row - it
- * renders the chevron that folds the card back into that row.
+ * `onCollapse` is non-null when the card was expanded from a resolved row - it renders the chevron that folds the card back into that row.
  */
 function PrReviewThreadCard(props: {
   readonly thread: PrReviewThread;
@@ -461,13 +431,7 @@ function PrReviewThreadCard(props: {
 
 /**
  * The lines a finding points at, through the app's own diff renderer.
- *
- * This used to be a `<pre>` of the raw hunk: no gutter, one flat colour for
- * added, removed, and context alike, so the reader had to decode `+`/`-`
- * prefixes by eye to see what the comment was even about. It is a diff, and
- * every other diff in the app is rendered by the same pipeline - reusing it
- * costs one adapter and buys tones, syntax highlighting, and line numbers that
- * agree with the file.
+ * It is a diff, and every other diff in the app is rendered by the same pipeline - reusing it costs one adapter and buys tones, syntax highlighting, and line numbers that agree with the file.
  */
 function PrReviewThreadHunk(props: {
   readonly thread: PrReviewThread;
@@ -504,11 +468,7 @@ function PrReviewThreadHunk(props: {
   );
 }
 
-/**
- * Findings whose review is not in this frame - it fell out of the review
- * window, or the cached fact predates review ids. Grouped rather than dropped:
- * an unresolved finding is exactly what this tab is for.
- */
+/** Grouped rather than dropped: an unresolved finding is exactly what this tab is for. */
 function PrOrphanThreads(props: {
   readonly threads: readonly PrReviewThread[];
   readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
@@ -563,9 +523,7 @@ function PrReviewEventRow(props: {
 }
 
 /**
- * The one card shell every conversation surface uses: a muted header rail and
- * a body. `tone` tints only the border, so an approval or an objection is
- * legible at a glance without the body becoming a coloured panel.
+ * `tone` tints only the border, so an approval or an objection is legible at a glance without the body becoming a coloured panel.
  */
 function PrSurfaceCard(props: {
   readonly tone: "ok" | "fail" | "pending" | "none";
@@ -594,10 +552,8 @@ function PrSurfaceCard(props: {
 }
 
 /**
- * `density` is the difference between a card that owns its column and a body
- * nested two borders deep inside one. The nested case has to line up with a
- * 2.5-unit header rail above it; card padding there reads as a text block that
- * drifted right of everything around it.
+ * `density` is the difference between a card that owns its column and a body nested two borders deep inside one.
+ * The nested case has to line up with a 2.5-unit header rail above it; card padding there reads as a text block that drifted right of everything around it.
  */
 function PrCardBody(props: {
   readonly body: string;
@@ -633,9 +589,7 @@ function PrCardBody(props: {
 }
 
 /**
- * Hover-revealed on pointer, always present for keyboard and screen readers.
- * `null` means no chat is selected to send to, which disables rather than
- * hides it - a missing button reads as "this cannot be quoted".
+ * `null` means no chat is selected to send to, which disables rather than hides it - a missing button reads as "this cannot be quoted".
  */
 function PrQuoteAction(props: {
   readonly label: string;
@@ -663,8 +617,7 @@ function PrQuoteAction(props: {
 
 /**
  * "…and N older on GitHub" - the escape hatch out of a truncated section.
- * Routed through {@link PrExternalGitHubLink} like every other GitHub anchor
- * on these surfaces.
+ * Routed through {@link PrExternalGitHubLink} like every other GitHub anchor on these surfaces.
  */
 export function PrOlderOnGitHub(props: {
   readonly href: string;
@@ -683,12 +636,7 @@ export function PrOlderOnGitHub(props: {
 
 /**
  * A timestamp carries its own type treatment.
- *
- * It used to inherit, which meant every call site had to remember to size and
- * mute it - and the one that forgot rendered a comment's date at body size in
- * body colour, so the same "9 Jul" appeared twice in one card at two sizes.
- * A date is metadata wherever it appears here, so it looks like metadata
- * wherever it appears.
+ * It used to inherit, which meant every call site had to remember to size and mute it - and the one that forgot rendered a comment's date at body size in body colour, so the same "9 Jul" appeared twice in one card at two sizes.
  */
 export function PrRelativeTime(props: {
   readonly timestamp: number;

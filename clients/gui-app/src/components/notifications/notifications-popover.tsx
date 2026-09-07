@@ -73,9 +73,8 @@ interface NotificationsPopoverProps {
   readonly headingRef: RefObject<HTMLHeadingElement | null>;
   readonly shellRef: RefObject<HTMLDivElement | null>;
   readonly shellStyle: CSSProperties;
-  /** Forwarded verbatim to `NotificationFilterMenu`'s `onOpenChange` - see
-   * that prop's doc for why the ancestor Popover's outside-dismissal guard
-   * needs it. */
+  /** Forwarded verbatim to `NotificationFilterMenu`'s `onOpenChange` - see that prop's doc for why the ancestor
+   * Popover's outside-dismissal guard needs it. */
   readonly onFilterMenuOpenChange: (open: boolean) => void;
 }
 
@@ -83,13 +82,8 @@ interface NotificationFeedStatusPresentation {
   readonly title: string;
   readonly detail: string;
   readonly isPending: boolean;
-  /**
-   * `degraded` is the amber reading: the cloud feed is not delivering, but
-   * the popover is still usable - rows already on this device (the retained
-   * cloud snapshot, app-local and collaboration rows) keep rendering. It is
-   * never red: nothing is lost, and the relay retries on its own.
-   * `neutral` is bootstrap, which claims nothing about health.
-   */
+  /** It is never red: nothing is lost, and the relay retries on its own. `neutral` is bootstrap, which claims
+   * nothing about health. */
   readonly tone: "neutral" | "degraded";
 }
 
@@ -101,9 +95,8 @@ const TEMPORAL_GROUP_LABEL: Readonly<
   earlier: "Earlier",
 };
 
-// A cursor with more attention rows to load must keep the section (and its
-// Load-more control) visible even once every currently loaded row has left
-// Attention - otherwise the continuation is unreachable until reopen.
+// A cursor with more attention rows to load must keep the section (and its Load-more control) visible even
+// once every currently loaded row has left Attention - otherwise the continuation is unreachable until reopen.
 function isAttentionSectionVisible(input: {
   readonly loadedAttentionCount: number;
   readonly canLoadMoreAttention: boolean;
@@ -149,12 +142,7 @@ function isClearAllDisabled(input: {
   return !input.hasActiveHost || !input.hasLoadedHostNotifications;
 }
 
-/** Local-fallback header subtitle text. A partial host state is either
- * transient (still
- * connecting - the exact wording carries no permanence claim) or confirmed
- * permanent for this session (the stream's mirror-compat check has already
- * resolved `host.notifications.feed.subscribe` as `"unsupported"` on an old
- * host) - only the confirmed case gets version-specific wording. */
+/** A partial host state is either transient (still connecting. */
 function localNotificationsSubtitle(input: {
   readonly isPartial: boolean;
   readonly hostLabel: string | null;
@@ -176,15 +164,7 @@ function notificationsSubtitle(
   return feedMode === "local" ? localNotificationsSubtitle(input) : null;
 }
 
-/**
- * Notification center surface content: header (title, optional local-host
- * subtitle, Filter, Mark all read, overflow Settings), a single scrolling
- * feed body (Needs attention, then Recent activity with temporal
- * separators), and a fixed "Load older activity" footer. Outer sizing is
- * entirely owned by the caller (`NotificationsBell`) via `shellRef`/
- * `shellStyle` - this component never touches its own outer dimensions, so
- * none of its content transitions can violate the frozen open-session rect.
- */
+/** Outer sizing is entirely owned by the caller (`NotificationsBell`) via `shellRef`/ `shellStyle`. */
 export function NotificationsPopover(
   props: NotificationsPopoverProps,
 ): ReactNode {
@@ -221,11 +201,8 @@ export function NotificationsPopover(
     connectionState: cloudConnectionState,
     hasSnapshot: cloudHasSnapshot,
   });
-  // Distinguishes a permanent condition (this host's stream mirror-compat
-  // check has already confirmed it will never support the notifications
-  // feed) from a merely transient one (still connecting) - both leave
-  // `hostState.isPartial` true, but only the confirmed case should be worded
-  // as permanent in the local fallback subtitle below.
+  // Distinguishes a permanent condition (this host's stream mirror-compat check has already confirmed it will
+  // never support the notifications feed) from a merely transient one (still connecting).
   const notificationsSupport = useStreamMethodSupport(
     "host.notifications.feed.subscribe",
   );
@@ -279,14 +256,12 @@ export function NotificationsPopover(
     isAtTop,
     scrollToTop,
   } = useNotificationCenterScrollAnchor({ orderedFeedIds });
-  // Feed traversal is bound to the shell, not the scrollport, so Up/Down also
-  // enter the list from the header - including the heading a keyboard or chord
-  // open focuses.
+  // Feed traversal is bound to the shell, not the scrollport, so Up/Down also enter the list from the header -
+  // including the heading a keyboard or chord open focuses.
   useNotificationFeedKeyboardNavigation(shellRef);
 
-  // Full, unfiltered occurrence order is the identity source for live-arrival
-  // detection, so a Recent filter can never blind the arrival set to a row it
-  // currently hides (see "N-new" in the technical plan).
+  // Full, unfiltered occurrence order is the identity source for live-arrival detection, so a Recent filter can
+  // never blind the arrival set to a row it currently hides (see "N-new" in the technical plan).
   const fullOccurrenceOrder = useMergedNotificationOccurrenceEntries();
   const hasLoadedHostNotifications = fullOccurrenceOrder.some((entry) =>
     entry.feedId.startsWith("host:"),
@@ -327,11 +302,7 @@ export function NotificationsPopover(
         receivedAt: Date.now(),
         feedId: row.feedId,
         originHostId: row.originHostId,
-        // Fires synchronously right after routing, so the center closes on
-        // dispatch (`onSuccess: onNavigate`). The origin-host guard inside
-        // the hook can still settle this as `"failure"` (no toast, nothing
-        // actually failed) - in that case the center stays open and the row
-        // stays unread, same as before.
+        // Fires synchronously right after routing, so the center closes on dispatch (`onSuccess: onNavigate`).
         onResult: activationResultHandler({
           row,
           feedId: row.feedId,
@@ -434,10 +405,8 @@ export function NotificationsPopover(
 
   return (
     <TooltipProvider delayDuration={300}>
-      {/* `data-notification-center` marks this surface for code that must ask
-          "is focus inside the center right now?" without reaching for the
-          shell ref (the keybinding chord's toggle-close, in
-          `notifications-bell.tsx`). */}
+      {/* `data-notification-center` marks this surface for code that must ask "is focus inside the center right now?"
+         without reaching for the shell ref (the keybinding chord's toggle-close, in `notifications-bell.tsx`). */}
       <div
         ref={shellRef}
         style={shellStyle}
@@ -580,10 +549,8 @@ function NotificationsFeedSections(
             className="overflow-hidden px-4 pt-3"
           >
             <SectionLabel>Needs attention</SectionLabel>
-            {/* -mx-4 breaks the row list out of the section's inset so each
-            row's bottom divider reaches the popover's true edges; rows
-            restore the same visual inset as their own content padding (see
-            notification-row.tsx). */}
+            {/* mx-4 breaks the row list out of the section's inset so each row's bottom divider reaches the popover's true
+               edges; rows restore the same visual inset as their own content padding (see notification-row.tsx). */}
             <ul className="-mx-4 flex flex-col">
               <AnimatePresence initial={false}>
                 {props.attentionIds.map((id) => (
@@ -770,13 +737,7 @@ function notificationFeedStatus(input: {
   readonly hasSnapshot: boolean;
 }): NotificationFeedStatusPresentation | null {
   if (input.feedMode === "local") return null;
-  // Every non-bootstrap branch below is worded about the CLOUD feed, not
-  // "notifications": in cloud mode the merged list keeps rendering the
-  // retained cloud snapshot plus app-local and collaboration rows while the
-  // relay is down, so a whole-capability "unavailable" would overclaim. The
-  // host-origin (v1) stream is deliberately not opened in cloud mode, which is
-  // why the copy says "already on this device" rather than promising new
-  // local events.
+  // Every non-bootstrap branch below is worded about the cloud feed, not "notifications".
   if (input.feedMode === "upgrade-required") {
     return {
       title: "Cloud notifications unavailable",
@@ -816,8 +777,6 @@ function NotificationFeedStatus(props: {
   readonly compact: boolean;
 }): ReactNode {
   const degraded = props.presentation.tone === "degraded";
-  // Amber = degraded-but-usable, the same `--warning` band the chat dead-tile
-  // banner and shell-output notice use for "still readable, one plane down".
   // Never destructive: the relay retains its rows and retries by itself.
   const neutralIconClass = props.compact
     ? "text-muted-foreground/60"
@@ -916,9 +875,8 @@ function NotificationsFeedContent(props: {
   );
 }
 
-/** One-open-cycle banner for a native click whose captured origin host no
- * longer matches the active host (see `notifications-popover-store.ts`).
- * Self-selects from the store so the parent doesn't carry this branch. */
+/** One-open-cycle banner for a native click whose captured origin host no longer matches the active host (see
+ * `notifications-popover-store.ts`). */
 function OriginUnavailableBanner(): ReactNode {
   const originUnavailable = useNotificationsPopoverStore(
     (state) => state.originUnavailable,
@@ -978,11 +936,8 @@ interface RecentRowListProps {
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
 }
 
-/** Inserts a temporal separator whenever the calendar-day group changes
- * along the already-chronological Recent projection. `-mx-4` breaks the row
- * list out of the section's inset so each row's bottom divider reaches the
- * popover's true edges - rows restore the same visual inset via their own
- * content padding (see notification-row.tsx). */
+/** Inserts a temporal separator whenever the calendar-day group changes along the already-chronological Recent
+ * projection. */
 function RecentRowList(props: RecentRowListProps): ReactNode {
   const now = useSampledNow();
   return (
@@ -1079,9 +1034,8 @@ interface LoadMoreButtonProps {
   readonly testId: string;
 }
 
-/** Recoverable inline error/retry state occupies the same footprint as the
- * normal control - it never collapses the shell, and retrying just
- * re-invokes the same load action against the still-current cursor. */
+/** Recoverable inline error/retry state occupies the same footprint as the normal control - it never collapses
+ * the shell, and retrying just re-invokes the same load action against the still-current cursor. */
 function LoadMoreButton(props: LoadMoreButtonProps): ReactNode {
   if (props.hasError) {
     return (

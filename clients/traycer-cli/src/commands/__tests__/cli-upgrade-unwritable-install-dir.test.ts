@@ -15,18 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliVersionsManifest } from "../../registry/cli-versions";
 import type { HostPlatformKey } from "../../registry/types";
 
-// `buildCliUpgradeCommand` used to fall back to staging in
-// `mktemp(tmpdir())` when the install directory wasn't writable, then
-// download a full binary before discovering publication couldn't
-// possibly succeed (atomic publish means creating a file NEXT TO the
-// live binary) - leaking a downloaded executable and a temp dir on
-// every retry. The fix refuses immediately after resolving the asset,
-// BEFORE any download, with `E_CLI_UPGRADE_REPLACE_FAILED`.
-//
-// `fetchCliVersions` and `downloadToFile` are mocked to avoid the
-// network (and so the test can assert `downloadToFile` was never
-// called); everything else runs against a real tmp HOME, matching
-// `doctor/__tests__/pending-upgrade.test.ts`.
+// `buildCliUpgradeCommand` used to fall back to staging in `mktemp(tmpdir())` when the install directory wasn't writable, then download a full binary before discovering publication couldn't possibly succeed (atomic publish means creating a file NEXT TO the live binary) - leaking a downloaded executable and a temp dir on every retry.
+// The fix refuses immediately after resolving the asset, BEFORE any download, with `E_CLI_UPGRADE_REPLACE_FAILED`.
 
 const mocks = vi.hoisted(() => ({
   versionsManifest: null as CliVersionsManifest | null,
@@ -167,10 +157,7 @@ async function makeVersionsManifest(
   };
 }
 
-// Root and Windows both ignore/behave differently under POSIX directory
-// mode bits, so the unwritable-directory scenario is unreliable there -
-// same guard `doctor/__tests__/pending-upgrade.test.ts` uses for its
-// EACCES case.
+// Root and Windows both ignore/behave differently under POSIX directory mode bits, so the unwritable-directory scenario is unreliable there - same guard `doctor/__tests__/pending-upgrade.test.ts` uses for its EACCES case.
 const canTestUnwritableDir =
   process.platform !== "win32" &&
   !(typeof process.getuid === "function" && process.getuid() === 0);
@@ -222,9 +209,8 @@ describe("buildCliUpgradeCommand refuses an unwritable install dir before downlo
       const platformKey = await currentPlatformKey();
       mocks.versionsManifest = await makeVersionsManifest(platformKey);
 
-      // Strip write permission from the install dir so `directoryWritable`
-      // reports false. Always re-grant in `finally` so cleanup (and the
-      // afterEach `rmSync` in other tests sharing this tmp root) succeeds.
+      // Strip write permission from the install dir so `directoryWritable` reports false.
+      // Always re-grant in `finally` so cleanup (and the afterEach `rmSync` in other tests sharing this tmp root) succeeds.
       chmodSync(installDir, 0o500);
       try {
         const { buildCliUpgradeCommand } = await import("../cli-upgrade");

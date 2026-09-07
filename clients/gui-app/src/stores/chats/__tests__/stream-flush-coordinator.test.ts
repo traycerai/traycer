@@ -236,9 +236,8 @@ describe("stream flush coordinator", () => {
     expect(fake.frameCount()).toBe(0);
 
     fake.advance(1);
-    // The deadline elapsed, but a visible store is never flushed by the
-    // timer itself - it hands off to a frame (see `tick`'s
-    // `source === "deadline" && entry.visible` skip).
+    // The deadline elapsed, but a visible store is never flushed by the timer itself - it hands off to
+    // a frame (see `tick`'s `source === "deadline" && entry.visible` skip).
     expect(store.flushCount()).toBe(1);
     expect(fake.frameCount()).toBe(1);
     expect(fake.timerCount()).toBe(1);
@@ -317,9 +316,8 @@ describe("stream flush coordinator", () => {
     expect(fake.frameCount()).toBe(0);
     expect(fake.timerCount()).toBe(1);
 
-    // The floor elapses: the deadline hands off to a frame instead of
-    // flushing directly - a starved rAF must not turn this into a bare
-    // 32ms-cadence timer flush.
+    // The floor elapses: the deadline hands off to a frame instead of flushing directly - a starved
+    // rAF must not turn this into a bare 32ms-cadence timer flush.
     fake.advance(VISIBLE_FLUSH_MIN_INTERVAL_MS - 10);
     expect(store.flushCount()).toBe(1);
     expect(fake.frameCount()).toBe(1);
@@ -334,9 +332,8 @@ describe("stream flush coordinator", () => {
   });
 
   it("arms a hidden store's first-flush deadline from its registration time, not from when the first delta arrives", () => {
-    // Scenario 1: registered at t=0. A delta arriving well after registration
-    // must still be due at registeredAt + interval, not at (delta time) +
-    // interval and not immediately.
+    // Scenario 1: registered at t=0. A delta arriving well after registration must still be due at
+    // registeredAt + interval, not at (delta time) + interval and not immediately.
     const fakeA = createFakeTimers();
     const coordinatorA = createStreamFlushCoordinator(fakeA.timers);
     const storeA = registerFakeStore(coordinatorA);
@@ -354,10 +351,7 @@ describe("stream flush coordinator", () => {
     // delta's own arrival (100) and not at delta + interval (600).
     expect(storeA.flushCount()).toBe(1);
 
-    // Scenario 2: registration itself happens after time has already passed
-    // on the clock. Using `0` instead of `registeredAt` would put the
-    // deadline in the past the instant the delta arrives, flushing far too
-    // early; the fix is due = registeredAt (1000) + interval.
+    // Scenario 2: registration itself happens after time has already passed on the clock.
     const fakeB = createFakeTimers();
     fakeB.advance(1000);
     const coordinatorB = createStreamFlushCoordinator(fakeB.timers);
@@ -395,18 +389,14 @@ describe("stream flush coordinator", () => {
     expect(fake.frameCount()).toBe(1);
     expect(fake.timerCount()).toBe(1);
 
-    // B (hidden) buffers at t=310. B's own deadline - its last flush (0)
-    // plus HIDDEN_FLUSH_INTERVAL_MS = 500 - is earlier than A's armed
-    // fallback (800), so the single shared timer must be replaced with B's
-    // earlier deadline rather than staying parked on A's later one.
+    // B (hidden) buffers at t=310.
     fake.advance(10);
     storeB.bufferDelta();
     expect(fake.frameCount()).toBe(1); // A's frame is untouched
     expect(fake.timerCount()).toBe(1); // replaced: now due at 500, not 800
 
-    // Advancing to B's deadline (500) without ever firing a frame still
-    // flushes B - proving the shared timer really moved to 500 instead of
-    // staying parked at A's later fallback.
+    // Advancing to B's deadline (500) without ever firing a frame still flushes B - proving the shared
+    // timer really moved to 500 instead of staying parked at A's later fallback.
     fake.advance(500 - 310);
     expect(storeB.flushCount()).toBe(2);
     // A is visible: the deadline tick must not flush it directly, only
@@ -420,10 +410,8 @@ describe("stream flush coordinator", () => {
     const coordinator = createStreamFlushCoordinator(fake.timers);
 
     /**
-     * A store that immediately re-buffers a fresh delta the instant its own
-     * flush lands, so it keeps re-arming its hidden deadline forever - a
-     * continuously streaming hidden chat, unlike `registerFakeStore`'s
-     * one-shot buffers.
+     * A store that immediately re-buffers a fresh delta the instant its own flush lands, so it keeps
+     * re-arming its hidden deadline forever - a continuously streaming hidden chat, unlike
      */
     function registerContinuouslyStreamingStore(): {
       readonly bufferDelta: () => void;
@@ -462,9 +450,8 @@ describe("stream flush coordinator", () => {
     h1.setVisible(false);
     h1.bufferDelta();
 
-    // t=250: H2 flushes once via a frame, then goes hidden and immediately
-    // re-buffers - its next hidden deadline is due at 250 + 500 = 750,
-    // staggered 250ms away from H1's.
+    // t=250: H2 flushes once via a frame, then goes hidden and immediately re-buffers - its next
+    // hidden deadline is due at 250 + 500 = 750, staggered 250ms away from H1's.
     fake.advance(250);
     const h2 = registerContinuouslyStreamingStore();
     h2.bufferDelta();
@@ -473,11 +460,8 @@ describe("stream flush coordinator", () => {
     h2.setVisible(false);
     h2.bufferDelta();
 
-    // t=300: V (visible) buffers - arms a frame plus a fallback due at
-    // 300 + FRAME_TIMEOUT_FALLBACK_MS = 800. From here on, rAF never fires
-    // again: H1's and H2's hidden deadlines (500, 750, ...) each cancel and
-    // re-arm V's frame before V's own fallback is due, and must NOT push
-    // that fallback out by another 500ms every time they do.
+    // t=300: V (visible) buffers - arms a frame plus a fallback due at 300 + FRAME_TIMEOUT_FALLBACK_MS
+    // = 800.
     fake.advance(50);
     const v = registerFakeStore(coordinator);
     v.bufferDelta();
@@ -487,9 +471,8 @@ describe("stream flush coordinator", () => {
     expect(v.flushCount()).toBe(0);
     expect(h1.flushCount()).toBe(2);
 
-    // H2's deadline (750) hands off to a frame too; V still has not
-    // flushed - if the fallback were reset on every hand-off it would now
-    // be due at 750 + 500 = 1250, not the original 800.
+    // H2's deadline (750) hands off to a frame too; V still has not flushed - if the fallback were
+    // reset on every hand-off it would now be due at 750 + 500 = 1250, not the original 800.
     fake.advance(750 - 500);
     expect(v.flushCount()).toBe(0);
     expect(h2.flushCount()).toBe(2);
@@ -501,11 +484,8 @@ describe("stream flush coordinator", () => {
     fake.advance(1);
     expect(v.flushCount()).toBe(1);
 
-    // A further V delta at t=810, inside its 32ms floor since the 800
-    // flush, hands off through the same deadline -> frame -> fallback
-    // sequence: due at 800 + 32 = 832, then a fresh fallback at
-    // 832 + 500 = 1332. H1's (1000) and H2's (1250) hidden deadlines land
-    // in between and must not disturb it either.
+    // A further V delta at t=810, inside its 32ms floor since the 800 flush, hands off through the
+    // same deadline -> frame -> fallback sequence: due at 800 + 32 = 832, then a fresh fallback at 832
     fake.advance(10);
     v.bufferDelta();
 
@@ -543,19 +523,12 @@ describe("stream flush coordinator", () => {
     expect(fake.frameCount()).toBe(0);
     expect(fake.timerCount()).toBe(1);
 
-    // At t=100, H turns visible while still pending: a frame plus a fallback
-    // due at 100 + 500 = 600 are armed. The earlier hidden deadline (500) is
-    // still the earliest known timer, so it stays the physically scheduled
-    // one (armTimer keeps an earlier timer over a later one) - that stale
-    // deadline is exactly what must not flush H early. Never fire a frame
-    // from here on (rAF starved).
+    // At t=100, H turns visible while still pending: a frame plus a fallback due at 100 + 500 = 600
+    // are armed.
     fake.advance(50);
     h.setVisible(true);
 
-    // t=500: the stale hidden-tier deadline fires. H is visible now, so the
-    // "deadline" tick must skip it (not flush directly) and hand off to a
-    // frame instead - with the ORIGINAL fallback due time (600) preserved,
-    // not pushed to 500 + 500 = 1000.
+    // t=500: the stale hidden-tier deadline fires.
     fake.advance(500 - 100);
     expect(h.flushCount()).toBe(1);
 
@@ -573,19 +546,11 @@ describe("stream flush coordinator", () => {
     const coordinator = createStreamFlushCoordinator(fake.timers);
     const v = registerFakeStore(coordinator);
 
-    // V's first-ever delta at t=1 arms a frame plus a fallback due at
-    // 1 + 500 = 501 (dueAt is -Infinity for a store that has never flushed,
-    // so this is due immediately regardless of the visible floor).
     fake.advance(1);
     v.bufferDelta();
     expect(fake.frameCount()).toBe(1);
     expect(fake.timerCount()).toBe(1);
 
-    // At t=5, V turns hidden while still pending: its hidden deadline -
-    // registeredAt(0) + HIDDEN_FLUSH_INTERVAL_MS(500) = 500 - is EARLIER
-    // than the already-armed visible fallback (501), so it must replace
-    // that timer instead of leaving V to ride the stale visible fallback
-    // out to 501. Never fire a frame from here on.
     fake.advance(4);
     v.setVisible(false);
 
@@ -608,9 +573,7 @@ describe("stream flush coordinator", () => {
     expect(fake.frameCount()).toBe(1);
     expect(fake.timerCount()).toBe(1);
 
-    // At t=100, V unregisters - it was the only entry, so the coordinator
-    // disarms entirely. Advancing all the way to t=2000 with no frames ever
-    // fired must flush nothing: V is gone, and nothing else is registered.
+    // At t=100, V unregisters - it was the only entry, so the coordinator disarms entirely.
     fake.advance(100);
     v.unregister();
 
@@ -625,9 +588,8 @@ describe("stream flush coordinator", () => {
     expect(fake.frameCount()).toBe(1);
     expect(fake.timerCount()).toBe(1);
 
-    // A stale fallback due at 500 would be clamped to "now" and fire
-    // immediately (0ms delay) the moment W arms it; the fresh 2500 due time
-    // must NOT flush W until then.
+    // A stale fallback due at 500 would be clamped to "now" and fire immediately (0ms delay) the
+    // moment W arms it; the fresh 2500 due time must NOT flush W until then.
     fake.advance(499);
     expect(w.flushCount()).toBe(0);
     fake.advance(1);

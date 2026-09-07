@@ -7,32 +7,15 @@ import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context"
 import type { ReportIssueErrorCapture } from "@/lib/report-issue-error-capture";
 
 export interface AppErrorScreenProps {
-  /** The thrown value, surfaced as a short technical detail for support. */
   readonly error: unknown;
-  /**
-   * Captured ONCE by the caller at catch time (a class boundary's
-   * `componentDidCatch`, or an idempotent function-component adapter) via
-   * `captureReportIssueError` - never derived here, since
-   * that call mints an id and reports to Sentry, both of which must not
-   * repeat on every re-render. `null` only when nothing was ever caught (this
-   * component is never rendered in that state by either real caller, but the
-   * type allows a synthetic/test render).
-   */
+  /** Captured once by the caller at catch time (a class boundary's `componentDidCatch`, or an idempotent
+   * function-component adapter) via `captureReportIssueError`. */
   readonly capture: ReportIssueErrorCapture | null;
-  /** Reload the renderer window (`window.location.reload()`). */
   readonly onRefresh: () => void;
-  /** Navigate back to the home route and clear the error. */
   readonly onReturnHome: () => void;
 }
 
-/**
- * Full-viewport fallback rendered when a renderer error escapes a feature's
- * own handling - both the router's `defaultErrorComponent` (route-tree crashes)
- * and the top-level `RootErrorBoundary` (provider crashes above the router)
- * render this so every uncaught error lands on one recognizable card instead
- * of a blank canvas. Presentational only: the host decides what "refresh" and
- * "return home" do.
- */
+/** Full-viewport fallback rendered when a renderer error escapes a feature's own handling. */
 export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
   const detail = errorDetail(props.error);
   return (
@@ -106,11 +89,8 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
 
 const MAX_DETAIL_LENGTH = 300;
 
-/**
- * Best-effort one-line technical detail for the card. Returns the error
- * message (truncated) so support can identify the failure; never the stack or
- * any payload, keeping user content out of the surface.
- */
+/** Returns the error message (truncated) so support can identify the failure; never the stack or any payload,
+ * keeping user content out of the surface. */
 function errorDetail(error: unknown): string | null {
   const message = readErrorMessage(error);
   if (message === null) return null;

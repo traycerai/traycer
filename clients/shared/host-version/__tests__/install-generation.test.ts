@@ -65,10 +65,6 @@ describe("encodeInstallGeneration", () => {
   });
 
   it("never collides an installId-shaped fingerprint with a legacy-tuple one", () => {
-    // Deliberately construct a legacy tuple whose fields, if concatenated
-    // without the tag prefix, could coincidentally resemble an installId
-    // fingerprint - the `id:`/`legacy:` prefixes keep the two encodings in
-    // disjoint namespaces regardless of field content.
     const legacy = encodeInstallGeneration({
       installId: null,
       installedAt: "id:not-actually-an-installId",

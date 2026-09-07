@@ -114,9 +114,8 @@ function selectMentionSlice(state: {
 }): MentionPickerSlice {
   return {
     active: state.open && state.kind === "mention",
-    // Watched so a swap to a session with an identical query and step still
-    // republishes the rows `openPicker` just dropped. See the slash picker's
-    // slice for the swap this guards.
+    // Watched so a swap to a session with an identical query and step still republishes the rows `openPicker` just dropped.
+    // See the slash picker's slice for the swap this guards.
     sessionId: state.kind === "mention" ? state.sessionId : null,
     query: state.kind === "mention" ? state.query : "",
     step: state.kind === "mention" ? state.step : ROOT_MENTION_STEP,
@@ -130,20 +129,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const { active, sessionId, query, step } = slice;
   const debouncedQuery = useDebouncedValue(query, MENTION_QUERY_DEBOUNCE_MS);
 
-  // The @-mention Agent list is the ONLY consumer of the open-epic chat and
-  // TUI-agent records, and only while the picker is open. Source it HERE, gated
-  // on `active`, rather than threading it as an eager prop from the chat tile: a
-  // record's `updatedAt` bumps on every streaming-throttle tick (~80ms), which
-  // re-identified the records array and re-rendered the whole composer + its
-  // Radix chrome. Reading live via `getState` at query time keeps the recency
-  // sort accurate without subscribing the composer to that churn.
-  // `handle === null` is the landing composer (no open epic).
-  // The Epic's attached roots (binding running dirs + workspace paths on this
-  // host) drive which mention roots are eligible for the scoped
-  // `workspace.searchPaths`; anything not in this set (global folders, or every
-  // root when there is no open Epic) keeps the legacy raw-root RPC. Gated on the
-  // picker being open with a current Epic so a closed composer holds no
-  // bindings subscription.
+  // Source it HERE, gated on `active`, rather than threading it as an eager prop from the chat tile: a record's `updatedAt` bumps on every streaming-throttle tick (~80ms), which re-identified the records array and re-rendered the whole composer + its Radix chrome.
   const epicIdOrEmpty = currentEpicId ?? "";
   const bindingsQuery = useWorktreeListBindingsForEpicForClient({
     client: hostClient,
@@ -167,23 +153,12 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       currentEpicId,
       state.epic.title,
     );
-    // Snapshot the Agent list when the picker opens (`active` flips). The query
-    // filters this list downstream, so it does not need to re-pull per keystroke;
-    // the list only changes if an Agent is added/removed while the picker is
-    // open, which re-snapshots on the next open.
+    // Snapshot the Agent list when the picker opens (`active` flips).
+    // The query filters this list downstream, so it does not need to re-pull per keystroke; the list only changes if an Agent is added/removed while the picker is open, which re-snapshots on the next open.
   }, [active, handle, currentEpicId]);
 
-  // Plain terminals are the one Task entity that never reaches the Y.Doc - the
-  // host's `terminal.list` is their source of truth - so unlike the Agent and
-  // artifact lists above this one cannot be read off the open-epic store. It
-  // goes through the SAME query the Terminals panel uses, which means the two
-  // surfaces share one cache entry and can never disagree about what exists.
-  // A null client is `useTerminalListFor`'s disable switch, so a closed picker
-  // (or a composer with no open Task) holds no terminal subscription at all.
-  // "Requested" mirrors the query's real enable condition, including the
-  // client: with no hostClient the query is disabled and no rows are ever
-  // coming, so the zero-match verdict must not wait on it (a disabled query
-  // pends forever - gating on isPending would pin the menu open offline).
+  // Plain terminals are the one Task entity that never reaches the Y.Doc - the host's `terminal.list` is their source of truth - so unlike the Agent and artifact lists above this one cannot be read off the open-epic store.
+  // "Requested" mirrors the query's real enable condition, including the client: with no hostClient the query is disabled and no rows are ever coming, so the zero-match verdict must not wait on it (a disabled query pends forever - gating on isPending would pin the menu open offline).
   const terminalsRequested =
     active && currentEpicId !== null && hostClient !== null;
   const terminalListQuery = useTerminalListFor(
@@ -203,40 +178,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     );
   }, [terminalSessions, currentEpicId]);
 
-  // Browser tabs are sourced live from the same coordinator the canvas/sidebar
-  // browser surfaces read - no host RPC of its own, so this needs no
-  // request/loading plumbing the way workspace/epic sources do. Dormant
-  // sessions and tabs are NOT excluded: `page.attachTab` auto-wakes a dormant
-  // session before leasing it (`SessionReplTabSource.attach` ->
-  // `activateTabForAgent` -> `ensureTabAttached`, which runs
-  // `runDormantActivation` BEFORE the lease - see
-  // `browser-repl-tab-source.ts` on the host), the same path the GUI's own
-  // viewer uses to wake a tab on demand. So a dormant tab is fully
-  // mentionable - offering it here matches what attach actually does, and
-  // hiding it would withhold a reference the agent CAN resolve. The row
-  // still carries a `dormant` flag (see `BrowserTabMentionEntry`) purely for
-  // the menu's Moon glyph, which sets expectations that the first message to
-  // it pays a wake cost, not to gate whether it appears.
-  //
-  // This does NOT read `useMaybeBrowserSessionsContext()`: that context value
-  // is a fresh object on every sessions-stream frame (`patchState` in
-  // `browser-sessions-coordinator.ts` spreads state on each server frame, and
-  // the host emits several frames per agent browser tool call plus one per
-  // navigation), so subscribing the composer to it re-rendered the WHOLE
-  // composer subtree at frame rate even with the picker closed, and rebuilt
-  // the entire ranked menu every frame while open. Instead this subscribes
-  // straight to the coordinator registry
-  // (`browserSessionsCoordinatorsForEpic` /
-  // `subscribeToBrowserSessionsCoordinators`) through
-  // `useBrowserTabMentionEntries` below, which returns the closed-picker
-  // constant untouched and, while open, caches the built entries by a content
-  // key so a frame that changes nothing mention-relevant keeps the same array
-  // identity and re-runs nothing downstream.
-  //
-  // It fans out over EVERY host with an open browser surface in this epic, not
-  // just the canvas host's coordinator: a tab on another host is still
-  // mentionable, as snapshot-only context (spec decision #10). Only tabs on
-  // the chat's OWN host keep the drive token.
+  // So a dormant tab is fully mentionable - offering it here matches what attach actually does, and hiding it would withhold a reference the agent CAN resolve.
+  // This does NOT read `useMaybeBrowserSessionsContext()`: that context value is a fresh object on every sessions-stream frame (`patchState` in `browser-sessions-coordinator.ts` spreads state on each server frame, and the host emits several frames per agent browser tool call plus one per navigation), so subscribing the composer to it re-rendered the WHOLE composer subtree at frame rate even with the picker closed, and rebuilt the entire ranked menu every frame while open.
   const readiness = useReactiveHostReadiness(hostClient);
   const hostDirectory = useHostDirectory();
   const hostLabelOf = useCallback(
@@ -251,14 +194,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     active,
   });
 
-  // The current epic's COMPLETE local artifact set, read the same churn-free way
-  // (via `getState`) as the chats above. Cloud `epic.mention*` returns at most
-  // 25 artifacts per kind across all epics, so on a large epic some of the
-  // current epic's artifacts never make the cut; merging the local set in
-  // (see `enrichedArtifactEntries`) guarantees the user always sees every
-  // artifact of the epic they're working in. Unlike chats, the artifact mention
-  // providers don't query-filter downstream, so filter by the (debounced) query
-  // here to stay consistent with the cloud list.
+  // Cloud `epic.mention*` returns at most 25 artifacts per kind across all epics, so on a large epic some of the current epic's artifacts never make the cut; merging the local set in (see `enrichedArtifactEntries`) guarantees the user always sees every artifact of the epic they're working in.
+  // Unlike chats, the artifact mention providers don't query-filter downstream, so filter by the (debounced) query here to stay consistent with the cloud list.
   const localArtifactEntries = useMemo<
     ReadonlyArray<EpicMentionArtifactSuggestion>
   >(() => {
@@ -274,10 +211,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     );
   }, [active, handle, currentEpicId, debouncedQuery]);
 
-  // Gated on `active`: while the picker is closed this composer holds no
-  // tasks-cache subscription at all, so background cache ticks can't recompute
-  // the enrichment memos below (which would mint fresh array identities even
-  // when nothing is shown).
+  // Gated on `active`: while the picker is closed this composer holds no tasks-cache subscription at all, so background cache ticks can't recompute the enrichment memos below (which would mint fresh array identities even when nothing is shown).
   const { tasks: cachedEpicTasks } = useCloudEpicTasksQuery(undefined, {
     enabled: active,
   });
@@ -293,9 +227,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, cachedEpicTasks, debouncedQuery],
   );
 
-  // PR/issue rows for whichever step is open, plus that step's chrome. Both
-  // sections are read cache-only at root so root search has warm rows without
-  // a GitHub call per keystroke; only an opened section fetches.
+  // PR/issue rows for whichever step is open, plus that step's chrome.
+  // Both sections are read cache-only at root so root search has warm rows without a GitHub call per keystroke; only an opened section fetches.
   const github = useGithubMentionSections({
     client: hostClient,
     active,
@@ -307,11 +240,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     limit: MENTION_RESULT_LIMIT,
   });
 
-  // Request-shaping contexts carry no rows; the GitHub arm is only read by
-  // `stepEntries`/`rootSearchEntries`, which run off `resolvedContext` below.
-  // The request contexts drive host lookups, never the rendered rows, so this
-  // stub reports `supported: false` - it is not an answer about the host, and
-  // nothing should read a category's availability off it.
+  // Request-shaping contexts carry no rows; the GitHub arm is only read by `stepEntries`/`rootSearchEntries`, which run off `resolvedContext` below.
+  // The request contexts drive host lookups, never the rendered rows, so this stub reports `supported: false` - it is not an answer about the host, and nothing should read a category's availability off it.
   const emptyGithubContext = useMemo(
     () => ({
       pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
@@ -322,9 +252,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [],
   );
 
-  // Live `query` drives the picker shell + workspace requests so file/folder
-  // results feel immediate; cloud-backed artifact requests use the debounced
-  // query so each keystroke doesn't fan out an `epic.mention*` RPC per provider.
+  // Live `query` drives the picker shell + workspace requests so file/folder results feel immediate; cloud-backed artifact requests use the debounced query so each keystroke doesn't fan out an `epic.mention*` RPC per provider.
   const requestContext = useMemo<ComposerMentionProviderContext>(
     () => ({
       roots: mentionRoots,
@@ -519,11 +447,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       workspacePending: workspaceFetching,
       epicRequested: epicRequests.length > 0,
       epicPending: epicFetching,
-      // Core flows asks for the header spinner AND the `Checking…` stamp during
-      // a background refetch, explicitly "same as Artifacts" - so the GitHub
-      // sections drive it too. They sit in the same menu as the section that
-      // does; reporting in-flight work differently there would read as one of
-      // them being broken.
+      // Core flows asks for the header spinner AND the `Checking…` stamp during a background refetch, explicitly "same as Artifacts" - so the GitHub sections drive it too.
+      // They sit in the same menu as the section that does; reporting in-flight work differently there would read as one of them being broken.
       githubPending: github.checking,
     });
 
@@ -568,11 +493,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     pickerStore.getState().setFetching(fetching);
   }, [active, fetching, pickerStore]);
 
-  // Zero-real-match dismissal: once every source has settled for the CURRENT
-  // query (debounce flushed, nothing loading or refetching) and the ranked
-  // root search matched nothing, the menu closes the way Escape would.
-  // Session-scoped close, so a session that already yielded cannot shut its
-  // successor's menu.
+  // Zero-real-match dismissal: once every source has settled for the CURRENT query (debounce flushed, nothing loading or refetching) and the ranked root search matched nothing, the menu closes the way Escape would.
+  // Session-scoped close, so a session that already yielded cannot shut its successor's menu.
   const dismissForNoMatches = mentionNoMatchDismissVerdict({
     active,
     stepKind: step.kind,
@@ -585,23 +507,14 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     workspaceError,
     epicRequestCount: epicRequests.length,
     epicError,
-    // The terminal list feeds root-search entries but lives outside the
-    // aggregated loading/fetching flags above (those cover only the
-    // query-driven workspace/epic requests) - so its state gates the
-    // zero-match verdict separately.
+    // The terminal list feeds root-search entries but lives outside the aggregated loading/fetching flags above (those cover only the query-driven workspace/epic requests) - so its state gates the zero-match verdict separately.
     terminalRequested: terminalsRequested,
     terminalLoading: terminalListQuery.isLoading,
     terminalFetching: terminalListQuery.isFetching,
     terminalError: terminalListQuery.error,
     githubErrored: github.errored,
-    // Only a reference the GitHub sections could actually resolve earns the
-    // exemption. The exemption exists because those sections offer a
-    // `Resolve in ...` row for a reference the cache does not hold - but when
-    // the category is unavailable, neither section contributes any row at
-    // all. Exempting `@#123` there suppresses the ordinary zero-match close
-    // over a picker that is genuinely empty and can never fill, and it stays
-    // open indefinitely. Availability is the provider's OWN predicate, not a
-    // restated copy of it, so a new availability term cannot strand this gate.
+    // The exemption exists because those sections offer a `Resolve in ...` row for a reference the cache does not hold - but when the category is unavailable, neither section contributes any row at all.
+    // Availability is the provider's OWN predicate, not a restated copy of it, so a new availability term cannot strand this gate.
     referenceQuery:
       githubMentionCategoryAvailable(
         github.context.supported,
@@ -612,14 +525,10 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   useEffect(() => {
     if (!dismissForNoMatches || sessionId === null) return;
     const state = pickerStore.getState();
-    // A stale effect must never fire the CURRENT session's dismiss handle:
-    // this verdict was computed for `sessionId`, but the store may already
-    // belong to a successor session by the time the effect runs.
+    // A stale effect must never fire the CURRENT session's dismiss handle: this verdict was computed for `sessionId`, but the store may already belong to a successor session by the time the effect runs.
     if (state.sessionId !== sessionId) return;
-    // Prefer the session's dismissal handle: it also ends the tiptap
-    // suggestion session, so the zero-match close cannot leak into the next
-    // `@` occurrence. Bare `closeSession` is the fallback for owners that
-    // registered no handle.
+    // Prefer the session's dismissal handle: it also ends the tiptap suggestion session, so the zero-match close cannot leak into the next `@` occurrence.
+    // Bare `closeSession` is the fallback for owners that registered no handle.
     if (state.dismiss !== null) {
       state.dismiss();
       return;
@@ -650,28 +559,13 @@ interface MentionStepChromeInput {
   readonly githubChrome: MentionStepChrome | null;
   readonly artifactRefetch: () => Promise<void>;
   readonly artifactFetching: boolean;
-  /**
-   * The bound host, part of the refresh button's target identity beside the
-   * epic. The landing composer's `epicId` is empty on EVERY host, so without
-   * the host in the key an app-wide host swap mid-refresh keeps the same
-   * control mounted - its component-local spinner then holds the NEW host's
-   * Refresh disabled until the DEPARTED host's promise settles or times out.
-   */
+  /** The bound host, part of the refresh button's target identity beside the epic. The landing composer's `epicId` is empty on EVERY host, so without the host in the key an app-wide host swap mid-refresh keeps the same control mounted - its component-local spinner then holds the NEW host's Refresh disabled until the DEPARTED host's promise settles or times out. */
   readonly hostId: string | null;
   /** Artifacts are per-epic, so the epic is this refresh button's target. */
   readonly epicId: string;
 }
 
-/**
- * The chrome the CURRENT step publishes.
- *
- * The GitHub sections bring their own; Artifacts contributes only a refresh,
- * and this is where the long-standing no-op is fixed. The button used to call
- * `setStep` with the step it was already on, which the picker store
- * early-returns from - so it spun for its 350ms minimum and refetched nothing.
- * It now calls the `epic.mention*` queries' real `refetch`, which was exposed
- * all along and never called.
- */
+/** It now calls the `epic.mention*` queries' real `refetch`, which was exposed all along and never called. */
 function useMentionStepChrome(
   input: MentionStepChromeInput,
 ): MentionStepChrome | null {
@@ -684,9 +578,8 @@ function useMentionStepChrome(
     hostId,
     epicId,
   } = input;
-  // `refetch` is rebuilt every render (it closes over the current query array),
-  // so publishing it directly would change the chrome's identity on every pass
-  // and republish forever. The ref holds ONE stable closure over the latest.
+  // `refetch` is rebuilt every render (it closes over the current query array), so publishing it directly would change the chrome's identity on every pass and republish forever.
+  // The ref holds ONE stable closure over the latest.
   const artifactRefetchRef = useRef(artifactRefetch);
   useEffect(() => {
     artifactRefetchRef.current = artifactRefetch;
@@ -703,10 +596,8 @@ function useMentionStepChrome(
         refreshing: artifactFetching,
         label: "Refresh artifacts",
         timeoutMs: ARTIFACT_REFRESH_TIMEOUT_MS,
-        // Answered BY the bound host FOR the current epic, so both name the
-        // target - same identity rule as the GitHub sections' key, whose
-        // `scopeKey` already carries the host. See `hostId` above for the
-        // landing-composer swap this remounts across.
+        // Answered BY the bound host FOR the current epic, so both name the target - same identity rule as the GitHub sections' key, whose `scopeKey` already carries the host.
+        // See `hostId` above for the landing-composer swap this remounts across.
         targetKey: artifactsRefreshTargetKey(hostId, epicId),
       },
       freshness: null,
@@ -727,12 +618,7 @@ function useMentionStepChrome(
   ]);
 }
 
-/**
- * The artifact refresh button's remount identity: host AND epic. The two
- * landing composers of two hosts share the empty epic, so an epic-only key
- * survives an app-wide host swap and strands the new host's control behind
- * the departed host's in-flight spinner.
- */
+/** The artifact refresh button's remount identity: host AND epic. The two landing composers of two hosts share the empty epic, so an epic-only key survives an app-wide host swap and strands the new host's control behind the departed host's in-flight spinner. */
 export function artifactsRefreshTargetKey(
   hostId: string | null,
   epicId: string,
@@ -756,24 +642,12 @@ interface MentionNoMatchVerdictInput {
   readonly terminalLoading: boolean;
   readonly terminalFetching: boolean;
   readonly terminalError: Error | null;
-  /**
-   * Already requested-gated at the source: each catalog reports an error only
-   * while its own read is enabled, so there is no separate request count to
-   * pair it with here.
-   */
+  /** Already requested-gated at the source: each catalog reports an error only while its own read is enabled, so there is no separate request count to pair it with here. */
   readonly githubErrored: boolean;
   readonly referenceQuery: boolean;
 }
 
-/**
- * Whether the open mention picker should close because a fully settled search
- * genuinely matched nothing. A source is "errored" only when it was actually
- * asked for rows (request count > 0, or the terminal list enabled) — a failed
- * search proves nothing empty, so it blocks this close and only this close.
- * The terminal list is folded into the settled/errored aggregates here: its
- * rows feed root search, so a still-loading or failed terminal query must
- * hold the menu open exactly like the workspace and epic sources do.
- */
+/** A source is "errored" only when it was actually asked for rows (request count > 0, or the terminal list enabled) - a failed search proves nothing empty, so it blocks this close and only this close. */
 export function mentionNoMatchDismissVerdict(
   input: MentionNoMatchVerdictInput,
 ): boolean {
@@ -820,10 +694,8 @@ function buildChatMentionEntry(
     epicId,
     epicTitle,
     chatId: chat.id,
-    // The picker addresses the durable Agent, so an untitled record falls back
-    // to "Untitled agent" regardless of interface. A record whose stored title
-    // literally reads "Untitled chat" keeps that text - it is data, not a
-    // fallback, and is indistinguishable from a title the user chose.
+    // The picker addresses the durable Agent, so an untitled record falls back to "Untitled agent" regardless of interface.
+    // A record whose stored title literally reads "Untitled chat" keeps that text - it is data, not a fallback, and is indistinguishable from a title the user chose.
     label: displayTitle(chat.title, "agent"),
     description: epicTitle,
     parentId: chat.parentId,
@@ -836,12 +708,7 @@ function buildChatMentionEntry(
   };
 }
 
-/**
- * `null` for an agent this build cannot address: a cross-host replica whose
- * cloud row predates `runSettingsSummary` carries no harness, and a mention
- * entry's whole purpose is to route a message to one. It stays in the roster
- * (the protocol contract keeps it listed) and simply is not offered here.
- */
+/** `null` for an agent this build cannot address: a cross-host replica whose cloud row predates `runSettingsSummary` carries no harness, and a mention entry's whole purpose is to route a message to one. It stays in the roster (the protocol contract keeps it listed) and simply is not offered here. */
 function buildTerminalAgentMentionEntry(
   agent: TuiAgentProjection,
   epicId: string,
@@ -865,9 +732,8 @@ function buildTerminalAgentMentionEntry(
     updatedAt: agent.updatedAt,
     archived: agent.archivedAt !== null,
     agentInterface: "terminal",
-    // Delivery support is a runtime capability, not a referenceability gate:
-    // Codex and OpenCode Terminal Agents stay listed with `false` here rather
-    // than being filtered out. Single-sourced from the protocol's A2A gate.
+    // Delivery support is a runtime capability, not a referenceability gate: Codex and OpenCode Terminal Agents stay listed with `false` here rather than being filtered out.
+    // Single-sourced from the protocol's A2A gate.
     runtimeSupportsMessageDelivery: canReceiveA2AMessages({
       surface: "tui",
       harnessId: agent.harnessId,
@@ -875,20 +741,7 @@ function buildTerminalAgentMentionEntry(
   };
 }
 
-/**
- * Pure projection of the open-epic Agent records - GUI chat-interface Agents
- * AND TUI terminal-interface Agents - into one @-mention suggestion list.
- * Extracted so the picker can source the list live at query time (see
- * `useMentionItems`) instead of having it threaded in as an eager prop - which
- * re-rendered the whole composer on every streaming `updatedAt` bump.
- *
- * Every projected record is referenceable. Interface and message-delivery
- * capability ride along as secondary metadata so the picker can label a row
- * without dropping it. The one exclusion is Cursor: it is GUI-only in the
- * product today, so a persisted Cursor TUI record (a reserved compatibility
- * value in the released schema) must not surface as a referenceable Terminal
- * Agent until minimal Cursor TUI support ships.
- */
+/** The one exclusion is Cursor: it is GUI-only in the product today, so a persisted Cursor TUI record (a reserved compatibility value in the released schema) must not surface as a referenceable Terminal Agent until minimal Cursor TUI support ships. */
 export function epicAgentMentionEntriesFromEpic(
   chats: ChatsSlice,
   tuiAgents: TerminalAgentsSlice,
@@ -917,16 +770,7 @@ export function epicAgentMentionEntriesFromEpic(
   return entries.length === 0 ? EMPTY_AGENT_ENTRIES : entries;
 }
 
-/**
- * Pure projection of the host's `terminal.list` rows into @-mention terminal
- * suggestions for one Task.
- *
- * Filtered by `isVisibleEpicTerminalSession` - the same predicate the Terminals
- * panel applies - so the picker lists a terminal exactly while that panel does.
- * That is the whole visibility rule: it also keeps the host's `terminal-agent`
- * backing PTYs out (they are Agents, listed under Agents) and drops sessions
- * belonging to another Task or to the host's landing scope.
- */
+/** Pure projection of the host's `terminal.list` rows into @-mention terminal suggestions for one Task. Filtered by `isVisibleEpicTerminalSession` - the same predicate the Terminals panel applies - so the picker lists a terminal exactly while that panel does. */
 export function epicTerminalMentionEntriesFromSessions(
   sessions: ReadonlyArray<CanonicalTerminalSessionInfo>,
   epicId: string,
@@ -938,26 +782,14 @@ export function epicTerminalMentionEntriesFromSessions(
   return entries.length === 0 ? EMPTY_TERMINAL_ENTRIES : entries;
 }
 
-/**
- * One host's browser inventory as the picker sees it: the coordinator that
- * reaches it, the snapshot it last published, and that host's directory
- * label - resolved once per source so the functions below read it off the
- * object instead of each taking their own `hostLabelOf` resolver.
- */
+/** One host's browser inventory as the picker sees it: the coordinator that reaches it, the snapshot it last published, and that host's directory label - resolved once per source so the functions below read it off the object instead of each taking their own `hostLabelOf` resolver. */
 export interface BrowserTabMentionSource {
   readonly key: string;
   readonly state: BrowserSessionsState;
   readonly hostLabel: string | null;
 }
 
-/**
- * Resolves each open coordinator's directory label once, so the projection
- * below reads it off the source object instead of threading a resolver.
- *
- * A coordinator with no host id yet (its stream has not answered) carries a
- * null label rather than being dropped: its rows are still mentionable, just
- * unattributed.
- */
+/** Resolves each open coordinator's directory label once, so the projection below reads it off the source object instead of threading a resolver. A coordinator with no host id yet (its stream has not answered) carries a null label rather than being dropped: its rows are still mentionable, just unattributed. */
 export function browserTabMentionSourcesFrom(
   coordinators: ReadonlyArray<BrowserSessionsCoordinatorEntry>,
   hostLabelOf: (hostId: string) => string | null,
@@ -969,27 +801,14 @@ export function browserTabMentionSourcesFrom(
   }));
 }
 
-/**
- * Pure projection of every open host's live browser-sessions state into
- * @-mention tab suggestions.
- *
- * The picker used to see exactly ONE coordinator - the canvas host's - and
- * dropped its rows whenever that host was not the chat's. Cross-host mentions
- * (spec decision #10) invert that: every host with an open browser surface in
- * this epic contributes rows, and the ones that are not the chat's host come
- * back marked `contextOnly`. Those attach a snapshot (url, title, screenshot)
- * instead of a `browser-tab:` drive token, because a session is host-local for
- * life and the chat's agent could never attach to it.
- */
+/** The picker used to see exactly ONE coordinator - the canvas host's - and dropped its rows whenever that host was not the chat's. Those attach a snapshot (url, title, screenshot) instead of a `browser-tab:` drive token, because a session is host-local for life and the chat's agent could never attach to it. */
 export function browserTabMentionEntriesFromSessions(
   sources: ReadonlyArray<BrowserTabMentionSource>,
   chatHostId: string | null,
   active: boolean,
 ): ReadonlyArray<BrowserTabMentionEntry> {
-  // A null `chatHostId` is "readiness has not resolved yet", not "the chat
-  // has no host": marking every row `contextOnly` on that would downgrade the
-  // chat's OWN tabs to snapshots for as long as it lasts. No rows until we
-  // know which host to compare against.
+  // A null `chatHostId` is "readiness has not resolved yet", not "the chat has no host": marking every row `contextOnly` on that would downgrade the chat's OWN tabs to snapshots for as long as it lasts.
+  // No rows until we know which host to compare against.
   if (!active || chatHostId === null) return EMPTY_BROWSER_TAB_ENTRIES;
   const entries = sources.flatMap((source) => {
     const hostId = source.state.hostId;
@@ -1014,10 +833,7 @@ export function browserTabMentionEntriesFromSessions(
         // stands in for the co-located-pane-group rank the design asks for.
         coLocated: tab.viewed,
         lastActivityAt: session.lastActivityAt,
-        // Per-TAB status, matching the sidebar's own source of truth for the
-        // dormant Moon glyph (`epic-browser-sidebar-row.tsx`'s
-        // `tab.status === "dormant"`) rather than the SESSION's runtime kind -
-        // a session can be non-dormant while carrying individual dormant tabs.
+        // Per-TAB status, matching the sidebar's own source of truth for the dormant Moon glyph (`epic-browser-sidebar-row.tsx`'s `tab.status === "dormant"`) rather than the SESSION's runtime kind - a session can be non-dormant while carrying individual dormant tabs.
         dormant: tab.status === "dormant",
       })),
     );
@@ -1025,29 +841,7 @@ export function browserTabMentionEntriesFromSessions(
   return entries;
 }
 
-/**
- * The mention-relevant content key for the aggregate snapshot: per host, every
- * tab's `sessionId|tabId|title|url|viewed|status`, which is exactly what
- * `browserTabMentionEntriesFromSessions` turns into a `BrowserTabMentionEntry`
- * (title via `resolveTabTitle`, `coLocated` from `viewed`, `dormant` from
- * `status`), plus each host id so a host appearing, leaving or swapping is
- * never masked by an identical tab set. `status` MUST be in the key - it is a
- * required field on the produced entry, so a tab waking (or going dormant)
- * with everything else unchanged has to invalidate the cached array, or the
- * snapshot cache would keep serving a stale `dormant` flag until some
- * unrelated field also changed.
- *
- * Deliberately excludes `lastActivityAt`: the host bumps it on essentially
- * every session frame (each agent browser tool call, each navigation), so
- * folding it in would defeat the cache - every frame would mint a new key and
- * a new array. `lastActivityAt` is read straight off the LIVE session at
- * build time instead (see `browserTabMentionEntriesFromSessions` above), so a
- * cache hit still serves whatever value was live at the moment the cached
- * array was built. It is only ever a secondary sort tiebreak, after
- * `coLocated`, so serving a momentarily-stale tiebreak while the picker stays
- * open (until some OTHER field changes and rebuilds the array anyway) is an
- * acceptable trade for not rebuilding the ranked menu at frame rate.
- */
+/** The mention-relevant content key for the aggregate snapshot: per host, every tab's `sessionId|tabId|title|url|viewed|status`, which is exactly what `browserTabMentionEntriesFromSessions` turns into a `BrowserTabMentionEntry` (title via `resolveTabTitle`, `coLocated` from `viewed`, `dormant` from `status`), plus each host id so a host appearing, leaving or swapping is never masked by an identical tab set. `status` MUST be in the key - it is a required field on the produced entry, so a tab waking (or going dormant) with everything else unchanged has to invalidate the cached array, or the snapshot cache would keep serving a stale `dormant` flag until some unrelated field also changed. */
 function browserTabMentionEntriesContentKey(
   sources: ReadonlyArray<BrowserTabMentionSource>,
   chatHostId: string | null,
@@ -1063,9 +857,7 @@ function browserTabMentionEntriesContentKey(
       }
     }
     const hostId = source.state.hostId;
-    // The label rides the key because it is not just chrome: it goes into the
-    // attached text line, so a renamed host must not keep serving the old
-    // name out of the cache.
+    // The label rides the key because it is not just chrome: it goes into the attached text line, so a renamed host must not keep serving the old name out of the cache.
     perHost.push(
       `${source.key}\x1f${hostId ?? ""}\x1f${source.hostLabel ?? ""}\x1f${parts.join("\x1e")}`,
     );
@@ -1073,15 +865,7 @@ function browserTabMentionEntriesContentKey(
   return `${chatHostId ?? ""}\x1d${perHost.join("\x1d")}`;
 }
 
-/**
- * A content-keyed cache over `browserTabMentionEntriesFromSessions`: repeated
- * calls whose aggregate snapshot hashes to the same
- * `browserTabMentionEntriesContentKey` return the SAME array reference
- * instead of rebuilding it. Factored out as a plain closure (no React) so
- * `useBrowserTabMentionEntries` can hand one instance to
- * `useSyncExternalStore` as its `getSnapshot`, and so this caching behavior is
- * directly testable without rendering a component.
- */
+/** A content-keyed cache over `browserTabMentionEntriesFromSessions`: repeated calls whose aggregate snapshot hashes to the same `browserTabMentionEntriesContentKey` return the SAME array reference instead of rebuilding it. Factored out as a plain closure (no React) so `useBrowserTabMentionEntries` can hand one instance to `useSyncExternalStore` as its `getSnapshot`, and so this caching behavior is directly testable without rendering a component. */
 export function createBrowserTabMentionEntriesSnapshotCache(): (
   sources: ReadonlyArray<BrowserTabMentionSource>,
   chatHostId: string | null,
@@ -1104,26 +888,7 @@ export function createBrowserTabMentionEntriesSnapshotCache(): (
   };
 }
 
-/**
- * Subscribes directly to the browser-sessions coordinator REGISTRY (see the
- * comment above this hook's call site in `useMentionItems`) instead of the
- * churning `BrowserSessionsContext`, and fans out over every coordinator open
- * for this epic rather than the canvas host's alone.
- *
- * The fan-out deliberately does NOT open streams of its own. `renderTile` puts
- * every tile behind a `BrowserSessionsHostBoundary` for its own host, so a
- * coordinator exists for exactly one host per DISTINCT TILE host in this epic
- * (plus the sidebar/PiP hosts) - wider than "hosts with browser tiles", and
- * the picker's fan-out widens with it. Lazily dialing on picker-open would
- * therefore buy nothing but a second, refcounted stream lifecycle and a
- * per-host auth gate for a menu that may never be used.
- *
- * `!active` unsubscribes entirely and returns the shared empty constant, so a
- * closed picker holds no subscription at all; while open, `getSnapshot` is
- * backed by a per-hook content-keyed cache so a frame that doesn't change any
- * tab's mention fields returns the previous array reference and triggers no
- * downstream re-render.
- */
+/** The fan-out deliberately does NOT open streams of its own. Lazily dialing on picker-open would therefore buy nothing but a second, refcounted stream lifecycle and a per-host auth gate for a menu that may never be used. */
 function useBrowserTabMentionEntries(args: {
   readonly epicId: string | null;
   readonly chatHostId: string | null;
@@ -1225,13 +990,7 @@ function localArtifactSuggestion(
   }
 }
 
-/**
- * Pure projection of the open-epic artifact slice into @-mention artifact
- * suggestions for the current epic, filtered by `query`. Sourced live at query
- * time (see `useMentionItems`) the same churn-free way as chats, and merged
- * with the cloud `epic.mention*` list so the current epic's artifacts are never
- * dropped by the cloud's 25-per-kind cap.
- */
+/** Pure projection of the open-epic artifact slice into @-mention artifact suggestions for the current epic, filtered by `query`. Sourced live at query time (see `useMentionItems`) the same churn-free way as chats, and merged with the cloud `epic.mention*` list so the current epic's artifacts are never dropped by the cloud's 25-per-kind cap. */
 export function buildCurrentEpicArtifactMentionEntries(
   artifacts: ArtifactsSlice,
   currentEpicId: string,
@@ -1251,13 +1010,7 @@ export function buildCurrentEpicArtifactMentionEntries(
   return entries.length === 0 ? EMPTY_ARTIFACT_ENTRIES : entries;
 }
 
-/**
- * Merges the COMPLETE local current-epic artifact set with the cloud
- * `epic.mention*` list (so the current epic's artifacts are never dropped by
- * the cloud's 25-per-kind cap), de-duped by entry id (the fresher local copy
- * wins for the current epic). Orders current-epic artifacts first, other epics'
- * next; each group sorted by last-updated, descending.
- */
+/** Merges the COMPLETE local current-epic artifact set with the cloud `epic.mention*` list (so the current epic's artifacts are never dropped by the cloud's 25-per-kind cap), de-duped by entry id (the fresher local copy wins for the current epic). Orders current-epic artifacts first, other epics' next; each group sorted by last-updated, descending. */
 export function mergeCurrentEpicArtifactMentions(
   localCurrentEpicEntries: ReadonlyArray<EpicMentionArtifactSuggestion>,
   cloudEntries: ReadonlyArray<EpicMentionEntry>,

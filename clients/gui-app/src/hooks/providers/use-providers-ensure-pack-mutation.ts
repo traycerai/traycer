@@ -22,29 +22,7 @@ interface EnsurePackMutationContext {
   readonly hostId: string | null;
 }
 
-/**
- * The retry affordance behind a `downloading`/`error` provider row: asks the
- * host to get this provider's managed pack ready.
- *
- * Reaching the host through this method is what marks the request as
- * USER-INITIATED, which is the whole point - the host clears that pack's
- * exponential backoff, promotes it to the front of the install queue, and
- * takes the one arm permitted to quarantine an unverifiable version directory.
- * Automatic paths (boot convergence, turn-start resolution) deliberately do
- * none of those things. So this hook must only ever be called from a real user
- * gesture; wiring it into an effect or a poll would launder a background retry
- * into a human one.
- *
- * Non-blocking by contract: the response is the pack's state as of the kick,
- * not the finished install. Progress arrives through `providers.list`, which
- * already carries `managedInstallState` - hence the invalidation rather than a
- * `setQueryData`.
- *
- * `onError` is deliberately omitted. The failure the user cares about is the
- * INSTALL failing, and that surfaces durably on the row itself as the `error`
- * arm with its reason; a toast for a failed kick would be a second, noisier
- * report of the same thing.
- */
+/** User-gesture only: never wire this into an effect or poll. No onError toast; install failure lives on the row. */
 export function useProvidersEnsurePack(): EnsurePackMutationResult {
   return useProvidersEnsurePackForClient(useHostClient());
 }

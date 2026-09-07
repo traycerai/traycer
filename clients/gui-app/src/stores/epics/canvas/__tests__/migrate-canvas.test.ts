@@ -1,16 +1,3 @@
-/**
- * Safety net for the canvas (de)serializer.
- *
- * `parseEpicCanvasState` is the single parse entry point for BOTH persist
- * paths (zustand localStorage merge and the desktop per-window projection),
- * over the current N-ary shape: `{kind:"pane", tabInstanceIds}` leaves under
- * `{kind:"group", direction, children}` containers, with `activePaneId` /
- * `tilesByInstanceId` / `sizesByGroupId` at the state level.
- *
- * These tests assert parsing is total (returns `null` only for non-object
- * input), the result always satisfies the tiles/tree/sizes invariants, and the
- * current-shape round-trip (`parse(serialize(state))`) deep-equals the input.
- */
 import { describe, expect, it } from "vitest";
 import {
   parseCanvasByTabId,

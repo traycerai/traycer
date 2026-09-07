@@ -6,12 +6,8 @@ import {
   parseHostVersionsManifestWithWarnings,
 } from "../manifest-schema";
 
-// NP-9 fixture-based parser test. The committed fixture at
-// scripts/native-packaging/fixtures/versions-example.json is also what
-// scripts/native-packaging/validate-manifest-fixture.cjs feeds into the
-// release-time pre-publish check; pinning a parser test against the
-// same file gives us a fast unit signal when either the schema or the
-// fixture drifts.
+// NP-9 fixture-based parser test.
+// The committed fixture at scripts/native-packaging/fixtures/versions-example.json is also what scripts/native-packaging/validate-manifest-fixture.cjs feeds into the release-time pre-publish check; pinning a parser test against the same file gives us a fast unit signal when either the schema or the fixture drifts.
 
 const FIXTURE_PATH = join(
   __dirname,
@@ -42,9 +38,7 @@ describe("host registry manifest fixture", () => {
     const raw = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
     const droppedVersion = raw.versions[0].version;
     raw.versions[0].platforms["darwin-arm64"].sha256 = "NOTHEX";
-    // A bad sha256 fails that entry's validation, so skip-and-warn drops the
-    // entry (it does NOT top-level reject the whole manifest); the rest still
-    // parses and `latest` falls back off the dropped entry.
+    // A bad sha256 fails that entry's validation, so skip-and-warn drops the entry (it does NOT top-level reject the whole manifest); the rest still parses and `latest` falls back off the dropped entry.
     const result = parseHostVersionsManifestWithWarnings(raw, "tampered");
     expect(result.manifest.versions.map((v) => v.version)).not.toContain(
       droppedVersion,

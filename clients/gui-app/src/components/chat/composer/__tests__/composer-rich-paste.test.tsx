@@ -265,9 +265,7 @@ describe("composer rich clipboard paste", () => {
     source.commands.setContent(
       hashOnlyImageContentWithText("same-epic-hash", "suffix"),
     );
-    // Serialize just the paragraph's own (inline) content - not the doc-level
-    // fragment - so the wrapper carries no block wrapper, mirroring a real
-    // mid-paragraph copy rather than a whole-paragraph one.
+    // Serialize just the paragraph's own (inline) content - not the doc-level fragment - so the wrapper carries no block wrapper, mirroring a real mid-paragraph copy rather than a whole-paragraph one.
     const wrapper = document.createElement("div");
     wrapper.appendChild(
       DOMSerializer.fromSchema(source.schema).serializeFragment(
@@ -301,9 +299,7 @@ describe("composer rich clipboard paste", () => {
     });
 
     expect(hasBytes).toHaveBeenCalledWith("same-epic-hash");
-    // Nothing needed stripping, so the original (open) slice is dispatched
-    // unchanged - merging into the SAME paragraph as "prefix" rather than the
-    // JSON round-trip's closed 0/0 slice splitting it into a new block.
+    // Nothing needed stripping, so the original (open) slice is dispatched unchanged - merging into the SAME paragraph as "prefix" rather than the JSON round-trip's closed 0/0 slice splitting it into a new block.
     expect(destination.state.doc.childCount).toBe(1);
     expect(collectImageIds(destination)).toEqual(["pasted-image"]);
     expect(destination.state.doc.textContent).toBe("prefix suffix");
@@ -351,10 +347,7 @@ describe("composer rich clipboard paste", () => {
 
     expect(hasBytes).toHaveBeenCalledWith("other-epic-hash");
     expect(collectImageIds(destination)).toEqual([]);
-    // The image was stripped, but the surviving text must still merge into
-    // the SAME paragraph as "prefix" - a JSON round-trip through
-    // `pasteComposerContent`'s closed 0/0 slice would instead split it into
-    // a second paragraph.
+    // The image was stripped, but the surviving text must still merge into the SAME paragraph as "prefix" - a JSON round-trip through `pasteComposerContent`'s closed 0/0 slice would instead split it into a second paragraph.
     expect(destination.state.doc.childCount).toBe(1);
     expect(destination.state.doc.textContent).toBe("prefix suffix");
     expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
@@ -613,9 +606,7 @@ describe("composer rich clipboard paste", () => {
     expect(remainderText(editor)).toBe(" review the diff");
   });
 
-  // `$` is the picker's other trigger, so raw text leading with it has to chip
-  // exactly like `/` does - and the chip records which character the paste led
-  // with, so it reads back as what was pasted.
+  // `$` is the picker's other trigger, so raw text leading with it has to chip exactly like `/` does - and the chip records which character the paste led with, so it reads back as what was pasted.
   it("converts a leading $ skill paste into a chip that reads back as $name", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
 
@@ -626,9 +617,7 @@ describe("composer rich clipboard paste", () => {
     expect(remainderText(editor)).toBe(" review the diff");
   });
 
-  // A pasted chip has to carry the resolved option's `kind`, not just its name:
-  // the host reads skills structurally off `kind`, and the editor's leading
-  // guard deletes a kindless chip the moment it stops being leading.
+  // A pasted chip has to carry the resolved option's `kind`, not just its name: the host reads skills structurally off `kind`, and the editor's leading guard deletes a kindless chip the moment it stops being leading.
   it("carries the catalog option's kind and path onto a pasted skill chip", () => {
     const editor = makeEditor([...KNOWN_SLASH_NAMES, "frontend-design"]);
 
@@ -777,10 +766,8 @@ describe("composer rich clipboard paste", () => {
   });
 });
 
-// A composer opening with a code block, caret at the end of its text — the
-// state right after typing ``` and some content. The caret is positioned
-// explicitly inside the code block because the schema keeps a trailing
-// paragraph after it.
+// A composer opening with a code block, caret at the end of its text - the state right after typing ``` and some content.
+// The caret is positioned explicitly inside the code block because the schema keeps a trailing paragraph after it.
 function makeCodeBlockEditor(text: string): Editor {
   const editor = makeEditor(KNOWN_SLASH_NAMES);
   editor.commands.setContent({

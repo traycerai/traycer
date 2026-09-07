@@ -15,16 +15,10 @@ export interface CapturedNeighbor {
 }
 
 export interface NeighborTabPicker {
-  /**
-   * Snapshot the active state and the would-be focus target BEFORE the
-   * close mutation runs. Once the closing tab is gone from the strip,
-   * `findIndex` can no longer recover its position.
-   */
+  /** Snapshot the active state and the would-be focus target before the close mutation runs. */
   readonly capture: (closing: HeaderTab) => CapturedNeighbor;
-  /**
-   * Focus the captured neighbor (or land on `/` when nothing remains)
-   * iff the closing tab was active on the current route.
-   */
+  /** Focus the captured neighbor (or land on `/` when nothing remains) iff the closing tab was active on the
+   * current route. */
   readonly navigateToCaptured: (captured: CapturedNeighbor) => void;
 }
 
@@ -34,11 +28,8 @@ export function useNeighborTabPicker(): NeighborTabPicker {
 
   const capture = useCallback(
     (closing: HeaderTab): CapturedNeighbor => {
-      // `capture` runs only at close time (a user action), so read the live
-      // pathname from the router then instead of subscribing. A reactive
-      // `useRouterState` pathname dep rebuilt `capture` (→ the picker →
-      // `closeTabFlow.requestCloseTab` → the header TabItem `onClose` prop) on
-      // every navigation, re-rendering the whole strip.
+      // `capture` runs only at close time (a user action), so read the live pathname from the router then instead of
+      // subscribing.
       const wasActive = closing.route === router.state.location.pathname;
       const neighbor = wasActive ? pickNeighborForClose(closing) : null;
       return { neighbor, wasActive };
@@ -68,14 +59,8 @@ export function useNeighborTabPicker(): NeighborTabPicker {
   );
 }
 
-/**
- * Pick the strip tab that should receive focus after `closingTab`
- * disappears. Reads `getHeaderTabs()` BEFORE any store mutation -
- * callers must invoke this *prior* to the kind-specific close action.
- *
- * Prefer the most recently activated surviving tab. Legacy layouts and
- * malformed history fall back to browser-style strip adjacency.
- */
+/** Pick the strip tab that should receive focus after `closingTab` disappears. Reads `getHeaderTabs` before any
+ * store mutation - callers must invoke this *prior* to the kind-specific close action. */
 export function pickNeighborForClose(closingTab: HeaderTab): HeaderTab | null {
   const tabs = getHeaderTabs();
   const closingIdx = tabs.findIndex(

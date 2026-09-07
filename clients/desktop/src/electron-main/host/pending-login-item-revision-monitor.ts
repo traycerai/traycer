@@ -5,44 +5,11 @@ import type {
   PendingRevisionCaller,
 } from "./host-controller-types";
 
-// `HostController.convergeReadyPackagedMac`'s already-reachable branch only
-// gets a chance to apply a deferred LaunchAgent revision
-// (`applyPendingLoginItemRevisionIfIdle`) once per `convergeReady` call - and
-// those are rare by design. The renderer's once-per-mount call was retired in
-// P1.3 (and its gate deleted in P3.4): what remains is this process's own
-// launch reconciler, firing once at startup, the selection authority's
-// ensure when derivation wants a local host that is down, and whatever the
-// user asks for by hand. So a marker left behind because the host was busy at
-// that single startup check sits inert for the rest of the session; the user
-// would need to fully relaunch the app before the refreshed plist (e.g. the
-// 8,192 descriptor limit) ever takes effect.
-//
-// This monitor closes that gap: it ticks on a bounded interval and hands off
-// to `HostController.applyPendingLoginItemRevisionIfIdle()` directly -
-// public, not run through the mutation lane, and fully self-locking via the
-// desktop cli-lock, so this poll loop and a renderer-triggered ensure can
-// never interleave SMAppService cycles. That method already owns every
-// precondition (pending marker, reachability, idle probe, quarantine) - this
-// monitor only owns the interval, the failure budget, and stopping once the
-// controller reports the refresh quarantined for the session.
 
 const PENDING_REVISION_POLL_INTERVAL_MS = 30_000;
-// A small bound, not a hot-loop backstop: a refresh cycle that keeps
-// throwing isn't going to resolve itself by retrying every 30s - that's a
-// Doctor-level problem, not something this background monitor should keep
-// hammering. After the budget is spent the marker stays on disk for the next
-// launch's single `convergeReady` attempt. This budget covers THROWN
-// attempts; a cycle that RESOLVES without applying the refresh (busy, no
-// marker, not yet reachable) is not a failure and does not spend it -  only
-// `isPendingRevisionRefreshQuarantined()` reporting true is terminal for
-// those cases.
+// After the budget is spent the marker stays on disk for the next launch's single `convergeReady` attempt.
 const MAX_REFRESH_ATTEMPTS_WITHOUT_SUCCESS = 3;
 
-/**
- * Narrow structural surface this monitor depends on - not the full
- * `IpcHostController` - so tests can pin exactly these two calls without
- * standing up every other `HostController` method.
- */
 export interface PendingLoginItemRevisionMonitorHostController {
   applyPendingLoginItemRevisionIfIdle(
     caller: PendingRevisionCaller,
@@ -52,7 +19,6 @@ export interface PendingLoginItemRevisionMonitorHostController {
 
 export interface PendingLoginItemRevisionMonitorDeps {
   readonly hostController: PendingLoginItemRevisionMonitorHostController;
-  /** Test seam; production callers pass undefined. */
   readonly intervalMs: number | undefined;
 }
 
@@ -72,11 +38,6 @@ export function startPendingLoginItemRevisionMonitor(
     // A tick that outlives its interval must not stack a second concurrent
     // tick on top of it.
     if (ticking || disposed || budgetExhausted) return;
-    // Once the controller has quarantined the refresh for this session
-    // (requires-approval pre-flight, or a cycle that ran and did not land
-    // enabled), every further attempt would just resolve `null` (nothing to
-    // do) - stop ticking rather than churn a no-op call every 30s forever.
-    // The marker survives on disk for the next launch's attempt.
     if (deps.hostController.isPendingRevisionRefreshQuarantined()) {
       budgetExhausted = true;
       log.info(

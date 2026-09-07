@@ -1,63 +1,6 @@
 /**
- * Ticket 21 slice 2: the canvas-wide, transaction-aware set of chat
- * `instanceId`s a stable tile surface host must keep painted.
- *
- * Three layers, matching the design (`ticket-21-stable-tile-surface-identity`,
- * "Host membership and lifecycle"):
- *
- * 1. Canvas-wide RETAINED identity - the chat tiles each pane, across every
- *    open top-level tab's canvas, keeps alive: the one it currently shows,
- *    plus the recently-active ones its `activationHistory` still names, up to
- *    `RETAINED_PANE_CHAT_CAP`. Uses the same `resolveActivePaneTab` fallback
- *    the renderer uses, so a chat `TabGroupView` paints is never omitted from
- *    membership.
- *
- *    This layer used to admit the SELECTED chat only, which made an inner
- *    pane tab switch a real unmount (decision #17) and left the reader
- *    watching the transcript re-converge on the way back. Retention is
- *    derived through the shared `retainedPaneChatInstanceIds` policy, and -
- *    critically - the WINDOW is picked on tile kind alone, with eligibility
- *    applied to its RESULT below. Injecting eligibility into the selection
- *    would not narrow this set relative to `use-mounted-pane-tabs.ts`'s; it
- *    would SHIFT it, because the window is capped and rejection keeps filling
- *    (cold review F1). A member the pane therefore never slots does not
- *    mispaint - a selected chat is seeded first on both sides, so the
- *    shifted-in id can never carry a stale `tabSelected: true` - it strands:
- *    its record keeps a non-null environment and the sticky `canMountBody`
- *    latch, so the hosted body stays mounted forever on a disconnected
- *    anchor, invisible and holding an unreclaimable chat session lease.
- * 2. Top-level retained-surface/MRU eligibility - a chat's owning top-level
- *    tab must also be one of the retained top-level surfaces. This reuses
- *    `TopLevelTabHost`'s actual recency/cap algorithm, extracted into
- *    `stores/tabs/top-level-surface-retention.ts` as a shared pure module, so
- *    both the render-time host and this store-driven mirror apply exactly
- *    one global cap across every top-level kind (epic, draft, history,
- *    settings) - never a per-kind cap.
- * 3. Transaction-aware retention - header tear-off is not one-store atomic
- *    (`tearOffTabIntoNewHeaderTab` commits `EpicCanvasStore` synchronously;
- *    `tabCommandCoordinator` places the new header ref in `useTabsStore`
- *    moments later, in the same transaction). Mid-transaction, the tile's new
- *    owning top-level tab id can exist in `EpicCanvasStore` before it exists
- *    in `useTabsStore`'s header strip - recomputing at that instant would
- *    read a real but momentarily inconsistent cross-store snapshot and could
- *    evict it. So membership is entirely FROZEN (not recomputed at all)
- *    while the coordinator's ledger shows an in-flight transaction, and
- *    reconciles - additions and MRU eviction alike - exactly once, from the
- *    coordinator's own settle notification.
- *
- * Membership is recomputed and diffed on every notification from
- * `useEpicCanvasStore`, `useTabsStore`, `tabCommandCoordinator`, and
- * `remote-deleted-chat-registry.ts` - deriving from observed state at each
- * checkpoint rather than trusting any one store's change to imply the others
- * are consistent (the same observation-over-claim lesson slice 1's identity
- * machinery learned the hard way).
- *
- * A selected chat also has to pass `isHostedSurfaceEligible` (shared with
- * `surface-owner.ts`'s render-routing decision - design-review slice-4
- * finding 2) - a remote-deleted chat leaves membership the same instant
- * `ActiveTabBody` reports it, so the registry entry it's holding gets cleared
- * by slice 2's existing membership-loss subscription instead of lingering
- * alongside the inline `DeletedArtifactBody`.
+ * Pick the retained-chat window by tile kind, then apply eligibility to the result - injecting eligibility into selection would shift the capped window and strand a body.
+ * Freeze membership for the whole in-flight tab-command transaction; header tear-off is not one-store atomic.
  */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
@@ -84,9 +27,7 @@ import {
 export type SurfaceMembershipListener = () => void;
 
 /**
- * Layer 1 (pure, standalone-testable): every chat `instanceId` a pane keeps
- * alive - shown or recently-active - across the complete `canvasByTabId`
- * snapshot, mapped to the top-level tab id that owns it.
+ * Layer 1 (pure, standalone-testable): every chat `instanceId` a pane keeps alive - shown or recently-active - across the complete `canvasByTabId` snapshot, mapped to the top-level tab id that owns it.
  */
 export function collectCanvasWideRetainedChatMembership(
   canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
@@ -95,11 +36,8 @@ export function collectCanvasWideRetainedChatMembership(
   for (const [tabId, canvas] of Object.entries(canvasByTabId)) {
     if (canvas === undefined) continue;
     for (const pane of collectPanes(canvas.root)) {
-      // The WINDOW is picked on tile kind alone, identically to
-      // `use-mounted-pane-tabs.ts`. Eligibility is applied to the result,
-      // AFTER the cap - injecting it into the selection would shift this
-      // window relative to the render side's and strand a member with no slot
-      // (cold review F1; see `retained-pane-chats.ts`).
+      // The WINDOW is picked on tile kind alone, identically to `use-mounted-pane-tabs.ts`.
+      // Eligibility is applied to the result, AFTER the cap - injecting it into the selection would shift this window relative to the render side's and strand a member with no slot (cold review F1; see `retained-pane-chats.ts`).
       const retained = retainedPaneChatInstanceIds({
         pane,
         cap: RETAINED_PANE_CHAT_CAP,
@@ -124,11 +62,7 @@ export function collectCanvasWideRetainedChatMembership(
 }
 
 /**
- * Layer 2: the kind-qualified `TabRef` keys (the same `"<kind>:<id>"` format
- * `tabRefKey` produces) currently eligible to retain a hosted surface, given
- * every open top-level tab strip and which refs are presently active.
- * Recomputed with the exact same shared algorithm `TopLevelTabHost` uses -
- * one global MRU/cap decision across every kind, never a per-kind one.
+ * Recomputed with the exact same shared algorithm `TopLevelTabHost` uses - one global MRU/cap decision across every kind, never a per-kind one.
  */
 function computeRetainedTopLevelRefKeys(): ReadonlyArray<string> {
   const { items, activeItemId } = useTabsStore.getState();
@@ -171,16 +105,8 @@ function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 }
 
 /**
- * While the coordinator has an in-flight transaction, membership is left
- * exactly as it was at the last settled snapshot - not recomputed at all.
- * Header tear-off's canvas write (which moves a tile to a brand-new,
- * not-yet-in-the-header-strip top-level tab id) synchronously notifies both
- * `useEpicCanvasStore` and, later in the same transaction, `useTabsStore`;
- * recomputing mid-transaction would read a real but momentarily
- * inconsistent snapshot (the tile's new owner exists in one store and not
- * yet the other) and could evict it. Freezing avoids that by construction -
- * the correct post-transaction membership is derived fresh, exactly once,
- * from the coordinator's own settle notification.
+ * While the coordinator has an in-flight transaction, membership is left exactly as it was at the last settled snapshot - not recomputed at all.
+ * Header tear-off's canvas write (which moves a tile to a brand-new, not-yet-in-the-header-strip top-level tab id) synchronously notifies both `useEpicCanvasStore` and, later in the same transaction, `useTabsStore`; recomputing mid-transaction would read a real but momentarily inconsistent snapshot (the tile's new owner exists in one store and not yet the other) and could evict it.
  */
 function recomputeMembership(): void {
   if (tabCommandCoordinator.getLedger().suppressionDepth > 0) return;

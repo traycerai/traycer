@@ -1,9 +1,6 @@
 /**
- * Source of truth for epic node kinds, display registries, and tree
- * conversion. The GUI treats chat + the four backend artifact kinds
- * (spec, ticket, story, review) as a single "EpicNode" concept.
- * `Record<EpicNodeKind, …>` tables below fail compilation until every
- * key is filled in when a kind is added.
+ * Source of truth for epic node kinds, display registries, and tree conversion.
+ * The GUI treats chat + the four backend artifact kinds (spec, ticket, story, review) as a single "EpicNode" concept.
  */
 import {
   BookOpen,
@@ -57,9 +54,8 @@ export function isEpicArtifactKind(
 
 const EPIC_NODE_KIND_SET: ReadonlySet<string> = new Set(EPIC_NODE_KINDS);
 
-// Single home for node-kind identity (mirrors `isEpicArtifactKind`). Accepts
-// `unknown` so callers validating untrusted persisted/wire data can guard a
-// raw `type` field directly.
+// Single home for node-kind identity (mirrors `isEpicArtifactKind`).
+// Accepts `unknown` so callers validating untrusted persisted/wire data can guard a raw `type` field directly.
 export function isEpicNodeKind(value: unknown): value is EpicNodeKind {
   return typeof value === "string" && EPIC_NODE_KIND_SET.has(value);
 }
@@ -76,10 +72,8 @@ export interface EpicNodeData {
 }
 
 /**
- * Canonical icon, default icon color, and default-name registries for
- * `EpicNodeKind`. Owned here so sidebars, the store (for newly-created
- * record names), and any other consumer render a single consistent
- * identity per kind.
+ * Canonical icon, default icon color, and default-name registries for `EpicNodeKind`.
+ * Owned here so sidebars, the store (for newly-created record names), and any other consumer render a single consistent identity per kind.
  */
 export const EPIC_NODE_ICONS: Readonly<Record<EpicNodeKind, LucideIcon>> = {
   chat: MessageSquare,
@@ -101,16 +95,7 @@ export const EPIC_NODE_LABELS: Readonly<Record<EpicNodeKind, string>> = {
   terminal: "Terminal",
 };
 
-/**
- * Lower-case noun naming a node inside a sentence - destructive confirmations,
- * summaries, and similar prose.
- *
- * `chat` and `terminal-agent` both collapse to **agent**: Agent is the durable
- * entity the action operates on and Chat/Terminal are only the interfaces used
- * to reach it, so "Delete agent "Foo"?" is true for either. Interpolating the
- * raw node kind here previously leaked the hyphenated `terminal-agent` into
- * user-facing copy.
- */
+/** Lower-case noun naming a node inside a sentence - destructive confirmations, summaries, and similar prose. */
 export const EPIC_NODE_SENTENCE_NOUNS: Readonly<Record<EpicNodeKind, string>> =
   {
     chat: "agent",
@@ -164,11 +149,7 @@ export function normalizeEpicNodeIconColors(
 }
 
 /**
- * Empty-document hint per artifact kind, rendered by the Tiptap `Placeholder`
- * extension while the doc is empty and the editor is editable - a fresh
- * manually-created artifact tells the user where to start typing (and what
- * the surface is for) without ever entering the document. A `Record` so a new
- * artifact kind fails compilation until its hint is written.
+ * Empty-document hint per artifact kind, rendered by the Tiptap `Placeholder` extension while the doc is empty and the editor is editable - a fresh manually-created artifact tells the user where to start typing (and what the surface is for) without ever.
  */
 export const EPIC_NODE_PLACEHOLDER_TEXT: Readonly<
   Record<EpicArtifactKind, string>
@@ -200,15 +181,8 @@ export const TUI_AGENT_HARNESS_LABELS: Readonly<Record<TuiHarnessId, string>> =
   };
 
 /**
- * Flat node record - mirrors the shape that the backend will eventually
- * return. Each node has a unique `id` and an optional `parentId` that
- * points to its parent in the hierarchy.
- *
- * `hostId` is the host that hosts the
- * artifact's Y.Doc projection. Stamped at create time and stable for
- * the artifact's lifetime - chat / terminal artifacts are bound to a
- * host for life, and the binding rides through every sidebar
- * projection into `EpicNodeRef.hostId`.
+ * Flat node record - mirrors the shape that the backend will eventually return.
+ * Each node has a unique `id` and an optional `parentId` that points to its parent in the hierarchy.
  */
 export interface EpicNodeRecord {
   id: string;
@@ -218,16 +192,10 @@ export interface EpicNodeRecord {
   hostId: string;
 }
 
-// ---------------------------------------------------------------------------
 // Tree builder
-// ---------------------------------------------------------------------------
 
 /**
- * Converts a flat list of `EpicNodeRecord`s into the nested
- * `TreeNodeNested<EpicNodeData>[]` format expected by `TreeView`.
- *
- * Records whose `parentId` is `null` or references an unknown id become
- * root nodes. Maintains insertion order within each level.
+ * Converts a flat list of `EpicNodeRecord`s into the nested `TreeNodeNested<EpicNodeData>[]` format expected by `TreeView`.
  */
 export function buildEpicNodeTree(
   records: ReadonlyArray<EpicNodeRecord>,

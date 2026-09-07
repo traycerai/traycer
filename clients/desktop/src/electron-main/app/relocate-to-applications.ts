@@ -3,11 +3,8 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "./logger";
 
-// A real CI release emits `app-update.yml` next to the app resources; dogfood
-// `--dir` / `electron-builder --dir` staging installs never do. Without a feed
-// this build can't auto-update at all, so there is nothing to relocate FOR -
-// don't prompt or mark the location blocked. Mirrors `canCheckForUpdates` in
-// updater.ts (kept sync here since it runs on the boot path).
+// A real CI release emits `app-update.yml` next to the app resources; dogfood `--dir` / `electron-builder --dir` staging installs never do.
+// Without a feed this build can't auto-update at all, so there is nothing to relocate FOR - don't prompt or mark the location blocked.
 function hasRealUpdateFeed(): boolean {
   return existsSync(join(process.resourcesPath, "app-update.yml"));
 }
@@ -37,12 +34,6 @@ function rememberRelocationDeclined(): void {
 export const UPDATE_BLOCKED_LOCATION_REASON =
   "Move Traycer to your Applications folder to install updates.";
 
-/**
- * True when the running macOS app can't apply auto-updates because it lives
- * outside /Applications (mounted .dmg, Downloads, or an App-Translocation
- * mount - all read-only to Squirrel.Mac). Always false off macOS / unpackaged,
- * where this failure mode doesn't exist.
- */
 export function isUpdateBlockedByLocation(): boolean {
   return (
     process.platform === "darwin" &&
@@ -53,18 +44,8 @@ export function isUpdateBlockedByLocation(): boolean {
 }
 
 /**
- * macOS only. When the app is launched from outside `/Applications` - most often
- * run straight from the mounted `.dmg` (a read-only volume) or a Gatekeeper
- * App-Translocation path - Squirrel.Mac cannot apply auto-updates ("Cannot
- * update while running on a read-only volume"). The platform-standard remedy,
- * shown by apps like VS Code and Slack on first run, is to offer to move the
- * bundle into `/Applications` and relaunch from there.
- *
- * Runs AFTER the main window exists (a deferred boot step), so the prompt
- * appears over a loaded, usable app rather than hard-blocking a windowless
- * boot. Asked at most once - a decline is persisted. On accept, Electron moves
- * the bundle and relaunches from `/Applications`, quitting this instance.
- * Best-effort: any failure logs and leaves the app running where it is.
+ * When the app is launched from outside `/Applications` - most often run straight from the mounted `.dmg` (a read-only volume) or a Gatekeeper App-Translocation path.
+ * Runs AFTER the main window exists (a deferred boot step), so the prompt appears over a loaded, usable app rather than hard-blocking a windowless boot.
  */
 export async function maybePromptRelocateToApplications(): Promise<void> {
   if (!isUpdateBlockedByLocation() || hasDeclinedRelocation()) {

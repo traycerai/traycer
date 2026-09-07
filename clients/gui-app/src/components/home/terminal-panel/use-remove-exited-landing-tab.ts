@@ -10,12 +10,7 @@ import {
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
 
-/**
- * Retires a tab whose session ended on its own (no kill owed), and moves the
- * keyboard somewhere sensible if that tab had it: to the panel's next tab
- * when there is one, else back to the composer. Shared by the legacy
- * bootstrap and the sign-in tile's Close, so the two cannot drift.
- */
+/** Shared by the legacy bootstrap and the sign-in tile's Close, so the two cannot drift. */
 export function useRemoveExitedLandingTab(
   landingPageId: string,
 ): (instanceId: string) => void {

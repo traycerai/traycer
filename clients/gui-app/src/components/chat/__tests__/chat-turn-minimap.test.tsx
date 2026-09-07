@@ -387,9 +387,8 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
       rerender([question, assistant(1, token)]);
     }
 
-    // A token gives the transcript a new array and the same outline. The bar
-    // is subscribed while closed, so a notify here would re-render it - and
-    // whatever it reads - once per token.
+    // A token gives the transcript a new array and the same outline.
+    // The bar is subscribed while closed, so a notify here would re-render it - and whatever it reads - once per token.
     expect(listener).not.toHaveBeenCalled();
     expect(adapter.getSnapshot().items).toBe(published);
     unsubscribe();

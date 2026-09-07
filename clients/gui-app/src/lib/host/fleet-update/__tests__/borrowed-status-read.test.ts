@@ -22,12 +22,7 @@ import {
 } from "@/lib/host/fleet-update/fleet-read-gate";
 import { FLEET_MAX_CONCURRENT_READS } from "@/lib/host/fleet-update/fleet-poll-policy";
 
-// G10(a): `observationFromStatus` builds a PROVISIONAL observation with a
-// synthetic `freshUntilMs: Number.POSITIVE_INFINITY` so the projection it
-// needs to compute the real deadline has something to project from — and the
-// module's own comment says that value must never escape the function. A test
-// that only checked one call site could miss a code path (a new early return,
-// a future arm) that skips the deadline-overwrite spread.
+// G10(a): `observationFromStatus` builds a PROVISIONAL observation with a synthetic `freshUntilMs: Number.POSITIVE_INFINITY` so the projection it needs to compute the real deadline has something to project from - and the module's own comment says that value.
 
 const NOW_MS = 42_000;
 
@@ -129,10 +124,7 @@ describe("observationFromStatus — the synthetic placeholder never escapes", ()
   });
 });
 
-// The two-state `updateProgress` marker is the only signal the shipped legacy
-// `traycer host update` path emits, and it must ride along beside the
-// (possibly absent) schema-v2 attempt record rather than being dropped at this
-// stamping boundary — see `FleetUpdateWireObservation.coarseProgress`'s doc.
+// The two-state `updateProgress` marker is the only signal the shipped legacy `traycer host update` path emits, and it must ride along beside the (possibly absent) schema-v2 attempt record rather than being dropped at this stamping boundary - see.
 describe("observationFromStatus — carries the coarse updateProgress marker through", () => {
   it("carries `updateProgress: null` through as `coarseProgress: null`", () => {
     const observation = observationFromStatus({
@@ -159,14 +151,7 @@ describe("observationFromStatus — carries the coarse updateProgress marker thr
   });
 });
 
-// The wiring proof this module needs alongside `fleet-read-gate.test.ts`'s
-// bound-in-isolation suite: `fleet-read-gate.test.ts` proves the SEMAPHORE
-// works; nothing proved that `readUpdateStatusOverBorrowedSession` actually
-// ENTERS it. Ten hosts all eventually resolving (the fleet-hook integration
-// suite) is consistent with `runWithFleetReadSlot` being dead code — every
-// read would still complete on its own, just without ever being bounded. This
-// is the binary version of that claim: does the transport get touched before
-// the gate says so, yes or no.
+// The wiring proof this module needs alongside `fleet-read-gate.test.ts`'s bound-in-isolation suite: `fleet-read-gate.test.ts` proves the SEMAPHORE works; nothing proved that `readUpdateStatusOverBorrowedSession` actually ENTERS it.
 interface FakeSession extends IRemoteSession<
   VersionedRpcRegistry,
   VersionedStreamRpcRegistry
@@ -255,11 +240,8 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
     await Promise.resolve();
     await Promise.resolve();
 
-    // A genuinely BORROWABLE session — required so a `sendUnary` count of
-    // zero later means "queued behind the gate", not "nothing to call". The
-    // borrow is taken before the gate is entered (module doc), so an
-    // unborrowable host would decline for an unrelated reason and this
-    // assertion would pass vacuously.
+    // A genuinely BORROWABLE session - required so a `sendUnary` count of zero later means "queued behind the gate", not "nothing to call".
+    // The borrow is taken before the gate is entered (module doc), so an unborrowable host would decline for an unrelated reason and this assertion would pass vacuously.
     const hostId = "host-gated";
     const session = readySession();
     const owner = acquireRemoteSession(
@@ -281,7 +263,7 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
     await Promise.resolve();
     expect(session.sendUnaryCalls).toBe(0);
 
-    // Free exactly one slot — the read is queued behind the gate, so it
+    // Free exactly one slot - the read is queued behind the gate, so it
     // should now be free to dispatch and resolve normally.
     holders[0].resolve();
     const observation = await readPromise;
@@ -297,14 +279,7 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
   });
 
   it("stamps observedAtMs AFTER the queue wait, not at call time", async () => {
-    // The defect this pins: with more borrowable hosts than gate slots, a
-    // later read waits behind whole round trips and then stamped a timestamp
-    // taken before the wait. `freshUntilMs` derives from that same instant, so
-    // an actively-updating host on the ~2s cadence could receive a deadline
-    // that had already expired by the time its read returned.
-    //
-    // The clock only advances while the read is QUEUED, so a call-time stamp
-    // and a post-read stamp are distinguishable by construction.
+    // `freshUntilMs` derives from that same instant, so an actively-updating host on the ~2s cadence could receive a deadline that had already expired by the time its read returned.
     const holders = Array.from({ length: FLEET_MAX_CONCURRENT_READS }, () =>
       deferred<void>(),
     );

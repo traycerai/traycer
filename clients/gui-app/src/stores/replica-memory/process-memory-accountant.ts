@@ -29,12 +29,8 @@ import {
 } from "@/stores/replica-memory/hot-doc-budget";
 
 /**
- * The process-wide memory runtime: one accountant, three plane books.
- *
- * Planes register here so a chat window, a hot artifact doc and an epic
- * replica all argue over the same snapshot. The books own WHAT to drop;
- * the accountant owns WHETHER to ask. Recency is one counter so LRU is
- * recency, not per-store publish count.
+ * The process-wide memory runtime: one accountant, three plane books. Planes register here so a
+ * chat window, a hot artifact doc and an epic replica all argue over the same snapshot.
  */
 export interface ProcessMemoryRuntime {
   readonly accountant: MemoryAccountant;
@@ -98,10 +94,8 @@ export function createProcessMemoryRuntime(
 let processRuntime: ProcessMemoryRuntime | null = null;
 
 /**
- * The process-wide singleton. Callers inject the environment on first
- * construction so this module never touches `window`. Tests reset it
- * between files so one store's leftover session cannot walk another file's
- * `set()`.
+ * The process-wide singleton. Callers inject the environment on first construction so this module
+ * never touches `window`.
  */
 export function ensureProcessMemoryRuntime(
   environment: RuntimeEnvironment,

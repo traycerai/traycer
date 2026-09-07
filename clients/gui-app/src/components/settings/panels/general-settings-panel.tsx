@@ -207,12 +207,8 @@ export function GeneralSettingsPanel() {
           </SettingsGroup>
         ) : null}
 
-        {/* One row, and named for the SUBJECT rather than for itself: the
-            tour is a window-level replay of onboarding, so it belongs on the
-            app-wide page. Import and Data migration used to sit beside it and
-            do not - each moves one machine's local data, and neither could
-            name the machine from here. Both are now on that host's own
-            Overview, under the sidebar's host picker. */}
+        {/* One row, and named for the subject rather than for itself: the tour is a window-level replay of onboarding,
+           so it belongs on the app-wide page. */}
         <SettingsGroup
           title="Onboarding"
           tone="default"
@@ -248,16 +244,8 @@ export function GeneralSettingsPanel() {
   );
 }
 
-/**
- * App-global destruction only.
- *
- * This box used to hold three rows at three different scopes: "File Edit
- * Snapshots" (ONE MACHINE's data - and it carried its own host dropdown, so a
- * red button took its target from a control shaped like a form field),
- * "Remove Traycer" (THIS DEVICE's installation) and "Local app state" (THIS
- * APP). Only the last is app-global, so only it stays. The other two moved to
- * the machine's own page, where the page title already names the target.
- */
+/** Only the last is app-global, so only it stays. The other two moved to the machine's own page, where the page
+ * title already names the target. */
 function DangerZoneSection() {
   return (
     <SettingsGroup
@@ -271,15 +259,8 @@ function DangerZoneSection() {
   );
 }
 
-// Resolve the host-side per-window clear for "Clear local app state":
-//   - desktop bridge with the `clear` RPC: use it directly (authoritative).
-//   - desktop bridge WITHOUT `clear` (older preload): degrade through the
-//     always-present `get` + `update` RPCs. Wiping browser storage alone leaves
-//     the host-owned per-window snapshot intact, so the tab strip / canvases /
-//     drafts would come back after reload. The fallback empties tabs + drafts
-//     and deletes every existing canvas entry by sending `null` for each key
-//     (the host `update` merge treats `canvasByTabId[key] = null` as deletion).
-//   - no bridge (true web mode): null, so the util stays storage-only.
+// Wiping browser storage alone leaves the host-owned per-window snapshot intact, so the tab strip / canvases /
+// drafts would come back after reload.
 function resolvePerWindowHostClear(
   bridge: DesktopWindowsBridge | null,
 ): (() => Promise<void>) | null {
@@ -309,17 +290,13 @@ function SettingsLocalAppStateSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const bridge = useWindowsBridge();
 
-  // Routed through `useMutation` (mirrors the sibling `clearSnapshotsMutation`):
-  // `isPending` drives the UI and `onError` resets the dialog + toasts, so a
-  // failed host `clear` RPC can't leave the dialog stuck. The windows bridge is
-  // `IRunnerHost`, so this uses a bare mutation + `toastFromRunnerError`.
+  // Routed through `useMutation` (mirrors the sibling `clearSnapshotsMutation`): `isPending` drives the UI and
+  // `onError` resets the dialog + toasts, so a failed host `clear` RPC can't leave the dialog stuck.
   const clearLocalAppStateMutation = useMutation({
     mutationKey: runnerMutationKeys.clearAllLocalData(),
     mutationFn: () =>
       clearAllPersistedStores({ hostClear: resolvePerWindowHostClear(bridge) }),
-    // On success the util reloads the page (its last step), so there is no
-    // onSuccess work to do. On failure, close the dialog and surface the error
-    // so the user isn't stuck on a spinning confirm.
+    // On success the util reloads the page (its last step), so there is no onSuccess work to do.
     onError: (error) => {
       setConfirmOpen(false);
       toastFromRunnerError(error, "Couldn't clear local app state.");

@@ -1,9 +1,5 @@
-/**
- * Integration: Escape while Branch naming is editing must cancel only the
- * editor at the Radix Dialog dismiss boundary - not close Worktree environment
- * or discard unsaved scripts. Uses the REAL Dialog/DialogContent primitives
- * (no dialog mock) so capture-phase Escape ordering matches production.
- */
+/** Integration: Escape while Branch naming is editing must cancel only the editor at the Radix Dialog dismiss
+ * boundary - not close Worktree environment or discard unsaved scripts. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,

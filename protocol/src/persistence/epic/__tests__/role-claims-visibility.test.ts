@@ -1,17 +1,6 @@
 /**
  * The single visibility projection.
- *
- * Every surface that can show a role claim - `agent.roles.list`, overlap
- * detection, the `overlapping` payload handed back to a claimant, and the
- * role block rendered into an agent's system prompt - reads through
- * `projectVisibleRoleClaims` and adds no filtering of its own. So this is the
- * ONE place cross-account leakage could happen, which is why it is tested
- * against a two-user epic rather than a single-user one.
- *
- * An epic can hold several collaborators' agents. Cross-account role
- * organization is out of scope for v1, so another account's claims must not
- * surface anywhere - not in a list, and not smuggled in through an overlap
- * result or a prompt.
+ * Cross-account role organization is out of scope for v1, so another account's claims must not surface anywhere - not in a list, and not smuggled in through an overlap result or a prompt.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -74,12 +63,7 @@ const ALL_CLAIMS = [A_LIVE, A_STALE, B_LIVE, B_STALE];
 
 /**
  * A live-agent set that records which agents it was asked about.
- *
- * Filter ORDER is invisible in the output - both orders drop the same claims -
- * so the only way to prove account-before-liveness is to observe that the
- * liveness lookup is never even consulted about another account's claim.
- * Subclasses `Set` rather than hand-rolling `ReadonlySet` so it stays a real
- * set (including the ES2024 set operations) with no type assertions.
+ * Filter ORDER is invisible in the output - both orders drop the same claims - so the only way to prove account-before-liveness is to observe that the liveness lookup is never even consulted about another account's claim.
  */
 class RecordingLiveAgentIds extends Set<string> {
   readonly probed: string[] = [];
@@ -133,15 +117,7 @@ describe("projectVisibleRoleClaims", () => {
   });
 
   it("filters by account BEFORE liveness - proven by observing that liveness is never even asked about a foreign claim", () => {
-    // Output alone cannot distinguish the two filter orders: both drop B's
-    // claims, so an account-second implementation would pass an
-    // output-only assertion. The ORDER is only observable through the
-    // liveness lookup, so make that lookup record what it was asked.
-    //
-    // This matters beyond tidiness. Account-first means a foreign claim is
-    // discarded before any other stage can touch it; account-second would
-    // mean every future stage we add between the two filters gets to see
-    // other accounts' claims, one refactor away from leaking them.
+    // Output alone cannot distinguish the two filter orders: both drop B's claims, so an account-second implementation would pass an output-only assertion.
     const observed = new RecordingLiveAgentIds([
       AGENT_A_LIVE,
       AGENT_A_GONE,
@@ -155,9 +131,7 @@ describe("projectVisibleRoleClaims", () => {
     });
     const probedAgentIds = observed.probed;
 
-    // Every agent is live here, so liveness excludes nothing. If the account
-    // filter ran second, B's claims would have been probed for liveness -
-    // and would have survived into the output.
+    // Every agent is live here, so liveness excludes nothing.
     expect(probedAgentIds).not.toContain(AGENT_B_LIVE);
     expect(probedAgentIds).not.toContain(AGENT_B_GONE);
     expect(probedAgentIds).toEqual([AGENT_A_LIVE, AGENT_A_GONE]);
@@ -167,10 +141,8 @@ describe("projectVisibleRoleClaims", () => {
   });
 
   it("orders claimId ties by CODE UNIT, not locale - mixed-case UUIDs must not reorder by host locale", () => {
-    // UUIDs may carry mixed-case hex. `localeCompare` collates case by locale
-    // (en-US puts "B" before "a"; code-unit order does not), which would make
-    // two hosts render the same registry in different orders. Uppercase hex
-    // sorts before lowercase by code unit, and that must hold everywhere.
+    // UUIDs may carry mixed-case hex.
+    // Uppercase hex sorts before lowercase by code unit, and that must hold everywhere.
     const mixedCase = [
       claim({
         claimId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

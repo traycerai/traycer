@@ -43,13 +43,7 @@ function DrawerOverlay({
   );
 }
 
-/**
- * `vaul` drawer primitive (drag-dismissable). Direction is caller-set via
- * `Drawer direction="bottom"`. The content imposes NO max-height itself so the
- * composing surface caps it with a viewport-aware value (e.g.
- * `max-h-[min(90dvh,…)]`) and owns its own internal scroll region. The grab
- * handle renders only for the bottom direction.
- */
+/** The grab handle renders only for the bottom direction. */
 function DrawerContent({
   ref,
   className,
@@ -68,18 +62,12 @@ function DrawerContent({
           "data-[vaul-drawer-direction=bottom]:inset-x-0 data-[vaul-drawer-direction=bottom]:bottom-0 data-[vaul-drawer-direction=bottom]:mt-24 data-[vaul-drawer-direction=bottom]:rounded-t-lg data-[vaul-drawer-direction=bottom]:border-t",
           "data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-3/4 data-[vaul-drawer-direction=right]:border-l data-[vaul-drawer-direction=right]:sm:max-w-sm",
           "data-[vaul-drawer-direction=left]:inset-y-0 data-[vaul-drawer-direction=left]:left-0 data-[vaul-drawer-direction=left]:w-3/4 data-[vaul-drawer-direction=left]:border-r data-[vaul-drawer-direction=left]:sm:max-w-sm",
-          // Safe-area inset, per direction, mirroring `sheet.tsx`: a drawer is
-          // portalled and `fixed`, so `#root`'s padding never reaches it. The
-          // horizontal insets apply to every direction, since the landscape
-          // sensor housing sits on a side edge whichever way the drawer opens.
-          // The edge a drawer is anchored to is left alone - it is meant to
-          // meet the screen there, and pads its own contents instead.
+          // Safe-area inset, per direction, mirroring `sheet.tsx`: a drawer is portalled and `fixed`, so `#root`'s
+          // padding never reaches it.
           "data-[vaul-drawer-direction=top]:mt-safe-top data-[vaul-drawer-direction=top]:ml-safe-left data-[vaul-drawer-direction=top]:mr-safe-right",
           "data-[vaul-drawer-direction=bottom]:ml-safe-left data-[vaul-drawer-direction=bottom]:mr-safe-right",
-          // The side directions also take a width cap, for the reason spelled
-          // out in `sheet.tsx`: a caller's `w-full` is 100% of the viewport on
-          // a fixed element, so a margin alone would displace it rather than
-          // narrow it.
+          // The side directions also take a width cap, for the reason spelled out in `sheet.tsx`: a caller's `w-full` is
+          // 100% of the viewport on a fixed element, so a margin alone would displace it rather than narrow it.
           "data-[vaul-drawer-direction=left]:mt-safe-top data-[vaul-drawer-direction=left]:ml-safe-left data-[vaul-drawer-direction=left]:max-w-safe-dvw data-[vaul-drawer-direction=right]:mt-safe-top data-[vaul-drawer-direction=right]:mr-safe-right data-[vaul-drawer-direction=right]:max-w-safe-dvw",
           className,
         )}

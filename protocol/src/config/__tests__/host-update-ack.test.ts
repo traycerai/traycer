@@ -19,10 +19,6 @@ const VALID = {
 
 describe("updateDispatchAckPath", () => {
   it("resolves inside the host home it is given", () => {
-    // Parameterized by the directory, not by an `Environment` — the CLI and
-    // the host resolve that directory through deliberately different
-    // machinery, and taking it as input is what makes the agreement
-    // structural instead of a slot rule copied into a third place.
     expect(updateDispatchAckPath("/tmp/host-home")).toBe(
       "/tmp/host-home/update-dispatch-ack.json",
     );
@@ -54,9 +50,6 @@ describe("decodeUpdateDispatchAck", () => {
   });
 
   it("reports a future version as unsupported, not as malformed", () => {
-    // Checked BEFORE the fields: a future shape is not broken, it is one this
-    // build has no business interpreting, and saying so is more useful than
-    // naming whichever field happens to differ.
     expect(
       decodeUpdateDispatchAck(JSON.stringify({ ...VALID, v: 99 })),
     ).toEqual({ kind: "invalid", reason: "unsupported-version" });
@@ -70,9 +63,7 @@ describe("decodeUpdateDispatchAck", () => {
     ["a missing claimedAt", { ...VALID, claimedAt: undefined }],
     ["an illegal nonce", { ...VALID, nonce: "../../etc/passwd" }],
   ])("rejects %s", (_label, payload) => {
-    // Every one of these would otherwise become a correlation the resolver
-    // could act on. `NaN` and `1.5` are both `number`, which is why the
-    // decoder checks `Number.isInteger` rather than `typeof`.
+    // Every one of these would otherwise become a correlation the resolver could act on.
     expect(decodeUpdateDispatchAck(JSON.stringify(payload))).toEqual({
       kind: "invalid",
       reason: "malformed-fields",
@@ -104,11 +95,6 @@ describe("isValidUpdateDispatchAckNonce", () => {
     ["over-long", "A".repeat(129)],
     ["empty", ""],
   ])("rejects %s", (_label, value) => {
-    // A closed character class rather than a length check, because this value
-    // travels on a command line: no quoting rule, shell metacharacter or path
-    // separator can be part of a legal nonce. The filename is fixed, so this
-    // is defence in depth rather than traversal protection — but the cheapest
-    // moment to refuse a hostile value is before it is written anywhere.
     expect(isValidUpdateDispatchAckNonce(value)).toBe(false);
   });
 });

@@ -41,19 +41,8 @@ const state = vi.hoisted((): GateTestState => ({
   })),
 }));
 
-// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
-// to, so `git.subscribeStatus` cannot ride the window's effective host while
-// carrying the tile's host id as a param. `null` is that hook's FOLLOWING
-// answer, so the tile falls back to the ambient binding this suite supplies -
-// which is what every assertion here is about. Which transport a host resolves
-// to is a different question with its own suite:
-// `use-surface-host-stream-binding.test.tsx`.
-// The hook returns the value to PROVIDE: the ambient binding while following
-// (this suite's), the pin's own once built, null while pending. Following here.
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
+// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND to, so `git.subscribeStatus` cannot ride the window's effective host while carrying the tile's host id as a param.
+// These tiles resolve the user's default open target, which asks whether the tile's host is the LOCAL one before it may offer Finder.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -98,17 +87,11 @@ vi.mock("react-virtuoso", () => ({
   Virtuoso: () => <div data-testid="virtuoso" />,
 }));
 
-// The toolbar's "open file" now dispatches on the TAB client (D15); these tests
-// mount the tile without the whole host runtime, so the seam is stubbed the
-// same way the sibling git-diff-tile suites already stub it.
+// The toolbar's "open file" now dispatches on the TAB client (D15); these tests mount the tile without the whole host runtime, so the seam is stubbed the same way the sibling git-diff-tile suites already stub it.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
 
-// The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
-// mocked hook ignores the client it is handed; what this repoint pins is that
-// the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpenForClient: () => ({
     mutate: vi.fn(),

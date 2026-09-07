@@ -1,11 +1,3 @@
-/**
- * Store integration for Phase 1.1's optimistic metadata overlay
- * (`beginRenameMutation` / `beginEpicTitleMutation` / `beginReparentMutation`
- * / `retirePendingMutation`). Drives a REAL `createOpenEpicStore` session
- * against a real Y.Doc - the same `newSession()` shape as
- * `epic-projector.test.ts` - so these assert the published projection, not a
- * mocked stand-in for it.
- */
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
@@ -92,9 +84,8 @@ function chatRecord(
 }
 
 /**
- * Seeds an UNTITLED chat directly (raw `title: ""`) - the shim's
- * `createArtifactInDocForTests` always seeds a non-empty placeholder title,
- * so an untitled row needs its own helper.
+ * Seeds an UNTITLED chat directly (raw `title: ""`) - the shim's `createArtifactInDocForTests`
+ * always seeds a non-empty placeholder title, so an untitled row needs its own helper.
  */
 function createUntitledChatInDocForTests(doc: Y.Doc): string {
   const id = crypto.randomUUID();
@@ -160,12 +151,7 @@ function newSession(permissionRole: PermissionRole): {
       close: () => undefined,
     };
   };
-  // The ONE blessed wiring: real host, real core, real composition, real
-  // bridge. `createOpenEpicStore` stopped constructing a runtime, so a suite
-  // that used to hand it a `streamClientFactory` has nothing to hand it - the
-  // factories go to the composition instead. `handle.doc` keeps working
-  // because this harness built the runtime in THIS thread and exposes its
-  // live doc as a getter.
+  // The ONE blessed wiring: real host, real core, real composition, real bridge.
   const handle = openStoreForTest({
     epicId: "epic-test",
     userId: null,
@@ -251,10 +237,8 @@ describe("beginRenameMutation", () => {
     // Landed, no doc echo yet - display shows "B".
     expect(handle.store.getState().artifacts.byId[id].title).toBe("B");
 
-    // Renaming back to the ORIGINAL title ("New spec") differs from what is
-    // DISPLAYED ("B"), so this must stamp a real entry - a baseline compare
-    // would have wrongly no-op'd here (baseline IS "New spec"), leaving the
-    // UI stuck on "B" until a full round trip.
+    // Renaming back to the ORIGINAL title ("New spec") differs from what is DISPLAYED ("B"), so this
+    // must stamp a real entry - a baseline compare would have wrongly no-op'd here (baseline IS "New
     const second = await handle.store
       .getState()
       .beginRenameMutation(id, "New spec");
@@ -330,9 +314,8 @@ describe("beginRenameMutation", () => {
       .getState()
       .beginRenameMutation(chatId, "Plan");
 
-    // Before this fix, a baseline read off the tree's fallback string could
-    // never match the row's actual "" title, so the patch silently never
-    // applied.
+    // Before this fix, a baseline read off the tree's fallback string could never match the row's
+    // actual "" title, so the patch silently never applied.
     expect(requestId).not.toBeNull();
     expect(handle.store.getState().chats.byId[chatId].title).toBe("Plan");
     handle.dispose();
@@ -349,17 +332,12 @@ describe("beginRenameMutation", () => {
     // The row shows the LATEST stamped value while both are pending.
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
-    // The host acks the FIRST rename's RPC ("B"). Retiring it as "landed"
-    // (rather than deleting it outright) is exactly what keeps the still-
-    // pending second entry anchored: the chain now has an explicit landed
-    // target ("B") to anchor against, independent of whether the doc has
-    // visibly echoed it yet.
+    // The host acks the FIRST rename's RPC ("B").
     await handle.store.getState().retirePendingMutation(first, "landed");
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
-    // The doc now echoes the host's write of "B" - the row moves off the
-    // ORIGINAL baseline ("New spec") but lands on the chain's own (now
-    // landed) first target, so the still-pending second entry still applies.
+    // The doc now echoes the host's write of "B" - the row moves off the ORIGINAL baseline ("New
+    // spec") but lands on the chain's own (now landed) first target, so the still-pending second entry
     const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
     if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
     const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
@@ -390,10 +368,7 @@ describe("beginRenameMutation", () => {
     if (second === null) throw new Error("expected a request id");
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
-    // The SECOND (newer) rename's RPC acks FIRST, while the first ("B") is
-    // still pending. Filtering landed entries out of display selection (the
-    // pre-fix behavior) would fall back to the still-pending "B" here -
-    // regressing the newest thing the user asked for until "B" also settles.
+    // The SECOND (newer) rename's RPC acks FIRST, while the first ("B") is still pending.
     await handle.store.getState().retirePendingMutation(second, "landed");
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
@@ -482,11 +457,8 @@ describe("beginReparentMutation", () => {
 
   it("stale-parent case: a row whose RAW parentId points at a deleted node (tree promotes it to root) still reparents optimistically", async () => {
     const { handle } = newSession("editor");
-    // The raw doc parentId names a node that was never created - the tree
-    // projector's `resolveEffectiveParent` cannot resolve it and promotes
-    // this row to root, but the ARTIFACT'S OWN raw `parentId` field still
-    // reads "deleted-parent" verbatim. The new baseline-capture contract
-    // reads THAT raw value, not the tree's nulled effective parent.
+    // The raw doc parentId names a node that was never created - the tree projector's
+    // `resolveEffectiveParent` cannot resolve it and promotes this row to root, but the ARTIFACT'S OWN
     const orphan = createArtifactInDocForTests(
       handle.doc,
       "spec",
@@ -590,10 +562,7 @@ describe("detachTransport", () => {
       "Renamed live",
     );
 
-    // The RPC's own terminal retire arrives after detach. With no attached
-    // projector, `retirePendingMutation` deletes rather than marking landed -
-    // observable here only via the boolean return values below, since the
-    // detached store no longer republishes a projection to inspect.
+    // The RPC's own terminal retire arrives after detach.
     expect(
       await handle.store.getState().retirePendingMutation(requestId, "landed"),
     ).toBe(true);
@@ -704,9 +673,8 @@ describe("landed-entry TTL", () => {
         "Renamed live",
       );
 
-      // Past the TTL: the entry expires, the row falls back to whatever the
-      // doc actually holds (still `baseline` - our echo never came), and a
-      // second terminal retire for the same requestId proves it is gone.
+      // Past the TTL: the entry expires, the row falls back to whatever the doc actually holds (still
+      // `baseline` - our echo never came), and a second terminal retire for the same requestId proves it
       vi.advanceTimersByTime(1);
       expect(handle.store.getState().artifacts.byId[id].title).toBe(baseline);
       expect(
@@ -739,10 +707,8 @@ describe("landed-entry TTL", () => {
       if (r2 === null) throw new Error("expected a request id");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
-      // r1's TTL fires here. Before the chain-scoped fix this deleted r1
-      // outright, stripping r2's anchor set and reading r2's own future echo
-      // as off-anchor supersession. Now it finds r2 unsettled and re-arms
-      // instead - r2 keeps showing normally.
+      // r1's TTL fires here. Before the chain-scoped fix this deleted r1 outright, stripping r2's anchor
+      // set and reading r2's own future echo as off-anchor supersession.
       vi.advanceTimersByTime(30_000);
       expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
@@ -751,9 +717,8 @@ describe("landed-entry TTL", () => {
       await handle.store.getState().retirePendingMutation(r2, "failed");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("B");
 
-      // r1's RE-ARMED timer's next fire (another full TTL later) finds no
-      // unsettled sibling left and finally expires it, converging on the
-      // authoritative value.
+      // r1's RE-ARMED timer's next fire (another full TTL later) finds no unsettled sibling left and
+      // finally expires it, converging on the authoritative value.
       vi.advanceTimersByTime(30_000);
       expect(handle.store.getState().artifacts.byId[id].title).toBe(baseline);
       expect(
@@ -784,9 +749,8 @@ describe("landed-entry TTL", () => {
       await handle.store.getState().retirePendingMutation(r2, "landed");
 
       vi.advanceTimersByTime(10_000);
-      // r1 acks ten seconds later. It is NOT the tail, so even once landed
-      // it never owns the chain's deletion - only re-arming or standing
-      // aside for the tail's timer.
+      // r1 acks ten seconds later. It is NOT the tail, so even once landed it never owns the chain's
+      // deletion - only re-arming or standing aside for the tail's timer.
       await handle.store.getState().retirePendingMutation(r1, "landed");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
@@ -795,11 +759,7 @@ describe("landed-entry TTL", () => {
       vi.advanceTimersByTime(19_999);
       expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
-      // r2's timer fires at t=30_000. The whole chain is landed now and r2
-      // is the tail, so it deletes BOTH entries atomically in one pass -
-      // the display must never regress to r1's target "B" first, which
-      // per-entry deletion (the pre-fix bug) would have done by deleting
-      // only r2 here and leaving r1 to expire later.
+      // r2's timer fires at t=30_000.
       vi.advanceTimersByTime(1);
       expect(handle.store.getState().artifacts.byId[id].title).not.toBe("B");
       expect(handle.store.getState().artifacts.byId[id].title).toBe(baseline);
@@ -851,9 +811,8 @@ describe("chat-record revision guard protects a pending overlay chain from a del
         fenceBeforePush,
       );
 
-    // Rejected by the revision guard (item 2's monotonic merge) - the
-    // authoritative row is still "C", so the pending chain stays ANCHORED on
-    // its own baseline and the overlay keeps showing "B".
+    // Rejected by the revision guard (item 2's monotonic merge) - the authoritative row is still "C",
+    // so the pending chain stays ANCHORED on its own baseline and the overlay keeps showing "B".
     expect(store.getState().chats.byId.c.title).toBe("B");
 
     // Proven not swept: the chain is still in the map to retire, and

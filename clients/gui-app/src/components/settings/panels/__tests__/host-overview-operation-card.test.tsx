@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -59,10 +57,8 @@ import {
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
-// G5: `HostOverviewOperationCard` renders measured byte progress
-// (`host-overview-operation-bytes`) independently of percentage — the
-// counterpart to the landing banner's own bytes coverage, since both surfaces
-// share `operationProgressBytes`/`showsProgressBar`.
+// G5: `HostOverviewOperationCard` renders measured byte progress (`host-overview-operation-bytes`)
+// independently of percentage.
 
 const ALL_OVERVIEW_METHODS = [
   "host.status",
@@ -159,11 +155,7 @@ function statusWith(
   };
 }
 
-// Same as `statusWith`, but lets the coarse `updateProgress` marker vary
-// independently of the attempt record - the shipped legacy `traycer host
-// update` path reports `updateOperation: {kind:"none"}` with the marker
-// carrying the whole signal, and that is exactly the shape this suite's
-// coarse-progress tests below exercise.
+// Same as `statusWith`, but lets the coarse `updateProgress` marker vary independently of the attempt record.
 function statusWithCoarseProgress(
   operation: HostStatusUpdateOperation,
   updateProgress: ResponseOfMethod<
@@ -274,9 +266,8 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // The live baseline: the bar IS present while the read is healthy, so the
-    // retained case below is a genuine transition rather than a card that
-    // never draws a bar at all.
+    // The live baseline: the bar IS present while the read is healthy, so the retained case below is a genuine
+    // transition rather than a card that never draws a bar at all.
     await screen.findByTestId("update-progress-indeterminate");
 
     // Advance past the 10s `host.status` poll so the same query refetches and
@@ -295,22 +286,15 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
   });
 });
 
-// The coarse `updateProgress` marker, carried BESIDE `updateOperation:
-// {kind:"none"}` - the shipped legacy `traycer host update` path's whole
-// vocabulary for "in flight" or "just failed". Before this field was wired
-// through, a @1.3 host running that path rendered as "Host is up to date"
-// (the pre-fix `idle` card) on the very Overview whose Update had just
-// started - the incident `isQuietUpdateView`'s gate exists to prevent.
+// The coarse `updateProgress` marker, carried beside `updateOperation: {kind:"none"}` - the shipped legacy
+// `traycer host update` path's whole vocabulary for "in flight" or "just failed".
 describe("HostOverviewOperationCard - the coarse updateProgress marker beside {kind:'none'}", () => {
   it("updateOperation:{kind:'none'} with no coarse marker renders no card and no stale 'Host is up to date' text", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
       overrideHandlers: {
-        // The live version differs from the registry copy (`1.5.0`) on
-        // purpose: the header renders the process's own answer once
-        // `host.status` has settled, so its appearance is the proof that
-        // the SAME reply carrying `{kind:"none"}` + no marker is on screen.
+        // The live version differs from the registry copy (`1.5.0`) on purpose.
         "host.status": () => ({
           ...statusWithCoarseProgress({ kind: "none" }, null),
           hostVersion: "1.5.0-live",
@@ -322,11 +306,8 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // The card is also absent while the status query is still loading, so
-    // the absence is asserted only after a render derived from the status
-    // reply is on screen. (The fixture's own call counter is bypassed by an
-    // overridden handler, and a counted call proves the request, not the
-    // render.)
+    // The card is also absent while the status query is still loading, so the absence is asserted only after a
+    // render derived from the status reply is on screen.
     await screen.findByText(/1\.5\.0-live/);
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByText(/Host is up to date/i)).toBeNull();

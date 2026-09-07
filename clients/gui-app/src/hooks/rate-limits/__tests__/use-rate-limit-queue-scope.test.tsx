@@ -78,11 +78,7 @@ describe("useRateLimitQueueScope", () => {
     );
   });
 
-  // The scope routes through `requestWithResponseTimeout` rather than the plain
-  // `request` precisely so the QUEUE's budget decides how long to wait: an
-  // `ephemeralProcess` read spawns a provider CLI and legitimately outruns the
-  // client's default frame timeout. Asserting a second, different value keeps
-  // this honest - a hard-coded constant would satisfy the case above.
+  // The scope routes through `requestWithResponseTimeout` rather than the plain `request` precisely so the QUEUE's budget decides how long to wait: an `ephemeralProcess` read spawns a provider CLI and legitimately outruns the client's default frame timeout.
   it("threads the caller's response budget through on every call", async () => {
     const { result } = renderHook(() => useRateLimitQueueScope(), {
       wrapper: wrapperFor(new QueryClient()),

@@ -9,12 +9,7 @@ interface ComposerSlotApprovalQueueProps {
   readonly onDecision: (approvalId: string, approved: boolean) => void;
 }
 
-/**
- * Single canonical surface for ALL pending approvals - one row when there
- * is one, N rows when many. Replaces the prior split where a single
- * approval lived in the composer slot and ≥2 spilled inline. Keeps the
- * action surface consistent regardless of queue depth.
- */
+/** Single canonical surface for ALL pending approvals - one row when there is one, N rows when many. Replaces the prior split where a single approval lived in the composer slot and ≥2 spilled inline. */
 export function ComposerSlotApprovalQueue(
   props: ComposerSlotApprovalQueueProps,
 ) {

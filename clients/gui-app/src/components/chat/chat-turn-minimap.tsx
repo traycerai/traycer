@@ -38,15 +38,9 @@ import {
 } from "@/stores/settings/settings-store";
 
 export interface ChatTurnMinimapProps {
-  /** The array the list renders - the rail's `rowIndex` values feed
-   *  `positionAtIndex`, so they must live in LIST index space, which on the
-   *  windowed line includes placeholder rows. */
+  /** The array the list renders - the rail's `rowIndex` values feed `positionAtIndex`, so they must live in LIST index space, which on the windowed line includes placeholder rows. */
   readonly rows: ReadonlyArray<TranscriptListRow>;
-  /**
-   * The window `rows` was merged from, or `null` on the legacy line. Read only
-   * as the derive's cache key - see `chatTurnMinimapItems`, which is what keeps
-   * the rail off the per-token path.
-   */
+  /** The window `rows` was merged from, or `null` on the legacy line. Read only as the derive's cache key - see `chatTurnMinimapItems`, which is what keeps the rail off the per-token path. */
   readonly transcriptWindow: TranscriptWindow | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly topOffsetAdjustmentRef: RefObject<number>;
@@ -75,19 +69,8 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     transcriptWindow,
     viewportRef,
   } = props;
-  // A streaming reply replaces `rows` per token, so this array is new per
-  // token even when the turns are not. What is keyed on its identity must
-  // survive that: the tile bar's notify compares the outline it publishes
-  // (`useRegisterTileMinimap`), and the rail's geometry effect below reads
-  // `refreshCurrent` through a ref instead of depending on it.
-  //
   // Which is also why the whole-transcript scan is not keyed on `rows`.
-  // `chatTurnMinimapItems` owns that decision and re-derives only when the
-  // structure moved, returning the SAME array otherwise - so `items` is stable
-  // across a token even though `rows` is not, and everything keyed on its
-  // identity below (the `refreshCurrent` callback, the published outline) stops
-  // churning with it. The `useMemo` is left in place only to keep the lookup
-  // itself off the re-render path; the cache is what makes the result stable.
+  // `chatTurnMinimapItems` owns that decision and re-derives only when the structure moved, returning the SAME array otherwise - so `items` is stable across a token even though `rows` is not, and everything keyed on its identity below (the `refreshCurrent` callback, the published outline) stops churning with it.
   const items = useMemo(
     () => chatTurnMinimapItems({ rows, window: transcriptWindow }),
     [rows, transcriptWindow],
@@ -147,10 +130,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     refreshCurrentRef.current = refreshCurrent;
   }, [refreshCurrent]);
 
-  // Only the rail consumes this geometry, so it runs only where the rail
-  // paints: `getBoundingClientRect` on the transcript container forces a
-  // layout of the virtualized rows inside it, and on a phone that buys
-  // nothing.
+  // Only the rail consumes this geometry, so it runs only where the rail paints: `getBoundingClientRect` on the transcript container forces a layout of the virtualized rows inside it, and on a phone that buys nothing.
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!railActive || viewport === null) return;

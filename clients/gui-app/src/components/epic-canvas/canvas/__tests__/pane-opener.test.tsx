@@ -161,11 +161,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-/**
- * The opener's search box. cmdk renders its input as a combobox (same accessor
- * shape the modal palette's tests use), named by the `aria-label` the opener
- * sets.
- */
 function searchInput(): HTMLElement {
   return screen.getByRole("combobox", { name: "Open into pane" });
 }
@@ -193,11 +188,6 @@ describe("PaneOpener", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  /**
-   * The global test shim answers every media query with `matches: false`,
-   * which is the fine-pointer arm. This narrows the coarse-pointer query alone
-   * so the rest of the app's queries keep the shim's answer.
-   */
   function stubCoarsePointer(coarse: boolean): void {
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
@@ -215,10 +205,6 @@ describe("PaneOpener", () => {
     });
   }
 
-  // Opening an empty pane on a touch device is a tap on a layout, not a
-  // request to type: focusing the opener's search would raise a software
-  // keyboard over the very list of things to open. The INPUT decides, not the
-  // width - a desktop window snapped narrow still types with hardware.
   it("leaves the search alone on a coarse pointer", () => {
     stubCoarsePointer(true);
     render(

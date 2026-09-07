@@ -3,13 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 import { useLinkDownTooLong } from "../use-link-down-too-long";
 
-// The escalation clock ("Reconnecting…" → "Still reconnecting…") runs per
-// OUTAGE. Three properties define it: it must not start before an outage
-// exists, it must not restart on the handshake-only `connected`/`syncing`
-// flips an ack-then-fatal loop produces mid-outage, and it must END on
-// evidence (a genuine cloud frame this cycle) rather than on a state label -
-// a legacy host that never sends the dirty snapshot derives `connected` even
-// for a fully evidenced recovery.
+// Three properties define it: it must not start before an outage exists, it must not restart on the handshake-only `connected`/`syncing` flips an ack-then-fatal loop produces mid-outage, and it must END on evidence (a genuine cloud frame this cycle) rather than on a state label - a legacy host that never sends the dirty snapshot derives `connected` even for a fully evidenced recovery.
 describe("useLinkDownTooLong", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -25,11 +19,7 @@ describe("useLinkDownTooLong", () => {
     });
   }
 
-  // Neutral `connected` is not proof of recovery, but it is not an outage
-  // either. Arming the clock there pre-set `escalated` for any epic that
-  // idles in `connected` past the threshold (an older host, or cloud/dirty
-  // evidence that never arrives), so a later outage's FIRST frame already
-  // said "Still reconnecting…" about a retry that had just begun.
+  // Arming the clock there pre-set `escalated` for any epic that idles in `connected` past the threshold (an older host, or cloud/dirty evidence that never arrives), so a later outage's FIRST frame already said "Still reconnecting…" about a retry that had just begun.
   it("does not pre-arm escalation while the link idles in neutral connected", () => {
     const { result, rerender } = renderState("connected", false);
 
@@ -53,9 +43,7 @@ describe("useLinkDownTooLong", () => {
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
-    // Ack-then-fatal: the transport reaches `open` on every handshake before
-    // the resolver's retryable close lands. No cloud frame ever arrives in
-    // those laps, so the evidence bit stays false. Same outage.
+    // Ack-then-fatal: the transport reaches `open` on every handshake before the resolver's retryable close lands.
     rerender({ state: "connected", fresh: false });
     act(() => {
       vi.advanceTimersByTime(20_000);
@@ -67,13 +55,8 @@ describe("useLinkDownTooLong", () => {
     expect(result.current).toBe(true);
   });
 
-  // Same loop, epic with renderer-only unsynced edits: the handshake lap
-  // derives `syncing` instead of `connected` (open socket + local dirty, no
-  // genuine cloud frame yet - `deriveEpicSyncPillState` rule 2). It is the
-  // same absence of evidence wearing a different label, so it must not end
-  // the outage either - resetting here is exactly how the escalation stayed
-  // invisible for the user most likely to be watching it: the one with
-  // unsaved work.
+  // Same loop, epic with renderer-only unsynced edits: the handshake lap derives `syncing` instead of `connected` (open socket + local dirty, no genuine cloud frame yet - `deriveEpicSyncPillState` rule 2).
+  // It is the same absence of evidence wearing a different label, so it must not end the outage either - resetting here is exactly how the escalation stayed invisible for the user most likely to be watching it: the one with unsaved work.
   it("keeps one outage's clock running across handshake-only syncing flips", () => {
     const { result, rerender } = renderState("reconnecting", false);
 
@@ -106,12 +89,7 @@ describe("useLinkDownTooLong", () => {
     expect(result.current).toBe(false);
   });
 
-  // Legacy host: no `epic.subscribe@1.1` dirty snapshot ever arrives, so
-  // `hostDirtyState` stays `unknown` and even a fully evidenced recovery
-  // derives `connected` - never `synced`. The outage must end on the
-  // EVIDENCE (a genuine cloud frame this cycle), or one outage's clock runs
-  // straight through the healthy connection, silently arms escalation, and
-  // every later brief drop says "Still reconnecting…" from its first frame.
+  // The outage must end on the EVIDENCE (a genuine cloud frame this cycle), or one outage's clock runs straight through the healthy connection, silently arms escalation, and every later brief drop says "Still reconnecting…" from its first frame.
   it("ends the outage on an evidenced connected state (legacy host recovery)", () => {
     const { result, rerender } = renderState("reconnecting", false);
 
@@ -139,10 +117,7 @@ describe("useLinkDownTooLong", () => {
     expect(result.current).toBe(true);
   });
 
-  // The escalated flag itself must also clear on an evidenced `connected`,
-  // not just the outage boolean - otherwise a legacy-host epic that once
-  // escalated shows the escalated copy on the first frame of every later
-  // drop forever.
+  // The escalated flag itself must also clear on an evidenced `connected`, not just the outage boolean - otherwise a legacy-host epic that once escalated shows the escalated copy on the first frame of every later drop forever.
   it("clears an escalated outage on evidenced connected so later drops start calm", () => {
     const { result, rerender } = renderState("reconnecting", false);
 

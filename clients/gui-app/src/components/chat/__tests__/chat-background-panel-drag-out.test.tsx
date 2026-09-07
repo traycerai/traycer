@@ -18,17 +18,7 @@ import {
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-/**
- * Dragging a shell row out of the composer's Background panel onto the canvas,
- * driven as a real pointer gesture through the real `RootDndProvider`.
- *
- * The sibling of the Shells-menu gesture, on the same payload - so what is
- * really pinned here is that a person who can already SEE the running shell
- * does not have to go find it in a second surface to place its window. The
- * menu's drag-out broke because its popover unmounted the source mid-gesture
- * and dnd-kit reads the payload live off the draggable that started it; this
- * panel is inline and stays put, which the second case holds it to.
- */
+/** The sibling of the Shells-menu gesture, on the same payload - so what is really pinned here is that a person who can already SEE the running shell does not have to go find it in a second surface to place its window. */
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
@@ -120,11 +110,7 @@ let epicHandle: OpenedStoreForTest;
 
 let chatSession: ManagedCommandChatSessionStub;
 
-/**
- * The pane's measured box. dnd-kit measures a droppable the moment it
- * registers - and a pane drop zone registers mid-drag - so the stub has to be
- * in place before the gesture starts, not after the element appears.
- */
+/** The pane's measured box. dnd-kit measures a droppable the moment it registers - and a pane drop zone registers mid-drag - so the stub has to be in place before the gesture starts, not after the element appears. */
 const PANE_RECT = new DOMRect(200, 0, 400, 400);
 const EMPTY_RECT = new DOMRect(0, 0, 0, 0);
 
@@ -136,11 +122,7 @@ function stubPaneGeometry(): void {
   );
 }
 
-/**
- * The root DnD provider reads the app's query client (a sidebar reparent
- * committed over RPC invalidates the moved row's record query), so the harness
- * supplies one the way the app shell does.
- */
+/** The root DnD provider reads the app's query client (a sidebar reparent committed over RPC invalidates the moved row's record query), so the harness supplies one the way the app shell does. */
 const queryClient = new QueryClient();
 
 function Harness(props: { readonly paneId: string }): ReactNode {
@@ -237,10 +219,7 @@ function startRowDrag(row: HTMLElement): void {
   });
 }
 
-/**
- * Two moves deep into the pane's rect: the first only re-measures after the
- * zone mounted, the second resolves the collision the drop commits against.
- */
+/** Two moves deep into the pane's rect: the first only re-measures after the zone mounted, the second resolves the collision the drop commits against. */
 function moveIntoPane(): void {
   act(() => {
     fireEvent.pointerMove(document, {
@@ -280,11 +259,8 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -302,9 +278,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // dnd-kit keeps a click-swallowing document listener for 50ms after a drag
-  // ends (its own guard against the browser's post-drag click). Without
-  // waiting it out, the NEXT test's first click never reaches React.
+  // dnd-kit keeps a click-swallowing document listener for 50ms after a drag ends (its own guard against the browser's post-drag click).
+  // Without waiting it out, the NEXT test's first click never reaches React.
   await new Promise((resolve) => {
     setTimeout(resolve, 60);
   });

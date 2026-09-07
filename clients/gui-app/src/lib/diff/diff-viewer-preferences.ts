@@ -7,10 +7,8 @@ export type GitDiffViewMode = "split" | "unified";
 export type GitDiffIndicatorStyle = "bars" | "classic" | "none";
 
 /**
- * Shared, user-level diff viewer configuration. Owned by `useSettingsStore`
- * and consumed by every git and snapshot diff renderer, so changing one field
- * live-updates all mounted viewers. Tile-local state (e.g. which files are
- * collapsed in a concrete diff) is intentionally NOT part of this shape.
+ * Shared, user-level diff viewer configuration.
+ * Owned by `useSettingsStore` and consumed by every git and snapshot diff renderer, so changing one field live-updates all mounted viewers.
  */
 export interface DiffViewerPreferences {
   readonly mode: GitDiffViewMode;
@@ -32,9 +30,7 @@ export interface DiffViewerPreferencesPatch {
 }
 
 /**
- * Defaults mirror @pierre/diffs (split view, backgrounds + line numbers on,
- * "bars" gutter) and match today's hardcoded diff tile defaults so existing
- * tiles render identically once preferences are threaded through.
+ * Defaults mirror @pierre/diffs (split view, backgrounds + line numbers on, "bars" gutter) and match today's hardcoded diff tile defaults so existing tiles render identically once preferences are threaded through.
  */
 export const DEFAULT_DIFF_VIEWER_PREFERENCES: DiffViewerPreferences = {
   mode: "split",
@@ -65,9 +61,8 @@ function persistedBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 /**
- * Defensively reconstructs diff viewer preferences from persisted/untrusted
- * data. Each field falls back independently to the supplied `fallback` value,
- * so a single corrupt field never discards the rest.
+ * Defensively reconstructs diff viewer preferences from persisted/untrusted data.
+ * Each field falls back independently to the supplied `fallback` value, so a single corrupt field never discards the rest.
  */
 export function normalizeDiffViewerPreferences(
   value: unknown,

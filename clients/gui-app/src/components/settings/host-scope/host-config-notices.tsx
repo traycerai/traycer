@@ -2,25 +2,13 @@ import type { ReactNode } from "react";
 import { Info, Laptop } from "lucide-react";
 import type { LocalConfigFallbackReason } from "@/components/settings/host-scope/host-scope-model";
 
-/**
- * The two honest states a config surface can be in once it talks to the host
- * over RPC. Both replaced `RequiresLocalHostNotice`, which said "this window
- * can only read it for the host running on this computer" — a claim about a
- * missing RPC that stopped being true when `config.*` / `diagnostics.*` landed.
- */
+/** Both replaced `RequiresLocalHostNotice`, which said "this window can only read it for the host running on
+ * this computer". */
 
-/**
- * The host answered its handshake WITHOUT the config methods: it predates them.
- *
- * Stated as a version fact rather than a transport one, because that is what it
- * is and because it self-heals — the host re-handshakes after an update and the
- * page fills in with no app restart. `useHostSupportsMethod` fails closed, so
- * this is only ever rendered on a `false` (a completed handshake that did not
- * advertise the method), never on "not yet known".
- */
+/** `useHostSupportsMethod` fails closed, so this is only ever rendered on a `false` (a completed handshake that
+ * did not advertise the method), never on "not yet known". */
 export function HostConfigUnsupportedNotice(props: {
   readonly hostName: string;
-  /** What is unavailable, lower-case: "shell configuration". */
   readonly subject: string;
 }): ReactNode {
   return (
@@ -41,15 +29,7 @@ export function HostConfigUnsupportedNotice(props: {
   );
 }
 
-/**
- * This computer's host cannot answer for its own configuration, so the page is
- * reading and writing the on-disk store directly (the same file the host loads).
- *
- * Not an error and not a gate: everything below it works. It exists because the
- * page silently changes SOURCE here — the host process is not the one answering
- * — and it names WHICH of the two reasons applies, because they call for
- * different actions: start the host, or update it.
- */
+/** It exists because the page silently changes source here - the host process is not the one answering. */
 export function LocalConfigFallbackNotice(props: {
   readonly hostName: string;
   readonly reason: LocalConfigFallbackReason;
@@ -80,12 +60,8 @@ export function LocalConfigFallbackNotice(props: {
   );
 }
 
-/**
- * The host cannot answer for its own configuration AND this shell has no local
- * Traycer CLI to read the store from disk — so there is no source for this page
- * at all. Rare (a local host implies the desktop shell), but it is the one
- * combination the two notices above cannot describe.
- */
+/** The host cannot answer for its own configuration and this shell has no local Traycer CLI to read the store
+ * from disk - so there is no source for this page at all. */
 export function NoConfigSourceNotice(props: {
   readonly hostName: string;
 }): ReactNode {

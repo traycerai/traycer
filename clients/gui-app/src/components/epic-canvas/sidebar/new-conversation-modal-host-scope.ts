@@ -4,12 +4,8 @@ import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-o
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * The picker's host is the placement's RESOLVED host - the one the chat is
- * created on, whichever tier answered - never merely the raw request field.
- * An unnamed request owns its placement, so its picker stays live and writes
- * the Epic-local pin through `onSelect`. A caller-named host is the request
- * itself (for example, a terminal quote) and therefore remains fixed. `null`
- * is the only case that has no placement to select yet and follows active.
+ * The picker's host is the placement's RESOLVED host - the one the chat is created on, whichever tier answered - never merely the raw request field.
+ * `null` is the only case that has no placement to select yet and follows active.
  */
 export function modalWorkspaceHostScope(input: {
   readonly resolvedHostId: string | null;

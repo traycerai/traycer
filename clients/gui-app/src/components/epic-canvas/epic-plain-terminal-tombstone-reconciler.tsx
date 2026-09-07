@@ -67,9 +67,7 @@ function epicPresentationSignatureForEpic(
 }
 
 /**
- * Epic-tab retained-tombstone ingress. Mounted outside EpicSessionGate so
- * a closed-only late payload is consumed even when the open handle is
- * unavailable and no live terminal tile remains.
+ * Mounted outside EpicSessionGate so a closed-only late payload is consumed even when the open handle is unavailable and no live terminal tile remains.
  */
 export function EpicPlainTerminalTombstoneReconciler(props: {
   readonly epicId: string;

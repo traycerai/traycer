@@ -1,27 +1,4 @@
-/**
- * Grouping for the Feedback tab's card stack.
- *
- * GitHub renders every review submission as its own row on a connector line,
- * so a bot that posts five inline-comment reviews in one pass produces five
- * identical "coderabbitai reviewed" rows carrying no text at all. That ladder
- * is most of the vertical space on a reviewed PR and none of its information.
- *
- * Here an entry earns a card only when it has something to READ. Everything
- * else collapses to a one-line event, and consecutive body-less reviews from
- * the same login with the same verdict fold into a single row with a count -
- * the fact ("this bot reviewed, repeatedly, without leaving a summary") is
- * preserved, the repetition is not.
- *
- * Body-less COMMENTS are never folded: a comment with no text is a data
- * oddity rather than a routine event, and silently dropping one would hide a
- * fact the feed is supposed to be a faithful window onto.
- *
- * Inline review threads attach to the review that submitted them, which is the
- * whole point of carrying them: a bot review's body is only a preamble
- * counting its findings ("Actionable comments posted: 5") and the findings
- * themselves are five threads. Rendered apart from that card the count and the
- * content never meet.
- */
+/** Grouping for the Feedback tab's card stack. */
 import type {
   PrActivityItem,
   PrReviewThread,
@@ -49,10 +26,8 @@ export type PrConversationEntry =
 export interface PrConversation {
   readonly entries: readonly PrConversationEntry[];
   /**
-   * Threads whose review is not in this frame - it fell out of the 20-review
-   * window, or the fact predates review ids being captured. Shown under their
-   * own heading rather than dropped, because an unresolved finding is the
-   * thing the tab exists to surface.
+   * Threads whose review is not in this frame - it fell out of the 20-review window, or the fact predates review ids being captured.
+   * Shown under their own heading rather than dropped, because an unresolved finding is the thing the tab exists to surface.
    */
   readonly orphanThreads: readonly PrReviewThread[];
 }
@@ -88,9 +63,8 @@ export function groupPrConversation(
   for (const item of items) {
     const own = item.kind === "review" ? (byReview.get(item.id) ?? []) : [];
     if (own.length > 0) claimed.add(item.id);
-    // A review that submitted findings ALWAYS earns a card, even with an empty
-    // body. Folding it into a one-line event would take its findings with it,
-    // which is the exact failure this feature exists to fix.
+    // A review that submitted findings ALWAYS earns a card, even with an empty body.
+    // Folding it into a one-line event would take its findings with it, which is the exact failure this feature exists to fix.
     if (
       item.kind === "comment" ||
       item.body.trim().length > 0 ||
@@ -150,13 +124,7 @@ export function partitionThreadsByResolution(
   };
 }
 
-/**
- * Where a thread points, as one label.
- *
- * An outdated thread has no `line` at all - the code moved or went away - so
- * `originalLine` is the only anchor left, and saying so is the difference
- * between "line 22" and "line 22 of the code as reviewed".
- */
+/** Where a thread points, as one label. */
 export function prReviewThreadAnchor(thread: PrReviewThread): {
   readonly label: string;
   readonly isOriginal: boolean;

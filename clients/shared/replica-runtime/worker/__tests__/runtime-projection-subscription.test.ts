@@ -1,17 +1,6 @@
 /**
  * The ordering reducer, driven directly.
- *
- * A pure unit, deliberately: the reducer is not where the risk lives. Whether
- * a spawned worker's projection stream actually reaches it is a WIRING
- * question, and that is pinned on the spawner
- * (`spawn-epic-runtime-worker.test.ts`) - a reducer suite cannot see a
- * projection arm that forgot to call it.
- *
- * What is pinned here is the property that makes whole-value publication safe:
- * an already-applied revision must be dropped. With patches an out-of-order
- * delivery corrupts visibly; with whole values it installs an older,
- * internally consistent slice that nothing downstream can distinguish from a
- * real update, and the UI silently goes backwards.
+ * What is pinned here is the property that makes whole-value publication safe: an already-applied revision must be dropped.
  */
 import { describe, expect, it } from "vitest";
 import { createRuntimeProjectionOrdering } from "../runtime-projection-subscription";

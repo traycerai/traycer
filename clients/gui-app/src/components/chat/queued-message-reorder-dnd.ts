@@ -207,17 +207,7 @@ export function useQueuedMessageReorderDnd(
     setDropPreview(null);
   }, []);
 
-  /**
-   * Collision detection for the queue's local DndContext: delegates to
-   * `closestCenter` and stashes the pass's `pointerCoordinates`. This is the
-   * ONLY pointer source for the midline math below. @dnd-kit/core's event
-   * `delta` is scroll-adjusted (it folds in the scroll delta since drag
-   * start) while droppable rects and `pointerCoordinates` live in the
-   * current viewport frame, so reconstructing the pointer as
-   * `activatorEvent.clientY + delta.y` drifts by the scroll amount once the
-   * queue list auto-scrolls mid-drag. Keyboard drags carry no pointer
-   * coordinates and resolve no preview, matching the previous behavior.
-   */
+  /** Collision detection for the queue's local DndContext: delegates to `closestCenter` and stashes the pass's `pointerCoordinates`. This is the ONLY pointer source for the midline math below. @dnd-kit/core's event `delta` is scroll-adjusted (it folds in the scroll delta since drag start) while droppable rects and `pointerCoordinates` live in the current viewport frame, so reconstructing the pointer as `activatorEvent.clientY + delta.y` drifts by the scroll amount once the queue list auto-scrolls mid-drag. */
   const collisionDetection = useCallback<CollisionDetection>((args) => {
     lastCollisionPointerYRef.current = args.pointerCoordinates?.y ?? null;
     return closestCenter(args);

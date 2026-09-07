@@ -1,11 +1,6 @@
 /**
  * Canonical image format sniffing/MIME normalization for the prompt stash.
- * Shared by image preparation (`prompt-stash-image-preparation.ts`, which
- * validates and encodes a captured image before it is stashed) and persisted
- * record/blob restore validation (`prompt-stash-codec.ts`) so the two never
- * drift into disagreeing about what counts as a valid PNG/JPEG/GIF/WebP -
- * this is the sole signature implementation; nothing else in the prompt
- * stash re-derives it.
+ * Shared by image preparation (`prompt-stash-image-preparation.ts`, which validates and encodes a captured image before it is stashed) and persisted record/blob restore validation (`prompt-stash-codec.ts`) so the two never drift into disagreeing about what.
  */
 
 export type CanonicalImageMimeType =
@@ -14,12 +9,7 @@ export type CanonicalImageMimeType =
   | "image/gif"
   | "image/webp";
 
-// Loosely typed as `ReadonlySet<string>` rather than
-// `ReadonlySet<CanonicalImageMimeType>`: both call sites check membership of
-// an arbitrary already-typed-as-`string` field (a stored record's `mimeType`,
-// an image node's `attrs.mimeType`) and only need a boolean answer, never a
-// narrowed return value - `canonicalImageMimeType`/`sniffImageMimeType` below
-// are what actually produce a narrowed `CanonicalImageMimeType`.
+// Loosely typed as `ReadonlySet<string>` rather than `ReadonlySet<CanonicalImageMimeType>`: both call sites check membership of an arbitrary already-typed-as-`string` field (a stored record's `mimeType`, an image node's `attrs.mimeType`) and only need a.
 export const CANONICAL_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
   "image/png",
   "image/jpeg",

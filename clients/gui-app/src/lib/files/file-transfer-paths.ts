@@ -36,11 +36,7 @@ const USABLE_CLIPBOARD_TEXT_FLAVORS = [
 ] as const;
 
 /**
- * True when `dataTransfer` carries a file-like payload: real `File` items, or
- * a URI-only flavor a source without a `File` object still exposes (macOS
- * `public.file-url`, the standard `text/uri-list`). Shared by every
- * paste/drop surface (terminal, composer) so URI-only clipboards get the same
- * detection as a real Finder drag.
+ * True when `dataTransfer` carries a file-like payload: real `File` items, or a URI-only flavor a source without a `File` object still exposes (macOS `public.file-url`, the standard `text/uri-list`).
  */
 export function dataTransferHasFiles(
   dataTransfer: FileTransferDragMetadata,
@@ -56,9 +52,7 @@ export function dataTransferHasFiles(
 
 /**
  * Classifies a file-like drag from metadata the browser exposes before drop.
- * This must not inspect file contents (`getAsFile`/`getData`), which are not
- * reliably readable during dragover. A URI-only transfer remains a path
- * candidate while its URI content is unavailable.
+ * This must not inspect file contents (`getAsFile`/`getData`), which are not reliably readable during dragover.
  */
 export function classifyFileTransferDrag(
   dataTransfer: FileTransferDragMetadata,
@@ -87,16 +81,8 @@ export function collectDroppedFiles(
 }
 
 /**
- * True when `dataTransfer` carries a payload an owner should actually claim:
- * real `File` items, or at least one URI entry that PARSES to a genuine
- * `file://` path. Unlike `dataTransferHasFiles` (a type-name-only check,
- * safe during `dragover`/`dragenter` where content isn't readable), this
- * reads actual clipboard/drop content via `getData` - only call it from
- * `paste`/`drop` handlers. A `text/uri-list` carrying just `https://` (or
- * another non-file scheme - an ordinary link paste) must NOT be claimed:
- * `text/uri-list` commonly accompanies an ordinary link paste (e.g. copying
- * a URL from a browser), and claiming on the type name alone - regardless of
- * what it actually contains - silently swallows that paste.
+ * True when `dataTransfer` carries a payload an owner should actually claim: real `File` items, or at least one URI entry that PARSES to a genuine `file://` path.
+ * Unlike `dataTransferHasFiles` (a type-name-only check, safe during `dragover`/`dragenter` where content isn't readable), this reads actual clipboard/drop content via `getData` - only call it from `paste`/`drop` handlers.
  */
 export function hasClaimableFileTransfer(dataTransfer: DataTransfer): boolean {
   const { files, fileUrlPaths } = collectFileTransferEntries(dataTransfer);
@@ -104,10 +90,8 @@ export function hasClaimableFileTransfer(dataTransfer: DataTransfer): boolean {
 }
 
 /**
- * Native clipboard fallback is deliberately narrower than file-transfer
- * ownership: any ordinary text, rich content, URI, or File item leaves the
- * browser paste path untouched. This is only true for Chromium's empty DOM
- * clipboard snapshot of native-only VS Code explorer copies.
+ * Native clipboard fallback is deliberately narrower than file-transfer ownership: any ordinary text, rich content, URI, or File item leaves the browser paste path untouched.
+ * This is only true for Chromium's empty DOM clipboard snapshot of native-only VS Code explorer copies.
  */
 export function dataTransferHasUsableClipboardData(
   dataTransfer: FileTransferClipboardMetadata,
@@ -122,9 +106,8 @@ export function dataTransferHasUsableClipboardData(
 }
 
 /**
- * Returns the file-like payload a surface should process. A real `File` is
- * authoritative: Finder and VS Code often include a duplicate URI flavor,
- * while URI paths are only needed for sources that expose no File object.
+ * Returns the file-like payload a surface should process.
+ * A real `File` is authoritative: Finder and VS Code often include a duplicate URI flavor, while URI paths are only needed for sources that expose no File object.
  */
 export function collectFileTransferEntries(
   dataTransfer: DataTransfer,
@@ -138,14 +121,7 @@ export function collectFileTransferEntries(
 }
 
 /**
- * Resolves every file-like entry in `dataTransfer` to a durable on-disk path,
- * merging real `File` objects (via `fileDrops.resolveDroppedFilePaths`) with
- * URI-only entries (via `fileDrops.copyDroppedFilePaths`). File URLs are a
- * fallback for sources that expose no `File` object. The host preserves stable
- * paths and copies only known ephemeral sources (notably macOS screenshot
- * thumbnails) into an app-managed temporary location. Real Finder files can
- * carry a duplicate URI list; favor their original path. Returns `null` when
- * `dataTransfer` carries no file-like payload at all.
+ * Resolves every file-like entry in `dataTransfer` to a durable on-disk path, merging real `File` objects (via `fileDrops.resolveDroppedFilePaths`) with URI-only entries (via `fileDrops.copyDroppedFilePaths`).
  */
 export function resolveFileTransferPaths(
   dataTransfer: DataTransfer,

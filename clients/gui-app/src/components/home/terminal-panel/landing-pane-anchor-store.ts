@@ -1,10 +1,8 @@
 import { create } from "zustand";
 import type { PaneSurfaceActivity } from "@/components/epic-tabs/pane-visibility-context";
 
-/**
- * The pane context an anchor sits in, captured at the anchor's React position
- * so the portaled panel can be given the same one.
- */
+/** The pane context an anchor sits in, captured at the anchor's React position so the portaled panel can be
+ * given the same one. */
 export interface LandingPanePresentation {
   readonly activity: PaneSurfaceActivity;
   readonly portalContainer: HTMLElement | null;
@@ -21,15 +19,8 @@ export interface LandingPaneAnchorState {
   ) => void;
 }
 
-/**
- * Ephemeral registry of each visible landing pane's panel slot. Split drafts
- * register one anchor apiece; the single host portals the panel into the
- * selected draft's anchor so the terminal UI stays inside that pane's bounds.
- *
- * Its own module rather than `landing-terminal-host.tsx` so a non-component
- * caller can read it: the fast-refresh lint rule forbids exporting a plain
- * function or store from a file that exports components.
- */
+/** Its own module rather than `landing-terminal-host.tsx` so a non-component caller can read it: the
+ * fast-refresh lint rule forbids exporting a plain function or store from a file that exports components. */
 export const useLandingPaneAnchorStore = create<LandingPaneAnchorState>()(
   (set) => ({
     anchors: new Map(),
@@ -45,9 +36,8 @@ export const useLandingPaneAnchorStore = create<LandingPaneAnchorState>()(
         }
         return { anchors };
       }),
-    // Field-wise equality, not reference: this runs on every anchor render, and a
-    // fresh map identity would re-render the host (and with it re-run the panel's
-    // gates) on every keystroke in the start page.
+    // Field-wise equality, not reference: this runs on every anchor render, and a fresh map identity would
+    // re-render the host (and with it re-run the panel's gates) on every keystroke in the start page.
     setPresentation: (draftId, presentation) =>
       set((state) => {
         const current = state.presentations.get(draftId);
@@ -73,17 +63,8 @@ export const useLandingPaneAnchorStore = create<LandingPaneAnchorState>()(
   }),
 );
 
-/**
- * Every start page with a mounted panel slot right now.
- *
- * This is the candidate set the single panel is portaled into:
- * `resolveHostedLandingDraftId` answers with the focused draft, else the
- * retained hosted one, else the first anchor - all of which are members of
- * THIS set (it returns null only when the set is empty). A caller that has to
- * make the panel visible without being able to read the host's retained React
- * state can therefore act on the whole set and be certain the hosted page is
- * covered.
- */
+/** A caller that has to make the panel visible without being able to read the host's retained React state can
+ * therefore act on the whole set and be certain the hosted page is covered. */
 export function landingPaneAnchorDraftIds(): readonly string[] {
   return [...useLandingPaneAnchorStore.getState().anchors.keys()];
 }

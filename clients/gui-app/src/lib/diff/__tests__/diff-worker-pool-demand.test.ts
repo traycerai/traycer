@@ -17,11 +17,7 @@ interface FakeWorkerPoolManager {
 }
 
 /**
- * A prototype-less object asserted to the class type, with the three members
- * a consumer could call assigned onto it (`as unknown as` is lint-forbidden
- * here, and a three-member literal does not overlap the ~90-member class
- * enough for a direct `as`). Each fake is its own object identity, which is
- * all these tests read - none of the three methods is ever called.
+ * A prototype-less object asserted to the class type, with the three members a consumer could call assigned onto it (`as unknown as` is lint-forbidden here, and a three-member literal does not overlap the ~90-member class enough for a direct `as`).
  */
 function fakeManager(id: string): WorkerPoolManager {
   const fake: FakeWorkerPoolManager & { readonly debugId: string } = {
@@ -172,19 +168,13 @@ describe("diff-worker-pool-demand", () => {
     unregisterDiffWorkerPoolCreator(creator);
 
     expect(getDiffWorkerPool()).toBeUndefined();
-    // The request is cleared too, not just the creator/manager: every surface
-    // that could have asked for a pool renders below the provider, so it has
-    // unmounted along with it, and a `requested` left standing would make the
-    // NEXT registration build a pool eagerly during its own mount.
+    // The request is cleared too, not just the creator/manager: every surface that could have asked for a pool renders below the provider, so it has unmounted along with it, and a `requested` left standing would make the NEXT registration build a pool eagerly.
     expect(getDiffWorkerPoolAvailability()).toBe("pending");
   });
 
   it("does not eagerly rebuild a pool for a second app-shell lifetime's registration after unregister", () => {
-    // The regression this pins: a host outage or sign-out unmounts the
-    // provider and remounts it under `HostReadyGate` within one session. The
-    // second lifetime must be exactly as lazy as the first - nothing has
-    // asked for a pool YET in this lifetime, so registering its creator alone
-    // must not build one.
+    // The regression this pins: a host outage or sign-out unmounts the provider and remounts it under `HostReadyGate` within one session.
+    // The second lifetime must be exactly as lazy as the first - nothing has asked for a pool YET in this lifetime, so registering its creator alone must not build one.
     const creator1 = vi.fn(fakeCreator("k1"));
     registerDiffWorkerPoolCreator(creator1);
     requestDiffWorkerPool();

@@ -61,12 +61,6 @@ const {
 const { __setDesktopStartupTestHooks, runDesktopStartup } =
   await import("../desktop-startup");
 
-/**
- * A {@link SignedInGate} whose answer can flip, so a test can drive the
- * sign-in TRANSITION rather than only the already-signed-in case - the
- * transition is the arm that reproduces the pre-retirement timing, where the
- * host was installed once the gate mounted after sign-in.
- */
 function fakeSignedInGate(initial: boolean): SignedInGate & {
   signIn(): void;
   signOut(): void;
@@ -146,17 +140,8 @@ function fakeHostController(
   readonly activateInstalledCalls: readonly boolean[];
   readonly convergeReadyCalls: readonly boolean[];
   readonly stageLatestCalls: number;
-  /**
-   * How many times status was sampled. Lets a test wait for an actor that
-   * DECLINES to act - "no converge" is not observable until you know the
-   * decision was actually reached, rather than still pending.
-   */
   readonly getStatusCalls: number;
-  /**
-   * Method names in invocation order. Counts alone cannot express "recovery
-   * ran BEFORE the release download", which is the whole point of the
-   * unavailable-first ordering.
-   */
+  /** Counts alone cannot express "recovery ran BEFORE the release download", which is the whole point of the unavailable-first ordering. */
   readonly callOrder: readonly string[];
 } {
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
@@ -267,10 +252,6 @@ function fakeHostController(
 describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    // `clearAllMocks` only wipes call history, not implementations set via
-    // `mockResolvedValue` - a test that opts into the removed-by-user branch
-    // would otherwise leave that override in place for every test after it,
-    // in this describe and the next.
     isHostRemovedByUserMock.mockResolvedValue(false);
   });
 
@@ -366,10 +347,6 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.activateInstalledCalls).toEqual([]);
   });
 
-  // An unavailable service is not registered at all, so the host is
-  // unreachable until it is. `stageLatest()` joins a controller-owned release
-  // download that can run for minutes on a slow link; recovering after it
-  // would leave the user hostless for that entire window.
   it("recovers an unavailable service BEFORE joining the release download", async () => {
     const controller = fakeHostController(
       fakeStatus(false, "unavailable", false),
@@ -388,13 +365,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.convergeReadyCalls).toEqual([false]);
   });
 
-  // Applying is itself the fastest route back to a running host and
-  // re-registers on the way, so a ready stage keeps its precedence rather
-  // than paying for a separate recovery first.
-  // `activation: "unavailable"` describes the RUNNING runtime, so a machine
-  // that has never installed a host reports it too. Recovering there would
-  // provision and start a background host before sign-in, bypassing the
-  // renderer's signed-in provisioning gate.
+  // `activation: "unavailable"` describes the RUNNING runtime, so a machine that has never installed a host reports it too.
   it("does not provision a host that was never installed", async () => {
     const controller = fakeHostController(
       { ...fakeStatus(false, "unavailable", false), installedVersion: null },
@@ -428,11 +399,6 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.applyStagedCalls).toEqual([["launch", false]]);
   });
 
-  // The other side of that precedence. `applyStaged` RESOLVES its failures
-  // rather than throwing, and the pre-stage recovery stood down because a
-  // stage was ready - so when the apply then does not land, an absent service
-  // had nobody left to re-register it and the machine stayed unreachable until
-  // the next launch.
   it.each([
     ["a failed apply", { kind: "failed" as const, message: "apply failed" }],
     [
@@ -443,12 +409,6 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       "bytes that committed without converging",
       { kind: "installed-not-converged" as const, message: "not converged" },
     ],
-    // Codex P1: `deferred` is NOT always contention. A registry outage leaves
-    // the stage un-eligibility-checked and resolves this same arm while
-    // holding no lock at all - skipping recovery there left an installed
-    // service unregistered because a network probe failed. The lock-contention
-    // reading is safe here too: convergeReady runs its own bounded CLI-lock
-    // retry and resolves deferred itself.
     [
       "an apply deferred by an unreachable registry",
       {
@@ -469,10 +429,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.convergeReadyCalls).toEqual([false]);
   });
 
-  // `busy` is the one pass-through: the controller's own gate says the host
-  // has work in progress, and convergeReady consults the same gate. Note the
-  // asymmetry with `deferred` above - that arm carries a non-contention
-  // meaning (registry outage) and so must go through the status gates.
+  // Note the asymmetry with `deferred` above - that arm carries a non-contention meaning (registry outage) and so must go through the status gates.
   it("does not chase a busy apply with a recovery", async () => {
     const controller = fakeHostController(
       fakeStatus(true, "unavailable", false),
@@ -538,10 +495,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       runPreReady: () => undefined,
       whenReady: async () => undefined,
       runOnReady: async () => undefined,
-      // SIGNED OUT for this composition test, so the first-install actor
-      // provably cannot contribute to the assertions below: it arms, sees no
-      // signed-in identity, and waits. What is under test here is activation
-      // debt on a host that already exists.
+      // SIGNED OUT for this composition test, so the first-install actor provably cannot contribute to the assertions below: it arms, sees no signed-in identity, and waits.
       runWindowPhase: async () => ({
         hostController,
         menu: fakeMenu(),
@@ -582,12 +536,8 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       },
       { kind: "ok", value: { activated: true } },
     );
-    // `runLaunchHostConvergeReconcile` reads status twice before deciding to
-    // apply (initial removed-by-user check, then the post-stageLatest
-    // decision read) - both must still show `updateReady` for the apply
-    // branch to run at all. The third read (inside
-    // `refreshHostRegistryIfNotRemoved`, after the apply committed) is what
-    // this test is actually exercising.
+    // `runLaunchHostConvergeReconcile` reads status twice before deciding to apply (initial removed-by-user check, then the post-stageLatest decision read).
+    // The third read (inside `refreshHostRegistryIfNotRemoved`, after the apply committed) is what this test is actually exercising.
     vi.spyOn(controller, "getStatus")
       .mockResolvedValueOnce(readyStatus)
       .mockResolvedValueOnce(readyStatus)
@@ -649,14 +599,6 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("re-arms after an attempt that THREW, and retries on the ladder rather than a sign-in edge", async () => {
-    // `settled` used to be set before the async work started, and the detached
-    // promise had no catch: one transient IPC failure retired first-install for
-    // the whole process, leaving a signed-in user in the unavailable-host flow
-    // until a manual retry or a relaunch. The retry now comes from the LADDER
-    // TIMER a throw schedules (when still signed in), not from waiting on
-    // another sign-in edge - so this also proves a same-state sign-in change
-    // (e.g. a token refresh) does not bypass the ladder while a timer is
-    // already pending.
     vi.useFakeTimers();
     const controller = fakeHostController(
       neverInstalled(false),
@@ -701,21 +643,8 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("stays armed after a RESOLVED non-ok outcome, and retries on the ladder without a sign-in edge", async () => {
-    // Deliberately NOT a throw. The throw path is the test directly above;
-    // this is the surviving half - `busy`, `deferred` and `failed` are
-    // ordinary resolved values, so they never reach the catch, and
-    // `outcome.kind` was logged without being read. Before the ladder this
-    // arm only retried on the NEXT SIGN-IN EDGE, which for a user who stays
-    // signed in never comes - the local host used to come up again without
-    // anyone signing in again, and the user has ruled it must keep doing so.
-    // This test drives the whole ladder with NO sign-in edge at all.
-    //
-    // `convergeReady` is OVERRIDDEN rather than configured, because
-    // `fakeHostController` hardcodes it to `ok` - its second parameter is
-    // `applyStagedOutcome`, not the converge outcome. Passing a `failed`
-    // there drives the SUCCESS path while looking like a failure fixture, and
-    // an earlier version of this test did exactly that and passed for the
-    // wrong reason.
+    // The throw path is the test directly above.
+    // Before the ladder this arm only retried on the NEXT SIGN-IN EDGE, which for a user who stays signed in never comes.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -771,10 +700,7 @@ describe("armLocalHostBootOnSignIn", () => {
     await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[1] - 1);
     expect(convergeCalls).toEqual([false, false]);
 
-    // ...and that third attempt, this time succeeding, settles the arm.
-    // Asserting only the listener count would pass on a build that kept the
-    // subscription and never acted on it - the point is the retry, not the
-    // bookkeeping.
+    // Asserting only the listener count would pass on a build that kept the subscription and never acted on it - the point is the retry, not the bookkeeping.
     outcomeKind = "ok";
     await vi.advanceTimersByTimeAsync(1);
     expect(convergeCalls).toEqual([false, false, false]);
@@ -850,12 +776,6 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("CONSENT: a sign-out landing inside the status round trip installs nothing", async () => {
-    // The window is real and not narrow in wall-clock terms: `getStatus()` is
-    // an IPC round trip to the host controller, and the arm's decision to act
-    // was taken BEFORE it. The falling edge reaches the subscription while
-    // that promise is pending and is ignored there by design (the handler only
-    // acts on `signedIn`), so nothing between the decision and the install
-    // re-reads consent unless this arm does.
     const base = fakeHostController(
       neverInstalled(false),
       {
@@ -936,11 +856,6 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("does nothing when a host is already RUNNING - activation debt is the reconciler's", async () => {
-    // Fixture is `activated` (a live runtime), so this still describes a
-    // one-shot no-op for THIS actor. What changed is the neighbour case: an
-    // INSTALLED host that is NOT running is no longer the reconciler's alone
-    // to catch - see "boots an INSTALLED host that is not running at launch"
-    // below, which is this actor's now too.
     const controller = fakeHostController(
       fakeStatus(false, "activated", false),
       {
@@ -959,14 +874,6 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("boots an INSTALLED host that is not running at launch, and leaves a running one alone", async () => {
-    // The widened contract: the owed condition is "no host RUNNING"
-    // (`activation === "unavailable"`), not "nothing installed"
-    // (`installedVersion === null`). An installed host with no running
-    // service is owed a boot from THIS actor now - not only from the
-    // one-shot reconciler, which can miss it entirely (see the regression
-    // test right below this one) - and a host that answers with any other
-    // activation value is already running and must settle without ever
-    // calling `convergeReady`.
     const downController = fakeHostController(
       fakeStatus(false, "unavailable", false),
       {
@@ -1009,15 +916,6 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("a half-completed first install (bytes landed, service never started) is still owed a boot", async () => {
-    // THE regression this widening exists to prevent: before it, `settle()`
-    // fired the moment `installedVersion !== null`, so an install whose bytes
-    // landed but whose service never registered looked "done" to this actor
-    // on its very first status read - a half-completed first install left the
-    // machine hostless with nothing retrying. The status read below models
-    // exactly that machine: `neverInstalled` on the FIRST read, then
-    // `installed but unavailable` on every read after - and the arm must ask
-    // `convergeReady` a second time rather than treat the now-installed bytes
-    // as a settled outcome.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -1067,15 +965,8 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("a `busy` outcome earns the next rung - it is a fail-safe, not a running host", async () => {
-    // The tempting reading is "only a LIVE host declines a byte swap", and an
-    // earlier revision of this actor settled on it. `assertHostNotBusy` raises
-    // `E_HOST_BUSY` whenever a live PID's idle state cannot be DETERMINED -
-    // `/activity` timed out, refused, answered malformed, or 404'd - which is
-    // what a WEDGED host looks like. Settling there retired this process's
-    // only retry ladder for a host that may never serve, and the authority
-    // cannot always cover it: it can only ensure a host the fleet can NAME,
-    // and an unusable enrollment record makes `readLastKnownLocalHostId`
-    // answer null outright.
+    // `assertHostNotBusy` raises `E_HOST_BUSY` whenever a live PID's idle state cannot be DETERMINED - `/activity` timed out, refused, answered malformed, or 404'd.
+    // Settling there retired this process's only retry ladder for a host that may never serve, and the authority cannot always cover it: it can only ensure a host the fleet can NAME.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -1114,11 +1005,6 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("a `deferred` outcome (CLI lock held elsewhere) earns the next rung, not a sign-in wait", async () => {
-    // `deferred` is an ordinary resolved outcome, same as `failed` above - it
-    // never reaches the catch, and it clears on its own once the other
-    // Traycer process releases the CLI lock, so it earns a ladder retry
-    // exactly like `failed` rather than falling back to the pre-ladder
-    // "wait for a sign-in edge" behaviour.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -1161,11 +1047,7 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("CONSENT: a sign-out mid-ladder cancels the pending retry, and the next sign-in starts the ladder over", async () => {
-    // The other half of consent-as-precondition: a sign-out must stop a
-    // pending retry from firing into an account that just left, and the
-    // ladder itself must not carry over - a real re-login gets the same
-    // rung-0 pace a fresh sign-in would, never the tail end of the previous
-    // attempt's backoff.
+    // The other half of consent-as-precondition: a sign-out must stop a pending retry from firing into an account that just left, and the ladder itself must not carry over.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -1247,16 +1129,8 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("the disposer stops an attempt BEFORE it can start provisioning", async () => {
-    // The sibling test above proves a disposed actor cannot re-ARM. This one
-    // proves it cannot START: teardown landing inside the `getStatus()` round
-    // trip left the continuation free to walk on to `convergeReady`, spawning
-    // a CLI `host ensure` against a controller the app was tearing down.
-    // Recording terminal in `dispose()` alone did not cover that - the guard
-    // has to be read again AFTER the await, which is what this asserts.
-    //
-    // Deterministic, not a scheduler race: `getStatus` parks on a promise this
-    // test holds the resolver for, so `dispose()` runs from the test body
-    // while the attempt is provably inside that await.
+    // The sibling test above proves a disposed actor cannot re-ARM.
+    // This one proves it cannot START: teardown landing inside the `getStatus()` round trip left the continuation free to walk on to `convergeReady`, spawning a CLI `host ensure`.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -1295,10 +1169,7 @@ describe("armLocalHostBootOnSignIn", () => {
     expect(convergeReadyCalls).toEqual([]);
 
     dispose();
-    // The account is STILL SIGNED IN, so nothing else in the continuation
-    // would turn it back: without the post-await guard the status below
-    // (never installed, `activation: "unavailable"`) sends it straight into
-    // `convergeReady`.
+    // The account is STILL SIGNED IN, so nothing else in the continuation would turn it back: without the post-await guard the status below (never installed, `activation.
     expect(gate.isSignedIn()).toBe(true);
     releaseStatus(neverInstalled(false));
     await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
@@ -1308,20 +1179,6 @@ describe("armLocalHostBootOnSignIn", () => {
   });
 
   it("the disposer fences an attempt that is already in flight", async () => {
-    // `dispose()` used to clear the timer and the subscription without
-    // setting `settled` - so an attempt already in flight when it ran had its
-    // CONTINUATION land after disposal and walk straight into
-    // `scheduleRetry()`, arming a fresh timer for an actor main just tore
-    // down: a disposed actor that keeps provisioning. `dispose()` now sets
-    // `settled = true` before anything else, so that continuation's
-    // `scheduleRetry()` sees it and returns without arming.
-    //
-    // The disposal below lands INSIDE the in-flight window deterministically,
-    // not as a race the scheduler might win: `convergeReady` returns a
-    // promise this test holds the resolver for, so `dispose()` runs from the
-    // test body itself while that promise is PROVABLY still pending - only
-    // after it returns do we resolve `convergeReady` and let the
-    // continuation run.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -1414,10 +1271,6 @@ describe("applyHostUpdateMenuState", () => {
 describe("refreshHostRegistryIfNotRemoved", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    // `clearAllMocks` only wipes call history, not implementations set via
-    // `mockResolvedValue` - a test that opts into the removed-by-user branch
-    // would otherwise leave that override in place for every test after it,
-    // in this describe and the next.
     isHostRemovedByUserMock.mockResolvedValue(false);
   });
 

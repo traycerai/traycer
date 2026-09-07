@@ -15,28 +15,7 @@ import {
 
 /**
  * Collect **top-level** `key = value` pairs from `launchctl print` output.
- * First occurrence wins; nested `=>` env lines excluded (macos.ts:465-490).
- *
- * Depth is enforced, not assumed. Real `launchctl print` indents top-level
- * fields with exactly one tab and everything inside a `{ … }` block with two
- * or more, so the anchor is `^\t?` — at most one leading tab. The previous
- * `^\s*` anchor matched any depth and harvested `port` / `active` / `managed`
- * / `reset` / `hide` / `watching` out of the `endpoints = { … }` block
- * (30 fields from one real print). First-occurrence-wins hid that today, but
- * `classifyLabelOwnership` reads `fields.get("path")`, and an
- * SMAppService-submitted job need not carry a top-level `path` while nested
- * descriptors can — a nested `path` would then become both the reported
- * `LabelOwnership.path` and the input to `isSmAppServiceLaunchAgentPath`.
- *
- * Block-opening lines (`arguments = {`) are pairs syntactically but not
- * semantically: they announce a nested section rather than carry a value, and
- * admitting them mapped container keys to the literal `"{"`. They are
- * dropped, which is what makes the docstring above true.
- *
- * Value capture uses `.+?` so a bare `key=` with no characters after `=`
- * fails the match entirely (same as today's CLI). A whitespace-only value
- * (`key =   `) does match; we **trim** and drop empty so the empty-value
- * guard is reachable and meaningful for real launchctl-ish shapes.
+ * Block-opening lines (`arguments = {`) are pairs syntactically but not semantically: they announce a nested section rather than carry a value, and admitting them mapped container keys to the literal `"{"`.
  */
 export function parseLaunchctlPrintFields(
   printOutput: string,
@@ -52,9 +31,7 @@ export function parseLaunchctlPrintFields(
     if (key === undefined || rawValue === undefined) {
       continue;
     }
-    // Trim so whitespace-only values are treated as empty (the guard below
-    // is intentionally live — without trim, `.+?` would keep a single
-    // trailing space and the empty check would never fire).
+    // Trim so whitespace-only values are treated as empty (the guard below is intentionally live - without trim, `.+?` would keep a single trailing space and the empty check would never fire).
     const value = rawValue.trim();
     if (value.length === 0) {
       continue;
@@ -72,12 +49,6 @@ export function isSmAppServiceLaunchAgentPath(plistPath: string): boolean {
   return /\/[^/]+\.app\/Contents\/Library\/LaunchAgents\//i.test(plistPath);
 }
 
-/**
- * Multi-signal SMAppService ownership. Any of:
- * 1. managed_by = com.apple.xpc.ServiceManagement
- * 2. type = Submitted
- * 3. in-bundle LaunchAgents path
- */
 export function classifyLabelOwnership(
   fields: ReadonlyMap<string, string>,
   raw: string,
@@ -140,30 +111,6 @@ export function classifyLabelOwnership(
   };
 }
 
-/**
- * ProgramArguments extraction from `launchctl print` text (annex §2.1.2).
- *
- * Real launchd emits arguments **bare, one per line** inside the block:
- *
- * ```
- * 	arguments = {
- * 		Contents/Library/LaunchAgents/Traycer Host.app/Contents/MacOS/traycer
- * 		host
- * 		start
- * 	}
- * ```
- *
- * Harvesting only `"quoted"` tokens returned `null` for **every real job**,
- * and a `null` here does not fail loudly — it silently reduces launchd-derived
- * attestation to label matching alone, which is precisely what `identity.ts`'s
- * header and the annex's eviction rule forbid. Arguments are one per line, and
- * an argument may legally contain spaces (the real Traycer agent's program
- * path does), so the line is the token: no whitespace splitting.
- *
- * Surrounding double quotes are stripped when present so a quoted generation
- * still reads correctly, and the leading `program arguments = {` spelling is
- * accepted alongside `arguments = {`.
- */
 export function extractProgramArgumentsFromPrint(
   raw: string,
 ): readonly string[] | null {
@@ -190,7 +137,7 @@ export function extractProgramArgumentsFromPrint(
     if (token.length === 0) continue;
     tokens.push(token);
   }
-  // Block never closed — truncated output is not evidence about arguments.
+  // Block never closed - truncated output is not evidence about arguments.
   return null;
 }
 
@@ -211,21 +158,8 @@ function stripSurroundingQuotes(value: string): string {
 }
 
 /**
- * LWCR **mismatch** markers — annex §1.1 (corrected).
- *
- * Exactly one token, and it is the only one that means anything is wrong.
- * `has LWCR` was in this list and is the *healthy* state: launchd prints it in
- * `properties` for any job with a Lightweight Code Requirement attached, which
- * is the normal state of a code-signed SMAppService agent. The live Traycer
- * agent on a working install prints
- * `properties = partial import | runatload | resolve program | has LWCR`.
- * Treating that as wedge evidence made the steady-state plan for a healthy
- * macOS install `transition-to-fallback` — provision a raw fallback and boot
- * out the agent. The bare substring `"lwcr"` was worse still: it matched any
- * path or argument containing those four letters.
- *
- * Adding a token here requires live `launchctl print` bytes showing it on a
- * job that is actually wedged — never inference from the string's wording.
+ * Only exact mismatch tokens, currently `needs LWCR update`. `has LWCR` is healthy; a bare `lwcr` substring matches paths.
+ * Adding a token requires live `launchctl print` bytes from a wedged job.
  */
 const LWCR_MISMATCH_MARKERS: readonly string[] = ["needs LWCR update"];
 
@@ -276,14 +210,8 @@ function evidenceNumber(
 }
 
 /**
- * LWCR evidence from the **`properties` field**, not the whole print blob
- * (annex §1.1 rule 2). Scanning the blob let any path, argument or coalition
- * name carrying the substring produce a marker.
- *
- * A print with no `properties` field is `indeterminate(unrecognized-format)`,
- * not `absent`: we did not read the property list, so we have not observed the
- * absence of a mismatch marker either. `deriveWedgeVerdict` only raises
- * `lwcr-mismatch-markers` on `observed`, so an unread field cannot wedge.
+ * Read LWCR markers from the `properties` field, not the whole print blob (paths/args can carry the substring).
+ * No `properties` field is `indeterminate`, not `absent` - an unread field must not wedge.
  */
 export function parseLwcrEvidence(raw: string): LwcrEvidence {
   const properties = parseLaunchctlPrintFields(raw).get("properties");

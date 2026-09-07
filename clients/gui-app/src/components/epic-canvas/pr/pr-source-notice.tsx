@@ -9,19 +9,13 @@ import {
 } from "@/lib/pr/pr-source-notice-message";
 
 /**
- * The ⓘ that explains why rows have stopped refreshing.
- *
- * The pause never shows as an error state: the rows on screen are real, just
- * not being refreshed, and `sourceStatus` stays `cached` to say exactly that.
- * The words themselves live in `pr-source-notice-message.ts`, one dialect for
- * every surface that shows this icon.
+ * The pause never shows as an error state: the rows on screen are real, just not being refreshed, and `sourceStatus` stays `cached` to say exactly that.
  */
 export function PrSourceNoticeHint(props: {
   readonly notice: PrSourceNotice;
   /**
-   * What is not refreshing. The composer's mention sections reuse this exact
-   * ⓘ for their own top bar, and an Issues section that said "Pull requests
-   * are not refreshing" would be describing a different surface.
+   * What is not refreshing.
+   * The composer's mention sections reuse this exact ⓘ for their own top bar, and an Issues section that said "Pull requests are not refreshing" would be describing a different surface.
    */
   readonly subject: PrSourceNoticeSubject;
 }): ReactNode {
@@ -32,19 +26,8 @@ export function PrSourceNoticeHint(props: {
     props.subject,
   );
   return (
-    // Two elements, two jobs. The live region announces the pause when it
-    // appears, without anyone having to go looking for it; the button is what
-    // makes the tooltip reachable, because a hover-only trigger hands the only
-    // full explanation to pointer users and leaves sighted keyboard users
-    // staring at an icon they cannot open. They cannot be the same element: a
-    // focusable `role="status"` is precisely what `no-noninteractive-tabindex`
-    // forbids, and it is right to - a live region is not a control.
-    //
-    // The message is rendered as visually-hidden TEXT, not as the region's
-    // `aria-label`. A live region announces its accessible CONTENT when that
-    // content changes; labelling an empty region gives it nothing to announce,
-    // so the pause would land silently. The button keeps its own `aria-label`
-    // because it is a control, and a control is named by its label.
+    // The live region announces the pause when it appears, without anyone having to go looking for it; the button is what makes the tooltip reachable, because a hover-only trigger hands the only full explanation to pointer users and leaves sighted keyboard users staring at an icon they cannot open.
+    // They cannot be the same element: a focusable `role="status"` is precisely what `no-noninteractive-tabindex` forbids, and it is right to - a live region is not a control.
     <span
       className="flex shrink-0 items-center"
       data-testid="pr-source-notice"

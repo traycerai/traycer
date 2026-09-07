@@ -1,14 +1,5 @@
 /**
- * PDF change summary for the git diff surfaces (single-file tile and bundle
- * rows) - the GitHub-shaped treatment, settled with the user 2026-09-03:
- * one COMPACT centered block (icon, path, "Added/Modified · size"), never a
- * full-height fake two-column diff (two multi-page viewers would look like
- * a diff while carrying none of a diff's meaning), never a modal. The one
- * action is Open: the CURRENT version in the app's own PDF viewer (the
- * workspace file tile), with the app's standard click-to-open +
- * drag-to-split mechanics. Old-version open deliberately deferred (needs a
- * file-at-revision tile kind; the user chose latest-only for now), so a
- * deleted PDF shows its status with no open affordance.
+ * Old-version open deliberately deferred (needs a file-at-revision tile kind; the user chose latest-only for now), so a deleted PDF shows its status with no open affordance.
  */
 import { useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
@@ -53,13 +44,7 @@ interface PdfDiffStatusSummary {
 
 /**
  * What the block says this change IS.
- *
- * Presence of a side comes first because it is the strongest fact the diff
- * surface has, and it is what decides whether there is anything to open.
- * Beyond that, git's OWN status decides - not a path comparison: a COPY
- * carries a `previousPath` and two live sides exactly like a rename, so
- * inferring from the paths alone labels it "Renamed" and tells the reader
- * the source moved when it is still sitting there.
+ * Presence of a side comes first because it is the strongest fact the diff surface has, and it is what decides whether there is anything to open.
  */
 function statusSummary(props: PdfDiffViewProps): PdfDiffStatusSummary {
   if (props.oldStage === null) return { label: "Added", sourcePath: null };
@@ -88,10 +73,7 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
       ? props.filePath
       : (props.previousPath ?? props.filePath);
 
-  // Latest-only by decision: the ref points at the CURRENT file on disk, so
-  // the button exists only while a current side does. The tile's own router
-  // handles whatever the path turns out to be (a rename can put a non-PDF on
-  // the new side - the file tile renders its true type).
+  // Latest-only by decision: the ref points at the CURRENT file on disk, so the button exists only while a current side does.
   const openRef = useMemo(() => {
     if (props.newStage === null) return null;
     return workspaceFileRefFromTreePath(
@@ -122,10 +104,7 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
     disabled: openRef === null || dragDisabled,
   });
 
-  // Through the one resolver, not a hand-rolled tab open: placement settings,
-  // grouping, dedupe, the route write and the analytics source all live there,
-  // and a shift- or middle-click on this button means what it means everywhere
-  // else only if the click's modifiers reach it.
+  // Through the one resolver, not a hand-rolled tab open: placement settings, grouping, dedupe, the route write and the analytics source all live there, and a shift- or middle-click on this button means what it means everywhere else only if the click's modifiers reach it.
   const handleOpen = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       if (openRef === null) return;

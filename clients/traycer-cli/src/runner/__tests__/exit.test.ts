@@ -1,20 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// int#4840. `finishAndExit` replaced the `process.exit(...)` call sites: the
-// win32 SEA aborted inside libuv teardown (`uv_async_send` on an already
-// closing handle, src\win\async.c:76) AFTER the command had succeeded, so a
-// finished `host available` reported failure to Desktop.
-//
-// Four properties carry that fix and none is observable from a command test:
-//   1. the code lands on `process.exitCode` and the loop is left to drain
-//   2. the code and the watchdog are in place BEFORE the first blocking await.
-//      The first version of this module armed the watchdog last, so the two
-//      steps most likely to hang were the two the backstop did not cover.
-//   3. every teardown step is bounded and escalates to a forced release, so a
-//      stalled socket cannot turn "let the loop drain" into "never exit"
-//   4. the watchdog is UNREF'd, so it cannot itself keep the process alive -
-//      if it could, every CLI run would sit there for the full timeout and the
-//      fix would read as a hang.
+// int#4840.
+// `finishAndExit` replaced the `process.exit(...)` call sites: the win32 SEA aborted inside libuv teardown (`uv_async_send` on an already closing handle, src\win\async.c:76) AFTER the command had succeeded, so a finished `host available` reported failure to Desktop.
 
 const sentryClose = vi.fn<(timeout: number) => Promise<boolean>>();
 const destroySentryTransportRequests = vi.fn<() => number>();
@@ -75,10 +62,8 @@ describe("finishAndExit", () => {
   });
 
   it("records the code and arms the watchdog BEFORE the teardown awaits", async () => {
-    // Both teardown clients hang forever. Under the original ordering nothing
-    // was recorded or armed until they resolved, so this is the regression
-    // test for the cold-review P1: the guard has to exist before the steps it
-    // is supposed to guard.
+    // Both teardown clients hang forever.
+    // Under the original ordering nothing was recorded or armed until they resolved, so this is the regression test for the cold-review P1: the guard has to exist before the steps it is supposed to guard.
     sentryClose.mockReturnValue(never());
     dispatcherClose.mockReturnValue(never());
     const exitSpy = vi
@@ -112,10 +97,8 @@ describe("finishAndExit", () => {
 
     await finishAndExit(0);
 
-    // `flushStdio` and the teardown bounds arm their own timers, so the
-    // watchdog is not the only `setTimeout` here - it is the only one that
-    // gets unref'd, which is exactly the property under test. The others are
-    // CLEARED on the normal path rather than unref'd.
+    // `flushStdio` and the teardown bounds arm their own timers, so the watchdog is not the only `setTimeout` here - it is the only one that gets unref'd, which is exactly the property under test.
+    // The others are CLEARED on the normal path rather than unref'd.
     expect(unref).toHaveBeenCalledTimes(1);
     const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
     expect(delays).toContain(15_000);
@@ -155,9 +138,8 @@ describe("finishAndExit", () => {
     it("does not let a later success downgrade a fatal code", async () => {
       const { finishAndExit } = await import("../exit");
 
-      // The process-fatal handler fire-and-forgets `finishAndExit(1)`, and
-      // draining lets the interrupted command keep running. Without
-      // arbitration its `ok` result would report success for a failed process.
+      // The process-fatal handler fire-and-forgets `finishAndExit(1)`, and draining lets the interrupted command keep running.
+      // Without arbitration its `ok` result would report success for a failed process.
       await finishAndExit(1);
       await finishAndExit(0);
 
@@ -200,10 +182,8 @@ describe("finishAndExit", () => {
 
   describe("bounded teardown", () => {
     it("gives up on a stalled Sentry flush and destroys its sockets anyway", async () => {
-      // `Sentry.close()` is `flush()` plus `enabled = false`; it does NOT
-      // retire in-flight requests. A DSN endpoint that accepts TCP and never
-      // answers leaves sockets holding the loop open, which is what turned the
-      // first version of this fix into a 5s stall plus a forced exit.
+      // `Sentry.close()` is `flush()` plus `enabled = false`; it does NOT retire in-flight requests.
+      // A DSN endpoint that accepts TCP and never answers leaves sockets holding the loop open, which is what turned the first version of this fix into a 5s stall plus a forced exit.
       sentryClose.mockReturnValue(never());
       const { finishAndExit } = await import("../exit");
 
@@ -216,9 +196,7 @@ describe("finishAndExit", () => {
     });
 
     it("destroys the dispatcher when a graceful close outlives its bound", async () => {
-      // undici's `Agent.close()` waits for RUNNING requests with no timeout of
-      // its own, so an un-cancelled stalled response body parks teardown
-      // forever unless something escalates.
+      // undici's `Agent.close()` waits for RUNNING requests with no timeout of its own, so an un-cancelled stalled response body parks teardown forever unless something escalates.
       dispatcherClose.mockReturnValue(never());
       const { finishAndExit } = await import("../exit");
 

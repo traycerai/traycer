@@ -11,10 +11,6 @@ const EPIC_ID = "epic-pr-embed";
 const TAB_ID = "tab-pr-embed";
 const HOST_ID = "host-A";
 
-// The sibling embed categories drag the whole epic-sidebar / git-diff module
-// graph in; this suite is about the PR body, so stub them at the boundary the
-// way `switcher-panel-embed.test.tsx` does. `PrPanelBody` itself stays REAL -
-// its subscription gate and row wiring are what is under test.
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar", () => ({
   FileTreePanelBody: () => <div data-testid="file-tree-body" />,
 }));
@@ -67,10 +63,6 @@ vi.mock("@/hooks/pr/use-pr-list-subscription", () => ({
   },
 }));
 
-// `PrRow` pulls the per-epic owner-label chain (titles off
-// `OpenEpicState.chats`, which needs a live `OpenEpicStoreHandle`), and that
-// has nothing to do with the embed wiring; stub it to a button that still
-// fires the REAL `onOpen` the panel built.
 vi.mock("@/components/epic-canvas/pr/pr-row", () => ({
   PrRow: (props: {
     readonly entry: {

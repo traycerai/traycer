@@ -26,11 +26,7 @@ import { updateAttemptLockPath } from "./paths";
 
 /**
  * The only non-update paths allowed through the contender boundary.
- *
- * New names are intentionally a source change here, rather than an arbitrary
- * string at a caller. Every exemption must state what it does when a durable
- * nonterminal attempt exists; that keeps a future repair or prefetch from
- * silently becoming a parallel updater.
+ * New names are intentionally a source change here, rather than an arbitrary string at a caller.
  */
 export type UpdateMaintenanceExemption =
   | "stage-maintenance"
@@ -39,23 +35,15 @@ export type UpdateMaintenanceExemption =
   | "desktop-activation-maintenance"
   | "runtime-repair-maintenance"
   /**
-   * User-confirmed restart/doctor recovery. This performs only the existing
-   * service/process recovery edge; it neither creates nor advances a v2
-   * attempt and is deliberately distinct from Desktop activation.
+   * User-confirmed restart/doctor recovery.
+   * This performs only the existing service/process recovery edge; it neither creates nor advances a v2 attempt and is deliberately distinct from Desktop activation.
    */
   | "recovery-maintenance";
 
-/**
- * The compatibility bridge while legacy update execution remains selected.
- * It is deliberately distinct from a maintenance exemption: Ticket 03 must
- * remove this route when schema-v2 execution becomes eligible.
- */
 export type UpdateContenderAdmission =
   | "legacy-update-shadow"
   /**
-   * The Ticket 03 executor is the only non-legacy actor allowed to claim or
-   * reconcile schema-v2 evidence. Its capability is still opaque; only the
-   * capability-consuming executor mutation facade below can reach the core.
+   * Its capability is still opaque; only the capability-consuming executor mutation facade below can reach the core.
    */
   | "attempt-executor"
   | UpdateMaintenanceExemption;
@@ -64,9 +52,7 @@ export type ActiveAttemptDisposition = "yield" | "refuse" | "allow";
 
 /**
  * A non-mutating policy fact supplied with a live contender capability.
- * Recovery callers must use this instead of re-reading a record after they
- * have decided to act: the action choice is therefore tied to the exact
- * durable attempt evidence admitted under the canonical lock.
+ * Recovery callers must use this instead of re-reading a record after they have decided to act: the action choice is therefore tied to the exact durable attempt evidence admitted under the canonical lock.
  */
 export type UpdateRecoveryAction = "restart-current" | "stop-only";
 
@@ -87,23 +73,13 @@ export interface WithUpdateContenderOptions {
 
 /**
  * A proof that the callback currently owns the canonical attempt lock.
- *
- * It has no public constructor. Membership in `issuedCapabilities`, plus a
- * fresh token check, closes both object-literal forgery and stale/released
- * handle reuse. It conveys no raw lock handle or arbitrary record authority:
- * only an `attempt-executor` capability may consume it through
- * `commitExecutorAttemptMutation`, which remains canonical-read/recompute
- * bound inside the core.
+ * It conveys no raw lock handle or arbitrary record authority: only an `attempt-executor` capability may consume it through `commitExecutorAttemptMutation`, which remains canonical-read/recompute bound inside the core.
  */
 export interface UpdateMutationCapability {
   readonly hostHomeDir: string;
 }
 
-/**
- * One-shot parent-to-supervisor proof. It conveys no mutation authority to
- * the supervisor: it merely proves that the named parent still owns the
- * canonical lock while the OS service manager reaches `host start`.
- */
+/** One-shot parent-to-supervisor proof. */
 export interface UpdateMutationCapabilityAdoption {
   readonly hostHomeDir: string;
   readonly holder: LockMetadata;
@@ -124,19 +100,13 @@ interface ExecutorCompletionObservation {
 
 declare const verifiedExecutorCompletionProofBrand: unique symbol;
 
-/**
- * A single-use runtime-branded terminal proof. It remains private with its
- * facts in this module's `WeakMap`; no caller can manufacture, retain, or
- * consume it outside the immediate session-owned write.
- */
 interface VerifiedExecutorCompletionProof {
   readonly [verifiedExecutorCompletionProofBrand]: true;
 }
 
 /**
- * Internal capability-scoped terminal writer supplied only to the CLI's
- * trusted executor bridge. It is intentionally absent from the public barrel;
- * architecture enforcement permits its direct import only in that bridge.
+ * Internal capability-scoped terminal writer supplied only to the CLI's trusted executor bridge.
+ * It is intentionally absent from the public barrel; architecture enforcement permits its direct import only in that bridge.
  */
 export interface ExecutorCompletionSession {
   complete(
@@ -147,17 +117,7 @@ export interface ExecutorCompletionSession {
 
 /**
  * How a capability holds its authority.
- *
- * `held` owns the canonical lock through a handle. `adopted` owns nothing: it
- * carries only a one-shot proof that some OTHER live process holds the lock,
- * and it re-validates that proof against disk on every verification.
- *
- * Making these two arms of one union - rather than one shape with a nullable
- * handle - is what enforces Ruling 1 structurally. Every record writer below
- * reaches its handle through `heldCapabilityState`, so an adopted capability
- * cannot reach a writer at all: not by policy, but because there is no handle
- * on that arm to pass. The child also has no way to release, break, or rebind
- * the parent's lock for the same reason.
+ * `adopted` owns nothing: it carries only a one-shot proof that some other live process holds the lock, and it re-validates that proof against disk on every verification.
  */
 type CapabilityState =
   | {
@@ -170,11 +130,7 @@ type CapabilityState =
       readonly kind: "adopted";
       readonly adoption: UpdateMutationCapabilityAdoption;
       readonly hostHomeDir: string;
-      /**
-       * `attempt-executor` is unrepresentable here. An adopted child performs
-       * install-tree and service work under its parent's segment; the parent
-       * remains the sole author of the durable record.
-       */
+      /** `attempt-executor` is unrepresentable here. */
       readonly admission: Exclude<UpdateContenderAdmission, "attempt-executor">;
     };
 
@@ -207,28 +163,8 @@ function heldCapabilityState(
 }
 
 /**
- * An adopted capability is live only on CONJUNCTIVE positive proof, re-taken
- * on every call:
- *
- *  1. the recorded holder identity still matches the lock on disk, token, pid,
- *     start time and start identity included; and
- *  2. that holder is still a LIVE process.
- *
- * (1) alone is the trap. A parent that died leaves its lock file behind, so
- * identity keeps matching a holder that no longer exists, and a child would
- * happily actuate on a segment nobody is running. (2) alone is not enough
- * either: a different process could hold the lock by then.
- *
- * The liveness probe is uncached (`cacheTtlMs: 0`) and that is not a
- * performance oversight. `probeAttemptHolder`'s cache exists so fleet status
- * polling does not spawn `tasklist` per host per read - it is sized for a
- * read-only projection. A cached positive verdict can outlive the parent's
- * death by its whole TTL, and authorizing an install-tree mutation on one
- * would be authorizing it on a memory of liveness rather than liveness.
- *
- * Every non-positive shape - no holder, indeterminate, unparseable lock,
- * token mismatch - resolves to not-live. There is no arm here that admits on
- * the absence of contrary evidence.
+ * An adopted capability is live only on conjunctive positive proof, re-taken on every call: 1.
+ * The liveness probe is uncached (`cacheTtlMs: 0`) and that is not a performance oversight.
  */
 async function verifyAdoptedCapability(
   state: Extract<CapabilityState, { readonly kind: "adopted" }>,
@@ -255,8 +191,7 @@ async function verifyAdoptedCapability(
 
 /**
  * Re-check capability ownership at the final mutation/restart boundary.
- * Callers must use this immediately before their injected install-tree or
- * service actuator, not merely when they first planned the operation.
+ * Callers must use this immediately before their injected install-tree or service actuator, not merely when they first planned the operation.
  */
 export async function verifyUpdateMutationCapability(
   capability: UpdateMutationCapability,
@@ -286,7 +221,6 @@ export async function verifyUpdateMutationCapability(
   }
 }
 
-/** Internal supervisor hook; does not mint or transfer capability authority. */
 export async function rebindUpdateMutationCapabilityLiveness(
   capability: UpdateMutationCapability,
   pid: number,
@@ -303,29 +237,8 @@ export async function rebindUpdateMutationCapabilityLiveness(
 }
 
 /**
- * The record-write boundary for an executor that holds a capability but no
- * lock handle - which is every executor outside this package, because
- * `withUpdateContender` deliberately hands out the former and never the
- * latter.
- *
- * ## Why it takes `PublicAttemptMutationIntent` and nothing wider
- *
- * The three executor-only intents (`recover`, `advance -> complete`, and a
- * recovery-provenance `supersede`) are absent from this signature by
- * construction, not by a runtime check that a future edit could soften. Each
- * of them is legal only against evidence gathered under an inner lock by the
- * actor that owns the verification segment, and each is reachable only through
- * the two facades below.
- *
- * That split is what lets a second executor exist without a second terminal
- * writer. A packaged-macOS Desktop segment can claim, advance, park and fail
- * its own attempt through here; the terminal states remain the property of an
- * executor that has done the evidence work, and stay unreachable from this
- * entry no matter which admission a caller holds.
- *
- * `attempt-executor` admission is still required: a maintenance or legacy
- * capability must not become a record writer merely because the intent it
- * carries happens to be a public one.
+ * The record-write boundary for an executor that holds a capability but no lock handle - which is every executor outside this package, because `withUpdateContender` deliberately hands out the former and never the latter.
+ * The three executor-only intents (`recover`, `advance -> complete`, and a recovery-provenance `supersede`) are absent from this signature by construction, not by a runtime check that a future edit could soften.
  */
 export async function commitAttemptMutationWithCapability(
   capability: UpdateMutationCapability,
@@ -343,21 +256,13 @@ export async function commitAttemptMutationWithCapability(
   if (verdict.kind !== "live") {
     throw new Error(`update executor capability is not live (${verdict.kind})`);
   }
-  // The public store channel, never the executor-only one. The core still
-  // re-reads canonical bytes under the handle lease and recomputes the record
-  // from the intent, so this facade contributes the live-capability check and
-  // nothing else - it cannot widen what the intent is allowed to express.
+  // The public store channel, never the executor-only one.
   return commitAttemptMutation({ handle: state.handle, intent });
 }
 
 /**
  * Capability-consuming durable mutation boundary for the schema-v2 executor.
- *
- * This is intentionally narrower than `commitAttemptMutation`: callers never
- * receive the lock handle and maintenance/legacy capabilities cannot turn
- * into record writers. The core rechecks ownership and recomputes the intent
- * from canonical bytes; this facade supplies the final live-capability check
- * that binds that write to the executor's outer segment.
+ * This is intentionally narrower than `commitAttemptMutation`: callers never receive the lock handle and maintenance/legacy capabilities cannot turn into record writers.
  */
 export async function commitExecutorAttemptMutation(
   capability: UpdateMutationCapability,
@@ -413,9 +318,8 @@ export async function commitExecutorAttemptMutation(
 }
 
 /**
- * Internal recovery writer. It deliberately stays out of the public barrel:
- * only the CLI executor's verifier-owned bridge may submit the evidence-bound
- * `recover` intent after its inner CLI-lock observation.
+ * Internal recovery writer.
+ * It deliberately stays out of the public barrel: only the CLI executor's verifier-owned bridge may submit the evidence-bound `recover` intent after its inner CLI-lock observation.
  */
 export async function commitExecutorRecoveryMutation(
   capability: UpdateMutationCapability,
@@ -438,8 +342,7 @@ export async function commitExecutorRecoveryMutation(
 
 /**
  * Seal facts that the live CLI verifier just derived under its inner CLI lock.
- * The opaque result contains no readable evidence and is valid exactly once
- * for the same issued executor capability/host-home pair.
+ * The opaque result contains no readable evidence and is valid exactly once for the same issued executor capability/host-home pair.
  */
 async function sealVerifiedExecutorCompletion(
   capability: UpdateMutationCapability,
@@ -469,10 +372,8 @@ async function sealVerifiedExecutorCompletion(
 }
 
 /**
- * The sole normal-completion writer. It consumes a proof sealed by the live
- * verifier above, so structural literals and casts cannot supply terminal
- * evidence. It still rechecks the capability and canonical record at the
- * durable write edge.
+ * The sole normal-completion writer.
+ * It consumes a proof sealed by the live verifier above, so structural literals and casts cannot supply terminal evidence.
  */
 async function commitVerifiedExecutorCompletion(
   capability: UpdateMutationCapability,
@@ -557,7 +458,6 @@ export async function createUpdateMutationCapabilityAdoption(
   return { hostHomeDir: state.hostHomeDir, holder: holder.holder };
 }
 
-/** Validate a consumed supervisor proof against the live canonical holder. */
 export async function validateUpdateMutationCapabilityAdoption(
   adoption: UpdateMutationCapabilityAdoption,
   hostHomeDir: string,
@@ -583,16 +483,8 @@ export type UpdateContenderOutcome<T> =
   | { readonly kind: "held-in-process"; readonly holder: LockMetadata }
   | {
       /**
-       * `allow` is deliberately not representable here. An admission that
-       * allows an active attempt does not produce this outcome at all - it
-       * runs the callback (see the `disposition !== "allow"` gate in
-       * `withUpdateContenderInternal`) - so a caller that had to handle an
-       * `allow` arm would be writing a branch this module can never take, and
-       * would have to invent a meaning for it.
-       *
-       * Stating the narrowing on the type is what lets a consumer exhaust
-       * `yield | refuse` honestly instead of widening its own union to keep
-       * the compiler quiet.
+       * `allow` is deliberately not representable here.
+       * Stating the narrowing on the type is what lets a consumer exhaust `yield | refuse` honestly instead of widening its own union to keep the compiler quiet.
        */
       readonly kind: "nonterminal-attempt";
       readonly disposition: Exclude<ActiveAttemptDisposition, "allow">;
@@ -615,7 +507,7 @@ export type UpdateContenderOutcome<T> =
       >;
     };
 
-/** The executor-only option shape intentionally cannot select another admission. */
+    /** The executor-only option shape intentionally cannot select another admission. */
 export type WithUpdateExecutorCompletionSegmentOptions = Omit<
   WithUpdateContenderOptions,
   "admission"
@@ -623,13 +515,7 @@ export type WithUpdateExecutorCompletionSegmentOptions = Omit<
 
 /**
  * The shared enforcement/shadow boundary for all current contenders.
- *
- * It acquires update-attempt before a caller can acquire the existing
- * `cli-lock`, reads durable attempt evidence under that lock, and passes an
- * opaque live capability to the admitted operation. With no schema-v2
- * executor selected, absence and terminal evidence preserve the legacy path;
- * nonterminal or faulted evidence never gets silently replaced by a legacy
- * mutation.
+ * It acquires update-attempt before a caller can acquire the existing `cli-lock`, reads durable attempt evidence under that lock, and passes an opaque live capability to the admitted operation.
  */
 export async function withUpdateContender<T>(
   options: WithUpdateContenderOptions,
@@ -644,9 +530,8 @@ export async function withUpdateContender<T>(
 }
 
 /**
- * Internal executor bridge. It forces executor admission and hands the
- * revocable completion closure only to the trusted CLI bridge; generic shadow
- * and maintenance callers cannot obtain it through the public barrel.
+ * Internal executor bridge.
+ * It forces executor admission and hands the revocable completion closure only to the trusted CLI bridge; generic shadow and maintenance callers cannot obtain it through the public barrel.
  */
 export async function withUpdateExecutorCompletionSegment<T>(
   options: WithUpdateExecutorCompletionSegmentOptions,
@@ -665,9 +550,8 @@ export async function withUpdateExecutorCompletionSegment<T>(
       try {
         return await run(capability, context, completion);
       } finally {
-        // AsyncLocalStorage propagates to detached work. An explicit revocable
-        // session instead makes a completion callback unusable the instant the
-        // admitted executor callback settles, before the outer lock releases.
+        // AsyncLocalStorage propagates to detached work.
+        // An explicit revocable session instead makes a completion callback unusable the instant the admitted executor callback settles, before the outer lock releases.
         await completion.revoke();
       }
     },
@@ -675,31 +559,8 @@ export async function withUpdateExecutorCompletionSegment<T>(
 }
 
 /**
- * Run work under a proof that ANOTHER live process holds the canonical lock.
- *
- * This is the second half of Ruling 1. The packaged-macOS executor holds the
- * attempt lock for its whole segment, but the byte-placement steps it needs -
- * `host apply --no-service`, `host install`, `host stamp-runtime` - are
- * bundled-CLI children that each call `withUpdateContender` themselves. A
- * child that tries to ACQUIRE deadlocks against its own parent, waits out the
- * lock timeout, and fails the segment that spawned it.
- *
- * So the child validates instead of acquiring. What it gets is a capability
- * that behaves identically at every consumer - the same
- * `verifyUpdateMutationCapability`, the same facades, the same architecture
- * gates - and differs only in how it proves liveness. Adoption is another way
- * to HOLD authority, never a way to bypass the checks that authority gates.
- *
- * Two things it deliberately cannot do, both structural rather than policed:
- *
- *  - **Write the record.** Its admission cannot be `attempt-executor`, and the
- *    record writers reach their handle through `heldCapabilityState`, which
- *    has nothing to return on this arm. The parent stays the sole author.
- *  - **Touch the parent's lock.** No handle is ever constructed here, so there
- *    is no release, no break, and no liveness rebind to call.
- *
- * A caller with no proof keeps `withUpdateContender` and today's
- * acquire-or-refuse behaviour, unchanged.
+ * Run work under a proof that another live process holds the canonical lock.
+ * So the child validates instead of acquiring.
  */
 export async function withUpdateContenderAdoption<T>(
   adoption: UpdateMutationCapabilityAdoption,
@@ -721,26 +582,8 @@ export async function withUpdateContenderAdoption<T>(
     admission: options.admission,
   });
 
-  // Verified before the callback and again after it, exactly as the acquiring
-  // path does. The parent can die mid-segment, and a child that reported
-  // success on work it finished after that would be reporting success for a
-  // segment that no longer existed to own it.
-  //
-  // The `finally` is the LIFETIME BOUNDARY, and it was missing.
-  //
-  // The acquiring path loses authority when its lock handle releases in its own
-  // `finally`; the adopted path had no equivalent, so the capability stayed in
-  // `capabilityStates` after the callback returned. A callback that captured it
-  // and scheduled work outliving the segment could then re-verify `live` - the
-  // parent's lock is still held, which is exactly what the adopted verdict
-  // checks - and enter an install or service actuator *outside* the segment and
-  // without the inner CLI lock that was meant to serialize it against
-  // mixed-version CLI work.
-  //
-  // No current callback detaches work, so this closes a future/accidental
-  // trigger rather than an observed escape. That is the right time to close an
-  // authority hole: the alternative is discovering it from the one caller who
-  // eventually does.
+  // Verified before the callback and again after it, exactly as the acquiring path does.
+  // The parent can die mid-segment, and a child that reported success on work it finished after that would be reporting success for a segment that no longer existed to own it.
   try {
     const before = await verifyUpdateMutationCapability(
       capability,
@@ -771,10 +614,8 @@ async function withUpdateContenderInternal<T>(
     completion: ExecutorCompletionSession | null,
   ) => Promise<T>,
 ): Promise<UpdateContenderOutcome<T>> {
-  // The attempt lock lives directly under the canonical host home. First-run
-  // install and Desktop activation legitimately contend before a legacy
-  // installer has created that directory, so establish only this parent
-  // before taking the outer lock. No install/stage record is created here.
+  // The attempt lock lives directly under the canonical host home.
+  // First-run install and Desktop activation legitimately contend before a legacy installer has created that directory, so establish only this parent before taking the outer lock.
   await mkdir(options.hostHomeDir, { recursive: true });
   const acquisition = await acquireUpdateAttemptLock({
     hostHomeDir: options.hostHomeDir,
@@ -805,31 +646,8 @@ async function withUpdateContenderInternal<T>(
       record.kind === "valid" && record.value.execution !== "terminal"
         ? record.value
         : null;
-    // Retention cleanup runs HERE, at attempt-store open, and this is the only
-    // place it can run. `pruneTerminalAttemptRecord` is handle-bound by design,
-    // and a handle exists at a lock acquisition and nowhere on the read paths -
-    // so `host.status`, which is what surfaces the stale record, is structurally
-    // unable to expire it. Without this call `TERMINAL_ATTEMPT_RETENTION_MS` was
-    // dead policy: a terminal attempt that no newer attempt replaced projected
-    // forever, and the Overview kept showing an old failure with no expiry.
-    //
-    // Per acquisition rather than on a timer: bounded, deterministic, and it
-    // adds no scheduling to a module whose whole contract is explicit
-    // lock-scoped mutation. A terminal record cannot be an `activeAttempt`
-    // (that requires `execution !== "terminal"`), so this never interacts with
-    // the disposition gate below.
-    //
-    // The expiry decision is deliberately NOT made here. `prune` re-reads under
-    // its own lease and applies `isTerminalRetentionExpired` itself; this
-    // caller supplies only observation time, which is the boundary
-    // `PruneTerminalAttemptRecordOptions` documents ("the caller controls only
-    // observation time, never retention policy"). Gating on `terminal` alone is
-    // a cheap read of data already in hand and keeps policy in one place.
-    //
-    // Best-effort by intent: a rejection - lost ownership, a racing writer, a
-    // record that changed under the lease - must never fail an admission that
-    // was otherwise granted. The record simply survives to the next
-    // acquisition, which is the same eventual outcome one tick later.
+    // Retention cleanup runs here, at attempt-store open, and this is the only place it can run.
+    // Without this call `TERMINAL_ATTEMPT_RETENTION_MS` was dead policy: a terminal attempt that no newer attempt replaced projected forever, and the Overview kept showing an old failure with no expiry.
     if (record.kind === "valid" && record.value.execution === "terminal") {
       await pruneTerminalAttemptRecord({
         handle: acquisition.handle,
@@ -839,11 +657,7 @@ async function withUpdateContenderInternal<T>(
     }
     if (activeAttempt !== null) {
       const disposition = dispositionFor(options.admission);
-      // Update state is not a global host-action mutex. A direct, confirmed
-      // recovery restart/doctor action remains available while a logical
-      // update is active or parked, provided this contender won the physical
-      // execution lock. It is a legacy service/process edge only: no record
-      // transition, promotion, or parked-byte activation is authorized here.
+      // Update state is not a global host-action mutex.
       if (disposition !== "allow") {
         return {
           kind: "nonterminal-attempt",
@@ -853,10 +667,8 @@ async function withUpdateContenderInternal<T>(
         };
       }
     }
-    // `readUpdateAttemptRecord` can perform I/O, so the capability used to
-    // admit the callback must be freshly live at the mutation boundary, not
-    // merely at lock acquisition. Adapters repeat this check after their
-    // inner cli-lock acquisition as well.
+    // `readUpdateAttemptRecord` can perform I/O, so the capability used to admit the callback must be freshly live at the mutation boundary, not merely at lock acquisition.
+    // Adapters repeat this check after their inner cli-lock acquisition as well.
     const beforeRun = await verifyUpdateMutationCapability(
       capability,
       options.hostHomeDir,
@@ -876,11 +688,8 @@ async function withUpdateContenderInternal<T>(
       },
       completion,
     );
-    // A callback is allowed to contain lengthy, non-actuating work. It must
-    // nevertheless not be able to report success after the evidence it was
-    // admitted on has disappeared. Concrete mutation facades perform the
-    // same check immediately before their rename/service call; this final
-    // check closes the return-value half of a lock-loss race as well.
+    // A callback is allowed to contain lengthy, non-actuating work.
+    // It must nevertheless not be able to report success after the evidence it was admitted on has disappeared.
     const afterRun = await verifyUpdateMutationCapability(
       capability,
       options.hostHomeDir,
@@ -894,12 +703,6 @@ async function withUpdateContenderInternal<T>(
   }
 }
 
-/**
- * Created inside one admitted executor callback only. The closure captures
- * the issued capability and canonical home rather than accepting either from
- * a future caller, so it becomes unusable immediately after the outer lock
- * releases even if somebody retains the session object.
- */
 function executorCompletionSession(
   capability: UpdateMutationCapability,
   hostHomeDir: string,
@@ -952,28 +755,17 @@ function recoveryActionFor(
   activeAttempt: HostUpdateAttemptRecord | null,
 ): UpdateRecoveryAction {
   if (activeAttempt === null) return "restart-current";
-  // `applying` is the durable write-ahead checkpoint for byte placement. A
-  // crash can leave it recorded after the canonical swap but before the
-  // executor publishes `waiting-to-activate`, whether it was a fresh apply
-  // (`null`) or a resumed apply (`resume-apply`). A generic `host start`
-  // would resolve those possibly-new bytes and activate them outside the
-  // attempt's continuation, so an independent recovery may only stop.
+  // `applying` is the durable write-ahead checkpoint for byte placement.
+  // A crash can leave it recorded after the canonical swap but before the executor publishes `waiting-to-activate`, whether it was a fresh apply (`null`) or a resumed apply (`resume-apply`).
   if (activeAttempt.phase === "applying") return "stop-only";
-  // A resumed packaged-Mac activation deliberately returns to
-  // `preparing/activate` after bytes are placed, while it performs the final
-  // drain before the sole legal restart edge.  Restarting the generic
-  // supervisor here would activate those bytes outside that continuation.
-  // `preparing/resume-apply` has not reached the placed-byte handoff.
+  // A resumed packaged-Mac activation deliberately returns to `preparing/activate` after bytes are placed, while it performs the final drain before the sole legal restart edge.
   if (
     activeAttempt.phase === "preparing" &&
     activeAttempt.continuation === "activate"
   ) {
     return "stop-only";
   }
-  // This parked checkpoint proves the same fact explicitly: bytes are placed
-  // and activation belongs only to the named continuation. In contrast a
-  // `verifying/activate` record has already crossed the restart boundary, so
-  // user-confirmed recovery may restart the current installed target.
+  // This parked checkpoint proves the same fact explicitly: bytes are placed and activation belongs only to the named continuation.
   return activeAttempt.phase === "waiting-to-activate"
     ? "stop-only"
     : "restart-current";

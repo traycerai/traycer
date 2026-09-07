@@ -23,21 +23,12 @@ export interface WorktreeHostIndex {
   readonly error: Error | null;
 }
 
-/**
- * The cheap host-wide owner/path index: `worktree.listAllForHost` without
- * activity probes, so `branch`/`worktreePath`/`owners` are populated but the
- * expensive per-worktree probes never run. Shared (same query key) with the
- * base call of `useTaskWorktreeMetadata`.
- */
+/** The cheap host-wide owner/path index: `worktree.listAllForHost` without activity probes, so `branch`/`worktreePath`/`owners` are populated but the expensive per-worktree probes never run. */
 export function useWorktreeHostIndex(enabled: boolean): WorktreeHostIndex {
   return useWorktreeHostIndexForClient(useHostClient(), enabled);
 }
 
-/**
- * {@link useWorktreeHostIndex} against a caller-resolved client. A surface
- * inside an Epic session passes the session's client: worktrees are per HOST,
- * so an Epic projected from host A must not be described by host B's listing.
- */
+/** A surface inside an Epic session passes the session's client: worktrees are per HOST, so an Epic projected from host A must not be described by host B's listing. */
 export function useWorktreeHostIndexForClient(
   client: HostClient<HostRpcRegistry> | null,
   enabled: boolean,
@@ -64,13 +55,7 @@ export function useWorktreeHostIndexForClient(
   };
 }
 
-/**
- * Host-wide worktree listing WITH activity enrichment (branch/PR probes) for
- * every worktree on the host. Strictly heavier than `useWorktreeHostIndex` -
- * the host probes each path (TTL-cached server-side) - so callers must gate
- * `enabled` on an actual need, e.g. a PR-number history search that has to
- * resolve "which epic owns PR #N" across all local worktrees.
- */
+/** Strictly heavier than `useWorktreeHostIndex` - the host probes each path (TTL-cached server-side) - so callers must gate `enabled` on an actual need, e.g. */
 export function useWorktreeHostActivityIndex(
   enabled: boolean,
 ): WorktreeHostIndex {
@@ -106,23 +91,14 @@ export function useWorktreeHostActivityIndex(
   };
 }
 
-/**
- * Batches task-history worktree metadata into two host calls: one cheap
- * owner/path index, then one bounded enrichment request for only paths owned by
- * the visible tasks. The expensive branch/PR probes never walk unrelated rows.
- */
+/** The expensive branch/PR probes never walk unrelated rows. */
 export function useTaskWorktreeMetadata(
   epicIds: readonly string[],
 ): TaskWorktreeMetadata {
   return useTaskWorktreeMetadataForClient(useHostClient(), epicIds);
 }
 
-/**
- * {@link useTaskWorktreeMetadata} against a caller-resolved client - the Epic
- * panel's sweep status row passes the Epic session's client (see
- * {@link useWorktreeHostIndexForClient}); the home history keeps the app-wide
- * wrapper above.
- */
+/** {@link useTaskWorktreeMetadata} against a caller-resolved client - the Epic panel's sweep status row passes the Epic session's client (see {@link useWorktreeHostIndexForClient}); the home history keeps the app-wide wrapper above. */
 export function useTaskWorktreeMetadataForClient(
   client: HostClient<HostRpcRegistry> | null,
   epicIds: readonly string[],

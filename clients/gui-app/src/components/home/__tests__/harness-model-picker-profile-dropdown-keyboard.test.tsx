@@ -275,13 +275,7 @@ function OpenProfileDropdownSurface() {
   );
 }
 
-/**
- * T5 amend-02 minor: the reviewer's load-bearing gap named the ACTUAL Radix
- * `DropdownMenu` primitive - `terminal-agent-fork-dialog-real-picker.test.tsx`
- * mocks it as native `<button disabled>` elements, which don't reproduce
- * Radix's own roving-tabindex/focus-skip behavior for a disabled item. This
- * drives the real, unmocked primitive (mirrors the suite above).
- */
+/** T5 amend-02 minor: the reviewer's load-bearing gap named the actual Radix `DropdownMenu` primitive. */
 describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () => {
   afterEach(() => cleanup());
 
@@ -303,10 +297,7 @@ describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () 
     });
     const personalProfile = screen.getByRole("menuitem", { name: "Personal" });
     expect(workProfile.getAttribute("aria-disabled")).toBe("true");
-    // amend-02 a11y fix: the reason must also be static, always-visible text
-    // inside the row - roving focus never lands on this item, so anything
-    // gated on focus/hover (the aria-label, the tooltip) never reaches
-    // keyboard/AT users.
+    // amend-02 a11y fix: the reason must also be static, always-visible text inside the row.
     expect(
       within(workProfile).getByText("Can't continue this session under Work."),
     ).not.toBeNull();
@@ -314,8 +305,8 @@ describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () 
     terminalProfile.focus();
     expect(document.activeElement).toBe(terminalProfile);
 
-    // Radix's own roving-tabindex skips a disabled item entirely - focus
-    // lands on Personal (the next ENABLED row), never on Work.
+    // Radix's own roving-tabindex skips a disabled item entirely - focus lands on Personal (the next enabled row),
+    // never on Work.
     fireEvent.keyDown(terminalProfile, { key: "ArrowDown" });
     await waitFor(() => expect(document.activeElement).toBe(personalProfile));
     expect(document.activeElement).not.toBe(workProfile);

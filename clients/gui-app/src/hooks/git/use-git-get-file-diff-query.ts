@@ -16,14 +16,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 
-/**
- * `client` is the CALLER's, and it must be the one that addresses `args.hostId`
- * - the tile's tab client, never the app-wide one (D15). This hook used to read
- * `useHostClient()` here while taking `hostId` as an argument and asserting the
- * two were "correlated 1:1"; they were not. `hostId` came from the tile and the
- * client from the app, so a diff tile bound to host A kept its A-shaped query
- * key while the request went to whichever host the app was pointed at.
- */
+/** `client` is the CALLER's, and it must be the one that addresses `args.hostId` the tile's tab client, never the app-wide one (D15). */
 export function useGitGetFileDiffQuery(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
@@ -44,9 +37,7 @@ export function useGitGetFileDiffQuery(args: {
   const enabledFromArgs = args.enabled && args.hostId !== null;
 
   return useQuery({
-    // The caller passes the client that addresses `args.hostId`, which is
-    // already captured in the key via `hostQueryKeys.scope(hostId)`; including
-    // `client` here would cause needless refetches on client identity drift.
+    // `client` is already in the key via `hostQueryKeys.scope(hostId)`; including it would refetch on identity drift.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps
     ...queryOptions<GitGetFileDiffResponse, HostRpcError>({
       queryKey: [

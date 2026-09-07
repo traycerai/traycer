@@ -1,16 +1,6 @@
 /**
  * A `Worker`-shaped message target over a {@link FakeBridgePair}'s main side.
- *
- * jsdom has no `Worker`, so every suite that spawns one supplies a constructor.
- * This is the adapter that makes the fake pair look like the real thing to
- * `spawnEpicRuntimeWorker`: the caller posts into `pair.main`, and what the
- * worker side posts back arrives as a `message` event.
- *
- * It lives here rather than inside one suite because there are now two callers
- * — the spawner's own tests and gui-app's vitest setup file, which installs a
- * default worker factory so no suite needs its own `beforeEach`. Two copies of
- * a transport adapter is two places for the transfer-list handling below to
- * drift.
+ * It lives here rather than inside one suite because there are now two callers - the spawner's own tests and gui-app's vitest setup file, which installs a default worker factory so no suite needs its own `beforeEach`.
  */
 import type {
   BridgeMessageEventLike,
@@ -30,11 +20,7 @@ export function createFakeWorkerTarget(
   });
   return {
     postMessage(message, transfer): void {
-      // Only `ArrayBuffer`s survive as transfers here. The real `postMessage`
-      // accepts other transferables, but the fake pair's `post` moves buffers
-      // and nothing else, and silently passing a `MessagePort` through as if
-      // it were transferred would make a suite pass on a frame the real
-      // structured clone would reject.
+      // Only `ArrayBuffer`s survive as transfers here.
       const buffers = transfer.filter(
         (value): value is ArrayBuffer => value instanceof ArrayBuffer,
       );

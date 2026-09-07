@@ -10,10 +10,7 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import type { Attachment } from "@/lib/composer/types";
 
-/**
- * Pins that `useChatActions.sendMessage` forwards `deliveryPolicy` to the
- * session store (the chat-tile submit path threads it through this hook).
- */
+/** Pins that `useChatActions.sendMessage` forwards `deliveryPolicy` to the session store (the chat-tile submit path threads it through this hook). */
 
 const CONTENT: JsonContent = {
   type: "doc",

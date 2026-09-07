@@ -51,11 +51,7 @@ export interface InterviewReviewDelivery {
   readonly settlementId: string | null;
 }
 
-/**
- * A field rendered by the read-only interview card and indexed by chat find.
- * Positional identity keeps find ids stable without embedding question or
- * answer text in an attribute.
- */
+/** A field rendered by the read-only interview card and indexed by chat find. Positional identity keeps find ids stable without embedding question or answer text in an attribute. */
 export type InterviewReviewFieldKind =
   | "summary"
   | "question-header"
@@ -223,9 +219,8 @@ function associateAnswers(
       continue;
     }
 
-    // A duplicated question label establishes a collision group, but not a
-    // particular page. Keep the one answer once in the neutral fallback;
-    // copying it to every member would fabricate both answers and progress.
+    // A duplicated question label establishes a collision group, but not a particular page.
+    // Keep the one answer once in the neutral fallback; copying it to every member would fabricate both answers and progress.
     unassociated.push(answer);
   }
   return { pages: byPage, unassociated };
@@ -687,11 +682,7 @@ function progressFor(input: {
   }
 }
 
-/**
- * Pure, evidence-first review projection. Rendering reads only this model so
- * historical cards cannot accidentally turn ambiguous flattened values into
- * editable or selected controls.
- */
+/** Pure, evidence-first review projection. Rendering reads only this model so historical cards cannot accidentally turn ambiguous flattened values into editable or selected controls. */
 export function deriveInterviewReviewModel(
   input: InterviewReviewInput,
 ): InterviewReviewModel {

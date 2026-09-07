@@ -2,24 +2,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-/**
- * Deterministically regenerates the Linux app icon set that electron-builder
- * installs into the hicolor icon theme, downscaled from the 1024x1024
- * `resources/bundle/icon.png`. Dependency-free (runtime built-ins only) so
- * contributors can rebuild the assets without an image-processing toolchain.
- *
- * Why a set and not the single source PNG: the freedesktop icon theme spec
- * only searches the size directories declared in the theme's `index.theme`,
- * and hicolor tops out at 512x512. Handing electron-builder a lone 1024x1024
- * PNG makes it install exactly one icon, at `hicolor/1024x1024/apps/` - a
- * directory no icon lookup ever visits - so `Icon=traycer-desktop` in the
- * generated `.desktop` entry silently resolves to nothing and the shell falls
- * back to a generic icon. Every size below is one hicolor does declare.
- *
- * Output (under `clients/desktop/resources/bundle/icons/`, consumed via
- * `build.linux.icon` in package.json): `<size>x<size>.png` for each ICON_SIZES
- * entry.
- */
 
 const { readFileSync, writeFileSync, mkdirSync } = require("node:fs");
 const { resolve } = require("node:path");
@@ -30,17 +12,6 @@ const { encodePng, decodePng } = require("./png-codec.cjs");
 // them. All are declared in the stock hicolor `index.theme`.
 const ICON_SIZES = [16, 24, 32, 48, 64, 128, 256, 512];
 
-/**
- * Box-filter downscale: every destination pixel averages the full source
- * region it covers, weighting partially-covered edge pixels by their exact
- * overlap. A 2-tap bilinear sample would read 4 of the 4096 source pixels
- * behind a 1024 -> 16 destination pixel and alias badly; averaging the whole
- * footprint is both simpler to reason about and correct at every ratio.
- *
- * Color channels are weighted by alpha (i.e. averaged premultiplied, then
- * unpremultiplied) so fully transparent source pixels - whose RGB is
- * arbitrary - cannot bleed into the resampled edges.
- */
 function downscale(image, size) {
   const out = new Uint8Array(size * size * 4);
   const scale = image.width / size;

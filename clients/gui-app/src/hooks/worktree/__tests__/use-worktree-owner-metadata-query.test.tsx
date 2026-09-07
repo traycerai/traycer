@@ -21,12 +21,7 @@ const OWNER_ID = "chat-1";
 const WORKTREE_PATH = "/worktrees/app/feature-login";
 const PLAIN_FOLDER = "/repos/infra";
 
-/**
- * One owner running in two directories at once: a MANAGED WORKTREE and a plain
- * folder it runs in directly. The two need different host reads, which is the
- * whole point of the fixture - `worktree.listAllForHost` walks managed
- * worktrees and never sees `/repos/infra`.
- */
+/** The two need different host reads, which is the whole point of the fixture - `worktree.listAllForHost` walks managed worktrees and never sees `/repos/infra`. */
 const BINDING: WorktreeBinding = {
   entries: [
     {
@@ -80,10 +75,7 @@ describe("useWorktreeOwnerMetadata", () => {
       expect(rendered.result.current.workspaces).toHaveLength(1);
     });
 
-    // Split correctly: the managed worktree goes to the host-wide walk, the
-    // plain folder to the per-workspace summary. Sending the plain folder to
-    // the walk would return nothing for it, and it is that silent nothing -
-    // falling through to the entry's null `branch` - that rendered "No branch".
+    // Split correctly: the managed worktree goes to the host-wide walk, the plain folder to the per-workspace summary.
     expect(fixture.calls("worktree.listAllForHost")).toEqual([
       {
         includeActivity: true,
@@ -116,12 +108,7 @@ describe("useWorktreeOwnerMetadata", () => {
   });
 
   it("ignores LEGACY_HOST_RESOLVED_AT rather than rendering it as an age", async () => {
-    // A host predating `resolvedAt` gets its rows bridged to the literal `1`.
-    // That is a resolved-MARKER, not a time: taken as one it is 1 Jan 1970, so
-    // the card would read "Workspace snapshot · 56y" on facts fetched a
-    // second ago. It
-    // is also the smallest possible value, so a plain `Math.min` would let one
-    // legacy folder swallow every real timestamp beside it.
+    // That is a resolved-MARKER, not a time: taken as one it is 1 Jan 1970, so the card would read "Workspace snapshot · 56y" on facts fetched a second ago.
     const fixture = createFixture({
       worktreeResolvedAt: LEGACY_HOST_RESOLVED_AT,
       workspaceResolvedAt: 9_000,
@@ -188,11 +175,7 @@ describe("useWorktreeOwnerMetadata", () => {
       forceRefresh: true,
     });
 
-    // The forced responses reach the SCREEN. `forceRefresh` is part of the
-    // request params and therefore part of the query key, so reissuing the
-    // queries with it flipped would write a second cache entry that no observer
-    // reads - the host would re-derive and the card would never move. Asserting
-    // the key set is unchanged is what catches that: same keys, new data.
+    // `forceRefresh` is part of the request params and therefore part of the query key, so reissuing the queries with it flipped would write a second cache entry that no observer reads - the host would re-derive and the card would never move.
     await waitFor(() => {
       expect(rendered.result.current.worktrees[0].branch).toBe(
         "feature/login-renamed",

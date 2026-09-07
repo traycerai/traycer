@@ -21,18 +21,13 @@ export interface MermaidFullscreenDialogProps {
   readonly onCopyCode: () => void;
   /** `null` where this device has no download destination at all. */
   readonly onDownloadPng: (() => void) | null;
-  /**
-   * Hands the PNG to the OS share sheet, or `null` where the shell owns no
-   * chooser and Download is already the only route out.
-   */
+  /** Hands the PNG to the OS share sheet, or `null` where the shell owns no chooser and Download is already the only route out. */
   readonly onSharePng: (() => void) | null;
   readonly downloadDisabled: boolean;
 }
 
 /**
- * Fullscreen mermaid preview. Same dialog shell as the wireframe variant -
- * title + Copy + Download + Close in the header. Body delegates to
- * `PanZoomSvgViewer` for read-only pan, zoom, fit, and keyboard control.
+ * Same dialog shell as wireframe. Body is PanZoomSvgViewer.
  */
 export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
   const {

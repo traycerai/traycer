@@ -26,30 +26,17 @@ import { CommentThreadCard } from "./comment-thread-card";
 
 export interface CommentSidebarProps {
   readonly epicId: string;
-  /** The EPIC SESSION's client. The sidebar is a sibling of the canvas, so it
-   *  is outside every per-tile provider and must not read the app-wide host:
-   *  during a re-point that host already answers B while this Epic still
-   *  renders A's threads. Passed rather than read here so the same surface
-   *  stays mountable from a tile (D15). */
+  /** The sidebar is a sibling of the canvas, so it is outside every per-tile provider and must not read the
+   * app-wide host: during a re-point that host already answers B while this Epic still renders A's threads. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
-  /** The state lane's comment records for this artifact, or `null` when the
-   *  lane has said nothing about it - which is every artifact on a legacy
-   *  connection, permanently. Resolved by the owner
-   *  (`useEpicLaneCommentThreads`) rather than read here, for the same reason
-   *  {@link hostClient} is: this surface reads no ambient context. `null` here
-   *  is not "no threads" - it hands the question to the poll below. */
+  /** Resolved by the owner (`useEpicLaneCommentThreads`) rather than read here, for the same reason hostClient
+   * is: this surface reads no ambient context. */
   readonly laneThreads: readonly CommentThreadWire[] | null;
-  /**
-   * When the lane pushing {@link laneThreads} stopped, or `null` while it is
-   * up. A prop for the same reason the rows are: this component reads no
-   * ambient context.
-   */
+  /** When the lane pushing laneThreads stopped, or `null` while it is up. */
   readonly laneDroppedAt: number | null;
-  /** Threads-anchored-in-document positions, derived from the active tile's
-   *  Tiptap editor by the parent. Used both for sort order and orphan
-   *  detection (no entry → orphan). */
+  /** Threads-anchored-in-document positions, derived from the active tile's Tiptap editor by the parent. */
   readonly anchorPositions: AnchorPositionMap;
   /** Logged-in user id. Resolved upstream from the auth profile against the
    *  collaborators query. `null` while resolving. */
@@ -62,12 +49,7 @@ export interface CommentSidebarProps {
   readonly onActivateThread: (threadId: string) => void;
 }
 
-/**
- * Sidebar surface that swaps in for the artifact tree when the user opens
- * the comments view. Owns the tab filter (Open/Resolved/All) and routes
- * thread expansion through the Zustand `activeThreadId` so the editor
- * decoration plugin paints the matching anchor.
- */
+/** Sidebar surface that swaps in for the artifact tree when the user opens the comments view. */
 export function CommentSidebar(props: CommentSidebarProps) {
   const {
     epicId,
@@ -87,9 +69,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
 
-  // The poll is NOT disabled when the lane has rows. It is on the released
-  // floor, so it is the one source every host serves, and it is what keeps
-  // this surface readable if the lane goes quiet.
+  // The poll is not disabled when the lane has rows.
   const query = useEpicCommentThreadsForClient({
     client: hostClient,
     epicId,
@@ -104,9 +84,8 @@ export function CommentSidebar(props: CommentSidebarProps) {
         laneThreads,
         laneDroppedAt,
         pollThreads: query.data === undefined ? null : query.data.threads,
-        // `0` is TanStack's "never resolved" sentinel, and it is also a real
-        // epoch instant - so it has to become `null` here or a cold cache
-        // would read as an answer from 1970 and lose every comparison.
+        // `0` is TanStack's "never resolved" sentinel, and it is also a real epoch instant - so it has to become
+        // `null` here or a cold cache would read as an answer from 1970 and lose every comparison.
         pollUpdatedAt: query.dataUpdatedAt === 0 ? null : query.dataUpdatedAt,
       }),
     [laneDroppedAt, laneThreads, query.data, query.dataUpdatedAt],
@@ -118,21 +97,8 @@ export function CommentSidebar(props: CommentSidebarProps) {
     return sortThreadsByDocumentOrder(filtered, anchorPositions);
   }, [resolved.threads, filter, anchorPositions]);
 
-  // `resolved.threads === null` - not `sorted.length === 0` - separates "we do
-  // not know" from "there are none", and it now takes BOTH sources to reach
-  // unknown. An artifact the lane has said nothing about is not an artifact
-  // with no threads (on a legacy connection the lane says nothing about any of
-  // them), so a missing lane key alone may never render the empty state; it
-  // defers to the poll, and only their combined silence is unknown.
-  //
-  // TanStack keeps the last successful snapshot when a REFETCH fails, so a
-  // populated sidebar keeps rendering real threads through an outage; the read
-  // that renders nothing is the COLD one (opening comments, switching
-  // artifacts, after cache eviction) while the host's collab provider is null,
-  // which `epic.listCommentThreads` answers with an error for the whole
-  // duration of every reconnect. A cold query that is disabled because no host
-  // client is ready is unknown for the same reason: it has never produced a
-  // snapshot.
+  // An artifact the lane has said nothing about is not an artifact with no threads (on a legacy connection the
+  // lane says nothing about any of them), so a missing lane key alone may never render the empty state.
   const isUnavailable =
     resolved.threads === null && query.fetchStatus !== "fetching";
 
@@ -148,10 +114,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
   );
 
   const handleStartDraft = useCallback(() => {
-    // Surface a hint when nothing is selected - selection capture lives in
-    // the toolbar / shortcut path, not here. We just clear any stale draft
-    // so the floating popover state is in a known shape if the user goes
-    // back and selects text.
+    // Surface a hint when nothing is selected - selection capture lives in the toolbar / shortcut path, not here.
     setDraft(epicId, null);
   }, [epicId, setDraft]);
 
@@ -199,9 +162,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
 
 interface SidebarBodyProps {
   readonly isLoading: boolean;
-  /** The read failed with nothing cached to fall back on, so the thread list
-   *  is unknown rather than empty. See where it is derived in
-   *  {@link CommentSidebar}. */
+  /** The read failed with nothing cached to fall back on, so the thread list is unknown rather than empty. */
   readonly isUnavailable: boolean;
   readonly sorted: ReadonlyArray<SortedThread>;
   readonly filter: CommentThreadStatusFilter;
@@ -290,26 +251,14 @@ function EmptyState({ filter, onPromptDraft }: EmptyStateProps) {
   );
 }
 
-/**
- * Shown when the thread read failed and nothing is cached — the honest
- * counterpart to {@link EmptyState}.
- *
- * Deliberately says the threads could not be *loaded*, never that there are
- * none, and makes no claim about why or about when they come back. It borrows
- * the empty state's quiet dashed frame rather than an alert treatment: this is
- * a correction to what the sidebar was previously asserting, not a new alarm.
- * The agent-facing path already degrades this way — `comments.listThreads`
- * emits a `<warning>` for an unavailable artifact instead of an empty list
- * (`protocol/src/comments/comments-xml-formatting.ts`).
- */
+/** Deliberately says the threads could not be *loaded*, never that there are none, and makes no claim about why
+ * or about when they come back. */
 function UnavailableState() {
   return (
     <div
       data-slot="comment-sidebar-unavailable"
-      // A status, not an alert: the same quiet register as the visual
-      // treatment. `polite` announces the correction once the reader finishes
-      // its current utterance, rather than interrupting to report a failed
-      // background read.
+      // A status, not an alert: the same quiet register as the visual treatment. `polite` announces the correction
+      // once the reader finishes its current utterance, rather than interrupting to report a failed background read.
       role="status"
       aria-live="polite"
       className="flex flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border/60 bg-muted/20 px-4 py-8 text-center"

@@ -15,9 +15,10 @@ interface GitStatusBadgeBaseProps {
   readonly letter: string;
   readonly tone: StatusBadgeStyle["tone"];
   readonly label: string;
-  /** Off where something above already owns the hover for this area - the
-   *  dense panel row, which has no room for a second hover target. Named for
-   *  the tooltip, not the old native `title` it used to toggle. */
+  /**
+   * Off where something above already owns the hover for this area - the dense panel row, which has no room for a second hover target.
+   * Named for the tooltip, not the old native `title` it used to toggle.
+   */
   readonly withTooltip: boolean;
 }
 

@@ -1,11 +1,8 @@
 import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
 
-// The app's custom `--text-*` typography tokens (src/index.css). Without
-// this, tailwind-merge cannot classify `text-ui-sm` & friends, falls back
-// to treating them as text COLORS, and silently drops them whenever a real
-// color like `text-accent-foreground` joins the same cn(...) merge - the
-// element then falls back to the inherited font size.
+// The app's custom `--text-*` typography tokens (src/index.css).
+// Without this, tailwind-merge cannot classify `text-ui-sm` & friends, falls back to treating them as text COLORS, and silently drops them whenever a real color like `text-accent-foreground` joins the same cn(...) merge - the element then falls back to the.
 const CUSTOM_FONT_SIZE_TOKENS = [
   "badge",
   "code",
@@ -26,14 +23,7 @@ const CUSTOM_FONT_SIZE_TOKENS = [
   "ui-xs",
 ];
 
-// The app's safe-area spacing tokens (src/index.css). tailwind-merge's stock
-// scales accept numbers, keywords and arbitrary values, so a bare token like
-// `safe-bottom` matches nothing and the class falls through UNCLASSIFIED.
-// Unclassified is safe - the class is never dropped - but it also never
-// conflicts, so `h-safe-dvh` does not displace an `h-full` from earlier in the
-// same merge and both reach the stylesheet, where source order decides. That
-// failure is invisible on desktop, because every safe-area token collapses to
-// zero there. Registering them is what makes the tokens ordinary overrides.
+// The app's safe-area spacing tokens (src/index.css). tailwind-merge's stock scales accept numbers, keywords and arbitrary values, so a bare token like `safe-bottom` matches nothing and the class falls through UNCLASSIFIED.
 const SAFE_AREA_SPACING_TOKENS = [
   "safe-top",
   "safe-right",
@@ -100,11 +90,8 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * Re-exported, not defined here. The implementation moved to
- * `lib/text/format-single-line.ts` so that a caller needing only the string
- * helper does not pull in `clsx` + `tailwind-merge` through this module - see
- * that file for why the chat find projection made that matter. Callers may
- * import from either place; there is one implementation.
+ * Re-exported, not defined here.
+ * The implementation moved to `lib/text/format-single-line.ts` so that a caller needing only the string helper does not pull in `clsx` + `tailwind-merge` through this module - see that file for why the chat find projection made that matter.
  */
 export {
   formatSingleLine,

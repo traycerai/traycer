@@ -30,13 +30,7 @@ function hostControllerStatusQueryOptions(management: IHostManagement | null) {
   });
 }
 
-/**
- * Reads the canonical two-lane `HostControllerStatus` (Host Update Layer
- * Redesign Tech Plan). Primed once via `getHostControllerStatus()` on
- * mount; live updates arrive via `HostControllerStatusListener` pushing
- * into the same query key. Shared by the host gate, update banner, and
- * Settings → Host so every surface renders the identical projection.
- */
+/** Reads the canonical two-lane `HostControllerStatus` (Host Update Layer Redesign Tech Plan). */
 export function useRunnerHostControllerStatusQuery(): UseQueryResult<HostControllerStatus> {
   const runnerHost = useRunnerHost();
   return useQuery(hostControllerStatusQueryOptions(runnerHost.hostManagement));

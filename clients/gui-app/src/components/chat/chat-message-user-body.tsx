@@ -195,11 +195,7 @@ export function UserMessageBody({
   return <UserMessageDisplayView message={message} actions={actions} />;
 }
 
-/**
- * Display variant for a `role: "user"` message whose sender was another
- * agent. It is rendered as operational agent traffic, not as a human-authored
- * user bubble; the visible body is the structured message body only.
- */
+/** Display variant for a `role: "user"` message whose sender was another agent. It is rendered as operational agent traffic, not as a human-authored user bubble; the visible body is the structured message body only. */
 function AgentMessageDisplayView({
   messageId,
   messageText,
@@ -233,9 +229,8 @@ function AgentMessageDisplayView({
   const epicId = useOpenEpicId();
   const { openTile } = useEpicTileNavigation();
   const senderNode = useEpicArtifact(agentSenderInfo.agentId);
-  // Resolve the live sender from the epic projection. A chat or
-  // terminal-agent is openable as a tab; an absent node (e.g. a
-  // cross-host sender not in this projection) renders as plain text.
+  // Resolve the live sender from the epic projection.
+  // A chat or terminal-agent is openable as a tab; an absent node (e.g. a cross-host sender not in this projection) renders as plain text.
   const openTarget = useMemo((): {
     readonly type: "chat" | "terminal-agent";
     readonly hostId: string;
@@ -288,9 +283,7 @@ function AgentMessageDisplayView({
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
-      {/* flex-wrap lets the badge drop to a second line on narrow (mobile)
-          widths; the name group truncates last, so the sender stays visible
-          and tappable instead of collapsing to "from agent …". */}
+      {/* flex-wrap lets the badge drop to a second line on narrow (mobile) widths; the name group truncates last, so the sender stays visible and tappable instead of collapsing to "from agent …". */}
       <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
         <span className="flex min-w-0 items-center gap-1">
           <span className="shrink-0 text-muted-foreground">from agent</span>
@@ -389,15 +382,12 @@ function UserMessageDisplayView({
     );
 
   const profileProvenance = useTombstonedProfileLabel(message.sessionAnchor);
-  // Present whenever `profileProvenance` is (the resolver only returns a
-  // verdict for an anchor with a non-null `profileId`) - re-derived separately
-  // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
+  // Present whenever `profileProvenance` is (the resolver only returns a verdict for an anchor with a non-null `profileId`) - re-derived separately since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
   const tombstoneIdentity = tombstoneFooterIdentity(message.sessionAnchor);
   const confirmingDelete = actions?.confirmingDelete ?? false;
   const visibleSteerBadge = visibleUserSteerBadge(message);
-  // Only clamp while collapsed; expanding drops both the height cap and the
-  // bottom fade so the full prompt is readable in place. The overflow probe
-  // keeps measuring the (now uncapped) content, so the toggle stays visible.
+  // Only clamp while collapsed; expanding drops both the height cap and the bottom fade so the full prompt is readable in place.
+  // The overflow probe keeps measuring the (now uncapped) content, so the toggle stays visible.
   const clamped = isOverflowing && !expanded;
   const findUnitId = chatFindMessageContentUnitId(message.id);
   const copyText = useMemo(
@@ -446,12 +436,7 @@ function UserMessageDisplayView({
             <ShowMoreToggle expanded={expanded} onToggle={toggleExpanded} />
           ) : null}
         </div>
-        {/* The action chip floats over the bubble's bottom-right border instead
-            of reserving a row beneath it, so the assistant reply sits close
-            under the user message rather than after a tall hover gap. The copy
-            button is rendered independently of `actions` so it stays available
-            on hover even while a turn is streaming (when edit/delete are gated
-            off and `actions` is null). */}
+        {/* The action chip floats over the bubble's bottom-right border instead of reserving a row beneath it, so the assistant reply sits close under the user message rather than after a tall hover gap. The copy button is rendered independently of `actions` so it stays available on hover even while a turn is streaming (when edit/delete are gated off and `actions` is null). */}
         <UserMessageActionOverlay
           confirmingDelete={confirmingDelete}
           actions={actions}
@@ -493,12 +478,8 @@ function UserMessageActionOverlay({
     <div
       className={cn(
         "absolute right-3 top-full z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 shadow-sm transition-opacity",
-        // The group-focus-within reveal is fine-pointer-only: on coarse
-        // pointers the touch "…" menu (UserMessageTouchMenu) replaces this
-        // chip, and Radix returning focus to that trigger on menu close would
-        // otherwise reveal the chip on top of it. The chip's own
-        // focus-within reveal stays unscoped so tabbing into its buttons with
-        // a hardware keyboard still shows them on any device.
+        // The group-focus-within reveal is fine-pointer-only: on coarse pointers the touch "…" menu (UserMessageTouchMenu) replaces this chip, and Radix returning focus to that trigger on menu close would otherwise reveal the chip on top of it.
+        // The chip's own focus-within reveal stays unscoped so tabbing into its buttons with a hardware keyboard still shows them on any device.
         confirmingDelete
           ? "pointer-events-auto opacity-100"
           : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 pointer-fine:group-focus-within/user-message:pointer-events-auto pointer-fine:group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
@@ -515,10 +496,7 @@ function UserMessageActionOverlay({
   );
 }
 
-// `message.sessionAnchor?.profileId ?? null` doesn't narrow the anchor's
-// discriminated-union type for TypeScript, so the footer's other identity
-// fields (harnessId, accentColor) need their own re-derivation - pulled into
-// one helper instead of three inline optional chains in the render body.
+// `message.sessionAnchor?.profileId ?? null` doesn't narrow the anchor's discriminated-union type for TypeScript, so the footer's other identity fields (harnessId, accentColor) need their own re-derivation - pulled into one helper instead of three inline optional chains in the render body.
 function tombstoneFooterIdentity(
   sessionAnchor: ChatMessageModel["sessionAnchor"],
 ): {
@@ -535,13 +513,7 @@ function tombstoneFooterIdentity(
   };
 }
 
-/**
- * `removed` is the ONLY thing separating a genuine local deletion from a turn
- * that simply ran on another machine: profile ids are host-local, so an anchor
- * carried here by a fork/clone can never match this host's list and claiming
- * "(removed)" for it would be a false accusation about a profile that is alive
- * and well elsewhere. The provenance itself is kept either way.
- */
+/** `removed` is the ONLY thing separating a genuine local deletion from a turn that simply ran on another machine: profile ids are host-local, so an anchor carried here by a fork/clone can never match this host's list and claiming "(removed)" for it would be a false accusation about a profile that is alive and well elsewhere. The provenance itself is kept either way. */
 function UserMessageTombstonedProfileFooter({
   profileId,
   harnessId,
@@ -571,11 +543,7 @@ function UserMessageTombstonedProfileFooter({
   );
 }
 
-/**
- * Bottom-anchored disclosure toggle for an overflowing user prompt. Only
- * mounts when the bubble was clamped, so the label flips between expanding the
- * full prompt and collapsing it back to the masked preview height.
- */
+/** Bottom-anchored disclosure toggle for an overflowing user prompt. Only mounts when the bubble was clamped, so the label flips between expanding the full prompt and collapsing it back to the masked preview height. */
 function ShowMoreToggle({
   expanded,
   onToggle,
@@ -733,9 +701,7 @@ function InlineUserMessageEditor({
     [editing, scheduleVisibilityCheck],
   );
 
-  // Inline message editing tracks no persisted selection of its own (unlike
-  // the chat/landing/modal composer drafts) - a caret move only needs the
-  // same visibility nudge a real edit gets, never a content dispatch.
+  // Inline message editing tracks no persisted selection of its own (unlike the chat/landing/modal composer drafts) - a caret move only needs the same visibility nudge a real edit gets, never a content dispatch.
   const onSelectionChange = useCallback(() => {
     scheduleVisibilityCheck();
   }, [scheduleVisibilityCheck]);
@@ -743,8 +709,7 @@ function InlineUserMessageEditor({
   useLayoutEffect(() => {
     const focusFrame = focusFrameRef;
     const visibilityFrame = visibilityFrameRef;
-    // ComposerMenu is now caret-anchored (portal'd to body, positioned by
-    // floating-ui), so it picks the best direction at open-time on its own.
+    // ComposerMenu is now caret-anchored (portal'd to body, positioned by floating-ui), so it picks the best direction at open-time on its own.
     // No headroom-reserving scroll needed.
     const scrollSnapshot = captureScrollSnapshot(containerRef.current);
     let attempt = 0;
@@ -1016,12 +981,7 @@ function MessageActionButton(props: {
   );
 }
 
-/**
- * Rewrite each hash-only `imageAttachment` node to carry inline `b64content`
- * (resolved from the epic's attachments store) so the copied clipboard payload
- * is self-contained. A hash whose bytes are unresolvable (a dangling ref) is
- * left hash-only — the destination composer's paste validation strips it.
- */
+/** Rewrite each hash-only `imageAttachment` node to carry inline `b64content` (resolved from the epic's attachments store) so the copied clipboard payload is self-contained. A hash whose bytes are unresolvable (a dangling ref) is left hash-only - the destination composer's paste validation strips it. */
 async function inlineCopiedImageBytes(
   content: JsonContent,
   resolveBytes: (hash: string) => Promise<Uint8Array | null>,
@@ -1078,12 +1038,7 @@ function inlineHashOnlyImageNodes(
   };
 }
 
-/**
- * Copy behavior shared by the hover chip's copy button and the coarse-pointer
- * "…" menu's Copy item, so both entry points write the identical clipboard
- * payload (rich composer content with re-inlined image bytes when the message
- * is structured, plain text otherwise).
- */
+/** Copy behavior shared by the hover chip's copy button and the coarse-pointer "…" menu's Copy item, so both entry points write the identical clipboard payload (rich composer content with re-inlined image bytes when the message is structured, plain text otherwise). */
 function useUserMessageCopy(
   text: string,
   structuredContent: JsonContent | null,
@@ -1093,21 +1048,14 @@ function useUserMessageCopy(
     onSuccess: null,
     onError: handleCopyError,
   });
-  // Chat-plane read with the reader's own bound. This replaces a
-  // `hasAttachmentBytes` pre-check that existed purely to stop
-  // `readAttachmentBytes` from waiting indefinitely and hanging the clipboard
-  // write; the bytes are no longer answerable synchronously, so the same
-  // guarantee now comes from the timeout. A hash that does not resolve stays
-  // hash-only, exactly as before, and downstream paste validation drops it.
+  // A hash that does not resolve stays hash-only, exactly as before, and downstream paste validation drops it.
   const resolveAttachmentBytes = useChatAttachmentByteReader();
   const onCopy = useCallback(() => {
     if (structuredContent === null) {
       copy(text);
       return;
     }
-    // Re-inline each hash-only image node's bytes as `b64content` before writing
-    // to the clipboard, so a paste onto the start page (or into another epic's
-    // chat) carries real bytes instead of a bare hash that resolves nowhere.
+    // Re-inline each hash-only image node's bytes as `b64content` before writing to the clipboard, so a paste onto the start page (or into another epic's chat) carries real bytes instead of a bare hash that resolves nowhere.
     copyWith(async () => {
       const content = await inlineCopiedImageBytes(
         structuredContent,
@@ -1117,9 +1065,8 @@ function useUserMessageCopy(
         content,
         plainText: text,
       });
-      // Image atoms serialize to no plain text, so a rich-write failure that
-      // silently degrades to plain text would drop every image while still
-      // resolving "copied". Surface that instead of a clean-looking success.
+      // Image atoms serialize to no plain text, so a rich-write failure that silently degrades to plain text would drop every image while still resolving "copied".
+      // Surface that instead of a clean-looking success.
       if (!result.richContentWritten && containsImageAtoms(content)) {
         reportableErrorToast(
           "Images weren't copied",
@@ -1141,11 +1088,7 @@ function useUserMessageCopy(
   return { copied, onCopy };
 }
 
-/**
- * Copy-to-clipboard button for the user message action chip. Sits alongside
- * edit/delete but stays available even while a turn is streaming (when those
- * two are gated off), so a user can always grab their own prompt text.
- */
+/** Copy-to-clipboard button for the user message action chip. Sits alongside edit/delete but stays available even while a turn is streaming (when those two are gated off), so a user can always grab their own prompt text. */
 function MessageCopyButton({
   text,
   structuredContent,
@@ -1174,24 +1117,7 @@ function MessageCopyButton({
   );
 }
 
-/**
- * Coarse-pointer replacement for the hover action chip: a single muted "…"
- * trigger straddling the bubble's bottom-right border (the chip's exact spot)
- * opening a menu with Edit / Copy / Delete wired to the same handlers the chip
- * uses. Hidden on fine pointers via `hidden pointer-coarse:flex`, so
- * hover-capable desktops keep today's chip untouched; hover reveals never
- * apply on coarse pointers (Tailwind gates `hover:` behind
- * `@media (hover: hover)`), which is exactly the gap this menu fills.
- *
- * Delete hands off to the existing confirm flow: `onDeleteRequest` sets the
- * chip's `confirmingDelete` state, which force-reveals the inline check/cross
- * confirm on every pointer type - so this trigger unmounts while that confirm
- * occupies the same corner, and no second confirm surface is introduced.
- *
- * Mirrors the chip's gating: Edit/Delete only while `actions` is present and
- * enabled (`canModifyMessages`, not pending); Copy whenever there is text,
- * including mid-stream when `actions` is null.
- */
+/** Hidden on fine pointers via `hidden pointer-coarse:flex`, so hover-capable desktops keep today's chip untouched; hover reveals never apply on coarse pointers (Tailwind gates `hover:` behind `@media (hover: hover)`), which is exactly the gap this menu fills. */
 function UserMessageTouchMenu({
   confirmingDelete,
   actions,
@@ -1209,12 +1135,8 @@ function UserMessageTouchMenu({
   if (confirmingDelete || (!canModify && !canCopy)) return null;
 
   return (
-    // Tucked onto the bubble's bottom-right corner, straddling the border
-    // (`top-full -translate-y-1/2`): the glyph's upper half only ever covers
-    // the bubble's bottom padding, so it can't collide with message text on
-    // short or multi-line bubbles, and it reads as attached to the bubble
-    // edge rather than floating beneath it. The confirming-delete chip takes
-    // this same corner region while this trigger is unmounted.
+    // Tucked onto the bubble's bottom-right corner, straddling the border (`top-full -translate-y-1/2`): the glyph's upper half only ever covers the bubble's bottom padding, so it can't collide with message text on short or multi-line bubbles, and it reads as attached to the bubble edge rather than floating beneath it.
+    // The confirming-delete chip takes this same corner region while this trigger is unmounted.
     <div className="absolute right-1 top-full z-10 hidden -translate-y-1/2 pointer-coarse:flex">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -1223,11 +1145,6 @@ function UserMessageTouchMenu({
             variant="ghost"
             size="icon-xs"
             aria-label="Message actions"
-            // Resting bg-muted matches ghost's aria-expanded open surface,
-            // so the glyph reads as a button before it is tapped. The
-            // invisible ::after slop widens the 24px visual control to the
-            // 44px touch-target guideline without painting anything (Button
-            // renders no ::after of its own, so nothing merges with it).
             // muted-fill-ok: transcript row renders on bg-background/canvas
             className="relative bg-muted text-muted-foreground/70 hover:text-foreground after:absolute after:-inset-2.5 after:content-['']"
           >

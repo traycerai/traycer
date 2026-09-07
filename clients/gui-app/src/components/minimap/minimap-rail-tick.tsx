@@ -14,7 +14,6 @@ export type MinimapRailTickProps = Omit<
   readonly top: string;
 };
 
-/** The shared visual language for chat-turn and artifact-heading rails. */
 export function MinimapRailTick({
   active,
   availableWidth,

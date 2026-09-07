@@ -39,26 +39,11 @@ import {
   type StoredCustomKeys,
 } from "./model-provider-custom-draft";
 
-/**
- * The docs upstream's own dialog links, so a user following either app lands on
- * the same page.
- */
+/** The docs upstream's own dialog links, so a user following either app lands on the same page. */
 const CUSTOM_PROVIDER_DOCS_URL =
   "https://opencode.ai/docs/providers/#custom-provider";
 
-/**
- * Re-lock the draft whenever the catalog's reading of this provider changes.
- *
- * DURING RENDER, guarded by the snapshot's identity - the same shape the tab
- * uses to adopt a resumed OAuth attempt, and for the same reason: this is
- * adjusting state to a prop that changed, so an effect would only add a commit
- * and a frame that still shows the stale locks. The snapshot is memoized by the
- * tab, so the guard settles in one pass and no-ops thereafter.
- *
- * The case it exists for: the host commits a config block before it reports the
- * credential step, so a write that FAILED can still have stored rows this form
- * opened believing were unsaved.
- */
+/** Re-lock the draft whenever the catalog's reading of this provider changes. */
 function useRelockAgainstCatalog(args: {
   readonly stored: StoredCustomKeys;
   readonly setDraft: Dispatch<SetStateAction<CustomProviderDraft>>;
@@ -70,46 +55,21 @@ function useRelockAgainstCatalog(args: {
   args.setDraft((current) => relockCustomProviderDraft(current, args.stored));
 }
 
-/**
- * Declare (or edit) an OpenAI-compatible provider the catalog does not ship.
- *
- * A DELIBERATE MIRROR of upstream's `CustomProviderForm`: same fields in the
- * same order, same copy, same helper text, same row editors. Matching their
- * rules while inventing the surface around them is not a mirror: the point is
- * that a user who knows one app can use the other without relearning it.
- *
- * EDIT is ours, not theirs. Upstream has no edit mode at all: you re-declare a
- * provider with the same id, which their exists-check permits only while it is
- * disabled. Ours opens the form on the current values with the id locked, which
- * is strictly more capable and is the only way to repair a hand-broken
- * declaration.
- *
- * The submit path is a PROP rather than a mutation hook of its own. The tab
- * owns which host and provider this is for and already holds the invalidation
- * story for the list.
- */
+/** Matching their rules while inventing the surface around them is not a mirror: the point is that a user who
+ * knows one app can use the other without relearning it. */
 export function ProviderCustomModelProviderDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly providerLabel: string;
   /** Ids already in the catalog - a new provider may not shadow one. */
   readonly takenIds: readonly string[];
-  /**
-   * Ids currently suppressed in the provider's config.
-   *
-   * Upstream skips the already-exists check for these, because re-declaring a
-   * disabled custom provider is how their app re-enables it.
-   */
+  /** Upstream skips the already-exists check for these, because re-declaring a disabled custom provider is how
+   * their app re-enables it. */
   readonly disabledIds: readonly string[];
   /** The provider being edited, or null when declaring a new one. */
   readonly initial: CustomProviderValues | null;
-  /**
-   * What the config declares for this provider RIGHT NOW, from the catalog.
-   *
-   * The form's own locks are a snapshot of when it opened, and a partially
-   * committed write moves the config underneath them - see
-   * {@link relockCustomProviderDraft}.
-   */
+  /** The form's own locks are a snapshot of when it opened, and a partially committed write moves the config
+   * underneath them - see relockCustomProviderDraft. */
   readonly stored: StoredCustomKeys;
   readonly isPending: boolean;
   /** Inline failure from the last submit, already redacted, or null. */
@@ -123,9 +83,8 @@ export function ProviderCustomModelProviderDialog(props: {
       ? emptyCustomProviderDraft()
       : customProviderDraftFrom(initialValues),
   );
-  // Whether the id is still following the name. An edit starts detached - the
-  // id is already fixed, and re-deriving it from a renamed provider would
-  // propose changing the key every stored model reference is built from.
+  // An edit starts detached - the id is already fixed, and re-deriving it from a renamed provider would propose
+  // changing the key every stored model reference is built from.
   const [idPinned, setIdPinned] = useState(editing);
 
   useRelockAgainstCatalog({ stored: props.stored, setDraft });
@@ -143,17 +102,13 @@ export function ProviderCustomModelProviderDialog(props: {
   );
   const disabledIds = props.disabledIds;
   const scope = useMemo(
-    // An edit judges the id as an EXISTING one: the field is disabled anyway,
-    // so the minting rules could only condemn a declaration the user cannot
-    // change from this form.
+    // An edit judges the id as an existing one: the field is disabled anyway, so the minting rules could only
+    // condemn a declaration the user cannot change from this form.
     () => ({ takenIds, disabledIds, existing: editing }),
     [disabledIds, editing, takenIds],
   );
-  // Validated continuously, SHOWN only after a submit attempt - upstream's
-  // behaviour, and the reason their Submit stays live. Disabling it instead
-  // turns a blank form into a dead button whose reasons are all invisible,
-  // because the errors it is waiting for are exactly the ones a
-  // blank form has.
+  // Validated continuously, shown only after a submit attempt - upstream's behaviour, and the reason their
+  // Submit stays live.
   const [showErrors, setShowErrors] = useState(false);
   const errors = validateCustomProviderDraft(draft, scope);
   const shown = showErrors ? errors : null;
@@ -175,9 +130,8 @@ export function ProviderCustomModelProviderDialog(props: {
     if (props.isPending) return;
     const values = customProviderValues(draft, scope);
     if (values === null) {
-      // Every field at once. This is four short fields and two row lists;
-      // revealing them one submit at a time would turn one fix into several
-      // rounds.
+      // This is four short fields and two row lists; revealing them one submit at a time would turn one fix into
+      // several rounds.
       setShowErrors(true);
       return;
     }
@@ -189,9 +143,8 @@ export function ProviderCustomModelProviderDialog(props: {
       <DialogContent className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {/* Always the generic mark: a provider the user declared has no
-             * brand of its own, and borrowing one would put a real company's
-             * logo on someone's private gateway. */}
+            {/* Always the generic mark: a provider the user declared has no brand of its own, and borrowing one would put a
+               real company's logo on someone's private gateway. */}
             <GenericModelProviderIcon aria-hidden className="size-4 shrink-0" />
             {editing ? "Edit custom provider" : "Custom provider"}
           </DialogTitle>
@@ -199,9 +152,8 @@ export function ProviderCustomModelProviderDialog(props: {
             Configure an OpenAI-compatible provider. See the{" "}
             <button
               type="button"
-              // The shell owns external navigation - the renderer has no
-              // browser to hand a URL to, which is the same route the connect
-              // dialog's authorization link takes.
+              // The shell owns external navigation - the renderer has no browser to hand a URL to, which is the same route
+              // the connect dialog's authorization link takes.
               className="underline underline-offset-2 hover:text-foreground"
               onClick={() => {
                 void openLink(CUSTOM_PROVIDER_DOCS_URL, "docs", null);
@@ -233,9 +185,8 @@ export function ProviderCustomModelProviderDialog(props: {
                 placeholder="myprovider"
                 autoComplete="off"
                 spellCheck={false}
-                // An existing provider's id is its config key and the name every
-                // stored model reference is built from, so a rename here would
-                // be a delete and a create wearing one button.
+                // An existing provider's id is its config key and the name every stored model reference is built from, so a
+                // rename here would be a delete and a create wearing one button.
                 disabled={editing}
                 onChange={(event) => {
                   setIdPinned(true);
@@ -291,12 +242,8 @@ export function ProviderCustomModelProviderDialog(props: {
               hint={
                 editing
                   ? // The stored secret is never read back, so an edit cannot
-                    // show it - and neither can one field show several env
-                    // fallbacks. Untouched keeps whatever is there; typing
-                    // replaces it. CLEARING is the third state and it is real
-                    // now, so the copy has to name it rather than promise that
-                    // an empty field is always harmless: a restored
-                    // `{env:VAR}` the user deletes is a deletion.
+                    // Clearing is the third state and it is real now, so the copy has to name it rather than promise that an empty
+                    // field is always harmless: a restored `{env:VAR}` the user deletes is a deletion.
                     "Optional. Untouched keeps the saved key and env fallbacks; clearing a restored {env:VAR} removes it."
                   : "Optional. Leave empty if you manage auth via headers."
               }
@@ -313,8 +260,7 @@ export function ProviderCustomModelProviderDialog(props: {
                   setDraft((current) => ({
                     ...current,
                     apiKey: event.target.value,
-                    // From here the field REPLACES whatever the row arrived
-                    // with; until now it was only proposing to.
+                    // From here the field replaces whatever the row arrived with; until now it was only proposing to.
                     apiKeyEdited: true,
                   }));
                 }}
@@ -350,9 +296,8 @@ export function ProviderCustomModelProviderDialog(props: {
                 errors={shown?.models[index]}
                 locked={model.locked}
                 removeLabel={`Remove model ${String(index + 1)}`}
-                // Upstream keeps the last row: the section is required, and a
-                // list you can empty is one whose Add button is its only
-                // content.
+                // Upstream keeps the last row: the section is required, and a list you can empty is one whose Add button is
+                // its only content.
                 removeDisabled={draft.models.length <= 1}
                 onFirstChange={(value) => {
                   setDraft((current) => ({
@@ -463,15 +408,8 @@ export function ProviderCustomModelProviderDialog(props: {
   );
 }
 
-/**
- * A labelled field whose message is ANNOUNCED with it.
- *
- * The message carries an id the control points at through `aria-describedby`,
- * and an invalid one also sets `aria-invalid`. Without that the error is a
- * paragraph that happens to sit nearby: sighted users infer the association
- * from proximity, and a screen reader gets the label and the box with nothing
- * saying why it was rejected. `RowField` already did this; this one did not.
- */
+/** Without that the error is a paragraph that happens to sit nearby: sighted users infer the association from
+ * proximity, and a screen reader gets the label and the box with nothing saying why it was rejected. */
 function Field(props: {
   readonly id: string;
   readonly label: string;
@@ -539,13 +477,8 @@ function RowSection(props: {
   );
 }
 
-/**
- * One two-column row with a trailing remove.
- *
- * Column labels are rendered for assistive tech only - upstream hides them too
- * (`hideLabel`), because a header repeated down every row is noise once the
- * placeholders have said the same thing.
- */
+/** Column labels are rendered for assistive tech only - upstream hides them too (`hideLabel`), because a header
+ * repeated down every row is noise once the placeholders have said the same thing. */
 function EditorRow(props: {
   readonly rowId: string;
   readonly firstLabel: string;
@@ -555,11 +488,8 @@ function EditorRow(props: {
   readonly secondPlaceholder: string;
   readonly secondValue: string;
   readonly errors: CustomProviderRowErrors | undefined;
-  /**
-   * Whether this row is already stored - see `StoredRow` on the draft module
-   * for what the merge can and cannot express. Locks the KEY and drops the
-   * remove entirely.
-   */
+  /** Whether this row is already stored - see `StoredRow` on the draft module for what the merge can and cannot
+   * express. Locks the key and drops the remove entirely. */
   readonly locked: boolean;
   readonly removeLabel: string;
   readonly removeDisabled: boolean;
@@ -577,9 +507,8 @@ function EditorRow(props: {
         placeholder={props.firstPlaceholder}
         value={props.firstValue}
         error={firstError}
-        // READ-ONLY rather than disabled: the value is still worth reading and
-        // copying, and a disabled control drops out of the accessibility tree
-        // that would otherwise say what this row is.
+        // Read-only rather than disabled: the value is still worth reading and copying, and a disabled control drops
+        // out of the accessibility tree that would otherwise say what this row is.
         readOnly={props.locked}
         onChange={props.onFirstChange}
       />
@@ -593,10 +522,8 @@ function EditorRow(props: {
         onChange={props.onSecondChange}
       />
       {props.locked ? (
-        // GONE, not disabled. A disabled control says "not right now"; this row
-        // can never be removed from this form, and a button that will never
-        // enable is an affordance that lies. The section's note carries the
-        // real route.
+        // A disabled control says "not right now"; this row can never be removed from this form, and a button that
+        // will never enable is an affordance that lies.
         <div aria-hidden className="mt-1 size-7 shrink-0" />
       ) : (
         <Button
@@ -618,14 +545,8 @@ function EditorRow(props: {
   );
 }
 
-/**
- * One column of a row editor, with its error ANNOUNCED rather than merely
- * adjacent - the same association {@link Field} makes, for the same reason.
- *
- * These rows repeat, so an unassociated "Required" is worse here than in the
- * fields above: a screen reader hears the column label and the value, and the
- * complaint belongs to whichever of the six nearby boxes the reader guesses.
- */
+/** One column of a row editor, with its error announced rather than merely adjacent - the same association
+ * Field makes, for the same reason. */
 function RowField(props: {
   readonly id: string;
   readonly label: string;

@@ -532,9 +532,7 @@ describe("ElectronTabSurface", () => {
     const bridge = state.bridge;
     if (bridge === null) throw new Error("bridge missing");
     state.sessions = liveSessions();
-    // Held open so the tab is still there when the request arrives and gone
-    // only while `openTab` is in flight - which is what makes this a test of
-    // WHEN the target is resolved, not just that a missing tab falls back.
+    // Held open so the tab is still there when the request arrives and gone only while `openTab` is in flight - which is what makes this a test of WHEN the target is resolved, not just that a missing tab falls back.
     const pending: {
       settle: (tab: { sessionId: string; tabId: string }) => void;
     } = { settle: () => undefined };
@@ -642,10 +640,7 @@ describe("ElectronTabSurface", () => {
 });
 
 /**
- * Browser-scoped reserved chords. Main claims these from the focused guest and
- * names the command; the app renderer's own keybindings are NOT involved -
- * that half is pinned in `browser-view-chords.test.ts`, which proves a
- * browser-scoped chord is never replayed as a keystroke.
+ * Main claims these from the focused guest and names the command; the app renderer's own keybindings are NOT involved - that half is pinned in `browser-view-chords.test.ts`, which proves a browser-scoped chord is never replayed as a keystroke.
  */
 describe("ElectronTabSurface browser-scoped chords", () => {
   beforeEach(() => {
@@ -712,12 +707,6 @@ describe("ElectronTabSurface browser-scoped chords", () => {
   });
 });
 
-/**
- * A `loading` that neither settles nor reports further progress within
- * `NAVIGATION_STALL_TIMEOUT_MS` resolves to the terminal stalled/Retry
- * surface. Each fresh `loading` status rearms the clock; a `ready`/`dead`
- * status clears the stalled state outright.
- */
 describe("ElectronTabSurface navigation stall", () => {
   function loadingStatus(): NativeStatusChange {
     return {
@@ -845,11 +834,8 @@ describe("ElectronTabSurface navigation stall", () => {
 });
 
 /**
- * The honest loader's stale-settle guard must not pin `status` at `loading`
- * forever after an echo-less settle. A back/forward history nav or a session
- * reconnect re-attach settles straight to `ready` with no preceding `loading`
- * echo, so `echoSeen` never flips; a settle whose URL matches the latch is
- * that attempt completing, not a stale settle, and clears the latch.
+ * The honest loader's stale-settle guard must not pin `status` at `loading` forever after an echo-less settle.
+ * A back/forward history nav or a session reconnect re-attach settles straight to `ready` with no preceding `loading` echo, so `echoSeen` never flips; a settle whose URL matches the latch is that attempt completing, not a stale settle, and clears the latch.
  */
 describe("ElectronTabSurface echo-less settle", () => {
   function statusChange(
@@ -898,9 +884,7 @@ describe("ElectronTabSurface echo-less settle", () => {
     state.latchAttemptedUrl(url);
   }
 
-  // The loader panel stays mounted at `opacity-0` when hidden, so its
-  // painted-ness is the overlay ancestor's opacity class, not the text's
-  // presence in the DOM.
+  // The loader panel stays mounted at `opacity-0` when hidden, so its painted-ness is the overlay ancestor's opacity class, not the text's presence in the DOM.
   function loaderOverlayClassName(): string {
     const banner = screen.getByText("Reconnecting to this session");
     const overlay = banner.closest('[class*="opacity-"]');

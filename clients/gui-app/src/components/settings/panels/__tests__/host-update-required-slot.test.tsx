@@ -22,23 +22,8 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
-/**
- * The CONJUNCTION that decides whether Settings offers "Update host": the
- * rendered health state AND the lease's dead reason must agree.
- *
- * Either half alone is wrong in a way a user would see. `health.state` respects
- * the derivation precedence — this machine's own stopped service outranks the
- * authority's verdict — so a local host that is both incompatible and not
- * running reads "Stopped"; a slot keyed on the lease alone would put an
- * "Update host" button beside that word, answering a question the card is not
- * asking. And the lease alone is what carries the structured skew the action
- * needs, which `health` deliberately does not.
- *
- * The store is seeded through the real chain (`applyKernelSnapshot` + `reset`)
- * rather than by mocking `useHostLease`: mutating what a hook EMITS cannot
- * reach a suite that fakes the hook's output, which is exactly how sealed probe
- * P2 measured a coverage separation instead of a defect.
- */
+/** The store is seeded through the real chain (`applyKernelSnapshot` + `reset`) rather than by mocking
+ * `useHostLease`. */
 
 const INCOMPATIBLE: HostLeaseSnapshot = {
   hostId: "host-a",
@@ -107,11 +92,8 @@ describe("<HostUpdateRequiredSlot />", () => {
     expect(screen.getByTestId("host-scope-update-host")).not.toBeNull();
   });
 
-  /**
-   * The precedence case. The lease still says incompatible — but this machine's
-   * own service read outranks it, so the card reads "Stopped", and a remedy for
-   * a different problem must not appear beside that word.
-   */
+  /** The lease still says incompatible - but this machine's own service read outranks it, so the card reads
+   * "Stopped", and a remedy for a different problem must not appear beside that word. */
   it("withholds the update when a higher-precedence state is what the card shows", () => {
     seedLeases([INCOMPATIBLE]);
     renderSlot({ state: "stopped" });
@@ -126,11 +108,8 @@ describe("<HostUpdateRequiredSlot />", () => {
     expect(screen.queryByTestId("host-scope-update-host")).toBeNull();
   });
 
-  /**
-   * The lease is looked up BY ID. Seeded with another host's incompatibility,
-   * this row has no verdict of its own and must not borrow one — the P12 shape,
-   * at the surface that would show a button because of it.
-   */
+  /** Seeded with another host's incompatibility, this row has no verdict of its own and must not borrow one - the
+   * P12 shape, at the surface that would show a button because of it. */
   it("does not borrow another host's incompatibility", () => {
     seedLeases([{ ...INCOMPATIBLE, hostId: "host-b" }]);
     renderSlot({ state: "update-required" });
@@ -145,8 +124,7 @@ describe("<HostUpdateRequiredSlot />", () => {
     fireEvent.click(screen.getByTestId("host-scope-update-host"));
 
     // `{ force: true }` IS the modal's `forceProvisioning`: same mutation, same
-    // `runnerMutationKeys.hostConvergeReady()` key, so P3.1's progress
-    // narration already covers a click made from here.
+    // `runnerMutationKeys.hostConvergeReady` key, so progress narration already covers a click made from here.
     expect(convergeMock.mutate).toHaveBeenCalledTimes(1);
     expect(convergeMock.mutate.mock.calls[0]?.[0]).toEqual({ force: true });
   });

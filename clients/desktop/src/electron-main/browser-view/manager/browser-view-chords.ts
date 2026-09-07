@@ -17,32 +17,12 @@ import type {
 } from "../browser-view-port";
 
 /**
- * Reserved-chord handling (BT-301/302). The renderer registers the whole
- * guest-focused input policy through the preload bridge - which chords outrank
- * the page, and what each one means. The chord vocabulary and its parser are
- * owned by `@traycer-clients/shared/keybindings/chord-core`; this module adds
- * what Electron main needs on top: turning a guest `before-input-event` into
- * chord parts, and acting on a match.
- *
- * A matched chord goes one of two ways, and the renderer's table decides
- * which. `command: null` is APP-FORWARDED: the key is replayed into the host
- * renderer so the app's own keybinding runs as if the guest never had focus.
- * A named command is BROWSER-SCOPED: the renderer is told to run it against
- * the focused tile's session tab. Either way the guest never sees the key and
- * the menu accelerator never fires, because the caller preventDefaults.
- *
- * Modifier semantics: on macOS `mod` is Command (Meta) and Control is a
- * DISTINCT modifier carried in `ctrl`; everywhere else `mod` IS Control, so a
- * registered `ctrl+k` and `mod+k` are the same gesture (folded at
- * registration by `resolveChordForPlatform`).
+ * `command: null` is APP-FORWARDED: the key is replayed into the host renderer so the app's own keybinding runs as if the guest never had focus.
+ * Either way the guest never sees the key and the menu accelerator never fires, because the caller preventDefaults.
  */
 
 export type HostPlatform = "darwin" | "other";
 
-/**
- * The `before-input-event` fields chord matching reads. Structurally a subset
- * of Electron's `Input`, so the manager passes one straight through.
- */
 export interface BrowserViewKeyInput {
   readonly key: string;
   readonly control: boolean;
@@ -75,11 +55,6 @@ const BARE_MODIFIER_KEYS = new Set<string>([
   "altright",
 ]);
 
-/**
- * Named keys forwardable to the host via `sendInputEvent`. This is Electron's
- * keyCode vocabulary, NOT the accelerator one chord-core's `toAccelerator`
- * uses (`Esc` vs `Escape`, `Enter` vs `Return`), so it stays a local table.
- */
 const KEY_TO_SEND_CODE: Readonly<Record<string, string>> = {
   space: "Space",
   enter: "Enter",
@@ -97,13 +72,7 @@ const KEY_TO_SEND_CODE: Readonly<Record<string, string>> = {
   pagedown: "PageDown",
 };
 
-/**
- * Electron `sendInputEvent` keyCode for replaying a matched chord's key into
- * the host window. Single characters (letters, digits, punctuation) pass
- * through as themselves; named keys map to accelerator codes. Null means
- * unmappable - callers must not intercept those chords at all rather than
- * swallow them.
- */
+/** Null means unmappable - callers must not intercept those chords at all rather than swallow them. */
 export function hostSendKeyCodeForToken(key: string): string | null {
   if (key.length === 1) return key.toUpperCase();
   if (/^f([1-9]|1\d|2[0-4])$/.test(key)) return key.toUpperCase();
@@ -125,11 +94,6 @@ function chordFromKeyEvent(
   };
 }
 
-/**
- * Fold a registered chord into its platform-physical form: off macOS Control
- * IS the primary modifier, so `ctrl+k` collapses onto `mod+k`. Run once at
- * registration; matching is then plain field equality.
- */
 function resolveChordForPlatform(
   chord: ChordParts,
   platform: HostPlatform,
@@ -163,9 +127,8 @@ interface BrowserViewChordsOptions {
 }
 
 /**
- * BT-302: reserved chords win before the guest sees them. The policy table is
- * registered by the renderer; only interceptable chords are claimed, so pages
- * keep everything the app cannot act on.
+ * BT-302: reserved chords win before the guest sees them.
+ * The policy table is registered by the renderer; only interceptable chords are claimed, so pages keep everything the app cannot act on.
  */
 export class BrowserViewChords {
   private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
@@ -206,15 +169,6 @@ export class BrowserViewChords {
     });
   }
 
-  /**
-   * Matching deliberately ignores `isAutoRepeat`: a repeat of a reserved chord
-   * still has to be CLAIMED, or it reaches the focus-blind menu accelerator
-   * this policy exists to displace (holding Cmd+W would close the app tab
-   * while the browser tab's asynchronous close is still pending). Whether a
-   * repeat also DISPATCHES is the seam's call - see
-   * `handleBeforeInputEvent`, which suppresses it because every reserved
-   * chord is one-shot.
-   */
   match(input: BrowserViewKeyInput): MatchedReservedChord | null {
     if (this.chords.length === 0) return null;
     const event = chordFromKeyEvent(input, this.hostPlatform);
@@ -222,11 +176,6 @@ export class BrowserViewChords {
     return this.chords.find((chord) => chordsEqual(chord, event)) ?? null;
   }
 
-  /**
-   * Act on a matched chord: replay an app-forwarded one into the host renderer
-   * so its own keybindings fire, or name a browser-scoped command to the
-   * renderer so it runs against this tile's session tab.
-   */
   dispatch(
     surface: BrowserViewEntry["surface"],
     chord: MatchedReservedChord,

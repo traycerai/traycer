@@ -19,11 +19,8 @@ export interface SplitDividerProps {
   readonly onPreviewRatioChange: (ratio: number | null) => void;
 }
 
-/**
- * The drag keeps ratio transient until pointer release. That means Escape or
- * pointer cancellation restores the saved layout without a compensating store
- * write or persistence echo.
- */
+/** That means Escape or pointer cancellation restores the saved layout without a compensating store write or
+ * persistence echo. */
 export function SplitDivider(props: SplitDividerProps) {
   const originRef = useRef<number | null>(null);
   const commit = (ratio: number): void => {
@@ -110,13 +107,7 @@ export function SplitDivider(props: SplitDividerProps) {
         "cursor-col-resize touch-none outline-none focus-visible:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring",
       )}
     >
-      {/*
-        The hairline is a centred child rather than a `border-l` on the grab
-        area. `left` puts this element's left edge on the pane boundary and
-        `-translate-x-1/2` recentres the 12px grab area over it, so a left
-        border would paint 6px INSIDE the left pane - leaving that pane's
-        content visibly running past the divider it is supposed to stop at.
-      */}
+      {/* The hairline is a centred child rather than a `border-l` on the grab area. */}
       <span
         aria-hidden
         data-testid={`split-divider-line-${props.splitId}`}

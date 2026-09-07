@@ -12,10 +12,7 @@ export function SelectAllToggle(props: {
   readonly disabled: boolean;
   readonly testId: string | undefined;
   readonly onToggle: () => void;
-  /**
-   * Visible button text. Settings keeps the default "Select all"; Sweep
-   * swaps to "Deselect all" when the bulk scope is fully selected.
-   */
+  /** Visible button text. */
   readonly actionLabel?: string;
   /** Optional keyboard hint shown after the label (Sweep: `A`). */
   readonly shortcut?: string;

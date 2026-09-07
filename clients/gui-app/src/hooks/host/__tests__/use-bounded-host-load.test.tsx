@@ -39,14 +39,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/**
- * `useBoundedHostLoad` is TOTAL (invariant 6): every arm is a caller-facing
- * word, none of them means "keep spinning indefinitely". These pin the
- * decision table in the source comment - which lease states read as
- * `loading` vs `connecting`, that a `dead` lease short-circuits the budget
- * entirely (F13), and that the deadline survives a lease flapping through
- * intermediate states because it is keyed on the host alone.
- */
+/** `useBoundedHostLoad` is TOTAL (invariant 6): every arm is a caller-facing word, none of them means "keep spinning indefinitely". */
 describe("useBoundedHostLoad", () => {
   it("answers ready when nothing is pending", () => {
     const { result } = renderHook(() =>
@@ -138,12 +131,7 @@ describe("useBoundedHostLoad", () => {
     });
   });
 
-  // `restarting-expected` is the one non-dead status that carries a product
-  // meaning of its own ("a restart is expected, do not panic" - P1.4). It
-  // falls through to `connecting` by construction (the hook's `if` only
-  // special-cases `ready`/`degraded`), which is correct, but nothing else
-  // pins that fall-through - a future refactor routing it to `loading` or
-  // `timed-out` instead would be a real regression this catches.
+  // `restarting-expected` is the one non-dead status that carries a product meaning of its own ("a restart is expected, do not panic" - P1.4).
   it("answers connecting when the lease is restarting-expected too", () => {
     seedLease("restarting-expected");
     const { result } = renderHook(() =>
@@ -178,15 +166,7 @@ describe("useBoundedHostLoad", () => {
     });
   });
 
-  /**
-   * Added after sealed probe P12 (`useHostLease`'s `find(hostId)` swapped for
-   * `leases[0]`) SURVIVED: every other test here seeds exactly ONE lease, so
-   * the wrong-host lookup and the right one are indistinguishable. A window
-   * with two hosts is the only shape that can tell them apart, and this hook
-   * is the canonical per-host projection every later status surface reads -
-   * a lease belonging to another machine is the worst possible answer for it
-   * to give.
-   */
+  /** Added after sealed probe P12 (`useHostLease`'s `find(hostId)` swapped for `leases[0]`) SURVIVED: every other test here seeds exactly ONE lease, so the wrong-host lookup and the right one are indistinguishable. */
   it("reads THIS host's lease, not merely the first one published", () => {
     useSelectionAuthorityStore.getState().applyKernelSnapshot({
       attached: true,
@@ -233,11 +213,7 @@ describe("useBoundedHostLoad", () => {
     });
     expect(result.current.kind).toBe("connecting");
 
-    // The flap: status changes, but the HOST (the deadline's key) does not.
-    // If the deadline were keyed on status, this would re-arm the budget
-    // from zero and the elapsed half would be lost. The zustand `setState`
-    // calls are wrapped in `act` so the test's passing does not depend on
-    // `rerender()`'s flush timing being synchronous.
+    // The zustand `setState` calls are wrapped in `act` so the test's passing does not depend on `rerender()`'s flush timing being synchronous.
     act(() => {
       seedLease("degraded");
     });

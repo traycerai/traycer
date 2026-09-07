@@ -8,25 +8,7 @@ const dropInput = (): void => {};
 const ignoreWriter = (): void => {};
 
 /**
- * Measure-before-subscribe probe: mounts the tile's PERSISTENT xterm engine
- * into the final layout box while the tile still shows its loading state, so
- * the container's natural grid is measured with xterm's own cell metrics
- * BEFORE `terminal.create` / `terminal.subscribe` are dispatched. The first
- * fit report flows through `onMeasured` into the bootstrap's
- * `reportMeasuredGrid`, which releases the gated subscribe with the true
- * dimensions - the PTY spawns (and the reattach snapshot is serialized) at
- * the size the pane actually renders, by construction.
- *
- * Nothing is wasted: this is the SAME engine (same `instanceId` in the
- * xterm-host registry) the live host reattaches once the session handle
- * resolves, so the ~150 KB chunk load and `Terminal` construction move
- * EARLIER, overlapping the list query / prepare RPC instead of following
- * them. `effectiveCols/Rows` of 0 keep the resize-sync and host-grid
- * reconcile inert (no session exists yet); input and the writer registration
- * are dropped for the same reason. Render it inside the same
- * relatively-positioned box the live host will occupy - the engine's
- * container is `absolute inset-0`, so any other parent measures the wrong
- * box.
+ * Nothing is wasted: this is the SAME engine (same `instanceId` in the xterm-host registry) the live host reattaches once the session handle resolves, so the ~150 KB chunk load and `Terminal` construction move EARLIER, overlapping the list query / prepare RPC instead of following them.
  */
 export function TerminalGridMeasureProbe(props: {
   readonly sessionId: string;
@@ -36,18 +18,8 @@ export function TerminalGridMeasureProbe(props: {
   readonly chrome: "padded" | "flush";
   readonly onMeasured: (cols: number, rows: number) => void;
 }) {
-  // The probe PRESENTS its host unconditionally, whatever the enclosing tab
-  // says. Terminal tabs are pinned-mounted and conceal with `visibility`, so a
-  // terminal opened in a background tab (every worktree setup terminal) mounts
-  // this probe into a correctly-sized but unselected body - and a measurement
-  // taken there must still be the one the live host will agree with. The grid
-  // is calibrated to whichever renderer is installed (see
-  // `XtermRendererController.isRendererSettled`), so measuring without the
-  // canvas renderer would seed `terminal.create` with a grid the tile
-  // contradicts the moment it is first shown. Presenting costs the accelerated
-  // canvases only for the span of the measurement - the live host takes the
-  // same engine moments later, and an engine nobody presents drops them again
-  // after the grace.
+  // Terminal tabs are pinned-mounted and conceal with `visibility`, so a terminal opened in a background tab (every worktree setup terminal) mounts this probe into a correctly-sized but unselected body - and a measurement taken there must still be the one the live host will agree with.
+  // The grid is calibrated to whichever renderer is installed (see `XtermRendererController.isRendererSettled`), so measuring without the canvas renderer would seed `terminal.create` with a grid the tile contradicts the moment it is first shown.
   return (
     <Suspense fallback={null}>
       <PaneVisibilityContext value>
@@ -64,15 +36,10 @@ export function TerminalGridMeasureProbe(props: {
             onContainerResize={props.onMeasured}
             onWriterReady={ignoreWriter}
             shouldFocusOnActivePane={false}
-            // A landing-panel open can park focus before this probe mounts. Leave
-            // that request parked for the live host: focusing the probe would both
-            // route early keystrokes into `dropInput` and lose DOM focus when the
-            // persistent xterm container is reparented into the live host.
+            // A landing-panel open can park focus before this probe mounts.
             registerImperativeFocus={false}
             findTargetId={null}
-            // The engine must survive the probe -> live-host swap (that is the
-            // point); if the tab closes before a session ever registers, the
-            // release path detects the orphan and disposes it.
+            // The engine must survive the probe -> live-host swap (that is the point); if the tab closes before a session ever registers, the release path detects the orphan and disposes it.
             keepAlive
             // Measure-only: the live host takes the same engine moments later and
             // owns every reader of it.

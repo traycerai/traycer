@@ -119,10 +119,6 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
   });
 
   it("re-runs the pass when sign-in provenance arrives AFTER it ran, reclassifying the tab it had left plain", async () => {
-    // The tab a peer window's session was adopted as before this window was
-    // told what it is: unmarked, unacknowledged, and - on a capable host -
-    // unprojected, which is exactly the shape the pass treats as legacy
-    // evidence.
     useLandingTerminalStore.getState().addTab({
       instanceId: "plain-instance",
       sessionId: "signin-session",
@@ -158,9 +154,8 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     // First pass: nothing says this is a sign-in, so it is imported.
     await waitFor(() => expect(importB).toHaveBeenCalledTimes(1));
 
-    // The peer's record arrives. Nothing about the host, the collection or the
-    // tabs changed - only the registry - so this is the one signal that can
-    // re-run the pass.
+    // Nothing about the host, the collection or the tabs changed - only the registry - so this is the one signal
+    // that can re-run the pass.
     act(() => {
       recordProviderLoginTerminal({
         hostId: "host-b",
@@ -241,10 +236,8 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     const importA = vi.fn(() => Promise.reject(new Error("wrong host")));
     const closeA = vi.fn(() => Promise.resolve());
     const closeB = vi.fn(() => Promise.resolve());
-    // Recorded rather than asserted inline: a thrown assertion inside the
-    // mock would surface as a rejected `importLegacy`, which the component
-    // reads as a host failure and reports much later as "importB not called
-    // once" instead of naming the field that broke.
+    // Recorded rather than asserted inline: a thrown assertion inside the mock would surface as a rejected
+    // `importLegacy`.
     const importBRequests: ImportLegacyPlainTerminalRequest[] = [];
     const importB = vi.fn((request: ImportLegacyPlainTerminalRequest) => {
       importBRequests.push(request);

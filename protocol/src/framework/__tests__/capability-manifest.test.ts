@@ -82,10 +82,7 @@ const UNSORTED_MAJOR_MANIFEST_REGISTRY = {
 
 describe("capability manifest helpers", () => {
   it("keeps the host legacy manifest exactly the released floor set", () => {
-    // Old peers negotiate against `manifest` alone with fail-closed name-set
-    // semantics, so it must carry the frozen floor methods and nothing else.
-    // Post-#272 additive methods (e.g. the notifications RPCs, or this PR's
-    // `epic.updateChatRunSettings`) land in `optionalManifest` instead.
+    // Old peers negotiate against `manifest` alone with fail-closed name-set semantics, so it must carry the frozen floor methods and nothing else.
     const fullManifest = buildConnectionManifest(
       hostRpcRegistry,
       SERVES_EVERY_INSTALLED_MAJOR,
@@ -447,11 +444,8 @@ describe("served-majors restriction", () => {
   });
 
   it("moves the canonical off the highest installed major when restricted", () => {
-    // Unrestricted, the canonical for `echo` is 2.0 (highest installed major,
-    // highest installed minor). A peer that can only SERVE major 1 must
-    // advertise 1.1 as canonical - checking supportedMajors alone would miss
-    // this: it would pass even if canonical still said 2.0, which is the
-    // actual CRITICAL this restriction fixes.
+    // Unrestricted, the canonical for `echo` is 2.0 (highest installed major, highest installed minor).
+    // A peer that can only SERVE major 1 must advertise 1.1 as canonical - checking supportedMajors alone would miss this: it would pass even if canonical still said 2.0, which is the actual CRITICAL this restriction fixes.
     const unrestricted = buildConnectionManifest(
       MULTI_MAJOR_MANIFEST_REGISTRY,
       SERVES_EVERY_INSTALLED_MAJOR,
@@ -499,11 +493,7 @@ describe("served-majors restriction", () => {
   });
 
   it("falls back to the full line, and keeps the method name, on empty intersection", () => {
-    // Serving [7] for a method installed at 1 and 2 shares nothing with the
-    // installed line. Dropping the method NAME here would be handshake-fatal
-    // for the whole connection - the released-floor check fails on any name
-    // present on one side only - so the safe response is to over-advertise
-    // (fall back to the full installed line) rather than omit the method.
+    // Serving [7] for a method installed at 1 and 2 shares nothing with the installed line.
     const manifest = buildConnectionManifest(MULTI_MAJOR_MANIFEST_REGISTRY, {
       echo: [7],
     });
@@ -517,9 +507,7 @@ describe("served-majors restriction", () => {
   });
 
   it("selectConnectionManifestForPeer picks the restricted major end to end", () => {
-    // The end-to-end shape of the CRITICAL: a host that serves everything
-    // negotiating against a client restricted to major 1 must select major 1,
-    // not the peer's canonical.
+    // The end-to-end shape of the CRITICAL: a host that serves everything negotiating against a client restricted to major 1 must select major 1, not the peer's canonical.
     const hostManifest = buildConnectionManifest(
       MULTI_MAJOR_MANIFEST_REGISTRY,
       SERVES_EVERY_INSTALLED_MAJOR,

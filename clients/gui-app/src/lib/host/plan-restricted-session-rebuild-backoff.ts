@@ -1,22 +1,14 @@
 /**
- * Extra OWNER-level delay after a plan-restricted transport reaches its own
- * reprobe deadline. The transport cache already waits before it permits a new
- * remote session; this ladder prevents a host that keeps denying the plan from
- * rebuilding the whole Epic session at every cache deadline forever.
- *
- * Requests are owned by the handle that observed the denial. One handle may
- * claim at most one ladder attempt, including the synchronous first attempt.
- * When a replacement handle is denied while a delayed attempt is pending, its
- * callback takes over that timer; a retired handle must never strand the live
- * one by keeping the only scheduled callback.
+ * Extra OWNER-level delay after a plan-restricted transport reaches its own reprobe deadline.
+ * The transport cache already waits before it permits a new remote session; this ladder prevents a host that keeps denying the plan from rebuilding the whole Epic session at every cache deadline forever.
  */
 export const PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS = 60_000;
 export const PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS = 15 * 60_000;
 
 export interface PlanRestrictedSessionRebuildBackoff {
   /**
-   * Runs the first owner's rebuild immediately, then delays distinct
-   * replacement owners. `owner` must remain stable for that handle's lifetime.
+   * Runs the first owner's rebuild immediately, then delays distinct replacement owners.
+   * `owner` must remain stable for that handle's lifetime.
    */
   readonly request: (owner: object, rebuild: () => void) => void;
   /** A loaded session on an open transport proves the denial loop ended. */
@@ -49,16 +41,14 @@ export function createPlanRestrictedSessionRebuildBackoff(): PlanRestrictedSessi
 
   return {
     request: (owner, rebuild) => {
-      // Remember the owner even when attempt zero runs synchronously. Without
-      // this, a duplicate close notification from that retired handle can arm
-      // attempt one with a callback that will be inert by the time it fires.
+      // Remember the owner even when attempt zero runs synchronously.
+      // Without this, a duplicate close notification from that retired handle can arm attempt one with a callback that will be inert by the time it fires.
       if (attemptedOwners.has(owner)) return;
       attemptedOwners.add(owner);
 
       if (pendingTimer !== null) {
-        // A replacement handle reached its own denial before the current rung
-        // fired. Keep the rung/deadline, but hand ownership to the live handle
-        // instead of dropping its request behind a retired callback.
+        // A replacement handle reached its own denial before the current rung fired.
+        // Keep the rung/deadline, but hand ownership to the live handle instead of dropping its request behind a retired callback.
         pendingRebuild = rebuild;
         return;
       }

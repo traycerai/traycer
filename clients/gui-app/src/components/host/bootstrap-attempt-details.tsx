@@ -10,21 +10,8 @@ export interface BootstrapAttemptDetailsProps {
   readonly bootstrapLogPath: string | null;
 }
 
-/**
- * What was tried and what happened: the shell and args of the last attempt,
- * its terminal outcome, and where the full log lives - so a stuck startup
- * reads as "we ran `zsh -i -l -c …` and it crashed with code 1, full log at
- * …" rather than a blank wait.
- *
- * Lives here rather than beside its original consumer because that consumer
- * (the host-unavailable card) stopped rendering in production and was deleted
- * in P3.4; importing a live surface out of a file queued for deletion would
- * have re-anchored it. The window narrator draws it now.
- *
- * Deliberately NOT behind the "Show details" disclosure. The log PATH is the
- * one thing a user needs in order to take the problem somewhere else, and a
- * path they have to discover by expanding a toggle is a path most never find.
- */
+/** The log PATH is the one thing a user needs in order to take the problem somewhere else, and a path they have
+ * to discover by expanding a toggle is a path most never find. */
 export function BootstrapAttemptDetails(
   props: BootstrapAttemptDetailsProps,
 ): ReactNode {
@@ -37,8 +24,6 @@ export function BootstrapAttemptDetails(
     <div
       data-testid="local-host-bootstrap-details"
       // align-ok: a labelled diagnostic block (shell, args, exit code, log
-      // path) inside its own border - the labels only scan if the block keeps
-      // one left edge, whatever the card around it does.
       // muted-fill-ok: delimited by its own border border-border
       className="flex w-full flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-left text-ui-xs text-muted-foreground"
     >

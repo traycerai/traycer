@@ -50,9 +50,8 @@ const otherFatal: StreamCloseReason = {
 
 describe("browser sessions lifecycle on a host without browsers", () => {
   it("reads an INCOMPATIBLE close as unsupported, with the remedy as its message", () => {
-    // A host from before `browser.sessions` existed refuses the subscribe at
-    // handshake. That is a fact about the host, not about this attempt, so it
-    // must not read as a retryable failure carrying the raw protocol reason.
+    // A host from before `browser.sessions` existed refuses the subscribe at handshake.
+    // That is a fact about the host, not about this attempt, so it must not read as a retryable failure carrying the raw protocol reason.
     expect(browserSessionsLifecycle("closed", incompatible)).toBe(
       "unsupported",
     );

@@ -15,9 +15,8 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import type { OpenFrameBearerSource } from "../auth/bearer-source";
 
 /**
- * Immutable transport coordinates captured for one host-RPC job. The
- * transport owns no live endpoint or bearer providers: callers capture an
- * authority before dispatch, then every retry reuses this exact object.
+ * Immutable transport coordinates captured for one host-RPC job.
+ * The transport owns no live endpoint or bearer providers: callers capture an authority before dispatch, then every retry reuses this exact object.
  */
 export interface HostTransportEndpoint {
   readonly hostId: string;
@@ -26,8 +25,7 @@ export interface HostTransportEndpoint {
 
 /**
  * The frozen authority a unary transport attempt is allowed to observe.
- * `bearer` can rotate in place for the same request context, but replacing the
- * context or host must abort this signal and issue a new authority.
+ * `bearer` can rotate in place for the same request context, but replacing the context or host must abort this signal and issue a new authority.
  */
 export interface HostRequestAuthority {
   readonly endpoint: HostTransportEndpoint;
@@ -36,57 +34,21 @@ export interface HostRequestAuthority {
 }
 
 /**
- * Per-request options shared by every unary send: the idempotency key that
- * lets a retried request be recognized as the same attempt, and the frozen
- * authority it may dispatch under. Grouped so `request` and
- * `requestWithResponseTimeout` take the same trailing shape rather than two
- * positional tails that drift apart as the seam grows.
+ * Per-request options shared by every unary send: the idempotency key that lets a retried request be recognized as the same attempt, and the frozen authority it may dispatch under.
+ * Grouped so `request` and `requestWithResponseTimeout` take the same trailing shape rather than two positional tails that drift apart as the seam grows.
  */
 export interface HostRequestOptions {
   readonly idempotencyKey: string | null;
   readonly authority: HostRequestAuthority;
   /**
-   * This dispatch is a REPLAY of an attempt that may already have committed,
-   * so it must not go out unkeyed.
-   *
-   * `false` on a caller's first attempt, and set by
-   * `createRetryingMessenger` for every attempt after a failure whose
-   * retryability was earned by a negotiated key
-   * ({@link RetryableTransportError.replaySafetyFromKey}).
-   *
-   * The two are not the same question as `idempotencyKey !== null`. A key is
-   * what the CALLER asked for; this is whether dropping it is still allowed.
-   * Both transports strip a key the handshake cannot honour
-   * (`ws-rpc-client`'s `wireIdempotencyKey`, `remote-session`'s), which is
-   * correct on a first attempt against a host that predates the capability -
-   * nothing has been dispatched, so an unkeyed send is a first send. It is not
-   * correct on a replay: the first attempt's retryability was granted BECAUSE
-   * that connection negotiated a key, and a second connection that cannot
-   * honour it - a reconnect onto a host replaced by an older incarnation -
-   * would execute the mutation a second time with no dedupe. On that path both
-   * transports must refuse and answer ambiguously instead of dispatching.
+   * This dispatch is a replay of an attempt that may already have committed, so it must not go out unkeyed.
+   * `false` on a caller's first attempt, and set by `createRetryingMessenger` for every attempt after a failure whose retryability was earned by a negotiated key ({@link RetryableTransportError.replaySafetyFromKey}).
    */
   readonly replayMustBeKeyed: boolean;
 }
 
-/**
- * App-facing host messenger abstraction.
- *
- * `IHostMessenger` sits above the committed versioned RPC envelope. Callers
- * name a method and pass canonical params for that method; the messenger owns
- * envelope construction (`requestId`, `method`, `schemaVersion`, `params`) and
- * response decoding on the wire.
- *
- * This is the unary surface required by the current slice. Streaming / push
- * (`streamRequest`, server push, unsolicited event delivery) remain reserved
- * extension points and are intentionally not part of this interface yet.
- */
 export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
-  /**
-   * Sends a single unary RPC request and resolves with the method's canonical
-   * response body. Rejects with `HostRpcError` when the host returns an
-   * error envelope or when transport-level validation fails.
-   */
+  /** Sends a single unary RPC request and resolves with the method's canonical response body. */
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
@@ -94,14 +56,8 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
   ): Promise<ResponseOfMethod<Registry, Method>>;
 
   /**
-   * Same as `request`, but waits up to `responseTimeoutMs` for the host's
-   * response frame instead of the transport's default frame timeout. For
-   * long-poll methods whose contract is to stay silent until a domain event
-   * fires (e.g. `providers.awaitLogin` blocks until the OAuth child
-   * terminates), the default frame timeout would misread that silence as a
-   * dead host and abandon a healthy in-flight call. Only the response wait
-   * is extended - dial and handshake (`openAck`) keep the transport's
-   * defaults, so a host that is actually unreachable still fails fast.
+   * Same as `request`, but waits up to `responseTimeoutMs` for the host's response frame instead of the transport's default frame timeout.
+   * Only the response wait is extended - dial and handshake (`openAck`) keep the transport's defaults, so a host that is actually unreachable still fails fast.
    */
   requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
@@ -111,13 +67,6 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 
-/**
- * Canonical request payload for a method on a validated host registry.
- *
- * `LatestContract<Registry[Method]>` tracks the highest installed major and
- * minor for that method - the same canonical contract the host's resolver
- * is written against - so clients and the dispatcher agree on shape.
- */
 export type RequestOfMethod<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -125,7 +74,6 @@ export type RequestOfMethod<
   ? RequestOf<LatestContract<Registry[Method]>>
   : never;
 
-/** Canonical response payload for a method on a validated host registry. */
 export type ResponseOfMethod<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -133,27 +81,17 @@ export type ResponseOfMethod<
   ? ResponseOf<LatestContract<Registry[Method]>>
   : never;
 
-/**
- * Typed error thrown by `IHostMessenger.request` when the host returns an
- * error envelope or when envelope decoding fails. Preserves the correlating
- * `requestId` and method name so callers can attribute failures.
- */
 export class HostRpcError extends Error {
   readonly code: RpcErrorCode;
   readonly requestId: string;
   readonly method: string;
   /**
-   * Buffered `fatalError` payload preserved verbatim from the host's
-   * pre-close frame (or from the client-side mirror compatibility check).
-   * `null` when the failure did not arrive via a fatal-error frame.
+   * Buffered `fatalError` payload preserved verbatim from the host's pre-close frame (or from the client-side mirror compatibility check).
    */
   readonly fatalDetails: FatalErrorDetails | null;
   /**
-   * Typed holder inventory on `WORKTREE_BUSY` and
-   * `WORKTREE_HOLDERS_CHANGED`. `null` when the envelope omitted it (old
-   * host), carried a different code, or failed schema parse. Callers that
-   * render a confirm dialog read this; they must not fall back to parsing
-   * `message`.
+   * Typed holder inventory on `WORKTREE_BUSY` and `WORKTREE_HOLDERS_CHANGED`.
+   * Callers that render a confirm dialog read this; they must not fall back to parsing `message`.
    */
   readonly holders: readonly WorktreeBusyHolder[] | null;
   /**
@@ -206,9 +144,7 @@ export class HostRpcError extends Error {
 
   /**
    * Build from a decoded wire error envelope (`code` is an open string).
-   * Unknown codes collapse to `RPC_ERROR`. `holders` (and
-   * `holdersRevision`) survive only on `WORKTREE_BUSY` /
-   * `WORKTREE_HOLDERS_CHANGED` when they match the protocol schema.
+   * `holders` (and `holdersRevision`) survive only on `WORKTREE_BUSY` / `WORKTREE_HOLDERS_CHANGED` when they match the protocol schema.
    */
   static fromWireEnvelope(
     error: {
@@ -270,10 +206,8 @@ function holdersRevisionForBusyCode(
 }
 
 /**
- * The major-version downgrade path can reject a request before a request frame
- * is sent. Keep that capability result distinct from ordinary transport and
- * host failures so UI feature gates can hide unavailable functionality without
- * mistaking a temporary disconnect for an old host.
+ * The major-version downgrade path can reject a request before a request frame is sent.
+ * Keep that capability result distinct from ordinary transport and host failures so UI feature gates can hide unavailable functionality without mistaking a temporary disconnect for an old host.
  */
 export type HostRequestFailure =
   | { readonly kind: "downgrade-unsupported"; readonly error: HostRpcError }
@@ -286,14 +220,6 @@ export function classifyHostRequestFailure(error: unknown): HostRequestFailure {
   return { kind: "other", error };
 }
 
-/**
- * Totalizes an arbitrary rejection into a `HostRpcError`. TypeScript cannot
- * type a promise's rejection channel, so every `HostRpcError`-declared error
- * generic (TanStack queries/mutations, hook result interfaces) is an
- * unchecked assertion - a bare `Error` slipping through it crashes `.code` /
- * `.fatalDetails` consumers at runtime. Passing a rejection through this
- * function is what makes those declarations true by construction.
- */
 export function toHostRpcError(error: unknown, method: string): HostRpcError {
   if (error instanceof HostRpcError) return error;
   return new HostRpcError({
@@ -306,13 +232,6 @@ export function toHostRpcError(error: unknown, method: string): HostRpcError {
   });
 }
 
-/**
- * Runs `run` and re-throws any rejection normalized via `toHostRpcError`.
- * Wrap the entire body of a queryFn/mutationFn whose error type is declared
- * as `HostRpcError`, so bugs and bare throws anywhere inside (response
- * mapping, pagination guards, transient-client resolution) can never leak a
- * foreign error shape to `.code`-reading consumers.
- */
 export async function withHostRpcErrorBoundary<T>(
   method: string,
   run: () => Promise<T>,
@@ -325,17 +244,8 @@ export async function withHostRpcErrorBoundary<T>(
 }
 
 /**
- * A `HostRpcError` whose cause is the transport itself - no host bound, a
- * dropped or unopenable WebSocket, a dial or frame timeout - rather than the
- * host rejecting the operation. The host either never saw the request or
- * never answered it, so the failure says nothing about the method that
- * happened to be in flight.
- *
- * It is a `HostRpcError` (`code` stays `"RPC_ERROR"`) so existing
- * `instanceof HostRpcError` / `code`-based handling - the auth-aware wrapper,
- * error toasts - keeps treating it exactly as it did before, while UI layers
- * can branch on the class to describe the connection ("host unreachable")
- * instead of the operation.
+ * A `HostRpcError` whose cause is the transport itself - no host bound, a dropped or unopenable WebSocket, a dial or frame timeout - rather than the host rejecting the operation.
+ * The host either never saw the request or never answered it, so the failure says nothing about the method that happened to be in flight.
  */
 export class HostTransportFailureError extends HostRpcError {
   constructor(details: {
@@ -351,34 +261,12 @@ export class HostTransportFailureError extends HostRpcError {
 }
 
 /**
- * A `HostTransportFailureError` for which the host is known not to have
- * dispatched the request: either the request frame was never put on the wire
- * (dial/handshake failure), or the host explicitly reported that its post-open
- * request deadline elapsed while it was still awaiting that frame.
- *
- * The "host did not dispatch the request" guarantee is what makes it safe to
- * retry even non-idempotent methods: a fresh dial cannot double-apply a side
- * effect. `createRetryingMessenger` keys its bounded retry off this subclass;
- * an ambiguous post-send drop stays a
- * `HostTransportFailureError`, and a malformed frame or any host-originated
- * error without the no-dispatch guarantee stays a plain `HostRpcError` - both
- * propagate on the first attempt.
+ * The "host did not dispatch the request" guarantee is what makes it safe to retry even non-idempotent methods: a fresh dial cannot double-apply a side effect.
  */
 export class RetryableTransportError extends HostTransportFailureError {
   /**
-   * This retryability was earned by a NEGOTIATED KEY rather than by proof that
-   * nothing was dispatched.
-   *
-   * The two grounds are not interchangeable and the difference decides what a
-   * retry is allowed to do. A pre-dispatch failure is safe to replay however
-   * the next connection is configured, because the host never saw the call. A
-   * post-send failure is safe only for as long as the host is deduplicating
-   * the key - so a replay of one must itself be keyed, which is what
-   * {@link HostRequestOptions.replayMustBeKeyed} carries into the next attempt.
-   *
-   * Defaulted nowhere: every construction states its ground, because a
-   * `false` assumed by omission would silently license exactly the unkeyed
-   * replay this field exists to prevent.
+   * This retryability was earned by a negotiated key rather than by proof that nothing was dispatched.
+   * A pre-dispatch failure is safe to replay however the next connection is configured, because the host never saw the call.
    */
   readonly replaySafetyFromKey: boolean;
 
@@ -397,9 +285,8 @@ export class RetryableTransportError extends HostTransportFailureError {
 }
 
 /**
- * A caller-owned request authority was aborted. Unlike a pre-send dial
- * failure, this is never retryable: the authority belongs to a context or host
- * binding that has already been replaced or disposed.
+ * A caller-owned request authority was aborted.
+ * Unlike a pre-send dial failure, this is never retryable: the authority belongs to a context or host binding that has already been replaced or disposed.
  */
 export class HostRequestAbortedError extends HostTransportFailureError {
   constructor(details: { message: string; requestId: string; method: string }) {
@@ -414,7 +301,6 @@ export class HostRequestAbortedError extends HostTransportFailureError {
   }
 }
 
-/** Auth recovery discovered that the captured bearer no longer owns the session. */
 export class HostAuthoritySupersededError extends Error {
   constructor() {
     super(
@@ -425,12 +311,7 @@ export class HostAuthoritySupersededError extends Error {
 }
 
 /**
- * True when the failure is expected to clear on its own: the transport never
- * got an answer from the host (restart, dropped socket, dial/frame timeout),
- * or the host answered with a fatal frame it explicitly marked `retryable`
- * (e.g. a transient credential-verification outage). Background best-effort
- * callers use this to fail silently; user-gesture surfaces can still toast,
- * describing the connection rather than the operation.
+ * Background best-effort callers use this to fail silently; user-gesture surfaces can still toast, describing the connection rather than the operation.
  */
 export function isTransientHostRpcFailure(error: HostRpcError): boolean {
   return (

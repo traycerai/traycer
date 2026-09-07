@@ -1,7 +1,5 @@
-// This file deliberately does NOT mock "@/components/ui/dropdown-menu" (unlike
-// worktrees-settings-panel.test.tsx, which renders it inline + always-open for
-// easy assertions on the Filter/Sort menus). This file keeps the REAL primitive
-// so row-utility menu mounting and keyboard access are tested against Radix.
+// This file deliberately does not mock "@/components/ui/dropdown-menu" (unlike
+// worktrees-settings-panel.test.tsx.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";

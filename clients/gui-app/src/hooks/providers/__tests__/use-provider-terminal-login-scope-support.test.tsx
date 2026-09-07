@@ -6,11 +6,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
-// The pickers that render this gate are drawn inside Epic TABS as well as on
-// the start page, and a tab resolves host identity through its lifetime
-// binding only. Any read of the app-wide host authority from this hook is a
-// violation, whichever surface then ignores the answer - so the module is
-// mocked to THROW, and every case below runs through it.
+// The pickers that render this gate are drawn inside Epic TABS as well as on the start page, and a tab resolves host identity through its lifetime binding only.
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: (): string => {
     throw new Error(
@@ -60,11 +56,7 @@ describe("useProviderTerminalLoginScopeSupported", () => {
   });
 
   it("is 'unsupported' for the landing surface on a host that negotiated the pre-scope major", () => {
-    // `@1.0` has no `scope` field, so the client's downgrade refuses the
-    // independent scope outright - the button could only ever fail, and for a
-    // provider on the generic guidance there is no manual command to fall
-    // back to. A POSITIVE answer: the copy built on it claims this host can
-    // open the sign-in from a chat, which a recorded `@1.0` proves.
+    // `@1.0` has no `scope` field, so the client's downgrade refuses the independent scope outright - the button could only ever fail, and for a provider on the generic guidance there is no manual command to fall back to.
     recordNegotiatedHostManifest(HOST_ID, manifestWithMajor(1));
 
     expect(scopeSupport(LANDING_SURFACE, HOST_ID)).toBe("unsupported");
@@ -103,11 +95,7 @@ describe("useProviderTerminalLoginScopeSupported", () => {
   it("reads a null landing run target as 'unknown' rather than filling it from the app-wide host", () => {
     recordNegotiatedHostManifest(HOST_ID, manifestWithMajor(2));
 
-    // The landing composer resolves its placement host itself and hands it
-    // down; `null` reaches the picker only in the ∅ case, where there is
-    // nothing usable to create on and submit refuses too. Resolving it here
-    // through the app-wide authority would be exactly the read a tab-bound
-    // picker must never make - and there is no machine to make a claim about.
+    // The landing composer resolves its placement host itself and hands it down; `null` reaches the picker only in the ∅ case, where there is nothing usable to create on and submit refuses too.
     expect(scopeSupport(LANDING_SURFACE, null)).toBe("unknown");
   });
 

@@ -18,31 +18,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * THE UNSTATED PREMISE THIS FILE PINS: readiness freshness in this app rests
- * on an identity transition moving the selection store, which is what
- * re-creates the effective requester every dependent memoizes on.
- * `useHostClient()` (`runtime.ts`) memoizes on `[spine, effectiveHostId]`, so
- * a consumer that reads its host id off the client it was handed only ever
- * re-reads because a NEW requester was minted - and nothing mints one unless
- * `effectiveHostId` actually changes identity in the store.
- *
- * Every other suite in this area hand-supplies that wake by writing straight
- * into `useSelectionAuthorityStore` (e.g. `applyKernelSnapshot` in
- * `host-switch-keeps-app-mounted.test.tsx` /
- * `host-compatibility-provider.test.tsx`), so none of them can verify the
- * PRODUCER of that wake. This suite drives the real producer end to end: the
- * mock's `selectionIdentity` port (`InMemoryAuthorityIdentitySource`) into the
- * real `createInProcessSelectionAuthority` engine - the SAME engine desktop
- * runs, with `RotatingSelectionAuthorityClient` rotating the client on
- * `reattachRequired` - through the real `mountSelectionAuthorityBridge` and
- * into the store `useEffectiveHostId()` reads.
- *
- * SCOPE LIMIT, not a defect to fix: this proves movement off a NON-NULL
- * effective host (host A). A transition starting from ∅ (`effectiveHostId`
- * already null) moves other store fields - `preferredHostId`, `leases`,
- * `attached` - while `effectiveHostId` itself stays `null`, and a memo keyed
- * on that value alone does not re-create for that case. That starting
- * condition is not exercised here.
+ * THE UNSTATED PREMISE THIS FILE PINS: readiness freshness in this app rests on an identity transition moving the selection store, which is what re-creates the effective requester every dependent memoizes on.
  */
 
 const LOCAL_HOST_ID = "desktop-pid-1";
@@ -64,10 +40,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 
 /**
- * The runtime hydrates the signed-in user before it publishes a binding; an
- * unanswered `/api/v3/user` leaves the whole chain on its loading fallback,
- * which would make every assertion below vacuous. Copied verbatim in spirit
- * from `local-boot-intent.test.tsx`.
+ * The runtime hydrates the signed-in user before it publishes a binding; an unanswered `/api/v3/user` leaves the whole chain on its loading fallback, which would make every assertion below vacuous.
  */
 function installAuthFetch(): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
@@ -140,18 +113,7 @@ function messengerFactory(): MessengerFactory<HostRpcRegistry> {
     });
 }
 
-/**
- * Records the requester `useHostClient()` returns on every commit.
- *
- * Deliberately NOT claiming to fire only when the identity changed - `props`
- * is a fresh object each render, so this effect runs on every commit and the
- * log holds duplicates. That costs nothing here because the ASSERTION is on
- * object identity (`not.toBe`), which is the fact under test: `useHostClient()`
- * memoizes on `[spine, effectiveHostId]`, so a different object in this log
- * means that memo re-created rather than continuing to serve the old
- * requester. Filtering the log would make the effect's dependency list carry
- * the claim instead of the assertion, which is the weaker place for it.
- */
+/** Records the requester `useHostClient()` returns on every commit. */
 function ClientIdentityProbe(props: {
   readonly onClient: (client: HostClient<HostRpcRegistry>) => void;
 }): ReactNode {
@@ -236,9 +198,6 @@ describe("an identity transition moves the selection store", () => {
       </RunnerHostProvider>,
     );
 
-    // 1. Settle on a NON-NULL effective host (host A). A store that never
-    // reached one would make every assertion below vacuous, so fail loudly
-    // here rather than let a later assertion misreport why it failed.
     await waitFor(() => {
       expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
         LOCAL_HOST_ID,
@@ -250,10 +209,8 @@ describe("an identity transition moves the selection store", () => {
     const requesterBeforeTransition = clients[clients.length - 1];
     expect(requesterBeforeTransition.getActiveHostId()).toBe(LOCAL_HOST_ID);
 
-    // 2 & 3. Drive the REAL producer: advance the mock's identity source, the
-    // same port `createInProcessSelectionAuthority` mounted this engine
-    // against. This runs the engine's `applyIdentity` -> `runIdentityTransition`
-    // synchronously, which is why the advance is wrapped in `act`.
+    // 2 & 3.
+    // Drive the REAL producer: advance the mock's identity source, the same port `createInProcessSelectionAuthority` mounted this engine against.
     act(() => {
       runnerHost.selectionIdentity.set("user-b");
     });
@@ -265,9 +222,8 @@ describe("an identity transition moves the selection store", () => {
       );
     });
 
-    // 4(b). The probe recorded a NEW requester identity after the transition -
-    // the proof that `useHostClient()`'s memo actually re-created rather than
-    // continuing to serve the pre-transition requester.
+    // 4(b).
+    // The probe recorded a NEW requester identity after the transition - the proof that `useHostClient()`'s memo actually re-created rather than continuing to serve the pre-transition requester.
     await waitFor(() => {
       expect(clients[clients.length - 1]).not.toBe(requesterBeforeTransition);
     });

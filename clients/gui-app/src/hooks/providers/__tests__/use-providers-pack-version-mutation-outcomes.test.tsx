@@ -4,14 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JSX, ReactNode } from "react";
 
 /**
- * Outcome delivery for the three pack-version mutations.
- *
- * WHY THIS FILE EXISTS. The panel that used to own these messages mocks all
- * three hooks (`provider-pack-version-manager-panel.test.tsx` calls `vi.mock`
- * on each), so every assertion it makes runs against a stub. Moving the
- * outcome handling INTO the hooks therefore moved it into the one place that
- * suite structurally cannot see - and there was no hook-level suite at all.
- * A green panel run says nothing about any of the behaviour below.
+ * Panel tests mock these hooks, so outcome delivery must be pinned here. A green panel run does not cover the behaviour below.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -150,10 +143,7 @@ describe("usePackVersion outcome delivery", () => {
   });
 
   it("toasts when the INITIATING panel is gone even though another remains", async () => {
-    // The defect a global count reintroduces. Pack A's request is in flight;
-    // the user opens pack B's popover, so A unmounts while the count stays
-    // above zero. A's refusal has no inline surface left - B has no row for it
-    // and never asked - so suppressing the toast loses the outcome entirely.
+    // A's refusal has no inline surface left - B has no row for it and never asked - so suppressing the toast loses the outcome entirely.
     const packA = createVersionManagerPanelToken("opencode");
     const releaseA = registerVersionManagerPanel(packA);
     const packB = createVersionManagerPanelToken("claude");
@@ -273,10 +263,7 @@ describe("install outcome delivery", () => {
 
 describe("panel presence accounting", () => {
   it("answers about the panel asked about, not about panels in general", () => {
-    // Settings can mount a panel for a second pack before the first finishes
-    // unmounting. Each answer has to be about the token handed in: the first
-    // panel is gone, the second is not, and one question cannot return the
-    // other's answer.
+    // Each answer has to be about the token handed in: the first panel is gone, the second is not, and one question cannot return the other's answer.
     const first = createVersionManagerPanelToken("opencode");
     const releaseFirst = registerVersionManagerPanel(first);
     const second = createVersionManagerPanelToken("claude");
@@ -310,10 +297,7 @@ describe("panel presence accounting", () => {
   });
 
   it("releases only once, so a re-invoked effect cleanup cannot unregister a live panel", () => {
-    // React double-invokes effects in development: mount, cleanup, mount. The
-    // second cleanup call must not delete the registration the re-run just
-    // made, which would report "no panel" with a panel mounted and silently
-    // restore the original defect.
+    // The second cleanup call must not delete the registration the re-run just made, which would report "no panel" with a panel mounted and silently restore the original defect.
     const panel = createVersionManagerPanelToken("opencode");
     const release = registerVersionManagerPanel(panel);
     release();

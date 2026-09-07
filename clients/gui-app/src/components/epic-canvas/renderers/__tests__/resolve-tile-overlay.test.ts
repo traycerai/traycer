@@ -3,11 +3,8 @@ import { resolveTileOverlay } from "@/components/epic-canvas/renderers/resolve-t
 import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 
 /**
- * Load-bearing invariant: pointer blocking is gated on the guest not yet
- * being interactive, never on the same flag that hides the overlay. A live,
- * presented guest must never be click-blocked by a stale loader, and a
- * terminal surface (dead / stalled) must always keep blocking so its Retry
- * stays clickable.
+ * Load-bearing invariant: pointer blocking is gated on the guest not yet being interactive, never on the same flag that hides the overlay.
+ * A live, presented guest must never be click-blocked by a stale loader, and a terminal surface (dead / stalled) must always keep blocking so its Retry stays clickable.
  */
 describe("resolveTileOverlay", () => {
   it("hides the overlay and never blocks once the tile is ready, regardless of guest interactivity", () => {

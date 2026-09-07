@@ -4,25 +4,8 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
 
-/**
- * Multi-host Sweep's host DECISION - the flow's half of it.
- *
- * Three properties carry the design, and each is asserted against the CLIENT
- * rather than against copy: at one dialable host nothing about Sweep changes;
- * with a fleet the confirmation opens immediately on the surface's own host
- * and merely CARRIES the choice (there is no step in front of it any more);
- * and once somebody switches, the confirmation is handed that host's client,
- * identified by the host it addresses.
- *
- * The chip itself lives inside the dialog and is exercised against the real
- * dialog in `sweep-host-chip.test.tsx`. Here the dialog is a capture, so these
- * cases can say exactly which client and which choice it received without a
- * census, a proof or a popover in the way.
- *
- * Built through a typed factory rather than a cast, matching
- * `landing-placement.test.ts`: the ban on `as any` / `as unknown` applies in
- * tests too.
- */
+/** Here the dialog is a capture, so these cases can say exactly which client and which choice it received
+ * without a census, a proof or a popover in the way. */
 function clientAddressing(hostId: string): HostClient<HostRpcRegistry> {
   const client: Pick<HostClient<HostRpcRegistry>, "getActiveHostId"> = {
     getActiveHostId: () => hostId,
@@ -33,10 +16,8 @@ function clientAddressing(hostId: string): HostClient<HostRpcRegistry> {
 const state = vi.hoisted(() => ({
   connectableHostIds: ["host-a"] as readonly string[],
   resolved: true,
-  /**
-   * Hosts whose client the seam cannot build - the real one answers `null`
-   * when the entry stops being dialable or the credential lease goes away.
-   */
+  /** Hosts whose client the seam cannot build - the real one answers `null` when the entry stops being dialable
+   * or the credential lease goes away. */
   unresolvableHostIds: [] as readonly string[],
 }));
 
@@ -55,7 +36,7 @@ const captured = vi.hoisted<{
   }[];
 }>(() => ({ dialog: [] }));
 
-/** The client the surface already speaks on — Sweep's client before this epic. */
+/** The client the surface already speaks on - Sweep's client before this epic. */
 const SURFACE_CLIENT = clientAddressing("host-a");
 
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
@@ -65,8 +46,8 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   }),
 }));
 
-// Resolves an explicit id to a client that ADDRESSES it, which is the whole
-// contract the real seam holds and the only part these assertions need.
+// Resolves an explicit id to a client that addresses it, which is the whole contract the real seam holds and
+// the only part these assertions need.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null || state.unresolvableHostIds.includes(hostId)
@@ -106,13 +87,8 @@ function flow() {
   return flowOn(SURFACE_ON_A);
 }
 
-/**
- * The same flow with the SURFACE's own host spelled out, because History's is
- * live: it hands this flow the app-wide effective-host follower, which
- * re-renders with a different machine's client the moment selection fails
- * over. A fixture that could only hold those props still would have made every
- * "never re-pointed" case here pass for the wrong reason.
- */
+/** A fixture that could only hold those props still would have made every "never re-pointed" case here pass for
+ * the wrong reason. */
 function flowOn(surface: SurfaceHost) {
   return (
     <SweepWorktreesFlow
@@ -163,9 +139,8 @@ describe("SweepWorktreesFlow", () => {
   it("carries no host choice and sweeps on the surface's own client at one dialable host", () => {
     render(flow());
 
-    // The confirmation opened immediately, on the object the surface passed -
-    // not on a client this flow re-resolved from a host id - and with no host
-    // control at all, which is what makes the single-host header byte-identical.
+    // The confirmation opened immediately, on the object the surface passed - not on a client this flow
+    // re-resolved from a host id.
     const opened = captured.dialog.filter((call) => call.epicIds !== null);
     expect(opened.length).toBeGreaterThan(0);
     for (const call of opened) {
@@ -198,16 +173,14 @@ describe("SweepWorktreesFlow", () => {
 
   it("undoes a pick whose client cannot be built, rather than showing an empty census", () => {
     state.connectableHostIds = ["host-a", "host-b"];
-    // The gesture and the refusal in one step: the popover row was enabled
-    // because this same seam answered for it a render ago, and by the time the
-    // pick is resolved the host is gone - deregistered, or its lease released.
+    // The gesture and the refusal in one step: the popover row was enabled because this same seam answered for it
+    // a render ago, and by the time the pick is resolved the host is gone - deregistered, or its lease released.
     state.unresolvableHostIds = ["host-b"];
     render(flow());
     switchTo("host-b");
 
-    // Handing the dialog a null client instead would have painted an empty
-    // census - "no worktrees here" is a claim about that machine's disk we
-    // never got to make. The gesture is undone and named instead.
+    // Handing the dialog a null client instead would have painted an empty census - "no worktrees here" is a claim
+    // about that machine's disk we never got to make.
     expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
     expect(lastOpenDialog().epicIds).not.toBeNull();
     expect(lastHostChoice().hostId).toBe("host-a");
@@ -235,9 +208,7 @@ describe("SweepWorktreesFlow", () => {
     switchTo("host-b");
     expect(lastOpenDialogHostId()).toBe("host-b");
 
-    // host-b has been the answer for a while - proven, maybe part-way through
-    // Review - and NOW leaves the directory. That is the fleet plane, not a
-    // failed gesture, and undoing a gesture nobody just made would hand a live
+    // That is the fleet plane, not a failed gesture, and undoing a gesture nobody just made would hand a live
     // confirmation another machine's worktrees.
     state.unresolvableHostIds = ["host-b"];
     view.rerender(flow());
@@ -246,7 +217,7 @@ describe("SweepWorktreesFlow", () => {
     // No client, so the dialog says it cannot reach the host it is on. What it
     // must NOT do is quietly become host-a's dialog.
     expect(lastOpenDialog().hostClient).toBeNull();
-    // The inline chip error belongs to a REFUSED PICK; nobody picked here.
+    // The inline chip error belongs to a refused pick; nobody picked here.
     expect(lastHostChoice().unavailableHostId).toBeNull();
   });
 
@@ -270,10 +241,8 @@ describe("SweepWorktreesFlow", () => {
     const view = render(flow());
     expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
 
-    // History hands this flow the app-wide effective-host FOLLOWER. host-a
-    // dies, selection fails over, and the surface props now describe host-b.
-    // Reading them would move the dialog's session key and discard a proof
-    // somebody may already have reviewed - with no gesture from anybody.
+    // Reading them would move the dialog's session key and discard a proof somebody may already have reviewed -
+    // with no gesture from anybody.
     view.rerender(
       flowOn({
         client: clientAddressing("host-b"),
@@ -302,22 +271,18 @@ describe("SweepWorktreesFlow", () => {
     state.connectableHostIds = ["host-a", "host-b"];
     const view = render(flowOn({ client: SURFACE_CLIENT, hostId: null }));
 
-    // Every caller arms its own "sweep is open" state and disarms it from
-    // `onOpenChange`, so rendering nothing here would leave the request armed
-    // with no dialog to cancel - permanently, if the effective host never
-    // recovers. The dialog opens and ASKS instead.
+    // Every caller arms its own "sweep is open" state and disarms it from `onOpenChange`, so rendering nothing
+    // here would leave the request armed with no dialog to cancel.
     expect(lastOpenDialog().epicIds).not.toBeNull();
     expect(lastHostChoice().hostId).toBeNull();
-    // And it censuses nothing until it is answered: a null client is the only
-    // honest one here, where the app-wide follower would walk whichever
-    // machine the window happens to be on.
+    // And it censuses nothing until it is answered: a null client is the only honest one here, where the app-wide
+    // follower would walk whichever machine the window happens to be on.
     expect(lastOpenDialog().hostClient).toBeNull();
 
     view.rerender(flow());
 
-    // Adopting the id when it lands is the latch arriving late, not a
-    // re-point: it is the same host the surface was always on, and nothing had
-    // been invested in the meantime.
+    // Adopting the id when it lands is the latch arriving late, not a re-point: it is the same host the surface
+    // was always on, and nothing had been invested in the meantime.
     expect(lastHostChoice().hostId).toBe("host-a");
     expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
   });
@@ -344,9 +309,8 @@ describe("SweepWorktreesFlow", () => {
     expect(lastHostChoice().hostId).toBeNull();
     expect(lastHostChoice().unavailableHostId).toBe("host-b");
 
-    // The chip is saying "couldn't reach Studio — choose another host". Taking
-    // the surface's id now would contradict that sentence while it is on
-    // screen, and start a census nobody asked for.
+    // Taking the surface's id now would contradict that sentence while it is on screen, and start a census nobody
+    // asked for.
     view.rerender(flow());
 
     expect(lastHostChoice().hostId).toBeNull();
@@ -367,18 +331,15 @@ describe("SweepWorktreesFlow", () => {
     state.resolved = false;
     render(flow());
 
-    // An unanswered directory is not a one-host fleet, so nothing is decided -
-    // but the dialog still opens, because a click that renders nothing arms
-    // the caller with no way to see or cancel what it armed.
+    // An unanswered directory is not a one-host fleet, so nothing is decided - but the dialog still opens, because
+    // a click that renders nothing arms the caller with no way to see or cancel what it armed.
     expect(lastOpenDialog().epicIds).not.toBeNull();
     expect(lastOpenDialog().fleetPending).toBe(true);
-    // No host, and therefore no census: the app-wide follower would otherwise
-    // walk whichever machine the window is on while the dialog says it has
-    // not started.
+    // No host, and therefore no census: the app-wide follower would otherwise walk whichever machine the window is
+    // on while the dialog says it has not started.
     expect(lastOpenDialog().hostClient).toBeNull();
-    // And no chip - not even "Choose a host". We do not yet know whether this
-    // account HAS a choice, and flashing a chooser at a single-host install
-    // is the byte-identical promise broken for the length of a query.
+    // We do not yet know whether this account has a choice, and flashing a chooser at a single-host install is the
+    // byte-identical promise broken for the length of a query.
     expect(lastOpenDialog().hostChoice).toBeNull();
   });
 
@@ -419,15 +380,14 @@ describe("SweepWorktreesFlow", () => {
     switchTo("host-b");
     expect(lastOpenDialogHostId()).toBe("host-b");
 
-    // host-b dies mid-confirmation. Sweep's host id is frozen from the proof
-    // that dialog already ran, so re-deriving the host here would re-point a
-    // LIVE dialog at another machine.
+    // Sweep's host id is frozen from the proof that dialog already ran, so re-deriving the host here would
+    // re-point a live dialog at another machine.
     state.connectableHostIds = ["host-a"];
     view.rerender(flow());
 
     expect(lastOpenDialogHostId()).toBe("host-b");
-    // And the chip does not vanish underneath it either: whether a person was
-    // OFFERED a choice is latched with the choice itself.
+    // And the chip does not vanish underneath it either: whether a person was offered a choice is latched with the
+    // choice itself.
     expect(lastHostChoice().hostId).toBe("host-b");
   });
 

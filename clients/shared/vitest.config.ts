@@ -19,10 +19,7 @@ export default defineConfig({
     ],
   },
   test: {
-    // Anchored to the package directory so siblings whose names merely
-    // CONTAIN "zod" (`zod-to-json-schema`, `@hookform/resolvers/zod`) are
-    // not dragged in. Full rationale for the workaround itself lives in
-    // `clients/desktop/vitest.shared.ts`.
+    // Anchored to the package directory so siblings whose names merely contain "zod" (`zod-to-json-schema`, `@hookform/resolvers/zod`) are not dragged in.
     server: { deps: { inline: [/[\\/]node_modules[\\/]zod[\\/]/] } },
     include: ["**/__tests__/**/*.test.ts"],
     globals: false,

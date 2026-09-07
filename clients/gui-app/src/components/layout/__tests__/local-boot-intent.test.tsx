@@ -29,21 +29,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   return { ...actual, useRouterState: () => "/" };
 });
 
-/**
- * The blocker this file pins: `canProvision` used to be "the target is not
- * remote", which is TRUE for a target that has not resolved at all. A user
- * whose durable selection names a remote host - and whose directory row for
- * it has not arrived - therefore armed the real local-host lifecycle on the
- * machine in front of them: `convergeReady` fired, the removal-state sentinel
- * was read, the one-shot attempt latch was spent on an episode that belonged
- * to a different computer, and the surface said "Starting local Traycer
- * Host…" about a host nobody asked to start.
- *
- * The other half is the opposite mistake: refusing ALL unresolved targets
- * would silence a first-ever install, which has no directory row until
- * provisioning creates one. Both arms are asserted here against the real
- * provider chain, because the defect lived in the wiring between them.
- */
+/** The other half is the opposite mistake: refusing all unresolved targets would silence a first-ever install,
+ * which has no directory row until provisioning creates one. */
 
 const LOCAL_HOST_ID = "desktop-pid-1";
 const REMOTE_HOST_ID = "remote-host-x";
@@ -80,11 +67,8 @@ interface ManagementSpy {
   readonly removalStateCalls: () => number;
 }
 
-/**
- * A management surface that COUNTS the two calls this fix is about. Every
- * other member rejects: if the lifecycle reaches one of them the test should
- * fail loudly rather than quietly pass on a stub.
- */
+/** Every other member rejects: if the lifecycle reaches one of them the test should fail loudly rather than
+ * quietly pass on a stub. */
 function buildManagementSpy(): ManagementSpy {
   let convergeReadyCalls = 0;
   let removalStateCalls = 0;
@@ -94,9 +78,8 @@ function buildManagementSpy(): ManagementSpy {
     getHostControllerStatus: () => Promise.resolve(IDLE_CONTROLLER_STATUS),
     convergeReady: () => {
       convergeReadyCalls += 1;
-      // `running: true` is the "converged" answer; a falsy `running` is how
-      // the desktop reports "this host was removed by the user", which would
-      // latch the removed surface instead of the install card.
+      // `running: true` is the "converged" answer; a falsy `running` is how the desktop reports "this host was
+      // removed by the user", which would latch the removed surface instead of the install card.
       return Promise.resolve({
         kind: "ok",
         value: { running: true, version: localSnapshot.version },
@@ -154,11 +137,8 @@ function buildManagementSpy(): ManagementSpy {
   };
 }
 
-/**
- * A signed-in shell. The token store must hold a real session: without it the
- * runtime never mints a `RequestContext`, every readiness answer collapses to
- * `restoring-request-context`, and the arms under test are never reached.
- */
+/** The token store must hold a real session: without it the runtime never mints a `RequestContext`, every
+ * readiness answer collapses to `restoring-request-context`, and the arms under test are never reached. */
 function buildRunnerHost(
   management: IHostManagement,
   startsWithLocalHost: boolean,
@@ -189,11 +169,7 @@ function messengerFactory(): MessengerFactory<HostRpcRegistry> {
     });
 }
 
-/**
- * The production chain, in production order (see traycer-app.tsx). The bug
- * lived in how `HostReadinessControllerProvider` drives
- * `HostProvisioningController`, so nothing between them may be stubbed.
- */
+/** The production chain, in production order (see traycer-app.tsx). */
 function mountRealChain(
   management: IHostManagement,
   startsWithLocalHost: boolean,
@@ -210,8 +186,7 @@ function mountRealChain(
           messengerFactory={messengerFactory()}
           invalidator={null}
           requestId={null}
-          // No remote rows: the persisted remote pick stays UNRESOLVED, which
-          // is the whole scenario.
+          // No remote rows: the persisted remote pick stays unresolved, which is the whole scenario.
           remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback">runtime loading</div>}
         >
@@ -232,11 +207,8 @@ function mountRealChain(
   return runnerHost;
 }
 
-/**
- * The runtime hydrates the signed-in user before it publishes a binding; an
- * unanswered `/api/v3/user` leaves the whole chain on its loading fallback,
- * which would make every assertion below vacuous.
- */
+/** The runtime hydrates the signed-in user before it publishes a binding; an unanswered `/api/v3/user` leaves
+ * the whole chain on its loading fallback, which would make every assertion below vacuous. */
 function installAuthFetch(): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
   Object.defineProperty(globalThis, "fetch", {
@@ -323,17 +295,8 @@ afterEach(() => {
 
 describe("local-boot intent", () => {
   it("arms nothing local for an unresolved REMOTE selection", async () => {
-    // The intent is the selection AUTHORITY's derived effective host now
-    // (redesign P1.2), not a persisted key `resolveLocalBootIntent` reads
-    // from storage. `lastSelectedHostKey` had no production reader at all and
-    // is deleted; `lastLocalHostIdKey` is still LIVE - read by
-    // `host-directory-service.ts:22,46` - so this comment used to assert a
-    // deadness that was true of one key and false of the other. Registering the remote host in the
-    // authority's fleet (so derivation can name it effective) while the
-    // DIRECTORY's own remoteFetcher still returns nothing for it reproduces
-    // "the directory row never arrives"; with no local host up and no other
-    // fleet member, the derivation's third arm makes it effective without
-    // an explicit Activate.
+    // Registering the remote host in the authority's fleet (so derivation can name it effective) while the
+    // directory's own remoteFetcher still returns nothing for it reproduces "the directory row never arrives".
     const spy = buildManagementSpy();
     const runnerHost = buildRunnerHost(spy.management, false);
     runnerHost.setHosts([
@@ -373,13 +336,8 @@ describe("local-boot intent", () => {
                 <DefaultHostReadyGate>
                   <main>app</main>
                 </DefaultHostReadyGate>
-                {/* The gate no longer draws "Connecting to Traycer Host…"
-                    itself for this kind (the window narrator, D10, owns it
-                    now) - see default-host-ready-gate.test.tsx deliverable D.
-                    Mounted here as the settle anchor: the modal appearing
-                    with NO local bootstrap body is the positive proof this
-                    surface reached its settled non-local state, which the
-                    negative assertions below then get to run after. */}
+                {/* The gate no longer draws "Connecting to Traycer Host…" itself for this kind - see
+                   default-host-ready-gate.test.tsx deliverable D. */}
                 <WindowHostModalHost bypassed={false} />
               </HostReadinessControllerProvider>
             </HostCompatibilityProvider>
@@ -388,33 +346,16 @@ describe("local-boot intent", () => {
       </RunnerHostProvider>,
     );
 
-    // The surface settles on the non-local wait: the window narrator comes up
-    // - the positive proof this reached its non-local settled state.
-    //
-    // EITHER presentation counts as the anchor. This stack mounts the real
-    // gate, so which form the narrator takes depends on whether the gate is
-    // still blocking - a detail this fixture is not about, and pinning one
-    // testid here would turn a settle anchor into an accidental presentation
-    // assertion that goes vacuous when the other form renders.
+    // This stack mounts the real gate, so which form the narrator takes depends on whether the gate is still
+    // blocking.
     await waitFor(() => {
       expect(
         screen.queryByTestId("window-host-modal") ??
           screen.queryByTestId("window-host-startup-card"),
       ).toBeTruthy();
     });
-    // WHAT THIS FENCE IS ABOUT, and what it is not. It is about ARMING: the
-    // local lifecycle's two calls below belong to a machine the user is not
-    // pointed at, and neither may run. It is NOT about the card. An earlier
-    // version of this fixture also pinned the card as bodiless for a remote
-    // target - no spinner, no "Starting Traycer…" - and that pin was the
-    // reported launch: the narrator's card rendering as nothing but the
-    // `Open settings` link for exactly this selection, while the two boot
-    // surfaces before it (which cannot know the target) drew the full card.
-    // The card is drawn now, whatever the target: the same idle heading the
-    // surfaces before it use, which names no machine.
-    // What the card must still NOT do is offer a host-management action
-    // against this machine: nothing has failed and nothing is slow, so there
-    // is no Retry of any kind on it.
+    // An earlier version of this fixture also pinned the card as bodiless for a remote target - no spinner, no
+    // "Starting Traycer…".
     expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
     expect(screen.queryByTestId("local-host-provisioning-retry")).toBeNull();
     // The two calls the blocker was about: both belong to a machine the user
@@ -424,20 +365,8 @@ describe("local-boot intent", () => {
   });
 
   it("the AUTHORITY's ensure reaches host management - the port is not a stub", async () => {
-    // The counterpart to the negative arm above, and the pin for a fidelity
-    // property that is otherwise invisible. `MockRunnerHost` composes the
-    // authority's `LocalHostEnsurePort`, and an earlier version of it answered
-    // `ok` directly instead of routing to `convergeReady` the way the real
-    // `createDesktopLocalHostEnsurePort` does. That satisfied the engine while
-    // making the provisioning unobservable to anything watching the
-    // controller: an ensure that "succeeded" without the host ever being asked
-    // to converge. Nothing failed, because no test looked.
-    //
-    // Here the local host EXISTS in the fleet and has never been dialed, which
-    // is exactly when D14 wants it, so the authority requests the ensure and
-    // it must arrive at management. The remote-preferred test above is the
-    // negative arm of the same mechanism: derivation that does NOT want local
-    // must leave the controller alone.
+    // Here the local host exists in the fleet and has never been dialed, which is exactly when wants it, so the
+    // authority requests the ensure and it must arrive at management.
     const spy = buildManagementSpy();
 
     mountRealChain(spy.management, true);
@@ -448,24 +377,8 @@ describe("local-boot intent", () => {
   });
 
   it("does NOT provision a first-ever start from the RENDERER - that actor moved to main", async () => {
-    // Nothing preferred and no local row yet: a genuine cold local start.
-    //
-    // THE ACTOR MOVED, and this test moved with it. It used to assert that
-    // the renderer ran the ensure and drew the install card, because
-    // the local-host gate fired a once-per-mount `convergeReady`. P1.3
-    // retired that - two process actors for one host is what made the ∅
-    // definition undecidable - so the renderer must now install NOTHING, and
-    // asserting otherwise would be pinning the defect the retirement removed.
-    //
-    // First install did not disappear with it: it is
-    // `armLocalHostBootOnSignIn` in the desktop's launch reconciler
-    // (`electron-main/startup/host-launch-converge.ts`), sign-in gated,
-    // removal-sentinel gated and retrying, and it is proven THERE - in the
-    // process that actually performs it - by that module's own suite. This
-    // chain does not mount main, so a renderer test asserting a main-process
-    // action could only ever be theatre. What is genuinely this layer's to
-    // promise is that it does not act, and does not lie about the host while
-    // it waits.
+    // retired that - two process actors for one host is what made the ∅ definition undecidable - so the renderer
+    // must now install nothing, and asserting otherwise would be pinning the defect the retirement removed.
     const spy = buildManagementSpy();
 
     mountRealChain(spy.management, false);

@@ -15,11 +15,7 @@ import {
 } from "./desktop-cli-lock";
 import { DesktopAttemptCapabilityError } from "./update-mutation";
 
-/**
- * Desktop's only direct-service mutation bridge. It deliberately obtains the
- * canonical update-attempt lock before the existing cross-process CLI lock,
- * matching the CLI bridge and preserving one global lock order.
- */
+/** It deliberately obtains the canonical update-attempt lock before the existing cross-process CLI lock, matching the CLI bridge and preserving one global lock order. */
 export interface WithDesktopUpdateContenderOptions {
   readonly hostHomeDir: string;
   readonly lockPath: string;
@@ -58,14 +54,7 @@ type DesktopInnerResult<T> =
   | { readonly kind: "ran"; readonly result: T }
   | { readonly kind: "capability-not-live"; readonly verdict: string };
 
-/**
- * Deliberately a separate union from {@link DesktopInnerResult}, not an extra
- * arm on it. The two wrappers differ in where the CLI lock sits: the
- * whole-callback wrapper learns "busy" from `withDesktopCliLock`'s own
- * outcome, while an execution segment can only learn it from an inner
- * acquisition several frames down. Sharing one union would force the older
- * wrapper to carry an arm it can never produce.
- */
+/** Sharing one union would force the older wrapper to carry an arm it can never produce. */
 type DesktopSegmentInnerResult<T> =
   | { readonly kind: "ran"; readonly result: T }
   | { readonly kind: "capability-not-live"; readonly verdict: string }
@@ -120,15 +109,6 @@ export async function withDesktopUpdateContender<T>(
   return mapDesktopContenderOutcome(contender);
 }
 
-/**
- * The desktop CLI lock was busy inside an already-admitted execution segment.
- *
- * Thrown rather than returned because it surfaces from the INNER boundary,
- * several frames below the callback the segment admitted, and the alternative
- * is threading a result union through every intermediate step until one of
- * them forgets. The segment wrapper below is the only catcher; nothing else
- * should handle it.
- */
 export class DesktopCliLockBusyError extends Error {
   readonly holder: LockMetadata | null;
 
@@ -148,23 +128,7 @@ export interface WithDesktopUpdateSegmentOptions {
   readonly admission: UpdateContenderAdmission;
 }
 
-/**
- * Own the outer attempt capability for a whole execution segment, taking the
- * inner CLI lock only through {@link withDesktopAttemptMutation}.
- *
- * ## Why this cannot be `withDesktopUpdateContender`
- *
- * That wrapper nests `withDesktopCliLock` around the ENTIRE callback, which is
- * right for the short maintenance sections it serves and wrong for an executor
- * segment. An activation segment spans a readiness wait of up to a minute and
- * spawns bundled-CLI children that re-acquire this very lock - holding it
- * across that is the nested-lock deadlock Fixup A7 removed when it moved
- * `stampIfNullRuntime` outside the locked section ("CLI-locked and
- * desktop-locked sections are sequenced, not nested").
- *
- * The global order is unchanged and is the reason both wrappers exist:
- * `update-attempt.lock` outer, `cli-lock` inner, never the reverse.
- */
+/** The global order is unchanged and is the reason both wrappers exist: `update-attempt.lock` outer, `cli-lock` inner, never the reverse. */
 export async function withDesktopUpdateExecutionSegment<T>(
   options: WithDesktopUpdateSegmentOptions,
   run: (capability: UpdateMutationCapability) => Promise<T>,
@@ -208,16 +172,6 @@ export async function withDesktopAttemptExecutor<T>(
   );
 }
 
-/**
- * Capability-consuming inner mutation boundary: the attempt capability stays
- * held by its segment while the CLI lock is taken for exactly one short
- * install-tree or service operation.
- *
- * Verified twice, and the second one is the load-bearing one: acquiring the
- * inner lock can wait, and a capability that was live when this was called can
- * be gone by the time the lock is won. Checking only up front would authorize
- * an actuator on evidence that has since expired.
- */
 export async function withDesktopAttemptMutation<T>(
   capability: UpdateMutationCapability,
   options: WithDesktopUpdateSegmentOptions,

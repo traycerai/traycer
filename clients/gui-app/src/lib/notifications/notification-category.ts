@@ -14,9 +14,9 @@ const CATEGORY_BY_SOURCE: Readonly<
   global: "collaboration",
 };
 
-/** Maps the internal source seam to the product vocabulary at the
- * projection boundary - callers outside the store never branch on `source`
- * directly. */
+/**
+ * Maps the internal source seam to the product vocabulary at the projection boundary - callers outside the store never branch on `source` directly.
+ */
 export function categoryForNotificationSource(
   source: MergedNotificationSource,
 ): NotificationCategory {

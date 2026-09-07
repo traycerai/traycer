@@ -35,9 +35,7 @@ describe("chatWindowedSnapshotSchema never embeds the transcript", () => {
   });
 
   it("has no messages/events key at the snapshot's own top level", () => {
-    // `tail` legitimately carries `messages`/`events` arrays - that is the
-    // bounded hydrated window, not the unbounded transcript this guard is
-    // about. Scoped to the snapshot's own keys and to `chat`, not to `tail`.
+    // `tail` legitimately carries `messages`/`events` arrays - that is the bounded hydrated window, not the unbounded transcript this guard is about.
     const topLevelKeys = Object.keys(chatWindowedSnapshotSchema.shape);
 
     expect(topLevelKeys).not.toContain("messages");
@@ -74,9 +72,7 @@ function baseWindowedSnapshot(): Record<string, unknown> {
     accumulatedFileChangeCount: 0,
     transcriptEpoch: 0,
     rowCount: 0,
-    // `null` is the bootstrap value - the host holds no index for this
-    // subscriber yet and a full skeleton follows - which is what a minimal
-    // frame with no rows is.
+    // `null` is the bootstrap value - the host holds no index for this subscriber yet and a full skeleton follows - which is what a minimal frame with no rows is.
     indexRevision: null,
     tail: { fromOrdinal: 0, messages: [], events: [] },
     derived: {
@@ -131,9 +127,6 @@ describe("chatSubscribeWindowedServerFrameSchema's snapshot variant", () => {
       worktreeBinding: null,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
-      // The field the windowed line actually uses, so this fixture is rejected
-      // specifically for missing transcriptEpoch/rowCount/tail/derived - not
-      // merely for an unrelated field-name difference.
       accumulatedFileChangeCount: 0,
       // No transcriptEpoch / rowCount / tail / derived - the windowed-only
       // fields a real 1.8 snapshot must carry.
@@ -193,12 +186,8 @@ describe("the chat.subscribe@1.6 freeze", () => {
     expect(parsed.snapshot.chat).not.toHaveProperty("somethingFromTheFuture");
   });
 
-  // The stronger guarantee: `chatSchemaV16` is a HAND-FROZEN copy, not a
-  // reference to the live `chatSchema`. If it were a reference, any later
-  // field added to `chatSchema` (as `pinnedUserProviderHandle` and
-  // `lastDeliveredRolesDigest` were) would silently reach this released wire
-  // shape. Written out literally so a future field addition to `chatSchema`
-  // must be a DELIBERATE decision about this file, not an accident.
+  // The stronger guarantee: `chatSchemaV16` is a HAND-FROZEN copy, not a reference to the live `chatSchema`.
+  // Written out literally so a future field addition to `chatSchema` must be a DELIBERATE decision about this file, not an accident.
   const CHAT_SCHEMA_V16_FIELDS = [
     "parentId",
     "id",
@@ -225,16 +214,7 @@ describe("the chat.subscribe@1.6 freeze", () => {
   });
 
   // Fields added to the live `chatSchema` AFTER `1.6` shipped.
-  //
-  // Empty today, and appending to it is the whole point: this is the tripwire
-  // that makes a new chat-record field a deliberate decision about the released
-  // wire shape rather than something that happens to it. When the assertion
-  // below fires, add the new field name HERE - never to
-  // `CHAT_SCHEMA_V16_FIELDS`, which is what `1.6` shipped and is finished.
-  //
-  // Deliberately not a plain equality check against `chatSchema`: an equality
-  // that can only ever be "fixed" by deleting it teaches the next person to
-  // delete it, and then nothing watches this again.
+  // When the assertion below fires, add the new field name HERE - never to `CHAT_SCHEMA_V16_FIELDS`, which is what `1.6` shipped and is finished.
   const CHAT_SCHEMA_FIELDS_ADDED_AFTER_V16: readonly string[] = [];
 
   it("accounts for every live chatSchema field as either frozen into 1.6 or explicitly post-1.6", () => {
@@ -263,9 +243,7 @@ describe("chatSubscribeWindowedServerFrameSchema's frame kinds", () => {
     // Windowed-only.
     "snapshot",
     "skeletonChunk",
-    // The accumulated-change summaries are chunked out of the snapshot for the
-    // reason the skeleton never joined it: their count is a property of the
-    // chat's HISTORY, not its current state.
+    // The accumulated-change summaries are chunked out of the snapshot for the reason the skeleton never joined it: their count is a property of the chat's HISTORY, not its current state.
     "accumulatedChanges",
     "indexChanged",
     "range",
@@ -326,16 +304,8 @@ describe("chatSubscribeWindowedClientFrameSchema's frame kinds", () => {
 
 describe("the 1.6 server union does not admit windowed-only frame kinds", () => {
   it("rejects range, indexChanged, and skeletonChunk kinds", () => {
-    // `Set<string>`, not the inferred `Set<"actionAck" | ...>`, and the reason
-    // is worth keeping: with the narrow element type the compiler REFUSES
-    // `has("range")` outright, because it already knows `1.6` has no such
-    // variant. That is the guard holding at the type level - but a test that
-    // cannot be written is not a test, and the whole point here is to fail
-    // loudly at runtime if someone later widens the union.
-    // Read from `chatSubscribeV16.serverFrameSchema`, NOT from the exported
-    // live union. They are different objects now, and the contract binds the
-    // former - a cold review caught this reading the wrong one, where adding
-    // `skeletonChunk` to the frozen union would have left the test green.
+    // `Set<string>`, not the inferred `Set<"actionAck" | ...>`, and the reason is worth keeping: with the narrow element type the compiler REFUSES `has("range")` outright, because it already knows `1.6` has no such variant.
+    // That is the guard holding at the type level - but a test that cannot be written is not a test, and the whole point here is to fail loudly at runtime if someone later widens the union.
     const v16ServerKinds = new Set<string>(
       chatSubscribeV16.serverFrameSchema.options.map(
         (option) => option.shape.kind.value,
@@ -373,8 +343,7 @@ describe("the 1.6 server union does not admit windowed-only frame kinds", () => 
 
   it("rejects skeletonChunk and indexChanged frames at parse time too", () => {
     // The kind list above is a structural check; these are the runtime half.
-    // Only `range` had one, so a frozen union that gained `skeletonChunk`
-    // would have passed both.
+    // Only `range` had one, so a frozen union that gained `skeletonChunk` would have passed both.
     const skeletonChunkFrame = {
       kind: "skeletonChunk",
       hasBinaryPayload: false,
@@ -389,12 +358,7 @@ describe("the 1.6 server union does not admit windowed-only frame kinds", () => 
       chatId: "chat-1",
       epoch: 1,
       rowCount: 0,
-      // The wire field is the ARRAY `changes` (see `chatIndexChangeSchema`'s
-      // frame). Spelling it `change` here would make this fixture malformed on
-      // its own terms, so the rejection below would prove only that - and it
-      // would keep proving it after someone added `indexChanged` to the frozen
-      // `1.6` union, which is the one regression this assertion exists to
-      // catch.
+      // The wire field is the ARRAY `changes` (see `chatIndexChangeSchema`'s frame).
       changes: [{ type: "reindexed" }],
     };
 
@@ -491,9 +455,6 @@ describe("chatAccumulatedFileChangeSummarySchema's digest bound", () => {
       reason: "snapshot" as const,
       undoable: true,
       hasContents: true,
-      // `null` is the "nothing to count" case (`diffSource: "none"`), and is
-      // deliberately distinct from `{additions: 0, deletions: 0}`, which means
-      // the host counted and the file came back unchanged.
       counts: null,
     };
   }
@@ -540,12 +501,7 @@ describe("chatReadAccumulatedFileChangeResponseSchema's stale/fresh arms", () =>
     expect(parsed).toEqual({ stale: true });
   });
 
-  // Checked against the actual schema rather than assumed, per the ticket:
-  // `stale: true` is a plain (non-strict) z.object with only `stale`
-  // declared, so zod's default unknown-key behavior applies - extra keys are
-  // SILENTLY STRIPPED, not rejected. Documented here as a guard against that
-  // stripping ever regressing into "extra keys pass through untouched",
-  // which would let a stale response carry contents by accident.
+  // Checked against the actual schema rather than assumed, per the ticket: `stale: true` is a plain (non-strict) z.object with only `stale` declared, so zod's default unknown-key behavior applies - extra keys are SILENTLY.
   it("strips (does not reject, and does not pass through) contents on a stale: true payload", () => {
     const parsed = chatReadAccumulatedFileChangeResponseSchema.parse({
       stale: true,
@@ -607,10 +563,6 @@ describe("chatIndexChangeSchema", () => {
   });
 
   it("rejects an entry missing a required skeleton field", () => {
-    // Through `chatIndexChangeSchema`, not `rowSkeletonEntrySchema` directly:
-    // this suite is about the DELTA, and the question is whether its `appended`
-    // arm still composes the entry schema. Parsing the entry on its own leaves
-    // that composition untested and would keep passing if the arm stopped.
     const withoutRowId = { createdAt: 1000, role: "user", byteLength: 10 };
     expect(
       chatIndexChangeSchema.safeParse({
@@ -623,17 +575,7 @@ describe("chatIndexChangeSchema", () => {
 
 // ─── Group 6: chatLocateRowResponseSchema ───────────────────────────────────
 
-/**
- * An ordinal is a coordinate, and a coordinate means nothing without the space
- * it is in. `chat.locateRow` is a unary RPC on a different connection from the
- * stream, so a restore or a compaction between the host numbering the row and
- * the client consuming the number leaves the client holding a position in a
- * space it has left - in range, fetchable, and pointing at the wrong row.
- *
- * The epoch is REQUIRED rather than optional for that reason: a producer that
- * omits it hands back an uncheckable coordinate, and the failure it causes is
- * silent at every layer below this schema.
- */
+/** An ordinal is a coordinate, and a coordinate means nothing without the space it is in. */
 describe("chatLocateRowResponseSchema's found/not-found arms", () => {
   it("accepts a found answer stamped with the epoch it is numbered in", () => {
     const parsed = chatLocateRowResponseSchema.parse({
@@ -652,9 +594,6 @@ describe("chatLocateRowResponseSchema's found/not-found arms", () => {
   });
 
   it("accepts the opaque refusal, which carries nothing", () => {
-    // `found: false` answers "no live session", "no row matches" and "you may
-    // not read this chat" alike; anything that distinguished them would rebuild
-    // the liveness oracle the sibling read closed.
     const parsed = chatLocateRowResponseSchema.parse({ found: false });
     expect(parsed).toEqual({ found: false });
   });

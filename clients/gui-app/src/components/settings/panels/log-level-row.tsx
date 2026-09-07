@@ -20,18 +20,13 @@ const LOG_LEVEL_LABEL: Record<LogLevel, string> = {
 
 interface LogLevelRowProps {
   readonly control: LogLevelControl;
-  // Externally-driven disable, e.g. a caller-coordinated bulk reset across
-  // several `LogLevelRow`s - so the row can't fire a conflicting per-scope
-  // mutation while that coordinated operation is in flight.
+  // Externally-driven disable, e.g. a caller-coordinated bulk reset across several `LogLevelRow`s - so the row
+  // can't fire a conflicting per-scope mutation while that coordinated operation is in flight.
   readonly disabled: boolean;
 }
 
-/**
- * One Settings dropdown for a log threshold. Purely presentational: the control
- * arrives with its own transport already resolved (local bridge for `desktop`,
- * the selected host's config RPC for `cli`/`host` - see `LogLevelControl`), so
- * this row is identical whichever machine is answering.
- */
+/** Purely presentational: the control arrives with its own transport already resolved (local bridge for
+ * `desktop`, the selected host's config RPC for `cli`/`host`. */
 export function LogLevelRow(props: LogLevelRowProps) {
   const { control, disabled } = props;
 

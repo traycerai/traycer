@@ -26,13 +26,7 @@ function traycerShellConfigQueryOptions(traycerCli: ITraycerCli | null) {
   });
 }
 
-/**
- * Reads the effective shell config (path + args + synthesised flag) through
- * `traycer config shell get`. Drives the Settings → Shell & environment form
- * and the bootstrap-failure card's "shell that was attempted" line.
- *
- * Disabled when `traycerCli === null`.
- */
+/** Reads the effective shell config (path + args + synthesised flag) through `traycer config shell get`. */
 export function useRunnerTraycerShellConfigQuery(): UseQueryResult<TraycerShellConfig> {
   const runnerHost = useRunnerHost();
   return useQuery(traycerShellConfigQueryOptions(runnerHost.traycerCli));

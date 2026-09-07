@@ -36,10 +36,8 @@ export const artifactLinkExtension = Link.extend({
     return [
       "a",
       mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, {
-        // Chromium's middle-click navigation cannot be reliably cancelled at
-        // auxclick time. The mark remains the URL source of truth. Viewer hash
-        // links retain native navigation; editable links use caret ownership
-        // and have no focusable descendant inside the contentEditable root.
+        // Middle-click cannot be cancelled at auxclick. Viewer hash links stay
+        // native; editable links use caret ownership.
         href: viewer && normalizedHref.startsWith("#") ? normalizedHref : null,
         "data-link-href": rawHref,
         role: "link",
@@ -58,17 +56,7 @@ export const artifactLinkExtension = Link.extend({
   },
 });
 
-/**
- * The Markdown extension configured with its own private `marked`.
- *
- * `@tiptap/markdown` registers one tokenizer per extension into whatever
- * `marked` it is given and never unregisters them, and its default is the
- * module-level singleton - so every editor built on the bare extension stayed
- * reachable for the life of the window (see `createIsolatedMarked`). Anything
- * that creates an editor or a manager must call this and get a FRESH instance;
- * the shared `extensions` array below is a schema template, not an editor
- * configuration.
- */
+/** Fresh marked instance per editor: @tiptap/markdown never unregisters tokenizers on the module singleton. Shared `extensions` is a schema template. */
 export function createArtifactMarkdownExtension(): AnyExtension {
   return Markdown.configure({ marked: createIsolatedMarked() });
 }

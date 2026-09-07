@@ -23,11 +23,7 @@ import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 
-/**
- * A row's `surface` is UI copy ("gui"/"tui"); opening a tile needs the
- * record-backed node kind. The two map 1:1 (the inverse of `surfaceOf` in
- * `use-agent-stop-controls`).
- */
+/** A row's `surface` is UI copy ("gui"/"tui"); opening a tile needs the record-backed node kind. The two map 1:1 (the inverse of `surfaceOf` in `use-agent-stop-controls`). */
 function nodeKindForSurface(surface: "gui" | "tui"): "chat" | "terminal-agent" {
   return surface === "gui" ? "chat" : "terminal-agent";
 }
@@ -60,13 +56,7 @@ function ActivityDot(props: {
   );
 }
 
-/**
- * On-hover reveal wrapper for a row's stop button, mirroring the per-file Undo
- * affordance in the accumulated-changes panel: the button stays mounted (so
- * keyboard focus still reaches it) but is invisible until the row is hovered or
- * a descendant gains focus. When `revealOnHover` is false the button renders
- * inline and always visible (the TUI popover surface).
- */
+/** On-hover reveal wrapper for a row's stop button, mirroring the per-file Undo affordance in the accumulated-changes panel: the button stays mounted (so keyboard focus still reaches it) but is invisible until the row is hovered or a descendant gains focus. When `revealOnHover` is false the button renders inline and always visible (the TUI popover surface). */
 function StopAffordance(props: {
   readonly revealOnHover: boolean;
   readonly children: ReactNode;
@@ -79,16 +69,7 @@ function StopAffordance(props: {
   );
 }
 
-/**
- * One openable active-agent row. Its self-describing payload keeps the same
- * pane, empty-canvas, and header-tab behavior as the navigator while preserving
- * the agent's tab-bound host instead of consulting the app's active device.
- *
- * The drag id is occurrence-scoped because this is another rendering of a node
- * that is usually mounted in the sidebar at the same time. The trailing stop
- * action stays outside the drag/open button so stopping never starts a drag or
- * opens the tile.
- */
+/** The trailing stop action stays outside the drag/open button so stopping never starts a drag or opens the tile. */
 function AgentStopRow(props: {
   readonly epicId: string;
   readonly viewTabId: string;
@@ -212,21 +193,7 @@ function AgentStopRow(props: {
   );
 }
 
-/**
- * Shared row list for both agent-stop surfaces. The current agent is the
- * topmost row; its active descendants follow, indented, each individually
- * stoppable. Keeping this in one place is what guarantees the two surfaces stay
- * consistent.
- *
- * Every row carries a trailing stop control occupying the same slot, so the
- * surface badges stay column-aligned regardless of which stops are visible. The
- * single `surface` prop drives the only presentation difference:
- *   - `composer-panel` uses compact icon-only stops; the current agent's
- *     "Stop all" stays visible (so the parent row never looks stop-less) while
- *     each descendant's stop reveals on hover (matching the accumulated-changes
- *     per-file Undo).
- *   - `tui-popover` uses labelled, always-visible stops on every row.
- */
+/** The single `surface` prop drives the only presentation difference: - `composer-panel` uses compact icon-only stops; the current agent's "Stop all" stays visible (so the parent row never looks stop-less) while each descendant's stop reveals on hover (matching the accumulated-changes per-file Undo). - `tui-popover` uses labelled, always-visible stops on every row. */
 export function AgentStopList(props: {
   readonly epicId: string;
   readonly viewTabId: string;

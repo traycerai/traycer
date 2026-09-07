@@ -38,10 +38,8 @@ interface FileChangeSegmentProps {
   segment: FileChangeSegmentModel;
   variant: "card" | "row";
   headerFindUnitId: string | null;
-  // Seeds the disclosure at mount, once. Open state is local here, so the copy
-  // of this row inside the bounded live activity window cannot hand its own
-  // over: a click there promotes, and this is how the copy that replaces it
-  // knows it was the row asked for.
+  // Seeds the disclosure at mount, once.
+  // Open state is local here, so the copy of this row inside the bounded live activity window cannot hand its own over: a click there promotes, and this is how the copy that replaces it knows it was the row asked for.
   initiallyOpen: boolean;
 }
 
@@ -53,10 +51,8 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
   // content fetch is needed to render the collapsed header.
   const hasDiff = segment.additions > 0 || segment.deletions > 0;
   const opener = useChatSnapshotDiffOpener();
-  // Clicking the file path opens this single edit's snapshot diff tile
-  // (single-click = preview, double-click = pinned), mirroring the Git file
-  // list. `null` when there is no chat target (isolated render) - the path
-  // then renders as plain, non-interactive text.
+  // Clicking the file path opens this single edit's snapshot diff tile (single-click = preview, double-click = pinned), mirroring the Git file list.
+  // `null` when there is no chat target (isolated render) - the path then renders as plain, non-interactive text.
   const clickHandlers = useMemo<DiffRowClickHandlers | null>(
     () =>
       opener === null
@@ -64,9 +60,8 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
         : opener.segment({
             filePath,
             sourceBlockIds: segment.sourceBlockIds,
-            // Carried so the tile survives this row leaving the transcript
-            // window - see `ChatSnapshotSegmentDiffRequest`. This row is on
-            // screen, so they are the endpoints as the user sees them.
+            // Carried so the tile survives this row leaving the transcript window - see `ChatSnapshotSegmentDiffRequest`.
+            // This row is on screen, so they are the endpoints as the user sees them.
             beforeHash: segment.beforeHash,
             afterHash: segment.afterHash,
           }),
@@ -144,28 +139,11 @@ function fileChangeBody(
   );
 }
 
-/**
- * Inline diff for a tool-call file edit, rendered through the same
- * `@pierre/diffs` pipeline as the Git diff tiles (via `DiffContentPrimitive`)
- * so the chat stream and the diff ecosystem look identical. Uses a fixed
- * inline-unified preset suited to the chat column: unified, no file header,
- * no line numbers, full changed-line backgrounds, and a compact change gutter.
- * This intentionally does not follow the global canvas diff viewer preferences.
- *
- * The before/after content is no longer inlined in the chat doc - it is
- * lazy-fetched from the host's snapshot blob store by hash on first expand
- * (this component only mounts when the row is open), then synthesized into a
- * unified patch client-side. While pending, a spinner shows; if the blob can't
- * be served the matching reason copy is shown; and on a published copy, whose
- * fetch crosses the network, a read that FAILED gets a retry instead of that
- * copy - it is not the same fact.
- */
+/** This intentionally does not follow the global canvas diff viewer preferences. While pending, a spinner shows; if the blob can't be served the matching reason copy is shown; and on a published copy, whose fetch crosses the network, a read that FAILED gets a retry instead of that copy - it is not the same fact. */
 function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
   const { segment } = props;
-  // Hookless dispatcher, the same shape `ChatNodeShell` uses: a live chat must
-  // not merely SKIP the cloud read, it must not mount its query observer at
-  // all. A transcript can hold dozens of these, and the live path stays exactly
-  // the code that shipped - no extra observer, no new provider requirement.
+  // Hookless dispatcher, the same shape `ChatNodeShell` uses: a live chat must not merely SKIP the cloud read, it must not mount its query observer at all.
+  // A transcript can hold dozens of these, and the live path stays exactly the code that shipped - no extra observer, no new provider requirement.
   const published = usePublishedChatSource();
   if (published === null) return <LiveFileChangeInlineDiff segment={segment} />;
   return <PublishedFileChangeInlineDiff segment={segment} source={published} />;
@@ -173,10 +151,7 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
 
 function LiveFileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
   const query = useSnapshotDiffQuery({
-    // The transcript only ever renders inside a chat TILE (`chat-tile.tsx` is
-    // the sole mount of `<ChatMessages>`), and the snapshot blobs this row
-    // expands were written by that tab's host - which is also the client the
-    // PUBLISHED arm beside this one reads off `PublishedChatSource` (D15).
+    // The transcript only ever renders inside a chat TILE (`chat-tile.tsx` is the sole mount of `<ChatMessages>`), and the snapshot blobs this row expands were written by that tab's host - which is also the client the PUBLISHED arm beside this one reads off `PublishedChatSource` (D15).
     client: useTabHostClient(),
     beforeHash: props.segment.beforeHash,
     afterHash: props.segment.afterHash,
@@ -227,18 +202,9 @@ function FileChangeDiffView(props: {
       }
     | undefined;
   isLoading: boolean;
-  /**
-   * Set when the content is a PREFIX. Always null on the live path, where the
-   * snapshot store serves whole blobs; a cloud payload above the reader's
-   * preview bound is served truncated, and a diff built from a prefix must not
-   * read as the complete set of changes.
-   */
+  /** Set when the content is a PREFIX. Always null on the live path, where the snapshot store serves whole blobs; a cloud payload above the reader's preview bound is served truncated, and a diff built from a prefix must not read as the complete set of changes. */
   truncation: PayloadExtent | null;
-  /**
-   * Set when a side's read FAILED. Always null on the live path. Drawn INSTEAD
-   * of the reason copy, because "snapshot blob missing" is a verdict about the
-   * owner's upload and this is a verdict about the network.
-   */
+  /** Set when a side's read FAILED. Always null on the live path. */
   failure: PayloadReadFailure | null;
 }) {
   const { segment, data, isLoading } = props;
@@ -254,9 +220,7 @@ function FileChangeDiffView(props: {
     });
   }, [data, segment.filePath]);
 
-  // isLoading (not isPending): a disabled query (e.g. both hashes null) keeps
-  // isPending true forever; only show the spinner while genuinely fetching, and
-  // otherwise fall through to the reason copy.
+  // isLoading (not isPending): a disabled query (e.g. both hashes null) keeps isPending true forever; only show the spinner while genuinely fetching, and otherwise fall through to the reason copy.
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
@@ -269,9 +233,7 @@ function FileChangeDiffView(props: {
       </div>
     );
   }
-  // Before the reason copy: a failed read has no `data`, so falling through
-  // would print "Skipped - snapshot blob missing." for content the next request
-  // may well return.
+  // Before the reason copy: a failed read has no `data`, so falling through would print "Skipped - snapshot blob missing." for content the next request may well return.
   if (props.failure !== null) {
     return (
       <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground">
@@ -301,9 +263,8 @@ function FileChangeDiffView(props: {
   return (
     <DiffContentFrame
       sizing="content"
-      // A prefix must not read as the whole file. The frame already has a slot
-      // for exactly this kind of statement, so the notice sits with the diff
-      // rather than in a branch that forks the rendering.
+      // A prefix must not read as the whole file.
+      // The frame already has a slot for exactly this kind of statement, so the notice sits with the diff rather than in a branch that forks the rendering.
       banner={
         props.truncation === null ? null : (
           <p
@@ -333,12 +294,7 @@ function FileChangeDiffView(props: {
   );
 }
 
-/**
- * Human verb for a file-change `operation`, so the row reads `Edit · path`
- * (mirroring how a tool row reads `Read · path`) instead of a bare path.
- * `operation` is an open string across harnesses: Claude emits
- * `edit`/`ambiguous`(Write)/`delete`; OpenCode emits `patch`.
- */
+/** Human verb for a file-change `operation`, so the row reads `Edit · path` (mirroring how a tool row reads `Read · path`) instead of a bare path. `operation` is an open string across harnesses: Claude emits `edit`/`ambiguous`(Write)/`delete`; OpenCode emits `patch`. */
 function fileChangeVerb(operation: string): string {
   switch (operation) {
     case "delete":
@@ -402,11 +358,7 @@ export function FileChangeHeader(props: FileChangeHeaderProps) {
           </StartTruncatedText>
         </FilePathTooltip>
       ) : (
-        // Rendered as a span (not button) because the surrounding
-        // SegmentCard/SegmentRow already wraps the entire header in a Radix
-        // CollapsibleTrigger <button>; nesting buttons is invalid HTML
-        // and triggers a hydration error. role=button + keydown keep
-        // keyboard activation so the path is still openable.
+        // Rendered as a span (not button) because the surrounding SegmentCard/SegmentRow already wraps the entire header in a Radix CollapsibleTrigger <button>; nesting buttons is invalid HTML and triggers a hydration error. role=button + keydown keep keyboard activation so the path is still openable.
         <StartTruncatedText
           role="button"
           tabIndex={0}

@@ -3,22 +3,9 @@ import type {
   PerfTelemetryEvent,
 } from "./perf-telemetry-writer";
 
-/**
- * Parser for renderer perf-telemetry console lines. Kept electron-free so the
- * routing branch can be unit-tested in isolation; the window factory feeds the
- * result to `appendPerfEvent`.
- *
- * A perf line looks like: `[traycer-perf] {"name":"...","tsMs":123,"fields":{}}`
- * emitted by `gui-app/src/lib/perf/perf-telemetry.ts`.
- */
 
 export const PERF_RENDERER_LOG_PREFIX = "[traycer-perf]";
 
-/**
- * Returns a validated event, or `null` when the line is not a perf line or is
- * malformed. Fields are narrowed to scalar values (number/string/boolean/null);
- * any non-scalar field is dropped rather than trusted.
- */
 export function parsePerfRendererLog(
   message: string,
 ): PerfTelemetryEvent | null {

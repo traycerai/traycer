@@ -26,10 +26,8 @@ const TERMINAL_ENTRY: EpicTerminalMentionEntry = {
 };
 
 /**
- * The `terminal:` reference names the shell itself, not an Agent reached
- * through one. It is deliberately a sibling of `terminal-agent:` rather than a
- * variant of it: a coding agent can READ a terminal and can never talk to one,
- * so the two must not collapse anywhere along this path.
+ * The `terminal:` reference names the shell itself, not an Agent reached through one.
+ * It is deliberately a sibling of `terminal-agent:` rather than a variant of it: a coding agent can READ a terminal and can never talk to one, so the two must not collapse anywhere along this path.
  */
 describe("terminal reference tokens", () => {
   it("builds a pointer-only mention from a picker row", () => {
@@ -122,10 +120,8 @@ describe("terminal reference tokens", () => {
   });
 
   it("emits attrs the protocol serializer renders as a terminal reference", () => {
-    // The GUI's contextType string and the protocol enum are declared
-    // independently. Pin the seam from both ends: an attachment that drifted
-    // off `ContextType.Terminal` would fall through the serializer's switch to
-    // `default:` and reach the coding agent as a bare label with no terminal id.
+    // The GUI's contextType string and the protocol enum are declared independently.
+    // Pin the seam from both ends: an attachment that drifted off `ContextType.Terminal` would fall through the serializer's switch to `default:` and reach the coding agent as a bare label with no terminal id.
     const attachment = mentionAttachmentFromSuggestion(TERMINAL_ENTRY);
     if (attachment === null) throw new Error("expected a terminal attachment");
     const attrs = mentionAttrsFromAttachment(attachment);

@@ -30,56 +30,33 @@ import {
 } from "@/components/onboarding/onboarding-story-script";
 import { cn } from "@/lib/utils";
 
-/**
- * The phone miniature for the mobile tour, drawn to the same treatment as the
- * desktop diorama (`onboarding-diorama.tsx`) — semantic theme tokens only, so
- * it follows the user's live theme, the same layered drop shadow, and the same
- * motion grammar (opacity fades on `EASE`, interval cycling, `useReducedMotion`
- * pinning every scene to its settled end state).
- *
- * It teaches the two affordances a phone user must find and the desktop tour
- * never mentions (the hamburger drawer and the top-right switcher sheet), and
- * it replays the shared agent story (`onboarding-story-script.ts`) down a
- * single column.
- */
+/** It teaches the two affordances a phone user must find and the desktop tour never mentions (the hamburger
+ * drawer and the top-right switcher sheet). */
 interface OnboardingPhoneDioramaProps {
   readonly scene: OnboardingPhoneSceneId;
 }
 
-/** What this phone miniature can draw. */
 export type OnboardingPhoneSceneId = "drawer" | "switcher" | "story";
 
-/** Which mini-header glyph the scene spotlights. */
 type HeaderGlyphId = "menu" | "switcher" | "bell";
 
 /** How long the panel waits before it slides in, so the frame reads first. */
 const REVEAL_DELAY_MS = 700;
-/** Active-row / active-category cadence, matching the desktop tab cycle. */
 const CYCLE_MS = 1900;
 
-/**
- * The frame is container-led: its height is whatever the page's grid row
- * hands down (`h-full`, capped by the tour's `--onboarding-diorama-max-height`
- * budget), and the 9/19 aspect derives the width from it. `max-w-full` lets a
- * narrow column clamp the width instead - `aspect-ratio` transfers that cap
- * back into the height, so the frame letterboxes and never distorts or runs
- * past the actions bar below its row.
- */
+/** `max-w-full` lets a narrow column clamp the width instead - `aspect-ratio` transfers that cap back into the
+ * height, so the frame letterboxes and never distorts or runs past the actions bar below its row. */
 const PHONE_FRAME_CLASS =
   "@container relative flex aspect-[9/19] h-full max-h-[var(--onboarding-diorama-max-height)] max-w-full flex-col overflow-hidden rounded-3xl border border-white/12 bg-background text-foreground shadow-[0_2rem_4rem_-1.75rem_rgba(0,0,0,0.72),0_0.875rem_2rem_-1.25rem_rgba(0,0,0,0.55)] transition-colors duration-500";
 
-/** Recency labels for the drawer's task rows, keyed so a rename breaks here. */
 const RECENT_TASK_AGES: Readonly<Record<(typeof TASKS)[number], string>> = {
   "Team usage limits": "2m",
   "Billing service": "1h",
   "Usage sync audit": "3d",
 };
 
-/**
- * Older history below the three live tasks. A real drawer is never three rows
- * and a void; these keep the miniature's composition honest without joining
- * the active-row cycle (they read as settled work, slightly dimmed).
- */
+/** A real drawer is never three rows and a void; these keep the miniature's composition honest without joining
+ * the active-row cycle (they read as settled work, slightly dimmed). */
 const OLDER_DRAWER_TASKS = [
   ["Provider pack audit", "1w"],
   ["Release notes draft", "2w"],
@@ -91,13 +68,8 @@ interface SwitcherCategory {
   readonly rows: ReadonlyArray<string>;
 }
 
-/**
- * The four categories the act's copy names, with the real MOBILE switcher bar's
- * titles and icons in its own relative order — the sheet teaches a bar the user
- * is about to see, so it must not fork the copy. "Chats" rather than the
- * desktop rail's "Agents": the phone bar overrides that one label
- * (`MOBILE_SWITCHER_TITLE_OVERRIDES`) so the tab names what it lists.
- */
+/** The four categories the act's copy names, with the real mobile switcher bar's titles and icons in its own
+ * relative order - the sheet teaches a bar the user is about to see, so it must not fork the copy. */
 const SWITCHER_CATEGORIES = [
   {
     label: "Chats",
@@ -144,10 +116,7 @@ export function OnboardingPhoneDiorama(props: OnboardingPhoneDioramaProps) {
   );
 }
 
-/**
- * The story scene owns the whole screen; the nav scenes raise a
- * panel over the shared task tile.
- */
+/** The story scene owns the whole screen; the nav scenes raise a panel over the shared task tile. */
 function PhoneScene(props: {
   readonly scene: OnboardingPhoneSceneId;
   readonly reducedMotion: boolean;
@@ -158,10 +127,8 @@ function PhoneScene(props: {
   }
   return (
     <>
-      {/* The panels cover the header exactly as the real overlays do. The
-          lesson still has its cause: the control sits spotlit through the
-          opening beat and a touch cue lands on it right before the panel
-          arrives, so what opened it is shown, not guessed. */}
+      {/* The lesson still has its cause: the control sits spotlit through the opening beat and a touch cue lands on
+         it right before the panel arrives, so what opened it is shown, not guessed. */}
       <PhoneHeader
         title={TASKS[0]}
         spotlight={scene === "drawer" ? "menu" : "switcher"}
@@ -176,10 +143,8 @@ function PhoneScene(props: {
   );
 }
 
-/**
- * Mirrors `MobileAppHeader`'s composition: hamburger, surface title, then the
- * right cluster of global controls with the switcher trigger ahead of the bell.
- */
+/** Mirrors `MobileAppHeader`'s composition: hamburger, surface title, then the right cluster of global controls
+ * with the switcher trigger ahead of the bell. */
 function PhoneHeader(props: {
   readonly title: string;
   readonly spotlight: HeaderGlyphId | null;
@@ -187,9 +152,8 @@ function PhoneHeader(props: {
   return (
     <header className="relative flex h-9 shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']">
       <HeaderGlyph id="menu" icon={Menu} spotlit={props.spotlight === "menu"} />
-      {/* On a frame too small to fit a legible title, the glyphs carry the
-          header alone - a title truncated to two letters teaches nothing. The
-          outer span stays as the flexible spacer either way. */}
+      {/* On a frame too small to fit a legible title, the glyphs carry the header alone - a title truncated to two
+         letters teaches nothing. */}
       <span className="min-w-0 flex-1 truncate text-ui-xs font-medium text-foreground">
         <span className="hidden @min-[11rem]:inline">{props.title}</span>
       </span>
@@ -205,10 +169,7 @@ function PhoneHeader(props: {
   );
 }
 
-/**
- * A header control. The spotlight reuses the desktop diorama's grammar — a
- * primary hairline ring plus a soft primary bloom, cross-faded over 500ms.
- */
+/** A header control. */
 function HeaderGlyph(props: {
   readonly id: HeaderGlyphId;
   readonly icon: LucideIcon;
@@ -233,11 +194,7 @@ function HeaderGlyph(props: {
   );
 }
 
-/**
- * The single full-screen tile a phone shows: one chat, one composer. The nav
- * scenes stretch it under their overlays; the gesture scene parks it in a
- * horizontal track, so the caller owns its sizing.
- */
+/** The single full-screen tile a phone shows: one chat, one composer. */
 function PhoneTaskScreen(props: { readonly className: string }) {
   return (
     <div
@@ -261,11 +218,8 @@ function PhoneTaskScreen(props: { readonly className: string }) {
   );
 }
 
-/**
- * The finger that summons a panel: a touch cue lands on the spotlit control
- * just before the panel opens, so the panel reads as an effect with a shown
- * cause. Plays once on mount and ends invisible, under the arriving panel.
- */
+/** The finger that summons a panel: a touch cue lands on the spotlit control just before the panel opens, so
+ * the panel reads as an effect with a shown cause. */
 function PanelTapCue(props: { readonly control: HeaderGlyphId }) {
   return (
     <m.span
@@ -459,7 +413,6 @@ function SwitcherTab(props: {
   );
 }
 
-/** Dims the whole screen, header included, the way the real overlays do. */
 function PhoneScrim(props: {
   readonly revealed: boolean;
   readonly reducedMotion: boolean;
@@ -475,13 +428,7 @@ function PhoneScrim(props: {
   );
 }
 
-/**
- * The agent story, one column deep. The desktop plays the same script across
- * three panes; a phone has one, so Codex's beats stay chat bubbles and the two
- * terminal agents fold into the same column as compact lines and pills. Every
- * beat, label and cadence comes from `onboarding-story-script.ts` — the two
- * platforms tell one story.
- */
+/** The agent story, one column deep. */
 function StoryChatScene(props: { readonly reducedMotion: boolean }) {
   const { reducedMotion } = props;
   // Mounted only while this scene is on screen, so the script always runs.
@@ -520,7 +467,6 @@ function StoryChatScene(props: { readonly reducedMotion: boolean }) {
   );
 }
 
-/** One beat: a Codex bubble, a terminal tick, or a folded-in agent pill. */
 function StoryBeatRow(props: {
   readonly beat: StoryBeat;
   readonly reducedMotion: boolean;
@@ -556,14 +502,7 @@ function StoryBeatRow(props: {
   );
 }
 
-/**
- * Codex's own beats, in the desktop `GuiMessage` grammar: the human right and
- * solid, an outgoing handoff right with a "to <agent>" kicker, a spec chip, and
- * everything received left. The one departure is the received fill — the
- * desktop bubble takes a `muted-fill-ok` waiver because its pane is literally
- * `bg-canvas`; a phone screen is not guaranteed to be, so it uses the
- * sanctioned foreground alpha instead.
- */
+/** Phone screen is not guaranteed to be `bg-canvas`, so received bubbles use foreground alpha instead of muted. */
 function StoryGuiBubble(props: {
   readonly kind: StoryKind;
   readonly text: string;
@@ -647,11 +586,8 @@ function StoryGuiBubble(props: {
   );
 }
 
-/**
- * A terminal agent's own progress — the beats the desktop draws inside a TUI
- * body. With no pane to put them in, they read as thin ticks in the column:
- * green for work done, yellow for the beat that blocks the run.
- */
+/** With no pane to put them in, they read as thin ticks in the column: green for work done, yellow for the beat
+ * that blocks the run. */
 function StoryAgentTick(props: {
   readonly pane: "claude" | "opencode";
   readonly kind: "term" | "blocked";
@@ -680,12 +616,7 @@ function StoryAgentTick(props: {
   );
 }
 
-/**
- * A terminal agent speaking to another agent: the folded-in handoff pill.
- * Deliberately the same quiet fill as every other received bubble - the
- * harness icon and name kicker identify the speaker, so the bubble itself
- * carries no accent border or colour of its own.
- */
+/** A terminal agent speaking to another agent: the folded-in handoff pill. */
 function StoryAgentPill(props: {
   readonly pane: "claude" | "opencode";
   readonly text: string;
@@ -716,11 +647,8 @@ function StoryAgentPill(props: {
   );
 }
 
-/**
- * Whether the scene's panel has arrived. Reduced motion starts settled — the
- * drawer open, the sheet up — so the frame never animates and never sits on a
- * pre-reveal state the user would read as the finished picture.
- */
+/** Reduced motion starts settled - the drawer open, the sheet up - so the frame never animates and never sits
+ * on a pre-reveal state the user would read as the finished picture. */
 function useRevealed(reducedMotion: boolean): boolean {
   const [revealed, setRevealed] = useState(false);
   useEffect(() => {
@@ -731,7 +659,6 @@ function useRevealed(reducedMotion: boolean): boolean {
   return reducedMotion || revealed;
 }
 
-/** The active row / category, advancing on a fixed cadence. */
 function useCyclingIndex(count: number, reducedMotion: boolean): number {
   const [index, setIndex] = useState(0);
   useEffect(() => {

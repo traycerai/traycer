@@ -10,11 +10,7 @@ import {
 } from "../model-slug-resolution";
 import type { GuiAgentModelOption } from "../unary-schemas";
 
-/**
- * Minimal row builder. Only the fields resolution actually reads matter
- * (slug, metadata.resolvedModel, harnessId); the rest are schema-shaped
- * placeholders so fixtures stay valid GuiAgentModelOption values.
- */
+/** Minimal row builder. */
 function model(
   partial: Pick<GuiAgentModelOption, "slug" | "harnessId"> & {
     resolvedModel?: string | null | undefined;
@@ -47,7 +43,7 @@ function model(
 
 /**
  * Real measured Claude catalog (5 rows). `default` and `opus[1m]` DUPLICATE
- * their resolvedModel — that duplication is why the ambiguous flag exists.
+ * their resolvedModel - that duplication is why the ambiguous flag exists.
  */
 const CLAUDE_CATALOG: readonly GuiAgentModelOption[] = [
   model({
@@ -97,10 +93,8 @@ describe("resolveModelBySlug", () => {
   });
 
   it("exact match beats alias even when a later slug equals an earlier resolvedModel", () => {
-    // Load-bearing ordering, not a preference: pass 1 (exact slug) must win
-    // over pass 2 (resolvedModel alias). Fixture: earlier row's resolvedModel
-    // equals a later row's slug — exact on the later slug must return that
-    // later row, not the earlier alias.
+    // Load-bearing ordering, not a preference: pass 1 (exact slug) must win over pass 2 (resolvedModel alias).
+    // Fixture: earlier row's resolvedModel equals a later row's slug - exact on the later slug must return that later row, not the earlier alias.
     const earlier = model({
       harnessId: "claude",
       slug: "pointer",
@@ -129,10 +123,8 @@ describe("resolveModelBySlug", () => {
   });
 
   it("DEFENSIVE: rows with no resolvedModel fall back to exact-only matching", () => {
-    // Pins a defensive branch. All five rows in the measured Claude catalog
-    // carried `resolvedModel` on both probed CLI versions, so no live catalog
-    // exercises the absent-metadata path. Without the key, a canonical-id
-    // lookup that would otherwise alias-match must return none.
+    // Pins a defensive branch.
+    // Without the key, a canonical-id lookup that would otherwise alias-match must return none.
     const bare = model({
       harnessId: "claude",
       slug: "bare-slug",
@@ -151,11 +143,7 @@ describe("resolveModelBySlug", () => {
   });
 
   it("returns none for a persisted decorated slug whose decoration later changed", () => {
-    // KNOWN, deliberately-unfixed gap — not a bug to "fix".
-    // Persisted "opus[1m]" when the catalog used to offer that decorated slug;
-    // catalog now offers undecorated "opus" with resolvedModel "claude-opus-5".
-    // Exact fails (slug gone). Alias fails (resolvedModel is the canonical
-    // wire id, not the old decorated slug). Resolution returns none.
+    // KNOWN, deliberately-unfixed gap - not a bug to "fix".
     const evolvedCatalog = [
       model({
         harnessId: "claude",
@@ -175,9 +163,8 @@ describe("resolveModelBySlug", () => {
 
 describe("modelMatchIsCovered", () => {
   it("counts an alias match as covered, ambiguous or not, and none as uncovered", () => {
-    // Coverage is "is this selection valid?", not "may I rewrite it?". A held
-    // alias must still count as covered, or every downstream write keyed on
-    // this answer is suppressed for a model that renders and runs fine.
+    // Coverage is "is this selection valid?", not "may I rewrite it?".
+    // A held alias must still count as covered, or every downstream write keyed on this answer is suppressed for a model that renders and runs fine.
     const exact = resolveModelBySlug(CLAUDE_CATALOG, "sonnet");
     expect(modelMatchIsCovered(exact)).toBe(true);
 
@@ -213,11 +200,11 @@ describe("readableModelMatch", () => {
 describe("aliasTieDisagreement", () => {
   it("returns false when tied rows agree, true when they disagree, false for non-ambiguous", () => {
     const ambiguous = resolveModelBySlug(CLAUDE_CATALOG, "claude-opus-5[1m]");
-    // Both default and opus[1m] share the same resolvedModel — agree on that.
+    // Both default and opus[1m] share the same resolvedModel - agree on that.
     expect(
       aliasTieDisagreement(ambiguous, (row) => modelResolvedModel(row)),
     ).toBe(false);
-    // Slugs differ — disagree.
+    // Slugs differ - disagree.
     expect(aliasTieDisagreement(ambiguous, (row) => row.slug)).toBe(true);
 
     const exact = resolveModelBySlug(CLAUDE_CATALOG, "sonnet");

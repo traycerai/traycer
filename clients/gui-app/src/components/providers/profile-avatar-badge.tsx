@@ -11,11 +11,8 @@ interface ProfileAvatarBadgeProps {
   readonly className: string | undefined;
 }
 
-/**
- * Initials badge for a provider profile (subscription), colored with its
- * deterministic accent (`resolveProfileAccentColor`). Shared by the provider
- * picker rail and the chat profile-anchor display.
- */
+/** Initials badge for a provider profile (subscription), colored with its deterministic accent
+ * (`resolveProfileAccentColor`). */
 export function ProfileAvatarBadge(props: ProfileAvatarBadgeProps) {
   const { profileId, label, email, accentColor, size, className } = props;
   const color = resolveProfileAccentColor(profileId, accentColor);

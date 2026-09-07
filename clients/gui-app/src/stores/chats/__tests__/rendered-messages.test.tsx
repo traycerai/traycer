@@ -34,9 +34,8 @@ import {
   parseTaskTodoToolPayloads,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 
-// Mirror the host accumulator: a persisted tool_call/approval block carries
-// precomputed display fields, not the raw input. Computed via the same protocol
-// helpers so block fixtures match what the host writes.
+// Mirror the host accumulator: a persisted tool_call/approval block carries precomputed display
+// fields, not the raw input.
 function toolCallInputFields(toolName: string, input: unknown) {
   return {
     inputSummary: deriveToolInputSummary(toolName, input),
@@ -68,9 +67,7 @@ const SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
-// Chat-tile binding identity required by every `RenderedMessagesInput`. Stable
-// across renders in real usage, so it's a shared constant spread into each
-// fixture; the setup-card integration tests below exercise it directly.
+// Chat-tile binding identity required by every `RenderedMessagesInput`.
 const BINDING = {
   epicId: "epic-1",
   ownerId: "owner-1",
@@ -96,9 +93,8 @@ function userMessage(messageId: string): Extract<Message, { role: "user" }> {
   };
 }
 
-// `userMessage` derives its timestamp from the id length (~1000s), so it can't
-// sort after an assistant turn. Use this when a send must land later in time
-// (e.g. a mid-chat worktree-creating send issued after an earlier exchange).
+// `userMessage` derives its timestamp from the id length (~1000s), so it can't sort after an assistant
+// turn. Use this when a send must land later in time (e.g.
 function userMessageAt(
   messageId: string,
   timestamp: number,
@@ -391,13 +387,8 @@ const displayContext: RenderedMessagesDisplayContext = {
 };
 
 /**
- * Domain-local RenderedMessages test driver.
- *
- * Owns the canonical input defaults (binding identity + empty/idle fields)
- * so scenarios only declare the deltas that matter for the behavior under
- * test. Prefer renderRenderedMessages(patch) over hand-rolled renderHook
- * plus full binding/default objects. For multi-step cases, patch merges
- * onto the current input and re-renders without re-stating defaults.
+ * Domain-local RenderedMessages test driver. Owns the canonical input defaults (binding identity +
+ * empty/idle fields) so scenarios only declare the deltas that matter for the behavior under test.
  */
 const CANONICAL_RENDERED_MESSAGES_INPUT: RenderedMessagesInput = {
   messages: [],
@@ -535,9 +526,7 @@ describe("useRenderedMessages", () => {
   });
 
   it("does not render a content-less plan block even when it carries actions and an approvalId", () => {
-    // A plan only renders once it carries content (markdownPreview / steps /
-    // fullContentRef). A status-only block - here `awaiting_approval` with
-    // actions + an approvalId but no body - must NOT surface as a blank card.
+    // A plan only renders once it carries content (markdownPreview / steps / fullContentRef).
     const assistant = assistantMessage("turn-empty-actionable-plan", 2000);
     const planBlock = {
       type: "plan",
@@ -780,9 +769,8 @@ describe("useRenderedMessages", () => {
     const driver = renderRenderedMessages(initial);
     const first = driver.result.current;
 
-    // Replace `u2` with a new reference (simulating the streaming-row
-    // replaceMessageAt path). `u1` reference is preserved so its cached
-    // model survives.
+    // Replace `u2` with a new reference (simulating the streaming-row replaceMessageAt path). `u1`
+    // reference is preserved so its cached model survives.
     const u2Replaced = userMessage("m2");
     driver.patch({ messages: [u1, u2Replaced] });
     const second = driver.result.current;
@@ -883,9 +871,8 @@ describe("useRenderedMessages", () => {
     const { result } = renderRenderedMessages({
       messages: [a],
     });
-    // `provider` comes from the sender's harnessId; the labels come from the
-    // display context; reasoningEffort/serviceTier flow from the persisted
-    // message through the turn accumulator.
+    // `provider` comes from the sender's harnessId; the labels come from the display context;
+    // reasoningEffort/serviceTier flow from the persisted message through the turn accumulator.
     expect(result.current[0]?.assistantMeta).toEqual({
       provider: "claude",
       providerLabel: "Claude Code",
@@ -925,10 +912,6 @@ describe("useRenderedMessages", () => {
   });
 
   it("takes the session anchor from the projection when the anchoring user row is cold", () => {
-    // The running `currentAnchor` walk is exactly the "look at the rows around
-    // this one" derivation a bounded window cannot make: hydrate the assistant
-    // turn alone and the walk starts with nothing, so the saved profile label
-    // disappears from a turn that had one. The host carries the anchor it used.
     const withoutContext = renderRenderedMessages({
       messages: [assistantMessage("turn-cold-anchor", 2000)],
     });
@@ -953,11 +936,7 @@ describe("useRenderedMessages", () => {
   });
 
   it("anchors a legacy turn's elapsed counter on the projection's own anchor", () => {
-    // A turn persisted before `startedAt` existed takes its anchor from the
-    // preceding user record. A span that does not reach that record leaves the
-    // walk's `lastUserTimestamp` null, and the anchor collapses onto the
-    // assistant record's COMPLETION stamp - a row whose elapsed time reads
-    // zero. The projection carries the anchor it actually used.
+    // A turn persisted before `startedAt` existed takes its anchor from the preceding user record.
     const legacy: Extract<Message, { role: "assistant" }> = {
       ...assistantMessage("turn-legacy-anchor", 9000),
       startedAt: null,
@@ -1420,9 +1399,8 @@ describe("useRenderedMessages", () => {
     const providerNoticeBlock = (title: string) => ({
       type: "text" as const,
       blockId: "text-1",
-      // Fixed fallback text: only the enriched notice fields change below, so
-      // `block.text.length` alone (the ordinary text-block signature) would
-      // NOT catch this update.
+      // Fixed fallback text: only the enriched notice fields change below, so `block.text.length` alone
+      // (the ordinary text-block signature) would NOT catch this update.
       text: "Notice.",
       status: "completed" as const,
       timestamp: 2001,
@@ -1769,10 +1747,8 @@ describe("useRenderedMessages", () => {
           imageResults: [],
         },
         {
-          // The resume trigger's blockId targets the subagent itself, but in
-          // raw block order the immediately preceding block is the child tool
-          // call nested under it - the scenario suppressRedundantResumeMarkers
-          // must catch by comparing against the visible (post-nesting) order.
+          // The resume trigger's blockId targets the subagent itself, but in raw block order the immediately
+          // preceding block is the child tool call nested under it - the scenario
           type: "autonomous_resume",
           blockId: "resume-1",
           status: "completed",
@@ -2032,9 +2008,8 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
-          // Modeling a block persisted before `stopped` existed - the legacy
-          // string-prefix error is the only signal, parsed false per the
-          // schema default. Exercises the GUI's fallback sniff.
+          // Modeling a block persisted before `stopped` existed - the legacy string-prefix error is the only
+          // signal, parsed false per the schema default. Exercises the GUI's fallback sniff.
           stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
@@ -2247,9 +2222,6 @@ describe("useRenderedMessages", () => {
           spawnToolCallId: null,
           stopped: false,
           workflowMeta: null,
-          // References a parent id never present in this turn's blocks (the
-          // owning subagent.started was dropped/never arrived) - the fallback
-          // is honest top-level placement, never vanishing or misattaching.
           parentBlockId: "agent-missing",
         },
       ],
@@ -2276,10 +2248,8 @@ describe("useRenderedMessages", () => {
   });
 
   it("keeps a nested child attached across a parent name re-emit", () => {
-    // `timestamp` must advance with the rename, exactly as a real host re-emit
-    // always bumps it - otherwise the per-turn render cache (keyed on each
-    // block's blockId/type/status/timestamp) reuses the stale model and the
-    // test would pass or fail for the wrong reason.
+    // `timestamp` must advance with the rename, exactly as a real host re-emit always bumps it -
+    // otherwise the per-turn render cache (keyed on each block's blockId/type/status/timestamp) reuses
     const buildAssistant = (
       parentName: string,
       timestamp: number,
@@ -2525,9 +2495,7 @@ describe("useRenderedMessages", () => {
       (message) => message.role === "user",
     );
 
-    // A streamed delta: same `messages` reference, a brand-new live row object
-    // with one more token. The live turn has no persisted assistant message, so
-    // the persisted render must NOT re-derive - the user row keeps its identity.
+    // A streamed delta: same `messages` reference, a brand-new live row object with one more token.
     driver.patch({
       liveAssistantMessage: {
         turnId: "turn-1",
@@ -2784,9 +2752,8 @@ describe("useRenderedMessages", () => {
       events: [checkpointEvent(manifest), checkpointEvent(laterManifest)],
     });
 
-    // The aggregate file_change_group is appended at the END of the
-    // assistant message; inline file_change segments stay flat in their
-    // conversational position for display-time grouping.
+    // The aggregate file_change_group is appended at the END of the assistant message; inline
+    // file_change segments stay flat in their conversational position for display-time grouping.
     const segments = result.current[0]?.segments ?? [];
     const group = segments[segments.length - 1];
 
@@ -2799,9 +2766,7 @@ describe("useRenderedMessages", () => {
   });
 
   it("detects a later overlapping change across an intervening unrelated turn", () => {
-    // turn-1 edits app.ts, turn-2 edits an unrelated file, turn-3 edits app.ts
-    // again. The overlap for turn-1 is non-adjacent (it is separated from the
-    // later touch by turn-2), so the warning must still surface.
+    // turn-1 edits app.ts, turn-2 edits an unrelated file, turn-3 edits app.ts again.
     const manifest = checkpointManifest("turn-1", "/repo/src/app.ts");
     const unrelatedManifest = checkpointManifest(
       "turn-2",
@@ -3192,7 +3157,7 @@ describe("useRenderedMessages fork link integration", () => {
         forkEvent({
           eventId: "fork-bad",
           timestamp: 2500,
-          // Missing sourceChatId — required field absent → row skipped
+          // Missing sourceChatId - required field absent → row skipped
           metadata: {
             sourceChatTitle: "Some chat",
             sourceHostId: "source-host-1",
@@ -3410,10 +3375,8 @@ describe("useRenderedMessages setup card integration", () => {
       ],
     });
 
-    // The genesis card is PINNED first - above the first user message (m1,
-    // createdAt 1002) - regardless of its (late) genesis timestamp (1500). The
-    // id carries the window ordinal (0) before the genesis so two windows can
-    // never collide on the React/virtualizer key.
+    // The genesis card is PINNED first - above the first user message (m1, createdAt 1002) -
+    // regardless of its (late) genesis timestamp (1500).
     expect(result.current.map((message) => message.id)).toEqual([
       "setup-card:owner-1:0:1500",
       "m1",
@@ -3521,11 +3484,8 @@ describe("useRenderedMessages setup card integration", () => {
         assistantMessage("turn-1", 6000),
       ],
       events: [
-        // The card is announced (`setup.creating`) BEFORE the slow git
-        // worktree add, but its server `createdAt` (5000) lands AFTER the
-        // triggering message's stamp (1011) - the clock-skew / persisted-
-        // later case. A pure createdAt sort would drop the card BELOW
-        // `trigger-msg`; the messageId anchor keeps it directly ABOVE.
+        // The card is announced (`setup.creating`) BEFORE the slow git worktree add, but its server
+        // `createdAt` (5000) lands AFTER the triggering message's stamp (1011) - the clock-skew /
         setupEvent({
           eventId: "creating",
           type: "setup.creating",
@@ -3685,10 +3645,8 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("shows the pre-turn Working indicator when a running setup was reset by worktree.missing", () => {
-    // Regression: a `setup.running` closed by `worktree.missing` (worktree
-    // vanished mid-setup) strands a historical card at `setting-up`. Because the
-    // window is closed it reads inactive, so it must NOT suppress the indicator
-    // for a later normal turn - only the LIVE lifecycle gates.
+    // Regression: a `setup.running` closed by `worktree.missing` (worktree vanished mid-setup) strands
+    // a historical card at `setting-up`.
     const { result } = renderRenderedMessages({
       events: [
         setupEvent({
@@ -3721,11 +3679,8 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("suppresses the Working indicator while a multi-repo window has a failed and a still-setting-up repo", () => {
-    // F3b regression: the rollup ranks `failed` above `setting-up`, so a
-    // multi-repo window with one failed + one in-flight repo rolls up to
-    // `failed`. Suppression must key off any-workspace-setting-up, NOT the
-    // aggregate, so the live card still stands in for the awaited turn (no
-    // duplicate "Working…" beside it).
+    // F3b regression: the rollup ranks `failed` above `setting-up`, so a multi-repo window with one
+    // failed + one in-flight repo rolls up to `failed`.
     const { result } = renderRenderedMessages({
       events: [
         setupEvent({
@@ -3941,10 +3896,8 @@ describe("useRenderedMessages head/tail partition", () => {
     expect(steeredRows[0]?.steerBadge).not.toBeNull();
   });
 
-  // An ORPHANED steer block - one whose steered user row is absent from
-  // `messages` - falls back to rendering the block's own content. These three
-  // pin the provenance of that fallback: it is the only thing standing between
-  // an agent-to-agent message and a bubble that looks like the user typed it.
+  // An ORPHANED steer block - one whose steered user row is absent from `messages` - falls back to
+  // rendering the block's own content.
   const AGENT_STEER_SENDER: UserMessageSender = {
     type: "agent",
     harnessId: "claude",
@@ -4063,9 +4016,8 @@ describe("useRenderedMessages head/tail partition", () => {
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
     expect(row?.segments.some((s) => s.kind === "text")).toBe(true);
-    // Auth errors render like any other error: suppressing them made headless
-    // (A2A-triggered) auth failures invisible once the transient re-auth
-    // banner cleared.
+    // Auth errors render like any other error: suppressing them made headless (A2A-triggered) auth
+    // failures invisible once the transient re-auth banner cleared.
     const errorSegments = row?.segments.filter((s) => s.kind === "error") ?? [];
     expect(errorSegments.map((segment) => segment.code)).toEqual([
       "auth",
@@ -4314,9 +4266,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    // A fatal connection close clears the active turn while the provider may
-    // still be running: turn.started exists, its terminal event does not. A
-    // start alone must not fabricate a "Resumed · no response · 0s" footer.
+    // A fatal connection close clears the active turn while the provider may still be running:
+    // turn.started exists, its terminal event does not.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
       events: [
@@ -4379,9 +4330,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     });
 
-    // The first response block must not switch the turn back to the
-    // pre-resume persisted start - the elapsed interval stays the provider
-    // window.
+    // The first response block must not switch the turn back to the pre-resume persisted start - the
+    // elapsed interval stays the provider window.
     const row = result.current.find((message) => message.role === "assistant");
     expect(row).toMatchObject({
       createdAt: 10_000,
@@ -4409,10 +4359,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    // Safe-point steering continuations reuse the turnId, so the turn can
-    // carry a pre-steer turn.started. The resumed attempt is the LATEST
-    // window; collapsing starts to their minimum would stretch the silent
-    // resume's elapsed across both attempts.
+    // Safe-point steering continuations reuse the turnId, so the turn can carry a pre-steer
+    // turn.started.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant, steeredUser],
       events: [
@@ -4485,9 +4433,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    // Attempt 1 pauses 8.5s → 9s; the resumed attempt (13s → 15s) pauses
-    // 13.5s → 14s. Only the in-window wait may subtract from the resumed
-    // attempt's duration.
+    // Attempt 1 pauses 8.5s → 9s; the resumed attempt (13s → 15s) pauses 13.5s → 14s. Only the
+    // in-window wait may subtract from the resumed attempt's duration.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
       events: [
@@ -4545,11 +4492,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    // The reused turnId completed an attempt BEFORE the notification was
-    // persisted, and the provider never started again. That window predates
-    // the divider it would prove adopted - the row must stay a footerless
-    // notification instead of rendering "Resumed · no response" with the
-    // stale window's timing.
+    // The reused turnId completed an attempt BEFORE the notification was persisted, and the provider
+    // never started again.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
       events: [
@@ -4596,9 +4540,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    // The host stamps the divider before launching the adopting provider
-    // turn, so a same-millisecond `turn.started` is the resumed attempt, not
-    // pre-resume history.
+    // The host stamps the divider before launching the adopting provider turn, so a same-millisecond
+    // `turn.started` is the resumed attempt, not pre-resume history.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
       events: [
@@ -4645,9 +4588,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    // A stale open window from before the notification (a connection close
-    // never delivered the terminal event) must not adopt the live timer -
-    // unlike a start AFTER the divider, which legitimately seeds it.
+    // A stale open window from before the notification (a connection close never delivered the
+    // terminal event) must not adopt the live timer - unlike a start AFTER the divider, which
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
       events: [
@@ -4920,12 +4862,7 @@ describe("useRenderedMessages turn.stopped", () => {
   });
 
   it("stamps the stopped marker even when the turn's last segment is an error", () => {
-    // A turn can carry an in-flight failure (e.g. a tool error) and still end
-    // via a user Stop rather than the error itself terminating the turn - the
-    // host resolves to `turn.stopped` whenever a stop was requested, even from
-    // its catch-block path. The derivation must not let error content suppress
-    // the marker; the error-vs-stopped precedence is a UI-layer decision
-    // (`shouldShowElapsedFooter`), not a derivation-layer one.
+    // A turn can carry an in-flight failure (e.g.
     const assistant = {
       ...assistantMessage("turn-1", 10_000),
       timestamp: 15_000,
@@ -5189,9 +5126,8 @@ describe("useRenderedMessages turn.stopped", () => {
       // The turn DID produce output (the text chunk above the steer) even
       // though this specific boundary row's own segments are empty.
       turnHadOutput: true,
-      // The turn's copyable reply text, aggregated from the text chunk
-      // above the steer even though this boundary row's own segments are
-      // empty - the copy control needs somewhere to source it from.
+      // The turn's copyable reply text, aggregated from the text chunk above the steer even though this
+      // boundary row's own segments are empty - the copy control needs somewhere to source it from.
     });
     expect(
       collectAssistantReplyText(trailingRow?.stopped?.turnReplySegments ?? []),
@@ -5226,9 +5162,8 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     });
 
-    // Before the fix, a steer-only turn produced no assistant row at all, so
-    // neither "Stopped · …" nor "Stopped before responding" had anywhere to
-    // render.
+    // Before the fix, a steer-only turn produced no assistant row at all, so neither "Stopped · …" nor
+    // "Stopped before responding" had anywhere to render.
     const assistantRows = result.current.filter(
       (row) => row.role === "assistant",
     );
@@ -5417,9 +5352,7 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(stoppedAfter?.stopped).not.toBeNull();
   });
   it("merges a multi-record turn without mutating the source record's blocks", () => {
-    // The accumulator now ALIASES the first record's block array and clones
-    // only on the first append. If that clone-on-write is ever lost, merging
-    // a sibling record would grow the persisted record's own array in place.
+    // The accumulator now ALIASES the first record's block array and clones only on the first append.
     const first = {
       ...assistantMessage("turn-merge", 2000),
       messageId: "record-1",
@@ -5453,10 +5386,8 @@ describe("useRenderedMessages turn.stopped", () => {
 });
 describe("assistant turn render cache invalidation", () => {
   it("re-renders a single-record turn whose blocks are replaced at the same blocksVersion", () => {
-    // An authoritative snapshot can rebuild a record with the SAME messageId,
-    // timestamp and persisted counter (counters restart at 0 on a rebuild).
-    // Keying on the counter alone then serves the previous render forever and
-    // the transcript stays visibly frozen at the older content.
+    // An authoritative snapshot can rebuild a record with the SAME messageId, timestamp and persisted
+    // counter (counters restart at 0 on a rebuild).
     const first = assistantMessage("turn-1", 10_000);
     const firstRecord = {
       ...first,

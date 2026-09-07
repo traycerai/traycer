@@ -18,29 +18,15 @@ const ALL_HOSTS_LABEL = "All hosts";
 
 export interface UsageHostFilterProps {
   readonly options: readonly UsageHostFilterOption[];
-  /** `null` = All hosts. */
   readonly hostId: string | null;
   readonly onChange: (hostId: string | null) => void;
-  /**
-   * The read is being served by the LOCAL plane, which only holds this
-   * machine's own executions - so there is no cross-host total to filter
-   * and the control states that instead of offering a choice it cannot
-   * honor. `null` while no response has arrived yet.
-   */
+  /** The read is being served by the local plane, which only holds this machine's own executions - so there is no
+   * cross-host total to filter and the control states that instead of offering a choice it cannot honor. */
   readonly pinnedToHostName: string | null;
 }
 
-/**
- * The dashboard's host scope: "All hosts" by default on the cloud plane, one
- * host when picked.
- *
- * On `servedBy: "local"` this is NOT a disabled dropdown. A greyed-out
- * picker says "you may not choose"; the truth is that there is nothing to
- * choose BETWEEN, because that plane can only ever see the machine it runs
- * on. So the control becomes a plain readout naming that machine, in the
- * same honest-state vocabulary the rest of this surface uses - a statement
- * of scope, not a blocked action.
- */
+/** So the control becomes a plain readout naming that machine, in the same honest-state vocabulary the rest of
+ * this surface uses - a statement of scope, not a blocked action. */
 export function UsageHostFilter(props: UsageHostFilterProps): ReactNode {
   if (props.pinnedToHostName !== null) {
     return (

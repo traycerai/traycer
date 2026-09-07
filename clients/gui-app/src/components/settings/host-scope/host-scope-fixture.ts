@@ -3,19 +3,7 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 
-/**
- * A lease for one host, for suites that drive `buildHostScopeOptions` directly.
- *
- * TAKES THE HOST ID AS ITS FIRST ARGUMENT, deliberately and unavoidably. The
- * builder looks each row's lease up BY ID, and sealed probe P12 showed what a
- * fixture that hides that costs: degrading `useHostLease`'s `find(hostId)` to
- * `leases[0]` SURVIVED its probe, because every suite seeded exactly one lease
- * and a wrong-host answer was indistinguishable from a right one. A helper
- * that defaulted the id would rebuild that blind spot here, one layer down.
- *
- * Any assertion about lease-derived health owes at least two hosts with
- * DIFFERENT verdicts; `host-scope-model.test.ts` carries that pin.
- */
+/** A helper that defaulted the id would rebuild that blind spot here, one layer down. */
 export function hostLeaseFixture(
   hostId: string,
   dead: HostLeaseSnapshot["dead"],
@@ -25,18 +13,8 @@ export function hostLeaseFixture(
     : { hostId, status: "dead", dead };
 }
 
-/**
- * A ready `HostScope` for panel tests.
- *
- * Panels depend on the SCOPE, not on the six hooks it composes, so tests mock
- * at that boundary. Reaching through to `useRegisteredHosts` /
- * `useHostDirectoryList` / `useRunnerHost` in every panel suite would couple
- * each of them to the scope's internals and break them all again the next time
- * the scope grows a data source.
- *
- * Lives outside `__tests__/` so suites in sibling directories can import it
- * without reaching into another folder's test-only tree.
- */
+/** Lives outside `__tests__/` so suites in sibling directories can import it without reaching into another
+ * folder's test-only tree. */
 export function hostScopeOptionFixture(
   overrides: Partial<HostScopeOption> & { readonly hostId: string },
 ): HostScopeOption {
@@ -64,18 +42,7 @@ export function hostScopeOptionFixture(
   };
 }
 
-/**
- * NOTE ON THE DEFAULT SHAPE: `status: "following"` with `client: null` is not a
- * state production can reach — `following` means the ambient client IS the
- * scoped host's, so it is never null there. It is the default here because
- * panel suites mock their own host hooks and never read `scope.client`, so
- * supplying a real `HostClient` would be ceremony with no assertion behind it.
- *
- * The consequence is that NO panel suite proves the status/client pairing.
- * That pairing is the safety contract, so it is covered where it is actually
- * derived — see `__tests__/use-host-scope-status.test.ts` — rather than being
- * implied by a fixture that cannot fail.
- */
+/** NOTE ON the default shape: `status: "following"` with `client: null` is not a */
 export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
   const host =
     overrides.host === undefined
@@ -91,15 +58,12 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     activeHostId: host?.hostId ?? null,
     activeHost: host,
     isViewingActive: true,
-    // The default status FOLLOWS the host rather than being pinned. Pinning it
-    // to "following" meant `host: null` produced a scope claiming to follow a
-    // host that does not exist — a state production cannot reach — and panels
-    // tested against it took branches they never take in the app.
+    // Pinning it to "following" meant `host: null` produced a scope claiming to follow a host that does not exist
+    // - a state production cannot reach - and panels tested against it took branches they never take in the app.
     status: host === null ? "unreachable" : "following",
     client: null,
-    // False by default for the same reason `client` is null: a suite about
-    // the fallback lane must say so explicitly, and every other suite keeps
-    // the plain-RPC branches production takes on a current host.
+    // False by default for the same reason `client` is null: a suite about the fallback lane must say so
+    // explicitly, and every other suite keeps the plain-RPC branches production takes on a current host.
     localMaintenanceFallback: false,
     setHostId: () => undefined,
     makeActive: () => undefined,
@@ -112,21 +76,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
   };
 }
 
-/**
- * A resolved `HostOptions` for suites that render a picker but are not about
- * the host LIST.
- *
- * It exists because unifying the pickers moved every surface from a narrow,
- * easily-stubbed directory query onto `useHostOptions`, which composes six
- * hooks (the runner host, the local service snapshot, the installed record,
- * both list queries, the plan gate). A suite that used to stub one hook now
- * has to stand up all of them — so it mocks at THIS boundary instead, exactly
- * as the panel suites mock `useHostScope` rather than its internals.
- *
- * A suite whose subject IS the merge belongs in `host-scope-model`'s tests,
- * where the real builder runs: a test that supplies this fixture can only
- * prove what the picker does with a list, never that the list is right.
- */
+/** A suite whose subject IS the merge belongs in `host-scope-model`'s tests, where the real builder runs. */
 export function hostOptionsFixture(
   overrides: Partial<HostOptions>,
 ): HostOptions {

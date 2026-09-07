@@ -10,39 +10,18 @@ import {
 import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 
 /**
- * How long a released, still-running plain terminal keeps its handle (and
- * therefore its live `terminal.subscribe` stream + warm xterm engine) before
- * the registry evicts it. Navigating away from the surface that mounted the
- * tile (landing page -> epic tab, epic -> epic) releases every lease; without
- * this window the stream is torn down immediately and coming back pays the
- * full reconnect cost - transport dial, re-subscribe, snapshot replay - as
- * seconds of blank terminal. Within the window a remount reacquires the same
- * handle and reattaches the same engine instantly. The host-side PTY runs
- * regardless; this only bounds how long the renderer keeps an attachment
- * nobody is looking at. Matches `DEFAULT_CHAT_IDLE_TTL_MS` so a tab switch
- * treats the chats and the terminals it hides identically.
+ * How long a released, still-running plain terminal keeps its handle (and therefore its live
+ * `terminal.subscribe` stream + warm xterm engine) before the registry evicts it.
  */
 export const PLAIN_TERMINAL_RELEASE_LINGER_MS = 10 * 60 * 1000;
 
-/**
- * Upper bound on lease-free lingering plain terminals held at once. The
- * linger window bounds retention in time; this bounds it in count, so cycling
- * through many terminal-bearing tabs inside one window cannot pin an unbounded
- * set of open streams and warm xterm engines. Oldest-released first. The
- * count-bounded pool is the lingering plain terminals only: lease-free
- * running terminal-agents live under their own indefinite keep-warm rule and
- * neither count toward nor get evicted by this cap (counting them would let N
- * running agents flush every lingering shell immediately). Mirrors
- * `DEFAULT_MAX_WARM_CHAT_SESSIONS`.
- */
+/** Upper bound on lease-free lingering plain terminals held at once. */
 export const MAX_LINGERING_PLAIN_TERMINALS =
   DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals;
 
 /**
- * Owner-scoped identity for warm-presentation lookup. Terminal sessions
- * always carry the bound owner `hostId`. `hostId: null` is the explicit
- * hostless/non-terminal compatibility path — never inferred from the
- * active or serving host.
+ * Owner-scoped identity for warm-presentation lookup. Terminal sessions always carry the bound
+ * owner `hostId`.
  */
 export type TerminalWarmSessionIdentity = {
   readonly hostId: string | null;
@@ -50,65 +29,22 @@ export type TerminalWarmSessionIdentity = {
 };
 
 /**
- * What this registry holds per tab instance: the handle, the owner host it was
- * acquired for, and the status subscription that evicts it once the session
- * becomes unreattachable.
- *
- * A record rather than the bare handle because the host is ACQUIRE-TIME
- * identity that the handle does not carry, and it has to live in the same book
- * as the entry it describes - a parallel `Map<instanceId, hostId>` is two
- * records of one fact, free to disagree the moment an entry is rekeyed or
- * evicted through a path that forgets it.
- *
- * It is deliberately NOT folded into the entry KEY (which is the tab instance
- * id alone): a different host under the same instance id would then read as a
- * different session, and the incumbent registry treats the host passed to a
- * repeat `acquire` as ignorable rather than as grounds for a rebuild.
+ * What this registry holds per tab instance: the handle, the owner host it was acquired for, and
+ * the status subscription that evicts it once the session becomes unreattachable.
  */
 interface TerminalRegistrySession {
   readonly handle: TerminalSessionStoreHandle;
   /** Bound owner host. `null` is the explicit hostless path. */
   readonly hostId: string | null;
-  /**
-   * Reaped and re-created on a rekey: the closure captures the instance id, so
-   * a subscription left under the old key would target an entry that no longer
-   * exists and the defunct handle would never be evicted.
-   */
   unsubscribeStatus: () => void;
 }
 
-/**
- * Every terminal entry shares one scope. The registry's scope key
- * discriminates REBUILDS within one identity, and this plane has no such
- * axis: a tab instance id names one session for its whole life, and the host
- * it is bound to is data on the entry rather than a rebuild trigger.
- */
+/** Every terminal entry shares one scope. */
 const TERMINAL_SESSION_SCOPE = "terminal";
 
 /**
- * Per-renderer registry for live `terminal.subscribe` sessions, lease-counted
- * so the same tab instance can mount in more than one place (a split-reparent
- * transition, StrictMode double-mount) without each remount tearing down the
- * underlying stream client. Mirrors `ChatSessionRegistry` in shape, scoped to a
- * single window - and now literally shares its mechanism: both, and the
- * open-epic registry, run on {@link createSessionRegistry}, with the three
- * policies that used to be three implementations expressed as this plane's
- * answers below.
- *
- * Entries are keyed by the per-tab `instanceId`, not the host `sessionId`, so
- * two tab instances of the SAME PTY/TUI session each get their own handle and
- * their own `TerminalStreamClient` subscribing to the shared session. The
- * host already fans `terminal.subscribe` out to many subscribers and replays
- * scrollback to each, so a second live view costs nothing host-side.
- *
- * Lease-free retention: a running terminal-agent is kept warm indefinitely
- * (its tab may reopen any time while the agent works); a running plain
- * terminal lingers for {@link PLAIN_TERMINAL_RELEASE_LINGER_MS} so a tab
- * switch away and back reattaches instantly, count-bounded by
- * {@link MAX_LINGERING_PLAIN_TERMINALS} (oldest-released evicted first);
- * exited sessions are disposed as soon as the last lease releases. This is
- * the terminal twin of `ChatSessionRegistry`'s warm pool, so hiding a tab
- * treats its chats and terminals identically.
+ * Per-renderer registry for live `terminal.subscribe` sessions, lease-counted so the same tab
+ * instance can mount in more than one place (a split-reparent transition, StrictMode double-mount)
  */
 export class TerminalSessionRegistry {
   private readonly sessions: SessionRegistry<TerminalRegistrySession>;
@@ -124,21 +60,18 @@ export class TerminalSessionRegistry {
           return getRetentionProfile().maxLingeringPlainTerminals;
         },
         warmCapScope: "demand-free",
-        // "The count-bounded pool is the lingering plain terminals only ...
-        // counting them would let N running agents flush every lingering shell
-        // immediately."
+        // "The count-bounded pool is the lingering plain terminals only ... counting them would let N
+        // running agents flush every lingering shell immediately."
         busyCountsTowardWarmCap: false,
-        // A running terminal-agent "is kept warm indefinitely (its tab may
-        // reopen any time while the agent works)", so it is not on a clock at
-        // all - the status subscription below is what collects it.
+        // A running terminal-agent "is kept warm indefinitely (its tab may reopen any time while the agent
+        // works)", so it is not on a clock at all - the status subscription below is what collects it.
         maxActiveDeferMs: null,
         // Ordered by release, which is what `releaseSequence` recorded.
         refreshOrderOnRelease: true,
         retainWhenIdle: ({ handle }) =>
           shouldKeepLeaseFree(handle) || shouldLingerLeaseFree(handle),
-        // "Busy" here is the indefinite keep-warm class: a running
-        // terminal-agent. A lingering plain terminal is not busy - it is warm
-        // on a clock.
+        // "Busy" here is the indefinite keep-warm class: a running terminal-agent. A lingering plain
+        // terminal is not busy - it is warm on a clock.
         hasActiveWork: ({ handle }) => shouldKeepLeaseFree(handle),
         // Nothing a terminal handle holds is lost by disposing it: the PTY runs
         // host-side and a reattach replays scrollback.
@@ -148,14 +81,8 @@ export class TerminalSessionRegistry {
           session.unsubscribeStatus();
           session.handle.dispose();
         },
-        // Attachment intent follows lease state, not session kind: a
-        // lease-free running terminal-agent (indefinite keep-warm) or
-        // lingering plain terminal must not claim attention.
-        // `terminal.subscribe@1.6` carries viewer only on the open frame, so
-        // this reopens as `cache`. A THROW here is the disappearing-transport
-        // case and the registry fails toward disposal, because the captured
-        // factory throws when the directory or user is gone and a warm entry
-        // whose stream is already closed would only ever be revived dead.
+        // Attachment intent follows lease state, not session kind: a lease-free running terminal-agent
+        // (indefinite keep-warm) or lingering plain terminal must not claim attention.
         onParked: ({ handle }) => {
           handle.store.getState().setViewer("cache");
         },
@@ -174,10 +101,7 @@ export class TerminalSessionRegistry {
 
   /**
    * Subscribe to membership changes (an instance added or removed). Mirrors
-   * `ChatSessionRegistry.subscribe`. Per-session lifecycle-status changes are
-   * observed by subscribing to each handle's store, not here. The
-   * agent-activity monitor uses this to keep its per-store subscriptions in
-   * sync as terminal tiles mount and unmount.
+   * `ChatSessionRegistry.subscribe`.
    */
   subscribe(listener: () => void): () => void {
     return this.sessions.subscribe(listener);
@@ -189,11 +113,8 @@ export class TerminalSessionRegistry {
   }
 
   /**
-   * Live tab-instance ids bound to one host. Overview's `host.status`
-   * refresh uses this so a membership change on host B does not void
-   * host A's settled busy. Reads the acquire-time identity, not the WeakMap
-   * the React hook stamps — that map is only set by
-   * `useTerminalSessionHandle`.
+   * Live tab-instance ids bound to one host. Overview's `host.status` refresh uses this so a
+   * membership change on host B does not void host A's settled busy.
    */
   membershipIdsForHost(hostId: string): string[] {
     const ids: string[] = [];
@@ -205,12 +126,7 @@ export class TerminalSessionRegistry {
     return ids;
   }
 
-  /**
-   * Live tab-instance ids. The xterm host registry keeps still-live
-   * terminal-agent engines warm keyed by `instanceId`; it uses this to drop a
-   * warm engine once its instance leaves the registry (the agent exited and its
-   * lease-free handle was evicted).
-   */
+  /** Live tab-instance ids. */
   listInstanceIds(): string[] {
     return Array.from(this.sessions.keys());
   }
@@ -236,13 +152,7 @@ export class TerminalSessionRegistry {
     }).handle;
   }
 
-  /**
-   * Subscribe the handle's store for defunct-state eviction of the entry at
-   * `instanceId`. Extracted because a rekey ({@link rekeyLeaseFreeEntry})
-   * must re-subscribe under the new instance id - the closure captures the
-   * id, so the old subscription would target a key that no longer exists and
-   * the defunct handle would never be evicted.
-   */
+  /** Subscribe the handle's store for defunct-state eviction of the entry at `instanceId`. */
   private watchDefunct(
     instanceId: string,
     handle: TerminalSessionStoreHandle,
@@ -250,19 +160,8 @@ export class TerminalSessionRegistry {
     return handle.store.subscribe((state) => {
       const defunct =
         state.status === "exited" ||
-        // `TERMINAL_NOT_FOUND` only proves this handle's PTY is gone. A
-        // durable terminal may already have been recreated under the same
-        // logical id, so a reaped handle must never shadow a fresh bootstrap.
+        // `TERMINAL_NOT_FOUND` only proves this handle's PTY is gone.
         state.status === "reaped" ||
-        // "Lost" (the store's mapping of a `closed` stream) is a dead end
-        // for a plain terminal: the stream client never redials after
-        // `closed` (transient drops surface as "reconnecting", not
-        // "closed"), so a lingering lost handle would only ever be revived
-        // as a permanently dead store - and it would shadow the fresh
-        // create-then-acquire bootstrap after the host recreates the
-        // session. Lost terminal-AGENTS stay warm: their reopen path runs
-        // `useTerminalSessionRecovery`, which force-releases the dead
-        // handle and re-bootstraps.
         (state.status === "lost" && state.kind === "terminal");
       if (!defunct) return;
       this.evictDefunctLeaseFreeEntry(instanceId);
@@ -270,14 +169,8 @@ export class TerminalSessionRegistry {
   }
 
   /**
-   * A lease-free warm entry for `sessionId` that a NEW tab instance may adopt
-   * ({@link rekeyLeaseFreeEntry}). Closing a tab keeps a running session's
-   * handle warm, but reopening mints a fresh tab instance id - without
-   * adoption the reopened tile would build a SECOND subscription while the
-   * warm one lingers as an unreachable zombie (still attached host-side,
-   * still counted in the shared `min()` grid, with no UI able to correct
-   * it). Returns null when the session has no warm lease-free entry or the
-   * new id is already registered (remount, StrictMode second pass).
+   * A lease-free warm entry for `sessionId` that a NEW tab instance may adopt ({@link
+   * rekeyLeaseFreeEntry}).
    */
   findAdoptableInstanceId(
     identity: TerminalWarmSessionIdentity,
@@ -295,20 +188,15 @@ export class TerminalSessionRegistry {
   }
 
   /**
-   * Rekey a lease-free entry to a new tab instance id so a reopened tab
-   * revives the closed tab's warm handle (live stream, current scrollback)
-   * instead of duplicating the subscription. The caller must rekey the xterm
-   * engine registry FIRST: this notify wakes the engine follower, which
-   * disposes engines whose instance id is no longer a registry member.
+   * Rekey a lease-free entry to a new tab instance id so a reopened tab revives the closed tab's
+   * warm handle (live stream, current scrollback) instead of duplicating the subscription.
    */
   rekeyLeaseFreeEntry(oldInstanceId: string, newInstanceId: string): boolean {
     const entry = this.sessions.peekEntry(oldInstanceId);
     if (entry === null) return false;
     const session = entry.session;
     return this.sessions.transact(() => {
-      // Reaped before the move, so the surviving subscription is never the one
-      // that names the old key. Re-armed under whichever key the entry ends up
-      // at, including when the move loses its race.
+      // Re-armed under whichever key the entry ends up at, including when the move loses its race.
       session.unsubscribeStatus();
       const moved = this.sessions.rekey(oldInstanceId, newInstanceId);
       session.unsubscribeStatus = this.watchDefunct(
@@ -320,13 +208,8 @@ export class TerminalSessionRegistry {
   }
 
   /**
-   * Drop one lease. `transportAlive` is the acquire effect's readiness at
-   * cleanup time (directory entry + signed-in user still present). A last
-   * lease with a live transport retags the keep-warm / linger subscribe as
-   * `cache`. A disappearing transport must not reopen: the captured factory
-   * throws when the directory or user is gone, and a throw from effect
-   * cleanup would leave a lease-free entry whose old stream is already
-   * closed. Fail toward disposal instead.
+   * Drop one lease. `transportAlive` is the acquire effect's readiness at cleanup time (directory
+   * entry + signed-in user still present).
    */
   release(
     instanceId: string,
@@ -335,9 +218,7 @@ export class TerminalSessionRegistry {
   ): void {
     const entry = this.sessions.peekEntry(instanceId);
     if (entry === null) return;
-    // A defunct handle may be replaced while an older consumer is still
-    // mounted. Its eventual effect cleanup must not release a lease belonging
-    // to the replacement incarnation now registered under the same instance.
+    // A defunct handle may be replaced while an older consumer is still mounted.
     if (entry.session.handle !== handle) return;
     this.sessions.release(instanceId, transportAlive ? "warm" : "dispose");
   }
@@ -351,10 +232,8 @@ export class TerminalSessionRegistry {
   }
 
   /**
-   * Drops a lease-free entry whose session became unreattachable (exited, or
-   * a plain terminal whose stream closed for good). Leased entries are left
-   * alone: the mounted tile observes the same status and owns the response
-   * (close the tab, run recovery).
+   * Drops a lease-free entry whose session became unreattachable (exited, or a plain terminal whose
+   * stream closed for good).
    */
   private evictDefunctLeaseFreeEntry(instanceId: string): void {
     const entry = this.sessions.peekEntry(instanceId);
@@ -374,11 +253,8 @@ function shouldKeepLeaseFree(handle: TerminalSessionStoreHandle): boolean {
 }
 
 /**
- * A released plain terminal lingers for
- * {@link PLAIN_TERMINAL_RELEASE_LINGER_MS} only while its stream can still
- * serve a reattach (creating/running). "Lost" and "reaped" are excluded: the
- * stream client cannot address a PTY from either state, so reviving that handle
- * would shadow the fresh create-then-acquire bootstrap after recovery.
+ * A released plain terminal lingers for {@link PLAIN_TERMINAL_RELEASE_LINGER_MS} only while its
+ * stream can still serve a reattach (creating/running).
  */
 function shouldLingerLeaseFree(handle: TerminalSessionStoreHandle): boolean {
   const state = handle.store.getState();

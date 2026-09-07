@@ -1,38 +1,3 @@
-/**
- * The refusal settlement on `onLocalDocUpdate`'s `body/update` call
- * (`store.ts`, `createMainThreadBodyDocStore({ onLocalDocUpdate: ... })`).
- *
- * That callback fires on every LOCAL Yjs edit to a resident artifact body and
- * posts it as `void runtime.port.call("body/update", ...)`. A dropped answer or
- * rejected call is not a failed user action, but it is observable state: the
- * main-thread doc is still the only proven holder and must keep `isDirty`
- * latched until that doc retires. The test also keeps the original
- * unhandled-rejection pin: rethrowing from a `.catch` on a `void`ed chain mints
- * a new rejection nobody awaits. It fires once per keystroke, so one broken
- * worker handler used to produce one unhandled rejection per edit for as long
- * as the person kept typing. The fix logs via `appLogger.error` instead of
- * rethrowing, and leaves the `BridgeDisposedError` early-return (teardown, not
- * a fault) unchanged.
- *
- * Reached through the REAL `createOpenEpicStore`, over a REAL
- * `createMainBridgeEndpoint`/`createFakeBridgePair` pair - not a hand-typed
- * `RuntimeWorkerPort` fake, which cannot express a rejection without either
- * fighting `call`'s generic signature or reimplementing the endpoint's own
- * settle/abort semantics (both of which this repo already has: `abortAll`
- * rejects every outstanding call with `BridgeDisposedError` on `dispose()`,
- * and an `{ outcome: "error" }` result rejects with `BridgeCallError`). Same
- * harness `artifact-body-lease-bridge.test.ts` already drives against this
- * exact bridge pair, pointed at `createOpenEpicStore` instead so the closure
- * under test is `store.ts`'s own, not a reimplementation of it.
- *
- * Getting a LOCAL edit to fire at all requires a resident body doc, which
- * requires an `acquireResidentArtifactBodyLease` round trip through
- * `body/materialize` - there is no lighter seam that reaches the real
- * closure. `installedArm: "lanes"` (pushed via the store's own `projection`
- * handle) is what lets the materialize fixture answer with
- * `docKey === artifactId` and skip fabricating an `artifacts.byId` entry:
- * `getArtifactBodyDocKey` returns the artifact id directly on that arm.
- */
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { createMainBridgeEndpoint } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
@@ -56,11 +21,6 @@ const ARTIFACT_ID = "artifact-1";
 /**
  * Rejections are asserted through Node's own `process` event rather than
  * `window.addEventListener("unhandledrejection")`: `vitest.config.ts` sets
- * `dangerouslyIgnoreUnhandledErrors` and the setup file registers a
- * process-level swallow, so an empty-array assertion taken off the DOM event
- * reads the same whether nothing rejected or nothing fired at all. Mirrors
- * `epic-title-write-settlement.test.ts` / `sidebar-reparent-commit-routing.test.ts`'s
- * helpers of the same names.
  */
 function captureUnhandledRejections(): {
   readonly seen: unknown[];
@@ -86,10 +46,8 @@ async function drainRejections(): Promise<void> {
 }
 
 /**
- * A hand-written worker side over the fake pair: answers `body/materialize`
- * immediately (granted, empty doc), and hands `body/update` calls to the test
- * so it can choose per-call how the worker answers - the dropped, rejected,
- * and bridge-disposed arms this file pins.
+ * A hand-written worker side over the fake pair: answers `body/materialize` immediately (granted,
+ * empty doc), and hands `body/update` calls to the test so it can choose per-call how the worker
  */
 function createWorkerSide(pair: FakeBridgePair): {
   readonly pendingBodyUpdateCallIds: number[];
@@ -244,9 +202,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       // observable as a recovery obligation rather than only as a log.
       expect(handle.store.getState().isDirty).toBe(true);
 
-      // A later worker projection cannot erase the main-only refusal while the
-      // doc still exists. This is the class pin: projected `false` is only the
-      // worker's verdict, not proof that main's bytes crossed the bridge.
+      // A later worker projection cannot erase the main-only refusal while the doc still exists.
       handle.projection.apply(
         {
           artifactRooms: {
@@ -260,30 +216,21 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
 
       errorSpy.mockClear();
 
-      // ── Arm 3 (CONTROL): the bridge disposed underneath the call ───────
-      // Teardown, not a failure - the edit is already in main's live doc, so
-      // this must NOT log. Without this half, an unconditional "always log"
-      // would pass arm 1 and read identically to the fix.
+      // ── Arm 3 (CONTROL): the bridge disposed underneath the call ─────── Teardown, not a failure -
+      // the edit is already in main's live doc, so this must NOT log.
       typeInto(fragment, "more");
-      // A second, INDEPENDENT body/update call really is outstanding here -
-      // this is not "nothing happened, so nothing was logged" wearing the
-      // assertion below's clothes. Without this check, a stale fragment or a
-      // replaced doc would leave every negative assertion in this arm
-      // vacuously true.
+      // A second, INDEPENDENT body/update call really is outstanding here - this is not "nothing
+      // happened, so nothing was logged" wearing the assertion below's clothes.
       expect(worker.pendingBodyUpdateCallIds).toHaveLength(1);
       main.dispose();
       await drainRejections();
 
       expect(errorSpy).not.toHaveBeenCalled();
-      // Neither rejection ever escaped as an unhandled one, in EITHER arm -
-      // the actual defect this fix closes (a rethrow inside a `.catch` on a
-      // `void`ed chain mints a fresh, unhandled rejection instead of
-      // reaching the logger this test just pinned).
+      // Neither rejection ever escaped as an unhandled one, in EITHER arm - the actual defect this fix
+      // closes (a rethrow inside a `.catch` on a `void`ed chain mints a fresh, unhandled rejection
       expect(capture.seen).toEqual([]);
 
-      // Retirement is the proof-based clearing point. `handle.dispose()` drops
-      // the main body docs and invokes the sink's `onDocRetired`; because the
-      // worker verdict above was false, the latch can now restore false.
+      // Retirement is the proof-based clearing point.
       handle.dispose();
       expect(handle.store.getState().isDirty).toBe(false);
     } finally {
@@ -395,10 +342,8 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
         }
         await drainRejections();
 
-        // The distinct replacement was resident before settlement, so this is
-        // not a vacuous "nothing remained to dirty" assertion. Ablation:
-        // without the dispatched-generation fence, each parameterized case
-        // independently latches the replacement's same docKey dirty.
+        // The distinct replacement was resident before settlement, so this is not a vacuous "nothing
+        // remained to dirty" assertion.
         expect(replacement.fragment.doc).toBe(replacement.doc);
         expect(handle.store.getState().isDirty).toBe(false);
       } finally {
@@ -409,16 +354,8 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
   );
 
   it("latches isDirty the instant a body edit posts, before the worker answers either way", async () => {
-    // Codex, #1694: the cap's data-loss gate reads `isDirty` synchronously on
-    // every prune walk, but until this fix `onLocalDocUpdate` only latched it
-    // on a PROVEN refusal - the window between posting `body/update` and that
-    // answer arriving read `isDirty: false` although the edit exists ONLY in
-    // main's live doc and the worker has not yet said it took ownership. The
-    // previous `isClean()` transport clause covered this window by accident,
-    // by refusing to evict ANY session with a non-`open` transport; the
-    // data-loss gate that replaced it does not, so a synchronous session
-    // check racing this exact window would have read the epic as evictable
-    // and `dispose()`d it - discarding the edit for good.
+    // Codex, #1694: the cap's data-loss gate reads `isDirty` synchronously on every prune walk, but
+    // until this fix `onLocalDocUpdate` only latched it on a PROVEN refusal - the window between
     const pair = createFakeBridgePair("sync");
     const worker = createWorkerSide(pair);
     const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
@@ -463,16 +400,6 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       // would read if it ran right now.
       expect(handle.store.getState().isDirty).toBe(true);
 
-      // A worker verdict of `false` cannot clear it while the call it would
-      // have to prove is still unanswered - the same rule the refusal arms
-      // pin, extended to the window BEFORE the answer is known at all.
-      // `artifactRooms: ready` is re-affirmed here for the same reason the
-      // refusal arms' own patch carries it: every `applyProjection` call ends
-      // by reconciling residency against the CURRENT room state, and this is
-      // the first one since materialize - omitting it would drop the body as
-      // a room that never announced ready, retiring the doc on an unrelated
-      // path and proving nothing about the pending latch this line exists to
-      // pin.
       handle.projection.apply(
         {
           artifactRooms: { stateByArtifactId: { [ARTIFACT_ID]: "ready" } },
@@ -482,10 +409,8 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       );
       expect(handle.store.getState().isDirty).toBe(true);
 
-      // Settling it - here, as a drop - releases the pending latch; the
-      // refusal arms above already pin what happens to `isDirty` from there.
-      // The point of this test is everything ABOVE this line: it was already
-      // `true` before the worker said anything at all.
+      // Settling it - here, as a drop - releases the pending latch; the refusal arms above already pin
+      // what happens to `isDirty` from there.
       worker.respondBodyUpdateDropped("closing the in-flight window");
       await drainRejections();
       expect(handle.store.getState().isDirty).toBe(true);

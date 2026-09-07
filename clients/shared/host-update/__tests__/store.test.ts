@@ -141,14 +141,6 @@ describe("the barrel does not export raw record mutators", () => {
   });
 });
 
-// Ticket 03 final-authority cold review, P0, exact reproduction: the reviewer
-// reached a false durable `complete` terminalization using nothing but
-// `@traycer-clients/shared/host-update`'s own public exports - no deep
-// import, no generic contender facade. This block reproduces that exact
-// shape, importing only through the barrel namespace (`barrel.*`, from
-// "../index" above) rather than any direct module, and proves the barrel's
-// own `AttemptMutationIntent` type alias already excludes the shape at
-// compile time.
 describe("public barrel-only reproduction (Ticket 03 final-authority cold review P0)", () => {
   it("acquires a lock handle and commits a create through nothing but the barrel, then a structural `recover` intent commits no durable terminal write", async () => {
     const dir = await freshDir();
@@ -171,12 +163,8 @@ describe("public barrel-only reproduction (Ticket 03 final-authority cold review
 
         const before = await readFile(updateAttemptRecordPath(dir), "utf8");
 
-        // The reviewer's exact reproduction: a `recover` intent whose
-        // installed/running legs are plain `verified` literals, with no
-        // install tree or host process behind them. The barrel's exported
-        // `AttemptMutationIntent` (= `PublicAttemptMutationIntent`)
-        // structurally excludes `recover`, so only a cast reaches this call -
-        // exactly the JS-boundary bypass the runtime guard exists to refuse.
+        // The reviewer's exact reproduction: a `recover` intent whose installed/running legs are plain `verified` literals, with no install tree or host process behind them.
+        // The barrel's exported `AttemptMutationIntent` (= `PublicAttemptMutationIntent`) structurally excludes `recover`, so only a cast reaches this call - exactly the JS-boundary bypass the runtime guard exists to refuse.
         const structuralRecover: ExecutorOnlyAttemptMutationIntent = {
           kind: "recover",
           recovery: {
@@ -195,10 +183,7 @@ describe("public barrel-only reproduction (Ticket 03 final-authority cold review
             nowIso: "2026-01-01T00:04:00.000Z",
           },
         };
-        // Types disappear at the JavaScript boundary - build the forced
-        // value through property assignment the same way that boundary is
-        // actually crossed at runtime, rather than a type assertion the
-        // compiler would reject outright.
+        // Types disappear at the JavaScript boundary - build the forced value through property assignment the same way that boundary is actually crossed at runtime, rather than a type assertion the compiler would reject outright.
         const forgedRecover = {} as PublicAttemptMutationIntent;
         for (const [key, value] of Object.entries(structuralRecover)) {
           Object.defineProperty(forgedRecover, key, {
@@ -291,12 +276,7 @@ describe("commitAttemptMutation - canonical binding", () => {
 });
 
 describe("commitAttemptMutation - illegal transitions are structurally unrepresentable", () => {
-  // There is no `next` parameter anywhere on this API: the caller supplies
-  // only an intent, and the module re-reads canonical disk state and asks
-  // the pure transition algebra (`decideAttemptClaim` / `advanceAttempt`) to
-  // derive the exact output. An arbitrary A -> B replacement, a counter
-  // jump, or a target/trigger rewrite therefore cannot be expressed by any
-  // caller of this API - not merely rejected at runtime.
+  // An arbitrary A -> B replacement, a counter jump, or a target/trigger rewrite therefore cannot be expressed by any caller of this API - not merely rejected at runtime.
 
   it("rejects intent-not-legal for a create intent over an already-active record, and disk is untouched", async () => {
     const dir = await freshDir();
@@ -414,7 +394,7 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
       expect(supersede.record.phase).toBe("superseded");
     }
 
-    // The old attempt's terminal outcome is durably on disk RIGHT NOW - a
+    // The old attempt's terminal outcome is durably on disk right NOW - a
     // crash here must not be able to erase it.
     const afterSupersede = await readUpdateAttemptRecord(dir);
     expect(afterSupersede.kind).toBe("valid");
@@ -492,7 +472,7 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
       },
     });
 
-    // A late callback still closing over the ORIGINAL identity (sequence 1),
+    // A late callback still closing over the original identity (sequence 1),
     // even though disk has since moved to sequence 2.
     const stale = await commitAttemptMutation({
       handle,
@@ -570,9 +550,7 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
       if (created.kind !== "committed") return;
 
       if (kind === "recover") {
-        // Active, unheld record with independently verified install + running
-        // evidence for the exact target: the sole path that bypasses the
-        // ordinary verifying -> complete edge.
+        // Active, unheld record with independently verified install + running evidence for the exact target: the sole path that bypasses the ordinary verifying -> complete edge.
         await expectExactRoundTrip(
           dir,
           await commitExecutorOnlyAttemptMutation({
@@ -1189,15 +1167,7 @@ describe("commitAttemptMutation - continuation provenance", () => {
   });
 });
 
-// `recover` and supersede-with-`recovery` are executor-only intents (Ticket 03
-// final-authority cold review, P0 class sweep): the public `commitAttemptMutation`
-// channel's type excludes them and its runtime unconditionally refuses them
-// before any recovery business logic runs (see the dedicated describe block
-// below). These business-logic cases therefore exercise the direct-module
-// `commitExecutorOnlyAttemptMutation` channel instead - the same channel the
-// CLI executor's recovery bridge calls through `contender.ts`. Plain `create`
-// and non-completing `advance` calls in this block stay on the public channel
-// since they remain legal there.
+// These business-logic cases therefore exercise the direct-module `commitExecutorOnlyAttemptMutation` channel instead - the same channel the CLI executor's recovery bridge calls through `contender.ts`.
 describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
   it("terminalizes complete when installed + running evidence exactly matches the target, bypassing verifying", async () => {
     const dir = await freshDir();
@@ -1654,9 +1624,7 @@ describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
           expected: created.identity,
           action: "force",
           requestedTargetVersion: "1.2.3",
-          // `unreadable` on any leg is normalize-legal (it is a defined
-          // evidence kind); an outright malformed shape is what must fail
-          // BEFORE the transition runs.
+          // `unreadable` on any leg is normalize-legal (it is a defined evidence kind); an outright malformed shape is what must fail before the transition runs.
           evidence: {
             installed: { kind: "not-a-real-kind" } as never,
             staged: { kind: "absent" },
@@ -1704,14 +1672,7 @@ describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
     });
   });
 
-  // The generation/sequence-ceiling `counter-exhausted` refusal is exercised
-  // directly against the pure `decideAttemptRecovery` core in
-  // transition.test.ts (constructing a record at
-  // `Number.MAX_SAFE_INTEGER` here would require driving thousands of real
-  // commits through the filesystem). This test instead confirms the
-  // persistence boundary commits a legal, non-ceiling recovery end to end,
-  // so the ceiling behaviour proven in isolation is not testing a path the
-  // store never reaches.
+  // This test instead confirms the persistence boundary commits a legal, non-ceiling recovery end to end, so the ceiling behaviour proven in isolation is not testing a path the store never reaches.
   it("commits a legal recovery end to end through the persistence boundary", async () => {
     const dir = await freshDir();
     const handle = await acquireHandle(dir, "recover-persistence-boundary");
@@ -1750,23 +1711,9 @@ describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
   });
 });
 
-// Ticket 03 final-authority cold review, P0 (class swept to its full shape):
-// the public `commitAttemptMutation` channel must refuse `recover`, `advance`
-// to `complete`, and `supersede` carrying a `recovery` field - never routing
-// any of the three into recovery/completion business logic - even when a
-// caller manufactures the intent through a type cast, a JS boundary, or a
-// parsed/deserialized object. `PublicAttemptMutationIntent` excludes all
-// three at the type level; `commitAttemptMutationInternal`'s
-// `isExecutorOnlyMutationIntent` guard excludes them again at runtime, before
-// any lease is taken or any read happens.
+// `PublicAttemptMutationIntent` excludes all three at the type level; `commitAttemptMutationInternal`'s `isExecutorOnlyMutationIntent` guard excludes them again at runtime, before any lease is taken or any read happens.
 describe("commitAttemptMutation - executor-only intents (recover / advance-to-complete / supersede-with-recovery) are refused, not routed to business logic", () => {
-  // Types disappear at the JavaScript boundary - the guard under test exists
-  // precisely because a JS caller, a plugin, or a parsed/deserialized object
-  // can hand `commitAttemptMutation` a shape typed code never could. Rather
-  // than a type assertion the compiler would reject outright (`recover` and
-  // `PublicAttemptMutationIntent` share no overlapping member), this builds
-  // the forced value through property assignment the same way that boundary
-  // is actually crossed at runtime.
+  // Types disappear at the JavaScript boundary - the guard under test exists precisely because a JS caller, a plugin, or a parsed/deserialized object can hand `commitAttemptMutation` a shape typed code never could.
   function forcedIntent(
     intent: ExecutorOnlyAttemptMutationIntent,
   ): PublicAttemptMutationIntent {
@@ -1781,14 +1728,6 @@ describe("commitAttemptMutation - executor-only intents (recover / advance-to-co
     return forced;
   }
 
-  // Byte-unchanged is necessary but not sufficient: a commit that opens the
-  // canonical record, re-derives an identical record, and renames it back
-  // over itself would also leave the bytes unchanged, yet would prove the
-  // guard runs AFTER a read/write rather than before one - the opposite of
-  // "no lease is taken or any read happens" above. This wraps a forced call
-  // with the existing record-open/rename test seams so each runtime case
-  // proves zero canonical opens and zero renames, matching the production
-  // guard firing before `commitAttemptMutationInternal`'s lease/read at all.
   async function commitWithNoCanonicalIo(
     options: Parameters<typeof commitAttemptMutation>[0],
   ): Promise<AttemptCommitOutcome> {
@@ -1801,9 +1740,7 @@ describe("commitAttemptMutation - executor-only intents (recover / advance-to-co
       renames += 1;
     });
     const outcome = await commitAttemptMutation(options);
-    // Clear before the caller's post-check read, so that read - and
-    // whatever the test does next - is never itself observed by a hook
-    // still armed from this call.
+    // Clear before the caller's post-check read, so that read - and whatever the test does next - is never itself observed by a hook still armed from this call.
     __setBeforeRecordOpenHookForTest(null);
     __setBeforeRecordRenameHookForTest(null);
     expect(opens).toBe(0);
@@ -2186,12 +2123,7 @@ describe("commitAttemptMutation - release cannot overtake an in-flight commit", 
       expect(released).toBe(false);
       await expect(stat(lockPath)).resolves.toBeDefined();
 
-      // A fresh contender must not be able to acquire - the old commit has
-      // not finished its rename, and release() must not have removed the
-      // lock out from under it. In this same process the in-process claim
-      // (still held until release() actually completes) answers first with
-      // `held-in-process`; a genuinely separate process would see `busy` -
-      // either way, `acquired` must never happen here.
+      // A fresh contender must not be able to acquire - the old commit has not finished its rename, and release() must not have removed the lock out from under it.
       const contender = await acquireUpdateAttemptLock({
         hostHomeDir: dir,
         reason: "contender",
@@ -2274,9 +2206,7 @@ describe("pruneTerminalAttemptRecord - release cannot overtake an in-flight prun
       expect(released).toBe(false);
       await expect(stat(lockPath)).resolves.toBeDefined();
 
-      // See the rename-barrier test above for why `held-in-process` (not
-      // `busy`) is the expected same-process outcome; either way `acquired`
-      // must never happen while the old prune is still able to unlink.
+      // See the rename-barrier test above for why `held-in-process` (not `busy`) is the expected same-process outcome; either way `acquired` must never happen while the old prune is still able to unlink.
       const contender = await acquireUpdateAttemptLock({
         hostHomeDir: dir,
         reason: "contender",
@@ -2390,9 +2320,7 @@ describe("commitAttemptMutation - durability", () => {
       const dir = await freshDir();
       const handle = await acquireHandle(dir, "segment");
 
-      // Execute+write, no read: creating/renaming known child paths still
-      // works (that only needs the execute+write bits), but `open(dir,
-      // O_RDONLY)` needs the read bit and genuinely fails EACCES.
+      // Execute+write, no read: creating/renaming known child paths still works (that only needs the execute+write bits), but `open(dir, O_RDONLY)` needs the read bit and genuinely fails eacces.
       await chmod(dir, 0o300);
 
       const outcome = await commitAttemptMutation({
@@ -2637,11 +2565,7 @@ describe("__sameRecordFileIdentityForTest - Windows fallback identity abstractio
   });
 });
 
-// Windows has no `O_NOFOLLOW`; `openRecordNoFollow` falls back to a
-// pre-open `lstat` plus the identity check above. Both reparse-point races
-// only exist on that fallback path, so these are Windows-only - they are
-// present in source (and exercised in Windows CI) but skipped everywhere
-// else, matching the existing POSIX symlink tests' inverse guard.
+// Windows has no `O_NOFOLLOW`; `openRecordNoFollow` falls back to a pre-open `lstat` plus the identity check above.
 describe("readUpdateAttemptRecord - Windows reparse-point races (Windows fallback path only)", () => {
   it.skipIf(process.platform !== "win32")(
     "reads a reparse point already present before the read as unreadable, never following it",
@@ -2931,9 +2855,7 @@ function mutationIntentDescription(
   }
 }
 
-// This mapped type is deliberately exhaustive: adding an intent arm without
-// updating the persistence tests becomes a compile error instead of silently
-// leaving a new mutation untested.
+// This mapped type is deliberately exhaustive: adding an intent arm without updating the persistence tests becomes a compile error instead of silently leaving a new mutation untested.
 describe("AttemptMutationIntent - exhaustive shape", () => {
   it("keeps every intent kind represented in the typed test map", () => {
     const kinds: {

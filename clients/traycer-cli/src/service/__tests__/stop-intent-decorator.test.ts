@@ -1,27 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ServiceController, ServiceLabel } from "../index";
 
-// The decorator's whole contract is an ORDERING and a withdrawal rule:
-//
-//   - intent is written BEFORE the operation, because the supervisor has to be
-//     able to see it before anything is killed;
-//   - it OUTLIVES the call, because reading it is how the supervisor knows the
-//     child's death was asked for, and because `hasActionableStopIntent`
-//     already answers each supervisor separately by its invocation time;
-//   - it is withdrawn ONLY when the operation failed AND the host is still
-//     serving, because that is the one case where the record describes a kill
-//     that did not happen.
-//
-// The withdrawal rule is the one with teeth, in both directions. Withdraw too
-// eagerly and a partly-completed uninstall lets the orphaned supervisor read a
-// deliberate kill as a crash and bring the host back. Never withdraw and a
-// `HOST_BUSY` refusal - which leaves the host RUNNING and untouched - suppresses
-// that live host's own crash recovery for the whole freshness window.
-//
-// Note what does NOT decide it: the error type. `HOST_BUSY` is raised before
-// anything is touched, but `stopService` throwing because the pid outlived its
-// exit wait happens strictly after the kill, and both arrive as an exception.
-// Only liveness separates them.
+// Write intent before stop; withdraw it only after a successful start.
 
 const mocks = vi.hoisted(() => ({
   writes: [] as string[],
@@ -56,9 +36,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { withStopIntent } = await import("../index");
 
-// Declared types rather than stubs laundered through `unknown`: a shape that
-// drifts from `ServiceController` then fails the build here, which is the only
-// thing making these tests evidence about the real decorator.
+// Declared types rather than stubs laundered through `unknown`: a shape that drifts from `ServiceController` then fails the build here, which is the only thing making these tests evidence about the real decorator.
 const label: ServiceLabel = {
   id: "ai.traycer.host",
   displayName: "Traycer Host",
@@ -114,9 +92,7 @@ describe("withStopIntent", () => {
   });
 
   it("writes the intent BEFORE a force stop runs too - force pass-through does not change decorator ordering", async () => {
-    // Snapshot `mocks.writes` from INSIDE the wrapped `stop`: if the
-    // decorator wrote the intent first, the write is already visible by the
-    // time this callback runs, regardless of `force`.
+    // Snapshot `mocks.writes` from INSIDE the wrapped `stop`: if the decorator wrote the intent first, the write is already visible by the time this callback runs, regardless of `force`.
     let writesWhenStopRan: string[] = [];
     let forceSeenByStop = false;
     const controller = withStopIntent(
@@ -135,10 +111,8 @@ describe("withStopIntent", () => {
   });
 
   it("clears the intent when stopForRestart is refused and the host is STILL SERVING", async () => {
-    // `HOST_BUSY` never touches the host, so it is still up - and leaving a
-    // "restart" record behind would suppress its own crash recovery for the
-    // whole freshness window. A refused restart must not end in a hostless
-    // machine.
+    // `HOST_BUSY` never touches the host, so it is still up - and leaving a "restart" record behind would suppress its own crash recovery for the whole freshness window.
+    // A refused restart must not end in a hostless machine.
     mocks.liveHost = { pid: 4242 };
     const busy = new Error("E_HOST_BUSY");
     const controller = withStopIntent(
@@ -158,11 +132,8 @@ describe("withStopIntent", () => {
   });
 
   it("KEEPS the intent when a stop throws after the kill already landed", async () => {
-    // The other half of the same failure, and the half the error type cannot
-    // distinguish: `stopService` signals, then waits for the pid to go, then
-    // throws if it did not - by which point the host may well be dead anyway.
-    // Nothing is serving, so the record is the only evidence the death was
-    // asked for. Clearing it lets the orphaned supervisor call it a crash.
+    // The other half of the same failure, and the half the error type cannot distinguish: `stopService` signals, then waits for the pid to go, then throws if it did not - by which point the host may well be dead anyway.
+    // Nothing is serving, so the record is the only evidence the death was asked for.
     mocks.liveHost = null;
     const controller = withStopIntent(
       baseController({
@@ -181,10 +152,8 @@ describe("withStopIntent", () => {
   });
 
   it("KEEPS the intent when an uninstall fails after killing the host", async () => {
-    // A `host uninstall` that ran `/End`, killed the tree, and then failed to
-    // remove the hidden launcher has already crossed its kill boundary. If this
-    // cleared, the orphaned supervisor would resurrect a host whose Scheduled
-    // Task may already be deleted - while uninstall reports failure.
+    // A `host uninstall` that ran `/End`, killed the tree, and then failed to remove the hidden launcher has already crossed its kill boundary.
+    // If this cleared, the orphaned supervisor would resurrect a host whose Scheduled Task may already be deleted - while uninstall reports failure.
     mocks.liveHost = null;
     const controller = withStopIntent(
       baseController({
@@ -216,10 +185,8 @@ describe("withStopIntent", () => {
   });
 
   it("refuses the stop on win32 when the intent could not be recorded", async () => {
-    // On win32 the sentinel is the ONLY channel - `schtasks /End` never
-    // signals the orphaned supervisor. Killing the host with no record means
-    // the supervisor reads a nonzero exit as a crash and brings it back, while
-    // `host stop` reports success. Refusing is the honest outcome.
+    // On win32 the sentinel is the ONLY channel - `schtasks /End` never signals the orphaned supervisor.
+    // Killing the host with no record means the supervisor reads a nonzero exit as a crash and brings it back, while `host stop` reports success.
     mocks.platform = "win32";
     mocks.persisted = false;
     let stopped = false;
@@ -240,9 +207,8 @@ describe("withStopIntent", () => {
   });
 
   it("proceeds on POSIX when the intent could not be recorded", async () => {
-    // There launchd/systemd signal the supervisor directly, so it latches
-    // `shuttingDown` and never relaunches. The sentinel is belt-and-braces and
-    // a failed write costs nothing - failing the stop would be a regression.
+    // There launchd/systemd signal the supervisor directly, so it latches `shuttingDown` and never relaunches.
+    // The sentinel is belt-and-braces and a failed write costs nothing - failing the stop would be a regression.
     mocks.platform = "darwin";
     mocks.persisted = false;
     let stopped = false;
@@ -260,12 +226,8 @@ describe("withStopIntent", () => {
   });
 
   it("refuses a FORCED stop on darwin when the intent could not be recorded, and the inner stop never runs", async () => {
-    // `force` makes the record load-bearing on EVERY platform, not just
-    // win32: a forced stop kills only the host child, so the supervisor is
-    // never signalled and the sentinel is the only thing telling it the
-    // death was asked for. Without it the kill would land, the supervisor
-    // would read an unexplained exit as a crash, and the host would come
-    // back while `--force` reported success.
+    // `force` makes the record load-bearing on EVERY platform, not just win32: a forced stop kills only the host child, so the supervisor is never signalled and the sentinel is the only thing telling it the death was asked for.
+    // Without it the kill would land, the supervisor would read an unexplained exit as a crash, and the host would come back while `--force` reported success.
     mocks.platform = "darwin";
     mocks.persisted = false;
     let stopped = false;
@@ -306,12 +268,8 @@ describe("withStopIntent", () => {
   });
 
   it("refuses a RESTART on win32 when the intent could not be recorded", async () => {
-    // `host free-port-and-restart` reaches the controller's `restart` directly,
-    // and that path kills the host exactly as `stop` does - `schtasks /End` plus
-    // a process-tree kill - before running the task again. With no record the
-    // orphaned supervisor reads the kill as a crash and relaunches on its own
-    // schedule, racing the `/Run` that is starting the replacement: one restart,
-    // two hosts. "It comes back anyway" is not a reason to skip the record.
+    // `host free-port-and-restart` reaches the controller's `restart` directly, and that path kills the host exactly as `stop` does - `schtasks /End` plus a process-tree kill - before running the task again.
+    // With no record the orphaned supervisor reads the kill as a crash and relaunches on its own schedule, racing the `/Run` that is starting the replacement: one restart, two hosts.
     mocks.platform = "win32";
     mocks.persisted = false;
     let restarted = false;
@@ -347,17 +305,8 @@ describe("withStopIntent", () => {
   });
 
   it("leaves the record standing after a SUCCESSFUL restart", async () => {
-    // This used to clear in `finally`, and that was the bug. On win32 the killed
-    // host's supervisor survives as an orphan, and `restartService` returns once
-    // the replacement's `starting` marker is written - before it has spawned a
-    // child or published `pid.json`. Clearing there hands the old supervisor a
-    // window in which it sees neither intent nor an incumbent, and it relaunches
-    // into the one the `/Run` is bringing up. One restart, two hosts.
-    //
-    // Keeping it is safe precisely because the record is not a global mute:
-    // `hasActionableStopIntent` compares it against the READER's invocation
-    // time, so the replacement supervisor - started after the request - reads it
-    // as already served and spawns normally.
+    // This used to clear in `finally`, and that was the bug.
+    // On win32 the killed host's supervisor survives as an orphan, and `restartService` returns once the replacement's `starting` marker is written - before it has spawned a child or published `pid.json`.
     const controller = withStopIntent(
       baseController({ restart: async () => undefined }),
     );
@@ -369,11 +318,8 @@ describe("withStopIntent", () => {
   });
 
   it("leaves the starts alone entirely - no write, no clear", async () => {
-    // The starts used to clear in `finally`, justified by "a leftover intent
-    // would suppress the NEXT crash's recovery". The invocation cutoff had
-    // already made that false, and the clear carried the same resurrection race
-    // as the restart above: `host start` after a `host stop` re-arms the
-    // orphaned supervisor if the new host has not published yet.
+    // The starts used to clear in `finally`, justified by "a leftover intent would suppress the NEXT crash's recovery".
+    // The invocation cutoff had already made that false, and the clear carried the same resurrection race as the restart above: `host start` after a `host stop` re-arms the orphaned supervisor if the new host has not published yet.
     const started = withStopIntent(
       baseController({ start: async () => undefined }),
     );

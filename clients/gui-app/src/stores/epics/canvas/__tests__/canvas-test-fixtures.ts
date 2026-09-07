@@ -1,10 +1,3 @@
-/**
- * Shared fixtures for the canvas store suites (`actions.test.ts`,
- * `store.test.ts`, `migrate-canvas.test.ts`, `tile-tree.test.ts`):
- * canonical tile refs, typed tree builders, and the ONE invariant checker
- * (`expectCanvasInvariants`) asserting the union of the tiles/tree/sizes/
- * active-pane invariants every action and every parse must uphold.
- */
 import { expect } from "vitest";
 import {
   makeGitBundleDiffTile,
@@ -101,9 +94,8 @@ export const SNAPSHOT_BUNDLE_CHANGES: SnapshotDiffTileRef =
     filePaths: ["src/a.ts", "src/b.ts"],
   });
 
-// ---------------------------------------------------------------------------
-// Typed literal builders (no `any`, no casts)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Typed literal
+// builders (no `any`, no casts)
 
 export function pane(
   id: string,
@@ -127,9 +119,6 @@ export function group(
   return { kind: "group", id, direction, children };
 }
 
-// ---------------------------------------------------------------------------
-// Narrowing helpers
-// ---------------------------------------------------------------------------
 
 /** Narrow `root` to a pane, throwing on a group/null root. */
 export function rootPane(state: EpicCanvasState): TilePane {
@@ -175,22 +164,10 @@ function allGroupIds(node: TileLayoutNode | null): ReadonlyArray<string> {
   return [node.id, ...node.children.flatMap(allGroupIds)];
 }
 
-// ---------------------------------------------------------------------------
-// Invariants
-// ---------------------------------------------------------------------------
 
 /**
- * Assert the full canvas invariant set (every action output AND every parse
- * output must satisfy all of these):
- *
- * 1. Reachable instanceIds are unique across the tree.
- * 2. `tilesByInstanceId`'s key set exactly matches the reachable set
- *    (every tab has a payload, no orphan payloads).
- * 3. `sizesByGroupId` holds entries only for live group ids.
- * 4. `activePaneId` resolves to an existing pane (and is null only for the
- *    empty canvas).
- * 5. Pane activation histories contain unique live tab ids with matching
- *    payload entries.
+ * Assert the full canvas invariant set (every action output AND every parse output must satisfy
+ * all of these):
  */
 export function expectCanvasInvariants(state: EpicCanvasState): void {
   const reachable = reachableInstanceIds(state);

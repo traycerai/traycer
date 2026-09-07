@@ -10,28 +10,11 @@ import {
   type LockMetadata,
 } from "@traycer-clients/shared/host-lock/cross-process-lock";
 
-// Re-exported for existing callers (`host/busy-check.ts`, service
-// controllers, doctor) - the liveness probe lives in
-// `@traycer-clients/shared/host-lock/process-identity` alongside the
-// start-time/identity logic it shares with the owner-tokened temp sweep,
-// but this stays the canonical CLI import path for plain liveness checks.
+// Re-exported for existing callers (`host/busy-check.ts`, service controllers, doctor) - the liveness probe lives in `@traycer-clients/shared/host-lock/process-identity` alongside the start-time/identity logic it shares with the owner-tokened temp sweep, but this stays the canonical CLI import path for plain liveness checks.
 export { isProcessAlive } from "./process-identity";
 
-// Cross-process lock for CLI mutations (host install/update/uninstall,
-// CLI self-upgrade promotion, manifest mutations). The lock-file protocol
-// itself - open with O_CREAT|O_EXCL, holder identity, only-positive-
-// evidence breaking, the `.break` arbitration sub-lock - lives in
-// `@traycer-clients/shared/host-lock/cross-process-lock` (Host Update
-// Layer Redesign Tech Plan, "cli-lock" rule 3: desktop main implements the
-// IDENTICAL protocol around its own SMAppService critical sections, so the
-// mechanics are singular and both sides consume the same module). This
-// file is the CLI's thin wrapper: it resolves the environment-scoped lock
-// path and converts the shared module's discriminated "busy" outcome into
-// this package's `CliError` throwing convention.
-//
-// Lock files are per-environment - there is no reason a dev-slot and a
-// prod-slot CLI mutation should serialise against each other, since they
-// touch disjoint directories.
+// Cross-process lock for CLI mutations (host install/update/uninstall, CLI self-upgrade promotion, manifest mutations).
+// The lock-file protocol itself - open with O_CREAT|O_EXCL, holder identity, only-positive- evidence breaking, the `.break` arbitration sub-lock - lives in `@traycer-clients/shared/host-lock/cross-process-lock` (Host Update Layer Redesign Tech Plan, "cli-lock" rule 3: desktop main implements the IDENTICAL protocol around its own SMAppService critical sections, so the mechanics are singular and both sides consume the same module).
 
 export type CliLockMetadata = LockMetadata;
 export type CliLockHandle = LockHandle;
@@ -41,9 +24,8 @@ export interface AcquireCliLockOptions {
   // What this lock holder is doing - written into the lock file for
   // observability ("install-host", "uninstall-host", etc.).
   readonly reason: string;
-  // Max time to wait for the lock to free up. 0 → fail immediately on
-  // contention. Defaults are *not* used here per project style; callers
-  // must decide.
+  // Max time to wait for the lock to free up. 0 → fail immediately on contention.
+  // Defaults are *not* used here per project style; callers must decide.
   readonly waitMs: number;
   // Poll interval while waiting. The runtime clamps below to a sane min.
   readonly pollIntervalMs: number;
@@ -87,12 +69,8 @@ export interface AcquireCliLockAtPathTestOptions {
   readonly pollIntervalMs: number;
 }
 
-// Test-only entry point that contends for a lock at an ARBITRARY path,
-// bypassing `cliLockPath`'s real `~/.traycer` resolution entirely. The
-// caller is responsible for ensuring the parent directory already exists
-// (a real `acquireCliLock` call does this via `ensureCliInstallHomeDir`; a
-// test sandbox typically already has one from `mkdtemp`). Production code
-// never calls this.
+// Test-only entry point that contends for a lock at an ARBITRARY path, bypassing `cliLockPath`'s real `~/.traycer` resolution entirely.
+// The caller is responsible for ensuring the parent directory already exists (a real `acquireCliLock` call does this via `ensureCliInstallHomeDir`; a test sandbox typically already has one from `mkdtemp`).
 export async function __acquireCliLockAtPathForTest(
   path: string,
   opts: AcquireCliLockAtPathTestOptions,
@@ -126,9 +104,8 @@ export async function withCliLock<T>(
       pollIntervalMs: opts.pollIntervalMs,
     },
     async (handle) => {
-      // Test-only process boundary: the desktop lock integration test needs
-      // to distinguish a spawned CLI from one which has actually acquired
-      // this shared lock. Production never sets this variable.
+      // Test-only process boundary: the desktop lock integration test needs to distinguish a spawned CLI from one which has actually acquired this shared lock.
+      // Production never sets this variable.
       const acquiredMarker = process.env.TRAYCER_CLI_LOCK_ACQUIRED_MARKER;
       if (acquiredMarker !== undefined) {
         await writeFile(acquiredMarker, "");

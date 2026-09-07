@@ -29,15 +29,7 @@ export function buildForkWorkspaceSeed(input: {
 }
 
 /**
- * The A/B fork's workspace seed: each folder is REBASED to the source chat's
- * actual working-copy directory, so the picker treats that directory as the
- * base and the `worktree-carry` override forks a new worktree off ITS working
- * tree. A worktree-bound folder's base becomes the origin WORKTREE PATH (not
- * the root workspace folder — an A/B fork of a worktree-bound chat must not
- * fork the root repo); a local folder's base stays the folder itself. Entries
- * are emitted as `local` carriers: the base directory is the identity, and
- * the picker's seeding override supplies the new-worktree branch selection
- * from that base's disk truth (current branch, generated name).
+ * The A/B fork's workspace seed: each folder is REBASED to the source chat's actual working-copy directory, so the picker treats that directory as the base and the `worktree-carry` override forks a new worktree off ITS working tree.
  */
 export function buildAbForkWorkspaceSeed(input: {
   readonly binding: WorktreeBinding | null;
@@ -120,9 +112,8 @@ function worktreeIntentToLandingWorkspaceSnapshot(
   intent: WorktreeIntent | null,
   hostId: string | null,
 ): LandingDraftWorkspaceSnapshot {
-  // An entry-less intent is the empty workspace. Every producer above already
-  // collapses that to `null`, but checking it here is what lets the primary
-  // below index `entries[0]` without a dead undefined-fallback.
+  // An entry-less intent is the empty workspace.
+  // Every producer above already collapses that to `null`, but checking it here is what lets the primary below index `entries[0]` without a dead undefined-fallback.
   if (intent === null || intent.entries.length === 0) {
     return emptyLandingDraftWorkspaceSnapshot();
   }
@@ -135,9 +126,7 @@ function worktreeIntentToLandingWorkspaceSnapshot(
     }),
     {},
   );
-  // The seed's primary is the entry marked `isPrimary` on the source
-  // intent - not array order - with the first entry as a fallback so a
-  // legacy/edge-case intent carrying no marked entry still seeds a primary.
+  // The seed's primary is the entry marked `isPrimary` on the source intent - not array order - with the first entry as a fallback so a legacy/edge-case intent carrying no marked entry still seeds a primary.
   const primaryEntry =
     intent.entries.find((entry) => entry.isPrimary) ?? intent.entries[0];
   return {

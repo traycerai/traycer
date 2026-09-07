@@ -1,8 +1,5 @@
-/**
- * Regression: optimistic rename + rollback must preserve top-level
- * `terminal.list@2.1` metadata (`homeCwd`). Session-row patches replace only
- * `sessions`; every other response field must survive mutate and onError.
- */
+/** Regression: optimistic rename + rollback must preserve top-level `terminal.list@2.1` metadata (`homeCwd`).
+ * Session-row patches replace only `sessions`; every other response field must survive mutate and onError. */
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

@@ -29,13 +29,7 @@ function resolvedAs(url: string): ImageBlobResolution {
 const bytesFetcher = () =>
   Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null });
 
-/**
- * Stand in for the cache's own key derivation.
- *
- * The hook hands `acquire` the raw hash plus the scoped source and the CACHE
- * derives the entry identity - so a double that keyed on the first argument
- * alone would collapse two subjects onto one blob and report that as correct.
- */
+/** Stand in for the cache's own key derivation. */
 function leaseKeyedLikeTheCache(
   subject: string,
   fetcher: ScopedImageBytesFetcher,
@@ -48,9 +42,8 @@ function leaseKeyedLikeTheCache(
 }
 
 /**
- * Bundles a bare byte source with a cache subject, for the cases below that
- * are about the retry/grace ladder rather than about scoping. `"test-scope"`
- * unless a case needs two distinct subjects.
+ * Bundles a bare byte source with a cache subject, for the cases below that are about the retry/grace ladder rather than about scoping.
+ * `"test-scope"` unless a case needs two distinct subjects.
  */
 function scopedFetcher(
   fetch: ImageBytesFetcher,
@@ -214,18 +207,14 @@ describe("useImageBlobUrlState", () => {
   it("re-arms the retry budget when the fetcher dependency changes", async () => {
     const rejectedInner = vi.fn(bytesFetcher);
     const recoveredInner = vi.fn(bytesFetcher);
-    // Same SUBJECT, different byte source - this case is about the fetcher
-    // dependency re-arming the budget, not about scoping, so the scope key is
-    // deliberately held constant across the rerender.
+    // Same SUBJECT, different byte source - this case is about the fetcher dependency re-arming the budget, not about scoping, so the scope key is deliberately held constant across the rerender.
     const rejectedFetcher = scopedFetcher(rejectedInner, "test-scope");
     const recoveredFetcher = scopedFetcher(recoveredInner, "test-scope");
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
       .mockImplementation((_subject, _mediaType, fetcher) =>
         makeLease(
-          // `.fetch`, because the hook hands `acquire` the SCOPED source, not
-          // the bare function - the cache needs `scopeKey` to derive its own
-          // entry identity.
+          // `.fetch`, because the hook hands `acquire` the SCOPED source, not the bare function - the cache needs `scopeKey` to derive its own entry identity.
           fetcher.fetch === recoveredInner
             ? Promise.resolve(resolvedAs("blob:rearmed-image"))
             : Promise.reject(new Error("store disposed")),
@@ -262,23 +251,15 @@ describe("useImageBlobUrlState", () => {
     });
   });
   it("keys the cache by SUBJECT as well as hash, so a second subject cannot be served the first's blob", async () => {
-    // The disclosure this closes, at its own seam. `acquire` returns a resolved
-    // (or in-flight) entry WITHOUT running the caller's fetcher, so under a
-    // bare-hash key the second subject's byte source - and with it the
-    // per-artifact/per-chat authorization the host performs inside it - never
-    // executes. Asserting on the KEY rather than on a rendered `src` is
-    // deliberate: the key is what decides whether the two acquirers meet, and a
-    // src-level assertion would pass against a cache that merely happened to
-    // miss.
+    // The disclosure this closes, at its own seam.
+    // `acquire` returns a resolved (or in-flight) entry WITHOUT running the caller's fetcher, so under a bare-hash key the second subject's byte source - and with it the per-artifact/per-chat authorization the host performs inside it - never executes.
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
       .mockImplementation((subject, _mediaType, fetcher) =>
         leaseKeyedLikeTheCache(subject, fetcher),
       );
     const sharedHash = "hash-referenced-from-two-artifacts";
-    // Hoisted, not built inside the render callback: the hook documents that
-    // `fetcher` must be referentially stable, and it is an effect dependency,
-    // so a fresh object per render re-runs the effect forever.
+    // Hoisted, not built inside the render callback: the hook documents that `fetcher` must be referentially stable, and it is an effect dependency, so a fresh object per render re-runs the effect forever.
     const fetcherA = scopedFetcher(vi.fn(bytesFetcher), "artifact-a");
     const fetcherB = scopedFetcher(vi.fn(bytesFetcher), "artifact-b");
 
@@ -292,10 +273,8 @@ describe("useImageBlobUrlState", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    // The SUBJECT handed to the cache is the bare hash, because that is what
-    // the byte source is asked for. Passing the scoped identity here instead
-    // made every artifact/chat RPC request `["scope","<hash>"]` and no
-    // persisted image resolved.
+    // The SUBJECT handed to the cache is the bare hash, because that is what the byte source is asked for.
+    // Passing the scoped identity here instead made every artifact/chat RPC request `["scope","<hash>"]` and no persisted image resolved.
     expect(acquire.mock.calls.map((call) => call[0])).toEqual([
       sharedHash,
       sharedHash,
@@ -318,9 +297,7 @@ describe("useImageBlobUrlState", () => {
   });
 
   it("still shares one entry across renders of the same hash under the SAME subject", async () => {
-    // The other half, and the one that fails if the key is over-scoped into
-    // uselessness: within a subject the cache must still collapse every fiber
-    // rendering an image onto one blob, which is the whole reason it exists.
+    // The other half, and the one that fails if the key is over-scoped into uselessness: within a subject the cache must still collapse every fiber rendering an image onto one blob, which is the whole reason it exists.
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
       .mockImplementation((subject, _mediaType, fetcher) =>
@@ -347,11 +324,7 @@ describe("useImageBlobUrlState", () => {
 
   it("drops the previous subject's resolved blob when the subject changes under one hash", async () => {
     // The same disclosure arriving through React state instead of the cache.
-    // The resolved-state gate used to compare only the hash, so a tile rebound
-    // to another artifact - or to another host - kept PAINTING the previous
-    // subject's bytes for the whole of the new subject's fetch, and
-    // indefinitely if the new one never resolves. `loading` is the assertion
-    // that matters here; the later `ready` only proves the hook still works.
+    // The resolved-state gate used to compare only the hash, so a tile rebound to another artifact - or to another host - kept PAINTING the previous subject's bytes for the whole of the new subject's fetch, and indefinitely if the new one never resolves.
     vi.spyOn(imageBlobCache, "acquire").mockImplementation(
       (subject, _mediaType, fetcher) =>
         leaseKeyedLikeTheCache(subject, fetcher),

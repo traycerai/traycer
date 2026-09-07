@@ -14,11 +14,8 @@ const tabNavigationMocks = vi.hoisted(() => ({
   activateTabIntent: vi.fn(),
 }));
 
-// Only `activateTabIntent` is replaced with a spy so we can observe HOW the
-// Phase row opens without changing the controller's real behavior; every
-// other export (notably `tabNavigationController` and `openPhaseMigrationIntent`,
-// used both by production and to build the expected call args below) stays
-// the real implementation via `importActual`.
+// Only `activateTabIntent` is replaced with a spy so we can observe how the Phase row opens without changing
+// the controller's real behavior.
 vi.mock("@/lib/tab-navigation", async () => {
   const actual = await vi.importActual<typeof import("@/lib/tab-navigation")>(
     "@/lib/tab-navigation",
@@ -65,17 +62,8 @@ import { flattenLayoutRefs, tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
-/**
- * F-phase: opening a legacy Phase row from the epics list must route through
- * the canonical activation boundary (`activateTabIntent` carrying an
- * `open-phase-migration` intent with `focus.migrationSource: "phase"`) instead of a raw
- * mutating navigate over a route builder - so a rejected phase navigation can
- * roll back to the tab the user actually started on, the same guarantee every
- * other opener in this boundary gets (see
- * `src/lib/tab-navigation/__tests__/navigation-envelope.test.ts`'s
- * "rejecting an open-epic-from-list navigation restores the genuine prior
- * tab").
- */
+/** F-phase: opening a legacy Phase row from the epics list must route through the canonical activation boundary
+ * (`activateTabIntent` carrying an `open-phase-migration` intent with `focus.migrationSource. */
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -129,10 +117,7 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle" as const,
 }));
 
-// The session-import prompt row sits above the list and reads the same host
-// runtime this file renders without. An unadvertised capability is what a host
-// that predates session import reports, and it draws no row at all - which is
-// the shape every assertion below already expects the panel to have.
+// The session-import prompt row sits above the list and reads the same host runtime this file renders without.
 vi.mock("@/hooks/session-import/use-session-import-available", () => ({
   useSessionImportAvailable: () => false,
 }));
@@ -265,10 +250,7 @@ describe("<EpicsListPanel /> Phase row activation", () => {
   });
 
   it("restores the prior tab when a rejected Phase-row migration navigation is rolled back", async () => {
-    // A real prior tab, open before the phase-open attempt - drives the REAL
-    // controller directly (bypassing the mocked `activateTabIntent` free
-    // function above) via `tabNavigationController.activate`, exactly the
-    // seam the Phase row itself calls in production.
+    // A real prior tab, open before the phase-open attempt.
     const priorTabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-prior", "Prior");
@@ -311,10 +293,8 @@ describe("<EpicsListPanel /> Phase row activation", () => {
     expect(entry, "expected a pending navigate to reject").toBeDefined();
     entry.reject(new Error("navigation cancelled"));
 
-    // The rejection restores the true pre-command selection: the prior tab.
-    // Waited on rather than drained with a fixed number of microtask ticks -
-    // that encoded the controller's current `then` depth, so adding an await
-    // anywhere in the rollback path would break this test for no real reason.
+    // Waited on rather than drained with a fixed number of microtask ticks - that encoded the controller's current
+    // `then` depth, so adding an await anywhere in the rollback path would break this test for no real reason.
     await waitFor(() => {
       expect(useTabsStore.getState().activeItemId).toBe(tabItemId(priorRef));
     });

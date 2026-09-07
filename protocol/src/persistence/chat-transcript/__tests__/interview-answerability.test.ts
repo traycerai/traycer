@@ -18,14 +18,7 @@ import {
   type UserMessage,
 } from "@traycer/protocol/persistence/epic/messages";
 
-/**
- * The host's answer to "is this pending question askable, and where".
- *
- * What is worth pinning here is every way the answer can be WRONG in the
- * direction that hurts: a `null` ordinal is what re-enables the destructive
- * dismiss affordance, so each of these asserts which of the three states the
- * judgement lands in - placed, unrenderable, or (by omission) unjudged.
- */
+/** The host's answer to "is this pending question askable, and where". */
 
 const AGENT_SENDER = {
   type: "agent" as const,
@@ -100,14 +93,7 @@ function userMessage(messageId: string, timestamp: number): UserMessage {
   });
 }
 
-/**
- * The projection the host feeds this judgement, built the way
- * `chat-transcript-view.ts` builds it.
- *
- * Going through `projectTranscriptRows` rather than hand-writing descriptors is
- * the point: the ORDINALS these tests assert are the projection's own indices,
- * so a change to how a turn splits into rows moves them here too.
- */
+/** The projection the host feeds this judgement, built the way `chat-transcript-view.ts` builds it. */
 function rowsFor(
   messages: readonly Message[],
   activeTurnId: string | null,
@@ -142,10 +128,8 @@ describe("judgeInterviewAnswerability", () => {
   });
 
   it("reports a settled block as unrenderable, which is the phantom-interview shape", () => {
-    // The harness errored the AskUserQuestion and the block persisted as
-    // `errored`, but the pending wait was rebuilt from a dangling
-    // `interview.requested`. Nothing will ever draw a card, and the dismiss
-    // affordance is the only way out of the chat - so this MUST stay `null`.
+    // The harness errored the AskUserQuestion and the block persisted as `errored`, but the pending wait was rebuilt from a dangling `interview.requested`.
+    // Nothing will ever draw a card, and the dismiss affordance is the only way out of the chat - so this MUST stay `null`.
     const messages = [
       assistantMessage({
         messageId: "a-1",
@@ -173,15 +157,6 @@ describe("judgeInterviewAnswerability", () => {
   });
 
   it("reports a streaming block NO ROW declares as unrenderable", () => {
-    // The contract that makes the row walk load-bearing rather than a stylistic
-    // choice: an ordinal is only ever returned for a row that names the block,
-    // so a block present in the RECORDS but declared by no row is `null`. A
-    // records walk would call it answerable and hand the client an id it has
-    // nowhere to send - hydration is addressed by ordinal, and there is none.
-    //
-    // The rows are hand-built rather than projected precisely because this pins
-    // the function's own contract; whether today's projection can produce such
-    // a block is a separate question, and the client is stuck either way.
     const messages = [
       assistantMessage({
         messageId: "a-1",
@@ -293,9 +268,6 @@ describe("judgeInterviewAnswerability", () => {
   });
 
   it("ignores a pending id that names a block of another type", () => {
-    // Not defensive noise: block ids are unique across the transcript, so a
-    // pending interview id colliding with a `steer` block would otherwise
-    // resolve to that block's row and hydrate the wrong ordinal.
     const messages = [
       assistantMessage({
         messageId: "a-1",

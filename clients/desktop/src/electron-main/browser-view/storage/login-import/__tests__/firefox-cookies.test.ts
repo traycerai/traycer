@@ -9,11 +9,7 @@ import { MAX_SQLITE_COOKIE_ROWS } from "../sqlite-columns";
 import { withSqliteSnapshot } from "../sqlite-snapshot";
 import type { ImportCookieRow } from "../cookie-rows";
 
-/**
- * Builds a real Firefox `cookies.sqlite` on disk, with the writer connection
- * left open so a caller can insert WAL-only rows before the snapshot copy
- * runs - the same interleaving a live browser produces.
- */
+/** Builds a real Firefox `cookies.sqlite` on disk, with the writer connection left open so a caller can insert WAL-only rows before the snapshot copy runs. */
 async function createFirefoxDatabase(options: {
   readonly withOptionalColumns: boolean;
 }): Promise<{
@@ -39,12 +35,7 @@ async function createFirefoxDatabase(options: {
       ${optionalColumns}
     );
   `);
-  // Enable WAL only after the schema exists, matching how a live browser
-  // profile is opened once and left in WAL mode for its whole life. Disable
-  // auto-checkpoint so a row inserted after this point stays in the -wal
-  // file for as long as this writer connection is open - the interleaving
-  // withSqliteSnapshot's read-write-open + page-read + unlink sequence has
-  // to survive.
+  // Enable WAL only after the schema exists, matching how a live browser profile is opened once and left in WAL mode for its whole life.
   writer.exec("PRAGMA journal_mode=WAL");
   writer.exec("PRAGMA wal_autocheckpoint=0");
   return { dir, path, writer };

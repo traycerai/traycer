@@ -12,36 +12,21 @@ interface SegmentRowProps {
   open: boolean;
   onOpenChange: (next: boolean) => void;
   header: ReactNode;
-  /**
-   * A control that belongs to the row but not to its disclosure - rendered as
-   * a SIBLING of the trigger, never inside it. The trigger is a button, so a
-   * button placed in `header` would nest interactive controls: invalid HTML,
-   * and a click on it toggles the row instead of doing its own job. Null when
-   * the row has no such control (all but the shell cards today).
-   */
+  /** A control that belongs to the row but not to its disclosure - rendered as a SIBLING of the trigger, never inside it. The trigger is a button, so a button placed in `header` would nest interactive controls: invalid HTML, and a click on it toggles the row instead of doing its own job. */
   headerAction: ReactNode | null;
   body: ReactNode;
   tone: "default" | "destructive";
   stickyHeader: boolean;
   headerFindUnitId: string | null;
   bodyFindUnitId: string | null;
-  // When false the row is a static header with no toggle, no caret and no body;
-  // the footer still renders. It needs no spacer to line up with its expandable
-  // siblings, because their caret trails rather than leads. For nested tool
-  // activity whose header already says everything.
+  // It needs no spacer to line up with its expandable siblings, because their caret trails rather than leads.
   expandable: boolean;
   className: string | undefined;
-  // Always-visible content rendered beneath the row, regardless of open state
-  // (e.g. a streaming heartbeat). Indented to align under the header. Null when
-  // the row has no footer.
+  // Always-visible content rendered beneath the row, regardless of open state (e.g. a streaming heartbeat). Indented to align under the header.
   footer: ReactNode | null;
 }
 
-/**
- * Bare collapsible row for nested chat activity. No outer border or card
- * background - the parent timeline item provides hierarchy. Body is indented
- * under the row when open; an optional `footer` sits beneath the row always.
- */
+/** Bare collapsible row for nested chat activity. No outer border or card background - the parent timeline item provides hierarchy. */
 export function SegmentRow(props: SegmentRowProps) {
   const { header, tone, className, headerFindUnitId } = props;
   const { expandable, footer } = props;
@@ -61,9 +46,7 @@ export function SegmentRow(props: SegmentRowProps) {
               tone === "destructive" && "text-destructive",
             )}
           >
-            {/* No leading spacer: with the caret moved to the trailing edge,
-                nothing occupies that column on an expandable sibling either, so
-                every row's icon starts flush at `px-1`. */}
+            {/* No leading spacer: with the caret moved to the trailing edge, nothing occupies that column on an expandable sibling either, so every row's icon starts flush at `px-1`. */}
             <span className="relative flex min-w-0 flex-1 items-center gap-2">
               {header}
             </span>
@@ -81,30 +64,9 @@ export function SegmentRow(props: SegmentRowProps) {
   return <ExpandableSegmentRow {...props} />;
 }
 
-/**
- * `data-row-header` marks the header LINE on all three branches above - the
- * plain div, the promoting button and the collapsible trigger. Placement tests
- * ("the elapsed counter rides the header row, the progress line does not") need
- * one anchor that means the same thing whichever branch rendered, and neither
- * `parentElement` nor `closest("button")` is that: the first depends on wrapper
- * depth inside each header, and the second silently returns null for the
- * non-expandable row, which is the branch a streaming tool actually takes.
- */
+/** `data-row-header` marks the header LINE on all three branches above - the plain div, the promoting button and the collapsible trigger. Placement tests ("the elapsed counter rides the header row, the progress line does not") need one anchor that means the same thing whichever branch rendered, and neither `parentElement` nor `closest("button")` is that: the first depends on wrapper depth inside each header, and the second silently returns null for the non-expandable row, which is the branch a streaming tool actually takes. */
 
-/**
- * The disclosure caret every activity row shares: trailing, and invisible until
- * the row is hovered, focused or open.
- *
- * It used to lead the row, which put a permanently-lit chevron in front of the
- * tool icon on every line of a run - two glyphs before the first word, and a
- * different shape from the thinking rows beside them, which carry their caret
- * on the right. Now nothing occupies the leading column on any row, so the
- * icons line up down the whole group.
- *
- * `rotateWhenOpen` is false for the promoting row: that click leaves the window
- * rather than unfolding anything, so a caret turning down would describe a
- * disclosure that never happens.
- */
+/** `rotateWhenOpen` is false for the promoting row: that click leaves the window rather than unfolding anything, so a caret turning down would describe a disclosure that never happens. */
 function RowTrailingCaret(props: { readonly rotateWhenOpen: boolean }) {
   return (
     <ChevronRight
@@ -123,19 +85,7 @@ function RowTrailingCaret(props: { readonly rotateWhenOpen: boolean }) {
   );
 }
 
-/**
- * The same row, inside the bounded live activity window: it never opens a body
- * where it stands. Clicking marks the row open and promotes, which opens the
- * activity group - so the row reappears in the full-height body already
- * unfolded, instead of unfolding into a four-line box that clips it to one line.
- *
- * `onOpenChange(true)` only carries across the remount for rows whose open state
- * is store-backed by segment id (tool, subagent). The rest are seeded by the
- * group through `revealed`; see `LiveActivityPromoteContext`.
- *
- * Deliberately NOT a `Collapsible`: there is no body here to disclose, so a
- * trigger advertising `aria-expanded` would be lying about what the click does.
- */
+/** The same row, inside the bounded live activity window: it never opens a body where it stands. Deliberately NOT a `Collapsible`: there is no body here to disclose, so a trigger advertising `aria-expanded` would be lying about what the click does. */
 function PromotingSegmentRow(
   props: SegmentRowProps & { readonly promote: () => void },
 ) {
@@ -197,13 +147,7 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
       onOpenChange={onOpenChange}
       className={cn("group/work-row", className)}
     >
-      {/* The sticky treatment lives on the WRAPPER, not the trigger. Sticky
-          resolves against the nearest scrollable ancestor but is confined to
-          its containing block, and the trigger's containing block is this
-          wrapper - exactly as tall as the header, so a sticky trigger would
-          have no room to travel and would not pin at all. On the wrapper the
-          containing block is the row, whose `CollapsibleContent` is what
-          scrolls past. */}
+      {/* The sticky treatment lives on the WRAPPER, not the trigger. Sticky resolves against the nearest scrollable ancestor but is confined to its containing block, and the trigger's containing block is this wrapper - exactly as tall as the header, so a sticky trigger would have no room to travel and would not pin at all. */}
       <div
         className={cn(
           "flex w-full items-center",

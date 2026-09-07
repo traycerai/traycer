@@ -41,7 +41,6 @@ interface TabContextMenuContentProps {
   readonly onDuplicateTab: (tab: HeaderTab) => void;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  /** Switches the epic tab title into the inline editable input. */
   readonly onEditTitle: () => void;
   readonly onSetTaskPinned: (pinned: boolean) => void;
 }
@@ -143,12 +142,7 @@ export function TabContextMenuContent(
   );
 }
 
-/**
- * The split-command section. Availability is resolved here at render time so
- * the menu reflects the live layout. Group-scoped commands remain directly in
- * the main menu: in a split, the creation commands above them are disabled, so
- * a second arrangement submenu only adds an unnecessary navigation step.
- */
+/** Availability is resolved here at render time so the menu reflects the live layout. */
 function TabSplitMenuItems(props: {
   readonly tab: HeaderTab;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
@@ -195,11 +189,7 @@ function TabSplitMenuItems(props: {
   );
 }
 
-/**
- * The four group-scoped verbs, ordered to match the platform browser: separate,
- * then the per-side closes, then reverse. Shared verbatim by the arrange
- * submenu and by an empty half's own menu, so the two can never drift.
- */
+/** Shared verbatim by the arrange submenu and by an empty half's own menu, so the two can never drift. */
 function TabSplitArrangeItems(props: {
   readonly tab: HeaderTab;
   readonly availability: TabSplitCommandAvailability;
@@ -246,12 +236,8 @@ function TabSplitArrangeItems(props: {
   );
 }
 
-/**
- * Menu for a split group's empty half. That half has no tab of its own, so the
- * commands resolve against the populated partner - which names the same group -
- * and are shown flat rather than nested, since the menu is already scoped to
- * this split. Without it, right-clicking a "Choose view" half did nothing.
- */
+/** That half has no tab of its own, so the commands resolve against the populated partner - which names the
+ * same group - and are shown flat rather than nested, since the menu is already scoped to this split. */
 export function SplitSlotMenuContent(props: {
   readonly partner: HeaderTab;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
@@ -271,7 +257,6 @@ export function SplitSlotMenuContent(props: {
   );
 }
 
-/** Click-menu counterpart to the flattened context-menu arrangement section. */
 export function SplitQuickActionsMenuContent(props: {
   readonly tab: HeaderTab;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;

@@ -27,10 +27,8 @@ export interface UsageOutputTile {
 }
 
 /**
- * Savings stands ALONE as a catalog-rate estimate (ticket 18). The earlier
- * "Nx raw cost" ratio added catalog-derived savings to costs that can be
- * provider-REPORTED - two different bases (call populations, tiers), so the
- * ratio was not a coherent counterfactual (billing-bug pressure test).
+ * Savings stands ALONE as a catalog-rate estimate (ticket 18).
+ * The earlier "Nx raw cost" ratio added catalog-derived savings to costs that can be provider-REPORTED - two different bases (call populations, tiers), so the ratio was not a coherent counterfactual (billing-bug pressure test).
  */
 export interface UsageCacheSavingsTile {
   readonly knownCacheSavingsUsd: number;
@@ -54,11 +52,8 @@ function countActiveDays(buckets: readonly UsageBucket[]): number {
 }
 
 /**
- * Pure computation for the dashboard's stat-tiles row. Every "null means
- * absent, not zero" rule from the honesty framing lives here once, so no
- * render site has to re-derive it: a `null` field means the tile renders its
- * headline number alone, with no secondary line implying a signal that was
- * never reported.
+ * Pure computation for the dashboard's stat-tiles row.
+ * Every "null means absent, not zero" rule from the honesty framing lives here once, so no render site has to re-derive it: a `null` field means the tile renders its headline number alone, with no secondary line implying a signal that was never reported.
  */
 export function buildUsageStatTiles(
   totals: UsageSummaryTotals,
@@ -102,12 +97,7 @@ export function buildUsageStatTiles(
 }
 
 /**
- * The one honesty note the stat-tiles row carries as a whole: turns with no
- * usage signal at all (`usageCompleteness: "absent"`) still contribute a
- * silent zero to every token sum above, which would otherwise read as "this
- * turn used no cache" rather than "this turn reported nothing" - the
- * distinction the pricing-provenance artifact's absent-not-zero rule exists
- * to preserve. `null` when every turn in the window reported real usage.
+ * The one honesty note the stat-tiles row carries as a whole: turns with no usage signal at all (`usageCompleteness: "absent"`) still contribute a silent zero to every token sum above, which would otherwise read as "this turn used no cache" rather than "this.
  */
 export function usageCompletenessAbsentNote(
   breakdown: UsageSummaryResponse["summary"]["usageCompletenessBreakdown"],

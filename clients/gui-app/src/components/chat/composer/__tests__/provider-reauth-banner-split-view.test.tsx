@@ -93,16 +93,8 @@ function copilotState() {
   };
 }
 
-// Row 9 of the terminal-login contract table: in a split view each pane
-// renders its own `ProviderReauthBanner` with its OWN `viewTabId` prop. The
-// terminal must open in the CLICKING pane's tab, never the other pane's or
-// some app-wide active view.
-//
-// If `TerminalLoginRow` ever stopped honouring the `viewTabId` prop it
-// receives (e.g. derived it from an app-wide "active view" hook instead), a
-// click in pane B would open its terminal into pane A's canvas tab instead -
-// this test would go red because pane B's tab would stay empty while pane
-// A's gained a second, unexpected tile.
+// The terminal must open in the CLICKING pane's tab, never the other pane's or some app-wide active view.
+// If `TerminalLoginRow` ever stopped honouring the `viewTabId` prop it receives (e.g. derived it from an app-wide "active view" hook instead), a click in pane B would open its terminal into pane A's canvas tab instead - this test would go red because pane B's tab would stay empty while pane A's gained a second, unexpected tile.
 describe("<ProviderReauthBanner /> in a split view", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);

@@ -5,10 +5,8 @@ import {
 } from "@/lib/history-search";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 
-// Hand-transcribed from `HISTORY_SEARCH_PERSIST_KEY` in
-// `history-search-store.ts` (`persistKey(STORE_KEYS.historySearch)`), not
-// derived from the builder - a divergence must fail HERE rather than pass a
-// circular comparison against itself (see `src/lib/persist/__tests__/keys.test.ts`).
+// Hand-transcribed from `HISTORY_SEARCH_PERSIST_KEY` in `history-search-store.ts`
+// (`persistKey(STORE_KEYS.historySearch)`), not derived from the builder - a divergence must fail
 const HISTORY_SEARCH_PERSIST_KEY = "traycer-gui-app:history-search";
 
 describe("useHistorySearchStore persisted-state rehydration", () => {

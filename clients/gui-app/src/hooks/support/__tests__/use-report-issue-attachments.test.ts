@@ -9,10 +9,7 @@ import {
 } from "@traycer-clients/shared/support/image-attachment-guards";
 import { useReportIssueAttachments } from "../use-report-issue-attachments";
 
-// Spyable budget predicate: with current constants (3 * 5 MiB + 2 * 512 KB
-// ≈ 16 MiB < 20 MiB) a pure size-based budget rejection is unreachable, so
-// the budget-rejection test below forces the predicate via this mock while
-// every other test uses the real implementation.
+// Spyable budget predicate: with current constants (3 * 5 MiB + 2 * 512 KB ≈ 16 MiB < 20 MiB) a pure size-based budget rejection is unreachable, so the budget-rejection test below forces the predicate via this mock while every other test uses the real implementation.
 vi.mock(
   "@traycer-clients/shared/support/image-attachment-guards",
   async (importOriginal) => {
@@ -69,12 +66,7 @@ function makeJpegFile(name: string): File {
   return new File([bytes], name, { type: "image/jpeg" });
 }
 
-/**
- * ADV-I4 fixture: a real 8-byte PNG signature with nothing after it - a
- * screenshot cut off mid-write, or a partial drag payload. The magic-byte
- * check (and the MIME allowlist) both pass this; only an actual decode
- * attempt catches it.
- */
+/** ADV-I4 fixture: a real 8-byte PNG signature with nothing after it - a screenshot cut off mid-write, or a partial drag payload. */
 function makeTruncatedPngFile(name: string): File {
   const bytes = new Uint8Array([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -87,19 +79,11 @@ interface DeferredPngFile {
   readonly resolve: () => void;
 }
 
-/**
- * A PNG `File` whose `arrayBuffer()` read stays pending until `resolve()` is
- * called - lets interleaving tests park two concurrent `ingest()` loops
- * mid-read (both past their pre-await checks, neither committed yet) and
- * then control which one's commit lands first.
- */
+/** A PNG `File` whose `arrayBuffer()` read stays pending until `resolve()` is called - lets interleaving tests park two concurrent `ingest()` loops mid-read (both past their pre-await checks, neither committed yet) and then control which one's commit lands first. */
 function makeDeferredPngFile(name: string): DeferredPngFile {
   const file = makeDefaultPngFile(name);
   const bytes = pngBytes(32);
-  // Definite-assignment assertion, not a type-erasing cast: the `Promise`
-  // executor below is invoked synchronously (per spec) before this function
-  // returns, so `release` is always assigned before `makeDeferredPngFile`'s
-  // caller can read it off the returned object.
+  // Definite-assignment assertion, not a type-erasing cast: the `Promise` executor below is invoked synchronously (per spec) before this function returns, so `release` is always assigned before `makeDeferredPngFile`'s caller can read it off the returned object.
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -115,15 +99,7 @@ let urlCounter = 0;
 const createObjectURLMock = vi.fn((): string => `blob:mock/${++urlCounter}`);
 const revokeObjectURLMock = vi.fn((): void => undefined);
 
-// jsdom implements no image decoder at all, so `createImageBitmap` is absent
-// from its `globalThis` - unlike the read/write DOM APIs above, there is no
-// "real" implementation to spy on here. Installed fresh via
-// `Object.defineProperty` each test (same pattern the shared jsdom-polyfill
-// setup file uses for `ResizeObserver`/`IntersectionObserver`), scoped to
-// this file only: vitest isolates `globalThis` per test file under the
-// default `pool: "forks"` configuration, so this never leaks into a sibling
-// test file that mounts the report-issue dialog. Defaults to a successful
-// decode; individual tests override it to simulate ADV-I4's undecodable case.
+// Installed fresh via `Object.defineProperty` each test (same pattern the shared jsdom-polyfill setup file uses for `ResizeObserver`/`IntersectionObserver`), scoped to this file only: vitest isolates `globalThis` per test file under the default `pool: "forks"` configuration, so this never leaks into a sibling test file that mounts the report-issue dialog.
 const createImageBitmapMock = vi.fn(
   (_source: File): Promise<{ close: () => void }> =>
     Promise.resolve({ close: () => undefined }),
@@ -332,13 +308,7 @@ describe("useReportIssueAttachments", () => {
   });
 
   it("rejects when the running total would exceed the attachment budget", async () => {
-    // Explicit arithmetic under current constants:
-    //   TOTAL = 20 * 1024 * 1024 = 20_971_520
-    //   2 * LOG = 2 * 512_000 = 1_024_000
-    //   maxFittingImageTotal = 20_971_520 - 1_024_000 = 19_947_520
-    //   3 * MAX_REPORT_IMAGE_BYTES = 3 * 5_242_880 = 15_728_640
-    //   15_728_640 < 19_947_520 => three real max-size images never trip budget.
-    // Force the predicate so the attach-time rejection UI path is covered.
+    // Explicit arithmetic under current constants: TOTAL = 20 * 1024 * 1024 = 20_971_520 2 * LOG = 2 * 512_000 = 1_024_000 maxFittingImageTotal = 20_971_520 - 1_024_000 = 19_947_520 3 * MAX_REPORT_IMAGE_BYTES = 3 * 5_242_880 = 15_728_640 15_728_640 < 19_947_520 => three real max-size images never trip budget.
     const maxFitting =
       TOTAL_ATTACHMENT_BUDGET_BYTES - 2 * REPORT_LOG_TAIL_MAX_BYTES;
     expect(MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES).toBeLessThan(maxFitting);
@@ -441,10 +411,7 @@ describe("useReportIssueAttachments", () => {
           result.current.images.some((image) => image.fileName === "fast.png"),
         ).toBe(true);
       });
-      // The fast batch already committed and its own loop returned, but the
-      // slow batch is still mid-read - a per-loop boolean would have already
-      // flipped this to false here, silently telling a submit-time consumer
-      // ingestion is done while an image is still in flight.
+      // The fast batch already committed and its own loop returned, but the slow batch is still mid-read - a per-loop boolean would have already flipped this to false here, silently telling a submit-time consumer ingestion is done while an image is still in flight.
       expect(result.current.isIngesting).toBe(true);
       expect(result.current.images).toHaveLength(1);
 
@@ -576,11 +543,7 @@ describe("useReportIssueAttachments", () => {
       const slow = makeDefaultPngFile("slow.png");
       const corrupt = makeTruncatedPngFile("broken.png");
 
-      // Gate each file's DECODE step individually (rather than relying on
-      // the relative speed of a default-successful decode vs. a rejected
-      // one, which is not a reliable ordering signal) so which batch is
-      // still "in flight" when the assertion below runs is explicit and
-      // deterministic, not inferred from microtask-hop counts.
+      // a rejected one, which is not a reliable ordering signal) so which batch is still "in flight" when the assertion below runs is explicit and deterministic, not inferred from microtask-hop counts.
       let releaseSlowDecode!: () => void;
       const slowDecodeGate = new Promise<void>((resolve) => {
         releaseSlowDecode = resolve;
@@ -599,11 +562,7 @@ describe("useReportIssueAttachments", () => {
       await waitFor(() => {
         expect(result.current.rejection?.reason).toBe("corrupt");
       });
-      // The corrupt batch's own loop has already unwound through its
-      // try/finally (the pending-ingest counter went 2 -> 1), but the slow
-      // batch's decode is still gated - isIngesting must still reflect that
-      // outstanding batch, not the corrupt one's own local completion (i.e.
-      // the counter, not a per-loop boolean, survived the throw correctly).
+      // The corrupt batch's own loop has already unwound through its try/finally (the pending-ingest counter went 2 -> 1), but the slow batch's decode is still gated - isIngesting must still reflect that outstanding batch, not the corrupt one's own local completion (i.e.
       expect(result.current.isIngesting).toBe(true);
       expect(result.current.images).toHaveLength(0);
 

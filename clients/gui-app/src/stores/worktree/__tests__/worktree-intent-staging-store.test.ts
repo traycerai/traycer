@@ -184,9 +184,8 @@ describe("worktree-intent-staging-store", () => {
     );
   });
 
-  // A slot's host can change under an open session, so both "consume this
-  // slot" and "this slot's identity changed" have to act on the whole family -
-  // otherwise the host the user drifted away from keeps a live copy.
+  // A slot's host can change under an open session, so both "consume this slot" and "this slot's
+  // identity changed" have to act on the whole family - otherwise the host the user drifted away
   describe("across-host slot lifecycle", () => {
     const nullDraftA: WorktreeStagingKey = {
       surface: "landing",
@@ -224,10 +223,7 @@ describe("worktree-intent-staging-store", () => {
       expect(readStagedWorktreeIntent(otherDraft)).not.toBeNull();
     });
 
-    // Minting the draft id must carry BOTH hosts' picks onto their own
-    // destination slots. Moving only the active host's copy loses the other
-    // pick AND strands it under the null-draft key, where the next brand-new
-    // landing page on that host would inherit it.
+    // Minting the draft id must carry BOTH hosts' picks onto their own destination slots.
     it("migrateKeyForAllHosts moves each host's copy onto its own host", () => {
       const store = useWorktreeIntentStagingStore.getState();
       store.stageEntry(nullDraftA, localEntry("/a", true));
@@ -631,9 +627,8 @@ describe("worktree-intent-staging-store", () => {
     expect(useWorktreeIntentStagingStore.getState().intentByKey).toEqual({});
   });
 
-  // Pairs with `clearForAllHosts`'s reach: a caller that clears every bucket
-  // must ask about every bucket, or it silently drops an intent staged while
-  // the surface was pinned to another host (Codex review finding).
+  // Pairs with `clearForAllHosts`'s reach: a caller that clears every bucket must ask about every
+  // bucket, or it silently drops an intent staged while the surface was pinned to another host
   describe("anyHostHasStagedWorktreeIntent", () => {
     const draftA: WorktreeStagingKey = {
       surface: "landing",

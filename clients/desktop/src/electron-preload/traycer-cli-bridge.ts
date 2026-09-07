@@ -9,14 +9,6 @@ import type {
   TraycerShellProbeResult,
 } from "../ipc-contracts/traycer-cli-types";
 
-/**
- * Surface exposed under `runnerHost.traycerCli` in the preload bridge.
- * Each method maps to one `runnerHost:traycer:*` invoke channel handled by
- * `traycer-cli-ipc.ts` in main, which subprocess-invokes the `traycer` CLI.
- *
- * Kept browser-safe: no Electron types leak across `contextBridge`. The
- * renderer-side `DesktopRunnerHost` wraps this as `ITraycerCli`.
- */
 export interface TraycerCliBridgeSurface {
   hostStatus(): Promise<TraycerHostStatusSnapshot>;
   shellConfigGet(): Promise<TraycerShellConfig>;

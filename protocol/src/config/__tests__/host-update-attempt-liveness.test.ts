@@ -1,17 +1,5 @@
 /**
- * Table-driven cross-product for `deriveAttemptLiveness` (design §2.4):
- * every `HostUpdateAttemptRead` shape the decoder can produce, times every
- * holder observation the probe can report. The load-bearing claims are
- * negative ones, so each is proven by construction rather than by a single
- * example:
- *
- *   - `interrupted` arises ONLY for a valid, ACTIVE, STALE record with
- *     `no-holder` evidence. Every other cell - including every parked or
- *     terminal cell, at any age, with any holder - must not be `interrupted`.
- *   - A parked record is never `interrupted` at any age (checked before the
- *     holder is even consulted).
- *   - A future-dated `updatedAt` is not stale.
- *   - An unparseable `updatedAt` is `indeterminate`, never `interrupted`.
+ * Table-driven cross-product for `deriveAttemptLiveness` (design §2.4): every `HostUpdateAttemptRead` shape the decoder can produce, times every holder observation the probe can report.
  */
 import { describe, expect, it } from "vitest";
 import {

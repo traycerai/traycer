@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 import { tuiAgentSchema } from "@traycer/protocol/persistence/epic/tui-agents";
 
 /**
- * `archivedAt` back-compat guard on `baseTuiAgentFields`, shared by all four
- * terminal-agent variants. Same host-backed archive flag as
- * `chatSchema.archivedAt` (a single `epic.setChatArchived` RPC covers both
- * chats and TUI agents by id) - records persisted before archiving existed
- * must still parse, defaulting to not-archived.
+ * `archivedAt` back-compat guard on `baseTuiAgentFields`, shared by all four terminal-agent variants.
+ * Same host-backed archive flag as `chatSchema.archivedAt` (a single `epic.setChatArchived` RPC covers both chats and TUI agents by id) - records persisted before archiving existed must still parse, defaulting to.
  */
 
 function baseFields() {

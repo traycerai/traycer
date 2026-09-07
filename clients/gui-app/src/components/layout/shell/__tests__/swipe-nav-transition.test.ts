@@ -26,12 +26,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/**
- * The geometry both directions are derived from. The cases are written against
- * the PLANES rather than the screens, because that is the invariant: whichever
- * screen the finger is carrying is the near one, and it behaves identically
- * going back and going forward.
- */
+/** The cases are written against the planes rather than the screens, because that is the invariant: whichever
+ * screen the finger is carrying is the near one, and it behaves identically going back and going forward. */
 describe("composeSwipeNavLayers", () => {
   it("rests with the near plane covering the screen and the far one behind it", () => {
     const back = composeSwipeNavLayers("back", 0, WIDTH_PX);
@@ -51,12 +47,7 @@ describe("composeSwipeNavLayers", () => {
     expect(swipeNavPlaneTransform(back, "far").dimOpacity).toBeCloseTo(0);
   });
 
-  // A forward swipe carries the DESTINATION in from the trailing edge - the
-  // edge the finger entered at - while the outgoing screen recedes toward the
-  // leading one. Asserted against the EDGES rather than against back's values
-  // negated: forward is back run in reverse, not back's mirror image, and a
-  // mirrored assertion once certified a forward whose planes travelled against
-  // the finger.
+  // Asserted against the edges rather than against back's values negated.
   it("carries the destination in from the trailing edge, going forward", () => {
     const rest = composeSwipeNavLayers("forward", 0, WIDTH_PX);
     const done = composeSwipeNavLayers("forward", 1, WIDTH_PX);
@@ -69,9 +60,8 @@ describe("composeSwipeNavLayers", () => {
     expect(swipeNavPlaneTransform(done, "far").dimOpacity).toBeGreaterThan(0);
   });
 
-  // The stack itself does not know which way the gesture runs: forward at any
-  // progress occupies exactly the positions back occupies at the complementary
-  // one. This is the invariant that keeps the two directions one code path.
+  // The stack itself does not know which way the gesture runs: forward at any progress occupies exactly the
+  // positions back occupies at the complementary one.
   it("runs forward as back played in reverse, plane for plane", () => {
     for (let step = 0; step <= 10; step += 1) {
       const progress = step / 10;
@@ -89,13 +79,11 @@ describe("composeSwipeNavLayers", () => {
     }
   });
 
-  // The depth cue is the DIFFERENCE in speed. If the far plane travelled as far
-  // as the near one the pair would read as one strip of content sliding past a
+  // If the far plane travelled as far as the near one the pair would read as one strip of content sliding past a
   // window rather than as two stacked screens.
   it("moves the far plane a fraction of what the near one moves", () => {
-    // Both travels are MEASURED between the endpoints rather than derived from
-    // the parallax constant: a test that recomputes the formula it is checking
-    // agrees with any formula, including none at all.
+    // Both travels are measured between the endpoints rather than derived from the parallax constant: a test that
+    // recomputes the formula it is checking agrees with any formula, including none at all.
     const start = composeSwipeNavLayers("back", 0, WIDTH_PX);
     const end = composeSwipeNavLayers("back", 1, WIDTH_PX);
     const nearTravel = Math.abs(
@@ -124,11 +112,8 @@ describe("composeSwipeNavLayers", () => {
         const far = swipeNavPlaneTransform(composition, "far").x;
         const leading = Math.min(near, far);
         const trailing = Math.max(near, far);
-        // Each plane spans a full width from its own offset. The screen is
-        // covered when the pair reaches both edges AND the trailing plane
-        // starts before the leading one ends - the third condition is the one
-        // that matters, since a gap between them would show the live app the
-        // gesture has not navigated yet.
+        // The screen is covered when the pair reaches both edges and the trailing plane starts before the leading one
+        // ends.
         expect(leading).toBeLessThanOrEqual(0);
         expect(trailing + WIDTH_PX).toBeGreaterThanOrEqual(WIDTH_PX);
         expect(trailing).toBeLessThanOrEqual(leading + WIDTH_PX);
@@ -215,10 +200,8 @@ describe("the snapshot cache", () => {
     expect(readScreenSnapshot("entry-four")).toBeNull();
   });
 
-  // A run of consecutive back swipes walks the cursor across entries that were
-  // all two-or-more steps away when they were filed. Retention by recency is
-  // what keeps the SECOND back of a run animated: pruning against the arrival
-  // position released exactly the screen that back needed.
+  // A run of consecutive back swipes walks the cursor across entries that were all two-or-more steps away when
+  // they were filed.
   it("keeps the screens a run of consecutive swipes walks back across", () => {
     rememberScreenSnapshot("entry-a", snapshotOf("first"));
     rememberScreenSnapshot("entry-b", snapshotOf("second"));
@@ -227,9 +210,8 @@ describe("the snapshot cache", () => {
     expect(readScreenSnapshot("entry-a")?.node.textContent).toBe("first");
   });
 
-  // A frozen screen is a whole DOM tree held out of the collector's reach, so
-  // the cache is bounded - by count, since distance from the cursor is not a
-  // bound the cursor's own movement respects.
+  // A frozen screen is a whole DOM tree held out of the collector's reach, so the cache is bounded - by count,
+  // since distance from the cursor is not a bound the cursor's own movement respects.
   it("releases the least recently filed screen once full", () => {
     for (let step = 0; step <= 4; step += 1) {
       rememberScreenSnapshot(`entry-${step}`, snapshotOf(`screen ${step}`));
@@ -240,9 +222,8 @@ describe("the snapshot cache", () => {
     expect(readScreenSnapshot("entry-4")?.node.textContent).toBe("screen 4");
   });
 
-  // Re-filing an entry is a fresh departure from it - the strongest claim on
-  // being swiped back to - so it renews the screen's tenure rather than
-  // inheriting the original filing's.
+  // Re-filing an entry is a fresh departure from it - the strongest claim on being swiped back to - so it renews
+  // the screen's tenure rather than inheriting the original filing's.
   it("renews a screen's tenure when its entry is filed again", () => {
     for (let step = 0; step <= 3; step += 1) {
       rememberScreenSnapshot(`entry-${step}`, snapshotOf(`screen ${step}`));
@@ -274,9 +255,8 @@ describe("captureScreenSnapshot", () => {
     expect(snapshot?.node.textContent).toBe("a chat");
   });
 
-  // A frozen screen sits on top of the live app it was copied from. Left
-  // interactive it would answer hit tests and be read out, so the app would
-  // have two of everything for the length of a gesture.
+  // Left interactive it would answer hit tests and be read out, so the app would have two of everything for the
+  // length of a gesture.
   it("freezes the copy out of reach of pointers and assistive technology", () => {
     const snapshot = captureScreenSnapshot(mountScreen("<p>a chat</p>"));
 
@@ -285,9 +265,8 @@ describe("captureScreenSnapshot", () => {
     expect(snapshot?.node.style.pointerEvents).toBe("none");
   });
 
-  // Without this a snapshot taken while a transition is on screen clones the
-  // frozen screens into the next frozen screen, and the one after contains
-  // both.
+  // Without this a snapshot taken while a transition is on screen clones the frozen screens into the next frozen
+  // screen, and the one after contains both.
   it("leaves out the subtrees marked as never belonging to a copy", () => {
     const source = mountScreen(
       `<p>a chat</p><div ${SWIPE_NAV_EXCLUDE_ATTRIBUTE}><p>frozen</p></div>`,
@@ -298,23 +277,7 @@ describe("captureScreenSnapshot", () => {
     expect(snapshot?.node.textContent).toBe("a chat");
   });
 
-  /**
-   * Scroll offsets are RECORDED at capture and applied after the node is
-   * mounted, and it is the recording these assert.
-   *
-   * That split is the fix for a real defect and not a convenience: a detached
-   * element has no scroll box, so writing `scrollTop` to the clone at capture
-   * time was silently discarded and every scrollable region froze at its top.
-   * Recording is also the half a layout-free environment can observe - the
-   * numbers are read from the source and carried as data, so nothing here
-   * depends on jsdom laying anything out.
-   *
-   * What these do NOT cover, and what still needs a device: that APPLYING them
-   * after mount actually moves the region (jsdom reports every offset as 0
-   * however it is set), and canvas restoration (jsdom gives a canvas no
-   * drawing context). A chat read halfway down and a live terminal tile are
-   * the two cases that show those.
-   */
+  /** That split is the fix for a real defect and not a convenience. */
   it("records where each scrolled region was, against the cloned element", () => {
     const source = mountScreen(`<div id="list"><p>a chat</p></div>`);
     const list = source.querySelector("#list");
@@ -334,15 +297,14 @@ describe("captureScreenSnapshot", () => {
     expect(recorded).toHaveLength(1);
     expect(recorded[0]?.scrollTop).toBe(250);
     expect(recorded[0]?.scrollLeft).toBe(10);
-    // The CLONE's element, never the live one: applying to the source would
-    // scroll the screen the user is still looking at.
+    // The clone's element, never the live one: applying to the source would scroll the screen the user is still
+    // looking at.
     expect(recorded[0]?.element).toBe(snapshot?.node.querySelector("#list"));
     expect(recorded[0]?.element).not.toBe(list);
   });
 
-  // The screen ROOT is as capable of scrolling as anything inside it, and a
-  // descendant-only walk skips exactly the region the marker names - which
-  // would freeze it at its top, the defect this recording exists to prevent.
+  // The screen root is as capable of scrolling as anything inside it, and a descendant-only walk skips exactly
+  // the region the marker names - which would freeze it at its top, the defect this recording exists to prevent.
   it("records the screen root's own offset, against the clone root", () => {
     const source = mountScreen(`<p>a chat</p>`);
     Object.defineProperty(source, "scrollTop", {
@@ -359,9 +321,8 @@ describe("captureScreenSnapshot", () => {
     expect(recorded[0]?.element).not.toBe(source);
   });
 
-  // A region at its origin is not worth carrying: every element in the tree
-  // would otherwise be recorded, and a frozen screen is already a whole DOM
-  // tree held out of the collector's reach.
+  // A region at its origin is not worth carrying: every element in the tree would otherwise be recorded, and a
+  // frozen screen is already a whole DOM tree held out of the collector's reach.
   it("records nothing for a screen that is not scrolled anywhere", () => {
     const snapshot = captureScreenSnapshot(
       mountScreen(`<div id="list"><p>a chat</p></div>`),
@@ -370,8 +331,7 @@ describe("captureScreenSnapshot", () => {
     expect(snapshot?.scrollOffsets).toHaveLength(0);
   });
 
-  // The write is deferred, not skipped. `applyScreenSnapshotScroll` is what
-  // the mount calls, and it must assign to the recorded element rather than
+  // `applyScreenSnapshotScroll` is what the mount calls, and it must assign to the recorded element rather than
   // re-deriving anything.
   it("applies a recorded offset to the element it was recorded against", () => {
     const source = mountScreen(`<div id="list"><p>a chat</p></div>`);

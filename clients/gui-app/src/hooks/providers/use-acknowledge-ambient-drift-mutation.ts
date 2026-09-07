@@ -27,15 +27,7 @@ export function useAcknowledgeAmbientDrift(): AcknowledgeAmbientDriftMutationRes
 }
 
 /**
- * Client-scoped variant - see `useProvidersStartLoginForClient`. Rides
- * `providers.setEnabled`'s `profileAction` fold-in (`acknowledgeAmbientDrift`,
- * added at `@2.2`) rather than a standalone method - see that schema's
- * comment. Deliberately has no `onError`: this is the best-effort DURABLE
- * layer behind the composer's local (session-only) acknowledgment - an
- * older host that predates `@2.2` rejects the unknown `profileAction`
- * variant client-side (a clean `RPC_ERROR` from the version-negotiation
- * Zod-strip, before ever reaching the wire) and that must stay silent, not
- * surface an error toast for a routine capability gap the user can't act on.
+ * No `onError`: an older host rejects unknown `profileAction` client-side. That capability gap must stay silent.
  */
 export function useAcknowledgeAmbientDriftForClient(
   client: HostClient<HostRpcRegistry> | null,

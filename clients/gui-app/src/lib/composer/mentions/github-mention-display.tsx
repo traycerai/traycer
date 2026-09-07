@@ -40,11 +40,7 @@ import {
 import { MENU_ICON_CLASS } from "./mention-entry-display";
 
 /**
- * The mention's IDENTITY builders live in
- * `@traycer/protocol/common/github-mention-identity` - pure string functions,
- * no rendering dependency - and are re-exported here so this module stays the
- * one place a caller has to know about. See that file for why they were
- * separated, and for why they left the GUI entirely.
+ * The mention's IDENTITY builders live in `@traycer/protocol/common/github-mention-identity` - pure string functions, no rendering dependency - and are re-exported here so this module stays the one place a caller has to know about.
  */
 export {
   githubMentionToken,
@@ -52,20 +48,10 @@ export {
   githubMentionTokenReference,
 } from "@traycer/protocol/common/github-mention-identity";
 
-/**
- * How a PR/issue row reads: its state glyph, its row text, its preview card,
- * and the chip it inserts.
- *
- * The glyphs and tints are the PR panel's, taken from
- * `worktree-pr-state-palette` rather than restated - the same three shapes
- * (open / merged / closed) a reader has already learned in the sidebar and the
- * hover card, at the same contrast-validated tokens. Draft and the two issue
- * states extend that vocabulary; they are not a second dialect of it.
- */
+/** How a PR/issue row reads: its state glyph, its row text, its preview card, and the chip it inserts. */
 
 /**
- * Draft is not a PR *state* on the wire - it is a flag on an open PR, and
- * `issue-not-planned` is the same shape: a closed issue's `stateReason`.
+ * Draft is not a PR *state* on the wire - it is a flag on an open PR, and `issue-not-planned` is the same shape: a closed issue's `stateReason`.
  */
 export type GithubMentionDisplayState =
   | "open"
@@ -101,14 +87,11 @@ const STATE_TINT: Readonly<Record<GithubMentionDisplayState, string>> = {
   merged: PR_STATE_TINT_CLASS.merged,
   closed: PR_STATE_TINT_CLASS.closed,
   "issue-open": PR_STATE_TINT_CLASS.open,
-  // A closed issue is resolved, not rejected - purple (the "landed" colour
-  // merged PRs already use) rather than the red that means "closed unmerged".
-  // That sentence is only true of a COMPLETED closure, which is why the
-  // not-planned case below is a separate state rather than a shade of this one.
+  // A closed issue is resolved, not rejected - purple (the "landed" colour merged PRs already use) rather than the red that means "closed unmerged".
+  // That sentence is only true of a COMPLETED closure, which is why the not-planned case below is a separate state rather than a shade of this one.
   "issue-closed": PR_STATE_TINT_CLASS.merged,
-  // Dismissed, not failed - so muted rather than the red that means something
-  // went wrong, on the same reasoning that leaves `draft` untinted. Red would
-  // read as a rejection the closure did not necessarily express.
+  // Dismissed, not failed - so muted rather than the red that means something went wrong, on the same reasoning that leaves `draft` untinted.
+  // Red would read as a rejection the closure did not necessarily express.
   "issue-not-planned": "text-muted-foreground",
 };
 
@@ -127,11 +110,8 @@ export function githubMentionDisplayState(
 ): GithubMentionDisplayState {
   if (row.kind === "issue") {
     if (row.state === "open") return "issue-open";
-    // `stateReason` is a nullable free-form string on the wire, so this asks
-    // whether it explicitly says something OTHER than completed rather than
-    // whether it says `completed`. A null reason is legacy or unpopulated, not
-    // a dismissal, and inventing one from an absence would be the same
-    // overclaim in the opposite direction - it keeps the settled reading.
+    // `stateReason` is a nullable free-form string on the wire, so this asks whether it explicitly says something OTHER than completed rather than whether it says `completed`.
+    // A null reason is legacy or unpopulated, not a dismissal, and inventing one from an absence would be the same overclaim in the opposite direction - it keeps the settled reading.
     if (row.stateReason !== null && row.stateReason !== "completed") {
       return "issue-not-planned";
     }
@@ -160,36 +140,19 @@ export function githubMentionCategoryIcon(
 }
 
 /**
- * `org/repo#123`, the one canonical way to write a reference in prose -
- * host-prefixed when the host is not github.com. The same coordinates on two
- * hosts are two different attachments, and every surface this feeds (the chip
- * tooltip, the preview subtitle, the menu description, the token below) must
- * not collapse them into one indistinguishable string. The default host is
- * omitted for the same byte-stability reason `githubMentionToken` documents.
+ * `org/repo#123`, the one canonical way to write a reference in prose - host-prefixed when the host is not github.com.
+ * The same coordinates on two hosts are two different attachments, and every surface this feeds (the chip tooltip, the preview subtitle, the menu description, the token below) must not collapse them into one indistinguishable string.
  */
 export function githubMentionReference(row: GithubMentionRow): string {
   const reference = `${row.owner}/${row.repo}#${row.number}`;
-  // The default check FOLDS (one predicate, shared with the token and the
-  // serializer): a row served as `GitHub.com` is the default host, and
-  // printing `GitHub.com/acme/widgets#123` would assert a host qualification
-  // the identity layer says does not exist.
+  // The default check FOLDS (one predicate, shared with the token and the serializer): a row served as `GitHub.com` is the default host, and printing `GitHub.com/acme/widgets#123` would assert a host qualification the identity layer says does not exist.
   return isDefaultGithubMentionHost(row.githubHost)
     ? reference
     : `${row.githubHost}/${reference}`;
 }
 
 /**
- * How much of a row's repository has to be written for the name to identify it
- * WITHIN THIS SCOPE - the shortest form that is still unambiguous.
- *
- * A boolean cannot answer this. `acme/api` and `contoso/api` in one scope are
- * two repositories with one name, so "more than one repository, therefore
- * print `repo`" labels both rows `api#123` and makes two distinct attachments
- * read identically - correct paths under indistinguishable text. Rare, but a
- * monorepo org plus a fork or a vendored upstream is exactly how it happens.
- *
- * Escalates only as far as the collision forces, so the common scope keeps the
- * short name it had before.
+ * How much of a row's repository has to be written for the name to identify it WITHIN THIS SCOPE - the shortest form that is still unambiguous.
  */
 export function githubRepositoryQualification(
   identity: {
@@ -199,17 +162,11 @@ export function githubRepositoryQualification(
   },
   repositories: ReadonlyArray<GithubMentionRepository> | null,
 ): GithubRepositoryQualification {
-  // Null is ignorance, not an answer: the scope has not resolved, and the live
-  // search can still put rows on screen (it runs whenever no repository is
-  // selected). Under ignorance the safe label is `owner/repo` - a bare `#123`
-  // from one repository beside a `#123` from another is exactly the ambiguity
-  // this function exists to prevent, and no collision answer exists to prove
-  // the short form safe.
+  // Null is ignorance, not an answer: the scope has not resolved, and the live search can still put rows on screen (it runs whenever no repository is selected).
+  // Under ignorance the safe label is `owner/repo` - a bare `#123` from one repository beside a `#123` from another is exactly the ambiguity this function exists to prevent, and no collision answer exists to prove the short form safe.
   if (repositories === null) return "owner-repo";
   if (repositories.length <= 1) return "none";
-  // Folded per segment: the row is API-cased while the scope's entries carry
-  // the remote's user-typed casing, so a verbatim compare under-counts the
-  // collisions and fails to escalate - the one job this function has.
+  // Folded per segment: the row is API-cased while the scope's entries carry the remote's user-typed casing, so a verbatim compare under-counts the collisions and fails to escalate - the one job this function has.
   const sharingName = repositories.filter(
     (repository) =>
       foldGithubIdentitySegment(repository.repo) ===
@@ -242,8 +199,7 @@ export function githubRepositoryQualifiedName(
 }
 
 /**
- * The row's trailing muted segment: `repo · 2h`, or just `2h` when the whole
- * scope is one repository and naming it every row would say nothing.
+ * The row's trailing muted segment: `repo · 2h`, or just `2h` when the whole scope is one repository and naming it every row would say nothing.
  */
 export function githubMentionRowTrailing(
   row: GithubMentionRow,
@@ -259,12 +215,8 @@ export function githubMentionRowTrailing(
 }
 
 /**
- * The preview card. Rendered from the CACHED row only - highlighting a row
- * never fetches, so every fact here is one the catalog already carried.
- *
- * A fact with nothing to say is OMITTED rather than rendered blank: a PR whose
- * checks have not reported yet should not show an empty "Checks" line, because
- * a labelled blank reads as "zero" rather than as "not known".
+ * The preview card.
+ * Rendered from the CACHED row only - highlighting a row never fetches, so every fact here is one the catalog already carried.
  */
 export function githubMentionPreview(
   row: GithubMentionRow,
@@ -288,9 +240,7 @@ function pullRequestFacts(
   const checks = prChecksSummary(row.checksRollup);
   return [
     { label: "State", value: STATE_LABEL[githubMentionDisplayState(row)] },
-    // `base ← head`, the merge-target reading GitHub's own compare control
-    // uses - shared with the PR panel row rather than re-derived here, so the
-    // two surfaces cannot end up writing the arrow in opposite directions.
+    // `base ← head`, the merge-target reading GitHub's own compare control uses - shared with the PR panel row rather than re-derived here, so the two surfaces cannot end up writing the arrow in opposite directions.
     ...(row.baseRefName === null && row.headRefName === null
       ? []
       : [{ label: "Branch", value: formatPrBaseFromHead(row) }]),
@@ -333,15 +283,7 @@ function authorFact(row: GithubMentionRow): ReadonlyArray<MentionPreviewFact> {
   return [{ label: "Author", value: author.login }];
 }
 
-/**
- * The inserted chip.
- *
- * `label` is what the chip READS - `#123`, or `repo#123` when the scope spans
- * more than one repository and a bare number would be ambiguous. `description`
- * is its tooltip: `org/repo#123 · <title>`, deliberately WITHOUT the state.
- * State changes between insert and read, and a chip must not assert a fact
- * that can quietly go stale on the reader.
- */
+/** The inserted chip. */
 export function githubMentionAttachmentFromRow(
   row: GithubMentionRow,
   repositories: ReadonlyArray<GithubMentionRepository> | null,

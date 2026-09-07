@@ -3,15 +3,7 @@ import { createTypedMap } from "./factory";
 import type { TypedYMap, YCreateInput } from "./types";
 import { toObject } from "./utils";
 
-/**
- * Move an element within a Y.Array from one index to another.
- *
- * Yjs deletes are permanent (items enter the CRDT deletion set), so a "move"
- * is really snapshot → delete → re-create → insert.  This generates exactly
- * 2 Yjs operations (1 delete + 1 insert) regardless of array size.
- *
- * After the operation the moved element occupies `toIndex` in the resulting array.
- */
+/** Move an element within a Y.Array from one index to another. */
 export function move<T extends object>(
   array: Y.Array<TypedYMap<T>>,
   fromIndex: number,
@@ -25,14 +17,7 @@ export function move<T extends object>(
 
 /**
  * Sort a Y.Array in-place using the provided comparator, with minimal Yjs ops.
- *
- * Uses selection-sort order: walks left-to-right, only `move`-ing elements
- * that are out of place.  Generates 0 Yjs ops when already sorted, and
- * exactly 2 ops (1 delete + 1 insert) per out-of-place element otherwise.
- *
- * Position tracking is done in-memory via a permutation array so we never
- * need identity or deep-equality checks on the live Y.Maps (which get
- * recreated on every move).
+ * Position tracking is done in-memory via a permutation array so we never need identity or deep-equality checks on the live Y.Maps (which get recreated on every move).
  */
 export function sort<T extends object>(
   array: Y.Array<TypedYMap<T>>,
@@ -79,9 +64,7 @@ export function sort<T extends object>(
 
 /**
  * Remove every element for which `predicate` returns true.
- *
- * Iterates in reverse so that deletions don't shift the indices of
- * yet-to-be-visited elements.  Each removal is a single Y.Array delete op.
+ * Iterates in reverse so that deletions don't shift the indices of yet-to-be-visited elements.
  */
 export function removeWhere<T extends object>(
   array: Y.Array<TypedYMap<T>>,

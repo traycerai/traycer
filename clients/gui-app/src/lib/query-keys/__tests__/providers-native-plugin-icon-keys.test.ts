@@ -28,11 +28,8 @@ function iconKey(args: {
 }
 
 /**
- * `isPluginIconKey` is what a plugin mutation invalidates through. It exists
- * because `version` is NULLABLE: a versioned plugin retires its own cache entry
- * by changing the key, but one that reports no version keeps the identical key
- * across a remove-then-add, and with `staleTime: Infinity` and polling off that
- * entry would serve the previous install's artwork for the rest of the session.
+ * `isPluginIconKey` is what a plugin mutation invalidates through.
+ * It exists because `version` is NULLABLE: a versioned plugin retires its own cache entry by changing the key, but one that reports no version keeps the identical key across a remove-then-add, and with `staleTime: Infinity` and polling off that entry would.
  */
 describe("providersNativeQueryKeys.isPluginIconKey", () => {
   it("matches every icon on its host - any plugin, theme, or version", () => {
@@ -73,10 +70,7 @@ describe("providersNativeQueryKeys.isPluginIconKey", () => {
   });
 
   it("does not match the sibling native lists on the same host", () => {
-    // These share the host prefix AND the `providers`/`native` segments, so a
-    // looser prefix test would sweep them in - and the plugins list is written
-    // directly by the mutation, so invalidating it would undo that write with
-    // a refetch.
+    // These share the host prefix AND the `providers`/`native` segments, so a looser prefix test would sweep them in - and the plugins list is written directly by the mutation, so invalidating it would undo that write with a refetch.
     expect(
       providersNativeQueryKeys.isPluginIconKey(
         "h1",

@@ -202,10 +202,8 @@ describe("notification display", () => {
   });
 
   it("separates a same-millisecond prompt supersede by source ref", () => {
-    // An approval reopened inside one Date.now() tick keeps its semantic id
-    // and updatedAt and only changes sourceRef. A delivery key without the
-    // source ref would collide with the prompt it superseded, and the dedup
-    // would suppress the new approval's notification entirely.
+    // An approval reopened inside one Date.now() tick keeps its semantic id and updatedAt and only changes sourceRef.
+    // A delivery key without the source ref would collide with the prompt it superseded, and the dedup would suppress the new approval's notification entirely.
     const showNotification = vi.fn(
       (_input: { readonly deliveryKey: string | null }) =>
         Promise.resolve<NotificationShowOutcome>("presented"),
@@ -400,11 +398,8 @@ describe("notification display", () => {
   });
 
   it("plays one fallback chime when the shell reports undeliverable", async () => {
-    // Platforms where Electron cannot present notifications, app blurred: the
-    // main process shows nothing, relays nothing, and burns the delivery key.
-    // The winning window - the only one to hear `undeliverable` - owns the
-    // sole audible cue; its focus-gated chime was skipped because it is
-    // blurred, so this is not a duplicate.
+    // Platforms where Electron cannot present notifications, app blurred: the main process shows nothing, relays nothing, and burns the delivery key.
+    // The winning window - the only one to hear `undeliverable` - owns the sole audible cue; its focus-gated chime was skipped because it is blurred, so this is not a duplicate.
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const playChime = vi.fn();
 
@@ -468,9 +463,7 @@ describe("notification display", () => {
   });
 
   it("chimes once when focus is lost while an undeliverable outcome is pending", async () => {
-    // Focused at render (chime played), blurred by the time the shell answers
-    // `undeliverable`: the guard is the recorded render-time chime, not a
-    // second focus read - a re-read would see "blurred" and double-chime.
+    // Focused at render (chime played), blurred by the time the shell answers `undeliverable`: the guard is the recorded render-time chime, not a second focus read - a re-read would see "blurred" and double-chime.
     const hasFocus = vi.spyOn(document, "hasFocus");
     hasFocus.mockReturnValueOnce(true);
     hasFocus.mockReturnValue(false);
@@ -496,10 +489,7 @@ describe("notification display", () => {
   });
 
   it("chimes once when focus arrives while an undeliverable outcome is pending", async () => {
-    // Blurred at render (no chime), focused by the time the shell answers
-    // `undeliverable`: nothing has voiced this occurrence yet, so the
-    // fallback must still play - a focus re-read would see "focused",
-    // assume the render chimed, and leave the arrival silent.
+    // Blurred at render (no chime), focused by the time the shell answers `undeliverable`: nothing has voiced this occurrence yet, so the fallback must still play - a focus re-read would see "focused", assume the render chimed, and leave the arrival silent.
     const hasFocus = vi.spyOn(document, "hasFocus");
     hasFocus.mockReturnValueOnce(false);
     hasFocus.mockReturnValue(true);
@@ -525,9 +515,8 @@ describe("notification display", () => {
   });
 
   it("does not double-chime when focus lands before an undeliverable outcome", async () => {
-    // Focused at render time -> the focus-gated chime already played. If the
-    // main process still answered `undeliverable` (it read focus moments
-    // earlier), the fallback must not add a second voice.
+    // Focused at render time -> the focus-gated chime already played.
+    // If the main process still answered `undeliverable` (it read focus moments earlier), the fallback must not add a second voice.
     const playChime = vi.fn();
 
     displayNotificationRows(
@@ -726,11 +715,8 @@ describe("host channel emission focus gate", () => {
   });
 
   it("keys an emission identically whether or not this window filtered it", () => {
-    // Delivery identity must survive focus filtering. A focused window that
-    // drops the focused row and a background window that keeps it are showing
-    // the SAME emission; if their keys differed, neither the main-process nor
-    // the renderer-local set would dedupe, and the focused window would show
-    // its filtered toast plus the relayed full batch - two chimes.
+    // Delivery identity must survive focus filtering.
+    // A focused window that drops the focused row and a background window that keeps it are showing the SAME emission; if their keys differed, neither the main-process nor the renderer-local set would dedupe, and the focused window would show its filtered toast.
     const entries = [hostEntry("n-1", "chat-1"), hostEntry("n-2", "chat-2")];
 
     focusChatTile("chat-1");
@@ -746,9 +732,7 @@ describe("host channel emission focus gate", () => {
       background.showNotification.mock.calls[0][0].deliveryKey;
     expect(focusedKey).toBe(EMISSION_N1_N2_DELIVERY_KEY);
     expect(backgroundKey).toBe(focusedKey);
-    // Each simulated window renders its own subset - the focused one shows
-    // only the sibling row, the background one the full batch - but the
-    // shared key is what lets the main process deliver the emission once.
+    // Each simulated window renders its own subset - the focused one shows only the sibling row, the background one the full batch - but the shared key is what lets the main process deliver the emission once.
     expect(toastCalls.map((call) => call.options.id)).toEqual([
       "host:chat:chat-2",
       "notification-batch",
@@ -768,12 +752,8 @@ describe("host channel emission focus gate", () => {
       "stream-host-1",
     );
 
-    // Blur disarms the entity gate, so the row goes out. The toast must
-    // still render: the main process relays nothing back to a focused
-    // sender, so a renderer that skipped its own toast could leave the
-    // arrival with no surface when focus lands between the two checks.
-    // Only the chime - audible from a window nobody is looking at, and
-    // never the sole delivery - is withheld.
+    // Blur disarms the entity gate, so the row goes out.
+    // The toast must still render: the main process relays nothing back to a focused sender, so a renderer that skipped its own toast could leave the arrival with no surface when focus lands between the two checks.
     expect(target.showNotification).toHaveBeenCalledOnce();
     expect(toastCalls).toHaveLength(1);
     expect(target.playChime).not.toHaveBeenCalled();
@@ -787,9 +767,7 @@ describe("forwarded foreground display gate", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    // Both feed stores are module-level; without a reset the last test's
-    // connection state leaks into every later test and any suite after this
-    // file, making `ownFeedIsDelivering` order-dependent.
+    // Both feed stores are module-level; without a reset the last test's connection state leaks into every later test and any suite after this file, making `ownFeedIsDelivering` order-dependent.
     useCloudNotificationsStore.setState({
       connectionState: "unavailable",
       hasSnapshot: false,
@@ -869,9 +847,7 @@ describe("forwarded foreground display gate", () => {
   }
 
   it("ignores a relayed feed display while our own feed is delivering", () => {
-    // Every window holds its own feed subscription, so the relayed row is
-    // already arriving here directly - filtered by THIS window's focus and
-    // with per-row content the sender's batch summary cannot reproduce.
+    // Every window holds its own feed subscription, so the relayed row is already arriving here directly - filtered by THIS window's focus and with per-row content the sender's batch summary cannot reproduce.
     focusChatTile("chat-2");
     connectedCloudFeed();
     const playChime = vi.fn();
@@ -886,12 +862,8 @@ describe("forwarded foreground display gate", () => {
   });
 
   it("ignores a relayed feed display whose payload degraded to null", () => {
-    // `payloadFromHostEntry` degrades an unrecognized payload - a newer
-    // host's shape, a cross-kind row - to null while the row's durable
-    // epicId/chatId stay authoritative. Those relays carry no route to gate
-    // on, so treating them as unattributable would hand exactly the rows the
-    // gate cannot inspect straight past it. They are feed rows: this window
-    // receives its own copy, gated on the durable columns.
+    // `payloadFromHostEntry` degrades an unrecognized payload - a newer host's shape, a cross-kind row - to null while the row's durable epicId/chatId stay authoritative.
+    // Those relays carry no route to gate on, so treating them as unattributable would hand exactly the rows the gate cannot inspect straight past it.
     focusChatTile("chat-1");
     connectedCloudFeed();
     const playChime = vi.fn();
@@ -914,9 +886,8 @@ describe("forwarded foreground display gate", () => {
   });
 
   it("renders a relayed feed display when our own feed is not delivering", () => {
-    // A feed stream can go terminal without the window noticing. Then the
-    // relay is the only copy of the row this window will ever see, so
-    // dropping it as redundant would swallow it.
+    // A feed stream can go terminal without the window noticing.
+    // Then the relay is the only copy of the row this window will ever see, so dropping it as redundant would swallow it.
     focusChatTile("chat-2");
     disconnectedCloudFeed();
     const playChime = vi.fn();
@@ -946,10 +917,8 @@ describe("forwarded foreground display gate", () => {
   }
 
   it("renders a relay while the host stream is open awaiting its snapshot", () => {
-    // Transport `open` is not usability: the stream reports open before the
-    // first snapshot lands, and that snapshot is a silent baseline - it never
-    // calls the channel emission. A relay dropped in that window would be the
-    // only copy of the occurrence this renderer had.
+    // Transport `open` is not usability: the stream reports open before the first snapshot lands, and that snapshot is a silent baseline - it never calls the channel emission.
+    // A relay dropped in that window would be the only copy of the occurrence this renderer had.
     focusChatTile("chat-2");
     openHostFeedAwaitingSnapshot();
     const playChime = vi.fn();
@@ -978,11 +947,8 @@ describe("forwarded foreground display gate", () => {
   });
 
   it("renders a cloud relay when only the local feed is delivering", () => {
-    // Windows can transiently disagree on feed mode. A cloud arrival relayed
-    // from a cloud-mode window can name a remote host's occurrence, which the
-    // v1 local feed will never emit - and once this window upgrades to cloud,
-    // the occurrence lands inside its silent baseline snapshot. The local
-    // feed therefore never covers a cloud-source relay.
+    // Windows can transiently disagree on feed mode.
+    // A cloud arrival relayed from a cloud-mode window can name a remote host's occurrence, which the v1 local feed will never emit - and once this window upgrades to cloud, the occurrence lands inside its silent baseline snapshot.
     focusChatTile("chat-2");
     deliveringHostFeed();
     const playChime = vi.fn();
@@ -997,11 +963,7 @@ describe("forwarded foreground display gate", () => {
   });
 
   it("renders a payload-less cloud relay when only the local feed is delivering", () => {
-    // A cloud row with an unrecognized payload ships a null activation
-    // envelope, so provenance must ride the display's feedSource field: the
-    // local feed cannot reproduce a remote host's occurrence, and without
-    // the field this relay would be dropped as redundant - then land inside
-    // this window's later silent baseline snapshot, permanently unheard.
+    // A cloud row with an unrecognized payload ships a null activation envelope, so provenance must ride the display's feedSource field: the local feed cannot reproduce a remote host's occurrence, and without the field this relay would be dropped as redundant -.
     focusChatTile("chat-2");
     deliveringHostFeed();
     const playChime = vi.fn();
@@ -1054,10 +1016,7 @@ describe("forwarded foreground display gate", () => {
   });
 
   it("renders an app-local relay addressed to the focused entity", () => {
-    // App-local rows (terminal closed/crashed, transport errors, routed host
-    // errors) are never entity-suppressed on their own path, and the emission
-    // controller records their display receipt BEFORE relaying - so dropping
-    // one here loses it permanently. Only host-feed relays may be gated.
+    // App-local rows (terminal closed/crashed, transport errors, routed host errors) are never entity-suppressed on their own path, and the emission controller records their display receipt BEFORE relaying - so dropping one here loses it permanently.
     focusChatTile("chat-1");
     const playChime = vi.fn();
 
@@ -1084,9 +1043,8 @@ describe("forwarded foreground display gate", () => {
   });
 
   it("treats a legacy relay as a feed row rather than rendering it blind", () => {
-    // A legacy payload carries no feed identity. It is still not app-local -
-    // only `foregroundAppLocal` and an app-local envelope say that - so it is
-    // a feed row this window already receives itself.
+    // A legacy payload carries no feed identity.
+    // It is still not app-local - only `foregroundAppLocal` and an app-local envelope say that - so it is a feed row this window already receives itself.
     focusChatTile("chat-2");
     connectedCloudFeed();
     const playChime = vi.fn();

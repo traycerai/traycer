@@ -12,9 +12,8 @@ import {
 } from "../server-time-offset-tracker";
 
 /**
- * A scriptable pair of clocks. `wallMs` is the machine clock under suspicion
- * (the one a user can set); `monotonicMs` is the reference that only elapses.
- * Advancing them independently is exactly what a clock being SET looks like.
+ * A scriptable pair of clocks.
+ * `wallMs` is the machine clock under suspicion (the one a user can set); `monotonicMs` is the reference that only elapses.
  */
 class FakeClocks {
   wallMs = 1_700_000_000_000;
@@ -74,7 +73,7 @@ describe("ServerTimeOffsetTracker classification", () => {
   it("declares `skewed` with the signed offset when the clock is hours ahead", () => {
     const clocks = new FakeClocks();
     const tracker = makeTracker(clocks);
-    // The incident: local clock 7h AHEAD, so server − local is negative.
+    // The incident: local clock 7h ahead, so server − local is negative.
     tracker.recordServerTimeMs(clocks.wallMs - SEVEN_HOURS_MS, clocks.wallMs);
     expect(tracker.currentState()).toEqual({
       verdict: "skewed",
@@ -115,16 +114,12 @@ describe("ServerTimeOffsetTracker classification", () => {
 });
 
 /**
- * The two directions of a wrong clock have OPPOSITE causal meaning at an auth
- * failure, and only one of them is a cause at all. Detection must not care;
- * parking must.
+ * The two directions of a wrong clock have opposite causal meaning at an auth failure, and only one of them is a cause at all.
+ * Detection must not care; parking must.
  */
 describe("ServerTimeOffsetTracker skew direction", () => {
   it("pins the sign convention: negative is a clock running AHEAD", () => {
-    // `offsetMs` is `serverTime − Date.now()`, so a FAST local clock is the
-    // larger term and the difference goes negative. Every direction-sensitive
-    // decision in the app routes through this one function; if it inverts,
-    // this is the test that says so.
+    // `offsetMs` is `serverTime − Date.now()`, so a fast local clock is the larger term and the difference goes negative.
     expect(localClockDirection(-1)).toBe("ahead");
     expect(localClockDirection(1)).toBe("behind");
     expect(localClockDirection(0)).toBe("behind");
@@ -133,7 +128,7 @@ describe("ServerTimeOffsetTracker skew direction", () => {
   it("declares `skewed` for a clock running BEHIND, because the user still wants to know", () => {
     const clocks = new FakeClocks();
     const tracker = makeTracker(clocks);
-    // Local clock 7h SLOW, so server − local is positive.
+    // Local clock 7h slow, so server − local is positive.
     tracker.recordServerTimeMs(clocks.wallMs + SEVEN_HOURS_MS, clocks.wallMs);
     expect(tracker.currentState()).toEqual({
       verdict: "skewed",
@@ -143,10 +138,7 @@ describe("ServerTimeOffsetTracker skew direction", () => {
   });
 
   it("refuses the park predicate for a clock running BEHIND, at the same magnitude that arms it when AHEAD", () => {
-    // A slow clock makes a bearer look MORE valid, never expired, and the host
-    // validates against its own clock - so it cannot be why anything was
-    // rejected. Parking on it would strand a session behind a "fix your clock"
-    // that fixes nothing. Same tracker, same magnitude, opposite sign.
+    // A slow clock makes a bearer look more valid, never expired, and the host validates against its own clock - so it cannot be why anything was rejected.
     const clocks = new FakeClocks();
     const behind = makeTracker(clocks);
     behind.recordServerTimeMs(clocks.wallMs + SEVEN_HOURS_MS, clocks.wallMs);
@@ -159,9 +151,7 @@ describe("ServerTimeOffsetTracker skew direction", () => {
   });
 
   it("is false for every non-`skewed` verdict, whatever the offset says", () => {
-    // `ok` and `unknown` must never arm a park, and `unknown` in particular
-    // carries no offset at all - the predicate has to tolerate that rather
-    // than read `null < 0`.
+    // `ok` and `unknown` must never arm a park, and `unknown` in particular carries no offset at all - the predicate has to tolerate that rather than read `null < 0`.
     expect(
       clockCanMakeValidBearersLookExpired({
         verdict: "unknown",
@@ -187,9 +177,8 @@ describe("ServerTimeOffsetTracker hysteresis", () => {
     tracker.recordServerTimeMs(clocks.wallMs - SEVEN_HOURS_MS, clocks.wallMs);
     expect(tracker.currentState().verdict).toBe("skewed");
 
-    // 3 minutes: under the 5-minute ENTER bound but over the 2-minute EXIT
-    // bound. A tracker without hysteresis would call this `ok` and unpark
-    // every session, only to re-park on the next sample.
+    // 3 minutes: under the 5-minute enter bound but over the 2-minute exit bound.
+    // A tracker without hysteresis would call this `ok` and unpark every session, only to re-park on the next sample.
     tracker.recordServerTimeMs(clocks.wallMs - 180_000, clocks.wallMs);
     expect(tracker.currentState().verdict).toBe("skewed");
 
@@ -260,9 +249,7 @@ describe("ServerTimeOffsetTracker wall-clock divergence", () => {
     expect(tracker.currentState().verdict).toBe("ok");
     tracker.noteWallClockTick();
 
-    // A suspend/resume can diverge wall and monotonic with no clock change at
-    // all. Reading that as "skewed" would fabricate the diagnosis the banner
-    // and the park state both act on.
+    // A suspend/resume can diverge wall and monotonic with no clock change at all.
     clocks.elapse(10_000);
     clocks.setWallBy(SEVEN_HOURS_MS);
     tracker.noteWallClockTick();
@@ -289,16 +276,7 @@ describe("ServerTimeOffsetTracker wall-clock divergence", () => {
   });
 
   it("never leaves `skewed` for anything but `ok`, which is what makes the narrow recovery edge safe", () => {
-    // A parked session wakes ONLY on `skewed → ok`. That is safe precisely
-    // because `skewed → unknown` cannot occur - the single `unknown` publish is
-    // fenced behind `verdict !== "skewed"` (see the sibling test above, where a
-    // jump from `ok` DOES invalidate the sample), and `applyOffset` can only
-    // yield `skewed` or `ok`. Today that is an emergent property of two guards
-    // rather than anything enforced, and a sample-age decay added in good faith
-    // would publish `unknown` and silently strand every parked session -
-    // exactly the never-recovers failure this feature exists to remove. So pin
-    // it: from `skewed`, throw every input the tracker has at it and assert
-    // nothing but `skewed` is ever published.
+    // A parked session wakes only on `skewed → ok`.
     const clocks = new FakeClocks();
     const tracker = makeTracker(clocks);
     const published: ServerClockVerdict[] = [];
@@ -329,9 +307,7 @@ describe("ServerTimeOffsetTracker wall-clock divergence", () => {
     tracker.recordServerTimeMs(Number.NaN, clocks.wallMs);
     tracker.recordServerTimeMs(clocks.wallMs - 4 * 60_000, clocks.wallMs);
 
-    // Published set first: if a guard goes, this is the assertion that names
-    // the defect ("unknown" appeared) rather than reporting the knock-on
-    // verdict the tracker happened to land on afterwards.
+    // Published set first: if a guard goes, this is the assertion that names the defect ("unknown" appeared) rather than reporting the knock-on verdict the tracker happened to land on afterwards.
     expect([...new Set(published)]).toEqual(["skewed"]);
     expect(tracker.currentState().verdict).toBe("skewed");
   });

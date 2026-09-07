@@ -7,10 +7,8 @@ const state = vi.hoisted(() => ({
   query: vi.fn(),
 }));
 
-// This suite's contract is only the seam the PDF gate crosses - which query
-// args the component issues, not the diff pipeline itself (patch building,
-// `@pierre/diffs` rendering). Mocking it out mirrors how
-// `snapshot-diff-tile-body.test.tsx` isolates the same hook.
+// This suite's contract is only the seam the PDF gate crosses - which query args the component issues, not the diff pipeline itself (patch building, `@pierre/diffs` rendering).
+// Mocking it out mirrors how `snapshot-diff-tile-body.test.tsx` isolates the same hook.
 vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
   useSnapshotDiffQuery: (args: unknown) => {
     state.query(args);

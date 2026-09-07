@@ -8,27 +8,16 @@ import {
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { cn } from "@/lib/utils";
 
-/**
- * The title bar of the tour's mini-app window, with the host picker where the
- * static title used to be - centred, the way the login-import window centres
- * its title, so the three live acts read as one window with a different
- * title. No words before the name: the card or wizard beneath already says
- * what the act is about, and "Agent guide for ⟨host⟩" over a card headed
- * "Agent selection guide" said it twice.
- *
- * A single-host account gets plain text: there is nothing to choose, and a
- * chevron that opens a list of one is a control that lies about what it does.
- */
+/** No words before the name: the card or wizard beneath already says what the act is about, and "Agent guide
+ * for ⟨host⟩" over a card headed "Agent selection guide" said it twice. */
 export function OnboardingHostPickerBar(props: {
   readonly picker: OnboardingHostPicker;
-  /** The window dots. Off where this bar heads a card inside a window. */
   readonly trafficLights: boolean;
   readonly className: string;
 }): ReactNode {
   const { scope } = props.picker;
-  // Every host the tour cannot reach, with the word its row would carry if
-  // the status column were silent. The row's own status word ("offline",
-  // "stopped") speaks first when it has one; this only makes the row inert.
+  // Every host the tour cannot reach, with the word its row would carry if the status column were silent. The
+  // row's own status word ("offline", "stopped") speaks first when it has one; this only makes the row inert.
   const refusalByHostId = useMemo(
     (): ReadonlyMap<string, string> =>
       new Map(
@@ -38,10 +27,8 @@ export function OnboardingHostPickerBar(props: {
       ),
     [scope.hosts],
   );
-  // The host rows are served by a NON-polling observer; the Settings sidebar
-  // is normally what opts a window into the liveness poll. During the tour
-  // this bar is the only host-list surface on screen, so it carries the same
-  // opt-in for as long as it is up.
+  // During the tour this bar is the only host-list surface on screen, so it carries the same opt-in for as long
+  // as it is up.
   useRegisteredHostsPollLiveness();
   return (
     <header
@@ -75,20 +62,12 @@ export function OnboardingHostPickerBar(props: {
             selected={scope.host}
             activeHostId={scope.activeHostId}
             onSelect={props.picker.onSelectHost}
-            // The tour WRITES to the picked host - it imports sessions onto
-            // it and stores the guide on it - so a host with no route is
-            // refused here rather than offered as a click that lands on a
-            // dead stage. A refusal rather than the `pin` intent, which
-            // would gate the same rows: `pin` also drops the ACTIVE tag and
-            // the "currently viewing" mark, and the tour has exactly the
-            // distinction those carry - following this window's host, or
-            // looking at another one - the same way the usage popover does.
+            // A refusal rather than the `pin` intent, which would gate the same rows: `pin` also drops the active tag and
+            // the "currently viewing" mark, and the tour has exactly the distinction those carry.
             refusalByHostId={refusalByHostId}
             inertExceptHostId={null}
-            // No trailing "Manage hosts" row: the tour renders outside the
-            // app shell, so the Settings overlay that row would open has no
-            // surface to appear on until the tour is over. Managing hosts is
-            // Settings' job; the tour only picks among the ones that exist.
+            // No trailing "Manage hosts" row: the tour renders outside the app shell, so the Settings overlay that row
+            // would open has no surface to appear on until the tour is over.
             action={null}
             surface="panel-header"
             intent="view"
@@ -104,22 +83,12 @@ export function OnboardingHostPickerBar(props: {
   );
 }
 
-/**
- * Why a stage is showing nothing rather than showing another machine's work
- * under the name in the bar above it.
- *
- * No "back to the active host" button on purpose: returning to following is a
- * host switch like any other, and the one path that saves the guide draft
- * before switching goes through the picker directly above this notice.
- */
+/** Why a stage is showing nothing rather than showing another machine's work under the name in the bar above
+ * it. */
 export function OnboardingHostUnavailableNotice(props: {
   readonly picker: OnboardingHostPicker;
-  /**
-   * A refusal only the STAGE can state - the session-import act's "this host
-   * is too old to scan" - or `null` for the scope's own three states. A caller
-   * sets it only once the host is otherwise usable, since a host with no
-   * client has negotiated nothing to refuse with.
-   */
+  /** A caller sets it only once the host is otherwise usable, since a host with no client has negotiated nothing
+   * to refuse with. */
   readonly refusal: string | null;
 }): ReactNode {
   const { scope } = props.picker;

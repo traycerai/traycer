@@ -1,17 +1,5 @@
-// The window narrator over a MOUNTED mobile shell, from the gesture's side.
-//
-// The two are wired together by the document and nothing else: a modal layer
-// raises `body { pointer-events: none }`, `modalLayerCoversApp` reads it, and
-// the edge recognizer stands its touch reservation down. That coupling is
-// invisible from either file on its own - the narrator's own suite can only see
-// which surface rendered, and the recognizer's can only see a barrier someone
-// poked in - so it is pinned here, with the real narrator deciding and the real
-// recognizer answering.
-//
-// The failure being pinned: a post-latch ∅ - one frame of it is enough, and the
-// authority produces one on every resume that re-attaches before naming an
-// effective host - taking the barrier and killing back AND forward app-wide,
-// with taps still working and no modal left on screen to explain it.
+// The two are wired together by the document and nothing else: a modal layer raises `body { pointer-events:
+// none }`, `modalLayerCoversApp` reads it, and the edge recognizer stands its touch reservation down.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -40,10 +28,8 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 
-// The provisioning lane is narration DETAIL, and mounting its query would put a
-// host round-trip between this fixture and the one thing it is about. Every
-// other decision the narrator makes here - which surface, which cause - is a
-// function of the authority snapshot below.
+// The provisioning lane is narration detail, and mounting its query would put a host round-trip between this
+// fixture and the one thing it is about.
 vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
   useHostProvisioningProgress: () => null,
 }));
@@ -76,11 +62,8 @@ const EMPTY_PRESENTATION: DefaultHostReadinessPresentation = {
   },
 };
 
-/**
- * The gate is OPEN and LATCHED: an app is mounted behind the narrator, which is
- * the only state in which this pairing exists at all. While the gate blocks
- * there is no `AppShell`, so no recognizer either.
- */
+/** The gate is open and latched: an app is mounted behind the narrator, which is the only state in which this
+ * pairing exists at all. While the gate blocks there is no `AppShell`, so no recognizer either. */
 const LATCHED_CONTROLLER: HostReadinessController = {
   readinessFor: () => ({ kind: "ready" }),
   defaultHostPresentation: EMPTY_PRESENTATION,
@@ -110,7 +93,6 @@ function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
   });
 }
 
-/** The ∅ verdict over a mounted app: nothing can serve this window right now. */
 function applyEmptyFleet(): void {
   applySnapshot({
     attached: true,
@@ -132,7 +114,6 @@ function makeRouter(history: RouterHistory): AppRouter {
   });
 }
 
-/** The shell's two halves: the narrator that decides, the recognizer that reads. */
 function NarratedShell() {
   useMobileHistorySwipes();
   return <WindowHostModalHost bypassed={false} />;
@@ -166,11 +147,8 @@ function renderShell(history: RouterHistory): void {
   );
 }
 
-/**
- * jsdom ships no working `Touch` constructor, so a touch is a plain `Event`
- * wearing the one shape the reservation reads off it - a `touches` list with
- * `.item()`, and a `target`. Same trick as `shell-gestures.test.tsx`.
- */
+/** jsdom ships no working `Touch` constructor, so a touch is a plain `Event` wearing the one shape the
+ * reservation reads off it - a `touches` list with `.item`, and a `target`. */
 function dispatchTouch(
   type: "touchstart" | "touchmove" | "touchend",
   points: ReadonlyArray<{ readonly clientX: number; readonly clientY: number }>,
@@ -190,15 +168,8 @@ function dispatchTouch(
   return event;
 }
 
-/**
- * A leading-edge touch dragged inward, answering the question the device asks:
- * did the reservation attach and cancel the move.
- *
- * A cancelled move is the ONLY proof that matters here. The reservation exists
- * because a pointer stream the web view has already given to a scroller cannot
- * be taken back, so a recognizer that never cancels is one whose gesture dies
- * on a phone while every synthetic pointer test still passes.
- */
+/** The reservation exists because a pointer stream the web view has already given to a scroller cannot be taken
+ * back. */
 function reservesLeadingEdgeDrag(): boolean {
   dispatchTouch("touchstart", [{ clientX: 8, clientY: 300 }]);
   const move = dispatchTouch("touchmove", [{ clientX: 40, clientY: 300 }]);
@@ -252,9 +223,8 @@ describe("edge swipes under the window narrator", () => {
     const backSpy = vi.spyOn(history, "back");
     renderShell(history);
 
-    // The narrator IS speaking - without this the case would pass on a window
-    // that simply had nothing to say, which is the vacuity this pairing is
-    // most likely to decay into.
+    // The narrator IS speaking - without this the case would pass on a window that simply had nothing to say,
+    // which is the vacuity this pairing is most likely to decay into.
     await waitFor(() => {
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
@@ -268,11 +238,8 @@ describe("edge swipes under the window narrator", () => {
     expect(backSpy).toHaveBeenCalledTimes(1);
   });
 
-  // The positive control for the mechanism: the same tree, the same gesture,
-  // with the barrier a modal layer raises. The reservation is refused at
-  // touchstart, so on a device the web view keeps the drag and the recognizer
-  // never sees the travel - which is what the case above would look like if a
-  // modal layer came back to this arm.
+  // The reservation is refused at touchstart, so on a device the web view keeps the drag and the recognizer
+  // never sees the travel - which is what the case above would look like if a modal layer came back to this arm.
   it("stands down while the document declares itself covered", async () => {
     applyEmptyFleet();
     const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });

@@ -6,17 +6,7 @@ import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-sto
 import "@/index.css";
 
 /**
- * Which control does a destructive confirmation open FOCUSED on?
- *
- * Driven in a real browser because that is where a focus scope resolves "the
- * first tabbable descendant" for real. The quit intercept was measured to open
- * on its destructive control; this asks the same question of the tab-close
- * confirmation, which fires far more often, rather than inferring it from the
- * shared composition.
- *
- * The dialog dismisses itself the moment its epic reads clean, so the registry
- * is seeded with a dirty session first - without that the fixture would measure
- * a dialog that had already closed.
+ * Which control does a destructive confirmation open focused on? Seed a dirty session first or the dialog dismisses itself.
  */
 const EPIC_ID = "epic-close-focus";
 
@@ -34,11 +24,8 @@ function seedDirtyEpic(): void {
   const handle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // Factories go to the composition; createOpenEpicStore no longer builds a
+    // runtime. handle.doc still resolves because this harness builds it here.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,

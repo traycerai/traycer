@@ -4,29 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeJsonAtomically } from "../lifecycle-probe";
 
-// T6: journal write ATOMICITY, demonstrated against the REAL N4 primitive
-// (`writeJsonAtomically`, the one function `createTransitionJournalStore`
-// uses for every `writeJournal`/`writeSubstrate` call — phase and governor
-// travel in the same `LifecycleTransitionJournal` object, so a single call
-// to this function is what makes "one temp+rename commits both" true).
-//
-// SCOPE, stated plainly because this file was previously named
-// "…-ordering-guard" and tested no ordering at all: everything here is about
-// a SINGLE write being all-or-nothing. It would not notice a `writeJournal`
-// call moved to AFTER the mutation it must precede — that is the write-ahead
-// invariant (I5/N4), and it lives in
-// `lifecycle-probe-journal-write-ahead-ordering.test.ts`.
-//
-// Two things are proven:
-//  1. The real writer never leaves a torn/partial file on disk, even when
-//     interrupted (simulated crash) right before the commit-visible rename.
-//  2. A REFERENCE two-step writer this test file owns (NOT production code —
-//     no such writer exists in `lifecycle-probe.ts`) demonstrably DOES leave
-//     a torn file under the equivalent crash timing — proving the
-//     atomicity property the real writer has is load-bearing, not
-//     incidental, and that this guard would catch a regression back to the
-//     two-step class rev 3 rejected ("two separate files cannot be updated
-//     atomically").
+// Journal write atomicity against the real N4 primitive, not a fake rename.
 
 const mocks = vi.hoisted(() => ({ crashOnNextRename: false }));
 
@@ -118,19 +96,7 @@ describe("writeJsonAtomically (real N4 writer) under a simulated crash before re
   });
 });
 
-/**
- * Reference BROKEN writer this test file owns for contrast only — commits
- * phase and governor as two independent writes to the same destination, the
- * exact pattern N4 exists to rule out. Not exported; exists solely to prove
- * the failure mode the real writer avoids is real and observable, not a
- * strawman.
- *
- * Split into its two steps so the crash case below can interrupt THIS writer
- * between them. The crash case previously re-implemented step one inline and
- * then asserted the file it had just written existed, which demonstrated only
- * that writing a file and throwing leaves that file — it never exercised
- * `brokenTwoStepWrite` at all.
- */
+/** Reference BROKEN writer this test file owns for contrast only - commits phase and governor as two independent writes to the same destination, the exact pattern N4 exists to rule out. Not exported; exists solely to prove the failure mode the real writer avoids is real and observable, not a strawman. */
 async function brokenWriteStepOne(
   destination: string,
   snapshot: JournalSnapshot,
@@ -149,11 +115,7 @@ async function brokenWriteStepTwo(
   await writeFile(destination, JSON.stringify(snapshot), "utf8");
 }
 
-/**
- * Step two is injected so the crash case interrupts THIS writer rather than a
- * hand-rolled copy of its first half: both cases below run the same function,
- * differing only in whether step two completes or dies.
- */
+/** Step two is injected so the crash case interrupts THIS writer rather than a hand-rolled copy of its first half: both cases below run the same function, differing only in whether step two completes or dies. */
 async function brokenTwoStepWrite(
   destination: string,
   snapshot: JournalSnapshot,
@@ -177,9 +139,7 @@ describe("reference broken two-step writer (test-owned contrast, not production 
     const readBack = JSON.parse(
       await readFile(destination, "utf8"),
     ) as JournalSnapshot;
-    // This is the defect made observable: phase reads as already-advanced,
-    // but the governor delta that should have traveled with it (the
-    // breaker that would prevent an immediate re-attempt) never arrived.
+    // This is the defect made observable: phase reads as already-advanced, but the governor delta that should have traveled with it (the breaker that would prevent an immediate re-attempt) never arrived.
     expect(readBack.phase).toBe(SNAPSHOT.phase);
     expect(readBack.governor).toBeNull();
     expect(readBack.governor).not.toEqual(SNAPSHOT.governor);

@@ -13,13 +13,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/**
- * `useLoadDeadline` is the epic's ONE loading deadline (invariant 6). The
- * whole reason it stores the ELAPSED KEY rather than a boolean is the re-arm
- * case below: a boolean-plus-reset-effect design reports the PREVIOUS wait's
- * verdict for one commit after the key changes, which is exactly the stale
- * "timed out" flash a fresh wait must never show.
- */
+/** The whole reason it stores the ELAPSED KEY rather than a boolean is the re-arm case below: a boolean-plus-reset-effect design reports the PREVIOUS wait's verdict for one commit after the key changes, which is exactly the stale "timed out" flash a fresh wait must never show. */
 describe("useLoadDeadline", () => {
   it("answers false before the budget elapses", () => {
     const { result } = renderHook(() => useLoadDeadline("host-1", BUDGET_MS));
@@ -52,10 +46,7 @@ describe("useLoadDeadline", () => {
     });
     expect(result.current).toBe(true);
 
-    // A different key is a different wait. The stored value is the ELAPSED
-    // KEY, so the very next render - with no advancing timer, no reset
-    // effect - must already read false. A boolean-plus-effect implementation
-    // would still read true here for one commit.
+    // The stored value is the ELAPSED KEY, so the very next render - with no advancing timer, no reset effect - must already read false.
     rerender({ key: "host-2" });
     expect(result.current).toBe(false);
 
@@ -97,10 +88,7 @@ describe("useLoadDeadline", () => {
     });
     expect(result.current).toBe(true);
 
-    // Disarm, then wait for the same host again - a restart of the host that
-    // just timed out. The second wait is a NEW episode: answering `true` on
-    // its opening frame (the stored verdict of the first wait) rendered a
-    // recovering host unreachable before its budget ever started.
+    // Disarm, then wait for the same host again - a restart of the host that just timed out.
     rerender({ key: null });
     rerender({ key: "host-1" });
     expect(result.current).toBe(false);
@@ -117,11 +105,7 @@ describe("useLoadDeadline", () => {
   it("clears its timer on unmount", () => {
     const { unmount } = renderHook(() => useLoadDeadline("host-1", BUDGET_MS));
 
-    // A direct assertion on the fake-timer queue, not on whether advancing it
-    // throws afterward - React 18 removed the "state update on an unmounted
-    // component" warning and it was never a throw to begin with, so
-    // `expect(() => act(...)).not.toThrow()` would pass whether or not the
-    // effect's cleanup actually ran `clearTimeout`.
+    // A direct assertion on the fake-timer queue, not on whether advancing it throws afterward - React 18 removed the "state update on an unmounted component" warning and it was never a throw to begin with, so `expect(() => act(...)).not.toThrow()` would pass whether or not the effect's cleanup actually ran `clearTimeout`.
     expect(vi.getTimerCount()).toBe(1);
     unmount();
     expect(vi.getTimerCount()).toBe(0);

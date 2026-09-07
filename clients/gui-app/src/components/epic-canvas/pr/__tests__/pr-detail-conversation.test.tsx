@@ -10,14 +10,8 @@ import type {
 import { PrDetailConversation } from "@/components/epic-canvas/pr/pr-detail-conversation";
 
 /**
- * The Feedback tab, over the case that motivated review threads: a bot review
- * whose body only COUNTS its findings while the findings themselves live in
- * inline threads. Before they were carried, this tab rendered "Actionable
- * comments posted: 5" and nothing else.
- *
- * The markdown renderer is stubbed - it mounts a full pipeline that has no
- * bearing on which branch was taken - but it still proves the body text
- * reached a renderer.
+ * The Feedback tab, over the case that motivated review threads: a bot review whose body only COUNTS its findings while the findings themselves live in inline threads.
+ * Before they were carried, this tab rendered "Actionable comments posted: 5" and nothing else.
  */
 vi.mock("@/markdown/traycer-markdown", () => ({
   TraycerMarkdown: (props: { readonly children: string }) => (
@@ -25,12 +19,6 @@ vi.mock("@/markdown/traycer-markdown", () => ({
   ),
 }));
 
-/**
- * The diff renderer mounts the `@pierre/diffs` worker pipeline, which needs a
- * pool and a theme provider and settles asynchronously. What this file is
- * about is WHICH patch it is handed and whether the gutter is on, so the
- * pipeline is stubbed and both are read straight off the props.
- */
 vi.mock("@/components/diff/diff-content-primitive", () => ({
   DiffContentFrame: (props: { readonly children: ReactNode }) => (
     <div data-testid="diff-frame">{props.children}</div>
@@ -230,8 +218,6 @@ describe("PrDetailConversation review threads", () => {
 
   it("gives a body-less review its findings instead of 'No content.'", () => {
     // A review that posts findings without a summary is the common bot shape.
-    // Folding it to an event, or printing "No content." over five real
-    // objections, both hide the thing the reader came for.
     renderTab({
       activity: activity([botReview("PRR_1", "")]),
       reviewThreads: threads([
@@ -313,9 +299,7 @@ describe("PrDetailConversation review threads", () => {
   });
 
   it("gives the thread quote button a hover-reveal ancestor, so it isn't permanently invisible", () => {
-    // `PrQuoteAction` only turns visible via `group-hover/header`; without a
-    // `group/header` ancestor the button never leaves its transparent resting
-    // state no matter how the row is hovered or focused.
+    // `PrQuoteAction` only turns visible via `group-hover/header`; without a `group/header` ancestor the button never leaves its transparent resting state no matter how the row is hovered or focused.
     renderTab({
       activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
       reviewThreads: threads([
@@ -365,9 +349,6 @@ describe("PrDetailConversation review threads", () => {
   });
 
   it("renders the anchoring hunk as a diff, not as a grey block of text", () => {
-    // It used to be a `<pre>` in one flat colour: no gutter, and added,
-    // removed, and context all looked alike, so the reader had to decode the
-    // `+`/`-` prefixes by eye to see what the comment was even about.
     renderTab({
       activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
       reviewThreads: threads([
@@ -416,9 +397,7 @@ describe("PrDetailConversation review threads", () => {
   });
 
   it("does not mount a diff for a resolved finding nobody has opened", () => {
-    // A collapsed row is a real unmount, not `<details>` CSS hiding - each
-    // expanded thread mounts a real diff renderer that parses and highlights
-    // its hunk, so only the row the reader opens may pay for one.
+    // A collapsed row is a real unmount, not `<details>` CSS hiding - each expanded thread mounts a real diff renderer that parses and highlights its hunk, so only the row the reader opens may pay for one.
     renderTab({
       activity: activity([botReview("PRR_1", "Actionable comments posted: 2")]),
       reviewThreads: threads([
@@ -456,9 +435,7 @@ describe("PrDetailConversation review threads", () => {
   });
 
   it("hands keyboard focus to the control that replaces the one it unmounts", () => {
-    // Expanding swaps the row out for the card, so the focused control stops
-    // existing. Without a handover focus falls back to <body> and the next Tab
-    // restarts at the top of the page instead of entering the thread.
+    // Without a handover focus falls back to <body> and the next Tab restarts at the top of the page instead of entering the thread.
     renderTab({
       activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
       reviewThreads: threads([

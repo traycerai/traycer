@@ -60,12 +60,8 @@ export function AddImageToArtifactButton(props: {
                 operations.prepareBytes,
               );
         operationId = prepared.operationId;
-        // Materializing the body is awaited: today the hold resolves at once,
-        // and once the cold tier lives in the runtime worker it resolves when
-        // that room's bytes have come back across the bridge. The `await` is
-        // here now so the mutation's control flow is already the one it will
-        // have then - the image is prepared before the body is held either
-        // way, and the abort path below already covers a failure after that.
+        // The `await` is here now so the mutation's control flow is already the one it will have then - the image is
+        // prepared before the body is held either way, and the abort path below already covers a failure after that.
         const body = await holdArtifactBody(
           handle,
           artifactId,

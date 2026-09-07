@@ -5,24 +5,7 @@ import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { writeGitListChangedFilesResponse } from "@/lib/git/write-list-changed-files-response";
 
-/**
- * Single-shot prefetch for git.listChangedFiles per (hostId, runningDir, ignoreWhitespace).
- * Populates the same cache slot as the subscription would, so rows read the cached
- * parent status via queryClient.getQueryData without opening N streams.
- *
- * Response written to cache per Q20 lock (response-equals-state carve-out):
- * listChangedFiles RPC is the parent-level status source for the picker badges;
- * the UI projects it into typed file/module counts at the panel boundary.
- *
- * Called once per row across potentially many different worktree hosts (see
- * `GitDiffPanelBodyLive`'s `gitRows.forEach`), so it cannot resolve a single
- * client at hook-render time - `args.hostId` in the request body does not
- * route the call (`HostClient.request()` sends through the bound messenger).
- * Each call resolves its own transient client for `args.hostId` via the host
- * directory, mirroring `useGitListChangedFilesWithSubmodules`. A host with no
- * reachable client is skipped - the same as a disabled query - rather than
- * silently falling back to the app-wide active host.
- */
+/** Resolve a transient client for args.hostId per call. hostId in the body does not route. Skip undialable hosts. */
 export function useGitPrefetchWorktreeStatus() {
   const globalClient = useHostClient();
   const directory = useHostDirectory();

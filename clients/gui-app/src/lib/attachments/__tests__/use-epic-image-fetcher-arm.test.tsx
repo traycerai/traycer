@@ -1,12 +1,4 @@
-/**
- * Which byte source an ARTIFACT image resolves through, per installed arm.
- *
- * The lane arm never seeds the root document - only the `@1` adapter emits on
- * the root plane - so the epic doc's `attachments` map cannot answer there and
- * the WAITING read parks for the life of the session while the image renders
- * "unavailable". These pin both directions: the lane arm asks the host, and the
- * legacy arm keeps the waiting doc read it always had.
- */
+/** Which byte source an ARTIFACT image resolves through, per installed arm. */
 import type { ReactNode } from "react";
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,16 +18,7 @@ const mocks = vi.hoisted(() => ({
   readHeldEpicAttachmentBytes: vi.fn(),
 }));
 
-/**
- * The store surface `useEpicImageFetcher` actually consumes.
- *
- * `subscribe` is not decoration: the hook reads `installedArm` through
- * `useSyncExternalStore`, so a double offering only `getState` throws on mount
- * rather than failing an assertion - which is how four green-looking pins went
- * red at once. `epicId` backs the cache subject the fetcher is bundled with.
- * A no-op unsubscribe is honest here: `mocks.installedArm` is set before
- * render and never changes mid-test.
- */
+/** The store surface `useEpicImageFetcher` actually consumes. */
 function fakeHandle(): {
   readonly epicId: string;
   readonly store: {
@@ -129,9 +112,7 @@ describe("useEpicImageFetcher - byte source per arm", () => {
 
     expect(requestWithSignal).toHaveBeenCalledWith(
       "epic.fetchArtifactAttachment",
-      // The id pair is the AUTHORIZATION subject, not decoration: a bare hash
-      // is a content address, and serving one unproven would turn a cache key
-      // into a capability.
+      // The id pair is the AUTHORIZATION subject, not decoration: a bare hash is a content address, and serving one unproven would turn a cache key into a capability.
       { epicId: "epic-1", artifactId: "artifact-1", hash: HASH },
       expect.anything(),
     );
@@ -202,10 +183,7 @@ describe("useEpicImageFetcher - byte source per arm", () => {
       new AbortController().signal,
     );
 
-    // The COMPATIBILITY direction, and it is the half a lane-arm fix is most
-    // likely to break: a legacy session's artifact images are byte-for-byte
-    // what they always were, host scope present or not. Waiting is the feature
-    // there - an image still replicating must resolve when it lands.
+    // The COMPATIBILITY direction, and it is the half a lane-arm fix is most likely to break: a legacy session's artifact images are byte-for-byte what they always were, host scope present or not.
     expect(Array.from(resolved.bytes)).toEqual([7]);
     expect(mocks.readEpicAttachmentBytes).toHaveBeenCalledTimes(1);
     expect(requestWithSignal).not.toHaveBeenCalled();

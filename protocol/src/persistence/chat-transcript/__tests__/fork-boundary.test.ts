@@ -21,14 +21,7 @@ import {
 } from "@traycer/protocol/persistence/epic/messages";
 
 /**
- * `latestForkableAssistantMessageId` is the shared derivation the renderer's
- * own scan must agree with (see the module doc on `fork-boundary.ts`); the
- * equivalence side of that lives in gui-app. These tests pin the derivation
- * itself: the backward scan over PROJECTED ROWS, the active-turn skip, the
- * walk-order id inside a multi-record turn, the legacy no-turnId grouping, the
- * steer-only skip / stopped-override pair, and - the reason this function reads
- * rows at all - the two ways a checkpoint restore drives projection order and
- * display order apart.
+ * `latestForkableAssistantMessageId` is the shared derivation the renderer's own scan must agree with (see the module doc on `fork-boundary.ts`); the equivalence side of that lives in gui-app.
  */
 
 const AGENT_SENDER = {
@@ -42,15 +35,7 @@ const USER_SENDER = { type: "user" as const, userId: "user-1" };
 
 const NO_EVENTS: readonly ChatEvent[] = [];
 
-/*
- * These build FULL blocks rather than relying on the schema's defaults to fill
- * the gaps. The fixtures are typed `ContentBlock` - the schema's OUTPUT type -
- * so every field a parsed block carries has to be here. That is not pedantry:
- * the first version of these helpers was typed `ReturnType<typeof textBlock>`,
- * which infers the shape from whatever the literal happens to contain, so an
- * incomplete fixture type-checked against itself and asserted nothing about
- * agreeing with a real block. Naming the concrete type is what surfaced it.
- */
+/* These build FULL blocks rather than relying on the schema's defaults to fill the gaps. */
 function textBlock(blockId: string, timestamp: number): ContentBlock {
   return {
     blockId,
@@ -132,12 +117,7 @@ function turnStoppedEvent(input: {
 }
 
 /**
- * The projection the host feeds this derivation, built the same way
- * `chat-transcript-view.ts` builds it.
- *
- * Going through `projectTranscriptRows` rather than hand-writing descriptors is
- * the point of these tests: the ordering and the walk-order `messageIds` are
- * the projection's, so a change there that moves the fork boundary fails here.
+ * The projection the host feeds this derivation, built the same way `chat-transcript-view.ts` builds it.
  */
 function rowsFor(
   messages: readonly Message[],
@@ -387,12 +367,7 @@ describe("latestForkableAssistantMessageId", () => {
     ).toBe("a-1");
   });
 
-  /*
-   * The two shapes the pre-rows derivation could not get right at once. Both
-   * model a checkpoint restore: `upsertEntry` appends a re-added record at the
-   * array TAIL while its timestamp - and so its display position - stays
-   * historical.
-   */
+  /* The two shapes the pre-rows derivation could not get right at once. */
 
   it("does not let an older turn's re-appended record steal the boundary", () => {
     const messages: readonly Message[] = [
@@ -449,9 +424,7 @@ describe("latestForkableAssistantMessageId", () => {
       }),
     ];
 
-    // The renderer's accumulator keeps the last record it WALKED, so the
-    // boundary is `a-1-early`. Sorting the records by timestamp first would
-    // answer `a-1-late`.
+    // The renderer's accumulator keeps the last record it WALKED, so the boundary is `a-1-early`.
     expect(
       latestForkableAssistantMessageId(
         rowsFor(messages, NO_EVENTS, null),

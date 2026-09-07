@@ -218,10 +218,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  // resetAllMocks (not clearAllMocks): a test that sets a throwing
-  // `mockImplementation` on captureFeedback (the "failed" describe block)
-  // would otherwise leak that implementation into every later test -
-  // clearing only wipes call history, not the implementation itself.
   vi.resetAllMocks();
   await rm(tempDir, { recursive: true, force: true });
 });
@@ -305,15 +301,6 @@ describe("DesktopSupportService.submitReport - delivered", () => {
   });
 
   it("survives Sentry's real normalize() with no '[Object]' placeholder anywhere in contexts", async () => {
-    // Round 1 of this fix (flattening each appMetrics entry to scalar
-    // fields) passed a unit test asserting the helper's *return value*, but
-    // a live delivered event still showed four "[Object]" placeholders -
-    // Sentry normalizes the whole `contexts` object under one shared depth
-    // budget, and `processMetrics.appMetrics[i]` sat one level too deep for
-    // even a fully-flattened entry to survive it. This test runs the actual
-    // captured `contexts` through Sentry's own `normalize()` (not a mock, not
-    // this file's helper) at its real default depth (3, unset in this app's
-    // Sentry.init) - the only assertion that would have caught round 1's gap.
     const { normalize } = await import("@sentry/core");
     await freezeAndSubmit(buildService(null));
 
@@ -345,10 +332,6 @@ describe("DesktopSupportService.submitReport - delivered", () => {
       ),
     ).toBe(false);
 
-    // Object.values, not array indexing: the wire shape is a numeric-keyed
-    // record ({"0": {...}, "1": {...}}), not an array - Sentry's `Contexts`
-    // type requires a plain record for every named context, and the two
-    // shapes normalize identically.
     const entries = Object.values(contexts?.appMetrics ?? {});
     expect(entries).toEqual([
       {
@@ -432,11 +415,6 @@ describe("DesktopSupportService.submitReport - consent panel log toggles", () =>
   });
 });
 
-// Ticket 03 / plan D3: one consent flag covers both browser diagnostic
-// files, each skipped independently of the other when its own tail is
-// empty - same "toggle off must actually withhold it" invariant as the
-// desktop/host toggles above, plus the "absence is normal" skip-on-empty
-// rule that has no desktop/host equivalent (those two always exist).
 describe("DesktopSupportService.submitReport - browser diagnostics consent (ticket 03)", () => {
   it("skips both browser attachments when neither file exists, even with the toggle on", async () => {
     const service = buildService(null);
@@ -665,12 +643,6 @@ describe("DesktopSupportService.submitReport - unconfirmed", () => {
 });
 
 describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEvent)", () => {
-  // E2E Round 3 F1: `flush` draining the queue was read as "delivered" even
-  // when Sentry's store definitively rejected the event (HTTP 500, or the
-  // connection destroyed after receiving the body) - draining only means the
-  // envelope reached the transport, not that the store accepted it. These
-  // tests drive the real per-event outcome mechanism (`afterSendEvent`)
-  // instead of trusting `flush`'s boolean alone.
   let fakeClient: FakeSentryClient;
 
   beforeEach(() => {
@@ -720,11 +692,8 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
   });
 
   it("returns failed when the connection is destroyed - no status code, not delivered", async () => {
-    // A network-level failure never reaches an HTTP response: the SDK's own
-    // `sendEnvelope` catches the transport rejection and still emits
-    // `afterSendEvent`, but with an empty response carrying no status code
-    // at all. This must read as a definite non-delivery, same as a 500 - not
-    // silently fall through to "delivered".
+    // A network-level failure never reaches an HTTP response: the SDK's own `sendEnvelope` catches the transport rejection and still emits `afterSendEvent`, but with an empty response.
+    // This must read as a definite non-delivery, same as a 500 - not silently fall through to "delivered".
     mockFlushWithSendOutcome({});
 
     const result = await freezeAndSubmit(buildService(null));
@@ -827,11 +796,7 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
   });
 
   it("records ONE sighting across StrictMode freeze → discard → freeze of the same key", async () => {
-    // Real renderer mounts under <StrictMode> (renderer-shell/main.tsx):
-    // setup freezes, cleanup discards, setup freezes again with the SAME
-    // draftId/key. The live freeze-map alone is not enough - discard clears
-    // it between the two setups. A short-TTL recentSightingKeys set must
-    // suppress the second claim so first open never reads as "2nd time".
+    // A short-TTL recentSightingKeys set must suppress the second claim so first open never reads as "2nd time".
     const service = buildService(null);
     await service.freezeEvidence(KEY, "fp:v1:sight");
     service.discardFrozenEvidence(KEY);
@@ -873,10 +838,6 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
   it("never lands evidence discarded while its file reads are still in flight", async () => {
     const service = buildService(null);
 
-    // Not awaited: the synchronous prefix of `freezeEvidence` (up through
-    // inserting the pending map entry) runs before this call returns, so the
-    // discard below reliably lands before the file reads resolve - the exact
-    // race a cancel-during-freeze produces in the real dialog.
     const freezePromise = service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
     await freezePromise;
@@ -1049,10 +1010,8 @@ describe("DesktopSupportService.buildPublicDraft", () => {
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 
-    // No-DSN builds never upload anything - the dialog sends "none" here,
-    // matching the real route (Flow 4 Case B). A `reportId` being resolvable
-    // from frozen evidence must not, on its own, make the draft claim a
-    // private report exists to see.
+    // No-DSN builds never upload anything - the dialog sends "none" here, matching the real route (Flow 4 Case B).
+    // A `reportId` being resolvable from frozen evidence must not, on its own, make the draft claim a private report exists to see.
     const draft = await service.buildPublicDraft(
       { ...FORM, privateOutcome: "none" },
       KEY,
@@ -1364,13 +1323,7 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     expect(raw).not.toContain("image/png");
   });
   it("writes the bundle owner-only and keeps a bundle saved moments ago", async () => {
-    // The bundle lands in a shared `/tmp` holding the desktop and host log
-    // tails and the browser trace, and every save used to leave its own
-    // directory behind for the lifetime of the machine's `/tmp`.
-    //
-    // The sweep is age-bounded, though: a bundle is REVEALED to the user so
-    // they can attach it to a ticket, so saving a second one must not pull the
-    // first out from under an open file manager window.
+    // The sweep is age-bounded, though: a bundle is REVEALED to the user so they can attach it to a ticket, so saving a second one must not pull the first out from under an open file.
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 

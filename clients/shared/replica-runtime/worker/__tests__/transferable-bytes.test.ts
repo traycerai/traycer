@@ -1,12 +1,4 @@
-/**
- * Transfer semantics, driven through the REAL platform primitive.
- *
- * Every assertion here goes through `structuredClone(value, { transfer })`,
- * which is the same machinery `postMessage` uses. That matters: the property
- * under test is what the RUNTIME does with a transfer list, not what this
- * module believes it does, and a suite that only inspected the returned list
- * would agree with a helper that transfers the wrong buffer.
- */
+/** Transfer semantics, driven through the real platform primitive. */
 import { describe, expect, it } from "vitest";
 import {
   mergeTransferLists,
@@ -14,7 +6,6 @@ import {
   takeBytesForTransfer,
 } from "../transferable-bytes";
 
-/** Sends bytes the way the bridge does, and answers what the receiver sees. */
 function deliver(
   bytes: Uint8Array,
   transfer: readonly ArrayBuffer[],

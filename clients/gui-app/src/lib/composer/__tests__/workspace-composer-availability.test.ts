@@ -129,12 +129,8 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
       1,
       ["/Users/me/project"],
     );
-    // A missing bound folder now BLOCKS send (status `worktree-missing` with a
-    // hint), so a turn can never be launched into a missing directory from the
-    // composer. The disable is paired with the chat tile's on-focus
-    // `worktree.getBinding` re-check, so restoring the folder + refocusing
-    // recomputes the missing set fresh and lifts the disable — recovery does not
-    // depend on a send the disable would forbid.
+    // A missing bound folder now BLOCKS send (status `worktree-missing` with a hint), so a turn can never be launched into a missing directory from the composer.
+    // The disable is paired with the chat tile's on-focus `worktree.getBinding` re-check, so restoring the folder + refocusing recomputes the missing set fresh and lifts the disable - recovery does not depend on a send the disable would forbid.
     expect(availability).toEqual({
       status: "worktree-missing",
       disabledHint: worktreeMissingComposerHint(
@@ -174,10 +170,8 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
   });
 
   it("names the missing WORKTREE, not the source repo it was cut from", () => {
-    // The host's `missingWorktreePaths` is keyed by binding entry, so a deleted
-    // sibling worktree arrives as the source repo's path — a folder that is
-    // still on disk. Blaming it made the disabled-send tooltip look like a false
-    // alarm and pointed recovery at the wrong directory.
+    // The host's `missingWorktreePaths` is keyed by binding entry, so a deleted sibling worktree arrives as the source repo's path - a folder that is still on disk.
+    // Blaming it made the disabled-send tooltip look like a false alarm and pointed recovery at the wrong directory.
     const availability = deriveWorktreeBindingWorkspaceAvailability(
       binding([
         worktreeBindingEntry(
@@ -201,14 +195,8 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
   });
 
   it("follows the host's run-directory rule for a Local row carrying a stale worktreePath", () => {
-    // The host's `entryRunDirectory` is mode-INDEPENDENT — `worktreePath` when
-    // set, else `workspacePath` — and it decides BOTH what the missing-check
-    // stats and where a turn launches. So for this shape the host stat-ed the
-    // stale worktree, and that is what the hint must name. Describing it as
-    // `/Users/me/project` (this repo's mode-aware `resolveBindingRunningDir`
-    // rule) would name a folder still on disk and leave the gone one unnamed —
-    // the exact defect this hint was changed to fix. If mode should win, the
-    // host's single run-directory owner is where that changes.
+    // The host's `entryRunDirectory` is mode-INDEPENDENT - `worktreePath` when set, else `workspacePath` - and it decides BOTH what the missing-check stats and where a turn launches.
+    // So for this shape the host stat-ed the stale worktree, and that is what the hint must name.
     expect(
       worktreeMissingComposerHint(
         ["/Users/me/project"],
@@ -226,7 +214,7 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
 
   it("falls back to the entry key when the binding cannot name a run directory", () => {
     // A Local row is its own run directory, and a re-bind can drop the entry
-    // between the host's stat and this render — neither may lose the path.
+    // between the host's stat and this render - neither may lose the path.
     expect(
       worktreeMissingComposerHint(
         ["/Users/me/local", "/Users/me/dropped"],

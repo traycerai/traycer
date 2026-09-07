@@ -39,8 +39,7 @@ function installOpenTileInGroupMock() {
 }
 
 /**
- * A seeded tab with an active pane, so a `splitPaneEmptyRightInTab` target
- * group can be carved out - mirrors `new-chat.test.ts`'s `seedActiveGroup`.
+ * A seeded tab with an active pane, so a `splitPaneEmptyRightInTab` target group can be carved out - mirrors `new-chat.test.ts`'s `seedActiveGroup`.
  */
 function seedTabWithEmptyTargetGroup(): {
   readonly tabId: string;
@@ -146,9 +145,7 @@ describe("openTileIntoTargetGroup", () => {
       navigateNestedFocus: navigation.navigateNestedFocus,
     });
 
-    // The boundary was invoked (proving the open routes through it), the
-    // `prepare` callback it ran resolved a real focus target, and the raw
-    // canvas mutation underneath still happened.
+    // The boundary was invoked (proving the open routes through it), the `prepare` callback it ran resolved a real focus target, and the raw canvas mutation underneath still happened.
     expect(navigation.calls).toHaveLength(1);
     const call = navigation.calls[0];
     expect(call.epicId).toBe("epic-1");

@@ -89,7 +89,6 @@ const FULL_CAPS: ProviderMcpCapabilities = {
   transports: ["stdio", "http", "sse"],
 };
 
-/** A genuinely single-header provider: capability declares multiplicity=1. */
 const SINGLE_HEADER_CAPS: ProviderMcpCapabilities = {
   ...REMOTE_HTTP_SSE_CAPS,
   supportsMultipleHeaders: false,
@@ -173,8 +172,8 @@ describe("<ProviderMcpAddDialog />", () => {
     expect(
       within(dialog).getByRole("textbox", { name: "Header 1 name" }),
     ).toBeDefined();
-    // type="password" values aren't exposed under role="textbox" — assert
-    // via label text instead (still a real accessible-name association).
+    // type="password" values aren't exposed under role="textbox" - assert via label text instead (still a real
+    // accessible-name association).
     expect(within(dialog).getByLabelText("Header 1 value")).toBeDefined();
 
     fireEvent.click(

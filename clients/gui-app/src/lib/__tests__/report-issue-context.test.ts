@@ -34,8 +34,7 @@ describe("createReportIssueContext", () => {
   });
 
   it("treats undefined values as absent instead of crashing", () => {
-    // Regression: `.code` read off an error whose declared type lied (a bare
-    // `Error` surfaced through a TanStack generic) is `undefined`, not `null`.
+    // Regression: `.code` read off an error whose declared type lied (a bare `Error` surfaced through a TanStack generic) is `undefined`, not `null`.
     // The old null-only guard crashed the git diff view on `.replace`.
     expect(
       createReportIssueContext({

@@ -17,12 +17,7 @@ export interface ActivateInstalledVariables {
   readonly force: boolean;
 }
 
-/**
- * Activates an already-installed-but-not-running-activated host record via
- * `IHostManagement.activateInstalled` - clears `pendingActivation` /
- * `activationUnknown` debt. Resolves the raw `MutationOutcome` (never throws
- * for a settled outcome) so callers branch on every `kind` themselves.
- */
+/** Resolves the raw `MutationOutcome` (never throws for a settled outcome) so callers branch on every `kind` themselves. */
 export function useRunnerActivateInstalled(): UseMutationResult<
   MutationOutcome<ActivateInstalledOk>,
   Error,

@@ -11,22 +11,11 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-/**
- * Shared inline environment-override editor (Settings → Providers per-provider,
- * and Settings → Shell host-process). One flat, column-aligned table:
- * `Name · Set/Unset value · actions`, with an explicit staged add row. `value:
- * null` is an explicit unset (drop a variable the process would otherwise
- * inherit). The parent owns the mutations.
- */
+/** `value: null` is an explicit unset (drop a variable the process would otherwise inherit). */
 
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-// Single grid shared by the header, every row, and the add row so the column
-// edges line up exactly (the previous header/rows used different padding). The
-// last track is fixed so the row delete button and the add button never shift
-// the Name/Value boundaries. Below `sm` the three columns can't fit, so rows
-// restack onto two lines - name + actions, then the value field full-width
-// (see VALUE_FIELD_PLACEMENT / ROW_ACTIONS_PLACEMENT) - and the header hides.
+// The last track is fixed so the row delete button and the add button never shift the Name/Value boundaries.
 const GRID =
   "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_4.75rem]";
 const VALUE_FIELD_PLACEMENT =
@@ -56,29 +45,12 @@ function isEnvMode(value: string): value is EnvMode {
   return value === "set" || value === "unset";
 }
 
-/**
- * Whether a SET value carries leading or trailing whitespace.
- *
- * Surfaced rather than stripped, and the distinction is load-bearing. This
- * value is handed to the spawned CLI byte for byte, and the providers each read
- * it their own way: most treat `"   "` as SET and resolve a directory literally
- * named three spaces under their own cwd, while a few (`claude-code`, `hermes`,
- * reasonix's `REASONIX_HOME`) strip it themselves and treat it as unset. The
- * host models each of those individually so a probe looks where the CLI looks.
- * Normalizing here would make this editor disagree with all of them at once and
- * hide the difference from the only person who can say which they meant - a
- * pasted path with a stray space and a deliberately padded value look identical
- * once trimmed. So: say what will happen, and put the fix one click away.
- */
+/** Surfaced rather than stripped, and the distinction is load-bearing. */
 function hasEdgeWhitespace(value: string): boolean {
   return value !== value.trim();
 }
 
-/**
- * The one line below a row: a blocking error if there is one, otherwise the
- * whitespace notice. Shared by the edit row and the add row so the precedence
- * is stated once.
- */
+/** The one line below a row: a blocking error if there is one, otherwise the whitespace notice. */
 function EnvRowFooter(props: {
   readonly draft: Draft;
   readonly disabled: boolean;

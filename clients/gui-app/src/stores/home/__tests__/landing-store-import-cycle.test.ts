@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-// In-memory idb-keyval stub so importing the landing stores (which pull in
-// landing-image-gc → landing-image-store) doesn't touch a real IndexedDB.
 vi.mock("idb-keyval", () => {
   const data = new Map<string, unknown>();
   const dummyStore = () => Promise.reject(new Error("unused"));
@@ -39,9 +37,7 @@ function imageDoc(hash: string, size: number): JsonContent {
   };
 }
 
-// Regression: the runtime registry deliberately does not import the persisted
-// source. The draft store configures it only after construction, avoiding the
-// former composer-store cycle while still allowing GC to read live roots.
+// Regression: the runtime registry deliberately does not import the persisted source.
 describe("landing draft runtime wiring", () => {
   it("evaluates the source and registry cleanly when the draft store is imported first", async () => {
     vi.resetModules();
@@ -61,11 +57,8 @@ describe("landing draft runtime wiring", () => {
 });
 
 /**
- * Regression for the fixed store → gc → budget → store cycle. Budget no longer
- * statically imports the draft store; the store registers a read-only root
- * source after construction. These cases exercise both realistic cold-start
- * order (store first) and reverse order (budget/gc first) and prove a
- * reconcile-shaped root read never throws a TDZ ReferenceError.
+ * Regression for the fixed store → gc → budget → store cycle. Budget no longer statically imports
+ * the draft store; the store registers a read-only root source after construction.
  */
 describe("landing budget store import order", () => {
   it("store-first cold start: root read and reserve do not throw", async () => {

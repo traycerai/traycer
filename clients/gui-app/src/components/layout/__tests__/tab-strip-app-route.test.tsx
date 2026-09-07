@@ -65,10 +65,8 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
-// The app shell mounts the fork-episode poll (it feeds the `pendingFork`
-// indicator's open/close edge). Stubbed like every other host-runtime consumer
-// in this file: these tests own tab-strip layout and navigation, and the real
-// hook would need a host client this tree deliberately does not build.
+// Stubbed like every other host-runtime consumer in this file: these tests own tab-strip layout and
+// navigation, and the real hook would need a host client this tree deliberately does not build.
 vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
   useChatForkEventQuery: () => ({ data: undefined }),
 }));
@@ -170,9 +168,8 @@ vi.mock("@/components/settings/settings-surface", () => ({
   SettingsSurface: () => <div data-testid="settings-surface" />,
 }));
 
-// The host wraps the panel in the gesture provider (the single live-value
-// reader); this route test does not exercise the terminal, so the provider is a
-// pass-through and the panel is inert.
+// The host wraps the panel in the gesture provider (the single live-value reader); this route test does not
+// exercise the terminal, so the provider is a pass-through and the panel is inert.
 vi.mock(
   "@/components/home/terminal-panel/landing-terminal-gesture-provider",
   () => ({

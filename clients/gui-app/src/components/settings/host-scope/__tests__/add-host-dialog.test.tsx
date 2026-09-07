@@ -11,18 +11,8 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 
-/**
- * The arrival watcher's contract: announce a host that was NOT in the last
- * COMPLETE picture of the account, and say only what is true of it. Both
- * halves broke in different releases:
- *
- *   - requiring `connectable` stranded free-plan users, whose newly enrolled
- *     remote hosts stay non-connectable by design — the dialog watched forever
- *     over a host already in the account;
- *   - trusting the click-time snapshot let a dialog opened during a list
- *     failure diff against an empty baseline, so the failed list's PRE-EXISTING
- *     hosts were announced as the new machine when the retry landed.
- */
+/** The arrival watcher's contract: announce a host that was not in the last complete picture of the account,
+ * and say only what is true of it. */
 
 const scopeMocks: { scope: Partial<HostScope> } = vi.hoisted(() => ({
   scope: {},
@@ -65,9 +55,8 @@ async function hostOption(overrides: {
 
 describe("<AddHostDialog /> arrival", () => {
   it("announces a registered host the plan keeps non-connectable", async () => {
-    // The free-plan case: the remote machine enrolled, the registry lists it,
-    // and the plan gate keeps `connectable` false forever. `registered &&
-    // connectable` spun on "Watching…" here for good.
+    // The free-plan case: the remote machine enrolled, the registry lists it, and the plan gate keeps
+    // `connectable` false forever.
     const newcomer = await hostOption({
       hostId: "host-new",
       name: "Office Linux",
@@ -114,11 +103,8 @@ describe("<AddHostDialog /> arrival", () => {
   });
 
   it("does not announce a pre-existing host revealed by a recovered list", async () => {
-    // Open while the registry request is failed: the click-time snapshot is
-    // EMPTY, and the union is about to gain every host the failed list was
-    // hiding. Diffing against that snapshot announced one of them as the new
-    // machine. The baseline instead waits for the first complete picture, so
-    // the recovered host lands inside it and the dialog keeps watching.
+    // Open while the registry request is failed: the click-time snapshot is empty, and the union is about to gain
+    // every host the failed list was hiding.
     const preExisting = await hostOption({
       hostId: "host-old",
       name: "Old Faithful",
@@ -139,10 +125,10 @@ describe("<AddHostDialog /> arrival", () => {
     };
     rerender(<AddHostDialog />);
 
-    // Not an arrival — it forms the baseline. Still watching.
+    // Not an arrival - it forms the baseline. Still watching.
     expect(screen.queryByTestId("add-host-arrived")).toBeNull();
 
-    // A host that appears AFTER the complete picture is the real newcomer.
+    // A host that appears after the complete picture is the real newcomer.
     const newcomer = await hostOption({
       hostId: "host-new",
       name: "Office Linux",
@@ -163,12 +149,8 @@ describe("<AddHostDialog /> arrival", () => {
   });
 
   it("announces a host that finished enrolling before the first clean read", async () => {
-    // Open during a failed list: the baseline waits for the retry, and a
-    // fast machine can register INSIDE that window — landing in the first
-    // clean read, where set membership alone swallows it as pre-existing
-    // forever. The registry's createdAt breaks the tie: enrolled after this
-    // dialog opened means it is the arrival being watched for, while the
-    // recovered pre-existing host (old or absent createdAt) stays silent.
+    // The registry's createdAt breaks the tie: enrolled after this dialog opened means it is the arrival being
+    // watched for, while the recovered pre-existing host (old or absent createdAt) stays silent.
     const preExisting = await hostOption({
       hostId: "host-old",
       name: "Old Faithful",
@@ -294,19 +276,8 @@ describe("<AddHostDialog /> arrival", () => {
   });
 });
 
-/**
- * The instructions are a contract with a machine nobody in this window can
- * see, and every line of the previous version was wrong: it printed a
- * `curl … | sh` installer for a URL that redirects to an HTML docs page, an
- * `install.ps1` that 404s, and then stopped at `traycer login` — which
- * authenticates and deliberately provisions nothing (`commands/login.ts`). A
- * person who followed it exactly ended with no host, and this dialog watched
- * for an arrival that could not come.
- *
- * So these lock the two facts that made it wrong, not the prose around them:
- * the fictional installers are gone, and the steps end on the command that
- * actually installs and starts the host.
- */
+/** So these lock the two facts that made it wrong, not the prose around them: the fictional installers are
+ * gone, and the steps end on the command that actually installs and starts the host. */
 describe("<AddHostDialog /> setup instructions", () => {
   beforeEach(() => {
     scopeMocks.scope = { hosts: [], isLoading: false, listsFailed: false };
@@ -316,9 +287,8 @@ describe("<AddHostDialog /> setup instructions", () => {
   it("ends on `host ensure`, not on `login`", () => {
     render(<AddHostDialog />);
 
-    // The ORDER is the fact under test, not just presence: install, then
-    // sign in, then the command that actually provisions. Presence checks
-    // alone passed with the steps shuffled.
+    // The order is the fact under test, not just presence: install, then sign in, then the command that actually
+    // provisions.
     const steps = within(screen.getByRole("list")).getAllByRole("listitem");
     expect(steps).toHaveLength(3);
     expect(steps[0].textContent).toContain("npm install -g @traycerai/cli");

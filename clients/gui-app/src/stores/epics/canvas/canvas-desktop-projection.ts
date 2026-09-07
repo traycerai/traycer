@@ -1,9 +1,6 @@
 /**
- * Desktop per-window projection: pure builders that translate between the
- * epic canvas store's state and the desktop snapshot/patch shapes. No store
- * import (only the store TYPE) - `store.ts` owns the bridge wiring, the
- * subscriber, and `applyEpicCanvasDesktopProjection`, all of which consume
- * these builders.
+ * Desktop per-window projection: pure builders that translate between the epic canvas store's
+ * state and the desktop snapshot/patch shapes.
  */
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import type {
@@ -87,10 +84,8 @@ function parseProjectedEpicTabs(snapshot: DesktopPerWindowSnapshot): {
   const openTabOrder: string[] = [];
   for (const tab of snapshot.epicTabs) {
     if (seen.has(tab.id)) continue;
-    // A tab's identity is its id + epicId; the stored name may legitimately be
-    // empty (epics/agents created untitled - the display layer derives the
-    // shown title). Only skip structurally-malformed projected entries, not
-    // empty-named ones.
+    // A tab's identity is its id + epicId; the stored name may legitimately be empty (epics/agents
+    // created untitled - the display layer derives the shown title).
     if (tab.id.length === 0 || tab.epicId.length === 0) continue;
     seen.add(tab.id);
     tabsById[tab.id] = {
@@ -118,12 +113,8 @@ function hiddenTabsByIdForDesktopProjection(
 }
 
 /**
- * Preserve tab-record identity across a projection: reuse the existing record
- * whenever its display metadata (`epicId` + `name`) is unchanged. The desktop
- * sync round-trip re-parses every tab into a fresh object on each interaction,
- * which otherwise churned `tabsById` identity for value-identical tabs and
- * re-rendered every `tabsById` consumer (header strip, command palette, route
- * tab). `tabId` is the map key, so only `epicId`/`name` need comparing.
+ * Preserve tab-record identity across a projection: reuse the existing record whenever its display
+ * metadata (`epicId` + `name`) is unchanged.
  */
 function reuseUnchangedTabRecords(
   next: Readonly<Record<string, EpicViewTab | undefined>>,
@@ -177,20 +168,16 @@ function mergeMostRecentTabIdsForDesktopProjection(
 }
 
 /**
- * The full store patch a desktop snapshot projection applies. Pure - the
- * store-side `applyEpicCanvasDesktopProjection` passes this to `setState`
- * inside the echo-suppression flag.
+ * The full store patch a desktop snapshot projection applies. Pure - the store-side
+ * `applyEpicCanvasDesktopProjection` passes this to `setState` inside the echo-suppression flag.
  */
 export function buildDesktopProjectionPatch(
   state: EpicCanvasStore,
   snapshot: DesktopPerWindowSnapshot,
 ): Partial<EpicCanvasStore> {
   const projected = parseProjectedEpicTabs(snapshot);
-  // The desktop sync round-trip echoes our own writes back and re-parses every
-  // tab into a FRESH record on each interaction. Reuse the existing record
-  // when its display metadata is unchanged so `tabsById` identity stays stable
-  // - otherwise the header strip, command palette, and route tab re-render on
-  // every tile open / tab switch.
+  // The desktop sync round-trip echoes our own writes back and re-parses every tab into a FRESH
+  // record on each interaction.
   const tabsById = reuseUnchangedTabRecords(
     {
       ...hiddenTabsByIdForDesktopProjection(state),
@@ -198,14 +185,8 @@ export function buildDesktopProjectionPatch(
     },
     state.tabsById,
   );
-  // Keep canvas in lockstep with the rebuilt tab set: projected tabs take
-  // the snapshot canvas; preserved hidden tabs keep their in-memory canvas.
-  // Per-tab identity reuse: the round-trip echoes our own write back as
-  // freshly-parsed canvases, so keep the CURRENT reference whenever the
-  // projected canvas is structurally equal - otherwise every echo would
-  // hand new identities to every pane and cascade re-renders through the
-  // tiled canvas. Per-tab (not whole-map) so a cross-window edit to tab A
-  // still leaves tab B's canvas identity-stable.
+  // Keep canvas in lockstep with the rebuilt tab set: projected tabs take the snapshot canvas;
+  // preserved hidden tabs keep their in-memory canvas.
   const canvasByTabId = Object.fromEntries(
     Object.keys(tabsById).map((tabId) => {
       const current = state.canvasByTabId[tabId];

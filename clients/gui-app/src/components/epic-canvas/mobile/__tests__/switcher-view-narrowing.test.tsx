@@ -6,15 +6,8 @@ import { SORT_FIELD } from "@/lib/epic-sort";
 import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 
 /**
- * The switcher's Agents and Artifacts lists narrow and order through the SAME
- * per-epic store the desktop sidebar writes, so these assertions are the parity
- * claim itself: a view set through the store - which is what the sidebar's own
- * menu does - has to change what the phone renders.
- *
- * The view menus are driven through the store rather than by opening their
- * Radix dropdowns. The menu bodies are the sidebar's own components, covered
- * where they live; what is new here is the wiring between the store and these
- * lists, and a dropdown in jsdom would only stand between the test and it.
+ * The switcher's Agents and Artifacts lists narrow and order through the SAME per-epic store the desktop sidebar writes, so these assertions are the parity claim itself: a view set through the store - which is what the sidebar's own menu does - has to change what the phone renders.
+ * The view menus are driven through the store rather than by opening their Radix dropdowns.
  */
 
 interface TestRecord {
@@ -96,11 +89,6 @@ vi.mock("@/lib/epic-selectors", () => ({
     ),
   }),
 }));
-// The artifact filter reads the epic's authoritative artifact map, the same
-// source the sidebar filters; outside an epic session the real hook throws.
-// The artifact search RPC needs a QueryClient this suite has no reason to
-// provide; the request logic is covered where it lives. Keep the real status
-// message so any surface wording stays under test.
 vi.mock(
   "@/components/epic-canvas/sidebar/use-artifact-search-results",
   async (importOriginal) => ({
@@ -262,13 +250,9 @@ describe("switcher Artifacts search", () => {
     seedArtifacts(SEEDED);
   }
 
-  // Built from a FIXED base, never from `holder.search`: these cases set one
-  // state after another, and inheriting the previous one would leave an earlier
-  // flag set - an "error" case still rendering the unsupported branch.
+  // Built from a FIXED base, never from `holder.search`: these cases set one state after another, and inheriting the previous one would leave an earlier flag set - an "error" case still rendering the unsupported branch.
   /**
-   * A hit as the host actually returns one. The fields beyond `artifactId` are
-   * what the ranking and snippet rendering read; a stub with only the id would
-   * typecheck nowhere and would quietly stop representing the producer.
+   * The fields beyond `artifactId` are what the ranking and snippet rendering read; a stub with only the id would typecheck nowhere and would quietly stop representing the producer.
    */
   function hit(artifactId: string, title: string, kind: "spec" | "ticket") {
     return {
@@ -341,9 +325,7 @@ describe("switcher Artifacts search", () => {
 
     holder.search = searchState({ isError: true });
     view.rerender(<SwitcherArtifactsList {...PROPS} />);
-    // Twice on purpose: once in the live region for a screen reader, once
-    // visibly. A failure a sighted user can see and a blind one cannot is
-    // the reason the status line exists.
+    // A failure a sighted user can see and a blind one cannot is the reason the status line exists.
     expect(screen.getAllByText("Artifact search failed.")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
 

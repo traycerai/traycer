@@ -9,17 +9,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 
 /**
- * The row's active-state wiring, verified against the REAL canvas store.
- *
- * The sibling suite (`epic-sidebar-cloud-chat-row.test.tsx`) mocks the canvas
- * store module wholesale - load-bearing for its click-routing assertions, but
- * it means its active-state cases answer through hand-rolled selector fakes
- * that re-implement the comparison. This file mocks NOTHING from the canvas
- * store: it opens real tile refs in a real epic tab through the store's own
- * actions and asserts the row's highlight through the real
- * `useIsActiveEpicArtifact` / `useIsActiveTile` selectors - including the
- * record-backed gate that makes a published copy visible only through its
- * composite tile id.
+ * This file mocks NOTHING from the canvas store: it opens real tile refs in a real epic tab through the store's own actions and asserts the row's highlight through the real `useIsActiveEpicArtifact` / `useIsActiveTile` selectors - including the record-backed gate that makes a published copy visible only through its composite tile id.
  */
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({

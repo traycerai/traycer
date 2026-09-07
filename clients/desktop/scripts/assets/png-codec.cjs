@@ -1,15 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-/**
- * Minimal PNG encode/decode shared by the asset generators in this directory
- * (`generate-tray-icons.cjs`, `generate-linux-icons.cjs`).
- *
- * Intentionally dependency-free (runtime built-ins only) so contributors can
- * rebuild the shipped icon assets without installing an image-processing
- * toolchain. Scope is deliberately narrow: 8-bit non-interlaced RGBA, which is
- * what every source asset under `resources/` already is.
- */
 
 const { deflateSync, inflateSync } = require("node:zlib");
 

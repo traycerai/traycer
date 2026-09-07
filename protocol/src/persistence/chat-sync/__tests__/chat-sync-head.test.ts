@@ -29,11 +29,6 @@ import {
   unknownEvent,
 } from "./__fixtures__/published-chat";
 
-/**
- * The head: lineage, graduation, version gating, and the canonical encoding
- * that makes a head's own sha256 - the value the NEXT head carries as its
- * `parentHeadSha256` - worth chaining on.
- */
 
 const chatHeadSchema = getRecordSchema(
   persistenceRecordRegistry,
@@ -157,9 +152,7 @@ describe("chat-head lineage", () => {
   });
 
   it("chains a head to the digest of the head it superseded", () => {
-    // Ancestry is proven by IDENTITY, never by sequence ordering: two forked
-    // histories both number their turns, so a seq comparison permits exactly
-    // the dangerous "local is ahead, overwrite the cloud" case.
+    // Ancestry is proven by IDENTITY, never by sequence ordering: two forked histories both number their turns, so a seq comparison permits exactly the dangerous "local is ahead, overwrite the cloud" case.
     const first = publishChat({
       graduate: { events: false, hostPrivate: false },
       parentHeadSha256: null,
@@ -170,10 +163,8 @@ describe("chat-head lineage", () => {
     });
 
     expect(second.head.parentHeadSha256).toBe(first.headSha256);
-    // The identity a head is chained on is the digest of the bytes that are
-    // STORED - the document, envelope and all. Chaining on the payload digest
-    // would name bytes nobody has, so the next sync would fail to find the
-    // ancestor and report a fork that never happened.
+    // The identity a head is chained on is the digest of the bytes that are STORED - the document, envelope and all.
+    // Chaining on the payload digest would name bytes nobody has, so the next sync would fail to find the ancestor and report a fork that never happened.
     expect(sha256Hex(serializeChatHeadDocument(first.head))).toBe(
       first.headSha256,
     );
@@ -242,9 +233,7 @@ describe("chat-head minReaderVersion coherence", () => {
   });
 
   it("READER defaults to null when the key is absent", () => {
-    // Reader tolerance for heads written before the field existed. The writer
-    // inherits the same default deliberately - see "the writer publishes a null
-    // reader floor" below.
+    // Reader tolerance for heads written before the field existed.
     const withoutKey: JsonObject = { ...wireHead };
     delete withoutKey.minReaderVersion;
     expect(chatHeadReaderSchema.parse(withoutKey).minReaderVersion).toBeNull();
@@ -285,9 +274,7 @@ describe("chat-head version gate", () => {
   });
 
   it("admits every same-major minor, however far ahead", () => {
-    // The whole point of the passthrough: the minor bump that introduces a new
-    // block type is exactly the one a strict-minor gate would have bounced,
-    // so the tolerant codec would never fire in the field.
+    // The whole point of the passthrough: the minor bump that introduces a new block type is exactly the one a strict-minor gate would have bounced, so the tolerant codec would never fire in the field.
     expect(
       gateChatHeadVersion(
         { schemaVersion: { major: 1, minor: 9 }, minReaderVersion: null },
@@ -362,13 +349,6 @@ describe("chat-head canonical encoding", () => {
     ).toBe(canonicalJsonStringify(withFutureFields));
   });
 
-  /**
-   * Canonical form is the schema-NORMALIZED encoding: `minReaderVersion` and
-   * the run settings' `.default(...)` fields materialize on the way through, so
-   * `encode(decode(x))` differs from `canonical(x)` for an input that omitted
-   * them. What holds is IDEMPOTENCE, which is what makes a head's digest - and
-   * therefore the lineage chain - stable across read/write cycles.
-   */
   it("materializes defaulted fields, then holds still", () => {
     const withoutDefaults: JsonObject = {
       ...wireHead,
@@ -401,9 +381,6 @@ describe("chat-head canonical encoding", () => {
       agentMode: "regular",
       profileId: null,
     });
-    // This fixture states a deliberate floor, so it survives the round trip
-    // verbatim; the DEFAULT (absent -> null, on the writer as on the reader) is
-    // pinned in the coherence and null-floor describes.
     expect(once.minReaderVersion).toEqual(CHAT_SYNC_1_1_READER_FLOOR);
 
     // Idempotent from there on - so the digest the next head chains to does not
@@ -471,10 +448,8 @@ describe("chat-head 1.0 reader compatibility", () => {
 });
 
 describe("a claimed 1.1 head must carry its cut plan", () => {
-  // The reader keeps cdc and membership optional FOR 1.0 heads. A payload
-  // whose own schemaVersion says 1.1+ while omitting them is a head no 1.1
-  // writer produced, and admitting it would hand downstream a nominal-1.1
-  // head whose cuts cannot be reproduced.
+  // The reader keeps cdc and membership optional FOR 1.0 heads.
+  // A payload whose own schemaVersion says 1.1+ while omitting them is a head no 1.1 writer produced, and admitting it would hand downstream a nominal-1.1 head whose cuts cannot be reproduced.
   it("reader rejects a claimed-1.1 head that omits cdc", () => {
     const missingCdc: JsonObject = { ...wireHead };
     delete missingCdc.cdc;
@@ -516,11 +491,8 @@ describe("a claimed 1.1 head must carry its cut plan", () => {
 });
 
 describe("the writer publishes a null reader floor", () => {
-  // The floor is reserved for a change an older reader cannot safely
-  // INTERPRET; the 1.1 reshape is additive and read-safe, so `null` is what a
-  // correct publisher stamps. The writer must therefore ACCEPT null - and it
-  // must not pin the floor to this build's own version, or the next additive
-  // minor would make a publisher's own stamp unparseable.
+  // The floor is reserved for a change an older reader cannot safely INTERPRET; the 1.1 reshape is additive and read-safe, so `null` is what a correct publisher stamps.
+  // The writer must therefore ACCEPT null - and it must not pin the floor to this build's own version, or the next additive minor would make a publisher's own stamp unparseable.
   it("accepts a null minReaderVersion - the ordinary case", () => {
     const published = chatHeadSchema.parse({
       ...wireHead,
@@ -536,10 +508,6 @@ describe("the writer publishes a null reader floor", () => {
   });
 
   it("still admits a DELIBERATE floor, including one below its own minor", () => {
-    // `CHAT_SYNC_1_1_READER_FLOOR` stays the documented mechanism for a future
-    // deliberate raise, and a floor from an earlier minor is coherent too - a
-    // 1.2 head may legitimately gate readers below 1.1. Only incoherent
-    // minimums are refused (see the coherence describe above).
     expect(
       chatHeadSchema.parse({
         ...wireHead,
@@ -555,9 +523,6 @@ describe("the writer publishes a null reader floor", () => {
   });
 
   it("a freshly published null-floor head opens for a 1.0-shaped reader", () => {
-    // The regression this pins: stamping the floor from
-    // `CHAT_SYNC_SCHEMA_VERSION` made every minor bump lock out every older
-    // reader, which is the refusal a dev host actually hit.
     const published = chatHeadSchema.parse({
       ...wireHead,
       minReaderVersion: null,

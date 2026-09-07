@@ -5,15 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 
 /**
- * The phone "New terminal" dialog, on its two contracts:
- *
- * 1. Geometry - header, one scrolled region, and the Launch bar pinned outside
- *    it under a viewport height cap, so Launch cannot end up below the fold.
- * 2. Focus - the dialog and the picker body used to disagree about it. The
- *    dialog declined Radix's open-autofocus precisely so the workspace search
- *    could claim focus, and the search claimed it unconditionally, which on a
- *    touch device raises a keyboard over a two-tap pick. The pointer decides
- *    now, and the two halves move together.
+ * Geometry - header, one scrolled region, and the Launch bar pinned outside it under a viewport height cap, so Launch cannot end up below the fold. 2.
+ * The dialog declined Radix's open-autofocus precisely so the workspace search could claim focus, and the search claimed it unconditionally, which on a touch device raises a keyboard over a two-tap pick.
  */
 
 const bindingsQuery = vi.hoisted(() => ({
@@ -136,11 +129,6 @@ function renderDialog(): void {
   );
 }
 
-/**
- * The global test shim answers every media query with `matches: false`, which
- * is the fine-pointer arm. This narrows the coarse-pointer query alone so the
- * rest of the app's queries keep the shim's answer.
- */
 function stubCoarsePointer(coarse: boolean): void {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,

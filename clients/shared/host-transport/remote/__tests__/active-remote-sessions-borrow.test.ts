@@ -19,14 +19,7 @@ const BORROW_TEST_POLICY: RemoteSessionAcquirePolicy = {
   proactiveWakeEligible: true,
 };
 
-// `tryAcquireReadyRemoteSession` / `hasBorrowableRemoteSession` (Ticket 06):
-// the narrow, non-lingering-extending surface a fleet-status poller gets. The
-// whole point is a property of the SIGNATURE, not merely the body: fleet
-// observation must create zero sessions, prolong zero sessions, and never
-// extend the keep-warm linger. Same fake-`IRemoteSession` test-double strategy
-// as `active-remote-sessions.test.ts` - this is pure timer/map logic with no
-// I/O, so fake timers are the right (and only) tool; they would be the WRONG
-// one if this ever touched real filesystem or network I/O, which it does not.
+// The whole point is a property of the signature, not merely the body: fleet observation must create zero sessions, prolong zero sessions, and never extend the keep-warm linger.
 
 interface FakeSession extends IRemoteSession<
   VersionedRpcRegistry,
@@ -89,11 +82,8 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 afterEach(() => {
-  // Every entry this suite creates is module-scoped state
-  // (`active-remote-sessions.ts`'s `entriesByKey` is a single shared map), so
-  // a test that leaves an entry lingering or held would otherwise bleed into
-  // the next one. Retiring closes/marks everything outstanding before the
-  // fake-timer teardown below.
+  // Every entry this suite creates is module-scoped state (`active-remote-sessions.ts`'s `entriesByKey` is a single shared map), so a test that leaves an entry lingering or held would otherwise bleed into the next one.
+  // Retiring closes/marks everything outstanding before the fake-timer teardown below.
   retireAllRemoteSessions();
   vi.useRealTimers();
 });
@@ -113,9 +103,7 @@ describe("tryAcquireReadyRemoteSession", () => {
     expect(tryAcquireReadyRemoteSession(identity.hostId)).toBeNull();
     expect(hasBorrowableRemoteSession(identity.hostId)).toBe(false);
 
-    // The bite: a borrow that reset the timer would still pass a bare
-    // "close was eventually called" assertion. Pinning the EXACT instant is
-    // what would catch that regression.
+    // The bite: a borrow that reset the timer would still pass a bare "close was eventually called" assertion.
     vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS - 1);
     expect(session.closeCalls).toBe(0);
     vi.advanceTimersByTime(1);
@@ -143,10 +131,6 @@ describe("tryAcquireReadyRemoteSession", () => {
     // T + Δ: the poller gives its borrow back, long after the owner released.
     borrow.release();
 
-    // If someone later folds borrows into `refCount`, release() above would
-    // (re-)arm the linger at T + Δ instead, and this assertion goes red: at
-    // T + LINGER the session would still be open (torn down only at
-    // T + Δ + LINGER instead).
     vi.advanceTimersByTime(
       REMOTE_SESSION_LINGER_MS - DELTA_WELL_UNDER_THE_WINDOW - 1,
     );
@@ -166,10 +150,6 @@ describe("tryAcquireReadyRemoteSession", () => {
     expect(tryAcquireReadyRemoteSession(hostWithNoSession3)).toBeNull();
     expect(factory).not.toHaveBeenCalled();
 
-    // Positive control: the identical spy DOES fire for a genuine acquire, so
-    // the absence above is a witnessed absence rather than a factory that was
-    // never wired to fire at all (this repo has been bitten by that shape of
-    // vacuous assertion four times).
     const identity = freshIdentity();
     const view = acquireRemoteSession(identity, BORROW_TEST_POLICY, factory);
     expect(factory).toHaveBeenCalledTimes(1);
@@ -197,12 +177,8 @@ describe("tryAcquireReadyRemoteSession", () => {
     // exactly the "still held" branch `closeSupersededIdentities` documents.
     expect(session.closeCalls).toBe(0);
 
-    // BEFORE the give-back, and this is the window the balance assertions
-    // below cannot see. The entry is marked but deliberately still OPEN,
-    // because the owner holds it - so nothing had closed the session and the
-    // borrow's only guard, `released`, was still false. It kept polling over
-    // an identity the sign-out retired, under the retired credential, for as
-    // long as the owner held on. The handle must refuse on its own.
+    // Before the give-back, and this is the window the balance assertions below cannot see.
+    // The entry is marked but deliberately still open, because the owner holds it - so nothing had closed the session and the borrow's only guard, `released`, was still false.
     await expect(
       borrow.sendUnary("host.status" as never, {} as never, null, undefined),
     ).rejects.toThrow(/superseded/);
@@ -224,7 +200,7 @@ describe("tryAcquireReadyRemoteSession", () => {
     owner.close();
     expect(session.closeCalls).toBe(1);
 
-    // No underflow leaked onto a successor entry for the SAME identity: a
+    // No underflow leaked onto a successor entry for the same identity: a
     // fresh acquire starts its own borrow count at zero.
     const successorSession = fakeSession();
     const successor = acquireRemoteSession(
@@ -236,9 +212,8 @@ describe("tryAcquireReadyRemoteSession", () => {
     successor.close();
   });
 
-  // The positive control for (4)'s supersession refusal. Without it, a
-  // `sendUnary` that rejected unconditionally would pass that assertion and
-  // silently break every real status poll.
+  // The positive control for (4)'s supersession refusal.
+  // Without it, a `sendUnary` that rejected unconditionally would pass that assertion and silently break every real status poll.
   it("(4b) an UNsuperseded borrow still dispatches to the underlying session", async () => {
     const identity = freshIdentity();
     const session = fakeSession();
@@ -263,12 +238,7 @@ describe("tryAcquireReadyRemoteSession", () => {
     owner.close();
   });
 
-  // (4) covers supersession observed BEFORE the send. This is the window it
-  // cannot see: the pre-send check is a snapshot, so a retirement that lands
-  // while the unary is in flight has already passed that guard, and the retired
-  // session's response is handed back — where the status reader timestamps it
-  // as a fresh current observation. That is the same stale-value-as-live
-  // outcome (4) exists to prevent, arriving by the one path it does not watch.
+  // (4) covers supersession observed before the send.
   it("(4c) refuses a response that RESOLVED after the identity was superseded mid-flight", async () => {
     const identity = freshIdentity();
     const session = fakeSession();
@@ -282,21 +252,12 @@ describe("tryAcquireReadyRemoteSession", () => {
     const borrow = tryAcquireReadyRemoteSession(identity.hostId);
     if (borrow === null) throw new Error("expected a borrow");
 
-    // Hold the unary open so supersession lands strictly between the pre-send
-    // check and the resolution, which is the ordering the bug needs.
-    //
-    // Assigned directly rather than via `mockImplementationOnce`: `FakeSession`
-    // types `sendUnary` as the plain call signature, so the mock API is not
-    // visible on it and only vitest's runtime would have accepted that - a
-    // green test the type-checker rejects. The settle handle lives on an object
-    // because a bare `let` assigned inside this callback narrows to `never` at
-    // the read below.
+    // Hold the unary open so supersession lands strictly between the pre-send check and the resolution, which is the ordering the bug needs.
+    // The settle handle lives on an object because a bare `let` assigned inside this callback narrows to `never` at the read below.
     const gate: { settle: (() => void) | null } = { settle: null };
     session.sendUnary = vi.fn(
       () =>
-        // `Promise<never>` (not a bare `new Promise`, which infers
-        // `Promise<unknown>`) so this is assignable to `sendUnary`'s generic
-        // response type - the same reason `fakeSession` writes `({}) as never`.
+        // `Promise<never>` (not a bare `new Promise`, which infers `Promise<unknown>`) so this is assignable to `sendUnary`'s generic response type - the same reason `fakeSession` writes `({}) as never`.
         new Promise<never>((resolve) => {
           gate.settle = () => resolve({} as never);
         }),
@@ -323,10 +284,8 @@ describe("tryAcquireReadyRemoteSession", () => {
     owner.close();
   });
 
-  // The positive control for (4c), and the one that matters most: the
-  // post-resolution recheck must not reject responses that were never
-  // superseded. Without this, a recheck that always threw would satisfy (4c)
-  // and break every real status poll.
+  // The positive control for (4c), and the one that matters most: the post-resolution recheck must not reject responses that were never superseded.
+  // Without this, a recheck that always threw would satisfy (4c) and break every real status poll.
   it("(4d) a response that resolves while still current is returned unchanged", async () => {
     const identity = freshIdentity();
     const session = fakeSession();
@@ -343,9 +302,7 @@ describe("tryAcquireReadyRemoteSession", () => {
     const gate: { settle: (() => void) | null } = { settle: null };
     session.sendUnary = vi.fn(
       () =>
-        // `Promise<never>` (not a bare `new Promise`, which infers
-        // `Promise<unknown>`) so this is assignable to `sendUnary`'s generic
-        // response type - the same reason `fakeSession` writes `({}) as never`.
+        // `Promise<never>` (not a bare `new Promise`, which infers `Promise<unknown>`) so this is assignable to `sendUnary`'s generic response type - the same reason `fakeSession` writes `({}) as never`.
         new Promise<never>((resolve) => {
           gate.settle = () => resolve({} as never);
         }),
@@ -408,18 +365,12 @@ describe("hasBorrowableRemoteSession", () => {
 
     expect(hasBorrowableRemoteSession(identity.hostId)).toBe(true);
     owner.close();
-    // Divergence from `hasReadyRemoteSession`, which stays true through the
-    // linger: a lingering entry is honest liveness EVIDENCE but is exactly
-    // the zero-consumer entry a poller must not be allowed to adopt.
+    // Divergence from `hasReadyRemoteSession`, which stays true through the linger: a lingering entry is honest liveness evidence but is exactly the zero-consumer entry a poller must not be allowed to adopt.
     expect(hasBorrowableRemoteSession(identity.hostId)).toBe(false);
   });
 
   it("a ready `terminal`-policy (one-shot) session is never borrowable, even fully held and ready; a `revalidate` one for the same host is", () => {
-    // `findBorrowableEntry` requires `authRecovery === "revalidate"`. A ready
-    // `"terminal"` one-shot runs with `auth: null`, so the first UNAUTHORIZED
-    // goes terminal-fatal - closing that owner's stream subscriptions and
-    // rejecting its pending calls - which a status poll must never trigger by
-    // borrowing it.
+    // `findBorrowableEntry` requires `authRecovery === "revalidate"`.
     const base = freshIdentity();
     const terminalIdentity: RemoteSessionIdentity = {
       ...base,
@@ -436,9 +387,7 @@ describe("hasBorrowableRemoteSession", () => {
     expect(hasBorrowableRemoteSession(base.hostId)).toBe(false);
     expect(tryAcquireReadyRemoteSession(base.hostId)).toBeNull();
 
-    // The positive control: a `"revalidate"` entry for the SAME hostId is
-    // borrowable, so the refusal above is about the policy field, not about
-    // the host having no eligible entry at all.
+    // The positive control: a `"revalidate"` entry for the same hostId is borrowable, so the refusal above is about the policy field, not about the host having no eligible entry at all.
     const revalidateIdentity: RemoteSessionIdentity = {
       ...base,
       authRecovery: "revalidate",

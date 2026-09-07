@@ -46,10 +46,7 @@ describe("useTerminalSessionRecovery", () => {
       { wrapper: withQueryClient(queryClient) },
     );
 
-    // Each attempt must be allowed to settle (its `terminal.list`
-    // invalidation resolve) before the next one fires - a still-in-flight
-    // attempt coalesces a duplicate call rather than spending a second unit
-    // of the auto-recovery budget (see the coalescing test below).
+    // Each attempt must be allowed to settle (its `terminal.list` invalidation resolve) before the next one fires - a still-in-flight attempt coalesces a duplicate call rather than spending a second unit of the auto-recovery budget (see the coalescing test below).
     for (let attempt = 1; attempt <= 3; attempt++) {
       act(() => {
         result.current.onSessionLost();
@@ -114,10 +111,7 @@ describe("useTerminalSessionRecovery", () => {
       result.current.onSessionLost();
     });
 
-    // The handle is force-released immediately, but the tile's bootstrap
-    // subtree must not remount (nonce bump) until fresh host authority has
-    // actually settled - otherwise a stale, retained `terminal.list` row
-    // could resubscribe against the already-dead PTY incarnation.
+    // The handle is force-released immediately, but the tile's bootstrap subtree must not remount (nonce bump) until fresh host authority has actually settled - otherwise a stale, retained `terminal.list` row could resubscribe against the already-dead PTY incarnation.
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
     expect(result.current.recoverNonce).toBe(0);
 
@@ -164,10 +158,7 @@ describe("useTerminalSessionRecovery", () => {
     });
     expect(result.current.recoverNonce).toBe(1);
 
-    // Two more, fully sequential (non-overlapping) attempts still fit inside
-    // the three-attempt budget - proving the coalesced burst above spent only
-    // ONE unit rather than three (which would have exhausted the budget here
-    // instead of allowing these to proceed).
+    // Two more, fully sequential (non-overlapping) attempts still fit inside the three-attempt budget - proving the coalesced burst above spent only ONE unit rather than three (which would have exhausted the budget here instead of allowing these to proceed).
     const second = createDeferred<void>();
     invalidateSpy.mockReturnValueOnce(second.promise);
     act(() => {

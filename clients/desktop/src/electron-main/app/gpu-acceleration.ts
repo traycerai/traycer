@@ -26,10 +26,6 @@ function storePath(): string {
   return join(app.getPath("userData"), STORE_FILE_NAME);
 }
 
-// The async store is created lazily - `app.getPath("userData")` is not
-// available until the app module has booted, which happens before
-// `applyHardwareAccelerationPreference` runs but uses sync I/O on that
-// path.
 function getAsyncStore() {
   return createJsonFileStore<GpuPreference>(
     storePath(),
@@ -38,10 +34,7 @@ function getAsyncStore() {
   );
 }
 
-/**
- * Must run pre-`whenReady` - `app.disableHardwareAcceleration` is rejected
- * after. Reads sync because there's no event loop pumping yet.
- */
+/** Must run pre-`whenReady` - `app.disableHardwareAcceleration` is rejected after. */
 export function applyHardwareAccelerationPreference(): void {
   let enabled = true;
   try {

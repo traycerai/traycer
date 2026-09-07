@@ -23,20 +23,15 @@ import type {
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
 
-/**
- * "Add a shell" validation through the local CLI bridge: this machine's fs,
- * this machine's file dialog, keyed by the bridge instance so it can never
- * share a cache slot with a per-host RPC probe of the same path.
- */
+/** "Add a shell" validation through the local CLI bridge: this machine's fs, this machine's file dialog, keyed
+ * by the bridge instance so it can never share a cache slot with a per-host RPC probe of the same path. */
 export function bridgeShellProbeSource(
   traycerCli: ITraycerCli,
 ): ShellProbeSource {
   return {
     queryKeyFor: (path: string): QueryKey =>
       runnerQueryKeys.traycerShellProbe(traycerCli, path),
-    // The bridge crosses an IPC channel with no cancellation of its own, so
-    // the signal is accepted and dropped. Keeping the parameter means the two
-    // sources stay interchangeable behind one query-options builder.
+    // The bridge crosses an IPC channel with no cancellation of its own, so the signal is accepted and dropped.
     probe: (
       path: string,
       _signal: AbortSignal | undefined,
@@ -47,15 +42,8 @@ export function bridgeShellProbeSource(
   };
 }
 
-/**
- * The Shell panel over the local CLI bridge — the local-host fallback.
- *
- * Every hook here predates the config RPC and is unchanged; this only adapts
- * them to the shared controller so the panel renders one editor either way. It
- * is mounted ONLY where `localConfigFallbackReason` says so — this computer's
- * host, stopped or predating the methods — and there the on-disk store the CLI
- * reads is the very config that host loads.
- */
+/** Every hook here predates the config RPC and is unchanged; this only adapts them to the shared controller so
+ * the panel renders one editor either way. */
 export function useBridgeShellConfigController(props: {
   readonly traycerCli: ITraycerCli;
 }): ShellConfigController {
@@ -72,12 +60,8 @@ export function useBridgeShellConfigController(props: {
   const envDeleteMutation = useRunnerTraycerEnvOverrideDeleteMutation();
   const queryClient = useQueryClient();
 
-  // Both writes inside ONE `mutationFn`, for the same reason the RPC path does
-  // it: the boundary that loses the second half is the OBSERVER, not the
-  // transport. Chained onto the set's per-`mutate` `onSuccess` - as this did -
-  // closing Settings while the set was in flight dropped the callback, so the
-  // old key was never removed and one rename left two live variables. That the
-  // bridge speaks IPC rather than RPC changes nothing about it.
+  // Chained onto the set's per-`mutate` `onSuccess` - as this did - closing Settings while the set was in flight
+  // dropped the callback, so the old key was never removed and one rename left two live variables.
   const envRenameMutation = useMutation<
     void,
     Error,
@@ -98,10 +82,8 @@ export function useBridgeShellConfigController(props: {
       if (rename.oldKey.length === 0) return;
       await traycerCli.envOverrideDelete({ key: rename.oldKey });
     },
-    // SETTLED, not success. A rename is two writes: if the set lands and the
-    // delete rejects, the store now holds BOTH keys while the editor still
-    // shows neither change - invalidating only on success leaves that stale
-    // view sitting over a config the host will actually read.
+    // A rename is two writes: if the set lands and the delete rejects, the store now holds both keys while the
+    // editor still shows neither change.
     onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.traycerEnvOverrideList(traycerCli),
@@ -119,9 +101,7 @@ export function useBridgeShellConfigController(props: {
 
   return {
     config: configQuery.data,
-    // The bridge reads the on-disk store directly, so there is no transport to
-    // fail the way a host RPC can. Its errors surface through the runner's own
-    // toasts; the panel's read-failed arm is for the RPC path.
+    // The bridge reads the on-disk store directly, so there is no transport to fail the way a host RPC can.
     configError: null,
     retryConfig: () => {
       void configQuery.refetch();

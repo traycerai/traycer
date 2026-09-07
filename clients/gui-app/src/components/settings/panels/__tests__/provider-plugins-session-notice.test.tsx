@@ -8,14 +8,8 @@ import {
   nativeScopeWorktreeMocks,
 } from "@/components/settings/panels/__tests__/provider-native-scope-test-mocks";
 
-/*
- * The Plugins tab calls `useProviderNativeScope`, which reaches three host
- * queries. Without these the render dies on "No QueryClient set" before any
- * notice is on screen - the failure is in the scope hook, not in the notice
- * this suite is about. Mocked rather than wrapped in a QueryClientProvider so
- * the suite keeps testing the notice against a fixed scope, matching the
- * convention in provider-plugins-tab-scope.test.tsx.
- */
+/* Without these the render dies on "No QueryClient set" before any notice is on screen - the failure is in the
+   scope hook, not in the notice this suite is about. */
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));

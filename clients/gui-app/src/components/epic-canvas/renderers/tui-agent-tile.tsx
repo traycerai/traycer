@@ -107,11 +107,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
- * A bound worktree/folder is gone from disk. The host's prepare-launch
- * resolver rejects with the typed `WORKTREE_MISSING` envelope instead of
- * silently demoting to Local (the silent demote-to-Local was removed - no
- * hidden fallback), so the tile surfaces an actionable recovery message
- * rather than a generic "Failed to start terminal" banner.
+ * The host's prepare-launch resolver rejects with the typed `WORKTREE_MISSING` envelope instead of silently demoting to Local (the silent demote-to-Local was removed - no hidden fallback), so the tile surfaces an actionable recovery message rather than a generic "Failed to start terminal" banner.
  */
 function isWorktreeMissingError(
   error: { readonly code?: string; readonly message?: string } | null,
@@ -120,15 +116,7 @@ function isWorktreeMissingError(
 }
 
 /**
- * Tile renderer for terminal-agent records. Reads the agent record from the
- * Y.Doc projection and reuses the same xterm + `terminal.create`
- * infrastructure the plain `TerminalTile` uses via
- * `useTerminalTileBootstrap`.
- *
- * The PTY's `desiredSessionId` is the agent record id (i.e. the canvas tab
- * id). That decoupling means the persisted terminal-agent `sessionId` can
- * stay stable across PTY restarts even when a provider needs the host to
- * rebuild dynamic launch state before the next attach.
+ * That decoupling means the persisted terminal-agent `sessionId` can stay stable across PTY restarts even when a provider needs the host to rebuild dynamic launch state before the next attach.
  */
 export interface TuiAgentTileProps {
   readonly node: EpicNodeRef;
@@ -227,33 +215,12 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // Same reason gate as `terminal-tile`: a `plan-restricted` host is running,
-    // so nothing closed and a persisted "closed" entry would be a lie an
-    // upgrade immediately contradicts.
+    // Same reason gate as `terminal-tile`: a `plan-restricted` host is running, so nothing closed and a persisted "closed" entry would be a lie an upgrade immediately contradicts.
     if (reachability.unavailability === "plan-restricted") return;
-    // And the same basis gate: since F4 this verdict also arrives from a
-    // starting host that overran its budget, which is the UI's patience
-    // expiring rather than proof the agent's session ended. The tile stops
-    // waiting; the persisted notification still needs directory evidence.
+    // And the same basis gate: since F4 this verdict also arrives from a starting host that overran its budget, which is the UI's patience expiring rather than proof the agent's session ended.
     if (reachability.basis !== "directory") return;
-    // REMOTE-UNADDRESSABLE: another of the user's machines, not reachable from
-    // this one. The banner is right and the notification is not.
-    //
-    // "Terminal closed" is a claim that a session on the reader's own machine
-    // ended, and it is written into a durable feed. Here it would be a claim
-    // about a machine this client cannot observe at all - and the reader
-    // closed nothing; someone shut a laptop. The agent and its transcript are
-    // exactly what the banner says they are: kept, on their own host, waiting
-    // for it to come back.
-    //
-    // The gate matters now because the TUI roster's phase 2 put every agent on
-    // every other machine the user owns into this tree. Before it, opening a
-    // remote-bound agent tile was rare enough that this fired seldom; after
-    // it, peeking at a sleeping laptop's agents would write one persisted
-    // "permanently closed" entry per tile. Deliberately narrow to `remote`:
-    // a host the directory cannot classify keeps today's behaviour, because
-    // inferring "someone else's machine" from "not in the directory" is the
-    // kind of guess this whole chain of gates exists to refuse.
+    // The banner is right and the notification is not. "Terminal closed" is a claim that a session on the reader's own machine ended, and it is written into a durable feed.
+    // Here it would be a claim about a machine this client cannot observe at all - and the reader closed nothing; someone shut a laptop.
     if (reachability.hostKind === "remote") return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
@@ -293,11 +260,8 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       />
     );
   }
-  // "host-starting": local host not published yet (boot/ensure/wake) - show
-  // the loading shell, never the permanently-closed banner. The shell and its
-  // worktree notice stay; only the wordless skeleton inside it is retired for
-  // a bounded state that names the host it is waiting on (audit S5, and
-  // invariant 6 for the end of the wait).
+  // "host-starting": local host not published yet (boot/ensure/wake) - show the loading shell, never the permanently-closed banner.
+  // The shell and its worktree notice stay; only the wordless skeleton inside it is retired for a bounded state that names the host it is waiting on (audit S5, and invariant 6 for the end of the wait).
   if (hostLoad.kind !== "ready") {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
@@ -318,9 +282,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       </TerminalAgentTileShell>
     );
   }
-  // Keyed on `recoverNonce`: a recovery remounts the bootstrap subtree, which
-  // re-issues `prepareLaunch` (resuming the conversation from disk) and recreates
-  // the reaped PTY.
+  // Keyed on `recoverNonce`: a recovery remounts the bootstrap subtree, which re-issues `prepareLaunch` (resuming the conversation from disk) and recreates the reaped PTY.
   return (
     <TuiAgentTileLive
       key={recovery.recoverNonce}
@@ -331,10 +293,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   );
 }
 
-// Safety ceiling for restart-kill exit suppression: the normal path lifts it as
-// soon as the recreated PTY is observed; this guarantees it is never held longer
-// than a kill exit could plausibly take to arrive, so a later genuine crash is
-// never swallowed indefinitely.
+// Safety ceiling for restart-kill exit suppression: the normal path lifts it as soon as the recreated PTY is observed; this guarantees it is never held longer than a kill exit could plausibly take to arrive, so a later genuine crash is never swallowed indefinitely.
 const RESTART_SUPPRESS_TIMEOUT_MS = 15_000;
 
 function TuiAgentTileLive(
@@ -349,9 +308,7 @@ function TuiAgentTileLive(
   const instanceId = props.node.instanceId;
   const agent = useEpicTerminalAgent(sessionId);
   const hostEntry = useHostDirectoryEntry(hostId);
-  // Read off the directory entry this component already holds rather than
-  // opening a second reachability subscription per tile: the outer component
-  // owns that verdict, and all this arm needs is a name to put in the banner.
+  // Read off the directory entry this component already holds rather than opening a second reachability subscription per tile: the outer component owns that verdict, and all this arm needs is a name to put in the banner.
   const hostLabel =
     hostEntry !== null && hostEntry.label.length > 0 ? hostEntry.label : hostId;
   const closeTile = useCloseCanvasTileWithNestedFocus(
@@ -367,33 +324,19 @@ function TuiAgentTileLive(
     false,
   );
 
-  // Every harness - Claude included - goes through `agent.startTerminalSession`
-  // on the launch / reopen path so the host can re-read the local worktree
-  // binding, reject a missing worktree (no silent demote-to-Local), and await
-  // orchestrator setup before the visible PTY is created. Codex and OpenCode
-  // have always required this for app-server URL freshness; routing Claude
-  // through the same RPC closes the bug where a Claude reopen / rebind kept
-  // using the stored invocation + persisted `workspaceFolders[0]` (Flow 6 / Flow 11).
+  // Every harness - Claude included - goes through `agent.startTerminalSession` on the launch / reopen path so the host can re-read the local worktree binding, reject a missing worktree (no silent demote-to-Local), and await orchestrator setup before the visible PTY is created.
   const prepareLaunchMutateAsync = prepareLaunch.mutateAsync;
   const preparePayload =
     useCallback(async (): Promise<TerminalCreatePayload | null> => {
       if (agent === null) return null;
-      // Unreachable while `adoptOnly` holds the create effect shut, and kept
-      // as the second half of that gate rather than trusting one flag: this is
-      // the function that would hand a null resume id to the owner host's
-      // prepare-launch and get a NEW provider session minted under this
-      // agent's id. A replica may never start one.
+      // Unreachable while `adoptOnly` holds the create effect shut, and kept as the second half of that gate rather than trusting one flag: this is the function that would hand a null resume id to the owner host's prepare-launch and get a NEW provider session minted under this agent's id.
+      // A replica may never start one.
       if (agent.origin === "cloud") return null;
-      // A harness this build cannot name is a harness it cannot launch. Only a
-      // cross-host replica can reach `null` here, and the line above has
-      // already refused those - this states the requirement rather than
-      // relying on that ordering.
+      // A harness this build cannot name is a harness it cannot launch.
+      // Only a cross-host replica can reach `null` here, and the line above has already refused those - this states the requirement rather than relying on that ordering.
       const launchHarnessId = agent.harnessId;
       if (launchHarnessId === null) return null;
-      // PEEK, don't consume: a failed `terminal.create` (PTY never started, so
-      // the fork command never ran) must be retryable against the SAME fork-
-      // prepared args. The stash is cleared once `terminal.create` succeeds (see
-      // the create-success effect below); after that, reopens resume normally.
+      // PEEK, don't consume: a failed `terminal.create` (PTY never started, so the fork command never ran) must be retryable against the SAME fork- prepared args.
       const preparedLaunch = peekPreparedTerminalAgentLaunch(agent.id);
       if (preparedLaunch !== null) {
         return {
@@ -414,17 +357,13 @@ function TuiAgentTileLive(
         tuiAgentId: agent.id,
         harnessSessionId: agent.harnessSessionId,
         forkSourceHarnessSessionId: null,
-        // `null`: a reopen/reattach carries no wire-level fork-source id -
-        // the resolver's strict-scan fallback (or persisted pending-fork
-        // provenance) is what applies here, never this field.
+        // `null`: a reopen/reattach carries no wire-level fork-source id - the resolver's strict-scan fallback (or persisted pending-fork provenance) is what applies here, never this field.
         forkSourceTuiAgentId: null,
         // Raw per-agent override: `null` keeps provider Settings as the
         // fallback, while `""` and non-empty strings are durable overrides.
         terminalAgentArgs: agent.terminalAgentArgs,
         workspaceMode: agent.workspaceMode,
-        // `null`: this is a reopen/reattach of an already-persisted agent, so
-        // the host resolver falls back to reading the profile off the stored
-        // record itself rather than re-threading it from here.
+        // `null`: this is a reopen/reattach of an already-persisted agent, so the host resolver falls back to reading the profile off the stored record itself rather than re-threading it from here.
         profileId: null,
       });
       if (
@@ -435,21 +374,8 @@ function TuiAgentTileLive(
           `${agent.harnessId} launch preparation did not return a terminal command.`,
         );
       }
-      // Worktree-mode terminal-agents must run the visible PTY inside the
-      // bound worktree, never in the root workspace. The host resolver
-      // derives `workingDirectory` from the binding's primary entry when a
-      // binding is present (rejecting with WORKTREE_MISSING if that entry's
-      // folder is gone on disk, rather than silently demoting), so we forward
-      // that value verbatim instead of re-deriving it from
-      // `agent.workspaceFolders[0]` - that would race a stale projection on a
-      // freshly-imported binding.
-      //
-      // `worktreeBusyPaths` is the resolver-authored set of concrete
-      // worktree paths the harness will hold open. We forward it verbatim
-      // to `terminal.create` so the host-side active-run busy registry
-      // can refuse `worktree.delete` for any of those paths until the PTY
-      // exits - covering multi-repo bindings where the sibling worktree
-      // paths would otherwise be missed by the single-cwd backstop.
+      // Worktree-mode terminal-agents must run the visible PTY inside the bound worktree, never in the root workspace.
+      // The host resolver derives `workingDirectory` from the binding's primary entry when a binding is present (rejecting with WORKTREE_MISSING if that entry's folder is gone on disk, rather than silently demoting), so we forward that value verbatim instead of re-deriving it from `agent.workspaceFolders[0]` - that would race a stale projection on a freshly-imported binding.
       return {
         tuiHarnessId: agent.harnessId,
         cwd: session.workingDirectory,
@@ -465,24 +391,8 @@ function TuiAgentTileLive(
     [prepareLaunchReset],
   );
 
-  // A CROSS-HOST REPLICA is ADOPT-ONLY, and this is the boundary decision 2
-  // rests on rather than a UI preference.
-  //
-  // The row came from this host's record inbox: it describes an agent living
-  // on ANOTHER of the user's machines, and it carries no `harnessSessionId`,
-  // because that never leaves the machine running the provider CLI. So there
-  // is nothing here to resume FROM. Sending the projected `null` through the
-  // ordinary prepare/create path does not fail safe - the host's
-  // prepare-launch resolver reads a null resume id as "new session" and mints
-  // a fresh provider session under the existing agent id. On a reachable
-  // owner host whose PTY was merely idle-reaped, that silently replaces the
-  // agent's conversation, and if the owner is still driving it, it is a
-  // SECOND driver on one CLI session.
-  //
-  // `adoptOnly` is the existing gate for exactly this shape (a session
-  // something else owns creating): it shuts the create effect for good while
-  // still arming the measure-grid wait, so the tile can attach when the owner
-  // host does report a running PTY.
+  // The row came from this host's record inbox: it describes an agent living on ANOTHER of the user's machines, and it carries no `harnessSessionId`, because that never leaves the machine running the provider CLI.
+  // On a reachable owner host whose PTY was merely idle-reaped, that silently replaces the agent's conversation, and if the owner is still driving it, it is a SECOND driver on one CLI session.
   const isCloudReplica = agent?.origin === "cloud";
   const bootstrap = useTerminalTileBootstrap({
     hostId,
@@ -500,36 +410,20 @@ function TuiAgentTileLive(
   const createIsSuccess = bootstrap.createIsSuccess;
   const killTerminalMutate = killTerminal.mutate;
 
-  // One-shot fork stash: clear it once the PTY is live (`terminal.create`
-  // succeeded). Until then `preparePayload` PEEKs it, so a failed create can be
-  // retried against the same fork-prepared args instead of silently falling back
-  // to a fresh, non-forked launch. A no-op for non-fork launches (no stash).
+  // Until then `preparePayload` PEEKs it, so a failed create can be retried against the same fork-prepared args instead of silently falling back to a fresh, non-forked launch.
   const agentId = agent?.id ?? null;
   useEffect(() => {
     if (agentId === null || !createIsSuccess) return;
     clearPreparedTerminalAgentLaunch(agentId);
   }, [agentId, createIsSuccess]);
 
-  // A binding-change restart KILLS the PTY and recreates it. Killing makes the
-  // live stream report a non-zero exit, which the tile would otherwise treat as
-  // a crash (error toast + close the tab) - the bug where applying folder edits
-  // closed the terminal on every harness. The kill exit is identical across
-  // Claude / Codex / OpenCode, so this is not a provider issue.
-  //
-  // `restartSuppressExitRef` marks "the next exit is our own restart kill, not a
-  // crash". It is a ref, not state: the exit-handling effects in
-  // `TerminalAgentLive` read it on each `status` change (every exit IS a status
-  // change), so the suppression applies without a re-render.
+  // Killing makes the live stream report a non-zero exit, which the tile would otherwise treat as a crash (error toast + close the tab) - the bug where applying folder edits closed the terminal on every harness.
+  // It is a ref, not state: the exit-handling effects in `TerminalAgentLive` read it on each `status` change (every exit IS a status change), so the suppression applies without a re-render.
   const restartSuppressExitRef = useRef(false);
-  // The recreate can only fire after the bootstrap observes the session gone
-  // (`hostHasSession === false` is the create gate), so a false→true cycle is
-  // a guaranteed "recreate finished" signal. Gate on having seen the `false` so
-  // the still-running old session at restart time can't lift suppression early.
+  // The recreate can only fire after the bootstrap observes the session gone (`hostHasSession === false` is the create gate), so a false→true cycle is a guaranteed "recreate finished" signal.
+  // Gate on having seen the `false` so the still-running old session at restart time can't lift suppression early.
   const restartSawSessionGoneRef = useRef(false);
-  // Hard ceiling: even if the false→true frame is ever coalesced away (so the
-  // lift effect never runs), suppression is force-cleared after this delay - a
-  // LATER genuine crash can then never be swallowed indefinitely. The normal
-  // path clears it (and cancels this timer) the moment the recreate is observed.
+  // Hard ceiling: even if the false→true frame is ever coalesced away (so the lift effect never runs), suppression is force-cleared after this delay - a LATER genuine crash can then never be swallowed indefinitely.
   const restartSuppressTimerRef = useRef<number | null>(null);
   const clearRestartSuppression = useCallback((): void => {
     restartSuppressExitRef.current = false;
@@ -539,10 +433,7 @@ function TuiAgentTileLive(
       restartSuppressTimerRef.current = null;
     }
   }, []);
-  // The live host reads this at EXIT time (not during render) to tell a
-  // binding-change restart kill apart from a real crash. Exposed as a stable
-  // getter so the ref itself never crosses the prop boundary (a ref passed as a
-  // prop / read in render trips react-hooks/refs).
+  // Exposed as a stable getter so the ref itself never crosses the prop boundary (a ref passed as a prop / read in render trips react-hooks/refs).
   const isRestartKillSuppressed = useCallback(
     (): boolean => restartSuppressExitRef.current,
     [],
@@ -569,49 +460,21 @@ function TuiAgentTileLive(
       },
     );
   }, [armRestartSuppression, killTerminalMutate, retryTerminal, sessionId]);
-  // A `reaped` exit is the host's idle-reap of this unwatched agent - pure
-  // lifecycle, not a crash - and the PTY is already gone, so there is
-  // nothing to kill. Arm the same suppression a binding restart uses (no
-  // error toast, no tab close, same safety ceiling) and recreate under the
-  // same id; `prepareLaunch` resumes the conversation transparently.
+  // A `reaped` exit is the host's idle-reap of this unwatched agent - pure lifecycle, not a crash - and the PTY is already gone, so there is nothing to kill.
+  // Arm the same suppression a binding restart uses (no error toast, no tab close, same safety ceiling) and recreate under the same id; `prepareLaunch` resumes the conversation transparently.
   const reviveAfterReap = useCallback((): void => {
-    // NOT for a cross-host replica. "Recreate under the same id" is precisely
-    // the reconstruction that is forbidden here: with no `harnessSessionId` to
-    // resume, `prepareLaunch` would mint a new provider session rather than
-    // resuming the conversation. The reaped tile falls to the unavailable
-    // banner instead, and the agent is restarted where it lives.
-    //
-    // DEFENSIVE, and stated as such after a review asked why no test can make
-    // it fail: `adoptOnly` above already shuts the create effect permanently,
-    // and `bootstrap.retry` only clears the dispatch latch and refetches the
-    // session list - it never creates on its own. So removing this line does
-    // not currently let a replica be recreated. What it saves is an
-    // ARM-RESTART-SUPPRESSION that has nothing to suppress, and it keeps the
-    // refusal readable at the call site instead of resting entirely on a flag
-    // handed to a hook three files away.
+    // NOT for a cross-host replica. "Recreate under the same id" is precisely the reconstruction that is forbidden here: with no `harnessSessionId` to resume, `prepareLaunch` would mint a new provider session rather than resuming the conversation.
+    // DEFENSIVE, and stated as such after a review asked why no test can make it fail: `adoptOnly` above already shuts the create effect permanently, and `bootstrap.retry` only clears the dispatch latch and refetches the session list - it never creates on its own.
     if (isCloudReplica) return;
     armRestartSuppression();
     retryTerminal();
   }, [armRestartSuppression, isCloudReplica, retryTerminal]);
-  // The kill must target a LIVE session. If session presence is unknown
-  // (`terminal.list` refetching → `hostHasSession === null`) or already gone at
-  // commit time, do NOT silently drop the rebind (the bug where Update appeared
-  // to succeed but the PTY kept the old folders). Remember the intent and let the
-  // effect below act once presence settles.
+  // The kill must target a LIVE session.
+  // If session presence is unknown (`terminal.list` refetching → `hostHasSession === null`) or already gone at commit time, do NOT silently drop the rebind (the bug where Update appeared to succeed but the PTY kept the old folders).
   const pendingRestartRef = useRef(false);
   const restartAfterWorkspaceBindingChange = useCallback((): void => {
-    // A CLOUD REPLICA never restarts anything. The kill below targets the PTY
-    // by session id, and that PTY lives on the OWNER's machine - so a rebind
-    // committed here would kill a terminal running somewhere else and then
-    // try to recreate it locally. The host refuses the rebind itself
-    // (TARGET_NOT_LOCAL), but the kill is dispatched client-side first and
-    // would land regardless.
-    //
-    // The toolbar does not offer workspace mutation for a replica at all, so
-    // in the shipped UI nothing calls this. It is guarded anyway because the
-    // affordance's absence is a rendering decision and this is the mutation:
-    // the two should not be able to drift apart. `pendingRestartRef` is set
-    // only below this line, so the deferred path cannot arm either.
+    // A CLOUD REPLICA never restarts anything.
+    // `pendingRestartRef` is set only below this line, so the deferred path cannot arm either.
     if (!mayRestartAfterWorkspaceBindingChange(agent?.origin ?? null)) return;
     if (hostHasSession === true) {
       performRestartKill();
@@ -622,19 +485,8 @@ function TuiAgentTileLive(
   }, [agent?.origin, hostHasSession, performRestartKill, retryTerminal]);
   useEffect(() => {
     if (!pendingRestartRef.current) return;
-    // REVALIDATED HERE, not just where the intent was armed. The arm and the
-    // fire are separated by a round trip (`terminal.list` settling), and the
-    // projection can be replaced in between - so an intent recorded while this
-    // row was local must not fire against a row that is now a replica, whose
-    // PTY belongs to another machine.
-    //
-    // Today the ref can only be armed for a non-cloud row and a live
-    // registry row does not become a replica (the list union suppresses a
-    // cloud copy of an id this host holds), so this is unreachable in the
-    // shipped app. It is here because the invariant belongs at the point of
-    // EXECUTION: the arming guard protects the decision, this one protects the
-    // act, and only the second one is still true if a later edit moves the
-    // arming.
+    // The arm and the fire are separated by a round trip (`terminal.list` settling), and the projection can be replaced in between - so an intent recorded while this row was local must not fire against a row that is now a replica, whose PTY belongs to another machine.
+    // Today the ref can only be armed for a non-cloud row and a live registry row does not become a replica (the list union suppresses a cloud copy of an id this host holds), so this is unreachable in the shipped app.
     if (!mayRestartAfterWorkspaceBindingChange(agent?.origin ?? null)) {
       pendingRestartRef.current = false;
       return;
@@ -648,13 +500,9 @@ function TuiAgentTileLive(
       // binding on its own; no kill needed.
       pendingRestartRef.current = false;
     }
-    // `null`: list still settling, keep waiting.
+  // `null`: list still settling, keep waiting.
   }, [agent?.origin, hostHasSession, performRestartKill]);
-  // Lift the suppression once the recreated PTY is back (`hostHasSession`
-  // cycles false → true), or the relaunch errored (the body then renders the
-  // inline error, not the live host). Ref assignments only - no setState - so a
-  // later genuine exit is handled normally even if its kill exit was never
-  // observed (e.g. the host unmounted first).
+  // Ref assignments only - no setState - so a later genuine exit is handled normally even if its kill exit was never observed (e.g. the host unmounted first).
   const prepareLaunchIsError = prepareLaunch.isError;
   const bootstrapCreateIsError = bootstrap.createIsError;
   useEffect(() => {
@@ -676,23 +524,12 @@ function TuiAgentTileLive(
     prepareLaunchIsError,
     clearRestartSuppression,
   ]);
-  // The terminal-agent's worktree is "in active use" while a PTY/session is
-  // running for it. Terminal-agent binding edits are still allowed; a successful
-  // binding write kills and recreates the PTY so the launch payload is prepared
-  // from the new binding. `hostHasSession === true` covers reattach after the
-  // GUI restarts; bootstrap also reports it for the freshly-launched PTY once
-  // the list query refreshes.
+  // The terminal-agent's worktree is "in active use" while a PTY/session is running for it.
+  // Terminal-agent binding edits are still allowed; a successful binding write kills and recreates the PTY so the launch payload is prepared from the new binding.
   const isOwnerActive = hostHasSession === true;
 
-  // ADOPT-ONLY AND NOT RUNNING. The owner host is reachable (an unreachable
-  // one was answered by the banner above) and reports no PTY for this agent -
-  // idle-reaped, or simply never started. There is nothing to attach to and
-  // this client may not create one, so the honest end state is the banner,
-  // not a loading skeleton that would wait forever for a session no one is
-  // going to start.
-  //
-  // `hostHasSession === null` deliberately keeps waiting: that is the list
-  // still loading, which is not evidence of anything.
+  // ADOPT-ONLY AND NOT RUNNING.
+  // The owner host is reachable (an unreachable one was answered by the banner above) and reports no PTY for this agent - idle-reaped, or simply never started.
   if (isCloudReplica && hostHasSession === false) {
     return (
       <TerminalDeadTileBanner
@@ -707,12 +544,8 @@ function TuiAgentTileLive(
   }
 
   if (agent === null) {
-    // Same stable skeleton the reachability-check, pre-launch, and xterm
-    // suspense states use, so the create→ready transition reads as one
-    // continuous loading state instead of a sequence of placeholder strings.
-    // The worktree-setup notice still rides on top (it keys off the tab/node
-    // id, not the pending agent projection), so a just-created worktree agent
-    // shows its notice before the record lands.
+    // Same stable skeleton the reachability-check, pre-launch, and xterm suspense states use, so the create→ready transition reads as one continuous loading state instead of a sequence of placeholder strings.
+    // The worktree-setup notice still rides on top (it keys off the tab/node id, not the pending agent projection), so a just-created worktree agent shows its notice before the record lands.
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
@@ -728,13 +561,8 @@ function TuiAgentTileLive(
     );
   }
 
-  // Pre-launch / live shell: the worktree chip sits at the top of the tile so
-  // the user can confirm the binding before the harness starts (Flow 1 step 6).
-  // The host is fixed for a terminal agent because a PTY can't migrate, but
-  // folder binding changes are supported by committing the new binding and
-  // restarting the PTY from the updated prepare-launch payload. The body
-  // underneath swaps between pre-launch placeholders and the live xterm host
-  // based on session readiness.
+  // Pre-launch / live shell: the worktree chip sits at the top of the tile so the user can confirm the binding before the harness starts (Flow 1 step 6).
+  // The host is fixed for a terminal agent because a PTY can't migrate, but folder binding changes are supported by committing the new binding and restarting the PTY from the updated prepare-launch payload.
   return (
     <TerminalAgentTileShell tileId={props.tileId}>
       <TerminalAgentPreLaunchToolbar
@@ -808,11 +636,7 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   if (props.prepareLaunchIsError || props.createIsError) {
     const error = props.prepareLaunchError ?? props.createError;
     if (isWorktreeMissingError(error)) {
-      // No silent demote-to-Local: the host refused to launch into a missing
-      // cwd. A terminal agent stays bound to its folder for life (a PTY can't
-      // migrate), so the recovery is to restore the missing path on disk (a
-      // worktree or a Local folder) and retry, or close the agent - not to
-      // re-bind elsewhere.
+      // A terminal agent stays bound to its folder for life (a PTY can't migrate), so the recovery is to restore the missing path on disk (a worktree or a Local folder) and retry, or close the agent - not to re-bind elsewhere.
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
           <span className="text-ui-sm text-destructive">
@@ -876,15 +700,8 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   }
 
   if (props.handle === null) {
-    // One stable skeleton for the whole pre-ready window (preparing → starting
-    // → xterm suspense all render `TerminalLoadingSkeleton`), so the transition
-    // into the live terminal never flickers between placeholder strings. The
-    // measurement probe mounts the persistent xterm engine beneath it (both
-    // fill the same relative box) so the container's grid is measured before
-    // the subscribe is dispatched - see `TerminalGridMeasureProbe`. Probe
-    // first, skeleton in an overlay after: the probe's container is
-    // `absolute inset-0`, so in-flow content preceding it would be painted
-    // over.
+    // One stable skeleton for the whole pre-ready window (preparing → starting → xterm suspense all render `TerminalLoadingSkeleton`), so the transition into the live terminal never flickers between placeholder strings.
+    // The measurement probe mounts the persistent xterm engine beneath it (both fill the same relative box) so the container's grid is measured before the subscribe is dispatched - see `TerminalGridMeasureProbe`.
     return (
       <>
         {props.measureProbe}
@@ -912,23 +729,7 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
 
 /**
  * The dialog's target, or `null` when this agent cannot be a fork source.
- *
- * Two narrowings `ForkableTuiAgent` asks for, done together at the one site
- * that builds a target - so the dialog's own type carries the rule and no
- * consumer re-derives it.
- *
- * A projection's harness can be `null` (a cross-host replica whose cloud row
- * predates `runSettingsSummary`), and such an agent has nothing to fork WITH:
- * no provider to look up, no harness to create under.
- *
- * The ORIGIN is the other half, and it is not implied by the first. A replica
- * whose row DOES carry a harness passes the harness test, and a target built
- * from it opens a dialog that can never submit - the fork needs a
- * `harnessSessionId` that structurally cannot cross to this machine.
- *
- * Module-level rather than inline in the toolbar because the toolbar sits at
- * the complexity ceiling, and because a narrowing is the kind of thing worth
- * reading in one piece.
+ * A replica whose row DOES carry a harness passes the harness test, and a target built from it opens a dialog that can never submit - the fork needs a `harnessSessionId` that structurally cannot cross to this machine.
  */
 function buildForkTarget(input: {
   readonly agent: TuiAgentProjection;
@@ -958,22 +759,12 @@ interface TerminalAgentPreLaunchToolbarProps {
 }
 
 /**
- * Always-on toolbar above the terminal-agent body. The host + workspace
- * chips sit beside the harness controls so the user can see where the agent
- * runs without leaving the tile. The host select is locked because a PTY
- * can't migrate; the workspace picker remains editable and restarts the PTY
- * after a committed folder-binding change.
- *
- * The binding is read via `worktree.getBinding` (a unary RPC) so the chip can
- * render `repo · branch` accurately even though terminal-agents do not
- * subscribe to `chat.subscribe`. While the query is loading we pass
- * `binding={null}` so the chip degrades to "not selected"; once it resolves
- * the chip reflects Local / worktree branch deterministically.
+ * The host + workspace chips sit beside the harness controls so the user can see where the agent runs without leaving the tile.
+ * The host select is locked because a PTY can't migrate; the workspace picker remains editable and restarts the PTY after a committed folder-binding change.
  */
-/** Tooltip/aria reason for the disabled "Continue under another profile…"
- *  dropdown item: the old-host capability gate takes precedence over the
- *  same session/binding readiness gate plain Fork uses, since it names a
- *  concrete remediation ("update the host") the other reason doesn't have. */
+/**
+ * Tooltip/aria reason for the disabled "Continue under another profile…" dropdown item: the old-host capability gate takes precedence over the same session/binding readiness gate plain Fork uses, since it names a concrete remediation ("update the host") the other reason doesn't have.
+ */
 function continueUnderProfileDisabledReasonFor(
   continueUnderProfileSupported: boolean,
   forkDisabled: boolean,
@@ -1002,10 +793,8 @@ function TerminalAgentPreLaunchToolbar(
     ownerId: props.agent.id,
     ownerKind: "terminal-agent",
     enabled: true,
-    // Re-check the bound folders on window focus (while this pane is visible) so
-    // the per-folder "missing on disk" indicator refreshes when a worktree is
-    // deleted - matching the chat tile's on-focus recompute. The query stays
-    // enabled regardless of focus so the chip always renders.
+    // Re-check the bound folders on window focus (while this pane is visible) so the per-folder "missing on disk" indicator refreshes when a worktree is deleted - matching the chat tile's on-focus recompute.
+    // The query stays enabled regardless of focus so the chip always renders.
     staleTime: 0,
     refetchOnWindowFocus: paneVisible,
     // The nested setup notice owns the in-flight polling; this observer only
@@ -1092,16 +881,7 @@ function TerminalAgentPreLaunchToolbar(
       role="toolbar"
       aria-label="Terminal agent controls"
     >
-      {/* NO WORKSPACE AFFORDANCE for a cross-host replica, on the same
-          reasoning as the fork block below - absent, not disabled.
-
-          A rebind is a MUTATION, and decision 3 makes a replica read-only.
-          The chip would also be lying before it was clicked: the binding it
-          renders is read with `worktree.getBinding` against THIS host for an
-          agent bound to another one, so there is nothing here to show and
-          nothing here to change. Committing one killed the remote PTY
-          client-side before the host's `TARGET_NOT_LOCAL` refusal could be
-          seen; `mayRestartAfterWorkspaceBindingChange` is the other half. */}
+      {/* The chip would also be lying before it was clicked: the binding it renders is read with `worktree.getBinding` against THIS host for an agent bound to another one, so there is nothing here to show and nothing here to change. Committing one killed the remote PTY client-side before the host's `TARGET_NOT_LOCAL` refusal could be seen; `mayRestartAfterWorkspaceBindingChange` is the other half. */}
       {props.agent.origin === "cloud" ? null : (
         <HostWorkspaceSelector
           disabled={false}
@@ -1113,35 +893,22 @@ function TerminalAgentPreLaunchToolbar(
             ownerId: props.agent.id,
             binding,
             isOwnerActive: props.isOwnerActive,
-            // Terminal agents have no background-work-outlives-the-turn concept
-            // distinct from PTY output (unlike chat), so there's no narrower
-            // signal to distinguish - this field is unread for this surface kind
-            // (the notice text is fixed regardless), kept equal for consistency.
+            // Terminal agents have no background-work-outlives-the-turn concept distinct from PTY output (unlike chat), so there's no narrower signal to distinguish - this field is unread for this surface kind (the notice text is fixed regardless), kept equal for consistency.
             hasActiveTurn: props.isOwnerActive,
             ownerLabel: props.agent.title,
             inFlightWorktreeIntent: null,
             // Surfaced on the chip as a per-folder "missing on disk" indicator.
-            // The host-computed signal on `worktree.getBinding` — the actual
-            // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
-            // gives the user a proactive, owner-scoped visual matching chat.
+            // The host-computed signal on `worktree.getBinding` - the actual launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this gives the user a proactive, owner-scoped visual matching chat.
             missingWorktreePaths: bindingQuery.data?.missingWorktreePaths ?? [],
             bindingResolved: bindingQuery.isSuccess,
             onBindingCommitted: handleWorkspaceBindingCommitted,
-            // Terminal agents cannot fork — the host section is `locked`, so
+            // Terminal agents cannot fork - the host section is `locked`, so
             // the switch gesture this handles is unreachable here anyway.
             onForkOnHost: null,
           }}
         />
       )}
-      {/* NO FORK AFFORDANCE AT ALL for a cross-host replica - not a disabled
-          one. Decision 2 is that a replica is never clonable, and the absence
-          is the honest rendering of a structural fact: forking needs the
-          source agent's `harnessSessionId`, which never leaves the machine
-          running the provider CLI, so there is nothing here to fork FROM and
-          no readiness that would ever arrive.
-
-          A disabled button with "available after the session and binding are
-          ready" says the opposite - it promises the capability is coming. */}
+      {/* NO FORK AFFORDANCE AT ALL for a cross-host replica - not a disabled one. A disabled button with "available after the session and binding are ready" says the opposite - it promises the capability is coming. */}
       {props.agent.origin === "cloud" ? null : (
         <DropdownMenu>
           <ButtonGroup aria-label="Fork actions" className="shrink-0">
@@ -1215,10 +982,7 @@ function TerminalAgentPreLaunchToolbar(
                   <span className="w-full whitespace-nowrap">
                     Continue under another profile…
                   </span>
-                  {/* Radix's roving-tabindex skips this item entirely while
-                    disabled, so its aria-label (and the hover-only tooltip
-                    above) never reach keyboard/AT users - a static second
-                    line needs no focus/hover to be perceivable. */}
+                  {/* Radix's roving-tabindex skips this item entirely while disabled, so its aria-label (and the hover-only tooltip above) never reach keyboard/AT users - a static second line needs no focus/hover to be perceivable. */}
                   {continueUnderProfileDisabledReason !== undefined ? (
                     <span className="text-left text-[11px] leading-tight text-muted-foreground">
                       {continueUnderProfileDisabledReason}
@@ -1230,9 +994,7 @@ function TerminalAgentPreLaunchToolbar(
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      {/* Right-aligned status-bar group: the worktree-creation notice sits
-          beside the agent controls. The notice's expanded detail opens as a
-          downward Popover overlay, so it never reflows the terminal below. */}
+      {/* The notice's expanded detail opens as a downward Popover overlay, so it never reflows the terminal below. */}
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <TerminalAgentWorktreeNotice
           hostId={props.hostId}
@@ -1260,25 +1022,7 @@ function TerminalAgentPreLaunchToolbar(
 }
 
 /**
- * Worktree-creation notice for a terminal agent - the TUI analog of the chat
- * setup card. Reuses the exact `SetupCardSegment` a chat renders (in its
- * `inline` variant), fed a view-model projected from this agent's
- * `worktree.getBinding` (the same unary read the toolbar chip already uses, so
- * this shares its TanStack cache - no extra request). Renders nothing unless
- * the agent runs in a worktree it CREATED, so Local / imported bindings show no
- * card. Retry / Open-terminal route by `ownerKind: "terminal-agent"` as in chat.
- *
- * Self-resolves the epic + tab-host client from `hostId` (rather than taking
- * them as props) so it can render in EVERY tile state - reachability-checking,
- * agent-projection-pending, and live - not only once the PTY toolbar mounts;
- * `agentId` is the tab/node id, always known before the agent record projects.
- *
- * `layout`:
- *  - `"chip"` - just the compact trigger, placed by the caller inside the live
- *    status-bar toolbar.
- *  - `"bar"` - the trigger wrapped in a standalone status-bar strip, for the
- *    pre-launch (checking / projection-pending) states where no toolbar exists
- *    yet. Returns null (no empty strip) when there is no notice to show.
+ * Self-resolves the epic + tab-host client from `hostId` (rather than taking them as props) so it can render in EVERY tile state - reachability-checking, agent-projection-pending, and live - not only once the PTY toolbar mounts; `agentId` is the tab/node id, always known before the agent record projects.
  */
 function TerminalAgentWorktreeNotice(props: {
   readonly hostId: string;
@@ -1296,25 +1040,17 @@ function TerminalAgentWorktreeNotice(props: {
     ownerId: props.agentId,
     ownerKind: "terminal-agent",
     enabled: true,
-    // Mirror the toolbar chip's query options so the two observers share one
-    // request and refresh together (re-check the binding on focus while the
-    // pane is visible, so a completed setup flips the card without a reopen).
+    // Mirror the toolbar chip's query options so the two observers share one request and refresh together (re-check the binding on focus while the pane is visible, so a completed setup flips the card without a reopen).
     staleTime: 0,
     refetchOnWindowFocus: paneVisible,
-    // Poll while a setup script is in flight so a background completion/failure
-    // surfaces on the card even while the agent PTY runs (no chat subscription
-    // to push binding transitions). The table stops polling once every entry
-    // settles.
+    // Poll while a setup script is in flight so a background completion/failure surfaces on the card even while the agent PTY runs (no chat subscription to push binding transitions).
+    // The table stops polling once every entry settles.
     poll: true,
   });
   const binding = bindingQuery.data?.binding ?? null;
-  // Setup PTYs are spawned server-side, so nothing invalidates the renderer's
-  // one-shot `terminal.list` query on its own; drive that off the binding so the
-  // card's "Open terminal" liveness tracks the setup terminal as it starts/ends.
+  // Setup PTYs are spawned server-side, so nothing invalidates the renderer's one-shot `terminal.list` query on its own; drive that off the binding so the card's "Open terminal" liveness tracks the setup terminal as it starts/ends.
   useTuiSetupTerminalListRefreshDriver({ binding });
-  // Register the running setup PTY as a background canvas tab so it auto-appears
-  // in the canvas and survives a host/GUI restart (the host keeps no terminal
-  // state across restarts - persistence comes only from a saved canvas tab).
+  // Register the running setup PTY as a background canvas tab so it auto-appears in the canvas and survives a host/GUI restart (the host keeps no terminal state across restarts - persistence comes only from a saved canvas tab).
   useTuiSetupTerminalTabRegisterDriver({ binding, viewTabId: props.viewTabId });
   const model = useMemo(
     () =>
@@ -1341,9 +1077,8 @@ function TerminalAgentWorktreeNotice(props: {
 }
 
 /**
- * The terminal-agent tile's outer chrome: a full-height `bg-canvas` column with
- * the tile test id. State-specific content (status bar + skeleton, or the live
- * shell) is provided as children.
+ * The terminal-agent tile's outer chrome: a full-height `bg-canvas` column with the tile test id.
+ * State-specific content (status bar + skeleton, or the live shell) is provided as children.
  */
 function TerminalAgentTileShell(props: {
   readonly tileId: string;
@@ -1360,16 +1095,7 @@ function TerminalAgentTileShell(props: {
 }
 
 /**
- * Right-aligned `[Agents N ▾]` popover for a terminal-agent tile - the TUI
- * analog of the chat composer's Active Agents panel (the tile has no
- * composer dock). Shows the same shared list: this agent on top with "Stop
- * all" (stop it + its subtree), its active sub-agents beneath. Hidden when
- * there are no active descendants.
- *
- * "Stop all" here interrupts this agent's own CLI too (consistent with the
- * chat panel). That's fine alongside Ctrl+C - it's the bulk "stop this whole
- * effort" action, just reached from the dropdown rather than a standalone
- * button.
+ * That's fine alongside Ctrl+C - it's the bulk "stop this whole effort" action, just reached from the dropdown rather than a standalone button.
  */
 function TerminalAgentHeaderControls(props: {
   readonly epicId: string;
@@ -1429,13 +1155,8 @@ interface TerminalAgentLiveProps {
   readonly viewTabId: string;
   readonly tileId: string;
   readonly isActive: boolean;
-  // Called on each exit (returns `true` ⇒ the tile is deliberately killing +
-  // recreating the PTY for a binding change). That kill produces a non-zero exit
-  // that must NOT be treated as a crash - no error toast, no tab close - until
-  // the new PTY is back. A getter (reads the parent's ref at exit time) rather
-  // than a prop boolean so the parent can flip suppression without re-rendering
-  // the live host, and rather than the ref itself (which react-hooks/refs flags
-  // when passed across the prop boundary).
+  // That kill produces a non-zero exit that must NOT be treated as a crash - no error toast, no tab close - until the new PTY is back.
+  // A getter (reads the parent's ref at exit time) rather than a prop boolean so the parent can flip suppression without re-rendering the live host, and rather than the ref itself (which react-hooks/refs flags when passed across the prop boundary).
   readonly isRestartKillSuppressed: () => boolean;
   /** Revive (recreate + resume) after the host's idle-reap of this agent. */
   readonly onReapedExit: () => void;
@@ -1459,9 +1180,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     props.instanceId,
   );
   const exitToastShownRef = useRef(false);
-  // One revive request per exit: the exit effect can re-run while the store
-  // still reports the same exited state (dep identity churn), and stacking
-  // `terminal.create` retries for one reap would race each other.
+  // One revive request per exit: the exit effect can re-run while the store still reports the same exited state (dep identity churn), and stacking `terminal.create` retries for one reap would race each other.
   const reapedReviveRequestedRef = useRef(false);
   useTerminalCrashNotification({
     handle,
@@ -1471,9 +1190,8 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
 
   const isRestartKillSuppressed = props.isRestartKillSuppressed;
   const showExitToast = useCallback(() => {
-    // A deliberate binding-change restart kills the PTY (non-zero exit); that is
-    // not a crash, so skip the error toast for it. Read at call time (not a dep)
-    // so the latest suppression state applies to this exact exit.
+    // A deliberate binding-change restart kills the PTY (non-zero exit); that is not a crash, so skip the error toast for it.
+    // Read at call time (not a dep) so the latest suppression state applies to this exact exit.
     if (isRestartKillSuppressed()) return;
     if (status !== "exited") return;
     // A `reaped` exit is the host's idle-reap of an unwatched agent -
@@ -1515,15 +1233,10 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   }, [status]);
   useEffect(() => {
     if (status !== "exited") return;
-    // Don't close the tab on the kill we issued for a restart - the bootstrap is
-    // already recreating the PTY under the same id. Closing here is the bug that
-    // dropped the terminal the instant folder edits were applied. Read on this
-    // exact exit; a genuine later exit sees suppression cleared and closes.
+    // Don't close the tab on the kill we issued for a restart - the bootstrap is already recreating the PTY under the same id.
     if (isRestartKillSuppressed()) return;
     if (exitReason === "reaped") {
-      // Host idle-reap of an unwatched agent: keep the tab open and revive
-      // the session in place (recreate under the same id; `prepareLaunch`
-      // resumes the conversation) instead of closing on a lifecycle event.
+      // Host idle-reap of an unwatched agent: keep the tab open and revive the session in place (recreate under the same id; `prepareLaunch` resumes the conversation) instead of closing on a lifecycle event.
       if (!reapedReviveRequestedRef.current) {
         reapedReviveRequestedRef.current = true;
         onReapedExit();
@@ -1540,10 +1253,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     ) {
       return;
     }
-    // `closeCanvasTab` resolves the tile by its pane tab *instance* id
-    // (`pane.tabInstanceIds`), not the content/session id. Passing
-    // `handle.sessionId` (the agent record id) silently no-ops, leaving the
-    // tab open after the harness TUI exits (e.g. Ctrl+C). Use the instance id.
+    // Passing `handle.sessionId` (the agent record id) silently no-ops, leaving the tab open after the harness TUI exits (e.g.
     closeCanvasTile();
   }, [
     status,
@@ -1574,10 +1284,8 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   );
 
   const { onSessionLost, onSessionHealthy } = props.recovery;
-  // Automatic recovery off a handle that can no longer address its PTY. Both
-  // `lost` and `reaped` force-release the old handle and remount the bootstrap,
-  // which either attaches to a host-restored session or re-issues
-  // `prepareLaunch` to resume the conversation. "running" refills the budget.
+  // Automatic recovery off a handle that can no longer address its PTY.
+  // Both `lost` and `reaped` force-release the old handle and remount the bootstrap, which either attaches to a host-restored session or re-issues `prepareLaunch` to resume the conversation. "running" refills the budget.
   useEffect(() => {
     if (status === "lost" || status === "reaped") onSessionLost();
   }, [status, onSessionLost]);
@@ -1591,8 +1299,6 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     recoveryExhausted: props.recovery.recoveryExhausted,
   });
 
-  // Fragment, not a wrapping element: both the xterm host and the overlay are
-  // `absolute inset-0`, so they share the tile's existing positioned ancestor.
   // Introducing a wrapper here would change that positioning context.
   return (
     <>
@@ -1615,11 +1321,8 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
               ? `terminal-agent:${props.viewTabId}:${props.tileId}:${handle.sessionId}`
               : null
           }
-          // A running TUI agent's session handle is kept lease-free across
-          // unmount, so the host never re-sends its snapshot. Keep the xterm
-          // engine alive too - otherwise a pane split disposes the only copy of
-          // the scrollback and the tab renders blank. Once the agent exits the
-          // handle is evicted, so stop pinning the engine.
+          // A running TUI agent's session handle is kept lease-free across unmount, so the host never re-sends its snapshot.
+          // Keep the xterm engine alive too - otherwise a pane split disposes the only copy of the scrollback and the tab renders blank.
           keepAlive={status !== "exited"}
           onTerminalReady={null}
         />

@@ -2,15 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 
-/**
- * The owner a clone surface sends with `forkSource` (chat-sync-v2 ticket 37).
- *
- * The case the ticket exists for is the third one: no local record, but a
- * cloud row the surface already rendered from. Everything else here pins the
- * ordering and the two ways this must answer `null` rather than guess - the
- * host TRUSTS a value it is given when it holds no facts of its own, so a
- * fabricated owner is worse than an absent one.
- */
+/** Everything else here pins the ordering and the two ways this must answer `null` rather than guess - the host TRUSTS a value it is given when it holds no facts of its own, so a fabricated owner is worse than an absent one. */
 
 function cloudRow(
   chatId: string,
@@ -110,11 +102,7 @@ describe("resolveCloneSourceOwnerUserId", () => {
     ).toBeNull();
   });
 
-  // `chatId` is host-minted and NOT unique under a task (`cloud-chat.ts`:
-  // identity is the triple), so a listing can carry two rows for one id. The
-  // owner drives the host's anti-squat expectation AND, since the shared-chat
-  // banner, whether the UI calls a chat the viewer's own - both are wrong to
-  // guess at.
+  // `chatId` is host-minted and NOT unique under a task (`cloud-chat.ts`: identity is the triple), so a listing can carry two rows for one id.
   it("disambiguates a colliding chat id by the source's bound host", () => {
     expect(
       resolveCloneSourceOwnerUserId({
@@ -154,11 +142,7 @@ describe("resolveCloneSourceOwnerUserId", () => {
     ).toBeNull();
   });
 
-  // The trap the fork dialog fell into: a published copy is read through the
-  // host SERVING it, generally the viewer's own machine. Handed that host as
-  // the tie-breaker, a colliding id resolves to the viewer's own unrelated row
-  // - a wrong owner, which the host TRUSTS, rather than an absent one. Callers
-  // that cannot name the OWNING host must pass `null` and take the degrade.
+  // a wrong owner, which the host TRUSTS, rather than an absent one. that cannot name the OWNING host must pass `null` and take the degrade.
   it("resolves a collision to the viewer's own row when handed a serving host - why callers must pass the owning host or null", () => {
     const colliding = [
       cloudRow("chat-1", "viewer-user", "viewer-own-host"),

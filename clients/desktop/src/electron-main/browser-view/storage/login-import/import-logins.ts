@@ -63,35 +63,11 @@ import {
 } from "./sqlite-snapshot";
 
 /**
- * Orchestration of "Import logins from another browser": list, scan, import.
- *
- * Three rules hold everything below together:
- *
- * 1. **The scan never touches a keystore.** Every fact the Choose-sites step
- *    shows is plaintext in every source, so the only OS prompt fires on the
- *    Import click, after the dialog has said which one to expect.
- * 2. **Every failure is a result value.** A rejected invoke has its message
- *    logged at WARN and forwarded to Sentry, and a decrypted cookie, a
- *    profile path, or a keychain's answer must never travel that way. The
- *    service catches everything and reports a closed enum; the only thing it
- *    logs is an errno code.
- * 3. **The jar is written with the delta observer muted, per site, then
- *    flushed once.** Replacing a site writes the source's cookies first and
- *    only then removes what the source did not carry (never the other way
- *    round, so a site whose every write fails is left as it was), and a
- *    removal the host heard about as `removedKeys` would evict that site
- *    from every live session. The one whole-jar capture main pushes
- *    afterwards says everything a dropped delta would have.
- *
- * And one boundary: a decrypted value exists between the `readValue` inside
- * the write loop and the `cookies.set` it feeds, never in a list.
+ * Three rules hold everything below together: 1. The scan never touches a keystore. Every fact the Choose-sites step shows is plaintext in every source, so the only OS prompt fires.
+ * 2. Every failure is a result value. A rejected invoke has its message logged at WARN and forwarded to Sentry, and a decrypted cookie, a profile path, or a keychain's answer must.
  */
 
-/**
- * The whole answer, hosts included. The push to the hosts is a jar frame,
- * sent from main and never from a renderer - and made by this service through
- * `pushJarToHosts`, inside its barrier, so the IPC handler has nothing to add.
- */
+/** The push to the hosts is a jar frame, sent from main and never from a renderer. */
 export type LoginImportOutcome = LoginImportResult;
 
 export interface LoginImportJarCookies {
@@ -105,10 +81,7 @@ export interface LoginImportJarSession {
   readonly cookies: LoginImportJarCookies;
 }
 
-/**
- * What main's confirmation dialog names: the registered source (never the
- * renderer's word for it) and how many sites the request validated to.
- */
+/** What main's confirmation dialog names: the registered source (never the renderer's word for it) and how many sites the request validated to. */
 export interface LoginImportSummary {
   readonly browser: LoginImportSource["browser"];
   readonly profileLabel: string;
@@ -133,129 +106,42 @@ export interface LoginImportServiceDependencies extends LoginImportDiscoveryEnvi
   readonly readSaveLogins: () => boolean;
   /** The durable `persist:` jar, whatever the saved-logins pref says today. */
   readonly getDurableSession: () => LoginImportJarSession;
-  /**
-   * The jar serializer's whole-jar barrier: no host-observed merge, per-site
-   * clear or forget-all runs while the import writes, and a forget confirmed
-   * mid-import waits for it rather than being marked complete under a write
-   * that then puts the logins back. The signal is aborted when the barrier
-   * gives the import up (its budget ran out) and is about to admit the work
-   * queued behind it; the write loop reads it between rows and stops.
-   */
   readonly serializeJarWrite: <T>(
     action: (signal: AbortSignal) => Promise<T>,
   ) => Promise<T>;
   readonly suppressDeltas: <T>(action: () => Promise<T>) => Promise<T>;
-  /**
-   * Empties the durable jar's localStorage for every origin under a site
-   * that this process remembers (the capture coordinator's memory, the only
-   * record of which origins hold any), and forgets those origins, so the
-   * capture that follows the import does not ship them back. The source
-   * carries cookies alone, so the slice a written site ends with is the
-   * source's: its cookies, and no localStorage from whichever account was
-   * signed in before - a site that keeps account state there would
-   * otherwise pair the old identity with the imported cookies. Reads the
-   * barrier's signal between origins: a site whose tiles keep landing on
-   * new origins re-enumerates until nothing new turns up, and an import the
-   * barrier has given up on must not go on clearing under the work queued
-   * behind it.
-   */
   readonly clearSiteLocalStorage: (
     site: string,
     signal: AbortSignal,
   ) => Promise<void>;
   /**
-   * The forget ledger's record that ONE site is being REPLACED, taken
-   * immediately before the first cookie that site removes, and answering the
-   * ledger revision it made (`null` when it recorded nothing). Per site and
-   * at that moment, never for the batch up front: it is the removals it
-   * covers, so a site that removes nothing - every row refused, or every jar
-   * cookie carried - and, above all, a site the write never REACHES (the
-   * barrier's budget, a refused removal or a failed clear ending the import
-   * on an earlier site) must not have every host prune a site this machine
-   * still holds whole, since a host away for the import would then lose a
-   * login only it had and be handed nothing in its place. The same entry a
-   * site clear records, and for the same two reasons. A host that hears it
-   * prunes the site and then takes the capture pushed after the write - so
-   * a host that was away for the import still ends with the source's slice,
-   * not a union of it and what it held. And until a host has acked that
-   * revision, its observations for the site are refused
-   * (`isBrowserForgetLedgerPendingAck`): an observation of a cookie the
-   * import removed - one the source did not carry - would otherwise find the
-   * name free in the jar and put it straight back, and the next capture
-   * would sync that union to every host. The written keys' release covers
-   * only keys the import WROTE; this is what covers the ones it removed.
+   * The forget ledger's record that ONE site is being REPLACED, taken immediately before the first cookie that site removes, and answering the ledger revision it made (`null` when it.
+   * Per site and at that moment, never for the batch up front: it is the removals it covers, so a site that removes nothing - every row refused, or every jar cookie carried.
    */
   readonly recordReplacedSite: (site: string) => Promise<number | null>;
-  /**
-   * The local side of those records is done: `markBrowserForgetLedgerCleared`
-   * for every revision above, once the writes have ended - however they
-   * ended - so the boot reconciliation does not re-run a clear of these
-   * sites at the next launch over the cookies the import put there.
-   */
   readonly markReplacementCleared: (
     revisions: readonly number[],
   ) => Promise<void>;
-  /**
-   * Holds the ledger's "tell every stream" edge until `end()`, so the sites
-   * recorded one at a time above cost each host one digest when the write
-   * ends rather than one per site; the records themselves land as they are
-   * made. Ended in the write's `finally`, BEFORE the push, so a host prunes
-   * and then takes the capture.
-   */
+  /** Ended in the write's `finally`, BEFORE the push, so a host prunes and then takes the capture. */
   readonly deferLedgerDigests: () => { readonly end: () => void };
   /**
-   * The push of the jar to every host, INSIDE the barrier, after the mute
-   * has lifted and the written keys are the desktop's. Inside, because a
-   * toggle of saved logins queued behind the barrier would otherwise run
-   * first and move the capture's session to the ephemeral jar, sending the
-   * hosts old ephemeral state - or nothing - while the dialog reports them
-   * notified; the capture reads the jar it is asked for without queueing on
-   * the serializer, so the barrier holder can make it. Answers how many
-   * hosts acked the jar; never rejects.
+   * The push of the jar to every host, INSIDE the barrier, after the mute has lifted and the written keys are the desktop's.
+   * Answers how many hosts acked the jar; never rejects.
    */
   readonly pushJarToHosts: () => Promise<number>;
-  /**
-   * Main's own confirmation of the replacement, shown once the request has
-   * been validated against its scan and before anything is read, prompted or
-   * written. The renderer may ASK; a native dialog it cannot draw over or
-   * dismiss is what turns the ask into a decision - the same rule as clearing
-   * a site or forgetting every login, and for the same reason: a compromised
-   * renderer can list, scan and then import every site a profile holds, and
-   * a plaintext (Firefox, Safari, file) import raises no other prompt at all.
-   * Answers false for a declined or dismissed dialog.
-   */
+  /** The renderer may ASK; a native dialog it cannot draw over or dismiss is what turns the ask into a decision. */
   readonly confirmImport: (summary: LoginImportSummary) => Promise<boolean>;
-  /**
-   * Hands the desktop ownership of the keys the import wrote. Ordinarily the
-   * change observer does this on any local write (`onLocalCookieWrite`), but
-   * the import writes under `suppressDeltas`, where the observer returns
-   * before it gets there - so a key a host had seeded would stay host-owned
-   * and that host's next observation could overwrite the value the user just
-   * imported. Called INSIDE the barrier, after the mute lifts: a merge queued
-   * behind the barrier runs the moment it opens, and it must find the keys
-   * already the desktop's.
-   */
+  /** Called INSIDE the barrier, after the mute lifts: a merge queued behind the barrier runs the moment it opens, and it must find the keys already the desktop's. */
   readonly releaseHostOwnedKeys: (
     keys: readonly BrowserCookieKey[],
   ) => Promise<void>;
-  /**
-   * How long to keep the observer muted after the last write. Chromium can
-   * deliver a `removed` event on the listener pipe after `remove()` has
-   * resolved on the manager pipe; a key the import did not re-set would
-   * otherwise survive the coalescer and evict the site.
-   */
+  /** How long to keep the observer muted after the last write. */
   readonly settleWindowMs: number;
   readonly sleep: (ms: number) => Promise<void>;
   readonly secrets: LoginImportSecretProviders;
   readonly now: () => number;
 }
 
-/**
- * A source id is a digest of its location: stable across re-listings and
- * windows (see `LoginImportService.register`), opaque to the renderer, and
- * different the moment a profile's jar moves (Chrome's `Cookies` →
- * `Network/Cookies`), which is exactly when an old scan must not be trusted.
- */
 function sourceIdFor(location: LoginImportSourceLocation): string {
   let key: string;
   if (location.kind === "chromium") {
@@ -308,11 +194,7 @@ interface WriteOutcome {
   readonly writtenKeys: BrowserCookieKey[];
 }
 
-/**
- * What the barrier hands back: the tallies, or why nothing was written - the
- * source could not be read, changed since the scan, the keystore refused, or
- * saving is off. Every reason is the renderer's closed set.
- */
+/** What the barrier hands back: the tallies, or why nothing was written - the source could not be read, changed since the scan, the keystore refused, or saving is off. */
 type ImportWrite =
   | {
       readonly ok: true;
@@ -344,12 +226,6 @@ interface ScannedSites {
   readonly sites: ReadonlySet<string>;
   /** The Google rows, importable only with `includeDeviceBound`. */
   readonly excluded: ReadonlySet<string>;
-  /**
-   * The keystore each listed site was shown to need. An import may open only
-   * a keystore some chosen site was scanned as needing: the Choose step
-   * promised that prompt, and a site that gained an encrypted row since is a
-   * source that changed under the user, not a prompt to spring on them.
-   */
   readonly unlockBySite: ReadonlyMap<string, LoginImportUnlock | null>;
 }
 
@@ -370,12 +246,6 @@ function keyNeedsOf(candidates: readonly ImportCandidate[]): KeyNeeds {
   return { needsV10, needsV11 };
 }
 
-/**
- * How many successful scans the service keeps at once. Each Settings window
- * holds one live scan per Choose step, so a handful is every window there
- * could be; the oldest goes when the set is full, and an import quoting it
- * answers `unreadable`, which the dialog's Try again re-scans out of.
- */
 export const RETAINED_SCAN_LIMIT = 16;
 
 /** A scan token: random, opaque, and no function of the source or the jar. */
@@ -385,25 +255,8 @@ function mintScanId(): string {
 
 export class LoginImportService {
   private readonly sources = new Map<string, DiscoveredLoginImportSource>();
-  /**
-   * What each retained successful scan listed, keyed by the scan's own token
-   * and in insertion order. An import quotes the token of the scan its window
-   * rendered and honours only domains in THAT scan's sets: the renderer
-   * chooses from what it was shown, never from the jar at large or from a
-   * later scan another window took of the same source - which could carry a
-   * keystore promise this window's Choose step never made. A site that
-   * appears in the file between scan and import is not imported unseen. The
-   * `excluded` (Google) set is honoured only with the request's explicit
-   * opt-in. A scan is dropped with its source when a re-listing no longer
-   * finds it, when an import finds the source changed under it, and when it
-   * is the oldest of `RETAINED_SCAN_LIMIT`.
-   */
+  /** An import quotes the token of the scan its window rendered and honours only domains in THAT scan's sets: the renderer chooses from what it was shown, never from the jar at large. */
   private readonly scanned = new Map<string, ScannedSites>();
-  /**
-   * Scans and imports run one at a time: each takes a snapshot under the
-   * same root and sweeps that root first, so two in flight would read each
-   * other's files out from under them.
-   */
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: LoginImportServiceDependencies) {}
@@ -517,10 +370,6 @@ export class LoginImportService {
     ) {
       return { status: "blocked", reason: "unreadable" };
     }
-    // The renderer can name only what its scan listed. A Google domain is
-    // listed under `excluded`, and is honoured only with the request's
-    // explicit opt-in - so a renderer that constructed the request itself
-    // still cannot import one behind a toggle the user left off.
     const chosen = new Set(
       request.domains
         .map((domain) => domain.trim().toLowerCase())
@@ -553,25 +402,9 @@ export class LoginImportService {
       return { status: "cancelled" };
     }
     const session = this.deps.getDurableSession();
-    // Under the serializer's barrier FROM THE CONFIRMATION ON - the source
-    // read, the keystore prompt and the write all inside it, with the
-    // observer muted for the write. The barrier orders this import against
-    // every other jar mutation in the order the user confirmed them: a
-    // forget-all or a site clear confirmed from another window AFTER this
-    // "Import" queues behind the whole import rather than clearing the jar,
-    // reporting done, and then having this import write the logins back over
-    // an empty jar - which is what it would do from any point outside the
-    // barrier, the multi-second read of a large jar as much as the prompt
-    // the user can sit on for minutes. The mute is what keeps the per-site
-    // removals from reaching the hosts.
     const written = await this.deps.serializeJarWrite(
       async (signal): Promise<ImportWrite> => {
-        // The pref first, inside the barrier the toggle itself takes, so it
-        // cannot change under anything below: a window that turned saving
-        // off while this import sat on the confirmation has moved the tiles
-        // to the ephemeral jar, and a write to the durable one now would land
-        // where nothing reads it and be captured by nobody - and there is no
-        // reason to read a jar, let alone raise a prompt, for that.
+        // The pref first, inside the barrier the toggle itself takes, so it cannot change under anything below: a window that turned saving off while this import sat on the confirmation has.
         if (!this.deps.readSaveLogins()) {
           return { ok: false, reason: "saved-logins-off" };
         }
@@ -579,11 +412,7 @@ export class LoginImportService {
         if (!read.ok) return { ok: false, reason: read.blocked };
         const nowSeconds = Math.floor(this.deps.now() / 1000);
         const candidates: ImportCandidate[] = [];
-        // Every key the source HOLDS for a chosen site, whether or not this
-        // reader can open the row: a row this desktop cannot decrypt (an
-        // app-bound `v20`) or must not write (a partitioned one) still says
-        // the source has a cookie at that key, and the jar's cookie there is
-        // kept rather than removed as "not carried" - see `writeSite` step 3.
+        // Every key the source HOLDS for a chosen site, whether or not this reader can open the row: a row this desktop cannot decrypt (an app-bound `v20`) or must not write (a partitioned.
         const carriedBySite = new Map<string, Set<string>>();
         // And every NAME the source holds for a chosen site, from the same
         // rows: the by-name keep in `writeSite` step 3 is about what the
@@ -607,12 +436,6 @@ export class LoginImportService {
           if (row.partitioned || row.secret.kind === "protected") continue;
           candidates.push({ row, scope });
         }
-        // The prompt the Choose step announced is the only prompt Import may
-        // raise. A keystore no chosen site was scanned as needing means the
-        // source changed since (a Linux site that was all `v10` gained a
-        // `v11` row); the scan is dropped so the way back in is a fresh one.
-        // DPAPI is exempt: it unseals silently, so there was nothing to
-        // announce.
         const needed = this.unlockFor(keyNeedsOf(candidates));
         if (
           needed !== null &&
@@ -623,22 +446,14 @@ export class LoginImportService {
           return { ok: false, reason: "source-changed" };
         }
 
-        // Grouped as ROWS, still ciphertext: a value is decrypted inside the
-        // write loop, immediately before its `cookies.set`, and is
-        // unreferenced once that call returns. Materialising the plaintext
-        // jar up front would keep every value alive through the other sites'
-        // writes, the flush and the settle window.
         const bySite = new Map<string, ImportCandidate[]>();
         for (const candidate of candidates) {
           const siteRows = bySite.get(candidate.scope.site) ?? [];
           siteRows.push(candidate);
           bySite.set(candidate.scope.site, siteRows);
         }
-        // Every site the write touches goes into the forget ledger under one
-        // revision, and the ledger keeps that many domains: a batch past it
-        // would be TRIMMED, and a trimmed scope never reaches a host's digest,
-        // so a host that was away would keep what the import removed. Refused
-        // here, before the keystore is opened or a cookie moves.
+        // Every site the write touches goes into the forget ledger under one revision, and the ledger keeps that many domains: a batch past it would be TRIMMED, and a trimmed scope never.
+        // Refused here, before the keystore is opened or a cookie moves.
         if (bySite.size > BROWSER_FORGET_LEDGER_MAX_DOMAINS) {
           return { ok: false, reason: "too-many-sites" };
         }
@@ -656,14 +471,7 @@ export class LoginImportService {
           skippedInvalid: 0,
           writtenKeys: [],
         };
-        // The ledger before a cookie is REMOVED - the order a site clear
-        // keeps, and for the same reason: the revision is what refuses a
-        // host's in-flight observation of what is about to be removed, and
-        // what a host that is away prunes from when it comes back. One
-        // revision per site, taken by that site as it reaches its removals,
-        // so the ledger never names a site the write did not reach - and
-        // none at all for an import that removes nothing. The streams are
-        // told once, when the write ends.
+        // One revision per site, taken by that site as it reaches its removals, so the ledger never names a site the write did not reach - and none at all for an import that removes nothing.
         const ledger: { readonly revisions: number[] } = { revisions: [] };
         const recordReplacement = async (site: string): Promise<void> => {
           const revision = await this.deps.recordReplacedSite(site);
@@ -697,12 +505,6 @@ export class LoginImportService {
             } catch (error) {
               ending.failure = { error };
             } finally {
-              // On the failure path too: a removal Chromium reports on the
-              // listener pipe after `remove()` resolved is what the settle
-              // window absorbs, and a throw mid-site must not let the
-              // observer wake before it has passed, or a removal that
-              // escaped here would reach the host as `removedKeys` ahead of
-              // the capture that reconciles it.
               try {
                 await session.cookies.flushStore();
               } catch (error) {
@@ -716,19 +518,6 @@ export class LoginImportService {
             }
           });
         } finally {
-          // Whatever ended the write - the last site, a throw from a row,
-          // the barrier's abort - the ledger's local side is done and every
-          // key the write DID put in the jar becomes the desktop's here,
-          // after the mute has lifted. On the ordinary path that is still
-          // inside the barrier, so nothing queued behind it (a host's
-          // observation of an OLDER value for one of these keys) can run
-          // before the keys are the desktop's; on the abort path the gate is
-          // already open and this runs late, which still beats a key left
-          // host-owned for good, which the host's next observation would put
-          // the old value back over.
-          // The streams' one digest per host goes out here, before the push
-          // below: a host prunes the sites the ledger names and THEN takes
-          // the capture, the order a site clear keeps.
           try {
             digests.end();
           } finally {
@@ -741,11 +530,6 @@ export class LoginImportService {
             }
           }
         }
-        // The jar is the hosts' to hear about once anything of the import's
-        // is in it - or once the ledger has told them to prune a site, even
-        // one the write then put back as it was: a host that pruned and was
-        // never captured would hold LESS than this machine until something
-        // else asked for a capture. Nothing of either is nothing to hear.
         const jarTouched =
           tally.writtenKeys.length > 0 || ledger.revisions.length > 0;
         if (!jarTouched) {
@@ -762,10 +546,6 @@ export class LoginImportService {
           return { ok: true, outcome: tally, notifiedHosts };
         }
         if (ending.failure !== null) {
-          // Answered as what it is - an import that stopped part-way, with
-          // what it did write kept, counted and pushed - rather than as a
-          // source that could not be read, which is what `unreadable` says
-          // and what Try again would then wrongly re-diagnose.
           this.warn("import-incomplete", ending.failure.error);
           return { ok: false, reason: "incomplete" };
         }
@@ -792,58 +572,14 @@ export class LoginImportService {
   }
 
   /**
-   * One site's replacement, in the order that never leaves the site empty:
-   *
-   * 1. WRITE every row, decrypting each immediately before its `set`. Same
-   *    key (name, domain scope, path) overwrites in place, which is what
-   *    Chromium does for a sign-in.
-   * 2. Nothing written means nothing touched: the slice the jar already held
-   *    stays as it was, so a source whose every row Electron rejects (a
-   *    hand-edited file with an invalid value) cannot sign the user out.
-   * 3. Otherwise REMOVE what the source did not CARRY - the jar's cookies for
-   *    the site whose key no source row names - so the slice is the
-   *    source's, not a union of two sign-ins. Carried, not written: a row
-   *    the source has for that key but that could not be decrypted,
-   *    normalised or set - or that this reader never tried, an app-bound
-   *    `v20` row or a partitioned one - leaves the jar's cookie at that key
-   *    alone, since the source did hold a cookie there and removing the
-   *    working one would turn one unreadable row into a sign-out. The same
-   *    holds one step wider, by NAME: a source row that did not land and
-   *    whose name no landed row shares leaves the jar's cookies of that name
-   *    alone under ANY scope - a host-only `sid` beside the source's failed
-   *    domain `sid` is the sign-in that row would have replaced, and its key
-   *    being unnamed by the source is a difference of scope, not of cookie.
-   * 4. Electron removes by `{url, name}`, which also catches a just-written
-   *    cookie of the same NAME under a different scope or path - and a kept
-   *    cookie of that name from step 3. Any written row whose name a removal
-   *    named is written once more, decrypted again rather than held; a
-   *    re-write refused is no longer written, and then, like any kept cookie
-   *    a removal named, the jar's prior cookie at that key is put back from
-   *    the listing taken before the first write - and, when no landed row
-   *    shares the name, so is every prior cookie of that name the removal
-   *    reached, carried or not, exactly as step 3 would have kept them had
-   *    the row failed on its first write. Should NO written row survive its
-   *    re-write, the site is back to step 2: everything the removals reached
-   *    is put back, the site is not counted as imported or replaced, and its
-   *    localStorage is left alone.
-   * 5. The site's localStorage goes with the cookies the source did not
-   *    carry: it belongs to whichever account was signed in before, and a
-   *    site that keeps account state there would otherwise run the old
-   *    identity on the imported cookies.
+   * One site's replacement, in the order that never leaves the site empty: 1. WRITE every row, decrypting each immediately before its `set`.
+   * 2. Nothing written means nothing touched: the slice the jar already held stays as it was, so a source whose every row Electron rejects (a hand-edited file with an invalid value).
    */
   private async writeSite(
     site: string,
     siteRows: readonly ImportCandidate[],
-    // Every key the source holds for this site - the candidates' AND the
-    // rows this reader could not open - from the rows' metadata, which is
-    // the same scope the write derives its key from, so a row that fails on
-    // the way in (or never starts) still marks its key as carried.
     carriedKeyIds: ReadonlySet<string>,
-    // Every NAME the source holds for this site, from the same rows - the
-    // candidates' and the ones this reader never opens - for the by-name
-    // keep of step 3: a protected `sid` the reader never tried is still a
-    // `sid` the source has, so the jar's `sid` under another scope is not
-    // stale for want of a landed row of that name.
+    // Every NAME the source holds for this site, from the same rows - the candidates' and the ones this reader never opens.
     sourceNames: ReadonlySet<string>,
     read: SourceRead & { ok: true },
     keys: ChromiumKeys & { ok: true },
@@ -887,11 +623,6 @@ export class LoginImportService {
     }
     if (writtenRows.length === 0) return;
 
-    // A name the source has a row for but no LANDED row of: that row failed
-    // on the way in (or, below, on its re-write), or was never opened, so
-    // the jar's cookies of that name are the sign-in it would have replaced,
-    // whatever their scope. Read against `writtenKeyIds` as it stands, so
-    // the re-write pass moving a key out of it moves that name in here.
     const orphaned = (name: string): boolean =>
       sourceNames.has(name) &&
       !writtenRows.some(
@@ -904,14 +635,6 @@ export class LoginImportService {
         !carriedKeyIds.has(storageCookieKeyId(cookie)) &&
         !orphaned(cookie.name),
     );
-    // The names the removals REACHED, each added before its `remove` is
-    // attempted: a rejection tells nothing about what the call took with it,
-    // so the recovery below covers that name either way. A removal that
-    // fails, or the barrier giving up between two, ends the removals but not
-    // the site: the recovery passes run for whatever was reached, and only
-    // then is the failure thrown - a `sid` a successful removal erased and a
-    // later rejection would otherwise leave un-rewritten, which is a
-    // sign-out reported as `incomplete`.
     const removedNames = new Set<string>();
     let removalFailure: { readonly error: unknown } | null = null;
     // Recorded before the first `remove`, never after: a removal the ledger
@@ -931,15 +654,6 @@ export class LoginImportService {
         if (removalFailure === null) removalFailure = { error };
       }
     }
-    // The recovery passes read no abort signal: each is a handful of `set`
-    // calls that put a reached cookie back, the serializer holds the gate
-    // through the action's settlement (up to its grace) even after it has
-    // given the import up, and a site left half-removed is a sign-out.
-    //
-    // Written rows a same-name removal reached are written once more. One
-    // refused now is no longer written: its key leaves `writtenKeyIds`, so
-    // the restore below treats it like any other carried key the source
-    // could not write and puts the jar's prior cookie back.
     for (const candidate of writtenRows) {
       if (!removedNames.has(candidate.row.name)) continue;
       const key = await this.writeRow(
@@ -950,10 +664,6 @@ export class LoginImportService {
         session,
       );
       if (key === null) {
-        // Accepted a moment ago and refused now: counted as it stands, and
-        // no longer the import's - the restore below puts the jar's prior
-        // cookie back at this key, so the desktop must not take ownership
-        // of a value a host may own.
         outcome.importedCookies -= 1;
         outcome.skippedInvalid += 1;
         const refusedKeyId = candidateKeyId(candidate);
@@ -964,22 +674,11 @@ export class LoginImportService {
         if (index !== -1) outcome.writtenKeys.splice(index, 1);
       }
     }
-    // No written row survived its re-write: the site is back to step 2, and
-    // the removals - every one of them made for a replacement that is not
-    // happening - are undone in full below, the site uncounted, its
-    // localStorage left alone.
     const nothingLanded = writtenKeyIds.size === 0;
     if (nothingLanded) {
       outcome.importedSites -= 1;
       if (previous.length > 0) outcome.replacedSites -= 1;
     }
-    // The jar's cookies at a carried key the source could NOT write - on the
-    // first attempt or on the re-write just above - are kept (step 3), but a
-    // same-name removal reaches them too, so each one a removal named is put
-    // back as it was, from the listing taken before any write. So is every
-    // prior cookie of a name no landed row shares (a re-write refused, with
-    // the differently scoped `sid` beside it that was the sign-in), and, when
-    // nothing landed at all, everything the removals reached.
     for (const cookie of previous) {
       const id = storageCookieKeyId(cookie);
       if (writtenKeyIds.has(id) || !removedNames.has(cookie.name)) continue;
@@ -1007,12 +706,7 @@ export class LoginImportService {
     await this.deps.clearSiteLocalStorage(site, signal);
   }
 
-  /**
-   * Decrypt, normalise and `set` one row; answers the cookie's key. The
-   * plaintext lives in this frame only. `null` is a row that could not be
-   * read, would not normalise, or that Electron rejected - the rejection
-   * names the cookie, so it is counted by the caller and dropped.
-   */
+  /** `null` is a row that could not be read, would not normalise, or that Electron rejected - the rejection names the cookie, so it is counted by the caller and dropped. */
   private async writeRow(
     candidate: ImportCandidate,
     read: SourceRead & { ok: true },
@@ -1063,10 +757,6 @@ export class LoginImportService {
       }
       const scope = classifyImportCookie(row, nowSeconds);
       if (scope === null) continue;
-      // Tallied per SITE as well as for the whole scan: the prompt the Import
-      // click raises depends on which sites are chosen - a plaintext-only
-      // selection opens nothing, and the Google rows sit behind an opt-in -
-      // so the dialog derives its explainer from the selection's sites.
       const group = isGoogleDeviceBoundDomain(scope.site) ? excluded : sites;
       const tally = group.get(scope.site) ?? {
         cookieCount: 0,
@@ -1199,10 +889,6 @@ export class LoginImportService {
     }
   }
 
-  /**
-   * The keystore reads, and only the ones this selection needs: a jar whose
-   * chosen rows are all plaintext raises no prompt at all.
-   */
   private async resolveKeys(
     read: SourceRead & { ok: true },
     candidates: readonly ImportCandidate[],
@@ -1297,14 +983,7 @@ export class LoginImportService {
     });
   }
 
-  /**
-   * Registers under an id derived from WHERE the source is, so re-listing
-   * hands every window the same id for the same profile and a scan on record
-   * survives. The service is one per main process and Settings can be open
-   * in two windows at once: with minted ids, the second window's listing
-   * would have retired the first window's ids and its scan mid-choice. The
-   * id is a digest, not the path, so the renderer still never learns one.
-   */
+  /** The id is a digest, not the path, so the renderer still never learns one. */
   private register(source: DiscoveredLoginImportSource): LoginImportSource {
     const id = sourceIdFor(source.location);
     this.sources.set(id, source);
@@ -1336,11 +1015,8 @@ export class LoginImportService {
 }
 
 /**
- * The barrier gave this import up and is admitting the jar work queued
- * behind it: stop before the next mutation. The flush and settle window still
- * run (the write's `finally`), and the outer catch answers `blocked` for a
- * jar that was only partly written - the message never leaves this process,
- * `warn` logs only the error's name.
+ * The barrier gave this import up and is admitting the jar work queued behind it: stop before the next mutation.
+ * The flush and settle window still run (the write's `finally`), and the outer catch answers `blocked` for a jar that was only partly written.
  */
 function throwIfBarrierExpired(signal: AbortSignal): void {
   if (signal.aborted) throw barrierExpiredError();

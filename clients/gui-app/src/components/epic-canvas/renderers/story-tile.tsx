@@ -1,10 +1,5 @@
-// TODO: extract a shared `<StatusBarTile>` between this file and
-// `./ticket-tile.tsx` - the two implementations only differ in
-// `artifactType` ("story" vs. "ticket"), the test-id, and the props
-// interface name. Holding off because the canvas tiles thread per-artifact
-// hooks (`useEpicArtifact`, `useEpicConnectionStatus`,
-// `useEpicUpdateArtifactStatus`) that the shared component would need to
-// re-derive cleanly without growing the tile-level prop surface.
+// TODO: extract a shared `<StatusBarTile>` with `./ticket-tile.tsx` (they only differ in artifactType, test-id, and props name).
+// Holding off: per-artifact hooks would need to re-derive on a shared component without growing the tile-level prop surface.
 import { CollabTileBody } from "./collab-tile-body";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {

@@ -26,37 +26,14 @@ import { useRemoveExitedLandingTab } from "./use-remove-exited-landing-tab";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 
-/**
- * The landing panel's tile for a HOST-created provider sign-in session (a tab
- * with `origin: "provider-login"`). The landing counterpart of the epic
- * canvas's sign-in tile, with the same two rules:
- *
- * - It never creates. The session carries the provider's spawn env; a
- *   `terminal.create` (or `terminal.plain.create`) under its id would spawn a
- *   bare shell that looks like the sign-in terminal and cannot sign anyone
- *   in, with no error saying so. `adoptOnly` keeps the bootstrap's create
- *   effect shut for life while still arming the measure-grid wait it needs
- *   to subscribe at a real size.
- * - It outlives its session. The interactive shell outlives the sign-in, so
- *   the session ending means the user (or a host restart) closed it; an
- *   ordinary tab would silently drop here, which for a sign-in retracts the
- *   only surface that can restart it. This shows the ended state with a
- *   restart instead.
- *
- * Independent of the host's plain-terminal authority on purpose: the session
- * is manager-owned on every host capability, so the tile reads the same
- * `terminal.list` + `terminal.subscribe` path whether the host is legacy or
- * capable, and the capable reconciliation leaves this tab out of migration.
- */
+/** The interactive shell outlives the sign-in, so the session ending means the user (or a host restart) closed
+ * it; an ordinary tab would silently drop here. */
 export function LandingSignInTerminalTile(
   props: LandingTerminalTileProps,
 ): ReactNode {
   const { tab, landingPageId } = props;
   const providerId = tab.originProviderId ?? null;
-  // `LandingTerminalTile` wraps this in `<TabHostProvider hostId={tab.hostId}>`,
-  // and a tab's host is bound for life, so the provider is the sanctioned read
-  // for every host-scoped path below (gui-app AGENTS.md). Same value as
-  // `tab.hostId`; reading it through the provider is what keeps it that way.
+  // Wrapped in `<TabHostProvider hostId={tab.hostId}>`; read the bound host through the provider.
   const hostId = useTabHostId();
   const reachability = useHostReachability(hostId);
   const hostLoad = useBoundedHostLoad({
@@ -81,9 +58,8 @@ export function LandingSignInTerminalTile(
     preparePayload,
     adoptOnly: true,
   });
-  // The attached exit is read from the stream (immediate), not from
-  // `terminal.list` (60 s stale, never polled): between the shell exiting and
-  // the next invalidation the list still says the session is live.
+  // The attached exit is read from the stream (immediate), not from `terminal.list` (60 s stale, never polled):
+  // between the shell exiting and the next invalidation the list still says the session is live.
   const [exitedWhileAttached, setExitedWhileAttached] = useState(false);
   const handleExited = useCallback((): void => {
     setExitedWhileAttached(true);
@@ -159,13 +135,8 @@ export function LandingSignInTerminalTile(
   );
 }
 
-/**
- * Shown when the sign-in session is gone. The button restarts the sign-in
- * through the same RPC the picker's setup CTA uses, which hands back a fresh
- * terminal and retires this tab. `providerId` can be absent on a persisted
- * tab whose marker survived without its provider; the copy then points at
- * the picker rather than offering a button that cannot know what to restart.
- */
+/** `providerId` can be absent on a persisted tab whose marker survived without its provider; the copy then
+ * points at the picker rather than offering a button that cannot know what to restart. */
 function LandingSignInTerminalEnded(props: {
   readonly providerId: ProviderId | null;
   readonly hostId: string;

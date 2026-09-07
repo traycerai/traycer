@@ -1,13 +1,6 @@
 import type { MinimapListEntry } from "@/components/minimap/minimap-list-card";
 
-/**
- * What a tile publishes for the phone tile bar's minimap button to render.
- *
- * Deliberately a pull-plus-subscribe adapter rather than plain store state:
- * `currentIndex` follows the reader's scroll position, so writing it into the
- * store would re-render every subscriber on each section boundary. The bar
- * holds only the (stable) adapter, and the open drawer is the sole reader.
- */
+/** What a tile publishes for the phone tile bar's minimap button to render. */
 export interface TileMinimapSnapshot {
   readonly items: ReadonlyArray<MinimapListEntry>;
   /** Entry the content is scrolled to. Out of range means "none resolved". */

@@ -90,9 +90,7 @@ describe("analytics", () => {
   });
 
   it("accepts every settings section the type union declares", async () => {
-    // The runtime allowlist is what `section` is validated against, and a
-    // union member missing from it drops the event with no error anywhere -
-    // `devices` and `usage` had both gone missing exactly that way.
+    // The runtime allowlist is what `section` is validated against, and a union member missing from it drops the event with no error anywhere - `devices` and `usage` had both gone missing exactly that way.
     const { AnalyticsEvent, sanitizeAnalyticsProperties } =
       await import("@/lib/analytics");
 
@@ -112,9 +110,7 @@ describe("analytics", () => {
       "usage",
       "worktrees",
     ];
-    // `source` alongside `section`, matching what the sidebars actually emit -
-    // the sanitizer requires every expected key to be present, so omitting it
-    // would reject all twelve and prove nothing.
+    // `source` alongside `section`, matching what the sidebars actually emit - the sanitizer requires every expected key to be present, so omitting it would reject all twelve and prove nothing.
     const rejected = sections.filter(
       (section) =>
         sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
@@ -292,9 +288,7 @@ describe("analytics", () => {
         "token",
       ].sort(),
     );
-    // Email is the ONLY person property allowed through; everything else the
-    // SDK staged on $set/$set_once (name, custom props, referrer/campaign
-    // enrichment) is dropped.
+    // Email is the ONLY person property allowed through; everything else the SDK staged on $set/$set_once (name, custom props, referrer/campaign enrichment) is dropped.
     expect(identify?.$set).toEqual({ email: "alice@example.com" });
     expect(identify?.$set_once).toBeUndefined();
     expect(identify?.$unset).toBeUndefined();
@@ -346,9 +340,7 @@ describe("analytics", () => {
       await import("@/lib/analytics");
     const captured: CaptureResult[] = [];
     const sdk = new PostHog();
-    // Unique token: posthog-js shares instances (and identified state) by
-    // token, and this test needs a genuinely fresh anonymous -> identified
-    // -> repeat-identify sequence.
+    // Unique token: posthog-js shares instances (and identified state) by token, and this test needs a genuinely fresh anonymous -> identified -> repeat-identify sequence.
     sdk.init("phc_test_project_key_repeat_identify", {
       ...POSTHOG_CONFIG,
       before_send: (result) => {
@@ -367,9 +359,8 @@ describe("analytics", () => {
       release_channel: "production",
     });
 
-    // Second identify for an ALREADY-identified distinct id: the real SDK
-    // emits `$set` instead of `$identify` (this is the renderer-restart /
-    // changed-email shape). The sanitizer must pass the email through.
+    // Second identify for an ALREADY-identified distinct id: the real SDK emits `$set` instead of `$identify` (this is the renderer-restart / changed-email shape).
+    // The sanitizer must pass the email through.
     sdk.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", {
       email: "alice@example.com",
       name: "Alice Smith",
@@ -482,9 +473,7 @@ describe("analytics", () => {
     try {
       const posthog = (await import("posthog-js")).default;
       const calls: string[] = [];
-      // Simulate a cold start on ANOTHER account's persisted SDK state:
-      // distinct_id differs from $device_id (= identified) and from the
-      // signing-in user.
+      // Simulate a cold start on ANOTHER account's persisted SDK state: distinct_id differs from $device_id (= identified) and from the signing-in user.
       vi.spyOn(posthog, "init").mockImplementation(() => posthog);
       vi.spyOn(posthog, "register").mockImplementation(() => undefined);
       vi.spyOn(posthog, "get_distinct_id").mockImplementation(
@@ -871,9 +860,7 @@ describe("analytics", () => {
           has_more: false,
         }),
       ).toBeNull();
-      // A completed page always carries an exact row count - `unknown` is
-      // reserved for a composite count that genuinely cannot be formed, which
-      // never applies to a finished page fetch.
+      // A completed page always carries an exact row count - `unknown` is reserved for a composite count that genuinely cannot be formed, which never applies to a finished page fetch.
       expect(
         sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
           section: "recent",
@@ -1139,10 +1126,8 @@ describe("app-surface pass-through in the outbound sanitizer", () => {
   }
 
   it("passes mobile surface and OS through instead of dropping the event", async () => {
-    // The regression this pins: the globals allowlist rebuilds outbound
-    // properties and returns null - dropping the WHOLE event - on any value
-    // outside its sets. Before app_surface/ios/android were admitted, every
-    // event from the installed mobile app would have vanished silently.
+    // The regression this pins: the globals allowlist rebuilds outbound properties and returns null - dropping the WHOLE event - on any value outside its sets.
+    // Before app_surface/ios/android were admitted, every event from the installed mobile app would have vanished silently.
     const { sanitizePostHogCaptureResult } = await import("@/lib/analytics");
     const sanitized = sanitizePostHogCaptureResult(
       capture({ app_surface: "mobile", platform: "ios" }),

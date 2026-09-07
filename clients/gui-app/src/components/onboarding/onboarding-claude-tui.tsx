@@ -4,21 +4,14 @@ import { cn } from "@/lib/utils";
 
 interface OnboardingClaudeTuiProps {
   readonly reducedMotion: boolean;
-  // Stacked half-height panes (e.g. screen 3's right-top pane) can't fit the
-  // full intro. Compact drops the rules + prompt and tightens spacing so the
-  // header and the status line — the load-bearing parts — always stay visible.
+  // Stacked half-height panes (e.g. screen 3's right-top pane) can't fit the full intro.
   readonly compact: boolean;
-  // Terminal scrollback / session output rendered in the body area between the
-  // header and the input box. Pass null (or an empty fragment) for the clean
-  // intro; pass step-revealed lines for an active session.
+  // Terminal scrollback / session output rendered in the body area between the header and the input box.
   readonly body: ReactNode;
 }
 
-/**
- * Static recreation of the Claude Code terminal intro screen used inside the
- * onboarding diorama's terminal pane. Colors come from the shared `--term-ansi-*`
- * tokens so it repaints with the active theme, exactly like the real xterm host.
- */
+/** Static recreation of the Claude Code terminal intro screen used inside the onboarding diorama's terminal
+ * pane. */
 export function OnboardingClaudeTui(props: OnboardingClaudeTuiProps) {
   return (
     <div
@@ -41,9 +34,8 @@ export function OnboardingClaudeTui(props: OnboardingClaudeTuiProps) {
         </div>
       </div>
 
-      {/* Terminal body: caller-injected session output fills this region and
-          pushes the input box + status bar to the bottom, like a real terminal.
-          Empty (clean intro) when the caller passes no body. */}
+      {/* Terminal body: caller-injected session output fills this region and pushes the input box + status bar to the
+         bottom, like a real terminal. */}
       <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-hidden">
         {props.body}
       </div>

@@ -13,15 +13,7 @@ import {
 } from "@traycer/protocol/host/index";
 
 /**
- * `useHostClient()` is the app-wide host client: the SELECTION LAYER's
- * `effectiveHostId` resolved through `createRequesterForHostId` (redesign
- * P2.1, then P4.2 deleted the runtime client's privileged active slot
- * entirely).
- *
- * The spine is substituted at the provider seam so these cases can drive
- * `effectiveHostId` directly against a real spine (real `findHostById`, real
- * `createRequesterForHostId`) without standing up the full selection
- * authority engine.
+ * `useHostClient()` is the app-wide host client: the SELECTION LAYER's `effectiveHostId` resolved through `createRequesterForHostId` (redesign P2.1, then P4.2 deleted the runtime client's privileged active slot entirely).
  */
 const spineRef = vi.hoisted<{ value: HostClient<HostRpcRegistry> | null }>(
   () => ({ value: null }),
@@ -34,15 +26,7 @@ function getSpine(): HostClient<HostRpcRegistry> {
   return spineRef.value;
 }
 
-/**
- * The APP-WIDE binding, as the provider publishes it: the spine, naming no host.
- *
- * This used to be `useHostBinding: () => null`, and that one line is why the
- * pinning defect shipped with a green suite. The hook under test reads its host
- * from the binding, so stubbing the binding away made the scoped path
- * unreachable in the only file that owns the hook - every assertion below was
- * correct and none of them could see it. The seam was mocked out at the seam.
- */
+/** The APP-WIDE binding, as the provider publishes it: the spine, naming no host. */
 interface ProbeBinding {
   readonly hostClient: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
@@ -53,10 +37,8 @@ const bindingRef = vi.hoisted<{ value: ProbeBinding | null }>(() => ({
 }));
 
 vi.mock("@/providers/host-runtime-provider", () => {
-  // ONE context for the module's lifetime, so a test can re-provide into the
-  // same object `runtime.ts` reads from. `createHostRuntime` is called once at
-  // module scope, but a fresh context per call would still break a suite that
-  // imported the export and rendered a Provider with it.
+  // ONE context for the module's lifetime, so a test can re-provide into the same object `runtime.ts` reads from.
+  // `createHostRuntime` is called once at module scope, but a fresh context per call would still break a suite that imported the export and rendered a Provider with it.
   const context = createContext<ProbeBinding | null>(null);
   return {
     createHostRuntimeState: () => ({
@@ -69,10 +51,8 @@ vi.mock("@/providers/host-runtime-provider", () => {
       useHostClient: getSpine,
       useHostDirectory: () => null,
       useAuthService: () => null,
-      // Context first, ambient second - the real provider's own shape. A panel
-      // that re-provides is BELOW the app-wide provider, and a subtree with no
-      // re-provide sees the app-wide binding, which is exactly what `null` from
-      // `useScopedHostBinding` means at a panel's own render.
+      // Context first, ambient second - the real provider's own shape.
+      // A panel that re-provides is BELOW the app-wide provider, and a subtree with no re-provide sees the app-wide binding, which is exactly what `null` from `useScopedHostBinding` means at a panel's own render.
       useHostBinding: () => use(context) ?? bindingRef.value,
       getBindingSnapshot: () => null,
     }),
@@ -145,14 +125,7 @@ afterEach(() => {
 
 describe("useHostClient", () => {
   it("addresses the effective host", () => {
-    // This used to also assert a CONTROL: the runtime client's own active
-    // slot stayed parked on the local host, so an implementation that read
-    // the slot instead of the selection layer would have answered
-    // `mock-local` here. Redesign P4.2 deleted the slot - `getActiveHostId()`
-    // on an un-pinned client is now hardwired to `null` regardless of what
-    // this hook does, so there is no second source left to distinguish from.
-    // The surviving claim is that `useHostClient()` resolves the effective
-    // host.
+    // This used to also assert a CONTROL: the runtime client's own active slot stayed parked on the local host, so an implementation that read the slot instead of the selection layer would have answered `mock-local` here.
     applyEffectiveHostId(HOST_B.hostId);
 
     const { result } = renderHook(() => useHostClient());
@@ -206,22 +179,7 @@ describe("useHostClient", () => {
   });
 });
 
-/**
- * A binding that NAMES a host wins over the app-wide effective host.
- *
- * This is the property `HostRuntimeBinding.hostId` exists for, and it had NO
- * coverage of any kind: `useHostClient()` composed the binding's CLIENT with a
- * name read from the selection layer, so a re-provided pinned client was used
- * only to rebuild a requester for the ambient host - `createRequesterForHostId`
- * is not intercepted by `createPinnedRequester`, so the pin fell through to the
- * spine and vanished. Every host-scoped panel in the app shipped inert.
- *
- * Each case sets the effective host to A and the binding to B, so the two
- * sources ALWAYS disagree: a build that reads the wrong one fails on the value,
- * never on an absence. The assertion is the ENDPOINT of the request that
- * actually went out - not which object came back, and not that a field was
- * set. `hostId` is bookkeeping; the machine the RPC reaches is the effect.
- */
+/** A binding that NAMES a host wins over the app-wide effective host. */
 describe("useHostClient under a re-provided binding", () => {
   /** The pinned client a scoped panel re-provides, built the way one really is. */
   function requesterForHostB(): HostClient<HostRpcRegistry> {
@@ -229,9 +187,7 @@ describe("useHostClient under a re-provided binding", () => {
   }
 
   function scopeShowingHostB(overrides: Partial<HostScope>): HostScope {
-    // `host`, not `hostId`: the fixture DERIVES `hostId` from `host`
-    // (`host?.hostId ?? null`), so passing `hostId` alone would leave `host`
-    // naming the default `host-a` and the two disagreeing inside the fixture.
+    // `host`, not `hostId`: the fixture DERIVES `hostId` from `host` (`host?.hostId ?? null`), so passing `hostId` alone would leave `host` naming the default `host-a` and the two disagreeing inside the fixture.
     return hostScopeFixture({
       host: hostScopeOptionFixture({ hostId: HOST_B.hostId }),
       ...overrides,
@@ -286,12 +242,8 @@ describe("useHostClient under a re-provided binding", () => {
   });
 
   it("falls back to the effective host when the binding names none - SAME client object", async () => {
-    // The control, and it is the sharp one: byte-identical binding except for
-    // `hostId`. If this landed on B too, the case above would prove only that a
-    // pinned client stays pinned - which was already true - rather than that
-    // `hostId` is what decides. It also pins the fall-through the app-wide
-    // resolver depends on: `createRequesterForHostId` called on a PINNED client
-    // reaches the spine through `Reflect.get` and re-resolves from there.
+    // The control, and it is the sharp one: byte-identical binding except for `hostId`.
+    // If this landed on B too, the case above would prove only that a pinned client stays pinned - which was already true - rather than that `hostId` is what decides.
     bindingRef.value = { hostClient: requesterForHostB(), hostId: null };
 
     render(<HostClientProbe />);
@@ -302,14 +254,7 @@ describe("useHostClient under a re-provided binding", () => {
   });
 
   it("reaches the scoped host through the real useScopedHostBinding re-provide", async () => {
-    // The PRODUCER, not a hand-built binding: a panel showing host B while the
-    // app is on A, arranged exactly as `providers-settings-panel` arranges it.
-    //
-    // This is the case a type cannot protect. `useScopedHostBinding` returns a
-    // SPREAD of the app-wide binding, so `...realBinding` already satisfies the
-    // required `hostId` with that binding's `null` - drop the explicit
-    // `hostId:` and the tree still compiles, every panel silently returns to
-    // the ambient host, and only this assertion moves.
+    // The PRODUCER, not a hand-built binding: a panel showing host B while the app is on A, arranged exactly as `providers-settings-panel` arranges it.
     render(
       <ScopedPanel
         scope={scopeShowingHostB({
@@ -323,10 +268,8 @@ describe("useHostClient under a re-provided binding", () => {
   });
 
   it("keeps a following scope on the effective host so it can still re-point", async () => {
-    // `following` means "track the app", so the binding must name NO host even
-    // though the scope names one. Pinning it here would freeze the panel on
-    // whichever host was effective when it mounted - auto-follow deleted, and
-    // nothing else in the suite would notice.
+    // `following` means "track the app", so the binding must name NO host even though the scope names one.
+    // Pinning it here would freeze the panel on whichever host was effective when it mounted - auto-follow deleted, and nothing else in the suite would notice.
     render(
       <ScopedPanel
         scope={scopeShowingHostB({

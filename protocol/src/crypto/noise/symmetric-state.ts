@@ -3,12 +3,6 @@ import { HASH_LEN, KEY_LEN, NOISE_PROTOCOL_NAME } from "./constants";
 import { CipherState } from "./cipher-state";
 import { hkdf, sha256 } from "./primitives";
 
-/**
- * Noise SymmetricState (spec §5.2): the running chaining key `ck`, the running
- * transcript hash `h`, and a CipherState that becomes keyed as DH results are
- * mixed in. It is a faithful, un-optimised transcription of the spec so it can
- * be reviewed against it directly.
- */
 export class SymmetricState {
   private ck: Uint8Array;
   private h: Uint8Array;
@@ -20,11 +14,7 @@ export class SymmetricState {
     this.cipher = cipher;
   }
 
-  /**
-   * InitializeSymmetric for this suite. The protocol name is 28 bytes, which is
-   * <= HASHLEN (32), so `h` is the name right-padded with zeros (not hashed);
-   * `ck` starts equal to `h`; the CipherState starts un-keyed.
-   */
+  /** InitializeSymmetric for this suite. */
   static initialize(): SymmetricState {
     const nameBytes = new TextEncoder().encode(NOISE_PROTOCOL_NAME);
     const h = new Uint8Array(HASH_LEN);

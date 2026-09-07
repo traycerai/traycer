@@ -5,11 +5,7 @@ export type UsageCostCoverage = UsageSummaryResponse["coverage"];
 export type UsageServedBy = UsageSummaryResponse["servedBy"];
 
 /**
- * The exact standing footnote every priced headline carries - the
- * pricing-provenance artifact's binding product framing (amended
- * 2026-08-10, fixup-01): asterisk on the figure, this five-word footnote
- * below it, matching t3code's density. Centralized so no render site can
- * drift from the exact wording.
+ * The exact standing footnote every priced headline carries - the pricing-provenance artifact's binding product framing (amended 2026-08-10, fixup-01): asterisk on the figure, this five-word footnote below it, matching t3code's density.
  */
 const FOOTNOTE_BASE = "* if billed at full API rate";
 
@@ -19,14 +15,8 @@ const USD_FORMAT = new Intl.NumberFormat("en-US", {
 });
 
 /**
- * Standard 2-decimal USD, with one carve-out: a REAL but sub-half-cent
- * amount reads "<$0.01" rather than rounding down to "$0.01"'s neighbour
- * "$0.00", which a reader takes as free. A short or heavily cached turn
- * lands there routinely, and this helper prices every dashboard, epic,
- * chat and turn figure, so the rounding would otherwise show real billable
- * usage as costing nothing. `0` itself still formats as "$0.00" - that one
- * IS a measured zero. Same shape the chat cost row already uses for its own
- * finer-grained threshold ("<$0.0001").
+ * Standard 2-decimal USD, with one carve-out: a REAL but sub-half-cent amount reads "<$0.01" rather than rounding down to "$0.01"'s neighbour "$0.00", which a reader takes as free.
+ * A short or heavily cached turn lands there routinely, and this helper prices every dashboard, epic, chat and turn figure, so the rounding would otherwise show real billable usage as costing nothing.
  */
 export function formatUsd(amountUsd: number): string {
   if (amountUsd > 0 && amountUsd < 0.005) return "<$0.01";
@@ -38,19 +28,13 @@ export interface UsageCostHeadline {
   readonly amount: string;
   /**
    * `null` only when there is no usage at all (no asterisk to explain).
-   * Otherwise always the five-word base text, plus the one standing
-   * exception - "· N turns not counted" - while unpriced turns exist.
+   * Otherwise always the five-word base text, plus the one standing exception - "· N turns not counted" - while unpriced turns exist.
    */
   readonly footnote: string | null;
 }
 
 /**
- * The headline + footnote pairing (fixup-01): a bare, unqualified dollar
- * figure never appears - every priced total carries its asterisk, and the
- * footnote is the ONLY place coverage gaps get standing pixels, via the one
- * allowed suffix. Everything else that used to live here (the "priced
- * subtotal" phrasing, the provenance split) has moved into
- * {@link usageCostTooltip}.
+ * The headline + footnote pairing (fixup-01): a bare, unqualified dollar figure never appears - every priced total carries its asterisk, and the footnote is the ONLY place coverage gaps get standing pixels, via the one allowed suffix.
  */
 export function describeCostHeadline(
   totals: UsageSummaryTotals,
@@ -71,13 +55,7 @@ export function describeCostHeadline(
 }
 
 /**
- * Plain-English tooltip content for the figure/asterisk - everything the
- * old standing text used to say, now on-demand: the estimate-at-list-prices
- * framing, that a subscription bills separately, the exact-vs-estimate
- * split with amounts, and the not-counted detail. The words "provenance",
- * "modeled", and "unpriced" never appear here (fixup-01, user ruling) - call
- * only when `totals.factCount > 0` (nothing to explain about an empty
- * window).
+ * Plain-English tooltip content for the figure/asterisk - everything the old standing text used to say, now on-demand: the estimate-at-list-prices framing, that a subscription bills separately, the exact-vs-estimate split with amounts, and the not-counted.
  */
 export function usageCostTooltip(
   totals: UsageSummaryTotals,
@@ -99,19 +77,8 @@ export function usageCostTooltip(
 }
 
 /**
- * What this figure actually covers, whenever that is narrower than "your
- * account". A total that spans one machine, or one machine's worth of an
- * account, must never read as the cross-device total (the comm-graph
- * fallback bug the replication-and-read-path artifact names explicitly).
- *
- * Two independent narrowings, and the copy names whichever applies:
- *
- * - `servedBy: "local"` - a bounded local-plane query over facts captured on
- *   THIS machine. Not a choice the reader made, and not one they can undo
- *   here, so it leads with what the number is rather than with a host name.
- * - `hostScopeName` - the reader picked one host out of the account on the
- *   cloud plane. `null` = no host filter (the "All hosts" default), which is
- *   the one case that needs no note at all.
+ * What this figure actually covers, whenever that is narrower than "your account".
+ * A total that spans one machine, or one machine's worth of an account, must never read as the cross-device total (the comm-graph fallback bug the replication-and-read-path artifact names explicitly).
  */
 export function servedByScopeNote(
   servedBy: UsageServedBy,

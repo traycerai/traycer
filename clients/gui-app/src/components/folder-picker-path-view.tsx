@@ -2,13 +2,8 @@ import type { ReactNode } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import type { FuzzyRange } from "@/lib/fuzzy-folder-match";
 
-/**
- * A folder name with the matched characters of the active filter marked.
- *
- * Highlight is a weight and colour change, never a background chip: rows are
- * already selectable, and a second filled rectangle inside a selected row
- * reads as a second selection.
- */
+/** Highlight is a weight and colour change, never a background chip: rows are already selectable, and a second
+ * filled rectangle inside a selected row reads as a second selection. */
 export function HighlightedName(props: {
   readonly name: string;
   readonly ranges: ReadonlyArray<FuzzyRange>;
@@ -44,12 +39,8 @@ export function HighlightedName(props: {
   return <span className={props.className}>{pieces}</span>;
 }
 
-/**
- * The escape hatch for every abbreviation above, on touch: the untouched
- * absolute path, selectable, one long-press away. A pointer reaches the same
- * path through the rows' hover tooltip. Abbreviating is safe precisely
- * because both exist.
- */
+/** The escape hatch for every abbreviation above, on touch: the untouched absolute path, selectable, one
+ * long-press away. Abbreviating is safe precisely because both exist. */
 export function FullPathSheet(props: {
   readonly path: string | null;
   readonly onClose: () => void;

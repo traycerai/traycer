@@ -60,12 +60,6 @@ interface BrowserAnnotationSessionOptions {
   ) => Promise<boolean>;
 }
 
-/**
- * Long-lived guest overlay connection. One CDP binding carries events up;
- * named evaluates carry commands down. Unlike the one-shot picker, start()
- * resolves once the overlay is injected and the session stays open until
- * cancel / navigation / crash / tile close / a replacement start.
- */
 export class BrowserAnnotationSession {
   private readonly webContents: BrowserAnnotationWebContents;
   private readonly debugSession: BrowserDebugSession;
@@ -394,13 +388,7 @@ export class BrowserAnnotationSession {
     }
   }
 
-  /**
-   * The two start-up reads go through the curated CDP table so the annotation
-   * session decodes `Page.getFrameTree` / `Page.createIsolatedWorld` exactly
-   * the way every other consumer does. A malformed reply while the debugger is
-   * still attached is reported as the absent-frame / absent-world outcome the
-   * caller already handles; losing the debugger keeps rejecting.
-   */
+  /** A malformed reply while the debugger is still attached is reported as the absent-frame / absent-world outcome the caller already handles; losing the debugger keeps rejecting. */
   private async dispatchCurated(
     command: BrowserCdpCommand,
   ): Promise<BrowserCdpResult | null> {

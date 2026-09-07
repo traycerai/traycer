@@ -6,28 +6,7 @@ import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import "@/index.css";
 
-/**
- * Browser fixture for the quit intercept's Cancel path.
- *
- * It exists because the claim under test is **"the modal is gone and the window
- * is interactive again"**, and jsdom cannot see the second half: it performs no
- * hit testing, so `fireEvent.click` reaches a node whether or not a real user
- * could. A jsdom test can assert that Radix released its
- * `body { pointer-events: none }` lock, which is a PROXY for interactivity, not
- * the thing itself. Here the same question is answered by clicking a button
- * behind the modal in a real layout engine and counting whether the click
- * arrived.
- *
- * The measured premise comes first: while the dialog is open, that same click at
- * that same pixel must NOT arrive. Otherwise "the click worked after Cancel"
- * would be satisfied by a modal that never blocked anything, and the fixture
- * would pass on a build where Cancel does nothing at all.
- *
- * The row under test is a buffer RETAINED across a host re-point, not merely a
- * dirty live session: a dirty session drains on its own and the modal closes
- * from the auto-proceed gate, so only a retention reproduces the state where
- * waiting can never end and Cancel is the only non-destructive exit.
- */
+/** Quit-intercept Cancel: after Cancel, a real click behind the modal must arrive. While open, that same pixel must not. Use a buffer retained across a host re-point; a dirty live session auto-proceeds and never needs Cancel. */
 const EPIC_ID = "epic-quit-cancel";
 const QUIT_REQUEST_ID = "quit-probe-1";
 
@@ -57,12 +36,7 @@ interface DecisionResponse {
 
 type DecisionPayload = string | DecisionResponse;
 
-/**
- * The seams the CDP driver reaches through. Widened with an intersection rather
- * than a `declare global`, mirroring how this repo's own quit-intercept test
- * widens `window` for `runnerHost`, so the extra members stay local to the
- * fixture instead of leaking into every file's `Window`.
- */
+/** Intersection widen, not declare global, so extra window members stay local to this fixture. */
 interface ProbeWindowGlobals {
   runnerHost?: unknown;
   __probeEmitQuit?: () => void;
@@ -74,11 +48,8 @@ function seedRetainedBuffer(): void {
   const outgoing = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // Factories go to the composition; createOpenEpicStore no longer builds a
+    // runtime. handle.doc still resolves because this harness builds it here.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -93,11 +64,8 @@ function seedRetainedBuffer(): void {
   const incoming = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // Factories go to the composition; createOpenEpicStore no longer builds a
+    // runtime. handle.doc still resolves because this harness builds it here.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -117,11 +85,8 @@ function seedRetainedBuffer(): void {
 
 function installAppLifecycle(): void {
   let quitHandler: ((request: unknown) => void) | null = null;
-  // Resolved per call, NOT captured once: `installAppLifecycle` runs before
-  // React has committed, so a captured reference would be null and every
-  // `record` would silently no-op through `?.` - a recorder that records
-  // nothing, which reads in the driver exactly like the renderer failing to
-  // respond.
+  // Resolve per call. installAppLifecycle runs before commit; a captured
+  // reference would be null and record would silently no-op.
   const record = (name: string, value: string): void => {
     const state = document.querySelector("#probe-state");
     if (state === null) throw new Error("#probe-state missing");

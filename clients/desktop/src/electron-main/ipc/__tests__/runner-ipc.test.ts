@@ -56,12 +56,6 @@ vi.mock("@traycer/protocol/config/store", async (importOriginal) => ({
   setAgentRolesEnabled: setAgentRolesEnabledMock,
 }));
 
-/**
- * Runner-IPC bridge tests. We mock `electron` so the bridge can install its
- * handlers against a plain-JS `ipcMain` double, then drive the host and
- * tray dependencies directly to assert the event/invoke surface the preload
- * bridge depends on.
- */
 
 type InvokeHandler = (
   event: unknown,
@@ -380,16 +374,6 @@ class FakeWindowRegistry implements IpcWindowRegistry {
   }
 }
 
-/**
- * Answer ONE window's outstanding `getFreshUnsyncedSnapshot` request.
- *
- * Per-window on purpose: the correlation that matters is requestId -> window,
- * and the response handler verifies the replying sender is the window the
- * waiter was minted for. Finding the request on that window's OWN captured
- * messages is what keeps a test from accidentally answering window A's
- * request as window B - which the bridge would (correctly) drop, leaving a
- * timeout that reads like a product bug.
- */
 async function replyFreshSnapshot(
   freshResponseHandler: (event: unknown, payload: unknown) => unknown,
   window: CapturingWindow,
@@ -412,18 +396,11 @@ function sender(webContentsId: number): {
 } {
   return {
     sender: { id: webContentsId },
-    // The bridge's IPC trust check rejects requests without a top-frame
-    // `senderFrame`. Real Electron events always populate this; tests
-    // must too so the same code path runs unmodified across dev / prod
-    // / test invocations.
+    // Real Electron events always populate this; tests must too so the same code path runs unmodified across dev / prod / test invocations.
     senderFrame: { parent: null },
   };
 }
 
-// Convenience for tests that use `SingleWindowRegistry` (constructed
-// via the `window:` constructor variant). That registry permissively
-// resolves any `event.sender.id` to its sole record, so passing `0` is
-// equivalent to "any sender".
 function bareEvent(): {
   readonly sender: { readonly id: number };
   readonly senderFrame: { readonly parent: null };
@@ -461,10 +438,6 @@ function invokeSync(channel: string): unknown {
   if (listeners === undefined || listeners.size === 0) {
     throw new Error(`no sync listener registered for ${channel}`);
   }
-  // Match the trusted-sender shape (`sender.id` registered in the window
-  // registry + a top-frame `senderFrame`) so the bridge's
-  // `isTrustedIpcSender` guard accepts the sync invocation. `SingleWindowRegistry`
-  // resolves `sender.id` permissively, so `0` is equivalent to "any sender".
   const event: SyncEvent & {
     readonly sender: { readonly id: number };
     readonly senderFrame: { readonly parent: null };
@@ -523,12 +496,6 @@ afterEach(() => {
 });
 
 describe("RunnerIpcBridge", () => {
-  // An explicit timeout because the cost here is the dynamic IMPORT, not the
-  // assertion: `register-runner-ipc` pulls in the whole main-process IPC
-  // surface, which H10 grew by the browser-sessions owner and the jar plane.
-  // It settles in ~2.5 s locally and has crossed the 5 s default on both the
-  // Linux and macOS runners. This case measures which channels get registered;
-  // making it a de-facto import-speed budget only produces cross-OS flakes.
   it(
     "registers the refreshed IRunnerHost invoke channels",
     { timeout: 30_000 },
@@ -601,11 +568,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.appUpdateGetSnapshot,
           RunnerHostInvoke.appUpdateInstall,
           RunnerHostInvoke.appUpdateResolveCompatRecovery,
-          // Previously absent from this list because it was never registered at
-          // all: the preload and renderer halves shipped while the main handler
-          // went with the removed Settings channel toggle, so `setAllowPrerelease`
-          // rejected as an unhandled channel. The compatibility-recovery RC opt-in
-          // is the one caller that reaches it now.
+          // Previously absent from this list because it was never registered at all: the preload and renderer halves shipped while the main handler went with the removed Settings channel.
+          // The compatibility-recovery RC opt-in is the one caller that reaches it now.
           RunnerHostInvoke.appUpdateSetAllowPrerelease,
           RunnerHostInvoke.globalShortcutsGetSnapshot,
           RunnerHostInvoke.globalShortcutsSet,
@@ -635,10 +599,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.supportSubmitReport,
           RunnerHostInvoke.supportSnapshotGet,
           RunnerHostInvoke.powerSetSleepBlocked,
-          // Legacy `runnerHost:service:*` install/uninstall/start/stop/restart/
-          // upgrade/enableLinger/status/getLogTail channels have been removed
-          // in favor of the `traycer-cli`-driven host-management handlers
-          // (`traycerHost*`). The bridge no longer registers them.
           RunnerHostInvoke.traycerHostStatus,
           RunnerHostInvoke.traycerConfigShellGet,
           RunnerHostInvoke.traycerConfigShellList,
@@ -679,10 +639,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.traycerFreePortAndRestart,
           RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
           RunnerHostInvoke.traycerCliManifestRead,
-          // The maintenance-RPC projections the GUI's local fallback serves
-          // when a local host too old for the v1.2.0 `host.*` maintenance
-          // family negotiated it away. Registered by the same
-          // `registerHostManagementIpc` call as the block above.
           RunnerHostInvoke.traycerMaintenanceUpdateCheck,
           RunnerHostInvoke.traycerMaintenanceDoctor,
           RunnerHostInvoke.traycerMaintenanceInstallationInfo,
@@ -690,10 +646,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.traycerHostRestartIfIdle,
           RunnerHostInvoke.traycerDoctorRepairQueued,
           RunnerHostInvoke.traycerDoctorRepairIfIdle,
-          // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
-          // which is now invoked from `RunnerIpcBridge.install()` rather than
-          // wired by the host. They cover recent docs, window effects, GPU,
-          // proxies, certificates, diagnostics, displays, and TouchID.
           RunnerHostInvoke.recentDocumentAdd,
           RunnerHostInvoke.windowFlashFrame,
           RunnerHostInvoke.windowSetProgressBar,
@@ -748,11 +700,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.zoomStepIn,
           RunnerHostInvoke.zoomStepOut,
           RunnerHostInvoke.zoomReset,
-          // H10: the jar/CDP plane moved into main's own `browser-sessions`
-          // owner. The renderer no longer ensures/accepts/releases native tabs,
-          // dispatches CDP, captures/applies profiles, wraps store keys or
-          // attests desktop identity directly - it opens/closes/sends onto the
-          // `browser.sessions` stream and main drives all of that itself.
           RunnerHostInvoke.browserViewSessionsOpen,
           RunnerHostInvoke.browserViewSessionsClose,
           RunnerHostInvoke.browserViewSessionsSend,
@@ -1123,11 +1070,7 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("prunes a closed window's per-window restore state + ownership on a deliberate mid-session close (other windows remain)", async () => {
-    // Closing one of several open windows is a deliberate mid-session close, not
-    // a quit gesture: the closed window's restore snapshot must be pruned so a
-    // relaunch does not resurrect it, while the remaining window's snapshot
-    // survives untouched. (Last-window / quit-in-progress closes PRESERVE the
-    // snapshot instead - covered by the two tests below.)
+    // Closing one of several open windows is a deliberate mid-session close, not a quit gesture: the closed window's restore snapshot must be pruned so a relaunch does not resurrect it.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -1206,11 +1149,7 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("preserves the per-window restore snapshot when the LAST window closes (quit/leave gesture)", async () => {
-    // Win/Linux: last-window `closed` fires this listener BEFORE
-    // `window-all-closed` -> `app.quit()`, so `quitState` is not yet set. macOS:
-    // a red-light close of the last window keeps the app alive. Either way the
-    // snapshot must survive so a later quit -> relaunch (or dock `activate`)
-    // restores it.
+    // Either way the snapshot must survive so a later quit -> relaunch (or dock `activate`) restores it.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -1258,10 +1197,7 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("preserves closing windows while the shell is quitting, even when others remain", async () => {
-    // Defense-in-depth for the quit sequence: if a window `closed` event races
-    // the registry-change listener while more windows are still open during a
-    // quit, the snapshot must NOT be pruned - all windows' state is restored on
-    // the next launch.
+    // Defense-in-depth for the quit sequence: if a window `closed` event races the registry-change listener while more windows are still open during a quit, the snapshot must NOT be.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -1714,10 +1650,7 @@ describe("RunnerIpcBridge", () => {
       },
     ]);
     windowB.sentMessages.length = 0;
-    // Tray "Update available: <ver> - Install" can fire with no focused
-    // renderer (tray click while another app is foregrounded). The
-    // dispatcher must fall back to the MRU renderer so the in-app install
-    // mutation still runs.
+    // The dispatcher must fall back to the MRU renderer so the in-app install mutation still runs.
     expect(bridge.dispatchMenuCommand("host.installUpdate")).toBe(true);
     expect(
       windowB.sentMessages.filter(
@@ -1911,11 +1844,6 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("answers the cross-window unsyncable question from every window's snapshot", async () => {
-    // Main is the only process that can answer this. A renderer holds one
-    // window's Epic session registry, while `appUpdateInstall` restarts the
-    // whole app - and its quit path deliberately skips the unsynced-edits
-    // interception, so the prompt this feeds is the only thing between the
-    // restart and a buffer that can never be saved.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -1980,12 +1908,6 @@ describe("RunnerIpcBridge", () => {
     // between two rows rather than passing on an empty map.
     expect(bridge.getUnsyncedEditsSnapshot()).toHaveLength(2);
 
-    // Asked BY window A, answered about window B: the whole point. (A real
-    // window sender rather than a bare event, because this channel sits behind
-    // the bridge's sender-trust guard like every other invoke.)
-    //
-    // Both windows answer the fresh fan-out this now issues, so the report is
-    // a complete census and says so.
     const answered = unsyncableHandler(sender(101));
     await replyFreshSnapshot(freshResponseHandler, windowA, 101, [
       {
@@ -2021,17 +1943,7 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("asks every window FRESH rather than trusting the debounced ambient push", async () => {
-    // Codex #1243 T-56, main half. Retention in window B is followed by a
-    // 100ms renderer debounce and an IPC hop before main hears about it, and
-    // nothing stopped window A's Update click from landing inside that gap:
-    // the ambient map still said "nothing unsyncable", the door installed
-    // with no prompt, and the restart destroyed the buffer.
-    //
-    // The renderer's fresh-snapshot handler cancels its own pending ambient
-    // push and reads its registry synchronously, so this round trip does not
-    // wait the debounce out - it bypasses it. Modelled here by a window whose
-    // AMBIENT row says nothing is unsyncable while its FRESH reply says
-    // otherwise, which is exactly the state the race leaves behind.
+    // The renderer's fresh-snapshot handler cancels its own pending ambient push and reads its registry synchronously, so this round trip does not wait the debounce out - it bypasses it.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -2109,11 +2021,6 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("reports otherWindowsUnknown when a window misses its deadline", async () => {
-    // The fail-closed half. A window that does not answer has its cached row
-    // substituted, and the substitution is REPORTED rather than resolved
-    // silently - because for a caller deciding whether to destroy work,
-    // "nobody reported anything" and "a window did not answer" are opposite
-    // conclusions that a bare list renders identical.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -2162,12 +2069,6 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("does not ask a window that never mounted the lifecycle bridge, and does not report it unknown", async () => {
-    // A window the readiness gate is blocking (host down, or the sign-in
-    // route) has no `AppShell`, so no `QuitInterceptBridge` to answer and no
-    // Epic session to hold unsynced work. Fanning the fresh query out to it
-    // anyway timed out on EVERY install click for the rest of the session and
-    // reported `otherWindowsUnknown` for a window that structurally could not
-    // hold anything - the destructive confirmation, with nothing at risk.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -2492,12 +2393,6 @@ describe("RunnerIpcBridge", () => {
     expect(windowA.sentMessages).toEqual([]);
     expect(windowB.sentMessages).toEqual([]);
 
-    // clear by sender: removes window-a's snapshot but does NOT forward the empty
-    // snapshot to any renderer. A `clear` is a window-teardown wipe; pushing its
-    // empty snapshot could clobber a still-alive window that transiently dropped
-    // from the registry (reload / re-registration), and the "Clear local app
-    // state" path reloads the window rather than relying on the echo. Window-b is
-    // likewise untouched.
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
     const empty = {
@@ -2517,15 +2412,7 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  // Regression: a window must NOT receive its own `perWindowState.update`
-  // echoed back. Per-window state is authored by the window itself; the window
-  // already holds what it just sent. A delayed self-echo is pure staleness: if
-  // it lands after a newer local edit it clobbers it - e.g. it resurrects a
-  // landing draft the window closed a moment ago (a terminal agent "launches
-  // empty", so the launch closes the draft while its create-echo is still in
-  // flight, leaving a phantom "New" tab). Main still persists the update and
-  // still pushes MAIN-initiated changes (restore, move-tab); it just stops
-  // bouncing a window's own writes back at it.
+  // Regression: a window must NOT receive its own `perWindowState.update` echoed back.
   it("does not echo a window's own per-window update back to that window", async () => {
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
@@ -2642,10 +2529,6 @@ describe("RunnerIpcBridge", () => {
     const adopted = { ...signedIn, verified: true };
     expect(await getHandler(sender(202))).toEqual(adopted);
     expect(authSession.get()).toEqual(adopted);
-    // Signing in is an IDENTITY TRANSITION for the selection authority (null
-    // -> userId), so every window is also told to re-attach: the transition
-    // voids every incarnation, and `reattachRequired` is the mandatory
-    // trigger that guarantees a post-transition attach.
     const expectedFanOut = [
       { channel: RunnerHostEvent.authSessionChange, payload: adopted },
       {
@@ -2807,11 +2690,8 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("mints a host credential with the caller's own bearer, never the retained step-up credential", async () => {
-    // Provisioning is not step-up gated: a retained step-up credential must
-    // never be substituted for the mint's Authorization header, even when one
-    // is sitting in main from a prior verify. This closes an exposure where
-    // an IPC caller could spend a step-up bearer for a mint no dialog ever
-    // authorized.
+    // Provisioning is not step-up gated: a retained step-up credential must never be substituted for the mint's Authorization header, even when one is sitting in main from a prior.
+    // This closes an exposure where an IPC caller could spend a step-up bearer for a mint no dialog ever authorized.
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
       const url = input.toString();
       if (url.endsWith("/api/v3/user/step-up/verify")) {
@@ -3231,15 +3111,6 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  // H10: main now captures the final browser state directly off the
-  // `BrowserSessionsRegistry` via `captureFinalPrimaryProfiles` - there is
-  // no renderer round trip, ack channel, or timeout left to drive from
-  // this bridge. The six arms that lived here (multi-window fan-out wait,
-  // undeliverable-sibling tolerance, ack timeout fallback,
-  // capture-then-close ordering, window-closed rejection, and
-  // dispose-time rejection) all existed only to pin that renderer round
-  // trip and were deleted rather than adapted; the `browser-sessions`
-  // owner's own suites cover the new direct-capture path.
   it("falls back to the cached ambient snapshot after the fresh-query timeout", async () => {
     vi.useFakeTimers();
     try {
@@ -3450,11 +3321,6 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  // The renderer's host directory seeds "which id is THIS machine" from this
-  // handler, and then persists the answer and neutralizes the matching registry
-  // row. A wrong answer therefore does not degrade - it neutralizes the wrong
-  // twin and leaves the real one remote-kind and relay-dialable, which is the
-  // local-provisioning lockout the seed exists to prevent.
   describe("lastKnownLocalHostId identity seed", () => {
     async function seedFrom(files: {
       readonly enrollment: string | null;
@@ -3530,11 +3396,7 @@ describe("RunnerIpcBridge", () => {
     });
 
     it("answers null - never pid metadata - when the enrollment record exists but is unusable", async () => {
-      // CodeRabbit (OSS #913): an unusable record is NOT the same fact as an
-      // absent one. The file existing proves this install enrolls, so a
-      // corrupt read must not hand the decision to the stale-prone source the
-      // enrollment-first ordering exists to outrank. Null lets the renderer
-      // keep its persisted value.
+      // The file existing proves this install enrolls, so a corrupt read must not hand the decision to the stale-prone source the enrollment-first ordering exists to outrank.
       await expect(
         seedFrom({
           enrollment: "{ not json",
@@ -3555,10 +3417,7 @@ describe("RunnerIpcBridge", () => {
     });
   });
 
-  // Field RCA 2026-07-28: the takeover fallback's host-busy denial resolves
-  // `deferred`, and the invoke must RESOLVE it as `declined` rather than
-  // reject - a rejected invoke lands on the renderer's reportable error
-  // toast, inviting "Report issue" for a self-recovering condition.
+  // Field RCA 2026-07-28: the takeover fallback's host-busy denial resolves `deferred`, and the invoke must RESOLVE it as `declined` rather than reject.
   it.each([
     {
       kind: "deferred" as const,
@@ -4366,12 +4225,7 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
   it("propagates a failed durable write out of the update handler and still releases echo suppression", async () => {
-    // `perWindowStateUpdate` is `async` and awaits the durable write, so a
-    // rejection has to reach `handleInvoke` rather than being swallowed into a
-    // silent success - the renderer's projection queue decides whether to
-    // retry on exactly that signal. The release matters just as much: it lives
-    // in a `finally`, so a failed write must not leave the window permanently
-    // suppressed and deaf to every later main-initiated change.
+    // The release matters just as much: it lives in a `finally`, so a failed write must not leave the window permanently suppressed and deaf to every later main-initiated change.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -4417,11 +4271,6 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("keeps a window's echo suppressed until its LAST overlapping update settles", async () => {
-    // The renderer can invoke a second update while the first is still in
-    // flight. Suppression used to be a Set of window ids, which is idempotent:
-    // both updates shared one entry and whichever settled first removed it, so
-    // the second update's own echo was pushed back to the window that authored
-    // it - the exact clobber the suppression exists to prevent.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -4480,12 +4329,7 @@ describe("RunnerIpcBridge", () => {
   });
 
   it("never forwards a teardown clear to a live window, but still forwards updates", async () => {
-    // `clear` wipes the durable snapshot on window teardown. A window that
-    // dropped out of the registry snapshot while its BrowserWindow is still
-    // alive (a reload / re-registration) would otherwise be handed the empty
-    // snapshot and lose a live draft. The trailing `emitChange` is the novelty
-    // guard: without it this would pass just as well against a bridge that
-    // never subscribed to `change` at all.
+    // The trailing `emitChange` is the novelty guard: without it this would pass just as well against a bridge that never subscribed to `change` at all.
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -4525,12 +4369,6 @@ describe("RunnerIpcBridge", () => {
   });
 });
 
-/**
- * `IpcPerWindowState` double whose `update` resolves only when the test says
- * so, letting two updates from one window genuinely overlap. It emits `change`
- * before resolving, mirroring the real store: the durable write lands, the
- * change is announced, then the acknowledgement returns.
- */
 class DeferredPerWindowState implements IpcPerWindowState {
   private readonly events = new EventEmitter();
   private readonly pending: Array<{
@@ -4575,13 +4413,7 @@ class DeferredPerWindowState implements IpcPerWindowState {
     this.announce(windowId, "update");
   }
 
-  /**
-   * Mirrors the real store, which announces a teardown wipe as
-   * `origin: "clear"` - the one origin the IPC forwarder drops before it can
-   * reach a renderer. Delegating to `emitChange` would make a clear look like
-   * an ordinary update here, so a future test asserting "a clear is never
-   * forwarded" would pass against a double that cannot express a clear.
-   */
+  /** Delegating to `emitChange` would make a clear look like an ordinary update here, so a future test asserting "a clear is never forwarded" would pass against a double that cannot. */
   clear(windowId: string): void {
     this.announce(windowId, "clear");
   }

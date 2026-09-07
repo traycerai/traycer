@@ -22,10 +22,8 @@ function noopControls() {
 }
 
 /**
- * A real, distinct `HostClient` instance (never a cast) so identity
- * assertions on `FocusedComposerEntry.hostClient` compare the exact object a
- * test registered. Never actually dispatched - nothing in this file issues a
- * real RPC through it.
+ * A real, distinct `HostClient` instance (never a cast) so identity assertions on `FocusedComposerEntry.hostClient` compare the exact object a test registered.
+ * Never actually dispatched - nothing in this file issues a real RPC through it.
  */
 function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = {

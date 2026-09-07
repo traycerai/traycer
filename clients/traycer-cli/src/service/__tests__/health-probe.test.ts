@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// `probeHostHealth` gates whether `host update` rolls back a swap. Its one
-// hard requirement is the binary-health / coordination-server(CS)-
-// reachability separation: it must never make a network call that could be
-// affected by a CS (or auth-service) blip. This suite exercises the
-// success/failure/backoff matrix with injected fakes and separately pins
-// the "no network calls beyond loopback TCP" guarantee by asserting the
-// module never imports anything that could dial out.
+// `probeHostHealth` gates whether `host update` rolls back a swap.
+// Its one hard requirement is the binary-health / coordination-server(CS)- reachability separation: it must never make a network call that could be affected by a CS (or auth-service) blip.
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataMock: vi.fn(),
@@ -163,13 +158,8 @@ describe("probeHostHealth", () => {
   });
 
   it("uses the real pid-liveness and loopback-TCP checks when no fakes are injected", async () => {
-    // Exercises the default (non-injected) code path so it's covered by
-    // something other than the always-faked tests above - a nonsense port
-    // must fail to connect, proving the default `checkTcpReachable`
-    // actually dials out rather than being a stub that always resolves.
-    // `isProcessAlive` itself is mocked at the module boundary for this
-    // whole file (see the `../../store/cli-lock` vi.mock above), so pin it
-    // to "alive" here to isolate the assertion to the TCP path.
+    // Exercises the default (non-injected) code path so it's covered by something other than the always-faked tests above - a nonsense port must fail to connect, proving the default `checkTcpReachable` actually dials out rather than being a stub that always resolves.
+    // `isProcessAlive` itself is mocked at the module boundary for this whole file (see the `../../store/cli-lock` vi.mock above), so pin it to "alive" here to isolate the assertion to the TCP path.
     mocks.isProcessAliveMock.mockReturnValue(true);
     mocks.readHostPidMetadataMock.mockResolvedValue(
       sampleMetadata({
@@ -191,11 +181,8 @@ describe("probeHostHealth", () => {
 
 describe("probeHostHealth CS-reachability separation", () => {
   it("never imports anything that resolves auth credentials or dials the coordination server", async () => {
-    // Static-analysis guard: the health-probe module's only local imports
-    // are pid-metadata + cli-lock + node:net - never `internal/host-rpc`,
-    // `internal/host-auth`, or any registry/fetch-based client. A future
-    // change that pulls in an authenticated RPC path here would show up as
-    // a new disallowed import rather than a silent behavioural change.
+    // Static-analysis guard: the health-probe module's only local imports are pid-metadata + cli-lock + node:net - never `internal/host-rpc`, `internal/host-auth`, or any registry/fetch-based client.
+    // A future change that pulls in an authenticated RPC path here would show up as a new disallowed import rather than a silent behavioural change.
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
     const source = await fs.readFile(

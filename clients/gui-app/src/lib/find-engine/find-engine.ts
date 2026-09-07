@@ -26,10 +26,8 @@ export function isFindEngineSupported(): boolean {
 }
 
 /**
- * Marks an element subtree as off-limits to the find engine (e.g., the
- * find bar itself, modal popovers we don't want highlighted). Applied
- * via attribute so it survives React re-renders without us threading
- * refs through every consumer.
+ * Marks an element subtree as off-limits to the find engine (e.g., the find bar itself, modal popovers we don't want highlighted).
+ * Applied via attribute so it survives React re-renders without us threading refs through every consumer.
  */
 export function getFindSkipAttribute(): string {
   return FIND_SKIP_ATTR;
@@ -53,9 +51,7 @@ export class FindEngine {
 
   /**
    * Re-scans the DOM for `query`, replacing any previous match set.
-   * Returns the new total count. Highlights are painted as a side effect.
-   * Caller must then call `scrollActiveIntoView()` to bring match 1 into
-   * view (kept separate so navigation calls can skip the scan).
+   * Returns the new total count.
    */
   search(query: string): number {
     this.clearHighlights();

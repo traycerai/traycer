@@ -12,21 +12,13 @@ export interface WorkspaceFolderInfo {
   readonly name: string;
   readonly repoIdentifier: TaskRepoIdentifier | null;
   /**
-   * Host that prepared/opened this folder. Required for non-git (local-only)
-   * paths so Project-scope MCP does not send Host A's scratch path to Host B.
-   * Null only for legacy persisted rows that predate host stamping (v2
-   * migration drops those - they cannot be attributed to a bucket).
+   * Host that prepared/opened this folder. Required for non-git (local-only) paths so Project-scope
+   * MCP does not send Host A's scratch path to Host B.
    */
   readonly hostId: string | null;
 }
 
-/**
- * One host's workspace selection. Folder paths are host-local (the SAME
- * string can name different directories on two machines), so the selection
- * list, its metadata, and the primary choice are all bucketed by host -
- * switching hosts restores that host's last selection instead of leaking
- * another machine's paths.
- */
+/** One host's workspace selection. */
 export interface WorkspaceFoldersHostBucket {
   readonly folders: ReadonlyArray<string>;
   readonly folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>;
@@ -35,12 +27,6 @@ export interface WorkspaceFoldersHostBucket {
 
 interface WorkspaceFoldersStore {
   byHost: Readonly<Record<string, WorkspaceFoldersHostBucket>>;
-  // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
-  // evicted) so callers can unstage any in-flight worktree intent for them -
-  // otherwise an evicted folder can disappear from rows/persistence while
-  // still riding along in a staged/outgoing WorktreeIntent. `hostId === null`
-  // (no resolved host) is a no-op: a folder selection always belongs to the
-  // host it was browsed on.
   addResolvedFolders: (
     hostId: string | null,
     folders: ReadonlyArray<WorkspaceFolderInfo>,
@@ -75,12 +61,7 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
       byHost: {},
       addResolvedFolders: (hostId, folders) => {
         if (hostId === null) return [];
-        // `hostId` is canonical, so a bucket only ever holds rows stamped with
-        // its own host. The picker stamps each row with its DISPATCH-time
-        // host, which a host switch landing between `pickAndPrepareFolders()`
-        // and this call can outrun - filing host A's paths under host B is the
-        // exact cross-host leak the buckets exist to prevent, so a mismatched
-        // row is dropped rather than rehomed.
+        // `hostId` is canonical, so a bucket only ever holds rows stamped with its own host.
         const ownFolders = folders.filter((folder) => folder.hostId === hostId);
         const before = selectWorkspaceFoldersBucket(get(), hostId).folders;
         set((state) => {
@@ -110,9 +91,8 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
               [hostId]: {
                 folders: nextFolders,
                 folderInfoByPath: nextInfoByPath,
-                // Deterministic fallback to the first remaining folder when
-                // the removed folder WAS the primary; `resolvePrimaryPath`
-                // also covers the "no folders left" case (`null`).
+                // Deterministic fallback to the first remaining folder when the removed folder WAS the primary;
+                // `resolvePrimaryPath` also covers the "no folders left" case (`null`).
                 primaryPath: resolvePrimaryPath(
                   nextFolders,
                   bucket.primaryPath,
@@ -140,18 +120,9 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
     {
       ...basePersistOptions(persistKey(STORE_KEYS.workspaceFolders)),
       version: 2,
-      // v1 -> v2: the flat selection is partitioned into per-host buckets by
-      // each row's existing `hostId` stamp; null-stamped rows (pre-stamping
-      // legacy) are dropped - they cannot be attributed to a host, and
-      // keeping them in every bucket would recreate the cross-host leak this
-      // migration exists to fix.
+      // v1 -> v2: the flat selection is partitioned into per-host buckets by each row's existing
+      // `hostId` stamp; null-stamped rows (pre-stamping legacy) are dropped - they cannot be attributed
       migrate: (persisted) => migrateWorkspaceFoldersPersistedState(persisted),
-      // Defensive re-derivation on every rehydration (mirrors
-      // `landing-draft-store.ts`'s `merge`): every bucket - and every field
-      // in it - is validated from raw JSON regardless of shape, so an
-      // absent/stale/out-of-bounds value always resolves sanely instead of
-      // rehydrating verbatim. `migrate` above only runs for version < 2;
-      // this validates the CURRENT shape too.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -173,11 +144,8 @@ export function migrateWorkspaceFoldersPersistedState(
   persisted: unknown,
 ): MigratedWorkspaceFoldersPersistedState {
   if (!isRecord(persisted)) return { byHost: {} };
-  // Metadata is parsed FIRST, independent of the raw `folders` array, then
-  // `folders` is filtered down to paths that actually resolved valid
-  // metadata (mirrors `landing-draft-store.ts`'s parse order). Reversing
-  // this order lets a "ghost" path (present in `folders`, no/corrupt
-  // metadata) survive migration and even resolve as primary.
+  // Metadata is parsed FIRST, independent of the raw `folders` array, then `folders` is filtered
+  // down to paths that actually resolved valid metadata (mirrors `landing-draft-store.ts`'s parse
   const folderInfoByPath = parsePersistedFolderInfoByPath(
     persisted.folderInfoByPath,
   );
@@ -203,9 +171,8 @@ export function migrateWorkspaceFoldersPersistedState(
   const byHost = Object.fromEntries(
     Object.entries(partitioned).map(([hostId, bucket]) => [
       hostId,
-      // The v1 primary belongs to whichever bucket contains its path; every
-      // other bucket resolves its own first folder, matching the pre-split
-      // "absent primary" behavior.
+      // The v1 primary belongs to whichever bucket contains its path; every other bucket resolves its
+      // own first folder, matching the pre-split "absent primary" behavior.
       normalizeBucket(
         bucket.folders,
         bucket.folderInfoByPath,
@@ -216,9 +183,8 @@ export function migrateWorkspaceFoldersPersistedState(
   return { byHost };
 }
 
-// Validate + cap one raw bucket into the canonical shape. Shared by the v2
-// `merge` validation and the v1 migration so both apply the identical cap
-// and primary-resolution rules.
+// Validate + cap one raw bucket into the canonical shape. Shared by the v2 `merge` validation and
+// the v1 migration so both apply the identical cap and primary-resolution rules.
 function normalizeBucket(
   validatedFolders: ReadonlyArray<string>,
   folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>,
@@ -249,12 +215,8 @@ function parsePersistedByHost(
   return Object.fromEntries(
     Object.entries(value).flatMap(([hostId, rawBucket]) => {
       if (!isRecord(rawBucket)) return [];
-      // Same invariant the writer enforces, re-applied to raw JSON: a bucket
-      // keeps only rows stamped with ITS host. A hand-edited or otherwise
-      // corrupt payload therefore cannot surface one host's local paths under
-      // another host. Filtering the metadata BEFORE parsing `folders` also
-      // drops the now-ghost paths, since a path survives only while it
-      // resolves metadata.
+      // Same invariant the writer enforces, re-applied to raw JSON: a bucket keeps only rows stamped
+      // with ITS host.
       const bucketFolderInfoByPath = Object.fromEntries(
         Object.entries(
           parsePersistedFolderInfoByPath(rawBucket.folderInfoByPath),
@@ -369,10 +331,8 @@ function mergeWorkspaceFolderInfo(
     mergeOneFolder(accumulator, folder);
   }
   if (!accumulator.changed) return bucket;
-  // Cap eviction must never silently move primary: trim the oldest
-  // SECONDARY folders first, keeping the resolved primary's slot intact even
-  // when it sits at the front (the most eviction-prone position under naive
-  // front-trimming).
+  // Cap eviction must never silently move primary: trim the oldest SECONDARY folders first, keeping
+  // the resolved primary's slot intact even when it sits at the front (the most eviction-prone
   const nextFolders = trimFoldersPreservingPrimary(
     accumulator.folders,
     bucket.primaryPath,
@@ -388,9 +348,8 @@ function mergeWorkspaceFolderInfo(
   return {
     folders: nextFolders,
     folderInfoByPath: nextInfoByPath,
-    // Only stamps a primary when none was resolvable before (a fresh bucket,
-    // or one whose stored primary no longer names a folder); an existing
-    // valid primary is never disturbed by an add.
+    // Only stamps a primary when none was resolvable before (a fresh bucket, or one whose stored
+    // primary no longer names a folder); an existing valid primary is never disturbed by an add.
     primaryPath: resolvePrimaryPath(nextFolders, bucket.primaryPath),
   };
 }

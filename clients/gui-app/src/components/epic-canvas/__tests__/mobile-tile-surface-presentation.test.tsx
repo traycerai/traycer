@@ -1,14 +1,6 @@
 /**
- * The phone canvas mounts ONE tile at a time, which makes it the only branch
- * where a hosted chat's environment publisher can vanish while the record it
- * published for is still a member. Every assertion here is a registry dump -
- * which records read as presented - because that predicate is what decides
- * whether a record paints, and two records reading presented at once means two
- * chat transcripts stacked at the same pane rect.
- *
- * The desktop tab group cannot reach this state (it keeps deselected tabs
- * mounted, so their slots republish `tabSelected: false`), so no desktop-branch
- * test can stand in for these.
+ * The phone canvas mounts ONE tile at a time, which makes it the only branch where a hosted chat's environment publisher can vanish while the record it published for is still a member.
+ * The desktop tab group cannot reach this state (it keeps deselected tabs mounted, so their slots republish `tabSelected: false`), so no desktop-branch test can stand in for these.
  */
 import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render } from "@testing-library/react";
@@ -47,10 +39,7 @@ const HOST_ID = "host-A";
 const EPIC_A = { epicId: "epic-1", viewTabId: "view-tab-1", paneId: "pane-A" };
 const EPIC_B = { epicId: "epic-2", viewTabId: "view-tab-2", paneId: "pane-B" };
 
-// `ActiveTabBody` reads permission/snapshot/projection state through these
-// seams on every render regardless of tab type; stubbed so the chat body
-// routes through `surfaceOwnerFor` without a HostRuntimeProvider /
-// EpicSessionProvider (same seams `tab-group-view.test` stubs).
+// `ActiveTabBody` reads permission/snapshot/projection state through these seams on every render regardless of tab type; stubbed so the chat body routes through `surfaceOwnerFor` without a HostRuntimeProvider / EpicSessionProvider (same seams `tab-group-view.test` stubs).
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id, userId: "user-1" }),
   useEpicChatRecordListAuthoritative: () => true,
@@ -62,9 +51,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 
-// A null canvas host keeps `computeIsRemoteDeleted` unauthoritative and the
-// published-copy fallback withdrawn, so every fixture chat here takes the
-// live hosted path - the one under test.
+// A null canvas host keeps `computeIsRemoteDeleted` unauthoritative and the published-copy fallback withdrawn, so every fixture chat here takes the live hosted path - the one under test.
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => null,
 }));
@@ -98,9 +85,7 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   useExistingChatSessionFatalClose: () => null,
 }));
 
-// `tab-group-view` imports the dead-tile banner container straight from
-// `chat-tile`, whose real module graph pulls the chat session/host runtime
-// this render-focused suite deliberately does not provide.
+// `tab-group-view` imports the dead-tile banner container straight from `chat-tile`, whose real module graph pulls the chat session/host runtime this render-focused suite deliberately does not provide.
 vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
   ChatDeadTileBannerContainer: () => null,
 }));
@@ -268,9 +253,7 @@ describe("mobile single-tile canvas: hosted surface presentation", () => {
     // Step 1: the shown chat has published and paints alone.
     expect(presentedInstanceIds()).toEqual(["inst-1"]);
 
-    // Step 2: switch chats, through the same store transition the mobile
-    // switcher drives. Only ONE tile mounts here, so `inst-1` loses its
-    // publisher while pane retention keeps its record alive.
+    // Step 2: switch chats, through the same store transition the mobile switcher drives.
     act(() => {
       useEpicCanvasStore
         .getState()
@@ -343,10 +326,7 @@ describe("mobile single-tile canvas: hosted surface presentation", () => {
     const { rerender } = render(mobileView(EPIC_A));
     expect(presentedInstanceIds()).toEqual(["inst-1"]);
 
-    // The record the departed epic leaves behind stays a MEMBER (its
-    // top-level surface is still retained), which is exactly why a stale
-    // presentation claim on it would paint over the epic navigated to - the
-    // two panes are different, and every record sits at its pane's rect.
+    // The record the departed epic leaves behind stays a MEMBER (its top-level surface is still retained), which is exactly why a stale presentation claim on it would paint over the epic navigated to - the two panes are different, and every record sits at its pane's rect.
     act(() => {
       activateTopLevel(EPIC_B.viewTabId);
       rerender(mobileView(EPIC_B));

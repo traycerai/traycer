@@ -1,11 +1,4 @@
-/**
- * Isolated-world overlay runtime. Bundled into an IIFE by
- * `scripts/bundle-annotation-overlay.cjs` and injected via CDP.
- * Page JS cannot observe this module: it shares the DOM only.
- *
- * `boot()` wires collaborators: the chrome (DOM + stylesheet), the mark store
- * (live marks and their nodes), and the draft stroke (freehand ink).
- */
+/** Page JS cannot observe this module: it shares the DOM only. */
 import type { BrowserAnnotationTheme } from "../../../ipc-contracts/browser-annotation-types";
 import {
   createMarkStore,

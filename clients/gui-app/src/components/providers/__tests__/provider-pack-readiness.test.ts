@@ -75,10 +75,8 @@ function candidate(
   };
 }
 
-// The copy and retryability assertions below all describe the BLOCKING voice -
-// a provider with nothing to fall back on. These builders pin
-// `fallbackRunnable: false` in one place so that stays deliberate rather than
-// incidental; the non-blocking voice has its own describe block.
+// These builders pin `fallbackRunnable: false` in one place so that stays deliberate rather than incidental;
+// the non-blocking voice has its own describe block.
 function blockingDownload(percent: number | null): ProviderPackPreparing {
   return {
     kind: "downloading",
@@ -102,9 +100,8 @@ function blockingFailure(
   };
 }
 
-// Asserting through a null-rejecting helper rather than a `!`: a case that
-// stopped producing a state at all would otherwise pass every "does not block"
-// assertion below for entirely the wrong reason.
+// Asserting through a null-rejecting helper rather than a `!`: a case that stopped producing a state at all
+// would otherwise pass every "does not block" assertion below for entirely the wrong reason.
 function blocksExecution(preparing: ProviderPackPreparing | null): boolean {
   if (preparing === null) {
     throw new Error("expected a preparing state, got null");
@@ -113,10 +110,8 @@ function blocksExecution(preparing: ProviderPackPreparing | null): boolean {
 }
 
 describe("providerPackPreparingForProvider: which states say anything", () => {
-  // The three quiet answers, each for a different reason - see the function's
-  // own doc comment. Getting any of these wrong locks users out of a provider
-  // the host would happily spawn, which is strictly worse than the bug this
-  // gate exists to fix.
+  // Getting any of these wrong locks users out of a provider the host would happily spawn, which is strictly
+  // worse than the bug this gate exists to fix.
   it.each([
     ["a null state (old host / unmanaged store)", null],
     ["installed", { status: "installed" as const }],
@@ -144,9 +139,8 @@ describe("providerPackPreparingForProvider: which states say anything", () => {
     ).toEqual(blockingDownload(42));
   });
 
-  // N13: a live sibling host owns the transfer, so there is no observable byte
-  // count. Null must survive to the renderer as null - coercing it to 0 would
-  // render a stalled-looking 0% bar for a download that is actually moving.
+  // Null must survive to the renderer as null - coercing it to 0 would render a stalled-looking 0% bar for a
+  // download that is actually moving.
   it("reports downloading with a null percent and keeps it null", () => {
     expect(
       providerPackPreparingForProvider(
@@ -169,18 +163,8 @@ describe("providerPackPreparingForProvider: which states say anything", () => {
   });
 });
 
-/**
- * The gate's actual question. `providers.list` reports a managed pack's
- * lifecycle; it does NOT report whether the provider can run, and reading the
- * second off the first is what dimmed every provider on the machine behind
- * `Preparing… 0%` during boot convergence - which enqueues every enabled pack
- * at once, on hosts whose bundled binaries were sitting right there.
- *
- * The host is the reference implementation and these tests are written against
- * it: `resolveProviderCli` only throws `preparing` after custom, managed, PATH
- * and bundled have all missed. A client stricter than that is a client
- * refusing turns the host would have run.
- */
+/** The host is the reference implementation and these tests are written against it: `resolveProviderCli` only
+ * throws `preparing` after custom, managed, PATH and bundled have all missed. */
 describe("fallback awareness: preparing vs unable to run", () => {
   it.each([
     ["a bundled binary", "bundled" as const],
@@ -195,7 +179,7 @@ describe("fallback awareness: preparing vs unable to run", () => {
       ),
     );
     expect(preparing).not.toBeNull();
-    // Still REPORTED - a surface that wants to show background progress can.
+    // Still reported - a surface that wants to show background progress can.
     expect(preparing?.kind).toBe("downloading");
     // ...but it takes nothing away.
     expect(preparing?.fallbackRunnable).toBe(true);
@@ -203,9 +187,8 @@ describe("fallback awareness: preparing vs unable to run", () => {
   });
 
   it("blocks when every candidate is unavailable", () => {
-    // The case the gated-and-labelled design was built for, and the one that
-    // becomes normal after the bundled binaries stop shipping: nothing on disk
-    // to fall back to, so the turn genuinely cannot run.
+    // The case the gated-and-labelled design was built for, and the one that becomes normal after the bundled
+    // binaries stop shipping: nothing on disk to fall back to, so the turn genuinely cannot run.
     const preparing = providerPackPreparingForProvider(
       providerStateWith(
         "claude-code",
@@ -221,8 +204,8 @@ describe("fallback awareness: preparing vs unable to run", () => {
   });
 
   it("blocks a failed pack only when it has nowhere to fall back to", () => {
-    // A failure is not special here. The user's Claude Code on PATH does not
-    // stop working because a managed copy hit ENOSPC.
+    // A failure is not special here. The user's Claude Code on PATH does not stop working because a managed copy
+    // hit enospc.
     const withFallback = providerPackPreparingForProvider(
       providerStateWith(
         "claude-code",
@@ -249,10 +232,8 @@ describe("fallback awareness: preparing vs unable to run", () => {
   });
 
   it("does not block while the shell probe is still settling", () => {
-    // `availabilityPending` means `candidates` UNDER-reports: the PATH probe
-    // has not finished. The execute path awaits that same probe before it
-    // decides, so a binary this snapshot cannot see yet is one the host would
-    // spawn. Fail open for the poll tick rather than dim a working provider.
+    // The execute path awaits that same probe before it decides, so a binary this snapshot cannot see yet is one
+    // the host would spawn. Fail open for the poll tick rather than dim a working provider.
     const preparing = providerPackPreparingForProvider(
       providerStateWith(
         "claude-code",
@@ -322,17 +303,8 @@ describe("preparing labels", () => {
   });
 });
 
-/**
- * The non-blocking voice. These strings go in front of a user whose provider
- * WORKS - the pack is downloading or failed behind a bundled/PATH/custom
- * binary the host will happily spawn. Softening the blocking copy would not
- * have been enough: "Claude Code setup failed" is simply false there, and
- * "Preparing Claude Code…" announces a wait that is not happening.
- *
- * The shared strings name the managed copy's update only - never the
- * provider's readiness, and never a download percentage the user is not
- * waiting on.
- */
+/** The shared strings name the managed copy's update only - never the provider's readiness, and never a
+ * download percentage the user is not waiting on. */
 describe("labels for an install that blocks nothing", () => {
   const runnable = (
     kind: ProviderPackPreparing["kind"],
@@ -391,20 +363,7 @@ describe("labels for an install that blocks nothing", () => {
   });
 });
 
-/**
- * `unrepairable` is a terminal non-retryable reason (see
- * `providerManagedInstallErrorReasonSchema`): the bytes verified against their
- * signed digest and were defective anyway, so the registry holds the identical
- * blob fleet-wide and no reinstall can change the outcome. The exhaustive
- * allow-list test below covers the broader default-deny policy.
- *
- * The failure these two describes exist to catch is a QUIET one - the enum
- * grows, the new member lands in `providerPackErrorDetail`'s deliberately
- * fail-open `default:` arm, and the user is told to "retry to try again" for a
- * build that can never work. Nothing throws, nothing logs; the copy is just
- * wrong forever. So both assertions are on the PROPERTY (no retry is promised,
- * no retry is offered) rather than on a string this file also authored.
- */
+/** The failure these two describes exist to catch is a quiet one. */
 const detailFor = (reason: ProviderManagedInstallErrorReason): string =>
   providerPackPreparingLabel(blockingFailure(reason, null), "Claude Code");
 
@@ -413,9 +372,8 @@ describe("the terminal `unrepairable` reason", () => {
     const copy = detailFor("unrepairable");
     // This terminal reason's detail must never promise a retry, in any casing.
     expect(copy).not.toMatch(/retry/i);
-    // ...and it is not the fail-open fallback wearing different words: the
-    // `unknown` arm is the closest neighbour that DOES route to a retry, so a
-    // copy identical to it would mean the new `case` never ran.
+    // ...and it is not the fail-open fallback wearing different words: the `unknown` arm is the closest neighbour
+    // that does route to a retry, so a copy identical to it would mean the new `case` never ran.
     expect(copy).not.toBe(detailFor("unknown"));
     // Still the failed line, not a progress phrase.
     expect(copy).toContain("Claude Code setup failed");
@@ -432,22 +390,15 @@ describe("the terminal `unrepairable` reason", () => {
   });
 
   it("withholds the retry for a host that cannot verify the registry", () => {
-    // The trap that made `providerPackRetryable` an allow-list. Under the old
-    // exclusion form (`reason !== "unrepairable"`) this new member was
-    // retryable BY DEFAULT - the rail would draw a button whose click reaches
-    // `providers.ensurePack` on a host with no install machinery at all.
-    // Offered-then-failed, reintroduced by a one-line vocabulary addition.
+    // Under the old exclusion form (`reason !== "unrepairable"`) this new member was retryable BY default.
     expect(
       providerPackRetryable(blockingFailure("trust-unavailable", null)),
     ).toBe(false);
   });
 
   it("default-denies retry for every protocol reason outside the explicit allow-list", () => {
-    // Enumerating the CLOSED SET from the schema itself, not a hand-copied
-    // member list: a new protocol reason that is not on the allow-list must
-    // stay non-retryable. That is the load-bearing default-deny property -
-    // stronger than naming one terminal reason, and constructible without
-    // casts.
+    // Enumerating the closed set from the schema itself, not a hand-copied member list: a new protocol reason that
+    // is not on the allow-list must stay non-retryable.
     const retryable = new Set<ProviderManagedInstallErrorReason>([
       "disk-full",
       "network",
@@ -464,31 +415,16 @@ describe("the terminal `unrepairable` reason", () => {
   });
 });
 
-/**
- * The other pole. `live-owner-stalled` means a SIBLING Traycer process on this
- * machine holds the pack's download lease and stopped advancing its progress
- * token, so this host stopped waiting behind it. It is fully retryable, with a
- * real `retryAtMs` - the exact opposite of `unrepairable`, and the two arrived
- * in the same change on purpose: they are the two ends of what `reason` is for.
- *
- * Before it existed this condition was reported as `unknown`, which is the
- * bucket for a failure the host could NOT classify. This one it classifies
- * precisely, so the assertions below are about the copy not misdirecting: not
- * the network (nothing about the registry failed), and not the fallback.
- */
+/** This one it classifies precisely, so the assertions below are about the copy not misdirecting: not the
+ * network (nothing about the registry failed), and not the fallback. */
 describe("the retryable `live-owner-stalled` reason", () => {
   it("blames the sibling process, not the user's connection", () => {
     const copy = detailFor("live-owner-stalled");
-    // The misdirection this member exists to prevent. Reported as `network`
-    // (the neighbouring plausible arm) the user is sent to check a connection
-    // that is fine; reported as `unknown` they are told nothing at all.
+    // The misdirection this member exists to prevent.
     expect(copy).not.toMatch(/online|connection|network/i);
     expect(copy).not.toBe(detailFor("network"));
     expect(copy).not.toBe(detailFor("unknown"));
-    // It names what actually happened, in the user's terms - and names the
-    // STORE rather than the machine, because the lease record carries no
-    // machine identity and "on this device" is false in the one topology that
-    // makes this reason common.
+    // It names what actually happened, in the user's terms.
     expect(copy).toContain("another Traycer process using this Traycer folder");
     expect(copy).not.toContain("on this device");
     // Still the failed line, not a progress phrase.
@@ -497,9 +433,7 @@ describe("the retryable `live-owner-stalled` reason", () => {
   });
 
   it("keeps the retry - this failure is a genuine try-again", () => {
-    // Paired with the `unrepairable` test above deliberately: same enum, same
-    // function, opposite answers. A gate that only ever said "no retry" would
-    // pass that test and strand this one with no action at all.
+    // A gate that only ever said "no retry" would pass that test and strand this one with no action at all.
     expect(detailFor("live-owner-stalled")).toMatch(/retry/i);
     expect(
       providerPackRetryable(

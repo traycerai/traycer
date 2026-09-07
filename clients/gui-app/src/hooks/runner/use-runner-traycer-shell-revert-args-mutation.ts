@@ -8,13 +8,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
-/**
- * Restores a remembered shell's flags to its family default
- * (`traycer config shell revert-args`) by clearing its stored deviation while
- * keeping the shell remembered. On success, invalidates both the shell config
- * (the selected shell's flags re-materialise to the default) and the shell list
- * (the row is retained but its state may have changed).
- */
+/** On success, invalidates both the shell config (the selected shell's flags re-materialise to the default) and the shell list (the row is retained but its state may have changed). */
 export function useRunnerTraycerShellRevertArgsMutation(): UseMutationResult<
   void,
   Error,

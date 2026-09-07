@@ -20,14 +20,8 @@ import type {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
-/**
- * Captures every `SessionImportRunClient` the controller constructs, in
- * construction order - the probe it opens on mount, and (were the guard ever
- * to fail) a second client from a `start()` call. Mocking at this seam, the
- * same one `session-import-wizard.test.tsx` and `migration-run-controller.test.tsx`
- * use for their own stream clients, lets a test play server frames straight
- * into the controller via the captured callbacks.
- */
+/** Captures every `SessionImportRunClient` the controller constructs, in construction order - the probe it
+ * opens on mount, and (were the guard ever to fail) a second client from a `start` call. */
 interface RunClientInstance {
   readonly selections: ReadonlyArray<SessionImportSelection>;
   readonly permissionMode: PermissionMode;
@@ -61,7 +55,6 @@ vi.mock(
   }),
 );
 
-/** Stands in for the app-wide stream binding, as the wizard suite does. */
 interface StreamBindingHarness {
   client: object | null;
   hostId: string | null;
@@ -106,11 +99,8 @@ function requireInstance(index: number): RunClientInstance {
   return instance;
 }
 
-/**
- * A stub satisfying `IHostStreamClient` honestly rather than casting - never
- * exercised by this suite, since `SessionImportRunClient` is itself mocked
- * above and never calls through to it.
- */
+/** A stub satisfying `IHostStreamClient` honestly rather than casting - never exercised by this suite, since
+ * `SessionImportRunClient` is itself mocked above and never calls through to it. */
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => {
@@ -134,7 +124,6 @@ function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   };
 }
 
-/** The target every `start()` call in this suite hands the current binding under. */
 function startTarget(): SessionImportRunTarget {
   const hostId = streamBinding.hostId;
   if (hostId === null) {
@@ -150,7 +139,6 @@ function runFor(hostId: string): SessionImportRunState {
   return sessionImportRunFor(useSessionImportRunStore.getState(), hostId);
 }
 
-/** The store slice for the host the suite is currently bound to. */
 function currentRun(): SessionImportRunState {
   return sessionImportRunFor(
     useSessionImportRunStore.getState(),
@@ -287,9 +275,8 @@ describe("<SessionImportRunController />", () => {
       handle.start(request, startTarget());
     });
 
-    // The probe was only asking; the click must not be dropped for it. If a
-    // run WAS in flight, this subscribe attaches to it just as the probe
-    // would have.
+    // The probe was only asking; the click must not be dropped for it. If a run was in flight, this subscribe
+    // attaches to it just as the probe would have.
     expect(probe.close).toHaveBeenCalledTimes(1);
     expect(runClientHarness.instances).toHaveLength(2);
     expect(requireInstance(1).selections).toEqual([SELECTION]);
@@ -355,10 +342,8 @@ describe("<SessionImportRunController />", () => {
       });
     });
 
-    // The app is pointed at another host while host-a's run is still going.
-    // Runs are per host, so host-a's does not hold the question back: host-b
-    // has never been asked, and a run in flight there is a fact this window
-    // has no other way to learn.
+    // Runs are per host, so host-a's does not hold the question back: host-b has never been asked, and a run in
+    // flight there is a fact this window has no other way to learn.
     streamBinding.client = { stream: "test-b" };
     streamBinding.hostId = "host-b";
     view.rerender(<SessionImportRunController />);
@@ -431,9 +416,7 @@ describe("<SessionImportRunController />", () => {
       </StrictMode>,
     );
 
-    // setup -> cleanup -> setup: the first probe is closed unanswered, the
-    // second is the live one. Without a live probe a dev build would never
-    // notice a run already going on the host.
+    // Without a live probe a dev build would never notice a run already going on the host.
     expect(runClientHarness.instances).toHaveLength(2);
     expect(requireInstance(0).close).toHaveBeenCalledTimes(1);
     expect(requireInstance(1).close).not.toHaveBeenCalled();

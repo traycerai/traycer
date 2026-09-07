@@ -1,18 +1,5 @@
 /**
- * Custom split-container resize handle.
- *
- * Pointer/keyboard mechanics live in the shared `usePointerDragCommit`
- * state machine; this component keeps only the adjacent-pair fraction
- * math. During a drag NO React state changes: the handle mutates
- * `style.flexGrow` on its two adjacent sibling child wrappers per frame
- * (refs resolved from the DOM at pointer-down), and commits the final
- * fractions to the store ONCE on pointer-up via `onCommitSizes`. The
- * global `traycer-panel-resizing` class freezes expensive overlays for the
- * drag's duration (see `lib/layout/panel-resizing-class.ts`).
- *
- * Double-click equalizes the containing group's fractions. Arrow keys nudge
- * the pair by 5% per press (committed immediately - keyboard resize has no
- * "drag" phase).
+ * Pointer/keyboard mechanics live in the shared `usePointerDragCommit` state machine; this component keeps only the adjacent-pair fraction math.
  */
 import { useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -38,10 +25,8 @@ interface SplitResizeHandleProps {
   /** The group's committed fractions (one per child). */
   readonly sizes: ReadonlyArray<number>;
   /**
-   * Px floor for each adjacent child while the container can afford it
-   * (canvas panes pass `MIN_PANE_PX`; sidebar sections pass their own,
-   * much smaller floor). The fraction floor `MIN_SPLIT_SIZE` applies
-   * regardless.
+   * Px floor for each adjacent child while the container can afford it (canvas panes pass `MIN_PANE_PX`; sidebar sections pass their own, much smaller floor).
+   * The fraction floor `MIN_SPLIT_SIZE` applies regardless.
    */
   readonly minChildPx: number;
   readonly className: string | undefined;
@@ -94,9 +79,7 @@ export function SplitResizeHandle(props: SplitResizeHandleProps) {
       if (containerSize <= 0) return false;
       dragRef.current = {
         containerSize,
-        // The px floor follows the live container: a child never shrinks
-        // below `minChildPx` while the container can afford it, and never
-        // below the fraction floor regardless.
+        // The px floor follows the live container: a child never shrinks below `minChildPx` while the container can afford it, and never below the fraction floor regardless.
         minSize: Math.max(MIN_SPLIT_SIZE, minChildPx / containerSize),
         previousChild,
         nextChild,
@@ -161,11 +144,7 @@ export function SplitResizeHandle(props: SplitResizeHandleProps) {
       aria-valuemax={100}
       aria-label="Resize pane"
       data-testid="split-resize-handle"
-      // NOT `data-group-id`: that attribute marks tab-group panes, and the
-      // canvas focus-navigation `readTileRects` collects every `[data-group-id]`
-      // as a focus target. A handle sits exactly on the seam between two panes,
-      // so it would win the spatial neighbour search - but its id is a split
-      // GROUP id, not a pane id, so the focus update would silently no-op.
+      // A handle sits exactly on the seam between two panes, so it would win the spatial neighbour search - but its id is a split GROUP id, not a pane id, so the focus update would silently no-op.
       // Keep handles on their own attribute so focus nav never sees them.
       data-resize-group-id={groupId}
       data-handle-index={index}

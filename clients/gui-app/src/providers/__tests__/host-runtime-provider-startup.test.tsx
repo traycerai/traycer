@@ -6,36 +6,13 @@ import { HostRuntimeProvider, hostRpcRegistry } from "@/lib/host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 /**
- * `HostRuntimeProvider` driven through its REAL startup path.
- *
- * Every other harness in this package hands the provider a `messengerFactory`,
- * which is exactly the branch production does not take: desktop passes `null`
- * so the runtime builds its own messenger from the selected host's endpoint.
- * The whole `auth.start()` -> `directory.start()` -> `runtime.start()` ->
- * bridge-mount sequence therefore had no coverage at all, and the way it had
- * none is the point - a provider that never settles renders `fallback`
- * forever, and a suite waiting on it HANGS. A hang is not a failure, so no
- * census reports it and no `--testTimeout` interrupts it usefully.
- *
- * So the wait here is bounded by a real timer that RESOLVES rather than
- * throws, and the assertion is made on what it found. A future regression that
- * wedges startup fails this suite with "startup never settled" plus the phase
- * it reached, instead of stalling the run.
+ * Real `HostRuntimeProvider` startup (`messengerFactory` is `null`, as desktop). Wait on a timer that resolves, not throws, so a wedge fails instead of hanging.
  */
 
 const REAL_TIMER_BUDGET_MS = 5_000;
 const POLL_MS = 10;
 
-/**
- * Waits for `predicate` under a REAL timer, and resolves either way.
- *
- * Deliberately not `waitFor`: Testing Library's version throws on timeout,
- * which reads as a normal assertion failure and hides the distinction this
- * suite exists to draw - "settled into the wrong state" versus "never settled
- * at all". Also deliberately not fake timers: the thing under test is a chain
- * of real promises through services this suite does not drive, so the clock
- * has to be the real one.
- */
+/** Wait on the real clock and resolve either way. waitFor throws on timeout; fake timers cannot drive this promise chain. */
 async function settledWithin(predicate: () => boolean): Promise<boolean> {
   const deadline = Date.now() + REAL_TIMER_BUDGET_MS;
   while (Date.now() < deadline) {
@@ -46,9 +23,7 @@ async function settledWithin(predicate: () => boolean): Promise<boolean> {
 }
 
 /**
- * A shell that owns no host process and no stored credentials - the ordinary
- * cold start, and the cheapest one to reason about. `hosts: []` keeps the
- * directory empty so nothing here depends on a fixture host's shape.
+ * Cold start: no host process, no credentials, empty directory.
  */
 function buildRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({

@@ -2,11 +2,8 @@ import { useCallback, useState } from "react";
 
 export interface PrimaryChangeAnnouncement {
   readonly message: string;
-  // Monotonically increasing per announcement. Two CONSECUTIVE identical
-  // messages (duplicate folder basenames: switch to "repo", remove it,
-  // fallback lands on the other "repo") must still both announce - a plain
-  // string state would bail in React on the second set and never mutate the
-  // live-region DOM, so screen readers would hear nothing.
+  // Two consecutive identical messages (duplicate folder basenames: switch to "repo", remove it, fallback lands
+  // on the other "repo") must still both announce.
   readonly seq: number;
 }
 

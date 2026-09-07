@@ -21,15 +21,7 @@ import {
   useEpicUpdateArtifactStatus,
 } from "@/hooks/epic/use-epic-node-mutations";
 
-/**
- * Pin for the trap `use-epic-node-mutations.ts` reintroduced: reading
- * `isPending` as `handle.store(selector)` (the bound-store call form) is not
- * recognizable as a hook to the React Compiler, which memoizes the call on
- * `handle` and skips it on the next render with the same handle - shifting
- * the hook order and throwing "Should have a queue". Only a suite compiled
- * through `vitest.react-compiler.config.ts` can see this; the plain config
- * does not run the compiler at all.
- */
+/** Only a suite compiled through `vitest.react-compiler.config.ts` can see this; the plain config does not run the compiler at all. */
 
 function fakeFactory(): EpicStreamClientFactory {
   return () => ({
@@ -97,10 +89,7 @@ describe("use-epic-node-mutations under React Compiler", () => {
       </EpicSessionContext.Provider>,
     );
 
-    // A store-driven re-render - the same trigger a real pending write
-    // command uses - is what surfaces the trap: it re-renders the SAME
-    // mounted fiber (same `handle` reference) via the zustand subscription
-    // itself, not via a new element from the test.
+    // A store-driven re-render - the same trigger a real pending write command uses - is what surfaces the trap: it re-renders the SAME mounted fiber (same `handle` reference) via the zustand subscription itself, not via a new element from the test.
     act(() => {
       handle.store.setState({
         writeCommands: [

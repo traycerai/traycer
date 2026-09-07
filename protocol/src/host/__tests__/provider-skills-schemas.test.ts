@@ -1,8 +1,5 @@
 /**
- * Schema unit tests for the skills-settings redesign additions:
- * inspect / edit / update mutate actions, inspect result, ProviderSkill
- * origin/conflict, live capability skew-gate keys, and the v7.0 pre-image
- * copies that must not grow those keys.
+ * Schema unit tests for the skills-settings redesign additions: inspect / edit / update mutate actions, inspect result, ProviderSkill origin/conflict, live capability skew-gate keys, and the v7.0 pre-image copies that.
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";

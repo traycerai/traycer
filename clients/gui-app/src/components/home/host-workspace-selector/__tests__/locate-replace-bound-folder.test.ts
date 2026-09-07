@@ -87,16 +87,13 @@ describe("locateReplaceBoundFolder", () => {
       remove,
     });
     expect(outcome).toEqual({ kind: "same-path-only" });
-    // Distinct list is empty — never call add for same-path-only, never remove.
+    // Distinct list is empty - never call add for same-path-only, never remove.
     expect(add).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
   });
 
   it("reports a retained entry when the old path could not be removed", async () => {
     // The adds landed, so the binding really did change and must be committed.
-    // But answering `replaced` here would tell the caller the absent entry is
-    // gone when it is still bound - it keeps blocking owner readiness while the
-    // UI reports a finished Locate, and nothing is left to retry against.
     const add = vi.fn(() => Promise.resolve(true));
     const remove = vi.fn(() => Promise.resolve(false));
     const outcome = await locateReplaceBoundFolder({

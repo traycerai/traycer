@@ -27,9 +27,8 @@ const MAX_LOG_ARRAY_ITEMS = 20;
 const MAX_LOG_OBJECT_KEYS = 40;
 const NOT_SCALAR_LOG_VALUE = Symbol("not-scalar-log-value");
 
-// The renderer's threshold, hydrated from the desktop log level over IPC (see
-// LogLevelBridge). Defaults to debug in dev for DX, info otherwise; in the
-// desktop shell the configured `desktopLogLevel` takes over once it loads.
+// The renderer's threshold, hydrated from the desktop log level over IPC (see LogLevelBridge).
+// Defaults to debug in dev for DX, info otherwise; in the desktop shell the configured `desktopLogLevel` takes over once it loads.
 let appLogLevel: LogLevel = import.meta.env.DEV ? "debug" : DEFAULT_LOG_LEVEL;
 
 export function setAppLogLevel(level: LogLevel): void {
@@ -144,8 +143,7 @@ function emitLog(
     return;
   }
   // Desktop production forwards renderer warning/error console messages only.
-  // The structured payload preserves the logical level; desktop remaps it back
-  // to info/warn/error when writing traycer-desktop.log.
+  // The structured payload preserves the logical level; desktop remaps it back to info/warn/error when writing traycer-desktop.log.
   console.warn(line);
 }
 

@@ -89,11 +89,7 @@ const {
     }),
   };
 });
-// The pending-creation registry is the open-epic store's seam
-// (`stores/epics/open-epic/pending-chat-creations.ts`), covered on its own
-// terms in that store's tests. Mocked at its facade leaf here so these tests
-// pin the WIRING - that the create hooks call it with the right facts on
-// success/error - without dragging in a live open-epic session.
+// Mocked at its facade leaf here so these tests pin the WIRING - that the create hooks call it with the right facts on success/error - without dragging in a live open-epic session.
 vi.mock("@/lib/chats/pending-chat-creations", () => ({
   beginPendingChatCreation,
   clearPendingChatCreation,
@@ -295,15 +291,7 @@ describe("useEpicRenameChat", () => {
   });
 
   it("addresses the Epic session's host, not the app-wide one", () => {
-    // Both call sites (the sidebar chat tree, the canvas tab rename) live
-    // inside an Epic and outside every tile `TabHostProvider`. The ambient
-    // client this used to read is the EFFECTIVE host, which diverges from the
-    // session host for the whole of a re-point - a window in which the sidebar
-    // stays interactive because only the canvas is made inert.
-    //
-    // Identity, not "a client was passed": `useHostClient()` is mocked to
-    // return a fresh object per call, so a regression fails here on the
-    // object rather than on an absence.
+    // Identity, not "a client was passed": `useHostClient()` is mocked to return a fresh object per call, so a regression fails here on the object rather than on an absence.
     renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
     expect(getCapturedMutation("epic.renameChat").client).toBe(
       epicSessionHostClient,
@@ -497,14 +485,7 @@ describe("useEpicArchiveChat", () => {
         | undefined;
       onError: (e: HostRpcError) => void;
     };
-    // Still no optimistic CACHE WRITE - nothing here fabricates an archived
-    // row. What the handlers do is refresh the host's record list, and that is
-    // a correction rather than an addition (chat-sync-v2 ticket 49): this test
-    // used to assert both were absent, on the premise that "the archive flag
-    // lives in the epic Y.Doc, so the host's write replicates back through the
-    // epic stream". Since the single-write pivot `archivedAt` is a chat-DATABASE
-    // fact and nothing replicates it, so without the refetch an archived swept
-    // chat stays in the tree until the record poll fires.
+    // What the handlers do is refresh the host's record list, and that is a correction rather than an addition (chat-sync-v2 ticket 49): this test used to assert both were absent, on the premise that "the archive flag lives in the epic Y.Doc, so the host's write replicates back through the epic stream".
     expect(opts.onMutate).toBeDefined();
     expect(opts.onSuccess).toBeDefined();
   });
@@ -544,10 +525,7 @@ describe("useEpicArchiveChat", () => {
       throw new Error("expected setChatArchived lifecycle handlers");
     }
 
-    // Idempotent "already in requested state" is a success response, DRIVEN
-    // here rather than merely present: `onMutate` captures the named target
-    // and the viewing session, and `onSuccess` for `{ updated: false }` must
-    // still refresh both record lists while announcing nothing.
+    // Idempotent "already in requested state" is a success response, DRIVEN here rather than merely present: `onMutate` captures the named target and the viewing session, and `onSuccess` for `{ updated: false }` must still refresh both record lists while announcing nothing.
     const variables: ArchiveChatMutationInput = {
       epicId: "epic-1",
       chatId: "chat-1",
@@ -633,14 +611,7 @@ describe("useEpicArchiveChat", () => {
       onError: (e: HostRpcError) => void;
     };
     opts.onError(makeError("E_HOST_UNSUPPORTED"));
-    // Archive is user-initiated, so it follows the FOREGROUND convention:
-    // `toastFromHostError` reports the failure rather than swallowing it (only
-    // the background helper swallows capability gaps, since nobody asked for
-    // that work). Silence here would read as a broken button. The capability
-    // gate keeps this path cold - reaching it means the host changed under a
-    // live session. `toastFromHostError` maps E_HOST_UNSUPPORTED to a specific
-    // host-upgrade message (a version gap, not a failed archive), which is the
-    // right actionable copy for this exact case, so the fallback never shows.
+    // Archive is user-initiated, so it follows the FOREGROUND convention: `toastFromHostError` reports the failure rather than swallowing it (only the background helper swallows capability gaps, since nobody asked for that work).
     expect(toast.error).toHaveBeenCalledWith(
       "This needs a newer Traycer host. Update the host to continue.",
     );

@@ -3,24 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-/**
- * The activity heatmap's `--usage-heat-N` ramp follows GitHub's contribution
- * graph, which does NOT use one direction for both modes:
- *
- *   light  #9be9a8 → #216e39   (light → dark)
- *   dark   #0e4429 → #39d353   (dark → bright)
- *
- * "Busier" means "further from the surface", and on a dark canvas that is
- * brighter. Flipping dark mode to light→dark for symmetry reads as a bug fix
- * and is not one: it sinks the busiest tile to ~1.3:1 against the dark preset
- * cards while the quietest sits above 6:1, so the emptiest days become the
- * loudest marks. These are 10px borderless marks - separation from the
- * surface is their only channel.
- *
- * The ramp is CSS, which no component test sees, so this reads the
- * stylesheet directly and pins both the direction and the contrast floor
- * that makes the direction matter.
- */
+/** These are 10px borderless marks - separation from the surface is their only channel. */
 const CSS = readFileSync(
   path.join(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -29,7 +12,6 @@ const CSS = readFileSync(
   "utf8",
 );
 
-/** WCAG relative luminance of a `#rrggbb` color. */
 function relativeLuminance(color: string): number {
   const hex = color.replace("#", "");
   const channel = (offset: number): number => {
@@ -49,7 +31,6 @@ function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** The four active steps of one `.usage-chart-root` block, level 1 → 4. */
 function rampIn(blockSelector: string): readonly string[] {
   const start = CSS.indexOf(blockSelector);
   if (start < 0) throw new Error(`missing block ${blockSelector}`);
@@ -70,7 +51,6 @@ function rampIn(blockSelector: string): readonly string[] {
 const LIGHT = ".usage-chart-root {";
 const DARK = ".dark .usage-chart-root {";
 
-/** Every dark surface the Usage panels actually render on (`--card` per preset). */
 const DARK_CARDS: ReadonlyArray<readonly [string, string]> = [
   ["default", "#343434"],
   ["neutral", "#1a1a1a"],
@@ -99,9 +79,8 @@ describe("--usage-heat ramp", () => {
   });
 
   it("keeps the busiest dark tile the most separated one on every preset card", () => {
-    // The reason the dark ramp inverts. A light→dark dark-mode ramp puts
-    // level 4 at 1.30:1 on nord - fainter than level 1 - so assert the
-    // ordering that a re-flip would break, plus a floor no flip survives.
+    // A light→dark dark-mode ramp puts level 4 at 1.30:1 on nord - fainter than level 1 - so assert the ordering
+    // that a re-flip would break, plus a floor no flip survives.
     const dark = rampIn(DARK);
     const faintest = dark[0];
     const busiest = dark[3];

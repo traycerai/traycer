@@ -8,24 +8,10 @@ import {
 import type { RuntimeContext } from "../runtime";
 import { noopLogger } from "../../logger";
 
-// Human-mode progress rendering. The regression pinned here: during a host
-// download the registry client interleaves percent-less liveness heartbeats
-// (`registry-archive-<phase>`, message "fetching host archive (attempt N)")
-// between the percent-bearing byte ticks of the SAME transfer
-// (registry/fetch-resource.ts emits the heartbeat at the top of every
-// attempt, immediately before publishing the resume offset). A renderer that
-// treats those heartbeats as discrete stage lines finalizes the live TTY bar
-// with a newline and the next byte tick starts a NEW bar - one frozen,
-// stacked bar per attempt. The contract: one bar per download, redrawn in
-// place; a heartbeat is a status update on that bar, never its finalizer.
+// Human-mode progress rendering.
+// The regression pinned here: during a host download the registry client interleaves percent-less liveness heartbeats (`registry-archive-<phase>`, message "fetching host archive (attempt N)") between the percent-bearing byte ticks of the SAME transfer (registry/fetch-resource.ts emits the heartbeat at the top of every attempt, immediately before publishing the resume offset).
 
-/**
- * The rail's cell count, mirrored from `../output`. Not exported from there:
- * the module's public surface is `createOutput`, and a test that reached in
- * for the constant would be asserting the renderer's arithmetic against
- * itself. Stated here so a width change reddens these cases rather than
- * silently re-deriving with them.
- */
+/** The rail's cell count, mirrored from `../output`. Not exported from there: the module's public surface is `createOutput`, and a test that reached in for the constant would be asserting the renderer's arithmetic against itself. */
 const PROGRESS_BAR_WIDTH = 24;
 
 function makeRuntime(): RuntimeContext {
@@ -56,9 +42,7 @@ function downloadTick(
   };
 }
 
-// Mirrors `emitRegistryHeartbeat` in ../../registry/client.ts: stage
-// `registry-archive-<phase>`, human message in `message`, all numeric
-// fields null (a heartbeat is a liveness tick, not a transfer measurement).
+// Mirrors `emitRegistryHeartbeat` in ../../registry/client.ts: stage `registry-archive-<phase>`, human message in `message`, all numeric fields null (a heartbeat is a liveness tick, not a transfer measurement).
 function archiveHeartbeatTick(
   phase: "attempt" | "watchdog" | "backoff",
   message: string,
@@ -135,12 +119,8 @@ function captureJsonStdout(): StdoutCapture {
 
 let capture: StderrCapture | null = null;
 
-// COLOUR IS ENV-DEPENDENT, so it is pinned rather than inherited. The rail's
-// unfilled half is dimmed on a colour-capable TTY, and a developer (or a CI
-// runner) with `NO_COLOR` set would otherwise be reading a different string
-// from these assertions than the next person. Every case below states which
-// of the two it is exercising; `NO_COLOR` is the default because the plain
-// rail is the one whose GEOMETRY these tests are about.
+// COLOUR IS ENV-DEPENDENT, so it is pinned rather than inherited.
+// The rail's unfilled half is dimmed on a colour-capable TTY, and a developer (or a CI runner) with `NO_COLOR` set would otherwise be reading a different string from these assertions than the next person.
 const originalNoColor = process.env.NO_COLOR;
 
 beforeEach(() => {
@@ -179,9 +159,7 @@ describe("createOutput human-mode TTY progress bar", () => {
     // the last real transfer numbers - not as a bare stage line.
     expect(writes[1]).toContain("fetching host archive (attempt 1)");
     expect(writes[1]).toContain("0%");
-    // The RAIL, not `[`: that used to be this line and it never tested
-    // anything - every frame starts with the `\x1b[2K` clear, so a bar drawn
-    // with no brackets at all satisfied it.
+    // The RAIL, not `[`: that used to be this line and it never tested anything - every frame starts with the `\x1b[2K` clear, so a bar drawn with no brackets at all satisfied it.
     expect(writes[1]).toContain("─".repeat(PROGRESS_BAR_WIDTH));
     expect(writes[2]).toContain("downloading host 1.5.0");
     expect(writes[2]).toContain("61%");
@@ -272,12 +250,8 @@ describe("createOutput progress bar rendering", () => {
   }
 
   it("never prints a byte count, however many bytes the tick carries", () => {
-    // THE RULE, and the reason for it: this bar is on screen while someone
-    // waits for Traycer to start, and "(5.2 MB / 10.0 MB)" there reads as
-    // "it started downloading something because I ran a command" - reported
-    // as alarming on the GUI's equivalent card, and fixed the same way in
-    // both. The tick still CARRIES the figures (asserted below), so this is
-    // the renderer withholding them, not a fixture that never supplied them.
+    // THE RULE, and the reason for it: this bar is on screen while someone waits for Traycer to start, and "(5.2 MB / 10.0 MB)" there reads as "it started downloading something because I ran a command" - reported as alarming on the GUI's equivalent card, and fixed the same way in both.
+    // The tick still CARRIES the figures (asserted below), so this is the renderer withholding them, not a fixture that never supplied them.
     capture = captureStderr(true);
     const output = createOutput(makeRuntime());
     const tick = downloadTick(
@@ -310,15 +284,12 @@ describe("createOutput progress bar rendering", () => {
   });
 
   it("holds the rail at a fixed cell count so the percentage column never moves", () => {
-    // A bar whose width tracked its fill would shuffle the number sideways on
-    // every frame - the terminal equivalent of the card that changed height
-    // mid-wait. Checked across the whole range, including the two ends.
+    // A bar whose width tracked its fill would shuffle the number sideways on every frame - the terminal equivalent of the card that changed height mid-wait.
+    // Checked across the whole range, including the two ends.
     capture = captureStderr(true);
     const output = createOutput(makeRuntime());
-    // FRACTIONS INCLUDED. `ProgressInfo.percent` is a `number`, and every
-    // producer in this repo happening to `Math.round` its byte ratio is each
-    // caller remembering rather than a property of this sink - "2.5%" is five
-    // characters and would move the column the rail exists to hold still.
+    // FRACTIONS INCLUDED.
+    // `ProgressInfo.percent` is a `number`, and every producer in this repo happening to `Math.round` its byte ratio is each caller remembering rather than a property of this sink - "2.5%" is five characters and would move the column the rail exists to hold still.
     for (const percent of [0, 1, 2, 2.5, 17, 42, 61, 99.6, 100]) {
       output.progress(
         downloadTick("downloading host 1.5.0", percent, percent, 100),
@@ -352,9 +323,8 @@ describe("createOutput progress bar rendering", () => {
   });
 
   it("fills by FLOOR with a half-cell leading edge, so it neither overstates a start nor completes early", () => {
-    // `Math.round` on whole cells drew a full cell from 2.1% and a full rail
-    // from ~98%; the half-cell edge is what buys the resolution back without
-    // either lie. One cell is 100/24 = 4.1666…%, so 61% is 14.6 cells.
+    // `Math.round` on whole cells drew a full cell from 2.1% and a full rail from ~98%; the half-cell edge is what buys the resolution back without either lie.
+    // One cell is 100/24 = 4.1666…%, so 61% is 14.6 cells.
     capture = captureStderr(true);
     const output = createOutput(makeRuntime());
     for (const percent of [0, 2, 3, 61, 99, 100]) {
@@ -377,9 +347,8 @@ describe("createOutput progress bar rendering", () => {
   });
 
   it("dims the unfilled rail on a colour-capable TTY and prints it bare under NO_COLOR", () => {
-    // The two halves differ by line WEIGHT first, so the bar still reads
-    // without colour - which is the whole point of dimming only the empty
-    // run. A completed rail closes no sequence it never opened.
+    // The two halves differ by line WEIGHT first, so the bar still reads without colour - which is the whole point of dimming only the empty run.
+    // A completed rail closes no sequence it never opened.
     delete process.env.NO_COLOR;
     capture = captureStderr(true);
     const coloured = createOutput(makeRuntime());
@@ -420,16 +389,8 @@ describe("createOutput human-mode non-TTY progress", () => {
   });
 });
 
-// JSON mode is the DESKTOP path - `traycer-cli.ts` spawns with `--json` and
-// parses one NDJSON event per line - so anything this serializer drops is
-// invisible to the host controller no matter what the producer emits.
-//
-// The regression pinned here: `workUnits` was hardcoded `null` on this branch
-// while `extract-heartbeat.ts` was emitting a rising archive-entry count. That
-// count is the ONLY moving field an extract has (no percent, no byte
-// position), so nulling it made every heartbeat of a multi-minute extract
-// serialize identically, the controller's progress-advance key never changed,
-// and a healthy first install was promoted to the Retry surface.
+// JSON mode is the DESKTOP path - `traycer-cli.ts` spawns with `--json` and parses one NDJSON event per line - so anything this serializer drops is invisible to the host controller no matter what the producer emits.
+// The regression pinned here: `workUnits` was hardcoded `null` on this branch while `extract-heartbeat.ts` was emitting a rising archive-entry count.
 describe("createOutput JSON-mode progress", () => {
   function jsonRuntime(): RuntimeContext {
     return { ...makeRuntime(), json: true };
@@ -467,11 +428,8 @@ describe("createOutput JSON-mode progress", () => {
     });
 
     expect(events.map((event) => event.workUnits)).toEqual([1, 47]);
-    // The point of the field, asserted as the EFFECT rather than as one
-    // value: every other field a consumer can key on is byte-identical
-    // between these two heartbeats, so `workUnits` is the only thing that can
-    // tell them apart. Re-null it and this arm reddens on the equality below
-    // as well as on the values above.
+    // The point of the field, asserted as the EFFECT rather than as one value: every other field a consumer can key on is byte-identical between these two heartbeats, so `workUnits` is the only thing that can tell them apart.
+    // Re-null it and this arm reddens on the equality below as well as on the values above.
     expect(events[0].stage).toEqual(events[1].stage);
     expect(events[0].percent).toEqual(events[1].percent);
     expect(events[0].bytes).toEqual(events[1].bytes);
@@ -483,9 +441,8 @@ describe("createOutput JSON-mode progress", () => {
       output.progress(downloadTick("downloading host 1.5.0", 61, 610, 1000));
     });
 
-    // The control. Forwarding must not become inventing: a producer that
-    // counts nothing keeps saying so, or the advance key would go moving for
-    // every stage and stop meaning "this one is advancing".
+    // The control.
+    // Forwarding must not become inventing: a producer that counts nothing keeps saying so, or the advance key would go moving for every stage and stop meaning "this one is advancing".
     expect(events[0].workUnits).toBeNull();
   });
 });

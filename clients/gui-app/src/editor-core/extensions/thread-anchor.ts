@@ -1,17 +1,6 @@
 import { Mark, mergeAttributes } from "@tiptap/core";
 
-/**
- * Tiptap mark mirroring the `threadAnchor` definition in the internal shared
- * Epic-persistence document schema.
- *
- * Storage parity with Views is required: the same Y.Doc round-trips through
- * Tiptap Cloud, so the parse/render shape MUST match the shared schema or
- * gui-app will silently drop anchors authored in Views (and vice versa).
- *
- * Visual state (active / hover / resolved / draft) is layered by
- * `CommentDecorationsExtension` as inline decorations, not by mark attrs,
- * so the persisted document never carries UI-only data.
- */
+/** Parse/render must match the shared Views schema or Y.Doc round-trips drop anchors. UI state lives on CommentDecorationsExtension, not mark attrs. */
 export const ThreadAnchor = Mark.create({
   name: "threadAnchor",
   inclusive: false,

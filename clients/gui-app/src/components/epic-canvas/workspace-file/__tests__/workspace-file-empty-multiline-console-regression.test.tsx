@@ -22,24 +22,8 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 }));
 
 /**
- * Real, unmocked `@pierre/diffs@1.3.1` regression for RESUME9, exercised
- * through the actual `WorkspaceFileRenderer` rendering pipeline (not the
- * library directly - see `workspace-empty-file-cachekey-console-regression.test.ts`
- * for the library-level proof of the underlying defect).
- *
- * Activates an empty file, types a second line, then blurs (discarding the
- * unsaved draft back to empty, and detaching the editor - matching a
- * pointer-activation sub-test's cleanup before a keyboard-activation
- * sub-test reuses the same file identity/tile). Before the fix,
- * `WorkspaceFileRenderer` re-derived `<File file={...}>` from the live
- * `content` prop on every render while keeping a `file.cacheKey` stable for
- * the whole file's lifetime - exactly the pattern that trips the library's
- * stale line-count cache once the editor is no longer attached to correct
- * the incoming snapshot. The fix bumps a generation counter into
- * `cacheKey` on every `editing` transition instead: `Editor`'s
- * `persistState` still needs a cacheKey stable for the whole of one
- * attached session, but the key now differs the moment that session ends,
- * so a post-session render can never hit the stale cache.
+ * Activates an empty file, types a second line, then blurs (discarding the unsaved draft back to empty, and detaching the editor - matching a pointer-activation sub-test's cleanup before a keyboard-activation sub-test reuses the same file identity/tile).
+ * Before the fix, `WorkspaceFileRenderer` re-derived `<File file={...}>` from the live `content` prop on every render while keeping a `file.cacheKey` stable for the whole file's lifetime - exactly the pattern that trips the library's stale line-count cache once the editor is no longer attached to correct the incoming snapshot.
  */
 const originalGetContextDescriptor = Object.getOwnPropertyDescriptor(
   HTMLCanvasElement.prototype,
@@ -93,10 +77,7 @@ function EmptyFileEditHarness(): ReactNode {
     onActivate,
     onActivationError: () => undefined,
     onChange: setDraftContent,
-    // Discards the unsaved draft on blur, back to the disk baseline (empty)
-    // - matching a certification harness resetting a pointer-activation
-    // sub-test's typed content before a keyboard-activation sub-test reuses
-    // the SAME kept-alive tile/file identity.
+    // Discards the unsaved draft on blur, back to the disk baseline (empty) - matching a certification harness resetting a pointer-activation sub-test's typed content before a keyboard-activation sub-test reuses the SAME kept-alive tile/file identity.
     onBlur: () => {
       setEditing(false);
       setDraftContent("");
@@ -106,13 +87,7 @@ function EmptyFileEditHarness(): ReactNode {
 
   return (
     <div>
-      {/* Exercised directly instead of a real DOM blur event: jsdom does not
-          reliably move focus into a shadow-DOM contentEditable region, so a
-          real `.blur()` call on the editor never dispatches the underlying
-          `blur` event here. Calling the adapter's own exposed `onBlur`
-          drives the exact same production code path
-          (`use-diff-click-to-edit.ts`'s `editorOptions.onBlur`) without
-          depending on jsdom's focus simulation. */}
+      {/* Exercised directly instead of a real DOM blur event: jsdom does not reliably move focus into a shadow-DOM contentEditable region, so a real `.blur()` call on the editor never dispatches the underlying `blur` event here. Calling the adapter's own exposed `onBlur` drives the exact same production code path (`use-diff-click-to-edit.ts`'s `editorOptions.onBlur`) without depending on jsdom's focus simulation. */}
       <button
         type="button"
         onClick={() => {
@@ -228,13 +203,7 @@ describe("empty workspace file: real activation, multi-line insert, then blur ba
       const editor = getRegisteredDiffEditor(SURFACE_ID);
       if (editor === undefined) throw new Error("editor never attached");
 
-      // The first content this previously-empty file ever receives spans TWO
-      // lines - the exact "0 lines -> multiple lines" jump the E2E session
-      // hit - driven through the real Editor API (not a raw keyboard-event
-      // simulation, since jsdom's contentEditable typing isn't reliable) so
-      // `onChange` fires and the harness's real React state (and therefore
-      // the real `<File file={...}>` prop) updates exactly the way
-      // `workspace-file-tile.tsx`'s `renderedContent` does in production.
+      // The first content this previously-empty file ever receives spans TWO lines - the exact "0 lines -> multiple lines" jump the E2E session hit - driven through the real Editor API (not a raw keyboard-event simulation, since jsdom's contentEditable typing isn't reliable) so `onChange` fires and the harness's real React state (and therefore the real `<File file={...}>` prop) updates exactly the way `workspace-file-tile.tsx`'s `renderedContent` does in production.
       await act(async () => {
         editor.applyEdits([
           {
@@ -248,16 +217,9 @@ describe("empty workspace file: real activation, multi-line insert, then blur ba
         await new Promise((resolve) => setTimeout(resolve, 50));
       });
 
-      // Blur discards the unsaved draft back to empty and detaches the
-      // editor - the reverted-to-empty render that follows is the one that
-      // happens WITHOUT an attached editor's own reconciliation protecting
-      // it.
+      // Blur discards the unsaved draft back to empty and detaches the editor - the reverted-to-empty render that follows is the one that happens WITHOUT an attached editor's own reconciliation protecting it.
       fireEvent.click(rendered.getByRole("button", { name: "Blur" }));
       await act(async () => {
-        // Give any of the library's own scheduled/deferred render or
-        // background-tokenize passes a chance to actually run and throw -
-        // the real regression fires from one of those, not synchronously
-        // from the blur callback itself.
         await new Promise((resolve) => setTimeout(resolve, 100));
       });
 

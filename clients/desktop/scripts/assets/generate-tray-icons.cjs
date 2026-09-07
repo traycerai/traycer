@@ -2,24 +2,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-/**
- * Deterministically regenerates the tray icon PNGs that ship with the desktop
- * shell from `resources/tray/logo-source.png`. The generator is intentionally
- * dependency-free (only runtime built-ins) so contributors can rebuild the assets
- * without installing an image-processing toolchain.
- *
- * Output (under `clients/desktop/resources/tray/`):
- *   - trayTemplate.png      16x16  black + alpha, macOS template image
- *   - trayTemplate@2x.png   32x32  black + alpha, macOS retina template
- *   - tray.png              16x16  white + alpha, Windows / Linux fallback
- *   - tray@2x.png           32x32  white + alpha, retina variant
- *
- * The macOS variants use only black pixels with alpha so AppKit can invert
- * them automatically against light/dark menu bars when
- * `nativeImage.setTemplateImage(true)` is set (see `src/electron-main/tray/tray.ts`).
- * The non-mac variants use white pixels so the icon stays visible against
- * the dark default tray backgrounds on Windows 10/11 and most Linux DEs.
- */
 
 const { readFileSync, writeFileSync, mkdirSync } = require("node:fs");
 const { resolve } = require("node:path");

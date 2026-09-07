@@ -1,18 +1,5 @@
 /**
- * Translate Mac Cmd/Option line-edit chords into the escape sequences shells
- * expect: Cmd+←/→ jump to line start/end, Option+←/→ jump by word, Cmd+⌫ kills
- * to line start, and Cmd+Enter sends a TUI newline. Returns the bytes to inject,
- * or null when the chord isn't a line-edit translation.
- *
- * Only stable named keys (ArrowLeft/Right, Backspace, Enter) are matched via
- * `event.key`. Printable keys vary by keyboard layout (`event.key === "p"` on
- * QWERTY is `"r"` on Dvorak), so a printable-key translation would need
- * `event.code` instead - none are needed here.
- *
- * This is the terminal's own encoding layer, not a second app-hotkey system:
- * the capture-phase `KeybindingProvider` already claims any chord bound to an
- * action before xterm sees the event, so this only handles the residue it
- * deliberately lets through (none of these chords are bound to app actions).
+ * Translate Mac Cmd/Option line-edit chords into the escape sequences shells expect: Cmd+←/→ jump to line start/end, Option+←/→ jump by word, Cmd+⌫ kills to line start, and Cmd+Enter sends a TUI newline.
  */
 export function translateLineEditChord(
   event: KeyboardEvent,

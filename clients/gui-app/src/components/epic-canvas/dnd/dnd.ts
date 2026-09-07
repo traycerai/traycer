@@ -29,10 +29,7 @@ import {
 import type { NodeFamily } from "@/lib/reparent-rules";
 
 /**
- * Each root-create panel owns exactly one node family. Single source of truth
- * for the panel→family mapping shared by the reparent preview gate
- * (`root-dnd-provider`) and the drag-end commit re-check (`root-dnd-commits`),
- * so the two cannot drift.
+ * Single source of truth for the panel→family mapping shared by the reparent preview gate (`root-dnd-provider`) and the drag-end commit re-check (`root-dnd-commits`), so the two cannot drift.
  */
 export const PANEL_NODE_FAMILY: Readonly<
   Record<RootCreatePanelId, NodeFamily>
@@ -90,10 +87,7 @@ interface LeftPanelGroupBoundary {
 }
 
 /**
- * Every canvas-openable source carries the epic + view-tab it is dragged
- * FROM. The root DndContext lives at the app shell (outside any epic
- * session provider), so commits resolve their epic/tab scope from the
- * payloads instead of from React context.
+ * The root DndContext lives at the app shell (outside any epic session provider), so commits resolve their epic/tab scope from the payloads instead of from React context.
  */
 export interface EpicCanvasArtifactTabDragData {
   readonly kind: typeof ARTIFACT_TAB_DND_TYPE;
@@ -134,11 +128,8 @@ export interface EpicCanvasGitDiffTileDragData {
 }
 
 /**
- * A shell's Background-panel row or transcript-card door, dragged out to give
- * that shell's output window a place on the canvas. The tile ref is minted at the source (like a
- * terminal row), and one-window-per-command survives it: the ref's content id
- * IS the command id, so the drop resolves to a MOVE of the existing window
- * whenever one is already open.
+ * A shell's Background-panel row or transcript-card door, dragged out to give that shell's output window a place on the canvas.
+ * The tile ref is minted at the source (like a terminal row), and one-window-per-command survives it: the ref's content id IS the command id, so the drop resolves to a MOVE of the existing window whenever one is already open.
  */
 export interface EpicCanvasManagedCommandOutputDragData {
   readonly kind: typeof MANAGED_COMMAND_OUTPUT_DND_TYPE;
@@ -155,10 +146,7 @@ export interface EpicCanvasWorkspaceFileDragData {
 }
 
 /**
- * A workspace directory row is mentionable but not canvas-openable, so it has
- * its own source shape instead of pretending to be a `WorkspaceFileRef`.
- * `folderPath` is the host-canonical, workspace-relative token (including its
- * trailing slash) used by the existing @-mention contract.
+ * A workspace directory row is mentionable but not canvas-openable, so it has its own source shape instead of pretending to be a `WorkspaceFileRef`.
  */
 export interface EpicCanvasWorkspaceFolderDragData {
   readonly kind: typeof WORKSPACE_FOLDER_DND_TYPE;
@@ -178,11 +166,8 @@ export interface EpicCanvasLeftPanelRailDragData {
 }
 
 /**
- * A same-epic artifact reference dragged out of a chat message (a block
- * card or an inline chip). Self-describing: it carries the artifact's
- * IDENTITY so `sourceToTileRef` builds the tile ref directly, with no
- * lookup against the sidebar-tree projection or open-epic registry. No
- * `instanceId` - that is minted per drop at commit time (constraint C2).
+ * A same-epic artifact reference dragged out of a chat message (a block card or an inline chip).
+ * Self-describing: it carries the artifact's IDENTITY so `sourceToTileRef` builds the tile ref directly, with no lookup against the sidebar-tree projection or open-epic registry.
  */
 export interface EpicCanvasChatArtifactDragData {
   readonly kind: typeof CHAT_ARTIFACT_DND_TYPE;
@@ -197,10 +182,7 @@ export interface EpicCanvasChatArtifactDragData {
 }
 
 /**
- * An agent row rendered outside the sidebar tree. Unlike `sidebar-node`, this
- * source carries its bound host explicitly: chat projections do not own host
- * identity, and resolving against the app's active host would violate the
- * tab-for-life host binding when another device is selected.
+ * Unlike `sidebar-node`, this source carries its bound host explicitly: chat projections do not own host identity, and resolving against the app's active host would violate the tab-for-life host binding when another device is selected.
  */
 export interface EpicCanvasActiveAgentDragData {
   readonly kind: typeof ACTIVE_AGENT_DND_TYPE;
@@ -229,9 +211,7 @@ export type EpicCanvasDragSourceData =
   | EpicCanvasLeftPanelRailDragData;
 
 /**
- * Ephemeral composer target data. The callbacks deliberately live in dnd-kit
- * `data`: the root DndContext is outside every composer/editor provider, while
- * the target owns the exact editor instance that must receive the attachment.
+ * The callbacks deliberately live in dnd-kit `data`: the root DndContext is outside every composer/editor provider, while the target owns the exact editor instance that must receive the attachment.
  */
 export interface ComposerAttachmentDropTargetData {
   readonly kind: typeof COMPOSER_ATTACHMENT_DROP_TARGET_TYPE;
@@ -243,9 +223,7 @@ export interface ComposerAttachmentDropTargetData {
 export type LeftPanelRailDropPosition = "before" | "after" | "combine";
 
 /**
- * Canvas drop targets carry the view-tab (and, for the empty shell, the
- * epic) that owns them so the root-level commit can address the right
- * canvas without React context.
+ * Canvas drop targets carry the view-tab (and, for the empty shell, the epic) that owns them so the root-level commit can address the right canvas without React context.
  */
 export type EpicCanvasDropTargetData =
   | {
@@ -288,10 +266,8 @@ export type EpicCanvasDropTargetData =
     }
   | {
       /**
-       * A sidebar tree row as a reparent drop target. `nodeId` is the new
-       * parent; `panelId` scopes the spring-load `expand(viewTabId, panelId,
-       * nodeId)` to the row's tree (chats vs artifacts). Same-family validity
-       * is decided by the preview-time `canReparent` pre-flight, NOT here.
+       * A sidebar tree row as a reparent drop target.
+       * `nodeId` is the new parent; `panelId` scopes the spring-load `expand(viewTabId, panelId, nodeId)` to the row's tree (chats vs artifacts).
        */
       readonly kind: "sidebar-reparent-row";
       readonly epicId: string;
@@ -381,10 +357,7 @@ export function getSidebarNodeDragId(nodeId: string): string {
 }
 
 /**
- * Active-agent rows are a second rendering of nodes already registered by the
- * sidebar. Key them by occurrence rather than node id so dnd-kit's registry
- * never collides with the sidebar row (or another open tile showing the same
- * active-agent list).
+ * Key them by occurrence rather than node id so dnd-kit's registry never collides with the sidebar row (or another open tile showing the same active-agent list).
  */
 export function getActiveAgentDragId(occurrenceKey: string): string {
   return `active-agent:${occurrenceKey}`;
@@ -414,10 +387,7 @@ export function getWorkspaceFileDragId(fileId: string): string {
 }
 
 /**
- * The same artifact can appear many times in one thread (repeated update
- * cards, multiple inline mentions), so the drag id keys on a per-occurrence
- * value the caller supplies (a `useId()`), NOT the artifact id - otherwise
- * dnd-kit's registry collides on duplicate ids (constraint C3).
+ * The same artifact can appear many times in one thread (repeated update cards, multiple inline mentions), so the drag id keys on a per-occurrence value the caller supplies (a `useId()`), NOT the artifact id - otherwise dnd-kit's registry collides on duplicate ids (constraint C3).
  */
 export function getChatArtifactDragId(occurrenceKey: string): string {
   return `chat-artifact:${occurrenceKey}`;
@@ -882,19 +852,10 @@ function readLeftPanelDropTargetData(
 /** Edge-side drop positions - the four half-splits (canonical in tile-tree.ts). */
 export type { EdgeDropPosition } from "@/stores/epics/canvas/types";
 
-/**
- * Drop-zone detection over a pane body. Delegates to the paseo-ported
- * 15%-edge / 40%-center hit testing (`pane-drop-geometry.ts`). Never
- * returns `null` - every point inside the group's body resolves to one of
- * the five zones.
- */
+/** Never returns `null` - every point inside the group's body resolves to one of the five zones. */
 /**
  * Optional corridor-aware pane-body resolution.
- *
- * Unlike `getEdgeDropPositionFromPoint`, this can answer "no target": the
- * neutral corridor is inert. The in-task tile interaction does not opt into
- * this geometry: its split feedback and commit remain immediate across the
- * full pane.
+ * Unlike `getEdgeDropPositionFromPoint`, this can answer "no target": the neutral corridor is inert.
  */
 export function getPaneCorridorPositionFromPoint(
   point: PointLike,
@@ -1020,13 +981,7 @@ export function getEpicCanvasDropPreview(
   rect: RectLike | null,
   point: PointLike,
   /**
-   * Opt-in corridor geometry can answer "no target". The production in-task
-   * tile interaction passes `false` to retain the immediate five-position
-   * pane split affordance.
-   *
-   * Required rather than defaulted: repo convention bans default parameters
-   * (`fn(x = 1)`), and a silent `false` here is the difference between the
-   * corridor being inert and ~84% of a pane committing a split.
+   * Required rather than defaulted: repo convention bans default parameters (`fn(x = 1)`), and a silent `false` here is the difference between the corridor being inert and ~84% of a pane committing a split.
    */
   useNeutralCorridor: boolean,
 ): EpicCanvasDropPreview {

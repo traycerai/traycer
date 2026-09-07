@@ -64,9 +64,8 @@ function addAcknowledgedTerminalId(
 }
 
 /**
- * Returns host-acknowledged presentation identities in exactly one authority
- * scope. Snapshot absence proves deletion only for these canonical pointers;
- * legacy/import evidence and pending creates require explicit host evidence.
+ * Returns host-acknowledged presentation identities in exactly one authority scope.
+ * Snapshot absence proves deletion only for these canonical pointers; legacy/import evidence and pending creates require explicit host evidence.
  */
 export function acknowledgedPlainTerminalPresentationIdsForScope(
   hostId: string,
@@ -146,14 +145,7 @@ function hasPlainTerminalPresentationRefs(
     .tabs.some((tab) => tab.hostId === hostId && tab.sessionId === terminalId);
 }
 
-/**
- * Removes every supported presentation pointer for one host-owned terminal.
- *
- * Durable terminal identity is shared across epic and independent surfaces,
- * so an authoritative deletion observed by either surface must invalidate
- * both stores. Unsupported future-authority refs remain presentation-only and
- * are deliberately left untouched.
- */
+/** Removes every supported presentation pointer for one host-owned terminal. */
 function removePlainTerminalPresentationRefs(
   hostId: string,
   terminalId: string,
@@ -174,9 +166,8 @@ function fanOutPlainTerminalDeletionOnce(args: {
 }
 
 /**
- * True when this revision is the collection's retained tombstone and has not
- * been overtaken by a newer live projection. Equal revision is conclusive
- * presentation evidence; a lower or raced revision is not.
+ * True when this revision is the collection's retained tombstone and has not been overtaken by a newer live projection.
+ * Equal revision is conclusive presentation evidence; a lower or raced revision is not.
  */
 function deletionMatchesRetainedTombstone(
   collection: PlainTerminalCollection | undefined,
@@ -208,9 +199,8 @@ function deletionMatchesRetainedTombstone(
 }
 
 /**
- * Sweeps current supported refs for a Query tombstone that was already
- * accepted. Presentation can hydrate after the first Query transition, so
- * this is not a new projection.
+ * Sweeps current supported refs for a Query tombstone that was already accepted.
+ * Presentation can hydrate after the first Query transition, so this is not a new projection.
  */
 export function consumeRetainedPlainTerminalTombstone(args: {
   readonly queryClient: QueryClient;
@@ -240,9 +230,8 @@ export function consumeRetainedPlainTerminalTombstone(args: {
 }
 
 /**
- * Sweeps every retained Query tombstone against current live and closed
- * presentation. Used by scope-level reconciliation so a late closed-only
- * epic payload does not need a later unary response.
+ * Sweeps every retained Query tombstone against current live and closed presentation.
+ * Used by scope-level reconciliation so a late closed-only epic payload does not need a later unary response.
  */
 export function reconcileRetainedPlainTerminalTombstones(args: {
   readonly queryClient: QueryClient;
@@ -323,9 +312,8 @@ function collectionsForEpicRestore(
 }
 
 /**
- * True when a retained epic tombstone still forbids restoring this closed
- * terminal. A newer live projection overtaking the tombstone does not block.
- * A still-deferred presentation obligation blocks restore without consuming.
+ * True when a retained epic tombstone still forbids restoring this closed terminal.
+ * A newer live projection overtaking the tombstone does not block.
  */
 export function retainedPlainTerminalTombstoneBlocksClosedRestore(args: {
   readonly queryClient: QueryClient;
@@ -362,10 +350,8 @@ export function retainedPlainTerminalTombstoneBlocksClosedRestore(args: {
 }
 
 /**
- * Synchronous closed-payload restore gate. Rejects a retained tombstone
- * without requiring a mounted observer. Consumes when the obligation is
- * settled; leaves presentation untouched while fanout is still deferred.
- * Returns true when the caller must not restore.
+ * Synchronous closed-payload restore gate.
+ * Rejects a retained tombstone without requiring a mounted observer.
  */
 export function rejectClosedPlainTerminalRestore(args: {
   readonly queryClient: QueryClient;
@@ -399,11 +385,8 @@ export function rejectClosedPlainTerminalRestore(args: {
 }
 
 /**
- * The sole revisioned-deletion commit boundary. Query state is written before
- * presentation effects. A stale or overtaken revision is a no-op. An equal
- * retained tombstone does not advance Query sequence, but still sweeps any
- * supported refs that hydrated after the first accepted transition.
- * Initialization may defer the fanout until the snapshot prefix is settled.
+ * The sole revisioned-deletion commit boundary.
+ * Query state is written before presentation effects.
  */
 export function commitPlainTerminalDeletion(args: {
   readonly queryClient: QueryClient;
@@ -477,9 +460,8 @@ export function commitPlainTerminalDeletion(args: {
 }
 
 /**
- * Discharges one accepted deletion after the snapshot and buffered prefix for
- * the current epoch have settled. The obligation lives in Query state so a
- * reconnect or replacement stream cannot strand presentation references.
+ * Discharges one accepted deletion after the snapshot and buffered prefix for the current epoch have settled.
+ * The obligation lives in Query state so a reconnect or replacement stream cannot strand presentation references.
  */
 export function commitPlainTerminalDeferredDeletion(args: {
   readonly queryClient: QueryClient;
@@ -519,17 +501,7 @@ export function commitPlainTerminalDeferredDeletion(args: {
   return true;
 }
 
-/**
- * Commits one absence proved by a settled snapshot initialization epoch.
- *
- * Snapshot absence proves deletion only for host-acknowledged pointers: an
- * unacknowledged ref or a pending create is legitimately absent from the
- * host's snapshot, so absence alone must never destroy it. That precondition
- * is enforced here through `acknowledgedPlainTerminalPresentationIdsForScope`
- * rather than left to the caller, because both exports are public and a caller
- * that passes a raw terminal id would otherwise delete a user's pending
- * terminal.
- */
+/** Commits one absence proved by a settled snapshot initialization epoch. */
 export function commitPlainTerminalSnapshotOmission(args: {
   readonly queryClient: QueryClient;
   readonly queryKey: QueryKey;

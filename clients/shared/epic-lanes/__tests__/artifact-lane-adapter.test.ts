@@ -30,16 +30,8 @@ import {
 } from "../artifact-lane-adapter";
 
 /**
- * `artifact.subscribe@1.0` adapter - `@1` tri-state -> epoch-addressed doc
- * events, send routing, resume offer, and readiness transitions.
- *
- * Every server frame is built by `.parse()`-ing through the real wire schema
- * and narrowing on `kind`, never hand-typed. Frames declaring a binary
- * payload are exercised through the real `ArtifactStreamClient` against a
- * stub `IStreamSession` in its own describe block at the bottom - the fake
- * factory used elsewhere in this file cannot exercise the
- * binary-payload-missing drop, because that drop lives inside the stream
- * client, not the adapter.
+ * `artifact.subscribe@1.0` adapter - `@1` tri-state -> epoch-addressed doc events, send routing, resume offer, and readiness transitions.
+ * Every server frame is built by `.parse()`-ing through the real wire schema and narrowing on `kind`, never hand-typed.
  */
 
 const ARTIFACT_ID = "artifact-1";
@@ -652,7 +644,7 @@ describe("createArtifactLaneAdapter - generation guard", () => {
   });
 });
 
-// ─── Binary-payload-missing drop, through the REAL ArtifactStreamClient ────
+// ─── Binary-payload-missing drop, through the real ArtifactStreamClient ────
 
 describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-payload-missing drop", () => {
   class StubStreamSession implements IStreamSession {

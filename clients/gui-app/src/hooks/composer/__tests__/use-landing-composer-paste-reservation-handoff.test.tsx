@@ -45,10 +45,8 @@ vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
     await importActual<typeof import("@/lib/composer/landing-image-gc")>();
   gcMocks.actualScheduleLandingImageReconcile =
     actual.scheduleLandingImageReconcile;
-  // Default: a no-op stub, not a call-through. The real scheduler starts a
-  // 250ms timer that later calls the real `reconcile()`, which would otherwise
-  // escape most tests' boundaries. Tests that need the real reclaim chain
-  // opt in via mockImplementation → actualScheduleLandingImageReconcile.
+  // Default: a no-op stub, not a call-through.
+  // The real scheduler starts a 250ms timer that later calls the real `reconcile()`, which would otherwise escape most tests' boundaries.
   gcMocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
   return {
     ...actual,
@@ -121,11 +119,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/**
- * Fixup 02 / B2: reservation must stay charged through the conversion-to-
- * insertion handoff and through every started sibling write on batch failure.
- * Release fires exactly once on every terminal path.
- */
+/** Fixup 02 / B2: reservation must stay charged through the conversion-to- insertion handoff and through every started sibling write on batch failure. */
 describe("useLandingComposerPaste - reservation handoff (B2)", () => {
   // Capture the real export once at suite load, before any spy replaces the
   // namespace property. Re-wrapping the live property across tests would nest
@@ -157,10 +151,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     return { promise, resolve };
   }
 
-  /**
-   * Wrap every real reservation so we can count `release` without replacing
-   * the ledger math. `releaseSpies` holds the wrappers in call order.
-   */
+  /** Wrap every real reservation so we can count `release` without replacing the ledger math. */
   function spyReservationReleases(): {
     readonly releaseSpies: Array<Mock<() => void>>;
   } {

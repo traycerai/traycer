@@ -234,11 +234,7 @@ describe("useProvidersListForClient table cadence", () => {
     const fetchTimes: number[] = [];
     vi.setSystemTime(0);
 
-    // Spy on the SPINE's own `requestForWithSignal`, not the pinned
-    // requester's `requestWithSignal`: the requester is a Proxy that
-    // special-cases that property to a fresh closure over the spine's method
-    // on every access, so a spy installed on the requester itself is never
-    // consulted - the spine's method is the one actually invoked underneath.
+    // Spy on the SPINE's own `requestForWithSignal`, not the pinned requester's `requestWithSignal`: the requester is a Proxy that special-cases that property to a fresh closure over the spine's method on every access, so a spy installed on the requester itself is never consulted - the spine's method is the one actually invoked underneath.
     const originalList = fixture.spine.requestForWithSignal.bind(fixture.spine);
     vi.spyOn(fixture.spine, "requestForWithSignal").mockImplementation(
       async (entry, method, params, signal) => {

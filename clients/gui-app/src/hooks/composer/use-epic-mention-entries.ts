@@ -14,11 +14,7 @@ import type {
 
 export interface UseEpicMentionEntriesParams {
   readonly requests: ReadonlyArray<MentionEpicRequest>;
-  /**
-   * The composer's host - the SAME client its workspace/terminal/GitHub
-   * mention lanes use, so a tab bound to a non-default host lists that host's
-   * artifacts and never the app-wide default's. `null` disables the queries.
-   */
+  /** The composer's host - the SAME client its workspace/terminal/GitHub mention lanes use, so a tab bound to a non-default host lists that host's artifacts and never the app-wide default's. */
   readonly client: HostClient<HostRpcRegistry> | null;
 }
 
@@ -28,14 +24,7 @@ export interface UseEpicMentionEntriesResult {
   readonly isFetching: boolean;
   readonly lastFetchedAt: number;
   /**
-   * Refetches every `epic.mention*` query behind this list, resolving when
-   * they all settle.
-   *
-   * It resolves rather than returning void because the composer's Artifacts
-   * refresh button awaits it: the button's spinner has to reflect a real
-   * round-trip. Until this was wired up, that button called `setStep` with the
-   * step it was already on, which the picker store early-returns from - so it
-   * spun for its minimum visible time and fetched nothing at all.
+   * Resolves when every `epic.mention*` refetch settles so the Artifacts refresh spinner reflects a real round-trip.
    */
   readonly refetch: () => Promise<void>;
   readonly error: HostRpcError | null;
@@ -47,11 +36,7 @@ export function useEpicMentionEntries(
   const { client } = params;
   const readiness = useReactiveHostReadiness(client);
 
-  // The CURRENTLY bound host, readable when the refetch below settles. That
-  // continuation is a plain promise chain closed over one render; a composer
-  // following the app-wide host can rebind while the round-trip is in flight,
-  // and the closure has no way to see it. The ref is the live end of the
-  // comparison.
+  // The CURRENTLY bound host, readable when the refetch below settles.
   const boundHostIdRef = useRef(readiness.hostId);
   useEffect(() => {
     boundHostIdRef.current = readiness.hostId;
@@ -74,22 +59,7 @@ export function useEpicMentionEntries(
         query.dataUpdatedAt > 0 ? [query.dataUpdatedAt] : [],
       ),
     ),
-    // A rejected refresh is REPORTED, because a user asked for this one.
-    //
-    // `refetch()` resolves with a failed result rather than rejecting, so
-    // without this the button spins for its round-trip and stops exactly as it
-    // does on success - a refresh that never reached the host, presented as
-    // one that found nothing new. The picker has no inline surface to say it
-    // in either: `useMentionItems` publishes `loadFailed: false` outright.
-    //
-    // Same split as the GitHub catalog's two lanes: the manual lane speaks up,
-    // automatic ones degrade in place and leave the cached rows on screen.
-    //
-    // The host is captured at REQUEST time and compared at settle time - the
-    // repo's standing host-swap rule, applied to a query refetch. Without it,
-    // an app-wide composer rebinding mid-round-trip toasts the departed
-    // host's rejection into the newly bound host's UI, blaming a host that
-    // was never asked.
+    // Manual refresh reports rejection (`refetch` resolves failed, does not throw). Compare request-time host at settle so a mid-flight composer rebind does not toast the departed host.
     refetch: () => {
       const issuedAgainstHostId = readiness.hostId;
       return Promise.all(queries.map((query) => query.refetch())).then(

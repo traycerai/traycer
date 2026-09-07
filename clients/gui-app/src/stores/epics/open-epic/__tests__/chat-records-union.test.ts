@@ -1,21 +1,3 @@
-/**
- * The store-backed chat RECORD channel (chat-sync-v2 ticket 49).
- *
- * Since the single-write pivot the epic Y.Doc is no longer where a chat's
- * existence is recorded: creation writes only the chat database, and the upgrade
- * sweep DELETES a doc entry once its chat is proven published. These tests drive
- * the session through both halves - `epic.listChatRecords` rows in through
- * `applyChatRecords`, doc entries in through the epic stream - and assert what
- * the renderer's record table is in each combination.
- *
- * The ablation each of these is written against: with the union removed
- * (`chats` = the doc projection), the first test's chat is in no slice at all -
- * no record, no tree row, nothing to rename.
- *
- * The second describe block drives the PUSH half (`applyChatRecordDelta`,
- * multi-host-chats record layer) into the SAME table, with its own ablations
- * named on each test.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
@@ -78,10 +60,8 @@ function docChatEntry(args: {
 }
 
 /**
- * An `epic.listChatRecords@1.1` row. `docResident: false` by default because
- * that is what this builder models - a row the host's chat REGISTRY answered
- * with. Doc-resident cases override it explicitly, so a fixture never inherits
- * a home it did not mean to claim.
+ * An `epic.listChatRecords@1.1` row. `docResident: false` by default because that is what this
+ * builder models - a row the host's chat REGISTRY answered with.
  */
 function record(
   overrides: Partial<ChatRecordSummaryV11>,
@@ -129,11 +109,7 @@ function newSession(seedDoc: (doc: Y.Doc) => void): Session {
   const handle = openStoreForTest({
     epicId: "epic-test",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -158,9 +134,8 @@ function newSession(seedDoc: (doc: Y.Doc) => void): Session {
 }
 
 /**
- * Keyed explicitly rather than read back off each entry: a `Y.Map` that has not
- * been integrated into a doc yet answers `undefined` to `get`, so the id has to
- * travel beside it.
+ * Keyed explicitly rather than read back off each entry: a `Y.Map` that has not been integrated
+ * into a doc yet answers `undefined` to `get`, so the id has to travel beside it.
  */
 function seedChats(
   entries: ReadonlyArray<readonly [string, Y.Map<unknown>]>,
@@ -182,9 +157,8 @@ function signedInAs(userId: string): void {
     );
 }
 
-// The auth store is module-global, so a test that signs in must not leak that
-// identity into the next one. Owned here at the suite level rather than by
-// per-test `finally` blocks.
+// The auth store is module-global, so a test that signs in must not leak that identity into the
+// next one. Owned here at the suite level rather than by per-test `finally` blocks.
 afterEach(() => {
   useAuthStore.getState().setSignedOut();
 });
@@ -218,9 +192,8 @@ describe("chats.byId unions the host's records with the doc projection", () => {
       userId: "user-a",
       hostId: "host-1",
       isTitleEditedByUser: true,
-      // The registry answered for this row, so the home it states is the one
-      // that reaches the projection - the post-sweep steady state is exactly
-      // "the store holds it and the doc does not".
+      // The registry answered for this row, so the home it states is the one that reaches the projection
+      // - the post-sweep steady state is exactly "the store holds it and the doc does not".
       docResident: false,
       settings: null,
       archivedAt: null,
@@ -321,13 +294,8 @@ describe("chats.byId unions the host's records with the doc projection", () => {
   });
 
   it("keeps the published chats identity across a doc patch the union masks", () => {
-    // A chat present in BOTH sources holds a fresh MERGED object in the union
-    // on every recompute (the row wins each field, the doc supplies settings),
-    // so a per-entry REFERENCE gate can never say "unchanged" for it.
-    // Ablation: gate `unionInto`'s publish on reference equality instead of
-    // `chatSlicesEq` and the doc mutation below - masked field-for-field by
-    // the row - hands every chat consumer a new `chats` identity carrying the
-    // same content.
+    // A chat present in BOTH sources holds a fresh MERGED object in the union on every recompute (the
+    // row wins each field, the doc supplies settings), so a per-entry REFERENCE gate can never say
     const session = newSession(
       seedChats([
         [
@@ -364,13 +332,8 @@ describe("chats.byId unions the host's records with the doc projection", () => {
   });
 
   it("un-aliases `chats` from `docChats` the moment a record answers, even when the projected content is byte-for-byte identical", () => {
-    // The reverse of the alias-preserving test above: doc-only mode publishes
-    // `chats` AS `docChats` (same object), and `chats === docChats` is what a
-    // consumer reads as "no record layer here". If the FIRST record answer
-    // for a row projects to content structurally equal to what the doc
-    // already held, a naive splice of both sides independently would hand
-    // back the same shared `prev` object for both - `chats` would still ===
-    // `docChats` after the record layer arrived, silently lying about it.
+    // The reverse of the alias-preserving test above: doc-only mode publishes `chats` AS `docChats`
+    // (same object), and `chats === docChats` is what a consumer reads as "no record layer here".
     const session = newSession(
       seedChats([
         [
@@ -414,19 +377,11 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     // Un-aliased even though nothing about the content changed.
     expect(store.getState().chats).not.toBe(store.getState().docChats);
     expect(store.getState().chats.byId.both.title).toBe("Same content");
-    // The row reference DOES move on this first answer, and only on it: the
-    // doc entry claims `docResident: true` (the doc is where that row lives)
-    // and the record STATES the home, so the first record answer for a chat
-    // present in both sources genuinely changes a projected field. Asserting
-    // reference identity across that transition would be asserting that a
-    // change did not happen.
     expect(beforeRow.docResident).toBe(true);
     expect(store.getState().chats.byId.both.docResident).toBe(false);
     const afterFirstAnswer = store.getState().chats.byId.both;
 
-    // What this test is actually for: the churn is ONE-TIME, not per poll. A
-    // second identical answer must re-hand the same row object, or every 20s
-    // refresh would re-render every chat consumer in the epic.
+    // What this test is actually for: the churn is ONE-TIME, not per poll.
     store.getState().applyChatRecords(
       [
         record({
@@ -509,10 +464,6 @@ describe("chats.byId unions the host's records with the doc projection", () => {
   });
 
   it("keeps another signed-in user's rows out of the record table", () => {
-    // Rows in hand when the account switches, or a host that answered for the
-    // wrong identity: the union applies the same display filter the doc
-    // projection does, at projection time rather than at ingest, so a user
-    // switch re-derives it instead of trusting an older decision.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     session.handle.store
@@ -560,11 +511,6 @@ describe("chats.byId unions the host's records with the doc projection", () => {
   });
 
   it("rejects a STALE poll answer for a row a later poll already advanced past", () => {
-    // The same `revision <= held.revision` guard `applyChatRecordDelta`
-    // applies to a push, now on the poll's OWN merge path: a delayed
-    // `epic.listChatRecords` answer serving an OLDER revision of a row must
-    // not regress it, or a healthy pending rename's overlay chain would read
-    // the regression as a peer overwrite and get terminally swept.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
     store
@@ -632,17 +578,8 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   });
 
   it("never lets a collaborator's SAME-ID row evict the viewer's own chat", () => {
-    // Record identity is `(epicId, ownerUserId, chatId)`: the id is host-minted,
-    // so two users can hold the same one inside one task. Ablation: key
-    // `chatRecordRows` on `chatId` alone and the second delta below overwrites
-    // the first - the viewer's own chat vanishes from their own sidebar because
-    // somebody else created a chat whose id happened to collide.
-    //
-    // The collaborator's row carries a HIGHER revision, which is the realistic
-    // case and the one that matters: revisions are monotonic PER RECORD, so two
-    // owners' revisions for the same id are incomparable. Under id-only keying
-    // the staleness guard would compare them anyway - and the bigger number
-    // wins, whoever it belongs to.
+    // Record identity is `(epicId, ownerUserId, chatId)`: the id is host-minted, so two users can hold
+    // the same one inside one task.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
@@ -677,11 +614,8 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   });
 
   it("retains a held-back row and re-derives the table when the signed-in user changes", () => {
-    // The reason selecting one owner AT INGEST is safe: the raw rows are all
-    // retained, so a user switch rebuilds the table rather than re-filtering a
-    // selection that was already frozen. Ablation: drop the
-    // `republishChatRecordsForCurrentUser` call from the auth subscription and
-    // user-b signs in to user-a's chat list.
+    // The reason selecting one owner AT INGEST is safe: the raw rows are all retained, so a user
+    // switch rebuilds the table rather than re-filtering a selection that was already frozen.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
@@ -736,10 +670,8 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   });
 
   it("reads a foreign ARCHIVED row as archived, though it carries no timestamp", () => {
-    // The two planes disagree about the TYPE of this fact: the host registry
-    // stores a timestamp, the cloud row (which a foreign row replicates) stores
-    // a boolean. Ablation: copy `archivedAt` straight through in
-    // `chatProjectionFromRecord` and this row renders as an ACTIVE chat.
+    // The two planes disagree about the TYPE of this fact: the host registry stores a timestamp, the
+    // cloud row (which a foreign row replicates) stores a boolean.
     const session = newSession(seedChats([]));
     session.handle.store.getState().applyChatRecordDelta({
       kind: "upsert",
@@ -778,9 +710,8 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   });
 
   it("rejects a STALE-revision upsert and accepts the next fresh one", () => {
-    // Ablation: drop the `record.revision <= held.revision` guard and the
-    // replayed frame below reinstates "Old title" - a rename that undoes itself
-    // whenever the transport redelivers, reorders or duplicates a delta.
+    // Ablation: drop the `record.revision <= held.revision` guard and the replayed frame below
+    // reinstates "Old title" - a rename that undoes itself whenever the transport redelivers, reorders
     const session = newSession(seedChats([]));
     const store = session.handle.store;
     store
@@ -844,10 +775,8 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   });
 
   it("keeps the retraction reason for a chat this session never held a record for", () => {
-    // The cross-host case: the tab was opened from the unified sidebar, so the
-    // record table never had the row, and the removal changes no slice at all.
-    // Ablation: gate `publishChatRecords` on `chatSlicesEq` alone and the open
-    // tab is never told - it keeps rendering a transcript it may no longer read.
+    // The cross-host case: the tab was opened from the unified sidebar, so the record table never had
+    // the row, and the removal changes no slice at all.
     const session = newSession(seedChats([]));
     session.handle.store.getState().applyChatRecordDelta({
       kind: "remove",
@@ -862,9 +791,8 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   });
 
   it("is absorbing: neither a later upsert nor a stale poll resurrects the row", () => {
-    // Ablation: drop the retraction check from `applyChatRecords` and the
-    // in-flight poll below puts the chat straight back, seconds after its tab
-    // announced it was gone.
+    // Ablation: drop the retraction check from `applyChatRecords` and the in-flight poll below puts
+    // the chat straight back, seconds after its tab announced it was gone.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
     store
@@ -907,9 +835,8 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
       chatId: "b",
       reason: "deleted",
     });
-    // The FIRST removal re-projects even though it changed no row - that is the
-    // deliberate gate bypass that lets a cross-host tab hear about its own
-    // retraction. Same content, new identity.
+    // The FIRST removal re-projects even though it changed no row - that is the deliberate gate bypass
+    // that lets a cross-host tab hear about its own retraction. Same content, new identity.
     const afterFirstRemove = store.getState().chats;
     expect(afterFirstRemove).toEqual(before);
 
@@ -932,21 +859,13 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
 });
 
 /**
- * `beginPendingChatCreation` / `clearPendingChatCreation` (chat-sync-v2
- * ticket A5) - the registry that makes a just-created chat visible before its
- * record completes the round trip. These drive the SAME store the two
- * describe blocks above do, so a pending row and a record row are exercised
- * through the one seam (`publishChatRecords`) both the poll and the push path
- * share.
+ * `beginPendingChatCreation` / `clearPendingChatCreation` (chat-sync-v2 ticket A5) - the registry
+ * that makes a just-created chat visible before its record completes the round trip.
  */
 describe("pending chat creations", () => {
   it("survives the poll's omission retraction when the answer does not include it yet", () => {
     signedInAs("user-a");
-    // Ablation: this is the whole point of the ticket. Fold the union out of
-    // `publishChatRecords` and the second `applyChatRecords` below - which
-    // reconciles `chatRecordRows` against what the answer carries and knows
-    // nothing about "just-created" - evicts it exactly like any other stale
-    // entry would be.
+    // Ablation: this is the whole point of the ticket.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
     store.getState().applyChatRecords([record({ chatId: "existing" })], null);
@@ -1051,11 +970,8 @@ describe("pending chat creations", () => {
 
   it("does not poison the record revision guard when a real row hands the pending one over", () => {
     signedInAs("user-a");
-    // Pins the reason the pending map is held separately from
-    // `chatRecordRows` rather than seeded into it with a fabricated
-    // `revision: 0`: that would make the real row's own first delta (also
-    // revision 0) read as a replay of itself and be dropped, stranding the
-    // stand-in permanently.
+    // Pins the reason the pending map is held separately from `chatRecordRows` rather than seeded into
+    // it with a fabricated `revision: 0`: that would make the real row's own first delta (also
     const session = newSession(seedChats([]));
     const store = session.handle.store;
     store.getState().beginPendingChatCreation({
@@ -1151,9 +1067,8 @@ describe("pending chat creations", () => {
   });
 
   it("hides a pending creation from a different signed-in user, and restores it on switching back", () => {
-    // Same display filter the record and doc slices apply, at the same
-    // projection-time boundary - see the "keeps another signed-in user's rows
-    // out" test above for the record-row equivalent.
+    // Same display filter the record and doc slices apply, at the same projection-time boundary - see
+    // the "keeps another signed-in user's rows out" test above for the record-row equivalent.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
@@ -1175,16 +1090,6 @@ describe("pending chat creations", () => {
   });
 
   it("is not retired by a COLLABORATOR's same-id record, through either path", () => {
-    // The pending-side half of "never lets a collaborator's SAME-ID row evict
-    // the viewer's own chat" above, and the reason retirement keys on
-    // `(ownerUserId, chatId)` rather than the id: `chatId` is not globally
-    // unique, so two owners can hold the same one inside one task.
-    //
-    // Ablation: retire on `chatId` alone and user-b's row - which is filtered
-    // straight back out of the published table because it is not user-a's -
-    // silently takes user-a's just-created chat down with it. The user watches
-    // the agent they just made disappear because a collaborator's unrelated
-    // chat happened to collide.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
@@ -1234,16 +1139,8 @@ describe("pending chat creations", () => {
   });
 
   it("retains even when the record beat the create's answer, so a stale poll cannot leave nothing", () => {
-    // An ordering the create cannot control: the owning host pushes its record
-    // the moment it commits, so the delta can arrive BEFORE `epic.createChat`
-    // answers.
-    //
-    // Ablation: refuse the registration in that case - "there is already a real
-    // row, nothing to stand in for" - and the list answer below, issued after
-    // the push was ingested yet legitimately omitting the row (cross-host, the
-    // session host's own SQLite lags a foreign commit by the replication
-    // path), retracts that row leaving NEITHER a record nor a stand-in. The
-    // chat vanishes until another poll, which cross-host is minutes away.
+    // An ordering the create cannot control: the owning host pushes its record the moment it commits,
+    // so the delta can arrive BEFORE `epic.createChat` answers.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
@@ -1265,10 +1162,8 @@ describe("pending chat creations", () => {
     expect(store.getState().chats.allIds).toEqual(["c"]);
     expect(store.getState().chats.byId.c.title).toBe("Served");
 
-    // The omitting answer lands, fenced AFTER the push ingest - so the
-    // omission is sanctioned to retract the served row (an answer whose fence
-    // predated the ingest would hold it instead; that fence behavior is the
-    // monotonic-merge contract's own test, in the applyChatRecords block).
+    // The omitting answer lands, fenced AFTER the push ingest - so the omission is sanctioned to
+    // retract the served row (an answer whose fence predated the ingest would hold it instead; that
     store.getState().applyChatRecords([], store.getState().peekChatIngestSeq());
     expect(store.getState().chats.allIds).toEqual(["c"]);
     expect(store.getState().chats.byId.c.title).toBe("");
@@ -1283,11 +1178,8 @@ describe("pending chat creations", () => {
   });
 
   it("files the stand-in under the CAPTURED owner, not whoever is signed in when it lands", () => {
-    // The create was authorized as user-a; the profile changed while it was in
-    // flight, and the host's answer arrives with user-b signed in. Reading the
-    // profile here would file user-a's chat under user-b - visible to a user who
-    // never made it, and unretirable by user-a's real record, which arrives
-    // under its actual owner and so never matches the row.
+    // The create was authorized as user-a; the profile changed while it was in flight, and the host's
+    // answer arrives with user-b signed in.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
@@ -1315,16 +1207,8 @@ describe("pending chat creations", () => {
   });
 
   it("refuses to retain a creation the caller could not attribute", () => {
-    // A stand-in has to say whose it is: the registry keys on
-    // `(ownerUserId, chatId)`, and an unattributed row could be retired by a
-    // stranger's same-id record or rendered to whoever signs in next. Refusing
-    // degrades to the behavior that existed before this registry - the chat
-    // surfaces when its own record arrives - which is why every test above
-    // names an owner.
-    //
-    // `null` is how the CALLER reports "nobody was signed in when the request
-    // left". The store no longer reads the profile itself, so this is the whole
-    // of the unattributed case rather than a stand-in for an empty auth store.
+    // Refusing degrades to the behavior that existed before this registry - the chat surfaces when its
+    // own record arrives - which is why every test above names an owner.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
 

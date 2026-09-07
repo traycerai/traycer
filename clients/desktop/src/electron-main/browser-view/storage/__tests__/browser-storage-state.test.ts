@@ -10,13 +10,7 @@ import {
   type BrowserStorageCaptureWebContents,
 } from "../browser-storage-state";
 
-/**
- * `setStorageCookie` is what every host->jar write goes through, and it is the
- * normalisation the whole ownership model rests on: the shell decides the
- * `url`, the scope and the expiry, so the sender's attributes are re-derived
- * rather than trusted. `mergeObservedProfileCookies` is its one exported
- * caller since H05 collapsed the seed onto it, so the case lives here.
- */
+/** `mergeObservedProfileCookies` is its one exported caller since H05 collapsed the seed onto it, so the case lives here. */
 describe("host-contributed cookie normalisation", () => {
   it("derives the url and scope from the cookie rather than the sender", async () => {
     const written: CookiesSetDetails[] = [];
@@ -133,13 +127,6 @@ describe("host-contributed cookie normalisation", () => {
     },
   );
 
-  /**
-   * H11: the three spellings a real jar hands out that the old
-   * already-canonical check rejected outright. Each has to reach the jar under
-   * the host form Chromium itself uses, with the sender's DOMAIN attribute
-   * untouched - the wire form is what tells a host-only cookie from a domain
-   * cookie, and normalising it would change the cookie's scope.
-   */
   it.each([
     ["uppercase", "Example.COM", "https://example.com/", null],
     ["trailing root dot", "example.com.", "https://example.com/", null],
@@ -193,11 +180,8 @@ describe("host-contributed cookie normalisation", () => {
   );
 
   it("V-18: refuses a partitioned (CHIPS) cookie, never writing it to the unpartitioned jar", async () => {
-    // RULE: isUnpartitionedCookie refuses any cookie with a non-null
-    // partitionKey before it reaches cookies.set - a host that names a
-    // partition must not have that cookie land in the desktop's ordinary,
-    // unpartitioned jar. Its unpartitioned sibling in the same batch must
-    // still be applied.
+    // RULE: isUnpartitionedCookie refuses any cookie with a non-null partitionKey before it reaches cookies.set.
+    // Its unpartitioned sibling in the same batch must still be applied.
     const written: CookiesSetDetails[] = [];
 
     const result = await mergeObservedProfileCookies(
@@ -346,12 +330,6 @@ describe("captureBrowserPrimaryProfile", () => {
   });
 });
 
-/**
- * The five coordinator tests below all wire the same capture callback
- * (record what it was called with, echo it back as a "captured" result) and
- * differ only in the origin-capture callback and the observe/seed calls that
- * follow - so that plumbing is factored into this one local factory.
- */
 function createTestCoordinator(
   captureOrigin: (
     origin: string,
@@ -378,10 +356,7 @@ function createTestCoordinator(
 
 describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   it("waits for prior observations, then orders live, demoted, and seeded tiers", async () => {
-    // Maximal-break: with a pre-existing seeded origin present, this fails if
-    // LRU eviction DROPS instead of demoting (origin-0/1 vanish), if the
-    // demoted pair is appended after the seed instead of prepended ahead of
-    // it, or if the live tier is not newest-first.
+    // Maximal-break: with a pre-existing seeded origin present, this fails if LRU eviction DROPS instead of demoting (origin-0/1 vanish), if the demoted pair is appended after the seed.
     const captureResolvers: Array<
       (snapshot: BrowserPrimaryProfileOriginSnapshot) => void
     > = [];
@@ -419,10 +394,6 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     });
     await capture;
 
-    // Three tiers in order: the 8 live origins newest-first (the LRU `origins`
-    // map is capped at PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT), then the
-    // two DEMOTED into the seeded tier by that eviction (freshest demotion
-    // first), then the pre-existing seed the run never navigated.
     expect(
       captured.map((origins) => origins.map((origin) => origin.origin)),
     ).toEqual([
@@ -507,11 +478,6 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
 
     coordinator.observe("https://pending.example/inbox", webContents);
 
-    // The read has not settled yet: rememberedOrigins (what a CAPTURE draws
-    // on) knows nothing about it, but clearableOrigins (what a site clear can
-    // NAME) does - otherwise a clear that only invalidated the read would
-    // leave the tile's live localStorage in place to meet the imported
-    // cookies on the next reload.
     expect(coordinator.clearableOrigins()).toEqual(["https://pending.example"]);
     expect(coordinator.rememberedOrigins()).toEqual([]);
 
@@ -536,10 +502,6 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   });
 
   it("keeps a demoted origin's fresh value when a LATER tab re-seeds the same jar", async () => {
-    // `retainSeededOrigins` runs once per PROVISIONED TAB, not once per run.
-    // A wholesale replace on the second tab's seed drops what LRU eviction
-    // demoted, and the capture then ships the STALE seeded copy - which the
-    // seed script writes back over the newer data on the next run.
     const { coordinator, captured } = createTestCoordinator((origin) =>
       Promise.resolve({
         origin,
@@ -584,10 +546,6 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   });
 
   it("carries the seeded origins this run never navigated", async () => {
-    // The host replaces its whole jar with what a capture sends, and the
-    // coordinator's own origin map only holds origins navigated in THIS
-    // process run. Without the seeded half, quitting after visiting one site
-    // erases the localStorage of every other origin the host was holding.
     const { coordinator, captured } = createTestCoordinator((origin) =>
       Promise.resolve({
         origin,
@@ -664,10 +622,6 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   });
 
   it("bounds the carried jar so it cannot grow with every origin ever visited", async () => {
-    // A capture becomes the host's whole jar and that jar is the next run's
-    // seed, so an unbounded union would ratchet the localStorage blob upward
-    // on every quit forever. Observed origins are kept first; the seed fills
-    // the remainder in seed order and the oldest imports age out.
     const { coordinator, captured } = createTestCoordinator((origin) =>
       Promise.resolve({
         origin,
@@ -713,11 +667,6 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   });
 
   it("omits an origin whose localStorage read was unavailable instead of emptying it", async () => {
-    // An `[]` snapshot is indistinguishable from a genuinely empty origin, and
-    // the host replaces its whole jar with what arrives - so reporting one for
-    // an origin that merely could not be read ERASES it. Absent means unknown.
-    // `captureBrowserOriginLocalStorage` answers null when the guest
-    // navigated away mid-read, or the origin is not http(s).
     const { coordinator, captured } = createTestCoordinator(() =>
       Promise.resolve(null),
     );
@@ -759,12 +708,7 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   });
 
   it("captures the cookie jar even when nothing was seeded or observed", async () => {
-    // Maximal-break: catches a pre-`captureProfile` emptiness short-circuit on
-    // the coordinator's OWN origin bookkeeping. The cookie jar lives in the
-    // Electron session, so bailing before the capture threw away every cookie
-    // on any quit that happened to navigate nothing. Wired to the real
-    // `captureBrowserPrimaryProfile` because the coordinator fixture above
-    // mocks cookies out entirely.
+    // The cookie jar lives in the Electron session, so bailing before the capture threw away every cookie on any quit that happened to navigate nothing.
     const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
       (origins) =>
         captureBrowserPrimaryProfile(
@@ -835,12 +779,7 @@ function primaryCaptureDependencies(
   };
 }
 
-/**
- * H11: the ownership ledger's key is minted from three sources that do not
- * agree on spelling - the jar read, the applier's claim off the wire, and the
- * observer's release - so the id has to canonicalise or a claim outlives every
- * release and the name stays desktop-owned forever.
- */
+/** H11: the ownership ledger's key is minted from three sources that do not agree on spelling - the jar read, the applier's claim off the wire, and the observer's release. */
 describe("cookieKeyId canonicalisation", () => {
   it("collapses case, a trailing root dot and IDN spelling onto one id", () => {
     const canonical = cookieKeyId({

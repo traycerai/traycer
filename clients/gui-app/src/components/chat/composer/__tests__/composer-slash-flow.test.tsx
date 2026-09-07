@@ -175,11 +175,8 @@ describe("composer slash flow", () => {
     expect(editor.state.doc.textContent).toBe("hello/");
   });
 
-  // An attachment-only block serializes to the empty string and is dropped by
-  // `plainTextFromNodes`, so the prompt the provider parses still begins with
-  // the command. Restricting the picker here would refuse a command that would
-  // in fact have run - and would contradict the same image sitting inline
-  // beside the caret, which has always been ignored.
+  // An attachment-only block serializes to the empty string and is dropped by `plainTextFromNodes`, so the prompt the provider parses still begins with the command.
+  // Restricting the picker here would refuse a command that would in fact have run - and would contradict the same image sitting inline beside the caret, which has always been ignored.
   it("keeps the picker unrestricted on a block after an attachment-only block", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.setContent({
@@ -204,10 +201,8 @@ describe("composer slash flow", () => {
     expect(editor.state.doc.textContent).toBe("/");
   });
 
-  // A blockquote is the one wrapper that cannot be skipped for looking empty:
-  // it serializes to a bare `>` even with nothing but a hard break inside, so
-  // the prompt starts with `>` and the provider never routes the command. The
-  // hard break alone would otherwise read as trimmable whitespace.
+  // A blockquote is the one wrapper that cannot be skipped for looking empty: it serializes to a bare `>` even with nothing but a hard break inside, so the prompt starts with `>` and the provider never routes the command.
+  // The hard break alone would otherwise read as trimmable whitespace.
   it("restricts the picker after a quote holding only a hard break", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.setContent({
@@ -248,11 +243,7 @@ describe("composer slash flow", () => {
     expect(pickerStore.getState().slashScope).toBe("skills");
   });
 
-  // Regression: `ChatListKeymap` owns Enter and falls through to submit when
-  // `commitActiveItem()` returns false. Once a highlighted row could legally
-  // refuse to commit, that fall-through started firing submit with the picker
-  // still open - sending a half-typed message. Exercised through a real DOM
-  // keydown because the store-level tests cannot see which plugin wins.
+  // Exercised through a real DOM keydown because the store-level tests cannot see which plugin wins.
   it("does not submit the message when Enter lands on a disabled row", async () => {
     const { editor, pickerStore, submitCount } = makeFixture();
     editor.commands.insertContent("hello /");
@@ -293,9 +284,7 @@ describe("composer slash flow", () => {
     expect(submitCount()).toBe(1);
   });
 
-  // Claude's parser bails unless `prompt.trim().startsWith("/")`, and the
-  // host's own `parseProviderSlashPrompt` trims too - so whitespace before the
-  // command must not demote it to an inline (skills-scoped) position.
+  // Claude's parser bails unless `prompt.trim().startsWith("/")`, and the host's own `parseProviderSlashPrompt` trims too - so whitespace before the command must not demote it to an inline (skills-scoped) position.
   it("treats a command after leading spaces as leading", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("   /");
@@ -405,10 +394,8 @@ describe("composer slash flow", () => {
     expect(chip.attrs.trigger).toBe("$");
   });
 
-  // The decision behind the `$` trigger: the chip reads back as what was typed,
-  // but still serializes to the canonical `/name`. The host reads skills off
-  // the node's `kind`, never out of the prompt text, so the trigger stays a
-  // local affordance and nothing downstream has to learn about `$`.
+  // The decision behind the `$` trigger: the chip reads back as what was typed, but still serializes to the canonical `/name`.
+  // The host reads skills off the node's `kind`, never out of the prompt text, so the trigger stays a local affordance and nothing downstream has to learn about `$`.
   it("commits a $ skill chip that renders as $name but serializes to /name", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("Review this with $front");
@@ -455,9 +442,8 @@ describe("composer slash flow", () => {
     expect(slashCommandLabelFromAttrs(chip.attrs)).toBe("/frontend-design");
   });
 
-  // The guard sees content the picker never built - pasted, restored from a
-  // draft, or carried in by an edited message. Position is what it checks: a
-  // native command away from the start is stripped whichever trigger it wears.
+  // The guard sees content the picker never built - pasted, restored from a draft, or carried in by an edited message.
+  // Position is what it checks: a native command away from the start is stripped whichever trigger it wears.
   it("strips a persisted non-leading $ native command chip", async () => {
     const { editor } = makeFixture();
     editor.commands.setContent({

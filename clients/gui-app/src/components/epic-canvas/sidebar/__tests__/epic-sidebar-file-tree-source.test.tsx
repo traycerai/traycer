@@ -88,19 +88,13 @@ interface RecordedReset {
 const resetPathsCalls: RecordedReset[] = [];
 const setSearchCalls: Array<string | null> = [];
 
-// The panel re-provides its own `StreamRuntimeContext` with whatever the pin
-// hook hands it: the ambient binding this suite supplies while FOLLOWING (the
-// client every assertion here is about), the pin's own binding when an arm
-// sets `pinnedStreamBindingRef`, and null only while PENDING. Which transport
-// the pin resolves to is a different question, and it has its own suite:
-// `hooks/host/__tests__/use-surface-host-stream-binding.test.tsx`.
+// The panel re-provides its own `StreamRuntimeContext` with whatever the pin hook hands it: the ambient binding this suite supplies while FOLLOWING (the client every assertion here is about), the pin's own binding when an arm sets `pinnedStreamBindingRef`, and null only while PENDING.
 const pinnedStreamBindingRef = vi.hoisted(() => ({
   value: null as StreamRuntimeBinding | null,
 }));
 
-// The hook returns the value to PROVIDE: the pin's own binding when this suite
-// supplies one, else the ambient binding (following). `null` would now mean
-// PENDING - no client at all - which is not what these arms drive.
+// The hook returns the value to PROVIDE: the pin's own binding when this suite supplies one, else the ambient binding (following).
+// `null` would now mean PENDING - no client at all - which is not what these arms drive.
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
   const { use } = await import("react");
   const { StreamRuntimeContext } =
@@ -115,17 +109,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => HOST_ID,
 }));
 
-// The real `useWorkspaceSearchPaths`, its query wiring and the echo guard all
-// run against a mock TRANSPORT, so the tests exercise the actual request shape
-// and stale-reply handling.
-//
-// THE TWO CLIENTS ARE DIFFERENT ON PURPOSE. This panel is host-pinned: it
-// resolves its client from the `hostId` it was handed, and every `searchCalls`
-// assertion below only records a request that reached THAT client's transport.
-// The app-wide client is a distinct object with no recorder, so a build that
-// reverts to reading the ambient host does not fail on a wrong value here - it
-// fails as SILENCE, and the suite's existing "asked the host for ranked
-// matches" cases are what catch it.
+// This panel is host-pinned: it resolves its client from the `hostId` it was handed, and every `searchCalls` assertion below only records a request that reached THAT client's transport.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => ambientHostClientRef.current };
@@ -147,10 +131,6 @@ vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
   }),
 }));
 
-// One STABLE data object, like real TanStack Query data (referentially stable
-// across renders). A per-call literal gives `treePaths` a new identity every
-// render, which defeats the panel's applied-paths guard and loops the
-// reset -> re-assert -> snapshot-notify cycle.
 const UNARY_TREE_DATA = {
   workspacePath: WORKSPACE_PATH,
   files: [{ path: "unary.md", name: "unary.md" }],
@@ -183,18 +163,11 @@ vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
   }),
 }));
 
-// Faithful enough for expansion round-tripping: the real model applies
-// `initialExpandedPaths` on reset and reports it back through `getItem`, which
-// is exactly the loop the panel's expansion sync rides.
+// Faithful enough for expansion round-tripping: the real model applies `initialExpandedPaths` on reset and reports it back through `getItem`, which is exactly the loop the panel's expansion sync rides.
 const expandedInModel = new Set<string>();
 const expandedAtLastReset = new Set<string>();
 
-// Reveal-in-sidebar mechanism state, additive to the expansion/search state
-// above. `selectedInModel` mirrors Pierre's own selection set; `getItem`'s
-// file handles read/write it and report every change through the SAME
-// `onSelectionChange` callback a real click lands in (captured below), which
-// is what lets the reveal effect's programmatic-selection guard be exercised
-// here rather than assumed.
+// `selectedInModel` mirrors Pierre's own selection set; `getItem`'s file handles read/write it and report every change through the SAME `onSelectionChange` callback a real click lands in (captured below), which is what lets the reveal effect's programmatic-selection guard be exercised here rather than assumed.
 const selectedInModel = new Set<string>();
 const scrollToPathCalls: Array<{
   readonly path: string;
@@ -203,21 +176,13 @@ const scrollToPathCalls: Array<{
 const fileTreeContainer = document.createElement("div");
 let fileTreeContainerAvailable = true;
 const modelListeners = new Set<() => void>();
-// Captured from the real `useFileTree(options)` call the panel makes - the
-// mocked hook below stashes `options.onSelectionChange` here so a test can
-// invoke it directly, the same way Pierre invokes it on a real row click.
+// Captured from the real `useFileTree(options)` call the panel makes - the mocked hook below stashes `options.onSelectionChange` here so a test can invoke it directly, the same way Pierre invokes it on a real row click.
 let capturedOnSelectionChange: ((paths: ReadonlyArray<string>) => void) | null =
   null;
-// Row geometry the panel asked Pierre for. Only observable here: `useFileTree`
-// reads its options once, at construction, and the model exposes no getter the
-// panel could be asked afterwards.
+// Only observable here: `useFileTree` reads its options once, at construction, and the model exposes no getter the panel could be asked afterwards.
 let capturedItemHeight: number | undefined = undefined;
 let capturedDensity: string | undefined = undefined;
 let capturedUnsafeCSS: string | undefined = undefined;
-// How many times the model was CONSTRUCTED. The panel used to remount across
-// the breakpoint to rebuild a touch-sized model; with one geometry everywhere
-// there is nothing to rebuild, and this is what tells a surviving tree apart
-// from a rebuilt one now that both viewports report the same geometry.
 let modelConstructionCount = 0;
 
 function notifyModel(): void {
@@ -228,10 +193,6 @@ function reportSelectionChange(): void {
   capturedOnSelectionChange?.([...selectedInModel]);
 }
 
-// Reactive search snapshot for the mocked `useFileTreeSearch`, recomputed on
-// every setSearch/resetPaths so the panel's zero-match empty state is
-// observable. Matching mirrors the real controller: case-insensitive
-// substring over the listed paths.
 let mockListedPaths: ReadonlyArray<string> = [];
 let mockSearchValue = "";
 let mockSearchSnapshot = {
@@ -271,17 +232,12 @@ function getSearchSnapshot(): typeof mockSearchSnapshot {
   return mockSearchSnapshot;
 }
 
-// ONE stable model object, like the real `useFileTree` (its model identity
-// never changes for a mounted tree). A per-render model would re-run every
-// model-dependent effect on each render - with the reactive search snapshot
-// above, that is an infinite loop jsdom would otherwise hide.
+// ONE stable model object, like the real `useFileTree` (its model identity never changes for a mounted tree).
+// A per-render model would re-run every model-dependent effect on each render - with the reactive search snapshot above, that is an infinite loop jsdom would otherwise hide.
 const mockModel = {
   setSearch: (value: string | null) => {
     setSearchCalls.push(value);
-    // The real model takes over expansion while a filter is applied (it
-    // reveals its own matches) and restores the pre-filter set when the
-    // filter clears. Mirroring that is what makes "filtering must not churn
-    // coverage" observable here at all.
+    // Mirroring that is what makes "filtering must not churn coverage" observable here at all.
     expandedInModel.clear();
     if (value === null) {
       for (const path of expandedAtLastReset) expandedInModel.add(path);
@@ -315,13 +271,7 @@ const mockModel = {
       modelListeners.delete(listener);
     };
   },
-  // A directory handle is only returned once the host has actually LISTED
-  // that path (membership in `mockListedPaths`), not merely because the
-  // token ends with "/" - the real model has no notion of a directory it has
-  // never been told about. This is what makes the reveal walk incremental in
-  // these tests: `expand()` on an as-yet-unlisted ancestor is simply
-  // unreachable, exactly as `model.getItem` returning `null` gates it in the
-  // real component.
+  // A directory handle is only returned once the host has actually LISTED that path (membership in `mockListedPaths`), not merely because the token ends with "/" - the real model has no notion of a directory it has never been told about.
   getItem: (path: string) => {
     if (!mockListedPaths.includes(path)) return null;
     if (path.endsWith("/")) {
@@ -373,10 +323,7 @@ vi.mock("@pierre/trees/react", () => ({
   }) => {
     capturedOnSelectionChange = options.onSelectionChange;
     capturedUnsafeCSS = options.unsafeCSS;
-    // Mount-captured, exactly like the real hook's `useState(() => new
-    // FileTree(options))`. Recording it per RENDER instead would make the row
-    // geometry look reactive here when it is not, and the viewport-transition
-    // case below would pass without the body ever having been rebuilt.
+    // Recording it per RENDER instead would make the row geometry look reactive here when it is not, and the viewport-transition case below would pass without the body ever having been rebuilt.
     const [geometryAtConstruction] = useState(() => {
       modelConstructionCount += 1;
       return { itemHeight: options.itemHeight, density: options.density };
@@ -532,10 +479,7 @@ function installSearchHost(script: Partial<SearchScript>): void {
     }),
   );
   hostClientRef.current = spine.createRequester(entry);
-  // A SEPARATE app-wide client on the same spine, addressing a host this
-  // fixture's messenger has no handlers for. Nothing routed here is recorded,
-  // which is what turns "the panel read the ambient host" into a visible
-  // absence rather than an indistinguishable pass.
+  // Nothing routed here is recorded, which is what turns "the panel read the ambient host" into a visible absence rather than an indistinguishable pass.
   ambientHostClientRef.current = spine.createRequesterForHostId("host-ambient");
 }
 
@@ -591,9 +535,7 @@ function renderPanel(client: MockWsStreamClient): void {
 
 describe("sidebar file tree source selection", () => {
   beforeEach(() => {
-    // Real store, seeded: the git-status subscription params are derived from
-    // this preference, so the value has to be deterministic without faking an
-    // internal Zustand store.
+    // Real store, seeded: the git-status subscription params are derived from this preference, so the value has to be deterministic without faking an internal Zustand store.
     useSettingsStore.setState({
       diffViewerPreferences: {
         ...DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -630,18 +572,8 @@ describe("sidebar file tree source selection", () => {
   });
 
   it("opens the stream on the PINNED host's transport, not the app-wide one", () => {
-    // The panel re-provides `StreamRuntimeContext` for the host its pin
-    // resolved to, and this is the arm that proves the provider actually sits
-    // ABOVE the hooks that read it - an adjacency neither the hook's own suite
-    // nor the subscription registry's can see, because each is correct in
-    // isolation either way.
-    //
-    // Before the re-point this panel passed the pinned host's id as a
-    // subscribe PARAM while riding the app-wide socket, which watches the
-    // wrong machine's working tree and reports nothing wrong: the param is a
-    // key, not a route. So the assertion is WHICH TRANSPORT carried the
-    // subscribe, and the ambient client is here as the control - without it a
-    // build that subscribed on both would pass.
+    // Before the re-point this panel passed the pinned host's id as a subscribe PARAM while riding the app-wide socket, which watches the wrong machine's working tree and reports nothing wrong: the param is a key, not a route.
+    // So the assertion is WHICH TRANSPORT carried the subscribe, and the ambient client is here as the control - without it a build that subscribed on both would pass.
     const ambient = new MockWsStreamClient("unknown");
     const pinned = new MockWsStreamClient("unknown");
     pinnedStreamBindingRef.value = {
@@ -657,19 +589,8 @@ describe("sidebar file tree source selection", () => {
   });
 
   /**
-   * Inside the mobile switcher sheet this tree is a vaul drawer descendant.
-   * vaul's `shouldDrag` walks up from the touch target and, finding no
-   * scrollable ancestor, returns true - it drags the drawer instead of letting
-   * the content scroll. Pierre's scroller is inside a shadow root and a touch
-   * inside one retargets to the host, so that walk starts outside the shadow
-   * tree and can never see it. The attribute is what tells vaul to stay out.
-   *
-   * This is the WORKSPACE tree - the surface actually reported - and it needs
-   * its own arm: the git-diff tree's assertion passes with this marker deleted,
-   * so without this the coverage claim would be true of the wrong mount.
-   *
-   * It pins the marker, not the scrolling. Whether a finger scrolls is touch
-   * arbitration, which jsdom cannot decide.
+   * Inside the mobile switcher sheet this tree is a vaul drawer descendant. vaul's `shouldDrag` walks up from the touch target and, finding no scrollable ancestor, returns true - it drags the drawer instead of letting the content scroll.
+   * Pierre's scroller is inside a shadow root and a touch inside one retargets to the host, so that walk starts outside the shadow tree and can never see it.
    */
   it("marks the tree wrapper as not a drawer-drag surface", () => {
     renderPanel(new MockWsStreamClient("unknown"));
@@ -679,15 +600,8 @@ describe("sidebar file tree source selection", () => {
   });
 
   /**
-   * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref
-   * (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove`
-   * bubbling out of Pierre's shadow-rooted scroller before it reaches a
-   * document BUBBLE listener - the modal scroll lock a vaul drawer registers
-   * while open. jsdom has no `TouchEvent`, so a plain bubbling `Event` stands
-   * in; the hook only calls `stopPropagation()`, which does not care about
-   * the event's concrete type. `touchstart` is the control: it is untouched
-   * by this hook, so it must still reach the document. Deleting
-   * `ref={touchShieldRef}` from the wrapper must fail this test.
+   * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove` bubbling out of Pierre's shadow-rooted scroller before it reaches a document BUBBLE listener - the modal scroll lock a vaul drawer registers while open. jsdom has no `TouchEvent`, so a plain bubbling `Event` stands in; the hook only calls `stopPropagation()`, which does not care about the event's concrete type.
+   * `touchstart` is the control: it is untouched by this hook, so it must still reach the document.
    */
   it("shields a bubbling touchmove from the pierre tree so it never reaches the document", () => {
     renderPanel(new MockWsStreamClient("unknown"));
@@ -767,9 +681,7 @@ describe("sidebar file tree filter source", () => {
   }
 
   beforeEach(() => {
-    // Real store, seeded: the git-status subscription params are derived from
-    // this preference, so the value has to be deterministic without faking an
-    // internal Zustand store.
+    // Real store, seeded: the git-status subscription params are derived from this preference, so the value has to be deterministic without faking an internal Zustand store.
     useSettingsStore.setState({
       diffViewerPreferences: {
         ...DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -893,17 +805,12 @@ describe("sidebar file tree filter source", () => {
     });
     expect(searchCalls).toHaveLength(1);
 
-    // The latched verdict backs the filter with the whole-workspace snapshot:
-    // a live tree's loaded rows are only the expanded directories, so a local
-    // filter over them would silently match nothing.
+    // The latched verdict backs the filter with the whole-workspace snapshot: a live tree's loaded rows are only the expanded directories, so a local filter over them would silently match nothing.
     await waitFor(() => {
       expect(resetPathsCalls.at(-1)?.paths).toEqual(["unary.md"]);
     });
     expect(listFileTreeCalls.at(-1)?.enabled).toBe(true);
-    // Pierre keeps the search VALUE across resetPaths but not its match set,
-    // and setSearch no-ops on an unchanged value - the component must force a
-    // recomputation with a null->value cycle or the snapshot renders
-    // unfiltered (observed live).
+    // Pierre keeps the search VALUE across resetPaths but not its match set, and setSearch no-ops on an unchanged value - the component must force a recomputation with a null->value cycle or the snapshot renders unfiltered (observed live).
     expect(setSearchCalls.slice(-2)).toEqual([null, "main"]);
 
     // The verdict is latched per (host, workspace): a further keystroke filters
@@ -924,11 +831,7 @@ describe("sidebar file tree filter source", () => {
   });
 
   it("latches onto local filtering when the host advertises the method but has no resolver", async () => {
-    // A host built between the OSS contract landing and its internal resolver
-    // landing negotiates `workspace.searchPaths` (the registry-derived
-    // manifest carried the contract) and then 404s the request. That verdict
-    // must latch exactly like E_HOST_UNSUPPORTED - without it the panel
-    // re-asks on every keystroke and never settles into the local filter.
+    // That verdict must latch exactly like E_HOST_UNSUPPORTED - without it the panel re-asks on every keystroke and never settles into the local filter.
     installSearchHost({
       reject: new HostRpcError({
         code: "RPC_ERROR",
@@ -958,9 +861,7 @@ describe("sidebar file tree filter source", () => {
   });
 
   it("shows an explicit empty state when the local filter matches nothing", async () => {
-    // Pierre renders the FULL tree on zero matches; the panel must replace
-    // that with an honest "no matches" state instead of a misleading root
-    // listing.
+    // Pierre renders the FULL tree on zero matches; the panel must replace that with an honest "no matches" state instead of a misleading root listing.
     installSearchHost({
       reject: new HostRpcError({
         code: "E_HOST_UNSUPPORTED",
@@ -1009,10 +910,7 @@ describe("sidebar file tree filter source", () => {
   });
 
   it("leaves stream coverage alone while filtering", async () => {
-    // Coverage is derived from the durable expansion set, and BOTH filter modes
-    // move the tree's expansion on their own (host matches expand their
-    // ancestors; the row filter expands its matches). If those transients were
-    // synced back, filtering would silently unwatch what the user was browsing.
+    // If those transients were synced back, filtering would silently unwatch what the user was browsing.
     useFileTreeStore
       .getState()
       .setExpandedPaths(EPIC_ID, HOST_ID, WORKSPACE_PATH, ["src/"]);
@@ -1057,11 +955,7 @@ describe("reveal in sidebar", () => {
   const REVEAL_TAB_ID = "tab-1";
 
   /**
-   * Emits the three listing frames the ancestor walk for `src/lib/a.ts`
-   * needs (root, `src/`, `src/lib/`) and waits for the final one to land,
-   * without asserting the intermediate steps - reused by the tests that only
-   * care that the reveal SETTLED, not how it got there (the detailed,
-   * step-by-step walk is covered on its own below).
+   * Emits the three listing frames the ancestor walk for `src/lib/a.ts` needs (root, `src/`, `src/lib/`) and waits for the final one to land, without asserting the intermediate steps - reused by the tests that only care that the reveal SETTLED, not how it got there (the detailed, step-by-step walk is covered on its own below).
    */
   async function revealSrcLibAToCompletion(
     client: MockWsStreamClient,
@@ -1154,12 +1048,7 @@ describe("reveal in sidebar", () => {
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
     useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
-    // The panel reads this action (via `openTile`, on the empty test canvas
-    // where the open-tile executor's plan has no pane to open into) to open a
-    // row's preview on a genuine selection; mocked so the "still opens on a
-    // real click" case is observable without a real canvas/tab-strip mounted,
-    // and so the reveal tests can assert it was NOT called for a
-    // programmatic selection.
+    // The panel reads this action (via `openTile`, on the empty test canvas where the open-tile executor's plan has no pane to open into) to open a row's preview on a genuine selection; mocked so the "still opens on a real click" case is observable without a real canvas/tab-strip mounted, and so the reveal tests can assert it was NOT called for a programmatic selection.
     openPreviewSpy = vi.fn(() => null);
     useEpicCanvasStore.setState({
       prepareOpenTilePreviewInTabFocusTargetFromSource: openPreviewSpy,
@@ -1284,12 +1173,7 @@ describe("reveal in sidebar", () => {
   });
 
   it("replaces a multi-row selection with the revealed row without opening a preview for the survivor", async () => {
-    // With TWO rows selected, deselecting the first already reports a
-    // NON-empty selection (the survivor), before the target is ever selected.
-    // A one-shot path marker set just around `select()` lets that
-    // notification through, opening the survivor's preview and then being
-    // consumed so the target's own `select()` opens another. The suppression
-    // has to span the whole rewrite.
+    // With TWO rows selected, deselecting the first already reports a NON-empty selection (the survivor), before the target is ever selected.
     requestFileTreeReveal(REVEAL_TAB_ID, {
       hostId: HOST_ID,
       workspacePath: WORKSPACE_PATH,
@@ -1476,21 +1360,16 @@ describe("reveal in sidebar", () => {
 });
 
 /**
- * The same panel body under the phone tab switcher, where it is the File tree
- * category rather than a sidebar column. `useIsMobileViewport` reads
- * `window.innerWidth` directly, so overriding it before render is what forces
- * the touch presentation - same pattern as the composer-menu and providers
- * panel mobile suites.
+ * The same panel body under the phone tab switcher, where it is the File tree category rather than a sidebar column.
+ * `useIsMobileViewport` reads `window.innerWidth` directly, so overriding it before render is what forces the touch presentation - same pattern as the composer-menu and providers panel mobile suites.
  */
 describe("file tree on a touch viewport", () => {
   const TAB_ID = "tab-1";
   const MOBILE_WIDTH = 390;
   const DESKTOP_WIDTH = 1024;
 
-  // The shared setup's `matchMedia` never notifies, which is right for suites
-  // that only need one width. Crossing the breakpoint mid-test needs a real
-  // one: `useIsMobileViewport` is a `useSyncExternalStore` over this event, so
-  // without it a width change reaches no render at all.
+  // The shared setup's `matchMedia` never notifies, which is right for suites that only need one width.
+  // Crossing the breakpoint mid-test needs a real one: `useIsMobileViewport` is a `useSyncExternalStore` over this event, so without it a width change reaches no render at all.
   const breakpointListeners = new Set<() => void>();
   function installLiveMatchMedia(): void {
     Object.defineProperty(window, "matchMedia", {
@@ -1605,14 +1484,7 @@ describe("file tree on a touch viewport", () => {
   });
 
   /**
-   * The phone shows the desktop's tree, pitch included. Touch used to inflate
-   * rows to a 44px hit target because pierre's rows sit in a shadow root the
-   * mobile hit-area stylesheet cannot reach; the compact pitch is deliberately
-   * kept instead, so the two viewports render one geometry.
-   *
-   * Both options are asserted because either alone leaves the pitch forked:
-   * `density` scales pierre's padding and radius, `itemHeight` overrides the
-   * row box.
+   * Touch used to inflate rows to a 44px hit target because pierre's rows sit in a shadow root the mobile hit-area stylesheet cannot reach; the compact pitch is deliberately kept instead, so the two viewports render one geometry.
    */
   it("builds the phone tree with the desktop's row geometry", () => {
     renderPanel(new MockWsStreamClient("unknown"));
@@ -1660,17 +1532,6 @@ describe("file tree on a touch viewport", () => {
     );
   });
 
-  /**
-   * The inverse of what this used to assert. The body was keyed on the
-   * viewport class so it would REBUILD across the breakpoint, because pierre
-   * bakes geometry at construction and a touch model differed from a pointer
-   * one. With one geometry everywhere there is nothing to rebuild, and the
-   * remount was not free - it drops the filter query.
-   *
-   * The construction count is what makes this discriminating: now that both
-   * viewports report the same `itemHeight` and `density`, comparing geometry
-   * across the crossing would pass whether the tree survived or was rebuilt.
-   */
   it("keeps the same tree across a breakpoint crossing instead of rebuilding it", () => {
     setViewportWidth(DESKTOP_WIDTH);
     renderPanel(new MockWsStreamClient("unknown"));

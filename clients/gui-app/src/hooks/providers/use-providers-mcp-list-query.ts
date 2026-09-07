@@ -40,18 +40,12 @@ export function useProvidersMcpList(args: {
     options: {
       enabled: args.enabled,
       staleTime: 30_000,
-      // Opt out of the table-owned condition polling for `providers.list`:
-      // that policy classifies the CLASSIC response shape, while this query
-      // caches a mapped MCP shape under its own `cacheKeyIdentity`. The
-      // pending cadence below stands in for it.
+      // Opt out of the table-owned condition polling for `providers.list`: that policy classifies the CLASSIC response shape, while this query caches a mapped MCP shape under its own `cacheKeyIdentity`.
       poll: false,
     },
   });
 
-  // Table-owned polling can't serve this query (see `poll: false` above) and
-  // the host-query layer owns `refetchInterval`, so the pending cadence is
-  // driven here: re-list while an explicit auth flow is awaiting completion,
-  // or while any server is still discovering/connecting.
+  // Table-owned polling can't serve this query (see `poll: false` above) and the host-query layer owns `refetchInterval`, so the pending cadence is driven here: re-list while an explicit auth flow is awaiting completion, or while any server is still discovering/connecting.
   const { refetch } = query;
   const servers = query.data?.servers;
   const needsPoll =

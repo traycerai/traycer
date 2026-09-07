@@ -46,22 +46,12 @@ interface BatchDeleteEpicMutationContext {
   readonly epicTitlesById: Readonly<Record<string, string>>;
 }
 
-/**
- * One approved worktree-cleanup candidate. `ownerEpicIds` lets `onSuccess`
- * re-confirm — once the batch result is known — that EVERY owner actually
- * succeeded before removing the worktree, so a partial-failure never deletes a
- * worktree still referenced by a Task that failed to delete.
- */
+/** `ownerEpicIds` lets `onSuccess` re-confirm - once the batch result is known - that EVERY owner actually succeeded before removing the worktree, so a partial-failure never deletes a worktree still referenced by a Task that failed to delete. */
 export interface BatchDeleteWorktreeCandidate {
   readonly worktreePath: string;
   readonly ownerEpicIds: ReadonlyArray<string>;
 }
 
-/**
- * Mutation variables. `worktreeCleanup` is `null` when the user approved no
- * worktrees (or none were offered), in which case the flow is identical to
- * before this feature. The wire request carries only `ids`.
- */
 export interface BatchDeleteEpicVariables {
   readonly ids: ReadonlyArray<string>;
   readonly worktreeCleanup: {
@@ -162,12 +152,8 @@ export function useEpicBatchDelete(): UseMutationResult<
         if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
           emitEpicDeleteToast(epicToast.level, epicToast.message, null);
         } else {
-          // The Task(s) are already deleted; stream the approved worktree
-          // removals and report a single combined summary once they settle.
-          // Deletion is never blocked or delayed on this cleanup - a slow or
-          // failing worktree delete only affects its own toast line. `hostId`
-          // is frozen from `onMutate` so a host swap mid-flight can't redirect
-          // the cleanup or its cache invalidation to the wrong scope.
+          // Deletion is never blocked or delayed on this cleanup - a slow or failing worktree delete only affects its own toast line.
+          // `hostId` is frozen from `onMutate` so a host swap mid-flight can't redirect the cleanup or its cache invalidation to the wrong scope.
           const hostId = ctx.hostId;
           void runWorktreeCleanup(openStreamTransport, {
             hostId,
@@ -309,12 +295,7 @@ function epicDeleteToastParts(args: {
   };
 }
 
-/**
- * `detail` is the toast's on-screen description - the per-path worktree
- * failure reasons, or `null` when the count line is all there is. It stays out
- * of the report-issue contexts below: those are public and must carry fixed
- * product copy, and a reason names an absolute worktree path.
- */
+/** It stays out of the report-issue contexts below: those are public and must carry fixed product copy, and a reason names an absolute worktree path. */
 export function emitEpicDeleteToast(
   level: EpicDeleteToastLevel,
   message: string,
@@ -346,10 +327,7 @@ export function emitEpicDeleteToast(
   });
 }
 
-// A worktree is safe to remove only when EVERY owning Task actually succeeded -
-// so a partial batch failure never removes a worktree still referenced by a
-// Task that failed to delete. Empty when no cleanup was approved or no Task
-// succeeded.
+// A worktree is safe to remove only when EVERY owning Task actually succeeded - so a partial batch failure never removes a worktree still referenced by a Task that failed to delete.
 function eligibleWorktreeCleanupPaths(
   cleanup: BatchDeleteEpicVariables["worktreeCleanup"],
   deletedIds: ReadonlyArray<string>,
@@ -414,10 +392,7 @@ function emitTaskDeleteSummaryToast(
   );
 }
 
-// Refresh the host-wide worktree list plus the shared binding-backed caches
-// after the cleanup lands, so Settings ▸ Worktrees and the folder/worktree
-// pickers stop showing the removed worktrees. Shares the Settings delete
-// flow's invalidation slice; see the helper for the refetchType rationale.
+// Refresh the host-wide worktree list plus the shared binding-backed caches after the cleanup lands, so Settings ▸ Worktrees and the folder/worktree pickers stop showing the removed worktrees.
 function invalidateWorktreeCachesForHost(
   queryClient: QueryClient,
   hostId: string,

@@ -13,22 +13,10 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
 
 /**
- * `epic.chatReplicaRead` is optional (`degrade: { kind: "unsupported" }`
- * in the registry), so a host built before ticket 34A has never heard of it.
- * TanStack still surfaces the rejection on `.error` - this hook does not (and
- * should not) swallow that - but two things must hold for the tile's "no
- * data means no replica" reading to be safe: `.data` stays `undefined` on
- * this path (never a stale/partial value), and the hook does not burn retries
- * re-asking a host that has already answered "I don't have this method" -
- * the hook's own `retry` predicate refuses exactly this code. Neither is
- * pinned anywhere else, and the query has no `onError`, so nothing else in
- * this tree would catch a regression here.
+ * Unsupported `epic.chatReplicaRead` must leave `.data` undefined and must not retry. The query has no `onError`, so only this pins both.
  */
 describe("useChatReplicaRead degrade path", () => {
-  // The hook is viewer-scoped (unattributed replica reads never fire, and
-  // the cache key carries the viewer so accounts can never share a slot) -
-  // every test seeds a signed-in viewer, and the reset keeps tests
-  // order-independent.
+  // The hook is viewer-scoped (unattributed replica reads never fire, and the cache key carries the viewer so accounts can never share a slot) - every test seeds a signed-in viewer, and the reset keeps tests order-independent.
   beforeEach(() => {
     useAuthStore.setState({
       contextMetadata: { userId: "viewer-1", username: "viewer-1" },
@@ -154,10 +142,7 @@ function createFixture(): {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
   const queryClient = new QueryClient({
-    // Retries ON at the client level, deliberately: the single-request
-    // assertion is about the HOOK's own `retry` predicate refusing
-    // E_HOST_UNSUPPORTED, and a client that never retries anything would keep
-    // that assertion green even with the predicate deleted.
+    // Retries ON at the client level, deliberately: the single-request assertion is about the HOOK's own `retry` predicate refusing E_HOST_UNSUPPORTED, and a client that never retries anything would keep that assertion green even with the predicate deleted.
     defaultOptions: {
       queries: { retry: 3, retryDelay: 0, staleTime: 0, gcTime: 0 },
     },

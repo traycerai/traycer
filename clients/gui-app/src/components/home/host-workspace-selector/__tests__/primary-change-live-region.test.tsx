@@ -4,10 +4,8 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { PrimaryChangeLiveRegion } from "../primary-change-live-region";
 import { usePrimaryChangeAnnouncement } from "../use-primary-change-announcement";
 
-// Minimal harness mirroring HomeWorkspaceRows' wiring: the hook owns the
-// announcement, the region renders it, and the announce callback is exposed
-// (via an effect, never during render) for the test to drive like a row
-// action would.
+// Minimal harness mirroring HomeWorkspaceRows' wiring: the hook owns the announcement, the region renders it,
+// and the announce callback is exposed (via an effect.
 let announceRef: ((folderName: string) => void) | null = null;
 
 function Harness() {
@@ -53,10 +51,7 @@ describe("PrimaryChangeLiveRegion", () => {
     render(<Harness />);
     const region = screen.getByTestId("primary-change-live-region");
 
-    // Two folders with the same basename ("repo" at /a/repo and /b/repo):
-    // switching to one, then removal-falling-back to the other produces the
-    // SAME message twice. A plain-string state would bail in React on the
-    // second announce and never mutate the live-region DOM.
+    // A plain-string state would bail in React on the second announce and never mutate the live-region DOM.
     act(() => announceRef?.("repo"));
     const firstNode = region.firstElementChild;
     expect(firstNode?.textContent).toBe("repo is now primary");
@@ -64,8 +59,8 @@ describe("PrimaryChangeLiveRegion", () => {
     act(() => announceRef?.("repo"));
     const secondNode = region.firstElementChild;
     expect(secondNode?.textContent).toBe("repo is now primary");
-    // The seq-keyed child was REMOUNTED - a real DOM mutation, which is what
-    // screen readers need to re-announce identical text.
+    // The seq-keyed child was remounted - a real DOM mutation, which is what screen readers need to re-announce
+    // identical text.
     expect(secondNode).not.toBe(firstNode);
   });
 });

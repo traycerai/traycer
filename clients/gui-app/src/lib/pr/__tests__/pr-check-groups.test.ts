@@ -112,9 +112,7 @@ describe("formatPrCheckName", () => {
   });
 
   it("separates jobs that share a name", () => {
-    // The bug this exists for: one reusable workflow across several packages
-    // reports `build` every time, and a list showing only the job name has
-    // five identical rows.
+    // The bug this exists for: one reusable workflow across several packages reports `build` every time, and a list showing only the job name has five identical rows.
     const rows = [
       check({ name: "build", workflowName: "Build Host", event: "push" }),
       check({ name: "build", workflowName: "Build GUI", event: "push" }),
@@ -154,11 +152,8 @@ describe("prCheckContextKey", () => {
   });
 
   it("still separates two contexts that SHARE a details url", () => {
-    // A check run's `detailsUrl` is per-run and unique; a commit status is
-    // not a check run, and several contexts posted by one integration
-    // routinely carry the same `target_url`. Keying on the bare url there
-    // hands the Checks list duplicate React keys and `derivePrAttentionQueue`
-    // a duplicate `check:` key.
+    // A check run's `detailsUrl` is per-run and unique; a commit status is not a check run, and several contexts posted by one integration routinely carry the same `target_url`.
+    // Keying on the bare url there hands the Checks list duplicate React keys and `derivePrAttentionQueue` a duplicate `check:` key.
     const first = check({ name: "lint", detailsUrl: "https://ci/app" });
     const second = check({ name: "typecheck", detailsUrl: "https://ci/app" });
     expect(prCheckContextKey(first, 0)).not.toBe(prCheckContextKey(second, 1));

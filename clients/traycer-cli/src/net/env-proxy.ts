@@ -1,29 +1,6 @@
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
-/**
- * Route the CLI's outbound HTTP through the machine's configured proxy.
- *
- * Node's built-in `fetch` ignores `HTTP_PROXY`/`HTTPS_PROXY` unless the process
- * was STARTED with `NODE_USE_ENV_PROXY=1` - the option is read during bootstrap,
- * so setting the variable from inside the process is too late (measured on Node
- * 24: an in-process assignment still resolved the origin directly). The CLI
- * ships as a single executable, so there is no launcher to pass that flag from;
- * installing undici's `EnvHttpProxyAgent` as the global dispatcher is what makes
- * the same environment variables work.
- *
- * This is not a nicety. On a managed workstation where only the browser's proxy
- * is configured, every Node-side request fails at once - the CLI could not reach
- * the release registry (`E_REGISTRY_UNAVAILABLE`) and the host could not reach
- * the sign-in service, so it rejected its own local GUI for the entire session
- * while Electron's update check succeeded a few feet away (traycer#858).
- *
- * `EnvHttpProxyAgent` implements the semantics of those variables - notably the
- * per-host `NO_PROXY` exclusion list - but it reads them from `process.env`
- * unless each one is passed explicitly. Passing them keeps the injected `env`
- * the single source of truth, so the test seam exercises the same values the
- * agent will actually route on rather than whatever the runner happens to
- * export.
- */
+/** Route outbound HTTP through the machine proxy. Do not bypass for registry downloads. */
 const PROXY_ENV_VARS = [
   "HTTP_PROXY",
   "http_proxy",
@@ -43,14 +20,7 @@ function readEnv(
   return "";
 }
 
-/**
- * Installs the env-driven proxy dispatcher when the environment asks for one.
- *
- * Returns the variable that triggered it, or `null` when no proxy is
- * configured - in which case the default dispatcher is deliberately left
- * untouched, so the overwhelmingly common no-proxy path keeps Node's own
- * connection pooling and defaults rather than an equivalent-but-different agent.
- */
+/** Installs the env-driven proxy dispatcher when the environment asks for one. Returns the variable that triggered it, or `null` when no proxy is configured - in which case the default dispatcher is deliberately left untouched, so the overwhelmingly common no-proxy path keeps Node's own connection pooling and defaults rather than an equivalent-but-different agent. */
 export function installEnvProxyDispatcher(
   env: Readonly<Partial<Record<string, string>>>,
 ): string | null {

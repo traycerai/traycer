@@ -106,9 +106,7 @@ describe("isHistoryEntryDead — conservative liveness", () => {
   });
 
   it("keeps a gone-tab href when the epic still has a sibling tab", () => {
-    // The exact tab is gone, but resolveTabIdForEpic("e1") resolves sibling t1
-    // (present in openTabOrder), so the route's beforeLoad would redirect a back
-    // step there instead of failing — prune must not drop it.
+    // The exact tab is gone, but resolveTabIdForEpic("e1") resolves sibling t1 (present in openTabOrder), so the route's beforeLoad would redirect a back step there instead of failing - prune must not drop it.
     useEpicCanvasStore.setState({
       tabsById: { t1: tab("t1", "e1") },
       openTabOrder: ["t1"],
@@ -212,11 +210,7 @@ describe("isHistoryEntryDead — conservative liveness", () => {
   });
 
   it("keeps unresolvable nested hrefs under a CLOSED task (skip-eligibility handles it, not pruning)", () => {
-    // Entries under a closed Task must survive pruning so the Task becoming
-    // reachable again on reopen also makes its history entries reachable
-    // again - back/forward's skip-eligibility scan (not liveness) is what
-    // keeps back/forward from landing on this entry while the Task stays
-    // closed.
+    // Entries under a closed Task must survive pruning so the Task becoming reachable again on reopen also makes its history entries reachable again - back/forward's skip-eligibility scan (not liveness) is what keeps back/forward from landing on this entry while.
     useEpicCanvasStore.setState({
       tabsById: { t1: tab("t1", "e1") },
       openTabOrder: [],

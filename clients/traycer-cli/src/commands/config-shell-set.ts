@@ -3,11 +3,8 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { setShell } from "../store/config-store";
 
-// Runner-aware `traycer config shell set`. The entrypoint validates the
-// `--clear-args` / positional-args conflict, leaving the command body to
-// route a fully-resolved (path, args) pair into the store. JSON mode
-// emits a single terminal `result` event whose `data` is the persisted
-// shape; human mode prints a one-line confirmation.
+// Runner-aware `traycer config shell set`.
+// The entrypoint validates the `--clear-args` / positional-args conflict, leaving the command body to route a fully-resolved (path, args) pair into the store.
 export interface ConfigShellSetArgs {
   readonly path: string | null;
   readonly args: readonly string[] | null;
@@ -26,9 +23,7 @@ export function buildConfigShellSetCommand(
         exitCode: 1,
       });
     }
-    // The help promises an absolute shell-binary path; enforce it so the
-    // stored value matches the contract (a relative path would resolve
-    // against the host's cwd at bootstrap, not the user's).
+    // The help promises an absolute shell-binary path; enforce it so the stored value matches the contract (a relative path would resolve against the host's cwd at bootstrap, not the user's).
     if (args.path !== null && !isAbsolute(args.path)) {
       throw cliError({
         code: CLI_ERROR_CODES.CONFIG_INVALID_VALUE,

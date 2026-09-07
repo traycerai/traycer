@@ -1,10 +1,4 @@
-/**
- * Locks down the legacy `/settings/service` route to redirect into the
- * native-packaging Host pane. The Settings sidebar no longer surfaces
- * the old Service entry, but persisted bookmarks, remembered tab paths,
- * and tray commands may still navigate there - the redirect makes that
- * land on the same surface as the primary sidebar entry.
- */
+/** Legacy /settings/service redirects to the Host pane so bookmarks still land on the sidebar's primary surface. */
 import { describe, expect, it } from "vitest";
 import { isRedirect } from "@tanstack/react-router";
 import { Route as ServiceRoute } from "@/routes/settings.service";
@@ -19,10 +13,8 @@ describe("legacy /settings/service route", () => {
     expect(beforeLoad).toBeTypeOf("function");
     let thrown: unknown = null;
     try {
-      // TanStack Router's `beforeLoad` signature is parameterized on
-      // the full file-route context, but our redirect implementation
-      // reads none of those args. Pass a permissive sentinel so the
-      // test stays decoupled from that type.
+      // Permissive sentinel: this beforeLoad reads none of the file-route
+      // context.
       const invoke = beforeLoad as (args: { context: object }) => void;
       invoke({ context: {} });
     } catch (err) {

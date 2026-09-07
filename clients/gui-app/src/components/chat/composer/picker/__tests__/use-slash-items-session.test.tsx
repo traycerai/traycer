@@ -10,10 +10,8 @@ import {
 } from "../composer-picker-store";
 import { useSlashItems } from "../use-slash-items";
 
-// Hoisted alongside the `vi.mock` that closes over it. Only the returned hook
-// reads `CATALOG`, and it is not called until a test renders, so a plain
-// top-level const would also work - but reading it in the factory body itself
-// would throw, and keeping the fixture hoisted removes that edge entirely.
+// Hoisted alongside the `vi.mock` that closes over it.
+// Only the returned hook reads `CATALOG`, and it is not called until a test renders, so a plain top-level const would also work - but reading it in the factory body itself would throw, and keeping the fixture hoisted removes that edge entirely.
 const { CATALOG } = vi.hoisted(
   (): { CATALOG: ReadonlyArray<SlashCommand> } => ({
     CATALOG: [
@@ -31,9 +29,7 @@ const { CATALOG } = vi.hoisted(
   }),
 );
 
-// The catalog is deliberately constant across renders: the bug under test is
-// about the hook not re-running, so any per-render identity change would mask
-// it by re-triggering the effect for the wrong reason.
+// The catalog is deliberately constant across renders: the bug under test is about the hook not re-running, so any per-render identity change would mask it by re-triggering the effect for the wrong reason.
 vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
   // Spread the real module rather than listing exports, so an export added
   // later (e.g. `NO_LOCAL_SLASH_COMMANDS`) cannot silently break this suite.
@@ -79,14 +75,7 @@ function renderItems(store: ComposerPickerStore) {
   );
 }
 
-/**
- * Tiptap swaps suggestion sessions without ever closing the picker - typing `/`
- * over a selection ends one session and starts another in the same transaction.
- * `openPicker` clears the published rows for the incoming session, so something
- * has to republish them. Every input the item effect watches (`query`,
- * `slashScope`, the catalog) can be identical across that swap, which leaves the
- * session id as the only evidence that a republish is owed.
- */
+/** Tiptap swaps suggestion sessions without ever closing the picker - typing `/` over a selection ends one session and starts another in the same transaction. `openPicker` clears the published rows for the incoming session, so something has to republish them. */
 describe("useSlashItems across a session swap", () => {
   it("republishes rows when a new session reopens on the same query", () => {
     const store = createComposerPickerStore();

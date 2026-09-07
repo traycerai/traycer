@@ -9,11 +9,8 @@ import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { isSetupTerminal } from "@/stores/worktree/setup-terminals";
 
 /**
- * Builds a canvas presentation from a `terminal.list` row (and the durable
- * fleet projection when the sidebar already classified the row as host
- * authority). Wire `lifecycleOwner` is copied onto the ref so import and
- * bootstrap stay manager-owned without renderer origin caches. Setup and
- * provider-login stores remain optional enrichment only.
+ * Builds a canvas presentation from a `terminal.list` row (and the durable fleet projection when the sidebar already classified the row as host authority).
+ * Wire `lifecycleOwner` is copied onto the ref so import and bootstrap stay manager-owned without renderer origin caches.
  */
 export function makeListedEpicTerminalRef(args: {
   readonly session: ListedTerminalSidebarSession;

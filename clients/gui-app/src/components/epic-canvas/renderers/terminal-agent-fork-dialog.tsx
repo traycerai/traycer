@@ -70,12 +70,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
-// `pendingForkTerminalAgentStagingKey` is per-EPIC, so every terminal-agent
-// tile in an epic shares one staging slot. Two dialog bodies can therefore be
-// mounted over the same key (one unmounting as another opens), and the loser's
-// teardown must not wipe the winner's freshly-seeded workspace. Whoever
-// registered last owns the slot; a stale cleanup sees a different symbol and
-// bails. Mirrors `chat-fork-dialog.tsx`.
+// Two dialog bodies can therefore be mounted over the same key (one unmounting as another opens), and the loser's teardown must not wipe the winner's freshly-seeded workspace.
 const activeTerminalForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
 const EMPTY_FORK_PROFILES: ReadonlyArray<ProviderProfile> = [];
@@ -101,10 +96,9 @@ interface AdmissionResultState {
   readonly outcome: AdmissionOutcome;
 }
 
-/** Disables every profile except `sourceProfileId` with the same `reason` -
- *  the shared shape both the old-host capability lock and the bulk-admission
- *  pending/failed states use (amend-01 Fixes 1 and 3): same profile stays
- *  fully functional, every OTHER profile is unreachable through the picker. */
+/**
+ * Disables every profile except `sourceProfileId` with the same `reason` - the shared shape both the old-host capability lock and the bulk-admission pending/failed states use (amend-01 Fixes 1 and 3): same profile stays fully functional, every OTHER profile is unreachable through the picker.
+ */
 function lockNonSourceProfiles(
   profiles: ReadonlyArray<ProviderProfile>,
   sourceProfileId: string | null,
@@ -118,18 +112,8 @@ function lockNonSourceProfiles(
 }
 
 /**
- * The dialog's single source of truth for `profileAdmission`, composing three
- * independent gates in priority order:
- *   1. Old-host capability lock (Fix 1) - wins regardless of intent. Exempts
- *      `capabilityLockExemptProfileId`, not the raw `sourceProfileId`: an old
- *      host has no guard, so ambient must stay reachable when the raw source
- *      is a no-longer-live profile (amend-02).
- *   2. Bulk admission unsettled/failed (Fix 3) - locks non-source profiles
- *      rather than failing open while pending or after an RPC failure.
- *   3. Bulk admission resolved - the server's per-profile verdicts.
- * Plain-fork intent on a capable host falls through to `EMPTY_FORK_ADMISSION`
- * (picker stays fully open) - sound per the T5 review: submit-time preflight
- * plus the authoritative `prepareLaunch` guard both still apply there.
+ * Exempts `capabilityLockExemptProfileId`, not the raw `sourceProfileId`: an old host has no guard, so ambient must stay reachable when the raw source is a no-longer-live profile (amend-02). 2.
+ * Bulk admission unsettled/failed (Fix 3) - locks non-source profiles rather than failing open while pending or after an RPC failure. 3.
  */
 function resolveDialogAdmission(input: {
   readonly capabilityLockActive: boolean;
@@ -165,43 +149,20 @@ function resolveDialogAdmission(input: {
 }
 
 /**
- * `"fork"` is today's plain sibling-session fork. `"continue"` is the T5
- * intent flag riding the SAME dialog (tech plan UX package): title/CTA copy
- * change and the profile strip gets emphasis + bulk-admission row disabling,
- * but the submit path, workspace handling, and every other mechanism are
- * identical - this is a presentation flag, not a second dialog.
+ * `"fork"` is today's plain sibling-session fork.
+ * `"continue"` is the T5 intent flag riding the SAME dialog (tech plan UX package): title/CTA copy change and the profile strip gets emphasis + bulk-admission row disabling, but the submit path, workspace handling, and every other mechanism are identical - this is a presentation flag, not a second dialog.
  */
 export type TerminalAgentForkIntent = "fork" | "continue";
 
 /**
- * A terminal agent that CAN be forked, narrowed at the type level.
- *
- * A projection's `harnessId` is nullable because a cross-host replica whose
- * cloud row predates `runSettingsSummary` cannot say what it runs. Such a row
- * belongs in the roster (the protocol contract says so) but has no dispatchable
- * harness - and forking needs one for the provider lookup, the create call, the
- * settings seed and the analytics event alike.
- *
- * Narrowed HERE, once, rather than null-checked at each of those four: the
- * toolbar that builds a target is the party that knows, and every consumer
- * downstream then reads a harness that is present by type.
+ * A projection's `harnessId` is nullable because a cross-host replica whose cloud row predates `runSettingsSummary` cannot say what it runs.
+ * Narrowed HERE, once, rather than null-checked at each of those four: the toolbar that builds a target is the party that knows, and every consumer downstream then reads a harness that is present by type.
  */
 export type ForkableTuiAgent = TuiAgentProjection & {
   readonly harnessId: TuiHarnessId;
   /**
-   * And it must not be a CLOUD REPLICA. Narrowing `harnessId` alone was not
-   * enough: a replica whose row does carry a harness satisfied that half, so
-   * the dialog would open for one and sit at `canSubmit === false` forever -
-   * the fork needs a `harnessSessionId`, which never leaves the machine
-   * running the provider CLI.
-   *
-   * Structural rather than another runtime check because the no-fork rule for
-   * replicas is a type-level fact (decision 2), and the toolbar that builds a
-   * target is where it can be proven once.
-   *
-   * `harnessSessionId` is deliberately NOT narrowed here as well: a Codex
-   * source can legitimately reach this dialog before `thread/started` has
-   * back-filled its id, and the submit gate already handles that.
+   * And it must not be a CLOUD REPLICA.
+   * Narrowing `harnessId` alone was not enough: a replica whose row does carry a harness satisfied that half, so the dialog would open for one and sit at `canSubmit === false` forever - the fork needs a `harnessSessionId`, which never leaves the machine running the provider CLI.
    */
   readonly origin: Exclude<TuiAgentProjectionOrigin, "cloud">;
 };
@@ -233,10 +194,7 @@ export function TerminalAgentForkDialog(props: TerminalAgentForkDialogProps) {
   );
 }
 
-// Coordinates dialog lifecycle, toolbar state, staged worktree state, and the
-// fork mutation in one fixed hook order. Splitting this body risks hiding the
-// cross-field submit invariants without reducing user-facing behavior.
-// eslint-disable-next-line complexity
+// eslint-disable-next-line complexity -- splitting this body would hide cross-field submit invariants
 function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   const { hostClient, hostId, epicId, onOpenChange, open, tabId, target } =
     props;
@@ -259,19 +217,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     if (target === null) return null;
     return terminalForkSettingsSeed(target.sourceAgent);
   }, [target]);
-  // A fork dialog has no send-time reauth gate of its own (unlike the main
-  // composer), so a source agent's profileId that was tombstoned since it
-  // last ran must be caught before it reaches `createAgent.create`.
-  // `useComposerToolbarStore` now validates every seed it receives against
-  // the SAME host's live `providers.list` (passing `hostClient` here - this
-  // dialog's explicit prop, not necessarily the app-wide active host -
-  // mirroring how the workspace controls below already query this fixed
-  // host), so no separate resolution is needed at this call site. Never
-  // authoritative: this dialog has no reauth gate of its own, so a
-  // genuinely-tombstoned source profile must be corrected to ambient here
-  // rather than silently submitted to `createAgent.create`. The catalog reads
-  // through the same fixed client, so the fork offers this host's harnesses
-  // and models.
+  // A fork dialog has no send-time reauth gate of its own (unlike the main composer), so a source agent's profileId that was tombstoned since it last ran must be caught before it reaches `createAgent.create`.
+  // Never authoritative: this dialog has no reauth gate of its own, so a genuinely-tombstoned source profile must be corrected to ambient here rather than silently submitted to `createAgent.create`.
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(settingsSeed, hostClient),
@@ -290,13 +237,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   );
   const currentProfileId = useStore(toolbarStore, (s) => s.selection.profileId);
 
-  // `providers.list` for the SOURCE harness, read from this dialog's own
-  // fixed `hostClient` (never the app-wide active host - mirrors
-  // `useResolvedSeededProfileId`'s host-scoping rule). Feeds three things:
-  // the bulk fork-admission preflight's candidate list (continue mode), the
-  // live "profile changed" default-title label, and the rejection alert's
-  // {target,source}Label copy - all three need the same profile-label
-  // resolution, so one query serves all of them.
+  // `providers.list` for the SOURCE harness, read from this dialog's own fixed `hostClient` (never the app-wide active host - mirrors `useResolvedSeededProfileId`'s host-scoping rule).
   const dialogActive = open && target !== null;
   const providersQuery = useProvidersListForClient(hostClient, {
     enabled: dialogActive,
@@ -313,53 +254,27 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   }, [providersQuery.data, target]);
 
   const sourceTuiAgentId = target?.sourceAgent.id ?? null;
-  // The SOURCE profile identity, RAW and persisted - the SAME identity the
-  // host's authoritative continuation-scope guard compares against (amend-02:
-  // the host now mirrors on-disk storage truth for a tombstoned managed
-  // profile whose layout used to share ambient storage, so raw is correct
-  // here rather than a UI-local normalization that could disagree with what
-  // the host actually admits). Used consistently everywhere this dialog
-  // needs "the source's own profile": admission composition, the CTA's
-  // locked-selection check, the default-title comparison, the cross-profile
-  // Claude disclosure, and `create.sourceProfileId`.
+  // The SOURCE profile identity, RAW and persisted - the SAME identity the host's authoritative continuation-scope guard compares against (amend-02: the host now mirrors on-disk storage truth for a tombstoned managed profile whose layout used to share ambient storage, so raw is correct here rather than a UI-local normalization that could disagree with what the host actually admits).
   const providersSettled = providersQuery.data !== undefined;
   const sourceProfileId = target?.sourceAgent.profileId ?? null;
-  // Old-host bypass fix (amend-01 Fix 1, blocker): negotiated capability
-  // absence is no evidence the host has the new authoritative `prepareLaunch`
-  // guard - it just means the host predates this package. The picker must be
-  // pinned to the source's own profile in THIS case regardless of intent,
-  // since the same dialog is reachable through the always-enabled primary
-  // Fork button, not just the (already capability-gated) Continue menu item.
+  // The picker must be pinned to the source's own profile in THIS case regardless of intent, since the same dialog is reachable through the always-enabled primary Fork button, not just the (already capability-gated) Continue menu item.
   const capabilityLockActive =
     dialogActive && !forkProfileSupported && sourceHarnessProfiles.length > 0;
-  // The capability lock's exemption specifically (amend-02): an old host has
-  // NO continuation-scope guard at all, so a plain fork/continue that lands
-  // on ambient - `useComposerToolbarStore`'s own seed correction for a
-  // tombstoned/no-longer-live raw source profile - must stay submittable
-  // there exactly as it did before this feature existed. Resolved the SAME
-  // way that seed correction is: live membership against this harness's
-  // `providers.list`. For a still-live source profile this equals
-  // `sourceProfileId` verbatim (no behavior change); it only diverges - to
-  // ambient - when the raw source profile is no longer a live row.
+  // The capability lock's exemption specifically (amend-02): an old host has NO continuation-scope guard at all, so a plain fork/continue that lands on ambient - `useComposerToolbarStore`'s own seed correction for a tombstoned/no-longer-live raw source profile - must stay submittable there exactly as it did before this feature existed.
+  // For a still-live source profile this equals `sourceProfileId` verbatim (no behavior change); it only diverges - to ambient - when the raw source profile is no longer a live row.
   const capabilityLockExemptProfileId = resolveSeededProfileId(
     sourceProfileId,
     sourceHarnessProfiles,
     providersSettled,
   );
-  // Only continue mode proactively disables unshared rows (tech plan UX
-  // package scopes bulk-admission picker behavior to continue mode); a
-  // manual cross-profile pick in plain fork mode still gets caught by
-  // `use-create-tui-agent.ts`'s own preflight at submit time, surfaced via
-  // the rejection alert below - it just isn't pre-disabled in the picker.
+  // Only continue mode proactively disables unshared rows (tech plan UX package scopes bulk-admission picker behavior to continue mode); a manual cross-profile pick in plain fork mode still gets caught by `use-create-tui-agent.ts`'s own preflight at submit time, surfaced via the rejection alert below - it just isn't pre-disabled in the picker.
   const admissionActive =
     dialogActive &&
     intent === "continue" &&
     forkProfileSupported &&
     sourceTuiAgentId !== null &&
     sourceHarnessProfiles.length > 0;
-  // Keyed by the exact inputs a bulk request answers for, so a stale result
-  // from a PRIOR target/profile-set is never read as settled for the current
-  // one (amend-01 Fix 3: the map must not fail open while unsettled).
+  // Keyed by the exact inputs a bulk request answers for, so a stale result from a PRIOR target/profile-set is never read as settled for the current one (amend-01 Fix 3: the map must not fail open while unsettled).
   const admissionRequestKey =
     sourceTuiAgentId === null
       ? null
@@ -432,10 +347,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     capabilityLockExemptProfileId,
   });
 
-  // Live default title (tech plan UX package: "profile-changed default
-  // title"): reactive to the CURRENT picker selection, not frozen at
-  // open-time, so switching profiles in the strip updates the title for as
-  // long as the user hasn't typed their own.
+  // Live default title (tech plan UX package: "profile-changed default title"): reactive to the CURRENT picker selection, not frozen at open-time, so switching profiles in the strip updates the title for as long as the user hasn't typed their own.
   const defaultTitle =
     target === null
       ? ""
@@ -450,18 +362,14 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 ),
         });
   if (open !== titleState.open) {
-    // A fresh open resets to the (now live) default; a close leaves the
-    // draft/touched state exactly as it was so the closing dialog doesn't
-    // flash back to the default mid-animation (matches prior behavior).
+    // A fresh open resets to the (now live) default; a close leaves the draft/touched state exactly as it was so the closing dialog doesn't flash back to the default mid-animation (matches prior behavior).
     setTitleState((current) => ({
       open,
       touched: open ? false : current.touched,
       draft: open ? "" : current.draft,
     }));
     if (!open) {
-      // Clear the transient submit status/alert when the dialog closes
-      // (incl. an external close mid-submit). Adjusted during render on the
-      // `open` prop transition rather than in an effect.
+      // Adjusted during render on the `open` prop transition rather than in an effect.
       if (status !== "idle") setStatus("idle");
       if (rejection !== null) setRejection(null);
     }
@@ -483,22 +391,13 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   }));
   const sourceAgentId = target?.sourceAgent.id ?? "";
   const sourceArgs = target?.sourceAgent.terminalAgentArgs ?? "";
-  // `argsDraft` / `argsTouched` are DERIVED from `argsState` vs the current
-  // source: a different source (or a never-touched field) falls back to the
-  // source's own args, so there is no effect syncing state to the props - the
-  // input's onChange stamps `sourceAgentId` when the user edits.
+  // `argsDraft` / `argsTouched` are DERIVED from `argsState` vs the current source: a different source (or a never-touched field) falls back to the source's own args, so there is no effect syncing state to the props - the input's onChange stamps `sourceAgentId` when the user edits.
   const argsDraft =
     argsState.sourceAgentId === sourceAgentId ? argsState.draft : sourceArgs;
   const argsTouched =
     argsState.sourceAgentId === sourceAgentId ? argsState.touched : false;
   const busy = createAgent.isPending || status !== "idle";
-  // Defense-in-depth alongside the picker's own row-disabling (amend-01
-  // Fixes 1 and 3): the CTA itself refuses to submit a currently-selected
-  // profile the composed admission map has locked, whether that's the
-  // old-host capability lock, an unsettled/failed bulk check, or a rejected
-  // server verdict. A resolved server verdict is authoritative for the source
-  // profile too; only local unsettled/failed locks exempt that same-profile
-  // selection.
+  // A resolved server verdict is authoritative for the source profile too; only local unsettled/failed locks exempt that same-profile selection.
   const crossProfileSelected = currentProfileId !== sourceProfileId;
   const hasResolvedAdmission = admissionSettled?.kind === "resolved";
   const selectedProfileLocked =
@@ -512,11 +411,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     !busy &&
     !selectedProfileLocked;
 
-  // The seeded workspace (staged intent + live snapshot) is scratch state for
-  // THIS fork attempt. Abandoning the dialog must drop it, or the next fork in
-  // the epic reads the cancelled fork's folders/primary back out of the shared
-  // per-epic slot - `readSeededLaunchWorkspace` prefers the snapshot over the
-  // new target's `workspaceSeed`.
+  // Abandoning the dialog must drop it, or the next fork in the epic reads the cancelled fork's folders/primary back out of the shared per-epic slot - `readSeededLaunchWorkspace` prefers the snapshot over the new target's `workspaceSeed`.
   const activeWorkspaceTarget = open ? target : null;
   useEffect(() => {
     if (activeWorkspaceTarget === null) return;
@@ -573,10 +468,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     );
     const toolbar = toolbarStore.getState();
     const submittedProfileId = toolbar.selection.profileId;
-    // Claude cross-profile disclosure moment (tech plan UX package): the
-    // forked session's TodoWrite/rewind state is provider-account-scoped and
-    // does not follow a profile switch. Gated to Claude - the only harness
-    // this feature admits cross-profile forks for at all.
+    // Gated to Claude - the only harness this feature admits cross-profile forks for at all.
     const crossProfileClaudeFork =
       submittedProfileId !== sourceProfileId &&
       target.sourceAgent.harnessId === "claude";
@@ -618,9 +510,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             source: "direct_ui",
             harness: target.sourceAgent.harnessId,
           });
-          // No trivial persisted field exists to drive a tile-side one-time
-          // notice (tech plan UX package's documented fallback), so the
-          // cross-profile lossiness disclosure fires as a toast here instead.
+          // No trivial persisted field exists to drive a tile-side one-time notice (tech plan UX package's documented fallback), so the cross-profile lossiness disclosure fires as a toast here instead.
           if (crossProfileClaudeFork) {
             toast(
               `Continuing under ${targetLabel} - TodoWrite history and rewind state from the original session won't carry over.`,
@@ -671,20 +561,15 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className="max-h-[92vh] w-[min(94vw,48rem)] gap-3 sm:max-w-[min(94vw,48rem)]"
-        // Same portal rule as the worktree pickers: the host switcher's list
-        // mounts outside this dialog, so a click in it reads as an interaction
-        // from outside. Dismissing on that would throw away the form someone is
-        // in the middle of filling, for the crime of choosing a host in it.
+        // Same portal rule as the worktree pickers: the host switcher's list mounts outside this dialog, so a click in it reads as an interaction from outside.
+        // Dismissing on that would throw away the form someone is in the middle of filling, for the crime of choosing a host in it.
         onInteractOutside={(event) => {
           if (isHostSwitcherListInteraction(event.target)) {
             event.preventDefault();
           }
         }}
         onOpenAutoFocus={(event) => {
-          // Continue mode starts on the real picker control, using that
-          // control's normal focus treatment instead of drawing a ring around
-          // the whole profile section. The section remains a safe fallback
-          // while the picker is still resolving.
+          // Continue mode starts on the real picker control, using that control's normal focus treatment instead of drawing a ring around the whole profile section.
           if (intent !== "continue") return;
           if (profileSectionRef.current === null) return;
           event.preventDefault();
@@ -772,9 +657,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                     registerActivation={false}
                     createProfileHostId={hostId}
                     runTargetHostId={hostId}
-                    // A dialog has no terminal surface to open a setup
-                    // terminal into; the CTA shows its steps without the
-                    // button.
+                    // A dialog has no terminal surface to open a setup terminal into; the CTA shows its steps without the button.
                     terminalLoginSurface={null}
                     profileAdmission={admissionByProfileId}
                   />
@@ -870,9 +753,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
 }
 
 // Drops both halves of this fork's scratch workspace: the staged per-folder
-// intent (branch/scripts selections) and the live snapshot the picker mirrors
-// out for `readSeededLaunchWorkspace`. Idempotent - a successful submit clears
-// here and the close that follows clears again.
+// intent (branch/scripts selections) and the live snapshot the picker mirrors out for `readSeededLaunchWorkspace`.
+// Idempotent - a successful submit clears here and the close that follows clears again.
 function clearTerminalForkWorkspace(stagingKey: WorktreeStagingKey): void {
   useWorktreeIntentStagingStore.getState().clear(stagingKey);
   useSeededWorkspaceSnapshotStore.getState().clear(stagingKey);
@@ -902,21 +784,13 @@ function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
     // Epic Mode was removed; the protocol still carries the field.
     agentMode: "regular",
     serviceTier: null,
-    // Seed from the source agent's profile - `useComposerToolbarStore`
-    // validates it against the target host's live provider profiles; the
-    // harness stays locked (see `lockedHarnessId` below) but the user can
-    // still switch between that harness's OTHER profiles via the rail
-    // before forking.
+    // Seed from the source agent's profile - `useComposerToolbarStore` validates it against the target host's live provider profiles; the harness stays locked (see `lockedHarnessId` below) but the user can still switch between that harness's OTHER profiles via the rail before forking.
     profileId: agent.profileId,
   };
 }
 
 /**
- * Tech plan UX package's "profile-changed default title":
- * `Continue · {profileLabel} - {sourceTitle}` once the picker's live
- * selection differs from the source's own profile, else the plain
- * `Fork - {sourceTitle}`. `profileLabel === null` is the caller's signal for
- * "no change" - it never independently re-derives that comparison.
+ * `profileLabel === null` is the caller's signal for "no change" - it never independently re-derives that comparison.
  */
 function terminalForkDefaultTitle(input: {
   readonly sourceAgent: ForkableTuiAgent;
@@ -929,9 +803,9 @@ function terminalForkDefaultTitle(input: {
   return `Continue · ${input.profileLabel} - ${sourceTitle}`;
 }
 
-/** Best-effort label for a profile id against a resolved profile list -
- *  used for the default-title and rejection-alert copy, both of which need
- *  a readable name even before `providers.list` has settled. */
+/**
+ * Best-effort label for a profile id against a resolved profile list - used for the default-title and rejection-alert copy, both of which need a readable name even before `providers.list` has settled.
+ */
 function resolveForkProfileLabel(
   profiles: ReadonlyArray<ProviderProfile>,
   profileId: string | null,

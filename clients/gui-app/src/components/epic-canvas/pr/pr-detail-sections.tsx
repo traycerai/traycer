@@ -39,13 +39,8 @@ import type { LinkClickEvent } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 
 /**
- * Reference tabs: Files changed and Checks.
- *
- * Both are lists of rows inside one bordered card - the same shell the
- * conversation surfaces use - rather than GitHub's collapsible box with its
- * own inner scroller. The tab body already scrolls, so a nested scroll region
- * only produces the trapped-wheel behaviour where the page stops moving over
- * a list and the reader has to aim around it.
+ * Both are lists of rows inside one bordered card - the same shell the conversation surfaces use - rather than GitHub's collapsible box with its own inner scroller.
+ * The tab body already scrolls, so a nested scroll region only produces the trapped-wheel behaviour where the page stops moving over a list and the reader has to aim around it.
  */
 
 // ---- Files changed --------------------------------------------------------- //
@@ -89,23 +84,13 @@ function PrFileChangeGlyph(props: {
 }
 
 /**
- * The changed-file list: paths, change type and per-file counts.
- *
- * Patch content is absent from the `pr.subscribeDetail` contract
- * (`prFilesSectionSchema`) because GitHub's GraphQL `PullRequestChangedFile`
- * has no patch field to carry, so this view can never render a diff from the
- * sweep alone. `pr.getLocalDiff` supplies one from the local checkout when
- * there is one; this list is what a reader sees when there isn't, and the
- * `footer` is where that gets explained (see `PrDetailFilesTab`).
+ * Patch content is absent from the `pr.subscribeDetail` contract (`prFilesSectionSchema`) because GitHub's GraphQL `PullRequestChangedFile` has no patch field to carry, so this view can never render a diff from the sweep alone.
  */
 export function PrDetailFilesChanged(props: {
   readonly files: PrFilesSection;
   readonly prUrl: string | null;
-  // PR-wide diffstat from `core`. The header must show these, NOT the sum of
-  // the shown (≤100) file rows: on a >100-file PR the row sum covers only the
-  // first 100 while `totalCount` covers all, so pairing them would read as a
-  // total that doesn't add up. Fall back to the shown sum only when the
-  // PR-wide values are absent (never observed).
+  // The header must show these, NOT the sum of the shown (≤100) file rows: on a >100-file PR the row sum covers only the first 100 while `totalCount` covers all, so pairing them would read as a total that doesn't add up.
+  // Fall back to the shown sum only when the PR-wide values are absent (never observed).
   readonly additions: number | null;
   readonly deletions: number | null;
   /** `null` when no chat is selected to send to, which disables the row action. */
@@ -214,17 +199,8 @@ function PrFileQuoteButton(props: {
 // ---- Checks ---------------------------------------------------------------- //
 
 /**
- * The Checks tab: the per-check list, and nothing above it.
- *
- * There was a headline card here - "Some checks were not successful", with the
- * failing count and the review decision - sitting directly on top of a list
- * whose first row was the failing check, in the same red. A summary is only
- * worth its space when it says something the thing below it doesn't; this one
- * restated the first row and the count of it. The counts moved into the list's
- * own header rail, which is where Files already carries its diffstat.
- *
- * (It also replaced GitHub's merge box, which is shaped around the merge
- * BUTTON - the one thing a read-only view has no business implying it can do.)
+ * A summary is only worth its space when it says something the thing below it doesn't; this one restated the first row and the count of it.
+ * The counts moved into the list's own header rail, which is where Files already carries its diffstat. (It also replaced GitHub's merge box, which is shaped around the merge BUTTON - the one thing a read-only view has no business implying it can do.)
  */
 export function PrDetailChecks(props: {
   readonly checks: PrChecksSection;
@@ -273,10 +249,8 @@ export function PrDetailChecks(props: {
 }
 
 /**
- * One outcome group. Every group starts EXPANDED - the grouping is there to
- * order and label the rows, not to hide them, and a check you have to click to
- * see is a check you have to know to look for. The heading still collapses on
- * demand once a reader has decided a group is not interesting.
+ * One outcome group.
+ * Every group starts EXPANDED - the grouping is there to order and label the rows, not to hide them, and a check you have to click to see is a check you have to know to look for.
  */
 function PrCheckGroupSection(props: {
   readonly group: PrCheckGroup;
@@ -328,11 +302,7 @@ const OUTCOME_GLYPH: Record<
 
 /**
  * One check.
- *
- * The NAME is the link - the whole row's subject is "this check", and the
- * thing a reader wants to click is the thing they just read. The trailing
- * icon-button it replaces was a second, smaller target for the same
- * destination, sitting where the eye had already stopped.
+ * The NAME is the link - the whole row's subject is "this check", and the thing a reader wants to click is the thing they just read.
  */
 function PrCheckRow(props: {
   readonly context: PrCheckContext;
@@ -395,10 +365,8 @@ function PrCheckRow(props: {
 }
 
 /**
- * The reporting app's mark, which is how a list of fourteen rows is scanned:
- * finding the one CodeRabbit row among twelve Actions rows is a glance rather
- * than a read. Falls back to nothing at all when the app served no icon -
- * a generic placeholder would add noise without adding a distinction.
+ * The reporting app's mark, which is how a list of fourteen rows is scanned: finding the one CodeRabbit row among twelve Actions rows is a glance rather than a read.
+ * Falls back to nothing at all when the app served no icon - a generic placeholder would add noise without adding a distinction.
  */
 function PrCheckAppMark(props: {
   readonly context: PrCheckContext;

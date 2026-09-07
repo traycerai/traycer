@@ -14,14 +14,7 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
 
 import { GithubMentionFilterPopover } from "./github-mention-filter-popover";
 
-/**
- * The mention menu's per-step top bar: freshness, the ⓘ that explains a paused
- * source, the filter funnel, and refresh - rendered from whatever the current
- * step published into the picker store.
- *
- * A step with no chrome renders nothing at all, so the menu header keeps its
- * previous shape for every step that had none.
- */
+/** The mention menu's per-step top bar: freshness, the ⓘ that explains a paused source, the filter funnel, and refresh - rendered from whatever the current step published into the picker store. A step with no chrome renders nothing at all, so the menu header keeps its previous shape for every step that had none. */
 export function MentionStepChromeBar(props: {
   readonly chrome: MentionStepChrome;
   readonly onReturnFocus: (resumeText: string | null) => void;
@@ -57,13 +50,7 @@ export function MentionStepChromeBar(props: {
   );
 }
 
-/**
- * `Updated 2m ago` / `Not yet fetched` / `Checking…`.
- *
- * It deliberately never claims what is on screen. A section paused before its
- * first successful fetch has no "last updated" to show, and saying so plainly
- * is the honest answer in both states.
- */
+/** It deliberately never claims what is on screen. */
 function FreshnessStamp(props: {
   readonly freshness: MentionStepChromeFreshness;
 }): ReactNode {
@@ -96,12 +83,7 @@ function UpdatedStamp(props: { readonly updatedAt: number }): ReactNode {
   );
 }
 
-/**
- * Icon-only and click-only: the desktop window's Reload owns ⌘R, and a bare
- * `R` is impossible inside a menu where typing filters the list.
- * `onMouseDown` preventDefault so pressing it never takes focus off the
- * composer - the caret has to survive a refresh.
- */
+/** Icon-only and click-only: the desktop window's Reload owns ⌘R, and a bare `R` is impossible inside a menu where typing filters the list. `onMouseDown` preventDefault so pressing it never takes focus off the composer - the caret has to survive a refresh. */
 function RefreshButton(props: {
   readonly refresh: MentionStepChromeRefresh;
 }): ReactNode {
@@ -138,12 +120,7 @@ function RefreshButton(props: {
   );
 }
 
-/**
- * The degraded-source banner above the rows.
- *
- * Not an ⓘ and not a pause: waiting does not fix a missing or signed-out `gh`,
- * so the copy has to say what to do. Cached rows still render below it.
- */
+/** Not an ⓘ and not a pause: waiting does not fix a missing or signed-out `gh`, so the copy has to say what to do. */
 export function MentionStepChromeBanner(props: {
   readonly chrome: MentionStepChrome;
 }): ReactNode {
@@ -162,13 +139,7 @@ export function MentionStepChromeBanner(props: {
   );
 }
 
-/**
- * The appended status row - the `Loading…` idiom while `busy`, a plain
- * statement otherwise. The dots are conditional because they MEAN in-flight
- * work: spinning beside "Couldn't reach GitHub." would claim progress a read
- * that has given up is not making (the failed slash-command row above makes
- * the same choice).
- */
+/** The appended status row - the `Loading…` idiom while `busy`, a plain statement otherwise. The dots are conditional because they MEAN in-flight work: spinning beside "Couldn't reach GitHub." would claim progress a read that has given up is not making (the failed slash-command row above makes the same choice). */
 export function MentionStepChromeStatusRow(props: {
   readonly label: string;
   readonly busy: boolean;

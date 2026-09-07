@@ -12,12 +12,7 @@ import { useHostClient } from "@/lib/host";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
-// Recoloring a profile only changes the accent color echoed back in
-// `providers.list`. It can't flip a provider's or profile's availability, so -
-// unlike the other provider mutations - it does not refresh the GUI/TUI
-// harness selectors or the agent-selection-guide default (those re-probe live
-// availability, which is expensive; see `useProvidersSetTerminalAgentArgs`
-// for the precedent).
+// It can't flip a provider's or profile's availability, so - unlike the other provider mutations - it does not refresh the GUI/TUI harness selectors or the agent-selection-guide default (those re-probe live availability, which is expensive; see `useProvidersSetTerminalAgentArgs` for the precedent).
 const RECOLOR_PROFILE_INVALIDATIONS: ReadonlyArray<
   keyof HostRpcRegistry & string
 > = ["providers.list"];

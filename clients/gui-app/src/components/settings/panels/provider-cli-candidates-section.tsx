@@ -42,52 +42,16 @@ import {
 
 type ProviderId = ProviderCliState["providerId"];
 
-// ONE grid for the whole table, with the header and every row joining it via
-// `grid-cols-subgrid`. This used to be the same template applied SEPARATELY to
-// the header and to each row, which are sibling grids - so the Version track
-// resolved against each row's own content and no two rows agreed where the
-// column started.
-//
-// The Version track is deliberately NOT content-sized. It was
-// `minmax(5.5rem,auto)`, and once the header and rows shared one grid, `auto`
-// meant ANY row's content could resize the column for EVERY row: clicking
-// Retry swapped that cell to a progress bar and the whole table reflowed. The
-// `0.2fr` max keeps it fluid (it grows with the dialog, per the repo's
-// no-fixed-layout-widths rule) while making it impossible for cell content to
-// size it - the property that makes the table hold still.
-//
-// The floor is `0`, not the `5.5rem` a `v0.147.0` wants before it truncates.
-// A rem floor is a fixed layout width: combined with the other tracks and the
-// cell padding it stops the grid shrinking with its viewport-sized container,
-// so a narrow settings dialog overflows horizontally instead of truncating.
-// The cell already truncates, which is the graceful answer at that width.
-//
-// The row wrapper still has to be a real box (borders, hover, dimming), which
-// is why this is subgrid and not `display: contents`.
+// The floor is `0`, not the `5.5rem` a `v0.147.0` wants before it truncates. The cell already truncates, which
+// is the graceful answer at that width.
 const TABLE_GRID =
   "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(0,0.2fr)_2.25rem]";
 const TABLE_ROW = "col-span-4 grid grid-cols-subgrid items-center";
-// Every cell in every row and in the header uses the SAME horizontal padding,
-// so the Version header's right edge lands exactly on each row's version. The
-// header used `p-2` against the rows' `p-2.5` and was 2px out.
+// Every cell in every row and in the header uses the same horizontal padding, so the Version header's right
+// edge lands exactly on each row's version.
 const TABLE_CELL_X = "px-2.5";
 
-/**
- * Which OTHER provider's CLI candidates this one falls back to when its own
- * list is empty, because the two resolve to the same binary on disk (host:
- * `baseBinaryName`/`providerSubdir` map traycer and openrouter onto opencode).
- * `null` for a provider that owns its binary.
- *
- * Exhaustive rather than the `traycer || openrouter` id test it replaces:
- * the pair was correct, but a provider added without an entry here silently
- * inherited "owns its own binary", which for the next opencode-family member
- * is an empty CLI table with a working binary sitting one row away. The
- * compiler now asks.
- *
- * A borrowed row is only ever a shortcut to the same absolute path - selecting
- * one writes a `custom` selection into THIS provider's own overrides, so
- * nothing here is shared state.
- */
+/** Exhaustive rather than the `traycer || openrouter` id test it replaces. */
 const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   "claude-code": null,
   codex: null,
@@ -113,26 +77,13 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   reasonix: null,
 };
 
-/**
- * Where to send a user whose provider ships no Traycer-managed binary and has
- * none on this machine. `null` means "no install page we can point at" - the
- * empty state still explains itself, it just has no link.
- *
- * Exhaustive rather than the `providerId === "hermes"` test it replaces. That
- * test was the second of the two registration points `adding-a-harness.md`
- * warns about (the first being the host's `PROVIDERS_WITHOUT_BUNDLED_BINARY`):
- * they happened to agree while hermes was the only member, and the moment amp
- * and cursor joined the host set they stopped agreeing. The empty state is now
- * driven by the CANDIDATE LIST itself - the host omits the bundled row for
- * exactly the providers in that set - and this map only supplies the link.
- */
+/** Exhaustive rather than the `providerId === "hermes"` test it replaces. */
 const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   "claude-code": null,
   codex: null,
   opencode: null,
-  // No entry: no cursor-agent install page is referenced anywhere in this repo
-  // and one has not been verified, so this stays null rather than shipping a
-  // guessed URL that 404s from a screen a stuck user was sent to.
+  // No entry: no cursor-agent install page is referenced anywhere in this repo and one has not been verified, so
+  // this stays null rather than shipping a guessed URL that 404s from a screen a stuck user was sent to.
   cursor: null,
   traycer: null,
   openrouter: null,
@@ -146,16 +97,15 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   kimi: null,
   copilot: null,
   kilocode: null,
-  // The one URL `@ampcode/cli`'s own README publishes.
+  // The one URL `@ampcode/cli`'s own readme publishes.
   amp: "https://ampcode.com/manual",
   devin: null,
   pi: null,
   hermes:
     "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
   omp: null,
-  // Reasonix IS bundled, so this empty state is not its normal path - it only
-  // appears if the managed binary is missing on this machine. Left null rather
-  // than shipping an unverified upstream install page for that edge.
+  // Reasonix IS bundled, so this empty state is not its normal path - it only appears if the managed binary is
+  // missing on this machine. Left null rather than shipping an unverified upstream install page for that edge.
   reasonix: null,
 };
 
@@ -196,16 +146,8 @@ function candidateConfigForProvider(
   };
 }
 
-/**
- * Three outcomes, not two.
- *
- * `null` still means HIDE, but it now means only one thing: this provider has
- * no managed pack, so there is nothing to manage and nothing to explain.
- * Every other way the panel can fail to appear returns `unavailable` and gets
- * rendered as a sentence. Silently hiding those was the reported bug - a
- * settings tab with no control and no reason reads as "this feature does not
- * exist on my machine".
- */
+/** Silently hiding those was the reported bug - a settings tab with no control and no reason reads as "this
+ * feature does not exist on my machine". */
 function versionManagerPanelDataFor(args: {
   readonly hostId: string | null;
   readonly supportsVersionManager: boolean | null;
@@ -213,20 +155,14 @@ function versionManagerPanelDataFor(args: {
   readonly managedVersions: ProviderCliState["managedVersions"];
   readonly managedVersionsUnavailable: ProviderCliState["managedVersionsUnavailable"];
 }): VersionManagerPanelData | null {
-  // No host is the second case that still HIDES rather than explains. Every
-  // reason below is a statement about a host; with none bound there is nothing
-  // true to say, and the capability read is null for a null hostId - so
-  // explaining here would confidently report "your host is too old" about a
-  // host that does not exist.
+  // No host is the second case that still hides rather than explains.
   if (args.hostId === null) return null;
   if (args.packId === null || args.packId === undefined) return null;
-  // A pack can back several providers. Its manager must retain the
-  // shared-store name rather than inheriting whichever provider row
-  // happened to open it (for example, `opencode CLI`, not `OpenRouter CLI`).
+  // Its manager must retain the shared-store name rather than inheriting whichever provider row happened to open
+  // it (for example, `opencode CLI`, not `OpenRouter CLI`).
   const packDisplayName = `${args.packId} CLI`;
-  // Null is "not answered yet", not "unsupported" - treat only an explicit
-  // false as a capability refusal, so a first paint does not flash a
-  // "your host is too old" line at a host that supports it perfectly.
+  // Null is "not answered yet", not "unsupported" - treat only an explicit false as a capability refusal, so a
+  // first paint does not flash a "your host is too old" line at a host that supports it perfectly.
   if (args.supportsVersionManager === false) {
     return {
       kind: "unavailable",
@@ -253,35 +189,10 @@ function versionManagerPanelDataFor(args: {
   };
 }
 
-/**
- * An empty candidate list means "nothing runnable was found on this machine",
- * not "nothing detected yet": the host only omits the bundled row for the
- * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
- * for everyone else the row is always present even when unavailable. So an
- * empty table is a terminal state that owes the user a sentence and, where one
- * exists, a link - not a bare header with no rows under it.
- *
- * This used to be hermes-only, by id. Amp and cursor joined the host's set
- * (their SDKs spawn their own copies, so Traycer vendors neither) and would
- * otherwise have rendered that bare table - which for amp is exactly the dead
- * end this whole change is about: MCP add/remove/auth silently gone, and the
- * one screen that could explain it saying nothing.
- *
- * Extracted for the same reason as `CandidateNotices`: it keeps the section
- * below orchestration, and keeps this anchor's RunnerHost branch out of that
- * component's complexity budget.
- */
-/**
- * What the candidate area shows: the table, or one of the two empty states.
- *
- * A plain function rather than nested ternaries in the JSX — the three-way
- * choice reads as a rule here, and the table branch is long enough that a
- * reader arriving at its `)` should not have to reconstruct which of two
- * conditions got them there.
- *
- * `adding` forces the table because that is where the custom-path input lives:
- * a user who opened it must still be able to type, whatever the probe says.
- */
+/** Amp and cursor joined the host's set (their SDKs spawn their own copies, so Traycer vendors neither) and
+ * would otherwise have rendered that bare table. */
+/** `adding` forces the table because that is where the custom-path input lives: a user who opened it must still
+ * be able to type, whatever the probe says. */
 type CandidateArea = "probing" | "missing" | "table";
 
 function candidateAreaFor(args: {
@@ -315,15 +226,8 @@ function CandidateEmptyArea({
   );
 }
 
-/**
- * Shown INSTEAD of the missing-binary notice while the host's PATH probe is
- * still in flight and has turned up nothing yet.
- *
- * Deliberately says nothing about installing: at this point we do not know
- * whether a binary exists, and the missing notice's advice ("install it, or
- * add its path below") is wrong often enough — every PATH-only provider on a
- * cold open — that showing it early is worse than showing nothing.
- */
+/** Deliberately says nothing about installing: at this point we do not know whether a binary exists, and the
+ * missing notice's advice ("install it, or add its path below") is wrong often enough. */
 function CliBinaryProbePendingNotice({
   providerLabel,
 }: {
@@ -355,9 +259,8 @@ function CliBinaryMissingNotice({
         <a
           href={installGuideUrl}
           onClick={(event) => {
-            // The app owns every URL egress (A6); the `href` stays for anchor
-            // semantics only.
             // oxlint-disable-next-line react-doctor/no-prevent-default -- `openLink` owns the open, not renderer navigation.
+            // The app owns every URL egress (A6); the `href` stays for anchor
             event.preventDefault();
             void openLink(installGuideUrl, "docs", null);
           }}
@@ -370,18 +273,8 @@ function CliBinaryMissingNotice({
   );
 }
 
-/**
- * S14: the CLI-path-management subsection of `ProviderDetail` (binary
- * selection table + "Add custom path" flow), extracted so the panel stays
- * orchestration.
- *
- * Renders for EVERY provider. It used to bail out for cursor and amp via
- * `hidesCliCandidates`, on the premise that an SDK-driven provider has no CLI
- * binary the user could pick. Both of them spawn the Traycer-resolved binary
- * for their MCP write verbs (`runAmpCliCapture`, `runCursorMcpCli`), so this
- * table was never decorative for them - it is the only control over the binary
- * those verbs use, and the only way to supply one when none is on PATH.
- */
+/** Both of them spawn the Traycer-resolved binary for their MCP write verbs (`runAmpCliCapture`,
+ * `runCursorMcpCli`), so this table was never decorative for them. */
 export function ProviderCliCandidatesSection({
   state,
   providers,
@@ -396,12 +289,8 @@ export function ProviderCliCandidatesSection({
   const radioName = useId();
   const [adding, setAdding] = useState(false);
   const [draftPath, setDraftPath] = useState("");
-  // The version manager's RPCs are all non-floor, so support is a real
-  // per-host question. Read THREE-VALUED: `useHostSupportsMethod` collapses
-  // "not answered yet" into `false`, which this surface can no longer use -
-  // it now renders a reason rather than hiding, and would confidently tell a
-  // perfectly capable host it is too old for the moments before its handshake
-  // lands.
+  // Read three-valued: `useHostSupportsMethod` collapses "not answered yet" into `false`, which this surface can
+  // no longer use.
   const supportsVersionManager = useProviderPackVersionManagerSupport(hostId);
   const focusDraftInput = useCallback((node: HTMLInputElement | null): void => {
     node?.focus();
@@ -437,21 +326,11 @@ export function ProviderCliCandidatesSection({
     );
   };
 
-  // Normalize once: an old host's payload leaves the key genuinely absent
-  // (`undefined`), which reads identically to an explicit `null` everywhere
-  // below.
+  // Normalize once: an old host's payload leaves the key genuinely absent (`undefined`), which reads identically
+  // to an explicit `null` everywhere below.
   const managedInstallState = state.managedInstallState ?? null;
-  // P2/P4. Derived from the WHOLE row, which is the only place the fallback
-  // candidates live - the point of `providerPackPreparingForProvider` taking a
-  // provider rather than a state. This section used to build its own
-  // `ProviderPackPreparing` at the two render sites with `fallbackRunnable:
-  // false` written in, on the argument that Settings shows the pack's lifecycle
-  // and not whether the provider can run. Those are the same object: every
-  // label and every colour in this module reads that field, so hardcoding it
-  // did not scope the display - it asserted "nothing runs" about a provider
-  // that may be running from PATH right now. On an offline first launch that is
-  // a red row and a blocking "Setup failed" for every pin-carrying provider on
-  // the machine, at the moment the user is least able to tell it is wrong.
+  // Derived from the whole row, which is the only place the fallback candidates live - the point of
+  // `providerPackPreparingForProvider` taking a provider rather than a state.
   const packPreparing = providerPackPreparingForProvider(state);
   const versionManagerData = versionManagerPanelDataFor({
     hostId,
@@ -460,13 +339,8 @@ export function ProviderCliCandidatesSection({
     managedVersions: state.managedVersions,
     managedVersionsUnavailable: state.managedVersionsUnavailable,
   });
-  // `availabilityPending` means the host's shell/PATH probe is still running,
-  // and the protocol is explicit that `candidates` must not be trusted until
-  // it settles ("A pending row always carries `available: false` semantically"
-  // — provider-schemas). An empty interim list is therefore not evidence of
-  // absence: for the PATH-only providers (amp, cursor) this pane would tell
-  // people to install a binary the in-flight probe is about to find, and offer
-  // an install guide for a CLI they already have.
+  // `availabilityPending` means the host's shell/PATH probe is still running, and the protocol is explicit that
+  // `candidates` must not be trusted until it settles ("A pending row always carries `available.
   const candidateArea = candidateAreaFor({
     adding,
     probePending: state.availabilityPending,
@@ -669,9 +543,8 @@ function CustomPathForm({
 }): ReactNode {
   if (!open) return null;
   return (
-    // `col-span-4`: the table container is the shared grid the header and rows
-    // subgrid onto, so this form is a grid item too - without it, it lands in
-    // the 2.25rem radio column and collapses to a sliver.
+    // `col-span-4`: the table container is the shared grid the header and rows subgrid onto, so this form is a
+    // grid item too - without it, it lands in the 2.25rem radio column and collapses to a sliver.
     <div className="col-span-4 flex flex-col gap-2 border-t border-border/40 bg-foreground/2 p-3">
       <div className="flex items-center gap-2">
         <Input
@@ -742,13 +615,9 @@ function CandidateRow({
   versionMenuHostId,
 }: {
   readonly candidate: ProviderCliCandidate;
-  // Provider-level (not per-candidate - see that schema's comment), so only
-  // meaningful for the bundled row; other candidates ignore it. Still the
-  // source for `bundledPathLabel`, which asks a different question than the
-  // status cell does: whether this build has a managed opinion at all, not what
-  // that opinion currently is.
+  // Provider-level (not per-candidate - see that schema's comment), so only meaningful for the bundled row;
+  // other candidates ignore it.
   readonly managedInstallState: ProviderManagedInstallState | null;
-  /** The same state, derived against the row's fallbacks. See the call site. */
   readonly packPreparing: ProviderPackPreparing | null;
   readonly nextRunBinary: ProviderNextRunBinary | null;
   readonly advisory: ProviderCliState["advisory"] | null;
@@ -851,16 +720,13 @@ function candidateRowPresentation(args: {
       !args.candidate.versionPending &&
       !packExcusesMissingBinary,
     status: rowStatusFor({
-      // The managed install, the pack-preparing derivation and the session
-      // count are all PROVIDER-level facts that belong to the bundled row, so
-      // they are scoped here rather than at the call site - every other row
-      // gets null and cannot accidentally narrate the pack's business.
+      // The managed install, the pack-preparing derivation and the session count are all provider-level facts that
+      // belong to the bundled row, so they are scoped here rather than at the call site.
       managedInstallState: isBundled ? args.managedInstallState : null,
       preparing: isBundled ? args.packPreparing : null,
       differingSessionCount: isBundled ? args.differingSessionCount : 0,
-      // NOT scoped: `nextRunMatchesSelection` has to know whether this provider
-      // has a managed pack at all to tell an inline bundled fallback apart from
-      // the managed install that shares its row.
+      // Not scoped: `nextRunMatchesSelection` has to know whether this provider has a managed pack at all to tell an
+      // inline bundled fallback apart from the managed install that shares its row.
       providerManagedInstallState: args.managedInstallState,
       nextRunBinary: args.nextRunBinary,
       selection: args.selection,
@@ -887,11 +753,7 @@ function CandidateSelectionControl({
       ? "Select bundled binary"
       : `Select ${candidate.path}`;
   return (
-    // `min-h-6` sets the row's content floor. Vertical padding lives on the row
-    // wrapper now (so the status line sits INSIDE the row's box), which means
-    // nothing else guarantees a rowtrack tall enough for the 24px action
-    // buttons - and a Managed row 4px taller than the PATH row under it is the
-    // same misalignment this revision exists to remove.
+    // `min-h-6` sets the row's content floor.
     <span className="flex min-h-6 items-center justify-center">
       <input
         type="radio"
@@ -916,9 +778,8 @@ function CandidatePathCell({
   readonly pathAdvisory: string | null;
 }): ReactNode {
   if (candidate.kind === "bundled") {
-    // The differing-session caption used to hang off this cell. It is a status,
-    // not an identity, so it moved to the row's one status line where it takes
-    // its turn behind an install failure or an install in flight.
+    // It is a status, not an identity, so it moved to the row's one status line where it takes its turn behind an
+    // install failure or an install in flight.
     return (
       <span
         className={cn(
@@ -987,16 +848,7 @@ function ExternalCandidatePathCell({
   );
 }
 
-/**
- * ONE subject: the version this row would run. Nothing else.
- *
- * It used to hold the version, a chevron, the Active chip, a warning icon, a
- * Retry button, a progress bar and a progress label - six subjects under a
- * header that says "Version", which is why no amount of alignment work made
- * the column line up. The chevron moved to the action column and everything
- * else moved to the row's status line; what is left is right-aligned text that
- * lands on the same edge on every row by construction.
- */
+/** One subject: the version this row would run. */
 function CandidateVersionCell({
   candidate,
   unavailable,
@@ -1017,18 +869,8 @@ function CandidateVersionCell({
   );
 }
 
-/**
- * The version MENU, in the per-row action column beside the custom-path trash.
- *
- * It used to wrap the version value itself, on the argument that clicking the
- * version to change the version needs no label. True, but it made the version
- * a padded button on exactly one row while every other row rendered bare text,
- * so the two could not share a right edge - the reported "weird indentation",
- * unfixable while the control and the value were the same element.
- *
- * Anchored with the same dialog-scoped collision handling the other settings
- * pickers use, so it cannot escape the modal.
- */
+/** Anchored with the same dialog-scoped collision handling the other settings pickers use, so it cannot escape
+ * the modal. */
 function VersionMenuTrigger({
   data,
   hostId,
@@ -1066,15 +908,8 @@ function VersionMenuTrigger({
         container={dialogContainer ?? undefined}
         collisionBoundary={dialogContainer ?? undefined}
         collisionPadding={8}
-        // Bounded in BOTH axes. Width was already viewport-derived; height was
-        // not, and the list is `managedVersions.available` in full - every
-        // published version plus every retained install. Past the dialog's
-        // collision boundary the older rows and their Use / Delete controls
-        // were simply unreachable, because `overflow-hidden` clips rather than
-        // scrolls. The panel scrolls its own list, so its banners and its
-        // auto-download footer stay put. This cap is now the outer of two -
-        // the list carries its own, tighter one - and remains the binding
-        // constraint only when the banners and a long notice are all present.
+        // Past the dialog's collision boundary the older rows and their Use / Delete controls were simply unreachable,
+        // because `overflow-hidden` clips rather than scrolls.
         className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden p-0"
       >
         {data.kind === "unavailable" ? (
@@ -1099,12 +934,8 @@ function VersionMenuTrigger({
   );
 }
 
-/**
- * The one per-row action, whatever that row's action happens to be: the
- * version menu on the managed row, Remove on a custom row, nothing elsewhere.
- * The two can never collide - `versionMenu` is only ever passed for the
- * bundled candidate, and a custom row is never bundled.
- */
+/** The two can never collide - `versionMenu` is only ever passed for the bundled candidate, and a custom row is
+ * never bundled. */
 function CandidateRowActions({
   candidate,
   busy,
@@ -1144,8 +975,8 @@ function CandidateRowActions({
 }
 
 function versionLabel(candidate: ProviderCliCandidate): string {
-  // Pending resolves INSIDE the column rather than replacing it with a spinner
-  // and a label, so a probing row keeps the same shape as every other row.
+  // Pending resolves inside the column rather than replacing it with a spinner and a label, so a probing row
+  // keeps the same shape as every other row.
   if (candidate.versionPending) return "Checking…";
   if (candidate.version !== null) return `v${candidate.version}`;
   if (candidate.kind === "bundled" && !candidate.available) {
@@ -1161,35 +992,8 @@ function differentVersionSessionsLabel(differingSessionCount: number): string {
     : `${differingSessionCount} running sessions use a different version.`;
 }
 
-/**
- * AT MOST ONE status line per row, ever.
- *
- * The bounded row shape is the property this whole layout rests on: the four
- * columns each hold exactly one subject, and everything else a row might need
- * to say queues up here. A second line would reintroduce the crowding that
- * made the version column unreadable, so the states are ranked instead.
- *
- * Ranking, most urgent first:
- *
- * 1. `install-failed` - the managed install failed.
- * 2. `installing` - bytes are moving.
- * 3. `substituted` - this is the row the radio picks, and the host will start
- *    something else.
- * 4. `sessions` - other live sessions hold a different version.
- *
- * 3 IS NOT STARVED BY 1 OR 2 - it is FOLDED INTO THEM. "What will actually
- * start" is the one fact the deleted Active chip carried, and the ranking is a
- * presentation rule, not a licence to drop it: a failed install whose sentence
- * does not say what is running instead is the exact reading that made a
- * healthy fallback look broken, and an install in flight that hides it loses
- * the fact entirely, because the row that WOULD have worn the chip is not this
- * one. So `runningInstead` is computed once and every arm that can coexist
- * with it says it.
- *
- * 4 genuinely is starved, and that is the accepted trade: it is a quiet,
- * self-correcting count, and it is never why someone opened this screen while
- * 1-3 are true.
- */
+/** 4 genuinely is starved, and that is the accepted trade: it is a quiet, self-correcting count, and it is
+ * never why someone opened this screen while 1-3 are true. */
 type RowStatus =
   | {
       readonly kind: "install-failed";
@@ -1208,19 +1012,14 @@ type RowStatus =
 function rowStatusFor(args: {
   /** Bundled-row-scoped: null on every other row. */
   readonly managedInstallState: ProviderManagedInstallState | null;
-  /** Bundled-row-scoped. */
   readonly preparing: ProviderPackPreparing | null;
-  /** Bundled-row-scoped. */
   readonly differingSessionCount: number;
-  /** Provider-level - see `nextRunMatchesSelection`. */
   readonly providerManagedInstallState: ProviderManagedInstallState | null;
   readonly nextRunBinary: ProviderNextRunBinary | null;
   readonly selection: ProviderSelection;
   readonly selected: boolean;
 }): RowStatus | null {
-  // Non-null only on the row the radio picks, and only when the host says it
-  // will start something else. Every arm below reads it; nothing else decides
-  // "what runs", which is what keeps the four states from contradicting.
+  // Non-null only on the row the radio picks, and only when the host says it will start something else.
   const runningInstead =
     args.selected &&
     args.nextRunBinary !== null &&
@@ -1240,8 +1039,8 @@ function rowStatusFor(args: {
     );
     return {
       kind: "install-failed",
-      // What runs comes FIRST. Leading with the failure is what made a
-      // provider that had cleanly fallen back read as broken.
+      // What runs comes first. Leading with the failure is what made a provider that had cleanly fallen back read as
+      // broken.
       text:
         runningInstead === null
           ? detail
@@ -1297,11 +1096,8 @@ function nextRunMatchesSelection(
   if (nextRunBinary.kind === "managed") {
     return selection.kind === "bundled";
   }
-  // The inline `bundled` fallback and a managed install share the Managed UI
-  // row but are different binaries, so that IS a substitution worth naming. A
-  // legacy Bundled row (`managedInstallState === null`) is the inline binary
-  // itself, where a bundled next run matches the persisted bundled selection
-  // and there is nothing to report.
+  // The inline `bundled` fallback and a managed install share the Managed UI row but are different binaries, so
+  // that IS a substitution worth naming.
   if (nextRunBinary.kind === "bundled") {
     return selection.kind === "bundled" && managedInstallState === null;
   }
@@ -1313,29 +1109,16 @@ function nextRunMatchesSelection(
   );
 }
 
-// "Bundled" while this provider still ships the still-inline binary (no
-// install-state signal at all, whether an old host or T7 hasn't cut this
-// provider over yet); "Managed" once the registry pack is what's actually
-// resolved here.
+// "Bundled" while this provider still ships the still-inline binary (no install-state signal at all, whether
+// an old host or T7 hasn't cut this provider over yet).
 function bundledPathLabel(
   managedInstallState: ProviderManagedInstallState | null,
 ): string {
   return managedInstallState === null ? "Bundled" : "Managed";
 }
 
-/**
- * The row's one subordinate line. Sits at `col-start-2 col-span-3`, so it
- * starts under the Path column and runs to the row's right edge.
- *
- * It costs no extra nesting: the row wrapper is already
- * `col-span-4 grid grid-cols-subgrid`, so this is simply its fifth child and
- * auto-places onto a second internal row. The wrapper keeps its border, hover
- * and dimming untouched - which is what lets a status appear and disappear
- * without any column resizing.
- *
- * Replaces `ManagedInstallProgress`, `ManagedInstallFailureNote` and
- * `ActiveNextRunChip`. Those were three affordances competing for one cell.
- */
+/** The wrapper keeps its border, hover and dimming untouched - which is what lets a status appear and disappear
+ * without any column resizing. */
 function RowStatusLine({
   status,
   onRetry,
@@ -1347,31 +1130,17 @@ function RowStatusLine({
 }): ReactNode {
   if (status === null) return null;
   if (status.kind === "installing") {
-    // Clamp before the value reaches a width or an accessible name. `percent`
-    // is a host wire field: above 100 it overflows the track, below 0 it emits
-    // an invalid width, and `aria-valuenow` would report a figure outside its
-    // own declared min/max. `DownloadProgress` in the version manager clamps
-    // the same field, and the two progress surfaces have to agree.
+    // Clamp before the value reaches a width or an accessible name.
     const percent =
       status.percent === null
         ? null
         : Math.min(100, Math.max(0, Math.round(status.percent)));
     return (
-      // STACKED, not side by side. The bar and the label used to share one
-      // flex line with the bar `w-full shrink-0` - it claimed the whole line
-      // and then refused to give any of it back, so the label was squeezed
-      // into whatever remained and wrapped to four lines against the right
-      // edge, under the narrow `0.2fr` Version column it does not even belong
-      // to. Nothing about the pair wants to be horizontal: the label is a
-      // sentence with a variable-length fallback clause appended, and a
-      // sentence next to a progress track is two things fighting for the same
-      // inline axis. Column layout also drops `shrink-0`, which only existed
-      // to stop the bar collapsing in that fight.
+      // Column layout also drops `shrink-0`, which only existed to stop the bar collapsing in that fight.
       <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 flex-col gap-1.5 px-2.5">
         <span className="min-w-0 text-ui-xs text-muted-foreground">
-          {/* Own element so the visible progress label stays byte-identical to
-              the progressbar's accessible name, whether or not a fallback
-              clause follows it. */}
+          {/* Own element so the visible progress label stays byte-identical to the progressbar's accessible name, whether
+             or not a fallback clause follows it. */}
           <span>{status.label}</span>
           {status.note === null ? null : <span> · {status.note}</span>}
         </span>
@@ -1381,10 +1150,8 @@ function RowStatusLine({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent === null ? undefined : percent}
-          // Viewport-bounded, not a fixed 12rem. `max-w-48` is a fixed layout
-          // width, which this repo's UI rule excludes for layout surfaces - the
-          // track has to shrink with a narrow settings dialog rather than hold
-          // a rem figure chosen against one window size.
+          // `max-w-48` is a fixed layout width, which this repo's UI rule excludes for layout surfaces - the track has
+          // to shrink with a narrow settings dialog rather than hold a rem figure chosen against one window size.
           className="h-1 w-full max-w-[min(100%,30vw)] overflow-hidden rounded-full bg-foreground/8"
         >
           <span
@@ -1408,10 +1175,7 @@ function RowStatusLine({
           aria-hidden="true"
         />
       )}
-      {/* The reason is TEXT, not a tooltip. It used to be the accessible name
-          of a warning icon, which is the wrong home for the one sentence that
-          decides whether a retry is worth attempting - four of the eight
-          reasons are terminal and say so. There is room for it here. */}
+      {/* The reason is text, not a tooltip. */}
       <span className="min-w-0">{status.text}</span>
       {status.kind === "install-failed" && status.retryable ? (
         <button

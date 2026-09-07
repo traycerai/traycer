@@ -10,31 +10,7 @@ import { cn } from "@/lib/utils";
 import "@/index.css";
 
 /**
- * Browser fixture for the boot card's escape hatch surviving a surface swap.
- *
- * WHY IT CANNOT BE A JSDOM TEST. The defect is a browser INPUT-DISPATCH fact:
- * when the element a press started on is removed from the document before
- * release, Chromium emits no `click` at all, so `onClick` never runs. Testing
- * Library dispatches `click` directly, so the broken build passes every jsdom
- * test ever written for this button. The only instrument that can see it is a
- * real browser driven through `Input.dispatchMouseEvent` - see
- * `scripts/boot-escape-hatch-press-browser.mjs`.
- *
- * The shape reproduced here is the measured one, from a CDP capture of a real
- * user press on the production card:
- *
- *   pointerdown -> button[host-boot-open-settings]
- *   mousedown   -> button[host-boot-open-settings]
- *   ... the launch hands off to the next boot surface ...
- *   mouseup     -> the tree that replaced it
- *   (no click)
- *
- * WHAT IS REAL: the button and both cards are production components
- * (`HostRuntimeBootFallback` -> `HostBootSurface` -> `BootOpenSettingsButton`).
- * The two phases are the two REAL surfaces a launch crosses, drawn the way
- * their owners draw them, so the swap unmounts a real card and mounts a real
- * one rather than shuffling a stand-in. Only the trigger is synthetic: the
- * driver calls `swap()` where a launch would advance on its own.
+ * Boot-card escape hatch across a surface swap. jsdom dispatches `click` directly; Chromium emits none if the press target is removed before release.
  */
 
 let activations = 0;
@@ -54,13 +30,7 @@ declare global {
   }
 }
 
-/**
- * The gate/narrator phase: a DIFFERENT React tree drawing the same card, which
- * is precisely what makes the swap invisible to a user and fatal to a press.
- * The frame mirrors `DefaultHostReadyGate`'s column so the card lands in the
- * same place - a card that moved would let a driver "miss" the button for
- * ordinary layout reasons and call it a regression.
- */
+/** Gate/narrator is a different React tree drawing the same card. Mirror DefaultHostReadyGate's column so a miss is not a layout shift. */
 export function GatePhase(props: { readonly onOpenSettings: () => void }) {
   return (
     <div className="flex min-h-svh w-full flex-col bg-background text-foreground">
@@ -84,10 +54,8 @@ export function Fixture() {
     activations += 1;
   };
 
-  // Installed in an EFFECT, never during render: the driver only needs the
-  // handle once the tree is on screen, and a render-time write to a
-  // module-scoped binding is both a lint error here and a real hazard under
-  // concurrent rendering.
+  // Install in an effect, never during render. A render-time module write is
+  // a lint error and a concurrent-rendering hazard.
   useEffect(() => {
     window.__bootEscapeHatchProbe = {
       activations: () => activations,
@@ -128,13 +96,7 @@ export function Fixture() {
   );
 }
 
-/**
- * The provider stack the boot body needs, and no more: the bootstrap-log
- * disclosure reads `traycer host status` through the runner host and its
- * TanStack query. A shell with no CLI (`MockRunnerHost`'s default) is the
- * honest configuration here - the disclosure self-hides, `Open settings`
- * still renders, and this fixture is about the escape hatch, not the log.
- */
+/** MockRunnerHost default (no CLI) hides the log disclosure; Open settings still renders. This fixture is the escape hatch, not the log. */
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false } },
 });

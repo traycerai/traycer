@@ -20,13 +20,7 @@ import {
   rowSkeletonEntrySchema,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 
-/**
- * `buildRowSkeleton` projects persisted messages/events to one skeleton entry
- * per transcript row. These tests pin the properties the module doc calls
- * out: human-vs-A2A preview rules, usage presence, omitted-not-undefined
- * optional keys, preview collapsing/capping, and ordinal-skipping for
- * non-materializing events.
- */
+/** `buildRowSkeleton` projects persisted messages/events to one skeleton entry per transcript row. */
 
 const previewText: TranscriptPreviewProjection = (content: JsonContent) =>
   content.text ?? "";
@@ -223,19 +217,7 @@ describe("buildRowSkeleton", () => {
     );
 
     expect(entries).toHaveLength(5);
-    // Two rules are visible in this order, and the second one surprised the
-    // author of this test:
-    //
-    // 1. Assistant rows are keyed by TURN, not by record. These fixtures carry
-    //    `turnId: null`, so the key falls back to `ts:<timestamp>`.
-    // 2. Both assistant fixtures also carry `startedAt: null`, so each turn
-    //    anchors at the LAST USER TIMESTAMP (2) rather than at its own
-    //    timestamp - the legacy fallback. Both turns therefore tie at 2 and
-    //    sort ahead of the fork link at 5, even though one of them has
-    //    `timestamp: 6`. Ordering assistant rows by the record timestamp would
-    //    put the fork link between them; that is precisely the sort-key defect
-    //    this projection exists to fix, so the "natural-looking" order here
-    //    would be the wrong one.
+    // Two rules are visible in this order, and the second one surprised the author of this test:
     expect(entries.map((e) => e.rowId)).toEqual([
       "m-human",
       "m-a2a",
@@ -476,11 +458,6 @@ describe("buildRowSkeleton", () => {
   });
 
   it("charges a steer row for the steer block AND the steered record", () => {
-    // `rowRecordIds` serves both for this row - the block carries the badge,
-    // mode and sender, the record carries the message - so a hint that named
-    // only one of them under-reports the row. The list turns that hint into a
-    // placeholder height, and an under-reported row reserves too little space,
-    // which is a visible jump when the body lands.
     const steered = humanUserMessage({
       messageId: "m-steer",
       timestamp: 5,
@@ -525,10 +502,7 @@ describe("buildRowSkeleton", () => {
     );
     expect(steerRow).toBeDefined();
     expect(orphanRow?.byteLength ?? 0).toBeGreaterThan(0);
-    // Against the RECORD, not against the block-only row: "bigger than a small
-    // row" is true of `recordByteLength(message)` alone, so it would pass with
-    // the block silently dropped. Strictly greater than the record is what
-    // only the sum satisfies.
+    // Against the RECORD, not against the block-only row: "bigger than a small row" is true of `recordByteLength(message)` alone, so it would pass with the block silently dropped.
     expect(steerRow?.byteLength ?? 0).toBeGreaterThan(
       recordByteLength(steered),
     );
@@ -591,12 +565,7 @@ describe("buildRowSkeleton", () => {
     expect(entries.map((e) => e.rowId)).toEqual(["m-before", "m-after"]);
   });
   /**
-   * An orphaned steer's provenance lives on the BLOCK, because the record a
-   * checkpoint removed is where every other row reads it from. Getting this
-   * wrong is not a cosmetic mislabel: the minimap lists human turns, so an A2A
-   * steer shows up there as an "Untitled message" and then re-classifies and
-   * vanishes the moment the row hydrates - the list changing under the reader
-   * for a row they never touched.
+   * An orphaned steer's provenance lives on the BLOCK, because the record a checkpoint removed is where every other row reads it from.
    */
   it("classifies an ORPHANED steer from its block's sender", () => {
     const agentOrphan = steeredTurn({
@@ -650,18 +619,8 @@ describe("buildRowSkeleton", () => {
 });
 
 /**
- * # The row's projection CONTEXT is part of its invalidation fingerprint
- *
- * `transcriptRowContextSchema`'s values are derived from WHOLE history: a
- * setup card's window is open until a `worktree.missing` closes it, and that
- * boundary event arrives arbitrarily later than the card's own records. The
- * card's records do not move, so every other skeleton field is byte-identical -
- * and the context rides the RANGE, not the skeleton, so there is no entry field
- * of its own to differ either.
- *
- * Absent this the host's comparison reports "unchanged", no `updated` is
- * emitted, and the client renders a historical setup card as the live one for
- * the rest of the connection.
+ * `transcriptRowContextSchema`'s values are derived from WHOLE history: a setup card's window is open until a `worktree.missing` closes it, and that boundary event arrives arbitrarily later than the card's own records.
+ * The card's records do not move, so every other skeleton field is byte-identical - and the context rides the RANGE, not the skeleton, so there is no entry field of its own to differ either.
  */
 describe("row context in the body fingerprint", () => {
   function setupEvent(fields: {
@@ -696,9 +655,7 @@ describe("row context in the body fingerprint", () => {
     type: "setup.succeeded",
     timestamp: 2,
   });
-  // The boundary. Not a setup event, forms no card of its own, and belongs to
-  // no card's record set - so it changes the FIRST card's context and nothing
-  // else about it.
+  // The boundary.
   const missing = setupEvent({
     eventId: "e-missing",
     type: "worktree.missing",
@@ -745,19 +702,7 @@ describe("row context in the body fingerprint", () => {
   });
 });
 
-/**
- * # An assistant slice's DECORATING events are part of its fingerprint too
- *
- * The finding this closes named two things, and the projection context above is
- * only the first. A range serves a turn's decorating events with every slice of
- * it (`rowRecordIds`), and the renderer folds them into the elapsed counter and
- * the restore affordance - so a `checkpoint.captured` landing on a turn whose
- * rows are already hydrated changes what those rows render while `blockIds`,
- * and therefore every field of the entry, stays identical.
- *
- * The failure is the quietest kind: the row is there, and merely poorer than it
- * was - a restore dialog with no restore point.
- */
+/** The finding this closes named two things, and the projection context above is only the first. */
 describe("decorating events in the body fingerprint", () => {
   const assistant = assistantMessage({
     messageId: "m-assistant",
@@ -830,9 +775,7 @@ describe("decorating events in the body fingerprint", () => {
   });
 
   it("leaves byteLength alone, because the turn's records are shared", () => {
-    // Charged per ROW: billing every slice of a steered turn for the whole
-    // turn's decorating events would over-estimate its height several times
-    // over. The digest has no such additivity to protect - it only has to move.
+    // Charged per ROW: billing every slice of a steered turn for the whole turn's decorating events would over-estimate its height several times over.
     expect(sliceEntryFor([started, captured]).byteLength).toBe(
       sliceEntryFor([started]).byteLength,
     );
@@ -859,10 +802,6 @@ describe("the preview stays well-formed UTF-16", () => {
   const EMOJI = "\u{1F600}";
 
   it("never ends on a lone high surrogate at the cap", () => {
-    // The loop appends one UNIT per iteration and stops at the cap, so a pair
-    // straddling it leaves the high half behind at exactly `maxUnits` - where a
-    // length-guarded slice sees nothing to do. The frame's UTF-8 encode then
-    // substitutes U+FFFD and the minimap label shows a replacement character.
     const filler = "x".repeat(ROW_SKELETON_PREVIEW_MAX_CHARS - 1);
     const entries = buildRowSkeleton(
       {
@@ -882,9 +821,7 @@ describe("the preview stays well-formed UTF-16", () => {
 
     const preview = entries[0].preview ?? "";
     expect(preview.length).toBeLessThanOrEqual(ROW_SKELETON_PREVIEW_MAX_CHARS);
-    // The assertion that matters: no unpaired surrogate anywhere. Written out
-    // rather than via `toWellFormed()`, which would be doing the same scan with
-    // a runtime that may not have it.
+    // The assertion that matters: no unpaired surrogate anywhere.
     expect(hasUnpairedSurrogate(preview)).toBe(false);
   });
 
@@ -911,15 +848,7 @@ describe("the preview stays well-formed UTF-16", () => {
 });
 
 /**
- * # The turn's IMAGE RESOLUTION record is part of the fingerprint too
- *
- * Third member of the family the two blocks above establish: something a row
- * renders that no field of its skeleton entry can see.
- * `image_resolution.updated` rewrites the message-level `imageResolutions`
- * array and touches no content block, so a settled hydrated row whose image has
- * just resolved - or just failed - rebuilds byte-identically. No `updated` is
- * emitted, and the client keeps showing the old consent/error state until it
- * reconnects.
+ * Third member of the family the two blocks above establish: something a row renders that no field of its skeleton entry can see.
  */
 describe("image resolutions in the body fingerprint", () => {
   function sliceEntryWithResolutions(

@@ -1,30 +1,3 @@
-/**
- * `artifact.subscribe@1.0`'s body events (`DocReplicaEvent`) in the rooms
- * replica's vocabulary.
- *
- * Three things are pinned here because getting them wrong fails silently:
- *
- *  - `doc-snapshot`'s `seed` and `docGuid` are FORWARDED, not decided here -
- *    they are the pair the artifact-body tier's merge-vs-seed-vs-replace rule
- *    reads.
- *  - EVERY event carrying a guid forwards it, not only the snapshot.
- *    `doc-update` and `doc-coverage-ack` both do, and both used to drop it -
- *    which left the replica unable to reject a frame from a generation a
- *    reseed had replaced. `DocUpdateEvent.docGuid` states whose check that is
- *    ("the replica - not the adapter - owns the drop"), so a translation that
- *    drops the guid is the adapter quietly deciding not to have one.
- *  - `doc-update` always forces `hostStateVectorBase64` to `null`, because a
- *    `""` here would read as "the host holds nothing" and silently un-retire
- *    the body's dirty mark.
- *  - `doc-unavailable`'s `"stale-authority-epoch"` code is NOT an
- *    availability state - it means the whole epic replica must be replaced,
- *    and folding it into `"unavailable"` would leave the epic silently stale
- *    while one tile merely greyed out.
- *
- * `artifactRoomId` is this arm's name for an ARTIFACT id (see the production
- * file's module doc): every translated room event carries the source event's
- * `docId` under that key.
- */
 import { describe, expect, it } from "vitest";
 import type {
   DocAwarenessEvent,
@@ -195,14 +168,8 @@ describe("doc-update translates to hostStateVectorBase64: null, always - this wi
   });
 
   it("FORWARDS the doc guid, which is what lets the replica drop a superseded update", () => {
-    // `DocUpdateEvent.docGuid` is required and its own doc names the owner of
-    // the drop: "the replica - not the adapter - owns the drop", because
-    // leaving the guid off the event "would push a core replica invariant into
-    // every adapter, where it would be enforced three times and eventually
-    // only twice". Dropping it HERE was that prediction coming true - a
-    // delayed update from a generation a reseed had replaced reached
-    // `ArtifactRoomTier.applyUpdate` with nothing left to compare against, and
-    // `Y.applyUpdate` spliced two histories that share no ancestor.
+    // `DocUpdateEvent.docGuid` is required and its own doc names the owner of the drop: "the replica -
+    // not the adapter - owns the drop", because leaving the guid off the event "would push a core
     const translated = laneBodyTranslationOf(docUpdate());
     if (
       translated.kind !== "room-event" ||
@@ -241,11 +208,6 @@ describe("doc-coverage-ack becomes room-coverage, carrying the coverage vector u
   });
 
   it("FORWARDS the doc guid, for a loss that is quieter than a spliced update", () => {
-    // Coverage retires the dirty watermark, so an ack accepted from a
-    // superseded generation marks the CURRENT document's unsent edits as
-    // durable when the host has never seen them - they leave the divergence
-    // accounting while existing nowhere but this tab. No splice, no visible
-    // corruption, and the edits are simply gone on the next reload.
     const translated = laneBodyTranslationOf(docCoverageAck("v"));
     if (
       translated.kind !== "room-event" ||

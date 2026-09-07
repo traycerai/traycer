@@ -275,11 +275,6 @@ describe("<BundleFileSection /> editing", () => {
     epicSessionHandle = openStoreForTest({
       epicId: "epic-1",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
       factories: {
         streamClientFactory: fakeStreamClientFactory,
         laneSelection: null,
@@ -363,7 +358,6 @@ describe("<BundleFileSection /> editing", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
     const statusPill = screen.getByTestId("file-autosave-pill");
-    // The test environment intentionally lacks IndexedDB, so the recovery
     // warning stays labelled instead of collapsing into the ordinary icon.
     expect(statusPill.getAttribute("data-appearance")).toBe("quiet");
     expect(statusPill.className).toContain("h-5");
@@ -379,11 +373,6 @@ describe("<BundleFileSection /> editing", () => {
     expect(currentRuntimeDraft()).toBe("const value = 2;\n");
     expect(diffSurfaceState.mountCount).toBe(mounts);
     expect(diffSurfaceState.unmountCount).toBe(unmounts);
-    // Stable oldFile/newFile identity is what DiffContentPrimitive keys its
-    // hydration memo on - a new object per render would re-derive the diff
-    // and reintroduce the partial-diff attach bug. `toBe`, not `toEqual`: a
-    // fresh object with identical fields would pass a structural comparison
-    // even though it is exactly the regression this test exists to catch.
     expect(diffSurfaceState.editableNewFiles).toHaveLength(1);
     expect(diffSurfaceState.editableNewFiles[0]).toBe(editableNewFile);
   });
@@ -472,9 +461,7 @@ describe("<BundleFileSection /> editing", () => {
     );
     renderBundleFile(true);
 
-    // `isEmptyFile` reaches FileDiffContent before any click - same
-    // computation (`editing.canOfferEdit ? sizeBytes === 0 : false`) as the
-    // single-file tile, threaded through the aggregate section instead.
+    // `isEmptyFile` reaches FileDiffContent before any click - same computation (`editing.canOfferEdit ? sizeBytes === 0 : false`) as the single-file tile, threaded through the aggregate section instead.
     await waitFor(() => {
       expect(diffSurfaceState.lastIsEmptyFile).toBe(true);
     });

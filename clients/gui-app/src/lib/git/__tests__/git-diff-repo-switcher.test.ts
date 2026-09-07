@@ -439,9 +439,7 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     });
   });
 
-  // The host's `isGitResolvePending` flag drives the render: a pending row
-  // reads as "checking"; a resolved non-git row reads "not git"; a real
-  // setup failure remains visible but is no longer a blocking label.
+  // The host's `isGitResolvePending` flag drives the render: a pending row reads as "checking"; a resolved non-git row reads "not git"; a real setup failure remains visible but is no longer a blocking label.
   it("renders pending and blocking rows distinctly from setup warnings", () => {
     const model = buildGitDiffRepoSwitcherModel({
       roots: [

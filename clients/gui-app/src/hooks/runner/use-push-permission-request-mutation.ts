@@ -17,13 +17,7 @@ export type PushPermissionRequestMutation = UseMutationResult<
   void
 >;
 
-/**
- * Raises the OS push prompt, if the OS still allows one. The resolved state is
- * NOT written into the cache: `request()` also registers the device token on a
- * grant, and the host fires `onChange` for that same edge, so the row settles
- * on a fresh `get()` either way - one source of truth for what the OS thinks,
- * rather than two that can disagree.
- */
+/** The resolved state is NOT written into the cache: `request()` also registers the device token on a grant, and the host fires `onChange` for that same edge, so the row settles on a fresh `get()` either way - one source of truth for what the OS thinks, rather than two that can disagree. */
 export function usePushPermissionRequestMutation(): PushPermissionRequestMutation {
   const { pushPermission } = useRunnerHost();
   const queryClient = useQueryClient();

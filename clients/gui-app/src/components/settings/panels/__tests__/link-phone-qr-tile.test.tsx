@@ -1,10 +1,5 @@
-/**
- * The branded QR tile is drawn from the encoder's own matrix, so these tests
- * compare the rendered SVG against a symbol encoded here: every module the
- * encoder produced is drawn, at its own coordinates, at level H, inside the
- * quiet zone. The frame's geometry and the rotation fade are asserted the same
- * way — off the rendered attributes, with no library standing in.
- */
+/** The branded QR tile is drawn from the encoder's own matrix, so these tests compare the rendered SVG against
+ * a symbol encoded here. */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import QRCode from "qrcode";
@@ -45,7 +40,6 @@ function expectedSymbol(code: string) {
   return { size, dark, version: qr.version };
 }
 
-/** Reads the drawn module set back out of the SVG, in matrix coordinates. */
 function renderedModules(): Set<string> {
   const group = screen.getByTestId("link-phone-qr-modules");
   const drawn = new Set<string>();
@@ -93,10 +87,8 @@ describe("LinkPhoneQrTile", () => {
     render(<LinkPhoneQrTile platformBaseUrl={PLATFORM} code={CODE} />);
     const svg = screen.getByTestId("link-phone-qr");
     const extent = expected.size + QUIET_ZONE * 2;
-    // The paper is the first rect in the symbol — everything else is a module
-    // or an eye. Its edge must land where the frame's stroke is centred, with
-    // the frame's radius, or the two curves disagree and the white tile
-    // speckles out past the band on a dark background.
+    // Its edge must land where the frame's stroke is centred, with the frame's radius, or the two curves disagree
+    // and the white tile speckles out past the band on a dark background.
     const paper = svg.querySelector("rect");
     const inset = (FRAME_CENTRE_INSET_PERCENT / 100) * extent;
     expect(Number(paper?.getAttribute("x"))).toBeCloseTo(inset, 6);
@@ -146,7 +138,7 @@ describe("LinkPhoneQrTile", () => {
     expect(pending.getAttribute("data-tile-state")).toBe("loading");
     expect(screen.getByTestId("link-phone-qr-placeholder")).toBeTruthy();
     expect(screen.queryByTestId("link-phone-qr")).toBeNull();
-    // The frame stays — the tile still reads as the code's place.
+    // The frame stays - the tile still reads as the code's place.
     expect(screen.getByTestId("link-phone-tile-frame")).toBeTruthy();
   });
 

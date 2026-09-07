@@ -22,21 +22,7 @@ import {
 } from "@/stores/tabs/tab-structural-lock";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
-/**
- * Revision over "which host serves which open epic".
- *
- * The epic tab's `hostId` is projected from the live session at `build()`
- * time, and a session RE-POINT (failover, retry, open-on-original-host)
- * replaces the registry's handle without touching the canvas store - so
- * nothing in the source-store subscriptions above would re-run the
- * projection, and the strip would keep serving the previous host's id.
- *
- * Same shape as `structuralLockRevision`: an external revision that forces
- * re-projection, with the per-source cache below keyed on the derived value so
- * a bump that changed nothing keeps every tab's referential identity. The
- * registry's own emit is already gated on an eligibility key, so per-keystroke
- * store churn does not reach this.
- */
+/** Revision over "which host serves which open epic". */
 let epicSessionHostRevision = 0;
 const epicSessionHostListeners = new Set<() => void>();
 let epicSessionHostSubscription: (() => void) | null = null;
@@ -56,13 +42,6 @@ function getEpicSessionHostRevision(): number {
   return epicSessionHostRevision;
 }
 
-/**
- * Projects the canonical strip order into render-ready `HeaderTab[]`.
- * Each `TabRef` is resolved against the source store for its kind;
- * the kind module's `build()` factory flattens the source record into
- * the self-contained `HeaderTab` variant. Refs whose source no longer
- * exists are filtered out (reconciliation should keep them in sync).
- */
 export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   const structuralLockRevision = useSyncExternalStore(
     subscribeTabStructuralLocks,
@@ -118,12 +97,7 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   );
 }
 
-/**
- * Header-only projection which preserves the authoritative strip-item
- * grouping. `useHeaderTabs` remains the deliberate flattened compatibility
- * projection for keyboard traversal, close flows, and surface lookup; only the
- * strip renderer consumes this projection.
- */
+/** Header-only projection which preserves the authoritative strip-item grouping. */
 export type HeaderStripItem =
   | {
       readonly kind: "tab";
@@ -243,11 +217,7 @@ export function useHeaderStripItemIds(): ReadonlyArray<string> {
   return useTabsStore(useShallow(selectHeaderStripItemIds));
 }
 
-/**
- * Per-item projection for the strip renderer. Unlike the flattened legacy
- * hook, metadata and lock churn for another ref never changes this hook's
- * return value, keeping group frames and member controls isolated.
- */
+/** Per-item projection for the strip renderer. */
 export function useHeaderStripItem(itemId: string): HeaderStripItem | null {
   const selector = useMemo(() => makeSelectHeaderItem(itemId), [itemId]);
   const item = useTabsStore(selector);
@@ -344,26 +314,13 @@ function fillableSide(
   };
 }
 
-// `build()` mints a fresh `HeaderTab` on every call, so without memoization any
-// `useHeaderTabs` recompute (a tab open/close, or unrelated input churn)
-// rebuilt EVERY non-Epic tab and re-rendered every header `TabItem`. Epic tabs
-// have cache entries for every exact-ref combination of structural and close
-// lock. A revision still re-runs projection so a lock transition is visible,
-// while unrelated lock churn preserves the referential identity of every
-// unlocked Epic header.
 type EpicHeaderTabLockState =
   | "unlocked"
   | "close-locked"
   | "structurally-locked"
   | "structurally-and-close-locked";
 
-/**
- * Cache key for one epic tab's projection: its lock state and the host its
- * session is on. Both are derived rather than stored on the source, so both
- * have to be in the key - a re-point that kept the same `EpicViewTab` object
- * would otherwise be memoized away and the strip would serve the old host id
- * forever.
- */
+/** Cache key for one epic tab's projection: its lock state and the host its session is on. */
 type EpicHeaderTabCacheKey = string;
 
 function epicHeaderTabCacheKey(
@@ -401,20 +358,13 @@ interface HeaderTabSources {
     readonly settings: SystemTab | null;
   };
   readonly structuralLockRevision: number;
-  /**
-   * Forces re-projection when a session re-points. Not read by `build()` -
-   * the projection reads the registry directly; this only invalidates the
-   * memo above it, exactly as `structuralLockRevision` does for the locks.
-   */
+  /** Forces re-projection when a session re-points. */
   readonly epicSessionHostRevision: number;
 }
 
 function memoizedEpicHeaderTab(source: EpicViewTab): HeaderTab {
-  // Built FIRST, then keyed on what it turned out to be: the host is the
-  // projection's own output, so there is nothing to look it up by until the
-  // build has run. The build is a store read and an object literal; the cache
-  // exists to preserve referential identity for the header rows, not to avoid
-  // that cost.
+  // Built FIRST, then keyed on what it turned out to be: the host is the projection's own output, so
+  // there is nothing to look it up by until the build has run.
   const tab = TAB_KINDS.epic.build(source);
   const key = epicHeaderTabCacheKey(epicHeaderTabLockState(source), tab.hostId);
   const cached = epicHeaderTabCache.get(source);

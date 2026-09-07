@@ -18,20 +18,7 @@ export interface VersionSkewInput {
 }
 
 /**
- * Direction-aware `INCOMPATIBLE` copy (Architecture §13, R4-D2): "every
- * supported app version can open a session to every host >= floor" is the
- * two-sided invariant, so above the floor an `INCOMPATIBLE` failure is a
- * genuine bug, not routine drift — the failure copy names the leg that's
- * actually behind instead of a generic fatal.
- *
- * Prefer the directory/status DTO's host `appVersion` against this app's build
- * manifest version. The handshake's `upgradeGuidance` is only a secondary hint
- * for surfaces that do not have DTO version evidence available.
- *
- * "Update required" is deliberately never used here — that copy is reserved
- * for a host below the global support floor (`updateState: "required"`), a
- * different failure this function's caller must not conflate with a version
- * skew above the floor.
+ * Direction-aware `INCOMPATIBLE` copy (Architecture §13, R4-D2): "every supported app version can open a session to every host >= floor" is the two-sided invariant, so above the floor an `INCOMPATIBLE` failure is a genuine bug, not routine drift - the.
  */
 export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
   const comparison = compareAppVersions(
@@ -74,12 +61,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
       direction: "client-outdated",
     };
   }
-  // Reached only when `guidance` doesn't single out one leg — either both
-  // flags are set (multiple incompatible methods diverging in opposite
-  // directions) or neither is (no guidance at all, with an unparsable/"same"
-  // comparison). Per this function's own doc comment, an `INCOMPATIBLE`
-  // failure above the floor is "a genuine bug, not routine drift", so this
-  // fallback is worth a log rather than a silent default.
+  // Reached only when `guidance` doesn't single out one leg - either both flags are set (multiple incompatible methods diverging in opposite directions) or neither is (no guidance at all, with an unparsable/"same" comparison).
   appLogger.warn(
     "[version-skew] ambiguous guidance; defaulting to host-update copy",
     {

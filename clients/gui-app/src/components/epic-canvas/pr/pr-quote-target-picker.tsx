@@ -13,17 +13,8 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
 /**
- * Picks which chat or terminal agent this tile's `⌁` affordances send to.
- *
- * Deliberately the same anatomy as `OpenInEditorButton`: a surface showing the
- * current pick, a chevron opening the list, and the choice becoming the new
- * default. The PR view has many quote sources (a check, a review, a file, the
- * description) and one destination, so the destination is chosen ONCE here
- * rather than being asked for at every quote.
- *
- * Three variants for the three width states the card ladder produces. They
- * differ only in chrome - the same target, the same list, the same callback -
- * so the answer to "where does this go?" cannot drift between them.
+ * The PR view has many quote sources (a check, a review, a file, the description) and one destination, so the destination is chosen ONCE here rather than being asked for at every quote.
+ * They differ only in chrome - the same target, the same list, the same callback - so the answer to "where does this go?" cannot drift between them.
  */
 export function PrQuoteTargetPicker(props: {
   readonly target: PrQuoteTarget | null;

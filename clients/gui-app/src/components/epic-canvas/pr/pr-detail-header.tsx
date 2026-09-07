@@ -31,16 +31,7 @@ import { onMiddleClick } from "@/lib/dom/on-middle-click";
 type PrDisplayState = PrState | "draft";
 
 /**
- * The identity badge's surface and glyph tint, reusing the SHARED palette the
- * chat hover card and the PR panel row already render "PR number + state"
- * with. `worktree-pr-state-palette.ts` states outright that this idea must not
- * grow a second dialect, and a full view that invents its own pill is exactly
- * that - the same PR would carry two different greens depending on which
- * surface you were looking at.
- *
- * `draft` is the one state the shared palette has no entry for (it is a
- * modifier on `open`, not a `PrState`), so it gets the neutral treatment here:
- * a draft is open, but it is not asking to be merged.
+ * `worktree-pr-state-palette.ts` states outright that this idea must not grow a second dialect, and a full view that invents its own pill is exactly that - the same PR would carry two different greens depending on which surface you were looking at.
  */
 const DRAFT_PILL_CLASS = "border-transparent bg-muted/60 text-foreground";
 const DRAFT_TINT_CLASS = "text-muted-foreground";
@@ -71,23 +62,8 @@ function prDisplayState(core: PrDetailCore): PrDisplayState {
 }
 
 /**
- * PR header: identity badge inline with the title, then one dense attribution
- * line, then the linked chats.
- *
- * The earlier version read as bare, and the reason was structural rather than
- * decorative: four stacked rows of small muted text with nothing to anchor the
- * eye, a lone badge marooned on its own line, and branch names buried inside a
- * prose sentence ("wants to merge changes into X from Y") that states the
- * direction backwards from how the arrow reads. The badge moves inline with
- * the title so line one is a heading rather than a heading plus a stray chip;
- * the author gains an avatar, which does more to give a header weight than any
- * amount of border; and the branches become a `head → base` flow, which is the
- * shape the fact actually has.
- *
- * State and number stay ONE badge, in the palette
- * `worktree-pr-state-palette.ts` already shares with the PR panel row and the
- * chat hover card - that file says outright this idea must not grow a second
- * dialect.
+ * The earlier version read as bare, and the reason was structural rather than decorative: four stacked rows of small muted text with nothing to anchor the eye, a lone badge marooned on its own line, and branch names buried inside a prose sentence ("wants to merge changes into X from Y") that states the direction backwards from how the arrow reads.
+ * The badge moves inline with the title so line one is a heading rather than a heading plus a stray chip; the author gains an avatar, which does more to give a header weight than any amount of border; and the branches become a `head → base` flow, which is the shape the fact actually has.
  */
 export function PrDetailHeader(props: {
   readonly core: PrDetailCore;
@@ -114,10 +90,7 @@ export function PrDetailHeader(props: {
         {title}
       </h1>
       <div className="flex shrink-0 items-center gap-1">
-        {/* Freshness lives here and not only in the context card: that card is
-            hidden below 1180px, so on a narrower tile the ⓘ beside it would be
-            explaining a pause with nothing on screen to say how old the rows
-            it is pausing actually are. */}
+        {/* Freshness lives here and not only in the context card: that card is hidden below 1180px, so on a narrower tile the ⓘ beside it would be explaining a pause with nothing on screen to say how old the rows it is pausing actually are. */}
         <span className="max-w-[min(40vw,10rem)] truncate text-ui-xs text-muted-foreground">
           <PrDetailStaleness observedAt={props.observedAt} />
         </span>
@@ -147,10 +120,7 @@ export function PrDetailHeader(props: {
 
 /**
  * Who is merging what into where - pinned alongside the title.
- *
- * It answers the second question a reader asks after "which PR", and unlike
- * the diffstat or the freshness stamp it stays relevant while scrolling: the
- * base branch is what every hunk in the diff below is being compared against.
+ * It answers the second question a reader asks after "which PR", and unlike the diffstat or the freshness stamp it stays relevant while scrolling: the base branch is what every hunk in the diff below is being compared against.
  */
 export function PrDetailMergeLine(props: {
   readonly core: PrDetailCore;
@@ -248,9 +218,7 @@ function PrDetailStalenessLabel(props: {
 function PrDetailGitHubLink(props: {
   readonly prUrl: string | null;
 }): ReactNode {
-  // Guarded on the bridge mutation's own pending flag (R10): each call fires a
-  // fresh request, so a click landing on an outstanding handoff would open a
-  // second OS tab.
+  // Guarded on the bridge mutation's own pending flag (R10): each call fires a fresh request, so a click landing on an outstanding handoff would open a second OS tab.
   const { isPending, openLink } = useOpenLinkWithPending();
   const prUrl = props.prUrl;
   const handleClick = useCallback(

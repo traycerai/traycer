@@ -4,14 +4,7 @@ import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behav
 import { altLabel, modLabel, shiftLabel } from "@/lib/keybindings/platform";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
-/**
- * Settings > Opening behavior. Every row here is one enum select over one
- * settings-store field, so what is worth pinning is the wiring: the control
- * writes the value the store reads back, the per-type rows exist only while
- * their default asks for them, and each select's spoken name is its visible
- * label verbatim - the option copy names a DESTINATION ("In a new split"),
- * which only reads correctly under a control the user can find by that name.
- */
+/** Every row here is one enum select over one settings-store field, so what is worth pinning is the wiring. */
 
 const DEFAULT_INNER_WIDTH = window.innerWidth;
 
@@ -21,7 +14,6 @@ afterEach(() => {
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 });
 
-/** Radix's select: open with the keyboard, then commit the named option. */
 function choose(control: string, option: string): void {
   fireEvent.keyDown(screen.getByRole("combobox", { name: control }), {
     key: "ArrowDown",

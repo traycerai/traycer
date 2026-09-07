@@ -137,10 +137,7 @@ describe("child conversation workspace seed", () => {
       hostId: null,
     });
 
-    // Must be non-null: a `null` seed makes the picker fall back to the global
-    // (start-page) workspace folders, which the auto-seed effect then stages as
-    // a default launch intent that bypasses the parent-binding gate. A non-null
-    // empty workspace snapshot resolves to zero folders, so nothing auto-stages.
+    // Must be non-null: a `null` seed makes the picker fall back to the global (start-page) workspace folders, which the auto-seed effect then stages as a default launch intent that bypasses the parent-binding gate.
     expect(seed).not.toBeNull();
     expect(seed?.intent).toBeNull();
     expect(seed?.workspace.folders).toEqual([]);

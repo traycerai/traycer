@@ -25,28 +25,14 @@ import "@/components/layout/shell/mobile-shell-touch-targets.css";
 interface MobileTerminalKeyBarProps {
   readonly instanceId: string;
   /**
-   * True while the soft keyboard is up - the measured viewport inset in an
-   * overlay-keyboard browser (where the view pads the covered strip below
-   * this bar), the plugin-fed native state in the installed app (where
-   * native-resize shrinks the webview and the inset stays 0). Either way the
-   * bar's bottom edge meets the keyboard, not the home indicator, so keeping
-   * `--safe-area-inset-bottom` would leave a dead gap between the keys and
-   * the keyboard.
+   * True while the soft keyboard is up - the measured viewport inset in an overlay-keyboard browser (where the view pads the covered strip below this bar), the plugin-fed native state in the installed app (where native-resize shrinks the webview and the inset stays 0).
+   * Either way the bar's bottom edge meets the keyboard, not the home indicator, so keeping `--safe-area-inset-bottom` would leave a dead gap between the keys and the keyboard.
    */
   readonly keyboardOpen: boolean;
 }
 
 /**
- * On-screen terminal key bar for phones: the keys TUIs need that soft
- * keyboards don't have (Esc/Tab/arrows/Enter plus sticky Ctrl/Alt/Shift).
- * The layout is the two-row arrangement proven by Termux / Blink / Happy.
- *
- * Bar taps inject escape sequences into the tile's xterm engine via
- * `terminal-key-input-registry`; the engine is looked up per press, so the bar
- * tolerates the engine still lazy-bootstrapping (taps no-op until it mounts).
- * Modifier taps latch one-shot state in `terminal-key-bar-latch`, which also
- * combines a latched Ctrl/Alt with the next character typed on the phone
- * keyboard.
+ * On-screen terminal key bar for phones: the keys TUIs need that soft keyboards don't have (Esc/Tab/arrows/Enter plus sticky Ctrl/Alt/Shift).
  */
 export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
   const { instanceId, keyboardOpen } = props;
@@ -55,13 +41,7 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
     getTerminalKeyBarModifiers,
   );
 
-  // iOS decides "tap outside the focused field -> blur it and dismiss the
-  // keyboard" from the TOUCH sequence, so the pointerdown preventDefault on
-  // each button (sufficient on desktop) doesn't stop it. React registers
-  // root touch listeners as passive, so this must be a native non-passive
-  // listener. Canceling touchstart suppresses the focus change and the
-  // compatibility mouse/click events; pointer events still fire, which is
-  // where all bar behavior lives.
+  // React registers root touch listeners as passive, so this must be a native non-passive listener.
   const barRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const bar = barRef.current;
@@ -87,11 +67,8 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
     [instanceId],
   );
 
-  // Long-press auto-repeat for arrows/backspace, like a physical key. The
-  // latch is one-shot, so only the initial press carries latched modifiers;
-  // repeats send the plain key. One repeat runs at a time, scoped to the
-  // pointer that started it: without the pointer-id check, lifting a first
-  // finger would kill the repeat a second finger is still holding.
+  // The latch is one-shot, so only the initial press carries latched modifiers; repeats send the plain key.
+  // One repeat runs at a time, scoped to the pointer that started it: without the pointer-id check, lifting a first finger would kill the repeat a second finger is still holding.
   const repeatDelayRef = useRef<number | null>(null);
   const repeatIntervalRef = useRef<number | null>(null);
   const repeatPointerIdRef = useRef<number | null>(null);
@@ -109,9 +86,7 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
   useEffect(
     () => () => {
       stopRepeat();
-      // The latch module is global and its only indicator is this bar; a
-      // modifier left armed at unmount would invisibly transform the next
-      // character typed into ANY terminal.
+      // The latch module is global and its only indicator is this bar; a modifier left armed at unmount would invisibly transform the next character typed into ANY terminal.
       consumeTerminalKeyBarModifiers();
     },
     [stopRepeat],
@@ -153,12 +128,7 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
       data-mobile-shell-touch-scope=""
       data-testid="mobile-terminal-key-bar"
       className={cn(
-        // `touch-none` states in CSS what the cancelled `touchstart` below
-        // already enforces: this bar consumes its touches and none of them are
-        // pans. The shell-wide recognizers read it to keep off - without it the
-        // leftmost key column sits inside the drawer's edge zone, and a drag
-        // off a key would open the drawer or dismiss the very keyboard the bar
-        // exists to supplement.
+        // The shell-wide recognizers read it to keep off - without it the leftmost key column sits inside the drawer's edge zone, and a drag off a key would open the drawer or dismiss the very keyboard the bar exists to supplement.
         "shrink-0 touch-none border-t border-canvas-border/70 bg-canvas px-1 pt-1",
         keyboardOpen
           ? "pb-1"
@@ -205,9 +175,7 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
                 latchedModifiers[def.key] &&
                   "bg-primary text-primary-foreground hover:bg-primary/90",
               )}
-              // Latch on pointerdown, like action keys: iOS suppresses the
-              // synthesized click after a canceled touch start, so an
-              // onClick-only toggle can never latch on a phone.
+              // Latch on pointerdown, like action keys: iOS suppresses the synthesized click after a canceled touch start, so an onClick-only toggle can never latch on a phone.
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 event.preventDefault();

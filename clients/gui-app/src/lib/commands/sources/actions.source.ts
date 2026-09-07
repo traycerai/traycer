@@ -1,19 +1,6 @@
 /**
- * One flat row per `chord`-kind action in `ACTION_META`. Runs as
- * a React source so rebinding a chord in the settings UI updates
- * the palette's shortcut column live; the items themselves still
- * dispatch through `dispatchAction` via `runCommandItem`, so the
- * keybinding registry remains the single source of truth for the
- * action's behavior.
- *
- * Skips:
- *   - `digit`-kind actions (modifier-only chords resolved at
- *     runtime; their concrete targets already live in other
- *     surfaces);
- *   - `app.palette.open` (the opener itself would loop);
- *   - `composer.dictation.toggle` (no `dispatchAction` handler - it's a
- *     press-and-hold action owned by a capture-phase hook, so a palette
- *     entry would be inert; toggling it is the mic button's job).
+ * One flat row per `chord`-kind action in `ACTION_META`.
+ * Runs as a React source so rebinding a chord in the settings UI updates the palette's shortcut column live; the items themselves still dispatch through `dispatchAction` via `runCommandItem`, so the keybinding registry remains the single source of truth for.
  */
 import { useMemo } from "react";
 import {

@@ -8,12 +8,7 @@ import {
 import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
 import type { CommandFn } from "../runner/runner";
 
-/**
- * `traycer agent list` - enumerate every agent the epic's Y.Doc sees
- * (`agent.list`). Cross-host agents are included as read-only rows;
- * `local=false` marks them. Pass `--json` (global runner flag) for the
- * structured payload.
- */
+/** `traycer agent list` - enumerate every agent the epic's Y.Doc sees (`agent.list`). Cross-host agents are included as read-only rows; `local=false` marks them. */
 export function buildAgentListCommand(opts: {
   readonly epicId: string | null;
   readonly senderAgentId: string | null;

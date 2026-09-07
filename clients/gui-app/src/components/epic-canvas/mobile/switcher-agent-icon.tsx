@@ -14,26 +14,8 @@ import {
 const SWITCHER_AGENT_TEST_ID_PREFIX = "switcher-agent";
 
 /**
- * Agent-row icon for the mobile switcher. Status resolution is the DESKTOP
- * mapping, not a mobile one: chats go through `ChatProgressIcon` and TUI agents
- * through the shared `TerminalAgentProgressIcon`, exactly as the sidebar chat
- * tree's rows do. So a switcher row answers the full vocabulary - failure,
- * fork, interview and approval tones first, then the turn spinner, the muted
- * background-activity glyph, unread-done, and the read-only lock - and updates
- * live while the sheet is open.
- *
- * It previously derived its own two-state mapping (`useEpicActiveAgentIds()`
- * membership -> spinner, else brand mark). That set is live, but it is a
- * COARSER source than the desktop tree's: it cannot tell an active turn from an
- * agent merely kept alive by background work, so both wore the busy spinner,
- * and it carries no notification status at all, so a failed or waiting agent
- * read as plain idle on the phone while the desktop row showed why.
- *
- * What stays mobile is only the IDLE glyph: the harness brand mark, with a
- * terminal badge chip on TUI rows to mark the surface. GUI chat rows keep the
- * brand mark here (the desktop tree deliberately does not, to avoid a column of
- * provider marks) because the switcher is the phone's only agent list and has
- * no hover card or header to surface the harness in.
+ * So a switcher row answers the full vocabulary - failure, fork, interview and approval tones first, then the turn spinner, the muted background-activity glyph, unread-done, and the read-only lock - and updates live while the sheet is open.
+ * That set is live, but it is a COARSER source than the desktop tree's: it cannot tell an active turn from an agent merely kept alive by background work, so both wore the busy spinner, and it carries no notification status at all, so a failed or waiting agent read as plain idle on the phone while the desktop row showed why.
  */
 export function SwitcherAgentIcon(props: {
   readonly epicId: string;
@@ -51,10 +33,7 @@ function SwitcherChatIcon(props: {
   readonly nodeId: string;
 }) {
   const harnessId = useEpicChatHarnessId(props.nodeId);
-  // Read the owner directly from the projection so legacy chats remain null
-  // instead of inheriting the session-host fallback used by openable tree
-  // records. `null` is a value `ChatProgressIcon` handles: no session to read,
-  // and the indicator falls back to the surface aggregate.
+  // Read the owner directly from the projection so legacy chats remain null instead of inheriting the session-host fallback used by openable tree records.
   const ownerHostId = useEpicNodeHostId(props.nodeId);
   return (
     <ChatProgressIcon
@@ -64,9 +43,7 @@ function SwitcherChatIcon(props: {
       className="size-4"
       mutedClassName="text-muted-foreground"
       testId={SWITCHER_AGENT_TEST_ID_PREFIX}
-      // `undefined` lets `ChatProgressIcon` fall back to the plain chat glyph
-      // for a record whose harness cannot be resolved, matching the desktop
-      // row's idle slot.
+      // `undefined` lets `ChatProgressIcon` fall back to the plain chat glyph for a record whose harness cannot be resolved, matching the desktop row's idle slot.
       defaultIcon={
         harnessId === null ? undefined : (
           <HarnessIcon harnessId={harnessId} className="size-4" />
@@ -92,14 +69,7 @@ function SwitcherTuiAgentIcon(props: {
     ) : (
       <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
         <HarnessIcon harnessId={harnessId} className="size-4" />
-        {/* TUI-surface marker as a corner badge chip - a solid accent disc with
-            a ring cutout (the repo's AvatarBadge / AccentDot-corner idiom;
-            ring-popover to match this sheet's sibling artifact status dot)
-            carrying the terminal glyph. The bare 8px muted glyph it replaces
-            vanished at arm's length; the disc + contrast make a Claude TUI agent
-            read distinctly from a Claude GUI chat against both the harness logo
-            and the dark row. A real <span> - independent of the mobile
-            touch-slop `::after`, which only decorates the row Button. */}
+        {/* A real <span> - independent of the mobile touch-slop `::after`, which only decorates the row Button. */}
         <span
           className="pointer-events-none absolute -right-1 -bottom-1 z-10 flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground ring-2 ring-popover"
           data-testid={`switcher-tui-badge-${props.nodeId}`}
@@ -112,9 +82,7 @@ function SwitcherTuiAgentIcon(props: {
     <TerminalAgentProgressIcon
       epicId={props.epicId}
       nodeId={props.nodeId}
-      // The row's owner host, matching the sidebar row: agent ids are
-      // host-minted, so a same-id agent on another machine must not light
-      // this glyph.
+      // The row's owner host, matching the sidebar row: agent ids are host-minted, so a same-id agent on another machine must not light this glyph.
       originHostId={ownerHostId}
       className="size-4"
       style={undefined}

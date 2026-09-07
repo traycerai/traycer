@@ -1,31 +1,4 @@
-/**
- * Deterministic canvas fixture seeding, for evaluation and development only.
- *
- * WHY THIS EXISTS. Sprints 04 and 05 could not measure the Sprint 01/02
- * regression matrices, because the certified fixture - tiles at 192.3 / 130 /
- * 101.1px in an overflowing strip - was built from incidental live content that
- * no longer exists on any machine. A survey of six windows found three epics
- * with exactly one openable row each. The gap was never a product defect; it
- * was that the fixture could not be reconstructed.
- *
- * WHY IT COMPOSES STATE DIRECTLY. Every affordance-level route is capped:
- * `openBlankTabInPane` re-activates rather than inserting when the active tab
- * is already blank (the cap is in the STORE, not merely the UI handler), and a
- * sidebar tree row focuses rather than opening on repeat. Neither can build an
- * unequal-width overflowing strip. Composing `EpicCanvasTileRef`s directly and
- * driving `openTileInTab` / `splitPaneEmptyInTab` sidesteps both, because tab
- * WIDTH follows title length under the strip's `max-w-40` cap - which is how
- * 192.3 / 130 / 101.1 arose in the first place. Unequal widths become a
- * parameter rather than a hope.
- *
- * WHY IT MUST NOT SHIP. This is a state-mutating affordance no user asked for.
- * Its only entry point is a dynamic `import()` inside an `import.meta.env.DEV`
- * branch, so a production build eliminates it entirely. `SEED_FIXTURE_SENTINEL`
- * exists solely so the built artifact can be grepped to PROVE that - and the
- * grep must first be shown to HIT on a build where the seeder is deliberately
- * retained, because "grep found nothing" and "grep is broken" are otherwise the
- * same reading.
- */
+/** Dev-only canvas fixture seeder. Composes tile refs directly because affordance-level routes cap insert-on-repeat. Entry is a dynamic `import()` inside `import.meta.env.DEV`; `SEED_FIXTURE_SENTINEL` proves it was eliminated from production. */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -41,16 +14,10 @@ import type {
 } from "@/stores/epics/canvas/types";
 import type { TileLayoutNode } from "@/stores/epics/canvas/tile-tree";
 
-/**
- * Unique string with no other reason to exist. Its presence in a production
- * bundle means dead-code elimination failed and this module shipped.
- */
+/** Unique string with no other reason to exist. Its presence in a production bundle means dead-code elimination failed and this module shipped. */
 export const SEED_FIXTURE_SENTINEL = "__TRAYCER_SEED_FIXTURE_a7f3c19d__";
 
-/**
- * Titles chosen so rendered tab widths reproduce the certified unequal regime.
- * Width tracks title length under `max-w-40`, so these are the knob.
- */
+/** Titles chosen so rendered tab widths reproduce the certified unequal regime. Width tracks title length under `max-w-40`, so these are the knob. */
 const WIDE_TITLE = "Seeded Wide Fixture Tile For Regression";
 const MID_TITLE = "Seeded Mid T";
 const NARROW_TITLE = "Seed";
@@ -71,15 +38,7 @@ export interface SeededPaneReport {
   readonly tileIds: readonly string[];
 }
 
-/**
- * Strip overflow as MEASURED numbers, not a boolean.
- *
- * "Content wider than the container" is satisfied by 1px, and dnd-kit's
- * autoScroll (`threshold: {x: 0.2}`) fires on entering the outer 20% - so a
- * strip overflowing by 5px triggers autoScroll, scrolls 5px, and stops. Grading
- * boundary invariance against 5px of travel passes while establishing nothing,
- * so the magnitude has to be reported and checked, not the sign.
- */
+/** Overflow as measured numbers, not a boolean: 1px overflow is not enough travel to grade autoScroll. */
 export interface StripOverflowReport {
   readonly groupId: string;
   readonly clientWidth: number;
@@ -104,18 +63,7 @@ function seededTitle(index: number): string {
   return `${NARROW_TITLE}${index}`;
 }
 
-/**
- * Workspace-file refs, NOT blank refs.
- *
- * `parseBlankTileRef` hard-codes `name: BLANK_TILE_NAME`, so a blank tile's
- * name is a CONSTANT rather than data: seeded titles survive until the canvas
- * round-trips through the schema, then every tile becomes "New tab" and settles
- * to a uniform width. Titles are the only knob for width, so the unequal regime
- * cannot be built from blanks at all - not late, not early.
- *
- * `artifact-tile.ts` preserves `name` on every parse path, and the
- * workspace-file variant is renderer-local, so no record has to exist behind it.
- */
+/** Workspace-file refs, not blanks: `parseBlankTileRef` hard-codes `name`, so titles would collapse to uniform width. */
 function seededRef(index: number, hostId: string): EpicCanvasTileRef {
   return {
     id: `seed-tile-${index}`,
@@ -128,15 +76,7 @@ function seededRef(index: number, hostId: string): EpicCanvasTileRef {
   };
 }
 
-/**
- * Does every seeded ref survive serialize -> parse unchanged?
- *
- * A builder that reports a property it has not shown survives serialization is
- * reporting the SEED, not the fixture. This caught nothing when it was a
- * one-off check for `name`; as a standing check it catches ANY field a schema
- * hard-codes on parse - including fields only the builder reports, which
- * nothing else could disagree with.
- */
+/** Whether every seeded ref survives serialize -> parse. Catches any field a schema hard-codes on parse. */
 export interface RoundTripReport {
   readonly ok: boolean;
   readonly drifted: readonly string[];
@@ -166,30 +106,10 @@ export function checkSeededRoundTrip(tabId: string): RoundTripReport {
 let preSeedSnapshot: EpicCanvasState | null = null;
 let seededTabId: string | null = null;
 
-/**
- * Strip scroll offsets at seed time, keyed by group id.
- *
- * `EpicCanvasState` is `{ root, activePaneId, tilesByInstanceId, sizesByGroupId }`
- * - scroll position is NOT in it. It is DOM state on the strip element. So
- * restoring the state object alone leaves a strip scrolled wherever the last
- * gesture left it, and S1.3's fingerprint check cannot see that: the
- * fingerprint is STRUCTURAL, so it reads identically whether scroll was
- * restored or not. Same reading, two worlds.
- *
- * That matters most for the one assertion about scrolling: a trial starting
- * mid-strip puts every boundary somewhere unintended, and it would present as a
- * boundary regression rather than as residue.
- */
+/** Strip scroll is DOM state, not `EpicCanvasState`. Restore it separately or a trial starts mid-strip. */
 let preSeedScrollByIndex: readonly number[] = [];
 
-/**
- * Strip scroll offsets in LEFT-TO-RIGHT order.
- *
- * Keyed by position, not group id, because seeding REGENERATES group ids - a
- * capture keyed by id matches nothing at teardown, and an empty restore map
- * reads exactly like a clean restore. That is how the first version of this
- * reported success having restored nothing.
- */
+/** Strip scroll offsets left-to-right. Keyed by position: seeding regenerates group ids. */
 function readScrollLefts(): readonly number[] {
   return [
     ...document.querySelectorAll<HTMLElement>(
@@ -243,9 +163,7 @@ function paneReports(tabId: string): readonly SeededPaneReport[] {
   const canvas = readCanvas(tabId);
   if (canvas === null || canvas.root === null) return [];
   const out: SeededPaneReport[] = [];
-  // `TileGroup` is N-ary (`children`), not binary - recursing into `first` /
-  // `second` finds nothing at all and reports "built 0 panes" for a canvas that
-  // plainly has some.
+  // `TileGroup` is N-ary (`children`), not binary.
   const walk = (node: TileLayoutNode): void => {
     if (node.kind === "pane") {
       out.push({ paneId: node.id, tileIds: [...node.tabInstanceIds] });
@@ -257,34 +175,15 @@ function paneReports(tabId: string): readonly SeededPaneReport[] {
   return out;
 }
 
-/**
- * Fingerprint by tile COMPOSITION, deliberately excluding pane ids.
- *
- * Pane ids are freshly generated uuids on every split, so a fingerprint that
- * includes them differs between two builds of the SAME spec with the SAME
- * tiles - which makes S1.1 ("same fingerprint from any starting state")
- * unsatisfiable by construction rather than by defect. Sorting by pane id makes
- * the pane ORDER arbitrary for the same reason.
- *
- * Tile order WITHIN a pane is preserved, because a reorder is exactly what this
- * has to detect; only the incidental pane identity is dropped.
- */
+/** Fingerprint by tile composition, excluding pane ids (fresh uuids on every split). Tile order within a pane is preserved. */
 function fingerprintOf(tabId: string): string {
-  // Panes in TREE order, which for a horizontal split is left-to-right - the
-  // Evaluator's instrument orders by strip x, and the two must agree. Sorting
-  // the composition strings instead would order panes by their tile names,
-  // so two fingerprints could differ purely in pane ordering and the gate
-  // would refuse a valid fixture while looking like fixture drift.
+  // Panes in tree order (left-to-right for a horizontal split). Do not sort composition strings.
   return paneReports(tabId)
     .map((pane) => pane.tileIds.map((id) => id.slice(0, 12)).join(","))
     .join(" | ");
 }
 
-/**
- * Build the fixture. Returns a report rather than a boolean: a builder that
- * says "done" without saying what it built is the shape that let a four-group
- * fixture pass for a two-group one across a whole sprint.
- */
+/** Build the fixture. Returns a report of what was built, not a boolean. */
 export function seedCanvasFixture(
   tabId: string,
   spec: SeedFixtureSpec,
@@ -312,40 +211,20 @@ export function seedCanvasFixture(
       fingerprint: fingerprintOf(tabId),
     };
   }
-  // Re-seeding the SAME tab is useful when a probe needs a fresh canonical
-  // shape between trials. Preserve the original pre-seed snapshot and scroll
-  // instead of quietly redefining "teardown" to mean "restore the last seeded
-  // fixture". A different tab is refused above because one global snapshot
-  // cannot restore two canvases honestly.
+  // Re-seeding the same tab: keep the original pre-seed snapshot. One global snapshot cannot restore two canvases honestly.
   if (seededTabId === null) {
     preSeedSnapshot = before;
     seededTabId = tabId;
     preSeedScrollByIndex = readScrollLefts();
   }
 
-  // Reset to an empty canvas FIRST, so the result depends on the spec and not
-  // on what happened to be there. Seeding on top of residue is why an earlier
-  // run produced four panes squeezed to 118px each: the tiles were right and
-  // the strip was too narrow to overflow, which is S1.1's whole point - the
-  // same spec must yield the same fingerprint from any starting state.
-  // Safe because `preSeedSnapshot` above is what teardown restores.
+  // Reset to an empty canvas first so the result depends on the spec, not residue. Teardown restores `preSeedSnapshot`.
   useEpicCanvasStore.setState((state) => ({
     ...state,
     canvasByTabId: { ...state.canvasByTabId, [tabId]: createEmptyCanvas() },
   }));
 
-  // Ordering matters, and both halves were bugs.
-  //
-  // `openTile` / `openTileInPane` FILL IN PLACE when the target pane's active
-  // tab is blank - browser new-tab semantics (`actions.ts:568-593`). Every
-  // seeded ref IS blank, because titles are how widths are set, so eight opens
-  // through that path replace each other and leave exactly one tile: the LAST.
-  // `openTileInBackgroundTab` appends unconditionally, so it is the only path
-  // that accumulates - but it returns state unchanged on a null root, so the
-  // FIRST tile still has to go through `openTile` to seed the root pane.
-  //
-  // And the split has to come AFTER the source tiles exist, or it produces an
-  // empty pane and there is nothing to overflow.
+  // First tile via `openTile` (seeds a null root). Later tiles via `openTileInBackgroundTab` (append, never fill-in-place). Split after source tiles exist.
   let opened = 0;
   const openInto = (index: number): void => {
     if (opened === 0 && readCanvas(tabId)?.root === null) {
@@ -363,8 +242,7 @@ export function seedCanvasFixture(
     if (sourcePanes.length > 0) {
       const source = sourcePanes[0];
       store.splitPaneEmptyInTab(tabId, source.paneId, "horizontal");
-      // `openTileInBackgroundTab` appends to `activePaneOrFirst`, so the new
-      // pane has to be made active before the target tiles are opened.
+      // `openTileInBackgroundTab` appends to `activePaneOrFirst`; activate the new pane first.
       const afterSplit = paneReports(tabId);
       const created = afterSplit.find((pane) => pane.tileIds.length === 0);
       if (created !== undefined) {
@@ -396,11 +274,7 @@ export function seedCanvasFixture(
     );
   }
 
-  // NOTE: overflow is deliberately NOT measured here. `seed()` mutates the
-  // store synchronously, so a DOM read on this tick sees the strip as it was
-  // BEFORE React re-rendered - stale widths that read exactly like real ones.
-  // The driver calls `measure()` after the render settles; S1.6's gate lives
-  // there, applied to geometry that exists.
+  // Do not measure overflow here: a DOM read on this tick sees the previous layout.
   const overflow: readonly StripOverflowReport[] = [];
 
   return {
@@ -412,20 +286,11 @@ export function seedCanvasFixture(
   };
 }
 
-/**
- * Restore the exact pre-seed canvas. Not "close what we opened" - an
- * approximate teardown leaves residue that the next measurement inherits.
- */
+/** Restore the exact pre-seed canvas. Approximate teardown leaves residue the next measurement inherits. */
 export interface TeardownReport {
   readonly ok: boolean;
   readonly fingerprint: string;
-  /**
-   * Scroll is NOT restored here. Teardown reinstates the pre-seed
-   * `EpicCanvasState`, and React re-renders the pre-seed panes on a LATER tick
-   * - so writing scrollLeft on this tick would address the SEEDED strips, which
-   * is the split-before-tiles ordering bug in a different costume. The driver
-   * calls `restoreSeededScroll()` once the structural restore has rendered.
-   */
+  /** Scroll is restored later, after the structural restore has rendered. */
   readonly scrollPending: number;
 }
 
@@ -452,12 +317,7 @@ export interface ScrollRestoreReport {
   readonly mismatches: readonly string[];
 }
 
-/**
- * Apply the captured scroll offsets by POSITION, after the structural restore
- * has rendered. Reports what it wanted against what it got, and refuses to
- * claim success when the strip count no longer matches - restoring nothing and
- * restoring correctly must not produce the same reading.
- */
+/** Apply captured scroll offsets by position after structural restore. Refuse success when strip count no longer matches. */
 export function restoreSeededScroll(): ScrollRestoreReport {
   const wanted = preSeedScrollByIndex;
   const ends = [
@@ -482,9 +342,7 @@ export function restoreSeededScroll(): ScrollRestoreReport {
       `captured ${wanted.length} strip(s), found ${ends.length} live`,
     );
   }
-  // Only the overlapping prefix can be restored; a count difference is already
-  // reported above, and is what makes "restored nothing" distinguishable from
-  // "restored correctly".
+  // Only the overlapping prefix can be restored; a count difference is already reported above.
   const pairs = Math.min(ends.length, wanted.length);
   for (let index = 0; index < pairs; index++) {
     ends[index].scrollLeft = wanted[index];
@@ -501,37 +359,12 @@ export function restoreSeededScroll(): ScrollRestoreReport {
   return { ok: mismatches.length === 0, wanted, got, mismatches };
 }
 
-/**
- * Seed HEADER tabs, for the Sprint 01 (E7.1) regression set.
- *
- * Header tabs are PROJECTED (`use-header-tabs.ts`) from
- * `canvasStore.openTabOrder` + `tabsById`, so seeding them is the same store
- * composition the canvas fixture already uses - an `EpicViewTab` carries a
- * `name`.
- *
- * HEADER WIDTH IS COUNT-DRIVEN, NOT TITLE-DRIVEN - the opposite of the tile
- * strip. Tabs divide the strip evenly (`762/N` measured exactly) until they hit
- * a MIN-WIDTH CLAMP at 120px, after which the strip overflows and every tab
- * stays at 120 regardless of count. So a title parameter here would be a claim
- * the API makes and the implementation does not keep, and the only knob is
- * `count`.
- *
- * This exists because E7.1 cannot otherwise be a REGRESSION test: Sprint 01
- * certified on 4 tabs at 191px and 5 plain tabs at 185.9px, and the live header
- * is 180.8 / 400.4 / 180.8. Grading the Sprint 01 matrix on that shape would be
- * a new measurement against an old baseline - refused by our own S4.2 rule.
- */
+/** Seed header tabs. Header width is count-driven, not title-driven (opposite of the tile strip). */
 export interface HeaderSeedReport {
   readonly ok: boolean;
   readonly failures: readonly string[];
   readonly seededTabIds: readonly string[];
-  /**
-   * Tabs present before seeding. `count` is ADDITIVE, so the resulting total is
-   * `preExisting + count` - and the caller must read the ACHIEVED total from
-   * `measureHeader()` after the render settles, never from this call: a DOM
-   * read on the tick that mutates the store returns the PREVIOUS layout, which
-   * is indistinguishable from the current one.
-   */
+  /** Tabs present before seeding. `count` is additive; read the achieved total from `measureHeader()` after render. */
   readonly preExisting: number;
 }
 
@@ -542,8 +375,7 @@ export function seedHeaderTabs(
   epicId: string,
 ): HeaderSeedReport {
   const store = useEpicCanvasStore.getState();
-  // Remember the order WITHOUT any previously seeded tabs, so a repeat call
-  // cannot memoise a seeded state as the baseline to restore to.
+  // Remember the order without previously seeded tabs, so a repeat cannot memoise a seeded baseline.
   preSeedOpenTabOrder ??= store.openTabOrder.filter(
     (id) => !id.startsWith("seed-header-"),
   );
@@ -557,15 +389,13 @@ export function seedHeaderTabs(
     tabs[tabId] = {
       tabId,
       epicId,
-      // Name does not affect header width - see the note above.
+      // Name does not affect header width.
       name: `Seeded Header ${index}`,
     };
     canvases[tabId] = createEmptyCanvas();
   }
 
-  // Drop any prior seeded ids before appending: the ids are deterministic, so
-  // appending them again would duplicate rather than accumulate, and React
-  // would render only the unique ones - a count that silently ignores the call.
+  // Drop prior seeded ids before appending: ids are deterministic, so a second append would duplicate.
   useEpicCanvasStore.setState((state) => ({
     ...state,
     tabsById: tabs,
@@ -589,14 +419,7 @@ export function seedHeaderTabs(
 }
 
 /** Restore the pre-seed header. Separate from the canvas teardown. */
-/**
- * Mint a DRAFT header tab, for E7.1's detach epic-vs-draft row.
- *
- * Drafts are projected from a different store than epic tabs
- * (`useLandingDraftStore.drafts`, see `use-header-tabs.ts`), so the epic-tab
- * seeding above cannot produce one - a draft is a different kind, not a
- * differently-named epic.
- */
+/** Mint a draft header tab. Drafts are projected from a different store than epic tabs. */
 export interface DraftSeedReport {
   readonly ok: boolean;
   readonly draftId: string;
@@ -630,19 +453,7 @@ export function teardownDraftTabs(): number {
   return removed;
 }
 
-/**
- * Remove EVERY seeded header tab from this window, regardless of whether this
- * page is the one that created them.
- *
- * `teardownHeaderTabs` restores a remembered baseline, which only works on the
- * window that seeded and only while the memo survives a reload. Seeded ids are
- * persisted with the canvas store, so they reappear on other windows and in
- * later sessions with no memo to restore from - and there they are invisible
- * contamination: they look like ordinary epic tabs.
- *
- * This is the payoff of naming what you write. `seed-header-` is a namespace,
- * so contamination is removable by inspection rather than by remembering.
- */
+/** Remove every `seed-header-` tab in this window. Teardown's remembered baseline does not survive reload or other windows. */
 export interface PurgeReport {
   readonly removed: readonly string[];
   readonly remaining: number;
@@ -728,13 +539,7 @@ export interface SeedMeasurement {
   readonly fingerprint: string;
 }
 
-/**
- * Live geometry after the render settles, and S1.6's gate.
- *
- * Separate from `seed()` because `seed()` returns on the same tick it mutates
- * the store: any DOM measured there is the PREVIOUS layout, which reads exactly
- * like the current one and is the sprint's recurring defect in miniature.
- */
+/** Live geometry after the render settles. Separate from `seed()`, which returns on the mutate tick. */
 export function measureSeededFixture(
   tabId: string,
   requireAutoScrollOverflow: boolean,
@@ -769,12 +574,7 @@ export interface SeededTabSummary {
   readonly tileCount: number;
 }
 
-/**
- * The canvas is keyed by TAB id, but the header testid carries the EPIC id -
- * `tab-epic-${epic.id}`. A driver reading the DOM therefore has the wrong key,
- * and a wrong key produces an empty canvas that is indistinguishable from an
- * empty canvas. Listing both ids makes the mapping explicit.
- */
+/** Canvas is keyed by tab id; the header testid carries the epic id. List both so a driver does not read an empty canvas. */
 export function listSeedableTabs(): readonly SeededTabSummary[] {
   const store = useEpicCanvasStore.getState();
   return Object.entries(store.canvasByTabId).flatMap(([tabId, canvas]) => {
@@ -815,17 +615,7 @@ interface SeedFixtureBridge {
   readonly fingerprint: (tabId: string) => string;
 }
 
-/**
- * Expose the seeder to an out-of-process driver (CDP). Called ONLY from a
- * dynamic `import()` inside an `import.meta.env.DEV` branch, so neither this
- * function nor anything it closes over reaches a production bundle.
- *
- * Attached with `Reflect.set` rather than by augmenting the global `Window`
- * interface. A `declare global` here would be erased at build but would let ANY
- * production file write `window.__traycerSeedFixture` and typecheck - the type
- * surface of an eval-only harness leaking into product code, which outlives the
- * harness itself.
- */
+/** Expose the seeder to a CDP driver. Called only from a DEV dynamic import. Attached with `Reflect.set`: a `declare global` would leak the harness type into production files. */
 export function installSeedFixtureBridge(): void {
   const bridge: SeedFixtureBridge = {
     sentinel: SEED_FIXTURE_SENTINEL,

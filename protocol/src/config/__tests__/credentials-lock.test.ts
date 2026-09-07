@@ -228,9 +228,7 @@ describe("acquireCredentialsLock", () => {
     "serializes concurrent contenders racing to break the same dead-holder lock",
     async () => {
       vi.spyOn(process, "kill").mockImplementation((pid: number) => {
-        // Only the recorded dead holder is gone; this real test process (which
-        // every contender's own lock records) stays alive, so contenders must
-        // wait for each other rather than all breaking through at once.
+        // Only the recorded dead holder is gone; this real test process (which every contender's own lock records) stays alive, so contenders must wait for each other rather than all breaking through at once.
         if (pid === 999999) {
           throw Object.assign(new Error("no such process"), { code: "ESRCH" });
         }
@@ -319,9 +317,7 @@ describe("breakStaleLock", () => {
   });
 
   it("leaves a lock that changed under us untouched and reports contended (re-read guard)", async () => {
-    // A competitor already broke the stale lock and linked its own live one in
-    // the gap. The re-read guard sees the bytes no longer match the stale entry
-    // and bails without moving it - the live lock is left intact.
+    // A competitor already broke the stale lock and linked its own live one in the gap.
     writeFileSync(lockPath, "FRESH");
     expect(await breakStaleLock(lockPath, "STALE")).toBe("contended");
     expect(readFileSync(lockPath, "utf8")).toBe("FRESH");

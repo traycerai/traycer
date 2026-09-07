@@ -2,17 +2,7 @@ import { z } from "zod";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 
-/**
- * Public sub-schemas and inferred types for the room-metadata record.
- *
- * The top-level `roomMetadataSchema` (the registered `room-metadata`
- * record) lives in
- * `protocol/persistence/_internal/room-metadata-schemas.ts` and is
- * reachable only through
- * `getRecordSchema(persistenceRecordRegistry, "room-metadata", "latest")`. The
- * helpers and inferred types below are building blocks of that record,
- * not records themselves, and stay public.
- */
+/** Public sub-schemas and inferred types for the room-metadata record. */
 
 const permissionRoleSchema = getRecordSchema(
   commonRecordRegistry,

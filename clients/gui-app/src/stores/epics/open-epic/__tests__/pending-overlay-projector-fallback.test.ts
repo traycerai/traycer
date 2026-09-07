@@ -1,9 +1,6 @@
 /**
- * `epic-projector.ts`'s incremental-vs-full-projection fork: with a pending
- * metadata mutation in flight, an ordinary doc edit must still take the FULL
- * projection path so the overlay stays applied instead of the row snapping
- * back to the doc's raw value for one frame. See the comment in
- * `createEpicProjector`'s observeDeep handler.
+ * `epic-projector.ts`'s incremental-vs-full-projection fork: with a pending metadata mutation in
+ * flight, an ordinary doc edit must still take the FULL projection path so the overlay stays
  */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -66,11 +63,7 @@ function newSession(): {
   const handle = openStoreForTest({
     epicId: "epic-test",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -99,9 +92,7 @@ describe("projector full-projection fallback while a mutation is pending", () =>
       "Optimistic title",
     );
 
-    // An ordinary doc edit on a DIFFERENT node. With no pending mutation this
-    // would take the incremental `applyPatches` path, which recomputes rows
-    // purely from the doc and would drop the overlay for `renamed`.
+    // An ordinary doc edit on a DIFFERENT node.
     await handle.store.getState().renameArtifact(other, "Other renamed");
 
     expect(handle.store.getState().artifacts.byId[other].title).toBe(
@@ -126,10 +117,6 @@ describe("projector full-projection fallback while a mutation is pending", () =>
       .beginRenameMutation(renamed, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
 
-    // The full-projection fallback path (item 9 - `stabilizeProjectedSlices`
-    // in the projector) must reconcile against the previously published
-    // state, not hand every consumer a fresh row reference just because a
-    // pending mutation forced the full-projection path.
     await handle.store.getState().renameArtifact(other, "Other renamed");
 
     expect(handle.store.getState().artifacts.byId[bystander]).toBe(
@@ -147,10 +134,8 @@ describe("projector full-projection fallback while a mutation is pending", () =>
       .beginRenameMutation(id, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
 
-    // Simulate the host's own dual-write reaching the doc for THIS row while
-    // the mutation is still pending (the scenario the module doc calls out:
-    // "a doc patch during that window is not rare, it is what the mutation's
-    // own dual-write produces").
+    // Simulate the host's own dual-write reaching the doc for THIS row while the mutation is still
+    // pending (the scenario the module doc calls out: "a doc patch during that window is not rare, it
     const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
     if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
     const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
@@ -162,11 +147,7 @@ describe("projector full-projection fallback while a mutation is pending", () =>
       entry.set("updatedAt", 123);
     });
 
-    // Still shows the optimistic title. Under the "landed" contract this is
-    // now genuinely row-wins (the mutation was never marked landed, so
-    // authoritative matching its target does not "anchor" it) - it just so
-    // happens the authoritative value the projector shows IS the same
-    // string, because that's what got written to the doc.
+    // Still shows the optimistic title.
     expect(handle.store.getState().artifacts.byId[id].title).toBe(
       "Optimistic title",
     );

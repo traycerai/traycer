@@ -13,10 +13,8 @@ interface PrDetailTileProps {
 }
 
 /**
- * Gates on the tile's BOUND host reachability only. Git-diff tiles are
- * tab-pinned the same way: they no longer go dead when the active host
- * changes. The detail subscription hook resolves and subscribes through
- * the bound host's own client (`use-pr-detail-subscription.ts`).
+ * Gates on the tile's BOUND host reachability only.
+ * Git-diff tiles are tab-pinned the same way: they no longer go dead when the active host changes.
  */
 export function PrDetailTile(props: PrDetailTileProps): ReactNode {
   const tabHostId = useTabHostId();

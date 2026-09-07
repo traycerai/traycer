@@ -11,12 +11,8 @@ import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
 
-// A narrow stand-in for `UseQueryResult`, not the real thing: the tile only
-// ever reads `.data` and `.isPending` off this query, and hand-building a
-// whole `UseQueryResult` (twenty-odd required fields, most meaningless for a
-// synchronous mock) would buy nothing but cast noise. Same convention as
-// `use-epic-collaborators-query.test.tsx`'s `MockQueryResult` - mock at the
-// hook boundary with only the fields the component under test actually uses.
+// A narrow stand-in for `UseQueryResult`, not the real thing: the tile only ever reads `.data` and `.isPending` off this query, and hand-building a whole `UseQueryResult` (twenty-odd required fields, most meaningless for a synchronous mock) would buy nothing but cast noise.
+// Same convention as `use-epic-collaborators-query.test.tsx`'s `MockQueryResult` - mock at the hook boundary with only the fields the component under test actually uses.
 interface MockReplicaQueryResult {
   readonly data: ChatReplicaReadResponse | undefined;
   readonly isPending: boolean;
@@ -31,11 +27,7 @@ interface MockHostReachability {
 }
 
 /**
- * The props the tile handed `ChatDeadTileBannerContainer`, per mount. The
- * container's own hook wiring (clone offer, owner lookup) is `chat-tile`'s
- * unit; what THIS suite owns is which props the copy's tile threads into it -
- * in particular that the ref's `ownerUserId` rides along instead of being
- * re-resolved from the cloud list.
+ * The container's own hook wiring (clone offer, owner lookup) is `chat-tile`'s unit; what THIS suite owns is which props the copy's tile threads into it - in particular that the ref's `ownerUserId` rides along instead of being re-resolved from the cloud list.
  */
 interface DeadTileBannerContainerProps {
   readonly epicId: string;
@@ -60,9 +52,6 @@ const mockUseHostReachability =
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
-// The serving host the tile binds via `useTabHostId()` - the tab is bound to
-// the ref's `hostId` ("host-1" in every fixture below), same as the real
-// `<TabHostProvider>` would resolve for this tab.
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
 }));
@@ -93,23 +82,12 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
     }) => (
       <div data-testid="chat-tile-session-view">{props.readOnlyNotice}</div>
     ),
-    // Stubbed at the container boundary - the real container runs the clone
-    // offer's host-runtime subscription and the owner lookup's cloud query,
-    // neither of which this suite mounts providers for. It records the props
-    // and renders the REAL `ChatDeadTileBanner`, so the Clone affordance the
-    // tests assert on is the genuine article.
     ChatDeadTileBannerContainer: (props: DeadTileBannerContainerProps) => {
       deadTileBannerContainerProps.push(props);
       return (
         <ChatDeadTileBanner
           hostLabel={props.hostLabel}
           reason={props.reason}
-          // The real container resolves these from the signed-in identity
-          // and the epic role; this suite mounts neither, and what it owns
-          // is the tile→container prop threading, so the banner renders the
-          // pre-collaborator defaults. `showsPublishedCopy` IS threading, so
-          // it forwards. The ownership wiring itself is pinned by
-          // `dead-tile-banner-container.test.tsx` against the real container.
           ownedByViewer
           cloneAllowed
           showsPublishedCopy={props.showsPublishedCopy}
@@ -152,13 +130,6 @@ const NODE: PublishedChatTileRef = {
   ownerHostId: "owner-host-1",
 };
 
-/**
- * The SAME ref shape the canvas builds when this device's own connected host
- * answers `CHAT_NOT_VISIBLE` for one of its chats (tickets 47/48): the
- * serving host and the owning host are one machine, which is exactly what
- * `hostId === ownerHostId` says. Nothing about it is probed - the copy's
- * footer has to read that off the ref.
- */
 const SAME_HOST_NODE: PublishedChatTileRef = {
   ...NODE,
   ownerHostId: NODE.hostId,
@@ -204,10 +175,7 @@ function replicaOk(): MockReplicaQueryResult {
 }
 
 /**
- * A replica read whose one message carries a block this build cannot parse -
- * exercises `convertReplicaChat`'s real placeholder-swap path (not mocked
- * here), so `unreadableCount` on the resulting conversion is genuinely `1`,
- * the same way it would be in production.
+ * A replica read whose one message carries a block this build cannot parse - exercises `convertReplicaChat`'s real placeholder-swap path (not mocked here), so `unreadableCount` on the resulting conversion is genuinely `1`, the same way it would be in production.
  */
 function replicaOkWithUnreadableBlock(): MockReplicaQueryResult {
   return {
@@ -333,9 +301,7 @@ describe("PublishedChatTile - doc-replica fallback", () => {
   });
 
   it('says the replica read FAILED rather than repeating "not published yet"', () => {
-    // Retries exhausted, `data` undefined - identical to an absent replica from
-    // the notice's point of view, and the difference matters: one means no copy
-    // exists, the other means the lookup never completed and is worth retrying.
+    // Retries exhausted, `data` undefined - identical to an absent replica from the notice's point of view, and the difference matters: one means no copy exists, the other means the lookup never completed and is worth retrying.
     mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
     mockUseChatReplicaRead.mockReturnValue(replicaFailed("RPC_ERROR"));
 
@@ -447,14 +413,7 @@ describe("PublishedChatTile - doc-replica fallback", () => {
       />,
     );
 
-    // Neither the notice NOR the transcript yet - a stale "not published"
-    // flash is exactly the bug this branch exists to prevent. The bounded
-    // load state (not a bare spinner testid) is what covers the window now -
-    // see `published-chat-tile.tsx`'s `boundedLoad` arm. This suite never
-    // seeds `useSelectionAuthorityStore`, so the lease read is null and the
-    // load answers "connecting" (pending, host itself not yet up) rather than
-    // "loading" (host up, content still pending) - either is a non-ready,
-    // non-terminal pending arm, which is all this test asserts.
+    // This suite never seeds `useSelectionAuthorityStore`, so the lease read is null and the load answers "connecting" (pending, host itself not yet up) rather than "loading" (host up, content still pending) - either is a non-ready, non-terminal pending arm, which is all this test asserts.
     const loadState = screen.queryByTestId(
       `published-chat-tile-load-${NODE.id}`,
     );
@@ -483,10 +442,7 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     );
 
     const view = screen.getByTestId("chat-tile-session-view");
-    // The cloud read can stay `unpublished` forever (a legacy chat, or a
-    // server declining this viewer the row) even after the owner is back
-    // online, so the lock reason must say so honestly instead of repeating
-    // the "which is offline" sentence past the point it stopped being true.
+    // The cloud read can stay `unpublished` forever (a legacy chat, or a server declining this viewer the row) even after the owner is back online, so the lock reason must say so honestly instead of repeating the "which is offline" sentence past the point it stopped being true.
     expect(view.textContent).toContain("not available live from this device");
     expect(view.textContent).not.toContain("which is offline");
   });
@@ -510,9 +466,7 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     );
 
     const view = screen.getByTestId("chat-tile-session-view");
-    // Same state as the test above (reachable owner, synced copy) - only the
-    // ref differs, and that alone must move the footer off copy that reads
-    // the reader's own machine as somewhere else.
+    // Same state as the test above (reachable owner, synced copy) - only the ref differs, and that alone must move the footer off copy that reads the reader's own machine as somewhere else.
     expect(view.textContent).toContain("no longer on this host");
     expect(view.textContent).not.toContain("lives on");
     expect(view.textContent).not.toContain("from this device");

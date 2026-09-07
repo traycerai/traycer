@@ -13,10 +13,7 @@ type AuthBeforeLoadFn = (args: {
   context: { getAuthSnapshot: () => { status: string } };
 }) => void;
 
-/**
- * Calls a beforeLoad function, captures any thrown redirect, and returns it.
- * Returns null when the function completes without throwing.
- */
+/** Calls a beforeLoad function, captures any thrown redirect, and returns it. Returns null when the function completes without throwing. */
 function callOnboardingBeforeLoad(
   fn: OnboardingBeforeLoadFn,
   status: string,

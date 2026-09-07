@@ -20,32 +20,19 @@ import {
 } from "@/components/providers/provider-profile-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 
-/**
- * The resolved run-settings header shown atop the chat/terminal-agent hover
- * card. Every field is already display-ready: labels are resolved against the
- * live GUI harness catalog with a raw-slug fallback, so the view never needs
- * the catalog again. Chat-only permission/service-tier fields remain absent
- * for terminal agents; their persisted reasoning, profile, and agent mode fill
- * the equivalent identity slots instead.
- */
+/** Every field is already display-ready: labels are resolved against the live GUI harness catalog with a
+ * raw-slug fallback, so the view never needs the catalog again. */
 export interface OwnerSettingsHeaderView {
   readonly harnessId: ProviderId;
   readonly harnessName: string;
   readonly modelLabel: string | null;
   readonly reasoningLabel: string | null;
   readonly fastMode: boolean;
-  /** Corner badge for the harness mark, NOT a text segment: the profile name
-   *  used to ride at the end of the line, where a long label ("Anthropic work
-   *  account") wrapped the row onto a second line and pushed the permission
-   *  mode - the one value here with a safety consequence - out of first sight.
-   *  Same `AccentDot` projection the composer's model-picker trigger uses, so
-   *  the same profile reads as the same mark on both surfaces. */
+  /** Same `AccentDot` projection the composer's model-picker trigger uses, so the same profile reads as the same
+   * mark on both surfaces. */
   readonly profileAccentDot: ProfileAccentDotInput | null;
-  /** The raw mode, not a pre-resolved label: the header needs BOTH the label
-   *  and the mode's icon, and `findPermissionOption` is the single source of
-   *  truth for that pair (`landing-options`). Resolving only the label here is
-   *  what let this surface drift into hardcoding one padlock for all three
-   *  modes. */
+  /** The raw mode, not a pre-resolved label: the header needs both the label and the mode's icon, and
+   * `findPermissionOption` is the single source of truth for that pair (`landing-options`). */
   readonly permissionMode: PermissionMode | null;
 }
 
@@ -54,31 +41,19 @@ export interface OwnerSettingsHeaderInput {
   /** GUI chat's persisted run settings (`null` for terminal agents and for
    *  legacy chats that predate the settings field). */
   readonly chatSettings: ChatRunSettings | null;
-  /** Terminal agent's harness id (`null` for GUI chats). */
   readonly tuiHarnessId: ProviderId | null;
-  /** Terminal agent's selected model slug, if any (`null` for GUI chats). */
   readonly tuiModel: string | null;
-  /** Terminal agent's persisted reasoning effort (`null` for GUI chats). */
   readonly tuiReasoningEffort: string | null;
-  /** Terminal agent's persisted provider profile (`null` means ambient). */
   readonly tuiProfileId: string | null;
-  /** Live GUI harness catalog entries - the dynamic label source. Empty while
-   *  the catalog is cold or the host is unreachable, which drives the
-   *  raw-slug fallback. */
+  /** Empty while the catalog is cold or the host is unreachable, which drives the raw-slug fallback. */
   readonly harnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
-  /** The chat harness's OWN profiles - not every provider's, flattened. The
-   *  accent dot is gated on this list crossing the 2-profile mark, and that
-   *  gate only means "this provider has more than one account" if the list is
-   *  scoped to the provider in question. */
+  /** The accent dot is gated on this list crossing the 2-profile mark, and that gate only means "this provider
+   * has more than one account" if the list is scoped to the provider in question. */
   readonly profiles: ReadonlyArray<ProviderProfile>;
 }
 
-/**
- * Resolves the hover-card settings header from already-local data: the chat's
- * persisted `settings` (or the terminal agent's flat fields) plus the dynamic
- * harness catalog. Returns `null` when there is nothing to show (a chat with no
- * persisted settings, or a terminal agent with no harness).
- */
+/** Resolves the hover-card settings header from already-local data: the chat's persisted `settings` (or the
+ * terminal agent's flat fields) plus the dynamic harness catalog. */
 export function deriveOwnerSettingsHeader(
   input: OwnerSettingsHeaderInput,
 ): OwnerSettingsHeaderView | null {
@@ -151,9 +126,8 @@ function findModel(
   return readableModelMatch(resolveModelBySlug(entry.models, slug));
 }
 
-// `findReasoningLabel` falls back to the raw level when the model (or its
-// options) is missing, so an unresolved effort still reads as its persisted
-// slug rather than disappearing. An empty/absent effort omits the row.
+// `findReasoningLabel` falls back to the raw level when the model (or its options) is missing, so an
+// unresolved effort still reads as its persisted slug rather than disappearing.
 function resolveReasoningLabel(
   reasoningEffort: string | null,
   model: ModelOption | null,
@@ -167,18 +141,8 @@ function resolveReasoningLabel(
   );
 }
 
-// Deliberately the same three lines as the model picker's own badge resolution
-// (`deriveHarnessModelPickerPresentation`), including the shape of what it
-// declines to show:
-//
-//   - Fewer than 2 profiles is the progressive-disclosure gate. A dot that is
-//     always present signals nothing; it earns its pixels only once the
-//     provider actually has more than one account to be confused between.
-//   - `null` here is AMBIENT, not "no profile" - it matches the ambient row via
-//     `profileCommitId`, so a chat running on the Terminal account gets its own
-//     mark rather than silently reading as an unconfigured one.
-//   - An id matching nothing (cold provider cache, host unreachable, deleted
-//     profile) omits the badge rather than guessing a color from an opaque id.
+// `null` here is ambient, not "no profile" - it matches the ambient row via `profileCommitId`, so a chat
+// running on the Terminal account gets its own mark rather than silently reading as an unconfigured one.
 export function resolveProfileAccentDot(
   profileId: string | null,
   profiles: ReadonlyArray<ProviderProfile>,

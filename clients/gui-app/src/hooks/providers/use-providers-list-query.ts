@@ -21,10 +21,7 @@ export function useProvidersList(
   return useProvidersListForClient(useHostClient(), activity);
 }
 
-/** Client-scoped variant - lets a caller outside `HostRuntimeContext` (e.g.
- *  the picker's globally-mounted "Create new profile" flow host, resolving a
- *  transient client for a captured tab host id) target an explicit host
- *  instead of the app-wide default. */
+/** the picker's globally-mounted "Create new profile" flow host, resolving a transient client for a captured tab host id) target an explicit host instead of the app-wide default. */
 export function useProvidersListForClient(
   client: HostClient<HostRpcRegistry> | null,
   activity: QueryActivityOptions,

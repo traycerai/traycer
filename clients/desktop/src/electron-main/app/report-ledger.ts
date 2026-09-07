@@ -7,18 +7,8 @@ import {
 import { log } from "./logger";
 
 /**
- * Install-local report ledger (T3.5).
- *
- * Lives under `userData` (per install, not per account). Never renderer
- * localStorage: `lib/persist/wipe.ts` sweeps every `traycer-gui-app:` key on
- * logout, and those keys are identity-scoped while this ledger is install-
- * scoped. Copy that consumes these numbers must say "on this install".
- *
- * Two separate concepts, deliberately not collapsed:
- * - **Sightings** (`fingerprints`): every time a report dialog opens / freezes
- *   evidence with a fingerprint. Powers "2nd time on this install".
- * - **Filed reports** (`reports`): only DELIVERED private submits. Powers
- *   later router / fixed-in work; not what the repeat-count copy reads.
+ * Never renderer localStorage: `lib/persist/wipe.ts` sweeps every `traycer-gui-app:` key on logout, and those keys are identity-scoped while this ledger is install- scoped.
+ * Copy that consumes these numbers must say "on this install".
  */
 
 const STORE_FILE_NAME = "report-ledger.json";
@@ -82,11 +72,6 @@ function getStore(): StrictJsonFileStore<ReportLedgerState> {
   return store;
 }
 
-/**
- * Strict parse of on-disk JSON. Corrupt / legacy shapes fall back to empty
- * rather than partially adopting untrusted entries - a bad file is cheaper
- * to reset than to mis-count "on this install" for the user.
- */
 export function parseReportLedgerState(value: unknown): ReportLedgerState {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return EMPTY_STATE;
@@ -164,12 +149,6 @@ function parseFiledReport(value: unknown): FiledReportEntry | null {
   };
 }
 
-/**
- * Drop TTL-expired entries, then LRU-evict down to the caps.
- * Pure: returns a new state. Used by mutations and tests.
- *
- * Fingerprints LRU by `lastSeen` (oldest first). Reports LRU by `timestamp`.
- */
 export function pruneReportLedgerState(
   state: ReportLedgerState,
   nowMs: number,
@@ -255,14 +234,8 @@ function applyMutation(
 }
 
 /**
- * Record that this install just opened a report dialog (or froze evidence)
- * for `fingerprint`. Bumps count and lastSeen; creates the row on first
- * sighting. Best-effort: a disk failure is logged and swallowed so a ledger
- * blip never blocks freeze / dialog open.
- *
- * Callers must treat an expired-and-gone row as a fresh first sighting
- * (count 1) - `applyMutation` prunes before this mutator runs so a stale
- * on-disk row cannot resurrect its old count.
+ * Best-effort: a disk failure is logged and swallowed so a ledger blip never blocks freeze / dialog open.
+ * Callers must treat an expired-and-gone row as a fresh first sighting (count 1).
  */
 export function recordFingerprintSighting(fingerprint: string): Promise<void> {
   if (fingerprint.length === 0) return Promise.resolve();
@@ -286,12 +259,7 @@ export function recordFingerprintSighting(fingerprint: string): Promise<void> {
   });
 }
 
-/**
- * Record a confirmed private delivery. Only call on
- * `{ status: "delivered", reportId }` - never on unconfirmed/failed/unavailable.
- * Requires a non-empty fingerprint (no-op otherwise); filed-report history
- * without identity is not useful to later router work.
- */
+/** Only call on `{ status: "delivered", reportId }` - never on unconfirmed/failed/unavailable. */
 export function recordFiledReport(
   reportId: string,
   fingerprint: string,
@@ -312,15 +280,7 @@ export function recordFiledReport(
   });
 }
 
-/**
- * Install-local occurrence info for the dialog's "Nth time on this install"
- * copy. Returns null when this fingerprint has never been sighted here.
- *
- * Awaits the mutation queue first so a fire-and-forget sighting scheduled by
- * freezeEvidence is visible to a read that follows the freeze await (ticket
- * 07's evidence strip). Without this, the strip can race and show the
- * pre-sighting count on first open.
- */
+/** Returns null when this fingerprint has never been sighted here. */
 export async function getFingerprintOccurrence(
   fingerprint: string,
 ): Promise<FingerprintOccurrence | null> {
@@ -329,10 +289,7 @@ export async function getFingerprintOccurrence(
   const loaded = await getStore().load();
   const nowMs = Date.now();
   const state = pruneReportLedgerState(loaded, nowMs, defaultBounds());
-  // Opportunistic persist of TTL/LRU eviction so expired history does not sit
-  // on disk indefinitely. Route it through applyMutation so a concurrent
-  // sighting cannot be overwritten by this read's stale snapshot, and so a
-  // cleanup write failure stays best-effort instead of rejecting the read.
+  // Route it through applyMutation so a concurrent sighting cannot be overwritten by this read's stale snapshot, and so a cleanup write failure stays best-effort instead of rejecting.
   if (
     Object.keys(state.fingerprints).length !==
       Object.keys(loaded.fingerprints).length ||
@@ -349,10 +306,7 @@ export async function getFingerprintOccurrence(
   };
 }
 
-/**
- * Test-only: re-point the store at a temp path and drop memoized handles so
- * each suite case starts from a clean disk. Production never calls this.
- */
+/** Production never calls this. */
 export function __resetReportLedgerForTest(options: {
   readonly storePath: string | null;
 }): void {
@@ -361,10 +315,6 @@ export function __resetReportLedgerForTest(options: {
   storePathOverride = options.storePath;
 }
 
-/**
- * Test-only: wait for every in-flight ledger mutation to settle. Production
- * callers use `getFingerprintOccurrence`, which already awaits the queue.
- */
 export function __flushReportLedgerForTest(): Promise<void> {
   return mutationQueue;
 }

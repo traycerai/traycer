@@ -36,9 +36,7 @@ import type {
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * The video plane end to end through the REAL hook, controller, transport and
- * media registry: only the peer connection is stood in, through the registry's
- * own `createPeer` seam (jsdom has no `RTCPeerConnection`).
+ * The video plane end to end through the REAL hook, controller, transport and media registry: only the peer connection is stood in, through the registry's own `createPeer` seam (jsdom has no `RTCPeerConnection`).
  */
 const peers = vi.hoisted(
   () => [] as Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }>,
@@ -120,10 +118,6 @@ function jpegFrame(sequence: number, bytes: readonly number[]): void {
   );
 }
 
-/**
- * A subscription on a host that will attempt video: the JPEG cast is off from
- * the start (ticket 26), so nothing paints until a plane does.
- */
 function renderTile(): void {
   renderPeekTile(
     <BrowserPeekTile
@@ -249,9 +243,7 @@ function restoreVisibility(): void {
 }
 
 /**
- * jsdom loads no resources, so an `<img>` never completes on its own - which
- * is exactly the state a frame decoded inside a hidden window leaves behind:
- * pixels are there, the load event the tile listens for is not.
+ * jsdom loads no resources, so an `<img>` never completes on its own - which is exactly the state a frame decoded inside a hidden window leaves behind: pixels are there, the load event the tile listens for is not.
  */
 function markImageComplete(image: HTMLImageElement): void {
   Object.defineProperty(image, "complete", {
@@ -305,11 +297,7 @@ function markDecodedSize(
 }
 
 /**
- * jsdom has no canvas 2D backend - stubbed the same way
- * `browser-peek-tile-video-snapshot.test.ts` stubs it, so this suite can
- * assert the hook actually reaches `snapshotVideoFrameIntoPeekCache` at the
- * right teardown moment, not just that the pure function's guards hold in
- * isolation.
+ * jsdom has no canvas 2D backend - stubbed the same way `browser-peek-tile-video-snapshot.test.ts` stubs it, so this suite can assert the hook actually reaches `snapshotVideoFrameIntoPeekCache` at the right teardown moment, not just that the pure function's guards hold in isolation.
  */
 function stubCanvasPrototype(dataUrl: string): void {
   Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
@@ -492,10 +480,7 @@ describe("BrowserPeekTile video plane", () => {
       peers[0]?.handlers.onFailure("track-ended");
     });
 
-    // B1 regression: the video plane's own state (and `videoActive`) has
-    // already flipped to JPEG by the time this teardown runs - the same
-    // commit that unmounts `<video>`. Only a snapshot taken from the value
-    // as of the render being torn down, not the new one, lands here.
+    // Only a snapshot taken from the value as of the render being torn down, not the new one, lands here.
     expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
     expect(getLastBrowserPeekFrame(key)?.src).toBe(
       "data:image/jpeg;base64,DORMANT_SNAPSHOT",
@@ -663,10 +648,8 @@ describe("BrowserPeekTile video plane", () => {
     decodeFrame(video);
     expect(planeStates(stream)).toHaveLength(1);
 
-    // Occluded: frame presentation stops on a track that is still arriving and
-    // still decoding, so the only liveness signal this side has goes quiet for
-    // reasons that say nothing about the stream. Judging it here tears down a
-    // healthy round and strands the viewer on a plane it must renegotiate.
+    // Occluded: frame presentation stops on a track that is still arriving and still decoding, so the only liveness signal this side has goes quiet for reasons that say nothing about the stream.
+    // Judging it here tears down a healthy round and strands the viewer on a plane it must renegotiate.
     setVisibility("hidden");
     act(() => {
       vi.advanceTimersByTime(60_000);
@@ -676,9 +659,7 @@ describe("BrowserPeekTile video plane", () => {
     expect(screen.queryByText("Stale")).toBeNull();
     expect(screen.getByText("Live")).toBeTruthy();
 
-    // Back on screen, still frozen: the clock restarts from the return, so a
-    // round that really is dead is caught one window later - never on the
-    // strength of the hidden stretch alone.
+    // Back on screen, still frozen: the clock restarts from the return, so a round that really is dead is caught one window later - never on the strength of the hidden stretch alone.
     setVisibility("visible");
     act(() => {
       vi.advanceTimersByTime(4_000);
@@ -703,9 +684,7 @@ describe("BrowserPeekTile video plane", () => {
     renderTile();
     paintJpeg(1, [1, 2, 3]);
 
-    // JPEG liveness is stamped when a frame ARRIVES, not when it paints, so
-    // it carries the same meaning to a hidden window: frames that stopped
-    // coming stopped for a reason nobody is looking away from.
+    // JPEG liveness is stamped when a frame ARRIVES, not when it paints, so it carries the same meaning to a hidden window: frames that stopped coming stopped for a reason nobody is looking away from.
     setVisibility("hidden");
     act(() => {
       vi.advanceTimersByTime(12_000);
@@ -729,10 +708,6 @@ describe("BrowserPeekTile video plane", () => {
     });
     expect(planeStates(stream)).toEqual([]);
 
-    // Back on screen almost two windows in. Restarting the clock blind while
-    // hidden would leave one about to expire, condemning the round seconds
-    // after the viewer could first have seen anything - on a first-attempt
-    // round that is a bare loader, with the JPEG cast stopped underneath.
     setVisibility("visible");
     act(() => {
       vi.advanceTimersByTime(2_000);
@@ -763,10 +738,6 @@ describe("BrowserPeekTile video plane", () => {
     const button = armTile();
     giveSurfaceABox(button);
 
-    // The round dies and the host turns its JPEG pump back on. By the time the
-    // frame that follows arrives the window is occluded, so it decodes with no
-    // `<img>` load event reaching the tile - and a resting page sends no second
-    // frame to try again with.
     act(() => {
       vi.advanceTimersByTime(12_000);
     });
@@ -794,13 +765,6 @@ describe("BrowserPeekTile video plane", () => {
   });
 });
 
-/**
- * The `inputAck` promotion end to end: the frame is parsed and dispatched by
- * the REAL `handleServerFrame`, not by calling the controller directly.
- * Ticket 17's DataChannel ping was swallowed by the transport before any
- * contract handler ran, and a controller-level test could never have seen it -
- * hence this one.
- */
 describe("BrowserPeekTile input ack", () => {
   function imeInput(): HTMLElement {
     return screen.getByRole("textbox", { name: "Browser IME input" });
@@ -926,11 +890,8 @@ describe("BrowserPeekTile input ack", () => {
 });
 
 /**
- * M52: the dormant placeholder replaces the peek tile in ONE commit, and React
- * runs the outgoing tile's destroys before the incoming placeholder's creates.
- * So the frame the tile stashes on its way out lands after the placeholder has
- * already rendered - which is why the read is a `useSyncExternalStore` snapshot
- * re-check rather than a render-phase `useState` initializer.
+ * M52: the dormant placeholder replaces the peek tile in ONE commit, and React runs the outgoing tile's destroys before the incoming placeholder's creates.
+ * So the frame the tile stashes on its way out lands after the placeholder has already rendered - which is why the read is a `useSyncExternalStore` snapshot re-check rather than a render-phase `useState` initializer.
  */
 describe("useLastBrowserPeekFrame", () => {
   const M52_KEY = "peek-cache-teardown-write";
@@ -1001,10 +962,6 @@ describe("useLastBrowserPeekFrame", () => {
   }
 
   it("shows a frame written during the outgoing tile's teardown", () => {
-    // Mutation: reading the cache with a render-phase `useState(() => ...)`
-    // initializer instead of `useSyncExternalStore` - React runs the outgoing
-    // tile's destroys AFTER the incoming placeholder renders, so the dormant
-    // tile would stay blank on exactly the swap it exists for.
     const view = renderPeekTile(<Swap dormant={false} />);
     expect(getLastBrowserPeekFrame(M52_KEY)).toBeNull();
 

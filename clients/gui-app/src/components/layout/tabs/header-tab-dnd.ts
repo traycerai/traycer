@@ -1,11 +1,4 @@
-/**
- * Header tab strip drag payloads + readers. Header tabs participate in the
- * single root DndContext (`root-dnd-provider.tsx`): each tab is a draggable
- * (`header-tab`) and a droppable slot (`header-tab-slot`), and the strip's
- * tab row is a trailing slot covering the empty space after the
- * last tab. Canvas tear-off lands on the same slots - there is no separate
- * geometry bridge.
- */
+/** Header tabs participate in the single root DndContext (`root-dnd-provider.tsx`). */
 import { TAB_KINDS, type HeaderTabKind } from "@/stores/tabs/registry";
 import { isRecord, type RectLike } from "@/components/epic-canvas/dnd/dnd";
 
@@ -18,15 +11,11 @@ export interface HeaderTabDragData {
   readonly stripItemId: string;
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
-  /** Rendered strip index at drag start - drives reorder noop suppression. */
   readonly index: number;
 }
 
-/**
- * One droppable slot per header tab plus one trailing slot for the strip's
- * empty space. `index` is the slot's tab index (trailing slot = tab count);
- * the insertion index is refined against the pointer x at resolve time.
- */
+/** `index` is the slot's tab index (trailing slot = tab count); the insertion index is refined against the
+ * pointer x at resolve time. */
 export interface HeaderTabSlotDropData {
   readonly kind: typeof HEADER_TAB_SLOT_DND_TYPE;
   readonly index: number;
@@ -77,9 +66,8 @@ export function readHeaderTabDragData(
   }
   return {
     kind: HEADER_TAB_DND_TYPE,
-    // Older drag payloads carried only a member ref. Keep them readable so a
-    // drag begun before a hot reload is harmless; current sources always
-    // provide the authoritative item id.
+    // Older drag payloads carried only a member ref. Keep them readable so a drag begun before a hot reload is
+    // harmless; current sources always provide the authoritative item id.
     stripItemId:
       typeof value.stripItemId === "string" && value.stripItemId.length > 0
         ? value.stripItemId
@@ -110,13 +98,8 @@ export function readHeaderTabSlotDropData(
   };
 }
 
-/**
- * Pointer-x midpoint insertion-index resolution over a header slot, for CANVAS
- * TEAR-OFF onto the strip - a source with no slot of its own, so hit-testing
- * cannot feed back on itself. Header-tab reorder does NOT come through here; it
- * resolves from `header-strip-drag-model.ts` instead. `sourceIndex` is retained
- * for the noop-suppression case and is null for tear-off.
- */
+/** Pointer-x midpoint insertion-index resolution over a header slot, for CANVAS tear-off onto the strip - a
+ * source with no slot of its own, so hit-testing cannot feed back on itself. */
 export function resolveHeaderStripDropIndex(input: {
   readonly slot: HeaderTabSlotDropData;
   readonly pointerX: number;

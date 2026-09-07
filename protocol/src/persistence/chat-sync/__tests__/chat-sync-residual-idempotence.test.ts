@@ -11,21 +11,7 @@ import {
 } from "@traycer/protocol/persistence/chat-sync/residual";
 import { describe, expect, it } from "vitest";
 
-/**
- * Residual capture is IDEMPOTENT, and a legacy nest heals on the way through.
- *
- * The property this pins is not an abstraction. `core.settings` is a captured
- * level whose emission does not spread its bag back out - the host re-offers
- * `state.settings` whole, in post-capture form - so every decode→encode cycle
- * used to wrap the bag one level deeper. The field consequence was a chat's
- * inline surface drifting by an empty wrapper per reconcile until a fresh fold
- * of the same op log no longer reproduced the acked head, which halted the
- * publisher's proving recut on essentially every long-lived chat.
- *
- * Depth is therefore the thing under test, and the depths here are the ones
- * observed on real heads (1, 4, 8, 19). A fix that merged only ONE level would
- * pass a naive round-trip test and still leave those chats unprovable.
- */
+/** Residual capture is IDEMPOTENT, and a legacy nest heals on the way through. */
 
 const DECLARED = ["alpha", "beta"] as const;
 const capture = captureResidualKeys(DECLARED);
@@ -70,20 +56,7 @@ function bagDepth(value: JsonValue): number {
 /** Counts reflection traps taken against a wrapped input. */
 type VisitCounter = { count: number };
 
-/**
- * A TRANSPARENT proxy that counts how many times capture reflects on it.
- *
- * Every trap forwards through `Reflect`, so the wrapper is invisible to
- * `isJsonObject`'s prototype / symbol / descriptor checks and to the walk: what
- * is measured is the real algorithm on a real input, not a stub of it.
- *
- * Four traps, which between them are every way capture can reach a level:
- * `get`, `getOwnPropertyDescriptor`, `ownKeys` (both
- * `Object.getOwnPropertyNames` and `Object.getOwnPropertySymbols` route
- * through it), and `getPrototypeOf` - `isJsonObject` takes exactly one of
- * those per level it deep-validates, so omitting it undercounts the
- * validation-driven half of the work by 1 per level.
- */
+/** A TRANSPARENT proxy that counts how many times capture reflects on it. */
 function countingProxy(target: JsonObject, visits: VisitCounter): JsonObject {
   return new Proxy(target, {
     get(object, key, receiver) {
@@ -125,11 +98,7 @@ function countingNest(
   return built;
 }
 
-/**
- * A plain object carrying `value` under `residual`, `nesting` levels down.
- * Built with `defineProperty` on a null-prototype target for the same reason
- * the canonicalizer does: so a `__proto__` key inside the payload survives.
- */
+/** A plain object carrying `value` under `residual`, `nesting` levels down. */
 function nestResidual(value: JsonObject, nesting: number): JsonObject {
   let built: JsonObject = value;
   for (let level = 0; level < nesting; level += 1) {
@@ -145,10 +114,8 @@ function nestResidual(value: JsonObject, nesting: number): JsonObject {
   return built;
 }
 
-// The raw wire objects a capture site actually meets: declared-only, declared
-// plus unmodeled keys, and either of those already carrying a prior bag at
-// several nesting depths. Canonical strings compare them, so key ORDER (which
-// capture normalizes away) never decides a case.
+// The raw wire objects a capture site actually meets: declared-only, declared plus unmodeled keys, and either of those already carrying a prior bag at several nesting depths.
+// Canonical strings compare them, so key ORDER (which capture normalizes away) never decides a case.
 const RAW_INPUTS: readonly JsonObject[] = (() => {
   const bases: readonly JsonObject[] = [
     { alpha: 1, beta: "b" },
@@ -220,9 +187,7 @@ describe("residual capture is idempotent", () => {
 
 describe("residual capture reads a prior bag exactly as far as it should", () => {
   it("keeps a NON-object residual as ordinary data", () => {
-    // A bag this module produced is always an object, so anything else under
-    // that key came from a writer and is data. Losing it would be the same
-    // silent strip the whole mechanism exists to stop.
+    // A bag this module produced is always an object, so anything else under that key came from a writer and is data.
     for (const value of ["a string", 7, true, null, [1, 2], []] as const) {
       const bag = bagOf({
         alpha: 1,
@@ -279,30 +244,13 @@ describe("residual capture reads a prior bag exactly as far as it should", () =>
     });
 
     expect(captured.alpha).toBe("declared");
-    // And it is not merely shadowed: the bag's invariant is that it holds only
-    // UNMODELED keys, so the stale copy is dropped outright. `mergeResidual`
-    // would give the declared field precedence anyway, so the wire is the same
-    // either way - what this pins is that the bag does not start accumulating
-    // shadow copies of modeled fields.
+    // And it is not merely shadowed: the bag's invariant is that it holds only UNMODELED keys, so the stale copy is dropped outright.
     expect(captured[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({});
   });
 
   it("visits each chain level a constant number of times, not N of them", () => {
-    // THE DETECTOR for the quadratic form, and it works by instrumenting the
-    // INPUT rather than the module - so nothing had to be exported, injected or
-    // otherwise widened to make a performance property assertable.
-    //
-    // A per-level `isJsonObject` re-validates the whole remaining suffix, so a
-    // chain of depth N is reflected on N + (N-1) + … + 1 times. Wrapping every
-    // level in a transparent counting proxy makes that difference a COUNT
-    // instead of a duration: linear work touches each level a fixed number of
-    // times, quadratic work touches it once per level above it. Deterministic,
-    // and with no wall clock anywhere near it.
-    //
-    // Measured at this depth: ~6N visits one-pass, ~2N² if the deep check comes
-    // back - 1,200 against 81,600. The cap below is deliberately loose; the
-    // point is separating 6N from 2N², not freezing the constant, so ordinary
-    // refactors of the walk have room while the quadratic form cannot fit.
+    // THE DETECTOR for the quadratic form, and it works by instrumenting the INPUT rather than the module - so nothing had to be exported, injected or otherwise widened to make a performance property assertable.
+    // The cap below is deliberately loose; the point is separating 6N from 2N², not freezing the constant, so ordinary refactors of the walk have room while the quadratic form cannot fit.
     const DEPTH = 200;
     const visits: VisitCounter = { count: 0 };
     const chain = countingNest(
@@ -321,21 +269,7 @@ describe("residual capture reads a prior bag exactly as far as it should", () =>
   });
 
   it("descends a hostile 2,000-deep chain without re-validating each suffix", () => {
-    // Not a detector - the pin above is. This one documents the STACK-BUDGET
-    // margin: it is the deepest chain the decoder is expected to meet and
-    // survive, and it would still pass if the quadratic form returned, merely
-    // slower (~2.8 SECONDS at depth 10,000 on a value under 130 KB, which a
-    // corrupt or hostile document reaches for free; ~1 ms now). No wall-clock
-    // assertion here on purpose - a timing pin flakes in CI.
-    //
-    // 2,000 rather than 10,000, and the ceiling is NOT this code: `isJsonValue`
-    // / `isJsonObject` recurse per level (`json.ts`), so the entry validation
-    // every capture already performed blows the stack somewhere between 5,000
-    // and 6,000 inside a vitest worker - and lower as ambient stack depth
-    // grows, which is what makes a pin up there flaky rather than strict. That
-    // recursion predates this fix and strikes any deep chat-sync value, residual
-    // chain or not (ticket 58); outside the worker this same chain flattens
-    // fine at 10,000.
+    // Not a detector - the pin above is.
     const bag = bagOf({
       alpha: 1,
       [CHAT_SNAPSHOT_RESIDUAL_KEY]: nestResidual(
@@ -350,17 +284,7 @@ describe("residual capture reads a prior bag exactly as far as it should", () =>
 
 /**
  * The bag can hold the ONLY copy of a field the current schema now models.
- *
- * A 1.0 reader bags a 1.1 writer's `newSetting` and has no top-level copy of
- * it, because it never had one to write. That post-capture shape is a supported
- * CARRIER - a clone seed passes `core.settings` verbatim, the host's settings
- * adapter re-offers its opaque settings whole - so a 1.1 schema really does
- * meet it again, with `newSetting` declared by then. Dropping the bag copy
- * there destroys the field: silently for a defaulted one, as a parse failure
- * for a required one.
- *
- * Two declared sets are what make this observable at all; a fixed-schema test
- * cannot witness it, which is how the first cut of this fix shipped the drop.
+ * A 1.0 reader bags a 1.1 writer's `newSetting` and has no top-level copy of it, because it never had one to write.
  */
 describe("residual capture promotes a since-modeled field out of the bag", () => {
   const oldSchema = captureResidualKeys(["alpha"]);
@@ -395,9 +319,6 @@ describe("residual capture promotes a since-modeled field out of the bag", () =>
   });
 
   it("promotes it from under legacy wrappers too", () => {
-    // The nesting and the skew are independent, and a lineage that accumulated
-    // wrappers is exactly the population this fix exists for - so the promotion
-    // has to reach through them rather than only reading the top bag.
     for (const depth of [2, 4, 19]) {
       const recaptured = captureWith(newSchema, {
         alpha: 1,
@@ -430,9 +351,6 @@ describe("residual capture promotes a since-modeled field out of the bag", () =>
   });
 
   it("still prefers the carrier's own modeled copy over a bagged one", () => {
-    // The complement, and what keeps promotion from becoming "the bag wins":
-    // when the carrier DOES have a top-level copy it is authoritative, and the
-    // stale bagged one is dropped rather than promoted over it.
     const recaptured = captureWith(newSchema, {
       alpha: 1,
       newSetting: "the carrier's own value",
@@ -444,9 +362,8 @@ describe("residual capture promotes a since-modeled field out of the bag", () =>
   });
 
   it("stays idempotent across the promotion", () => {
-    // Promotion moves a key between homes, which is exactly the shape of edit
-    // that could reintroduce a per-cycle drift. Re-capturing the healed output
-    // must change nothing.
+    // Promotion moves a key between homes, which is exactly the shape of edit that could reintroduce a per-cycle drift.
+    // Re-capturing the healed output must change nothing.
     const healed = captureWith(newSchema, {
       alpha: 1,
       [CHAT_SNAPSHOT_RESIDUAL_KEY]: nestResidual(

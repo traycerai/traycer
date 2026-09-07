@@ -99,11 +99,8 @@ describe("parseTraycerNextStepsMarkdown", () => {
   });
 
   it("keeps part and settled-option ids stable while a block streams", () => {
-    // Three frames of one streaming turn: the open block grows by a few
-    // tokens, then the close tag lands and streaming ends. The part id and
-    // the settled first option's id are React keys - if either changed
-    // between frames, the prose markdown and the option buttons would
-    // remount on every streamed token.
+    // Part id and first option id are React keys; changing them remounts
+    // prose and buttons on every streamed token.
     const earlierFrame = [
       "Before",
       "",

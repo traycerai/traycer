@@ -1,22 +1,4 @@
-/**
- * Regression coverage for the chat scrollbar / lower-composer overlay fix:
- *
- * 1. Full-width absolute lower chrome stays pointer- and paint-transparent so
- *    the transcript scrollbar edge lanes stay visible and reachable.
- * 2. Outer px-4 wrappers carry no bg-canvas and no vertical pt/pb; centered
- *    max-w-3xl children own bg-canvas + vertical spacing + pointer restore.
- * 3. Main ChatComposer (always) and ComposerSlotShell (when bottomSpacing is
- *    "normal") paint a 1px pointer-free after: seal so scrolling transcript
- *    cannot peek a 1px seam under the backplate.
- * 4. ChatTimeline does not opt out of the app-wide compact scrollbar theme.
- *
- * Prefer render/DOM class assertions. ChatTile's absolute lower wrapper and
- * ChatComposer's rate-limit / main chrome depend on the full epic-session +
- * host/draft/provider stack, so those pins use source-shape assertions with
- * an explicit why. ComposerSlotShell's seal-off branch (bottomSpacing "none")
- * is also source-pinned: it only mounts for approval queues stacked above a
- * dock, which needs a heavier approvals fixture than this focused suite.
- */
+/** Main ChatComposer (always) and ComposerSlotShell (when bottomSpacing is "normal") paint a 1px pointer-free after: seal so scrolling transcript cannot peek a 1px seam under the backplate. 4. ChatTimeline does not opt out of the app-wide compact scrollbar theme. */
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -47,9 +29,7 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
   useAgentStop: () => ({ mutate: () => undefined }),
 }));
-// The background panel reaches for the managed half's RPCs whether or not any
-// managed command is on screen; this suite is about paint and pointer regions,
-// so the host boundary behind them is faked away.
+// The background panel reaches for the managed half's RPCs whether or not any managed command is on screen; this suite is about paint and pointer regions, so the host boundary behind them is faked away.
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
   () => ({
@@ -99,11 +79,7 @@ function hasAnyVerticalPadding(className: string): boolean {
   return /\b(pt|pb|py)-\S+/.test(className);
 }
 
-/**
- * Full-width outer chrome: pointer-none, horizontal px only, no paint, no
- * vertical padding. Centered max-w-3xl child restores pointer-auto + owns
- * bg-canvas (and typically vertical spacing).
- */
+/** Full-width outer chrome: pointer-none, horizontal px only, no paint, no vertical padding. Centered max-w-3xl child restores pointer-auto + owns bg-canvas (and typically vertical spacing). */
 function expectEdgeLaneOuterWithCenteredPaint(
   outer: Element,
   options: {
@@ -352,11 +328,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
   });
 
   describe("ChatComposer chrome (source-shape)", () => {
-    // Why not render: ChatComposerImpl pulls tab-host, draft store, toolbar
-    // catalog, reauth/pack/rate-limit gates, paste, dictation, prompt stash,
-    // and submit hooks. Mounting it for className pins forces the full
-    // chat-tile harness; a source pin is the focused regression for the
-    // edge-lane vs centered paint split, vertical spacing move, and seal.
+    // Why not render: ChatComposerImpl pulls tab-host, draft store, toolbar catalog, reauth/pack/rate-limit gates, paste, dictation, prompt stash, and submit hooks.
+    // Mounting it for className pins forces the full chat-tile harness; a source pin is the focused regression for the edge-lane vs centered paint split, vertical spacing move, and seal.
 
     it("keeps full-width wrappers as edge lanes; centered children own bg-canvas, spacing, and the main 1px seal", () => {
       const source = sourceOf("components/chat/composer/chat-composer.tsx");
@@ -393,11 +366,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
   });
 
   describe("ChatTile absolute lower interaction wrapper (source-shape)", () => {
-    // Why not render: the absolute lower wrapper only mounts inside
-    // ChatTileSessionView after snapshotLoaded, which requires the epic
-    // session harness, chat stream, auth, and draft stores used by
-    // chat-tile.test.tsx. Isolating the pointer-events split does not need
-    // that stack; the production JSX is the contract under test.
+    // Why not render: the absolute lower wrapper only mounts inside ChatTileSessionView after snapshotLoaded, which requires the epic session harness, chat stream, auth, and draft stores used by chat-tile.test.tsx.
+    // Isolating the pointer-events split does not need that stack; the production JSX is the contract under test.
 
     it("cannot capture input or paint over the full-width absolute lower layer", () => {
       const source = sourceOf("components/epic-canvas/renderers/chat-tile.tsx");
@@ -422,9 +392,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       );
       expect(overlayClasses).not.toMatch(/(?:^|\s)(?:after:)?bg-/);
       expect(overlayClasses).not.toContain("after:");
-      // Immediate child that used to re-enable hit testing across the full
-      // width must also stay transparent; only nested max-w-3xl chrome
-      // (dock/composer/shell) restores pointer-events-auto.
+      // Immediate child that used to re-enable hit testing across the full width must also stay transparent; only nested max-w-3xl chrome (dock/composer/shell) restores pointer-events-auto.
       expect(source).toMatch(
         /className="pointer-events-none absolute inset-x-0 bottom-0 z-10[^"]*"[\s\S]*?>\s*<div className="pointer-events-none">/,
       );

@@ -22,9 +22,8 @@ afterEach(() => {
 });
 
 describe("currentHostPlatformKey", () => {
-  // Windows ships x64-only (no win-arm64 host: sherpa-onnx has no win-arm64
-  // binary). Windows 11 on ARM runs the x64 build under emulation, so arm64
-  // must resolve to win32-x64 for both host download and CLI self-resolution.
+  // Windows ships x64-only (no win-arm64 host: sherpa-onnx has no win-arm64 binary).
+  // Windows 11 on ARM runs the x64 build under emulation, so arm64 must resolve to win32-x64 for both host download and CLI self-resolution.
   it("resolves Windows arm64 to win32-x64 (x64 emulation)", () => {
     osMock.platform.mockReturnValue("win32");
     osMock.arch.mockReturnValue("arm64");

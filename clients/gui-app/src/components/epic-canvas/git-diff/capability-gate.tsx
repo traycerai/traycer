@@ -6,9 +6,7 @@ import { HostUnsupported } from "./empty-states/host-unsupported";
 
 /**
  * Detects RPC_ERROR for a method that doesn't exist on the host.
- * When a host doesn't support a method (too old), it returns RPC_ERROR with
- * a message containing "method" or similar. We inspect both the error code and
- * message to identify this case.
+ * When a host doesn't support a method (too old), it returns RPC_ERROR with a message containing "method" or similar.
  */
 function isMethodNotFoundError(error: unknown): boolean {
   if (error instanceof Error && "code" in error) {

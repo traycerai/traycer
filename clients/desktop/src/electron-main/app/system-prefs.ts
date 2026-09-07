@@ -5,10 +5,6 @@ import {
 } from "electron";
 import { log } from "./logger";
 
-/**
- * macOS/Windows accent color as 8-char hex `RRGGBBAA`. Returns null on
- * Linux (systemPreferences.getAccentColor is unsupported there).
- */
 export function getAccentColor(): string | null {
   if (process.platform !== "darwin" && process.platform !== "win32") {
     return null;
@@ -21,22 +17,12 @@ export function getAccentColor(): string | null {
   }
 }
 
-/**
- * macOS "Dark" | "Light". Returns null off-macOS so the renderer can fall
- * back to `prefers-color-scheme`.
- */
 export function getEffectiveAppearance(): "dark" | "light" | null {
   if (process.platform !== "darwin") return null;
   const value = systemPreferences.getEffectiveAppearance();
   return value === "dark" || value === "light" ? value : null;
 }
 
-/**
- * macOS Touch ID availability check. Returns false everywhere else.
- * Renderer should call this before showing a "Unlock with Touch ID"
- * affordance so it can degrade gracefully on Macs without a sensor and
- * on non-macOS hosts.
- */
 export function canPromptTouchID(): boolean {
   if (process.platform !== "darwin") return false;
   try {
@@ -46,10 +32,6 @@ export function canPromptTouchID(): boolean {
   }
 }
 
-/**
- * Prompts for Touch ID. Resolves to true on auth success, false on
- * cancel/failure. The reason string is shown in the system dialog.
- */
 export async function promptTouchID(reason: string): Promise<boolean> {
   if (process.platform !== "darwin") return false;
   try {
@@ -84,11 +66,7 @@ function isVibrancy(value: unknown): value is Vibrancy {
   return typeof value === "string" && ALLOWED_VIBRANCY.has(value as Vibrancy);
 }
 
-/**
- * macOS-only: applies an `NSVisualEffectView` material behind the
- * window content. Renderer must use transparent backgrounds in the
- * areas it wants the vibrancy to show through. Pass `null` to clear.
- */
+/** Renderer must use transparent backgrounds in the areas it wants the vibrancy to show through. */
 export function handleSetVibrancy(
   event: IpcMainInvokeEvent,
   vibrancy: unknown,
@@ -126,12 +104,6 @@ function isBackgroundMaterial(value: unknown): value is BackgroundMaterial {
   );
 }
 
-/**
- * Windows 11-only: applies a system backdrop material. `mica` is the
- * standard subtle theme-aware tint, `acrylic` is heavier blur, `tabbed`
- * is for tabbed apps. Renderer should call this once at window mount
- * with the chosen material.
- */
 export function handleSetBackgroundMaterial(
   event: IpcMainInvokeEvent,
   material: unknown,
@@ -146,11 +118,7 @@ export function handleSetBackgroundMaterial(
   window.setBackgroundMaterial(material);
 }
 
-/**
- * macOS-only: keeps a window pinned across all Spaces / full-screen
- * desktops. Useful for HUD / quick-prompt surfaces. Pass `true` to pin,
- * `false` to release.
- */
+/** macOS-only: keeps a window pinned across all Spaces / full-screen desktops. */
 export function handleSetVisibleOnAllWorkspaces(
   event: IpcMainInvokeEvent,
   visible: unknown,

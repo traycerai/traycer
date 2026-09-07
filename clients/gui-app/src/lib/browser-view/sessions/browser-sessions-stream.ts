@@ -4,9 +4,8 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 
 /**
- * Session-list projection shared by the primary-host provider and the remote
- * PiP fan-in. `null` for a frame that carries no list change (captions, burst
- * markers, request/response frames), so a caller can keep dispatching.
+ * Session-list projection shared by the primary-host provider and the remote PiP fan-in.
+ * `null` for a frame that carries no list change (captions, burst markers, request/response frames), so a caller can keep dispatching.
  */
 export function browserSessionsReducer(
   current: readonly BrowserSessionInfo[],

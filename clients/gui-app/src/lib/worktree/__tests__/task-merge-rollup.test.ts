@@ -20,8 +20,8 @@ function owner(epicId: string) {
 }
 
 /**
- * Owned-submodule merge fact. Defaults to the "no signal" shape (no PR, no HEAD
- * match); each test opts into the fields it exercises.
+ * Owned-submodule merge fact.
+ * Defaults to the "no signal" shape (no PR, no HEAD match); each test opts into the fields it exercises.
  */
 function submodule(
   over: Partial<WorktreeSubmoduleMergeFactV12>,
@@ -42,9 +42,8 @@ function submodule(
 }
 
 /**
- * Superproject listing entry. Merge-provenance fields default to the "no
- * signal / v1.0 or pre-M4 host" shape (null PR bundle, `[]` submodules) that
- * claims nothing.
+ * Superproject listing entry.
+ * Merge-provenance fields default to the "no signal / v1.0 or pre-M4 host" shape (null PR bundle, `[]` submodules) that claims nothing.
  */
 function entry(over: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
   return {

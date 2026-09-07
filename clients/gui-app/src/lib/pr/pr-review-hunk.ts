@@ -1,18 +1,4 @@
-/**
- * A review thread's anchoring hunk, as something the app's diff renderer takes.
- *
- * GitHub hands back a bare hunk - a `@@` header and its lines - while
- * `parsePatchFiles` wants a file-scoped patch. Wrapping the hunk in the three
- * headers it is missing is the whole adapter, and it buys the inline finding
- * the same gutter, tones, and syntax highlighting as every other diff in the
- * app, instead of the grey `<pre>` it used to be.
- *
- * The header may be absent: the host clips long hunks to their tail, and a
- * fact cached before clipping learned to renumber has no `@@` line left. That
- * costs the line numbers and nothing else, so the gutter is switched off rather
- * than filled with a plausible-looking count from 1 - a wrong line number is
- * worse than no line number when the point of the panel is to say WHERE.
- */
+/** A review thread's anchoring hunk, as something the app's diff renderer takes. */
 import type { PrReviewThread } from "@traycer/protocol/host/pr-schemas";
 
 /** `@@ -oldStart,oldCount +newStart,newCount @@ optional section heading` */
@@ -26,9 +12,8 @@ export interface PrReviewHunkPatch {
 }
 
 /**
- * How many body lines land on one side. Context counts for both, so the caller
- * asks for `-` to size the old side and `+` to size the new one. A
- * `\ No newline at end of file` marker is a line of neither file.
+ * How many body lines land on one side.
+ * Context counts for both, so the caller asks for `-` to size the old side and `+` to size the new one.
  */
 function countHunkSide(lines: readonly string[], marker: "-" | "+"): number {
   let count = 0;
@@ -40,9 +25,8 @@ function countHunkSide(lines: readonly string[], marker: "-" | "+"): number {
 }
 
 /**
- * Every body line carries a prefix character. A line that lost its single
- * leading space in transit reads as an empty string, which a patch parser
- * would take as the end of the hunk rather than as a blank line of code.
+ * Every body line carries a prefix character.
+ * A line that lost its single leading space in transit reads as an empty string, which a patch parser would take as the end of the hunk rather than as a blank line of code.
  */
 function normalizeHunkBody(lines: readonly string[]): readonly string[] {
   const body = [...lines];

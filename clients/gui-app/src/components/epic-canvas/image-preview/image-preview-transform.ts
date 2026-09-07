@@ -1,9 +1,3 @@
-/**
- * Pure pan/zoom transform math shared between `ImagePreview` and
- * `ImageDiffView` (ticket 07) - kept out of `image-preview.tsx` so that
- * file stays component-only (Fast Refresh only works when a file exports
- * ONLY components).
- */
 
 /** Scale/position tuple a `TransformWrapper` reports on every change - the sync unit `ImageDiffView` mirrors onto a linked peer. */
 export interface ImagePreviewTransformState {
@@ -13,29 +7,13 @@ export interface ImagePreviewTransformState {
 }
 
 /**
- * Why a transform changed (review finding #3): `"gesture"` is a genuine
- * user pan/pinch/wheel, reported by the library's own event handlers.
- * `"programmatic"` is a transform `ImagePreview` issued itself - Fit,
- * Actual-size, zoom in/out, or its own autonomous resize-refit. A caller
- * linking multiple instances must only mirror `"gesture"` transforms onto a
- * peer (a programmatic one recomputes its OWN fit independently) and must
- * not read a programmatic transform as "the user manually zoomed away".
+ * A caller linking multiple instances must only mirror `"gesture"` transforms onto a peer (a programmatic one recomputes its OWN fit independently) and must not read a programmatic transform as "the user manually zoomed away".
  */
 export type TransformOrigin = "gesture" | "programmatic";
 
 /**
- * Everything a caller linking multiple `ImagePreview` instances needs from
- * one `onTransform` firing (round-2 review, findings #3/#4): the raw
- * `state` to mirror, its `origin`, the CHILD's OWN derived fit/actual-size
- * mode (so a caller never re-derives or manually toggles it), and the
- * child's live interactive floor (so a caller's shared zoom-boundary UI
- * never has to guess). Fired once at mount (`onInit` - RZPP applies its
- * initial transform without calling `onTransform`) and on every subsequent
- * `onTransform`. No `maxScale` field: every `TransformWrapper` is configured
- * with the same constant `MAX_SCALE` (only `minScale` varies per instance,
- * from that instance's own image dimensions), so a ceiling check compares
- * against `MAX_SCALE` directly rather than threading an always-identical
- * value through every report.
+ * Everything a caller linking multiple `ImagePreview` instances needs from one `onTransform` firing (round-2 review, findings #3/#4): the raw `state` to mirror, its `origin`, the CHILD's OWN derived fit/actual-size mode (so a caller never re-derives or manually toggles it), and the child's live interactive floor (so a caller's shared zoom-boundary UI never has to guess).
+ * Fired once at mount (`onInit` - RZPP applies its initial transform without calling `onTransform`) and on every subsequent `onTransform`.
  */
 export interface ImagePreviewTransformReport {
   readonly state: ImagePreviewTransformState;
@@ -66,17 +44,8 @@ const FIT_PADDING_PX = 32;
 const MIN_SAFE_SCALE = 1e-3;
 
 /**
- * Fit-to-container scale from a measured size vs an image's own natural
- * pixels, inset by `FIT_PADDING_PX` on every side - clamped only against
- * `MAX_SCALE` and a degenerate-input floor, NEVER against the interactive
- * `MIN_SCALE` (review finding #7): a huge image in a small pane must fit at
- * whatever scale that actually takes, even below the normal zoom-out floor.
- * `centerView`/`setTransform` bypass the library's own `minScale`/`maxScale`
- * setup entirely (verified against installed v4.0.4's `setState`), so this
- * clamp is the only one that applies to a caller-supplied fit scale. Used by
- * `ImageDiffView` to compute the SAME fit independently for each of its two
- * linked sides (ticket 07) rather than forcing one side's shared number onto
- * a differently-sized peer.
+ * Fit-to-container scale from a measured size vs an image's own natural pixels, inset by `FIT_PADDING_PX` on every side - clamped only against `MAX_SCALE` and a degenerate-input floor, NEVER against the interactive `MIN_SCALE` (review finding #7): a huge image in a small pane must fit at whatever scale that actually takes, even below the normal zoom-out floor.
+ * `centerView`/`setTransform` bypass the library's own `minScale`/`maxScale` setup entirely (verified against installed v4.0.4's `setState`), so this clamp is the only one that applies to a caller-supplied fit scale.
  */
 export function fitScaleFor(
   container: ContainerSize,
@@ -93,11 +62,7 @@ export function fitScaleFor(
 }
 
 /**
- * The wrapper's effective interactive-zoom floor (review finding #7): no
- * greater than the current fit scale, so a huge image's "Fit to screen"
- * value is always reachable by zooming out, and Zoom Out only disables once
- * the user is actually AT that fit (or the constant floor, whichever is
- * smaller/looser) - never before.
+ * The wrapper's effective interactive-zoom floor (review finding #7): no greater than the current fit scale, so a huge image's "Fit to screen" value is always reachable by zooming out, and Zoom Out only disables once the user is actually AT that fit (or the constant floor, whichever is smaller/looser) - never before.
  */
 export function effectiveMinScale(fitScale: number): number {
   return Math.min(MIN_SCALE, fitScale);
@@ -117,11 +82,7 @@ export function initialFitTransform(
 }
 
 /**
- * Whether `transform` IS the fit transform right now (review finding #2: the
- * single source of truth for "is this image currently fitted", replacing a
- * manually-toggled flag that gesture handlers could leave stuck). Compares
- * scale AND position - a pure pan away from an unchanged fit SCALE is still
- * "actual pan activity" that must read as no-longer-fitted.
+ * Compares scale AND position - a pure pan away from an unchanged fit SCALE is still "actual pan activity" that must read as no-longer-fitted.
  */
 export function transformMatchesFit(
   transform: ImagePreviewTransformState,
@@ -138,15 +99,7 @@ export function transformMatchesFit(
 const MIN_VISIBLE_OVERLAP_PX = 1;
 
 /**
- * Clamps a mirrored position so the (differently-sized) peer's content can
- * never end up wholly (or effectively) offscreen (review finding #5) - the
- * loosest bound that guarantees at least `MIN_VISIBLE_OVERLAP_PX` of
- * overlap between the scaled content rect and the wrapper rect on one
- * axis, nothing tighter. Deliberately NOT a reimplementation of the
- * library's own padding-aware bounds engine (ticket 07: "do not over-
- * engineer sub-pixel alignment for mismatched dimensions") - a same-
- * dimension mirror (the common case) is already exact and never gets
- * anywhere near this range; only a genuine mismatch can.
+ * Clamps a mirrored position so the (differently-sized) peer's content can never end up wholly (or effectively) offscreen (review finding #5) - the loosest bound that guarantees at least `MIN_VISIBLE_OVERLAP_PX` of overlap between the scaled content rect and the wrapper rect on one axis, nothing tighter.
  */
 export function clampPositionToVisibleBounds(
   position: number,

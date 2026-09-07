@@ -1,21 +1,4 @@
-/**
- * Opener **Agents** sub-page - the single Agent category in the pane opener.
- *
- * Agent is the durable entity a user opens; Chat and Terminal are the
- * interfaces it is interacted with through. Peer "Chat agents" / "Terminal
- * agents" categories restated the interface as an entity collection, so the two
- * are merged here into one category listing every Agent in the Task.
- *
- * Layout: both creation leaves first, then the canonical mixed-interface Agent
- * tree from the Epic projection. This is the same parent/child structure and
- * default ordering used by the sidebar, so a child remains findable beneath
- * the Agent that spawned it instead of disappearing into a long flat list.
- *
- * Composition, not reimplementation: the per-interface hooks still own their
- * own leaves, so `open:chats:*` / `open:tui:*` ids (and therefore the
- * `open_chat` / `open_terminal` analytics routing keyed on those prefixes in
- * `palette-cmdk-controller.ts`) are untouched by the merge.
- */
+/** Opener **Agents** sub-page - the single Agent category in the pane opener. */
 import { agentActivityTiers } from "@/lib/agent-activity";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useChatsOpenerItems } from "@/lib/commands/sources/open/chats-subpage";
@@ -25,9 +8,8 @@ import { projectTreeSlice } from "@/stores/epics/open-epic/projection-helpers";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 
 /**
- * One interface's contribution to the Agents sub-page. `create` is kept out of
- * `existing` so the merged page can group creation entries at the top rather
- * than interleaving them between the two interfaces' records.
+ * One interface's contribution to the Agents sub-page.
+ * `create` is kept out of `existing` so the merged page can group creation entries at the top rather than interleaving them between the two interfaces' records.
  */
 export interface OpenerInterfaceItems {
   readonly create: CommandItem;
@@ -42,11 +24,8 @@ export function useAgentsOpenerItems(
   const projection = useActiveEpicProjection(ctx.activeEpicId);
   const activity = agentActivityTiers(useEpicAgentActivity(ctx.activeEpicId));
   if (projection === null) return [chat.create, terminal.create];
-  // The command palette subscribes to the passive registry projection outside
-  // EpicSessionProvider. Its independently cached `tree` index can briefly be
-  // empty while the record slices are already populated (the sidebar, inside
-  // the provider, does not have that gap). Derive from the authoritative live
-  // records here so opening the Agents page never collapses to creation-only.
+  // The command palette subscribes to the passive registry projection outside EpicSessionProvider.
+  // Its independently cached `tree` index can briefly be empty while the record slices are already populated (the sidebar, inside the provider, does not have that gap).
   const tree = projectTreeSlice(
     projection.artifacts,
     projection.chats,

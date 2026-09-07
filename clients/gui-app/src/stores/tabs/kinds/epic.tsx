@@ -25,17 +25,8 @@ const epicSurface = lazy(() =>
 );
 
 /**
- * The host serving this epic right now, read from the live session rather
- * than stored on the tab.
- *
- * The session provider owns the answer (`requestedHostId ?? effectiveHostId`,
- * stamped onto the handle at acquire); this reads it. `null` when the registry
- * holds no handle - a background tab evicted past the MRU cap, or any tab
- * before the provider's first acquisition, including the window between the
- * registry's own emit for that acquisition and the handle being stamped.
- * Every one of those degrades a consumer to the app-wide client, which is what
- * it used before this projection existed - a safe direction, and the reason
- * this can be a plain read instead of an ordering contract.
+ * The host serving this epic right now, read from the live session rather than stored on the tab.
+ * The session provider owns the answer (`requestedHostId ??
  */
 function epicSessionHostId(epicId: string): string | null {
   const handle = getOpenEpicRegistry().peek(epicId);
@@ -43,10 +34,8 @@ function epicSessionHostId(epicId: string): string | null {
 }
 
 /**
- * Module for `kind: "epic"` tabs. Data lives in the epic-canvas
- * store's `tabsById`; `build()` projects a `EpicViewTab` into the
- * flat `HeaderTab` variant. Close routes through the epic-canvas store
- * so visible header order and canvas restoration stay consistent.
+ * Module for `kind: "epic"` tabs. Data lives in the epic-canvas store's `tabsById`; `build()`
+ * projects a `EpicViewTab` into the flat `HeaderTab` variant.
  */
 export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
   kind: "epic",
@@ -82,9 +71,7 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       duplication: "allowed",
       singleton: "per-instance",
       newWindow: "move",
-      // T11 adds a durable per-Epic host binding. Until then the session
-      // provider resolves through the renderer default host, so readiness must
-      // use that same scope rather than inventing a tile-derived binding.
+      // T11 adds a durable per-Epic host binding.
       readinessScope: "default-host",
       durableState: { owner: "epic-canvas", eviction: "reconstruct" },
     },
@@ -106,12 +93,8 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       }),
     routeOptions: (intent) => ({
       ...epicTabRoute({ epicId: intent.epicId, tabId: intent.tabId }),
-      // `nestedFocus` is `null` for every plain tab-switch intent, in which
-      // case `buildNestedFocusSearchPatch` contributes `undefined` for both
-      // fields - identical to the old `search: intent.focus` literal, so
-      // wipe-then-canonicalize behavior is unchanged for ordinary switches.
-      // Only `existingEpicTabIntentWithNestedFocus` (cross-route openers)
-      // sets a real target, committing it in this same navigation.
+      // Only `existingEpicTabIntentWithNestedFocus` (cross-route openers) sets a real target, committing
+      // it in this same navigation.
       search: {
         ...intent.focus,
         ...buildNestedFocusSearchPatch(intent.nestedFocus),

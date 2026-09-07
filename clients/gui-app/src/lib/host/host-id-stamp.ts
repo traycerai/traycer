@@ -1,14 +1,4 @@
-/**
- * A stable, comparable string for a SET of host ids.
- *
- * `useSyncExternalStore` and `useMemo` both compare with `Object.is`, so a
- * derivation that rebuilds an array or a Set on every projection update
- * re-renders everything downstream even when the set is unchanged. Stamping
- * the sorted set as one string turns that into a value comparison.
- *
- * JSON rather than a delimiter join, matching `useCommGraphAgents`: host ids
- * are opaque strings, so no separator is collision-safe by contract.
- */
+/** A stable, comparable string for a SET of host ids. */
 export function stampHostIds(hostIds: Iterable<string | null>): string {
   const present: string[] = [];
   for (const hostId of hostIds) {

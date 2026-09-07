@@ -15,34 +15,7 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
-/**
- * Codex #1243 T-55 - the palette's opener sub-pages froze after a re-point.
- *
- * `useActiveEpicProjection` resolved the handle INSIDE a `subscribe` callback
- * keyed on `epicId` alone. A re-point swaps the registry's handle without
- * changing the epic id, so React never re-ran `subscribe` and the hook stayed
- * bound to the OUTGOING handle's store. The registry `emit()` that follows the
- * swap refreshes the snapshot exactly once and then goes quiet - the
- * registry's own subscription is eligibility-keyed and deliberately does not
- * fire on ordinary projection mutations. So chats, artifacts, files and TUI
- * items in the palette sat at that one snapshot until the sub-page remounted.
- *
- * The distinction this file has to hold onto is that the ONE refresh makes the
- * broken version look fixed at the moment of the swap. Asserting the value
- * right after `replaceMounted` passes either way. Only a mutation made on the
- * NEW store AFTERWARDS separates "re-read once" from "resubscribed".
- *
- * The mirror-image half - that the subscription to the OUTGOING store is
- * released - is deliberately NOT asserted here, because at this seam it
- * cannot fail. A leaked subscriber still resolves its snapshot through the
- * registry, so a write to the outgoing store hands React the replacement's
- * unchanged state object and React bails out: same rendered value, same
- * render count, leaked subscription and released subscription alike. Both
- * shapes of that assertion were written, probed against the pre-fix version,
- * and passed - so they were removed rather than kept as coverage that cannot
- * discriminate. The leak is real but is a wasted `getSnapshot` call, not an
- * observable behaviour, and the arm below is what pins the defect that is.
- */
+/** Codex #1243 T-55 - the palette's opener sub-pages froze after a re-point. */
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -59,11 +32,7 @@ function buildHandle(hostId: string): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: EPIC,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -76,13 +45,7 @@ function buildHandle(hostId: string): OpenedStoreForTest {
   return handle;
 }
 
-/**
- * The chat id list is a stand-in for any projection the sub-pages render.
- *
- * Only `allIds` is written - the probe reads its length and nothing walks
- * `byId`, so seeding records would add a shape to keep in step with the real
- * projector for no assertion's benefit.
- */
+/** The chat id list is a stand-in for any projection the sub-pages render. */
 function setChatCount(handle: OpenedStoreForTest, count: number): void {
   const allIds: string[] = [];
   for (let i = 0; i < count; i += 1) allIds.push(`chat-${i}`);
@@ -137,9 +100,8 @@ describe("the active epic's projection follows a re-point", () => {
     expect(screen.getByTestId("chat-count").textContent).toBe("2");
     expect(screen.getByTestId("host-id").textContent).toBe("host-b");
 
-    // THE ASSERTION. A projection mutation on the replacement, with no
-    // registry event behind it. A hook still subscribed to the outgoing
-    // store never hears this and stays at 2.
+    // THE ASSERTION.
+    // A projection mutation on the replacement, with no registry event behind it.
     act(() => {
       setChatCount(incoming, 5);
     });

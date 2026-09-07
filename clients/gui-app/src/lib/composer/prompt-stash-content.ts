@@ -30,10 +30,7 @@ interface PreparedOwnedImage {
 }
 
 /**
- * Wraps every `prepare()` failure (unsupported format, over the 5 MB limit,
- * couldn't decode/compress enough to fit) behind one identifiable type so
- * capture-failure messaging can give compression-specific feedback instead
- * of a generic "durable storage did not complete" fallback.
+ * Wraps every `prepare()` failure (unsupported format, over the 5 MB limit, couldn't decode/compress enough to fit) behind one identifiable type so capture-failure messaging can give compression-specific feedback instead of a generic "durable storage did not.
  */
 export class PromptStashImagePreparationError extends Error {
   constructor(message: string) {
@@ -170,10 +167,7 @@ async function resolveImageSource(args: {
 export async function materializePromptStashEntry(
   entry: PromptStashEntry,
 ): Promise<JsonContent> {
-  // One consistent-snapshot read of every referenced blob up front: bytes
-  // resolved here stay valid even if another window deletes/reclaims them
-  // immediately after, and a missing OR corrupt blob fails the whole restore
-  // before any node is rewritten.
+  // One consistent-snapshot read of every referenced blob up front: bytes resolved here stay valid even if another window deletes/reclaims them immediately after, and a missing OR corrupt blob fails the whole restore before any node is rewritten.
   const read = await readPromptStashRestoreBlobs(entry.blobHashes);
   if (read.status === "missing") throw new PromptStashMissingBlobError();
   if (read.status === "corrupt") throw new PromptStashCorruptBlobError();
@@ -187,11 +181,7 @@ export async function materializePromptStashEntry(
     if (blob === undefined) {
       throw new PromptStashMissingBlobError();
     }
-    // The node's own declared MIME/size can diverge from what the verified
-    // blob actually is (the entry and its blob store having drifted apart) -
-    // a SHA-256 match alone would not catch this. Metadata disagreement is
-    // corruption: preserve the stash rather than materialize mismatched
-    // content.
+    // The node's own declared MIME/size can diverge from what the verified blob actually is (the entry and its blob store having drifted apart) - a SHA-256 match alone would not catch this.
     if (
       !stashImageMetadataAgreesWithBlob(
         stringValue(attrs.mimeType),
@@ -211,10 +201,8 @@ export async function materializePromptStashEntry(
 }
 
 /**
- * Empty destinations receive the restored document unchanged. Non-empty
- * destinations retain their existing blocks and append the restored document
- * after one separator paragraph. Selection/caret behavior is intentionally
- * owned by the destination adapter, which always focuses the resulting end.
+ * Empty destinations receive the restored document unchanged.
+ * Non-empty destinations retain their existing blocks and append the restored document after one separator paragraph.
  */
 export function appendPromptStashContent(
   current: JsonContent,

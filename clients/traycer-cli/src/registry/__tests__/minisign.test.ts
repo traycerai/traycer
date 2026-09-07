@@ -13,11 +13,8 @@ import { CliError } from "../../runner/errors";
 import { verifyMinisignArchive } from "../minisign";
 import type { ParsedMinisignPublicKey } from "../trusted-keys";
 
-// We generate an Ed25519 key pair on the fly and produce a minisign-
-// compatible signature for an in-memory archive, then feed both into
-// the verifier. This proves the byte-for-byte compatibility of our
-// parser/verifier with what `minisign -S -H` produces, without
-// depending on the `minisign` CLI being installed.
+// We generate an Ed25519 key pair on the fly and produce a minisign- compatible signature for an in-memory archive, then feed both into the verifier.
+// This proves the byte-for-byte compatibility of our parser/verifier with what `minisign -S -H` produces, without depending on the `minisign` CLI being installed.
 
 interface GeneratedKey {
   readonly trustedPublicKey: ParsedMinisignPublicKey;

@@ -13,22 +13,13 @@ import type {
 import type { IStreamClient } from "./i-stream-client";
 
 /**
- * Snapshot metadata for the per-user notifications stream. Mirrors the
- * contract's `z.object({ schemaVersion: z.string() })` - kept as a named
- * type so consumers can evolve the Zustand store shape without depending
- * on the raw Zod inference at every call site.
+ * Snapshot metadata for the per-user notifications stream.
+ * Mirrors the contract's `z.object({ schemaVersion: z.string() })` - kept as a named type so consumers can evolve the Zustand store shape without depending on the raw Zod inference at every call site.
  */
 export interface NotificationsSnapshotMeta {
   readonly schemaVersion: string;
 }
 
-/**
- * Typed handlers for a `notifications.subscribe@1.0` / `@1.1` session.
- *
- * Symmetric to `EpicStreamCallbacks` but with no `epicId` - the host
- * infers `userId` from the authenticated `/stream` connection, so the
- * subscription is singleton-per-user.
- */
 export interface NotificationsStreamCallbacks {
   readonly onSnapshot: (
     meta: NotificationsSnapshotMeta,
@@ -36,12 +27,7 @@ export interface NotificationsStreamCallbacks {
   ) => void;
   readonly onUpdate: (updateBytes: Uint8Array) => void;
   /**
-   * A y-protocols awareness update for the per-user notification room,
-   * carrying each host's agent-activity presence. Only ever fires on a
-   * session that negotiated `@1.1`: against a `@1.0` host the transport
-   * declares `1.0` on the wire and the host never emits the frame, so the
-   * consumer simply sees no presence (and every activity surface reads
-   * idle from this source).
+   * A y-protocols awareness update for the per-user notification room, carrying each host's agent-activity presence.
    */
   readonly onAwareness: (awarenessBytes: Uint8Array) => void;
   /**
@@ -61,17 +47,7 @@ export interface NotificationsStreamClientOptions {
 
 /**
  * Typed wrapper over `WsStreamClient` for `notifications.subscribe`.
- *
- * Opens exactly one session on construction, binds the callback surface,
- * and exposes the fire-and-forget `applyUpdate` path plus `close`. Zod
- * parse on inbound frames is the boundary where the raw envelope becomes
- * a typed variant of `NotificationsSubscribeServerFrame`.
- *
- * The negotiated minor is chosen by `WsStreamClient` from the shared
- * registry (canonical `1.1`, downgraded on the wire to `1.0` against an
- * older host), so nothing here plumbs a version: parsing against the
- * latest installed frame schema is safe because a `@1.0` peer simply never
- * sends the `awareness` kind.
+ * Zod parse on inbound frames is the boundary where the raw envelope becomes a typed variant of `NotificationsSubscribeServerFrame`.
  */
 export class NotificationsStreamClient {
   private readonly session: IStreamSession;

@@ -5,12 +5,7 @@ export interface FilterCollaboratorsOptions {
   readonly maxResults: number;
 }
 
-/**
- * Pure filter so the suggestion plugin's `items` callback stays
- * synchronous. Match against display name + email; case-insensitive prefix
- * boost so a user typing `@an` sees their own name first if they share a
- * prefix with another collaborator.
- */
+/** Pure filter so the suggestion plugin's `items` callback stays synchronous. */
 export function filterCollaborators(
   collaborators: ReadonlyArray<MentionCollaborator>,
   query: string,
@@ -33,12 +28,8 @@ export function filterCollaborators(
   return matches.slice(0, options.maxResults);
 }
 
-/**
- * Identity-stable ref over the live collaborator list, so the suggestion
- * plugin closure always reads the freshest snapshot without forcing the
- * Tiptap editor to rebuild on every list refresh. The returned ref object
- * is the same instance across renders; only `.current` updates.
- */
+/** Identity-stable ref over the live collaborator list, so the suggestion plugin closure always reads the
+ * freshest snapshot without forcing the Tiptap editor to rebuild on every list refresh. */
 export function useStableCollaboratorRef(
   collaborators: ReadonlyArray<MentionCollaborator>,
 ) {
@@ -49,11 +40,7 @@ export function useStableCollaboratorRef(
   return useMemo(() => ref, []);
 }
 
-/**
- * Two-letter initials fallback for the avatar circle. We intentionally use
- * the display name (not email) as the source so renaming a user changes
- * the initials immediately, matching how Views renders collaborator chips.
- */
+/** Two-letter initials fallback for the avatar circle. */
 export function deriveInitials(displayName: string): string {
   const trimmed = displayName.trim();
   if (trimmed.length === 0) return "?";

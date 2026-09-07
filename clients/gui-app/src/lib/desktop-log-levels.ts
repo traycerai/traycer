@@ -1,11 +1,7 @@
 import type { LogLevel } from "@traycer/protocol/config/log-level";
 
 /**
- * Feature-detected access to the desktop-only `platform.logLevels` namespace the
- * Electron preload installs on `window.runnerHost`. gui-app stays browser-safe,
- * so this reads the global defensively and returns `null` on shells (web /
- * gui-app-dev) that don't expose it — there, log-level config simply isn't
- * available. Typed locally so gui-app doesn't import from the desktop package.
+ * Feature-detected access to the desktop-only `platform.logLevels` namespace the Electron preload installs on `window.runnerHost`. gui-app stays browser-safe, so this reads the global defensively and returns `null` on shells (web / gui-app-dev) that don't.
  */
 
 export type LogLevelScope = "cli" | "host" | "desktop";

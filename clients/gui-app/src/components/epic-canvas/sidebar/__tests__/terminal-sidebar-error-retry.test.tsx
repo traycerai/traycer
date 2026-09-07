@@ -12,9 +12,7 @@ const listState = vi.hoisted<{ isFetching: boolean }>(() => ({
   isFetching: false,
 }));
 
-// The sidebar is outside every tile `TabHostProvider`, so its client and its
-// ref host both come from the Epic SESSION - not from the app-wide effective
-// host, which this panel deliberately no longer reads.
+// The sidebar is outside every tile `TabHostProvider`, so its client and its ref host both come from the Epic SESSION - not from the app-wide effective host, which this panel deliberately no longer reads.
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
@@ -23,9 +21,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => "host-1",
 }));
 
-// The stranded state this guards: `terminal.list` errored (transport already
-// retried), no automatic refetch route exists, and the panel must offer a
-// manual way back.
+// The stranded state this guards: `terminal.list` errored (transport already retried), no automatic refetch route exists, and the panel must offer a manual way back.
 vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   useTerminalList: () => ({
     data: undefined,

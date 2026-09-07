@@ -197,15 +197,7 @@ describe("<FileTree /> nested focus navigation", () => {
   });
 
   /**
-   * Inside the mobile switcher sheet this tree is a vaul drawer descendant, and
-   * vaul decides scroll-vs-dismiss by climbing `parentElement` from the touch
-   * target. Pierre's scroller is in a shadow root and a touch inside one
-   * retargets to the host, so that climb finds nothing scrollable and claims
-   * the gesture - which is what left the tree unscrollable on device.
-   *
-   * This pins the attribute, NOT the scrolling: whether a finger scrolls is a
-   * touch-arbitration question that jsdom cannot answer, and the earlier
-   * attempt to settle it with `scrollTop` is precisely what missed the bug.
+   * This pins the attribute, NOT the scrolling: whether a finger scrolls is a touch-arbitration question that jsdom cannot answer, and the earlier attempt to settle it with `scrollTop` is precisely what missed the bug.
    */
   it("marks the tree wrapper as not a drawer-drag surface", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
@@ -216,15 +208,8 @@ describe("<FileTree /> nested focus navigation", () => {
   });
 
   /**
-   * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref
-   * (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove`
-   * bubbling out of Pierre's shadow-rooted scroller before it reaches a
-   * document BUBBLE listener - the modal scroll lock a vaul drawer registers
-   * while open. jsdom has no `TouchEvent`, so a plain bubbling `Event` stands
-   * in; the hook only calls `stopPropagation()`, which does not care about
-   * the event's concrete type. `touchstart` is the control: it is untouched
-   * by this hook, so it must still reach the document. Deleting
-   * `ref={touchShieldRef}` from the wrapper must fail this test.
+   * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove` bubbling out of Pierre's shadow-rooted scroller before it reaches a document BUBBLE listener - the modal scroll lock a vaul drawer registers while open. jsdom has no `TouchEvent`, so a plain bubbling `Event` stands in; the hook only calls `stopPropagation()`, which does not care about the event's concrete type.
+   * `touchstart` is the control: it is untouched by this hook, so it must still reach the document.
    */
   it("shields a bubbling touchmove from the pierre tree so it never reaches the document", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");

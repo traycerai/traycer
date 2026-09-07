@@ -67,17 +67,7 @@ interface RefBox<T> {
   current: T;
 }
 
-/**
- * Tracks clean leader-hold sessions and publishes leader owners relative to the
- * modifier combo actually held (`mod`, `alt`, or `modShift`). Holding either
- * ordinary leader reveals that modifier's owner and the other ordinary
- * modifier's owner when a DIFFERENT scope owns it - so two sibling app scopes
- * (canvas tabs own `mod`, header tabs own `alt`) still show `⌘` and `⌥` badges
- * together. The shifted leader is an exact-owner-only tier: an unowned Cmd+Shift
- * hold must never fall through to the ordinary leaders. The dispatcher's chord
- * matching still owns route-aware action selection and fires digit shortcuts
- * from the actual key event immediately.
- */
+/** Ordinary leader-hold reveals this modifier's owner and a sibling scope's other modifier. Shifted leader never falls through to ordinary leaders. */
 export function KeybindingProvider(props: KeybindingProviderProps) {
   const { router, children } = props;
   const [leaderState, setLeaderState] = useState<LeaderState>(INITIAL_LEADER);
@@ -119,14 +109,8 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       setLeaderState(next);
     };
 
-    // Publish the held ordinary modifier's owner and the OTHER ordinary
-    // modifier's owner only when a DIFFERENT scope owns it. Two sibling app
-    // scopes (canvas tabs own `mod`, header tabs own `alt`) still light both
-    // badge sets on a single hold - the #3966 "show both task tabs" behavior.
-    // The shifted leader is exact-owner-only: Cmd+Shift must not light ordinary
-    // Cmd/Option badges when no scope owns the `modShift` mask. A lone overlay
-    // scope binding all three dimensions (the model picker: ⌘ rail, ⌥
-    // reasoning, ⌘⇧ profile) therefore lights only the matching tier.
+    // Ordinary hold lights this modifier and a sibling scope's other modifier.
+    // Shifted leader is exact-owner-only and must not light ordinary badges.
     const resolveVisibleLeaderState = (
       heldModifier: LeaderModifier,
       pathname: string,
@@ -225,15 +209,8 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       showLeaderHints(modifier, pathname);
     };
 
-    // Moves the hint session onto `modifier` - called both when a fresh bare
-    // modifier keydown starts a hold, AND when the physically-held combo
-    // changes while a leader is CONTINUOUSLY held (e.g. releasing Shift while
-    // Cmd stays down: modShift -> mod, or the reverse, pressing Shift while
-    // Cmd is already down). A VISIBLE session swaps to the new modifier
-    // instantly - the hold delay was already cleared once for this
-    // continuous hold, so re-imposing it on every combo change would make
-    // hints flicker off and back on for no reason. A PENDING (or idle/spent)
-    // session (re)starts the delay for the new modifier, same as a fresh hold.
+    // Visible hold swaps modifier instantly; pending/idle/spent restarts the
+    // delay. Re-imposing the delay on combo change would flicker hints.
     const transitionLeaderSession = (
       modifier: LeaderModifier,
       pathname: string,
@@ -333,19 +310,13 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       if (event.defaultPrevented) return;
-      // A Diffs editor boundary claims bare typing plus its native history
-      // commands. Other modified chords (⌘1, a reserved shortcut, ...) still
-      // resolve as app actions below. Undo/redo are different: Diffs owns a
-      // custom edit stack, so even a persisted user binding must not reserve
-      // Cmd/Ctrl-Z or Shift-Cmd/Ctrl-Z before the editor sees them.
+      // Diffs claims bare typing and undo/redo. Other modified chords still
+      // resolve as app actions. Do not reserve Cmd-Z before the editor sees it.
       if (isDiffsEditorOwnedKey(event, hasLeaderModifier(event))) return;
       if (isArtifactEditorLinkShortcut(event)) return;
 
-      // Digit actions (e.g. ⌘1 or header tab sequences like ⌥1,0) must match
-      // before full chords -
-      // otherwise a rebinding like `mod+1 → something` would shadow the
-      // digit-by-number flow. `matchDigitAction` only succeeds when a digit
-      // is the primary key + at least one modifier is held.
+      // Digit actions match before full chords so a mod+1 rebinding cannot
+      // shadow digit-by-number. matchDigitAction needs a digit plus a modifier.
       const digitMatch = matchDigitAction(event);
       if (
         handleDigitKeyDown(
@@ -376,23 +347,15 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         return;
       }
 
-      // Reserve any chord bound to a centrally-handled action - even when
-      // dispatch can't act (e.g. `group.focus.right` with no right neighbour).
-      // This stops the browser from running its own default for the same chord
-      // (Cmd+Alt+Left/Right = history back/forward on Chrome+Safari).
+      // Reserve even when dispatch cannot act, or the browser runs history
+      // back/forward for the same chord.
       event.preventDefault();
       event.stopPropagation();
       dispatchAction(actionId.actionId, adapter);
     };
 
-    // Mouse back/forward (buttons 3/4). Desktop-only, on the shared chrome
-    // predicate rather than the controller brand alone: the mobile app carries
-    // the brand too, and these buttons are chrome for a device that has them.
-    // `preventDefault()` runs only when handled, so the shell's native
-    // back/forward stays intact everywhere else.
-    // NOTE: Windows may instead surface these as a main-process `app-command`
-    // (`browser-backward`/`browser-forward`); that path is a verify-and-extend
-    // follow-up tracked in the tech plan (§4.4).
+    // Mouse back/forward (buttons 3/4): desktop chrome predicate, not history brand.
+    // preventDefault only when handled so native back/forward stays elsewhere.
     const handleMouseNav = (event: MouseEvent) => {
       if (!historyNavChromeAvailable(router.history)) return;
       if (event.button === 3) {
@@ -416,12 +379,8 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         if (hasLeaderModifier(event)) spendHintSession(pathname);
         return;
       }
-      // A modifier was released (e.g. Shift, while Cmd/Ctrl stays down) but
-      // what remains held is STILL a clean, tracked combo - just a different
-      // one (modShift -> mod). Without this, an active pending/visible
-      // session would keep pointing at the released combo: visible hints for
-      // the wrong tier stay lit, and a pending session's timer can reveal the
-      // wrong tier's hints after the user already let go of it.
+      // Remaining held combo is still clean (modShift -> mod). Without this,
+      // hints stay on the released tier.
       const session = hintSessionRef.current;
       if (
         (session.status === "pending" || session.status === "visible") &&
@@ -435,10 +394,8 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       resetHintSession(adapter.getPathname());
     };
 
-    // A scope registering/unregistering (e.g. the model picker opening or
-    // closing) can change who owns visible leader badges. Re-resolve a pending
-    // or visible session immediately; if its owner disappears, spend the
-    // session so a transient owner loss cannot be repaired by a stale timer.
+    // Re-resolve pending/visible session when a scope registers. Spend it if
+    // the owner disappears so a stale timer cannot revive.
     const handleScopeChange = () => {
       const session = hintSessionRef.current;
       if (session.status !== "pending" && session.status !== "visible") return;
@@ -481,15 +438,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
   );
 }
 
-/**
- * Resolve the chord to an action the provider should RESERVE (preventDefault +
- * dispatch). Uses `resolveMatchingChord` for the Control-specific precedence
- * (macOS ⌃, distinct from ⌘): when the ctrl-aware chord differs, the event is
- * reserved only by an explicit `ctrl+…` binding, so a bare macOS Control chord
- * can't fall through to a plain key binding. Returns null for an action handled
- * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
- * reserving those would swallow the key when the owner is inactive.
- */
+/** Reserve only when this dispatcher owns the chord. Bare macOS Control must not fall through to a plain key; null means another owner (e.g. dictation). */
 interface ReservedAction {
   readonly actionId: ActionId;
   readonly terminalPolicy: TerminalPolicy;
@@ -500,10 +449,8 @@ function resolveReservedAction(event: KeyboardEvent): ReservedAction | null {
   if (chord === null) return null;
   const match = findActionMatchForChord(chord);
   if (match === null) return null;
-  // Cmd+Left/Right is browser history on macOS, but it is also the native
-  // beginning/end-of-line command in text fields. Keep the familiar global
-  // navigation binding without breaking editing. The same safeguard applies
-  // if a non-Mac user explicitly remaps history to Ctrl+Left/Right.
+  // Cmd+Left/Right is history and also start/end of line in text fields.
+  // Keep global nav without breaking editing.
   if (
     (match.actionId === "nav.back" || match.actionId === "nav.forward") &&
     (chord === "mod+arrowleft" || chord === "mod+arrowright") &&
@@ -656,11 +603,8 @@ function isAnyDialogOpen(): boolean {
   const dialogs = document.querySelectorAll(
     '[role="dialog"][data-state="open"]',
   );
-  // A dialog that hosts a leader scope (the system-tab modal, the model picker
-  // popover, …) opts out of the block via `data-leader-scope`: it's the
-  // intended target of the leader shortcuts, so treat it as transparent to
-  // chord dispatch. Any other open dialog still blocks, so chords don't fire
-  // behind an unrelated modal.
+  // data-leader-scope dialogs are transparent to chord dispatch. Any other
+  // open dialog still blocks.
   for (const node of dialogs) {
     if (!(node instanceof HTMLElement)) return true;
     if (node.dataset.leaderScope === undefined) return true;

@@ -13,13 +13,8 @@ import {
 import { observationFromStatus } from "@/lib/host/fleet-update/borrowed-status-read";
 import { projectFleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 
-// This is the F1/F2 shared fix (independent cold review, finding 1): a
-// canonical `host.status` read must carry its own freshness rather than being
-// asserted as permanently current. `canonicalReadIsLive` is the health
-// predicate; `observationFromCanonicalRead` is what stamps an already-expired
-// deadline onto an unhealthy read WITHOUT touching the phase it carries — the
-// stale-arm retention in `fleet-update-view.ts` is what turns that into a
-// qualified "last seen" view.
+// This is the F1/F2 shared fix (independent cold review, finding 1): a canonical `host.status` read must carry its own freshness rather than being asserted as permanently current.
+// `canonicalReadIsLive` is the health predicate; `observationFromCanonicalRead` is what stamps an already-expired deadline onto an unhealthy read WITHOUT touching the phase it carries - the stale-arm retention in `fleet-update-view.ts` is what turns that.
 
 const NOW_MS = 5_000_000;
 
@@ -169,20 +164,14 @@ describe("observationFromCanonicalRead", () => {
       source: "selected",
     });
     expect(observation.operation).toEqual(op);
-    // Already expired — `EXPIRED_FRESH_UNTIL_MS` is `Number.NEGATIVE_INFINITY`,
+    // Already expired - `EXPIRED_FRESH_UNTIL_MS` is `Number.NEGATIVE_INFINITY`,
     // never `Number.POSITIVE_INFINITY`. Both are "not finite"; only one demotes.
     expect(observation.freshUntilMs).toBe(Number.NEGATIVE_INFINITY);
     expect(NOW_MS).toBeGreaterThan(observation.freshUntilMs);
   });
 
   it("THE RETAINED-ACTIVE DEFECT ITSELF: an active downloading read that goes unhealthy must NOT present as current", () => {
-    // This is the exact scenario the independent cold review's finding 1
-    // describes: a host reports an active downloading attempt and then the
-    // read becomes unhealthy (error, paused, or aged past its own staleness
-    // window) while the retained response still says "downloading". Before
-    // the fix this module exists to make unrepeatable, the Overview built an
-    // observation with `freshUntilMs: Infinity` here — which can never expire,
-    // no matter how unhealthy the read becomes.
+    // This is the exact scenario the independent cold review's finding 1 describes: a host reports an active downloading attempt and then the read becomes unhealthy (error, paused, or aged past its own staleness window) while the retained response still says.
     const activeDownloading = attemptOperation({
       phase: "downloading",
       execution: "active",
@@ -194,33 +183,13 @@ describe("observationFromCanonicalRead", () => {
       health: { ...healthyHealth(), isError: true },
       source: "selected",
     });
-    // A finite, already-expired deadline is what lets `projectFleetUpdateView`
-    // demote this to `unknown` — the ABLATION below shows what happens
-    // without it.
+    // A finite, already-expired deadline is what lets `projectFleetUpdateView` demote this to `unknown` - the ABLATION below shows what happens without it.
     expect(observation.freshUntilMs).not.toBe(Number.POSITIVE_INFINITY);
     expect(observation.freshUntilMs).toBeLessThan(NOW_MS + 1);
   });
 
   it("ABLATION — drives the real production path: an unhealthy active-downloading read must demote through projectFleetUpdateView IMMEDIATELY, not eventually", () => {
-    // Unlike the version this replaces (which compared a hand-built literal's
-    // `freshUntilMs: Infinity` against `NOW_MS` — a tautology that never called
-    // either production function and could not go red if the fix were
-    // reverted), this drives BOTH real functions the fix touches:
-    // `observationFromCanonicalRead` stamps the expiry, and
-    // `projectFleetUpdateView` is what actually consumes it to decide whether
-    // the host still reads as "downloading".
-    //
-    // `nowMs` is pinned to the SAME instant as `dataUpdatedAt` on purpose,
-    // not pushed into the future: a merely finite (but short) freshness
-    // window would also read as stale given enough elapsed time, which would
-    // not discriminate a reverted guard from a working one. Only the real
-    // guard's `EXPIRED_FRESH_UNTIL_MS` (`-Infinity`) is stale at the very
-    // instant the read landed. If `observationFromCanonicalRead` ever
-    // reverted to treating an unhealthy read as live (the old defect's
-    // `freshUntilMs: Number.POSITIVE_INFINITY` construction, or simply
-    // skipping the demotion), `view.kind` below would still read
-    // "downloading" at this same instant, and this assertion — not a
-    // comparison against a literal nobody produced — is what would catch it.
+    // Unlike the version this replaces (which compared a hand-built literal's `freshUntilMs: Infinity` against `NOW_MS` - a tautology that never called either production function and could not go red if the fix were reverted), this drives BOTH real functions the.
     const activeDownloading = attemptOperation({
       phase: "downloading",
       execution: "active",
@@ -237,9 +206,8 @@ describe("observationFromCanonicalRead", () => {
       nowMs: NOW_MS,
       connected: true,
     });
-    // The permanent-lock defect demoted to nothing: `kind` would still read
-    // "downloading". The real fix demotes to a qualified `unknown` that still
-    // remembers the phase, exactly like the direct-projection stale arm.
+    // The permanent-lock defect demoted to nothing: `kind` would still read "downloading".
+    // The real fix demotes to a qualified `unknown` that still remembers the phase, exactly like the direct-projection stale arm.
     expect(view.kind).toBe("unknown");
     expect(view.qualified).toBe(true);
     expect(view.lastKnownKind).toBe("downloading");

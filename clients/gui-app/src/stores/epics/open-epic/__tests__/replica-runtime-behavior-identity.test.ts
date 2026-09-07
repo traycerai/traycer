@@ -1,44 +1,3 @@
-/**
- * Behaviour-identity pins for the extracted replica runtime, wired through
- * `createOpenEpicStore` (`store.ts`). Each assertion is a cross-plane
- * sequencing invariant that a naive re-decomposition of the old monolithic
- * closure could silently break while every single-plane unit test still
- * passes.
- *
- * 1. A viewer-role snapshot tears down every artifact room AND republishes
- *    divergence (`epic-replica-runtime.ts`'s `applyRootSnapshot`: `if
- *    (!control.facts.isWritableRole()) { rooms.dropAllOnViewerDowngrade();
- *    records.publishDivergence(); return; }`).
- * 2. `requestFreshSnapshot` closes the socket BEFORE clearing coverage and
- *    reopens AFTER, so the reattach that follows sends no seed offer
- *    (`legacy-epic-stream-adapter.ts`'s `closeTransport`/`openTransport`
- *    split, `epic-replica-runtime.ts`'s `requestFreshSnapshot`).
- * 3. `detachTransport` publishes `hostTransportStatus: "closed"` but leaves
- *    the internal transport leg untouched, so the projected divergence
- *    fields freeze rather than resuming queueing
- *    (`epic-control-replica.ts`'s `noteTransportDetached` doc comment).
- * 4. A user switch on a DETACHED handle must not blank the projection. The
- *    old closure's `useAuthStore` subscriber ended with an unguarded
- *    `store.setState(projector.projectFull())` - every other call site in
- *    that file checked `projector.isAttached()` first, this one didn't -
- *    so a user switch after `detachTransport()` wrote EMPTY projected
- *    slices into a store whose retention contract says display freezes.
- *    Fixed: `reprojectForViewerChange()` -> `records.project()` ->
- *    `projector.projectFull()` now returns `EMPTY_PROJECTED_SLICES` AND
- *    publishes nothing while detached (`epic-projector.ts`'s `projectFull`
- *    guards `attached === null` before calling `attached.sink.publish`).
- * 5. `chatRecordListAuthoritative` must round-trip through the sink. The old
- *    auth subscriber cleared this projected field with a direct
- *    `store.setState({ chatRecordListAuthoritative: false })`, bypassing the
- *    sink `markChatRecordListAuthoritative()` reads its change gate from -
- *    so the sink kept believing `true` while the store said `false`, and
- *    `markChatRecordListAuthoritative()`'s early-out
- *    (`if (sink.read().chatRecordListAuthoritative) return;`) meant the flag
- *    could never be restored. Fixed: the subscriber now routes the clear
- *    through `runtime.markChatRecordListNotAuthoritative()`
- *    (`epic-records-replica.ts`), which writes the SAME sink the setter
- *    reads.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
@@ -141,18 +100,8 @@ function seedRootArtifact(targetDoc: Y.Doc, artifactId: string): void {
 }
 
 /**
- * Materializes the artifact-room doc for `artifactId` by taking a lease and
- * reading its fragment - the same "editor is mounted" stand-in used by
- * `store.test.ts`. The lease is intentionally not released, so the room stays
- * hot for the assertions that follow.
- *
- * ASYNC, and the premise is what changed rather than the behaviour. Before the
- * relocation `acquireArtifactBodyLease` materialized the room and installed the
- * doc synchronously, so the fragment was readable on the next line. It is now a
- * `body/materialize` CALL - the store fires it and installs the doc in a `.then`
- * - so a synchronous read on the next line is a read of a frame still in
- * flight, and answers `null` for a room that does materialize a microtask
- * later. `flush()` is the harness's own name for that boundary.
+ * Materializes the artifact-room doc for `artifactId` by taking a lease and reading its fragment -
+ * the same "editor is mounted" stand-in used by `store.test.ts`.
  */
 async function leasedFragmentDoc(
   opened: OpenedStoreForTest,
@@ -235,10 +184,8 @@ function fakeFactory(): {
 }
 
 /**
- * A factory whose events feed into ONE shared array, in order, so the
- * ordering between `close()` on the outgoing client and the factory being
- * invoked again for the incoming one can be asserted directly rather than
- * inferred from side effects.
+ * A factory whose events feed into ONE shared array, in order, so the ordering between `close()`
+ * on the outgoing client and the factory being invoked again for the incoming one can be asserted
  */
 function sequencingFactory(): {
   factory: EpicStreamClientFactory;
@@ -287,11 +234,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     handle = openStoreForTest({
       epicId: "epic-viewer-teardown",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -321,20 +264,15 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     expect(opened.hotArtifactRoomIdsForTests()).toEqual(["artifact-room-0"]);
     expect(opened.store.getState().isDirty).toBe(false);
 
-    // Go offline and make a local edit to the room body - this sets the
-    // room's own dirty watermark, which `hasRoomDivergence()` folds into the
-    // published `isDirty` even though the ROOT doc has nothing unsynced.
+    // Go offline and make a local edit to the room body - this sets the room's own dirty watermark,
+    // which `hasRoomDivergence()` folds into the published `isDirty` even though the ROOT doc has
     streamHandle().callbacks.onConnectionStatus("reconnecting", null);
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("offline").set("k", "v");
     });
     expect(opened.store.getState().isDirty).toBe(true);
 
-    // A reconnect snapshot that downgrades the role to viewer. Per
-    // `applyRootSnapshot`, an unwritable role fails closed: every room is
-    // torn down (`rooms.dropAllOnViewerDowngrade()`), unconditionally, and
-    // divergence is republished (`records.publishDivergence()`) - so the
-    // now-empty room set clears the room-side contribution to `isDirty`.
+    // A reconnect snapshot that downgrades the role to viewer.
     streamHandle().callbacks.onSnapshot(
       buildMeta("viewer", donor),
       Y.encodeStateAsUpdate(donor),
@@ -350,13 +288,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       opened.store.getState().artifactRooms.stateByArtifactId["art-1"],
     ).not.toBe("ready");
 
-    // AND STAYS THAT WAY across an ordinary root update. This is the half the
-    // teardown missed: it published an empty slice but left the ROOM-KEYED
-    // availability map populated, and `republishAvailability` - which the
-    // records plane calls on every root frame - derives from that map rather
-    // than from the last publication. So the destroyed rooms came straight
-    // back as `ready`, and a mounted artifact read as available while lease
-    // acquisition had no body to hand it.
+    // AND STAYS THAT WAY across an ordinary root update.
     donor.getMap("epic").set("title", "an ordinary later edit");
     streamHandle().callbacks.onUpdate(Y.encodeStateAsUpdate(donor));
 
@@ -371,11 +303,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     handle = openStoreForTest({
       epicId: "epic-close-before-open",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -395,20 +323,12 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       Y.encodeStateAsUpdate(donor),
     );
 
-    // Every factory invocation and every close lands in one shared sequence,
-    // and the whole of it is asserted below rather than the tail. Truncating it
-    // first (this read `sequence.length = 0`) would have been both a write to a
-    // `readonly` array and a weaker test: erasing the constructor's own record
-    // means an unexpected extra open before this point becomes invisible, which
-    // is exactly the kind of thing an ordering assertion exists to catch.
+    // Every factory invocation and every close lands in one shared sequence, and the whole of it is
+    // asserted below rather than the tail.
     expect(sequence).toEqual(["open"]);
 
     opened.requestFreshSnapshot();
 
-    // One open from construction, then close STRICTLY BEFORE the factory is
-    // invoked again for the replacement client - the re-subscribe reads the
-    // seed offer, so an offer taken before coverage is cleared would name state
-    // this client just discarded.
     expect(sequence).toEqual(["open", "close", "open"]);
     expect(streamHandle().callbacks).toBeDefined();
   });
@@ -418,11 +338,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     handle = openStoreForTest({
       epicId: "epic-detach-freeze",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -449,26 +365,15 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
 
     const frozenQueueSize = opened.store.getState().unsyncedQueueSize;
 
-    // A local edit AFTER the detach. Two different things happen to the two
-    // divergence signals, and conflating them is the trap this test exists to
-    // hold open.
+    // A local edit AFTER the detach. Two different things happen to the two divergence signals, and
+    // conflating them is the trap this test exists to hold open.
     opened.doc.getMap("epic").set("title", "edited after detach");
 
-    // THE FREEZE, and the only one: the queue does not grow. `detachTransport`
-    // deliberately leaves the control plane's INTERNAL transport leg alone, so
-    // `applyLocalUpdate` still takes its send path and the send is dropped by
-    // an adapter with no client. Flipping that leg to "closed" would route the
-    // edit into the unsynced buffer instead - a buffer nothing will ever drain,
-    // on a handle whose whole promise is that it takes no further input.
+    // THE FREEZE, and the only one: the queue does not grow.
     expect(opened.store.getState().unsyncedQueueSize).toBe(frozenQueueSize);
     expect(opened.store.getState().hostTransportStatus).toBe("closed");
 
-    // NOT frozen, and it must not be: the edit really is unsynced, so saying so
-    // is the honest reading. The doc's update listener is bound for the
-    // replica's life and `detachTransport` does not unbind it - only dispose
-    // and a replica swap do. Gating this on the detach would let a retained
-    // buffer that has since accumulated NEW edits keep reporting itself clean,
-    // which is the one direction the divergence arithmetic may never round.
+    // NOT frozen, and it must not be: the edit really is unsynced, so saying so is the honest reading.
     expect(opened.store.getState().isDirty).toBe(true);
     expect(
       opened.store.getState().dirtyWatermarkStateVectorBase64,
@@ -481,11 +386,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     handle = openStoreForTest({
       epicId: "epic-detach-user-switch",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -496,9 +397,6 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     });
     const opened = handle;
 
-    // Land a snapshot with a non-empty artifact slice, then a chat record so
-    // `chats`/`tree` are non-empty too - the union (`chats`) is what the old
-    // bug's unguarded `projectFull()` write would have blanked.
     const donor = new Y.Doc();
     donor.getMap("epic").set("title", "Detach test epic");
     seedRootArtifact(donor, "art-1");
@@ -532,12 +430,6 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     signedInAs("user-b");
 
     const after = opened.store.getState();
-    // REFERENCE equality, not deep: a rebuilt-but-content-equal projection
-    // would pass a `toEqual` check and miss the exact regression class this
-    // pins - the old bug's `projectFull()` write handed back a NEW (empty)
-    // object, which a deep-equality assertion against non-empty fixtures
-    // would already have caught, but a fix that merely restores CONTENT
-    // while still re-publishing on every detached user switch would not be.
     expect(after.epic).toBe(epicBefore);
     expect(after.artifacts).toBe(artifactsBefore);
     expect(after.chats).toBe(chatsBefore);
@@ -554,11 +446,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     handle = openStoreForTest({
       epicId: "epic-authoritative-roundtrip",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
       factories: {
         streamClientFactory: factory,
         laneSelection: null,
@@ -581,18 +469,12 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     opened.store.getState().markChatRecordListAuthoritative();
     expect(opened.store.getState().chatRecordListAuthoritative).toBe(true);
 
-    // Step 2: a real user switch clears it through
-    // `runtime.markChatRecordListNotAuthoritative()`, which writes the SAME
-    // sink the setter's change gate reads.
+    // Step 2: a real user switch clears it through `runtime.markChatRecordListNotAuthoritative()`,
+    // which writes the SAME sink the setter's change gate reads.
     signedInAs("user-b");
     expect(opened.store.getState().chatRecordListAuthoritative).toBe(false);
 
-    // Step 3: the whole point of this test. Against the bug, the sink was
-    // still holding `true` from step 1 (the clear in step 2 wrote the store
-    // directly, never the sink), so this call's early-out
-    // (`if (sink.read().chatRecordListAuthoritative) return;`) would silently
-    // no-op and the flag would stay `false` forever. Not collapsed into a
-    // two-step assertion - this is the regression the fix targets.
+    // Step 3: the whole point of this test.
     opened.store.getState().markChatRecordListAuthoritative();
     expect(opened.store.getState().chatRecordListAuthoritative).toBe(true);
   });

@@ -2,9 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SwitcherPanelEmbed } from "@/components/epic-canvas/mobile/switcher-panel-embed";
 
-// Embed, don't fork: the desktop bodies pull host queries + Pierre + the epic
-// session, so stub them at the module boundary and assert the embed routes each
-// category to the right body.
+// Embed, don't fork: the desktop bodies pull host queries + Pierre + the epic session, so stub them at the module boundary and assert the embed routes each category to the right body.
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar", () => ({
   FileTreePanelBody: () => <div data-testid="file-tree-body" />,
 }));
@@ -61,11 +59,7 @@ describe("<SwitcherPanelEmbed />", () => {
   });
 
   /**
-   * `@pierre/trees` paints its own background on the list container and every
-   * row. The desktop sidebar it was written for is `bg-background`, so it is
-   * invisible there; this sheet is `bg-popover`, so without a declared surface
-   * the tree paints a slab of the wrong colour over it. The sheet declares the
-   * surface because the sheet is what knows which one it is.
+   * The desktop sidebar it was written for is `bg-background`, so it is invisible there; this sheet is `bg-popover`, so without a declared surface the tree paints a slab of the wrong colour over it.
    */
   it("declares its own surface for the embedded Pierre trees", () => {
     const { container } = render(

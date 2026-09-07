@@ -17,10 +17,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
-// Frameless-desktop detection: Electron's preload bridge exposes
-// `window.runnerHost` via `contextBridge.exposeInMainWorld`. Browser
-// shells never see it. Reliable in Electron 42 with sandbox + app://
-// scheme + Chromium UA reduction (UA sniffing is not).
+// Browser shells never see it.
 function isFramelessDesktop(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -32,9 +29,7 @@ function isFramelessDesktop(): boolean {
 const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
-// Drag style for the header's title-bar spacers: only frameless desktop shells
-// use them as an OS drag region, and only while no header overlay needs the
-// title bar to receive clicks (see `useTitleBarDraggingSuppressed`).
+// Drag style for the header's title-bar spacers: only frameless desktop shells use them as an OS drag region.
 function titleBarSpacerStyle(
   framelessDesktop: boolean,
   dragSuppressed: boolean,
@@ -49,11 +44,7 @@ export interface AppHeaderProps {
   readonly variant: AppHeaderVariant;
 }
 
-/**
- * App navigation chrome. On phones this delegates to the hamburger
- * `MobileAppHeader`; at >=768px it renders the desktop tab-strip header
- * (`DesktopAppHeader`) exactly as before.
- */
+/** App navigation chrome. */
 export function AppHeader(props: AppHeaderProps): ReactNode {
   const isMobile = useIsMobileViewport();
   if (props.variant === "app" && isMobile) {
@@ -62,26 +53,20 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
   return <DesktopAppHeader variant={props.variant} />;
 }
 
-/**
- * Desktop navigation chrome. Frameless desktop shells use this row as the
- * native title bar: tabs and controls stay interactive, while the empty spacer
- * before the right-side controls remains available for window dragging.
- */
+/** Frameless desktop shells use this row as the native title bar: tabs and controls stay interactive, while the
+ * empty spacer before the right-side controls remains available for window dragging. */
 function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const { variant } = props;
   const showTabStrip = variant === "app";
-  // Host-loading renders above the router and above the
-  // notifications provider: nav links would crash, and the bell would
-  // throw when its hooks can't find the stream context.
+  // Host-loading renders above the router and above the notifications provider: nav links would crash, and the
+  // bell would throw when its hooks can't find the stream context.
   const navDisabled = variant === "host-loading";
   const showBell = variant !== "host-loading";
   const framelessDesktop = isFramelessDesktop();
   const showGlobalResourceMonitor = useSettingsStore(
     (state) => state.showGlobalResourceMonitor,
   );
-  // A header-anchored overlay (e.g. the resource monitor) needs the title bar to
-  // stop swallowing clicks so a click there dismisses it. Drop drag while any
-  // such overlay is open; restore it once they all close.
+  // Drop drag while any such overlay is open; restore it once they all close.
   const dragSuppressed = useTitleBarDraggingSuppressed();
   const draggable = framelessDesktop && !dragSuppressed;
   const spacerDragStyle = titleBarSpacerStyle(framelessDesktop, dragSuppressed);
@@ -106,18 +91,8 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
     >
       <WindowsMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
-      {/* Left drag handle: breathing room beside the traffic lights +
-          back/forward arrows so the window can be grabbed from the left end
-          too. Desktop-only (the browser app has neither traffic lights nor
-          arrows, so a left gap there would be stray).
-
-          IMPORTANT: this must be a DIRECT child of <header> (a top-level
-          title-bar element), mirroring the right-side spacer below. An
-          otherwise-identical drag spacer nested inside the flex tab-strip
-          section was NOT honored as a draggable region (only the right
-          spacer, a direct header child, dragged). Electron registers
-          `-webkit-app-region: drag` reliably only on top-level title-bar
-          elements. */}
+      {/* Desktop-only (the browser app has neither traffic lights nor arrows, so a left gap there would be stray).
+         Electron registers `-webkit-app-region: drag` reliably only on top-level title-bar elements. */}
       {showTabStrip && framelessDesktop ? (
         <div
           aria-hidden

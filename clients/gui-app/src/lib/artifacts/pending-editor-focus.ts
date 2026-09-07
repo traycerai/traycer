@@ -1,15 +1,6 @@
 /**
- * One-shot handoff between artifact creation flows and the collab tile
- * editor. The sidebar "+" actions mark the freshly created artifact id;
- * `CollabTileBodyEditor` consumes the mark when its Tiptap editor mounts
- * and moves focus into the document so the user can start typing
- * immediately.
- *
- * A module-level registry (same shape as `comment-editor-registry`) rather
- * than Zustand state: the signal is consumed exactly once, never rendered,
- * and must not trigger re-renders. The key includes the tab instance id so a
- * failed create/open path cannot steal focus from a later manual open of the
- * same artifact.
+ * One-shot handoff between artifact creation flows and the collab tile editor.
+ * The sidebar "+" actions mark the freshly created artifact id; `CollabTileBodyEditor` consumes the mark when its Tiptap editor mounts and moves focus into the document so the user can start typing immediately.
  */
 
 const pendingKeys = new Set<string>();

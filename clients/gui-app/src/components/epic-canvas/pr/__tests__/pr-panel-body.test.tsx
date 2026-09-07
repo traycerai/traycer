@@ -30,14 +30,7 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => "host1",
 }));
 
-// `PrRow` pulls in the per-Epic owner-label chain (`useChatById` /
-// `useEpicTerminalAgent`, which resolve titles off `OpenEpicState.chats` and so
-// need a live `OpenEpicStoreHandle`) that has nothing to do with the panel
-// wiring under test here. Stub it to a minimal clickable row that still exercises the
-// REAL row-click -> tile-open wiring in `pr-panel-body.tsx`, keeping the WS
-// transport as the only faked external boundary plus this one unrelated
-// presentational seam. Linked (nested submodule) rows render as their own
-// buttons so the panel's nesting decisions stay observable here.
+// Stub it to a minimal clickable row that still exercises the REAL row-click -> tile-open wiring in `pr-panel-body.tsx`, keeping the WS transport as the only faked external boundary plus this one unrelated presentational seam.
 vi.mock("@/components/epic-canvas/pr/pr-row", () => {
   const mockLabel = (item: PrLightItem): string =>
     item.base !== null
@@ -86,9 +79,9 @@ type MockWsStreamClient =
 const MockWsStreamClient =
   SharedMockWsStreamClient<PrSubscribeListForEpicServerFrame>;
 
-/** Minimal, fully-populated `PrLightItem` fixture builder - every required
- * field gets a realistic default; callers override only what the case cares
- * about. */
+/**
+ * Minimal, fully-populated `PrLightItem` fixture builder - every required field gets a realistic default; callers override only what the case cares about.
+ */
 function buildPrItem(overrides: Partial<PrLightItem>): PrLightItem {
   return {
     githubHost: null,

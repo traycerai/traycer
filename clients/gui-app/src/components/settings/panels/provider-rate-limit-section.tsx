@@ -43,7 +43,6 @@ export function ProviderRateLimitForProvider({
   );
 }
 
-/** The surrounding Profiles card owns the refresh action for embedded usage. */
 export function EmbeddedProviderRateLimitForProvider({
   providerId,
   profileId,
@@ -237,15 +236,8 @@ function EmbeddedProviderRateLimitSettingsCard({
   );
 }
 
-/**
- * Whether this read failed but is not being PRESENTED as a failure, because
- * the queue scheduled a delayed collection for it.
- *
- * Folded into the body's `isFetching` so the section reads as loading for that
- * window. Suppressing the error alone is not enough here: with no cached
- * envelope the view resolver would fall through to `empty` and render a blank
- * usage card until the collection landed.
- */
+/** Suppressing the error alone is not enough here: with no cached envelope the view resolver would fall through
+ * to `empty` and render a blank usage card until the collection landed. */
 function isRecoveringUnheardRead(query: {
   readonly isError: boolean;
   readonly presentedIsError: boolean;
@@ -271,9 +263,8 @@ function ProviderRateLimitSettingsCard({
     profileId,
     fetchEligible,
   );
-  // Single source of truth for this provider's refresh action + spinner state
-  // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
-  // shared verbatim with the popover's per-provider block.
+  // Single source of truth for this provider's refresh action + spinner state (fresh-on-open, queue routing, and
+  // the ephemeralProcess `draining` fold-in), shared verbatim with the popover's per-provider block.
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId,

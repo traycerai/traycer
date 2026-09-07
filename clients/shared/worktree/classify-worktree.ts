@@ -4,19 +4,7 @@ import type {
   WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 
-/**
- * Evidence tier for a host worktree. Names a PROVEN fact about the worktree, not
- * a safety verdict. Three green tiers each require positive, host-validated proof:
- * `merged` (a PR merged with the live HEAD at the merged SHA, local ancestry
- * proof the work landed in the default branch, OR an at-base superproject with
- * authored owned-submodule work proven landed); `at-base-commit` (the worktree
- * never advanced from its birth commit and no authored submodule work landed, so
- * deleting loses nothing committed); and `unreferenced` (a proven upstream-tip
- * branch nothing points at). `review` is the amber catch-all for anything
- * unproven or with would-be-lost state; `orphaned` and `in-use` are neutral. The
- * same names are shared verbatim with the Task-delete dialog and the
- * `traycer-housekeeping` skill.
- */
+/** Proven fact, not a safety verdict. Green tiers need host-validated proof; `review` is the unproven catch-all. */
 export type WorktreeTier =
   | "in-use"
   | "review"
@@ -27,21 +15,11 @@ export type WorktreeTier =
 
 export interface WorktreeClassification {
   readonly tier: WorktreeTier;
-  /** Human tier label ("In use" / "Review" / …). */
   readonly label: string;
-  /**
-   * Ordered, relevance-gated evidence facts for non-chip consumers such as CLI
-   * and skill reports. This is the full set: PR provenance facts first, then
-   * non-PR facts. Never a time string (that is a render concern the caller
-   * appends).
-   */
+  /** Full fact set for CLI/skill reports. Never a time string. */
   readonly facts: readonly string[];
-  /**
-   * PR/provenance facts that GUI chip surfaces may choose to hide structurally
-   * rather than by matching rendered fact text.
-   */
+  /** PR/provenance facts GUI chips may hide structurally. */
   readonly prFacts: readonly string[];
-  /** Evidence facts unrelated to PR/provenance chip presentation. */
   readonly nonPrFacts: readonly string[];
 }
 
@@ -50,19 +28,12 @@ export const WORKTREE_TIER_LABEL: Record<WorktreeTier, string> = {
   review: "Review",
   orphaned: "Orphaned",
   merged: "Landed",
-  // Honest wording: the worktree is literally unchanged from its birth commit.
-  // Deliberately NOT "Pristine"/"Untouched" - setup may have written ignored
-  // files, so those labels would over-claim.
+  // Not "Pristine"/"Untouched": setup may have written ignored files.
   "at-base-commit": "At base commit",
   unreferenced: "Unreferenced",
 };
 
-/**
- * Hover explanation for each tier label. Copy must stay honest to the evidence
- * ladder in `classifyWorktreeTier`: green tiers state the PROVEN fact and why
- * deleting is safe; `review` states what is unproven; `orphaned`/`in-use` state
- * the neutral condition. Shown wherever the tier label renders as a pill.
- */
+/** Hover copy must stay honest to the evidence ladder. */
 export const WORKTREE_TIER_TOOLTIP: Record<WorktreeTier, string> = {
   "in-use":
     "An active task or agent is currently using this worktree, so it can't be deleted.",
@@ -78,12 +49,6 @@ export const WORKTREE_TIER_TOOLTIP: Record<WorktreeTier, string> = {
     "Clean, fully pushed (0 commits ahead of its upstream), and no task or agent references it - the branch tip stays safe on the remote.",
 };
 
-/**
- * Safe-first display order (proven-merged first, blocked `in-use` last). Rows land
- * pre-triaged in this order, stalest-first within each tier. `at-base-commit` sits
- * between the two stronger greens and `review`: it is proven-safe to delete but a
- * fresher, less-consequential state than a merged branch.
- */
 export const WORKTREE_TIER_ORDER: readonly WorktreeTier[] = [
   "merged",
   "at-base-commit",
@@ -110,68 +75,8 @@ function gitUnreadableOf(entry: WorktreeHostEntryV12): boolean {
 }
 
 /**
- * The canonical evidence ladder - FIRST MATCH WINS. Implements the merge-provenance
- * plan's precedence truth table. Order is deliberate:
- *
- *  1. `inUse` → **in-use** (blocked; never a delete candidate).
- *  1b. `gitUnreadable` → **review**. The `.git` gitlink exists but git cannot
- *     resolve the repository it points at (main missing / moved / re-cloned, or
- *     the admin entry pruned). Checked BEFORE orphaned on purpose: this shape
- *     also has `gitRemovable: false`, but its branch and dirty count are
- *     fabricated, so it must not read as an fs-only cleanup with nothing to
- *     lose. Older hosts omit the field; absence is treated as false.
- *  2. `!gitRemovable` → **orphaned**. Checked BEFORE the greens on purpose: an
- *     orphan's `branchStatus` is usually null. Per-row only, so this only changes
- *     the LABEL, never bulk safety.
- *  3. dirty (`uncommittedCount > 0`) → **review**. Above every green: a merged or
- *     at-base worktree with uncommitted changes still has work that would be lost.
- *  4. detached HEAD (`branch === null`) → **review**. Kept above the greens: a
- *     detached worktree has no branch ref, so force-remove can orphan commits. We
- *     do NOT extend the new positive-proof greens to detached HEADs in this pass
- *     (a conservative, never-false-green choice - see report notes).
- *  5. any owned-submodule branch not proven merged → **review**. Worktree
- *     teardown deletes the owned submodule branches, so an unproven submodule is
- *     would-be-lost work even when the SUPERPROJECT is proven green (the classic
- *     case: submodule commits landed on the submodule branch but its PR hasn't
- *     merged, while the superproject gitlink was never bumped - the superproject
- *     looks clean/at-base). Proof per fact mirrors the superproject greens:
- *     a HEAD-validated merged PR, local `mergedIntoDefault` ancestry, or
- *     `atPinnedCommit` (the branch/tip equals the superproject's pinned gitlink
- *     and carries nothing beyond that pin).
- *     `submodules: []` (none owned, or `includeActivity: false`) gates nothing.
- *  6. `prState === "merged" && mergedHeadShaMatches` → **merged** (green, PR
- *     provenance). Highest green - the authoritative signal that the work landed.
- *     The host already validated the live HEAD is the merged SHA, so the pure
- *     client never needs the SHA. A merged PR state WITHOUT the live-HEAD match
- *     does NOT green - it falls through.
- *  7. `atBaseCommit === true` + any owned submodule with authored work proven
- *     landed → **merged** (green). A submodule has authored work when it differs
- *     from the pinned gitlink (`!atPinnedCommit`); landing proof is the same
- *     HEAD-validated merged PR or local default-branch ancestry used by the
- *     submodule safety gate. The gate above still requires EVERY owned submodule
- *     to be proven safe, so one unproven sibling keeps the row in Review.
- *  8. `atBaseCommit === true` → **at-base-commit** (green). Host-computed
- *     retroactively from signals every worktree carries: `clean && contained in
- *     default (mergedIntoDefault) && no authored-commit reflog entry` ⇒ untouched.
- *     Checked BEFORE local ancestry ON PURPOSE: an untouched worktree is contained
- *     in the default, so `mergedIntoDefault` is ALSO true. Ordering at-base first
- *     makes the common untouched worktree read the honest "At base commit"
- *     instead of the stronger "Landed" label. The reflog guard is the only thing
- *     splitting the two labels - both share the `mergedIntoDefault` safety
- *     floor. Applies
- *     regardless of owners or an open PR; deleting loses nothing committed.
- *  9. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
- *     ancestry). Now correctly rare: only a branch that actually ADVANCED from its
- *     base and is now contained in the default lands here (a genuine merge). Proof
- *     stands regardless of owners and of any upstream.
- *  10. clean + non-null status + `ahead === 0` + no owners → **unreferenced**
- *     (quiet-green; a PROVEN upstream-tip branch nothing references).
- *  11. else → **review** (null status, `ahead === null`/`> 0` unmerged,
- *     referenced-unmerged).
- *
- * Green requires positive, host-validated proof; unknown/stale is never green.
- * `ahead === null` (no upstream) is NOT a green light on its own: a never-pushed
- * branch is only ever Landed (proven contained), At base commit, or Review.
+ * First match wins. `gitUnreadable` before orphaned; `atBaseCommit` before local ancestry so an untouched worktree is not labeled Landed.
+ * Green requires positive host-validated proof; `ahead === null` is never green on its own.
  */
 export function classifyWorktreeTier(
   entry: WorktreeHostEntryV12,
@@ -181,16 +86,10 @@ export function classifyWorktreeTier(
   if (!entry.gitRemovable) return "orphaned";
   if (entry.uncommittedCount > 0) return "review";
   if (entry.branch === null) return "review";
-  // Owned-submodule gate: teardown deletes owned submodule branches, so ONE
-  // unproven submodule blocks every green - the superproject proof says nothing
-  // about the submodule branch's work.
+  // One unproven owned submodule blocks every green; teardown deletes those branches.
   if (entry.submodules.some((fact) => !submoduleMergeProven(fact))) {
     return "review";
   }
-  // Positive, host-validated green proofs, in precedence order. `atBaseCommit`
-  // sits ABOVE local ancestry so a never-touched worktree (whose base is in the
-  // default, making `mergedIntoDefault` also true) reads the honest "At base
-  // commit", not "Landed". A validated merged PR still wins over both.
   if (entry.prState === "merged" && entry.mergedHeadShaMatches) return "merged";
   if (
     entry.atBaseCommit &&
@@ -207,11 +106,6 @@ export function classifyWorktreeTier(
   return "review";
 }
 
-/**
- * Specific, non-exclusive blockers for a Review row. Kept separate from the
- * tier classifier: the ladder still picks one tier, while this reports every
- * contributing risk the user should inspect.
- */
 export function describeReviewReasons(
   entry: WorktreeHostEntryV12,
 ): readonly string[] {
@@ -244,10 +138,7 @@ export function describeReviewReasons(
           `No PR for ${status.ahead} unmerged commit${status.ahead === 1 ? "" : "s"}`,
         ]
       : []),
-    // `ahead === null` = no upstream to diff against: the branch was never
-    // pushed (or its remote ref is gone), so its unmerged commits are not
-    // recoverable from anywhere else - the highest-stakes Review shape, and it
-    // must say so rather than fall back to the generic tier help.
+    // `ahead === null` means no upstream; say so rather than falling back to generic tier help.
     ...(entry.prState === "none" &&
     status !== null &&
     status.ahead === null &&
@@ -265,26 +156,11 @@ export function describeReviewReasons(
   ];
 }
 
-/**
- * A single owned-submodule branch is proven merged the same two ways the
- * superproject greens, plus the submodule-specific at-pin proof: a
- * HEAD-validated merged PR (`prState === "merged"` with the host's live-HEAD
- * match), local `mergedIntoDefault` ancestry, or `atPinnedCommit`. `prState`
- * null (not probed) or `"none"` proves nothing on its own - the local proof bits
- * are then the only possible proof.
- */
 function submoduleMergeProven(fact: WorktreeSubmoduleMergeFactV12): boolean {
   if (fact.prState === "merged" && fact.mergedHeadShaMatches) return true;
   return fact.mergedIntoDefault || fact.atPinnedCommit;
 }
 
-/**
- * Positive proof that an owned submodule both carried work beyond the
- * superproject's pinned gitlink and landed that work. `atPinnedCommit` is kept as
- * a hard exclusion even if another proof bit is also true: the pinned checkout
- * is safe, but it contains no authored submodule work that should promote an
- * otherwise at-base superproject to Landed.
- */
 function submoduleAuthoredWorkLanded(
   fact: WorktreeSubmoduleMergeFactV12,
 ): boolean {
@@ -308,14 +184,6 @@ function describeUnprovenSubmodule(
   return `${name}: unmerged commits`;
 }
 
-/**
- * The single green / bulk-eligible predicate - one source of truth backing the
- * pill, the Task-delete default-check, and the bulk delete copy (critique #5 - no
- * divergent predicates). A worktree is proven-removable when the shared classifier
- * places it in one of the three green tiers: `merged`, `at-base-commit`, or
- * `unreferenced`. Deriving it from `classifyWorktreeTier` guarantees the pill the
- * user sees and the bulk cohort can never disagree.
- */
 export function provenRemovable(entry: WorktreeHostEntryV12): boolean {
   const tier = classifyWorktreeTier(entry);
   return (
@@ -346,9 +214,7 @@ function worktreeFacts(
   entry: WorktreeHostEntryV12,
   tier: WorktreeTier,
 ): WorktreeFacts {
-  // "clean" only reads as reassuring on the green-leaning tiers; elsewhere it is
-  // noise against the louder signals already listed. The owner/reference state
-  // is shown on its own line, so it is deliberately NOT repeated as a fact here.
+  // "clean" only on green-leaning tiers; owner/reference is on its own line.
   const cleanGreen =
     entry.uncommittedCount === 0 &&
     (tier === "merged" || tier === "at-base-commit" || tier === "unreferenced");
@@ -374,14 +240,7 @@ function worktreeFacts(
   };
 }
 
-/**
- * The row-fact hint that distinguishes HOW a `merged` worktree was proven merged:
- * `PR #123` when the green came from a validated superproject PR, `submodule
- * owner/repo landed` when an otherwise at-base superproject carried landed
- * authored submodule work, or `in default` when it came from superproject local
- * ancestry. Only emitted on the `merged` tier - the provenance is the reassuring
- * detail there. The order mirrors the classifier's evidence ladder.
- */
+/** How a `merged` row was proven: PR, landed submodule work, or local ancestry. Only emitted on the merged tier. */
 function mergedProvenanceFacts(
   entry: WorktreeHostEntryV12,
   tier: WorktreeTier,
@@ -406,13 +265,6 @@ function mergedProvenanceFacts(
   return ["in default"];
 }
 
-/**
- * One fact per owned submodule whose branch is NOT proven merged - the loss the
- * submodule gate is protecting (teardown deletes those branches). An open PR is
- * named so the user can see the work is in flight; otherwise the branch is
- * plainly "unmerged". Proven submodules emit nothing - on a green tier they are
- * covered by the tier itself.
- */
 function unprovenSubmoduleFacts(
   submodules: readonly WorktreeSubmoduleMergeFactV12[],
 ): string[] {
@@ -429,10 +281,7 @@ function unprovenSubmoduleFacts(
 
 function branchStatusFacts(status: WorktreeBranchStatus | null): string[] {
   if (status === null) return [];
-  // `ahead`/`behind` are null for a never-pushed branch (no upstream to diff);
-  // render nothing rather than a bogus "0 ahead". Landed-ness is surfaced by
-  // `mergedProvenanceFacts` (as "PR #123" / "in default") on the merged tier, so
-  // landed status is deliberately NOT repeated here.
+  // Null ahead/behind: render nothing rather than `0 ahead`. Landed-ness is not repeated here.
   return [
     ...(status.ahead !== null && status.ahead > 0
       ? [`${status.ahead} ahead`]

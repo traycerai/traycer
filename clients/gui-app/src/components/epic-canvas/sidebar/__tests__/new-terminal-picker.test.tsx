@@ -91,12 +91,7 @@ function stubLoadedBindings(): void {
   };
 }
 
-// This suite is about the WORKSPACE / terminal-launch list, not the host
-// list, so it mocks `useHostOptions` at the boundary (the same pattern panel
-// suites use for `useHostScope`) rather than standing up the six hooks it
-// composes. The host section itself is now a collapsed `HostSwitcher`
-// trigger (one host here, so its nested popover renders no search box, just
-// the one option row).
+// This suite is about the WORKSPACE / terminal-launch list, not the host list, so it mocks `useHostOptions` at the boundary (the same pattern panel suites use for `useHostScope`) rather than standing up the six hooks it composes.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -115,9 +110,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
 
-// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign
-// P1.2) resolves the picker's own pin row when it has none, so an unmocked
-// authority store would read a null effective host here.
+// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign P1.2) resolves the picker's own pin row when it has none, so an unmocked authority store would read a null effective host here.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-1",
 }));
@@ -156,12 +149,6 @@ function resetCanvas(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 }
 
-// The host section now opts the window into the registry liveness poll, and
-// that hook stands on TanStack Query - so these boundary-mocked suites need a
-// client even though every query in them is disabled (signed-out auth store).
-// ONE client for the wrapper's lifetime: constructing it inside the render
-// would hand `rerender` a fresh client while existing observers stay attached
-// to the old one.
 const testQueryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, gcTime: 0 } },
 });

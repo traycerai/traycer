@@ -126,10 +126,7 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
     const nextLiveWindowIds = new Set(
       bridge.windowRegistry.records().map((record) => record.windowId),
     );
-    // Only a deliberate mid-session close (other windows still open, not
-    // quitting) prunes the durable per-window restore snapshot. A close that is
-    // really a quit/leave gesture must preserve it - see
-    // `shouldPreserveClosedWindowSnapshot`.
+    // A close that is really a quit/leave gesture must preserve it - see `shouldPreserveClosedWindowSnapshot`.
     const preserveClosedSnapshots = shouldPreserveClosedWindowSnapshot({
       quitting: bridge.quitState.isQuitting(),
       remainingWindowCount: nextLiveWindowIds.size,
@@ -160,23 +157,8 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
 }
 
 /**
- * Decides whether a window that just vanished from the registry should KEEP its
- * durable per-window restore snapshot (open epic tabs, pane layout, drafts).
- *
- * Preserve when the close is really a quit/leave gesture:
- *  - `quitting` - the shell has begun quitting (Cmd+Q / "Quit Traycer" / the
- *    auto-update install re-quit). During quit no close should destroy state,
- *    so ALL closing windows are preserved regardless of how many remain.
- *  - `remainingWindowCount === 0` - this was the last remaining window. On
- *    Win/Linux the native `closed` event (and this listener) fire BEFORE
- *    `window-all-closed` -> `app.quit()` -> `before-quit`, so the `quitting`
- *    flag is not yet set on that path; the last-window check covers the race.
- *    On macOS a red-light close of the last window keeps the app alive, and the
- *    snapshot must survive so a later quit -> relaunch, or a dock `activate`,
- *    restores it.
- *
- * Prune only a deliberate mid-session close: another window is still open and
- * the shell is not quitting, so relaunch must not resurrect the closed window.
+ * On macOS a red-light close of the last window keeps the app alive, and the snapshot must survive so a later quit -> relaunch, or a dock `activate`, restores it.
+ * Prune only a deliberate mid-session close: another window is still open and the shell is not quitting, so relaunch must not resurrect the closed window.
  */
 export function shouldPreserveClosedWindowSnapshot(input: {
   readonly quitting: boolean;
@@ -207,10 +189,6 @@ async function openEpicInNewWindow(
     id: movedTabId,
     epicId,
     name: sourceTab?.name ?? title,
-    // A tab keeps the surface it was moved on. Dropping `surfaceMode` here
-    // restored a pending phase-migration tab as the normal Epic surface in the
-    // destination window. Older snapshots legitimately omit the field, so it is
-    // carried only when the source actually had one.
     ...(sourceTab?.surfaceMode === undefined
       ? {}
       : { surfaceMode: sourceTab.surfaceMode }),
@@ -237,11 +215,6 @@ async function openEpicInNewWindow(
         } else {
           bridge.ownership.claim(movedTabId, epicId, windowId);
         }
-        // `IpcPerWindowState.update` is allowed to be synchronous, so it is
-        // invoked inside the `then` callback. Passed directly as the
-        // `Promise.resolve(...)` argument it runs before `.catch` is attached,
-        // and a synchronous throw would escape this handler and abort
-        // `beforeLoad` - failing the whole move over a persistence warning.
         void Promise.resolve()
           .then(() =>
             bridge.perWindowState.update(windowId, {
@@ -299,18 +272,8 @@ async function openEpicInNewWindow(
 }
 
 /**
- * Move a landing DRAFT into its own window. Structurally the epic move minus
- * ownership: a draft's whole substance is its per-window record (content is
- * hash-only editor JSON), so the move IS the relocation of that record - the
- * destination is seeded with it in `beforeLoad`, before its renderer loads.
- * The draft's image BYTES do not travel here: they live in a per-window
- * IndexedDB partition the main process cannot reach, so the renderer stages
- * them in a handoff DB before invoking this (see `landing-image-move.ts`).
- *
- * The source snapshot is trusted as current because the renderer flushes its
- * per-window projection before invoking this - the same barrier the epic move
- * uses. A draft absent from the flushed snapshot is a refused move, never a
- * guess.
+ * The draft's image BYTES do not travel here: they live in a per-window IndexedDB partition the main process cannot reach, so the renderer stages them in a handoff DB before.
+ * A draft absent from the flushed snapshot is a refused move, never a guess.
  */
 async function openDraftInNewWindow(
   bridge: RunnerIpcBridge,
@@ -360,17 +323,6 @@ async function openDraftInNewWindow(
     throw err;
   }
 
-  // The prune is a read-modify-write of whatever the source has projected BY
-  // NOW, not of `sourceSnapshot`: `create` above awaited the destination's
-  // load, and in that gap the source renderer may have projected a newer
-  // snapshot (another draft edited, a new one started). Writing the pre-await
-  // array back wholesale would revert those. Only this draft is removed.
-  //
-  // The active id is nulled rather than pointed at a successor: the source
-  // RENDERER owns successor selection (its `closeRefAfterConfirmed` picks the
-  // neighbouring tab and re-projects), and a successor chosen here would race
-  // that pick. This patch only matters if the source crashes before its own
-  // close runs.
   void Promise.resolve()
     .then(() => {
       const current = bridge.perWindowState.get(sourceWindowId);

@@ -26,27 +26,8 @@ import {
   analyticsBlockerFromError,
 } from "@/lib/analytics";
 
-/**
- * Landing-composer paste/drop ingest. Unlike the shared base64 adapter
- * (`useComposerPasteAdapter`), accepted files are stored content-addressed and
- * inserted as HASH-ONLY nodes, so the persisted landing draft `content` never
- * carries image base64. Bytes go to the per-runtime image store (which also
- * seeds a synchronous session object-URL for flash-free render); the node
- * carries only `{ id, fileName, hash, mimeType, size }`.
- *
- * Drag/drop/paste event handling and the `image/*` + 5MB cap are reused from the
- * shared core (`useComposerPasteEvents` + `collectImages`); only the ingest
- * differs. Chat / new-conversation keep using `useComposerPaste` (base64).
- *
- * The returned reservation (when present) is deliberately NOT released here:
- * `runImageIngest` releases it only after `insertAttrs` has run, so a
- * concurrent admission check during the conversion-to-insertion handoff still
- * sees this batch's bytes charged. On a write failure, every started
- * read/write is awaited (`Promise.allSettled`, not `Promise.all`) before this
- * function releases and re-throws - a `Promise.all`-style short-circuit would
- * release while a slower sibling `putImage` is still landing bytes nothing
- * will ever reference.
- */
+/** Landing paste stores hash-only nodes; draft content never carries image base64.
+ * Do not release the reservation here; await every started write with allSettled before releasing on failure. */
 async function landingImageAttrsFromFiles(
   draftId: string | null,
   files: ReadonlyArray<File>,
@@ -60,12 +41,7 @@ async function landingImageAttrsFromFiles(
     });
   });
   if (accepted.length === 0) return { attrs: [] };
-  // Reserve against this draft's roots (plus every other outstanding
-  // reservation, landing paste or stash import) before storing bytes. A
-  // capacity miss rejects only this attachment; GC never discards another
-  // draft to make room. The hash isn't known until `putImage` hashes the
-  // bytes below, so each candidate reserves anonymously (see
-  // `landing-image-budget.ts`).
+  // A capacity miss rejects only this attachment; GC never discards another draft to make room.
   const reservation = reserveLandingImageBudget(
     draftId,
     accepted.map((file) => ({
@@ -198,21 +174,11 @@ export function useLandingComposerPaste(params: {
   return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
 }
 
-// A base64 clipboard image whose decoded size would exceed the per-image cap is
-// dropped WITHOUT decoding, so a malformed/oversized structured payload can't
-// allocate far beyond the cap. base64 encodes 3 bytes per 4 chars, so
-// `length * 3 / 4` is the decoded size (padding makes this a slight
-// over-estimate, which only ever drops sooner).
+// A base64 clipboard image whose decoded size would exceed the per-image cap is dropped WITHOUT decoding, so a malformed/oversized structured payload can't allocate far beyond the cap.
 const MAX_PASTED_IMAGE_B64_LENGTH = Math.ceil((MAX_IMAGE_BYTES * 4) / 3) + 4;
 
-/**
- * Synchronously validate one structured-paste inline-base64 image and return its
- * bytes, or `null` if it must be rejected. Applies the exact same contract the
- * file pipeline does — encoded-length cap, `image/*` MIME, decode, 5 MB — but
- * WITHOUT building a `File` or inserting, because the in-place paste keeps the
- * node in the document and only needs the raw bytes for the background
- * hash + `putImage` job.
- */
+/** Synchronously validate one structured-paste inline-base64 image and return its bytes, or `null` if it must be rejected.
+ * Applies the exact same contract the file pipeline does - encoded-length cap, `image/*` MIME, decode, 5 MB - but WITHOUT building a `File` or inserting, because the in-place paste keeps the node in the document and only needs the raw bytes for the background hash + `putImage` job. */
 export function decodeValidatedPastedImage(
   image: PastedComposerImage,
 ): Uint8Array<ArrayBuffer> | null {

@@ -3,17 +3,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
 
 /**
- * Deliberately does NOT mock `@/lib/epic-selectors` - the point is the REAL
- * hooks, which throw "useOpenEpicHandle must be called inside
- * <EpicSessionProvider>" when the session handle is absent.
- *
- * That is not a hypothetical: `EpicSessionProvider` renders its children BEFORE
- * it holds a handle (desktop ownership claim, then acquire), and the PR list
- * arrives on its own host stream, which waits for no epic session - so
- * fully-populated rows paint while the context is still null. Every owner chip
- * reads the projection, so the whole subtree has to be session-gated; ungated
- * it took the route's error boundary down and the window showed "Something went
- * wrong". The sibling test file mocks the selectors away and so is blind to it.
+ * Deliberately does NOT mock `@/lib/epic-selectors` - the point is the REAL hooks, which throw "useOpenEpicHandle must be called inside <EpicSessionProvider>" when the session handle is absent.
+ * That is not a hypothetical: `EpicSessionProvider` renders its children BEFORE it holds a handle (desktop ownership claim, then acquire), and the PR list arrives on its own host stream, which waits for no epic session - so fully-populated rows paint while the context is still null.
  */
 afterEach(cleanup);
 

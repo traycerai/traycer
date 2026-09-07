@@ -17,10 +17,8 @@ import {
 } from "@/stores/managed-commands/managed-command-output-store";
 
 /**
- * The viewer half of the Shells surface (`UI.md` §4): one interleaved
- * timeline, opened at the tail and paged backwards on demand. Gaplessness is
- * the host's contract - the client's job is to hand back the position it was
- * given and to append what arrives, in order.
+ * The viewer half of the Shells surface (`UI.md` §4): one interleaved timeline, opened at the tail
+ * and paged backwards on demand.
  */
 
 const COMMAND: ManagedCommand = {
@@ -207,12 +205,8 @@ describe("managed-command output store", () => {
   });
 
   it("does not append while the reader is scrolled back, then resnapshots when follow resumes", () => {
-    // Superseded design: a scrolled-back reader used to keep accumulating
-    // every live frame in the backing array, unbounded by scroll duration or
-    // output rate. It now detaches instead - live output is discarded and
-    // only counted, so the held history the reader is looking at never grows
-    // behind their back; resuming follow re-bases from a fresh tail rather
-    // than replaying everything that was withheld.
+    // It now detaches instead - live output is discarded and only counted, so the held history the
+    // reader is looking at never grows behind their back; resuming follow re-bases from a fresh tail
     const h = harness();
     openAtTail(h);
     h.handle.store.getState().setFollowing(false);
@@ -316,10 +310,7 @@ describe("managed-command output store", () => {
 
     h.emit().onDeleted();
 
-    // The STORE keeps every line it already held; deletion only flips the
-    // flag. What a viewer does with them is the window's own call now (it
-    // shows none, for the terminal `gone` state) - this store makes no claim
-    // about the screen, only about what it retains.
+    // The STORE keeps every line it already held; deletion only flips the flag.
     expect(h.handle.store.getState().deleted).toBe(true);
     expect(texts(h.handle)).toEqual(["tail-1", "tail-2"]);
   });
@@ -441,9 +432,8 @@ describe("managed-command output store", () => {
     h.handle.store.getState().setFollowing(true);
     expect(h.resnapshotCalls()).toBe(1);
 
-    // A page request while a resync is in flight would race the replacement
-    // snapshot; it must be refused rather than queued against a start the
-    // snapshot is about to invalidate.
+    // A page request while a resync is in flight would race the replacement snapshot; it must be
+    // refused rather than queued against a start the snapshot is about to invalidate.
     h.handle.store.getState().loadOlder();
     expect(h.sent).toHaveLength(0);
 
@@ -471,9 +461,8 @@ describe("managed-command output store", () => {
     expect(resynced.resyncPending).toBe(false);
     expect(resynced.newOutputAvailable).toBe(false);
     expect(resynced.timelineGeneration).toBe(generationBeforeResync + 1);
-    // Row identities are never reset by a snapshot: the tile keys its
-    // virtualized rows on `seq`, so a reused id here would misfire its
-    // prepend-anchor correction as if the new tail had been scrolled to.
+    // Row identities are never reset by a snapshot: the tile keys its virtualized rows on `seq`, so a
+    // reused id here would misfire its prepend-anchor correction as if the new tail had been scrolled
     expect(resynced.lines[0].seq).toBeGreaterThan(lastSeqBeforeResync ?? -1);
 
     // Following resumed, so ordinary live output appends again.
@@ -489,9 +478,7 @@ describe("managed-command output store", () => {
     openAtTail(h);
     h.handle.store.getState().setFollowing(false);
 
-    // Every response respects the wire's 500-line page size. No live output
-    // arrives: tail eviction alone must still make the window require a fresh
-    // snapshot, or Jump to live would land on stale history forever.
+    // Every response respects the wire's 500-line page size.
     for (let page = 0; page < 41; page += 1) {
       h.handle.store.getState().loadOlder();
       const request = loadOlderFrame(h.sent[page]);

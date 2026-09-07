@@ -1,19 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deriveActivationState } from "../host-state";
 
-// `activation` is what `runLaunchHostConvergeReconcile` switches on at launch,
-// and oss #913 made `"unavailable"` run `convergeReady`. The load-bearing fact
-// - which nothing tested directly - is what "unavailable" actually MEANS.
-//
-// It is not "the service is unregistered" and not a Windows constant. It is
-// derived purely from `runningRuntimeVersion === null`: NO HOST IS RUNNING.
-// That is why the crashed-host-at-launch case (OSS #916, where the desktop
-// logged `launch converge has no activation debt { activation: 'unavailable' }`
-// against a host that had crash-aborted 12 hours earlier) reaches the same
-// recovery arm as a reinstall that dropped the registration.
-//
-// If this ever narrows to "unregistered", a crashed host silently stops being
-// converged at launch and #916 regresses without any converge test failing.
 
 describe("deriveActivationState", () => {
   it("reports `unavailable` whenever no host is running, whatever is installed", () => {

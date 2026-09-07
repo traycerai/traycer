@@ -8,44 +8,14 @@ import type { Environment } from "../runner/environment";
 import { readLiveProcessStartTimeMs } from "../store/process-identity";
 import { readHostPidMetadata } from "./pid-metadata";
 
-// pid.json's `startedAt` is the time the host published readiness, not its OS
-// process-creation time. On POSIX, `ps -o etime=` truncates elapsed time to
-// whole seconds; reconstructing a wall-clock start from that value can land
-// nearly 1s AFTER the real start. Keep a 250ms scheduling/read margin beyond
-// that known resolution limit.
+// pid.json's `startedAt` is the time the host published readiness, not its OS process-creation time.
+// On POSIX, `ps -o etime=` truncates elapsed time to whole seconds; reconstructing a wall-clock start from that value can land nearly 1s AFTER the real start.
 export const PROCESS_START_PUBLICATION_ALLOWANCE_MS = 1_250;
 
-// Deliberate residual, matching the ticket-1 break-lock availability trade:
-// a PID recycled onto a process that starts within this allowance after the
-// observed publication can be accepted and stamped. A zero allowance would
-// routinely false-supersede fast genuine publishers because of `ps`'s
-// truncation, stranding their records in activationUnknown. Closing the rare
-// false-accept requires a process-asserted instance token in pid.json, which
-// is a traycer-host format change and deliberately out of scope here.
+// Deliberate residual, matching the ticket-1 break-lock availability trade: a PID recycled onto a process that starts within this allowance after the observed publication can be accepted and stamped.
+// A zero allowance would routinely false-supersede fast genuine publishers because of `ps`'s truncation, stranding their records in activationUnknown.
 
-// `host stamp-runtime` (hidden, internal) - the guarded compare-and-set
-// that closes the `activationUnknown` debt (Host Update Layer Redesign
-// Tech Plan, "Unknown runtime identity - two domains, never mixed" >
-// "Unknown runtime identity - `activationUnknown` debt + one-time
-// backfill"). The controller invokes this ONLY immediately after an
-// activation cycle IT drove observes readiness of the fresh process,
-// passing the install-generation fingerprint it ATTESTED from that
-// cycle's own result (never a racy disk read - see `applyHost`'s
-// `installGeneration`) plus the readiness identity it just observed
-// (pid.json's own pid/startedAt/version).
-//
-// Stamps `runtimeVersion` only on a full match: the record's stamp is
-// still null, its generation matches the expected fingerprint, and a
-// FRESH re-read of pid.json still carries exactly the observed pid,
-// startedAt, and version. Any mismatch is a structured `superseded`
-// no-op - a terminal null-runtime bytes-only install (or an
-// uninstall/reinstall) landing between the controller's readiness
-// observation and this call must not inherit an unrelated process's
-// stamp; its own debt survives for the next activation moment.
-//
-// Concurrency: like `applyHost`/`installHost`, this assumes the caller
-// already holds the environment's `cli-lock` - see
-// `commands/host-stamp-runtime.ts`.
+// Guarded compare-and-set of the runtime stamp. Fail closed on an unreadable current value.
 export interface StampRuntimeOptions {
   readonly environment: Environment;
   readonly expectedInstallGeneration: string;
@@ -138,11 +108,8 @@ export async function stampRuntime(
     return { outcome: "superseded", reason: "pid-evidence-mismatch" };
   }
 
-  // pid.json's timestamp marks publication/readiness and may be many seconds
-  // later than process creation, so it must NOT be passed through
-  // `verifyProcessIdentity`'s approximate-equality test. A fresh process
-  // occupying a recycled PID necessarily began after this observed
-  // publication; a genuine publisher began at or before it.
+  // pid.json's timestamp marks publication/readiness and may be many seconds later than process creation, so it must NOT be passed through `verifyProcessIdentity`'s approximate-equality test.
+  // A fresh process occupying a recycled PID necessarily began after this observed publication; a genuine publisher began at or before it.
   const publishedAtMs = Date.parse(opts.observedStartedAt);
   const processStartedAtMs = readLiveProcessStartTimeMs(opts.observedPid);
   if (

@@ -3,16 +3,7 @@ import {
   readMermaidPalette,
 } from "./mermaid-theme";
 
-/**
- * Thin façade over the lazily-imported `mermaid` package. Centralising the
- * loader means (a) only one editor pays the ~400 kB import cost, (b) the
- * dark-mode MutationObserver is wired once per document, and (c) render /
- * export helpers share the same singleton instance.
- *
- * All exported functions are `async` and idempotent: they await
- * `ensureReady()` up front, which kicks off the dynamic import the first
- * time and returns the cached module thereafter.
- */
+/** Lazy mermaid façade. All exports await `ensureReady()` so the import is a singleton. */
 
 type MermaidModule = (typeof import("mermaid"))["default"];
 
@@ -39,36 +30,21 @@ function notifyThemeChange(): void {
 }
 
 /**
- * Snapshot for `useSyncExternalStore`. Increments on every theme flip so
- * subscribers can re-render when the value changes. Stable across renders
- * when the theme hasn't changed, so concurrent React reads stay consistent.
+ * useSyncExternalStore snapshot. Increments on theme flip; stable otherwise.
  */
 export function getMermaidThemeVersion(): number {
   return themeVersion;
 }
 
-/**
- * Reinitialise mermaid with fresh theme variables sampled from the document
- * root. Safe to call repeatedly; mermaid merges the config on each call.
- */
+/** Reinitialise mermaid with fresh theme variables sampled from the document root. Safe to call repeatedly; mermaid merges the config on each call. */
 function applyTheme(mermaid: MermaidModule, doc: Document): void {
   const palette = readMermaidPalette(doc);
   const themeVariables = buildMermaidThemeVariables(palette);
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
-    // Without `suppressErrorRendering`, mermaid's `render()` injects an
-    // "error diagram" SVG (the one with "Syntax error in text" / "mermaid
-    // version X.Y.Z") into a temporary `<div id="d{id}">` on `document.body`
-    // BEFORE rethrowing. The temp div is only removed on the success path -
-    // on failure it stays in the DOM (mermaid bug, see esm.mjs:1502→1509,
-    // never reaches the cleanup at 1533). With streaming markdown the LLM
-    // emits one mermaid fence whose body grows token-by-token; each delta
-    // triggers a render against syntactically incomplete code, leaks a div,
-    // and the page accumulates an infinite scroll of error SVGs.
-    // `suppressErrorRendering: true` flips the early-throw branch
-    // (esm.mjs:1485-1488) so the temp div is removed and the error
-    // propagates cleanly to our caller, which renders its own error UI.
+    // mermaid render() leaks a body error-SVG div on throw; suppressErrorRendering
+    // removes it so streaming incomplete fences do not pile up.
     suppressErrorRendering: true,
     theme: "base",
     themeVariables,
@@ -78,10 +54,7 @@ function applyTheme(mermaid: MermaidModule, doc: Document): void {
 }
 
 /**
- * Attach a single MutationObserver to `html` that reacts to `class`
- * changes (next-themes toggles `dark` here). Because mermaid's config is
- * global, one observer is enough - all mounted NodeViews share the same
- * initialized module.
+ * One html class observer for next-themes dark toggles; mermaid config is global.
  */
 function ensureDarkObserver(mermaid: MermaidModule, doc: Document): void {
   if (darkObserver !== null) return;
@@ -97,9 +70,7 @@ function ensureDarkObserver(mermaid: MermaidModule, doc: Document): void {
 }
 
 /**
- * Lazy-load mermaid on first request. Subsequent calls return the same
- * cached promise; failures re-throw so callers can render their error
- * fallback.
+ * Lazy-load mermaid; reuse the cached promise. Failures re-throw.
  */
 export function ensureMermaidReady(): Promise<ReadyState> {
   if (readyPromise !== null) return readyPromise;
@@ -119,10 +90,7 @@ export function ensureMermaidReady(): Promise<ReadyState> {
   return readyPromise;
 }
 
-/**
- * Subscribe to theme-change notifications. The returned function detaches
- * the listener - NodeViews call this in an effect cleanup.
- */
+/** Subscribe to theme-change notifications. The returned function detaches the listener - NodeViews call this in an effect cleanup. */
 export function subscribeMermaidTheme(cb: () => void): () => void {
   themeChangeListeners.add(cb);
   return () => {
@@ -130,10 +98,7 @@ export function subscribeMermaidTheme(cb: () => void): () => void {
   };
 }
 
-/**
- * Syntax-validate mermaid source. Mermaid's `parse` throws on invalid
- * syntax with a `message` on the error - we surface it as-is.
- */
+/** Syntax-validate mermaid source. Mermaid's `parse` throws on invalid syntax with a `message` on the error - we surface it as-is. */
 export async function parseMermaid(code: string): Promise<void> {
   const { mermaid } = await ensureMermaidReady();
   await mermaid.parse(code);
@@ -143,11 +108,7 @@ export interface MermaidRenderResult {
   readonly svg: string;
 }
 
-/**
- * Render the diagram to an SVG string. The `id` must be unique per call
- * (mermaid uses it as the root element id inside the SVG) - we append a
- * monotonic counter so concurrent renders in split-pane views don't clash.
- */
+/** id must be unique per call (SVG root id). Append a counter so split-pane renders do not clash. */
 let renderCounter = 0;
 export async function renderMermaidSvg(
   code: string,
@@ -163,15 +124,7 @@ export async function renderMermaidSvg(
   }
 }
 
-/**
- * Defense-in-depth sweep for stranded mermaid render containers. Mermaid's
- * `render(id, text)` injects a `<div id="d{id}">` into `document.body` for
- * measurement; on the success path it removes the div, but historically
- * (and on certain error branches) the cleanup was skipped, leaving the
- * rendered error SVG visible in the page. `suppressErrorRendering: true` in
- * `applyTheme()` covers the canonical syntax-error case - this function
- * handles anything else that escapes (`d{id}`, sandbox iframe `i{id}`).
- */
+/** Sweep leftover mermaid body containers (`d{id}`, sandbox `i{id}`) that suppressErrorRendering does not cover. */
 function sweepStrandedMermaidContainers(id: string): void {
   if (typeof document === "undefined") return;
   document.getElementById(`d${id}`)?.remove();
@@ -183,13 +136,7 @@ export interface SvgIntrinsicSize {
   readonly height: number;
 }
 
-/**
- * Resolve an SVG's natural pixel dimensions from its `viewBox` and root
- * `width`/`height` attributes. Pixel-valued width/height override the
- * viewBox when present. Relative units (`100%`, `50vw`, etc.) are ignored
- * - mermaid emits `width="100%"` so naive `parseFloat` would silently
- * collapse to `100`. Falls back to 1024x768 when nothing is parseable.
- */
+/** Pixel width/height override viewBox. Ignore relative units - mermaid emits width="100%" so parseFloat would collapse to 100. Fallback 1024x768. */
 export function getSvgIntrinsicSize(svg: string): SvgIntrinsicSize {
   const root = new DOMParser().parseFromString(
     svg,
@@ -220,17 +167,7 @@ function parsePixelLength(value: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Convert mermaid's lenient-HTML SVG output to strict-XML form so it can
- * be loaded via `data:image/svg+xml`. Mermaid emits HTML void elements
- * unclosed (`<br>`, not `<br/>`) inside `<foreignObject>` labels - the
- * live DOM accepts that under the HTML parser, but the data-URI MIME
- * forces the strict XML parser, which rejects the open tag with
- * `unexpected close tag` and fails the `<img>` load (silent
- * `image.onerror`). Round-tripping through `innerHTML` (HTML mode →
- * builds a proper SVG/XHTML tree) and `XMLSerializer` (emits closed
- * tags) yields parser-clean XML without hand-rolling a tag list.
- */
+/** Mermaid SVG is HTML-lenient (`<br>`); data:image/svg+xml needs closed tags. innerHTML then XMLSerializer, not a hand-rolled tag list. */
 function makeSvgXmlSafe(svg: string): string {
   const wrapper = document.createElement("div");
   wrapper.innerHTML = svg;
@@ -246,16 +183,7 @@ export interface SvgToPngParams {
   readonly scale?: number;
 }
 
-/**
- * Rasterise an SVG string to a PNG Blob via an offscreen `<canvas>`. The
- * background is painted first so dark-mode diagrams don't export with a
- * transparent background that looks broken on light chat clients.
- *
- * The intermediate `<img>` is fed via a `data:` URI rather than a `blob:`
- * URL - Electron / Tauri / strict-CSP shells in the desktop app block
- * `blob:` under `img-src 'self' data:`, so the data-URI form is the only
- * one that consistently works across all targets.
- */
+/** Paint background first so dark diagrams do not export transparent. data: URI, not blob: - desktop img-src blocks blob:. */
 export async function svgToPngBlob(params: SvgToPngParams): Promise<Blob> {
   const { svg, backgroundColor, scale = 2 } = params;
   const { width, height } = getSvgIntrinsicSize(svg);
@@ -270,13 +198,8 @@ export async function svgToPngBlob(params: SvgToPngParams): Promise<Blob> {
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Inline the SVG via `data:` URI. `blob:` URLs are blocked by the
-  // desktop shell's CSP (`img-src 'self' data:`); the data form is
-  // CSP-clean and same-origin, so `canvas.toBlob` won't taint either.
-  // `encodeURIComponent` covers `#`, `%`, `<`, `>` - the chars that
-  // would otherwise break parsing. The XML-safe pass closes mermaid's
-  // unclosed HTML void tags so the strict XML parser does not reject
-  // the data URI.
+  // data: URI, not blob: (desktop img-src). XML-safe pass closes void tags
+  // so the strict XML parser accepts the URI.
   const safe = makeSvgXmlSafe(svg);
   const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(safe)}`;
   const image = new Image();

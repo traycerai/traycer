@@ -87,9 +87,8 @@ import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-past
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 
 /**
- * Hint shown inside the empty leading title heading of a freshly seeded
- * hand-created artifact. Kind-agnostic - the body hint below already carries
- * the per-kind guidance.
+ * Hint shown inside the empty leading title heading of a freshly seeded hand-created artifact.
+ * Kind-agnostic - the body hint below already carries the per-kind guidance.
  */
 const ARTIFACT_TITLE_PLACEHOLDER = "Untitled";
 
@@ -132,11 +131,8 @@ function artifactPasteHandlers(
 }
 
 /**
- * Shared body for spec / ticket / story tiles. Resolves the node's
- * `Y.XmlFragment` from the per-Epic Y.Doc and wires it into a live Tiptap
- * editor with collaboration + caret presence. Re-gates `editable` whenever
- * the user's permission role changes so a viewer-downgrade synchronously
- * locks the surface.
+ * Shared body for spec / ticket / story tiles.
+ * Resolves the node's `Y.XmlFragment` from the per-Epic Y.Doc and wires it into a live Tiptap editor with collaboration + caret presence.
  */
 export function CollabTileBody(props: CollabTileBodyProps) {
   // `useEpicArtifactFragment` takes the artifact-room lease itself, which is
@@ -151,39 +147,8 @@ export function CollabTileBody(props: CollabTileBodyProps) {
   const fragmentDoc = fragment?.doc ?? null;
 
   /**
-   * Latched, because the question this tile has is "has this body EVER been
-   * answered", and the map underneath can go back to empty:
-   * `dropAllOnViewerDowngrade` clears every entry at once. That is a DROP, and
-   * a drop is something the reader should be told about - without the latch it
-   * would read as "not asked yet" and hold the placeholder for the full 15 s
-   * tile budget.
-   *
-   * Both arms clear the map on a downgrade, by different routes, and the
-   * routes differ in what happens NEXT - which is what this latch is really
-   * reading. `@1` runs `rooms.dropAllOnViewerDowngrade()` from
-   * `applyRootSnapshot` and then stays down, keeping no body state at all; the
-   * lane arm runs `applyPermissionChanged` -> `requestFreshSnapshot()` ->
-   * `rooms.reset(...)`, which clears the same map and then RE-SUBSCRIBES as a
-   * viewer. So on `@1` the latch reports a durable drop, and on lanes it
-   * reports a window that is about to be answered again.
-   *
-   * The derived-state idiom (`use-load-deadline.ts` uses the same shape for
-   * the same reason): seeded from the CURRENT answer, so a tile that mounts
-   * onto an already-refused body states it on its first frame instead of
-   * flashing a placeholder, and advanced by a guarded render-phase set rather
-   * than an effect, so there is no commit in which the latch disagrees with
-   * what is on screen. A remount resets it, which is correct - a fresh tile
-   * genuinely has no answer of its own yet.
-   *
-   * Do not remove the latch on the grounds that it over-reports. It does: the
-   * downgrade is not the only path that empties the map - `resetInternal`
-   * (replace-replica, resume-too-old, reseed, teardown) does too, and through
-   * that window the latch keeps saying the host refused this document while a
-   * legitimate re-subscribe is in flight. That window reads exactly the same
-   * on HEAD, so the latch RETAINS a wrong state rather than introducing one,
-   * and dropping it would trade the drop case for the reseed case rather than
-   * fix anything. Telling the two apart needs a signal the body plane does not
-   * currently send.
+   * That is a DROP, and a drop is something the reader should be told about - without the latch it would read as "not asked yet" and hold the placeholder for the full 15 s tile budget.
+   * The derived-state idiom (`use-load-deadline.ts` uses the same shape for the same reason): seeded from the CURRENT answer, so a tile that mounts onto an already-refused body states it on its first frame instead of flashing a placeholder, and advanced by a guarded render-phase set rather than an effect, so there is no commit in which the latch disagrees with what is on screen.
    */
   const [bodyAnsweredOnce, setBodyAnsweredOnce] = useState(
     bodySubscribeAnswered,
@@ -197,9 +162,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
     fragment === null ||
     fragmentDoc === null ||
     artifactRoomAwareness === null;
-  // Invariant 6. The artifact room is doc-scoped rather than host-scoped, so
-  // this bounds on the node itself rather than reaching for a host lease -
-  // there is no host here whose name would tell the reader anything.
+  // The artifact room is doc-scoped rather than host-scoped, so this bounds on the node itself rather than reaching for a host lease - there is no host here whose name would tell the reader anything.
   const loadBudgetElapsed = useLoadDeadline(
     bodyPending ? props.node.id : null,
     TILE_CONTENT_BUDGET_MS,
@@ -227,25 +190,8 @@ export function CollabTileBody(props: CollabTileBodyProps) {
 }
 
 /**
- * The three pre-editor states, which used to be ONE.
- *
- * `unavailable` and `loading` rendered byte-identical markup - the same three
- * pulsing bars - distinguished only by a `data-testid` suffix no reader can
- * see. So a document whose room the host had refused looked exactly like a
- * document that was about to appear, and the only way to tell them apart was
- * to keep waiting: indefinitely, since neither state ended.
- *
- * Now each says which one it is, and the wait has a deadline (invariant 6).
- * The pulsing bars are kept for the short, genuinely-loading window - they
- * are a good placeholder for content that is coming - and retired the moment
- * the answer is anything else.
- *
- * "The answer", precisely: `subscribeAnswered` is false until the body plane
- * has stated something about this artifact, and an UNANSWERED tile is a
- * loading one however `bodyAvailability` reads. The two are separate props
- * rather than one pre-collapsed value so the DOM carries both - a tile that
- * looks stuck can be told apart from one that was refused without re-running
- * the app.
+ * `unavailable` and `loading` rendered byte-identical markup - the same three pulsing bars - distinguished only by a `data-testid` suffix no reader can see.
+ * So a document whose room the host had refused looked exactly like a document that was about to appear, and the only way to tell them apart was to keep waiting: indefinitely, since neither state ended.
  */
 function CollabTileSkeleton(props: {
   readonly testId: string;
@@ -336,17 +282,9 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const hoverThreadId = useHoverThreadId(epicId);
   const flashThread = useFlashThread(epicId);
   const draft = useDraftRange(epicId);
-  // The artifact this tile edits is served by the TAB's host, so its threads
-  // are read (and its comments written) on that client - never the app-wide
-  // one, which answers a different machine mid re-point (D15). Resolved once
-  // here and handed to both comment popovers so all three share one cache key.
+  // The artifact this tile edits is served by the TAB's host, so its threads are read (and its comments written) on that client - never the app-wide one, which answers a different machine mid re-point (D15).
   const tabHostClient = useTabHostClient();
-  // The byte scope for images inside THIS artifact's body. On the lane arm the
-  // root doc is never seeded, so its `attachments` map cannot answer and the
-  // node view asks the host instead; the id pair is the authorization subject
-  // that read is checked against. Resolved once per tile for the same reason
-  // the chat tile resolves its own: a body can hold many images, and resolving
-  // per image would put a directory query observer behind every one.
+  // On the lane arm the root doc is never seeded, so its `attachments` map cannot answer and the node view asks the host instead; the id pair is the authorization subject that read is checked against.
   const artifactAttachmentScope = useArtifactAttachmentScopeValue(
     epicId,
     node.id,
@@ -364,12 +302,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     options: { enabled: commentsSupported, laneDroppedAt },
   });
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
-  // The state lane's records for this artifact, or `null` where it has said
-  // nothing. Resolved once here and fed to the decoration sets AND the hover
-  // preview below, because they must agree by construction: a thread the
-  // preview can show while `liveThreadIds` has never heard of it is a thread
-  // whose anchor the decoration layer strips as an orphan, leaving nothing to
-  // hover.
+  // Resolved once here and fed to the decoration sets AND the hover preview below, because they must agree by construction: a thread the preview can show while `liveThreadIds` has never heard of it is a thread whose anchor the decoration layer strips as an orphan, leaving nothing to hover.
   const laneThreads = useEpicLaneCommentThreads(node.id);
   const commentThreads = useMemo(
     () =>
@@ -391,13 +324,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       ),
     [commentThreads.threads],
   );
-  // `null` until SOME source resolves the thread list so we don't transiently
-  // treat every anchor as orphan during initial load - and a lane that has said
-  // nothing about this artifact is not such a source, which is why this reads
-  // the resolved value rather than the lane slice. Once loaded, anchors whose
-  // `threadId` is missing from this set get filtered out of the decoration
-  // layer - a defense against historical orphan marks left in production docs
-  // before the host-side strip shipped.
+  // `null` until SOME source resolves the thread list so we don't transiently treat every anchor as orphan during initial load - and a lane that has said nothing about this artifact is not such a source, which is why this reads the resolved value rather than the lane slice.
+  // Once loaded, anchors whose `threadId` is missing from this set get filtered out of the decoration layer - a defense against historical orphan marks left in production docs before the host-side strip shipped.
   const liveThreadIds = useMemo<ReadonlySet<string> | null>(
     () =>
       commentThreads.threads === null
@@ -413,11 +341,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     [draft, tileId, node.id],
   );
 
-  // Stable callback for the keymap extension. Reads via closure; the
-  // extension caches it on `this.options` so a callback identity flip
-  // would NOT reach it without rebuilding the editor - keeping the deps
-  // tight to the tile/node owner so the saved draft cannot leak to a
-  // sibling pane in the same Epic.
+  // Reads via closure; the extension caches it on `this.options` so a callback identity flip would NOT reach it without rebuilding the editor - keeping the deps tight to the tile/node owner so the saved draft cannot leak to a sibling pane in the same Epic.
   const onCommentShortcut = useMemo<
     ((editor: Editor) => boolean) | null
   >(() => {
@@ -430,10 +354,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       ).started;
   }, [commentsSupported, epicId, viewTabId, tileId, node.id, setDraft]);
 
-  // A container (any artifact with children) renders its child index below the
-  // body, so the empty-doc authoring placeholder ("Describe what you want to
-  // build…") both fights that index and prompts the wrong thing. Suppress it
-  // when children exist; the body stays editable for an optional overview.
+  // A container (any artifact with children) renders its child index below the body, so the empty-doc authoring placeholder ("Describe what you want to build…") both fights that index and prompts the wrong thing.
+  // Suppress it when children exist; the body stays editable for an optional overview.
   const hasChildren = useChildIdsOf(node.id).length > 0;
   const kindPlaceholder = isEpicArtifactKind(node.type)
     ? EPIC_NODE_PLACEHOLDER_TEXT[node.type]
@@ -451,9 +373,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   });
   const artifactImagePaste = useArtifactImagePaste(editor, epicId, node.id);
 
-  // Notion-style title inheritance: a hand-created artifact whose title still
-  // follows the doc renames itself from the leading `# ` heading as the user
-  // types, so the tab / sidebar title mirrors the document title.
+  // Notion-style title inheritance: a hand-created artifact whose title still follows the doc renames itself from the leading `# ` heading as the user types, so the tab / sidebar title mirrors the document title.
   useArtifactDocTitleFollow({
     editor,
     epicId,
@@ -462,17 +382,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     editable,
   });
 
-  // One-shot handoff from the create flows: when this tile exists because the
-  // user just hand-created an empty spec/ticket/story/review, seed the
-  // Notion-style title line (an empty `# ` heading + body paragraph) and drop
-  // the caret into the title so the user types a title first - which the tab
-  // then follows via `useArtifactDocTitleFollow`. Gated on `isActive` so a
-  // user who tabbed away mid-create doesn't get focus yanked. Emptiness is
-  // checked BEFORE consuming the token: content can land in the Y.Doc ahead
-  // of this effect, and a doc that already has content must not silently burn
-  // the request (nor get a stray heading prepended). The token is set only by
-  // the manual "+" create flow on the creating client, so no collaborator
-  // races in a second heading.
+  // Emptiness is checked BEFORE consuming the token: content can land in the Y.Doc ahead of this effect, and a doc that already has content must not silently burn the request (nor get a stray heading prepended).
+  // The token is set only by the manual "+" create flow on the creating client, so no collaborator races in a second heading.
   useEffect(() => {
     if (editor === null) return;
     if (!isActive || !editable) return;
@@ -580,11 +491,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     ownedDraftRange,
   ]);
 
-  // Anchor positions: the `AnchorReporter` Tiptap extension (mounted by
-  // `useCollabTileEditor` when `anchorScope` is non-null) writes into
-  // `useAnchorPositionsStore` on every editor transaction. We only need
-  // an unmount-time cleanup here so a closed tile's bucket doesn't outlive
-  // the editor instance.
+  // We only need an unmount-time cleanup here so a closed tile's bucket doesn't outlive the editor instance.
   const clearAnchorPositions = useAnchorPositionsStore(
     (s) => s.clearForArtifact,
   );
@@ -612,24 +519,19 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const onScroll = useCallback(
     (event: UIEvent<HTMLDivElement>): void => {
       onScrollRestoration(event);
-      // Pure arithmetic against the rail's cached heading offsets - kept on
-      // this existing handler so the rail never attaches a scroll listener of
-      // its own (the lesson the chat rail's own consolidation encodes).
+      // Pure arithmetic against the rail's cached heading offsets - kept on this existing handler so the rail never attaches a scroll listener of its own (the lesson the chat rail's own consolidation encodes).
       headingMinimapRefreshRef.current();
       if (editor === null || ownedDraftRange !== null || linkPopoverOpen) {
         return;
       }
       // TipTap's native BubbleMenu scroll listener is trailing-debounced.
-      // Drive its documented escape hatch from this existing handler so the
-      // selection toolbar tracks every native tile scroll event immediately.
+      // Drive its documented escape hatch from this existing handler so the selection toolbar tracks every native tile scroll event immediately.
       updateArtifactToolbarPosition(editor);
     },
     [editor, linkPopoverOpen, onScrollRestoration, ownedDraftRange],
   );
 
-  // The heading rail is a sibling of the scroller, not a child: the scroller is
-  // its own positioning context, so an overlay inside it would scroll away with
-  // the document instead of holding the tile edge.
+  // The heading rail is a sibling of the scroller, not a child: the scroller is its own positioning context, so an overlay inside it would scroll away with the document instead of holding the tile edge.
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
       <ArtifactHeadingMinimapMount
@@ -721,15 +623,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
 }
 
 /**
- * Gate for the heading rail, kept out of `CollabTileBodyEditor` so its two
- * conditions do not count against that component's complexity ceiling. Only
- * artifact kinds get an outline - a workspace file tile shares this body but
- * is not a document with a heading skeleton.
- *
- * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
- * bar existed - the rail is the only consumer there. On a phone viewport it
- * stays mounted and suppresses only its own rail, because the tile bar's
- * button reads the outline it registers and does not obey `hide`.
+ * Gate for the heading rail, kept out of `CollabTileBodyEditor` so its two conditions do not count against that component's complexity ceiling.
+ * Only artifact kinds get an outline - a workspace file tile shares this body but is not a document with a heading skeleton.
  */
 function ArtifactHeadingMinimapMount(props: {
   readonly editor: Editor | null;

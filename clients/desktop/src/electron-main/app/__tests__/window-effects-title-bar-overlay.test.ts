@@ -11,13 +11,6 @@ import {
 import type { IpcMainInvokeEvent } from "electron";
 import { handleSetTitleBarOverlay } from "../window-effects";
 
-/**
- * On Windows the native min/max/close controls are drawn by Electron from the
- * `titleBarOverlay` colors. `handleSetTitleBarOverlay` lets the renderer push
- * theme-derived colors so the controls follow the active theme instead of the
- * static dark launch defaults. It is Windows-only (mac uses the WCO with
- * OS-drawn glyphs; Linux uses default chrome).
- */
 
 const setTitleBarOverlay = vi.fn();
 const fromWebContents = vi.fn();

@@ -61,9 +61,8 @@ export function revealDiffFindMatches(args: {
   readonly scrollContainer: HTMLElement;
   readonly matches: ReadonlyArray<DiffFindMatch>;
   readonly activeMatch: DiffFindMatch | null;
-  // User-initiated reveal (search/next/previous) scrolls the active match into
-  // view; a section-mount repaint paints in place and passes `false` so a row
-  // becoming available cannot yank the viewport.
+  // User-initiated reveal (search/next/previous) scrolls the active match into view; a section-mount repaint
+  // paints in place and passes `false` so a row becoming available cannot yank the viewport.
   readonly scrollActiveIntoView: boolean;
 }): TileFindExactHighlight {
   clearDiffFindHighlights(args.scrollContainer);
@@ -120,12 +119,7 @@ function findDiffUnitElements(
   unit: DiffFindUnit,
 ): ReadonlyArray<HTMLElement> {
   if (unit.kind === "file") {
-    // File-level (metadata) units have no paintable element today:
-    // `data-diff-find-file` lives only on the bundle section root (excluded by
-    // `querySelectorAll`) and single-file mode has no such element, so this
-    // resolves nothing in either mode. It is kept so every unit kind flows
-    // through one lookup; the empty result drives an honest `"none"` highlight
-    // (navigation/scroll for file matches happens in the caller, not here).
+    // File-level (metadata) units have no paintable element today.
     return queryElementsByDataAttribute({
       root: scrollContainer,
       attributeName: "data-diff-find-file",

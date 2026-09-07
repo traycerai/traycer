@@ -66,10 +66,8 @@ import { HOST_RESTARTING_FATAL_CODE } from "@traycer/protocol/framework/index";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 /**
- * StubWebSocket - fully scriptable `StreamWebSocketLike` mirror of the
- * text+binary WS surface. Every inbound event is fired explicitly from the
- * test so the stream client's state machine is exercised deterministically
- * without resorting to real timers.
+ * StubWebSocket - fully scriptable `StreamWebSocketLike` mirror of the text+binary WS surface.
+ * Every inbound event is fired explicitly from the test so the stream client's state machine is exercised deterministically without resorting to real timers.
  */
 class StubStreamWebSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -80,9 +78,7 @@ class StubStreamWebSocket implements StreamWebSocketLike {
   readonly textSent: string[] = [];
   readonly binarySent: Uint8Array[] = [];
   /**
-   * Ordered record of every frame the client emitted - strings for text
-   * envelopes, `Uint8Array` for binary payloads. Lets tests assert exact
-   * interleaving across the wire.
+   * Ordered record of every frame the client emitted - strings for text envelopes, `Uint8Array` for binary payloads.
    */
   readonly wire: Array<string | Uint8Array> = [];
   closed: { readonly code: number; readonly reason: string } | null = null;
@@ -165,28 +161,15 @@ function makeFactory(): {
 }
 
 /**
- * Bound and cadence for {@link pollUntil}. The budget is far longer than any
- * backoff rung these suites configure, so it only ever expires on a genuine
- * hang - it is a failure message, not a timing assumption.
+ * Bound and cadence for {@link pollUntil}.
+ * The budget is far longer than any backoff rung these suites configure, so it only ever expires on a genuine hang - it is a failure message, not a timing assumption.
  */
 const POLL_BUDGET_MS = 2_000;
 const POLL_STEP_MS = 5;
 
 /**
- * Waits for something to HAPPEN, instead of betting it happened inside a fixed
- * sleep.
- *
- * `await wait(30)` followed by `expect(sockets).toHaveLength(1)` — or worse,
- * `sockets[0].socket.fireOpen()` — is the shape behind this file's known
- * intermittent failures: the sleep loses the race against a backoff redial and
- * the test either indexes a socket that does not exist yet or reads a count
- * that has not caught up. These suites run on REAL timers, so that race is
- * decided by machine load, and every test added to the file makes it likelier.
- *
- * Every POSITIVE claim ("a dial happened", "the park installed its listener")
- * goes through this. NEGATIVE claims ("nothing dialed", "never closed") keep
- * their fixed `wait`, because there the elapsed time IS the assertion and
- * polling would weaken it.
+ * Waits for something to happen, instead of betting it happened inside a fixed sleep.
+ * Negative claims ("nothing dialed", "never closed") keep their fixed `wait`, because there the elapsed time IS the assertion and polling would weaken it.
  */
 async function pollUntil(
   label: string,
@@ -202,14 +185,6 @@ async function pollUntil(
   throw new Error(`timed out after ${POLL_BUDGET_MS}ms waiting for ${label}`);
 }
 
-/**
- * The socket for dial number `index`, once it exists.
- *
- * Indexed rather than "the most recent", which is the other half of the same
- * hazard: a loop that grabs `sockets[sockets.length - 1]` before the next dial
- * has landed silently re-drives the PREVIOUS socket, so the test appears to run
- * its cycles while actually running one of them twice.
- */
 async function nthSocket(
   sockets: RecordedSocket[],
   index: number,
@@ -262,9 +237,7 @@ function makeRequestContext(bearer: string): RequestContext {
 }
 
 /**
- * A client whose bearer can be rotated in place via the returned `ctx`, so
- * `credentialUpdate` tests can refresh the credential and assert what the client
- * pushes onto the open session.
+ * A client whose bearer can be rotated in place via the returned `ctx`, so `credentialUpdate` tests can refresh the credential and assert what the client pushes onto the open session.
  */
 function makeRotatableClient(
   factory: IStreamWebSocketFactory,
@@ -296,12 +269,6 @@ function makeRotatableClient(
   return { client, ctx };
 }
 
-/**
- * A client whose evidence reporter and dialed endpoint are both caller-
- * controlled - suite D's restart-tombstone tests need a recording reporter
- * (not `NO_TRANSPORT_EVIDENCE`), and the identity-pin test additionally needs
- * to repoint `endpoint()` mid-connection.
- */
 function makeClientWithEvidence(options: {
   readonly factory: IStreamWebSocketFactory;
   readonly authToken: string | null;
@@ -310,9 +277,7 @@ function makeClientWithEvidence(options: {
 }): WsStreamClient<typeof hostStreamRpcRegistry> {
   const ctx =
     options.authToken === null ? null : makeRequestContext(options.authToken);
-  // The hostId the memo seed would key on - taken once at construction, from
-  // whatever this call's endpoint currently resolves to, same as production
-  // resolves it from the already-selected target rather than the endpoint.
+  // The hostId the memo seed would key on - taken once at construction, from whatever this call's endpoint currently resolves to, same as production resolves it from the already-selected target rather than the endpoint.
   const hostId = options.endpoint()?.hostId ?? null;
   return new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
@@ -340,16 +305,8 @@ async function flush(): Promise<void> {
 }
 
 /**
- * Drives the handshake portion of the state machine forward: fires open,
- * parses the emitted `open` envelope into the manifest, then fires an
- * `openAck` that echoes that manifest so the mirror compatibility check
- * passes. Returns after the `subscribe` frame has been emitted.
- */
-/**
- * Read from the LIVE registry rather than hardcoded, because
- * `completeHandshake` echoes the client's own manifest back: pinning a literal
- * minor here would make every future `git.subscribeStatus` bump fail a test
- * that is about per-session ROUTING, not about any particular version.
+ * Drives the handshake portion of the state machine forward: fires open, parses the emitted `open` envelope into the manifest, then fires an `openAck` that echoes that manifest so the mirror compatibility check passes.
+ * Returns after the `subscribe` frame has been emitted.
  */
 const GIT_STATUS_VERSION = {
   major: 1,
@@ -431,19 +388,12 @@ describe("WsStreamClient", () => {
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.kind).toBe("open");
     expect(openFrame.token).toBe("token-abc");
-    // The open frame's manifest is the client's raw canonical - no per-method
-    // substitution needed. A same-major minor skew (e.g. host-v1.0.0's
-    // chat.subscribe@1.0 vs this client's @1.1) is safe for the old host's own
-    // full-manifest check: `canBridgeStream` trusts an older peer receiving a
-    // newer minor unconditionally (additive minors), so it never poisons an
-    // unrelated method's open handshake the way the old major bump once did.
+    // The open frame's manifest is the client's raw canonical - no per-method substitution needed.
     expect(openFrame.manifest).toEqual(
       buildStreamManifest(hostStreamRpcRegistry, CLIENT_SERVED_STREAM_MAJORS),
     );
     expect(openFrame).not.toHaveProperty("optionalManifest");
-    // WHO IS CONNECTING. `/stream` authenticates independently of `/rpc`, so a
-    // stream socket that forgot to identify itself would read to a floored
-    // host as a legacy client no matter what the unary transport sent.
+    // Who IS connecting.
     expect(openFrame.clientIdentity).toEqual({
       kind: TEST_CLIENT_IDENTITY.kind,
       compatibilityEpoch: TEST_CLIENT_IDENTITY.compatibilityEpoch,
@@ -524,9 +474,7 @@ describe("WsStreamClient", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
 
-    // A hypothetical peer on some future, unbridgeable chat.subscribe major -
-    // exercises method isolation, independent of chat.subscribe's real,
-    // currently-bridgeable version history.
+    // A hypothetical peer on some future, unbridgeable chat.subscribe major - exercises method isolation, independent of chat.subscribe's real, currently-bridgeable version history.
     const skewedManifest = {
       ...buildStreamManifest(
         hostStreamRpcRegistry,
@@ -597,9 +545,8 @@ describe("WsStreamClient", () => {
     );
     expect(openFrame).not.toHaveProperty("optionalManifest");
 
-    // Shipped stream hosts do not run a fatal open-time manifest check. They
-    // acknowledge the intersection of their manifest with the client's legacy
-    // advertised entries, without an optional channel.
+    // Shipped stream hosts do not run a fatal open-time manifest check.
+    // They acknowledge the intersection of their manifest with the client's legacy advertised entries, without an optional channel.
     stub.fireText({
       kind: "openAck",
       manifest: {
@@ -620,13 +567,7 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
-  // Regression test for the release-v1.1.0 RC incident: the compatibility
-  // check correctly determined chat.subscribe@1.1 bridges to a host still on
-  // @1.0, but the subscribe frame kept declaring this client's own canonical
-  // (1.1) regardless - a version host-v1.0.0's dispatch table has never heard
-  // of, so it rejected the subscribe outright even though the handshake
-  // passed. The client must downgrade what it declares to the version the
-  // host actually advertised.
+  // The client must downgrade what it declares to the version the host actually advertised.
   it("declares the host's own chat.subscribe version when the host is still on 1.0", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -667,11 +608,7 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
-  // chat.subscribe's own openRequestSchema never changed across 1.0/1.1, so
-  // the test above can't prove `prepareStreamSubscribeRequest` actually
-  // reprojects params through the older contract - only that it downgrades
-  // the declared version. A synthetic method with a genuinely different
-  // open-request shape per minor closes that gap.
+  // A synthetic method with a genuinely different open-request shape per minor closes that gap.
   it("rewrites the subscribe params onto the host's older contract when the open-request shape changed", async () => {
     const openRequestSchemaV10 = z.object({ id: z.string() });
     const openRequestSchemaV11 = z.object({
@@ -932,7 +869,7 @@ describe("WsStreamClient", () => {
     await flush();
     const stub = sockets[0].socket;
     stub.fireOpen();
-    // The open frame carried token-1. Rotate BEFORE the openAck arrives: the
+    // The open frame carried token-1. Rotate before the openAck arrives: the
     // session isn't subscribed yet, so this push is dropped at the time.
     ctx.credentials.rotateBearerToken({
       userId: ctx.identity.userId,
@@ -1138,10 +1075,6 @@ describe("WsStreamClient", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
 
-    // Host reports a method at major=2, minor=0 which the client at
-    // major=1, minor=0 cannot bridge in v1 (no cross-major stream
-    // bridges), so the mirror check must fail and the client must emit
-    // its own fatalError before closing.
     stub.fireText({
       kind: "openAck",
       manifest: {
@@ -1159,11 +1092,7 @@ describe("WsStreamClient", () => {
 
   describe("live-session evidence (invariant 5)", () => {
     it("announces the local stream session once subscribed, and retracts it against the SAME host on teardown", async () => {
-      // `/stream` is a live session and the authority's strongest evidence
-      // class: it suppresses death accumulation entirely. Unannounced, a
-      // healthy long-lived stream counted for nothing, so unary dials refused
-      // during an accept-loop stall could reach the confirmed-death streak and
-      // fail the local host over while its stream was still carrying frames.
+      // `/stream` is a live session and the authority's strongest evidence class: it suppresses death accumulation entirely.
       const { factory, sockets } = makeFactory();
       const recorder = new RecordingTransportEvidence();
       const client = makeClientWithEvidence({
@@ -1191,9 +1120,7 @@ describe("WsStreamClient", () => {
 
       const retracted = recorder.ofKind("sessionLost");
       expect(retracted).toHaveLength(1);
-      // Retracted against the host it was announced FOR, under the same id -
-      // an announcement that is never matched means the host can never be
-      // declared dead again.
+      // Retracted against the host it was announced for, under the same id - an announcement that is never matched means the host can never be declared dead again.
       expect(retracted[0].hostId).toBe(announced[0].hostId);
       expect(retracted[0].sessionId).toBe(announced[0].sessionId);
     });
@@ -1280,9 +1207,7 @@ describe("WsStreamClient", () => {
         },
       });
 
-      // Positive control in the same test: the retryable path DOES still
-      // reconnect, so the absence of a tombstone report below is not because
-      // nothing happened at all.
+      // Positive control in the same test: the retryable path does still reconnect, so the absence of a tombstone report below is not because nothing happened at all.
       await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(1), {
         timeout: 2_000,
       });
@@ -1327,9 +1252,7 @@ describe("WsStreamClient", () => {
         },
       });
 
-      // No `auth` revalidator is wired on this client, so an UNAUTHORIZED
-      // fatal with no `retryable` flag stays terminal - the tombstone report
-      // must still have fired before that routing decision was made.
+      // No `auth` revalidator is wired on this client, so an unauthorized fatal with no `retryable` flag stays terminal - the tombstone report must still have fired before that routing decision was made.
       expect(closedCode).toBe("UNAUTHORIZED");
       const tombstones = recorder.ofKind("restartIntent");
       expect(tombstones).toHaveLength(1);
@@ -1354,9 +1277,7 @@ describe("WsStreamClient", () => {
       const stub = sockets[0].socket;
       stub.fireOpen();
 
-      // The endpoint provider now points at a DIFFERENT host than the one
-      // this socket dialed - simulating a host switch that raced an
-      // in-flight connection.
+      // The endpoint provider now points at a different host than the one this socket dialed - simulating a host switch that raced an in-flight connection.
       expect(mockRemoteHostEntry.hostId).not.toBe(mockLocalHostEntry.hostId);
       currentEndpoint = mockRemoteHostEntry;
 
@@ -1374,7 +1295,7 @@ describe("WsStreamClient", () => {
 
       const tombstones = recorder.ofKind("restartIntent");
       expect(tombstones).toHaveLength(1);
-      // The ORIGINAL dialed identity, not the provider's current answer -
+      // The original dialed identity, not the provider's current answer -
       // filing against the wrong host would hold the wrong lease.
       expect(tombstones[0].hostId).toBe(mockLocalHostEntry.hostId);
       expect(tombstones[0].hostId).not.toBe(mockRemoteHostEntry.hostId);
@@ -1458,8 +1379,6 @@ describe("WsStreamClient", () => {
     void browserScreencastRegistry;
 
     // What an old host acks: its own manifest intersected with the client's.
-    // This client names every method the old host does, so the intersection is
-    // the old host's manifest verbatim - browser methods simply absent.
     const oldHostOpenAckManifest = buildStreamManifest(
       oldHostStreamRpcRegistry,
       SERVES_EVERY_INSTALLED_MAJOR,
@@ -1818,9 +1737,8 @@ describe("WsStreamClient", () => {
       params: { epicId: "epic-42", sinceCursor: null },
     });
 
-    // The consumer applies through C100 while this physical session remains
-    // live. A socket loss must ask it for the current cursor rather than reuse
-    // the null captured at the first subscribe.
+    // The consumer applies through C100 while this physical session remains live.
+    // A socket loss must ask it for the current cursor rather than reuse the null captured at the first subscribe.
     sinceCursor = { ingestVersion: 100, eventId: "event-100" };
     sockets[0].socket.fireClose(1006, "physical connection lost", false);
     vi.advanceTimersByTime(10);
@@ -1891,17 +1809,13 @@ describe("WsStreamClient", () => {
     const socket = sockets[0].socket;
     completeHandshake(socket);
 
-    // Healthy cadence: the pong answering the t=25s ping arrives one ping
-    // interval after `lastPongAt` was seeded at openAck - below the
-    // interval-plus-slack recovery threshold, so no emission.
+    // Healthy cadence: the pong answering the t=25s ping arrives one ping interval after `lastPongAt` was seeded at openAck - below the interval-plus-slack recovery threshold, so no emission.
     vi.advanceTimersByTime(25_000);
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).not.toHaveBeenCalled();
 
-    // Host event-loop stall: the t=50s ping goes unanswered until t=60s. The
-    // 35s pong gap exceeds pingIntervalMs + 5s slack → recovery evidence,
-    // while staying under the 50s missed-pong cutoff → the socket never
-    // dropped and the reconnect-recovery path never ran.
+    // Host event-loop stall: the t=50s ping goes unanswered until t=60s.
+    // The 35s pong gap exceeds pingIntervalMs + 5s slack → recovery evidence, while staying under the 50s missed-pong cutoff → the socket never dropped and the reconnect-recovery path never ran.
     vi.advanceTimersByTime(25_000);
     vi.advanceTimersByTime(10_000);
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
@@ -1936,10 +1850,6 @@ describe("WsStreamClient", () => {
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).not.toHaveBeenCalled();
 
-    // The client's OWN heartbeat timer fires late - a backgrounded or busy
-    // renderer, not a host stall: the wall clock jumps 10s before the next
-    // ping is actually written, so the gap since the last pong (35s) clears
-    // the stall-length threshold even though the host answers instantly.
     vi.setSystemTime(Date.now() + 10_000);
     vi.advanceTimersByTime(25_000);
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
@@ -1975,9 +1885,7 @@ describe("WsStreamClient", () => {
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).not.toHaveBeenCalled();
 
-    // t=50s ping, sent exactly on schedule, but the HOST takes 7s to answer
-    // it (t=57s): the client's own ping was on time, so the gap is genuine
-    // host-side recovery evidence.
+    // t=50s ping, sent exactly on schedule, but the host takes 7s to answer it (t=57s): the client's own ping was on time, so the gap is genuine host-side recovery evidence.
     vi.advanceTimersByTime(25_000);
     vi.advanceTimersByTime(7_000);
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
@@ -2078,9 +1986,7 @@ describe("WsStreamClient", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
     completeHandshake(sockets[0].socket);
 
-    // Ordinary drop schedules backoffFor(0)=10ms and leaves reconnectAttempt=1
-    // on the subsequent dial. Leave the replacement mid-handshake so the
-    // attempt counter is still elevated while a live socket exists.
+    // Ordinary drop schedules backoffFor(0)=10ms and leaves reconnectAttempt=1 on the subsequent dial.
     sockets[0].socket.fireClose(1006, "abnormal", false);
     vi.advanceTimersByTime(10);
     expect(sockets).toHaveLength(2);
@@ -2130,10 +2036,6 @@ describe("WsStreamClient", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
     completeHandshake(sockets[0].socket);
 
-    // First SLOW_CLIENT eviction: streak -> 1, so the backoff is
-    // backoffFor(1) = 20ms - `reconnectAttempt` no longer resets at the
-    // subscribe-ack (it resets on a delivered frame or healthy dwell), but
-    // max(attempt, streak) is driven by the streak here either way.
     sockets[0].socket.fireClose(1000, "SLOW_CLIENT: queue overflowed", true);
     vi.advanceTimersByTime(19);
     expect(sockets).toHaveLength(1);
@@ -2141,10 +2043,6 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(2);
     completeHandshake(sockets[1].socket);
 
-    // Second consecutive SLOW_CLIENT eviction: streak -> 2, so the backoff
-    // escalates to backoffFor(2) = 40ms - strictly larger than the first,
-    // which is the whole point (a persistently slow renderer must not retry at
-    // the fixed initial delay forever).
     sockets[1].socket.fireClose(1000, "SLOW_CLIENT: queue overflowed", true);
     vi.advanceTimersByTime(20);
     expect(sockets).toHaveLength(2);
@@ -2207,12 +2105,7 @@ describe("WsStreamClient", () => {
     vi.useRealTimers();
   });
 
-  // Codex review, PR #978 thread PRRT_kwDOL6Tbrc6WdfpB: "Reset dwell based on
-  // elapsed time, not only timer firing". A backgrounded renderer throttles
-  // `setTimeout` (Chromium clamps hidden pages to >=1/min), and a quiet
-  // event-only stream has no application frames to reset on - so the dwell
-  // callback is the ONLY reset signal it has, and discarding it on the drop
-  // leaves `reconnectAttempt` a lifetime drop counter again.
+  // Codex review, PR #978 thread PRRT_kwDOL6Tbrc6WdfpB: "Reset dwell based on elapsed time, not only timer firing".
   it("settles the dwell on ELAPSED time when a throttled timer never fired", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 
@@ -2246,18 +2139,13 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(2);
     completeHandshake(sockets[1].socket);
 
-    // The renderer is backgrounded: wall clock moves 30s - three times the
-    // dwell - while the throttled dwell timer has NOT run. `setSystemTime`
-    // shifts pending timers with it, so the callback is still queued exactly
-    // as it would be under throttling.
+    // The renderer is backgrounded: wall clock moves 30s - three times the dwell - while the throttled dwell timer has not run.
     vi.setSystemTime(Date.now() + 30_000);
 
     sockets[1].socket.fireClose(1006, "abnormal", false);
 
-    // The connection was genuinely subscribed past the dwell, so its reset is
-    // owed: the redial must come at the 5s floor. Without the elapsed-time
-    // settle the discarded timer leaves attempt 1 standing and this waits
-    // 10s - the lifetime-counter behavior the dwell exists to remove.
+    // The connection was genuinely subscribed past the dwell, so its reset is owed: the redial must come at the 5s floor.
+    // Without the elapsed-time settle the discarded timer leaves attempt 1 standing and this waits 10s - the lifetime-counter behavior the dwell exists to remove.
     await vi.advanceTimersByTimeAsync(4_999);
     expect(sockets).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1);
@@ -2539,11 +2427,8 @@ describe("WsStreamClient", () => {
       code: 1000,
       reason: "closed-by-caller",
     });
-    // Defense-in-depth: a stale subscribe on a closed client degrades to an
-    // inert session instead of throwing into the renderer error boundary. No
-    // new socket is dialed, the returned session is safe to drive, and it
-    // emits ONE terminal status (on a microtask) so the consumer learns its
-    // subscription is dead instead of pending forever.
+    // Defense-in-depth: a stale subscribe on a closed client degrades to an inert session instead of throwing into the renderer error boundary.
+    // No new socket is dialed, the returned session is safe to drive, and it emits one terminal status (on a microtask) so the consumer learns its subscription is dead instead of pending forever.
     const warnSpy = vi
       .spyOn(console, "warn")
       .mockImplementation(() => undefined);
@@ -2736,12 +2621,6 @@ describe("WsStreamClient", () => {
   });
 });
 
-/**
- * Component-2 (unified stream auth): on an `UNAUTHORIZED` open-frame rejection
- * the session revalidates the credential and acts on the outcome - re-dial on a
- * fresh/valid credential, stay in backoff on a transient error, terminal on a
- * rejected credential, and a bounded no-progress loop also goes terminal.
- */
 describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -2768,9 +2647,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       upgradeGuidance: null,
     },
   } as const;
-  // A transient, host-side rejection (e.g. the host's JWKS fetch timed out): the
-  // wire `code` stays `UNAUTHORIZED` for older clients, but `retryable: true`
-  // tells a newer client the credential is fine and to just reconnect.
+  // A transient, host-side rejection (e.g. the host's jwks fetch timed out): the wire `code` stays `unauthorized` for older clients, but `retryable: true` tells a newer client the credential is fine and to just reconnect.
   const RETRYABLE_FATAL = {
     kind: "fatalError",
     details: {
@@ -2813,7 +2690,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
   }
 
   // A revalidator whose promise the test resolves explicitly, so a concurrent
-  // reconnect can be driven WHILE the revalidation is still pending.
+  // reconnect can be driven while the revalidation is still pending.
   function makeDeferredRevalidator(): {
     readonly auth: StreamAuthRevalidator;
     readonly resolve: (outcome: RevalidateOutcome) => void;
@@ -2905,12 +2782,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
   });
 
   it("treats a SYNCHRONOUSLY thrown revalidation as transient, not an unhandled rejection", async () => {
-    // `revalidateForReconnect` is typed to RETURN a promise, but nothing stops
-    // an implementation throwing before it returns one. Called bare, that throw
-    // skips the `.catch` that maps a failed revalidation to "network-error" and
-    // the `finally` that clears the budget timer, then escapes the
-    // `void`-discarded recovery task: an unhandled rejection, and a session left
-    // in backoff with no re-dial armed.
+    // `revalidateForReconnect` is typed to return a promise, but nothing stops an implementation throwing before it returns one.
     const { factory, sockets } = makeFactory();
     const calls = { count: 0 };
     const auth: StreamAuthRevalidator = {
@@ -3024,7 +2896,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     session.onStatusChange((status) => statuses.push(status));
 
     await flush();
-    // Drive MORE consecutive rejections than the no-progress bound (3): a
+    // Drive more consecutive rejections than the no-progress bound (3): a
     // transient host-side rejection must never terminate the session.
     for (let cycle = 0; cycle < 5; cycle += 1) {
       const socket = sockets[sockets.length - 1].socket;
@@ -3039,7 +2911,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(statuses).toContain("reconnecting");
     expect(statuses).not.toContain("closed");
     // Reconnected well past the no-progress bound (3) that a misclassified
-    // UNAUTHORIZED would have hit - proof the transient path never gives up.
+    // unauthorized would have hit - proof the transient path never gives up.
     expect(sockets.length).toBeGreaterThan(4);
     session.close();
   });
@@ -3079,29 +2951,18 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
     await flush();
     expect(sockets).toHaveLength(1);
-    // Complete the real open/openAck handshake so the client actually emits
-    // `host.notifications.feed.subscribe` on socket 0 before the host rejects
-    // the snapshot init - the failure must land on a real subscription
-    // attempt, not a pre-subscribe open-only socket.
     completeHandshake(sockets[0].socket);
     expect(sockets[0].socket.textSent).toHaveLength(2);
     expect(parseText(sockets[0].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // The newest installed minor of the feed, read off the registry's
-      // `latestMinor`; the mirrored handshake negotiates it. A minor added in
-      // `protocol/src/host/registry.ts` moves this literal with it.
+      // The newest installed minor of the feed, read off the registry's `latestMinor`; the mirrored handshake negotiates it.
       schemaVersion: { major: 1, minor: 2, supportedMajors: [1] },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,
       },
     });
-    // Mirrors `HostNotificationsStreamResolver`'s real termination when its
-    // initial snapshot read fails: the wire code is host-domain
-    // (`NOTIFICATIONS_SNAPSHOT_UNAVAILABLE`), not `UNAUTHORIZED`, and
-    // `retryable: true` routes the client through the plain transport-drop
-    // path rather than credential recovery.
     sockets[0].socket.fireText({
       kind: "fatalError",
       details: {
@@ -3124,9 +2985,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // The newest installed minor of the feed, read off the registry's
-      // `latestMinor`; the mirrored handshake negotiates it. A minor added in
-      // `protocol/src/host/registry.ts` moves this literal with it.
+      // The newest installed minor of the feed, read off the registry's `latestMinor`; the mirrored handshake negotiates it.
       schemaVersion: { major: 1, minor: 2, supportedMajors: [1] },
       params: {
         initialAttentionLimit: 50,
@@ -3198,9 +3057,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
   it("clears the no-progress streak on a retryable interlude so a later genuine UNAUTHORIZED still gets the full bound", async () => {
     const { factory, sockets } = makeFactory();
-    // Every revalidation reports the same never-rotated bearer ("rotated"),
-    // the no-progress case. Enough entries for a 2-cycle then a 3-cycle episode;
-    // the retryable interlude between them never revalidates.
+    // Every revalidation reports the same never-rotated bearer ("rotated"), the no-progress case.
+    // Enough entries for a 2-cycle then a 3-cycle episode; the retryable interlude between them never revalidates.
     const revalidator = makeAuthRevalidator([
       "rotated",
       "rotated",
@@ -3208,18 +3066,12 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       "rotated",
       "rotated",
     ]);
-    // Tiny initial backoff: this episode drives ~5 reconnects and the shared
-    // `reconnectAttempt` escalates the delay each time, so keep it well under
-    // the per-cycle wait so every reconnected socket is live before the next.
+    // Tiny initial backoff: this episode drives ~5 reconnects and the shared `reconnectAttempt` escalates the delay each time, so keep it well under the per-cycle wait so every reconnected socket is live before the next.
     const client = makeAuthClient(factory, revalidator.auth, 1);
     const statuses: StreamConnectionStatus[] = [];
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    // Both fixtures are `as const`, so their `details.reason` (and the
-    // retryable variant's extra `retryable` flag) are literal types: this
-    // helper drives BOTH, and typing it as only the UNAUTHORIZED shape rejects
-    // the transient interlude the test is specifically about.
     const driveFatal = async (
       frame: typeof UNAUTHORIZED_FATAL | typeof RETRYABLE_FATAL,
     ) => {
@@ -3230,7 +3082,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     };
 
     await flush();
-    // Two genuine UNAUTHORIZED cycles: streak climbs to 2 (both re-dial).
+    // Two genuine unauthorized cycles: streak climbs to 2 (both re-dial).
     await driveFatal(UNAUTHORIZED_FATAL);
     await driveFatal(UNAUTHORIZED_FATAL);
     expect(statuses).not.toContain("closed");
@@ -3238,9 +3090,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     // A transient interlude clears the streak back to 0 (and re-dials).
     await driveFatal(RETRYABLE_FATAL);
 
-    // With the streak cleared, the next two genuine cycles are 1 and 2 - still
-    // recoverable. WITHOUT the reset the first of these would hit 3 and go
-    // terminal here; this is the regression guard for the reset.
+    // With the streak cleared, the next two genuine cycles are 1 and 2 - still recoverable.
+    // Without the reset the first of these would hit 3 and go terminal here; this is the regression guard for the reset.
     await driveFatal(UNAUTHORIZED_FATAL);
     await driveFatal(UNAUTHORIZED_FATAL);
     expect(statuses).not.toContain("closed");
@@ -3269,10 +3120,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     session.onStatusChange((status) => statuses.push(status));
 
     await flush();
-    // Drive consecutive UNAUTHORIZED open-frame rejections. Each revalidates,
-    // returns "rotated" with the SAME (never-rotated) bearer, so the streak
-    // grows; the 3rd cycle reaches the cap (3) and goes terminal. (The 4th
-    // iteration runs against the already-torn-down socket and no-ops.)
+    // Drive consecutive unauthorized open-frame rejections.
+    // Each revalidates, returns "rotated" with the same (never-rotated) bearer, so the streak grows; the 3rd cycle reaches the cap (3) and goes terminal.
     for (let cycle = 0; cycle < 4; cycle += 1) {
       const socket = sockets[sockets.length - 1].socket;
       socket.fireOpen();
@@ -3305,9 +3154,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     session.onStatusChange((status) => statuses.push(status));
     const startedAt = Date.now();
 
-    // Each host cycle completes the open/openAck/subscribe handshake and then
-    // fails resolver initialization with UNAUTHORIZED before delivering any
-    // application frame. The subscribe-ack alone must not clear the streak.
+    // Each host cycle completes the open/openAck/subscribe handshake and then fails resolver initialization with unauthorized before delivering any application frame.
+    // The subscribe-ack alone must not clear the streak.
     completeHandshake(sockets[0].socket);
     sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
     await vi.advanceTimersByTimeAsync(5);
@@ -3378,9 +3226,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     sockets[2].socket.fireBinary(new Uint8Array());
     expect(frames).toHaveLength(1);
 
-    // Start the later UNAUTHORIZED episode on a fresh socket. If the
-    // snapshot did not reset the streak, this first rejection would
-    // reach the bound immediately instead of reconnecting.
+    // Start the later unauthorized episode on a fresh socket.
+    // If the snapshot did not reset the streak, this first rejection would reach the bound immediately instead of reconnecting.
     sockets[2].socket.fireClose(1006, "abnormal", false);
     await vi.advanceTimersByTimeAsync(5);
     expect(sockets).toHaveLength(4);
@@ -3478,11 +3325,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
   it("does NOT count transient network-errors toward the no-progress bound (a wake-network blip stays recoverable)", async () => {
     const { factory, sockets } = makeFactory();
-    // Authn is briefly unreachable on wake: every revalidation is a transient
-    // network-error. This must NEVER terminate the session - it keeps
-    // re-dialing on backoff until connectivity returns. (The pre-fix code
-    // wrongly incremented the no-progress streak here and went terminal after
-    // 3, the exact overnight-wake failure.)
+    // Authn is briefly unreachable on wake: every revalidation is a transient network-error.
+    // This must never terminate the session - it keeps re-dialing on backoff until connectivity returns.
     const revalidator = makeAuthRevalidator([
       "network-error",
       "network-error",
@@ -3511,11 +3355,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
   });
 
   it("wake probe KEEPS a session whose socket still answers a ping", async () => {
-    // The overnight-sleep incident in miniature: a lid-open fires a wake while
-    // the localhost socket to a local host is perfectly alive. Dropping it
-    // re-runs every stream's open against a machine whose network has not
-    // finished coming back - which is what turned the RECOVERY signal into the
-    // damage. A session that answers must be left alone.
+    // The overnight-sleep incident in miniature: a lid-open fires a wake while the localhost socket to a local host is perfectly alive.
+    // A session that answers must be left alone.
     const { factory, sockets } = makeFactory();
     const client = makeClient({
       factory,
@@ -3557,9 +3398,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
   });
 
   it("wake probe RE-DIALS a session whose socket has gone silent", async () => {
-    // The other half, and the reason the timeout IS the mechanism: a half-open
-    // socket after sleep fails only by not answering. Without this arm the
-    // probe would be a way to never reconnect anything.
+    // The other half, and the reason the timeout IS the mechanism: a half-open socket after sleep fails only by not answering.
+    // Without this arm the probe would be a way to never reconnect anything.
     const { factory, sockets } = makeFactory();
     const client = makeClient({
       factory,
@@ -3578,7 +3418,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     vi.useFakeTimers();
     try {
       client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
-      // A probe really went out, so the re-dial below is the TIMEOUT path and
+      // A probe really went out, so the re-dial below is the timeout path and
       // not the "nothing live to probe" shortcut.
       expect(
         sockets[0].socket.textSent.some((raw) => raw.includes('"kind":"ping"')),
@@ -3606,13 +3446,13 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     await flush();
     expect(sockets).toHaveLength(1);
 
-    // UNAUTHORIZED on socket 0 → revalidation starts and HANGS on the deferred.
+    // unauthorized on socket 0 → revalidation starts and hangs on the deferred.
     sockets[0].socket.fireOpen();
     sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
     await flush();
     expect(deferred.calls.count).toBe(1);
 
-    // A concurrent wake re-dials and FULLY reconnects socket 1 while the
+    // A concurrent wake re-dials and fully reconnects socket 1 while the
     // revalidation is still pending.
     client.reconnectAll("wake-resume", { probeFirst: false, wakeProbe: null });
     await wait(30);
@@ -3622,9 +3462,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(statuses).toContain("open");
     const socketCountAfterReconnect = sockets.length;
 
-    // The stale revalidation now resolves "rotated" → it must NOT dial a second
-    // socket over the live one (the connect() single-dial guard), and socket 1
-    // must stay live.
+    // The stale revalidation now resolves "rotated" → it must not dial a second socket over the live one (the connect() single-dial guard), and socket 1 must stay live.
     deferred.resolve("rotated");
     await wait(30);
     expect(sockets.length).toBe(socketCountAfterReconnect);
@@ -3635,11 +3473,8 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 });
 
 /**
- * Phase-2 delegated host credentials: the client mints a device credential for
- * a connected host that reports it has none, then hands it over the `/stream`
- * socket. Pins capability gating, UUID preflight, one-attempt-per-host, per-host
- * pending delivery (adoption tuple on the wire), expiry via server expiresIn,
- * never-cross-host, and close teardown.
+ * Phase-2 delegated host credentials: the client mints a device credential for a connected host that reports it has none, then hands it over the `/stream` socket.
+ * Pins capability gating, UUID preflight, one-attempt-per-host, per-host pending delivery (adoption tuple on the wire), expiry via server expiresIn, never-cross-host, and close teardown.
  */
 describe("WsStreamClient host credential provisioning", () => {
   beforeEach(() => {
@@ -3765,10 +3600,7 @@ describe("WsStreamClient host credential provisioning", () => {
   }
 
   /**
-   * Same wiring as `makeProvisioningClient`, plus a caller-supplied
-   * `onHostCredentialState` observer - the tap the client fires on every ack
-   * that carries a state, ahead of (and independent from) the mint machinery
-   * above.
+   * Same wiring as `makeProvisioningClient`, plus a caller-supplied `onHostCredentialState` observer - the tap the client fires on every ack that carries a state, ahead of (and independent from) the mint machinery above.
    */
   function makeProvisioningClientWithObserver(options: {
     readonly factory: IStreamWebSocketFactory;
@@ -3810,12 +3642,8 @@ describe("WsStreamClient host credential provisioning", () => {
   }
 
   /**
-   * The half of the handshake that READS what `fireOpen` produced.
-   *
-   * Split out so a caller that cannot assume the open frame is already on the
-   * wire can poll between the two halves. `socket.textSent[0]` is undefined
-   * until the client has responded to the open event, and parsing that
-   * undefined is the exact shape of this file's long-standing flake.
+   * The half of the handshake that reads what `fireOpen` produced.
+   * Split out so a caller that cannot assume the open frame is already on the wire can poll between the two halves.
    */
   function ackProvisionHandshake(
     socket: StubStreamWebSocket,
@@ -3881,7 +3709,7 @@ describe("WsStreamClient host credential provisioning", () => {
   it("skips mint when hostId is not a UUID (marks attempted, no OTP)", async () => {
     const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
-    // mockLocalHostEntry.hostId is "mock-local" — not a UUID.
+    // mockLocalHostEntry.hostId is "mock-local" - not a UUID.
     const client = makeProvisioningClient({
       factory,
       mint,
@@ -3977,12 +3805,7 @@ describe("WsStreamClient host credential provisioning", () => {
     expect(mint).toHaveBeenCalledTimes(1);
 
     for (let i = 0; i < 4; i += 1) {
-      // Wait for the REDIAL, do not bet on it landing inside 30ms. The old
-      // fixed wait could return while `sockets` still ended at the socket just
-      // closed, replaying the handshake against a dead socket - a silent no-op
-      // that made this loop run fewer cycles than it claims - or reach a fresh
-      // socket that had not sent its open frame yet, which is the
-      // `JSON.parse(undefined)` this test failed on.
+      // Wait for the redial, do not bet on it landing inside 30ms.
       const closedIndex = sockets.length - 1;
       sockets[closedIndex].socket.fireClose(1000, "drop", false);
       const latest = await nthSocket(sockets, closedIndex + 1);
@@ -3995,24 +3818,15 @@ describe("WsStreamClient host credential provisioning", () => {
       await flush();
     }
 
-    // Deliberately NOT polled. "Minted exactly once" is a claim about the whole
-    // window that just elapsed, so waiting for it to become true would be
-    // waiting for the bug; the four cycles above are what give the window its
-    // length.
+    // Deliberately not polled.
+    // "Minted exactly once" is a claim about the whole window that just elapsed, so waiting for it to become true would be waiting for the bug; the four cycles above are what give the window its length.
     expect(mint).toHaveBeenCalledTimes(1);
     session.close();
   });
 
   it("re-arms after a SUCCESSFUL handoff, so a later burn can mint again", async () => {
-    // T1. There is no ack that says "adopted": the host confirms only on its
-    // NEXT `openAck`, and the socket that carried the credential has already
-    // seen `needs-reauth`. So after a successful delivery `lastHostCredentialState`
-    // still read `needs-reauth`, and when the replacement was later burned the
-    // next ack was `needs-reauth` again - no transition, marker still set, and
-    // the replacement mint suppressed until the client was recreated.
-    //
-    // Recording the handoff as `active` (assumed-adopted; the host confirms or
-    // corrects on its next ack) is what makes that later burn a transition.
+    // T1.
+    // There is no ack that says "adopted": the host confirms only on its next `openAck`, and the socket that carried the credential has already seen `needs-reauth`.
     const mint = vi.fn(async () =>
       provisioned({
         token: "tok-handoff",
@@ -4037,7 +3851,7 @@ describe("WsStreamClient host credential provisioning", () => {
     // Delivered on this very socket.
     expect(allProvisionFrames(sockets)).toHaveLength(1);
 
-    // The replacement is later burned; the host asks again on the SAME socket's
+    // The replacement is later burned; the host asks again on the same socket's
     // next ack. Without the handoff being recorded this reads as unchanged.
     sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
     await wait(30);
@@ -4052,11 +3866,8 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("retries after the wait a pending-elsewhere answer asks for, with no new ack", async () => {
-    // T2. Giving the marker back is not enough on its own: nothing re-asks
-    // until another `openAck` arrives, and the claim TTL is only evaluated when
-    // the flow is next called. A host whose only surviving transport asked
-    // during the window therefore sat un-provisioned with nobody scheduled to
-    // look again.
+    // T2.
+    // Giving the marker back is not enough on its own: nothing re-asks until another `openAck` arrives, and the claim ttl is only evaluated when the flow is next called.
     const mint = vi
       .fn<HostCredentialMintFlow>()
       .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
@@ -4075,20 +3886,15 @@ describe("WsStreamClient host credential provisioning", () => {
     await flush();
     expect(mint).toHaveBeenCalledTimes(1);
 
-    // No new ack, no state transition - only the timer. A zero-length wait is
-    // floored to `PROVISION_RETRY_MIN_DELAY_MS` (+ jitter), which is exactly
-    // what stops a just-expired claim spinning, so wait past that.
+    // No new ack, no state transition - only the timer.
+    // A zero-length wait is floored to `PROVISION_RETRY_MIN_DELAY_MS` (+ jitter), which is exactly what stops a just-expired claim spinning, so wait past that.
     await wait(1_600);
     expect(mint).toHaveBeenCalledTimes(2);
     session.close();
   });
   it("does not consume the client's one attempt on a pending-elsewhere answer", async () => {
-    // The liveness half of the app-wide claim. Another transport's credential
-    // is already in flight, so this client has not actually attempted
-    // anything - and if that delivery never lands and this client is the only
-    // one left, it must still be able to ask. Answering `unavailable` here
-    // spent the client's single attempt and could strand the host on the
-    // client lease until the app restarted.
+    // The liveness half of the app-wide claim.
+    // Another transport's credential is already in flight, so this client has not actually attempted anything - and if that delivery never lands and this client is the only one left, it must still be able to ask.
     const mint = vi
       .fn(async () => ({
         kind: "pending-elsewhere" as const,
@@ -4124,16 +3930,8 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("a stale active ack does not eat an armed provision retry", async () => {
-    // Regression: `armProvisionRetry`'s timer used to re-read
-    // `lastHostCredentialState` at fire time and bail unless it was still
-    // `missing`/`needs-reauth`. One `WsStreamClient` owns several sessions
-    // and `handleHostCredentialAck` runs per `openAck` with no cross-session
-    // ordering, so an `active` ack FORMED BEFORE the burn that armed this
-    // retry can be PROCESSED AFTER it - the arm sits behind a mint network
-    // round trip, so an ack racing across it is ordinary, not exotic. The
-    // old timer read that stale `active`, bailed, and never rescheduled -
-    // leaving the host unprovisioned with no further `openAck` left to wake
-    // it while its socket stayed up.
+    // Regression: `armProvisionRetry`'s timer used to re-read `lastHostCredentialState` at fire time and bail unless it was still `missing`/`needs-reauth`.
+    // The old timer read that stale `active`, bailed, and never rescheduled - leaving the host unprovisioned with no further `openAck` left to wake it while its socket stayed up.
     const mint = vi
       .fn<HostCredentialMintFlow>()
       .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
@@ -4152,19 +3950,15 @@ describe("WsStreamClient host credential provisioning", () => {
     await flush();
     expect(mint).toHaveBeenCalledTimes(1);
 
-    // The pre-burn ack arrives late, on a reconnect of the very session that
-    // armed the retry - the same mechanics a sibling session's stale
-    // handshake would produce, minus the second socket. Nothing was handed
-    // off, so this must not be read as recovery.
+    // The pre-burn ack arrives late, on a reconnect of the very session that armed the retry - the same mechanics a sibling session's stale handshake would produce, minus the second socket.
+    // Nothing was handed off, so this must not be read as recovery.
     sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
     await wait(30);
     completeProvisionHandshake(sockets[sockets.length - 1].socket, "active");
     await flush();
     expect(mint).toHaveBeenCalledTimes(1);
 
-    // Past the floor + jitter ceiling (1_000 + 250) with margin - the retry
-    // must fire regardless of the stale `active` sitting in
-    // `lastHostCredentialState`.
+    // Past the floor + jitter ceiling (1_000 + 250) with margin - the retry must fire regardless of the stale `active` sitting in `lastHostCredentialState`.
     await wait(1_600);
     expect(mint).toHaveBeenCalledTimes(2);
 
@@ -4172,23 +3966,8 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("this client's own successful handoff does cancel an armed retry", async () => {
-    // The one thing allowed to cancel the timer - see
-    // `WsStreamClient.armProvisionRetry`'s doc comment. A delivery this
-    // client performed has provenance an `active` report does not, so unlike
-    // the regression above it IS correct for this to be read as recovery.
-    //
-    // The setup below is deliberately roundabout so that `handedOffHostIds`
-    // is the ONLY thing standing between the armed retry and a third mint
-    // call. If call B's credential were instead delivered straight off the
-    // ack that minted it (the simpler shape), `provisionAttemptedHostIds`
-    // would still be set from that same ack - since only a `pending-
-    // elsewhere` outcome or a re-arm transition ever gives it back - and
-    // would ALSO block a third call, hiding a regression in the
-    // `handedOffHostIds` check specifically. Routing the handoff through a
-    // credential that was already pending when a re-arm transition (the
-    // "burn" below) delivered it keeps the marker clear: that transition's
-    // own top-of-function flush runs and returns before the attempt-marker
-    // code could set it again.
+    // The one thing allowed to cancel the timer - see `WsStreamClient.armProvisionRetry`'s doc comment.
+    // The setup below is deliberately roundabout so that `handedOffHostIds` is the only thing standing between the armed retry and a third mint call.
     const deferredB: { resolve: ((outcome: Provisioned) => void) | null } = {
       resolve: null,
     };
@@ -4217,9 +3996,7 @@ describe("WsStreamClient host credential provisioning", () => {
     await flush();
     expect(mint).toHaveBeenCalledTimes(1);
 
-    // Call B: same state, no transition - only the marker being clear lets
-    // this ask again. Left deferred so it can resolve with nothing
-    // subscribed to receive it.
+    // Call B: same state, no transition - only the marker being clear lets this ask again.
     sockets[0].socket.fireClose(1000, "drop", false);
     await wait(30);
     completeProvisionHandshake(
@@ -4248,18 +4025,13 @@ describe("WsStreamClient host credential provisioning", () => {
     // than being delivered here.
     expect(pendingMap(client).has(HOST_A.hostId)).toBe(true);
 
-    // The burn: a transition ack. It clears the (already-clear) attempt
-    // marker and `handedOffHostIds`, then its own top-of-function flush
-    // delivers call B's pending credential before the attempt gate can run
-    // again - so the handoff lands with the marker still clear.
+    // The burn: a transition ack.
     completeProvisionHandshake(sockets[sockets.length - 1].socket, "missing");
     await flush();
     expect(mint).toHaveBeenCalledTimes(2);
     expect(provisionFrames(sockets[sockets.length - 1].socket)).toHaveLength(1);
 
-    // Past the floor + jitter ceiling: call A's retry - armed long before any
-    // of this and untouched by it - must not fire a third mint now that this
-    // client has actually delivered.
+    // Past the floor + jitter ceiling: call A's retry - armed long before any of this and untouched by it - must not fire a third mint now that this client has actually delivered.
     await wait(1_600);
     expect(mint).toHaveBeenCalledTimes(2);
 
@@ -4267,14 +4039,7 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("a later missing/needs-reauth ack clears the handoff record so an armed retry can still fire", async () => {
-    // The re-arm edge in `handleHostCredentialAck` clears BOTH
-    // `provisionAttemptedHostIds` and `handedOffHostIds`. If only the former
-    // were cleared, a host that had a credential handed to it, burned it,
-    // and got a NEW retry armed for that burn would find the retry silently
-    // swallowed by a handoff record left over from the credential it already
-    // burned - the timer's `handedOffHostIds` check cannot tell "still holds
-    // it" from "held it once, and burned it since" unless this edge clears
-    // the record.
+    // The re-arm edge in `handleHostCredentialAck` clears both `provisionAttemptedHostIds` and `handedOffHostIds`.
     const outcome = provisioned({
       token: "tok-first-handoff",
       refreshToken: "refresh-first-handoff",
@@ -4302,10 +4067,8 @@ describe("WsStreamClient host credential provisioning", () => {
     expect(mint).toHaveBeenCalledTimes(1);
     expect(provisionFrames(sockets[0].socket)).toHaveLength(1);
 
-    // Call 2: the delivered credential is burned; the host asks again. This
-    // transition must clear the stale handoff record left by call 1, or the
-    // retry it arms below would be swallowed by a fact about a DIFFERENT
-    // credential.
+    // Call 2: the delivered credential is burned; the host asks again.
+    // This transition must clear the stale handoff record left by call 1, or the retry it arms below would be swallowed by a fact about a different credential.
     sockets[0].socket.fireClose(1000, "drop", false);
     await wait(30);
     completeProvisionHandshake(
@@ -4324,14 +4087,6 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("carries the reason that armed the retry, not whatever lastHostCredentialState reads at fire time", async () => {
-    // `reason` is passed into `armProvisionRetry` and closed over by its
-    // timer rather than re-read from `lastHostCredentialState` at fire time,
-    // because the map can - and, per the regression above, does - hold
-    // something else by then. Arm with `missing`, then let a stale `active`
-    // land (same mechanics as the regression test), and check the request
-    // the timer eventually fires: it must still say `missing`, which a
-    // re-read could not even express - `active` is excluded from the mint
-    // request's `reason` type.
     const mint = vi
       .fn<HostCredentialMintFlow>()
       .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
@@ -4371,13 +4126,6 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("re-arms the mint when a host that went active comes back needs-reauth", async () => {
-    // The once-per-host bound was written for a host that reports `missing`
-    // and keeps reporting it: repeating the attempt could only repeat the same
-    // failure, and an unbounded policy turns a reconnect loop into a stream of
-    // mints. A host that has since HELD a credential and burned it is not that
-    // host - it burned it precisely so a client would mint another - and
-    // refusing on the strength of an attempt that already succeeded would
-    // leave it on the client lease until the app is restarted.
     const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
     const client = makeProvisioningClient({
@@ -4398,12 +4146,8 @@ describe("WsStreamClient host credential provisioning", () => {
     ): Promise<void> => {
       const before = sockets.length;
       sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
-      // WAIT FOR THE SOCKET, not for a fixed delay. The re-dial backs off, so
-      // by the fourth drop a flat 30ms expires before the new socket exists -
-      // and the handshake below would then be completed on the CLOSED one,
-      // delivering no ack at all. A case that asserts a mint count is
-      // UNCHANGED passes vacuously when that happens, which is how the
-      // reconnect that never landed went unnoticed.
+      // Wait for the socket, not for a fixed delay.
+      // The re-dial backs off, so by the fourth drop a flat 30ms expires before the new socket exists - and the handshake below would then be completed on the closed one, delivering no ack at all.
       for (let i = 0; i < 100 && sockets.length === before; i += 1) {
         await wait(10);
       }
@@ -4427,11 +4171,7 @@ describe("WsStreamClient host credential provisioning", () => {
     await reconnectReporting("needs-reauth");
     expect(mint).toHaveBeenCalledTimes(2);
 
-    // The re-arm is a VALUE CHANGE, not a return to `active`. A burned
-    // credential the host then deletes reports `missing`, and that host is
-    // asking for one just as plainly as the `needs-reauth` before it - so a
-    // rule that only re-armed via `active` would strand exactly the host that
-    // cleaned up after itself.
+    // The re-arm is a value change, not a return to `active`.
     await reconnectReporting("missing");
     expect(mint).toHaveBeenCalledTimes(3);
 
@@ -4765,12 +4505,7 @@ describe("WsStreamClient host credential provisioning", () => {
     });
 
     it("fires even when the subscribed method's version is INCOMPATIBLE", async () => {
-      // The credential state is a HANDSHAKE fact, not a per-method one. It
-      // used to be reported only after the compatibility gate, so a host that
-      // advertised the capability but disagreed with this build about one
-      // method's version looked indistinguishable from an unreachable host -
-      // and the CLI's install probe reported it as such and could not
-      // provision it.
+      // The credential state is a handshake fact, not a per-method one.
       const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
       const observed: Array<{ hostId: string; state: HostCredentialState }> =
         [];
@@ -4909,12 +4644,8 @@ describe("WsStreamClient readiness", () => {
   it("reports ready while it owns no sessions at all", () => {
     const { client } = readinessClient();
 
-    // Vacuously ready ON PURPOSE. This client is not one connection - it owns
-    // N independent per-method sockets - so "ready" can only mean "nothing I
-    // own is down". A client that has not subscribed to anything is not
-    // evidence of an outage, and answering `false` here would make every
-    // client flip to not-ready the moment its last stream is legitimately
-    // unsubscribed. Do not "fix" this to false-when-empty.
+    // Vacuously ready ON purpose.
+    // This client is not one connection - it owns N independent per-method sockets - so "ready" can only mean "nothing I own is down".
     expect(client.isReady()).toBe(true);
 
     client.close("test-teardown");
@@ -4984,10 +4715,6 @@ describe("WsStreamClient readiness", () => {
 });
 
 describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
-  // Fake timers are installed BEFORE the client exists: the heartbeat interval
-  // is armed at subscribe time, and an interval created under real timers is
-  // never advanced by `advanceTimersByTime` - a test that installs them later
-  // passes whether or not the bug is present.
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -5015,15 +4742,10 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     return stub;
   }
 
-  // The wake probe exists to KEEP a socket that survived a lid-open. But the
-  // heartbeat interval is still armed across the sleep holding a PRE-sleep
-  // `lastPongAt`, so its next tick took the `missed-pongs` branch and tore the
-  // socket down before the probe could be answered - the stale deadline
-  // pre-empting the detector meant to decide, and re-running every stream's
-  // open on a machine whose Wi-Fi is still re-associating.
+  // The wake probe exists to keep a socket that survived a lid-open.
   it("does not let the pre-sleep pong deadline tear down a socket the probe is still testing", async () => {
     const { factory, sockets } = makeFactory();
-    // The heartbeat must be able to TICK inside the 5s wake-probe window, or
+    // The heartbeat must be able to tick inside the 5s wake-probe window, or
     // the race this pins cannot occur at all.
     const client = makeClient({
       factory,
@@ -5042,7 +4764,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     const sentBeforeProbe = stub.textSent.length;
     client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
-    // The probe really went out on the SAME socket.
+    // The probe really went out on the same socket.
     expect(stub.textSent.length).toBe(sentBeforeProbe + 1);
     expect(parseText(stub.textSent[sentBeforeProbe]).kind).toBe("ping");
     expect(stub.closed).toBeNull();
@@ -5056,9 +4778,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     session.close();
   });
 
-  // The other direction: rebasing the deadline must not make a genuinely dead
-  // socket immortal - the probe timeout still has to condemn it, and for its
-  // own reason rather than the heartbeat's.
+  // The other direction: rebasing the deadline must not make a genuinely dead socket immortal - the probe timeout still has to condemn it, and for its own reason rather than the heartbeat's.
   it("still force-reconnects when the probe goes unanswered", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -5119,13 +4839,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
 /**
  * Clock-skew park (Clock-skew detection and self-healing recovery, §2).
- *
- * The incident these cover: a machine boots with its wall clock 7h ahead, so
- * every 15-minute bearer reads as long expired against `Date.now()` while authn
- * (correct clock) keeps answering "valid". Before parking, that combination
- * walked every session to `goTerminal` with a diagnosis naming the credential,
- * and fixing the clock recovered nothing because terminal sessions never
- * re-dial.
+ * Before parking, that combination walked every session to `goTerminal` with a diagnosis naming the credential, and fixing the clock recovered nothing because terminal sessions never re-dial.
  */
 describe("WsStreamClient clock-skew park", () => {
   beforeEach(() => {
@@ -5150,18 +4864,8 @@ describe("WsStreamClient clock-skew park", () => {
   }
 
   /**
-   * A hand-driven `ServerClockSkewSignal`. Nothing here samples anything - the
-   * transport's contract is with the verdict, its DIRECTION, and the recovery
-   * edge, and keeping the double dumb is what makes these tests statements
-   * about the transport rather than about the tracker (which has its own
-   * suite).
-   *
-   * `skewed-ahead` is the incident: a local clock running FAST, so
-   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
-   * clock that is just as wrong and just as banner-worthy but CANNOT be why a
-   * bearer was rejected - the direction the park must not fire on. The
-   * predicate is computed exactly as the real tracker computes it rather than
-   * hardcoded per case, so the double cannot drift from the sign convention.
+   * A hand-driven `ServerClockSkewSignal`.
+   * `skewed-behind` is the equal-and-opposite clock that is just as wrong and just as banner-worthy but cannot be why a bearer was rejected - the direction the park must not fire on.
    */
   function makeClockSignal(
     initial: "ok" | "skewed-ahead" | "skewed-behind" | "unknown",
@@ -5203,7 +4907,6 @@ describe("WsStreamClient clock-skew park", () => {
     };
   }
 
-  /** A decodable JWT whose `exp` is in the past by local-clock arithmetic. */
   function expiredJwt(): string {
     const encode = (value: object): string =>
       btoa(JSON.stringify(value))
@@ -5218,9 +4921,7 @@ describe("WsStreamClient clock-skew park", () => {
     readonly factory: IStreamWebSocketFactory;
     readonly auth: StreamAuthRevalidator;
     readonly clock: ServerClockSkewSignal | null;
-    // A PROVIDER, not a fixed string, because the incident's last act needs the
-    // bearer to stop reading as expired at the same moment the verdict clears -
-    // which is what physically happens when the clock is corrected.
+    // A provider, not a fixed string, because the incident's last act needs the bearer to stop reading as expired at the same moment the verdict clears - which is what physically happens when the clock is corrected.
     readonly bearer: () => string;
   }): WsStreamClient<typeof hostStreamRpcRegistry> {
     const contexts = new Map<string, RequestContext>();
@@ -5239,7 +4940,7 @@ describe("WsStreamClient clock-skew park", () => {
       endpoint: () => mockLocalHostEntry,
       hostId: mockLocalHostEntry.hostId,
       // Never rotated by these tests' revalidators, which is what makes every
-      // cycle a NO-PROGRESS one - the exact shape of the incident.
+      // cycle a NO-progress one - the exact shape of the incident.
       bearer: () => contextFor(options.bearer()).credentials,
       auth: options.auth,
       clock: options.clock,
@@ -5291,8 +4992,7 @@ describe("WsStreamClient clock-skew park", () => {
       () => clock.recoverySubscribers() === 1,
     );
     // Then settle: a park that dialed or revalidated anyway shows up here.
-    // No socket, no authn round trip, no terminal close - and a live
-    // subscription is the only thing holding the session.
+    // No socket, no authn round trip, no terminal close - and a live subscription is the only thing holding the session.
     await wait(60);
     expect(sockets).toHaveLength(0);
     expect(revalidator.calls.count).toBe(0);
@@ -5322,9 +5022,7 @@ describe("WsStreamClient clock-skew park", () => {
       "the session to park",
       () => clock.recoverySubscribers() === 1,
     );
-    // The dial count AT THE PARK, not a literal: what this test claims is that
-    // correcting the clock adds exactly one more dial, whatever it took to get
-    // here.
+    // The dial count AT the park, not a literal: what this test claims is that correcting the clock adds exactly one more dial, whatever it took to get here.
     const dialsAtPark = sockets.length;
 
     clock.recover();
@@ -5361,9 +5059,7 @@ describe("WsStreamClient clock-skew park", () => {
   });
 
   it("still reaches the terminal bound for a HOST CONFIG MISMATCH, which looks identical on the wire", async () => {
-    // The whole reason parking keys on the tracker's verdict and not on the
-    // rejection shape: "authn validates it, the host rejects it" is also what a
-    // misconfigured host produces, and retrying that forever helps nobody.
+    // The whole reason parking keys on the tracker's verdict and not on the rejection shape: "authn validates it, the host rejects it" is also what a misconfigured host produces, and retrying that forever helps nobody.
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
     const clock = makeClockSignal("ok");
@@ -5381,9 +5077,7 @@ describe("WsStreamClient clock-skew park", () => {
       closeReasons.push(reason);
     });
 
-    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
-    // behind a fixed wait re-drives the previous one when the redial has not
-    // landed yet, which silently turns three cycles into fewer.
+    // Each cycle drives its own dial.
     for (let cycle = 0; cycle < 3; cycle += 1) {
       const socket = await nthSocket(sockets, cycle);
       socket.fireOpen();
@@ -5401,13 +5095,8 @@ describe("WsStreamClient clock-skew park", () => {
   });
 
   it("does NOT park on a clock running BEHIND, and still walks the no-progress bound to terminal", async () => {
-    // The mirror of the incident, and the failure this feature would otherwise
-    // have reintroduced in the opposite direction. A SLOW clock makes a bearer
-    // look more valid, never expired, and the host validates against its own
-    // clock - so it cannot be why this bearer was rejected. Whatever is (a host
-    // config mismatch, a revocation) is exactly the case the terminal bound
-    // exists to diagnose, and parking here would strand the session until the
-    // user "fixed" a clock that was never the cause.
+    // The mirror of the incident, and the failure this feature would otherwise have reintroduced in the opposite direction.
+    // A slow clock makes a bearer look more valid, never expired, and the host validates against its own clock - so it cannot be why this bearer was rejected.
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
     const clock = makeClockSignal("skewed-behind");
@@ -5425,9 +5114,7 @@ describe("WsStreamClient clock-skew park", () => {
       closeReasons.push(reason);
     });
 
-    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
-    // behind a fixed wait re-drives the previous one when the redial has not
-    // landed yet, which silently turns three cycles into fewer.
+    // Each cycle drives its own dial.
     for (let cycle = 0; cycle < 3; cycle += 1) {
       const socket = await nthSocket(sockets, cycle);
       socket.fireOpen();
@@ -5449,9 +5136,8 @@ describe("WsStreamClient clock-skew park", () => {
   });
 
   it("does NOT park at the pre-dial gate on a clock running BEHIND, and does not blame the clock for it", async () => {
-    // A slow clock makes `exp <= Date.now()` LESS likely to fire, so if it
-    // fired anyway the bearer really is expired. Revalidate exactly as before,
-    // and do not hand the user a confident misdiagnosis on the way.
+    // A slow clock makes `exp <= Date.now()` less likely to fire, so if it fired anyway the bearer really is expired.
+    // Revalidate exactly as before, and do not hand the user a confident misdiagnosis on the way.
     const { factory } = makeFactory();
     const revalidator = makeRevalidator("rotated");
     const clock = makeClockSignal("skewed-behind");
@@ -5549,11 +5235,7 @@ describe("WsStreamClient clock-skew park", () => {
     // what made the old loop make no progress.
     const revalidator = makeRevalidator("rotated");
     const clock = makeClockSignal("skewed-ahead");
-    // The bearer and the verdict move TOGETHER because physically they are one
-    // fact: the token only ever "expired" because it was being compared against
-    // a clock that was 7h ahead, so correcting the clock is what makes the same
-    // token read as live again. `expiredJwt()` stands in for that comparison,
-    // since the suite's own `Date.now()` cannot be skewed.
+    // `expiredJwt()` stands in for that comparison, since the suite's own `Date.now()` cannot be skewed.
     const bearer = { current: expiredJwt() };
     const client = makeClockClient({
       factory,
@@ -5565,9 +5247,8 @@ describe("WsStreamClient clock-skew park", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    // Phase 1 - wrong clock. Parked at the pre-dial gate: nothing dialed,
-    // nothing closed, and authn is not being hammered. On the old build this
-    // window was three revalidate/redial cycles ending in `goTerminal`.
+    // Phase 1 - wrong clock.
+    // Parked at the pre-dial gate: nothing dialed, nothing closed, and authn is not being hammered.
     await pollUntil(
       "the pre-dial gate to park",
       () => clock.recoverySubscribers() === 1,
@@ -5577,9 +5258,7 @@ describe("WsStreamClient clock-skew park", () => {
     expect(statuses).not.toContain("closed");
     expect(revalidator.calls.count).toBe(0);
 
-    // Phase 2 - the user fixes the clock. The recovery edge alone brings the
-    // session back: no reload, no manual intervention, and the host-side rooms
-    // unlatch off the reconnect that follows.
+    // Phase 2 - the user fixes the clock.
     bearer.current = "live-bearer";
     clock.recover();
     await pollUntil("the resumed dial", () => sockets.length >= 1);
@@ -5616,13 +5295,7 @@ describe("WsStreamClient clock-skew park re-entrancy", () => {
   }
 
   it("leaves NO subscription behind when a consumer closes the session from the park's status callback", async () => {
-    // `transitionTo` runs the consumer's handler synchronously, and an owner
-    // unmounting on a status change is ordinary React. If the park installs
-    // its recovery listener AFTER that emit, the re-entrant `close()` runs
-    // `clearClockPark` against a handle that does not exist yet - and the
-    // listener installed a moment later belongs to a disposed session that
-    // will never release it. The app-wide tracker would then hold that dead
-    // session for the life of the page.
+    // `transitionTo` runs the consumer's handler synchronously, and an owner unmounting on a status change is ordinary React.
     const { factory, sockets } = makeFactory();
     const ctx = makeRequestContext("plain-bearer");
     const recoveryListeners = new Set<() => void>();
@@ -5664,9 +5337,8 @@ describe("WsStreamClient clock-skew park re-entrancy", () => {
     });
 
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
-    // Two "reconnecting" emits follow the fatal: `resetForReconnect`'s, then
-    // the park's own. Closing on the FIRST would dispose before the park ever
-    // ran and prove nothing, so the close is aimed at the second.
+    // Two "reconnecting" emits follow the fatal: `resetForReconnect`'s, then the park's own.
+    // Closing on the first would dispose before the park ever ran and prove nothing, so the close is aimed at the second.
     let reconnectingAfterFatal = 0;
     let armed = false;
     session.onStatusChange((status) => {
@@ -5700,12 +5372,8 @@ describe("WsStreamClient clock-skew park re-entrancy", () => {
 });
 
 /**
- * Pins for `stream-method-support-registry.ts`'s seed - what a freshly
- * constructed client's `getMethodSupport` answers BEFORE it has handshaken
- * with its host, from a PRIOR client's completed handshake with that same
- * host. Lives in this file rather than a standalone one so it can reuse the
- * existing `StubStreamWebSocket` / `makeFactory` / `completeHandshake`
- * harness instead of re-building a second copy of it.
+ * Pins for `stream-method-support-registry.ts`'s seed - what a freshly constructed client's `getMethodSupport` answers before it has handshaken with its host, from a prior client's completed handshake with that same host.
+ * Lives in this file rather than a standalone one so it can reuse the existing `StubStreamWebSocket` / `makeFactory` / `completeHandshake` harness instead of re-building a second copy of it.
  */
 describe("WsStreamClient stream-method-support-registry seed", () => {
   const HOST_A_ENTRY: HostDirectoryEntry = {
@@ -5754,9 +5422,7 @@ describe("WsStreamClient stream-method-support-registry seed", () => {
   }
 
   /**
-   * Completes a handshake against host A that negotiates {@link SEED_METHOD}
-   * as `"supported"`, recording that verdict into the memo under host A - the
-   * fact every case below either relies on or overrides.
+   * Completes a handshake against host A that negotiates {@link SEED_METHOD} as `"supported"`, recording that verdict into the memo under host A - the fact every case below either relies on or overrides.
    */
   async function recordHostASupportedViaHandshake(): Promise<void> {
     const { factory, sockets } = makeFactory();
@@ -5779,9 +5445,7 @@ describe("WsStreamClient stream-method-support-registry seed", () => {
   it("seeds a fresh client's getMethodSupport from a PRIOR client's completed handshake with the same host", async () => {
     await recordHostASupportedViaHandshake();
 
-    // A second, freshly-constructed client for the SAME host - no handshake
-    // of its own - reports the memo's verdict. This is the whole lever: the
-    // Epic's client is minted per session, so this is what removes the probe.
+    // A second, freshly-constructed client for the same host - no handshake of its own - reports the memo's verdict.
     const { factory } = makeFactory();
     const fresh = makeSeedClient({
       factory,
@@ -5818,10 +5482,6 @@ describe("WsStreamClient stream-method-support-registry seed", () => {
   it("a client's own handshake evidence overrides what the memo says for its host", async () => {
     await recordHostASupportedViaHandshake();
 
-    // A second client for host A, whose OWN handshake computes `unsupported`
-    // for the seeded method (omitted from the host's ack manifest) - mirrors
-    // "remembers a missing stream method as unsupported for newer-client
-    // older-host pairs" above.
     const { factory, sockets } = makeFactory();
     const client = makeSeedClient({
       factory,
@@ -5843,26 +5503,8 @@ describe("WsStreamClient stream-method-support-registry seed", () => {
   });
 
   it("does not seed a NEGATIVE verdict: an in-place host upgrade must reach the probe, not a decided legacy arm", async () => {
-    // The two directions are not symmetric, which is why only one of them is
-    // reused. A stale `supported` is self-correcting at a cost the registry
-    // header already budgets for: the subscribe is rejected and the caller
-    // falls back to legacy.
-    //
-    // A stale `unsupported` is what a host upgraded IN PLACE leaves behind -
-    // `hostId` survives an upgrade, so the entry outlives the fact it records
-    // - and `readEpicAdapterVerdict` treats an explicit `unsupported` as a
-    // DECISION (`legacy`), not as the `undecided` that runs the probe. So
-    // every newly minted client on the upgraded host would install and
-    // subscribe the legacy arm, and only that unnecessary handshake could
-    // replace the verdict - at the price of a replica replacement onto the
-    // lanes mid-session. That reinstates the speculative legacy open and the
-    // extra round trip this memo exists to remove, exactly after the
-    // auto-update that makes the lanes available.
-    //
-    // Recorded through a REAL handshake whose ack omits the method, the same
-    // way the "own handshake evidence overrides" case above does it, so this
-    // pins what production writes rather than what a direct `record…` call
-    // would let the test assert into existence.
+    // The two directions are not symmetric, which is why only one of them is reused.
+    // That reinstates the speculative legacy open and the extra round trip this memo exists to remove, exactly after the auto-update that makes the lanes available.
     const { factory: seedingFactory, sockets: seedingSockets } = makeFactory();
     const seeding = makeSeedClient({
       factory: seedingFactory,
@@ -5880,15 +5522,11 @@ describe("WsStreamClient stream-method-support-registry seed", () => {
         "epic.subscribe": { major: 1, minor: 0 },
       },
     });
-    // The negative really was negotiated and really is in the memo - without
-    // this the assertion below would pass just as happily against an empty
-    // registry, which is the answer it is trying to distinguish from.
+    // The negative really was negotiated and really is in the memo - without this the assertion below would pass just as happily against an empty registry, which is the answer it is trying to distinguish from.
     expect(seeding.getMethodSupport(SEED_METHOD)).toBe("unsupported");
     seedingSession.close();
 
-    // THE REDDENING ASSERTION. `unsupported` here is a decided legacy arm on a
-    // host that may well serve the lanes now; `unknown` is the probe, which is
-    // the pre-memo behaviour and correct by construction.
+    // The reddening assertion.
     const { factory } = makeFactory();
     const afterUpgrade = makeSeedClient({
       factory,
@@ -5912,10 +5550,8 @@ describe("WsStreamClient stream-method-support-registry seed", () => {
     completeHandshake(sockets[0].socket);
     expect(client.getMethodSupport(SEED_METHOD)).toBe("supported");
 
-    // Drive a real reconnect the way production does - an abnormal drop -
-    // rather than reaching into the instance. `resetForReconnect` clears the
-    // client's own support map but leaves `hasCompletedHandshake` latched on,
-    // which is exactly what must stop the seed from answering here.
+    // Drive a real reconnect the way production does - an abnormal drop - rather than reaching into the instance.
+    // `resetForReconnect` clears the client's own support map but leaves `hasCompletedHandshake` latched on, which is exactly what must stop the seed from answering here.
     sockets[0].socket.fireClose(1006, "abnormal", false);
 
     expect(client.getMethodSupport(SEED_METHOD)).toBe("unknown");

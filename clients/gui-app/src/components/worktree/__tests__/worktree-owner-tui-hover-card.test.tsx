@@ -1,9 +1,4 @@
-/**
- * Integrated hover-card coverage for terminal-agent identity.
- *
- * Uses the real Radix HoverCard primitives (via HoverPreviewCard). Only host
- * data / epic-store boundaries are stubbed - not the hover surface itself.
- */
+/** Only host data / epic-store boundaries are stubbed - not the hover surface itself. */
 import {
   act,
   cleanup,
@@ -50,11 +45,7 @@ vi.mock("@/hooks/use-epic-store", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => ({ getActiveHostId: () => "host-1" }),
 }));
-// The card also derives PR pills from `pr.subscribeListForEpic` via this
-// hook - unmocked, it reaches for `useHostDirectoryEntryForHostId` (absent
-// from the partial host-client mock above) and a real stream client, neither
-// of which this file provides. This suite is about TUI identity chrome, not
-// PR pills, so an inert result suffices.
+// The card also derives PR pills from `pr.subscribeListForEpic` via this hook.
 vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
   useOwnerListPrReferences: () => ({
     references: [],
@@ -67,9 +58,8 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // The header's subject-harness warmup; targeting is covered by
   // `worktree-owner-settings-header.test.tsx`, so a no-op suffices here.
   useGuiHarnessModelsWarmup: () => undefined,
-  // The header resolves the catalog through the owner's host client; this
-  // suite is about hover-card identity, not host scoping (covered by
-  // `worktree-owner-settings-header.test.tsx`), so it answers for any client.
+  // The header resolves the catalog through the owner's host client; this suite is about hover-card identity,
+  // not host scoping (covered by `worktree-owner-settings-header.test.tsx`), so it answers for any client.
   useGuiHarnessCatalogForClient: () => ({
     harnesses: [
       {
@@ -99,10 +89,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     },
   }),
 }));
-// Terminal agents keep their settings on the store projection, so this read is
-// disabled for every owner in this suite. Mocked rather than provided for: the
-// real hook needs a `QueryClientProvider`, and standing one up here would be
-// scaffolding for a query that is never issued.
+// Mocked rather than provided for: the real hook needs a `QueryClientProvider`, and standing one up here would
+// be scaffolding for a query that is never issued.
 vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
   useChatRunSettings: () => ({ data: undefined }),
 }));
@@ -255,11 +243,8 @@ describe("TUI agent hover card identity (real HoverCard)", () => {
   });
 
   it("carries a caller's supplemental content inside the real hover card", () => {
-    // The card is the shared identity chrome; a caller (e.g. the office
-    // floor) appends its own line under it rather than replacing anything.
-    // This exercises the REAL HoverCard content, not a mocked stand-in, so a
-    // regression that dropped supplemental content from the render tree
-    // would show up here.
+    // This exercises the real HoverCard content, not a mocked stand-in, so a regression that dropped supplemental
+    // content from the render tree would show up here.
     render(
       <WorktreeOwnerMetadataTooltip
         trigger={

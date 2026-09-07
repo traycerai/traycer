@@ -30,9 +30,8 @@ const listCommandsKey = queryKeys.hostMethod<
 });
 
 /**
- * Non-catalog host-scoped control. Not in the active-refetch carve-out;
- * proves ordinary methods still refetch on recovery while catalogs do not.
- * (`git.status` is not a registry method — use a real key builder target.)
+ * Non-catalog host-scoped control.
+ * Not in the active-refetch carve-out; proves ordinary methods still refetch on recovery while catalogs do not.
  */
 const controlKey = queryKeys.hostMethod<HostRpcRegistry, "git.getCapabilities">(
   HOST_ID,
@@ -46,10 +45,7 @@ const controlKey = queryKeys.hostMethod<HostRpcRegistry, "git.getCapabilities">(
 
 /**
  * traycer#912: host-scope active recovery must not re-probe harness catalogs.
- * Catalogs are cache-only (`staleTime: Infinity`) with three documented refresh
- * points; an un-carved `invalidateQueries({queryKey})` would beat that and
- * re-spawn provider CLIs on every recovery sweep. Same-host transport rebind
- * also passes `refetchActive: true` — the carve-out is global for that edge.
+ * Catalogs are cache-only (`staleTime: Infinity`) with three documented refresh points; an un-carved `invalidateQueries({queryKey})` would beat that and re-spawn provider CLIs on every recovery sweep.
  */
 describe("createHostQueryInvalidator / invalidateHostScope", () => {
   const stops: Array<() => void> = [];
@@ -84,10 +80,7 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
 
     invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
 
-    // Non-catalog active observer must refetch (mutation probe: a plain
-    // invalidateQueries({queryKey}) would also bump catalog counts, so this
-    // assertion alone is not enough — the unchanged catalog counts below are
-    // the carve-out probe).
+    // Non-catalog active observer must refetch (mutation probe: a plain invalidateQueries({queryKey}) would also bump catalog counts, so this assertion alone is not enough - the unchanged catalog counts below are the carve-out probe).
     await waitUntil(() => control.fetches.count === 2);
     expect(control.fetches.count).toBe(2);
 
@@ -105,20 +98,8 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
   });
 
-  // Codex review, PR #977 thread PRRT_kwDOL6Tbrc6WdeIO: "Do not invalidate
-  // cache-only catalog queries during recovery". Marking them stale without
-  // a refetch is not enough - TanStack treats an invalidated query as stale
-  // regardless of `staleTime`, so the storm is deferred to the next mount,
-  // not prevented. The picker creates one enabled `listModels` observer per
-  // harness on open, so that mount is where all ~14 probes would land.
-  // This is the load-bearing half of the argument, pinned in-suite because it
-  // is the non-obvious part: `staleTime: Infinity` does NOT protect a query
-  // that carries `isInvalidated`. `Query.isStaleByTime` returns true on the
-  // invalidated flag BEFORE it ever consults the time budget
-  // (query-core 5.101.4, `query.js:134`), and `shouldFetchOnMount` routes
-  // through exactly that. So "mark stale without refetching" only moves the
-  // fan-out to the next mount. The test above asserts the sweep leaves the
-  // flag off; this one shows what that flag would have cost.
+  // Codex review, PR #977 thread PRRT_kwDOL6Tbrc6WdeIO: "Do not invalidate cache-only catalog queries during recovery".
+  // Marking them stale without a refetch is not enough - TanStack treats an invalidated query as stale regardless of `staleTime`, so the storm is deferred to the next mount, not prevented.
   it("an invalidated cache-only entry DOES refetch on the next mount (the cost the carve-out avoids)", async () => {
     const queryClient = createAppQueryClient();
 
@@ -194,10 +175,8 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
   });
 
   it("with refetchActive: true, does not refetch a cloud epic-tasks key while still refetching an ordinary host key", async () => {
-    // The bind-path force-refetch is the broadest host-scope sweep; force-
-    // refetching the cloud epic-tasks history drops optimistically-inserted
-    // local-first epics (cloud-query-keys.ts). This pin is the bind-path
-    // enforcement of that documented invariant.
+    // The bind-path force-refetch is the broadest host-scope sweep; force- refetching the cloud epic-tasks history drops optimistically-inserted local-first epics (cloud-query-keys.ts).
+    // This pin is the bind-path enforcement of that documented invariant.
     const queryClient = createAppQueryClient();
     const invalidator = createHostQueryInvalidator(queryClient);
 
@@ -237,12 +216,7 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
   });
 
   it("does not auto-refetch an errored catalog on refetchActive: true; intent edge recovers it", async () => {
-    // Accepted trade-off for the same-host transport-rebind edge (also
-    // refetchActive: true): an error-state catalog is marked stale without a
-    // recovery fetch, so a rebind/flap cannot re-open the #912 CLI storm.
-    // Recovery is intentional — harnessCatalogEntryNeedsRefresh treats isError
-    // as always-due, and an intent-edge refetch (picker open / selection)
-    // clears the stranded entry.
+    // Accepted trade-off for the same-host transport-rebind edge (also refetchActive: true): an error-state catalog is marked stale without a recovery fetch, so a rebind/flap cannot re-open the #912 CLI storm.
     const queryClient = createAppQueryClient();
     const invalidator = createHostQueryInvalidator(queryClient);
 
@@ -269,15 +243,8 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     expect(control.fetches.count).toBe(2);
 
     await settle(20);
-    // Carve-out holds even when the catalog entry is already in error: no
-    // automatic recovery fetch on the active host-scope sweep. The unchanged
-    // fetch count is the whole probe here - note that `isInvalidated` below
-    // is NOT evidence of anything the invalidator did: a query comes out of a
-    // REJECTED fetch already flagged invalidated by TanStack itself, before
-    // any `invalidateQueries` call (verified directly). It is asserted only
-    // to pin that pre-existing shape, and it is exactly why the successful
-    // catalogs in the tests above - where the flag does mean something - are
-    // the ones that discriminate the carve-out.
+    // Carve-out holds even when the catalog entry is already in error: no automatic recovery fetch on the active host-scope sweep.
+    // The unchanged fetch count is the whole probe here - note that `isInvalidated` below is NOT evidence of anything the invalidator did: a query comes out of a REJECTED fetch already flagged invalidated by TanStack itself, before any `invalidateQueries` call.
     expect(models.fetches.count).toBe(1);
     expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(listModelsKey)?.status).toBe("error");
@@ -321,9 +288,7 @@ function mountCountedQuery(
 } {
   const fetches = { count: 0 };
   let impl: FetchImpl = options.impl;
-  // Named function (not an inline queryFn) so @tanstack/query/exhaustive-deps
-  // doesn't demand the test's fetch counter in the queryKey - the counter is
-  // observation instrumentation, not query input.
+  // Named function (not an inline queryFn) so @tanstack/query/exhaustive-deps doesn't demand the test's fetch counter in the queryKey - the counter is observation instrumentation, not query input.
   const countingQueryFn = (): Promise<unknown> => {
     fetches.count += 1;
     return impl();

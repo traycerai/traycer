@@ -19,15 +19,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * The anti-drift test for the imperative reader.
- *
- * `cloud-chat-list-cache.ts` rebuilds the slot `useCloudChatList` writes, and
- * two sides agreeing about a key format in prose is the exact bug shape that
- * fails SILENTLY - the lookup compiles, runs, and answers "nothing" forever.
- * So the hook is mounted for real here and the reader is pointed at whatever it
- * actually wrote, rather than at a key this test also hand-builds.
- */
+/** The anti-drift test for the imperative reader. */
 
 const VIEWER = "viewer-a";
 const TASK_ID = "task-1";
@@ -67,12 +59,7 @@ function createHarness(
 ): Harness {
   const queryClient = createAppQueryClient();
   queryClient.setDefaultOptions({
-    // The hook under test sets its own `retry` predicate, and per-query
-    // options beat these defaults - so `retry: false` never reaches it and
-    // only disables retries for any OTHER query a test happens to mount.
-    // What actually matters for the hook is `retryDelay: 0`: its predicate
-    // still allows retries, and two backed-off ones would otherwise outlast
-    // `waitFor`'s window and read as a hang rather than a settled failure.
+    // The hook under test sets its own `retry` predicate, and per-query options beat these defaults - so `retry: false` never reaches it and only disables retries for any OTHER query a test happens to mount.
     queries: {
       ...queryClient.getDefaultOptions().queries,
       retry: false,
@@ -216,10 +203,7 @@ describe("readCloudKnownChatIds", () => {
   it("refuses to answer for a request that could never be made", () => {
     const harness = createHarness(() => []);
 
-    // "Nothing could ask" is not "the cloud lists nothing": an unresolved host
-    // binding or a sign-in still settling is a boot-order state, and reporting
-    // it as an empty SET let a transient race authorize the caller's permanent
-    // payload discard. These arms must be `null` - no answer to act on.
+    // "Nothing could ask" is not "the cloud lists nothing": an unresolved host binding or a sign-in still settling is a boot-order state, and reporting it as an empty SET let a transient race authorize the caller's permanent payload discard.
     expect(
       readCloudKnownChatIds(harness.queryClient, {
         hostId: null,

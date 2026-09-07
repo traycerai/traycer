@@ -9,14 +9,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 
 /**
- * `terminal.list` against an EXPLICIT host client rather than the app-wide
- * active host. Used by callers that must scope the query to a specific host
- * - e.g. a chat tab bound to a non-default host resolving its setup-terminal
- * liveness via `useTabHostClient`. A `null` client (directory not yet
- * resolved / signed out) disables the query, so liveness stays optimistic until
- * the first response settles.
- *
- * `useTerminalList` is the default-host convenience wrapper over this hook.
+ * `terminal.list` on the explicit bound client. Null client disables the query so liveness stays optimistic until the first response.
  */
 export function useTerminalListFor(
   client: HostClient<HostRpcRegistry> | null,

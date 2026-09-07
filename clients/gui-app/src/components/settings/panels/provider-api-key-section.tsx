@@ -14,21 +14,8 @@ import { envNamePlaceholder } from "./provider-env-name-placeholder";
 
 type ProviderId = ProviderCliState["providerId"];
 
-/**
- * Where the user gets a key, per provider. `null` means "no page to send them
- * to" and simply omits the link.
- *
- * EXHAUSTIVE on purpose. This was a `Partial<Record<…>>`, and the failure mode
- * of a partial record here is entirely silent: kiro takes a `KIRO_API_KEY`,
- * renders the whole key field, and had no entry - so its users saw an input box
- * and no way to find out where a key comes from, with nothing in the code
- * marking the omission as an omission. Every future key provider would have
- * inherited that. A total record makes the compiler ask.
- *
- * Only the five providers in the host's `API_KEY_ENV_VAR` map ever reach this
- * component (`state.apiKey.supported` is false for the rest), so the other
- * thirteen entries are `null` by construction rather than by research.
- */
+/** Only the five providers in the host's `API_KEY_ENV_VAR` map ever reach this component
+ * (`state.apiKey.supported` is false for the rest). */
 const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   "claude-code": null,
   codex: null,
@@ -39,27 +26,21 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   huggingface: "https://huggingface.co/settings/tokens",
   grok: null,
   qwen: null,
-  // Kiro keys are issued from the Kiro app / AWS console rather than a stable
-  // public key page; left null rather than shipping a guessed URL that dead-ends
-  // the user this entry exists to help. Fill it in once one is confirmed.
+  // Kiro keys are issued from the Kiro app / AWS console rather than a stable public key page; left null rather
+  // than shipping a guessed URL that dead-ends the user this entry exists to help.
   kiro: null,
   droid: "https://app.factory.ai/settings/api-keys",
   kimi: null,
   copilot: null,
   kilocode: null,
   amp: "https://ampcode.com/settings",
-  // Devin is NOT an API-key provider (it is absent from the host's
-  // `API_KEY_ENV_VAR`, so `apiKey.supported` is false and this section never
-  // renders for it). The old entry - a Windsurf-key URL - was unreachable, and
-  // making this record total is what surfaced that.
+  // Devin is not an API-key provider (it is absent from the host's `API_KEY_ENV_VAR`, so `apiKey.supported` is
+  // false and this section never renders for it).
   devin: null,
   pi: null,
   hermes: null,
   omp: null,
-  // Reasonix keys are pasted into its own terminal `setup` wizard, which
-  // writes them to Reasonix's global store - there is no Reasonix-hosted key
-  // page to send the user to, and the provider key page it would name depends
-  // on which model provider they configured.
+  // Reasonix keys are pasted into its own terminal `setup` wizard, which writes them to Reasonix's global store.
   reasonix: null,
 };
 
@@ -68,16 +49,8 @@ function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {
   return apiKey.source === "stored" ? "Key set" : "From environment";
 }
 
-// API-key-authenticated providers (Cursor) render a key field in addition to
-// the binary picker. The raw key never leaves the host; `state.apiKey` only
-// reports whether one is configured and where it came from.
-//
-// The draft is OWNED BY THE CALLER rather than held here. This section renders
-// inside the `account` tab, and Radix unmounts an inactive `TabsContent` - so
-// a locally-held draft would be destroyed by an ordinary tab switch, silently
-// blanking a key the user had already pasted. `ProviderDetail` holds it
-// instead: that survives tab switches and is still discarded on a provider
-// switch, which remounts it by `key`.
+// The raw key never leaves the host; `state.apiKey` only reports whether one is configured and where it came
+// from. The draft is owned BY the caller rather than held here.
 export function ProviderApiKeySection({
   state,
   draft,

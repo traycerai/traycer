@@ -31,17 +31,10 @@ import {
 } from "../epic-state-lane-adapter";
 
 /**
- * `epic.state.subscribe@1.0` adapter - records-lane decode, lane strip/stamp,
- * resume/replacement signalling, and generation-guard dropping.
- *
- * Every server frame fed to the adapter is built by parsing a plain object
- * through the REAL wire schema and narrowing on `kind` - never hand-typed -
- * so a fixture that drifts from the contract fails at construction rather
- * than passing silently. See the module's own note on two independently
- * green halves of a wire contract both being wrong together.
+ * `epic.state.subscribe@1.0` adapter - records-lane decode, lane strip/stamp, resume/replacement signalling, and generation-guard dropping.
  */
 
-// ─── Frame builders (parsed through the real schema) ───────────────────────
+ // ─── Frame builders (parsed through the real schema) ───────────────────────
 
 function snapshotFrame(
   overrides: Partial<{
@@ -69,12 +62,7 @@ function snapshotFrame(
 }
 
 /**
- * `reconciledWithCloud` is REQUIRED on `resumed`, and that is the one field a
- * resuming client cannot carry over from its previous session: rows are row
- * state and survive the gap by definition, but trust describes the SERVING
- * HOST'S replica, which may have restarted seed-only since the cursor was
- * persisted. Defaulted here rather than made a parameter on every call site,
- * with the one test that cares passing it explicitly.
+ * Defaulted here rather than made a parameter on every call site, with the one test that cares passing it explicitly.
  */
 function resumedFrame(
   authorityEpoch: string,
@@ -98,9 +86,7 @@ interface ArtifactRecordFixtureOverrides {
   readonly parentId?: string | null;
 }
 
-// Named rather than inferred, because the overrides interfaces below have to
-// reference these shapes and `ReturnType<typeof fn>` is banned by this repo's
-// type-safety rules - in tests as well as in production.
+// Named rather than inferred, because the overrides interfaces below have to reference these shapes and `ReturnType<typeof fn>` is banned by this repo's type-safety rules - in tests as well as in production.
 interface ArtifactRecordFixture {
   readonly kind: "spec";
   readonly id: string;
@@ -147,9 +133,7 @@ function artifactRecordFixture(
   };
 }
 
-// `artifactRoomId` is deliberately absent: `epicDeletedArtifactRecordSchema`
-// `.omit()`s it, so a fixture that included it would be stripped on `.parse()`
-// and no longer match what the adapter actually receives.
+// `artifactRoomId` is deliberately absent: `epicDeletedArtifactRecordSchema` `.omit()`s it, so a fixture that included it would be stripped on `.parse()` and no longer match what the adapter actually receives.
 function deletedArtifactRecordFixture(
   id: string,
   revision: number,
@@ -276,12 +260,6 @@ function createFakeRuntimeEnvironment(): RuntimeEnvironment {
   };
 }
 
-/**
- * Every channel a host receives - `emit`, `reportResume`, `reportStatus`,
- * `requestReplacement` - appended into ONE ordered log, because order between
- * those channels is load-bearing (e.g. `reportResume` before the snapshot's
- * rows).
- */
 type LogEntry =
   | { readonly channel: "emit"; readonly event: EpicStateLaneEvent }
   | { readonly channel: "reportResume"; readonly outcome: ResumeOutcome }
@@ -520,9 +498,7 @@ describe("createEpicStateLaneAdapter - resumed frame", () => {
 
     latest().callbacks.onResumed(resumedFrame("epoch-1", 5, true));
 
-    // Trust follows the acknowledgement and NOTHING else does: no rows travel
-    // on a resume, because the client keeping what it holds is the point. See
-    // `resumedFrame` for why trust is the one exception.
+    // Trust follows the acknowledgement and nothing else does: no rows travel on a resume, because the client keeping what it holds is the point.
     expect(log).toEqual([
       {
         channel: "reportResume",
@@ -590,11 +566,7 @@ describe("createEpicStateLaneAdapter - snapshot row decode", () => {
   });
 
   it("gives distinct (artifactId, threadId) pairs distinct row ids", () => {
-    // `:`-joined, these two pairs produced the SAME row id. Both fields are
-    // `z.string()` on the wire, so this is reachable input, and the failure is
-    // not a mixed-up render: an upsert overwrites the other thread, and
-    // removing either installs an absorbing retraction under the shared key
-    // that suppresses the survivor for the rest of the session.
+    // `:`-joined, these two pairs produced the same row id.
     expect(commentThreadRowId("a:b", "c")).not.toBe(
       commentThreadRowId("a", "b:c"),
     );
@@ -1012,14 +984,8 @@ describe("createEpicStateLaneAdapter - generation guard", () => {
 });
 
 /**
- * The seed-trust marker, and the frame that exists because nothing else could
- * carry it.
- *
- * A background reconcile commits no row, so a `delta` envelope has nothing to
- * carry (and refuses to be empty), and a re-`snapshot` would have to claim a
- * `basis` that is not true. Before `trustChanged` existed, a seed-served client
- * labelled its data stale for the life of the subscription - found end to end
- * by the capture/replay harness, with both halves green in isolation.
+ * The seed-trust marker, and the frame that exists because nothing else could carry it.
+ * A background reconcile commits no row, so a `delta` envelope has nothing to carry (and refuses to be empty), and a re-`snapshot` would have to claim a `basis` that is not true.
  */
 describe("createEpicStateLaneAdapter - seed trust", () => {
   it("labels a snapshot from the wire's boolean, both ways", () => {
@@ -1104,10 +1070,8 @@ describe("createEpicStateLaneAdapter - seed trust", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    // Rows are row state and survive the gap by definition. Trust describes the
-    // SERVING HOST'S replica, which may have restarted seed-only since the
-    // cursor was persisted - so a client that kept its old value would resume
-    // believing it is reconciled against a host that is not.
+    // Rows are row state and survive the gap by definition.
+    // Trust describes the serving host'S replica, which may have restarted seed-only since the cursor was persisted - so a client that kept its old value would resume believing it is reconciled against a host that is not.
     latest().callbacks.onResumed(resumedFrame("epoch-1", 7, false));
 
     const events = emittedEvents(log);

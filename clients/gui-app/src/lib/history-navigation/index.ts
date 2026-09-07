@@ -1,12 +1,6 @@
 /**
- * History-navigation core library — the pure logic layer behind in-app
- * back/forward navigation. No UI, no provider mounting, no keybinding wiring;
- * the input surfaces and the prune-lifecycle ticket consume these.
- *
- * The controller surface itself (`getHistoryController`,
- * `PersistentHistoryController`) lives in `@/lib/persistent-history` and is
- * re-exported here so dependents can import the whole feature from
- * `@/lib/history-navigation`.
+ * History-navigation core library - the pure logic layer behind in-app back/forward navigation.
+ * No UI, no provider mounting, no keybinding wiring; the input surfaces and the prune-lifecycle ticket consume these.
  */
 export {
   getHistoryController,

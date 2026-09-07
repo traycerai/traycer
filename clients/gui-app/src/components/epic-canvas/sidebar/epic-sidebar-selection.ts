@@ -254,9 +254,7 @@ export function useMaybeSidebarBulkSelection(): SidebarBulkSelectionValue | null
 }
 
 /**
- * The node types the chats panel's tree is BUILT from. Terminal agents belong
- * to it even for a caller that only wants chats: a chat can be nested under
- * one, so dropping the agent from the walk takes its children with it.
+ * Terminal agents belong to it even for a caller that only wants chats: a chat can be nested under one, so dropping the agent from the walk takes its children with it.
  */
 export const CHATS_TREE_FILTER: SidebarTreeFilterFn = (type) =>
   type === "chat" || type === "terminal-agent";
@@ -266,9 +264,7 @@ const CHAT_NODE_FILTER: SidebarTreeFilterFn = (type) => type === "chat";
 
 /**
  * The top-level rows of one sidebar tree, in the panel's sort order.
- * `tree.rootIds` already carries the projector's default
- * (most-recent-activity) order, so a default sort (`comparator === null`)
- * re-sorts nothing.
+ * `tree.rootIds` already carries the projector's default (most-recent-activity) order, so a default sort (`comparator === null`) re-sorts nothing.
  */
 export function sidebarTreeRootIds(args: {
   readonly tree: EpicTreeIndex;
@@ -286,18 +282,8 @@ export function sidebarTreeRootIds(args: {
 const EMPTY_ARCHIVE_HIDDEN_IDS: ReadonlySet<string> = new Set<string>();
 
 /**
- * Every node hidden by archiving: the archived nodes themselves plus their
- * whole subtrees, i.e. exactly "some ancestor-or-self carries `archivedAt`".
- *
- * Descends from the archive roots through `childrenByParent` rather than
- * walking each node's parent chain upward - the archived set is normally tiny
- * and the walk then costs O(hidden subtree) instead of O(nodes x depth).
- *
- * This is what makes the SINGLE-FLAG model work without cascade writes:
- * archiving stamps only the target, and unarchiving clears only the target, so
- * the subtree reappears in one step - except for descendants that were archived
- * in their own right, which stay in `archivedIds` and keep hiding their own
- * subtrees. `hidden` doubles as the cycle guard.
+ * Descends from the archive roots through `childrenByParent` rather than walking each node's parent chain upward - the archived set is normally tiny and the walk then costs O(hidden subtree) instead of O(nodes x depth).
+ * This is what makes the SINGLE-FLAG model work without cascade writes: archiving stamps only the target, and unarchiving clears only the target, so the subtree reappears in one step - except for descendants that were archived in their own right, which stay in `archivedIds` and keep hiding their own subtrees.
  */
 function collectArchiveHiddenIds(
   archivedIds: ReadonlyArray<string>,
@@ -318,9 +304,7 @@ function collectArchiveHiddenIds(
 }
 
 /**
- * Archived-only is a tree projection rather than a flat list: unarchived
- * ancestors remain as navigational context for archived descendants, while
- * unrelated branches and unarchived descendants are hidden.
+ * Archived-only is a tree projection rather than a flat list: unarchived ancestors remain as navigational context for archived descendants, while unrelated branches and unarchived descendants are hidden.
  */
 function collectArchivedOnlyHiddenIds(
   archivedIds: ReadonlyArray<string>,
@@ -345,25 +329,8 @@ function collectArchivedOnlyHiddenIds(
 }
 
 /**
- * The archive-hidden set for this epic, or empty when nothing should be hidden.
- *
  * The selected visibility mode determines which archive partition is hidden.
- * `Archived only` retains unarchived ancestors solely as tree context.
- * Nothing is hidden in two cases, and the second is load-bearing:
- *
- * 1. "All chats" is selected - archived rows render dimmed alongside active.
- * 2. The host is KNOWN to lack `epic.setChatArchived`. Every way back to an
- *    archived row is capability-gated (the archive visibility filter, the
- *    Unarchive entry, the empty-state hint), so continuing to hide on such a
- *    host would leave rows invisible with nothing left to recover them - a real
- *    path, since a host can be rolled back under a live session or the default
- *    host can simply be an older machine. Archived records must never become
- *    unreachable, so a known-absent host stops hiding entirely.
- *
- * The support state is deliberately the TRI-STATE, not the fail-closed boolean:
- * `null` (no handshake yet) keeps hiding, because revealing on unknown would
- * flash archived rows on every cold start and hide them again a moment later.
- * Only a positive `false` reveals.
+ * Every way back to an archived row is capability-gated (the archive visibility filter, the Unarchive entry, the empty-state hint), so continuing to hide on such a host would leave rows invisible with nothing left to recover them - a real path, since a host can be rolled back under a live session or the default host can simply be an older machine.
  */
 export function useSidebarArchiveHiddenIds(
   epicId: string,
@@ -387,12 +354,8 @@ export function useSidebarArchiveHiddenIds(
 }
 
 /**
- * In the default unarchived view, reveals exceptional archived rows without
- * changing the mode to "All chats". An open, working, or unread row needs its
- * ancestor path to remain navigable, but siblings and descendants that have no
- * such signal stay hidden. Walking parent links also handles an active
- * unarchived descendant whose archived ancestor would otherwise prune the
- * whole branch.
+ * In the default unarchived view, reveals exceptional archived rows without changing the mode to "All chats".
+ * Walking parent links also handles an active unarchived descendant whose archived ancestor would otherwise prune the whole branch.
  */
 export function revealArchiveHiddenIds(
   archiveHiddenIds: ReadonlySet<string>,
@@ -417,15 +380,8 @@ export function revealArchiveHiddenIds(
 }
 
 /**
- * Intersects the origin filter's visible-id set with archive hiding, for the
- * consumers that walk tree DATA rather than the rendered tree (the collapsed
- * parent's status rollup, the bulk-selection id sweep, the send-to-chat
- * picker). Those must not surface a row the user cannot reach by expanding.
- *
- * Deliberately NOT fed to `mergeForcedExpanded`: that force-expands every id in
- * a non-null set, so publishing an archive-derived set there would expand the
- * entire tree the moment anything was archived. Forced expansion stays keyed
- * off the origin filter alone.
+ * Intersects the origin filter's visible-id set with archive hiding, for the consumers that walk tree DATA rather than the rendered tree (the collapsed parent's status rollup, the bulk-selection id sweep, the send-to-chat picker).
+ * Those must not surface a row the user cannot reach by expanding.
  */
 export function combineSidebarVisibleIds(
   originVisibleIds: ReadonlySet<string> | null,
@@ -449,10 +405,7 @@ export function collectVisibleSidebarTreeIds(args: {
   /** Node types this tree is made of. Anything else prunes its whole subtree. */
   readonly treeFilter: SidebarTreeFilterFn;
   /**
-   * Node types to EMIT. Narrower than `treeFilter` for a caller that needs a
-   * node's descendants but not the node itself - the send-to-chat picker walks
-   * THROUGH a terminal agent to reach the chats under it while offering only
-   * chats. Pass the same predicate as `treeFilter` to emit every row walked.
+   * Narrower than `treeFilter` for a caller that needs a node's descendants but not the node itself - the send-to-chat picker walks THROUGH a terminal agent to reach the chats under it while offering only chats.
    */
   readonly emitFilter: SidebarTreeFilterFn;
   readonly visibleIds: ReadonlySet<string> | null;
@@ -485,28 +438,8 @@ export function collectVisibleSidebarTreeIds(args: {
 }
 
 /**
- * Every chat the chats sidebar would show for this Task, flattened into the
- * order it lists them in. Not a lookalike of that panel - the same
- * {@link sidebarTreeRootIds} roots, the same {@link useSidebarArchiveHiddenIds}
- * subtree pruning, the same {@link collectVisibleSidebarTreeIds} walk with the
- * same comparator at every level. Any surface that offers "pick one of this
- * Task's chats" reads the order from here, or the two drift the first time
- * either the sort mode or the hiding rules change.
- *
- * Two deliberate departures from the rendered panel, both because this is a
- * flat list of destinations rather than a tree of rows:
- *
- *   - Expansion is a tree affordance and a flat list has nothing to expand, so
- *     the walk runs as if every parent were open and a nested chat keeps its
- *     place directly under its parent.
- *   - The panel's origin filter (GUI chats vs TUI agents) is a view the user
- *     put on that panel, not a statement about which chats exist. Narrowing
- *     the picker by it would hide send targets the user never meant to rule
- *     out.
- *
- * Terminal agents are walked through but never emitted: they have no composer,
- * so an agent is not somewhere a message can be sent - while the chats nested
- * UNDER one are, and are exactly what a chat-rooted walk would have missed.
+ * Two deliberate departures from the rendered panel, both because this is a flat list of destinations rather than a tree of rows: - Expansion is a tree affordance and a flat list has nothing to expand, so the walk runs as if every parent were open and a nested chat keeps its place directly under its parent. - The panel's origin filter (GUI chats vs TUI agents) is a view the user put on that panel, not a statement about which chats exist.
+ * Narrowing the picker by it would hide send targets the user never meant to rule out.
  */
 export function useSidebarChatOrder(epicId: string): readonly string[] {
   const tree = useEpicTreeIndex();
@@ -597,9 +530,7 @@ function sidebarBulkSelectionReducer(
     case "selectAll":
       return { ...state, selectedIds: new Set(state.selectableIds) };
     case "deselectAll":
-      // Clear every check but stay in selection mode (unlike `clearSelected`,
-      // which exits when the set empties) so the toolbar's "Deselect all" is a
-      // pure toggle back to "Select all" without dropping the user out.
+      // Clear every check but stay in selection mode (unlike `clearSelected`, which exits when the set empties) so the toolbar's "Deselect all" is a pure toggle back to "Select all" without dropping the user out.
       if (state.selectedIds.size === 0) return state;
       return {
         ...state,

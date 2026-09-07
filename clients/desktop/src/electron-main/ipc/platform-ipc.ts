@@ -88,15 +88,6 @@ import type {
   FeatureSettingsSnapshot,
 } from "../../ipc-contracts/platform-types";
 
-/**
- * Registers IPC handlers that expose platform-integration primitives to the
- * renderer: recent documents, window-attention effects (flash/progress/badge),
- * macOS document-window niceties (represented filename + dirty dot), screen
- * recording protection, and diagnostics (metrics / heap snapshot / tracing).
- *
- * All handlers are silent if the platform doesn't support them - the renderer
- * can call them unconditionally without platform-specific branches.
- */
 export function registerPlatformIpc(
   bridge: Pick<RunnerIpcBridge, "handleInvoke">,
 ): void {
@@ -121,11 +112,7 @@ export function registerPlatformIpc(
     async (_event, input: unknown): Promise<readonly string[]> => {
       const sourcePaths = parseCopyDroppedFileInput(input);
       if (sourcePaths.length === 0) return [];
-      // Same OS-reclaimed scratch dir as `fileDropWriteTemporary`. Drops that
-      // expose only a `file://` URL (the macOS screenshot thumbnail) point at an
-      // ephemeral source the OS deletes shortly after the drag. Copy it now,
-      // while it still exists, so the path pasted into the terminal stays valid
-      // when the running program reads it.
+      // Drops that expose only a `file://` URL (the macOS screenshot thumbnail) point at an ephemeral source the OS deletes shortly after the drag.
       const directory = path.join(app.getPath("temp"), "traycer-dropped-files");
       await mkdir(directory, { recursive: true });
       return Promise.all(
@@ -144,10 +131,6 @@ export function registerPlatformIpc(
     },
   );
 
-  // Every path `fileSave` wrote this process lifetime. `fileOpenSaved` opens
-  // only members of this set, so the renderer's "Open file" affordance can
-  // reach exactly the files the user just picked in the native dialog and
-  // nothing else on disk.
   const savedFilePaths = new Set<string>();
 
   bridge.handleInvoke(

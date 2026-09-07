@@ -11,17 +11,8 @@ import {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 /**
- * Two separate reasons every new interview field carries `.catch()` on top
- * of `.default()`, and the tests below pin both:
- *
- * 1. Failure isolation — malformed enhanced data must downgrade to neutral
- *    and never invalidate the legacy `status`/`answers`/`error` projection
- *    an old renderer still reads. One corrupt `selection` must not take
- *    down the surrounding answer, block, message, or snapshot.
- * 2. Forward compatibility — these are closed enums on a record that is
- *    both persisted and published. A newer writer adding an outcome /
- *    settlement source / delivery status must not make every older reader
- *    reject the block outright.
+ * Two separate reasons every new interview field carries `.catch()` on top of `.default()`, and the tests below pin both
+ * One corrupt `selection` must not take down the surrounding answer, block, message, or snapshot.
  */
 
 const SELECTION = {
@@ -75,10 +66,7 @@ function populatedInterviewBlock(): Record<string, unknown> {
     error: null,
     metadata: null,
     outcome: "answered",
-    // Deliberately EMPTY. Saved drafts exist only for an explicit Skip, so an
-    // answered block carrying them is an invalid combination this fixture must
-    // not bless - `applyInterviewSettlement` clears them on any winning
-    // non-skip outcome, and `interviewErrored` rejects them on the wire.
+    // Deliberately EMPTY.
     draftAnswers: [],
     settlement: { settlementId: "gui-1", source: "gui" },
     diagnostics: [
@@ -340,7 +328,7 @@ describe("frozen chat.subscribe 1.4–1.6 drop every 1.7 interview field", () =>
         }
         const answer = firstAnswer(interview.answers);
         expect(Object.hasOwn(answer, "selection")).toBe(false);
-        // Legacy meaning is what a 1.4–1.6 peer actually renders.
+        // Legacy meaning is what a 1.4-1.6 peer actually renders.
         expect(interview.status).toBe("completed");
         expect(answer.values).toEqual(["date-fns"]);
         expect(interview.error).toBeNull();
@@ -621,9 +609,7 @@ describe("interviewBlockSchema defaults and malformed enhanced fields", () => {
   });
 
   it("falls a corrupt draftAnswers or diagnostics entry back to an empty array", () => {
-    // Array-level catch: one unparseable entry discards the whole set, not
-    // just itself. Drafts are unsents; losing them is cheaper than losing
-    // the settled outcome around them.
+    // Array-level catch: one unparseable entry discards the whole set, not just itself.
     const drafts = interviewBlockSchema.parse({
       ...legacyInterviewBlock(),
       outcome: "skipped",
@@ -708,9 +694,8 @@ function draftAnswersIssuePath(
 
 describe("interviewErrored lifecycle invariants", () => {
   it("rejects outcome answered", () => {
-    // An answered interview settles through interviewAnswered. The same
-    // block arriving as "errored but answered" is a contradiction the
-    // frame must not let into history.
+    // An answered interview settles through interviewAnswered.
+    // The same block arriving as "errored but answered" is a contradiction the frame must not let into history.
     const result = chatSubscribeV17.serverFrameSchema.safeParse(
       interviewErroredPayload({ outcome: "answered" }),
     );

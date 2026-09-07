@@ -64,9 +64,7 @@ function entry(
     lastActivityAt: null,
     branchStatus: null,
     createdAt: null,
-    // v1.1 merge-provenance fields default to the "no signal / v1.0 host" shape:
-    // a null/false bundle that greens nothing. Each test opts into the fields it
-    // exercises.
+    // v1.1 merge-provenance fields default to the "no signal / v1.0 host" shape: a null/false bundle that greens nothing.
     prState: null,
     prNumber: null,
     prUrl: null,
@@ -269,9 +267,8 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       tier: "review",
     },
     {
-      // PRECEDENCE PIN: the common never-touched worktree. Its base is in the
-      // default branch, so `mergedIntoDefault` is ALSO true - at-base MUST win so
-      // it reads the honest "At base commit", never the stronger "Landed" label.
+      // Precedence pin: the common never-touched worktree.
+      // Its base is in the default branch, so `mergedIntoDefault` is also true - at-base must win so it reads the honest "At base commit", never the stronger "Landed" label.
       name: "at-base beats merged(local) when both set → at-base-commit (never Landed)",
       entry: entry({
         atBaseCommit: true,
@@ -611,9 +608,7 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
   });
 
   it("degrades to today's behavior against a v1.0 / no-PR host (all new fields null/false)", () => {
-    // With the merge-provenance bundle at its null/false defaults, only the T9
-    // local-ancestry and upstream-tip signals can green - no Landed (PR), no
-    // At base commit.
+    // With the merge-provenance bundle at its null/false defaults, only the T9 local-ancestry and upstream-tip signals can green - no Landed (PR), no At base commit.
     expect(
       classifyWorktreeTier(
         entry({ branchStatus: status({ mergedIntoDefault: true }) }),
@@ -775,10 +770,7 @@ describe("describeReviewReasons", () => {
   });
 
   it("names the never-pushed shape: no PR, no upstream, not contained", () => {
-    // The gui-agent-cli-env fleet shape: clean tree, local-only commits, no PR
-    // ever, branch never pushed (`ahead: null`). Falling back to the generic
-    // tier help here hid the highest-stakes warning - these commits exist
-    // nowhere else.
+    // The gui-agent-cli-env fleet shape: clean tree, local-only commits, no PR ever, branch never pushed (`ahead: null`).
     expect(
       describeReviewReasons(
         entry({

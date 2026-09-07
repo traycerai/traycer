@@ -21,9 +21,8 @@ import {
   readWorktreeListingSnapshot,
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
-// The listing hook reads/writes the warm-open listing snapshot in
-// localStorage on every mount - a snapshot leaked by one test would seed the
-// next test's listing and skew its assertions.
+// The listing hook reads/writes the warm-open listing snapshot in localStorage on every mount - a snapshot
+// leaked by one test would seed the next test's listing and skew its assertions.
 afterEach(() => {
   window.localStorage.clear();
   vi.useRealTimers();
@@ -68,9 +67,8 @@ function fleet(count: number, prefix: string): WorktreeHostEntryV16[] {
   );
 }
 
-// A hand-rolled deferred: the executor runs synchronously, so `resolve` is
-// always the real resolver by construction (initialized to a no-op only to
-// satisfy definite assignment).
+// A hand-rolled deferred: the executor runs synchronously, so `resolve` is always the real resolver by
+// construction (initialized to a no-op only to satisfy definite assignment).
 function deferred(): { readonly promise: Promise<void>; resolve: () => void } {
   let resolve: () => void = () => undefined;
   const promise = new Promise<void>((r) => {
@@ -79,9 +77,8 @@ function deferred(): { readonly promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-// A paged `worktree.listAllForHost` handler over a LIVE array reference (the
-// test mutates it to model the fleet changing between runs), with an optional
-// per-request gate so a test can hold pages in flight.
+// A paged `worktree.listAllForHost` handler over a live array reference (the test mutates it to model the
+// fleet changing between runs), with an optional per-request gate so a test can hold pages in flight.
 function createFixture(
   liveEntries: () => readonly WorktreeHostEntryV16[],
   onRequest: ((cursor: string | null) => void) | null,
@@ -129,11 +126,8 @@ function createFixture(
 }
 
 describe("listing snapshot sentinel guard (cold-host clobber regression)", () => {
-  // The base listing is deliberately non-spawning, so against a cold host it
-  // answers entirely in `unresolvedRow` sentinels (`resolvedAt: null`, unknown
-  // branch). Persisting those replaced a good snapshot with a fleet of
-  // "detached HEAD" rows, which then restored on the next launch - the failure
-  // seen live, where all 54 rows went unknown and stayed that way.
+  // The base listing is deliberately non-spawning, so against a cold host it answers entirely in `unresolvedRow`
+  // sentinels (`resolvedAt: null`, unknown branch).
   function sentinelEntry(worktreePath: string): WorktreeHostEntryV16 {
     return {
       ...listedEntry(worktreePath, "feat"),
@@ -268,9 +262,8 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
       { wrapper: fixture.Wrapper },
     );
 
-    // Every restored row paints, and the seed is page-shaped (chunked at the
-    // live limit), not one flat page - so the refetch replaces it page by
-    // page instead of collapsing the tail.
+    // Every restored row paints, and the seed is page-shaped (chunked at the live limit), not one flat page - so
+    // the refetch replaces it page by page instead of collapsing the tail.
     expect(result.current.worktrees).toHaveLength(PAGE_LIMIT + 8);
     const seeded = fixture.queryClient.getQueryData<{
       readonly pages: ReadonlyArray<{
@@ -282,9 +275,8 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
       8,
     ]);
 
-    // The live walk converges to the same fleet (cursors re-derived from live
-    // pages - the synthetic seed cursors never reach the mock host, which
-    // only understands numeric offsets).
+    // The live walk converges to the same fleet (cursors re-derived from live pages - the synthetic seed cursors
+    // never reach the mock host, which only understands numeric offsets).
     await waitFor(() => {
       expect(result.current.worktrees).toHaveLength(PAGE_LIMIT + 8);
       expect(result.current.isRefreshPending).toBe(false);
@@ -353,9 +345,8 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
     );
     expect(result.current.worktrees).toHaveLength(1);
 
-    // Past the debounce: the seed satisfies "complete listing" (success, no
-    // next page), but it is NOT live data - the write must be skipped, so the
-    // stored snapshot keeps its original savedAt.
+    // Past the debounce: the seed satisfies "complete listing" (success, no next page), but it is not live data -
+    // the write must be skipped, so the stored snapshot keeps its original savedAt.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
@@ -386,16 +377,11 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
       ),
     ).toBeNull();
   });
-  // `forceRefresh` re-resolves the BASE rows, so every cached per-path overlay
-  // is instantly older than its base row and `acceptedEnrichedByPath` rejects
-  // it - the row reads "Checking...". The overlays keep their keys, so nothing
-  // else re-probes them: without this invalidation the Refresh button strands
-  // every on-screen row, permanently against a host with no `worktree.changed`.
+  // The overlays keep their keys, so nothing else re-probes them: without this invalidation the Refresh button
+  // strands every on-screen row, permanently against a host with no `worktree.changed`.
   it("isRefreshPending tracks the manual refresh mutation only, not background fetches", async () => {
-    // Regression: the toolbar keyed its Refresh button's disabled state off a
-    // signal that also went true during background/enrichment fetching, so a
-    // cold fleet still converging locked the button (and the "Updated" label)
-    // out for the whole convergence.
+    // Regression: the toolbar keyed its Refresh button's disabled state off a signal that also went true during
+    // background/enrichment fetching.
     const live = [listedEntry("/wt/a", "main")];
     // Two gates: one holds the mount-time background page, one holds the
     // forced-refresh request, so each can be observed in flight.

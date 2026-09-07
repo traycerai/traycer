@@ -16,56 +16,21 @@ import { appLogger } from "@/lib/logger";
 export interface DurableStreamTransport {
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   /**
-   * Tears down wake + endpoint-change wiring then the socket. The owning session
-   * calls it exactly once - when it disposes, or before rebuilding on `retry()`.
+   * Tears down wake + endpoint-change wiring then the socket.
+   * The owning session calls it exactly once - when it disposes, or before rebuilding on `retry()`.
    */
   readonly close: () => void;
 }
 
 /** A durable session transport whose owner can attribute its final close. */
 export interface AttributableDurableStreamTransport extends DurableStreamTransport {
-  /**
-   * Same teardown, with a caller-authored diagnostic reason.
-   *
-   * Kept on the transport rather than achieved by closing `wsStreamClient`
-   * directly: wake, endpoint-change and availability wiring must be disposed
-   * BEFORE the socket closes, or a close notification can race live reconnect
-   * wiring. `close()` is the historical default for owners with no narrower
-   * attribution.
-   */
+  /** Same teardown, with a caller-authored diagnostic reason. */
   readonly closeWithReason: (reason: string) => void;
 }
 
 /**
- * Builds a LONG-LIVED host stream transport for a SESSION STORE to own across
- * its warm lifetime (not a React tile). This is the ONE place "durable stream =
- * transport + auth + wake + endpoint-change re-dial + availability recovery"
- * lives: the chat, terminal, and epic session stores all build their transport
- * here, and the app-wide stream uses the same `buildHostStreamClient` +
- * reconnect primitives - so a new durable consumer cannot wire a subset (auth
- * without wake, or a socket without the endpoint-change re-dial) and silently
- * reintroduce the freeze / slow-wake / stuck-after-restart bugs this replaced.
- *
- *  - `endpoint` is read LIVE on every (re)dial, so a host that respawns on a
- *    new `websocketUrl` while the session is warm (no tile mounted to recompute
- *    a memo) reconnects to the new address instead of retrying the dead one.
- *  - `bearer` + `auth` provide UNAUTHORIZED revalidate+reconnect.
- *  - bearer-rotation forwarding pushes `credentialUpdate` frames to already-open
- *    sessions after same-user token refresh, so long-lived streams do not keep
- *    stale host-side request contexts.
- *  - wake re-dial (`window 'online'` + OS resume) is wired here.
- *  - endpoint-change re-dial: when the bound host moves to a NEW dialable
- *    endpoint while the app is awake (a Settings-page restart / re-provision -
- *    no OS sleep, no network transition), this re-dials IMMEDIATELY instead of
- *    waiting for the dropped socket to be noticed (up to the pong timeout on a
- *    half-open socket). It is the session-transport sibling of the app-wide
- *    `useReconnectStreamOnEndpointChange` nudge, keeping both scopes symmetric.
- *
- * All wiring is torn down by `close()`. If any subscription throws while wiring,
- * every already-registered subscription is disposed and the half-built socket is
- * closed before the error propagates, so a failed build never leaks a socket or
- * listeners. Callers that build a typed stream client (chat/terminal/epic) on
- * top must likewise `close()` this transport if THAT construction throws.
+ * Long-lived host stream for session stores: live `endpoint` on every redial, auth revalidate, wake, endpoint-change redial, availability recovery.
+ * `close()` tears all wiring; a throw while wiring disposes already-registered subscriptions so a failed build never leaks a socket.
  */
 export function openDurableStreamTransport(params: {
   readonly target: HostDirectoryEntry;
@@ -76,27 +41,18 @@ export function openDurableStreamTransport(params: {
   readonly auth: StreamAuthRevalidator;
   readonly runnerHost: IRunnerHost;
   /**
-   * Subscribes to same-user bearer rotations. The durable transport forwards the
-   * event to its owned stream client so open host connections rotate credentials
-   * in place via `credentialUpdate`.
+   * Subscribes to same-user bearer rotations.
+   * The durable transport forwards the event to its owned stream client so open host connections rotate credentials in place via `credentialUpdate`.
    */
   readonly subscribeBearerRotation: (onRotation: () => void) => () => void;
   /**
-   * Subscribes to host-directory changes for the bound host, returning a
-   * disposer. The callback fires on ANY directory change; this module filters it
-   * down to a genuine dialable-endpoint move before re-dialing.
+   * Subscribes to host-directory changes for the bound host, returning a disposer.
+   * The callback fires on ANY directory change; this module filters it down to a genuine dialable-endpoint move before re-dialing.
    */
   readonly subscribeEndpointChange: (onChange: () => void) => () => void;
   /**
-   * Called (cooldown-coalesced by this module) when this transport's own
-   * heartbeat evidences ITS host recovering - a session re-open after a drop,
-   * or a pong after a stall-length gap. The factory routes it to
-   * `HostClient.notifyHostAvailabilityRecovered(hostId)` so that host's
-   * stranded unary queries refetch. This must live here, not on the app-wide
-   * stream: tabs bind a `hostId` for life, so a tab can heartbeat a host that
-   * is not the effective one, and only its own transport ever observes that
-   * host's recovery. No argument, because the host is fixed at open time -
-   * see {@link NamedHostRecoveryTarget}.
+   * Called (cooldown-coalesced by this module) when this transport's own heartbeat evidences ITS host recovering - a session re-open after a drop, or a pong after a stall-length gap.
+   * The factory routes it to `HostClient.notifyHostAvailabilityRecovered(hostId)` so that host's stranded unary queries refetch.
    */
   readonly notifyRecoveredForNamedHost: () => void;
 }): AttributableDurableStreamTransport {
@@ -114,9 +70,7 @@ export function openDurableStreamTransport(params: {
     autoStart: true,
   });
   if (wsStreamClient === null) {
-    // Only reachable for a remote target whose registry-published public key
-    // does not decode (a corrupt row) — genuinely exceptional, unlike the
-    // ordinary "no target yet" case callers already gate on before opening.
+    // Only reachable for a remote target whose registry-published public key does not decode (a corrupt row) - genuinely exceptional, unlike the ordinary "no target yet" case callers already gate on before opening.
     throw new Error(
       `Remote host ${params.target.hostId} has an invalid public key; cannot open a durable stream`,
     );
@@ -175,18 +129,7 @@ export function openDurableStreamTransport(params: {
 }
 
 /**
- * Re-dials the durable transport the instant its bound host gains a NEW dialable
- * endpoint - a host restart / re-provision that moved to a new `websocketUrl`,
- * or a host that just came back `available` - instead of waiting for the dropped
- * socket to notice (up to the pong timeout on a half-open socket). The dropped
- * socket would re-dial the live `endpoint()` on its own eventually; nudging
- * skips that wait so recovery is instant, matching the app-wide stream.
- *
- * Only fires when the dialable `websocketUrl` actually MOVES to a new non-null
- * value, so the high-frequency benign directory re-emits (every
- * `onLocalHostChange` rebuilds the entry, and on desktop it crosses the IPC
- * bridge as a fresh object) do NOT churn the socket. A move to `null` (host went
- * away) is recorded but not nudged - the next non-null move fires it.
+ * Re-dials the durable transport the instant its bound host gains a NEW dialable endpoint - a host restart / re-provision that moved to a new `websocketUrl`, or a host that just came back `available` - instead of waiting for the dropped socket to notice (up.
  */
 function subscribeEndpointRedial(
   client: IHostStreamClient<HostStreamRpcRegistry>,
@@ -202,9 +145,8 @@ function subscribeEndpointRedial(
     lastWebsocketUrl = nextWebsocketUrl;
     if (nextWebsocketUrl !== null) {
       appLogger.debug("[stream] durable endpoint changed - reconnecting", {});
-      // The host moved to a new address: the current socket points somewhere
-      // that no longer serves this host, so it must be dropped whether or not
-      // it still answers. Not a wake - no probe.
+      // The host moved to a new address: the current socket points somewhere that no longer serves this host, so it must be dropped whether or not it still answers.
+      // Not a wake - no probe.
       client.reconnectAll("host-endpoint-change", {
         probeFirst: false,
         wakeProbe: null,

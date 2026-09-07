@@ -15,7 +15,6 @@ export interface PhaseMigrationSurfaceProps {
   readonly phaseId: string;
 }
 
-/** Slot-local progress and recovery UI for one persisted Phase migration ref. */
 export function PhaseMigrationSurface(
   props: PhaseMigrationSurfaceProps,
 ): ReactNode {

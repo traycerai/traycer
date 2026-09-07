@@ -13,20 +13,8 @@ import {
   type LinkLoginStatusDatum,
 } from "@/hooks/auth/use-link-login-status-query";
 
-/**
- * A live claim on this panel's code. The server enforces ONE live code per
- * user (minting atomically supersedes the previous unclaimed record, and is
- * refused while a claim is being decided), so the displayed code is the only
- * code that can ever report a claim — no multi-code bookkeeping exists.
- */
-/**
- * What the approver can say about the claim's match code. `shown` is the
- * two digits the phone is displaying. `not-presented` is the server saying
- * the phone declined to show one — a legitimate older app, or a leaked-QR
- * holder withholding the flag to dodge the check, which the card cannot
- * tell apart and so must render as a warning. `unavailable` is a server that
- * predates the code, where today's description prompt is all there is.
- */
+/** The server enforces ONE live code per user (minting atomically supersedes the previous unclaimed record, and is refused while a claim is being decided), so the displayed code is the only code that can ever report a claim - no multi-code bookkeeping exists. */
+/** `not-presented` is the server saying the phone declined to show one - a legitimate older app, or a leaked-QR holder withholding the flag to dodge the check, which the card cannot tell apart and so must render as a warning. */
 export type LiveMatchCode =
   | { readonly kind: "shown"; readonly code: string }
   | { readonly kind: "not-presented" }
@@ -38,11 +26,7 @@ export interface LiveClaim {
   readonly userAgent: string | null;
   readonly location: string | null;
   readonly matchCode: LiveMatchCode;
-  /**
-   * When the claim expires unanswered (epoch ms) on the SERVER's clock, or
-   * `null` from a server that predates the field — the card then shows no
-   * countdown. The local deadline guard in this hook is independent of it.
-   */
+  /** When the claim expires unanswered (epoch ms) on the SERVER's clock, or `null` from a server that predates the field - the card then shows no countdown. */
   readonly claimExpiresAt: number | null;
 }
 
@@ -58,45 +42,20 @@ function liveMatchCodeOf(
   return { kind: "shown", code: claimant.matchCode };
 }
 
-/**
- * How the displayed code was terminated externally: `superseded` (gone —
- * replaced by a mint on another surface, expired, or consumed) or
- * `rejected` (a denial someone actually made on another surface). Two
- * states because they read differently to the user; the portal renders the
- * same pair.
- */
+/** How the displayed code was terminated externally: `superseded` (gone - replaced by a mint on another surface, expired, or consumed) or `rejected` (a denial someone actually made on another surface). */
 export type LinkLoginDeadKind = "superseded" | "rejected" | "expired";
 
-// Client-side mirror of the server's claim window (authn's
-// LINK_LOGIN_CLAIM_WINDOW_SECONDS): from the claim, the human has this long
-// to decide before the record evaporates. The generous grace absorbs clock
-// skew and poll latency — the local deadline exists so a frozen status poll
-// (throttled timers, a dropped network) can never leave a confirm card whose
-// buttons act on a record the server already deleted.
+// The generous grace absorbs clock skew and poll latency - the local deadline exists so a frozen status poll (throttled timers, a dropped network) can never leave a confirm card whose buttons act on a record the server already deleted.
 const LINK_LOGIN_CLAIM_WINDOW_MS = 120_000;
 const CLAIM_EXPIRY_GRACE_MS = 15_000;
 
 export interface LinkLoginWatch {
-  /** The live claim on the displayed code, if any. */
   readonly claim: LiveClaim | null;
-  /**
-   * The mint query. Rotation is paused while a claim is live AND while the
-   * displayed code is externally dead — a dead code costs zero further
-   * requests, and an automatic re-mint would supersede the other surface
-   * right back (ping-ponging mints between open surfaces). Restart is the
-   * panel's explicit, user-driven `refetch()` only.
-   */
+  /** The mint query. */
   readonly code: UseQueryResult<MintLinkLoginCodeResponse | null>;
-  /** External termination of the displayed code, rendered — never reacted to. */
+  /** External termination of the displayed code, rendered - never reacted to. */
   readonly deadKind: LinkLoginDeadKind | null;
-  /**
-   * The ONLY way a surface replaces a dead (or consumed) code: evicts the
-   * cached mint and re-enables rotation, so the re-enabled query has nothing
-   * stale to serve and must adopt a genuinely new code. A bare `refetch()`
-   * is NOT equivalent — it fires the request but the re-enabled observer
-   * serves the still-fresh cache entry, re-rendering the dead code and
-   * wasting the minted one.
-   */
+  /** The ONLY way a surface replaces a dead (or consumed) code: evicts the cached mint and re-enables rotation, so the re-enabled query has nothing stale to serve and must adopt a genuinely new code. */
   readonly restart: () => void;
 }
 
@@ -118,13 +77,7 @@ function claimFromStatus(
   };
 }
 
-/**
- * The claimant a status datum carries, or `null` for every state that has
- * none — absent, `"gone"`, not yet claimed, or claimed with no metadata.
- *
- * One narrowing rather than two: both readers below need exactly this shape,
- * and a change to `LinkLoginStatusDatum` should not have to be noticed twice.
- */
+/** One narrowing rather than two: both readers below need exactly this shape, and a change to `LinkLoginStatusDatum` should not have to be noticed twice. */
 function claimantOf(
   datum: LinkLoginStatusDatum | null | undefined,
 ): LinkLoginStatusResponse["claimant"] | null {
@@ -151,11 +104,7 @@ interface WatchSnapshot {
   readonly externallyDead: LinkLoginDeadKind | null;
 }
 
-/**
- * One synchronous read of the watch state: the live claim (unless its local
- * deadline has passed), or how the displayed code died. Pure, so the hook
- * body stays a straight line.
- */
+/** One synchronous read of the watch state: the live claim (unless its local deadline has passed), or how the displayed code died. */
 function resolveWatchSnapshot(
   watchedCode: string | null,
   datum: LinkLoginStatusDatum | null | undefined,
@@ -189,15 +138,7 @@ function deadKindFromStatus(
   return null;
 }
 
-/**
- * Owns the Link mobile app panel's code lifecycle: rotates the public code
- * while nothing is claimed, watches THE displayed code (the server's
- * one-live-code policy makes it the only claimable one), pauses rotation the
- * moment its claim appears, and reports external death of the displayed
- * code as a rendered state with rotation idled — the panel offers an
- * explicit restart (a manual `refetch`, which TanStack v5 honors on a
- * disabled query), never an automatic re-mint.
- */
+/** Owns the Link mobile app panel's code lifecycle: rotates the public code while nothing is claimed, watches THE displayed code (the server's one-live-code policy makes it the only claimable one), pauses rotation the moment its claim appears, and reports external death of the displayed code as a rendered state with rotation idled - the panel offers an explicit restart (a manual `refetch`, which TanStack v5 honors on a disabled query), never an automatic re-mint. */
 export function useLinkLoginWatch(enabled: boolean): LinkLoginWatch {
   const [watchedCode, setWatchedCode] = useState<string | null>(null);
   // The code a user-driven restart is replacing: while it is still the
@@ -208,7 +149,7 @@ export function useLinkLoginWatch(enabled: boolean): LinkLoginWatch {
   const status = useAuthLinkLoginStatus(enabled ? watchedCode : null);
 
   // Local claim deadline, ticking only while a claim is on screen: belt to
-  // the status poll's braces — even if every poll freezes, the confirm card
+  // the status poll's braces - even if every poll freezes, the confirm card
   // cannot outlive the record it fronts.
   const [nowMs, setNowMs] = useState(() => Date.now());
   const { claim, externallyDead } = resolveWatchSnapshot(
@@ -237,7 +178,7 @@ export function useLinkLoginWatch(enabled: boolean): LinkLoginWatch {
   const minted = code.data ?? null;
 
   // Adjust-during-render (guarded): follow the mint onto the code now on
-  // screen. Never while a claim is live — the claimed code stays watched
+  // screen. Never while a claim is live - the claimed code stays watched
   // until the decision resolves it, and the mint query is paused anyway.
   if (claim === null && minted !== null && watchedCode !== minted.code) {
     setWatchedCode(minted.code);

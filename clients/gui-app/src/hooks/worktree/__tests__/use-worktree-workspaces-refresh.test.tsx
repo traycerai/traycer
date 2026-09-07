@@ -73,11 +73,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
       scriptRefs: [],
       forceRefresh: true,
     });
-    // The forced response reaches the SCREEN. `forceRefresh` is part of the
-    // request params and therefore part of the query key, so reissuing the
-    // query with it flipped would write a second cache entry that no observer
-    // reads - the host would re-derive and the row would never move. Asserting
-    // the key set is unchanged is what catches that: same keys, new data.
+    // `forceRefresh` is part of the request params and therefore part of the query key, so reissuing the query with it flipped would write a second cache entry that no observer reads - the host would re-derive and the row would never move.
     await waitFor(() => {
       expect(rendered.result.current.branch).toBe("main");
     });
@@ -129,11 +125,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("survives a slower cache-only read settling after the forced one", async () => {
-    // The stacked rows arm (fork-chat, terminal-agent fork, add-node) forces on
-    // MOUNT, so the ordinary `forceRefresh: false` query and the forced read
-    // start together and are separate jobs. If the older, cache-only response
-    // is allowed to settle last it overwrites the same key back to the stale
-    // view - leaving the label worse than if nothing had refreshed at all.
+    // The stacked rows arm (fork-chat, terminal-agent fork, add-node) forces on MOUNT, so the ordinary `forceRefresh: false` query and the forced read start together and are separate jobs.
     const fixture = createFixture();
     fixture.holdCacheOnlyReads();
     const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
@@ -163,21 +155,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("waits for the VISIBLE branch list before reporting done", async () => {
-    // Supersedes "settles without awaiting the branch-list fan-out (D3
-    // reversal)", which pinned fire-and-forget outright.
-    //
-    // D3's concern was awaiting INACTIVE branch queries - the list usually
-    // lives in an unmounted nested form - which wedged "Checking…" on relay
-    // round-trips nobody was watching. That concern survives and is still
-    // pinned, one test below. What did not survive is the conclusion: an
-    // active-only invalidation never fetches an inactive entry, so dropping
-    // the await bought nothing against it and cost the visible list. Refresh
-    // reported done while the mounted picker still showed cached branches, so
-    // a branch deleted outside Traycer - the reason someone presses Refresh -
-    // stayed selectable exactly when the spinner said it was safe to look.
-    //
-    // This fixture holds an ACTIVE read (the picker is mounted and
-    // observing), so it now pins the opposite of what it used to.
+    // Active branch-list read: refresh must await the visible picker so a deleted branch does not stay selectable after the spinner clears.
     const fixture = createFixture();
     const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
@@ -200,23 +178,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
         settled = true;
       });
     });
-    // Summary force lands, branch list still held: refresh must NOT report
-    // done yet. The held read is the one the user is looking at.
-    //
-    // The `waitForHeldRequest` line is load-bearing and is not decoration on
-    // the `waitFor` below it. `expect(settled).toBe(false)` is a NEGATIVE
-    // assertion, so it only means anything once the thing that must block the
-    // settle is provably in flight - and `isRefreshing` does not establish
-    // that: it goes true the moment refresh starts, before the branch read is
-    // even issued. Gating on it alone left `settled` racing the very request
-    // it is about, and it failed under parallel-shard CI load while passing in
-    // isolation. Every other hold in this file already gates on
-    // `waitForHeldRequest`; this was the one that did not.
-    //
-    // Added as an EXTRA line rather than as a replacement, deliberately: the
-    // assertions after the release are themselves timing-sensitive, and
-    // reordering these two moved the failure down to line ~226 instead of
-    // removing it.
+    // waitForHeldRequest before asserting settled is false: isRefreshing goes true before the branch read is issued.
     await fixture.waitForHeldRequest("branch", 1);
     await waitFor(() => {
       expect(rendered.result.current.refresh.isRefreshing).toBe(true);
@@ -229,30 +191,17 @@ describe("useWorktreeWorkspacesRefresh", () => {
     });
 
     expect(settled).toBe(true);
-    // `waitFor`, not a bare read: the promise settling and React committing
-    // the cleared flag are two different events, and asserting the flag
-    // synchronously off the promise raced them. It stayed green only because
-    // nothing awaited in between - adding the `waitForHeldRequest` gate above
-    // was enough to flip it, which is precisely how little it took.
+    // `waitFor`, not a bare read: the promise settling and React committing the cleared flag are two different events, and asserting the flag synchronously off the promise raced them.
     await waitFor(() => {
       expect(rendered.result.current.refresh.isRefreshing).toBe(false);
     });
-    // The spinner cleared and the deleted branch is already gone - the two
-    // facts that were allowed to disagree before. This one stays a BARE read
-    // on purpose: it is the simultaneity claim the test exists for, so it must
-    // hold at the moment the spinner clears, not merely converge later.
+    // This one stays a BARE read on purpose: it is the simultaneity claim the test exists for, so it must hold at the moment the spinner clears, not merely converge later.
     expect(rendered.result.current.branches).toEqual(["main"]);
   });
 
   it("does NOT wait for an unobserved branch list (the half of D3 that stands)", async () => {
-    // The other side of the test above, and the reason the await is
-    // `refetchType: "active"` rather than a plain await.
-    //
-    // The branch list usually lives in an unmounted nested form. Awaiting THAT
-    // is what D3 correctly refused: it wedged "Checking…" on serial relay
-    // round-trips for a list nobody had on screen. An active-only invalidation
-    // never fetches an inactive entry, so this must settle even with branch
-    // reads held.
+    // The other side of the test above, and the reason the await is `refetchType: "active"` rather than a plain await.
+    // Awaiting THAT is what D3 correctly refused: it wedged "Checking…" on serial relay round-trips for a list nobody had on screen.
     const fixture = createFixture();
     const rendered = renderHook(
       ({ observe }: { observe: boolean }) =>
@@ -298,10 +247,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("refreshes the scope on screen when the folder set changed mid-flight", async () => {
-    // The captured-key write protects the NEW key from being corrupted, but it
-    // does not refresh it: the new scope issued its own cache-only read, which
-    // cold-only mode can answer stale. The forced derive did install fresh
-    // per-path host entries, so the current key only needs re-reading.
+    // The captured-key write protects the NEW key from being corrupted, but it does not refresh it: the new scope issued its own cache-only read, which cold-only mode can answer stale.
     const fixture = createFixture();
     const rendered = renderHook(
       (paths: ReadonlyArray<string>) => usePicker(fixture.client, paths, true),
@@ -342,20 +288,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("forces again against the host the user switched to, and stops there", async () => {
-    // The compact landing surface follows the ACTIVE host, so a rebind can land
-    // while a forced read is in flight. Invalidating cannot heal that: workspace
-    // views are host-local, so the force that just succeeded taught host A
-    // nothing about host B, and B's own cache-only read is answered from ITS
-    // cold-only cache - stale, and refetching re-serves the same stale value.
-    // Only a force against B moves it.
-    //
-    // The swap happens explicitly here, in the test body between awaits, not
-    // from inside the mock's RPC handler (redesign P4.2): under the requester
-    // contract an in-flight request has already captured its entry, so a
-    // handler-interior move is both inexpressible and irrelevant now - "the
-    // host moved" is a NEW pinned requester the picker only sees once it
-    // re-renders. Exactly two forced calls is what proves the follow-up is
-    // bounded to one hop.
+    // Compact landing follows the active host: a rebind mid-force needs a second force against B. Invalidating A cannot heal B's cache-only read. Two forced calls prove the follow-up is one hop.
     const fixture = createFixture();
     const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
@@ -387,32 +320,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("stays silent on a cancellation that is NOT a host move, and starts no chase", async () => {
-    // The `onError` CancelledError arm, on the trigger that still produces it.
-    //
-    // This case used to drive a HOST SWAP, because `HostClient.bind` snapshotted
-    // the outgoing host's in-flight jobs and settled them `authority-superseded`.
-    // Redesign P2.1 deleted that: a host becoming effective is no longer a
-    // lifecycle event for the host that left, so a swap mid-refresh now lets the
-    // in-flight read finish and lands in `onSuccess` - which carries the SAME
-    // `forceAgainstLiveHost` call, so the follow-up survives and is covered by
-    // "forces again against the host the user switched to, and stops there".
-    //
-    // What P2.1 did NOT delete is the cancellation class itself, and this arm is
-    // its only cover. `setRequestContext` still aborts the bound host's in-flight
-    // work on an identity transition - deliberately, because a credential change
-    // must not let work issued under the old identity keep running - so an auth
-    // change mid-refresh is now the plainest live producer. It is also the one
-    // the fixture already speaks: `client` is exposed and the context fixture is
-    // already imported, so nothing here reaches for new fixture surface. (A
-    // same-host TRANSPORT move reaches the same arm, but pinning it would couple
-    // this test to whichever fields `sameHostTransport` happens to compare -
-    // machinery P4.1/P4.2 will move.)
-    //
-    // The claim, and it is a different one than before: a cancellation with the
-    // host UNMOVED is silent AND spawns nothing. `forceAgainstLiveHost` returns
-    // early when the live host still equals the one the request started under,
-    // so there is no second force to find - the toast must not fire and the
-    // chase must not start.
+    // Auth-change cancellation with the host unmoved is silent and spawns nothing.
     const fixture = createFixture();
     const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
@@ -442,29 +350,13 @@ describe("useWorktreeWorkspacesRefresh", () => {
       );
     });
 
-    // NOT released first, and that ordering IS the discriminator. The abort is
-    // ASYNCHRONOUS - `cancelThenAbortAll` waits on the invalidator's
-    // `cancelHostScope` before aborting the coordinator job - so releasing here
-    // would let the held read settle normally and win the race, and the test
-    // would pass without a cancellation ever occurring. Awaiting the in-flight
-    // refresh FIRST means only the abort can settle it: if the cancellation
-    // stops firing, this await never returns and the case times out rather
-    // than quietly passing.
+    // Awaiting the in-flight refresh FIRST means only the abort can settle it: if the cancellation stops firing, this await never returns and the case times out rather than quietly passing.
     await act(async () => {
       await inFlight;
     });
     fixture.releaseHeldReads();
 
-    // THE DISCRIMINATOR, and it is the only assertion here that can tell the
-    // subject apart from its own null hypothesis. `onSuccess` is what writes
-    // the forced response into the entry the picker renders from, so a read
-    // that was CANCELLED leaves the pre-refresh branch on screen while a read
-    // that merely settled would have moved it to the disk value. Written down
-    // because the silence assertions below are true of BOTH outcomes: a
-    // successful held read also makes exactly one forced call and also raises
-    // no toast, so on their own they pass whether or not the cancellation this
-    // test is named for ever happened. Measured, not assumed - without this
-    // line the trigger can be deleted outright and the test still passes.
+    // Assert the picker still shows the pre-refresh branch. Silence assertions pass for both cancel and success, so without this the trigger can be deleted and the test stays green.
     expect(rendered.result.current.branch).toBe("feature/login");
     // Exactly the one force that was cancelled: the host never moved, so no
     // follow-up is owed and none is made.
@@ -473,10 +365,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("reports completion only once the moved scope is current, not merely marked", async () => {
-    // `refresh()` resolving is what the spinner and every caller treat as
-    // "done". If the current-key invalidation is fired and discarded, the
-    // promise settles while that refetch is still in flight and the label the
-    // user is looking at is still the pre-checkout one.
+    // `refresh()` resolving is what the spinner and every caller treat as "done".
     const fixture = createFixture();
     const rendered = renderHook(
       (paths: ReadonlyArray<string>) => usePicker(fixture.client, paths, true),
@@ -502,10 +391,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
         "feature/login",
       );
     });
-    // Hold the moved scope's re-read so it settles only when we release it -
-    // later than the branch list, whose invalidation is awaited either way.
-    // Otherwise awaiting branches alone would mask a discarded current-key
-    // invalidation.
+    // Hold the moved scope's re-read so it settles only when we release it - later than the branch list, whose invalidation is awaited either way.
     fixture.holdCacheOnlyReads();
     act(() => {
       fixture.releaseHeldOfKind("forced");
@@ -575,16 +461,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("sets verifyFailed when the one-hop post-host-change force fails", async () => {
-    // A→B path: A's held read settles normally (redesign P4.2 deleted the
-    // active-slot cancellation `HostClient.bind` used to trigger, so there is
-    // no CancelledError here - `onSuccess` is what notices the host moved),
-    // then forceAgainstLiveHost fires against B. If THAT hop fails, the
-    // footer must still show the failure state — toast alone left it
-    // silently idle.
-    //
-    // Arm order matters: failNextForced is checked BEFORE holdForced in the
-    // fixture. Arming fail before A's request starts makes A reject
-    // immediately and waitForHeldRequest never sees a hold.
+    // A's held read settles; follow-up against B. Arm `failNextForced` after A's hold, not before, or A rejects immediately and `waitForHeldRequest` never sees a hold.
     const fixture = createFixture();
     const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
@@ -604,11 +481,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // A is held. NOW arm B to fail so the one-hop follow-up rejects.
     await fixture.waitForHeldRequest("forced", 1);
     fixture.failNextForcedRead(new Error("host B unreachable"));
-    // Swap to a NEW pinned requester for B and re-render so the picker (and
-    // `forceAgainstLiveHost`'s `client` closure) observes it before A's held
-    // read is released - the requester swap itself does not touch A's
-    // already-dispatched request (failNext is checked before hold, so B's
-    // follow-up fails immediately once it fires).
+    // Swap to a NEW pinned requester for B and re-render so the picker (and `forceAgainstLiveHost`'s `client` closure) observes it before A's held read is released - the requester swap itself does not touch A's already-dispatched request (failNext is checked before hold, so B's follow-up fails immediately once it fires).
     act(() => {
       fixture.swapHost();
       rendered.rerender();
@@ -623,13 +496,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 });
 
-/**
- * The picker's two reads as one hook: the summary query the rows render from,
- * and the forced refresh that has to land in that query's own cache entry.
- * Kept together because the path list is part of the key - splitting them into
- * two independently-built path arrays is exactly the drift the hook's contract
- * forbids.
- */
+/** The picker's two reads as one hook: the summary query the rows render from, and the forced refresh that has to land in that query's own cache entry. */
 function usePicker(
   client: HostClient<HostRpcRegistry>,
   workspacePaths: ReadonlyArray<string>,
@@ -722,11 +589,7 @@ function createFixture(): {
   readonly hostQueryKeys: () => ReadonlyArray<string>;
   /** Switches the active host once, exactly as the host picker does. */
   readonly swapHost: () => void;
-  /**
-   * The branch sitting in the cache entry a scope renders from, read without
-   * waiting - so a test can assert what is TRUE the moment a refresh reports
-   * itself finished, rather than what becomes true shortly after.
-   */
+  /** The branch sitting in the cache entry a scope renders from, read without waiting - so a test can assert what is TRUE the moment a refresh reports itself finished, rather than what becomes true shortly after. */
   readonly branchInCacheFor: (paths: ReadonlyArray<string>) => string | null;
   /** In-flight TanStack queries+mutations; 0 means reconciliation settled. */
   readonly isFetching: () => number;
@@ -739,25 +602,16 @@ function createFixture(): {
     readonly branch: string;
     readonly resolvedAt: number | null;
   }) => void;
-  /** Holds reads of one kind open, so a test can settle them LAST. */
   readonly holdCacheOnlyReads: () => void;
   readonly holdForcedReads: () => void;
   readonly holdBranchReads: () => void;
-  /**
-   * Resolves when `count` held requests of `kind` arrive in its current hold
-   * window. Re-arming a kind starts a new window, so this stays relative to the
-   * request race the test is controlling rather than earlier holds.
-   */
+  /** Re-arming a kind starts a new window, so this stays relative to the request race the test is controlling rather than earlier holds. */
   readonly waitForHeldRequest: (
     kind: HeldRequestKind,
     count: number,
   ) => Promise<void>;
-  /** Releases every held kind and stops holding. */
   readonly releaseHeldReads: () => void;
-  /**
-   * Releases only one held kind (and stops holding it). Other kinds stay
-   * held so a test can order settlement deterministically.
-   */
+  /** Releases only one held kind (and stops holding it). */
   readonly releaseHeldOfKind: (kind: HeldRequestKind) => void;
   /** The next forced read rejects with `error` instead of settling. */
   readonly failNextForcedRead: (error: Error) => void;
@@ -900,11 +754,7 @@ function createFixture(): {
       },
     },
   });
-  // A requester pinned to a known row (migration recipe, redesign P4.2):
-  // `findHostById` is what both `createRequester` calls below re-resolve the
-  // live entry through, and it is REQUIRED - without it every request on a
-  // pinned client rejects as a stale binding, surfacing as absent data rather
-  // than an error naming a client.
+  // A requester pinned to a known row (migration recipe, redesign P4.2): `findHostById` is what both `createRequester` calls below re-resolve the live entry through, and it is REQUIRED - without it every request on a pinned client rejects as a stale binding, surfacing as absent data rather than an error naming a client.
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -918,10 +768,7 @@ function createFixture(): {
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  // Reassigned by `swapHost` rather than rebound in place - the active slot
-  // `HostClient.bind` used to mutate is gone (redesign P4.2), so "the host
-  // moved" is now expressed as a NEW pinned requester, and the picker only
-  // observes it once the test explicitly re-renders with the new reference.
+  // Reassigned by `swapHost` rather than rebound in place - the active slot `HostClient.bind` used to mutate is gone (redesign P4.2), so "the host moved" is now expressed as a NEW pinned requester, and the picker only observes it once the test explicitly re-renders with the new reference.
   let client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>

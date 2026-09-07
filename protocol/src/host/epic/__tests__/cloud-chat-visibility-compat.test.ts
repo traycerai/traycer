@@ -15,11 +15,8 @@ import {
 } from "@traycer/protocol/host/epic/cloud-chat";
 
 /**
- * `epic.setCloudChatVisibility` and `epic.setChatSharingDefault` are new
- * ADDITIVE unary methods on the optional-capabilities channel. Entering the
- * released floor would be handshake-fatal for every peer that shipped before
- * these names existed (same rule as the five cloud-chat reads and
- * `epic.setChatArchived`).
+ * `epic.setCloudChatVisibility` and `epic.setChatSharingDefault` are new ADDITIVE unary methods on the optional-capabilities channel.
+ * Entering the released floor would be handshake-fatal for every peer that shipped before these names existed (same rule as the five cloud-chat reads and `epic.setChatArchived`).
  */
 
 const VISIBILITY_METHODS = [

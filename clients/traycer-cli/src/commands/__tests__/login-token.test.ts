@@ -8,13 +8,8 @@ import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { validateAuthTokenIdentityAccessOnly } from "../../../../shared/auth/auth-validation";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
-// `login --token -` is access-only + fail-fast (§7): validate the piped access
-// token WITHOUT a refresh fallback, then persist through the locked store. Keep
-// the real (pure) identity projection, stub the network probe, and inject a fake
-// store through the store-facing helpers the command imports directly. Mocking
-// `createCliCredentialsStore` alone would NOT work: `runWithCliStore` calls it
-// intra-module, so that call binds to the real function - so we mock the helpers
-// (`runWithCliStore` / `withCommitRetry`) the command actually imports.
+// `login --token -` is access-only + fail-fast (§7): validate the piped access token WITHOUT a refresh fallback, then persist through the locked store.
+// Keep the real (pure) identity projection, stub the network probe, and inject a fake store through the store-facing helpers the command imports directly.
 const { fakeStore, signInMock } = vi.hoisted(() => {
   const signInMock = vi.fn();
   return {
@@ -173,12 +168,8 @@ describe("buildLoginCommand with --token", () => {
   });
 
   it("signs in with a blank refresh token + preserveRefreshTokenIfBlank when the stdin payload carries none", async () => {
-    // A bare-bearer re-seed must NOT resolve "keep the on-disk refresh token"
-    // itself (that pre-lock read/write raced a concurrent rotate); it hands the
-    // empty string plus `preserveRefreshTokenIfBlank: true` to the locked
-    // `signIn`, which resolves it under the same lock that performs the write.
-    // The actual preservation mechanics are covered at the store level in
-    // credentials-mutation.test.ts.
+    // A bare-bearer re-seed must NOT resolve "keep the on-disk refresh token" itself (that pre-lock read/write raced a concurrent rotate); it hands the empty string plus `preserveRefreshTokenIfBlank: true` to the locked `signIn`, which resolves it under the same lock that performs the write.
+    // The actual preservation mechanics are covered at the store level in credentials-mutation.test.ts.
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ token: "rotated-bearer", refreshToken: "" })],

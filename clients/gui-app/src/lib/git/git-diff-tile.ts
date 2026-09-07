@@ -16,9 +16,8 @@ import {
 } from "@/lib/assets/image-extension-allowlist";
 
 /**
- * Deterministic tile id derived from the host + diff payload - mirrors
- * `workspaceFileTabId`. Two tiles for the same diff resolve to the same
- * id, so canvas dedup is plain id equality (no `sameGitDiffIdentity`).
+ * Deterministic tile id derived from the host + diff payload - mirrors `workspaceFileTabId`.
+ * Two tiles for the same diff resolve to the same id, so canvas dedup is plain id equality (no `sameGitDiffIdentity`).
  */
 export function gitDiffTileId(
   hostId: string,
@@ -58,11 +57,7 @@ export interface GitImageDiffSides {
 }
 
 /**
- * (side, stage) routing for `git.streamFileAsset` from a `GitChangedFile` -
- * there is no server-side "conflicted" signal, so the client constructs
- * these tuples itself (image-preview tech plan section 1 side-table;
- * decision log decisions #9, #10). Shared between the single-file diff tile
- * and bundle sections, which both need the same routing for the same file.
+ * (side, stage) routing for `git.streamFileAsset` from a `GitChangedFile` - there is no server-side "conflicted" signal, so the client constructs these tuples itself (image-preview tech plan section 1 side-table; decision log decisions #9, #10).
  */
 export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
   if (file.stage === "conflicted") {
@@ -87,40 +82,8 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
 }
 
 /**
- * `<ImageDiffView>`'s `key` for a git-backed file (PR review P1): its own
- * `useFileAsset` request key covers `(path, stage)`, never `headSha`/
- * `stagedOid` - so a staged or HEAD-relative side that stays mounted through
- * a commit/amend/re-stage keeps showing the OLD bytes, since `(path, stage)`
- * alone is unchanged. The unstaged/worktree side already has its own re-stat
- * (pane-focus nonce, decision #11) so this isn't strictly needed there, but
- * including `worktreeOid` too keeps one key covering every side rather than
- * conditionally narrowing it per file. Forcing a full remount (rather than
- * threading these into the request type) is deliberate: zoom/pan/toolbar
- * state SHOULD reset for a genuinely different image, not just the bytes.
- * Mirrors `git-query-keys.ts`'s `fileDiff` key - the sibling TEXT-diff cache
- * key for the SAME file already includes all three.
- *
- * A null OID is not always "this side doesn't exist" (Codex re-review):
- * ADR-0007's degraded-repo-mode fallback (`assessRepoMode`,
- * `computeStatusPipeline` in `git-service.ts`) skips OID computation
- * entirely under load, nulling `stagedOid`/`worktreeOid` for every changed
- * file in that snapshot regardless of whether the side has real content -
- * indistinguishable, from here, from a genuinely absent side. Falling back
- * to a constant would mean a re-stage/edit that lands while degraded, at an
- * unchanged `headSha`, produces the SAME key and never remounts - and the
- * staged/old side has no other recovery path (unlike the unstaged side's
- * focus-nonce backstop). Falling back to `[insertions, deletions,
- * sizeBytes]` instead - already populated from real diff data even in
- * degraded mode - closes that for any edit that changes line count or byte
- * size (the overwhelming majority); a content swap that preserves all three
- * exactly, during degraded mode, at an unchanged `headSha`, is an accepted
- * residual gap, not chased further.
- *
- * JSON-encoded with an explicit `"oid"`/`"stats"` tag on each side, not
- * delimiter-joined into the OID's own slot: an OID and a stats fallback
- * must never be able to alias each other structurally, not just avoid
- * colliding by string luck (mirrors `requestKeyFor`/`buildFileAssetCacheKey`'s
- * own JSON-array discipline for the identical reason).
+ * ImageDiff remount key includes `headSha`/`stagedOid`/`worktreeOid`; `(path, stage)` alone would keep old bytes through commit/amend.
+ * Null OID in degraded-repo mode falls back to tagged stats JSON so a re-stage still remounts; oid and stats must not alias.
  */
 type GitRevisionSideKey =
   | readonly ["oid", string]
@@ -157,23 +120,7 @@ export interface GitImageDiffRouting {
 }
 
 /**
- * Extension gate before any diff-text fetch (image-preview decision log,
- * decision #6): a binary image extension, or `.svg` (never `isBinary` to
- * git - decision #5), routes to `ImageDiffView`. A rename's CURRENT path
- * alone is not enough (pre-landing review, P0: `old.png -> new.txt` must
- * still route for its old side) - route when EITHER the current or previous
- * path is allowlisted, and (re-review P1) OR the previous path into the SVG
- * check too (`old.svg -> new.txt` is text to git on the rename). A
- * conflicted file is exempted from the `isBinary` check entirely (live E2E
- * finding, ticket 06): the host's bulk `listChangedFiles` numstat pipeline
- * now resolves a `MERGE_HEAD`/`CHERRY_PICK_HEAD` peer ref for conflicted
- * paths (`resolveConflictedIsBinary`, ticket 08), but falls back to leaving
- * `isBinary: false` unchanged when no such peer ref can be found - decision
- * #10 routes every conflicted image unconditionally regardless, so the
- * extension gate stays the correct signal for that residual gap. Shared
- * between the single-file diff tile (which also drives a per-tile SVG
- * source/image toggle from `isSvg`) and bundle sections (which only need
- * the boolean).
+ * Extension gate before any diff-text fetch (image-preview decision log, decision #6): a binary image extension, or `.svg` (never `isBinary` to git - decision #5), routes to `ImageDiffView`.
  */
 export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
   const isImage = isImageAssetPath(file.path);
@@ -189,26 +136,13 @@ export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
 }
 
 /**
- * Whether the single-file diff tile shows the PDF summary-card view (PDF
- * preview design, Q7 follow-up): per-side "PDF · size · View" cards instead
- * of the plain binary placeholder. Checked AFTER `gitImageDiffRouting` in
- * the tile - a rename straddling both allowlists (`a.png -> b.pdf`) keeps
- * routing to the image diff, whose non-image side already explains itself.
- *
- * Extension-only for the CURRENT side, no `isBinary` requirement - the SVG
- * precedent: a PDF can be authored as pure ASCII (no NUL bytes), which git's
- * content sniff calls text, yet the cards are still the right rendering and
- * the asset stream's `%PDF-` magic check still guards the open tile. No
- * host-version gate: the open tile's own stream negotiation is the authority
- * on whether the host can serve the bytes.
+ * Whether the single-file diff tile shows the PDF summary-card view (PDF preview design, Q7 follow-up): per-side "PDF · size · View" cards instead of the plain binary placeholder.
+ * Checked AFTER `gitImageDiffRouting` in the tile - a rename straddling both allowlists (`a.png -> b.pdf`) keeps routing to the image diff, whose non-image side already explains itself.
  */
 export function gitRoutesToPdfDiffCards(file: GitChangedFile): boolean {
   if (isPdfAssetPath(file.path)) return true;
-  // Renamed OFF the allowlist. `old.pdf -> new.bin` keeps the cards, which at
-  // least offer the old side where a binary placeholder offers nothing - but
-  // `old.pdf -> new.txt` has a real source diff on the surviving side, and a
-  // summary card about a file that is no longer a PDF is a worse answer than
-  // the text it was turned into.
+  // Renamed OFF the allowlist.
+  // `old.pdf -> new.bin` keeps the cards, which at least offer the old side where a binary placeholder offers nothing - but `old.pdf -> new.txt` has a real source diff on the surviving side, and a summary card about a file that is no longer a PDF is a worse.
   return (
     file.previousPath !== null &&
     isPdfAssetPath(file.previousPath) &&

@@ -2,18 +2,7 @@ import type { Slice } from "@tiptap/pm/model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 /**
- * Wrap a copied ProseMirror slice into a `doc`-shaped JSON tree so a block-aware
- * serializer (markdown / structured plain text) can walk it the same way it
- * walks a whole document.
- *
- * A slice whose top level is inline (e.g. a fragment of bare text with no
- * enclosing block) is wrapped in a paragraph first, so the serializer emits one
- * block instead of treating each text run as its own block - the latter injects
- * a blank line between runs.
- *
- * Returns `null` for an empty slice. `Fragment.toJSON()` is typed `any` by
- * ProseMirror; it is funnelled through `unknown` and the `isJsonContent` guard
- * so no `any` escapes into the typed surface.
+ * Wrap a copied ProseMirror slice into a `doc`-shaped JSON tree so a block-aware serializer (markdown / structured plain text) can walk it the same way it walks a whole document.
  */
 export function sliceToDocJson(slice: Slice): JsonContent | null {
   const firstChild = slice.content.firstChild;

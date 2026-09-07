@@ -13,30 +13,7 @@ import {
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
-/**
- * Notification indicators for chat ids that do NOT all belong to one host.
- *
- * `useNotificationIndicators` is one hook call and therefore one host, which is
- * correct for a surface whose ids are all owned by the same machine. A canvas
- * tab strip is not that surface: tabs bind a `hostId` for life, a strip can hold
- * a retained tab from host B beside a live one on host A, and
- * `host.notifications.indicatorState` is computed over ONE host's SQLite rows.
- * Asking the connected host about every tab's chat id gets both errors at once -
- * host B's `pendingFork` never lights, and a host-minted id that A happens to
- * share lights the wrong tab from an unrelated chat.
- *
- * The fan-out is a nest of providers rather than a loop, because one host is one
- * hook call and the number of hosts is data. Each layer asks its own host about
- * its own ids and folds the answer into what it inherited, so a consumer below
- * still reads one merged, chatId-keyed map through the context it already used.
- *
- * The residual, stated rather than hidden: the merged map is keyed by `chatId`
- * alone, so two DIFFERENT chats on two hosts that share an id still collapse
- * into one entry (their flags OR together). Fixing that means keying the context
- * and every consumer on `(hostId, chatId)`. What this does fix is the far more
- * common pair - the cross-host tab that could never light, and the connected
- * host answering about a chat it has never owned.
- */
+/** Notification indicators for chat ids that do not all belong to one host. */
 
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
 
@@ -50,10 +27,7 @@ export function ChatIndicatorHostScopes(props: {
     [props.scopes],
   );
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
-  // The cloud snapshot is the base every host layer folds into, and it is
-  // host-INDEPENDENT: a cloud row produced on any machine is already in this
-  // client's snapshot, which is the whole reason cloud mode exists. Only the
-  // host-local bits below have to be asked for per host.
+  // Only the host-local bits below have to be asked for per host.
   const base = useMemo(
     () =>
       isCloud
@@ -90,15 +64,7 @@ function ChatIndicatorHostLayers(props: {
   );
 }
 
-/**
- * One host's answer, folded into whatever the layers above already established.
- *
- * The two feed modes fold differently for the reason
- * `mergeHostPendingForkIntoCloudIndicators` documents: in cloud mode the feed
- * rows own read state and the approval/interview flags across every host, and
- * only `pendingFork` is host-local truth. In local mode the host response IS the
- * answer, so it merges whole.
- */
+/** One host's answer, folded into whatever the layers above already established. */
 function ChatIndicatorHostLayer(props: {
   readonly hostId: string;
   readonly chatIds: ReadonlyArray<string>;

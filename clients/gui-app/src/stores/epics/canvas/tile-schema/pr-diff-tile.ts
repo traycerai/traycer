@@ -1,9 +1,4 @@
-/**
- * Schema for the PR diff tile. Pure ref (`isRecordBacked: false`) - the patch
- * itself is read live from the local checkout over `pr.getLocalDiff`, and the
- * range it covers is re-derived from `pr.subscribeDetail`, so only the GitHub
- * base coordinates and the collapse state persist here.
- */
+/** Schema for the PR diff tile. */
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { prDiffTileId } from "@/lib/pr/pr-diff-tile";
 import { TILE_KIND_PR_DIFF } from "../tile-kinds";

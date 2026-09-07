@@ -1,11 +1,3 @@
-/**
- * Ticket 21 slice 4: pins the environment-to-context bridge for a hosted
- * chat. Scope note - `renderTile` is swapped for a test probe that reads the
- * bridged contexts and surfaces the `isActive` argument the bridge body
- * computed. The full real-`renderTile` path is exercised transitively by the
- * switch-ON ActiveTabBody routing tests; this file's job is narrowly "are
- * the contexts wired right + isActive mirrors ActiveTabBody".
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { use } from "react";

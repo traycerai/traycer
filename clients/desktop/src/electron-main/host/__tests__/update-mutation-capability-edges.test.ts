@@ -13,14 +13,8 @@ import {
 import type { HostFsLayout } from "../host-paths";
 import { freshHostFsLayout } from "./host-fs-layout-test-support";
 
-// The tombstone-ordering contract (design §3.4): the caller must never boot
-// the SMAppService job out unless `publishRestartTombstoneWithAttempt`
-// reports that the record durably landed - a call-order-only assertion would
-// pass a build that "calls publish" but never actually flushes anything to
-// disk. Every negative here is paired with a positive on the SAME fixture,
-// so a permanently no-op writer cannot satisfy the suite by never landing
-// anything (see the "negative assertion satisfied by permanent inaction"
-// class of bug).
+// The tombstone-ordering contract (design §3.4): the caller must never boot the SMAppService job out unless `publishRestartTombstoneWithAttempt` reports that the record durably.
+// Every negative here is paired with a positive on the SAME fixture, so a permanently no-op writer cannot satisfy the suite by never landing anything (see the "negative assertion.
 
 const roots: string[] = [];
 
@@ -187,14 +181,8 @@ describe("writeSubstrateOwnerWithAttempt", () => {
   });
 
   it("leaves no .substrate temp behind when the publishing rename cannot land", async () => {
-    // The temp name carries a pid and a timestamp, so a failure that skips the
-    // unlink leaks a NEW file every time rather than overwriting the last —
-    // and launch-time backfill retries this publication, so they accumulate in
-    // the host root.
-    //
-    // The rename is obstructed the same way the tombstone suite obstructs its
-    // own, which reaches the throw AFTER the temp exists. That ordering is the
-    // whole point: a failure before the write has nothing to clean up.
+    // The rename is obstructed the same way the tombstone suite obstructs its own, which reaches the throw AFTER the temp exists.
+    // That ordering is the whole point: a failure before the write has nothing to clean up.
     const layout = await freshLayout();
     await mkdir(layout.substrateFile, { recursive: true });
 

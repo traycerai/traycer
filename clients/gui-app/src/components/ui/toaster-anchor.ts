@@ -3,7 +3,6 @@ import {
   type TileRect,
 } from "@/lib/browser-view/tiles/tile-rect-registry";
 
-/** One of sonner's six fixed `Toaster` `position` values. */
 export type ToasterAnchor =
   | "top-left"
   | "top-center"
@@ -17,12 +16,8 @@ export interface ToasterSize {
   readonly height: number;
 }
 
-/**
- * Matches sonner's own `VIEWPORT_OFFSET` default (`24px`), which the app
- * does not override via the `Toaster`'s `offset` prop. Reusing it keeps
- * each anchor's prospective rect aligned with where sonner actually paints
- * the toaster, without hardcoding the toaster's own size.
- */
+/** Reusing it keeps each anchor's prospective rect aligned with where sonner actually paints the toaster,
+ * without hardcoding the toaster's own size. */
 export const TOASTER_EDGE_OFFSET_PX = 24;
 
 export const DEFAULT_TOASTER_ANCHOR: ToasterAnchor = "bottom-right";
@@ -56,19 +51,8 @@ const ANCHOR_Y: Record<ToasterAnchor, "top" | "bottom"> = {
   "bottom-right": "bottom",
 };
 
-/**
- * Picks the least-overlapping of sonner's six fixed anchors against the
- * live registered tile rects, per invariant 10. Starts from the app
- * default and only moves off it when the default's prospective rect (at
- * `toasterSize`, the toaster's own last-measured rect) overlaps a tile;
- * when every anchor overlaps something, it keeps the default rather than
- * picking an arbitrary "least-bad" one - invariant 2 still applies there.
- *
- * `toasterSize` is `null` before the toaster has ever measured itself
- * (nothing has shown yet) - with no known size there is nothing sound to
- * compare against a tile rect, so this returns the default rather than
- * guessing at a size.
- */
+/** Starts from the app default and only moves off it when the default's prospective rect (at `toasterSize`, the
+ * toaster's own last-measured rect) overlaps a tile. */
 export function pickToasterAnchor(input: {
   readonly toasterSize: ToasterSize | null;
   readonly viewport: ToasterSize;

@@ -4,10 +4,8 @@ import { mcpBinaryAbsentNotice } from "@/components/settings/panels/provider-mcp
 
 const BOTH = ["global", "project"] as const;
 
-/**
- * Build a base MCP capability object. Second helpers (rather than default
- * params) keep the suite inside the monorepo's no-default-params ESLint rule.
- */
+/** Second helpers (rather than default params) keep the suite inside the monorepo's no-default-params ESLint
+ * rule. */
 function baseMcpCaps(): ProviderMcpCapabilities {
   return {
     transports: ["stdio", "http"],
@@ -105,9 +103,8 @@ describe("mcpBinaryAbsentNotice", () => {
   });
 
   it("never names auth even when authActions is empty", () => {
-    // Deliberate limit: post-gate authActions:[] is indistinguishable from a
-    // contract that never had auth actions (droid, copilot). Naming auth here
-    // would be a guess dressed as a fact.
+    // Deliberate limit: post-gate authActions:[] is indistinguishable from a contract that never had auth actions
+    // (droid, copilot). Naming auth here would be a guess dressed as a fact.
     const caps = withEmptyScopes(baseMcpCaps(), ["auth"]);
     expect(caps.authActions).toEqual([]);
     expect(caps.actionScopes.auth).toEqual([]);

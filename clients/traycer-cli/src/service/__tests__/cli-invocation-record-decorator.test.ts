@@ -12,23 +12,12 @@ const mocks = vi.hoisted(() => ({
   hostHomes: [] as string[],
   callRegister: true,
   callUninstall: true,
-  // When true, the mocked transaction wrapper throws BEFORE calling
-  // `opts.uninstall()` at all - simulating a failed txn acquire - so tests
-  // can assert nothing downstream (the stop intent) ran.
+  // When true, the mocked transaction wrapper throws BEFORE calling `opts.uninstall()` at all - simulating a failed txn acquire - so tests can assert nothing downstream (the stop intent) ran.
   throwBeforeUninstall: false,
-  // Shared ordering trace: the transaction wrapper pushes "txn-open" before
-  // calling the OS callback and "txn-commit" after it resolves, while the OS
-  // callback itself (supplied per-test) pushes its own "os-*" marker, and the
-  // stop-intent decorator pushes "stop-intent" when it writes the intent.
-  // This proves the OS mutation runs INSIDE the transaction, not merely that
-  // it ran at all, and that the transaction is entered before the intent is
-  // written.
+  // Shared ordering trace: the transaction wrapper pushes "txn-open" before calling the OS callback and "txn-commit" after it resolves, while the OS callback itself (supplied per-test) pushes its own "os-*" marker, and the stop-intent decorator pushes "stop-intent" when it writes the intent.
+  // This proves the OS mutation runs INSIDE the transaction, not merely that it ran at all, and that the transaction is entered before the intent is written.
   order: [] as string[],
-  // The `removed` predicate `withCliInvocationRecord` passes to
-  // `runServiceRemovalWithInvocationRecord` for `retireCompetingRegistration`,
-  // captured so tests can drive it directly against every
-  // `CompetingRegistrationRetirement` kind rather than only the one kind a
-  // single call happens to produce.
+  // The `removed` predicate `withCliInvocationRecord` passes to `runServiceRemovalWithInvocationRecord` for `retireCompetingRegistration`, captured so tests can drive it directly against every `CompetingRegistrationRetirement` kind rather than only the one kind a single call happens to produce.
   lastRemovedPredicate: null as
     | ((result: CompetingRegistrationRetirement) => boolean)
     | null,
@@ -246,16 +235,8 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
   });
 
   it("classifies retired and a retire-failed that removed something as removed - every other outcome as untouched", async () => {
-    // `retired` and a `retire-failed` with a successful half both mean the
-    // registration was taken away wholly or in part, so the record must be
-    // invalidated exactly as an uninstall does; a `retire-failed` whose
-    // halves both did nothing (a failed bootout on an already-absent
-    // manifest) and every other outcome touched nothing on the OS side and
-    // must leave the record alone. This drives the captured `removed`
-    // predicate directly against all five `CompetingRegistrationRetirement`
-    // kinds, rather than relying on whichever one kind a single call
-    // happens to produce - the case ablation D targets specifically
-    // (`removed: () => false` would flip only the first two).
+    // `retired` and a `retire-failed` with a successful half both mean the registration was taken away wholly or in part, so the record must be invalidated exactly as an uninstall does; a `retire-failed` whose halves both did nothing (a failed bootout on an already-absent manifest) and every other outcome touched nothing on the OS side and must leave the record alone.
+    // This drives the captured `removed` predicate directly against all five `CompetingRegistrationRetirement` kinds, rather than relying on whichever one kind a single call happens to produce - the case ablation D targets specifically (`removed: () => false` would flip only the first two).
     const controller = withCliInvocationRecord(
       baseController({
         retireCompetingRegistration: async () => ({
@@ -298,9 +279,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         manifestRemoved: false,
       }),
     ).toBe(true);
-    // Attempted and unconfirmed: a `bootout --wait` timeout kills the waiter
-    // after launchd may already have accepted the eviction, so "not
-    // confirmed" is not "did not happen" and the record must not outlive it.
+    // Attempted and unconfirmed: a `bootout --wait` timeout kills the waiter after launchd may already have accepted the eviction, so "not confirmed" is not "did not happen" and the record must not outlive it.
     expect(
       removed({
         kind: "retire-failed",
@@ -311,9 +290,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         manifestRemoved: false,
       }),
     ).toBe(true);
-    // Nothing happened: no bootout was attempted (the owner could not be
-    // read) and the manifest was already absent, so the registration is
-    // exactly as it was, and the record with it.
+    // Nothing happened: no bootout was attempted (the owner could not be read) and the manifest was already absent, so the registration is exactly as it was, and the record with it.
     expect(
       removed({
         kind: "retire-failed",
@@ -391,11 +368,8 @@ describe("createServiceController wiring", () => {
   });
 
   it("wraps the same platform controller for both install and uninstall on the current platform", async () => {
-    // Wiring bug class: install and uninstall silently resolving to
-    // different platform backends (e.g. one branch left unwrapped after a
-    // refactor). Both calls must reach the SAME mocked transaction wrapper
-    // with the SAME label/environment, on whichever platform this suite
-    // actually runs on.
+    // Wiring bug class: install and uninstall silently resolving to different platform backends (e.g. one branch left unwrapped after a refactor).
+    // Both calls must reach the SAME mocked transaction wrapper with the SAME label/environment, on whichever platform this suite actually runs on.
     mocks.callRegister = false;
     mocks.callUninstall = false;
     const controller = createServiceController();

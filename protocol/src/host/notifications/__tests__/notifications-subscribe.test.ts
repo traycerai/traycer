@@ -13,14 +13,7 @@ import {
   readHostRuntimeStatusAwareness,
 } from "@traycer/protocol/host/notifications/subscribe";
 
-/**
- * `notifications.subscribe@1.0` / `@1.1` frame fixtures.
- *
- * Covers every frame kind the contract declares, including the binary-bearing
- * frames (`hasBinaryPayload: true`) that ride a paired binary payload and the
- * pure-text frames (`pong`, `ping`) whose `hasBinaryPayload` is pinned to the
- * `false` literal.
- */
+/** `notifications.subscribe@1.0` / `@1.1` frame fixtures. */
 
 describe("notifications.subscribe@1.0 server frames", () => {
   it("parses a binary-bearing snapshot frame with a semver schemaVersion", () => {
@@ -258,10 +251,7 @@ describe("readHostRuntimeStatusAwareness", () => {
   });
 
   it("tolerates an unrecognised field a newer host adds to the payload — deliberately non-strict", () => {
-    // Unlike the GET /hosts DTO, awareness entries from old and new hosts
-    // coexist in one room indefinitely, so a field a newer host adds must be
-    // dropped rather than blanking out the rest of the entry — a `.strict()`
-    // parse here would erase a newer host's busy count on every older client.
+    // Unlike the GET /hosts DTO, awareness entries from old and new hosts coexist in one room indefinitely, so a field a newer host adds must be dropped rather than blanking out the rest of the entry - a `.strict()` parse.
     const entry = {
       [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
         busy: false,

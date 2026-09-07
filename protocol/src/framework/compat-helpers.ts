@@ -7,31 +7,19 @@ import type {
   ManifestMethodEntry,
 } from "./ws-protocol";
 
-/**
- * Shared helpers used by both the unary `/rpc` compatibility checker and
- * the `/stream` mirror. Kept role-aware (client vs host) so the terminal
- * error frame's `clientCanonical` / `hostCanonical` labels stay objective
- * regardless of which side is running the check.
- */
+/** Shared helpers used by both the unary `/rpc` compatibility checker and the `/stream` mirror. */
 
 export type CompatibilityRole = "client" | "host";
 
 /**
- * Minimal shape common to both the unary and stream method-version
- * registries: each major maps to a line that at least exposes
- * `latestMinor`. Additional per-variant fields (`versions`,
- * `downgradePathsFromLatest`) are read by the variant-specific
- * `canBridge` helpers, not here.
+ * Minimal shape common to both the unary and stream method-version registries: each major maps to a line that at least exposes `latestMinor`.
  */
 export type MajorKeyedLineRegistry = Readonly<
   Record<number, { readonly latestMinor: number }>
 >;
 
 /**
- * Returns the canonical `{ major, minor }` the side should advertise for a
- * method - the highest installed minor of the highest installed major.
- * Numeric keys are filtered defensively because `Object.keys` returns
- * strings; `Number.isInteger` rejects the validator brand symbols.
+ * Returns the canonical `{ major, minor }` the side should advertise for a method - the highest installed minor of the highest installed major.
  */
 export function canonicalForMethodVersionLine(
   methodRegistry: MajorKeyedLineRegistry,
@@ -56,11 +44,7 @@ export function canonicalForMethodVersionLine(
   return { major: latestMajor, minor: line.latestMinor };
 }
 
-/**
- * Every installed major a peer advertised for one method. A missing
- * `supportedMajors` is the one legacy-wire form, and means only its canonical
- * major was installed.
- */
+/** Every installed major a peer advertised for one method. */
 export function advertisedMajors(
   entry: ManifestMethodEntry,
 ): readonly number[] {
@@ -82,12 +66,7 @@ export function highestSharedMajor(
   return highest;
 }
 
-/**
- * Sorted union of method names across both manifests - the domain
- * checked for compatibility. Sorting keeps the resulting
- * `IncompatibleMethodDetails[]` stable so fatal error frames are
- * deterministic across runs.
- */
+/** Sorted union of method names across both manifests - the domain checked for compatibility. */
 export function collectManifestMethods(
   myManifest: ConnectionManifest,
   theirManifest: ConnectionManifest,
@@ -113,10 +92,7 @@ export function readManifestVersion(
 }
 
 /**
- * Builds the `IncompatibleMethodDetails` for a missing method - either
- * "my side missing" (I don't have this method) or "their side missing"
- * (the peer doesn't have it). Role-aware so the `blocking` field names
- * the correct side using objective client/host language.
+ * Builds the `IncompatibleMethodDetails` for a missing method - either "my side missing" (I don't have this method) or "their side missing" (the peer doesn't have it).
  */
 export function missingMethodDetail(
   method: string,

@@ -41,12 +41,7 @@ import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
 
 /**
- * Decision 14 real ChatTile edit arm:
- * mount ChatTile → open queue-row edit → drive the actual submitMessage path
- * (queueEdit + queueSteerNow for after_safe_point vs queueEdit +
- * queueSettingsUpdate for auto). Captures the tile's onSubmitMessage so
- * deliveryPolicy can be driven without TipTap DOM key events under jsdom.
- * A change to chat-tile.tsx's edit branch fails these assertions.
+ * Captures the tile's onSubmitMessage so deliveryPolicy can be driven without TipTap DOM key events under jsdom.
  */
 
 vi.mock(
@@ -132,9 +127,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-// The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// The Epic session resolves its host through the selection authority's derived pointer (selection model §1), not the active-host projection above - seed the decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));

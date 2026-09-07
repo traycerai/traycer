@@ -58,9 +58,6 @@ export function WorktreeBranchPickerContent(
   } = props;
 
   // Typing to narrow a long branch list is a hardware-keyboard convenience.
-  // On a touch pointer the same focus raises a software keyboard over the very
-  // list the popover exists to show, so the search stands down and the popover
-  // opens on its rows.
   const coarsePointer = useCoarsePointer();
   const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
     useCoarsePointerOpenAutoFocus();
@@ -123,9 +120,8 @@ export function WorktreeBranchPickerContent(
         contentClassName,
       )}
       ref={contentRef}
-      // The search field is the first tabbable descendant, so Radix's own
-      // open-autofocus takes it whether or not the effect above runs. Both
-      // halves have to move together or the gate is a no-op.
+      // The search field is the first tabbable descendant, so Radix's own open-autofocus takes it whether or not the
+      // effect above runs. Both halves have to move together or the gate is a no-op.
       onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={handleContentKeyDown}
       onEscapeKeyDown={(event) => {

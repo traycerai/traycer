@@ -9,11 +9,8 @@ import {
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 /**
- * Widened rather than given a new parameter (guardrail G9): the ~50+
- * existing callers all pass a plain {@link ReportIssueContext} and are
- * untouched. A caller with a structured private cause to attach can pass a
- * {@link ReportIssueDraftContext} instead - `showReportableToast` branches
- * on which one it got.
+ * Widened rather than given a new parameter (guardrail G9): the ~50+ existing callers all pass a plain {@link ReportIssueContext} and are untouched.
+ * A caller with a structured private cause to attach can pass a {@link ReportIssueDraftContext} instead - `showReportableToast` branches on which one it got.
  */
 type ReportableToastContext = ReportIssueContext | ReportIssueDraftContext;
 
@@ -72,25 +69,7 @@ function createReportAction(
   };
 }
 
-/**
- * The "Report issue" affordance as a NON-DISMISSING action button.
- *
- * Sonner's two button slots differ, and the difference is load-bearing here:
- * the CANCEL slot calls `deleteToast()` unconditionally once its `onClick`
- * returns - `preventDefault` is never consulted on that path - while the
- * ACTION slot checks `event.defaultPrevented` first. So a toast that must
- * SURVIVE being reported cannot carry its report affordance as a cancel.
- *
- * That matters for a toast whose body is the last copy of the user's text: the
- * report draft does not carry the notice body (it must not - a report context
- * is public, and it collapses whitespace and truncates), and the delivered-
- * notice tracker has already retained the id so nothing replays it. Dismissing
- * on report therefore destroyed the only copy of the draft it was reporting
- * about.
- *
- * `undefined` when reporting is unavailable, matching the cancel-side gate in
- * {@link showReportableToast}: the button is absent there, not merely inert.
- */
+/** The "Report issue" affordance as a NON-DISMISSING action button. */
 export function createRetainingReportAction(
   context: ReportableToastContext,
 ): ExternalToast["action"] {

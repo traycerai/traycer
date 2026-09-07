@@ -2,12 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ProbeCommandResult } from "@traycer-clients/shared/host-lifecycle";
 import { probeMacosWedgedJob } from "../launchd-wedge";
 
-// The v1.1.8 lockout shape, pinned at the doctor probe: launchd holds the
-// label loaded (ownership checks read "healthy") while the job itself
-// cannot run. The probe must report only on positive wedge evidence from
-// the job's run state, route the repair by who owns the registration, and
-// stay silent on healthy, absent, and unreadable worlds - a probe that
-// can cry wolf would be disabled within a release.
+// The v1.1.8 lockout shape, pinned at the doctor probe: launchd holds the label loaded (ownership checks read "healthy") while the job itself cannot run.
+// The probe must report only on positive wedge evidence from the job's run state, route the repair by who owns the registration, and stay silent on healthy, absent, and unreadable worlds - a probe that can cry wolf would be disabled within a release.
 
 function printResult(stdout: string): ProbeCommandResult {
   return {
@@ -85,9 +81,7 @@ describe.runIf(process.platform !== "win32")("probeMacosWedgedJob", () => {
     expect(issue?.message).toContain("spawn failed");
     expect(issue?.message).toContain("last exit code = 78");
     expect(issue?.message).toContain("ai.traycer.host.agent");
-    // Desktop owns the registration: the repair routes through the app,
-    // with the never-refuse uninstall as the escape hatch when the app
-    // itself is what is broken.
+    // Desktop owns the registration: the repair routes through the app, with the never-refuse uninstall as the escape hatch when the app itself is what is broken.
     expect(issue?.message).toContain("Traycer Desktop app");
     expect(issue?.message).toContain("traycer host service uninstall");
     expect(issue?.terminalCommand).toBe("traycer host service uninstall");
@@ -135,16 +129,11 @@ describe.runIf(process.platform !== "win32")("probeMacosWedgedJob", () => {
       ownership: "cli-or-other",
       reasons: ["job-state-spawn-failed"],
     });
-    // A wedged job is wedged in the definition launchd has CACHED. Only a
-    // bootout/bootstrap cycle replaces it, and `service install` is the
-    // operation that performs one (pinned behaviourally in macos.test.ts:
-    // "runs print -> bootout -> bootstrap -> kickstart").
+    // A wedged job is wedged in the definition launchd has CACHED.
+    // Only a bootout/bootstrap cycle replaces it, and `service install` is the operation that performs one (pinned behaviourally in macos.test.ts: "runs print -> bootout -> bootstrap -> kickstart").
     expect(issue?.terminalCommand).toBe("traycer host service install");
     expect(issue?.fixAction).toBe("service-install");
-    // Pinned in the other direction too, because the wrong answer here is
-    // not a missing action but a plausible one that cannot work: `restart`
-    // ends in `kickstart -k` against that same cached definition, and both
-    // `host-start` and `host-restart` resolve to `restartHost()` in the GUI.
+    // Pinned in the other direction too, because the wrong answer here is not a missing action but a plausible one that cannot work: `restart` ends in `kickstart -k` against that same cached definition, and both `host-start` and `host-restart` resolve to `restartHost()` in the GUI.
     // Offering either returns the user to this exact card.
     expect(issue?.terminalCommand).not.toBe("traycer host restart");
     expect(issue?.fixAction).not.toBe("host-start");

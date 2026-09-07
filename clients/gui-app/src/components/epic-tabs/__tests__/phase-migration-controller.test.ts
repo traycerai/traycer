@@ -168,10 +168,8 @@ describe("PhaseMigrationController", () => {
   });
 
   it("completePhaseMigration returns false and leaves surfaceMode alone when a listener races the resolution to a different epic first", () => {
-    // `execute`'s listeners fire before `applySources`, so this racer wins
-    // BEFORE `completePhaseMigration`'s own resolution call ever runs - the
-    // pre-commit window (closed since round 1/2). See the pin below for a
-    // listener that races the commit itself instead.
+    // `execute`'s listeners fire before `applySources`, so this racer wins before `completePhaseMigration`'s own
+    // resolution call ever runs - the pre-commit window (closed since round 1/2).
     const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
       const current = useEpicCanvasStore.getState().tabsById[PHASE_TAB_ID];
       if (current?.surfaceMode?.kind === "phase-migration") {
@@ -200,17 +198,8 @@ describe("PhaseMigrationController", () => {
   });
 
   it("completePhaseMigration returns false when a raw store subscriber supersedes the resolution DURING its own commit", () => {
-    // The round-3 window: `rawPublicSetState` inside `resolveTabEpicIdentity`
-    // notifies zustand subscribers SYNCHRONOUSLY, mid-commit - a listener
-    // observing the just-landed epicId can call the same authorized action
-    // AGAIN before the outer `resolveTabEpicIdentity` call returns to
-    // `completePhaseMigration`'s own closure. The precondition passes (the
-    // outer write already landed), so a claim recorded at write time would
-    // be wrong; the fix reads `getState()` back after `execute()` instead.
-    // The listener is self-limiting: it only fires while the tab's epicId
-    // still equals the outer target, which stops holding once the racer's
-    // own write lands (including on the racer's own re-entrant
-    // notification), so this terminates without a manual guard.
+    // The precondition passes (the outer write already landed), so a claim recorded at write time would be wrong;
+    // the fix reads `getState` back after `execute` instead.
     const unsubscribeRace = useEpicCanvasStore.subscribe((state) => {
       if (state.tabsById[PHASE_TAB_ID]?.epicId === "epic-created") {
         resolveTabEpicIdentity(PHASE_TAB_ID, "epic-created", "epic-racer");
@@ -264,12 +253,8 @@ describe("PhaseMigrationController", () => {
       useEpicCanvasStore.getState().tabsById[PHASE_TAB_ID]?.surfaceMode,
     ).toEqual({ kind: "phase-migration", phaseId: "phase-1" });
 
-    // The race already committed the tab to a third epic through the same
-    // authorized action, ahead of this migration's own resolution - a real
-    // caller can't retry its way back to "phase-1" against that. What
-    // matters here is that `retry()` routes into its existing pending/start
-    // cycle sanely (same "retries after an error" mechanics as the
-    // ordinary-failure pin above) instead of hot-looping or getting stuck.
+    // The race already committed the tab to a third epic through the same authorized action, ahead of this
+    // migration's own resolution - a real caller can't retry its way back to "phase-1" against that.
     controller.retry(PHASE_TAB_ID);
 
     expect(controller.snapshot(PHASE_TAB_ID)).toMatchObject({

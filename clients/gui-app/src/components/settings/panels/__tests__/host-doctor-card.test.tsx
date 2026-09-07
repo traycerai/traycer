@@ -222,20 +222,17 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       name: /Free port \+ restart/i,
     });
     fireEvent.click(fixButton);
-    // The confirmation dialog renders the conflicting PID + process name.
-    // Radix dialogs portal into document.body; `findByRole("dialog")`
-    // matches the open dialog regardless of its DOM location.
+    // Radix dialogs portal into document.body; `findByRole("dialog")` matches the open dialog regardless of its
+    // DOM location.
     await screen.findByRole("dialog");
     const dialogTitle = await screen.findByText(/Free port and restart\?/i);
     expect(dialogTitle).toBeTruthy();
-    // node/4321 may appear in both the issue summary and the dialog
-    // description; assert via `getAllByText` so we don't trip on the
-    // duplicate.
+    // node/4321 may appear in both the issue summary and the dialog description; assert via `getAllByText` so we
+    // don't trip on the duplicate.
     expect(screen.getAllByText(/node/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/4321/).length).toBeGreaterThan(0);
-    // Confirm. Radix marks the rest of the document aria-hidden when
-    // the dialog opens, so role queries return only the dialog's
-    // footer buttons. Find by destructive variant - the one styled red.
+    // Radix marks the rest of the document aria-hidden when the dialog opens, so role queries return only the
+    // dialog's footer buttons.
     const confirmButton = await screen.findByRole("button", {
       name: /Free port \+ restart/i,
     });
@@ -243,9 +240,8 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     await waitFor(() => {
       expect(freePortAndRestart).toHaveBeenCalledTimes(1);
     });
-    // The recovery console keeps the QUEUEING route (it repairs a host that is
-    // already down) but still carries the identity fence: the port and pid it
-    // is about to act on describe the machine as this report saw it.
+    // The recovery console keeps the queueing route (it repairs a host that is already down) but still carries the
+    // identity fence: the port and pid it is about to act on describe the machine as this report saw it.
     expect(freePortAndRestart).toHaveBeenCalledWith({
       port: 7300,
       pid: 4321,
@@ -414,9 +410,8 @@ describe("HostDoctorCard pending CLI upgrade", () => {
         expectedHostId: "local-host",
       });
     });
-    // The console keeps QUEUEING semantics, but it may no longer reach the
-    // app-wide method that carries no host id: this console can outlive the
-    // host it opened on, and that call would kill whichever host is here now.
+    // The console keeps queueing semantics, but it may no longer reach the app-wide method that carries no host
+    // id: this console can outlive the host it opened on, and that call would kill whichever host is here now.
     expect(restartHost).not.toHaveBeenCalled();
   });
 
@@ -442,9 +437,8 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   });
 
   it("Re-run Doctor on the error arm refetches, swapping the arm for the spinner", async () => {
-    // Held in an object rather than a `let`: TS narrows a captured `let` to
-    // `null` at the call site because it cannot prove the executor ran, and
-    // the `?.()` that placates it then types as `never`.
+    // Held in an object rather than a `let`: TS narrows a captured `let` to `null` at the call site because it
+    // cannot prove the executor ran, and the `?.` that placates it then types as `never`.
     const second: { release: () => void } = { release: () => undefined };
     const secondGate = new Promise<void>((resolve) => {
       second.release = resolve;
@@ -479,11 +473,8 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     expect(runDoctor).toHaveBeenLastCalledWith({
       expectedHostId: "local-host",
     });
-    // The refetch clears the error, and with no data behind it the query
-    // returns to `pending` — so the error arm and its button are GONE and the
-    // shared spinner owns the in-flight state. Pinned as an equality, not a
-    // tolerance: it is the reason the button carries no `disabled` prop, and
-    // if a later change keeps the arm mounted that prop has to come back.
+    // Pinned as an equality, not a tolerance: it is the reason the button carries no `disabled` prop, and if a
+    // later change keeps the arm mounted that prop has to come back.
     expect(screen.queryByTestId("host-doctor-rerun")).toBeNull();
     expect(screen.queryByText(/Doctor could not run:/)).toBeNull();
     expect(screen.getByText("Running Doctor…")).toBeTruthy();

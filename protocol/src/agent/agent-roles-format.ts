@@ -9,17 +9,6 @@ import type {
   RoleClaimWire,
 } from "@traycer/protocol/host/agent/roles";
 
-/**
- * ONE rendering for role operations, shared verbatim by the host's GUI tool
- * results and the CLI's human output - byte-identical text on both surfaces
- * for the same response is a contract requirement, so neither surface may
- * post-process what these return.
- *
- * These format SUCCESS response schemas ONLY. Failures are typed errors with
- * their own per-surface envelopes (tool `isError` text, CLI error codes); a
- * formatter that pretended to render exceptions would invite surfaces to
- * catch-and-stringify instead of surfacing the typed result.
- */
 export function formatClaimRoleResponse(
   response: ClaimAgentRoleResponse,
 ): string {
@@ -98,11 +87,6 @@ function appendFailureSummary(
   parts.push(`failed ${failed.length} (${reasons})`);
 }
 
-/**
- * Partial delivery is explicit without implying registry failure: the claim
- * or release is durable by the time this is computed, and this line only
- * reports who happened to be reachable to hear about it.
- */
 function formatAwarenessSummary(delivery: RoleAwarenessDelivery): string {
   const parts = [
     `delivered ${delivery.deliveredTo.length}`,
@@ -113,21 +97,10 @@ function formatAwarenessSummary(delivery: RoleAwarenessDelivery): string {
 }
 
 // ─── v1.1 vocabulary (GUI tools + CLI share these formatters verbatim) ───
-//
-// `deferredToPrompt` is neither delivery nor failure, so it gets its own
-// word - "prompt-pending" - rather than being folded into "delivered" (no
-// event was queued, no model read anything) or "failed" (nothing went
-// wrong; the next fresh prompt for that agent will carry the update). Any
-// surface rendering a v1.1 awareness report must use this word for the
-// category, never "delivered".
+// Any surface rendering a v1.1 awareness report must use this word for the category, never "delivered".
 const PROMPT_PENDING_LABEL = "prompt-pending";
 
-/**
- * Same shape as {@link formatAwarenessSummary}, extended with the
- * prompt-pending bucket. Kept as a distinct function - rather than an
- * overload - so the v1.0 formatter's output stays byte-identical to the
- * released surface for any caller still on that formatter.
- */
+/** Same shape as {@link formatAwarenessSummary}, extended with the prompt-pending bucket. */
 function formatAwarenessSummaryV11(delivery: RoleAwarenessDeliveryV11): string {
   const parts = [
     `delivered ${delivery.deliveredTo.length}`,

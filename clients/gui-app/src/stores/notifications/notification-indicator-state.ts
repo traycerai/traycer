@@ -28,11 +28,7 @@ export interface NotificationIndicatorState {
   readonly unreadDone: boolean;
 }
 
-/**
- * GUI-only enrichment of the released host response. Aggregate surfaces read
- * `epics` / `chats` exactly as before; host-bound tabs use the per-origin
- * projection so another host's same-id lineage cannot decorate the tab.
- */
+/** GUI-only enrichment of the released host response. */
 export type SurfaceNotificationIndicators =
   HostNotificationsIndicatorStateResponse & {
     readonly byOriginHostId?: Readonly<
@@ -74,9 +70,7 @@ export function selectNotificationIndicatorState(
     unreadFailure: unreadLocalFailure || hostState.unreadFailure,
     unreadNonTerminalFailure:
       unreadLocalNonTerminalFailure || hostFailureIsAggregateAttention,
-    // The host indicator's failure bit is produced by terminal notification
-    // chronology. Treat it as terminal status so a newer running turn can own
-    // the glyph while the historical failure remains in the feed.
+    // The host indicator's failure bit is produced by terminal notification chronology.
     unreadTerminalFailure:
       unreadLocalTerminalFailure ||
       (hostState.unreadFailure && !hostFailureIsAggregateAttention),
@@ -147,29 +141,8 @@ function selectHostIndicatorState(
 }
 
 /**
- * The cloud-mode counterpart of the host's `indicatorState` RPC, computed from
- * the snapshot the GUI already holds.
- *
- * The cloud feed is the complete VISIBLE set (the relay only ever sends whole
- * snapshots, already filtered for cleared/superseded), and every row carries
- * the entity columns, severity, kind and markers, so it can mirror the host's
- * derivation over rows from EVERY host rather than only the connected one.
- * Unread, unresolved prompt notifications light their respective pending
- * actions. A resolved-but-unread row remains a notification-stream concern,
- * not a false claim that its chat is still waiting for an action. Terminal rows
- * first resolve to the newest terminal outcome for each exact entity within
- * one origin host, whose timestamps share a clock domain. Those
- * per-host winners are then rolled into epic state. This lets a later success
- * replace an earlier failure's GLYPH without comparing clocks across hosts or
- * altering the historical failure row retained in the feed.
- * `pendingFork` is always false here: fork truth is host-local and is merged
- * from the host response after this feed-row derivation, never inferred from a
- * retained cloud row.
- *
- * Sparse on purpose: an entity with nothing lit is omitted, which
- * `selectNotificationIndicatorState`'s `?? EMPTY` lookup reads identically to
- * the host's all-false row while keeping the empty result referentially
- * stable.
+ * The cloud-mode counterpart of the host's `indicatorState` RPC, computed from the snapshot the
+ * GUI already holds.
  */
 export function selectCloudNotificationIndicators(
   rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV11>>>,
@@ -342,10 +315,8 @@ function collectCloudIndicatorEntry(
 /** `null` when the entry lights nothing, so an entity with only quiet rows is
  * never allocated an all-false record. */
 /**
- * `pendingApproval` is the wire's generic "needs a person" flag: every
- * pending-prompt kind but `interview.requested` lights it, driven off the
- * shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS` tuple so a new kind lights
- * this glyph (and the host SQL projection) by joining that tuple.
+ * `pendingApproval` is the wire's generic "needs a person" flag: every pending-prompt kind but
+ * `interview.requested` lights it, driven off the shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS`
  */
 function indicatorContribution(
   entry: HostNotificationEntryV22,
@@ -472,9 +443,8 @@ function terminalEntryIsNewer(
   candidate: CloudTerminalCandidate,
   current: CloudTerminalCandidate,
 ): boolean {
-  // The origin store clamps every terminal occurrence for one exact entity
-  // to a durable causal timestamp. Retain the entry-id tie-breaker for
-  // deterministic ordering and compatibility with rows minted by older hosts.
+  // The origin store clamps every terminal occurrence for one exact entity to a durable causal
+  // timestamp.
   return (
     candidate.entry.updatedAt > current.entry.updatedAt ||
     (candidate.entry.updatedAt === current.entry.updatedAt &&
@@ -512,10 +482,8 @@ function mergeIndicatorFlags(
 }
 
 /**
- * Cloud mode has two deliberately separate authorities: feed rows own the
- * read/unread and approval/interview flags across hosts, while the connected
- * host's fork notice board owns `pendingFork`. Merge only that one host-local
- * bit so local SQLite read markers can never override the cloud feed view.
+ * Cloud mode has two deliberately separate authorities: feed rows own the read/unread and
+ * approval/interview flags across hosts, while the connected host's fork notice board owns
  */
 export function mergeHostPendingForkIntoCloudIndicators(
   cloud: SurfaceNotificationIndicators,
@@ -557,17 +525,7 @@ function mergePendingForkChats(
   return { epics: response.epics, chats };
 }
 
-/**
- * Two indicator responses folded into one, flag by flag.
- *
- * Used to combine per-HOST reads of one surface: chat ids on a canvas tab strip
- * can belong to different hosts, each answered by its own `indicatorState` call,
- * and the surface below reads a single chatId-keyed map. A spread-merge would
- * make the last answer win for an id two hosts both reported on - `chatId` is
- * host-minted and not unique across hosts, so that is a reachable state - and
- * silently extinguish a real pending flag. The host's own aggregate is
- * `MAX(CASE WHEN ...)`, so OR is the same rule applied one level up.
- */
+/** Two indicator responses folded into one, flag by flag. */
 export function mergeIndicatorStateResponses(
   base: HostNotificationsIndicatorStateResponse,
   next: HostNotificationsIndicatorStateResponse,

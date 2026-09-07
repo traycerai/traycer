@@ -8,26 +8,9 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { projectCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 
 /**
- * SESSION-SCOPED, all three. These hooks are mounted by exactly one surface -
- * the Epic Sharing panel, inside the Epic canvas - and the collaborator list
- * that panel renders is read on the Epic session's client, so the mutations
- * that edit that list must land on the same host or the cache write below
- * targets a key nobody is reading. They used to resolve `useHostClient()`, the
- * app-wide host, which is not the session's host for the whole of a re-point
- * that is establishing and after one that failed (`EpicSessionProvider` keeps
- * the previous handle rendered; only the tile subtree is made inert). The
- * Sharing panel's own comment recorded this as deferred work; this is it.
- *
- * `hostId` is captured at mutate time, per the host-swap convention, so a
- * swap while the request is in flight cannot write another machine's cache.
+ * Session-scoped: mutations must land on the epic session's host, the one the Sharing panel reads. Capture `hostId` at mutate time so a swap cannot write another machine's cache.
  */
-/**
- * Mutation hook for `epic.grantAccess`.
- *
- * On success, writes the returned `ListEpicCollaboratorsResponse` directly
- * into the `epic.listCollaborators` cache entry so the Sharing panel updates
- * immediately without a separate network round-trip.
- */
+/** On success, writes the returned `ListEpicCollaboratorsResponse` directly into the `epic.listCollaborators` cache entry so the Sharing panel updates immediately without a separate network round-trip. */
 export function useEpicGrantAccess() {
   const client = useEpicSessionHostClient();
   const queryClient = useQueryClient();
@@ -69,12 +52,6 @@ export function useEpicGrantAccess() {
   });
 }
 
-/**
- * Mutation hook for `epic.batchUpdateRoles`.
- *
- * On success, writes the returned `ListEpicCollaboratorsResponse` directly
- * into the `epic.listCollaborators` cache entry.
- */
 export function useEpicBatchUpdateRoles() {
   const client = useEpicSessionHostClient();
   const queryClient = useQueryClient();
@@ -125,12 +102,6 @@ export function useEpicBatchUpdateRoles() {
   });
 }
 
-/**
- * Mutation hook for `epic.revokeCollaborator`.
- *
- * On success, writes the returned `ListEpicCollaboratorsResponse` directly
- * into the `epic.listCollaborators` cache entry.
- */
 export function useEpicRevokeCollaborator() {
   const client = useEpicSessionHostClient();
   const queryClient = useQueryClient();

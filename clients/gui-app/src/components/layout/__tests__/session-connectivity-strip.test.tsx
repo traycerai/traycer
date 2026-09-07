@@ -29,10 +29,8 @@ describe("<SessionConnectivityStrip />", () => {
     mocks.wake.mockReset();
   });
 
-  // The un-announced verdicts must render NOTHING: `settling` is inside the
-  // announce window (most drops heal on the first redial), `dialing` has never
-  // been ready, and `unknown` is not the mobile app at all. A strip that
-  // painted any of them would cry wolf on every tunnel.
+  // The un-announced verdicts must render nothing: `settling` is inside the announce window (most drops heal on
+  // the first redial), `dialing` has never been ready, and `unknown` is not the mobile app at all.
   for (const quiet of ["ready", "settling", "dialing", "unknown"] as const) {
     it(`renders nothing on the un-announced '${quiet}' verdict`, () => {
       mocks.connectivity = quiet;
@@ -48,9 +46,8 @@ describe("<SessionConnectivityStrip />", () => {
     expect(strip.textContent).toContain(
       "Connection interrupted - reconnecting…",
     );
-    // The copy and the accessible name both name the CONNECTION: the verdict
-    // cannot distinguish our leg down from the relay's host uplink gone, so a
-    // host claim would be a guess that is wrong half the time it matters.
+    // The copy and the accessible name both name the connection: the verdict cannot distinguish our leg down from
+    // the relay's host uplink gone, so a host claim would be a guess that is wrong half the time it matters.
     expect(strip.getAttribute("aria-label")).toBe(
       "Connection to Traycer Host interrupted",
     );

@@ -3,11 +3,7 @@ import { hostListItemSchema, hostListResponseSchema } from "../host-status";
 import { HOST_LIST_ITEM_GOLDEN_FIXTURE } from "../__fixtures__/host-status-golden-fixture";
 
 /**
- * Strict-parse invariant (S5 / fix #5, mechanism 2): the client consumer
- * (`remote-fetcher.ts`) must fail loud on a server-added field instead of
- * silently stripping it. `.strict()` is not deep in Zod, so the negative
- * cases below probe every nesting level the fixture touches, not just the
- * top one.
+ * Strict-parse invariant (S5 / fix #5, mechanism 2): the client consumer (`remote-fetcher.ts`) must fail loud on a server-added field instead of silently stripping it.
  */
 describe("host-status.ts strict parsing", () => {
   it("parses the golden fixture unchanged at every level", () => {
@@ -95,9 +91,6 @@ describe("host-status.ts strict parsing", () => {
       ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
       status: legacyShapedStatus,
     };
-    // Missing the now-required `connectivity` AND carrying the removed
-    // fields — `.strict()` rejects on both counts, which is the point: there
-    // is no version marker and no dual-parse to fall back to.
     expect(hostListItemSchema.safeParse(legacyItem).success).toBe(false);
   });
 });

@@ -37,11 +37,7 @@ interface MutationContext {
   readonly hostId: string | null;
 }
 
-/**
- * Result of a user-initiated folder pick+prepare. `hostId` is the host that
- * was bound at dispatch (and re-validated after every await) — callers MUST
- * stamp folder rows with this value, never re-read the mutable client.
- */
+/** `hostId` is the host that was bound at dispatch (and re-validated after every await) - callers MUST stamp folder rows with this value, never re-read the mutable client. */
 export type PrepareFoldersWithHostResult = {
   readonly folders: readonly PreparedWorkspaceFolder[];
   readonly repoIdentifiers: WorkspacePrepareFoldersResponseV14["repoIdentifiers"];
@@ -190,10 +186,7 @@ export function useWorkspaceFolderActionsForClient(
 
   const pickAndPrepareFolders = useCallback(
     async (recordAsRecent: boolean) => {
-      // Capture host identity at dispatch. Every post-await re-read must match
-      // this id; otherwise refuse so we never stamp A-prepared paths as B.
-      // Any bound host qualifies, not just a local one: a remote host reaches its
-      // own filesystem through the RPC-backed browse dialog below.
+      // Every post-await re-read must match this id; otherwise refuse so we never stamp A-prepared paths as B. Capture host identity at dispatch.
       const dispatchHost = client?.getActiveHost() ?? null;
       if (client === null || dispatchHost === null) {
         reportableErrorToast("Select a host to add folders.", undefined, {
@@ -206,11 +199,7 @@ export function useWorkspaceFolderActionsForClient(
       }
       const dispatchHostId = dispatchHost.hostId;
 
-      // Hand the shared picker a requester PINNED to dispatchHost. A tab's
-      // client is host-bound for life, but an app-wide one is not: if the
-      // active host changed while the dialog was open, an unpinned client
-      // would browse whichever host became active even though the path is
-      // submitted to dispatchHost below.
+      // Hand the shared picker a requester PINNED to dispatchHost.
       const selection = await useRemoteFolderPickerStore
         .getState()
         .requestPick(client.createRequester(dispatchHost));
@@ -322,10 +311,7 @@ function readWorkspaceActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
-/**
- * Pure helper for tests: stamp prepared folders with a dispatch-time host id.
- * Mirrors the production post-prepare mapping without re-reading a client.
- */
+/** Mirrors the production post-prepare mapping without re-reading a client. */
 export function stampPreparedFoldersWithDispatchHost(
   folders: readonly PreparedWorkspaceFolder[],
   dispatchHostId: string,

@@ -20,26 +20,14 @@ import { cn } from "@/lib/utils";
 const EMPTY_ENTRIES: readonly WorktreeHostEntryV12[] = [];
 
 /**
- * Icon-only Sweep affordance in the Epic status row (top-right), next to the
- * sync pill. Always present - faded and non-actionable when the Task owns no
- * worktrees - so the row keeps a stable shape; the dialog does the judging,
- * listing every worktree with its proof state and pre-checking only the ones
- * proven safe.
- *
- * Host-backed, so callers must only mount it where the host runtime and the
- * Epic session exist (the status row gates on `snapshotLoaded`, which implies
- * a live session). Nothing here is on the render path of a retained pane.
+ * Icon-only Sweep affordance in the Epic status row (top-right), next to the sync pill.
+ * Always present - faded and non-actionable when the Task owns no worktrees - so the row keeps a stable shape; the dialog does the judging, listing every worktree with its proof state and pre-checking only the ones proven safe.
  */
 export function EpicSweepAction(props: {
   readonly epicId: string;
   readonly tabId: string;
 }): ReactNode {
-  // Decorative chrome must never be able to take the canvas down. This is
-  // host-backed (worktree metadata), and the host hooks THROW when the runtime
-  // is absent or incomplete; unguarded, that error escapes the status row and
-  // the route boundary swallows the entire Epic pane with it. Degrade to "no
-  // sweep icon" instead - the same action stays reachable from History and
-  // Settings ▸ Worktrees.
+  // Decorative chrome must never be able to take the canvas down.
   return (
     <StatusRowChromeBoundary label="sweep affordance">
       <EpicSweepActionBody epicId={props.epicId} tabId={props.tabId} />
@@ -53,10 +41,8 @@ function EpicSweepActionBody(props: {
 }): ReactNode {
   const { epicId, tabId } = props;
   const epicIds = useMemo(() => [epicId], [epicId]);
-  // Worktrees are per HOST. This row sits inside the Epic session, so the
-  // rollup it shows and the sweep it opens both describe the SESSION's host -
-  // not the app-wide one, which already answers B while an A-backed Epic is
-  // still rendered through a re-point.
+  // Worktrees are per HOST.
+  // This row sits inside the Epic session, so the rollup it shows and the sweep it opens both describe the SESSION's host - not the app-wide one, which already answers B while an A-backed Epic is still rendered through a re-point.
   const sessionHostClient = useEpicSessionHostClient();
   const sessionHostId = useEpicSessionHostId();
   const metadata = useTaskWorktreeMetadataForClient(sessionHostClient, epicIds);
@@ -65,9 +51,7 @@ function EpicSweepActionBody(props: {
   // Zero-RPC evidence that this Task reaches past the session's host: every
   // node record in the projection carries the machine it lives on.
   const nodeHostIds = useEpicNodeHostIds();
-  // The SAME predicate History's row and bulk affordances ask of their own
-  // provenance, so the two surfaces cannot disagree about whether a Task
-  // reaches past the host in front of you.
+  // The SAME predicate History's row and bulk affordances ask of their own provenance, so the two surfaces cannot disagree about whether a Task reaches past the host in front of you.
   const hasNodesOnOtherHosts = useMemo(
     () =>
       namesHostOutsideSurface({
@@ -81,17 +65,8 @@ function EpicSweepActionBody(props: {
     return tab?.epicId === epicId ? tab.name : null;
   });
   const [sweepOpen, setSweepOpen] = useState(false);
-  // Kept in place (faded, non-actionable) when there is nothing to sweep, so
-  // the status row does not gain and lose a control as worktrees come and go -
-  // the same treatment History's row action and bulk button use. `aria-disabled`
-  // rather than `disabled`: a truly disabled button swallows the pointer events
-  // the tooltip needs, and the tooltip is where the reason lives.
-  //
-  // The metadata half is the SESSION host's, and used to be the whole gate -
-  // which faded the affordance for exactly the Task multi-host Sweep exists
-  // for: agents ran on another machine, this host owns nothing, and the only
-  // route to those worktrees was greyed out. The second clause is the fleet-
-  // shaped question, answered from records already in hand.
+  // Kept in place (faded, non-actionable) when there is nothing to sweep, so the status row does not gain and lose a control as worktrees come and go - the same treatment History's row action and bulk button use.
+  // `aria-disabled` rather than `disabled`: a truly disabled button swallows the pointer events the tooltip needs, and the tooltip is where the reason lives.
   const canSweep = entries.length > 0 || hasNodesOnOtherHosts;
 
   return (
@@ -144,13 +119,7 @@ function EpicSweepActionBody(props: {
 }
 
 /**
- * The status the strip used to render permanently now rides the tooltip: how
- * many worktrees this Task owns, and the merge rollup when there is one.
- *
- * The counts are the SESSION host's, so a Task whose worktrees live entirely
- * elsewhere has nothing to count. It still gets a reason rather than the
- * disabled copy, and deliberately does not guess at a number: "there is
- * something over there" is the whole of what a zero-RPC read can honestly say.
+ * It still gets a reason rather than the disabled copy, and deliberately does not guess at a number: "there is something over there" is the whole of what a zero-RPC read can honestly say.
  */
 function sweepAffordanceTooltip(input: {
   readonly entryCount: number;

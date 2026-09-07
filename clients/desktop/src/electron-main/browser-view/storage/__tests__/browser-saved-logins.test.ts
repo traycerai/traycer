@@ -45,13 +45,7 @@ describe("browser saved-logins pref", () => {
   });
 
   it("is on when the stored record is well-formed JSON of the wrong shape", async () => {
-    // The schema's own fallback, which is a DIFFERENT branch from a file that
-    // will not parse at all: `json-file-store` catches a `JSON.parse` throw and
-    // returns the default before the validator is ever reached, so only
-    // readable JSON that fails `recordSchema` exercises this one.
-    //
-    // Loaded from an explicit OFF first, so the `true` is the fallback being
-    // applied rather than the module's initial value never having moved.
+    // Loaded from an explicit OFF first, so the `true` is the fallback being applied rather than the module's initial value never having moved.
     const offPath = pathIn("off.json");
     await writeFile(offPath, '{"saveLogins":false}', "utf8");
     await initBrowserSavedLogins(offPath);

@@ -28,10 +28,8 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainder}s`;
 }
 
-// Pre-compaction token count is intentionally NOT shown on its own - a bare
-// "before" number reads like a result/savings when it is not. Only the real
-// before→after pair (when a harness reports both) or a standalone post count
-// are meaningful enough to surface.
+// Pre-compaction token count is intentionally NOT shown on its own - a bare "before" number reads like a result/savings when it is not.
+// Only the real before→after pair (when a harness reports both) or a standalone post count are meaningful enough to surface.
 function compactionMetricText(
   preTokens: number | null,
   postTokens: number | null,
@@ -51,9 +49,8 @@ function compactionMetricText(
   return metricParts.length === 0 ? "" : ` · ${metricParts.join(" · ")}`;
 }
 
-// "Compacted" is a claim about what happened to the context. When compaction
-// failed nothing was folded, so the bar must not make that claim - it marks the
-// attempt, and the destructive line below carries the reason.
+// "Compacted" is a claim about what happened to the context.
+// When compaction failed nothing was folded, so the bar must not make that claim - it marks the attempt, and the destructive line below carries the reason.
 function terminalCompactionLabel(
   status: "completed" | "errored",
   isAuto: boolean,
@@ -81,10 +78,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
   const hasSummary =
     status === "completed" && summary !== null && summary.length > 0;
   const ExpandIcon = expanded ? ChevronDown : ChevronRight;
-  // Only `auto` earns a distinct label. A manual compaction is one the user
-  // just asked for, so naming it adds nothing; an automatic one interrupted
-  // them because the window filled up, and that is worth saying. `null` (most
-  // harnesses report no trigger) stays neutral rather than guessing.
+  // `null` (most harnesses report no trigger) stays neutral rather than guessing.
   const isAuto = trigger === "auto";
 
   const labelInner = isStreaming ? (

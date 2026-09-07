@@ -157,10 +157,8 @@ describe("servedByScopeNote", () => {
   });
 
   it("keeps the local-plane wording even under a host filter - the plane, not the pick, is what bounds it", () => {
-    // On the local plane the filter is pinned rather than chosen, and what
-    // limits the number is that the plane cannot see another machine at all.
-    // Saying "other hosts aren't included" there would imply a cross-device
-    // read that was merely narrowed.
+    // On the local plane the filter is pinned rather than chosen, and what limits the number is that the plane cannot see another machine at all.
+    // Saying "other hosts aren't included" there would imply a cross-device read that was merely narrowed.
     expect(servedByScopeNote("local", "Studio Mac")).toMatch(/this machine/i);
   });
 });

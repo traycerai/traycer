@@ -15,10 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Lets one test force the descriptor-bound raw read release() performs to fail with a
-// transient, non-ENOENT error (EIO-shaped) for the exact lock path, while
-// every other read proxies straight through to the real implementation -
-// see the "aborts release ... transient error" test below.
+// Lets one test force the descriptor-bound raw read release() performs to fail with a transient, non-ENOENT error (EIO-shaped) for the exact lock path, while every other read proxies straight through to the real implementation - see the "aborts release ... transient error" test below.
 const mocks = vi.hoisted(() => ({
   lockPath: "",
   forceReadFileErrorForPath: null as string | null,
@@ -58,11 +55,8 @@ import {
 } from "../process-identity";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
-// Spawns a real, separate OS process so the "two-process" lock tests probe
-// genuine cross-process liveness/identity instead of the `pid ===
-// process.pid` self shortcut. Not available on win32 (no `sleep`) - those
-// tests are skipped there, matching this file's existing platform-specific
-// skip convention.
+// Spawns a real, separate OS process so the "two-process" lock tests probe genuine cross-process liveness/identity instead of the `pid === process.pid` self shortcut.
+// Not available on win32 (no `sleep`) - those tests are skipped there, matching this file's existing platform-specific skip convention.
 function spawnSleeper(seconds: number): {
   readonly child: ChildProcessWithoutNullStreams;
   readonly ready: Promise<number>;
@@ -81,11 +75,7 @@ function spawnSleeper(seconds: number): {
   return { child, ready };
 }
 
-// Retained only as an "old enough that the removed age ceiling would have
-// broken this lock under the pre-hardening rule" marker for the regression
-// tests below - the cli-lock breaking decision no longer consults age at
-// all once a holder record parses (see cli-lock.ts's "only positive
-// evidence" comment).
+// Retained only as an "old enough that the removed age ceiling would have broken this lock under the pre-hardening rule" marker for the regression tests below - the cli-lock breaking decision no longer consults age at all once a holder record parses (see cli-lock.ts's "only positive evidence" comment).
 const VERY_OLD_MS = 10 * 60 * 1000 + 1000;
 const EMPTY_LOCK_GRACE_MS = 5000;
 
@@ -200,14 +190,8 @@ describe("acquireCliLock", () => {
     });
   });
 
-  // Superseded regression: the pre-hardening rule force-broke any lock
-  // past MAX_LOCK_AGE_MS regardless of liveness. The hardened rule removes
-  // that ceiling entirely - only positive identity evidence (dead /
-  // mismatched) breaks a lock now, so a genuinely live, identity-verified
-  // holder survives no matter its age. Spawns a real, separate OS process
-  // (not the `pid === process.pid` self shortcut) so this exercises the
-  // genuine cross-process liveness/start-time probing, not the own-pid
-  // identity path.
+  // Superseded regression: the pre-hardening rule force-broke any lock past MAX_LOCK_AGE_MS regardless of liveness.
+  // The hardened rule removes that ceiling entirely - only positive identity evidence (dead / mismatched) breaks a lock now, so a genuinely live, identity-verified holder survives no matter its age.
   it.skipIf(process.platform === "win32")(
     "new-format live holder (genuine two-process) survives past the old age ceiling",
     async () => {
@@ -253,20 +237,8 @@ describe("acquireCliLock", () => {
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
   });
 
-  // Forces the failure at the underlying `readProcessStartTimeMs` probe
-  // boundary via the real test-only injection seam
-  // (`__setProcessStartTimeReaderForTest`), not by mocking the
-  // `../process-identity` module wholesale: a `vi.mock` replacing the
-  // module's EXPORTED `readProcessStartTimeMs` does not rebind
-  // `verifyProcessIdentity`'s own same-module call to it (ES module
-  // same-file references aren't routed through the mocked export object),
-  // so that approach silently passed via ordinary alive-same instead of
-  // genuinely exercising the probe-failure path - see the Fixup round-2
-  // ticket's item F. Against a genuinely live, separate spawned process:
-  // liveness itself succeeds (the child really is running), only the
-  // start-time read fails, so the real verdict logic must independently
-  // derive "indeterminate" from that combination rather than have the
-  // verdict handed to it.
+  // Forces the failure at the underlying `readProcessStartTimeMs` probe boundary via the real test-only injection seam (`__setProcessStartTimeReaderForTest`), not by mocking the `../process-identity` module wholesale: a `vi.mock` replacing the module's EXPORTED `readProcessStartTimeMs` does not rebind `verifyProcessIdentity`'s own same-module call to it (ES module same-file references aren't routed through the mocked export object), so that approach silently passed via ordinary alive-same instead of genuinely exercising the probe-failure path - see the Fixup round-2 ticket's item F.
+  // Against a genuinely live, separate spawned process: liveness itself succeeds (the child really is running), only the start-time read fails, so the real verdict logic must independently derive "indeterminate" from that combination rather than have the verdict handed to it.
   it.skipIf(process.platform === "win32")(
     "liveness-alive/start-time-probe-failure holder (genuine two-process) survives past the ceiling",
     async () => {
@@ -298,9 +270,7 @@ describe("acquireCliLock", () => {
     },
   );
 
-  // Two-process tests: a genuinely separate OS process (not the
-  // `pid === process.pid` shortcut) proves the identity check works
-  // against real cross-process liveness/start-time probing.
+  // Two-process tests: a genuinely separate OS process (not the `pid === process.pid` shortcut) proves the identity check works against real cross-process liveness/start-time probing.
   describe.skipIf(process.platform === "win32")("two-process holders", () => {
     it("identity-less (legacy-format) live holder survives past the ceiling", async () => {
       const { child, ready } = spawnSleeper(5);
@@ -335,12 +305,8 @@ describe("acquireCliLock", () => {
           pid,
           reason: "old-holder",
           startedAt: new Date().toISOString(),
-          // A well-formed creation stamp from this platform that is
-          // positively NOT the live process's, simulating the OS having
-          // recycled this pid onto an unrelated process since the lock was
-          // written. Derived from the real stamp so the platform tags match -
-          // a cross-platform pair would read as "cannot compare" and would
-          // (correctly) refuse to break, which is a different row.
+          // A well-formed creation stamp from this platform that is positively NOT the live process's, simulating the OS having recycled this pid onto an unrelated process since the lock was written.
+          // Derived from the real stamp so the platform tags match - a cross-platform pair would read as "cannot compare" and would (correctly) refuse to break, which is a different row.
           processStartIdentity: `${readProcessStartIdentity(pid) ?? "linux:boot-a 1"} 0`,
         });
         const handle = await acquireCliLock({
@@ -357,15 +323,8 @@ describe("acquireCliLock", () => {
     });
   });
 
-  // Regression for the break-race: a plain `unlink` let a second
-  // contender delete a FIRST contender's freshly-acquired, genuinely
-  // live lock, because the break decision was based on a stale read with
-  // no re-check against what was actually still on disk at unlink time.
-  // The reviewer reproduced 3 simultaneous holders out of 40 racing
-  // contenders against a single dead lock. This drives the same shape:
-  // many concurrent contenders, one initially-dead holder, and a
-  // held-marker counter asserting no two contenders are ever inside
-  // their acquired section at the same time.
+  // Regression for the break-race: a plain `unlink` let a second contender delete a FIRST contender's freshly-acquired, genuinely live lock, because the break decision was based on a stale read with no re-check against what was actually still on disk at unlink time.
+  // The reviewer reproduced 3 simultaneous holders out of 40 racing contenders against a single dead lock.
   it("many concurrent contenders racing a dead lock never see more than one holder at a time", async () => {
     const DEAD_PID = 555555;
     const killSpy = vi
@@ -415,16 +374,8 @@ describe("acquireCliLock", () => {
     expect(maxConcurrentHolders).toBe(1);
   }, 20_000);
 
-  // TRUE multiprocess regression for the residual break-race the reviewer
-  // found in the round-1 rename-to-claim protocol: a contender delayed
-  // between its stale read and its break attempt could rename away a
-  // DIFFERENT, genuinely fresh holder's lock. Reproducing that shape needs
-  // two genuinely separate OS processes and a deterministic way to pause
-  // one of them mid-decision - an in-process `Promise.allSettled` (as the
-  // stress test above uses) can't reproduce a cross-process TOCTOU window,
-  // only the arbitration-lock serialization itself can be trusted to close
-  // it. `cli-lock-worker.ts` is spawned as a real `bun run` child process
-  // so this exercises actual OS-level file contention, not a simulation.
+  // TRUE multiprocess regression for the residual break-race the reviewer found in the round-1 rename-to-claim protocol: a contender delayed between its stale read and its break attempt could rename away a DIFFERENT, genuinely fresh holder's lock.
+  // Reproducing that shape needs two genuinely separate OS processes and a deterministic way to pause one of them mid-decision - an in-process `Promise.allSettled` (as the stress test above uses) can't reproduce a cross-process TOCTOU window, only the arbitration-lock serialization itself can be trusted to close it.
   it.skipIf(process.platform === "win32")(
     "a contender paused between its stale read and its break attempt aborts even while a different process is still actively holding the lock it broke",
     async () => {
@@ -435,10 +386,7 @@ describe("acquireCliLock", () => {
       mkdirSync(hookDir);
       mkdirSync(holdBarrierDir);
 
-      // A genuinely dead pid, established the same way the rest of this
-      // file's real-process tests do: spawn, wait for exit, then use that
-      // now-dead pid - never a magic number that might collide with an
-      // unrelated live process on the test machine.
+      // A genuinely dead pid, established the same way the rest of this file's real-process tests do: spawn, wait for exit, then use that now-dead pid - never a magic number that might collide with an unrelated live process on the test machine.
       const shortLived = spawn("sleep", ["0.1"]);
       const deadPid = await new Promise<number>((resolve, reject) => {
         shortLived.once("spawn", () => {
@@ -494,22 +442,14 @@ describe("acquireCliLock", () => {
         throw new Error(`timed out waiting for ${path}`);
       };
 
-      // Contender A: paused (via the env-gated break-hook seam) right
-      // after it decides to break the stale lock, but before it attempts
-      // the break.
+      // Contender A: paused (via the env-gated break-hook seam) right after it decides to break the stale lock, but before it attempts the break.
       const childA = spawnWorker("A", {
         TRAYCER_CLI_LOCK_TEST_BREAK_HOOK_DIR: hookDir,
       });
       await waitForFile(join(hookDir, "ready"));
 
-      // Contender B: unpaused. Reads the SAME stale lock, breaks it,
-      // acquires, writes its held-marker - then blocks behind an explicit
-      // release barrier instead of releasing immediately. Resuming A only
-      // after B has fully exited (and released) would make A's abort
-      // vacuous - it would just find the path absent, which even the old,
-      // unsafe direct-unlink protocol would also no-op on. Resuming A
-      // while B's fresh lock is still genuinely on disk, mid-critical-
-      // section, is what actually exercises the byte-equality re-read.
+      // Contender B: unpaused.
+      // Reads the SAME stale lock, breaks it, acquires, writes its held-marker - then blocks behind an explicit release barrier instead of releasing immediately.
       const childB = spawnWorker("B", {
         WORKER_HOLD_BARRIER_DIR: holdBarrierDir,
       });
@@ -519,17 +459,13 @@ describe("acquireCliLock", () => {
       // break attempt against that live, changed content.
       writeFileSync(join(hookDir, "go"), "");
 
-      // A's own process won't exit until it eventually acquires the lock
-      // itself (which can't happen until B releases below) - so wait for
-      // the break OUTCOME it records via the hook seam, not for A's exit.
+      // A's own process won't exit until it eventually acquires the lock itself (which can't happen until B releases below) - so wait for the break OUTCOME it records via the hook seam, not for A's exit.
       await waitForFile(join(hookDir, "outcome"));
       const outcome = readFileSync(join(hookDir, "outcome"), "utf8");
       expect(outcome).toBe("aborted");
 
-      // Held-marker protocol: neither worker ever observed the other's
-      // marker still present when it wrote its own - i.e. at no point did
-      // both processes believe they held the lock simultaneously. Checked
-      // while B is still holding, before its marker is removed.
+      // Held-marker protocol: neither worker ever observed the other's marker still present when it wrote its own - i.e. at no point did both processes believe they held the lock simultaneously.
+      // Checked while B is still holding, before its marker is removed.
       const markerEntries = readdirSync(markerDir);
       const violations = markerEntries.filter((name) =>
         name.startsWith("violation-"),
@@ -674,11 +610,7 @@ describe("release() compare-and-delete", () => {
       pollIntervalMs: 50,
     });
     // Simulate the file having been rewritten by pre-token-version code.
-    // Every lock THIS code writes always carries a `randomUUID()` token,
-    // so a tokenless record at this path can never be the one this handle
-    // itself wrote - unlinking it would risk deleting a different,
-    // legitimate holder's lock on nothing but "there was nothing to
-    // compare against."
+    // Every lock THIS code writes always carries a `randomUUID()` token, so a tokenless record at this path can never be the one this handle itself wrote - unlinking it would risk deleting a different, legitimate holder's lock on nothing but "there was nothing to compare against."
     const legacy = {
       pid: process.pid,
       reason: "r",
@@ -696,11 +628,7 @@ describe("release() compare-and-delete", () => {
       waitMs: 1000,
       pollIntervalMs: 50,
     });
-    // Same positive-evidence rule as the read-error and legacy-file cases
-    // above: a successful read of content that doesn't even parse as
-    // lock metadata is not evidence of ownership either - it could be a
-    // fresh holder that has `open()`ed but not yet finished
-    // `writeFile()`ing its own metadata.
+    // Same positive-evidence rule as the read-error and legacy-file cases above: a successful read of content that doesn't even parse as lock metadata is not evidence of ownership either - it could be a fresh holder that has `open()`ed but not yet finished `writeFile()`ing its own metadata.
     writeFileSync(mocks.lockPath, "not valid json");
     await handle.release();
     expect(readFileSync(mocks.lockPath, "utf8")).toBe("not valid json");
@@ -713,13 +641,8 @@ describe("release() compare-and-delete", () => {
       waitMs: 1000,
       pollIntervalMs: 50,
     });
-    // Simulate a transient I/O error (not ENOENT) on the exact read
-    // release() performs to confirm it still owns the file. A prior
-    // version of this code folded any read failure into "nothing to
-    // compare against, unlink anyway" - which would delete a live
-    // holder's lock (e.g. a fresh holder's under the accepted
-    // break-arbitration double-recovery residual) on nothing but a flaky
-    // read. Only a successful read that confirms ownership may unlink.
+    // Simulate a transient I/O error (not ENOENT) on the exact read release() performs to confirm it still owns the file.
+    // A prior version of this code folded any read failure into "nothing to compare against, unlink anyway" - which would delete a live holder's lock (e.g. a fresh holder's under the accepted break-arbitration double-recovery residual) on nothing but a flaky read.
     mocks.forceReadFileErrorForPath = mocks.lockPath;
     await handle.release();
     mocks.forceReadFileErrorForPath = null;

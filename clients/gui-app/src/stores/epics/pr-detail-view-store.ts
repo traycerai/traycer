@@ -1,24 +1,12 @@
 /**
- * Session-only per-PR view state for the full-view tile: which tab is open and
- * which chat its `⌁` affordances send to.
- *
- * Keyed by the PR's own GitHub coordinates, NOT by tile `instanceId`. The tile
- * ref is a pure coordinate identity that dedupes and reopens the same tile
- * (see `PrDetailTileRef`), so closing and reopening a PR should land back on
- * the tab you were reading rather than resetting to Overview. Coordinate keying
- * also means there is nothing to evict when a tile is removed.
- *
- * Not persisted: a fresh app load starts every PR on Overview. Wrap with
- * `persist` if that ever needs to survive a
- * reload - the shape is already serialisable.
+ * Session-only per-PR view state for the full-view tile: which tab is open and which chat its `⌁`
+ * affordances send to. Keyed by the PR's own GitHub coordinates, NOT by tile `instanceId`.
  */
 import { create } from "zustand";
 
 /**
- * Reading order, narrowest question first: what needs me (Overview), what did
- * I change (Commits), what did others say (Feedback), what does CI think
- * (Checks), and only then the full file list (Files) - the widest, least
- * frequently answered question.
+ * Reading order, narrowest question first: what needs me (Overview), what did I change (Commits),
+ * what did others say (Feedback), what does CI think (Checks), and only then the full file list
  */
 export const PR_DETAIL_TABS = [
   "overview",
@@ -51,11 +39,7 @@ export function prDetailViewKey(coordinates: {
 
 interface PrDetailViewEntry {
   readonly tab: PrDetailTabId;
-  /**
-   * The chosen quote target's id, or `null` while the user has not picked one.
-   * Stored as a bare id rather than the resolved target so a deleted chat
-   * simply stops resolving instead of pinning a stale title forever.
-   */
+  /** The chosen quote target's id, or `null` while the user has not picked one. */
   readonly targetId: string | null;
 }
 

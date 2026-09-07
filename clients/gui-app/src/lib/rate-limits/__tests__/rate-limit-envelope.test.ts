@@ -319,9 +319,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       latest: OTHER_GOOD,
       lastGood: OTHER_GOOD,
       lastGoodAt: 2_000,
-      // lastFailureAt is preserved (still true that a failure happened at
-      // some point) until either another failure or an authoritative
-      // unavailable reason updates it again.
+      // lastFailureAt is preserved (still true that a failure happened at some point) until either another failure or an authoritative unavailable reason updates it again.
       lastFailureAt: 1_500,
     });
   });
@@ -470,10 +468,7 @@ describe("resolveRetainedProviderRateLimits", () => {
     expect(
       resolveRetainedProviderRateLimits({
         latest,
-        // Shouldn't normally coexist (an authoritative reason clears
-        // lastGood per buildProviderRateLimitEnvelope), but proves the
-        // resolver itself never substitutes lastGood for a non-transient
-        // reason even if one were somehow present.
+        // Shouldn't normally coexist (an authoritative reason clears lastGood per buildProviderRateLimitEnvelope), but proves the resolver itself never substitutes lastGood for a non-transient reason even if one were somehow present.
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,

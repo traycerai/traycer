@@ -20,7 +20,6 @@ interface EpicSurfaceProps {
   readonly tabId: string;
 }
 
-/** One independently retained Epic pane: sidebar and canvas share its session. */
 export function EpicSurface(props: EpicSurfaceProps) {
   const activity = useTabSurfaceActivity();
   // Report visibility for the agent-tab-surfacing pipeline: PiP auto-surfacing
@@ -56,26 +55,15 @@ export function EpicSurface(props: EpicSurfaceProps) {
         <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>
           <EpicViewTabContext.Provider value={props.tabId}>
             <BrowserSessionsProvider epicId={props.epicId}>
-              {/* Registers the mobile header's right actions (the tab switcher
-                  trigger) for this epic PANE - focused or merely retained - so a
-                  focus switch onto an already-retained tab resolves its trigger
-                  in that same commit, with no register-on-focus gap. Which pane's
-                  entry the header shows is resolution's call, keyed by the tab
-                  layout's focused ref rather than the route - so the trigger also
-                  appears on a phone cold restore, where the layout restores the
-                  tab but the router boots at `/`, leaving the route-active
-                  effects below unmounted. Self-gates on mobile, so desktop
-                  registers nothing either way. */}
+              {/* Which pane's entry the header shows is resolution's call, keyed by the tab layout's focused ref rather than
+                 the route. */}
               <MobileEpicHeaderActionsBinder tabId={props.tabId} />
               <div
                 className="flex min-h-0 min-w-0 flex-1 flex-row"
                 data-epic-surface={props.tabId}
               >
-                {/* Phones present one full-screen surface at a time: the epic
-                    sidebar (artifact/chat/terminal tree + resize rail) is dropped
-                    below md so the pane container spans the full width. Its
-                    navigation re-homes into the mobile tile switcher. Desktop
-                    (>=768px) is unaffected. */}
+                {/* Phones present one full-screen surface at a time: the epic sidebar (artifact/chat/terminal tree + resize
+                   rail) is dropped below md so the pane container spans the full width. */}
                 {isMobile ? null : (
                   <EpicSidebarColumn
                     epicId={props.epicId}

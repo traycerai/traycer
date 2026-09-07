@@ -19,8 +19,7 @@ export interface MintNewEpicTerminalTileTarget extends TerminalLaunchTarget {
 
 /**
  * Mints a canonical host-authority ref for a user-created epic terminal.
- * `legacyFallback` keeps the released local fields so a downgraded host can
- * still spawn through the legacy tile path.
+ * `legacyFallback` keeps the released local fields so a downgraded host can still spawn through the legacy tile path.
  */
 export function buildTerminalTileRef(
   target: TerminalLaunchTarget,
@@ -42,10 +41,8 @@ export function buildTerminalTileRef(
 }
 
 /**
- * New epic terminals must dispatch `terminal.plain.create`, not
- * `importLegacy`. The pending-create mark is the create-vs-attach gate, and
- * the session-level create coordinator owns the job so tab unmount cannot
- * cancel it.
+ * New epic terminals must dispatch `terminal.plain.create`, not `importLegacy`.
+ * The pending-create mark is the create-vs-attach gate, and the session-level create coordinator owns the job so tab unmount cannot cancel it.
  */
 export function mintNewEpicTerminalTile(
   target: MintNewEpicTerminalTileTarget,

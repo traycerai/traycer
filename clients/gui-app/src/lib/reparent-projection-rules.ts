@@ -7,27 +7,7 @@ import type {
   TreeSlice,
 } from "@/stores/epics/open-epic/types";
 
-/**
- * The reparent rules evaluated against the PROJECTED tree rather than the
- * epic Y.Doc's maps.
- *
- * `@/lib/reparent-rules` resolves nodes straight out of the doc's
- * `artifacts` / `chats` / `tuiAgents` maps, which was the whole truth while
- * every node lived there. It no longer is: chats became host-owned registry
- * records (chats-off-YJS) and terminal agents follow them (the TUI
- * eviction), so a registry-backed agent has NO doc entry and the doc-based
- * evaluator answers `missing-node` for a row that is plainly on screen. The
- * projected `TreeSlice` is the union the sidebar actually renders - doc
- * entries, registry rows, pending creations - so it is the only surface that
- * can say whether a drop is legal for every node the user can grab.
- *
- * Same four verdicts as the doc evaluator, same order, so the DnD preview
- * and commit keep their existing contract:
- *   - `missing-node`  - the node, or the named parent, is not in the tree
- *   - `cross-panel`   - artifact <-> agent in either direction
- *   - `cycle`         - the parent is the node or one of its descendants
- *   - `same-parent`   - the node already has that parent (a silent no-op)
- */
+/** The reparent rules evaluated against the PROJECTED tree rather than the epic Y.Doc's maps. */
 export interface ProjectedReparentNode {
   readonly id: string;
   readonly family: NodeFamily;
@@ -72,9 +52,7 @@ export function evaluateProjectedReparent(
   const node = resolveProjectedReparentNode(tree, nodeId);
   if (node === null) return { ok: false, reason: "missing-node" };
 
-  // Validate the proposed parent BEFORE the same-parent short-circuit, for
-  // the reason the doc evaluator does: re-dropping onto a corrupt parent
-  // must surface the real reason, not hide behind a silent no-op.
+  // Validate the proposed parent BEFORE the same-parent short-circuit, for the reason the doc evaluator does: re-dropping onto a corrupt parent must surface the real reason, not hide behind a silent no-op.
   let parent: ProjectedReparentNode | null = null;
   if (newParentId !== null) {
     if (newParentId === nodeId) return { ok: false, reason: "cycle" };
@@ -103,15 +81,7 @@ export function canReparentProjected(
 }
 
 /**
- * The projected twin of `reparentRejectionError`, so a rejection is described
- * by the SAME surface that judged it.
- *
- * Building the doc-based error for a projected rejection would report the
- * wrong thing: its `missingRole` probe asks the DOC whether the node exists,
- * and for a registry-backed row the answer is always "no" - so every
- * projected rejection would blame the node, even when the tree's actual
- * complaint was the parent. `same-parent` is never routed here; it is a
- * silent no-op at every call site.
+ * The projected twin of `reparentRejectionError`, so a rejection is described by the SAME surface that judged it.
  */
 export function projectedReparentRejectionError(
   tree: TreeSlice,
@@ -137,11 +107,8 @@ export function projectedReparentRejectionError(
 }
 
 /**
- * Whether `candidateId` is `ancestorId` or sits below it, walking the
- * PROJECTED parent pointers. The projector already promotes unknown and
- * cross-family parents to root, so a walk here terminates at `null` or at a
- * revisit - the visited set is belt-and-braces against a pointer cycle that
- * arrived from a peer's doc before the projector had a say.
+ * Whether `candidateId` is `ancestorId` or sits below it, walking the PROJECTED parent pointers.
+ * The projector already promotes unknown and cross-family parents to root, so a walk here terminates at `null` or at a revisit - the visited set is belt-and-braces against a pointer cycle that arrived from a peer's doc before the projector had a say.
  */
 function isProjectedDescendantOf(
   tree: TreeSlice,

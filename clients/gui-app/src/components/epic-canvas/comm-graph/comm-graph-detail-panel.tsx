@@ -1,16 +1,6 @@
 /**
- * The canvas's ONE detail surface: a header plus a chronological list of raw
- * captured events.
- *
- * Two things open it - clicking a pair edge, and clicking an agent node - and
- * they are siblings by construction rather than by resemblance: same shell, same
- * row grammar, same markdown bodies, only the header and the event set differ.
- * Exactly one is open at a time; opening either replaces the other.
- *
- * WHAT IT CAN HONESTLY SHOW is what the host captured: A2A messages and broker
- * notices. It is not a tool-call log, nor a record of what an agent DID, and
- * must not be labelled as either - an agent's turn is full of work that never
- * reaches this record.
+ * Two things open it - clicking a pair edge, and clicking an agent node - and they are siblings by construction rather than by resemblance: same shell, same row grammar, same markdown bodies, only the header and the event set differ.
+ * It is not a tool-call log, nor a record of what an agent DID, and must not be labelled as either - an agent's turn is full of work that never reaches this record.
  */
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
@@ -83,18 +73,12 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
   const eventListRef = useRef<HTMLDivElement | null>(null);
   const hasPositionedInitialEventsRef = useRef(false);
 
-  // Chronology reads down the panel (oldest first), but the useful opening
-  // position is its newest row. A snapshot is bounded, so wait until the
-  // selected hosts have drained their initial backlog before positioning. This
-  // is deliberately a one-time position: later arrivals must not pull a reader
-  // away from older rows they intentionally scrolled back to.
+  // A snapshot is bounded, so wait until the selected hosts have drained their initial backlog before positioning.
+  // This is deliberately a one-time position: later arrivals must not pull a reader away from older rows they intentionally scrolled back to.
   useLayoutEffect(() => {
     const eventList = eventListRef.current;
     if (events.length === 0) {
-      // An authority handoff is temporarily empty while its new source is
-      // still catching up, so its later rows need a fresh initial position.
-      // A genuinely caught-up empty panel has no initial rows to position;
-      // freeze it so later live rows do not become a false initial batch.
+      // A genuinely caught-up empty panel has no initial rows to position; freeze it so later live rows do not become a false initial batch.
       hasPositionedInitialEventsRef.current = initialHistoryCaughtUp;
       return;
     }
@@ -114,9 +98,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
       aria-label={ariaLabel}
       data-testid={testId}
       data-comm-graph-detail-panel
-      // User-adjustable width (drag the left edge), persisted across tiles;
-      // the `50%` cap mirrors the handle's live-drag cap so the canvas always
-      // keeps space on a narrow tile.
+      // User-adjustable width (drag the left edge), persisted across tiles; the `50%` cap mirrors the handle's live-drag cap so the canvas always keeps space on a narrow tile.
       className="relative flex max-w-[50%] min-w-0 shrink-0 flex-col border-l border-border bg-background"
       style={{ width: panelWidthPx }}
     >
@@ -207,11 +189,8 @@ function isDetailPanelElement(element: Element | null): element is HTMLElement {
 }
 
 /**
- * Width handle on the panel's LEFT edge, on the shared `usePointerDragCommit`
- * state machine - the same mechanics as the epic sidebar's handle with the
- * axis mirrored: the panel is docked RIGHT, so dragging left GROWS it and the
- * grow arrow key is ArrowLeft. Per-frame direct `style.width` mutation, one
- * store commit on release, double-click resets to the default width.
+ * Width handle on the panel's LEFT edge, on the shared `usePointerDragCommit` state machine - the same mechanics as the epic sidebar's handle with the axis mirrored: the panel is docked RIGHT, so dragging left GROWS it and the grow arrow key is ArrowLeft.
+ * Per-frame direct `style.width` mutation, one store commit on release, double-click resets to the default width.
  */
 function CommGraphPanelResizeHandle() {
   const panelWidthPx = useCommGraphPanelWidthPx();

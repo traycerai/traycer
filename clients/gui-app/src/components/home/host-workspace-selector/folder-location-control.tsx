@@ -76,18 +76,10 @@ function LocationGlyph(props: { readonly value: FolderLocationValue }) {
   );
 }
 
-/**
- * The per-row Location control: a dropdown with Local / New worktree / Existing
- * worktree. Existing worktree opens a submenu of on-disk worktrees built from
- * the summary alone (no `listBranches`); one click adopts it (→ `import`). The
- * value is derived from `currentIntent.kind ?? mode`. Disabled (with the rebind
- * tooltip) when `item.modeDisabled`. A non-git folder offers Local only.
- */
+/** The per-row Location control: a dropdown with Local / New worktree / Existing worktree. */
 export function FolderLocationControl(props: {
   readonly item: WorkspaceRunItem;
-  /** Host-wide uncommitted counts keyed by worktree path (optional annotation). */
   readonly uncommittedByPath: ReadonlyMap<string, number>;
-  /** Collision boundary for the menu (in-epic rows live in a popover). */
   readonly boundaryEl: HTMLElement | null;
   readonly readOnly: boolean;
 }) {
@@ -127,9 +119,8 @@ export function FolderLocationControl(props: {
       className={cn(FOLDER_CONTROL_TRIGGER_CLASS)}
     >
       <LocationGlyph value={value} />
-      {/* Reserve the widest label's width with an invisible ghost so the control
-          is static across mode switches AND snug to the longest label — no empty
-          space trailing "Existing worktree". */}
+      {/* Reserve the widest label's width with an invisible ghost so the control is static across mode switches and
+         snug to the longest label - no empty space trailing "Existing worktree". */}
       <span className="grid min-w-0 flex-1 text-left">
         <span
           aria-hidden
@@ -190,9 +181,7 @@ function FolderLocationMenu(props: {
 }) {
   const { item, value, importRows } = props;
   return (
-    // Non-modal so the menu's focus scope doesn't trap focus back into the menu:
-    // that trap is what stole the search autofocus in the "Existing worktree"
-    // submenu (its search input lives outside the roving menu-item focus).
+    // Non-modal so the menu's focus scope doesn't trap focus back into the menu.
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>{props.trigger}</DropdownMenuTrigger>
       <DropdownMenuContent
@@ -258,16 +247,8 @@ function FolderLocationMenu(props: {
   );
 }
 
-/**
- * The on-disk worktree list inside the Location "Existing worktree" submenu. The
- * list is always height-capped to ~5 rows and scrolls beyond that; a search bar
- * appears once the worktrees exceed {@link EXISTING_WORKTREE_SEARCH_THRESHOLD}.
- * Mounted only while the submenu is open, so the query resets per open and the
- * search autofocuses on a pointer that can type without covering the list.
- * `onKeyDown` stops typed characters from reaching the
- * menu's typeahead, bridges vertical arrows into the filtered menu items, and
- * lets Escape reach Radix's dismissal handler.
- */
+/** Mounted only while the submenu is open, so the query resets per open and the search autofocuses on a pointer
+ * that can type without covering the list. */
 function ExistingWorktreeList(props: {
   readonly rows: ReadonlyArray<UnifiedPickerWorktreeRow>;
   readonly promoteRowId: string | null;
@@ -284,17 +265,8 @@ function ExistingWorktreeList(props: {
   );
   const showSearch = props.rows.length > EXISTING_WORKTREE_SEARCH_THRESHOLD;
 
-  // A hover-opened Radix submenu keeps focus on its trigger and pulls focus back
-  // off the search for a frame or two after open. Set the focus, then re-assert
-  // it a bounded number of times when the menu reclaims it (the non-modal menu
-  // above means nothing keeps trapping it afterwards), so the search ends up
-  // focused without fighting a deliberate later focus change.
-  //
-  // None of that applies to a touch pointer, where focusing the search raises a
-  // software keyboard over the rows and the reclaim-on-blur loop would then
-  // fight the very tap that dismissed it. There is no hover-open on touch
-  // either, so the whole recovery has nothing to recover from: focus stays on
-  // the submenu trigger the tap put it on.
+  // Set the focus, then re-assert it a bounded number of times when the menu reclaims it (the non-modal menu
+  // above means nothing keeps trapping it afterwards).
   const coarsePointer = useCoarsePointer();
   useEffect(() => {
     if (!showSearch || coarsePointer) return;
@@ -373,11 +345,7 @@ function ExistingWorktreeList(props: {
       ) : null}
       <div
         ref={listRef}
-        // When the search bar is shown the height is PINNED (not capped) so
-        // filtering the list down doesn't shrink the submenu and trigger Radix
-        // to recompute/reposition it - that resize-on-every-keystroke is what
-        // made the menu jump. Without search (<=5 rows, no filtering) keep it
-        // snug with max-h.
+        // Without search (<=5 rows, no filtering) keep it snug with max-h.
         className={cn(
           "overflow-y-auto overscroll-contain",
           showSearch ? "h-[min(50vh,15rem)]" : "max-h-[min(50vh,15rem)]",

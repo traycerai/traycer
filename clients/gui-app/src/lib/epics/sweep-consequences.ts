@@ -4,10 +4,8 @@ import type { EpicSweepWorktreeRow } from "@/hooks/epic/use-epic-sweep-worktree-
 import { formatUnknownHolderConsequence } from "@/lib/worktree/teardown-holder-copy";
 
 /**
- * How a row is NAMED to a person - the branch when there is one, else the
- * path. A display label only: two worktrees on the same branch share it, so
- * it must never stand in for the row's identity. Selection, reconciliation
- * and session outcomes all key on `entry.worktreePath`.
+ * How a row is NAMED to a person - the branch when there is one, else the path.
+ * A display label only: two worktrees on the same branch share it, so it must never stand in for the row's identity.
  */
 export function worktreeIdentity(row: EpicSweepWorktreeRow): string {
   return row.entry.branch ?? row.entry.worktreePath;
@@ -18,9 +16,8 @@ function worktreeNoun(count: number): string {
 }
 
 /**
- * The Choose step's primary action. It always cues removal - never "review"
- * or "preview" - because review is an automatic safety step on the way, not
- * the person's goal.
+ * The Choose step's primary action.
+ * It always cues removal - never "review" or "preview" - because review is an automatic safety step on the way, not the person's goal.
  */
 export function removeButtonLabel(count: number): string {
   return `Remove ${worktreeNoun(count)}`;
@@ -62,9 +59,8 @@ export function selectionHasShared(
 }
 
 /**
- * The consequences step's final action. The categories (stopping work,
- * unproven landings, broken bindings) are explained in the body above it; the
- * button states the outcome.
+ * The consequences step's final action.
+ * The categories (stopping work, unproven landings, broken bindings) are explained in the body above it; the button states the outcome.
  */
 export function finalSweepButtonLabel(
   rows: ReadonlyArray<EpicSweepWorktreeRow>,
@@ -152,8 +148,7 @@ export function bindingHeading(taskCount: number): string {
 export type SweepSessionOutcomeKind = "uncertain" | "failed";
 
 /**
- * Per-path sweep outcome that outlives the disposable review snapshot
- * (Back, Choose re-render, later HOLDERS_CHANGED receipts).
+ * Per-path sweep outcome that outlives the disposable review snapshot (Back, Choose re-render, later HOLDERS_CHANGED receipts).
  */
 export interface SweepSessionOutcome {
   readonly kind: SweepSessionOutcomeKind;
@@ -166,9 +161,8 @@ export interface SweepReviewSnapshot {
   readonly inUse: readonly EpicSweepWorktreeRow[];
   readonly shared: readonly EpicSweepWorktreeRow[];
   /**
-   * Rows the next confirm will submit. Removed, uncertain, and failed
-   * outcomes are not in this list — uncertain must not be replayed, and
-   * failed needs a fresh Choose-step selection.
+   * Rows the next confirm will submit.
+   * Removed, uncertain, and failed outcomes are not in this list - uncertain must not be replayed, and failed needs a fresh Choose-step selection.
    */
   readonly all: readonly EpicSweepWorktreeRow[];
   readonly disclosedHolders: readonly WorktreeBusyHolder[];
@@ -254,8 +248,7 @@ export function mergeSessionOutcomes(
 }
 
 /**
- * After a completed proof/refresh: vanished uncertain paths drop (deletion
- * finished); still-listed uncertain paths re-enable (deletion did not happen).
+ * After a completed proof/refresh: vanished uncertain paths drop (deletion finished); still-listed uncertain paths re-enable (deletion did not happen).
  * Failed paths stay while listed and drop when gone.
  */
 export function reconcileSessionOutcomes(

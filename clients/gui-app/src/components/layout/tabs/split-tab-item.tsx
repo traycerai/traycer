@@ -44,12 +44,8 @@ export interface SplitTabItemProps {
   readonly leftMemberIndex: number;
   readonly rightMemberIndex: number;
   readonly isActive: boolean;
-  /**
-   * Draws the strip hairline at the GROUP's right edge - the boundary between
-   * this group and whatever strip item follows it. Distinct from the internal
-   * divider between the two halves, which is unconditional and belongs to the
-   * group's own silhouette.
-   */
+  /** Distinct from the internal divider between the two halves, which is unconditional and belongs to the group's
+   * own silhouette. */
   readonly showSeparatorAfter: boolean;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
@@ -69,11 +65,8 @@ export interface SplitTabItemProps {
   ) => void;
 }
 
-/**
- * One reorder frame owns the split control and both members. A persistent
- * accent underline communicates their group membership, while only the
- * focused member draws ordinary selected-tab chrome.
- */
+/** A persistent accent underline communicates their group membership, while only the focused member draws
+ * ordinary selected-tab chrome. */
 export const SplitTabItem = memo(function SplitTabItem(
   props: SplitTabItemProps,
 ): ReactNode {
@@ -98,11 +91,8 @@ export const SplitTabItem = memo(function SplitTabItem(
     memberTab(props.item.left) ?? memberTab(props.item.right);
 
   const transition = useHeaderTabDisplacementTransition();
-  // A split group is a strip item like any other, so it takes part in the
-  // commit re-base like any other. It rendered its own `animate={{x}}` frame
-  // and was therefore never registered - which made the widest item in the
-  // strip exempt from every commit, in both directions, while its neighbours
-  // were corrected.
+  // It rendered its own `animate={{x}}` frame and was therefore never registered - which made the widest item in
+  // the strip exempt from every commit, in both directions, while its neighbours were corrected.
   const frameRef = useRef<HTMLDivElement | null>(null);
   const x = useHeaderTabDisplacement({
     nodeRef: frameRef,
@@ -122,32 +112,23 @@ export const SplitTabItem = memo(function SplitTabItem(
       initial={false}
       animate={{ opacity: isDragging ? 0 : 1 }}
       style={{ x }}
-      // Explicit x from the drag model - deliberately NOT `layout="position"`
-      // plus CSS `order`. That pairing strands a translateX when the item set
-      // changes under an in-flight projection; binding x to state makes the
-      // class unrepresentable rather than merely currently unreachable.
+      // That pairing strands a translateX when the item set changes under an in-flight projection; binding x to
+      // state makes the class unrepresentable rather than merely currently unreachable.
       transition={transition}
-      // A split group is one strip item, but it is never a merge target: the
-      // pair target carries a single TabRef and a two-ref item has no
-      // unambiguous one. Passing over it reorders.
+      // A split group is one strip item, but it is never a merge target: the pair target carries a single TabRef and
+      // a two-ref item has no unambiguous one.
       data-strip-item-id={props.item.id}
       data-strip-item-mergeable="false"
       role="group"
       aria-label="Split tab group"
       data-testid={`split-tab-group-${props.item.id}`}
       data-active={props.isActive ? "true" : "false"}
-      // Two ordinary tab footprints plus the leading quick-actions control.
-      // The extra width keeps that control from stealing either title's
-      // share. Capped by viewport width (not just the rem ceiling) so the
-      // frame stays fluid on narrow windows instead of pinning to 31rem.
+      // Capped by viewport width (not just the rem ceiling) so the frame stays fluid on narrow windows instead of
+      // pinning to 31rem.
       className="relative flex w-[min(60vw,31rem)] min-w-[276px] max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
     >
-      {/*
-        The shared silhouette's end caps flare over the outer ~20px, so the
-        halves are inset by a tab's own side padding. Without it the leading
-        half's label and focus wash ride on top of the cap curve and read as
-        overlapping chrome.
-      */}
+      {/* Without it the leading half's label and focus wash ride on top of the cap curve and read as overlapping
+         chrome. */}
       <div className="relative flex h-10 w-full min-w-0 items-center pr-[clamp(0.75rem,5%,1.5rem)] pl-2">
         {/* Hover and selection feedback stay per-half (see SplitMemberChrome)
             so the focused member reads like the selected tab in a group. */}
@@ -214,11 +195,8 @@ export const SplitTabItem = memo(function SplitTabItem(
         splitId={props.item.id}
         selectedSide={props.isActive ? props.item.focusedSide : null}
       />
-      {/*
-        Outside the padded inner row so it lands on the group's own right edge,
-        where an ordinary tab's separator sits - not inset against the trailing
-        half's label.
-      */}
+      {/* Outside the padded inner row so it lands on the group's own right edge, where an ordinary tab's separator
+         sits - not inset against the trailing half's label. */}
       <HeaderTabSeparator visible={props.showSeparatorAfter} />
     </m.div>
   );
@@ -356,7 +334,6 @@ function memberTab(member: HeaderStripMember): HeaderTab | null {
 
 interface SplitMemberProps {
   readonly member: HeaderStripMember;
-  /** The other half's tab, used to scope an empty half's own menu. */
   readonly partner: HeaderTab | null;
   readonly side: "left" | "right";
   readonly focused: boolean;

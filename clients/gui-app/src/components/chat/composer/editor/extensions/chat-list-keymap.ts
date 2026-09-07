@@ -32,12 +32,7 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
       // ordinary history keymap. For the fence input rule this restores ```.
       "Mod-z": ({ editor }) => editor.commands.undoInputRule(),
       "Mod-Enter": () => {
-        // Steer chord (decision 12): with an open @mention/slash picker, commit
-        // the highlighted item and then submit-as-steer in one press, rather
-        // than sending the half-typed trigger. With no picker it is a plain
-        // submit-as-steer. A highlighted row that legally refuses to commit
-        // (disabled/loading) absorbs the chord exactly like Enter does, instead
-        // of falling through to submit the half-typed trigger.
+        // Steer chord (decision 12): with an open @mention/slash picker, commit the highlighted item and then submit-as-steer in one press, rather than sending the half-typed trigger.
         if (commitPickerRefused(pickerStore)) return true;
         onSubmit.current("mod-enter");
         return true;
@@ -50,12 +45,8 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
       Enter: ({ editor }) => {
         if (handlePickerEnter(pickerStore)) return true;
         if (handleOpeningCodeFence(editor)) return true;
-        // On a phone-width viewport the return key is the only way to break a
-        // line — there is no Shift to chord with — so Enter writes a newline
-        // and only the send button submits. Keyed to the VIEWPORT signal, not
-        // the installed-app one: the web app opened on a phone needs the same
-        // behavior. Read imperatively per keypress; the keymap is built once
-        // at editor creation and must not go stale across resizes.
+        // Keyed to the VIEWPORT signal, not the installed-app one: the web app opened on a phone needs the same behavior.
+        // Read imperatively per keypress; the keymap is built once at editor creation and must not go stale across resizes.
         if (isMobileViewport()) {
           return insertSoftNewline(editor);
         }
@@ -90,10 +81,8 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
           const tr = state.tr
             .delete(range.from, range.to)
             .setBlockType(range.from, range.from, codeBlockType);
-          // Keep StarterKit's trailing-paragraph invariant inside the same
-          // undoable input-rule transaction. If TrailingNode appended it in a
-          // follow-up transaction, Tiptap would discard the rule state before
-          // Mod-z had a chance to restore the literal fence.
+          // Keep StarterKit's trailing-paragraph invariant inside the same undoable input-rule transaction.
+          // If TrailingNode appended it in a follow-up transaction, Tiptap would discard the rule state before Mod-z had a chance to restore the literal fence.
           if (tr.doc.lastChild?.type !== paragraphType) {
             tr.insert(tr.doc.content.size, paragraphType.create());
           }
@@ -114,37 +103,23 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
   },
 });
 
-/**
- * The soft-newline path shared by Shift-Enter everywhere and plain Enter on a
- * mobile-width viewport.
- */
+/** The soft-newline path shared by Shift-Enter everywhere and plain Enter on a mobile-width viewport. */
 function insertSoftNewline(editor: Editor): boolean {
   if (handleListEnter(editor)) return true;
   if (editor.isActive("codeBlock")) {
-    // `splitBlock` would fragment one code block into two; `newlineInCode`
-    // inserts a real in-code newline. A bare `return false` would insert
-    // nothing here, because `Enter` is globally bound to submit and
-    // nothing else binds `Shift-Enter`.
+    // `splitBlock` would fragment one code block into two; `newlineInCode` inserts a real in-code newline.
+    // A bare `return false` would insert nothing here, because `Enter` is globally bound to submit and nothing else binds `Shift-Enter`.
     return editor.chain().newlineInCode().scrollIntoView().run();
   }
-  // Must run before the `splitBlock` fallback: an empty trailing quote
-  // line means the user already added one blank line via the ordinary
-  // path below and is now signalling "done quoting" rather than "add
-  // another quote line".
+  // Must run before the `splitBlock` fallback: an empty trailing quote line means the user already added one blank line via the ordinary path below and is now signalling "done quoting" rather than "add another quote line".
   if (handleQuoteExit(editor)) return true;
-  // A soft newline is a paragraph boundary: `splitBlock` makes each visual
-  // line its own textblock, so native list/heading input rules fire on
-  // every line. `scrollIntoView` keeps the caret visible when the new line
-  // pushes past the editor's max-height. Inside a blockquote this simply
-  // adds another quote line, since `splitBlock` keeps the same ancestor.
+  // A soft newline is a paragraph boundary: `splitBlock` makes each visual line its own textblock, so native list/heading input rules fire on every line.
+  // `scrollIntoView` keeps the caret visible when the new line pushes past the editor's max-height.
   return editor.chain().splitBlock().scrollIntoView().run();
 }
 
-// The composer owns both Enter (submit) and Shift-Enter (paragraph split), so
-// Tiptap never sees the newline that completes its native fenced-code input
-// rule. Recognize the opening fence before either shortcut: a paragraph
-// containing only ``` (optionally with Tiptap's supported lowercase language
-// suffix) becomes an empty code block.
+// The composer owns both Enter (submit) and Shift-Enter (paragraph split), so Tiptap never sees the newline that completes its native fenced-code input rule.
+// Recognize the opening fence before either shortcut: a paragraph containing only ``` (optionally with Tiptap's supported lowercase language suffix) becomes an empty code block.
 function handleOpeningCodeFence(editor: Editor): boolean {
   const { $from, empty } = editor.state.selection;
   if (!empty || $from.parent.type.name !== "paragraph") return false;
@@ -174,9 +149,7 @@ function hasOnlyTextChildren(node: ProseMirrorNode): boolean {
   return true;
 }
 
-// A closing fence typed on its own line exits the rich code block immediately:
-// the full fence (and preceding newline on later lines) is removed, and the
-// caret moves into the following paragraph.
+// A closing fence typed on its own line exits the rich code block immediately: the full fence (and preceding newline on later lines) is removed, and the caret moves into the following paragraph.
 function handleClosingCodeFence(
   view: EditorView,
   from: number,
@@ -197,9 +170,8 @@ function handleClosingCodeFence(
   if (!isFirstLineFence && !isLaterLineFence) return false;
 
   const closingFenceFrom = from - (isFirstLineFence ? 2 : 3);
-  // Record the incoming third backtick before closing the block. Isolating the
-  // close in its own history event means undo restores the complete literal
-  // fence, even when the first two backticks belong to an older history group.
+  // Record the incoming third backtick before closing the block.
+  // Isolating the close in its own history event means undo restores the complete literal fence, even when the first two backticks belong to an older history group.
   view.dispatch(view.state.tr.insertText(text, from, to));
   const closingFenceTo = from + text.length;
   const codeBlockEnd = view.state.selection.$from.after();
@@ -222,26 +194,14 @@ function handlePickerEnter(pickerStore: ComposerPickerStore | null): boolean {
   if (pickerStore === null) return false;
   const state = pickerStore.getState();
   if (!state.open) return false;
-  // An open picker owns Enter outright - whether it can commit (a highlighted,
-  // enabled row) or not (empty results, still loading, or the active row
-  // legally refusing). `commitActiveItem()` commits when it can and no-ops
-  // (returns false) otherwise; either way we absorb the keypress so a
-  // half-typed trigger is never submitted with the picker still on screen.
-  // Returning `commitActiveItem()` directly would fall through to `onSubmit`
-  // in exactly those can't-commit states. This binding wins over the
-  // suggestion plugin's own key handling, so the absorb must happen here too.
+  // `commitActiveItem()` commits when it can and no-ops (returns false) otherwise; either way we absorb the keypress so a half-typed trigger is never submitted with the picker still on screen.
+  // Returning `commitActiveItem()` directly would fall through to `onSubmit` in exactly those can't-commit states.
   state.commitActiveItem();
   return true;
 }
 
-// Mod-Enter's picker handling differs from Enter's only on a SUCCESSFUL commit:
-// it does NOT absorb the keypress, so the same chord proceeds to submit as a
-// steer (commit + steer in one press). Whenever the OPEN picker cannot commit -
-// empty results, still loading, or the active row legally refusing (all of which
-// make `commitActiveItem` return false) - it absorbs the chord exactly like
-// Enter, so the half-typed trigger is never sent with the picker still open.
-// With no open picker nothing is committed and the submit runs. Returns true
-// when the commit was refused and the caller must NOT submit.
+// Mod-Enter's picker handling differs from Enter's only on a SUCCESSFUL commit: it does NOT absorb the keypress, so the same chord proceeds to submit as a steer (commit + steer in one press).
+// Returns true when the commit was refused and the caller must NOT submit.
 function commitPickerRefused(pickerStore: ComposerPickerStore | null): boolean {
   if (pickerStore === null) return false;
   const state = pickerStore.getState();
@@ -249,9 +209,7 @@ function commitPickerRefused(pickerStore: ComposerPickerStore | null): boolean {
   return !state.commitActiveItem();
 }
 
-// Shift-Enter on an empty final line inside a blockquote lifts the caret out
-// below the quote instead of adding yet another empty quote line, mirroring
-// the "blank list item exits the list" idiom in `handleListEnter` below.
+// Shift-Enter on an empty final line inside a blockquote lifts the caret out below the quote instead of adding yet another empty quote line, mirroring the "blank list item exits the list" idiom in `handleListEnter` below.
 function handleQuoteExit(editor: Editor): boolean {
   const { $from, empty } = editor.state.selection;
   if (!empty) return false;
@@ -269,18 +227,12 @@ function handleQuoteExit(editor: Editor): boolean {
   if (blockquote.childCount <= 1) return false;
   if ($from.index(blockquoteDepth) !== blockquote.childCount - 1) return false;
 
-  // Lifting the (empty) last line out of the blockquote - rather than
-  // deleting it and inserting a fresh paragraph - reuses ProseMirror's own
-  // range-lift machinery (the same primitive `unsetBlockquote` below builds
-  // on) and keeps selection mapping correct for free.
+  // Lifting the (empty) last line out of the blockquote - rather than deleting it and inserting a fresh paragraph - reuses ProseMirror's own range-lift machinery (the same primitive `unsetBlockquote` below builds on) and keeps selection mapping correct for free.
   return editor.commands.lift("blockquote");
 }
 
-// Backspace unwraps the blockquote only when the caret sits at the very start
-// of its first line. Deliberately narrow: the composer does not also join a
-// following paragraph backward into a preceding blockquote (Tiptap's default
-// Blockquote keymap does), since that would surprise a user backspacing at
-// the start of their typed reply just below a quote.
+// Backspace unwraps the blockquote only when the caret sits at the very start of its first line.
+// Deliberately narrow: the composer does not also join a following paragraph backward into a preceding blockquote (Tiptap's default Blockquote keymap does), since that would surprise a user backspacing at the start of their typed reply just below a quote.
 function handleQuoteBackspaceUnwrap(editor: Editor): boolean {
   const { selection } = editor.state;
   if (!selection.empty) return false;
@@ -295,11 +247,7 @@ function handleQuoteBackspaceUnwrap(editor: Editor): boolean {
   if ($from.index(blockquoteDepth) !== 0) return false;
 
   if ($from.parent.type.name !== "paragraph") {
-    // A non-prose first line (e.g. a quoted code block, per the future
-    // fence-quote path) is not unwrapped here - it stops instead of falling
-    // through, because ProseMirror's default Backspace-at-start-of-sole-child
-    // behavior would otherwise silently lift it out of the blockquote too,
-    // just via a different mechanism than this handler.
+    // A non-prose first line (e.g. a quoted code block, per the future fence-quote path) is not unwrapped here - it stops instead of falling through, because ProseMirror's default Backspace-at-start-of-sole-child behavior would otherwise silently lift it out of the blockquote too, just via a different mechanism than this handler.
     return true;
   }
 
@@ -311,9 +259,8 @@ function handleListEnter(editor: Editor): boolean {
     if (editor.can().splitListItem("listItem")) {
       return editor.chain().splitListItem("listItem").run();
     }
-    // `splitListItem` cannot run on an empty list item, so its failure is the
-    // signal that the caret sits on a blank list item - the moment the user
-    // wants to leave the list. Lift that item out instead of breaking the line.
+    // `splitListItem` cannot run on an empty list item, so its failure is the signal that the caret sits on a blank list item - the moment the user wants to leave the list.
+    // Lift that item out instead of breaking the line.
     if (editor.can().liftListItem("listItem")) {
       return editor.chain().liftListItem("listItem").run();
     }

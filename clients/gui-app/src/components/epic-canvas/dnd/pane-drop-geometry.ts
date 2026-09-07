@@ -1,11 +1,3 @@
-/**
- * Pane-body drop hit testing, ported from paseo's `split-drop-zone.tsx`
- * (`resolveSplitDropPosition`): a centered box of `CENTER_DROP_RATIO` per
- * dimension resolves to "center" (move into pane); a band of
- * `EDGE_SPLIT_RATIO` along each side resolves to that edge (split); the
- * dead zone between them falls back to the nearest edge so every point
- * inside the pane resolves to one of the five positions.
- */
 import {
   CENTER_DROP_RATIO,
   EDGE_SPLIT_RATIO,

@@ -10,67 +10,13 @@ import { writeJsonAtomically } from "./lifecycle-probe";
 import { hostStopIntentPath } from "../store/paths";
 import type { Environment } from "../runner/environment";
 
-// The RECORD's shape, path and parser are shared with the host - it reads this
-// exact file at SIGTERM to tell a deliberate restart from death (D5/M1), on the
-// CLI-owned path that has no RPC leg to carry the intent. Re-exported so this
-// module stays the CLI's single entry point for stop intent.
+// Host reads this file at SIGTERM to tell a deliberate restart from death. Path is CLI-owned; no RPC leg.
 export type { StopIntent, StopIntentReason };
 
-/**
- * "Someone is deliberately stopping this host - do not bring it back."
- *
- * The supervisor relaunches a child that dies abnormally. That is correct for a
- * crash and catastrophic for a stop: `traycer host stop`, an install swap, or
- * Desktop's `host restart` would each be undone by the very process they are
- * trying to shut down.
- *
- * ### Why intent has to be STATED, not inferred
- *
- * Exit shape cannot answer this. On Windows `taskkill /T /F` gives the killed
- * process exit code 1, which is byte-identical to a host that genuinely crashed
- * with exit 1. On POSIX the supervisor forwards SIGTERM itself, so the child's
- * death during a stop wears the same signal as any other signal death. Every
- * heuristic here is a coin flip on whether we fight the user.
- *
- * ### Why it is a FILE and not an in-process flag
- *
- * The stopper is never the supervisor. On POSIX that barely matters - launchd
- * and systemd signal the supervisor directly, so it knows - but on Windows
- * `schtasks /End` terminates only the task's root process (`wscript.exe`) and
- * Task Scheduler does not job-object the tree, so the supervisor survives as an
- * orphan and is never told anything. A file is the only channel that reaches it.
- *
- * ### Staleness
- *
- * A stop that dies halfway through (the stopper is killed between writing intent
- * and finishing the kill) must not wedge the machine into never relaunching
- * again. Intent therefore EXPIRES: it only has to outlive stop → kill → settle,
- * so a few minutes is generous, and past that the supervisor resumes normal
- * crash recovery.
- */
+/** File, not in-process: win32 `schtasks /End` orphans the supervisor. Expires so a half-finished stop cannot wedge never-relaunch. */
 export const STOP_INTENT_STALE_MS = 300_000;
 
-/**
- * Record intent BEFORE anything is killed.
- *
- * Ordering is the whole contract: `stopService` removes pid.json only *after*
- * the kill, so "pid metadata is gone" cannot be the supervisor's pre-relaunch
- * check - it would already have relaunched by then. This lands first, which is
- * what makes the check race-free.
- *
- * Never throws, but REPORTS whether the record landed, and the caller has to
- * care on Windows.
- *
- * An earlier version of this comment claimed a failed write was harmless
- * because "the worst case is one unwanted relaunch, which the supervisor's own
- * budget and incumbent re-check then contain". That is false, and the
- * containment argument is what made it sound safe. If the write fails on
- * win32, `/End` and `taskkill` still run, the orphaned supervisor is never
- * signalled and sees no intent, so it reads the killed child's nonzero exit as
- * a crash and relaunches. A replacement that then stays healthy resets the
- * budget and IS the incumbent - so neither mechanism stops it, and `host stop`
- * has reported success while the host is still running.
- */
+/** Write before any kill. Never throws; on win32 a failed write still runs `/End` and the orphaned supervisor relaunches. */
 export async function writeStopIntent(
   environment: Environment | undefined,
   reason: StopIntentReason,
@@ -85,17 +31,12 @@ export async function writeStopIntent(
     await writeJsonAtomically(hostStopIntentPath(environment), intent);
     return true;
   } catch {
-    // Never throws: the caller decides what an unrecorded intent means, and
-    // that answer is platform-dependent (see `withStopIntent`).
+    // Caller decides what an unrecorded intent means (platform-dependent; see `withStopIntent`).
     return false;
   }
 }
 
-/**
- * Drop a served intent. Called when a start succeeds: a host that is being
- * started is no longer a host anyone is stopping, and leaving the file behind
- * would suppress the NEXT crash's recovery.
- */
+/** Drop served intent on a successful start so it cannot suppress the next crash's recovery. */
 export async function clearStopIntent(
   environment: Environment | undefined,
 ): Promise<void> {
@@ -106,14 +47,7 @@ export async function clearStopIntent(
   }
 }
 
-/**
- * Which RECORD a supervisor has already answered, independent of any clock.
- *
- * `requestedAt` alone would be a timestamp comparison again; pairing it with the
- * writing pid makes this an identity rather than an ordering. Two different stop
- * requests cannot collide on both - they would have to be issued by the same
- * process in the same millisecond, which is the same process's single write.
- */
+/** Record identity independent of clock: `requestedAt` plus writing pid. */
 export interface StopIntentIdentity {
   readonly requestedAt: string;
   readonly requestedByPid: number;
@@ -126,9 +60,7 @@ export function stopIntentIdentity(intent: StopIntent): StopIntentIdentity {
   };
 }
 
-/** Whether `intent` IS the record named by `identity`. A null identity - no
- * record existed when the supervisor started - matches nothing, so any record
- * that appears later is a request this supervisor has not answered. */
+/** Null identity matches nothing, so a later record is unanswered. */
 export function isSameStopIntent(
   intent: StopIntent,
   identity: StopIntentIdentity | null,
@@ -140,7 +72,6 @@ export function isSameStopIntent(
   );
 }
 
-/** The record present right now, as an identity a supervisor can remember. */
 export async function readStopIntentIdentity(
   environment: Environment | undefined,
 ): Promise<StopIntentIdentity | null> {
@@ -167,73 +98,7 @@ export async function readStopIntent(
   return parseStopIntent(raw);
 }
 
-/**
- * The supervisor's question: is there a stop intent that this invocation has
- * NOT already served?
- *
- * A torn or malformed file reads as NO intent - biased toward recovering the
- * host, matching `findLiveIncumbentHost`'s own bias. Leaving a machine hostless
- * on a garbled byte is the worse failure.
- *
- * `servedAtStartup` is the record that existed when this supervisor was
- * invoked. Our own existence answers it - something asked for a start after
- * asking for a stop, and the start is the newer instruction. Any OTHER record
- * is a request we have not answered.
- *
- * ### Why identity rather than deleting the file
- *
- * The obvious implementation is to `rm` the sentinel once at startup. It has a
- * race that matters: a stop landing between this supervisor's invocation and
- * its clear gets ERASED, and the supervisor then spawns a host the user just
- * stopped. Two supervisors (a logon trigger plus a manual start) make it worse,
- * because either one's clear can delete intent written after the other's.
- *
- * Remembering destroys nothing, so there is no window in which a real stop can
- * be lost. The record disappears on its own via `STOP_INTENT_STALE_MS`, and that
- * is the ONLY thing that retires it on the ordinary path: each supervisor
- * remembers separately, so a lingering record silences the process being retired
- * while a later one - which saw it at ITS start - reads it as served and starts
- * normally. Deleting it is what would re-arm the retired process; see
- * `withStopIntent`.
- *
- * It is also what makes checking intent on the FIRST attempt safe. Reading the
- * raw file there would make a logon-started supervisor refuse to start the host
- * at all within the freshness window of any stop - strictly worse than the bug.
- *
- * ### Why not a timestamp cutoff
- *
- * This compared the record's stamp against the supervisor's own start stamp:
- * two readings of a clock that can move between them. Both directions bite, and
- * both end the same way, with a machine that has no host:
- *
- *   - a BACKWARD step larger than our uptime makes a stop issued NOW look older
- *     than our start, so a live request reads as served, the orphaned win32
- *     supervisor sees nothing actionable, and it relaunches the host the user
- *     just stopped;
- *   - the same step leaves a PRE-EXISTING record looking future-dated, so a
- *     supervisor starting afterwards reads an already-answered stop as aimed at
- *     it, declines to spawn, and exits 0 - which `KeepAlive.SuccessfulExit=false`,
- *     `Restart=on-failure` and Task Scheduler all decline to answer. The host
- *     then stays down until the next logon rather than for the intended five
- *     minutes.
- *
- * Neither is exotic: a machine that boots with a wrong RTC - a dead CMOS cell, a
- * restored VM snapshot - takes its largest correction seconds after the logon
- * task started this process, exactly when uptime is smallest.
- *
- * The cutoff was only ever a PROXY for "did my own start answer this record",
- * and identity answers that question directly and without a clock. So the proxy
- * is gone rather than refined: the two cases it distinguished were the same
- * record either way, and no clock reading can separate them.
- *
- * KNOWN LIMIT: a stop written between this supervisor's invocation and its first
- * read of the file is remembered as pre-existing, and therefore read as served.
- * That window is a single file read at process start, and it is irreducible -
- * whether such a stop came before or after the start request is exactly what no
- * clock on a machine with a moving clock can tell us. It is also the cheaper
- * failure: a host that is running after a stop can be stopped again, whereas the
- * other direction leaves the machine with no host at all.
- */
+/** Torn file reads as no intent. Remember `servedAtStartup` rather than deleting or comparing clocks: a stop between invoke and clear would be erased, and RTC steps mis-serve both ways. */
 export async function hasActionableStopIntent(
   environment: Environment | undefined,
   nowMs: number,
@@ -245,20 +110,7 @@ export async function hasActionableStopIntent(
   return !isSameStopIntent(intent, servedAtStartup);
 }
 
-/**
- * Whether `intent` is recent enough for the SUPERVISOR to still act on - the
- * shared symmetric window, bound here to `STOP_INTENT_STALE_MS`.
- *
- * The window has to outlive stop -> kill -> settle, so a few minutes is
- * generous; past that the supervisor resumes normal crash recovery. Why the
- * window is symmetric rather than backward-only (an unbounded forward half
- * would be a wedge with no expiry, which is the one thing this sentinel must
- * never become) is argued at `isStopIntentWithin`.
- *
- * The host binds the SAME predicate to a much tighter window: it is only
- * covering the gap between the CLI's write and the SIGTERM landing, and it is
- * answering a different question with it (see the shared module's header).
- */
+/** Symmetric window bound to `STOP_INTENT_STALE_MS`. Host uses a tighter window for the SIGTERM gap only. */
 export function isStopIntentFresh(intent: StopIntent, nowMs: number): boolean {
   return isStopIntentWithin(intent, nowMs, STOP_INTENT_STALE_MS);
 }

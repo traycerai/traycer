@@ -123,10 +123,7 @@ afterEach(() => {
 });
 
 describe("<WorkspaceFileRenderer />", () => {
-  // Unwrapped, Diffs gives its code area a horizontal scroll box of its own,
-  // nested inside the tile's vertical one - the pair a touch drag feeds at the
-  // same time. Wrapping is what removes that box, so the two must not drift
-  // apart: this asserts the prop reaches the library option that decides it.
+  // Wrapping is what removes that box, so the two must not drift apart: this asserts the prop reaches the library option that decides it.
   it("selects the Diffs overflow mode that matches the requested wrapping", async () => {
     const editAdapter = createEditAdapter(vi.fn(), undefined);
     const tree = (wordWrap: boolean): ReactNode => (
@@ -397,9 +394,7 @@ describe("<WorkspaceFileRenderer />", () => {
       expect(grid).toBeTruthy();
       expect(screen.getByTestId("empty-origin-edit-affordance")).toBeTruthy();
 
-      // Once attached, the affordance is gone but the same grid wrapper (not
-      // a replaced/reflowed container) still holds the real editor - proven
-      // by DOM node identity, not a pixel measurement jsdom can't provide.
+      // Once attached, the affordance is gone but the same grid wrapper (not a replaced/reflowed container) still holds the real editor - proven by DOM node identity, not a pixel measurement jsdom can't provide.
       rendered.rerender(
         <WorkspaceFileRenderer
           content=""
@@ -548,9 +543,8 @@ describe("<WorkspaceFileRenderer />", () => {
       expect(activeDiffsContainer()).toBeTruthy();
     });
 
-    // The target row never renders (e.g. scrolled far off-screen). The retry
-    // loop must give up instead of scheduling animation frames forever -
-    // `flushFrames` throws if it doesn't converge within its guard.
+    // The target row never renders (e.g. scrolled far off-screen).
+    // The retry loop must give up instead of scheduling animation frames forever - `flushFrames` throws if it doesn't converge within its guard.
     act(() => {
       frames.flushFrames();
     });
@@ -657,10 +651,7 @@ function installAnimationFrameQueue(): {
     callbacks.delete(handle);
   });
   return {
-    // Drain every pending frame, including frames re-scheduled while
-    // draining (the reveal retry loop), so a test can assert the loop
-    // converges instead of polling forever. Guarded against runaway
-    // re-scheduling.
+    // Drain every pending frame, including frames re-scheduled while draining (the reveal retry loop), so a test can assert the loop converges instead of polling forever.
     flushFrames: () => {
       let guard = 0;
       while (callbacks.size > 0) {

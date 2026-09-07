@@ -924,9 +924,8 @@ function interviewMessage(
 
 describe("findUnanswerableInterviews", () => {
   it("flags a host-pending block the transcript already settled", () => {
-    // The phantom-interview shape: the harness errored the AskUserQuestion, the
-    // block persisted as `errored`, but the pending wait was rehydrated from a
-    // dangling `interview.requested`. No card renders, yet sends are rejected.
+    // The phantom-interview shape: the harness errored the AskUserQuestion, the block persisted as `errored`, but the pending wait was rehydrated from a dangling `interview.requested`.
+    // No card renders, yet sends are rejected.
     const messages = [
       interviewMessage("m-1", [
         { blockId: "settled-block", status: "errored" },
@@ -1022,17 +1021,11 @@ describe("findUnanswerableInterviews", () => {
   });
 
   /**
-   * The windowed line, where "not in `messages`" stopped being evidence.
-   *
-   * The three cases below are the three states the host's judgement can be in
-   * for a pending id, and only ONE of them may reach the dismiss affordance.
-   * The other two are a question the reader can still answer.
+   * The three cases below are the three states the host's judgement can be in for a pending id, and only ONE of them may reach the dismiss affordance.
    */
   describe("on the windowed line", () => {
     it("does not offer to dismiss a question the host placed at an ordinal", () => {
-      // The bug this fixes. The block is answerable and merely cold - its row
-      // outside the retained window - so the rendered scan misses it, and
-      // before the host's answer this offered to settle it as errored.
+      // The block is answerable and merely cold - its row outside the retained window - so the rendered scan misses it, and before the host's answer this offered to settle it as errored.
       expect(
         findUnanswerableInterviews(
           [],
@@ -1043,10 +1036,6 @@ describe("findUnanswerableInterviews", () => {
     });
 
     it("offers to dismiss a question the host says no row renders", () => {
-      // `ordinal: null` is a judgement, not an absence: the host walked the
-      // whole transcript and found nothing that could ever draw a card. This
-      // is the phantom-interview case, and suppressing the notice here would
-      // leave the chat wedged with no way out.
       expect(
         findUnanswerableInterviews(
           [],
@@ -1057,10 +1046,6 @@ describe("findUnanswerableInterviews", () => {
     });
 
     it("does not offer to dismiss a question the host has not judged", () => {
-      // An id that became pending AFTER the snapshot: `interviewRequested`
-      // publishes it, and the block delta that would have rendered it was
-      // dropped because its row is evicted. Absent from the judgement is
-      // "unjudged", never "unrenderable" - the next snapshot decides.
       expect(
         findUnanswerableInterviews(
           [],
@@ -1107,11 +1092,7 @@ describe("findUnanswerableInterviews", () => {
 });
 
 /**
- * A minimal `ChatSessionRecord` - `ChatSessionState["chat"]` post
- * `chatRecordWithoutTranscript`, so it carries no `messages`/`events` fields.
- * `shouldGenerateChatTitleForSubmittedMessage` only reads `isTitleEditedByUser`
- * off it, but the fixture is typed through the real field so a widening back
- * to `Chat` would surface here too.
+ * `shouldGenerateChatTitleForSubmittedMessage` only reads `isTitleEditedByUser` off it, but the fixture is typed through the real field so a widening back to `Chat` would surface here too.
  */
 function chatRecord(
   isTitleEditedByUser: boolean,
@@ -1287,9 +1268,8 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
   // ─── The windowed line, where `messages` stops being the transcript ──────
 
   it("does not re-title an established chat whose user rows are all unhydrated", () => {
-    // The failure this fixes. `messages` is empty because nothing in the
-    // window is hydrated - not because nobody has ever spoken. The skeleton
-    // knows better.
+    // The failure this fixes.
+    // `messages` is empty because nothing in the window is hydrated - not because nobody has ever spoken.
     expect(
       shouldGenerateChatTitleForSubmittedMessage({
         chat: chatRecord(false),
@@ -1309,9 +1289,7 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
   });
 
   it("still titles a brand-new windowed chat, whose skeleton is empty AND incomplete", () => {
-    // `rowCount === 0` has to be checked before completeness: no chunk is ever
-    // sent for an empty transcript, so its skeleton never becomes `complete`
-    // and this chat would otherwise read as unknown and never be titled.
+    // `rowCount === 0` has to be checked before completeness: no chunk is ever sent for an empty transcript, so its skeleton never becomes `complete` and this chat would otherwise read as unknown and never be titled.
     expect(
       shouldGenerateChatTitleForSubmittedMessage({
         chat: chatRecord(false),
@@ -1448,9 +1426,8 @@ describe("selectContextUsage", () => {
   });
 
   it("reads the host's fold on the windowed line, where the scan would find nothing", () => {
-    // The shape the chip is being fixed for: a chat long enough to be windowed
-    // holds no hydrated assistant row at all, so the backwards scan returns
-    // null and the chip reads blank. The host looked at the whole transcript.
+    // The shape the chip is being fixed for: a chat long enough to be windowed holds no hydrated assistant row at all, so the backwards scan returns null and the chip reads blank.
+    // The host looked at the whole transcript.
     expect(
       selectContextUsage({
         liveTurnUsage: null,
@@ -1461,9 +1438,7 @@ describe("selectContextUsage", () => {
   });
 
   it("reports the host's null rather than falling back to a hydrated row", () => {
-    // Not a `??` chain. `latestAssistantUsage: null` is an ANSWER - the chip's
-    // empty form - so a hydrated row must not override the party that can see
-    // the whole transcript. Kills the mutation that writes `?? scan(...)`.
+    // `latestAssistantUsage: null` is an ANSWER - the chip's empty form - so a hydrated row must not override the party that can see the whole transcript.
     expect(
       selectContextUsage({
         liveTurnUsage: null,

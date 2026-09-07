@@ -4,21 +4,8 @@ import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { stopHostServiceWithAttempt } from "../host/update-mutation";
 
-// `traycer host stop` - asks the OS service manager to stop the
-// host. Idempotent: a not-running host resolves cleanly.
-//
-// `--force`: skip the cooperative shutdown claim and kill the host process
-// (SIGTERM, then SIGKILL after the exit grace). The claim exists to protect
-// in-flight work, and a busy host denies it indefinitely - any open plain
-// terminal tab is enough - so without an explicit escape hatch "stop the
-// host to free resources" has no supported path. Force is that consent:
-// running sessions and in-flight agent work are killed.
-//
-// `cli-lock` coverage (Host Update Layer Redesign Tech Plan, "Lifecycle
-// lock coverage"): a terminal stop must not enter another actor's
-// apply/install/activation critical section and kill the process it
-// just started - the stop itself executes inside the lock, short-held,
-// and linearizes after a foreign holder releases.
+// `traycer host stop` - asks the OS service manager to stop the host.
+// Idempotent: a not-running host resolves cleanly.
 export interface HostStopArgs {
   readonly force: boolean;
 }

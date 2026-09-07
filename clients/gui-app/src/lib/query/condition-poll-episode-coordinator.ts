@@ -41,9 +41,8 @@ const shouldAssertPolicy =
   import.meta.env.DEV || import.meta.env.MODE === "test";
 
 /**
- * Owns condition-poll attempts for one QueryClient. Query metadata is only
- * used to latch a query's method once; aggregate polling ownership lives in
- * QueryCache observer events so unmount/remount transitions remain visible.
+ * Owns condition-poll attempts for one QueryClient.
+ * Query metadata is only used to latch a query's method once; aggregate polling ownership lives in QueryCache observer events so unmount/remount transitions remain visible.
  */
 export class ConditionPollEpisodeCoordinator {
   private readonly latchedMethods = new WeakMap<CacheQuery, HostRpcMethod>();
@@ -66,8 +65,8 @@ export class ConditionPollEpisodeCoordinator {
   }
 
   /**
-   * Returns the only condition-poll interval callback accepted by this
-   * coordinator for a table method. Its implementation is a pure delay read.
+   * Returns the only condition-poll interval callback accepted by this coordinator for a table method.
+   * Its implementation is a pure delay read.
    */
   refetchIntervalFor(method: HostRpcMethod): ConditionPollRefetchInterval {
     this.requireConditionPolicy(method);
@@ -92,18 +91,15 @@ export class ConditionPollEpisodeCoordinator {
     this.beginEpisode(query, episode, this.requireConditionPolicy(method));
   }
 
-  /**
-   * Query-key form of resetQuery for imperative refresh producers that do not
-   * retain the Query instance.
-   */
+  /** Query-key form of resetQuery for imperative refresh producers that do not retain the Query instance. */
   resetQueryByKey(queryKey: QueryKey): void {
     const query = this.client.getQueryCache().find({ queryKey, exact: true });
     if (query !== undefined) this.resetQuery(query);
   }
 
   /**
-   * Clears active host-scoped condition episodes when the host/auth authority
-   * domain changes. `null` follows hostQueryKeys.scope(null): all host keys.
+   * Clears active host-scoped condition episodes when the host/auth authority domain changes.
+   * `null` follows hostQueryKeys.scope(null): all host keys.
    */
   resetHostScope(hostId: string | null): void {
     this.episodes.forEach((episode, query) => {
@@ -136,9 +132,8 @@ export class ConditionPollEpisodeCoordinator {
       return;
     }
 
-    // Removal changes aggregate ownership only. It must not re-read mutable
-    // meta and turn cleanup after an already-surfaced identity violation into
-    // another assertion failure.
+    // Removal changes aggregate ownership only.
+    // It must not re-read mutable meta and turn cleanup after an already-surfaced identity violation into another assertion failure.
     if (event.type === "observerRemoved") {
       this.handleObserverRemoved(event.query, event.observer);
       return;
@@ -172,14 +167,8 @@ export class ConditionPollEpisodeCoordinator {
       return stampedMethod;
     }
 
-    // The latch - not the stamp - is the stable identity. `query.options.meta`
-    // is TanStack last-writer state, so a later UNSTAMPED writer on the same
-    // hash (a raw `useQueries` leg like worktree enrichment's batched transport,
-    // or an imperative `fetchQuery`/`ensureQueryData`) legitimately clears it to
-    // `undefined`. That is an absent opinion, not a changed method: fall back to
-    // the latch. Only a DIFFERENT concrete method - reachable solely via a
-    // custom `cacheKeyIdentity` that drops the method from the hash - is a real
-    // one-hash-two-methods violation worth crashing on.
+    // The latch - not the stamp - is the stable identity.
+    // `query.options.meta` is TanStack last-writer state, so a later UNSTAMPED writer on the same hash (a raw `useQueries` leg like worktree enrichment's batched transport, or an imperative `fetchQuery`/`ensureQueryData`) legitimately clears it to `undefined`.
     this.assertPolicy(
       stampedMethod === undefined || stampedMethod === latchedMethod,
       `Query ${query.queryHash} changed hostRpcMethod from ${latchedMethod} to ${stampedMethod}. A query hash maps to exactly one host RPC method.`,
@@ -285,10 +274,8 @@ export class ConditionPollEpisodeCoordinator {
   }
 
   /**
-   * Advances at most once per Query version. QueryObserver reads the branded
-   * interval before QueryCache emits `updated`, so both paths call this helper:
-   * the interval read applies the current settlement's delay to TanStack's
-   * timer, and the cache event remains an idempotent fallback.
+   * Advances at most once per Query version.
+   * QueryObserver reads the branded interval before QueryCache emits `updated`, so both paths call this helper: the interval read applies the current settlement's delay to TanStack's timer, and the cache event remains an idempotent fallback.
    */
   private advanceUnprocessedSettlement(
     query: CacheQuery,
@@ -372,8 +359,8 @@ export class ConditionPollEpisodeCoordinator {
   }
 
   /**
-   * Starts a fresh episode from already-cached state without consuming an
-   * attempt. The next new Query version is therefore still attempt zero.
+   * Starts a fresh episode from already-cached state without consuming an attempt.
+   * The next new Query version is therefore still attempt zero.
    */
   private primeLane(episode: EpisodeState, lane: ConditionPollLane): void {
     episode.currentLaneId = lane.id;

@@ -8,20 +8,16 @@ const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
 const pluginMocks = vi.hoisted(() => ({
   plugins: [] as ProviderPlugin[],
-  /** Every `useProvidersPluginIcon` call, in render order. */
   iconCalls: [] as Array<{
     pluginId: string;
     enabled: boolean;
     hasDarkIcon: boolean;
   }>,
-  /** pluginId -> data URI the mocked query resolves with. */
   iconByPluginId: new Map<string, string | null>(),
 }));
 
-// Icons suite never switches scope; stub the shared hook so host/QueryClient
-// infrastructure for workspace resolution is not pulled in (F5 wired the real
-// scope hook into this tab). Factory uses a dynamic import because `vi.mock`
-// is hoisted above static imports.
+// Icons suite never switches scope; stub the shared hook so host/QueryClient infrastructure for workspace
+// resolution is not pulled in.
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
   const { GLOBAL_ONLY_NATIVE_SCOPE } =
     await import("@/components/settings/panels/__tests__/provider-native-scope-test-mocks");
@@ -114,14 +110,8 @@ function plugin(over: Partial<ProviderPlugin>): ProviderPlugin {
   };
 }
 
-/**
- * Returns the rendered container so icons can be queried as ELEMENTS.
- *
- * Not `getByRole("img")`: the tile is decorative (`alt=""` + `aria-hidden`),
- * which gives it the `presentation` role, so a role query silently matches
- * nothing - and the "falls back to the monogram" assertion below would then
- * pass whether or not the image rendered.
- */
+/** Not `getByRole("img")`: the tile is decorative (`alt=""` + `aria-hidden`), which gives it the `presentation`
+ * role, so a role query silently matches nothing. */
 function renderTab(): HTMLElement {
   return render(<ProviderPluginsTab state={pluginsState()} />).container;
 }
@@ -147,9 +137,8 @@ describe("<ProviderPluginsTab /> icons and manifest labels", () => {
   });
 
   it("does not request an icon for a row that ships none", () => {
-    // `hasIcon` exists precisely so these rows cost no round trip. Asserted on
-    // the ENABLED flag rather than call count: the hook is called either way
-    // (hooks are unconditional), and it is the gate that must be false.
+    // Asserted on the enabled flag rather than call count: the hook is called either way (hooks are
+    // unconditional), and it is the gate that must be false.
     pluginMocks.plugins = [plugin({ hasIcon: false })];
     const container = renderTab();
 
@@ -164,11 +153,8 @@ describe("<ProviderPluginsTab /> icons and manifest labels", () => {
   });
 
   it("renders NO tile when the host returns no artwork", () => {
-    // The host answers `{ dataUri: null }` rather than failing when a file is
-    // unreadable, so this is a success path - and its answer is "nothing".
-    // There is deliberately no fallback glyph: a derived monogram asserts a
-    // visual identity the plugin never declared, and beside real vendor logos
-    // it reads as a rendering fault.
+    // There is deliberately no fallback glyph: a derived monogram asserts a visual identity the plugin never
+    // declared, and beside real vendor logos it reads as a rendering fault.
     pluginMocks.plugins = [plugin({ hasIcon: true, displayName: "PDF" })];
     pluginMocks.iconByPluginId.set("pdf@openai-primary-runtime", null);
     const container = renderTab();
@@ -240,9 +226,8 @@ describe("<ProviderPluginsTab /> icons and manifest labels", () => {
   });
 
   it("passes hasDarkIcon through so only theme-aware rows vary by theme", () => {
-    // The hook keys its request on theme ONLY when a dark asset exists.
-    // Without this flag reaching it, a theme flip would miss the cache on
-    // every row and re-fetch the whole ~900 KB set to get identical bytes.
+    // The hook keys its request on theme only when a dark asset exists. Without this flag reaching it, a theme
+    // flip would miss the cache on every row and re-fetch the whole ~900 KB set to get identical bytes.
     pluginMocks.plugins = [
       plugin({ id: "a@m", hasIcon: true, hasDarkIcon: true }),
       plugin({ id: "b@m", hasIcon: true, hasDarkIcon: false }),

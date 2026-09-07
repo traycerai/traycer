@@ -197,19 +197,12 @@ const SORT_LABELS: Record<ResourceSortOption, string> = {
 const METRIC_COLS = "flex shrink-0 items-center tabular-nums tracking-tight";
 const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
-// The current root section pins to the top of the scroll region and swaps to the
-// next section as it scrolls into view (a single sticky header, not a stack).
-// Opaque background so scrolled rows slide cleanly underneath it.
+// The current root section pins to the top of the scroll region and swaps to the next section as it scrolls
+// into view (a single sticky header, not a stack).
 const STICKY_SECTION_HEADER =
   "sticky top-0 z-20 border-b border-border/50 bg-popover";
-/**
- * Trailing gutter every row reserves for its kill affordance. Section headers
- * (which have no action) reserve the same width as an empty spacer, so the
- * cpu/memory columns share one right edge across headers, owner rows, and
- * process rows. Icon-button sized, so hardcoding the track width is correct.
- */
+/** Trailing gutter every row reserves for its kill affordance. */
 const ROW_ACTION_SLOT = "flex w-10 shrink-0 items-center justify-center";
-/** Row actions stay out of the way until the row is hovered or focused. */
 const ROW_HOVER_REVEAL =
   "opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100";
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
@@ -245,13 +238,7 @@ interface OpenOwnerLocation {
   readonly ref: EpicNodeRef;
 }
 
-/**
- * A closed tile whose payload is preserved in `closedTilePayloadsByTabId`.
- * The preserved ref carries everything needed to reopen the tile (for a
- * terminal: name, titleSource, cwd - none of which the resource wire
- * snapshot has), so an owner without a live tile stays clickable, matching
- * how notification clicks reopen closed terminal/agent tiles.
- */
+/** The preserved ref carries everything needed to reopen the tile (for a terminal: name, titleSource, cwd. */
 interface ClosedOwnerTile {
   readonly tabId: string;
   readonly node: EpicNodeRef;
@@ -276,20 +263,11 @@ interface OwnerDisplayRow {
   readonly location: OpenOwnerLocation | null;
   readonly closedTile: ClosedOwnerTile | null;
   readonly record: EpicNodeRecord | null;
-  /**
-   * The shells this row's agent created, nested behind its chevron. Empty for
-   * every row that is not a creator - a shell itself never has shells.
-   */
+  /** Empty for every row that is not a creator - a shell itself never has shells. */
   readonly shells: readonly OwnerDisplayRow[];
-  /**
-   * A Synthetic Agent Row: the stand-in for a creator whose own program is not
-   * running while its shells still are. It owns no processes (its snapshot is
-   * an honest all-zero one the GUI builds), so it can neither be killed nor
-   * report usage of its own - it exists to carry the agent's name, its
-   * navigation, and its shells' combined total.
-   */
+  /** A Synthetic Agent Row: the stand-in for a creator whose own program is not running while its shells still
+   * are. */
   readonly synthetic: boolean;
-  /** Subtree total: this row's own process tree plus its shells' trees. */
   readonly treeCpuPercent: number;
   readonly ownMemoryBytes: number | null;
   readonly treeMemoryBytes: number | null;
@@ -370,13 +348,8 @@ interface RowActionTargetIndexInput {
 
 const NO_EXPANDED_PROCESSES: ReadonlySet<string> = new Set();
 
-/**
- * Marks the panel body so `PopoverContent`'s `onInteractOutside` can tell an
- * interaction that really is outside from one Radix only reports that way
- * because the sort menu's own layer is on top. A DOM marker rather than a ref
- * handed down: the guard lives on the element's ANCESTOR, so a ref would have
- * to cross a component boundary as a prop, which nothing else here needs.
- */
+/** A DOM marker rather than a ref handed down: the guard lives on the element's ancestor, so a ref would have
+ * to cross a component boundary as a prop, which nothing else here needs. */
 const RESOURCE_MONITOR_PANEL_ATTRIBUTE = "data-resource-monitor-panel";
 const RESOURCE_SEARCH_ATTRIBUTE = "data-resource-search";
 const RESOURCE_NAVIGATION_KEY_ATTRIBUTE = "data-resource-navigation-key";
@@ -430,31 +403,7 @@ function armResourceRowAction(
   return true;
 }
 
-/**
- * Header trigger for the resource monitor, scoped to the host its own picker
- * selected.
- *
- * The scope is resolved HERE, above both the stream mount and the panel, and
- * re-provided as this subtree's `StreamRuntimeContext`. That one swap is what
- * re-targets the whole surface: `resources.subscribe` is a STREAM, so unlike
- * the usage popover (whose reads are unary RPCs behind `HostRuntimeContext`)
- * the transport that has to move is the streaming one. The unary context is
- * deliberately left alone — every mutation this panel fires already pins its
- * own transient client to the row's `hostId` (`resources.kill`,
- * `managedCommand.stop`), and the host directory the picker itself reads is
- * app-wide.
- *
- * `useScopedStreamBinding` returns null while the pick is the active host, or
- * while it has not resolved to its own client — in both cases the value below
- * falls back to the AMBIENT binding, which is exactly what this subtree read
- * before there was a picker at all.
- *
- * The provider is rendered unconditionally, and that is load-bearing rather
- * than tidiness: mounting it only when a scoped binding exists changes the
- * element type at this position the moment a pick resolves, so React would
- * unmount the whole subtree and take the popover's own `open` state with it —
- * closing the panel the instant a host was chosen from the picker inside it.
- */
+/** The provider is rendered unconditionally, and that is load-bearing rather than tidiness. */
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   const { scope, hasExplicitPick } = useResourceMonitorHostScope();
   const scopedStreamBinding = useScopedStreamBinding(scope);
@@ -508,18 +457,15 @@ function ScopedResourceMonitorPopover(props: {
 
   return (
     <>
-      {/* Held out of the tree entirely under an unresolved pick, rather than
-          mounted and ignored: this mount OPENS a stream, and one opened on the
-          ambient host would be sampling processes on a machine nobody asked
-          about — and would then have to be disowned by every reader below. */}
+      {/* Held out of the tree entirely under an unresolved pick, rather than mounted and ignored: this mount opens a
+         stream, and one opened on the ambient host would be sampling processes on a machine nobody asked about. */}
       {props.streamBoundToScope ? (
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>
         <TooltipWrapper
-          // The host belongs in the label only when it is NOT the obvious one.
-          // Naming the active host on every hover would train people to ignore
-          // the one case the words exist for.
+          // The host belongs in the label only when it is not the obvious one. Naming the active host on every hover
+          // would train people to ignore the one case the words exist for.
           label={tooltip}
           side="top"
           sideOffset={6}
@@ -557,15 +503,8 @@ function ScopedResourceMonitorPopover(props: {
   );
 }
 
-/**
- * Owns the resource monitor's row-action + multi-select state. Groups selected
- * kill targets by host and merges their pids into one `resources.kill` per
- * host, so a bulk kill is one RPC per host rather than one per row. The host
- * validates every pid against its live tracked set, so an already-dead pid is
- * harmless. Shells are stopped one call each: `managedCommand.stop` names a
- * single command and is idempotent, so a shell already on its way down costs
- * nothing.
- */
+/** Groups selected kill targets by host and merges their pids into one `resources.kill` per host, so a bulk
+ * kill is one RPC per host rather than one per row. */
 function sameResourceKeySet(
   left: ReadonlySet<string>,
   right: ReadonlySet<string>,
@@ -574,14 +513,11 @@ function sameResourceKeySet(
 }
 
 function useResourceRowActions(
-  // Keys of every row currently rendered as actionable. Selection is pruned
-  // against this LIVE set at read time (never via an effect), so a selected
-  // process that exits on its own stops counting the moment its row drops
-  // out of the projection.
+  // Selection is pruned against this live set at read time (never via an effect), so a selected process that
+  // exits on its own stops counting the moment its row drops out of the projection.
   liveKeys: ReadonlySet<string>,
-  // Top-level targets (owner rows + Other roots) for "Select all".
-  // Deliberately excludes descendant process rows: acting on an owner already
-  // takes its whole tree, and counting children would double-count.
+  // Deliberately excludes descendant process rows: acting on an owner already takes its whole tree, and counting
+  // children would double-count.
   topLevelTargets: ReadonlyMap<string, RowActionTarget>,
 ): {
   readonly api: ResourceRowActionApi;
@@ -687,12 +623,8 @@ function countedNoun(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-/**
- * What the bulk action button says. A mixed selection has to name BOTH verbs:
- * the button would otherwise promise one act and perform another on half the
- * rows. A shells-only selection also drops the destructive styling, because
- * stopping a shell destroys nothing - it stays listed and restartable.
- */
+/** A mixed selection has to name both verbs: the button would otherwise promise one act and perform another on
+ * half the rows. */
 function selectionActionCopy(
   stopCount: number,
   killCount: number,
@@ -718,15 +650,8 @@ function selectionActionCopy(
   };
 }
 
-/**
- * The popover surface: the host picker row, then either the panel or the
- * reason there isn't one.
- *
- * The sort menu's open flag lives HERE rather than with the control it belongs
- * to because `PopoverContent`'s `onInteractOutside` reads it, and that handler
- * cannot be pushed down past the element it guards. The panel itself is found
- * by DOM marker instead (`RESOURCE_MONITOR_PANEL_ATTRIBUTE`).
- */
+/** The sort menu's open flag lives here rather than with the control it belongs to because `PopoverContent`'s
+ * `onInteractOutside` reads it, and that handler cannot be pushed down past the element it guards. */
 function ResourceMonitorContent(props: {
   readonly searchQuery: string;
   readonly onSearchQueryChange: (value: string) => void;
@@ -738,39 +663,14 @@ function ResourceMonitorContent(props: {
 }) {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const scope = props.scope;
-  // The picker earns its row once there is a choice to make. One host means one
-  // possible answer, and a control whose only outcome is the state you are
-  // already in is chrome. The `vanished` exception is not a choice but a way
-  // OUT: a pick that no longer resolves must never leave someone stranded on a
-  // notice with the only control that could clear it hidden.
+  // The `vanished` exception is not a choice but a way out: a pick that no longer resolves must never leave
+  // someone stranded on a notice with the only control that could clear it hidden.
   const showHostPicker =
     scope.hosts.length > 1 || scope.vanishedHostId !== null;
-  // Everything below reads through this subtree's stream binding, and a PICK
-  // that is not `ready` did not produce one - so every process, every total and
-  // every kill target would describe the AMBIENT host under the name this
-  // header just printed.
-  //
-  // Gated on there being a pick at all, because without one the ambient host is
-  // not a substitution for anything: it is the host this surface has always
-  // reported, and blanking it on a routine blip would take a working monitor
-  // away from every single-host user for a picker they never opened.
+  // Gated on there being a pick at all, because without one the ambient host is not a substitution for anything.
   const scopeUnusable =
     props.hasExplicitPick && !isHostScopeUsable(scope.status);
-  // A reachable host whose stream cannot serve this subscription is a THIRD
-  // outcome, and it is terminal: nothing will ever attribute a usable global
-  // projection to this machine, whether because the mount declined to acquire
-  // or because the stream it did open negotiated a version too old to carry
-  // one. Only checked while watching another host — following the active one,
-  // an old host still has the per-epic fallback, which is genuinely its data.
-  //
-  // Gated on the stream actually being BOUND to the pick, because the pre-check
-  // half of this verdict is read from whichever client the context is serving.
-  // While a pick's own binding is unresolved (still dialling, or backing off
-  // after a close) that is the AMBIENT one, and an old ambient host would have
-  // us report the picked machine as outdated on evidence collected from a
-  // different computer entirely. Unbound, we have not asked this host anything
-  // yet. The stream half carries its own, stricter attribution check, since the
-  // registry entry it reads is a singleton that can outlive a swap.
+  // A reachable host whose stream cannot serve this subscription is a third outcome, and it is terminal.
   const resourcesUnsupported = useGlobalResourcesUnsupported(scope.hostId);
   const streamIncompatible =
     props.streamBoundToScope &&
@@ -786,15 +686,11 @@ function ResourceMonitorContent(props: {
       aria-label="Resources"
       className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
-      // Keep the panel open when focus moves elsewhere (switching tabs, a task
-      // finishing load and autofocusing its content, a terminal grabbing
-      // focus). Only a genuine outside pointer click or Escape should dismiss
-      // it; those go through onPointerDownOutside / onEscapeKeyDown, not here.
+      // Keep the panel open when focus moves elsewhere (switching tabs, a task finishing load and autofocusing its
+      // content, a terminal grabbing focus).
       onFocusOutside={(event) => event.preventDefault()}
-      // Radix owns a document-level Escape listener, so the inline row
-      // confirmation cannot protect the containing popover through React event
-      // propagation alone. Keep the popover mounted while that confirmation
-      // consumes Escape and restores focus to its row.
+      // Radix owns a document-level Escape listener, so the inline row confirmation cannot protect the containing
+      // popover through React event propagation alone.
       onEscapeKeyDown={(event) => {
         const activeElement = document.activeElement;
         if (
@@ -806,11 +702,8 @@ function ResourceMonitorContent(props: {
       }}
       onInteractOutside={(event) => {
         const target = event.target;
-        // The host switcher's own list is a nested Radix popover, so it portals
-        // OUTSIDE this content and every click in it reads as an interaction
-        // outside. Without this, opening the picker closed the surface the
-        // picker exists to scope, and no host could ever be chosen. Shared with
-        // every other container that embeds it.
+        // Without this, opening the picker closed the surface the picker exists to scope, and no host could ever be
+        // chosen.
         if (
           target instanceof Element &&
           isHostSwitcherListInteraction(target)
@@ -843,15 +736,8 @@ function ResourceMonitorContent(props: {
   );
 }
 
-/**
- * Which of the card's three mutually exclusive bodies is showing. Split out so
- * the choice reads as the ordered set of questions it is — can this scope be
- * read at all, then can its host serve this stream, then show it — rather than
- * as nested ternaries in the middle of the card.
- *
- * The order matters: an unreachable host has no negotiated stream to judge, so
- * asking about compatibility first would report an old host as merely offline.
- */
+/** Split out so the choice reads as the ordered set of questions it is - can this scope be read at all, then
+ * can its host serve this stream, then show it - rather than as nested ternaries in the middle of the card. */
 function ResourceMonitorBody(props: {
   readonly searchQuery: string;
   readonly onSearchQueryChange: (value: string) => void;
@@ -882,36 +768,20 @@ function ResourceMonitorBody(props: {
   );
 }
 
-/**
- * The host row above the panel: which machine's processes this surface is
- * reporting. It heads the whole card rather than sitting inside the list,
- * because it scopes every section in it - the host app, the task trees and the
- * Other roots alike.
- *
- * `HostSwitcher` is Settings' picker, reused rather than re-skinned, on the
- * same terms as the usage popover's row: the two surfaces answer different
- * questions (administer vs. watch) but the rows answer the same one - which
- * machine is this, can I reach it, which one is active - and a second picker
- * over one concept is how two vocabularies for it start.
- */
+/** It heads the whole card rather than sitting inside the list, because it scopes every section in it - the
+ * host app, the task trees and the Other roots alike. */
 function ResourceMonitorHostPickerRow(props: {
   readonly scope: HostScope;
   readonly onClose: () => void;
 }) {
   const { openSettings } = useSystemTabModalActions();
-  // The registry list this picker renders is served by a NON-polling observer;
-  // the Settings sidebar is normally the surface that opts the window into the
-  // liveness poll. When this popover is the only host-list surface mounted, a
-  // row would otherwise keep an Online dot from the last registry DTO until
-  // something else happened to refetch - so this picker carries the same opt-in
-  // for exactly as long as it is on screen.
+  // When this popover is the only host-list surface mounted, a row would otherwise keep an Online dot from the
+  // last registry DTO until something else happened to refetch.
   useRegisteredHostsPollLiveness();
   const scope = props.scope;
   return (
-    // Full-bleed on purpose: the strip's own edges ARE the card's, so the
-    // picker's list can drop from it at exactly the card's width. Padding here
-    // would inset the trigger, and with it the list anchored to the trigger,
-    // leaving a few pixels of card showing down both sides of the open list.
+    // Padding here would inset the trigger, and with it the list anchored to the trigger, leaving a few pixels of
+    // card showing down both sides of the open list.
     <div
       className="flex shrink-0 items-center border-b"
       data-testid="resource-monitor-host-picker-row"
@@ -923,10 +793,8 @@ function ResourceMonitorHostPickerRow(props: {
         onSelect={scope.setHostId}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
-        // Managing hosts - adding, renaming, updating, removing - is Settings'
-        // job, with its own dialogs and failure states; this popover watches
-        // processes. So the list ends in one link to where that work already
-        // lives, rather than a second copy of one verb from it.
+        // So the list ends in one link to where that work already lives, rather than a second copy of one verb from
+        // it.
         action={{
           kind: "manage-hosts",
           onSelect: () => {
@@ -947,12 +815,8 @@ function ResourceMonitorHostPickerRow(props: {
   );
 }
 
-/**
- * Why this surface is showing nothing rather than showing the active host's
- * processes under another host's name. Each branch names the remedy it has,
- * because the three states differ in exactly that: `vanished` needs the pick
- * dropped, `unreachable` needs the machine back, `connecting` needs a moment.
- */
+/** Why this surface is showing nothing rather than showing the active host's processes under another host's
+ * name. */
 function ResourceMonitorHostUnavailableNotice(props: {
   readonly scope: HostScope;
 }) {
@@ -968,12 +832,8 @@ function ResourceMonitorHostUnavailableNotice(props: {
       </div>
     );
   }
-  // A plan-gated host is not an offline one, and the copy below would send
-  // someone to debug a network that is working: the machine is up, this app
-  // just may not attach to it remotely on the current plan. The scope gate
-  // makes exactly this distinction for the Settings panels
-  // (`host-scope-gate.tsx`), and a picker that can land on the same host owes
-  // the same answer and the same remedy.
+  // A plan-gated host is not an offline one, and the copy below would send someone to debug a network that is
+  // working: the machine is up, this app just may not attach to it remotely on the current plan.
   if (scope.host?.planRestricted === true) {
     return (
       <div
@@ -1029,17 +889,7 @@ function ResourceMonitorHostUnavailableNotice(props: {
   );
 }
 
-/**
- * A host that is reachable, answering, and simply too old to stream its
- * processes to this window.
- *
- * It gets its own notice rather than the waiting copy because the difference is
- * whether anything is coming: `unreachable` may recover on its own, but a host
- * that did not negotiate the global subscription will not start, and a spinner
- * over that says something untrue for as long as the pick stands. The remedy is
- * named for the same reason — it is an action on the other machine, not
- * something this window can retry.
- */
+/** It gets its own notice rather than the waiting copy because the difference is whether anything is coming. */
 function ResourceMonitorHostIncompatibleNotice(props: {
   readonly scope: HostScope;
 }) {
@@ -1069,17 +919,8 @@ function ResourceMonitorHostIncompatibleNotice(props: {
   );
 }
 
-/**
- * What "nothing here yet" means, which differs by who is being watched.
- *
- * Under a pick this covers a host whose stream has not been attributed to it
- * yet: the transport is still resolving, or a swap left the projection still
- * naming the machine we just stopped watching. Naming the machine keeps that
- * honest instead of implying data is on its way from a host this window is not
- * actually reading. A host that will NEVER be attributed — one too old to serve
- * a global stream — is not one of these: it gets a terminal notice rather than
- * a wait that cannot end (`ResourceMonitorHostIncompatibleNotice`).
- */
+/** A host that will never be attributed - one too old to serve a global stream - is not one of these: it gets a
+ * terminal notice rather than a wait that cannot end (`ResourceMonitorHostIncompatibleNotice`). */
 function resourceMonitorWaitingCopy(
   scope: HostScope,
   hasExplicitPick: boolean,
@@ -1089,81 +930,35 @@ function resourceMonitorWaitingCopy(
     : "Waiting for resource data.";
 }
 
-/**
- * Whether this surface is reporting a machine the user NAMED — the question
- * every "are we watching someone else" branch actually wants answered.
- *
- * `isViewingActive` cannot answer it. It is `isFollowing`, which requires a
- * RESOLVED host, so it reads false throughout the cold-start window before the
- * host lists reply — during which there is no pick, nothing is named on screen,
- * and treating the surface as if it were watching another machine blanks a
- * working monitor and can accuse the ambient host of being unable to report.
- * The pick is what the person did; `isViewingActive` is a fact about lists that
- * happens to correlate once they load.
- *
- * The second half stands because naming the active host on a surface already
- * following it is noise — but it is only ever consulted once a pick exists.
- */
+/** `isViewingActive` cannot answer it. The second half stands because naming the active host on a surface
+ * already following it is noise - but it is only ever consulted once a pick exists. */
 function watchesNamedHost(scope: HostScope, hasExplicitPick: boolean): boolean {
   return hasExplicitPick && !scope.isViewingActive;
 }
 
-/** Everything watching another machine changes about what this panel reads. */
 interface ResourceMonitorHostReading {
-  /**
-   * Where a kill goes for rows that carry no host of their own - the "Other"
-   * roots. Owner rows route by their own `owner.hostId` and never consult this.
-   */
+  /** Owner rows route by their own `owner.hostId` and never consult this. */
   readonly killHostId: string | null;
   readonly projection: GlobalResourceProjection;
   readonly desktopApp: DesktopAppResourceUsage | null;
 }
 
-/**
- * Whether "Traycer Desktop" — the Electron shell, which is THIS computer's
- * process — belongs in the reading.
- *
- * The test is the machine's IDENTITY, not whether the surface happens to be
- * following the active selection. Those come apart in both directions: the
- * active host can itself be a remote machine (counting the local shell there
- * attributes this computer's memory to another one, over a "RAM share"
- * denominator its numerator never came from), and someone can explicitly pick
- * the machine they are sitting at while the active host is elsewhere — where
- * the row is exactly what they asked for.
- *
- * With no host resolved the answer is "we do not know which machine this is
- * describing", and the row stays hidden — which is also what it did before
- * there was a picker, since `isViewingActive` is itself false until a host
- * resolves (`isFollowing` requires one). Reaching for `isViewingActive` as a
- * cold-start fallback here looks like it preserves something and cannot: it is
- * false in exactly the case it would be consulted.
- */
+/** Reaching for `isViewingActive` as a cold-start fallback here looks like it preserves something and cannot:
+ * it is false in exactly the case it would be consulted. */
 function readingShowsLocalDesktop(scope: HostScope): boolean {
   return scope.host?.isLocalMachine === true;
 }
 
-/**
- * Reconcile the panel's three host-dependent inputs in ONE place, so the
- * "which machine is this" question is answered once rather than re-derived
- * beside every consumer — the shape of mistake where the totals move to the
- * picked host and the kill route quietly does not.
- *
- * Following the active host every answer is what it was before the picker
- * existed; nothing about a single-host window changes.
- */
+/** Following the active host every answer is what it was before the picker existed; nothing about a single-host
+ * window changes. */
 function resolveResourceMonitorHostReading(input: {
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   readonly streamed: GlobalResourceProjection;
   readonly localDesktopApp: DesktopAppResourceUsage | null;
 }): ResourceMonitorHostReading {
-  // ONE value answers "which machine is this reading about", and it answers it
-  // for both the data and the actions. Deriving the kill target from a second
-  // reader of the active host — `useAddressableHostId`, which this used to
-  // call — is what let the two disagree: on an ambient host swap it moved to
-  // the new machine a commit before the stream transport did, so the panel
-  // showed the old host's processes with kills aimed at the new one. That
-  // needed no picker to happen, and no pick to reproduce.
+  // One value answers "which machine is this reading about", and it answers it for both the data and the
+  // actions.
   return {
     killHostId: input.scope.hostId,
     projection: attributedProjection(
@@ -1177,36 +972,7 @@ function resolveResourceMonitorHostReading(input: {
   };
 }
 
-/**
- * The projection, or nothing, according to what this surface is CLAIMING —
- * and the two claims differ, so the burden of proof does too.
- *
- * The projection is a module singleton that outlives any one transport, so it
- * can describe a machine the current reading was not opened against: a host
- * swap still in flight (ambient or scoped — the registry entry is named at
- * acquire time, one commit before the replacement binding reaches context), or
- * a pick just dropped, where the entry still carries the abandoned host's name.
- *
- * **Under a pick** the surface is accountable to a machine the person named, so
- * it owes positive proof: the projection must say this host, or there is
- * nothing to show. An unattributed projection is not good enough — that is
- * exactly the pre-v1.1 per-epic fallback, which rides the ambient transport and
- * would put one machine's processes under another's name.
- *
- * **With no pick** nothing on screen names a machine; the only thing that can
- * go wrong is a kill routed at a host these rows did not come from. So refuse
- * what can be PROVEN foreign and nothing more. A scope that has not resolved
- * its host id — every cold start, between the ambient stream connecting and the
- * host lists answering — proves nothing, and has no kill target either
- * (`defaultHostId` is null, so the Other roots offer no action). Demanding
- * proof there would blank a working monitor on every launch to defend a name it
- * never prints.
- *
- * The branch is `hasExplicitPick`, NOT `isViewingActive`. The latter is false
- * throughout that same cold-start window (see `watchesNamedHost`), so keying on
- * it puts the strict branch in charge of exactly the case the permissive branch
- * exists for — which is the bug this comment used to describe as fixed.
- */
+/** Demanding proof there would blank a working monitor on every launch to defend a name it never prints. */
 function attributedProjection(
   scope: HostScope,
   hasExplicitPick: boolean,
@@ -1224,11 +990,7 @@ function attributedProjection(
   return provablyAnotherMachine ? EMPTY_GLOBAL_RESOURCE_PROJECTION : streamed;
 }
 
-/**
- * The panel itself, mounted only once the surface is bound to the host it
- * names. Split from `ResourceMonitorContent` so the reads below are not
- * mounted at all under an unusable scope.
- */
+/** The panel itself, mounted only once the surface is bound to the host it names. */
 function ResourceMonitorPanel(props: {
   readonly searchQuery: string;
   readonly onSearchQueryChange: (value: string) => void;
@@ -1310,10 +1072,7 @@ function ResourceMonitorPanel(props: {
     void tombstoneEvidence;
     return buildCanvasResourceIndex(canvas);
   }, [canvas, tombstoneEvidence]);
-  // The live epic projection is what says an agent row EXISTS (and what it is
-  // called): the canvas's own record list only ever holds what this window
-  // created, so an agent created by another window, device or agent would
-  // otherwise render as a dead, unlinked row.
+  // The live epic projection is what says an agent row exists (and what it is called).
   const liveAgentRefs = useMemo(
     () => collectLiveAgentRefs(projection.entries),
     [projection.entries],
@@ -1498,9 +1257,8 @@ function ResourceMonitorPanel(props: {
           </h4>
           <div className="flex shrink-0 items-center gap-1">
             {rowActions.selectionMode ? (
-              // Selection mode replaces the header controls wholesale (the
-              // sort dropdown included), mirroring the chat navigator's
-              // Select all / Cancel / destructive-action toolbar.
+              // Selection mode replaces the header controls wholesale (the sort dropdown included), mirroring the chat
+              // navigator's Select all / Cancel / destructive-action toolbar.
               <div className="flex items-center gap-0.5">
                 <SelectAllToggle
                   allSelected={rowActions.allVisibleSelected}
@@ -1787,12 +1545,7 @@ function ResourceSearchInput(props: {
   readonly onChange: (value: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  // The popover declines Radix's open-autofocus so this field can take it; on
-  // a touch pointer that is a software keyboard over a panel opened to READ
-  // CPU and memory, and the search is optional on the way there. Standing down
-  // leaves focus where the popover put it - the trigger chip, still mounted -
-  // so nothing is stranded. The pointer decides, not the viewport and not the
-  // build: a narrow desktop window still types with hardware.
+  // The pointer decides, not the viewport and not the build: a narrow desktop window still types with hardware.
   const coarsePointer = useCoarsePointer();
   useLayoutEffect(() => {
     if (coarsePointer) return;
@@ -1834,12 +1587,8 @@ function ResourceSearchInput(props: {
   );
 }
 
-/**
- * `value` is `null` for an unavailable reading rather than a pre-rendered dash:
- * the em dash is decoration a screen reader must not be left with, and `<span
- * aria-label>` cannot supply the words - naming is prohibited on the generic
- * role, so AT ignores it. A visually-hidden sibling is the repo's idiom.
- */
+/** `value` is `null` for an unavailable reading rather than a pre-rendered dash: the em dash is decoration a
+ * screen reader must not be left with, and `<span aria-label>` cannot supply the words. */
 function MetricBlock(props: {
   readonly label: string;
   readonly value: string | null;
@@ -2121,9 +1870,8 @@ function HostRamShareBar(props: {
   );
 }
 
-// Module scope on purpose: the panel's keyboard routing is pure DOM work over
-// the event and the panel element, and keeping it inline pushed the component
-// past the complexity budget.
+// Module scope on purpose: the panel's keyboard routing is pure DOM work over the event and the panel element,
+// and keeping it inline pushed the component past the complexity budget.
 function handleResourcePanelKeyDown(
   event: ReactKeyboardEvent<HTMLDivElement>,
   panel: HTMLDivElement | null,
@@ -2343,9 +2091,8 @@ function OtherResourceSection(props: {
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
-  // Collapsed by default: the header aggregate says everything most users
-  // need; the per-root breakdown (provider servers, probes, misc children)
-  // is inspect-on-demand, matching collapsed-by-default owner trees.
+  // Collapsed by default: the header aggregate says everything most users need; the per-root breakdown (provider
+  // servers, probes, misc children) is inspect-on-demand, matching collapsed-by-default owner trees.
   const [expanded, setExpanded] = useState(false);
   const allProcessRows = buildProcessRows({
     processes: props.other.processes,
@@ -2467,7 +2214,6 @@ function RestrictedResourceSection(props: {
   );
 }
 
-/** A concrete kill target: a host and the root pids whose trees to terminate. */
 interface KillTarget {
   readonly kind: "kill";
   readonly key: string;
@@ -2475,11 +2221,8 @@ interface KillTarget {
   readonly pids: readonly number[];
 }
 
-/**
- * A shell to hand back to its supervisor. Named by command id rather than by
- * pid because that is what the stop acts on - the supervised object, not the
- * process currently standing in for it.
- */
+/** Named by command id rather than by pid because that is what the stop acts on - the supervised object, not
+ * the process currently standing in for it. */
 interface StopTarget {
   readonly kind: "stop";
   readonly key: string;
@@ -2488,21 +2231,11 @@ interface StopTarget {
   readonly commandId: string;
 }
 
-/**
- * What acting on one row means. The two verbs are not interchangeable: a raw
- * process tree is killed, but a SUPERVISED shell is stopped through its
- * supervisor. Signalling a shell directly would be recorded as
- * `exited (signal SIGTERM)` - a crash, as far as every reader of that status is
- * concerned - which lights the chat's attention badge and invites the agent to
- * restart the very shell a human just asked it to stop.
- */
+/** The two verbs are not interchangeable: a raw process tree is killed, but a supervised shell is stopped
+ * through its supervisor. */
 type RowActionTarget = KillTarget | StopTarget;
 
-/**
- * Row action controls threaded down to actionable rows. `selectionMode` toggles
- * the multi-select affordance; the rest drive per-row and bulk actions. `null`
- * for rows that can't be acted on (the app/host sections never receive it).
- */
+/** `null` for rows that can't be acted on (the app/host sections never receive it). */
 interface ResourceRowActionApi {
   readonly selectionMode: boolean;
   readonly isSelected: (key: string) => boolean;
@@ -2511,12 +2244,8 @@ interface ResourceRowActionApi {
   readonly isPending: boolean;
 }
 
-/**
- * Per-row destructive affordance: hidden until the row is hovered/focused,
- * then a two-step INLINE confirm (no modal). The keyboard path deliberately
- * lands on Confirm after Delete/Backspace arms it, making Enter the second,
- * distinct confirmation key; Escape dismisses and restores row focus.
- */
+/** The keyboard path deliberately lands on Confirm after Delete/Backspace arms it, making Enter the second,
+ * distinct confirmation key; Escape dismisses and restores row focus. */
 function ConfirmableRowAction(props: {
   readonly target: RowActionTarget;
   readonly label: string;
@@ -2555,9 +2284,8 @@ function ConfirmableRowAction(props: {
   };
 
   if (armed) {
-    // Armed confirm floats over the row's right edge as a small panel (the
-    // row wrapper is `relative`), instead of squeezing beside the metrics -
-    // nothing shifts or clips while confirming.
+    // Armed confirm floats over the row's right edge as a small panel (the row wrapper is `relative`), instead of
+    // squeezing beside the metrics - nothing shifts or clips while confirming.
     return (
       <>
         <span className={ROW_ACTION_SLOT} />
@@ -2635,9 +2363,8 @@ function ConfirmableRowAction(props: {
         />
       ) : (
         <>
-          {/* Text label, not an icon: a bin reads as "delete this agent's
-              state" and a stop glyph reads as "stop the turn", but this only
-              terminates the process tree. The word carries the meaning. */}
+          {/* Text label, not an icon: a bin reads as "delete this agent's state" and a stop glyph reads as "stop the
+             turn", but this only terminates the process tree. */}
           <Button
             type="button"
             variant="ghost"
@@ -2660,12 +2387,8 @@ function ConfirmableRowAction(props: {
   );
 }
 
-/**
- * The owner row's leading cell: a select checkbox when the row can be acted on
- * and selection mode is on, otherwise the expand chevron (or a spacer when the
- * tree has no descendants). Owns the selection branching so `OwnerTreeRow`
- * stays flat.
- */
+/** The owner row's leading cell: a select checkbox when the row can be acted on and selection mode is on,
+ * otherwise the expand chevron (or a spacer when the tree has no descendants). */
 function OwnerRowLeadingCell(props: {
   readonly actions: ResourceRowActionApi | null;
   readonly target: RowActionTarget | null;
@@ -2717,12 +2440,8 @@ function OwnerRowLeadingCell(props: {
   );
 }
 
-/**
- * Trailing action affordance for an owner row (hidden in selection mode). A
- * shell gets the supervisor's Stop - the same button the Shells surfaces
- * carry - so the row that ends a shell looks the same wherever it appears, and
- * never like the "Kill" beside it.
- */
+/** A shell gets the supervisor's Stop - the same button the Shells surfaces carry - so the row that ends a
+ * shell looks the same wherever it appears, and never like the "Kill" beside it. */
 function OwnerRowActionCell(props: {
   readonly actions: ResourceRowActionApi | null;
   readonly target: RowActionTarget | null;
@@ -2745,13 +2464,8 @@ function OwnerRowActionCell(props: {
   );
 }
 
-/**
- * What acting on this owner row means, or `null` when there is nothing to act
- * on - a Synthetic Agent Row, which owns no process of its own.
- *
- * A shell is stopped rather than killed regardless of how it is nested, so this
- * reads the snapshot rather than the row's position in the tree.
- */
+/** A shell is stopped rather than killed regardless of how it is nested, so this reads the snapshot rather than
+ * the row's position in the tree. */
 function ownerSnapshotActionTarget(
   snapshot: OwnerResourceSnapshotWireV15,
   key: string,
@@ -2775,13 +2489,7 @@ function ownerSnapshotActionTarget(
   };
 }
 
-/**
- * Index of currently-actionable rows. `live` holds every selectable key so a
- * selection whose process exited on its own is pruned at read time; `topLevel`
- * holds the owner-row / Other-root targets "Select all" operates on
- * (descendant process rows are excluded - acting on an owner already takes its
- * whole tree, and counting children would double-count).
- */
+/** `live` holds every selectable key so a selection whose process exited on its own is pruned at read time. */
 function buildRowActionTargetIndex(input: RowActionTargetIndexInput): {
   readonly live: ReadonlySet<string>;
   readonly topLevel: ReadonlyMap<string, RowActionTarget>;
@@ -2847,10 +2555,7 @@ function SelectAllToggle(props: {
   );
 }
 
-/**
- * In selection mode the whole owner row is a selection toggle - it must NOT
- * navigate to the owner's tile. Outside selection mode it opens the tile.
- */
+/** In selection mode the whole owner row is a selection toggle - it must not navigate to the owner's tile. */
 function ownerRowClickHandler(
   selecting: boolean,
   actions: ResourceRowActionApi | null,
@@ -2861,25 +2566,14 @@ function ownerRowClickHandler(
   return () => actions.toggleSelection(target);
 }
 
-/**
- * Provider icon for an owner row's subtitle, or a neutral glyph for a
- * harness-less owner. Subscript-scale (`size-3`) so it reads as part of the
- * secondary text line, not a second row element.
- *
- * A shell has no provider at all, and the generic `Server` glyph told a viewer
- * nothing that the row did not already say. It gets the shell glyph instead -
- * the same one the sidebar, the strip and the chip use - so the row is
- * recognisable as the shell it is, watching or not. The noun is still in the
- * row's title in words, so the glyph stays decorative.
- */
+/** Subscript-scale (`size-3`) so it reads as part of the secondary text line, not a second row element. */
 function OwnerProviderIcon(props: {
   readonly harnessId: string | null;
   readonly managedCommand: ManagedCommandOwnerWire | null;
   readonly synthetic: boolean;
 }) {
-  // A Synthetic Agent Row has no running program, so there is no provider to
-  // advertise; the chat glyph says what the row stands for - the agent whose
-  // shells are still running underneath it.
+  // A Synthetic Agent Row has no running program, so there is no provider to advertise; the chat glyph says what
+  // the row stands for - the agent whose shells are still running underneath it.
   if (props.synthetic) {
     return (
       <MessagesSquare className="size-3 shrink-0 text-muted-foreground/70" />
@@ -2902,11 +2596,8 @@ function OwnerProviderIcon(props: {
   return <HarnessIcon harnessId={providerId} className="size-3" />;
 }
 
-/**
- * One owner row and everything nested behind its chevron: the shells its agent
- * created (rendered as sub-rows of the same shape, above), then its own OS
- * process tree. A shell has no shells of its own, so the recursion is two deep.
- */
+/** One owner row and everything nested behind its chevron: the shells its agent created (rendered as sub-rows
+ * of the same shape, above), then its own OS process tree. */
 function resourceNavigationKey(
   canOpen: boolean,
   selecting: boolean,
@@ -3076,12 +2767,7 @@ function OwnerTreeRow(props: {
   );
 }
 
-/**
- * The owner row's cpu/memory cell. Collapsed it states the whole subtree (own
- * process tree plus its shells'); expanded it states only this row's own
- * process, the rest now carried on the lines below. A Synthetic Agent Row has
- * no process at all, so expanded it states nothing rather than a row of zeroes.
- */
+/** A Synthetic Agent Row has no process at all, so expanded it states nothing rather than a row of zeroes. */
 function OwnerRowMetrics(props: {
   readonly row: OwnerDisplayRow;
   readonly processRows: OwnerProcessRows;
@@ -3148,21 +2834,16 @@ function ProcessRowMarker(props: {
   );
 }
 
-/**
- * Trailing kill cell for a process row: a select checkbox in selection mode,
- * otherwise the hover-revealed kill button. Killing a process pid terminates
- * its whole subtree (the host enumerates descendants). `null` host or kill api
- * renders nothing (a spacer), keeping the row width stable.
- */
+/** Trailing kill cell for a process row: a select checkbox in selection mode, otherwise the hover-revealed kill
+ * button. */
 function ProcessRowKillCell(props: {
   readonly actions: ResourceRowActionApi | null;
   readonly killHostId: string | null;
   readonly process: ResourceProcessSnapshotWireV15;
   readonly label: string;
 }) {
-  // `?? null` collapses undefined to null: a partial HMR update can transiently
-  // render this row before a parent passes `kill`, and a hover affordance must
-  // never crash the whole popover.
+  // null` collapses undefined to null: a partial HMR update can transiently render this row before a parent
+  // passes `kill`, and a hover affordance must never crash the whole popover.
   const actions = props.actions ?? null;
   const killHostId = props.killHostId ?? null;
   if (actions === null || killHostId === null) {
@@ -3199,10 +2880,7 @@ function processCollapsedLabel(
     : processLeafLabel(process, hiddenCount);
 }
 
-/**
- * Leading selection checkbox for a process row (left side, matching the
- * chat / artifact selection convention). Renders nothing outside select mode.
- */
+/** Leading selection checkbox for a process row (left side, matching the chat / artifact selection convention). */
 function ProcessRowSelectCheckbox(props: {
   readonly visible: boolean;
   readonly selected: boolean;
@@ -3234,11 +2912,8 @@ function processExpandAriaLabel(row: ProcessDisplayRow): string {
 
 function ProcessTreeRow(props: {
   readonly processRow: ProcessDisplayRow;
-  /**
-   * Indent levels contributed by the owner row above this tree, so a nested
-   * shell's processes sit deeper than its creator's own processes instead of
-   * lining up with them.
-   */
+  /** Indent levels contributed by the owner row above this tree, so a nested shell's processes sit deeper than
+   * its creator's own processes instead of lining up with them. */
   readonly ownerDepth: number;
   readonly stickyTop: number;
   readonly labelMode: "full" | "compact-root";
@@ -3296,10 +2971,8 @@ function ProcessTreeRow(props: {
       />
     </>
   );
-  // In selection mode EVERY row is a whole-row selection toggle (expand is
-  // suspended, mirroring owner rows). Otherwise leaf and non-boundary rows are
-  // static; only an expand boundary is an interactive, keyboard-reachable
-  // toggle that reveals its sub-tree inline.
+  // Otherwise leaf and non-boundary rows are static; only an expand boundary is an interactive,
+  // keyboard-reachable toggle that reveals its sub-tree inline.
   let row;
   if (selecting) {
     row = (
@@ -3497,9 +3170,8 @@ function buildTaskRows(input: TaskRowBuildInput): TaskDisplayRow[] {
         entry,
         label: taskLabel(entry.epicId, input.canvas, input.epicTitleById),
         tabOrder: taskTabOrder(entry.epicId, input.canvas),
-        // Top-level totals are already subtree-inclusive, so nesting a shell
-        // under its creator moves where its usage is reported without changing
-        // what the section header adds up to.
+        // Top-level totals are already subtree-inclusive, so nesting a shell under its creator moves where its usage
+        // is reported without changing what the section header adds up to.
         cpuPercent: owners.reduce(
           (sum, owner) => sum + owner.treeCpuPercent,
           0,
@@ -3556,12 +3228,8 @@ function buildOwnerRow(
   };
 }
 
-/**
- * Nests every shell row under a node for its creator. While the creator's own
- * agent program is running, that node IS its owner row; otherwise a Synthetic
- * Agent Row stands in. A shell whose creator names no agent this client can
- * resolve stays where it has always been - flat, at the task level.
- */
+/** While the creator's own agent program is running, that node IS its owner row; otherwise a Synthetic Agent
+ * Row stands in. */
 function nestShellsUnderCreators(
   rows: readonly OwnerDisplayRow[],
   input: TaskRowBuildInput,
@@ -3628,13 +3296,8 @@ function nestShellsUnderCreators(
   ];
 }
 
-/**
- * The Synthetic Agent Row for a creator whose own program is not running. Its
- * snapshot is an honest all-zero one: this agent really does own no processes
- * right now, which is what leaves the row with no kill affordance and no usage
- * of its own to report. `null` when nothing in this client names the creator -
- * the caller then leaves the shell flat rather than inventing an unknown node.
- */
+/** `null` when nothing in this client names the creator - the caller then leaves the shell flat rather than
+ * inventing an unknown node. */
 function buildSyntheticAgentRow(
   creatorId: string,
   shell: OwnerDisplayRow,
@@ -3691,13 +3354,7 @@ function buildSyntheticAgentRow(
   return null;
 }
 
-/**
- * The owner rows currently on screen in a task section: a parent's shells
- * count only once the parent is expanded - by hand, or by the search
- * force-expand that reveals a shell whose parent failed to match on its own
- * terms (mirroring `buildOwnerProcessSearchProjection`). Kill targeting must
- * track exactly this: "Select all" must never reap a row the user cannot see.
- */
+/** Kill targeting must track exactly this: "Select all" must never reap a row the user cannot see. */
 function visibleOwnerRowsForTask(
   task: TaskDisplayRow,
   searchQuery: string,
@@ -3901,16 +3558,14 @@ function filterTaskRowsForSearch(
     );
   return rows.flatMap((task): TaskDisplayRow[] => {
     if (taskRowMatchesSearch(task, searchQuery)) return [task];
-    // A parent that matches keeps its whole subtree; one that does not survives
-    // only on its matching shells, so searching a shell's name reveals it (the
-    // parent force-expands, having failed to match on its own terms).
+    // A parent that matches keeps its whole subtree; one that does not survives only on its matching shells, so
+    // searching a shell's name reveals it (the parent force-expands, having failed to match on its own terms).
     const owners = task.owners.flatMap((owner): OwnerDisplayRow[] => {
       if (matches(owner, task)) return [owner];
       const shells = owner.shells.filter((shell) => matches(shell, task));
       if (shells.length === 0) return [];
-      // The subtree totals must describe the shells that survived the filter,
-      // not the ones it removed - the metrics tooltip renders them even while
-      // the row itself is force-expanded.
+      // The subtree totals must describe the shells that survived the filter, not the ones it removed - the metrics
+      // tooltip renders them even while the row itself is force-expanded.
       const droppedCpu = owner.shells.reduce(
         (sum, shell) =>
           shells.includes(shell) ? sum : sum + shell.treeCpuPercent,
@@ -4236,16 +3891,8 @@ function filterOwnerProcessRowsForSearch(
   };
 }
 
-/**
- * Retained-tombstone evidence that `buildCanvasResourceIndex` consults through
- * `retainedPlainTerminalTombstoneBlocksClosedRestore`. It lives in Query, not
- * in the canvas snapshot, so the index has to observe it separately: a
- * tombstone that arrives before its presentation fanout leaves the closed-tile
- * row visible while `openResourceOwner` already rejects it, which reads to the
- * user as a click that does nothing. Only the tombstoned ids and the live
- * revision that could overtake them are folded in, so an ordinary projection
- * tick does not churn the index.
- */
+/** Retained-tombstone evidence that `buildCanvasResourceIndex` consults through
+ * `retainedPlainTerminalTombstoneBlocksClosedRestore`. */
 function plainTerminalTombstoneEvidence(): string {
   const parts: string[] = [];
   for (const [queryKey, collection] of queryClient.getQueriesData<
@@ -4288,10 +3935,8 @@ function buildCanvasResourceIndex(
   const locationByOwner = new Map<string, OpenOwnerLocation>();
   const tabOrderByOwner = new Map<string, number>();
   const openTabIds = new Set(canvas.openTabOrder);
-  // Closing a task only removes its tab from the visible strip; its tab and
-  // canvas stay preserved so reopening can restore the exact pane/tile focus.
-  // Scan visible tabs first, then retained hidden tabs, so an open location
-  // wins when duplicate task tabs contain the same owner.
+  // Closing a task only removes its tab from the visible strip; its tab and canvas stay preserved so reopening
+  // can restore the exact pane/tile focus.
   const indexedTabIds = [
     ...canvas.openTabOrder,
     ...Object.keys(canvas.tabsById).filter((tabId) => !openTabIds.has(tabId)),
@@ -4336,10 +3981,7 @@ function buildCanvasResourceIndex(
     }
   });
 
-  // A tile closed out of a tab's canvas keeps its payload in
-  // `closedTilePayloadsByTabId`; index those refs so the owner row can reopen
-  // the tile (terminals have no artifact record, so this preserved ref is the
-  // only way to reconstruct their tile).
+  // A tile closed out of a tab's canvas keeps its payload in `closedTilePayloadsByTabId`.
   const closedTileByOwner = new Map<string, ClosedOwnerTile>();
   for (const tabId of indexedTabIds) {
     const tab = canvas.tabsById[tabId];
@@ -4370,12 +4012,7 @@ function buildCanvasResourceIndex(
   return { locationByOwner, closedTileByOwner, tabOrderByOwner };
 }
 
-/**
- * Every agent the snapshot can name, for the live-projection lookup: each
- * chat / terminal-agent owner, plus each shell's creator - a creator whose own
- * program has exited has no owner row, and its Synthetic Agent Row needs the
- * same lookup to exist and to open. A plain terminal is not an agent.
- */
+/** A plain terminal is not an agent. */
 function collectLiveAgentRefs(
   entries: readonly GlobalResourceEpicEntry[],
 ): readonly LiveAgentRef[] {
@@ -4398,7 +4035,6 @@ function collectLiveAgentRefs(
   return [...byKey.values()];
 }
 
-/** The agent a snapshot names: the owner itself, or the shell's creator. */
 function liveAgentIdForSnapshot(
   snapshot: OwnerResourceSnapshotWireV15,
 ): string | null {
@@ -4411,7 +4047,6 @@ function liveAgentIdForSnapshot(
 
 interface LiveAgentRef extends RegisteredEpicAgentRef {
   readonly agentId: string;
-  /** The host whose resource stream reported this agent's process. */
   readonly processHostId: string;
 }
 
@@ -4422,17 +4057,8 @@ interface LiveOwnerAgent {
   readonly hostId: string;
 }
 
-/**
- * Live agents keyed by owner key, the kind coming from the projection slice.
- *
- * An epic's projection spans hosts, and an agent id is host-minted rather than
- * globally unique, so a projection entry only describes THIS row when it names
- * the same host the process was reported from. A disagreement is dropped rather
- * than reconciled: enabling the row on the projection's host would open a tile
- * bound to a machine the process is not running on. A `null` projection host is
- * the legacy pre-`hostId` chat record, which names no host to disagree with, so
- * it keeps the wire owner's.
- */
+/** An epic's projection spans hosts, and an agent id is host-minted rather than globally unique, so a
+ * projection entry only describes this row when it names the same host the process was reported from. */
 function indexLiveAgentsByOwner(
   refs: readonly LiveAgentRef[],
   agents: readonly (RegisteredEpicLiveAgent | null)[],
@@ -4455,11 +4081,8 @@ function indexLiveAgentsByOwner(
   return byOwner;
 }
 
-/**
- * The record behind an agent row: the live projection first (it is the one
- * source that knows about agents this window never created), the canvas's own
- * record list as the legacy fallback.
- */
+/** The record behind an agent row: the live projection first (it is the one source that knows about agents this
+ * window never created), the canvas's own record list as the legacy fallback. */
 function buildRecordByOwner(
   canvas: CanvasResourceSnapshot,
   liveAgentByOwner: ReadonlyMap<string, LiveOwnerAgent>,
@@ -4601,12 +4224,8 @@ function openResourceOwner(args: {
 
   const snapshot = args.row.snapshot;
 
-  // No live tile, but the tile's payload survived its close (same store the
-  // notification reopen path reads). Reopen the preserved ref in its original
-  // tab - `setActiveTab` reinserts a hidden tab into the strip, and the
-  // open-tile preparation re-adds the tile to that tab's canvas. This is the
-  // only reopen path for terminals, whose refs (cwd, title) cannot be rebuilt
-  // from the resource snapshot or an artifact record.
+  // This is the only reopen path for terminals, whose refs (cwd, title) cannot be rebuilt from the resource
+  // snapshot or an artifact record.
   const closedTile = args.row.closedTile;
   if (closedTile !== null) {
     if (
@@ -4639,9 +4258,8 @@ function openResourceOwner(args: {
     return true;
   }
 
-  // A shell has no canvas node to reopen - its output window is built from the
-  // command id alone, and the canvas's content-id dedup turns "open" into
-  // "focus the one that is already there".
+  // A shell has no canvas node to reopen - its output window is built from the command id alone, and the
+  // canvas's content-id dedup turns "open" into "focus the one that is already there".
   if (snapshot.owner.kind === "managed-command") {
     commitOwnerFocus({
       epicId: snapshot.owner.epicId,
@@ -4654,10 +4272,8 @@ function openResourceOwner(args: {
           commandId: snapshot.owner.ownerId,
           hostId: snapshot.owner.hostId,
         }),
-        // Same glance every other shell door is (see
-        // `useOpenManagedCommandOutput`): jumping from a resource row to the
-        // log is a look, and the strip should not keep it unasked. `single` is
-        // the gesture that lands a preview tab.
+        // Same glance every other shell door is (see `useOpenManagedCommandOutput`): jumping from a resource row to
+        // the log is a look, and the strip should not keep it unasked.
         gesture: "single",
       },
       navigate: args.navigate,
@@ -4675,9 +4291,8 @@ function openResourceOwner(args: {
   ) {
     return false;
   }
-  // The row's record is the live projection's agent when this window has the
-  // epic mounted (an agent created elsewhere has no other representation
-  // here), else the canvas's own legacy record.
+  // The row's record is the live projection's agent when this window has the epic mounted (an agent created
+  // elsewhere has no other representation here), else the canvas's own legacy record.
   const record = args.row.record;
   if (record === null) return false;
   const recordType = record.type;
@@ -4693,10 +4308,8 @@ function openResourceOwner(args: {
         id: record.id,
         instanceId: uuidv4(),
         type: recordType,
-        // The tile's `name` is the fallback `useEpicTabDisplayTitle` lands on
-        // when the live doc has no title, and an untitled agent projects as
-        // `null` there - so an unnamed record has to carry the render-tier
-        // fallback itself, exactly as the palette's openers do.
+        // The tile's `name` is the fallback `useEpicTabDisplayTitle` lands on when the live doc has no title, and an
+        // untitled agent projects as `null` there.
         name: displayTitle(record.name, "agent"),
         hostId: record.hostId,
       },
@@ -4711,19 +4324,8 @@ function openResourceOwner(args: {
   return true;
 }
 
-/**
- * Commits an owner's focus target through the nested-focus opener boundary.
- *
- * Same-route (the owner's tab is already the active route) delegates to
- * `useEpicNestedFocusNavigation` so the search patch, duplicate-target skip,
- * and desktop-only gating stay identical to every other in-place focus
- * change in the app.
- *
- * Cross-route passes an unresolved preparation payload to the top-level
- * navigation controller. The controller resolves/creates and activates the
- * exact header tab first, then prepares nested focus and issues one correlated
- * route navigation carrying that target.
- */
+/** Same-route (the owner's tab is already the active route) delegates to `useEpicNestedFocusNavigation` so the
+ * search patch, duplicate-target skip. */
 function commitOwnerFocus(args: {
   readonly epicId: string;
   readonly tabId: string | null;
@@ -4863,33 +4465,20 @@ function isOwnerNodeRef(ref: EpicCanvasTileRef): ref is EpicNodeRef {
 }
 
 function ownerKindLabel(kind: ResourceOwnerKindWireV14): string {
-  // Several owner kinds render side by side here, so a raw Terminal has to stay
-  // distinguishable from an Agent using the Terminal interface - qualification
-  // is warranted. It uses the interface axis rather than coining "Chat agent" /
-  // "Terminal agent" as sibling nouns, which would restate the entity model the
-  // rename removes.
+  // It uses the interface axis rather than coining "Chat agent" / "Terminal agent" as sibling nouns, which would
+  // restate the entity model the rename removes.
   if (kind === "terminal") return "Terminal";
   if (kind === "terminal-agent") return "Agent (Terminal)";
   if (kind === "managed-command") {
-    // The KIND, not this shell's name: it sits in a column of classes
-    // ("Terminal", "Agent (Chat)"), and a monitor is a shell. The row title
-    // beside it is where the monitor flag speaks.
+    // The kind, not this shell's name: it sits in a column of classes ("Terminal", "Agent (Chat)"), and a monitor
+    // is a shell.
     return MANAGED_COMMAND_NOUN;
   }
   return "Agent (Chat)";
 }
 
-/**
- * Row title for a managed command. Its own description is the only name it
- * has - it is not a canvas node, so none of the tile/record fallbacks the
- * other owner kinds walk apply to it.
- *
- * Straight through `managedCommandTitle`, exactly as the Shells list names the
- * same shell: the owner frame carries `monitoring` precisely so one process
- * tree is not labelled two different ways. An owner the host sent without
- * naming (nothing does today) falls back to the umbrella noun rather than to a
- * third one - "Managed command" is the term the UI does not use.
- */
+/** An owner the host sent without naming (nothing does today) falls back to the umbrella noun rather than to a
+ * third one - "Managed command" is the term the UI does not use. */
 function managedCommandLabel(
   managedCommand: ManagedCommandOwnerWire | null,
 ): string {
@@ -4897,10 +4486,8 @@ function managedCommandLabel(
   return managedCommandTitle(managedCommand);
 }
 
-// Subtitle beside the provider icon. Always non-empty so the icon never sits
-// alone on its line: a known provider shows its friendly name ("Claude Code"),
-// a harness-less owner (plain terminal) keeps its kind label; the running
-// process name trails either when present.
+// Always non-empty so the icon never sits alone on its line: a known provider shows its friendly name ("Claude
+// Code"), a harness-less owner (plain terminal) keeps its kind label.
 function harnessProviderSubtitle(
   harnessId: string | null,
   kind: ResourceOwnerKindWireV14,
@@ -4917,12 +4504,8 @@ function harnessProviderSubtitle(
   return activeProcessName === null ? base : `${base} · ${activeProcessName}`;
 }
 
-/**
- * The owner's tile ref for labelling - the live canvas tile when one is
- * open, otherwise the preserved closed-tile payload's ref, so a closed
- * terminal keeps its manually-set title readable after the tile leaves the
- * canvas.
- */
+/** The owner's tile ref for labelling - the live canvas tile when one is open, otherwise the preserved
+ * closed-tile payload's ref. */
 function ownerTileRef(
   location: OpenOwnerLocation | null,
   closedTile: ClosedOwnerTile | null,
@@ -4947,9 +4530,8 @@ function ownerLabel(
     });
   }
   if (snapshot.owner.kind === "chat") {
-    // Durable Agent read surface: an untitled Chat-interface Agent falls back
-    // to "Untitled agent" (this light surface carries no first-user-message to
-    // derive from).
+    // Durable Agent read surface: an untitled Chat-interface Agent falls back to "Untitled agent" (this light
+    // surface carries no first-user-message to derive from).
     return displayTitle(
       liveArtifactTitle || ref?.name || record?.name || "",
       "agent",
@@ -4995,12 +4577,7 @@ function processLabel(process: ResourceProcessSnapshotWireV15): string {
   return `${process.name} (${process.pid})`;
 }
 
-/**
- * Chromium's descriptor labels are intentionally short and semantic, so two
- * renderer (or other same-role) rows need their numeric identity in controls'
- * accessible names. Keep the PID out of the visible label: it is an action
- * disambiguator, not display copy.
- */
+/** Keep the PID out of the visible label: it is an action disambiguator, not display copy. */
 function processAccessibleLabel(
   process: ResourceProcessSnapshotWireV15,
 ): string {
@@ -5042,12 +4619,8 @@ function processLeafLabel(
   return leafLabelFrom(processLabel(process), hiddenCount);
 }
 
-/**
- * Compact label for an unattributed (Other) root: the executable basename
- * rather than the full command path, which for provider binaries is a long
- * install path that adds no signal at the collapsed level. The full command
- * remains visible on the expanded row.
- */
+/** Compact label for an unattributed (Other) root: the executable basename rather than the full command path,
+ * which for provider binaries is a long install path that adds no signal at the collapsed level. */
 function processCompactLeafLabel(
   process: ResourceProcessSnapshotWireV15,
   hiddenCount: number,
@@ -5072,13 +4645,8 @@ function processRowKey(process: ResourceProcessSnapshotWireV15): string {
   return `${process.rootPid}:${process.pid}`;
 }
 
-/**
- * Comparator for sibling process rows. Sorts on the SUBTREE aggregates, not a
- * process's own usage, so a parent with a heavy descendant bubbles above a
- * lighter sibling even while collapsed - matching the inclusive values the
- * collapsed rows display. "tab" has no meaning for OS processes; null keeps
- * the host's wire order.
- */
+/** Sorts on the subtree aggregates, not a process's own usage, so a parent with a heavy descendant bubbles
+ * above a lighter sibling even while collapsed - matching the inclusive values the collapsed rows display. */
 function processRowComparator(
   sortOption: ResourceSortOption,
 ): ((a: ProcessDisplayRow, b: ProcessDisplayRow) => number) | null {
@@ -5132,11 +4700,8 @@ function buildProcessRows(input: {
     return byParent;
   }, new Map<number, ResourceProcessSnapshotWireV15[]>());
 
-  // Rootness is purely structural: parentless, or parent outside this list.
-  // `pid === rootPid` must NOT qualify — an owner can carry a second tracked
-  // root that is an OS descendant of its first (e.g. a harness child under the
-  // owner's PTY), and counting it as a root while `childrenByParent` also
-  // attaches it under its in-list parent would double-count its subtree.
+  // `pid === rootPid` must not qualify - an owner can carry a second tracked root that is an OS descendant of
+  // its first (e.g. a harness child under the owner's PTY).
   const roots = processes.filter(
     (process) =>
       process.parentPid === null || !processByPid.has(process.parentPid),

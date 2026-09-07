@@ -3,11 +3,8 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 
-// `subscribeStreamWakeReconnect` registers the `window 'online'` listener first,
-// then the OS-resume subscription. These tests pin that the first listener is
-// rolled back if the second subscription throws (otherwise the disposer is never
-// returned and the 'online' listener leaks), and that the happy-path disposer
-// tears down both.
+// `subscribeStreamWakeReconnect` registers the `window 'online'` listener first, then the OS-resume subscription.
+// These tests pin that the first listener is rolled back if the second subscription throws (otherwise the disposer is never returned and the 'online' listener leaks), and that the happy-path disposer tears down both.
 const mocks = vi.hoisted(() => ({
   onWakeReconnect: vi.fn(),
   offOnline: vi.fn(),
@@ -37,9 +34,8 @@ const LOCAL_TARGET: HostDirectoryEntry = {
 };
 
 function makeClient() {
-  // A real (inert) WsStreamClient: it dials nothing until `subscribe()` is
-  // called, and `subscribeStreamWakeReconnect` only captures it in callbacks
-  // that never fire here. Built via the real factory to avoid an unsafe cast.
+  // A real (inert) WsStreamClient: it dials nothing until `subscribe()` is called, and `subscribeStreamWakeReconnect` only captures it in callbacks that never fire here.
+  // Built via the real factory to avoid an unsafe cast.
   const client = buildHostStreamClient({
     target: LOCAL_TARGET,
     userId: "user-a",
@@ -76,9 +72,7 @@ beforeEach(() => {
   mocks.onWakeReconnect.mockReset();
   mocks.offOnline.mockReset();
   mocks.onWakeReconnect.mockReturnValue(mocks.offOnline);
-  // The sweep's install flag is module-level and would otherwise survive from
-  // whichever test subscribed first, making every later case here see one
-  // fewer registration than production has.
+  // The sweep's install flag is module-level and would otherwise survive from whichever test subscribed first, making every later case here see one fewer registration than production has.
   resetRemoteResumeSweepForTest();
 });
 
@@ -158,9 +152,8 @@ describe("subscribeStreamWakeReconnect", () => {
       },
     });
 
-    // At the gate: the socket did not survive that background; the probe is
-    // skipped outright. The two arms MUST map differently - a deleted gate
-    // collapses them into one reading and this pair fails.
+    // At the gate: the socket did not survive that background; the probe is skipped outright.
+    // The two arms MUST map differently - a deleted gate collapses them into one reading and this pair fails.
     runnerHost.emitSystemResumed({
       backgroundedForMs: WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS,
     });
@@ -213,10 +206,7 @@ describe("subscribeStreamWakeReconnect", () => {
     expect(resumeSpy).toHaveBeenCalledTimes(2);
 
     subscribeStreamWakeReconnect(makeClient(), runnerHost);
-    // The second client brings its OWN subscription - per-client wake stays
-    // per-client, because the local transport's re-dial belongs to the client
-    // that owns it - but the sweep is not installed again. Three, not four:
-    // the invariant is one sweep, not one subscription.
+    // The second client brings its OWN subscription - per-client wake stays per-client, because the local transport's re-dial belongs to the client that owns it - but the sweep is not installed again.
     expect(resumeSpy).toHaveBeenCalledTimes(3);
   });
 });

@@ -34,16 +34,12 @@ import { deriveInitials } from "./mention-utils";
 
 export interface CommentThreadCardProps {
   readonly epicId: string;
-  /** The host serving the surface this card was mounted from - the Epic
-   *  session's client under the sidebar. Passed rather than read here so the
-   *  card stays mountable from a tile too (D15). */
+  /** Passed rather than read here so the card stays mountable from a tile too. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   readonly thread: CommentThreadWire;
-  /** Logged-in user id; resolved upstream from the auth profile against the
-   *  collaborators list. `null` while unresolved (rare; the sidebar should
-   *  hide actions until it lands). */
+  /** `null` while unresolved (rare; the sidebar should hide actions until it lands). */
   readonly currentUserId: string | null;
   /** True when the caller's role permits resolve / delete-thread. Author of
    *  the thread is always permitted regardless of role. */
@@ -54,20 +50,8 @@ export interface CommentThreadCardProps {
   readonly onActivateAnchor: () => void;
 }
 
-/**
- * Single comment thread shown in the sidebar.
- *
- * Layout:
- *   - quoted snapshot (italic, line-clamped) - frozen at thread creation
- *     time; never re-derived from the live document so anchor edits never
- *     mutate the visible quote
- *   - comments stack (oldest first) with per-comment edit / delete kebab
- *   - inline reply composer at the bottom (only when expanded)
- *   - "Anchor missing" badge when the parent reports `hasAnchor=false`
- *
- * Mutation invalidation is handled by the mutation hooks themselves; this
- * component only kicks them off and reacts to `isPending` for spinners.
- */
+/** Layout: - quoted snapshot (italic, line-clamped) - frozen at thread creation time; never re-derived from the
+ * live document so anchor edits never mutate the visible quote. */
 export function CommentThreadCard(props: CommentThreadCardProps) {
   const {
     epicId,
@@ -167,10 +151,8 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
     >
       <button
         type="button"
-        // The card's expand/collapse control. Named as a slot because it is not
-        // a `ui/button` and the coarse-pointer hit-slop rules address controls
-        // by slot; its own box is a single line of meta text on a thread with no
-        // quoted snapshot, well under the 44px touch target.
+        // Named as a slot because it is not a `ui/button` and the coarse-pointer hit-slop rules address controls by
+        // slot.
         data-slot="comment-thread-toggle"
         onClick={handleHeaderClick}
         aria-expanded={isExpanded}
@@ -384,11 +366,7 @@ function CommentEntry(props: CommentEntryProps) {
   );
 }
 
-/**
- * Approximate `now - timestamp` formatter used by both the sidebar and the
- * hover popover. Keeps the bundle small (no `date-fns` for one helper) and
- * aligns with the granularity Views uses ("just now / 5m / 2h / 3d / Apr 12").
- */
+/** Approximate `now - timestamp` formatter used by both the sidebar and the hover popover. */
 function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
   const diff = Math.max(0, now - timestamp);

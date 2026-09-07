@@ -11,19 +11,7 @@ import { cn } from "@/lib/utils";
 const AGENT_CURSOR_LINGER_MS = 2_000;
 
 /**
- * The agent's pointer, drawn over the screencast surface.
- *
- * Plane-agnostic on purpose: the host sends coordinates normalized to the
- * geometry the viewer is looking at, and both surfaces (`<img>` and `<video>`)
- * are `object-contain` inside this same box, so one `frameSize` serves JPEG and
- * video alike. The contain-fit is CSS rather than a measurement: the inner box
- * is the painted rectangle (container-query units clamp it on whichever axis
- * runs out first, `margin: auto` centres it), so a normalized coordinate is
- * just a percentage inside it and a tile resize needs no code at all.
- *
- * Purely decorative - `pointer-events: none`, no arm/epoch involvement, and it
- * dies with whichever subscription feeds it: the tile's own for a tile, PiP's
- * own for the PiP mirror, which mounts this too.
+ * The contain-fit is CSS rather than a measurement: the inner box is the painted rectangle (container-query units clamp it on whichever axis runs out first, `margin: auto` centres it), so a normalized coordinate is just a percentage inside it and a tile resize needs no code at all.
  */
 export function AgentCursorOverlay(props: {
   readonly cursor: AgentCursorPosition | null;
@@ -32,14 +20,7 @@ export function AgentCursorOverlay(props: {
   const { cursor, frameSize } = props;
   const [pressedId, setPressedId] = useState<number | null>(null);
 
-  // Adjusted during render (React's documented way to derive state from a
-  // changing prop) rather than in an Effect: a press must not flash one frame
-  // without its ripple.
-  //
-  // No cursor clears the latch, because cursor ids are per-SELECTION counters
-  // that restart at 1: PiP mounts this overlay once and keeps it across tab
-  // switches, so a retained `pressedId` of 1 would suppress the very first
-  // press of the next tab.
+  // Adjusted during render (React's documented way to derive state from a changing prop) rather than in an Effect: a press must not flash one frame without its ripple.
   if (cursor === null) {
     if (pressedId !== null) setPressedId(null);
   } else if (cursor.type === "down" && pressedId !== cursor.id) {
@@ -80,10 +61,7 @@ export function AgentCursorOverlay(props: {
 }
 
 /**
- * Remounted per cursor id by its `key`, which is what restarts the linger: the
- * cursor fades only once the agent has stopped pointing for
- * {@link AGENT_CURSOR_LINGER_MS}, and every new frame is a fresh mount with a
- * fresh timer.
+ * Remounted per cursor id by its `key`, which is what restarts the linger: the cursor fades only once the agent has stopped pointing for {@link AGENT_CURSOR_LINGER_MS}, and every new frame is a fresh mount with a fresh timer.
  */
 function AgentCursorMarker(props: {
   readonly label: string;

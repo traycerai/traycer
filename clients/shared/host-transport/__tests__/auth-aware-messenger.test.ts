@@ -41,7 +41,7 @@ function rpcError(): HostRpcError {
 }
 
 // A transient host-side rejection (JWKS fetch timeout): wire `code` stays
-// UNAUTHORIZED but `fatalDetails.retryable` marks it recoverable-without-authn.
+// unauthorized but `fatalDetails.retryable` marks it recoverable-without-authn.
 function retryableUnauthorizedError(): HostRpcError {
   return new HostRpcError({
     code: "UNAUTHORIZED",
@@ -58,11 +58,8 @@ function retryableUnauthorizedError(): HostRpcError {
   });
 }
 
-// These tests drive only the unary `request` path; the wrapper routes the two
-// methods independently. Stub the long-poll variant with a throwing mock rather
-// than a bare `vi.fn()` (which resolves `undefined`) so an accidental route of
-// `request` through it fails loudly instead of silently passing on an invalid
-// result.
+// These tests drive only the unary `request` path; the wrapper routes the two methods independently.
+// Stub the long-poll variant with a throwing mock rather than a bare `vi.fn()` (which resolves `undefined`) so an accidental route of `request` through it fails loudly instead of silently passing on an invalid result.
 function uncalledLongPoll() {
   return vi.fn(() => {
     throw new Error(
@@ -180,7 +177,7 @@ describe("createAuthAwareMessenger", () => {
         authority: authorityFor(lease),
       })
       .catch((e: unknown) => e);
-    // The typed UNAUTHORIZED must survive so recovery keyed on `code` still works.
+      // The typed unauthorized must survive so recovery keyed on `code` still works.
     expect(thrown).toBe(original);
     expect((thrown as HostRpcError).code).toBe("UNAUTHORIZED");
   });

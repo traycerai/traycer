@@ -19,14 +19,8 @@ import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-c
 import { cn } from "@/lib/utils";
 import { deriveInitials } from "./mention-utils";
 
-/**
- * Imperative handle the Tiptap suggestion `render()` lifecycle calls into so
- * arrow / Enter / Escape keystrokes captured by the editor can drive the
- * floating list without React having to own the keymap. The composer wires
- * the ref through `useImperativeHandle` and the suggestion plugin's
- * `onKeyDown` callback returns whatever this handle returns - `true` to
- * swallow, `false` to fall through.
- */
+/** Imperative handle the Tiptap suggestion `render` lifecycle calls into so arrow / Enter / Escape keystrokes
+ * captured by the editor can drive the floating list without React having to own the keymap. */
 export interface MentionSuggestionListHandle {
   onKeyDown(event: KeyboardEvent): boolean;
 }
@@ -38,18 +32,8 @@ export interface MentionSuggestionListProps {
   readonly ref?: Ref<MentionSuggestionListHandle>;
 }
 
-/**
- * Floating list rendered into `document.body` while a `@` mention query is
- * active inside the comment composer. The list itself is a thin presentation
- * layer - the composer owns lifetime, the suggestion plugin owns input
- * dispatch.
- *
- * Positioning uses `@floating-ui/dom` with `autoUpdate` so the popover stays
- * pinned to the caret while the user types or scrolls. We deliberately don't
- * use `cmdk`'s `Command` here: `cmdk` insists on owning the focused element
- * (a hidden input), but the editor must keep DOM focus so its key handlers
- * keep firing. A handcrafted listbox sidesteps that conflict.
- */
+/** We deliberately don't use `cmdk`'s `Command` here: `cmdk` insists on owning the focused element (a hidden
+ * input), but the editor must keep DOM focus so its key handlers keep firing. */
 export function MentionSuggestionList({
   items,
   command,
@@ -77,9 +61,8 @@ function MentionSuggestionListContent({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  // Render into the pane's portal host (not `document.body`), so a mention
-  // list opened inside a background split pane's comment composer is hidden +
-  // inert with that pane instead of escaping over the focused partner.
+  // Render into the pane's portal host (not `document.body`), so a mention list opened inside a background split
+  // pane's comment composer is hidden + inert with that pane instead of escaping over the focused partner.
   const paneContainer = usePanePortalContainer();
 
   useImperativeHandle(
@@ -176,13 +159,8 @@ function MentionSuggestionListContent({
                 // `border-transparent` in the base so the selected border
                 // below does not shift the row.
                 "flex w-full items-center gap-2 rounded-sm border border-transparent px-2 py-1.5 text-left outline-none",
-                // The ACTIVE option (keyboard navigation) takes the same
-                // treatment `ui/command.tsx` gives its selected item, rather
-                // than a heavier foreground alpha: `--primary` never
-                // collapses into a surface token in any theme, and a
-                // selection this list drives with ArrowUp/Down has to be
-                // unmistakable next to the plain hover tint below - which a
-                // foreground alpha one step up from it would not be.
+                // The active option (keyboard navigation) takes the same treatment `ui/command.tsx` gives its selected item,
+                // rather than a heavier foreground alpha.
                 "data-[selected=true]:border-primary/35 data-[selected=true]:bg-primary/12 data-[selected=true]:text-foreground data-[selected=true]:shadow-sm",
                 "hover:bg-foreground/6",
               )}

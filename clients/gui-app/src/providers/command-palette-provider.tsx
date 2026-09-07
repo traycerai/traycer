@@ -1,11 +1,4 @@
-/**
- * Mounts the command palette exactly once, beside the keybinding
- * provider, and registers the `app.palette.open` action handler so
- * the chord is live anywhere the app shell is rendered. Also
- * publishes the shared router adapter via
- * `CommandPaletteRouterContext` so sources can dispatch through the
- * same narrow seam the keybinding dispatcher uses.
- */
+/** Mount the palette once and register app.palette.open. Sources dispatch through CommandPaletteRouterContext, same seam as the keybinding dispatcher. */
 import { useMemo, type ReactNode } from "react";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
@@ -36,14 +29,7 @@ interface CommandPaletteRootProps {
   readonly children: ReactNode;
 }
 
-/**
- * Test seam - accepts a pre-built adapter so tests don't construct
- * a full TanStack `AppRouter`, and mounts `CommandPaletteTestShell`
- * so they don't need `HostRuntimeProvider` / `QueryClientProvider`
- * just to exercise palette mechanics. Production always goes through
- * `CommandPaletteProvider`, which renders the full palette with
- * every source (including React-backed ones).
- */
+/** Test seam: pre-built adapter + CommandPaletteTestShell. Production always goes through CommandPaletteProvider. */
 export function CommandPaletteRoot(props: CommandPaletteRootProps) {
   return (
     <CommandPaletteRouterContext.Provider value={props.adapter}>

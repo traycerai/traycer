@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 
-// Amended decision 3 (added after PR #533 review): structural validity (a
-// string) isn't semantic validity - `parseGlobalShortcutIntent` must reject a
-// non-canonical chord string (e.g. "mod+", wrong token order, an unsupported
-// key) with a typed rejection at the IPC boundary, rather than letting it
-// reach `applyGlobalShortcutIntent`/`reconcile()`/Electron unchanged.
 
 const shortcuts = vi.hoisted(() => ({
   applyGlobalShortcutIntent: vi.fn(),

@@ -4,31 +4,10 @@ import type { DetectedShell, WslHealth } from "./schema";
 
 /**
  * Liveness probe behind `DetectedShell.wslHealth`.
- *
- * On Windows 11 `System32\wsl.exe` exists on every machine - when the WSL
- * feature was never installed it is only the installer stub, and EVERY
- * invocation (including spawning it as a terminal shell) prints usage text and
- * exits with code 1. A file-existence check therefore says nothing about
- * whether WSL can host a terminal; only asking wsl.exe itself does.
- *
- * Classification is deliberately locale-independent - exit codes and line
- * counts, never message text:
- *
- *   1. `wsl --list --quiet` exits 0 and names at least one distribution
- *      → healthy (`undefined`).
- *   2. otherwise `wsl --status` exits 0 → WSL runs but nothing is registered
- *      (`"no-distro"`).
- *   3. otherwise → the installer stub, or wsl.exe too old to answer
- *      (`"not-installed"`; pre-`--status` WSL without a distro lands here too,
- *      where the remedy - `wsl --install` - is the same).
+ * Classification is deliberately locale-independent - exit codes and line counts, never message text
  */
 
 const PROBE_TIMEOUT_MS = 3_000;
-/**
- * Coalesces the burst of `listShells` calls a Settings open can trigger while
- * staying short enough that the panel's explicit "re-detect" control observes
- * a just-installed WSL rather than a memoised verdict.
- */
 const MEMO_TTL_MS = 5_000;
 
 interface WslRunResult {
@@ -44,10 +23,8 @@ export type WslRunner = (
 ) => Promise<WslRunResult>;
 
 /**
- * wsl.exe historically writes UTF-16LE regardless of console code page (the
- * `WSL_UTF8=1` env below asks newer builds for UTF-8, but the installer stub
- * and older builds ignore it). ASCII-range UTF-16LE is riddled with NUL bytes
- * and valid UTF-8 never contains one, so a single NUL check picks the decoder.
+ * wsl.exe historically writes UTF-16LE regardless of console code page (the `WSL_UTF8=1` env below asks newer builds for UTF-8, but the installer stub and older builds ignore it).
+ * ASCII-range UTF-16LE is riddled with NUL bytes and valid UTF-8 never contains one, so a single NUL check picks the decoder.
  */
 export function decodeWslOutput(raw: Buffer): string {
   return raw.includes(0) ? raw.toString("utf16le") : raw.toString("utf8");
@@ -73,11 +50,7 @@ const runWsl: WslRunner = (wslPath, args) =>
     );
   });
 
-/**
- * `undefined` = WSL can host a terminal; see the module doc for the ladder.
- * The runner is explicit (tests pass a fake; production callers go through
- * `probeWslHealthCached`, which binds the real spawn).
- */
+/** `undefined` = WSL can host a terminal; see the module doc for the ladder. */
 export async function probeWslHealth(
   wslPath: string,
   run: WslRunner,
@@ -97,9 +70,7 @@ const memo = new Map<
 >();
 
 /**
- * `probeWslHealth` with in-flight coalescing and a short TTL, keyed
- * case-insensitively (Windows paths). The promise is memoised, not the value,
- * so concurrent list calls share one spawn.
+ * `probeWslHealth` with in-flight coalescing and a short TTL, keyed case-insensitively (Windows paths).
  */
 export function probeWslHealthCached(
   wslPath: string,
@@ -123,19 +94,8 @@ export type WslHealthProbe = (
 ) => Promise<WslHealth | undefined>;
 
 /**
- * Attaches {@link DetectedShell.wslHealth} to every `wsl.exe` row whose WSL
- * cannot host a terminal, so pickers can warn (and refuse) instead of offering
- * a shell that prints usage text and exits.
- *
- * Probed PER DISTINCT PATH, never once for the basename: an added row may point
- * at a different `wsl.exe` than System32's (a wrapper, a copy, a Sysnative
- * view), and answering for one with another's verdict would flag a working
- * shell or clear a broken one. Distinct paths are rare - normally exactly one -
- * and the caching prober is keyed by path, so the common case is one spawn.
- *
- * Best-effort like the rest of listing: a probe that cannot answer (rejects, or
- * resolves `undefined`) leaves its rows unannotated rather than failing the
- * list. Callers own the platform gate; this is pure mapping.
+ * Attaches {@link DetectedShell.wslHealth} to every `wsl.exe` row whose WSL cannot host a terminal, so pickers can warn (and refuse) instead of offering a shell that prints usage text and exits.
+ * Best-effort like the rest of listing: a probe that cannot answer (rejects, or resolves `undefined`) leaves its rows unannotated rather than failing the list.
  */
 export async function annotateWslHealth(
   rows: readonly DetectedShell[],

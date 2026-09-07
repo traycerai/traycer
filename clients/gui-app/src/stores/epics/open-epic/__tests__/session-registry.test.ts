@@ -21,12 +21,8 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
-// ── No-op stream-client factory ───────────────────────────────────────────────
-// Honestly-typed, zero-implementation factory. No snapshots arrive - the
-// registry no longer reads `handle.isClean()` for its cap decision (see
-// `holdsNothingToLose` in the production module); it reads `store.subscribe()`
-// and the store's own `isDirty` / `unsyncedQueueSize` / `writeCommands`
-// fields, plus `dispose()`.
+// ── No-op stream-client factory ─────────────────────────────────────────────── Honestly-typed,
+// zero-implementation factory.
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -37,18 +33,8 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-// ── TestHandle ────────────────────────────────────────────────────────────────
-// Wraps a real OpenedStoreForTest so the registry tests can:
-//   - observe dispose() calls via the `disposed` flag
-//   - fire store subscribers via notify() to exercise auto-prune
-//
-// Eviction no longer reads `isClean()` (see `holdsNothingToLose` in the
-// production module), so "clean" / "dirty" are driven on the real store via
-// `base.store.setState(...)` rather than through a fake override. The second
-// constructor argument sets `isDirty` at build time as the simplest way to
-// make a handle non-evictable; a test that needs a more specific reason (a
-// nonzero `unsyncedQueueSize`, a pending `writeCommands` entry, a
-// `hostTransportStatus`) sets it explicitly afterward through `th.handle.store`.
+// ── TestHandle ──────────────────────────────────────────────────────────────── Wraps a real
+// OpenedStoreForTest so the registry tests can:
 
 interface TestHandle {
   readonly handle: OpenedStoreForTest;
@@ -60,9 +46,8 @@ function buildTestHandle(id: string, dirty: boolean): TestHandle {
   const base = openStoreForTest({
     epicId: id,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a
+    // `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -80,17 +65,8 @@ function buildTestHandle(id: string, dirty: boolean): TestHandle {
   };
 
   const wrappedHandle: OpenedStoreForTest = {
-    // SPREAD, rather than a member-by-member forward. The comment below has
-    // always said every other member must be the harness's own; a spread is
-    // that sentence as code, and a hand-written list is the same sentence as a
-    // promise that expires the next time the interface grows a member - which
-    // is how this line came to need editing at all.
+    // SPREAD, rather than a member-by-member forward.
     ...base,
-    // Re-declared as getters ON TOP of the spread, because these three are the
-    // members a spread would get WRONG rather than merely miss: the harness
-    // declares them as getters precisely because a replica replacement swaps
-    // the live `Y.Doc` and `Awareness`, and a spread freezes whichever pair
-    // existed at wrap time. `store` follows them for the same reason.
     get doc() {
       return base.doc;
     },
@@ -106,10 +82,8 @@ function buildTestHandle(id: string, dirty: boolean): TestHandle {
     ...INERT_ROOT_STATE_PORT,
   };
 
-  // `isDirty` is the simplest lever on `holdsNothingToLose`: setting it makes
-  // the session non-evictable regardless of queue size or write commands, and
-  // leaving it false keeps the store's defaults (isDirty / unsyncedQueueSize /
-  // writeCommands all empty), which is already evictable.
+  // `isDirty` is the simplest lever on `holdsNothingToLose`: setting it makes the session
+  // non-evictable regardless of queue size or write commands, and leaving it false keeps the store's
   if (dirty) {
     base.store.setState({ isDirty: true });
   }
@@ -122,10 +96,8 @@ function buildTestHandle(id: string, dirty: boolean): TestHandle {
     set disposed(value: boolean) {
       disposed = value;
     },
-    // Fire the store's subscribers so the registry's auto-prune subscription
-    // triggers, mirroring what production's store-update cycle does.
-    // Spread to produce a new object reference so Zustand's equality check
-    // treats this as a change and notifies all subscribers.
+    // Fire the store's subscribers so the registry's auto-prune subscription triggers, mirroring what
+    // production's store-update cycle does.
     notify: () => {
       base.store.setState({ ...base.store.getState() });
     },
@@ -139,15 +111,7 @@ function h(t: TestHandle): OpenedStoreForTest {
   return t.handle;
 }
 
-// Overrides a built handle's `hostId` for a cross-host scenario. Every OTHER
-// member - including `doc` / `awareness` / `store`, which `buildTestHandle`
-// already wraps as getters because a replica replacement can swap them
-// mid-life - stays LIVE-linked to `th`, the same way `buildTestHandle` stays
-// live-linked to its own `base`: a plain `{...th.handle, hostId}` spread
-// would freeze whichever values those getters returned at THIS call, not
-// track them, and a plain `{...th}` would do the same to `disposed`, which
-// `buildTestHandle` also declares as a getter/setter pair over a closure
-// variable.
+// Overrides a built handle's `hostId` for a cross-host scenario.
 function withHostId(th: TestHandle, hostId: string): TestHandle {
   return {
     get disposed() {
@@ -173,13 +137,8 @@ function withHostId(th: TestHandle, hostId: string): TestHandle {
   };
 }
 
-// The cap's `epicIsBusy` guard fails CLOSED when the activity plane cannot
-// vouch for "no agent is working": every epic reads busy until the plane
-// answers. Puts the plane into the answering state before each test so the
-// existing cap/prune fixtures (which never touch agent activity) exercise
-// `holdsNothingToLose` rather than being blocked by a blind plane from the
-// store's own "connecting" default. Tests that need the plane blind, or that
-// mark agents working, override this afterward.
+// The cap's `epicIsBusy` guard fails CLOSED when the activity plane cannot vouch for "no agent is
+// working": every epic reads busy until the plane answers.
 beforeEach(() => {
   __setAgentActivityPlaneAnsweringForTests();
 });
@@ -291,13 +250,6 @@ describe("OpenEpicSessionRegistry", () => {
   });
 
   it("evicts a clean, loaded, unmounted session whose transport is reconnecting", () => {
-    // The transport is NOT part of the cap's data-loss gate
-    // (`holdsNothingToLose` reads `isDirty` / `writeCommands` /
-    // `unsyncedQueueSize` only) - a `reconnecting` transport on an otherwise
-    // clean, loaded session must not block eviction, unlike the old
-    // `isClean()`-based gate, which also required an OPEN transport and left
-    // every reconnecting epic un-evictable forever (the field report this
-    // change exists to fix).
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const reconnecting = buildTestHandle("e0", false);
     reconnecting.handle.store.setState({
@@ -321,13 +273,8 @@ describe("OpenEpicSessionRegistry", () => {
   });
 
   it("keeps a session on another host while the union is narrow, even with an open transport", () => {
-    // The union is the SERVING host's answer, so a narrow one (no cloud link)
-    // can prove an epic idle only for a session bound to THAT host - this
-    // registry can hold sessions bound to others, with no OTHER way to check
-    // them against it. This is the fix for the gap `epicIsBusy`'s first cut
-    // left open and documented: an open transport used to make a session
-    // evictable regardless of which host it was bound to, because the
-    // plane's own map had no per-session host to compare against.
+    // The union is the SERVING host's answer, so a narrow one (no cloud link) can prove an epic idle
+    // only for a session bound to THAT host - this registry can hold sessions bound to others, with no
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "local",
@@ -351,19 +298,15 @@ describe("OpenEpicSessionRegistry", () => {
       h(withHostId(buildTestHandle("e5", false), "host-serving")),
     );
 
-    // `e0` is the LRU entry, but the walk SKIPS it (its host is outside the
-    // union's reach) and evicts the next eligible LRU entry instead - the cap
-    // stays enforced, just not against the one session it cannot vouch for.
+    // `e0` is the LRU entry, but the walk SKIPS it (its host is outside the union's reach) and evicts
+    // the next eligible LRU entry instead - the cap stays enforced, just not against the one session
     expect(elsewhere.disposed).toBe(false);
     expect(registry.size()).toBe(5);
     expect(onServingHost[0].disposed).toBe(true);
   });
 
   it("still evicts a session on the union's own serving host while the union stays narrow", () => {
-    // The narrow-union arm is scoped to sessions on a DIFFERENT host. A
-    // session on the host that built the union is exactly what the union
-    // describes, open transport or not - holding those too would make the
-    // cap inert for every install without a cloud link.
+    // The narrow-union arm is scoped to sessions on a DIFFERENT host.
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "local",
@@ -530,9 +473,8 @@ describe("OpenEpicSessionRegistry", () => {
   });
 
   it("evicts a never-loaded, unmounted, empty session", () => {
-    // `snapshotLoaded` defaults to false and is deliberately not part of
-    // `holdsNothingToLose` - a session that never received a snapshot has
-    // nothing to lose either.
+    // `snapshotLoaded` defaults to false and is deliberately not part of `holdsNothingToLose` - a
+    // session that never received a snapshot has nothing to lose either.
     const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
     const neverLoaded = buildTestHandle("never-loaded", false);
     const other = buildTestHandle("other", false);
@@ -571,11 +513,8 @@ describe("OpenEpicSessionRegistry", () => {
 });
 
 /**
- * Prune eligibility rides the host-selected activity view, not the epic's own
- * collaboration awareness, so these helpers publish one host
- * entry covering every epic that currently has work. Publishing the whole set
- * each time mirrors the host, which republishes its full entry on every
- * activity boundary.
+ * Prune eligibility rides the host-selected activity view, not the epic's own collaboration
+ * awareness, so these helpers publish one host entry covering every epic that currently has work.
  */
 const workingByEpic = new Map<string, readonly string[]>();
 
@@ -601,13 +540,8 @@ function clearAgentWorking(handle: TestHandle): void {
 }
 
 describe("cap eviction defers to the activity plane's own health", () => {
-  // `epicIsBusy` fails CLOSED when `agentActivityPlaneAnswers()` is false: a
-  // blind plane must read every epic as busy, or an outage that closes the
-  // activity stream (which also empties `byEpic`) would look identical to
-  // "no agent anywhere is working" and evict a session whose agent is
-  // actually mid-turn. These fixtures override the file's own `beforeEach`
-  // (which puts the plane into an answering state) to exercise that gate
-  // directly.
+  // `epicIsBusy` fails CLOSED when `agentActivityPlaneAnswers()` is false: a blind plane must read
+  // every epic as busy, or an outage that closes the activity stream (which also empties `byEpic`)
   function acquireOverflowing(
     registry: OpenEpicSessionRegistry,
     count: number,
@@ -633,11 +567,8 @@ describe("cap eviction defers to the activity plane's own health", () => {
   });
 
   it("evicts nothing while the stream is open but has not yet delivered a state frame of its OWN", () => {
-    // The shape a replacement epoch is in between its raw `open` and its
-    // first frame: `servedBy` and `byEpic` survive the swap, so the only
-    // thing that says this epoch has not re-attested the union is the marker.
-    // Reading `servedBy` here would vouch with the PREVIOUS epoch's working
-    // set and evict an Epic whose agent started during the gap.
+    // The shape a replacement epoch is in between its raw `open` and its first frame: `servedBy` and
+    // `byEpic` survive the swap, so the only thing that says this epoch has not re-attested the union
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "cloud",
@@ -676,9 +607,8 @@ describe("cap eviction defers to the activity plane's own health", () => {
     const handles = acquireOverflowing(registry, 6);
     expect(registry.size()).toBe(6);
 
-    // No acquire follows: the flip fires through
-    // `subscribeAgentActivityPlaneHealth`, which every session subscribes to
-    // independently of the working-set subscription.
+    // No acquire follows: the flip fires through `subscribeAgentActivityPlaneHealth`, which every
+    // session subscribes to independently of the working-set subscription.
     __setAgentActivityPlaneAnsweringForTests();
 
     expect(registry.size()).toBe(5);
@@ -686,18 +616,6 @@ describe("cap eviction defers to the activity plane's own health", () => {
   });
 });
 
-// ── F10: dirty sessions retained across a host re-point ───────────────────────
-// Below protocol `@1.2` the host sends no `roomId`, so the cross-host document
-// merge is unreachable and `replaceMounted`'s dispose destroyed the outgoing
-// handle's unsynced edits outright.
-//
-// Every fixture here asserts the retention POSITIVELY first - the row exists,
-// with its content - before asserting anything it prevents. Four of the five
-// rules the retention has to satisfy are negatives ("not adopted", "not
-// reported", "does not flush"), and a negative is satisfied just as well by a
-// retention that never happened, so a fixture that opens with one is testing
-// nothing. The single mutation that must redden this whole block is making the
-// gate in `replaceMounted` dispose unconditionally again.
 
 function buildRetentionHandle(
   epicId: string,
@@ -708,9 +626,8 @@ function buildRetentionHandle(
   const handle = openStoreForTest({
     epicId: epicId,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a
+    // `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: () => ({
         applyUpdate: () => undefined,
@@ -788,11 +705,8 @@ function raceAgainstHang(waiter: Promise<unknown>): Promise<unknown> {
 }
 
 /**
- * `buildRetentionHandle`-style construction (a real `openStoreForTest` store,
- * marked clean), but with the write gate actually OPEN and a `writeCommand`
- * that never settles - so a command enqueued against it stays genuinely in
- * flight, for R3-1's sibling: a clean outgoing handle that `replaceMounted`
- * disposes while it still has an outstanding write command.
+ * `buildRetentionHandle`-style construction (a real `openStoreForTest` store, marked clean), but
+ * with the write gate actually OPEN and a `writeCommand` that never settles - so a command
  */
 function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {
   readonly handle: OpenedStoreForTest;
@@ -827,10 +741,8 @@ function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {
     Y.encodeStateAsUpdate(new Y.Doc()),
   );
   const artifactId = createArtifactInDocForTests(handle.doc, "spec", null);
-  // Clean: no unsynced Y.Doc edits - matching the sibling "disposes a CLEAN
-  // outgoing handle" test this one extends. Set AFTER the snapshot/seed, for
-  // the same reason `buildRetentionHandle`'s own caller re-asserts after a doc
-  // write: a local mutation publishes and re-states every projected field.
+  // Clean: no unsynced Y.Doc edits - matching the sibling "disposes a CLEAN outgoing handle" test
+  // this one extends.
   handle.store.setState({ isDirty: false, unsyncedQueueSize: 0 });
   return { handle, closed: () => closeCount > 0, artifactId };
 }
@@ -849,9 +761,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     next: OpenedStoreForTest,
     identity: { hostStamp: string | null; ownerIdentityKey: string | null },
   ): boolean {
-    // Every arm in this describe is the F10 shape: a re-point with no
-    // same-room merge behind it, so the outgoing handle is the ONLY copy of
-    // its edits and retention is the whole subject.
+    // Every arm in this describe is the F10 shape: a re-point with no same-room merge behind it, so
+    // the outgoing handle is the ONLY copy of its edits and retention is the whole subject.
     return registry.replaceMounted(EPIC, previous, next, {
       ...identity,
       editsTransferredToReplacement: false,
@@ -862,13 +773,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const previous = buildRetentionHandle(EPIC, true, 3);
     seedEpicTitle(previous.handle, "Rewrite the onboarding");
-    // Re-assert AFTER the doc write, not before. The seed above is a local
-    // mutation, so it publishes - and a publish re-states every field the
-    // records projection owns, `unsyncedQueueSize` among them. That is the
-    // sink's contract (whole values, never patches) and the reason nothing in
-    // production writes a projected field out of band; this fixture does, so it
-    // has to do it last. The subject of the test is unchanged: a retained
-    // handle whose published state reports three queued edits.
+    // Re-assert AFTER the doc write, not before. The seed above is a local mutation, so it publishes -
+    // and a publish re-states every field the records projection owns, `unsyncedQueueSize` among them.
     previous.handle.store.setState({ isDirty: true, unsyncedQueueSize: 3 });
     registry.acquireMounted(EPIC, () => previous.handle);
     const next = buildRetentionHandle(EPIC, false, 0);
@@ -877,17 +783,14 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
       true,
     );
 
-    // The row EXISTS at all - the condition, not just its content. The live
-    // entry is clean here, which is the normal state right after a re-point,
-    // and the pre-fix projection skipped the epic entirely on that basis.
+    // The row EXISTS at all - the condition, not just its content.
     const rows = registry.getUnsyncedEdits();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.epicId).toBe(EPIC);
     expect(rows[0]?.queueSize).toBe(3);
     expect(rows[0]?.isDirty).toBe(true);
-    // Title falls through to the retained handle: a freshly re-pointed live
-    // session has no Y.Doc title and no snapshot meta, so preferring it
-    // unconditionally would label the row with a bare epic id.
+    // Title falls through to the retained handle: a freshly re-pointed live session has no Y.Doc title
+    // and no snapshot meta, so preferring it unconditionally would label the row with a bare epic id.
     expect(rows[0]?.title).toBe("Rewrite the onboarding");
   });
 
@@ -898,10 +801,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const next = buildRetentionHandle(EPIC, false, 0);
     repoint(registry, previous.handle, next.handle, IDENTITY_A);
 
-    // The projection and this predicate are the same walk. Before the
-    // unification they were two traversals, and this one answered off the
-    // live entry alone - so tab-close and the window-move discarded without
-    // asking while the quit sheet was still protecting the same work.
+    // The projection and this predicate are the same walk.
     expect(registry.hasUnsyncedEdits(EPIC)).toBe(true);
   });
 
@@ -914,9 +814,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
 
     // Positive first: the buffer is retained...
     expect(registry.getUnsyncedEdits()).toHaveLength(1);
-    // ...and it is inert. A retained handle that kept its stream client would
-    // report dial evidence for a host this window has left, into the input
-    // host-death detection reads.
+    // ...and it is inert. A retained handle that kept its stream client would report dial evidence for
+    // a host this window has left, into the input host-death detection reads.
     expect(previous.closed()).toBe(true);
   });
 
@@ -927,9 +826,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const next = buildRetentionHandle(EPIC, false, 0);
     repoint(registry, previous.handle, next.handle, IDENTITY_A);
 
-    // The control. Gating on `isClean()` instead of `isDirty` would retain
-    // here too - `isClean()` requires an open transport, which a re-point has
-    // by definition taken away - and nothing would ever retire it.
+    // The control.
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
     expect(registry.hasUnsyncedEdits(EPIC)).toBe(false);
   });
@@ -954,10 +851,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const next = buildRetentionHandle(EPIC, false, 0);
     expect(repoint(registry, rig.handle, next.handle, IDENTITY_A)).toBe(true);
 
-    // The retention gate is DELIBERATELY unchanged: a clean outgoing handle
-    // is still not retained, even though it has a pending write command - the
-    // two are different questions (unsynced Y.Doc edits vs. an in-flight
-    // command), and this dispose sibling only extends the write-command side.
+    // The retention gate is DELIBERATELY unchanged: a clean outgoing handle is still not retained,
+    // even though it has a pending write command - the two are different questions (unsynced Y.Doc
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
 
     const outcome = await raceAgainstHang(waiter);
@@ -975,24 +870,13 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const third = buildRetentionHandle(EPIC, false, 0);
     repoint(registry, second.handle, third.handle, IDENTITY_A);
 
-    // One row, summed - not two retentions and not a replacement. Same epic,
-    // same host, same proven identity means the same room, which is what
-    // makes the merge legal with no `roomId` and therefore legal below `@1.2`.
+    // One row, summed - not two retentions and not a replacement.
     const rows = registry.getUnsyncedEdits();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.queueSize).toBe(7);
   });
 
-  /**
-   * Waits for the merge tail to run to completion.
-   *
-   * A MACROTASK, not a count of microtasks. The tail is
-   * `encode().then(apply).then(disposeOrKeep).catch(keep)` - and it crosses
-   * the worker bridge in the middle, so counting ticks means guessing that
-   * depth right, which is how a pin ends up asserting scheduling. Every
-   * pending microtask runs before a `setTimeout` callback, so this needs no
-   * depth at all.
-   */
+  /** Waits for the merge tail to run to completion. A MACROTASK, not a count of microtasks. */
   async function settled(): Promise<void> {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
@@ -1000,13 +884,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
   }
 
   /**
-   * A handle whose root-state PORT is held open, so the merge window is
-   * observable by ORDER rather than by timing.
-   *
-   * The window is real: between the encode and the disposal the source is
-   * DETACHED, MERGED-FROM and NOT YET DISPOSED. Resolving by hand is what makes
-   * "during the window" a place a test can stand; a timer would make these
-   * pins assert scheduling instead of sequence.
+   * A handle whose root-state PORT is held open, so the merge window is observable by ORDER rather
+   * than by timing.
    */
   function deferredSource(epicId: string): {
     readonly handle: OpenedStoreForTest;
@@ -1033,12 +912,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     return {
       handle,
       settle: (outcome) => {
-        // A REAL update, and the three fabricated bytes that used to stand
-        // here are worth naming: `Y.applyUpdate` threw on them, the target
-        // answered `applied: false`, and the pin below still read green -
-        // because the code disposed the source in every outcome and could not
-        // tell an accepted transfer from a refused one. "Resolve" has to mean
-        // the target ACCEPTS, or the happy path is never exercised at all.
+        // "Resolve" has to mean the target ACCEPTS, or the happy path is never exercised at all.
         if (outcome === "resolve")
           release?.(Y.encodeStateAsUpdate(new Y.Doc()));
         else fail?.(new Error("encode failed"));
@@ -1059,9 +933,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
 
     // INSIDE the window: encoded, not yet applied, not yet disposed.
     expect(source.disposed()).toBe(0);
-    // (a) The transport went at detach and does not come back. A source that
-    // reattached here would dial a host this window has left, into the
-    // selection authority's death-detection input.
+    // (a) The transport went at detach and does not come back. A source that reattached here would
+    // dial a host this window has left, into the selection authority's death-detection input.
     expect(source.transportClosed()).toBe(true);
 
     source.settle("resolve");
@@ -1072,16 +945,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
   });
 
   it("KEEPS the merged-from handle when the transfer rejects, as its own buffer", async () => {
-    // REVERSED, and the reversal is the point. This pin used to assert
-    // `disposed() === 1` under the reasoning that "a rejected transfer still
-    // has to dispose: leaving it alive is a handle with no transport that
-    // nothing will ever retire". The first half was a real concern and the
-    // second half was false: `appendRetainedBuffer` puts it in the collection
-    // that IS retired - by tab close, by Drain, by sign-out - and that
-    // collection is what the quit sheet enumerates. So the choice was never
-    // "dispose or leak"; it was "dispose or retain", and a rejection means
-    // "I could not ask", which leaves the source holding the ONLY copy of its
-    // unsynced edits.
+    // REVERSED, and the reversal is the point.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const first = buildRetentionHandle(EPIC, true, 2);
     registry.acquireMounted(EPIC, () => first.handle);
@@ -1100,48 +964,15 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
 
     expect(source.disposed()).toBe(0);
     expect(registry.retainedCountForTests(EPIC)).toBe(2);
-    // And the credit for a transfer that did not happen was taken back. The
-    // TOTAL is 5 either way, which is why this reads the buffers rather than
-    // the row.
+    // And the credit for a transfer that did not happen was taken back. The TOTAL is 5 either way,
+    // which is why this reads the buffers rather than the row.
     expect([...registry.retainedQueueSizesForTests(EPIC)]).toEqual([2, 3]);
   });
 
-  // NO PIN for "a second merge for the same source", and the absence is
-  // deliberate. Two ablations proved it unreachable: removing the guard I had
-  // written left the suite green, and so did moving the `pendingRetention`
-  // null after the merge. A source is out of the registry by the time the
-  // merge runs, so a second repoint naming it never reaches the release path -
-  // any test here asserts "one repoint disposes once", which the pin above
-  // already covers. A named reasoned absence beats a green test that restates
-  // its neighbour.
+  // NO PIN for "a second merge for the same source", and the absence is deliberate.
 
-  // ── OWED-AT-FLIP #2: the retention decision precedes disposal ──────────────
-  //
-  // `replaceMounted` reads `previousHandle.store.getState().isDirty` to decide
-  // whether the outgoing handle is the only copy of its edits and must be
-  // retained. That read has to happen while the handle is still LIVE. Dispose
-  // it first and the decision is made against a torn-down store - which
-  // answers "not dirty" and discards the only copy, silently, with the
-  // re-point still reporting success.
-  //
-  // The ordering is structural today (disposal is a CONSEQUENCE of
-  // `replaceMounted`, reached through the registry's own replace path), so
-  // this pin exists to keep it that way when the flip moves the tail around:
-  // §8's constraint was that `replaceMounted` precedes dispose in the async
-  // tail, and an async tail is exactly where an await lands in front of it.
   it("still retains when the outgoing store would read CLEAN after teardown", () => {
-    // ONE pin, not two. A companion asserting "a dirty handle is retained"
-    // was written first and deleted: it restates `reports the retained buffer`
-    // above, and the ablation proved it - disposing before the decision left
-    // it GREEN while this one reddened. A test that cannot fail for the reason
-    // it is named after is the thing this block already refuses to keep.
-    //
-    // The discriminating case. This handle reports dirty while live and clean
-    // once disposed - which is what a real torn-down store does, and what
-    // makes the ordering observable at all. If anything ever disposes before
-    // the decision, this is the fixture that notices: the row disappears while
-    // every other retention test stays green, because theirs keep reporting
-    // dirty after teardown and cannot tell the two orders apart.
+    // ONE pin, not two.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const built = buildRetentionHandle(EPIC, true, 6);
     built.handle.store.setState({ isDirty: true, unsyncedQueueSize: 6 });
@@ -1181,10 +1012,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const second = buildRetentionHandle(EPIC, true, 5);
     repoint(registry, first.handle, second.handle, IDENTITY_A);
     const third = buildRetentionHandle(EPIC, false, 0);
-    // Same host, rotated identity. A rotation is only ever reachable on ONE
-    // host, so the stamp alone cannot tell these apart - merging them would
-    // produce a single buffer spanning two owner identities, which can be
-    // honestly flushed to neither.
+    // Same host, rotated identity.
     repoint(registry, second.handle, third.handle, {
       hostStamp: "host-a",
       ownerIdentityKey: "key-a-rotated",
@@ -1211,10 +1039,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
       ownerIdentityKey: null,
     });
 
-    // `null` is absence of proof, not a match - so it must not match another
-    // `null` either. Two retentions whose identity reading had not landed yet
-    // would otherwise collide on a shared "unknown" key and one document
-    // would silently replace the other.
+    // `null` is absence of proof, not a match - so it must not match another `null` either.
     expect(registry.retainedCountForTests(EPIC)).toBe(2);
     expect(registry.getUnsyncedEdits()[0]?.queueSize).toBe(7);
   });
@@ -1230,8 +1055,6 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     registry.drainUnsyncedEdits(EPIC);
 
     // Discard is one decision per epic because the row is one per epic.
-    // Draining through `get(epicId)` would reach only the live session and
-    // leave this buffer behind, after a Discard the user believes was total.
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
     expect(registry.hasUnsyncedEdits(EPIC)).toBe(false);
   });
@@ -1246,10 +1069,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
 
     registry.release(EPIC, "discard", null);
 
-    // `prune()` cannot reach retentions and must not, so tab close is one of
-    // the few real reclamation paths. It is also the point where the user has
-    // already answered the close confirmation - which now reads the retained
-    // buffer too, so the answer covers it.
+    // `prune()` cannot reach retentions and must not, so tab close is one of the few real reclamation
+    // paths.
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
     expect(registry.retainedCountForTests(EPIC)).toBe(0);
   });
@@ -1264,22 +1085,13 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
 
     registry.disposeAll();
 
-    // `disposeAll` is the auth lifecycle's hook and its contract is that no
-    // prior identity's Y.Doc survives into the next session. It cleared
-    // `entries` only, so a retention would have outlived a user switch
-    // holding that user's unsynced edits.
+    // `disposeAll` is the auth lifecycle's hook and its contract is that no prior identity's Y.Doc
+    // survives into the next session.
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
     expect(registry.retainedCountForTests(EPIC)).toBe(0);
   });
 });
 
-// ── `release` means three different things to its three callers ───────────────
-// Reclaiming retentions inside `release` looked like the tab-close path alone,
-// because that is the caller its doc-comment names. It is also reached by a
-// DENIED desktop ownership claim and by the provider's rebuild arm - neither of
-// which offered the user a decision. The rebuild arm is the pointed one: it
-// fires on an owner-identity rotation, a rotation is only ever detected on ONE
-// host, and the retained buffers can belong to others.
 
 describe("release states its meaning for retained buffers", () => {
   const EPIC = "epic-release";
@@ -1296,11 +1108,8 @@ describe("release states its meaning for retained buffers", () => {
     });
     expect(registry.getUnsyncedEdits()).toHaveLength(1);
 
-    // Host B rotates its owner identity. The provider's rebuild arm releases
-    // the live session - it must not take host A's unsynced work with it.
-    // Deleting it here would be strictly more destructive than the
-    // cross-identity MERGE `findMergeTarget` refuses, and would happen with
-    // no decision and no log.
+    // Host B rotates its owner identity. The provider's rebuild arm releases the live session - it
+    // must not take host A's unsynced work with it.
     registry.release(EPIC, "keep", null);
 
     expect(registry.retainedCountForTests(EPIC)).toBe(1);
@@ -1310,12 +1119,8 @@ describe("release states its meaning for retained buffers", () => {
   });
 
   it("retains the DIRTY LIVE handle when an owner-identity rotation releases it", () => {
-    // Codex #1243 post-merge. `"keep"` spared only buffers ALREADY retained;
-    // the live handle - the one actually holding the user's unsynced edits -
-    // was disposed either way. An owner-identity rotation leaves `userId`
-    // unchanged, so the provider takes this arm, and a same-host
-    // re-enrollment therefore destroyed a dirty Y.Doc with no confirmation
-    // and no retention.
+    // Codex #1243 post-merge. `"keep"` spared only buffers ALREADY retained; the live handle - the one
+    // actually holding the user's unsynced edits - was disposed either way.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const live = buildRetentionHandle(EPIC, true, 4);
     registry.acquireMounted(EPIC, () => live.handle);
@@ -1326,9 +1131,8 @@ describe("release states its meaning for retained buffers", () => {
       ownerIdentityKey: "key-before-rotation",
     });
 
-    // The live session is gone, but its edits are not: they are now a
-    // retained buffer, reachable through the same projection every close and
-    // quit gate reads.
+    // The live session is gone, but its edits are not: they are now a retained buffer, reachable
+    // through the same projection every close and quit gate reads.
     expect(registry.get(EPIC)).toBeNull();
     expect(registry.retainedCountForTests(EPIC)).toBe(1);
     const rows = registry.getUnsyncedEdits();
@@ -1340,9 +1144,8 @@ describe("release states its meaning for retained buffers", () => {
   });
 
   it("disposes a CLEAN live handle on the same path rather than retaining an empty buffer", () => {
-    // The control: retention is for unsynced edits, not for every release.
-    // Retaining a clean handle would put an empty row in the quit sheet and
-    // nothing would ever retire it.
+    // The control: retention is for unsynced edits, not for every release. Retaining a clean handle
+    // would put an empty row in the quit sheet and nothing would ever retire it.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const live = buildRetentionHandle(EPIC, false, 0);
     registry.acquireMounted(EPIC, () => live.handle);
@@ -1357,9 +1160,8 @@ describe("release states its meaning for retained buffers", () => {
   });
 
   it("destroys the dirty live handle when the caller names NO identity, which is how a user change stays a security boundary", () => {
-    // `null` is the decision the user-change arm takes: another person is at
-    // the keyboard and no prior identity's document may survive it. The
-    // rotation arm above is the one that must not.
+    // `null` is the decision the user-change arm takes: another person is at the keyboard and no prior
+    // identity's document may survive it. The rotation arm above is the one that must not.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const live = buildRetentionHandle(EPIC, true, 4);
     registry.acquireMounted(EPIC, () => live.handle);
@@ -1394,26 +1196,14 @@ describe("a re-point whose edits were MERGED into the replacement", () => {
   const EPIC = "epic-transferred";
 
   it("disposes the outgoing handle instead of retaining a duplicate of it", () => {
-    // Codex #1243 T-57. When both snapshots name the same room,
-    // `EpicSessionProvider` applies the outgoing doc into the replacement
-    // under LOCAL_ORIGIN BEFORE calling this - so those edits are already
-    // queued on the new handle and will sync through its transport.
-    //
-    // The outgoing handle is nonetheless still `isDirty`: its own store never
-    // saw an acknowledgement, and never can, because `retainDirtyHandle`
-    // detaches its transport. So the dirty test ALONE cannot tell "the only
-    // copy of this work" from "a second copy of work the replacement now
-    // owns", and retaining the second copy pins the epic as unsyncable
-    // forever - the quit and update-install prompts keep naming work that
-    // synced long ago, until the tab is closed.
+    // Codex #1243 T-57.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const outgoing = buildRetentionHandle(EPIC, true, 4);
     registry.acquireMounted(EPIC, () => outgoing.handle);
     const incoming = buildRetentionHandle(EPIC, false, 0);
 
-    // Premise, positively: the handle being displaced really is dirty, so
-    // this arm is exercising the transfer branch and not passing because
-    // there was nothing to retain in the first place.
+    // Premise, positively: the handle being displaced really is dirty, so this arm is exercising the
+    // transfer branch and not passing because there was nothing to retain in the first place.
     expect(outgoing.handle.store.getState().isDirty).toBe(true);
 
     const replaced = registry.replaceMounted(
@@ -1433,10 +1223,7 @@ describe("a re-point whose edits were MERGED into the replacement", () => {
   });
 
   it("still retains when nothing was transferred - F10 is not weakened", () => {
-    // The control. The flag must be what decides, not the re-point: an
-    // identical sequence with `false` is the room-swap / sub-`@1.2` case where
-    // the outgoing handle IS the only copy, and destroying it there is the
-    // data loss the retention was added for.
+    // The control.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const outgoing = buildRetentionHandle(EPIC, true, 4);
     registry.acquireMounted(EPIC, () => outgoing.handle);
@@ -1455,13 +1242,8 @@ describe("a re-point whose edits were MERGED into the replacement", () => {
 
 describe("eligibility key watches the live Y.Doc title, not just metaTitle", () => {
   it("emits when the live title changes on an already-dirty session, even though metaTitle never does", () => {
-    // The regression: `resolveUnsyncedTitle` PREFERS the live `Y.Doc` title
-    // over `metaTitle`, but the eligibility key used to watch `metaTitle`
-    // alone. A title landing in the doc on a dirty session left the key
-    // unchanged, so `handleEligibilityChange` short-circuited before
-    // `emit()` - the React-subscribed quit sheet kept the stale (bare
-    // epicId) title while an imperative `getUnsyncedEdits()` call already
-    // saw the real one.
+    // A title landing in the doc on a dirty session left the key unchanged, so
+    // `handleEligibilityChange` short-circuited before `emit()` - the React-subscribed quit sheet kept
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const EPIC = "epic-live-title-emit";
     const th = buildTestHandle(EPIC, false);
@@ -1473,10 +1255,8 @@ describe("eligibility key watches the live Y.Doc title, not just metaTitle", () 
       emitCount += 1;
     });
 
-    // Only the live doc title moves - `isDirty`, `unsyncedQueueSize`,
-    // `isClean()` and `metaTitle` (there is no snapshot meta here at all)
-    // are all unchanged. `notify()` mirrors what a real Y-doc title write
-    // does to the store's subscription, per its own doc comment above.
+    // Only the live doc title moves - `isDirty`, `unsyncedQueueSize`, `isClean()` and `metaTitle`
+    // (there is no snapshot meta here at all) are all unchanged.
     seedEpicTitle(h(th), "Renamed while dirty");
     th.notify();
 
@@ -1490,10 +1270,8 @@ describe("eligibility key watches the live Y.Doc title, not just metaTitle", () 
   });
 
   it("does not emit again when neither the live title nor any other key field moves", () => {
-    // The control: a `notify()` that changes nothing observable must stay
-    // silent, or the fix above would just be "always emit" wearing a title
-    // check - which defeats the whole per-keystroke gating this key exists
-    // for.
+    // The control: a `notify()` that changes nothing observable must stay silent, or the fix above
+    // would just be "always emit" wearing a title check - which defeats the whole per-keystroke gating
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const EPIC = "epic-live-title-no-emit";
     const th = buildTestHandle(EPIC, false);

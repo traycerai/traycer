@@ -54,17 +54,12 @@ export type DiffTabToolbarViewPatch =
   | { readonly collapsedFilePaths: ReadonlyArray<string> };
 
 /**
- * The toolbar's open-this-file action. One object rather than four parallel
- * props so "no action" is a single `null` - the label and pending state cannot
- * outlive the handler, and a caller with no file to open cannot be asked for a
- * label it would never render.
+ * One object rather than four parallel props so "no action" is a single `null` - the label and pending state cannot outlive the handler, and a caller with no file to open cannot be asked for a label it would never render.
  */
 export interface DiffTabToolbarOpenFile {
   readonly onClick: () => void;
   /**
-   * Names the resolved default target, because it is not always an editor - a
-   * Finder default reveals the file in Finder, and "Open in editor" would be
-   * describing something else.
+   * Names the resolved default target, because it is not always an editor - a Finder default reveals the file in Finder, and "Open in editor" would be describing something else.
    */
   readonly label: string;
   readonly disabled: boolean;
@@ -289,10 +284,7 @@ function DiffSettingRow(props: {
   );
 }
 
-// Segmented control with a sliding "magnetic" highlight (diffshub style): one
-// pill slides between equal-width segments instead of each button toggling its
-// own background. The highlight translates by whole segment widths, so its own
-// width is the segment width and translateX(index * 100%) lands it exactly.
+// Segmented control with a sliding "magnetic" highlight (diffshub style): one pill slides between equal-width segments instead of each button toggling its own background.
 function IndicatorStyleControl(props: {
   readonly value: GitDiffIndicatorStyle;
   readonly onChange: (style: GitDiffIndicatorStyle) => void;

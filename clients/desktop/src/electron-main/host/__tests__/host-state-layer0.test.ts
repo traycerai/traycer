@@ -1,27 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { decodeHostLayer0Record } from "../host-state";
 
-/**
- * Layer-0 pid.json decode is the only skew guard on this surface (not in any
- * RPC or persistence registry). These fixtures pin fail-open behavior:
- * absence stays absent; an unknown cause stays diagnostic, never dropped.
- */
+/** These fixtures pin fail-open behavior: absence stays absent; an unknown cause stays diagnostic, never dropped. */
 describe("decodeHostLayer0Record skew", () => {
-  /**
-   * Older host: pid.json with no `layer0` key means the field is not
-   * recorded. That must decode as null, never as a fabricated healthy
-   * acquired verdict.
-   */
+  /** That must decode as null, never as a fabricated healthy acquired verdict. */
   it("decodes an older-host missing layer0 field as absent/null", () => {
     expect(decodeHostLayer0Record(undefined)).toBeNull();
     expect(decodeHostLayer0Record(null)).toBeNull();
   });
 
-  /**
-   * Newer host: a degraded record whose cause this desktop does not know
-   * yet must fail open as `unrecognized` with the raw JSON intact. Narrowing
-   * to a parse failure would destroy the diagnostic T1 exists to preserve.
-   */
+  /** Newer host: a degraded record whose cause this desktop does not know yet must fail open as `unrecognized` with the raw JSON intact. */
   it("decodes a newer-host degraded record with an unknown cause as unrecognized, preserving raw JSON", () => {
     const newerHostLayer0 = {
       status: "degraded",

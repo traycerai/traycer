@@ -965,9 +965,7 @@ describe("BrowsersPanelBody", () => {
     expect(screen.getByRole("button", { name: "Add browser" })).toBeTruthy();
   });
 
-  // B3: closing the last tab leaves the session dormant on the host. The panel
-  // lists tabs, not sessions, so a dormant one contributes no row and no header
-  // - and a surface holding only dormant sessions reads as empty.
+  // The panel lists tabs, not sessions, so a dormant one contributes no row and no header - and a surface holding only dormant sessions reads as empty.
   it("renders nothing for a session with no tabs", () => {
     replaceSessions([
       session({ sessionId: "sess-dormant", profile: "primary", tabs: [] }),
@@ -1203,9 +1201,7 @@ describe("BrowsersPanelBody", () => {
         .querySelector(".lucide-bot"),
     ).not.toBeNull();
 
-    // Real timers before the close: the mutation that drives the pending state
-    // settles on the microtask queue, and `waitFor` needs a real clock to
-    // observe it.
+    // Real timers before the close: the mutation that drives the pending state settles on the microtask queue, and `waitFor` needs a real clock to observe it.
     vi.useRealTimers();
     fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
     // The pending state arrives with the mutation, one microtask after the

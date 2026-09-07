@@ -298,12 +298,7 @@ describe("cloud notifications store", () => {
       version: 10,
     });
 
-    // The relay only sends this when the feed genuinely moved. The rendered
-    // rows can still be identical - an entry this build cannot display may
-    // have been superseded by another it also cannot display - and the
-    // version is the part that changed. Holding the old one would make this
-    // client's own `clearAll` name a feed that no longer exists and quietly
-    // leave the newcomer uncleared.
+    // The relay only sends this when the feed genuinely moved.
     useCloudNotificationsStore.getState().applySnapshot({
       rows: [row],
       summary,

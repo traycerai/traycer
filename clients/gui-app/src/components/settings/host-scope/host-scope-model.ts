@@ -12,66 +12,27 @@ import {
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
 
-/**
- * ONE host, as every settings surface should see it.
- *
- * The app carries two host lists that do not have to agree:
- *
- *   - the **runtime directory** (`useHostDirectoryList`) — what this client
- *     can actually dial. It knows `websocketUrl`, so it alone decides whether
- *     a host can be administered at all.
- *   - the **cloud registry** (`useRegisteredHosts`) — what the ACCOUNT owns.
- *     It alone knows presence leases, platform, update state and policy.
- *
- * Every picker until now was built on exactly one of them, so each was blind
- * to a real class of host: directory-only pickers could not say whether a
- * machine was online, and a registry-only list would offer rows nothing could
- * connect to. This model is their UNION, keyed by `hostId`, with `connectable`
- * and `registered` recording which side each row came from — so a row that
- * exists in only one list renders honestly instead of being dropped or faked.
- */
+/** The app carries two host lists that do not have to agree: - the runtime directory (`useHostDirectoryList`) -
+ * what this client can actually dial. */
 export interface HostScopeOption {
   readonly hostId: string;
   /** Best available human name. Never a bare id unless nothing else exists. */
   readonly name: string;
-  /** This client's own machine — the one whose service we can install/restart. */
   readonly isLocalMachine: boolean;
-  /** The app-wide active host: where new work lands, what the bell reads. */
   readonly isActive: boolean;
-  /** In the runtime directory with a dialable URL — i.e. administrable. */
   readonly connectable: boolean;
-  /**
-   * `connectable` is false ONLY because of the plan gate: the route is
-   * present and live, and the server would refuse the attach
-   * (`plan_restricted`). A consumer that renders this as "unreachable"
-   * erases the actual remedy — the fix is an upgrade, not a retry.
-   */
+  /** `connectable` is false only because of the plan gate: the route is present and live, and the server would
+   * refuse the attach (`plan_restricted`). */
   readonly planRestricted: boolean;
-  /**
-   * This machine's own host is being installed or started right now (M5).
-   *
-   * A per-host fact, and it lives here beside `connectable` and `health` for
-   * the same reason they do: every picker must answer "what is going on with
-   * this machine" identically. It was briefly derived inside the row component
-   * instead, which put a `useRunnerHost` read BELOW the boundary every picker
-   * suite mocks — the pickers kept working in production and every one of
-   * those suites threw, which is the shape of a fact living at the wrong
-   * layer.
-   *
-   * Always false for a host that is not this machine: the mutation lane
-   * belongs to the local host controller and says nothing about anyone else's.
-   */
+  /** A per-host fact, and it lives here beside `connectable` and `health` for the same reason they do: every
+   * picker must answer "what is going on with this machine" identically. */
   readonly settingUp: boolean;
-  /** Present in the account's host registry. */
   readonly registered: boolean;
   readonly platform: string | null;
-  /** Version as last reported. `null` when nothing has reported one. */
   readonly version: string | null;
   readonly health: HostHealth;
   readonly updateState: HostUpdateState | null;
-  /** The directory entry, when there is one — needed to build a client. */
   readonly entry: HostDirectoryEntry | null;
-  /** The registry row, when there is one — needed for update policy writes. */
   readonly item: HostListItem | null;
 }
 
@@ -83,29 +44,13 @@ export interface BuildHostScopeOptionsInput {
   /** Local service truth, used only for the local machine's row. */
   readonly localService: ServiceStatusSnapshot | undefined;
   readonly hasLiveSession: (hostId: string) => boolean;
-  /**
-   * Every lease the selection authority has published, as the store holds
-   * them. Looked up PER HOST below rather than taken as an already-resolved
-   * value, because the lookup is the part that has been got wrong before:
-   * sealed probe P12 degraded `useHostLease`'s `find(hostId)` to `leases[0]`
-   * and survived, since every suite seeded exactly one lease and a wrong-host
-   * answer was indistinguishable from a right one. Anything asserting against
-   * this field owes a two-host arrangement.
-   */
+  /** Looked up per host below rather than taken as an already-resolved value, because the lookup is the part that
+   * has been got wrong before. */
   readonly leases: readonly HostLeaseSnapshot[];
-  /**
-   * Whether the authority has attached at all. Threaded rather than inferred
-   * from `leases.length === 0`, which cannot tell "not attached yet" from
-   * "attached, and this account genuinely has no hosts" — and the two demand
-   * opposite renderings.
-   */
+  /** Threaded rather than inferred from `leases.length === 0`, which cannot tell "not attached yet" from
+   * "attached, and this account genuinely has no hosts" - and the two demand opposite renderings. */
   readonly authorityAttached: boolean;
-  /**
-   * The local host controller's mutation lane is busy (install, start,
-   * restart, update). Actor-agnostic by construction — the lane is the
-   * controller's own, so this is true whether the desktop's launch reconciler,
-   * the selection authority's ensure, or a user's Retry asked for it.
-   */
+  /** The local host controller's mutation lane is busy (install, start, restart, update). */
   readonly localHostSettingUp: boolean;
   readonly nowMs: number;
 }
@@ -160,34 +105,8 @@ function isLeasePlanRestricted(lease: HostLeaseSnapshot | null): boolean {
   return lease?.status === "dead" && lease.dead.reason === "plan-restricted";
 }
 
-/**
- * Can this row be administered over the host's own RPC right now?
- *
- * A directory entry with no websocket URL is a listing, not a route:
- * `buildDialableHostClient` returns null for it, so offering it as an
- * administrable target would produce a picker row that can never load.
- *
- * Dialability is half of that question, not a detail — so this now CALLS the
- * canonical rule (`dialableHostEndpointFor`, with the caller-subscribed
- * ready-session answer — the ambient form's cache read is a frozen answer in
- * a memoized model) instead of restating it. It used to
- * restate it as `status === "available"`, which was the same answer only for as
- * long as the two definitions happened to agree; they stopped agreeing when the
- * transport was taught that a failed liveness read still dials, and a
- * hand-copied predicate cannot be told that.
- *
- * The URL check matters on its own: `buildDialableHostClient` does not
- * re-check it, so a URL-only test handed back a live-looking client whose every
- * call hangs — the scope read `ready`, panels mounted, and the Add-host dialog
- * announced a machine as connected and ready to run agents.
- *
- * EXPORTED for `useConnectableHostIds`, which answers the same question of the
- * raw directory for a surface that must know the fleet's shape before it can
- * afford to mount `useHostOptions` (Sweep's host-picker gate). It calls THIS
- * rather than restating it, for exactly the reason the paragraph above gives:
- * a hand-copied dialability predicate is only right until the transport learns
- * something the copy cannot be told.
- */
+/** It calls this rather than restating it, for exactly the reason the paragraph above gives: a hand-copied
+ * dialability predicate is only right until the transport learns something the copy cannot be told. */
 export function isAdministrableRoute(
   entry: HostDirectoryEntry | null,
   hasLiveSession: boolean,
@@ -202,30 +121,7 @@ function isPlanRestrictedRoute(entry: HostDirectoryEntry | null): boolean {
   return entry !== null && hostUnavailability(entry) === "plan-restricted";
 }
 
-/**
- * A name a person recognizes, in descending order of how deliberate it is:
- * the registry display name, then the directory label, then the raw id as a
- * last resort.
- *
- * This is the UNREACHABLE-host half of the naming rule. The host itself is the
- * master copy — `host.identity.get` answers `effectiveName`, and a surface with
- * a live route to the host reads that (see the Overview panel). What makes the
- * two halves agree is a settled host-side invariant rather than a coincidence:
- * `effectiveName` (`customName ?? hostLabel ?? systemName`, folded in ONE place)
- * is the value the presence heartbeat publishes, which is the value authn writes
- * to the registry's `displayName`. So a host named over RPC and the same host
- * named from this list are the same string, and this function is simply what is
- * left when there is no route to ask.
- *
- * The local machine used to be special-cased here, preferring its directory
- * label. That existed because renaming wrote a local file the registry only
- * learned about at register/adopt time — it never learned about a rename at all,
- * so the registry name went stale for good and the fresher directory label was
- * the only honest answer. The comment that used to sit here claimed the registry
- * `displayName` "is what Edit name writes"; that path never existed. Now that the
- * heartbeat carries the name, the registry is kept fresh for every host, the two
- * sources agree, and the exception would only reintroduce a way for them not to.
- */
+/** That existed because renaming wrote a local file the registry only learned about at register/adopt time. */
 function resolveHostName(
   hostId: string,
   entry: HostDirectoryEntry | null,
@@ -237,12 +133,8 @@ function resolveHostName(
   return hostId;
 }
 
-/**
- * Stable ordering: this machine, then the active host, then everything else
- * alphabetically. Deliberately NOT sorted by health — a list that reorders
- * itself when a host blinks would move a row out from under the pointer mid-
- * click, and the registry keeps polling underneath it.
- */
+/** Deliberately not sorted by health - a list that reorders itself when a host blinks would move a row out from
+ * under the pointer mid- click, and the registry keeps polling underneath it. */
 function compareHostOptions(a: HostScopeOption, b: HostScopeOption): number {
   if (a.isLocalMachine !== b.isLocalMachine) return a.isLocalMachine ? -1 : 1;
   if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
@@ -255,29 +147,7 @@ export interface ScopeResolution {
   readonly vanishedHostId: string | null;
 }
 
-/**
- * Turn an explicit pick (or its absence) into the host this surface administers.
- *
- * Resolution order matters, and the `vanished` branch is the load-bearing one.
- * An explicit pick that is no longer in the list must NOT quietly resolve to
- * the active host: that is a silent retarget of an administration surface, and
- * it is exactly how a destructive action ends up aimed at a machine the user
- * never chose. It resolves to nothing, and the caller is obliged to say so.
- *
- * Two conditions have to be true before that verdict may be spoken, and they
- * are different questions:
- *
- *   - both lists have ANSWERED (`listsResolved`) — still loading is not gone;
- *   - neither answered with an ERROR (`listsFailed`) — a failed source cannot
- *     testify that a host was removed. A directory failure hides every
- *     directory-only host and a registry failure hides every registry-only one,
- *     so the pinned host is missing from the union for a reason that has
- *     nothing to do with it.
- *
- * Lives here rather than inside `useHostScope` for the same reason
- * `hostListReadiness` does: every panel suite mocks that hook wholesale, so a
- * rule written inside it is a rule no test can reach.
- */
+/** An explicit pick that is no longer in the list must not quietly resolve to the active host. */
 export function resolveScopedHost(input: {
   readonly hosts: readonly HostScopeOption[];
   readonly scopedHostId: string | null;
@@ -288,10 +158,7 @@ export function resolveScopedHost(input: {
   if (input.scopedHostId !== null) {
     const picked = findHostOption(input.hosts, input.scopedHostId);
     if (picked !== null) return { host: picked, vanishedHostId: null };
-    // Keying on `hosts.length` got this wrong in both directions: a
-    // registry-only host was declared vanished the instant the directory
-    // resolved first, and deregistering your ONLY host emptied the union so the
-    // verdict could never fire at all.
+    // Keying on `hosts.length` got this wrong in both directions.
     if (!input.listsResolved) return { host: null, vanishedHostId: null };
     // Withholding the verdict here resolves to the list-error notice instead,
     // which offers a retry and claims nothing about the host.
@@ -300,27 +167,13 @@ export function resolveScopedHost(input: {
   }
   const active = findHostOption(input.hosts, input.activeHostId);
   if (active !== null) return { host: active, vanishedHostId: null };
-  // No explicit pick and no active host: administer the first machine rather
-  // than rendering a pane the user cannot act on. This is a default, not a
-  // fallback from a pick — nothing was overridden.
+  // No explicit pick and no active host: administer the first machine rather than rendering a pane the user
+  // cannot act on. This is a default, not a fallback from a pick - nothing was overridden.
   return { host: input.hosts[0] ?? null, vanishedHostId: null };
 }
 
-/**
- * The one rule for which directory entry a transient client may be built
- * from. `buildDialableHostClient` independently checks the canonical
- * transport predicate and authenticated request context, but panels read
- * `scope.client` before their gate renders (Notifications does). Withholding
- * a non-`connectable` entry here keeps those panels from mounting a client for
- * a route the scope already knows cannot be administered.
- *
- * `isFollowing` is not a refusal — the active host already has the ambient
- * client, and building a second one would duplicate its socket.
- *
- * Lives here rather than inline in `useHostScope` for the same reason every
- * other rule in this file does: panel suites mock the hook wholesale, so a
- * rule inside it is a rule no test can reach.
- */
+/** Withholding a non-`connectable` entry here keeps those panels from mounting a client for a route the scope
+ * already knows cannot be administered. */
 export function transientClientEntry(
   host: HostScopeOption | null,
   isFollowing: boolean,
@@ -332,33 +185,7 @@ export function transientClientEntry(
 /** Why a config surface is reading this computer's disk instead of a host RPC. */
 export type LocalConfigFallbackReason = "host-stopped" | "host-outdated";
 
-/**
- * Whether a config surface may honestly read the on-disk store through the
- * local CLI bridge instead of over the host's own RPC — and if so, why.
- *
- * One condition is non-negotiable: the row must be THIS machine
- * (`isLocalMachine`, an id identity — see `buildHostScopeOptions`). The store
- * the bridge reads is machine-OS-user-global, so for a local row it describes
- * exactly the host being named; for any remote row it would be the substitution
- * the whole scope model exists to prevent. A remote host that cannot answer has
- * no local truth to fall back to and must say so instead.
- *
- * Given that, two states make the RPC path unusable, and both must fall back or
- * a working page would go dark:
- *
- *   - **`host-stopped`** — no route to the process exists (`connectable`, the
- *     same dialability rule `deriveHostScopeStatus` turns into `unreachable`).
- *   - **`host-outdated`** — the process answered a handshake that did not carry
- *     the config methods. This one matters most during a fleet update: the app
- *     updates before the host it manages, and without this branch shell and
- *     diagnostics editing would disappear for exactly that window even though
- *     the on-disk store is right here and the host reads it on start.
- *
- * `methodsSupported` is deliberately the TRI-STATE answer.  `null` means no
- * handshake has completed yet — and the panel's own first RPC is what produces
- * one — so treating it as absent would abandon the RPC path before it was ever
- * tried, permanently, for a host that supports everything.
- */
+/** A remote host that cannot answer has no local truth to fall back to and must say so instead. */
 export function localConfigFallbackReason(
   host: HostScopeOption | null,
   methodsSupported: boolean | null,
@@ -377,13 +204,8 @@ export function findHostOption(
   return options.find((option) => option.hostId === hostId) ?? null;
 }
 
-/**
- * A short platform word for the identity line ("macOS", "Linux", "Windows").
- * The registry reports raw Node platform triples like `darwin-arm64`, which
- * name the build target rather than the machine and read as debug output in
- * an identity line. The architecture is kept as a separate detail rather than
- * discarded — it matters when picking an install — but it stops leading.
- */
+/** The registry reports raw Node platform triples like `darwin-arm64`, which name the build target rather than
+ * the machine and read as debug output in an identity line. */
 export function formatPlatform(platform: string | null): string | null {
   if (platform === null || platform.length === 0) return null;
   const [os] = platform.split("-");
@@ -399,7 +221,6 @@ export function formatPlatform(platform: string | null): string | null {
   }
 }
 
-/** The architecture half of a `darwin-arm64` style triple, when present. */
 export function formatArchitecture(platform: string | null): string | null {
   if (platform === null) return null;
   const parts = platform.split("-");
@@ -408,31 +229,16 @@ export function formatArchitecture(platform: string | null): string | null {
   return arch.length === 0 ? null : arch;
 }
 
-/**
- * Host versions arrive in two flavours: a real semver (`1.4.2`) and a staging
- * build id (`vstaging.1785936318070.4e951281b`). The build id was being
- * rendered as the primary version string, which is unreadable and says nothing
- * a person can act on. Real versions get a `v` prefix; anything else is
- * reported as a build so the identity line never claims a version it doesn't
- * have.
- */
+/** Real versions get a `v` prefix; anything else is reported as a build so the identity line never claims a
+ * version it doesn't have. */
 export function formatHostVersion(version: string | null): string | null {
   if (version === null || version.length === 0) return null;
   if (/^\d+\.\d+\.\d+/.test(version)) return `v${version}`;
   return "Preview build";
 }
 
-/**
- * The stand-in row for a host a surface is PINNED to but the merged list has
- * never heard of — a terminal agent's own host, in a window that has since lost
- * sight of it.
- *
- * Deliberately a real `HostScopeOption` rather than a special case in the
- * picker: the row that says "this is the machine, and it cannot be reached
- * right now" already exists and is drawn identically everywhere. A one-off
- * shape for this case is how the fixed surface would drift back into having its
- * own vocabulary for "offline".
- */
+/** Deliberately a real `HostScopeOption` rather than a special case in the picker: the row that says "this is
+ * the machine, and it cannot be reached right now" already exists and is drawn identically everywhere. */
 export function unavailableHostOption(
   hostId: string,
   name: string,
@@ -444,9 +250,8 @@ export function unavailableHostOption(
     isActive: false,
     connectable: false,
     planRestricted: false,
-    // A host the merged list has never heard of is not a machine we are
-    // installing: the mutation lane only ever describes THIS machine, and this
-    // stand-in is by definition some other one.
+    // A host the merged list has never heard of is not a machine we are installing: the mutation lane only ever
+    // describes this machine, and this stand-in is by definition some other one.
     settingUp: false,
     registered: false,
     platform: null,

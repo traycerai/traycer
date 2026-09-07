@@ -1,8 +1,5 @@
 /**
- * Shared test harness for the P1.1 selection-authority suite (engine +
- * in-process adapter). A fake {@link AuthorityClock} that only advances when
- * told to, plus small recorders so ordering/revision assertions read as plain
- * data instead of ad-hoc listener wiring in every test.
+ * A fake {@link AuthorityClock} that only advances when told to, plus small recorders so ordering/revision assertions read as plain data instead of ad-hoc listener wiring in every test.
  */
 import {
   type HostFleetEntry,
@@ -30,7 +27,6 @@ import {
   unavailableLocalHostEnsurePort,
 } from "../in-process-selection-authority";
 
-/** A recorded timer, keyed by an id private to the fake clock. */
 interface FakeTimer {
   readonly deadline: number;
   readonly run: () => void;
@@ -42,12 +38,6 @@ export interface FakeAuthorityClock extends AuthorityClock {
   pendingTimerCount(): number;
 }
 
-/**
- * `advance` moves `now` then fires every timer whose deadline has passed, in
- * deadline order, looping until a pass fires nothing - a fired callback may
- * itself re-arm a timer whose new deadline is already due (delay 0 relative
- * to the moved clock), and that must fire in the same `advance` call.
- */
 export function createFakeAuthorityClock(startAt: number): FakeAuthorityClock {
   let current = startAt;
   let nextId = 0;
@@ -89,7 +79,6 @@ export function createFakeAuthorityClock(startAt: number): FakeAuthorityClock {
   };
 }
 
-/** One emitted event, flattened for ordering/revision assertions. */
 export type RecordedEngineEvent =
   | {
       readonly kind: "selection";
@@ -103,7 +92,6 @@ export type RecordedEngineEvent =
     }
   | { readonly kind: "reattach"; readonly revision: number };
 
-/** Subscribes to all three engine event kinds and records them in delivery order. */
 export function recordEngineEvents(engine: SelectionAuthorityEngine): {
   readonly events: RecordedEngineEvent[];
   readonly subscriptions: readonly SelectionSubscription[];
@@ -133,7 +121,6 @@ export function recordEngineEvents(engine: SelectionAuthorityEngine): {
   return { events, subscriptions };
 }
 
-/** Everything one engine test needs, wired to a fake clock and in-memory ports. */
 export interface TestAuthority {
   readonly engine: SelectionAuthorityEngineImpl;
   readonly fleet: InMemoryHostFleetSource;
@@ -145,10 +132,8 @@ export interface TestAuthority {
 }
 
 /**
- * Builds a fresh engine over in-memory ports and a fake clock, with an event
- * recorder already attached. `initialFleet`/`initialIdentityKey` seed the
- * ports the engine reads synchronously at construction (module header
- * "subscribe before read").
+ * Builds a fresh engine over in-memory ports and a fake clock, with an event recorder already attached.
+ * `initialFleet`/`initialIdentityKey` seed the ports the engine reads synchronously at construction (module header "subscribe before read").
  */
 export function createTestAuthority(input: {
   readonly initialFleet: {
@@ -204,7 +189,6 @@ export function createTestAuthority(input: {
   };
 }
 
-/** One captured {@link AuthorityLog} call. */
 export interface RecordedAuthorityLog {
   readonly level: "debug" | "warn";
   readonly message: string;
@@ -213,10 +197,7 @@ export interface RecordedAuthorityLog {
 
 /**
  * An {@link AuthorityLog} that keeps what it was told.
- *
- * The engine's dial-evidence instrumentation is only worth having if it is
- * exhaustive, and "exhaustive" is a claim about lines that DO get emitted -
- * which the silent log cannot see. Tests assert against this.
+ * The engine's dial-evidence instrumentation is only worth having if it is exhaustive, and "exhaustive" is a claim about lines that DO get emitted - which the silent log cannot see.
  */
 export interface RecordingAuthorityLog extends AuthorityLog {
   readonly records: RecordedAuthorityLog[];
@@ -235,7 +216,6 @@ export function createRecordingAuthorityLog(): RecordingAuthorityLog {
   };
 }
 
-/** A `HostFleetEntry` builder for readable test setup. */
 export function fleetHost(
   hostId: string,
   kind: "local" | "remote",
@@ -243,7 +223,6 @@ export function fleetHost(
   return { hostId, kind };
 }
 
-/** Finds a host's lease in a leases array the way tests want to assert on it. */
 export function findLease(
   leases: readonly HostLeaseSnapshot[],
   hostId: string,

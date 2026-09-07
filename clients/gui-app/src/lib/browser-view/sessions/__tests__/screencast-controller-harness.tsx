@@ -32,19 +32,15 @@ export interface MountedController {
   readonly video: HTMLVideoElement;
   readonly imeInput: HTMLInputElement;
   /**
-   * What `readVideoPainting` answers: whether the video plane has DECODED a
-   * frame. Both surfaces are mounted here, so this is what decides which one
-   * the controller normalizes against - `false` (the default) is the JPEG
-   * plane and the whole loader window.
+   * What `readVideoPainting` answers: whether the video plane has DECODED a frame.
+   * Both surfaces are mounted here, so this is what decides which one the controller normalizes against - `false` (the default) is the JPEG plane and the whole loader window.
    */
   readonly setVideoPainting: (value: boolean) => void;
 }
 
 /**
- * The controller driven through real DOM events on a real overlay button, so
- * pointer capture, the arm buffer and the correlation seam all run as they do
- * in the tile. The image stands in for whatever surface the plane renders -
- * only its box matters to normalization.
+ * The controller driven through real DOM events on a real overlay button, so pointer capture, the arm buffer and the correlation seam all run as they do in the tile.
+ * The image stands in for whatever surface the plane renders - only its box matters to normalization.
  */
 export function mountController(): MountedController {
   const sent: BrowserScreencastClientFrame[] = [];
@@ -128,10 +124,7 @@ export function mountController(): MountedController {
 }
 
 /**
- * Arm the way a viewer does - a deliberate gesture, then the host's `armed` -
- * because a bare `noteArmed` is also how a hover PRE-arm lands, and a pre-arm
- * deliberately drives nothing. The arm frame itself is dropped from `sent`;
- * the arm path is pinned in `screencast-arm-path.test.tsx`.
+ * Arm the way a viewer does - a deliberate gesture, then the host's `armed` - because a bare `noteArmed` is also how a hover PRE-arm lands, and a pre-arm deliberately drives nothing.
  */
 export function armViaGesture(
   mounted: MountedController,

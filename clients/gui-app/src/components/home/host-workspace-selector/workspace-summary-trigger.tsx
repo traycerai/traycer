@@ -23,12 +23,8 @@ import { WorkspaceBranchLabel } from "./workspace-branch-label";
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
 
-/**
- * In-epic collapsed summary: `📁 folder · branch (+N)` from `items[0]`, the mode
- * glyph, and a missing indicator. Interactive (opens the folder-rows popover)
- * unless `readOnly`, where hover keeps the compact preview and click opens an
- * inspect-only folder list with no binding controls.
- */
+/** Interactive (opens the folder-rows popover) unless `readOnly`, where hover keeps the compact preview and
+ * click opens an inspect-only folder list with no binding controls. */
 export function WorkspaceSummaryTrigger(
   props: ButtonHTMLAttributes<HTMLButtonElement> & {
     readonly items: ReadonlyArray<WorkspaceRunItem>;
@@ -47,10 +43,8 @@ export function WorkspaceSummaryTrigger(
     ref,
     ...rest
   } = props;
-  // Resolve by the marked `isPrimary` row, not array order: the host
-  // normalizes binding flags without reordering entries, so the collapsed
-  // chip must agree with the primary pin/row rather than always reading
-  // position 0.
+  // Resolve by the marked `isPrimary` row, not array order: the host normalizes binding flags without reordering
+  // entries, so the collapsed chip must agree with the primary pin/row rather than always reading position 0.
   const primary =
     items.length === 0
       ? null
@@ -118,10 +112,8 @@ export function WorkspaceSummaryTrigger(
       <ChevronDown className="size-3.5 shrink-0 text-current" />
     </button>
   );
-  // The interactive (non-read-only) summary is wrapped by the parent's
-  // controlled hover card (`WorkspaceFolderSummaryControl`), which gates the
-  // preview on the click-open picker; the read-only branch below owns its own
-  // coordinated hover+popover pair.
+  // The interactive (non-read-only) summary is wrapped by the parent's controlled hover card
+  // (`WorkspaceFolderSummaryControl`), which gates the preview on the click-open picker.
   const trigger = triggerButton;
 
   // Read-only (terminal-agent): hover keeps the compact preview; click expands
@@ -149,9 +141,8 @@ export function WorkspaceSummaryTrigger(
             }}
           >
             <PopoverTrigger asChild>
-              {/* Innermost, so the press guard runs BEFORE the popover's own
-                  open handler and can prevent it - `Slot` composes a child's
-                  handler ahead of the slot's. */}
+              {/* Innermost, so the press guard runs before the popover's own open handler and can prevent it - `Slot`
+                 composes a child's handler ahead of the slot's. */}
               <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
             </PopoverTrigger>
           </HoverPreviewCard>

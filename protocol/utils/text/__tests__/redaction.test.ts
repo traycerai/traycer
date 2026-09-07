@@ -6,13 +6,7 @@ import {
 } from "../redaction";
 
 describe("redactSensitiveText session cookies", () => {
-  /**
-   * The reason the pattern is case-sensitive. `sessionId` is Traycer's own
-   * camelCase field name and appears on nearly every trace and telemetry
-   * line; a case-insensitive cookie pattern redacted all of them, which
-   * destroyed support-bundle correlation while protecting nothing - no cookie
-   * is ever named `sessionId`.
-   */
+  /** The reason the pattern is case-sensitive. */
   it("leaves Traycer's own camelCase sessionId alone", () => {
     expect(redactSensitiveText('{"sessionId":"s-7"}')).toBe(
       '{"sessionId":"s-7"}',
@@ -39,9 +33,7 @@ describe("redactSensitiveText session cookies", () => {
 
 describe("redactSensitiveText union coverage", () => {
   /**
-   * These three shapes existed in exactly one of the four former copies (the
-   * host's provider redactor), which is what "the detection set must not
-   * differ by call site" was about.
+   * These three shapes existed in exactly one of the four former copies (the host's provider redactor), which is what "the detection set must not differ by call site" was about.
    */
   it("redacts Cookie headers, Digest response= and AWS4 Signature=", () => {
     expect(redactSensitiveText("Cookie: a=1; b=2")).toBe("Cookie: <redacted>");

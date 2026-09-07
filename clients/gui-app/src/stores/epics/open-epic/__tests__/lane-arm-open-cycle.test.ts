@@ -1,37 +1,3 @@
-/**
- * The lane arm completes an OPEN CYCLE: content becomes readable, and a write
- * is delivered.
- *
- * ## Why this suite exists
- *
- * The lane arm had five suites and no integration coverage. Every one of them
- * proved a SUB-SYSTEM - body availability projection, arm selection, body seed
- * timing, byte parity across arms - and not one drove a lane session to the
- * point where a user could read the epic or change it. Meanwhile every suite
- * that DID assert `snapshotLoaded`, and the one that asserted write DELIVERY,
- * opened with `laneSelection: null`: the legacy arm.
- *
- * That is not a gap in any single test. It is the shape of a two-arm system:
- * equivalence suites read as covering both arms, the fixture default picks one,
- * and the other arm's whole-cycle behaviour is unproven no matter how green the
- * tree is. Four defects lived there at once - two of them here.
- *
- * ## What it pins, and why these two assertions specifically
- *
- * On the legacy arm both facts are established by ONE function,
- * `applyRootSnapshot`: it calls `control.adoptSnapshotRole` (the only writer of
- * `hasFreshRootSnapshotForOpenCycle`, which the write gate reads) and
- * `records.publishSnapshotLanded` (the only writer of `snapshotLoaded`). The
- * lane arm reaches neither - its frames land through `applyLaneState` and
- * `control.apply` - so both facts were false for the life of a lane session:
- * the UI sat behind loading skeletons and every write was refused before
- * dispatch.
- *
- * DELIVERY, not enqueue, is the second assertion, because the queue answers
- * enqueue locally, before the gate. `write-command-delivery.test.ts` exists
- * because that distinction already hid this exact class of defect once; it
- * closed the hole for the arm it opened with, and the other arm reopened it.
- */
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
@@ -62,12 +28,7 @@ const EPOCH = "authority-epoch-1";
 const ANSWERING_HOST = "host-that-answered";
 
 interface LaneRigOptions {
-  /**
-   * The two lane unaries. EXPLICIT with no default, exactly as
-   * `openStoreForTest`'s `writeCommand` is: a default would hide which of
-   * these tests depends on a unary, and the whole subject here is a pair of
-   * transports that were never reached.
-   */
+  /** The two lane unaries. */
   readonly unaries: EpicLaneUnaries;
   /** What the status snapshot says about a major migration. */
   readonly migration: EpicMigrationStatus | null;
@@ -78,22 +39,18 @@ interface LaneRig {
   readonly received: { commandId: string; intent: EpicWriteCommandIntent }[];
   readonly openLanes: () => void;
   /**
-   * A transport drop and return on the CONTROL lane - the policy's named
-   * `reconnect` trigger. Only a return to `open` after the transport had left
-   * it counts, so both halves are driven.
+   * A transport drop and return on the CONTROL lane - the policy's named `reconnect` trigger. Only a
+   * return to `open` after the transport had left it counts, so both halves are driven.
    */
   readonly reconnectControlLane: () => void;
   /**
-   * A transport drop and return on the RECORDS lane ALONE - the
-   * `ownsControlCycle: false` half of the same event, never touching the
-   * status lane. Mirrors `reconnectControlLane` on the other lane.
+   * A transport drop and return on the RECORDS lane ALONE - the `ownsControlCycle: false` half of
+   * the same event, never touching the status lane.
    */
   readonly reconnectStateLane: () => void;
   /**
-   * A `migrationProgress` transition on the status lane - the host reporting
-   * on a migration it has actually taken up. Needed to tell "the retry was
-   * refused and nothing happened" from "the retry landed and the host is
-   * mid-migration", which is the whole distinction the retry token draws.
+   * A `migrationProgress` transition on the status lane - the host reporting on a migration it has
+   * actually taken up.
    */
   readonly emitMigrationProgress: (progress: {
     readonly phase: "prepare" | "upload" | "finalize";
@@ -110,10 +67,8 @@ function statusSnapshot(
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
     securityEpoch: 1,
-    // EDITOR: the write gate has a permission arm as well as a freshness arm,
-    // and this suite is about the freshness arm. A viewer role would refuse
-    // the write for the other reason and the assertion would pass for the
-    // wrong one.
+    // EDITOR: the write gate has a permission arm as well as a freshness arm, and this suite is about
+    // the freshness arm.
     permissionRole: "editor",
     cloudSyncStatus: "connected",
     dirty: false,
@@ -169,9 +124,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
   });
 
   const laneSelection: EpicLaneSelectionSources = {
-    // Declared support rather than the probe's outcome: this suite is about
-    // what the lane arm DOES once installed, not about how it gets chosen -
-    // `lane-adapter-probe.test.ts` owns that question.
+    // Declared support rather than the probe's outcome: this suite is about what the lane arm DOES
+    // once installed, not about how it gets chosen - `lane-adapter-probe.test.ts` owns that question.
     support: () => "supported",
     subscribeSupport: () => () => {},
     unaries: options.unaries,
@@ -191,9 +145,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
       },
       laneSelection,
     },
-    // Recording rather than dispatching, exactly as the legacy delivery suite
-    // does: the question is whether the command arrives, not what the
-    // dispatcher maps it to.
+    // Recording rather than dispatching, exactly as the legacy delivery suite does: the question is
+    // whether the command arrives, not what the dispatcher maps it to.
     writeCommand: (commandId, intent) => {
       received.push({ commandId, intent });
       return Promise.resolve({ hostId: ANSWERING_HOST });
@@ -204,10 +157,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null || stateCallbacks === null) {
       throw new Error("the lane factories were not invoked");
     }
-    // Transport BEFORE the snapshots, for the reason the legacy delivery suite
-    // documents: the control replica clears the open-cycle freshness on every
-    // transport-status transition, so opening afterwards would wipe what the
-    // snapshot established and this suite would fail for the wrong reason.
+    // Transport BEFORE the snapshots, for the reason the legacy delivery suite documents: the control
+    // replica clears the open-cycle freshness on every transport-status transition, so opening
     statusCallbacks.onConnectionStatus("open", null);
     stateCallbacks.onConnectionStatus("open", null);
     statusCallbacks.onSnapshot(statusSnapshot(options.migration));
@@ -264,10 +215,6 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
 }
 
 async function settle(handle: OpenedStoreForTest): Promise<void> {
-  // Three drains, named rather than looped, for the same reason the legacy
-  // delivery suite names them: the command crosses to the worker queue, the
-  // send crosses back for `main/write-command`, and the answer crosses again
-  // to resolve the record.
   await handle.flush();
   await handle.flush();
   await handle.flush();
@@ -275,11 +222,7 @@ async function settle(handle: OpenedStoreForTest): Promise<void> {
 
 describe("a lane-selected session completes an open cycle", () => {
   it("reports the lead snapshot as LOADED, so the UI leaves its skeletons", async () => {
-    // ABSENT unaries on purpose. Neither assertion in this block depends on a
-    // workspace context, and the rejecting default proves it: the refresh
-    // policy fires its tab-open read on attach, that read fails, and both
-    // facts below still land. A resolving stub would have made these two
-    // assertions depend on a payload they have nothing to do with.
+    // ABSENT unaries on purpose.
     const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
     rig.openLanes();
     await settle(rig.handle);
@@ -290,11 +233,7 @@ describe("a lane-selected session completes an open cycle", () => {
   });
 
   it("DELIVERS a write command, rather than refusing it before dispatch", async () => {
-    // ABSENT unaries on purpose. Neither assertion in this block depends on a
-    // workspace context, and the rejecting default proves it: the refresh
-    // policy fires its tab-open read on attach, that read fails, and both
-    // facts below still land. A resolving stub would have made these two
-    // assertions depend on a payload they have nothing to do with.
+    // ABSENT unaries on purpose.
     const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
     rig.openLanes();
     await settle(rig.handle);
@@ -307,10 +246,7 @@ describe("a lane-selected session completes an open cycle", () => {
     expect(commandId).not.toBeNull();
     await settle(rig.handle);
 
-    // The leg the lane arm never proved. Under the unfixed tree this list is
-    // empty: `hasFreshRootSnapshotForOpenCycle` is false for the session's
-    // life, so the queue's send gate throws
-    // `EpicWriteCommandTransportUnavailableError` before `send` runs.
+    // The leg the lane arm never proved.
     expect(rig.received).toHaveLength(1);
     expect(rig.received[0].commandId).toBe(commandId);
     expect(rig.received[0].intent).toEqual({
@@ -342,11 +278,8 @@ describe("only the CONTROL lane's own reconnect may close the write gate (ownsCo
     await settle(rig.handle);
     expect(rig.received).toHaveLength(1);
 
-    // The RECORDS lane alone drops and returns - `ownsControlCycle: false`
-    // on this lane's transport-status event. Only the status (control) lane
-    // may clear this cycle's snapshot freshness, because only a CONTROL
-    // snapshot can restore it; a lane that can clear it but cannot restore
-    // it is a one-way door.
+    // The RECORDS lane alone drops and returns - `ownsControlCycle: false` on this lane's
+    // transport-status event.
     rig.reconnectStateLane();
     await settle(rig.handle);
 
@@ -357,11 +290,7 @@ describe("only the CONTROL lane's own reconnect may close the write gate (ownsCo
     });
     expect(second).not.toBeNull();
     await settle(rig.handle);
-    // Freshness SURVIVED the records lane's own reconnect: the write reached
-    // the host. Before the fix, `applyTransportStatus` cleared
-    // `hasFreshRootSnapshotForOpenCycle` on EVERY transport-status frame
-    // regardless of which lane reported it, so this command would have been
-    // refused before dispatch and never appear in `rig.received`.
+    // Freshness SURVIVED the records lane's own reconnect: the write reached the host.
     expect(rig.received).toHaveLength(2);
 
     // The CONTROL lane's own reconnect DOES own the cycle and clears it - no
@@ -382,16 +311,7 @@ describe("only the CONTROL lane's own reconnect may close the write gate (ownsCo
   });
 });
 
-/**
- * The workspace context every lane session needs and no lane session read.
- *
- * `epic.getWorkspaceContext@1.0` had no production caller anywhere: the policy
- * module existed, the protocol declared the read, and nothing ever instantiated
- * or started it. Neither lane carries repos, workspaces, repo mapping or
- * resolved folders - only `epic.subscribe@1`'s `earlyMeta` frame did - so a
- * lane session's `snapshotMeta` held none of it, and the workspace-derived UI
- * (git status, file tree, sidebar repo chip) had nothing to initialise from.
- */
+/** The workspace context every lane session needs and no lane session read. */
 const WORKSPACE_CONTEXT: EarlyMetaEpic = {
   epicLight: null,
   permissionRole: "editor",
@@ -455,24 +375,11 @@ describe("a lane-selected session reads its workspace context", () => {
     rig.openLanes();
     await settle(rig.handle);
 
-    // TWO, and the number is the coalescer's documented cost rather than a
-    // defect. The tab-open read goes out at attach; the lead snapshot then
-    // RESTATES the role, the cloud-sync status and the dirty flag as ordinary
-    // events, and the first of those is a permission frame - which the refetch
-    // contract names. Those three restatements arrive while the open read is
-    // still in flight, so they collapse into ONE trailing fetch: "the cost of a
-    // burst is two requests rather than N".
-    //
-    // Pinned exactly rather than as `>= 1`, because both directions are
-    // regressions worth catching. Three would mean the burst stopped
-    // coalescing; one would mean the snapshot's permission frame stopped
-    // reaching the policy, which is the trigger that keeps the projected
-    // context's role in agreement with the snapshot's rather than predating it.
+    // TWO, and the number is the coalescer's documented cost rather than a defect.
     expect(context.reads()).toBe(2);
     const meta = rig.handle.store.getState().snapshotMeta;
-    // Read off the STORE rather than the runtime: this payload's whole purpose
-    // is to reach a renderer before the snapshot does, so the projection is
-    // the fact, not the call.
+    // Read off the STORE rather than the runtime: this payload's whole purpose is to reach a renderer
+    // before the snapshot does, so the projection is the fact, not the call.
     expect(meta?.repos).toEqual(WORKSPACE_CONTEXT.repos);
     expect(meta?.workspaceFolders).toEqual(WORKSPACE_CONTEXT.workspaceFolders);
     expect(meta?.repoMapping).toEqual(WORKSPACE_CONTEXT.repoMapping);
@@ -488,11 +395,8 @@ describe("a lane-selected session reads its workspace context", () => {
     // The cold open's two - see the previous test for why it is two.
     expect(context.reads()).toBe(2);
 
-    // The monolith RE-EMITTED `earlyMeta`; a unary called once at tab open is a
-    // behaviour regression whose symptom is a stale repo chip that nothing ever
-    // corrects. Only a RETURN to `open` after the transport had left it counts,
-    // so the drop is driven explicitly - the session's first `open`, above, is
-    // the tab opening and deliberately does not refetch.
+    // The monolith RE-EMITTED `earlyMeta`; a unary called once at tab open is a behaviour regression
+    // whose symptom is a stale repo chip that nothing ever corrects.
     rig.reconnectControlLane();
     await settle(rig.handle);
 
@@ -513,9 +417,8 @@ describe("a lane-selected session retries a failed migration", () => {
           return Promise.resolve();
         },
       },
-      // A lane-serving host reporting a failed migration on a lane that STAYS
-      // OPEN - the condition the contract is explicit about, and the one that
-      // reaches the in-stream branch rather than the reopen branch.
+      // A lane-serving host reporting a failed migration on a lane that STAYS OPEN - the condition the
+      // contract is explicit about, and the one that reaches the in-stream branch rather than the reopen
       migration: { state: "failed", reason: "chunk upload rejected" },
     });
     rig.openLanes();
@@ -524,21 +427,15 @@ describe("a lane-selected session retries a failed migration", () => {
     rig.handle.store.getState().retryMigration();
     await settle(rig.handle);
 
-    // The TRANSPORT, not the modal. `markMigrationRetrying` is an optimistic
-    // flip that ran on the unfixed tree too, so a modal-state assertion passed
-    // while the host was never asked: `adapter` is the `@1` stream adapter and
-    // it is detached on this arm, so its `send` answered `dropped` and the
-    // Retry button did nothing at all.
+    // The TRANSPORT, not the modal.
     expect(retries).toBe(1);
 
     rig.handle.dispose();
   });
 
   it("restores the error state when the retry is REFUSED, so Retry comes back", async () => {
-    // A refused retry - an absent requester, a host that declines, a bridge
-    // failure - produces no migration frame at all. The optimistic flip to
-    // `running` would then be terminal: the modal sits on a running body with
-    // its Retry button gone, for the rest of the session.
+    // A refused retry - an absent requester, a host that declines, a bridge failure - produces no
+    // migration frame at all.
     const rig = openLaneRig({
       unaries: {
         getWorkspaceContext: () => Promise.resolve(WORKSPACE_CONTEXT),
@@ -553,24 +450,15 @@ describe("a lane-selected session retries a failed migration", () => {
     rig.handle.store.getState().retryMigration();
     await settle(rig.handle);
 
-    // THE REDDENING ASSERTION. Before this the rejection was swallowed on the
-    // grounds that "the modal's recovery is the same path it has always had" -
-    // but that path is a status-lane migration frame, and a refused retry
-    // never produces one, so the state stayed `running` forever.
+    // THE REDDENING ASSERTION.
     expect(rig.handle.store.getState().migration.status).toBe("error");
 
     rig.handle.dispose();
   });
 
   it("does NOT overwrite host progress with an error when the rejection arrives late", async () => {
-    // The control, and the reason the restore is token-guarded rather than
-    // unconditional: a host can accept the retry and start reporting while the
-    // unary's own answer is still in flight (or fails for an unrelated reason).
-    // Publishing an error over a running migration would be this runtime
-    // inventing a failure the host never reported.
-    // Built eagerly so the rejector exists before anything can await it; the
-    // initializer below is unreachable, and throws rather than no-ops so a
-    // future refactor that defers construction fails loudly.
+    // The control, and the reason the restore is token-guarded rather than unconditional: a host can
+    // accept the retry and start reporting while the unary's own answer is still in flight (or fails
     let rejectRetry: () => void = () => {
       throw new Error("the retry never published its rejector");
     };

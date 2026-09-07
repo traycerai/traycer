@@ -5,20 +5,8 @@ import { noopLogger } from "../../logger";
 import type { HostPidMetadata } from "../../host/pid-metadata";
 import type { BootstrapLogEntry } from "../../host/bootstrap-log";
 
-// CLI-001: `host status` reads state, it never provisions. This used to call
-// `maybeAutoBootstrap` first, so asking a clean machine for its status could
-// install a host, register an OS service, and start it - none of which the
-// command's own help text ("Show host status") promised. The fix deleted
-// `host/auto-bootstrap.ts` entirely and pinned the payload's `bootstrap`
-// field at `null` (mirroring `commands/login.ts`, which had already dropped
-// its own auto-bootstrap call for the same reason).
-//
-// This file replaces the deleted `auto-bootstrap-integration.test.ts`, which
-// pinned the OPPOSITE contract (status triggers bootstrap). The strong
-// property worth pinning now is not just "the payload looks right" but
-// "status never even imports a provisioning path" - so `../../host/provision`
-// and `../../service` are mocked and asserted untouched, not merely absent
-// from the payload.
+// CLI-001: `host status` reads state, it never provisions.
+// This used to call `maybeAutoBootstrap` first, so asking a clean machine for its status could install a host, register an OS service, and start it - none of which the command's own help text ("Show host status") promised.
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataMock: vi.fn(),
@@ -47,9 +35,7 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
   return { ...actual, isProcessAlive: mocks.isProcessAliveMock };
 });
 
-// A read of host status must never import (let alone call) a provisioning
-// path - this is the strong property CLI-001 asks for, not merely "the
-// payload's bootstrap field is null".
+// A read of host status must never import (let alone call) a provisioning path - this is the strong property CLI-001 asks for, not merely "the payload's bootstrap field is null".
 vi.mock("../../host/provision", () => ({
   provisionHost: mocks.provisionHostMock,
 }));

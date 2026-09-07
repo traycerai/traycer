@@ -20,14 +20,7 @@ import {
   describeTranscriptFidelity,
 } from "@/lib/chats/cloud-chat-transcript-display";
 
-/**
- * The transcript rows, driven off a chat that went through the REAL read path.
- *
- * Building a `PresentedChat` by hand would be faster and would test nothing:
- * the interesting rows here exist because a shard carried a variant this build
- * has never heard of, and only the actual parse-and-assemble produces one of
- * those with its `raw` intact.
- */
+/** The transcript rows, driven off a chat that went through the REAL read path. */
 
 async function present(options: {
   readonly resolvable: readonly { kind: string; sha256: string }[] | null;

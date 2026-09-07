@@ -30,13 +30,7 @@ interface MentionAttrs {
   readonly label: string | null;
 }
 
-/**
- * Type-guarded narrowing for a Tiptap mention node's `attrs` bag. Tiptap
- * types `node.attrs` as `Record<string, any>` and there is no schema-level
- * guarantee that a third-party render pass left the expected mention keys
- * in place. Read each field defensively so a malformed mention can't crash
- * the renderText path.
- */
+/** Read each field defensively so a malformed mention can't crash the renderText path. */
 function readMentionAttrs(attrs: unknown): MentionAttrs {
   if (attrs === null || typeof attrs !== "object") {
     return { id: null, label: null };
@@ -48,24 +42,18 @@ function readMentionAttrs(attrs: unknown): MentionAttrs {
 }
 
 export interface CommentComposerProps {
-  /** Epic the composer is mounted under - drives the mention picker source. */
   readonly epicId: string;
-  /** The host serving the surface this composer was mounted from - the tab's
-   *  client under a collab tile, the Epic session's under the sidebar. Passed
-   *  rather than read here because this component is mounted from BOTH, and an
-   *  ambient app-wide read would offer the wrong machine's collaborators
-   *  (D15). */
+  /** Passed rather than read here because this component is mounted from both, and an ambient app-wide read would
+   * offer the wrong machine's collaborators. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  /** Initial JSONContent. Pass `null` for a blank composer (most flows). */
   readonly initialContent: JsonContent | null;
   readonly placeholder: string;
   /** Whether to grab focus on mount. Used by the floating draft popover and
    *  by inline reply composers. */
   readonly focusOnMount: boolean;
   readonly submitLabel: string;
-  /** Called with the parsed JSONContent on submit. The composer leaves
-   *  network state to the caller - it does not clear itself, so the caller
-   *  should `reset()` via the imperative handle on success. */
+  /** The composer leaves network state to the caller - it does not clear itself, so the caller should `reset` via
+   * the imperative handle on success. */
   readonly onSubmit: (content: JsonContent) => void;
   /** Optional cancel hook. Receives `isDirty` so callers can decide whether
    *  to confirm before discarding. */
@@ -75,7 +63,6 @@ export interface CommentComposerProps {
 }
 
 export interface CommentComposerHandle {
-  /** Empty the editor doc back to a single empty paragraph. */
   reset(): void;
   /** Imperatively focus the editor (used after Submit so the user can keep
    *  typing in the next reply slot without click-fishing). */
@@ -92,21 +79,8 @@ interface SuggestionRenderState {
   readonly clientRect: (() => DOMRect | null) | null;
 }
 
-/**
- * Small Tiptap editor used to author comment-thread content.
- *
- * Storage shape mirrors Views: the host RPC payloads carry `JSONContent`,
- * so a comment authored here renders identically in Views and vice versa.
- * `Collaboration` is intentionally absent - the composer is private to the
- * local user until they hit Submit; the thread Y.Map only learns about it
- * through the host RPC.
- *
- * Mention picker uses the canonical Tiptap v3 suggestion → React bridge:
- * the suggestion plugin's `render` lifecycle lifts state into the
- * composer's React tree (`setSuggestionState`), and a ref-forwarded list
- * component handles arrow / Enter / Escape via `onKeyDown`. Positioning
- * uses `@floating-ui/dom` (Tippy was removed in Tiptap v3).
- */
+/** `Collaboration` is intentionally absent - the composer is private to the local user until they hit Submit;
+ * the thread Y.Map only learns about it through the host RPC. */
 export function CommentComposer(props: CommentComposerProps) {
   const {
     epicId,
@@ -132,9 +106,8 @@ export function CommentComposer(props: CommentComposerProps) {
   // see a stale callback once the parent re-renders with new handlers.
   const onSubmitRef = useRef(onSubmit);
   const onCancelRef = useRef(onCancel);
-  // Editor's `handleKeyDown` is captured under `useEditor`'s `[]` deps so it
-  // would see a stale `suggestionState`. Mirror it in a ref so Escape can
-  // distinguish "close suggestion popup" from "cancel composer".
+  // Editor's `handleKeyDown` is captured under `useEditor`'s `[]` deps so it would see a stale
+  // `suggestionState`.
   const suggestionActiveRef = useRef(false);
 
   useEffect(() => {
@@ -251,9 +224,8 @@ export function CommentComposer(props: CommentComposerProps) {
         setIsEmpty(e.isEmpty);
       },
     },
-    // Editor identity is intentionally tile-stable: rebuilding would lose
-    // draft text. Mention extension closes over refs so it picks up fresh
-    // collaborator data without a teardown.
+    // Editor identity is intentionally tile-stable: rebuilding would lose draft text. Mention extension closes
+    // over refs so it picks up fresh collaborator data without a teardown.
     [],
   );
 

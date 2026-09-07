@@ -93,10 +93,7 @@ describe("capturePersistedAgentError", () => {
 });
 
 describe("captureDictationFailure", () => {
-  // Change C (int#4836): the failure class travels in the PUBLIC prefill so a
-  // filed issue names the failing path, while the raw error text - which can
-  // carry browser/host wording - stays private. These are the invariants that
-  // change exists to establish, so they are pinned rather than inspected.
+  // Change C (int#4836): the failure class travels in the PUBLIC prefill so a filed issue names the failing path, while the raw error text - which can carry browser/host wording - stays private.
   it("never calls captureException", () => {
     captureDictationFailure({
       failureClass: "not_connected",

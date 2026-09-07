@@ -7,12 +7,8 @@ import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
-// `traycer host stamp-runtime` (hidden, internal) - the desktop
-// controller's sole caller of `stampRuntime` (Host Update Layer
-// Redesign Tech Plan, "Unknown runtime identity" - one-time backfill).
-// Invoked ONLY immediately after an activation cycle the controller
-// itself drove observes readiness of the fresh process - see
-// `host/stamp-runtime.ts` for the full CAS contract.
+// `traycer host stamp-runtime` (hidden, internal) - the desktop controller's sole caller of `stampRuntime` (Host Update Layer Redesign Tech Plan, "Unknown runtime identity" - one-time backfill).
+// Invoked ONLY immediately after an activation cycle the controller itself drove observes readiness of the fresh process - see `host/stamp-runtime.ts` for the full CAS contract.
 export interface HostStampRuntimeArgs {
   readonly expectedInstallGeneration: string;
   readonly observedPid: number;

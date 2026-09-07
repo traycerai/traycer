@@ -1,18 +1,6 @@
 /**
- * Where an agent's name tag actually gets drawn, once its neighbours are
- * accounted for.
- *
- * Characters cluster - two agents at adjacent cafeteria seats, a queue at
- * reception - and their tags are wider than they are, so at rest they overlap
- * into a band of unreadable text. Nothing about the FLOOR is wrong when that
- * happens, so the fix belongs here rather than in the scene: the tag moves,
- * the character does not.
- *
- * GREEDY AND DETERMINISTIC. Tags are placed in a fixed order (top to bottom,
- * then left to right), each takes the first free slot at or below its anchor,
- * and one that finds none is DROPPED rather than drawn over a neighbour. A
- * dropped tag costs a name that hovering still reveals; a drawn one costs both
- * names.
+ * Nothing about the FLOOR is wrong when that happens, so the fix belongs here rather than in the scene: the tag moves, the character does not.
+ * Tags are placed in a fixed order (top to bottom, then left to right), each takes the first free slot at or below its anchor, and one that finds none is DROPPED rather than drawn over a neighbour.
  */
 export interface OfficeNameTagCandidate {
   readonly text: string;
@@ -68,9 +56,7 @@ export function layoutNameTags(
   candidates: ReadonlyArray<OfficeNameTagCandidate>,
   lineHeight: number,
 ): ReadonlyArray<OfficePlacedNameTag> {
-  // Sorted before placing, so the same floor always drops the same tags: a
-  // tie broken by iteration order would make a name flicker as the scene
-  // re-emits its drawables in a different sequence.
+  // Sorted before placing, so the same floor always drops the same tags: a tie broken by iteration order would make a name flicker as the scene re-emits its drawables in a different sequence.
   const ordered = [...candidates].sort(
     (a, b) => a.baselineY - b.baselineY || a.centerX - b.centerX,
   );

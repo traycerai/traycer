@@ -11,13 +11,7 @@ export interface TrayProjection {
   readonly indicator: TrayIndicatorState;
 }
 
-/**
- * Forwards GUI-derived tray state into the runner-host tray surface.
- *
- * Tray is always present on `IRunnerHost`; shells without a native tray
- * install a no-op implementation whose events never fire and whose setters
- * do nothing, so this hook drives the same calls everywhere.
- */
+/** Tray is always present on `IRunnerHost`; shells without a native tray install a no-op implementation whose events never fire and whose setters do nothing, so this hook drives the same calls everywhere. */
 export function useTrayProjection(projection: TrayProjection): void {
   const runnerHost = useRunnerHost();
 

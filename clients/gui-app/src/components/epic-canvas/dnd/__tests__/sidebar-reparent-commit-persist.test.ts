@@ -1,27 +1,3 @@
-/**
- * Persist path for an artifact sidebar reparent: a live `createOpenEpicStore`
- * (not the routing-test store stub) plus the real session registry, so a drop
- * actually moves `parentId` on the Y.Doc and fires `epic.reparentArtifact`.
- *
- * The projector suite already covers the store action in isolation
- * (`epic-projector.test.ts` "structural change (parent move) updates
- * childrenByParent buckets"). This file is the commit-level proof that the
- * commit is not a persist no-op.
- *
- * RETARGETED for T11's write-command queue. It used to assert a DUAL WRITE -
- * the local Y `parentId` moved AND `epic.reparentArtifact` went out - because
- * that is what the commit did. The queue now owns the write: the drop enqueues
- * a `reparent-artifact` command, the optimistic overlay moves the PROJECTION
- * immediately, and the doc is not written locally at all. A surviving direct Y
- * write would apply the move twice, once locally and once when the command
- * commits, which is the double-apply the queue exists to prevent - so the
- * absence of it is now part of what this file proves. Reload/second-session
- * against a real host is out of scope here.
- *
- * Only `getEpicSessionHandleHostClient` is stubbed — the same request seam
- * the routing suite uses — so peek returns the live handle. The rest of the
- * registry stays real.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import * as Y from "yjs";
@@ -101,11 +77,6 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-1",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -152,9 +123,7 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
       queryClient,
     });
 
-    // The user sees the move immediately - that is the optimistic overlay the
-    // queue stamps on enqueue, and it is what makes the drop feel committed
-    // before any round trip.
+    // The user sees the move immediately - that is the optimistic overlay the queue stamps on enqueue, and it is what makes the drop feel committed before any round trip.
     expect(handle.store.getState().tree.nodeById[child].parentId).toBe(parent);
 
     // The command is queued, carrying exactly the intent the direct pair used

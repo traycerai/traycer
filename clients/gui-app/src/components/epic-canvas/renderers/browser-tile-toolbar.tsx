@@ -147,9 +147,8 @@ export function BrowserTileToolbar(props: {
 }
 
 /**
- * The touch-grade chrome: the same nav buttons, the address field, and the
- * page-loading spinner. No PiP and no more-menu - a coarse pointer has no
- * hover to reveal them and the tile has no room.
+ * The touch-grade chrome: the same nav buttons, the address field, and the page-loading spinner.
+ * No PiP and no more-menu - a coarse pointer has no hover to reveal them and the tile has no room.
  */
 export function BrowserTileToolbarCompact(props: {
   readonly controller: TileController;
@@ -268,10 +267,7 @@ function BrowserTileToolbarAddress(props: {
       <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
         <InputGroupInput
           ref={setAddressInput}
-          // The rest of the toolbar already honours `disabled`; the address
-          // field is where a `viewer` (H12), a peek tile with no host client,
-          // or any other clientless tile would otherwise submit a nav frame
-          // nothing can carry.
+          // The rest of the toolbar already honours `disabled`; the address field is where a `viewer` (H12), a peek tile with no host client, or any other clientless tile would otherwise submit a nav frame nothing can carry.
           disabled={disabled}
           aria-label="Browser address"
           value={addressValue}
@@ -334,9 +330,7 @@ function BrowserTileToolbarTrailing(props: {
 }) {
   const controller = props.controller;
   const capabilities = controller.capabilities;
-  // The confirm dialog lives here, not inside the menu: selecting the item
-  // closes the dropdown, which would unmount a dialog rendered under it before
-  // it could ever open.
+  // The confirm dialog lives here, not inside the menu: selecting the item closes the dropdown, which would unmount a dialog rendered under it before it could ever open.
   const [clearSiteConfirmOpen, setClearSiteConfirmOpen] = useState(false);
   const clearSite = browserClearSiteAction(controller);
   return (
@@ -381,15 +375,7 @@ function BrowserTileToolbarTrailing(props: {
 }
 
 /**
- * The clear-site action for one tile. `null` hides the item outright, for the
- * two tiles that have no jar of their own to clear: a private session, whose
- * partition dies with the session and is shared with nothing (spec §6.1), and
- * a screencast tile, which watches a context on the host.
- *
- * A `null` `site` keeps the item visible but disabled: the tile is on
- * `about:blank` or a devtools URL, so there is a jar but no site to name. That
- * is a state the user can leave by navigating, which is why it reads as
- * disabled rather than as an action that quietly disappeared.
+ * That is a state the user can leave by navigating, which is why it reads as disabled rather than as an action that quietly disappeared.
  */
 function browserClearSiteAction(
   controller: TileController,
@@ -403,10 +389,7 @@ function browserClearSiteAction(
 }
 
 /**
- * The one shield a tile still shows. Saving logins is silent and always-on for
- * a `primary` tile - Chrome shows no badge for it either - so the only thing
- * left worth saying in the toolbar is that THIS session is private: it has
- * nothing to save, enable or clear, and closing it destroys the jar.
+ * Saving logins is silent and always-on for a `primary` tile - Chrome shows no badge for it either - so the only thing left worth saying in the toolbar is that THIS session is private: it has nothing to save, enable or clear, and closing it destroys the jar.
  */
 function BrowserPrivateSessionShield() {
   const [open, setOpen] = useState(false);

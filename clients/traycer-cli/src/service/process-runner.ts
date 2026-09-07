@@ -10,28 +10,21 @@ export interface RunOptions {
   readonly env: NodeJS.ProcessEnv | undefined;
   readonly cwd: string | undefined;
   readonly timeoutMs: number;
-  // When true, a non-zero exit code resolves rather than rejects. Use
-  // for commands like `launchctl bootout` whose non-zero exit is an
-  // expected "already gone" signal.
+  // When true, a non-zero exit code resolves rather than rejects.
+  // Use for commands like `launchctl bootout` whose non-zero exit is an expected "already gone" signal.
   readonly tolerateNonZeroExit: boolean;
 }
 
-// Promisified `child_process.execFile` with consistent error semantics
-// across platforms. Lifted from the Desktop service-installer so the
-// behaviour stays uniform after the move into the CLI.
+// Promisified `child_process.execFile` with consistent error semantics across platforms.
+// Lifted from the Desktop service-installer so the behaviour stays uniform after the move into the CLI.
 export function runCommand(
   command: string,
   args: readonly string[],
   options: RunOptions,
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    // Affirmative "the child started" evidence, recorded from the process
-    // handle itself rather than inferred from the shape of the error: a
-    // spawned child has a pid the moment `execFile` returns (and emits
-    // `spawn`), one that failed at fork/exec has neither. The error's `code`
-    // TYPE is not that evidence - execFile also reports a string code for a
-    // child that DID run and overflowed `maxBuffer`
-    // (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`), which must stay a run failure.
+    // Affirmative "the child started" evidence, recorded from the process handle itself rather than inferred from the shape of the error: a spawned child has a pid the moment `execFile` returns (and emits `spawn`), one that failed at fork/exec has neither.
+    // The error's `code` TYPE is not that evidence - execFile also reports a string code for a child that DID run and overflowed `maxBuffer` (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`), which must stay a run failure.
     let spawned = false;
     const child = execFile(
       command,
@@ -56,22 +49,15 @@ export function runCommand(
           resolve({ stdout: stdoutStr, stderr: stderrStr, exitCode });
           return;
         }
-        // Distinguish timeout/signal kills from genuine non-zero exits so
-        // the resulting CLI error tells the operator which knob to turn
-        // (raise `timeoutMs`) instead of pointing at a phantom "exit -1".
-        // execFile sets `err.signal` (and `err.killed`) when its own
-        // timer fires SIGTERM at the child.
+        // Distinguish timeout/signal kills from genuine non-zero exits so the resulting CLI error tells the operator which knob to turn (raise `timeoutMs`) instead of pointing at a phantom "exit -1". execFile sets `err.signal` (and `err.killed`) when its own timer fires SIGTERM at the child.
         const errWithSignal = err as NodeJS.ErrnoException & {
           signal?: string | null;
           killed?: boolean;
         };
         const signal = errWithSignal.signal ?? null;
         const killed = errWithSignal.killed === true;
-        // Never started: no pid and no `spawn` event, and execFile reported
-        // the errno (`ENOENT`, `EACCES`, `EAGAIN`) instead of an exit status.
-        // A child that ran and failed carries a numeric exit code, one this
-        // runner killed carries a signal, and one that overflowed `maxBuffer`
-        // carries a string code but DID start - the pid keeps it a run error.
+        // Never started: no pid and no `spawn` event, and execFile reported the errno (`ENOENT`, `EACCES`, `EAGAIN`) instead of an exit status.
+        // A child that ran and failed carries a numeric exit code, one this runner killed carries a signal, and one that overflowed `maxBuffer` carries a string code but DID start - the pid keeps it a run error.
         const spawnFailed = !spawned && typeof err.code === "string" && !killed;
         const summary = spawnFailed
           ? `could not be spawned (${err.code})`
@@ -100,10 +86,8 @@ export function runCommand(
         );
       },
     );
-    // Both signals, because they arrive at different times: the pid is set
-    // synchronously when the fork succeeded, `spawn` fires once the child is
-    // running. Either is proof the command reached the OS; the callback
-    // above runs after both (execFile's error path defers to the next tick).
+    // Both signals, because they arrive at different times: the pid is set synchronously when the fork succeeded, `spawn` fires once the child is running.
+    // Either is proof the command reached the OS; the callback above runs after both (execFile's error path defers to the next tick).
     if (typeof child.pid === "number") {
       spawned = true;
     }
@@ -137,14 +121,7 @@ export class ProcessRunError extends Error {
   }
 }
 
-/**
- * The child never started - `execFile` reported a spawn errno (`ENOENT`,
- * `EACCES`) rather than an exit status. Still a {@link ProcessRunError} for
- * every caller that only asks "did it fail", and a distinct class for the
- * callers whose answer depends on whether the command REACHED its target: a
- * `launchctl bootout` that could not be spawned provably evicted nothing,
- * where one that ran and failed may have.
- */
+/** The child never started - `execFile` reported a spawn errno (`ENOENT`, `EACCES`) rather than an exit status. Still a {@link ProcessRunError} for every caller that only asks "did it fail", and a distinct class for the callers whose answer depends on whether the command REACHED its target: a `launchctl bootout` that could not be spawned provably evicted nothing, where one that ran and failed may have. */
 export class ProcessSpawnError extends ProcessRunError {
   constructor(
     message: string,

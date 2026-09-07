@@ -33,11 +33,7 @@ export function isTabStructurallyLocked(ref: TabRef): boolean {
   return structuralPredicate(ref);
 }
 
-/**
- * Installs the runtime-owned close policy. A feature may allow grouped repair
- * to close an errored surface while still keeping every other structural
- * operation locked until that surface converts to its durable kind.
- */
+/** Installs the runtime-owned close policy. */
 export function registerTabCloseLockPredicate(
   next: TabCloseLockPredicate,
 ): () => void {

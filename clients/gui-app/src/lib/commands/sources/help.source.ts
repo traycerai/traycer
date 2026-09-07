@@ -1,6 +1,6 @@
 /**
- * Help-oriented commands. Uses a ReactCommandSource so it can close
- * over `runnerHost` for commands that open external links.
+ * Help-oriented commands.
+ * Uses a ReactCommandSource so it can close over `runnerHost` for commands that open external links.
  */
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -12,9 +12,7 @@ export const helpSource: ReactCommandSource = {
     const reportIssueAvailable = useDesktopDialogStore(
       (s) => s.reportIssueAvailable,
     );
-    // The row navigates straight into a settings section, so it exists only
-    // where that section does - otherwise it is the one entry point that
-    // routes around the navigation, and its destination redirects elsewhere.
+    // The row navigates straight into a settings section, so it exists only where that section does - otherwise it is the one entry point that routes around the navigation, and its destination redirects elsewhere.
     const keybindingsAvailable = isSettingsSectionVisible("keybindings");
     const keybindings: CommandItem = {
       id: "help:keybindings",

@@ -37,11 +37,8 @@ describe("splitPromptIntoComposerSegments", () => {
   });
 
   it("browser-tab LLM token splits into a mention plus the [tabId=...] suffix as text", () => {
-    // `@browser-tab:<title> [tabId=...]` is `formatMentionForLLMQuery`'s
-    // `ContextType.BrowserTab` output. `MENTION_TOKEN_REGEX` stops at the
-    // first whitespace, so only a single-word title is captured as the
-    // mention path here - the bracketed suffix falls into the following text
-    // segment, exactly like `@agent:`/`@terminal:` tokens already do.
+    // `@browser-tab:<title> [tabId=...]` is `formatMentionForLLMQuery`'s `ContextType.BrowserTab` output.
+    // `MENTION_TOKEN_REGEX` stops at the first whitespace, so only a single-word title is captured as the mention path here - the bracketed suffix falls into the following text segment, exactly like `@agent:`/`@terminal:` tokens already do.
     expect(
       splitPromptIntoComposerSegments("check @browser-tab:GitHub [tabId=t1]"),
     ).toEqual([
@@ -79,9 +76,8 @@ describe("collapsedPromptLength", () => {
 
 describe("GitHub entity tokens and trailing punctuation", () => {
   it("keeps a trailing comma out of the token", () => {
-    // The path IS the attachment key. With the comma inside it, the sent
-    // message looks up `github-pr:acme/widgets#123,`, misses the real
-    // attachment, and renders a generic chip that has eaten the punctuation.
+    // The path IS the attachment key.
+    // With the comma inside it, the sent message looks up `github-pr:acme/widgets#123,`, misses the real attachment, and renders a generic chip that has eaten the punctuation.
     expect(
       splitPromptIntoComposerSegments("see @github-pr:acme/widgets#123, then"),
     ).toEqual([
@@ -120,9 +116,8 @@ describe("GitHub entity tokens and trailing punctuation", () => {
   });
 
   it("leaves other entity kinds untouched", () => {
-    // The other control, and the deliberate scope: only GitHub tokens state
-    // where they end, so only they are trimmed. The pre-existing behaviour for
-    // every other kind is unchanged rather than guessed at.
+    // The other control, and the deliberate scope: only GitHub tokens state where they end, so only they are trimmed.
+    // The pre-existing behaviour for every other kind is unchanged rather than guessed at.
     expect(splitPromptIntoComposerSegments("@spec:epic-1/design,")).toEqual([
       { type: "mention", path: "spec:epic-1/design," },
     ]);

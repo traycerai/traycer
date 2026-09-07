@@ -1,28 +1,5 @@
 import { EncryptStorage } from "encrypt-storage";
 
-/**
- * Renderer-side replacement for the keychain-backed `safeStorage` token
- * store. Mirrors how the Traycer web UI persists credentials: AES on
- * top of `window.localStorage`, with the encryption key bundled into the
- * shipped renderer JS at build time via Vite's `import.meta.env`.
- *
- * Threat model (be honest about what this is and isn't):
- *   - Stops a curious user with DevTools from reading bearer tokens straight
- *     out of `localStorage` as plaintext.
- *   - Frustrates trivial copy-paste exfiltration (e.g. screen-share leaks).
- *   - DOES NOT defend against malware running as the same OS user - that
- *     attacker can read both the ciphertext (from Chromium's local storage
- *     on disk) and the bundled key (`grep`-able inside the asar). The
- *     macOS Keychain we replaced was the only mechanism that gave us
- *     offline-disk-theft protection, and it cost us a scary password
- *     prompt on every unsigned-build first-launch.
- *
- * In exchange we get:
- *   - No keychain prompts, on any OS.
- *   - No Electron `safeStorage` / IPC dance for credential I/O - the
- *     renderer reads/writes its own `localStorage` directly.
- *   - Parity with how the Traycer web UI persists its credentials.
- */
 const FALLBACK_KEY = "traycer-desktop-default-secret";
 
 function resolveEncryptionKey(): string {
@@ -36,12 +13,7 @@ function resolveEncryptionKey(): string {
   if (configured !== null) {
     return configured;
   }
-  // Packaged builds must never fall back to the well-known public string
-  // - anyone with the bundled asar would otherwise be able to decrypt
-  // tokens at rest. `import.meta.env.PROD` is wired by Vite at build
-  // time and is `true` for production-mode bundles; dev shells (`make
-  // dev-desktop`) get a warning + the fallback so local iteration isn't
-  // blocked on setting the env var.
+  // Packaged builds must never fall back to the well-known public string - anyone with the bundled asar would otherwise be able to decrypt tokens at rest.
   const isProdBuild =
     typeof import.meta !== "undefined" &&
     import.meta.env !== undefined &&
@@ -67,33 +39,14 @@ function getEncryptStorage(): EncryptStorage {
     encryptStorage = new EncryptStorage(ENCRYPTION_KEY, {
       storageType: "localStorage",
       encAlgorithm: "AES",
-      // `ISecureStorage.get` returns exactly the string `set` was handed -
-      // this adapter stores opaque strings and every caller parses its own.
-      //
-      // encrypt-storage defaults this to `false`, and then `getItem`
-      // JSON-parses whatever it decrypted. For a JWT (the legacy token slots)
-      // the parse throws and the raw string comes back, so the default LOOKED
-      // correct for years. Hand it a value that happens to BE valid JSON and
-      // it returns an object instead - which `readEncryptedItem` below reports
-      // as `null`, because a non-string cannot be the string it promised. A
-      // stored value silently reads as absent, with no throw and no log.
-      //
-      // That is not hypothetical: it is exactly what happened to the auth
-      // provisional-session snapshot (a JSON object, written and then never
-      // readable), and it cost a whole boot optimisation with no error
-      // anywhere. Parsing is the caller's business; this layer moves strings.
+      // `ISecureStorage.get` returns exactly the string `set` was handed - this adapter stores opaque strings and every caller parses its own.
+      // For a JWT (the legacy token slots) the parse throws and the raw string comes back, so the default LOOKED correct for years.
       doNotParseValues: true,
     });
   }
   return encryptStorage;
 }
 
-/**
- * Read a previously-encrypted string value. Returns `null` when the slot
- * is empty or the ciphertext fails to decrypt (we treat decrypt failure as
- * "no value" so a corrupted local store doesn't crash sign-in - the user
- * just gets re-prompted to authenticate).
- */
 export function readEncryptedItem(key: string): string | null {
   try {
     const value = getEncryptStorage().getItem<string>(key);

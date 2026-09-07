@@ -33,23 +33,11 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 const ROW_CLASS = "h-11 w-full justify-start gap-3 px-3";
 
-// The task scroller fades its bottom edge rather than slicing a row against the
-// footer's border. The list carries matching bottom padding, so the gradient
-// only ever covers blank space - at full scroll the last row stays crisp.
+// The task scroller fades its bottom edge rather than slicing a row against the footer's border.
 const LIST_FADE_CLASS =
   "[-webkit-mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)] [mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)]";
 
-/**
- * Left hamburger drawer for the mobile shell. It re-homes the global controls
- * that the desktop header carries (Settings, identity / account) into a single
- * menu, plus a "New task" entry and an inline recent task list (the same
- * `useHistoryQuery` source the landing page renders), since the tab strip and
- * header right-cluster are hidden on phones. Manage subscription and Sign out
- * ride the identity row as icons; notifications stay in the header next to the
- * other status controls (`MobileNotificationsButton`). Every action reuses the
- * same helper the desktop surfaces call. Mounted only on mobile (see
- * AppShell), so desktop is untouched.
- */
+/** Mounted only on mobile (see AppShell), so desktop is untouched. */
 export function MobileNavDrawer(): ReactNode {
   const open = useMobileNavStore((state) => state.open);
   const setOpen = useMobileNavStore((state) => state.setOpen);
@@ -72,9 +60,7 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleSettings = () => {
     close();
-    // Mirror the desktop user-menu call site's telemetry (user-menu.tsx). Not
-    // lifted into the shared action, which would double-fire for the desktop
-    // callers that already track here.
+    // Not lifted into the shared action, which would double-fire for the desktop callers that already track here.
     Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
       source: "direct_ui",
       section: "general",
@@ -97,14 +83,8 @@ export function MobileNavDrawer(): ReactNode {
   // differs, so it is built once rather than duplicated per branch.
   const panel = (
     <>
-      {/* Identity plus the two account actions as icons beside the name -
-            the same pair the desktop `UserMenu` offers behind the avatar, both
-            one tap here. Manage subscription takes the slot the notification
-            bell vacated when it moved to the header.
-
-            `px-5` is the nav rows' effective inset below (`p-2` + `px-3`), so
-            the avatar shares a left edge with their glyphs; no bottom padding
-            beyond `pb-2` because the `nav` supplies the rest of the gap. */}
+      {/* `px-5` is the nav rows' effective inset below (`p-2` + `px-3`), so the avatar shares a left edge with their
+         glyphs; no bottom padding beyond `pb-2` because the `nav` supplies the rest of the gap. */}
       {profile === null ? null : (
         <div className="flex shrink-0 items-center gap-3 px-5 pt-4 pb-2">
           <Avatar size="sm">
@@ -133,9 +113,8 @@ export function MobileNavDrawer(): ReactNode {
           >
             <SquareArrowOutUpRight className="size-4" />
           </Button>
-          {/* Opens the confirm rather than signing out: unlike its
-                neighbours this control doesn't `close()` first, so cancelling
-                puts the user back in the drawer where they were. */}
+          {/* Opens the confirm rather than signing out: unlike its neighbours this control doesn't `close` first, so
+             cancelling puts the user back in the drawer where they were. */}
           <Button
             type="button"
             variant="ghost"
@@ -157,13 +136,8 @@ export function MobileNavDrawer(): ReactNode {
         <Button
           type="button"
           variant="default"
-          // The drawer's ONE filled element: a compact accent pill separates
-          // the create action from the flat history rows without spanning a
-          // heavy full-height slab. Nothing else in this panel may take a
-          // resting fill, or the distinction dies.
-          // Visually a compact h-9 pill, but the tap target must still meet
-          // the 44px touch floor: the ::after overlay extends the hit area
-          // invisibly without growing the rendered button.
+          // Visually a compact h-9 pill, but the tap target must still meet the 44px touch floor: the::after overlay
+          // extends the hit area invisibly without growing the rendered button.
           className="relative h-9 w-full shrink-0 justify-center gap-2 rounded-md px-4 font-semibold after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-['']"
           data-testid="mobile-nav-new-task"
           onClick={handleNewTask}
@@ -201,18 +175,7 @@ export function MobileNavDrawer(): ReactNode {
         onConfirm={close}
       />
       {installedApp ? (
-        /* A hand-driven surface rather than a dialog primitive, for one
-           reason: dismissal has to follow the finger and stay interruptible
-           mid-flight. Every dialog primitive available here plays a canned
-           exit the hand cannot catch or reverse, and no amount of
-           configuration produces one - a panel that tracks a pointer 1:1 has
-           to own its transform outright.
-
-           Branched on the PRODUCT flag, not the viewport, because the drawer
-           itself is mounted by form factor: a narrow desktop window renders
-           this component too, and it has a pointer rather than a finger. A
-           surface whose only dismissal is a drag would be a surface that
-           window cannot close, so it takes the Sheet. */
+        /* A surface whose only dismissal is a drag would be a surface that window cannot close, so it takes the Sheet. */
         <MobileNavDrawerSurface open={open} onOpenChange={setOpen}>
           {panel}
         </MobileNavDrawerSurface>
@@ -234,9 +197,8 @@ export function MobileNavDrawer(): ReactNode {
   );
 }
 
-// Single source of a row's display label; raw epic titles can be empty, so
-// apply the source-aware "Untitled task" fallback (phases carry their own
-// baked fallback and render verbatim). Mirrors the landing list.
+// Single source of a row's display label; raw epic titles can be empty, so apply the source-aware "Untitled
+// task" fallback (phases carry their own baked fallback and render verbatim).
 function drawerItemDisplayTitle(item: HistoryItem): string {
   return item.taskType === "phase"
     ? item.title
@@ -250,20 +212,13 @@ interface DrawerTaskListProps {
   readonly onNavigate: () => void;
 }
 
-/**
- * Inline recent-task list under "New task". Same data source as the landing
- * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) and the
- * same ambient search memory every history surface shares - the drawer shows
- * the list the way the user last filtered it, with no filter/sort/selection
- * chrome of its own; the full surface stays one tap away on the landing page.
- */
+/** Inline recent-task list under "New task". */
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { openHistory } = useSystemTabModalActions();
-  // One subscription to the shared 60s clock for the whole list, then the pure
-  // formatter per row - rather than a per-row `useRelativeTimestamp`, which
-  // would take one subscription each to re-render the same list anyway.
+  // One subscription to the shared 60s clock for the whole list, then the pure formatter per row - rather than a
+  // per-row `useRelativeTimestamp`, which would take one subscription each to re-render the same list anyway.
   const now = useSampledNow();
   const { search } = useAmbientHistorySearchState();
   const {
@@ -353,11 +308,8 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
               openItem(item);
             }}
           >
-            {/* No leading icon on ordinary rows: every row in this list is a
-                task, so a repeated glyph carried no information and cost the
-                title ~28px. The pin glyph appears only on pinned rows, where
-                it IS the information - mirrors the list panel's pinned style
-                (primary + filled). */}
+            {/* The pin glyph appears only on pinned rows, where it IS the information - mirrors the list panel's pinned
+               style (primary + filled). */}
             {item.isPinned ? (
               <Pin
                 aria-label="Pinned"
@@ -368,11 +320,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             <span className="min-w-0 flex-1 truncate text-left font-normal">
               {drawerItemDisplayTitle(item)}
             </span>
-            {/* The shared `updatedLabel` ("about 1 month ago") spends ~100px on
-                a secondary detail and is why titles truncated mid-word. The
-                bucketed formatter the notification rows use says the same thing
-                in a third of the width. Formatted here rather than by changing
-                `updatedLabel`, which the landing list and the tray also read. */}
+            {/* Formatted here rather than by changing `updatedLabel`, which the landing list and the tray also read. */}
             <span className="shrink-0 text-ui-xs text-muted-foreground">
               {formatRelativeTimestamp(item.updatedAtMs, now)}
             </span>
@@ -406,17 +354,13 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
 
   return (
     <div
-      // `pb-8` is the blank strip `LIST_FADE_CLASS` fades over, so a full
-      // scroll never leaves the last row half-faded. Grouping here is
-      // whitespace rather than another rule: the drawer had four of them
-      // (identity, New task, this list, footer) and only the footer's - which
-      // separates the pinned actions from a moving list - earns its keep.
+      // `pb-8` is the blank strip `LIST_FADE_CLASS` fades over, so a full scroll never leaves the last row
+      // half-faded.
       className="flex flex-col gap-1 pb-8"
       data-testid="mobile-nav-task-list"
     >
-      {/* Pinned while the rows scroll: the caption and the History entry
-          stay reachable at any scroll depth. Solid drawer background
-          (`bg-popover`) so rows slide under it rather than through it. */}
+      {/* Pinned while the rows scroll: the caption and the History entry stay reachable at any scroll depth. Solid
+         drawer background (`bg-popover`) so rows slide under it rather than through it. */}
       <div className="sticky top-0 z-10 flex items-center justify-between bg-popover px-3 py-1">
         <span className="text-overline text-muted-foreground">
           Recent tasks

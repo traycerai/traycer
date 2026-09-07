@@ -11,17 +11,8 @@ import {
   resolveCliVersion,
 } from "../index";
 
-// `traycer --version` must report the release-injected
-// `TRAYCER_CLI_VERSION` for SEA builds and the local/dev fallback
-// otherwise. Before this fixup, `index.ts` registered a hardcoded
-// `0.0.0` so the SEA artifact reported the source-tree placeholder
-// even when the release workflow had injected the correct version
-// (ticket:e86b8372-…/284b9132-…).
-//
-// These tests pin both the env-resolution unit boundary and the
-// Commander integration so a future refactor that bypasses the
-// helper (or drops the `.version(...)` call) cannot regress the
-// SEA build silently.
+// `traycer --version` must report the release-injected `TRAYCER_CLI_VERSION` for SEA builds and the local/dev fallback otherwise.
+// Before this fixup, `index.ts` registered a hardcoded `0.0.0` so the SEA artifact reported the source-tree placeholder even when the release workflow had injected the correct version (ticket:e86b8372-…/284b9132-…).
 
 describe("resolveCliVersion", () => {
   it("returns TRAYCER_CLI_VERSION when the release pipeline injected it", () => {
@@ -49,19 +40,14 @@ describe("resolveCliVersion", () => {
   });
 
   it("returns the local sentinel in the literal form the package-manager refute_match guards against", () => {
-    // The Homebrew formula's `refute_match /\A0\.0\.0(?:-local)?\z/`
-    // pins exactly two placeholder shapes - '0.0.0' and '0.0.0-local'.
-    // If a future refactor changed the sentinel to e.g. 'dev', the
-    // release flow would also need to update the formula guard. This
-    // test makes the coupling explicit so the change is intentional.
+    // The Homebrew formula's `refute_match /\A0\.0\.0(?:-local)?\z/` pins exactly two placeholder shapes - '0.0.0' and '0.0.0-local'.
+    // If a future refactor changed the sentinel to e.g.
     expect(LOCAL_CLI_VERSION).toBe("0.0.0-local");
   });
 
   it("matches the fallback literal hardcoded in build-cli-sea.cjs", () => {
-    // The SEA build pipeline embeds the same sentinel via esbuild's
-    // `define` map. The two files live in different layers (TS source
-    // + CJS build script) and CI failures from drift here are hard to
-    // diagnose, so the cross-file invariant is pinned here.
+    // The SEA build pipeline embeds the same sentinel via esbuild's `define` map.
+    // The two files live in different layers (TS source + CJS build script) and CI failures from drift here are hard to diagnose, so the cross-file invariant is pinned here.
     const buildScript = readFileSync(
       join(__dirname, "..", "..", "scripts", "build-cli-sea.cjs"),
       "utf8",
@@ -102,10 +88,8 @@ describe("resolveCliVersion", () => {
 
 describe("buildProgram() Commander version registration", () => {
   it("registers the local/dev fallback when TRAYCER_CLI_VERSION is unset at module-evaluation time", () => {
-    // `buildProgram()` reads `process.env.TRAYCER_CLI_VERSION` directly,
-    // so we save/restore the slot around the assertion. Tests run under
-    // tsx/vitest where the env var is not injected at the build step,
-    // so the natural default is the local fallback.
+    // `buildProgram()` reads `process.env.TRAYCER_CLI_VERSION` directly, so we save/restore the slot around the assertion.
+    // Tests run under tsx/vitest where the env var is not injected at the build step, so the natural default is the local fallback.
     const previous = process.env.TRAYCER_CLI_VERSION;
     delete process.env.TRAYCER_CLI_VERSION;
     try {
@@ -140,9 +124,8 @@ describe("buildProgram() Commander version registration", () => {
     delete process.env.TRAYCER_CLI_VERSION;
     try {
       const program = buildProgram();
-      // Specifically guards the regression - the pre-fix value was
-      // exactly "0.0.0" with no suffix. The local fallback is
-      // "0.0.0-local" which is distinguishable.
+      // Specifically guards the regression - the pre-fix value was exactly "0.0.0" with no suffix.
+      // The local fallback is "0.0.0-local" which is distinguishable.
       expect(program.version()).not.toBe("0.0.0");
     } finally {
       if (previous === undefined) {
@@ -198,9 +181,7 @@ describe("buildProgramWithAgentRoles() command registration", () => {
 describe("CLI_CLIENT_IDENTITY", () => {
   it("declares the cli kind, the shared reviewed epoch, and the resolved version", () => {
     expect(CLI_CLIENT_IDENTITY.kind).toBe("cli");
-    // Read from the protocol package rather than restated here: a second copy
-    // of this number is how one sender starts claiming a generation the
-    // others do not.
+    // Read from the protocol package rather than restated here: a second copy of this number is how one sender starts claiming a generation the others do not.
     expect(CLI_CLIENT_IDENTITY.compatibilityEpoch).toBe(
       CURRENT_CLIENT_COMPATIBILITY_EPOCH,
     );
@@ -208,11 +189,8 @@ describe("CLI_CLIENT_IDENTITY", () => {
   });
 
   it("does NOT derive its epoch from its version", () => {
-    // The two answer different questions: a backport carries a low SemVer and
-    // a current epoch, and a version bump that changes no architectural
-    // guarantee must not move the epoch. Under vitest the version resolves to
-    // `0.0.0-local`, whose major is 0 - an epoch derived from it would be
-    // `invalid-epoch` to every host.
+    // The two answer different questions: a backport carries a low SemVer and a current epoch, and a version bump that changes no architectural guarantee must not move the epoch.
+    // Under vitest the version resolves to `0.0.0-local`, whose major is 0 - an epoch derived from it would be `invalid-epoch` to every host.
     expect(CLI_CLIENT_IDENTITY.appVersion).toBe(LOCAL_CLI_VERSION);
     expect(CLI_CLIENT_IDENTITY.compatibilityEpoch).toBeGreaterThan(0);
   });

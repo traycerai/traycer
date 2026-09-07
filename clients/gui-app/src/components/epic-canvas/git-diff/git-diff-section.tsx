@@ -29,10 +29,8 @@ export interface GitDiffSectionProps {
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly bundleFileCount: number;
   /**
-   * When a filter is active, force the section open regardless of the user's
-   * stored collapse flag so matches are always visible. Overridden at render
-   * time only - the persisted flag is untouched, so clearing the filter
-   * restores the user's collapse state.
+   * When a filter is active, force the section open regardless of the user's stored collapse flag so matches are always visible.
+   * Overridden at render time only - the persisted flag is untouched, so clearing the filter restores the user's collapse state.
    */
   readonly forceExpanded: boolean;
   readonly collapseController: GitDiffSectionCollapseController | null;
@@ -42,11 +40,7 @@ export interface GitDiffSectionProps {
 }
 
 /**
- * Per-stage-group chrome shared by both panel layouts (flat list and
- * Pierre tree): the Section shell, the persisted per-epic collapse flag,
- * the +/- stats summary, and the bundle-open action. `Section` only
- * mounts `children` when expanded and non-empty, so callers pass the
- * section body unconditionally.
+ * `Section` only mounts `children` when expanded and non-empty, so callers pass the section body unconditionally.
  */
 export function GitDiffSection(props: GitDiffSectionProps): ReactNode {
   const collapseController = props.collapseController;

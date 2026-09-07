@@ -1,13 +1,4 @@
-/**
- * Schema + factory for managed-command output windows.
- *
- * The persisted tile is a pointer: the command id (as the tile's content id,
- * which is what makes "open again focuses the existing window" fall out of the
- * canvas's own dedup) plus the host that owns it. Nothing about the shell
- * itself is written down - description, status and the monitor flag are live
- * state carried by the owning chat's stream, and a window rehydrated days later
- * has to read them fresh rather than replay a snapshot from disk.
- */
+/** Schema + factory for managed-command output windows. */
 import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { TILE_KIND_MANAGED_COMMAND_OUTPUT } from "../tile-kinds";
@@ -16,10 +7,8 @@ import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
 /**
- * Tab label before the chat's set answers. Nameless on purpose: the shell's
- * description is not knowable from the tile, and guessing one would be the
- * state creep this shape exists to prevent. `useEpicTabDisplayTitle` replaces
- * it with the live title as soon as the shell's record lands.
+ * Tab label before the chat's set answers. Nameless on purpose: the shell's description is not
+ * knowable from the tile, and guessing one would be the state creep this shape exists to prevent.
  */
 export const MANAGED_COMMAND_OUTPUT_TILE_NAME = "Output";
 

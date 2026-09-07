@@ -184,11 +184,7 @@ interface GeometryHarnessProps {
   readonly isColdOpen: boolean;
 }
 
-/**
- * Minimal deterministic harness: a Popper wrapper ancestor + real
- * NotificationsPopover content. Avoids Radix portal timing flakes while
- * still exercising the placement-gated lock + shrink paths.
- */
+/** Avoids Radix portal timing flakes while still exercising the placement-gated lock + shrink paths. */
 function GeometryHarness(props: GeometryHarnessProps): ReactNode {
   const geometry = useNotificationCenterGeometry({
     open: props.open,
@@ -632,12 +628,8 @@ describe("useNotificationCenterGeometry integration", () => {
   });
 
   it("holds the outer rect across pending and failure row content states", async () => {
-    // Pending/failure only change opacity/disabled/data attrs - not the
-    // outer shell geometry. Seed enough content for a stable locked rect,
-    // then flip a row into pending via data-notification-pending is owned
-    // by activation (tested elsewhere); here we assert content churn that
-    // mirrors pending/failure (opacity-disabled sibling, failure severity
-    // swap) never mutates the frozen outer width/height.
+    // Pending/failure only change opacity/disabled/data attrs - not the outer shell geometry.
+    // Seed enough content for a stable locked rect, then flip a row into pending via data-notification-pending is owned by activation (tested elsewhere); here we assert content churn that mirrors pending/failure (opacity-disabled sibling, failure severity swap) never mutates the frozen outer width/height.
     const shell = await openAndLock({ isColdOpen: false });
     const locked = {
       width: shell.style.width,

@@ -76,7 +76,7 @@ describe("HostBindingAuthorityRegistry", () => {
     expect(b2.providerGeneration).toBe(2);
     expect(b2.endpoint.websocketUrl).toBe(t2.websocketUrl);
 
-    // Returning to H1/t1 must mint again — not resurrect the aborted generation.
+    // Returning to H1/t1 must mint again - not resurrect the aborted generation.
     const b3 = registry.capture(t1, t1);
     expect(b3.token).not.toBe(b1.token);
     expect(b3.token).not.toBe(b2.token);

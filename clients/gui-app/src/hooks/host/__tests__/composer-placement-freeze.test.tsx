@@ -8,17 +8,7 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * F4: a composer's SUBMIT client must be frozen to the resolved host, while
- * its READ client stays mutable.
- *
- * The bug this guards is invisible to any single-RPC test. A following
- * composer's read client is the app-wide one, which rebinds IN PLACE - the
- * object identity never changes - so a terminal-agent submit
- * (`epic.create` → `agent.tui.prepareLaunch` → `epic.createTuiAgent`, awaiting
- * between each) can create the epic on host A and then run every later step on
- * host B, with nothing in the chain able to notice. Freezing is what makes the
- * chain provably single-host; these assert the two clients are resolved from
- * DIFFERENT sources, which is the whole mechanism.
+ * Submit client is frozen to the resolved host; read client stays mutable. A following composer's read client rebinds in place, so a multi-RPC submit would otherwise split hosts.
  */
 
 // The composer key is now the BROWSER TAB's identity, not the literal
@@ -87,10 +77,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // This suite never captures `unmount`, so a still-mounted tree from an
-  // earlier test would otherwise keep observing later store writes below and
-  // re-render, adding unrelated `useHostClientForHostId` calls to the shared
-  // `mocks.resolvedFor` this file uses as an oracle.
+  // This suite never captures `unmount`, so a still-mounted tree from an earlier test would otherwise keep observing later store writes below and re-render, adding unrelated `useHostClientForHostId` calls to the shared `mocks.resolvedFor` this file uses as an oracle.
   cleanup();
   useSurfaceHostSelectionStore.getState().resetForTests();
   useSelectionAuthorityStore.getState().reset();
@@ -154,12 +141,8 @@ describe("composer placement freezes its submit client", () => {
   });
 
   it("a deposed pin's read client follows the resolved host, not the pin", () => {
-    // The defect this pins: the hook must read `pin.honoredSelection` for the
-    // READ client, never `pin.selection`. While the pin is deposed,
-    // `selection` still NAMES THE DEAD HOST ("host-a"), so reverting the hook
-    // to read `selection` would resolve the read client against "host-a"
-    // instead of following the live host - this case must fail if that
-    // happens.
+    // The defect this pins: the hook must read `pin.honoredSelection` for the READ client, never `pin.selection`.
+    // While the pin is deposed, `selection` still NAMES THE DEAD HOST ("host-a"), so reverting the hook to read `selection` would resolve the read client against "host-a" instead of following the live host - this case must fail if that happens.
     useSurfaceHostSelectionStore
       .getState()
       .setSelection(COMPOSER_KEY, "host-a");
@@ -195,10 +178,7 @@ describe("composer placement freezes its submit client", () => {
     expect(result.current.submitTarget.client?.getActiveHostId()).toBe(
       "host-b",
     );
-    // The literal ids requested from `useHostClientForHostId`, in call order:
-    // `null` for the read client (never "host-a"), then "host-b" for submit.
-    // Reverting the hook to `pin.selection` would push "host-a" first here,
-    // which is exactly what turns the two assertions above into failures.
+    // The literal ids requested from `useHostClientForHostId`, in call order: `null` for the read client (never "host-a"), then "host-b" for submit.
     expect(mocks.resolvedFor).toEqual([null, "host-b"]);
   });
 });

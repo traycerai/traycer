@@ -38,13 +38,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/**
- * Real-editor integration coverage for the review-fix round on paste/drop
- * path insertion. Mounts the actual `ComposerPromptEditor` wired to the
- * actual `useComposerPaste` handlers - the seam the prior review called out
- * as untested (plain div / mocked handle would hide ProseMirror ownership
- * races, position mapping, undo grouping, and unmount liveness).
- */
+/** Real-editor integration coverage for the review-fix round on paste/drop path insertion. Mounts the actual `ComposerPromptEditor` wired to the actual `useComposerPaste` handlers - the seam the prior review called out as untested (plain div / mocked handle would hide ProseMirror ownership races, position mapping, undo grouping, and unmount liveness). */
 describe("composer path paste/drop integration (real editor)", () => {
   describe("native-only clipboard fallback", () => {
     it("inserts a native VS Code file path when the DOM clipboard is empty", async () => {
@@ -235,10 +229,7 @@ describe("composer path paste/drop integration (real editor)", () => {
         clipboardData: makeFileTransfer([file]),
       });
 
-      // Append at the end via a real document transaction so the mappable
-      // position is tracked through an intervening edit (proves mapping, not
-      // "current selection at resolve time"). insertDictatedText when unfocused
-      // appends at Selection.atEnd without replacing the whole doc.
+      // Append at the end via a real document transaction so the mappable position is tracked through an intervening edit (proves mapping, not "current selection at resolve time"). insertDictatedText when unfocused appends at Selection.atEnd without replacing the whole doc.
       act(() => {
         handleRef.current?.insertDictatedText("ZZZ");
       });
@@ -249,9 +240,7 @@ describe("composer path paste/drop integration (real editor)", () => {
         await flushMicrotasksRaw();
       });
 
-      // Path should land between AAAA and BBBB (original paste caret), not
-      // after the later "ZZZ " append at end (which would mean "current
-      // selection at resolve time").
+      // Path should land between AAAA and BBBB (original paste caret), not after the later "ZZZ " append at end (which would mean "current selection at resolve time").
       expect(pathSpanTexts(handleRef.current)).toEqual(["mid.txt"]);
       const joined = textRuns(handleRef.current)
         .map((run) => run.text)
@@ -314,9 +303,6 @@ describe("composer path paste/drop integration (real editor)", () => {
       expect(joined.indexOf("mid.txt")).toBeLessThan(joined.indexOf("NEW"));
     });
   });
-  // Round-2 finding 3: `hasClaimableFileTransfer` parses URI content instead
-  // of trusting the `text/uri-list` type name alone, so an ordinary link
-  // paste isn't silently swallowed.
   describe("round-2 finding 3 - ordinary link paste is not claimed as file-like", () => {
     it("does not swallow an ordinary https:// link paste (text/uri-list + text/plain, no file:// entries)", async () => {
       const resolveDroppedFilePaths = vi.fn(() => Promise.resolve([]));
@@ -381,9 +367,7 @@ describe("composer path paste/drop integration (real editor)", () => {
       expect(screen.queryByTestId("composer-editor")).toBeNull();
     });
   });
-  // Round-3: https drag-enter may light the overlay (type-name only), but
-  // drop clears it and does not claim the transfer. Real editor confirms
-  // ordinary drop text is not doubled by a path-span pipeline.
+  // Real editor confirms ordinary drop text is not doubled by a path-span pipeline.
   describe("round-3 - https uri drag-enter/drop does not claim or double-insert", () => {
     it("clears ownership on drop and inserts ordinary https text once without resolvers", async () => {
       const resolveDroppedFilePaths = vi.fn(() => Promise.resolve([]));
@@ -428,9 +412,7 @@ describe("composer path paste/drop integration (real editor)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Harness
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Harness ---------------------------------------------------------------------------
 
 interface MountOptions {
   readonly mentionRoots: ReadonlyArray<string>;
@@ -537,9 +519,7 @@ function Harness({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Clipboard / drop fixtures
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Clipboard / drop fixtures ---------------------------------------------------------------------------
 
 interface TransferLike {
   readonly files: ReadonlyArray<File>;
@@ -625,9 +605,7 @@ function makeHttpsUriDrop(uri: string, plain: string): TransferLike {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Doc assertions
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Doc assertions ---------------------------------------------------------------------------
 
 interface TextRun {
   readonly text: string;

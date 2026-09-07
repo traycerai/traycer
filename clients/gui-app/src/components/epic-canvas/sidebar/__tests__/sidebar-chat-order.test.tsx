@@ -93,10 +93,7 @@ function terminalAgent(id: string): Y.Map<unknown> {
 }
 
 /**
- * The two shapes the send-to-chat picker used to get wrong, in one tree:
- * a chat nested under a terminal agent (a chat-rooted walk never reaches it)
- * and a live chat under an archived parent (the sidebar hides the whole
- * subtree; a per-row `archivedAt` check offers the child anyway).
+ * The two shapes the send-to-chat picker used to get wrong, in one tree: a chat nested under a terminal agent (a chat-rooted walk never reaches it) and a live chat under an archived parent (the sidebar hides the whole subtree; a per-row `archivedAt` check offers the child anyway).
  */
 function seedDoc(doc: Y.Doc): void {
   const chats = new Y.Map<unknown>();
@@ -129,11 +126,6 @@ function createSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: EPIC_ID,
     userId: "user-1",
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -150,12 +142,6 @@ function createSession(): OpenedStoreForTest {
   return handle;
 }
 
-/**
- * Renders the picker's order beside the rows the chats sidebar would render
- * from the same tree, so the assertion can be the real invariant - the picker
- * offers exactly the sidebar's chat rows - rather than a hand-copied list that
- * would keep passing if the two implementations drifted apart again.
- */
 function ChatOrderProbe() {
   const chatOrder = useSidebarChatOrder(EPIC_ID);
   const tree = useEpicTreeIndex();

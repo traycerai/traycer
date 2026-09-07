@@ -1,17 +1,3 @@
-/**
- * The main-side body docs — owed #3's hot half.
- *
- * The pin that matters is the seed rule, and it is the one with a data-loss
- * failure mode: a `"full"` snapshot whose guid DIFFERS must REPLACE the
- * document, never be applied on top of it. Merging two unrelated Yjs histories
- * produces a document containing both, and no user action undoes that - it is
- * unrecoverable rather than lossy, which is a different and worse category
- * than dropping an edit.
- *
- * Real `Y.Doc`s throughout. A fake would let the merge-versus-replace
- * distinction be asserted as a call pattern rather than as the document
- * content it actually is, and the content is the whole claim.
- */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
@@ -40,9 +26,8 @@ function snapshotWith(text: string): { update: Uint8Array; guid: string } {
 }
 
 /**
- * ONE construction site, so the next member added to this factory is one
- * compile error rather than eight. Every sink is a no-op here; a suite that
- * cares about one spreads this and overrides that one.
+ * ONE construction site, so the next member added to this factory is one compile error rather than
+ * eight.
  */
 const NOOP_SINKS: MainThreadBodyDocSinks = {
   onResidencyChange: () => {},
@@ -102,9 +87,7 @@ describe("install", () => {
 
     const text = textOf(store);
     expect(text).toContain("recreated");
-    // The whole point: the old content is GONE, not sitting beside the new.
-    // A merge leaves both paragraphs and reads as a document the user never
-    // authored.
+    // A merge leaves both paragraphs and reads as a document the user never authored.
     expect(text).not.toContain("original");
   });
 
@@ -175,9 +158,8 @@ describe("encode", () => {
   });
 
   it("answers empty bytes for a doc it does not hold, rather than throwing", () => {
-    // The caller is the demote path and the lease bridge already refuses to
-    // post for an entry it does not have; a throw here turns a benign race
-    // into a failed teardown.
+    // The caller is the demote path and the lease bridge already refuses to post for an entry it does
+    // not have; a throw here turns a benign race into a failed teardown.
     const store = createStore();
 
     expect(store.encode("absent")).toEqual(new Uint8Array());
@@ -264,9 +246,7 @@ describe("residentDocKeys", () => {
 
 describe("the residency signal", () => {
   it("fires when a body becomes resident and when it is dropped", () => {
-    // The re-render signal. Without it a synchronous `getArtifactFragment`
-    // read of an asynchronously-filled set is invisible to React: the editor
-    // sees `null` at `ready` and never looks again.
+    // The re-render signal.
     let fired = 0;
     const store = createMainThreadBodyDocStore({
       ...NOOP_SINKS,
@@ -290,9 +270,8 @@ describe("the residency signal", () => {
   });
 
   it("does not fire for an update applied to a body already resident", () => {
-    // The fragment REFERENCE is unchanged, and Yjs notifies its own observers
-    // for the content. A bump here would re-render every editor on every
-    // inbound delta for no reason.
+    // The fragment REFERENCE is unchanged, and Yjs notifies its own observers for the content. A bump
+    // here would re-render every editor on every inbound delta for no reason.
     let fired = 0;
     const store = createMainThreadBodyDocStore({
       ...NOOP_SINKS,
@@ -319,22 +298,8 @@ describe("the residency signal", () => {
 });
 
 /**
- * The private origin's DOUBLE DUTY.
- *
- * One symbol, two jobs, and each is pinned separately because they fail
- * differently and a single test would let either half rot:
- *
- *  - the REMOTE applies (`install`'s same-lineage branch, `applyRemote`,
- *    `applyRemoteAwareness`) must not read as local, or a collaborator's edit
- *    is echoed straight back and two typing peers loop;
- *  - the initial SEED must not read as local, which is the half that looks
- *    unnecessary. Nothing breaks visibly when it is missing - Yjs merges the
- *    echo harmlessly - it just ships the entire document over the wire every
- *    time a body opens, which reads as a slow network rather than a bug.
- *
- * Each has a POSITIVE counterpart in the same block: a pin that only proves
- * "nothing was sent" passes just as well against a store that sends nothing
- * at all.
+ * The private origin's DOUBLE DUTY. One symbol, two jobs, and each is pinned separately because
+ * they fail differently and a single test would let either half rot:
  */
 describe("the local/remote origin split", () => {
   interface Captured {
@@ -452,9 +417,8 @@ describe("the local/remote origin split", () => {
     // Our own, set through the live instance the editor binds to.
     awareness?.setLocalState({ user: "me" });
     expect(captured.presence).toHaveLength(1);
-    // Reported under the id of the Awareness that PRODUCED it - the tier
-    // excludes exactly this id from its remote-peer pin, so a wrong one here
-    // holds the room hot forever.
+    // Reported under the id of the Awareness that PRODUCED it - the tier excludes exactly this id from
+    // its remote-peer pin, so a wrong one here holds the room hot forever.
     expect(captured.presence[0]?.clientId).toBe(awareness?.clientID);
 
     peerAwareness.destroy();
@@ -462,20 +426,8 @@ describe("the local/remote origin split", () => {
   });
 
   it("emits no presence frame while tearing a body down", () => {
-    // THE detach pin, and it is deliberately this one rather than a
-    // "nothing arrives after the drop" probe.
-    //
-    // A post-drop probe cannot fail: `Y.Doc.destroy()` empties its own
-    // observer map, so the doc handler is released whether or not this module
-    // detaches it, and asserting on it would pass against a store that never
-    // called `off` at all. That is a vacuous pin wearing the right words.
-    //
-    // `Awareness.destroy()` is different: it REMOVES this client's state,
-    // which emits an update. A handler still attached at that moment reports
-    // it as a local presence change - so the store announces a cursor
-    // arriving, by way of one departing, for a body it has already released.
-    // That is observable, so it is what gets pinned; ablate the
-    // `awareness.off(...)` in `destroy` and this goes red.
+    // THE detach pin, and it is deliberately this one rather than a "nothing arrives after the drop"
+    // probe.
     const { store, captured } = createCapturingStore();
     seed(store);
 

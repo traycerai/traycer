@@ -30,19 +30,7 @@ interface RetryState {
 }
 
 /**
- * Preserve and restore a tile's scroll position across keep-alive hiding and a
- * full unmount/remount within the session.
- *
- * Capture is CONTINUOUS, not on-hide. The browser zeroes `scrollTop` the moment
- * a container goes `display:none`, and that happens in the same commit as the
- * `visible -> false` prop change - before any layout effect runs. So the
- * adapter reads from a ref it keeps fresh on every scroll; this hook only
- * decides WHEN to copy that ref into the session store (on hide and on unmount)
- * and WHEN to apply it back (on show, and once async content is ready).
- *
- * `visible` is `paneVisible && tabSelected`. `contentReady` gates the
- * remount/async path so restore waits until the surface actually has content to
- * scroll (messages loaded, diff fetched, file read).
+ * Capture continuously: `display:none` zeroes `scrollTop` in the same commit as `visible -> false`, before any layout effect. `contentReady` gates remount restore until there is content to scroll.
  */
 export interface UseScrollRestorationResult {
   readonly cancelRetry: () => void;
@@ -89,11 +77,7 @@ export function useScrollRestoration(
     }
   }, [identity, surfaceKind]);
 
-  // On unmount we save ONLY if the tile is still live (LRU eviction / hide for
-  // reopen). A permanent close removes the tile from the canvas first, which
-  // synchronously fires the store's anchor sweep (see `store.ts`); guarding the
-  // save here is what stops this later cleanup from resurrecting that anchor.
-  // Clearing is the sweep's job alone - the hook never clears.
+  // Clearing is the sweep's job alone - the hook never clears. On unmount we save ONLY if the tile is still live (LRU eviction / hide for reopen).
   const commitIfTileLive = useCallback((): void => {
     if (isEpicCanvasTileInstanceLive(identity.viewKey)) commit();
   }, [commit, identity.viewKey]);
@@ -177,13 +161,7 @@ export function useScrollRestoration(
   return { cancelRetry, commit };
 }
 
-/**
- * Re-attempt `applyAnchor` on the next animation frame while it reports
- * `"retry"` (content still laying out) or `"defend"` (applied but an external
- * autoscroll may overwrite it), bounded by `MAX_RESTORE_FRAMES`. Using rAF (not
- * setTimeout) means each attempt reads layout post-paint, so `scrollHeight` is
- * populated, and does one read + one write per frame.
- */
+/** Re-attempt `applyAnchor` on the next animation frame while it reports `"retry"` (content still laying out) or `"defend"` (applied but an external autoscroll may overwrite it), bounded by `MAX_RESTORE_FRAMES`. */
 function scheduleRestoreRetry(
   adapterRef: RefObject<ScrollRestorationAdapter>,
   retryRef: RefObject<RetryState>,

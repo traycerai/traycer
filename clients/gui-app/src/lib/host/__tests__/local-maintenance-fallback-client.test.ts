@@ -111,12 +111,7 @@ describe("mapInstallVersionOutcome", () => {
   });
 
   it("throws for the POST-commit busy (continuation: activate) too, carrying the actionable message", () => {
-    // Priced decision (see mapInstallVersionOutcome's doc): `accepted` here
-    // would show a false "Updating…" toast, discard this actionable message,
-    // and arm the accepted latch - which a pre-1.2.0 host can never release
-    // early (no `host.status.updateProgress`, no self-restart), locking the
-    // very controls the message asks the user to reach for. The refusal
-    // renders the message and leaves the page live for that restart.
+    // Priced decision (see mapInstallVersionOutcome's doc): `accepted` here would show a false "Updating…" toast, discard this actionable message, and arm the accepted latch - which a pre-1.2.0 host can never release early (no `host.status.updateProgress`, no.
     expectHostRpcError(
       () =>
         mapInstallVersionOutcome({
@@ -162,11 +157,8 @@ describe("mapInstallVersionOutcome", () => {
 
 describe("localWsDoctorResponse", () => {
   it("does NOT borrow the local-WS trivially-green exemption", () => {
-    // The exemption holds only when the response IS the liveness evidence -
-    // the host answering over loopback. This lane's report comes from the
-    // bundled CLI over IPC and completes with the host down, so honouring it
-    // would hide the three codes that describe a host that stopped serving
-    // behind a green Doctor card.
+    // The exemption holds only when the response IS the liveness evidence - the host answering over loopback.
+    // This lane's report comes from the bundled CLI over IPC and completes with the host down, so honouring it would hide the three codes that describe a host that stopped serving behind a green Doctor card.
     const issues = [
       doctorIssue("SERVICE_STOPPED"),
       doctorIssue("STALE_CONFIG"),
@@ -201,9 +193,7 @@ describe("localWsDoctorResponse", () => {
 
 describe("buildMaintenanceFallbackServeMap", () => {
   it("reports a NON-update lane block as a refusal, never already-updating", async () => {
-    // `already-updating` arms the caller's accepted-update latch to wait on
-    // `host.status.updateProgress`, which a service registration never
-    // publishes - so mislabelling it both lies and hangs the surface.
+    // `already-updating` arms the caller's accepted-update latch to wait on `host.status.updateProgress`, which a service registration never publishes - so mislabelling it both lies and hangs the surface.
     const maintenanceInstallVersion = vi.fn(() =>
       Promise.resolve({
         kind: "lane-busy" as const,
@@ -316,11 +306,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
   );
 
   it("rejects a dispatched POST-commit busy (continuation: activate) with the restart-to-finish message", async () => {
-    // The error path ON PURPOSE: it releases the accepted latch, which is
-    // what leaves the restart controls live for the action this message
-    // names - `accepted` would lock them for the full 60s timer instead,
-    // since a pre-1.2.0 host never publishes the progress frame that
-    // releases the latch early.
+    // The error path ON PURPOSE: it releases the accepted latch, which is what leaves the restart controls live for the action this message names - `accepted` would lock them for the full 60s timer instead, since a pre-1.2.0 host never publishes the progress.
     const management = buildOverviewManagement({
       maintenanceInstallVersion: () =>
         Promise.resolve({
@@ -391,9 +377,8 @@ describe("buildMaintenanceFallbackServeMap", () => {
   });
 
   it("sends the construction-time expectedHostId on every one of the four calls, not a later id", async () => {
-    // Discriminator: omitting expectedHostId, or re-reading some live id at
-    // dispatch, makes this red. The decorator freezes the id it was built
-    // for; main is the one that compares it against the live local host.
+    // Discriminator: omitting expectedHostId, or re-reading some live id at dispatch, makes this red.
+    // The decorator freezes the id it was built for; main is the one that compares it against the live local host.
     const captured = "host-captured";
     const maintenanceUpdateCheck = vi.fn(() =>
       Promise.resolve({
@@ -813,10 +798,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
   });
 
   it("re-serves over the bridge when a delegated request's own handshake reveals the method absent", async () => {
-    // Discriminator: if the catch arm is removed, the RPC refusal escapes
-    // and the bridge is never called. Recording the absent family INSIDE
-    // the rejecting fake is the cold-renderer race — `shouldServe` read
-    // `null` at dispatch, then this call's handshake flipped it to false.
+    // Discriminator: if the catch arm is removed, the RPC refusal escapes and the bridge is never called.
+    // Recording the absent family INSIDE the rejecting fake is the cold-renderer race - `shouldServe` read `null` at dispatch, then this call's handshake flipped it to false.
     const served = servingManagement();
     const { client, rpcCalls } = decorateThrowing(
       LOCAL_HOST_ID,
@@ -867,10 +850,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
   });
 
   it("re-serves requestWithResponseTimeout when the delegated call rejects and the handshake flips mid-flight", async () => {
-    // This fixture's HostClient rejects `requestWithResponseTimeout` at the
-    // scheduling-policy gate (no join timeout), which is still a delegated
-    // rejection. Flip the registry between dispatch and settlement so the
-    // catch arm can see handshake-false.
+    // This fixture's HostClient rejects `requestWithResponseTimeout` at the scheduling-policy gate (no join timeout), which is still a delegated rejection.
+    // Flip the registry between dispatch and settlement so the catch arm can see handshake-false.
     const served = servingManagement();
     const { client, rpcCalls } = decorateThrowing(
       LOCAL_HOST_ID,
@@ -914,10 +895,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
   });
 
   it("does not re-serve an already-aborted requestWithSignal even if the handshake flips to absent", async () => {
-    // Discriminator: without the abort guard, the catch would see
-    // handshake-false and call the bridge, resurrecting work the caller
-    // cancelled. The coordinator rejects an already-aborted waiter before
-    // the mock handler runs, so the flip is recorded after dispatch.
+    // Discriminator: without the abort guard, the catch would see handshake-false and call the bridge, resurrecting work the caller cancelled.
+    // The coordinator rejects an already-aborted waiter before the mock handler runs, so the flip is recorded after dispatch.
     const served = servingManagement();
     const { client, rpcCalls } = decorateThrowing(
       LOCAL_HOST_ID,
@@ -942,9 +921,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
   });
 
   it("does not call the wrapped client at all when shouldServe is already true", async () => {
-    // Discriminator: routing through delegateThenServeIfAbsent first would
-    // invoke the throwing RPC fake (rpcCalls non-empty) even if the catch
-    // then served the bridge.
+    // Discriminator: routing through delegateThenServeIfAbsent first would invoke the throwing RPC fake (rpcCalls non-empty) even if the catch then served the bridge.
     handshakeAbsent(LOCAL_HOST_ID);
     const served = servingManagement();
     const { client, rpcCalls } = decorateThrowing(
@@ -971,9 +948,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
   });
 
   it("an already-aborted signal on the direct-serve path never starts the CLI", async () => {
-    // Discriminator: round 8's serveRespectingSignal must reject with the
-    // transport cancellation shape before calling management. Red against
-    // 45e3cb7a^ which ignored the signal on the served branch.
+    // Discriminator: round 8's serveRespectingSignal must reject with the transport cancellation shape before calling management.
+    // Red against 45e3cb7a^ which ignored the signal on the served branch.
     handshakeAbsent(LOCAL_HOST_ID);
     const served = servingManagement();
     const { client, rpcCalls } = decorate(

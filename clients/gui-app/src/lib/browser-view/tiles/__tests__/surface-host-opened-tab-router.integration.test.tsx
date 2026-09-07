@@ -29,9 +29,8 @@ let navigateNested: NavigateNestedFocus | null = null;
 
 function NestedFocusProbe(): null {
   const navigate = useEpicNestedFocusNavigation();
-  // Published from an effect, not during render: writing an outer variable
-  // mid-render is a side effect (and `react-hooks/globals` says so). Every
-  // reader already `waitFor`s the handle, so the extra commit costs nothing.
+  // Published from an effect, not during render: writing an outer variable mid-render is a side effect (and `react-hooks/globals` says so).
+  // Every reader already `waitFor`s the handle, so the extra commit costs nothing.
   useEffect(() => {
     navigateNested = navigate;
   }, [navigate]);

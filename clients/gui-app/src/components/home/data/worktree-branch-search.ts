@@ -13,14 +13,8 @@ interface WorktreeBranchSearchKey {
   readonly weight: number;
 }
 
-/**
- * Search fields in ranking precedence, with their Fuse weights. This single
- * declaration drives both the fuzzy index and the substring fast path, so the
- * two passes cannot drift on membership or precedence. Each field is checked
- * independently in the substring pass: the path fields are usually substrings
- * of `searchFullPath`, but not always — `pathSearchTail` re-joins segments
- * with `/`, so a Windows tail is not contained in its backslashed full path.
- */
+/** This single declaration drives both the fuzzy index and the substring fast path, so the two passes cannot
+ * drift on membership or precedence. */
 const WORKTREE_BRANCH_SEARCH_KEYS: ReadonlyArray<WorktreeBranchSearchKey> = [
   { name: "searchBranch", weight: 0.58 },
   { name: "searchPathTail", weight: 0.24 },
@@ -36,19 +30,13 @@ const WORKTREE_BRANCH_FUSE_OPTIONS: IFuseOptions<WorktreeBranchSearchRow> = {
   keys: [...WORKTREE_BRANCH_SEARCH_KEYS],
 };
 
-/**
- * Above this length Fuse splits the pattern into multiple bitap chunks and the
- * error budget from `threshold` makes each scan expensive (hundreds of ms over
- * ~1k branches), while edit-distance matches on a query that long are noise —
- * so long queries are served by the substring pass alone.
- */
+/** Above this length Fuse splits the pattern into multiple bitap chunks and the error budget from `threshold`
+ * makes each scan expensive (hundreds of ms over ~1k branches). */
 const FUZZY_QUERY_MAX_LENGTH = 32;
 
 interface SubstringMatch<TRow extends WorktreeBranchSearchRow> {
   readonly row: TRow;
-  /** Index into {@link WORKTREE_BRANCH_SEARCH_KEYS} of the first field hit. */
   readonly tier: number;
-  /** Lowercased text of that field. */
   readonly matchedText: string;
   readonly rowIndex: number;
 }
@@ -67,12 +55,8 @@ function substringMatch<TRow extends WorktreeBranchSearchRow>(
   return null;
 }
 
-/**
- * Field precedence first, then how well the matched field fits the query:
- * an exact field match, then a prefix match, then the shorter field —
- * approximating Fuse's fieldNorm scoring, where `main` must outrank
- * `chore/domain-cleanup`. Input order breaks ties.
- */
+/** Field precedence first, then how well the matched field fits the query: an exact field match, then a prefix
+ * match, then the shorter field. */
 function compareSubstringMatches<TRow extends WorktreeBranchSearchRow>(
   a: SubstringMatch<TRow>,
   b: SubstringMatch<TRow>,
@@ -110,9 +94,8 @@ export function filterWorktreeBranchRows<TRow extends WorktreeBranchSearchRow>(
     const match = substringMatch(row, rowIndex, loweredQuery);
     if (match !== null) matches.push(match);
   }
-  // Fuse only ever widens a non-empty substring result set with edit-distance
-  // matches nobody scans past exact hits for — so it runs solely as the
-  // typo-tolerance fallback, on short queries with no exact hit.
+  // Fuse only ever widens a non-empty substring result set with edit-distance matches nobody scans past exact
+  // hits for - so it runs solely as the typo-tolerance fallback, on short queries with no exact hit.
   if (matches.length > 0 || trimmed.length > FUZZY_QUERY_MAX_LENGTH) {
     return matches
       .sort((a, b) => compareSubstringMatches(a, b, loweredQuery))

@@ -12,10 +12,8 @@ import type {
 } from "./types";
 
 /**
- * Shared durable-journal convention for lifecycle mutations.  The caller
- * persists the returned snapshot before performing the mutation named by its
- * phase.  Keeping this primitive here makes the activation and substrate
- * journals one convention rather than two similar-looking implementations.
+ * Shared durable-journal convention for lifecycle mutations.
+ * The caller persists the returned snapshot before performing the mutation named by its phase.
  */
 export function advanceWriteAheadJournal<
   Phase extends string,
@@ -61,7 +59,6 @@ export function createTransitionJournal(input: {
   };
 }
 
-/** A write-ahead advance: the returned record names the mutation to perform. */
 export function advanceTransitionJournal(
   journal: LifecycleTransitionJournal,
   phase: TransitionPhase,
@@ -123,12 +120,8 @@ export function finishTransitionJournal(input: {
 }
 
 /**
- * The canonical terminal-phase classifier. Exhaustive by construction.
- *
- * A boolean chain (what this used to be) silently answers `false` for a phase
- * it has never heard of, so adding a terminal phase upstream would quietly
- * reclassify retained journals as in-flight. The `never` guard turns that into
- * a compile error at the one place the decision belongs.
+ * The canonical terminal-phase classifier.
+ * A boolean chain (what this used to be) silently answers `false` for a phase it has never heard of, so adding a terminal phase upstream would quietly reclassify retained journals as in-flight.
  */
 export function isTerminalPhase(phase: TransitionPhase): boolean {
   switch (phase) {

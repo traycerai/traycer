@@ -9,11 +9,6 @@ vi.mock("../../app/logger", () => ({
   },
 }));
 
-// F5: `applyQuitDecision` is the fix's enforcement point - the inline
-// `before-quit` `.then` this was extracted from called `authorizeQuitAfterFlush()`
-// unconditionally, never reading `decision` at all. Each row below asserts BOTH
-// directions: which dep fired, and that the other one did not, because
-// "authorize was not called" alone also passes on a function that does nothing.
 describe("applyQuitDecision", () => {
   const QUITTING_DECISIONS: ReadonlyArray<QuitDecision> = [
     "proceed",

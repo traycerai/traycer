@@ -59,7 +59,6 @@ import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 
-/** A single signed-in owner for host reachability and lifecycle state. */
 export function HostReadinessControllerProvider(props: {
   readonly onConfigureShell: () => void;
   readonly onOpenSettings: () => void;
@@ -68,25 +67,13 @@ export function HostReadinessControllerProvider(props: {
   const binding = useHostBinding();
   const runnerHost = useRunnerHost();
   const authStatus = useAuthStore((state) => state.status);
-  // Read every render off LIVE in-memory state, never from storage: while the
-  // target is UNRESOLVED this is the only thing that separates a cold local
-  // start from a remote host whose directory row has not arrived. The intent
-  // is the AUTHORITY's derived effective host (redesign P1.2) - the directory
-  // no longer holds one - and it changes the instant Activate re-derives,
-  // which re-renders this controller.
+  // Read every render off live in-memory state, never from storage: while the target is unresolved this is the
+  // only thing that separates a cold local start from a remote host whose directory row has not arrived.
   const effectiveHostId = useEffectiveHostId();
   // The authority's own verdicts, for the default-host readiness arm below.
   const leases = useHostLeases();
   const authorityAttached = useSelectionAuthorityAttached();
-  // The app-wide client, resolved from that id. It used to be the spine, whose
-  // answer came from the active slot; P4.2 deleted the slot, so the id-pinned
-  // requester is what reports "the effective host, once its row exists".
-  //
-  // APP-WIDE BY CONSTRUCTION: this controller is a top-level provider, so every
-  // host-scoped surface renders INSIDE it and none can re-provide above it. The
-  // explicit hook is what keeps that true if the tree ever moves - this is the
-  // app's readiness authority, and a controller reporting a settings panel's
-  // host would gate the whole window on a machine the user is only inspecting.
+  // The explicit hook is what keeps that true if the tree ever moves.
   const client = useMemo(
     () => resolveAppWideHostClient(binding, effectiveHostId),
     [binding, effectiveHostId],
@@ -98,11 +85,8 @@ export function HostReadinessControllerProvider(props: {
   const activeEntry = directoryEntries.find(
     (entry) => entry.hostId === readiness.hostId,
   );
-  // Subscribed, not read at render time: every dialability answer below is
-  // ready-session-aware, and a readiness flip changes no directory value.
-  // The lookup's identity changes exactly when some listed host's readiness
-  // does, which is what re-runs the memoized context value and re-renders
-  // every readiness consumer.
+  // Subscribed, not read at render time: every dialability answer below is ready-session-aware, and a readiness
+  // flip changes no directory value.
   const hasReadySessionFor = useRemoteSessionsPollReadiness(
     useMemo(
       () => directoryEntries.map((entry) => entry.hostId),
@@ -129,25 +113,13 @@ export function HostReadinessControllerProvider(props: {
     targetEntry,
     selectionIntent,
   });
-  // Keyed on INTENT, not on "not remote". Keying it on the latter armed the
-  // real local lifecycle for an unresolved remote selection:
-  // `HostProvisioningController` forwards enablement whenever the local
-  // snapshot is unavailable, which fires `convergeReady`, enables the
-  // removal-state read, and burns the one-shot attempt latch on an episode
-  // belonging to a machine the user is not pointed at. `hasLocalHost` is
-  // folded into the intent - a shell with no local host is never booting one.
+  // `hasLocalHost` is folded into the intent - a shell with no local host is never booting one.
   const canProvision = authStatus === "signed-in" && localBootIntent;
   const directory = binding === null ? null : binding.directory;
-  // Stable identities: the presentation is memoized on its inputs, and a
-  // fresh closure each render would re-run every readiness consumer in the
-  // surface tree.
+  // Stable identities: the presentation is memoized on its inputs, and a fresh closure each render would re-run
+  // every readiness consumer in the surface tree.
   const refreshDirectory = useCallback(() => {
-    // A FAILED registry read is not an error here - `fetchRemoteOutcome`
-    // collapses a throwing fetcher into the `failed` outcome that retains the
-    // last-known entries, deliberately, so this button has nothing to report
-    // in the case users actually hit. What can still reject is a subscriber
-    // throwing out of the change emit, and letting that surface as an
-    // unhandled rejection loses the stack. Log it and keep the click silent.
+    // Log it and keep the click silent.
     directory?.refresh().catch((error: unknown) => {
       appLogger.warn("[host-readiness] directory refresh rejected", {
         error: describeLogError(error),
@@ -193,11 +165,7 @@ function HostReadinessControllerContents(props: {
   readonly requestContextUserId: string | null;
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
   readonly hasReadySessionFor: (hostId: string) => boolean;
-  /**
-   * The authority's leases and its attach flag, threaded to the DEFAULT-HOST
-   * arm of `resolveSurfaceReadiness`. Read there and nowhere else - the
-   * tab-host arm stays a route question by design (§1b).
-   */
+  /** The authority's leases and its attach flag, threaded to the default-host arm of `resolveSurfaceReadiness`. */
   readonly leases: readonly HostLeaseSnapshot[];
   readonly authorityAttached: boolean;
   readonly hasLocalHost: boolean;
@@ -256,11 +224,7 @@ function HostReadinessControllerContents(props: {
           })
         : readiness;
     },
-    // Depend on the individual fields this closes over, like the presentation
-    // memo above. `props` is a fresh object every render, so listing it defeated
-    // the memo entirely: the context value changed identity on each render and
-    // re-ran every `useSurfaceReadiness` / `useHostReadinessController` consumer
-    // across the surface tree.
+    // Depend on the individual fields this closes over, like the presentation memo above.
     [
       defaultHostPresentation,
       props.activeHostId,
@@ -275,17 +239,8 @@ function HostReadinessControllerContents(props: {
     ],
   );
 
-  // THE GATE'S LATCH, lifted from `DefaultHostReadyGate` because the window
-  // modal now needs it too - see `HostReadinessController.hasBeenDefaultHostReady`
-  // for why, and for why it stays render-adjusted rather than moving to an
-  // effect. It is state adjusted DURING render (React's documented "adjusting
-  // state when props change" pattern) rather than a ref read in render or a
-  // `setState` in an effect: the gate's whole output is a function of it, so it
-  // has to be render-visible, and React re-runs this render immediately - before
-  // committing anything - instead of painting an un-latched frame first.
-  //
-  // Monotonic: set once, never cleared, so the widened re-render scope is one
-  // extra pass per window rather than a recurring global invalidation.
+  // Monotonic: set once, never cleared, so the widened re-render scope is one extra pass per window rather than
+  // a recurring global invalidation.
   const [hasBeenDefaultHostReady, setHasBeenDefaultHostReady] =
     useState<boolean>(false);
   if (
@@ -311,13 +266,8 @@ function HostReadinessControllerContents(props: {
   );
 }
 
-/**
- * Classifies the entry the default-host surface is pointed at. `undefined` -
- * no selection bound and no directory row for the active id - is `unknown`,
- * never local: see `HostTargetKind`. `mock` shells are local machines for
- * every purpose here, matching the pre-tri-state `kind !== "remote"` reading
- * for every entry that actually resolves.
- */
+/** `undefined` - no selection bound and no directory row for the active id - is `unknown`, never local: see
+ * `HostTargetKind`. */
 function resolveHostTargetKind(
   entry: HostDirectoryEntry | undefined,
 ): HostTargetKind {
@@ -325,39 +275,11 @@ function resolveHostTargetKind(
   return entry.kind === "remote" ? "remote" : "local";
 }
 
-/**
- * Whether the app is booting THIS machine's own host - see
- * `DefaultHostReadinessPresentation.localBootIntent`.
- *
- * A resolved entry answers for itself. An UNRESOLVED target is decided by the
- * directory's IN-MEMORY selection intent - the live record of what the user
- * asked for, which exists before anything binds:
- *  - nothing selected -> a genuine cold local start (first install has no
- *    directory row until provisioning creates one);
- *  - the selected id IS this machine's local host -> local start, even while
- *    the host is down and its row is the non-dialable booting twin;
- *  - any other selected id -> a remote pick. Nothing local may arm, even
- *    though the row has not resolved yet. This is the case that used to run a
- *    real `convergeReady` against the wrong machine.
- *
- * The intent must come from memory, not from persisted keys: the local-id
- * write is best-effort and swallows failures, so on a machine with blocked
- * storage a local restart whose id write failed reads back as a remote pick.
- * That direction fails toward doing the wrong thing to the local machine,
- * which is the one thing this function exists to prevent.
- *
- * `selectionIntent === null` means there is no runtime binding yet. Nothing
- * can be effective in that state, so the only boot it can be is the local
- * one.
- */
+/** The intent must come from memory, not from persisted keys. */
 interface LocalBootSelection {
-  /**
-   * The host this app is pointed at, or `null` when the authority has no
-   * effective host at all (∅ - first run, or nothing usable). NOT resolved
-   * against the directory: that is the point.
-   */
+  /** The host this app is pointed at, or `null` when the authority has no effective host at all (∅ - first run,
+   * or nothing usable). */
   readonly selectedHostId: string | null;
-  /** This machine's own local host id, as the directory knows it. */
   readonly localHostId: string | null;
 }
 
@@ -415,35 +337,15 @@ export function HostScopeReady(props: {
   return readiness.kind === "ready" ? props.children : null;
 }
 
-/**
- * The full-screen surface for a readiness kind the WINDOW NARRATOR does not
- * own - i.e. the only kinds this gate still draws for itself.
- *
- * Which kinds those are is a TYPE now, not a runtime check: `GateDrawnReadiness`
- * is `SurfaceReadiness` minus `ready` minus everything `windowNarratorOwns`
- * claims. That is what makes the deletions below provable rather than argued -
- * add a kind to the narrator without removing its case here and this file stops
- * compiling, instead of quietly reviving a second narrator.
- *
- * Exported for ONE reader outside this file: the boot-family screenshot gallery
- * (`__tests__/browser/host-boot-family-gallery.tsx`), which renders every face
- * of the launch side by side to prove they are one card. Production mounts it
- * only through `DefaultHostReadyGate`.
- */
+/** Which kinds those are is a type now, not a runtime check: `GateDrawnReadiness` is `SurfaceReadiness` minus
+ * `ready` minus everything `windowNarratorOwns` claims. */
 export function SurfaceReadinessFallback(props: {
   readonly readiness: GateDrawnReadiness;
 }): ReactNode {
   const controller = useHostReadinessController();
   const presentation = controller.defaultHostPresentation;
-  // The auth-restore wait is a WAIT, not a terminal, and it can sit between
-  // the attach cover and the narrator's card on any launch. It therefore wears
-  // the shared boot surface - same card, same idle sentence, same Show details
-  // / Open settings footer - rather than a bare "Restoring authenticated
-  // session…" line with no spinner and no controls, which read as a fourth,
-  // unrelated card taking a turn in the middle of one launch. The sentence is
-  // the family's idle heading on purpose: while nothing lane-specific is
-  // known every phase says the same thing, and "Traycer is starting" is what
-  // restoring the session is a step of.
+  // The auth-restore wait is a wait, not a terminal, and it can sit between the attach cover and the narrator's
+  // card on any launch.
   if (props.readiness.kind === "restoring-request-context") {
     return (
       <div className="flex flex-1 items-center justify-center p-6">
@@ -455,10 +357,8 @@ export function SurfaceReadinessFallback(props: {
       </div>
     );
   }
-  // No install-progress read here any more. Every kind that HAD progress to
-  // show (`loading-host`, `provisioning-host`, the slow-host card) belongs to
-  // the window narrator now; the kinds left are terminals with nothing
-  // streaming behind them.
+  // Every kind that had progress to show (`loading-host`, `provisioning-host`, the slow-host card) belongs to
+  // the window narrator now; the kinds left are terminals with nothing streaming behind them.
   return (
     <FallbackFrame
       fallback={fallbackContent(props.readiness, presentation)}
@@ -470,45 +370,7 @@ export function SurfaceReadinessFallback(props: {
   );
 }
 
-/**
- * COLD-START default-host gate: until the app has been ready once this
- * window, nothing host-dependent is reachable - not the tab strip, not
- * another tab, not a keyboard route change. Split view made every surface
- * project its own in-place fallback, which left the shell live and let a user
- * drive host-dependent affordances during setup.
- *
- * After the first `ready` render the gate LATCHES and never replaces the app
- * again (one exception below). Blocking a second time is what made every host
- * switch - and every transient probe failure on a host that was running the
- * whole time - throw away the entire DOM: editors, terminals, scroll
- * positions, popovers. The recovery actions did not disappear with the block:
- * they are the window modal's now (D10/D11), which derives from the
- * authority's leases and narrates once, for the window, wherever the app is.
- *
- * Latch semantics: per-window runtime state, so a window reload always
- * re-gates. That is intended - a cold start still gets the full setup surface
- * and the traycer#738 lockout protection it exists for. A cold start whose
- * default host is REMOTE latches trivially (readiness passes through as
- * `ready`), which is unchanged from today: the remote direction never had
- * that protection, and its failures have always surfaced inline.
- *
- * Three properties are deliberate and must not be "simplified" away:
- *
- *  - It renders through `SurfaceReadinessFallback`, the same mapping the
- *    in-surface slot uses, so every recovery action (retry / force update /
- *    reinstall / report) survives the cold-start block. Collapsing this to a
- *    generic spinner - or re-deriving the surface here - would strand a user
- *    whose host cannot start, the exact lockout traycer#738 exists to prevent.
- *  - `/settings` still bypasses it. The splash's own "Configure shell" button
- *    navigates there, so gating settings on a ready host would make the
- *    escape hatch unreachable from the screen that offers it.
- *  - `mobile-no-host` keeps the full-screen surface even post-latch
- *    (`postLatchSurfaceFor`): a mobile shell with no host at all has no app
- *    worth keeping mounted, and it is not reachable from a desktop switch.
- *
- * Readiness and presentation both come from the one controller above; this
- * adds no second subscription.
- */
+/** Three properties are deliberate and must not be "simplified" away. */
 export function DefaultHostReadyGate(props: {
   readonly children: ReactNode;
 }): ReactNode {
@@ -517,17 +379,12 @@ export function DefaultHostReadyGate(props: {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  // The latch is no longer this component's state - it moved to the readiness
-  // controller so the window modal can read it too. See
-  // `HostReadinessController.hasBeenDefaultHostReady`, which carries the reason
-  // it stays render-adjusted rather than becoming an effect.
+  // See `HostReadinessController.hasBeenDefaultHostReady`, which carries the reason it stays render-adjusted
+  // rather than becoming an effect.
   const { hasBeenDefaultHostReady, defaultHostPresentation } =
     useHostReadinessController();
-  // Both questions come from ONE place, shared with the window modal. They are
-  // genuinely different questions: for a narrator-owned kind this gate still
-  // BLOCKS - the app must not mount against a host that cannot serve it - while
-  // drawing no card of its own, leaving the words to the modal. Deriving either
-  // one here as well as there is what let two surfaces narrate one failure.
+  // They are genuinely different questions: for a narrator-owned kind this gate still blocks - the app must not
+  // mount against a host that cannot serve it - while drawing no card of its own.
   const predicateInput = {
     readiness,
     hasBeenReady: hasBeenDefaultHostReady,
@@ -535,14 +392,8 @@ export function DefaultHostReadyGate(props: {
     bypassed: pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   };
   if (!gateBlocksApp(predicateInput)) return props.children;
-  // The frame stays (header + background) so the block still looks like the
-  // app rather than a blank document, and so a user whose modal is suppressed
-  // on `/settings` is not left staring at nothing.
-  //
-  // `null` here means the window narrator owns this kind: `ready` and the
-  // not-blocking cases are already gone via `gateBlocksApp` above. The card gets
-  // the NARROWED value, so it cannot be handed a kind the narrator speaks for
-  // even by accident.
+  // The frame stays (header + background) so the block still looks like the app rather than a blank document,
+  // and so a user whose modal is suppressed on `/settings` is not left staring at nothing.
   const cardReadiness = gateCardReadiness(predicateInput);
   return (
     <div
@@ -561,20 +412,8 @@ export function DefaultHostReadyGate(props: {
   );
 }
 
-/**
- * The narrator-owned slot's cover for the ATTACH gap. The window narrator is
- * structurally silent until the selection kernel attaches
- * (`deriveWindowNarration` returns silent on `attached: false`), and this
- * frame used to render nothing there - a blank page with only the header for
- * the whole attach latency, under a data attribute claiming a narrator that
- * was provably not rendering yet. One speaker at every moment: this card
- * shows only while the narrator cannot speak, and yields the instant it can.
- *
- * The line is deliberately NOT from the F19 lane table - no lane is known to
- * be running yet; this is the window finding its authority, and claiming
- * "Starting local Traycer Host…" here would name a machine nothing has
- * resolved.
- */
+/** One speaker at every moment: this card shows only while the narrator cannot speak, and yields the instant it
+ * can. */
 function AttachPendingCard(props: {
   readonly presentation: DefaultHostReadinessPresentation;
 }): ReactNode {
@@ -582,10 +421,8 @@ function AttachPendingCard(props: {
   if (attached) return null;
   return (
     <div className="flex flex-1 items-center justify-center p-6">
-      {/* The shared boot SURFACE, not a card of its own: this sits between the
-          runtime fallback and the narrator's startup card in one launch, and a
-          third shape - or a card missing the controls its neighbours have -
-          is what made the sequence read as unrelated modals. */}
+      {/* The shared boot surface, not a card of its own: this sits between the runtime fallback and the narrator's
+         startup card in one launch, and a third shape - or a card missing the controls its neighbours have. */}
       <HostBootSurface
         testId="host-gate-attach-pending"
         onConfigureShell={props.presentation.configureShell}
@@ -595,23 +432,8 @@ function AttachPendingCard(props: {
   );
 }
 
-/**
- * The gate's own full-screen card, drawn through the SHARED boot card.
- *
- * It used to carry its own `max-w-md` card, which was the released splash's
- * shape before the gate took over. That predated the boot-card family; once
- * the family existed, this was the one member with a different width, so a
- * launch that ended on a terminal (a failed install, a removed host) widened
- * its card by 64px at the very moment it had bad news. Same card, same
- * centring, same spinner rules; this frame adds only the message, the
- * optional detail line, a body slot and the action row.
- *
- * It took a `variant` until P3.2: `slot` was the bounded in-surface form, drawn
- * without a card because it sat inside a tab's frame. P2.2 deleted the per-pane
- * readiness boundaries that were its only producer, so the branch had no caller
- * left; tabs gate on their own host's lease now and render their own tile
- * states.
- */
+/** Same card, same centring, same spinner rules; this frame adds only the message, the optional detail line, a
+ * body slot and the action row. */
 function FallbackFrame(props: {
   readonly fallback: ReadinessFallback;
   readonly testId: string;
@@ -626,10 +448,7 @@ function FallbackFrame(props: {
     >
       <HostBootCard testId={null} dataset={{}} viewportCapped={false}>
         {props.fallback.title === null ? null : (
-          // The same heading treatment as the narrator's titled faces
-          // (`WindowHostStartupCard`): a settled failure gets a title, and the
-          // two cards that can say "this machine's host didn't start" say it
-          // in the same type on the same card.
+          // The same heading treatment as the narrator's titled faces (`WindowHostStartupCard`).
           <h2 className="font-heading text-lg leading-none font-medium">
             {props.fallback.title}
           </h2>
@@ -680,50 +499,27 @@ interface ReadinessFallbackAction {
   readonly testId: string;
   readonly variant: "default" | "destructive" | "outline";
   readonly disabled: boolean;
-  /**
-   * Shows the inline spinner beside an UNCHANGED label, the way every gate
-   * card did before consolidation and the way this app states pending work
-   * everywhere else. Dropping it left a Retry that only greyed out, which
-   * reads as "broken" rather than "working".
-   */
+  /** Dropping it left a Retry that only greyed out, which reads as "broken" rather than "working". */
   readonly pending: boolean;
   readonly onClick: () => void;
 }
 
 interface ReadinessFallback {
-  /** The heading of a SETTLED state, or null for a card that is only a line. */
+  /** The heading of a settled state, or null for a card that is only a line. */
   readonly title: string | null;
   readonly message: string | null;
-  /** Rich slot content rendered between the message and the actions row. */
   readonly body: ReactNode | null;
-  /** Rich content rendered alongside the action buttons, in the same row. */
   readonly footer: ReactNode | null;
   readonly actions: ReadonlyArray<ReadinessFallbackAction>;
 }
 
-/**
- * The gate-drawn kinds that are TERMINALS - a card with a message and actions
- * rather than a wait. `restoring-request-context` is a wait and draws the boot
- * surface instead (see `SurfaceReadinessFallback`), so it is carved out here
- * at the type level: the switch below is total over what is left, and a new
- * gate-drawn kind has to say which of the two it is.
- */
+/** The gate-drawn kinds that are terminals - a card with a message and actions rather than a wait. */
 type GateTerminalReadiness = Exclude<
   GateDrawnReadiness,
   { readonly kind: "restoring-request-context" }
 >;
 
-/**
- * Three kinds, and the type says so.
- *
- * `loading-host`, `provisioning-host` and `unavailable-host` are absent because
- * `GateDrawnReadiness` excludes them - the window narrator speaks for all three.
- * Their renderers went with them: `loadingFallback` (its last live kind was the
- * compat probe, deleted by D13 with the rest of the compat readiness
- * vocabulary), and `unavailableFallback` + `SlowHostFallback`, which had been
- * unreachable since the narrator landed and which nothing detected because
- * reachability was a predicate rather than a type.
- */
+/** Their renderers went with them: `loadingFallback`, and `unavailableFallback` + `SlowHostFallback`. */
 function fallbackContent(
   readiness: GateTerminalReadiness,
   presentation: DefaultHostReadinessPresentation,
@@ -743,9 +539,7 @@ function fallbackContent(
     case "removed-host":
       return {
         title: "Traycer was removed",
-        // The original card named the actual next step. "Reinstall to start
-        // the host again" answered a question the user was not asking: they
-        // removed it on purpose and need to know how to finish.
+        // The original card named the actual next step.
         message:
           "You removed Traycer's background components from this device, so the host won't start. Your agents and history are preserved. To finish, quit Traycer and drag it from Applications to the Trash.",
         body: null,
@@ -769,12 +563,7 @@ function fallbackContent(
             pending: false,
             onClick: presentation.reinstall,
           },
-          // The family's escape hatch, on this card too. Removing this
-          // machine's background components does not remove the account's
-          // OTHER hosts, and Settings ▸ Host is where one of those gets
-          // activated - a user who removed local Traycer on purpose may well
-          // be doing so to work from a remote machine. Same rule as every
-          // other card in the launch: never a terminal with no way to Settings.
+          // Same rule as every other card in the launch: never a terminal with no way to Settings.
           {
             label: "Open settings",
             testId: "local-host-removed-open-settings",
@@ -798,16 +587,7 @@ function provisioningErrorFallback(
     message:
       presentation.provisioningError?.message ??
       "Could not start Traycer Host.",
-    // THE DIAGNOSTICS, and this card had none. It is drawn when this machine's
-    // install just failed, and it WINS over the window narrator on that state
-    // (`gateCardReadiness`) - which meant the narrator's settled arm, the one
-    // place the attempt panel and the bootstrap.log path lived, was unreachable
-    // for exactly the launch that most needed them. A user staring at "Could
-    // not start Traycer Host." with Retry and nothing else has no path to take
-    // the failure anywhere. Same body as the narrator's settled arm, by
-    // composition rather than by copy: the attempt panel first (it explains
-    // the state), then the log disclosure with NO trailing peer, because this
-    // card has a real action row that already carries `Open settings`.
+    // Same body as the narrator's settled arm, by composition rather than by copy.
     body: (
       <LocalHostBodyShell>
         <LocalBootstrapAttempts />
@@ -836,23 +616,8 @@ function provisioningErrorFallback(
         pending: presentation.provisioning,
         onClick: presentation.retryProvisioning,
       },
-      // THE ESCAPE HATCH, and it was missing here.
-      //
-      // This card is drawn when the local host could not start, offering Retry -
-      // an action that may keep failing for a reason only Settings ▸ Shell can
-      // fix, since that page edits the launch config through the CLI with no
-      // running host involved. A card that can only retry the thing that just
-      // failed is a dead end for exactly the user who is stuck.
-      //
-      // Unconditional, deliberately, and the same rule the window modal states
-      // for its own copy of this button: gating the escape hatch behind the
-      // failure it exists to fix is the lockout that surface exists to prevent.
-      // It is NOT disabled while provisioning either - a retry in flight is
-      // precisely when someone wants to go and change the shell it is using.
-      //
-      // Independent of whether anything ever suppresses the modal over this
-      // card: the gap is real on its own, and this card has to be survivable
-      // whether it is the only narrator or not.
+      // Unconditional, deliberately, and the same rule the window modal states for its own copy of this button:
+      // gating the escape hatch behind the failure it exists to fix is the lockout that surface exists to prevent.
       {
         label: "Open settings",
         testId: "local-host-provisioning-open-settings",

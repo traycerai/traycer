@@ -1,10 +1,4 @@
-/**
- * Ranked fuzzy matching over the names already on screen.
- *
- * Scope is one directory's listing — the entries the picker has in hand. It
- * never walks deeper, so a filter can never cost a round trip or outrun the
- * listing it is filtering.
- */
+/** Ranked fuzzy matching over the names already on screen. */
 
 /** Half-open `[start, end)` slice of the name that the query matched. */
 export interface FuzzyRange {
@@ -24,14 +18,8 @@ export interface FuzzyMatch<T> {
 }
 
 /**
- * Match `query` against each item's name and return the survivors, best
- * first. An empty query matches everything, unranked and unhighlighted, so
- * "browsing" is just the zero-length case of "filtering".
- *
- * Ordering: prefix beats substring beats scattered subsequence; within a
- * tier, the match that spans fewer characters wins (a tight run reads as
- * intentional, a match smeared across the whole name reads as noise); ties
- * break alphabetically so the list never reshuffles on equal input.
+ * Match `query` against each item's name and return the survivors, best first.
+ * An empty query matches everything, unranked and unhighlighted, so "browsing" is just the zero-length case of "filtering".
  */
 export function fuzzyMatchNames<T>(
   items: ReadonlyArray<T>,
@@ -72,18 +60,11 @@ export function fuzzyMatchNames<T>(
 interface NameMatch {
   readonly ranges: ReadonlyArray<FuzzyRange>;
   readonly tier: number;
-  /** Characters from first matched index to last — smaller is tighter. */
+  /** Characters from first matched index to last - smaller is tighter. */
   readonly span: number;
 }
 
-/**
- * Lowercase `name` while keeping every index aligned with the original.
- *
- * A plain `toLowerCase()` can change length - Turkish `\u0130` folds to two code
- * units - and every range this module produces is later used to SLICE the
- * original string. A folded offset that has drifted marks the wrong
- * characters, so alignment matters more here than perfect case folding.
- */
+/** Lowercase `name` while keeping every index aligned with the original. */
 function foldAligned(name: string): string {
   let folded = "";
   for (const character of name) {
@@ -120,15 +101,7 @@ function matchName(name: string, foldedQuery: string): NameMatch | null {
 }
 
 /**
- * In-order character match, coalescing adjacent hits into one range so a run
- * of matched characters underlines as one word rather than as separate
- * letters.
- *
- * Every occurrence of the query's first character is tried as a start, and
- * the tightest result wins. Committing to the leftmost start instead would
- * rank by an accident of where the name happens to begin: for query `ab`,
- * `a---b-a-b` matches with a span of 5 from its first `a` but only 3 from its
- * second, and the sorter would place it behind a genuinely looser name.
+ * In-order character match, coalescing adjacent hits into one range so a run of matched characters underlines as one word rather than as separate letters.
  */
 function matchSubsequence(
   folded: string,

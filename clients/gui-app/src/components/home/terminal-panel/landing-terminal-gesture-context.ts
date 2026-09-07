@@ -4,29 +4,13 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { HomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
 import type { LandingTerminalAvailability } from "./landing-terminal-availability";
 
-/**
- * The routing target every landing-terminal consumer acts on. It is the ONLY
- * shape a consumer may read host/client/workspace/availability from: the
- * provider is the single reader of live focus/probe/runtime state, so a
- * consumer literally has no live value in scope to accidentally use. That is
- * what makes the terminal-gesture snapshot leak-proof by construction rather
- * than by auditing each consumer.
- *
- * - While a gesture is PENDING (panel opened / `+`): draft, host,
- *   availability, and client are captured at panel-open. The provider keeps
- *   reading folder metadata from that captured draft so an open chooser tracks
- *   pin/add/remove changes without following newly focused draft or host state.
- * - While NO gesture is pending: the fields are live focus (normal non-gesture
- *   operation), with `client` the app-wide default client and `generation` 0 —
- *   nothing outside a gesture changes.
- */
+/** The provider keeps reading folder metadata from that captured draft so an open chooser tracks pin/add/remove
+ * changes without following newly focused draft or host state. */
 export interface LandingTerminalTarget {
   readonly draftId: string | null;
   readonly hostId: string | null;
-  /** Workspace identities used by the primary badge and folder chooser. */
   readonly primaryWorkspacePath: string | null;
   readonly workspacePaths: ReadonlyArray<string>;
-  /** Execution directory, including a selected existing worktree's path. */
   readonly launchWorkspacePath: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly generation: number;
@@ -34,46 +18,30 @@ export interface LandingTerminalTarget {
 }
 
 export interface LandingTerminalGestureValue {
-  /** The focused start page that owns the currently visible panel layout. */
   readonly focusedLandingPageId: string | null;
   /** The effective routing target (captured snapshot while pending, else live). */
   readonly target: LandingTerminalTarget;
-  /** Whether an opening gesture is currently pinning the target. */
   readonly pending: boolean;
-  /** The pending gesture's generation (for settlement matching), else `null`. */
   readonly pendingGeneration: number | null;
-  /**
-   * The draft the current open episode belongs to. The empty-panel auto-spawn
-   * is pinned to it so navigating to a different draft never spawns there.
-   */
+  /** The draft the current open episode belongs to. The empty-panel auto-spawn is pinned to it so navigating to a
+   * different draft never spawns there. */
   readonly openEpisodeDraftId: string | null;
-  /**
-   * The workspace source for the EFFECTIVE draft (captured draft while pending).
-   * Consumers (the folder picker) write through this so a folder lands in the
-   * captured draft, not the focused partner.
-   */
+  /** The workspace source for the effective draft (captured draft while pending). Consumers (the folder picker)
+   * write through this so a folder lands in the captured draft, not the focused partner. */
   readonly workspace: HomeWorkspaceSource;
-  /**
-   * Capture a fresh opening gesture from current live focus and return it. The
-   * only path that reads live host/folder/client — used by panel-open and the
-   * reveal-and-create chord. Consumers never capture; they read `target`.
-   */
+  /** Capture a fresh opening gesture from current live focus and return it. Consumers never capture; they read
+   * `target`. */
   readonly capture: () => LandingTerminalTarget;
-  /** Select a currently attached path and advance the pending generation. */
   readonly selectWorkspacePath: (
     workspacePath: string,
   ) => LandingTerminalTarget | null;
-  /** Clear the pending gesture (settlement, collapse, or user tab pick). */
   readonly clearPending: () => void;
 }
 
 export const LandingTerminalGestureContext =
   createContext<LandingTerminalGestureValue | null>(null);
 
-/**
- * Read the landing-terminal gesture routing. Throws outside the provider so a
- * consumer can never silently fall back to reading live state.
- */
+/** Throws outside the provider so a consumer can never silently fall back to reading live state. */
 export function useLandingTerminalGesture(): LandingTerminalGestureValue {
   const value = use(LandingTerminalGestureContext);
   if (value === null) {
@@ -84,7 +52,6 @@ export function useLandingTerminalGesture(): LandingTerminalGestureValue {
   return value;
 }
 
-/** The effective routing target — the value every host/client/folder read goes through. */
 export function useCapturedTerminalTarget(): LandingTerminalTarget {
   return useLandingTerminalGesture().target;
 }

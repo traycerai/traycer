@@ -1,10 +1,6 @@
 "use strict";
 
-// Shared Node SEA toolchain helpers used by the CLI and host
-// production build scripts. Wraps the official toolchain (esbuild bundle,
-// `node --experimental-sea-config`, `postject`, and codesign on macOS)
-// behind a single, scriptable surface so per-platform build/CI workflows
-// stay declarative.
+// Shared Node SEA toolchain helpers used by the CLI and host production build scripts.
 
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -14,26 +10,11 @@ const esbuild = require("esbuild");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
-// The fuse sentinel + Mach-O segment name come straight from the official
-// Node SEA docs - they are part of the platform contract, not a knob. The
-// same literal is both what postject searches for in the host binary and
-// what we scan for to decide whether a given `node` is SEA-capable at all.
+// The fuse sentinel + Mach-O segment name come straight from the official Node SEA docs - they are part of the platform contract, not a knob.
 const SEA_FUSE_SENTINEL = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 
-// Guard: every step in this toolchain - `--experimental-sea-config`,
-// host-binary copy, postject injection - uses `process.execPath` to refer
-// to the running interpreter. When the build script is launched under Bun,
-// `process.execPath` points at the Bun executable, which does not accept
-// `--experimental-sea-config` and is the wrong binary to copy as the SEA
-// host. Detecting this up front turns a confusing downstream failure into
-// a clear "run under Node" error.
-//
-// Detection is best-effort and runtime-only: we look for Bun-injected
-// globals that Node never sets. We deliberately ignore environment
-// variables like `BUN_INSTALL` because they survive in the user's shell
-// even when invoking `node` directly - those would produce false
-// positives. If a future Bun release stops setting these the guard
-// becomes inert rather than erroring on Node, which is the safer bias.
+// Guard: every step in this toolchain - `--experimental-sea-config`, host-binary copy, postject injection - uses `process.execPath` to refer to the running interpreter.
+// Detection is best-effort and runtime-only: we look for Bun-injected globals that Node never sets.
 function assertRunningUnderNode() {
   const looksLikeBun =
     typeof globalThis.Bun !== "undefined" ||
@@ -71,14 +52,13 @@ function ensureDir(target) {
 
 function resolveEsbuildBin() {
   // Prefer `require.resolve` so the build script honors the repo's pinned
-  // esbuild rather than whatever happens to be on PATH.
+  // esbuild rather than whatever happens to be on path.
   return require.resolve("esbuild/bin/esbuild", { paths: [REPO_ROOT] });
 }
 
 function resolvePostjectBin() {
-  // postject ships as a CLI under `dist/cli.js`. We resolve it programmatically
-  // so we don't depend on a globally installed npx/bunx shim; if the package
-  // hasn't been installed yet we surface a useful error.
+  // postject ships as a CLI under `dist/cli.js`.
+  // We resolve it programmatically so we don't depend on a globally installed npx/bunx shim; if the package hasn't been installed yet we surface a useful error.
   try {
     return require.resolve("postject/dist/cli.js", { paths: [REPO_ROOT] });
   } catch (err) {
@@ -89,15 +69,7 @@ function resolvePostjectBin() {
   }
 }
 
-// Bundle `entry` with esbuild into a single CJS file at `outfile`.
-// `externals` is a list of module specifiers / globs that should remain
-// `require()` calls in the output so they can be resolved against native
-// runtime siblings shipped alongside the SEA executable.
-//
-// `bannerJs` is prepended verbatim to the bundle. Host-style builds use
-// it to re-anchor `require()` against the executable directory (so
-// externalised native addons like better-sqlite3 / node-pty resolve to
-// the packaged `node_modules/`).
+// Bundle `entry` with esbuild into a single cjs file at `outfile`.
 function bundleCjs({
   entry,
   outfile,
@@ -120,9 +92,8 @@ function bundleCjs({
     outfile,
     external: externals,
     absWorkingDir: cwd || REPO_ROOT,
-    // Sentry's proxy module emits this warning for entry points with no
-    // default export (e.g. main-sea.ts). The proxy is never imported for its
-    // default, so the warning is noise.
+    // Sentry's proxy module emits this warning for entry points with no default export (e.g. main-sea.ts).
+    // The proxy is never imported for its default, so the warning is noise.
     logOverride: { "import-is-undefined": "silent" },
   };
   if (tsconfig) {
@@ -144,10 +115,6 @@ function bundleCjs({
 }
 
 // Write the `sea-config.json` used by `node --experimental-sea-config`.
-// We deliberately keep `useSnapshot` and `useCodeCache` off - they require
-// V8 snapshot compatibility with the host Node and add no functional
-// guarantee for the CLI/host SEA targets (the JS bundle is small and
-// load-time is dominated by native addon dlopen on the host path).
 function writeSeaConfig({ mainBundle, outputBlob, assets, configPath }) {
   const seaConfig = {
     main: mainBundle,
@@ -167,19 +134,11 @@ function writeSeaConfig({ mainBundle, outputBlob, assets, configPath }) {
   );
 }
 
-// Scan a `node` binary for the SEA fuse sentinel. postject injects the
-// blob by overwriting the bytes that follow this sentinel inside the host
-// binary, so a binary that does not contain it cannot be used as a SEA
-// host. The canonical failure this guards against is Homebrew's Node,
-// which is built `--shared`: `bin/node` is a ~68 KB launcher stub that
-// dlopen()s `libnode.dylib`, so the fuse lives in the dylib (if anywhere)
-// and never in the stub postject would patch. Official nodejs.org builds
-// (and nvm/fnm/Volta, which install them) are monolithic and contain it.
+// Scan a `node` binary for the SEA fuse sentinel.
+// postject injects the blob by overwriting the bytes that follow this sentinel inside the host binary, so a binary that does not contain it cannot be used as a SEA host.
 function nodeBinaryHasSeaFuse(binaryPath) {
   const sentinel = Buffer.from(SEA_FUSE_SENTINEL, "utf8");
-  // Stream in chunks so we don't slurp a ~110 MB monolithic node into one
-  // Buffer; carry a sentinel-length overlap so a match that straddles a
-  // chunk boundary is still found.
+  // Stream in chunks so we don't slurp a ~110 MB monolithic node into one Buffer; carry a sentinel-length overlap so a match that straddles a chunk boundary is still found.
   const fd = fs.openSync(binaryPath, "r");
   try {
     const chunkSize = 1 << 20; // 1 MiB
@@ -202,10 +161,8 @@ function nodeBinaryHasSeaFuse(binaryPath) {
   }
 }
 
-// Map Node's `process.platform`/`process.arch` onto the nodejs.org dist
-// download tuple. Only the tuples we actually build SEA artifacts on are
-// listed; anything else throws with a directive to install official Node
-// rather than silently downloading a tarball that won't exist.
+// Map Node's `process.platform`/`process.arch` onto the nodejs.org dist download tuple.
+// Only the tuples we actually build SEA artifacts on are listed; anything else throws with a directive to install official Node rather than silently downloading a tarball that won't exist.
 function officialNodeDistTuple() {
   const platform = { darwin: "darwin", linux: "linux" }[process.platform];
   const arch = { arm64: "arm64", x64: "x64" }[process.arch];
@@ -219,12 +176,8 @@ function officialNodeDistTuple() {
   return { platform, arch };
 }
 
-// Download + extract the official monolithic Node matching the running
-// version into the gitignored repo cache, returning the path to its
-// `bin/node`. Idempotent: a cached, fuse-bearing binary is reused. We pin
-// to `process.version` so the SEA host and the interpreter that generated
-// the blob are the same Node version (the blob is version-sensitive when
-// code cache / snapshots are on; pinning keeps us correct regardless).
+// Download + extract the official monolithic Node matching the running version into the gitignored repo cache, returning the path to its `bin/node`.
+// Idempotent: a cached, fuse-bearing binary is reused.
 function provisionOfficialNode() {
   const { platform, arch } = officialNodeDistTuple();
   const version = process.version; // e.g. "v26.0.0"
@@ -279,11 +232,8 @@ function provisionOfficialNode() {
   return nodeBin;
 }
 
-// Resolve a SEA-capable `node` to use as both the blob generator and the
-// host binary we postject into. The running interpreter is preferred when
-// it is itself SEA-capable (official Node in CI / nvm / fnm), so the common
-// path stays a zero-cost no-op. Only a non-capable host (Homebrew's shared
-// build) triggers the one-time official-Node download.
+// Resolve a SEA-capable `node` to use as both the blob generator and the host binary we postject into.
+// Only a non-capable host (Homebrew's shared build) triggers the one-time official-Node download.
 function resolveSeaHostNode() {
   if (nodeBinaryHasSeaFuse(process.execPath)) {
     return process.execPath;
@@ -291,9 +241,7 @@ function resolveSeaHostNode() {
   return provisionOfficialNode();
 }
 
-// Generate the SEA blob by invoking a SEA-capable Node binary with the SEA
-// config. The blob is the platform-neutral payload postject will inject
-// into the copied host binary in the next step.
+// Generate the SEA blob by invoking a SEA-capable Node binary with the SEA config.
 function generateSeaBlob({ hostNode, configPath, cwd }) {
   execFileSync(hostNode, ["--experimental-sea-config", configPath], {
     cwd: cwd || REPO_ROOT,
@@ -311,17 +259,14 @@ function copyHostNodeBinary({ hostNode, destination }) {
   }
 }
 
-// macOS code-signs every Mach-O binary at build time; injecting a SEA
-// blob invalidates the existing signature, so we strip it before postject
-// and re-sign (ad-hoc for local builds, hardware identity in CI) after.
+// macOS code-signs every Mach-O binary at build time; injecting a SEA blob invalidates the existing signature, so we strip it before postject and re-sign (ad-hoc for local builds, hardware identity in CI) after.
 function macosRemoveSignature(target) {
   if (process.platform !== "darwin") return;
   const res = spawnSync("codesign", ["--remove-signature", target], {
     stdio: "inherit",
   });
   if (res.status !== 0) {
-    // `codesign --remove-signature` returns non-zero when the file is
-    // unsigned, which is fine for a freshly copied binary on some hosts.
+    // `codesign --remove-signature` returns non-zero when the file is unsigned, which is fine for a freshly copied binary on some hosts.
     // We log instead of throwing so the build keeps moving.
     console.warn(
       `[sea] codesign --remove-signature exited with status=${res.status}; continuing`,
@@ -330,12 +275,7 @@ function macosRemoveSignature(target) {
 }
 
 // Windows: node.exe ships Authenticode-signed by the OpenJS Foundation.
-// postject appends the SEA blob AFTER the PE certificate table, leaving the
-// existing signature malformed, so a later `signtool sign` rejects the binary
-// with 0x800700C1 (ERROR_BAD_EXE_FORMAT). Strip the signature BEFORE postject
-// (while the PE is still a clean signed image) so the release workflow can
-// re-sign the injected binary cleanly. No-op when signtool is unavailable
-// (local builds that never sign) or the binary is already unsigned.
+// postject appends the SEA blob after the PE certificate table, leaving the existing signature malformed, so a later `signtool sign` rejects the binary with 0x800700C1 (ERROR_BAD_EXE_FORMAT).
 function findWindowsSigntool() {
   const fromEnv = process.env.SIGNTOOL_PATH;
   if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
@@ -370,11 +310,8 @@ function windowsRemoveSignature(target) {
   }
 }
 
-// Inject the SEA blob into the copied host binary using postject. The
-// fuse sentinel + Mach-O segment name come straight from the official
-// Node SEA docs - they are part of the platform contract, not a knob.
-// postject is a plain JS CLI (no SEA fuse needed), so it can run under the
-// original interpreter even when that interpreter is Homebrew's stub.
+// Inject the SEA blob into the copied host binary using postject.
+// The fuse sentinel + Mach-O segment name come straight from the official Node SEA docs - they are part of the platform contract, not a knob.
 function injectSeaBlob({ binary, blob }) {
   const args = [
     binary,
@@ -391,27 +328,8 @@ function injectSeaBlob({ binary, blob }) {
   });
 }
 
-// Re-sign the injected binary so macOS Gatekeeper can launch it. Local
-// builds use ad-hoc (`-`) signing; release workflows will swap in a
-// Developer ID identity via `TRAYCER_MACOS_SIGN_IDENTITY`.
-//
-// When a real Developer ID identity is provided we add
-// `--options runtime --timestamp` - hardened runtime is required for
-// Apple notarization (notarytool rejects unhardened Mach-O), and a
-// secure timestamp from Apple's TSA is what keeps the signature valid
-// past the signing certificate's expiry. Ad-hoc signing (`-`) cannot
-// be notarized and does not benefit from these flags, so we omit them
-// in that path to keep local builds fast and offline.
-//
-// Hardened runtime ALSO requires JIT entitlements for any V8 binary:
-// the isolate JIT-compiles into executable memory at startup, and
-// without `com.apple.security.cs.allow-jit` /
-// `allow-unsigned-executable-memory` the process dies before running
-// any JS with "Failed to reserve virtual memory for CodeRange".
-// notarytool does NOT check these, so a binary can notarize cleanly
-// yet be unlaunchable - which is exactly how an entitlement-less host
-// shipped. We therefore attach the entitlements plist whenever we
-// harden, and hard-fail if it's missing so the regression can't recur.
+// Re-sign the injected binary so macOS Gatekeeper can launch it.
+// Ad-hoc signing (`-`) cannot be notarized and does not benefit from these flags, so we omit them in that path to keep local builds fast and offline.
 const SEA_ENTITLEMENTS_PLIST = path.join(
   __dirname,
   "sea-entitlements.mac.plist",
@@ -448,11 +366,8 @@ function macosSignAdHoc(target) {
   }
 }
 
-// Stub for the platform signing/notarization hook used by release
-// workflows. Local SEA builds always end with `macosSignAdHoc` (or no-op
-// on linux/win32). Release pipelines will override `TRAYCER_SEA_SIGN_HOOK`
-// with a script that performs hardware-key signing + notarization. We
-// invoke it after injection so the hook sees the final binary.
+// Stub for the platform signing/notarization hook used by release workflows.
+// We invoke it after injection so the hook sees the final binary.
 function runPlatformSignHook(target) {
   const hook = process.env.TRAYCER_SEA_SIGN_HOOK;
   if (!hook) return;
@@ -464,28 +379,7 @@ function runPlatformSignHook(target) {
   }
 }
 
-// Build a single-executable SEA artifact end-to-end:
-//   1. esbuild bundle → bundle.cjs
-//   2. write sea-config.json
-//   3. generate sea-prep.blob
-//   4. copy host node → final binary
-//   5. strip existing signature on macOS
-//   6. postject blob into binary
-//   7. sign:
-//      - When `TRAYCER_SEA_SIGN_HOOK` is set, that hook owns the
-//        final signing (hardware identity + notarization). We skip
-//        the in-toolchain `macosSignAdHoc` step so the binary is
-//        not signed twice - first ad-hoc, then over-signed by the
-//        hook, which leaves an ambiguous chain and double the
-//        codesign timestamping cost.
-//      - When the hook is unset (local builds / unit tests), we
-//        ad-hoc sign so the freshly injected Mach-O can launch on
-//        macOS without Gatekeeper complaining. `TRAYCER_MACOS_SIGN_IDENTITY`
-//        (read by `macosSignAdHoc`) can still be used to do a
-//        single-pass hardware sign in local-but-not-CI flows.
-//
-// The contract is: hook present => hook is the single signer; hook
-// absent => `macosSignAdHoc` is the single signer. We never run both.
+// Build a single-executable SEA artifact end-to-end: 1.
 function buildSingleSeaExecutable({
   workDir,
   bundleFile,
@@ -495,12 +389,7 @@ function buildSingleSeaExecutable({
   assets,
 }) {
   assertRunningUnderNode();
-  // The running interpreter is used to *drive* the build (postject, esbuild),
-  // but the SEA host - the binary we generate the blob with and postject
-  // into - must be a monolithic, fuse-bearing Node. When the launcher is
-  // Homebrew's shared-build stub these differ; resolveSeaHostNode() returns
-  // an official Node (downloaded once, cached) in that case and the running
-  // interpreter otherwise.
+  // The running interpreter is used to *drive* the build (postject, esbuild), but the SEA host - the binary we generate the blob with and postject into - must be a monolithic, fuse-bearing Node.
   const hostNode = resolveSeaHostNode();
   writeSeaConfig({
     mainBundle: bundleFile,
@@ -522,9 +411,7 @@ function buildSingleSeaExecutable({
   }
 }
 
-// Recursive copy that follows the same rules as `cp -R src/. dst/` -
-// callers point at a directory and we replicate its contents into `dst`,
-// preserving file modes and creating intermediate directories.
+// Recursive copy that follows the same rules as `cp -R src/.
 function copyRecursive(src, dst) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
@@ -539,12 +426,8 @@ function copyRecursive(src, dst) {
   fs.chmodSync(dst, stat.mode);
 }
 
-// Resolve a workspace dependency directory (e.g. `better-sqlite3`,
-// `node-pty`) by walking `module.paths` from a known anchor and locating
-// the directory that contains a `package.json` for `name`. We don't use
-// `require.resolve(name)` because some packages (better-sqlite3) only
-// expose their entry through the `bindings` module's lookup, not a clean
-// `main` resolution.
+// Resolve a workspace dependency directory (e.g. `better-sqlite3`, `node-pty`) by walking `module.paths` from a known anchor and locating the directory that contains a `package.json` for `name`.
+// We don't use `require.resolve(name)` because some packages (better-sqlite3) only expose their entry through the `bindings` module's lookup, not a clean `main` resolution.
 function resolveDependencyDir(name, anchorDir) {
   const candidates = [
     path.join(anchorDir, "node_modules", name),
@@ -565,9 +448,7 @@ function resolveDependencyDir(name, anchorDir) {
   );
 }
 
-// `tar -czf` is the lowest-friction archive primitive across mac/linux;
-// Windows builds skip the tarball and ship the directory verbatim (an
-// MSI/zip wrapper is the release workflow's job, not NP-3's).
+// `tar -czf` is the lowest-friction archive primitive across mac/linux; Windows builds skip the tarball and ship the directory verbatim (an msi/zip wrapper is the release workflow's job, not NP-3's).
 function createTarball({ sourceDir, outputArchive }) {
   if (process.platform === "win32") {
     // Defer to release workflow tooling on Windows.

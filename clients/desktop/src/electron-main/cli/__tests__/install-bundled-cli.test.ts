@@ -18,13 +18,7 @@ import { sandboxHome } from "../../__tests__/sandbox-home";
 import { cliLockPath } from "../../host/host-paths";
 import type { CliInstallManifest } from "../cli-discovery";
 
-// The slot used to be a POSIX symlink into the .app bundle - field report
-// 5's "file exists but won't run": remove or replace the bundle and the
-// link dangles, `ls`/lstat still succeed, exec fails ENOENT, and the only
-// healer ran at the next *successful* app launch - circular exactly when
-// the app is the broken part. The slot is now a COPY on every platform.
-// These tests pin the property that closes the class: the staged binary
-// must survive its bundled source disappearing.
+// These tests pin the property that closes the class: the staged binary must survive its bundled source disappearing.
 
 vi.mock("electron-log", () => ({
   default: {
@@ -54,14 +48,6 @@ vi.mock("../../../config", async (importActual) => {
   };
 });
 
-// Change 2 (`installBundledCli` takes the CLI lock): `publishBundledCli`
-// makes exactly one top-level `node:fs/promises` write once the binary
-// itself is staged - the manifest write. (The lock's own metadata write
-// goes through a `FileHandle.writeFile()` method on the handle `open()`
-// returns, never this named export, so intercepting the export cannot see
-// the lock writing its own metadata.) Observing lock-file existence at that
-// exact moment is an in-process seam for "was the lock still held while the
-// manifest was written", without changing production code.
 const manifestWriteObserved = vi.hoisted(() => ({
   lockPathToCheck: null as string | null,
   sawLockDuringManifestWrite: false,
@@ -84,12 +70,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     writeFile: mockedWriteFile,
   };
-  // Mirror the override onto `default` too - Vite/esbuild's CJS interop can
-  // read `default.writeFile` rather than the top-level named export
-  // (`clients/desktop/src/electron-main/windows/__tests__/desktop-state-store.test.ts`
-  // hits the identical gotcha), and a plain spread of the real namespace
-  // would otherwise leave the un-mocked implementation reachable there,
-  // silently missing every call `cli-discovery.ts` makes.
   return { ...mocked, default: mocked };
 });
 
@@ -189,12 +169,6 @@ describe("installBundledCli stages a copy that outlives the bundle", () => {
   );
 });
 
-// Desktop and the CLI are the two writers of this directory, so a mode rule
-// only one of them enforces is not enforced: whichever runs first on a given
-// machine decides, and on a machine that already has an install neither
-// `mkdir` touches it at all, because `mode` applies only to directories the
-// call actually creates. The CLI side pins the mirror of this in
-// `store/__tests__/well-known-cli.test.ts`.
 describe("installBundledCli hardens the slot home it shares with the CLI", () => {
   it.skipIf(process.platform === "win32")(
     "repairs an EXISTING 0755 slot home and bin directory to 0700",
@@ -260,20 +234,7 @@ describe("installBundledCli takes the CLI lock", () => {
 });
 
 describe("installBundledCli proceeds past lock contention", () => {
-  // A holder record that stays un-breakable for the WHOLE 15s wait
-  // (`CLI_SLOT_LOCK_WAIT_MS` in cli-discovery.ts): `cross-process-lock.ts`
-  // only ever breaks a lock on POSITIVE evidence - the holder's pid is dead,
-  // or a fresh identity read positively mismatches the recorded one - and an
-  // "indeterminate" verdict waits regardless of age. Recording THIS
-  // process's own pid with no `processStartIdentity` hits that branch
-  // deterministically on every platform: `verifyOwnProcessIdentity` compares
-  // the recorded `null` identity against this process's real one via
-  // `compareProcessStartIdentity`, which returns "unknown" whenever either
-  // side is `null` - true here no matter whether the real identity probe
-  // itself succeeds on this machine. A plain EMPTY lock file would NOT work
-  // for this: an empty/corrupt lock is judged solely by age
-  // (`EMPTY_LOCK_GRACE_MS` = 5s) and would be broken well before the 15s
-  // deadline, producing no contention at all.
+  // A plain EMPTY lock file would NOT work for this: an empty/corrupt lock is judged solely by age (`EMPTY_LOCK_GRACE_MS` = 5s) and would be broken well before the 15s deadline.
   function writeUnbreakableHolderLock(lockPath: string): void {
     mkdirSync(dirname(lockPath), { recursive: true });
     const metadata = {
@@ -288,26 +249,7 @@ describe("installBundledCli proceeds past lock contention", () => {
     writeFileSync(lockPath, JSON.stringify(metadata, null, 2), "utf8");
   }
 
-  // Contention is survived by WAITING, which is the branch that actually
-  // runs in the field: another writer holds the lock briefly, this call
-  // polls, and publishes once the holder lets go.
-  //
-  // Deliberately driven by releasing the holder rather than by fast-
-  // forwarding to the end of the 15s wait. The fast-forward version of this
-  // test passed on macOS and failed on Linux CI: pumping fake time outruns
-  // the real filesystem I/O the lock's poll loop awaits between polls, so
-  // the number of real polls that fit inside the pumped budget is a property
-  // of how fast the machine is, which is exactly what a test must not depend
-  // on. Releasing the lock makes the outcome a consequence of the code under
-  // test rather than of the runner.
-  //
-  // NOT covered here: the past-the-wait branch, where the holder never lets
-  // go and the publish is deferred. Reaching it needs 15s of real wall clock,
-  // and the only faster route is the fake-timer fast-forward this test exists
-  // to avoid. Its CONSEQUENCE is covered - `cli-reconcile.test.ts` pins that a
-  // deferred publish reports `upgrade-blocked` rather than an upgrade - but
-  // the three lines that log and return it have no direct test, and this
-  // comment records that rather than leaving it an assumed pass.
+  // Not covered here: the past-the-wait branch, where the holder never lets go and the publish is deferred.
   it("publishes once a briefly-held lock is released", async () => {
     const bundled = stageBundled("cli-bytes-contended");
     const lockPath = cliLockPath("production");
@@ -330,12 +272,8 @@ describe("installBundledCli proceeds past lock contention", () => {
       },
     );
 
-    // Prove the call is genuinely BLOCKED before handing the lock over.
-    // Without this the test would pass even if the holder were removed
-    // before the first acquisition attempt - i.e. it would quietly be
-    // testing the uncontended path again, with extra steps. The assertion
-    // errs in the safe direction: while an unbreakable holder is in place
-    // the call cannot finish inside this window, because its wait is 15s.
+    // Without this the test would pass even if the holder were removed before the first acquisition attempt.
+    // The assertion errs in the safe direction: while an unbreakable holder is in place the call cannot finish inside this window, because its wait is 15s.
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(settled).toBe(false);
 
@@ -359,10 +297,6 @@ describe("installBundledCli proceeds past lock contention", () => {
   });
 });
 
-// Change 2 (`writeCliManifestPendingUpgrade`): this now takes the desktop
-// CLI lock, RE-READS the on-disk manifest under it rather than trusting the
-// caller's snapshot, writes via tmp+rename, and returns null (writing
-// nothing) when the lock is held past the wait.
 describe("writeCliManifestPendingUpgrade", () => {
   it("re-reads the manifest under the lock instead of trusting the caller's snapshot", async () => {
     const { writeCliManifestPendingUpgrade, cliManifestPath } =
@@ -419,17 +353,6 @@ describe("writeCliManifestPendingUpgrade", () => {
     expect(persisted.pendingUpgrade).toEqual(pending);
   });
 
-  // The lock-held branch. `CLI_SLOT_LOCK_WAIT_MS` (15s, 100ms polls) is a
-  // module-private constant this call site has no override for - unlike the
-  // sibling `installBundledCli` contention test above, which survives
-  // contention by releasing the holder before the wait ends, this test needs
-  // the PAST-THE-WAIT outcome itself (a `null` return with nothing written),
-  // which only happens once the full wait has elapsed. That sibling test's
-  // own comment records the same trade-off ("NOT covered here: the
-  // past-the-wait branch... needs 15s of real wall clock") and declines to
-  // pay it; this test pays it once, deliberately, as the direct pin for this
-  // exact branch, with an explicit per-test timeout so vitest's 5s default
-  // does not kill it first.
   it("returns null and writes nothing while the CLI lock is held", async () => {
     const { writeCliManifestPendingUpgrade, cliManifestPath } =
       await import("../cli-discovery");
@@ -448,11 +371,6 @@ describe("writeCliManifestPendingUpgrade", () => {
       "utf8",
     );
     const lockPath = cliLockPath("production");
-    // An unbreakable holder record, the identical technique the sibling
-    // contention test above uses: this process's own pid with no
-    // `processStartIdentity` hits `cross-process-lock.ts`'s "indeterminate"
-    // branch deterministically, which waits out the full budget rather than
-    // breaking early on a dead-pid or stale-empty-file check.
     mkdirSync(dirname(lockPath), { recursive: true });
     writeFileSync(
       lockPath,

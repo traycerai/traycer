@@ -77,10 +77,7 @@ describe("mentionPathTree", () => {
   });
 
   it("preserves the absolute marker on the leaf for a single-segment absolute path", () => {
-    // Regression: with no directory rows, rootLabel is "" and previously
-    // nothing carried the leading "/" - a worktree mounted at "/repo" would
-    // render identically to a relative dir named "repo". The leaf now
-    // carries the marker instead.
+    // Regression: with no directory rows, rootLabel is "" and previously nothing carried the leading "/" - a worktree mounted at "/repo" would render identically to a relative dir named "repo".
     expect(mentionPathTree("/repo", false)).toEqual({
       rootLabel: "",
       midDirs: [],

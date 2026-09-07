@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// `config.ts` resolves the dev-gated backend URL overrides once, at module
-// init - so each case stubs the env first and imports the module fresh.
-// The non-dev ("shipped builds ignore the env") side of the gate lives in
-// the shared helper's own tests; the source tree always bakes "dev".
 
 afterEach(() => {
   vi.unstubAllEnvs();

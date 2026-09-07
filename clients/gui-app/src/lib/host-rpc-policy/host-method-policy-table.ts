@@ -86,61 +86,22 @@ export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   maxDelayMs: 30 * SECOND_MS,
 };
 /**
- * A managed provider pack is actively downloading. Mirrors the speech model's
- * download lane below (1.5s → 5s), for the same reason: `providers.list` is
- * the ONLY source of install progress, so its cadence IS the progress bar's
- * frame rate.
- *
- * A tighter cap than `providers.pending` on purpose. A shell probe that has
- * not settled after half a minute is genuinely worth backing off from; a
- * download is not - the wire sits at `downloading` with a full fraction
- * through the entire extract-and-verify phase, so a 30s (let alone 15min)
- * cadence leaves a finished-looking bar frozen on screen for the exact stretch
- * where the user is most likely to conclude the install is hung.
+ * A managed provider pack is actively downloading.
+ * Mirrors the speech model's download lane below (1.5s → 5s), for the same reason: `providers.list` is the ONLY source of install progress, so its cadence IS the progress bar's frame rate.
  */
 export const PROVIDERS_INSTALLING_POLL_LANE: ConditionPollLane = {
   id: "providers.installing",
   initialDelayMs: 1_500,
   maxDelayMs: 5 * SECOND_MS,
 };
-/**
- * A managed pack failed and the host has scheduled another attempt.
- *
- * Without this lane an `error` cell falls straight to `providers.steady`, so a
- * wifi blip that the host recovers from in a minute keeps "Setup failed" on
- * screen for up to fifteen. That is the wrong direction for a transient
- * failure: the steady lane's cadence is chosen for state that is not expected
- * to change, and a cell carrying `retryAtMs` is state that is.
- *
- * Deliberately looser than the installing lane. Nothing here has to animate -
- * this lane exists to notice ONE transition (error → downloading, or error
- * with a fresh `retryAtMs`) shortly after it happens, and 30s of staleness on
- * a failure notice is not the same cost as 30s of frozen progress bar.
- */
+/** A managed pack failed and the host has scheduled another attempt. */
 export const PROVIDERS_RETRY_SCHEDULED_POLL_LANE: ConditionPollLane = {
   id: "providers.retry-scheduled",
   initialDelayMs: 5 * SECOND_MS,
   maxDelayMs: 30 * SECOND_MS,
 };
 
-/**
- * How long after `retryAtMs` the lane keeps watching.
- *
- * A window is needed rather than a bare `retryAtMs > now` because nothing on
- * the host fires AT `retryAtMs`. The field is the manager's backoff memo -
- * "this cell becomes eligible again at T" - and the attempt itself rides on
- * the next kick: a turn resolving the provider, an explicit `ensurePack`, or
- * the reconvergence tick. So the transition this lane exists to see lands
- * shortly AFTER `retryAtMs`, never before it, and dropping to the steady lane
- * the instant eligibility arrives would miss precisely the moment it was
- * added for.
- *
- * It is also what bounds the lane. Past the window the cell is not "about to
- * heal", it is waiting for a kick nobody has scheduled - and the kick's own
- * arrival (a turn) already refreshes the list through
- * `useRefreshProvidersListOnTurn`. Polling a quiescent failure every 30
- * seconds forever would buy nothing and cost it on every wedged host.
- */
+/** How long after `retryAtMs` the lane keeps watching. */
 export const PROVIDERS_RETRY_OBSERVATION_GRACE_MS = 60 * SECOND_MS;
 
 function isRetryWorthWatching(
@@ -149,34 +110,19 @@ function isRetryWorthWatching(
 ): boolean {
   if (state === null || state === undefined) return false;
   if (state.status !== "error") return false;
-  // `retryAtMs: null` is the terminal case - `unrepairable`, or a failure the
-  // manager deliberately declined to memo. Nothing is coming, so watching is
-  // not cheaper than the steady lane, it is only more expensive.
+  // `retryAtMs: null` is the terminal case - `unrepairable`, or a failure the manager deliberately declined to memo.
+  // Nothing is coming, so watching is not cheaper than the steady lane, it is only more expensive.
   if (state.retryAtMs === null) return false;
   return nowMs < state.retryAtMs + PROVIDERS_RETRY_OBSERVATION_GRACE_MS;
 }
 
 /**
- * True when any managed-pack transfer is in flight for this provider row —
- * automatic lane (`managedInstallState`) or user-lane version-manager rows
- * (`managedVersions.available[].installState`).
- *
- * User-lane downloads are independent of the automatic target: after
- * `providers.installPackVersion` returns non-blocking, only the version row
- * sits at `downloading` while the automatic slot may remain `installed` /
- * `absent`. The installing poll lane must still fire, or progress freezes on
- * the 15-minute steady cadence.
- *
- * There is no `queued` status on either wire install-state union today, so
- * this predicate only inspects `downloading` (including `percent: null`).
+ * True when any managed-pack transfer is in flight for this provider row - automatic lane (`managedInstallState`) or user-lane version-manager rows (`managedVersions.available[].installState`).
  */
 function providerHasManagedInstallInFlight(provider: {
   readonly managedInstallState?: ProviderManagedInstallState | null;
-  // The protocol type, not a structural stand-in. The row shape used to be
-  // spelled out with `status: string`, which widened the wire union to any
-  // string: rename `downloading` upstream and the comparison below silently
-  // returns false, dropping every user-lane download onto the 15-minute steady
-  // lane with no compile error to notice it.
+  // The protocol type, not a structural stand-in.
+  // The row shape used to be spelled out with `status: string`, which widened the wire union to any string: rename `downloading` upstream and the comparison below silently returns false, dropping every user-lane download onto the 15-minute steady lane with no.
   readonly managedVersions?: Pick<ProviderManagedVersions, "available"> | null;
 }): boolean {
   if (provider.managedInstallState?.status === "downloading") return true;
@@ -280,27 +226,11 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
   maxDelayMs: 30 * SECOND_MS,
 };
 /**
- * `host.update.check` answered `cli-unavailable`. That answer retires the
- * whole update region and the retired region hides Check now, so with no
- * focus/reconnect refetch in production nothing would ever notice the Traycer
- * CLI being reinstalled — the region stayed retired until the user left the
- * host scope and came back. The probe fails fast on the host while the CLI is
- * genuinely absent, and the first ok answer revives the region and ends the
- * lane.
+ * `host.update.check` answered `cli-unavailable`.
+ * That answer retires the whole update region and the retired region hides Check now, so with no focus/reconnect refetch in production nothing would ever notice the Traycer CLI being reinstalled - the region stayed retired until the user left the host scope.
  */
 /**
- * A fork boundary waiting on the publisher: the chat has not been backed up
- * yet, or the chosen turn is not covered by the last receipt.
- *
- * Backs off because the thing being waited on is a publish sweep rather than a
- * transport fault - it lands when it lands, and the dialog is a foreground
- * surface someone is looking at, so the first few asks are the ones worth
- * making promptly.
- *
- * Entered ONLY while the answer can still move. A publication the host has
- * called `definitive` never reaches this lane: it has no attempt cap, so a lane
- * entered on a frozen answer is an unbounded poll of a fact, under copy that
- * tells the user the wait is enough.
+ * A fork boundary waiting on the publisher: the chat has not been backed up yet, or the chosen turn is not covered by the last receipt.
  */
 export const CHAT_PUBLICATION_WAIT_POLL_LANE: ConditionPollLane = {
   id: "epic-chat-publication-state.waiting",
@@ -313,10 +243,8 @@ export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
   maxDelayMs: 60 * SECOND_MS,
 };
 /**
- * The check itself failed — a transport fault, not an answer. Same recovery
- * reasoning as the lane above ("Couldn't ask …" has no retry button either),
- * on a quieter cadence: reachability is the scope's problem first, this query
- * only needs to catch up once the host is back.
+ * The check itself failed - a transport fault, not an answer.
+ * Same recovery reasoning as the lane above ("Couldn't ask …" has no retry button either), on a quieter cadence: reachability is the scope's problem first, this query only needs to catch up once the host is back.
  */
 export const UPDATE_CHECK_ERROR_POLL_LANE: ConditionPollLane = {
   id: "host-update-check.error",
@@ -346,31 +274,19 @@ const LATEST_SCHEDULING = {
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
-  // Settings > Browser's saved-logins list. A bounded read that can coalesce,
-  // and no cadence: the list changes only when the person on this screen
-  // clears a row or a site writes a cookie, and the group refetches on the
-  // former. Polling it would keep a settings page waking the host store.
+  // Settings > Browser's saved-logins list.
+  // A bounded read that can coalesce, and no cadence: the list changes only when the person on this screen clears a row or a site writes a cookie, and the group refetches on the former.
   "browser.savedLoginSites": { ...LATEST_SCHEDULING, poll: null },
-  // Opt-in polling (`poll: true`), for one caller: the Overview's drain
-  // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
-  // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
-  // promises and then destroys, so the question is not whether the
-  // cached value may be reused but whether it is still TRUE. Going stale does
-  // not refetch on its own, so without a cadence a focused Overview served the
-  // count it read on mount indefinitely.
-  //
-  // Under the query's `staleTime` (30s), deliberately: this interval keeps a
-  // healthy read fresh while `isStale` demotes an unhealthy one to `null`. The
-  // two numbers are one mechanism and must move together.
+  // Opt-in polling (`poll: true`), for one caller: the Overview's drain affordance.
+  // Its `busySessionCount` / `busyBreakdown` is what "Apply now - ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host) promises and then destroys, so the question is not whether the cached value may be reused but whether it is still TRUE.
   "host.status": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 10_000 },
   },
   // Restart commits host admission state before its deferred teardown.
   "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // The host's own name: a bounded read that can coalesce. It has no poll —
-  // the host watches `host-name.json`, so a rename made anywhere else lands on
-  // the next read (or the next explicit invalidation) rather than needing one.
+  // The host's own name: a bounded read that can coalesce.
+  // It has no poll - the host watches `host-name.json`, so a rename made anywhere else lands on the next read (or the next explicit invalidation) rather than needing one.
   "host.identity.get": { ...LATEST_SCHEDULING, poll: null },
   // Renaming persists a file the heartbeat then publishes; rapid edits must
   // land in the order the user made them, so this is never coalesced.
@@ -401,10 +317,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "host.getInstallationInfo": { ...LATEST_SCHEDULING, poll: null },
   "host.service.status": { ...LATEST_SCHEDULING, poll: null },
-  // FIFO, like `host.update.install` and for the same reason: these mutate the
-  // host's own lifecycle, so two in flight must never collapse to "the latest".
-  // Unpolled — a service registration changes only when someone changes it, and
-  // the status read above is what refreshes after a write.
+  // FIFO, like `host.update.install` and for the same reason: these mutate the host's own lifecycle, so two in flight must never collapse to "the latest".
+  // Unpolled - a service registration changes only when someone changes it, and the status read above is what refreshes after a write.
   "host.service.register": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -416,12 +330,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
-  // The provider-pull branch spawns a CLI subprocess on the host whose probe
-  // can legitimately outlast the transport's 30s default frame timeout (a
-  // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
-  // queue requests with this extended response budget so a slow-but-successful
-  // probe is not discarded client-side while the host finishes it; the value
-  // is declared once in `rate-limit-timing.ts` and must match exactly.
+  // The provider-pull branch spawns a CLI subprocess on the host whose probe can legitimately outlast the transport's 30s default frame timeout (a Claude refresh-safe probe alone is budgeted 90s).
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
@@ -434,8 +343,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // An explicit human maintenance action may probe one disabled profile.
-  // It can spawn the same long-running CLI usage probe as the ordinary read,
-  // but is never polled or coalesced with another profile's action.
+  // It can spawn the same long-running CLI usage probe as the ordinary read, but is never polled or coalesced with another profile's action.
   "providers.refreshProfileStatus": {
     mode: "fifo",
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
@@ -530,15 +438,10 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // The on-demand body behind a windowed chat's accumulated-change summary.
-  // Latest-wins is safe because a newer click for the same summary supersedes
-  // an older one, and it is deliberately never polled: the live
-  // `chat.subscribe` snapshot pushes summary freshness while the UI fetches
-  // bodies only for the file the person opens.
+  // Latest-wins is safe because a newer click for the same summary supersedes an older one, and it is deliberately never polled: the live `chat.subscribe` snapshot pushes summary freshness while the UI fetches bodies only for the file the person opens.
   "chat.readAccumulatedFileChange": { ...LATEST_SCHEDULING, poll: null },
-  // Where a cross-tile jump target sits, asked once when the target row is
-  // cold. Latest-wins for the same reason as the read above - a newer jump
-  // supersedes an older one - and never polled: the answer is a position in a
-  // transcript the live subscription is already reporting changes to.
+  // Where a cross-tile jump target sits, asked once when the target row is cold.
+  // Latest-wins for the same reason as the read above - a newer jump supersedes an older one - and never polled: the answer is a position in a transcript the live subscription is already reporting changes to.
   "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
@@ -554,18 +457,8 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 3 * SECOND_MS },
   },
-  // Shell lifecycle from the Shells list and the output window header. `fifo`
-  // is what buys these three the guarantees the
-  // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
-  // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
-  // refuses to cancel one. A delete destroys the command's entire output
-  // history, so it must never be collapsed into another in-flight request or
-  // silently dropped on a host swap - the human pressed it once and it either
-  // happens or reports why.
-  //
-  // (Not for cross-method ordering: the coordinator keys queues by
-  // [hostId, userId, method, params], so a start and a stop never share a
-  // queue and fifo cannot sequence one against the other.)
+  // Shell lifecycle from the Shells list and the output window header.
+  // `fifo` is what buys these three the guarantees the coordinator reserves for commands: `selectJob` refuses to coalesce a fifo job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead` refuses to cancel one.
   "managedCommand.start": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -581,29 +474,15 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A toggle: two quick presses are on-then-off, and the second must not
-  // coalesce into the first or the human ends up with the opposite of what
-  // the switch shows. `fifo` keeps two IDENTICAL presses distinct; it cannot
-  // order an on against an off, because the value is part of the params and
-  // so of the queue key - those are two queues. The per-command ordering
-  // lives one layer up, in `useManagedCommandConfigure`'s mutation scope.
+  // A toggle: two quick presses are on-then-off, and the second must not coalesce into the first or the human ends up with the opposite of what the switch shows.
+  // `fifo` keeps two IDENTICAL presses distinct; it cannot order an on against an off, because the value is part of the params and so of the queue key - those are two queues.
   "managedCommand.configure": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Deliver takes `fifo` for a reason the other three do not have, and NOT the
-  // one about distinct params. The coordinator keys queues by
-  // [hostId, userId, method, params], so two Delivers naming different subsets
-  // are already distinct jobs - but the common press names no subset at all
-  // (`commandIds: null`), and two of THOSE are byte-identical params, one
-  // queue, and would coalesce under `latest`. Coalescing them is precisely what
-  // must not happen: releasing a hold advances a DURABLE delivery cursor, so a
-  // second press collapsed into the first, or a request aborted on a host swap,
-  // leaves the human looking at a list that may or may not still be held with
-  // no way to tell which.
-  // Never poll it - it is a mutation, and the held set it would poll for
-  // arrives unprompted on `chat.subscribe`.
+  // Deliver takes `fifo` for a reason the other three do not have, and NOT the one about distinct params.
+  // The coordinator keys queues by [hostId, userId, method, params], so two Delivers naming different subsets are already distinct jobs - but the common press names no subset at all (`commandIds: null`), and two of THOSE are byte-identical params, one queue.
   "managedCommand.deliverHeld": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -637,9 +516,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Read-only cross-profile fork-admission preflight; no host-side state
-  // changes, but each call answers a specific candidate profile so requests
-  // are not superseded by one another.
+  // Read-only cross-profile fork-admission preflight; no host-side state changes, but each call answers a specific candidate profile so requests are not superseded by one another.
   "agent.tui.validateForkProfile": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -663,9 +540,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Optional replacement for the recordActivity start edge: records the
-  // activity edge and pulls the role-registry digest cursor forward when
-  // behind (roles-snapshot-delivery). Same scheduling as its sibling hooks.
+  // Optional replacement for the recordActivity start edge: records the activity edge and pulls the role-registry digest cursor forward when behind (roles-snapshot-delivery).
+  // Same scheduling as its sibling hooks.
   "agent.tui.promptSubmitted": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -740,10 +616,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A pure read of whether an import run is in flight. `latest` because only
-  // the newest answer means anything to the surface that shows it, and no
-  // fixed poll: the wizard subscribes to `sessionImport.run` while it is open,
-  // so the only reader of this is the Settings entry, which asks on mount.
+  // A pure read of whether an import run is in flight.
+  // `latest` because only the newest answer means anything to the surface that shows it, and no fixed poll: the wizard subscribes to `sessionImport.run` while it is open, so the only reader of this is the Settings entry, which asks on mount.
   "sessionImport.status": { ...LATEST_SCHEDULING, poll: null },
   "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
   // Recording a view updates the user's central task ordering preference.
@@ -853,38 +727,18 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Optional host capability, read-only: does the source chat's publication
-  // cover a chosen fork boundary? Asked when the fork dialog OPENS, and only
-  // when the account has a host other than the source, so a single-host user
-  // never pays for it.
+  // Optional host capability, read-only: does the source chat's publication cover a chosen fork boundary?
+  // Asked when the fork dialog OPENS, and only when the account has a host other than the source, so a single-host user never pays for it.
   "epic.chatPublicationState": {
     // A pure read with no ordering requirement, like every other read here.
     ...LATEST_SCHEDULING,
-    // Polled only while the answer is one the FORK DIALOG'S COPY promises will
-    // resolve on its own - "It backs up automatically - try again shortly" and
-    // the boundary-syncing sentence. `staleTime` alone only marks the cache
-    // stale and issues nothing for a mounted, idle observer, so an open dialog
-    // sitting on either answer would wait forever on a sentence that told the
-    // user waiting was enough.
-    //
-    // `false` for a covered chat: that is terminal for this boundary, and a
-    // host too old to answer at all never gets here (the read is gated on
-    // `useHostSupportsMethod`).
-    //
-    // This lane has no attempt cap and no terminal lane of its own, which is
-    // exactly why `definitive` has to be read BEFORE the other two fields. A
-    // permanently halted publication reports `published: false` - byte for byte
-    // what a chat mid-first-sweep reports - so without that read the wait lane
-    // is entered forever on a state nothing will ever move, under copy that
-    // promises it will.
+    // Polled only while the answer is one the FORK DIALOG'S COPY promises will resolve on its own - "It backs up automatically - try again shortly" and the boundary-syncing sentence.
+    // `staleTime` alone only marks the cache stale and issues nothing for a mounted, idle observer, so an open dialog sitting on either answer would wait forever on a sentence that told the user waiting was enough.
     poll: defineConditionPolicy("epic.chatPublicationState", {
       classify: (data) => {
         if (data === undefined) return false;
-        // Terminal, and it outranks both readings below: `definitive` names a
-        // reason waiting cannot clear, so re-asking cannot clear it either. Any
-        // reason counts, including one this build does not recognise; the
-        // shared reader is also what keeps a host that predates the field
-        // (`undefined`, not `null`) in the wait lane where it belongs.
+        // Terminal, and it outranks both readings below: `definitive` names a reason waiting cannot clear, so re-asking cannot clear it either.
+        // Any reason counts, including one this build does not recognise; the shared reader is also what keeps a host that predates the field (`undefined`, not `null`) in the wait lane where it belongs.
         if (chatPublicationDefinitiveReason(data.definitive) !== null) {
           return false;
         }
@@ -905,12 +759,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Visibility mutations. Optional host capability. The coordinator's queue
-  // identity is method + full params, so these two methods never share a
-  // queue and two per-chat flips of different chats do not either. fifo
-  // only serializes identical retries of the SAME call. Cross-surface
-  // ordering (master toggle vs per-chat) is a client-side one-in-flight
-  // gate per (task, viewer) — subsequent requests are refused, not queued.
+  // Visibility mutations.
+  // Optional host capability.
   "epic.setCloudChatVisibility": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -951,13 +801,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Updating the epic title persists user intent.
   "epic.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Re-running an interrupted major migration. `fifo`, not `latest`, because it
-  // is an ACTION with host-side effects and not a read: `latest` would let a
-  // second press supersede an in-flight retry, dropping a user-initiated
-  // recovery attempt. Never polled - the modal's Retry button is the only
-  // caller. Replaces the client frame the monolith carried; no GUI caller
-  // exists yet (the read cutover wires it), and this entry is here because the
-  // table must exactly match the registry.
+  // Re-running an interrupted major migration.
+  // `fifo`, not `latest`, because it is an ACTION with host-side effects and not a read: `latest` would let a second press supersede an in-flight retry, dropping a user-initiated recovery attempt.
   "epic.retryMigration": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1009,124 +854,47 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A FIXED cadence the caller gates, not an always-on one. Comment threads
-  // normally arrive pushed on the records lane, and while that lane is up this
-  // poll must stay quiet - the lane is fresher by construction and a cadence
-  // beside it would be pure waste. But the lane's rows are RETAINED when it
-  // drops, and `resolveArtifactCommentThreads` only hands precedence back once
-  // the poll has answered SINCE that drop - so with no cadence at all, a
-  // permanently dead lane on a focused window froze the surface on retained
-  // rows indefinitely, hiding remote additions, deletions and status changes.
-  // `useEpicCommentThreadsForClient` therefore passes `poll` = "the lane is
-  // down" (`commentThreadsShouldPoll`).
-  //
-  // A condition policy would be the wrong shape: `classify` reads the
-  // RESPONSE, and the lane's liveness is not in it.
-  //
-  // 15s matches that hook's `staleTime`, deliberately - inside the stale
-  // window a read is served from cache anyway, so a tighter interval would
-  // spend requests to learn nothing.
+  // A FIXED cadence the caller gates, not an always-on one.
+  // Comment threads normally arrive pushed on the records lane, and while that lane is up this poll must stay quiet - the lane is fresher by construction and a cadence beside it would be pure waste.
   "epic.listCommentThreads": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
   },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
-  // The workspace context the decomposed lanes fetch at tab open. A read, so
-  // `latest`; `poll: null` because it is refetched on EVENTS - a reconnect, or
-  // a control-lane migration/permission signal - never on a cadence. No GUI
-  // caller exists yet (the read cutover wires it); this entry is here because
-  // the table must exactly match the registry, and the method landed there with
-  // the protocol lane contracts.
+  // The workspace context the decomposed lanes fetch at tab open.
+  // A read, so `latest`; `poll: null` because it is refetched on EVENTS - a reconnect, or a control-lane migration/permission signal - never on a cadence.
   "epic.getWorkspaceContext": { ...LATEST_SCHEDULING, poll: null },
-  // The cloud-chat READ surface. All five are reads, so `latest` - and the two
-  // properties that follow from the coordinator keying on PARAMS are exactly
-  // what this fan-out wants: a read of part A never supersedes a concurrent
-  // read of part B (different params, different queue), while two readers
-  // asking for the SAME digest at the same time coalesce onto one request.
-  // `fifo` would serialize a p99 chat's ~165 parts behind each other for no
-  // property gained, since none of these writes anything.
-  //
-  // No polling. A published head changes only when its owning host publishes
-  // again, and this reader has no signal for that; an interval would spend
-  // requests on an answer that is almost always identical. A newer head is
-  // picked up by reopening.
+  // The cloud-chat READ surface.
+  // All five are reads, so `latest` - and the two properties that follow from the coordinator keying on PARAMS are exactly what this fan-out wants: a read of part A never supersedes a concurrent read of part B (different params, different queue), while two.
   "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
-  // One chat image attachment's bytes. Not polled, and it must not be: the
-  // answer is content-addressed, so a hash that resolved once resolves to the
-  // same bytes forever and a hash that missed is re-driven by the image blob
-  // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
-  // interval here would re-fetch megabytes to re-learn a constant.
+  // One chat image attachment's bytes.
+  // Not polled, and it must not be: the answer is content-addressed, so a hash that resolved once resolves to the same bytes forever and a hash that missed is re-driven by the image blob cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence.
   "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
-  // Like the chat attachment read, artifact attachment bytes are addressed by
-  // their content hash and the image cache owns retry after a transient miss.
+  // Like the chat attachment read, artifact attachment bytes are addressed by their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
-  // Not polled, and this is a deliberate freshness choice rather than a copy of
-  // the row above it. The answer is "which cloud row does this local chat
-  // publish into", which changes exactly once in a chat's life - when a fork
-  // sends its lineage into a clone row - and never again. A cadence would spend
-  // a request per interval per open sidebar to re-learn a constant.
-  //
-  // What it costs: between a fork's auto-resolution and the next refetch, one
-  // sidebar row can be stale - the chat's OLD publication row briefly shows as
-  // a separate entry. That is a duplicate-looking row for a moment, not wrong
-  // content: the transcript a locked row renders comes from the head read, not
-  // from this mapping, so nothing a user is reading goes stale with it. The
-  // fork's own notification is the signal that something changed, and a
-  // reopened task picks the new mapping up.
+  // Not polled, and this is a deliberate freshness choice rather than a copy of the row above it.
+  // The answer is "which cloud row does this local chat publish into", which changes exactly once in a chat's life - when a fork sends its lineage into a clone row - and never again.
   "epic.listChatPublicationTargets": { ...LATEST_SCHEDULING, poll: null },
   // One-shot read: the doc content of an unreachable owner's chat cannot
   // change while its owner is away.
   "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
   // The store-backed chat RECORD channel (chat-sync-v2 ticket 49).
-  //
-  // POLLED, at a cadence, and the reason is that there is no invalidation edge
-  // to ride. The facts this serves - a chat was created, renamed, re-parented,
-  // archived, deleted - are committed to the chat DATABASE and, since the
-  // single-write pivot, are written NOWHERE the renderer already listens: not
-  // into the epic Y.Doc (whose update stream is the only per-epic push channel
-  // a client has), and not into any per-epic frame on `epic.subscribe`. The
-  // host's registry does emit a change stream internally, but it has no wire
-  // surface, and giving it one is a new STREAM method - handshake-fatal against
-  // a released peer on a surface whose whole point here is to degrade quietly.
-  //
-  // A condition policy was the alternative and does not fit: `defineConditionPolicy`
-  // classifies from THIS method's own response, and nothing in a list of chat
-  // rows says whether another one is about to appear. The honest classification
-  // is "always maybe", which is a fixed interval wearing a lane's clothes.
-  //
-  // 20s: a local in-memory registry read, one per open epic. It bounds how long
-  // a chat created on ANOTHER device (or by an agent, or by the CLI) stays
-  // missing from this renderer's tree - the same staleness the sidebar's own
-  // cloud list already tolerates at 30s - and the client's own mutations do not
-  // wait for it, since they invalidate this key on success.
   "epic.listChatRecords": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
   },
-  // UNPOLLED, unlike the list above, and for the opposite reason: the list has
-  // to notice a chat that appeared elsewhere, while this answers a question
-  // whose subject cannot change without a user action. Run settings move when
-  // somebody moves them, and the surfaces that move them invalidate this key.
-  // Its caller unmounts on close, so a re-open is a fresh read once the entry
-  // goes stale - a cadence would only re-ask the host about a card nobody is
-  // looking at.
+  // UNPOLLED, unlike the list above, and for the opposite reason: the list has to notice a chat that appeared elsewhere, while this answers a question whose subject cannot change without a user action.
   "epic.getChatRunSettings": {
     ...LATEST_SCHEDULING,
     poll: null,
   },
-  // The terminal-agent RECORD read (TUI eviction), the sibling of
-  // `epic.listChatRecords` above and polled at its exact cadence for its
-  // exact reasons: the facts it serves are committed to the host's registry
-  // and written nowhere the renderer already listens per-epic, there is no
-  // response field a condition policy could classify "about to change" from,
-  // and the client's own mutations invalidate the key on success so nothing
-  // user-initiated waits on the interval.
+  // The terminal-agent RECORD read (TUI eviction), the sibling of `epic.listChatRecords` above and polled at its exact cadence for its exact reasons: the facts it serves are committed to the host's registry and written nowhere the renderer already listens.
   "epic.listTuiAgents": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
@@ -1137,12 +905,7 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 45_000 },
   },
-  // Polled: no host-pushed invalidation channel exists for this event today
-  // (see the implementation report), so without a cadence a fork detected
-  // after this query first cached would never surface. 45s sits between the
-  // publisher's own ~30s detection sweep and "expensive enough to matter" -
-  // the point of a fork prompt is time-to-resolution, not zero-latency, and
-  // this is a single small unary call.
+  // Polled: no host-pushed invalidation channel exists for this event today (see the implementation report), so without a cadence a fork detected after this query first cached would never surface. 45s sits between the publisher's own ~30s detection sweep and.
   "host.chatFork.get": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 45_000 },
@@ -1176,23 +939,16 @@ export const HOST_METHOD_POLL_TABLE = {
   "git.getFileContents": { ...LATEST_SCHEDULING, poll: null },
   "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
   // A read of the local checkout, requested when the PR Files tab opens.
-  // No poll: the PR detail stream is what notices a new push, and a re-render
-  // off a changed `headRefOid` re-keys the query on its own.
+  // No poll: the PR detail stream is what notices a new push, and a re-render off a changed `headRefOid` re-keys the query on its own.
   "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
-  // The split form of the same read: one metadata frame when the tile opens,
-  // then one small patch per visible row. Same no-poll reasoning - the detail
-  // stream notices pushes, and the per-file queries are keyed by immutable
-  // OIDs, so there is nothing a cadence could learn.
+  // The split form of the same read: one metadata frame when the tile opens, then one small patch per visible row.
+  // Same no-poll reasoning - the detail stream notices pushes, and the per-file queries are keyed by immutable OIDs, so there is nothing a cadence could learn.
   "pr.getLocalDiffSummary": { ...LATEST_SCHEDULING, poll: null },
   "pr.getLocalFileDiff": { ...LATEST_SCHEDULING, poll: null },
-  // The composer's PR/issue mention sections. Both are latest-wins with no
-  // poll: the menu is open for seconds at a time and drives every fetch
-  // explicitly (open, refresh click, filter change), so there is no cadence
-  // to keep - and a superseded read has nothing worth waiting for.
+  // The composer's PR/issue mention sections.
+  // Both are latest-wins with no poll: the menu is open for seconds at a time and drives every fetch explicitly (open, refresh click, filter change), so there is no cadence to keep - and a superseded read has nothing worth waiting for.
   "mention.githubCatalog": { ...LATEST_SCHEDULING, poll: null },
-  // Latest-wins is load-bearing here rather than incidental: the section
-  // searches as the user types, and a queued query that has already been
-  // retyped past must not be the one that lands.
+  // Latest-wins is load-bearing here rather than incidental: the section searches as the user types, and a queued query that has already been retyped past must not be the one that lands.
   "mention.githubSearch": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
@@ -1200,15 +956,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "terminal.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "terminal.list": { ...LATEST_SCHEDULING, poll: null },
   // A read that materializes the terminal's output to a file on the host.
-  // Latest-wins with no poll: it is issued on demand, and a superseded read
-  // has nothing worth waiting for - the next one rewrites the same file.
+  // Latest-wins with no poll: it is issued on demand, and a superseded read has nothing worth waiting for - the next one rewrites the same file.
   "terminal.readOutput": { ...LATEST_SCHEDULING, poll: null },
   // Renaming a terminal persists its display name.
   "terminal.rename": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Durable plain-terminal authority. The list is snapshot seeding only; the
-  // stream owns subsequent convergence. Every write is FIFO so rapid user
-  // actions reach the host in order, while revision guards still protect the
-  // client cache from independently delayed stream frames.
+  // Durable plain-terminal authority.
+  // The list is snapshot seeding only; the stream owns subsequent convergence.
   "terminal.plain.create": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1303,25 +1056,11 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("providers.list", {
       classify: (data) => {
         if (data === undefined) return false;
-        // `providers.list` is also the carrier for the native (MCP/plugins/
-        // skills) queries, which cache a MAPPED shape under their own
-        // `cacheKeyIdentity` rather than the raw response. Those entries have
-        // no `providers` array; they opt out of table-owned polling
-        // (`poll: false`) and must never drive the classic lanes. This guard
-        // has to precede every `data.providers` read below.
+        // `providers.list` is also the carrier for the native (MCP/plugins/ skills) queries, which cache a MAPPED shape under their own `cacheKeyIdentity` rather than the raw response.
+        // Those entries have no `providers` array; they opt out of table-owned polling (`poll: false`) and must never drive the classic lanes.
         if (!Array.isArray(data.providers)) return false;
-        // Ahead of the probe lane deliberately. Both can be true at once on a
-        // first boot, and `providers.pending` decays to 30s while an install
-        // needs a bounded 5s - taking the faster, tighter-capped lane while
-        // bytes are moving is the only ordering that keeps progress readable.
-        //
-        // Both lanes: automatic (`managedInstallState`) AND user-lane version
-        // manager rows (`managedVersions.available[].installState`). A
-        // non-blocking installPackVersion leaves only the user-lane row as
-        // `downloading` while the automatic lane stays settled — missing that
-        // would drop progress onto the 15-minute steady lane.
-        // `percent: null` still counts: a sibling-owned transfer needs the
-        // fast lane to notice completion.
+        // Ahead of the probe lane deliberately.
+        // Both can be true at once on a first boot, and `providers.pending` decays to 30s while an install needs a bounded 5s - taking the faster, tighter-capped lane while bytes are moving is the only ordering that keeps progress readable.
         const hasInstallInFlight = data.providers.some((provider) =>
           providerHasManagedInstallInFlight(provider),
         );
@@ -1407,10 +1146,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Opening a sign-in terminal kills the previous one and spawns a PTY, so
-  // ordering is load-bearing: a "latest wins" policy could drop the call that
-  // actually left a terminal behind. Concurrent clicks are collapsed
-  // host-side, which is where that decision belongs.
+  // Opening a sign-in terminal kills the previous one and spawns a PTY, so ordering is load-bearing: a "latest wins" policy could drop the call that actually left a terminal behind.
+  // Concurrent clicks are collapsed host-side, which is where that decision belongs.
   "providers.startTerminalLogin": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1458,9 +1195,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Native MCP/plugins/skills mutations write provider config files, so they
-  // are `fifo` for the same reason as the classic provider mutations above:
-  // two rapid toggles must both land, in order, not be coalesced into one.
+  // Native MCP/plugins/skills mutations write provider config files, so they are `fifo` for the same reason as the classic provider mutations above: two rapid toggles must both land, in order, not be coalesced into one.
   "providers.nativeMutate": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1485,16 +1220,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Reading the upstream LLM provider catalog for a provider - a pure read, so
-  // `latest`. `poll: null`: the catalog only changes as a result of an auth
-  // mutation on this same surface, which invalidates the query directly.
+  // Reading the upstream LLM provider catalog for a provider - a pure read, so `latest`.
+  // `poll: null`: the catalog only changes as a result of an auth mutation on this same surface, which invalidates the query directly.
   "providers.listModelProviders": {
     ...LATEST_SCHEDULING,
     poll: null,
   },
-  // Upstream credential writes (connect / start OAuth / submit code /
-  // disconnect) - `fifo` for the same reason as `providers.mcpAuth`: two rapid
-  // actions must both land, in order, not be coalesced into one.
+  // Upstream credential writes (connect / start OAuth / submit code / disconnect) - `fifo` for the same reason as `providers.mcpAuth`: two rapid actions must both land, in order, not be coalesced into one.
   "providers.modelProviderAuth": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1512,28 +1244,15 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A user-initiated "get this provider's managed pack ready" kick. `fifo`
-  // because it mutates host-side scheduling state (clears the cell's backoff,
-  // promotes it to the front of the install queue) and two rapid retry taps
-  // must not be coalesced into one. `poll: null` because the method is a kick,
-  // not a status source - progress is read from `providers.list`, which
-  // already carries `managedInstallState`.
+  // A user-initiated "get this provider's managed pack ready" kick.
+  // `fifo` because it mutates host-side scheduling state (clears the cell's backoff, promotes it to the front of the install queue) and two rapid retry taps must not be coalesced into one.
   "providers.ensurePack": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // The four per-pack version-manager methods. All `fifo` for the reason
-  // `providers.ensurePack` above is: each mutates durable host state (bytes on
-  // disk, the shared pin/policy record), so coalescing two rapid taps into one
-  // would drop a user action - and unlike a read, replaying the survivor is not
-  // equivalent. `poll: null` on all four: none is a status source. Progress and
-  // the resulting version list are read from `providers.list`, which carries
-  // `managedVersions`; polling the mutation would re-run it.
-  //
-  // These entries exist because this table is EXHAUSTIVE over the registry's
-  // method names - adding a method to `@traycer/protocol` without adding a row
-  // here is a gui-app compile error, which is the intended tripwire.
+  // The four per-pack version-manager methods.
+  // All `fifo` for the reason `providers.ensurePack` above is: each mutates durable host state (bytes on disk, the shared pin/policy record), so coalescing two rapid taps into one would drop a user action - and unlike a read, replaying the survivor is not.
   "providers.installPackVersion": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1554,20 +1273,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // The on-demand "Check for updates" in the same popover. `fifo` for a
-  // different reason than the four above - it writes no durable state - but the
-  // same consequence: each press is answered with its own outcome, so two rapid
-  // taps must not coalesce into one answer. `poll: null` because this method IS
-  // the poll; a cadence here would be a second discovery ticker living in the
-  // client.
-  //
-  // `joinResponseTimeoutMs` here is a PERMISSION, not a budget. It buys nothing
-  // on its own: the host client rejects a `requestWithResponseTimeout` whose
-  // value is not exactly this number, and the extended budget only ever applies
-  // because `useProvidersRefreshPackDiscovery` passes the same constant through
-  // `useHostMutationWithResponseTimeout`. Under a plain `useHostMutation` the
-  // call would run on the transport default and this line would be inert - the
-  // gap `providers.refreshProfileStatus` above still has.
+  // The on-demand "Check for updates" in the same popover.
+  // `fifo` for a different reason than the four above - it writes no durable state - but the same consequence: each press is answered with its own outcome, so two rapid taps must not coalesce into one answer.
   "providers.refreshPackDiscovery": {
     mode: "fifo",
     joinResponseTimeoutMs: PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS,
@@ -1653,12 +1360,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
-  // A bounded read over settled facts (Usage page + epic cost badge). The
-  // Settings panel controls its own refetch (window/metric change, manual
-  // retry) and opts out of polling; the ambient epic cost badge opts in
-  // (matching `host.getRateLimitUsage`'s cadence below) so it self-heals
-  // within a bounded time from a silently-reverted fetch instead of staying
-  // stuck pending forever with no other trigger (ticket-7 fixup-01).
+  // A bounded read over settled facts (Usage page + epic cost badge).
+  // The Settings panel controls its own refetch (window/metric change, manual retry) and opts out of polling; the ambient epic cost badge opts in (matching `host.getRateLimitUsage`'s cadence below) so it self-heals within a bounded time from a.
   "host.usage.summary": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },

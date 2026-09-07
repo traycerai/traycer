@@ -99,10 +99,7 @@ describe("createHostRecoveryGovernor", () => {
   });
 
   it("trips after the consecutive-grant limit - the breaker is actually reachable", async () => {
-    // A window-based breaker ("N in M minutes") could never fire once the
-    // backoff spaced grants beyond the window, so the promised "give up and
-    // let the user decide" state never arrived. Counting consecutive grants
-    // composes with any backoff.
+    // A window-based breaker ("N in M minutes") could never fire once the backoff spaced grants beyond the window, so the promised "give up and let the user decide" state never arrived.
     const { governor, advance } = makeGovernor(() => DEAD);
 
     const granted = await drainGrants(

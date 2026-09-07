@@ -34,11 +34,7 @@ type PhaseMigrationCompletionListener = (
 ) => void;
 type PhaseMigrationStarter = (attemptId: number) => void;
 
-/**
- * Per-window runtime registry. It is intentionally independent of the slot
- * retention LRU: a renderer runner attaches to every open Phase-mode ref,
- * while the slot merely observes the exact runtime's progress or error state.
- */
+/** Per-window runtime registry. */
 export class PhaseMigrationController {
   private readonly runtimes = new Map<string, PhaseMigrationRuntime>();
   private readonly listeners = new Set<PhaseMigrationListener>();

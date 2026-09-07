@@ -33,17 +33,13 @@ const HOVER_DELAY_MS = 300;
 
 export interface ThreadAnchorHoverPopoverProps {
   readonly epicId: string;
-  /** The TILE's client, handed down by `collab-tile-body.tsx`. It must be the
-   *  same one the tile's own threads query used or this cache-only read
-   *  (`enabled: false`) lands on a different host's key and never resolves a
-   *  thread (D15). */
+  /** It must be the same one the tile's own threads query used or this cache-only read (`enabled: false`) lands
+   * on a different host's key and never resolves a thread. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
-  /** The state lane's comment records for this artifact, or `null` when the
-   *  lane has said nothing about it. Resolved by the tile alongside the same
-   *  value it feeds its own decoration layer, so a thread this preview can
-   *  show can never be one the tile has stripped the anchor for. */
+  /** Resolved by the tile alongside the same value it feeds its own decoration layer, so a thread this preview
+   * can show can never be one the tile has stripped the anchor for. */
   readonly laneThreads: readonly CommentThreadWire[] | null;
   /** When the lane pushing {@link laneThreads} stopped, or `null` while it
    *  is up. */
@@ -62,37 +58,8 @@ interface HoverState {
   readonly anchor: HTMLElement;
 }
 
-/**
- * Lightweight 300 ms-delayed preview that surfaces a thread's quoted snapshot
- * + most recent comment when the user dwells on a `[data-thread-id]` span.
- *
- * Dwelling is a pointing-device gesture, so the preview is offered to a mouse
- * only. A touch pointer emits `pointerout` immediately after `pointerup`, which
- * cancels the pending show - a tap could never open the preview - and there is
- * no hover state to reach it from either. A tap therefore skips the preview
- * entirely and activates the thread directly, which is what the preview's own
- * click does.
- *
- * Implementation notes:
- *  - We attach pointerdown / pointerover / pointerout / click listeners to the
- *    editor's root DOM rather than walking React refs - the `threadAnchor` mark
- *    is rendered by ProseMirror, not React, so a delegated DOM listener is the
- *    canonical bridge. `click` carries no `pointerType`, so the preceding
- *    `pointerdown` records which device produced it; the "mouse" default means
- *    an event with no pointer behind it takes the desktop path.
- *  - The hover threadId is mirrored into the Zustand store so the
- *    decoration plugin paints the matching anchor at the same time the
- *    popover appears.
- *  - The thread payload comes from the state lane's records when the lane has
- *    spoken about this artifact, and otherwise from the cached
- *    `epic.listCommentThreads` query - no extra RPC traffic either way. The
- *    lane arm also closes the cold-cache hole in the poll arm: the cached read
- *    is deliberately `enabled: false`, so before the lane it rendered nothing
- *    at all until some other surface had populated that exact cache key. With
- *    neither source holding the thread we still render nothing rather than
- *    blocking on a fetch; the click fallback works regardless, because the
- *    parent invokes the sidebar swap which lazily fetches.
- */
+/** A touch pointer emits `pointerout` immediately after `pointerup`, which cancels the pending show - a tap
+ * could never open the preview - and there is no hover state to reach it from either. */
 export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const {
     epicId,
@@ -111,9 +78,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const floatingRef = useRef<HTMLButtonElement | null>(null);
-  // Which device produced the gesture in flight. `click` does not carry a
-  // pointer type of its own, so it is read from the `pointerdown` that preceded
-  // it.
+  // `click` does not carry a pointer type of its own, so it is read from the `pointerdown` that preceded it.
   const lastPointerTypeRef = useRef<string>("mouse");
   // Render into the pane's portal host so a hover popover triggered inside a
   // background split pane is hidden with that pane, not shown over the partner.
@@ -126,9 +91,8 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     epicId,
     artifactType: artifactType,
     artifactId: artifactId,
-    // `enabled: false` already means this surface never fires traffic, so the
-    // cadence is inert here - passed because the option is required, and
-    // required so no call site can silently omit the lane's liveness.
+    // `enabled: false` already means this surface never fires traffic, so the cadence is inert here - passed
+    // because the option is required, and required so no call site can silently omit the lane's liveness.
     options: { enabled: false, laneDroppedAt },
   });
   const threadsById = useMemo(() => {
@@ -206,15 +170,8 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
 
   const handleClick = useEffectEvent((event: MouseEvent) => {
     if (isHoverCapablePointer(lastPointerTypeRef.current)) return;
-    // A thread anchor may sit ON a link: the `threadAnchor` mark sets
-    // `excludes: ""`, so it deliberately overlaps other marks, and the artifact
-    // link layer listens for `click` on this same editor root. A tap inside a
-    // link therefore has two possible readings, and it is resolved in favour of
-    // the link - the only one of the two with no other way to reach it. Every
-    // thread on the artifact is listed in the comments panel, while a link
-    // inside a document body has no affordance but its own text. Resolving it
-    // here, on the shape of the DOM, is also what keeps the answer from
-    // depending on which surface happened to register its listener first.
+    // A tap inside a link therefore has two possible readings, and it is resolved in favour of the link - the only
+    // one of the two with no other way to reach it.
     if (findLinkAnchor(event.target) !== null) return;
     const anchor = findThreadAnchor(event.target);
     if (anchor === null) return;
@@ -227,8 +184,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     onActivateThread(threadId);
   });
 
-  // Delegate pointer events on the editor root. ProseMirror reuses the same
-  // `editor.view.dom` reference for the lifetime of the editor instance, so
+  // ProseMirror reuses the same `editor.view.dom` reference for the lifetime of the editor instance, so
   // attaching once is safe.
   useEffect(() => {
     const root = editor.view.dom;
@@ -329,12 +285,8 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   );
 }
 
-/**
- * Whether this pointer can rest on a target without committing to it - the
- * precondition for a dwell-delayed preview. Only a mouse can: touch has no
- * hover state, and a pen reports one so briefly that the delay outlives it.
- * Everything else activates on the tap instead.
- */
+/** Whether this pointer can rest on a target without committing to it - the precondition for a dwell-delayed
+ * preview. */
 function isHoverCapablePointer(pointerType: string): boolean {
   return pointerType === "mouse";
 }
@@ -344,11 +296,8 @@ function findThreadAnchor(target: EventTarget | null): HTMLElement | null {
   return target.closest<HTMLElement>("[data-thread-id]");
 }
 
-/**
- * The link the artifact link layer would consider this event to be on. The
- * selector matches that layer's own, so the two surfaces cannot disagree about
- * what counts as a link and leave a tap claimed by both or by neither.
- */
+/** The selector matches that layer's own, so the two surfaces cannot disagree about what counts as a link and
+ * leave a tap claimed by both or by neither. */
 function findLinkAnchor(target: EventTarget | null): HTMLAnchorElement | null {
   if (!(target instanceof HTMLElement)) return null;
   return target.closest<HTMLAnchorElement>("a");

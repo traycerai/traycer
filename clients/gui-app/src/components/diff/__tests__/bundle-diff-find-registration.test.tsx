@@ -222,12 +222,8 @@ function tileSnapshot(): TileFindStateSnapshot {
   return snapshot;
 }
 
-// --- Navigation tests: exercise the real useBundleDiffFindNavigation reveal +
-// repaint AND the real registration/source path (no sourceOverride), so a
-// section mount that wrongly recreated the source (the fixed bug) would be
-// caught. Loaded patches are registered independently of which sections are
-// mounted, mirroring the retained-after-unmount model. The canonical 4-line
-// hunk parses the addition line to unified/split index "2,1". ---
+// Navigation tests: exercise the real useBundleDiffFindNavigation reveal + repaint and the real
+// registration/source path (no sourceOverride).
 
 const ACTIVE_ATTR = "data-traycer-diff-find-active";
 const MATCH_ATTR = "data-traycer-diff-find-match";
@@ -318,9 +314,8 @@ function makeVirtuosoHandle(scrollIntoView: Mock): VirtuosoHandle {
   };
 }
 
-// Builds a faithful section DOM (a `diffs-container` custom element whose shadow
-// root holds one `data-line-index` row) and fires the mount signal — mirroring
-// what a real virtualized BundleFileSection does on mount.
+// Builds a faithful section DOM (a `diffs-container` custom element whose shadow root holds one
+// `data-line-index` row) and fires the mount signal.
 function FauxBundleSection(props: NavSection): ReactNode {
   const context = useBundleDiffFindRegistrationContext();
   const sectionRef = useRef<HTMLDivElement | null>(null);

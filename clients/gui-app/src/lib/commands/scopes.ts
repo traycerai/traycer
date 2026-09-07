@@ -1,18 +1,6 @@
 /**
- * Declarative scope <-> prefix <-> chip map. Adding a new scope is
- * a single file edit - update `SCOPE_DESCRIPTORS` and the renderer
- * picks it up on the next load. Keep this module framework-free:
- * the palette shell reads it; tests read it; no React.
- *
- * A scope ties together:
- *   - the chip label shown above the input;
- *   - the leading prefix character that narrows to it (`>` etc);
- *   - the per-scope item filter (by `CommandItem.scope`).
- *
- * The `activeScope: null` state is "show everything" and is the
- * default. Only scopes listed here render chips; items with a
- * `CommandItem.scope` not in this table still surface under
- * fuzzy search when no chip is active.
+ * Declarative scope <-> prefix <-> chip map.
+ * Adding a new scope is a single file edit - update `SCOPE_DESCRIPTORS` and the renderer picks it up on the next load.
  */
 import type { CommandScope } from "@/lib/commands/types";
 
@@ -24,10 +12,8 @@ export interface ScopeDescriptor {
 }
 
 /**
- * Rendering order is chip-bar order. Keep the list intentionally
- * lean - every extra chip burns header real-estate. Items in other
- * scopes (e.g. "help" leaf rows, "workspaces" worktree rows) remain
- * reachable via fuzzy search without a chip.
+ * Rendering order is chip-bar order.
+ * Keep the list intentionally lean - every extra chip burns header real-estate.
  */
 export const SCOPE_DESCRIPTORS: ReadonlyArray<ScopeDescriptor> = [
   {
@@ -65,14 +51,8 @@ const DESCRIPTOR_BY_PREFIX = new Map<string, ScopeDescriptor>(
 );
 
 /**
- * Pull an active scope out of a query string. A prefix must be the
- * very first character; mid-string matches stay as plain text so a
- * user searching for `#tag` in, say, a commit message (or
- * hypothetical future repo mentions) isn't silently re-scoped.
- *
- * Returns `{ scope, restQuery }` where `restQuery` is the query
- * minus the prefix (and any single space that follows), or `null`
- * when no prefix is active.
+ * Pull an active scope out of a query string.
+ * A prefix must be the very first character; mid-string matches stay as plain text so a user searching for `#tag` in, say, a commit message (or hypothetical future repo mentions) isn't silently re-scoped.
  */
 export interface PrefixMatch {
   readonly scope: CommandScope;
@@ -90,9 +70,8 @@ export function parseScopePrefix(query: string): PrefixMatch | null {
 }
 
 /**
- * Build a query string carrying a scope prefix. Used by chip
- * clicks so the input visibly reflects the active scope - typing
- * keeps working on the `rest` portion after the prefix.
+ * Build a query string carrying a scope prefix.
+ * Used by chip clicks so the input visibly reflects the active scope - typing keeps working on the `rest` portion after the prefix.
  */
 export function writeScopePrefix(scope: CommandScope, rest: string): string {
   const prefix = PREFIX_BY_SCOPE.get(scope);

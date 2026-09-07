@@ -9,10 +9,7 @@ export interface GitChangedFileMatch {
   readonly pathRanges: HighlightRanges;
 }
 
-// Tuned to match the other fuse.js usages in this app
-// (worktree-branch-search.ts, harness-model-search.ts): location-agnostic so a
-// match anywhere in the path counts, with a moderate fuzzy threshold. The
-// current path is weighted above the previous (rename) path.
+// Tuned to match the other fuse.js usages in this app (worktree-branch-search.ts, harness-model-search.ts): location-agnostic so a match anywhere in the path counts, with a moderate fuzzy threshold.
 const GIT_CHANGED_FILE_FUSE_OPTIONS: IFuseOptions<GitChangedFile> = {
   includeScore: false,
   includeMatches: true,
@@ -32,10 +29,8 @@ export function createGitChangedFileSearchIndex(
 }
 
 /**
- * Fuzzy-filter the Git panel's changed-file list. An empty query
- * returns every file (with no highlight); otherwise it returns the fuse.js
- * matches paired with the ranges that hit the displayed `path`. Callers re-sort
- * the result, so the fuse relevance order is not relied upon here.
+ * Fuzzy-filter the Git panel's changed-file list.
+ * An empty query returns every file (with no highlight); otherwise it returns the fuse.js matches paired with the ranges that hit the displayed `path`.
  */
 export function filterGitChangedFiles(
   files: ReadonlyArray<GitChangedFile>,

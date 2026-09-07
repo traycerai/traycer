@@ -34,9 +34,8 @@ function model(id: string): ChatMessageModel {
 }
 
 /**
- * A record the host pushed whole and no span carries yet - what
- * `TranscriptWindow.liveMessages` holds between a `messageAccepted` and the
- * range that seats it.
+ * A record the host pushed whole and no span carries yet - what `TranscriptWindow.liveMessages`
+ * holds between a `messageAccepted` and the range that seats it.
  */
 function liveMessage(messageId: string): Message {
   return {
@@ -68,10 +67,6 @@ function entry(rowId: string): RowSkeletonEntry {
   };
 }
 
-// No test in this file gives a span an actual record - every case here is
-// about ROW placement (span coverage, live records, skeleton), never about
-// record content or ledger clocks - so the fixture spans reference an empty
-// ledger throughout.
 function span(fromOrdinal: number, rowIds: readonly string[]): HydratedSpan {
   return {
     fromOrdinal,
@@ -116,9 +111,8 @@ function windowOf(
 
 describe("transcriptListRows renderer-policy suppression", () => {
   it("omits a span row the pinned-todo renderer policy actually drops", () => {
-    // A real todo-only assistant row, run through the real renderer policy -
-    // rather than an empty `rendered: []` asserted by fiat, which would pass
-    // even if the policy stopped dropping anything.
+    // A real todo-only assistant row, run through the real renderer policy - rather than an empty
+    // `rendered: []` asserted by fiat, which would pass even if the policy stopped dropping anything.
     const todoOnlyMessage: ChatMessageModel = {
       ...model("r-1"),
       segments: [
@@ -175,23 +169,13 @@ describe("transcriptListRows renderer-policy suppression", () => {
   });
 
   /**
-   * The gap between "the index names this row" and "a span carries its body".
-   *
-   * A live record arrives with no ordinal and renders from `liveMessages`. The
-   * next `indexChanged` names its row id - and from that moment the row is
-   * neither placed (no span covers it, and `placedRowIds` is built from spans
-   * alone) nor unplaced (the skeleton names it). Dropping it there replaces a
-   * body this client is HOLDING with a skeleton placeholder, which is what a
-   * user watching the message they just sent turn back into a grey bar sees.
-   *
-   * `pruneSupersededLiveRecords` drops a live record only once a SPAN carries
-   * it, so the record really is still in `rendered` for this whole gap.
+   * The gap between "the index names this row" and "a span carries its body". A live record arrives
+   * with no ordinal and renders from `liveMessages`.
    */
   it("seats a live record at the ordinal the index has started naming", () => {
     const rows = transcriptListRows({
-      // Only ordinal 0 is spanned; the index names r-1 and r-2 but no range
-      // has delivered either body yet. r-1 is one this client HOLDS, pushed as
-      // a live record and not yet superseded by a span.
+      // Only ordinal 0 is spanned; the index names r-1 and r-2 but no range has delivered either body
+      // yet. r-1 is one this client HOLDS, pushed as a live record and not yet superseded by a span.
       window: {
         ...windowOf(
           3,
@@ -213,14 +197,8 @@ describe("transcriptListRows renderer-policy suppression", () => {
   });
 
   /**
-   * The discriminating half, and the reason the seat above is gated on live
-   * records rather than on "the renderer produced a model for it".
-   *
-   * Hydrating one row of a steer-split assistant turn pulls the turn's shared
-   * records, and rendering those projects EVERY row of the turn - including
-   * ones no range ever served. Those models are the client's own inference at
-   * an ordinal the host declined to serve, so they must keep reading as
-   * placeholders. Identical fixture to the seat above, minus the live record.
+   * The discriminating half, and the reason the seat above is gated on live records rather than on
+   * "the renderer produced a model for it".
    */
   it("leaves a projected row - one no live record backs - as a placeholder", () => {
     const rows = transcriptListRows({

@@ -1,16 +1,5 @@
 /**
- * The record-change PUSH stream's mount (multi-host-chats record layer).
- *
- * Three things live here and nowhere else: WHEN a subscription is opened at
- * all (the degrade arm), WHERE a delta is routed (frames name their epic; the
- * subscription is host-scoped), and WHAT happens to a delta for an epic nobody
- * has open. The stream client itself is exercised in
- * `clients/shared/host-transport/__tests__/chat-records-stream-client.test.ts`;
- * here it is stubbed at the class boundary so a delta can be emitted by hand.
- *
- * The open-epic sessions are REAL, so a delta that reaches one is asserted by
- * reading the record table it was supposed to change - the same table
- * `epic.listChatRecords` fills.
+ * Record-change push mount: when a subscription opens, where a delta routes, and what happens to a delta for an epic nobody has open.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -64,12 +53,7 @@ const streamState = vi.hoisted((): StreamState => ({
   hasClient: true,
 }));
 
-/**
- * ONE stable client object across renders. The mount keys its effect on the
- * client's identity, so a mock that minted `{ stub: true }` per render would
- * re-run the effect on EVERY rerender - and the host-change test below could
- * then pass because the client changed, not because `hostId` did.
- */
+/** One stable client across renders. A per-render stub retriggers the effect and would make the host-change test pass for the wrong reason. */
 const stubWsStreamClient = vi.hoisted((): { readonly stub: true } => ({
   stub: true,
 }));
@@ -131,11 +115,7 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   };
 }
 
-/**
- * The `epic.listChatRecords@1.1` poll's row - what `applyChatRecords` (as
- * opposed to a stream delta, which carries the BASE `record()` shape above)
- * takes. `docResident: false` by default: a registry answer.
- */
+/** listChatRecords poll row for applyChatRecords. docResident false: a registry answer, not a stream delta. */
 function pollRecord(
   overrides: Partial<ChatRecordSummaryV11>,
 ): ChatRecordSummaryV11 {
@@ -185,12 +165,7 @@ const noopStreamFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-/**
- * `hostId` is explicit at every call because it is load-bearing: the mount
- * applies a delta only to a session stamped with the stream's own host, which
- * `epic-session-provider.tsx` does for every handle it creates. A helper that
- * defaulted it would hide the one input the routing gate reads.
- */
+/** hostId is explicit at every call; a default would hide the routing gate's input. */
 // Returns what the REGISTRY returns, which narrows to the production handle
 // type whatever it was handed. Nothing here reads the harness's extra members.
 function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
@@ -198,11 +173,8 @@ function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
     openStoreForTest({
       epicId: id,
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // Factories go to the composition; createOpenEpicStore no longer builds a
+      // runtime. handle.doc still resolves because this harness builds it here.
       factories: {
         streamClientFactory: noopStreamFactory,
         laneSelection: null,
@@ -305,14 +277,8 @@ describe("<ChatRecordsStreamMount />", () => {
   });
 
   it("drops a delta for a session bound to a DIFFERENT host than the stream", () => {
-    // The A/B case: this subscription is dialling host-A (`streamState.hostId`)
-    // while the open session is still pinned to host-B - a re-point in flight,
-    // or a tab reopened on its original host. B's session must not ingest A's
-    // rows: the record does not exist on B's plane, and every affordance the
-    // row renders would address the wrong host.
-    //
-    // Ablation: drop the stamp comparison in the mount and both assertions
-    // below flip - the row lands, and the terminal agent with it.
+    // Stream host-A while the session is pinned to host-B: B must not ingest
+    // A's rows. Drop the stamp comparison and both assertions flip.
     const foreign = openEpic("epic-1", "host-B");
     render(<ChatRecordsStreamMount />);
 
@@ -375,13 +341,8 @@ describe("<ChatRecordsStreamMount />", () => {
   });
 
   it("opens NOTHING when the host does not support the method - the poll carries on alone", () => {
-    // The whole degrade contract: a host predating the stream never advertises
-    // it, so there is no subscription, no error, and no empty state. The 20s
-    // `epic.listChatRecords` poll is untouched by this component and remains
-    // the record table's only refresh.
-    //
-    // Ablation: drop the `support === "unsupported"` arm and the mount dials a
-    // method the host will refuse on every reconnect.
+    // Unsupported: no subscription, no error, no empty state. The 20s poll
+    // remains the only refresh. Drop the arm and the mount dials a refused method.
     streamState.support = "unsupported";
     const handle = openEpic("epic-1", "host-A");
     handle.store
@@ -433,14 +394,7 @@ describe("<ChatRecordsStreamMount />", () => {
   });
 });
 
-/**
- * The reopen lane: a terminal close used to leave this mount's subscription
- * dead until reload (new agents stopped appearing until the 20s poll's next
- * success, or not at all while the poll was failing too). It now opens a
- * reopen lane on the host's shared reconnect engine, mirroring the
- * notification-family stores (`notifications-session-provider.test.tsx`'s
- * "reopens activity after a recoverable terminal close").
- */
+/** Terminal close must reopen on the host's shared reconnect engine, not wait for the 20s poll (or stay dead if the poll is also failing). */
 describe("<ChatRecordsStreamMount /> reopen lane", () => {
   it("rebuilds the client after a reopenable terminal close, once the backoff elapses", () => {
     vi.useFakeTimers();

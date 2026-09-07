@@ -256,9 +256,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
       { token: "foo", refreshToken: "foo-refresh" },
       { id: "u1", email: "u1@example.com", name: "U One" },
     );
-    // No `authnBaseUrl`: the stored session carries only the token pair and the
-    // cached identity. The origin lives on the runner host's own config (the
-    // `authnBaseUrl` option above), which is what the refresh closes over.
+    // No `authnBaseUrl`: the stored session carries only the token pair and the cached identity.
     await expect(host.tokenStore.get()).resolves.toEqual({
       token: "foo",
       refreshToken: "foo-refresh",
@@ -309,9 +307,8 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
 
 describe("HostInstallResult.serviceLifecycle.postSwapAction shape", () => {
   it("accepts the exact literal union the CLI emits and nothing else", () => {
-    // Type-level regression: each literal must compile. Adding or removing a
-    // member here without updating `IHostManagement.installHost` callers
-    // will surface as a compile error.
+    // Type-level regression: each literal must compile.
+    // Adding or removing a member here without updating `IHostManagement.installHost` callers will surface as a compile error.
     const all: ReadonlyArray<
       HostInstallResult["serviceLifecycle"]["postSwapAction"]
     > = ["install", "restart", "start", "none"];

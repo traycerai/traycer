@@ -22,12 +22,8 @@ import {
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
-/**
- * F5: Skills tab reuses `useProviderNativeScope` + `McpScopePicker` with
- * locationLabel "Skills location". Global/project is WHERE skill files live;
- * composer's "Available to" / providerScoped is a different axis and must not
- * be conflated here.
- */
+/** Global/project is where skill files live; composer's "Available to" / providerScoped is a different axis and
+ * must not be conflated here. */
 
 const skillMocks = vi.hoisted(() => ({
   skills: [] as ProviderSkill[],
@@ -423,9 +419,7 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
   });
 
   it("does not present the scope picker as an Available-to / providerScoped control", () => {
-    // Guard against conflating global/project location with the composer's
-    // shared-vs-provider "Available to" axis. Asserted before the composer
-    // opens: Radix aria-hides the background, and accessible names inside
+    // Asserted before the composer opens: Radix aria-hides the background, and accessible names inside
     // visibility:hidden subtrees collapse to "".
     skillMocks.createScopes = ["global"];
     skillMocks.skills = [FIND_SKILLS];

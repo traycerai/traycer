@@ -1,26 +1,4 @@
-/**
- * Machine-readable capability contract for the CLI slot.
- *
- * A service definition (launchd plist, systemd unit, Windows Scheduled Task)
- * outlives the CLI binary it invokes: the slot is a user-owned symlink and can
- * genuinely point at an N-1 build. Before a definition passes an argument a
- * newer CLI introduced, it has to ask the binary it is about to exec whether
- * that argument exists.
- *
- * This is that question, and it is deliberately NOT `--help`. Help output is
- * human-facing layout: hiding an internal option behind `.hideHelp()` - the
- * house convention in `index.ts` for exactly the `"Internal:"` options
- * involved here - would silently answer "no" with every test still green, and
- * the identity binding the reclaim probe depends on would drop off every
- * platform at once. Capability tokens are a closed, pinned set; changing one
- * is a deliberate edit that a test fails on.
- *
- * Adding a token: append it here, pin it in
- * `__tests__/capabilities.test.ts`, and only then have an emitter gate on it.
- * Never remove or rename a token that a shipped service definition probes -
- * an emitted script asks an *older* CLI, so the token is a backwards
- * compatibility surface in the same sense as an RPC method name.
- */
+/** Machine-readable CLI-slot capabilities. Hosts older than a field must see it absent, not false. */
 
 /** `traycer host start --service-label <label>` - reclaim probe identity binding. */
 export const HOST_CAPABILITY_SERVICE_LABEL = "service-label";
@@ -50,18 +28,12 @@ export type HostCapabilitiesResponse = {
   readonly exitCode: number;
 };
 
-/**
- * Pure - no data-dir contact, no host spawn, no network. Emitted service
- * scripts run this at every login before the supervisor starts, so it must be
- * a process spawn and a `printf`, nothing more.
- */
+/** Pure - no data-dir contact, no host spawn, no network. Emitted service scripts run this at every login before the supervisor starts, so it must be a process spawn and a `printf`, nothing more. */
 export function runHostCapabilities(
   request: HostCapabilitiesRequest,
 ): HostCapabilitiesResponse {
   if (request.kind === "has") {
-    // Exit code IS the answer: the emitted probes branch on `$?` and never
-    // parse stdout, so they need neither `grep` (absent on NixOS) nor a
-    // stable text layout.
+    // Exit code IS the answer: the emitted probes branch on `$?` and never parse stdout, so they need neither `grep` (absent on NixOS) nor a stable text layout.
     return {
       stdout: "",
       exitCode: HOST_CAPABILITIES.includes(request.capability) ? 0 : 1,

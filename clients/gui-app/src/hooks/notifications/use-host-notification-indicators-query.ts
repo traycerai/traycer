@@ -18,24 +18,7 @@ const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
 };
 
 export interface UseHostNotificationIndicatorsArgs {
-  /**
-   * The host to ASK. Required, and required to be explicit: this RPC is
-   * computed over ONE host's SQLite rows, so an answer is only about the
-   * entities that host owns. A caller that reaches for the app-wide active
-   * host because it is the easy one to get is exactly how a chat bound to
-   * another host ends up asking a machine that has never heard of it - and how
-   * a host-minted id that two hosts happen to share lights the wrong surface.
-   *
-   * `null` means the app-wide active host, which is the right answer only for
-   * a caller whose ids are EPIC ids: an Epic is a shared cloud entity rather
-   * than a host-owned record.
-   *
-   * Resolution stays INSIDE this hook rather than being hoisted to the caller,
-   * because this module is the seam every consuming surface's test already
-   * replaces. A caller that resolved its own client would reach the host
-   * runtime around that seam, and every suite rendering such a surface would
-   * have to start providing one.
-   */
+  /** Host that owns these ids. null means the app-wide active host (epic ids only). Resolve inside this hook. */
   readonly hostId: string | null;
   readonly epicIds: ReadonlyArray<string>;
   readonly chatIds: ReadonlyArray<string>;
@@ -50,11 +33,7 @@ export interface HostNotificationIndicatorsQuery {
   readonly refetch: () => Promise<void>;
 }
 
-/**
- * One surface-level indicator observer. The visible ids are canonicalized and
- * paired into cap-sized requests, so normal surfaces issue one RPC and very
- * large surfaces grow only by 500-id pages rather than one observer per row.
- */
+/** The visible ids are canonicalized and paired into cap-sized requests, so normal surfaces issue one RPC and very large surfaces grow only by 500-id pages rather than one observer per row. */
 export function useHostNotificationIndicators(
   args: UseHostNotificationIndicatorsArgs,
 ): HostNotificationIndicatorsQuery {

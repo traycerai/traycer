@@ -13,9 +13,7 @@ import {
 } from "@/lib/persist/zustand-persist-lifecycle";
 
 /**
- * Renderer-side bridge that retargets the persisted Epic canvas bucket
- * whenever the signed-in identity changes. The store itself stays global;
- * only the localStorage key is switched per user.
+ * Switch the canvas localStorage key on identity change. The store stays global.
  */
 export interface EpicCanvasPersistLifecycleBridgeProps {
   readonly children: ReactNode;

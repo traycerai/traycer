@@ -300,9 +300,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     expect(
       result.current.destinations.map((entry) => entry.profile.label),
     ).toEqual(["Blocked", "Unknown", "Healthy", "Signed out"]);
-    // Unknown is a deliberate menu option, but absence of gauge evidence
-    // never powers the one-click recommendation. The proven-ok profile is
-    // still the primary target.
+    // Unknown is a deliberate menu option, but absence of gauge evidence never powers the one-click recommendation. The proven-ok profile is still the primary target.
     expect(
       result.current.destinations.map((entry) => entry.selectable),
     ).toEqual([false, true, true, false]);
@@ -340,9 +338,8 @@ describe("useProfileRateLimitSwitchPrompt", () => {
 
     const { result } = currentPrompt(null);
     const prompt = visiblePrompt(result.current);
-    // Unknown remains incomparable and therefore never becomes the confident
-    // one-click target. It is still available as a deliberate menu choice;
-    // the signed-out unknown profile is not.
+    // Unknown remains incomparable and therefore never becomes the confident one-click target.
+    // It is still available as a deliberate menu choice; the signed-out unknown profile is not.
     expect(prompt.destinations.map((entry) => entry.selectable)).toEqual([
       false,
       true,
@@ -527,9 +524,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     rerender();
     expect(result.current.kind).toBe("hidden");
 
-    // Severity unchanged; the selectable destination set gained "second".
-    // The warning must resurface with a new key even though severity
-    // never moved.
+    // Severity unchanged; the selectable destination set gained "second". The warning must resurface with a new key even though severity never moved.
     mocks.providers = [claudeState([source, first, second])];
     rerender();
     const resurfaced = visiblePrompt(result.current);
@@ -573,10 +568,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       act(() => result.current.dismiss());
       expect(result.current.kind).toBe("hidden");
 
-      // Probe proves unknown-a strictly better: it flips false -> true on
-      // its own `recommended` flag, so the key changes and the earlier
-      // dismissal doesn't carry over to the resurfaced, more confident
-      // warning.
+      // Probe proves unknown-a strictly better: it flips false -> true on its own `recommended` flag, so the key changes and the earlier dismissal doesn't carry over to the resurfaced, more confident warning.
       mocks.providers = [
         claudeState([source, { ...unknownA, rateLimitStatus: "ok" }, unknownB]),
       ];
@@ -596,11 +588,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       act(() => result.current.dismiss());
       expect(result.current.kind).toBe("hidden");
 
-      // Probe proves unknown-a known-but-not-better: it drops out of the
-      // selectable set entirely, but it was never `recommended` (false in
-      // both states), so the key stays identical - no fresh warning
-      // episode, and (because the composer keys the banner by this key) no
-      // remount to re-arm a second automatic probe onto unknown-b.
+      // Probe proves unknown-a known-but-not-better: it drops out of the selectable set entirely, but it was never `recommended` (false in both states), so the key stays identical - no fresh warning episode, and (because the composer keys the banner by this key) no remount to re-arm a second automatic probe onto unknown-b.
       mocks.providers = [
         claudeState([
           source,

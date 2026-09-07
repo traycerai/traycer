@@ -14,8 +14,7 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
-// Recording every construction is what lets a test assert the migration's core
-// claim - N approved paths produce one command, not N streams.
+// Recording every construction is what lets a test assert the migration's core claim - N approved paths produce one command, not N streams.
 const commandMock = vi.hoisted(() => ({
   commands: [] as Array<{
     readonly commandId: string;
@@ -111,8 +110,7 @@ vi.mock(
 );
 
 // Fixed copy the runner supplies where the stream carries no reason of its own.
-// Asserted literally: a `deleted: false` decline reaching the toast as
-// `undefined` is the exact regression this ticket exists to prevent.
+// Asserted literally: a `deleted: false` decline reaching the toast as `undefined` is the exact regression this ticket exists to prevent.
 const DECLINED_REASON = "The host declined the deletion.";
 const NEVER_REACHED_HOST_REASON =
   "Couldn't reach the host to start the deletion.";
@@ -329,9 +327,7 @@ describe("runWorktreeCleanup on a current host", () => {
       failed: [],
       uncertain: ["/wt/b"],
     });
-    // Detach, not cancel, and not restart: exactly one command was ever opened,
-    // its session was released, and no destructive fallback was started behind
-    // the user's back.
+    // Detach, not cancel, and not restart: exactly one command was ever opened, its session was released, and no destructive fallback was started behind the user's back.
     expect(commandMock.commands).toHaveLength(1);
     expect(commandMock.closeCount).toBe(1);
     expect(legacyMock.paths).toEqual([]);
@@ -423,11 +419,7 @@ describe("runWorktreeCleanup on an older host", () => {
     expect(commandMock.closeCount).toBe(1);
   });
 
-  // Regression: a recoverable drop (`reconnecting`, reason null) before any
-  // terminal frame must fail fast - count the path failed, tear the session down
-  // (exactly one subscribe, no reconnect re-run), and let the overall promise
-  // settle so the summary toast + cache invalidation still fire. Unchanged by
-  // the migration: an older host has no command to keep running without us.
+  // Regression: a recoverable drop (`reconnecting`, reason null) before any terminal frame must fail fast - count the path failed, tear the session down (exactly one subscribe, no reconnect re-run), and let the overall promise settle so the summary toast +.
   it("fails fast and settles when a per-target stream drops", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
     await reportUnsupported();
@@ -454,18 +446,7 @@ describe("runWorktreeCleanup on an older host", () => {
     });
   });
 
-  // The cleanup runner's standing invariant is that its promise ALWAYS settles:
-  // the Tasks are already deleted by the time it runs, so a promise that hangs
-  // costs the user their combined toast and the worktree cache invalidation,
-  // silently.
-  //
-  // This drives the one region of the fan-out that can actually break it, end to
-  // end rather than by stubbing a rejected promise: an open failure lands in
-  // `deleteOneWorktree`'s catch, whose only statement before `finish` is the log
-  // call. A log sink that throws there escapes the promise executor, so
-  // `deleteOneWorktree` REJECTS - which rejects its worker, which rejects
-  // `Promise.all`, which rejects `runFallbackCleanup`, which is the hand-off's
-  // rejection branch.
+  // The cleanup runner's standing invariant is that its promise ALWAYS settles: the Tasks are already deleted by the time it runs, so a promise that hangs costs the user their combined toast and the worktree cache invalidation, silently.
   it("still settles when the per-target fan-out itself rejects", async () => {
     legacyMock.throwForPaths.add("/wt/a");
     loggerMock.throwForMessages.add(
@@ -477,10 +458,8 @@ describe("runWorktreeCleanup on an older host", () => {
 
     // Both paths went out before the fan-out came apart.
     expect(legacyMock.paths).toEqual(["/wt/a", "/wt/b"]);
-    // Unconfirmed, not failed: the fan-out aborted at an unknown point, so a
-    // removal that already landed is real and "couldn't be removed" would be a
-    // false claim about the filesystem. And nothing is retried - an unknown
-    // destructive outcome is exactly what must not be replayed.
+    // Unconfirmed, not failed: the fan-out aborted at an unknown point, so a removal that already landed is real and "couldn't be removed" would be a false claim about the filesystem.
+    // And nothing is retried - an unknown destructive outcome is exactly what must not be replayed.
     await expect(promise).resolves.toEqual({
       removed: [],
       failed: [],

@@ -15,21 +15,8 @@ import {
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
 
-/**
- * The wizard's whole state model, kept pure and away from the stream plumbing
- * and the markup.
- *
- * Two things make this worth its own module. Groups ARRIVE - the scan streams
- * one repo folder at a time - so "everything is pre-selected" is not a thing
- * the component can compute once from a finished list; it is a rule the
- * reducer applies to each group as it lands, without disturbing the choices
- * the user has already made about the groups that landed before it. And the
- * rendered shape (provider pills counting a whole scan, a folder header with a
- * tri-state checkbox over rows that may be searched out from under it) is a
- * projection of that state, not a copy of it.
- */
+/** Groups arrive - the scan streams one repo folder at a time. */
 
-/** `(harness, nativeSessionId)` is the import's identity everywhere. */
 export function sessionImportSelectionKey(
   harness: GuiHarnessId,
   nativeSessionId: string,
@@ -37,33 +24,20 @@ export function sessionImportSelectionKey(
   return `${harness}:${nativeSessionId}`;
 }
 
-/**
- * A scan group's identity: one per location, which is how the scan streams
- * them and how arrival dedupes a re-delivered group.
- */
+/** A scan group's identity: one per location, which is how the scan streams them and how arrival dedupes a
+ * re-delivered group. */
 export function sessionImportGroupKey(
   location: SessionImportGroupLocation,
 ): string {
   return `${location.kind}:${location.path}`;
 }
 
-/**
- * Every folder that no longer exists on disk renders as ONE group, under this
- * key. The scan still reports them one location per folder - the wire shape
- * is per folder, and so is an older host - so the merge is the projection's:
- * a person deciding about "work whose folder is gone" decides once, not once
- * per deleted checkout, and the folder each row ran in stays on the row.
- */
+/** Every folder that no longer exists on disk renders as one group, under this key. */
 export const SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY = "deleted-folders";
 export const SESSION_IMPORT_DELETED_FOLDERS_NAME = "Deleted Folders";
 
-/**
- * The key a RENDERED group answers to - what the header's checkbox and expand
- * toggle dispatch, and what {@link groupsForViewKey} resolves back to scan
- * groups. Distinct from {@link sessionImportGroupKey}: a missing folder keeps
- * its own scan identity (so two of them are not deduped into one on arrival)
- * while sharing one rendered group.
- */
+/** Distinct from sessionImportGroupKey: a missing folder keeps its own scan identity (so two of them are not
+ * deduped into one on arrival) while sharing one rendered group. */
 export function sessionImportGroupViewKey(
   location: SessionImportGroupLocation,
 ): string {
@@ -84,15 +58,10 @@ function groupsForViewKey(
 
 export type SessionImportScanPhase = "scanning" | "complete" | "failed";
 
-/**
- * The scan's recency bound, in days; `null` scans everything. A bound is the
- * cheap path end to end - the host skips old sessions on their own timestamps
- * before reading anything - so it is part of the scan request, never a
- * client-side filter over a full scan.
- */
+/** A bound is the cheap path end to end - the host skips old sessions on their own timestamps before reading
+ * anything - so it is part of the scan request, never a client-side filter over a full scan. */
 export type SessionImportScanWindow = 1 | 7 | 14 | 30 | null;
 
-/** A week: recent enough to be "what I'm working on", the act's premise. */
 export const SESSION_IMPORT_DEFAULT_SCAN_WINDOW: SessionImportScanWindow = 7;
 
 export const SESSION_IMPORT_SCAN_WINDOW_OPTIONS: ReadonlyArray<{
@@ -117,7 +86,6 @@ export function sessionImportScanWindowLabel(
 
 export interface SessionImportWizardState {
   readonly phase: SessionImportScanPhase;
-  /** Groups in arrival order; the projection sorts them for display. */
   readonly groups: ReadonlyArray<SessionImportGroup>;
   readonly providerFailures: ReadonlyArray<SessionImportProviderFailure>;
   readonly totals: SessionImportScanTotals | null;
@@ -125,29 +93,16 @@ export interface SessionImportWizardState {
   readonly scanErrorDetail: string | null;
   readonly selected: ReadonlySet<string>;
   readonly expandedGroups: ReadonlySet<string>;
-  /**
-   * Whether the user cleared the Deleted Folders header. Every missing folder
-   * renders under that one header, so a missing folder that arrives AFTER the
-   * clear (a reconnected scan delivering one the first pass never reached)
-   * must not arrive ticked: it would re-tick a header the user just cleared.
-   * Re-ticking the header, or a fresh scan, lifts it.
-   */
+  /** Every missing folder renders under that one header, so a missing folder that arrives after the clear (a
+   * reconnected scan delivering one the first pass never reached) must not arrive ticked. */
   readonly deletedFoldersCleared: boolean;
   readonly query: string;
-  /**
-   * Providers the user has switched OUT of the import. This is scope, not a
-   * view filter: a harness in here is hidden from the list AND unticked, so
-   * nothing can be imported from a provider whose rows are off screen.
-   */
+  /** This is scope, not a view filter: a harness in here is hidden from the list and unticked, so nothing can be
+   * imported from a provider whose rows are off screen. */
   readonly disabledHarnesses: ReadonlySet<GuiHarnessId>;
-  /** How far back the current scan looks; the control the toolbar renders. */
   readonly scanWindow: SessionImportScanWindow;
-  /**
-   * Every provider the host said the scan covers, from its `started` frame.
-   * This is what keeps the pill row STATIC: pills exist from the moment the
-   * scan starts and hold through rescans, instead of each provider's pill
-   * popping in with its first folder and vanishing on every restart.
-   */
+  /** This is what keeps the pill row static: pills exist from the moment the scan starts and hold through
+   * rescans, instead of each provider's pill popping in with its first folder and vanishing on every restart. */
   readonly scannedProviders: ReadonlyArray<GuiHarnessId>;
 }
 
@@ -166,11 +121,8 @@ export const SESSION_IMPORT_INITIAL_STATE: SessionImportWizardState = {
   scannedProviders: [],
 };
 
-/**
- * Why the scan is starting over. `reconnect` is the transport coming back under
- * a wizard the user is already working in; `fresh` is the wizard (re)opening.
- * The two want opposite things from the selection the user has made so far.
- */
+/** `reconnect` is the transport coming back under a wizard the user is already working in; `fresh` is the
+ * wizard (re)opening. */
 export type SessionImportScanRestartReason = "fresh" | "reconnect";
 
 export type SessionImportWizardAction =
@@ -218,12 +170,8 @@ export function isImportable(candidate: SessionImportCandidate): boolean {
   return candidate.state.kind === "importable";
 }
 
-/**
- * Split in two along the only line that matters here: frames the HOST sends
- * and actions the USER takes. They share a state object but never each other's
- * reasoning, and reading either half whole is worth more than seeing all ten
- * cases in one switch.
- */
+/** They share a state object but never each other's reasoning, and reading either half whole is worth more than
+ * seeing all ten cases in one switch. */
 export function sessionImportWizardReducer(
   state: SessionImportWizardState,
   action: SessionImportWizardAction,
@@ -257,12 +205,8 @@ function applyScanFrame(
   switch (action.kind) {
     case "scanRestarted": {
       if (action.reason === "reconnect") {
-        // The stream dropped and came back over the SAME folders, so the rows
-        // the user has been ticking are the rows the host is about to re-send.
-        // Nothing below the filters is thrown away - not even the groups:
-        // re-delivered ones are ignored by the dedupe in `scanGroupArrived`,
-        // which is also what keeps a deliberate UNTICK from being undone by
-        // that case's pre-select-on-arrival rule.
+        // The stream dropped and came back over the same folders, so the rows the user has been ticking are the rows
+        // the host is about to re-send.
         return {
           ...state,
           phase: "scanning",
@@ -271,12 +215,8 @@ function applyScanFrame(
           scanErrorDetail: null,
         };
       }
-      // A fresh scan starts clean: last visit's picks may already have been
-      // imported. Only what the user narrowed the picker to survives - the
-      // scan window included, because a window change is itself what starts
-      // most fresh scans. The provider roster survives too: which providers
-      // the host scans is not a per-scan fact, and dropping it here is what
-      // made the pill row blink empty on every window change.
+      // Only what the user narrowed the picker to survives - the scan window included, because a window change is
+      // itself what starts most fresh scans.
       return {
         ...SESSION_IMPORT_INITIAL_STATE,
         query: state.query,
@@ -297,21 +237,14 @@ function applyScanFrame(
       ) {
         return state;
       }
-      // A current host hides already-imported sessions from the scan; an older
-      // one still sends them as `already_in_traycer` rows. Discard those here
-      // so both hosts produce the same wizard: only what is new to bring over.
+      // Discard those here so both hosts produce the same wizard: only what is new to bring over.
       const sessions = action.group.sessions.filter(
         (candidate) => candidate.state.kind !== "already_in_traycer",
       );
       if (sessions.length === 0) return state;
       const group = { ...action.group, sessions };
-      // Everything importable arrives pre-selected, missing folders included
-      // (spec §5): those still import, just without a workspace. Two
-      // exceptions: a provider the user has switched out of the import - its
-      // rows are not on screen, so ticking them would import work the user
-      // cannot see - and a missing folder landing under a Deleted Folders
-      // header the user has already cleared, which shares that header's
-      // decision rather than reopening it.
+      // Two exceptions: a provider the user has switched out of the import - its rows are not on screen, so ticking
+      // them would import work the user cannot see.
       const preselect =
         group.location.kind !== "missing_folder" ||
         !state.deletedFoldersCleared;
@@ -435,12 +368,8 @@ function applyGroupSelectionSet(
   return { ...state, selected, deletedFoldersCleared };
 }
 
-/**
- * Scope and selection move together, in both directions: switching a provider
- * out unticks everything it contributed, and switching it back in re-ticks what
- * could be imported - the same rule arrival applies, so a pill turned off and
- * on again lands where it started.
- */
+/** Scope and selection move together, in both directions: switching a provider out unticks everything it
+ * contributed, and switching it back in re-ticks what could be imported. */
 function applyProviderScopeToggle(
   state: SessionImportWizardState,
   harness: GuiHarnessId,
@@ -465,31 +394,23 @@ function applyProviderScopeToggle(
   return { ...state, disabledHarnesses, selected };
 }
 
-/* ------------------------------------------------------------------ */
 /* Projection                                                          */
-/* ------------------------------------------------------------------ */
 
 export interface SessionImportRowView {
   readonly selectionKey: string;
   readonly candidate: SessionImportCandidate;
   readonly title: string;
-  /**
-   * The folder this session ran in, as the scan spelled it. Every row carries
-   * it; the list shows it only inside the Deleted Folders group, where the
-   * header no longer names one folder.
-   */
+  /** Every row carries it; the list shows it only inside the Deleted Folders group, where the header no longer
+   * names one folder. */
   readonly folderPath: string;
   readonly selected: boolean;
   readonly selectable: boolean;
-  /** Short reason a row is not selectable, e.g. "Unreadable". */
   readonly unavailableLabel: string | null;
-  /** The long form, for the row's tooltip. */
   readonly unavailableDetail: string | null;
 }
 
 export type SessionImportGroupSelectionState = "none" | "partial" | "all";
 
-/** One provider pill: what the scan found for it, and whether it is in scope. */
 export interface SessionImportProviderView {
   readonly harness: GuiHarnessId;
   readonly name: string;
@@ -504,7 +425,6 @@ export interface SessionImportGroupView {
   readonly missingFolder: boolean;
   readonly expanded: boolean;
   readonly rows: ReadonlyArray<SessionImportRowView>;
-  /** Everything in scope this folder holds, pickable or not. */
   readonly totalCount: number;
   readonly selectableCount: number;
   readonly selectedCount: number;
@@ -513,30 +433,21 @@ export interface SessionImportGroupView {
 
 export interface SessionImportWizardView {
   readonly groups: ReadonlyArray<SessionImportGroupView>;
-  /** One pill per harness the scan has produced, in the app's provider order. */
   readonly providers: ReadonlyArray<SessionImportProviderView>;
   /** Every session the scan has produced, before scope and search. */
   readonly totalSessions: number;
-  /**
-   * How many in-scope sessions could ever be ticked. The footer's denominator,
-   * because counting rows the user is not allowed to pick makes "3 of 40"
-   * read as an unfinished job when it is in fact everything on offer.
-   */
+  /** The footer's denominator, because counting rows the user is not allowed to pick makes "3 of 40" read as an
+   * unfinished job when it is in fact everything on offer. */
   readonly selectableSessions: number;
-  /** How many survive scope and search. */
   readonly matchedSessions: number;
-  /** Everything ticked - search-hidden rows included - is what submits. */
   readonly selectedCount: number;
-  /** Selectable rows currently on screen, for the Select all / Clear action. */
   readonly visibleSelectionKeys: ReadonlyArray<string>;
-  /** How many of those are ticked, which is what the action toggles between. */
   readonly visibleSelectedCount: number;
 }
 
 const UNTITLED_SESSION = "Untitled session";
 const FIRST_PROMPT_PREVIEW_LENGTH = 140;
 
-/** Native title first, then the opening prompt, then a neutral placeholder. */
 export function candidateDisplayTitle(
   candidate: SessionImportCandidate,
 ): string {
@@ -549,13 +460,11 @@ export function candidateDisplayTitle(
     : prompt;
 }
 
-/** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
 export function harnessDisplayName(harness: GuiHarnessId): string {
   const providerId = guiHarnessIdToProviderId(harness);
   return providerId === null ? harness : providerDisplayName(providerId);
 }
 
-/** Last path segment, on either separator; the full path stays on the row. */
 export function folderDisplayName(path: string): string {
   const trimmed = path.replace(/[/\\]+$/, "");
   const parts = trimmed.split(/[/\\]/);
@@ -563,7 +472,6 @@ export function folderDisplayName(path: string): string {
   return last.length > 0 ? last : path;
 }
 
-/** The order failure groups render in: what the user can act on first. */
 const FAILURE_REASON_ORDER: ReadonlyArray<SessionImportFailureReason> = [
   "source_unreadable",
   "workspace_bind_failed",
@@ -572,10 +480,8 @@ const FAILURE_REASON_ORDER: ReadonlyArray<SessionImportFailureReason> = [
   "source_empty",
 ];
 
-/**
- * The cause as a short heading: what the summary's sections are titled, and
- * what a greyed row's tooltip leads with.
- */
+/** The cause as a short heading: what the summary's sections are titled, and what a greyed row's tooltip leads
+ * with. */
 export function sessionImportFailureLabel(
   reason: SessionImportFailureReason,
 ): string {
@@ -593,12 +499,7 @@ export function sessionImportFailureLabel(
   }
 }
 
-/**
- * Whether the host's per-session detail says more than the reason does. For
- * an unreadable file it is the actual error, worth a glance; for an empty
- * session it restates the heading, and a list that repeats one sentence per
- * row is what buried the summary under a wall of text.
- */
+/** Whether the host's per-session detail says more than the reason does. */
 export function sessionImportFailureDetailVaries(
   reason: SessionImportFailureReason,
 ): boolean {
@@ -613,12 +514,7 @@ export function sessionImportFailureDetailVaries(
   }
 }
 
-/**
- * The one line the summary shows above the details: an outcome first, then
- * the cause when there is exactly one - "Not imported: 6 sessions with no
- * messages". Mixed causes keep the line plain and leave the reasons to the
- * sections underneath.
- */
+/** Mixed causes keep the line plain and leave the reasons to the sections underneath. */
 export function sessionImportNotImportedLine(
   groups: ReadonlyArray<SessionImportFailureGroupView>,
 ): string {
@@ -658,9 +554,8 @@ function rowView(
   );
   const title = candidateDisplayTitle(candidate);
   const state = candidate.state;
-  // `already_in_traycer` never reaches here: those rows are dropped at
-  // arrival (see `scanGroupArrived`), so the only unavailable rows are
-  // unreadable ones.
+  // `already_in_traycer` never reaches here: those rows are dropped at arrival (see `scanGroupArrived`), so the
+  // only unavailable rows are unreadable ones.
   if (state.kind === "unreadable") {
     return {
       selectionKey,
@@ -697,15 +592,8 @@ function matchesQuery(
   );
 }
 
-/**
- * The pill row: every provider the host's scan covers, plus any the scan has
- * produced work for or the user has switched off. The roster comes from the
- * scan's `started` frame so the row is complete before the first folder lands
- * and identical after every rescan - pills that popped in per result read as
- * flicker. A switched-off harness keeps its pill even when a rescan found
- * nothing for it - the unlit pill is the only thing on screen that explains
- * why those rows are missing, and the only way back.
- */
+/** The roster comes from the scan's `started` frame so the row is complete before the first folder lands and
+ * identical after every rescan - pills that popped in per result read as flicker. */
 function providerViewsFor(
   state: SessionImportWizardState,
 ): ReadonlyArray<SessionImportProviderView> {
@@ -717,9 +605,8 @@ function providerViewsFor(
       counts.set(candidate.harness, (counts.get(candidate.harness) ?? 0) + 1);
     }
   }
-  // Map order is whatever order the host reported sessions in, which would
-  // reshuffle the pills as the scan streams. The app's one harness order
-  // settles it; it keys on `id`, hence the hop.
+  // Map order is whatever order the host reported sessions in, which would reshuffle the pills as the scan
+  // streams.
   return sortGuiHarnessesByProviderOrder(
     [...counts].map(([harness, count]) => ({ id: harness, count })),
   ).map((entry) => ({
@@ -738,23 +625,13 @@ export function selectionStateFor(
   return selectedCount === selectableCount ? "all" : "partial";
 }
 
-/**
- * Projects state into what the list renders.
- *
- * The counts on a group header describe the whole IN-SCOPE group, not the
- * searched slice: the header's checkbox toggles exactly those rows (that is the
- * only way to clear a folder without expanding it), so a header claiming "2"
- * while ticking 40 would be lying about its own control. Scope is a different
- * matter - a provider the user switched off is not part of this import at all,
- * so it leaves the counts as well as the list.
- */
+/** The counts on a group header describe the whole IN-scope group, not the searched slice. */
 export function buildSessionImportView(
   state: SessionImportWizardState,
 ): SessionImportWizardView {
   const needle = state.query.trim().toLowerCase();
   const sortable: Array<{
     readonly view: SessionImportGroupView;
-    /** Repos first, then loose folders, then folders gone from disk. */
     readonly tier: number;
     readonly count: number;
     readonly latest: number;
@@ -764,10 +641,7 @@ export function buildSessionImportView(
   let selectableSessions = 0;
   let matchedSessions = 0;
   let visibleSelectedCount = 0;
-  // Every missing folder lands here instead of in `sortable`, and becomes one
-  // rendered group after the walk. Its counts span every missing folder in
-  // scope, searched or not - the same rule as a folder header - while its
-  // rows are only the searched slice.
+  // Every missing folder lands here instead of in `sortable`, and becomes one rendered group after the walk.
   const deletedRows: SessionImportRowView[] = [];
   const deleted = {
     folders: 0,
@@ -869,10 +743,8 @@ export function buildSessionImportView(
     });
   }
 
-  // Repos over loose folders over missing ones; the busiest folder first
-  // within a tier, because repeated work is what the user came back for.
-  // Recency breaks ties so two one-session folders keep a stable, sensible
-  // order.
+  // Repos over loose folders over missing ones; the busiest folder first within a tier, because repeated work is
+  // what the user came back for. Recency breaks ties so two one-session folders keep a stable, sensible order.
   sortable.sort(
     (left, right) =>
       left.tier - right.tier ||
@@ -892,16 +764,13 @@ export function buildSessionImportView(
   };
 }
 
-/** Repos sort above loose folders, which sort above the deleted ones. */
 function groupSortTier(missingFolder: boolean, gitBacked: boolean): number {
   if (missingFolder) return 2;
   return gitBacked ? 0 : 1;
 }
 
-/**
- * The Deleted Folders header's second line, where a folder group shows its
- * path: how many folders the rows below came from.
- */
+/** The Deleted Folders header's second line, where a folder group shows its path: how many folders the rows
+ * below came from. */
 function deletedFoldersSubtitle(folders: number): string {
   const noun = folders === 1 ? "folder" : "folders";
   return `${folders.toLocaleString()} ${noun} no longer on this machine`;
@@ -915,18 +784,12 @@ export interface SessionImportFailureEntryView {
 
 export interface SessionImportFailureGroupView {
   readonly reason: SessionImportFailureReason;
-  /** The cause as the section's heading. */
   readonly label: string;
   readonly entries: ReadonlyArray<SessionImportFailureEntryView>;
 }
 
-/**
- * Groups a finished run's failures by cause, because that is how a person acts
- * on them: "four sessions could not be read" is one problem with four
- * instances, not four problems. The closed reason enum is what makes the
- * grouping meaningful; `detail` is the per-session half and stays on the row,
- * behind the group's expand toggle.
- */
+/** Groups a finished run's failures by cause, because that is how a person acts on them: "four sessions could
+ * not be read" is one problem with four instances, not four problems. */
 export interface SessionImportOutcomeEntry {
   readonly selectionKey: string;
   readonly nativeSessionId: string;
@@ -967,12 +830,8 @@ export function groupSessionImportFailures(
     }));
 }
 
-/**
- * The wizard submits every ticked session, in the order the scan produced
- * them, plus the display titles the progress and summary views need - the
- * `progress` frame names a session by id only, and nothing else in the client
- * can turn that back into something a person recognises.
- */
+/** The wizard submits every ticked session, in the order the scan produced them, plus the display titles the
+ * progress and summary views need. */
 export interface SessionImportSubmission {
   readonly selections: ReadonlyArray<SessionImportSelection>;
   readonly titles: ReadonlyMap<string, string>;

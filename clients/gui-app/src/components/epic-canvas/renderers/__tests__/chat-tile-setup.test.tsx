@@ -232,14 +232,7 @@ function emitSnapshot(
 }
 
 /**
- * The same chat on the WINDOWED line, where the interruption is not an event
- * the driver can watch arrive - it is a value on the snapshot.
- *
- * An empty transcript (`rowCount: 0`) rather than a contrived long one: the
- * point under test is the CARRIAGE, and a setup failure by definition happens
- * before the message it gated ever became a row. That is also why `events` is
- * empty and stays empty - the interruption's event occupies no ordinal, so no
- * amount of hydration would ever put it in `state.events`.
+ * An empty transcript (`rowCount: 0`) rather than a contrived long one: the point under test is the CARRIAGE, and a setup failure by definition happens before the message it gated ever became a row.
  */
 function emitWindowedSnapshot(
   callbacks: ChatStreamCallbacks,
@@ -410,12 +403,8 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("restores the failed prompt on the windowed line, where no event ever reaches state.events", () => {
-    // Consumer 25 of the `state.messages` sweep, and the one with no
-    // client-side repair: `selectRestorableSetupInterruption`'s scan reads
-    // `state.events`, and on this line the interruption's event occupies no
-    // ordinal - `sliceTranscriptTail` never carries it and `loadRange` cannot
-    // ask for it. If the driver does not read the host's derived payload, the
-    // composer silently stops restoring drafts after a setup failure.
+    // Consumer 25 of the `state.messages` sweep, and the one with no client-side repair: `selectRestorableSetupInterruption`'s scan reads `state.events`, and on this line the interruption's event occupies no ordinal - `sliceTranscriptTail` never carries it and `loadRange` cannot ask for it.
+    // If the driver does not read the host's derived payload, the composer silently stops restoring drafts after a setup failure.
     const harness = createHarness();
     emitWindowedSnapshot(harness.callbacks(), null);
 
@@ -475,9 +464,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     const epochAfterFirst =
       useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch ?? 0;
 
-    // Every subsequent snapshot re-delivers the SAME interruption as a value,
-    // so `eventId` is the only thing standing between this and a re-restore on
-    // every frame. Legacy's dedupe guard has to hold harder here.
+    // Every subsequent snapshot re-delivers the SAME interruption as a value, so `eventId` is the only thing standing between this and a re-restore on every frame.
     act(() => {
       emitWindowedSnapshot(harness.callbacks(), {
         eventType: "setup.failed",
@@ -496,11 +483,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("restores the failed prompt when actionAck and messageAccepted arrive before setup.failed", () => {
-    // Bug guard for setup-gating restoration after the host accepted
-    // the send. `actionAck`+`messageAccepted` clear `pendingUserMessages`
-    // long before the gating `setup.failed` lands. The accepted-action
-    // record retains the original prompt content so the driver can
-    // still seed the composer with it exactly once.
+    // `actionAck`+`messageAccepted` clear `pendingUserMessages` long before the gating `setup.failed` lands.
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
 
@@ -576,10 +559,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     const epochAfterRestore =
       useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch ?? 0;
 
-    // Replaying the same setup.failed event must be idempotent: the
-    // dedupe set short-circuits the driver and the accepted-action
-    // record's restore slot is now `null`, so a second pass
-    // also has nothing to hand back.
+    // Replaying the same setup.failed event must be idempotent: the dedupe set short-circuits the driver and the accepted-action record's restore slot is now `null`, so a second pass also has nothing to hand back.
     act(() => {
       appendEvent(
         harness.callbacks(),
@@ -598,13 +578,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("still restores the gating prompt when a transition-only setup.failed lands afterwards", () => {
-    // Bug guard for the setup-failure restore ordering bug. When the
-    // orchestrator's binding-change observer emits a transition-only
-    // `setup.failed` (`messageId: null`) after the gating event for the
-    // same workspace, the driver must still resolve the gating event
-    // and restore its content into the composer - choosing the latest
-    // event would skip restoration because the transition-only entry
-    // has no `messageId`.
+    // When the orchestrator's binding-change observer emits a transition-only `setup.failed` (`messageId: null`) after the gating event for the same workspace, the driver must still resolve the gating event and restore its content into the composer - choosing the latest event would skip restoration because the transition-only entry has no `messageId`.
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
 
@@ -662,10 +636,8 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("restores content when setup is cancelled so the message can be resubmitted", () => {
-    // Stop-during-setup cancellation leaves the chat turn without a
-    // completed user message. Restore the locally cached prompt to the
-    // composer and clear the optimistic pending row so the user can edit
-    // and resubmit instead of being stranded in read-only pending state.
+    // Stop-during-setup cancellation leaves the chat turn without a completed user message.
+    // Restore the locally cached prompt to the composer and clear the optimistic pending row so the user can edit and resubmit instead of being stranded in read-only pending state.
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
 
@@ -709,11 +681,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("does not re-restore after a retry transitions setup back to running", () => {
-    // After Flow 8 restoration the user typically retries setup. The
-    // ensuing `setup.running` (or `setup.succeeded`) for the same
-    // workspace must clear the restorable failure so a re-render of
-    // the driver does not seed the composer a second time on top of
-    // any edits the user has made.
+    // The ensuing `setup.running` (or `setup.succeeded`) for the same workspace must clear the restorable failure so a re-render of the driver does not seed the composer a second time on top of any edits the user has made.
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
 
@@ -791,9 +759,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("toasts a path-less setup failure (no card can render it) and still restores the prompt", () => {
-    // The generic SETUP_AWAIT_FAILED catch-all emits a `setup.failed` with no
-    // `workspacePath`, so the in-transcript card can't anchor it - the toast is
-    // the only failure feedback, restoring the parity the old banner provided.
+    // The generic SETUP_AWAIT_FAILED catch-all emits a `setup.failed` with no `workspacePath`, so the in-transcript card can't anchor it - the toast is the only failure feedback, restoring the parity the old banner provided.
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
 
@@ -875,11 +841,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("does not toast a historical path-less failure with no restorable content (cold snapshot open)", () => {
-    // Regression: the path-less toast must fire only alongside an actual
-    // restoration. The path-less `setup.failed` already lives in `events` when
-    // the store hydrates from snapshot, but nothing was sent in this session,
-    // so `takeSetupFailedRestoration` returns null. Toasting here would
-    // re-announce a stale failure every time the chat is reopened.
+    // Regression: the path-less toast must fire only alongside an actual restoration.
     const harness = createHarness();
     emitSnapshot(
       harness.callbacks(),
@@ -901,11 +863,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("does not re-toast a path-less failure after the driver remounts (restore slot already consumed)", () => {
-    // Regression for the "fresh dedupe set on remount" path. The first mount
-    // toasts + restores and consumes the one-shot restore slot. On remount the
-    // dedupe set is empty again and `events` still carry the failure, but
-    // `takeSetupFailedRestoration` now returns null - so the toast must stay
-    // silent instead of re-firing the old failure.
+    // On remount the dedupe set is empty again and `events` still carry the failure, but `takeSetupFailedRestoration` now returns null - so the toast must stay silent instead of re-firing the old failure.
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
 
@@ -1043,10 +1001,6 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
 
-  // R7 `-oRs`: round 6 made the recovery STRING verbatim, but Sonner renders
-  // it as ordinary HTML - so the newlines and indentation the byte guarantee
-  // exists to protect collapse on screen and on copy. The presentation layer
-  // has to preserve them or the guarantee stops at the store boundary.
   it("renders a last-copy notice with its whitespace preserved", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
@@ -1078,11 +1032,6 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     );
   });
 
-  // R4-3: a retained record's DELIVERY state has to be as durable as the
-  // record. `clientActionIds` is FIFO-bounded at 128 while the ring exemption
-  // made the records themselves unbounded, so ordinary chat traffic evicts a
-  // delivered last-copy id - and the very next notice re-traverses the ring,
-  // finds it "undelivered" and fires the never-expiring draft toast again.
   it("delivers a last-copy notice once, even as tracker churn evicts its id", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
@@ -1128,11 +1077,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(draftToasts).toHaveLength(1);
   });
 
-  // The reconnect-while-away case is exactly when a send-recovery notice
-  // arrives: the pane is unfocused, so `useActivePaneEffect` has torn the
-  // subscription down and the notice lands unseen. The mount-time replay used
-  // to mark it delivered and then skip it for being a `warning`, which threw
-  // away the only remaining copy of the user's text.
+  // The mount-time replay used to mark it delivered and then skip it for being a `warning`, which threw away the only remaining copy of the user's text.
   it("replays a notice carrying the only copy of the user's text", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
@@ -1164,12 +1109,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     });
   });
 
-  // `-LV77`: one ACTION legitimately has more than one thing to say. A
-  // rejection states its account on a host-coded warning; if nobody saw that,
-  // the ack says it again as a protected `SEND_RESTORED` under the SAME
-  // `clientActionId`. Keying the tracker by id alone made the second telling a
-  // duplicate of a notice that was MUTED rather than shown, so the one that
-  // was supposed to reach the user was the one dropped.
+  // Keying the tracker by id alone made the second telling a duplicate of a notice that was MUTED rather than shown, so the one that was supposed to reach the user was the one dropped.
   it("shows a second speaker for an action whose first was muted", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
@@ -1211,22 +1151,13 @@ describe("<ChatTileErrorNoticeToasts />", () => {
       });
     });
 
-    // Exactly one toast, and it is the PROTECTED speaker - not the stale
-    // warning resurrected out of the ring. Both assertions matter: an earlier
-    // version of this test used two messages that shared a phrase, so it
-    // passed while showing the wrong one.
     expect(sonnerToastWarning).toHaveBeenCalledTimes(1);
     expect(toastText(sonnerToastWarning.mock.lastCall?.[0])).toBe(
       "PROTECTED-ACCOUNT-TEXT",
     );
   });
 
-  // The invariant the mount pass owes the subscription pass. That callback
-  // re-walks the ENTIRE ring on every append with no severity gate, which is
-  // only safe because everything the mount pass declined to show is already
-  // remembered. Skip-without-remember turns each stale warning into a bomb
-  // the next unrelated notice detonates - and a ring holding several bursts
-  // them all at once.
+  // That callback re-walks the ENTIRE ring on every append with no severity gate, which is only safe because everything the mount pass declined to show is already remembered.
   it("keeps a muted notice muted when an unrelated notice arrives later", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
@@ -1269,11 +1200,6 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(toastText(sonnerToastWarning.mock.lastCall?.[0])).toBe("FRESH-TEXT");
   });
 
-  // `-IfOj`: a toast with NO lifetime needs an owner. The app-level
-  // `<Toaster />` is mounted outside the auth-dependent tree, so an infinite
-  // last-copy toast survives sign-out and user-switch - and its body is the
-  // previous account's full draft, readable by whoever signs in next on a
-  // shared desktop.
   it("hands a retained draft toast to the identity boundary", () => {
     resetRetainedDraftToastsForTests();
     const harness = createHarness();
@@ -1304,10 +1230,8 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(retainedDraftToastCountForTests()).toBe(0);
   });
 
-  // ...and ONLY those. The dismissal runs beside app-update and
-  // worktree-delete toasts that own their own lifecycles, so tracking an
-  // ordinary notice here would let an identity change reach through and take
-  // down toasts this module never minted.
+  // ...and ONLY those.
+  // The dismissal runs beside app-update and worktree-delete toasts that own their own lifecycles, so tracking an ordinary notice here would let an identity change reach through and take down toasts this module never minted.
   it("does not hand ordinary notices to the identity boundary", () => {
     resetRetainedDraftToastsForTests();
     const harness = createHarness();
@@ -1335,16 +1259,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
   });
 
   // `-CbBV`: the report affordance must not destroy what it reports about.
-  //
-  // Sonner's CANCEL button calls `deleteToast()` unconditionally once its
-  // `onClick` returns - `preventDefault` is not consulted on that path - so
-  // the auto-added "Report issue" cancel dismissed the infinite last-copy
-  // toast. `CHAT_ACTION_REPORT_CONTEXT` carries `message: null`, and
-  // `rememberErrorNotice` has already retained the id so nothing replays it:
-  // using the report affordance destroyed the only copy of the draft.
-  //
-  // Sonner's ACTION button DOES check `event.defaultPrevented`, so that is
-  // where a report affordance on a last-copy toast has to live.
+  // `CHAT_ACTION_REPORT_CONTEXT` carries `message: null`, and `rememberErrorNotice` has already retained the id so nothing replays it: using the report affordance destroyed the only copy of the draft.
   it("keeps a last-copy toast alive when its report affordance is used", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);

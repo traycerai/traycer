@@ -5,19 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
-// Same rationale as the sibling report-issue test: `ProfileEditDialog` and the
-// refresh button pull in mutation/host hooks unconditionally, so those are
-// mocked to keep this test scoped to a QueryClient, no bound host.
+// Same rationale as the sibling report-issue test: `ProfileEditDialog` and the refresh button pull in
+// mutation/host hooks unconditionally, so those are mocked to keep this test scoped to a QueryClient.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
 });
-// The stub above is not sufficient on its own: it replaces `@/lib/host`, but
-// the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
-// which that stub does not intercept - so the real hook throws its "must be
-// used inside a <HostRuntimeProvider>" error. The refresh button reaches that
-// chain via `useProviderRateLimitRefresh` -> `useRateLimitQueueScope`. Stub the
-// one resolution they share, the way the host-less panel suites already do.
+// The stub above is not sufficient on its own: it replaces `@/lib/host`, but the pinned-client chain also
+// reads `useHostClient` from `@/lib/host/runtime`, which that stub does not intercept.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -50,9 +45,7 @@ import { ProviderProfileScopedSection } from "@/components/settings/panels/provi
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
 const RAW_EMAIL = "worker@example.com";
-// Matches `redactEmail`'s format: first local-part char + fixed mask + the
-// domain's first char. Duplicated here rather than imported so the test
-// fails loudly if the two definitions ever drift apart.
+// Duplicated here rather than imported so the test fails loudly if the two definitions ever drift apart.
 const REDACTED_EMAIL = "w•••@e…";
 
 function managedProfile(): ProviderCliState["profiles"][number] {
@@ -78,9 +71,8 @@ function managedProfile(): ProviderCliState["profiles"][number] {
   };
 }
 
-// `opencode` is not in the rate-limit-capable provider set, so the embedded
-// usage card and refresh button take their no-query branch - no additional
-// host-query mocking needed for this section-level test.
+// `opencode` is not in the rate-limit-capable provider set, so the embedded usage card and refresh button take
+// their no-query branch - no additional host-query mocking needed for this section-level test.
 function opencodeState(): ProviderCliState {
   return {
     providerId: "opencode",

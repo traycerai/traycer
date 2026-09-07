@@ -3,12 +3,7 @@ import { join } from "node:path";
 import { DESKTOP_APP_USER_MODEL_ID } from "../../config";
 import { log } from "./logger";
 
-/**
- * Persists V8 bytecode cache to disk so subsequent launches skip the JS
- * parse/compile step for hot modules. Measurable cold-start gain on a
- * multi-MB renderer bundle. Must be called after `app.whenReady()` since
- * `session.defaultSession` is not available before it.
- */
+/** Must be called after `app.whenReady()` since `session.defaultSession` is not available before it. */
 export function configureV8CodeCache(): void {
   const cacheDir = join(app.getPath("userData"), "v8-code-cache");
   session.defaultSession.setCodeCachePath(cacheDir);
@@ -16,9 +11,8 @@ export function configureV8CodeCache(): void {
 }
 
 /**
- * Trim Chromium features the app never uses. Reduces RSS and CPU for
- * subsystems that would otherwise sit idle. Must be called before
- * `app.whenReady()` - command-line switches are read at Chromium init.
+ * Trim Chromium features the app never uses.
+ * Must be called before `app.whenReady()` - command-line switches are read at Chromium init.
  */
 export function trimUnusedChromiumFeatures(): void {
   app.commandLine.appendSwitch(
@@ -38,34 +32,17 @@ export function trimUnusedChromiumFeatures(): void {
   app.commandLine.appendSwitch("disk-cache-size", String(256 * 1024 * 1024));
 }
 
-/**
- * Raises V8's old-space ceiling for the renderer + main heap. Traycer's
- * renderer holds long-lived agent transcripts, document snapshots, and
- * cached host state - the default ~2GB cap is close enough for some
- * users to hit OOM on large epics. 4GB is conservative; bump if telemetry
- * shows actual usage approaching this. Must run pre-ready.
- */
+/** Must run pre-ready. */
 export function configureV8HeapSize(): void {
   app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
 }
 
-/**
- * Windows-only: required for toast-notification grouping and jumplist
- * support. Without an AppUserModelId, toasts may be attributed to
- * "electron.app.Traycer" instead of the product, and jumplist entries are
- * dropped. The id must match the AppUserModelId baked into the installer -
- * electron-builder uses `appId` from `build.appId` for this.
- */
+/** The id must match the AppUserModelId baked into the installer - electron-builder uses `appId` from `build.appId` for this. */
 export function configureAppUserModelId(): void {
   if (process.platform !== "win32") return;
   app.setAppUserModelId(DESKTOP_APP_USER_MODEL_ID);
 }
 
-/**
- * Subscribes to OS power events. Callers receive coarse-grained signals so
- * they can pause polling (host lifecycle watcher) or release expensive
- * resources on sleep, and resume on wake.
- */
 export interface PowerEventHandlers {
   readonly onSuspend: (() => void) | undefined;
   readonly onResume: (() => void) | undefined;

@@ -100,11 +100,8 @@ const PIP_CURSOR_FRAME: BrowserScreencastServerFrame = {
 };
 
 /**
- * The non-pixel half of PiP's own subscription: frame geometry and the agent
- * cursor. Everything below the transport is real - only the stream itself is
- * stood in, so the frames travel the same `applyCaptureFrame` path production
- * uses. The transport's own key/probe behaviour is pinned against the real
- * module in `pip-headless-stream.test.ts`.
+ * The non-pixel half of PiP's own subscription: frame geometry and the agent cursor.
+ * Everything below the transport is real - only the stream itself is stood in, so the frames travel the same `applyCaptureFrame` path production uses.
  */
 function PipMetaProbe(props: { readonly snapshot: PipSnapshot }) {
   const preview = usePipOwnedFrame("epic-1", props.snapshot);

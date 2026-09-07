@@ -8,13 +8,7 @@ import {
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 export interface EpicTileNavigation {
-  /**
-   * The one way a tile enters or is focused on a canvas (decision C1): the
-   * intent plus the placement settings, the live canvas and the viewport go
-   * through the pure resolver, and the resulting plan through the
-   * nested-focus boundary. Returns the committed focus target, or `null` when
-   * nothing was focused (a background open, a PiP, a no-op).
-   */
+  /** Returns the committed focus target, or `null` when nothing was focused (a background open, a PiP, a no-op). */
   readonly openTile: (intent: TileOpenIntent) => NestedFocusTarget | null;
 }
 

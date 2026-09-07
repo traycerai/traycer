@@ -59,11 +59,7 @@ const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
 const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
-// ---------------------------------------------------------------------------
-// Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s
-// full `AppRouter` type so tests can supply a tiny fake without reaching for
-// `as unknown as AppRouter`.
-// ---------------------------------------------------------------------------
+// Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s full `AppRouter` type so tests can supply a tiny fake without reaching for `as unknown as AppRouter`.
 
 export interface KeybindingRouter {
   readonly getPathname: () => string;
@@ -76,41 +72,29 @@ export interface KeybindingRouter {
   readonly navigateToEpicList: () => void;
   readonly navigateSettingsSection: (sectionId: SettingsSectionId) => void;
   /**
-   * Canonical tab activation seam. Routes a `TabActivationIntent`
-   * through `navigateToTabIntent` so every keybinding-triggered tab
-   * switch performs the same activate-then-navigate dance as a UI
-   * click - see `lib/tab-navigation.ts`.
+   * Canonical tab activation seam.
+   * Routes a `TabActivationIntent` through `navigateToTabIntent` so every keybinding-triggered tab switch performs the same activate-then-navigate dance as a UI click - see `lib/tab-navigation.ts`.
    */
   readonly navigateToTabIntent: (intent: TabActivationIntent) => void;
   readonly navigateNestedFocus?: NavigateNestedFocus;
   readonly navigateNestedFocusToPrimaryEditor?: NavigateNestedFocus;
   /**
-   * In-app history back/forward. Delegate to the shared
-   * `goBack`/`goForward` actions on the CURRENT router (the live
-   * instance in `<RouterProvider>`), so keybinding, mouse, header, and
-   * palette all walk the same persistent history. No-op when the current
-   * history carries no controller brand (browser/web build).
+   * In-app history back/forward.
+   * Delegate to the shared `goBack`/`goForward` actions on the CURRENT router (the live instance in `<RouterProvider>`), so keybinding, mouse, header, and palette all walk the same persistent history.
    */
   readonly goBack: () => void;
   readonly goForward: () => void;
   /**
-   * History-navigation availability + boundary state, read off the
-   * CURRENT router's persistent-history controller. The palette source
-   * gates on `isHistoryNavAvailable` (desktop-only feature signal) and
-   * reads through this seam instead of TanStack `useRouter()`, since the
-   * palette mounts ABOVE `<RouterProvider>` where router context is null.
+   * History-navigation availability + boundary state, read off the CURRENT router's persistent-history controller.
+   * The palette source gates on `isHistoryNavAvailable` (desktop-only feature signal) and reads through this seam instead of TanStack `useRouter()`, since the palette mounts ABOVE `<RouterProvider>` where router context is null.
    */
   readonly isHistoryNavAvailable: () => boolean;
   readonly canGoBack: () => boolean;
   readonly canGoForward: () => boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Dynamic handler registry - context-bound actions (e.g. sidebar toggle)
-// can only be dispatched from inside the component tree that owns their
-// state. A bridge registers on mount and unregisters on unmount; if no
-// handler is registered when the chord fires, the action no-ops.
-// ---------------------------------------------------------------------------
+// Dynamic handler registry - context-bound actions (e.g. sidebar toggle) can only be dispatched from inside the component tree that owns their state.
+// A bridge registers on mount and unregisters on unmount; if no handler is registered when the chord fires, the action no-ops.
 
 type ActionHandler = () => void;
 
@@ -128,9 +112,7 @@ export function registerDynamicActionHandler(
   };
 }
 
-// ---------------------------------------------------------------------------
 // Chord lookup
-// ---------------------------------------------------------------------------
 
 export interface ActionChordMatch {
   readonly actionId: ActionId;
@@ -173,16 +155,8 @@ export function findActionForChord(chord: ChordString): ActionId | null {
   return findActionMatchForChord(chord)?.actionId ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// Digit action lookup - a `kind: "digit"` action fires when its modifier-only
-// chord mask matches the current modifiers AND a digit key is the event's
-// primary key. Resolution walks the leader-scope stack top-down: the first
-// ACTIVE action (across the topmost scopes first) whose bound chord matches the
-// event's modifier mask wins, and the match carries thunks for single-digit or
-// sequence dispatch. Because every scope binds modifier-specific chords,
-// suppression is automatically per-modifier (an `alt` event falls through a
-// scope that only claims `mod`).
-// ---------------------------------------------------------------------------
+// Digit action lookup - a `kind: "digit"` action fires when its modifier-only chord mask matches the current modifiers AND a digit key is the event's primary key.
+// Resolution walks the leader-scope stack top-down: the first ACTIVE action (across the topmost scopes first) whose bound chord matches the event's modifier mask wins, and the match carries thunks for single-digit or sequence dispatch.
 
 export interface DigitActionMatch {
   readonly actionId: ActionId;
@@ -225,10 +199,7 @@ export function matchDigitAction(
   return null;
 }
 
-// The exact mask each hint dimension matches - `"mod"` is mod-only (no shift,
-// no alt), `"alt"` is alt-only, `"modShift"` is mod+shift-only (no alt) - so a
-// scope binding one dimension (e.g. the model picker's `⌘⇧` profile digit)
-// never bleeds into another's hint pass (`⌘` rail, `⌥` reasoning).
+// The exact mask each hint dimension matches - `"mod"` is mod-only (no shift, no alt), `"alt"` is alt-only, `"modShift"` is mod+shift-only (no alt) - so a scope binding one dimension (e.g. the model picker's `⌘⇧` profile digit) never bleeds into another's.
 const EXACT_LEADER_MASKS: Readonly<
   Record<"mod" | "alt" | "modShift", ModifierMask>
 > = {
@@ -238,10 +209,8 @@ const EXACT_LEADER_MASKS: Readonly<
 };
 
 /**
- * The scope id that currently OWNS `modifier` for visual hints, or null when no
- * active scope binds it. Mirrors `matchDigitAction`'s top-down walk but keys off
- * the modifier-only chord, so consumer badges can scope themselves to their own
- * scope (e.g. header-tab badges only light up when the header scope owns `alt`).
+ * The scope id that currently OWNS `modifier` for visual hints, or null when no active scope binds it.
+ * Mirrors `matchDigitAction`'s top-down walk but keys off the modifier-only chord, so consumer badges can scope themselves to their own scope (e.g. header-tab badges only light up when the header scope owns `alt`).
  */
 export function resolveLeaderOwner(
   modifier: "mod" | "alt" | "modShift",
@@ -259,12 +228,8 @@ export function resolveLeaderOwner(
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Base leader scopes: always-present app surfaces registered once at provider
-// mount with the live router so their handlers can navigate. Later registrations
-// sit higher, so settings can claim `alt` above the header when active, and
-// overlays (model picker) can claim `mod`/`alt` above every base scope.
-// ---------------------------------------------------------------------------
+// Base leader scopes: always-present app surfaces registered once at provider mount with the live router so their handlers can navigate.
+// Later registrations sit higher, so settings can claim `alt` above the header when active, and overlays (model picker) can claim `mod`/`alt` above every base scope.
 
 export function registerBaseLeaderScope(router: KeybindingRouter): () => void {
   const unregisterSettings = registerLeaderScopeAtBottom({
@@ -319,10 +284,8 @@ function isSettingsScope(pathname: string): boolean {
   // its section digits stay live.
   if (getSystemTabModalApi()?.isOverlayActive("settings") ?? false) return true;
   if (!isSettingsPath(pathname)) return false;
-  // Otherwise gate on the ACTUAL focused ref, not just the pathname. With
-  // `[Settings | empty]` focused on the empty side, `routeBackingSide` keeps the
-  // URL on /settings but the Settings tab does not own focus - an Alt-digit
-  // section command must no-op instead of stealing focus back to Settings.
+  // Otherwise gate on the ACTUAL focused ref, not just the pathname.
+  // With `[Settings | empty]` focused on the empty side, `routeBackingSide` keeps the URL on /settings but the Settings tab does not own focus - an Alt-digit section command must no-op instead of stealing focus back to Settings.
   return selectHostFocusedRef(useTabsStore.getState())?.kind === "settings";
 }
 
@@ -362,9 +325,7 @@ function hasLongerTabSlotWithPrefix(
   );
 }
 
-// ---------------------------------------------------------------------------
 // Dispatch
-// ---------------------------------------------------------------------------
 
 type StaticHandler = (router: KeybindingRouter) => boolean;
 
@@ -411,10 +372,8 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
     r.navigateSettings();
     return true;
   },
-  // Composer-scoped, but routed centrally (not externally-handled): the active
-  // composer's picker registers a controller; here we just toggle the top one.
-  // No-op (false) when no composer is active, matching the "hidden/disabled"
-  // surfaces.
+  // Composer-scoped, but routed centrally (not externally-handled): the active composer's picker registers a controller; here we just toggle the top one.
+  // No-op (false) when no composer is active, matching the "hidden/disabled" surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
   "composer.stash": () => stashActivePrompt(),
 };
@@ -432,12 +391,8 @@ export function dispatchAction(
   return handler === undefined ? false : handler(router);
 }
 
-// Actions that are listed/rebindable here but dispatched OUTSIDE this central
-// dispatcher (owned by a capture-phase hook). The provider must NOT reserve
-// (preventDefault/stopPropagation) their chords, or it would swallow the key
-// when the external owner is inactive. Note: this is NOT the same as "has no
-// handler right now" - dynamic-handler actions (palette/sidebar) legitimately
-// have no handler while their bridge is unmounted yet must still be reserved.
+// Actions that are listed/rebindable here but dispatched OUTSIDE this central dispatcher (owned by a capture-phase hook).
+// The provider must NOT reserve (preventDefault/stopPropagation) their chords, or it would swallow the key when the external owner is inactive.
 const EXTERNALLY_HANDLED_ACTIONS: ReadonlySet<ActionId> = new Set([
   "composer.dictation.toggle",
 ]);
@@ -447,13 +402,7 @@ export function isExternallyHandled(id: ActionId): boolean {
 }
 
 // Actions whose chord must fire once per physical press, never on OS key-repeat.
-// A toggle (the model picker, the terminal panel's open and maximize states)
-// would otherwise flip rapidly while the chord is held and settle in a
-// timing-dependent state; a spawner (new terminal) would open one shell per
-// repeat event. The provider still reserves the chord on repeat
-// (preventDefault) but skips re-dispatch. `tab.new` is repeat-safe on the epic
-// canvas (the store reuses an active blank tab), but on the landing page it
-// shares the new-terminal handler, so it needs the same protection.
+// A toggle (the model picker, the terminal panel's open and maximize states) would otherwise flip rapidly while the chord is held and settle in a timing-dependent state; a spawner (new terminal) would open one shell per repeat event.
 const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "composer.stash",
   "composer.model-picker.toggle",
@@ -467,9 +416,7 @@ export function isRepeatSensitiveAction(id: ActionId): boolean {
   return REPEAT_SENSITIVE_ACTIONS.has(id);
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 function switchToTabByIndex(router: KeybindingRouter, index: number): boolean {
   const allTabs = getHeaderTabs();
@@ -490,10 +437,7 @@ function moveHeaderTabFocus(router: KeybindingRouter, delta: -1 | 1): boolean {
   return true;
 }
 
-// Indexes the OFFERED sections, which is the same list the sidebar renders and
-// badges - a digit means "the nth row of the rail", so a build that offers
-// fewer sections must resolve the digit against the shorter list or the badge
-// and the shortcut name different rows.
+// Indexes the OFFERED sections, which is the same list the sidebar renders and badges - a digit means "the nth row of the rail", so a build that offers fewer sections must resolve the digit against the shorter list or the badge and the shortcut name.
 function switchToSettingsSection(
   router: KeybindingRouter,
   index: number,
@@ -808,11 +752,7 @@ function findComposerOrArtifactEditor(
 }
 
 /**
- * A hosted chat's own composer/editor lives in `StableTileSurfaceHost`'s
- * plane - `selectedTab` (the pane's tab-body wrapper) only ever contains
- * `TileSurfaceSlot`'s empty geometry anchor for it. `selectedTab` still
- * carries the tab's own `data-tab-instance-id`, so no extra plumbing is
- * needed to locate the hosted record for the same instance.
+ * A hosted chat's own composer/editor lives in `StableTileSurfaceHost`'s plane - `selectedTab` (the pane's tab-body wrapper) only ever contains `TileSurfaceSlot`'s empty geometry anchor for it.
  */
 function hostedRecordForSelectedTab(
   selectedTab: HTMLElement | null | undefined,

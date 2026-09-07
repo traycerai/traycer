@@ -1,22 +1,15 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
-// Resolve the PID + process name holding a TCP port. Used by Doctor to
-// distinguish a true port-conflict (Free Port + Restart can ask the
-// holder to exit) from a generic unreachable endpoint (where the host
-// PID is alive but its socket isn't accepting connections - restart is
-// the right fix). The platforms we ship CLI on each expose a different
-// listing tool; we shell out, parse stdout, and tolerate any tool
-// missing/erroring so Doctor can always degrade to "no identifiable
-// conflict, route to restart".
+// Resolve the PID + process name holding a TCP port.
+// Used by Doctor to distinguish a true port-conflict (Free Port + Restart can ask the holder to exit) from a generic unreachable endpoint (where the host PID is alive but its socket isn't accepting connections - restart is the right fix).
 export interface PortConflictInfo {
   readonly pid: number;
   readonly processName: string;
 }
 
 export interface ResolvePortConflictDeps {
-  // Allows tests to inject a deterministic stdout per tool instead of
-  // shelling out. Resolves null when the tool isn't available on the
-  // current host.
+  // Allows tests to inject a deterministic stdout per tool instead of shelling out.
+  // Resolves null when the tool isn't available on the current host.
   runCommand(
     bin: string,
     args: readonly string[],
@@ -68,11 +61,7 @@ export async function resolvePortConflict(
   return null;
 }
 
-// lsof -Fpcn emits a single record per FD:
-//   p<pid>\n
-//   c<command>\n
-//   n<endpoint>\n
-// We only care about the first LISTEN match.
+// lsof -Fpcn emits a single record per FD: p<pid>\n c<command>\n n<endpoint>\n We only care about the first LISTEN match.
 export function parseLsof(stdout: string): PortConflictInfo | null {
   const lines = stdout.split("\n");
   let pid: number | null = null;

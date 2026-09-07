@@ -14,13 +14,7 @@ interface WorktreesSettingsSelectionStoreState {
   ) => void;
 }
 
-/**
- * Session-only Worktrees settings selection. This survives the panel being
- * unmounted while the user visits another Settings section or closes and
- * reopens Settings, but deliberately is not persisted across app restarts.
- * Selections are host-scoped so changing the managed host cannot leak paths
- * into another host's list.
- */
+/** Session-only Worktrees settings selection. */
 export const useWorktreesSettingsSelectionStore =
   create<WorktreesSettingsSelectionStoreState>()((set, get) => ({
     selectedPathsByHost: new Map(),

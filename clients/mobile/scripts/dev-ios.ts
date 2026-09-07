@@ -1,11 +1,4 @@
-/**
- * iOS Simulator launcher. Slot resolution, `run.json` reading, and the
- * Capacitor live-reload handoff live in `dev-run.ts`, shared with the Android
- * loop; what is left here is Simulator targeting.
- *
- * The Simulator shares the Mac's loopback interface, so the baked
- * `http://127.0.0.1:<port>` dev config resolves as-is with no tunnelling.
- */
+/** iOS Simulator launcher. */
 import { spawnSync } from "node:child_process";
 import {
   ensureWebAssets,

@@ -155,9 +155,7 @@ describe("<WorkspaceFileTile /> read validity", () => {
     expect(
       screen.getByText("Could not read /Users/me/private/api-key.txt"),
     ).toBeTruthy();
-    // The empty-file affordance/editable session is the real
-    // `WorkspaceFileRenderer` - it never mounts (this mock is never called)
-    // when the current payload is an error, regardless of its empty body.
+    // The empty-file affordance/editable session is the real `WorkspaceFileRenderer` - it never mounts (this mock is never called) when the current payload is an error, regardless of its empty body.
     expect(state.rendererContent).not.toHaveBeenCalled();
     expect(currentRuntimeState()).toBeUndefined();
   });
@@ -176,9 +174,7 @@ describe("<WorkspaceFileTile /> read validity", () => {
     await screen.findByRole("button", { name: "Type without blur" });
     state.rendererContent.mockClear();
 
-    // TanStack retains the last successful payload on a failed background
-    // refetch - `data` stays the same good response, only `isError`/`error`
-    // flip. This must not be conflated with a payload error.
+    // This must not be conflated with a payload error.
     state.isError = true;
     state.error = new Error("network unreachable");
     harness.rerender();

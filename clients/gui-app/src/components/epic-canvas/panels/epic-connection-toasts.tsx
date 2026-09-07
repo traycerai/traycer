@@ -26,14 +26,7 @@ export function EpicConnectionToasts(props: EpicConnectionToastsProps) {
   return null;
 }
 
-/**
- * Surfaces role upgrade/downgrade toasts on live permission transitions.
- * The *first* role the tab ever sees is the initial snapshot - we skip
- * it so opening a tab as viewer does not fire a "you can no longer edit"
- * toast. Only transitions that happen after the tab has a real role are
- * considered a live change. `permissionRole === null` (full revoke) is
- * handled upstream by the access-lost banner and is not re-toasted here.
- */
+/** Only transitions that happen after the tab has a real role are considered a live change. */
 function useRoleChangeToasts(
   role: PermissionRole | null,
   isActiveTab: boolean,

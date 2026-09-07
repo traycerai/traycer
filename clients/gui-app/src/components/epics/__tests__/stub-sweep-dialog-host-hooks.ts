@@ -1,9 +1,5 @@
-/**
- * Side-effect import for suites that mount `<EpicsListPanel>` (or a parent
- * that does) without exercising Sweep. The panel always mounts
- * `SweepWorktreesDialog`, whose title/name/query hooks require a host
- * runtime. Import this file before the SUT so a new hook is stubbed once.
- */
+/** Side-effect import for suites that mount `<EpicsListPanel>` (or a parent that does) without exercising
+ * Sweep. The panel always mounts `SweepWorktreesDialog`, whose title/name/query hooks require a host runtime. */
 import { vi } from "vitest";
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({

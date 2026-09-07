@@ -22,11 +22,6 @@ const bundledPreloadPath = path.resolve(
   "index.js",
 );
 
-// `build:main` (esbuild) produces these two self-contained CommonJS bundles
-// before this script is invoked. Both dev and production now load the same
-// bundles - dropping the prior tsx-shim path means we lose hot-reload for
-// the main process, but main edits already required an Electron restart
-// to take effect, and the renderer keeps Vite HMR independently.
 if (!existsSync(bundledMainPath)) {
   throw new Error(`Desktop main bundle not found: ${bundledMainPath}`);
 }
@@ -43,11 +38,6 @@ const electronBin = prepareElectronBinary(
 const childEnv = {
   ...process.env,
   TRAYCER_DESKTOP_DEV_APP_PATH: workspaceRoot,
-  // This is the dev runner, so it always loads the renderer from the Vite dev
-  // server. Default these here rather than via an inline `VAR=1 ... bun run`
-  // prefix in the package.json `dev` script - that POSIX shell syntax isn't
-  // understood by cmd.exe, so on Windows it failed with "'TRAYCER_DESKTOP_DEV'
-  // is not recognized". Any caller-provided value still wins.
   TRAYCER_DESKTOP_DEV: process.env.TRAYCER_DESKTOP_DEV ?? "1",
   TRAYCER_DESKTOP_DEV_URL:
     process.env.TRAYCER_DESKTOP_DEV_URL ?? "http://localhost:5173",
@@ -60,10 +50,6 @@ if (devDesktopDisplayName === null) {
 
 delete childEnv.ELECTRON_RUN_AS_NODE;
 
-// See shouldDisableChromiumSandbox: on Linux kernels that restrict
-// unprivileged user namespaces, an un-setuid dev Electron aborts at launch
-// rather than run unsandboxed. Scoped to this dev child (trusted local code);
-// a caller-provided value still wins.
 if (
   childEnv.ELECTRON_DISABLE_SANDBOX === undefined &&
   shouldDisableChromiumSandbox(electronBin)
@@ -74,14 +60,6 @@ if (
   );
 }
 
-// Expose a Chromium remote-debugging (CDP) endpoint on loopback so browser
-// automation (the Playwright MCP) can attach to the live app window. This is
-// the dev-only runner and the port stays bound to 127.0.0.1, so the open
-// endpoint is a local affordance. On by default so `make dev-desktop` is
-// drivable without remembering a flag; set the port to "off" (or "0") to
-// disable it, or to another value to avoid a clash when two desktop slots run
-// at once. Kept at a fixed default because the Playwright MCP's static
-// `--cdp-endpoint` can't chase a per-slot port.
 const remoteDebuggingSetting =
   process.env.TRAYCER_DESKTOP_REMOTE_DEBUGGING_PORT ?? "9222";
 const remoteDebuggingPort =

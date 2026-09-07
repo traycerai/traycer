@@ -13,23 +13,11 @@ export interface ConfirmDestructiveDialogProps {
   onOpenChange: (open: boolean) => void;
   title: string;
   description: string;
-  /** Optional cascade summary inlined into the description. Omit when no descendants. */
   cascadeSummary: string | null;
-  /** Label for the destructive action button (e.g. "Delete" or "Remove"). */
   actionLabel: string;
   isPending: boolean;
-  /**
-   * Why this action cannot be performed at all, or `null` when it can.
-   *
-   * Disables confirm and renders the reason. Deliberately not optional: a
-   * caller that can be blocked and a caller that never is must both say so,
-   * because the failure of the omitted case is an enabled destructive button.
-   *
-   * For a MULTI-target action the reason must name the blocking targets. A
-   * refusal that does not say which row to deselect turns a clean refusal into
-   * a dead end - the whole reason refusing beats partially succeeding is that
-   * the user can act on it.
-   */
+  /** Deliberately not optional: a caller that can be blocked and a caller that never is must both say so, because
+   * the failure of the omitted case is an enabled destructive button. */
   blockedReason: string | null;
   onConfirm: () => void;
 }

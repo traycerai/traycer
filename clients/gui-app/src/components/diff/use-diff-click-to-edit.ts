@@ -22,13 +22,8 @@ import { preloadDiffEditProvider } from "@/components/diff/diff-edit-provider-lo
 
 type DiffInteractionOptions = NonNullable<FileDiffProps<undefined>["options"]>;
 
-/**
- * Opportunistic preloads (hover, pointerdown) are fire-and-forget - nothing
- * awaits them, so a rejected dynamic import must not surface as an unhandled
- * rejection. The activation path preloads separately via `preloadDiffEditProvider`
- * directly, awaited through `editorReady`, and reports failures via
- * `onActivationError`; this helper is only for the passive warm-up calls.
- */
+/** Opportunistic preloads (hover, pointerdown) are fire-and-forget - nothing awaits them, so a rejected dynamic
+ * import must not surface as an unhandled rejection. */
 function preloadDiffEditProviderSilently(): void {
   void preloadDiffEditProvider().catch(() => undefined);
 }
@@ -44,7 +39,6 @@ export type DiffEditActivationResult =
   | { readonly kind: "focus-owner"; readonly ownerSurfaceId: string }
   | { readonly kind: "rejected" };
 
-/** Caret an empty-origin activation (no clickable line exists) starts at. */
 const EMPTY_ORIGIN_CARET: DiffEditCaret = { lineNumber: 1, character: 0 };
 
 export interface DiffClickToEditAdapter {
@@ -104,13 +98,7 @@ export function useDiffClickToEdit(props: {
   const unregisterEditorRef = useRef<(() => void) | null>(null);
   const attachedEditorRef = useRef<Editor<undefined> | null>(null);
   const [attached, setAttached] = useState(false);
-  // Render-phase reset (React's documented "storing information from
-  // previous renders" pattern - not an effect body, avoiding the
-  // `react-hooks/set-state-in-effect` cascading-render concern, and not a
-  // ref, since a ref's `.current` can't be read during render either): the
-  // moment `active` goes false, `attached` must reflect it immediately,
-  // since a fresh activation cycle can start again before any effect would
-  // otherwise run.
+  // Render-phase reset (React's documented "storing information from previous renders" pattern.
   const [wasActive, setWasActive] = useState(props.active);
   if (wasActive !== props.active) {
     setWasActive(props.active);
@@ -125,10 +113,8 @@ export function useDiffClickToEdit(props: {
     if (propsRef.current.enabled) preloadDiffEditProviderSilently();
   }, []);
 
-  // Shared activation core: every activation path (a real line/token click,
-  // and `activateEmptyOrigin` for a file with no clickable lines at all)
-  // funnels through here, so there is exactly one place that starts an edit
-  // session - no separate save/session state for the empty-file case.
+  // Shared activation core: every activation path (a real line/token click, and `activateEmptyOrigin` for a file
+  // with no clickable lines at all) funnels through here.
   const activateWithCaret = useCallback((caret: DiffEditCaret): void => {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
@@ -163,12 +149,8 @@ export function useDiffClickToEdit(props: {
     [activateWithCaret],
   );
 
-  // Entry point for a surface with no clickable line/token at all (an empty
-  // file renders zero lines - see `splitFileContents` - so `onLineClick`/
-  // `onTokenClick` can never fire). Any caller-side gesture filtering
-  // (button/modifier checks for a pointer event, key checks for a keyboard
-  // event) happens in the caller, since there both mouse and keyboard
-  // gestures may reach this same one entry point.
+  // Entry point for a surface with no clickable line/token at all (an empty file renders zero lines - see
+  // `splitFileContents` - so `onLineClick`/ `onTokenClick` can never fire).
   const activateEmptyOrigin = useCallback((): void => {
     if (!propsRef.current.enabled) return;
     activateWithCaret(EMPTY_ORIGIN_CARET);
@@ -265,9 +247,8 @@ export function useDiffClickToEdit(props: {
         setAttached(true);
         queueMicrotask(() => {
           if (attachedEditorRef.current !== editor) return;
-          // A superseded/hidden surface can finish attaching after ownership
-          // has already moved. It must never steal focus (or scroll its kept-
-          // alive canvas) on that late completion.
+          // A superseded/hidden surface can finish attaching after ownership has already moved. It must never steal
+          // focus (or scroll its kept- alive canvas) on that late completion.
           if (!propsRef.current.active) return;
           const pending = pendingCaretRef.current;
           if (

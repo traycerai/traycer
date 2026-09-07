@@ -53,47 +53,13 @@ import {
 
 interface NotificationRowProps {
   readonly feedId: string;
-  /** Briefly identifies a row that just moved from Attention into Recent. */
   readonly highlightRelocation: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
 }
 
-/**
- * Whether an origin-host-bound row must stop offering its action.
- *
- * DERIVATION, not the coarse bit, and the difference is the whole point of this
- * function existing. It used to disable the row for anything the directory did
- * not call `available`, which folded a failed liveness read in with a host that
- * is genuinely gone: an approval prompt on a perfectly healthy machine went
- * grey and un-actionable because one Redis read on the cloud side came back
- * blind. `indeterminate` therefore does NOT disable — the activation path dials
- * and fails on its own evidence, which is recoverable, where a disabled row is
- * a dead end the user cannot argue with.
- *
- * A CONFIRMED refusal still disables, because for those the action really has
- * nowhere to go: `offline` (the host is detached) and `plan-restricted` (no
- * remote route exists to it on this account's plan).
- *
- * "Confirmed" is asked through `isConfirmedTransportRefusal` - the SAME
- * ready-session-aware gate the activation path itself dials through
- * (`ensureOriginHostSelected` -> `dialableHostEndpoint`) - not by re-reading
- * the raw verdict here. The two must agree, and a hand-rolled second gate is
- * how they stop agreeing: reading `hostUnavailability` directly greyed out a
- * cloud-`offline` origin this client held a READY live session to (firsthand
- * proof the route works, which every other gate lets outrank the registry),
- * and refused the fuse-window recovery dial the transport would have
- * attempted. `hostUnavailability` now supplies only the per-reason copy once
- * the refusal is confirmed.
- *
- * `hasReadySession` is the component's REACTIVE answer to
- * `hasReadyRemoteSession` (via `useRemoteSessionPollReadiness`), not read
- * here: the session cache is pull-only and a readiness flip changes neither
- * the notification row nor any directory value, so a direct read froze the
- * refusal at whatever the cache said when something else happened to
- * re-render the row - the same staleness the host picker's refusal predicate
- * had.
- */
+/** `indeterminate` therefore does not disable - the activation path dials and fails on its own evidence, which
+ * is recoverable, where a disabled row is a dead end the user cannot argue with. */
 function originRefusal(input: {
   readonly row: MergedNotificationRow;
   readonly originEntry: HostDirectoryEntry | null;
@@ -113,15 +79,8 @@ function originRefusal(input: {
   return hostUnavailability(input.originEntry);
 }
 
-/**
- * The motion props the row's `layout` animation needs, or their inert forms.
- *
- * Extracted rather than inlined as four ternaries because this row now carries
- * both the reduced-motion branches and the pack-attribution presentation, and
- * the union of the two pushed `NotificationRow` past the module's complexity
- * ceiling. The reduced-motion answer is one decision, so it reads better as
- * one function than as the same conditional spelled four times.
- */
+/** The reduced-motion answer is one decision, so it reads better as one function than as the same conditional
+ * spelled four times. */
 function rowMotionProps(options: {
   readonly feedId: string;
   readonly shouldReduceMotion: boolean;
@@ -140,40 +99,21 @@ function rowMotionProps(options: {
   };
 }
 
-/**
- * One flat, balanced two-line row - a small semantic glyph, title/meta
- * content, trailing relative time, and exactly one primary interactive
- * control. A navigable row's primary control is the row itself (click to
- * activate) with a sibling mark-as-read affordance while unread; a
- * payload-less row never pretends to navigate - its only control is an
- * explicit acknowledge button, so neither shape ever nests a button inside
- * a button. Unread state is a full-height accent
- * rail on the row's leading edge (matching the app's pre-existing rail
- * language) plus title weight - the rail is absolutely positioned inside a
- * permanently-reserved edge inset (`pl-6` on the row regardless of rail
- * visibility), so its presence never shifts row content. The row itself
- * spans the popover's true edge-to-edge width (no section-level inset) so
- * its bottom divider isn't cut off short of the popover's edges - `pl-6`/
- * `pr-4` reproduce the section inset plus the rail gutter purely as content
- * padding.
- */
+/** A navigable row's primary control is the row itself (click to activate) with a sibling mark-as-read
+ * affordance while unread; a payload-less row never pretends to navigate. */
 export function NotificationRow(props: NotificationRowProps): ReactNode {
   const row = useMergedNotificationRow(props.feedId);
-  // Hooks must remain unconditional while an exact-removal frame makes this
-  // row disappear between renders; the empty-id fallback is what keeps the
-  // two origin-host subscriptions below callable for a vanished row.
+  // Hooks must remain unconditional while an exact-removal frame makes this row disappear between renders; the
+  // empty-id fallback is what keeps the two origin-host subscriptions below callable for a vanished row.
   const originHostId = row?.originHostId ?? "";
   const originHost = useHostDirectoryEntry(originHostId);
-  // This machine — not the ambient active host (G8 / D7). Pack-store events
-  // are machine-local; comparing against active would mis-caption when the
-  // user has a remote host selected.
+  // This machine - not the ambient active host. Pack-store events are machine-local; comparing against active
+  // would mis-caption when the user has a remote host selected.
   const localHost = useReactiveLocalHostEntry();
   const runnerHost = useRunnerHostOrNull();
   const shouldReduceMotion = useReducedMotion() === true;
-  // Subscribed, not read at render time: `originRefusal` is ready-session-
-  // aware, and a readiness flip changes no value this row otherwise
-  // subscribes to. An empty id reads as "no ready session", the right answer
-  // for a row with no origin host.
+  // Subscribed, not read at render time: `originRefusal` is ready-session- aware, and a readiness flip changes
+  // no value this row otherwise subscribes to.
   const originHasReadySession = useRemoteSessionPollReadiness(originHostId);
   if (row === null) return null;
 
@@ -203,9 +143,8 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   // activation of a focused row and a click on that button are the same act.
   const canActivate =
     packPresentation.isNavigable && originUnavailability === null;
-  // Only the row's OWN key events - a keydown bubbling up from one of its
-  // controls has already been handled by that control (Enter on the trailing
-  // tick acknowledges; it must not also activate the row).
+  // Only the row's own key events - a keydown bubbling up from one of its controls has already been handled by
+  // that control (Enter on the trailing tick acknowledges; it must not also activate the row).
   const onRowKeyDown = (event: KeyboardEvent<HTMLLIElement>): void => {
     if (event.target !== event.currentTarget) return;
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -223,22 +162,8 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         layout: { duration: 0.24, ease: "easeOut" },
         opacity: { duration: 0.12, ease: "easeOut" },
       }}
-      // hover:/has-[:focus-visible]: give the whole row a subtle tint
-      // whenever any of its interactive controls is hovered or keyboard-
-      // focused, so the user can see what they're targeting - distinct from
-      // the unread rail, which is a persistent state marker, not a hover
-      // affordance (no persistent row tint). The row is not a Button, so it
-      // opts into the shared press scrim itself; `hover:` is media-gated to
-      // hover-capable pointers, so without it a finger sees nothing at all for
-      // the whole press.
-      //
-      // Remote pack-store entries stay fully listed (needs_action evidence)
-      // but are visually de-emphasised so this machine's actionable items
-      // lead — de-emphasis, not filter-out (D7).
-      //
-      // `tabIndex={-1}` makes the row itself the arrow-key landing spot
-      // (see `notification-feed-keyboard-navigation.ts`) without adding a Tab
-      // stop: Tab order still runs through the row's controls only.
+      // hover:/has-[:focus-visible]: give the whole row a subtle tint whenever any of its interactive controls is
+      // hovered or keyboard- focused, so the user can see what they're targeting.
       tabIndex={-1}
       onKeyDown={onRowKeyDown}
       className={cn(
@@ -405,9 +330,7 @@ interface NotificationRowTrailingControlProps {
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
 }
 
-/** The sibling trailing control acknowledges every unread row, including
- * questions and permission requests. Acknowledging notification awareness
- * never resolves the underlying chat workflow. */
+/** Acknowledging notification awareness never resolves the underlying chat workflow. */
 function NotificationRowTrailingControl(
   props: NotificationRowTrailingControlProps,
 ): ReactNode {
@@ -431,10 +354,7 @@ interface NotificationRowControlButtonProps {
   readonly onClick: () => void;
 }
 
-/** The shared right-edge tick button. Mark-as-read and acknowledge use the
- * same affordance visually. It is a sibling of the
- * navigable body button, never nested inside it, so a click can't activate the
- * row. */
+/** It is a sibling of the navigable body button, never nested inside it, so a click can't activate the row. */
 function NotificationRowControlButton(
   props: NotificationRowControlButtonProps,
 ): ReactNode {
@@ -503,9 +423,8 @@ interface NotificationTimestampProps {
   readonly createdAt: number;
 }
 
-// Isolated leaf so the shared 60s clock only re-renders this span - the
-// surrounding row, glyph, and button subtree stay still between ticks (and,
-// critically, never touch the frozen outer shell dimensions).
+// Isolated leaf so the shared 60s clock only re-renders this span - the surrounding row, glyph, and button
+// subtree stay still between ticks (and, critically, never touch the frozen outer shell dimensions).
 function NotificationTimestamp(props: NotificationTimestampProps): ReactNode {
   const label = useRelativeTimestamp(props.createdAt);
   return (
@@ -528,9 +447,8 @@ const NEUTRAL_COLOR = "text-muted-foreground";
 const SUCCESS_COLOR = "text-success-foreground";
 const INVITE_COLOR = "text-primary";
 
-/** Severity/category glyph selection - color is the only severity signal
- * (no background tint, no icon-tile), matching the approved flat visual
- * contract. */
+/** Severity/category glyph selection - color is the only severity signal (no background tint, no icon-tile),
+ * matching the approved flat visual contract. */
 function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
   if (row.globalEntry !== null) {
     return globalEventGlyph(row.globalEntry.event);
@@ -564,9 +482,8 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
     case "workspace.operation.failed":
       return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
-    // Only reachable for an `info` row: the severity branches above already
-    // claim every `done`/`failure`/`needs_action` host-operation row, and the
-    // kind itself says nothing about how the operation ended.
+    // Only reachable for an `info` row: the severity branches above already claim every
+    // `done`/`failure`/`needs_action` host-operation row.
     case "host.operation.finished":
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
     // Needs-action, but not an agent prompt: the shared tones return null for
@@ -578,12 +495,8 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
   }
 }
 
-/**
- * Host events whose subject is not an agent keep their subject-specific glyph
- * while severity continues to own color. Without this layer, the shared
- * done/failure tones turn every successful or failed host operation into a
- * chat bubble before the host-kind fallback can run.
- */
+/** Host events whose subject is not an agent keep their subject-specific glyph while severity continues to own
+ * color. */
 function hostNotificationSemanticIcon(
   row: MergedNotificationRow,
 ): LucideIcon | null {
@@ -614,9 +527,8 @@ function globalEventGlyph(event: NotificationEvent): RowGlyph {
     case NOTIFICATION_EVENT_TYPES.THREAD_DELETED:
       return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
     default:
-      // Fall through to a safe neutral fallback rather than an exhaustive
-      // `never` assertion - a server-added event kind must degrade, not
-      // crash the renderer on a client that hasn't upgraded yet.
+      // Fall through to a safe neutral fallback rather than an exhaustive `never` assertion - a server-added event
+      // kind must degrade, not crash the renderer on a client that hasn't upgraded yet.
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
   }
 }

@@ -1,12 +1,4 @@
-/**
- * `terminal.create@2.1` schema + negotiation coverage.
- *
- * Additive request-side `themeHint` (spawning client's resolved terminal
- * appearance, for host-side OSC 10/11 replies). `null` - the v2.0-upgraded
- * default - means "no spawner theme known" and the host answers with its
- * fixed dark fallback. The response is unchanged from `@2.0`. The major
- * downgrade strips the hint and keeps the independent-scope failure gate.
- */
+/** `terminal.create@2.1` schema + negotiation coverage. */
 import { describe, expect, it } from "vitest";
 import { upgradeRequestToVersion } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";

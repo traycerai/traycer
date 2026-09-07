@@ -28,11 +28,6 @@ import {
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
 
-/**
- * Records the frame/status handlers `AgentActivityStreamClient` installs so a
- * test can drive them directly - mirrors the `StubSession` in
- * `clients/shared/host-transport/__tests__/agent-activity-stream-client.test.ts`.
- */
 class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
   private statusChangeHandler: StatusChangeHandler = () => undefined;
@@ -68,12 +63,7 @@ class StubSession implements IStreamSession {
   }
 }
 
-/**
- * A whole `IHostStreamClient<HostStreamRpcRegistry>` bound to a single
- * `StubSession`. `openAgentActivityStream` only ever calls `.subscribe(...)`
- * on it (through `AgentActivityStreamClient`), so every other member is a
- * stub that is never expected to be reached.
- */
+/** A whole `IHostStreamClient<HostStreamRpcRegistry>` bound to a single `StubSession`. */
 class StubHostStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
   constructor(
     private readonly session: IStreamSession,
@@ -151,9 +141,8 @@ function createStubRebuildPacer(): StreamRebuildPacer {
 }
 
 /**
- * Stubs the reconnect engine's `openReopenLane` (the only member
- * `openAgentActivityStream` calls) while still satisfying the full
- * `HostReconnectEngine` shape.
+ * Stubs the reconnect engine's `openReopenLane` (the only member `openAgentActivityStream` calls)
+ * while still satisfying the full `HostReconnectEngine` shape.
  */
 function createStubReconnectEngine(): HostReconnectEngine {
   return {
@@ -165,12 +154,6 @@ function createStubReconnectEngine(): HostReconnectEngine {
   };
 }
 
-/**
- * Like {@link createStubReconnectEngine}, but the reopen lane also hands back
- * the `reopen` callback `openAgentActivityStream` gives `openReopenLane`, so a
- * test can fire it directly - standing in for the real engine's backoff timer
- * elapsing, which is that module's own suite's job to cover, not this file's.
- */
 function createReopenCapturingReconnectEngine(): {
   readonly reconnectEngine: HostReconnectEngine;
   readonly fireReopen: () => void;
@@ -256,9 +239,8 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    // The new epoch is opened, but its session is never driven - no frame,
-    // no status change. Without the fix the store would still be reading
-    // `open` / `connected` from the torn-down first session.
+    // The new epoch is opened, but its session is never driven - no frame, no status change. Without
+    // the fix the store would still be reading `open` / `connected` from the torn-down first session.
     openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
 
     expect(useAgentActivityStore.getState().connectionStatus).toBe(
@@ -314,12 +296,7 @@ describe("agent activity stream epoch handoff", () => {
       "host-stream-2",
     );
     openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
-    // The window this pins: a raw transport open with no frame behind it. The
-    // per-user union and its `servedBy` are still the FIRST epoch's, by
-    // design, so a plane predicate that read `servedBy !== null` would vouch
-    // here - and the epic cap, which fails closed on a plane that cannot
-    // vouch, would prune against a working set nobody has re-attested,
-    // evicting an Epic whose agent started during the gap.
+    // The window this pins: a raw transport open with no frame behind it.
     secondSession.emitStatus("open", null);
     expect(useAgentActivityStore.getState().connectionStatus).toBe("open");
     expect(useAgentActivityStore.getState().servedBy).toBe("cloud");
@@ -345,11 +322,8 @@ describe("agent activity stream epoch handoff", () => {
     driveToOpenAndConnected(session);
     expect(agentActivityPlaneAnswers()).toBe(true);
 
-    // A dropped socket never reports `closed`: the client goes `open` ->
-    // `reconnecting` -> `open` in place and keeps redialing, so no epoch
-    // boundary runs and the union stays on record. What must NOT stay is the
-    // claim that it describes now - an agent can start on the other side of
-    // that gap, and the cap would evict its Epic on the old map's silence.
+    // A dropped socket never reports `closed`: the client goes `open` -> `reconnecting` -> `open` in
+    // place and keeps redialing, so no epoch boundary runs and the union stays on record.
     session.emitStatus("reconnecting", null);
     expect(agentActivityPlaneAnswers()).toBe(false);
     expect(
@@ -372,10 +346,8 @@ describe("agent activity stream epoch handoff", () => {
   });
 
   it("records the caller's servingHostId, and a replacement's own", () => {
-    // A NARROW frame throughout (`cloudSyncStatus: null`, not the shared
-    // `driveToOpenAndConnected` helper's `"connected"`): a fleet-wide union
-    // would cover every host and this test would prove nothing about which
-    // one was actually recorded.
+    // A NARROW frame throughout (`cloudSyncStatus: null`, not the shared `driveToOpenAndConnected`
+    // helper's `"connected"`): a fleet-wide union would cover every host and this test would prove
     function driveOpenWithNarrowFrame(session: StubSession): void {
       session.emitStatus("open", null);
       session.emitFrame({
@@ -397,9 +369,8 @@ describe("agent activity stream epoch handoff", () => {
       null,
       "host-a",
     );
-    // Set at open, ahead of any frame - `agentActivityPlaneCoversHost` is
-    // still false here because `agentActivityPlaneAnswers` gates it first,
-    // not because the host was not recorded.
+    // Set at open, ahead of any frame - `agentActivityPlaneCoversHost` is still false here because
+    // `agentActivityPlaneAnswers` gates it first, not because the host was not recorded.
     expect(agentActivityPlaneAnswers()).toBe(false);
     driveOpenWithNarrowFrame(firstSession);
     expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
@@ -412,9 +383,8 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    // A different host now serves the union - the exact swap a host failover
-    // performs, with the registry potentially still holding a session bound
-    // to `host-a` from before it.
+    // A different host now serves the union - the exact swap a host failover performs, with the
+    // registry potentially still holding a session bound to `host-a` from before it.
     openAgentActivityStream(reconnectEngine, secondClient, null, "host-b");
     driveOpenWithNarrowFrame(secondSession);
     expect(agentActivityPlaneCoversHost("host-b")).toBe(true);
@@ -422,11 +392,6 @@ describe("agent activity stream epoch handoff", () => {
   });
 
   it("re-asserts the serving host on every reopen dial, not only the first", () => {
-    // A NARROW frame (`cloudSyncStatus: null`), not the shared
-    // `driveToOpenAndConnected` helper's fleet-spanning one:
-    // `agentActivityPlaneCoversHost` short-circuits true for ANY host once the
-    // union spans the fleet, which would prove nothing about `servingHostId`
-    // specifically.
     function driveOpenWithNarrowFrame(session: StubSession): void {
       session.emitStatus("open", null);
       session.emitFrame({
@@ -447,24 +412,16 @@ describe("agent activity stream epoch handoff", () => {
     driveOpenWithNarrowFrame(session);
     expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
 
-    // A terminal close retires the whole reading through
-    // `noteAgentActivityConnectionStatus("closed")` - `servingHostId`
-    // included, same as every other field.
+    // A terminal close retires the whole reading through `noteAgentActivityConnectionStatus("closed")`
+    // - `servingHostId` included, same as every other field.
     session.emitStatus("closed", reopenableFatalClose());
     expect(useAgentActivityStore.getState().servingHostId).toBeNull();
 
-    // The reopen lane's timer firing, simulated directly: the callback
-    // `openAgentActivityStream` gave `openReopenLane` closes the old client
-    // and dials a fresh one against the same stub session - it does not go
-    // through `openAgentActivityStream` again, so nothing outside `openClient`
-    // itself can re-assert `servingHostId` for this dial.
     fireReopen();
     driveOpenWithNarrowFrame(session);
 
-    // Without the fix this reads false forever past a reopen: the close above
-    // cleared `servingHostId` to `null` and nothing on the reopen path re-set
-    // it, though the stream is, in fact, open against "host-a" again with its
-    // own fresh attestation.
+    // Without the fix this reads false forever past a reopen: the close above cleared `servingHostId`
+    // to `null` and nothing on the reopen path re-set it, though the stream is, in fact, open against
     expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
   });
 

@@ -3,38 +3,8 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
 import { setEpicPinnedInCloudTasksResponse } from "@/lib/cloud-epic-tasks-query/cache";
 
 /**
- * Accumulated "Show more" pages for the cloud epic-tasks list, keyed by the
- * query identity (`host | user | request scope`).
- *
- * The first page lives in the TanStack Query cache, but the cursor-paginated
- * extra pages are accumulated here rather than in `useCloudEpicTasksQuery`'s
- * component state. Holding them in component state meant they were discarded the
- * moment the host surface unmounted - closing the History overlay collapsed the
- * list back to the first page on every reopen. Owning them in this module-level
- * store lets the loaded pages survive unmount/remount for the whole app session.
- *
- * Keyed by identity so distinct surfaces/filters don't clobber each other, and
- * so reopening with the same scope restores exactly the pages that were loaded.
- * In-memory only: a full reload starts a fresh list (cursors and page snapshots
- * are not worth persisting across reloads); search/filter/sort persistence is
- * owned separately by `useHistorySearchStore`.
- *
- * Each identity also carries a monotonic generation. `resetIdentity` (called on
- * refresh/refetch) bumps it; `appendPage` ignores any page tagged with an older
- * generation. That guards the cursor race where a "Show more" fetch resolves
- * *after* a refresh reset the list - without it, the in-flight response would
- * re-create `pagesByIdentity[identity]` with stale rows on top of the refreshed
- * first page. The next-page fetch (a TanStack `useHostMutation`) captures the
- * generation when it starts and hands it back here on success.
- *
- * `registerIdentity` must run before that first fetch is dispatched, even
- * though no page or reset has touched the identity yet. Without an explicit
- * `generationByIdentity` entry, `resetCloudEpicTasksPagesForScope` only
- * iterates identities already present in `pagesByIdentity` /
- * `generationByIdentity` - a scope reset that lands while the *first*
- * "Show more" request for an identity is still in flight would find no entry
- * to bump, so the stale response's captured generation `0` would still equal
- * the (never-advanced) current generation `0` and get accepted.
+ * Accumulated "Show more" pages for the cloud epic-tasks list, keyed by the query identity (`host
+ * | user | request scope`).
  */
 interface CloudEpicTasksPagesStoreState {
   readonly pagesByIdentity: Readonly<
@@ -72,9 +42,8 @@ export const useCloudEpicTasksPagesStore =
     },
     appendPage: (identity, generation, page) => {
       set((state) => {
-        // A response tagged with a superseded generation belongs to a list
-        // that was reset (e.g. by a refresh) after the fetch started - drop it
-        // so late results can't revive a cleared identity.
+        // A response tagged with a superseded generation belongs to a list that was reset (e.g. by a
+        // refresh) after the fetch started - drop it so late results can't revive a cleared identity.
         if (generation !== currentGeneration(state, identity)) return state;
         const current = state.pagesByIdentity[identity] ?? [];
         return {
@@ -101,13 +70,7 @@ export const useCloudEpicTasksPagesStore =
     },
     setTaskPinned: (identityPrefix, epicId, pinned) => {
       set((state) => {
-        // In-place optimistic pin patch across every retained tail in the
-        // scope. Identity-preserving on both levels (page and identity
-        // bucket) so untouched scopes never re-render, and deliberately
-        // generation-neutral: the patch only updates what is displayed. The
-        // pin mutation's success handler resets the scope's pagination
-        // afterwards - a pin reorders rows across server page boundaries,
-        // so every retained cursor goes stale on commit.
+        // In-place optimistic pin patch across every retained tail in the scope.
         const entries = Object.entries(state.pagesByIdentity).map(
           ([identity, pages]): [string, readonly ListTasksResponse[]] => {
             if (!identity.startsWith(identityPrefix)) {
@@ -140,31 +103,24 @@ function currentGeneration(
 }
 
 /**
- * Current generation for an identity, read imperatively so the next-page fetch
- * can tag its request and `appendPage` can reject responses from before the
- * latest reset.
+ * Current generation for an identity, read imperatively so the next-page fetch can tag its request
+ * and `appendPage` can reject responses from before the latest reset.
  */
 export function cloudEpicTasksPageGeneration(identity: string): number {
   return currentGeneration(useCloudEpicTasksPagesStore.getState(), identity);
 }
 
 /**
- * Registers an identity's generation entry imperatively, before the fetch
- * that will read it via `cloudEpicTasksPageGeneration` is dispatched. Must be
- * called first so a scope reset landing during that very first in-flight
- * request has an entry to advance - see the store-level doc comment.
+ * Registers an identity's generation entry imperatively, before the fetch that will read it via
+ * `cloudEpicTasksPageGeneration` is dispatched.
  */
 export function registerCloudEpicTasksPageIdentity(identity: string): void {
   useCloudEpicTasksPagesStore.getState().registerIdentity(identity);
 }
 
 /**
- * Drops every accumulated pagination tail for one host/user and advances
- * their generations so in-flight tails are rejected on arrival. The pin
- * mutation patches rows in place at mutate time (`setCloudEpicTasksPagePinned`)
- * and calls this on success: the committed reorder crosses server page
- * boundaries, so every retained cursor is stale and a later "Show more"
- * against one could silently skip rows.
+ * Drops every accumulated pagination tail for one host/user and advances their generations so
+ * in-flight tails are rejected on arrival.
  */
 export function resetCloudEpicTasksPagesForScope(
   hostId: string,
@@ -182,9 +138,8 @@ export function resetCloudEpicTasksPagesForScope(
 }
 
 /**
- * Drops only last-viewed pagination tails for one host/user. Recording a view
- * can move rows across page boundaries for that ordering, but leaves cursors
- * for every other sort valid.
+ * Drops only last-viewed pagination tails for one host/user. Recording a view can move rows across
+ * page boundaries for that ordering, but leaves cursors for every other sort valid.
  */
 export function resetLastViewedCloudEpicTasksPagesForScope(
   hostId: string,
@@ -206,12 +161,6 @@ export function resetLastViewedCloudEpicTasksPagesForScope(
   });
 }
 
-/**
- * Flips one epic's `pinned` bit inside every retained "Show more" tail for
- * one host/user - the pages-store half of the optimistic pin patch (the
- * cached first page lives in TanStack Query and is patched by
- * `setEpicPinnedInCloudTaskCaches`).
- */
 export function setCloudEpicTasksPagePinned(
   hostId: string,
   userId: string,

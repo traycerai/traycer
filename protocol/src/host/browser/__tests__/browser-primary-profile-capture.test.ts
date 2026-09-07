@@ -142,9 +142,7 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
   });
 
   it("reads a cookie from a peer built before partitionKey as unpartitioned", () => {
-    // A required field here silently dropped every frame a pre-CHIPS peer sent
-    // - and every frame this side sent back to one - which read as an inert
-    // "+ Add browser" button rather than as a version skew.
+    // A required field here silently dropped every frame a pre-CHIPS peer sent - and every frame this side sent back to one - which read as an inert "+ Add browser" button rather than as a version skew.
     const { partitionKey: _partitionKey, ...withoutPartitionKey } =
       CAPTURED_RESPONSE.storageState.cookies[0];
     const parsed = browserSessionsClientFrameSchema.safeParse({
@@ -163,9 +161,6 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
   });
 
   it("rejects CDP's object partitionKey, which a producer must flatten first", () => {
-    // Modelled fields are validated, not stripped: an unflattened
-    // `{topLevelSite, hasCrossSiteAncestor}` fails the whole capture rather
-    // than quietly dropping the partition. Producers flatten to the string.
     expect(
       browserSessionsClientFrameSchema.safeParse({
         ...CAPTURED_RESPONSE,
@@ -205,10 +200,8 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
   });
 
   it("round-trips primaryProfileCaptureAck back to the capture's requestId", () => {
-    // The desktop's quit flush waits on this ack, keyed by requestId. Mutation:
-    // dropping `requestId` from the variant, or sending it the client -> host
-    // direction (the ack is the HOST's durability answer, so an ack arriving
-    // from a client must not settle anyone's flush).
+    // The desktop's quit flush waits on this ack, keyed by requestId.
+    // Mutation: dropping `requestId` from the variant, or sending it the client -> host direction (the ack is the HOST's durability answer, so an ack arriving from a client must not settle anyone's flush).
     const ack = {
       kind: "primaryProfileCaptureAck",
       hasBinaryPayload: false,

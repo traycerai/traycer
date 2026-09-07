@@ -70,9 +70,7 @@ afterEach(() => {
 });
 
 /**
- * ONE hover for both the Agents navigator and the graph nodes. These pin the
- * precedence the sidebar established, so extracting it cannot quietly change
- * what either surface shows.
+ * These pin the precedence the sidebar established, so extracting it cannot quietly change what either surface shows.
  */
 describe("AgentHoverTooltip", () => {
   it("prefers owner metadata, carrying role claims as supplemental content", () => {
@@ -96,12 +94,6 @@ describe("AgentHoverTooltip", () => {
   });
 
   it("degrades to the role tooltip when the owner host is unreachable", async () => {
-    // Outcome 1's content is a live RPC chain against the row's OWN binding
-    // host, and branch and worktree path are filesystem facts of that machine
-    // - so there is nothing to replicate that would let the card render
-    // truthfully while the host is gone. Falling back shows what is still
-    // true. Same inputs as the test above apart from this one flag, so the
-    // flag is what proves to be the gate.
     renderHover({
       hostId: "host-a",
       ownerHostUnreachable: true,
@@ -119,9 +111,7 @@ describe("AgentHoverTooltip", () => {
   });
 
   it("still shows the NAME on hover for an unreachable owner with no roles", async () => {
-    // Never a bare trigger: sidebar rows and graph nodes truncate, so the
-    // tooltip is the only place a long agent name is readable - and an offline
-    // machine does not make its agent's name less true.
+    // Never a bare trigger: sidebar rows and graph nodes truncate, so the tooltip is the only place a long agent name is readable - and an offline machine does not make its agent's name less true.
     renderHover({
       hostId: "host-a",
       ownerHostUnreachable: true,
@@ -176,9 +166,8 @@ describe("AgentHoverTooltip", () => {
   });
 
   it("puts the caller's own content under the role content", () => {
-    // The office adds a line of its own beneath the shared card. Both have to
-    // survive: the floor's posture line replacing the roles would be a
-    // regression the surfaces could not see in each other.
+    // The office adds a line of its own beneath the shared card.
+    // Both have to survive: the floor's posture line replacing the roles would be a regression the surfaces could not see in each other.
     renderHover({
       hostId: "host-a",
       ownerHostUnreachable: false,
@@ -244,10 +233,7 @@ describe("AgentHoverTooltip", () => {
   });
 
   it("keeps the agent name alongside extra content in the fallback tooltip", async () => {
-    // Regression coverage: the fallback branch used to drop the name whenever
-    // a caller supplied `extraContent`, because the label collapsed to just
-    // the extra node. Both have to survive - the extra line is appended
-    // UNDER the name, never in place of it.
+    // Both have to survive - the extra line is appended UNDER the name, never in place of it.
     renderHover({
       hostId: null,
       ownerKind: null,
@@ -261,23 +247,16 @@ describe("AgentHoverTooltip", () => {
 
     await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
 
-    // Wait for the tooltip content to actually mount before counting - the
-    // trigger's own "Reviewer" already exists in the document, so a plain
-    // findAllByText resolves on that single match without ever waiting for
-    // the tooltip to open.
+    // Wait for the tooltip content to actually mount before counting - the trigger's own "Reviewer" already exists in the document, so a plain findAllByText resolves on that single match without ever waiting for the tooltip to open.
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("Reviewer");
     expect(tooltip.textContent).toContain("Working · large model");
-    // One "Reviewer" is the trigger button's own label; the other is the
-    // tooltip content TooltipWrapper renders on hover - so finding two is
-    // what proves the name reached the tooltip rather than just the trigger.
+    // One "Reviewer" is the trigger button's own label; the other is the tooltip content TooltipWrapper renders on hover - so finding two is what proves the name reached the tooltip rather than just the trigger.
     expect(screen.getAllByText("Reviewer")).toHaveLength(2);
   });
 
   it("keeps the agent name alongside extra content when the owner host is unreachable", async () => {
-    // Same fallback branch, reached through the OTHER gate: an owner host that
-    // cannot be reached degrades from the rich card to this same tooltip, so
-    // the name-plus-extra guarantee has to hold here too.
+    // Same fallback branch, reached through the OTHER gate: an owner host that cannot be reached degrades from the rich card to this same tooltip, so the name-plus-extra guarantee has to hold here too.
     renderHover({
       hostId: "host-a",
       ownerKind: "chat",

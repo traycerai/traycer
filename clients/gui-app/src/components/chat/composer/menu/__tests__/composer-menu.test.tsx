@@ -145,9 +145,7 @@ function openSlashPickerWithItems(
 }
 
 describe("ComposerMenu preview panel viewport gate", () => {
-  // `useIsMobileViewport` reads `window.innerWidth` directly, so overriding
-  // it before render is what forces the phone presentation - same pattern as
-  // the providers panel's mobile suites.
+  // `useIsMobileViewport` reads `window.innerWidth` directly, so overriding it before render is what forces the phone presentation - same pattern as the providers panel's mobile suites.
   afterEach(() => {
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
@@ -168,9 +166,7 @@ describe("ComposerMenu preview panel viewport gate", () => {
   });
 
   it("does not mount the preview panel on a phone viewport", async () => {
-    // The regression this pins: the panel is a SIDE surface, and a phone has
-    // no side room - every placement covers the command list, so the row's
-    // description painted on top of the menu it described.
+    // The regression this pins: the panel is a SIDE surface, and a phone has no side room - every placement covers the command list, so the row's description painted on top of the menu it described.
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       value: 400,

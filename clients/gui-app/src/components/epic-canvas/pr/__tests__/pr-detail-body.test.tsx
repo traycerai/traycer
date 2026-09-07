@@ -25,28 +25,8 @@ import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-s
 import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
 
 /**
- * `PrDetailBody` component-level tests - (b) GHES/unknown-host cache-only
- * zero-live-churn, and (c) warm-cache reopen paints before first live frame.
- *
- * `usePrDetailSubscription` resolves its transport via `useTabHostId()` ->
- * `useHostStreamClientFor` (NOT the app-wide default-host
- * `StreamRuntimeContext`), so this file wraps `PrDetailBody` in a real
- * `<TabHostProvider>` and mocks `useHostStreamClientFor` directly, mirroring
- * `pr-panel-body.test.tsx`'s "fake only the WS transport" convention for the
- * list stream. `@/lib/host` is mocked too - `usePrDetailSubscription` calls
- * `useHostDirectoryEntry` / `useStreamAuthRevalidator` directly, and both
- * need a `HostRuntimeContext` provider in production; their return values
- * are discarded since `useHostStreamClientFor` ignores its args here.
- *
- * `PrDetailSidebar` renders `PrOwnerLabel`, which unconditionally calls
- * `useChatById` / `useEpicTerminalAgent` (rules-of-hooks - the id argument
- * gates only which one resolves a record, not whether the hook itself
- * runs). Both read `useEpicStore()` -> `useOpenEpicHandle()`, which throws
- * outside `<EpicSessionProvider>`. That per-Epic projection chain is unrelated
- * to PR-detail behavior under test here (every fixture's `owners` is empty),
- * so it is stubbed the same way `pr-panel-body.test.tsx` stubs it for
- * `PrListRow`'s identical dependency - `importActual` keeps every other
- * selector in the module real.
+ * `PrDetailBody` component-level tests - (b) GHES/unknown-host cache-only zero-live-churn, and (c) warm-cache reopen paints before first live frame.
+ * `usePrDetailSubscription` resolves its transport via `useTabHostId()` -> `useHostStreamClientFor` (NOT the app-wide default-host `StreamRuntimeContext`), so this file wraps `PrDetailBody` in a real `<TabHostProvider>` and mocks `useHostStreamClientFor` directly, mirroring `pr-panel-body.test.tsx`'s "fake only the WS transport" convention for the list stream.
  */
 
 const wsStreamClientRef = vi.hoisted(() => ({
@@ -58,10 +38,6 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  // Added when the PR detail spinner became a BOUNDED load (invariant 6):
-  // past its budget it renders `TileHostLoadState`, whose Report-issue action
-  // reaches the barrel's `useHostBinding`. `null` is the production shape for
-  // "no binding", which that surface already handles.
   useHostBinding: () => null,
   useHostDirectory: () => ({
     onChange: () => ({ dispose() {} }),
@@ -70,11 +46,6 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
-  // The Files tab reads the local diff over unary RPC. `null` is the
-  // production shape for "no client yet", which the query's own guard turns
-  // into an error and the tab renders as the GitHub file list - the fallback
-  // these tests already assert nothing about. `PrDetailFilesTab` has its own
-  // file for the diff/stale/unavailable states.
   useHostClient: () => null,
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => null,
@@ -84,10 +55,6 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/epic-selectors")>()),
   useChatById: () => null,
   useEpicTerminalAgent: () => null,
-  // The quote-target picker enumerates the epic's chats and terminal agents.
-  // Both selectors reach the same `useOpenEpicHandle()` chain the two above do,
-  // so they are stubbed for the same reason: that per-epic projection is
-  // unrelated to the PR-detail behaviour under test.
   useEpicChatRecords: () => chatRecordsRef.value,
   useEpicTerminalAgentRecords: () => EMPTY_EPIC_RECORDS,
 }));
@@ -99,11 +66,6 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 /** Stable identity: a fresh `[]` each call would re-run every dependent memo. */
 const EMPTY_EPIC_RECORDS: readonly never[] = [];
 
-/**
- * Per-test chat fixtures. Hoisted and mutable because the selector mock is
- * module-level, and the default has to stay EMPTY: most tests here assert on a
- * PR with no owners, where having nothing to send to is the honest state.
- */
 const chatRecordsRef = vi.hoisted(() => ({
   value: [] as ReadonlyArray<{
     readonly id: string;
@@ -113,11 +75,7 @@ const chatRecordsRef = vi.hoisted(() => ({
 }));
 
 /**
- * `openTile` takes a single intent object (`{ node, target, ... }`);
- * structurally typed on the two `node` fields the assertions read, rather
- * than on `EpicCanvasTileRef` - the ref union's other members would force a
- * cast at the call-site read, and the point of the test is which id and kind
- * got opened, on which tab.
+ * `openTile` takes a single intent object (`{ node, target, ... }`); structurally typed on the two `node` fields the assertions read, rather than on `EpicCanvasTileRef` - the ref union's other members would force a cast at the call-site read, and the point of the test is which id and kind got opened, on which tab.
  */
 const tileNavigationMock = vi.hoisted(() => ({
   openTile: vi.fn(
@@ -471,9 +429,7 @@ describe("PrDetailBody", () => {
     // Refresh reuses the existing session - it must not open a second stream.
     expect(mockWsStreamClient.subscribeCallCount).toBe(1);
 
-    // Simulate the host's cache-only re-emit contract: the GHES/unknown-host
-    // policy never runs a live sweep for this PR, it only re-serves the
-    // cached facts in response to the refresh request.
+    // Simulate the host's cache-only re-emit contract: the GHES/unknown-host policy never runs a live sweep for this PR, it only re-serves the cached facts in response to the refresh request.
     session.emitFrame(
       buildPrDetailFrame({
         kind: "updated",
@@ -514,17 +470,11 @@ describe("PrDetailBody", () => {
       isActive: true,
     });
 
-    // First paint must already show the warm data - assert synchronously
-    // right after render, before any server frame is emitted, so the
-    // loading spinner is caught absent on the FIRST render rather than
-    // merely absent "eventually".
+    // First paint must already show the warm data - assert synchronously right after render, before any server frame is emitted, so the loading spinner is caught absent on the FIRST render rather than merely absent "eventually".
     expect(screen.queryByTestId("pr-detail-loading")).toBeNull();
     expect(screen.getByTestId("pr-detail-body")).toBeTruthy();
     expect(screen.getByText(/Warm cached title/)).toBeTruthy();
 
-    // The hook still opens its own session (it always does), but no server
-    // frame has been emitted yet - the paint above came from the pre-seeded
-    // cache, not a fast frame race.
     await waitFor(() => {
       expect(mockWsStreamClient.subscribeCallCount).toBe(1);
     });
@@ -625,10 +575,7 @@ describe("PrDetailBody", () => {
   });
 
   it("pins the title and the tab strip, and lets the meta lines scroll away", async () => {
-    // Scrolling a 300-file diff, the two things a reader keeps reaching for
-    // are "which PR is this" and "which section" - and only those. The author,
-    // branch flow and freshness lines are read once on open, so spending four
-    // lines of every viewport on them would be the wrong trade.
+    // Scrolling a 300-file diff, the two things a reader keeps reaching for are "which PR is this" and "which section" - and only those.
     renderBody({
       epicId: "epic-sticky",
       githubHost: "github.com",
@@ -668,10 +615,7 @@ describe("PrDetailBody", () => {
     // The merge line stays pinned too: the base branch is what every hunk in
     // the diff below is being compared against.
     expect(bar.contains(screen.getByTestId("pr-detail-merge-line"))).toBe(true);
-    // ...while the reference lines are not in the bar at all - the diffstat,
-    // comment count and freshness moved into the always-visible context card,
-    // because a pinned bar has to earn every line it spends and those are
-    // consulted once rather than re-read while scrolling.
+    // ...while the reference lines are not in the bar at all - the diffstat, comment count and freshness moved into the always-visible context card, because a pinned bar has to earn every line it spends and those are consulted once rather than re-read while scrolling.
     expect(bar.textContent).not.toContain("comment");
     expect(screen.queryByTestId("pr-detail-header-meta")).toBeNull();
   });
@@ -712,40 +656,28 @@ describe("PrDetailBody", () => {
     const overview = shellClasses();
     expect(overview).toContain("max-w-3xl");
 
-    // Driven by ROLE: the switch is the user-facing interaction, so it should
-    // go through the accessible name. `getByTestId` stays for the class
-    // assertions below, which have no role to hang off.
+    // Driven by ROLE: the switch is the user-facing interaction, so it should go through the accessible name.
+    // `getByTestId` stays for the class assertions below, which have no role to hang off.
     for (const tab of [/Feedback/, /Files/, /Checks/, /Commits/] as const) {
       fireEvent.click(screen.getByRole("tab", { name: tab }));
       expect(shellClasses()).toBe(overview);
     }
 
-    // jsdom does not evaluate container queries, so the card renders here
-    // whatever the threshold is. What IS checkable is the threshold itself -
-    // and that is the thing that broke twice. It was derived from the column
-    // width alone (1520, then 1400) and both times landed at or above the
-    // ~1400px a maximised window with the PR panel open actually measures, so
-    // the card never appeared once. This ceiling is not arithmetic; it is the
-    // observation, and it is what the arithmetic has to come in under.
+    // jsdom does not evaluate container queries, so the card renders here whatever the threshold is.
+    // It was derived from the column width alone (1520, then 1400) and both times landed at or above the ~1400px a maximised window with the PR panel open actually measures, so the card never appeared once.
     const card = screen.getByTestId("pr-detail-card-gutter");
     const threshold = /@min-\[(\d+)px\]/.exec(card.className)?.[1] ?? null;
     expect(threshold).not.toBeNull();
     expect(Number(threshold)).toBeLessThanOrEqual(1300);
 
-    // The card and the shell's wider cap are one switch. If the card appears
-    // without the extra width the row squeezes the prose; if the width appears
-    // without the card the measure just gets too long. Neither throws.
+    // If the card appears without the extra width the row squeezes the prose; if the width appears without the card the measure just gets too long.
     const shellThreshold =
       /@min-\[(\d+)px\]:max-w-/.exec(overview)?.[1] ?? null;
     expect(shellThreshold).toBe(threshold);
   });
 
   it("caps the card's width fluidly instead of forcing a bare fixed width", async () => {
-    // `shrink-0` alone made this a hard-coded 18rem regardless of how much
-    // room the flex row actually had. `w-full max-w-[min(24vw,18rem)]` lets
-    // the item size down to whatever space remains rather than overflowing
-    // it, and pairs the rem ceiling with a viewport term so the cap is not a
-    // fixed layout dimension.
+    // `w-full max-w-[min(24vw,18rem)]` lets the item size down to whatever space remains rather than overflowing it, and pairs the rem ceiling with a viewport term so the cap is not a fixed layout dimension.
     renderBody({
       epicId: "epic-width",
       githubHost: "github.com",
@@ -832,10 +764,7 @@ describe("PrDetailBody", () => {
   });
 
   it("Fix in chat quotes the failing CHECK, not the generic PR overview", async () => {
-    // The queue keys check rows on `prCheckContextKey(context, index)`, which
-    // is the details URL when there is one. Matching on `entry.name` instead
-    // never hit, so every "Fix in chat" silently pasted the overview quote and
-    // the reader lost the one fact they asked for - which check failed.
+    // Matching on `entry.name` instead never hit, so every "Fix in chat" silently pasted the overview quote and the reader lost the one fact they asked for - which check failed.
     chatRecordsRef.value = [
       { id: "chat-9", title: "Technical Support Inquiry", updatedAt: 5_000 },
     ];
@@ -885,10 +814,6 @@ describe("PrDetailBody", () => {
     fireEvent.click(screen.getByTestId("pr-detail-queue-send"));
 
     const draft = JSON.stringify(readComposerDraftSnapshot("chat-9").content);
-    // The COMPOSED name, exactly as the Checks tab shows it. `pre-commit`
-    // alone is the job name, which a reusable workflow reports identically
-    // for every job it runs - the agent receiving this quote would have no
-    // way to tell which of them failed.
     expect(draft).toContain("check Run Pre-commit / pre-commit (pull_request)");
     expect(draft).toContain("https://ci/pre-commit");
   });
@@ -952,9 +877,7 @@ describe("PrDetailBody", () => {
     expect(intent.node.id).toBe("chat-7");
     expect(intent.node.type).toBe("chat");
 
-    // The passive quote glyphs must NOT navigate - they are for stacking
-    // context before you go, and yanking the tab away mid-collection is its
-    // own bug.
+    // The passive quote glyphs must NOT navigate - they are for stacking context before you go, and yanking the tab away mid-collection is its own bug.
     fireEvent.click(screen.getByTestId("pr-detail-description-quote"));
     expect(tileNavigationMock.openTile).toHaveBeenCalledTimes(1);
   });

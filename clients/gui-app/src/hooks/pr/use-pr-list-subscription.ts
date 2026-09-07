@@ -54,14 +54,7 @@ interface ActiveSubscriptionArgs {
 type SharedSubscription =
   SharedStreamSubscription<PrSubscribeListForEpicServerFrame>;
 
-/**
- * Module-level ref-counted subscriptions, keyed by the owning client
- * instance + `hostId` + `epicId` + `mode`. `mode` is part of the key (NOT
- * the cache key - see `prQueryKeys.listForEpic`) so a background session
- * (the epic shell's standing subscription) and a foreground session (the
- * panel) coexist as two independent transport lifecycles instead of one
- * collapsing into the other, per the tech plan's session-key rule.
- */
+/** `mode` is part of the key (NOT the cache key - see `prQueryKeys.listForEpic`) so a background session (the epic shell's standing subscription) and a foreground session (the panel) coexist as two independent transport lifecycles instead of one collapsing into the other, per the tech plan's session-key rule. */
 const subscriptions: SharedStreamSubscriptionRegistry<PrSubscribeListForEpicServerFrame> =
   new Map();
 
@@ -90,12 +83,7 @@ export function usePrListSubscription(args: {
   });
 }
 
-/**
- * Host-explicit counterpart used by surfaces whose owner may live on a host
- * other than the app-wide effective host. The client is intentionally an
- * argument: `hostId` authorizes and keys the PR projection, but it cannot
- * select which websocket carries the subscription.
- */
+/** The client is intentionally an argument: `hostId` authorizes and keys the PR projection, but it cannot select which websocket carries the subscription. */
 export function usePrListSubscriptionForClient(args: {
   readonly hostId: string | null;
   readonly epicId: string;
@@ -217,10 +205,7 @@ function createSharedSubscription(
     consumers: new Map(),
   };
 
-  // Terminal teardown that keeps the map entry (and its error) alive for the
-  // mounted consumers: the entry only leaves the map through the refCount
-  // lifecycle, so a later fresh mount re-subscribes from scratch while the
-  // current ones render the error instead of a forever-pending skeleton.
+  // Terminal teardown that keeps the map entry (and its error) alive for the mounted consumers: the entry only leaves the map through the refCount lifecycle, so a later fresh mount re-subscribes from scratch while the current ones render the error instead of a forever-pending skeleton.
   const markTerminal = (frame: PrListErrorFrame): void => {
     sessionClosed = true;
     shared.isTerminal = true;
@@ -234,10 +219,7 @@ function createSharedSubscription(
   session.onServerFrame((envelope) => {
     if (sessionClosed) return;
 
-    // Plain v1 stream: the frame's own fields ride directly on the envelope
-    // (`streamMethodFrameEnvelopeSchema` is `.passthrough()`) - unlike git's
-    // status stream, there is no host-specific `envelope.value` wrapping
-    // here.
+    // Plain v1 stream: the frame's own fields ride directly on the envelope (`streamMethodFrameEnvelopeSchema` is `.passthrough()`) - unlike git's status stream, there is no host-specific `envelope.value` wrapping here.
     const parseResult =
       prSubscribeListForEpicServerFrameSchema.safeParse(envelope);
     if (!parseResult.success) {
@@ -264,10 +246,7 @@ function createSharedSubscription(
     writeIntoCache(queryClient, args, frame);
   });
 
-  // Transport-terminal transitions (a fatal error frame, a closed client's
-  // inert session, the no-progress UNAUTHORIZED give-up) never produce a
-  // domain error frame - without this handler the subscription would sit in
-  // a pending state forever.
+  // Transport-terminal transitions (a fatal error frame, a closed client's inert session, the no-progress UNAUTHORIZED give-up) never produce a domain error frame - without this handler the subscription would sit in a pending state forever.
   session.onStatusChange((status, reason) => {
     if (sessionClosed) return;
     if (status !== "closed") return;
@@ -288,12 +267,7 @@ function createSharedSubscription(
 }
 
 function describeStreamClose(reason: StreamCloseReason | null): string | null {
-  // A RETRYABLE close is the transport reconnecting, not a failure the user
-  // has to see: the client re-subscribes on its own backoff and the next
-  // snapshot repopulates this surface. Returning `null` keeps the panel in
-  // its pending state - "visibly retrying" - instead of flashing an error
-  // that resolves itself, which is what an overnight sleep used to do to
-  // every open panel at once.
+  // A RETRYABLE close is the transport reconnecting, not a failure the user has to see: the client re-subscribes on its own backoff and the next snapshot repopulates this surface.
   if (
     reason !== null &&
     reason.kind === "fatalError" &&
@@ -307,11 +281,7 @@ function describeStreamClose(reason: StreamCloseReason | null): string | null {
   return `The Pull Requests stream failed (${reason.details.code}): ${reason.details.reason}`;
 }
 
-/**
- * The one frame-to-cache-value projection, so a new field on the frame cannot
- * reach the write path and be missed on the replay path (or the reverse).
- * `use-pr-detail-subscription.ts` carries the same helper.
- */
+/** The one frame-to-cache-value projection, so a new field on the frame cannot reach the write path and be missed on the replay path (or the reverse). */
 function toSubscriptionData(frame: PrListDataFrame): PrListSubscriptionData {
   return {
     sourceStatus: frame.sourceStatus,
@@ -321,11 +291,7 @@ function toSubscriptionData(frame: PrListDataFrame): PrListSubscriptionData {
 }
 
 /**
- * Writes subscription frames into the TanStack Query cache.
- * Authorization: CLAUDE.md "Optimistic setQueryData is reserved for
- * response-equals-state cases". This call falls under that carve-out: the
- * host's `snapshot` / `updated` frames ARE the authoritative PR list state
- * at the moment they are emitted.
+ * Host `snapshot`/`updated` frames are the PR list; write them into the query cache.
  */
 function writeIntoCache(
   queryClient: QueryClient,
@@ -338,14 +304,7 @@ function writeIntoCache(
   );
 }
 
-/**
- * Re-applies a shared session's cached last frame to the query cache when a
- * NEW consumer joins an already-live session: an unobserved slot may have
- * been GC-collected since delivery, and the host sends no fresh hydration
- * snapshot to a session that never dropped its last subscriber. Refill-only:
- * a present value is always at least as fresh (this hook is the only
- * writer of this cache key).
- */
+/** Re-applies a shared session's cached last frame to the query cache when a NEW consumer joins an already-live session: an unobserved slot may have been GC-collected since delivery, and the host sends no fresh hydration snapshot to a session that never dropped its last subscriber. */
 function replayLastEventIntoCache(
   queryClient: QueryClient,
   args: ActiveSubscriptionArgs,

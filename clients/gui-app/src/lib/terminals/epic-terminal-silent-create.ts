@@ -37,8 +37,7 @@ function unavailableClientError(method: string): HostRpcError {
 
 /**
  * Issues `terminal.plain.create` with no mutation cache write or toast.
- * The caller applies those effects only after the durable-create generation
- * fence accepts the attempt.
+ * The caller applies those effects only after the durable-create generation fence accepts the attempt.
  */
 export async function runSilentCapableEpicTerminalCreate(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -58,8 +57,7 @@ export async function runSilentCapableEpicTerminalCreate(args: {
 
 /**
  * Issues `terminal.create` with no list refresh, cache write, or toast.
- * The returned session is the ordinary-success authority; lost-response
- * discovery belongs in the coordinator's generation-fenced `commit`.
+ * The returned session is the ordinary-success authority; lost-response discovery belongs in the coordinator's generation-fenced `commit`.
  */
 export async function runSilentLegacyEpicTerminalCreate(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -76,8 +74,8 @@ export async function runSilentLegacyEpicTerminalCreate(args: {
 }
 
 /**
- * Isolated `terminal.list` for uncertain/lost create responses. Does not
- * read or write shared QueryClient state.
+ * Isolated `terminal.list` for uncertain/lost create responses.
+ * Does not read or write shared QueryClient state.
  */
 export async function fetchIsolatedLegacyTerminalList(args: {
   readonly client: HostClient<HostRpcRegistry> | null;

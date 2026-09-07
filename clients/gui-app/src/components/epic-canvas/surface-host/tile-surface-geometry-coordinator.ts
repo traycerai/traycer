@@ -1,46 +1,6 @@
 /**
- * Ticket 21 slice 3: the direct-flush geometry coordinator design-review
- * finding 2 requires in place of `ResizeObserver -> requestAnimationFrame`.
- *
- * ONE shared `ResizeObserver` for the host root and every registered slot.
- * Its callback applies every registered rect DIRECTLY - synchronously, in
- * the same task, no `requestAnimationFrame` hop - because `document.hidden`
- * is `true` in the automated renderer and a prior live investigation
- * established that rAF never services a state mirror there. Resize
- * observation already fires after layout and before paint; scheduling rAF
- * from that callback would push the record-box write a full rendering
- * opportunity late during a continuous divider drag, and can stall
- * indefinitely in that hidden renderer.
- *
- * The callback recomputes EVERY currently registered rect on any observed
- * change, not only the entries in that batch: a host-root move (a real
- * `TopLevelTabHost` resize, e.g. a sidebar toggle) must invalidate every
- * live record's position, not just the slot that happened to report in this
- * particular batch. `getBoundingClientRect()` is read fresh for both the
- * host and the slot at apply time rather than trusted from the RO entry -
- * `ResizeObserverEntry.contentRect` only carries size, never position.
- *
- * Writing an absolutely positioned record does not resize its OWN observed
- * slot (the record is not a descendant of the slot), so applying rects
- * directly here cannot re-trigger this same observer in a feedback loop.
- *
- * Registration is callback-ref driven (a synchronous initial measurement on
- * attach, matching the design's structural-transfer requirement) and
- * StrictMode-safe by construction: every register call creates a fresh
- * registration object, and its own unregister closure only ever removes
- * that EXACT object (`registrations.get(key) === registration`), so a stale
- * cleanup from an earlier registration can never clobber a newer one that
- * has already replaced it - the same compare-before-clear discipline
- * ticket 22's geometry scheduler needed for its own StrictMode replay.
- *
- * A same-key re-registration (slice-3 review finding 2) unobserves the
- * DISPLACED element before observing the new one, at replacement time -
- * the identity-guarded cleanup above correctly refuses to remove the new
- * mapping entry, but that guard alone left the old element observed
- * forever (its own late cleanup skips `unobserve` along with the deletion
- * it correctly declines). Repeated structural transfers would otherwise
- * retain every detached source element in the shared observer's target set
- * and pay a redundant all-record recompute pass per stale target.
+ * Its callback applies every registered rect DIRECTLY - synchronously, in the same task, no `requestAnimationFrame` hop - because `document.hidden` is `true` in the automated renderer and a prior live investigation established that rAF never services a state mirror there.
+ * Resize observation already fires after layout and before paint; scheduling rAF from that callback would push the record-box write a full rendering opportunity late during a continuous divider drag, and can stall indefinitely in that hidden renderer.
  */
 
 export interface TileSurfaceRect {
@@ -99,25 +59,14 @@ function applyAllRegisteredRects(): void {
 }
 
 /**
- * Re-reads every registered slot's rect right now, outside any observer
- * callback. The shared `ResizeObserver` only fires on a SIZE change, so a
- * layout change that moves a slot without resizing it - "Reverse views" on
- * a top-level split, which swaps the two panes' `left` offsets while each
- * keeps its own width - never reaches `applyAllRegisteredRects` on its own,
- * and every hosted body stays painted at its pre-move rect while the pane
- * chrome around it (tab strip, sidebar) has already moved. The layout that
- * performs such a move calls this after commit, from a layout effect, so the
- * rects it reads are the post-move ones.
+ * The shared `ResizeObserver` only fires on a SIZE change, so a layout change that moves a slot without resizing it - "Reverse views" on a top-level split, which swaps the two panes' `left` offsets while each keeps its own width - never reaches `applyAllRegisteredRects` on its own, and every hosted body stays painted at its pre-move rect while the pane chrome around it (tab strip, sidebar) has already moved.
  */
 export function remeasureTileSurfaceGeometry(): void {
   applyAllRegisteredRects();
 }
 
 /**
- * Registers the plane's own root element as the coordinate origin every
- * slot rect is reported relative to. Exactly one host element is expected
- * live at a time; a later register replaces the origin outright (the
- * unregister closure only clears it if it is still the one that set it).
+ * Exactly one host element is expected live at a time; a later register replaces the origin outright (the unregister closure only clears it if it is still the one that set it).
  */
 export function registerTileSurfaceGeometryHost(element: Element): () => void {
   if (hostRegistration !== null) {
@@ -136,13 +85,7 @@ export function registerTileSurfaceGeometryHost(element: Element): () => void {
 }
 
 /**
- * Registers a slot element (a `ReadyTileSurfaceEnvironment.services.geometryAnchorElement`)
- * to report its host-relative rect to `onRect` - synchronously once on
- * registration, then on every subsequent layout change, directly in the RO
- * callback. `key` is the owning record's stable identity (its `instanceId`)
- * so a structural transfer's destination-slot registration cannot be
- * confused with a still-draining source-slot registration for a different
- * record.
+ * `key` is the owning record's stable identity (its `instanceId`) so a structural transfer's destination-slot registration cannot be confused with a still-draining source-slot registration for a different record.
  */
 export function registerTileSurfaceGeometrySlot(
   key: string,

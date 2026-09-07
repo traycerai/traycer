@@ -630,9 +630,7 @@ describe("BrowserPeekTile input capture", () => {
     armPeekTile(stream);
     const button = overlayButton();
 
-    // The frame has arrived (and been acked) but not yet painted, so the
-    // presented sequence has not latched - a pointer send has nothing to
-    // carry as `castSequence` and is dropped.
+    // The frame has arrived (and been acked) but not yet painted, so the presented sequence has not latched - a pointer send has nothing to carry as `castSequence` and is dropped.
     fireEvent.pointerDown(
       button,
       pointerEventInit({
@@ -1187,9 +1185,7 @@ describe("BrowserPeekTile input capture", () => {
     armPeekTile(stream);
     const button = overlayButton();
 
-    // Wheel is coalesced (still pending in its rAF) when the click lands -
-    // it must go out first, so the click isn't read against a stale scroll
-    // position on the wire.
+    // Wheel is coalesced (still pending in its rAF) when the click lands - it must go out first, so the click isn't read against a stale scroll position on the wire.
     button.dispatchEvent(
       new WheelEvent("wheel", {
         deltaX: 0,
@@ -1731,12 +1727,7 @@ describe("BrowserPeekTile input capture", () => {
     ]);
   });
   it("withholds pointer input while the tile is on its connecting loader", () => {
-    // The host stopped the cast to attempt video (ticket 26), so the frame
-    // that was on screen is retired and nothing has replaced it yet. There is
-    // no box to normalize a pointer against, and aiming at a surface the
-    // viewer cannot see is worse than dropping the frame. Epoch correlation
-    // itself is pinned in `screencast-input-correlation.test.tsx`, on a tile
-    // that has a plane.
+    // There is no box to normalize a pointer against, and aiming at a surface the viewer cannot see is worse than dropping the frame.
     renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"

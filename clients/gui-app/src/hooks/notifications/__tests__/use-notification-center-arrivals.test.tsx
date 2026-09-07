@@ -7,7 +7,6 @@ import {
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import type { MergedNotificationOccurrenceEntry } from "@/stores/notifications/merged-notifications";
 
-/** Build full `{feedId, occurrenceKey}` entries from `feedId@createdAt` keys. */
 function entries(
   ...parts: ReadonlyArray<string>
 ): ReadonlyArray<MergedNotificationOccurrenceEntry> {

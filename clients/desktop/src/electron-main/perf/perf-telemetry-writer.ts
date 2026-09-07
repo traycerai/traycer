@@ -3,23 +3,7 @@ import { dirname, join } from "node:path";
 import { app } from "electron";
 import { describeLogError, log } from "../app/logger";
 
-/**
- * Dedicated, append-only sink for renderer performance telemetry.
- *
- * Perf events (prefixed `[traycer-perf]` in the renderer console, see
- * `gui-app/src/lib/perf/perf-telemetry.ts`) are routed here by the window
- * factory's `console-message` handler INSTEAD of electron-log, so they land in
- * one machine-parseable NDJSON file separate from the human log.
- *
- *   File:   <userData>/traycer-perf.ndjson  (one JSON object per line)
- *   Rotate: when the file exceeds ~5 MB, rename to `traycer-perf.ndjson.1`
- *           (single backup kept) and start fresh.
- *
- * Writes are QUEUED sequentially onto a serialized append chain (mirroring the
- * discipline in `app/json-file-store.ts`) so concurrent events can't interleave
- * a half-written line. The whole path is best-effort: a write failure is logged
- * once and swallowed - it must never throw into the app.
- */
+/** The whole path is best-effort: a write failure is logged once and swallowed - it must never throw into the app. */
 
 const PERF_FILE_NAME = "traycer-perf.ndjson";
 const PERF_BACKUP_FILE_NAME = "traycer-perf.ndjson.1";
@@ -69,10 +53,7 @@ async function persist(event: PerfTelemetryEvent): Promise<void> {
   await appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
-/**
- * Queue one perf event for append. Fire-and-forget by design: it returns
- * immediately, never throws, and a failed write is logged once (not rethrown).
- */
+/** Fire-and-forget by design: it returns immediately, never throws, and a failed write is logged once (not rethrown). */
 export function appendPerfEvent(event: PerfTelemetryEvent): void {
   writeChain = writeChain
     .then(() => persist(event))
@@ -81,10 +62,7 @@ export function appendPerfEvent(event: PerfTelemetryEvent): void {
     });
 }
 
-/**
- * Resolve once every queued write has settled. Test seam - the app itself is
- * fire-and-forget and never awaits the chain.
- */
+/** Test seam - the app itself is fire-and-forget and never awaits the chain. */
 export function flushPerfWrites(): Promise<void> {
   return writeChain.then(() => undefined);
 }

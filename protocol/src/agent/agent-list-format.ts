@@ -7,9 +7,6 @@ import type {
 export function formatAgentListResponse(response: ListAgentsResponse): string {
   const agents = response.agents;
   const showSend = response.caller.canSendMessages;
-  // Only the direct host-enriched listing can ever render an [archived] row, so
-  // the legend entry is gated on the enrichment actually being present rather
-  // than on any row being archived - see `hasArchiveEnrichment`.
   const showArchived = agents.some(hasArchiveEnrichment);
   const showRunConfig = agents.some(hasRunConfigEnrichment);
   const body =
@@ -36,13 +33,6 @@ export function formatAgentSelf(agent: AgentSummary | null): string {
   ].join("\n");
 }
 
-/**
- * Renders where the current agent runs as a `dir:`/`worktree:` line so
- * `traycer_get_self` carries the same location detail the list rows already
- * expose - the agent should be able to report its own working directory (or
- * dedicated git worktree) without a separate list call. Falls back to `-` when
- * no folder paths are known (e.g. a chat with no resolved workspace context).
- */
 function formatSelfLocationLine(agent: AgentSummary): string {
   // With no resolvable path there is nothing to label as a worktree, so report
   // a neutral `dir: -` rather than the self-contradictory `worktree: -`.
@@ -51,22 +41,7 @@ function formatSelfLocationLine(agent: AgentSummary): string {
 }
 
 /**
- * Groups the visible agents by their relationship to the caller (the agent
- * that issued `agent.list`) and renders one labelled section per group:
- *
- *   - **You** - the caller itself.
- *   - **Parent** - the agent that spawned the caller (if any).
- *   - **Siblings** - agents sharing the caller's parent, each with its own
- *     delegated subtree nested beneath it.
- *   - **Children** - agents the caller spawned, with their subtrees.
- *   - **Other agents (user-triggered)** - everything else: top-level agents the
- *     user started directly plus any unrelated subtrees.
- *
- * Caller identity comes from `caller.agentId` - the same `senderAgentId` the
- * host resolves when launching child agents - so categorization is always
- * anchored on the requesting agent. When the caller is not present in the
- * visible set (unexpected), the whole list falls back to a single relationship
- * forest so no agent is dropped.
+ * Groups the visible agents by their relationship to the caller (the agent that issued `agent.list`) and renders one labelled section per group:
  */
 function formatCategorizedAgents(
   agents: readonly AgentSummary[],
@@ -82,10 +57,6 @@ function formatCategorizedAgents(
   const childrenByParent = buildChildrenByParent(agents, ids);
 
   // The caller's full upward lineage (immediate parent, grandparent, ...).
-  // Walking the entire chain - not just the immediate parent - keeps an
-  // ancestor out of the "Other agents (user-triggered)" bucket, where it would
-  // be mislabelled as unrelated. Visible siblings are still anchored on the
-  // immediate parent only.
   const ancestors: AgentSummary[] = [];
   const ancestorIds = new Set<string>();
   let ancestorCursor = caller.parentId;
@@ -163,12 +134,7 @@ function formatCategorizedAgents(
   return sections.join("\n\n");
 }
 
-/**
- * Renders a flat set of agents as an indentation-tree forest. Roots are the
- * members whose (effective) parent is not itself a member of the set, so a
- * category that contains a subtree renders it nested while a category of
- * unrelated agents renders them side by side.
- */
+/** Renders a flat set of agents as an indentation-tree forest. */
 function renderAgentForest(
   members: readonly AgentSummary[],
   showSend: boolean,
@@ -262,10 +228,7 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   ];
   const runConfig = formatRunConfigToken(agent);
   if (runConfig.length > 0) parts.push(runConfig);
-  // The capability token describes what *the caller* can do to a row, so it is
-  // meaningless on the caller's own [self] row (you don't read your own
-  // transcript or message yourself). Showing "R/S" there is just misleading -
-  // the [self] marker already identifies it.
+  // The capability token describes what *the caller* can do to a row, so it is meaningless on the caller's own [self] row (you don't read your own transcript or message yourself).
   if (!agent.isSelf) {
     parts.push(formatCapabilityToken(agent, showSend));
   }
@@ -274,9 +237,7 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   return parts.join(" ");
 }
 
-// Quoted title placed right after the id (and [self] marker) so the agent can
-// tell rows apart by what they're working on. Omitted entirely for untitled
-// agents - the absence reads as "untitled" and keeps the line uncluttered.
+// Quoted title placed right after the id (and [self] marker) so the agent can tell rows apart by what they're working on.
 function formatTitleToken(agent: AgentSummary): string {
   return agent.title === null ? "" : ` "${agent.title}"`;
 }
@@ -286,17 +247,7 @@ function agentLocationLabel(agent: AgentSummary): "worktree" | "dir" {
 }
 
 /**
- * Appends where the agent runs to its list line so a caller can tell which
- * agents share a directory and which run in their own git worktree. Omitted
- * entirely when no folder paths are known (e.g. a cross-host GUI row). A
- * cross-host (other-device) row's paths live on a machine the caller can't
- * reach, so they are marked `(other device)` rather than presented as a
- * directory the caller could share.
- *
- * Returns a bare `dir:`/`worktree:` token (no leading separator) - the caller
- * joins line parts with spaces. An earlier em-dash separator read as the `-`
- * "no available action" capability token, so it was dropped; the `dir:` /
- * `worktree:` label already sets the location apart.
+ * Appends where the agent runs to its list line so a caller can tell which agents share a directory and which run in their own git worktree.
  */
 function formatAgentLocation(agent: AgentSummary): string {
   // No resolvable path -> no location suffix (and no bare "worktree" claim with
@@ -381,16 +332,7 @@ function formatRunConfigSelfLines(agent: AgentSummary): string[] {
 }
 
 /**
- * The direct host-side A2A list enriches the released RPC row with an
- * `archived` flag before calling this formatter. The versioned `agent.list`
- * wire schema intentionally remains unchanged, so a response that has been
- * through `listAgentsResponseSchema` (the CLI path) has the key stripped and
- * carries no archive information at all.
- *
- * Presence - not truthiness - is what distinguishes the two: an enriched
- * listing whose agents are all unarchived still carries `archived: false` on
- * every row, and must keep explaining the marker, while a stripped listing must
- * never advertise a marker its schema cannot represent.
+ * The direct host-side A2A list enriches the released RPC row with an `archived` flag before calling this formatter.
  */
 function hasArchiveEnrichment(agent: AgentSummary): boolean {
   return "archived" in agent;

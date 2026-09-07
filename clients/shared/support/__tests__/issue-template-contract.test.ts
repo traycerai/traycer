@@ -1,12 +1,6 @@
 /**
  * Wire-contract tripwire for `.github/ISSUE_TEMPLATE/*.yml`.
- *
- * `clients/shared/support/issue-reporter.ts` prefills GitHub issue-form fields
- * by id (`template=bug_report.yml&component=...&version=...`). Renaming a field
- * id, flipping `required`, or dropping `"Desktop app"` from the component
- * dropdown breaks every shipped client that still emits the old ids - with no
- * TypeScript compile error. These tests are the gate the frozen-ids comment
- * headers in those YAML files point at.
+ * These tests are the gate the frozen-ids comment headers in those YAML files point at.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -18,7 +12,6 @@ const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 // support/__tests__ -> shared -> clients -> traycer root
 const ISSUE_TEMPLATE_DIR = join(THIS_DIR, "../../../../.github/ISSUE_TEMPLATE");
 
-/** Field ids that issue-reporter.ts currently prefills on bug_report.yml. */
 const BUG_REPORT_CLIENT_FIELD_IDS = [
   "component",
   "version",
@@ -27,17 +20,14 @@ const BUG_REPORT_CLIENT_FIELD_IDS = [
   "repro",
 ] as const;
 
-/** Field ids `buildPublicDraftFields` prefills on feature_request.yml (ticket 07's "idea" route). */
 const FEATURE_REQUEST_CLIENT_FIELD_IDS = [
   "problem",
   "proposal",
   "component",
 ] as const;
 
-/** Field ids `buildPublicDraftFields` prefills on general.yml (ticket 07's "other" route). */
 const GENERAL_CLIENT_FIELD_IDS = ["details"] as const;
 
-/** Literal hardcoded in issue-reporter.ts as the component prefill value. */
 const DESKTOP_APP_COMPONENT = "Desktop app";
 
 interface IssueFormField {

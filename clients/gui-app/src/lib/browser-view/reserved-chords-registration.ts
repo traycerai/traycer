@@ -4,38 +4,8 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { ignoreError } from "./ignore-error";
 
 /**
- * THE guest-focused input policy. When a native browser tile has keyboard
- * focus, key delivery is guest `before-input-event` -> macOS app-menu
- * accelerator -> the page; the app renderer's keybinding registry is never in
- * the chain. Every chord that must still mean something in that state is
- * listed here, and nowhere else. Anything absent belongs to the page.
- *
- * Two dispositions, and the `command` field is the whole distinction:
- *
- * - BROWSER-SCOPED (`command` set) - the chord acts on the BROWSER, matching
- *   what every other browser does with it. Main claims the keystroke and names
- *   the command back to the focused tile, which runs it against its own
- *   session tab (`agent-browser-tile.tsx`). Without this, Cmd+W would reach
- *   the app menu's "Close Tab" and retire the app task tab instead.
- * - APP-FORWARDED (`command: null`) - the app must win even over the page.
- *   Main replays the keystroke into the host renderer so the renderer's
- *   existing binding runs. Keep this set SMALL and epic/app-navigation level:
- *   a chord a site may legitimately bind does not belong here.
- *
- * Not listed, deliberately: the zoom chords (Cmd +/-/0), which the guest
- * handler claims for the page's own zoom factor
- * (`browser-view-entry-factory.ts`), and Electron's role-built items
- * (reload, cut/copy/paste, select-all), which already act on the focused
- * web contents and are therefore correct as they are.
- *
- * `@/lib/keybindings/conflicts.ts` reads this table so the rebinding UI can
- * warn about a chord a focused browser tile would swallow - the two sides
- * cannot drift.
- *
- * ponytail: the app-forwarded tokens are the DEFAULT chords for their actions,
- * not the user's live bindings, so a rebound `epic.close` stops being
- * forwarded. Registration happens outside the bindings store today; wire it to
- * the store if anyone actually rebinds these.
+ * Guest-focused chords: `command` set acts on the browser tile; `command: null` is app-forwarded.
+ * Anything absent belongs to the page.
  */
 export const RESERVED_BROWSER_CHORDS: readonly BrowserViewReservedChord[] = [
   // Browser-scoped: the focused tile's own tab.
@@ -68,8 +38,7 @@ const BROWSER_SCOPED_CHORD_LABELS = {
 
 /**
  * Push the policy into the complete desktop preload bridge when present.
- * Idempotent and HMR-safe: main REPLACES its whole table on every call, so a
- * re-registration after hot reload can never duplicate or drift.
+ * Idempotent and HMR-safe: main REPLACES its whole table on every call, so a re-registration after hot reload can never duplicate or drift.
  */
 export function registerReservedBrowserChords(runnerHost: IRunnerHost): void {
   const browserView = runnerHost.browserView;

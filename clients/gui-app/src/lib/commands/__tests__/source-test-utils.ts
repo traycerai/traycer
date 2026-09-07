@@ -1,10 +1,6 @@
 /**
- * Test-only helper. Narrows a `CommandSource.getItems` result (which
- * is typed as `ReadonlyArray<CommandItem> | Promise<...>` to cover
- * both sync and async sources) down to its sync branch so tests can
- * read `items[i].id` / `.shortcut` / etc without fighting the
- * strict-lint rules that treat the union as `any` once it flows
- * through expressions.
+ * Test-only helper.
+ * Narrows a `CommandSource.getItems` result (which is typed as `ReadonlyArray<CommandItem> | Promise<...>` to cover both sync and async sources) down to its sync branch so tests can read `items[i].id` / `.shortcut` / etc without fighting the strict-lint.
  */
 import type { CommandItem } from "@/lib/commands/types";
 

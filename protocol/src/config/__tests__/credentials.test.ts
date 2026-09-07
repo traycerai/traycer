@@ -120,10 +120,8 @@ describe("credentials primitives (real filesystem)", () => {
     it("keeps the mtime increasing across a delete then recreate (carried floor)", async () => {
       const first = await writeCredentialsFile(credPath, CREDS, 0);
       await deleteCredentialsFile(credPath);
-      // A fresh file's natural mtime would be ~now, which on a coarse-grained
-      // clock can equal `first`. Carrying the prior mtime as the floor forces
-      // the recreated file strictly newer, so the host owner-gate cache can
-      // never serve a stale owner after a sign-out/sign-in.
+      // A fresh file's natural mtime would be ~now, which on a coarse-grained clock can equal `first`.
+      // Carrying the prior mtime as the floor forces the recreated file strictly newer, so the host owner-gate cache can never serve a stale owner after a sign-out/sign-in.
       const recreated = await writeCredentialsFile(
         credPath,
         CREDS,

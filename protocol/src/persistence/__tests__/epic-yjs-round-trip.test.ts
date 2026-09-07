@@ -1,22 +1,4 @@
-/**
- * Pre-flight round-trip test for the V200 epic on-disk record.
- *
- * Seeds a representative live V200 epic Yjs root map in its post-artifact-room
- * cutover shape - a single `artifacts` map (plus matching
- * `deletedArtifacts`) where every entry is metadata-only and references
- * its body artifactRoom via `artifactRoomId`. Body content lives in separate artifact-rooms
- * keyed off `artifact-body:{artifactId}` and is intentionally not part of
- * this round-trip.
- *
- * Materializes the seeded root via the same plain-JS walk that cloud sync
- * uses (`toObject(rootMap)`) and asserts the result parses against
- * `epicSchema`.
- *
- * Its job is structural: if the protocol Zod surface drifts from what the
- * materialized Yjs storage actually produces, this test stops passing. The
- * seed is intentionally self-contained (no cross-workspace fixture import)
- * so the protocol boundary remains clean.
- */
+/** Pre-flight round-trip test for the V200 epic on-disk record. */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
@@ -24,10 +6,7 @@ import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registr
 
 const epicSchema = getRecordSchema(persistenceRecordRegistry, "epic", "latest");
 
-// ---- inline `toObject` (mirrors the shared Yjs `toObject` helper) --- //
-// Kept inline so protocol tests do not reach across workspaces. Y.XmlFragment
-// and Y.Text pass through as live instances - same contract the real
-// `toObject` honors.
+// inline `toObject` (mirrors the shared Yjs `toObject` helper) --- // Kept inline so protocol tests do not reach across workspaces.
 function fromYjsValue(value: unknown): unknown {
   if (value == null) return value;
   if (value instanceof Y.XmlFragment || value instanceof Y.Text) return value;
@@ -48,10 +27,6 @@ function toPlainObject(map: Y.Map<unknown>): Record<string, unknown> {
   return fromYjsValue(map) as Record<string, unknown>;
 }
 
-// ---- Fixture builder -------------------------------------------------- //
-// Seeds the unified V200 shape: one `artifacts` Y.Map keyed by id, with
-// every entry carrying a `kind` discriminator and a `artifactRoomId` pointing
-// at the body artifactRoom (the body fragment itself lives outside the root doc).
 
 function makeSeededEpicDoc(): { doc: Y.Doc; rootMap: Y.Map<unknown> } {
   const doc = new Y.Doc();
@@ -229,9 +204,7 @@ describe("epic V200 Yjs → JSON → protocol round-trip (metadata-only artifact
     }
     expect(parsed.success).toBe(true);
 
-    // Pin the unified shape: every seeded artifact lives in the single
-    // `artifacts` map with the right discriminator, parent wiring, and
-    // artifact-room reference.
+    // Pin the unified shape: every seeded artifact lives in the single `artifacts` map with the right discriminator, parent wiring, and artifact-room reference.
     const epic = parsed.data;
     expect(epic.artifacts["spec-1"].kind).toBe("spec");
     expect(epic.artifacts["spec-1"].artifactRoomId).toBe("artifact-room-0");

@@ -4,15 +4,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
-/**
- * In-app "Remove Traycer" (Settings → General → Danger Zone). Stops + removes
- * the host service, host install, and (on macOS) the SMAppService login item,
- * and marks the device removed-by-user so the host is not auto-reinstalled
- * when it goes unreachable. All `~/.traycer` user data is preserved.
- *
- * Returns the raw mutation result so the Danger Zone can drive `isPending`
- * and switch to its success/quit state from `isSuccess`.
- */
+/** In-app "Remove Traycer" (Settings → General → Danger Zone). */
 export function useRunnerUninstallTraycer(): UseMutationResult<
   TraycerUninstallResult,
   Error,

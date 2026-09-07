@@ -1,15 +1,6 @@
 /**
- * THE single DndContext for the app. Mounted once in `app-shell.tsx`,
- * wrapping the header tab strip and every route surface, so canvas tiles,
- * sidebar sources, rail items, header tabs, and tear-off all share one
- * context - no geometry bridges between provider islands.
- *
- * The provider holds ZERO React state: drag lifecycle handlers write into
- * the ephemeral `dnd-store` (narrow per-target selectors keep preview ticks
- * scoped to the hovered pane) and track the last resolved drop in a ref.
- * Collision detection + the collision-pass pointer stash live in
- * `root-dnd-collision.ts`; commits live in `root-dnd-commits.ts` and read
- * stores imperatively.
+ * THE single DndContext for the app.
+ * Mounted once in `app-shell.tsx`, wrapping the header tab strip and every route surface, so canvas tiles, sidebar sources, rail items, header tabs, and tear-off all share one context - no geometry bridges between provider islands.
  */
 import {
   ARTIFACT_TAB_DND_TYPE,
@@ -143,9 +134,8 @@ import {
 } from "@/components/epic-canvas/dnd/tile-strip-geometry";
 
 /**
- * How far below the header strip a release has to land before it detaches into
- * a new window. Measured from the strip's own bottom edge - a hard-coded y is
- * only ever right for one strip height.
+ * How far below the header strip a release has to land before it detaches into a new window.
+ * Measured from the strip's own bottom edge - a hard-coded y is only ever right for one strip height.
  */
 const HEADER_TAB_TEAR_OFF_THRESHOLD_PX = 24;
 
@@ -156,12 +146,7 @@ const HEADER_TAB_TEAR_OFF_RELEASE_PX = 16;
 const EMPTY_HEADER_OFFSETS: ReadonlyMap<string, number> = new Map();
 
 /**
- * Strip geometry for the header-tab gesture in flight, or null.
- *
- * Module-scoped rather than a React ref, mirroring the collision pass's pointer
- * stash: the overlay modifier is a plain dnd-kit callback, not a React consumer,
- * and threading a ref into it is exactly the "ref read during render" shape the
- * hooks lint forbids. Cleared on drag end and cancel.
+ * Module-scoped rather than a React ref, mirroring the collision pass's pointer stash: the overlay modifier is a plain dnd-kit callback, not a React consumer, and threading a ref into it is exactly the "ref read during render" shape the hooks lint forbids.
  */
 let activeHeaderStripGeometry: StripDragGeometry | null = null;
 
@@ -170,24 +155,14 @@ let headerTearOffActive = false;
 
 /**
  * Latest raw pointer x, tracked independently of dnd-kit's render cycle.
- *
- * The overlay mounts a frame after activation, and on that first frame dnd-kit's
- * transform is still zero - so a tab positioned from the transform paints at its
- * rest position while the pointer is already `activationDistance` away, which
- * reads as a lag on the first frame of every drag. Reading the live pointer
- * makes the first painted frame correct.
- *
- * Overlay presentation ONLY. The model keeps using the collision pass's pointer,
- * which is the scroll-corrected point that actually chose `over`.
+ * The overlay mounts a frame after activation, and on that first frame dnd-kit's transform is still zero - so a tab positioned from the transform paints at its rest position while the pointer is already `activationDistance` away, which reads as a lag on the first frame of every drag.
  */
 let latestPointerX: number | null = null;
 let latestPointerY: number | null = null;
 
 /**
- * Tile-drag geometry for the gesture in flight: the SOURCE group's strip, plus
- * which group's strip the pointer is currently over. Module-scoped for the same
- * reason the header's is - the overlay modifier is a dnd-kit callback, not a
- * React consumer.
+ * Tile-drag geometry for the gesture in flight: the SOURCE group's strip, plus which group's strip the pointer is currently over.
+ * Module-scoped for the same reason the header's is - the overlay modifier is a dnd-kit callback, not a React consumer.
  */
 let activeTileDrag: {
   readonly groupId: string;
@@ -196,12 +171,8 @@ let activeTileDrag: {
 } | null = null;
 
 /**
- * A preview tile promoted by drag start, so a drag that commits nothing can
- * put it back.
- *
- * Promotion is state, so a tile left promoted by a cancel or neutral-corridor
- * release is a residual. A completed drop keeps the promotion; every no-commit
- * exit restores it.
+ * A preview tile promoted by drag start, so a drag that commits nothing can put it back.
+ * Promotion is state, so a tile left promoted by a cancel or neutral-corridor release is a residual.
  */
 let promotedPreviewOnDrag: {
   readonly viewTabId: string;
@@ -235,16 +206,8 @@ function trackPointerX(event: PointerEvent): void {
 }
 
 /**
- * Viewport x of the last pointer PRESS.
- *
- * The grab offset must be measured from where the gesture was pressed, not
- * where it activated - activation happens `EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE`
- * later, and using that point makes the dragged object sit offset from the
- * spot the user grabbed. `activatorEvent` carries this, but only when it is
- * recognisably a `MouseEvent`; a `PointerEvent` constructed in another realm
- * fails that check and silently falls back to a stale collision point, which
- * is a several-tens-of-px error rather than a few. Capturing the press
- * directly removes the guesswork for every source.
+ * The grab offset must be measured from where the gesture was pressed, not where it activated - activation happens `EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE` later, and using that point makes the dragged object sit offset from the spot the user grabbed.
+ * `activatorEvent` carries this, but only when it is recognisably a `MouseEvent`; a `PointerEvent` constructed in another realm fails that check and silently falls back to a stale collision point, which is a several-tens-of-px error rather than a few.
  */
 let lastPointerDownX: number | null = null;
 
@@ -261,21 +224,7 @@ function grabPointerX(activatorEvent: Event): number {
   return getLastCollisionPointerPoint()?.x ?? 0;
 }
 
-/**
-/**
- * Tile overlay: pointer-derived, and deliberately NOT clamped to any strip.
- *
- * The header clamps because it has exactly one strip and a tab cannot leave it.
- * The canvas has a strip per group with canvas between them, and a tile
- * legitimately travels across that space to reach another group. Clamping to
- * whichever strip the pointer happens to be over pins the tile at one strip's
- * right edge and then snaps it to the next strip's left edge as the pointer
- * crosses - a visible fold, and the grab offset stops being constant exactly
- * during the cross-group gesture this sprint exists to get right.
- *
- * Unclamped, the tile is simply where the pointer is. Insertion stays sane
- * because `targetIndex` is bounded by the model, not by the overlay.
- */
+/** The header clamps because it has exactly one strip and a tab cannot leave it. */
 function tileOverlayTransform(
   tile: NonNullable<typeof activeTileDrag>,
   transform: {
@@ -297,16 +246,8 @@ function tileOverlayTransform(
 }
 
 /**
- * Canvas and rail sources drag an abstract chip, so centring it under the
- * cursor reads correctly. A header tab is not a chip - it is the tab itself, so
- * centring it would teleport it on the first frame and break the illusion that
- * the pointer is holding the object it grabbed.
- *
- * The header tab's position is derived from the POINTER rather than from the
- * drag delta, against the source's rect at drag start. Never against
- * `activeNodeRect`: that rect follows the source placeholder as the provisional
- * order slides it, and mixing it with a delta measured from the original
- * position pins the overlay partway through a drag.
+ * The header tab's position is derived from the POINTER rather than from the drag delta, against the source's rect at drag start.
+ * Never against `activeNodeRect`: that rect follows the source placeholder as the provisional order slides it, and mixing it with a delta measured from the original position pins the overlay partway through a drag.
  */
 const rootDragOverlayModifier: Modifier = (args) => {
   const tile = activeTileDrag;
@@ -364,10 +305,7 @@ function compatibleCanvasTarget(
 }
 
 /**
- * Preview resolution for a typed canvas/rail source: header-slot hovers feed
- * the header strip index; everything else resolves through
- * `resolveCanvasDropPreview` and lands in the canvas preview + the
- * last-resolved-drop ref the commit reads at drag end.
+ * Preview resolution for a typed canvas/rail source: header-slot hovers feed the header strip index; everything else resolves through `resolveCanvasDropPreview` and lands in the canvas preview + the last-resolved-drop ref the commit reads at drag end.
  */
 function updateCanvasSourcePreview(
   source: EpicCanvasDragSourceData,
@@ -481,9 +419,8 @@ function preserveSourceTileStripGap(): void {
 }
 
 /**
- * Canvas source hovering the HEADER strip (tear-off). This source owns no slot
- * there, so droppable hit-testing is stable and stays. Returns true when it
- * owns the frame.
+ * Canvas source hovering the HEADER strip (tear-off).
+ * This source owns no slot there, so droppable hit-testing is stable and stays.
  */
 function updateHeaderStripTearOffPreview(
   source: EpicCanvasDragSourceData,
@@ -512,14 +449,7 @@ function updateHeaderStripTearOffPreview(
 }
 
 /**
- * Tile reorder / cross-group insertion, resolved from strip geometry rather
- * than droppable hit-testing. dnd-kit still supplies the TARGET identity - the
- * commit path is unchanged and already certified - but the INDEX comes from the
- * model, because hit-testing cannot survive the provisional order sliding the
- * dragged tile's own placeholder under the pointer.
- *
- * Returns true when it owns this frame (pointer over some strip), false to let
- * the pane-body path run.
+ * Tile reorder / cross-group insertion, resolved from strip geometry rather than droppable hit-testing. dnd-kit still supplies the TARGET identity - the commit path is unchanged and already certified - but the INDEX comes from the model, because hit-testing cannot survive the provisional order sliding the dragged tile's own placeholder under the pointer.
  */
 function updateTileStripPreview(
   source: EpicCanvasDragSourceData,
@@ -528,17 +458,13 @@ function updateTileStripPreview(
 ): boolean {
   const dndStore = useEpicDndStore.getState();
   const drag = activeTileDrag;
-  // Initial measurement can be unavailable while the independent header-strip
-  // tear-off path remains valid. Only a geometry that existed and then fails
-  // to remap is a mid-gesture model failure that must own and cancel the frame.
+  // Only a geometry that existed and then fails to remap is a mid-gesture model failure that must own and cancel the frame.
   if (drag === null) return false;
   if (point === null) return false;
   const groupId = tileStripGroupAtPoint(point, source.viewTabId);
   if (groupId === null) return false;
   const offsets = new Map<string, ReadonlyMap<string, number>>();
-  // null = the drag sits at its own source position: a no-op the commit would
-  // refuse, so no insertion indicator is advertised - the same suppression the
-  // header path applies to its drop index.
+  // null = the drag sits at its own source position: a no-op the commit would refuse, so no insertion indicator is advertised - the same suppression the header path applies to its drop index.
   let index: number | null;
   if (groupId === drag.groupId) {
     const contentOriginX = readTileStripContentOriginX(groupId);
@@ -606,11 +532,7 @@ function updateTileStripPreview(
 }
 
 /**
- * Header-tab preview. The fillable-slot target still comes from droppable
- * hit-testing - it is a content-pane target with no source slot under it - but
- * the strip's own reorder/merge is resolved from the geometry model instead.
- * Hit-testing the strip cannot work once a provisional order moves the dragged
- * tab's own placeholder beneath the pointer.
+ * Hit-testing the strip cannot work once a provisional order moves the dragged tab's own placeholder beneath the pointer.
  */
 function updateHeaderTabSourcePreview(input: {
   readonly headerTab: HeaderTabDragData;
@@ -635,12 +557,7 @@ function updateHeaderTabSourcePreview(input: {
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
-  // Once the pointer visibly leaves the strip for tear-off, stop advertising a
-  // reorder that the available detach handler may replace at release. Preview
-  // and commit use the same point source and threshold predicate. Only the
-  // fillable slot above outranks the tear-off: it is an explicit, visible
-  // empty pane inviting the drop. (The invisible edge-split bands that used to
-  // sit here lost that argument and were removed outright.)
+  // Only the fillable slot above outranks the tear-off: it is an explicit, visible empty pane inviting the drop. (The invisible edge-split bands that used to sit here lost that argument and were removed outright.)
   if (
     isHeaderTearOffPoint(
       currentReleasePointerPoint(),
@@ -697,10 +614,8 @@ function publishHeaderStripDragState(input: {
   dndStore.headerStripOffsetsChanged(
     stripOffsetsFor(geometry, next.targetIndex),
   );
-  // A merge shows the pair highlight and nothing else - an insertion line
-  // beside a highlighted merge target advertises two different outcomes for
-  // one release. Plain reorder shows the line at the settled model boundary,
-  // where the displacement gap is opening.
+  // A merge shows the pair highlight and nothing else - an insertion line beside a highlighted merge target advertises two different outcomes for one release.
+  // Plain reorder shows the line at the settled model boundary, where the displacement gap is opening.
   dndStore.headerStripDropIndexChanged(
     next.kind !== "reorder" || next.targetIndex === geometry.sourceIndex
       ? null
@@ -813,9 +728,7 @@ function commitHeaderTabDrop(input: {
   ) {
     return;
   }
-  // A merge beats the reorder it is sitting on: both describe the same pointer
-  // position, and which half of the neighbour the dragged tab's centre is on
-  // is what distinguishes "combine with this tab" from "move next to it".
+  // A merge beats the reorder it is sitting on: both describe the same pointer position, and which half of the neighbour the dragged tab's centre is on is what distinguishes "combine with this tab" from "move next to it".
   if (input.dragState.kind === "merge") {
     const pairTarget = resolveStripPairTarget(
       headerTab,
@@ -833,9 +746,7 @@ function commitHeaderTabDrop(input: {
     }
   }
   if (input.dragState.targetIndex === input.geometry.sourceIndex) return;
-  // Arm BEFORE the reorder is written: the strip items re-base their transform
-  // against the new baseline in the layout effect of the render this causes, so
-  // the flag has to be set by the time that render commits.
+  // Arm BEFORE the reorder is written: the strip items re-base their transform against the new baseline in the layout effect of the render this causes, so the flag has to be set by the time that render commits.
   armHeaderStripCommitHandoff();
   tabCommandCoordinator.reorderStripItem({
     itemId: headerTab.stripItemId,
@@ -847,10 +758,8 @@ function commitHeaderTabDrop(input: {
 }
 
 /**
- * Dropping A onto B pairs them with A on its APPROACH side - the side of B the
- * pointer was hovering, which is also the side the preview highlighted.
- * Dragging rightward onto B yields `A | B`; leftward yields `B | A`. The
- * dragged tab takes focus either way.
+ * Dropping A onto B pairs them with A on its APPROACH side - the side of B the pointer was hovering, which is also the side the preview highlighted.
+ * Dragging rightward onto B yields `A | B`; leftward yields `B | A`.
  */
 function commitHeaderStripPair(
   headerTab: HeaderTabDragData,
@@ -880,12 +789,8 @@ function commitHeaderStripPair(
 }
 
 /**
- * Canvas tear-off onto the header strip. Source creation and authoritative
- * placement run inside ONE suppressed coordinator transaction: the source
- * store's synchronous reconciliation subscriber fires between them otherwise,
- * and with a stale legacy `stripOrder` it would rebuild the flat layout and
- * dissolve existing split groups before placement. Returns the committed drop
- * only when the new ref was also placed.
+ * Source creation and authoritative placement run inside ONE suppressed coordinator transaction: the source store's synchronous reconciliation subscriber fires between them otherwise, and with a stale legacy `stripOrder` it would rebuild the flat layout and dissolve existing split groups before placement.
+ * Returns the committed drop only when the new ref was also placed.
  */
 function commitHeaderStripDropAtIndex(
   source: EpicCanvasDragSourceData,
@@ -903,25 +808,8 @@ function commitHeaderStripDropAtIndex(
 }
 
 /**
-/**
- * Resolve whether this release should detach, and report the one state that is
- * never intentional.
- *
- * The channel's two negative states mean different things, which is why it has
- * three states rather than a boolean:
- *
- *   `null`                    no `TabDetachOwner` has published. Nothing here
- *                             can see whether a router is present, so this is
- *                             reported as an unexpected condition rather than
- *                             diagnosed as a defect - a caller that mounts the
- *                             provider deliberately without the owner is a
- *                             legitimate reader of this line.
- *   `{ isAvailable: false }`  an owner is present and says no (no desktop
- *                             bridge). Intentional, and silent.
- *
- * Without the report, a missing owner makes a tear-off fall through to ordinary
- * drop handling: the tab reorders instead of detaching, with no crash and no
- * warning.
+ * Resolve whether this release should detach, and report the one state that is never intentional.
+ * The channel's two negative states mean different things, which is why it has three states rather than a boolean: `null` no `TabDetachOwner` has published.
  */
 interface DetachRequest {
   readonly tab: HeaderTab;
@@ -942,17 +830,8 @@ function resolveDetachRequest(detach: HeaderTab | null): DetachRequest | null {
 }
 
 /**
- * The tab a release should tear off into a new window, or null to fall through
- * to the ordinary drop commit.
- *
- * A header tab tears off ONLY by being pulled clear of its strip, measured from
- * the strip's own rect. It must not tear off merely because the release landed
- * on no droppable: the geometry model gives every in-strip position a reorder
- * destination, so "no target" would turn an ordinary reorder into a new window.
- *
- * Of the top-level targets only a valid FILLABLE SLOT blocks a tear-off - the
- * same precedence the live preview applies: it is an explicit, visible empty
- * pane inviting the drop, and the preview has been advertising it.
+ * A header tab tears off ONLY by being pulled clear of its strip, measured from the strip's own rect.
+ * It must not tear off merely because the release landed on no droppable: the geometry model gives every in-strip position a reorder destination, so "no target" would turn an ordinary reorder into a new window.
  */
 function resolveTearOff(input: {
   readonly event: DragEndEvent;
@@ -960,9 +839,8 @@ function resolveTearOff(input: {
   readonly canvasTearOffAllowed: boolean;
 }): HeaderTab | null {
   const { event, stripBottom } = input;
-  // The activator position plus the final delta keeps advancing after the
-  // pointer has left every target, unlike collision coordinates. Used for
-  // tear-off detection only - drop math still reads the collision point.
+  // The activator position plus the final delta keeps advancing after the pointer has left every target, unlike collision coordinates.
+  // Used for tear-off detection only - drop math still reads the collision point.
   const point = currentReleasePointerPoint();
   const headerTab = readHeaderTabDragData(event.active.data.current);
   if (headerTab !== null) {
@@ -998,7 +876,6 @@ function currentReleasePointerPoint(): PointLike | null {
     : { x: latestPointerX, y: latestPointerY };
 }
 
-/** Whether a header tab has visibly entered the tear-off region. */
 function isHeaderTearOffPoint(
   point: PointLike | null,
   stripBottom: number | null,
@@ -1117,13 +994,7 @@ interface RootDndProviderProps {
 export function RootDndProvider(props: RootDndProviderProps) {
   const navigate = useNavigate();
   const navigateNested = useEpicNestedFocusNavigation();
-  // No detach hook here, deliberately. `useTabOpenInNewWindowFlow` reaches
-  // `useRouterState`, which THROWS without a router where `useNavigate` above
-  // only warns - calling it from this provider made the whole provider
-  // router-REQUIRED and broke every provider-light mount. `TabDetachOwner`
-  // owns that flow from the ROUTE tree and publishes it through
-  // `tab-detach-channel`; this provider reads it at drag end and stays
-  // router-optional.
+  // `useTabOpenInNewWindowFlow` reaches `useRouterState`, which THROWS without a router where `useNavigate` above only warns - calling it from this provider made the whole provider router-REQUIRED and broke every provider-light mount.
   const lastResolvedDropRef = useRef<ResolvedEpicCanvasDrop | null>(null);
   const lastReparentDropRef = useRef<LastReparentDrop | null>(null);
   const springLoadRef = useRef<SpringLoadEntry | null>(null);
@@ -1148,9 +1019,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
     }),
     [],
   );
-  // A spring-load timer armed mid-drag must not survive the provider: if it
-  // unmounts (route change / epic close) before drag end/cancel clears it, the
-  // pending `setTimeout` would fire and `expand()` a stale tab/panel.
+  // A spring-load timer armed mid-drag must not survive the provider: if it unmounts (route change / epic close) before drag end/cancel clears it, the pending `setTimeout` would fire and `expand()` a stale tab/panel.
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent): void => {
       trackPointerX(event);
@@ -1162,10 +1031,8 @@ export function RootDndProvider(props: RootDndProviderProps) {
         event.clientY >= activeHeaderStripGeometry.stripTop &&
         event.clientY <= activeHeaderStripGeometry.stripBottom
       ) {
-        // dnd-kit can coalesce a fast native sweep into activation + release
-        // without an intermediate onDragMove. The capture stream is the raw
-        // pointer source already used for release; publish the same point live
-        // so neighbours move before pointer-up too.
+        // dnd-kit can coalesce a fast native sweep into activation + release without an intermediate onDragMove.
+        // The capture stream is the raw pointer source already used for release; publish the same point live so neighbours move before pointer-up too.
         publishStripState(headerTab, event.clientX);
         return;
       }
@@ -1213,9 +1080,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
-      // A handoff is normally consumed by the layout effect immediately after
-      // commit. Defensively clear any arm left by a commit that removed its
-      // whole strip before that boundary could run.
+      // Defensively clear any arm left by a commit that removed its whole strip before that boundary could run.
       disarmHeaderStripCommitHandoff();
       disarmTileStripCommitHandoff();
       stripGeometryFailureReported = false;
@@ -1270,11 +1135,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
           headerTab,
           geometry?.slots[geometry.sourceIndex]?.width ?? null,
         );
-        // The move that crosses the activation distance can itself span one or
-        // more tabs. dnd-kit starts the drag from that event but does not emit
-        // onDragMove for the same event, so seed the preview from the raw point
-        // captured before activation instead of waiting for another move that
-        // a quick gesture may never produce.
+        // The move that crosses the activation distance can itself span one or more tabs. dnd-kit starts the drag from that event but does not emit onDragMove for the same event, so seed the preview from the raw point captured before activation instead of waiting for another move that a quick gesture may never produce.
         if (geometry !== null && latestPointerX !== null) {
           publishStripState(headerTab, latestPointerX);
         }
@@ -1285,13 +1146,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
 
   const updateDropPreview = useCallback(
     (event: DragUpdateEvent) => {
-      // SINGLE pointer source of truth, shared with the capture-phase native
-      // pointermove handler: the raw tracked pointer, falling back to the
-      // collision-pass point when no native event has arrived yet. Two update
-      // paths publishing from two different pointer snapshots is what made a
-      // fast drag flip between a fresh and a stale resolution every frame.
-      // Never reconstruct the point from `activatorEvent` + `event.delta`
-      // (scroll-adjusted; diverges under autoScroll).
+      // Never reconstruct the point from `activatorEvent` + `event.delta` (scroll-adjusted; diverges under autoScroll).
       const point = currentReleasePointerPoint();
       const source = readActiveDragSource(event.active);
       if (source !== null) {
@@ -1327,32 +1182,12 @@ export function RootDndProvider(props: RootDndProviderProps) {
     [updateDropPreview],
   );
 
-  // Handed to the imperative reparent commit so an RPC-routed move can
-  // invalidate the moved node's record query on success - this provider is
-  // the nearest hook context to that commit.
+  // Handed to the imperative reparent commit so an RPC-routed move can invalidate the moved node's record query on success - this provider is the nearest hook context to that commit.
   const queryClient = useQueryClient();
 
   /**
-   * THE single teardown for a gesture. Every exit from drag-end and drag-cancel
-   * goes through this, and it is idempotent so a double call is harmless.
-   *
-   * It exists because the three near-duplicate teardown blocks it replaces had
-   * already drifted - one statement was written twice at two indent levels -
-   * and two early returns (sidebar reparent, composer attachment) performed
-   * only PART of it. Both are ordinary supported gestures, and both left
-   * module-scoped state alive into the NEXT drag:
-   *
-   *   `activeTileDrag`          `rootDragOverlayModifier` tests it BEFORE it
-   *                             decides the drag kind, so the next drag of any
-   *                             kind is positioned with a dead tile's grab
-   *                             offset - the overlay sits at an arbitrary x for
-   *                             the whole gesture.
-   *   `promotedPreviewOnDrag`   a later Esc runs `restorePreviewInTab` against
-   *                             a stale tile, re-marking an unrelated promoted
-   *                             tile as a preview - the exact residual the
-   *                             promote/restore pair exists to prevent.
-   *
-   * Extracting it makes the drift unrepresentable rather than merely absent.
+   * It exists because the three near-duplicate teardown blocks it replaces had already drifted - one statement was written twice at two indent levels - and two early returns (sidebar reparent, composer attachment) performed only PART of it.
+   * Both are ordinary supported gestures, and both left module-scoped state alive into the NEXT drag: `activeTileDrag` `rootDragOverlayModifier` tests it BEFORE it decides the drag kind, so the next drag of any kind is positioned with a dead tile's grab offset - the overlay sits at an arbitrary x for the whole gesture.
    */
   const endGesture = useCallback(() => {
     clearSpringLoad(springLoadRef);
@@ -1381,9 +1216,8 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const source = readActiveDragSource(event.active);
-      // Pointer-up can race the final collision update. Refresh first so an
-      // explicit in-app target wins over the viewport-edge tear-off affordance
-      // on overlapping edge pixels.
+      // Pointer-up can race the final collision update.
+      // Refresh first so an explicit in-app target wins over the viewport-edge tear-off affordance on overlapping edge pixels.
       updateDropPreview(event);
       const composerDrop = acceptedComposerDrop(source, event);
       const detach = resolveTearOff({
@@ -1408,33 +1242,11 @@ export function RootDndProvider(props: RootDndProviderProps) {
       const reparent = lastReparentDropRef.current;
       if (reparent !== null) {
         restorePromotedPreview();
-        // ENDING THE GESTURE IS NOT CONDITIONAL ON THE COMMIT SUCCEEDING.
-        // `endGesture()` used to sit plainly after this call, so a throw out
-        // of the commit skipped it and left the store mid-drag with stale
-        // refs: a dead sidebar until the tree remounted. One ordinary drop
-        // did it (a doc-only terminal agent onto a record-backed chat, where
-        // the doc evaluator rejects what the projected gate allowed).
-        //
-        // Extracting `endGesture` widened this rather than closing it. The
-        // skipped cleanup used to be four refs; it is now everything that
-        // function clears - `activeTileDrag`, `promotedPreviewOnDrag`, the
-        // replay latch - each of which its own doc describes corrupting the
-        // NEXT drag when it survives this one.
-        //
-        // Rethrowing would defeat the point, since the cleanup is exactly
-        // what has to survive the failure, so the error is logged and
-        // swallowed and the commit's own handler owns anything user-facing.
+        // One ordinary drop did it (a doc-only terminal agent onto a record-backed chat, where the doc evaluator rejects what the projected gate allowed).
+        // Extracting `endGesture` widened this rather than closing it.
         try {
-          // The rejection is caught by `.catch`, NOT by the `catch` below.
-          // The commit is async now, so it has no synchronous throw and the
-          // enclosing `catch` can never see its failure - a `void`ed call
-          // would lose the log entirely and surface as an unhandled rejection.
-          //
-          // `.catch` rather than `await`, and that is the whole point at THIS
-          // site: awaiting would hold the `finally` until the commit settled,
-          // and the `finally` is the gesture cleanup that "has to survive the
-          // failure" per the comment above. Cleanup stays synchronous; only
-          // the logging waits.
+          // The commit is async now, so it has no synchronous throw and the enclosing `catch` can never see its failure - a `void`ed call would lose the log entirely and surface as an unhandled rejection.
+          // Cleanup stays synchronous; only the logging waits.
           void commitSidebarReparentDrop({
             epicId: reparent.epicId,
             sourceNodeId: reparent.sourceNodeId,

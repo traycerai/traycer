@@ -11,10 +11,8 @@ import {
 import { jitteredBackoffFor } from "./backoff";
 
 /**
- * Bounded retry schedule for the unary transport. `maxRetries` is the number of
- * *extra* attempts after the first, so the total attempt budget is
- * `maxRetries + 1`. `sleep` and `random` are injected so tests drive the delay
- * deterministically; production uses {@link DEFAULT_TRANSPORT_RETRY_POLICY}.
+ * Bounded retry schedule for the unary transport.
+ * `maxRetries` is the number of *extra* attempts after the first, so the total attempt budget is `maxRetries + 1`.
  */
 export interface TransportRetryPolicy {
   readonly maxRetries: number;
@@ -35,14 +33,6 @@ export const DEFAULT_TRANSPORT_RETRY_POLICY: TransportRetryPolicy = {
   random: () => Math.random(),
 };
 
-/**
- * Fail-fast policy (`maxRetries: 0` → a single attempt, no backoff) for paths
- * where time-to-failure matters more than absorbing a transient blip: a host
- * that is reachable but not completing the handshake makes each attempt cost a
- * full dial timeout, so retrying would stack those timeouts. Use it for
- * best-effort, latency-sensitive calls (IDE hook commands) and for probes that
- * already own a retry budget at a higher layer.
- */
 export const NO_RETRY_TRANSPORT_POLICY: TransportRetryPolicy = {
   maxRetries: 0,
   initialDelayMs: 0,
@@ -55,21 +45,8 @@ export const NO_RETRY_TRANSPORT_POLICY: TransportRetryPolicy = {
 };
 
 /**
- * Wraps an `IHostMessenger` so a `RetryableTransportError` is retried on a
- * fresh dial with jittered exponential backoff, up to `policy.maxRetries`
- * times. That classification covers either a provably pre-dispatch failure or
- * a post-send failure carrying a key the host negotiated and deduplicates.
- *
- * Only `RetryableTransportError` is retried: an ambiguous post-send drop, a
- * malformed frame, an `UNAUTHORIZED`, or any other host-originated
- * `HostRpcError` propagates on the first attempt. A no-dispatch guarantee or a
- * negotiated replay key is what makes the retry safe for non-idempotent
- * methods; an ambiguous unkeyed failure never receives this class.
- *
- * Compose this *outside* `createAuthAwareMessenger`: the auth wrapper only acts
- * on `UNAUTHORIZED` (never a `RetryableTransportError`), so the two layers
- * never contend, and an auth-driven retry still sits under one transport-retry
- * budget.
+ * Wraps an `IHostMessenger` so a `RetryableTransportError` is retried on a fresh dial with jittered exponential backoff, up to `policy.maxRetries` times.
+ * A no-dispatch guarantee or a negotiated replay key is what makes the retry safe for non-idempotent methods; an ambiguous unkeyed failure never receives this class.
  */
 export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
@@ -80,11 +57,7 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
     method: string,
     attemptCall: (replayMustBeKeyed: boolean) => Promise<Response>,
   ): Promise<Response> => {
-    // Carried across attempts, and it only ever LATCHES on. Once any attempt
-    // has failed on ground that only a negotiated key made safe, every later
-    // attempt in this episode is a replay of a call that may already have
-    // committed - including one whose own immediate predecessor happened to
-    // fail pre-dispatch. Recomputing it per attempt would forget that.
+    // Carried across attempts, and it only ever latches on.
     let replayMustBeKeyed = false;
     for (let attempt = 0; attempt < policy.maxRetries; attempt += 1) {
       throwIfAuthorityAborted(authority, method);
@@ -109,10 +82,7 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
         );
       }
     }
-    // Final attempt: out of the retry budget, so let whatever it throws -
-    // retryable or not - propagate to the caller unchanged. Still carries the
-    // requirement: being the last attempt does not make an unkeyed replay any
-    // safer.
+    // Final attempt: out of the retry budget, so let whatever it throws - retryable or not - propagate to the caller unchanged.
     throwIfAuthorityAborted(authority, method);
     return attemptCall(replayMustBeKeyed);
   };

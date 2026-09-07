@@ -1,15 +1,6 @@
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
-/**
- * "Tokens occupying the window" / "window size" pair plus the derived "% left",
- * all computed from one place so the chip headline and detail breakdowns
- * can't drift. Each harness adapter owns its SDK's cache semantics and emits
- * `contextTokens` as the canonical dynamic occupancy number. Harnesses that
- * report a fixed baseline separately can set `contextBaselineTokens`; the
- * renderer folds that into used tokens while keeping the model's reported
- * context window as the denominator.
- * Returns `null` when no reliable percent can be derived.
- */
+/** "Tokens occupying the window" / "window size" pair plus the derived "% left", all computed from one place so the chip headline and detail breakdowns can't drift. */
 export interface EffectiveContextUsage {
   /** Tokens occupying the window, including any fixed baseline. */
   readonly used: number;
@@ -28,10 +19,8 @@ export function computeEffectiveContextUsage(
   const rawUsed = usage.contextTokens ?? usage.inputTokens;
   const baseline = Math.max(0, usage.contextBaselineTokens ?? 0);
   const window = contextWindow;
-  // Cap at the window: occupancy + a fixed baseline can exceed the reported
-  // window near the limit, and the tooltip renders `used / window` verbatim, so
-  // an uncapped value shows a nonsensical "277K / 272K". Clamping reads as
-  // "100% used" and keeps percentLeft at 0.
+  // Cap at the window: occupancy + a fixed baseline can exceed the reported window near the limit, and the tooltip renders `used / window` verbatim, so an uncapped value shows a nonsensical "277K / 272K".
+  // Clamping reads as "100% used" and keeps percentLeft at 0.
   const used = Math.min(window, Math.max(0, rawUsed) + baseline);
   if (used <= 0) return null;
   // `window > 0` is guaranteed above, so the ratio is always finite.
@@ -39,13 +28,7 @@ export function computeEffectiveContextUsage(
   return { used, window, percentLeft: Math.round(clamped * 100) };
 }
 
-/**
- * One breakdown row shared by every context usage detail surface. A
- * `total` makes the row render as `value / total` against the context window;
- * `null` renders the value on its own. Keeping the row model here is the single
- * source of truth for which rows appear and how cache-derived numbers are
- * computed, so the surfaces can't drift in their displayed math.
- */
+/** Keeping the row model here is the single source of truth for which rows appear and how cache-derived numbers are computed, so the surfaces can't drift in their displayed math. */
 export interface ContextUsageRow {
   readonly key: "used" | "fresh" | "cacheRead" | "cacheWrite" | "output";
   readonly label: string;
@@ -54,12 +37,7 @@ export interface ContextUsageRow {
   readonly total: number | null;
 }
 
-/**
- * Build the ordered breakdown rows for a usage/effective pair. Cache rows are
- * omitted when their values are absent so the surfaces never show noisy zeros,
- * and "Fresh" is hidden without any cache because "Used" already tells the
- * whole story then.
- */
+/** Build the ordered breakdown rows for a usage/effective pair. Cache rows are omitted when their values are absent so the surfaces never show noisy zeros, and "Fresh" is hidden without any cache because "Used" already tells the whole story then. */
 export function buildContextUsageRows(
   usage: TokenUsage,
   effective: EffectiveContextUsage,
@@ -109,11 +87,7 @@ export function formatContextUsageRowValue(row: ContextUsageRow): string {
   return `${formatContextWindowTokens(row.value)} / ${formatContextWindowTokens(row.total)}`;
 }
 
-/**
- * Compact token formatter for standalone counts: 1_234 → "1.2k",
- * 1_234_567 → "1.2M". Falls back to raw `toLocaleString` for values < 1k so
- * tiny output-only turns aren't misleadingly rounded.
- */
+/** Compact token formatter for standalone counts: 1_234 → "1.2k", 1_234_567 → "1.2M". Falls back to raw `toLocaleString` for values < 1k so tiny output-only turns aren't misleadingly rounded. */
 function formatTokens(value: number): string {
   if (value < 1_000) return value.toLocaleString();
   if (value < 1_000_000) return `${(value / 1_000).toFixed(1)}k`;
@@ -129,14 +103,7 @@ export function formatContextWindowTokens(value: number): string {
   return `${Math.round(value / 1_000_000).toLocaleString()}M`;
 }
 
-/**
- * Shared "how much headroom is left" tone scale: `percent` is a LEFT/
- * remaining percentage (0 = exhausted), not a used percentage - low
- * remaining reads as destructive/amber. Reused by the context-window chip
- * and the provider rate-limit views, which invert their native
- * `usedPercent` (`100 - usedPercent`) before calling this so both surfaces
- * share one polarity and one set of thresholds.
- */
+/** Shared "how much headroom is left" tone scale: `percent` is a LEFT/ remaining percentage (0 = exhausted), not a used percentage - low remaining reads as destructive/amber. Reused by the context-window chip and the provider rate-limit views, which invert their native `usedPercent` (`100 - usedPercent`) before calling this so both surfaces share one polarity and one set of thresholds. */
 export function contextUsageTone(percent: number): string {
   if (percent <= 10) return "text-destructive";
   if (percent <= 25) return "text-amber-500 dark:text-amber-400";

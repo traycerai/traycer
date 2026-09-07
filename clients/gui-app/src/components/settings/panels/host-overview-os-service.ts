@@ -26,37 +26,24 @@ const REGISTER_RESTART_LATCH_MS = 45_000;
 /** How long an accepted deregister holds it - the detached CLI can fail late. */
 const DEREGISTER_ACCEPTED_LATCH_MS = 60_000;
 
-/**
- * The `host.service.*` ADAPTER: RPC in, `OsServiceSectionProps` out.
- *
- * The section itself renders and decides nothing about where its answers come
- * from, so this is where the RPC half lives. The recovery console has a sibling
- * adapter over the local CLI bridge, which is the only source that can answer
- * for a machine whose host process is not running — same section, same copy,
- * different question asked.
- */
+/** The recovery console has a sibling adapter over the local CLI bridge, which is the only source that can
+ * answer for a machine whose host process is not running - same section, same copy, different question asked. */
 export function useOverviewOsService(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostName: string;
   readonly status: HostServiceStatusResponse | undefined;
   readonly loading: boolean;
-  /** The CURRENT read failed; retained data is history, not the present. */
+  /** The current read failed; retained data is history, not the present. */
   readonly statusFailed: boolean;
   readonly statusDegrade: OverviewDegradeReason | null;
   readonly registerDegrade: OverviewDegradeReason | null;
   readonly deregisterDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
-  /** The scoped host's id - the latch store's key. `null` disables latching. */
   readonly hostId: string | null;
-  /** Whether the scope still has a live route; releases the accepted latch. */
   readonly scopeUsable: boolean;
-  /** Refetches `host.service.status`; called when a restart window expires. */
   readonly refetchStatus: () => void;
-  /**
-   * What the host said is working, `null`/false while it has not settled -
-   * the register CONFIRM names it, because re-registering bootouts the very
-   * job running that work (macOS) and must not read as a safe repair.
-   */
+  /** What the host said is working, `null`/false while it has not settled - the register confirm names it,
+   * because re-registering bootouts the very job running that work (macOS) and must not read as a safe repair. */
   readonly settledBusy: boolean;
   readonly settledBusySessionCount: number | null;
   readonly settledBusyBreakdown: HostBusyBreakdown | null;
@@ -111,21 +98,11 @@ export function useOverviewOsService(input: {
           }
           toast.error(describeServiceRegisterFailure(response, hostName));
         },
-        // A dropped connection here is the EXPECTED shape of success on macOS,
-        // where registering is a bootout/bootstrap cycle that replaces the very
-        // process answering this call. Reporting it as a failure would tell the
-        // user their registration did not take at the exact moment it did —
-        // which is exactly what handing this to `toastFromHostError` did: its
-        // transport branch overrides ANY fallback with a generic "Can't reach
-        // the Traycer host" error toast plus a host-error notification. So the
-        // expected disconnect is branched on HERE, as information rather than
-        // failure; everything else keeps the generic mapping.
+        // Reporting it as a failure would tell the user their registration did not take at the exact moment it did.
         onError: (error) => {
           if (error instanceof HostTransportFailureError) {
-            // Probable success mid-restart. The latch was armed at DISPATCH
-            // (hook level, host-keyed store) and this settle deliberately
-            // does not release it - the page stays locked until the scope
-            // reflects the restart or the bounded window expires.
+            // The latch was armed at dispatch (hook level, host-keyed store) and this settle deliberately does not release
+            // it - the page stays locked until the scope reflects the restart or the bounded window expires.
             toast.info(
               `Lost contact with ${hostName} while re-registering — it is probably restarting.`,
             );
@@ -142,18 +119,15 @@ export function useOverviewOsService(input: {
       deregister.mutate(undefined, {
         onSuccess: (response) => {
           if (response.outcome === "accepted") {
-            // Deliberately not "Deregistered". The CLI was dispatched detached
-            // because it kills this host mid-command; nobody here ever learns
-            // whether it finished, and claiming otherwise is the one thing that
-            // response shape exists to prevent.
+            // The CLI was dispatched detached because it kills this host mid-command; nobody here ever learns whether it
+            // finished, and claiming otherwise is the one thing that response shape exists to prevent.
             toast.success(`Stopping ${hostName} and deregistering it`);
             return;
           }
           toast.error(describeServiceDeregisterFailure(response, hostName));
         },
-        // Same expected-disconnect split as register above: a deregister that
-        // reached the host kills that host, so the dropped connection is the
-        // PROBABLE shape of success, not a failure to report as one.
+        // Same expected-disconnect split as register above: a deregister that reached the host kills that host, so the
+        // dropped connection is the probable shape of success, not a failure to report as one.
         onError: (error) => {
           if (error instanceof HostTransportFailureError) {
             toast.info(
@@ -168,28 +142,8 @@ export function useOverviewOsService(input: {
   };
 }
 
-/**
- * The section's read-side facts, derived once.
- *
- * - A failed CURRENT read demotes whatever TanStack retained to history:
- *   deriving visibility from an old `externally-managed` or `cli-unavailable`
- *   answer could hide the repair verbs indefinitely, since this query has no
- *   poll. `undefined` routes the description to "couldn't read" while the
- *   verbs keep their repair posture.
- * - `externallyManaged`: a registration someone ELSE owns, reported on either
- *   axis - the CLI's own `state` answer (Desktop's SMAppService owns a label
- *   the CLI can see) or the host's `externally-managed` OUTCOME (the env-var
- *   supervisor; the host refused to consult the CLI at all). Both verbs are
- *   withheld: the CLI either refuses the write or installs a second unit
- *   beside the owner's.
- * - `cliUnavailable`: the read affirmatively said there is NO CLI. Only the
- *   affirmative answer hides the verbs - ambiguity keeps Re-register exactly
- *   when someone is debugging a flaky host.
- * - `statusUnresolved`: the FIRST read is still in flight; a quick Deregister
- *   click beside "Checking service registration…" would be a destructive
- *   write against a state the page has not seen. Folded into `busy`, so the
- *   buttons render disabled rather than vanish for a moment.
- */
+/** `undefined` routes the description to "couldn't read" while the verbs keep their repair posture. Folded into
+ * `busy`, so the buttons render disabled rather than vanish for a moment. */
 function deriveServiceStatusView(input: {
   readonly status: HostServiceStatusResponse | undefined;
   readonly loading: boolean;
@@ -214,23 +168,8 @@ function deriveServiceStatusView(input: {
   };
 }
 
-/**
- * The section's view of the host-keyed latch STORE, plus the two lifecycles
- * only a mounted component can run for it: the bounded timers and the
- * scope-flip release. The latches themselves live in
- * `host-service-write-latch-store` and are ARMED at hook level in
- * `host-overview-rpc.ts` (dispatch-armed, settle-released), because both the
- * component state and its settle callbacks die when the host-keyed panel
- * unmounts mid-flight - see the store's doc for the two failure shapes that
- * design closes.
- *
- * Timer windows: a launchd bootout/bootstrap or a detached shutdown is a
- * matter of seconds, so a latch nothing has released within its window is
- * guarding an operation that finished or never happened. Each expiry also
- * refetches `host.service.status`: that query never polls (`poll: null`),
- * never remounts here, and its `enabled` never transitions when the scope
- * absorbed the event - the timer is its one deterministic path back to truth.
- */
+/** Timer windows: a launchd bootout/bootstrap or a detached shutdown is a matter of seconds, so a latch nothing
+ * has released within its window is guarding an operation that finished or never happened. */
 function useServiceWriteLatchLifecycle(
   hostId: string | null,
   scopeUsable: boolean,
@@ -246,10 +185,8 @@ function useServiceWriteLatchLifecycle(
   useEffect(() => {
     refetchRef.current = refetchStatus;
   });
-  // Scope-flip release: dropping means the restart/shutdown the latches
-  // guarded is now the page's visible state; coming back means a live,
-  // possibly reconfigured process is answering again. Store writes are not
-  // React setState, so running this in an effect is fine.
+  // Scope-flip release: dropping means the restart/shutdown the latches guarded is now the page's visible state;
+  // coming back means a live, possibly reconfigured process is answering again.
   const prevUsableRef = useRef(scopeUsable);
   useEffect(() => {
     if (prevUsableRef.current === scopeUsable) return;
@@ -258,12 +195,7 @@ function useServiceWriteLatchLifecycle(
       useHostServiceWriteLatchStore.getState().releaseAll(hostId);
     }
   }, [scopeUsable, hostId]);
-  // The structural latch also releases ONCE per mount: the flip release above
-  // only fires for transitions this instance observes, and a disconnect that
-  // happened while nobody had this host's Overview open would otherwise leave
-  // the refusal pinned forever (it has no timer by design). Coming back to
-  // the page is a fresh look at a possibly reconfigured host - re-offer the
-  // verbs; one refused click re-latches at the cost of a toast.
+  // The structural latch also releases once per mount.
   useEffect(() => {
     if (hostId === null) return;
     useHostServiceWriteLatchStore
@@ -308,15 +240,8 @@ function useServiceWriteLatchLifecycle(
   };
 }
 
-/**
- * What the registration IS, in a sentence, including when the host could not
- * answer.
- *
- * The bridge-era copy had two states, registered and not; over RPC there is a
- * third — asked and refused — and it must not collapse into either. Rendering a
- * failed read as "Not registered" would invite someone to press Re-register
- * against a host whose service is fine and whose CLI is missing.
- */
+/** The bridge-era copy had two states, registered and not; over RPC there is a third - asked and refused - and
+ * it must not collapse into either. */
 function describeServiceState(input: {
   readonly status: HostServiceStatusResponse | undefined;
   readonly loading: boolean;
@@ -333,19 +258,16 @@ function describeServiceState(input: {
         return "Not registered. The OS service manifest is required for the host to survive logout.";
       }
       if (input.status.state === "externally-managed") {
-        // The registration EXISTS — this is the normal state of a
-        // Desktop-managed machine — it just is not the CLI's to change, so the
-        // verbs below are withheld rather than offered-and-refused.
+        // The registration exists - this is the normal state of a Desktop-managed machine - it just is not the CLI's
+        // to change, so the verbs below are withheld rather than offered-and-refused.
         return "Registered and managed by Traycer Desktop, which owns this host's service registration.";
       }
       return input.status.state === "running"
         ? "Registered and running. The OS service manifest starts the host at user login."
         : "Registered but not running. The OS service manifest starts the host at user login.";
     case "externally-managed":
-      // The host did not consult the CLI: an external supervisor owns its
-      // service lifecycle, and the canonical label the CLI would inspect is
-      // not the unit actually running this host. No label or manifest line to
-      // show — the supervising unit is outside the CLI's sight.
+      // The host did not consult the CLI: an external supervisor owns its service lifecycle, and the canonical label
+      // the CLI would inspect is not the unit actually running this host.
       return `${input.hostName}'s service is managed by an external supervisor, which owns its registration.`;
     case "cli-unavailable":
       return `${input.hostName} has no Traycer CLI, so its service registration can't be read from here.`;
@@ -359,9 +281,8 @@ function describeServiceRegisterFailure(
   hostName: string,
 ): string {
   if (response.outcome === "externally-managed") {
-    // The host refused before running the CLI: an external supervisor owns its
-    // service lifecycle. Reachable only when the status read that hides the
-    // buttons is stale, so this is a correction rather than an error report.
+    // The host refused before running the CLI: an external supervisor owns its service lifecycle. Reachable only
+    // when the status read that hides the buttons is stale, so this is a correction rather than an error report.
     return `${hostName}'s service is managed by an external supervisor, so it can't be re-registered from here.`;
   }
   if (response.outcome === "cli-unavailable") {
@@ -370,10 +291,8 @@ function describeServiceRegisterFailure(
   if (response.outcome === "invalid-output") {
     return `${hostName}'s CLI returned something unreadable while registering.`;
   }
-  // The CLI's own message, when it left one. This is the whole reason the
-  // response carries a string: the refusal that matters most here — a label
-  // owned by Traycer Desktop's SMAppService registration — names its own
-  // remedy, and "couldn't register" would throw that away.
+  // This is the whole reason the response carries a string: the refusal that matters most here - a label owned
+  // by Traycer Desktop's SMAppService registration.
   return response.message ?? `${hostName} couldn't register its OS service.`;
 }
 

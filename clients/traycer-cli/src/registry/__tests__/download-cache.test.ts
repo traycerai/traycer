@@ -75,9 +75,8 @@ function ageFile(path: string, ms: number): void {
   utimesSync(path, old, old);
 }
 
-// A pid that is provably not running, so `verifyProcessIdentity` returns
-// "dead" rather than "indeterminate" - the SIGKILLed-previous-invocation
-// case. `startedAtMs: null` would only ever be "indeterminate".
+// A pid that is provably not running, so `verifyProcessIdentity` returns "dead" rather than "indeterminate" - the SIGKILLed-previous-invocation case.
+// `startedAtMs: null` would only ever be "indeterminate".
 function writeDeadOwner(ownerPath: string): void {
   writeFileSync(
     ownerPath,
@@ -106,9 +105,8 @@ describe("acquireDownloadSlot", () => {
   });
 
   it("takes over a slot whose owner is gone, keeping the partial bytes", async () => {
-    // The reported failure: Desktop SIGKILLs the CLI mid-download, so the
-    // marker outlives its process. The next invocation must inherit the
-    // partial, not delete it.
+    // The reported failure: Desktop SIGKILLs the CLI mid-download, so the marker outlives its process.
+    // The next invocation must inherit the partial, not delete it.
     const slot = await acquireDownloadSlot(SLOT);
     writeFileSync(slot.archivePath, "partial-bytes", "utf8");
     writeDeadOwner(`${slot.archivePath}.owner`);
@@ -167,9 +165,7 @@ describe("acquireDownloadSlot", () => {
     expect(existsSync(orphan)).toBe(false);
     expect(existsSync(unverifiable)).toBe(true);
 
-    // An old marker beside an archive that is still GROWING is a live
-    // downloader mid-transfer, not litter: the newest mtime across the pair
-    // is what decides, so this must still be spared.
+    // An old marker beside an archive that is still GROWING is a live downloader mid-transfer, not litter: the newest mtime across the pair is what decides, so this must still be spared.
     ageFile(`${unverifiable}.owner`, IDLE_PAST_TAKEOVER_MS);
     ageFile(unverifiable, IDLE_WITHIN_TAKEOVER_MS);
     await acquireDownloadSlot({ ...SLOT, version: "1.6.0" });
@@ -186,10 +182,7 @@ describe("acquireDownloadSlot", () => {
 
   it("hands the slot to exactly one of two processes racing the same stale marker", async () => {
     // Proving a marker stale is not the same as being allowed to replace it.
-    // Two contenders reach the same conclusion about the same marker, and
-    // the gap between deciding and acting spans a `ps`/`tasklist` probe - if
-    // both then win, both append to one file and the partial stops being a
-    // prefix of the archive.
+    // Two contenders reach the same conclusion about the same marker, and the gap between deciding and acting spans a `ps`/`tasklist` probe - if both then win, both append to one file and the partial stops being a prefix of the archive.
     const slot = await acquireDownloadSlot(SLOT);
     writeFileSync(slot.archivePath, "partial-bytes", "utf8");
     writeDeadOwner(`${slot.archivePath}.owner`);
@@ -211,12 +204,8 @@ describe("acquireDownloadSlot", () => {
   });
 
   it("declines to steal the break sub-lock from a breaker that is still alive", async () => {
-    // Another process is mid-takeover of this slot. Its sub-lock is old
-    // enough to look abandoned, but its recorded identity does not say it
-    // crashed - and age alone is not evidence. Stealing it would put two
-    // processes in the critical section at once, and the descheduled one's
-    // unlink would then land on the marker the other just wrote for itself,
-    // leaving both appending to one archive.
+    // Another process is mid-takeover of this slot.
+    // Its sub-lock is old enough to look abandoned, but its recorded identity does not say it crashed - and age alone is not evidence.
     const slot = await acquireDownloadSlot(SLOT);
     writeFileSync(slot.archivePath, "partial-bytes", "utf8");
     writeDeadOwner(`${slot.archivePath}.owner`);
@@ -241,10 +230,8 @@ describe("acquireDownloadSlot", () => {
   });
 
   it("refreshing the claim keeps an unidentifiable owner's slot from being taken over", async () => {
-    // Everything after the transfer - hashing, signature verification, and
-    // above all the caller's extract - only READS the archive, so its mtime
-    // stops advancing while the slot is still legitimately held. The refresh
-    // is what keeps the idle rule from handing the slot away mid-extract.
+    // Everything after the transfer - hashing, signature verification, and above all the caller's extract - only READS the archive, so its mtime stops advancing while the slot is still legitimately held.
+    // The refresh is what keeps the idle rule from handing the slot away mid-extract.
     const slot = await acquireDownloadSlot(SLOT);
     writeFileSync(slot.archivePath, "partial-bytes", "utf8");
     writeFileSync(
@@ -261,10 +248,8 @@ describe("acquireDownloadSlot", () => {
   });
 
   it("takes over a slot whose owner cannot be identified once it goes idle", async () => {
-    // Where the liveness probe itself is unavailable - a locked-down Windows
-    // with no usable `tasklist` - every verdict is "indeterminate". Identity
-    // alone would then pin the slot indefinitely and silently turn
-    // cross-process resume back off, which is the behaviour being fixed.
+    // Where the liveness probe itself is unavailable - a locked-down Windows with no usable `tasklist` - every verdict is "indeterminate".
+    // Identity alone would then pin the slot indefinitely and silently turn cross-process resume back off, which is the behaviour being fixed.
     const slot = await acquireDownloadSlot(SLOT);
     writeFileSync(slot.archivePath, "partial-bytes", "utf8");
     writeFileSync(
@@ -287,10 +272,7 @@ describe("acquireDownloadSlot", () => {
   });
 
   it("spares a private slot whose claim exists before its directory", async () => {
-    // The window `createPrivateSlot` closes by claiming first: mid-creation
-    // the marker exists and the directory does not, and a concurrent sweep
-    // must read that as a claim to respect rather than an unowned entry to
-    // remove.
+    // The window `createPrivateSlot` closes by claiming first: mid-creation the marker exists and the directory does not, and a concurrent sweep must read that as a claim to respect rather than an unowned entry to remove.
     const held = await acquireDownloadSlot(SLOT);
     writeFileSync(held.archivePath, "held", "utf8");
     const priv = await acquireDownloadSlot(SLOT);
@@ -308,21 +290,14 @@ describe("acquireDownloadSlot", () => {
       urlBasename: "../../../etc/passwd",
     });
 
-    // The publisher-controlled segment can never contribute a separator or
-    // a parent-dir hop: whatever it contained, the archive resolves to one
-    // plain entry directly inside the cache dir.
+    // The publisher-controlled segment can never contribute a separator or a parent-dir hop: whatever it contained, the archive resolves to one plain entry directly inside the cache dir.
     expect(dirname(slot.archivePath)).toBe(cacheDir());
     expect(basename(slot.archivePath)).not.toMatch(/[/\\]/);
     expect(basename(slot.archivePath)).not.toContain("..");
   });
 
   it("keeps a publisher basename out of the reserved bookkeeping suffixes", async () => {
-    // `sanitizeSegment` preserves `.` and `-`, so a published asset named
-    // `…owner` / `…break` would otherwise produce a slot file the sweep
-    // mistakes for its own bookkeeping: `readMarkerRaw` would read a
-    // multi-hundred-MB partial into a string, a `.break` name would never be
-    // reclaimed, and the marker for a neighbouring slot would resolve onto
-    // the archive itself.
+    // `sanitizeSegment` preserves `.` and `-`, so a published asset named `…owner` / `…break` would otherwise produce a slot file the sweep mistakes for its own bookkeeping: `readMarkerRaw` would read a multi-hundred-MB partial into a string, a `.break` name would never be reclaimed, and the marker for a neighbouring slot would resolve onto the archive itself.
     for (const hostile of ["host.owner", "host.break"]) {
       const slot = await acquireDownloadSlot({
         ...SLOT,
@@ -350,10 +325,8 @@ describe("releaseDownloadSlot", () => {
   });
 
   it("leaves the slot alone when the claim has changed hands", async () => {
-    // A slot legitimately changes owner while this process holds it - the
-    // idle takeover fires during a long extract. After that the archive and
-    // the marker belong to a fresh holder that is resuming them, so this
-    // process's release must not delete either.
+    // A slot legitimately changes owner while this process holds it - the idle takeover fires during a long extract.
+    // After that the archive and the marker belong to a fresh holder that is resuming them, so this process's release must not delete either.
     const slot = await acquireDownloadSlot(SLOT);
     writeFileSync(slot.archivePath, "verified", "utf8");
     writeFileSync(
@@ -369,10 +342,8 @@ describe("releaseDownloadSlot", () => {
   });
 
   it("escalates to a recursive remove only for a private slot inside the cache", async () => {
-    // Exported and called for any archive the installer considers temporary,
-    // including archives this module never created. Deciding "this is a
-    // private slot, remove its whole directory" from the parent's NAME alone
-    // would let such an archive aim an `rm -rf` at its own parent.
+    // Exported and called for any archive the installer considers temporary, including archives this module never created.
+    // Deciding "this is a private slot, remove its whole directory" from the parent's NAME alone would let such an archive aim an `rm -rf` at its own parent.
     const outside = join(sandboxRoot, "elsewhere", "private-not-ours");
     mkdirSync(outside, { recursive: true });
     const archive = join(outside, "host.zip");

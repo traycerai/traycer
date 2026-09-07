@@ -13,18 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliVersionsManifest } from "../../registry/cli-versions";
 import type { HostPlatformKey } from "../../registry/types";
 
-// `buildCliUpgradeCommand`'s target-version contract (audit CLI-013):
-// the rolling release feed publishes exactly one build's platform
-// assets, so the version stamped into the manifest must always be the
-// feed's own `version` (never `latest`, never the caller's `--target`
-// string). `--target` is downgraded from a selector to a GUARD that
-// asserts the caller's expectation against the feed and refuses with
-// E_CLI_UPGRADE_TARGET_UNAVAILABLE when they disagree.
-//
-// `fetchCliVersions` and `downloadToFile` are mocked to avoid the
-// network; everything else (manifest read/write, staging, rename,
-// well-known-slot refresh, cli-lock) runs against a real tmp HOME the
-// same way `doctor/__tests__/pending-upgrade.test.ts` does.
+// `buildCliUpgradeCommand`'s target-version contract (audit CLI-013): the rolling release feed publishes exactly one build's platform assets, so the version stamped into the manifest must always be the feed's own `version` (never `latest`, never the caller's `--target` string).
+// `--target` is downgraded from a selector to a GUARD that asserts the caller's expectation against the feed and refuses with E_CLI_UPGRADE_TARGET_UNAVAILABLE when they disagree.
 
 const mocks = vi.hoisted(() => ({
   versionsManifest: null as CliVersionsManifest | null,

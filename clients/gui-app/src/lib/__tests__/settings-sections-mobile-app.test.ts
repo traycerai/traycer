@@ -1,11 +1,5 @@
 /**
- * Two sections are not offered in the installed mobile app, for two different
- * reasons: Keybindings because chord capture reads `keydown` on `window` and a
- * touch shell can never commit one, and Link mobile app because the panel is the
- * DISPLAY end of a pairing whose scanner end is the mobile app itself.
- *
- * The table itself keeps both, because ids resolve routes, remembered tab
- * paths and titles; only the OFFERED list drops them.
+ * Two sections are not offered in the installed mobile app, for two different reasons: Keybindings because chord capture reads `keydown` on `window` and a touch shell can never commit one, and Link mobile app because the panel is the DISPLAY end of a pairing.
  */
 import { afterEach, describe, expect, it } from "vitest";
 

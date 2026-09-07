@@ -15,10 +15,7 @@ import {
   githubRepositoryQualification,
 } from "../github-mention-display";
 
-/**
- * Two things a row must not overstate: how its issue was closed, and which
- * repository it belongs to.
- */
+/** Two things a row must not overstate: how its issue was closed, and which repository it belongs to. */
 
 function repository(
   owner: string,
@@ -72,9 +69,7 @@ function pullRequest(owner: string, repo: string): GithubPullRequestMentionRow {
 
 describe("githubMentionDisplayState", () => {
   it("separates a not-planned closure from a completed one", () => {
-    // The two closures are opposite outcomes, and `issue-closed` carries a
-    // check glyph and the purple "landed" tint - so collapsing them presents a
-    // dismissal as a resolution.
+    // The two closures are opposite outcomes, and `issue-closed` carries a check glyph and the purple "landed" tint - so collapsing them presents a dismissal as a resolution.
     expect(
       githubMentionDisplayState(
         issue({ state: "closed", stateReason: "not_planned" }),
@@ -98,9 +93,8 @@ describe("githubMentionDisplayState", () => {
   });
 
   it("keeps the settled reading when no reason was carried", () => {
-    // The control, and the deliberate asymmetry: an absent reason is legacy or
-    // unpopulated data, not a dismissal. Inventing one from an absence would
-    // be the same overclaim pointing the other way.
+    // The control, and the deliberate asymmetry: an absent reason is legacy or unpopulated data, not a dismissal.
+    // Inventing one from an absence would be the same overclaim pointing the other way.
     expect(
       githubMentionDisplayState(issue({ state: "closed", stateReason: null })),
     ).toBe("issue-closed");
@@ -150,9 +144,7 @@ describe("githubRepositoryQualification", () => {
   });
 
   it("labels colliding chips distinguishably", () => {
-    // The user-visible consequence: both the composer decorator and the posted
-    // message render `mention.label`, so two same-named repositories produced
-    // two chips reading `api#123` for different attachments.
+    // The user-visible consequence: both the composer decorator and the posted message render `mention.label`, so two same-named repositories produced two chips reading `api#123` for different attachments.
     const scope = [ACME_API, CONTOSO_API];
     expect(
       githubMentionAttachmentFromRow(pullRequest("acme", "api"), scope).label,
@@ -195,11 +187,7 @@ describe("githubRepositoryQualification", () => {
   });
 
   it("still finds the collision when the two entries are spelled with different casing", () => {
-    // The row is API-cased ("contoso"/"api") while the scope's entries carry
-    // the remote's user-typed casing ("Contoso"/"Api") - a verbatim compare
-    // under-counts the collision and never escalates past "repo", so this row
-    // and an "acme/api" row in the same scope would both print the bare chip
-    // `api#123` for two different attachments.
+    // The row is API-cased ("contoso"/"api") while the scope's entries carry the remote's user-typed casing ("Contoso"/"Api") - a verbatim compare under-counts the collision and never escalates past "repo", so this row and an "acme/api" row in the same scope.
     const scope = [
       repository("acme", "api", "github.com"),
       repository("Contoso", "Api", "github.com"),
@@ -222,12 +210,8 @@ describe("githubRepositoryQualification", () => {
   });
 
   it("treats an unresolved scope as ignorance, not proof of no collision", () => {
-    // Null means the scope has not resolved yet - the live search can still
-    // put rows on screen before any catalog answers. The safe label under
-    // that ignorance is `owner/repo`: a bare `#123` from one repository
-    // beside a `#123` from another is exactly the ambiguity this function
-    // exists to prevent, and no collision answer exists yet to prove the
-    // short form safe.
+    // Null means the scope has not resolved yet - the live search can still put rows on screen before any catalog answers.
+    // The safe label under that ignorance is `owner/repo`: a bare `#123` from one repository beside a `#123` from another is exactly the ambiguity this function exists to prevent, and no collision answer exists yet to prove the short form safe.
     expect(
       githubRepositoryQualification(pullRequest("acme", "api"), null),
     ).toBe("owner-repo");
@@ -254,10 +238,7 @@ describe("githubMentionReference", () => {
   });
 
   it("prefixes a non-default host", () => {
-    // The same coordinates on two hosts are two different attachments, and
-    // every surface fed by this reference - the chip tooltip, the preview
-    // subtitle, the menu description - must not collapse them into one
-    // indistinguishable string.
+    // The same coordinates on two hosts are two different attachments, and every surface fed by this reference - the chip tooltip, the preview subtitle, the menu description - must not collapse them into one indistinguishable string.
     expect(
       githubMentionReference({
         ...pullRequest("acme", "api"),
@@ -267,10 +248,7 @@ describe("githubMentionReference", () => {
   });
 
   it("folds a differently-cased default host and stays bare", () => {
-    // The default check FOLDS (one predicate, shared with the token and the
-    // serializer): a row served as `GitHub.com` is the default host, and
-    // printing `GitHub.com/acme/api#123` would assert a host qualification
-    // the identity layer says does not exist.
+    // The default check FOLDS (one predicate, shared with the token and the serializer): a row served as `GitHub.com` is the default host, and printing `GitHub.com/acme/api#123` would assert a host qualification the identity layer says does not exist.
     expect(
       githubMentionReference({
         ...pullRequest("acme", "api"),
@@ -286,10 +264,8 @@ describe("githubMentionToken", () => {
   }
 
   it("keeps the default host implicit", () => {
-    // Compatibility, not brevity. This token is the attachment's durable
-    // `path`; writing `github.com/` into it would give the same pull request a
-    // different identity before and after this change, so one message holding
-    // both inserts would render it twice.
+    // Compatibility, not brevity.
+    // This token is the attachment's durable `path`; writing `github.com/` into it would give the same pull request a different identity before and after this change, so one message holding both inserts would render it twice.
     expect(githubMentionToken(onHost("github.com"))).toBe(
       "github-pr:acme/api#123",
     );
@@ -302,9 +278,7 @@ describe("githubMentionToken", () => {
   });
 
   it("distinguishes the same reference on two hosts", () => {
-    // The defect: `path` is the node id, what `buildAttachmentsFromJSONContent`
-    // dedupes on, and what the sent-message renderer indexes by - so one token
-    // for two rows dropped or aliased an attachment.
+    // The defect: `path` is the node id, what `buildAttachmentsFromJSONContent` dedupes on, and what the sent-message renderer indexes by - so one token for two rows dropped or aliased an attachment.
     expect(githubMentionToken(onHost("github.com"))).not.toBe(
       githubMentionToken(onHost("ghe.acme.dev")),
     );
@@ -319,11 +293,7 @@ describe("githubMentionToken", () => {
     expect(pattern.test(githubMentionToken(onHost("ghe.acme.dev")))).toBe(true);
   });
 
-  // The identity segments are FOLDED, unlike every prose surface: a live
-  // payload that respells a cached row's casing must not re-identify its
-  // attachment, or the same artifact mints two different `path`s (and two
-  // insertable copies) depending only on which casing happened to be on
-  // screen when it was picked.
+  // The identity segments are FOLDED, unlike every prose surface: a live payload that respells a cached row's casing must not re-identify its attachment, or the same artifact mints two different `path`s (and two insertable copies) depending only on which.
   it("folds owner/repo casing so two spellings of one artifact produce byte-identical tokens", () => {
     const canonical = pullRequest("acme", "widgets");
     const respelled = pullRequest("Acme", "Widgets");
@@ -339,10 +309,7 @@ describe("githubMentionToken", () => {
   });
 
   it("folds a non-default host's casing into the token", () => {
-    // The default-host check runs on the FOLDED host, so this must not stop
-    // at recognizing `GHE.Corp` as non-default - the segment it appends has
-    // to be folded too, or two casings of the same enterprise host would
-    // still mint two tokens for the same pull request.
+    // The default-host check runs on the FOLDED host, so this must not stop at recognizing `GHE.Corp` as non-default - the segment it appends has to be folded too, or two casings of the same enterprise host would still mint two tokens for the same pull request.
     expect(githubMentionToken(onHost("GHE.Corp"))).toBe(
       "github-pr:ghe.corp/acme/api#123",
     );
@@ -368,9 +335,8 @@ describe("githubMentionToken", () => {
   });
 
   it("leaves githubMentionReference's casing untouched - the prose form is not folded", () => {
-    // The control: only the durable token identity folds. The prose reference
-    // (chip tooltip, preview subtitle, menu description) still echoes back
-    // whatever casing the row actually carries.
+    // The control: only the durable token identity folds.
+    // The prose reference (chip tooltip, preview subtitle, menu description) still echoes back whatever casing the row actually carries.
     expect(
       githubMentionReference({
         ...pullRequest("Acme", "Widgets"),

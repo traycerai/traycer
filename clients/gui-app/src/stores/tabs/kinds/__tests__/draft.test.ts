@@ -104,10 +104,8 @@ function emptyPerWindowSnapshot(): DesktopPerWindowSnapshot {
 }
 
 /**
- * Neither `bridge` nor `epicFlow` is read by the draft kind's
- * `openInNewWindow` (only `draftFlow` is - see the module under test), so
- * these are inert structural doubles: present to satisfy `OpenInNewWindowDeps`,
- * never expected to be called.
+ * Neither `bridge` nor `epicFlow` is read by the draft kind's `openInNewWindow` (only `draftFlow`
+ * is - see the module under test), so these are inert structural doubles: present to satisfy
  */
 function buildInertBridge(): DesktopWindowsBridge {
   const claimResult: DesktopOwnershipClaimResult = { ok: true };

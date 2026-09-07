@@ -7,13 +7,7 @@ export interface HorizontalScrollEdges {
 
 const NO_EDGES: HorizontalScrollEdges = { left: false, right: false };
 
-/**
- * Which horizontal edges of a scroller currently hide content. Tracked from
- * scroll plus resizes of both the scroller and its content row, so the edge
- * fades appear only where something is actually cut off (a static both-ends
- * mask would fade the first/last item even when fully scrolled to that side)
- * and follow a content set that changes without the scroller itself resizing.
- */
+/** Tracked from scroll plus resizes of both the scroller and its content row, so the edge fades appear only where something is actually cut off (a static both-ends mask would fade the first/last item even when fully scrolled to that side) and follow a content set that changes without the scroller itself resizing. */
 export function useHorizontalScrollEdges(
   scrollerRef: RefObject<HTMLElement | null>,
   contentRef: RefObject<HTMLElement | null>,
@@ -53,10 +47,7 @@ const FADE_LEFT =
 const FADE_RIGHT =
   "[-webkit-mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]";
 
-/**
- * The mask utilities that fade whichever edges of a horizontal scroller still
- * hide content, or `null` when nothing is cut off.
- */
+/** The mask utilities that fade whichever edges of a horizontal scroller still hide content, or `null` when nothing is cut off. */
 export function horizontalScrollFadeClass(
   edges: HorizontalScrollEdges,
 ): string | null {

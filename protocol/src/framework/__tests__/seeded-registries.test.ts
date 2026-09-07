@@ -10,18 +10,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
 
 /**
- * Smoke test that every seeded protocol registry survives the structural
- * + JSON-Schema compatibility validators. `defineVersionedRpcRegistry()`
- * and `defineVersionedRecordRegistry()` run these at module load, so a
- * broken seed would blow up on import - these assertions just pin the
- * guarantee with explicit coverage.
- *
- * The CloudData RPC registry has moved out of `protocol/` and now lives
- * beside the `CloudDataClient` HTTP client in the cloud data client
- * (internal, not in this repo). The cloud catalog
- * (`epic-light`), repo association, and workspace-association cached
- * records moved with it; this file keeps only the host + narrowed
- * persistence (`2.0.0` / V200 epic record) registries honest.
+ * Smoke test that every seeded protocol registry survives the structural + JSON-Schema compatibility validators.
  */
 
 describe("seeded protocol registries", () => {
@@ -93,9 +82,7 @@ describe("seeded protocol registries", () => {
   });
 
   it("registers both chat-sync records on one version line", () => {
-    // A shard embeds the sub-schemas the head's core is built from, so every
-    // change that moves one moves the other. Bound to the SAME constant object,
-    // not two equal literals - see `chat-sync/version.ts`.
+    // A shard embeds the sub-schemas the head's core is built from, so every change that moves one moves the other.
     expect(
       persistenceRecordRegistry["chat-head"][1].versions[3].contract
         .schemaVersion,
@@ -112,10 +99,6 @@ describe("seeded protocol registries", () => {
 
     expect(epicRecordV300.schemaVersion).toEqual({ major: 3, minor: 0 });
 
-    // `artifacts` and `deletedArtifacts` are the unified on-disk
-    // replacements for the four per-kind maps (specs / tickets / stories
-    // / reviews) the V200 / `2.0.0` authority uses. `chats` is also
-    // on-disk-only.
     for (const field of ["chats", "artifacts", "deletedArtifacts"]) {
       expect(onDiskEpicKeys).toContain(field);
     }

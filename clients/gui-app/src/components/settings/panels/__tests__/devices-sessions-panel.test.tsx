@@ -14,10 +14,8 @@ import { StepUpRequiredError } from "@/lib/auth/step-up-flow";
 import type { StepUpPromptRequest } from "@/lib/auth/step-up-prompt";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * Captures the active step-up prompt so tests can cancel/verify without driving
- * Radix dialog DOM (same pattern as host-credential-provision-provider tests).
- */
+/** Captures the active step-up prompt so tests can cancel/verify without driving Radix dialog DOM (same pattern
+ * as host-credential-provision-provider tests). */
 const dialogState = vi.hoisted<{
   request: StepUpPromptRequest | null;
   onCancel: (() => void) | null;
@@ -123,7 +121,6 @@ function makeSession(
   };
 }
 
-/** Per-row sign-out (not "Sign out everywhere"). */
 function sessionSignOutButton(): HTMLElement {
   return screen.getByRole("button", { name: /^Sign out$/ });
 }
@@ -279,7 +276,6 @@ describe("<DevicesSessionsPanel />", () => {
       expect(dialogState.request).toBeNull();
     });
     expect(screen.queryByRole("alert")).toBeNull();
-    // Pre-fix: cancel used to surface the literal StepUpCanceledError message.
     expect(screen.queryByText("Verification canceled.")).toBeNull();
   });
 

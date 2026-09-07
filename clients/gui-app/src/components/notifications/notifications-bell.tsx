@@ -32,19 +32,10 @@ import {
   type AnalyticsNotificationEntryPoint,
 } from "@/lib/analytics";
 
-/** The center's own surface, marked by `NotificationsPopover`. */
 const NOTIFICATION_CENTER_SELECTOR = "[data-notification-center]";
 
-/**
- * Top-level notifications trigger in the app header. Shows an unread-count
- * badge and opens the `NotificationsPopover` on click. Native toast/chime
- * emission is owned by `NotificationEmissionController` so all sources share
- * the same hold/coalescing/focus policy.
- *
- * Owns every Radix-Popover-specific concern for the center - anchoring,
- * the one-time geometry lock, and open/close focus lifecycle - so
- * `NotificationsPopover` stays purely presentational.
- */
+/** Native toast/chime emission is owned by `NotificationEmissionController` so all sources share the same
+ * hold/coalescing/focus policy. */
 export function NotificationsBell() {
   const open = useNotificationsPopoverStore((state) => state.open);
   const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
@@ -68,26 +59,14 @@ export function NotificationsBell() {
     setOpen(false);
   }, [setOpen]);
 
-  // Whether the nested filter menu is logically open right now, per Radix's
-  // own onOpenChange notification - not derived from the DOM, since the menu
-  // portals to document.body (so it isn't a shell descendant to query) and
-  // its data-state can briefly read "closed" while still mounted mid-exit-
-  // animation. The outside-pointerdown guard below reads this ref at
-  // dispatch time to decide whether the menu still needs a synthetic Escape
-  // or has already dismissed itself first - see the guard's own comment for
-  // why that ordering isn't guaranteed.
+  // The outside-pointerdown guard below reads this ref at dispatch time to decide whether the menu still needs a
+  // synthetic Escape or has already dismissed itself first.
   const nestedMenuOpenRef = useRef(false);
   const handleFilterMenuOpenChange = useCallback((menuOpen: boolean) => {
     nestedMenuOpenRef.current = menuOpen;
   }, []);
 
-  // Analytics-only entry-point tracking, independent of the T04 focus-
-  // modality ref above: a direct bell interaction sets this just before the
-  // open transition; anything that flips `open` without going through the
-  // trigger (native-notification bridge opens, including the
-  // origin-unavailable state) keeps the "notification" default. Reset after
-  // every consumed open cycle so a later bell-less open never inherits a
-  // stale "direct_ui" value.
+  // Reset after every consumed open cycle so a later bell-less open never inherits a stale "direct_ui" value.
   const openEntryPointRef =
     useRef<AnalyticsNotificationEntryPoint>("notification");
   const onTriggerPointerDown = useCallback(() => {
@@ -106,10 +85,8 @@ export function NotificationsBell() {
 
   const chord = useBindingForAction("app.notifications.open");
   const markKeyboardDismiss = lifecycle.markKeyboardDismiss;
-  // Opening goes through the normal dispatch path. A chord open is a
-  // deliberate interaction with the app, so it is attributed to `direct_ui`
-  // like a bell click - `notification` means "arrived from a native
-  // notification", which would be a false claim here.
+  // A chord open is a deliberate interaction with the app, so it is attributed to `direct_ui` like a bell click
+  // - `notification` means "arrived from a native notification", which would be a false claim here.
   useEffect(
     () =>
       registerDynamicActionHandler("app.notifications.open", () => {
@@ -119,20 +96,8 @@ export function NotificationsBell() {
     [],
   );
 
-  // Closing does NOT: an open Radix popover is a `role="dialog"`, and the
-  // keybinding provider deliberately stops dispatching chords behind one
-  // (`isAnyDialogOpen`), so the dynamic handler above can never see the
-  // second press. This window listener is mounted only while the center is
-  // open and matches the live binding itself, which also keeps the toggle
-  // working when the center was opened by pointer or by a native-notification
-  // click (focus outside the surface, so no in-surface handler would fire).
-  //
-  // Focus returns to the bell only when the center's own surface still holds
-  // it: a pointer-opened center leaves focus wherever the user was typing,
-  // and yanking that into the header would be the worse bug. That question is
-  // asked of the focused element itself (`data-notification-center`, set by
-  // the popover) rather than of the shell ref, which belongs to the geometry
-  // lock and must not be read from render.
+  // That question is asked of the focused element itself (`data-notification-center`, set by the popover) rather
+  // than of the shell ref, which belongs to the geometry lock and must not be read from render.
   useEffect(() => {
     if (!open || chord === null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
@@ -149,11 +114,7 @@ export function NotificationsBell() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [chord, markKeyboardDismiss, open]);
 
-  // Fires exactly once per open cycle - edge-triggered on the `open`
-  // boolean's false -> true transition, so it covers every way the center
-  // can open (bell click/keyboard AND a native-notification-driven
-  // programmatic open) rather than only the ones that go through Radix's own
-  // onOpenChange handler.
+  // Fires exactly once per open cycle - edge-triggered on the `open` boolean's false -> true transition.
   const wasOpenRef = useRef(open);
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -230,41 +191,11 @@ export function NotificationsBell() {
         onOpenAutoFocus={lifecycle.onContentOpenAutoFocus}
         onEscapeKeyDown={lifecycle.onContentEscapeKeyDown}
         onCloseAutoFocus={lifecycle.onContentCloseAutoFocus}
-        // A nested modal menu (the filter menu) traps focus into its own
-        // portal, outside this Content's DOM subtree - without this guard,
-        // Radix's DismissableLayer reads that as focus leaving the popover
-        // and dismisses it. Escape still closes the popover normally; this
-        // only turns off the focus-outside path, which nothing else in the
-        // T04 focus contract depends on.
+        // A nested modal menu (the filter menu) traps focus into its own portal, outside this Content's DOM subtree -
+        // without this guard, Radix's DismissableLayer reads that as focus leaving the popover and dismisses it.
         onFocusOutside={(event) => event.preventDefault()}
-        // Real-browser-only bug (jsdom's fireEvent bypasses hit-testing and
-        // never reproduced it): while the modal filter menu is open, its
-        // pointer/scroll barrier sets `body.style.pointerEvents = "none"`.
-        // A click landing inside the popover but outside the menu is then
-        // NOT hit-tested onto the clicked element at all - the browser skips
-        // every inert (pointer-events:none) node under it and resolves
-        // `event.target` to <html>. `event.target` can't be trusted to tell
-        // "inside the popover" from "truly outside" while that lock is
-        // active, so this checks the click's real screen position against
-        // the shell's own rect instead. Genuinely outside still closes
-        // everything normally.
-        //
-        // Inside the shell, this must decide whether the filter menu still
-        // needs a synthetic Escape to close it, or already closed itself -
-        // Radix's own DismissableLayer defers cross-layer
-        // onPointerDownOutside delivery (`deferPointerDownOutside`), so the
-        // menu's own outside-pointerdown handling and this popover-level
-        // handler are NOT guaranteed to run in a fixed order relative to
-        // each other. When the menu's handler runs first, it has already
-        // closed the menu by the time this fires; dispatching Escape then
-        // would hit the popover itself as the new topmost layer and close
-        // it too - reproduced live in headless Chrome. Reading
-        // `nestedMenuOpenRef` (updated synchronously by the menu's own
-        // onOpenChange, which always completes before this deferred handler
-        // runs, since it fires on an earlier event in the same gesture)
-        // makes the decision correct in both orderings: dispatch Escape only
-        // if the menu is still open; otherwise it already closed itself, so
-        // do nothing and leave the popover open.
+        // Real-browser-only bug (jsdom's fireEvent bypasses hit-testing and never reproduced it): while the modal
+        // filter menu is open, its pointer/scroll barrier sets `body.style.pointerEvents = "none"`.
         onPointerDownOutside={(event) => {
           const shell = geometry.shellRef.current;
           if (shell === null) return;

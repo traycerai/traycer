@@ -43,7 +43,7 @@ describe("highlightSegmentsFromByteRanges", () => {
   });
 
   it("maps multibyte UTF-8 byte offsets to the correct JS characters", () => {
-    // "naïve" — the ï is 2 UTF-8 bytes, so "naïve" is 6 bytes; the match on
+    // "naïve" - the ï is 2 UTF-8 bytes, so "naïve" is 6 bytes; the match on
     // the leading "naïve" word ends at byte 6, not char index 5.
     const segments = highlightSegmentsFromByteRanges("naïve text", [
       { startByte: 0, endByte: 6 },

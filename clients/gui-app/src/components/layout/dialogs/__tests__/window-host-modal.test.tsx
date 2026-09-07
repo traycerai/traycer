@@ -41,12 +41,11 @@ function baseProps(
     retryPending: false,
     onUpdateHost: null,
     onOpenSettings: () => undefined,
-    // The DIALOG ignores this - it keeps its own right-aligned footer - and
-    // this base describes a settled ∅, which is never settings-only anyway.
+    // The dialog ignores this - it keeps its own right-aligned footer - and this base describes a settled ∅, which
+    // is never settings-only anyway.
     settingsOnly: false,
-    // The default mirrors this base's `cause: "no-usable-host"` - a settled
-    // failure - so existing fixtures keep describing the state they were
-    // written for. The healthy-start arm passes these explicitly.
+    // The default mirrors this base's `cause: "no-usable-host"` - a settled failure - so existing fixtures keep
+    // describing the state they were written for.
     showReportIssue: true,
     settingsEmphasis: "button",
     ...overrides,
@@ -166,10 +165,7 @@ describe("<WindowHostModal />", () => {
   });
 
   it("update-host: a NON-target incompatible host explains why it cannot be updated here", () => {
-    // Arm 3 of `deriveNoHostVariant`. The action is withheld upstream because
-    // this machine's provisioning cannot fix another machine's host - so the
-    // copy has to say that, or the card reads as "update the host" beside no
-    // button, which is an unexplained gap rather than an honest absence.
+    // The action is withheld upstream because this machine's provisioning cannot fix another machine's host.
     const detail: SelectionIncompatibility = {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
@@ -266,10 +262,8 @@ describe("<WindowHostModal />", () => {
 });
 
 describe("<WindowHostModal /> update-client (epoch rejection)", () => {
-  // Typed at the CONTRACT rather than inferred: a `typeof requirement`
-  // override type narrows every member to the literal this fixture happens to
-  // use, so the "host could not read a version" case below - the whole point
-  // of the second arm - would not type-check.
+  // Typed at the contract rather than inferred: a `typeof requirement` override type narrows every member to the
+  // literal this fixture happens to use, so the "host could not read a version" case below.
   const requirement: ClientCompatibilityRequirement = {
     minimumCompatibilityEpoch: 2,
     observedCompatibilityEpoch: 1,
@@ -294,9 +288,8 @@ describe("<WindowHostModal /> update-client (epoch rejection)", () => {
         isTargetHost: true,
         requirement: { ...requirement, ...overrides },
       },
-      // The narrator withholds this on the update-client arm; passed as `null`
-      // here so the assertion below is about the COMPONENT's own refusal to
-      // draw a host action, not about the caller happening not to supply one.
+      // The narrator withholds this on the update-client arm; passed as `null` here so the assertion below is about
+      // the component's own refusal to draw a host action, not about the caller happening not to supply one.
       onUpdateHost: null,
     });
   }
@@ -342,9 +335,8 @@ describe("<WindowHostModal /> update-client (epoch rejection)", () => {
   });
 
   it("keeps Report issue available as a secondary action", () => {
-    // The shell decides whether reporting exists at all; this arm's job is to
-    // ASK for it (`showReportIssue`), which is invisible unless the store says
-    // the affordance is available.
+    // The shell decides whether reporting exists at all; this arm's job is to ask for it (`showReportIssue`),
+    // which is invisible unless the store says the affordance is available.
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     renderModalWithProviders(updateClientProps({}));
     expect(screen.getByRole("button", { name: /report issue/i })).toBeTruthy();

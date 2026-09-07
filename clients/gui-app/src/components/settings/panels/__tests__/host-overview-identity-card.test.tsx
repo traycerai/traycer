@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -64,12 +62,6 @@ import {
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { hostQueryKeys } from "@/lib/query-keys";
 
-/**
- * `HostIdentityCard`'s restructure (`host-identity-card.tsx`): `actions` moved
- * into a footer bar, the `via relay… / ws://… pid N` endpoint row is deleted,
- * a session-count chip replaced it, and `ThisWindowCard` no longer renders on
- * the Overview — its boolean now rides an `Active` tag plus a footer button.
- */
 
 afterEach(() => {
   cleanup();
@@ -147,19 +139,12 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
-    // Waiting on the NAME rather than the button itself: the pencil renders
-    // immediately but stays disabled (`!loaded`) until `host.identity.get`
-    // answers, and a click on a disabled control is a no-op jsdom silently
-    // absorbs rather than surfaces as a failure.
+    // Waiting on the name rather than the button itself.
     await screen.findByText("Studio Mac");
     fireEvent.click(screen.getByRole("button", { name: "Edit name" }));
 
-    // IN PLACE, not a new row: the input replaces the `<h2>` rather than
-    // opening an editor band beneath it (`useInlineRename`, the same hook the
-    // tab strips use). Both halves are asserted, because the old editor also
-    // put an input on screen — what makes this the fixed behaviour is that the
-    // heading is GONE while it is up, so the card does not grow and shove
-    // everything below it down as you reach for it.
+    // IN place, not a new row: the input replaces the `<h2>` rather than opening an editor band beneath it
+    // (`useInlineRename`, the same hook the tab strips use).
     const input = await screen.findByTestId<HTMLInputElement>(
       "host-overview-name-input",
     );
@@ -183,8 +168,8 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
     renderPanel(undefined);
 
     await screen.findByText("Studio Mac");
-    // Pinned as ABSENT rather than left un-asserted: a reader who remembers
-    // this row would otherwise assume it moved rather than went.
+    // Pinned as absent rather than left un-asserted: a reader who remembers this row would otherwise assume it
+    // moved rather than went.
     expect(screen.queryByTestId("host-overview-endpoint")).toBeNull();
   });
 });
@@ -291,9 +276,8 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
-    // The identity card mounts before `host.status` answers — "not yet
-    // known" and "known zero" are different facts, and rendering the chip
-    // here would be claiming an answer the host has not given.
+    // The identity card mounts before `host.status` answers - "not yet known" and "known zero" are different
+    // facts, and rendering the chip here would be claiming an answer the host has not given.
     await screen.findByText("Studio Mac");
     expect(screen.queryByTestId("host-active-sessions")).toBeNull();
 
@@ -356,10 +340,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
       });
     });
 
-    // Prove the invalidation actually matched and a refetch is in flight
-    // (gated on refetchGate) - otherwise a wrong query key would leave the
-    // initial render on screen and the retained-content assertion below
-    // would pass vacuously.
+    // Prove the invalidation actually matched and a refetch is in flight (gated on refetchGate).
     await waitFor(() => {
       expect(statusCalls).toBe(2);
     });
@@ -406,10 +387,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     renderPanel(undefined);
 
     const button = await screen.findByTestId("host-make-active");
-    // "Activate", paired with the "Active" state it produces. The old label
-    // was "Use in this window" beside an "Active" badge — two vocabularies for
-    // one boolean, which is what made the badge and the button read as
-    // unrelated controls.
+    // "Activate", paired with the "Active" state it produces.
     expect(button.textContent).toBe("Activate");
     fireEvent.click(button);
     expect(makeActive).toHaveBeenCalledWith("host-a");
@@ -432,21 +410,8 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
   });
 });
 
-/**
- * A rejected `host.identity.get`, and the button it puts in the pencil's place.
- *
- * The state under test is the one BETWEEN the two reads. `failed` used to be
- * `identityQuery.isError`, and TanStack returns a query with no data behind it
- * to `pending` the moment a refetch starts (`fetchState` clears `error`) — so
- * the arm holding the retry button unmounted on the click that started the
- * retry, and the disabled pencil flickered in for the length of the read. The
- * three tests below pin the whole cycle rather than only the fix: the in-flight
- * window, and BOTH settled exits, because the counter the fix reads
- * (`errorUpdateCount`) never resets and "does the button then latch forever" is
- * the first thing that has to be answered.
- */
+/** The three tests below pin the whole cycle rather than only the fix. */
 describe("<HostSettingsPanel /> Overview identity card — the failed-name retry", () => {
-  /** A fixture whose identity read fails, then parks until the test releases it. */
   function buildRetryFixture(second: {
     readonly gate: Promise<void>;
     readonly succeeds: boolean;
@@ -480,11 +445,8 @@ describe("<HostSettingsPanel /> Overview identity card — the failed-name retry
     renderPanel(undefined);
   }
 
-  /**
-   * The native `disabled` property, not `toBeDisabled()`: jest-dom's matchers
-   * are not wired into this suite, so the matcher would be undefined rather
-   * than failing informatively.
-   */
+  /** The native `disabled` property, not `toBeDisabled`: jest-dom's matchers are not wired into this suite, so
+   * the matcher would be undefined rather than failing informatively. */
   function isDisabled(element: HTMLElement): boolean {
     return element instanceof HTMLButtonElement && element.disabled;
   }
@@ -500,9 +462,8 @@ describe("<HostSettingsPanel /> Overview identity card — the failed-name retry
     mountRetryPanel(fixture);
 
     const retry = await screen.findByTestId("host-overview-retry-identity");
-    // Idle: worded, pressable, and NOT spinning. The spinner's absence here is
-    // what makes its presence below evidence of the retry rather than of the
-    // button simply always carrying one.
+    // The spinner's absence here is what makes its presence below evidence of the retry rather than of the button
+    // simply always carrying one.
     expect(retry.textContent).toBe("Retry name");
     expect(isDisabled(retry)).toBe(false);
     expect(
@@ -511,9 +472,8 @@ describe("<HostSettingsPanel /> Overview identity card — the failed-name retry
 
     fireEvent.click(retry);
 
-    // The whole point of the fix, and an equality rather than a tolerance: the
-    // SAME button is still on screen, now spinning. `findBy` would pass on a
-    // remount too, so the node identity is asserted directly.
+    // The whole point of the fix, and an equality rather than a tolerance: the same button is still on screen, now
+    // spinning. `findBy` would pass on a remount too, so the node identity is asserted directly.
     expect(
       await screen.findByTestId("host-overview-retry-identity-spinner"),
     ).toBeTruthy();
@@ -541,10 +501,8 @@ describe("<HostSettingsPanel /> Overview identity card — the failed-name retry
 
     fireEvent.click(await screen.findByTestId("host-overview-retry-identity"));
 
-    // `errorUpdateCount` never returns to zero, so this is the assertion that
-    // says the fix reads it as one half of a conjunction and not on its own:
-    // a settled identity retires the retry arm however many times it failed
-    // before.
+    // `errorUpdateCount` never returns to zero, so this is the assertion that says the fix reads it as one half of
+    // a conjunction and not on its own.
     const pencil = await screen.findByRole("button", { name: "Edit name" });
     expect(isDisabled(pencil)).toBe(false);
     expect(screen.queryByTestId("host-overview-retry-identity")).toBeNull();

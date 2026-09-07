@@ -24,27 +24,14 @@ import {
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { epicMutationKeys } from "@/lib/query-keys";
 
-/**
- * What a visibility mutation has to remember to refresh the right viewer's
- * cache afterwards: the host it was actually sent to, and the viewer whose
- * ACL-filtered list it wrote, both captured at mutate time so a host or
- * account swap in flight cannot redirect the write at another cache slot.
- */
+/** What a visibility mutation has to remember to refresh the right viewer's cache afterwards: the host it was actually sent to, and the viewer whose ACL-filtered list it wrote, both captured at mutate time so a host or account swap in flight cannot redirect the write at another cache slot. */
 interface CloudChatVisibilityMutationContext {
   readonly hostId: string | null;
   readonly viewerUserId: string;
 }
 
 /**
- * Mutation hook for `epic.setCloudChatVisibility` (optional host capability).
- *
- * Flips one cloud chat's visibility. Scoped to the surrounding Epic session's
- * owning host: the sidebar is outside every tile-level `TabHostProvider`, so
- * the write must follow the Epic stream that projected these rows.
- *
- * On success the returned row is folded into the viewer's list cache and every
- * cloud-chat read keyed for that viewer is invalidated. `{ chat }` is the
- * authority — there is no second list hop.
+ * Session-host write: the sidebar sits outside every tile `TabHostProvider`. `{ chat }` is the authority; there is no second list hop.
  */
 export function useEpicSetCloudChatVisibility(): UseMutationResult<
   SetCloudChatVisibilityResponse,
@@ -102,15 +89,7 @@ export function useEpicSetCloudChatVisibility(): UseMutationResult<
 }
 
 /**
- * Mutation hook for `epic.setChatSharingDefault` (optional host capability).
- *
- * Writes this caller's per-task default visibility and, when
- * `applyToExisting` is true, bulk-updates every chat they already own on the
- * task. Same Epic-session host scope as the per-chat flip.
- *
- * The response is a count, not the rows, so the list cache is patched by
- * applying the written visibility to every own row and the viewer's
- * cloud-chat reads are invalidated.
+ * Response is a count, not rows. Patch own rows with the written visibility and invalidate the viewer's cloud-chat reads.
  */
 export function useEpicSetChatSharingDefault(): UseMutationResult<
   SetChatSharingDefaultResponse,

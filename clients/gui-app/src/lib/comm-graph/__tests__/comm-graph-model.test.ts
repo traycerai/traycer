@@ -168,9 +168,8 @@ describe("aggregateCommGraphEdges", () => {
   });
 
   it("re-opens a reused responseId when every row shares one timestamp", () => {
-    // Request, reply, and a re-opening request routinely land in the same
-    // millisecond. Wall clock alone cannot order them; the host's monotonic row
-    // id can, and both ends of an A2A exchange live on one host.
+    // Request, reply, and a re-opening request routinely land in the same millisecond.
+    // Wall clock alone cannot order them; the host's monotonic row id can, and both ends of an A2A exchange live on one host.
     const edges = aggregateCommGraphEdges(
       [
         a2a({ id: 1, timestamp: 100, expectReply: true, responseId: "r1" }),
@@ -190,9 +189,7 @@ describe("aggregateCommGraphEdges", () => {
   });
 
   it("keeps a post-rollback request open when its clock reads EARLIER than the reply", () => {
-    // The host's clock stepped backwards between the reply and the next
-    // request, so wall-clock ordering would place the new request before the
-    // reply that preceded it and mark it answered. Row id is the causal order.
+    // The host's clock stepped backwards between the reply and the next request, so wall-clock ordering would place the new request before the reply that preceded it and mark it answered.
     const edges = aggregateCommGraphEdges(
       [
         a2a({ id: 1, timestamp: 100, expectReply: true, responseId: "r1" }),
@@ -358,9 +355,8 @@ describe("layoutCommGraphNodes", () => {
   });
 
   it("pulls conversing agents together rather than leaving them at opposite ends", () => {
-    // Two lineage siblings, only one of which talks to the third agent. Feeding
-    // the pair edge to the layout is what stops the talkers reading as
-    // unrelated - the old hand-rolled pass placed by lineage order alone.
+    // Two lineage siblings, only one of which talks to the third agent.
+    // Feeding the pair edge to the layout is what stops the talkers reading as unrelated - the old hand-rolled pass placed by lineage order alone.
     const nodes = [
       agent("root", null, 1),
       agent("far", "root", 2),
@@ -381,10 +377,7 @@ describe("layoutCommGraphNodes", () => {
   });
 
   it("places an identical topology identically, whatever order the pairs arrived in", () => {
-    // The aggregation yields pairs in Map insertion order - "whichever spoke
-    // first" - so a late row on an existing pair can reorder the layout input
-    // for a graph that has not actually changed. Positions must not move under
-    // the user because of that.
+    // The aggregation yields pairs in Map insertion order - "whichever spoke first" - so a late row on an existing pair can reorder the layout input for a graph that has not actually changed.
     const nodes = [
       agent("root", null, 1),
       agent("b", "root", 2),
@@ -415,10 +408,8 @@ describe("layoutCommGraphNodes", () => {
 });
 
 /**
- * ADDENDUM 7: an edge carries no statistics - its one adornment is the
- * "awaiting reply" chip (plus dashing), and this flag is the whole of what
- * decides it. React Flow edges do not mount in jsdom, so the flag is where that
- * behaviour is pinned; the chip's own rendering is a dev-app check.
+ * ADDENDUM 7: an edge carries no statistics - its one adornment is the "awaiting reply" chip (plus dashing), and this flag is the whole of what decides it.
+ * React Flow edges do not mount in jsdom, so the flag is where that behaviour is pinned; the chip's own rendering is a dev-app check.
  */
 describe("open-thread lifecycle - the edge's only adornment", () => {
   it("leaves a settled pair with nothing to show", () => {

@@ -1,16 +1,9 @@
 /**
  * Canonical AuthenticatedUser test fixture for traycer-agents tests.
- *
- * Every field required by the real authn service contract is present so that
- * future model changes cause compile-time failures rather than silent
- * runtime mismatches.
+ * Every field required by the real authn service contract is present so that future model changes cause compile-time failures rather than silent runtime mismatches.
  */
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 
-/**
- * Returns a deeply-populated AuthenticatedUser fixture.
- * Pass overrides to customise individual fields per test.
- */
 export function createAuthenticatedUserFixture(
   overrides: Partial<AuthenticatedUser> | undefined,
 ): AuthenticatedUser {

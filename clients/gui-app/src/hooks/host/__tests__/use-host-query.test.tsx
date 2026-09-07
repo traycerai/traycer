@@ -57,11 +57,7 @@ describe("useHostQuery auth readiness", () => {
     expect(fixture.requestCount.value).toBe(0);
     expect(rendered.result.current.fetchStatus).toBe("idle");
 
-    // A directory refresh is what wakes `useReactiveHostReadiness`'s
-    // registry subscription in production (`HostRuntime`'s
-    // `requestContextProvider.onChange` pairs every `setRequestContext` with
-    // `directory.refreshForEra`) - this bare-`HostClient` fixture has no
-    // `HostRuntime`/directory installed, so it fires the same wake by hand.
+    // A directory refresh is what wakes `useReactiveHostReadiness`'s registry subscription in production (`HostRuntime`'s `requestContextProvider.onChange` pairs every `setRequestContext` with `directory.refreshForEra`) - this bare-`HostClient` fixture has no `HostRuntime`/directory installed, so it fires the same wake by hand.
     installHostConnectionRegistrySource({
       directory: {
         findById: () => mockLocalHostEntry,
@@ -412,11 +408,7 @@ describe("useHostQuery auth readiness", () => {
   });
 });
 
-// The `HostRpcError` error generic on these hooks is an unchecked assertion:
-// TypeScript cannot type a promise's rejection channel, so a bare throw
-// anywhere inside the queryFn/mutationFn would reach `.code`-reading
-// consumers as a foreign shape (the git diff white-screen). These tests pin
-// the boundary that makes the declared type true by construction.
+// The `HostRpcError` error generic on these hooks is an unchecked assertion: TypeScript cannot type a promise's rejection channel, so a bare throw anywhere inside the queryFn/mutationFn would reach `.code`-reading consumers as a foreign shape (the git diff white-screen).
 describe("host query/mutation HostRpcError boundary", () => {
   afterEach(() => {
     cleanup();

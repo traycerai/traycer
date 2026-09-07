@@ -14,11 +14,8 @@ import type { ConflictResult } from "@/lib/keybindings/conflicts";
 const NO_MODIFIER_MESSAGE =
   "Global shortcuts need at least one modifier key (⌘, Ctrl, Shift, or Alt).";
 
-/**
- * Result of validating a just-captured chord: the conflict message to show,
- * and whether it blocks the capture from committing (a true conflict) or is
- * warn-only (an OS-clash chord that still gets bound).
- */
+/** Result of validating a just-captured chord: the conflict message to show, and whether it blocks the capture
+ * from committing (a true conflict) or is warn-only (an OS-clash chord that still gets bound). */
 export interface ChordCaptureCheck {
   readonly conflict: ConflictResult;
   readonly blocksCommit: boolean;
@@ -26,54 +23,24 @@ export interface ChordCaptureCheck {
 
 export interface ChordCaptureCoreProps {
   readonly value: ChordString | null;
-  /**
-   * Whether the ⌃ key should be captured distinctly from ⌘ (macOS can't
-   * detect ⌘ key-release, which hold/toggle actions need) - see
-   * `chordFromEventCtrlAware`'s doc for the full rationale. Global shortcuts
-   * have no hold/release semantics, so they always pass `false`.
-   */
+  /** Whether the ⌃ key should be captured distinctly from ⌘ (macOS can't detect ⌘ key-release, which hold/toggle
+   * actions need) - see `chordFromEventCtrlAware`'s doc for the full rationale. */
   readonly controlAware: boolean;
-  /**
-   * Reject a captured chord with no modifier held. A global (OS-level)
-   * shortcut with a bare key (`a`, Space, an arrow) would swallow ordinary
-   * typing system-wide, so the global-shortcut row passes `true`; renderer
-   * keybinding capture is unaffected and always passes `false`.
-   */
+  /** Reject a captured chord with no modifier held. */
   readonly requireModifier: boolean;
-  /**
-   * Disables entering capture mode (and force-cancels an in-progress capture)
-   * while a caller-owned async mutation is in flight - e.g. the global
-   * shortcut row disables this while its `set` invoke is pending, so a user
-   * can't fire overlapping rebind requests. Renderer keybinding capture is a
-   * synchronous local write and always passes `false`.
-   */
+  /** Disables entering capture mode (and force-cancels an in-progress capture) while a caller-owned async
+   * mutation is in flight. */
   readonly disabled: boolean;
-  /**
-   * The chord that clearing (Backspace) resolves to for conflict-checking
-   * purposes, or `null` when clearing simply unbinds (no chord becomes
-   * effective, so there's nothing to check). The global shortcut row passes
-   * the definition's default chord - `chord: null` there persists as "use
-   * the default", which is a real, live chord exactly as reservable as one
-   * the user captures directly (decision 6: every commit path, including
-   * clear-to-default, runs the conflict check). Renderer keybinding capture
-   * passes `null` - unbinding an action is always safe.
-   */
+  /** Renderer keybinding capture passes `null` - unbinding an action is always safe. */
   readonly clearResolvesTo: ChordString | null;
-  /** Interpolated into "Rebind {label}" / "Recording new chord for {label}". */
   readonly label: string;
   readonly checkConflict: (candidate: ChordString) => ChordCaptureCheck | null;
   readonly onCapture: (chord: ChordString) => void;
   readonly onClear: () => void;
 }
 
-/**
- * Click-to-capture chord input, extracted from the action-scoped
- * `ChordCaptureInput` so the desktop global-shortcut settings row can reuse
- * the exact capture mechanics (click to arm, next full chord keydown commits,
- * Escape cancels, Backspace clears, blur cancels) without being coupled to a
- * renderer `ActionId` or `useKeybindingStore` - conflict-checking and the
- * committed value are both supplied by the caller.
- */
+/** Click-to-capture chord input, extracted from the action-scoped `ChordCaptureInput` so the desktop
+ * global-shortcut settings row can reuse the exact capture mechanics (click to arm. */
 export function ChordCaptureCore(props: ChordCaptureCoreProps) {
   const {
     value,
@@ -214,11 +181,7 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
   );
 }
 
-/**
- * What a capturing keydown should do, decided as pure data so the event
- * handler itself stays a simple dispatch table. `null` means "not a
- * complete chord yet, ignore" (e.g. a modifier-only combination).
- */
+/** `null` means "not a complete chord yet, ignore" (e.g. a modifier-only combination). */
 type ChordKeyDownDecision =
   | { readonly kind: "cancel" }
   | { readonly kind: "block"; readonly conflict: ConflictResult }

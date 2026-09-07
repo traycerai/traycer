@@ -26,15 +26,7 @@ function getGlobalClient(): HostClient<HostRpcRegistry> {
 }
 
 /**
- * Mirrors `lib/host/runtime.ts`'s `useHostClient` exactly: the SELECTION
- * LAYER's effective host id, resolved through the spine's uniform requester.
- *
- * Reads the authority store rather than the spine's bound slot. Those agree
- * in production, so a slot-derived mirror passed here for the wrong reason -
- * and would keep passing after the slot is deleted (P4.2), long after the
- * thing it claims to mirror had stopped existing. No case below reads this
- * branch; it is kept faithful so the first one that does gets ∅ and a fixture
- * that must NAME its effective host, rather than a quietly wrong answer.
+ * Mirror `useHostClient` from the authority store, not the spine's bound slot. A slot-derived stand-in would keep passing after the slot is gone.
  */
 function getFollowingClient(): HostClient<HostRpcRegistry> {
   return getGlobalClient().createRequesterForHostId(
@@ -53,11 +45,7 @@ vi.mock("@/lib/host", () => ({
   useHostRuntimeClient: getGlobalClient,
 }));
 
-// Two distinct hooks since redesign P2.1: `useHostRuntimeClient` is the
-// SPINE (what a host id is resolved against) and `useHostClient` is the
-// effective host resolved through it. These tests only exercise EXPLICIT ids,
-// so the following-client mirror below exists to keep the mock honest about
-// the shape, not because a case reads it.
+// These tests only exercise EXPLICIT ids, so the following-client mirror below exists to keep the mock honest about the shape, not because a case reads it.
 vi.mock("@/lib/host/runtime", () => ({
   useHostRuntimeClient: getGlobalClient,
   useHostClient: getFollowingClient,
@@ -200,10 +188,7 @@ describe("useHostClientForHostId", () => {
       throw new Error("Expected an explicit-host requester");
     }
 
-    // The switch happens without a React re-render, matching the vulnerable
-    // window between the app-wide host moving and React consuming that move.
-    // Expressed as a POINTER move now: the slot this used to bind is gone, and
-    // "the default host switched" is a fact about the selection layer.
+    // The switch happens without a React re-render, matching the vulnerable window between the app-wide host moving and React consuming that move.
     useSelectionAuthorityStore.getState().applyKernelSnapshot({
       attached: true,
       preferredHostId: TARGET_B.hostId,

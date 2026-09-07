@@ -11,10 +11,7 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: useHostNotificationIndicatorsMock,
 }));
 
-// The tile now offers jump-to-source, so it reaches `useEpicTileNavigation` ->
-// `useRouter`. A non-router value is the hook's documented degrade path (it
-// falls back to preparing the focus target without navigating), which is all
-// these canvas-focused cases need.
+// A non-router value is the hook's documented degrade path (it falls back to preparing the focus target without navigating), which is all these canvas-focused cases need.
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
   useRouter: () => null,
@@ -37,25 +34,11 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostDirectory: () => hostDirectoryMock,
-  // `EpicSessionProvider` folds the host binding's owner identity into its
-  // rebuild decision; a null binding is the legitimate "directory not bound
-  // yet" state and keeps the identity key null.
+  // `EpicSessionProvider` folds the host binding's owner identity into its rebuild decision; a null binding is the legitimate "directory not bound yet" state and keeps the identity key null.
   useHostBinding: () => null,
 }));
 
-// The epic session and the comm-graph fan-in both build durable transports.
-// This stub used to THROW on the reasoning that neither would reach it. Half of
-// that reasoning is gone: the session's stream-factory override was deleted, so
-// `EpicSessionProvider` now opens a transport unconditionally and the throw
-// failed every test here.
-//
-// The comm-graph half still holds, and by construction rather than by this
-// stub: `use-comm-graph-snapshot.ts` builds its opener as
-// `localOpenerOverride ?? createCommGraphSubscriptionOpener(openTransport)`, and
-// `??` short-circuits - with `__setCommGraphSubscriptionOpenerForTests`
-// installed the wrapped opener is never even constructed, let alone invoked.
-// What the throw added on top of that was redundancy, and it is what is lost
-// here; the primary guarantee is the override, which this file still installs.
+// The comm-graph half still holds, and by construction rather than by this stub: `use-comm-graph-snapshot.ts` builds its opener as `localOpenerOverride ?? createCommGraphSubscriptionOpener(openTransport)`, and `??` short-circuits - with `__setCommGraphSubscriptionOpenerForTests` installed the wrapped opener is never even constructed, let alone invoked.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -76,9 +59,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
 }));
 
-// The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// The Epic session resolves its host through the selection authority's derived pointer (selection model §1), not the active-host projection above - seed the decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -87,12 +68,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
-// Nodes render `WorktreeOwnerMetadataTooltip` for their hover card, which
-// derives PR pills from `pr.subscribeListForEpic` via this hook - unmocked,
-// it reaches for `useHostDirectoryEntryForHostId` (absent from the partial
-// host-client mock above) and a real stream client, neither of which this
-// file provides. This suite is about comm-graph node projection, not PR
-// pills, so an inert result suffices.
 vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
   useOwnerListPrReferences: () => ({
     references: [],
@@ -195,11 +170,6 @@ function seedEmptyDoc(doc: Y.Doc): void {
   epic.set("chats", new Y.Map<unknown>());
 }
 
-/**
- * Every case below asserts on React Flow nodes, so the tile is opened in the
- * NODE-GRAPH mode explicitly. The tile's own default is the office floor, which
- * draws to a canvas and mounts no nodes at all.
- */
 function graphModeTileRef(): CommGraphTileRef {
   const ref = makeCommGraphTileRef(EPIC_ID);
   return { ...ref, view: { ...ref.view, mode: "graph" } };
@@ -262,19 +232,8 @@ afterEach(() => {
 });
 
 /**
- * Integrated: real epic projection + real canvas store, with only the stream
- * boundary faked (`__setCommGraphSubscriptionOpenerForTests`).
- *
- * KNOWN jsdom GAP: React Flow renders an edge only after BOTH endpoint nodes
- * have been measured, and jsdom reports every element as 0x0 with a
- * ResizeObserver that never fires - so edges (and their labels) never mount
- * here. Edge behaviour is covered where it actually lives instead:
- * aggregation, counts, last activity and open-thread detection in
- * `lib/comm-graph/__tests__/comm-graph-model.test.ts`, and the click-through
- * message list in `comm-graph-thread-panel.test.tsx`. What is left to the
- * dev-app check is purely the rendered edge itself: that the label shows
- * count + relative last activity, dashes for an open thread, and opens the
- * message list on click.
+ * Integrated: real epic projection + real canvas store, with only the stream boundary faked (`__setCommGraphSubscriptionOpenerForTests`).
+ * KNOWN jsdom GAP: React Flow renders an edge only after BOTH endpoint nodes have been measured, and jsdom reports every element as 0x0 with a ResizeObserver that never fires - so edges (and their labels) never mount here.
  */
 describe("CommGraphTile", () => {
   it("registers a ready zero-result Find adapter for an empty graph", async () => {
@@ -345,14 +304,8 @@ describe("CommGraphTile", () => {
         screen.getByTestId(`comm-graph-node-${LEGACY_CHAT_ID}`),
       ).toBeDefined();
     });
-    // Rendered, marked, and NOT attributed to the app's active host - which
-    // would otherwise move the node (and reset that host's subscription,
-    // events and cursor) every time the user switched hosts elsewhere.
-    // `host-unknown` is a property of the agent's OWN record (a legacy chat
-    // predating `Chat.hostId`), never a subscription status, so it can never
-    // reach `snapshot.hosts` and the header's feed-health dot has no way to
-    // roll it up - the node is the only place this can ever be surfaced, and
-    // it stays captioned here even though the transport statuses do not.
+    // Rendered, marked, and NOT attributed to the app's active host - which would otherwise move the node (and reset that host's subscription, events and cursor) every time the user switched hosts elsewhere.
+    // `host-unknown` is a property of the agent's OWN record (a legacy chat predating `Chat.hostId`), never a subscription status, so it can never reach `snapshot.hosts` and the header's feed-health dot has no way to roll it up - the node is the only place this can ever be surfaced, and it stays captioned here even though the transport statuses do not.
     expect(
       screen
         .getByTestId(`comm-graph-node-${LEGACY_CHAT_ID}`)

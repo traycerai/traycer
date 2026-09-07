@@ -73,9 +73,6 @@ describe("ProfileSelection / ConcreteProfileSelection schemas", () => {
   });
 
   it("rejects the reserved ambient sentinel as a managed profileId, but keeps normal ids and the explicit ambient arm valid", () => {
-    // The contradictory shape a direct RPC caller could otherwise construct:
-    // a "profile" arm naming the "ambient" sentinel instead of using the
-    // dedicated { kind: "ambient" } arm (batch-2 review finding).
     expect(
       profileSelectionSchema.safeParse({
         kind: "profile",
@@ -280,12 +277,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
   });
 
   it("rejects the ambient sentinel as agent.create@2.0's managed profileId, even reconstructed through the v1->v2 upgrade bridge", () => {
-    // The registry-level schema is the actual enforcement boundary: the
-    // upgrade bridge itself is a plain mapping function (batch-1's frozen
-    // v1.0 wire has no way to express the distinction), so a legacy v1
-    // caller that happened to persist the literal string "ambient" as a
-    // profile id upgrades into the contradictory shape - the v2.0 request
-    // schema is what must reject it once parsed at the RPC boundary.
+    // The registry-level schema is the actual enforcement boundary: the upgrade bridge itself is a plain mapping function (batch-1's frozen v1.0 wire has no way to express the distinction), so a legacy v1 caller that.
     const upgraded = agentCreateUpgradeV10ToV20.upgradeRequest({
       ...baseV1Request,
       profileId: AMBIENT_PROFILE_ID_SENTINEL,
@@ -329,16 +321,11 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
   });
 
   it("has no independent kind field that could disagree with the selection - a contradictory kind is never trusted", () => {
-    // `selection.kind` is the sole ambient-vs-managed discriminant; there is
-    // no separate `kind` property left on the schema for a caller to set
-    // inconsistently (batch-1 review correction).
     expect(agentProviderProfileSummarySchema.shape).not.toHaveProperty("kind");
 
     const summary = agentProviderProfileSummarySchema.parse({
       selection: { kind: "ambient" },
-      // A stale/contradictory extra key a pre-amendment caller might still
-      // send - non-strict `z.object` drops it, so it can never surface as a
-      // disagreeing `kind`.
+      // A stale/contradictory extra key a pre-amendment caller might still send - non-strict `z.object` drops it, so it can never surface as a disagreeing `kind`.
       kind: "managed",
       label: "Terminal account",
       authStatus: "authenticated",
@@ -448,17 +435,12 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
   });
 
   it("has no independent providerId field that could disagree with rateLimits.provider", () => {
-    // The provider identity lives solely on `rateLimits.provider` (every arm,
-    // including `available: false`, carries it); there is no outer field for
-    // a caller to set inconsistently (batch-1 review correction).
     expect(
       agentGetProviderProfileRateLimitsResponseSchema.shape,
     ).not.toHaveProperty("providerId");
 
     const response = agentGetProviderProfileRateLimitsResponseSchema.parse({
-      // A stale/contradictory outer field a pre-amendment caller might still
-      // send - non-strict `z.object` drops it, so it can never surface as a
-      // disagreeing provider identity.
+      // A stale/contradictory outer field a pre-amendment caller might still send - non-strict `z.object` drops it, so it can never surface as a disagreeing provider identity.
       providerId: "claude-code",
       rateLimits: { provider: "codex", available: false, reason: "timeout" },
       usageUpdatedAt: null,
@@ -575,15 +557,8 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // All three now sit on the v5.0 line. Major 4 DID ship - the v1.2.0 tags
-    // (2026-08-24) carry it - so the sentence this comment used to end with
-    // ("since 4 has never shipped") stopped being true, and with it the reason
-    // these three could keep absorbing ids in place. `reasonix` opened major 5
-    // on each, with fail-closed v5->v4 bridges.
-    // `supportedMajors` is every major the line INSTALLS, so opening major 5
-    // widens it to [1..5] on all three. It is not a restatement of `major`:
-    // `major` is the canonical one a peer picks by default, `supportedMajors`
-    // is the set it can still be talked down to.
+    // All three now sit on the v5.0 line.
+    // `reasonix` opened major 5 on each, with fail-closed v5->v4 bridges.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
       major: 5,
       minor: 0,
@@ -647,10 +622,7 @@ describe("optional-method capability negotiation", () => {
       hostRpcRegistry["agent.getProviderProfileRateLimits"][3].versions[0]
         .contract.schemaVersion,
     ).toEqual({ major: 3, minor: 0 });
-    // The Hugging-Face-inclusive lines: the v3.0 lines above are frozen
-    // pre-huggingface (cli-v1.1.9 shipped them), v4.0 carries the id. Asserted
-    // so an accidental repin of a v4.0 contract fails here rather than only in
-    // the tag-based compat gate.
+    // The Hugging-Face-inclusive lines: the v3.0 lines above are frozen pre-huggingface (cli-v1.1.9 shipped them), v4.0 carries the id.
     expect(
       hostRpcRegistry["agent.listProviderProfiles"][4].versions[0].contract
         .schemaVersion,
@@ -710,9 +682,7 @@ describe("agent.listProviderProfiles v1 <-> v2 hermes-provider translation", () 
     expect(downgraded.error.message).toMatch(/newer Traycer client/i);
   });
 
-  // omp lives only on v3.0: the v1.1.8 tags froze v2.0 with the 17-id enum, so
-  // an omp response cannot even be constructed at v2.0 any more - the bridges
-  // under test start at v3.0.
+  // omp lives only on v3.0: the v1.1.8 tags froze v2.0 with the 17-id enum, so an omp response cannot even be constructed at v2.0 any more - the bridges under test start at v3.0.
   it("downgrades a pre-omp v3.0 response to v2.0 as a pure pass-through", () => {
     const downgraded =
       agentListProviderProfilesDowngradeV30ToV20.downgradeResponse(
@@ -790,17 +760,11 @@ describe("agent.getProviderProfileRateLimits v1 <-> v2 hermes-provider translati
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    // The message was generalized when grok joined the bridge: an
-    // unrepresentable provider (Hermes here) no longer names itself, since the
-    // bridge now pre-maps grok-available to the unavailable shape rather than
-    // failing closed on it.
     expect(downgraded.error.message).toMatch(/newer Traycer client/i);
   });
 
   it("degrades a grok-available rate-limit read to unsupported_provider (never errors)", () => {
-    // Grok is in the frozen provider enum (it predates Hermes), so a
-    // grok-available snapshot degrades to the unavailable shape a v1.0 host
-    // returns for grok today - credit/period fields must be gone after reparse.
+    // Grok is in the frozen provider enum (it predates Hermes), so a grok-available snapshot degrades to the unavailable shape a v1.0 host returns for grok today - credit/period fields must be gone after reparse.
     const downgraded =
       agentGetProviderProfileRateLimitsDowngradeV20ToV10.downgradeResponse({
         rateLimits: {
@@ -1018,12 +982,7 @@ describe("agent.getProviderProfileRateLimits v4 OpenCode downgrade", () => {
     ).toEqual({ ok: true, value: openCodeUnsupported });
   });
 
-  // The AVAILABLE arm is the one the maps rewrite; an already-unavailable
-  // OpenCode row passes them untouched and is degraded by the frozen re-parse
-  // alone. That is only safe because `opencode` is a member of the pinned
-  // `providerIdSchemaV40` enum, so the older `available: false` arm accepts the
-  // id rather than failing the union - the collapse onto 4.0 made this path
-  // reachable for every peer, not just a hypothetical 5.0 one.
+  // The AVAILABLE arm is the one the maps rewrite; an already-unavailable OpenCode row passes them untouched and is degraded by the frozen re-parse alone.
   it("strips the cache generation from an unavailable OpenCode snapshot on every v4 bridge, keeping its reason", () => {
     const openCodeUnavailable = {
       rateLimits: {
@@ -1166,12 +1125,8 @@ describe("Epic Mode removal — agentMode is RETAINED on the released wires", ()
     warnings: [],
   };
 
-  // `agent.configure` v3.0 is RELEASED: its baseline surface requires
-  // `settings.agentMode` on the response, so a payload built from this tree
-  // that omitted it would be rejected outright by an already-shipped peer.
-  // Epic Mode is gone from the PRODUCT, but the key stays on the wire until
-  // the released floor passes this version. The host states the one
-  // remaining mode rather than dropping the field.
+  // `agent.configure` v3.0 is RELEASED: its baseline surface requires `settings.agentMode` on the response, so a payload built from this tree that omitted it would be rejected outright by an already-shipped peer.
+  // Epic Mode is gone from the PRODUCT, but the key stays on the wire until the released floor passes this version.
   it("keeps agentMode required on the live configure response", () => {
     expect(
       agentConfigureResponseSchema.safeParse({
@@ -1188,10 +1143,8 @@ describe("Epic Mode removal — agentMode is RETAINED on the released wires", ()
     expect(parsed.settings.agentMode).toBe("regular");
   });
 
-  // The field is present on every version in the chain, so no bridge has to
-  // synthesize it - each simply passes through what its input carried. A
-  // legacy "epic" value must survive rather than be normalized away: these
-  // bridges translate an existing wire payload, they do not mint new records.
+  // The field is present on every version in the chain, so no bridge has to synthesize it - each simply passes through what its input carried.
+  // A legacy "epic" value must survive rather than be normalized away: these bridges translate an existing wire payload, they do not mint new records.
   it.each([
     ["v3.0 -> v2.0", agentConfigureDowngradeV30ToV20],
     ["v3.0 -> v1.0", agentConfigureDowngradeV30ToV10],
@@ -1210,9 +1163,8 @@ describe("Epic Mode removal — agentMode is RETAINED on the released wires", ()
     },
   );
 
-  // v3.0 is itself released (v1.1.8), so a current client and a v1.1.8 host
-  // both negotiate 3.0 with NO bridge between them. The key must survive the
-  // upgrade or that host rejects the request outright.
+  // v3.0 is itself released (v1.1.8), so a current client and a v1.1.8 host both negotiate 3.0 with NO bridge between them.
+  // The key must survive the upgrade or that host rejects the request outright.
   it("keeps agentMode on the released v3.0 create request", () => {
     const upgraded = agentCreateUpgradeV20ToV30.upgradeRequest(
       createAgentRequestSchemaV20.parse({

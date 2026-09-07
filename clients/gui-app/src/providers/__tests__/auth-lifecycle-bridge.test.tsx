@@ -238,10 +238,8 @@ describe("<EpicSessionLifecycleBridge />", () => {
   });
 
   it("drops the Settings host scope on user-switch so it cannot name the prior account's machine", () => {
-    // A host id belongs to an ACCOUNT. Carrying account A's pick into account
-    // B's session opened Settings on a `vanished` host B has never seen and
-    // cannot dismiss without re-picking. `null` restores "follow the active
-    // host", which is the store's unset state, not an empty one.
+    // Clear Settings viewing scope. null means follow the active host, not
+    // empty.
     useSettingsHostScopeStore.getState().setScopedHostId("host-owned-by-alice");
 
     render(
@@ -274,12 +272,8 @@ describe("<EpicSessionLifecycleBridge />", () => {
   });
 
   it("closes the Add-host dialog and drops its fleet snapshot on user-switch", () => {
-    // The dialog store is module-level and carries more than `open`:
-    // `knownHostIds` is the snapshot its arrival watcher diffs against to
-    // decide which machine is NEW. Reset only the scope and account B mounts
-    // Settings into A's open dialog holding A's fleet — so a host B already
-    // owns is absent from that snapshot and gets announced as the machine that
-    // just connected.
+    // Reset only the scope and B mounts Settings into A's open dialog holding
+    // A's knownHostIds, so B's own host is announced as newly connected.
     useAddHostDialogStore.getState().openDialog(["host-owned-by-alice"]);
 
     render(
@@ -313,11 +307,8 @@ describe("<EpicSessionLifecycleBridge />", () => {
   });
 
   it("drops a pending Providers deep-link intent on user-switch", () => {
-    // The most dangerous of the three module-level stores on this boundary:
-    // `focusHostId` names account A's machine and `startSignIn` asks Providers
-    // to begin a sign-in the moment it consumes the intent. Left armed,
-    // account B's Providers could select A's host id and then run A's pending
-    // profile sign-in against whichever host B lands on.
+    // Leftover focusHostId + startSignIn would run A's pending sign-in on B's
+    // host.
     useProvidersFocusStore.getState().setProfileFocus({
       harnessId: "claude",
       hostId: "host-owned-by-alice",
@@ -380,10 +371,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
   });
 
   it("keeps the Settings host scope when the same identity merely re-mounts", () => {
-    // The counterpart of the sessions case below: a hydration is not a
-    // transition, so an explicit pick must survive it. Without this the two
-    // assertions above would also pass for a bridge that cleared the scope on
-    // every render.
+    // Hydration is not a transition. An explicit pick must survive it.
     useSettingsHostScopeStore.getState().setScopedHostId("host-a");
 
     render(

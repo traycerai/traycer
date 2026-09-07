@@ -2,28 +2,12 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import type { ScreencastImage } from "@/lib/browser-view/sessions/use-screencast-session";
 
-/**
- * Best-effort last-known frame per tab, outside React state on purpose.
- *
- * The dormant placeholder (`browser-session-tile.tsx`, decision #9) greys this
- * out when a tab's host goes unreachable - and by then the peek tile has
- * usually already unmounted, since the parent renders the placeholder instead.
- * A frame kept only in that component's state would be gone; this cache is
- * keyed the same way the screencast session is (host+session+tab+tile
- * instance).
- *
- * NOT freed on a tile's own unmount: the same key remounts on every
- * `runtime.revision` bump and again whenever the placeholder hands back to the
- * tile. Freed instead by {@link clearLastBrowserPeekFrame}, called from the one
- * place that knows the tab is genuinely gone rather than merely swapping
- * surfaces.
- */
+/** Best-effort last-known frame per tab, outside React state on purpose. */
 const lastFrameCache = new Map<string, ScreencastImage>();
 
 /**
- * Every tile open/close cycle mints a fresh `instanceId`, so keys are never
- * reused and the targeted `clearLastBrowserPeekFrame` cannot reclaim the
- * strays. Insertion-order eviction bounds what the strays can cost.
+ * Every tile open/close cycle mints a fresh `instanceId`, so keys are never reused and the targeted `clearLastBrowserPeekFrame` cannot reclaim the strays.
+ * Insertion-order eviction bounds what the strays can cost.
  */
 const LAST_FRAME_CACHE_LIMIT = 20;
 
@@ -37,10 +21,8 @@ function retainLastFrame(key: string, image: ScreencastImage): void {
 }
 
 /**
- * The one key builder for a browser peek tile's frame cache / dormant
- * placeholder lookup - host+session+tab+tile-instance. Shared by the tile and
- * by `browser-session-tile.tsx`'s placeholder/self-close reads, so the shape
- * cannot drift between the write side and any of its readers.
+ * The one key builder for a browser peek tile's frame cache / dormant placeholder lookup - host+session+tab+tile-instance.
+ * Shared by the tile and by `browser-session-tile.tsx`'s placeholder/self-close reads, so the shape cannot drift between the write side and any of its readers.
  */
 export function browserPeekFrameKey(node: {
   readonly hostId: string;
@@ -73,17 +55,7 @@ function subscribeToNothing(): () => void {
   return () => {};
 }
 
-/**
- * The dormant placeholder's read of the cache.
- *
- * `useSyncExternalStore` rather than a render-phase `useState` initializer
- * because the write can land BETWEEN this component's render and its commit:
- * React runs destroys before creates, and the video plane writes its dormant
- * snapshot from the peek tile's teardown (`captureDormantSnapshot`) in the very
- * commit that mounts this placeholder. A render-phase read misses that frame;
- * the post-commit snapshot re-check does not. The stored value is a stable
- * object identity, so the re-check settles after one extra render at most.
- */
+/** The dormant placeholder's read of the cache. */
 export function useLastBrowserPeekFrame(key: string): ScreencastImage | null {
   const read = useCallback(() => getLastBrowserPeekFrame(key), [key]);
   return useSyncExternalStore(subscribeToNothing, read, read);
@@ -93,21 +65,7 @@ const VIDEO_SNAPSHOT_JPEG_QUALITY = 0.7;
 const VIDEO_SNAPSHOT_MAX_EDGE_PX = 960;
 
 /**
- * Draws a `<video>` element's currently decoded frame into the same cache the
- * JPEG pump writes, under the same key - so the dormant placeholder still has
- * something to show when a tab's last live pixels arrived over WebRTC.
- *
- * Called from the video plane's teardown (`use-screencast-session.ts`'s
- * `captureDormantSnapshot` option), while the element still has its last frame
- * and before `srcObject` is cleared.
- *
- * Both guards live here, not at the call site, so a test can pin them directly:
- * - `wasActivePlane` - only write when the video plane was actually painting;
- *   otherwise an ordinary fallback-to-JPEG teardown would overwrite a fresher
- *   JPEG frame with stale/blank video pixels.
- * - `videoWidth`/`videoHeight` - an element with no decoded frame reports 0x0.
- *
- * Same-origin media (the host's own peer connection) never taints the canvas.
+ * Draws a `<video>` element's currently decoded frame into the same cache the JPEG pump writes, under the same key - so the dormant placeholder still has something to show when a tab's last live pixels arrived over WebRTC.
  */
 export function snapshotVideoFrameIntoPeekCache(
   key: string,
@@ -116,9 +74,7 @@ export function snapshotVideoFrameIntoPeekCache(
 ): void {
   if (!wasActivePlane) return;
   if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
-  // The placeholder renders this at opacity-30/grayscale/object-contain, so
-  // native resolution buys nothing and costs a ~16MiB RGBA buffer plus a
-  // synchronous `toDataURL` on the main thread during unmount.
+  // The placeholder renders this at opacity-30/grayscale/object-contain, so native resolution buys nothing and costs a ~16MiB RGBA buffer plus a synchronous `toDataURL` on the main thread during unmount.
   const scale = Math.min(
     1,
     VIDEO_SNAPSHOT_MAX_EDGE_PX / Math.max(video.videoWidth, video.videoHeight),

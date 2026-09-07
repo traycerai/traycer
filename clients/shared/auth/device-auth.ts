@@ -1,22 +1,6 @@
 /**
- * Shell-agnostic client for the OAuth 2.0 Device Authorization Grant
- * (RFC 8628) endpoints in `authn-v3` (`/api/v3/auth/device/authorize` and
- * `/api/v3/auth/device/token`). Used by both the CLI process (ticket 04) and
- * the Electron main process (ticket 06), so it depends only on the ambient
- * `fetch` and carries no shell, DI, or singleton state.
- *
- * Why a dedicated client instead of `exchangeCodeForTokens`: the device-token
- * endpoint deliberately diverges from `exchange-code`. `428` and `429` are
- * *non-terminal poll states* the caller must distinguish from failure, and the
- * `400` family (`access_denied` / `expired` / `invalid_grant`) carries the
- * terminal reason in its `error` field. `exchangeCodeForTokens` collapses all
- * of these into `rejected` / `network-error`, which would make the poll loop
- * impossible to drive correctly. Every wire status therefore maps to its own
- * explicit variant here; none collapse.
- *
- * The 200 body is the same `{ token, refreshToken }` shape every mint endpoint
- * returns, so it is parsed with the shared `readRotatedTokens` helper rather
- * than a second copy of that validation.
+ * Shell-agnostic client for the OAuth 2.0 Device Authorization Grant (rfc 8628) endpoints in `authn-v3` (`/api/v3/auth/device/authorize` and `/api/v3/auth/device/token`).
+ * Why a dedicated client instead of `exchangeCodeForTokens`: the device-token endpoint deliberately diverges from `exchange-code`.
  */
 import { readRotatedTokens } from "./auth-validation";
 import {
@@ -26,38 +10,20 @@ import {
 
 export type DeviceClientId = "cli" | "desktop" | "mobile";
 
-/**
- * Per-request cancellation + timeout for the device HTTP calls. `signal` is the
- * caller's abort (a superseded/cancelled desktop attempt, or the CLI's expiry
- * watchdog); `timeoutMs` is a hard ceiling so a stalled connection can never
- * hang the loop indefinitely - a timeout/abort surfaces as the retryable
- * `network-error` variant, identical to any other transport failure.
- *
- * Required (no optional `?:` / defaults): callers pass `signal: undefined`
- * explicitly when they have no caller-side abort to thread.
- */
 export interface DeviceRequestOptions {
   readonly signal: AbortSignal | undefined;
   readonly timeoutMs: number;
 }
 
 /**
- * Default per-request ceiling for a single device HTTP call. Sized well above a
- * healthy round-trip but low enough that a black-holed connection can't wedge
- * the poll loop until the device_code TTL. Callers may pass a tighter value
- * (e.g. derived from the poll interval).
+ * Default per-request ceiling for a single device HTTP call.
+ * Sized well above a healthy round-trip but low enough that a black-holed connection can't wedge the poll loop until the device_code ttl.
  */
 export const DEFAULT_DEVICE_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
- * Builds the effective abort signal for one fetch by combining the caller's
- * `signal` (if any) with a fresh per-request timeout. Returns the merged signal
- * plus a `clear` to cancel the pending timeout once the request settles so the
- * timer can't fire (or leak) after the fetch resolves.
- *
- * The composition itself lives in `request-abort.ts` because it cannot use
- * `AbortSignal.any` - that API postdates this app's iOS floor and throws
- * rather than degrading. See that module.
+ * Builds the effective abort signal for one fetch by combining the caller's `signal` (if any) with a fresh per-request timeout.
+ * Returns the merged signal plus a `clear` to cancel the pending timeout once the request settles so the timer can't fire (or leak) after the fetch resolves.
  */
 function buildRequestSignal(
   options: DeviceRequestOptions,
@@ -65,12 +31,6 @@ function buildRequestSignal(
   return composeRequestAbort(options.signal ?? null, options.timeoutMs);
 }
 
-/**
- * Result of `POST /device/authorize`. `started` carries the fields the caller
- * needs to display the verification prompt and drive the poll loop; a
- * transport failure or any non-200 is a transient `network-error` (the caller
- * may retry starting a fresh authorization).
- */
 export type DeviceAuthorizationResult =
   | {
       readonly kind: "started";
@@ -83,18 +43,6 @@ export type DeviceAuthorizationResult =
     }
   | { readonly kind: "network-error" };
 
-/**
- * Result of one `POST /device/token` poll. The variants mirror the endpoint's
- * status envelope 1:1:
- *
- *   - `authorized`            200, the minted `{ token, refreshToken }` pair
- *   - `authorization-pending` 428, user has not approved yet (keep polling)
- *   - `slow-down`             429, polling too fast (back off; honor Retry-After)
- *   - `access-denied`         400 `access_denied`, user denied (terminal)
- *   - `expired`               400 `expired`, device_code TTL elapsed (terminal)
- *   - `invalid`               400 `invalid_grant`/unknown 400 reason (terminal)
- *   - `network-error`         transport failure or 5xx (transient; retryable)
- */
 export type DevicePollResult =
   | {
       readonly kind: "authorized";
@@ -108,11 +56,6 @@ export type DevicePollResult =
   | { readonly kind: "invalid" }
   | { readonly kind: "network-error" };
 
-/**
- * Starts a device authorization. On success the caller shows `userCode` +
- * `verificationUri` (or opens `verificationUriComplete`) and then drives
- * `pollDeviceToken` using `intervalSeconds` / `expiresInSeconds`.
- */
 export async function startDeviceAuthorization(
   authnBaseUrl: string,
   params: { readonly clientId: DeviceClientId; readonly hostLabel: string },
@@ -134,9 +77,7 @@ export async function startDeviceAuthorization(
       signal: request.signal,
     });
   } catch {
-    // A caller abort or per-request timeout surfaces here too; both collapse
-    // into the retryable `network-error` variant - the caller decides whether
-    // to retry (poll loop) or give up (abort already consumed).
+    // A caller abort or per-request timeout surfaces here too; both collapse into the retryable `network-error` variant - the caller decides whether to retry (poll loop) or give up (abort already consumed).
     return { kind: "network-error" };
   } finally {
     request.clear();
@@ -153,12 +94,6 @@ export async function startDeviceAuthorization(
   return parsed;
 }
 
-/**
- * Polls `POST /device/token` once and maps the wire status to an explicit
- * variant. The caller loops on `authorization-pending` / `slow-down`, applies
- * a terminal state on `access-denied` / `expired` / `invalid`, and may retry
- * on `network-error` until the device_code expires.
- */
 export async function pollDeviceToken(
   authnBaseUrl: string,
   deviceCode: string,
@@ -178,9 +113,7 @@ export async function pollDeviceToken(
       signal: request.signal,
     });
   } catch {
-    // Caller abort (superseded attempt / CLI expiry) and per-request timeout
-    // both land here and map to the retryable `network-error`, so a stalled
-    // `/device/token` socket can no longer wedge the poll loop.
+    // Caller abort (superseded attempt / CLI expiry) and per-request timeout both land here and map to the retryable `network-error`, so a stalled `/device/token` socket can no longer wedge the poll loop.
     return { kind: "network-error" };
   } finally {
     request.clear();
@@ -188,10 +121,8 @@ export async function pollDeviceToken(
 
   if (response.status === 200) {
     const tokens = await readRotatedTokens(response);
-    // A 200 whose body fails validation OR whose read aborts/times out is
-    // treated as transient: the loop re-polls (and, since the server consumed
-    // the code on mint, will then see a terminal `invalid`). This never silently
-    // drops a real success on a momentary parse hiccup.
+    // A 200 whose body fails validation OR whose read aborts/times out is treated as transient: the loop re-polls (and, since the server consumed the code on mint, will then see a terminal `invalid`).
+    // This never silently drops a real success on a momentary parse hiccup.
     if (tokens.kind !== "ok") {
       return { kind: "network-error" };
     }
@@ -224,18 +155,7 @@ export async function pollDeviceToken(
 }
 
 /**
- * Appends this build's registered deep-link scheme to the browser verification
- * URL as `return_scheme`, so the cloud's /device approval page can deep-link
- * back to THE APP THAT ASKED - per-environment (`traycer` / `traycer-dev`) and
- * slot-suffixed under multi-run dev - instead of a hardcoded production scheme
- * (which launches an installed prod Traycer when a dev build signs in). The
- * page validates the value against a strict allowlist and fires nothing when
- * it is absent or malformed, so a manually typed verification URL simply gets
- * no return deep link. Defensive: an unparseable URL passes through untouched.
- *
- * Shared by the desktop and mobile shells; both apply it to
- * `verificationUriComplete` only - the short display URI stays clean for
- * manual entry.
+ * The page validates the value against a strict allowlist and fires nothing when it is absent or malformed, so a manually typed verification URL simply gets no return deep link.
  */
 export function withReturnScheme(uri: string, scheme: string): string {
   try {
@@ -249,28 +169,17 @@ export function withReturnScheme(uri: string, scheme: string): string {
 
 // --- Backoff helper --------------------------------------------------------
 
-/** RFC 8628 §3.5: a `slow_down` increases the poll interval by 5 seconds. */
 const SLOW_DOWN_INCREMENT_SECONDS = 5;
-/** Floor used when the server-supplied interval is missing or nonsensical. */
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 /** Cap so a hostile/huge `interval` or `Retry-After` can't stall the loop. */
 export const MAX_POLL_INTERVAL_SECONDS = 60;
 
-/**
- * Immutable poll schedule for one device authorization. Holds the current
- * inter-poll delay (`intervalMs`), the server-issued base delay
- * (`baseIntervalMs`) the interval decays back to once polling is compliant
- * again, and the absolute deadline (`expiresAtMs`) past which the device_code
- * is dead. Pure and clock-injected (callers pass `startedAtMs` / `nowMs`) so
- * it runs identically in the CLI process, in Electron main, and in unit tests.
- */
 export type DevicePollSchedule = {
   readonly intervalMs: number;
   readonly baseIntervalMs: number;
   readonly expiresAtMs: number;
 };
 
-/** Builds the initial schedule from the `/authorize` response timings. */
 export function createPollSchedule(params: {
   readonly intervalSeconds: number;
   readonly expiresInSeconds: number;
@@ -286,9 +195,7 @@ export function createPollSchedule(params: {
 
 /**
  * Returns a new schedule with the interval increased after a `slow-down`.
- * Honors `Retry-After` when present, but never decreases the interval and
- * always adds at least the RFC-mandated 5 seconds; the result is capped at
- * `MAX_POLL_INTERVAL_SECONDS`.
+ * Honors `Retry-After` when present, but never decreases the interval and always adds at least the rfc-mandated 5 seconds; the result is capped at `MAX_POLL_INTERVAL_SECONDS`.
  */
 export function applySlowDown(
   schedule: DevicePollSchedule,
@@ -306,28 +213,12 @@ export function applySlowDown(
   };
 }
 
-/**
- * Returns a schedule with the interval restored to the server-issued base.
- * Callers apply this after an `authorization-pending` response: the server
- * accepted the poll's pacing, so any earlier `slow_down` widening (e.g. from a
- * premature browser-return nudge) should not outlive the violation and keep
- * the user waiting a padded interval for the rest of the attempt.
- *
- * DELIBERATE deviation from RFC 8628 §3.5, which keeps a slow_down's +5s for
- * "all subsequent requests". This client only ever talks to Traycer's own
- * authn, whose gate is itself a fixed one-interval penalty (never ratcheting),
- * so decaying after an accepted poll mirrors the server's actual policy - and
- * without decay one spurious slow_down (e.g. clock skew between authn
- * replicas) would pin a widened interval for the attempt's remaining life,
- * delaying approval detection for clients with no browser-return nudge (CLI).
- */
 export function resetPollInterval(
   schedule: DevicePollSchedule,
 ): DevicePollSchedule {
   return { ...schedule, intervalMs: schedule.baseIntervalMs };
 }
 
-/** Whether the device_code has expired as of `nowMs`. */
 export function isDeviceExpired(
   schedule: DevicePollSchedule,
   nowMs: number,
@@ -352,8 +243,6 @@ function mapTerminalError(errorCode: string | null): DevicePollResult {
       return { kind: "expired" };
     default:
       // `invalid_grant` and any other 400 reason are terminal-but-unspecified.
-      // Crucially this is NOT collapsed into `network-error`: a 400 means the
-      // request itself is dead, not that the network is flaky.
       return { kind: "invalid" };
   }
 }
@@ -419,15 +308,8 @@ async function readErrorCode(response: Response): Promise<string | null> {
 }
 
 /**
- * Parses a `Retry-After` header value. The poll endpoints only ever emit
- * integer seconds, so the HTTP-date form is intentionally not handled; an
- * absent or unparseable value yields `null` and the caller falls back to its
- * own backoff increment. Returning `null` rather than a number is the whole
- * point: a numeric fallback of zero reads as "retry immediately", which is
- * the opposite of what a 429 asked for.
- *
- * Shared with the link-login poll client, whose 429s come from the same two
- * sources (a paced record throttle and a request budget).
+ * Parses a `Retry-After` header value.
+ * The poll endpoints only ever emit integer seconds, so the HTTP-date form is intentionally not handled; an absent or unparseable value yields `null` and the caller falls back to its own backoff increment.
  */
 export function parseRetryAfterSeconds(header: string | null): number | null {
   if (header === null) {
@@ -462,13 +344,6 @@ function pickNonEmptyString(
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/**
- * Like `pickNonEmptyString`, but additionally requires the value to parse as an
- * absolute `http`/`https` URL. The verification URIs come straight from the
- * server response and are opened in the user's browser, so a non-http(s) scheme
- * (`file:`, `javascript:`, ...) must be rejected as an invalid authorization
- * body rather than handed to the platform opener.
- */
 function pickHttpUrl(
   record: Record<string, unknown>,
   key: string,
@@ -494,9 +369,7 @@ function pickPositiveInt(
   key: string,
 ): number | null {
   const value = record[key];
-  // Require a positive integer: flooring a fractional value would accept a
-  // malformed `expires_in: 0.5` as `0` (instant expiry) instead of rejecting the
-  // `/device/authorize` body as invalid.
+  // Require a positive integer: flooring a fractional value would accept a malformed `expires_in: 0.5` as `0` (instant expiry) instead of rejecting the `/device/authorize` body as invalid.
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return null;
   }

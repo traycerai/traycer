@@ -23,15 +23,7 @@ interface NormalizeContentResult {
   readonly insertedLeadingSize: number;
 }
 
-/**
- * Canonicalize composer JSON at app/editor boundaries.
- *
- * Legacy composers stored all images in a hidden leading `attachmentGroup`
- * block. New composer content keeps `imageAttachment` atoms inline where the
- * user inserted them, while the visible strip remains a projection over those
- * atoms. This rewrites only the legacy leading group shape; non-leading groups
- * are left readable for compatibility.
- */
+/** Canonicalize composer JSON at app/editor boundaries. */
 export function normalizeComposerContent(content: JsonContent): JsonContent {
   return normalizeComposerContentResult(content).content;
 }

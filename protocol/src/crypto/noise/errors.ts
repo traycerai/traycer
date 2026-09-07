@@ -1,9 +1,4 @@
-/**
- * Typed errors for the Noise layer. Each failure mode is its own class so
- * callers (the host responder and client initiator) can branch on cause —
- * e.g. a replayed frame is operationally different from a corrupt one — and so
- * a security reviewer can see every distinct failure exit.
- */
+/** Typed errors for the Noise layer. */
 
 export class NoiseError extends Error {
   constructor(message: string) {

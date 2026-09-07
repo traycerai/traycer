@@ -17,11 +17,7 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 const { reportableErrorToast } = await import("@/lib/reportable-error-toast");
 
 /**
- * Rejections are asserted through Node's own `process` event rather than
- * `window.addEventListener("unhandledrejection")`: `vitest.config.ts` sets
- * `dangerouslyIgnoreUnhandledErrors` and the setup file registers a
- * process-level swallow, so an empty-array assertion taken off the DOM event
- * reads the same whether nothing rejected or nothing fired at all.
+ * Rejections are asserted through Node's own `process` event rather than `window.addEventListener("unhandledrejection")`: `vitest.config.ts` sets `dangerouslyIgnoreUnhandledErrors` and the setup file registers a process-level swallow, so an empty-array.
  */
 function captureUnhandledRejections(): {
   readonly seen: unknown[];
@@ -47,9 +43,7 @@ async function drainRejections(): Promise<void> {
 }
 
 /**
- * Built to the real `CommandRecord` shape rather than cast into it: the first
- * cut used `as` and hid three fields the type requires, which is exactly the
- * narrowing this repo's rules forbid.
+ * Built to the real `CommandRecord` shape rather than cast into it: the first cut used `as` and hid three fields the type requires, which is exactly the narrowing this repo's rules forbid.
  */
 function record(
   state: CommandState,
@@ -156,18 +150,14 @@ describe("settleDetachedEpicTitleCommit", () => {
     const capture = captureUnhandledRejections();
     try {
       settleDetachedEpicTitleCommit(
-        // What `enqueueWriteCommand` raises for a real fault:
-        // `callOrNullOnTeardown` answers `null` only for a disposed bridge and
-        // RETHROWS a decode failure or a worker that threw.
+        // What `enqueueWriteCommand` raises for a real fault: `callOrNullOnTeardown` answers `null` only for a disposed bridge and RETHROWS a decode failure or a worker that threw.
         Promise.reject(new Error("worker threw")),
         "Epic tabs",
       );
       await drainRejections();
 
-      // THE REDDENING PAIR. `onCommit` is void-returning, so the commit was
-      // handed to a bare `void`: the fault was an unhandled rejection AND - the
-      // half the person renaming experiences - a rename that silently did
-      // nothing on the one path here that raised no toast.
+      // THE REDDENING PAIR.
+      // `onCommit` is void-returning, so the commit was handed to a bare `void`: the fault was an unhandled rejection AND - the half the person renaming experiences - a rename that silently did nothing on the one path here that raised no toast.
       expect(capture.seen).toEqual([]);
       expect(reportableErrorToast).toHaveBeenCalledWith(
         "Couldn't rename epic.",
@@ -188,9 +178,8 @@ describe("settleDetachedEpicTitleCommit", () => {
       );
       await drainRejections();
 
-      // The discriminating control. Without it a blanket catch would pass the
-      // arm above while turning every host replacement with a rename in flight
-      // into a spurious failure toast.
+      // The discriminating control.
+      // Without it a blanket catch would pass the arm above while turning every host replacement with a rename in flight into a spurious failure toast.
       expect(capture.seen).toEqual([]);
       expect(reportableErrorToast).not.toHaveBeenCalled();
     } finally {

@@ -98,12 +98,8 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
   });
 
   it("clamps a double-click on the LAST block whose word-selection tail lands at offset 0 of an out-of-root TEXT node", () => {
-    // A real double-click's word selection absorbs the block's trailing
-    // whitespace and finalizes the end at offset 0 of the NEXT text node - for
-    // a turn's last paragraph that node is the elapsed footer's label text,
-    // OUTSIDE the quotable root. This is the text-node analogue of the
-    // triple-click element@0 tail above; the element@0 clamp did not cover it,
-    // so the final paragraph was unquotable by double-click on every turn.
+    // A real double-click's word selection absorbs the block's trailing whitespace and finalizes the end at offset 0 of the NEXT text node - for a turn's last paragraph that node is the elapsed footer's label text, OUTSIDE the quotable root.
+    // This is the text-node analogue of the triple-click element@0 tail above; the element@0 clamp did not cover it, so the final paragraph was unquotable by double-click on every turn.
     const segment = document.createElement("div");
     const root = document.createElement("div");
     root.setAttribute("data-quotable", "true");
@@ -133,9 +129,8 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
   });
 
   it("rejects a double-click tail that genuinely selected out-of-root TEXT (offset > 0)", () => {
-    // Offset > 0 in an out-of-root text node means the browser actually
-    // captured characters past the root (a real cross-root selection), not the
-    // empty offset-0 tail landing. The clamp must not fire and swallow it.
+    // Offset > 0 in an out-of-root text node means the browser actually captured characters past the root (a real cross-root selection), not the empty offset-0 tail landing.
+    // The clamp must not fire and swallow it.
     const segment = document.createElement("div");
     const root = document.createElement("div");
     root.setAttribute("data-quotable", "true");
@@ -162,9 +157,7 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     const paragraph = document.createElement("p");
     paragraph.textContent = "Third.";
     root.appendChild(paragraph);
-    // Non-quotable prose BETWEEN the root and the element boundary the end
-    // lands on: clamping here would emit "Intervening prose" (still present in
-    // the selection text) as if it belonged to the assistant message.
+    // Non-quotable prose BETWEEN the root and the element boundary the end lands on: clamping here would emit "Intervening prose" (still present in the selection text) as if it belonged to the assistant message.
     const intervening = document.createElement("div");
     intervening.textContent = "Intervening prose";
     const nextSteps = document.createElement("div");
@@ -190,9 +183,8 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     paragraph.textContent = "Third.";
     root.appendChild(paragraph);
     segment.appendChild(root);
-    // Sibling AFTER the quotable root, shaped like the real elapsed footer:
-    // a provider icon (SVG with an accessibility-only <title>) plus an
-    // elapsed-time label. Triple-click extends the end into the label span.
+    // Sibling AFTER the quotable root, shaped like the real elapsed footer: a provider icon (SVG with an accessibility-only <title>) plus an elapsed-time label.
+    // Triple-click extends the end into the label span.
     const footer = document.createElement("button");
     footer.setAttribute("data-testid", "assistant-elapsed-footer");
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -212,18 +204,11 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     range.setStart(firstText(paragraph), 0);
     range.setEnd(footerSpan, 0);
 
-    // jsdom's `Range`/`Selection.toString()` both include the SVG title's
-    // text (plain DOM concatenation) - real Chromium's `Selection.toString()`
-    // does NOT, since `<title>` produces no layout box. Don't trust this
-    // jsdom value as the production `selectionText` contract; a hand-authored,
-    // browser-shaped string is passed below instead. This assertion just
-    // documents the divergence so a future edit doesn't "simplify" this test
-    // back to `range.toString()`.
+    // jsdom's `Range`/`Selection.toString()` both include the SVG title's text (plain DOM concatenation) - real Chromium's `Selection.toString()` does NOT, since `<title>` produces no layout box.
+    // Don't trust this jsdom value as the production `selectionText` contract; a hand-authored, browser-shaped string is passed below instead.
     expect(range.toString()).toBe("Third.Claude");
 
-    // Browser-shaped: no leaked "Claude" (real Chromium excludes it), with
-    // the trailing block-boundary blank line the browser synthesizes at the
-    // selection's end for a last-paragraph triple-click.
+    // Browser-shaped: no leaked "Claude" (real Chromium excludes it), with the trailing block-boundary blank line the browser synthesizes at the selection's end for a last-paragraph triple-click.
     const selectionText = "Third.\n\n";
     const snapshot = resolveQuoteSelection(range, selectionText);
     expect(snapshot).not.toBeNull();
@@ -264,10 +249,8 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     range.setStart(firstText(first), 0);
     range.setEnd(footerSpan, 0);
 
-    // Browser-shaped: real Chromium's `Selection.toString()` keeps the
-    // paragraph-boundary blank line BETWEEN blocks. A derived
-    // `Range.toString()` would flatten this to "First.Second." instead -
-    // the regression an earlier fix attempt introduced.
+    // Browser-shaped: real Chromium's `Selection.toString()` keeps the paragraph-boundary blank line BETWEEN blocks.
+    // A derived `Range.toString()` would flatten this to "First.Second." instead - the regression an earlier fix attempt introduced.
     const selectionText = "First.\n\nSecond.\n\n";
     const snapshot = resolveQuoteSelection(range, selectionText);
     expect(snapshot).not.toBeNull();
@@ -284,11 +267,7 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     paragraph.textContent = "Third.";
     root.appendChild(paragraph);
     segment.appendChild(root);
-    // Chrome AFTER the quotable root: an excluded label (real text, but
-    // data-quote-exclude) followed by a trailing span the triple-click
-    // extends into - mirrors the elapsed-footer shape without an SVG title,
-    // so the excluded label fully precedes the end boundary in document
-    // order and actually lands in the clamped-away/raw-selection text.
+    // Chrome AFTER the quotable root: an excluded label (real text, but data-quote-exclude) followed by a trailing span the triple-click extends into - mirrors the elapsed-footer shape without an SVG title, so the excluded label fully precedes the end boundary in document order and actually lands in the clamped-away/raw-selection text.
     const chrome = document.createElement("div");
     const excludedLabel = document.createElement("span");
     excludedLabel.setAttribute("data-quote-exclude", "");
@@ -303,11 +282,8 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     range.setStart(firstText(paragraph), 0);
     range.setEnd(trailingSpan, 0);
 
-    // Browser-shaped: unlike an SVG title, real Chromium's
-    // `Selection.toString()` DOES include this visible (merely
-    // quote-excluded) label text - it's ordinary rendered HTML. A
-    // block-boundary blank line separates the root's paragraph from the
-    // chrome div.
+    // Browser-shaped: unlike an SVG title, real Chromium's `Selection.toString()` DOES include this visible (merely quote-excluded) label text - it's ordinary rendered HTML.
+    // A block-boundary blank line separates the root's paragraph from the chrome div.
     const selectionText = "Third.\n\nNext steps";
     const snapshot = resolveQuoteSelection(range, selectionText);
     expect(snapshot).not.toBeNull();
@@ -326,10 +302,8 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     paragraph.textContent = "Third.";
     root.appendChild(paragraph);
     segment.appendChild(root);
-    // Mirrors the real NextStepsActionGroup: ONE data-quote-exclude flex
-    // container wrapping MULTIPLE separately rendered option buttons, each
-    // its own text node - not one merged string. Chromium inserts a layout
-    // separator between them even though they share an excluded ancestor.
+    // Mirrors the real NextStepsActionGroup: ONE data-quote-exclude flex container wrapping MULTIPLE separately rendered option buttons, each its own text node - not one merged string.
+    // Chromium inserts a layout separator between them even though they share an excluded ancestor.
     const nextSteps = document.createElement("div");
     nextSteps.setAttribute("data-quote-exclude", "");
     const option1 = document.createElement("button");
@@ -351,15 +325,11 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     range.setStart(firstText(paragraph), 0);
     range.setEnd(trailingSibling, 0);
 
-    // Browser-shaped, matching a real Chrome 148 capture: a block-boundary
-    // blank line between EACH separately rendered option, not just before
-    // the excluded container as a whole.
+    // Browser-shaped, matching a real Chrome 148 capture: a block-boundary blank line between EACH separately rendered option, not just before the excluded container as a whole.
     const selectionText = "Third.\n\nCreate the plan (1)\n\nReview + ship?\n\n";
     const snapshot = resolveQuoteSelection(range, selectionText);
     expect(snapshot).not.toBeNull();
-    // Both option labels must be gone, not just the first (a naive
-    // parts.join("") regex would only match a single unbroken run and miss
-    // this).
+    // Both option labels must be gone, not just the first (a naive parts.join("") regex would only match a single unbroken run and miss this).
     expect(snapshot?.text).toBe("Third.");
   });
 
@@ -368,9 +338,7 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     const root = document.createElement("div");
     root.setAttribute("data-quotable", "true");
     const paragraph = document.createElement("p");
-    // The quoted body legitimately contains wording that also appears (as an
-    // excluded option label) in the trailing chrome - only the trailing,
-    // excluded occurrence must be stripped.
+    // The quoted body legitimately contains wording that also appears (as an excluded option label) in the trailing chrome - only the trailing, excluded occurrence must be stripped.
     paragraph.textContent = "Third: Review + ship? is the plan.";
     root.appendChild(paragraph);
     segment.appendChild(root);
@@ -711,9 +679,7 @@ describe("resolveQuoteSelection - extraction and fence detection", () => {
     pre.appendChild(code);
     codeBlock.appendChild(pre);
     root.appendChild(codeBlock);
-    // Triple-click on the last code line lands the end at the start of the
-    // NEXT element outside the root; the clamped end sits on the root itself,
-    // so fence detection must resolve it into the trailing code block.
+    // Triple-click on the last code line lands the end at the start of the NEXT element outside the root; the clamped end sits on the root itself, so fence detection must resolve it into the trailing code block.
     const nextSteps = document.createElement("div");
     nextSteps.setAttribute("data-quote-exclude", "");
     nextSteps.textContent = "Next steps";

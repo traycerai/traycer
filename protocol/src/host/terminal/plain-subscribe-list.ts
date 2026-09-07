@@ -67,9 +67,7 @@ export const terminalPlainSubscribeListClientFrameSchemaV10 =
 
 /**
  * Server frames are replacement `state` plus the transport keepalive.
- * Each accepted `state` frame replaces the collection described by its
- * coverage. There is no upsert/delete tombstone interpretation: host
- * withdrawal is absence from the next complete replacement state.
+ * There is no upsert/delete tombstone interpretation: host withdrawal is absence from the next complete replacement state.
  */
 export const terminalPlainSubscribeListServerFrameSchema = z.discriminatedUnion(
   "kind",

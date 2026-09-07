@@ -7,11 +7,7 @@ import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 
 const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
 
-/**
- * One GUI harness's profiles from the wire provider list. Keeping the two id
- * spaces explicit prevents `claude` from being compared directly with the
- * wire's `claude-code` identifier.
- */
+/** One GUI harness's profiles from the wire provider list. */
 export function harnessProfiles(
   providers: ReadonlyArray<{
     readonly providerId: WireProviderId;

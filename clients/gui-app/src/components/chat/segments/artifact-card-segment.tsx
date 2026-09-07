@@ -31,18 +31,13 @@ interface ArtifactCardSegmentProps {
   readonly artifactKind: EpicArtifactKind;
   readonly artifactId: string;
   readonly title: string | null;
-  // The turn's merged change for this artifact, or null while streaming / when
-  // uncaptured. When present, a file-diff toggle appears in the header and opens
-  // the merged diff flush-connected below the card.
+  // The turn's merged change for this artifact, or null while streaming / when uncaptured.
+  // When present, a file-diff toggle appears in the header and opens the merged diff flush-connected below the card.
   readonly change: ArtifactSegmentChange | null;
   readonly findUnitId: string | null;
 }
 
-/**
- * File-diff toggle shown in the header, just left of the operation badge. A
- * real button, sibling to the open-artifact button, so the header has valid
- * interactive markup. Opens / closes the merged diff connected below the card.
- */
+/** File-diff toggle shown in the header, just left of the operation badge. A real button, sibling to the open-artifact button, so the header has valid interactive markup. */
 function ArtifactDiffToggle(props: {
   readonly open: boolean;
   readonly onToggle: () => void;
@@ -77,27 +72,7 @@ function ArtifactDiffToggle(props: {
   );
 }
 
-/**
- * The card's header row, and the drag surface for the card. The open-artifact
- * action is a child button, while the diff toggle and full-diff control are
- * siblings, avoiding nested interactive content. Drag lives on this whole row
- * (never the outer card) so an expanded diff body below stays free for text
- * selection, and the whole row shows the grab cursor on hover. The overlay chip
- * is centered on the pointer by the root DragOverlay's `snapCenterToCursor`
- * modifier, so a full-width row does not leave the chip offset from the hand.
- *
- * A `GripVertical` fades in on hover to signal draggability. It lives in a
- * reserved IN-FLOW column (never absolutely positioned), so it can never overlap
- * the artifact icon, and it is `pointer-events-none` decoration - the row, not
- * the grip, is the drag node. The column is reserved even for a non-draggable
- * card (rendered empty) so icons stay aligned across a mixed list.
- *
- * Only `setNodeRef` + `listeners` are attached: the row wraps a real open
- * button, so spreading dnd-kit's default `attributes` (which set `role="button"`
- * + `tabIndex` on this div) would nest interactive/focusable elements, and the
- * root DnD system ships no keyboard sensor. The card stays keyboard-openable via
- * its inner buttons.
- */
+/** The overlay chip is centered on the pointer by the root DragOverlay's `snapCenterToCursor` modifier, so a full-width row does not leave the chip offset from the hand. It lives in a reserved IN-FLOW column (never absolutely positioned), so it can never overlap the artifact icon, and it is `pointer-events-none` decoration - the row, not the grip, is the drag node. */
 function ArtifactCardHeaderRow(props: {
   readonly sticky: boolean;
   readonly surfaceClassName: string;
@@ -168,16 +143,8 @@ const ARTIFACT_KIND_SURFACE_CLASSES: Readonly<
   review: "bg-rose-400/[0.07] dark:bg-rose-300/[0.08]",
 };
 
-// Opaque equivalent of the collapsed card's surface, for the sticky header. A
-// sticky header floats over the scrolling diff, so a translucent tint lets the
-// diff rows bleed through - it must be opaque. The collapsed card applies the
-// kind tint TWICE (the outer card AND the header each carry
-// ARTIFACT_KIND_SURFACE_CLASSES), so the visible color is the tint composited
-// over itself: 1-(1-0.07)^2 = 13.5% light, 1-(1-0.08)^2 = 15.4% dark. These mix
-// that exact effective weight into an opaque `--background` so the expanded
-// header keeps the collapsed card's color. The mix is `in srgb` - NOT `in oklch`
-// - because Tailwind's `bg-<hue>/[a]` is an sRGB alpha-composite, so an `in srgb`
-// color-mix is the exact opaque match.
+// Opaque equivalent of the collapsed card's surface, for the sticky header.
+// The mix is `in srgb` - NOT `in oklch` - because Tailwind's `bg-<hue>/[a]` is an sRGB alpha-composite, so an `in srgb` color-mix is the exact opaque match.
 const ARTIFACT_KIND_STICKY_SURFACE_CLASSES: Readonly<
   Record<EpicArtifactKind, string>
 > = {
@@ -208,12 +175,7 @@ const ARTIFACT_KIND_HOVER_CLASSES: Readonly<Record<EpicArtifactKind, string>> =
     review: "group-hover/artifact-card:bg-rose-400/[0.11]",
   };
 
-/**
- * Operation glyph ported from the old VS Code webview
- * `operation-status-indicator`: create→`+` (green), update→dot (amber),
- * delete→`−` (red). A fixed 20px badge - an inherently-sized chrome element,
- * so the literal `size-*` is intentional (not a layout surface).
- */
+/** Operation glyph ported from the old VS Code webview `operation-status-indicator`: create→`+` (green), update→dot (amber), delete→`−` (red). A fixed 20px badge - an inherently-sized chrome element, so the literal `size-*` is intentional (not a layout surface). */
 function ArtifactOperationBadge(props: {
   readonly operation: ArtifactOperationAction;
 }) {
@@ -299,11 +261,7 @@ function ArtifactKindIconTile(props: {
   );
 }
 
-/**
- * Secondary kind + status line shown below the title.
- * Tickets additionally show their live status: "Ticket · In Progress".
- * Other kinds show just the short kind label: "Spec", "Story", "Review".
- */
+/** Secondary kind + status line shown below the title. Tickets additionally show their live status: "Ticket · In Progress". */
 function ArtifactKindMeta(props: {
   readonly displayKind: EpicArtifactKind;
   readonly status: number | null;
@@ -465,16 +423,7 @@ function canOpenArtifactCard(input: {
   return input.hasLiveArtifact && input.hasHost && !input.isDeleted;
 }
 
-/**
- * Lighter single-row card for one artifact create / update / delete (no group
- * header / count). Resolution is REACTIVE: the live title / ticket status comes
- * from `artifacts.byId[artifactId]` and the deletion tombstone from
- * `deletedArtifacts.byId[artifactId]`, both subscribed - so a just-minted or
- * cross-host-synced id that is absent at first render fills in (pending →
- * resolved) without a remount, and a later rename/status-change/delete reflects
- * live. The whole card opens the artifact in the epic's canvas (a tombstone has
- * no body, so a deleted card is not openable).
- */
+/** The whole card opens the artifact in the epic's canvas (a tombstone has no body, so a deleted card is not openable). */
 export function ArtifactCardSegment(props: ArtifactCardSegmentProps) {
   return (
     <ArtifactCardSegmentContent
@@ -507,9 +456,8 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   const { openTile } = useEpicTileNavigation();
   const [diffOpen, setDiffOpen] = useState(false);
 
-  // Prefer the tombstone for a delete (the live entry is already gone); else the
-  // live projection. Both null ⇒ pending/unavailable - render a graceful
-  // placeholder; the subscription fills it in when the id syncs.
+  // Prefer the tombstone for a delete (the live entry is already gone); else the live projection.
+  // Both null ⇒ pending/unavailable - render a graceful placeholder; the subscription fills it in when the id syncs.
   const resolved = tombstone ?? live;
   const displayKind: EpicArtifactKind = resolved?.kind ?? artifactKind;
   const projectionTitle = resolved === null ? null : resolved.title;
@@ -521,10 +469,8 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     hasTombstone,
     title,
   });
-  // A delete can race tombstone projection, and older history may point at an
-  // artifact that no longer exists. If the artifact is already unavailable and
-  // we still have a title, show the missing/deleted title treatment while
-  // preserving the card's original operation badge.
+  // A delete can race tombstone projection, and older history may point at an artifact that no longer exists.
+  // If the artifact is already unavailable and we still have a title, show the missing/deleted title treatment while preserving the card's original operation badge.
   const isDeleted = isArtifactCardDeleted({
     operation,
     hasTombstone,
@@ -542,13 +488,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     hasHost: true,
   });
 
-  // Drag source (mirrors the sidebar): the card opens its artifact in the
-  // canvas. Identity is present only when a host is bound (`activeHostId`);
-  // `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
-  // The surrounding Epic surface supplies the exact owning view tab (C1); the
-  // shared hook owns the occurrence-unique drag id (C3) and identity payload (C2). The card
-  // attaches `setNodeRef` + `listeners` to the whole header row (no
-  // `attributes`).
+  // Identity is present only when a host is bound (`activeHostId`); `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
   const {
     isDraggable: canDrag,
     setNodeRef: dragRef,
@@ -621,11 +561,8 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     </>
   );
 
-  // The title/icon region opens the artifact (when openable); the diff controls
-  // are sibling buttons in the same header row. The diff body is a sibling row
-  // INSIDE the same bordered container, so it reads as one connected card (no
-  // gap). When open, the header sticks while the main chat scrolls, matching
-  // file-change cards with large diffs.
+  // The title/icon region opens the artifact (when openable); the diff controls are sibling buttons in the same header row.
+  // The diff body is a sibling row INSIDE the same bordered container, so it reads as one connected card (no gap).
   return (
     <div
       data-chat-find-unit={props.findUnitId ?? undefined}

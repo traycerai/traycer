@@ -18,17 +18,6 @@ const rendererEnvPrefix = [
   "VITE_TRAYCER_SIGN_IN_URL",
 ];
 
-/**
- * Desktop renderer Vite config.
- *
- * Builds `src/renderer-shell/index.html` + `src/renderer-shell/main.tsx` into
- * `dist/renderer/`. The renderer consumes `@traycer-clients/gui-app` as a
- * workspace library - there is no separate `gui-app` build step - so this
- * config mirrors the plugin chain that `gui-app` itself previously required
- * (TanStack Router codegen, React + compiler preset, Tailwind v4). Aliases
- * route `@/…` into `gui-app/src` so `gui-app`'s internal imports resolve in
- * the desktop build.
- */
 export default defineConfig((): UserConfig => {
   const noWatch = process.env.TRAYCER_DESKTOP_NO_WATCH === "1";
   const port = Number(process.env.PORT) || 5173;
@@ -88,11 +77,7 @@ export default defineConfig((): UserConfig => {
         "@": resolve(guiAppRoot, "src"),
         "@traycer-clients/gui-app": resolve(guiAppRoot, "index.ts"),
         "@traycer-clients/shared": sharedRoot,
-        // Cross-workspace imports that gui-app makes at runtime - the
-        // tsconfig `paths` entries cover type-checking, but vite needs
-        // explicit aliases so dependency pre-bundling can resolve them.
-        // The `utils` entry must precede the bare `@traycer/protocol`
-        // entry so vite matches the longer prefix first.
+        // The `utils` entry must precede the bare `@traycer/protocol` entry so vite matches the longer prefix first.
         "@traycer/protocol/utils": resolve(protocolRoot, "utils"),
         "@traycer/protocol": resolve(protocolRoot, "src"),
       },
@@ -106,10 +91,7 @@ export default defineConfig((): UserConfig => {
       host: "127.0.0.1",
       port,
       strictPort: true,
-      // `make dev-desktop ARGS=--no-watch` sets this so the renderer
-      // freezes alongside the host watcher: no HMR socket and no file
-      // watcher, so UI edits never reload the Electron window until a
-      // manual restart. Default dev keeps live reload (`hmr: true`).
+      // `make dev-desktop ARGS=--no-watch` sets this so the renderer freezes alongside the host watcher: no HMR socket and no file watcher, so UI edits never reload the Electron window.
       hmr: noWatch ? false : true,
       watch: noWatch ? null : undefined,
     },

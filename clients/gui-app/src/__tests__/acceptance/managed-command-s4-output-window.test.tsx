@@ -1,18 +1,5 @@
 /**
- * Independent acceptance suite — seam S4: the managed-command output window.
- *
- * Expected behavior comes from the records (`traycer-host/src/domain/
- * managed-command/UI.md` §§3-4, 9, 9a and root `CONTEXT.md`), never from the
- * component code. The tile, its session hook, its zustand store and the epic
- * canvas store are all real; the one seam faked is the WebSocket stream
- * client, replaced through the production factory override. Every frame fed
- * in is first parsed through the wire contract's own server-frame schema, so
- * each fixture is a frame a host could actually have sent.
- *
- * jsdom limitation, handled explicitly: follow-mode and load-older read live
- * scroll geometry (`scrollHeight`/`clientHeight`) that jsdom never lays out.
- * Geometry is injected per element; the scroll DECISIONS under test remain
- * the component's own.
+ * Acceptance for the managed-command output window. Fake only the stream client. Inject scroll geometry; jsdom never lays it out.
  */
 import {
   act,
@@ -97,13 +84,8 @@ vi.mock(
   }),
 );
 
-// Dialing the real durable transport from a test would be a silent fall-through
-// past the factory override; make it unmissable instead.
-//
-// Hoisted to ONE instance so the opener is referentially stable across renders,
-// matching the real hook — see the note at
-// `lib/registries/__tests__/chat-session-registry.test.ts` for what a
-// fresh-closure-per-render mock does to the effects that depend on it.
+// Hoist one opener instance so it is referentially stable; a fresh-closure-per-render
+// mock retriggers effects. Dialing the real transport would silently skip the override.
 const refuseDurableTransport = vi.hoisted(() => () => {
   throw new Error("acceptance: the real stream transport must not be dialed");
 });
@@ -296,11 +278,8 @@ function renderTile(): void {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // Factories go to the composition; createOpenEpicStore no longer builds a
+    // runtime. handle.doc still resolves because this harness builds it here.
     factories: {
       streamClientFactory: noopEpicStreamClientFactory,
       laneSelection: null,

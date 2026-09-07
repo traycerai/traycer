@@ -61,9 +61,7 @@ vi.mock("@/components/chat/agent-stop-button", () => ({
   ),
 }));
 
-// The background panel reaches for the managed half's RPCs whether or not any
-// managed command is on screen; this suite is about the dock's layout and
-// dispatch, so the host boundary behind them is the one thing faked.
+// The background panel reaches for the managed half's RPCs whether or not any managed command is on screen; this suite is about the dock's layout and dispatch, so the host boundary behind them is the one thing faked.
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
   () => ({
@@ -197,12 +195,8 @@ describe("<ChatLowerDock />", () => {
     expect(onBackgroundItemStop).toHaveBeenCalledWith("task-1");
   });
 
-  // The dock's own half of the hold gate. A hold lingers only on a shell that
-  // has FINISHED, so it reaches neither the harness's background items nor the
-  // running-command count - and on those two alone the dock returned null,
-  // taking the only affordance that clears a hold off screen. The count is the
-  // parent's to compute (the surfaces below size themselves from the same one);
-  // what this pins is that the dock opens the section on it.
+  // The dock's own half of the hold gate.
+  // A hold lingers only on a shell that has FINISHED, so it reaches neither the harness's background items nor the running-command count - and on those two alone the dock returned null, taking the only affordance that clears a hold off screen.
   it("opens the Background section on the held count alone", () => {
     renderDock({
       queue: queueState([]),

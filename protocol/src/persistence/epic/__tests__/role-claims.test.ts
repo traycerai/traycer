@@ -1,11 +1,4 @@
-/**
- * Role vocabulary: normalization order, validation, and identity.
- *
- * The order is the whole point. Whitespace folding happens BEFORE the
- * control-character check, so a tab is a space rather than a rejection - while
- * NUL and C1, which no folding rescues, are rejected. Getting that backwards
- * would reject every multi-line paste, or accept a NUL into a display name.
- */
+/** Role vocabulary: normalization order, validation, and identity. */
 import { describe, expect, it } from "vitest";
 import {
   normalizeRoleText,
@@ -119,9 +112,7 @@ describe("roleClaimIdentityKey", () => {
   });
 
   it("cannot be forged across the role/scope boundary", () => {
-    // Without a separator that role text can never contain, ("ab","c") and
-    // ("a","bc") would collide. U+001F is rejected inside role/scope, so they
-    // cannot.
+    // Without a separator that role text can never contain, ("ab","c") and ("a","bc") would collide.
     expect(roleClaimIdentityKey({ role: "ab", scope: "c" })).not.toBe(
       roleClaimIdentityKey({ role: "a", scope: "bc" }),
     );

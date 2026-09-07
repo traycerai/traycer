@@ -163,9 +163,8 @@ describe("usePromptStashStore", () => {
       load: () => Promise.reject(new Error("idb offline")),
     });
 
-    // Auto-hydrate on import is swallowed (.catch(() => undefined)). An
-    // explicit hydrate still rejects until the repository recovers, then a
-    // later hydrate re-arms and succeeds.
+    // Auto-hydrate on import is swallowed (.catch(() => undefined)). An explicit hydrate still rejects
+    // until the repository recovers, then a later hydrate re-arms and succeeds.
     await expect(usePromptStashStore.getState().hydrate()).rejects.toThrow(
       /idb offline/,
     );
@@ -321,9 +320,7 @@ describe("usePromptStashStore", () => {
     );
 
     const peer = new FakeBroadcastChannel(PROMPT_STASH_CHANNEL);
-    // A save into the recreated database can broadcast its low revision before
-    // the delayed reset. The old generation suppresses that change, so reset
-    // must reload rather than only clearing memory.
+    // A save into the recreated database can broadcast its low revision before the delayed reset.
     peer.postMessage({ type: "changed", revision: 1 });
     peer.postMessage({ type: "reset" });
 
@@ -388,11 +385,6 @@ describe("usePromptStashStore", () => {
   });
 
   it("applies a local save that resolves after a broadcast reload raced ahead with a newer load token", async () => {
-    // Inverse of the stale-load-after-save case: save starts first (deferred),
-    // a broadcast reload is issued afterward (newer load token) and resolves
-    // first with an intermediate revision, then the save lands with a higher
-    // revision. Mutation results must apply by revision alone — not be
-    // discarded on token mismatch.
     const initial = [entry("a", 1, "a")];
     let resolveSave: ((value: PromptStashManifest) => void) | undefined;
     const pendingSave = new Promise<PromptStashManifest>((resolve) => {
@@ -425,7 +417,7 @@ describe("usePromptStashStore", () => {
       );
     });
 
-    // Save finally resolves at revision 3 — authoritative, must win.
+    // Save finally resolves at revision 3 - authoritative, must win.
     const afterSave = [entry("b", 2, "b"), ...initial];
     resolveSave?.(manifest(afterSave, 3));
     await savePromise;
@@ -514,7 +506,7 @@ describe("usePromptStashStore", () => {
       expect(usePromptStashStore.getState().rows).toEqual(asRows(laterEntries));
     });
 
-    // Earlier-issued load (#1) resolves after with a lower revision — ignored
+    // Earlier-issued load (#1) resolves after with a lower revision - ignored
     // because its load token is no longer current.
     resolveFirst?.(manifest([entry("earlier", 1, "earlier")], 1));
     await Promise.resolve();

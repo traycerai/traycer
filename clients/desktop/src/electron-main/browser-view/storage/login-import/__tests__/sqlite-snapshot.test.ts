@@ -75,11 +75,6 @@ describe("withSqliteSnapshot - success", () => {
     const sourcePath = await makeRealSqliteFile(sourceDir, "cookies.sqlite");
     const snapshotRoot = await makeSnapshotRoot();
 
-    // A throw from the caller-supplied reader is caught by the inner
-    // try/catch around `read(database)` and reported as `{ ok: false,
-    // reason: "unreadable" }` - it never becomes a rejected promise. The
-    // finally block that removes the per-call directory has to run on this
-    // path exactly as it does on every other failure path.
     const result = await withSqliteSnapshot(
       { sourcePath, snapshotRoot, platform: process.platform },
       () => {
@@ -182,16 +177,7 @@ describe("withSqliteSnapshot - copy failure classification, end to end", () => {
   });
 });
 
-/**
- * EBUSY/EPERM-on-non-win32/unmapped-errno are Windows share-mode signals or
- * synthetic errno strings that the real filesystem on this host cannot be
- * made to produce for `copyFile` (see the two end-to-end cases above for the
- * codes that ARE portably reproducible: ENOENT and EACCES). `classifyCopyFailure`
- * is exported from `sqlite-snapshot.ts` for exactly this reason - a test-only
- * seam so these cases exercise the real classification function directly with
- * real `Error` objects shaped like Node's errno errors, rather than a
- * reimplementation of its logic.
- */
+/** EBUSY/EPERM-on-non-win32/unmapped-errno are Windows share-mode signals or synthetic errno strings that the real filesystem on this host cannot be made to produce for `copyFile`. */
 describe("classifyCopyFailure - codes not portably reproducible end to end", () => {
   it("classifies EBUSY as 'locked' regardless of platform", () => {
     const ebusy = Object.assign(new Error("busy"), { code: "EBUSY" });
@@ -361,13 +347,7 @@ describe("copySqliteFiles - retry against a moving source", () => {
     dirsToClean.push(snapshotDir);
     const snapshotPath = join(snapshotDir, "cookies.sqlite");
 
-    // Overall call order within one attempt is [main, -wal, -shm]; the -shm
-    // copy fails "missing" on its own (no hook needed). After the SECOND
-    // call (the -wal copy of attempt 1, which lands on disk because the WAL
-    // still exists at that point), simulate a checkpoint: the WAL disappears
-    // and the main file's size changes, so the retry loop notices and starts
-    // a second attempt - on which the -wal copy now fails "missing" and the
-    // attempt-1 copy is unlinked.
+    // After the SECOND call (the -wal copy of attempt 1, which lands on disk because the WAL still exists at that point), simulate a checkpoint: the WAL disappears and the main file's.
     let callCount = 0;
     const copy: SqliteFileCopy = async (from, to, maxBytes) => {
       callCount += 1;
@@ -456,10 +436,6 @@ describe("copySqliteFiles - too-large refusal by size alone, before any byte is 
 });
 
 describe("copySqliteFiles - TOCTOU: a source that grows AFTER the pre-check but DURING the copy", () => {
-  // The pre-check reads the source's size at an instant, before any byte is
-  // copied. A source that grows between that instant and the copy itself -
-  // the exact gap `copySqliteFileBounded`'s bounded read stream exists to
-  // close - must still be caught, on the SAME attempt, with no retry.
   it("fails 'too-large' on the attempt that catches the mid-copy growth, with no retry", async () => {
     const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
     dirsToClean.push(sourceDir);

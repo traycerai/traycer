@@ -27,68 +27,8 @@ import { partitionSetupCardWindows } from "@traycer/protocol/persistence/chat-tr
 import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
 
 /**
- * # The transcript row projection
- *
- * The one enumeration of "which rows does this chat have, in what order" -
- * shared by the host (which numbers ordinals from it) and the renderer (which
- * draws them).
- *
- * ## Why this exists rather than a comparator
- *
- * The first attempt at this was `buildCanonicalTranscriptRows`: one row per
- * persisted record, sorted by `timestamp`. A cold review found that claim false
- * in three ways at once, and the shape of every one of them is the same - a row
- * is not a record:
- *
- * 1. **Records to rows is MANY-TO-MANY.** Every `AssistantMessage` sharing a
- *    turn key folds into one turn; that turn then SPLITS into several rows
- *    around its steer blocks; and the persisted user records those steers point
- *    at are suppressed at top level and re-rendered nested.
- * 2. **Rows exist that no record produces.** Setup cards fold from `setup.*`
- *    events; a `turn.stopped` arriving before any assistant record synthesizes
- *    a durable completed row; a stopped turn ending on a steer gets a
- *    synthesized trailing boundary row.
- * 3. **Placement is not purely a sort.** An assistant row is keyed on
- *    `rowAnchorAt`, not on the record `timestamp` the host rewrites on every
- *    streaming delta - and EVERY row of one turn shares that single value, so
- *    intra-turn order rests on sort stability alone. On top of that the genesis
- *    setup card pins to the top regardless of its key, a mid-chat one is
- *    woven above its anchor BY ID, and an imported chat's provenance marker
- *    pins above even the genesis card.
- *
- * An ordinal numbered from a one-per-record enumeration puts bodies under the
- * wrong rows for the rest of a transcript, and nothing about that failure is
- * loud - it looks like a chat whose messages are subtly shuffled.
- *
- * ## Durable rows only
- *
- * Three of the renderer's row sources are client-only: the optimistic pending
- * user echo, the live assistant row, and the pre-turn "Working..." indicator.
- * They carry no ordinal. That is sound because all three sort into the TAIL,
- * and the tail is pinned hydrated - so the client interleaves them at render
- * time and the host never has to name them.
- *
- * The same reasoning covers the two places this projection deliberately differs
- * from a live renderer, both of which add a row in the TAIL and neither of
- * which the host could know about:
- *
- * 1. `runState` is modelled as absent, so the live turn's trailing indicator
- *    row is omitted. Against a transcript with no active turn the two
- *    enumerations are identical row for row; with one, this is a prefix of what
- *    the renderer draws. Both are pinned by the equivalence corpus.
- * 2. A `turn.stopped` naming a user message that exists only as an OPTIMISTIC
- *    pending echo synthesizes a stopped row in the renderer and not here -
- *    correctly, since the host does not hold that message either. It
- *    materializes once the record persists.
- *
- * ## Consume, do not mirror
- *
- * The renderer builds its rows THROUGH the exported helpers here rather than
- * beside them. That is not a style preference. `eventMaterializesTranscriptRow`
- * shipped with a copy of its condition in the renderer that disagreed on the
- * empty string - an event carrying `sourceChatId: ""` would have occupied an
- * ordinal here and drawn nothing there. A predicate that can disagree with its
- * consumer does not get to have one.
+ * The one enumeration of "which rows does this chat have, in what order" - shared by the host (which numbers ordinals from it) and the renderer (which draws them).
+ * That is sound because all three sort into the TAIL, and the tail is pinned hydrated - so the client interleaves them at render time and the host never has to name them.
  */
 
 /** What produced a row - enough for a range read to know what to hydrate. */
@@ -99,80 +39,24 @@ export type TranscriptRowSource =
       readonly turnKey: string;
       /** Every record contributing to the turn, in walk order. */
       readonly messageIds: readonly string[];
-      /**
-       * The blocks THIS slice renders, in order.
-       *
-       * Carried rather than left derivable: a client holding the turn's records
-       * would otherwise have to re-run `planAssistantTurnRows` to find out which
-       * blocks belong to which slice - a third implementation of the split, in
-       * the place where getting it wrong is least visible.
-       */
+      /** The blocks THIS slice renders, in order. */
       readonly blockIds: readonly string[];
       readonly chunkIndex: number;
       readonly split: boolean;
       /** True for a row synthesized to carry a stopped turn's boundary. */
       readonly synthesizedBoundary: boolean;
-      /**
-       * The turn's events that DECORATE this row rather than produce it.
-       *
-       * A row is not only what it is built from. The renderer folds a turn's
-       * `turn.started` / `turn.completed` / `turn.stopped` / `turn.interrupted`
-       * into its elapsed counter, and its `checkpoint.captured` into the
-       * restore affordance - and it does that by scanning the WHOLE event
-       * array, which a windowed client no longer has.
-       *
-       * So they travel with the row. Without this, a hydration that reported
-       * success renders a turn with no duration and no restore point: the
-       * quietest possible failure, because the row is there and merely poorer
-       * than it was.
-       *
-       * Every slice of one turn names the same ids. That is not waste - the
-       * range reader charges a record once however many rows introduce it.
-       */
+      /** The turn's events that DECORATE this row rather than produce it. */
       readonly decoratingEventIds: readonly string[];
-      /**
-       * Every surviving steered user record of this turn - see the same field
-       * on the `steer` variant.
-       *
-       * On an assistant slice for the same reason `messageIds` is: the
-       * renderer folds the WHOLE turn out of these shared records, so a slice
-       * hydrated without them regenerates the turn's steer rows as orphans.
-       */
+      /** Every surviving steered user record of this turn - see the same field on the `steer` variant. */
       readonly steeredMessageIds: readonly string[];
     }
   | {
       readonly kind: "steer";
       readonly turnKey: string;
-      /**
-       * The turn's records - needed even when {@link steeredMessageId} is set,
-       * because the steer BLOCK lives in an assistant record and carries the
-       * badge, mode and sender the row renders.
-       */
       readonly messageIds: readonly string[];
-      /**
-       * The steered user record, when one survives. `null` means the block was
-       * orphaned by a checkpoint rewrite and the row renders from the block
-       * alone - so its identity comes from a QUEUE ITEM, not a record.
-       */
+      /** The steered user record, when one survives. */
       readonly steeredMessageId: string | null;
-      /**
-       * EVERY surviving steered user record of the turn, not just this row's.
-       *
-       * The turn is the unit the renderer folds, and it folds it out of the
-       * assistant records that {@link messageIds} names - records every row of
-       * the turn shares. So a range that served only this row's own steered
-       * record still hands the renderer the whole turn, minus the other steers'
-       * user messages: it re-derives those rows, finds no record, and treats
-       * them as ORPHANED. An orphan takes its identity from the queue item
-       * (`steer:<queueItemId>`) rather than from the message, so the id
-       * disagrees with the one the skeleton published, its ordinal is
-       * suppressed, and the row draws unplaced at the tail while a placeholder
-       * sits at its real position.
-       *
-       * Shared across the turn's rows exactly as {@link messageIds} and
-       * `decoratingEventIds` are, and free for the same reason: the range
-       * reader charges a record once however many rows name it.
-       */
+      /** EVERY surviving steered user record of the turn, not just this row's. */
       readonly steeredMessageIds: readonly string[];
       /** The steer block itself, inside one of {@link messageIds}. */
       readonly blockId: string;
@@ -184,16 +68,7 @@ export type TranscriptRowSource =
       readonly eventId: string;
       /**
        * The user record whose Stop this row reports.
-       *
-       * The row renders through `renderStoppedTurnsWithoutAssistantRecords`,
-       * which emits NOTHING unless the referenced message is present - so a
-       * hydration that served only the event reports success and draws no row,
-       * while the span still counts it hydrated and `transcriptListRows`
-       * suppresses its ordinal rather than leaving a placeholder.
-       *
-       * Never null: the row is synthesized only for a stop whose `messageId` is
-       * both set and retained (see `stoppedTurnsWithoutRecords`), which is the
-       * same condition the renderer re-checks.
+       * Never null: the row is synthesized only for a stop whose `messageId` is both set and retained (see `stoppedTurnsWithoutRecords`), which is the same condition the renderer re-checks.
        */
       readonly triggeringMessageId: string;
     }
@@ -206,28 +81,16 @@ export type TranscriptRowSource =
       readonly eventIds: readonly string[];
     };
 
-/**
- * A row's identity, order and provenance - never its content.
- *
- * The ordinal of a row IS its index in the array {@link projectTranscriptRows}
- * returns.
- */
+/** A row's identity, order and provenance - never its content. */
 export interface TranscriptRowDescriptor {
   /** The renderer's row id, verbatim. This is the `(kind, id)` identity echo. */
   readonly rowId: string;
-  /**
-   * The placement key. For an assistant row this is `rowAnchorAt`, NOT the
-   * record timestamp - see the module doc. Rows pinned or woven by id
-   * (setup cards) still carry theirs, but it does not decide their position.
-   */
+  /** The placement key. */
   readonly createdAt: number;
   readonly source: TranscriptRowSource;
   /**
    * What this row renders WITH - see {@link TranscriptRowContext}.
-   *
-   * Always an object, never absent, so a consumer reads fields rather than
-   * branching on the container first. Empty for the many rows whose rendering
-   * depends on nothing around them.
+   * Always an object, never absent, so a consumer reads fields rather than branching on the container first.
    */
   readonly context: TranscriptRowContext;
 }
@@ -244,20 +107,14 @@ export interface TranscriptRowProjectionInput {
   readonly chatId: string;
 }
 
-// ---------------------------------------------------------------------------
-// Row ids. Exported because the renderer must build the same strings; a second
-// template literal that agreed by inspection is the drift this module prevents.
-// ---------------------------------------------------------------------------
+// Row ids.
+// Exported because the renderer must build the same strings; a second template literal that agreed by inspection is the drift this module prevents.
 
 export function assistantRowId(turnKey: string): string {
   return `assistant:${turnKey}`;
 }
 
-/**
- * A slice's row id. `split` is sticky for the WHOLE turn: adding one steer
- * block renames every slice row of that turn, because an unsplit turn's single
- * row keeps the bare `assistant:<key>` id.
- */
+/** A slice's row id. */
 export function assistantSliceRowId(
   turnKey: string,
   chunkIndex: number,
@@ -267,20 +124,7 @@ export function assistantSliceRowId(
   return `${assistantRowId(turnKey)}:part:${chunkIndex}`;
 }
 
-/**
- * The turn key an assistant row id names, or `null` for any other row id.
- *
- * The inverse of {@link assistantSliceRowId}, and it lives beside it for the
- * reason everything else in this file does: a consumer that stripped the split
- * suffix by hand would be a second copy of the id format, and the two would
- * disagree the first time one moved.
- *
- * What it is FOR: {@link TranscriptRowContext} is keyed by row id, and a turn's
- * context is shared by every row the turn produces - so a renderer holding a
- * turn key needs the mapping in this direction to read it. A turn key is a
- * `turnId` or a `ts:<millis>` fallback (see `assistantTurnKey`), neither of
- * which can end in `:part:<digits>`, so the strip is unambiguous.
- */
+/** The turn key an assistant row id names, or `null` for any other row id. */
 export function assistantRowTurnKey(rowId: string): string | null {
   const prefix = assistantRowId("");
   if (!rowId.startsWith(prefix)) return null;
@@ -310,14 +154,9 @@ export function setupCardRowId(
   return `setup-card:${chatId}:${windowIndex}:${createdAt}`;
 }
 
-// ---------------------------------------------------------------------------
-// Turn folding
-// ---------------------------------------------------------------------------
 
 /**
- * The durable subset of the renderer's turn accumulator - the fields that
- * decide row COUNT and row ORDER. Everything the accumulator carries for
- * rendering (senders, cost, image resolutions) is deliberately absent.
+ * The durable subset of the renderer's turn accumulator - the fields that decide row COUNT and row ORDER.
  */
 export interface DurableTurnAccumulator {
   readonly turnKey: string;
@@ -346,12 +185,7 @@ function minNullable(a: number | null, b: number | null): number | null {
 }
 
 /**
- * Folds every assistant record sharing a turn key into one accumulator, keyed
- * in first-appearance order.
- *
- * `startedAt` takes the minimum so a turn split across records (subagent flows,
- * migrated snapshots) anchors at the earliest recorded start; `timestamp` takes
- * the maximum so the last-resort anchor reflects the real turn end.
+ * Folds every assistant record sharing a turn key into one accumulator, keyed in first-appearance order.
  */
 export function accumulateDurableTurns(
   messages: readonly Message[],
@@ -381,28 +215,12 @@ export function accumulateDurableTurns(
   return turns;
 }
 
-/**
- * The one field {@link nestedSteeredMessageIds} reads off a turn.
- *
- * Deliberately structural rather than {@link DurableTurnAccumulator}: the
- * renderer's accumulator carries a dozen more fields for rendering, and asking
- * it to satisfy the durable shape would push it to either restate this walk or
- * build a throwaway adapter. Both are how a shared function ends up with a
- * second implementation beside it.
- */
+/** The one field {@link nestedSteeredMessageIds} reads off a turn. */
 export interface BlockBearingTurn {
   readonly blocks: readonly ContentBlock[];
 }
 
-/**
- * The persisted user records rendered NESTED inside an assistant turn rather
- * than at top level.
- *
- * A steer block naming a record that is still in the transcript suppresses that
- * record's top-level row. A block whose record is gone (checkpoint rewrote the
- * block, the row was written once and lost) suppresses nothing and renders from
- * the block alone.
- */
+/** The persisted user records rendered NESTED inside an assistant turn rather than at top level. */
 export function nestedSteeredMessageIds(
   turns: Iterable<BlockBearingTurn>,
   userMessagesById: ReadonlyMap<string, UserMessage>,
@@ -428,15 +246,8 @@ export function userMessagesById(
   return usersById;
 }
 
-// ---------------------------------------------------------------------------
-// The steer split
-// ---------------------------------------------------------------------------
 
-/**
- * One row of a turn, as an index into the turn's block array. Indices rather
- * than blocks so the renderer can map them straight back to its own array
- * without this module having to carry content.
- */
+/** One row of a turn, as an index into the turn's block array. */
 export type AssistantTurnRowPlanEntry =
   | {
       readonly kind: "slice";
@@ -457,12 +268,8 @@ export interface AssistantTurnRowPlan {
 }
 
 /**
- * Plans a turn's rows: maximal runs of non-steer blocks become slices, each
- * steer block becomes its own row between them.
- *
- * A turn with no blocks and no steer still plans ONE slice - an empty assistant
- * row is what a turn that produced nothing renders as, and it must occupy an
- * ordinal like any other.
+ * Plans a turn's rows: maximal runs of non-steer blocks become slices, each steer block becomes its own row between them.
+ * A turn with no blocks and no steer still plans ONE slice - an empty assistant row is what a turn that produced nothing renders as, and it must occupy an ordinal like any other.
  */
 export function planAssistantTurnRows(
   blocks: readonly ContentBlock[],
@@ -499,28 +306,11 @@ export function planAssistantTurnRows(
   return { split, entries, nextChunkIndex: chunkIndex };
 }
 
-/**
- * Whether a turn needs a synthesized trailing assistant row.
- *
- * A stopped turn's `completedAt`/`stopped` marker is stamped on its LAST
- * assistant row. When the turn's final block is a steer, the last planned row
- * is a `role: "user"` bubble that cannot carry it - so without this the marker
- * lands on the chunk BEFORE the steer (wrong boundary) or, for a steer-only
- * turn, on no row at all (dropped entirely).
- *
- * This is why a turn's durable row count depends on an EVENT and not only on
- * its records. A host enumeration reading messages alone gets every
- * stopped-steer-terminated turn wrong.
- */
 export function assistantTurnNeedsTrailingRow(input: {
   readonly plan: AssistantTurnRowPlan;
   readonly turnComplete: boolean;
   readonly stopped: boolean;
-  /**
-   * Whether the turn carries a live run indicator. Always `false` in the
-   * durable projection; the renderer passes its real value, which is what adds
-   * the live turn's trailing row on top of this enumeration.
-   */
+  /** Whether the turn carries a live run indicator. */
   readonly hasRunState: boolean;
 }): boolean {
   const needs = input.hasRunState || (input.turnComplete && input.stopped);
@@ -531,9 +321,6 @@ export function assistantTurnNeedsTrailingRow(input: {
   return last !== undefined && last.kind === "steer";
 }
 
-// ---------------------------------------------------------------------------
-// Stopped turns
-// ---------------------------------------------------------------------------
 
 export interface TurnStoppedInfo {
   readonly stoppedAt: number;
@@ -545,20 +332,7 @@ export interface TurnStoppedInfo {
 
 const EMPTY_EVENT_IDS: readonly string[] = [];
 
-/**
- * Event types a turn's rows RENDER WITH but are not built from.
- *
- * `turn.*` drives the elapsed counter; `checkpoint.captured` drives the restore
- * affordance. Both are folded by `turnId` in `rendered-messages.ts` over the
- * whole event array - which is exactly the array a windowed client stops
- * having, so the ids travel with the row instead.
- *
- * `turn.stopped` appears here AND can materialize a row of its own. That is not
- * a contradiction: the row it synthesizes exists only when the turn wrote no
- * assistant record, and the marker it stamps on a turn that DID is a different
- * use of the same event. Listing it in both places is what makes a range serve
- * it either way.
- */
+/** Event types a turn's rows RENDER WITH but are not built from. */
 const TURN_DECORATING_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
   "turn.started",
   "turn.completed",
@@ -571,23 +345,7 @@ export function isTurnDecoratingEvent(event: ChatEvent): boolean {
   return TURN_DECORATING_EVENT_TYPES.has(event.type);
 }
 
-/**
- * The pause lifecycle, which decorates a turn but cannot be keyed on `turnId`.
- *
- * `buildTurnPauseAccounting` subtracts the human's wait from a turn's elapsed
- * time by pairing a request with its resolution: the OPEN carries the turn, and
- * the CLOSE is matched back to it by `approvalId` / `blockId` rather than by a
- * turn of its own. These events materialize no row, so neither a range nor the
- * inline tail can supply them any other way.
- *
- * Keying them on `event.turnId` like the rest would ship the open WITHOUT its
- * close, because the host stamps a resolution with
- * `this.activeTurn?.turnId ?? null` and a resolution landing after its turn
- * settled therefore carries `null`. An unclosed request that is not
- * live-pending is then dropped by the fold entirely - leaving exactly the
- * overcounted elapsed the association exists to prevent. So a close is
- * attributed to the turn its OPEN named.
- */
+/** The pause lifecycle, which decorates a turn but cannot be keyed on `turnId`. */
 const PAUSE_OPEN_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
   "approval.requested",
   "interview.requested",
@@ -600,13 +358,7 @@ const PAUSE_CLOSE_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
   "interview.errored",
 ]);
 
-/**
- * What a pause request and its resolution are paired on.
- *
- * The two families use different correlation fields, and an event carrying
- * neither is unpairable - `buildTurnPauseAccounting` skips those on both sides,
- * so associating them with a row would ship bytes the fold discards.
- */
+/** What a pause request and its resolution are paired on. */
 function pauseCorrelationKey(event: ChatEvent): string | null {
   if (event.type.startsWith("interview.")) {
     return event.blockId === null ? null : `interview:${event.blockId}`;
@@ -616,20 +368,7 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
 
 /**
  * Turn keys whose checkpoint has a file a LATER checkpoint touches again.
- *
- * Computed here, over the whole event log, because the renderer cannot: it
- * derives this from the events it holds, and on the windowed line that is
- * whatever subset is hydrated. A span containing an old turn but none of the
- * later checkpoints concludes `false`, and the restore dialog drops its
- * warning that files modified in later turns will also be rewound - a missing
- * warning on an irreversible action, which is why
- * {@link TranscriptRowContext.hasLaterOverlappingChanges} was specified for it.
- *
- * Keyed by TURN, not by checkpoint id, because that is what the row carries;
- * the checkpoint id is an implementation detail of the overlap rule.
- *
- * Order is load-bearing - "later" means later in the event log - so this walks
- * `events` in its given order and never sorts.
+ * Order is load-bearing - "later" means later in the event log - so this walks `events` in its given order and never sorts.
  */
 export function turnKeysWithLaterOverlappingChanges(
   events: readonly ChatEvent[],
@@ -639,9 +378,7 @@ export function turnKeysWithLaterOverlappingChanges(
     if (event.turnId === null || event.metadata === null) return [];
     const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
     // A manifest this reader cannot parse is one whose overlap it cannot judge.
-    // Dropping it is the same answer the restore path gives a version mismatch
-    // ("cannot restore"), and it keeps an unreadable entry from silently
-    // reading as "touches nothing" and clearing a warning it should have kept.
+    // Dropping it is the same answer the restore path gives a version mismatch ("cannot restore"), and it keeps an unreadable entry from silently reading as "touches nothing" and clearing a warning it should have kept.
     if (!manifest.success) return [];
     return [{ turnId: event.turnId, manifest: manifest.data }];
   });
@@ -658,15 +395,7 @@ export function turnKeysWithLaterOverlappingChanges(
 
 const EMPTY_TURN_KEYS: ReadonlySet<string> = new Set<string>();
 
-/**
- * Decorating event ids per turn, in event order.
- *
- * Keyed on `turnId` because that is what the renderer's folds key on. An event
- * with no `turnId` decorates nothing and is skipped - it is chat-level state,
- * and chat-level state rides the snapshot rather than a row. The pause
- * lifecycle is the one exception, and it is correlated rather than keyed; see
- * {@link PAUSE_OPEN_EVENT_TYPES}.
- */
+/** Decorating event ids per turn, in event order. */
 export function decoratingEventIdsByTurn(
   events: readonly ChatEvent[],
 ): ReadonlyMap<string, readonly string[]> {
@@ -705,14 +434,7 @@ export function decoratingEventIdsByTurn(
   return out;
 }
 
-/**
- * `turn.stopped` events keyed by `turnId`, in event order.
- *
- * The host's terminal latch guarantees at most one per turn attempt, so
- * last-write-wins is a defensive fallback rather than an expected overwrite.
- * Insertion order is load-bearing: it decides tie order among synthesized
- * stopped rows.
- */
+/** `turn.stopped` events keyed by `turnId`, in event order. */
 export function turnStoppedInfoByTurnKey(
   events: readonly ChatEvent[],
 ): ReadonlyMap<string, TurnStoppedInfo> {
@@ -730,12 +452,8 @@ export function turnStoppedInfoByTurnKey(
 }
 
 /**
- * Turn keys whose Stop landed before any assistant record existed, and which
- * therefore render as a synthesized completed row.
- *
- * The guard is retention-based: a turn whose records were branched away stops
- * producing a folded row and starts producing a synthetic one, and both must
- * land on the same ordinal count.
+ * Turn keys whose Stop landed before any assistant record existed, and which therefore render as a synthesized completed row.
+ * The guard is retention-based: a turn whose records were branched away stops producing a folded row and starts producing a synthetic one, and both must land on the same ordinal count.
  */
 function stoppedTurnsWithoutRecords(input: {
   readonly stoppedByTurnKey: ReadonlyMap<string, TurnStoppedInfo>;
@@ -764,18 +482,8 @@ function stoppedTurnsWithoutRecords(input: {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// The projection
-// ---------------------------------------------------------------------------
 
-/**
- * Enumerates a chat's durable transcript rows, in the order they are drawn.
- *
- * The returned array's indices ARE the ordinals. Assembly mirrors the
- * renderer's `baseRows` concatenation exactly, because a stable sort keeps
- * input order for ties and every row of a turn shares one key - so the
- * concatenation order is not incidental, it is part of the answer.
- */
+/** Enumerates a chat's durable transcript rows, in the order they are drawn. */
 export function projectTranscriptRows(
   input: TranscriptRowProjectionInput,
 ): readonly TranscriptRowDescriptor[] {
@@ -785,23 +493,13 @@ export function projectTranscriptRows(
   const stoppedByTurnKey = turnStoppedInfoByTurnKey(input.events);
   const decoratingEventIdsByTurnKey = decoratingEventIdsByTurn(input.events);
   const overlappingTurnKeys = turnKeysWithLaterOverlappingChanges(input.events);
-  // Whole-history fold: a `queue.fallback` arbitrarily later than the request
-  // retracts the badge, so this cannot be re-derived from a row's own records.
-  // See `TranscriptRowContext.completedSteer`.
+  // Whole-history fold: a `queue.fallback` arbitrarily later than the request retracts the badge, so this cannot be re-derived from a row's own records.
   const completedSteerMessageIds = steeredMessageIdsFromEvents(input.events);
 
   const base: TranscriptRowDescriptor[] = [];
   const emittedTurns = new Set<string>();
-  // The most recent NON-suppressed user record in walk order - the legacy
-  // anchor fallback for a record persisted before `startedAt` existed. It is
-  // walk-order dependent, not `createdAt`-order dependent, which is why this
-  // module fixes the walk order rather than sorting first.
   let lastUserTimestamp: number | null = null;
-  // The session anchor in effect at this point of the walk. Updated from EVERY
-  // user record - including a nested-steered one, which the ordinal walk below
-  // skips entirely. The renderer's `profileLabelsByTurnKeyFromMessages` does
-  // not skip it either, and an anchor that disagreed with the renderer's would
-  // be worse than none.
+  // The session anchor in effect at this point of the walk.
   let currentSessionAnchor: ChatSessionAnchor | null = null;
 
   for (const message of input.messages) {
@@ -809,9 +507,7 @@ export function projectTranscriptRows(
       if (message.sessionAnchor !== null) {
         currentSessionAnchor = message.sessionAnchor;
       }
-      // A steered user record is a mid-turn interjection rendered inside its
-      // turn. Updating the anchor here would mis-anchor a LATER turn on the
-      // steer instant, so it is skipped entirely, not merely un-emitted.
+      // A steered user record is a mid-turn interjection rendered inside its turn.
       if (nestedSteered.has(message.messageId)) continue;
       lastUserTimestamp = message.timestamp;
       base.push({
@@ -863,10 +559,7 @@ export function projectTranscriptRows(
     });
   }
 
-  // Event rows are appended in two passes, all fork links before all
-  // notification anchors, because that is the renderer's `baseRows` order. For
-  // two events sharing a timestamp the resulting tie order differs from the
-  // event log's own order - matching that exactly is the point.
+  // Event rows are appended in two passes, all fork links before all notification anchors, because that is the renderer's `baseRows` order.
   for (const event of input.events) {
     if (forkedChatLinkRowSource(event) === null) continue;
     base.push({
@@ -886,12 +579,7 @@ export function projectTranscriptRows(
     });
   }
 
-  // The provenance marker sits above EVERYTHING, the pinned genesis setup card
-  // included. Its timestamp is the import time - later than every message it
-  // introduces, so a `createdAt` sort would file it at the bottom - and what
-  // it says ("Imported from Claude Code") is about the whole chat's origin:
-  // the workspace a genesis card describes was bound to this chat after the
-  // transcript already existed elsewhere. Event-log order between two markers.
+  // The provenance marker sits above EVERYTHING, the pinned genesis setup card included.
   const markers: TranscriptRowDescriptor[] = [];
   for (const event of input.events) {
     if (importedChatMarkerRowSource(event) === null) continue;
@@ -926,10 +614,7 @@ function describeTurnRows(input: {
   readonly hasLaterOverlappingChanges: boolean;
 }): readonly TranscriptRowDescriptor[] {
   const { turn } = input;
-  // Every branch of the renderer's timing derivation returns this same anchor;
-  // the autonomous-resume lifecycle window it also computes moves the ELAPSED
-  // counter, never the row's position. So ordering needs none of that
-  // machinery - which is most of why this projection stayed small.
+  // Every branch of the renderer's timing derivation returns this same anchor; the autonomous-resume lifecycle window it also computes moves the ELAPSED counter, never the row's position.
   const rowAnchorAt =
     turn.startedAt ?? input.lastUserTimestamp ?? turn.timestamp;
   const turnComplete = input.activeTurnId !== turn.turnKey;
@@ -937,20 +622,8 @@ function describeTurnRows(input: {
   const plan = planAssistantTurnRows(blocks);
   const decoratingEventIds =
     input.decoratingEventIdsByTurnKey.get(turn.turnKey) ?? EMPTY_EVENT_IDS;
-  // One object shared by every row of the turn: they all render with the same
-  // anchor and the same elapsed counter, and sharing it keeps a split turn from
-  // allocating a fresh copy per slice.
-  //
-  // `legacyRowAnchorAt` is carried ONLY when `startedAt` did not supply the
-  // anchor. For a modern turn the renderer reads `startedAt` off the record it
-  // already has and cannot get it wrong, so speaking would be noise on every
-  // row of every chat.
-  //
-  // `hasLaterOverlappingChanges` is carried only when TRUE, for the reason the
-  // schema gives: an absent field is the projection declining to speak, and the
-  // renderer falls back to its own derivation. `false` is what that derivation
-  // already produces from an isolated span, so speaking it would be bytes
-  // asserting the answer the reader would have reached anyway.
+  // One object shared by every row of the turn: they all render with the same anchor and the same elapsed counter, and sharing it keeps a split turn from allocating a fresh copy per slice.
+  // For a modern turn the renderer reads `startedAt` off the record it already has and cannot get it wrong, so speaking would be noise on every row of every chat.
   const context: TranscriptRowContext = {
     ...(turn.startedAt === null ? { legacyRowAnchorAt: rowAnchorAt } : {}),
     ...(input.sessionAnchor === null
@@ -961,9 +634,7 @@ function describeTurnRows(input: {
       : {}),
   };
 
-  // The turn's surviving steered user records, in block order. Computed once
-  // for the whole turn because every row of it names the same set - see
-  // `steeredMessageIds` on the source variants.
+  // The turn's surviving steered user records, in block order.
   const steeredMessageIds: readonly string[] = blocks.flatMap((block) =>
     block.type === "steer" && input.usersById.has(block.messageId)
       ? [block.messageId]
@@ -1026,9 +697,7 @@ function describeTurnRows(input: {
   ) {
     rows.push({
       rowId: assistantSliceRowId(turn.turnKey, plan.nextChunkIndex, true),
-      // Reuses the turn anchor exactly: every other row of the turn does, and
-      // position here rests on push order under the stable sort, not on a
-      // numerically later value.
+      // Reuses the turn anchor exactly: every other row of the turn does, and position here rests on push order under the stable sort, not on a numerically later value.
       createdAt: rowAnchorAt,
       source: {
         kind: "assistant-slice",
@@ -1051,20 +720,7 @@ function describeTurnRows(input: {
 
 /**
  * Sorts the base rows and weaves the setup cards in.
- *
- * Three placements, and only one of them is a sort:
- *
- * - the GENESIS card (window 0 with no `setup.creating` event) pins to ordinal
- *   0, because its stamp is back-filled and can land after the first message;
- * - a card whose `triggeringMessageId` names a row that exists is woven
- *   immediately ABOVE that row, by id - the card is announced before the slow
- *   `git worktree add` while its message persists only after, so a timestamp
- *   sort would place it below and then jump it above;
- * - anything else floats by `createdAt`, including a card whose anchor was
- *   branched away, so it still renders instead of vanishing.
- *
- * Ordinals are therefore assigned AFTER the weave. This is the structural
- * reason a shared comparator was never going to be enough.
+ * This is the structural reason a shared comparator was never going to be enough.
  */
 function placeSetupCards(
   base: readonly TranscriptRowDescriptor[],
@@ -1084,10 +740,7 @@ function placeSetupCards(
         windowIndex,
         eventIds: window.events.map((event) => event.eventId),
       },
-      // Both facts come from a partition over the WHOLE log. A client re-running
-      // it on this window's events alone renumbers the card to 0 - which changes
-      // its generated row id, so the skeleton stops matching and the ordinal is
-      // suppressed - and can revive a closed window as active.
+      // Both facts come from a partition over the WHOLE log.
       context: {
         setupWindowIndex: windowIndex,
         setupWindowIsActive: window.isActive,

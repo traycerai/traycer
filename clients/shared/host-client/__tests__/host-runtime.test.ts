@@ -79,32 +79,20 @@ const accountBHostEntry: HostDirectoryEntry = {
 
 class FakeDirectoryService implements IHostDirectoryService {
   entries: HostDirectoryEntry[] = [];
-  /** Every call that triggers a fetch, through EITHER `refresh()` or
-   * `refreshForEra(...)` - the two are one cadence from a caller's
-   * point of view, just keyed differently. */
+  /**
+   * Every call that triggers a fetch, through either `refresh()` or `refreshForEra(...)` - the two are one cadence from a caller's point of view, just keyed differently.
+   */
   readonly refreshCalls = { count: 0 };
-  /** Every era `refreshForEra(...)` was actually called WITH, in order - what
-   * the probes below assert on. */
+  /** Every era `refreshForEra(...)` was actually called with, in order - what
+   */
   readonly refreshForEraCalls: AuthEra[] = [];
   readonly invalidateInFlightRefreshCalls = { count: 0 };
   /**
-   * Per-identity host sets a "fetch" resolves to, keyed by auth context id
-   * (`null` for signed-out). Lets `refreshForEra`/`refresh` model a REAL
-   * commit instead of a no-op counter: a call stamped with the wrong identity
-   * is then observable as the wrong hosts landing in `entries`, not just as a
-   * count. Identities with no entry here leave `entries` untouched, so tests
-   * that only care about call counts do not need to populate this.
+   * Per-identity host sets a "fetch" resolves to, keyed by auth context id (`null` for signed-out).
+   * Lets `refreshForEra`/`refresh` model a real commit instead of a no-op counter: a call stamped with the wrong identity is then observable as the wrong hosts landing in `entries`, not just as a count.
    */
   readonly hostsByIdentity = new Map<string | null, HostDirectoryEntry[]>();
-  /**
-   * Stands in for the ambient accessors `HostDirectoryService.refresh()` reads
-   * in production. A real one can lag an emission it is being read from inside
-   * of, so this is deliberately left STALE across the emissions below: only
-   * the PRE-FIX `refresh()` path reads it, and `HostRuntime`'s context-change
-   * handler must instead thread the era `onChange` itself carried. A test that
-   * updated this atomically with the emission would pass against the bug,
-   * which is the failure mode these probes exist to avoid.
-   */
+  /** Stands in for the ambient accessors `HostDirectoryService.refresh()` reads in production. */
   laggedIdentity: string | null = null;
   async list(): Promise<readonly HostDirectoryEntry[]> {
     return this.entries;
@@ -115,10 +103,8 @@ class FakeDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * The AMBIENT path, and the one the context-change handler must not use.
-   * Kept modelled rather than stubbed so a regression back to calling it from
-   * that handler is detectable: it commits under `laggedIdentity`, not under
-   * whatever identity the emission actually named.
+   * The ambient path, and the one the context-change handler must not use.
+   * Kept modelled rather than stubbed so a regression back to calling it from that handler is detectable: it commits under `laggedIdentity`, not under whatever identity the emission actually named.
    */
   async refresh(): Promise<readonly HostDirectoryEntry[]> {
     this.refreshCalls.count += 1;
@@ -238,11 +224,7 @@ describe("HostRuntime lifecycle", () => {
     expect(
       runtime.hostClient.getRequestContext()?.credentials.getBearerToken(),
     ).toBe("tok-1");
-    // `start()` applies the context and NOTHING ELSE host-shaped: it no longer
-    // binds a host, so there is no `getActiveHostId()` to assert here (P4.2
-    // deleted the slot, and the spine's accessor is a constant `null` kept
-    // only for the requester proxy). The context application is an identity
-    // transition and still sweeps, scope-free.
+    // The context application is an identity transition and still sweeps, scope-free.
     expect(invalidator.calls).toEqual([null]);
   });
 
@@ -324,9 +306,7 @@ describe("HostRuntime lifecycle", () => {
     // Same-user rotation does NOT emit through the provider, so the
     // host-scoped cache is preserved across token refreshes.
     expect(invalidator.calls).toEqual([]);
-    // The in-flight memo IS dropped, though: a promise the old bearer
-    // started must not be joined by a caller under the new one (see
-    // `HostDirectoryService.invalidateInFlightRefresh`).
+    // The in-flight memo IS dropped, though: a promise the old bearer started must not be joined by a caller under the new one (see `HostDirectoryService.invalidateInFlightRefresh`).
     expect(directory.invalidateInFlightRefreshCalls.count).toBe(
       invalidateInFlightBaseline + 1,
     );
@@ -362,12 +342,8 @@ describe("HostRuntime lifecycle", () => {
     expect(directory.refreshCalls.count).toBe(refreshBaseline + 1);
   });
 
-  // DELETED: "rebinds the host client when directory selection changes". It
-  // was a test OF the runtime's selection subscription, which P4.2 removed
-  // along with the slot it wrote to - `HostRuntime` no longer observes
-  // selection at all. What replaced the behaviour is not a rebind: consumers
-  // resolve `effectiveHostId` through the registry per request, which the
-  // gui-app selection-authority suites cover.
+  // Deleted: "rebinds the host client when directory selection changes".
+  // What replaced the behaviour is not a rebind: consumers resolve `effectiveHostId` through the registry per request, which the gui-app selection-authority suites cover.
 
   it("refreshes the directory on local-host transitions from runnerHost", () => {
     const { runtime, directory, runnerHost } = buildRuntime({
@@ -398,12 +374,7 @@ describe("HostRuntime lifecycle", () => {
     runtime.start();
     runtime.dispose();
 
-    // Two probes, not three. The `bind` spy went with the active slot, and the
-    // selection-change stimulus that drove a third went with the runtime's
-    // selection subscription (P4.2) - along with the whole selection half of
-    // the fake directory, since a stimulus that can no longer reach the
-    // subject proves nothing about dispose and reads as coverage it is not.
-    // Both survivors below still fire pre-dispose.
+    // Two probes, not three.
     const setContextSpy = vi.spyOn(runtime.hostClient, "setRequestContext");
     const refreshBaseline = directory.refreshCalls.count;
 
@@ -437,19 +408,8 @@ describe("HostRuntime lifecycle", () => {
 });
 
 describe("HostRuntime context-change refresh is stamped with the era the emission is FOR", () => {
-  // Both probes model the real defect: an ambient accessor read from inside an
-  // emission can still describe the transition that is being replaced.
-  // `directory.laggedIdentity` stands in for such an accessor and is
-  // deliberately left stale across the emission in both tests - a test that
-  // updated it atomically with the emission would prove nothing, because it
-  // could never observe the ordering bug. The runtime must call
-  // `refreshForEra` with the era `onChange` itself carried, not read the
-  // lagged accessor.
-  //
-  // These probes pin the RUNTIME's half: which value it threads. They cannot
-  // see which credential the fetch then runs under, because this fake has no
-  // credential - that half is pinned against the real `AuthService` in
-  // gui-app's `host-directory-auth-era.test.ts`, at the transport boundary.
+  // Both probes model the real defect: an ambient accessor read from inside an emission can still describe the transition that is being replaced.
+  // The runtime must call `refreshForEra` with the era `onChange` itself carried, not read the lagged accessor.
 
   it("switching identity mid-session must not let B's directory retain A's hosts, even while the lagged profile accessor still reads A", () => {
     const { runtime, provider, directory } = buildRuntime({
@@ -460,25 +420,17 @@ describe("HostRuntime context-change refresh is stamped with the era the emissio
     directory.laggedIdentity = "account-a";
 
     runtime.start();
-    // Represents "A's hosts are already loaded", the state a prior mandatory
-    // refresh under A would have produced. (`start()` itself already fired
-    // one `refresh()` off the local-host subscription - that is the OTHER,
-    // unrelated cadence this fix leaves untouched; baseline past it below.)
+    // Represents "A's hosts are already loaded", the state a prior mandatory refresh under A would have produced.
     directory.entries = [accountAHostEntry];
     const refreshBaseline = directory.refreshCalls.count;
 
     signInProvider(provider, "account-b", "tok-b");
 
-    // The runtime must have called `refreshForEra` with the era `onChange`
-    // itself carried - not `refresh()`, which would have read the still-stale
-    // `laggedIdentity` ("account-a") and re-committed A's hosts into B's
-    // directory.
+    // The runtime must have called `refreshForEra` with the era `onChange` itself carried - not `refresh()`, which would have read the still-stale `laggedIdentity` ("account-a") and re-committed A's hosts into B's directory.
     expect(directory.refreshForEraCalls.map((era) => era.identity)).toEqual([
       "account-b",
     ]);
-    // ...and the era carries the generation of the credential that transition
-    // committed, so the same value fences the fetch and the commit. The
-    // provider bumps on every credential change; this is A's sign-in plus B's.
+    // ...and the era carries the generation of the credential that transition committed, so the same value fences the fetch and the commit.
     expect(
       directory.refreshForEraCalls.map((era) => era.credentialGeneration),
     ).toEqual([provider.getCredentialGeneration()]);
@@ -501,9 +453,7 @@ describe("HostRuntime context-change refresh is stamped with the era the emissio
 
     provider.signOut();
 
-    // `null` IS the incoming identity on sign-out - stamping the refresh
-    // with it (rather than the lagged "account-a") is what lets the clearing
-    // commit land instead of being discarded by its own identity guard.
+    // `null` IS the incoming identity on sign-out - stamping the refresh with it (rather than the lagged "account-a") is what lets the clearing commit land instead of being discarded by its own identity guard.
     expect(directory.refreshForEraCalls.map((era) => era.identity)).toEqual([
       null,
     ]);

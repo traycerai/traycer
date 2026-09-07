@@ -1,27 +1,6 @@
 /**
- * React-aware source: open epic tabs (from
- * `useEpicCanvasStore.tabsById` / `openTabOrder`) + epics from the same
- * TanStack Query that powers `/epics` (via `useHistoryQuery`). The
- * two lists dedupe by id with the open-tab copy winning so open
- * epics render with an `"Open"` pill without a second row.
- *
- * The palette's live query is forwarded to the history search (scope prefix
- * stripped), so the rows are the SAME rows the History page would show for
- * that text: the cloud title/repo match plus the local worktree arm that
- * resolves branch names and PR numbers (`84`, `#84`, `PR #84`) to tasks and
- * fetches them by id. With an empty query the source falls back to the
- * default recents page, exactly as before.
- *
- * cmdk still runs its own filter over the pool, so every local-only match
- * key the history search can hit (PR number forms, branch names, repo
- * identifiers) is also carried on the row as a keyword - otherwise a task
- * found BY its PR number would be fetched and then hidden, since neither its
- * id nor its title contains the number.
- *
- * Rendered inside a single "Tasks" group, alphabetical by label.
- *
- * Items dispatch through the router adapter, which resolves the target
- * epic to a concrete local tab id before navigating.
+ * React-aware source: open epic tabs (from `useEpicCanvasStore.tabsById` / `openTabOrder`) + epics from the same TanStack Query that powers `/epics` (via `useHistoryQuery`).
+ * The two lists dedupe by id with the open-tab copy winning so open epics render with an `"Open"` pill without a second row.
  */
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -44,9 +23,7 @@ import type {
 
 /**
  * The text to search task history for, derived from the raw palette query.
- * A leading Tasks prefix (`#`) is stripped so `#84` searches for `84`; any
- * OTHER scope prefix (`>`, `@`, `?`) hides this group entirely, so its text
- * is not worth a cloud round-trip and the default recents are kept instead.
+ * A leading Tasks prefix (`#`) is stripped so `#84` searches for `84`; any OTHER scope prefix (`>`, `@`, `?`) hides this group entirely, so its text is not worth a cloud round-trip and the default recents are kept instead.
  */
 export function taskSearchQuery(paletteQuery: string): string {
   const parsed = parseScopePrefix(paletteQuery);
@@ -109,19 +86,8 @@ export const epicsSource: ReactCommandSource = {
 };
 
 /**
- * The search keys the history query can match a row on that are NOT part of
- * the label. Mirrors `LOCAL_FUSE_OPTIONS` in `use-history-query.ts` - every
- * key there except `title`, which is already the row's label.
- *
- * `worktreePaths` earns its place even though the local epic-id resolution
- * deliberately matches paths NARROWLY (basename, or the full path only for a
- * `/`-shaped query, so a common ancestor like the home directory cannot union
- * unrelated tasks into an ordinary search). That narrowness governs which
- * tasks ENTER the pool; this list only governs which pooled rows cmdk is
- * allowed to show, and can never add a task history did not already match. A
- * worktree directory name is not the branch name - a Traycer worktree carries
- * a hash suffix - so a query that matched only by path would otherwise be
- * fetched and then hidden.
+ * The search keys the history query can match a row on that are NOT part of the label.
+ * Mirrors `LOCAL_FUSE_OPTIONS` in `use-history-query.ts` - every key there except `title`, which is already the row's label.
  */
 function historyMatchKeywords(row: HistoryItem): ReadonlyArray<string> {
   return [

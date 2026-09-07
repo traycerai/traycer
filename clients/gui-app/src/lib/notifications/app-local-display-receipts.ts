@@ -118,9 +118,8 @@ function compactNotificationIds(version: AppLocalDisplayReceiptVersion): void {
   ) {
     return;
   }
-  // Forget the oldest IDs once the index is full. That can permit a retry for
-  // an ancient evicted row, but unlike a user-wide watermark it can never
-  // suppress a notification ID that has no display evidence of its own.
+  // Forget the oldest IDs once the index is full.
+  // That can permit a retry for an ancient evicted row, but unlike a user-wide watermark it can never suppress a notification ID that has no display evidence of its own.
   const currentNotificationKey = encodedNotificationKey(version);
   const obsoleteNotificationKeys = new Set(
     [...latestByNotificationKey.entries()]

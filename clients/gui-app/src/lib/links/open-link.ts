@@ -26,25 +26,8 @@ export type OpenLink = (
 ) => Promise<void>;
 
 /**
- * The one way a URL leaves the app (A6). Order (A1-A5):
- *
- * 1. a non-http(s) scheme or a hard-external kind goes to the OS browser -
- *    there is nothing a browser tile could do with `mailto:` or an OAuth
- *    device grant;
- * 2. `ctrl`/`meta` forces external, `alt` inverts the configured mode;
- * 3. otherwise the per-kind setting decides, and an in-app open goes through
- *    {@link useOpenBrowserUrl}.
- *
- * Terminal links additionally record their dev-server origin, which is what
- * populates the detected-origins list in settings.
- *
- * The returned promise settles with the OS handoff and REJECTS when it fails,
- * for the one caller that needs to know (the report-issue publish flow keeps
- * its preview screen on a failed open, L1). The in-app path resolves
- * immediately - it has already handed off to `openBrowserUrl`, which owns its
- * own failure toast (A5). Nothing needs to await it: the bridge promise
- * carries its own rejection handler (see {@link useOpenLinkWithPending}), so a
- * plain `void openLink(...)` is safe.
+ * The one way a URL leaves the app (A6).
+ * Order (A1-A5):
  */
 export function useOpenLink(): OpenLink {
   return useOpenLinkWithPending().openLink;
@@ -53,17 +36,15 @@ export function useOpenLink(): OpenLink {
 export interface OpenLinkWithPending {
   readonly openLink: OpenLink;
   /**
-   * True while an OS handoff started through THIS hook is outstanding - the
-   * bridge mutation's own `isPending`. Drives `disabled` / `aria-disabled` on
-   * the surfaces where a second click would open the browser twice (R10).
+   * True while an OS handoff started through THIS hook is outstanding - the bridge mutation's own `isPending`.
+   * Drives `disabled` / `aria-disabled` on the surfaces where a second click would open the browser twice (R10).
    */
   readonly isPending: boolean;
 }
 
 /**
- * {@link useOpenLink} plus the bridge mutation's pending flag, for the few
- * surfaces that render a pending state. Everything else takes the function
- * alone.
+ * {@link useOpenLink} plus the bridge mutation's pending flag, for the few surfaces that render a pending state.
+ * Everything else takes the function alone.
  */
 export function useOpenLinkWithPending(): OpenLinkWithPending {
   const target = useLinkTarget();
@@ -76,11 +57,8 @@ export function useOpenLinkWithPending(): OpenLinkWithPending {
       kind: LinkKind,
       event: LinkClickEvent | null,
     ): Promise<void> => {
-      // Most callers fire and forget, so an unhandled rejection would be the
-      // NORMAL case. The handler is attached to THIS promise rather than a
-      // derived copy, so a caller that awaits still sees the failure - which
-      // is what keeps the report-issue publish flow on its preview screen
-      // instead of advancing to the confirmation (L1).
+      // Most callers fire and forget, so an unhandled rejection would be the NORMAL case.
+      // The handler is attached to THIS promise rather than a derived copy, so a caller that awaits still sees the failure - which is what keeps the report-issue publish flow on its preview screen instead of advancing to the confirmation (L1).
       const openExternalLink = (href: string): Promise<void> => {
         const done = mutateAsync(href);
         void done.catch(() => undefined);
@@ -113,11 +91,8 @@ export function useOpenLinkWithPending(): OpenLinkWithPending {
         return openExternalLink(webUrl);
       }
       if (target === null) {
-        // No epic behind this surface at all, so there is no canvas an in-app
-        // tab could land on. This is not the A5 failure case (that one toasts
-        // in `useOpenBrowserUrl`): nothing was attempted and nothing failed,
-        // the surface simply has no in-app destination. Ticket 08 shrinks this
-        // set by mounting `LinkTargetProvider` on the surfaces that do.
+        // No epic behind this surface at all, so there is no canvas an in-app tab could land on.
+        // This is not the A5 failure case (that one toasts in `useOpenBrowserUrl`): nothing was attempted and nothing failed, the surface simply has no in-app destination.
         return openExternalLink(webUrl);
       }
       openBrowserUrl({

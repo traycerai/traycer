@@ -3,14 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 
-/**
- * Deliberately does NOT mock `@/lib/epic-selectors`: the whole point of the
- * registered (registry-keyed, non-throwing) selector switch in
- * `chat-progress-icon.tsx` is that this icon stays renderable with no
- * `<EpicSessionProvider>` in the tree at all - unlike the sibling
- * `chat-progress-icon.test.tsx`, which mocks the module to control the
- * awareness/permission inputs directly.
- */
+/** Deliberately does NOT mock `@/lib/epic-selectors`: the whole point of the registered (registry-keyed, non-throwing) selector switch in `chat-progress-icon.tsx` is that this icon stays renderable with no `<EpicSessionProvider>` in the tree at all - unlike the sibling `chat-progress-icon.test.tsx`, which mocks the module to control the awareness/permission inputs directly. */
 function AmbientPermissionRoleProbe() {
   useEpicPermissionRole();
   return null;
@@ -32,10 +25,7 @@ describe("<ChatProgressIcon /> outside an EpicSessionProvider", () => {
       />,
     );
 
-    // No running-turn spinner and no background-activity glyph: the
-    // registered activity-tiers selector reads an empty map for an epic this
-    // window never opened, which is the correct "no session, no awareness"
-    // answer - not a throw.
+    // No running-turn spinner and no background-activity glyph: the registered activity-tiers selector reads an empty map for an epic this window never opened, which is the correct "no session, no awareness" answer - not a throw.
     expect(screen.queryByTestId("icon-activity-chat-y")).toBeNull();
     expect(screen.queryByTestId("icon-background-activity-chat-y")).toBeNull();
     // No read-only lock: the registered permission-role selector reads

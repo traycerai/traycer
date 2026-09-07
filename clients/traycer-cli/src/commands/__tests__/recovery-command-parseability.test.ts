@@ -4,27 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Command } from "commander";
 import { buildProgramWithAgentRoles } from "../../index";
 
-// CLI-006 (recovery command parseability audit): every recovery instruction
-// this CLI prints - `terminalCommand` literals Desktop renders as a
-// copy-paste "Open in Terminal" chip, and the `'traycer ...'` prose
-// references inside message/description strings that are this codebase's
-// convention for "run this" - must actually be a command `buildProgram()`
-// recognizes. `traycer host install latest` was the defect: `host install`
-// takes no positional (a pin is `--release <version>`), so the string Doctor
-// printed for people to copy would itself fail with "too many arguments".
-//
-// This is a STATIC regression guard, not a snapshot of today's strings: it
-// scans the real source tree on every run and validates whatever it finds
-// against the real command tree, so a future recovery string that drifts
-// from the command surface fails here instead of shipping.
-//
-// Two strictness levels:
-//   - EVERYTHING (terminalCommand and prose) must resolve to a registered
-//     command path, with no excess positionals and no unknown options.
-//   - terminalCommand values must ADDITIONALLY parse completely, including
-//     required options, because Desktop executes them verbatim. Some prose
-//     references are legitimately partial (`'traycer agent stop'` omits its
-//     required `--agent-id`) and are not held to that bar.
+// Every recovery instruction string this CLI prints must parse as a real command.
 
 const SRC_ROOT = join(__dirname, "..", "..");
 
@@ -49,11 +29,8 @@ function listSourceFiles(dir: string): string[] {
   return files;
 }
 
-// Extracts the source text of the value bound to `terminalCommand:` - a
-// string literal, a template literal, or (in `launchd-wedge.ts`) a ternary
-// between two literals - by scanning characters until the enclosing
-// object's depth returns to zero. Handles multi-line ternaries; a
-// line-oriented regex cannot.
+// Extracts the source text of the value bound to `terminalCommand:` - a string literal, a template literal, or (in `launchd-wedge.ts`) a ternary between two literals - by scanning characters until the enclosing object's depth returns to zero.
+// Handles multi-line ternaries; a line-oriented regex cannot.
 function extractAssignedValueSource(text: string, startIndex: number): string {
   let i = startIndex;
   let depth = 0;
@@ -116,11 +93,8 @@ function extractAssignedValueSource(text: string, startIndex: number): string {
   return chars.join("");
 }
 
-// A `'traycer ...'` prose reference can be split across an adjacent
-// double-quoted `"a" + "b"` concatenation purely by line-wrapping (see
-// `doctor/engine.ts`'s "'traycer host " + "restart'"). Collapse those before
-// scanning so the single-quoted match lands on the real command text
-// instead of also swallowing the `" + "` JS syntax between the halves.
+// A `'traycer ...'` prose reference can be split across an adjacent double-quoted `"a" + "b"` concatenation purely by line-wrapping (see `doctor/engine.ts`'s "'traycer host " + "restart'").
+// Collapse those before scanning so the single-quoted match lands on the real command text instead of also swallowing the `" + "` JS syntax between the halves.
 function collapseAdjacentStringConcatenation(text: string): string {
   const pattern = /"((?:[^"\\]|\\.)*)"\s*\+\s*"((?:[^"\\]|\\.)*)"/g;
   let previous: string;
@@ -135,12 +109,8 @@ function collapseAdjacentStringConcatenation(text: string): string {
   return current;
 }
 
-// Single-quoted literals are matched too. Formatting normalises `terminalCommand`
-// values to double quotes or backticks today, so omitting them looked harmless -
-// but the scanner's job is to be robust to how the source is WRITTEN, not to
-// today's formatter settings. A single-quoted `terminalCommand: 'traycer ...'`
-// would otherwise be picked up only by the prose pass, silently dropping it from
-// the strict level-2 check that Desktop's copy-paste chip actually depends on.
+// Single-quoted literals are matched too.
+// Formatting normalises `terminalCommand` values to double quotes or backticks today, so omitting them looked harmless - but the scanner's job is to be robust to how the source is WRITTEN, not to today's formatter settings.
 const STRING_OR_TEMPLATE_LITERAL =
   /`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
 

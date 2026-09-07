@@ -40,11 +40,7 @@ describe("devices and sessions auth DTO schemas", () => {
     ).toThrow();
   });
 
-  /**
-   * Phase-3 host adoption orders by `(provisionedAt, familyId)`, never the
-   * access token's `iat`. Phase 2 can only pin that the mint response schema
-   * carries a parseable `provisionedAt` and fails closed otherwise.
-   */
+  /** Phase-3 host adoption orders by `(provisionedAt, familyId)`, never the access token's `iat`. */
   describe("mintHostCredentialResponseSchema", () => {
     const validBody = {
       token: "host-access-jws",
@@ -70,10 +66,6 @@ describe("devices and sessions auth DTO schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    // Each of these parses fine under `Date.parse`, so a permissive
-    // `refine(!Number.isNaN(Date.parse(value)))` schema would accept them -
-    // they are exactly what proves `isoMillisecondTimestampSchema` (offset +
-    // millisecond precision required) tightened the contract.
     it("rejects date-only, human-readable, and non-millisecond-precision provisionedAt", () => {
       expect(
         mintHostCredentialResponseSchema.safeParse({

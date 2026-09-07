@@ -47,9 +47,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     nodeId === "child-2" ? "claude" : null,
 }));
 
-// Stub the host-coupled stop button so these render tests stay focused on the
-// panel/list structure (header "Stop all", per-row hover stops, self-stop
-// inclusion) without the host client / mutation stack.
+// Stub the host-coupled stop button so these render tests stay focused on the panel/list structure (header "Stop all", per-row hover stops, self-stop inclusion) without the host client / mutation stack.
 vi.mock("@/components/chat/agent-stop-button", () => ({
   AgentStopButton: (props: {
     readonly label: string;
@@ -141,9 +139,7 @@ describe("ActiveAgentsPanel", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: /active agents/i }));
 
-    // "Stop all" now lives on the current agent's row (compact, icon-only) and
-    // stays visible there - the header no longer shows a duplicate, and the
-    // parent row is never stop-less.
+    // "Stop all" now lives on the current agent's row (compact, icon-only) and stays visible there - the header no longer shows a duplicate, and the parent row is never stop-less.
     const stopAll = screen.getAllByTestId("agent-stop-all");
     expect(stopAll).toHaveLength(1);
     expect(stopAll[0].getAttribute("data-agent-id")).toBe("self");
@@ -174,9 +170,7 @@ describe("ActiveAgentsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Root chat" }));
     fireEvent.click(screen.getByRole("button", { name: "Open Sub-agent two" }));
 
-    // The row press is a deliberate open of a named agent into THIS view tab,
-    // de-duped onto an already-open tile, and it carries the click's modifier
-    // triple so a shift/alt-click still reaches the resolver.
+    // The row press is a deliberate open of a named agent into THIS view tab, de-duped onto an already-open tile, and it carries the click's modifier triple so a shift/alt-click still reaches the resolver.
     expect(
       navigation.openTile.mock.calls.map(
         ([

@@ -1,25 +1,4 @@
-/**
- * Submodule-aware `git.*@1.1` compatibility + schema tests (v2 - simplified).
- *
- * Covers the ticket verifications for the de-implemented v1.1 schema:
- *  1. Registry validation - `listChangedFiles@1.1` carries an upgrade path and
- *     NO same-major downgrade path; `getFileDiff`/`getFileDiffs` stay v1.0-only
- *     (their no-op v1.1 bump was dropped).
- *  2. Transport skew - new-GUI/old-host upgrades a v1.0 listChangedFiles response
- *     to `submodules: []` / `gitlink: null`; old-GUI/new-host strips the v1.1
- *     response fields, and a v1.0 listChangedFiles request upgrades with
- *     `includeSubmodules: false` (parent-only, no fan-out).
- *  3. Stream minor-0 projection guard - `subscribeStatus@1.0` frames stay
- *     parse-equivalent to today and carry no `gitlink` / `submodules` /
- *     `nestedFingerprint`, even when fed a genuine v1.1 frame (this is the
- *     client-side of the two independent projection guards).
- *  4. Simplified shapes - the minimal `submodulePointer` (pin equality via
- *     `diverged` + dirty/conflicted flags, no merge-base direction) and the
- *     working-tree-only `submoduleChangeset` (files + a `pointer`, no
- *     commits-ahead expansion).
- *  5. Stream v1.1 frames - `subscribeStatus@1.1` nested-snapshot fixtures
- *     round-trip (snapshot + updated with per-submodule `changedPaths`).
- */
+/** Submodule-aware `git.*@1.1` compatibility + schema tests (v2 - simplified). */
 import { describe, it, expect } from "vitest";
 import {
   upgradeRequestToVersion,
@@ -67,9 +46,6 @@ const v10File: GitChangedFileV10 = {
   worktreeOid: "wt-oid",
 };
 
-// The parent's view of an ordinary (non-conflicted) dirty gitlink - the minimal
-// pointer: recorded pin vs submodule HEAD equality via `diverged`, plus the
-// dirty flags. NO ahead/behind direction, NO staged index pin.
 const gitlinkDescriptor = {
   kind: "normal" as const,
   recordedPinSha: "a1b2c3",
@@ -125,13 +101,8 @@ describe("git.*@1.1 registry", () => {
   });
 
   it("registers git.subscribeStatus minors {0,1,2,3} on major 1", () => {
-    // subscribeStatus is a stream method - absence from the unary registry is
-    // structural; assert the stream line itself. The unary-v1.1 work froze the
-    // stream at 1.0; the watcher-driven-refresh plan DELIBERATELY reversed
-    // that scoping: minor 1 carries the nested snapshot, the v1.0 frame schema
-    // stays byte-frozen, and the HOST resolver projects frames for minor-0
-    // connections (streams have no version bridges). No new major, no new
-    // method name - both are handshake-fatal against released peers.
+    // subscribeStatus is a stream method - absence from the unary registry is structural; assert the stream line itself.
+    // No new major, no new method name - both are handshake-fatal against released peers.
     expect("git.subscribeStatus" in hostRpcRegistry).toBe(false);
 
     const streamLine = hostStreamRpcRegistry["git.subscribeStatus"][1];
@@ -249,9 +220,6 @@ describe("subscribeStatus minor-0 projection guard (client side)", () => {
   });
 
   it("strips gitlink, submodules AND nestedFingerprint from a v1.1 snapshot", () => {
-    // The non-strict v1.0 parse is the RELEASED-CLIENT half of the two
-    // independent projection guards (the host resolver is the other): even if
-    // a v1.1 frame ever reached a v1.0 parser, every v1.1 field is dropped.
     const parsed = gitSubscribeStatusEventSchema.parse(v11SnapshotFrame);
     expect("submodules" in parsed).toBe(false);
     expect("nestedFingerprint" in parsed).toBe(false);
@@ -370,8 +338,7 @@ describe("subscribeStatus@1.3 watcher health", () => {
 
   it("requires watcher on snapshot/updated frames", () => {
     // A v1.2 frame is NOT a v1.3 frame: the field is required, never defaulted.
-    // Defaulting would let a host that never learned about watcher health
-    // silently claim a state it cannot observe.
+    // Defaulting would let a host that never learned about watcher health silently claim a state it cannot observe.
     expect(() =>
       gitSubscribeStatusEventSchemaV13.parse({
         ...v11SnapshotFrame,
@@ -395,9 +362,7 @@ describe("subscribeStatus@1.3 watcher health", () => {
   });
 
   it("keeps the error variant free of watcher across minors", () => {
-    // Git-compute failure and watcher health degrade independently; the error
-    // variant must stay shape-identical on every minor so a client can render
-    // it without a version branch.
+    // Git-compute failure and watcher health degrade independently; the error variant must stay shape-identical on every minor so a client can render it without a version branch.
     const error = { type: "error" as const, message: "boom", isFatal: false };
     expect(gitSubscribeStatusEventSchemaV13.parse(error)).toEqual(error);
     expect(gitSubscribeStatusEventSchemaV12.parse(error)).toEqual(error);
@@ -405,9 +370,6 @@ describe("subscribeStatus@1.3 watcher health", () => {
   });
 
   it("keeps lower-minor parsers byte-compatible by stripping watcher", () => {
-    // The released-client half of the two projection guards: even if a v1.3
-    // frame reached an older parser, `watcher` is dropped rather than surfacing
-    // as an unrecognized field.
     const v12 = gitSubscribeStatusEventSchemaV12.parse(v13SnapshotFrame);
     const v11 = gitSubscribeStatusEventSchemaV11.parse(v13SnapshotFrame);
     const v10 = gitSubscribeStatusEventSchema.parse(v13SnapshotFrame);
@@ -519,10 +481,8 @@ describe("v1.1 simplified schema shapes", () => {
   });
 
   it("tolerates unknown/missing reason values, degrading them to git-error", () => {
-    // A future host emitting a reason value this GUI does not know must NOT
-    // hard-fail parsing: `.catch("git-error")` degrades unknown enum VALUES in
-    // the retained `reason` field to the known default. Minor-skew projection
-    // strips unknown KEYS, never unknown VALUES, so the bare enum was a trap.
+    // A future host emitting a reason value this GUI does not know must NOT hard-fail parsing: `.catch("git-error")` degrades unknown enum VALUES in the retained `reason` field to the known default.
+    // Minor-skew projection strips unknown KEYS, never unknown VALUES, so the bare enum was a trap.
     const futureReason = submoduleAvailabilitySchema.parse({
       state: "unavailable",
       reason: "timeout",

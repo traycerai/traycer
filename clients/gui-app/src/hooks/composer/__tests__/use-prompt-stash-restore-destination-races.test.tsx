@@ -27,10 +27,7 @@ const storeMocks = vi.hoisted(() => ({
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
-/**
- * Optional delayed materialize for destination-race tests. When `impl` is set,
- * restore uses it instead of the real blob-read path.
- */
+/** When `impl` is set, restore uses it instead of the real blob-read path. */
 const materializeMocks = vi.hoisted(() => ({
   impl: null as null | ((entry: PromptStashEntry) => Promise<JsonContent>),
 }));
@@ -345,10 +342,8 @@ describe("usePromptStash restore destination races", () => {
     });
 
     it("uses the latest render's destination for post-materialize import (sync destinationRef)", async () => {
-      // After materialize, importAndInsert is invoked through
-      // destinationRef.current (freshest adapter), not the generation that
-      // started materialize. Owner-2 receives the originally captured identity
-      // and must refuse it.
+      // Owner-2 receives the originally captured identity and must refuse it.
+      // After materialize, importAndInsert is invoked through destinationRef.current (freshest adapter), not the generation that started materialize.
       const entry: PromptStashEntry = {
         id: "entry-dest-swap",
         createdAt: 1,
@@ -416,10 +411,7 @@ describe("usePromptStash restore destination races", () => {
     });
 
     it("importAndInsert sees live identity mutated during destination materialize", async () => {
-      // Regression: importAndInsert must re-check against live adapter state
-      // after materialize, not a value closed over when restore started.
-      // Drive this with a custom destination.materialize that delays, and an
-      // importAndInsert that reads `let currentKey` from test scope.
+      // Regression: importAndInsert must re-check against live adapter state after materialize, not a value closed over when restore started.
       const entry: PromptStashEntry = {
         id: "entry-live-key",
         createdAt: 1,

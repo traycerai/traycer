@@ -14,21 +14,8 @@ export interface ParkedSweepReview {
 }
 
 /**
- * What a Sweep session owes across the dialog's lifetime - the part that must
- * NOT live in component state, because the flow never holds the user.
- *
- * A person clicks Remove and may close the dialog, or leave the surface it is
- * mounted on, before the proof settles. The proof continues (it is a plain
- * promise chain, nothing cancels it), and when it lands it needs somewhere to
- * put its answer that outlives the component: `proving` says a click is still
- * being answered for this session, `parked` holds a review that needs the
- * person's consent, and `open` says whether a dialog is on screen to receive
- * it - if not, the proof toasts instead. Keyed by the dialog's own session key
- * (`host + Task set`), so a review proven on host A can never paint over a
- * dialog pointed at host B.
- *
- * In-memory only, on purpose: consent is never inferred, so a review that was
- * never confirmed simply disappears with the app.
+ * What a Sweep session owes across the dialog's lifetime - the part that must NOT live in
+ * component state, because the flow never holds the user.
  */
 interface SweepSessionState {
   readonly proving: ReadonlySet<string>;

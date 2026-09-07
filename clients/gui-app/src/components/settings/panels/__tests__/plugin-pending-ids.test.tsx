@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-/**
- * Unit-level regression for the pending-ids Set pattern used by plugins tab.
- * Mirrors markPending add/remove without mounting HostRuntime/QueryClient.
- */
+/** Mirrors markPending add/remove without mounting HostRuntime/QueryClient. */
 function createPendingIdsTracker() {
   let pendingIds: ReadonlySet<string> = new Set();
 

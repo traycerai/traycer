@@ -79,11 +79,8 @@ import { MigrationRunController } from "@/components/migration/migration-run-con
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
 
-/**
- * A stub satisfying `IHostStreamClient` honestly rather than casting - never
- * exercised by this suite, since `MigrationStreamClient` is itself mocked
- * above and never calls through to it.
- */
+/** A stub satisfying `IHostStreamClient` honestly rather than casting - never exercised by this suite, since
+ * `MigrationStreamClient` is itself mocked above and never calls through to it. */
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => {

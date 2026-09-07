@@ -45,9 +45,7 @@ describe("stampUpdateDispatchAck", () => {
       claimedAtIso: "2026-01-01T00:00:00.000Z",
     });
 
-    // Read back through the DECODER the resolver uses, not through a local
-    // JSON.parse: what matters is that the reader on the other side of this
-    // contract accepts these exact bytes.
+    // Read back through the DECODER the resolver uses, not through a local JSON.parse: what matters is that the reader on the other side of this contract accepts these exact bytes.
     const decoded = decodeUpdateDispatchAck(
       await readFile(updateDispatchAckPath(home), "utf8"),
     );
@@ -73,9 +71,8 @@ describe("stampUpdateDispatchAck", () => {
       claimedAtIso: "2026-01-01T00:00:00.000Z",
     });
 
-    // Enumerated, not a single-name absence check: an unexpected extra file
-    // fails loudly here, where checking for one name would miss it. A leaked
-    // temp accumulates in the host home silently and forever.
+    // Enumerated, not a single-name absence check: an unexpected extra file fails loudly here, where checking for one name would miss it.
+    // A leaked temp accumulates in the host home silently and forever.
     expect((await readdir(home)).sort()).toEqual(["update-dispatch-ack.json"]);
   });
 
@@ -107,11 +104,8 @@ describe("stampUpdateDispatchAck", () => {
   });
 
   it("cleans up its scratch file when the publish itself fails", async () => {
-    // The throw path, which the success-path test above cannot reach. A
-    // directory standing where the ACK belongs makes `rename` fail for a
-    // reason the writer cannot anticipate - which is the point: the guarantee
-    // is that ANY publish failure leaves no scratch behind, not that the
-    // writer enumerated the failures.
+    // The throw path, which the success-path test above cannot reach.
+    // A directory standing where the ACK belongs makes `rename` fail for a reason the writer cannot anticipate - which is the point: the guarantee is that ANY publish failure leaves no scratch behind, not that the writer enumerated the failures.
     const home = await freshHome();
     await mkdir(updateDispatchAckPath(home), { recursive: true });
 
@@ -139,9 +133,8 @@ describe("stampUpdateDispatchAck", () => {
       }),
     ).rejects.toThrow(/nonce/);
 
-    // Both halves. Throwing while still having written a junk file would be
-    // worse than not refusing at all: no wait would ever accept it, and it
-    // would sit in the host home indefinitely.
+    // Both halves.
+    // Throwing while still having written a junk file would be worse than not refusing at all: no wait would ever accept it, and it would sit in the host home indefinitely.
     expect(await readdir(home)).toEqual([]);
   });
 

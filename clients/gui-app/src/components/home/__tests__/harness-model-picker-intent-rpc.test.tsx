@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same UI/infra scaffolding `harness-model-picker.test.tsx` mocks - none of it
-// is the network boundary this suite cares about. The one deliberate
-// difference from that file: `@/hooks/harnesses/use-gui-harness-catalog` is
-// NOT mocked here - the whole point of this suite is to exercise the real
-// query hooks against a mocked host transport so an actual RPC undercount (or
-// overcount) is observable, which a wholesale hook mock structurally cannot
-// catch (see the review comment on PR #331).
+// The one deliberate difference from that file: `@/hooks/harnesses/use-gui-harness-catalog` is not mocked
+// here.
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: vi.fn(),
@@ -87,16 +82,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   }),
 }));
 
-// `runTargetHostId` is always `null` in this suite's fixtures (see
-// `renderPickerWithFixture`), so this mirrors the real hook's `null` branch
-// exactly: fall back to the app-wide default host's client
-// (`hostBindingMock.current?.hostClient`, the same real `HostClient` over a
-// `MockHostMessenger` the suite's RPC-count assertions depend on) rather than
-// a bare sentinel string. The picker now threads this client straight into
-// `useHostQuery` (via the REAL, unmocked `…ForClient` catalog hooks - see the
-// file header), which calls `client?.getActiveHostId()` - a plain string
-// lacks that method and throws, which is exactly what regressed every test
-// in this file before this fix.
+// `runTargetHostId` is always `null` in this suite's fixtures (see `renderPickerWithFixture`), so this mirrors
+// the real hook's `null` branch exactly.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? (hostBindingMock.current?.hostClient ?? null) : hostId,
@@ -230,12 +217,10 @@ const hostBindingMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => hostBindingMock.current,
-  // `useRefreshHarnessCatalog` (wired to the picker's manual refresh button,
-  // not part of this suite's intent-edge assertions) reads the client via
-  // `useHostClient()` rather than `useHostBinding()?.hostClient` - both must
-  // resolve to the same fixture client or the component throws on render.
+  // `useRefreshHarnessCatalog` (wired to the picker's manual refresh button, not part of this suite's
+  // intent-edge assertions) reads the client via `useHostClient` rather than `useHostBinding?.hostClient`.
   useHostClient: () => hostBindingMock.current?.hostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => hostBindingMock.current?.hostClient,
 }));
 
@@ -329,14 +314,8 @@ interface PickerRpcFixture {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
-/**
- * Real `HostClient` over a `MockHostMessenger`, mirroring the fixture in
- * `use-gui-harness-catalog.test.tsx` (~L210-245) - the only faked boundary is
- * the network; every query hook, TanStack cache, and React effect above it is
- * real. `calls` is populated from inside the typed mock handlers (rather than
- * parsed back out of the messenger's untyped `calls` log) so counting a
- * harness's RPCs never needs an `as`-cast on `unknown` params.
- */
+/** `calls` is populated from inside the typed mock handlers (rather than parsed back out of the messenger's
+ * untyped `calls` log) so counting a harness's RPCs never needs an `as`-cast on `unknown` params. */
 function createPickerRpcFixture(
   harnesses: ReadonlyArray<ListGuiHarnessesResponse["harnesses"][number]>,
 ): PickerRpcFixture {
@@ -441,13 +420,7 @@ async function openPickerByTriggerName(
   await screen.findByRole("textbox", { name: /^Search/ });
 }
 
-/**
- * Waits for `label` to appear among the MODEL ROWS. Scoped to the row list
- * because the trigger shows the same text after a commit - and re-queried on
- * every retry because a cold browse renders the "Loading models" state row
- * (no scroller) until the browsed provider's real fetch lands, then remounts
- * the Virtuoso list under a fresh node.
- */
+/** Scoped to the row list because the trigger shows the same text after a commit. */
 async function findModelRow(label: string): Promise<void> {
   await waitFor(() => {
     within(screen.getByTestId("virtuoso-scroller")).getByText(label);
@@ -463,12 +436,8 @@ async function closePickerByTriggerName(
   });
 }
 
-/**
- * Ages every cached catalog entry past the refresh window. Both
- * `harnessCatalogEntryNeedsRefresh` and TanStack's own `dataUpdatedAt` read
- * `Date.now()`, so moving the system clock is what puts a cache entry "15
- * minutes old" without any real waiting.
- */
+/** Both `harnessCatalogEntryNeedsRefresh` and TanStack's own `dataUpdatedAt` read `Date.now`, so moving the
+ * system clock is what puts a cache entry "15 minutes old" without any real waiting. */
 function ageCachePastRefreshWindow(): void {
   vi.setSystemTime(Date.now() + HARNESS_CATALOG_REFRESH_AFTER_MS + 1_000);
 }
@@ -485,10 +454,8 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   beforeEach(() => {
-    // Fake `Date` only. The refresh window is measured in wall-clock time, so
-    // `ageCachePastRefreshWindow` needs a movable `Date.now()` - but timers
-    // themselves must stay real, or Testing Library's `findBy*` / `waitFor`
-    // (and the mocked transport's async replies) would never settle.
+    // The refresh window is measured in wall-clock time, so `ageCachePastRefreshWindow` needs a movable
+    // `Date.now`.
     vi.useFakeTimers({ toFake: ["Date"] });
     useKeybindingStore.getState().resetAll();
     useComposerHarnessMemoryStore.getState().resetForTests();
@@ -503,17 +470,13 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     ]);
     renderPickerWithFixture(fixture, defaultSelection("codex"));
 
-    // Let the harnesses fetch resolve, `selectedHarnessAvailable` flip true,
-    // and `selectedModelsQuery`'s own `enabled` gate transition - this is a
-    // real TanStack "enabled just turned true" fetch, not the guarded intent
-    // edge, and it is legitimate: `selectedModelsQuery` feeds the trigger /
-    // footer UI directly.
+    // Let the harnesses fetch resolve, `selectedHarnessAvailable` flip true, and `selectedModelsQuery`'s own
+    // `enabled` gate transition.
     await screen.findByText("codex Model 1");
 
     expect(countFor(fixture.calls.listModels, "codex")).toBe(1);
-    // The commands prewarm query is held `enabled: false` - only the guarded
-    // intent-edge refetch below may ever fire it. Nothing has opened the
-    // picker or changed selection yet, so it must still be zero.
+    // The commands prewarm query is held `enabled: false` - only the guarded intent-edge refetch below may ever
+    // fire it. Nothing has opened the picker or changed selection yet, so it must still be zero.
     expect(countFor(fixture.calls.listCommands, "codex")).toBe(0);
   });
 
@@ -529,16 +492,11 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
 
     await openPickerByTriggerName(/^codex Model 1/);
 
-    // The mount fetch filled this entry seconds ago, so the open edge has
-    // nothing to refresh. `.refetch()` ignores `staleTime` as well as
-    // `enabled`, so without the freshness guard EVERY open would re-hit
-    // `listModels` - and respawn a reaped OpenCode server - however warm the
-    // cache was.
+    // `.refetch` ignores `staleTime` as well as `enabled`, so without the freshness guard every open would re-hit
+    // `listModels` - and respawn a reaped OpenCode server - however warm the cache was.
     expect(countFor(fixture.calls.listModels, "codex")).toBe(modelsBeforeOpen);
-    // The commands prewarm has never loaded, so it IS due on this edge. It is
-    // the only call that reaches a Traycer/OpenRouter server (their models come
-    // from remote HTTP and never touch it), which is the whole point of firing
-    // it here.
+    // It is the only call that reaches a Traycer/OpenRouter server (their models come from remote HTTP and never
+    // touch it), which is the whole point of firing it here.
     expect(countFor(fixture.calls.listCommands, "codex")).toBe(1);
   });
 
@@ -558,12 +516,6 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
       expect(countFor(fixture.calls.listCommands, "codex")).toBe(1);
     });
 
-    // The cold-host regression this suite now holds: the picker's catalog
-    // read is `"cached-only"`, so opening it on a host whose model slots are
-    // all empty (this fixture's fresh client stands in for a remote host no
-    // prefetcher ever filled) issues zero rail-wide listModels - previously
-    // one spawned provider server per available entry - and exactly one for
-    // the harness the user is actually on.
     expect(countFor(fixture.calls.listModels, "codex")).toBe(1);
     expect(countFor(fixture.calls.listModels, "claude")).toBe(0);
     expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
@@ -582,13 +534,8 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     fireEvent.click(screen.getByRole("tab", { name: "claude" }));
     await findModelRow("claude Model 1");
 
-    // Exactly once: browsing an available entry commits the selection in the
-    // same commit that enables its first fetch, so the browsed-provider and
-    // selected-harness queries land on ONE cold slot and dedupe into one
-    // fetch. (The selection intent edge also races this slot; its in-flight
-    // guard is covered as a unit in `use-gui-harness-catalog.test.tsx` - this
-    // mock transport honors the abort before its handler runs, so a canceled
-    // re-issue would not be countable here.)
+    // (The selection intent edge also races this slot; its in-flight guard is covered as a unit in
+    // `use-gui-harness-catalog.test.tsx`.
     expect(countFor(fixture.calls.listModels, "claude")).toBe(1);
     expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
   });
@@ -647,9 +594,8 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     await waitFor(() => {
       expect(countFor(fixture.calls.listCommands, "claude")).toBe(1);
     });
-    // ONE models fetch for the whole browse+commit: the browsed-provider and
-    // selected-harness queries share the cache slot, and the intent edge
-    // joins the fetch in flight rather than re-issuing it.
+    // One models fetch for the whole browse+commit: the browsed-provider and selected-harness queries share the
+    // cache slot, and the intent edge joins the fetch in flight rather than re-issuing it.
     expect(countFor(fixture.calls.listModels, "claude")).toBe(1);
   });
 
@@ -662,8 +608,8 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     await screen.findByText("codex Model 1");
 
     await openPickerByTriggerName(/^codex Model 1/);
-    // Warm claude by browsing it, then return to codex, so the aged switch
-    // below is a real selection CHANGE landing on warm-but-aged data.
+    // Warm claude by browsing it, then return to codex, so the aged switch below is a real selection change
+    // landing on warm-but-aged data.
     fireEvent.click(screen.getByRole("tab", { name: "claude" }));
     await findModelRow("claude Model 1");
     fireEvent.click(screen.getByRole("tab", { name: "codex" }));
@@ -708,10 +654,8 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     await screen.findByText("codex Model 1");
     await openPickerByTriggerName(/^codex Model 1/);
 
-    // Bypasses the rail-click gate (which only commits available harnesses)
-    // to reproduce a selection change arriving from elsewhere while
-    // unavailable, mirroring the equivalent case in
-    // `harness-model-picker.test.tsx`.
+    // Bypasses the rail-click gate (which only commits available harnesses) to reproduce a selection change
+    // arriving from elsewhere while unavailable, mirroring the equivalent case in `harness-model-picker.test.tsx`.
     act(() => {
       store.getState().setSelection(defaultSelection("opencode"));
     });

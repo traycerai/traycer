@@ -32,10 +32,8 @@ vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
     await importActual<typeof import("@/lib/composer/landing-image-gc")>();
   gcMocks.actualScheduleLandingImageReconcile =
     actual.scheduleLandingImageReconcile;
-  // Default: a no-op stub, not a call-through. The real scheduler starts a
-  // 250ms timer that later calls the real `reconcile()`, which would otherwise
-  // escape most tests' boundaries. Tests that need the real reclaim chain
-  // opt in via mockImplementation → actualScheduleLandingImageReconcile.
+  // Default: a no-op stub, not a call-through.
+  // The real scheduler starts a 250ms timer that later calls the real `reconcile()`, which would otherwise escape most tests' boundaries.
   gcMocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
   return {
     ...actual,

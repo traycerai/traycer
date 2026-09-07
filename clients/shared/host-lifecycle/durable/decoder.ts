@@ -14,10 +14,6 @@ import {
   TRANSITION_SUPPORTED_VERSIONS,
 } from "./records";
 
-/**
- * Input to a durable-record decoder. Callers map fs errors into this
- * shape so the decoder itself stays pure and total.
- */
 export type DurableBytes =
   | { readonly kind: "missing" }
   | { readonly kind: "unreadable"; readonly cause: string }
@@ -99,17 +95,7 @@ export function decodeSubstrateRecord(
 }
 
 /**
- * Decodes `transition.json` into the **T3 world-probe projection**
- * (`records.ts:TransitionJournal`) — NOT the full journal.
- *
- * The projection deliberately omits `kind`, `probeDeadlineAt` and `terminal`,
- * because the world probe does not need them. The CLI's probe-authority path
- * decides on exactly those three fields, so "just use the shared decoder" is
- * wrong there and would silently delete the `probeDeadlineAt` bound — it
- * reuses this module's total decoder and version gate with its own richer
- * parser instead (`traycer-cli/src/host/lifecycle-probe.ts`).
- *
- * Two shapes, one name: see also `transition/types.ts:LifecycleTransitionJournal`.
+ * Decodes `transition.json` into the **T3 world-probe projection** (`records.ts:TransitionJournal`) - not the full journal.
  * Widen this projection only if the world probe genuinely needs the field.
  */
 export function decodeTransitionJournal(
@@ -120,10 +106,7 @@ export function decodeTransitionJournal(
     if (typeof obj.probeNonce !== "string") return null;
     if (obj.from !== "smappservice" && obj.from !== "raw-fallback") return null;
     if (obj.to !== "smappservice" && obj.to !== "raw-fallback") return null;
-    // Fail CLOSED on an unrecognized phase. Accepting any string let an
-    // unknown/on-disk-future phase through as a valid journal, which every
-    // consumer then had to classify by guesswork - and Ticket 05's guess was
-    // "in-flight", producing a permanent ownership veto.
+    // Fail closed on an unrecognized phase.
     if (!isTransitionPhase(obj.phase)) return null;
     if (typeof obj.startedAt !== "string") return null;
     if (!Array.isArray(obj.expectedIdentities)) return null;
@@ -186,11 +169,6 @@ function stringOrNull(value: unknown): string | null {
   return null;
 }
 
-/**
- * Install records historically omit a top-level `v` and use a looser
- * shape. Accept either `{ v: 1, ... }` or a legacy object with `version`
- * + `installedAt` (synthesized as version 1).
- */
 export function decodeInstallRecord(
   input: DurableBytes,
 ): DurableRecord<InstallRecord> {

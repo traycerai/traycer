@@ -47,14 +47,7 @@ function nextBrowserSidebarTabRows(
 }
 
 /**
- * Every browser tab across the surface's sessions, as rows in a stable order:
- * tabs that were already listed keep their position and only the newcomers are
- * appended, so a title settling or a session re-reporting itself never
- * reshuffles the list under a finger or a cursor.
- *
- * Identity is settled through {@link nextSettledTabIdentity} against the row's
- * own previous identity, which is what keeps a tab mid-navigation from blinking
- * back to "Browser" between the commit and the new document's title.
+ * Every browser tab across the surface's sessions, as rows in a stable order: tabs that were already listed keep their position and only the newcomers are appended, so a title settling or a session re-reporting itself never reshuffles the list under a finger or a cursor.
  */
 export function useBrowserSidebarTabRows(
   sessions: readonly BrowserSessionInfo[],

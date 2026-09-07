@@ -22,11 +22,7 @@ export interface HostNotificationPresentation {
 
 /**
  * Canonical user-facing copy for one enriched host notification entry.
- *
- * The host and every renderer-facing surface consume this formatter so an
- * external delivery cannot drift from the in-app notification feed. Unknown,
- * future, cross-kind, or malformed semantic payloads degrade to the same safe
- * generic copy instead of throwing or exposing untrusted raw error text.
+ * The host and every renderer-facing surface consume this formatter so an external delivery cannot drift from the in-app notification feed.
  */
 export function formatHostNotificationPresentation(
   entry: HostNotificationEntryV22,
@@ -80,9 +76,8 @@ export function formatHostNotificationPresentation(
         entry.payload,
         known,
       );
-    // Host-composed title, agent-authored reason as the context. The reason is
-    // the only thing that says WHICH wall was hit, so it leads the body; a
-    // payload this build cannot parse still gets the title and the status.
+    // Host-composed title, agent-authored reason as the context.
+    // The reason is the only thing that says WHICH wall was hit, so it leads the body; a payload this build cannot parse still gets the title and the status.
     case "browser.human.needed":
       return {
         title: "Browser needs you",
@@ -98,26 +93,8 @@ function browserHumanNeededReason(
 }
 
 /**
- * Three-tier degradation for a host-wide operation completion, resolved as a
- * per-FIELD fallback chain rather than a first-match-wins branch:
- *
- *  1. a KNOWN operation payload's own copy, when that arm supplies any
- *     (`hostOperationKnownCopy`);
- *  2. the common `operation`/`title`/`message` convention read leniently off
- *     the open record, so an operation newer than this build still shows
- *     host-composed copy;
- *  3. generic copy, keyed only off the durable `outcome` column.
- *
- * The chain is per-field on purpose. A first-match-wins branch would let the
- * first real operation arm REGRESS a row that already renders host-composed
- * copy today: recognising the payload would swap "Deleted 3 worktrees" for
- * whatever the known branch produced. Here an arm can only ever add copy, so
- * a known payload is never worse than an unknown one - which is the property
- * that makes the tier ordering safe to activate.
- *
- * Tiers 2 and 3 are what make the frozen outer arm affordable: a future
- * operation is additive at the payload layer and never needs another outer
- * kind. Copy comes from the host, so it reaches email and hooks unchanged.
+ * Three-tier degradation for a host-wide operation completion, resolved as a per-FIELD fallback chain rather than a first-match-wins branch
+ * Tiers 2 and 3 are what make the frozen outer arm affordable: a future operation is additive at the payload layer and never needs another outer kind.
  */
 function hostOperationFinishedPresentation(
   outcome: HostNotificationOutcome,
@@ -139,13 +116,8 @@ function hostOperationFinishedPresentation(
 }
 
 /**
- * Per-operation copy for a payload arm this build fully understands, or
- * `null` to inherit the common-field/generic copy below it.
- *
- * Exhaustive over the known payload union so every operation arm gets a
- * compile-visible slot here. A Task-scoped operation may replace the title
- * with its Task name, but must retain the host-composed operation result in
- * the body. Host-wide rows inherit the common payload copy unchanged.
+ * Per-operation copy for a payload arm this build fully understands, or `null` to inherit the common-field/generic copy below it.
+ * A Task-scoped operation may replace the title with its Task name, but must retain the host-composed operation result in the body.
  */
 export function hostOperationKnownCopy(
   payload: HostNotificationKnownPayload,
@@ -190,9 +162,7 @@ function hostOperationGenericBody(outcome: HostNotificationOutcome): string {
   return "Host operation • Done";
 }
 
-// The protocol records only whether an approval/interview has resolved, not
-// how it resolved. Keep the canonical formatter honest and shared across the
-// in-app feed and external hook deliveries.
+// The protocol records only whether an approval/interview has resolved, not how it resolved.
 function resolvableRequestStatus(
   resolvedAt: number | null,
   waitingLabel: string,
@@ -217,16 +187,7 @@ function knownPresentationContext(known: HostNotificationKnownPayload | null) {
   };
 }
 
-/**
- * The task title a chat-scoped payload carries, or `null` for a payload that
- * has no task at all.
- *
- * Read through a switch rather than off the union directly (`known.taskTitle`)
- * because host-WIDE operation payloads are not addressed to an epic/chat and
- * carry no such field. This is the compile-visible seam that stopped the first
- * host-wide arm from being modelled as "a task notification with the task
- * fields left blank".
- */
+/** The task title a chat-scoped payload carries, or `null` for a payload that has no task at all. */
 function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
   switch (payload.kind) {
     case "chat":

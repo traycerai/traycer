@@ -39,10 +39,7 @@ const testState = vi.hoisted(() => {
   };
 });
 
-// The fake cloud applies the request's text query as a title filter, the way
-// the real cloud task index does - so a query that only matches local
-// worktree strings comes back empty from the "server" and must be satisfied
-// by the id-fetched union.
+// The fake cloud applies the request's text query as a title filter, the way the real cloud task index does - so a query that only matches local worktree strings comes back empty from the "server" and must be satisfied by the id-fetched union.
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: (request: ListCloudTasksRequest) => {
     const query = request.filters?.query?.trim().toLowerCase() ?? "";
@@ -59,10 +56,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
       currentUserId: "user-1",
       tasks,
       query: {
-        // Facets ride along even on the query branch: the real server computes
-        // them for every FIRST page regardless of filters, and this query
-        // never carries a cursor. Dropping them here would fake the
-        // old-cloud-tier signal the host filter fails closed on.
+        // Facets ride along even on the query branch: the real server computes them for every FIRST page regardless of filters, and this query never carries a cursor.
         data:
           query.length === 0
             ? testState.response
@@ -396,10 +390,7 @@ describe("useHistoryQuery", () => {
   });
 
   it("lifts an optimistically pinned row above unpinned rows in the settled server order", () => {
-    // An optimistic pin patch flips the cached row's bit in place, so the
-    // settled (non-projecting) path must partition pinned-first itself
-    // instead of trusting the raw cached order, which still reflects the
-    // pre-pin state.
+    // An optimistic pin patch flips the cached row's bit in place, so the settled (non-projecting) path must partition pinned-first itself instead of trusting the raw cached order, which still reflects the pre-pin state.
     testState.tasks = [
       taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
       {
@@ -417,11 +408,7 @@ describe("useHistoryQuery", () => {
   });
 
   it("floats pinned rows above a higher-relevance unpinned match under relevance sort", () => {
-    // Relevance sort + a non-empty query is the only path that routes through
-    // prioritizePinnedHistoryItems (use-history-query.ts). That local
-    // projection only runs while the cloud query is unsettled, so mark it
-    // fetching. The unpinned row is the exact-title match, so Fuse ranks it
-    // first; the pin must still lift its (weaker-matching) row above it.
+    // The unpinned row is the exact-title match, so Fuse ranks it first; the pin must still lift its (weaker-matching) row above it.
     testState.isFetching = true;
     testState.tasks = [
       taskLight("epic-exact", "search", "traycer/gui-app"),
@@ -506,10 +493,7 @@ describe("useHistoryQuery", () => {
     };
 
     it("withholds rows when the host negotiated a minor that drops the filter", () => {
-      // The response is well-formed and complete - that is exactly the
-      // hazard. An old host strips `chatHostIds` and answers as if no filter
-      // was asked for, so rendering these rows would present an UNFILTERED
-      // list as a filtered one, with nothing anywhere reporting a problem.
+      // The response is well-formed and complete - that is exactly the hazard.
       testState.chatHostSupport = "unsupported";
       render(<HistoryQueryHarness search={hostSearch} />);
 
@@ -522,10 +506,8 @@ describe("useHistoryQuery", () => {
     });
 
     it("withholds rows when the first page comes back without the chat-host facet", () => {
-      // The cloud tier has no version negotiation of its own: an old server
-      // simply drops request keys it does not recognize. A first page that
-      // omits the `chatHosts` group is the only evidence of that, and it must
-      // fail closed the same way the host arm does.
+      // The cloud tier has no version negotiation of its own: an old server simply drops request keys it does not recognize.
+      // A first page that omits the `chatHosts` group is the only evidence of that, and it must fail closed the same way the host arm does.
       testState.chatHostSupport = "supported";
       testState.response = {
         tasks: testState.tasks,
@@ -547,10 +529,8 @@ describe("useHistoryQuery", () => {
     });
 
     it("withholds rows when the response carries no facets object at all", () => {
-      // This query never carries a cursor - "Show more" pages append through a
-      // separate mutation and store - so its response is always a first page.
-      // A first page with no facets is a server that never computed them, not
-      // a later page that legitimately omits them.
+      // This query never carries a cursor - "Show more" pages append through a separate mutation and store - so its response is always a first page.
+      // A first page with no facets is a server that never computed them, not a later page that legitimately omits them.
       testState.chatHostSupport = "supported";
       testState.response = { tasks: testState.tasks, hasMore: false };
       render(<HistoryQueryHarness search={hostSearch} />);
@@ -589,12 +569,7 @@ describe("useHistoryQuery", () => {
     });
 
     it("host-filters an id-fetched worktree match instead of dropping the local search", () => {
-      // A branch name lives only in local worktree metadata, so this row can
-      // only arrive through the id-fetched union - which never passed the
-      // server's host filter. The row carries its own visible chat hosts, so
-      // the filter is re-applied here rather than the whole local arm being
-      // switched off (which would make branch search silently return nothing
-      // whenever a host was selected).
+      // A branch name lives only in local worktree metadata, so this row can only arrive through the id-fetched union - which never passed the server's host filter.
       const onHost = taskLight("epic-local", "Local only", "traycer/gui-app");
       testState.taskContexts = new Map([
         ["epic-local", { ...onHost, chatHostIds: ["host-a"] }],

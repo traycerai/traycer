@@ -53,24 +53,11 @@ export interface ArtifactCommentAction {
 export interface ArtifactToolbarProps {
   readonly editor: Editor;
   readonly className: string | undefined;
-  /**
-   * Tile-owned scroll container. The bubble-menu plugin listens to this
-   * element so the toolbar stays anchored while the tile body scrolls.
-   */
+  /** Tile-owned scroll container. The bubble-menu plugin listens to this element so the toolbar stays anchored while the tile body scrolls. */
   readonly scrollTarget: HTMLElement | null;
-  /**
-   * Pass `null` for tiles whose artifact type doesn't support comments
-   * (chat). When non-null, the bubble bar shows the 💬 button on every
-   * non-collapsed selection - including for viewers, who can comment but
-   * not format. The formatting buttons stay `disabled` for non-editable
-   * editors while the comment button remains active.
-   */
+  /** null for chat. Non-null shows the comment button even for viewers; formatting stays disabled when not editable. */
   readonly commentAction: ArtifactCommentAction | null;
-  /**
-   * Hide the selection bubble while a higher-priority selection surface owns
-   * the range, e.g. the comment draft composer. This keeps the interaction
-   * model single-modal: selection menu -> comment composer, never both.
-   */
+  /** Hide while a higher-priority surface owns the range (comment draft). Never both. */
   readonly suppressBubbleMenu: boolean;
 }
 
@@ -111,20 +98,7 @@ function selectToolbarState({ editor }: { editor: Editor }): ToolbarState {
 }
 
 /**
- * Floating bubble-menu formatting toolbar. Rides on `@tiptap/react/menus`'s
- * `BubbleMenu`, which positions the menu above the current selection via
- * Floating UI and hides whenever the selection is collapsed. The benefit
- * over a sticky bar is that the menu is only present when the user is
- * actively formatting - it stays out of the way while reading or drafting
- * and appears exactly where the caret is.
- *
- * Active-state is driven by `useEditorState` so the subscription stays
- * selector-scoped; the host editor sets `shouldRerenderOnTransaction: false`
- * for view cost, which would otherwise prevent the bar from reflecting
- * toggle state without a full re-render.
- *
- * History (undo/redo) lives on the Yjs undo manager and is driven via
- * keyboard (⌘Z / ⌘⇧Z); it is intentionally not exposed in the bubble bar.
+ * Bubble formatting toolbar. `useEditorState` for active-state because the host sets `shouldRerenderOnTransaction: false`. Undo is keyboard-only.
  */
 export function ArtifactToolbar(props: ArtifactToolbarProps) {
   const { editor, className, scrollTarget, commentAction, suppressBubbleMenu } =
@@ -143,10 +117,8 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
   );
   const canShowToolbar = useCallback(
     (currentEditor: Editor, from: number, to: number): boolean => {
-      // Viewers (non-editable) still see the bar when commenting is
-      // available - the bar will only render the 💬 button via the
-      // `commentAction !== null` branch below; formatting buttons stay
-      // disabled regardless.
+      // Viewers still see the bar when commenting is available. Formatting
+      // stays disabled.
       if (!currentEditor.isEditable && commentAction === null) return false;
       // Hide inside code blocks - inline formatting would be rejected
       // by the schema and the bar would flash against an empty selection.
@@ -199,13 +171,8 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
     editor.view.focus();
   };
 
-  // `editor.isEditable` gates visibility at the data level: the toolbar still
-  // mounts (so BubbleMenu can keep its listeners attached), but its own
-  // `shouldShow` returns false for viewers. Buttons are also `disabled` as a
-  // second layer in case the menu is forced open by custom callers.
-  // `style` lands on BubbleMenu's positioned wrapper, not the inner toolbar.
-  // Keep z-index 40 below the shared Dialog overlay/content at z-50, including
-  // future dialogs that opt out of Radix's default focus transfer.
+  // Toolbar still mounts so BubbleMenu keeps listeners; shouldShow is false for
+  // viewers. z-index 40 stays below Dialog overlay at 50.
   return (
     <BubbleMenu
       editor={editor}

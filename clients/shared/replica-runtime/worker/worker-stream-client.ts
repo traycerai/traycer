@@ -1,18 +1,6 @@
 /**
- * The worker's `IStreamClient`: a real implementation whose frames cross the
- * bridge instead of a socket.
- *
- * Everything the interface promises SYNCHRONOUSLY is answered from worker-side
- * state, which is what makes the proxy possible at all: `subscribe` returns a
- * session object built here and now (the `streamId` is ours, so nothing has to
- * be awaited), and both schema-version reads answer from replicas the main
- * thread pushes.
- *
- * Frames and statuses for a `streamId` this client no longer holds are DROPPED
- * silently. That is not laziness - it is the only safe answer. A frame can be
- * in flight when a session closes, and a worker that was replaced leaves its
- * predecessor's frames arriving at a live successor; a throw here would be an
- * unhandled error inside a `message` listener with no route back to anyone.
+ * The worker's `IStreamClient`: a real implementation whose frames cross the bridge instead of a socket.
+ * That is not laziness - it is the only safe answer.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -35,12 +23,7 @@ import { takeBytesForTransfer, NO_TRANSFER } from "./transferable-bytes";
 
 /**
  * What the client needs from its owner to put an event on the wire.
- *
- * The NARROWED family, not the whole worker->main union. This client produces
- * exactly the five `stream/*` kinds and nothing else, so the wide type was
- * over-declaration - and not harmless: it is what let an owner hand the
- * proxy host un-narrowed events, which is the reason that host carried a
- * `default` arm swallowing anything it did not recognise.
+ * The narrowed family, not the whole worker->main union.
  */
 export type StreamProxyEmit = (
   event: StreamProxyWorkerEvent,
@@ -68,11 +51,7 @@ export interface WorkerStreamClientHandle {
   manifest(): StreamProxyManifest | null;
   /** Fires whenever a manifest lands - the worker's `subscribeSupport`. */
   subscribeManifest(listener: () => void): () => void;
-  /**
-   * Closes every session this client opened, and tells main to close the real
-   * ones. Called on worker teardown: a session left open on main is a socket
-   * subscription with nothing behind it.
-   */
+  /** Closes every session this client opened, and tells main to close the real ones. */
   disposeAll(): void;
 }
 
@@ -222,10 +201,8 @@ export function createWorkerStreamClient(
       const entry = sessions.get(streamId);
       if (entry === undefined) return;
       entry.deliverStatus(status, reason);
-      // A status transition is when a re-declare becomes imminent, so it is
-      // where a params provider is re-read. Pushed AFTER the handler runs: the
-      // handler is what applies the state the provider reads, so reading first
-      // would report the value the reconnect was already going to use.
+      // A status transition is when a re-declare becomes imminent, so it is where a params provider is re-read.
+      // Pushed after the handler runs: the handler is what applies the state the provider reads, so reading first would report the value the reconnect was already going to use.
       const params = entry.readParams();
       if (!params.has || entry.isClosed()) return;
       emit(

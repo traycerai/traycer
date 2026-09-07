@@ -1,55 +1,6 @@
 /**
- * The managed-command output stream - the transport half of the "Monitors &
- * Shells" surface described in the host's `domain/managed-command/UI.md`.
- *
- * ## Where the LIST lives
- *
- * There is deliberately no list stream here. Every surface that reads the set
- * of commands is chat-scoped (the chat tile's menu, the chat's Background
- * panel), so the set rides the chat's own stream instead: `chat.subscribe`'s
- * `snapshot.managedCommands` and its `managedCommandsChanged` frame, both
- * filtered to the commands that chat created. That also binds the set to the
- * tab's host the way every other chat surface is bound, which an epic-wide
- * stream on the app-wide active-host connection could not be.
- *
- * Re-entry path: a future GLOBAL panel (one that lists an epic's commands
- * across chats) needs what the chat stream cannot give it, and would re-add an
- * epic-level `managedCommand.subscribeList@1.0` here - a `snapshot` of every
- * command in the epic followed by `changed`/`removed` upserts, served off the
- * supervisor's events exactly as the output stream below is. It is a new
- * method at that point, not a revival: nothing on the wire depends on its
- * absence today.
- *
- * ## `managedCommand.subscribeOutput@1.0` - the viewer
- *
- * One stream per COMMAND, serving its log as an interleaved timeline of output
- * and lifecycle records. This is not a terminal: managed commands are spawned
- * over pipes with no PTY, so there are no escape sequences to emulate and the
- * lines arrive already framed. They are carried as STRUCTURED records rather
- * than as the log's rendered text so the viewer can tint stderr and set
- * lifecycle rows apart without re-parsing a presentation format.
- *
- * ### Gaplessness
- *
- * Every line on this stream is read out of the log file, and every read is
- * bounded by a `LogPosition` - the log store's rotation-stable cursor. The
- * opening `snapshot` names the position its lines end at; `output` frames
- * continue from exactly there. The host's live signal (the supervisor's own
- * events) is only a wake-up telling it to read again, never itself a source of
- * lines. So the tail-to-live handoff cannot duplicate a line or skip one, and a
- * rotation in the middle of it changes nothing.
- *
- * Scrolling up runs the same cursor backwards: `loadOlder` names the position a
- * window starts at and gets the window before it, walking across rotated
- * segments until `reachedStart`. The retained log runs to tens of megabytes and
- * is never loaded eagerly.
- *
- * ## Degrade story
- *
- * A brand-new method, deliberately off the released floor. A host that does not
- * serve it rejects the open as an unknown method; the client shows the surface
- * as unavailable rather than empty. There is no older transport to fall back
- * to - this is the first one.
+ * `managedCommand.subscribeList@1.0` - The managed-command output stream - the transport half of the "Monitors & Shells" surface described in the host's `domain/managed-command/UI.md`.
+ * A brand-new method, deliberately off the released floor.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -58,11 +9,7 @@ import {
   managedCommandSchemaPreRelaunch,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 
-/**
- * Ceiling on one `loadOlder` window. The viewer pages in screenfuls, so this is
- * far above any single scroll-up; it exists to keep a malformed request from
- * asking the host to render the whole retained log into one frame.
- */
+/** Ceiling on one `loadOlder` window. */
 export const MANAGED_COMMAND_MAX_WINDOW_LINES = 2_000;
 
 const textFrameFields = {
@@ -72,11 +19,7 @@ const textFrameFields = {
 // ─── `managedCommand.subscribeOutput@1.0` ───────────────────────────────────
 
 /**
- * A cursor into the rolling log: a segment named by a rotation-stable identity
- * plus a byte offset into it. Opaque to the client, which only ever hands one
- * back where it got it. It survives the rename that rotation performs on the
- * active segment, which is what makes it safe to hold across a long-open
- * window.
+ * A cursor into the rolling log: a segment named by a rotation-stable identity plus a byte offset into it.
  */
 export const managedCommandLogPositionSchema = z.object({
   segmentId: z.string(),
@@ -86,15 +29,7 @@ export type ManagedCommandLogPosition = z.infer<
   typeof managedCommandLogPositionSchema
 >;
 
-/**
- * One row of the timeline. `lifecycle` records (`started (pid 4410, manual,
- * shell: /bin/sh)`, `exited (code 1)`) ride the same stream as output, in the
- * same order, because that interleaving is exactly what a human debugging a 3am
- * restart is reading for.
- *
- * `atMs` is null only for a line the host could not read a timestamp from - a
- * partial record left behind by a crash. Everything else is stamped.
- */
+/** One row of the timeline. */
 export const managedCommandLogLineSchema = z.object({
   channel: z.enum(["stdout", "stderr", "lifecycle"]),
   text: z.string(),
@@ -112,14 +47,7 @@ export type ManagedCommandSubscribeOutputOpenRequest = z.infer<
   typeof managedCommandSubscribeOutputOpenRequestSchema
 >;
 
-/**
- * The server frames, parameterized on the command shape the `snapshot` and
- * `status` headers carry. `@1.0` shipped (cli-v1.2.0) with the pre-relaunch
- * command; `@1.1` carries the live one. Everything else on the stream is
- * identical across the two minors, and the host strips the flag from a `1.0`
- * subscriber's headers (`managed-command-view.ts`) so the raw wire matches
- * the negotiated contract - the same discipline `chat.subscribe` follows.
- */
+/** The server frames, parameterized on the command shape the `snapshot` and `status` headers carry. */
 function managedCommandSubscribeOutputServerFrames<
   TCommand extends z.ZodTypeAny,
 >(commandSchema: TCommand) {
@@ -135,10 +63,7 @@ function managedCommandSubscribeOutputServerFrames<
       /** Nothing older than `start` is retained; the viewer stops asking. */
       reachedStart: z.boolean(),
     }),
-    // Lines appended since the last frame, oldest first. `start` is the exact
-    // log boundary before the first line. A following viewer may discard whole
-    // frames, advance its held start to this cursor, and later page the gap
-    // back without guessing byte offsets or losing rotation stability.
+    // Lines appended since the last frame, oldest first.
     z.object({
       kind: z.literal("output"),
       ...textFrameFields,
@@ -154,18 +79,13 @@ function managedCommandSubscribeOutputServerFrames<
       start: managedCommandLogPositionSchema,
       reachedStart: z.boolean(),
     }),
-    // The command's own state moved (started, stopped, exited). The matching
-    // lifecycle record also arrives as a timeline row; this is what the window
-    // header's status reads.
+    // The command's own state moved (started, stopped, exited).
     z.object({
       kind: z.literal("status"),
       ...textFrameFields,
       command: commandSchema,
     }),
-    // The command was deleted: its row, process and entire output history are
-    // gone. The stream stays open so the window can show its dead-state banner
-    // over the scrollback the viewer already has, and closes when the human
-    // closes it.
+    // The command was deleted: its row, process and entire output history are gone.
     z.object({
       kind: z.literal("deleted"),
       ...textFrameFields,
@@ -205,9 +125,7 @@ export const managedCommandSubscribeOutputClientFrameSchema =
         .positive()
         .max(MANAGED_COMMAND_MAX_WINDOW_LINES),
     }),
-    // Re-base a viewer that deliberately detached from live output while
-    // reading history. The host serializes this through the live pump so the
-    // next `output` starts exactly where the replacement snapshot ends.
+    // Re-base a viewer that deliberately detached from live output while reading history.
     z.object({
       kind: z.literal("resnapshot"),
       ...textFrameFields,
@@ -230,10 +148,6 @@ export const managedCommandSubscribeOutputV10 = defineStreamRpcContract({
 });
 
 // ─── `managedCommand.subscribeOutput@1.1` ───────────────────────────────────
-//
-// Adds `relaunchOnHostRestart` to the `snapshot` / `status` command headers.
-// Same open request, same client frames: a `1.0` peer negotiates and keeps
-// reading headers without the flag.
 
 export const managedCommandSubscribeOutputV11 = defineStreamRpcContract({
   method: "managedCommand.subscribeOutput",

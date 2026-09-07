@@ -8,15 +8,7 @@ import {
 import { resolveEpicId } from "../internal/agent-context";
 import type { CommandFn } from "../runner/runner";
 
-/**
- * `traycer terminal list` - the interactive terminals in this Task you can
- * read, including ones whose process has exited but the host still remembers
- * (so a finished command's output stays reachable for as long as the tab is).
- *
- * `terminal-agent` sessions are filtered out: those back another Traycer
- * agent, whose conversation is `traycer agent transcript`'s job. Their PTY
- * grid is a rendering of a TUI, not a transcript.
- */
+/** `traycer terminal list` - the interactive terminals in this Task you can read, including ones whose process has exited but the host still remembers (so a finished command's output stays reachable for as long as the tab is). `terminal-agent` sessions are filtered out: those back another Traycer agent, whose conversation is `traycer agent transcript`'s job. */
 export function buildTerminalListCommand(opts: {
   readonly epicId: string | null;
 }): CommandFn {
@@ -69,12 +61,7 @@ function summarizeTerminal(
   };
 }
 
-/**
- * A `null` title means the tab was never renamed, so the GUI derives a label
- * from the working directory; do the same here rather than printing the id
- * twice. The shell's live directory wins over the one it launched in, so the
- * TITLE names the same directory the row's DIRECTORY column shows.
- */
+/** A `null` title means the tab was never renamed, so the GUI derives a label from the working directory; do the same here rather than printing the id twice. The shell's live directory wins over the one it launched in, so the TITLE names the same directory the row's DIRECTORY column shows. */
 function terminalTitle(
   session: CanonicalTerminalSessionInfoWithLifecycleOwner,
 ): string {
@@ -94,11 +81,7 @@ const COLUMNS = [
   "DIRECTORY",
 ] as const;
 
-/**
- * Fixed-width column table, pure so the layout is testable without a host.
- * DIRECTORY shows the shell's live directory, which is the one that answers
- * "where would a command I read here have run".
- */
+/** Fixed-width column table, pure so the layout is testable without a host. DIRECTORY shows the shell's live directory, which is the one that answers "where would a command I read here have run". */
 export function formatTerminalListTable(
   terminals: ReadonlyArray<TerminalListRow>,
 ): string {

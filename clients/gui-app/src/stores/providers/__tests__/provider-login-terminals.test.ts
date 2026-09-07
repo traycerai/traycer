@@ -101,10 +101,8 @@ describe("useProviderLoginTerminalsStore", () => {
       providerId: "reasonix",
     });
 
-    // The peer read storage before this window wrote, so ITS write does not
-    // mention this window's session at all. Rehydrating from it would adopt
-    // that loss; the union keeps both. An unclassified live session is one a
-    // tile recreates as a bare shell, so the loss is not cosmetic.
+    // The peer read storage before this window wrote, so ITS write does not mention this window's
+    // session at all. Rehydrating from it would adopt that loss; the union keeps both.
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: PERSIST_KEY,
@@ -132,9 +130,7 @@ describe("useProviderLoginTerminalsStore", () => {
     });
     expect(useProviderLoginTerminalsStore.getState().revision).toBe(1);
 
-    // A peer window's write. The classifier is read imperatively inside the
-    // reconciliation effects, so this is the only signal that would re-run
-    // them; without it the tab the peer's record should mark stays plain.
+    // A peer window's write.
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: PERSIST_KEY,
@@ -165,12 +161,6 @@ describe("useProviderLoginTerminalsStore", () => {
     ]);
 
     // The peer holds the identical two records with ITS own record first.
-    // Merging keeps this window's order, so the result equals what is already
-    // here - and a `setState` on it would go through persist, write the whole
-    // payload, and fire the peer's `storage` event in turn: the peer would
-    // merge, keep ITS order, write, and fire ours. Two windows would trade
-    // orders forever, bumping `revision` and re-running reconciliation on
-    // every hop.
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: PERSIST_KEY,
@@ -206,10 +196,8 @@ describe("useProviderLoginTerminalsStore", () => {
     });
     const before = useProviderLoginTerminalsStore.getState();
 
-    // A stale concurrent write: the peer wrote from a memory that predates
-    // this window's second record. Nothing to learn here - but left on disk,
-    // that subset is what a window opened LATER hydrates, and it would
-    // recreate the omitted live session as a bare shell.
+    // A stale concurrent write: the peer wrote from a memory that predates this window's second
+    // record.
     const stale = persistedPayload({ [`${HOST_A}:session-a`]: "reasonix" });
     window.localStorage.setItem(PERSIST_KEY, stale);
     window.dispatchEvent(
@@ -229,10 +217,8 @@ describe("useProviderLoginTerminalsStore", () => {
   });
 
   it("does not republish at the bound when the peer's set is one this window cannot absorb - the loop by another name", () => {
-    // 32 records here, 32 different ones from the peer: the merge keeps this
-    // window's own and evicts every one of the peer's, so "the peer lacks
-    // records" is true of BOTH windows forever. Republishing on "differs"
-    // would trade the two sets until one window closed.
+    // 32 records here, 32 different ones from the peer: the merge keeps this window's own and evicts
+    // every one of the peer's, so "the peer lacks records" is true of BOTH windows forever.
     for (let index = 0; index < 32; index += 1) {
       recordProviderLoginTerminal({
         hostId: HOST_A,
@@ -282,9 +268,7 @@ describe("useProviderLoginTerminalsStore", () => {
       providerId: "reasonix",
     });
 
-    // A `clear()` in another window arrives as a null key. The session did not
-    // stop being a sign-in because storage was wiped, and dropping the record
-    // for a LIVE session is the bare-shell recreation this store prevents.
+    // A `clear()` in another window arrives as a null key.
     window.dispatchEvent(new StorageEvent("storage", { key: null }));
 
     expect(providerLoginTerminalProviderId(HOST_A, "session-live")).toBe(
@@ -336,11 +320,6 @@ describe("useProviderLoginTerminalsStore", () => {
 
   describe("hydration validates the persisted payload", () => {
     it("a persisted providerBySessionKey of null does not replace the map", async () => {
-      // Zustand's DEFAULT merge is `{...current, ...persisted}`, so this would
-      // land verbatim and the read below would throw on `null[key]` - at the
-      // very moment it is asked whether a live session is a sign-in. Version
-      // gating does not cover it: the malformed value carries the current
-      // version.
       window.localStorage.setItem(
         PERSIST_KEY,
         JSON.stringify({
@@ -429,10 +408,8 @@ describe("useProviderLoginTerminalsStore", () => {
 
   describe("record() merges against what is on disk before writing", () => {
     it("keeps a concurrent window's on-disk session instead of dropping it", () => {
-      // Window A's write, landing straight in storage exactly as it would if
-      // this window completed its OWN sign-in before ever seeing window A's
-      // `storage` event - no rehydrate, nothing routed through this store's
-      // own actions.
+      // Window A's write, landing straight in storage exactly as it would if this window completed its
+      // OWN sign-in before ever seeing window A's `storage` event - no rehydrate, nothing routed through
       window.localStorage.setItem(
         PERSIST_KEY,
         JSON.stringify({
@@ -563,10 +540,8 @@ describe("useProviderLoginTerminalsStore", () => {
       expect(providerLoginTerminalProviderId(HOST_B, "session-ok")).toBe(
         "copilot",
       );
-      // The malformed entry never comes back as a provider - dropped, not
-      // smuggled through as some truthy placeholder. Its eviction-order key
-      // is preserved (that array is not schema-validated against provider
-      // ids), but nothing maps it to a provider any more.
+      // The malformed entry never comes back as a provider - dropped, not smuggled through as some
+      // truthy placeholder.
       expect(
         providerLoginTerminalProviderId(HOST_A, "session-bad-provider"),
       ).toBeNull();

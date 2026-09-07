@@ -11,21 +11,7 @@ import { readHostPidMetadata, type HostPidMetadata } from "./pid-metadata";
 import type { Environment } from "../runner/environment";
 import { bootstrapLogPath, hostPidMetadataPath } from "../store/paths";
 
-/**
- * File-identity-aware spawn-evidence substrate (Finding F).
- *
- * Markers and pid.json carry no attempt ownership for older CLIs, so evidence
- * correlates against a **pre-action baseline** captured before the decision
- * point. The baseline records file identity (dev/inode when available) **and**
- * length — never a bare length. `host-log-rotation.ts` rotates an oversized
- * dead-host log *before* start, landing `starting` at offset 0 of a fresh
- * file; a length-only baseline would miss that marker. Replacement,
- * truncation, or any size decrease ⇒ new log, read from zero.
- *
- * win32 uses this substrate for `/Run` verification and readiness extension.
- * T6 (darwin cycle state machine) reuses the same baseline/reader for
- * marker diagnostics — cycle-skip authority stays launchctl-only.
- */
+/** File-identity-aware spawn-evidence substrate (Finding F). Markers and pid.json carry no attempt ownership for older CLIs, so evidence correlates against a **pre-action baseline** captured before the decision point. */
 
 export interface LogFileBaseline {
   readonly path: string;
@@ -151,12 +137,7 @@ export async function captureSpawnEvidenceBaseline(
   return { log, pidMetadata };
 }
 
-/**
- * Resolve the byte offset from which post-baseline content should be read.
- * Returns 0 when the live file is a replacement/truncation relative to the
- * baseline (new identity, size decrease, or baseline file was missing and
- * a file now exists — the new file is read from zero either way).
- */
+/** Resolve the byte offset from which post-baseline content should be read. Returns 0 when the live file is a replacement/truncation relative to the baseline (new identity, size decrease, or baseline file was missing and a file now exists - the new file is read from zero either way). */
 export async function resolvePostBaselineReadOffset(
   baseline: LogFileBaseline,
 ): Promise<number> {
@@ -182,34 +163,13 @@ function offsetForBaseline(baseline: LogFileBaseline, info: Stats): number {
   return info.size < baseline.size ? 0 : baseline.size;
 }
 
-/**
- * Prefix scan window. The pre-baseline region is only ever asked a yes/no
- * question, so it is streamed in fixed chunks rather than buffered whole:
- * `host-log-rotation.ts` caps `host.log` only at START, and states plainly
- * that a long-lived host can grow it past the cap within one lifetime. This
- * reader runs inside the 250ms `runTaskAndVerifyStart` poll loop on the
- * failure path, which must time out and report Last Run Result - allocating
- * a multi-megabyte stale log there could block or OOM the very path whose
- * job is to give up cleanly.
- */
+/** Prefix scan window. The pre-baseline region is only ever asked a yes/no question, so it is streamed in fixed chunks rather than buffered whole: `host-log-rotation.ts` caps `host.log` only at START, and states plainly that a long-lived host can grow it past the cap within one lifetime. */
 const PREFIX_SCAN_CHUNK_BYTES = 64 * 1024;
 
-/**
- * Upper bound on a partial line carried between chunks. Marker lines are far
- * shorter (`stderrTail` itself is capped in `crash-diagnostics.ts`), so a
- * "line" past this length is host output that cannot be a marker; dropping
- * the excess keeps the carry bounded on a log with no newlines at all.
- */
+/** Upper bound on a partial line carried between chunks. Marker lines are far shorter (`stderrTail` itself is capped in `crash-diagnostics.ts`), so a "line" past this length is host output that cannot be a marker; dropping the excess keeps the carry bounded on a log with no newlines at all. */
 const MAX_CARRY_BYTES = 64 * 1024;
 
-/**
- * Answers only "did the writer stamp a marker before `prefixBytes`?", in
- * bounded memory, returning at the first stamped marker.
- *
- * The carry is kept as BYTES, not a decoded string: a chunk boundary can
- * land mid-sequence in UTF-8, and decoding each chunk independently would
- * corrupt the characters that straddle it.
- */
+/** Answers only "did the writer stamp a marker before `prefixBytes`?", in bounded memory, returning at the first stamped marker. The carry is kept as BYTES, not a decoded string: a chunk boundary can land mid-sequence in UTF-8, and decoding each chunk independently would corrupt the characters that straddle it. */
 async function prefixIdentifiesWriter(
   handle: FileHandle,
   prefixBytes: number,
@@ -249,21 +209,7 @@ interface BaselineSlicedLog {
   readonly postBaselineText: string;
 }
 
-/**
- * Resolves the pre-baseline boundary answer and the post-baseline slice
- * from ONE open.
- *
- * Evidence is drawn only from the slice, but whether the slice sits past
- * the writer-identity boundary depends on what came BEFORE it: the
- * supervisor's `writer=supervisor` marker can be pre-baseline entirely (a
- * service-managed start writes no CLI marker for this attempt), which would
- * otherwise leave the slice looking pre-boundary and promote a marker-shaped
- * host stderr line to `starting-marker` evidence.
- *
- * Both come from a single handle so a rotation between two opens cannot
- * pair one file's boundary with another file's slice - the same reason
- * `offset` is taken from the opened handle's stat rather than a path stat.
- */
+/** Resolves the pre-baseline boundary answer and the post-baseline slice from ONE open. Evidence is drawn only from the slice, but whether the slice sits past the writer-identity boundary depends on what came BEFORE it: the supervisor's `writer=supervisor` marker can be pre-baseline entirely (a service-managed start writes no CLI marker for this attempt), which would otherwise leave the slice looking pre-boundary and promote a marker-shaped host stderr line to `starting-marker` evidence. */
 async function readBaselineSlicedLog(
   baseline: LogFileBaseline,
 ): Promise<BaselineSlicedLog> {
@@ -299,10 +245,7 @@ async function readBaselineSlicedLog(
   }
 }
 
-/**
- * Read the host log slice written after the baseline, identity-aware.
- * Handles rotation that lands new markers at offset 0 of a fresh file.
- */
+/** Read the host log slice written after the baseline, identity-aware. Handles rotation that lands new markers at offset 0 of a fresh file. */
 export async function readPostBaselineLogText(
   baseline: LogFileBaseline,
 ): Promise<string> {
@@ -321,25 +264,13 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   let pending = "";
   // Labelled and unfiltered; the authoritative view is derived per read.
   let observed: readonly BootstrapLogEntry[] = [];
-  // TWO bits, deliberately. They answer different questions and conflating
-  // them breaks one of the two cases this reader has to serve.
-  //
-  // `boundaryIdentified` is about THIS file: had the writer already stamped
-  // before the window we are accumulating began? Only that justifies
-  // filtering the window wholesale. It is per-file and never set from a
-  // marker inside the window - within one file the boundary is POSITIONAL,
-  // which is what keeps an N-1 legacy marker that precedes the first stamped
-  // one (the ordinary upgrade, both eras in one file).
+  // TWO bits, deliberately.
+  // They answer different questions and conflating them breaks one of the two cases this reader has to serve.
   let boundaryIdentified = false;
   // `sawSupervisorMarker` is about the WRITER, and outlives any single file.
-  // Sticky because `observed` is capped below, so re-deriving it from the
-  // retained window would let a burst of marker-shaped host output evict the
-  // verified marker and reopen the hole.
+  // Sticky because `observed` is capped below, so re-deriving it from the retained window would let a burst of marker-shaped host output evict the verified marker and reopen the hole.
   let sawSupervisorMarker = false;
-  // The boundary also has to account for what came BEFORE the baseline, which
-  // this reader never otherwise looks at: the verified marker can sit in
-  // the pre-baseline region (a service-managed start writes no CLI marker
-  // for this attempt), and reading only forward would call that log legacy.
+  // The boundary also has to account for what came BEFORE the baseline, which this reader never otherwise looks at: the verified marker can sit in the pre-baseline region (a service-managed start writes no CLI marker for this attempt), and reading only forward would call that log legacy.
   // Seeded once per observed file; seeding can only turn the bit ON.
   let seeded = false;
 
@@ -366,13 +297,8 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         if (!sameOpenFile) {
           pending = "";
           observed = [];
-          // A replacement INHERITS the boundary answer we already proved:
-          // capability belongs to the WRITER, and rotation hands the same
-          // supervisor a fresh file it will keep identifying itself in. That
-          // file has no pre-baseline region to re-seed from, so without this
-          // the boundary is forgotten and a marker-shaped host line in the
-          // replacement reads as legacy evidence - the collision this reader
-          // exists to reject.
+          // A replacement INHERITS the boundary answer we already proved: capability belongs to the WRITER, and rotation hands the same supervisor a fresh file it will keep identifying itself in.
+          // That file has no pre-baseline region to re-seed from, so without this the boundary is forgotten and a marker-shaped host line in the replacement reads as legacy evidence - the collision this reader exists to reject.
           boundaryIdentified = sawSupervisorMarker;
           seeded = false;
         }
@@ -402,24 +328,11 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         const lines = text.split(/\r?\n/);
         pending = lines.pop() ?? "";
         const combined = [...observed, ...parseMarkerLines(lines.join("\n"))];
-        // Retain BEFORE capping. Capping first lets marker-shaped host
-        // output consume the window: a real `starting` or terminal marker
-        // followed by more than MAX_RETAINED_MARKERS raw lines would be
-        // evicted, the reader would report no marker, and
-        // `runTaskAndVerifyStart` would time out on a spawn that had in
-        // fact left evidence.
+        // Retain BEFORE capping.
+        // Capping first lets marker-shaped host output consume the window: a real `starting` or terminal marker followed by more than MAX_RETAINED_MARKERS raw lines would be evicted, the reader would report no marker, and `runTaskAndVerifyStart` would time out on a spawn that had in fact left evidence.
         const retained = retainAuthenticMarkers(combined, boundaryIdentified);
-        // Record the capability from a marker seen in the STREAM, not just
-        // from the pre-baseline seed - post-baseline is where the supervisor
-        // ordinarily stamps, so the seed usually never sees one. This feeds
-        // ONLY the next file (see the rotation branch); promoting it into
-        // `boundaryIdentified` here would re-filter this same window on the
-        // next poll and delete the pre-boundary legacy marker that
-        // `retainAuthenticMarkers` was given a positional boundary to keep.
-        //
-        // The CAP needs no equivalent: everything kept past the boundary is
-        // stamped and the cap keeps the most recent entries, so it cannot
-        // lose the boundary. Rotation is a different loss and needs this.
+        // Record the capability from a marker seen in the STREAM, not just from the pre-baseline seed - post-baseline is where the supervisor ordinarily stamps, so the seed usually never sees one.
+        // This feeds ONLY the next file (see the rotation branch); promoting it into `boundaryIdentified` here would re-filter this same window on the next poll and delete the pre-boundary legacy marker that `retainAuthenticMarkers` was given a positional boundary to keep.
         sawSupervisorMarker =
           sawSupervisorMarker || markersIdentifyWriter(retained);
         observed = retained.slice(-MAX_RETAINED_MARKERS);
@@ -431,11 +344,8 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   };
 }
 
-// Labelled but UNFILTERED - the writer latch is a property of the whole
-// scanned region, so a caller that accumulates across chunks has to apply
-// it itself over everything it has seen (see
-// `createPostBaselineMarkerReader`). Filtering per chunk would let a chunk
-// that happens to contain no verified marker read as legacy.
+// Labelled but UNFILTERED - the writer latch is a property of the whole scanned region, so a caller that accumulates across chunks has to apply it itself over everything it has seen (see `createPostBaselineMarkerReader`).
+// Filtering per chunk would let a chunk that happens to contain no verified marker read as legacy.
 function parseMarkerLines(text: string): readonly BootstrapLogEntry[] {
   const entries: BootstrapLogEntry[] = [];
   for (const line of text.split(/\r?\n/)) {
@@ -457,11 +367,8 @@ export function parseBootstrapMarkersFromText(
 export async function readPostBaselineMarkers(
   baseline: LogFileBaseline,
 ): Promise<readonly BootstrapLogEntry[]> {
-  // Evidence from the slice; whether the slice is already past the
-  // boundary is answered by what preceded it. Asking only the slice would
-  // let a pre-baseline `writer=supervisor` marker fall outside the window
-  // and hand `collectSpawnEvidence` a host stderr line as a
-  // `starting-marker`.
+  // Evidence from the slice; whether the slice is already past the boundary is answered by what preceded it.
+  // Asking only the slice would let a pre-baseline `writer=supervisor` marker fall outside the window and hand `collectSpawnEvidence` a host stderr line as a `starting-marker`.
   const { writerIdentifiedBefore, postBaselineText } =
     await readBaselineSlicedLog(baseline);
   return retainAuthenticMarkers(
@@ -470,15 +377,7 @@ export async function readPostBaselineMarkers(
   );
 }
 
-/**
- * True when pid.json was written after the baseline in a way that proves a
- * fresh host published metadata — never mere file presence of a stale
- * pre-baseline pid.json.
- *
- * Rules:
- * - baseline missing → any well-formed pid.json is evidence
- * - baseline present → mtime must advance AND pid must change
- */
+/** True when pid.json was written after the baseline in a way that proves a fresh host published metadata - never mere file presence of a stale pre-baseline pid.json. Rules: - baseline missing → any well-formed pid.json is evidence - baseline present → mtime must advance AND pid must change */
 export async function hasPostBaselinePidMetadata(
   baseline: PidMetadataBaseline,
   environment: Environment | undefined,
@@ -546,15 +445,7 @@ export function terminalMarkerReason(marker: BootstrapLogEntry): string {
   return `host ${marker.phase}`;
 }
 
-/**
- * Collect post-baseline spawn evidence for win32 `/Run` verification and
- * readiness extension. Order of preference:
- * 1. terminal marker (spawn attempted but died — still counts as spawn
- *    evidence for the short start-verify window; readiness treats it as
- *    fail-now separately)
- * 2. starting marker
- * 3. post-baseline pid metadata
- */
+/** Collect post-baseline spawn evidence for win32 `/Run` verification and readiness extension. Order of preference: 1. terminal marker (spawn attempted but died - still counts as spawn evidence for the short start-verify window; readiness treats it as fail-now separately) 2. starting marker 3. post-baseline pid metadata */
 export async function collectSpawnEvidence(
   baseline: SpawnEvidenceBaseline,
   environment: Environment | undefined,
@@ -643,10 +534,7 @@ export async function hasPostBaselineSpawnEvidence(
   return (await collectSpawnEvidence(baseline, environment)) !== null;
 }
 
-/**
- * Sleep helper kept local so platform seams (windows start verify, readiness
- * extension) can poll without pulling a shared timer util.
- */
+/** Sleep helper kept local so platform seams (windows start verify, readiness extension) can poll without pulling a shared timer util. */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);

@@ -568,10 +568,7 @@ describe("host notifications store", () => {
   });
 
   it("lets a newer same-id upsert re-open Attention after a resolve frame", () => {
-    // Approval/interview ids are stable per chat; a later prompt reuses the id
-    // with a fresh updatedAt. With no optimistic resolve write, the client
-    // simply trusts frames: resolve then a newer unresolved upsert must leave
-    // the row pending again (the new occurrence wins).
+    // Approval/interview ids are stable per chat; a later prompt reuses the id with a fresh updatedAt.
     const stableId = "approval.requested:chat-1";
     const older = promptOccurrence(stableId, 100);
     const newer = promptOccurrence(stableId, 200);
@@ -883,9 +880,8 @@ describe("host notifications store", () => {
       // missing removedIds + summary → schema failure
     });
 
-    // Integrity failure degrades the exact summary but keeps already-rendered
-    // rows, and asks the existing session to redial through its own backoff
-    // rather than close() + subscribe() a second session (hot redial loop).
+    // Integrity failure degrades the exact summary but keeps already-rendered rows, and asks the
+    // existing session to redial through its own backoff rather than close() + subscribe() a second
     expect(useHostNotificationsStore.getState().summary).toBeNull();
     expect(useHostNotificationsStore.getState().byId.kept).toBeDefined();
     expect(client.subscribeCount).toBe(1);
@@ -970,13 +966,8 @@ describe("host notifications store", () => {
     expect(after.unreadRecentStatus).toBe("idle");
   });
 
-  // These three reproduce the exact ABA collision from the review's read-only
-  // repro: a page-request token is captured, `reset()` fires, and a fresh
-  // snapshot lands whose epoch/revision would equal the captured token again
-  // if the counters were zeroed by reset. Because both counters are
-  // monotonic across the store's entire lifetime (never reset to 0), the
-  // post-reset epoch keeps climbing past the captured value, so the stale
-  // response is discarded rather than resurrecting the prior identity's row.
+  // These three reproduce the exact ABA collision from the review's read-only repro: a page-request
+  // token is captured, `reset()` fires, and a fresh snapshot lands whose epoch/revision would equal
   it("discards an attention page whose captured token collides with a post-reset snapshot (ABA)", () => {
     applySimpleSnapshot({
       entries: [promptEntry("prior-user")],
@@ -1040,9 +1031,6 @@ describe("host notifications store", () => {
       cursor: useHostNotificationsStore.getState().recentCursor,
     };
 
-    // Same-host identity reset landing while the page request above is still
-    // in flight: `reset()` fires, then a replacement snapshot for the new
-    // identity lands BEFORE the old request's response resolves.
     useHostNotificationsStore.getState().reset();
     applySimpleSnapshot({
       entries: [entry("fresh-user", 50, null)],
@@ -1135,10 +1123,8 @@ describe("host notifications store", () => {
     );
   });
 
-  // Pre-snapshot reset interval: an in-flight null-cursor page resolves after
-  // `reset()` but BEFORE any replacement snapshot. Reset must advance both
-  // tokens immediately so the stale response cannot merge into the empty
-  // replica; a current-token retry must still succeed afterward.
+  // Pre-snapshot reset interval: an in-flight null-cursor page resolves after `reset()` but BEFORE
+  // any replacement snapshot.
   it("discards a pre-snapshot-interval attention page after reset before any replacement snapshot", () => {
     applySimpleSnapshot({
       entries: [promptEntry("prior-user")],
@@ -1341,9 +1327,8 @@ describe("host notifications store", () => {
   });
 
   it("orders equal-updatedAt host rows by SQLite code-unit id ASC, not localeCompare", () => {
-    // Stable premise: uppercase code units precede lowercase (Z=90, a=97).
-    // Lock the comparator to the SQLite-exact code-unit path
-    // (compareFeedIdAscending), not locale-sensitive collation.
+    // Stable premise: uppercase code units precede lowercase (Z=90, a=97). Lock the comparator to the
+    // SQLite-exact code-unit path (compareFeedIdAscending), not locale-sensitive collation.
     expect("Z".charCodeAt(0)).toBeLessThan("a".charCodeAt(0));
 
     applySimpleSnapshot({
@@ -1418,9 +1403,8 @@ describe("host notifications store", () => {
       unreadRecentStatus: "idle",
       connectionStatus: "connecting",
     });
-    // Both counters advance by exactly one on every reset and never fall
-    // back, so a captured pre-reset token cannot match again even before a
-    // replacement snapshot lands (and cannot collide after one does).
+    // Both counters advance by exactly one on every reset and never fall back, so a captured pre-reset
+    // token cannot match again even before a replacement snapshot lands (and cannot collide after one
     expect(state.snapshotEpoch).toBe(preResetEpoch + 1);
     expect(state.liveLifecycleRevision).toBe(preResetRevision + 1);
   });
@@ -1711,7 +1695,7 @@ describe("host notifications store", () => {
       client.session.emitOpen();
       expect(client.session.clientFrames).toHaveLength(1);
 
-      // Nothing changed locally — the heartbeat must still refresh the
+      // Nothing changed locally - the heartbeat must still refresh the
       // host's TTL'd presence record, bypassing the content dedupe.
       vi.advanceTimersByTime(HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
       expect(client.session.clientFrames).toHaveLength(2);
@@ -1745,10 +1729,8 @@ describe("host notifications store", () => {
       onStreamOpened: () => undefined,
     });
     try {
-      // No open ack ever arrives: the transport send is impossible, but the
-      // local consumer (unary-channel read-consumption) must still hear the
-      // focus change — this is what keeps tab clicks clearing indicators
-      // while the stream is down.
+      // No open ack ever arrives: the transport send is impossible, but the local consumer
+      // (unary-channel read-consumption) must still hear the focus change - this is what keeps tab
       useEpicCanvasStore.getState().openEpicTab("epic-presence-1", "Epic");
 
       expect(notified.length).toBeGreaterThan(0);
@@ -1787,7 +1769,7 @@ describe("host notifications store", () => {
       expect(useHostNotificationsStore.getState().connectionStatus).toBe(
         "closed",
       );
-      // The reopen waits out the backoff — no synchronous redial storm.
+      // The reopen waits out the backoff - no synchronous redial storm.
       expect(client.subscribeCount).toBe(1);
       vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(2);
@@ -1836,11 +1818,6 @@ describe("host notifications store", () => {
       const replacementSession = client.session;
       expect(replacementSession).not.toBe(firstSession);
 
-      // Nothing about the local presence content changed across the reopen,
-      // but the replacement session still needs the frame (its host-side
-      // record starts empty) and the consumer still needs the notify:
-      // `onStreamOpened` cleared its active entity, so an unchanged-key
-      // dedupe would leave the focused entity permanently unconsumed.
       replacementSession.emitOpen();
       expect(replacementSession.clientFrames).toHaveLength(1);
       expect(replacementSession.clientFrames[0]).toMatchObject({
@@ -1891,9 +1868,8 @@ describe("host notifications store", () => {
       vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       expect(client.subscribeCount).toBe(3);
 
-      // A raw transport `open` is NOT proof of a usable stream (the host
-      // resolver can still terminate during async init) — the backoff keeps
-      // escalating: this close waits the quadrupled delay.
+      // A raw transport `open` is NOT proof of a usable stream (the host resolver can still terminate
+      // during async init) - the backoff keeps escalating: this close waits the quadrupled delay.
       client.session.emitOpen();
       terminalClose();
       vi.advanceTimersByTime(3 * HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);

@@ -6,10 +6,8 @@ import {
   runCommand,
 } from "../process-runner";
 
-// Real children, no mocks: the discriminator under test is "did this
-// command reach the OS", and only a real `execFile` can answer that. Each
-// case is a distinct failure shape execFile reports, and the class the
-// runner must assign to it.
+// Real children, no mocks: the discriminator under test is "did this command reach the OS", and only a real `execFile` can answer that.
+// Each case is a distinct failure shape execFile reports, and the class the runner must assign to it.
 const options = {
   env: undefined,
   cwd: undefined,
@@ -45,11 +43,8 @@ describe("runCommand spawn-failure classification", () => {
     expect((error as ProcessRunError).exitCode).toBe(3);
   });
 
-  // The case a "string error code means it never started" heuristic gets
-  // wrong: execFile reports `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` - a string
-  // code - for a child that DID start and produced more than `maxBuffer`.
-  // Callers that act on "provably never reached its target" (the macOS
-  // bootout eviction) must not be told that about a command that ran.
+  // The case a "string error code means it never started" heuristic gets wrong: execFile reports `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` - a string code - for a child that DID start and produced more than `maxBuffer`.
+  // Callers that act on "provably never reached its target" (the macOS bootout eviction) must not be told that about a command that ran.
   it("a child that overflowed maxBuffer ran, so it is a run failure", async () => {
     const error = await rejection(
       runCommand(

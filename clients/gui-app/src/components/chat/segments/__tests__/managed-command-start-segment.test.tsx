@@ -26,15 +26,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { ToolSegment } from "../tool-segment";
 
-/**
- * The `traycer_run_shell` call as a shell rather than a wrench row.
- *
- * The point of the correlation payload is that ONE card tracks the shell for
- * as long as it exists: status arrives live off the chat's set, and the card
- * still says something honest after the record dies. Both halves are proven
- * here through the real projection - the segment is reached via `ToolSegment`,
- * because which calls route to this card is itself the behaviour.
- */
+/** The `traycer_run_shell` call as a shell rather than a wrench row. */
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
@@ -77,11 +69,7 @@ function shell(over: Partial<ManagedCommand>): ManagedCommand {
   };
 }
 
-/**
- * Every provider a card needs EXCEPT the chat transcript identity - kept
- * apart so the "owner unknown" test can render without it, the way a
- * transcript with no bound host does.
- */
+/** Every provider a card needs EXCEPT the chat transcript identity - kept apart so the "owner unknown" test can render without it, the way a transcript with no bound host does. */
 function treeWithoutTranscript(node: ReactNode): ReactNode {
   return (
     <EpicSessionContext.Provider value={epicHandle}>
@@ -149,11 +137,8 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // The factories go to the COMPOSITION now, not the store: `createOpenEpicStore` stopped constructing a runtime, so a suite that used to hand it a `streamClientFactory` has nothing to hand it.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -226,9 +211,8 @@ describe("the run_shell start card", () => {
   });
 
   it("keeps the command the CALL asked for, not the shell's current spec", () => {
-    // A restart can re-spec a shell. This card is the record of one call, so
-    // its command body is frozen; the output window's details popover is where
-    // the effective spec is reported.
+    // A restart can re-spec a shell.
+    // This card is the record of one call, so its command body is frozen; the output window's details popover is where the effective spec is reported.
     renderCall({ variant: "card", correlated: true });
     act(() => {
       session.setCommands([
@@ -236,9 +220,7 @@ describe("the run_shell start card", () => {
       ]);
     });
 
-    // Expand the body and read what actually rendered, rather than merely
-    // asserting the live re-spec's absence: the persisted call command has to
-    // be the thing shown, not just "nothing else is".
+    // Expand the body and read what actually rendered, rather than merely asserting the live re-spec's absence: the persisted call command has to be the thing shown, not just "nothing else is".
     fireEvent.click(screen.getByText("Monitor · deploy watcher"));
 
     expect(screen.getByText(COMMAND_LINE)).toBeTruthy();
@@ -263,8 +245,7 @@ describe("the run_shell start card", () => {
     // card claiming to know something it does not.
     expect(screen.queryByText("Running")).toBeNull();
     // Deleting a shell destroys its log, so the tab would open onto a banner.
-    // The disabled door still carries its reason in its own name, for a reader
-    // who cannot hover a tooltip.
+    // The disabled door still carries its reason in its own name, for a reader who cannot hover a tooltip.
     const door = screen.getByRole("button", {
       name: "Open in tab - this shell was deleted",
     });
@@ -272,10 +253,8 @@ describe("the run_shell start card", () => {
   });
 
   it("keeps the door open before the owning chat's set has arrived", () => {
-    // Pre-hydration: a session is installed (beforeEach) but its stream is
-    // still "connecting" and has sent no commands. Absence proves nothing
-    // until the owning stream is open, so the door must stay a live button -
-    // never the aria-disabled "deleted" marker.
+    // Pre-hydration: a session is installed (beforeEach) but its stream is still "connecting" and has sent no commands.
+    // Absence proves nothing until the owning stream is open, so the door must stay a live button - never the aria-disabled "deleted" marker.
     renderCall({ variant: "card", correlated: true });
 
     const door = screen.getByRole("button", { name: "Open in tab" });
@@ -320,10 +299,8 @@ describe("the run_shell start card", () => {
   });
 
   it("claims no deletion while the stream is open but the snapshot has not landed", () => {
-    // The narrow window the connection status alone cannot see: subscribe is
-    // acknowledged (status "open") and change frames can already arrive, while
-    // the authoritative set is still in flight. An empty set here is the
-    // session's initial value, not the host's answer.
+    // The narrow window the connection status alone cannot see: subscribe is acknowledged (status "open") and change frames can already arrive, while the authoritative set is still in flight.
+    // An empty set here is the session's initial value, not the host's answer.
     renderCall({ variant: "card", correlated: true });
     act(() => {
       session.setConnectionStatus("open");
@@ -350,9 +327,8 @@ describe("the run_shell start card", () => {
   });
 
   it("keeps a proven deletion disabled across a reconnect blip", () => {
-    // The host has already said the shell is gone; a dropped socket does not
-    // un-delete it. Re-arming the door mid-reconnect would offer a tile onto a
-    // log that no longer exists.
+    // The host has already said the shell is gone; a dropped socket does not un-delete it.
+    // Re-arming the door mid-reconnect would offer a tile onto a log that no longer exists.
     renderCall({ variant: "card", correlated: true });
     act(() => {
       session.setConnectionStatus("open");
@@ -386,10 +362,7 @@ describe("the run_shell start card", () => {
   });
 
   it("reads presence from the owning host's session, never another host's", () => {
-    // A clone carries the source transcript's blocks. The source chat may be
-    // warm in the same epic with the shell very much alive - but it belongs to
-    // the source host, and this card is bound to the clone's. An epic-wide
-    // scan would let the clone claim a shell whose output it cannot open.
+    // An epic-wide scan would let the clone claim a shell whose output it cannot open.
     const sourceSession = installManagedCommandChatSession({
       epicId: EPIC_ID,
       chatId: "chat-source",
@@ -414,9 +387,7 @@ describe("the run_shell start card", () => {
   });
 
   it("claims no deletion when there is no chat transcript identity to attribute absence to", () => {
-    // The stream is open and the shell is absent - but with no chat identity
-    // in scope there is no OWNER for that absence to be authoritative for, so
-    // the card must not claim a deletion it cannot honestly attribute.
+    // The stream is open and the shell is absent - but with no chat identity in scope there is no OWNER for that absence to be authoritative for, so the card must not claim a deletion it cannot honestly attribute.
     render(
       treeWithoutTranscript(
         startCallElement({ variant: "card", correlated: true }),
@@ -449,9 +420,8 @@ describe("the run_shell start card", () => {
   });
 
   it("claims no deletion when there is no epic session to have looked in", () => {
-    // Absence only proves the shell is gone if we actually searched. Rendered
-    // outside an epic session there is nowhere to search, so the card must not
-    // put up "This shell was deleted" over a shell that may be perfectly alive.
+    // Absence only proves the shell is gone if we actually searched.
+    // Rendered outside an epic session there is nowhere to search, so the card must not put up "This shell was deleted" over a shell that may be perfectly alive.
     render(
       <TooltipProvider>
         <ToolSegment
@@ -501,10 +471,8 @@ describe("the run_shell start card", () => {
   });
 
   it("never surfaces the call's cwd on the card, though the payload carries it", () => {
-    // Product decision: the directory is a host-disk detail that reads as
-    // noise on a card about what the agent ran; the output window's details
-    // popover has the effective cwd. The block still stamps it so a later
-    // restart card can say "cwd changed".
+    // Product decision: the directory is a host-disk detail that reads as noise on a card about what the agent ran; the output window's details popover has the effective cwd.
+    // The block still stamps it so a later restart card can say "cwd changed".
     renderCall({ variant: "card", correlated: true });
     act(() => {
       session.setCommands([shell({})]);

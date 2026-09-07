@@ -40,11 +40,6 @@ type MeasuringContext = {
   measureText: (text: string) => { readonly width: number };
 };
 
-// The shared setup stubs `getContext` to null, which is enough for components
-// that skip drawing when there is no context - but the WidthCache is built
-// during `open()` and throws on a null context. This suite needs a REAL
-// `Terminal`, opened, so it measures real cell widths; monospace-ish text
-// measurement is all the cache asks for.
 beforeAll(() => {
   const measuringContext: MeasuringContext = {
     font: "",
@@ -52,9 +47,7 @@ beforeAll(() => {
   };
   const getContext = (contextId: string): MeasuringContext | null =>
     contextId === "2d" ? measuringContext : null;
-  // `defineProperty` rather than assignment: the real `getContext` is a set of
-  // overloads returning full context types, so no narrower function is
-  // assignable to it without an assertion the type rules here rightly forbid.
+  // `defineProperty` rather than assignment: the real `getContext` is a set of overloads returning full context types, so no narrower function is assignable to it without an assertion the type rules here rightly forbid.
   Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
     configurable: true,
     value: getContext,
@@ -101,11 +94,6 @@ function lineText(term: Terminal, row: number): string {
   return term.buffer.active.getLine(row)?.translateToString(true) ?? "";
 }
 
-// The host advertises `TERM_PROGRAM=kitty` to TUI sessions, so chat TUIs
-// (claude-code, codex) do their cursor math with string-width semantics, where
-// U+2705 / U+274C are width 2. xterm defaults to the Unicode 6 tables, where
-// they are width 1. These tests pin the renderer to the same width model the
-// TUIs assume - see the Unicode11Addon comment in terminal-tile-xterm.tsx.
 describe("<TerminalXtermHost /> emoji cell width", () => {
   afterEach(() => {
     cleanup();
@@ -123,10 +111,6 @@ describe("<TerminalXtermHost /> emoji cell width", () => {
   it("keeps an incremental repaint aligned when the TUI positions with width-2 math", async () => {
     const term = await mountedTerminal();
     const row = "│ ✅ ok │ ❌ iterate │ end";
-    // Where the TUI believes "iterate" starts: 13 columns of prefix counting
-    // both emoji as width 2. It repaints that span with a RELATIVE move
-    // (column 1, then cursor-forward), which is exactly what makes the drift
-    // visible - one column per emoji if the grid disagrees about the width.
     const iterateColumnOffset = 13;
 
     await write(term, `\x1b[1;1H\x1b[2K${row}`);

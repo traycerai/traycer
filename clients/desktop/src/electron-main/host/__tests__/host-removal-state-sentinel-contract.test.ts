@@ -7,28 +7,8 @@ import { canonicalBooleanSentinelBytes } from "@traycer-clients/shared/host-life
 import type { BooleanSentinelRecord } from "@traycer-clients/shared/host-lifecycle/durable/sentinel";
 
 /**
- * **Writer ↔ reader pinning for the removed-by-user sentinel** (macOS annex
- * §2.1.1: "Reader and writer must be pinned to each other by a test that runs
- * the *real writer* and feeds its actual output to the reader. A fixture the
- * product cannot produce proves nothing about either.").
- *
- * This test exists because of a lockout-class blocker. The lifecycle probe's
- * sentinel decoder recognised a bare JSON boolean or `{"value": <bool>}` and
- * fell through **every other shape** to `observed(true)`. The only writer of
- * this file in either repo is `host-removal-state.ts` — right here — and it
- * writes `{"removedByUser": <bool>}`, which was neither recognised shape. So
- * the file that means *"the user did NOT remove Traycer"* decoded as *"the
- * user removed Traycer"*, every converge/respawn arm short-circuited, the host
- * never started, and nothing in the evidence trail said why.
- *
- * `observed(false)` was, in other words, unreachable from any byte sequence
- * the product could write — and mutation testing cannot surface that by
- * construction, because the assertions over the hand-written fixtures were all
- * perfectly sound. Only running the real writer catches it.
- *
- * The writer is REAL here: `markHostRemovedByUser` / `clearHostRemovedByUser`
- * go through `createJsonFileStore`'s real atomic write into a real temp
- * `userData` directory. Only `electron.app.getPath` is mocked, to point at it.
+ * Writer ↔ reader pinning for the removed-by-user sentinel (macOS annex §2.1.1: "Reader and writer must be pinned to each other by a test that runs the *real writer* and feeds its.
+ * A fixture the product cannot produce proves nothing about either.").
  */
 
 let userDataDir = "";
@@ -112,13 +92,7 @@ describe("removed-by-user sentinel: real writer → lifecycle reader", () => {
     expect(decoded).toEqual({ kind: "observed", value: true });
   });
 
-  /**
-   * The keyed-decode rule, pinned by the **real writer's** bytes rather than a
-   * hand-built fixture. `observed(true)` is the only verdict that suppresses a
-   * start, so this file landing at (or being copied to) the stop-sentinel path
-   * would otherwise silently refuse to start the host forever. It has to read
-   * as unattributable, and `corrupt` proceeds — and is then repaired.
-   */
+  /** The keyed-decode rule, pinned by the real writer's bytes rather than a hand-built fixture. */
   it("does not decode as a stop-sentinel refusal when read at the wrong path", async () => {
     await markHostRemovedByUser();
     const { decoded, decodedAsStopSentinel } = await decodeWrittenSentinel();
@@ -127,24 +101,6 @@ describe("removed-by-user sentinel: real writer → lifecycle reader", () => {
     expect(decodedAsStopSentinel).toEqual({ kind: "corrupt" });
   });
 
-  /**
-   * **The reverse pin: lifecycle encoder → the real shipped reader.**
-   *
-   * Everything above pins writer→reader. That is half a contract, and the
-   * unpinned half is where this bug lived: `repair-canonical` rewrites this
-   * file to canonical shape, and `parseRemovalState` — still shipping, still
-   * the reader every auto-provision path goes through — recognises only
-   * `removedByUser === true`. A bare `{"v":1,"value":true}` envelope therefore
-   * read back as **false**, so `remove` would persist the user's decision and
-   * the desktop would then reinstall the host it had just removed, at the next
-   * login. Resurrect direction, on the one sentinel where the permissive
-   * direction is not cheap.
-   *
-   * The fix is in the encoder: the canonical envelope carries the file's own
-   * legacy key alongside `value`, so both readers see the same fact. This test
-   * is what holds that — and it is what tells you whether it is safe to drop
-   * the legacy key once `parseRemovalState` understands the envelope.
-   */
   it("writes bytes the real shipped reader still understands", async () => {
     for (const value of [true, false]) {
       __resetHostRemovalStateForTest();
@@ -154,7 +110,7 @@ describe("removed-by-user sentinel: real writer → lifecycle reader", () => {
         "utf8",
       );
 
-      // The shipped reader — the one `host-launch-converge`,
+      // The shipped reader  -  the one `host-launch-converge`,
       // `host-health-respawn` and `host-login-item` all gate on.
       expect(await isHostRemovedByUser()).toBe(value);
 

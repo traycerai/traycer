@@ -1,13 +1,4 @@
-/**
- * Remote-host `browser.sessions` fan-in for manual browser PiP.
- *
- * `BrowserSessionsProvider` is the sole primary-host authority. This manager
- * subscribes only to the non-primary hosts named by the current or pending
- * PiP target and forwards their inventory and selected-tab captions to PiP.
- *
- * Plain object (not a hook-per-host) so the host set can be data-driven.
- * Dispose closes every subscription; there is no retained detached state.
- */
+/** Remote-host `browser.sessions` fan-in for manual browser PiP. */
 import type {
   BrowserSessionInfo,
   BrowserSessionsServerFrame,

@@ -88,9 +88,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => testState.role,
 }));
 
-// Captures the client the controller hands the list query, so the suite can
-// say WHICH host the panel reads on - the two client mocks below answer
-// different ids for exactly this reason.
+// Captures the client the controller hands the list query, so the suite can say WHICH host the panel reads on - the two client mocks below answer different ids for exactly this reason.
 const collaboratorsQueryClientIds = vi.hoisted(
   () => [] as Array<string | null>,
 );
@@ -379,13 +377,6 @@ describe("<SharingPanel />", () => {
   });
 
   it("reads the collaborator list on the EPIC SESSION's client, not the app-wide one", () => {
-    // Codex #1243 sweep: the panel's grant/revoke/role mutations were moved
-    // onto the Epic session's client, and the list must agree with the host
-    // those writes land on. The controller's own comment recorded this as
-    // deferred ("would have to move the mutation hooks with it"); this pins
-    // that it is no longer deferred. Both client mocks are installed with
-    // distinct ids, so a controller reading the app-wide client fails here
-    // by name.
     collaboratorsQueryClientIds.length = 0;
     renderSharingPanel();
     expect(collaboratorsQueryClientIds.length).toBeGreaterThan(0);
@@ -577,9 +568,7 @@ describe("<SharingPanel /> My agents", () => {
   });
 
   it("keeps the switch inert until the cloud chat list has answered", () => {
-    // The confirm copy counts the chats about to be exposed and the request
-    // always applies to existing rows - so an unanswered list must not be
-    // able to arm the toggle with a count of zero.
+    // The confirm copy counts the chats about to be exposed and the request always applies to existing rows - so an unanswered list must not be able to arm the toggle with a count of zero.
     testState.sharingDefaultSupported = true;
     testState.cloudChatListSuccess = false;
     testState.ownCloudChats = [

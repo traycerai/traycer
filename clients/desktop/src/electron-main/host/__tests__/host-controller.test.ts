@@ -13,27 +13,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 
-// Host Update Layer Redesign Tech Plan - Ticket: "Desktop main: HostController
-// two-lane scheduler + policy cutover". This is the ticket's own verification
-// suite: the mutation lane's wait-never-reject contract (the "screenshot
-// race" guardrail - `convergeReady` during an in-flight apply/update resolves
-// instead of throwing, and "Another host operation" no longer exists
-// anywhere in this call graph), the desktop-held `cli-lock` sections around
-// SMAppService work (proven with a genuine two-process test), identity/debt
-// derivation and convergence, the yank/apply reconcile-ordering edge, the
-// macOS vs CLI-owned platform matrix, `removeTraycer`'s ordering, and
-// `applyPendingLoginItemRevisionIfIdle` (the production-incident-driven
-// pending-LaunchAgent-revision refresh, retargeted here after
-// `host-ensure-ipc.ts`'s deletion folded its coverage in).
-//
-// Mocking boundary: the CLI subprocess wrapper (`../../cli/traycer-cli`),
-// the macOS SMAppService bindings (`../../app/host-login-item`), and
-// `waitForHostReady`'s own polling (`../host-readiness` - its polling
-// mechanics are a pre-existing primitive, not part of this ticket) are
-// mocked. `./host-state`, `./host-paths`, `./host-removal-state`, and
-// `./desktop-cli-lock` are REAL - installed/staged/pid records are read from
-// and written to a real temp `$HOME/.traycer` tree per test, so state
-// derivation and the desktop lock are genuinely exercised, not simulated.
 
 vi.mock("electron", () => ({
   app: {
@@ -69,16 +48,6 @@ vi.mock("../../cli/cli-discovery", () => ({
   resolveBundledCliPath: vi.fn(async () => null),
 }));
 
-// Mirrors exactly what production imports from this module across
-// `host-controller.ts` (`hasUnappliedPendingLoginItemRevision`,
-// `hostManagesHostLoginItem`, `readHostLoginItemStatus`) and, indirectly,
-// `update-mutation.ts` (`registerHostLoginItem`,
-// `retireCompetingCliRegistrationAtLaunchGuarded`,
-// `unregisterHostLoginItemGuarded`) - the wrapped final actuators
-// `host-controller.ts` now calls through instead of the raw functions
-// directly. A mock missing one of these is not "smaller coverage", it is a
-// `TypeError` the moment the real code path is reached (see the
-// `removeTraycer` incident this replaced).
 vi.mock("../../app/host-login-item", () => ({
   hostManagesHostLoginItem: vi.fn(async () => false),
   registerHostLoginItem: vi.fn(async () => "enabled"),
@@ -117,31 +86,8 @@ vi.mock("../../app/update-preferences", async (importOriginal) => {
   };
 });
 
-// F3 (routeForceRestartContinuation): the desktop executor cohort ships
-// static shadow-disabled, exactly like the CLI's own cohort - mirrors the
-// same `vi.importActual` + `mockImplementation` pattern
-// `update-executor.test.ts` already uses for `runDesktopActivationSegment`
-// (the function this cohort gate actually protects; F3 reaches it through
-// `routeForceRestartContinuation`). Defaults to the REAL shipped
-// shadow-disabled implementation - forced eligible only inside the specific
-// F3 tests that need to reach the continuation arm.
 const desktopExecutorCohortMock = vi.hoisted(() => ({
   decide: vi.fn(),
-  /**
-   * Reinstates the REAL shipped cohort policy as this mock's default.
-   *
-   * Load-bearing, and it cost a false green to learn why: the factory below
-   * installs the real implementation exactly once, but `eligibleDesktopCohort()`
-   * overrides it with `mockReturnValue`, and `vi.clearAllMocks()` clears call
-   * history WITHOUT restoring implementations. So one test opting into an
-   * eligible cohort silently made EVERY later test in this file run under an
-   * eligible cohort - including the ones whose whole point is to assert the
-   * shipped shadow-disabled default.
-   *
-   * That leak was invisible while the continuation self-deadlocked, because a
-   * deadlocked continuation fell through to the same plain restart the
-   * fall-through tests expected. Fixing the deadlock is what exposed it.
-   */
   restoreShippedCohort: (): void => {},
 }));
 vi.mock("../update-executor-cohort", async () => {
@@ -160,27 +106,12 @@ vi.mock("../update-executor-cohort", async () => {
   };
 });
 
-// F3 (round 5 review, F3 finding): `withMintedAdoption` mints its proof
-// through `writeAdoptionProof` - the ONE seam narrow enough to simulate a
-// real minting failure (a proof write rejected, e.g. disk pressure) without
-// touching `host-controller.ts` or faking the capability-liveness machinery
-// itself. Defaults to the REAL shared implementation - every other test in
-// this file that reaches `withMintedAdoption` (or the round-5 F10 adoption
-// transport suite's own concerns) is unaffected; only the one test that
-// explicitly overrides it exercises a simulated failure.
 const writeAdoptionProofMock = vi.hoisted(() => ({
   write: vi.fn(),
   restoreShipped: (): void => {},
 }));
 
-// F3 terminal-with-diagnostics contract (round 5, item #1): the tombstone
-// must be withdrawn BEFORE the record's own `failed` commit lands, not
-// merely gone by the time a test reads final state (both orderings produce
-// the identical FINAL state, which is exactly why a naive "tombstone is
-// absent after respawn() resolves" assertion cannot distinguish them - it
-// would stay green even if the order were reversed). This records the real
-// call order of the two underlying actuators so the order itself, not just
-// the end state, is asserted and ablatable.
+// F3 terminal-with-diagnostics contract (round 5, item #1): the tombstone must be withdrawn BEFORE the record's own `failed` commit lands, not merely gone by the time a test reads.
 const terminalOrderEvents = vi.hoisted(() => ({
   events: [] as string[],
   reset: (): void => {},
@@ -379,14 +310,6 @@ function fakeHostLifecycle(): HostControllerHostLifecycle & {
   };
 }
 
-// Fixup A3: `readRunningRuntimeVersion` now requires a real endpoint-
-// reachability probe. Defaulting it to always-reachable here preserves
-// every existing fixture-driven test's behavior (they write a pid.json with
-// a genuinely-alive `pid: process.pid` and rely on that alone meaning
-// "running") without needing a real TCP listener bound to the fixture's
-// `websocketUrl`; the small number of A3-specific tests that need to prove
-// the "process alive, endpoint dead" gap use
-// `newControllerWithReachability` directly with a probe that resolves false.
 function newController(environment: "production" | "dev"): HostController {
   return newControllerWithReachability(environment, async () => true);
 }
@@ -416,17 +339,6 @@ function newControllerWithLifecycle(
   });
 }
 
-// Fixup A9: the desktop-held cli-lock's wait/poll is now an injectable
-// `HostControllerOptions` field (production: `DESKTOP_LOCK_WAIT_MS`/
-// `DESKTOP_LOCK_POLL_INTERVAL_MS`, matching the CLI's own 30s `waitMs` -
-// fixup A8) rather than a hardcoded module constant every call site read
-// directly. Every existing test funnels through `newControllerWithReachability`
-// above, which passes the real production timing unchanged - the
-// "desktop-held cli-lock: two-process test" still exercises a genuine
-// multi-second poll against a real worker process. Only the
-// exhausted-lock-wait contract test below needs the wait to actually
-// elapse inside a unit test, so it calls this lower-level helper directly
-// with a small override instead.
 function newControllerWithLockTiming(
   environment: "production" | "dev",
   reachabilityProbe: (websocketUrl: string) => Promise<boolean>,
@@ -562,12 +474,7 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-// Mirrors the REAL `traycer host available --json` wire shape (pinned by
-// the contract test in `traycer-cli/src/commands/__tests__/host-available.test.ts`):
-// `{ manifest: { latest, versions[].platforms[platformKey] }, manifestUrl,
-// platformKey }`, NOT a flat `{latest, versions[].platformAsset}` shape
-// (fixup A1 - every fixture using the old flat shape validated the parsing
-// bug rather than catching it).
+// Mirrors the REAL `traycer host available --json` wire shape (pinned by the contract test in `traycer-cli/src/commands/__tests__/host-available.test.ts`): `{ manifest: { latest.
 function availableSnapshotFixture(
   latest: string,
   availableVersions: readonly string[],
@@ -604,12 +511,6 @@ function availableSnapshotFixture(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Headline guardrail: "the screenshot race becomes a test" - `convergeReady`
-// submitted while a mutation is in flight resolves once its turn comes,
-// instead of being rejected the way the deleted `trackHostOperation`
-// single-flight guard used to reject a second concurrent call synchronously.
-// ---------------------------------------------------------------------------
 describe("headline: convergeReady during an in-flight mutation resolves, never rejects", () => {
   it("convergeReady queued behind an in-flight applyStaged waits for it, then resolves ok - not a rejection", async () => {
     const controller = newController("production");
@@ -711,9 +612,6 @@ describe("headline: convergeReady during an in-flight mutation resolves, never r
   });
 });
 
-// ---------------------------------------------------------------------------
-// Mutation lane: wait-never-reject, FIFO ordering, no starvation.
-// ---------------------------------------------------------------------------
 describe("mutation lane: wait-never-reject", () => {
   it("a failed job does not starve the next queued job", async () => {
     const controller = newController("production");
@@ -741,10 +639,6 @@ describe("mutation lane: wait-never-reject", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
-    // Fixup C2: `applyStaged` short-circuits to a synthetic "ok" without
-    // ever invoking the CLI when there's no staged version - a staged
-    // record is required for `applyStagedCliOwned` (and therefore this
-    // test's `order` tracking) to run at all.
     writeStagedRecord("production", "1.8.0", "1.8.0");
 
     let concurrentHolders = 0;
@@ -766,12 +660,7 @@ describe("mutation lane: wait-never-reject", () => {
     ]);
 
     expect(maxConcurrentHolders).toBe(1);
-    // Fixup C2: the title's own "FIFO order" claim was never checked - only
-    // mutual exclusion was. The second `respawn()` coalesces with the first
-    // (same key, still in flight). `applyStaged`'s production preflight
-    // revalidates the extant stage before consuming it, but that in-lane
-    // pass is manifest-only. The one automatic download stays on the
-    // independent lane before apply owns the mutation lane.
+    // Fixup C2: the title's own "FIFO order" claim was never checked - only mutual exclusion was.
     expect(order).toEqual([
       "host restart --force --defer-if-parked",
       "host download --automatic",
@@ -844,13 +733,7 @@ describe("mutation lane: wait-never-reject", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// v1.1.7 update-flow review findings re-derived onto the HostController:
-//   Mo-A - a live host + `requires-approval` must not be booted out for a
-//          futile register cycle (only the user can approve the login item).
-//   Mi-1 - a bare progress heartbeat must hold the last concrete numbers
-//          instead of blanking the progress bar to null.
-// ---------------------------------------------------------------------------
+// Mi-1 - a bare progress heartbeat must hold the last concrete numbers instead of blanking the progress bar to null.
 describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-forward", () => {
   it("Mo-A: a running host + requires-approval fails fast with the approval message and never boots the healthy host out", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -948,11 +831,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
   });
 
   it("a registry liveness tick keeps the running stage, but a real stage transition still lands", async () => {
-    // `registry-*` ticks are emitted from inside whatever stage is already
-    // running, so letting one overwrite `stage` flipped the renderer's
-    // heading away from "Downloading Traycer Host…" and back on every
-    // retry - constant flicker on the throttled links the retry budget
-    // exists for. The tick's message must still come through.
+    // The tick's message must still come through.
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -1029,11 +908,6 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         message: "retrying host archive shortly",
         workUnits: null,
       }),
-      // ...and a GENUINE transition carries nothing. This assertion used to read
-      // `percent: 45`, pinning the leak as though it were intended - incidentally,
-      // since this test's subject is the `stage` guard and not the numbers. It was
-      // the only thing in the suite that noticed they leaked, and it agreed with
-      // them.
       expect.objectContaining({
         stage: "extract",
         percent: null,
@@ -1044,16 +918,6 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
   });
 
   it("a genuine stage transition blanks the bar instead of inheriting a COMPLETED download's numbers", async () => {
-    // THE SHIPPED DEFECT, in the shape a user meets it. On every registry
-    // install: download climbs to 100% with bytes == totalBytes, extract
-    // announces with all three null, the stage transitions correctly - and every
-    // number is inherited. So the card sat at a FULL progress bar reading
-    // "800 MB of 800 MB", under "Setting up Traycer Host…", for the whole
-    // multi-minute extract.
-    //
-    // A full bar reads as FINISHED, not as working, which makes it the worst of
-    // the three fields. Blanking is not a regression: the new stage has no
-    // measured position yet, and an honest empty beats an inherited lie.
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -1132,14 +996,6 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup A5: keyed coalescing (Tech Plan D3 "explicit coalescing keys, per-
-// intent results") - a duplicate submission still in flight for the same
-// intent + distinguishing params JOINS the existing job instead of
-// re-executing it. Distinct from mere serialization: these tests assert the
-// CLI was invoked exactly once for two concurrent identical calls, not just
-// that both eventually resolve.
-// ---------------------------------------------------------------------------
 describe("coalescing: duplicate in-flight submissions join rather than re-execute", () => {
   it("P10/V6: identical apply intents coalesce across their preflight and in-lane eligibility verification", async () => {
     const controller = newController("production");
@@ -1352,10 +1208,6 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
   });
 });
 
-// ---------------------------------------------------------------------------
-// Two independent lanes: a download never starts while a mutation owns the
-// host, and re-kicks once the mutation completes.
-// ---------------------------------------------------------------------------
 describe("two lanes: mutation vs download independence", () => {
   it("stageLatest defers starting a new download while a mutation is active, then re-kicks once it settles", async () => {
     const controller = newController("production");
@@ -1392,10 +1244,6 @@ describe("two lanes: mutation vs download independence", () => {
     mutationGate.resolve({ data: { activated: true } });
     await respawnPromise;
     await stageLatestPromise;
-    // `enqueueMutation`'s finally re-kicks the pending stageLatest - real fs
-    // reads (isHostRemovedByUser, install/staged records) are in the path
-    // before the download call, so poll rather than assume a fixed number
-    // of microtask ticks is enough.
     await vi.waitFor(() => {
       if (downloadCalls.length === 0)
         throw new Error("download not kicked yet");
@@ -1404,11 +1252,6 @@ describe("two lanes: mutation vs download independence", () => {
     expect(downloadCalls.length).toBeGreaterThan(0);
   });
 
-  // Fixup A6: `stageLatest`'s synchronous `mutationStatus !== null` guard
-  // only covers callers that start AFTER a mutation is already active. This
-  // proves the OTHER direction - a mutation starting WHILE the registry
-  // probe (an async gap) is still in flight must still be caught, by a
-  // re-check made atomically with the decision to start the download.
   it("re-checks mutation state after the registry probe, not just at entry - a mutation starting mid-probe still defers the download", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -1418,11 +1261,6 @@ describe("two lanes: mutation vs download independence", () => {
     writeStagedRecord("production", "1.8.0", null);
 
     const probeGate = deferred<void>();
-    // Separately gated from the probe - respawn's OWN CLI call must stay
-    // pending for the length of this test, or its `finally` would clear
-    // `mutationStatus` back to null before the assertion below runs and the
-    // test would pass for the wrong reason (respawn already having
-    // finished) rather than genuinely exercising the re-check.
     const restartGate = deferred<{ data: unknown }>();
     const downloadCalls: string[][] = [];
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
@@ -1467,10 +1305,7 @@ describe("two lanes: mutation vs download independence", () => {
     expect(downloadCalls.length).toBeGreaterThan(0);
   });
 
-  // Fixup A6: `applyStaged`'s preflight reconcile (registry probe + possible
-  // download) must run BEFORE the exclusive mutation lane is entered, so a
-  // WAN download never holds every other mutation hostage - the exact
-  // gate-pressure bug this ticket exists to eliminate.
+  // Fixup A6: `applyStaged`'s preflight reconcile (registry probe + possible download) must run BEFORE the exclusive mutation lane is entered, so a WAN download never holds every.
   it("applyStaged's preflight download reconcile does not hold the exclusive mutation lane - a concurrent convergeReady is not blocked on it", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -1480,13 +1315,8 @@ describe("two lanes: mutation vs download independence", () => {
     writeStagedRecord("production", "1.8.0", null);
 
     const downloadGate = deferred<unknown>();
-    // Signals that the preflight download has actually been ENTERED. The
-    // property under test is "convergeReady is not blocked while apply sits
-    // in its preflight download", so apply must provably be sitting there
-    // before convergeReady starts. `flushMicrotasks()` cannot establish that:
-    // it is three promise turns, while `applyStaged` first crosses real fs
-    // reads. Losing that race makes this test either time out or - worse -
-    // pass without ever exercising the concurrency it claims to prove.
+    // The property under test is "convergeReady is not blocked while apply sits in its preflight download", so apply must provably be sitting there before convergeReady starts.
+    // `flushMicrotasks()` cannot establish that: it is three promise turns, while `applyStaged` first crosses real fs reads.
     const downloadStarted = deferred<void>();
     let ensureCalled = false;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
@@ -1521,11 +1351,7 @@ describe("two lanes: mutation vs download independence", () => {
     const convergePromise = controller.convergeReady(false, {
       kind: "background",
     });
-    // The download is still gated (unresolved) while convergeReady reaches
-    // its own CLI call - real fs reads (readRunningHostIdentity et al.) are
-    // in the path first, so poll rather than assume a fixed number of
-    // microtask ticks is enough. If the exclusive lane were held across the
-    // download, this would never resolve until `downloadGate` is released.
+    // If the exclusive lane were held across the download, this would never resolve until `downloadGate` is released.
     await vi.waitFor(() => {
       if (!ensureCalled) throw new Error("ensure not reached yet");
     });
@@ -1536,13 +1362,6 @@ describe("two lanes: mutation vs download independence", () => {
     await convergePromise;
   });
 
-  // Fixup A6 (third citation): `activateInstalled`'s "a ready update
-  // supersedes activation debt" branch used to run its own reconcile via
-  // `applyStagedInline` from WITHIN the lane (it couldn't re-enter
-  // `enqueueMutation`, so it inlined the same reconcile-then-download
-  // logic in place) - same gate-pressure bug as `applyStaged`'s own entry
-  // point. The reconcile now runs once, before `activateInstalled` enters
-  // the lane at all.
   it("activateInstalled's preflight download reconcile (ready-update-supersedes-debt path) does not hold the exclusive mutation lane", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -1599,13 +1418,6 @@ describe("two lanes: mutation vs download independence", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup C5: the download lane's `finally` used to unconditionally null
-// `downloadStatus` right after the `catch` block above wrote `lastError`
-// into it - the terminal error was written and erased in the same tick, so
-// `getStatus().download` could never observe a failed download (ticket 4
-// needs this to render download-lane failures).
-// ---------------------------------------------------------------------------
 describe("download lane: terminal lastError is observable via canonical status (fixup C5)", () => {
   it("keeps lastError readable from getStatus() after a failed download, until the next attempt starts fresh", async () => {
     const controller = newController("production");
@@ -1648,34 +1460,13 @@ describe("download lane: terminal lastError is observable via canonical status (
   });
 });
 
-// ---------------------------------------------------------------------------
-// Desktop-held cli-lock sections (Tech Plan "cli-lock" rule 3): the SAME
-// file-lock protocol the CLI itself uses, so a real cross-process CLI
-// mutation and a desktop-driven SMAppService cycle exclude each other.
-// ---------------------------------------------------------------------------
 describe("desktop-held cli-lock: two-process test", () => {
-  // Fixup C1: the worker used to only hold/release the lock and exercise
-  // register - disk state never changed, so this couldn't catch any of the
-  // races it exists to cover (nested stamp reacquisition (A7), missing
-  // post-acquisition state reread (B12), supersession (A4)). The worker now
-  // starts a real terminal `traycer host uninstall` process while it holds
-  // that lock. This test asserts both lock participation (the real CLI has
-  // not changed disk state while the worker lock is held) and the desktop
-  // post-acquisition reread after the terminal mutation wins the lock.
+  // Fixup C1: the worker used to only hold/release the lock and exercise register.
+  // This test asserts both lock participation (the real CLI has not changed disk state while the worker lock is held) and the desktop post-acquisition reread after the terminal.
   it("V1: a packaged-macOS registerService call yields to a real terminal host uninstall, then detects its post-lock supersession", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    // Use a real multi-run slot, not dev's legacy path. The controller, the
-    // worker, and the source CLI must all carry this exact value: if any
-    // side drops slot resolution, they contend on different .lock files and
-    // desktop registers before the terminal uninstall wins.
+    // The controller, the worker, and the source CLI must all carry this exact value: if any side drops slot resolution, they contend on different .lock files and desktop registers.
     process.env[DEV_DESKTOP_SLOT_ENV] = "round4-v1-lock";
-    // The checked-in real CLI source is a dev build, so exercise the dev
-    // slot: that makes the terminal command and desktop controller address
-    // the identical live lock and install record without a test-only CLI.
-    // The terminal CLI is queued first. Give this desktop contender a
-    // deliberately slower polling cadence so the test deterministically
-    // exercises the CLI winning the next lock turn, rather than relying on
-    // two 100ms timers happening to fire in the desired order.
     const controller = newControllerWithLockTiming(
       "dev",
       async () => true,
@@ -1739,11 +1530,6 @@ describe("desktop-held cli-lock: two-process test", () => {
     expect(existsSync(installRecordFile)).toBe(true);
     writeFileSync(join(barrierDir, "mutate"), "");
 
-    // This marker is written by the REAL CLI's `withCliLock` callback,
-    // immediately after it acquires the shared lock and before host-uninstall
-    // enters its critical section. Waiting for it before submitting Desktop
-    // avoids a scheduler race where a cold `bun run` has not reached its
-    // first lock attempt before Desktop's own retry timer wakes.
     await waitForFile(join(barrierDir, "cli-lock-acquired"));
     const registerPromise = controller.registerService({ kind: "background" });
     await waitForFile(join(barrierDir, "cli-exit"));
@@ -1758,12 +1544,6 @@ describe("desktop-held cli-lock: two-process test", () => {
     await waitForFile(join(barrierDir, "mutated"));
     expect(existsSync(installRecordFile)).toBe(false);
     const outcome = await registerPromise;
-    // Proves the post-acquisition reread (fixup B12): if desktop had acted
-    // on the pre-wait snapshot it could only have read before this point
-    // (when the install still existed) instead of re-reading after
-    // acquiring the lock, this would be `{kind: "ok"}` and
-    // `registerHostLoginItem` would have been called against an install
-    // that no longer exists.
     expect(outcome).toEqual({ kind: "failed", message: "No host installed." });
     expect(registerHostLoginItem).not.toHaveBeenCalled();
 
@@ -1771,19 +1551,7 @@ describe("desktop-held cli-lock: two-process test", () => {
   }, 30_000);
 });
 
-// ---------------------------------------------------------------------------
-// Fixup A7: the packaged-macOS null-runtime activation cycle used to call
-// `stampIfNullRuntime` (which spawns `host stamp-runtime` - a CLI subprocess
-// that reacquires this SAME desktop-held lock file) from INSIDE the
-// `withDesktopCliLock` closure. Nesting a CLI-locked section inside a
-// desktop-locked one deadlocks the subprocess against its own caller until
-// the desktop's own subprocess timeout swallows the error - activation then
-// reports success while the stamp silently never lands. `runBundledTraycerCliJson`
-// is mocked here to make a REAL acquisition attempt against the SAME lock
-// file `runLockedMacActivationCycle` uses (`./desktop-cli-lock` is real, not
-// mocked, per this suite's mocking boundary) - proving genuine contention
-// (or its absence) rather than merely asserting call order.
-// ---------------------------------------------------------------------------
+// Nesting a CLI-locked section inside a desktop-locked one deadlocks the subprocess against its own caller until the desktop's own subprocess timeout swallows the error.
 describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)", () => {
   it("stamp-runtime's CLI subprocess call happens after the desktop lock has released, not while still held", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -1795,12 +1563,7 @@ describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)"
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
     const lockPath = cliLockPath("production");
-    // `activateInstalled` also runs `stageLatest`'s registry `available`
-    // check through this same CLI subprocess wrapper, so the wrapper is
-    // called more than once now. This test's invariant is ORDERING (the
-    // stamp-runtime call happens after the desktop lock releases), not the
-    // total call count - so only the stamp-runtime-shaped call probes the
-    // lock; every other call is a harmless passthrough.
+    // This test's invariant is ORDERING (the stamp-runtime call happens after the desktop lock releases), not the total call count.
     const acquireAttempts: Array<"acquired" | "busy"> = [];
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (!args.includes("stamp-runtime")) {
@@ -1830,19 +1593,6 @@ describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)"
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup A9: the desktop-held cli-lock's wait/poll used to be a hardcoded
-// module constant (`DESKTOP_LOCK_WAIT_MS = 30_000`) baked into every
-// `withDesktopCliLock` call site, so the "lock wait exhausted -> `deferred`"
-// terminal contract (the same contract fixup A8 depends on: a lock-taking
-// CLI subprocess must be allowed to run at least as long as the CLI's own
-// 30s lock wait) could only be proven with a real 30-second wait - not
-// practical for a unit suite, per the review's "code-level reasoning was
-// insufficient, and findings A6/A8 show why." `HostControllerOptions` now
-// takes the wait/poll as an explicit, required, per-instance field, so a
-// test can inject a small override and force a genuine exhaustion within
-// milliseconds instead of asserting on code shape.
-// ---------------------------------------------------------------------------
 describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup A9)", () => {
   it("resolves 'deferred' once the injected lock wait is genuinely exhausted against a held lock, without hanging or throwing", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -1875,22 +1625,8 @@ describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup
   });
 });
 
-// ---------------------------------------------------------------------------
-// Lock-contention terminal contract: ONE class, `deferred`, for every
-// mutation - convergeReady included. This SUPERSEDES fixup B3, which split
-// convergeReady off to "failed" + a Retry-worded message for the renderer's
-// live "connecting to host" gate. That gate's automatic converge is retired
-// (D14/C5); convergeReady's launch-time caller is now the selection
-// authority's ensure - a background actor - and the engine turns a `failed`
-// completion into a 30s dead-lease cooldown, i.e. the "No host is
-// available" modal over a healthy machine whose lock the desktop's own
-// launch reconcile happened to hold. A held lock means nothing ran and
-// nothing was learned about the host; the surviving manual surfaces
-// (Settings converge, doctor) throw the outcome message whatever its kind.
-// What this pin still protects from B3's era: contention during the
-// packaged-mac ACTIVATION CYCLE (after the ensure CLI call) resolves
-// cleanly - no hang, no throw.
-// ---------------------------------------------------------------------------
+// That gate's automatic converge is retired (D14/C5).
+// A held lock means nothing ran and nothing was learned about the host; the surviving manual surfaces (Settings converge, doctor) throw the outcome message whatever its kind.
 describe("lock-contention terminal contract: convergeReady defers like every other mutation (supersedes fixup B3)", () => {
   it("convergeReady on packaged macOS resolves deferred when the desktop lock is held during the activation cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -1932,12 +1668,6 @@ describe("lock-contention terminal contract: convergeReady defers like every oth
   });
 });
 
-// ---------------------------------------------------------------------------
-// Canonical status: activation-state derivation + convergence across a
-// simulated app restart (a fresh HostController reading the same on-disk
-// state - exactly what production sees on a real relaunch, since nothing
-// HostController tracks that matters here is held in memory).
-// ---------------------------------------------------------------------------
 describe("canonical status: activation-state derivation", () => {
   it("unavailable when there is no reachable running host", async () => {
     writeInstallRecord("production", {
@@ -2207,11 +1937,6 @@ describe("canonical status: activation-state derivation", () => {
   });
 
   it("a legacy null-runtime install record converges within one activation cycle across two simulated app launches", async () => {
-    // Launch 1: an install record predating runtime stamping (runtimeVersion
-    // null) with no host running - `activateInstalled` cycles it and, since
-    // the record itself has a null stamp, stamps immediately from its own
-    // readiness observation (installGeneration attested from disk, per the
-    // Tech Plan's stamp-runtime CAS).
     writeInstallRecord("production", {
       version: "1.7.0",
       runtimeVersion: null,
@@ -2264,13 +1989,6 @@ describe("canonical status: activation-state derivation", () => {
   });
 });
 
-// Ticket 07 §5.2.7 / retention (`isTerminalRetentionExpired`): `getStatus()`'s
-// `localAttempt` is the host-DOWN window's only observation, so an aged-out
-// terminal record must not resurface a week-old failure as the freshest
-// available fact. Direct JSON writes, mirroring `attemptRecordFields` /
-// `writeAttemptRecord` in the "F3: routeForceRestartContinuation via respawn"
-// describe block below - a terminal record's shape, not the legal
-// claim/commit path, is what `readLocalAttemptFacts` reads.
 describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
   function writeTerminalAttemptRecord(overrides: {
     readonly updatedAt: string;
@@ -2337,11 +2055,6 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Yank/apply ordering edge: `applyStaged` awaits any in-flight-or-due
-// eligibility reconcile for the staged version before re-reading
-// `updateReady`, so a yanked stage is never applied post-refresh.
-// ---------------------------------------------------------------------------
 describe("yank/apply ordering", () => {
   it("passes the download-lane stage fingerprint to the real apply command", async () => {
     const controller = newController("production");
@@ -2671,11 +2384,6 @@ describe("yank/apply ordering", () => {
     expect(downloads).toEqual([]);
   });
   it("keeps revalidating a staged non-canonical prerelease after an opt-out", async () => {
-    // The listing question is "would this row be hidden by the default view",
-    // which covers every prerelease shape - NOT "is this a canonical RC",
-    // which is the narrower question implicit following asks. Narrowing this
-    // one would drop the staged row from the listing, read it as yanked, and
-    // purge a verified artifact.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -2699,10 +2407,6 @@ describe("yank/apply ordering", () => {
   });
 
   it("follows its own RC line with no saved preference", async () => {
-    // Implicit following: derived from the installed version, nothing
-    // persisted. The listing has to be widened for the line's own RCs to be
-    // visible at all, and `2.1.0-rc.1` - newer, but another line - is not a
-    // candidate at any distance.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -2730,10 +2434,7 @@ describe("yank/apply ordering", () => {
   });
 
   it("pins the matching stable even while the registry `latest` still lags", async () => {
-    // The case `--automatic` cannot reach: `2.0.0` is published but `latest`
-    // still points at `1.9.0`, which is a DOWNGRADE for a 2.0.0-line RC.
-    // Resolve-then-pin is what makes the line's stable reachable, and taking it
-    // is also what ends implicit participation.
+    // The case `--automatic` cannot reach: `2.0.0` is published but `latest` still points at `1.9.0`, which is a DOWNGRADE for a 2.0.0-line RC.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -2755,11 +2456,7 @@ describe("yank/apply ordering", () => {
   });
 
   it("leaves an unpinned legacy stage alone while following, without attempting a purge", async () => {
-    // A legacy (fingerprint-less) stage plus a line with nothing to replace it:
-    // the repair must not run `--automatic` (that would stage another line's
-    // build), and the reconcile must stop there rather than fall into the purge
-    // branch - which needs a fingerprint this stage has never had, and would
-    // warn about "registry invalidation" that did not happen, on every pass.
+    // A legacy (fingerprint-less) stage plus a line with nothing to replace it: the repair must not run `--automatic` (that would stage another line's build), and the reconcile must.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -2837,10 +2534,7 @@ describe("yank/apply ordering", () => {
     expect(downloads).toEqual(["host download 2.0.0"]);
   });
   it("drives updateReady from the verified stage alone, with no second registry probe", async () => {
-    // The landing banner reads `HostControllerStatus.updateReady` and nothing
-    // else - no React-side release lookup. Proving that here means: one
-    // `host available` call for the whole reconcile, and a canonical status
-    // that reports the pinned stage as ready straight afterwards.
+    // Proving that here means: one `host available` call for the whole reconcile, and a canonical status that reports the pinned stage as ready straight afterwards.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -3063,10 +2757,6 @@ describe("yank/apply ordering", () => {
       }
       if (!args.includes("available")) return {};
       availableCalls += 1;
-      // The reconciliation which was pending behind the older restart saw
-      // the stage as eligible. By the time apply owns the lane, registry
-      // curation has yanked it; only the fresh in-lane pass can observe
-      // that state before `host apply` consumes the bytes.
       return availableSnapshotFixture(
         availableCalls === 1 ? "1.8.0" : "1.7.0",
         availableCalls === 1 ? ["1.8.0"] : ["1.7.0"],
@@ -3097,10 +2787,6 @@ describe("yank/apply ordering", () => {
 
     const restart = controller.respawn({ kind: "background" });
     await vi.waitFor(() => {
-      // `--force` distinguishes respawn (the explicit force path - the
-      // Settings Force-restart offer, tray restart) from the cooperative
-      // `["host", "restart"]` that `activateInstalledCliOwned`/`recoverIfDown`
-      // send: respawn must skip the shutdown claim the busy host would deny.
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
         expect.objectContaining({
           args: ["host", "restart", "--force", "--defer-if-parked"],
@@ -3120,14 +2806,6 @@ describe("yank/apply ordering", () => {
     expect(applyCalls).toBe(1);
   });
 
-  // Fixup B13: `activateInstalled`'s "a ready update supersedes activation
-  // debt" branch must re-derive `updateReady` AFTER its preflight reconcile
-  // settles, not decide it from the pre-reconcile disk state. Simulates the
-  // yank-heal arm discovering the staged version was pulled from the
-  // registry (`host download --automatic` discards `staged.json`) - the
-  // pre-existing activation debt (installed but null-runtime) must still
-  // get its own real activation cycle, never an `applied`/`activated:true`
-  // outcome papered over the discarded stage.
   it("activateInstalled re-derives updateReady after the reconcile yanks the staged version - falls through to activation, never apply", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -3179,9 +2857,6 @@ describe("yank/apply ordering", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Platform matrix: packaged-macOS (SMAppService/login-item) vs CLI-owned.
-// ---------------------------------------------------------------------------
 describe("platform matrix", () => {
   it("installVersion on a CLI-owned platform passes --if-idle unless force", async () => {
     const controller = newController("production");
@@ -3244,11 +2919,6 @@ describe("platform matrix", () => {
     expect(outcome.kind).toBe("ok");
   });
 
-  // Fixup B11: `installVersion(pin, force)` used to hardcode `force: false`
-  // into the packaged-mac post-commit activation cycle, so Settings'
-  // "Force" busy-continuation resubmit on a pin still refused to activate
-  // past a busy host - it committed bytes then reported `busy` again,
-  // making Force a no-op on this one platform/intent combination.
   it("threads force through to the post-commit activation cycle, activating past a busy host", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -3279,15 +2949,6 @@ describe("platform matrix", () => {
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
 
-  // Fixup C6: `runLockedMacActivationCycle`'s readiness-timeout diagnosis
-  // used to classify the failure using `registerResult` - captured BEFORE
-  // `waitForHostReady` even started - so a user disabling the login item in
-  // System Settings mid-wait still surfaced the generic Doctor-text timeout
-  // message instead of the actionable approval one. The pre-wait register
-  // call here returns "enabled" (not requires-approval); only the POST-wait
-  // reread reports requires-approval, proving the diagnosis uses a fresh
-  // read rather than the stale pre-wait result. Restores the deleted
-  // `respawnHost` test's exact pin.
   it("substitutes the approval message on a readiness timeout when the user toggled login-item approval off mid-wait", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -3307,13 +2968,7 @@ describe("platform matrix", () => {
       startedAt: null,
       reason: "pid metadata never appeared",
     });
-    // "enabled" until the readiness wait has actually run, then
-    // "requires-approval" - the mid-wait toggle this test exists to pin. A
-    // blanket "requires-approval" here made the cycle's EARLY approval
-    // terminal fire before register and before the wait, so the queued
-    // not-ready readiness above was never consumed (and leaked into the
-    // next test's Once queue) while the assertion passed against the wrong
-    // branch.
+    // A blanket "requires-approval" here made the cycle's EARLY approval terminal fire before register and before the wait, so the queued not-ready readiness above was never consumed.
     vi.mocked(readHostLoginItemStatus).mockImplementation(() =>
       vi.mocked(waitForHostReady).mock.calls.length > 0
         ? "requires-approval"
@@ -3328,11 +2983,6 @@ describe("platform matrix", () => {
     }
   });
 
-  // `activateAroundParkedRegistration` - the cooperative-restart fallback for
-  // a `registerHostLoginItem` cycle that parked (production: `parked` is a
-  // dedicated arm rather than the prior primary status, and this cycle asks
-  // the RUNNING host to restart through the CLI instead of reporting a
-  // registration failure for bytes that already committed).
   describe("activateAroundParkedRegistration - the parked SMAppService register fallback", () => {
     it("restarts the running host through the CLI (--if-idle) and confirms readiness AFTER that spawn, never before it", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -3407,10 +3057,6 @@ describe("platform matrix", () => {
       expect(waitForHostReady).not.toHaveBeenCalled();
     });
 
-    // An enabled login item is not "down" in the way the failure branch
-    // above is - launchd can restart an enabled agent without a live pid to
-    // distinguish readiness from, so this falls through to the same CLI
-    // restart cycle a running host uses instead of failing immediately.
     it("with no running host but an ENABLED login item, kickstarts it through the CLI restart and reports activated", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");
@@ -3489,11 +3135,6 @@ describe("platform matrix", () => {
       ).toEqual(["host", "restart", "--force", "--defer-if-parked"]);
     });
 
-    // A host that is DOWN because its login item is toggled off is a
-    // DIFFERENT failure from "no host is running to restart": `host doctor`
-    // cannot fix a login item macOS is refusing to run, only re-enabling it
-    // in System Settings can. The park guard names that condition directly
-    // instead of pointing at the wrong remedy.
     it("with no running host and a login item that requires approval, fails with the System Settings approval guidance instead of pointing at host doctor", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");
@@ -3511,11 +3152,6 @@ describe("platform matrix", () => {
 
       expect(outcome.kind).toBe("failed");
       if (outcome.kind === "failed") {
-        // `approvalRequiredMessage()` (host-controller.ts) is the sole
-        // canonical copy for this state and is not exported, so this is the
-        // exact literal it returns - asserted in full so the "no host is
-        // running" message text (a substring match would let through) is
-        // provably absent, not merely unmatched.
         expect(outcome.message).toBe(
           "Traycer's background host is registered but disabled by macOS. " +
             "Open System Settings → General → Login Items & Extensions and turn on " +
@@ -3591,11 +3227,6 @@ describe("platform matrix", () => {
       expect(waitForHostReady).not.toHaveBeenCalled();
     });
 
-    // `registerService` promises a REGISTERED login item, which is a different
-    // promise from the activation cycle's "the committed bytes are running".
-    // A park attempted nothing, so the item is whatever it was before; only
-    // an item that already reads `enabled` can honestly be reported as
-    // registered, and nothing else may be restarted on the way to a failure.
     it("registerService: a park over an ENABLED login item restarts the running host and reports registered", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");
@@ -3669,10 +3300,6 @@ describe("platform matrix", () => {
     });
   });
 
-  // Fixup B6: `convergeReadyPackagedMac`'s "already reachable, skip
-  // activation" fast-path used to key off reachability ALONE - a live OLD
-  // process still answering pings made "reachable" true regardless of what
-  // `ensure` just reported, so freshly-installed bytes never got activated.
   it("activates when ensure reports a non-noop action even though a stale old process is still reachable", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -3741,13 +3368,6 @@ describe("platform matrix", () => {
   });
 
   it("deregisterService streams `host service uninstall` on non-macOS rather than running it under the flat JSON timeout", async () => {
-    // On Windows the uninstall stops the host through the bounded
-    // scan-then-kill loop, whose worst case is several 30 s scans plus
-    // `schtasks /End` and `taskkill` before `/Delete`. The run path's flat
-    // 45 s budget would SIGKILL the CLI mid-loop and leave the host
-    // half-stopped with its task still registered; the streaming path's idle
-    // timeout (re-armed by output, ten minutes) is what `host restart`
-    // already relies on for the same loop.
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -3768,14 +3388,6 @@ describe("platform matrix", () => {
     // reddens on both mock assertions.
   });
 
-  // ---- user-repair reprovision intent -------------------------------------
-  //
-  // These pin the half of a Doctor lifecycle repair that the IPC handler
-  // deliberately does NOT do. Both repair routes hand the controller a
-  // `user-repair` intent instead of clearing the sentinel and checking
-  // identity themselves — the queued one because its wait is unbounded, the
-  // watched one because an await between its lane test and its submit would
-  // reopen the window the test exists to close.
 
   it("a user-repair converge clears the removal sentinel at the head of the lane", async () => {
     // The bug this closes: `convergeReady` short-circuits to
@@ -3796,7 +3408,7 @@ describe("platform matrix", () => {
       guard: () => Promise.resolve({ kind: "proceed" }),
     });
 
-    // Not merely "the sentinel is gone afterwards" — the converge must have
+    // Not merely "the sentinel is gone afterwards"  -  the converge must have
     // actually RUN. A short-circuit would also leave kind "ok".
     expect(await isHostRemovedByUser()).toBe(false);
     expect(streamBundledTraycerCliJson).toHaveBeenCalled();
@@ -3804,7 +3416,7 @@ describe("platform matrix", () => {
   });
   it("a user-repair whose guard abandons mutates nothing", async () => {
     // The host was replaced while the repair waited in the lane. Nothing may
-    // run — and critically the sentinel must NOT be cleared, since clearing
+    // run  -  and critically the sentinel must NOT be cleared, since clearing
     // it is itself a write against whichever host is now current.
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -3820,10 +3432,6 @@ describe("platform matrix", () => {
         Promise.resolve({ kind: "abandon", message: "host changed" }),
     });
 
-    // `abandoned`, not `failed`: the refusal classification travels in the
-    // settled outcome so every coalesced waiter reads the same verdict, and
-    // so the Doctor console can render it as "declined" instead of counting
-    // it toward its recurrence lock.
     expect(outcome).toEqual({ kind: "abandoned", message: "host changed" });
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(await isHostRemovedByUser()).toBe(true);
@@ -3867,10 +3475,6 @@ describe("platform matrix", () => {
   });
 
   it("a user-repair does not coalesce onto a background job of the same shape", async () => {
-    // Coalescing is keyed on the intent for this reason: a repair that joined
-    // a background converge would inherit its policy and silently skip both
-    // the guard and the sentinel clear — the same shape as the pending-login-
-    // item bug where the joiner's policy was discarded.
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -3901,12 +3505,7 @@ describe("platform matrix", () => {
   });
 
   it("two coalesced user-repairs for the same host both receive the guard's refusal", async () => {
-    // Two windows submit the identical repair for the same host; the second
-    // JOINS the first's in-flight job, so only the first intent's guard ever
-    // runs. The refusal must ride the SHARED settled outcome — as the
-    // `abandoned` arm — because any state parked with one caller is dead for
-    // the other, which would then misread the result as a genuine failure
-    // and count it toward the Doctor console's recurrence lock.
+    // The refusal must ride the SHARED settled outcome - as the `abandoned` arm.
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -3937,17 +3536,12 @@ describe("platform matrix", () => {
       kind: "abandoned",
       message: "host changed",
     });
-    // Proves the two really were ONE job — the joiner's own guard never ran.
+    // Proves the two really were ONE job  -  the joiner's own guard never ran.
     expect(secondGuardAsked).toBe(false);
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
   });
 
   it("a queued user-repair restart asks its guard at the head of the lane and abandons after a host swap", async () => {
-    // A restart queues exactly like the reprovisions, so the identity
-    // question must be answered when the restart is about to FIRE, not when
-    // it was submitted: the host it named can be replaced while it waits
-    // behind an install, and a forced restart against the replacement kills
-    // sessions nobody asked about.
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -3982,7 +3576,7 @@ describe("platform matrix", () => {
       message: "host changed",
     });
     expect(guardAsked).toBe(true);
-    // The restart itself never ran — the only CLI traffic was the converge
+    // The restart itself never ran  -  the only CLI traffic was the converge
     // that occupied the lane.
     const restartCalls = vi
       .mocked(streamBundledTraycerCliJson)
@@ -3991,11 +3585,7 @@ describe("platform matrix", () => {
   });
 
   it("a respawn admitted after another respawn already restarted answers restarted without a second cycle", async () => {
-    // The coalesce key is intent-discriminated, so a watched user repair and
-    // a menu/tray background restart for the same slot are DIFFERENT lane
-    // jobs — the seam `respawnGeneration` closes. Without it the second
-    // forced cycle fires immediately after the first and kills the sessions
-    // that just reconnected to the fresh host.
+    // Without it the second forced cycle fires immediately after the first and kills the sessions that just reconnected to the fresh host.
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -4150,11 +3740,6 @@ describe("platform matrix", () => {
     );
   });
 
-  // Fixup B12 (lock rule 3): re-read install state after acquisition - a
-  // terminal `host uninstall --all` may have won the lock, removed the
-  // install, and released it while this call waited its turn. Registering
-  // SMAppService against an absent install used to report success for a
-  // host that no longer exists.
   it("registerService on packaged macOS fails without registering when the install is absent after lock acquisition", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -4219,10 +3804,7 @@ describe("platform matrix", () => {
     );
   });
 
-  // P3: the signal must reach the real download child, and removal must wait
-  // for that child to close before it begins the uninstall. A signal-only
-  // check is insufficient: it would still allow a late promote to race the
-  // removal path.
+  // P3: the signal must reach the real download child, and removal must wait for that child to close before it begins the uninstall.
   it("P3: removeTraycer aborts an in-flight download and waits for its child to settle before uninstalling", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -4238,15 +3820,8 @@ describe("platform matrix", () => {
       }
       return {};
     });
-    // Signals that the download is genuinely in flight WITH its abort
-    // listener attached. Without this handshake the test has no in-flight
-    // child to abort: `flushMicrotasks()` is three promise turns, while
-    // `stageLatest` first crosses real fs reads (isHostRemovedByUser, the
-    // staged-record read) before the download child and its AbortController
-    // exist. Removal could therefore win outright, leaving `observedAbort`
-    // false forever - which is a 1 s `vi.waitFor` timeout, not a bug in the
-    // behaviour under test. Raising that deadline would only wait longer on
-    // a precondition that never became true.
+    // Without this handshake the test has no in-flight child to abort: `flushMicrotasks()` is three promise turns, while `stageLatest` first crosses real fs reads (isHostRemovedByUser.
+    // Raising that deadline would only wait longer on a precondition that never became true.
     const downloadStarted = deferred<void>();
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
       if (opts.args.includes("download")) {
@@ -4304,10 +3879,6 @@ describe("platform matrix", () => {
     expect(uninstallCalls).toBe(1);
     expect(await isHostRemovedByUser()).toBe(true);
 
-    // A subsequent registry-refresh tick's `stageLatest` is a hard no-op
-    // once removed - this is the actual "no resurrection" guarantee (the
-    // in-flight download's bytes landing late doesn't get picked up by
-    // anything, because every entry point re-checks `isHostRemovedByUser`).
     const runCallsBefore = vi.mocked(runBundledTraycerCliJson).mock.calls
       .length;
     await controller.stageLatest();
@@ -4339,15 +3910,6 @@ describe("platform matrix", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup B9: `applyStagedCliOwned` must decide whether to stamp off the
-// NEWLY COMMITTED record's own runtime stamp (`result.runtimeVersion`),
-// never the record apply just replaced. Applying a null-runtime archive
-// over an already-stamped install still needs immediate CAS stamping - the
-// old code read `preRecord.runtimeVersion` (the record being REPLACED) and
-// skipped it whenever that happened to already be non-null, leaving
-// avoidable durable activation debt.
-// ---------------------------------------------------------------------------
 describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
   it("F8a: reports a durable failure when apply reports a post-swap service-start error", async () => {
     const controller = newController("production");
@@ -4589,10 +4151,7 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       runtimeVersion: null,
     });
     writeStagedRecord("production", "1.8.0", "1.8.0");
-    // The committed record carries runtime 1.8.0, so activation readiness is
-    // checked against 1.8.0. The suite default publishes 1.0.0, which makes
-    // `confirmActivationReadiness` throw and lands this on
-    // installed-not-converged before the stamp decision is even observable.
+    // The suite default publishes 1.0.0, which makes `confirmActivationReadiness` throw and lands this on installed-not-converged before the stamp decision is even observable.
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
       version: "1.8.0",
@@ -4611,11 +4170,6 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
 
     const outcome = await controller.applyStaged("manual", false);
 
-    // `applyStaged` can leave before it ever runs the apply command
-    // (`deferred` when the staged record is not eligible), and that path
-    // trivially satisfies the no-stamp assertion below. Pin the apply
-    // actually succeeding first, so this stays a test about the stamp
-    // decision rather than about not reaching it.
     expect(outcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: expect.arrayContaining(["apply"]) }),
@@ -4734,11 +4288,6 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// P12: packaged-macOS activation with a null-runtime record must share its
-// one readiness observation with stamp-runtime instead of spending one full
-// timeout budget in each step.
-// ---------------------------------------------------------------------------
 describe("packaged-macOS null-runtime readiness budget", () => {
   it("P12: performs one readiness wait before stamping and reporting activation", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -4767,15 +4316,6 @@ describe("packaged-macOS null-runtime readiness budget", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup B7: `convergeReadyCliOwned` used to ignore `postSwapError` entirely
-// and only wait for readiness on the null-runtime CAS path - a non-throwing
-// post-swap start failure returned `ok`/`running:false`, which the IPC layer
-// misprojects as `{action:"removed"}` (see `traycerHostEnsure`'s comment:
-// `running:false` is otherwise only reachable via the removed-by-user
-// short-circuit); an already-stamped service-starting branch reported `ok`
-// before the endpoint had actually bound.
-// ---------------------------------------------------------------------------
 describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
   it("does not converge when ensure reports a post-swap start failure", async () => {
     const controller = newController("production");
@@ -4837,18 +4377,6 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup B8: `classifyEnsureLikeError`'s `HOST_BUSY_CODE` branch used to
-// classify `isConvergeReady=true` callers (the only production callers -
-// both `convergeReadyCliOwned` and `convergeReadyPackagedMac` pass `true`)
-// as a fatal `failed` gate result, so a reconnect/compat `convergeReady`
-// while a healthy host had active work showed a fatal error instead of the
-// pre-refactor busy-keep outcome (`host-busy`/`running: true`). The
-// IPC-layer channel test only ever manufactured a fake `{kind:"busy"}`
-// `MutationOutcome` directly on a stub `HostController` - it never actually
-// drove a real `E_HOST_BUSY` through this classification. This is that
-// missing production-path coverage.
-// ---------------------------------------------------------------------------
 describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
   it("classifies a CLI-owned ensure's E_HOST_BUSY as busy/retry-with-force, not a fatal failure", async () => {
     const controller = newController("production");
@@ -4872,15 +4400,7 @@ describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Windows bundled-host `--from` fallback (fixup A2): on Windows the per-user
-// slot CLI is a COPY outside the app bundle (symlinks need elevated
-// privilege there), so the CLI's own sibling-archive resolution can't see
-// the bundled host archive and would fall back to the registry - which
-// publishes no win32 asset for dogfood/unsigned builds. `convergeReadyCliOwned`
-// must pass `--from <archive>` explicitly when running on win32 with a
-// bundled archive present beside the CLI binary.
-// ---------------------------------------------------------------------------
+// `convergeReadyCliOwned` must pass `--from <archive>` explicitly when running on win32 with a bundled archive present beside the CLI binary.
 describe("Windows bundled-host --from fallback", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
     process,
@@ -5011,29 +4531,6 @@ describe("Windows bundled-host --from fallback", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// applyPendingLoginItemRevisionIfIdle - the production-incident-driven
-// pending-LaunchAgent-revision refresh, retargeted here after the deletion
-// of `host-ensure-ipc.ts`'s `ensureHost` fast path (the same login-item
-// register/quarantine choreography, now a controller method instead of an
-// IPC handler).
-//
-// Fixup C3: the comment this replaces claimed the deleted
-// `pending-login-item-revision-monitor.test.ts`'s "mutual exclusion with a
-// concurrent renderer-triggered ensure" coverage was folded in here - it was
-// not. Every collaborator below (`hasUnappliedPendingLoginItemRevision`,
-// `registerHostLoginItem`, `readHostLoginItemStatus`, `waitForHostReady`) is
-// mocked, and every test drives exactly one caller. The old suite proved
-// TWO concurrent callers (the monitor's tick + a renderer-triggered
-// `convergeReady`) coalesce onto a single underlying cycle via
-// `runEnsureHost`'s own in-flight promise cache. `applyPendingLoginItemRevisionIfIdle`
-// has no equivalent coalescing - each caller independently passes the
-// pre-lock checks and then serializes on the desktop lock, so two
-// concurrent callers run the disruptive SMAppService cycle TWICE, not once
-// (confirmed empirically, not from documentation). Flagged to the epic
-// parent rather than silently fixed or silently dropped - this is a
-// production gap, not a portable test case.
-// ---------------------------------------------------------------------------
 describe("applyPendingLoginItemRevisionIfIdle", () => {
   it("returns null when there is no pending revision marker", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -5084,12 +4581,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(readHostLoginItemStatus).not.toHaveBeenCalled();
   });
 
-  // Fixup C3: ported from the deleted `host-ensure-ipc.test.ts` ("throws
-  // the approval-required error when the idle refresh cycle ends
-  // requires-approval") - distinct from the pre-flight case above: here
-  // the login item read as fine BEFORE the cycle, but the register call
-  // ITSELF comes back requires-approval (the user revoked approval during
-  // the disruptive bootout/reregister window).
   it("registerHostLoginItem returning requires-approval post-cycle fails and quarantines the refresh", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5112,10 +4603,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
 
-  // Contrasts with the requires-approval post-cycle case above: "parked"
-  // is a healthy converge (the host this call already confirmed reachable
-  // is untouched, nothing needs restarting) rather than a failure - but the
-  // park is not transient, so it still quarantines for the session.
+  // Contrasts with the requires-approval post-cycle case above: "parked" is a healthy converge (the host this call already confirmed reachable is untouched, nothing needs restarting).
   it("registerHostLoginItem returning parked post-cycle returns null (healthy converge), quarantines the refresh for the session, and a second attempt never re-runs the cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const reachabilityProbe = vi.fn(async () => true);
@@ -5140,10 +4628,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
 
-    // Quarantined for the rest of the session - a second attempt (e.g. the
-    // monitor's next tick) never re-runs the disruptive cycle, including the
-    // reachability probe: the quarantine check now runs before
-    // `readRunningRuntimeVersion`, so a quarantined tick performs no probe.
+    // Quarantined for the rest of the session - a second attempt (e.g. the monitor's next tick) never re-runs the disruptive cycle, including the reachability probe: the quarantine.
     const reachabilityCallsBeforeSecondAttempt =
       reachabilityProbe.mock.calls.length;
     const second =
@@ -5155,14 +4640,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     );
   });
 
-  // Field RCA 2026-07-28: this cycle's leading bootout had just torn down a
-  // verified-idle host when SMAppService answered `not-found` for every
-  // subsequent call in the session - the old terminal failure stranded the
-  // machine with nothing running AND nothing registered. The refresh must
-  // restore service via the CLI-owned LaunchAgent (which bypasses
-  // SMAppService/BTM), keep the quarantine so this session never re-runs
-  // the doomed cycle, and leave the marker for the next launch's fresh
-  // SMAppService session.
   it("registerHostLoginItem returning a non-enabled, non-approval status recovers via the CLI takeover fallback, quarantines, and a second attempt never re-runs the cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5198,24 +4675,13 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
 
-    // The register cycle's leading step is a bootout - that failed attempt
-    // already killed the running host once. A later attempt (e.g. the
-    // monitor's next 30s tick) must not run the disruptive cycle again for
-    // the same terminal outcome.
+    // A later attempt (e.g. the monitor's next 30s tick) must not run the disruptive cycle again for the same terminal outcome.
     const second =
       await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second).toBeNull();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
 
-  // Fixed by the T2/T3 author's call-site-enrichment ruling: the classifier
-  // may normalize the failure category, but caller-only discriminating
-  // evidence must be appended at the presentation boundary - here that's
-  // `withTakeoverDiagnostics`, composing the observed SMAppService status and
-  // the manual escape hatch onto whatever `classifyMutationSubprocessError`
-  // returns, without altering `kind`/`continuation`. Same fix as the
-  // identically-shaped test in the `packaged-mac register failure` describe
-  // block below - not a second, independent case.
   it("a failing CLI fallback after a failed refresh cycle surfaces BOTH failures with the manual escape hatch", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5245,12 +4711,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
   });
 
-  // Fixup C3: ported from the deleted `host-ensure-ipc.test.ts` ("throws
-  // the reachability-timeout error when waitForHostReady times out after
-  // an idle refresh"). Contrasts with the case above: a readiness timeout
-  // does NOT quarantine - it's a transient condition (the host may still
-  // come up), unlike a register status that can only change if the user
-  // acts.
   it("a readiness timeout after a successful register fails WITHOUT quarantining - a later attempt can still retry", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5291,13 +4751,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
   });
 
-  // Fixup C3: "deferred-busy + desktop-lock retryability" - two distinct
-  // non-terminal busy outcomes, neither of which the old suite pinned:
-  // contention on the desktop-held lock itself (a different controller-
-  // driven SMAppService section is mid-cycle), and `registerHostLoginItem`'s
-  // own revalidation guard reporting the host went busy while queued on the
-  // shared registration lock. Both must be silent (no quarantine) and
-  // retryable once the transient condition clears.
+  // Fixup C3: "deferred-busy + desktop-lock retryability".
+  // Both must be silent (no quarantine) and retryable once the transient condition clears.
   it("desktop-lock contention returns null (silent, no quarantine); a later attempt succeeds once the lock frees", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newControllerWithLockTiming(
@@ -5390,11 +4845,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
   });
 
-  // Fixup A4: a terminal bytes-only install (B) landing on disk WHILE this
-  // cycle is mid-`registerHostLoginItem` must not have its generation
-  // captured and stamped with A's (this cycle's) identity - the record read
-  // + generation computation must be pinned to A, captured before the
-  // disruptive cycle starts, never re-read from disk after it settles.
   it("stamps the generation captured before the cycle started, not a superseding record that lands mid-cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5413,10 +4863,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       version: "1.7.0",
     });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-    // Simulate a terminal bytes-only install (B) completing WHILE this
-    // cycle is mid-registerHostLoginItem (called from inside the desktop
-    // lock) - the on-disk install record changes out from under this cycle
-    // before it returns.
     vi.mocked(registerHostLoginItem).mockImplementation(async () => {
       writeInstallRecord("production", {
         installId: "install-B",
@@ -5483,10 +4929,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
 
     const refreshPromise =
       controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
-    // Real fs reads precede the disruptive step (readRunningRuntimeVersion,
-    // probeHostBusyVerdict, the lock acquisition, readRunningHostIdentity,
-    // readDesktopHostInstallRecord) - poll rather than a fixed microtask
-    // flush so this doesn't race those.
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("register not reached yet");
     });
@@ -5525,13 +4967,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(await controller.awaitMutationLaneIdle(20)).toBe(true);
   });
 
-  // Fixup D1: two concurrent callers (the monitor's standalone tick and a
-  // reentrant call from `convergeReadyPackagedMac`) used to each pass every
-  // pre-check independently and run their own disruptive SMAppService
-  // bootout+reregister - confirmed empirically in Batch C via this exact
-  // scenario (`registerHostLoginItem` called twice). The in-flight
-  // coalescing gate now makes the second caller join the first's result
-  // instead of starting its own cycle.
+  // The in-flight coalescing gate now makes the second caller join the first's result instead of starting its own cycle.
   it("two concurrent callers coalesce onto a single disruptive cycle - registerHostLoginItem runs once, both resolve", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5610,11 +5046,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     const convergence = controller.convergeReady(false, { kind: "background" });
     await vi.waitFor(() => {
-      // A reachability probe is only an earlier asynchronous prerequisite.
-      // Wait for the real production join edge: the reentrant caller has
-      // invoked the public coalescing method, which synchronously observes
-      // the in-flight slot before its first await. Releasing the register
-      // gate earlier could turn this into two serial cycles instead.
+      // Wait for the real production join edge: the reentrant caller has invoked the public coalescing method, which synchronously observes the in-flight slot before its first await.
       expect(refresh).toHaveBeenCalledTimes(2);
     });
 
@@ -5635,12 +5067,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
   });
 
-  // Fixup D1 defense-in-depth: the locked closure now re-checks the pending-
-  // revision marker itself after acquisition, not just the install record
-  // (B12). This proves that reread independent of the coalescing gate above -
-  // by the time the lock is acquired, the marker is gone even though the
-  // pre-lock check (mocked here, so it can't see the file the marker itself
-  // would live at) still reported it as pending.
   it("skips the bootout and returns null when the pending-revision marker resolves before lock acquisition", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -5668,16 +5094,6 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup B14: `respawn()` used to ignore the removed-by-user sentinel (a
-// terminal `Remove Traycer` that persisted the sentinel but then
-// failed/was interrupted mid-uninstall can leave bytes behind - Restart
-// must not resurrect them), and `notifyRespawning()` cleared the
-// renderer-facing snapshot BEFORE the disruptive cycle's own lock-
-// acquisition/busy gates resolved - a lock-busy/failed attempt never
-// actually touched the host, so without healing, a healthy host stayed
-// surfaced as gone with no future pid-file edge to correct it.
-// ---------------------------------------------------------------------------
 describe("respawn (fixup B14)", () => {
   it("defers rather than restarting when the host was removed by the user", async () => {
     const controller = newController("production");
@@ -5723,27 +5139,10 @@ describe("respawn (fixup B14)", () => {
 
     expect(outcome.kind).toBe("deferred");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
-    // Fixup C2: `notifyRespawningCalls` was instrumented specifically to
-    // observe this - `notifyRespawning()` clearing the renderer snapshot
-    // BEFORE the busy gate resolves is the exact behavior this test's own
-    // header comment describes - but nothing ever read it.
     expect(lifecycle.notifyRespawningCalls).toHaveLength(1);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup C2: `newControllerWithLockTiming` builds its `HostController` with a
-// `fakeHostLifecycle()` constructed inline and immediately discarded - every
-// test that goes through `newController`/`newControllerWithReachability` has
-// no way to observe `ensureWatcherInstalled`/`reloadSnapshotFromDisk`, so the
-// suite passed with those calls removed entirely. B14 (above) already proves
-// the lane is wired for the busy/"heals without restarting" path; these
-// prove it for a genuine success on each of the two platform families -
-// CLI-owned (`convergeReadyCliOwned`) and packaged-macOS
-// (`runLockedMacActivationCycle`, the single cycle shared by every
-// packaged-mac mutation per fixup B3) - using the same direct-construction
-// pattern as B14 to keep a live reference to the fake.
-// ---------------------------------------------------------------------------
 describe("hostLifecycle wiring on success (fixup C2)", () => {
   it("convergeReady (CLI-owned) reinstalls the watcher and reloads the snapshot", async () => {
     const lifecycle = fakeHostLifecycle();
@@ -5914,10 +5313,6 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
   });
 
   it("an outside-lane tick defers when the mutation lane owns an intent, without raising login-item-refresh", async () => {
-    // Discriminator: without reverse admission the monitor would commit a
-    // bootout behind an already-accepted install. The check and the
-    // commitment flag share one synchronous stretch, so the block stays
-    // `{kind:"mutation"}` rather than flipping to login-item-refresh.
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -6037,10 +5432,6 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
   async function occupyInstallAndParkOutsideRevision(input: {
     readonly joiner: "outside-lane" | "within-lane-job";
   }) {
-    // Probe starts resolved so install can occupy the lane; flipped to a
-    // pending promise before the outside tick so that tick parks in
-    // `readRunningRuntimeVersion` (the first uncoalesced await) with the
-    // D1 slot already populated.
     const probeResult: { current: Promise<boolean> } = {
       current: Promise.resolve(true),
     };
@@ -6096,11 +5487,7 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
   }
 
   it("a within-lane joiner upgrades an in-flight outside tick still in prechecks so the cycle runs", async () => {
-    // Discriminator: before the coalescing upgrade, the parked outside tick
-    // kept its own `outside-lane` policy, saw the mutation lane the JOINER
-    // occupies, and returned null — a cycle refusing because of the caller
-    // waiting on it. Red against f705b8eb^ (join returned the in-flight
-    // promise as-is).
+    // Discriminator: before the coalescing upgrade, the parked outside tick kept its own `outside-lane` policy, saw the mutation lane the JOINER occupies, and returned null.
     const parked = await occupyInstallAndParkOutsideRevision({
       joiner: "within-lane-job",
     });
@@ -6207,12 +5594,7 @@ describe("Class B no-op liveness", () => {
   });
 });
 
-// `completeServiceStart` owns the one post-start publication reload. These
-// four CLI-owned callers used to repeat that reload and ignore its nullable
-// result, creating a second, unguarded success path. Keep the assertion at
-// each public entry point: reintroducing the vestigial caller reload makes
-// exactly that caller's test fail instead of relying on the helper in
-// isolation.
+// Keep the assertion at each public entry point: reintroducing the vestigial caller reload makes exactly that caller's test fail instead of relying on the helper in isolation.
 describe("Class B CLI-owned caller publication", () => {
   function configureRestartAndStamp(): void {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
@@ -6247,19 +5629,7 @@ describe("Class B CLI-owned caller publication", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// F3: `routeForceRestartContinuation()`, reached only through `respawn()` -
-// never by calling the private method directly. Returning `null` means "fall
-// through to today's byte-identical `host restart --force`"; only a
-// completed continuation or a live-executor busy refusal diverge from that.
-//
-// Mocking boundary for this block specifically: `../update-executor-cohort`
-// is forced eligible only where noted (default: real shipped shadow-disabled,
-// exactly the production posture). Attempt records are written directly to
-// `updateAttemptRecordPath` rather than driven through the transition core -
-// `update-executor.test.ts` already exhaustively covers `decideAttemptClaim`
-// itself; this suite is testing the ROUTING layer above it.
-// ---------------------------------------------------------------------------
+// Returning `null` means "fall through to today's byte-identical `host restart --force`"; only a completed continuation or a live-executor busy refusal diverge from that.
 describe("F3: routeForceRestartContinuation via respawn", () => {
   const RESTART_FORCE_ARGV = [
     "host",
@@ -6322,11 +5692,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     );
   }
 
-  // Direct JSON writes suffice for the fall-through cases below (they never
-  // reach the commit pipeline), but a record the continuation arm must
-  // legally RESUME needs to go through the real claim/commit path -
-  // mirrors `update-executor.test.ts`'s `seedParkedAttempt` exactly, against
-  // this suite's own real temp layout instead of a bespoke one.
   async function seedParkedActivationAttempt(
     targetVersion: string,
   ): Promise<void> {
@@ -6392,29 +5757,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     return read.kind === "valid" ? read.value.phase : read.kind;
   }
 
-  /**
-   * Seed a park at `preparing/activate` the way the executor actually reaches
-   * it: by a GENUINE resume claim, never by writing the record shape.
-   *
-   * This is not fixture pedantry, and it is the reason this helper exists
-   * instead of one more `advance`. The phase graph rejects a direct
-   * `waiting-to-activate -> preparing` advance as `intent-not-legal`, so a
-   * fixture that "advances" into `preparing` would be pinning a state the
-   * system cannot produce - the invalid-fixture class this epic has already
-   * paid for once, when a permissive decoder let `phase: "started"` stand in
-   * for coverage.
-   *
-   * The legal route is the one `runDesktopActivationSegment` itself takes: an
-   * identity-bound claim carrying `action: "activate"` resolves to `resume`,
-   * and a resume lands in `preparing` carrying `activate`. Driving the same
-   * `{kind:"resume"}` intent through `commitAttemptMutationWithCapability`
-   * makes the CORE recompute the record from the intent, so this fixture
-   * inherits the graph's legality rules rather than sidestepping them.
-   *
-   * Self-verifying on purpose: if a future graph change stops a resume landing
-   * on `preparing/activate`, this throws at seed time instead of quietly
-   * handing the tests below a state they were not written for.
-   */
   async function seedPreparingActivateViaResume(
     targetVersion: string,
   ): Promise<void> {
@@ -6506,14 +5848,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     }
   }
 
-  /**
-   * Do what the real CLI recovery claimant does to an orphaned
-   * `preparing/activate`: re-park it at `waiting-to-activate` and report the
-   * identity it parked.
-   *
-   * The re-park is the already-legal `reparkedActivation` edge, so this drives
-   * the same transition production takes rather than writing a record shape.
-   */
+  /** Do what the real CLI recovery claimant does to an orphaned `preparing/activate`: re-park it at `waiting-to-activate` and report the identity it parked. */
   async function reparkPreparingActivateAsRecoveryWould(): Promise<HostUpdateAttemptIdentity> {
     const layout = getHostFsLayout("production");
     let parked: HostUpdateAttemptIdentity | null = null;
@@ -6561,15 +5896,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     return parked;
   }
 
-  /**
-   * An ACTIVE attempt that is NOT an adopted activation continuation: a fresh
-   * `create` lands in `applying` carrying `continuation: null`.
-   *
-   * This is the control's fixture. It reaches the cohort gate through the same
-   * route as the trace test - `applying` is in
-   * `FORCE_RESTART_CONTINUATION_PHASES`, so the pre-filter admits it - but
-   * carries no `activate` continuation, so the gate is consulted and refuses.
-   */
   async function seedActiveAttemptWithoutActivationContinuation(
     targetVersion: string,
   ): Promise<void> {
@@ -6619,15 +5945,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     }
   }
 
-  /**
-   * Stage the bundled CLI ARG-AWARE.
-   *
-   * `mockResolvedValue` answers EVERY spawn with one shape, which meant the
-   * `host update-verify` child got the restart payload
-   * (`{restarted, version}`). Under the F1 fix that decodes to
-   * `indeterminate`, so a continuation could never report success - the tests
-   * were only green while Desktop ignored the verdict entirely.
-   */
+  /** Under the F1 fix that decodes to `indeterminate`, so a continuation could never report success - the tests were only green while Desktop ignored the verdict entirely. */
   function stageCliWithVerification(report: Record<string, unknown>): void {
     stageCliWithVerificationAndRestart(report, {
       restarted: true,
@@ -6635,15 +5953,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     });
   }
 
-  /**
-   * Stage the verify verdict AND the generic restart's answer independently.
-   *
-   * The single-response form above answers `{restarted:true}` for the restart
-   * no matter what, which is the overloaded-stub class: it makes every arm
-   * look successful regardless of what the real two-command interaction would
-   * do. Any test whose subject IS that interaction must state both halves, so
-   * that changing the command's answer changes the test's result.
-   */
+  /** Any test whose subject IS that interaction must state both halves, so that changing the command's answer changes the test's result. */
   function stageCliWithVerificationAndRestart(
     report: Record<string, unknown>,
     restartResponse: Record<string, unknown>,
@@ -6686,18 +5996,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     return controller;
   }
 
-  /**
-   * Same world, but with NO running host: the reachability probe answers
-   * false and no live pid metadata is written.
-   *
-   * This dimension is load-bearing and was the axis of a disagreement worth
-   * recording. At `waiting-to-activate` with the host UP, a refusal strands
-   * nothing - the old host keeps serving, which is precisely the state the
-   * plan's "Desktop absent after Mac byte placement" park is designed to
-   * leave behind. The park is durable; the host process is not, so a crash,
-   * a `host stop`, or a reboot AFTER parking reaches host-down while parked.
-   * That is where a refusal stops being harmless.
-   */
+  /** The park is durable; the host process is not, so a crash, a `host stop`, or a reboot AFTER parking reaches host-down while parked. */
   function stagePackagedMacRestartWorldHostDown(): HostController {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newControllerWithReachability(
@@ -6827,43 +6126,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
   });
 
   describe("continuation arm (cohort mocked eligible - the seam this surface is exposed to)", () => {
-    // Formerly seeded `seedParkedActivationAttempt` (an ADOPTED activation
-    // continuation) and framed as a cohort seam proof. Ticket 07 plan §7
-    // Finding 2 changed what that fixture means: `runDesktopActivationSegment`
-    // now SKIPS the cohort gate entirely whenever the durable record already
-    // names an adopted `activate` continuation (see
-    // `hasAdoptedActivationContinuation` in `update-executor.ts`). Under that
-    // fixture the outcome is identical whether the cohort mock is real,
-    // eligible, or broken outright, because the gate is never consulted - so
-    // it stopped proving anything about the cohort while still passing.
-    //
-    // `seedActiveAttemptWithoutActivationContinuation` (`applying`,
-    // `continuation: null`) is NOT an adopted continuation, so the gate IS
-    // consulted for it - this is the fixture that can still tell "real
-    // disabled cohort" apart from "forced eligible". It reaches
-    // `FORCE_RESTART_CONTINUATION_PHASES` the same way the old fixture did,
-    // so the pre-filter still admits it.
+    // Under that fixture the outcome is identical whether the cohort mock is real, eligible, or broken outright, because the gate is never consulted.
     it("SEAM PROOF: under the REAL shipped shadow-disabled cohort, a record with NO adopted activation continuation still falls through to the plain restart", async () => {
-      // No `eligibleDesktopCohort()` call here - this uses whatever
-      // `../update-executor-cohort` actually resolves to.
-      //
-      // If a future change silently stopped this test's mock from
-      // intercepting, this test would still pass: production's real gate is
-      // also shadow-disabled, so "the mock is real and disabled" and "the
-      // mock is broken" both reject here before `claim()` ever runs, and both
-      // fall through to the same plain restart.
-      //
-      // What DOES distinguish "real disabled" from "forced eligible" is the
-      // CALL SEQUENCE, not the terminal outcome. Forced eligible lets this
-      // record past the gate into `claim()`, which refuses an active
-      // (non-parked) record with no activation continuation as
-      // `requires-recovery` - and `requires-recovery` dispatches the CLI's
-      // `update-verify` recovery claimant before ever falling through to the
-      // plain restart. Under the real disabled gate, the segment is rejected
-      // before `claim()` runs, so that claimant is never dispatched at all.
-      // Both paths still converge on `{activated:true}` (the mocked restart
-      // answers success either way), so the discriminating assertion below is
-      // on whether `update-verify` was called - not on the outcome shape.
+      // Forced eligible lets this record past the gate into `claim()`, which refuses an active (non-parked) record with no activation continuation as `requires-recovery`.
+      // Under the real disabled gate, the segment is rejected before `claim()` runs, so that claimant is never dispatched at all.
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
       await seedActiveAttemptWithoutActivationContinuation("2.0.0");
@@ -6877,10 +6143,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
         expect.objectContaining({ args: RESTART_FORCE_ARGV }),
       );
-      // The seam: forcing the cohort eligible would route this same fixture
-      // through `requires-recovery` and dispatch `update-verify` first (see
-      // the block comment above). The real shipped (shadow-disabled) gate
-      // never reaches `claim()` at all, so that call must never happen here.
+      // The real shipped (shadow-disabled) gate never reaches `claim()` at all, so that call must never happen here.
       expect(streamBundledTraycerCliJson).not.toHaveBeenCalledWith(
         expect.objectContaining({
           args: expect.arrayContaining(["update-verify"]),
@@ -6888,56 +6151,20 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       );
     });
 
-    // ---- Ticket 07 plan §7 Finding 2 --------------------------------------
-    //
-    // "The switch stops admitting NEW attempts; it does not abandon an ADOPTED
-    // one." These two tests pin that sentence from both sides, and they are a
-    // pair on purpose: either one alone is satisfiable by a gate that is
-    // simply always-on or always-off.
-    //
-    // The 6-step stranding they exist for, every step individually correct:
-    //
-    //   1. an attempt is PARKED with bytes placed and the target host NOT
-    //      running - `waiting-to-activate`, which `recoveryActionFor`
-    //      classifies `stop-only` exactly as it does `preparing/activate`;
-    //   2. the Desktop cohort is disabled (kill switch, or a rollback);
-    //   3. Force restart routes to `runDesktopActivationSegment`, which under
-    //      the unscoped gate returned `{kind:"rejected", reason:"cohort-disabled"}`;
-    //   4. `rejected` matches none of the route's arms, so it fell through;
-    //   5. the generic restart carries `--defer-if-parked`, and the CLI
-    //      correctly classifies `preparing/activate` as `stop-only` and
-    //      REFUSES without stopping;
-    //   6. the host was already down, so nothing brought it back. Stranded.
-    //
-    // Neither test calls `eligibleDesktopCohort()`. The REAL shipped
-    // shadow-disabled gate is the premise, restored per-test by
-    // `restoreShippedCohort()` in the shared hook.
+    // The 6-step stranding they exist for, every step individually correct: 1. an attempt is PARKED with bytes placed and the target host NOT running.
     it("a cohort DISABLED mid-attempt does not strand an adopted activation - the parked record still advances", async () => {
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
       await seedParkedActivationAttempt("2.0.0");
       stageCliWithVerificationAndRestart(
         { outcome: "resumed", continuation: "activate" },
-        // What the CLI really answers for a placed-byte `preparing/activate`
-        // once `--defer-if-parked` is honoured: it refuses WITHOUT stopping.
-        // With the host already down, this is precisely the arm that used to
-        // leave the machine with nothing able to bring it back.
+        // What the CLI really answers for a placed-byte `preparing/activate` once `--defer-if-parked` is honoured: it refuses WITHOUT stopping.
         { restarted: false, deferredForParkedActivation: true },
       );
       expect(await currentAttemptPhase()).toBe("waiting-to-activate");
 
       await controller.respawn({ kind: "background" });
 
-      // The INVARIANT, not the mechanism: the adopted attempt was carried
-      // forward rather than refused. Asserting "the cohort gate was skipped"
-      // would pin the fix's shape and survive a later change that skipped the
-      // gate and then failed to act anyway.
-      //
-      // Deliberately `not.toBe("preparing")` rather than naming a successor.
-      // Whether the segment reaches `restarting` or re-parks at
-      // `waiting-to-activate` depends on the drain, and both are the attempt
-      // being carried forward. Pinning one of them would make this test fail
-      // on a legitimate drain change while proving nothing extra.
       expect(await currentAttemptPhase()).not.toBe("waiting-to-activate");
     });
     // The other side of the sentence. Without this, "skip the gate whenever a
@@ -6946,10 +6173,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     it("with NO adopted activation continuation, the disabled cohort still refuses - the record does not advance", async () => {
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
-      // `applying` + `continuation: null`. Reaches the gate through the SAME
-      // route (`applying` is in `FORCE_RESTART_CONTINUATION_PHASES`), so this
-      // control differs from the trace test in exactly one fact: whether the
-      // record names an activation continuation.
       await seedActiveAttemptWithoutActivationContinuation("2.0.0");
       stageCliWithVerificationAndRestart(
         { outcome: "resumed", continuation: "activate" },
@@ -6961,25 +6184,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(await currentAttemptPhase()).toBe("applying");
     });
 
-    // INVERTED — this was an `it.fails` KNOWN-GAP pin, and the orphan-recovery
-    // ruling closed the gap. The pin's whole purpose was to force revisiting
-    // when that happened; it is now a real assertion.
-    //
-    // The gap: an ORPHANED `preparing/activate` is non-parked and non-terminal
-    // with the lock free, which `decideAttemptClaim` refuses as
-    // `requires-recovery` BY DESIGN - "the pure core refuses rather than
-    // guessing a continuation from the phase alone". No cohort scoping could
-    // reach it; it was a second, independent cause of the same stranding.
-    //
-    // The close: Desktop dispatches the CLI recovery claimant, which resumes
-    // the orphan and then re-parks it (`preparing/activate ->
-    // waiting-to-activate`) before releasing, so an ordinary claim can resume
-    // it with no Desktop-minted evidence.
-    //
-    // The CLI is mocked here, so the mock must do what the real claimant does:
-    // actually re-park the record AND report the identity it parked. A mock
-    // that only returned the report would prove the decode and nothing about
-    // the sequence.
+    // The gap: an ORPHANED `preparing/activate` is non-parked and non-terminal with the lock free, which `decideAttemptClaim` refuses as `requires-recovery` BY DESIGN.
+    // The CLI is mocked here, so the mock must do what the real claimant does: actually re-park the record AND report the identity it parked.
     it("an ORPHANED preparing/activate is recovered and resumed rather than stranded", async () => {
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
@@ -7011,10 +6217,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
 
       await controller.respawn({ kind: "background" });
 
-      // The INVARIANT: the adopted attempt was carried forward. Asserting a
-      // specific phase would be wrong - a resume lands back in `preparing`, so
-      // the segment's own progress is not a phase inequality. What cannot
-      // happen if the attempt was abandoned is its identity advancing.
+      // What cannot happen if the attempt was abandoned is its identity advancing.
       const after = await readUpdateAttemptRecord(
         getHostFsLayout("production").rootDir,
       );
@@ -7033,10 +6236,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       );
     });
 
-    // The CONTROL the ruling requires: indeterminate evidence must leave the
-    // record UNCHANGED and must not read as success. A recovery route that
-    // "resumed" on any answer would satisfy the test above while destroying
-    // the one property that makes recovery safe to attempt at all.
+    // The CONTROL the ruling requires: indeterminate evidence must leave the record UNCHANGED and must not read as success.
     it("recovery that reports indeterminate leaves the record untouched and does not report success", async () => {
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
@@ -7062,31 +6262,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(outcome).not.toEqual({ kind: "ok", value: { activated: true } });
     });
 
-    // REGRESSION PIN for a real production defect, found by this suite and
-    // since FIXED. Keeping the history because the mechanism is subtle and the
-    // fix is easy to undo by accident.
-    //
-    // The defect: `routeForceRestartContinuation`'s `activate` callback ignored
-    // the `capability` it was handed and called `runLockedMacActivationCycle`,
-    // which reaches the update-attempt lock through
-    // `withDesktopUpdateContender` — a wrapper that ACQUIRES that lock fresh
-    // around its whole callback. But the outer segment already held that same
-    // lock for the entire claim-through-activate span via
-    // `withDesktopAttemptExecutor`. So the nested acquisition contended against
-    // its own parent, resolved `busy`/`source:"attempt"`, terminalized the
-    // record `failed`/`activation-not-performed`, and never attempted
-    // SMAppService registration at all. In production the F3 continuation arm
-    // could therefore NEVER complete an activation — it self-deadlocked every
-    // time and reported it as ordinary lock contention, which is exactly why it
-    // survived review.
-    //
-    // The fix: `runMacActivationStepWithCapability` runs the identical actuator
-    // while CONSUMING the capability the segment already holds, so the lock is
-    // taken once. Not adoption — adoption carries a proof to a separate
-    // process, and there is no second process here.
-    //
-    // If this test ever fails with a lock-busy/deferred outcome again, the
-    // `activate` callback has been rewired back through the contender.
+    // So the nested acquisition contended against its own parent, resolved `busy`/`source:"attempt"`, terminalized the record `failed`/`activation-not-performed`, and never attempted.
+    // In production the F3 continuation arm could therefore NEVER complete an activation.
     it("a legal `waiting-to-activate` continuation completes and returns ok/activated WITHOUT ever calling `host restart --force`", async () => {
       eligibleDesktopCohort();
       // The verify child must answer with a real verdict; the F1 fix now
@@ -7121,38 +6298,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       }
     });
 
-    // NOTE on what this test actually proves right now: the assertion below
-    // (never re-parked as `waiting-to-activate`) is true and meaningful, but
-    // with the self-deadlock defect pinned above still live, this record
-    // currently reaches "not waiting-to-activate" by terminalizing to `failed`
-    // rather than by a genuine `{kind:"verified"}` completion that passed
-    // through the busy drain under `overrideDrain: true`. Green here is not by
-    // itself proof the overrideDrain wiring holds — once the self-deadlock is
-    // fixed, re-verify this test lands on `phase: "restarting"`/`verified`
-    // rather than `failed`.
+    // NOTE on what this test actually proves right now: the assertion below (never re-parked as `waiting-to-activate`) is true and meaningful, but with the self-deadlock defect pinned.
 
-    // F1 acceptance, REDESIGNED by round-2 findings 1 and 2.
-    //
-    // Round 1 gated the fall-through on a Desktop-side read of the attempt
-    // record. Round 2 falsified that on two independent counts:
-    //
-    //  - It was a SNAPSHOT, not a condition on the restart. A contender can
-    //    park `preparing/activate` between Desktop's read and the command
-    //    taking the contender lock, so a "safe to restart" verdict could be
-    //    stale before it was acted on - and the command would then stop the
-    //    service without relaunching. The check re-created the stranding it
-    //    was added to prevent.
-    //  - It was a SECOND COPY of the policy, and it DISAGREED with the
-    //    canonical one. `recoveryActionFor` calls `restarting/activate` and
-    //    `verifying/activate` `restart-current`; the Desktop copy treated
-    //    every continuation phase as undeferrable, so an `indeterminate`
-    //    verdict over one of those records deferred forever and Force restart
-    //    could never bring a downed host back.
-    //
-    // The decision now lives in the command, under the same lock that guards
-    // the action it authorizes. That leaves Desktop exactly two obligations,
-    // and this block asserts both: ALWAYS pass `--defer-if-parked`, and never
-    // flatten the command's deferral into an `ok`.
+    // `recoveryActionFor` calls `restarting/activate` and `verifying/activate` `restart-current`.
+    // That leaves Desktop exactly two obligations, and this block asserts both: ALWAYS pass `--defer-if-parked`, and never flatten the command's deferral into an `ok`.
     it.each([
       ["failed", { outcome: "failed", reason: "runtime-mismatch" }],
       ["resumed", { outcome: "resumed", continuation: "activate" }],
@@ -7182,10 +6331,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
             args: expect.arrayContaining(["update-verify"]),
           }),
         );
-        // The generic restart WAS invoked, with the exact argv including
-        // `--defer-if-parked`. `RESTART_FORCE_ARGV` is the full array, so a
-        // dropped flag fails here by name - and a dropped flag is precisely
-        // what would let the command safe-stop the host behind Desktop's back.
+        // The generic restart WAS invoked, with the exact argv including `--defer-if-parked`.
         expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
           expect.objectContaining({ args: RESTART_FORCE_ARGV }),
         );
@@ -7199,11 +6345,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       },
     );
 
-    // Finding 2's half, and the reason the Desktop-side policy copy had to go:
-    // a record the CANONICAL classification calls `restart-current` must
-    // actually be restarted. The round-1 code deferred on every continuation
-    // phase, so `restarting/activate` and `verifying/activate` - both
-    // explicitly recoverable - could never be relaunched from this route.
+    // Finding 2's half, and the reason the Desktop-side policy copy had to go: a record the CANONICAL classification calls `restart-current` must actually be restarted.
+    // The round-1 code deferred on every continuation phase, so `restarting/activate` and `verifying/activate` - both explicitly recoverable - could never be relaunched from this route.
     it("a non-complete verdict over a RECOVERABLE record restarts, and the relaunch is reported as an activation", async () => {
       eligibleDesktopCohort();
       stageCliWithVerificationAndRestart(
@@ -7220,17 +6363,9 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
         expect.objectContaining({ args: RESTART_FORCE_ARGV }),
       );
-      // The FULL shape. The version this replaces asserted `outcome.kind` and
-      // nothing else, and `restarted:false` also produces `kind:"ok"` - so
-      // the reviewer flipped its fixture from `true` to `false` and it still
-      // passed. `activated` is the fact under test, so `activated` is asserted.
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
     });
 
-    // The genuine post-verification path: verification owns the terminal
-    // states, so by the time it answers, the continuation is gone. Clearing
-    // the record INSIDE the verify call - rather than before `respawn` - is
-    // what makes this the real sequence rather than a pre-staged world.
     it("a terminalized continuation restarts and reports the relaunch", async () => {
       eligibleDesktopCohort();
       const controller = stagePackagedMacRestartWorld(undefined);
@@ -7264,13 +6399,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
       await seedParkedActivationAttempt("2.0.0");
-      // A genuinely busy drain read. `runDesktopActivationSegment`'s ONLY
-      // park branch is `verdict === "busy" && !overrideDrain` - with
-      // `overrideDrain: true` hardcoded at this call site, that branch is
-      // structurally unreachable from F3. If `action` had instead smuggled
-      // in `force` semantics, or `overrideDrain` were `false`, this busy
-      // drain would re-park the record as `waiting-to-activate` and this
-      // test would fail on the phase assertion below.
       vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
 
       const outcome = await controller.respawn({ kind: "background" });
@@ -7290,11 +6418,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         // NOT re-parked. A busy drain under `overrideDrain: true` proceeds
         // straight through instead of writing `waiting-to-activate` again.
         expect(committed.value.phase).not.toBe("waiting-to-activate");
-        // And NOT terminalized. Until the self-deadlock was fixed (§6.22) the
-        // segment always landed `failed`/`activation-not-performed`, which
-        // satisfies the `waiting-to-activate` assertion above just as well as
-        // success does - so that assertion could not tell a working
-        // `overrideDrain` from a broken activation. This one can.
         expect(committed.value.phase).not.toBe("failed");
       }
     });
@@ -7312,18 +6435,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       });
       writeOwnedSmAppServiceSubstrate();
       await seedParkedActivationAttempt("2.0.0");
-      // `withDesktopAttemptExecutor`/`withDesktopUpdateExecutionSegment` (the
-      // outer wrapper F3's segment goes through) contends ONLY on the outer
-      // update-attempt lock via `withUpdateContender` — it takes the cli-lock
-      // solely through the short inner `withDesktopAttemptMutation` windows,
-      // never around the whole segment (`update-contender.ts` lines ~168-198).
-      // Holding `cliLockPath` here would not contend with the segment
-      // acquisition at all; `acquireUpdateAttemptLock` is the real outer lock,
-      // confirmed against `update-contender-segment.test.ts`'s own reference
-      // test ("maps a real outer-attempt holder to a busy/attempt outcome").
-      // Acquire it for real and never release it for the duration of this
-      // test, so the segment observes a genuinely contended lock rather than a
-      // simulated refusal.
+      // `withDesktopAttemptExecutor`/`withDesktopUpdateExecutionSegment` (the outer wrapper F3's segment goes through) contends ONLY on the outer update-attempt lock via.
+      // Acquire it for real and never release it for the duration of this test, so the segment observes a genuinely contended lock rather than a simulated refusal.
       const held = await acquireUpdateAttemptLock({
         hostHomeDir: getHostFsLayout("production").rootDir,
         reason: "f3-test-live-holder",
@@ -7347,11 +6460,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     });
 
     it("a rejection (real shipped cohort-disabled) falls through to the plain restart", async () => {
-      // Deliberately NOT calling `eligibleDesktopCohort()` - this is the
-      // production default. `runDesktopActivationSegment` rejects
-      // `cohort-disabled` before reading anything else, which is a
-      // `rejected` outcome distinct from the `busy` refusal above - and
-      // must fall through exactly like every other non-busy refusal.
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
       await seedParkedActivationAttempt("2.0.0");
@@ -7371,11 +6479,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       eligibleDesktopCohort();
       const controller = stagePackagedMacRestartWorld(undefined);
       writeOwnedSmAppServiceSubstrate();
-      // An ACTIVE (non-parked) phase with no live lock holder: the record
-      // claims a segment is executing, but nothing here actually holds
-      // `update-attempt.lock`. `decideAttemptClaim` refuses this as
-      // `requires-recovery` - reconciling it is the CLI executor's job,
-      // never Desktop's - which is a `rejected` outcome, not `busy`.
+      // An ACTIVE (non-parked) phase with no live lock holder: the record claims a segment is executing, but nothing here actually holds `update-attempt.lock`.
+      // `decideAttemptClaim` refuses this as `requires-recovery` - reconciling it is the CLI executor's job, never Desktop's - which is a `rejected` outcome, not `busy`.
       writeAttemptRecord(
         attemptRecordFields({
           phase: "applying",
@@ -7396,20 +6501,9 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     });
   });
 
-  // F2 (round 5 review): `withDesktopAttemptMutation` had ZERO production
-  // callers before this ticket - the continuation's `activate` step now
-  // wraps its registration actuator in it, taking the INNER `cli-lock`
-  // (distinct from the outer `update-attempt.lock` the "live-executor
-  // deferral" block above proves) for exactly that actuator. A mixed-version
-  // CLI that only knows `cli-lock` must still be excluded from mutating the
-  // install tree underneath this segment.
+  // A mixed-version CLI that only knows `cli-lock` must still be excluded from mutating the install tree underneath this segment.
   describe("F2: the continuation actually takes the inner cli-lock", () => {
-    // The wired property, proven positively: with the inner cli-lock
-    // genuinely held externally, registration never runs at all. This is
-    // what "the continuation actually takes the inner cli-lock" means -
-    // `withDesktopAttemptMutation` observes the real contention and refuses
-    // to let `runMacActivationStepWithCapability` (and therefore
-    // `registerHostLoginItem`) run underneath it.
+    // The wired property, proven positively: with the inner cli-lock genuinely held externally, registration never runs at all.
     it("a genuinely busy cli-lock blocks registration from ever running", async () => {
       eligibleDesktopCohort();
       const controller = stagePackagedMacRestartWorld({
@@ -7418,12 +6512,6 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       });
       writeOwnedSmAppServiceSubstrate();
       await seedParkedActivationAttempt("2.0.0");
-      // `cliLockPath("production")` is the SAME file
-      // `withDesktopAttemptMutation` contends on inside `activate` (this is
-      // `this.lockPath`, threaded through as `options.lockPath` -
-      // `update-contender.ts`'s `withDesktopAttemptMutation` ->
-      // `withDesktopCliLock({lockPath: options.lockPath, ...})`). Distinct
-      // from `acquireUpdateAttemptLock` above, which is the OUTER lock.
       const held = await acquireDesktopCliLock({
         lockPath: cliLockPath("production"),
         reason: "f2-test-live-holder",
@@ -7439,51 +6527,9 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       }
       expect(registerHostLoginItem).not.toHaveBeenCalled();
 
-      // Ablated: temporarily mocked `../update-contender`'s
-      // `withDesktopAttemptMutation` to `(capability, _options, run) =>
-      // run(capability as never)` - a total bypass of the inner lock, i.e.
-      // exactly what "the wrapper was removed from `activate`" looks like
-      // from `activate`'s own perspective. Re-ran this exact test: it went
-      // red - `registerHostLoginItem` WAS called despite the external hold
-      // (`expect(registerHostLoginItem).not.toHaveBeenCalled()` failed).
-      // Reverted before committing anything; `host-controller.ts` was
-      // never touched.
+      // Reverted before committing anything; `host-controller.ts` was never touched.
     });
 
-    // KNOWN GAP — pinned, not routed around. The lock IS genuinely taken
-    // (proven above), but its busy outcome does not currently surface as
-    // `{kind:"deferred"}` through `respawn()` - it falls through to the
-    // plain `host restart --force`, identically to a genuine activation
-    // failure. This is NOT about `withDesktopAttemptMutation` being unwired
-    // (the test above rules that out); it is a gap one layer up.
-    //
-    // Mechanism, traced end to end: `activate`'s catch maps a busy inner
-    // lock to `{kind:"deferred", message: LOCK_BUSY_MESSAGE}` correctly
-    // (`host-controller.ts`). But by the time `activate()` runs,
-    // `runClaimedActivation` (`update-executor.ts:299-328`) has ALREADY
-    // advanced the record to `restarting` and published the tombstone (the
-    // write-ahead ordering is deliberate: "the tombstone is flushed BEFORE
-    // the bootout, no gate between them"). `runClaimedActivation` line 329
-    // then checks only `activation.kind !== "activated"` - it does not
-    // distinguish `deferred` from `failed` - and unconditionally
-    // `terminalize`s the record to `phase:"failed"`,
-    // `error:{code:"activation-not-performed", message: LOCK_BUSY_MESSAGE}`.
-    // `routeForceRestartContinuation`'s mapping only special-cases
-    // `segment.kind === "verified"` and `segment.kind === "refused" &&
-    // outcome.kind === "busy"` (the OUTER attempt-lock busy case, proven in
-    // the "live-executor deferral" block above) - a `segment.kind ===
-    // "failed"` result, regardless of its `reason`/`cause`, falls through to
-    // `return null` (the plain restart).
-    //
-    // So structurally, once the tombstone is on disk, EVERY non-"activated"
-    // `activate()` result is terminal by the phase graph's own design (no
-    // edge from `restarting` back to a park) - which means "defer instead of
-    // falling through" for a busy inner lock may not be achievable without
-    // either detecting the inner-lock contention BEFORE the tombstone write
-    // (a real ordering change), or teaching `routeForceRestartContinuation`
-    // to recognize this specific terminal reason/cause pair as
-    // deferred-shaped despite the record already being terminal. Flagging
-    // rather than guessing which one you want.
     it("a genuinely busy cli-lock defers the continuation rather than failing or falling through", async () => {
       eligibleDesktopCohort();
       const controller = stagePackagedMacRestartWorld({
@@ -7518,13 +6564,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     });
   });
 
-  // F3 (round 5 review): `withMintedAdoption` had ZERO production callers
-  // before this ticket - the continuation's takeover-recovery arm now wraps
-  // `host service install --takeover` in it so the spawned CLI child
-  // validates the parent's held lock instead of contending against it (the
-  // self-deadlock class F3's earlier finding pinned). This must be provable
-  // from the spawned argv, not from an internal call to `withMintedAdoption`
-  // - the argv IS the wire contract the child actually receives.
+  // F3 (round 5 review): `withMintedAdoption` had ZERO production callers before this ticket.
+  // This must be provable from the spawned argv, not from an internal call to `withMintedAdoption` - the argv IS the wire contract the child actually receives.
   describe("F3: the takeover child actually receives a minted nonce", () => {
     const UUID_PATTERN =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -7556,25 +6597,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(flagIndex).toBeGreaterThanOrEqual(0);
       expect(argv?.[flagIndex + 1]).toMatch(UUID_PATTERN);
 
-      // Ablated (verification-only, never committed): temporarily mocked
-      // `../update-mutation`'s `withMintedAdoption` to bypass minting -
-      // `(_capability, _layout, run) => run([])`, the exact shape "the
-      // wrapper was removed" produces (empty adoption args, same as the
-      // legacy callers below). Re-ran this exact test: it went red - the
-      // spawned argv no longer contained `--attempt-adoption` at all
-      // (`flagIndex` was `-1`). Reverted before committing anything;
-      // `host-controller.ts` was never touched.
+      // Ablated (verification-only, never committed): temporarily mocked `../update-mutation`'s `withMintedAdoption` to bypass minting.
+      // Reverted before committing anything; `host-controller.ts` was never touched.
     });
 
-    // Ruling (round 5, F3): terminal-with-diagnostics is correct for a
-    // post-tombstone mint/spawn failure - the phase graph offers no path
-    // back to a park once `restarting` + tombstone are on disk, and a route
-    // that reported `deferred` while the record said `failed` would make
-    // truth live in a string match on a message constant. This block proves
-    // the full terminal CONTRACT instead: the tombstone is withdrawn, the
-    // attempt lock is genuinely released, the record carries real
-    // diagnostics, the route does NOT report `deferred`, and no partial
-    // activation is reachable.
     describe("terminal-with-diagnostics contract for a post-tombstone mint/spawn failure", () => {
       async function assertAttemptLockReleased(): Promise<void> {
         const held = await acquireUpdateAttemptLock({
@@ -7628,10 +6654,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
           existsSync(hostStopIntentPath(getHostFsLayout("production").rootDir)),
         ).toBe(false);
         expect(committed.value.phase).toBe("failed");
-        // ...AND withdrawn BEFORE the record's `failed` commit specifically -
-        // not merely gone by the time this test happens to look. Both
-        // orderings produce the identical final state above, which is why
-        // that assertion alone cannot tell them apart; this one can.
+        // ...AND withdrawn BEFORE the record's `failed` commit specifically - not merely gone by the time this test happens to look.
+        // Both orderings produce the identical final state above, which is why that assertion alone cannot tell them apart; this one can.
         expect(terminalOrderEvents.events).toEqual([
           "clear-tombstone",
           "terminalize-commit",
@@ -7692,41 +6716,14 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         expect(installVersion).toBe("2.0.0");
         // #2: attempt lock genuinely released.
         await assertAttemptLockReleased();
-        // #3: diagnostics carry the REAL spawn error here - this path goes
-        // through `classifyMutationSubprocessError` +
-        // `withTakeoverDiagnostics`, which DOES preserve the discriminating
-        // status and the underlying error, unlike the mint-failure catch
-        // above.
         expect(committed.value.error?.message).toContain("not-found");
       });
 
-      // Ablated (verification-only, never committed): temporarily swapped
-      // `update-executor.ts`'s terminal-close to call `terminalize` BEFORE
-      // `clearTombstone` (previously: withdraw first, terminalize second).
-      // Re-ran BOTH tests above: the FIRST attempt at this ablation used only
-      // the final-state assertion (`existsSync(tombstone) === false`) and
-      // stayed GREEN under the reversed order - both orderings leave the
-      // tombstone absent by the time `respawn()` resolves, so that assertion
-      // could not tell them apart. That was itself a "green that could not
-      // fail" near-miss on my part; caught it by asking what the assertion
-      // would see if the order flipped, not just whether it currently
-      // passes. Added `terminalOrderEvents` to record the real call order
-      // via `commitAttemptMutationWithCapability`/
-      // `clearRestartTombstoneWithAttempt`; re-ran the ablation again with
-      // the order assertion in place - both tests went red
-      // (`["terminalize-commit", "clear-tombstone"]` instead of the expected
-      // `["clear-tombstone", "terminalize-commit"]`). Reverted before
-      // committing anything; production files were never left modified.
+      // Ablated (verification-only, never committed): temporarily swapped `update-executor.ts`'s terminal-close to call `terminalize` BEFORE `clearTombstone` (previously: withdraw first.
+      // Reverted before committing anything; production files were never left modified.
     });
 
     it("regression guard: legacy (non-continuation) takeover recovery still passes NO adoption args", async () => {
-      // `activateInstalled` runs the SAME `recoverRegistrationViaCliTakeover`
-      // actuator, but OUTSIDE any F3 executor segment - after
-      // `withDesktopUpdateContender` has already released, so the spawned
-      // child contends for the attempt lock normally and wins it. Minting a
-      // proof here would be authorizing a child against a lock its parent no
-      // longer holds - the asymmetry the coordinator flagged as something a
-      // future edit could flatten by accident.
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");
       writeInstallRecord("production", {
@@ -7758,12 +6755,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
   });
 });
 
-// Packaged macOS recovery must use the same attempt-aware CLI restart lane as
-// the CLI-owned path. In particular, a parked activation continuation is a
-// safe-stop (`restarted: false`), not permission for Desktop to activate the
-// bytes currently on disk through SMAppService. The stream wrapper returns the
-// command result in `data`; retain coverage for both its direct command shape
-// and the nested `data` envelope seen when the runner forwards that envelope.
+// Packaged macOS recovery must use the same attempt-aware CLI restart lane as the CLI-owned path.
+// In particular, a parked activation continuation is a safe-stop (`restarted: false`), not permission for Desktop to activate the bytes currently on disk through SMAppService.
 describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
   it("respawn uses host restart --force and does not activate a direct safe-stop result", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
@@ -7841,21 +6834,6 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
   });
 
-  // ---- The refusal shape, at every entry point that can produce it --------
-  //
-  // Round-2 finding 1 was that a stop-without-relaunch reaches the user as
-  // `{kind:"ok", value:{activated:false}}` - "your restart ran and did
-  // nothing", while the host is actually down. The redesign makes the command
-  // refuse instead of stopping, and these pin the two halves that make that
-  // reach the user correctly:
-  //
-  //   1. every Desktop entry point passes `--defer-if-parked`, so the command
-  //      is never free to safe-stop on Desktop's behalf; and
-  //   2. the refusal maps to `deferred`, never to `ok`.
-  //
-  // One per entry point deliberately, not one shared helper test: the flag is
-  // added at three separate call sites and a single test would leave two of
-  // them free to regress silently.
   it.each([
     [
       "respawn",
@@ -7915,11 +6893,7 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
     },
   );
 
-  // The negative control for the pair above: WITHOUT the deferral flag in the
-  // response, the same `restarted:false` must still read as the safe-stop it
-  // has always been. Without this, mapping every `restarted:false` to
-  // `deferred` would satisfy all three tests above and silently reclassify a
-  // real stop as "nothing happened".
+  // The negative control for the pair above: WITHOUT the deferral flag in the response, the same `restarted:false` must still read as the safe-stop it has always been.
   it("a safe-stop WITHOUT the deferral flag is still reported as ok/activated:false", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const lifecycle = fakeHostLifecycle();
@@ -7935,10 +6909,6 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// recoverIfDown: head-of-lane suppression (no double-restart), and the busy/
-// deferred/failed lock-contention outcome classes.
-// ---------------------------------------------------------------------------
 describe("recoverIfDown", () => {
   it("suppresses when a mutation already owns the host, checked before submission", async () => {
     const controller = newController("production");
@@ -7972,13 +6942,7 @@ describe("recoverIfDown", () => {
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
   });
 
-  // Fixup A3: `readRunningRuntimeVersion` used to be a structural pid.json
-  // parse only - a stale-but-well-formed file (the process behind it wedged
-  // or its endpoint stopped answering, without pid.json itself being
-  // rewritten) read as "running" and `recoverIfDown` silently skipped the
-  // restart, reporting success while the host stayed dead. The pid here IS
-  // genuinely alive (`process.pid`) - only the endpoint probe reports
-  // unreachable - so a correct implementation must still restart.
+  // The pid here IS genuinely alive (`process.pid`) - only the endpoint probe reports unreachable - so a correct implementation must still restart.
   it("actually restarts when pid.json parses and the pid is alive but the endpoint probe reports unreachable", async () => {
     const controller = newControllerWithReachability(
       "production",
@@ -8043,10 +7007,7 @@ describe("recoverIfDown", () => {
     });
   });
 
-  // `recoverIfDown`/`respawn` always run the unconditional `host restart`
-  // (never `--if-idle`), which never busy-checks CLI-side - so `E_HOST_BUSY`
-  // genuinely cannot come back from that call, and there is no dedicated
-  // classification for it here (any other CLI error just maps to `failed`).
+  // `recoverIfDown`/`respawn` always run the unconditional `host restart` (never `--if-idle`), which never busy-checks CLI-side.
   it("an unclassified CLI failure on a CLI-owned restart maps to failed, not busy", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -8062,11 +7023,7 @@ describe("recoverIfDown", () => {
     expect(outcome).toEqual({ kind: "failed", message: "connection refused" });
   });
 
-  // Fixup B10: `recoverIfDown` drives its own restart, so it must stamp
-  // immediately after its own readiness observation using the attested
-  // pre-cycle generation - it used to restart and report `activated: true`
-  // unconditionally, leaving a null-runtime record's debt unresolved even
-  // though this very cycle just re-started the host.
+  // Fixup B10: `recoverIfDown` drives its own restart, so it must stamp immediately after its own readiness observation using the attested pre-cycle generation.
   it("stamps immediately after its own restart when the pre-cycle record is null-runtime", async () => {
     const controller = newControllerWithReachability(
       "production",
@@ -8093,11 +7050,6 @@ describe("recoverIfDown", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Fixup B10: `freePortAndRestart`'s CLI-owned branch has the identical gap
-// as `recoverIfDown` above - it drives its own restart and must stamp
-// immediately after its own readiness observation.
-// ---------------------------------------------------------------------------
 describe("freePortAndRestart (CLI-owned)", () => {
   it("stamps immediately after its own restart when the pre-cycle record is null-runtime", async () => {
     const controller = newControllerWithReachability(
@@ -8136,12 +7088,7 @@ describe("freePortAndRestart (CLI-owned)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Closing A2: these are the five Desktop production edges that start or
-// cycle a CLI-owned service. The command returns the record it observed
-// while holding cli-lock; each caller must feed THAT generation to the CAS,
-// never derive one from its pre-lock Desktop disk read.
-// ---------------------------------------------------------------------------
+// The command returns the record it observed while holding cli-lock; each caller must feed THAT generation to the CAS, never derive one from its pre-lock Desktop disk read.
 describe("CLI-owned service start attestation (closing A2)", () => {
   const commandGeneration = "committed-under-cli-lock";
 
@@ -8406,11 +7353,6 @@ describe("CLI-owned service start attestation (closing A2)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Pins (CLI-owned platforms): the ticket's own worked example - a busy pin
-// pre-stop maps to `continuation: "retry-with-force"`, and Force re-submits
-// `installVersion{force}` and succeeds.
-// ---------------------------------------------------------------------------
 describe("installVersion busy/force continuation (CLI-owned)", () => {
   it("a busy pin (E_HOST_BUSY, pre-stop) resolves busy/retry-with-force; Force re-submits and succeeds", async () => {
     const controller = newController("production");
@@ -8465,12 +7407,7 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     const respawnOutcome = await controller.respawn({ kind: "background" });
     expect(respawnOutcome.kind).toBe("ok");
 
-    // Fixup C2: the title's own claim - "no durable pending-pin state" -
-    // was never actually exercised against the SAME pin; an unrelated
-    // intent succeeding doesn't prove that. Re-submit the identical pin and
-    // confirm it genuinely re-executes against the CLI rather than
-    // resolving from (or being blocked by) stale coalescing state left over
-    // from the earlier busy attempt.
+    // Fixup C2: the title's own claim - "no durable pending-pin state" - was never actually exercised against the SAME pin; an unrelated intent succeeding doesn't prove that.
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValueOnce({
       data: { version: "1.8.0", installGeneration: null },
     });
@@ -8480,15 +7417,7 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Bounded auto-retry: a readiness timeout after a COMPLETED register cycle
-// re-runs the full activation cycle exactly once before surfacing the gate
-// card. The register cycle is itself the repair (bootout + re-register), so
-// this is the machine clicking its own Retry button - bounded at one so a
-// genuinely broken host still surfaces a card instead of churning
-// disruptive SMAppService cycles forever. `requires-approval` never
-// auto-retries: only the user can act there.
-// ---------------------------------------------------------------------------
+// `requires-approval` never auto-retries: only the user can act there.
 describe("packaged-mac activation: bounded auto-retry on readiness timeout", () => {
   const NOT_READY = {
     ready: false,
@@ -8543,31 +7472,10 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     expect(waitForHostReady).toHaveBeenCalledTimes(2);
   });
 
-  /*
-   * The deadline is not proof of failure. A host that binds its endpoint just
-   * after `HOST_READY_TIMEOUT_MS` expires is up and serving, and the retry
-   * leads with `registerHostLoginItem`'s bootout - so retrying regardless
-   * KILLS the recovery this code was waiting for and holds the caller's
-   * mutation lane for another full timeout before anything surfaces.
-   *
-   * The evidence has to be a DIFFERENT process, though: this cycle just
-   * booted a host out, and one that outlived its own eviction is reachable
-   * too. Accepting that would report an activation that never happened, which
-   * is worse than the wasted cycle because it is silent. Both rows below
-   * exist because a guard that only checked reachability would pass the first
-   * and fail the second.
-   */
+  /** Accepting that would report an activation that never happened, which is worse than the wasted cycle because it is silent. */
   it("accepts a host that came up late instead of cycling it again", async () => {
     const controller = stagePackagedMacWorld();
-    // The host binds just AFTER the deadline: the wait reports not-ready, and
-    // by the time the retry decision is taken pid.json names a new process.
-    // Written as a side effect of the wait because the ordering is the whole
-    // point - staging the new pid up front would make it the cycle's `prePid`
-    // and the guard would (correctly) reject it.
-    //
-    // `process.ppid` is a different, genuinely live pid;
-    // `isPublishedHostEndpointReachable` probes real liveness, so a synthetic
-    // number would read as dead and the row would prove nothing.
+    // The host binds just AFTER the deadline: the wait reports not-ready, and by the time the retry decision is taken pid.json names a new process.
     vi.mocked(waitForHostReady).mockImplementation(async () => {
       writePidMetadata("production", { version: "1.7.0", pid: process.ppid });
       return NOT_READY;
@@ -8613,15 +7521,8 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
   });
 });
 
-// Field RCA 2026-07-28 (`make install-desktop-production`, ad-hoc build):
-// SMAppService answered `not-found` for a byte-correct in-bundle plist for
-// the remainder of the app process's life, AFTER the register cycle's own
-// bootout had already torn down the loaded agent. Every same-session retry
-// (S8 auto-retry, the monitor, the gate card's Retry button) re-ran the
-// same doomed SMAppService call, so the user was locked out with no
-// recovery affordance. These rows pin the escalation: a register failure
-// hands off to the CLI-owned raw LaunchAgent (`host service install
-// --takeover`), which does not go through SMAppService/BTM at all.
+// Field RCA 2026-07-28 (`make install-desktop-production`, ad-hoc build): SMAppService answered `not-found` for a byte-correct in-bundle plist for the remainder of the app process's.
+// These rows pin the escalation: a register failure hands off to the CLI-owned raw LaunchAgent (`host service install --takeover`), which does not go through SMAppService/BTM at all.
 describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback", () => {
   const TAKEOVER_ARGV = ["host", "service", "install", "--takeover"];
 
@@ -8633,10 +7534,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    // The fallback's readiness check keeps the normal version-equality
-    // guard: the recovered host must publish the runtime the committed
-    // installation expects (the beforeEach default reports 1.0.0, which
-    // this world would rightly reject).
+    // The fallback's readiness check keeps the normal version-equality guard: the recovered host must publish the runtime the committed installation expects (the beforeEach default.
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
       version: "1.7.0",
@@ -8667,16 +7565,6 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
   });
 
-  // SUSPECTED PRODUCTION BUG (reported, not fixed here - see the ticket
-  // hand-off; same root cause as the identically-shaped failure in
-  // `applyPendingLoginItemRevisionIfIdle`'s "surfaces BOTH failures" test).
-  // `recoverRegistrationViaCliTakeover`'s catch for a raw `streamBundled`
-  // throw (`host-controller.ts:1401-1415`) classifies the error through
-  // `classifyMutationSubprocessError`, then `withTakeoverDiagnostics` appends
-  // the caller-only evidence (observed status, escape hatch) the classifier
-  // is contractually forbidden to carry - fixed per the T2/T3 author's
-  // call-site-enrichment ruling (see the Field RCA comment above this
-  // describe block: "the user was locked out with no recovery affordance").
   it("activation cycle: a failing takeover surfaces one terminal message naming the status and the manual escape hatch", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
@@ -8698,12 +7586,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
 
-  // Field RCA 2026-07-28: the very restart that exercised this fallback in
-  // the field hit a live host that denied the takeover's shutdown claim
-  // (E_HOST_BUSY) - a self-recovering state (the retry 14s later
-  // succeeded), yet it surfaced as a `failed` outcome and therefore a
-  // reportable "Couldn't restart host" error toast. The denial must
-  // resolve `deferred` so restart surfaces present it as information.
+  // The denial must resolve `deferred` so restart surfaces present it as information.
   it("activation cycle: a takeover denied by a busy host resolves busy - retry-later information, not a reportable failure", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
@@ -8716,11 +7599,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
 
     const outcome = await controller.activateInstalled(true);
 
-    // Fixup B8 (already shipped) classifies workload-busy as `busy` with
-    // retry guidance, distinct from `deferred` (lock contention). The
-    // durable property this test protects survives that split: whichever
-    // label it carries, a live host with work in progress is retry-later
-    // information, never a reportable failure.
+    // The durable property this test protects survives that split: whichever label it carries, a live host with work in progress is retry-later information, never a reportable failure.
     expect(outcome.kind).not.toBe("failed");
     expect(outcome.kind).toBe("busy");
     if (outcome.kind === "busy") {
@@ -8751,22 +7630,9 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       expect(outcome.message).toContain("pid metadata never appeared");
     }
   });
-  // Split into its two legs (entry-point drift only touches the first): this
-  // used to drive both `respawn` and `registerService` through the SAME
-  // packaged-mac activation cycle. `respawn` no longer reaches it at all
-  // (rerouted to the CLI recovery facade, `host restart --force`,
-  // unconditionally) - there is no `requires-approval` escalation-gate
-  // behavior left on that path to pin. The activation-cycle leg moves to
-  // `activateInstalled`, one of its four live entry points; the
-  // `registerService` leg is untouched below, byte-identical, since that
-  // path never went through `respawn` and did not move.
   it("requires-approval NEVER escalates to the takeover (activateInstalled leg) - the toggle is the user's alone", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
-    // `requires-approval` still means the plist is registered, so the cycle
-    // waits for readiness; only when the host does NOT come up does the
-    // approval failure surface. A ready host here would be a legitimate
-    // success and prove nothing about the escalation gate.
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: false,
       version: null,
@@ -8783,10 +7649,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const activateOutcome = await controller.activateInstalled(true);
 
     expect(activateOutcome.kind).toBe("failed");
-    // Guards against a vacuous pass: the pre-bootout `requires-approval`
-    // preflight must not have short-circuited before the cycle actually
-    // reached registration - otherwise "failed" and no takeover would hold
-    // trivially without exercising the escalation gate at all.
+    // Guards against a vacuous pass: the pre-bootout `requires-approval` preflight must not have short-circuited before the cycle actually reached registration.
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
   });
@@ -8807,20 +7670,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
   });
 });
 
-// Fixup E: `mutationEpoch` ownership. `streamBundled` captures
-// `(mutationEpoch, mutationStatus !== null)` at spawn time, and only
-// publishes a progress event through `setMutationProgress` when BOTH the
-// spawning call was inside the mutation lane AND the epoch is still the one
-// captured at spawn. `enqueueMutation` bumps the epoch at mutation start and
-// end. Two things must hold:
-//   (1) a `streamBundled` call made while NO mutation is active (e.g. the
-//       `applyPendingLoginItemRevisionIfIdle` takeover recovery path, which
-//       deliberately runs outside `enqueueMutation`) must never alter an
-//       unrelated mutation's published progress, even if that mutation
-//       starts and is still active when the out-of-lane call's progress
-//       events arrive.
-//   (2) a normal in-lane call still publishes its progress exactly as
-//       before.
+// Two things must hold: (1) a `streamBundled` call made while NO mutation is active (e.g. the `applyPendingLoginItemRevisionIfIdle` takeover recovery path, which deliberately runs.
 describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
   it("a streamBundled call spawned OUTSIDE the mutation lane never publishes progress into an unrelated mutation that starts while it is still running", async () => {
     const controller = newController("production");
@@ -8841,12 +7691,6 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
 
     const takeoverGate = deferred<{ data: unknown }>();
     const restartGate = deferred<{ data: unknown }>();
-    // A plain `let` reassigned only inside the mock's closure loses its
-    // narrowed (non-null) type at every read in this outer scope - TS's
-    // control-flow analysis does not trace assignments made from inside a
-    // nested function expression. Holding it as an object property sidesteps
-    // that: property narrowing is re-evaluated from each guard, not frozen
-    // to the variable's initializer.
     const takeoverEvents: { onEvent: ((event: NdjsonEvent) => void) | null } = {
       onEvent: null,
     };
@@ -8867,11 +7711,6 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
       progresses.push(p);
     });
 
-    // `applyPendingLoginItemRevisionIfIdle` runs OUTSIDE `enqueueMutation` -
-    // no mutation is active when its takeover call spawns, so `streamBundled`
-    // captures `spawnedInLane = false`. That is exactly what the `caller`
-    // argument now names, so this call passes `"outside-lane"`: it is subject
-    // to reverse admission and defers to a mutation that takes the lane.
     const refreshPromise =
       controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await vi.waitFor(() => {

@@ -23,19 +23,10 @@ import type {
   RemovedWorktreeRefs,
 } from "@/lib/worktree/removed-worktree-refs";
 
-/**
- * One approved sweep target. `branch` rides along (from the candidate row) so
- * completion can purge staged/remembered intents that reference the deleted
- * branch - the wire calls only consume `worktreePath`.
- */
 export interface SweepTargetWorktree {
   readonly worktreePath: string;
   readonly branch: string | null;
-  /**
-   * Repository the branch belongs to, so the intent purge can qualify the
-   * branch name and leave another repo's same-named branch alone. `null` when
-   * the host could not identify the repo (no parseable origin).
-   */
+  /** Repository the branch belongs to, so the intent purge can qualify the branch name and leave another repo's same-named branch alone. */
   readonly repoIdentifier: RemovedBranchRepo | null;
   /** In-use rows the user selected deliberately: deleteByPath with stopOwners. */
   readonly stopOwners: boolean;
@@ -57,19 +48,7 @@ export interface SweepWorktreesResult {
 }
 
 /**
- * The Sweep action: streams one host-owned batch command for every approved
- * path via the shared cleanup runner (host-side busy-check intact, headless
- * teardown best-effort), then refreshes the worktree listing/binding caches so the
- * history PR pills, task rollups, and the task-status strip converge. A bare
- * `useMutation` rather than `useHostMutation`: there is no single host RPC
- * here - the whole mutation is the streamed multi-path run. `hostId` comes
- * from the candidate query's settled act-time proof, so a host swap between
- * proof and confirm cannot redirect the command or its cache invalidation.
- *
- * Runs in the BACKGROUND (matching Settings worktree deletion): the dialog
- * closes at confirm, the kickoff is acknowledged once the host-connection
- * guard has passed, and the outcome lands as a summary toast when every
- * stream settles.
+ * Bare `useMutation`: there is no single host RPC. `hostId` is the candidate query's act-time proof so a swap between proof and confirm cannot redirect the command or invalidation.
  */
 export function useEpicSweepWorktrees(): UseMutationResult<
   SweepWorktreesResult,
@@ -124,16 +103,7 @@ export function useEpicSweepWorktrees(): UseMutationResult<
 }
 
 /**
- * Drops staged + remembered composer intents that reference the worktrees a
- * settled sweep ACTUALLY removed (failed paths keep their intents - the
- * worktree still exists). Without this, a pick staged before the sweep keeps
- * offering the deleted worktree as an "existing worktree" in new chats: the
- * staged tier is deliberately never re-validated by the composer seeding.
- *
- * `hostId` is the host the removal ran on (the dialog's act-time proof, frozen
- * in the variables). Both stores scope by it, so only that machine's staged
- * slots and remembered defaults are touched - an identically-named path or
- * branch on another host still materializes there and keeps its pick.
+ * Drop staged/remembered intents for worktrees the sweep actually removed. `hostId` is the act-time proof so another host's identically named path is untouched.
  */
 function purgeIntentsForRemovedWorktrees(
   hostId: string,
@@ -158,14 +128,7 @@ function purgeIntentsForRemovedWorktrees(
     .purgeRemovedWorktreeIntents(hostId, removed);
 }
 
-/**
- * Worktree paths with an in-flight sweep, read from the mutation cache by the
- * shared key rather than from one hook instance. The Sweep dialog is mounted
- * independently per surface (a History row and the task-status strip each
- * render their own), so a component-local `isPending` would only ever see the
- * run IT started - reopening from the other surface would happily re-stream
- * the same paths. Mirrors `usePendingSetPinnedEpicIds`.
- */
+/** Worktree paths with an in-flight sweep, read from the mutation cache by the shared key rather than from one hook instance. */
 export function useSweepingWorktreePaths(
   hostId: string | null,
 ): ReadonlySet<string> {
@@ -217,11 +180,7 @@ function isSweepTargetWorktree(value: unknown): value is SweepTargetWorktree {
 export interface SweepWorktreeSummary {
   readonly level: "success" | "warning";
   readonly message: string;
-  /**
-   * Per-path failure reasons for the toast's on-screen description, or `null`
-   * when the count line in `message` is all there is to say. Never goes into
-   * the report-issue context - it names absolute paths.
-   */
+  /** Never goes into the report-issue context - it names absolute paths. */
   readonly detail: string | null;
 }
 

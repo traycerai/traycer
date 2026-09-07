@@ -5,42 +5,7 @@ import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/
 import { startEpicRuntimeWorkerHost } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-worker-host";
 import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
 
-// ── The epic runtime worker, for every jsdom suite ──────────────────────────
-//
-// ONE place, not a `beforeEach` in thirty files. jsdom has no `Worker`, and the
-// production factory is the only site that calls
-// `new Worker(new URL(...), { type: "module" })` - the literal form Vite must
-// see and jsdom cannot execute. Installing the in-process factory here means a
-// suite that mounts a session gets the REAL worker host, over a fake bridge
-// pair, on this thread, with no per-file wiring.
-//
-// The single opt-out is `__setEpicRuntimeWorkerFactoryForTests(null)` in a
-// suite that knows why - which today means only a suite deliberately reaching
-// for a real `Worker`, and no jsdom suite may do that.
-//
-// Constructed LAZILY, per call: each spawn gets its own pair and its own host,
-// because a shared pair would let two sessions' frames interleave on one
-// transport and a shared host would have `installCore` dispose the first
-// session's core when the second arrived (`epic-runtime-worker-host.ts:141`).
-//
-// CORELESS, and no longer "inert until the flip" - which is what this comment
-// said, and it stopped being true when `epic-runtime-worker-entry.ts` started
-// calling `installEpicRuntimeCore`. The entry composes a runtime now; what this
-// factory does not do is run the entry.
-//
-// So a host started HERE has no core and answers "not held" to everything,
-// while the same spawn in production carries a full runtime. That is deliberate
-// and it is the honest default: a suite that merely mounts a session must not
-// be handed a live replica it did not ask for, and the suites that DO want one
-// build it themselves (`open-store-for-test.ts` installs a core on its own
-// pair; `arm-b-accounting-equality.test.ts` installs one behind a spawned
-// worker's port, which is what makes the owed #4 pin's second arm exist at
-// all).
-//
-// The correction matters beyond this file: §8 argued Arm B was not
-// constructible BECAUSE the entry did not compose, and that argument expired
-// with this comment. A reader checking the claim would have found this text and
-// stopped.
+// jsdom has no `Worker`. One in-process factory for every suite: lazy, per-call, coreless. Opt out with `__setEpicRuntimeWorkerFactoryForTests(null)`.
 __setEpicRuntimeWorkerFactoryForTests(() => {
   const pair = createFakeBridgePair("sync");
   const host = startEpicRuntimeWorkerHost(pair.worker);
@@ -49,39 +14,12 @@ __setEpicRuntimeWorkerFactoryForTests(() => {
     terminate: () => {
       host.shutdown();
     },
-    // Unreachable here, and stated rather than left to a default: this host
-    // runs in THIS thread, so there is no module fetch to fail and no DOM
-    // event to report one. The real `Worker` is the only implementor that can
-    // ever call this listener.
+    // Unreachable here: this host runs in this thread, so there is no module fetch to fail.
     onWorkerFault: () => {},
   };
 });
 
-// ── The session's durable transport, for every jsdom suite ──────────────────
-//
-// The SAME shape as the worker default above, and here for the same reason: one
-// place, not a `beforeEach` in thirty files. A suite that merely mounts a
-// session must not be handed a live socket it did not ask for.
-//
-// WHY IT BECAME NECESSARY, since a reader will otherwise wonder why thirty
-// suites managed without it. `EpicSessionProvider` used to SKIP opening a
-// transport when a test had installed a stream-factory override
-// (`__setEpicStreamClientFactoryForTests`), so most suites reached
-// `openTransport` never, and the handful that stubbed it could safely stub it
-// with a THROW. That override is deleted: a stream factory built on MAIN cannot
-// cross `postMessage` to a runtime that lives in the worker, so overriding it
-// could not do what its name promised. With the branch gone the provider opens
-// UNCONDITIONALLY (`epic-session-provider.tsx`, the `openTransport` call in
-// `createHandle`), and every suite that mounts a session reaches the real hook -
-// which dials a real socket off `useHostClient()` and dies on the first member a
-// test's host stub does not implement. Five suites failed exactly that way,
-// through `createEpicSessionTestHarness`, none of them naming a transport
-// anywhere in their source.
-//
-// A suite that cares about the transport still mocks this module itself, and a
-// file-level `vi.mock` takes precedence over this one - twenty do. The suite
-// that exercises the real dialing path targets `durable-stream-transport.ts`,
-// a different module, and is untouched by this.
+// Default fake durable transport for every jsdom suite. A file-level `vi.mock` takes precedence.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -91,18 +29,7 @@ vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   };
 });
 
-// CI stability net. A stray late async error - an `unhandledRejection` or
-// `uncaughtException` from a timer, socket, or microtask that fires AFTER a
-// test's teardown - otherwise takes down the whole vitest worker (exit 1 with
-// no failing test: the classic intermittent CI flake). Catch and LOG them so
-// the source stays visible/debuggable, but don't let them crash the run. Paired
-// with `dangerouslyIgnoreUnhandledErrors` in vitest.config.ts, which stops
-// vitest from converting these post-teardown escapes into a run failure.
-//
-// Registered idempotently (by handler name) because `setupFiles` re-runs per
-// test file and forks are reused, so a naive `process.on` would leak listeners.
-// `process` is reached through `globalThis` (this is a browser-typed package
-// with no `@types/node`), mirroring the existing `fetch` shim below.
+// Catch post-teardown `unhandledRejection` / `uncaughtException` so they do not take down the vitest worker. Register idempotently.
 interface NodeProcessLike {
   on(event: string, listener: (value: unknown) => void): void;
   listeners(event: string): ReadonlyArray<{ readonly name: string }>;
@@ -125,9 +52,7 @@ if (nodeProcess !== undefined) {
   }
 }
 
-// Vite's `?worker` import returns a Worker constructor at build time. jsdom has
-// no Worker; mock the @pierre/diffs worker module to a no-op constructor so
-// any test that mounts <DiffWorkerPoolProvider> doesn't crash.
+// jsdom has no Worker; mock the @pierre/diffs worker so <DiffWorkerPoolProvider> can mount.
 vi.mock("@pierre/diffs/worker/worker.js?worker", () => ({
   default: class MockDiffsWorker {
     postMessage(): void {}
@@ -137,14 +62,7 @@ vi.mock("@pierre/diffs/worker/worker.js?worker", () => ({
   },
 }));
 
-// ECharts (the usage charts' renderer) cannot run under jsdom: zrender
-// measures text through a real canvas context, which jsdom does not
-// implement (see the getContext stub below). Mock the tree-shaken entry
-// points globally so any test that mounts a usage surface gets a recording
-// fake instead of a crash; chart tests read the captured options back
-// through `getEChartsMockInstances`. Registered here rather than per test
-// file because the chart mounts transitively from several suites (settings
-// panel, epic dialog, summary panel).
+// ECharts cannot run under jsdom. Mock globally so usage surfaces get a recording fake.
 export interface EChartsMockInstance {
   readonly dom: HTMLElement;
   readonly options: unknown[];
@@ -155,14 +73,7 @@ export interface EChartsMockInstance {
 interface EChartsMockGlobal {
   __traycerEChartsMockInstances?: EChartsMockInstance[];
 }
-/**
- * LIVE chart instances only. The record list is append-only and shared
- * across a file's tests, and every consumer reaches for `.at(-1)` - so
- * without this filter a test could read an option belonging to a chart
- * that a previous test already unmounted, and pass on stale data.
- * {@link getAllEChartsMockInstances} keeps the unfiltered list for
- * lifecycle assertions (e.g. "did unmount dispose it").
- */
+/** Live charts only. The append-only record would let `.at(-1)` read an unmounted instance. getAllEChartsMockInstances keeps the unfiltered list. */
 export function getEChartsMockInstances(): readonly EChartsMockInstance[] {
   return getAllEChartsMockInstances().filter((record) => !record.disposed);
 }
@@ -205,12 +116,7 @@ vi.mock("echarts/components", () => ({
 }));
 vi.mock("echarts/renderers", () => ({ SVGRenderer: {} }));
 
-// Brand icons (@lobehub/icons) render a decorative SVG `<title>BrandName</title>`
-// for accessibility. Those titles aren't visible content, but they DO satisfy
-// `getByText`, which makes any text query near a provider icon ambiguous (the
-// provider's name label vs. its icon's title). Treat `<title>` like the
-// `<script>`/`<style>` elements Testing Library already ignores so text queries
-// match real content only.
+// Brand-icon SVG `<title>` satisfies `getByText`. Ignore it so text queries match real content only.
 configure({ defaultIgnore: "script, style, title" });
 
 class MockResizeObserver implements ResizeObserver {
@@ -256,9 +162,7 @@ export function installMockLocalStorage(): Storage {
   return storage;
 }
 
-// Vitest reruns setup files for each test file while reusing fork processes.
-// Reset this global every time so a suite with a controllable observer cannot
-// leak it into the unrelated test file that happens to run next in the worker.
+// Reset this global every setup-file rerun so a suite cannot leak a controllable observer.
 Object.defineProperty(globalThis, "ResizeObserver", {
   configurable: true,
   writable: true,
@@ -285,12 +189,7 @@ if (typeof globalThis.IntersectionObserver === "undefined") {
   });
 }
 
-// jsdom implements no image decoder, so `createImageBitmap` (ADV-I4's
-// attach-time decodability check in use-report-issue-attachments.ts) is
-// absent. Default to a successful decode - tests exercising a genuine
-// decode failure stub their own rejecting/throwing implementation over
-// this default (see use-report-issue-attachments.test.ts); interaction
-// tests elsewhere just need attaching a well-formed fixture to work.
+// jsdom has no image decoder. Default `createImageBitmap` to a successful decode.
 if (typeof globalThis.createImageBitmap === "undefined") {
   Object.defineProperty(globalThis, "createImageBitmap", {
     configurable: true,
@@ -300,9 +199,7 @@ if (typeof globalThis.createImageBitmap === "undefined") {
   });
 }
 
-// Radix-ui's DropdownMenu / Popover triggers route through Pointer Events
-// that jsdom does not implement. Stub the pointer-capture methods and
-// `scrollIntoView` so opening a menu in tests does not throw.
+// jsdom does not implement Pointer Events. Stub pointer-capture and `scrollIntoView`.
 if (typeof Element !== "undefined") {
   const elementProto = Element.prototype as Element & {
     hasPointerCapture?: (pointerId: number) => boolean;
@@ -328,10 +225,7 @@ if (typeof Element !== "undefined") {
   }
 }
 
-// jsdom throws "Not implemented" from HTMLCanvasElement.getContext (logged to
-// the virtual console before throwing). The SubagentAvatar canvas treats a null
-// context as "skip drawing", so stub getContext to return null - silences the
-// noise and lets avatar-bearing components mount without the canvas npm package.
+// jsdom `getContext` throws. Stub null so canvas-bearing components can mount.
 if (typeof HTMLCanvasElement !== "undefined") {
   const canvasProto = HTMLCanvasElement.prototype as HTMLCanvasElement & {
     getContext: () => null;
@@ -339,11 +233,7 @@ if (typeof HTMLCanvasElement !== "undefined") {
   canvasProto.getContext = (): null => null;
 }
 
-// jsdom does not implement hit-testing. Tiptap 3.26's placeholder extension
-// tracks the viewport via ProseMirror's `posAtCoords`, which calls
-// `document.elementFromPoint`. Stub it (and `elementsFromPoint`) so mounting an
-// editor in tests does not throw; null / [] is the spec-valid "no element at
-// these coordinates" answer, which `posAtCoords` already handles.
+// jsdom has no hit-testing. Stub `elementFromPoint` so mounting an editor does not throw.
 if (typeof Document !== "undefined") {
   const documentProto = Document.prototype as Document & {
     elementFromPoint?: (x: number, y: number) => Element | null;
@@ -357,10 +247,7 @@ if (typeof Document !== "undefined") {
   }
 }
 
-// jsdom does not implement layout, so ProseMirror's `coordsAtPos` path that
-// calls `getClientRects()` / `getBoundingClientRect()` on text nodes / ranges
-// throws. Stub zero-rect responses so Tiptap's auto-scroll-into-view after
-// dispatch is a no-op in tests.
+// jsdom has no layout. Stub zero-rects so Tiptap auto-scroll-into-view is a no-op.
 const ZERO_RECT_LIST: DOMRectList = Object.assign([], {
   item: (_index: number): DOMRect | null => null,
 });
@@ -448,15 +335,7 @@ if (typeof window !== "undefined") {
 }
 
 /**
- * Installs a fetch stub that satisfies AuthService's
- * `${authnBaseUrl}/api/v3/user` validation with a 200 response carrying a
- * structured `AuthenticatedUser` body (identity nested under `user`), and
- * rejects every other URL. Used by tree-level integration tests so the
- * post-T6 token validation path does not need a real network. The body
- * mirrors the real AuthnV3 v3 contract because AuthService now treats a
- * 2xx response without a usable profile (parsed from the nested `user`
- * object) as a session-expired-equivalent rejection. Returns a teardown
- * function that restores the previous fetch.
+ * Fetch stub for AuthService `/api/v3/user` validation. Body must nest identity under `user`; a 2xx without a usable profile is treated as expired.
  */
 export function installAuthValidationFetch(): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;

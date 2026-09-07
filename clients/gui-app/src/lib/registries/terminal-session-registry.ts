@@ -26,12 +26,8 @@ import type {
 const registry = new TerminalSessionRegistry();
 
 const handleHostIds = new WeakMap<TerminalSessionStoreHandle, string | null>();
-// Owner-identity discriminator (R-1), tracked separately from `handleHostIds`
-// (which `agent-activity.ts` filters by hostId and must stay hostId-only).
-// `TerminalSessionRegistry.acquire` has no scope-key concept of its own - it
-// only ever rebuilds on an explicit `forceRelease` - so this is what lets a
-// same-host remote public-key rotation force one instead of leaving the
-// warm session pinned to a `TerminalStreamClient` built against the stale key.
+// Owner-identity discriminator (R-1), tracked separately from `handleHostIds` (which `agent-activity.ts` filters by hostId and must stay hostId-only).
+// `TerminalSessionRegistry.acquire` has no scope-key concept of its own - it only ever rebuilds on an explicit `forceRelease` - so this is what lets a same-host remote public-key rotation force one instead of leaving the warm session pinned to a.
 const handleOwnerIdentityKeys = new WeakMap<
   TerminalSessionStoreHandle,
   string | null
@@ -68,10 +64,8 @@ export interface UseTerminalSessionHandleArgs {
   readonly scope: TerminalScope;
   readonly sessionId: string;
   /**
-   * Per-tab instance id this handle is registered under. Keying by
-   * `instanceId` (not `sessionId`) lets two tab instances of the same PTY/TUI
-   * session each hold their own handle + stream client subscribing to the
-   * shared `sessionId`.
+   * Per-tab instance id this handle is registered under.
+   * Keying by `instanceId` (not `sessionId`) lets two tab instances of the same PTY/TUI session each hold their own handle + stream client subscribing to the shared `sessionId`.
    */
   readonly instanceId: string;
   readonly cols: number;
@@ -87,13 +81,7 @@ export function useTerminalSessionHandle(
 ): TerminalSessionStoreHandle | null {
   const hostEntry = useHostDirectoryEntry(args.hostId);
   const globalClient = useHostClient();
-  // Terminal is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
-  // session store for the session's warm lifetime (live sessions are kept warm
-  // across tile unmount - agents indefinitely, plain terminals for the
-  // release-linger window), NOT by this tile - so closing then reopening
-  // the tab no longer hands the revived warm session a socket the unmounting
-  // tile already closed. The opener wires the shared "durable stream = auth +
-  // wake" recovery; the returned handle's `close()` tears it down on dispose.
+  // Terminal is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the session store for the session's warm lifetime (live sessions are kept warm across tile unmount - agents indefinitely, plain terminals for the release-linger window), NOT by this.
   const openTransport = useDurableStreamTransportFactory();
   const queryClient = useQueryClient();
   const creationConfigRef = useRef({
@@ -102,20 +90,13 @@ export function useTerminalSessionHandle(
     reattachMode: args.reattachMode,
   });
 
-  // Readiness gate: authenticated request context + dialable endpoint (or the
-  // test seam). A non-null `transportKey` is the terminal's "ready to acquire"
-  // signal, replacing the old per-tile `wsStreamClient !== null` check. The
-  // shared `authenticatedHostStreamKey` derives the production identity only
-  // when the factory is not overridden, matching chat.
+  // Readiness gate: authenticated request context + dialable endpoint (or the test seam).
+  // A non-null `transportKey` is the terminal's "ready to acquire" signal, replacing the old per-tile `wsStreamClient !== null` check.
   const transportKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedHostStreamKey(globalClient, hostEntry);
-  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
-  // remote host's public key (dialability, not identity). `args.hostId` is
-  // stable for a terminal tab's whole lifetime by design (bound for life -
-  // see CLAUDE.md), so the hostId-only check below can never see a same-host
-  // remote public-key rotation; this closes that gap.
+  // `transportKey` omits a remote public key; `args.hostId` is the owner-identity discriminator.
   const ownerIdentityKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
@@ -129,10 +110,8 @@ export function useTerminalSessionHandle(
     null,
   );
 
-  // The previous acquire effect's cleanup runs AFTER this commit's layout
-  // effects, so a disappearing `transportKey` is visible to `release` as
-  // `transportAlive: false`. The captured effect-local key is still the
-  // old non-null value; a render-time ref write is forbidden (`react-hooks/refs`).
+  // The previous acquire effect's cleanup runs AFTER this commit's layout effects, so a disappearing `transportKey` is visible to `release` as `transportAlive: false`.
+  // The captured effect-local key is still the old non-null value; a render-time ref write is forbidden (`react-hooks/refs`).
   const transportReadyRef = useRef(false);
   useLayoutEffect(() => {
     transportReadyRef.current =
@@ -148,9 +127,8 @@ export function useTerminalSessionHandle(
   }, [args.cols, args.rows, args.reattachMode]);
 
   const scopeEpicId = args.scope.kind === "epic" ? args.scope.epicId : null;
-  // Callers commonly construct a scope literal during render. Keep an
-  // equivalent scope referentially stable so that a render cannot release and
-  // reacquire this instanceId's durable stream.
+  // Callers commonly construct a scope literal during render.
+  // Keep an equivalent scope referentially stable so that a render cannot release and reacquire this instanceId's durable stream.
   const scope = useMemo<TerminalScope>(
     () =>
       scopeEpicId === null
@@ -164,11 +142,8 @@ export function useTerminalSessionHandle(
       setHandle(null);
       return;
     }
-    // Null until there is an authenticated request context and a dialable host
-    // endpoint (or "test-..." when the factory is overridden). `ownerIdentityKey`
-    // is null under that same gate (both derive from the same `globalClient` +
-    // `hostEntry`), so this never masks a ready session behind a not-yet-known
-    // identity.
+    // Null until there is an authenticated request context and a dialable host endpoint (or "test-..." when the factory is overridden).
+    // `ownerIdentityKey` is null under that same gate (both derive from the same `globalClient` + `hostEntry`), so this never masks a ready session behind a not-yet-known identity.
     if (transportKey === null || ownerIdentityKey === null) {
       setHandle(null);
       return;
@@ -195,12 +170,8 @@ export function useTerminalSessionHandle(
       if (streamClientFactoryOverride !== null) {
         return streamClientFactoryOverride(streamArgs);
       }
-      // The session OWNS this transport (built here, torn down by `close()`), so
-      // it survives tile unmount for warm terminal-agent sessions instead of
-      // being closed with the tile. `openOwnedDurableStreamClient` composes the
-      // close and closes the half-built transport if `new TerminalStreamClient`
-      // (it subscribes on the socket) throws synchronously, so no socket or wake
-      // listener leaks.
+      // The session OWNS this transport (built here, torn down by `close()`), so it survives tile unmount for warm terminal-agent sessions instead of being closed with the tile.
+      // `openOwnedDurableStreamClient` composes the close and closes the half-built transport if `new TerminalStreamClient` (it subscribes on the socket) throws synchronously, so no socket or wake listener leaks.
       const result = openOwnedDurableStreamClient(
         openTransport,
         args.hostId,
@@ -245,10 +216,7 @@ export function useTerminalSessionHandle(
     return () => {
       registry.release(args.instanceId, next, transportReadyRef.current);
     };
-    // `openTransport` is referentially stable and reads its deps live;
-    // `transportKey` already encodes user + host + endpoint identity;
-    // `ownerIdentityKey` additionally discriminates a remote host's
-    // public-key rotation (R-1).
+    // `openTransport` is referentially stable and reads its deps live; `transportKey` already encodes user + host + endpoint identity; `ownerIdentityKey` additionally discriminates a remote host's public-key rotation (R-1).
   }, [
     args.hostId,
     args.enabled,
@@ -285,15 +253,8 @@ export function useTerminalSessionHandle(
       previousCurrentCwd = state.currentCwd;
       previousCurrentCwdReported = state.currentCwdReported;
       if (metadataChanged) {
-        // Patch the cached `terminal.list` rows in place - NEVER invalidate
-        // here. The stream is the authoritative source for these fields
-        // (snapshot / `sessionUpdated` frames), so a refetch adds nothing,
-        // and invalidating was actively harmful: the tile bootstrap gates
-        // this handle on `terminal.list`, so invalidate -> refetch -> handle
-        // released -> re-subscribe -> snapshot re-sets metadata -> invalidate
-        // looped forever, bouncing the PTY stream and leaving reattached
-        // terminals blank. (An explicitly justified `setQueriesData`:
-        // stream-pushed state IS the response state.)
+        // Patch the cached `terminal.list` rows in place - NEVER invalidate here.
+        // The stream is the authoritative source for these fields (snapshot / `sessionUpdated` frames), so a refetch adds nothing, and invalidating was actively harmful: the tile bootstrap gates this handle on `terminal.list`, so invalidate -> refetch -> handle.
         queryClient.setQueriesData<ListTerminalsResponseV23>(
           { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
           (data) => {

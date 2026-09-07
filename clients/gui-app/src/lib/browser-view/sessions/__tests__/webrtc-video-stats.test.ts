@@ -115,11 +115,8 @@ describe("mapWebrtcVideoStats", () => {
   });
 
   it("resolves via the transport's selectedCandidatePairId, not just the last nominated pair (ICE restart)", () => {
-    // Iteration order is deliberately adversarial: the pair the transport
-    // actually selected comes FIRST, and a retired-but-still-nominated pair
-    // (the ICE-restart case) comes AFTER it. A naive "last nominated wins"
-    // scan would report the retired pair's numbers - wrong host/relay type
-    // and wrong RTT, the two figures this metric exists for.
+    // Iteration order is deliberately adversarial: the pair the transport actually selected comes FIRST, and a retired-but-still-nominated pair (the ICE-restart case) comes AFTER it.
+    // A naive "last nominated wins" scan would report the retired pair's numbers - wrong host/relay type and wrong RTT, the two figures this metric exists for.
     const report = fakeReport([
       ["video-1", { type: "inbound-rtp", kind: "video", framesDecoded: 10 }],
       [

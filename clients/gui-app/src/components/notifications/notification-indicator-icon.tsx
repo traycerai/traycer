@@ -14,15 +14,7 @@ import { cn } from "@/lib/utils";
 
 export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
 
-/**
- * Live-activity tier for the running slot. `"turn"` is the agent actually
- * processing (an active or activating turn — the busy spinner); `"background"`
- * is background-only work (Monitor / `run_in_background` / a scheduled
- * wakeup) keeping the chat non-idle while the agent itself is NOT running —
- * rendered calmer and muted so the two are distinguishable at a glance.
- * Callers resolve the tier (turn wins when both are happening); this
- * component only presents it.
- */
+/** Callers resolve the tier (turn wins when both are happening); this component only presents it. */
 export type IndicatorRunningKind = "turn" | "background" | false;
 
 interface NotificationIndicatorIconProps {
@@ -40,14 +32,8 @@ interface NotificationIndicatorIconProps {
   readonly agentSurface: AgentNotificationSurface;
 }
 
-/**
- * The single renderer for notification status icons. Notification state wins
- * over live activity for high-attention states: chat/other failures first,
- * then unresolved prompts, followed by the session-backed running indicator
- * (turn spinner, or the muted background variant), unread completion, and
- * finally terminal failure. Producers retain historical failures in the feed
- * while projecting only the latest terminal outcome into this renderer.
- */
+/** Producers retain historical failures in the feed while projecting only the latest terminal outcome into this
+ * renderer. */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,
 ): ReactNode {
@@ -136,17 +122,7 @@ function IndicatorDot(props: {
   );
 }
 
-/**
- * The one status-glyph leaf: `role="status"` + accessible name + the hover
- * tooltip. The tone/dot/running variants above differ only in their glyph, and
- * each used to re-spell this span - including its own native `title`, which is
- * how three copies of the same "aria-label and title say the same thing"
- * pairing ended up here.
- *
- * The prop is `tooltip`, not `title`: `title` on a component that spreads onto
- * a DOM node is indistinguishable at the call site from the native attribute
- * this replaces.
- */
+/** The one status-glyph leaf: `role="status"` + accessible name + the hover tooltip. */
 function IndicatorSpan(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
   readonly tooltip: string;

@@ -10,31 +10,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 
-/**
- * TWO SURFACES ON ONE HOST HOLD ONE STREAM CLIENT.
- *
- * This is the half of the sharing claim that was never asserted anywhere. The
- * OTHER half already is, in `use-git-list-changed-files-subscription.test.tsx`:
- * "two consumers with same key share one underlying stream" proves one client
- * object yields ONE `git.subscribeStatus`, and the swap case beside it
- * (`firstClient.instanceId).not.toBe(...)`) proves a DIFFERENT client object
- * drains that entry and opens a second. So the registry's behaviour given an
- * object is pinned; what was unpinned is which object each surface gets — and
- * that was the defect: every caller of `useHostStreamClientBindingFor` minted
- * its own, so two surfaces on one host ran two watchers on it.
- *
- * The two suites are deliberately not merged. Duplicating the registry's
- * `MockWsStreamClient` here to re-assert a subscribe count would prove the
- * registry again and this hook not at all, while this suite needs the REAL
- * `WsStreamClient` the cache actually hands out.
- *
- * ⚠ WHAT THIS DOES NOT CLAIM. The epic-canvas surfaces (`epic-sidebar-file-
- * tree`, `git-diff-panel-body-live`) still read `useWsStreamClient()` — the
- * APP-WIDE stream — so they do not yet reach a per-host client at all. Only
- * `resource-monitor-popover` re-provides a scoped `StreamRuntimeContext`
- * today. This suite pins the shared-object property those re-providers depend
- * on; it does not assert that any particular surface has been re-pointed.
- */
+/** Two surfaces on one host must hold the same stream client object. */
 const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
 }));
@@ -96,15 +72,7 @@ const HOST_C: HostDirectoryEntry = {
 };
 
 /**
- * `HOST_B`'s ENDPOINT under a different host id, and nothing else changed.
- *
- * `HOST_B` vs `HOST_C` differ in two fields at once, so they cannot say which
- * one separates them - a probe deleting `hostId` from the cache key SURVIVED
- * that pair, because the differing URL still split it. This is the isolating
- * fixture, and the combination is a real one rather than a contrivance: every
- * REMOTE host in a fleet shares one relay attach URL (see
- * `remoteAwareOwnerIdentity`, which folds the public key in for exactly this
- * reason), so "same endpoint, different host" is the shape a remote fleet has.
+ * Same endpoint, different host id. Remote fleet hosts share one relay URL, so a key that omitted `hostId` survived a URL-differing pair.
  */
 const HOST_D_SHARING_B_ENDPOINT: HostDirectoryEntry = {
   ...HOST_B,
@@ -154,11 +122,7 @@ describe("per-host stream clients are shared between surfaces", () => {
   });
 
   it("separates two hosts that share ONE endpoint", () => {
-    // The arm above cannot prove `hostId` separates anything, because its two
-    // hosts also differ in `websocketUrl`. Here the id is the only difference,
-    // so this is the one that fails if `hostId` leaves the cache key - and a
-    // fleet of remote hosts behind one relay attach URL is precisely that
-    // shape, which would put every host's stream on one client.
+    // The arm above cannot prove `hostId` separates anything, because its two hosts also differ in `websocketUrl`.
     globalClientRef.value = buildGlobalClient();
     const onB = renderSurface(HOST_B);
     const onD = renderSurface(HOST_D_SHARING_B_ENDPOINT);
@@ -171,11 +135,7 @@ describe("per-host stream clients are shared between surfaces", () => {
   });
 
   it("keeps the transport alive when only ONE of the two surfaces unmounts", () => {
-    // The pairing constraint, asserted as the EFFECT (is the transport dead?)
-    // rather than as a reference count. A shared object closed by the first
-    // unmount is the premature-disposal half of what two lifecycles over one
-    // object would produce, and the surface still mounted would be left
-    // holding a closed client.
+    // The pairing constraint, asserted as the EFFECT (is the transport dead?) rather than as a reference count.
     globalClientRef.value = buildGlobalClient();
     const first = renderSurface(HOST_B);
     const second = renderSurface(HOST_B);
@@ -209,12 +169,7 @@ describe("per-host stream clients are shared between surfaces", () => {
   });
 
   it("ignores an unpin the surface never pinned, instead of closing a sibling's transport", () => {
-    // The reference count is now SHARED, so an over-`unpin` no longer just
-    // clamps at zero the way the old per-instance closure did - it would
-    // return a reference this surface never took and tear down a transport
-    // another surface is reading through. The asset-coalescing layer reaches
-    // `unpin` from two paths, guarded only by a map-identity check at the call
-    // site, so this is reachable rather than theoretical.
+    // The reference count is now SHARED, so an over-`unpin` no longer just clamps at zero the way the old per-instance closure did - it would return a reference this surface never took and tear down a transport another surface is reading through.
     globalClientRef.value = buildGlobalClient();
     const first = renderSurface(HOST_B);
     const second = renderSurface(HOST_B);

@@ -19,12 +19,7 @@ interface UpdateHostVersionPolicyMutationContext {
   readonly userId: string | null;
 }
 
-/**
- * Unwraps the discriminated `PATCH /api/v3/hosts/:hostId` result into the
- * applied policy or a user-facing `Error`, so the mutation's success data is
- * the meaningfully-typed payload rather than a `kind` union callers must
- * re-branch on.
- */
+/** Unwraps the discriminated `PATCH /api/v3/hosts/:hostId` result into the applied policy or a user-facing `Error`, so the mutation's success data is the meaningfully-typed payload rather than a `kind` union callers must re-branch on. */
 function unwrapUpdateHostVersionPolicyResult(
   result: UpdateHostVersionPolicyFetchResult,
 ): HostVersionPolicyResult {
@@ -44,19 +39,7 @@ function unwrapUpdateHostVersionPolicyResult(
 }
 
 /**
- * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
- * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId`, scoped to
- * one host (mirrors `HostRow` being keyed by `host.hostId`, so a fresh hook
- * instance is bound per row). All three affordances share this single
- * mutation — they differ only in which tri-state field of
- * {@link UpdateHostVersionPolicyInput} they set:
- *   - "Update now"     → `{ desiredVersion }`
- *   - auto-policy toggle → `{ updatePolicy }`
- *   - "Apply now"       → `{ force: true }`
- *
- * On success, invalidates the My Hosts list query so the row's
- * `desiredVersion` / `updatePolicy` / `updateState` reflect the write
- * promptly instead of waiting out the ~15s poll.
+ * One-host `PATCH /api/v3/hosts/:hostId` for desiredVersion, updatePolicy, or force. Invalidates the My Hosts list so the row does not wait out the poll.
  */
 export function useUpdateHostVersionPolicy(
   hostId: string,

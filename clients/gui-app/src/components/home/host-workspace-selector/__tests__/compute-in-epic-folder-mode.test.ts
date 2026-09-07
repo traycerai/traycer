@@ -3,9 +3,8 @@ import { computeInEpicFolderMode } from "../compute-in-epic-folder-mode";
 
 describe("computeInEpicFolderMode", () => {
   it("shows the staged new branch even while the binding is still local", () => {
-    // The reported bug: in-epic "Create new worktree" stages the intent (the
-    // binding stays local until the next send), so the chip must read the
-    // pending branch, not "Local".
+    // The reported bug: in-epic "Create new worktree" stages the intent (the binding stays local until the next
+    // send), so the chip must read the pending branch, not "Local".
     expect(
       computeInEpicFolderMode({
         boundMode: "local",

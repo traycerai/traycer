@@ -236,9 +236,7 @@ function browserSessionsState(
   };
 }
 
-// TabItem reads its active/preview/globally-active state from the canvas store
-// (via `useTabActivation`), not from props, so seed a tab whose lone group has
-// `TAB` as the active + preview tab.
+// TabItem reads its active/preview/globally-active state from the canvas store (via `useTabActivation`), not from props, so seed a tab whose lone group has `TAB` as the active + preview tab.
 function seedActivePreviewTab(tab: EpicCanvasTileRef): void {
   useEpicCanvasStore.setState({
     tabsById: {
@@ -756,9 +754,8 @@ describe("<TabStrip />", () => {
   ])(
     "closes a capable-host $name ref through the legacy coordinator branch",
     ({ tab }) => {
-      // Import-exempt refs report capability: "legacy" from
-      // useEpicTerminalAuthority even against a capable host, so the
-      // coordinator can close them locally. Projection stays undefined.
+      // Import-exempt refs report capability: "legacy" from useEpicTerminalAuthority even against a capable host, so the coordinator can close them locally.
+      // Projection stays undefined.
       terminalAuthorityState.capability = "legacy";
       terminalAuthorityState.canMutate = true;
       const onClose = vi.fn((groupId: string, instanceId: string): void => {
@@ -1003,10 +1000,7 @@ describe("<TabStrip />", () => {
 });
 
 /**
- * A shell's tab used to draw lucide `Activity` - a glyph no other shell surface
- * uses - so the strip was the one place a watcher did not look like a watcher.
- * It reads the same live record the tab TITLE already resolves, so the icon and
- * the name in one tab can never disagree.
+ * It reads the same live record the tab TITLE already resolves, so the icon and the name in one tab can never disagree.
  */
 describe("<TabStrip /> shell output tabs", () => {
   const EPIC_ID = "epic-1";
@@ -1069,18 +1063,13 @@ describe("<TabStrip /> shell output tabs", () => {
   });
 
   it("falls back to the quiet glyph when the owning chat has no live session", () => {
-    // A restored tab whose chat was never opened resolves to no record. A
-    // watcher announces itself the moment its record lands; guessing "on"
-    // meanwhile would be the strip inventing state.
+    // A restored tab whose chat was never opened resolves to no record.
     renderShellTab(null);
     expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
   });
 
   it("ignores a same-id shell living on another host", () => {
-    // A cross-host clone keeps the source transcript's command ids. The tab is
-    // bound to its own host for life, so a watching shell of the same id over
-    // on the source host must not lend this tab its glyph - the tab cannot
-    // open that shell's output at all.
+    // The tab is bound to its own host for life, so a watching shell of the same id over on the source host must not lend this tab its glyph - the tab cannot open that shell's output at all.
     const session = installManagedCommandChatSession({
       epicId: EPIC_ID,
       chatId: CHAT_ID,

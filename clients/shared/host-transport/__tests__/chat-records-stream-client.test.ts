@@ -1,15 +1,4 @@
-/**
- * `host.chatRecords.subscribe@1.0`'s typed client.
- *
- * The class owns exactly one thing - turning wire envelopes into typed deltas -
- * so that is what these pin: the two ops arrive intact and in order, control
- * frames are inert, and a frame this build cannot parse is DROPPED rather than
- * guessed at (the removal-reason enum is closed for precisely that reason).
- *
- * Ablation: delete the `safeParse` guard and the unknown-reason case below
- * delivers a `remove` whose reason is a string no consumer has a branch for -
- * a tab that silently renders nothing instead of falling back to the poll.
- */
+/** `host.chatRecords.subscribe@1.0`'s typed client. */
 import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
@@ -233,11 +222,6 @@ describe("ChatRecordsStreamClient", () => {
       reason: "deleted",
     });
 
-    // The `@1.1` row is PROMOTED to the current union on the way through, and
-    // both fills are exact rather than defaults: a `@1.1` host is never sent
-    // the `@1.2` cloud arm (the host gates its emission on the negotiated
-    // version), and the delta plane has no doc-resident producer at all - such
-    // a row reaches a client through `epic.listTuiAgents` alone.
     expect(h.deltas).toEqual([
       {
         kind: "tuiUpsert",
@@ -255,12 +239,8 @@ describe("ChatRecordsStreamClient", () => {
   });
 
   it("TRIPWIRE: still delivers a tuiUpsert when the session negotiated @1.1", () => {
-    // THE REGRESSION THIS PINS. A newer app talking to a host that only
-    // negotiates `@1.1` parsed every frame with the `@1.2` schema - whose
-    // `tuiUpsert` row is a union DISCRIMINATED on `origin`, a key the frozen
-    // `@1.1` row does not have. So the upsert failed to parse and was dropped
-    // while `tuiRemove`, unchanged between the minors, kept arriving: rows
-    // vanished on removal and never came back on creation.
+    // The regression this pins.
+    // A newer app talking to a host that only negotiates `@1.1` parsed every frame with the `@1.2` schema - whose `tuiUpsert` row is a union discriminated on `origin`, a key the frozen `@1.1` row does not have.
     const h = harness();
     h.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
     const record = tuiRow({ tuiAgentId: "tui-legacy", revision: 4 });
@@ -284,9 +264,7 @@ describe("ChatRecordsStreamClient", () => {
   });
 
   it("delivers the @1.2 cloud arm verbatim when the session negotiated @1.2", () => {
-    // The other side of the branch: at `@1.2` the row is already the union, so
-    // it passes through untouched - including the narrow cloud arm, which the
-    // `@1.1` schema would reject.
+    // The other side of the branch: at `@1.2` the row is already the union, so it passes through untouched - including the narrow cloud arm, which the `@1.1` schema would reject.
     const h = harness();
     h.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
     const record = {
@@ -317,9 +295,7 @@ describe("ChatRecordsStreamClient", () => {
   });
 
   it("drops a tuiUpsert whose envelope disagrees with the row it carries", () => {
-    // The contract's envelope invariant, exercised through this client: a
-    // frame addressing one agent while carrying another's row (or ordering by
-    // a revision the row does not hold) is refused outright, not guessed at.
+    // The contract's envelope invariant, exercised through this client: a frame addressing one agent while carrying another's row (or ordering by a revision the row does not hold) is refused outright, not guessed at.
     const h = harness();
     h.session.emitFrame({
       kind: "tuiUpsert",
@@ -371,9 +347,7 @@ describe("ChatRecordsStreamClient", () => {
       origin: "foreign",
       visibility: "task",
       archived: true,
-      // The shape a foreign archived row really has: the cloud row carries the
-      // boolean and no timestamp, so anything deriving archived-ness from
-      // `archivedAt` alone would read this as active.
+      // The shape a foreign archived row really has: the cloud row carries the boolean and no timestamp, so anything deriving archived-ness from `archivedAt` alone would read this as active.
       archivedAt: null,
     });
     h.session.emitFrame({
@@ -393,9 +367,7 @@ describe("ChatRecordsStreamClient", () => {
 
   it("drops a frame this build cannot parse instead of guessing at it", () => {
     const h = harness();
-    // A removal reason from a later, widened minor. The enum is CLOSED, so the
-    // honest answer is to deliver nothing and let the poll - which still sees
-    // the row leave the host's list - keep the table correct.
+    // A removal reason from a later, widened minor.
     h.session.emitFrame({
       kind: "remove",
       hasBinaryPayload: false,

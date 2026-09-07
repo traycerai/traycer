@@ -3,27 +3,7 @@ import { Command } from "commander";
 import { buildProgramWithAgentRoles } from "../../index";
 import { extractRunnerFlags } from "../../runner/commander-flags";
 
-// Regression suite for the CLI command audit's "Help audit checklist"
-// (epics/.../artifacts/cli-command-audit/index.md): rendered root/parent/leaf
-// `--help` output must match the inventory - every supported flag/command
-// visible, every internal one hidden and undocumented in user-facing text,
-// and parent help enumerating exactly its intended public children.
-//
-// Built once per test via `buildProgramWithAgentRoles(true)` (the full agent
-// surface, agent roles enabled) so `agent role` and every non-readonly-gated
-// command are present.
-//
-// IMPORTANT - anti-tautology note: several checks below walk the LIVE
-// command tree (`cmd.options`, `cmd.registeredArguments`) and verify it
-// against its OWN rendered help. Those checks are real and worth having, but
-// they cannot by themselves catch a flag or command that was DELETED from
-// registration entirely - there is nothing left in the live tree to iterate
-// once it's gone, so a walk-and-check-yourself test stays green through a
-// silent removal. That is exactly what an independent review proved: deleting
-// `worktree create --branch` passed the whole suite. `EXPECTED_PUBLIC_SURFACE`
-// below exists specifically to close that hole - it is a hand-maintained
-// literal that does NOT come from `cmd`, so removing something public has
-// something fixed to disagree with.
+// Help text must not document hidden flags as user-facing.
 
 interface TreeEntry {
   readonly path: readonly string[];
@@ -63,11 +43,8 @@ function findByPath(root: Command, path: readonly string[]): Command {
   return cursor;
 }
 
-// Public Help API - `createHelp().visibleCommands(cmd)` is what commander's
-// own help renderer calls to decide what to list, so it's the supported way
-// to ask "is this subcommand hidden" rather than reading `Command`'s private
-// `_hidden` field. `Option#hidden` (used below) is a public field already -
-// no equivalent workaround needed for options.
+// Public Help API - `createHelp().visibleCommands(cmd)` is what commander's own help renderer calls to decide what to list, so it's the supported way to ask "is this subcommand hidden" rather than reading `Command`'s private `_hidden` field.
+// `Option#hidden` (used below) is a public field already - no equivalent workaround needed for options.
 function hiddenChildren(cmd: Command): Command[] {
   const visible = cmd.createHelp().visibleCommands(cmd);
   return cmd.commands.filter((child) => !visible.includes(child));
@@ -88,20 +65,14 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Boundary-safe "is this command name listed" check. A bare `.includes()`
-// would let `free-port` (hidden) false-match inside `free-port-and-restart`
-// (visible) - exactly the trap the audit's spot check calls out.
+// Boundary-safe "is this command name listed" check.
+// A bare `.includes()` would let `free-port` (hidden) false-match inside `free-port-and-restart` (visible) - exactly the trap the audit's spot check calls out.
 function helpListsCommandName(help: string, name: string): boolean {
   return new RegExp(`(^|\\s)${escapeRegExp(name)}(\\s|\\[|$)`, "m").test(help);
 }
 
-// Real-render helper: `helpInformation()` renders only commander's built-in
-// sections and omits `addHelpText` blocks entirely (e.g. `host update`'s
-// public `--version <version>` spelling, which exists ONLY as addHelpText
-// because the registered option would collide with root `--version`). Used
-// for the root, every named parent, `host update`, and the full-render
-// vocabulary sweep below; `helpInformation()` is used where no addHelpText
-// content is in play.
+// Real-render helper: `helpInformation()` renders only commander's built-in sections and omits `addHelpText` blocks entirely (e.g.
+// `host update`'s public `--version <version>` spelling, which exists ONLY as addHelpText because the registered option would collide with root `--version`).
 function renderHelp(cmd: Command): string {
   const write = vi
     .spyOn(process.stdout, "write")
@@ -126,19 +97,8 @@ function expectRecordDefined(
   return value;
 }
 
-// Commander's help sections ("Arguments:", "Options:", "Commands:") list one
-// ROW per item, indented by EXACTLY two spaces before the row's own content.
-// A word-wrapped CONTINUATION of a row's description is indented to the
-// description column instead, which is always deeper than two spaces - so
-// matching only lines with precisely a two-space indent isolates real rows
-// from wrapped text. This is what makes flag/argument presence checks
-// EXACT: a name only counts as "rendered" if some row's own content
-// contains it, never because the string happens to appear inside a
-// DIFFERENT row's flags or description - e.g. "--branch" is a literal
-// substring of "--source-branch"'s own flags and of both its and
-// "--carry-uncommitted"'s description text in the real `worktree create`
-// help, which is exactly the false-positive an independent review caught a
-// naive `help.includes("--branch")` check missing.
+// Commander's help sections ("Arguments:", "Options:", "Commands:") list one ROW per item, indented by EXACTLY two spaces before the row's own content.
+// A word-wrapped CONTINUATION of a row's description is indented to the description column instead, which is always deeper than two spaces - so matching only lines with precisely a two-space indent isolates real rows from wrapped text.
 function parseSectionRows(
   help: string,
   heading: string,
@@ -159,28 +119,16 @@ function parseSectionRows(
   return rows;
 }
 
-// Every option row's leading term is commander's own `option.flags` string
-// verbatim (e.g. "-a, --all", "--workspace <path>") - confirmed by reading
-// `Option#flags` against real rendered rows, not assumed. Returned AS THE
-// FULL TERM, not reduced to the bare long flag: reducing to `--all` would
-// let the public `-a` alias on `agent list` be deleted with nothing to
-// disagree - `parseOptionRowFlagTerms(...)` would still report `--all`
-// present, and a caller of `traycer agent list -a` breaks with no test
-// failure. The auto-added `-h, --help` is excluded uniformly rather than
-// tracked per command.
+// Every option row's leading term is commander's own `option.flags` string verbatim (e.g.
+// "-a, --all", "--workspace <path>") - confirmed by reading `Option#flags` against real rendered rows, not assumed.
 function parseOptionRowFlagTerms(help: string): string[] {
   return parseSectionRows(help, "Options", ["Commands"]).filter(
     (term) => term !== "-h, --help",
   );
 }
 
-// The "Arguments:" section lists the bare argument name (no `<>`/`[]`/
-// `...`), e.g. `artifactPaths`, `terminal-id` - confirmed against real
-// rendered output, not guessed. Commander OMITS the entire "Arguments:"
-// heading whenever no registered argument has a non-empty description
-// (`Help#visibleArguments`), so a blanked description silently removes the
-// whole section - exactly the mutation verified below for the fixed
-// inventory's argument check.
+// The "Arguments:" section lists the bare argument name (no `<>`/`[]`/ `...`), e.g.
+// `artifactPaths`, `terminal-id` - confirmed against real rendered output, not guessed.
 function parseArgumentRowNames(help: string): string[] {
   return parseSectionRows(help, "Arguments", ["Options", "Commands"]);
 }
@@ -191,13 +139,8 @@ interface ExpectedArgument {
   readonly variadic: boolean;
 }
 
-// Commander renders the SAME bare row name for `[artifactPaths]`,
-// `[artifactPaths...]`, and `<artifactPaths...>` in the "Arguments:"
-// section - the name alone can't tell them apart, so a name-only inventory
-// entry cannot catch `comments list` silently losing its variadic (only one
-// path accepted) or becoming required (breaking a no-args invocation). Both
-// `.required` and `.variadic` are public fields on commander's `Argument`
-// (confirmed by reading `argument.js`, not assumed).
+// Commander renders the SAME bare row name for `[artifactPaths]`, `[artifactPaths...]`, and `<artifactPaths...>` in the "Arguments:" section - the name alone can't tell them apart, so a name-only inventory entry cannot catch `comments list` silently losing its variadic (only one path accepted) or becoming required (breaking a no-args invocation).
+// Both `.required` and `.variadic` are public fields on commander's `Argument` (confirmed by reading `argument.js`, not assumed).
 function actualArgumentSignature(cmd: Command): readonly ExpectedArgument[] {
   return cmd.registeredArguments.map((argument) => ({
     name: argument.name(),
@@ -232,25 +175,8 @@ interface ExpectedSurfaceEntry {
   readonly args: readonly ExpectedArgument[];
 }
 
-// The full public command surface under `buildProgramWithAgentRoles(true)` -
-// every visible command path (`""` is the root itself; parents are listed
-// too, so deleting a whole subtree is caught, not just a leaf), each
-// command's own visible options as their FULL rendered flags term PLUS
-// mandatory-ness (short alias included, e.g. `"-a, --all"`, not reduced to
-// the long flag - see `parseOptionRowFlagTerms`; `.requiredOption(...)` vs
-// `.option(...)` renders the IDENTICAL flags term and row, so mandatory-ness
-// has to be tracked as its own fact or a required flag silently becoming
-// optional - or vice versa - passes with nothing to disagree), and each
-// command's registered arguments as their full name/required/variadic
-// signature (see `ExpectedArgument` above) rather than just a name.
-//
-// THIS LITERAL IS MEANT TO BE EDITED whenever the public surface
-// legitimately changes - a new command, a renamed/added/removed flag or
-// alias, a flag becoming required/optional, a new positional argument, a
-// changed arity. That edit is the enforcement mechanism, not a maintenance
-// cost to route around: unlike everything else in this file, nothing here
-// is derived from `cmd`, so it is the one check that can prove something
-// disappeared or silently changed shape.
+// The full public command surface under `buildProgramWithAgentRoles(true)` - every visible command path (`""` is the root itself; parents are listed too, so deleting a whole subtree is caught, not just a leaf), each command's own visible options as their FULL rendered flags term PLUS mandatory-ness (short alias included, e.g.
+// `"-a, --all"`, not reduced to the long flag - see `parseOptionRowFlagTerms`; `.requiredOption(...)` vs `.option(...)` renders the IDENTICAL flags term and row, so mandatory-ness has to be tracked as its own fact or a required flag silently becoming optional - or vice versa - passes with nothing to disagree), and each command's registered arguments as their full name/required/variadic signature (see `ExpectedArgument` above) rather than just a name.
 const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "",
@@ -957,12 +883,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     );
   });
 
-  // Anti-tautology check (see the file-level comment). Set equality both
-  // ways against `EXPECTED_PUBLIC_SURFACE`, with separate MISSING vs
-  // UNEXPECTED messages because they call for different reactions: missing
-  // means something public disappeared (fix the regression); unexpected
-  // means something new needs documenting in the literal above (update the
-  // inventory) - or, if it was never meant to be public, hiding it.
+  // Anti-tautology check (see the file-level comment).
+  // Set equality both ways against `EXPECTED_PUBLIC_SURFACE`, with separate MISSING vs UNEXPECTED messages because they call for different reactions: missing means something public disappeared (fix the regression); unexpected means something new needs documenting in the literal above (update the inventory) - or, if it was never meant to be public, hiding it.
   it("matches the fixed public-surface inventory exactly - nothing removed, nothing undocumented added", () => {
     const program = freshProgram();
 
@@ -992,9 +914,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       const label = pathLabel(splitPath(entry.path));
       const help = cmd.helpInformation();
 
-      // Full flags TERM (short alias included, e.g. "-a, --all"), not
-      // reduced to the long flag - a deleted `-a` alias with `--all` still
-      // registered must show up as a mismatch here.
+      // Full flags TERM (short alias included, e.g.
+      // "-a, --all"), not reduced to the long flag - a deleted `-a` alias with `--all` still registered must show up as a mismatch here.
       const renderedOptionTerms = new Set(parseOptionRowFlagTerms(help));
       const expectedFlagTerms = new Set(entry.options.map((o) => o.flags));
       const missingOptions = [...expectedFlagTerms].filter(
@@ -1012,15 +933,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         `${label}: undocumented new rendered option(s) - add to EXPECTED_PUBLIC_SURFACE if intentional: ${unexpectedOptions.join(", ")}`,
       ).toEqual([]);
 
-      // Mandatory-ness has NO rendered representation at all -
-      // `.requiredOption("--artifact <path>", ...)` and
-      // `.option("--artifact <path>", ...)` produce the byte-identical
-      // Options: row, so this can only be checked against the live `Option`
-      // object's public `.mandatory` field, never parsed from text. Flipping
-      // a required flag to optional (or vice versa) changes the public CLI
-      // contract with nothing in rendered help to disagree - for
-      // `--artifact` specifically it would let the `opts.artifact ?? ""`
-      // empty-string fallback in `index.ts` reach the RPC.
+      // Mandatory-ness has NO rendered representation at all - `.requiredOption("--artifact <path>", ...)` and `.option("--artifact <path>", ...)` produce the byte-identical Options: row, so this can only be checked against the live `Option` object's public `.mandatory` field, never parsed from text.
+      // Flipping a required flag to optional (or vice versa) changes the public CLI contract with nothing in rendered help to disagree - for `--artifact` specifically it would let the `opts.artifact ??
       const mandatoryMismatches = entry.options
         .map((expectedOption) => {
           const actualOption = cmd.options.find(
@@ -1037,14 +951,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         `${label}: option mandatory-ness changed: ${mandatoryMismatches.join(", ")}`,
       ).toEqual([]);
 
-      // Full argument SIGNATURE (name + required + variadic), not just the
-      // name - commander renders the identical bare row name for
-      // `[artifactPaths]`, `[artifactPaths...]`, and `<artifactPaths...>`,
-      // so a name-only comparison can't catch an arity change (e.g.
-      // `comments list` silently losing its "many paths" variadic, or
-      // becoming required). Compared via a canonical string key so a
-      // mismatch reports which exact signature is missing/unexpected
-      // rather than just a name.
+      // Full argument SIGNATURE (name + required + variadic), not just the name - commander renders the identical bare row name for `[artifactPaths]`, `[artifactPaths...]`, and `<artifactPaths...>`, so a name-only comparison can't catch an arity change (e.g.
+      // `comments list` silently losing its "many paths" variadic, or becoming required).
       const argumentKey = (arg: ExpectedArgument): string =>
         `${arg.name} (required=${arg.required}, variadic=${arg.variadic})`;
       const actualArgs = new Set(actualArgumentSignature(cmd).map(argumentKey));
@@ -1064,16 +972,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     }
   });
 
-  // Defense-in-depth alongside the fixed inventory above: this walks the
-  // LIVE tree (so it also covers anything not yet added to
-  // EXPECTED_PUBLIC_SURFACE) but checks EXACT row membership rather than
-  // substring presence anywhere in the text - `option.flags` / an
-  // argument's `.name()` must appear as some row's own content, not merely
-  // somewhere in the rendered string. A bare `help.includes(...)` check
-  // (the prior version of this test) is fooled by "--branch" appearing
-  // inside "--source-branch"'s own flags/description, and by an argument
-  // name that's already present in the auto-generated `Usage:` line even
-  // when its "Arguments:" row is gone.
+  // Defense-in-depth alongside the fixed inventory above: this walks the LIVE tree (so it also covers anything not yet added to EXPECTED_PUBLIC_SURFACE) but checks EXACT row membership rather than substring presence anywhere in the text - `option.flags` / an argument's `.name()` must appear as some row's own content, not merely somewhere in the rendered string.
+  // A bare `help.includes(...)` check (the prior version of this test) is fooled by "--branch" appearing inside "--source-branch"'s own flags/description, and by an argument name that's already present in the auto-generated `Usage:` line even when its "Arguments:" row is gone.
   it("renders every non-hidden option and every registered argument as an actual row - not merely present somewhere in the text", () => {
     const program = freshProgram();
     for (const { path, cmd } of allCommands(program)) {
@@ -1145,10 +1045,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     const hostUpdate = findByPath(program, ["host", "update"]);
     const help = renderHelp(hostUpdate);
     expect(help).toContain("--version <version>");
-    // The target is now a REGISTERED `--release` option; `--version` survives
-    // as the published compatibility spelling the host's own spawners use, and
-    // the argv rewrite retargets it onto `--release`. The hidden parse flag it
-    // used to point at is deleted outright.
+    // The target is now a REGISTERED `--release` option; `--version` survives as the published compatibility spelling the host's own spawners use, and the argv rewrite retargets it onto `--release`.
+    // The hidden parse flag it used to point at is deleted outright.
     expect(help).toContain("Compatibility alias for --release");
     expect(help).toContain("--release <version>");
     expect(help).not.toContain("--host-update-version");
@@ -1157,21 +1055,13 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
   it("host update --help (real render) advertises the downgrade capability contract", () => {
     const program = freshProgram();
     const hostUpdate = findByPath(program, ["host", "update"]);
-    // Host maintenance probes this literal before dispatching an explicit
-    // lower target. Keep the flag visible so that probe is a real capability
-    // contract rather than an implementation detail hidden from users.
+    // Host maintenance probes this literal before dispatching an explicit lower target.
+    // Keep the flag visible so that probe is a real capability contract rather than an implementation detail hidden from users.
     expect(renderHelp(hostUpdate)).toContain("--allow-downgrade");
   });
 
-  // Encodes the standing user policy: every supported user-facing/invocable
-  // command and flag must appear in rendered help. Hidden visibility must
-  // not paper over confusing public behavior - genuinely machine-only
-  // callbacks and service-manager entrypoints may stay hidden ONLY when
-  // they are explicitly unsupported for direct users and are
-  // tested/documented as machine contracts (which is exactly what every
-  // entry below is). THIS TEST MUST BE UPDATED whenever the hidden surface
-  // legitimately changes - that update is the enforcement mechanism, not a
-  // maintenance cost to route around.
+  // Encodes the standing user policy: every supported user-facing/invocable command and flag must appear in rendered help.
+  // Hidden visibility must not paper over confusing public behavior - genuinely machine-only callbacks and service-manager entrypoints may stay hidden ONLY when they are explicitly unsupported for direct users and are tested/documented as machine contracts (which is exactly what every entry below is).
   it("hides exactly the allowlisted commands - nothing more, nothing less", () => {
     const program = freshProgram();
     const hiddenCommandPaths = allCommands(program)
@@ -1184,11 +1074,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "host purge-stage",
         "host stamp-runtime",
         "host free-port",
-        // Host Update Layer machine contracts: the desktop reads the
-        // executor-segment adoption nonce, drives the root-maintenance
-        // lease handshake, and asks for a staged-bytes verification verdict
-        // over NDJSON. None of them has a human-usable outcome on its own,
-        // and each is exercised as a machine contract by its own suite.
+        // Host Update Layer machine contracts: the desktop reads the executor-segment adoption nonce, drives the root-maintenance lease handshake, and asks for a staged-bytes verification verdict over NDJSON.
+        // None of them has a human-usable outcome on its own, and each is exercised as a machine contract by its own suite.
         "host adoption-nonce",
         "host maintenance-lease",
         "host update-verify",
@@ -1218,19 +1105,15 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "traycer host start --service-label",
         "traycer host start --transition-id",
         "traycer host start --probe-nonce",
-        // Executor-segment adoption handoff (Host Update Layer): a parent
-        // that already holds the attempt lock hands its child a one-shot
-        // proof instead of contending. Machine-minted, single-use,
-        // clock-bounded - never something a person types.
+        // Executor-segment adoption handoff (Host Update Layer): a parent that already holds the attempt lock hands its child a one-shot proof instead of contending.
+        // Machine-minted, single-use, clock-bounded - never something a person types.
         "traycer host start --adoption-nonce",
         "traycer host apply --attempt-adoption",
         "traycer host ensure --attempt-adoption",
         "traycer host install --attempt-adoption",
         "traycer host service install --attempt-adoption",
         "traycer host stamp-runtime --attempt-adoption",
-        // Parked-activation refusal contract shared by the desktop's
-        // restart paths: refuse a generic restart when parked bytes make
-        // it unsafe, rather than activating them as a side effect.
+        // Parked-activation refusal contract shared by the desktop's restart paths: refuse a generic restart when parked bytes make it unsafe, rather than activating them as a side effect.
         "traycer host restart --defer-if-parked",
         "traycer host free-port-and-restart --defer-if-parked",
         // Update ACK correlation nonce - the host echoes it back so the
@@ -1249,10 +1132,7 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     const program = freshProgram();
     const allEntries = allCommands(program);
 
-    // "Runner-backed" is derived programmatically as "carries the shared
-    // --json flag", with `host capabilities` carved out: its --json is a
-    // distinct raw machine-contract flag registered directly (not via
-    // `addRunnerFlags`), so it never gets --no-bootstrap either.
+    // "Runner-backed" is derived programmatically as "carries the shared --json flag", with `host capabilities` carved out: its --json is a distinct raw machine-contract flag registered directly (not via `addRunnerFlags`), so it never gets --no-bootstrap either.
     const runnerBackedPaths = allEntries
       .filter(
         ({ path, cmd }) =>
@@ -1279,17 +1159,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     ).toBe(false);
   });
 
-  // Full-render vocabulary sweep (not field-by-field): `renderHelp(cmd)` is
-  // the REAL `--help` output, which naturally covers descriptions, option
-  // descriptions, argument descriptions, commander-generated content, AND
-  // `addHelpText` blocks in one pass - a field-by-field scan of
-  // `cmd.description()`/`option.description`/`argument.description` misses
-  // addHelpText entirely (confirmed: banned text added to `host update`'s
-  // addHelpText block passes a field-by-field scan silently). Hidden
-  // commands' text is absent from a render by construction (nothing to
-  // render), so this stays correct without a separate skip list beyond the
-  // `isHiddenCommand` filter already needed to know which commands are
-  // public.
+  // Full-render vocabulary sweep (not field-by-field): `renderHelp(cmd)` is the REAL `--help` output, which naturally covers descriptions, option descriptions, argument descriptions, commander-generated content, AND `addHelpText` blocks in one pass - a field-by-field scan of `cmd.description()`/`option.description`/`argument.description` misses addHelpText entirely (confirmed: banned text added to `host update`'s addHelpText block passes a field-by-field scan silently).
+  // Hidden commands' text is absent from a render by construction (nothing to render), so this stays correct without a separate skip list beyond the `isHiddenCommand` filter already needed to know which commands are public.
   it("keeps internal vocabulary out of every visible command's FULL rendered --help", () => {
     const program = freshProgram();
     // Deliberately does NOT blocklist "bootstrap" (host start's description
@@ -1324,10 +1195,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     it("--no-bootstrap still parses even though it is hidden (Desktop's discoverCli() slot depends on this)", async () => {
       const program = freshProgram();
       program.exitOverride();
-      // Override the real action so this stays a parse-layer assertion -
-      // it must not dial a host in this test process. If --no-bootstrap
-      // were an unknown option, commander would throw before this action
-      // ever runs.
+      // Override the real action so this stays a parse-layer assertion - it must not dial a host in this test process.
+      // If --no-bootstrap were an unknown option, commander would throw before this action ever runs.
       const hostStatus = findByPath(program, ["host", "status"]);
       let actionRan = false;
       hostStatus.action(() => {
@@ -1339,13 +1208,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       expect(actionRan).toBe(true);
     });
 
-    // The compatibility vector `--no-bootstrap`'s own comment describes:
-    // Desktop's `discoverCli()` may place the flag BEFORE the subcommand
-    // (`traycer --no-bootstrap host status`), binding to the root's global
-    // copy rather than the leaf's own. The prior test only covers the
-    // after-command spelling and only proves the action ran - this asserts
-    // the actual runtime signal (`optsWithGlobals()` /
-    // `extractRunnerFlags(...)`) a real command body reads.
+    // The compatibility vector `--no-bootstrap`'s own comment describes: Desktop's `discoverCli()` may place the flag BEFORE the subcommand (`traycer --no-bootstrap host status`), binding to the root's global copy rather than the leaf's own.
+    // The prior test only covers the after-command spelling and only proves the action ran - this asserts the actual runtime signal (`optsWithGlobals()` / `extractRunnerFlags(...)`) a real command body reads.
     it("--no-bootstrap placed BEFORE the subcommand binds through the root's global copy", async () => {
       const program = freshProgram();
       program.exitOverride();
@@ -1418,11 +1282,7 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
 
     it("comments list/set-status --help say relative artifact paths are resolved against the current directory", () => {
       const program = freshProgram();
-      // Commander word-wraps long option/argument descriptions across
-      // lines, so the sentence can be split by a newline in the rendered
-      // text even though it reads as one line in source - collapse
-      // whitespace before matching rather than asserting on a raw
-      // multi-line substring.
+      // Commander word-wraps long option/argument descriptions across lines, so the sentence can be split by a newline in the rendered text even though it reads as one line in source - collapse whitespace before matching rather than asserting on a raw multi-line substring.
       const normalize = (text: string): string => text.replace(/\s+/g, " ");
       const list = normalize(
         renderHelp(findByPath(program, ["comments", "list"])),
@@ -1436,12 +1296,8 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       expect(setStatus).toContain(expectedWording);
     });
 
-    // Belt-and-braces duplicate of the generic internal-vocabulary sweep
-    // above: this is a proven regression (CLI-005 walked right back in via
-    // `comments list`'s `[artifactPaths...]` argument description reverting
-    // to "this epic"), and the generic sweep's failure message names the
-    // command path but not what the wording SHOULD say. This one points
-    // straight at the finding.
+    // Belt-and-braces duplicate of the generic internal-vocabulary sweep above: this is a proven regression (CLI-005 walked right back in via `comments list`'s `[artifactPaths...]` argument description reverting to "this epic"), and the generic sweep's failure message names the command path but not what the wording SHOULD say.
+    // This one points straight at the finding.
     it("comments list's [artifactPaths...] argument says 'this Task', never 'epic' (CLI-005 regression)", () => {
       const program = freshProgram();
       const list = findByPath(program, ["comments", "list"]);

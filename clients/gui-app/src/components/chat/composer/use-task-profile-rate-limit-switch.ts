@@ -16,46 +16,15 @@ interface AffectedTaskChat {
 }
 
 export interface TaskProfileRateLimitSwitch {
-  /**
-   * How many chats in this task (epic) a task-wide switch would move off the
-   * limited profile - every registry-backed chat on this tab's host whose
-   * persisted settings pin the same harness + profile, always counting this
-   * chat itself. `1`
-   * (just this chat) whenever the epic store is unavailable, so the banner
-   * simply hides the task-wide affordance on surfaces without an epic.
-   */
+  /** How many chats in this task (epic) a task-wide switch would move off the limited profile - every registry-backed chat on this tab's host whose persisted settings pin the same harness + profile, always counting this chat itself. `1` (just this chat) whenever the epic store is unavailable, so the banner simply hides the task-wide affordance on surfaces without an epic. */
   readonly affectedChatCount: number;
-  /**
-   * Switches every OTHER affected chat to `nextProfileId` via the narrow
-   * `epic.updateChatProfile` RPC (best-effort - an old host rejects the
-   * optional method and those chats keep legacy persist-on-next-send
-   * behavior). The host patches its own authoritative persisted tuple and,
-   * for a warm session, moves already-queued prompts and a not-yet-spawned
-   * parked turn onto the new profile with it. Warm sessions additionally get
-   * a local composer re-seed so open sibling tiles reflect the switch
-   * immediately. The caller's own composer commit (`onSwitchProfile`) covers
-   * this chat.
-   */
+  /** Switches every OTHER affected chat to `nextProfileId` via the narrow `epic.updateChatProfile` RPC (best-effort - an old host rejects the optional method and those chats keep legacy persist-on-next-send behavior). The host patches its own authoritative persisted tuple and, for a warm session, moves already-queued prompts and a not-yet-spawned parked turn onto the new profile with it. */
   readonly switchOtherTaskChats: (nextProfileId: string | null) => void;
 }
 
 const NO_AFFECTED: ReadonlyArray<AffectedTaskChat> = [];
 
-/**
- * Whether a sibling chat's persisted settings make it eligible for a task-wide
- * switch off the limited profile. Beyond the same harness + limited profile,
- * the sibling must use the SAME model as the composer that owns the banner:
- * a proven-better destination is only proven for that model, and an
- * unknown-usage destination was only ever offered as a deliberate choice to
- * that model's composer - nothing was validated for it at all
- * (`useProfileRateLimitSwitchPrompt`'s `selectedModel` scopes both). Either
- * way the guarantee (or deliberate choice) transfers only to same-model
- * chats; a differently-modeled sibling could otherwise be moved to a profile
- * that is equal, worse, or simply unvetted for ITS model.
- * `selectedModelSlug` is `null` when the composer's model is unresolved
- * (catalog still loading); no persisted sibling matches a null slug, so
- * task-wide switching is conservatively withheld until the model resolves.
- */
+/** Either way the guarantee (or deliberate choice) transfers only to same-model chats; a differently-modeled sibling could otherwise be moved to a profile that is equal, worse, or simply unvetted for ITS model. */
 export function taskChatInheritsProfileSwitch(
   settings: ChatRunSettings,
   criteria: {
@@ -71,15 +40,7 @@ export function taskChatInheritsProfileSwitch(
   );
 }
 
-/**
- * Task-wide counterpart of the composer's rate-limit switch prompt: finds the
- * registry-backed sibling chats of this task that are pinned to the SAME
- * limited profile so the banner can offer "switch all N chats in this task",
- * not just the current session. The record projection establishes which new
- * chats belong to this tab's host; authoritative run settings are then read
- * from that host. Legacy doc-only chats and chats on other hosts are outside
- * this operation by design.
- */
+/** Task-wide counterpart of the composer's rate-limit switch prompt: finds the registry-backed sibling chats of this task that are pinned to the SAME limited profile so the banner can offer "switch all N chats in this task", not just the current session. The record projection establishes which new chats belong to this tab's host; authoritative run settings are then read from that host. */
 export function useTaskProfileRateLimitSwitch(input: {
   readonly enabled: boolean;
   readonly harnessId: GuiHarnessId;
@@ -96,11 +57,7 @@ export function useTaskProfileRateLimitSwitch(input: {
   const tabHostId = useTabHostId();
   const tabHostClient = useTabHostClient();
   const epicHandle = useMaybeOpenEpicHandle();
-  // Gated on `enabled` (not just `epicHandle`): every mounted composer in the
-  // task calls this hook, so without the gate each one subscribes to the
-  // full `chatRecords` slice and re-renders on every record-list mutation even in
-  // the common case where the profile isn't limited and `affected` below
-  // would short-circuit to `NO_AFFECTED` anyway.
+  // Gated on `enabled` (not just `epicHandle`): every mounted composer in the task calls this hook, so without the gate each one subscribes to the full `chatRecords` slice and re-renders on every record-list mutation even in the common case where the profile isn't limited and `affected` below would short-circuit to `NO_AFFECTED` anyway.
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       if (!enabled || epicHandle === null) return () => {};
@@ -157,9 +114,7 @@ export function useTaskProfileRateLimitSwitch(input: {
     selectedModelSlug,
   ]);
 
-  // The current chat always counts (its composer holds the limited profile
-  // even when its persisted record lags, e.g. never-sent or pre-capability
-  // records).
+  // The current chat always counts (its composer holds the limited profile even when its persisted record lags, e.g. never-sent or pre-capability records).
   const affectedChatCount = affected.length + 1;
 
   const updateChatProfile = useEpicUpdateChatProfile();
@@ -169,28 +124,15 @@ export function useTaskProfileRateLimitSwitch(input: {
       if (epicId === null) return;
       for (const chat of affected) {
         if (chat.chatId === chatId) continue;
-        // Narrow profile-only update: the host patches its own authoritative
-        // persisted tuple (and, for a warm session, moves queued prompts and
-        // a not-yet-spawned parked turn with it). Deliberately NOT a
-        // client-side `{ ...chat.settings, profileId }` rebuild - the store
-        // projection can lag the sibling's real settings, and re-persisting
-        // a stale full tuple just to move the profile is exactly the
-        // subset-field misuse `epic.updateChatRunSettings` v1.1 forbids.
+        // Narrow profile-only update: the host patches its own authoritative persisted tuple (and, for a warm session, moves queued prompts and a not-yet-spawned parked turn with it).
+        // Deliberately NOT a client-side `{ ...chat.settings, profileId }` rebuild - the store projection can lag the sibling's real settings, and re-persisting a stale full tuple just to move the profile is exactly the subset-field misuse `epic.updateChatRunSettings` v1.1 forbids.
         updateChatProfileMutate({
           epicId,
           chatId: chat.chatId,
           profileId: nextProfileId,
         });
-        // Warm sessions re-seed their composer toolbar from
-        // `currentComposerSettings`, so an open sibling tile reflects the
-        // switch immediately instead of stomping it on its next send. This is
-        // local display state, not a wire persist.
-        //
-        // Peeked on THIS TAB'S host, which is also the host the registry
-        // candidates were filtered by: the sibling being
-        // re-seeded is by construction a chat of this tab's host, and a
-        // same-id chat on another host is a different agent whose composer
-        // must not be touched by this switch.
+        // This is local display state, not a wire persist.
+        // Peeked on THIS TAB'S host, which is also the host the registry candidates were filtered by: the sibling being re-seeded is by construction a chat of this tab's host, and a same-id chat on another host is a different agent whose composer must not be touched by this switch.
         const warmSession = getChatSessionRegistry().peek(
           epicId,
           chat.chatId,

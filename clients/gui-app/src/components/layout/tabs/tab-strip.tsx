@@ -88,15 +88,10 @@ function TabStripBody() {
   // Single insertion index covering header-tab reorder AND canvas tear-off
   // hovers - both flow through the root DndContext into the drag store.
   const dropIndicatorIndex = useHeaderStripDropIndex();
-  // Explicit per-item displacement resolved by the drag model - the same
-  // mechanism the tile strip uses. No provisional CSS `order`, no layout
-  // projection, so no projection can be stranded mid-flight.
+  // Explicit per-item displacement resolved by the drag model - the same mechanism the tile strip uses.
   const headerOffsets = useHeaderStripOffsets();
-  // Parent layout effects run AFTER every child's, so by here every strip item
-  // has registered and published its current target. Driving the re-base from
-  // this one boundary is what makes it reach EVERY item whose baseline moved -
-  // an earlier per-item version reached only the items React happened to
-  // re-render, which is one tab per commit.
+  // Parent layout effects run after every child's, so by here every strip item has registered and published its
+  // current target.
   useLayoutEffect(() => {
     runHeaderStripCommitHandoff();
   });
@@ -251,13 +246,8 @@ function TabStripBody() {
     };
   }, [executeActiveSplitCommand]);
 
-  // The strip mounts inside every signed-in route, so it's the right
-  // home for the universal "close active strip tab" chord. Registers
-  // a dynamic handler for `epic.close` (default ⇧⌘W) so the chord
-  // closes the active strip tab regardless of kind - epic, draft,
-  // history, or settings - by routing through the close-flow. The
-  // system-tab modal takes precedence: if it's open, the chord closes
-  // the modal first instead of the underlying strip tab.
+  // The system-tab modal takes precedence: if it's open, the chord closes the modal first instead of the
+  // underlying strip tab.
   const closeActiveStripTab = closeTabFlow.closeActiveTab;
   useEffect(() => {
     return registerDynamicActionHandler("epic.close", () => {
@@ -338,9 +328,6 @@ interface HeaderStripItemRendererProps {
   readonly offsetX: number;
   readonly memberOffset: number;
   // Passed as named booleans rather than packed into one positional string.
-  // `memo` compares primitives, so five props cost the same as one - and a
-  // packed string spread magic indices across two components, where a wrong
-  // index is a silent visual bug no type check can catch.
   readonly isActive: boolean;
   readonly isNextActive: boolean;
   readonly nextIsSplit: boolean;
@@ -376,9 +363,8 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
     showDropIndicatorAfter,
   } = props;
   if (item === null) return null;
-  // Computed once, above the branch, because it applies to every strip item.
-  // Restating it inside only the tab branch is what left a split group with no
-  // trailing hairline, so the group-to-tab boundary rendered as a blank gap.
+  // Restating it inside only the tab branch is what left a split group with no trailing hairline, so the
+  // group-to-tab boundary rendered as a blank gap.
   const isSplitGroupBoundary = item.kind === "split" && nextIsSplit;
   const showSeparatorAfter =
     !isLastItem && (isSplitGroupBoundary || (!isActive && !isNextActive));

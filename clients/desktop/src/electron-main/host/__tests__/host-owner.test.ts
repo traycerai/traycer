@@ -13,11 +13,6 @@ import {
 } from "../host-owner";
 import type { HostFsLayout } from "../host-paths";
 
-// `projectHostServiceOwner` is pure and total (host-owner.ts:99-165), so the
-// whole precedence matrix is exercised here without touching a filesystem.
-// `readHostServiceOwner` gets a thinner, fs-backed pass to prove the
-// ENOENT-vs-unreadable mapping and the ok/missing wiring, since that mapping
-// is where the pure matrix could silently disagree with the real reader.
 
 const LABELS: HostServiceOwnerLabels = {
   cliLabelId: "ai.traycer.host",
@@ -335,10 +330,6 @@ describe("projectHostServiceOwner - precedence matrix", () => {
           );
           if (owner.kind !== "owned") continue;
 
-          // Positive evidence for the substrate this projection returned:
-          // either the label leg named it directly, or the durable record
-          // (decodable and present) recorded it. Anything else would be the
-          // projection guessing an owner instead of reading one.
           const labelNamesIt =
             (owner.substrate === "smappservice" &&
               observedLabel.kind === "observed" &&
@@ -439,16 +430,7 @@ describe("readHostServiceOwner", () => {
   });
 });
 
-// A SETTLED transition is history, not a veto (cold-review finding 5).
-//
-// Terminal journals are retained as durable audit/governor history and
-// `TransitionJournalStore` has no removal operation - so treating every
-// decodable journal as in-flight excluded the machine PERMANENTLY. The
-// substrate backfill defers on the same cause, so nothing could repair it.
-//
-// The invariant, from the transition model's author: persisted history never
-// GRANTS ownership by itself, but completed history never permanently BLOCKS
-// it either; only an in-flight transition vetoes.
+// The invariant, from the transition model's author: persisted history never GRANTS ownership by itself, but completed history never permanently BLOCKS it either.
 describe("projectHostServiceOwner - terminal journals do not veto", () => {
   it.each(["done", "failed", "compensated"] as const)(
     "a settled %s journal falls through to the durable substrate and GRANTS ownership",

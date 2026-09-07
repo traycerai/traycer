@@ -44,38 +44,13 @@ export interface JarRecorder {
   emitLedgerChange: () => void;
   emitDelta: (delta: BrowserPrimaryProfileDelta) => void;
   readonly port: BrowserSessionsJarPort;
-  /**
-   * When true, `capturePrimaryProfile` returns a promise that only settles
-   * once a suite calls {@link resolvePendingCapture} - a way to pin what a
-   * stream does with a jar read that is still in flight when the connection
-   * changes underneath it.
-   */
   deferCaptures: boolean;
   /** Resolves the OLDEST still-pending deferred capture, in call order. */
   resolvePendingCapture: () => void;
-  /**
-   * When set, the NEXT `capturePrimaryProfile` call rejects with this error
-   * instead of returning a result, then clears itself - once only, the way
-   * one bad file read is.
-   */
   failNextCapture: Error | null;
-  /**
-   * When true, `capturePrimaryProfileBehindBarrier` holds the gate closed
-   * until a suite calls {@link releaseBarrier} - a way to pin what a
-   * HOST-issued capture, or the final capture at close/quit, does while a
-   * whole-jar barrier (a forget-all, a login import) is still pending.
-   * Unlike {@link deferCaptures}, a barrier is not a per-call queue: every
-   * awaiter blocked on it is released together, because that is what a
-   * barrier is - one gate, not one slot per caller.
-   */
   deferBarrier: boolean;
   /** Releases every awaiter currently blocked on the held barrier. */
   releaseBarrier: () => void;
-  /**
-   * How many `capturePrimaryProfileBehindBarrier` calls answered `null`
-   * because the barrier was still held past their bounded `waitMs` - the
-   * final capture's shutdown-budget path, never the host's unbounded ask.
-   */
   boundedWaitTimeouts: number;
 }
 
@@ -84,11 +59,6 @@ export function createJarRecorder(): JarRecorder {
   const deltaListeners = new Set<(delta: BrowserPrimaryProfileDelta) => void>();
   const pendingCaptures: Array<() => void> = [];
   let barrierWaiters: Array<() => void> = [];
-  /**
-   * The read every jar-reading port method shares: counted in
-   * `recorder.captures`, honors `failNextCapture` once, and defers behind
-   * `deferCaptures` exactly like the un-barriered path did before.
-   */
   function readPrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult> {
     recorder.captures += 1;
     if (recorder.failNextCapture !== null) {
@@ -141,12 +111,6 @@ export function createJarRecorder(): JarRecorder {
     },
     port: {
       capturePrimaryProfile: () => readPrimaryProfile(),
-      // No barrier held by default: a host-issued capture (and the final
-      // capture) reads at once. A suite that sets `deferBarrier` holds every
-      // awaiter open until it calls `releaseBarrier`. `waitMs === null` waits
-      // however long the barrier holds; a bounded wait answers `null` - and
-      // counts a bounded-wait timeout - if `releaseBarrier` has not been
-      // called by then.
       capturePrimaryProfileBehindBarrier: (waitMs) => {
         if (!recorder.deferBarrier) return readPrimaryProfile();
         if (waitMs === null) {
@@ -311,12 +275,6 @@ export interface RegistryHarness {
   /** The signed-in user main reads for itself; null while signed out. */
   userId: string | null;
   publishLocalHost: (hostId: string) => void;
-  /**
-   * What the directory answers for a host id. Replaceable so a suite can hold
-   * the read open (the resolve is one await wide, and an identity change
-   * inside it is the race worth pinning) or answer `null` for a host that is
-   * not in the account's registry.
-   */
   resolveHost: (hostId: string) => Promise<HostDirectoryEntry | null>;
   /** How many times a fresh identity dropped the whole cached registry. */
   readonly directoryResets: { count: number };

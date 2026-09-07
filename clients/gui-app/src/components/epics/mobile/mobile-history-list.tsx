@@ -17,7 +17,6 @@ import {
 } from "@/components/epics/mobile/use-pull-to-refresh";
 import { cn } from "@/lib/utils";
 
-/** Matches the row settle, so the surface and its rows share one motion. */
 const SETTLE_CLASS = "transition-transform duration-[220ms]";
 
 export interface MobileHistoryListProps {
@@ -41,25 +40,8 @@ export interface MobileHistoryListProps {
   readonly onRefresh: () => Promise<unknown>;
 }
 
-/**
- * The task list as it renders on a phone.
- *
- * A separate body rather than a responsive variant of the desktop one: every
- * per-row affordance desktop reveals on hover has no touch equivalent, so the
- * mobile row strips back to a title and a timestamp and puts the actions behind
- * a swipe instead. Sharing one component would mean every row rendering both
- * sets of chrome and hiding one of them, which is how a list ends up slow and
- * ambiguous at once.
- *
- * This body owns the scroll container - the desktop one is handed a scroller by
- * the panel - because pull-to-refresh has to attach a non-passive listener to
- * the exact element whose scroll position gates the gesture.
- *
- * Only one row's tray may be open, and that rule lives here. A row cannot
- * enforce it (it does not know its siblings) and the panel should not have to
- * (the tray is not part of the list's data). Scrolling closes it, matching
- * every platform list where the tray is a transient state rather than a mode.
- */
+/** A row cannot enforce it (it does not know its siblings) and the panel should not have to (the tray is not
+ * part of the list's data). */
 export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
   const {
     error,
@@ -92,11 +74,8 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
     });
   }, []);
 
-  // Selection mode replaces what a touch on a row means, so a tray left open
-  // from before it was entered would be an action the row can no longer
-  // reach. Derived at render rather than reset in an effect: the tray is
-  // simply never open while selection mode holds, and the stored id survives
-  // only as far as the next explicit open.
+  // Derived at render rather than reset in an effect: the tray is simply never open while selection mode holds,
+  // and the stored id survives only as far as the next explicit open.
   const visibleTrayEpicId = selectionMode ? null : openTrayEpicId;
 
   const pull = usePullToRefresh({
@@ -121,15 +100,8 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
       <div
         ref={scrollRef}
         data-testid="mobile-history-scroller"
-        // `overscroll-contain` stops the webview bouncing the whole surface
-        // when the pull runs past the top of the content, which would otherwise
-        // move underneath the indicator this gesture is already animating.
-        //
-        // The bottom floor is two things at once: 2.5rem is the breathing room
-        // under the last row, and the inset term is the home indicator's
-        // clearance where that is larger. `max()` and not a sum - the padding
-        // already clears the indicator on every device that has one, and
-        // stacking them would open a visible gap for no reason.
+        // `overscroll-contain` stops the webview bouncing the whole surface when the pull runs past the top of the
+        // content, which would otherwise move underneath the indicator this gesture is already animating.
         className={cn(
           "h-full overflow-y-auto overscroll-contain",
           "pb-[max(2.5rem,var(--safe-area-inset-bottom))]",
@@ -164,12 +136,8 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
   );
 }
 
-/**
- * The pull affordance, parked behind the list and revealed by the gap the list
- * leaves as it travels. It reports three things in order - that the gesture is
- * being read, that releasing now would refresh, and that the refresh is running
- * - so the user never has to guess which of them is true.
- */
+/** It reports three things in order - that the gesture is being read, that releasing now would refresh, and
+ * that the refresh is running - so the user never has to guess which of them is true. */
 function PullIndicator(props: {
   readonly pullPx: number;
   readonly isArmed: boolean;
@@ -239,8 +207,8 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
   if (props.isPending) {
     return <EpicsListLoading />;
   }
-  // Ahead of every other empty state: the rows were WITHHELD, not absent, and
-  // "No tasks yet" would be an outright false statement about the account.
+  // Ahead of every other empty state: the rows were withheld, not absent, and "No tasks yet" would be an
+  // outright false statement about the account.
   if (props.chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }

@@ -20,10 +20,7 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 
 const mocks = vi.hoisted(() => ({
   useEpicSyncPillState: vi.fn(),
-  // Defaults to `open`: most existing tests pin durability/host-visible
-  // states that assume the GUI↔host transport is up. A host-link-down test
-  // overrides this to `connecting`/`reconnecting` so `useCloudLinkGrace`'s
-  // `hostTransportStatus === "open"` gate never applies to it.
+  // A host-link-down test overrides this to `connecting`/`reconnecting` so `useCloudLinkGrace`'s `hostTransportStatus === "open"` gate never applies to it.
   hostTransportStatus: "open" as StreamConnectionStatus,
   chatBackupStatus: null as EpicChatBackupStatus | null,
   presenceDegraded: null as AgentActivityPresenceDegradedReason | null,
@@ -46,11 +43,8 @@ vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicSyncPillState: mocks.useEpicSyncPillState,
-  // Mirrors the derivation contract instead of a hand-set flag: every state
-  // that REQUIRES a genuine cloud frame this cycle implies the evidence bit,
-  // and `connected`/`syncing` default to the handshake-only (no-evidence)
-  // reading these tests exercise. Keeps each `mockReturnValue(state)` site
-  // self-consistent without threading a second knob through all of them.
+  // Mirrors the derivation contract instead of a hand-set flag: every state that REQUIRES a genuine cloud frame this cycle implies the evidence bit, and `connected`/`syncing` default to the handshake-only (no-evidence) reading these tests exercise.
+  // Keeps each `mockReturnValue(state)` site self-consistent without threading a second knob through all of them.
   useEpicHasFreshCloudSyncStatus: (): boolean => {
     const state = mocks.useEpicSyncPillState() as EpicSyncPillState;
     return (
@@ -103,10 +97,8 @@ function renderPill(state: EpicSyncPillState) {
 }
 
 /**
- * Reads the claim off the pill's accessible name. Uses `getByRole` rather
- * than `queryByTestId` deliberately: a missing pill must FAIL these
- * assertions, not silently satisfy the negative ones - a rendering
- * regression would otherwise read as "does not claim synced".
+ * Reads the claim off the pill's accessible name.
+ * Uses `getByRole` rather than `queryByTestId` deliberately: a missing pill must FAIL these assertions, not silently satisfy the negative ones - a rendering regression would otherwise read as "does not claim synced".
  */
 function pillClaimsSynced(): boolean {
   return (
@@ -120,11 +112,6 @@ async function expectTooltip(text: string) {
   expect((await screen.findByRole("tooltip")).textContent).toBe(text);
 }
 
-/**
- * The hover, one entry per degraded plane: the selected plane's sentence
- * first, then every other degraded plane in source order. A single-plane
- * hover is a bare string, which reads here as one line.
- */
 async function tooltipLines(): Promise<ReadonlyArray<string | null>> {
   fireEvent.focus(screen.getByTestId("epic-connection-pill"));
   const tooltip = await screen.findByRole("tooltip");
@@ -194,9 +181,7 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("renders connecting as the amber bootstrap pill", async () => {
-    // Host-link-down reading: the GUI↔host transport itself is coming up, so
-    // `useCloudLinkGrace`'s `hostTransportStatus === "open"` gate must not
-    // apply and the pill reads amber immediately.
+    // Host-link-down reading: the GUI↔host transport itself is coming up, so `useCloudLinkGrace`'s `hostTransportStatus === "open"` gate must not apply and the pill reads amber immediately.
     mocks.hostTransportStatus = "connecting";
     renderPill("connecting");
 
@@ -232,12 +217,7 @@ describe("<EpicConnectionPill />", () => {
     await expectTooltip("Reconnecting to server");
   });
 
-  // A stream failure the host cannot classify now closes RETRYABLE and the
-  // client reconnects forever, so "Reconnecting…" alone no longer implies
-  // "back in a moment". After a minute down the copy escalates to say the
-  // retry is not converging - same amber severity, and the screen-reader
-  // announcement follows the same threshold so a routine reconnect stays
-  // silent.
+  // A stream failure the host cannot classify now closes RETRYABLE and the client reconnects forever, so "Reconnecting…" alone no longer implies "back in a moment".
   describe("stalled-link escalation (60s)", () => {
     it("reads Reconnecting… before the escalation threshold, with a silent status region", () => {
       vi.useFakeTimers();
@@ -303,11 +283,7 @@ describe("<EpicConnectionPill />", () => {
   });
 
   describe("cloud-only grace (15s)", () => {
-    // `reconnecting` with the GUI↔host transport `open` is the cloud-down
-    // reading (see `deriveEpicSyncPillState`): the host is reachable and
-    // edits stay durable there, so `useCloudLinkGrace` holds the pill at the
-    // quiet neutral `syncing` reading for `CLOUD_LINK_GRACE_MS` before it may
-    // say "Reconnecting…".
+    // `reconnecting` with the GUI↔host transport `open` is the cloud-down reading (see `deriveEpicSyncPillState`): the host is reachable and edits stay durable there, so `useCloudLinkGrace` holds the pill at the quiet neutral `syncing` reading for `CLOUD_LINK_GRACE_MS` before it may say "Reconnecting…".
     it("renders the quiet syncing indicator for 14_999ms, then amber Reconnecting at 15_000, with a silent aria-live region throughout the grace", () => {
       vi.useFakeTimers();
       mocks.hostTransportStatus = "open";
@@ -360,10 +336,7 @@ describe("<EpicConnectionPill />", () => {
     await expectTooltip(OFFLINE_COPY);
   });
 
-  // `offline` is the ONE state where an unsent edit exists only in this
-  // window's memory, so it is the one state that must not promise the edit is
-  // safe. Both surfaces are pinned: the tooltip a sighted user hovers and the
-  // aria-label a screen-reader user hears.
+  // `offline` is the ONE state where an unsent edit exists only in this window's memory, so it is the one state that must not promise the edit is safe.
   it("offline promises nothing about durability in either the tooltip or the aria-label", async () => {
     renderPill("offline");
 
@@ -474,11 +447,7 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("shows one plane's copy and lists every other degraded plane on hover", async () => {
-    // Two warnings at once: the catalog gap (earlier source, so it wins the
-    // tie) and degraded presence, which carries a label of its own. The row
-    // must not concatenate them - one light, the selected plane's copy only -
-    // while the hover and the accessible name carry both, selected first, so
-    // the second outage is not hidden behind the first.
+    // The row must not concatenate them - one light, the selected plane's copy only - while the hover and the accessible name carry both, selected first, so the second outage is not hidden behind the first.
     vi.useFakeTimers();
     mocks.terminalCoverage = "partial-serving-host";
     mocks.presenceDegraded = "cloud-down";
@@ -624,12 +593,8 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("shows the unsafe overlap warning immediately, with no cloud-only grace", async () => {
-    // `offlineWithUnsavedChanges` derives with the GUI↔host transport open,
-    // but an open transport is not host ACKNOWLEDGEMENT: this is the
-    // deriver's divergence arm, so the work is renderer-only and the copy
-    // below ("Keep this window open") is the only thing telling the user the
-    // edit dies with the window. It is excluded from the cloud-link grace for
-    // exactly that reason, so it must read amber on the first frame.
+    // `offlineWithUnsavedChanges` derives with the GUI↔host transport open, but an open transport is not host ACKNOWLEDGEMENT: this is the deriver's divergence arm, so the work is renderer-only and the copy below ("Keep this window open") is the only thing telling the user the edit dies with the window.
+    // It is excluded from the cloud-link grace for exactly that reason, so it must read amber on the first frame.
     vi.useFakeTimers();
     renderPill("offlineWithUnsavedChanges");
 
@@ -659,11 +624,7 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("shows host-pending offline work immediately, without claiming it is durable", async () => {
-    // Cloud-down, but never quieted: the aria-label and tooltip below say
-    // "keep it running", which is an instruction about the DEVICE. The host
-    // has acked this replica's work, so the window is not its last holder -
-    // but the host's own durable flush is unknown, and a 15s quiet window is
-    // exactly when a shutdown would interrupt it.
+    // Cloud-down, but never quieted: the aria-label and tooltip below say "keep it running", which is an instruction about the DEVICE.
     vi.useFakeTimers();
     renderPill("offlineWithHostPending");
     vi.useRealTimers();
@@ -730,10 +691,6 @@ describe("<EpicConnectionPill />", () => {
     vi.useRealTimers();
 
     expect(screen.getByText("Offline — changes saved locally")).not.toBeNull();
-    // The spinner (AgentSpinningDots) writes a braille glyph into the dot's
-    // textContent via layout effect; the plain-dot fallback renders no
-    // children at all. An empty dot is the behavioral signal that no
-    // spinner mounted, matching `showAgentSpinner: false` for this state.
     expect(screen.getByTestId("epic-connection-pill-dot").textContent).toBe("");
     // ...and the plain-dot branch is the one that rendered: it is the only
     // branch that puts the state's own dot colour on a `rounded-full` span.
@@ -852,11 +809,8 @@ describe("<EpicConnectionPill />", () => {
       "one-directional guard: from a displayed synced, a derived %s shows immediately with no timer advance at all",
       (nextState) => {
         vi.useFakeTimers();
-        // This test pins the SETTLE guard, not the cloud-only grace: a
-        // cloud-down reading of the offline* states would otherwise hold
-        // them back as `syncing` for 15s and contradict "no timer advance at
-        // all". Take the host-link-down reading throughout so
-        // `useCloudLinkGrace` never applies.
+        // This test pins the SETTLE guard, not the cloud-only grace: a cloud-down reading of the offline* states would otherwise hold them back as `syncing` for 15s and contradict "no timer advance at all".
+        // Take the host-link-down reading throughout so `useCloudLinkGrace` never applies.
         mocks.hostTransportStatus = "reconnecting";
         const { rerender } = renderPill("synced");
         act(() => {
@@ -983,9 +937,7 @@ describe("<EpicConnectionPill />", () => {
         screen.getByTestId("epic-connection-pill-dot").className,
       ).toContain("bg-red-500");
       expect(pill.getAttribute("aria-label")).toBe(REJECTED_MESSAGE);
-      // Load-bearing: `warningAnnouncement` used to test `severity ===
-      // "warning"` exactly, so a `danger` non-artifact plane beside a healthy
-      // link announced nothing at all.
+      // Load-bearing: `warningAnnouncement` used to test `severity === "warning"` exactly, so a `danger` non-artifact plane beside a healthy link announced nothing at all.
       expect(screen.getByRole("status").textContent).toBe(REJECTED_MESSAGE);
       await expectTooltip(REJECTED_MESSAGE);
     });
@@ -1022,10 +974,7 @@ describe("<EpicConnectionPill />", () => {
       await expectTooltip(OUTCOME_UNKNOWN_MESSAGE);
     });
 
-    // "A second outage is never hidden behind the first": the artifact leg's
-    // own danger (a down link) wins the light on source order, but the
-    // rejected write must still ride `alsoDegraded` into the tooltip and the
-    // aria-label rather than disappearing behind the link outage.
+    // "A second outage is never hidden behind the first": the artifact leg's own danger (a down link) wins the light on source order, but the rejected write must still ride `alsoDegraded` into the tooltip and the aria-label rather than disappearing behind the link outage.
     it("a rejected write is not hidden behind a down link - both ride the tooltip and aria-label", async () => {
       mocks.writeCommandAlert = "rejected";
       renderPill("offline");

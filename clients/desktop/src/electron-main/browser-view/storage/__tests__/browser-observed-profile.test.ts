@@ -22,19 +22,6 @@ import {
 import { log } from "../../../app/logger";
 import { FakeCookieJar } from "./cookie-jar-fixture";
 
-/**
- * The desktop's enforcement of `primaryProfileObserved` (universal-sign-in
- * ticket 03), driven through the real apply path: the real cookie schema, the
- * real `cookies.set` conversion, and - for the echo round - the real cookie
- * change observer.
- *
- * The jar is the one piece that has to be a stand-in, and it lives in
- * `cookie-jar-fixture.ts` so ticket 07's cross-plane suite answers to the same
- * one: it models the two Chromium behaviours the enforcement is written
- * against - a `set` whose expiration is in the past DELETES the matching
- * cookie, and a `set` may refuse one cookie without the batch around it
- * failing.
- */
 
 vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -89,29 +76,12 @@ function pastSeconds(): number {
   return Date.now() / 1_000 - 60;
 }
 
-/**
- * One desktop's worth of the apply path: the jar, the per-connection governor,
- * and the serial queue every jar write goes through. `apply` mirrors the IPC
- * handler exactly - validate, merge, then trace the result - so the trace runs
- * on every case these tests cover.
- */
 class ObservedApplyHarness {
   readonly jar = new FakeCookieJar();
   readonly serializer = new BrowserJarSerializer();
   readonly governor = new BrowserObservedConnectionGovernor(() => Date.now());
-  /**
-   * Sites the forget ledger covers at a revision the naming connection has not
-   * acked pruning, keyed `<connectionId> <domain>` - the real gate's two inputs
-   * (`browser-forget-ledger.ts` decides this from the ledger and the acked
-   * revisions; the end-to-end wiring is pinned in that module's own suite).
-   */
   readonly forgottenPendingAck = new Set<string>();
-  /**
-   * The durable headless-origin key set of `browser-forget-ledger.ts`, as ids.
-   * The applier reads it to decide who owns a key the jar already holds, and
-   * claims into it as it applies; the file-backed wiring is pinned in that
-   * module's own suite.
-   */
+  /** The applier reads it to decide who owns a key the jar already holds, and claims into it as it applies; the file-backed wiring is pinned in that module's own suite. */
   readonly headlessOriginKeyIds = new Set<string>();
   /** Keys the applier announced to the observer before writing them. */
   readonly announcedKeys: BrowserCookieKey[] = [];
@@ -119,16 +89,7 @@ class ObservedApplyHarness {
   readonly releasedKeys: BrowserCookieKey[] = [];
   /** Set to false to run the apply path with the ownership rule disabled. */
   ownershipRuleEnabled = true;
-  /**
-   * False models a machine with saved logins OFF: `partitionForProfile` sends
-   * `primary` guests to the ephemeral jar, and nothing durable may be recorded
-   * about a write that lands there.
-   */
   durableJar = true;
-  /**
-   * Parks the jar read of the next apply until it resolves, for the cases
-   * about WHERE that read happens rather than what it returns.
-   */
   readGate: Promise<void> | null = null;
   /** The jar as the applier sees it: the real fixture behind the read gate. */
   private readonly gatedJar = {
@@ -203,11 +164,6 @@ class ObservedApplyHarness {
     });
   }
 
-  /**
-   * The `createElectronTab` storage-seed door: same merge path as `apply`,
-   * but declared `source: "seed"` - the one thing that door and the observed
-   * replay door differ on.
-   */
   applySeed(input: {
     readonly domain: string;
     readonly cookies: readonly BrowserStorageCookie[];
@@ -312,12 +268,6 @@ describe("observed sign-in apply", () => {
     );
   });
 
-  /**
-   * H11: the claimed scope and each cookie's own domain are collapsed by the
-   * same derivation, so the two only have to name the same site - not spell it
-   * the same way. A jar hands out A-labels; a wire frame may carry either
-   * form, and either casing.
-   */
   it("matches a claimed scope against a cookie spelled in another IDN or case form", async () => {
     const harness = new ObservedApplyHarness();
 
@@ -345,10 +295,6 @@ describe("observed sign-in apply", () => {
   });
 
   it("claims a sender-spelled domain under the canonical id the jar reads back", async () => {
-    // H11: the claim is recorded from the WIRE spelling and released from the
-    // jar's own, so an id that carried the sender's spelling left the claim
-    // standing forever - and with it, the name desktop-owned and every later
-    // sign-in for it refused.
     const harness = new ObservedApplyHarness();
 
     await harness.apply({
@@ -381,10 +327,8 @@ describe("observed sign-in apply", () => {
   });
 
   it("leaves the cookie an expired one names in the jar, and applies the live cookie beside it", async () => {
-    // The acceptance test for the implicit sign-out channel: the frame cannot
-    // express a removal, so a compromised host's only remaining move is to
-    // re-set the live cookie with a past expiry, which Chromium would treat as
-    // a delete. The pre-existing cookie must be there afterwards, untouched.
+    // The acceptance test for the implicit sign-out channel: the frame cannot express a removal, so a compromised host's only remaining move is to re-set the live cookie with a past.
+    // The pre-existing cookie must be there afterwards, untouched.
     const harness = new ObservedApplyHarness();
     harness.jar.seed(
       seededCookie({
@@ -441,13 +385,7 @@ describe("observed sign-in apply", () => {
   });
 
   it("keeps going past a malformed cookie in the MIDDLE of a frame, and still flushes", async () => {
-    // These three are wire-legal - the protocol schema takes any string - but
-    // the desktop's own cookie schema THROWS on each of them rather than
-    // answering with a failed parse. A throw that escapes the per-cookie guard
-    // would abort the loop where it happened, applying an attacker-chosen
-    // PREFIX of the frame and skipping the flush, with nothing counted or
-    // traced. The jar fake cannot catch this: it only models jar-level
-    // refusals, and these never reach the jar.
+    // The jar fake cannot catch this: it only models jar-level refusals, and these never reach the jar.
     const harness = new ObservedApplyHarness();
     const malformed: Record<number, BrowserStorageCookie> = {
       5: {
@@ -541,10 +479,6 @@ describe("observed sign-in apply", () => {
   });
 
   it("refuses per connection, so one host's ack does not vouch for another's frames", async () => {
-    // The gate is a happens-before, and a happens-before belongs to the stream
-    // that established it: a host that acked the revision pruned before it
-    // observed anything, which says nothing about what a DIFFERENT host was
-    // holding when it captured.
     const harness = new ObservedApplyHarness();
     harness.forgottenPendingAck.add("connection-2 example.com");
     const cookies = [
@@ -624,12 +558,8 @@ describe("observed sign-in serialization", () => {
   ];
 
   it("queues a merge behind a clear of the same site, so the ledger read cannot go stale", async () => {
-    // The TOCTOU this exists to remove: the applier reads the gate, then
-    // awaits, then writes. Serialising the two means a clear cannot begin AND
-    // FINISH inside that await - the merge simply runs after it, with the read
-    // taken on the far side. Here the host acks the covering revision while
-    // the clear is still holding the site, which is exactly the sequence that
-    // would go stale if the read happened before the queue.
+    // Serialising the two means a clear cannot begin AND FINISH inside that await - the merge simply runs after it, with the read taken on the far side.
+    // Here the host acks the covering revision while the clear is still holding the site, which is exactly the sequence that would go stale if the read happened before the queue.
     const harness = new ObservedApplyHarness();
     let releaseClear = (): void => undefined;
     const clearRunning = new Promise<void>((resolve) => {
@@ -763,10 +693,6 @@ describe("observed frame rate limiting", () => {
 
     admit.mockClear();
 
-    // The SAME input, declared as a seed, is applied instead - and the
-    // governor is not even consulted for it, because a seed is one tab being
-    // born, already bounded by the tab-create rate and the per-frame cookie
-    // bound, not the host's unsolicited replay budget.
     const seedResult = await harness.applySeed({
       domain: "example.com",
       cookies,
@@ -778,12 +704,6 @@ describe("observed frame rate limiting", () => {
 });
 
 describe("observed sign-in ownership rule", () => {
-  /**
-   * The rule in one place (universal-sign-in ticket 08, security review root
-   * cause D): the jar holds `sid` because the user signed in HERE, so no host
-   * may write that key - whatever value, expiry or path it dresses the write
-   * in - while a key the jar has never held is exactly what carry-over is for.
-   */
   it("refuses a key the desktop's own browsing owns and applies the new one beside it", async () => {
     const harness = new ObservedApplyHarness();
     harness.jar.seed(
@@ -874,12 +794,6 @@ describe("observed sign-in ownership rule", () => {
       }),
     );
 
-    // `/app` is a different (name, domain, path) triple, so a key-level rule
-    // reads it as an add. It is not one. RFC 6265 orders the `Cookie` header
-    // longest-path-first and mainstream parsers take the first occurrence of a
-    // name, so on every request the user makes under `/app` this IS the
-    // session - an overwrite performed under another key. Hence the ownership
-    // unit is (name, registrable domain).
     const shadow = await harness.applyFrame([
       {
         ...observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
@@ -926,10 +840,7 @@ describe("observed sign-in ownership rule", () => {
 
   it("hands back the claim over a key the jar refused, instead of keeping a right to a cookie nobody wrote", async () => {
     // Chromium refuses cookies the applier cannot predict from the wire alone.
-    // The claim is taken BEFORE the write (which is what stops the applier's
-    // own inserts handing the key straight back), so a refusal leaves a
-    // standing update right over a key that does not exist - and the user's
-    // own later sign-in would spend it rather than revoke it.
+    // The claim is taken BEFORE the write (which is what stops the applier's own inserts handing the key straight back), so a refusal leaves a standing update right over a key that does.
     const harness = new ObservedApplyHarness();
     harness.jar.refuse("sid");
 
@@ -973,11 +884,6 @@ describe("observed sign-in ownership rule", () => {
   });
 
   it("records no durable custody for a write bound for the ephemeral jar", async () => {
-    // Saved logins are off, so `partitionForProfile` sends `primary` guests to
-    // the in-memory jar. The sign-in still reaches the user's live tiles - but
-    // a durable mark would describe a cookie that dies at quit, and would
-    // still be standing as an update right over the user's own login the day
-    // they turn saving back on.
     const harness = new ObservedApplyHarness();
     harness.durableJar = false;
 
@@ -999,10 +905,7 @@ describe("observed sign-in ownership rule", () => {
   });
 
   it("reads the jar from inside the domain's serialized section", async () => {
-    // The ownership test is only an ordering fact if the read it is made from
-    // happens where no other jar work for the site can interleave. Pinned by
-    // parking the read: while it is parked, other work queued for the same
-    // domain must not have started.
+    // Pinned by parking the read: while it is parked, other work queued for the same domain must not have started.
     const harness = new ObservedApplyHarness();
     let releaseRead = (): void => undefined;
     harness.readGate = new Promise<void>((resolve) => {

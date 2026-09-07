@@ -21,11 +21,7 @@ import type {
   BrowserViewWindowOpenResult,
 } from "../browser-view-port";
 
-/**
- * Bounded so a page holding a real gesture stream cannot paper the desktop in
- * windows. Global across every browser tile the manager owns, which is tighter
- * than a real OAuth flow (one popup at a time) ever needs.
- */
+/** Bounded so a page holding a real gesture stream cannot paper the desktop in windows. */
 export const MAX_BROWSER_VIEW_POPUPS = 4;
 
 interface PopupGestureOpener {
@@ -33,14 +29,6 @@ interface PopupGestureOpener {
   readonly off: NodeJS.EventEmitter["off"];
 }
 
-/**
- * The opener context `handleWindowOpen` resolves a `window.open` against. For a
- * tile it is a live view of the tile's entry; for a popup it is the POPUP's own
- * context, so a popup-of-popup resolves relative URLs against the popup's
- * current location and routes tiles onto the popup's surface - never the
- * original tile's. `currentUrl` is read at open time, so a tracked popup that
- * has navigated resolves against where it actually is.
- */
 interface BrowserViewPopupOpener {
   readonly surface: BrowserViewEntryKey | null;
   readonly currentUrl: string;
@@ -48,11 +36,6 @@ interface BrowserViewPopupOpener {
 
 interface BrowserViewPopupsOptions {
   readonly createPopupWindowOptions: () => BrowserWindowConstructorOptions;
-  /**
-   * Builds the popup `BrowserWindow` ADOPTING the pre-created contents in
-   * `createWindowOptions.webContents`. Kept off the manager so the Electron
-   * construction stays at the process boundary that owns the jar.
-   */
   readonly createPopupWindow: (input: {
     readonly windowOptions: BrowserWindowConstructorOptions;
     readonly createWindowOptions: BrowserViewPopupCreateWindowOptions;
@@ -63,11 +46,6 @@ interface BrowserViewPopupsOptions {
   readonly send: BrowserViewSend;
 }
 
-/**
- * Decision #22: real popups keep their opener as a native window, while
- * `target=_blank` and tab dispositions become Traycer tiles carrying
- * Chromium's disposition (`background-tab` -> background, else foreground).
- */
 export class BrowserViewPopups {
   private readonly createPopupWindowOptions: () => BrowserWindowConstructorOptions;
   private readonly createPopupWindow: (input: {
@@ -78,25 +56,11 @@ export class BrowserViewPopups {
     webContents: BrowserViewPopupWebContents,
   ) => void;
   private readonly send: BrowserViewSend;
-  /**
-   * A native popup is still a browser guest. Keep the policy install keyed by
-   * WebContents so a duplicate delivery cannot stack handlers, while allowing
-   * each popup to recursively create policy-bound children of its own.
-   */
+  /** Keep the policy install keyed by WebContents so a duplicate delivery cannot stack handlers, while allowing each popup to recursively create policy-bound children of its own. */
   private readonly policyInstalledOn =
     new WeakSet<BrowserViewPopupWebContents>();
   private readonly trackedPopupWindows = new WeakSet<BrowserViewPopupWindow>();
-  // `outlivesOpener: false` preserves Chromium's opener lifetime, while these
-  // windows intentionally have no native BrowserWindow parent: a native child
-  // of a fullscreen macOS window can black out its owner after closing. Keep
-  // tracking them so manager disposal closes any popup that is still alive.
   private readonly openWindows = new Set<BrowserViewPopupWindow>();
-  /**
-   * Browser-process input timeline per opener: Electron's window-open details
-   * carry no user-activation flag, so main tracks its own. The value's listener
-   * is released on the opener's `destroyed`, breaking the value->key cycle so
-   * the WeakMap entry can be collected.
-   */
   private readonly gestures = new WeakMap<
     PopupGestureOpener,
     BrowserViewPopupGesture
@@ -109,11 +73,6 @@ export class BrowserViewPopups {
     this.send = options.send;
   }
 
-  /**
-   * Start observing input on an opener before it can call `window.open`, so a
-   * gesture-less popup (spam, or a page replaying an old click) fails the gate.
-   * Idempotent per opener.
-   */
   installGuestGesture(opener: PopupGestureOpener): void {
     if (this.gestures.has(opener)) return;
     const gesture = trackBrowserViewPopupGesture(opener, () => Date.now());
@@ -124,12 +83,6 @@ export class BrowserViewPopups {
     });
   }
 
-  /**
-   * Whether a real user gesture landed on this guest recently, without
-   * consuming it (unlike the native-popup gate). The external-scheme hand-off
-   * uses it to let a clicked `mailto:`/`tel:` open straight through while an
-   * on-load or scripted one falls to the confirm dialog.
-   */
   hadRecentGuestGesture(opener: PopupGestureOpener): boolean {
     return this.gestures.get(opener)?.peek() ?? false;
   }
@@ -141,18 +94,10 @@ export class BrowserViewPopups {
   ): BrowserViewWindowOpenResult {
     const surface = opener.surface;
     if (surface === null) return { action: "deny" };
-    // The third door the guest scheme gate has to cover: a guest CAN open
-    // windows, and both outcomes below carry the target onward - one into a
-    // new tile, one into a real popup on the opener's jar. Resolved against
-    // the opener first, because `window.open("/x")` is relative and a scheme
-    // check on the raw string would be checking the wrong string.
+    // Resolved against the opener first, because `window.open("/x")` is relative and a scheme check on the raw string would be checking the wrong string.
     const target = normalizeOpenedUrl(details.url, opener.currentUrl);
     if (!isAllowedGuestNavigationUrl(target)) {
-      // Chromium must never open a non-web scheme, but a real external one
-      // (mailto:, an app deep link) is handed to the OS rather than dropped;
-      // handleExternalGuestScheme traces the refusal for a dangerous scheme.
-      // window.open needs a gesture, so the safe-scheme fast-path is gated on
-      // the opener actually having had a recent click.
+      // Chromium must never open a non-web scheme, but a real external one (mailto:, an app deep link) is handed to the OS rather than dropped.
       handleExternalGuestScheme(
         target,
         "window-open",
@@ -185,11 +130,6 @@ export class BrowserViewPopups {
       traceRefusedGuestNavigation(target, "window-open");
       return { action: "deny" };
     }
-    // A popup shares its opener's jar. Adopting the contents Chromium already
-    // created (below) is what carries that jar - and `window.opener` - into
-    // the popup, so the window options stay chrome-only: passing
-    // `webPreferences` alongside an adopted `webContents` is rejected by
-    // Electron, and the adopted contents already carry the opener's prefs.
     const windowOptions = this.createPopupWindowOptions();
     return {
       action: "allow",
@@ -242,10 +182,6 @@ export class BrowserViewPopups {
     installGuestNavigationGuard(webContents, () =>
       this.hadRecentGuestGesture(webContents),
     );
-    // The popup's OWN opener context: its surface is the opener's (a popup
-    // belongs to the tile that spawned the chain), but its `currentUrl` tracks
-    // where the popup itself has navigated so a nested `window.open` resolves
-    // against the popup, not the original tile.
     const popupOpener = { surface, currentUrl: initialUrl };
     webContents.on("did-navigate", (_event: Event, url: string) => {
       popupOpener.currentUrl = url;

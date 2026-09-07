@@ -30,13 +30,7 @@ function serialize(
 }
 
 describe("GitHub mention serialization", () => {
-  // `url` is still optional on the node, so nodes written before it existed -
-  // and any caller that omits it - must serialize to the SAME complete
-  // reference they always did. Emitting `[url=]` is malformed metadata that
-  // hands the agent an empty fallback rather than no fallback. github.com
-  // stays bare here too - it is the default every unqualified reference
-  // already means, so qualifying it would churn every serialization that was
-  // already fine.
+  // `url` is still optional on the node, so nodes written before it existed - and any caller that omits it - must serialize to the SAME complete reference they always did.
   it.each([
     [ContextType.GithubPullRequest, "github-pr", 42],
     [ContextType.GithubIssue, "github-issue", 7],
@@ -59,11 +53,6 @@ describe("GitHub mention serialization", () => {
     },
   );
 
-  // Without a url, the host is the only thing that can disambiguate an
-  // enterprise reference from the same coordinates on github.com: the node
-  // keeps `githubHost` even when no `url` was ever set, and dropping the
-  // suffix here would make an `acme/widgets#42` on ghe.example.com
-  // indistinguishable from the same coordinates on github.com.
   it.each([
     [ContextType.GithubPullRequest, "github-pr", 42],
     [ContextType.GithubIssue, "github-issue", 7],
@@ -88,9 +77,7 @@ describe("GitHub mention serialization", () => {
     },
   );
 
-  // A url already disambiguates the reference on its own, so an enterprise
-  // host must not ALSO append its own suffix - that would double-qualify a
-  // reference the url alone already resolves unambiguously.
+  // A url already disambiguates the reference on its own, so an enterprise host must not ALSO append its own suffix - that would double-qualify a reference the url alone already resolves unambiguously.
   it.each([
     [ContextType.GithubPullRequest, "github-pr", "pull/42"],
     [ContextType.GithubIssue, "github-issue", "issues/7"],
@@ -163,12 +150,8 @@ describe("GitHub mention serialization", () => {
     },
   );
 
-  // Without a url, the host is the only thing that can disambiguate an
-  // enterprise reference from the same coordinates on github.com - the same
-  // rule the LLM form above follows. The display/user form is what a human
-  // reads in the chip and the sent message, so it must not read an
-  // enterprise reference as if it were the github.com repository it shares
-  // coordinates with.
+  // Without a url, the host is the only thing that can disambiguate an enterprise reference from the same coordinates on github.com - the same rule the LLM form above follows.
+  // The display/user form is what a human reads in the chip and the sent message, so it must not read an enterprise reference as if it were the github.com repository it shares coordinates with.
   it.each([
     [ContextType.GithubPullRequest, 42],
     [ContextType.GithubIssue, 7],
@@ -193,9 +176,7 @@ describe("GitHub mention serialization", () => {
     },
   );
 
-  // The control: an explicit github.com host must keep the compact reference
-  // byte-identical to what it has always been - qualifying the default host
-  // would churn every display serialization that was already fine.
+  // The control: an explicit github.com host must keep the compact reference byte-identical to what it has always been - qualifying the default host would churn every display serialization that was already fine.
   it.each([
     [ContextType.GithubPullRequest, 42],
     [ContextType.GithubIssue, 7],
@@ -218,10 +199,7 @@ describe("GitHub mention serialization", () => {
     },
   );
 
-  // The default-host check goes through `isDefaultGithubMentionHost`, which
-  // FOLDS the compare: a node saved with `GitHub.com` (or any other casing)
-  // is the default host exactly like `github.com`, and must omit the
-  // `[host=]` suffix just as the lowercase spelling does.
+  // The default-host check goes through `isDefaultGithubMentionHost`, which FOLDS the compare: a node saved with `GitHub.com` (or any other casing) is the default host exactly like `github.com`, and must omit the `[host=]`.
   it.each([
     [ContextType.GithubPullRequest, "github-pr", 42],
     [ContextType.GithubIssue, "github-issue", 7],
@@ -312,10 +290,8 @@ describe("GitHub mention serialization", () => {
         issueNumber: number,
         url: `https://github.com/acme/widgets/${kind}/${number}`,
       };
-      // Both markers, in both formats. Asserting only the one the entry cannot
-      // produce is the vacuous half of this check: `pr:42` maps to
-      // `{ exists: false }`, which only ever emits NOT FOUND, so testing it for
-      // DELETED proves nothing about the branch that renders it.
+      // Both markers, in both formats.
+      // Asserting only the one the entry cannot produce is the vacuous half of this check: `pr:42` maps to `{ exists: false }`, which only ever emits NOT FOUND, so testing it for DELETED proves nothing about the branch that.
       for (const mentionFormat of ["llm", "user"] as const) {
         const markdown = jsonContentToMarkdown(mentionDoc(attrs), {
           mentionFormat,

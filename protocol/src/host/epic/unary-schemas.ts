@@ -1,19 +1,6 @@
 /**
  * Host ↔ client wire shapes for the `epic.*` RPC surface.
- *
- * Scope: this module hosts all schemas used by the host's `epic.*` RPC
- * methods - read operations (`epic.listTasks`, `epic.create`,
- * `epic.listCollaborators`) and the full mutation surface (artifact
- * create/delete/status/rename, chat create/rename/delete, epic title update,
- * collaborator grant/update-roles/revoke). Other CloudData schemas still live
- * in `packages/common/src/clients/cloud-data-client/schemas.ts` where the
- * CloudDataClient HTTP surface consumes them; that file re-exports the
- * symbols defined here so the versioned RPC registry and the legacy HTTP
- * types resolve to the **same** zod instances (a hard invariant enforced by
- * the instance-identity tests under `protocol/host/__tests__`).
- *
- * Allowed dependencies: `zod` and other protocol modules only - this file
- * must stay browser-safe.
+ * Allowed dependencies: `zod` and other protocol modules only - this file must stay browser-safe.
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
@@ -170,12 +157,8 @@ export interface TaskAssociations {
   workspaces: UserTaskWorkspace[];
 }
 
-// The pre-@1.3 filter shape, shared by every minor from @1.0 through @1.2 -
-// they must all resolve to the SAME schema instance, or the registry's
-// compatibility validator reads the newer field as one an older minor
-// "drops". `hostId` here is the WORKSPACE-association
-// host (it pairs with `workspacePath`), NOT the chat-host filter added in
-// @1.3 - the two dimensions answer different questions and must stay distinct.
+// The pre-@1.3 filter shape, shared by every minor from @1.0 through @1.2 - they must all resolve to the SAME schema instance, or the registry's compatibility validator reads the newer field as one an older minor "drops".
+// `hostId` here is the WORKSPACE-association host (it pairs with `workspacePath`), NOT the chat-host filter added in @1.3 - the two dimensions answer different questions and must stay distinct.
 export const taskFiltersSchemaPre13 = z.object({
   query: z.string().optional(),
   taskType: taskTypeSchema.optional(),
@@ -192,18 +175,8 @@ export const taskFiltersSchemaPre13 = z.object({
 export type TaskFiltersPre13 = z.infer<typeof taskFiltersSchemaPre13>;
 
 /**
- * `chatHostIds` filters tasks by the hosts that own CHATS in them
- * (`chats.owner_host_id`), which is what "this task is on that machine" means
- * to a person: agents live on a host, and a task acquires a host when a chat
- * is created there. Deliberately not the workspace association above - a
- * workspace is bound at create and never follows the work.
- *
- * Scoped to the caller's OWN live chats. A collaborator's host is a machine
- * the caller cannot name - their host directory has never seen it - and
- * surfacing which machine a teammate works on is an association nothing else
- * in the product exposes. It also sidesteps duplicate chat ids, which the
- * real readers resolve by an owner-precedence tiebreak that an aggregate
- * cannot reproduce.
+ * `chatHostIds` filters tasks by the hosts that own CHATS in them (`chats.owner_host_id`), which is what "this task is on that machine" means to a person: agents live on a host, and a task acquires a host when a chat is.
+ * It also sidesteps duplicate chat ids, which the real readers resolve by an owner-precedence tiebreak that an aggregate cannot reproduce.
  */
 export const taskFiltersSchema = taskFiltersSchemaPre13.extend({
   chatHostIds: z.array(z.string()).optional(),
@@ -264,10 +237,6 @@ export type PhaseLightWithPermission = z.infer<
   typeof phaseLightWithPermissionSchema
 >;
 
-// ─── Epic light delta / update (epic.updateTitle@1.0 and epic.update@1.0) ────
-// Defined here so hostRpcRegistry["epic.updateTitle"] and
-// cloudDataRpcRegistry["epic.update"] resolve to the same zod instances
-// (enforced by epic-update-title-instance-identity.test.ts).
 
 export const epicLightDeltaSchema = z.object({
   id: z.string(),
@@ -317,10 +286,6 @@ export const generateTitleResponseSchema = z.object({
 });
 export type GenerateTitleResponse = z.infer<typeof generateTitleResponseSchema>;
 
-// ─── Epic delete (HTTP wire shape) ───────────────────────────────────────────
-// Used by the legacy `cloudDataRpcRegistry["epic.delete"]` HTTP contract and
-// the Fastify `DELETE /api/epics/:id` route. The host RPC layer routes
-// single-row deletions through `epic.batchDelete` instead.
 
 export const deleteEpicRequestSchema = z.object({ id: z.string() });
 export type DeleteEpicRequest = z.infer<typeof deleteEpicRequestSchema>;
@@ -328,9 +293,6 @@ export type DeleteEpicRequest = z.infer<typeof deleteEpicRequestSchema>;
 export const deleteEpicResponseSchema = z.object({ success: z.boolean() });
 export type DeleteEpicResponse = z.infer<typeof deleteEpicResponseSchema>;
 
-// ─── Batch delete (epic.batchDelete@1.0 wire shape) ──────────────────────────
-// Defined here so hostRpcRegistry["epic.batchDelete"] and
-// cloudDataClient.batchDelete resolve to the same zod instances.
 
 export const batchDeleteRequestSchema = z.object({
   ids: z.array(z.string()),
@@ -352,11 +314,7 @@ export type BatchDeleteResponse = z.infer<typeof batchDeleteResponseSchema>;
 // ─── Epic create (epic.create@1.0 wire shape) ────────────────────────────────
 
 /**
- * The first message carried on a create (`epic.create`'s folded chat or
- * `epic.createChat`) so the host can schedule the provider turn immediately
- * (turn-overlap). Reuses the exact send-frame value schemas;
- * `messageId`/`clientActionId` are shared with any fallback `send` frame so the
- * host's idempotency gate dedupes.
+ * The first message carried on a create (`epic.create`'s folded chat or `epic.createChat`) so the host can schedule the provider turn immediately (turn-overlap).
  */
 export const createChatInitialMessageSchema = z.object({
   messageId: z.string(),
@@ -373,10 +331,8 @@ export type CreateChatInitialMessage = z.infer<
 >;
 
 /**
- * The first chat folded into `epic.create`. The host seeds this chat into the
- * same in-memory Y.Doc it seeds the epic into, so the create is atomic and a
- * racing `chat.subscribe` never opens the epic before the chat exists. Carries
- * everything `epic.createChat` would (minus `epicId`, which is `epic.id`).
+ * The first chat folded into `epic.create`.
+ * The host seeds this chat into the same in-memory Y.Doc it seeds the epic into, so the create is atomic and a racing `chat.subscribe` never opens the epic before the chat exists.
  */
 export const createEpicChatSeedSchema = z.object({
   chatId: z.string(),
@@ -393,32 +349,17 @@ export const createEpicRequestSchema = z.object({
   epic: epicLightSchema,
   repoIdentifiers: z.array(taskRepoIdentifierSchema),
   workspaces: z.array(createEpicWorkspaceIdentifierSchema),
-  // The first chat, folded into the epic create so it is seeded into the same
-  // in-memory Y.Doc atomically and the provider turn can be scheduled without an
-  // extra create-chat round trip. Absent / `null` for epic-only creates
-  // (terminal agents, migrations) and for cloud REST callers that share this
-  // request type (the cloud record is created from epic/repos/workspaces; the
-  // chat reaches the cloud via Yjs room sync).
   chat: createEpicChatSeedSchema.nullable().optional(),
 });
 export type CreateEpicRequest = z.infer<typeof createEpicRequestSchema>;
 
 export const createEpicResponseSchema = z.object({
   roomInfo: tiptapRoomInfoSchema.nullable(),
-  // Full list-shape `TaskLight` for the freshly-created epic so the GUI can
-  // ingest it into the cloud-tasks history cache without round-tripping
-  // through `epic.listTasks`. `null` when the cloud-side create step did not
-  // synthesize a list row (e.g. legacy/migration paths that pre-date this
-  // field - clients fall back to a manual refresh in that case).
   task: z
     .lazy(() => taskLightSchema)
     .nullable()
     .optional(),
-  // True when the host confirmed the provider turn started from the folded
-  // chat's `initialMessage`. The renderer uses this to skip the redundant
-  // `send` frame. Detached epic-create starts return `false` so the
-  // stream-driven fallback remains armed. Absent / `null` when no chat was
-  // folded.
+  // True when the host confirmed the provider turn started from the folded chat's `initialMessage`.
   initialTurnStarted: z.boolean().nullable().optional(),
 });
 export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
@@ -519,9 +460,8 @@ export const taskLightSchema = z.object({
 });
 export type TaskLight = z.infer<typeof taskLightSchema>;
 
-// The task list carries viewer-specific presentation state in addition to the
-// reusable TaskLight core. Keep the v1.0 row frozen so a v1.1 client can bridge
-// an older host by defaulting every row to unpinned.
+// The task list carries viewer-specific presentation state in addition to the reusable TaskLight core.
+// Keep the v1.0 row frozen so a v1.1 client can bridge an older host by defaulting every row to unpinned.
 export const listTaskLightSchemaV10 = taskLightSchema;
 export type ListTaskLightV10 = z.infer<typeof listTaskLightSchemaV10>;
 
@@ -531,15 +471,8 @@ export const listTaskLightSchemaPre13 = taskLightSchema.extend({
 export type ListTaskLightPre13 = z.infer<typeof listTaskLightSchemaPre13>;
 
 /**
- * `chatHostIds` are the hosts owning the CALLER'S OWN live chats in this task
- * - the same scope the `chatHostIds` filter and the `chatHosts` facet apply,
- * evaluated per row. It is what lets a client re-apply the host filter
- * locally: to cached rows while a request is in flight, and to rows it fetched
- * by id (which never passed through the server's filter at all).
- *
- * Absent, not `[]`, on a row from a peer that predates the field - the
- * distinction matters, because `[]` is a truthful "none of my chats anywhere"
- * and would let a local predicate confidently filter the row OUT.
+ * `chatHostIds` are the hosts owning the CALLER'S OWN live chats in this task - the same scope the `chatHostIds` filter and the `chatHosts` facet apply, evaluated per row.
+ * It is what lets a client re-apply the host filter locally: to cached rows while a request is in flight, and to rows it fetched by id (which never passed through the server's filter at all).
  */
 export const listTaskLightSchema = listTaskLightSchemaPre13.extend({
   chatHostIds: z.array(z.string()).optional(),
@@ -589,9 +522,6 @@ export const listTasksFacetsSchemaPre13 = z.object({
 export type ListTasksFacetsPre13 = z.infer<typeof listTasksFacetsSchemaPre13>;
 
 export const listTasksFacetsSchema = listTasksFacetsSchemaPre13.extend({
-  // Optional rather than required: the whole facets object is already
-  // first-page-only, and a host that upgrades ahead of the cloud tier would
-  // otherwise fail the response parse instead of degrading to "no counts".
   chatHosts: z
     .array(
       z.object({
@@ -621,10 +551,8 @@ export type ListTasksResponsePre13 = z.infer<
   typeof listTasksResponseSchemaPre13
 >;
 
-// BOTH members move to their @1.3 shapes. Extending only `facets` leaves
-// `tasks` on the frozen pre-1.3 row, and since zod STRIPS unknown keys, every
-// row's `chatHostIds` would be silently discarded at response validation -
-// the field would simply never arrive, with nothing failing.
+// BOTH members move to their @1.3 shapes.
+// Extending only `facets` leaves `tasks` on the frozen pre-1.3 row, and since zod STRIPS unknown keys, every row's `chatHostIds` would be silently discarded at response validation - the field would simply never arrive.
 export const listTasksResponseSchema = listTasksResponseSchemaPre13.extend({
   tasks: z.array(listTaskLightSchema),
   facets: listTasksFacetsSchema.optional(),
@@ -660,15 +588,6 @@ export type RecordEpicViewedResponse = z.infer<
   typeof recordEpicViewedResponseSchema
 >;
 
-// ─── Batch task context (epic.getTaskContexts@1.0+) ──────────────────────────
-// Optional (non-floor) capability: resolve a small set of task ids to list-row
-// shapes for title/context (e.g. worktree owner titles). Old hosts fail only
-// this call with E_HOST_UNSUPPORTED; callers degrade to cache-only resolution.
-//
-// v1.0's `null` response row was ambiguous: a deleted task, an inaccessible
-// task, and a failed cloud lookup all looked identical. v1.1 makes that
-// distinction explicit. Its `unknown` arm deliberately preserves uncertainty
-// rather than licensing destructive client reconciliation.
 
 export const GET_TASK_CONTEXTS_MAX_IDS = 50;
 
@@ -728,10 +647,7 @@ export const taskContextResolutionSchema = z.discriminatedUnion("status", [
 ]);
 export type TaskContextResolution = z.infer<typeof taskContextResolutionSchema>;
 
-// Older-host values are parsed by their v1.0 schema and upgraded at the
-// transport boundary. Canonical v1.1 data therefore stays exhaustive here:
-// accepting the all-optional legacy list shape would let malformed v1.1 arms
-// parse as an empty task.
+// Older-host values are parsed by their v1.0 schema and upgraded at the transport boundary.
 export const taskContextResultSchema = taskContextResolutionSchema;
 export type TaskContextResult = TaskContextResolution;
 
@@ -807,10 +723,7 @@ function epicMentionArtifactSuggestionSchemaFor<
     label: z.string(),
     description: z.string(),
     status: z.number().nullable(),
-    // Last-updated epoch-ms, used by the GUI to sort the @-mention list by
-    // recency. Optional so a newer renderer talking to an older (remote)
-    // host that doesn't emit it still validates the response (the GUI treats
-    // a missing value as 0 / least-recent).
+    // Last-updated epoch-ms, used by the GUI to sort the @-mention list by recency.
     updatedAt: z.number().optional(),
   });
 }
@@ -852,13 +765,7 @@ export type EpicMentionArtifactSuggestion = z.infer<
   typeof epicMentionArtifactSuggestionSchema
 >;
 
-/**
- * Canonical `@`-mention id/token format for an epic artifact. Shared by the
- * host resolver (buildArtifactSuggestion) and the GUI's local-artifact
- * builder so the cloud and local copies of the same artifact produce identical
- * ids and de-dupe to a single mention entry. Keep the two formats in lock-step
- * here rather than hand-rolling the template strings at each call site.
- */
+/** Canonical `@`-mention token for an epic artifact. Host and GUI must keep this format in lock-step so cloud and local copies de-dupe. */
 export function epicArtifactMentionId(
   kind: EpicArtifactKind,
   epicId: string,
@@ -916,10 +823,6 @@ export type EpicMentionReviewsResponse = z.infer<
   typeof epicMentionReviewsResponseSchema
 >;
 
-// ─── Collaborator mutation primitives ────────────────────────────────────────
-// Moved here from `packages/common/src/clients/cloud-data-client/schemas.ts`
-// so these Zod instances are owned by the protocol layer and re-exported
-// back to the HTTP-client layer (preserving instance identity).
 
 export const identifierTypeSchema = z.enum(["email", "github_handle"]);
 export type IdentifierType = z.infer<typeof identifierTypeSchema>;
@@ -958,11 +861,6 @@ export const teamShareGrantSchema = z.object({
 });
 export type TeamShareGrant = z.infer<typeof teamShareGrantSchema>;
 
-// ─── Unified artifact light (RPC registry only) ──────────────────────────────
-// Specs, tickets, stories, and reviews share mostly the same catalog
-// fields, differing only in two optional columns (`assignee` and `status`).
-// The `epic.*` RPC surface uses a single `kind` discriminator rather than
-// four per-kind top-level schemas.
 
 export const epicArtifactLightSchema = z.object({
   kind: LatestEpicArtifactKindSchema,
@@ -1073,52 +971,14 @@ export const createChatForkSourceSchema = z.object({
   sourceChatId: z.string(),
   assistantMessageId: z.string(),
   // Optional content-block boundary within the selected assistant message.
-  // Q&A actions pass the interview block id so a completed assistant turn can
-  // be forked at the question checkpoint instead of at the end of the row.
-  // Message-level forks leave this null/absent and retain the whole message.
   interviewBlockId: z.string().nullish(),
-  // Disposition for interview (AskUserQuestion) blocks still pending at the
-  // fork boundary when forking mid-Q&A:
-  //  - "pending" - re-open each carried question in the fork as an answerable
-  //    detached pending (A/B fork: answer differently and proceed in parallel).
-  //  - "settled" - close each carried question as reference-only so the fork's
-  //    composer is immediately free (Cross Question fork: interrogate the
-  //    assistant instead of answering).
-  // null/absent defaults to "pending".
   carriedInterviews: z.enum(["pending", "settled"]).nullish(),
 });
 export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
 
 /**
- * v1.1 fork source: the same precise-boundary shape as v1.0, tagged with an
- * explicit `boundary` discriminant so it can sit in a union beside the new
- * latest-checkpoint variant below. NOT a replacement for
- * {@link createChatForkSourceSchema} - that name stays byte-identical
- * forever, since `epic.createChat@1.0` is already in released hosts (see
- * `epicCreateChatV11`'s own doc in `contracts.ts` for why this is a new
- * minor rather than an in-place edit).
- *
- * Carries the same `sourceOwnerUserId` hint the latest-checkpoint variant
- * below has had since ticket 37, for the CROSS-HOST fork: the target host of
- * a cross-host fork holds no local registry facts about the source chat, so
- * the cloud tier's anti-squatting guard (ticket 34 B2) has nothing to check
- * the resolved publication's owner against and refuses to seed.
- *
- * A HINT, never an authority, with UNLOCK-ONLY semantics: the host prefers
- * its own registry facts and REFUSES the cloud tier outright when the two
- * disagree - the registry outranks the client, and a disagreement is
- * suspicious rather than a tiebreak to resolve. The hint only unlocks the
- * case where the host holds no facts of its own. See
- * `resolveExpectedForkOwner` / `chat-fork-cloud-source.ts`.
- *
- * NULLABLE WITH A `null` DEFAULT, unlike the latest-checkpoint variant: that
- * one was a brand-new arm with no producers to be compatible with, so it can
- * demand the field explicitly. This shape's other producers - every
- * message-level fork the dialog already sends - predate the field, so the
- * default makes an omitting payload parse to the honest `null` instead of
- * failing validation outright. `null` stays the honest value for "the client
- * genuinely does not know who owns this", which must never be fabricated
- * into a guess the host would then trust.
+ * `epic.createChat@1.0` - v1.1 fork source: the same precise-boundary shape as v1.0, tagged with an explicit `boundary` discriminant so it can sit in a union beside the new latest-checkpoint variant below.
+ * `null` stays the honest value for "the client genuinely does not know who owns this", which must never be fabricated into a guess the host would then trust.
  */
 export const createChatForkSourceAssistantBoundarySchema = z.object({
   boundary: z.literal("assistantMessage"),
@@ -1133,39 +993,14 @@ export type CreateChatForkSourceAssistantBoundary = z.infer<
 >;
 
 /**
- * v1.1's other fork source: fork through the source chat's LATEST available
- * assistant checkpoint, naming only the chat. Exists because a client that
- * cannot READ the source (an unreachable-owner chat viewed through the
- * doc-replica fallback, ticket 34A) cannot name a specific
- * `assistantMessageId` the way the precise-boundary variant requires - it
- * can only say "this chat, whatever it last landed on". The host resolves the
- * boundary itself via `buildLatestCheckpointForkSeed` against the
- * best-available transcript (store first, doc second - see `chat-fork-seed.ts`).
+ * v1.1's other fork source: fork through the source chat's LATEST available assistant checkpoint, naming only the chat.
  */
 export const createChatForkSourceLatestCheckpointBoundarySchema = z.object({
   boundary: z.literal("latest"),
   sourceChatId: z.string(),
   /**
-   * The owner the CLIENT was showing for this chat when the user clicked
-   * Clone (chat-sync-v2 ticket 37).
-   *
-   * The clone's cloud tier refuses to seed unless the host can check the
-   * resolved publication's owner against an expectation it holds locally -
-   * the anti-squatting guard from ticket 34 B2, which stops a caller
-   * naming somebody else's `chatId` and being handed their transcript.
-   * When local registry facts are absent (a post-restart swept chat, a
-   * fresh identity) the guard refuses correctly and the clone degrades to
-   * settings-only, losing the history. But the client knew the owner all
-   * along: it is on the sidebar row / published ref it just rendered.
-   *
-   * A HINT, never an authority. The host prefers its own registry facts and
-   * REFUSES the cloud tier outright when the two disagree - the registry
-   * outranks the client, and a disagreement is suspicious rather than a
-   * tiebreak to resolve. See `chat-fork-cloud-source.ts`.
-   *
-   * NULLABLE, NOT OPTIONAL: producers pass it explicitly, and `null` is the
-   * honest value for "the client genuinely does not know who owns this" -
-   * which must never be fabricated into a guess the host would then trust.
+   * The owner the CLIENT was showing for this chat when the user clicked Clone (chat-sync-v2 ticket 37).
+   * NULLABLE, NOT OPTIONAL: producers pass it explicitly, and `null` is the honest value for "the client genuinely does not know who owns this" - which must never be fabricated into a guess the host would then trust.
    */
   sourceOwnerUserId: z.string().min(1).nullable(),
 });
@@ -1184,39 +1019,24 @@ export type CreateChatForkSourceV11 = z.infer<
 export const createChatRequestSchema = z.object({
   epicId: z.string(),
   parentId: z.string().nullable(),
-  // Device the chat is bound to. Persisted on the chat artifact so the
-  // tab carries its host binding for life (mirrors the
-  // `tuiAgentSchema.hostId` contract).
+  // Device the chat is bound to.
   hostId: z.string(),
   title: z.string(),
   workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
   // Client-supplied. The host resolver is idempotent on this id.
   chatId: z.string(),
-  // Optional per-chat run settings to stamp on the new chat. Existing callers
-  // omit this and let the chat start with host defaults; fork creation passes
-  // the user's modal-selected provider/model settings.
+  // Optional per-chat run settings to stamp on the new chat.
   settings: chatRunSettingsSchema.nullable().optional(),
-  // Optional intent - when present the host orchestrator resolves it into a
-  // local SQLite WorktreeBinding row for this chat before the first
-  // chat.subscribe send is processed. Intent only carries mode + entries; the
-  // host authors all setup state.
   worktreeIntent: worktreeIntentSchema.nullable().optional(),
-  // Optional first message. When present (the landing → epic create flow), the
-  // host starts the provider turn immediately after creating the chat, so the
-  // ~3s cold-start overlaps the renderer's chat.subscribe round-trip instead of
-  // running strictly after it.
+  // Optional first message.
   initialMessage: createChatInitialMessageSchema.nullable().optional(),
-  // Optional manual fork source. The host copies source chat history through
-  // the selected completed assistant message and records a `chat.forked` event
-  // for the forked chat's provenance divider.
+  // Optional manual fork source.
   forkSource: createChatForkSourceSchema.nullable().optional(),
 });
 export type CreateChatRequest = z.infer<typeof createChatRequestSchema>;
 
 /**
- * v1.1 request: `forkSource` widened to the discriminated union above so a
- * caller can name a latest-checkpoint fork alongside the existing precise
- * boundary. Every other field is identical to v1.0.
+ * v1.1 request: `forkSource` widened to the discriminated union above so a caller can name a latest-checkpoint fork alongside the existing precise boundary.
  */
 export const createChatRequestSchemaV11 = createChatRequestSchema.extend({
   forkSource: createChatForkSourceSchemaV11.nullable().optional(),
@@ -1225,9 +1045,8 @@ export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
 
 export const createChatResponseSchema = z.object({
   chatId: z.string(),
-  // True when the host kicked the provider turn from `initialMessage`. The
-  // renderer uses this to skip the redundant `send` frame; `false`/absent means
-  // it must fall back to sending the message after chat.subscribe.
+  // True when the host kicked the provider turn from `initialMessage`.
+  // The renderer uses this to skip the redundant `send` frame; `false`/absent means it must fall back to sending the message after chat.subscribe.
   initialTurnStarted: z.boolean().optional(),
 });
 export type CreateChatResponse = z.infer<typeof createChatResponseSchema>;
@@ -1242,13 +1061,8 @@ export type RenameChatRequest = z.infer<typeof renameChatRequestSchema>;
 export const renameChatResponseSchema = z.object({ updated: z.boolean() });
 export type RenameChatResponse = z.infer<typeof renameChatResponseSchema>;
 
-// Persists a chat's run settings (harness/model/profile/…) WITHOUT sending a
-// message. Composer selection changes call this so the durable per-chat
-// settings — the ones a headless turn (e.g. an incoming agent-to-agent
-// message) resolves its provider profile from — never lag behind the UI.
-// Optional (non-floor) capability: old hosts fail only this call with
-// E_HOST_UNSUPPORTED and the renderer degrades to the legacy
-// persist-on-next-send behavior.
+// Persists a chat's run settings (harness/model/profile/…) WITHOUT sending a message.
+// Composer selection changes call this so the durable per-chat settings - the ones a headless turn (e.g. an incoming agent-to-agent message) resolves its provider profile from - never lag behind the UI.
 export const updateChatRunSettingsRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),
@@ -1265,11 +1079,6 @@ export type UpdateChatRunSettingsResponse = z.infer<
   typeof updateChatRunSettingsResponseSchema
 >;
 
-// v1.1 tightens `settings` to the wire-strict tuple (every field required, no
-// zod defaults): this method is a whole-tuple WYSIWYG replace, and the strict
-// schema makes a subset-field "patch" a validation error instead of a silent
-// null-clobber of omitted fields. See `chatRunSettingsStrictSchema`.
-// Profile-only changes belong on `epic.updateChatProfile` below.
 export const updateChatRunSettingsRequestSchemaV11 = z.object({
   epicId: z.string(),
   chatId: z.string(),
@@ -1279,16 +1088,8 @@ export type UpdateChatRunSettingsRequestV11 = z.infer<
   typeof updateChatRunSettingsRequestSchemaV11
 >;
 
-// Narrow, safe-by-construction field update: move a chat onto another
-// logged-in profile (subscription) of its CURRENT harness without touching
-// the rest of the tuple. The host patches its own authoritative persisted
-// record, so callers never rebuild (and possibly stale-patch) the full
-// tuple client-side. `null` = the ambient/host login. There is deliberately
-// no sibling `epic.updateChatModel`: a model change invalidates the
-// reasoning/thinking/tier selection and is only expressible as a full
-// reconfigure (`agent.configure` / `epic.updateChatRunSettings`).
-// Optional (non-floor) capability: old hosts fail only this call with
-// E_HOST_UNSUPPORTED and the renderer degrades to persist-on-next-send.
+// Narrow, safe-by-construction field update: move a chat onto another logged-in profile (subscription) of its CURRENT harness without touching the rest of the tuple.
+// The host patches its own authoritative persisted record, so callers never rebuild (and possibly stale-patch) the full tuple client-side.
 export const updateChatProfileRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),
@@ -1298,9 +1099,7 @@ export type UpdateChatProfileRequest = z.infer<
   typeof updateChatProfileRequestSchema
 >;
 
-// `updated` is false when the chat has no persisted run settings yet (a
-// never-configured chat has no tuple to patch; its first send will stamp
-// the composer's full tuple, profile included).
+// `updated` is false when the chat has no persisted run settings yet (a never-configured chat has no tuple to patch; its first send will stamp the composer's full tuple, profile included).
 export const updateChatProfileResponseSchema = z.object({
   updated: z.boolean(),
 });
@@ -1317,12 +1116,8 @@ export type DeleteChatRequest = z.infer<typeof deleteChatRequestSchema>;
 export const deleteChatResponseSchema = z.object({ deleted: z.boolean() });
 export type DeleteChatResponse = z.infer<typeof deleteChatResponseSchema>;
 
-// Optional (non-floor) capability: durable host-backed archive toggle. Sets or
-// clears `archivedAt` on a single chat OR terminal-agent record, resolved by
-// `chatId` (one method keyed by id covers both the `chats` and `tuiAgents`
-// maps). Idempotent - archiving an already-archived record, or unarchiving an
-// active one, is a no-op. Old hosts lack it; callers get E_HOST_UNSUPPORTED for
-// this call only and hide the archive affordance.
+// Optional (non-floor) capability: durable host-backed archive toggle.
+// Idempotent - archiving an already-archived record, or unarchiving an active one, is a no-op.
 export const setChatArchivedRequestSchema = z.object({
   epicId: z.string(),
   // Names either a chat (in `chats`) or a terminal-agent (in `tuiAgents`)
@@ -1334,9 +1129,7 @@ export type SetChatArchivedRequest = z.infer<
   typeof setChatArchivedRequestSchema
 >;
 
-// `updated` is true when the record's `archivedAt` actually changed; false when
-// the record was already in the requested state (idempotent no-op) or no record
-// matched the id.
+// `updated` is true when the record's `archivedAt` actually changed; false when the record was already in the requested state (idempotent no-op) or no record matched the id.
 export const setChatArchivedResponseSchema = z.object({
   updated: z.boolean(),
 });
@@ -1346,21 +1139,7 @@ export type SetChatArchivedResponse = z.infer<
 
 /**
  * Publication coverage for a chat this host OWNS, asked on demand.
- *
- * The fork dialog needs to know, BEFORE it lets a user fork a chat onto another
- * machine, whether the target will be able to read the transcript at all: a
- * cross-host fork is served from the chat's cloud publication, so a chat that
- * has never been published cannot be pulled, and a boundary the published head
- * does not yet cover would slice against a transcript that stops short of it.
- *
- * Answered from the publisher's own acknowledged receipt rather than from
- * maintained state: no registry-row write path, no outbox interaction, no cloud
- * schema, and no per-chat churn on the record plane.
- *
- * `boundaryMessageId` is the fork boundary the caller intends to use. It is
- * OPTIONAL because the same question is worth asking without one ("is this chat
- * backed up at all?"); when it is absent the host answers `boundaryCovered:
- * null`, which means NOT ASKED and must never be read as "not covered".
+ * It is OPTIONAL because the same question is worth asking without one ("is this chat backed up at all?"); when it is absent the host answers `boundaryCovered: null`, which means NOT ASKED and must never be read as "not.
  */
 export const chatPublicationStateRequestSchema = z.object({
   epicId: z.string(),
@@ -1372,80 +1151,16 @@ export type ChatPublicationStateRequest = z.infer<
 >;
 
 /**
- * `boundaryCovered` is decided by MESSAGE IDENTITY, never by clock comparison:
- * it is true iff the UPSERT that carries the named message is at or below the
- * acknowledged receipt's `through_seq` in this host's own op log. That is
- * exact, and it is why no timestamp reasoning exists anywhere in this feature -
- * forked and cloned chats carry foreign-minted timestamps and per-chat
- * timestamps are not monotonic, so a "boundary newer than the watermark" test
- * would be wrong in both directions.
- *
- * UPSERT-ONLY, deliberately. A local removal of the boundary message does NOT
- * make this `false`, and that is the correct answer rather than a gap: coverage
- * asks what a TARGET host could pull from the published head, and an
- * unpublished deletion has not changed that. Answering `false` would tell the
- * user to retry, and retrying is precisely what makes an unpublished removal
- * fail permanently. Do not build "the boundary is gone if it was deleted" on
- * this field - it does not answer that question and is not intended to.
- *
- * `publishedThroughTs` is DISPLAY METADATA ONLY ("backed up as of …"). It must
- * never be gated on. It is nullable because a chat with no acknowledged receipt
- * has no such moment to report.
- *
- * The tri-state on `boundaryCovered` is load-bearing:
- * - `true`  - the boundary is inside the published head.
- * - `false` - it is not, YET. This clears on its own within a publish sweep, so
- *   callers should treat it as retryable rather than terminal.
- * - `null`  - NO ANSWER WAS COMPUTED. Two causes, and `published` is what
- *   distinguishes them: no boundary was named (`published: true`), or the chat
- *   has never been published at all (`published: false`), in which case `null`
- *   comes back even though a boundary WAS named - there is no head to measure
- *   against. So never branch on `boundaryCovered` alone: read `published`
- *   first, which is decisive by itself. A caller that collapses `null` to
- *   `false` blocks a fork on a question that was never answered, and one that
- *   reads `null` as "not asked" mislabels a never-published chat.
- *
- * One deliberate indistinguishability, so a future reader does not treat it as
- * a leak to be fixed: a boundary withheld by fork arbitration reports
- * `{ published: true, boundaryCovered: false }`, exactly like a boundary the
- * sweep has not reached yet. Both are retryable and the client's action is the
- * same, so distinguishing them would leak host-side arbitration state for no
- * behavioural gain. This holds only while the condition really is transient -
- * a lineage that has been SUPERSEDED is not, and reports through `definitive`
- * below rather than hiding here.
+ * `boundaryCovered` is decided by MESSAGE IDENTITY, never by clock comparison: it is true iff the UPSERT that carries the named message is at or below the acknowledged receipt's `through_seq` in this host's own op log.
+ * It is nullable because a chat with no acknowledged receipt has no such moment to report.
  */
 export const chatPublicationStateResponseSchema = z.object({
   published: z.boolean(),
   boundaryCovered: z.boolean().nullable(),
   publishedThroughTs: z.number().nullable(),
   /**
-   * Set when waiting CANNOT change this answer. `null` means the ordinary
-   * reading applies and the state may still move on its own.
-   *
-   * ## Why a separate field rather than more values on the other three
-   *
-   * Every other answer here is a snapshot of a moving process, and the client
-   * polls precisely because it expects movement. Nothing in `published` /
-   * `boundaryCovered` can express "stop asking": `published: false` is what a
-   * chat mid-first-sweep reports, and it is also what a chat whose publication
-   * halted on an unresolvable conflict reports. The client cannot tell them
-   * apart, so it re-asks every 30s forever and tells the user "it backs up
-   * automatically - try again shortly", which is false and never resolves.
-   *
-   * A caller MUST stop polling when this is non-null and MUST NOT present the
-   * state as transient. Treating an unrecognised reason as terminal-but-
-   * unexplained is correct and forward-compatible; treating it as `null` is
-   * not, and reintroduces the infinite wait.
-   *
-   * - `chat-deleted` - the source chat is a tombstone on its own host. It will
-   *   not come back, and the fork would be refused anyway.
-   * - `lineage-superseded` - this chat lost an arbitrated fork, so its
-   *   publications now land under a different cloud identity. The receipt this
-   *   host holds describes a row a fork of THIS id will never fetch.
-   * - `backup-halted` - publication stopped for a reason the sweep does not
-   *   retry within the process lifetime (an unresolvable conflict, an
-   *   escalation, an unprovable head). A host restart may clear it; waiting on
-   *   this connection will not.
+   * Set when waiting CANNOT change this answer.
+   * A caller MUST stop polling when this is non-null and MUST NOT present the state as transient.
    */
   definitive: z
     .enum(["chat-deleted", "lineage-superseded", "backup-halted"])
@@ -1583,21 +1298,7 @@ export type ReparentChatRequest = z.infer<typeof reparentChatRequestSchema>;
 export const reparentChatResponseSchema = z.object({ updated: z.boolean() });
 export type ReparentChatResponse = z.infer<typeof reparentChatResponseSchema>;
 
-// ─── TUI-agent mutations (epic.createTuiAgent) ───────────────────────────────
-// TUI agents live in the epic's `tuiAgents` Y.Map, parallel to chats. The
-// renderer first calls `agent.tui.prepareLaunch` (resolves workspace context
-// and, for harnesses that allocate synchronously, mints the upstream harness
-// session id), then forwards the result here so the host writes a persisted
-// record.
-//
-// `harnessSessionId` is `null` only when the harness hasn't allocated its
-// session id yet - currently just Codex's first launch, which back-fills the
-// thread id async via `onProviderSessionStarted`.
-//
-// `terminalAgentArgs` is the raw per-agent override captured from the landing
-// launch args field. `null` means no override: prepare/launch should resolve
-// the current provider Settings default. `""` means an explicit "no extra
-// args" override. This is distinct from the computed `terminalShellArgs`.
+// `epic.createTuiAgent` - TUI agents live in the epic's `tuiAgents` Y.Map, parallel to chats.
 export const createTuiAgentRequestSchema = z.object({
   epicId: z.string(),
   parentId: z.string().nullable(),
@@ -1613,43 +1314,17 @@ export const createTuiAgentRequestSchema = z.object({
   model: z.string().nullable(),
   reasoningEffort: z.string().nullable().default(null),
   agentMode: agentModeSchema,
-  // Optional client-minted tui-agent id. When present the host uses
-  // it as the persisted record's id; when absent the host mints one
-  // server-side. Lets the GUI dispatch worktree.* binding RPCs against the
-  // same id BEFORE creating the record so `agent.tui.prepareLaunch`
-  // reads the correct binding and gates harness launch on `awaitSetup`.
+  /** Optional client-minted id. When present the host persists it; when absent the host mints. Lets GUI bind worktree.* before create. */
   tuiAgentId: z.string().nullable().optional(),
-  // Which of the harness's logged-in profiles (subscriptions) to launch
-  // this agent on. `null` = the ambient/host login, so older clients that
-  // predate profiles keep today's exact behavior. See the multi-profile
-  // decision log.
+  // Which of the harness's logged-in profiles (subscriptions) to launch this agent on.
   profileId: z.string().nullable().default(null),
-  // The upstream harness session id this record was forked FROM, when the
-  // client's `agent.tui.prepareLaunch` call that minted `harnessSessionId`
-  // above was itself a fork. `null` for a normal (non-fork) create, and for
-  // older clients that predate this field. The resolver persists this
-  // verbatim as the record's `pendingForkSourceHarnessSessionId` so a
-  // provider failure between PTY spawn and destination-transcript
-  // establishment still has durable provenance to retry the fork from -
-  // the renderer's own prepared-launch stash is cleared on PTY creation,
-  // well before that establishment point.
-  // Rides @1.1 alone - see `createTuiAgentRequestSchemaV10` below.
   forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
 
 /**
- * Frozen `epic.createTuiAgent@1.0` request, exactly as shipped through
- * `host-v1.1.10`: everything above except `forkSourceHarnessSessionId`.
- *
- * That field was authored straight onto the live object while @1.0 was the
- * only registered version, so it silently grew an already-released contract;
- * `host-v1.1.10` then froze @1.0 without it, because the commit that added it
- * was not in the release cherry-pick. It rides @1.1 now.
- *
- * Hand-pinned field-for-field rather than derived from the live schema via
- * `.omit()` - a field added to the live shape must not silently leak back into
- * this contract, which is the exact failure this freeze exists to prevent.
+ * Frozen `epic.createTuiAgent@1.0` request, exactly as shipped through `host-v1.1.10`: everything above except `forkSourceHarnessSessionId`.
+ * Hand-pinned field-for-field rather than derived from the live schema via `.omit()` - a field added to the live shape must not silently leak back into this contract, which is the exact failure this freeze exists to.
  */
 export const createTuiAgentRequestSchemaV10 = z.object({
   epicId: z.string(),
@@ -1707,11 +1382,7 @@ export type RenameTuiAgentResponse = z.infer<
   typeof renameTuiAgentResponseSchema
 >;
 
-// ─── Collaborator mutations (epic.grantAccess / batchUpdateRoles / revokeCollaborator) ──
-// All three requests use an `{ epicId, input }` wrapper. Grant and revoke use
-// a discriminated union on `kind` ("users" | "team"); batch-update uses a flat
-// changes array. Responses reuse `listEpicCollaboratorsResponseSchema` so the
-// caller always gets a fresh collaborator list back.
+// ─── Collaborator mutations (epic.grantAccess / batchUpdateRoles / revokeCollaborator) ── All three requests use an `{ epicId, input }` wrapper.
 
 export const grantAccessInputSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -1876,10 +1547,6 @@ export type DeleteCommentThreadResponse = z.infer<
   typeof deleteCommentThreadResponseSchema
 >;
 
-// Mirror of `clients/shared/collaboration/comment.ts` types - kept in
-// the protocol layer so the host read RPC and gui-app deserialize through
-// the same zod instances. The shared TS interfaces re-export this type so
-// consumers continue to import from `@traycer/host/collaboration`.
 
 export const commentUserSchema = z.object({
   userId: z.string(),
@@ -1925,14 +1592,6 @@ export type ListCommentThreadsResponse = z.infer<
   typeof listCommentThreadsResponseSchema
 >;
 
-// ─── Resolve artifact by path (epic.resolveArtifactByPath@1.0 wire shape) ────
-// Read-only RPC mapping an artifact `index.md` filesystem path to its stable
-// `{ artifactId, kind }`. `filePath` is an ABSOLUTE path that may have been
-// authored on another machine/user (a different home prefix); the daemon
-// resolver locates the `epics/<epicId>/artifacts/<chain>/index.md` subsequence
-// structurally, so resolution is independent of the local disk root. A `null`
-// response means "not an artifact / not yet minted / unresolved chain" - the
-// GUI degrades to opening the raw file as a workspace-file preview.
 
 export const resolveArtifactByPathRequestSchema = z.object({
   epicId: z.string(),
@@ -1950,10 +1609,8 @@ export type ResolveArtifactByPathResult = z.infer<
   typeof resolveArtifactByPathResultSchema
 >;
 
-// `artifact` is `null` for "not an artifact / not yet minted / unresolved
-// chain". The wrapper object is intentional: the versioned-RPC fingerprint
-// rejects a top-level nullable response, so the nullable lives on a field
-// (mirroring `epicLightWithPermissionSchema.light`).
+// `artifact` is `null` for "not an artifact / not yet minted / unresolved chain".
+// The wrapper object is intentional: the versioned-RPC fingerprint rejects a top-level nullable response, so the nullable lives on a field (mirroring `epicLightWithPermissionSchema.light`).
 export const resolveArtifactByPathResponseSchema = z.object({
   artifact: resolveArtifactByPathResultSchema.nullable(),
 });
@@ -1961,15 +1618,8 @@ export type ResolveArtifactByPathResponse = z.infer<
   typeof resolveArtifactByPathResponseSchema
 >;
 
-// ─── Search artifacts (epic.searchArtifacts@1.0 wire shape) ──────────────────
-// Epic-scoped artifact search. `epicId` is ALWAYS required: the protocol cannot
-// represent an omitted epic, an "all epics" sentinel, or a cross-epic scope, so
-// artifact search can never grow into a cloud-wide index (search decision log,
-// "Context-derived search scope"). `fields` selects which of title / relative
-// path / Markdown body are searched; title/path are Fuse-ranked over authoritative
-// artifact metadata, body is ripgrep-matched over the epic's on-disk Markdown
-// mirror. All paths returned are RELATIVE to the epic's artifact root - a
-// host-absolute path is never exposed.
+// ─── Search artifacts (epic.searchArtifacts@1.0 wire shape) ────────────────── Epic-scoped artifact search.
+// All paths returned are RELATIVE to the epic's artifact root - a host-absolute path is never exposed.
 
 /** Which of the artifact's searchable surfaces a query is run against. */
 export const searchArtifactsFieldsSchema = z.object({
@@ -1979,13 +1629,7 @@ export const searchArtifactsFieldsSchema = z.object({
 });
 export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
 
-/**
- * Server-side filters composed with the query. `kinds`/`statuses` restrict by
- * artifact metadata; `subtreePath` restricts to a subtree of the artifact tree,
- * expressed as a POSIX path RELATIVE to the epic artifact root (never an
- * absolute filesystem root - the host derives and authorizes the real root
- * internally). A `null` field means "no restriction on this axis".
- */
+/** Server-side filters composed with the query. */
 export const searchArtifactsFiltersSchema = z.object({
   kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
   statuses: z.array(z.number().int()).nullable(),
@@ -2029,22 +1673,10 @@ export type SearchArtifactMatchSource = z.infer<
   typeof searchArtifactMatchSourceSchema
 >;
 
-/**
- * Maximum size, in UTF-8 bytes, of a single {@link searchArtifactSnippetSchema}
- * `text`. The host enforces this bound (ripgrep's `--max-columns` does NOT bound
- * the JSON `lines.text` payload), truncating on a UTF-8 character boundary and
- * clamping/dropping highlight ranges so every returned range still addresses the
- * returned text. Bounds response weight against a pathological single-line body.
- */
+/** Maximum size, in UTF-8 bytes, of a single {@link searchArtifactSnippetSchema} `text`. */
 export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = SEARCH_TEXT_PREVIEW_MAX_BYTES;
 
-/**
- * One body-match line. `ranges` are BYTE offsets into the UTF-8 encoding of
- * `text` (ripgrep submatch offsets), not UTF-16/JS string indices, so a
- * consumer that wants character indices converts deliberately. `text` is bounded
- * to {@link SEARCH_ARTIFACT_SNIPPET_MAX_BYTES} bytes host-side; a highlight for a
- * match past that bound is dropped rather than pointing outside `text`.
- */
+/** One body-match line. */
 export const searchArtifactSnippetSchema = z.object({
   lineNumber: z.number().int().positive(),
   text: z.string(),
@@ -2053,13 +1685,8 @@ export const searchArtifactSnippetSchema = z.object({
 export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
 
 /**
- * One ranked artifact hit. `artifactId`/`kind`/`title` are authoritative
- * (resolved against the epic's Y.Doc index, so a stale disk entry for a deleted
- * artifact never appears); `status` is read from the trusted disk mirror.
- * `relativePath` and `breadcrumb` are relative to the epic artifact root. The
- * hit is NOT authoritative for opening: the caller re-resolves the path through
- * the existing `epic.resolveArtifactByPath` route so a stale disk result cannot
- * mutate or resurrect deleted state.
+ * One ranked artifact hit.
+ * The hit is NOT authoritative for opening: the caller re-resolves the path through the existing `epic.resolveArtifactByPath` route so a stale disk result cannot mutate or resurrect deleted state.
  */
 export const searchArtifactHitSchema = z.object({
   artifactId: z.string(),
@@ -2074,12 +1701,7 @@ export const searchArtifactHitSchema = z.object({
 });
 export type SearchArtifactHit = z.infer<typeof searchArtifactHitSchema>;
 
-/**
- * `ready` = the mirror was searched (an empty `results` is a legitimate
- * zero-match). `mirror-unavailable` = the epic's on-disk mirror does not exist
- * yet / is not a directory - a DISTINCT typed condition from zero matches, so a
- * caller can tell "nothing matched" apart from "nothing to search yet".
- */
+/** `ready` = the mirror was searched (an empty `results` is a legitimate zero-match). */
 export const searchArtifactsOutcomeSchema = z.enum([
   "ready",
   "mirror-unavailable",

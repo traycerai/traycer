@@ -66,11 +66,8 @@ describe("resolveArtifactRelativeLinkPath", () => {
   });
 
   it("returns null (not a parent/artifacts-root fallback guess) when the author writes one '../' too many", () => {
-    // Mirrors the corpus report's Gap 2: selfChain is 2 deep, so exactly 2
-    // '../' reach the artifacts root - a 3rd walks the resolver off the top
-    // of selfChain. There is deliberately no fallback base to retry against;
-    // a wrong guess would silently open a DIFFERENT real artifact rather
-    // than surfacing the authoring mistake.
+    // selfChain is 2 deep: a third ../ walks off the top. No fallback base;
+    // a wrong guess would open a different real artifact.
     expect(
       resolveArtifactRelativeLinkPath(
         EPIC_ID,
@@ -107,10 +104,8 @@ describe("resolveArtifactRelativeLinkPath", () => {
     ).toBe("epics/epic-1/artifacts/ticket-breakdown/decision-log/index.md");
   });
 
-  // `classifyHref` owns the single decode on the way here, so a percent escape
-  // that survives it is a LITERAL part of the folder name and must stay one.
-  // Decoding again would both miss the real folder and let an authored
-  // `%252E%252E` become a `..` that walks out of the linked folder.
+  // A percent escape that survived classifyHref is literal. Decoding again
+  // would turn %252E%252E into .. .
   it("keeps a literal percent escape in a folder name as authored", () => {
     expect(
       resolveArtifactRelativeLinkPath(EPIC_ID, SELF_CHAIN, "my%20folder"),

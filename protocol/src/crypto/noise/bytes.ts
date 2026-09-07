@@ -1,10 +1,4 @@
-/**
- * Small, total, side-effect-free byte helpers used across the Noise core.
- *
- * They are intentionally trivial: keeping buffer arithmetic in one audited
- * place (rather than inline throughout the state machine) is part of the
- * "clear, no clever obscurity" security-review bar.
- */
+/** Small, total, side-effect-free byte helpers used across the Noise core. */
 
 const MAX_UINT64 = 2n ** 64n - 1n;
 

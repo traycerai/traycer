@@ -6,31 +6,14 @@ import { appServerClock } from "@/lib/clock/app-server-clock";
 
 const SEVEN_HOURS_MS = 7 * 3_600_000;
 
-/**
- * Feeds the app-wide tracker a synthetic server time. The banner reads the real
- * singleton - the same instance every stream transport parks on - so these
- * assertions are about the wiring, not about a stand-in.
- */
+/** Feeds the app-wide tracker a synthetic server time. */
 function recordOffset(offsetMs: number): void {
   act(() => {
     appServerClock.recordServerTimeMs(Date.now() + offsetMs, Date.now());
   });
 }
 
-/**
- * The banner as an ASSISTIVE-TECHNOLOGY sees it: a live region with the
- * accessible name below.
- *
- * Queried by role rather than by test id on purpose. For an ambient banner the
- * announcement IS the behaviour - a user who cannot see the amber strip still
- * has to be told their clock is wrong, because every other symptom they will
- * hit (a session that will not connect, timestamps that make no sense) is
- * silent about the cause. A test id would pass just as well against a `<div>`
- * that announces nothing, so it cannot defend the one property that matters
- * here. `<output>` carries an implicit `status` role, which is the polite live
- * region this wants; `alert` would interrupt, and the condition is ambient
- * rather than an event.
- */
+/** For an ambient banner the announcement IS the behaviour. */
 const BANNER_ROLE = "status";
 const BANNER_NAME = "System clock is incorrect";
 
@@ -62,11 +45,7 @@ describe("ClockSkewBanner", () => {
   });
 
   it("announces itself as a live region rather than being visible-only", () => {
-    // The one property a test id could never defend. A user who cannot see the
-    // amber strip meets this condition as a set of unexplained symptoms, so the
-    // diagnosis has to reach them through the accessibility tree - and the
-    // magnitude has to sit INSIDE the live region, or the announcement says
-    // something is wrong without saying what.
+    // The one property a test id could never defend.
     render(<ClockSkewBanner />);
     recordOffset(-SEVEN_HOURS_MS);
     const banner = getBanner();
@@ -76,7 +55,7 @@ describe("ClockSkewBanner", () => {
 
   it("names magnitude and direction while the clock is wrong", () => {
     render(<ClockSkewBanner />);
-    // Local clock 7h AHEAD, so the server reads earlier than we do.
+    // Local clock 7h ahead, so the server reads earlier than we do.
     recordOffset(-SEVEN_HOURS_MS);
     const banner = getBanner();
     expect(banner.textContent).toContain("~7h ahead");
@@ -84,11 +63,8 @@ describe("ClockSkewBanner", () => {
   });
 
   it("still speaks for a clock running BEHIND, but does not claim connections are blocked", () => {
-    // Detection is deliberately NOT narrowed to the direction that parks
-    // sessions - a clock hours slow is worth telling the user about. What the
-    // banner must not do is repeat the fast-clock CLAIM, because a slow clock
-    // makes bearers look more valid rather than expired and blocks nothing;
-    // saying otherwise sends the user after the wrong cause.
+    // What the banner must not do is repeat the fast-clock claim, because a slow clock makes bearers look more
+    // valid rather than expired and blocks nothing; saying otherwise sends the user after the wrong cause.
     render(<ClockSkewBanner />);
     recordOffset(SEVEN_HOURS_MS);
     const banner = getBanner();

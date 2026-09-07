@@ -6,10 +6,7 @@ import {
   latestForkableAssistantMessageId,
 } from "../chat-tile-session-state";
 
-// Minimal fixture mirroring the shape built in
-// `chat-tile-session-state.test.ts`'s `MESSAGE` constant - every field the
-// `ChatMessage` interface requires, defaulted to its "nothing special going
-// on" value so each test only overrides what it is actually exercising.
+// Minimal fixture mirroring the shape built in `chat-tile-session-state.test.ts`'s `MESSAGE` constant - every field the `ChatMessage` interface requires, defaulted to its "nothing special going on" value so each test only overrides what it is actually exercising.
 const BASE_ASSISTANT_MESSAGE: ChatMessage = {
   id: "assistant-base",
   role: "assistant",
@@ -118,14 +115,6 @@ describe("latestForkableAssistantMessageId", () => {
   });
 });
 
-/**
- * The host-derived boundary refreshes per SNAPSHOT while the gate in front of
- * the host-switch fork gesture is cleared by a live `turnStateChanged` frame.
- * In the gap between the two the gesture is open and the boundary still names
- * the previous turn, so the fork omits the turn the user just watched finish.
- *
- * This is the second hand: forward-only, from the live tail.
- */
 describe("forkableAssistantMessageIdAfter", () => {
   const completedFirst = assistantMessage({
     id: "a-1",
@@ -157,8 +146,6 @@ describe("forkableAssistantMessageIdAfter", () => {
   });
 
   it("never moves the boundary BACKWARD past the host's answer", () => {
-    // The hydrated window holds an older completed turn as well; a plain
-    // "latest in view" scan run against a colder window could return it.
     // Anything at or before the known boundary is out of scope by construction.
     expect(
       forkableAssistantMessageIdAfter([completedFirst], "persisted-a-2"),

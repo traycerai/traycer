@@ -6,11 +6,8 @@ import type {
   HostVersionsManifest,
 } from "./types";
 
-// Structured warning emitted alongside the parsed manifest when an
-// individual entry was skipped. Callers can surface these via Doctor /
-// runner output without aborting the whole install - a single
-// malformed future entry must not soft-brick every version's install
-// path.
+// Structured warning emitted alongside the parsed manifest when an individual entry was skipped.
+// Callers can surface these via Doctor / runner output without aborting the whole install - a single malformed future entry must not soft-brick every version's install path.
 export interface ManifestParseWarning {
   readonly entryIndex: number;
   readonly entryLabel: string;
@@ -22,15 +19,8 @@ export interface HostVersionsManifestParseResult {
   readonly warnings: readonly ManifestParseWarning[];
 }
 
-// Strict validator for the hosted versions.json manifest. The manifest
-// shape is the durable contract between the registry publisher (release
-// workflows in scripts/native-packaging/) and the CLI consumer - any
-// drift between writer and reader is a hard failure here so a corrupt
-// or partially-published manifest never reaches the installer.
-//
-// schemaVersion: only `1` is recognised in v1. Higher versions are an
-// explicit upgrade signal handled by the caller (REGISTRY_UNAVAILABLE
-// with a clear message); we deliberately don't try to forward-compat.
+// Strict validator for the hosted versions.json manifest.
+// The manifest shape is the durable contract between the registry publisher (release workflows in scripts/native-packaging/) and the CLI consumer - any drift between writer and reader is a hard failure here so a corrupt or partially-published manifest never reaches the installer. schemaVersion: only `1` is recognised in v1.
 
 const SUPPORTED_SCHEMA_VERSION = 1;
 
@@ -43,16 +33,8 @@ const PLATFORM_KEYS = [
   "win32-x64",
 ] as const;
 
-// Skip-and-warn parser: top-level field failures (schemaVersion,
-// generatedAt, latest, versions array shape) still fail-closed.
-// Individual `versions[i]` entries that fail validation produce a
-// structured warning and are dropped from the returned manifest, so a
-// single malformed future entry never soft-bricks every install path.
-//
-// `parseHostVersionsManifest` keeps the legacy signature returning a
-// bare manifest and throwing on top-level shape failures. Use
-// `parseHostVersionsManifestWithWarnings` from new call sites that
-// want to surface the warnings.
+// Skip-and-warn parser: top-level field failures (schemaVersion, generatedAt, latest, versions array shape) still fail-closed.
+// Individual `versions[i]` entries that fail validation produce a structured warning and are dropped from the returned manifest, so a single malformed future entry never soft-bricks every install path.
 export function parseHostVersionsManifestWithWarnings(
   raw: unknown,
   sourceLabel: string,
@@ -88,9 +70,8 @@ export function parseHostVersionsManifestWithWarnings(
     try {
       entry = parseVersionEntry(obj.versions[i], entryLabel);
     } catch (err) {
-      // Skip this entry but keep parsing the rest. Surface enough detail
-      // for the operator-facing Doctor / installer log to identify which
-      // entry was dropped.
+      // Skip this entry but keep parsing the rest.
+      // Surface enough detail for the operator-facing Doctor / installer log to identify which entry was dropped.
       warnings.push({
         entryIndex: i,
         entryLabel,
@@ -109,15 +90,8 @@ export function parseHostVersionsManifestWithWarnings(
     seen.add(entry.version);
     versions.push(entry);
   }
-  // `latest` must resolve to a usable entry. When it doesn't name a
-  // successfully-parsed version, distinguish two cases:
-  //   - It named an entry that WAS present in versions[] but failed to parse
-  //     (forward compat: a newer host wrote a shape this CLI can't read, so it
-  //     was skip-and-warned above). Degrade gracefully: repoint `latest` to the
-  //     newest parsed non-yanked version (versions are newest-first) so a single
-  //     bad entry never soft-bricks every install path, defeating skip-and-warn.
-  //   - It named a version absent from versions[] entirely (corrupt/tampered
-  //     manifest). Fail closed, as before.
+  // `latest` must resolve to a usable entry.
+  // When it doesn't name a successfully-parsed version, distinguish two cases: - It named an entry that WAS present in versions[] but failed to parse (forward compat: a newer host wrote a shape this CLI can't read, so it was skip-and-warned above).
   let effectiveLatest = obj.latest;
   if (!seen.has(obj.latest)) {
     const latestNamesADroppedEntry = obj.versions.some(
@@ -190,29 +164,15 @@ function parseVersionEntry(
     sourceLabel,
     "deprecationReason",
   );
-  // No longer parse-only. `client-floor.ts` enforces this at the one place a
-  // host version is selected (`resolveAsset`), as a REFUSAL rather than as
-  // version resolution - so the deferred compat-RANGE work stays deferred
-  // while the floor itself is real. The connect-time per-method handshake
-  // remains the authoritative runtime compatibility check; what it cannot do
-  // is stop an old client from installing a host it will misrepresent, since
-  // by then the handshake has already succeeded.
+  // No longer parse-only.
+  // `client-floor.ts` enforces this at the one place a host version is selected (`resolveAsset`), as a REFUSAL rather than as version resolution - so the deferred compat-RANGE work stays deferred while the floor itself is real.
   const requiredCliVersion = parseNullableString(
     obj.requiredCliVersion,
     sourceLabel,
     "requiredCliVersion",
   );
-  // The host build's baked compatibility floor, recorded for RELEASE TOOLING -
-  // nothing on the client acts on it (the host enforces its own floor at
-  // connection time from its own bytes).
-  //
-  // ADDITIVE-SAFE IN BOTH DIRECTIONS, which is the whole reason it is parsed
-  // this leniently. Every entry written before this field existed omits it, and
-  // a rerun of an older workflow revision still writes entries without it, so
-  // requiring it would reject the manifest this client depends on to install
-  // anything at all. A present-but-malformed value is a different matter and
-  // throws: this parser is the boundary, and silently mapping "not a number" to
-  // "no floor" is the one reading that fails permissively.
+  // The host build's baked compatibility floor, recorded for RELEASE TOOLING - nothing on the client acts on it (the host enforces its own floor at connection time from its own bytes).
+  // ADDITIVE-SAFE IN BOTH DIRECTIONS, which is the whole reason it is parsed this leniently.
   const minimumEpoch = parseNullableEpoch(obj.minimumEpoch, sourceLabel);
   if (
     obj.platforms === null ||
@@ -247,15 +207,7 @@ function parseVersionEntry(
   };
 }
 
-/**
- * A nullable, absent-tolerant positive-integer field.
- *
- * `undefined` (the key is absent) and `null` are the same claim - no floor -
- * because both are how a manifest entry written by a workflow revision that
- * predates the field looks. Anything else present must be a positive safe
- * integer or the manifest is invalid; there is no coercion arm, so a stringly
- * `"2"` is refused rather than read.
- */
+/** A nullable, absent-tolerant positive-integer field. `undefined` (the key is absent) and `null` are the same claim - no floor - because both are how a manifest entry written by a workflow revision that predates the field looks. */
 function parseNullableEpoch(raw: unknown, sourceLabel: string): number | null {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== "number" || !isValidCompatibilityEpoch(raw)) {
@@ -284,9 +236,8 @@ function parsePlatformAsset(
     "unavailableReason",
   );
   if (obj.available) {
-    // For an available asset, every artifact field must be present and
-    // non-empty. We refuse to surface partial entries - the manifest
-    // publisher is expected to mark the asset unavailable instead.
+    // For an available asset, every artifact field must be present and non-empty.
+    // We refuse to surface partial entries - the manifest publisher is expected to mark the asset unavailable instead.
     if (typeof obj.url !== "string" || obj.url.length === 0) {
       throw manifestInvalid(
         sourceLabel,
@@ -338,8 +289,7 @@ function parsePlatformAsset(
       publicKeyId: obj.publicKeyId,
     };
   }
-  // available=false: artifact fields are still surfaced but allowed to
-  // be empty/zero so the manifest reader doesn't have to special-case.
+  // available=false: artifact fields are still surfaced but allowed to be empty/zero so the manifest reader doesn't have to special-case.
   // Callers must check `available` before trying to download.
   return {
     available: false,

@@ -9,13 +9,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import { browserQueryKeys } from "@/lib/query-keys";
 
-/**
- * The browsers and profiles this machine can import logins from. A listing is
- * `stat` calls and a `Local State` read on the desktop - no jar is opened and
- * nothing prompts - so it re-runs on every open of the dialog and is thrown
- * away when the dialog closes: the desktop mints a fresh id per source on
- * every listing, and a cached list would name ids the desktop no longer has.
- */
+/** The browsers and profiles this machine can import logins from. */
 function loginImportSourcesQueryOptions(
   browserView: BrowserViewBridge | null,
   enabled: boolean,

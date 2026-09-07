@@ -62,42 +62,26 @@ export interface AddArtifactDropdownProps {
   itemTestId: (type: EpicNodeKind) => string;
   onAdd: (type: EpicNodeKind) => void;
   /**
-   * Epic the dropdown adds into. Scopes the terminal-agent launcher's pending
-   * staging slot (`pendingTerminalAgentStagingKey(epicId)`) so per-epic seeds
-   * don't bleed across epics, and the launch handler reads the same key.
+   * Scopes the terminal-agent launcher's pending staging slot (`pendingTerminalAgentStagingKey(epicId)`) so per-epic seeds don't bleed across epics, and the launch handler reads the same key.
    */
   epicId: string;
   /**
-   * Optional handler for terminal-agent launches. When supplied, the
-   * dropdown shows a "Terminal Agent" submenu with a harness picker, launch
-   * arguments, and an inline host/workspace picker. The submenu reads its
-   * pending-launcher staged intent at Start time and passes it through here so
-   * dropdown cleanup cannot clear the binding before the dispatcher sees it.
+   * The submenu reads its pending-launcher staged intent at Start time and passes it through here so dropdown cleanup cannot clear the binding before the dispatcher sees it.
    */
   onAddTerminalAgent:
     | ((input: TerminalAgentWorktreeCreateInput) => void)
     | undefined;
   /**
-   * Optional seed copied from the latest chat's visible workspace binding.
-   * Terminal-agent submenu uses it both for the initial folder rows and for the
-   * pending launch intent when the user accepts without editing.
+   * Terminal-agent submenu uses it both for the initial folder rows and for the pending launch intent when the user accepts without editing.
    */
   terminalAgentWorkspaceSeed: ForkWorkspaceSeed | null;
   /**
-   * Host scope for the terminal-agent submenu workspace picker. Row child
-   * creation passes a fixed row-host scope so the picker resolves folders and
-   * staged intents on the same host the child will be created on. Header/root
-   * launchers pass `undefined` and keep active-host behavior.
+   * Host scope for the terminal-agent submenu workspace picker.
+   * Row child creation passes a fixed row-host scope so the picker resolves folders and staged intents on the same host the child will be created on.
    */
   terminalAgentHostScope: HostWorkspaceControlsHostScope | undefined;
   /**
-   * Staging-key override for the terminal-agent submenu's host/workspace
-   * picker. When provided (a chat / agent ROW's per-parent slot from
-   * `pendingChildTerminalAgentStagingKey(epicId, parentId)`), the submenu stages
-   * and reads its workspace picks under that key instead of the shared
-   * `pendingTerminalAgentStagingKey(epicId)` launcher slot - so concurrent rows
-   * don't collide and the picker can be seeded from the parent's workspace.
-   * Header / root-create callers pass `undefined` to keep today's default slot.
+   * When provided (a chat / agent ROW's per-parent slot from `pendingChildTerminalAgentStagingKey(epicId, parentId)`), the submenu stages and reads its workspace picks under that key instead of the shared `pendingTerminalAgentStagingKey(epicId)` launcher slot - so concurrent rows don't collide and the picker can be seeded from the parent's workspace.
    */
   terminalAgentStagingKey: WorktreeStagingKey | undefined;
   /**
@@ -109,16 +93,9 @@ export interface AddArtifactDropdownProps {
   /** Tooltip text to show when disabled. `null` when no special message needed. */
   disabledTooltip: string | null;
   disabledTypes: ReadonlyArray<EpicNodeKind> | undefined;
-  /**
-   * Optional set of kinds to omit from the dropdown.
-   */
   excludeTypes: ReadonlyArray<EpicNodeKind> | undefined;
 }
 
-/**
- * Shared dropdown that lists all addable artifact types. Used by the
- * sidebar header "+", per-row inline "+", and other add-node entry points.
- */
 export function AddNodeDropdown(props: AddArtifactDropdownProps) {
   const {
     children,
@@ -139,9 +116,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     disabledTypes,
     excludeTypes,
   } = props;
-  // The Terminal Agent submenu's own content node, so an outside-click can tell
-  // a nested overlay (host Select / folder picker, stacked above) from an
-  // ancestor surface - see preserveWhenNestedOverlay.
+  // The Terminal Agent submenu's own content node, so an outside-click can tell a nested overlay (host Select / folder picker, stacked above) from an ancestor surface - see preserveWhenNestedOverlay.
   const terminalAgentSubRef = useRef<HTMLDivElement>(null);
   const visibleTypes =
     excludeTypes === undefined || excludeTypes.length === 0
@@ -154,12 +129,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     (state) => state.artifactIconColorMode,
   );
 
-  // When disabled there is no dropdown, so the tooltip (e.g. "Reconnect to
-  // make changes.") can wrap the trigger directly. In the interactive path the
-  // trigger must be the *direct* child of `DropdownMenuTrigger asChild`: that
-  // slot clones the child to inject the open-menu handlers and ref, and
-  // `TooltipWrapper` does not forward them, so interposing it would swallow the
-  // click and the menu would never open.
+  // In the interactive path the trigger must be the *direct* child of `DropdownMenuTrigger asChild`: that slot clones the child to inject the open-menu handlers and ref, and `TooltipWrapper` does not forward them, so interposing it would swallow the click and the menu would never open.
   if (disabled) {
     return (
       <TooltipWrapper
@@ -238,9 +208,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
               ref={terminalAgentSubRef}
               className="flex w-[min(92vw,32rem)] flex-col gap-3 p-2"
               data-testid={`${menuTestId}-terminal-agent-sub`}
-              // The host Select + folder picker open portaled overlays; treat
-              // clicks inside them (stacked above this submenu) as inside it so
-              // picking a host / branch doesn't dismiss the launcher.
+              // The host Select + folder picker open portaled overlays; treat clicks inside them (stacked above this submenu) as inside it so picking a host / branch doesn't dismiss the launcher.
               onInteractOutside={(event) =>
                 preserveWhenNestedOverlay(event, terminalAgentSubRef.current)
               }
@@ -274,9 +242,8 @@ interface TerminalAgentSubMenuContentProps {
     input: TerminalAgentWorktreeCreateInput,
   ) => void;
   /**
-   * Per-parent staging-key override (see `AddArtifactDropdownProps`). When
-   * `undefined`, fall back to the epic-scoped `pendingTerminalAgentStagingKey`
-   * launcher slot.
+   * Per-parent staging-key override (see `AddArtifactDropdownProps`).
+   * When `undefined`, fall back to the epic-scoped `pendingTerminalAgentStagingKey` launcher slot.
    */
   readonly terminalAgentStagingKey: WorktreeStagingKey | undefined;
 }
@@ -289,25 +256,13 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     tuiAgentPending,
     workspaceSeed,
   } = props;
-  // The host the agent launches on - `hostScope`'s fixed host when a row pins
-  // one, else this window's composer surface pin (`pin ?? effective`), which
-  // is what the active-scope host list below now writes instead of rebinding
-  // the app (redesign P1.2, selection model §2). Resolved through the SAME
-  // primitive the picker below applies to its `runTargetHostId`, so the
-  // toolbar store's catalog, the picker and the saved-args `providers.list`
-  // read below can never disagree on the host, and none of them can drift onto
-  // another host than the workspace controls create on.
+  // The host the agent launches on - `hostScope`'s fixed host when a row pins one, else this window's composer surface pin (`pin ?? effective`), which is what the active-scope host list below now writes instead of rebinding the app (redesign P1.2, selection model §2).
+  // Resolved through the SAME primitive the picker below applies to its `runTargetHostId`, so the toolbar store's catalog, the picker and the saved-args `providers.list` read below can never disagree on the host, and none of them can drift onto another host than the workspace controls create on.
   const composerPin = useComposerSurfaceHostPin();
   const launchHostId =
     hostScope.kind === "fixed" ? hostScope.hostId : composerPin.resolvedHostId;
-  // `honoredSelection`, never `selection`: a following launcher keeps the
-  // app-wide bound client (already on the effective host); only a pin that
-  // can still SERVE needs its own requester. Same rule as the composer. This
-  // read `selection` once - the raw pin - so a pin whose host had died still
-  // aimed the catalog, the profile list and the picker at the dead machine
-  // while `launchHostId` above had already re-resolved to the live one: the
-  // catalog never populated and the terminal-agent launch stayed disabled
-  // under a chip naming a host that was fine.
+  // `honoredSelection`, never `selection`: a following launcher keeps the app-wide bound client (already on the effective host); only a pin that can still SERVE needs its own requester.
+  // This read `selection` once - the raw pin - so a pin whose host had died still aimed the catalog, the profile list and the picker at the dead machine while `launchHostId` above had already re-resolved to the live one: the catalog never populated and the terminal-agent launch stayed disabled under a chip naming a host that was fine.
   const launchHostClient = useHostClientForHostId(
     hostScope.kind === "fixed"
       ? hostScope.hostId
@@ -400,12 +355,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     (state) => state.clear,
   );
 
-  // The seed flows through the picker's own seeding (the `seedIntent` prop on
-  // ActiveHostWorkspaceControls below) as the top-precedence tier - the SAME
-  // single seeding authority GUI chat creation uses - so there is no separate
-  // seed-application effect racing the folder rows' generic auto-default. We
-  // only clear the pending slot on unmount / epic change so a reopened launcher
-  // re-seeds fresh from the latest conversation.
+  // We only clear the pending slot on unmount / epic change so a reopened launcher re-seeds fresh from the latest conversation.
   useEffect(() => {
     return () => {
       clearStagedIntent(stagingKey);
@@ -432,15 +382,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             lockedHarnessId={null}
             disabled={tuiAgentPending}
             registerActivation={false}
-            // The launch host (see `launchHostId` above): a row-pinned fixed
-            // host, or `null` = the app-wide default for a brand-new node
-            // with no tab to bind to yet - the same scope as this submenu's
-            // own `providers.list` read.
+            // The launch host (see `launchHostId` above): a row-pinned fixed host, or `null` = the app-wide default for a brand-new node with no tab to bind to yet - the same scope as this submenu's own `providers.list` read.
             createProfileHostId={launchHostId}
             runTargetHostId={launchHostId}
-            // A menu has no terminal surface of its own, and its launch host
-            // may not be the tab's; the setup CTA shows its steps without the
-            // button and names the chat picker instead.
+            // A menu has no terminal surface of its own, and its launch host may not be the tab's; the setup CTA shows its steps without the button and names the chat picker instead.
             terminalLoginSurface={null}
             profileAdmission={null}
           />

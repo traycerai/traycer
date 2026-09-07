@@ -77,9 +77,8 @@ describe("TerminalSessionRegistry", () => {
     registry.acquire("terminal-1", () => owned.handle, HOST_ID);
     registry.release("terminal-1", owned.handle, true);
 
-    // Still a live registry member for the linger window: subscribe was
-    // reopened as cache (the presentation stream closed) and the xterm
-    // follower keeps its engine.
+    // Still a live registry member for the linger window: subscribe was reopened as cache (the
+    // presentation stream closed) and the xterm follower keeps its engine.
     expect(owned.closeCount()).toBe(1);
     expect(owned.viewers()).toEqual(["presentation", "cache"]);
     expect(registry.get("terminal-1")).toBe(owned.handle);
@@ -211,9 +210,8 @@ describe("TerminalSessionRegistry", () => {
     owned.forEach((entry, index) => {
       registry.acquire(`terminal-${index}`, () => entry.handle, HOST_ID);
     });
-    // All releases happen in the same synchronous batch (same tick), so
-    // ordering relies entirely on the monotonic release sequence, not on
-    // `Date.now()` ticking between them.
+    // All releases happen in the same synchronous batch (same tick), so ordering relies entirely on
+    // the monotonic release sequence, not on `Date.now()` ticking between them.
     owned.forEach((entry, index) => {
       registry.release(`terminal-${index}`, entry.handle, true);
     });
@@ -380,9 +378,6 @@ describe("TerminalSessionRegistry", () => {
     registry.release("tab-1", owned.handle, true);
     registry.rekeyLeaseFreeEntry("tab-1", "tab-2");
 
-    // The defunct watcher must target the rekeyed entry: with the old
-    // subscription (closure over "tab-1") the exit would evict nothing and
-    // the dead handle would stay warm forever.
     owned.callbacks().onExit({
       kind: "exit",
       hasBinaryPayload: false,
@@ -478,9 +473,8 @@ describe("TerminalSessionRegistry", () => {
     });
 
     expect(owned.handle.store.getState().status).toBe("reaped");
-    // Unlike a merely "lost" terminal-agent (kept warm - see the sibling test
-    // above), a confirmed-reaped one is a dead end: keeping it warm would
-    // shadow the fresh create-then-acquire bootstrap once the tile revives.
+    // Unlike a merely "lost" terminal-agent (kept warm - see the sibling test above), a
+    // confirmed-reaped one is a dead end: keeping it warm would shadow the fresh create-then-acquire
     expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
     // A reopened tab must never adopt the dead entry - there is nothing left
@@ -505,21 +499,13 @@ describe("TerminalSessionRegistry", () => {
 
     registry.acquire("terminal-1", () => ownedA.handle, HOST_ID);
 
-    // The recovery path (`useTerminalSessionRecovery`'s `doRecover`) replaces
-    // A's entry outright via `forceRelease` - consumer A's React effect has
-    // not unmounted yet and still holds a reference to `ownedA.handle`. B is
-    // the fresh handle the remounted bootstrap subtree acquires under the
-    // SAME instance id.
     registry.forceRelease("terminal-1");
     const ownedB = createHandle("terminal");
     registry.acquire("terminal-1", () => ownedB.handle, HOST_ID);
     expect(registry.get("terminal-1")).toBe(ownedB.handle);
 
-    // Consumer A's own effect cleanup finally runs (its key-swapped subtree
-    // unmounts) and releases its now-stale handle reference. Before the
-    // handle-identity guard this decremented B's lease and could park B's
-    // still-actively-held entry on the release-linger clock a release too
-    // early.
+    // Consumer A's own effect cleanup finally runs (its key-swapped subtree unmounts) and releases its
+    // now-stale handle reference.
     registry.release("terminal-1", ownedA.handle, true);
 
     // B is still actively leased - its own consumer never released it - so a
@@ -677,12 +663,8 @@ describe("TerminalSessionRegistry", () => {
   });
 
   it("follows the active retention profile's linger cap, not the desktop constant", () => {
-    // `TerminalSessionRegistry` has no constructor option for this cap - it
-    // reads `getRetentionProfile().maxLingeringPlainTerminals` fresh on every
-    // warm-pool walk (see `terminal-session-registry.ts`'s `maxWarm` getter).
-    // Mirrors the desktop-cap fixture above ("caps the linger pool..."), but
-    // proves the SMALLER mobile number is what actually governs once that
-    // profile is active, not `MAX_LINGERING_PLAIN_TERMINALS`.
+    // `TerminalSessionRegistry` has no constructor option for this cap - it reads
+    // `getRetentionProfile().maxLingeringPlainTerminals` fresh on every warm-pool walk (see
     setRetentionProfile(MOBILE_RETENTION_PROFILE);
     const registry = new TerminalSessionRegistry();
     const owned = Array.from(

@@ -88,9 +88,7 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 /**
- * Records every call the client instance makes and gives the test full
- * control over when `attach` resolves and what it resolves with - the
- * plan explicitly wants a fake transport, not a real engine, for this file.
+ * Records every call the client instance makes and gives the test full control over when `attach` resolves and what it resolves with - the plan explicitly wants a fake transport, not a real engine, for this file.
  */
 class FakeTransport implements SelectionAuthorityClientTransport {
   private readonly seqs: readonly number[];
@@ -107,11 +105,7 @@ class FakeTransport implements SelectionAuthorityClientTransport {
   }> = [];
 
   /**
-   * Incremented by every subscription's `dispose()` - the three the
-   * constructor takes out (selection/leases/reattach). This is what tells
-   * "the instance disposed" apart from "the instance merely never went
-   * live": a client stuck in `buffering` also delivers nothing and also
-   * never calls `reportEvidence`, but it never disposes its subscriptions.
+   * Incremented by every subscription's `dispose()` - the three the constructor takes out (selection/leases/reattach).
    */
   disposedSubscriptionCount = 0;
 
@@ -350,10 +344,6 @@ describe("BufferedSelectionAuthorityClient - failure arms dispose", () => {
         failureCase.resolveWith ?? { ok: false, kind: "superseded" },
       );
 
-      // The instance actually tore down its transport subscriptions (all
-      // three: selection, leases, reattach) - not merely stuck buffering,
-      // which would also produce zero delivery and zero reportEvidence
-      // calls but leak the listeners.
       expect(transport.disposedSubscriptionCount).toBe(3);
 
       transport.emitSelection({ revision: 999, change: selectionChangeStub() });
@@ -547,7 +537,7 @@ describe("RotatingSelectionAuthorityClient - rotation ordering", () => {
       throw new Error("expected the reattach handler to have fired");
     await secondAttachPromise;
 
-    // Events from the FIRST (now-retired) instance must not reach the listener.
+    // Events from the first (now-retired) instance must not reach the listener.
     firstTransport.emitLeases({ revision: 999, change: [] });
     expect(received).toEqual([]);
 
@@ -777,9 +767,6 @@ describe("RotatingSelectionAuthorityClient - B5/B6: a retired instance is never 
       );
     });
 
-    // Resolving with snapshot revision 5 (< 6) makes install() replay the
-    // buffered reattachRequired, which rotates and disposes instance #1
-    // BEFORE the outer attach() call below ever settles.
     firstTransport.resolveLastAttach({
       ok: true,
       incarnationId: "inc-1",
@@ -787,9 +774,7 @@ describe("RotatingSelectionAuthorityClient - B5/B6: a retired instance is never 
     });
     const result = await consumerAttach;
 
-    // The consumer's own attach() promise resolves superseded, never the
-    // stale ok:true that landed on a generation this layer already rotated
-    // away from.
+    // The consumer's own attach() promise resolves superseded, never the stale ok:true that landed on a generation this layer already rotated away from.
     expect(result).toEqual({ ok: false, kind: "superseded" });
 
     expect(transports.length).toBe(2);
@@ -803,12 +788,8 @@ describe("RotatingSelectionAuthorityClient - B5/B6: a retired instance is never 
     firstTransport.emitLeases({ revision: 999, change: [] });
     expect(received).toEqual([]);
 
-    // ...and it is still DISPOSED, not merely unsubscribed. The distinction
-    // is observable exactly here: a retired instance that had been flipped to
-    // `live` would hold an installed incarnation and would still forward
-    // evidence under it - the outgoing generation reporting as if it owned
-    // the reporter. Dropped events alone cannot show that, because dispose
-    // already tore down the transport subscriptions.
+    // ...and it is still disposed, not merely unsubscribed.
+    // Dropped events alone cannot show that, because dispose already tore down the transport subscriptions.
     await instanceOne.reportEvidence(dialReportStub("H", "after-retire"));
     expect(firstTransport.reportEvidenceCalls.length).toBe(0);
 

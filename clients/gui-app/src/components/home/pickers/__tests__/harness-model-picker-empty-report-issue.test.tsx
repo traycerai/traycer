@@ -123,9 +123,8 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     });
     const reportButton = screen.getByRole("button", { name: "Report issue" });
 
-    // A `role="option"` element's descendants are flattened/disabled by
-    // assistive tech, so the action must not be nested inside the
-    // `aria-disabled="true"` option row - only a sibling of it.
+    // A `role="option"` element's descendants are flattened/disabled by assistive tech, so the action must not be
+    // nested inside the `aria-disabled="true"` option row - only a sibling of it.
     expect(reportButton.closest('[role="option"]')).toBeNull();
     expect(reportButton.closest('[aria-disabled="true"]')).toBeNull();
     expect(reportButton.hasAttribute("disabled")).toBe(false);

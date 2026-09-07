@@ -10,10 +10,10 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
 export interface ResolvedClonedChatSettings {
   readonly status: "ready";
   readonly settings: ChatRunSettings;
-  /** True when the source profile could not be mapped to an equivalent
-   *  profile on the target host, so `settings.profileId` was reset to the
-   *  ambient login instead. Never automatic beyond this notice - the caller
-   *  surfaces it (toast) so the switch is never silent. */
+  /**
+   * True when the source profile could not be mapped to an equivalent profile on the target host, so `settings.profileId` was reset to the ambient login instead.
+   * Never automatic beyond this notice - the caller surfaces it (toast) so the switch is never silent.
+   */
   readonly fallenBackToAmbient: boolean;
 }
 
@@ -41,9 +41,8 @@ export type ClonedChatSettingsResolution =
   | ResolvedClonedChatSettings
   | ClonedChatProfileRecoveryRequired;
 
-// The wire array's ambient row keys itself by the literal "ambient" sentinel;
-// every run/session-level profileId (chat settings included) uses `null` for
-// the same concept. Mirrors `rate-limit-popover.tsx`'s identical mapping.
+// The wire array's ambient row keys itself by the literal "ambient" sentinel; every run/session-level profileId (chat settings included) uses `null` for the same concept.
+// Mirrors `rate-limit-popover.tsx`'s identical mapping.
 function normalizedProfileId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
 }
@@ -59,18 +58,8 @@ function findAccountUuid(
 }
 
 /**
- * Resolves the `ChatRunSettings` a cloned chat should start with on
- * `targetClient`'s host, given the source chat's own settings. Harness/model/
- * permission/reasoning/tier carry over verbatim (unlike today's clone, which
- * drops them entirely); only `profileId` needs host-aware remapping.
- *
- * `sourceClient: null` means the source host is unreachable (e.g. cloning off
- * a dead tile) - there is then no way to read the source profile's identity,
- * so a non-ambient profile may fall back only to an enabled target Terminal
- * account. A disabled identity match or missing enabled Terminal fallback
- * returns the explicit-selection state instead of silently changing identity.
- * Never throws: a target catalog failure is a distinct retryable outcome;
- * source identity failure still follows the explicit Terminal fallback rules.
+ * Resolves the `ChatRunSettings` a cloned chat should start with on `targetClient`'s host, given the source chat's own settings.
+ * Harness/model/ permission/reasoning/tier carry over verbatim (unlike today's clone, which drops them entirely); only `profileId` needs host-aware remapping.
  */
 export async function resolveClonedChatSettings(input: {
   readonly sourceSettings: ChatRunSettings;

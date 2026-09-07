@@ -20,12 +20,7 @@ import {
 
 const ACME = { owner: "acme", repo: "app" } as const;
 
-/**
- * The yes/no question, asked through the partition. There is deliberately no
- * any-match helper in the store any more: every production caller NAMES the
- * folders it describes, so the coarse answer had no honest consumer and a
- * second way to ask is how the granularity drifted in the first place.
- */
+/** The yes/no question, asked through the partition. */
 function sweptAnythingOf(
   key: WorktreeStagingKey,
   intent: WorktreeIntent,
@@ -125,10 +120,8 @@ describe("worktreeFolderIntentReferencesRemoved", () => {
     ).toBe(false);
   });
 
-  // Both sides unidentifiable is the local-repo-with-no-origin case: the
-  // branch name is all either side has, and this is exactly the shape that
-  // must still purge - otherwise the swept worktree keeps being offered as an
-  // "existing worktree" in new chats, which is the bug the purge exists for.
+  // Both sides unidentifiable is the local-repo-with-no-origin case: the branch name is all either
+  // side has, and this is exactly the shape that must still purge - otherwise the swept worktree
   it("purges on branch name alone when NEITHER side can identify its repo", () => {
     const removedUnidentified: RemovedWorktreeRefs = {
       worktreePaths: new Set(),
@@ -238,9 +231,8 @@ describe("worktree intent purge on sweep completion", () => {
     expect(next.getEpicIntent("epic-2", SWEPT_HOST)).toBeNull();
   });
 
-  // A sweep is one machine's filesystem event. The identically-named path and
-  // branch on another host still materialize there, so purging them would
-  // destroy a selection that is perfectly valid.
+  // A sweep is one machine's filesystem event. The identically-named path and branch on another host
+  // still materialize there, so purging them would destroy a selection that is perfectly valid.
   it("leaves ANOTHER host's identically-named path and branch untouched", () => {
     const memory = useWorktreeIntentMemoryStore.getState();
     for (const hostId of [SWEPT_HOST, OTHER_HOST]) {
@@ -313,9 +305,8 @@ describe("worktree intent purge on sweep completion", () => {
     });
   });
 
-  // The staged tier is deliberately never re-validated by the seeding tiers, so
-  // an over-broad purge here silently destroys a pick the other machine can
-  // still execute.
+  // The staged tier is deliberately never re-validated by the seeding tiers, so an over-broad purge
+  // here silently destroys a pick the other machine can still execute.
   it("leaves ANOTHER host's staged slot alone", () => {
     const staging = useWorktreeIntentStagingStore.getState();
     const sweptKey: WorktreeStagingKey = {
@@ -347,9 +338,8 @@ describe("worktree intent purge on sweep completion", () => {
     });
   });
 
-  // The other half of that filter. Pinned separately, because a later
-  // tightening to an exact host match would leave a `hostId: null` slot
-  // offering a deleted worktree with nothing failing.
+  // The other half of that filter. Pinned separately, because a later tightening to an exact host
+  // match would leave a `hostId: null` slot offering a deleted worktree with nothing failing.
   it("purges the unresolved-host staged bucket with the swept host", () => {
     const unresolvedKey: WorktreeStagingKey = {
       surface: "landing",
@@ -494,9 +484,8 @@ describe("purge and an in-flight dispatch", () => {
       .getState()
       .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
 
-    // The sweep removed a DIFFERENT branch. Refusing this one would cost the
-    // hand-back and - now that the refusal speaks - would tell the user a
-    // worktree was deleted that is still there.
+    // The sweep removed a DIFFERENT branch. Refusing this one would cost the hand-back and - now that
+    // the refusal speaks - would tell the user a worktree was deleted that is still there.
     expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
     expect(
       sweptAnythingOf(key, {
@@ -528,11 +517,7 @@ describe("purge and an in-flight dispatch", () => {
     ).toBe(false);
   });
 
-  // `-Jy80` REACHABILITY. `stagedWorktreeIntentAwaitsDispatchOutcome` is
-  // deliberately ownership-blind ("the last consumer is not the one owed a
-  // hand-back"), so an OLDER send's hand-back passes the gate while a NEWER
-  // dispatch owns the mark - and `setIntent`'s "one lifetime, one drop"
-  // coupling then takes the newer dispatch's `sweptRefsByKey` with it.
+  // `-Jy80` REACHABILITY.
   it("loses a newer dispatch's sweep evidence when an older prompt hands its pick back", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const older = existingBranchIntent("main");
@@ -564,12 +549,7 @@ describe("purge and an in-flight dispatch", () => {
     expect(sweptAnythingOf(key, { entries: [newer] })).toBe(true);
   });
 
-  // `-IfOZ`: a `WorktreeIntent` is one binding PER WORKSPACE FOLDER, and those
-  // are independent. The any-match predicate answers the yes/no question
-  // correctly, but using it to decide the hand-back made one removed worktree
-  // forfeit every surviving folder's binding - and then said "its staged
-  // worktree no longer exists", as though there had been one. The ordinary
-  // purge loop has always filtered per entry.
+  // `-IfOZ`: a `WorktreeIntent` is one binding PER WORKSPACE FOLDER, and those are independent.
   it("keeps the surviving folders when a sweep takes only one of them", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const doomed = existingBranchIntent("traycer/gone-branch");
@@ -618,11 +598,8 @@ describe("purge and an in-flight dispatch", () => {
     expect(partition.swept?.entries).toEqual([doomed]);
   });
 
-  // The `slotSegment !== ""` half of the host guard, which nothing exercised:
-  // dropping it left the whole suite green. An EMPTY host segment is the
-  // unresolved-host bucket, not a host - no machine can claim it, and any
-  // machine's sweep may concern it - so it must accumulate from every sweep
-  // rather than being filtered out as "not this host".
+  // The `slotSegment !== ""` half of the host guard, which nothing exercised: dropping it left the
+  // whole suite green.
   it("records a sweep against an unresolved-host slot, whichever host swept", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const unresolvedKey = { ...key, hostId: null };

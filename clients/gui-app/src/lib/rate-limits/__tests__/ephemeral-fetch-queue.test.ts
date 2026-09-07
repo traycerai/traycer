@@ -111,14 +111,8 @@ describe("ephemeral-fetch-queue", () => {
   });
 
   it("REISSUES a forced pull behind an in-flight automatic one instead of joining it", async () => {
-    // Joining used to be safe because every request forced a probe. Now that
-    // `force` rides the wire, the in-flight automatic pull travels as
-    // `force: false` and a v4 host may answer it from its gauge cache - so a
-    // joined forced pull gets a reading up to the host's read floor old when it
-    // asked for a probe. The refresh controls disable while their own target is
-    // fetching, but consuming a Codex rate-limit reset credit forces a re-read
-    // from outside any button, and answering THAT from cache shows the
-    // pre-reset numbers the user just paid to clear.
+    // Joining used to be safe because every request forced a probe.
+    // Now that `force` rides the wire, the in-flight automatic pull travels as `force: false` and a v4 host may answer it from its gauge cache - so a joined forced pull gets a reading up to the host's read floor old when it asked for a probe.
     const queryClient = newQueryClient();
     const forced: boolean[] = [];
     const settlers: Array<() => void> = [];
@@ -159,11 +153,7 @@ describe("ephemeral-fetch-queue", () => {
     expect(forced).toEqual([false, true]);
   });
 
-  // A response timeout after the request reached the host is not a failed read:
-  // the probe keeps running (a same-profile custodian alone can hold the gate
-  // for minutes) and the host captures it in its gauge cache. These pin that
-  // the queue goes back for it rather than leaving the user with a refresh that
-  // visibly failed and silently succeeded later.
+  // A response timeout after the request reached the host is not a failed read: the probe keeps running (a same-profile custodian alone can hold the gate for minutes) and the host captures it in its gauge cache.
   describe("read follow-up after we stop waiting", () => {
     function transportFailure(): HostTransportFailureError {
       return new HostTransportFailureError({
@@ -243,13 +233,8 @@ describe("ephemeral-fetch-queue", () => {
       expect(calls).toBe(2);
     });
 
-    // That cap is exactly what `isRateLimitQueryFailure` leans on to keep a
-    // still-running read hidden: it stays quiet because a collection is coming.
-    // Once the cap declines one, nothing is, and the surface has to say so - at
-    // the RIGHT moments. The two false readings below are the point: a row that
-    // reported exhausted while its own collection was still waiting, or still
-    // on the wire, would flash a failure in the middle of the recovery this
-    // whole lane exists to perform.
+    // That cap is exactly what `isRateLimitQueryFailure` leans on to keep a still-running read hidden: it stays quiet because a collection is coming.
+    // Once the cap declines one, nothing is, and the surface has to say so - at the RIGHT moments.
     it("reports the follow-up budget exhausted only once the collection has settled unheard", async () => {
       vi.useFakeTimers();
       const queryClient = newQueryClient();
@@ -307,18 +292,7 @@ describe("ephemeral-fetch-queue", () => {
     });
 
     it("does not let TanStack retry a queue-owned read into a second CLI probe", async () => {
-      // `newQueryClient()` sets `retry: false` as the DEFAULT, so every other
-      // test in this file is blind to what production actually does: the app
-      // QueryClient retries every non-`RetryableTransportError` once
-      // (`lib/query-client.ts`). This client mirrors THAT, so the assertion is
-      // about the queue's own `retry: false` on `fetchQuery` rather than about
-      // the fixture.
-      //
-      // Without it, the response budget elapsing on a read the host is still
-      // running makes TanStack re-send the SAME forced probe - a second codex
-      // subprocess while the first may still be completing - and holds the
-      // serial lane for up to another full budget before the catch schedules
-      // the one delayed gauge read that is supposed to own recovery.
+      // `newQueryClient()` sets `retry: false` as the DEFAULT, so every other test in this file is blind to what production actually does: the app QueryClient retries every non-`RetryableTransportError` once (`lib/query-client.ts`).
       vi.useFakeTimers();
       const queryClient = new QueryClient({
         defaultOptions: {
@@ -516,9 +490,7 @@ describe("ephemeral-fetch-queue", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "codex",
         profileId: "work-profile",
-        // Rides the wire request only - the cache key asserted just below is
-        // deliberately force-less, so a forced pull and an automatic one share
-        // one entry instead of splitting into two.
+        // Rides the wire request only - the cache key asserted just below is deliberately force-less, so a forced pull and an automatic one share one entry instead of splitting into two.
         force: true,
       },
       RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
@@ -575,12 +547,8 @@ describe("ephemeral-fetch-queue", () => {
   });
 
   it("dedupes rapid identical-target force enqueues into a single fetch (target registry join, not four serialized fetches)", async () => {
-    // Pre-registry behavior serialized four rapid same-target force enqueues
-    // into four back-to-back fetches. The target registry now joins a
-    // still-queued identical target instead of re-registering it, so four
-    // back-to-back force refreshes for the SAME provider/profile collapse
-    // into ONE fetch - see "rate-limit queue target registry" below for the
-    // dedup/promotion/join mechanics in isolation.
+    // Pre-registry behavior serialized four rapid same-target force enqueues into four back-to-back fetches.
+    // The target registry now joins a still-queued identical target instead of re-registering it, so four back-to-back force refreshes for the SAME provider/profile collapse into ONE fetch - see "rate-limit queue target registry" below for the.
     const queryClient = newQueryClient();
     const { request, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
@@ -627,9 +595,7 @@ describe("ephemeral-fetch-queue", () => {
     settlers[0].ok();
     await flush();
 
-    // The queue's queryFn wraps the raw response into the provider-pull
-    // envelope before TanStack caches it - `response()`'s `providerRateLimits:
-    // null` resolves to an envelope with nothing retained.
+    // The queue's queryFn wraps the raw response into the provider-pull envelope before TanStack caches it - `response()`'s `providerRateLimits: null` resolves to an envelope with nothing retained.
     expect(queryClient.getQueryState(keyFor("codex"))?.data).toEqual({
       latest: null,
       lastGood: null,
@@ -805,17 +771,7 @@ describe("ephemeral-fetch-queue", () => {
   });
 
   it("force: true actually refetches fresh-cached data under the app QueryClient's global staleTime", async () => {
-    // THE regression that made "Refresh all" look broken in the real app while
-    // every test passed: `fetchQuery` inherits the QueryClient's GLOBAL
-    // `staleTime` default (60s in the app's `query-client.ts`) and serves
-    // still-fresh cache without fetching. The popover's open-time refresh
-    // keeps provider data younger than 60s, so a user's `force: true` refresh
-    // resolved from cache in a microtask - no subprocess, no `isFetching`, a
-    // sub-frame `draining` blip - while the httpFetch lane's
-    // `invalidateQueries` (which always refetches) visibly spun. Every prior
-    // test built a bare `new QueryClient()` (staleTime 0), where `fetchQuery`
-    // always fetches - so the suite exercised semantics the app doesn't run.
-    // This test runs the production configuration.
+    // THE regression that made "Refresh all" look broken in the real app while every test passed: `fetchQuery` inherits the QueryClient's GLOBAL `staleTime` default (60s in the app's `query-client.ts`) and serves still-fresh cache without fetching.
     const queryClient = createAppQueryClient();
     const { request, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
@@ -838,11 +794,7 @@ describe("ephemeral-fetch-queue", () => {
   });
 
   it("an automatic (force: false) enqueue re-checks freshness at its turn in the lane, not just at enqueue time", async () => {
-    // With `staleTime: 0` on the queue's own `fetchQuery`, the accidental
-    // dedupe the inherited global staleTime used to provide is gone - so the
-    // queue re-checks the freshness floor when a queued automatic fetch's
-    // turn arrives. An automatic trigger enqueued behind a fetch for the same
-    // provider must not re-spawn a subprocess for data that just became fresh.
+    // With `staleTime: 0` on the queue's own `fetchQuery`, the accidental dedupe the inherited global staleTime used to provide is gone - so the queue re-checks the freshness floor when a queued automatic fetch's turn arrives.
     const queryClient = createAppQueryClient();
     const { request, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
@@ -880,21 +832,11 @@ describe("ephemeral-fetch-queue", () => {
   });
 });
 
-// Cool-down after a `usage_fetch_failed` response (PR tech plan: a server-side
-// 429 on Anthropic's usage endpoint with a multi-minute penalty window - the
-// point of this cool-down is to stop automatic polling from re-tripping it).
-// Uses fake timers (and `vi.setSystemTime`) so the tests can cross both the
-// `PROVIDER_RATE_LIMITS_STALE_TIME_MS` freshness floor (5m) AND the 15-minute
-// cool-down window deterministically, without a real 5-minute wait - and to
-// prove the cool-down is a DISTINCT gate from the freshness floor (an
-// automatic enqueue past 5m but still inside the cool-down must stay
-// suppressed).
+// Cool-down after a `usage_fetch_failed` response (PR tech plan: a server-side 429 on Anthropic's usage endpoint with a multi-minute penalty window - the point of this cool-down is to stop automatic polling from re-tripping it).
 describe("post-usage_fetch_failed cool-down", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // A realistic epoch, not 0: `isFresh()`'s default `dataUpdatedAt ?? 0` for
-    // a never-fetched key would otherwise sit right next to a clock started
-    // at 0, making the very first enqueue look artificially "fresh".
+    // A realistic epoch, not 0: `isFresh()`'s default `dataUpdatedAt ?? 0` for a never-fetched key would otherwise sit right next to a clock started at 0, making the very first enqueue look artificially "fresh".
     vi.setSystemTime(1_700_000_000_000);
   });
 
@@ -926,10 +868,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
 
-    // Past the 5-minute freshness floor, but still well inside the 15-minute
-    // cool-down - an automatic trigger (interval tick / turn completion) must
-    // still be suppressed here, proving the cool-down is a separate gate from
-    // freshness (freshness alone would already allow a re-fetch by now).
+    // Past the 5-minute freshness floor, but still well inside the 15-minute cool-down - an automatic trigger (interval tick / turn completion) must still be suppressed here, proving the cool-down is a separate gate from freshness (freshness alone would already.
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
@@ -985,9 +924,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
 
-    // Past the freshness floor only (not the 5-minute cool-down window) - a
-    // `timeout` response must not have started this provider's cool-down, so
-    // the freshness floor alone (already elapsed) is what gates this.
+    // Past the freshness floor only (not the 5-minute cool-down window) - a `timeout` response must not have started this provider's cool-down, so the freshness floor alone (already elapsed) is what gates this.
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
@@ -1024,9 +961,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
 
-    // Past the freshness floor, well inside what would have been the original
-    // cool-down window - a subsequent automatic trigger now proceeds, because
-    // the clean read above cleared the standing cool-down.
+    // Past the freshness floor, well inside what would have been the original cool-down window - a subsequent automatic trigger now proceeds, because the clean read above cleared the standing cool-down.
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
@@ -1037,11 +972,7 @@ describe("post-usage_fetch_failed cool-down", () => {
   });
 });
 
-// The per-target `queued`/`fetching` registry (`getRateLimitQueueTargetPhase` /
-// `subscribeRateLimitQueueTargets`) backing `useRateLimitQueueTargetPhase` -
-// the popover row-level "Queued…"/spinner copy. Distinct from the lane-wide
-// `isRateLimitQueueDraining` signal: a target can be truthfully reported
-// "queued" while a DIFFERENT target occupies the serial lane.
+// The per-target `queued`/`fetching` registry (`getRateLimitQueueTargetPhase` / `subscribeRateLimitQueueTargets`) backing `useRateLimitQueueTargetPhase` - the popover row-level "Queued…"/spinner copy.
 describe("rate-limit queue target registry", () => {
   beforeEach(() => {
     __resetRateLimitQueueForTests();
@@ -1246,12 +1177,8 @@ describe("rate-limit queue target registry", () => {
       "fetching",
     );
 
-    // A second caller (e.g. a popover row remounting) asks for the exact same
-    // target while the first fetch is still in flight. The in-flight pull is
-    // itself forced, so its result is the probe this caller wants - joining is
-    // correct, and reissuing would spawn a redundant CLI subprocess. Contrast
-    // the reissue case above, where the in-flight pull is AUTOMATIC and may be
-    // answered from the host gauge cache.
+    // A second caller (e.g. a popover row remounting) asks for the exact same target while the first fetch is still in flight.
+    // The in-flight pull is itself forced, so its result is the probe this caller wants - joining is correct, and reissuing would spawn a redundant CLI subprocess.
     const joinResult = enqueueRateLimitFetchBatchForScope(
       { hostId: HOST_ID, queryClient, request },
       [ambientTarget("codex")],
@@ -1306,9 +1233,7 @@ describe("rate-limit queue target registry", () => {
     await flush();
     expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBe("queued");
 
-    // While it waits, the codex cache key becomes fresh (a sibling lane wrote
-    // it) - without promotion, `shouldSkipAutomatic()` would now skip codex's
-    // still-force:false turn entirely.
+    // While it waits, the codex cache key becomes fresh (a sibling lane wrote it) - without promotion, `shouldSkipAutomatic()` would now skip codex's still-force:false turn entirely.
     queryClient.setQueryData(keyFor("codex"), response());
 
     // A manual refresh for the exact same target joins the queued entry
@@ -1323,9 +1248,7 @@ describe("rate-limit queue target registry", () => {
     blocker.settlers[0].ok();
     await flush();
 
-    // The promotion made codex's turn run despite the now-fresh cache -
-    // proving `force` actually propagated onto the already-queued entry
-    // rather than being dropped as a redundant enqueue.
+    // The promotion made codex's turn run despite the now-fresh cache - proving `force` actually propagated onto the already-queued entry rather than being dropped as a redundant enqueue.
     expect(codexRequest).toHaveBeenCalledTimes(1);
     expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBeNull();
   });
@@ -1367,13 +1290,7 @@ describe("rate-limit queue target registry", () => {
   });
 
   it("keeps host-scoped targets separate: the same provider/profile on two hosts tracks independent registry entries and is never joined as one target", async () => {
-    // The serial lane itself is shared process-wide across every host scope
-    // (by design - see the module doc comment), so these two items still run
-    // one after the other rather than concurrently. What this test proves is
-    // narrower: an identical (providerId, profileId) pair on two DIFFERENT
-    // hosts must occupy two DISTINCT registry entries - never joined/deduped
-    // into one target the way a same-host repeat enqueue is - and each host's
-    // fetch/cleanup is independent of the other's.
+    // The serial lane itself is shared process-wide across every host scope (by design - see the module doc comment), so these two items still run one after the other rather than concurrently.
     const queryClient = newQueryClient();
     const hostA = makeControllableRequest();
     const hostB = makeControllableRequest();
@@ -1390,9 +1307,7 @@ describe("rate-limit queue target registry", () => {
     );
     await flush();
 
-    // host-a's item reached the lane first and started fetching; host-b's
-    // identical (provider, profile) pair got its OWN registry entry - queued
-    // behind host-a's, not silently joined into it.
+    // host-a's item reached the lane first and started fetching; host-b's identical (provider, profile) pair got its OWN registry entry - queued behind host-a's, not silently joined into it.
     expect(hostA.request).toHaveBeenCalledTimes(1);
     expect(hostB.request).not.toHaveBeenCalled();
     expect(

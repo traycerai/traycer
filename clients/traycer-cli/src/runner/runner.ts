@@ -10,25 +10,16 @@ import {
   type RuntimeContext,
 } from "./runtime";
 
-// Context handed to every CommandFn. `progress(info)` is a thin
-// convenience mirroring output.progress so command bodies don't have
-// to reach into `ctx.output` for the common case. Field shape matches
-// the NDJSON progress event 1:1 - pass `null` for unknown fields.
+// Context handed to every CommandFn.
+// `progress(info)` is a thin convenience mirroring output.progress so command bodies don't have to reach into `ctx.output` for the common case.
 export interface CommandContext {
   readonly runtime: RuntimeContext;
   readonly output: Output;
   progress(info: ProgressInfo): void;
 }
 
-// What a command returns to the runner:
-//   - `data` is the structured payload surfaced as `result.data` in NDJSON.
-//   - `human` is the optional text to print on the human path.
-//     `null` means "command already emitted its own human output" (e.g.
-//     host-status renders its own multi-line block).
-//   - `exitCode` defaults to 0; non-zero lets a command succeed in the
-//     "we did our job, here's the answer" sense while still signalling a
-//     state the shell convention treats as a failure (e.g. whoami when
-//     not logged in).
+// What a command returns to the runner: - `data` is the structured payload surfaced as `result.data` in NDJSON. - `human` is the optional text to print on the human path.
+// `null` means "command already emitted its own human output" (e.g. host-status renders its own multi-line block). - `exitCode` defaults to 0; non-zero lets a command succeed in the "we did our job, here's the answer" sense while still signalling a state the shell convention treats as a failure (e.g. whoami when not logged in).
 export interface CommandResult {
   readonly data: unknown;
   readonly human: string | null;
@@ -37,18 +28,8 @@ export interface CommandResult {
 
 export type CommandFn = (ctx: CommandContext) => Promise<CommandResult>;
 
-// Drives a single command end-to-end:
-//   1. Resolve runtime flags + env into a RuntimeContext.
-//   2. Build the appropriate Output (NDJSON or human).
-//   3. Invoke the command function.
-//   4. Render the human result OR emit the NDJSON `result` event.
-//   5. On throw: emit the terminal `result` event with status=error and
-//      exit with the code on the CliError (or 1 for unknown errors).
-//
-// The runner owns process termination - callers should not exit themselves.
-// It terminates through `finishAndExit`, which records the code on
-// `process.exitCode` and lets the loop end rather than calling
-// `process.exit()`; see exit.ts for the win32 teardown abort that motivates it.
+// Drives a single command end-to-end: 1.
+// Resolve runtime flags + env into a RuntimeContext. 2.
 export async function runCommand(
   fn: CommandFn,
   flags: RawRunnerFlags,
@@ -84,19 +65,13 @@ export async function runCommand(
       errorFromUnknown(err),
     );
     output.emitError(cliErr.code, cliErr.message, cliErr.details);
-    // The error envelope was just written to a possibly-piped stdout, and the
-    // Sentry client is still live. `finishAndExit` flushes the first and shuts
-    // down the second before letting the loop end - see exit.ts for why the
-    // process no longer tears itself down here.
+    // The error envelope was just written to a possibly-piped stdout, and the Sentry client is still live.
+    // `finishAndExit` flushes the first and shuts down the second before letting the loop end - see exit.ts for why the process no longer tears itself down here.
     await finishAndExit(cliErr.exitCode);
     return;
   }
-  // A process-fatal handler (unhandled rejection / uncaught exception) may
-  // have fired WHILE this command was running. Draining is what makes that
-  // survivable - the command keeps going and can still return a result - but
-  // the process has already failed, and Desktop now trusts a terminal `ok`
-  // over a non-zero exit. Emitting success here would report a failed
-  // install/update/ensure as successful, so report what actually happened.
+  // A process-fatal handler (unhandled rejection / uncaught exception) may have fired WHILE this command was running.
+  // Draining is what makes that survivable - the command keeps going and can still return a result - but the process has already failed, and Desktop now trusts a terminal `ok` over a non-zero exit.
   if (isProcessFatal()) {
     runtime.logger.error(
       "CLI command completed after a process-fatal failure",
@@ -123,9 +98,7 @@ export async function runCommand(
   } else if (result.human !== null && !runtime.quiet) {
     output.human(result.human);
   }
-  // Terminal `result` line just went out. `finishAndExit` still flushes it
-  // first - that is the flush the `host available --include-pre-releases`
-  // truncation turned on, and it is unrelated to the teardown abort the rest
-  // of that helper addresses. See std-write.ts and exit.ts.
+  // Terminal `result` line just went out.
+  // `finishAndExit` still flushes it first - that is the flush the `host available --include-pre-releases` truncation turned on, and it is unrelated to the teardown abort the rest of that helper addresses.
   await finishAndExit(result.exitCode);
 }

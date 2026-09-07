@@ -7,14 +7,7 @@ import {
 import { resolveEpicId } from "../internal/agent-context";
 import type { CommandFn } from "../runner/runner";
 
-/**
- * `traycer agent transcript` - print another agent's conversation as an
- * XML-tagged string (`agent.getTranscript`). Chat-interface agents return their
- * persisted message history, readable across hosts. Terminal-interface agents
- * return the coding agent's own durable session history - NOT PTY scrollback,
- * so it survives the terminal closing - but the read must run on the host that
- * owns that agent.
- */
+/** `traycer agent transcript` - print another agent's conversation as an XML-tagged string (`agent.getTranscript`). Chat-interface agents return their persisted message history, readable across hosts. */
 export function buildAgentTranscriptCommand(opts: {
   readonly epicId: string | null;
   readonly agentId: string;

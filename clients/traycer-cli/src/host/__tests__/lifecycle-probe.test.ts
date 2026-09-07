@@ -19,12 +19,8 @@ import {
   writeProbeMarkerAtomically,
 } from "../lifecycle-probe";
 
-// T6: unit tests for the CLI-side probe transport — frame parsing off the
-// `stdio[3]` socket (`readLayer0Frame`), the marker read/write round trip,
-// and `readLiveProbeContext`'s incumbent-bypass authorization check. Scoped
-// to a temp data dir via a mocked `../store/paths` (same pattern as
-// `store/__tests__/owned-temp.test.ts`) so nothing here ever touches a real
-// `~/.traycer/host` tree.
+// T6: unit tests for the CLI-side probe transport - frame parsing off the `stdio[3]` socket (`readLayer0Frame`), the marker read/write round trip, and `readLiveProbeContext`'s incumbent-bypass authorization check.
+// Scoped to a temp data dir via a mocked `../store/paths` (same pattern as `store/__tests__/owned-temp.test.ts`) so nothing here ever touches a real `~/.traycer/host` tree.
 
 let scopedRoot = "";
 
@@ -144,12 +140,8 @@ describe("readLayer0Frame", () => {
   it("rejects a 'unavailable' frame - a shape the host has no way to emit must not decode as a verdict", async () => {
     const stream = new PassThrough();
     const pending = readLayer0Frame(stream, 1_000);
-    // `unavailable` was a fourth arm carried only by the OSS client's
-    // hand-written copy of the host's union; the host emits three. Now that
-    // both sides import the declaration from `@traycer/protocol`, a frame
-    // claiming this arm is either a corrupted stream or a foreign writer, and
-    // either way must leave the probe inconclusive rather than be read as a
-    // degraded-but-started verdict.
+    // `unavailable` was a fourth arm carried only by the OSS client's hand-written copy of the host's union; the host emits three.
+    // Now that both sides import the declaration from `@traycer/protocol`, a frame claiming this arm is either a corrupted stream or a foreign writer, and either way must leave the probe inconclusive rather than be read as a degraded-but-started verdict.
     writeFrame(stream, {
       attemptId: "a-unavailable",
       layer0: "unavailable",
@@ -406,15 +398,8 @@ describe("readLiveProbeContext — incumbent-bypass authorization", () => {
   });
 });
 
-// Finding F4. A reclaim interrupted at `reclaim-awaiting-probe` (logout
-// between the journal write and the next reconcile) strands the journal at
-// that phase, and recovery is trigger-bounded, so nothing clears it. Without
-// this bound, every login-time `host start --service-label <label>` re-enters
-// probe mode -- which skips `findIncumbentHost` entirely -- and stacks
-// another supervisor onto the live fallback host, forever. `probeDeadlineAt`
-// is written in the SAME write that records the phase precisely to stop that;
-// the reconciler enforced it, the login-time path (the one that grants the
-// bypass) did not.
+// Finding F4.
+// A reclaim interrupted at `reclaim-awaiting-probe` (logout between the journal write and the next reconcile) strands the journal at that phase, and recovery is trigger-bounded, so nothing clears it.
 describe("probe authority is bounded by probeDeadlineAt", () => {
   const DEADLINE = "2026-07-27T00:01:00.000Z";
 
@@ -485,11 +470,8 @@ describe("probe authority is bounded by probeDeadlineAt", () => {
   });
 });
 
-// Finding F6. The CLI used to hand-roll a second `transition.json` parser
-// that returned `T | null`, so a journal written by a NEWER desktop (v2) was
-// indistinguishable from no journal and from corrupt bytes: the probe simply
-// never ran, with no diagnosis anywhere. The plan is explicit that no boolean
-// may collapse "could not know" into a value.
+// Finding F6.
+// The CLI used to hand-roll a second `transition.json` parser that returned `T | null`, so a journal written by a NEWER desktop (v2) was indistinguishable from no journal and from corrupt bytes: the probe simply never ran, with no diagnosis anywhere.
 describe("journal decode keeps the evidence algebra intact", () => {
   it("distinguishes a newer schema version from an absent journal", async () => {
     await writeFile(

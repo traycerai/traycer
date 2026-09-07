@@ -43,11 +43,6 @@ const SUSTAINED_TICKS = Math.ceil(SUSTAINED_HEALTH_MS / INTERVAL_MS) + 20;
 const DEAD = (): Promise<HostProcessLiveness> => Promise.resolve("dead");
 const ALIVE = (): Promise<HostProcessLiveness> => Promise.resolve("alive");
 
-/**
- * These suites predate the recovery governor and exercise the monitor against
- * a host whose process is GONE - the genuinely dead case they were written
- * for, and the one where a respawn is the right answer.
- */
 function startMonitor(deps: {
   readonly host: IpcHostLifecycle;
   readonly intervalMs: number;
@@ -160,13 +155,6 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("still converges on a replacement host whose own process is alive", async () => {
-    // Same supervisor-respawn as above, but with the liveness gate in play. The
-    // gate asks about whatever pid.json currently holds - which here is the
-    // REPLACEMENT, alive and healthy - while the snapshot the renderer is
-    // pointed at names the dead predecessor. Reading "alive" as "the snapshot's
-    // host is merely busy" would hold the stale snapshot for the whole
-    // unreachable-demote window, leaving the renderer on a dead endpoint for ten
-    // minutes when a reload converges it on the next tick.
     const replacement: DesktopPublishedHostSnapshot = {
       ...SNAPSHOT,
       pid: SNAPSHOT.pid + 1,
@@ -199,10 +187,7 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("does not respawn a host stopped in the window between the outage and the reload (finding 3)", async () => {
-    // The stop lands DURING recovery: pid.json is still present when the tick
-    // begins, but the reload observes it gone. Deciding respawn off the stale
-    // pre-reload read would resurrect a host the user deliberately stopped, so
-    // the metadata that gates respawn must be read AFTER the reload.
+    // Deciding respawn off the stale pre-reload read would resurrect a host the user deliberately stopped, so the metadata that gates respawn must be read AFTER the reload.
     const respawn = vi.fn(async () => {});
     let stopped = false;
     const reload = vi.fn(async () => {
@@ -397,17 +382,11 @@ describe("startHostHealthMonitor", () => {
       respawn,
     });
 
-    // The first attempt is lock-deferred: another Traycer process held the
-    // lock, so the host was never touched and the budget must be refunded -
-    // the retry that follows is immediate rather than paced behind a backoff
-    // it did not earn.
+    // The first attempt is lock-deferred: another Traycer process held the lock, so the host was never touched and the budget must be refunded.
     await ticks(3);
     expect(respawn).toHaveBeenCalledTimes(2);
 
-    // From here the attempts are real failures, so they are paced. Retry
-    // ownership survives the null snapshot (without it, every later tick
-    // returns at the null-snapshot arm and the dead host is never retried),
-    // but the budget still runs out.
+    // Retry ownership survives the null snapshot (without it, every later tick returns at the null-snapshot arm and the dead host is never retried), but the budget still runs out.
     await ticks(1_600);
     expect(respawn).toHaveBeenCalledTimes(6);
     await ticks(1_000);
@@ -480,10 +459,8 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("does NOT re-arm the respawn budget on a single successful probe", async () => {
-    // The v1.1.8-rc.2 restart loop was infinite for exactly this reason: every
-    // freshly spawned host answered one probe before stalling again, which
-    // reset the budget, so the attempt counter never advanced past its first
-    // value and the loop had no end. Recovery must be SUSTAINED to count.
+    // The v1.1.8-rc.2 restart loop was infinite for exactly this reason: every freshly spawned host answered one probe before stalling again, which reset the budget, so the attempt.
+    // Recovery must be SUSTAINED to count.
     const respawn = vi.fn(async () => {});
     let reachable = false;
     const monitor = startMonitor({
@@ -527,10 +504,6 @@ describe("startHostHealthMonitor", () => {
       respawn,
     });
 
-    // Spend the budget down to a TRIPPED breaker first. Asserting from a merely
-    // paced state proves nothing: enough time passes to satisfy the backoff
-    // anyway, so the next respawn happens whether or not sustained health
-    // forgave anything. From a tripped breaker, only forgiveness can.
     for (
       let attempt = 0;
       attempt < BREAKER_MAX_CONSECUTIVE_GRANTS;
@@ -558,10 +531,7 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("holds the snapshot and does not respawn while the host process is alive", async () => {
-    // The incident in one test: a host mid-epic-open answers no probe, but its
-    // process is plainly still there. It must not be restarted - and, just as
-    // important, its snapshot must not be demoted, or the user watches a
-    // healthy session flip to "host unavailable" for the length of the open.
+    // It must not be restarted - and, just as important, its snapshot must not be demoted, or the user watches a healthy session flip to "host unavailable" for the length of the open.
     const respawn = vi.fn(async () => {});
     const reload = vi.fn(async () => null);
     const liveness = vi.fn(ALIVE);
@@ -586,13 +556,6 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("never demotes a live host, however long it stays unreachable (int #48)", async () => {
-    // The 2026-08-11 regression guard, and the exact inversion of what this
-    // test used to assert. It used to require a demote after
-    // UNREACHABLE_DEMOTE_MS so the renderer would offer a Retry card. A demote
-    // tells the renderer the host is GONE, and on 2026-08-11 that verdict -
-    // against a host answering RPCs in milliseconds - locked every chat on the
-    // machine read-only for two hours. Liveness is the authority: while the
-    // process is there, the monitor holds, forever if need be.
     const respawn = vi.fn(async () => {});
     const reload = vi.fn(async () => null);
     const monitor = startHostHealthMonitor({
@@ -616,10 +579,6 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("throttles the liveness re-read while holding a live host busy", async () => {
-    // The hold is now unbounded, so the cost guard that used to live behind the
-    // demote has to live inside the hold itself: each liveness probe spawns a
-    // child process (`ps`, or `tasklist` + `powershell` on Windows), and an
-    // afternoon-long stall would otherwise spawn one every other tick forever.
     const respawn = vi.fn(async () => {});
     // One spy for both readers, so this counts total probes the way the machine
     // pays for them.
@@ -650,10 +609,6 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("hands a successful probe back to the lifecycle so a busy verdict can recover", async () => {
-    // The recovery half of int #48. Probes against the wedged host succeeded
-    // continuously for two hours on 2026-08-11 while the renderer was still
-    // being told the host was gone: nothing carried the success back to the
-    // component that owns the verdict.
     const noteEndpointAnswered = vi.fn();
     let reachable = false;
     const monitor = startMonitor({
@@ -674,11 +629,6 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("re-reads the disk while the snapshot is null so the state is never terminal", async () => {
-    // A null snapshot with nothing scheduled to re-examine it is the shape of
-    // the two-hour wedge: the pid-file watcher is edge-triggered on WRITES, so
-    // a host that is already up and never rewrites pid.json produces no edge.
-    // This arm used to return immediately - "recovery belongs to other flows" -
-    // which is true of RESTARTING the host and not of looking at the disk.
     const reload = vi.fn(async () => null);
     const monitor = startMonitor({
       host: fakeHost({

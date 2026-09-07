@@ -67,9 +67,7 @@ describe("rateLimitFetchLane", () => {
   });
 
   it("maps cursor to the httpFetch lane despite its two round trips", () => {
-    // Cursor mints a dashboard session from the API key before reading usage,
-    // so it costs two requests - but no subprocess, so it stays off the serial
-    // ephemeral queue.
+    // Cursor mints a dashboard session from the API key before reading usage, so it costs two requests - but no subprocess, so it stays off the serial ephemeral queue.
     expect(rateLimitFetchLane("cursor")).toBe("httpFetch");
   });
 });
@@ -218,9 +216,7 @@ describe("resolveRateLimitFetchEligibility", () => {
       state({ providerId: "codex", profiles: [disabled] }),
     );
 
-    // Preserved auth keeps the provider-level managed lane visible, but the
-    // per-profile classifier must keep disabled rows out of every automatic
-    // usage lane.
+    // Preserved auth keeps the provider-level managed lane visible, but the per-profile classifier must keep disabled rows out of every automatic usage lane.
     expect(eligibility.managedProfiles).toBe(true);
     expect(isRateLimitProfileFetchEligible(eligibility, disabled)).toBe(false);
   });

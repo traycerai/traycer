@@ -4,8 +4,7 @@ import type { TokenizerExtension, Tokens } from "marked";
 import { createIsolatedMarked } from "../isolated-marked";
 
 /**
- * A minimal inline tokenizer recognizing `@@word@@`, matching the shape
- * `@tiptap/markdown` extensions register (see `Underline`'s `markdownTokenizer`).
+ * A minimal inline tokenizer recognizing `@@word@@`, matching the shape `@tiptap/markdown` extensions register (see `Underline`'s `markdownTokenizer`).
  */
 function buildTokenizerExtension(name: string): TokenizerExtension {
   return {

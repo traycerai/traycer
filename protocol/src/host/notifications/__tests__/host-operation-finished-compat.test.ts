@@ -37,15 +37,7 @@ import {
   type HostNotificationEntryV21,
 } from "@traycer/protocol/host/notifications/contracts";
 
-/**
- * The one-time compatibility cutover for `host.operation.finished`.
- *
- * A leaked arm is not a hidden row: on the unary path the host re-parses its
- * downgraded result against the caller's own contract and answers 500 for the
- * whole page; on the feed path a failed frame parse reads as connection
- * corruption and the client reconnects into a snapshot carrying the same row.
- * These tests pin the boundary that makes that unreachable.
- */
+/** The one-time compatibility cutover for `host.operation.finished`. */
 
 const AGENT_STOPPED_ENTRY = {
   id: "agent.stopped:chat-1",
@@ -190,9 +182,7 @@ describe("released schemas stay frozen", () => {
       entry: OPERATION_FINISHED_ENTRY,
       presentation: { epicTitle: null, chatTitle: null },
     };
-    // The live bug this pins against: the cloud relay validated every row
-    // against the frozen V1 union, so this exact row was silently dropped
-    // AFTER being counted into the badge.
+    // The live bug this pins against: the cloud relay validated every row against the frozen V1 union, so this exact row was silently dropped AFTER being counted into the badge.
     expect(
       hostNotificationsCloudFeedSubscribeServerFrameSchemaV10.safeParse(
         snapshot([row]),
@@ -343,9 +333,7 @@ describe("negotiated-version visibility projection", () => {
   });
 
   it("fails closed for an unknown future major on every surface", () => {
-    // Majors are breaking by definition, so "newer than the majors I know"
-    // must not read as "carries everything I know" - a `list@3.0` could close
-    // its union around a different set of arms.
+    // Majors are breaking by definition, so "newer than the majors I know" must not read as "carries everything I know" - a `list@3.0` could close its union around a different set of arms.
     for (const surface of [
       { method: "host.notifications.list" } as const,
       { method: "host.notifications.feed.subscribe" } as const,
@@ -499,11 +487,8 @@ describe("three-tier presentation", () => {
   });
 
   it("tier 1: no existing known arm may supply copy for a host-wide row", () => {
-    // The regression this guards: a first-match-wins tier-1 branch that
-    // derived its title from `knownPresentationContext` would render "Task"
-    // and a generic body the moment an arm started matching this kind -
-    // strictly worse than the tier-2 copy the same row shows today. Every arm
-    // that exists is chat-scoped and must decline, so the chain falls through.
+    // The regression this guards: a first-match-wins tier-1 branch that derived its title from `knownPresentationContext` would render "Task" and a generic body the moment an arm started matching this kind - strictly worse.
+    // Every arm that exists is chat-scoped and must decline, so the chain falls through.
     const armPayloads: readonly Record<string, unknown>[] = [
       {
         kind: "chat",
@@ -569,13 +554,7 @@ describe("three-tier presentation", () => {
   });
 
   it("tier 1 can never render worse than tier 2 for the same payload", () => {
-    // A payload that satisfies BOTH the common convention and an existing
-    // known arm's shape still renders the host-composed copy.
-    //
-    // Today this passes because the kind guard keeps tier 1 unreachable; the
-    // test above is what pins the branch itself. Kept as the end-to-end
-    // statement of the property so it starts covering the live path the
-    // moment `payloadKindMatchesNotificationKind` returns an operation arm.
+    // A payload that satisfies BOTH the common convention and an existing known arm's shape still renders the host-composed copy.
     const hybrid = entry(
       {
         kind: "workspace_operation_failed",

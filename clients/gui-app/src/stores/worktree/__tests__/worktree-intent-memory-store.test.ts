@@ -454,9 +454,8 @@ describe("worktree intent memory rehydration", () => {
     expect(after.getEpicIntent("epic-a", HOST_A)).toBeNull();
   });
 
-  // Regression: with a shared legacy tier, purging the host entry that
-  // SUPERSEDED a legacy choice fell back to the superseded choice and
-  // silently re-seeded it.
+  // Regression: with a shared legacy tier, purging the host entry that SUPERSEDED a legacy choice
+  // fell back to the superseded choice and silently re-seeded it.
   it("never resurfaces a superseded legacy choice after a purge", async () => {
     await rehydrateV1Blob();
     const store = useWorktreeIntentMemoryStore.getState();

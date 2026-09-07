@@ -57,9 +57,7 @@ vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
 }));
 
-// The tile header's agent-controls subsystem has its own tests; stub it so
-// these setup-banner tests don't pull in the epic-tree selectors + agent.list
-// query it depends on.
+// The tile header's agent-controls subsystem has its own tests; stub it so these setup-banner tests don't pull in the epic-tree selectors + agent.list query it depends on.
 vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
   useAgentStopControls: () => ({ self: null, descendants: [] }),
 }));
@@ -264,9 +262,7 @@ describe("<TuiAgentTile /> setup error rendering", () => {
   });
 
   it("renders a distinct missing-worktree body (not the generic banner) for WORKTREE_MISSING", () => {
-    // The host refuses to launch into a missing cwd (no silent demote-to-Local)
-    // and rejects with the typed WORKTREE_MISSING envelope. The tile surfaces an
-    // actionable recreate/retry body instead of the generic failure banner.
+    // The tile surfaces an actionable recreate/retry body instead of the generic failure banner.
     const error = Object.assign(
       new Error(
         "Cannot launch this terminal agent: bound folder(s) missing on disk: /repo-wt.",

@@ -21,11 +21,7 @@ import {
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 
-// A terminal-agent tile auto-closes when the harness TUI exits (e.g. the user
-// presses Ctrl+C and the process terminates). The close must target the pane
-// tab *instance* id - `closeCanvasTab` resolves the tile via
-// `pane.tabInstanceIds`, so passing the content/session id silently no-ops and
-// the dead tab lingers. This test pins that contract.
+// The close must target the pane tab *instance* id - `closeCanvasTab` resolves the tile via `pane.tabInstanceIds`, so passing the content/session id silently no-ops and the dead tab lingers.
 
 const testState = vi.hoisted(() => ({
   reachability: {
@@ -375,12 +371,7 @@ describe("<TuiAgentTile /> exit close", () => {
 });
 
 /**
- * The `basis` notification gate, `tui-agent-tile.tsx`'s copy of the same
- * `if (reachability.basis !== "directory") return;` guard `terminal-tile.tsx`
- * carries - see that file's `basis notification gate` describe block in
- * `terminal-tile-close-navigation.test.tsx` for the full rationale. Repeated
- * here rather than shared because the two tiles wire their own reachability
- * fixture and render tree; the assertions mirror that suite's exactly.
+ * Repeated here rather than shared because the two tiles wire their own reachability fixture and render tree; the assertions mirror that suite's exactly.
  */
 describe("<TuiAgentTile /> basis notification gate", () => {
   beforeEach(() => {
@@ -448,9 +439,7 @@ describe("<TuiAgentTile /> basis notification gate", () => {
       ),
     );
 
-    // The render branch does not key on `basis` - the dead banner fires off
-    // `status` alone - so it must still appear even though the notification
-    // is withheld.
+    // The render branch does not key on `basis` - the dead banner fires off `status` alone - so it must still appear even though the notification is withheld.
     expect(
       await screen.findByRole("button", { name: "Close tab" }),
     ).toBeDefined();
@@ -463,12 +452,6 @@ describe("<TuiAgentTile /> basis notification gate", () => {
   });
 });
 
-/**
- * S5, the TuiAgentTile mirror of `terminal-tile-close-navigation.test.tsx`'s
- * S5 block: a wordless skeleton for `checking`/`host-starting` used to be
- * indistinguishable from an agent about to appear and never ended. Asserted
- * on the rendered sentence, not on the absence of a spinner.
- */
 describe("<TuiAgentTile /> S5 bounded pre-bootstrap wait", () => {
   beforeEach(() => {
     cleanup();

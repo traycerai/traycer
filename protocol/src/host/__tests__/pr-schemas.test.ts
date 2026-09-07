@@ -392,10 +392,7 @@ describe("prCheckContextSchema", () => {
       "waiting",
     ] as const;
 
-    // The SET, not just its members. Asserting only that each listed value
-    // parses says nothing about a seventh being added: a new status would
-    // reach the client with no copy written for it and this test would stay
-    // green. Set equality makes adding one to the schema fail here first.
+    // The SET, not just its members.
     expect([...prCheckStatusSchema.options].sort()).toEqual(
       [...expected].sort(),
     );
@@ -680,9 +677,7 @@ describe("prReviewThreadsSectionSchema", () => {
   });
 
   it("carries a null line beside a real originalLine - an outdated thread", () => {
-    // GitHub returns `line: null` once the code the thread pointed at has
-    // moved or gone, and `originalLine` is then the only anchor left. A schema
-    // that required `line` would reject exactly the threads most worth reading.
+    // GitHub returns `line: null` once the code the thread pointed at has moved or gone, and `originalLine` is then the only anchor left.
     const parsed = prReviewThreadsSectionSchema.parse({
       observedAt: 1_700_000_000_000,
       threads: [{ ...thread, line: null, isOutdated: true }],
@@ -974,9 +969,7 @@ describe("prCommitsSectionSchema", () => {
 describe("prSourceNoticeSchema on both stream frames", () => {
   const NOTICES = [
     { kind: "rate-limited" as const, retryAt: 1_726_000_000_000 },
-    // `retryAt: null` is the fresh-restart-mid-limit case, and it has to
-    // survive the wire intact: collapsing it to a number would turn "we do
-    // not know when GitHub resets" into a specific promise.
+    // `retryAt: null` is the fresh-restart-mid-limit case, and it has to survive the wire intact: collapsing it to a number would turn "we do not know when GitHub resets" into a specific promise.
     { kind: "rate-limited" as const, retryAt: null },
     { kind: "backing-off" as const, retryAt: 1_726_000_000_000 },
     { kind: "backing-off" as const, retryAt: null },
@@ -1205,10 +1198,8 @@ describe("prGetLocalDiffRequestSchema", () => {
   });
 
   it("REQUIRES a non-empty epicId - it is the authorization scope, not a hint", () => {
-    // The host gates this method on the caller's role in `epicId` and matches
-    // it against the binding that vouches for `linkGroupKey`. An absent or
-    // empty value must fail at the boundary rather than reach a resolver that
-    // would then have nothing to authorize against.
+    // The host gates this method on the caller's role in `epicId` and matches it against the binding that vouches for `linkGroupKey`.
+    // An absent or empty value must fail at the boundary rather than reach a resolver that would then have nothing to authorize against.
     const { epicId, ...withoutEpicId } = LOCAL_DIFF_REQUEST_FIXTURE;
     expect(epicId).toBe("epic-1");
     expect(() => prGetLocalDiffRequestSchema.parse(withoutEpicId)).toThrow();
@@ -1222,12 +1213,8 @@ describe("prGetLocalDiffRequestSchema", () => {
 });
 
 describe("prLinkGroupKeySchema / prRepoIdentifierSchema stay permissive", () => {
-  // `pr.getLocalDiff` tightens `linkGroupKey`/`owner`/`repo` to `.min(1)` on
-  // its OWN request fields, not on these shared schemas - the stream frames
-  // (`prLightItemSchema`, `prDetailCoreSchema`) legitimately carry an empty
-  // `linkGroupKey` for an entry with no stable local path, and a repo
-  // identifier that predates this stricter request shape. Tightening the
-  // shared schemas instead would silently break those frames.
+  // `pr.getLocalDiff` tightens `linkGroupKey`/`owner`/`repo` to `.min(1)` on its OWN request fields, not on these shared schemas - the stream frames (`prLightItemSchema`, `prDetailCoreSchema`) legitimately carry an empty.
+  // Tightening the shared schemas instead would silently break those frames.
   it("prLinkGroupKeySchema still accepts an empty string", () => {
     expect(prLinkGroupKeySchema.parse("")).toBe("");
   });
@@ -1285,9 +1272,7 @@ describe("prGetLocalDiffResponseSchema", () => {
   });
 
   it("keeps a file's patch and counts independently nullable", () => {
-    // A truncated sweep yields `patch: null` with REAL counts; a binary file
-    // yields null counts with a real (empty) patch. Collapsing either pair
-    // would lose the distinction the UI renders differently.
+    // A truncated sweep yields `patch: null` with REAL counts; a binary file yields null counts with a real (empty) patch.
     const truncated = prLocalDiffFileSchema.parse({
       ...LOCAL_DIFF_FILE_FIXTURE,
       patch: null,
@@ -1438,12 +1423,8 @@ describe("prGetLocalDiffSummaryResponseSchema", () => {
   });
 
   it("rejects empty path and previousPath in a summary file", () => {
-    // The client forwards a summary file's path and previousPath verbatim
-    // into pr.getLocalFileDiff requests, whose schema requires min(1) (path)
-    // and min(1) | null (previousPath). The summary states the SAME rules so
-    // a parse-valid summary can never build a request-invalid ask. (The
-    // released monolith file schema stays looser - its files never feed a
-    // request.)
+    // The client forwards a summary file's path and previousPath verbatim into pr.getLocalFileDiff requests, whose schema requires min(1) (path) and min(1) | null (previousPath).
+    // The summary states the SAME rules so a parse-valid summary can never build a request-invalid ask. (The released monolith file schema stays looser - its files never feed a request.)
     const renamed = prLocalDiffSummaryFileSchema.parse({
       path: "new/path.ts",
       previousPath: "old/path.ts",
@@ -1571,9 +1552,7 @@ describe("pr split RPC contracts", () => {
     expect(summaryContract.requestSchema).toBe(
       prGetLocalDiffSummaryRequestSchema,
     );
-    // The single minor binds the SIDECAR-BEARING schemas: `pathBytes` /
-    // `previousPathBytes` never had a peer that predated them, so they ride
-    // 1.0 rather than a 1.1.
+    // The single minor binds the SIDECAR-BEARING schemas: `pathBytes` / `previousPathBytes` never had a peer that predated them, so they ride 1.0 rather than a 1.1.
     expect(summaryContract.responseSchema).toBe(
       prGetLocalDiffSummaryResponseV11Schema,
     );
@@ -1675,9 +1654,6 @@ describe("prLocalDiffSummaryFileV11Schema", () => {
   });
 
   it("rejects every noncanonical alias of a token at the schema, so an alias can never become a distinct identity", () => {
-    // Each decodes (forgivingly) to bytes whose canonical encoding differs:
-    // missing padding, url-safe alphabet, embedded whitespace, trailing
-    // junk, nonzero padding bits, and a plainly non-base64 string.
     const aliases = [
       "/w",
       "_w==",

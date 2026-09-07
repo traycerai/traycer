@@ -21,25 +21,11 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest | null) => {
-    // Dedupe by reference (round-2 review finding #4: `ImageDiffView` now
-    // fires one legitimate extra render on mount, learning each side's
-    // real initial bounds from `onInit` - the SAME memoized `request`
-    // object is passed to this hook again on that render, not a new fetch)
-    // so tests keep counting distinct requests, not raw render passes.
     if (!state.requests.includes(request)) {
       state.requests.push(request);
     }
-    // Forces THIS call site's own re-render when `reportDecodeFailure` fires
-    // (the real hook transitions synchronously from a callback, not a prop
-    // change) - `state.old`/`state.new` stay the module-level source of
-    // truth so a test's own direct mutations still work exactly as before.
     const [, forceRender] = useState(0);
-    // A `null` request (a non-image side) never falls back to `"new"` - the
-    // real hook always reports `"loading"` for a null request (its
-    // `requestKey`/`resolved.key` comparison can never match), so a test
-    // exercising a Deleted/non-image side must see that too, not silently
-    // read the OTHER side's `"ready"` state (CodeRabbit finding: this hid
-    // a raw-status check that should have gated on `oldActive`/`newActive`).
+    // A `null` request (a non-image side) never falls back to `"new"` - the real hook always reports `"loading"` for a null request (its `requestKey`/`resolved.key` comparison can never match), so a test exercising a Deleted/non-image side must see that too, not silently read the OTHER side's `"ready"` state (CodeRabbit finding: this hid a raw-status check that should have gated on `oldActive`/`newActive`).
     if (request === null) {
       return {
         status: "loading",
@@ -314,15 +300,7 @@ describe("<ImageDiffView />", () => {
     expect(screen.queryByText("Conflicted")).toBeNull();
   });
 
-  // Supersedes decision #17's scroll-mirroring interaction (ticket 07): zoom
-  // + pan are now one continuous transform per side (react-zoom-pan-pinch),
-  // linked via `onTransform`-driven `setTransform` on the peer instead of
-  // scrollTop/Left mirroring. This pins the SHARED toolbar's own mechanism
-  // (single Fit/Actual-size pair driving both sides, no per-side toolbar);
-  // the deeper linked-transform-sync behavior (does a GESTURE on one side's
-  // real RZPP instance actually propagate to the peer's real instance) needs
-  // `react-zoom-pan-pinch` mocked for deterministic jsdom assertions and is
-  // left to that suite rather than guessed at here.
+  // This pins the SHARED toolbar's own mechanism (single Fit/Actual-size pair driving both sides, no per-side toolbar); the deeper linked-transform-sync behavior (does a GESTURE on one side's real RZPP instance actually propagate to the peer's real instance) needs `react-zoom-pan-pinch` mocked for deterministic jsdom assertions and is left to that suite rather than guessed at here.
   it("drives fit/actual state from one shared toolbar, with no per-side toolbar", () => {
     renderDiff({});
 

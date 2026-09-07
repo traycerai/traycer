@@ -12,12 +12,8 @@ export interface ConflictResult {
 }
 
 /**
- * A chord reserved outside the renderer keybinding map - today, the desktop
- * global summon shortcut when it's actually registered with the OS. A global
- * shortcut swallows its chord system-wide before any renderer listener sees
- * it, so any overlap with it is a real conflict, checked bidirectionally:
- * capturing a global chord checks against every renderer binding, and
- * capturing a renderer binding checks against every reserved external chord.
+ * A chord reserved outside the renderer keybinding map - today, the desktop global summon shortcut when it's actually registered with the OS.
+ * A global shortcut swallows its chord system-wide before any renderer listener sees it, so any overlap with it is a real conflict, checked bidirectionally: capturing a global chord checks against every renderer binding, and capturing a renderer binding.
  */
 export interface ExternalReservedChord {
   readonly id: string;

@@ -124,9 +124,8 @@ function optionDescription(command: Command, longFlag: string): string {
   return option.description;
 }
 
-// `mandatory` is commander's flag for `.requiredOption(...)` - the option must
-// be SUPPLIED. (`required` only means the option takes a value argument, which
-// every `--profile <ambient|id>` does whether or not it is mandatory.)
+// `mandatory` is commander's flag for `.requiredOption(...)` - the option must be SUPPLIED.
+// (`required` only means the option takes a value argument, which every `--profile <ambient|id>` does whether or not it is mandatory.)
 function requiredOptionFlags(
   command: Command,
 ): readonly (string | undefined)[] {
@@ -347,9 +346,7 @@ describe("agent configure", () => {
       reasoningEffort: "high",
       fastMode: false,
       permissionMode: "supervised",
-      // `agent.configure@3.0` is released and its baseline requires this on the
-      // response, so the CLI still has to decode it - see the schema comment in
-      // `protocol/src/host/agent/profiles.ts`.
+      // `agent.configure@3.0` is released and its baseline requires this on the response, so the CLI still has to decode it - see the schema comment in `protocol/src/host/agent/profiles.ts`.
       agentMode: "regular",
     },
     warnings: ["Fast mode is not available for 'gpt-5.6-codex'."],
@@ -491,9 +488,8 @@ describe("version skew", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNSUPPORTED);
   });
 
-  // The requests the CLI actually builds, run through the REAL v3→v2 create
-  // downgrade a host-v1.1.7 manifest triggers in the transport. Every profile
-  // selection must fail because released v2.0 cannot carry permission intent.
+  // The requests the CLI actually builds, run through the REAL v3→v2 create downgrade a host-v1.1.7 manifest triggers in the transport.
+  // Every profile selection must fail because released v2.0 cannot carry permission intent.
   function cliCreateRequest(profile: string | null) {
     return createAgentRequestSchemaV30.parse({
       senderAgentId: "agent_parent",

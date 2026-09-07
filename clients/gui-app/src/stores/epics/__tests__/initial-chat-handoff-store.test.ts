@@ -54,11 +54,8 @@ describe("handoff identity is the epic, not the host", () => {
   });
 
   it("finds a handoff registered under the PLACEMENT host when the canvas reads a different one", () => {
-    // A landing composer pinned to host B creates the epic there, so
-    // `useLandingComposerActions` registers under B. The canvas that consumes
-    // the handoff reads the app-wide pointer, which is still host A. Keyed on
-    // the host, that lookup missed entirely: the seeded chat was never
-    // eager-opened and its pending-create mark was never cleared.
+    // A landing composer pinned to host B creates the epic there, so `useLandingComposerActions`
+    // registers under B.
     register();
 
     const fromAnotherHost = selectInitialChatHandoff(
@@ -177,16 +174,8 @@ describe("v1 -> v2 persisted-key migration", () => {
   });
 
   it("rehydrates a v1 blob from localStorage at IMPORT time, findable under the v2 scope", async () => {
-    // The real path, not just the pure function: `persist` calls `hydrate()`
-    // inside `create()` and `toThenable` keeps that synchronous for a sync
-    // storage, so `migrate` runs during MODULE EVALUATION. Anything it touches
-    // that is declared after the `create()` call is still in its temporal dead
-    // zone for precisely the installs that hold a v1 blob.
-    //
-    // Calling the migrate function directly cannot see that - only a fresh
-    // import can. And the symptom is silent: zustand catches what `migrate`
-    // throws, so moving the declaration makes this fail as `expected null not
-    // to be null`, never as a ReferenceError.
+    // The real path, not just the pure function: `persist` calls `hydrate()` inside `create()` and
+    // `toThenable` keeps that synchronous for a sync storage, so `migrate` runs during MODULE
     localStorage.setItem(
       persistKey(STORE_KEYS.initialChatHandoff),
       JSON.stringify({

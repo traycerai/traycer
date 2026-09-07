@@ -14,20 +14,7 @@ import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-h
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 
 /**
- * F6b, end to end: a host registered LATE - from the CLI, or from another
- * machine - must become activatable without waiting for an unrelated refresh.
- *
- * The renderer's directory learns about it on its own poll. The selection
- * authority, which lives in the desktop main process and holds its OWN fleet,
- * learns nothing - so `activate()` refuses `unknown-host` and the user is told
- * a machine they just registered is not on their account.
- *
- * This drives the REAL surfaces on both sides: the actual
- * `SelectionAuthorityEngineImpl.activate` refusal, and the actual
- * `IRunnerHost.refreshHostFleet()` contract member the directory announces
- * through. The only stand-in is the shell's implementation of that member,
- * which does here what a real shell does - re-read membership and republish
- * its snapshot.
+ * F6b, end to end: a host registered LATE - from the CLI, or from another machine - must become activatable without waiting for an unrelated refresh.
  */
 
 const IDENTITY_KEY = "user-1";
@@ -71,9 +58,8 @@ function buildWorld() {
     log: { debug: () => undefined, warn: () => undefined },
   });
 
-  // The shell's half: republish the membership it can see. A real shell reads
-  // its own source; the point is that it is driven by `refreshHostFleet()`,
-  // not by anything the renderer invents.
+  // The shell's half: republish the membership it can see.
+  // A real shell reads its own source; the point is that it is driven by `refreshHostFleet()`, not by anything the renderer invents.
   let fleetRefreshCount = 0;
   const runnerHost = createFakeRunnerHost({
     refreshHostFleet: () => {

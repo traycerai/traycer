@@ -1,23 +1,11 @@
-/**
- * Deterministic per-agent looks for the office view.
- *
- * The same agent must render identically in every window, on every device and
- * across restarts, so nothing here is stored: an appearance is a pure function
- * of the agent id (plus its kind, which salts the hash) and its harness.
- */
+/** Deterministic per-agent looks for the office view. */
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
 import type { CommGraphAgentKind } from "@/lib/comm-graph/comm-graph-model";
 import type { OfficeAppearance } from "@/lib/comm-graph/office/office-types";
 
 /**
- * Brand tint per harness. Drives the envelope color of a message that agent
- * sends and the accent stripe on its desk.
- *
- * Every harness the app can run needs an entry, so the record is keyed by the
- * whole enum rather than by the subset that happens to be on a floor: a missing
- * key would resolve to `undefined` and paint an agent's envelopes with nothing
- * at all. A brand whose own mark is near-black is deliberately lightened here -
- * the accent is drawn on a dark floor and an unreadable tint is not a brand.
+ * Brand tint per harness.
+ * Drives the envelope color of a message that agent sends and the accent stripe on its desk.
  */
 export const HARNESS_ACCENT: Readonly<Record<GuiHarnessId, string>> = {
   claude: "#d97757",
@@ -68,8 +56,7 @@ const HAIR_COLORS: ReadonlyArray<string> = [
 ];
 
 /**
- * Shirt colors deliberately skip the greens and sages the floor and wall
- * palettes occupy, so a seated character never dissolves into the room.
+ * Shirt colors deliberately skip the greens and sages the floor and wall palettes occupy, so a seated character never dissolves into the room.
  */
 const SHIRT_COLORS: ReadonlyArray<string> = [
   "#3b6fd6",
@@ -106,9 +93,8 @@ export function hashAgentId(id: string): number {
 }
 
 /**
- * Decorrelates one hash into independent draws. Without it, consecutive ids
- * would pick neighbouring entries in every list at once and a floor of agents
- * created back to back would read as a uniform.
+ * Decorrelates one hash into independent draws.
+ * Without it, consecutive ids would pick neighbouring entries in every list at once and a floor of agents created back to back would read as a uniform.
  */
 function mix(seed: number, salt: number): number {
   let hash = (seed ^ Math.imul(salt, 0x9e3779b1)) >>> 0;
@@ -122,9 +108,8 @@ function pickColor(list: ReadonlyArray<string>, seed: number): string {
 }
 
 /**
- * The look of one agent. `kind` salts the hash rather than selecting anything:
- * two agents that happen to share an id prefix should still differ, and the
- * accent is the only field the caller's metadata decides outright.
+ * The look of one agent.
+ * `kind` salts the hash rather than selecting anything: two agents that happen to share an id prefix should still differ, and the accent is the only field the caller's metadata decides outright.
  */
 export function agentAppearance(
   agentId: string,

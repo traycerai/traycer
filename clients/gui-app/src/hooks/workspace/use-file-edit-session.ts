@@ -82,12 +82,7 @@ export function useFileEditSession(props: {
     }
     const diskContent = props.diskContent;
     let cancelled = false;
-    // A runtime this effect just auto-attached can still be "recovering" -
-    // `refreshCleanDisk` no-ops outside `status === "clean"`, and nothing
-    // else re-checks the freshest disk content once recovery settles. Wait
-    // for `whenRecovered()` (the same primitive `activate()` already awaits
-    // above) alongside the revision hash so a reconciliation that lands
-    // mid-recovery isn't silently dropped instead of merely deferred.
+    // A runtime this effect just auto-attached can still be "recovering" - `refreshCleanDisk` no-ops outside `status === "clean"`, and nothing else re-checks the freshest disk content once recovery settles.
     void Promise.all([
       current.runtime.whenRecovered(),
       fileContentRevision(diskContent),
@@ -115,16 +110,7 @@ export function useFileEditSession(props: {
     };
   }, [identityKey]);
 
-  // A surface that auto-attached (e.g. a workspace-file tab) can become
-  // ineligible to edit while still mounted - an LRU keep-alive tab hides an
-  // inactive body instead of unmounting it. Without this, an attachment (and
-  // any ownership it claimed) would linger on the hidden surface forever, so a
-  // freshly opened visible tab for the same file would keep hitting
-  // `focus-owner` against a body the user can no longer see or release. Only
-  // fires for THIS effect's own auto-attach path: `identityKey` gates it to
-  // the attachment this hook created, so it never touches an attachment an
-  // explicit `activate()` call owns (the Git-diff path always passes
-  // `autoAttach: false` and never changes it, so this never re-runs there).
+  // Detach this effect's own auto-attach when the surface becomes ineligible while still mounted (LRU keep-alive). Never touch an explicit `activate()` attachment.
   useEffect(() => {
     if (props.autoAttach) return;
     const current = attachmentRef.current;
@@ -181,14 +167,7 @@ export function useFileEditSession(props: {
       let current = attachmentRef.current;
       if (current?.identityKey !== identityKey) {
         current?.detach();
-        // Null the ref right away, before the await below: if this request
-        // stops being current while awaiting `fileContentRevision`, the
-        // rejected branch below returns without ever reassigning
-        // `attachmentRef.current`, which would otherwise keep pointing at
-        // the just-detached attachment. `setDraft`/`flush`/`retry` read
-        // `attachmentRef.current` directly (not gated by `identityKey`), so
-        // a stale ref would route them at a runtime that no longer holds a
-        // surface lease for this component.
+        // Null the ref right away, before the await below: if this request stops being current while awaiting `fileContentRevision`, the rejected branch below returns without ever reassigning `attachmentRef.current`, which would otherwise keep pointing at the just-detached attachment.
         if (attachmentRef.current === current) {
           attachmentRef.current = null;
         }

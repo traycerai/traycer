@@ -7,17 +7,7 @@ export interface SnapshotUnifiedPatchEntry {
 }
 
 /**
- * Synthesize a unified-diff patch string from a chat file-edit snapshot's
- * before/after content so it can be rendered through the same `@pierre/diffs`
- * pipeline (`parsePatchFiles` -> `<FileDiff>`) the live Git ecosystem uses.
- *
- * The chat snapshot is the agent's captured `beforeContent`/`afterContent` for
- * one edit (or the cumulative first->last for a file). A `null` side means the
- * file did not exist on that side (create -> null before, delete -> null
- * after); we render it as an empty side so the hunk shows a pure add/remove.
- *
- * `filePath` is emitted as the `a/` and `b/` patch headers so the parsed file
- * name carries the repo-relative path (mirrors Git's diff headers).
+ * Synthesize a unified-diff patch string from a chat file-edit snapshot's before/after content so it can be rendered through the same `@pierre/diffs` pipeline (`parsePatchFiles` -> `<FileDiff>`) the live Git ecosystem uses.
  */
 export function buildSnapshotUnifiedPatch(args: {
   readonly filePath: string;

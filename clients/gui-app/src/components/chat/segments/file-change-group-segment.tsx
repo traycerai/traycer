@@ -184,9 +184,7 @@ function undoButtonState(
   restore: ChatRestoreContextValue | null,
 ): UndoButtonState | null {
   if (manifest === null) return null;
-  // Drive enablement off real changes only: a manifest whose only entries are
-  // no-ops (touched but net-unchanged) has nothing to undo, so it must offer no
-  // button - matching the restore plan, which skips those same entries.
+  // Drive enablement off real changes only: a manifest whose only entries are no-ops (touched but net-unchanged) has nothing to undo, so it must offer no button - matching the restore plan, which skips those same entries.
   const effectiveEntries = manifest.entries.filter(
     (entry) => !isNoOpCheckpointEntry(entry),
   );

@@ -49,9 +49,8 @@ export function recordAppLocalCompletionReceipts(
         }),
       );
     } catch {
-      // Receipt persistence is best-effort. The in-memory ledger must still
-      // advance so a full or unavailable localStorage cannot abort the whole
-      // completion batch and leave matching failures unreconciled.
+      // Receipt persistence is best-effort.
+      // The in-memory ledger must still advance so a full or unavailable localStorage cannot abort the whole completion batch and leave matching failures unreconciled.
     }
   }
   const hostsByUser = new Map<string, Set<string>>();

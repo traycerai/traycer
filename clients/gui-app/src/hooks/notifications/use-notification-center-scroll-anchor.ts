@@ -75,12 +75,7 @@ export function findFirstVisibleAnchor(
   return null;
 }
 
-/**
- * `scrollTop` delta to keep the surviving anchor row visually fixed: the
- * same row if it survived, else the nearest surviving successor from its
- * prior position, else the nearest surviving predecessor. `null` when
- * nothing from the prior order survives at all.
- */
+/** `scrollTop` delta to keep the surviving anchor row visually fixed: the same row if it survived, else the nearest surviving successor from its prior position, else the nearest surviving predecessor. */
 export function computeScrollAnchorCorrectionPx(input: {
   readonly previousAnchor: AnchorSnapshot;
   readonly previousOrderedFeedIds: ReadonlyArray<string>;
@@ -123,15 +118,7 @@ export function computeScrollAnchorCorrectionPx(input: {
 }
 
 /**
- * Preserves the reader's visual place across live insertions, lifecycle
- * moves (read/resolution), and pagination: `overflow-anchor: none` stops the
- * browser's own heuristic from double-applying this explicit correction.
- * Each commit that changes `orderedFeedIds` re-measures every rendered row,
- * corrects `scrollTop` against the anchor captured from the PRIOR commit
- * (falling back to the nearest surviving successor, then predecessor, if
- * that exact row disappeared), then captures a fresh anchor for the next
- * commit. Skipped entirely within the 8px top threshold, where new rows must
- * insert live instead.
+ * Correct `scrollTop` against the prior commit's anchor. `overflow-anchor: none` stops the browser doubling it. Skip within 8px of the top so new rows insert live.
  */
 export function useNotificationCenterScrollAnchor(
   input: NotificationCenterScrollAnchorInput,

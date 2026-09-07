@@ -14,9 +14,8 @@ import {
   type CliInstallSource,
 } from "../../manifest/cli-manifest";
 
-// C2: a handshake `fatalError INCOMPATIBLE` must route to the correct
-// per-vector recovery. `hostShouldUpgrade` reinstalls the latest host;
-// `clientShouldUpgrade` updates THIS client via its install vector.
+// C2: a handshake `fatalError INCOMPATIBLE` must route to the correct per-vector recovery.
+// `hostShouldUpgrade` reinstalls the latest host; `clientShouldUpgrade` updates THIS client via its install vector.
 
 function guidance(
   hostShouldUpgrade: boolean,
@@ -189,10 +188,8 @@ describe("clientCompatibilityRecoveryHintForVector", () => {
       });
       expect(readFeedEpoch).toHaveBeenCalledTimes(1);
       expect(hint).toContain("https://github.com/traycerai/traycer/releases");
-      // The command may be NAMED here - it is ruled out explicitly, because it
-      // is the obvious thing a blocked user reaches for and it would cost them
-      // a wasted upgrade cycle. What must never appear is the IMPERATIVE form
-      // the sufficient branch uses, which is the actual instruction.
+      // The command may be NAMED here - it is ruled out explicitly, because it is the obvious thing a blocked user reaches for and it would cost them a wasted upgrade cycle.
+      // What must never appear is the IMPERATIVE form the sufficient branch uses, which is the actual instruction.
       expect(hint).not.toMatch(/Run 'traycer cli upgrade'/u);
       expect(hint).toMatch(
         /could not verify that 'traycer cli upgrade' will resolve it/u,

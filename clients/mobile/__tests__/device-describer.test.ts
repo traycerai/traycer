@@ -1,7 +1,6 @@
 /**
- * What this device calls itself on the approve prompt. iOS is family-only by
- * design — these cases exist to keep an identifier-to-marketing-name table
- * from creeping back in.
+ * What this device calls itself on the approve prompt.
+ * iOS is family-only by design - these cases exist to keep an identifier-to-marketing-name table from creeping back in.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo } from "@capacitor/device";
@@ -17,7 +16,6 @@ vi.mock("@capacitor/device", () => ({
   },
 }));
 
-/** A `getInfo()` payload carrying the two fields the describer reads. */
 function deviceInfo(
   model: string,
   platform: DeviceInfo["platform"],

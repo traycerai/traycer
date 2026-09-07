@@ -9,10 +9,6 @@ import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-s
 
 const TEST_HOST_ID = "host-a";
 
-// Stamped with the host the hook targets: the store files a folder only in
-// the bucket of the host it was actually prepared on, so an unstamped fixture
-// would be silently dropped (and would not resemble anything the picker
-// produces).
 const FIRST: WorkspaceFolderInfo = {
   path: "/tmp/first-repo",
   name: "first-repo",
@@ -35,13 +31,7 @@ function resetStores(): void {
 beforeEach(resetStores);
 afterEach(resetStores);
 
-/**
- * `primaryWorkspacePath` is the cwd the landing terminal panel spawns every
- * new terminal in. The panel's own tests mock this hook away, so these pin the
- * contract it depends on with the real stores: the PINNED folder wins over
- * array order, whether the landing surface is backed by a draft or falls
- * through to the global folder cache.
- */
+/** `primaryWorkspacePath` is the cwd the landing terminal panel spawns every new terminal in. */
 describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins", () => {
   it("resolves the pinned folder, not the first one (no active draft)", () => {
     const stagingKey: WorktreeStagingKey = {

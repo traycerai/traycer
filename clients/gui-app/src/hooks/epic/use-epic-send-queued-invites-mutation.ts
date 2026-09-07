@@ -47,12 +47,7 @@ export interface QueuedInviteBatches {
   readonly newInvites: ReadonlyArray<QueuedInvite>;
 }
 
-/**
- * Splits the queue into re-invites (existing user ids) and net-new identifiers,
- * then runs `epic.batchUpdateRoles` and `epic.grantAccess` sequentially so
- * mid-queue failures land in the structured per-invite result. The caller
- * owns the user-facing summary toasts.
- */
+/** Splits the queue into re-invites (existing user ids) and net-new identifiers, then runs `epic.batchUpdateRoles` and `epic.grantAccess` sequentially so mid-queue failures land in the structured per-invite result. */
 export function useEpicSendQueuedInvites(): UseMutationResult<
   SendQueuedInvitesResult,
   Error,
@@ -61,10 +56,8 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
 > {
   const batchUpdateRoles = useEpicBatchUpdateRoles();
   const grantAccess = useEpicGrantAccess();
-  // The Epic session's client, like the two mutations above it composes: the
-  // hostId captured here keys the collaborators cache the Sharing panel reads
-  // on that same client. `null` outside a session; the composed mutations
-  // then refuse at their own preflight and the ctx hostId is honestly null.
+  // `null` outside a session; the composed mutations then refuse at their own preflight and the ctx hostId is honestly null.
+  // The Epic session's client, like the two mutations above it composes: the hostId captured here keys the collaborators cache the Sharing panel reads on that same client.
   const client = useEpicSessionHostClient();
   const queryClient = useQueryClient();
 

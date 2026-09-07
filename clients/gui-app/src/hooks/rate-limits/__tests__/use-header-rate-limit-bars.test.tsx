@@ -56,10 +56,7 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
     providerId: RateLimitProviderId,
   ) => mocks.profileIds.get(providerId) ?? null,
 }));
-// Production calls `useHostQueriesWithResponseMap` (not the plain
-// `useHostQueries`) - see that hook's own doc comment - so this mock exports
-// both names with equivalent behavior; the extra `mapResponse` field
-// production passes is irrelevant to this fixture-backed double.
+// Production calls `useHostQueriesWithResponseMap` (not the plain `useHostQueries`) - see that hook's own doc comment - so this mock exports both names with equivalent behavior; the extra `mapResponse` field production passes is irrelevant to this fixture-backed double.
 function mockUseHostQueriesImpl(args: {
   readonly requests: ReadonlyArray<{
     readonly params: {
@@ -541,10 +538,7 @@ describe("useHeaderRateLimitBars", () => {
   });
 
   it("shows the retained last-good reading dimmed when the envelope's latest is a transient failure (not a thrown isError)", () => {
-    // Distinct from the test above: `isError` is false here (the RPC itself
-    // succeeded) - the envelope's own `latest` reports `usage_fetch_failed`
-    // while `lastGood` retains an earlier good reading. The glyph should
-    // still show that retained reading, marked degraded.
+    // Distinct from the test above: `isError` is false here (the RPC itself succeeded) - the envelope's own `latest` reports `usage_fetch_failed` while `lastGood` retains an earlier good reading.
     setProvider("codex", "ephemeralProcess", {
       data: {
         latest: {

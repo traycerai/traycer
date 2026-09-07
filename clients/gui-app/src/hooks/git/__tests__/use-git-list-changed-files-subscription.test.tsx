@@ -42,18 +42,11 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
-// Mock stream session for testing.
 class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
   closed: boolean = false;
-  /**
-   * The version THIS session negotiated, which is deliberately settable
-   * independently of `MockWsStreamClient.methodSchemaVersion`. The two are
-   * independent in production too: `reconcileMethodSchemaVersion` reports
-   * whichever live session for the method it reaches FIRST, so a second repo's
-   * stream can sit at a different minor and never be consulted.
-   */
+  /** The two are independent in production too: `reconcileMethodSchemaVersion` reports whichever live session for the method it reaches FIRST, so a second repo's stream can sit at a different minor and never be consulted. */
   negotiatedSchemaVersion: SchemaVersion | null = null;
 
   onServerFrame(handler: ServerFrameHandler): void {
@@ -149,10 +142,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
     if (!this.sessions.has(key)) {
       const created = new MockStreamSession();
-      // A session negotiates AT OPEN, so it starts life carrying whatever this
-      // client negotiates now. Tests that need the two to diverge - the skew a
-      // client-wide read cannot see, and a renegotiation that moves one session
-      // and not its sibling - assign the session's own value afterwards.
+      // Tests that need the two to diverge - the skew a client-wide read cannot see, and a renegotiation that moves one session and not its sibling - assign the session's own value afterwards.
       created.negotiatedSchemaVersion = this.methodSchemaVersion;
       this.sessions.set(key, created);
     }
@@ -563,7 +553,6 @@ describe("useGitListChangedFilesSubscription", () => {
     queryClient.setQueryData(changedDiffKey, { patch: "old" });
     queryClient.setQueryData(unchangedDiffKey, { patch: "stable" });
 
-    // Now send an updated event.
     const updatedEvent: GitSubscribeStatusEvent = {
       type: "updated",
       runningDir: "/repo",
@@ -866,12 +855,7 @@ describe("useGitListChangedFilesSubscription", () => {
       expect(result.current.data?.headSha).toBe("initial-head");
     });
 
-    // Close the LIVE client underneath the consumer with NO parent rerender.
-    // The `onClosed` subscription in `useWsStreamClient` must notify on its own,
-    // flip the served snapshot to null, and drive the consumer to detach - its
-    // effect cleanup closes the session - WITHOUT surfacing CLIENT_CLOSED. If
-    // the subscribe branch were dropped, nothing would re-read the snapshot on
-    // this close and the consumer would cling to the dead client's session.
+    // The `onClosed` subscription in `useWsStreamClient` must notify on its own, flip the served snapshot to null, and drive the consumer to detach - its effect cleanup closes the session - WITHOUT surfacing CLIENT_CLOSED.
     act(() => {
       liveClient.close("closed-underneath");
     });
@@ -911,10 +895,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
     if (!firstSession) throw new Error("Session should exist");
 
-    // Swap the context to a NEW client - a provider rebuild after host swap or
-    // the liveness guard. The shared map is keyed per client instance, so the
-    // consumer must drain the old entry (closing its session) and open a fresh
-    // subscription on the new client instead of clinging to the dead session.
+    // The shared map is keyed per client instance, so the consumer must drain the old entry (closing its session) and open a fresh subscription on the new client instead of clinging to the dead session.
     mockWsStreamClient = new MockWsStreamClient();
     rerender();
 
@@ -1728,10 +1709,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("holds watcher health across a git error frame", async () => {
-      // Error frames carry no watcher field, and a git-compute failure says
-      // nothing about the watcher. Dropping the value here would hide the
-      // notice for the whole error backoff - precisely when the panel is
-      // showing stale data and the staleness needs explaining.
+      // Error frames carry no watcher field, and a git-compute failure says nothing about the watcher.
       const { result, session } = await renderAtMinor(3);
       session.emitFrame(
         v13Snapshot({ state: "degraded-error", detail: "boom" }),
@@ -1751,11 +1729,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("drops watcher health when the stream terminates for good", async () => {
-      // The mirror of the test above, and the distinction is whether anything
-      // is still arriving. A non-fatal git error keeps polling, so "refreshing
-      // on a timer" stays true; a fatal frame means no frame will ever arrive
-      // again, and continuing to promise periodic refreshes is a lie the
-      // panel is especially good at hiding behind cached data.
+      // The mirror of the test above, and the distinction is whether anything is still arriving.
       const { result, session } = await renderAtMinor(3);
       session.emitFrame(
         v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
@@ -1787,10 +1761,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("clears watcher health when the connection renegotiates below 1.3", async () => {
-      // Cold-review finding: writing `lastWatcherStatus` only when the field
-      // is PRESENT makes it a latch. The same client instance can reconnect to
-      // a restarted or rolled-back host and negotiate down, and then no frame
-      // is able to clear a notice describing a host generation that is gone.
+      // Cold-review finding: writing `lastWatcherStatus` only when the field is PRESENT makes it a latch.
       const { result, session } = await renderAtMinor(3);
       session.emitFrame(
         v13Snapshot({ state: "degraded-error", detail: "boom" }),
@@ -1825,16 +1796,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("DROPS a watcher-less frame on a session that itself negotiated 1.3", async () => {
-      // The invariant that replaced the tolerant v1.2 fallback. That fallback
-      // existed because the tier came from the CLIENT-WIDE version and could
-      // belong to a sibling repo's stream, making a watcher-less frame ordinary
-      // version skew; the skew case now lives in "per-session schema version"
-      // below, where it is accepted because that session really is at 1.2.
-      //
-      // Here the delivering session negotiated 1.3 itself, so this host agreed
-      // to send `watcher` and a frame without one is malformed. Degrading it to
-      // a v1.2 parse would strip the offending shape and accept a payload the
-      // contract exists to reject.
+      // Delivering session negotiated 1.3, so a watcher-less frame is malformed. Do not re-parse as v1.2.
       const { result, session } = await renderAtMinor(3);
       session.emitFrame(v13Snapshot({ state: "watching", detail: null }), null);
       await waitFor(() =>
@@ -1870,12 +1832,8 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("DROPS a malformed watcher rather than downgrading it into a v1.2 parse", async () => {
-      // The skew fallback must not become a bypass for the wire contract. A
-      // frame that CARRIES a watcher and still fails v1.3 is malformed - an
-      // unknown `state`, say - and the non-strict v1.2 schema would happily
-      // "rescue" it by stripping the offending field, recording the watcher as
-      // UNKNOWN and accepting a payload the contract exists to reject. Only a
-      // frame with no `watcher` key at all is version skew.
+      // The skew fallback must not become a bypass for the wire contract.
+      // A frame that CARRIES a watcher and still fails v1.3 is malformed - an unknown `state`, say - and the non-strict v1.2 schema would happily "rescue" it by stripping the offending field, recording the watcher as UNKNOWN and accepting a payload the contract exists to reject.
       const { result, session } = await renderAtMinor(3);
       session.emitFrame(
         v13Snapshot({ state: "degraded-capacity", detail: "over budget" }),
@@ -1892,13 +1850,7 @@ describe("useGitListChangedFilesSubscription", () => {
       };
       session.emitFrame(malformed, null);
 
-      // ORDERING, not a sleep: `emitFrame` runs the handler synchronously, so
-      // once a LATER well-formed frame is visible the malformed one has
-      // provably already been processed. A fixed delay would add dead time to
-      // every run and stay timing-dependent under load.
-      // Narrowed before the spread: `v13Snapshot` is typed as the whole union,
-      // and spreading it unnarrowed leaves `type` as a union, so TS cannot pick
-      // the member the extra `fingerprint` belongs to.
+      // ORDERING, not a sleep: `emitFrame` runs the handler synchronously, so once a LATER well-formed frame is visible the malformed one has provably already been processed.
       const base = v13Snapshot({
         state: "degraded-capacity",
         detail: "over budget",
@@ -1923,10 +1875,8 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("clears watcher health while the socket is RECONNECTING, not only on close", async () => {
-      // A recoverable drop parks the logical session at "reconnecting", never
-      // "closed", so `markTerminal` is not on that path. Without an explicit
-      // clear the notice survives the whole backoff - stating "Periodic
-      // refresh" as fact while no frame can arrive to contradict it.
+      // A recoverable drop parks the logical session at "reconnecting", never "closed", so `markTerminal` is not on that path.
+      // Without an explicit clear the notice survives the whole backoff - stating "Periodic refresh" as fact while no frame can arrive to contradict it.
       const { result, session } = await renderAtMinor(3);
       session.emitFrame(
         v13Snapshot({ state: "degraded-error", detail: "boom" }),
@@ -1942,9 +1892,6 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("drops watcher health when the session is REPLACED, not only when it terminates", async () => {
-      // Replacement retires the generation and makes the old session's
-      // callbacks inert, so nothing downstream can clear the value on its
-      // behalf — and the replacement may reach a different host incarnation.
       // `markTerminal` covers the terminal path only.
       const { result, session } = await renderAtMinor(3);
       session.emitFrame(
@@ -1974,16 +1921,7 @@ describe("useGitListChangedFilesSubscription", () => {
   });
 
   describe("per-session schema version", () => {
-    // `getMethodSchemaVersion` is CLIENT-WIDE per method:
-    // `reconcileMethodSchemaVersion` (`ws-stream-client.ts:682-701`) walks the
-    // owned sessions, takes the FIRST one carrying a version for that method,
-    // and breaks. Two repos open on one host are two sessions on one client, so
-    // a host restart that renegotiates one and not the other leaves the
-    // client-wide value describing whichever session it reached first - and
-    // every consumer reading that value gets the other repo's answer.
-    //
-    // Both tests below pin the SAME invariant from opposite directions: a frame
-    // is parsed at the version ITS OWN session negotiated.
+    // `getMethodSchemaVersion` is client-wide (first owned session wins). Parse each frame at the version its own session negotiated.
 
     function v12SnapshotFor(
       runningDir: string,
@@ -2046,14 +1984,8 @@ describe("useGitListChangedFilesSubscription", () => {
     }
 
     it("keeps a v1.3 frame's watcher health when the CLIENT-WIDE value reads 1.2", async () => {
-      // The skew direction `tolerantV13Parse` cannot rescue, because the
-      // fallback only ever degrades a v1.3 read DOWN. Here the client-wide
-      // value is already the lower one: repo B reconnected against a rolled-back
-      // host and answers reconciliation first, so repo A - still on 1.3 - has
-      // its frames parsed with the v1.2 schema. That parse STRIPS `watcher`
-      // (asserted directly by "ignores a watcher field arriving on a connection
-      // negotiated at 1.2"), so repo A's degrade notice silently never appears:
-      // the panel claims live updates while the watcher is off.
+      // The skew direction `tolerantV13Parse` cannot rescue, because the fallback only ever degrades a v1.3 read DOWN.
+      // That parse STRIPS `watcher` (asserted directly by "ignores a watcher field arriving on a connection negotiated at 1.2"), so repo A's degrade notice silently never appears: the panel claims live updates while the watcher is off.
       mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
 
       const repoB = await renderRepo("/repo-b");
@@ -2082,14 +2014,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("accepts a v1.2 frame when the CLIENT-WIDE value reads 1.3", async () => {
-      // The mirror direction, and the one that GUARDS THE DELETION of
-      // `tolerantV13Parse` rather than discriminating on its own: it passes
-      // today only because that fallback degrades a failed v1.3 parse to v1.2.
-      // Once delivery reads the delivering session it passes for the right
-      // reason - repo B's frame is parsed with the v1.2 schema because repo B
-      // negotiated 1.2 - which is what makes the fallback safe to remove.
-      // Without either, the required `watcher` fails the parse and the frame is
-      // dropped: repo B's changeset freezes until it reconnects.
+      // The mirror direction, and the one that GUARDS THE DELETION of `tolerantV13Parse` rather than discriminating on its own: it passes today only because that fallback degrades a failed v1.3 parse to v1.2.
       mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 3 };
 
       const repoA = await renderRepo("/repo-a");
@@ -2106,11 +2031,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("scopes rich-slot ownership to the repo asking, not to the client", async () => {
-      // The failure this closes has no fallback to soften it. The ownership
-      // read used to take NO arguments at all while its caller is worktree-
-      // scoped, so repo A at >= 1.1 disabled repo B's unary query - and with
-      // B's own session at 1.0 the stream does not write B's rich slot either.
-      // Both writers off: that panel has no writer at all.
+      // The ownership read used to take NO arguments at all while its caller is worktree- scoped, so repo A at >= 1.1 disabled repo B's unary query - and with B's own session at 1.0 the stream does not write B's rich slot either.
       mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
 
       const repoA = await renderRepo("/repo-a");
@@ -2142,14 +2063,8 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("hands the rich slot back when the stream terminates", async () => {
-      // A terminated stream will never write the slot again, so the unary
-      // query has to take it back. The client-wide value used to do this by
-      // itself: closing a session removes it from `ownedSessions` and
-      // reconciles the method's version away, leaving no owner. Reading the
-      // entry's own session instead loses that for free - `StreamSession.close`
-      // does NOT clear its negotiated version (only `resetForReconnect` does),
-      // so a closed session keeps answering with the minor it last negotiated
-      // and the slot stays disabled with nothing left to fill it.
+      // A terminated stream will never write the slot again, so the unary query has to take it back.
+      // Reading the entry's own session instead loses that for free - `StreamSession.close` does NOT clear its negotiated version (only `resetForReconnect` does), so a closed session keeps answering with the minor it last negotiated and the slot stays disabled with nothing left to fill it.
       mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
       const repo = await renderRepo("/repo-a");
       repo.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
@@ -2166,13 +2081,8 @@ describe("useGitListChangedFilesSubscription", () => {
       );
       await waitFor(() => expect(ownership.result.current).toBe(true));
 
-      // Fatal domain frame -> `markTerminal`. Reconciliation drops the
-      // client-wide value the same way it always did; the entry must not go on
-      // answering from the session it just closed.
-      // Reconciliation drops the client-wide value as the session leaves
-      // `ownedSessions`, which happens DURING the close - so it is already gone
-      // by the time anything re-reads. Setting it afterwards would leave the
-      // store holding a snapshot taken while it was still 1.1.
+      // Reconciliation drops the client-wide value the same way it always did; the entry must not go on answering from the session it just closed.
+      // Setting it afterwards would leave the store holding a snapshot taken while it was still 1.1.
       mockWsStreamClient.methodSchemaVersion = null;
       repo.session.emitFrame(
         { type: "error", message: "fatal git error", isFatal: true },
@@ -2183,12 +2093,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("refuses a fresh-nonce refresh while the session is between connections", async () => {
-      // The nonce gate is an ACTION taken against whatever session exists now,
-      // so a stamp from a handshake that has already ended is not evidence for
-      // it. A host that restarts and rolls back to v1.1 cannot echo a
-      // `freshNonce`, and the caller treats a non-null return as "the stream is
-      // handling it" and skips its unary fallback - so guessing high here costs
-      // a real refresh and parks the user on the 10s timeout instead.
+      // A host that restarts and rolls back to v1.1 cannot echo a `freshNonce`, and the caller treats a non-null return as "the stream is handling it" and skips its unary fallback - so guessing high here costs a real refresh and parks the user on the 10s timeout instead.
       mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
       const repo = await renderRepo("/repo-a");
       repo.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
@@ -2219,15 +2124,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("does not answer a TERMINATED stream from a live sibling's version", async () => {
-      // Clearing the closed session and its stamp is not enough on its own: the
-      // fallback below them is the client-wide value, and with repo B still
-      // live at >= 1.1 that value is not empty - it is B's. Repo A would go on
-      // reporting the stream owns its rich slot, with A's stream dead and no
-      // way to refill it.
-      //
-      // The single-repo case hides this, because reconciliation empties the
-      // client-wide value when the only session closes. A sibling keeps it
-      // populated, which is exactly the skew this PR is about.
+      // Clearing the closed session and its stamp is not enough on its own: the fallback below them is the client-wide value, and with repo B still live at >= 1.1 that value is not empty - it is B's.
       mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
       const repoA = await renderRepo("/repo-a");
       repoA.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
@@ -2259,15 +2156,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("publishes this session's version at OPEN, before any frame", async () => {
-      // The snapshot was already correct on read - `entrySchemaVersion` asks the
-      // live session first - but nothing asked it. The entry channel only fires
-      // on delivery, and `subscribeMethodSupport` fires only when the
-      // CLIENT-WIDE value changes: with repo A already holding it at 1.1,
-      // reconciliation keeps answering with A, so repo B negotiating 1.0 moves
-      // nothing. B's hook kept its stale pre-handshake `true` until B's first
-      // frame - and during a slow initial git scan that is a long time to sit
-      // with the unary query disabled and a v1.0 stream that will never write
-      // the rich slot.
+      // B's hook kept its stale pre-handshake `true` until B's first frame - and during a slow initial git scan that is a long time to sit with the unary query disabled and a v1.0 stream that will never write the rich slot.
       mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
       const repoA = await renderRepo("/repo-a");
       repoA.session.negotiatedSchemaVersion = { major: 1, minor: 1 };

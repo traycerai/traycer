@@ -1,26 +1,6 @@
 /**
  * Compatibility for the additive `roleClaims` field on the epic record.
- *
- * Two directions, and the second one is the interesting one.
- *
- * OLD RECORD -> NEW CODE is the easy half: `.default({})` means an epic
- * written before roles existed decodes to an empty registry.
- *
- * NEW RECORD -> OLD HOST is where an earlier draft of this design was simply
- * wrong. The fear was that an old host would strip `roleClaims`, because
- * `z.object` drops unknown keys - which would silently erase live claims on a
- * downgrade/read-write cycle. It does not, and the reason is structural:
- * `epicSchema` is never `.parse()`d at runtime (it exists to derive the `Epic`
- * TYPE), and the durable substrate is Yjs, which is schema-agnostic. Host
- * mutations are per-key `Y.Map.set` inside a transaction, so sibling keys an
- * old host has never heard of survive untouched.
- *
- * That claim is load-bearing enough that it is proven here rather than
- * asserted: the round-trip below mutates a doc through a reader that has no
- * knowledge of `roleClaims` and shows the claims still standing afterwards.
- *
- * Also pins that the record stays at v2.0 - no minor bump, no migrator - and
- * that the claimId/map-key integrity rule actually rejects malformed records.
+ * Host mutations are per-key `Y.Map.set` inside a transaction, so sibling keys an old host has never heard of survive untouched.
  */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -54,11 +34,7 @@ describe("epic record: roleClaims is additive at v2.0", () => {
   });
 
   it("stays on record version 2.0 - no minor bump, so no migrator is dragged in", () => {
-    // A bump would be worse than unnecessary. Raising the host's
-    // CURRENT_EPIC_VERSION_NUMBER pulls every existing 200-stamped row into a
-    // migration loop with no matching case; a MAJOR bump flips old hosts to
-    // read-only, which is an availability break for epic work that has nothing
-    // to do with roles.
+    // A bump would be worse than unnecessary.
     expect(persistenceRecordRegistry.epic[2].latestMinor).toBe(0);
   });
 
@@ -105,10 +81,8 @@ describe("epic record: an old host preserves roleClaims", () => {
       root.set("roleClaims", claims);
     });
 
-    // An OLD host syncs that doc and mutates it. It knows nothing about
-    // `roleClaims` - it only ever touches the keys in its own schema, exactly
-    // as the real host does (per-key `Y.Map.set`, never a rebuild-and-replace
-    // of the root map).
+    // An OLD host syncs that doc and mutates it.
+    // It knows nothing about `roleClaims` - it only ever touches the keys in its own schema, exactly as the real host does (per-key `Y.Map.set`, never a rebuild-and-replace of the root map).
     const oldHostDoc = new Y.Doc();
     Y.applyUpdate(oldHostDoc, Y.encodeStateAsUpdate(newHostDoc));
     const oldHostRoot = oldHostDoc.getMap("epic");

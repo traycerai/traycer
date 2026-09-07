@@ -18,15 +18,7 @@ import {
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { Attachment } from "@/lib/composer/types";
 
-/**
- * Drift-gating branch of `useChatComposerSubmit` (decision 6).
- *
- * A Mod-Enter that would steer opens the settings-conflict dialog when the
- * toolbar settings differ from the running turn on a turn-start-baked field
- * (model/harness/reasoning/tier/agent-mode/profile). permissionMode alone is
- * soft and must not open the dialog. Follows the harness style of
- * chat-composer-submit-gate.test.tsx.
- */
+/** A Mod-Enter that would steer opens the settings-conflict dialog when the toolbar settings differ from the running turn on a turn-start-baked field (model/harness/reasoning/tier/agent-mode/profile). permissionMode alone is soft and must not open the dialog. */
 
 const DIRTY: JsonContent = {
   type: "doc",
@@ -250,10 +242,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
   });
 
   it("re-resolves onRestart to auto when steerProtocolSupported flips false while the dialog is open (F1)", () => {
-    // Staged conflict stores INTENT only. Confirm re-runs
-    // resolveSubmitDeliveryPolicy against CURRENT connection/turn state so a
-    // host downgrade (1.5 → 1.4) while the dialog is open cannot emit a stale
-    // after_safe_point.
+    // Staged conflict stores INTENT only.
+    // Confirm re-runs resolveSubmitDeliveryPolicy against CURRENT connection/turn state so a host downgrade (1.5 → 1.4) while the dialog is open cannot emit a stale after_safe_point.
     const onSubmitMessage = vi.fn(acceptSubmit);
     const mount = mountSubmit({
       activeTurn: MATCHING_TURN,
@@ -575,11 +565,7 @@ interface MountSubmitInput {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null> | null;
   readonly steerCapable: boolean;
   readonly steerProtocolSupported: boolean | null;
-  /**
-   * Overrides `activeTurn?.status` for the hook's `activeTurnStatus` prop
-   * (e.g. force "stopping" while still exposing the origin turn via
-   * getActiveTurnForSteer). Pass `null` or omit to derive from activeTurn.
-   */
+  /** Overrides `activeTurn?.status` for the hook's `activeTurnStatus` prop (e.g. force "stopping" while still exposing the origin turn via getActiveTurnForSteer). Pass `null` or omit to derive from activeTurn. */
   readonly activeTurnStatus?: ChatActiveTurn["status"] | null;
   readonly hasPendingApprovals?: boolean;
   readonly sendDisabled?: boolean;

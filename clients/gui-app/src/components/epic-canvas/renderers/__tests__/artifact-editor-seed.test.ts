@@ -25,9 +25,7 @@ describe("seedArtifactTitleHeading", () => {
     expect(doc.child(0).attrs.level).toBe(1);
     expect(doc.child(0).textContent).toBe("");
     expect(doc.child(1).type.name).toBe("paragraph");
-    // Tiptap's `isEmpty` is a text-content heuristic, so a doc of empty-text
-    // nodes still reads empty - which is what keeps the whole-empty-editor
-    // placeholder rule rendering the title hint on the seeded empty heading.
+    // Tiptap's `isEmpty` is a text-content heuristic, so a doc of empty-text nodes still reads empty - which is what keeps the whole-empty-editor placeholder rule rendering the title hint on the seeded empty heading.
     expect(editor.isEmpty).toBe(true);
   });
 

@@ -12,11 +12,7 @@ export interface ChatTileActivationQueryPolicy {
   readonly discoverCompactSlashCommands: boolean;
 }
 
-/**
- * Activation queries serve actions that a locked published-chat copy cannot
- * perform. Keep them live for every ordinary chat surface, including viewers;
- * `readOnlyNotice` is the explicit copy marker and is null on live surfaces.
- */
+/** Activation queries serve actions that a locked published-chat copy cannot perform. */
 export function chatTileActivationQueryPolicy(
   input: ChatTileActivationQueryPolicyInput,
 ): ChatTileActivationQueryPolicy {

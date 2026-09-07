@@ -7,13 +7,8 @@ export interface TitleBarOverlaySink {
 }
 
 /**
- * Keeps the Windows native min/max/close controls aligned with the active
- * renderer theme. Desktop startup calls this only on Windows, after preload
- * and renderer CSS are available.
- *
- * The load retry closes the startup race where the first computed-style read
- * can precede the final stylesheet cascade. Theme changes then push after the
- * theme applier has synchronously updated the document attributes.
+ * Keeps the Windows native min/max/close controls aligned with the active renderer theme.
+ * Desktop startup calls this only on Windows, after preload and renderer CSS are available.
  */
 export function installTitleBarOverlayThemeSync(
   sink: TitleBarOverlaySink,

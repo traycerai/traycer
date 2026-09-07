@@ -1,22 +1,3 @@
-/**
- * How the terminal-agent record table combines its TWO producers - the
- * `epic.listTuiAgents` poll (`applyTuiAgentRecords`) and the
- * `host.chatRecords.subscribe@1.1` push (`applyTuiAgentRecordDelta`).
- *
- * The pair is not ordered by anything the wire carries. A list read issued
- * before an agent was committed cannot contain it, and the `tuiUpsert` that
- * announces that agent can land while the read is still in flight - so the
- * older answer arrives LAST and, as a clear-and-replace, would delete the row
- * the push had just surfaced. That is the exact shape of the field report this
- * channel exists to fix (an A2A-created child that never appears), which is why
- * the merge rules are pinned here rather than left to the reducer's shape.
- *
- * Two rules, both asserted below with their ablation named:
- *   - a SERVED row is revision-guarded, like a delta, so an older answer cannot
- *     regress a newer push;
- *   - an OMITTED row is retracted only once an answer issued after it was
- *     ingested has had its chance, so a genuine deletion is still collected.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type {
@@ -65,18 +46,7 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-/**
- * A local row (registry- or doc-resident). Every scenario in this file is
- * about the MERGE (revision guards, omission fencing) rather than about doc
- * residency, so the default is `false` - an ordinary registry row.
- *
- * Built as the `@1.1` shape (both local arms are field-for-field identical
- * bar `origin`) and then given the `origin` its own `docResident` implies,
- * exactly as `epicListTuiAgentsUpgradeV11ToV12` derives it - so this factory
- * can never produce the one combination the wire itself cannot
- * (`docResident: true` paired with `origin: "registry"`, or the reverse).
- * Only the two local arms: this file never exercises a `cloud` row.
- */
+/** A local row (registry- or doc-resident). */
 function row(
   overrides: Partial<TuiAgentRecordSummaryV11>,
 ): Extract<TuiAgentRecordSummaryV12, { origin: "registry" | "doc" }> {
@@ -111,11 +81,7 @@ function row(
     : { ...base, origin: "registry" as const };
 }
 
-/**
- * Every handle a test opens. A store subscribes to the auth store at
- * construction and unsubscribes only in `dispose()`, so an undisposed handle
- * would keep re-publishing and re-projecting on every later test's sign-out.
- */
+/** Every handle a test opens. */
 const openHandles: OpenedStoreForTest[] = [];
 
 function newSession(): OpenedStoreForTest {
@@ -134,11 +100,7 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-test",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -154,13 +116,8 @@ function newSession(): OpenedStoreForTest {
 }
 
 /**
- * A session whose ROOT SNAPSHOT already carries doc content, for the tests that
- * need `docTuiAgents` to be non-empty before any record answers.
- *
- * Separate from {@link newSession} rather than a parameter on it: every other
- * test in this file asserts about the record TABLE and wants an empty doc, and
- * threading a seeder through them all would put a doc-projection concern into
- * eleven tests that have none.
+ * A session whose ROOT SNAPSHOT already carries doc content, for the tests that need
+ * `docTuiAgents` to be non-empty before any record answers.
  */
 function newSessionSeeded(seedDoc: (doc: Y.Doc) => void): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
@@ -192,15 +149,7 @@ function newSessionSeeded(seedDoc: (doc: Y.Doc) => void): OpenedStoreForTest {
   return handle;
 }
 
-/**
- * One doc-resident terminal agent, with every field
- * `projectTerminalAgent` requires.
- *
- * `harnessId: "codex"` because the projection DROPS a row whose harness this
- * build cannot dispatch (`narrowTuiHarnessId`) - a fixture naming `cursor` or
- * an unknown vendor would produce an empty slice and the alias pins would then
- * be asserting `EMPTY === EMPTY`, which holds for the wrong reason.
- */
+/** One doc-resident terminal agent, with every field `projectTerminalAgent` requires. */
 function seedDocTerminalAgent(doc: Y.Doc, id: string, title: string): void {
   const agent = new Y.Map<unknown>();
   agent.set("id", id);
@@ -246,11 +195,8 @@ afterEach(() => {
 
 describe("applyTuiAgentRecords merges rather than replaces", () => {
   it("keeps a pushed agent that an in-flight list answer could not carry", () => {
-    // The A2A case end to end: the host commits `pushed`, the delta announces
-    // it, and the list read that was ALREADY in flight answers without it.
-    //
-    // Ablation: restore the `clear()`-then-refill body and `pushed` is gone
-    // from the table the instant the stale answer lands.
+    // The A2A case end to end: the host commits `pushed`, the delta announces it, and the list read
+    // that was ALREADY in flight answers without it.
     signedInAs(USER);
     const handle = newSession();
     const state = handle.store.getState();
@@ -271,15 +217,8 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 
   it("collects a deleted agent on the first answer issued after it landed", () => {
-    // The other half of the same rule: holding an omitted row forever would
-    // turn a missed `tuiRemove` (a delta lost to a disconnect) into a row that
-    // outlives the session. An answer issued AFTER the push is evidence - the
-    // host had the row when it answered - so the omission retracts it at once,
-    // not one read later.
-    //
-    // Ablation: fence on the previous answer's watermark instead of the
-    // request-time counter and `doomed` survives this answer, staying
-    // actionable until the 20s poll after a mutation's own refetch.
+    // The other half of the same rule: holding an omitted row forever would turn a missed `tuiRemove`
+    // (a delta lost to a disconnect) into a row that outlives the session.
     signedInAs(USER);
     const handle = newSession();
     const state = handle.store.getState();
@@ -296,9 +235,8 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 
   it("falls back to a one-answer grace when no fence was captured", () => {
-    // `null` is the dispatch-with-no-session case: the answer cannot say
-    // whether it was issued before or after the push, so the previous
-    // answer's watermark stands in and the row survives exactly one answer.
+    // `null` is the dispatch-with-no-session case: the answer cannot say whether it was issued before
+    // or after the push, so the previous answer's watermark stands in and the row survives exactly one
     signedInAs(USER);
     const handle = newSession();
     const state = handle.store.getState();
@@ -316,11 +254,8 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 
   it("does not let an older served row regress a newer pushed revision", () => {
-    // Revision is per-record monotonic and is the only ordering fact on a row,
-    // so the poll owes it the same test the push already applies.
-    //
-    // Ablation: drop the revision guard in the served loop and the title reverts
-    // to "Before" - a rename the user has already seen land, undone by a poll.
+    // Revision is per-record monotonic and is the only ordering fact on a row, so the poll owes it the
+    // same test the push already applies.
     signedInAs(USER);
     const handle = newSession();
     handle.store
@@ -348,9 +283,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 
   it("still lets a served row advance the table when its revision is newer", () => {
-    // The positive control for the guard above: same shape, newer revision, so
-    // the poll must win. Without this a guard inverted to `>=` would pass the
-    // test above and silently freeze the table against its own poll.
+    // The positive control for the guard above: same shape, newer revision, so the poll must win.
     signedInAs(USER);
     const handle = newSession();
     handle.store
@@ -372,18 +305,8 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 
   it("refreshes a doc-resident row on a later answer at the same revision: 0", () => {
-    // H1: `tuiAgentRecordSummaryOfDocEntry` hardcodes every doc-resident row to
-    // `revision: 0` on EVERY answer, because a doc entry has no registry seq
-    // to report. The ordinary revision guard ("apply only when strictly
-    // greater") would then reject every refresh of a doc-resident row against
-    // itself - `0 <= 0` - freezing it at whatever the session's first answer
-    // said, for the life of the session (H1 in the cold review). The two
-    // titles below are the only way to observe the freeze: an unfixed guard
-    // keeps "First poll" forever.
-    //
-    // Ablation: drop the `bothDocResident` waiver back to a bare
-    // `row.revision <= held.revision` and this fails - the second answer's
-    // title never lands.
+    // H1: `tuiAgentRecordSummaryOfDocEntry` hardcodes every doc-resident row to `revision: 0` on EVERY
+    // answer, because a doc entry has no registry seq to report.
     signedInAs(USER);
     const handle = newSession();
     const state = handle.store.getState();
@@ -420,10 +343,8 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 
   it("still blocks a doc-resident row at revision 0 from clobbering a held registry row", () => {
-    // The H1 waiver is narrow: it applies ONLY when both the held row and the
-    // incoming row are doc-resident. A held REGISTRY row (revision >= 1) must
-    // still win against a doc row at revision 0 - the ordinary guard, not the
-    // waiver, governs this pair.
+    // The H1 waiver is narrow: it applies ONLY when both the held row and the incoming row are
+    // doc-resident.
     signedInAs(USER);
     const handle = newSession();
     const state = handle.store.getState();
@@ -458,11 +379,6 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 
   it("still lets adoption replace a held doc-resident row at revision 0 with a real registry row", () => {
-    // The other direction the waiver must not break: the adoption path
-    // (`converges a frozen doc-resident row...` below) is a registry row
-    // (revision >= 1) replacing a held DOC row at 0 - that must keep working,
-    // since it is not a doc-over-doc comparison and the ordinary guard
-    // (`0 <= n` is false) already lets it through.
     signedInAs(USER);
     const handle = newSession();
     const state = handle.store.getState();
@@ -521,14 +437,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
 
 describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
   it("preserves what the frame stated, rather than re-deriving it", () => {
-    // THIS USED TO STAMP `docResident: false` unconditionally, and that was
-    // right while the frame could not answer: at `@1.1` a `tuiUpsert` carried
-    // the `@1.0` row, which has no `docResident` at all, and the delta plane
-    // was registry-only - so `false` was a fact about the SOURCE.
-    //
-    // `@1.2` gave the row an `origin` and a second producer. Re-deriving now
-    // would overwrite a stated answer with a guess, and there is no guess that
-    // is right for both arms.
+    // `@1.2` gave the row an `origin` and a second producer.
     signedInAs(USER);
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
@@ -543,12 +452,6 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
   });
 
   it("LISTS a replica whose cloud row never named a harness", () => {
-    // The protocol arm makes `harnessId` nullable on purpose - a cloud row
-    // written before `runSettingsSummary` carried the harness has none - and
-    // says such a row renders without a harness mark. Dropping it here made
-    // the agent vanish from the roster on every other machine, which is the
-    // one outcome the contract rules out: the host stores and serves it
-    // correctly, and only the projection was losing it.
     signedInAs(USER);
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
@@ -576,9 +479,8 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
   });
 
   it("still DROPS a replica naming a harness this build cannot dispatch", () => {
-    // A different case, and it keeps its old answer: the row named something
-    // (a newer host's vendor), so a tile for it would promise a session this
-    // build cannot open. Absent beats a row that errors on click.
+    // A different case, and it keeps its old answer: the row named something (a newer host's vendor),
+    // so a tile for it would promise a session this build cannot open.
     signedInAs(USER);
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
@@ -606,11 +508,8 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
   });
 
   it("applies a CROSS-HOST replica, which has no docResident to stamp", () => {
-    // The second producer: the serving host's record inbox, replicating an
-    // agent bound to another of the user's machines. The narrow arm carries no
-    // `docResident` key, so the old unconditional stamp had nothing to write
-    // it onto - and the projection derives `false` from the arm rather than
-    // from a field that is not there.
+    // The second producer: the serving host's record inbox, replicating an agent bound to another of
+    // the user's machines.
     signedInAs(USER);
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
@@ -634,36 +533,17 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
 
     const applied = handle.store.getState().tuiAgentRecords.byId["tui-remote"];
     expect(applied.origin).toBe("cloud");
-    // NOT doc-resident: a replica is not the doc map's frozen copy, and it IS
-    // addressable through the registry affordances - on its own host, which is
-    // where every mutation aimed at it has to go anyway.
+    // NOT doc-resident: a replica is not the doc map's frozen copy, and it IS addressable through the
+    // registry affordances - on its own host, which is where every mutation aimed at it has to go
     expect(applied.docResident).toBe(false);
-    // The placeholders the narrow arm cannot fill. `origin` is what keeps a
-    // consumer from reading them as facts about the remote machine - above all
-    // `harnessSessionId`, whose absence is why a replica can never be cloned.
+    // The placeholders the narrow arm cannot fill.
     expect(applied.harnessSessionId).toBeNull();
     expect(applied.workspaceFolders).toEqual([]);
   });
 
   it("converges a frozen doc-resident row through the same revision guard the poll's merge uses", () => {
-    // `epic.listTuiAgents@1.1` can serve a doc-resident remainder at
-    // `revision: 0` (the lowest value the wire admits - see
-    // `tuiAgentRecordSummaryOfDocEntry`): the frozen copy of an agent whose
-    // BINDING host has not upgraded. The delta plane cannot address that row
-    // directly - it is registry-only - but it does not need to: the moment
-    // the binding host upgrades and the eviction sweep imports the entry, the
-    // FIRST real registry delta for that id carries a revision >= 1, which -
-    // through the exact staleness test exercised above ("does not let an
-    // older served row regress a newer pushed revision") - strictly exceeds
-    // the frozen `0` and replaces it, flipping `docResident` to `false` in
-    // the same move.
-    //
-    // Ablation: if the doc-resident poll row were held at any revision other
-    // than the lowest the wire admits, a binding host that upgrades and
-    // imports at a low real revision could lose to the frozen copy and the
-    // agent would stay stuck at `docResident: true`. Pinning the doc-resident
-    // row to `revision: 0` is what guarantees the FIRST real registry write
-    // always wins.
+    // `epic.listTuiAgents@1.1` can serve a doc-resident remainder at `revision: 0` (the lowest value
+    // the wire admits - see `tuiAgentRecordSummaryOfDocEntry`): the frozen copy of an agent whose
     signedInAs(USER);
     const handle = newSession();
     const state = handle.store.getState();
@@ -705,20 +585,8 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
 });
 
 /**
- * The `tuiAgents` / `docTuiAgents` alias - the TWIN of the one
- * `chat-records-union.test.ts` pins, and the member of that pair that had no
- * pin at all until this suite grew one.
- *
- * There are exactly two producer aliases of this shape in the projection:
- * `unionChats` returns `docChats` itself when no record has answered, and
- * `unionTerminalAgents` returns `docAgents` on the same condition
- * (`projection-helpers.ts`). `chats === docChats` was pinned; `tuiAgents ===
- * docTuiAgents` was not, and it was severed identically and silently by the
- * store's per-key `replaceEqualDeep` pass - each key reconciled against its
- * own previous value, so two deep-equal results and no `===`.
- *
- * Pinned here rather than left to the chats twin's coverage because "the other
- * one is tested" is exactly the reasoning under which this one went unnoticed.
+ * The `tuiAgents` / `docTuiAgents` alias - the TWIN of the one `chat-records-union.test.ts` pins,
+ * and the member of that pair that had no pin at all until this suite grew one.
  */
 describe("the doc slice is handed through by reference in doc-only mode", () => {
   it("aliases `tuiAgents` to `docTuiAgents` while no record has answered", () => {
@@ -734,18 +602,8 @@ describe("the doc slice is handed through by reference in doc-only mode", () => 
   });
 
   it("un-aliases the moment a record answers, even when the content is unchanged", () => {
-    // The other half, and the one that says the alias is a FACT about the
-    // record layer rather than about content: the record below projects to a
-    // row equal field-for-field to what the doc already held, and the slices
-    // must still come apart.
-    //
-    // NOTE ON ITS HISTORY, so the vacuous era is on record: the sibling
-    // assertion in `chat-records-union.test.ts` (`expect(chats).not.toBe(
-    // docChats)`) passed for the whole period the alias was severed, because
-    // nothing was ever aliased and a negative identity assertion cannot fail
-    // in that world. It became a REAL pin only once aliasing was restored, and
-    // so did this one. A `not.toBe` is only load-bearing beside a `toBe` that
-    // holds.
+    // The other half, and the one that says the alias is a FACT about the record layer rather than
+    // about content: the record below projects to a row equal field-for-field to what the doc already
     signedInAs(USER);
     const handle = newSessionSeeded((doc) => {
       seedDocTerminalAgent(doc, "both", "Same content");
@@ -788,14 +646,7 @@ function cloudRow(
 
 describe("terminal-agent merge puts AUTHORITY before revision", () => {
   it("TRIPWIRE: a registry snapshot row replaces a held cloud row at a LOWER revision", () => {
-    // THE STRANDING THIS PREVENTS. The host may legitimately answer with the
-    // authoritative local row at or below a stale replica's revision - it
-    // drops a replica sitting under a live local row SILENTLY, then serves the
-    // local row from its next list. A revision-first rule rejects that as "not
-    // newer" and keeps the cloud copy, which is unlaunchable and unforkable -
-    // and because the id WAS in the snapshot, the omission fence cannot remove
-    // it either. Nothing dislodges it until some later local mutation happens
-    // to bump the revision.
+    // THE STRANDING THIS PREVENTS.
     signedInAs(USER);
     const handle = newSession();
     handle.store
@@ -832,9 +683,8 @@ describe("terminal-agent merge puts AUTHORITY before revision", () => {
   });
 
   it("never lets a cloud row displace a local one, however new it is", () => {
-    // The other direction, and the one that keeps a live local agent usable: a
-    // replica arriving at a far higher revision must not turn an authoritative
-    // row into an unlaunchable copy.
+    // The other direction, and the one that keeps a live local agent usable: a replica arriving at a
+    // far higher revision must not turn an authoritative row into an unlaunchable copy.
     signedInAs(USER);
     const handle = newSession();
     handle.store
@@ -850,9 +700,8 @@ describe("terminal-agent merge puts AUTHORITY before revision", () => {
   });
 
   it("still orders by revision BETWEEN two rows of the same authority", () => {
-    // Authority is a tie-breaker between planes, not a licence to ignore
-    // ordering. Two replicas still compare by revision, so a replayed or
-    // reordered delta stays a no-op.
+    // Authority is a tie-breaker between planes, not a licence to ignore ordering. Two replicas still
+    // compare by revision, so a replayed or reordered delta stays a no-op.
     signedInAs(USER);
     const handle = newSession();
     handle.store

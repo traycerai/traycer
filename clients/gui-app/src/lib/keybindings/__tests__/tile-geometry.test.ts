@@ -41,15 +41,7 @@ describe("findNeighbor", () => {
     expect(findNeighbor(a, [a, near, far], "right")).toBe("near");
   });
 
-  // Repro for the "bottom-left → right goes to top instead of right-bottom"
-  // bug: a wide top pane spans both columns, but from the bottom-left tile
-  // "right" must land on the bottom-right tile, not the top.
-  //
-  //   ┌───────────────────────┐
-  //   │          top          │   (full width, y 0..300)
-  //   ├───────────┬───────────┤
-  //   │ bottomL   │ bottomR   │   (y 300..600)
-  //   └───────────┴───────────┘
+  // Repro for the "bottom-left → right goes to top instead of right-bottom" bug: a wide top pane spans both columns, but from the bottom-left tile "right" must land on the bottom-right tile, not the top.
   it("picks the aligned neighbour over a wide unaligned pane", () => {
     const top = rect("top", [0, 0, 1000, 300]);
     const bottomL = rect("bottomL", [0, 300, 500, 300]);
@@ -75,12 +67,8 @@ describe("findNeighbor", () => {
   });
 });
 
-// Regression: a split resize handle sits on the seam between two panes, so it
-// scores better than the true neighbour pane in `findNeighbor` (primaryGap 0
-// vs ~handle-width). It must therefore NOT be a focus target. The handle is
-// kept off `data-group-id` (it uses `data-resize-group-id`), so `readTileRects`
-// excludes it and downstream navigation lands on the neighbour pane - never on
-// the handle's split-group id, which no pane matches (a silent no-op).
+// Regression: a split resize handle sits on the seam between two panes, so it scores better than the true neighbour pane in `findNeighbor` (primaryGap 0 vs ~handle-width).
+// It must therefore NOT be a focus target.
 describe("readTileRects excludes split resize handles", () => {
   afterEach(() => {
     document.body.innerHTML = "";
@@ -104,9 +92,7 @@ describe("readTileRects excludes split resize handles", () => {
   }
 
   it("collects panes only, so cross-split focus lands on the neighbour pane", () => {
-    // Real horizontal-split geometry (split-container.tsx, flex-row):
-    //   [ pane-A (grow) ][ handle w-px ][ pane-B (grow) ]
-    // The 1px handle sits exactly on the seam at x=499.5.
+    // Real horizontal-split geometry (split-container.tsx, flex-row): [ pane-A (grow) ][ handle w-px ][ pane-B (grow) ] The 1px handle sits exactly on the seam at x=499.5.
     const container = document.createElement("div");
     document.body.append(container);
     appendBox(container, "data-group-id", "pane-A", [0, 0, 499.5, 600]);

@@ -3,11 +3,8 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 
-// `openDurableStreamTransport` is the single place "durable stream = transport +
-// auth + bearer rotation + wake" is assembled. These tests pin its load-bearing
-// guarantees: forwarding rotations, teardown order, and that a failure while
-// wiring wake never leaks the socket. The socket builder and wake wiring are
-// mocked so the test is about the assembly contract, not the real transport.
+// `openDurableStreamTransport` is the single place "durable stream = transport + auth + bearer rotation + wake" is assembled.
+// These tests pin its load-bearing guarantees: forwarding rotations, teardown order, and that a failure while wiring wake never leaks the socket.
 const mocks = vi.hoisted(() => ({
   buildHostStreamClient: vi.fn(),
   subscribeStreamWakeReconnect: vi.fn(),
@@ -36,9 +33,7 @@ const AUTH: StreamAuthRevalidator = {
   revalidateForReconnect: () => Promise.resolve("rotated"),
 };
 
-// `buildHostStreamClient` is mocked in these tests, so `target` only needs to
-// satisfy the type — its content plays no role in the assembly contract these
-// tests pin.
+// `buildHostStreamClient` is mocked in these tests, so `target` only needs to satisfy the type - its content plays no role in the assembly contract these tests pin.
 const FAKE_TARGET: HostDirectoryEntry = {
   hostId: "host-a",
   label: "host-a",

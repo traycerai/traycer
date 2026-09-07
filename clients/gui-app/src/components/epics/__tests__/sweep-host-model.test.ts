@@ -87,9 +87,8 @@ describe("namesHostOutsideSurface", () => {
   });
 
   it("says no when the surface has no host of its own", () => {
-    // There is no client to sweep with, so there is nothing to compare
-    // against - and enabling an affordance whose every route is null would
-    // only lead to a dialog that cannot ask anything.
+    // There is no client to sweep with, so there is nothing to compare against - and enabling an affordance whose
+    // every route is null would only lead to a dialog that cannot ask anything.
     expect(
       namesHostOutsideSurface({ hostIds: ["host-b"], surfaceHostId: null }),
     ).toBe(false);
@@ -103,9 +102,8 @@ describe("buildSweepHostPickerRows", () => {
       defaultHostId: "host-a",
     });
 
-    // Never filtered and never grouped: a host with no record naming it can
-    // still hold the Task's worktrees, and the shared picker's own order is
-    // the order.
+    // Never filtered and never grouped: a host with no record naming it can still hold the Task's worktrees, and
+    // the shared picker's own order is the order.
     expect(rows.map((row) => row.host.hostId)).toEqual([
       "host-a",
       "host-b",

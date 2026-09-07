@@ -1,11 +1,4 @@
-/**
- * Surface-agnostic classification of a rendered markdown anchor's `href`.
- *
- * This only understands URL *scheme* plus a trailing editor-style
- * `:line[:col]` location. All Traycer-domain knowledge (workspace resolution,
- * artifact paths, navigation) lives in the host surface's link policy, so this
- * stays reusable across every markdown surface.
- */
+/** Scheme plus trailing :line[:col] only. Workspace/artifact/navigation live in the host surface's link policy. */
 export type ClassifiedHref =
   | { readonly kind: "external"; readonly url: string }
   | {
@@ -27,12 +20,8 @@ const EXTERNAL_SCHEMES = new Set(["http", "https", "mailto"]);
 
 export function classifyHref(rawHref: string): ClassifiedHref {
   const href = rawHref.trim();
-  // Empty or in-page anchors (`#heading`): this renderer only routes clicks
-  // that leave the current document/surface. `default` means "not ours" - the
-  // editor surface relies on it to let ProseMirror place the caret. Rendered
-  // anchors must never carry an empty href in the first place (it resolves to
-  // the current document, so a click reloads the SPA); `MarkdownAnchor` drops
-  // the attribute rather than classifying its way out of it.
+  // Empty or #heading: default so ProseMirror can place the caret. MarkdownAnchor
+  // drops empty href rather than classifying it.
   if (href.length === 0 || href.startsWith("#")) return { kind: "default" };
 
   const schemeMatch = SCHEME_PATTERN.exec(href);
@@ -56,19 +45,14 @@ export function classifyHref(rawHref: string): ClassifiedHref {
 // port (`http://host:8080`, which never reaches this branch) is untouched.
 const LINE_SUFFIX_PATTERN = /:(\d+)(?::(\d+))?$/;
 
-// Builds a `file` classification, splitting off a trailing `:line[:col]` target
-// so the bare path is what resolves to a file and the location travels in
-// `line`/`col`. The split runs on the ENCODED href (so a `%23` in a filename is
-// never mistaken for a fragment and a `%3A` never for a location), and only the
-// resulting bare path is decoded.
+// Split :line[:col] on the encoded href so %23 is not a fragment and %3A is
+// not a location. Decode only the bare path.
 function fileHref(encodedPath: string): ClassifiedHref {
   const match = LINE_SUFFIX_PATTERN.exec(encodedPath);
   const barePath =
     match === null ? encodedPath : encodedPath.slice(0, match.index);
-  // Nothing to open: either a bare href with no path at all, or a trailing
-  // location with no file in front of it (`:99`, `:0`). `ignore` - not
-  // `default` - so the anchor still `preventDefault`s the click rather than
-  // letting the browser navigate the href and unload the SPA.
+  // Bare or :line with no file: ignore, not default, so preventDefault still
+  // runs and the SPA does not unload.
   if (barePath.length === 0) return { kind: "ignore" };
   const path = decodePercentEncoding(barePath);
   if (match === null) return { kind: "file", path, line: null, col: null };
@@ -93,21 +77,7 @@ function fileUrlToPath(href: string): string {
 }
 
 /**
- * Every href reaching this module is percent-encoded - the markdown parser
- * normalizes a link destination on the way to the DOM, so a path with a space
- * or a Windows separator arrives as `…Traycer%20Dev%5Crepo…`. The surface
- * policies resolve against a real filesystem, so they need the native form.
- *
- * This is the ONE decode on a file path's way to a surface policy - consumers
- * (`resolveArtifactRelativeLinkPath`, the workspace-file candidates) take the
- * native path as given. A second decode downstream would eat a literal percent
- * escape in a real name (`my%20folder` authored as `my%2520folder`) and could
- * turn `%252E%252E` into a `..` that walks out of the linked folder.
- *
- * `decodeURIComponent`, not `decodeURI`: the latter preserves the reserved set,
- * so a filename's `%23` or `%3A` would reach the filesystem literally. Splitting
- * the `:line[:col]` suffix off the ENCODED href (see {@link fileHref}) is what
- * keeps those from being read as a fragment or a location in the first place.
+ * One decode (`decodeURIComponent`) on a file path's way to a surface policy. Split `:line[:col]` off the encoded href first.
  */
 function decodePercentEncoding(path: string): string {
   try {

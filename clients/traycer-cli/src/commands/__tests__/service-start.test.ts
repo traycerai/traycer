@@ -1,16 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `traycer host service start` - the public background start, and the
-// counterpart to `host stop`. See `../service-start.ts`'s module doc for why
-// it exists as its own command rather than a mode of `host start`.
+// `traycer host service start` - the public background start, and the counterpart to `host stop`.
+// See `../service-start.ts`'s module doc for why it exists as its own command rather than a mode of `host start`.
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
   startFails: false,
-  // Is a host POSITIVELY serving? The `running` status alone is derived from a
-  // bare liveness check over pid metadata, so this is what decides whether the
-  // idempotent shortcut is safe.
+  // Is a host POSITIVELY serving?
+  // The `running` status alone is derived from a bare liveness check over pid metadata, so this is what decides whether the idempotent shortcut is safe.
   hostServing: true,
   statusResponses: [] as Array<{
     state: "running" | "stopped" | "not-installed" | "externally-managed";
@@ -47,9 +45,7 @@ vi.mock("../../service", async (importOriginal) => {
   };
 });
 
-// The attempt-gated start facade publishes a host-start adoption and waits
-// for the spawn; nothing real can spawn here, so stub the wait exactly as
-// host-restart.test.ts does.
+// The attempt-gated start facade publishes a host-start adoption and waits for the spawn; nothing real can spawn here, so stub the wait exactly as host-restart.test.ts does.
 vi.mock("../../host/host-start-adoption", () => ({
   publishHostStartAdoption: async () => ({
     waitForSpawn: async () => undefined,
@@ -130,12 +126,8 @@ describe("serviceStartCommand", () => {
     vi.clearAllMocks();
   });
 
-  // The `not-installed` read is ADVISORY, not a gate. On Windows
-  // `statusService` maps every `schtasks /Query` failure - timeout, transient
-  // access denial - to `not-installed`, so refusing on it meant a genuinely
-  // registered service could not be started whenever that query happened to
-  // fail. The platform start is the authoritative attempt; the read only
-  // decides what to say when it fails.
+  // The `not-installed` read is ADVISORY, not a gate.
+  // On Windows `statusService` maps every `schtasks /Query` failure - timeout, transient access denial - to `not-installed`, so refusing on it meant a genuinely registered service could not be started whenever that query happened to fail.
   it("still attempts the start when the registration probe says nothing is installed", async () => {
     mocks.startFails = false;
     mocks.statusResponses = [
@@ -186,21 +178,14 @@ describe("serviceStartCommand", () => {
       alreadyRunning: false,
     });
     expect(result.exitCode).toBe(0);
-    // "requested ... a host is now serving", not "started the service". The
-    // post-start readback shares the shortcut's blind spot: it can be
-    // observing a FOREGROUND host while this service's supervisor exited after
-    // finding that incumbent.
+    // "requested ... a host is now serving", not "started the service".
+    // The post-start readback shares the shortcut's blind spot: it can be observing a FOREGROUND host while this service's supervisor exited after finding that incumbent.
     expect(result.human ?? "").toContain("requested start");
     expect(result.human ?? "").not.toContain("started service");
   });
 
-  // Idempotent like `host stop`, and it gets there by SKIPPING the platform
-  // start rather than trusting it to no-op. On Windows the Scheduled Task is
-  // registered `MultipleInstancesPolicy=IgnoreNew`, so `schtasks /Run` against
-  // a live task is suppressed - and `runTaskAndVerifyStart` only accepts
-  // POST-BASELINE spawn evidence, so a suppressed run polls out its verify
-  // timeout and throws E_SERVICE_CONTROL_FAILED. Calling `start` here would
-  // have made "start an already-running host" a slow hard failure on Windows.
+  // Idempotent like `host stop`, and it gets there by SKIPPING the platform start rather than trusting it to no-op.
+  // On Windows the Scheduled Task is registered `MultipleInstancesPolicy=IgnoreNew`, so `schtasks /Run` against a live task is suppressed - and `runTaskAndVerifyStart` only accepts POST-BASELINE spawn evidence, so a suppressed run polls out its verify timeout and throws E_SERVICE_CONTROL_FAILED.
   it("reports alreadyRunning: true without ever calling controller.start when the service was already running", async () => {
     mocks.hostServing = true;
     mocks.statusResponses = [
@@ -222,20 +207,14 @@ describe("serviceStartCommand", () => {
       alreadyRunning: true,
     });
     expect(result.exitCode).toBe(0);
-    // "a host", not "the service": nothing here can attribute the running
-    // process to the SERVICE MANAGER, since Linux and Windows both derive
-    // `running` from shared pid metadata. A foreground `traycer host start`
-    // satisfies it while the registration sits inactive, and claiming the
-    // service was already running there reports success for a background start
-    // that never happened.
+    // "a host", not "the service": nothing here can attribute the running process to the SERVICE MANAGER, since Linux and Windows both derive `running` from shared pid metadata.
+    // A foreground `traycer host start` satisfies it while the registration sits inactive, and claiming the service was already running there reports success for a background start that never happened.
     expect(result.human ?? "").toContain("a host is already serving");
     expect(result.human ?? "").toContain("traycer host start");
   });
 
-  // `statusService` derives `running` from `isProcessAlive(pid)` over pid
-  // metadata, so a RECYCLED pid reports a host that is not there. Taking the
-  // idempotent shortcut on that left a genuinely stopped host down until
-  // someone repaired the metadata - the opposite of what was asked.
+  // `statusService` derives `running` from `isProcessAlive(pid)` over pid metadata, so a RECYCLED pid reports a host that is not there.
+  // Taking the idempotent shortcut on that left a genuinely stopped host down until someone repaired the metadata - the opposite of what was asked.
   it("starts anyway when a 'running' status rests on stale, recycled pid metadata", async () => {
     mocks.hostServing = false;
     mocks.statusResponses = [
@@ -249,10 +228,8 @@ describe("serviceStartCommand", () => {
     expect(result.data).toMatchObject({ alreadyRunning: false });
   });
 
-  // `externally-managed` is macOS with Desktop's SMAppService owning the
-  // label. Deliberately NOT refused: a registration exists, the user asked for
-  // the host to be running, and the macOS backend redirects the start to the
-  // agent label launchd can actually start.
+  // `externally-managed` is macOS with Desktop's SMAppService owning the label.
+  // Deliberately NOT refused: a registration exists, the user asked for the host to be running, and the macOS backend redirects the start to the agent label launchd can actually start.
   it("starts an externally-managed (Desktop-owned) registration rather than refusing it", async () => {
     mocks.hostServing = false;
     mocks.statusResponses = [
@@ -272,9 +249,7 @@ describe("serviceStartCommand", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  // A failed pre-start probe must not turn into install guidance: we never
-  // learned that nothing was registered, so the raw platform failure is the
-  // honest error to surface.
+  // A failed pre-start probe must not turn into install guidance: we never learned that nothing was registered, so the raw platform failure is the honest error to surface.
   it("rethrows the raw start failure when the pre-start probe itself threw", async () => {
     mocks.startFails = true;
     mocks.statusResponses = []; // the mock status call throws

@@ -129,9 +129,8 @@ describe("useChatComposerDraft bridge", () => {
   it("does not stamp a pending epoch into a not-yet-ready handle (whose methods silently no-op)", () => {
     const taskId = "task-not-ready";
     const { handle, syncContent, markReady } = fakeHandle(false);
-    // The handle EXISTS from the owner's first commit - only the editor
-    // behind it is still constructing. Applying now would no-op inside the
-    // handle and permanently swallow the reset.
+    // The handle EXISTS from the owner's first commit - only the editor behind it is still constructing.
+    // Applying now would no-op inside the handle and permanently swallow the reset.
     const editorRef = { current: handle as ComposerPromptEditorHandle | null };
 
     const { rerender } = renderBridgeHook({
@@ -178,11 +177,7 @@ describe("useChatComposerDraft bridge", () => {
     expect(syncContent).toHaveBeenLastCalledWith(doc("second restore"), null);
   });
 
-  /**
-   * clearDraft reuses the resetEpoch broadcast. Old clearDraft deleted the
-   * map entry, so a sibling composer's Tiptap document kept the just-
-   * submitted text (split panes / keep-alive tabs sharing one taskId).
-   */
+  /** clearDraft reuses the resetEpoch broadcast. Old clearDraft deleted the map entry, so a sibling composer's Tiptap document kept the just- submitted text (split panes / keep-alive tabs sharing one taskId). */
   it("broadcasts clearDraft empty content into every ready sibling composer for the same taskId", () => {
     const taskId = "task-multi-surface";
     const a = fakeHandle(true);
@@ -421,9 +416,7 @@ describe("appendQuoteToDraft + useChatComposerDraft integration", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    // Tiptap's `focus` command dispatches the selection change synchronously
-    // but defers the actual DOM `view.focus()` to a `requestAnimationFrame`
-    // callback - wait a frame before asserting `document.activeElement`.
+    // Tiptap's `focus` command dispatches the selection change synchronously but defers the actual DOM `view.focus()` to a `requestAnimationFrame` callback - wait a frame before asserting `document.activeElement`.
     await act(async () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });

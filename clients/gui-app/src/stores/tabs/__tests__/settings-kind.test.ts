@@ -1,12 +1,3 @@
-/**
- * Locks down the settings tab kind helpers around the host section.
- * The Settings sidebar's primary entry routes through these helpers, so
- * the host section needs to resolve consistently from path → section
- * id → route options. The legacy `/settings/service` path is preserved
- * as a section-level alias to the Host section so a remembered tab
- * path from before the rename still lands on the current native-
- * packaging surface (the route itself redirects).
- */
 import { describe, expect, it } from "vitest";
 import {
   settingsDefaultPath,

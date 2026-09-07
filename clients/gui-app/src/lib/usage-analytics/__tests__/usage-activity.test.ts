@@ -155,9 +155,8 @@ describe("buildUsageActivityCalendar", () => {
   });
 
   it("counts a day of unpriced work as activity, not as an empty day", () => {
-    // Cost is the selected metric and this day's usage was never priced, so
-    // its value is 0 - but the turns happened. Reporting that as inactivity
-    // would break the streak and drop the day from the accessible table.
+    // Cost is the selected metric and this day's usage was never priced, so its value is 0 - but the turns happened.
+    // Reporting that as inactivity would break the streak and drop the day from the accessible table.
     const days = dayRange("2026-08-02", "2026-08-05");
     const calendar = buildUsageActivityCalendar(
       days,
@@ -183,9 +182,8 @@ describe("buildUsageActivityCalendar", () => {
   });
 
   it("names a most-active month even when every active day is unpriced", () => {
-    // All-unpriced year under the Cost metric: every month sums to $0, but
-    // the tiles/streaks/table all recognize the work - "—" beside them
-    // reads as a contradiction. Fact counts break the all-zero tie.
+    // All-unpriced year under the Cost metric: every month sums to $0, but the tiles/streaks/table all recognize the work - "-" beside them reads as a contradiction.
+    // Fact counts break the all-zero tie.
     const days = dayRange("2026-07-28", "2026-08-05");
     const calendar = buildUsageActivityCalendar(
       days,

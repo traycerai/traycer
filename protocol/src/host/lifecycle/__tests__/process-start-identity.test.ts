@@ -8,13 +8,8 @@ import {
 } from "../process-start-identity";
 
 /*
- * These rows are the contract between two readers that cannot import each
- * other: `clients/shared/host-lock/process-identity.ts` (desktop + CLI) and
- * `traycer-host/src/lifecycle/process-start-identity.ts` (the publisher). If
- * the format drifts, a published token stops matching an observed one, so the
- * failure direction is "cannot attest" rather than a false match - but it
- * would silently retire recycled-pid detection everywhere, so the bytes are
- * pinned here.
+ * These rows are the contract between two readers that cannot import each other: `clients/shared/host-lock/process-identity.ts` (desktop + CLI) and `traycer-host/src/lifecycle/process-start-identity.ts` (the publisher).
+ * If the format drifts, a published token stops matching an observed one, so the failure direction is "cannot attest" rather than a false match - but it would silently retire recycled-pid detection everywhere, so the.
  */
 describe("token format", () => {
   it("pins the Linux token to boot id plus start ticks", () => {
@@ -36,9 +31,8 @@ describe("token format", () => {
   });
 
   /*
-   * `ps` pads its columns, and the two readers trim differently by accident
-   * of how each captures stdout. Normalising at format time means incidental
-   * whitespace can never present as a different process.
+   * `ps` pads its columns, and the two readers trim differently by accident of how each captures stdout.
+   * Normalising at format time means incidental whitespace can never present as a different process.
    */
   it("normalises padding so column whitespace is not an identity change", () => {
     expect(
@@ -84,20 +78,7 @@ describe("compareProcessStartIdentity", () => {
     ).toBe("same");
   });
 
-  /*
-   * Validation and comparison have to agree on what "the same token" means.
-   * `isProcessStartIdentity` accepts any payload that WOULD normalize to
-   * something non-empty, so a writer storing raw probe output rather than
-   * going through `formatToken` yields a token that is valid but not
-   * canonical. Comparing raw bytes then answered `different` - the one
-   * verdict that authorises treating a live pid as an impostor - for two
-   * readings of one process.
-   *
-   * This is #740's failure mode arriving through formatting instead of
-   * through the clock, so it is pinned at the comparator: the module
-   * documents two independent writers on opposite sides of the OSS/internal
-   * boundary, and correctness cannot depend on both remembering to normalize.
-   */
+  /* Validation and comparison have to agree on what "the same token" means. */
   it("is same across non-canonical padding, not different", () => {
     // `ps -o lstart=` pads single-digit days to a fixed column width.
     expect(
@@ -130,14 +111,7 @@ describe("compareProcessStartIdentity", () => {
     ).toBe("different");
   });
 
-  /*
-   * Everything below must be `unknown`, never `different`. `different` is the
-   * only answer that lets a caller treat a live process as an impostor, and
-   * the callers act on it by refusing to defer to a host or by allowing it to
-   * be restarted. An absent, malformed, or cross-platform operand is a reason
-   * to know less - turning it into positive evidence is exactly the class of
-   * bug that produced traycerai/traycer#740.
-   */
+  /* Everything below must be `unknown`, never `different`. */
   it("is unknown when either operand is missing", () => {
     expect(compareProcessStartIdentity(null, "linux:boot-a 1")).toBe("unknown");
     expect(compareProcessStartIdentity("linux:boot-a 1", null)).toBe("unknown");

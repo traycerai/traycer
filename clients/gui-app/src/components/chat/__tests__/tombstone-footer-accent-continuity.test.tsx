@@ -12,12 +12,7 @@ import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
-/**
- * T7 (accent continuity): the tombstone footer stops rendering the initials
- * `ProfileAvatarBadge` and instead renders provider icon + accent dot, with
- * the dot sourced from the anchor's `accentColor` snapshot (falling back to
- * the id-hash color for anchors minted before the field existed).
- */
+/** T7 (accent continuity): the tombstone footer stops rendering the initials `ProfileAvatarBadge` and instead renders provider icon + accent dot, with the dot sourced from the anchor's `accentColor` snapshot (falling back to the id-hash color for anchors minted before the field existed). */
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => null,

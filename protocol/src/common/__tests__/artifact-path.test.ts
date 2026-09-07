@@ -9,11 +9,8 @@ import {
 } from "../artifact-path";
 
 /**
- * The single home for the `epics/<epicId>/artifacts/<chain>/index.md`
- * root-agnostic scanner (TKT-03). Previously copy-pasted in the host (the
- * external Traycer Host) and the gui-app's `artifact-link-path.ts`; both
- * now consume this, so resolution semantics MUST stay identical across the host
- * RPC resolver and the client pre-check.
+ * The single home for the `epics/<epicId>/artifacts/<chain>/index.md` root-agnostic scanner (TKT-03).
+ * Previously copy-pasted in the host (the external Traycer Host) and the gui-app's `artifact-link-path.ts`; both now consume this, so resolution semantics MUST stay identical across the host RPC resolver and the client.
  */
 
 const EPIC = "epic-abc";
@@ -38,9 +35,7 @@ describe("deriveArtifactPathLayoutRootAgnostic - pinned epicId (host RPC)", () =
   });
 
   it("keys on the folder segment, not a human slug - a renamed slug with a stable id folder still resolves to that id", () => {
-    // Artifact folders on disk are named by the STABLE id; renaming the
-    // displayed slug never touches the folder, so the scanner returns the
-    // stable id verbatim as the folderName.
+    // Artifact folders on disk are named by the STABLE id; renaming the displayed slug never touches the folder, so the scanner returns the stable id verbatim as the folderName.
     expect(
       deriveArtifactPathLayoutRootAgnostic(
         `/x/epics/${EPIC}/artifacts/art_01HSTABLEID/index.md`,
@@ -182,12 +177,8 @@ describe("artifactLayoutFromChain", () => {
   });
 
   /**
-   * The reservation has to hold on the FILESYSTEM, not in the string. Windows
-   * is supported and macOS volumes are case-insensitive by default, so
-   * `.COMMENTS` there names the very directory the projection writes into -
-   * admitting it as a chain hands ingest a folder that already has another
-   * writer. Widening to case variants strands nothing, because `slugify`
-   * cannot mint a leading dot in any casing.
+   * The reservation has to hold on the FILESYSTEM, not in the string.
+   * Widening to case variants strands nothing, because `slugify` cannot mint a leading dot in any casing.
    */
   it.each([".COMMENTS", ".Comments", ".cOmMeNtS"])(
     "returns null for the case variant %s, which names the same directory on a case-insensitive volume",
@@ -197,12 +188,7 @@ describe("artifactLayoutFromChain", () => {
     },
   );
 
-  /**
-   * The widening is case ONLY. A near-miss is a genuinely different directory
-   * on every platform, so it stays a resolvable artifact - the same
-   * do-not-strand-a-disk-ingested-folder constraint that kept the gate one
-   * name wide to begin with.
-   */
+  /** The widening is case ONLY. */
   it.each([".comments-old", ".comments2", "comments", ".comment"])(
     "still resolves the near-miss %s, which is a distinct directory everywhere",
     (name) => {
@@ -215,20 +201,7 @@ describe("artifactLayoutFromChain", () => {
 
   /**
    * The reservation is exactly one name wide, and these two cases are why.
-   *
-   * An earlier revision rejected EVERY dot-prefixed segment, on the stated
-   * ground that folder names are minted as `^[a-z0-9]` slugs so nothing
-   * legitimate could be dot-prefixed. Minting is not the only way in: a
-   * folderName that arrived by disk ingest is stored as a bare `z.string()`,
-   * so a `.draft/` artifact can already exist in a live epic. The wide gate
-   * silently stranded it - the GUI link pre-check stopped resolving it, and
-   * edits to its `index.md` stopped being ingested and were reverted by the
-   * next projection pass.
-   *
-   * `images` is the mirror image: a name the gate must NOT take, because
-   * `slugify("Images")` mints it, so reserving it would break a legitimately
-   * named artifact. The `images/` collision predates this gate and is
-   * deliberately left as it was.
+   * `images` is the mirror image: a name the gate must NOT take, because `slugify("Images")` mints it, so reserving it would break a legitimately named artifact.
    */
   it("still resolves an unrelated dot-prefixed folder (a pre-existing `.draft` artifact keeps working)", () => {
     expect(artifactLayoutFromChain([".draft"])).toEqual({
@@ -284,10 +257,6 @@ describe("deriveArtifactPathLayoutRootAgnostic - the reserved `.comments` segmen
     ).toEqual({ epicId: EPIC, folderName: "auth", parentSegments: [] });
   });
 
-  // This is the surface that made the wide gate a regression rather than a
-  // theoretical one: the GUI's artifact-link pre-check
-  // (`artifact-link-path.ts`) resolves hrefs through this exact function with
-  // a null epicId, so a `null` here is a link that stops opening.
   it("still resolves a pre-existing dot-prefixed artifact through the GUI link pre-check path", () => {
     expect(
       deriveArtifactPathLayoutRootAgnostic(
@@ -299,13 +268,7 @@ describe("deriveArtifactPathLayoutRootAgnostic - the reserved `.comments` segmen
 });
 
 /**
- * The predicate is exported so the host's file-sync answers "is this our
- * projection directory?" with the very same code that refuses it as an
- * artifact chain. The two sides diverging is the failure this guards: an
- * ingest that folds case plus a sweep that does not turns a `.COMMENTS/` on a
- * case-insensitive volume into a directory that is neither ingestable nor
- * recognized as ours, and the sweep then deletes a live projection that has no
- * local authority to regenerate from.
+ * The predicate is exported so the host's file-sync answers "is this our projection directory?" with the very same code that refuses it as an artifact chain.
  */
 describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption", () => {
   it.each([".comments", ".COMMENTS", ".Comments", ".cOmMeNtS"])(
@@ -316,11 +279,7 @@ describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption
   );
 
   /**
-   * Win32 drops trailing dots and spaces from a path component, so
-   * `CreateFile(".comments.")` opens `.comments`. Such a name is hard to create
-   * ON Windows for that same reason, but it travels: authored on a
-   * dot-sensitive host, synced, and then resolved on Windows onto the
-   * projection directory.
+   * Win32 drops trailing dots and spaces from a path component, so `CreateFile(".comments.")` opens `.comments`.
    */
   it.each([
     ".comments.",
@@ -335,12 +294,7 @@ describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption
     },
   );
 
-  /**
-   * Unicode case FOLDING, which is not lowercasing. U+017F LATIN SMALL LETTER
-   * LONG S folds to `s` and `.comments` ends in one, so a case-insensitive
-   * APFS volume addresses the projection directory through this spelling.
-   * `toLowerCase` would not catch it - `ſ` is already lowercase.
-   */
+  /** Unicode case FOLDING, which is not lowercasing. */
   it.each([".commentſ", ".COMMENTſ", ".ComMentſ.", ".commentſ "])(
     "matches %s, which Unicode case folding collapses onto the reserved name",
     (name) => {

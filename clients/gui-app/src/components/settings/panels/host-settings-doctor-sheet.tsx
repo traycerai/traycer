@@ -17,20 +17,11 @@ import {
 import type { OverviewDegradeReason } from "@/components/settings/panels/host-overview-model";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * Which mechanism produces the report.
- *
- * `rpc` is the ordinary path for every reachable host, local or remote: the
- * host shells its OWN CLI, so the report describes the machine the page names.
- * `bridge` runs the CLI on THIS computer, and survives for exactly one caller —
- * the recovery console, where the local host cannot answer an RPC because it is
- * not running. Reaching for the bridge anywhere else would go back to reporting
- * this computer's diagnostics under another host's name.
- */
+/** `bridge` runs the CLI on this computer, and survives for exactly one caller - the recovery console, where
+ * the local host cannot answer an RPC because it is not running. */
 export type DoctorSheetSource =
   | {
       readonly kind: "bridge";
-      /** This machine's host id, fencing the console's own bridge calls. */
       readonly expectedHostId: string;
     }
   | {
@@ -40,28 +31,16 @@ export type DoctorSheetSource =
       readonly isLocalMachine: boolean;
       readonly hasLocalBridge: boolean;
       readonly degrade: OverviewDegradeReason | null;
-      /**
-       * Whether `host.restart` is servable for this host — the capability
-       * itself, so `false` for ANY host whose handshake refused it, remote
-       * ones included. Routing on refusal is `bridgeRestartRoute`'s job.
-       */
+      /** Whether `host.restart` is servable for this host - the capability itself, so `false` for any host whose
+       * handshake refused it, remote ones included. */
       readonly rpcRestartSupported: boolean;
-      /**
-       * Whether a refused `host.restart` has the page's bridge respawn to
-       * stand in — the SAME derived fact the restart confirm's dispatch leg
-       * branches on, threaded so the card cannot route to a confirm whose
-       * dispatch would disagree. `false` with `rpcRestartSupported` false
-       * means no route at all: the fix degrades to its terminal command.
-       */
       readonly bridgeRestartRoute: boolean;
-      /** Opens the page's restart confirm, whose confirm dispatches the
-       * bridge respawn — never a direct dispatch, the respawn always forces. */
+      /** Opens the page's restart confirm, whose confirm dispatches the bridge respawn - never a direct dispatch, the
+       * respawn always forces. */
       readonly onBridgeRestart: () => void;
       /** True while that restart write is in flight. */
       readonly bridgeRestartPending: boolean;
-      /** Whether `diagnostics.logs.tail` is servable for this host. */
       readonly rpcLogsSupported: boolean;
-      /** Reads this machine's host log over the CLI bridge. */
       readonly onBridgeLogs: () => Promise<readonly string[]>;
       /** True while that bridge read is in flight. */
       readonly bridgeLogsPending: boolean;
@@ -95,9 +74,8 @@ export function DoctorSheet(props: DoctorSheetProps) {
         {/* The scroll region owns the bottom edge here - the sheet has no
             footer - so it is what clears the home indicator. */}
         <div className="flex-1 overflow-y-auto px-4 pb-safe-bottom-gutter">
-          {/* Mounted only while open, in both branches: the report is produced
-              by running a process on the host, so it must be a consequence of
-              opening this sheet rather than of the panel rendering. */}
+          {/* Mounted only while open, in both branches: the report is produced by running a process on the host, so it
+             must be a consequence of opening this sheet rather than of the panel rendering. */}
           {open ? (
             <DoctorSheetBody
               source={source}

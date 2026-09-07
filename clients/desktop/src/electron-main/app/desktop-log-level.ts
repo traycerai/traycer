@@ -57,19 +57,13 @@ const ELECTRON_LOG_LEVEL: Record<LogLevel, ElectronLogLevel> = {
   error: "error",
 };
 
-/**
- * Applies the desktop threshold to electron-log's file transport — the sink
- * that persists both the main process's own logs and the renderer's forwarded
- * console logs into `traycer-desktop.log`. Raising it to `debug` is what support
- * asks for when collecting a repro.
- */
 export function applyDesktopLogLevel(level: LogLevel): void {
   log.transports.file.level = ELECTRON_LOG_LEVEL[level];
 }
 
 /**
- * Synchronous startup read, before the event loop is pumping (mirrors the GPU
- * preference). Never throws — a missing or unreadable file yields the default.
+ * Synchronous startup read, before the event loop is pumping (mirrors the GPU preference).
+ * Never throws - a missing or unreadable file yields the default.
  */
 export function readDesktopLogLevelSync(): LogLevel {
   try {

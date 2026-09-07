@@ -54,10 +54,7 @@ describe("removeHostPidMetadataForPurge", () => {
   });
 });
 
-// `uninstallHost` (Tech Plan, "host uninstall ... removes staged/
-// alongside install/") - a genuine sandbox exercising the real
-// filesystem removal, not a mocked call-count check, since the whole
-// point is that BOTH directories are actually gone from disk afterward.
+// `uninstallHost` (Tech Plan, "host uninstall ... removes staged/ alongside install/") - a genuine sandbox exercising the real filesystem removal, not a mocked call-count check, since the whole point is that BOTH directories are actually gone from disk afterward.
 type Environment = "dev" | "production";
 
 let sandboxRoot = "";
@@ -72,18 +69,8 @@ function stagedDirFor(environment: Environment): string {
   return join(hostHomeFor(environment), "staged");
 }
 
-// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
-// load - any export this mock leaves un-overridden (falls through via
-// `...actual` below, e.g. `hostPidMetadataPath`/`cliLogPath` via
-// `createCliLogger`) would otherwise resolve against the REAL production
-// `~/.traycer`, not this sandbox - confirmed root cause of a real prod-host
-// kill (host.log rotated, pid.json deleted for real). Redirect the `os`
-// boundary itself so `vi.importActual`'s fresh module evaluation picks up
-// the sandbox (falling back to the real tmpdir, never the real home,
-// before the first `beforeEach` has set `sandboxRoot`).
-// `vi.mock` factories are hoisted above this file's own top-level `let
-// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
-// live value has to live in `vi.hoisted` instead.
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module load - any export this mock leaves un-overridden (falls through via `...actual` below, e.g.
+// `hostPidMetadataPath`/`cliLogPath` via `createCliLogger`) would otherwise resolve against the REAL production `~/.traycer`, not this sandbox - confirmed root cause of a real prod-host kill (host.log rotated, pid.json deleted for real).
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -183,9 +170,7 @@ describe("uninstallHost", () => {
   it("reports removedStagedDir: true even when staged/ never existed", async () => {
     const { uninstallHost } = await import("../uninstall");
     mkdirSync(installDirFor(ENV), { recursive: true });
-    // No staged/ directory created - `rm(..., { force: true })` on an
-    // absent path resolves successfully, matching `removedInstallDir`'s
-    // identical existing semantics.
+    // No staged/ directory created - `rm(..., { force: true })` on an absent path resolves successfully, matching `removedInstallDir`'s identical existing semantics.
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
 
     const result = await uninstallHost({

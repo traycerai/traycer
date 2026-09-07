@@ -297,9 +297,7 @@ describe("agent runtime stream schema", () => {
       noticeKind: "model_rerouted",
     });
 
-    // The frozen pre-1.3 union must never accept this event - a real 1.2
-    // peer can never produce it, and the wire projection relies on this
-    // rejection staying true (see chat-frame-projection.ts).
+    // The frozen pre-1.3 union must never accept this event - a real 1.2 peer can never produce it, and the wire projection relies on this rejection staying true (see chat-frame-projection.ts).
     expect(runtimeEventSchemaV12.safeParse(event).success).toBe(false);
   });
 
@@ -420,9 +418,7 @@ describe("agent runtime stream schema", () => {
       },
     });
 
-    // `skillInvocations` is `.optional()` with no `.default()` - an older
-    // caller created before multi-skill composer support omits the field
-    // entirely, and the schema must not backfill it with `[]`.
+    // `skillInvocations` is `.optional()` with no `.default()` - an older caller created before multi-skill composer support omits the field entirely, and the schema must not backfill it with `[]`.
     expect(parsed.skillInvocations).toBeUndefined();
     expect("skillInvocations" in parsed).toBe(false);
   });

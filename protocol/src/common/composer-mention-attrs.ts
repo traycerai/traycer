@@ -5,80 +5,15 @@ import { DEFAULT_GITHUB_MENTION_HOST } from "./github-mention-host";
 import { githubMentionTokenReference } from "./github-mention-identity";
 
 /**
- * What a composer mention node's `attrs` bag MEANS.
- *
- * A `mention` node in a persisted `JsonContent` document is an open attribute
- * bag - `Record<string, unknown>` by schema - and every surface that reads one
- * has to answer the same question: which of `path` / `relPath` / `id` /
- * `worktreePath` names this chip, and what is the fallback when the field the
- * node was written with is absent. That resolution is the whole subject of this
- * module, and it is deliberately NOT restated per consumer: the branches below
- * each resolve their path as `attrs.path ?? <branch-specific fallback>`, so
- * reading `attrs.path` directly is right for most chips and silently wrong for
- * the GitHub one, which carries no `path` of its own at all.
- *
- * It lives in `common/` rather than in the GUI because the same resolution now
- * has two consumers that must not disagree: the renderer, which draws a chip's
- * label, and {@link ../persistence/chat-transcript/build-skeleton}'s preview,
- * which the host computes for a row the client has not loaded yet. A preview
- * that resolved a path differently from the label would show a different chat
- * in the minimap than in the transcript. The GUI's
- * `lib/composer/tiptap-json-content.ts` and `lib/composer/types.ts` re-export
- * everything here, so no GUI import path changed when it moved.
- *
- * The attachment shapes are the DECODED form; the encoder that writes attrs
- * back out (`mentionAttrsFromAttachment`) is still GUI-local, because only the
- * composer creates chips.
- *
- * ## The `host/` import above is type-only, and must stay that way
- *
- * `common/` is the base layer: `host/` imports from it freely, and this is one
- * of the only edges pointing back. It is safe solely because `import type` is
- * erased at emit, so nothing of it survives into the module graph.
- *
- * A VALUE import of the same module would close a real cycle today, not a
- * theoretical one:
- *
- * ```
- * common/composer-mention-attrs -> host/workspace/unary-schemas
- *                               -> host/epic/unary-schemas
- *                               -> common/registry
- * ```
- *
- * and these are zod modules, so the failure would be evaluation-order flake at
- * import time rather than an honest error. If you need a runtime value that
- * lives under `host/`, move the value down into `common/` instead of reaching
- * up for it. `WorkspaceMentionGitType` is imported rather than restated because
- * `GIT_TYPES` below must not drift from the wire enum it mirrors - the type
- * costs nothing, the three literals are the part worth keeping honest.
+ * Mention `attrs` resolution. Do not read `attrs.path` as the GitHub chip's identity; keep the `host/` import type-only (a value import cycles through `common/registry`).
  */
 
 export type PathKind = "file" | "folder";
 
-/**
- * Wire spelling, not a local one: matches `ContextType.BrowserTab` in the
- * json-content serializer. A browser tab is readable but not itself an Agent,
- * so it stays a SIBLING of the entity kinds rather than folding into them -
- * those carry epic-scoped fields a tab has no use for.
- */
+/** Wire spelling, not a local one: matches `ContextType.BrowserTab` in the json-content serializer. */
 export type BrowserTabMentionContextType = "browser-tab";
 
-/**
- * The epic-scoped entities a mention chip can DECODE to an attachment.
- *
- * Every member is reachable: `mentionAttachmentFromAttrs` names these four
- * literals and the artifact kinds explicitly before falling through to `null`,
- * and `entityMentionAttachmentFromAttrs` - the only producer of an
- * `EntityMentionAttachment` - is called from nowhere else.
- *
- * `"user"` is deliberately NOT here, and its absence is not an oversight to
- * correct. A user mention is real and renders as `@name`, but it is the
- * SERIALIZER's concern: `ContextType.User` in `json-content-serializer.ts` has
- * its own branches for both the LLM and plain-text forms, reading the node's
- * raw attrs. It is not an epic-scoped entity - it carries no `epicId`, which
- * this decoder requires - so listing it here only ever widened a type past
- * what any code path could produce.
- */
+/** The epic-scoped entities a mention chip can DECODE to an attachment. */
 export type EntityMentionContextType =
   | "epic"
   | "chat"
@@ -87,10 +22,8 @@ export type EntityMentionContextType =
   | EpicArtifactKind;
 
 /**
- * Wire spelling, not a local one: these strings ARE `ContextType` members in
- * `json-content-serializer.ts`, which reads the mention node's `contextType`
- * attribute straight off the submitted document. Renaming them here would
- * silently stop the serializer recognizing the chip.
+ * Wire spelling, not a local one: these strings ARE `ContextType` members in `json-content-serializer.ts`, which reads the mention node's `contextType` attribute straight off the submitted document.
+ * Renaming them here would silently stop the serializer recognizing the chip.
  */
 export type GithubMentionContextType = "github_pull_request" | "github_issue";
 
@@ -160,16 +93,7 @@ export type EntityMentionAttachment = {
 
 /**
  * A GitHub pull request or issue the composer references.
- *
- * What travels is a STABLE REFERENCE, never inlined content: provider, kind,
- * `org/repo#number`, and the URL. The agent resolves detail with its own tools
- * at read time, exactly as a file mention hands over a path rather than the
- * file's bytes - so the reference cannot go stale between insert and send, and
- * the URL keeps it resolvable where `gh` is not signed in.
- *
- * The field names are the serializer's (`organizationLogin`, `repositoryName`,
- * `issueNumber`, `githubHost`, `url`), because these become the mention node's
- * attributes verbatim and `formatMentionForLLMQuery` reads them by name.
+ * What travels is a STABLE REFERENCE, never inlined content: provider, kind, `org/repo#number`, and the URL.
  */
 export type GithubMentionAttachment = {
   kind: "mention";
@@ -190,12 +114,8 @@ export type GithubMentionAttachment = {
 };
 
 /**
- * A browser tab chip. `tabId` is the only field that must survive - it is what
- * `page.attachTab({tabId})` resolves - so `path` is DERIVED from it rather than
- * trusted verbatim, and a node carrying a stale `path` still round-trips to the
- * tab its `tabId` names. `label`/`url` are display-only (the live decorator's
- * tooltip fallback once the tab is gone); `description` carries the tab URL,
- * which the sent-message chip renders as its tooltip.
+ * A browser tab chip.
+ * `tabId` is the only field that must survive - it is what `page.attachTab({tabId})` resolves - so `path` is DERIVED from it rather than trusted verbatim, and a node carrying a stale `path` still round-trips to the tab.
  */
 export type BrowserTabMentionAttachment = {
   kind: "mention";
@@ -228,16 +148,7 @@ const ARTIFACT_CONTEXT_TYPES: Readonly<Record<EpicArtifactKind, true>> = {
   review: true,
 };
 
-/**
- * A RECORD keyed by the union, not an array of it.
- *
- * `ReadonlyArray<WorkspaceMentionGitType>` accepts any SUBSET, so the header's
- * claim that importing the wire type keeps this list from drifting was not
- * something the annotation could enforce: a new member added to the enum
- * compiled here unchanged and then decoded to `null` in `gitTypeValue`, which
- * drops the chip's attachment and its plain-text projection with no error
- * anywhere. Keyed by the union, omitting one is a compile error.
- */
+/** A RECORD keyed by the union, not an array of it. */
 const GIT_TYPES: Readonly<Record<WorkspaceMentionGitType, true>> = {
   against_uncommitted_changes: true,
   against_branch: true,
@@ -351,14 +262,7 @@ function gitMentionAttachmentFromAttrs(
   };
 }
 
-/**
- * Rebuilds a GitHub chip from its node attributes.
- *
- * A chip with no `organizationLogin`/`repositoryName`/`issueNumber` cannot be
- * turned back into a reference at all - `formatMentionForLLMQuery` would emit
- * `@github-pr:/#` - so it is rejected here and the node falls back to plain
- * text rather than shipping a broken reference to the agent.
- */
+/** Rebuilds a GitHub chip from its node attributes. */
 function githubMentionAttachmentFromAttrs(
   attrs: Record<string, unknown>,
   contextType: GithubMentionContextType,
@@ -380,10 +284,6 @@ function githubMentionAttachmentFromAttrs(
   const githubHost =
     stringValue(attrs.githubHost) ?? DEFAULT_GITHUB_MENTION_HOST;
   const reference = `${organizationLogin}/${repositoryName}#${issueNumber}`;
-  // Rebuilt through `githubMentionToken`'s own reference builder, so a chip
-  // restored from its node keeps the identity the picker gave it - the rule
-  // lives in one place instead of being restated here. Only reached when the
-  // node carries no `path` of its own.
   const path =
     stringValue(attrs.path) ??
     `${prefix}:${githubMentionTokenReference({
@@ -467,31 +367,9 @@ export function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/**
- * `issueNumber` after a round-trip through HTML, where it is a STRING.
- *
- * The chip is the only mention attribute that is genuinely numeric, and
- * `dataAttributeMap` parses every attribute back with `getAttribute`, which
- * only ever returns a string. So the same chip is a `number` when it comes
- * from the picker or from persisted ProseMirror JSON, and `"123"` when the
- * user copies it and pastes it back - the editor's ordinary Cmd+C path.
- * Rejecting the string form left the pasted chip with no attachment at all:
- * a blank node view, no plain-text projection, and silent omission from the
- * submitted context.
- *
- * Deliberately strict about what it accepts: a bare run of digits, so
- * `"12abc"`, `"1.5"` and `""` are still rejected rather than being coerced
- * into a reference that points somewhere else.
- */
+/** `issueNumber` after a round-trip through HTML, where it is a STRING. */
 function issueNumberValue(value: unknown): number | null {
-  // Positive SAFE INTEGER, on both paths. `numberValue` only rejects
-  // non-finite, so the direct path accepted `0`, negatives and fractions, and
-  // the digit-string path accepted `"0"` - each producing an attachment like
-  // `github-pr:org/repo#0` that serializes a reference no catalog or search
-  // response can ever contain. `githubMentionRowBaseSchema` requires a
-  // positive integer on the wire; this is the same rule for the node
-  // reconstruction path, which reaches attachments without passing the query
-  // parser's `referenceNumber`.
+  // Positive SAFE INTEGER, on both paths.
   const direct = numberValue(value);
   if (direct !== null) return positiveIssueNumber(direct);
   if (typeof value !== "string" || !/^\d+$/.test(value)) return null;

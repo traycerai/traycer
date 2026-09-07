@@ -1,17 +1,4 @@
-/**
- * Quote-to-chat payloads for the PR full view.
- *
- * The view is read-only (decision #4), so the ONE thing it can do that GitHub
- * cannot is hand a fact to the agent that wrote the branch. Every quotable
- * surface therefore produces a structured block - a provenance header line
- * plus the body - rather than bare selected text, so the receiving agent knows
- * which PR and which kind of finding it is looking at without being told.
- *
- * Reuses the chat quote feature's own primitives (`buildQuoteBlockquote` /
- * `appendQuoteToDraft`), so a quoted PR fact lands in the composer as exactly
- * the same node shape a quoted transcript selection does, and the host flattens
- * both into `<user_quoted_section>` identically.
- */
+/** Quote-to-chat payloads for the PR full view. */
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   PrActivityItem,
@@ -33,8 +20,8 @@ import { prReviewThreadAnchor } from "./pr-conversation";
 import { formatPrCheckName } from "./pr-check-groups";
 
 /**
- * A chat or terminal agent a quote can be sent to. `id` is the composer draft
- * key (`taskId`), which is what `appendQuoteToDraft` writes against.
+ * A chat or terminal agent a quote can be sent to.
+ * `id` is the composer draft key (`taskId`), which is what `appendQuoteToDraft` writes against.
  */
 export interface PrQuoteTarget {
   readonly id: string;
@@ -81,10 +68,7 @@ export function buildPrCheckQuote(
     text: quoteText(
       [
         `PR ${formatPrSlug(core)}`,
-        // The COMPOSED name, as the Checks tab shows it: `name` alone is the
-        // job name, which a reusable workflow reports identically for every
-        // job it runs, so quoting it would not tell the agent which check
-        // failed.
+        // The COMPOSED name, as the Checks tab shows it: `name` alone is the job name, which a reusable workflow reports identically for every job it runs, so quoting it would not tell the agent which check failed.
         `check ${formatPrCheckName(context)} · ${formatPrCheckStatusLabel(context)}`,
         context.detailsUrl !== null ? context.detailsUrl : null,
       ].filter((line): line is string => line !== null),
@@ -109,14 +93,7 @@ export function buildPrActivityQuote(
   });
 }
 
-/**
- * Quotes one inline finding.
- *
- * The anchor goes in the header rather than the body, because it is the part
- * an agent needs to act: "fix this" is unactionable without the file and line
- * it points at. An outdated thread quotes its ORIGINAL line and says so - a
- * current line number it no longer has would send the agent to the wrong place.
- */
+/** Quotes one inline finding. */
 export function buildPrReviewThreadQuote(
   core: PrDetailCore,
   thread: PrReviewThread,
@@ -168,9 +145,8 @@ export function buildPrDescriptionQuote(core: PrDetailCore): JsonContent {
 }
 
 /**
- * Sends a built payload to a target's composer draft. Thin on purpose: the
- * draft store, focus behaviour and node shape are all the chat quote feature's,
- * so a PR quote and a transcript quote can never drift apart.
+ * Sends a built payload to a target's composer draft.
+ * Thin on purpose: the draft store, focus behaviour and node shape are all the chat quote feature's, so a PR quote and a transcript quote can never drift apart.
  */
 export function sendPrQuoteToTarget(
   target: PrQuoteTarget,

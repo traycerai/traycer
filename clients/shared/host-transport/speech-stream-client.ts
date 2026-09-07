@@ -41,10 +41,8 @@ export interface SpeechStreamClientOptions {
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for a single dictation session. Streams
- * PCM16 mono audio to the host recognizer (`sendAudio`); on `flush` the
- * recognizer replies with a final `transcript` then `flushed`, surfaced through
- * the bound callbacks.
+ * Typed wrapper over `WsStreamClient` for a single dictation session.
+ * Streams PCM16 mono audio to the host recognizer (`sendAudio`); on `flush` the recognizer replies with a final `transcript` then `flushed`, surfaced through the bound callbacks.
  */
 export class SpeechStreamClient {
   private readonly session: IStreamSession;

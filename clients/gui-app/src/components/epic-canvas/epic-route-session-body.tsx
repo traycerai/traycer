@@ -21,9 +21,7 @@ export interface EpicRouteSessionBodyProps {
 }
 
 export function EpicRouteSessionBody(props: EpicRouteSessionBodyProps) {
-  // Closing an unavailable/revoked/deleted epic tab (and redirecting an active
-  // tab to landing) is owned by the app-level `EpicAccessCoordinator`, which
-  // observes every live session - not just the active route.
+  // Closing an unavailable/revoked/deleted epic tab (and redirecting an active tab to landing) is owned by the app-level `EpicAccessCoordinator`, which observes every live session - not just the active route.
   return (
     <>
       <EpicShell
@@ -42,10 +40,8 @@ export function EpicRouteSessionBody(props: EpicRouteSessionBodyProps) {
 
 function EpicRouteSessionEffects(props: EpicRouteSessionBodyProps) {
   useInitialChatHandoff(props.epicId, props.tabId);
-  // Deliberately OUTSIDE the `props.active` gate below: the record table backs
-  // the sidebar tree and every open tile of this session, which keep rendering
-  // while another tab is in front. A background epic that stopped hearing about
-  // its own chats would lose the rows again the moment it was swept.
+  // Deliberately OUTSIDE the `props.active` gate below: the record table backs the sidebar tree and every open tile of this session, which keep rendering while another tab is in front.
+  // A background epic that stopped hearing about its own chats would lose the rows again the moment it was swept.
   useEpicSyncChatRecords(props.epicId);
   // Same placement, same reason, for the terminal-agent record table.
   useEpicSyncTuiAgentRecords(props.epicId);

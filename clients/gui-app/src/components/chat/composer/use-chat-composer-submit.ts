@@ -50,59 +50,27 @@ interface UseChatComposerSubmitArgs {
   readonly taskId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly pickerStore: ComposerPickerStore;
-  /**
-   * Toolbar settings source. Read via `getState()` at submit time (the
-   * sanctioned escape hatch) so this callback stays referentially stable
-   * across model/permission/reasoning changes. This also owns the
-   * model-resolution gate: an empty slug is the transient "catalog still
-   * loading" marker and must never reach the wire as `model: ""` - the
-   * editor's Enter handler calls this directly, bypassing the send button's
-   * `canSubmit` gate, so the block is checked here.
-   */
+  /** This also owns the model-resolution gate: an empty slug is the transient "catalog still loading" marker and must never reach the wire as `model: ""` - the editor's Enter handler calls this directly, bypassing the send button's `canSubmit` gate, so the block is checked here. */
   readonly toolbarStore: ComposerToolbarStore;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
-  /**
-   * Whether the running turn's harness supports same-turn steering, projected
-   * from the host `activeTurn.sameTurnSteeringSupported` capability. Gates
-   * whether a `Mod-Enter` steers or falls back to plain queueing (decision 5).
-   */
+  /** Whether the running turn's harness supports same-turn steering, projected from the host `activeTurn.sameTurnSteeringSupported` capability. Gates whether a `Mod-Enter` steers or falls back to plain queueing (decision 5). */
   readonly steerCapable: boolean;
   /** App-wide opt-out preference (default ON - decision 17). */
   readonly steerEnabled: boolean;
-  /**
-   * Whether the tab's negotiated `chat.subscribe` protocol version understands
-   * `after_safe_point` (host handshake minor >= 5). `false` degrades `Mod-Enter`
-   * to plain-Enter queueing so a new renderer never steers a released <=1.4 host
-   * that predates same-turn steering.
-   */
+  /** Whether the tab's negotiated `chat.subscribe` protocol version understands `after_safe_point` (host handshake minor >= 5). `false` degrades `Mod-Enter` to plain-Enter queueing so a new renderer never steers a released <=1.4 host that predates same-turn steering. */
   readonly steerProtocolSupported: boolean;
-  /**
-   * Reads the live active turn at submit time (not a reactive prop) so the
-   * settings-drift comparison never re-creates this callback per streamed
-   * token - mirrors `steerQueuedItemNow`'s live-turn read.
-   */
+  /** Reads the live active turn at submit time (not a reactive prop) so the settings-drift comparison never re-creates this callback per streamed token - mirrors `steerQueuedItemNow`'s live-turn read. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly hasPendingApprovals: boolean;
   readonly sendDisabled: boolean | undefined;
-  /**
-   * True when the bound workspace folder can't back a turn (none linked, or
-   * the host resolved no existing folder). The editor's Enter handler calls
-   * this directly, bypassing the send button's `canSubmit` gate, so the block
-   * is re-checked here.
-   */
+  /** True when the bound workspace folder can't back a turn (none linked, or the host resolved no existing folder). The editor's Enter handler calls this directly, bypassing the send button's `canSubmit` gate, so the block is re-checked here. */
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
-  /**
-   * Handles a prompt that leads with `/btw` / `/side`
-   * (`lib/chats/side-chat-command.ts`): fork the chat and ask the remainder
-   * there, instead of sending it here. Returning `false` keeps the composer
-   * text, exactly like a refused `onSubmitMessage`. `null` where there is no
-   * chat to fork; the prompt then goes through the ordinary send untouched.
-   */
+  /** Handles a prompt that leads with `/btw` / `/side` (`lib/chats/side-chat-command.ts`): fork the chat and ask the remainder there, instead of sending it here. Returning `false` keeps the composer text, exactly like a refused `onSubmitMessage`. */
   readonly onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
 }
 
@@ -113,35 +81,22 @@ export interface ChatComposerSideChatInput {
 }
 
 interface PendingSteerConflict {
-  // The submit INTENT only - deliberately NOT the resolved `deliveryPolicy`. The
-  // policy is re-resolved from the CURRENT connection/turn state at confirmation
-  // time (see `onRestart`), so a host reconnect/downgrade or turn-end while the
-  // dialog is open can never let a stale `after_safe_point` slip past the
-  // negotiated gate.
+  // The submit INTENT only - deliberately NOT the resolved `deliveryPolicy`.
+  // The policy is re-resolved from the CURRENT connection/turn state at confirmation time (see `onRestart`), so a host reconnect/downgrade or turn-end while the dialog is open can never let a stale `after_safe_point` slip past the negotiated gate.
   readonly content: JsonContent;
   readonly contentText: string;
   readonly attachments: ReadonlyArray<Attachment>;
   readonly restore: ChatSendRestore;
   readonly settings: ChatRunSettings;
   readonly changed: ReadonlyArray<string>;
-  // The turnId this consent was DISPLAYED for. The composer persists across turn
-  // replacement, so a dialog opened for turn T1 must never confirm into a
-  // successor T2: at confirm time `onRestart` re-reads the live turn and only
-  // steers/restarts when it is still this same turn. `null` when the drift was
-  // computed against no active turn (defensive; a real interrupt_restart drift
-  // always has one).
+  // The composer persists across turn replacement, so a dialog opened for turn T1 must never confirm into a successor T2: at confirm time `onRestart` re-reads the live turn and only steers/restarts when it is still this same turn.
   readonly originTurnId: string | null;
 }
 
 export interface ChatComposerSubmitResult {
   readonly submitDraft: (source: ChatComposerSubmitSource) => void;
   readonly annotationPreparationPending: boolean;
-  /**
-   * Confirm-dialog state for a `Mod-Enter` steer whose settings differ from the
-   * running turn's baked settings (decision 6). Open means the send is staged
-   * behind an interrupt-and-restart confirmation; the composer text is kept
-   * until the user confirms or cancels.
-   */
+  /** Confirm-dialog state for a `Mod-Enter` steer whose settings differ from the running turn's baked settings (decision 6). Open means the send is staged behind an interrupt-and-restart confirmation; the composer text is kept until the user confirms or cancels. */
   readonly steerConflict: {
     readonly open: boolean;
     readonly changed: ReadonlyArray<string>;
@@ -185,10 +140,8 @@ export function useChatComposerSubmit(
     clearDraftInStore(taskId);
     pickerStore.getState().reset();
     editorRef.current?.clear();
-    // A rejected send leaves the text in place, and dropping the keyboard
-    // there would take the user away from the message they still have to fix.
-    // On a phone the keyboard covers most of the screen, so holding it open
-    // after a send hides the reply the send was for.
+    // A rejected send leaves the text in place, and dropping the keyboard there would take the user away from the message they still have to fix.
+    // On a phone the keyboard covers most of the screen, so holding it open after a send hides the reply the send was for.
     if (isMobileApp()) blurTextEntry();
   }, [clearDraftInStore, editorRef, pickerStore, taskId]);
 
@@ -212,9 +165,7 @@ export function useChatComposerSubmit(
     [appendMessage, clearAcceptedDraft, onSubmitMessage, taskId],
   );
 
-  // The conditions that block a live submit, shared verbatim between the live
-  // `submitDraft` path and the deferred `onRestart` confirm so a guard added to
-  // one path can never miss the other.
+  // The conditions that block a live submit, shared verbatim between the live `submitDraft` path and the deferred `onRestart` confirm so a guard added to one path can never miss the other.
   const submitBlocked = useCallback(
     (): boolean =>
       activeTurnStatus === "stopping" ||
@@ -239,11 +190,7 @@ export function useChatComposerSubmit(
       const toolbar = toolbarStore.getState();
       if (toolbar.selection.modelSlug.length === 0) return;
       const editor = editorRef.current;
-      // A handle exists from the owner's first commit, before Tiptap's async
-      // `useEditor` resolves - `getJSON()`/`clear()` silently no-op until
-      // then, so a submit in that window would read the fallback initial JSON
-      // and clear nothing, letting the just-submitted text resurrect once the
-      // editor finishes initializing from that same stale initial content.
+      // A handle exists from the owner's first commit, before Tiptap's async `useEditor` resolves - `getJSON()`/`clear()` silently no-op until then, so a submit in that window would read the fallback initial JSON and clear nothing, letting the just-submitted text resurrect once the editor finishes initializing from that same stale initial content.
       if (editor === null || !editor.isReady()) return;
       if (annotationPrepFlight.current) return;
       const { annotationRecords } = readDraftSidecars(taskId);
@@ -264,22 +211,13 @@ export function useChatComposerSubmit(
         annotationImages: ReadonlyArray<AnnotationImageAtom>,
       ): void => {
         if (submitBlocked()) return;
-        // Re-read the document rather than comparing the `revision` captured
-        // before the async annotation-image read. `revision` bumps on every
-        // keystroke, so a single character typed during that read dropped the
-        // send silently; and the pre-flight capture is not what the user is
-        // looking at by the time we clear the editor, so sending it would
-        // discard those keystrokes. The live document is both.
+        // Re-read the document rather than comparing the `revision` captured before the async annotation-image read.
+        // `revision` bumps on every keystroke, so a single character typed during that read dropped the send silently; and the pre-flight capture is not what the user is looking at by the time we clear the editor, so sending it would discard those keystrokes.
         const liveContent = editor.getJSON();
         const liveContentText =
           extractPlainTextFromComposerJSONContent(liveContent);
-        // Re-read the sidecar array for the same reason the document is
-        // re-read: an annotation attached while the crop bytes resolved is
-        // what the user is looking at, and the `clearDraft` below wipes it -
-        // the pre-flight capture would drop it silently. `annotationImages`
-        // still covers only the records captured BEFORE that read, so a late
-        // annotation sends its record without an inlined crop atom rather
-        // than not being sent at all.
+        // Re-read the sidecar array for the same reason the document is re-read: an annotation attached while the crop bytes resolved is what the user is looking at, and the `clearDraft` below wipes it - the pre-flight capture would drop it silently.
+        // `annotationImages` still covers only the records captured BEFORE that read, so a late annotation sends its record without an inlined crop atom rather than not being sent at all.
         const { annotationRecords: liveAnnotationRecords } =
           readDraftSidecars(taskId);
         const settings = buildChatRunSettings({
@@ -300,13 +238,7 @@ export function useChatComposerSubmit(
           ...liveAnnotationRecords,
         ];
 
-        // A `/btw` prompt never reaches this chat: the remainder is asked in a
-        // fork instead. Decided AFTER chip conversion (so a typed `/btw` and a
-        // picked chip read the same) and BEFORE the delivery/steer decision
-        // below - a side question asked mid-turn is the whole point, and it
-        // must neither steer nor queue. It sits inside the prepared-draft path
-        // so it reads the same live document the send would, and the annotation
-        // atoms appended above are transparent to the leading-token scan.
+        // A `/btw` prompt never reaches this chat: the remainder is asked in a fork instead.
         if (onSideChat !== null) {
           const sideChat = splitLeadingSideChatCommand(submittedContent);
           if (sideChat !== null) {
@@ -408,22 +340,14 @@ export function useChatComposerSubmit(
 
   const onRestart = useCallback((): void => {
     if (pendingConflict === null) return;
-    // The same guards the live submit path enforces (submitDraft) must block this
-    // deferred confirm too. If any holds now, the consent cannot be honored -
-    // dismiss the dialog (the composer text is kept, so the user can retry once it
-    // clears) rather than pushing the send through the guards.
+    // The same guards the live submit path enforces (submitDraft) must block this deferred confirm too.
+    // If any holds now, the consent cannot be honored - dismiss the dialog (the composer text is kept, so the user can retry once it clears) rather than pushing the send through the guards.
     if (submitBlocked()) {
       setPendingConflict(null);
       return;
     }
-    // Bind the consent to the turn it was DISPLAYED for. The composer persists
-    // across turn replacement, so if the running turn changed (a successor turn
-    // is live, or none is) since the dialog opened, steering/restarting it would
-    // act on consent shown for a DIFFERENT turn. Only re-resolve to a steer when
-    // it is still that same turn; otherwise degrade to a plain queued send - never
-    // interrupt-restart a successor turn on stale consent. (Re-resolving also
-    // degrades to "auto" if the host reconnected/downgraded while the dialog was
-    // open.) It was always a `mod-enter` chord that opened this dialog.
+    // The composer persists across turn replacement, so if the running turn changed (a successor turn is live, or none is) since the dialog opened, steering/restarting it would act on consent shown for a DIFFERENT turn.
+    // Only re-resolve to a steer when it is still that same turn; otherwise degrade to a plain queued send - never interrupt-restart a successor turn on stale consent.
     const currentTurn = getActiveTurnForSteer();
     const sameTurn =
       currentTurn !== null &&
@@ -480,10 +404,7 @@ interface ComposerDraftSidecars {
   readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
 }
 
-/**
- * The draft's non-document sidecar array, read live. Both the pre-flight read
- * and the post-async finalize go through here so they can never diverge.
- */
+/** The draft's non-document sidecar array, read live. Both the pre-flight read and the post-async finalize go through here so they can never diverge. */
 function readDraftSidecars(taskId: string): ComposerDraftSidecars {
   const draft = readComposerDraftSnapshot(taskId);
   return { annotationRecords: draft.browserAnnotations };
@@ -518,10 +439,7 @@ async function resolveAnnotationImageAtoms(
     const sessionBytes = sessionImageBytes(record.imageHash);
     const bytes =
       sessionBytes ??
-      // An IndexedDB open/transaction failure is "the crop is not available",
-      // the same outcome as a missing key - and it must reach the caller as
-      // `null` rather than a rejection, which nothing above awaits with a
-      // `catch` and which would silently abandon the submit with no toast.
+      // An IndexedDB open/transaction failure is "the crop is not available", the same outcome as a missing key - and it must reach the caller as `null` rather than a rejection, which nothing above awaits with a `catch` and which would silently abandon the submit with no toast.
       (await getImageBytes(record.imageHash).catch((error: unknown) => {
         appLogger.error(
           "[chat-composer] annotation image read failed",

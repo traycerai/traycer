@@ -180,14 +180,7 @@ describe("host.getRateLimitUsage v2.1 reset-credit detail", () => {
   });
 });
 
-// `providerRateLimitsSchema` is a plain `z.union`, not a `z.discriminatedUnion`,
-// because its "unavailable" arm's `provider` field ranges over the full
-// provider-id enum, which overlaps the `"codex"` / `"claude-code"` literals the
-// other two arms use as their tag. A `z.discriminatedUnion` with that overlap
-// throws a raw (non-`ZodError`) "Duplicate discriminator value" error the first
-// time it's parsed - `safeParse` can't catch it, so these tests must call
-// `.parse()`/`.safeParse()` for real to catch a regression back to
-// `discriminatedUnion`.
+// `providerRateLimitsSchema` is a plain `z.union`, not a `z.discriminatedUnion`, because its "unavailable" arm's `provider` field ranges over the full provider-id enum, which overlaps the `"codex"` / `"claude-code"`.
 describe("providerRateLimitsSchema", () => {
   it("parses an available codex snapshot with per-limit breakdown and reset credits", () => {
     const codex = {
@@ -370,12 +363,7 @@ describe("rateLimitUsageResponseSchemaV12", () => {
   });
 });
 
-// `host.getRateLimitUsage` major 2.0 - splits the conflated
-// `rate_limits_not_available` reason by adding `usage_fetch_failed` (v2-only).
-// The v1 reason enum is frozen (see `rateLimitUnavailableReasonSchemaV1` in
-// `rate-limit/schemas.ts`), so the still-installed v1.2 response schema must
-// keep rejecting the new value - the downgrade bridge below is the only
-// place that ever translates it back to something a v1.2 client accepts.
+// `host.getRateLimitUsage` major 2.0 - splits the conflated `rate_limits_not_available` reason by adding `usage_fetch_failed` (v2-only).
 describe("rateLimitUnavailableReasonSchemaV1 / rateLimitUnavailableReasonSchemaV2", () => {
   it("keeps the v1 enum rejecting usage_fetch_failed", () => {
     expect(
@@ -589,13 +577,7 @@ describe("host.getRateLimitUsage v2.0 -> v1.2 downgrade bridge", () => {
   });
 });
 
-// `host.getRateLimitUsage` major 3.0 - adds the grok available arm. Frozen
-// v2.1 / v1.2 unions have no grok arm, so the 3 -> 2 and 3 -> 1 downgrade
-// bridges degrade a grok-available snapshot to
-// `{ provider: "grok", available: false, reason: "unsupported_provider" }`
-// (the exact row a pre-grok host returns for grok) and reparse through the
-// frozen response schema. 3 -> 1 also composes the existing
-// `usage_fetch_failed` -> `rate_limits_not_available` mapping.
+// `host.getRateLimitUsage` major 3.0 - adds the grok available arm.
 describe("host.getRateLimitUsage v3.0 -> v2.1 / v1.2 grok downgrade bridges", () => {
   const grokAvailableWithPeriod = {
     provider: "grok" as const,
@@ -973,9 +955,7 @@ describe("host.getRateLimitUsage v4.0 Hugging Face freeze + downgrade bridges", 
     balance: 9,
   };
 
-  // The freeze itself: v3.0 is what cli-v1.1.8 through cli-v1.1.10 shipped, so
-  // it must REJECT the arm the live union accepts. This is the assertion that
-  // fails if anyone repoints v3.0 back at the live union.
+  // The freeze itself: v3.0 is what cli-v1.1.8 through cli-v1.1.10 shipped, so it must REJECT the arm the live union accepts.
   it("accepts a Hugging Face arm on the live union and rejects it on the frozen v3.0 schema", () => {
     for (const snapshot of [huggingFaceAvailable, huggingFaceSpendOnly]) {
       expect(providerRateLimitsSchema.parse(snapshot)).toEqual(snapshot);
@@ -1069,9 +1049,6 @@ describe("host.getRateLimitUsage v4.0 Hugging Face freeze + downgrade bridges", 
       providerRateLimits: huggingFaceAvailable,
     });
     const registry = hostRpcRegistry["host.getRateLimitUsage"];
-    // One call per literal target: a union-typed `target` widens the helper's
-    // return across every major's shape, and major 1's earliest minors carry
-    // no `providerRateLimits` key at all.
     const toV3 = downgradeResponseAcrossMajors(registry, 4, 3, response);
     expect(toV3.ok).toBe(true);
     if (toV3.ok) {
@@ -1115,11 +1092,6 @@ describe("host.getRateLimitUsage v4.0 Hugging Face freeze + downgrade bridges", 
   });
 });
 
-// OpenCode rides the SAME major as Hugging Face: the release collapsed the
-// unreleased v5.0 into v4.0, so there is no peer that negotiated one arm
-// without the other. The Hugging-Face-specific coverage and the major-4
-// registry assertions live in the v4.0 block above; only the OpenCode-specific
-// behaviour is asserted here.
 describe("host.getRateLimitUsage v4.0 OpenCode arm + downgrade bridges", () => {
   const openCodeAvailable = {
     provider: "opencode" as const,
@@ -1238,10 +1210,6 @@ describe("host.getRateLimitUsage v4.0 OpenCode arm + downgrade bridges", () => {
       remainingTokens: 0,
       providerRateLimits: openCodeAvailable,
     });
-    // Unrolled rather than looped: each target major has its own result type,
-    // and the major-1 line's response shape has no `providerRateLimits` at all
-    // until 1.2 - a loop unions all three and the property read stops
-    // type-checking.
     const registry = hostRpcRegistry["host.getRateLimitUsage"];
     const toV3 = downgradeResponseAcrossMajors(registry, 4, 3, response);
     expect(toV3.ok).toBe(true);
@@ -1261,11 +1229,8 @@ describe("host.getRateLimitUsage v4.0 OpenCode arm + downgrade bridges", () => {
   });
 });
 
-// `host.getRateLimitUsage@4.0`'s `force` opt-out (see
-// `rateLimitUsageRequestSchemaV40`'s doc comment). ABSENT means force - every
-// released version forced unconditionally, so the field is `.optional()`
-// rather than `.default(true)` specifically so it stays ABSENT (not merely
-// `undefined`) on a request that never opts out.
+// `host.getRateLimitUsage@4.0`'s `force` opt-out (see `rateLimitUsageRequestSchemaV40`'s doc comment).
+// ABSENT means force - every released version forced unconditionally, so the field is `.optional()` rather than `.default(true)` specifically so it stays ABSENT (not merely `undefined`) on a request that never opts out.
 describe("rateLimitUsageRequestSchemaV40 force opt-out", () => {
   it("parses force: true and force: false", () => {
     expect(
@@ -1491,9 +1456,7 @@ describe("cursor rate-limit arm", () => {
     ).not.toThrow();
   });
 
-  // `"cursor"` is in every frozen provider enum (it long predates Hermes/omp),
-  // so the degraded row must reparse cleanly all the way down - this is what
-  // lets the arm ride 4.0 instead of forcing a new major.
+  // `"cursor"` is in every frozen provider enum (it long predates Hermes/omp), so the degraded row must reparse cleanly all the way down - this is what lets the arm ride 4.0 instead of forcing a new major.
   it("degrades cursor down the 4.0 -> 2.1 and 4.0 -> 1.2 bridges too", () => {
     const response = rateLimitUsageResponseSchemaV40.parse({
       totalTokens: 0,

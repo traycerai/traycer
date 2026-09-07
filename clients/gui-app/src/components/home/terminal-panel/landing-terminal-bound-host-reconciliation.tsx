@@ -12,13 +12,8 @@ import {
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { reconcileCapableLandingTerminals } from "./use-landing-terminal-reconciliation";
 
-/**
- * Keeps every non-selected host represented in the landing presentation on
- * its own authority lifecycle. The selected host remains owned by the opening
- * gesture reconciliation because that pass also publishes homeCwd and settles
- * auto-create; this fleet supplies the same canonical migration/reconciliation
- * for all other bound hosts without moving layout or selection between clients.
- */
+/** The selected host remains owned by the opening gesture reconciliation because that pass also publishes
+ * homeCwd and settles auto-create. */
 export function LandingTerminalBoundHostReconciliationFleet(props: {
   readonly landingPageId: string;
   readonly selectedHostId: string | null;
@@ -47,9 +42,8 @@ function LandingTerminalBoundHostReconciliation(props: {
   const queryClient = useQueryClient();
   const tabs = useLandingTerminalStore((state) => state.tabs);
   const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
-  // Same wake as the selected host's pass: provenance is read imperatively
-  // inside `reconcileCapableLandingTerminals`, so a record that lands after
-  // the pass has to re-key it.
+  // Same wake as the selected host's pass: provenance is read imperatively inside
+  // `reconcileCapableLandingTerminals`, so a record that lands after the pass has to re-key it.
   const provenanceRevision = useProviderLoginTerminalsStore(
     (state) => state.revision,
   );
@@ -118,9 +112,8 @@ function LandingTerminalBoundHostReconciliation(props: {
       queryClient,
     }).then(
       (outcome) => {
-        // A non-fresh snapshot no longer rejects, so release the latch for it
-        // too - otherwise this key would stay claimed and the pass that the
-        // returning snapshot should re-run would be skipped.
+        // A non-fresh snapshot no longer rejects, so release the latch for it too - otherwise this key would stay
+        // claimed and the pass that the returning snapshot should re-run would be skipped.
         if (outcome === "reconciled") return;
         releaseLatch();
       },

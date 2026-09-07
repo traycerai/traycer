@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -28,14 +26,8 @@ interface HostBindingMock {
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
   current: null,
 }));
-/**
- * What `binding.directory.getLocalEntry()` answers about THIS machine at the
- * instant it is called. The force offer is bound to the host that produced the
- * busy verdict and re-reads this live on the press, so it is the axis that
- * drives the host-changed refusal. `null` is "cannot tell" - deliberately NOT a
- * refusal, since the local entry also goes null while the host is down, which
- * is the state a respawn most legitimately answers.
- */
+/** `null` is "cannot tell" - deliberately not a refusal, since the local entry also goes null while the host is
+ * down, which is the state a respawn most legitimately answers. */
 const localHostIdMock = vi.hoisted((): { current: string | null } => ({
   current: null,
 }));
@@ -131,12 +123,7 @@ function scopeFrom(
   };
 }
 
-/**
- * A host binding whose `directory` answers from `localHostIdMock`, so a test
- * can replace this machine's host mid-flow without reassigning the binding
- * (which would hand every consumer a fresh object identity on a path that has
- * nothing to do with the swap).
- */
+/** A host binding whose `directory` answers from `localHostIdMock`. */
 function bindingWith(hostClient: unknown): HostBindingMock {
   return {
     hostClient,
@@ -161,11 +148,7 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-/**
- * Same in-memory shell as `makeRunnerHost`, but with a CLI bridge attached —
- * `MockRunnerHost` otherwise defaults `hostManagement` to `null`, which is
- * exactly "no bridge" and cannot exercise the Force-restart offer at all.
- */
+/** Same in-memory shell as `makeRunnerHost`, but with a CLI bridge attached. */
 function makeRunnerHostWithManagement(
   management: IHostManagement | null,
 ): IRunnerHost {
@@ -181,12 +164,7 @@ function makeRunnerHostWithManagement(
   });
 }
 
-/**
- * Same shape as `scopeFrom`, but with `isLocalMachine` a caller-supplied axis
- * rather than pinned `true` — the Force-restart offer forks on exactly that
- * flag (bridge respawns THIS machine's process only), so these tests need
- * both a local and a remote host from the same fixture.
- */
+/** Same shape as `scopeFrom`, but with `isLocalMachine` a caller-supplied axis rather than pinned `true`. */
 function scopeFromWithLocality(
   hostId: string,
   fixture: OverviewHostFixture,
@@ -214,9 +192,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
     const gate = new Promise<void>((resolve) => {
       releaseRestart = resolve;
     });
-    // `overrideHandlers` REPLACES the tracked default handler wholesale, so
-    // this attempt is counted locally rather than through the fixture's own
-    // `restartCalls()` (which would stay 0 forever under an override).
+    // `overrideHandlers` replaces the tracked default handler wholesale, so this attempt is counted locally rather
+    // than through the fixture's own `restartCalls` (which would stay 0 forever under an override).
     let armedHostCalls = 0;
     const armedHostTransitionIds: string[] = [];
     const fixtureA = buildOverviewHostFixture({
@@ -263,7 +240,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
       expect(armedHostCalls).toBe(0); // still parked on the gate
     });
 
-    // Move the scope to another host WHILE the restart is still in flight.
+    // Move the scope to another host while the restart is still in flight.
     hostBindingMock.current = bindingWith(fixtureB.client);
     scopeOverrides.current = scopeFrom("host-b", fixtureB);
     view.rerender(makeUi());
@@ -323,14 +300,10 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
     );
     const view = render(makeUi());
 
-    // Wait for `host.identity.get` to resolve — "Edit name" stays disabled
-    // (`busy={identity === null}`) until then, so a click before this would
-    // be a no-op.
     await screen.findByText("Original Name");
     fireEvent.click(await waitForButton("Edit name"));
-    // The name edits IN PLACE now (`useInlineRename`, same hook the tab strips
-    // use), so there is no separate editor row and no Save button — the write
-    // is what Enter commits.
+    // The name edits IN place now (`useInlineRename`, same hook the tab strips use), so there is no separate
+    // editor row and no Save button - the write is what Enter commits.
     const input = await screen.findByTestId("host-overview-name-input");
     fireEvent.change(input, { target: { value: "New Name" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -374,12 +347,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
 
 describe("<HostSettingsPanel /> Overview restart outcomes", () => {
   it("a busy restart with NO force route reports the verdict without promising a Force button", async () => {
-    // `makeRunnerHost()` has no CLI bridge, so there is no respawn to offer
-    // and nothing to put a force/defer decision to. The verdict is reported in
-    // the same "deliberately not restarted, clears on its own" register a
-    // declined respawn uses — never an error — and the sentence must STOP
-    // before "Force restart ends them immediately.", which would name a
-    // control this host cannot have.
+    // The verdict is reported in the same "deliberately not restarted, clears on its own" register a declined
+    // respawn uses - never an error.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -433,11 +402,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
   });
 
   it("reuses the armed transitionId when the retry follows an AMBIGUOUS failure", async () => {
-    // The complement of the busy case above, and the one the claim contract is
-    // actually for: a transport failure says nothing about whether the host
-    // granted the shutdown claim. Minting a fresh id for that retry means it
-    // cannot adopt a claim the host may already hold - turning the idempotent
-    // retry this design exists for into a busy refusal.
+    // Minting a fresh id for that retry means it cannot adopt a claim the host may already hold - turning the
+    // idempotent retry this design exists for into a busy refusal.
     const transitionIds: string[] = [];
     let attempt = 0;
     const fixture = buildOverviewHostFixture({
@@ -534,10 +500,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     );
     await waitFor(() => expect(transitionIds).toHaveLength(1));
 
-    // Busy is a DEFINITIVE answer - the host refused the claim outright - so
-    // the retry is a NEW action and must not adopt the spent id. Reached from
-    // the `⋯` menu now that the busy band with its own Try again is gone;
-    // re-asking a host that may have drained since is the honest retry.
+    // Busy is a definitive answer - the host refused the claim outright - so the retry is a new action and must
+    // not adopt the spent id.
     await openHostOverviewMenu();
     fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
@@ -554,15 +518,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
 });
 
 describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", () => {
-  // The busy verdict's ONLY affordance is `HostBusyForceDeferDialog`, the same
-  // second modal the menu/tray restart flow shows for the same answer. The amber
-  // band that used to carry an inline, one-press Force restart is deleted: the
-  // identical verdict must not be more destructive answered from Settings than
-  // from the Help menu.
+  // The busy verdict's only affordance is `HostBusyForceDeferDialog`, the same second modal the menu/tray
+  // restart flow shows for the same answer.
   it("a busy restart on a REMOTE host offers no Force restart, even with a management bridge present", async () => {
-    // The forking rule is `isLocalMachine`, not "is a bridge available" — a
-    // remote host's process cannot be respawned by THIS machine's bridge, so
-    // the offer must stay withheld even when `hostManagement` answers.
+    // The forking rule is `isLocalMachine`, not "is a bridge available" - a remote host's process cannot be
+    // respawned by this machine's bridge, so the offer must stay withheld even when `hostManagement` answers.
     const fixture = buildOverviewHostFixture({
       hostId: "host-remote",
       isLocalMachine: false,
@@ -615,16 +575,13 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       );
     });
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
-    // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
-    // future markup change that drops the testid but leaves a real "Force
-    // restart" button behind must still fail this.
+    // CodeRabbit: absence pinned by accessible role, not the testid - a future markup change that drops the testid
+    // but leaves a real "Force restart" button behind must still fail this.
     expect(screen.queryByRole("button", { name: "Force restart" })).toBeNull();
   });
 
   it("a busy restart on a LOCAL host with no CLI bridge offers no Force restart either", async () => {
-    // The parity half of the case above: local alone is not enough. Pins that
-    // the no-bridge fixture (`makeRunnerHost`, `hostManagement: null`) stays
-    // equivalent for local and remote — neither offers Force.
+    // The parity half of the case above: local alone is not enough.
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
       isLocalMachine: true,
@@ -670,9 +627,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       );
     });
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
-    // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
-    // future markup change that drops the testid but leaves a real "Force
-    // restart" button behind must still fail this.
+    // CodeRabbit: absence pinned by accessible role, not the testid - a future markup change that drops the testid
+    // but leaves a real "Force restart" button behind must still fail this.
     expect(screen.queryByRole("button", { name: "Force restart" })).toBeNull();
   });
 
@@ -694,9 +650,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
     recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
-    // The machine's host IS the one this page is scoped to, so the press-time
-    // freshness check matches and dispatches. Asserted on the positive arm
-    // rather than left at "cannot tell", so this test proves the guard lets a
+    // Asserted on the positive arm rather than left at "cannot tell", so this test proves the guard lets a
     // legitimate force through instead of passing because it never ran.
     localHostIdMock.current = "host-local";
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
@@ -748,26 +702,15 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    // Wording unified across every restart surface (`host-restart-toast.ts`,
-    // already-landed audit F15-F17/F19/F20/F25, unrelated to this ticket) -
-    // the host name doesn't earn its place here since the surface the click
-    // came from already names it.
+    // Wording unified across every restart surface - the host name doesn't earn its place here since the surface
+    // the click came from already names it.
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
     expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("refuses the force when this machine's host was replaced under the open offer", async () => {
-    // `restartHost()` is NOT host-scoped: it respawns whichever host is local
-    // at the moment it runs. So an offer that outlives a local host identity
-    // change states A's session count over a button that kills B - whose claim
-    // was never asked and whose sessions were never counted.
-    //
-    // The swap is deliberately made INVISIBLE to the render here: the page is
-    // still scoped to the host that produced the verdict and still reads
-    // `isLocalMachine: true`, so every render-derived value agrees the offer is
-    // fine. Only the live directory answer has moved. That is the stale-vs-
-    // stale window a committed-render check sails straight through, and it is
-    // why the press re-reads rather than trusting what it rendered with.
+    // So an offer that outlives a local host identity change states A's session count over a button that kills B -
+    // whose claim was never asked and whose sessions were never counted.
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
       isLocalMachine: true,
@@ -833,11 +776,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
   });
 
   it("closes the offer when the page's host stops being this machine's", async () => {
-    // The render-phase half of the same rule. `isLocalMachine` going false is
-    // the route itself disappearing - there is no longer a bridge that could
-    // kill this host - so an offer left answerable would be a Force button with
-    // nothing legitimate behind it. It is dropped without a toast: no decision
-    // was made and nothing was attempted, so there is nothing to report.
+    // `isLocalMachine` going false is the route itself disappearing - there is no longer a bridge that could kill
+    // this host - so an offer left answerable would be a Force button with nothing legitimate behind it.
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
       isLocalMachine: true,
@@ -896,10 +836,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
   });
 
   it("Defer answers the offer without respawning, and Restart re-asks the host", async () => {
-    // The other half of the second modal, and the reason it exists: the
-    // destructive choice must be declinable. Deferring dispatches nothing and
-    // closes the offer - `⋯ → Restart` is the retry, which re-asks a host that
-    // may have drained since rather than replaying a stale verdict.
+    // The other half of the second modal, and the reason it exists: the destructive choice must be declinable.
     let attempt = 0;
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
@@ -954,8 +891,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
     expect(restartHostIfIdle).not.toHaveBeenCalled();
 
-    // The second ask carries the SECOND verdict, so the dialog is describing
-    // the host as it is now rather than replaying the answer just declined.
+    // The second ask carries the second verdict, so the dialog is describing the host as it is now rather than
+    // replaying the answer just declined.
     await openHostOverviewMenu();
     fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
@@ -1035,28 +972,16 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
-    // Declined performed nothing, but it ANSWERED - re-offering a decision the
-    // user already made would put the same modal back up over its own toast.
+    // Declined performed nothing, but it answered - re-offering a decision the user already made would put the
+    // same modal back up over its own toast.
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
   });
 
   it("a scope move mid-flight still reports the restart, surviving the closure remount", async () => {
-    // Mirrors the `host.restart` arm-time-capture test above, for the
-    // page-remount half of the force-restart scoping fix: `HostSettingsPanel`
-    // keys `HostSettingsPanelInner` by `scopeId`, so a host swap unmounts the
-    // whole subtree the armed `forceRestart` mutation lives in. Its `onSuccess`
-    // closure is frozen at the OLD render, so this proves the toast still
-    // fires after that remount rather than the closure silently losing its
-    // callback. `variables.hostId` (captured per the host-swap rule in
-    // `host-overview-panel.tsx`) still gates `setRestartBusyCount` correctly
-    // - the sibling "Force restart armed on host A..." test below covers
-    // that half - but the toast copy itself no longer carries a host name to
-    // assert against (unified across every restart surface by
-    // `host-restart-toast.ts`, an already-landed, unrelated audit fix), so
-    // this can no longer verify attribution BY NAME, only that the report
-    // survives.
+    // Its `onSuccess` closure is frozen at the old render, so this proves the toast still fires after that remount
+    // rather than the closure silently losing its callback.
     let releaseForceRestart: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
       releaseForceRestart = resolve;
@@ -1123,8 +1048,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
     expect(management.restartHost).not.toHaveBeenCalled();
 
-    // Move the scope to another host WHILE the force restart is still
-    // killing and relaunching the local bridge process.
+    // Move the scope to another host while the force restart is still killing and relaunching the local bridge
+    // process.
     hostBindingMock.current = bindingWith(fixtureB.client);
     scopeOverrides.current = scopeFromWithLocality("host-b", fixtureB, true);
     view.rerender(makeUi());
@@ -1143,18 +1068,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
   });
 
   it("Force restart armed on host A stays counted after a remount to host B, locking B's lifecycle writes until it settles", async () => {
-    // The regression Codex proved: `forceRestart.isPending` is the LOCAL
-    // `useMutation` observer's flag, and that observer dies with the
-    // scope-keyed remount (`HostSettingsPanel` keys `HostSettingsPanelInner`
-    // by `scopeId`). A swap away mid-flight used to mount a FRESH observer
-    // that starts idle, so the page-wide gate read `false` and reopened every
-    // lifecycle write it exists to hold shut — on host B's brand-new page,
-    // not even the host the bridge respawn is running against.
-    // `forceRestartInFlight` (`useIsMutating` against the shared
-    // `runnerMutationKeys.hostRestart()` key) is CACHE-derived, so it must
-    // stay `true` on host B's fresh mount for as long as the mutation the
-    // stale host-A instance armed is still settling, and drop back to
-    // `false` once it does.
+    // `forceRestartInFlight` (`useIsMutating` against the shared `runnerMutationKeys.hostRestart` key) is
+    // cache-derived.
     let releaseForceRestart: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
       releaseForceRestart = resolve;
@@ -1218,15 +1133,13 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
     expect(management.restartHost).not.toHaveBeenCalled();
 
-    // Move the scope to host B WHILE the force restart is still killing and
-    // relaunching the local bridge process.
+    // Move the scope to host B while the force restart is still killing and relaunching the local bridge process.
     hostBindingMock.current = bindingWith(fixtureB.client);
     scopeOverrides.current = scopeFromWithLocality("host-b", fixtureB, true);
     view.rerender(makeUi());
 
-    // Wait for host B's identity to load so the lock asserted below is
-    // attributable to `locked` (the page-wide gate) rather than to
-    // `!loaded`, which disables the pencil regardless of the gate.
+    // Wait for host B's identity to load so the lock asserted below is attributable to `locked` (the page-wide
+    // gate) rather than to `!loaded`, which disables the pencil regardless of the gate.
     await screen.findByText("Host B Display");
     await waitFor(() => {
       expect(
@@ -1247,18 +1160,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
   });
 
   it("a PAGE-WIDE write arming under the open offer closes it, so Force cannot recycle the host beside another lifecycle write", async () => {
-    // Codex P1, carried over from the deleted busy band: its buttons gated
-    // only each OTHER, so Force stayed clickable while a rename, an update
-    // install or a service write was running - any of which a forced bridge
-    // respawn would then race. `pageGatePending` closed that on the band; the
-    // modal inherits the rule as a CLOSE rather than a disable, because
-    // disabling a modal's only two buttons traps the user in it.
-    //
-    // The lever is the update-install accepted latch, armed through the real
-    // store: it is the page-wide write that can arm with NO interaction, which
-    // is the only kind that can reach a page behind an open modal. A disable
-    // test cannot be written for the others - Radix takes the page's pointer
-    // events, so nothing on it is clickable to start one.
+    // Codex P1, carried over from the deleted busy band: its buttons gated only each other, so Force stayed
+    // clickable while a rename, an update install or a service write was running.
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
       isLocalMachine: true,
@@ -1360,11 +1263,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
     await openHostOverviewAdvanced();
     fireEvent.click(await waitForButton(/^Install \d/));
 
-    // The whole REGION retires, not just the install button. This test used to
-    // assert a disabled install button beside a live "Check now", which is the
-    // shape a review called out: `externally-managed` means the cloud pin
-    // governs updates for this host, so leaving a check control behind keeps
-    // offering the one action the host has just said leads nowhere.
+    // The whole region retires, not just the install button.
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
     ).toBeTruthy();
@@ -1376,10 +1275,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
 });
 
 describe("<HostSettingsPanel /> Overview OS service externally-managed outcome", () => {
-  // The OUTCOME axis, distinct from `ok` + `state: "externally-managed"`: the
-  // host refused to consult the CLI because an external supervisor owns its
-  // service lifecycle, so there is no label or manifest line to show and both
-  // verbs are withheld rather than offered-and-refused.
+  // The outcome axis, distinct from `ok` + `state: "externally-managed"`.
   it("withholds both service verbs and names the external supervisor", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -1469,7 +1365,7 @@ describe("<HostSettingsPanel /> Overview per-button capability degrade", () => {
       hostId: "host-a",
       isLocalMachine: true,
     });
-    // Handshaked WITHOUT host.restart, but WITH host.doctor and everything else.
+    // Handshaked without host.restart, but with host.doctor and everything else.
     recordNegotiatedHostMethods(
       "host-a",
       ALL_OVERVIEW_METHODS.filter((m) => m !== "host.restart"),
@@ -1495,10 +1391,8 @@ describe("<HostSettingsPanel /> Overview per-button capability degrade", () => {
     await waitFor(() => {
       expect(restart.getAttribute("data-degraded")).toBe("unsupported");
     });
-    // `aria-disabled`, not the `disabled` ATTRIBUTE. These are Radix
-    // `DropdownMenuItem`s — divs with `role="menuitem"` — so `hasAttribute
-    // ("disabled")` is false for every one of them, enabled or not, and the
-    // assertion it replaces could never have failed.
+    // These are Radix `DropdownMenuItem`s - divs with `role="menuitem"` - so `hasAttribute ("disabled")` is false
+    // for every one of them, enabled or not, and the assertion it replaces could never have failed.
     expect(restart.getAttribute("aria-disabled")).toBe("true");
 
     const doctor = screen.getByTestId("host-overview-run-doctor");
@@ -1511,8 +1405,8 @@ describe("<HostSettingsPanel /> Overview per-button capability degrade", () => {
       hostId: "host-a",
       isLocalMachine: true,
     });
-    // No `recordNegotiatedHostMethods` call at all for this host id: "not
-    // dialled yet", the tri-state's null — must never read as "absent".
+    // No `recordNegotiatedHostMethods` call at all for this host id: "not dialled yet", the tri-state's null -
+    // must never read as "absent".
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     render(

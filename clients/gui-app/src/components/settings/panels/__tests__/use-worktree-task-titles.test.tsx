@@ -32,7 +32,7 @@ const mockHostClient = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mockHostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => mockHostClient,
 }));
 
@@ -340,9 +340,8 @@ describe("useWorktreeTaskTitles", () => {
   });
 
   it("reuses the tier-2 batch when the panel is reopened inside the stale window", async () => {
-    // The Settings panel unmounts on close and remounts on open. With the
-    // default zero stale time every reopen re-fanned the batch into one
-    // `POST /tasks/context` per unresolved owner.
+    // With the default zero stale time every reopen re-fanned the batch into one `POST /tasks/context` per
+    // unresolved owner.
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });

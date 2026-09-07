@@ -17,12 +17,7 @@ import {
   assistantTurnNeedsTrailingRow,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 
-/**
- * These pin the rules a cold review found the previous record-level enumeration
- * getting wrong. Each `describe` maps to one of them, because each one shifts
- * every later ordinal when it breaks - and a shifted ordinal renders a
- * neighbour's body under a row rather than failing.
- */
+/** These pin the rules a cold review found the previous record-level enumeration getting wrong. */
 
 function textBlock(blockId: string, timestamp: number): ContentBlock {
   return {
@@ -206,8 +201,6 @@ function project(
 describe("turn folding", () => {
   it("folds several records sharing a turn id into ONE row", () => {
     // The defect that started this module: three records, one rendered row.
-    // A one-per-record enumeration would reserve three ordinals here and put
-    // every later body two rows out of place.
     const records = [1, 2, 3].map((n) =>
       assistantMessage({
         messageId: `m-${n}`,
@@ -374,12 +367,7 @@ describe("the stopped-turn trailing row", () => {
   });
 
   it("numbers the boundary row `part:0` for a STEER-ONLY stopped turn", () => {
-    // The one shape where `nextChunkIndex` is 0: `planAssistantTurnRows` never
-    // increments `chunkIndex` because the turn produced no slice at all. Every
-    // other fixture here ends on "one more than the last slice", so the id
-    // string is pinned rather than inferred - both the host projection and the
-    // renderer read the same `nextChunkIndex`, which is exactly why an
-    // equivalence assertion alone cannot see a change to it.
+    // The one shape where `nextChunkIndex` is 0: `planAssistantTurnRows` never increments `chunkIndex` because the turn produced no slice at all.
     const turn = assistantMessage({
       messageId: "m-1",
       timestamp: 10,
@@ -573,9 +561,6 @@ describe("setup cards", () => {
       triggeringMessageId: "m-2",
     });
 
-    // ...and it still renders directly above m-2, not between m-1 and m-2 by
-    // timestamp - which is the same place here, so the ORDER below is what
-    // distinguishes anchoring from sorting only in the next test.
     expect(project([user, later], [creating], null)).toEqual([
       "m-1",
       "setup-card:chat-1:0:200",
@@ -622,9 +607,7 @@ describe("setup cards", () => {
 
 describe("event rows", () => {
   it("orders all fork links before all notification anchors for equal timestamps", () => {
-    // The renderer concatenates its two event-row arrays in this order, so a
-    // tie resolves this way and NOT in the event log's own order. Matching that
-    // exactly is the point.
+    // The renderer concatenates its two event-row arrays in this order, so a tie resolves this way and NOT in the event log's own order.
     const anchor = chatEventSchema.parse({
       eventId: "e-anchor",
       type: "send.failed",
@@ -683,10 +666,7 @@ describe("event rows", () => {
     expect(project([user], [started], null)).toEqual(["m-1"]);
   });
 
-  // The imported-chat marker was a renderer-side pin with no ordinal until
-  // 2026-09-03; the windowed transcript never served its event on reopen, so
-  // the row vanished (spec `session-import.md` §8e). Now it is a row like any
-  // other, seated where the renderer already drew it: above everything.
+  // The imported-chat marker was a renderer-side pin with no ordinal until 2026-09-03; the windowed transcript never served its event on reopen, so the row vanished (spec `session-import.md` §8e).
   describe("imported-chat marker rows", () => {
     function importedEvent(input: {
       readonly eventId: string;
@@ -795,20 +775,10 @@ describe("event rows", () => {
   });
 });
 
-/**
- * A hydrated turn is only as good as the context that travels with it. These
- * pin the two ways a row under-reported what it needs - both of which surface
- * as a hydration that REPORTS SUCCESS and renders something poorer than the
- * legacy line drew, which is the quietest failure this system has.
- */
+/** A hydrated turn is only as good as the context that travels with it. */
 describe("what travels with a hydrated turn", () => {
   it("carries the pause lifecycle, including a resolution stamped with NO turn", () => {
-    // `buildTurnPauseAccounting` subtracts the human's wait by pairing a
-    // request with its resolution. The host stamps a resolution with
-    // `activeTurn?.turnId ?? null`, so one landing after its turn settled
-    // carries null - and an association keyed on `turnId` would ship the OPEN
-    // without its CLOSE. The fold then drops the unclosed request entirely and
-    // counts the whole human wait as agent execution time.
+    // `buildTurnPauseAccounting` subtracts the human's wait by pairing a request with its resolution.
     const turn = assistantMessage({
       messageId: "m-1",
       timestamp: 10,
@@ -893,11 +863,7 @@ describe("what travels with a hydrated turn", () => {
   });
 
   it("names the user record a synthesized stopped row renders from", () => {
-    // `renderStoppedTurnsWithoutAssistantRecords` emits NO model unless the
-    // referenced message is present. A row served without it hydrates
-    // "successfully" and draws nothing, while the span still counts it
-    // hydrated - so the list suppresses its ordinal instead of leaving the
-    // placeholder that would be retried.
+    // `renderStoppedTurnsWithoutAssistantRecords` emits NO model unless the referenced message is present.
     const user = userMessage({ messageId: "m-1", timestamp: 10 });
     const stopped = stoppedEvent({
       eventId: "e-1",
@@ -922,10 +888,8 @@ describe("what travels with a hydrated turn", () => {
 
 describe("assistantRowTurnKey", () => {
   /**
-   * `TranscriptRowContext` is keyed by ROW id and a turn's context is shared by
-   * every row the turn produces, so a renderer holding a turn key needs the
-   * mapping in this direction. Pinned against the BUILDERS rather than against
-   * literals: the point of the function is that the two cannot drift.
+   * `TranscriptRowContext` is keyed by ROW id and a turn's context is shared by every row the turn produces, so a renderer holding a turn key needs the mapping in this direction.
+   * Pinned against the BUILDERS rather than against literals: the point of the function is that the two cannot drift.
    */
   it("inverts the row-id builders for split and unsplit turns", () => {
     for (const turnKey of ["turn-1", "ts:1730000000000"]) {
@@ -980,10 +944,6 @@ function checkpointEvent(fields: {
       entries: fields.filePaths.map((filePath) => ({
         filePath,
         operation: "edit" as const,
-        // Distinct hashes: `isNoOpCheckpointEntry` treats an undoable entry
-        // whose before/after agree as a no-op, and a no-op is excluded from
-        // the overlap rule - so equal hashes here would make the fixture
-        // assert nothing.
         beforeHash: `${filePath}:before`,
         afterHash: `${filePath}:after`,
         undoable: true,
@@ -994,18 +954,7 @@ function checkpointEvent(fields: {
   });
 }
 
-/**
- * The one derived value on a row that a WINDOW can silently invert.
- *
- * `hasLaterOverlappingChanges` answers "does a later turn rewrite a file this
- * checkpoint touches", and the renderer used to derive it from the events it
- * held. On the windowed line that is whatever is hydrated, so a span holding
- * the EARLIER turn and not the later one concludes `false` and the restore
- * dialog drops its warning that later turns' files will also be rewound - a
- * missing warning on an irreversible action.
- *
- * The projection sees whole history, so it answers once and carries it.
- */
+/** The one derived value on a row that a WINDOW can silently invert. */
 describe("row context: whole-history checkpoint overlap", () => {
   const overlappingEvents: readonly ChatEvent[] = [
     checkpointEvent({
@@ -1067,9 +1016,7 @@ describe("row context: whole-history checkpoint overlap", () => {
   });
 
   it("leaves the LAST checkpoint unmarked - nothing comes after it", () => {
-    // The discriminating half. A projection that marked every checkpoint in an
-    // overlapping set would pass the assertion above while saying nothing about
-    // the rule, since "later" is the entire content of it.
+    // The discriminating half.
     expect(contextForTurn(overlappingEvents, "t-2")).toBeUndefined();
   });
 
@@ -1094,10 +1041,8 @@ describe("row context: whole-history checkpoint overlap", () => {
   });
 
   it("is ABSENT rather than false, so the renderer's own derivation still runs", () => {
-    // The row-context contract: an absent field is the projection declining to
-    // speak, never an assertion of `false`. A legacy peer holding the whole log
-    // must keep deriving this for itself, and it can only do that if silence
-    // stays distinguishable from a negative answer.
+    // The row-context contract: an absent field is the projection declining to speak, never an assertion of `false`.
+    // A legacy peer holding the whole log must keep deriving this for itself, and it can only do that if silence stays distinguishable from a negative answer.
     const rows = projectTranscriptRows({
       chatId: "c-1",
       messages: twoTurns,

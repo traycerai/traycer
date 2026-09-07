@@ -44,8 +44,8 @@ afterEach(() => {
 
 describe("devices/sessions authn fetcher", () => {
   it("GETs /api/v3/user/sessions with the user bearer and parses the session list", async () => {
-    // Typed args (not `vi.fn(async () => …)`) so `mock.calls[0]` is a real
-    // [url, init] tuple rather than `[]` — the assertions below read both.
+  // Typed args (not `vi.fn(async () => …)`) so `mock.calls[0]` is a real
+    // [url, init] tuple rather than `[]` - the assertions below read both.
     const fetchMock = vi.fn(
       async (_url: string, _init: RequestInit | undefined) =>
         jsonResponse(200, sessionListBody()),
@@ -67,9 +67,7 @@ describe("devices/sessions authn fetcher", () => {
   });
 
   it("aborts the session-list request when the reader's signal aborts", async () => {
-    // The in-process shells (browser/dev) own this request, so a cancelled
-    // read must abort the real fetch rather than just discard its reply. The
-    // per-call timeout has to survive alongside it.
+    // The in-process shells (browser/dev) own this request, so a cancelled read must abort the real fetch rather than just discard its reply.
     const fetchMock = vi.fn(
       async (_url: string, init: RequestInit | undefined) => {
         await new Promise<void>((resolve, reject) => {

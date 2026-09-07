@@ -109,11 +109,7 @@ describe("fetchWorkspaceFileExists", () => {
   });
 
   it("re-probes a file that was missing on an earlier click instead of serving a cached miss", async () => {
-    // A click-time existence probe exists specifically to catch a file the
-    // agent just created after an earlier failed click - a positive staleTime
-    // on a MISS would keep re-clicks failing silently until the window
-    // expired, so a miss must be evicted immediately (unlike a HIT, which
-    // keeps its 5s window to collapse a double-click).
+    // A click-time existence probe exists specifically to catch a file the agent just created after an earlier failed click - a positive staleTime on a MISS would keep re-clicks failing silently until the window expired, so a miss must be evicted immediately.
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });

@@ -17,13 +17,8 @@ import {
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 
 /**
- * `agent.tui.validateForkProfile` is a new ADDITIVE unary method (tech plan
- * governing mechanism 2). It must ride the optional-capabilities channel with
- * `degrade: unsupported`, not the released floor: entering the floor would be
- * handshake-fatal for every peer that shipped before this method existed.
- *
- * `prepareLaunch@1.1` is a same-major minor bump that defaults the new
- * `forkSourceTuiAgentId` field so a v1.0-shaped payload upgrades cleanly.
+ * `agent.tui.validateForkProfile` is a new ADDITIVE unary method (tech plan governing mechanism 2).
+ * It must ride the optional-capabilities channel with `degrade: unsupported`, not the released floor: entering the floor would be handshake-fatal for every peer that shipped before this method existed.
  */
 describe("agent.tui.validateForkProfile is optional, not floor", () => {
   it("is present in hostRpcRegistry", () => {

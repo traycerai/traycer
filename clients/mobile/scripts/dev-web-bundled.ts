@@ -1,11 +1,6 @@
 /**
- * Tunnel-friendly GUI development server.
- *
- * Vite's normal dev server preserves each source module, which gives excellent
- * HMR on a local machine but turns a cold page load into hundreds of serial
- * requests over an SSH tunnel. This lane watches a non-minified build, serves
- * it through Vite preview, and lets the injected build poller reload the page
- * after a successful rebuild.
+ * Tunnel-friendly gui development server.
+ * This lane watches a non-minified build, serves it through Vite preview, and lets the injected build poller reload the page after a successful rebuild.
  */
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";

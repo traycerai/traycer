@@ -8,29 +8,9 @@ vi.mock("../../../host/pid-metadata", () => ({
   removeHostPidMetadata: vi.fn(),
 }));
 
-/**
- * The Windows Scheduled Task launcher, decoded the way Windows decodes it.
- *
- * WHAT THIS FILE CANNOT DO: it never runs `cscript`. Darwin has no Windows
- * Script Host, so the VBScript is not executed anywhere in CI or here, and no
- * claim below should be read as "this ran on Windows". What it DOES do is
- * execute the two decode steps the OS performs before any process starts -
- * VBScript string-literal un-doubling, then `CommandLineToArgvW` - and assert
- * the resulting argv exactly. That is the layer the blocker lived in.
- *
- * The blocker: the capability probe used to be a `cmd.exe /d /s /c` line
- * quoted with `quoteWindowsArg`, i.e. MSVCRT argv rules (`"` -> `\"`).
- * cmd.exe does not honour `\"`; it saw a leading literal backslash, could not
- * resolve the command token, and returned non-zero. The `If` was therefore
- * always false and the task started the host UNLABELLED at every login,
- * permanently and silently. The fix drops cmd.exe entirely - `shell.Run`
- * takes CreateProcess argv rules, the same dialect as the line beside it.
- */
+/** The Windows Scheduled Task launcher, decoded the way Windows decodes it. WHAT THIS FILE CANNOT DO: it never runs `cscript`. */
 
-/**
- * VBScript string literal -> the string the interpreter yields. The only
- * escape inside a `"..."` literal is a doubled quote.
- */
+/** VBScript string literal -> the string the interpreter yields. The only escape inside a `"..."` literal is a doubled quote. */
 function decodeVbsStringLiteral(literal: string): string {
   if (!literal.startsWith('"') || !literal.endsWith('"')) {
     throw new Error(`not a VBScript string literal: ${literal}`);
@@ -52,17 +32,7 @@ function decodeVbsStringLiteral(literal: string): string {
   return out;
 }
 
-/**
- * Reference `CommandLineToArgvW`, post-argv[0]. Rules, per Microsoft's
- * "Parsing C++ Command-Line Arguments":
- *   - a run of `2n` backslashes before `"` -> `n` backslashes, quote toggles;
- *   - a run of `2n+1` backslashes before `"` -> `n` backslashes + a literal
- *     `"`, quote does not toggle;
- *   - backslashes not followed by `"` are literal;
- *   - unquoted whitespace separates arguments.
- * Pinned against the documented examples in the first test below, so a bug
- * in this decoder cannot quietly agree with a bug in the emitter.
- */
+/** Reference `CommandLineToArgvW`, post-argv[0]. Rules, per Microsoft's "Parsing C++ Command-Line Arguments": - a run of `2n` backslashes before `"` -> `n` backslashes, quote toggles; - a run of `2n+1` backslashes before `"` -> `n` backslashes + a literal `"`, quote does not toggle; - backslashes not followed by `"` are literal; - unquoted whitespace separates arguments. */
 function commandLineToArgv(commandLine: string): readonly string[] {
   const argv: string[] = [];
   let current = "";
@@ -129,15 +99,7 @@ function assignmentLiteral(script: string, statement: string): string {
   return line.slice(line.indexOf("=") + 1).trim();
 }
 
-/**
- * Evaluates the nonce-read expression the launcher emits, with VBScript's
- * semantics for the pieces it uses: nested `Trim(...)` / `Replace(s, a, b)`
- * calls over string literals, the `vbCr` / `vbLf` constants, and the probe's
- * `nonceProbe.StdOut.ReadAll`, which is bound to `probeStdout`. The one
- * semantic that matters is pinned rather than assumed: VBScript `Trim`
- * strips SPACES only - not CR, not LF - which is exactly why `Trim` alone
- * never yielded a nonce the pattern accepted.
- */
+/** Evaluates the nonce-read expression the launcher emits, with VBScript's semantics for the pieces it uses: nested `Trim(...)` / `Replace(s, a, b)` calls over string literals, the `vbCr` / `vbLf` constants, and the probe's `nonceProbe.StdOut.ReadAll`, which is bound to `probeStdout`. The one semantic that matters is pinned rather than assumed: VBScript `Trim` strips SPACES only - not CR, not LF - which is exactly why `Trim` alone never yielded a nonce the pattern accepted. */
 function evaluateVbsStringExpression(
   expression: string,
   probeStdout: string,
@@ -249,9 +211,7 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
       decodeVbsStringLiteral(shellRunLiteral(script, "probeStatus =")),
     );
 
-    // The regression: this used to decode to
-    // ["cmd.exe","/d","/s","/c", '\\"C:\\Users\\...\\traycer.exe\\" ...'],
-    // whose leading literal backslash cmd.exe could not resolve.
+    // The regression: this used to decode to ["cmd.exe","/d","/s","/c", '\\"C:\\Users\\...\\traycer.exe\\" ...'], whose leading literal backslash cmd.exe could not resolve.
     expect(probe).toEqual([
       "C:\\Users\\Traycer Dev\\.traycer\\cli\\bin\\traycer.exe",
       "host",
@@ -315,20 +275,8 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
   });
 
   it("still passes the nonce to the pattern when the probe's stdout ends in LF or CRLF", () => {
-    // `traycer host adoption-nonce` writes `${nonce}\n`. VBScript `Trim`
-    // removes spaces only, and `noncePattern` is anchored with `$` on a
-    // single-line RegExp, which does not match before a trailing LF - so a
-    // `Trim(...)`-only read failed the pattern on EVERY launch and the task
-    // started the host without `--adoption-nonce`; the supervisor then
-    // refused the pending grant until it aged out (~60 s) and every
-    // task-managed start reported failure while the host came up late.
-    // Falsification recipe (this file cannot run cscript): on Windows,
-    // `cscript //nologo t.vbs` with
-    //   s = "0f6c1b2e-8a44-4d19-9c3e-5b7a0d21f8ac" & vbLf
-    //   Set r = New RegExp : r.Pattern = "^[0-9A-Fa-f-]{36}$"
-    //   WScript.Echo Len(Trim(s)) & " " & r.Test(Trim(s))
-    // prints `37 False`; with the Replace pair it prints `36 True`
-    // (observed 2026-09-06 on Windows 11 26200).
+    // `traycer host adoption-nonce` writes `${nonce}\n`.
+    // VBScript `Trim` removes spaces only, and `noncePattern` is anchored with `$` on a single-line RegExp, which does not match before a trailing LF - so a `Trim(...)`-only read failed the pattern on EVERY launch and the task started the host without `--adoption-nonce`; the supervisor then refused the pending grant until it aged out (~60 s) and every task-managed start reported failure while the host came up late.
     const script = buildWindowsHiddenHostLauncher(cli, serviceLabel);
     const readLine = script
       .split("\r\n")
@@ -337,9 +285,8 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
     const prefix = "If nonceProbe.ExitCode = 0 Then adoptionNonce = ";
     expect(readLine?.startsWith(prefix)).toBe(true);
     const expression = (readLine ?? "").slice(prefix.length);
-    // A JS RegExp without the `m` flag and a VBScript RegExp without
-    // `Multiline` agree on `$`: only the very end of the string, never before
-    // a trailing LF. The pattern is taken from the script, not restated.
+    // A JS RegExp without the `m` flag and a VBScript RegExp without `Multiline` agree on `$`: only the very end of the string, never before a trailing LF.
+    // The pattern is taken from the script, not restated.
     const pattern = new RegExp(
       decodeVbsStringLiteral(
         assignmentLiteral(script, "noncePattern.Pattern ="),
@@ -357,9 +304,7 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
         pattern.test(evaluateVbsStringExpression(expression, stdout)),
       ).toBe(true);
     }
-    // Control for the evaluator: with the pre-fix expression the same input
-    // must FAIL the same pattern, or `Trim` above would be stripping the
-    // newline and this test would be passing for the wrong reason.
+    // Control for the evaluator: with the pre-fix expression the same input must FAIL the same pattern, or `Trim` above would be stripping the newline and this test would be passing for the wrong reason.
     expect(
       pattern.test(
         evaluateVbsStringExpression(
@@ -376,10 +321,8 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
 
   it("degrades to the unlabelled start when the probe cannot even be launched", () => {
     const script = buildWindowsHiddenHostLauncher(cli, serviceLabel);
-    // `Option Explicit` with no handler makes a `shell.Run` failure a fatal
-    // runtime error, which would abort the script BEFORE the fallback start.
-    // The probe is therefore wrapped, and any error forced to a non-zero
-    // status so the fallback is what runs.
+    // `Option Explicit` with no handler makes a `shell.Run` failure a fatal runtime error, which would abort the script BEFORE the fallback start.
+    // The probe is therefore wrapped, and any error forced to a non-zero status so the fallback is what runs.
     const lines = script.split("\r\n");
     const guardStart = lines.indexOf("On Error Resume Next");
     const probeLine = lines.findIndex((line) =>

@@ -1,11 +1,6 @@
 /**
  * Curated CDP vocabulary carried by the Electron-tab transport.
- *
- * Address-free on purpose: a command names what to do, never which native
- * session does it. `contracts.ts` wraps these in the `browser.sessions` frames
- * that carry the addressing, and `cdp-dispatch.ts` turns one command into one
- * raw CDP call. Re-exported from `contracts.ts`, so consumers keep importing
- * the whole browser vocabulary from one path.
+ * Address-free on purpose: a command names what to do, never which native session does it.
  */
 import { z } from "zod";
 
@@ -171,12 +166,7 @@ export const browserCdpCommandSchema = z.discriminatedUnion("kind", [
 ]);
 export type BrowserCdpCommand = z.infer<typeof browserCdpCommandSchema>;
 
-/**
- * The curated vocabulary's only per-command datum beyond its params schema.
- * Keyed by `BrowserCdpCommand["kind"]`, so a new command variant is a compile
- * error until its method lands here, and `dispatchCuratedCdp` reads the method
- * it sends from nowhere else.
- */
+/** The curated vocabulary's only per-command datum beyond its params schema. */
 export const CURATED_CDP_METHOD_BY_KIND = {
   cdpNavigate: "Page.navigate",
   cdpCaptureScreenshot: "Page.captureScreenshot",
@@ -200,9 +190,7 @@ export const CURATED_CDP_METHODS: readonly CuratedCdpMethod[] = Object.values(
 );
 
 /**
- * Derived from the command union rather than hand-listed: a hand-written array
- * would only be `satisfies`-checked as a subset, so a thirteenth command could
- * ship with the failure arm silently rejecting its errors.
+ * Derived from the command union rather than hand-listed: a hand-written array would only be `satisfies`-checked as a subset, so a thirteenth command could ship with the failure arm silently rejecting its errors.
  */
 const browserCdpCommandKindSchema = z.enum(
   browserCdpCommandSchema.def.options.map(
@@ -211,9 +199,8 @@ const browserCdpCommandKindSchema = z.enum(
 );
 
 /**
- * A returned JavaScript value. CDP distinguishes an absent `RemoteObject.value`
- * (JavaScript `undefined`) from a present JSON `null`; the wire must preserve
- * that distinction instead of using `null` as an absence sentinel.
+ * A returned JavaScript value.
+ * CDP distinguishes an absent `RemoteObject.value` (JavaScript `undefined`) from a present JSON `null`; the wire must preserve that distinction instead of using `null` as an absence sentinel.
  */
 export const browserCdpValueSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("json"), value: z.json() }).strict(),

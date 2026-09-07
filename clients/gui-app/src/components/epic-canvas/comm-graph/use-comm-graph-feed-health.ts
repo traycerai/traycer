@@ -1,29 +1,6 @@
 /**
- * Health of the communication-graph FEED for the Epic header's status dot.
- *
- * The graph keeps one subscription per host (or one cloud relay stamped onto
- * every origin host), and each carries a socket status. That status used to be
- * captioned onto every agent node on the canvas - so one wobbly relay socket
- * read "Reconnecting…" under every agent at once, as if each agent were the
- * problem. It is a fact about the feed, not about an agent, so it now rolls up
- * here: the header dot goes amber and the tooltip says what is degraded.
- *
- * CLAIM-FREE, BUT OWNED. Reading through the registries opens no socket - the
- * dot only ever reports a subscription some OPEN surface (the graph tile) is
- * holding, and `isAttached` is the gate, because a detached manager retains the
- * last statuses it saw and reporting those would show a stale warning for a
- * tile that is closed.
- *
- * Resolving a manager nevertheless CREATES a registry entry, and only a claim's
- * release ever removes one - so a header that merely resolved would strand an
- * entry for every epic the user visited, whether or not its graph was ever
- * opened. This registers as an OBSERVER instead: an owner with no opener, whose
- * release disposes the entry when nothing else ever wanted it. See
- * `releaseCommGraphObserver`.
- *
- * The authority choice mirrors `useCommGraphSnapshot` exactly - cloud hosts
- * while the cloud feed is available, local hosts otherwise - so the dot and the
- * canvas can never describe two different subscriptions.
+ * Reading through the registries opens no socket - the dot only ever reports a subscription some OPEN surface (the graph tile) is holding, and `isAttached` is the gate, because a detached manager retains the last statuses it saw and reporting those would show a stale warning for a tile that is closed.
+ * Resolving a manager nevertheless CREATES a registry entry, and only a claim's release ever removes one - so a header that merely resolved would strand an entry for every epic the user visited, whether or not its graph was ever opened.
  */
 import {
   useCallback,
@@ -55,9 +32,7 @@ export interface CommGraphFeedHealth {
 }
 
 /**
- * Statuses worth an amber dot. `connecting` is a first dial, not a problem, and
- * a host that never answers is promoted to `unreachable` by the manager after
- * its failed-dial threshold - so it reports here through that, not on its own.
+ * `connecting` is a first dial, not a problem, and a host that never answers is promoted to `unreachable` by the manager after its failed-dial threshold - so it reports here through that, not on its own.
  */
 const DEGRADED_STATUSES: ReadonlyArray<
   Exclude<CommGraphHostStatus, "live" | "connecting">
@@ -75,9 +50,8 @@ const STATUS_COPY: Record<(typeof DEGRADED_STATUSES)[number], string> = {
 };
 
 /**
- * Pure derivation, so the copy is testable on values. Returns `null` when there
- * is nothing to report: no surface holds the feed open, or every host is
- * healthy.
+ * Pure derivation, so the copy is testable on values.
+ * Returns `null` when there is nothing to report: no surface holds the feed open, or every host is healthy.
  */
 export function deriveCommGraphFeedHealth(
   attached: boolean,
@@ -95,9 +69,7 @@ export function deriveCommGraphFeedHealth(
     (status) => {
       const count = counts.get(status) ?? 0;
       const phrase = STATUS_COPY[status];
-      // A single-host epic, or every host in the same state, needs no tally -
-      // and the cloud relay stamps one status onto every origin host, so a
-      // tally there would only ever say "N of N".
+      // A single-host epic, or every host in the same state, needs no tally - and the cloud relay stamps one status onto every origin host, so a tally there would only ever say "N of N".
       if (hosts.length === 1 || count === hosts.length) return phrase;
       return `${phrase} (${String(count)} of ${String(hosts.length)} hosts)`;
     },
@@ -121,13 +93,9 @@ function feedHealthKey(
 export function useCommGraphFeedHealth(
   epicId: string,
 ): CommGraphFeedHealth | null {
-  // This surface's ownership identity, stable for its lifetime - the same
-  // convention the graph tile's claim uses, and for the same reason: two
-  // headers must count as two owners.
+  // This surface's ownership identity, stable for its lifetime - the same convention the graph tile's claim uses, and for the same reason: two headers must count as two owners.
   const [observer] = useState<object>(() => ({}));
-  // Resolving during render is what `useSyncExternalStore` needs, and both
-  // getters are idempotent, so a StrictMode double render cannot double-own.
-  // The EFFECT below is what takes ownership, so its cleanup balances it.
+  // Resolving during render is what `useSyncExternalStore` needs, and both getters are idempotent, so a StrictMode double render cannot double-own.
   const manager = useMemo(
     () => getCommGraphSubscriptionManager(epicId),
     [epicId],

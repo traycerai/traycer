@@ -1,13 +1,6 @@
 /**
  * Test fixtures for the shared `RequestContext`.
- *
- * Provides per-origin builders (host RPC, host stream, renderer,
- * extension, and a generic "test") so test code can construct an
- * authenticated context without importing host-only transport types.
- *
- * These fixtures intentionally do NOT depend on core auth controllers or
- * host WS transport - the shared-core context surface must remain
- * platform-neutral, and tests for that surface must reflect that.
+ * Provides per-origin builders (host RPC, host stream, renderer, extension, and a generic "test") so test code can construct an authenticated context without importing host-only transport types.
  */
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
@@ -46,10 +39,6 @@ function resolveIdentity(
   );
 }
 
-/**
- * Generic builder that allows callers to override every input. Defaults
- * to a `"test"` origin context with a deterministic bearer.
- */
 export function createRequestContextFixture(
   overrides: Partial<RequestContextFixtureOverrides>,
 ): RequestContext {
@@ -64,10 +53,6 @@ export function createRequestContextFixture(
   });
 }
 
-/**
- * Host unary RPC fixture. Every host WS open frame mints exactly
- * one of these per accepted connection at the boundary.
- */
 export function createHostRpcContextFixture(
   overrides: Partial<RequestContextFixtureOverrides>,
 ): RequestContext {
@@ -78,11 +63,6 @@ export function createHostRpcContextFixture(
   });
 }
 
-/**
- * Host stream fixture. The dispatcher mints `connectionId` per WS
- * accept; tests should mirror that by supplying one (or accepting the
- * default).
- */
 export function createHostStreamContextFixture(
   overrides: Partial<RequestContextFixtureOverrides>,
 ): RequestContext {
@@ -93,10 +73,6 @@ export function createHostStreamContextFixture(
   });
 }
 
-/**
- * Renderer fixture. Renderer/extension flows are single-user and have no
- * connection id; the context is built at the renderer auth boundary.
- */
 export function createRendererContextFixture(
   overrides: Partial<RequestContextFixtureOverrides>,
 ): RequestContext {
@@ -107,10 +83,6 @@ export function createRendererContextFixture(
   });
 }
 
-/**
- * Extension fixture. Same single-user shape as the renderer; the origin
- * tag exists so guard tests can distinguish them when needed.
- */
 export function createExtensionContextFixture(
   overrides: Partial<RequestContextFixtureOverrides>,
 ): RequestContext {

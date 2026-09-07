@@ -234,7 +234,6 @@ describe("recordFingerprintSighting / recordFiledReport persistence", () => {
       "fp:v1:restart",
     );
 
-    // Drop the in-memory handle the way a process restart would.
     __resetReportLedgerForTest({ storePath: storeFile });
 
     const occurrence = await getFingerprintOccurrence("fp:v1:restart");
@@ -271,10 +270,7 @@ describe("recordFingerprintSighting / recordFiledReport persistence", () => {
   });
 
   it("resets a TTL-expired fingerprint to count 1 instead of resurrecting the old count", async () => {
-    // Seed a row whose lastSeen is past the 180-day TTL. If the mutator ran
-    // before prune, it would increment count 42 → 43 and the post-mutator
-    // prune would keep it (lastSeen=now). Prune-before-mutate must treat
-    // this as a first sighting again.
+    // Prune-before-mutate must treat this as a first sighting again.
     const now = Date.now();
     const stale = now - REPORT_LEDGER_TTL_MS - 1_000;
     writeFileSync(

@@ -17,45 +17,18 @@ import {
   RELAY_PONG_TIMEOUT_MS,
 } from "./config";
 
-/**
- * The persistent client↔relay WebSocket leg (T10 wire protocol; relay-do
- * README). One socket = one relay session = one E2E Noise session (the client's
- * single socket is its single `sid`; the relay assigns and owns `sid`).
- *
- * Responsibilities (transport-only — no Noise, no mux; those sit above):
- *  - present the `role:"client"` attach grant and await `attach_ack{sid}`;
- *  - forward opaque DATA (binary) frames both ways — client leg is `[ciphertext]`
- *    with NO sid prefix (the relay knows the sid from this authenticated socket);
- *  - surface relay CONTROL (text JSON) lifecycle frames as typed callbacks;
- *  - drive the `relay-ping`/`relay-pong` keepalive and fail the socket on missed
- *    pongs (a half-open socket after device sleep);
- *  - re-present a fresh grant in-band via a `reauth` control frame.
- *
- * The grant rides the `?grant=<jws>` query fallback (the relay also accepts the
- * preferred `Sec-WebSocket-Protocol: …, grant.<jws>` header, but the shared
- * `IStreamWebSocketFactory` only takes a URL, so the client uses the query form).
- */
+/** The persistent client↔relay WebSocket leg (T10 wire protocol; relay-do readme). */
 
 // Kept in lockstep with workers/relay-do/src/config.ts (relay-owned constants).
 const KEEPALIVE_PING = "relay-ping";
 const KEEPALIVE_PONG = "relay-pong";
 
-/**
- * The close code+reason a failed wake probe reports, exported so the session
- * above can recognize this loss BY IDENTITY (structured fields on the close
- * event, not a substring of the composed log line) when deciding whether a
- * wake-probe verdict earns an immediate redial.
- */
 export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE = 4006;
 export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON = "relay-wake-probe-timeout";
 
 /**
  * Relay session-kill / peer-death reasons (mirror relay-do `KillReason`).
- *
- * The relay can add a reason before this client updates. Preserve that reason
- * rather than rejecting its control frame: unknown kills are transport losses
- * and therefore retryable by default. The known literals remain here for the
- * one reason with stronger semantics (`revoked`) and for call-site discovery.
+ * The relay can add a reason before this client updates.
  */
 export type RelayKillReason =
   | "reauth_timeout"
@@ -67,19 +40,19 @@ export type RelayKillReason =
 export interface RelaySocketHandlers {
   /** The relay assigned this client session its `sid`; bridging is live. */
   readonly onAttachAck: (sid: number) => void;
-  /** An opaque inbound DATA frame (Noise transport bytes for the layer above). */
+  /** An opaque inbound data frame (Noise transport bytes for the layer above). */
   readonly onData: (ciphertext: Uint8Array) => void;
-  /** The host's uplink dropped — pause; the same Noise session resumes on re-attach. */
+  /** The host's uplink dropped - pause; the same Noise session resumes on re-attach. */
   readonly onHostDetached: () => void;
-  /** The host's uplink (re)attached — resume sends on the existing Noise session. */
+  /** The host's uplink (re)attached - resume sends on the existing Noise session. */
   readonly onHostAttached: () => void;
   /** The relay acknowledged an in-band `reauth` grant. */
   readonly onReauthAck: () => void;
-  /** The peer is gone / the session was killed — the session must full-resume. */
+  /** The peer is gone / the session was killed - the session must full-resume. */
   readonly onPeerGone: (reason: RelayKillReason) => void;
   /** A recoverable relay protocol error (no close). */
   readonly onError: (code: string, message: string) => void;
-  /** The socket dropped (any cause) — the session reconnects from backoff. */
+  /** The socket dropped (any cause) - the session reconnects from backoff. */
   readonly onClose: (info: {
     readonly code: number;
     readonly reason: string;
@@ -101,16 +74,10 @@ export class RelaySocket {
   private dialTimer: TimerHandle | null = null;
   private pingTimer: IntervalHandle | null = null;
   /**
-   * Armed exactly while a wake-time ping is outstanding, and disarmed by the
-   * next inbound frame - so its survival to the deadline IS the verdict. See
-   * {@link pokeKeepalive}.
+   * Armed exactly while a wake-time ping is outstanding, and disarmed by the next inbound frame - so its survival to the deadline IS the verdict.
    */
   private probeTimer: TimerHandle | null = null;
-  /**
-   * Monotonically increasing identity of the current wake-probe arm. Bumped
-   * when an arm is raised AND when one is retired by an inbound answer, so a
-   * scheduled deadline callback can prove it still speaks for the live arm.
-   */
+  /** Monotonically increasing identity of the current wake-probe arm. */
   private probeArmToken = 0;
   /** When the current arm's (possibly joined-earlier) deadline fires. */
   private probeDeadlineAt = 0;
@@ -121,43 +88,28 @@ export class RelaySocket {
   private probeUnanswered = false;
   /** The current arm's effective failure policy (upgrade-only merged). */
   private probeImmediateRedialOnFailure = false;
-  /** Last time ANY frame arrived from the relay (pong, control, or data). */
+  /** Last time any frame arrived from the relay (pong, control, or data). */
   private lastInboundAt: number;
   /**
-   * Whether application traffic is currently outstanding - explicit state, NOT
-   * a comparison of the two timestamps.
-   *
-   * `lastOutboundAt > lastInboundAt` looks equivalent and is not: `Date.now()`
-   * has millisecond resolution, so a send issued from an inbound frame's own
-   * handler - a stream frame answered by the next request, the commonest shape
-   * on this socket - reads equal, and a strict comparison resolves the tie as
-   * "not awaiting". That parks a genuinely half-open socket on the 60s idle
-   * deadline instead of the 12s detection one, for exactly the traffic pattern
-   * the fast deadline was added to catch.
+   * Whether application traffic is currently outstanding - explicit state, not a comparison of the two timestamps.
+   * That parks a genuinely half-open socket on the 60s idle deadline instead of the 12s detection one, for exactly the traffic pattern the fast deadline was added to catch.
    */
   private awaitingResponse = false;
   /** When the current unanswered-send run began; the fast deadline's origin. */
   private awaitingSince = 0;
   private lastPingSentAt = 0;
   /**
-   * This socket's own path estimator (ticket 24, A8) - deliberately not
-   * shared with any other leg or subscription. Feeds the two liveness
-   * deadlines below, which floor on their constants and can therefore only
-   * be lengthened by it.
+   * Feeds the two liveness deadlines below, which floor on their constants and can therefore only be lengthened by it.
    */
   private readonly path = createRelayPathEstimator();
 
   constructor(options: RelaySocketOptions) {
     this.handlers = options.handlers;
     this.lastInboundAt = Date.now();
-    // Before the URL is built, let alone dialed: the grant goes into the query
-    // string on the next line. `beginConnectGuarded` catches a synchronous
-    // throw out of this constructor and re-arms the backoff loop.
+    // Before the URL is built, let alone dialed: the grant goes into the query string on the next line.
     assertRelayAttachUrlSecure(options.attachBaseUrl);
     const dialUrl = withGrantQuery(options.attachBaseUrl, options.grantJws);
-    // Not a host method, and not classifiable as one: this is the single
-    // durable leg that MULTIPLEXES every unary call and every stream for a
-    // remote host, so anything queued behind it is queued behind all of them.
+    // Not a host method, and not classifiable as one: this is the single durable leg that multiplexes every unary call and every stream for a remote host, so anything queued behind it is queued behind all of them.
     // It holds a dial slot only while connecting, so it cannot squat.
     this.socket = options.webSocketFactory.create(dialUrl, "interactive");
     this.wireSocket(this.socket);
@@ -169,7 +121,7 @@ export class RelaySocket {
     }, RELAY_DIAL_TIMEOUT_MS);
   }
 
-  /** Sends an opaque DATA frame (client leg: raw `[ciphertext]`, no sid). */
+  /** Sends an opaque data frame (client leg: raw `[ciphertext]`, no sid). */
   sendData(ciphertext: Uint8Array): boolean {
     const socket = this.socket;
     if (socket === null || !this.opened) {
@@ -190,63 +142,8 @@ export class RelaySocket {
   }
 
   /**
-   * Probes this socket NOW, for a caller that knows the runtime just un-froze
-   * (an OS wake, an app returning to the foreground).
-   *
-   * Two things go wrong across a freeze, and this answers both. The keepalive
-   * is an INTERVAL, and an interval does not run while the runtime is stopped,
-   * so a socket the network dropped mid-freeze is not even looked at until the
-   * overdue tick lands. And the drop itself is frequently silent - the peer
-   * never got to send a close, so the socket reads open and the layer above
-   * keeps parking work on a connection that will never answer.
-   *
-   * So: run the scheduled check off-schedule (a socket already past
-   * `RELAY_PONG_TIMEOUT_MS` fails immediately, exactly as the tick would), and
-   * then hold the ping that check just sent to a much shorter
-   * `probeTimeoutMs` deadline. The 60s allowance is calibrated for
-   * a link that is merely slow; a wake is the one moment we have positive
-   * reason to suspect the socket is dead, and waiting out a minute to find out
-   * is most of what "the app was unusable after switching away" means. The
-   * deadline is the CALLER's because the caller holds the evidence that sizes
-   * it: a desktop wake passes `RELAY_WAKE_PROBE_TIMEOUT_MS` (the socket
-   * usually survived, be generous), a mobile resume after a measured brief
-   * background passes `RELAY_WAKE_PROBE_TIMEOUT_BACKGROUNDED_MS` (the socket
-   * is probably dead, verdict fast).
-   *
-   * An ARMED probe timer is the whole state, and it means exactly "a ping went
-   * out and nothing has answered since". Any inbound frame disarms it; the
-   * timer surviving to its deadline is therefore proof of silence on its own,
-   * with no timestamp to compare. That correlation has to be the timer's own
-   * identity rather than a `lastInboundAt` reading, because `lastInboundAt` is
-   * also stamped when the socket OPENS and is not reset per probe - so
-   * comparing against it both credits a probe with the open's stamp and
-   * credits a later probe with an earlier probe's answer. Silence is the thing
-   * being measured; only the absence of a disarm can measure it.
-   *
-   * One probe ARM is unanswered at a time, and ownership within it is
-   * MONOTONIC. A poke that finds an arm already in flight joins it - no
-   * second ping goes out - and a joiner may only make the arm stricter:
-   * the deadline moves to the EARLIER of the two, and the failure policy
-   * (`immediateRedialOnFailure`) can be raised but never lowered. Wake
-   * bursts arrive from independent triggers with different evidence (a
-   * measured mobile resume beside a generic online edge, in either order),
-   * and whichever is stronger must win regardless of arrival order.
-   *
-   * Any inbound frame RETIRES the arm completely - deadline, policy, and
-   * token - so the poke after an answered one arms a genuinely fresh probe
-   * whose policy starts from its own arguments, never inherited. The arm
-   * token is what keeps a retired arm's scheduled deadline callback inert.
-   * No verdict is duplicated: a probe fails through the same {@link fail}
-   * path. A socket that has not opened, or is closed, has nothing to probe
-   * and is a no-op.
-   *
-   * The unanswered-arm state and its effective policy deliberately survive
-   * {@link close}, so the session's close handler can still read
-   * {@link hasUnansweredImmediateRedialProbe} - a NEGATIVE end of any kind
-   * (the probe's own deadline, an OS-delivered error close, missed pongs)
-   * while the arm was unanswered inherits the arm's policy, not only the
-   * synthetic probe-timeout close. Each connection owns its own socket
-   * object, so nothing here can leak across dials.
+   * Probes this socket now, for a caller that knows the runtime just un-froze (an OS wake, an app returning to the foreground).
+   * And the drop itself is frequently silent - the peer never got to send a close, so the socket reads open and the layer above keeps parking work on a connection that will never answer.
    */
   pokeKeepalive(
     probeTimeoutMs: number,
@@ -288,9 +185,7 @@ export class RelaySocket {
   }
 
   /**
-   * The deadline for one specific arm, pinned by token: a callback whose arm
-   * has been retired (answered, or re-armed later) finds a different token
-   * and does nothing, however late the runtime delivers it.
+   * The deadline for one specific arm, pinned by token: a callback whose arm has been retired (answered, or re-armed later) finds a different token and does nothing, however late the runtime delivers it.
    */
   private probeDeadlineCallback(token: number): () => void {
     return () => {
@@ -307,13 +202,7 @@ export class RelaySocket {
     };
   }
 
-  /**
-   * True while an unanswered wake-probe arm demands that a failure redial
-   * immediately. Readable after {@link close} on purpose - the session's
-   * close handler is the consumer, and the close IS the failure the arm's
-   * policy speaks to. An answered arm reads false forever: liveness was
-   * proven, so a later loss is an ordinary one.
-   */
+  /** True while an unanswered wake-probe arm demands that a failure redial immediately. */
   hasUnansweredImmediateRedialProbe(): boolean {
     return this.probeUnanswered && this.probeImmediateRedialOnFailure;
   }
@@ -398,11 +287,7 @@ export class RelaySocket {
 
   private handleTextFrame(raw: string): void {
     if (raw === KEEPALIVE_PONG) {
-      // `noteInbound` already stamped it (and disarmed any wake probe); a pong
-      // carries no extra liveness meaning now that every inbound frame counts
-      // as proof the socket carries traffic. It is still the ONLY frame whose
-      // round trip this end initiated, so it is the only one that can measure
-      // the path (ticket 24, A8).
+      // `noteInbound` already stamped it (and disarmed any wake probe); a pong carries no extra liveness meaning now that every inbound frame counts as proof the socket carries traffic.
       this.path.notePongReceived(Date.now());
       return;
     }
@@ -451,27 +336,14 @@ export class RelaySocket {
   }
 
   /**
-   * True once this client has sent application traffic that nothing at all has
-   * come back after. That is the literal definition of a half-open socket, and
-   * it is the only state worth paying the fast cadence for.
-   *
-   * Keepalive pings deliberately do NOT put the socket in this state. A ping
-   * that set it would make every idle session permanently "awaiting" between
-   * its own ping and pong, which is how a cheap idle cadence turns into a 5 s
-   * one for a backgrounded app that has nothing to say.
+   * True once this client has sent application traffic that nothing at all has come back after.
+   * That is the literal definition of a half-open socket, and it is the only state worth paying the fast cadence for.
    */
   private isAwaitingResponse(): boolean {
     return this.awaitingResponse;
   }
 
-  /**
-   * Records outbound APPLICATION traffic. `awaitingSince` is stamped only when
-   * this send OPENS a new unanswered run, and that is load-bearing rather than
-   * an optimization: the fast deadline has to be measured from the moment we
-   * started waiting, never from `lastInboundAt`. A healthy idle socket's last
-   * inbound can legitimately be a ~25 s-old pong, so a 12 s deadline measured
-   * against it would fail a perfectly good socket the instant the user typed.
-   */
+  /** Records outbound application traffic. */
   private noteOutbound(): void {
     if (this.awaitingResponse) {
       return;
@@ -481,11 +353,8 @@ export class RelaySocket {
   }
 
   /**
-   * ANY inbound frame proves the socket carries traffic, not just a pong, and
-   * closes whatever unanswered run was open. Ordering inside `onmessage` is
-   * what makes the tie safe: this runs before the frame is dispatched, so a
-   * send issued from that dispatch re-opens the run under the same clock
-   * reading rather than being swallowed by it.
+   * Any inbound frame proves the socket carries traffic, not just a pong, and closes whatever unanswered run was open.
+   * Ordering inside `onmessage` is what makes the tie safe: this runs before the frame is dispatched, so a send issued from that dispatch re-opens the run under the same clock reading rather than being swallowed by it.
    */
   private noteInbound(): void {
     this.lastInboundAt = Date.now();
@@ -503,18 +372,7 @@ export class RelaySocket {
       const silentSince = awaiting
         ? Math.max(this.lastInboundAt, this.awaitingSince)
         : this.lastInboundAt;
-      // Both deadlines FLOOR on their constant and are lengthened - never
-      // shortened - by what this socket has measured of its own path (ticket
-      // 24, A8): a jittery relayed link is what F11's false-positive
-      // `relay-missed-pongs` teardowns were made of.
-      //
-      // The AWAITING lane is additionally CAPPED, because one estimator sizes
-      // both windows and they are not the same kind of window. The idle lane
-      // can absorb whatever a slow path needs; the awaiting lane is a
-      // DETECTION window whose whole value is being fast, and a single
-      // stalled sample near the clamp would otherwise stretch its 12s out to
-      // over a minute - turning the fast detector back into the slow one it
-      // exists to pre-empt.
+      // The awaiting lane is additionally capped, because one estimator sizes both windows and they are not the same kind of window.
       const floorMs = awaiting
         ? RELAY_AWAITING_PONG_TIMEOUT_MS
         : RELAY_PONG_TIMEOUT_MS;
@@ -546,14 +404,7 @@ export class RelaySocket {
     }, RELAY_PING_TICK_MS);
   }
 
-  /**
-   * The wake probe's immediate round, outside the scheduled tick's cadence
-   * gating: fail the socket outright if it is already past the idle deadline
-   * (a runtime frozen for over a minute holds a socket that is dead or
-   * NAT-expired - no reason to spend the probe window confirming it), else
-   * force-send a ping now so the probe's own deadline has an answer to wait
-   * for. Stamps `lastPingSentAt` so the scheduled tick does not double-send.
-   */
+  /** Stamps `lastPingSentAt` so the scheduled tick does not double-send. */
   private runKeepaliveTick(): void {
     if (this.closed || !this.opened) {
       return;
@@ -569,9 +420,7 @@ export class RelaySocket {
     if (socket === null) {
       return;
     }
-    // Deliberately NOT timed into the estimator: this ping is sent at wake,
-    // so its round trip carries the runtime's own resume cost and would
-    // report the path as far worse than it is.
+    // Deliberately not timed into the estimator: this ping is sent at wake, so its round trip carries the runtime's own resume cost and would report the path as far worse than it is.
     this.path.retireRun();
     this.lastPingSentAt = Date.now();
     try {
@@ -589,11 +438,7 @@ export class RelaySocket {
   }
 
   /**
-   * Retires the current wake-probe arm as ANSWERED: liveness is proven, so
-   * the arm's deadline, failure policy, and token all end here. The token
-   * bump is what makes a late deadline callback from this arm inert, and the
-   * policy reset is what keeps an answered arm's `immediateRedialOnFailure`
-   * from ever attaching to a later, unrelated loss.
+   * Retires the current wake-probe arm as answered: liveness is proven, so the arm's deadline, failure policy, and token all end here.
    */
   private clearProbe(): void {
     if (this.probeTimer !== null) {
@@ -609,10 +454,7 @@ export class RelaySocket {
 
   private teardownTimers(): void {
     this.clearKeepalive();
-    // Only the probe TIMER dies with the socket. The unanswered-arm state and
-    // its failure policy deliberately survive close - retiring them here (via
-    // `clearProbe`) would erase the very evidence the session's close handler
-    // is about to read to decide whether this loss earns an immediate redial.
+    // Only the probe timer dies with the socket.
     if (this.probeTimer !== null) {
       clearTimeout(this.probeTimer);
       this.probeTimer = null;
@@ -643,15 +485,10 @@ export class RelaySocket {
   }
 }
 
-/** Appends the attach grant as a `?grant=` query param (fallback presentation). */
 function withGrantQuery(attachBaseUrl: string, grantJws: string): string {
   const separator = attachBaseUrl.includes("?") ? "&" : "?";
   return `${attachBaseUrl}${separator}grant=${encodeURIComponent(grantJws)}`;
 }
-
-// -----------------------------------------------------------------------------
-// Inbound relay→peer control parsing (mirror relay-do RelayControlMessage)
-// -----------------------------------------------------------------------------
 
 type RelayControlInbound =
   | { type: "attach_ack"; sid: number }

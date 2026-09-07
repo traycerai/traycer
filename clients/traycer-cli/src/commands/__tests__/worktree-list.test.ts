@@ -271,12 +271,8 @@ describe("buildWorktreeListCommand", () => {
   });
 
   it("classifies a gitUnreadable row as review, not orphaned - the v1.4 regression this canonical parse fixes", async () => {
-    // The real host pairs `gitUnreadable: true` with `gitRemovable: false`
-    // (git can neither read the pointed-at repo nor prove it removable). A
-    // stale v1.4 parse strips `gitUnreadable`, so `classifyWorktreeTier` falls
-    // through to rung 2 (`!gitRemovable`) and mislabels the row "orphaned" -
-    // a forced-cleanup reading this shape must never get, since its branch
-    // and dirty count are unknowable, not proven empty.
+    // The real host pairs `gitUnreadable: true` with `gitRemovable: false` (git can neither read the pointed-at repo nor prove it removable).
+    // A stale v1.4 parse strips `gitUnreadable`, so `classifyWorktreeTier` falls through to rung 2 (`!gitRemovable`) and mislabels the row "orphaned" - a forced-cleanup reading this shape must never get, since its branch and dirty count are unknowable, not proven empty.
     rpcMock.mockResolvedValue({
       worktrees: [entry({ gitUnreadable: true, gitRemovable: false })],
       nextCursor: null,

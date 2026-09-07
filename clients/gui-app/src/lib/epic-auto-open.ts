@@ -24,10 +24,8 @@ interface AutoOpenTarget {
   readonly hostId: string;
 }
 
-// Plain terminals are renderer-only and never live in the cloud-backed records
-// auto-open consumes, so they stay excluded. Terminal-agents (TUI agents) ARE
-// record-backed and openable, so focusing one - e.g. from the resource monitor -
-// must resolve to that agent rather than falling back to an arbitrary chat.
+// Plain terminals are renderer-only and never live in the cloud-backed records auto-open consumes, so they stay excluded.
+// Terminal-agents (TUI agents) ARE record-backed and openable, so focusing one - e.g. from the resource monitor - must resolve to that agent rather than falling back to an arbitrary chat.
 function isAutoOpenableKind(
   type: EpicNodeKind,
 ): type is AutoOpenTarget["type"] {

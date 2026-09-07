@@ -74,9 +74,7 @@ describe("isChatTimelineAtStrictBottom", () => {
   });
 });
 
-// --- Hook-level tests: a REAL DOM node driven by REAL native `scroll`
-// events and a controllable ResizeObserver, proving the latch is sound
-// against actual browser event semantics, not just numeric comparisons.
+// --- Hook-level tests: a REAL DOM node driven by REAL native `scroll` events and a controllable ResizeObserver, proving the latch is sound against actual browser event semantics, not just numeric comparisons.
 
 interface ControllableGeometry {
   scrollTop: number;
@@ -159,10 +157,7 @@ const FAKE_RESIZE_OBSERVER: ResizeObserver = {
 };
 
 function fireResizeObservers(): void {
-  // Snapshot first: firing a callback can itself trigger a re-render that
-  // registers a NEW observer (pushing into `capturedResizeCallbacks`) -
-  // iterating the live array would pick up entries added during this same
-  // pass.
+  // Snapshot first: firing a callback can itself trigger a re-render that registers a NEW observer (pushing into `capturedResizeCallbacks`) - iterating the live array would pick up entries added during this same pass.
   for (const callback of [...capturedResizeCallbacks]) {
     callback([], FAKE_RESIZE_OBSERVER);
   }
@@ -189,10 +184,7 @@ function fireTouch(
   node.dispatchEvent(event);
 }
 
-/** Throws if ever actually invoked - only `getScrollableNode`/`scrollToEnd`
- *  are exercised by the latch under test; every other member of the (large)
- *  `LegendListRef` interface is stubbed just to keep this a real, uncast
- *  `LegendListRef` value. */
+/** Throws if ever actually invoked - only `getScrollableNode`/`scrollToEnd` are exercised by the latch under test; every other member of the (large) `LegendListRef` interface is stubbed just to keep this a real, uncast `LegendListRef` value. */
 function notImplemented(): never {
   throw new Error("not implemented in this test double");
 }
@@ -446,9 +438,8 @@ describe("useChatTimelineFollowLatch", () => {
     shim.setGeometry(node, { scrollTop: 467 });
     node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
 
-    // If the pending LegendList token is still live, this restores the
-    // strict edge and coalesces as a native strict-bottom report, which
-    // would re-latch follow. Arm-time supersede must cancel it first.
+    // If the pending LegendList token is still live, this restores the strict edge and coalesces as a native strict-bottom report, which would re-latch follow.
+    // Arm-time supersede must cancel it first.
     runDeferredEnd();
     fireNativeScroll(node);
     expect(node.scrollTop).toBe(467);
@@ -521,9 +512,8 @@ describe("useChatTimelineFollowLatch", () => {
     result.current.followEndIfPermitted();
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
 
-    // A disclosure pointerdown is a non-publishing preflight. It cancels the
-    // in-flight correction but does not authorize the resulting layout
-    // movement to publish a reader departure.
+    // A disclosure pointerdown is a non-publishing preflight.
+    // It cancels the in-flight correction but does not authorize the resulting layout movement to publish a reader departure.
     result.current.noteReaderGesture({
       direction: "indeterminate",
       freezeInFlightScroll: true,
@@ -815,9 +805,7 @@ describe("useChatTimelineFollowLatch", () => {
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
     });
-    // The compositor has moved the thumb, but under long-list main-thread
-    // pressure pointer completion and layout maintenance can run before the
-    // coalesced native scroll event is delivered.
+    // The compositor has moved the thumb, but under long-list main-thread pressure pointer completion and layout maintenance can run before the coalesced native scroll event is delivered.
     shim.setGeometry(node, { scrollTop: 200 });
     node.dispatchEvent(new PointerEvent("pointerup"));
     shim.setGeometry(node, { scrollHeight: 1700 });
@@ -1074,9 +1062,8 @@ describe("useChatTimelineFollowLatch", () => {
       }),
     ).toBe(true);
 
-    // Reader detaches upward to 1100 - ABOVE the very first observed 1000,
-    // but 400px from the true end. A numeric "hasn't decreased since 1000"
-    // baseline would wrongly grant follow here; the latch must not.
+    // Reader detaches upward to 1100 - ABOVE the very first observed 1000, but 400px from the true end.
+    // A numeric "hasn't decreased since 1000" baseline would wrongly grant follow here; the latch must not.
     node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
     shim.setGeometry(node, { scrollTop: 1100 });
     fireNativeScroll(node);
@@ -1124,9 +1111,8 @@ describe("useChatTimelineFollowLatch", () => {
     );
     fireNativeScroll(node);
 
-    // A real DOM scrollTop write matching MVCP's own coordinate remap. With
-    // no publishing reader input, this layout-owned report cannot revoke the
-    // existing follow intent and immediately starts correction.
+    // A real DOM scrollTop write matching MVCP's own coordinate remap.
+    // With no publishing reader input, this layout-owned report cannot revoke the existing follow intent and immediately starts correction.
     shim.setGeometry(node, { scrollTop: 300, scrollHeight: 1500 });
     fireNativeScroll(node);
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
@@ -1195,9 +1181,7 @@ describe("useChatTimelineFollowLatch", () => {
     shim.setGeometry(node, { scrollTop: 200 });
     fireNativeScroll(node);
 
-    // Item-size callback equivalent (component-level wiring calls
-    // `followEndIfPermitted` directly from `onItemSizeChanged` - this proves
-    // the latch itself denies it regardless of caller).
+    // Item-size callback equivalent (component-level wiring calls `followEndIfPermitted` directly from `onItemSizeChanged` - this proves the latch itself denies it regardless of caller).
     result.current.followEndIfPermitted();
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
 
@@ -1240,13 +1224,8 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   it("a viewport resize alone does not revoke permission (symmetric to content growth)", () => {
-    // A container resize (clientHeight shrinking - composer growing taller,
-    // eating into the list's height) moves the strict-edge distance exactly
-    // like content growth does, with scrollTop untouched. Treating that as
-    // "the reader detached" would be the same unsoundness content growth
-    // already had to be protected against - the resize observer must only
-    // TRIGGER a follow attempt against the EXISTING permission, never itself
-    // decide permission from post-resize geometry.
+    // A container resize (clientHeight shrinking - composer growing taller, eating into the list's height) moves the strict-edge distance exactly like content growth does, with scrollTop untouched.
+    // Treating that as "the reader detached" would be the same unsoundness content growth already had to be protected against - the resize observer must only TRIGGER a follow attempt against the EXISTING permission, never itself decide permission from post-resize geometry.
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,
@@ -1269,19 +1248,14 @@ describe("useChatTimelineFollowLatch", () => {
     fireResizeObservers();
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1); // catches up
 
-    // A LATER resize with no further scrollTop movement must still be
-    // treated as following (permission was never revoked) - if the resize
-    // itself had wrongly cleared permission, this would silently no-op.
+    // A LATER resize with no further scrollTop movement must still be treated as following (permission was never revoked) - if the resize itself had wrongly cleared permission, this would silently no-op.
     shim.setGeometry(node, { clientHeight: 400 });
     fireResizeObservers();
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
   });
 
   it("skips a redundant scrollToEnd when already exactly at the edge (no invented navigation)", () => {
-    // A destructive mutation the UA itself already clamped to the new max
-    // lands exactly at the edge with no reader-earned follow behind it -
-    // `followEndIfPermitted` must not issue an imperative call that has
-    // nothing to correct.
+    // A destructive mutation the UA itself already clamped to the new max lands exactly at the edge with no reader-earned follow behind it - `followEndIfPermitted` must not issue an imperative call that has nothing to correct.
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,
@@ -1347,11 +1321,7 @@ describe("useChatTimelineFollowLatch", () => {
 
   it("regression: a sub-epsilon bottom report cannot disarm an owned free navigation", () => {
     // Minimap/find/deep-link jump issued while latched at the strict bottom.
-    // An ANIMATED jump's first smooth-scroll frame moves <1px, so its scroll
-    // event still reads as strict-bottom geometry; that report must not
-    // consume the armed departure, or every later (genuinely departing)
-    // report is classified layout-owned and a correction burst yanks the
-    // jump straight back to the tail.
+    // An ANIMATED jump's first smooth-scroll frame moves <1px, so its scroll event still reads as strict-bottom geometry; that report must not consume the armed departure, or every later (genuinely departing) report is classified layout-owned and a correction burst yanks the jump straight back to the tail.
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,

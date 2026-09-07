@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 
 interface NullableFontSizeInputProps {
   readonly value: number | null;
-  /** Value shown (and live-tracked) while `value` is null. */
   readonly followValue: number;
   readonly onChange: (next: number | null) => void;
   readonly min: number;
@@ -15,14 +14,7 @@ interface NullableFontSizeInputProps {
   readonly resetTooltip: string;
 }
 
-/**
- * `SettingsNumberInput`-style number field that additionally supports a
- * `null` "follow" state: the displayed value tracks `followValue` in muted
- * styling until the user ticks or types, which pins an explicit value
- * starting from what was displayed. A ghost reset button clears back to
- * `null`. Kept separate from `SettingsNumberInput` (non-nullable) so its two
- * existing call sites are untouched.
- */
+/** `SettingsNumberInput`-style number field that additionally supports a `null` "follow" state. */
 export function NullableFontSizeInput(props: NullableFontSizeInputProps) {
   const { value, followValue, onChange, min, max, ariaLabel, resetTooltip } =
     props;

@@ -25,30 +25,11 @@ import {
 } from "./install";
 import { renameWithRetry } from "./rename-retry";
 
-// CLI-owned stage reconciliation - Host Update Layer Redesign Tech Plan,
-// "Stage lifecycle - CLI-owned reconciliation". Every locked mutating
-// command is meant to run this, in order, under the `cli-lock`; ticket 1
-// wires it into `host download`'s promote step only - ticket 2 wires it
-// into apply/install/ensure/uninstall.
-//
-// Steps, in order (each one's ordering rationale lives inline below):
-//   1. target-missing recovery (`install/` absent + `install.old-*`
-//      present -> restore the newest valid aside) BEFORE any orphan rule,
-//      so a stage isn't wrongly orphaned by a transient missing target.
-//   2. install-trash sweep (target exists -> best-effort delete obsolete
-//      `install.old-*` litter).
-//   3. stage deletion rules (malformed/unknown-schema sidecar,
-//      platform-arch mismatch, missing executable, comparable
-//      staged <= installed, orphan/no install record).
-//   4. `staged.old-*` aside recovery (delete when `staged/` exists, else
-//      restore the newest valid aside).
-//   5. owner-tokened temp sweep (identity outranks age).
+// CLI-owned stage reconciliation - Host Update Layer Redesign Tech Plan, "Stage lifecycle - CLI-owned reconciliation".
+// Every locked mutating command is meant to run this, in order, under the `cli-lock`; ticket 1 wires it into `host download`'s promote step only - ticket 2 wires it into apply/install/ensure/uninstall.
 
 export type StageDeletionReason =
-  // The sidecar reader is deliberately tolerant (returns `null` for BOTH
-  // malformed JSON and an unknown `schemaVersion`, per the Tech Plan) -
-  // reconcile can't distinguish the two after the fact without forking
-  // that contract, so both collapse to one reason here.
+  // The sidecar reader is deliberately tolerant (returns `null` for BOTH malformed JSON and an unknown `schemaVersion`, per the Tech Plan) - reconcile can't distinguish the two after the fact without forking that contract, so both collapse to one reason here.
   | "invalid-sidecar"
   | "platform-arch-mismatch"
   | "executable-missing"
@@ -74,13 +55,8 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-// Re-verified at USE time (not just at sidecar-parse time) - this stays
-// meaningful even though `readHostStagedRecordAt` already structurally
-// validates `executablePath`, because disk state can change in the gap
-// between reading the sidecar and reconcile deciding what to do with it
-// (e.g. the executable removed out from under a stage). `stat().isFile()`
-// rather than a bare existence check so a directory left at that path
-// (e.g. a partial extraction) is correctly treated as missing.
+// Re-verified at USE time (not just at sidecar-parse time) - this stays meaningful even though `readHostStagedRecordAt` already structurally validates `executablePath`, because disk state can change in the gap between reading the sidecar and reconcile deciding what to do with it (e.g. the executable removed out from under a stage).
+// `stat().isFile()` rather than a bare existence check so a directory left at that path (e.g. a partial extraction) is correctly treated as missing.
 async function stagedExecutableIsFile(
   stagedDirLikePath: string,
   executablePath: string,
@@ -97,14 +73,8 @@ function listOldAsideDirsNewestFirst(target: string): Promise<string[]> {
   return listAsideDirsNewestFirst(target, "old-");
 }
 
-// "Valid" here means good enough to safely restore in place of a missing
-// `install/`: a parseable `install.json` whose platform/arch match this
-// machine and whose recorded executable actually exists under the
-// candidate dir. This is a lighter check than `readHostInstallRecord`'s
-// full strict schema validation (which reads a fixed canonical path, not
-// an arbitrary aside candidate, and throws rather than returning null) -
-// proportionate to the failure mode being healed: an aside dir was a
-// complete, working install moments before the crash that left it there.
+// "Valid" here means good enough to safely restore in place of a missing `install/`: a parseable `install.json` whose platform/arch match this machine and whose recorded executable actually exists under the candidate dir.
+// This is a lighter check than `readHostInstallRecord`'s full strict schema validation (which reads a fixed canonical path, not an arbitrary aside candidate, and throws rather than returning null) - proportionate to the failure mode being healed: an aside dir was a complete, working install moments before the crash that left it there.
 async function validateInstallAsideCandidate(
   candidateDir: string,
   installDir: string,
@@ -172,9 +142,8 @@ async function sweepInstallTrashIfTargetExists(
   return true;
 }
 
-// Step 3. `installRecord` must be read AFTER step 1 so an install/
-// restored moments ago is what "no install record -> orphan" is judged
-// against, not stale pre-reconcile state.
+// Step 3.
+// `installRecord` must be read AFTER step 1 so an install/ restored moments ago is what "no install record -> orphan" is judged against, not stale pre-reconcile state.
 async function evaluateStageForDeletion(
   environment: Environment,
   installRecord: HostInstallRecord | null,
@@ -192,9 +161,7 @@ async function evaluateStageForDeletion(
   if (!(await stagedExecutableIsFile(stagedDir, record.executablePath))) {
     return "executable-missing";
   }
-  // Version comparison is only meaningful once we know there IS an
-  // install record to compare against - orphan is checked before it,
-  // not after, despite the Tech Plan's prose listing it last.
+  // Version comparison is only meaningful once we know there IS an install record to compare against - orphan is checked before it, not after, despite the Tech Plan's prose listing it last.
   if (installRecord === null) return "orphan-no-install-record";
   const cmp = compareHostVersions(record.version, installRecord.version);
   if (cmp.comparable && cmp.ordering !== "greater") {
@@ -203,12 +170,8 @@ async function evaluateStageForDeletion(
   return null;
 }
 
-// Step 4. Mirrors step 1's aside-recovery shape but for `staged/`: when
-// `staged/` already exists the asides are pure litter (redundant, always
-// deleted); when it's missing, restore the newest valid one so a crash
-// between "rename staged aside" and "rename new stage in" (the explicit-
-// version replace dance in `host download`'s promote) self-heals. If no
-// aside is valid, they're swept rather than left to linger forever.
+// Step 4.
+// Mirrors step 1's aside-recovery shape but for `staged/`: when `staged/` already exists the asides are pure litter (redundant, always deleted); when it's missing, restore the newest valid one so a crash between "rename staged aside" and "rename new stage in" (the explicit- version replace dance in `host download`'s promote) self-heals.
 async function reconcileStagedAside(
   environment: Environment,
   logger: ILogger,
@@ -252,15 +215,8 @@ async function reconcileStagedAside(
   return "deleted";
 }
 
-// Explicit curation invalidation is deliberately NOT expressed as a normal
-// reconcile: reconcile restores a valid `staged.old-*` when canonical
-// `staged/` is absent. A yanked stage must instead make both canonical and
-// every recoverable aside permanently ineligible before the next reconcile
-// can run. Caller owns cli-lock. A command-driven purge supplies the exact
-// stage fingerprint it judged withdrawn: a different stage arriving while a
-// registry probe was in flight is a stale verdict, never authority to delete
-// the replacement. Internal locked callers that just read their own manifest
-// pass null and retain their existing unconditional invalidation behavior.
+// Explicit curation invalidation is deliberately NOT expressed as a normal reconcile: reconcile restores a valid `staged.old-*` when canonical `staged/` is absent.
+// A yanked stage must instead make both canonical and every recoverable aside permanently ineligible before the next reconcile can run.
 export type PurgeHostStageResult =
   | { readonly outcome: "purged"; readonly purged: true }
   | {
@@ -274,9 +230,8 @@ export async function purgeHostStage(
   expectedStageFingerprint: string | null,
   verifyMutationCapability: () => Promise<void>,
 ): Promise<PurgeHostStageResult> {
-  // Every destructive edge below receives an explicit verifier. Legacy
-  // maintenance passes `legacyMutationVerifier` deliberately; production
-  // contender paths pass their live capability verifier.
+  // Every destructive edge below receives an explicit verifier.
+  // Legacy maintenance passes `legacyMutationVerifier` deliberately; production contender paths pass their live capability verifier.
   const verify = verifyMutationCapability;
   const logger = createCliLogger(environment);
   const stagedDir = hostStagedDir(environment);
@@ -352,27 +307,15 @@ async function reconcileHostStageWithVerifier(
     logger,
     verifyMutationCapability,
   );
-  // Unconditional and independent of `stagedAsideOutcome` above -
-  // `.dead-*` siblings are litter `invalidateAsideDir`'s layer-1
-  // rename leaves behind regardless of whether THIS pass found any
-  // `.old-*` candidates to invalidate (the common case after a completed
-  // replacement has none) or restored one instead. A call site nested
-  // inside `reconcileStagedAside`'s pure-litter branch was unreachable on
-  // both of those paths, so `.dead-*` trees accumulated forever.
+  // Unconditional and independent of `stagedAsideOutcome` above - `.dead-*` siblings are litter `invalidateAsideDir`'s layer-1 rename leaves behind regardless of whether THIS pass found any `.old-*` candidates to invalidate (the common case after a completed replacement has none) or restored one instead.
+  // A call site nested inside `reconcileStagedAside`'s pure-litter branch was unreachable on both of those paths, so `.dead-*` trees accumulated forever.
   await sweepDeadAsideDirs(
     hostStagedDir(environment),
     verifyMutationCapability,
   );
   if (stagedAsideOutcome === "restored") {
-    // Step 4's own validation (parseable sidecar + platform/arch match +
-    // executable present) is a lighter "good enough to try" check than
-    // step 3's full eligibility rules (it doesn't compare against the
-    // install record at all) - a restored aside can still be stale,
-    // orphaned, or otherwise fail step 3. Re-run step 3 against what is
-    // now at `staged/` so one reconcile pass never ends with a stage
-    // that violates its own rules; the next pass would just delete it
-    // anyway, but leaving it in place until then is observable state
-    // ticket 2's apply/install/ensure flows shouldn't have to tolerate.
+    // Step 4's own validation (parseable sidecar + platform/arch match + executable present) is a lighter "good enough to try" check than step 3's full eligibility rules (it doesn't compare against the install record at all) - a restored aside can still be stale, orphaned, or otherwise fail step 3.
+    // Re-run step 3 against what is now at `staged/` so one reconcile pass never ends with a stage that violates its own rules; the next pass would just delete it anyway, but leaving it in place until then is observable state ticket 2's apply/install/ensure flows shouldn't have to tolerate.
     const restoredDeletionReason = await evaluateStageForDeletion(
       environment,
       installRecord,
@@ -409,9 +352,7 @@ async function reconcileHostStageWithVerifier(
 }
 
 // Legacy maintenance callers retain their established no-capability behavior.
-// All attempt-bound install/download/apply paths use the explicit verifier
-// variant below so every rename/remove inside reconciliation rechecks the
-// same live capability immediately before the edge.
+// All attempt-bound install/download/apply paths use the explicit verifier variant below so every rename/remove inside reconciliation rechecks the same live capability immediately before the edge.
 export async function reconcileHostStage(
   environment: Environment,
 ): Promise<StageReconcileResult> {

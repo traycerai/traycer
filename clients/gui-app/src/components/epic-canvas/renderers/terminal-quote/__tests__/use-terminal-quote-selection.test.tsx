@@ -12,11 +12,7 @@ afterEach(() => {
   cleanup();
 });
 
-/**
- * A stand-in for the pane's xterm engine, driven the way the real one drives
- * the hook: the selection is whatever the test set, and events are fired by
- * hand. Enough to exercise the publish/retract state machine without a canvas.
- */
+/** Enough to exercise the publish/retract state machine without a canvas. */
 function createSource(): TerminalSelectionSource & {
   readonly element: HTMLElement;
   readonly setSelection: (text: string) => void;
@@ -71,9 +67,7 @@ describe("useTerminalQuoteSelection", () => {
     const source = createSource();
     const { result } = renderSelection(source);
 
-    // The way a user selects to the end of the output: press inside, drag past
-    // the pane's edge, release over whatever is next to it. xterm finishes the
-    // drag on the document, so a pane-local mouseup would never see this.
+    // The way a user selects to the end of the output: press inside, drag past the pane's edge, release over whatever is next to it. xterm finishes the drag on the document, so a pane-local mouseup would never see this.
     act(() => {
       source.element.dispatchEvent(mouse("mousedown"));
       source.setSelection("error: build failed");

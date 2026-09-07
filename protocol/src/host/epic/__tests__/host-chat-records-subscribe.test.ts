@@ -18,11 +18,7 @@ import {
 } from "@traycer/protocol/host/epic/chat-records";
 
 /**
- * `host.chatRecords.subscribe@1.0` contract fixtures, plus the record-row
- * facts the record layer depends on: the revision/visibility/origin triple,
- * the archived PAIR (boolean for every row, timestamp only for own rows), and
- * the optional-method degrade that leaves the `epic.listChatRecords` poll as
- * the client's whole story on an older host.
+ * `host.chatRecords.subscribe@1.0` contract fixtures, plus the record-row facts the record layer depends on: the revision/visibility/origin triple, the archived PAIR (boolean for every row, timestamp only for own rows).
  */
 
 const METHOD = "host.chatRecords.subscribe";
@@ -126,9 +122,7 @@ describe("host.chatRecords.subscribe@1.0 contract", () => {
       major: 1,
       minor: 0,
     });
-    // The manifest names the newest installed minor - @1.2 since `tuiUpsert`
-    // grew the cross-host `origin` row union. @1.0 and @1.1 stay installed
-    // beneath it for clients that negotiated the frozen sets.
+    // The manifest names the newest installed minor - @1.2 since `tuiUpsert` grew the cross-host `origin` row union. @1.0 and @1.1 stay installed beneath it for clients that negotiated the frozen sets.
     expect(
       buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR)[
         METHOD
@@ -171,9 +165,6 @@ describe("host.chatRecords.subscribe@1.0 frames", () => {
   });
 
   it("rejects an upsert whose envelope addresses a different chat than its row", () => {
-    // A mismatched envelope is addressing one chat while carrying another's
-    // row - whichever field a consumer read would decide which chat it
-    // corrupts, so the contract refuses the frame outright.
     const result = hostChatRecordsSubscribeServerFrameSchemaV10.safeParse({
       kind: "upsert",
       hasBinaryPayload: false,
@@ -389,10 +380,8 @@ describe("host.chatRecords.subscribe@1.2 tuiUpsert frames", () => {
   });
 
   it("refuses a cloud replica on the frozen @1.1 frame set", () => {
-    // The emission gate's reason, stated as a contract fact: a @1.1
-    // subscriber agreed to a `tuiUpsert` carrying the full registry row, so
-    // handing it a narrow arm would be a frame it cannot parse. The host
-    // must never emit one below the negotiated floor.
+    // The emission gate's reason, stated as a contract fact: a @1.1 subscriber agreed to a `tuiUpsert` carrying the full registry row, so handing it a narrow arm would be a frame it cannot parse.
+    // The host must never emit one below the negotiated floor.
     expect(
       hostChatRecordsSubscribeServerFrameSchemaV11.safeParse({
         ...ENVELOPE,

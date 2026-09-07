@@ -19,11 +19,8 @@ export interface UsageHarnessSplitRow {
 }
 
 /**
- * Folds the window's buckets into one row per harness (across every model
- * and day), sorted by cost descending - the per-harness split the t3code
- * shape shows under the headline. `shareOfCost` is computed against the sum
- * of every row's OWN cost (not `totals.knownCostUsd`) so the shares always
- * foot to 100% regardless of any coverage subtlety upstream.
+ * Folds the window's buckets into one row per harness (across every model and day), sorted by cost descending - the per-harness split the t3code shape shows under the headline.
+ * `shareOfCost` is computed against the sum of every row's OWN cost (not `totals.knownCostUsd`) so the shares always foot to 100% regardless of any coverage subtlety upstream.
  */
 export function buildUsageHarnessSplitRows(
   buckets: readonly UsageBucket[],

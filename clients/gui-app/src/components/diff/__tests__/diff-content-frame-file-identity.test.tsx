@@ -1,14 +1,5 @@
-/**
- * `DiffContentFrame` is the shared host boundary behind every editable Diffs
- * surface (workspace file, single Git diff, bundle section). Before this,
- * only the bundle section's own outer wrapper (`DiffBundleFileSectionFrame`)
- * stamped `data-diff-find-file`/`data-bundle-diff-file-id` - a single-file
- * Git or workspace host carried only the generic `data-diffs-host` marker,
- * so neither automation nor the app's own find/focus/ownership logic could
- * bind to it unambiguously. This suite proves the shared `fileIdentity` prop
- * closes that gap and maps every host one-to-one, including a host an LRU
- * keep-alive tab hides (via CSS) rather than unmounts.
- */
+/** This suite proves the shared `fileIdentity` prop closes that gap and maps every host one-to-one, including a
+ * host an lru keep-alive tab hides (via CSS) rather than unmounts. */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { DiffContentFrame } from "@/components/diff/diff-content-primitive";
@@ -62,9 +53,8 @@ describe("DiffContentFrame file identity", () => {
   it("maps an LRU-retained hidden host, a visible host, and an aggregate section host one-to-one with no collision", () => {
     const HOSTS = [
       {
-        // A tab an LRU keep-alive strategy hides instead of unmounting - the
-        // frame stays in the DOM (just display:none), so its identity must
-        // still resolve for automation and any background reconciliation.
+        // A tab an lru keep-alive strategy hides instead of unmounting - the frame stays in the DOM (just
+        // display:none), so its identity must still resolve for automation and any background reconciliation.
         label: "lru-hidden",
         hidden: true,
         findFilePath: "src/hidden-file.ts",
@@ -116,9 +106,8 @@ describe("DiffContentFrame file identity", () => {
     const allHosts = container.querySelectorAll("[data-diffs-host]");
     expect(allHosts).toHaveLength(3);
 
-    // The two same-path hosts (visible single-file vs. its staged aggregate
-    // counterpart) are disambiguated by bundleFindFileId alone - querying by
-    // that value resolves to exactly one host each, never both.
+    // its staged aggregate counterpart) are disambiguated by bundleFindFileId alone - querying by that value
+    // resolves to exactly one host each, never both.
     for (const host of HOSTS) {
       const matches = container.querySelectorAll(
         `[data-bundle-diff-file-id="${host.bundleFindFileId}"]`,

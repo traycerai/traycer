@@ -1,7 +1,6 @@
 /**
- * Shared fake-IndexedDB harness for prompt-stash repository and ownership-
- * transfer suites. Installs a fresh factory per test so prior DBs and
- * connections cannot leak state.
+ * Shared fake-IndexedDB harness for prompt-stash repository and ownership- transfer suites.
+ * Installs a fresh factory per test so prior DBs and connections cannot leak state.
  */
 import {
   IDBFactory as FakeIDBFactory,

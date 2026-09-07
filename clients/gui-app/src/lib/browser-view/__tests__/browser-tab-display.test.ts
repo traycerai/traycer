@@ -306,10 +306,8 @@ describe("browser address helpers", () => {
     expect(normalizeBrowserAddressInput("http://127.0.0.1:8080/api")).toBe(
       "http://127.0.0.1:8080/api",
     );
-    // A colon followed by digits is a PORT, not a scheme, so these still get
-    // one.
-    // A path does not make it remote: guessing https here would fail against
-    // a plain HTTP dev server.
+    // A colon followed by digits is a PORT, not a scheme, so these still get one.
+    // A path does not make it remote: guessing https here would fail against a plain HTTP dev server.
     expect(normalizeBrowserAddressInput("app.localhost/path")).toBe(
       "http://app.localhost/path",
     );

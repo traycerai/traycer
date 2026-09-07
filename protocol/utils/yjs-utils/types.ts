@@ -57,11 +57,6 @@ type YjsResolvedObject<T extends object> = string extends keyof T
   : TypedYMap<T>;
 
 // Resolves a schema field type to its Yjs representation.
-// Uses `T extends object` instead of `T extends Record<string, unknown>`
-// because TS interfaces lack implicit index signatures and fail the Record constraint.
-// Distributive conditional types handle unions (T | null, T | undefined) correctly.
-// Y.Array<U> is already the live persistence representation, so it passes
-// through without recursively wrapping its elements.
 export type YjsResolved<T> = T extends Y.Text
   ? Y.Text
   : T extends Y.XmlFragment
@@ -78,10 +73,6 @@ export type YjsResolved<T> = T extends Y.Text
               ? YjsResolvedObject<T>
               : T;
 
-// What callers pass to createTypedMap() -- plain JS objects/arrays, with
-// Yjs rich-text types passed through as-is (caller constructs Y.Text etc.)
-// Y.Array<U> fields accept either a detached/live Y.Array<U> or plain U[] at
-// the input boundary.
 export type YCreateInput<T> = T extends Y.Text
   ? Y.Text
   : T extends Y.XmlFragment
@@ -99,6 +90,4 @@ export type YCreateInput<T> = T extends Y.Text
               : T;
 
 // Extracts the raw schema interface from a TypedYMap.
-// Useful when a generic API is parameterized by the raw schema type
-// but the caller only has the TypedYMap alias.
 export type InferSchema<M> = M extends TypedYMap<infer S> ? S : never;

@@ -5,23 +5,6 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { LoginImportJarCoordination } from "../../browser-view/storage/login-import/login-import-runtime";
 
-/**
- * The one link between a committed import and the hosts: main pushes the
- * freshly imported jar itself, because the import writes with the delta
- * observer muted, so no ordinary capture fires for it. That push now lives
- * entirely inside `pushJarToHosts`, the coordination member
- * `registerBrowserViewIpc` passes to `createLoginImportService` - it is
- * best-effort there (the cookies are already durably written), catching any
- * rejection and answering 0 rather than turning a committed import into a
- * rejected invoke.
- *
- * `LoginImportService` itself is exercised end to end by
- * `import-logins.test.ts`; the service is stubbed out here entirely, so this
- * suite covers two separate things: the IPC handler is now a pure passthrough
- * of whatever the (stubbed) service's `import` answers, and `pushJarToHosts`
- * - captured off the coordination object handed to the stub - is exercised
- * directly against its own real implementation.
- */
 
 type ImportedResult = Extract<LoginImportResult, { status: "imported" }>;
 
@@ -116,12 +99,6 @@ vi.mock("../../browser-view/browser-session", () => {
   };
 });
 
-/**
- * The jar-plane registry. Only `capturePrimaryProfileOnEveryHost` matters
- * here - it is the call `pushJarToHosts` wraps in try/catch - so it is the
- * one method whose outcome the test controls, both the count it resolves
- * with and whether it rejects.
- */
 vi.mock("../../browser-sessions/browser-sessions-owner", () => ({
   BrowserSessionsRegistry: class {
     constructor(_options: unknown) {}
@@ -182,13 +159,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   }) => `${key.domain} ${key.name} ${key.path}`,
 }));
 
-/**
- * The service itself is a stub - `LoginImportService` is covered end to end
- * by `import-logins.test.ts` - but the coordination object this module is
- * called with is real: `registerBrowserViewIpc` builds it (including the
- * `pushJarToHosts` closure this suite exercises directly), and this mock's
- * only job is to capture that object before handing back a canned service.
- */
 vi.mock("../../browser-view/storage/login-import/login-import-runtime", () => ({
   LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS: 10 * 60_000,
   createLoginImportService: (coordination: LoginImportJarCoordination) => {
@@ -266,10 +236,6 @@ function findInvokeHandler(
   return handler as InvokeHandler;
 }
 
-/**
- * Registers the IPC handlers, which is also what calls
- * `createLoginImportService` and so populates `fixture.coordination`.
- */
 async function registerBridge() {
   const { registerBrowserViewIpc } = await import("../browser-view-ipc");
   const bridge = makeBridge();

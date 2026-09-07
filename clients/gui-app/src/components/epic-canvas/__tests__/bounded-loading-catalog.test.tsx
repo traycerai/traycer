@@ -15,32 +15,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
 /**
- * THE S1-S6 SPINNER-FOREVER CATALOG — the regression suite for the audit's
- * "Spinner-forever paths (catalogued)" table, and the acceptance artifact for
- * invariant 6 (every host-dependent loading state carries a deadline AND a
- * terminal presentation).
- *
- * Five of the six rows are pinned NEXT TO THEIR SUBJECT rather than restated
- * here, because a catalog that re-mounts six subtrees to repeat pins that
- * already live beside the code is worse coverage wearing a better name. This
- * file is the index, and it owns the one row that had no home:
- *
- * | Row | What it was | Pinned in |
- * | --- | --- | --- |
- * | S1 | epic re-point: snapshot never arrives | `providers/__tests__/epic-session-provider.test.tsx` — "bounds an authority that never attaches at the establishing deadline". Closed by P2.4's `ESTABLISHING_DEADLINE_MS`; pinned, not re-proved. |
- * | S2 | `host-starting` forever, Clone withheld | **HERE** — it needed a real `<ChatTile>` and had no existing harness that could drive reachability. |
- * | S3 | null tab client ⇒ `enabled:false` ⇒ forever `isPending` | `renderers/__tests__/published-chat-tile.test.tsx` (bounded words + `data-load-kind`, not "no spinner") |
- * | S4 | `indeterminate` ⇒ optimistic retry, no banner | `hooks/agent/__tests__/use-host-reachability.starting-deadline.test.tsx` (stays `reachable` — deliberately) + `hooks/host/__tests__/use-bounded-host-load.test.tsx` (content reaches `timed-out`) |
- * | S5 | terminal/TUI/shell-output bare skeletons | each tile's own suite: `terminal-tile-close-navigation`, `terminal-agent-tile-exit-close`, `managed-command-output-tile`, `terminal-panel/__tests__/landing-terminal-tile-bounded-load` |
- * | S6 | Clone CTA silent no-op on same host | `renderers/__tests__/use-chat-clone-on-host-switch.test.tsx` (asserts the refusal TOAST, not merely that no clone happened — "no clone happened" is also true when the button is unwired) |
- *
- * The mechanism this whole family shares was diagnosed correctly at ONE call
- * site years before it was fixed at the seam. `snapshot-diff-tile-body.tsx`
- * still carries the comment: "Use isLoading (isPending && isFetching), NOT
- * isPending: a content-less edit (both hashes null) disables the query, which
- * leaves isPending permanently true but isFetching false - that case must fall
- * through to the source-unavailable banner, not spin forever." One surface
- * defended itself; five did not. That is the argument for a shared seam.
+ * Five of the six rows are pinned NEXT TO THEIR SUBJECT rather than restated here, because a catalog that re-mounts six subtrees to repeat pins that already live beside the code is worse coverage wearing a better name.
+ * This file is the index, and it owns the one row that had no home: | Row | What it was | Pinned in | | --- | --- | --- | | S1 | epic re-point: snapshot never arrives | `providers/__tests__/epic-session-provider.test.tsx` - "bounds an authority that never attaches at the establishing deadline".
  */
 
 vi.mock(
@@ -112,13 +88,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 /**
- * The ONE seam this file drives. Everything else above is scaffolding to get a
- * `<ChatTile>` on screen; this is the input the test is actually about.
- *
- * `useHostReachability` is deliberately NOT mocked - the real hook runs, with
- * the real `useLoadDeadline` and the real `HOST_STARTING_BUDGET_MS` behind it.
- * Mocking reachability would have made this test assert that a fake returns
- * what the fake was told to return.
+ * `useHostReachability` is deliberately NOT mocked - the real hook runs, with the real `useLoadDeadline` and the real `HOST_STARTING_BUDGET_MS` behind it.
  */
 const directoryState: {
   data: readonly HostDirectoryEntry[] | undefined;
@@ -203,10 +173,7 @@ afterEach(() => {
 });
 
 /**
- * The epic-session harness delivers its snapshot on a `setTimeout(0)`, so the
- * gate above `<ChatTile>` opens one tick after render. Without this the whole
- * tree renders `null` and every assertion below fails for a reason that has
- * nothing to do with reachability - the empty-mount shape.
+ * Without this the whole tree renders `null` and every assertion below fails for a reason that has nothing to do with reachability - the empty-mount shape.
  */
 async function settleEpicSession(): Promise<void> {
   await act(async () => {
@@ -215,19 +182,8 @@ async function settleEpicSession(): Promise<void> {
 }
 
 /**
- * S2 — the audit's permanent trap, and F4's presentation half.
- *
- * An EMPTY host directory means this machine's own host has not published yet,
- * which the reachability hook answers `host-starting` for - correctly, because
- * a tile that called it dead would offer to fork a healthy thread. The defect
- * was that this state had NO EXIT: a chat bound to a host that never came back
- * sat behind "Waiting for the host to start…" forever, with the Clone offer -
- * the affordance that would have let the user carry on - gated on the very
- * state that never ended.
- *
- * These two tests are one claim in two halves, and BOTH halves are load-bearing:
- * withholding Clone early is what makes the state non-destructive, and offering
- * it at the deadline is what makes the state terminal.
+ * The defect was that this state had NO EXIT: a chat bound to a host that never came back sat behind "Waiting for the host to start…" forever, with the Clone offer - the affordance that would have let the user carry on - gated on the very state that never ended.
+ * These two tests are one claim in two halves, and BOTH halves are load-bearing: withholding Clone early is what makes the state non-destructive, and offering it at the deadline is what makes the state terminal.
  */
 describe("S2 — host-starting is bounded, and Clone arrives AT the deadline", () => {
   it("withholds Clone while the host may still be starting", async () => {
@@ -266,12 +222,7 @@ describe("S2 — host-starting is bounded, and Clone arrives AT the deadline", (
     ).not.toBeNull();
   });
 
-  // Shared-chat support, wired through the REAL container: `epic.createChat`
-  // is editor-gated host-side, so a known viewer role must withhold the Clone
-  // button the same banner would otherwise offer - the alternative was a
-  // click that died on a bare "You don't have permission" toast. The
-  // editor-role sibling above is the control: same tile, same deadline, the
-  // button present.
+  // Shared-chat support, wired through the REAL container: `epic.createChat` is editor-gated host-side, so a known viewer role must withhold the Clone button the same banner would otherwise offer - the alternative was a click that died on a bare "You don't have permission" toast.
   it("withholds Clone at the deadline for a viewer role, and says why", async () => {
     epicHarness.install(null, "viewer");
     renderChatTile();

@@ -1,17 +1,8 @@
 import { create } from "zustand";
 
 /**
- * Which chat the user was last typing in, per Task.
- *
- * Recorded on composer focus, which is the only signal that means "this is the
- * conversation I am working in". The open-epic store's `lastFocusedArtifactId`
- * cannot answer this: it tracks the last focused TILE of any kind, so opening
- * a terminal immediately overwrites it - and a terminal is exactly what the
- * user has just focused when they select output to quote.
- *
- * Deliberately session-scoped (not persisted): a stale "last used" chat from a
- * previous launch is a worse default than the Task's most recent chat, which
- * the resolver falls back to.
+ * Which chat the user was last typing in, per Task. Recorded on composer focus, which is the only
+ * signal that means "this is the conversation I am working in".
  */
 interface LastFocusedChatStore {
   readonly chatIdByEpicId: Partial<Record<string, string>>;

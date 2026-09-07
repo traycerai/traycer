@@ -22,24 +22,12 @@ interface InlineTitleFieldProps {
 }
 
 /**
- * A title that becomes its own text field in place: tap to edit, commit on blur
- * or Return, cancel on Escape. The title IS the control - it carries no edit
- * affordance of its own and opens no dialog.
- *
- * COMMIT ON BLUR is what makes this safe on a phone. The mobile shell dismisses
- * the soft keyboard by blurring the focused field when a tap lands outside it,
- * so "tap away" ends an edit exactly once, through the same path as any other
- * focus loss, instead of the two recognizers fighting over the gesture.
- *
- * An empty (or whitespace-only) title is never committed: it restores the
- * previous one, the same guard the row rename dialogs express as a disabled
- * Save button.
+ * The mobile shell dismisses the soft keyboard by blurring the focused field when a tap lands outside it, so "tap away" ends an edit exactly once, through the same path as any other focus loss, instead of the two recognizers fighting over the gesture.
+ * An empty (or whitespace-only) title is never committed: it restores the previous one, the same guard the row rename dialogs express as a disabled Save button.
  */
 export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   const { value, editable, onCommit, inputLabel, testId, className } = props;
-  // `null` means "not editing"; a string is the in-flight draft, which owns the
-  // displayed text until the edit ends (so a projection update mid-edit cannot
-  // yank the characters out from under the caret).
+  // `null` means "not editing"; a string is the in-flight draft, which owns the displayed text until the edit ends (so a projection update mid-edit cannot yank the characters out from under the caret).
   const [draft, setDraft] = useState<string | null>(null);
   // Return and Escape both settle the edit and then drop focus; without this the
   // blur they cause would run the commit path a second time.
@@ -99,10 +87,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
         onKeyDown={handleKeyDown}
         aria-label={inputLabel}
         data-testid={`${testId}-input`}
-        // No padding in either state, so entering an edit swaps the control
-        // without shifting the text sideways. `self-stretch` takes the tap
-        // target (and the field box) up to the full height of the row the title
-        // sits in, which is where the touch-target size comes from.
+        // No padding in either state, so entering an edit swaps the control without shifting the text sideways.
         className={cn(
           className,
           "self-stretch rounded-sm border-0 bg-transparent outline-hidden ring-1 ring-ring/60",

@@ -20,17 +20,7 @@ import { publishChat, sha256Hex } from "./__fixtures__/published-chat";
 
 /**
  * The head DOCUMENT: the tenant envelope plus the opaque payload.
- *
- * A head is stored as `parts` (the one thing the sync layer reads, so it can
- * tell what a swap displaces) wrapped around the record (which the sync layer
- * never interprets). These bytes are the identity: the CAS witness, the digest
- * the chat row holds, and the value the next head chains to as its
- * `parentHeadSha256` are all the same sha256 over this string.
- *
- * The failure this suite exists to prevent is the one that made the seam worth
- * writing down: a record-serialized head that the server cannot commit, or an
- * envelope that disagrees with the payload it wraps and so drives a swap that
- * strands a live object or deletes one still in use.
+ * A head is stored as `parts` (the one thing the sync layer reads, so it can tell what a swap displaces) wrapped around the record (which the sync layer never interprets).
  */
 
 const inline = publishChat({
@@ -50,13 +40,9 @@ function readEnvelope(documentBytes: string): JsonValue | undefined {
   return readJsonProperty(parsed, CHAT_HEAD_PARTS_KEY);
 }
 
-/** Rebuilds document bytes with the envelope replaced. */
 function withEnvelope(record: ChatHeadRecord, envelope: JsonValue): string {
   const document = encodeChatHeadDocument(record);
-  // Through the reserved-key constant, like `readEnvelope` above. A literal
-  // here would keep writing `parts` if the key were ever renamed, so the five
-  // negative tests below would pass on an unrelated extra field instead of on
-  // the tampering they describe.
+  // Through the reserved-key constant, like `readEnvelope` above.
   const tampered: JsonObject = {
     ...document,
     [CHAT_HEAD_PARTS_KEY]: envelope,
@@ -66,9 +52,7 @@ function withEnvelope(record: ChatHeadRecord, envelope: JsonValue): string {
 
 describe("chat-head document envelope", () => {
   it("carries a top-level parts array - the one tenant obligation", () => {
-    // The server refuses a head without this and cannot compute what a swap
-    // displaces, so a record-serialized head that lacked it would be
-    // uncommittable.
+    // The server refuses a head without this and cannot compute what a swap displaces, so a record-serialized head that lacked it would be uncommittable.
     expect(readEnvelope(serializeChatHeadDocument(graduated.head))).toEqual([
       ...listChatHeadPartAddresses(graduated.head),
     ]);
@@ -103,10 +87,6 @@ describe("chat-head document envelope", () => {
   });
 
   it("keeps the payload byte-identical to the record's own encoding", () => {
-    // The envelope is additive: strip it and what is left is exactly the
-    // record's own canonical encoding, so nothing about the payload's form is
-    // disturbed by wrapping it. Composed explicitly - there is deliberately no
-    // payload serializer to reach for.
     const document: unknown = JSON.parse(
       serializeChatHeadDocument(graduated.head),
     );
@@ -158,11 +138,7 @@ describe("chat-head document identity", () => {
   });
 });
 
-/**
- * The envelope must never reach the record. It is derived state, so a copy
- * carried through a decode would be re-emitted beside a freshly derived one on
- * the next publish - a stale index in the bytes the sync layer reads.
- */
+/** The envelope must never reach the record. */
 describe("chat-head document strips the envelope before parsing", () => {
   it("never lands parts in the record's residual bag", () => {
     const result = decodeChatHeadDocument(
@@ -329,12 +305,7 @@ describe("chat-head document fails closed", () => {
   });
 });
 
-/**
- * A head may not name the same part twice. The sync server refuses one, because
- * "displaced = previous minus current" stops being well-defined exactly where
- * that set drives deletion - so such a head is uncommittable, and catching it
- * at parse puts the failure where the publisher can see it.
- */
+/** A head may not name the same part twice. */
 describe("chat-head part uniqueness", () => {
   it("refuses a head that names one part in two lists", () => {
     const duplicated: ChatHeadRecord = {

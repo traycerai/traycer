@@ -16,11 +16,7 @@ const BASE = {
 
 describe("prQueryKeys.localDiff", () => {
   it("separates two epics that share the same PR identity on one host", () => {
-    // `pr.getLocalDiff` is authorized against `epicId` and only honours a
-    // worktree binding belonging to that epic, so the SAME PR under a
-    // different epic can legitimately answer `unavailable`. If the key
-    // omitted `epicId` the two would share one cache slot and one epic's
-    // answer would be served for the other.
+    // `pr.getLocalDiff` is authorized against `epicId` and only honours a worktree binding belonging to that epic, so the SAME PR under a different epic can legitimately answer `unavailable`.
     const first = prQueryKeys.localDiff(BASE);
     const second = prQueryKeys.localDiff({ ...BASE, epicId: "epic-2" });
 
@@ -40,9 +36,7 @@ describe("prQueryKeys.localDiff", () => {
       { headRefOid: "b".repeat(40) },
       { ignoreWhitespace: true },
       { baseRefName: "release" },
-      // `repoRole` selects WHICH checkout under the link group answers -
-      // superproject root vs an owned submodule - so the two roles are two
-      // different answers, never one shared slot.
+      // `repoRole` selects WHICH checkout under the link group answers - superproject root vs an owned submodule - so the two roles are two different answers, never one shared slot.
       { repoRole: "submodule" },
     ]) {
       expect(prQueryKeys.localDiff({ ...BASE, ...patch })).not.toEqual(first);

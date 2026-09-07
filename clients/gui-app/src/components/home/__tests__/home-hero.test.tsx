@@ -4,26 +4,10 @@ import { HomeHero } from "@/components/home/home-hero";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
-// `HomeHero` resolves its global-folder fallback through the LANDING COMPOSER'S
-// PIN (`useComposerSurfaceHostPin().resolvedHostId`), which needs a
-// `<HostRuntimeProvider>` this bare-render suite doesn't set up. Pin it to a
-// fixed host id so the tests below can seed/assert that host's bucket directly.
-//
-// ⚠ THIS MOCK USED TO NAME `@/hooks/host/use-reactive-active-host-id`, AND THAT
-// MODULE NO LONGER EXISTS. `vi.mock` on a path nothing imports is not an error -
-// it registers a factory for a specifier that never resolves and stays silent -
-// so when the component moved to the pin hook, the mock went inert and the
-// seeded bucket stopped being the one `HomeHero` reads. Both fallback arms below
-// then asserted an absence that the FIXTURE guaranteed rather than the behaviour:
-// "does not fall back to global folders" passed because the global folders were
-// never reachable, and would have passed just as well with the fallback bug
-// restored. Nothing failed, so nothing said so.
+// Both fallback arms below then asserted an absence that the fixture guaranteed rather than the behaviour.
 const TEST_HOST_ID = "host-a";
-//
-// The WHOLE `SurfaceHostPin` shape, not just the one field `HomeHero` reads.
-// A partial module mock is how the previous one rotted: it satisfies today's
-// consumer and silently hands `undefined` to tomorrow's, and vitest type-checks
-// none of it.
+// A partial module mock is how the previous one rotted: it satisfies today's consumer and silently hands
+// `undefined` to tomorrow's, and vitest type-checks none of it.
 vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
   useComposerSurfaceHostPin: () => ({
     selection: { kind: "pinned", hostId: TEST_HOST_ID },

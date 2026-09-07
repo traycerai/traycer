@@ -59,11 +59,7 @@ function assistantModel(id: string, content: string): ChatMessageModel {
   return { ...userModel(id, content), role: "assistant" };
 }
 
-/**
- * What `transcriptListRows` produces for a window whose assistant row is
- * streaming: a new array whose hydrated row carries a NEW model object per
- * token, beside a placeholder whose identity the skeleton cache holds stable.
- */
+/** What `transcriptListRows` produces for a window whose assistant row is streaming: a new array whose hydrated row carries a NEW model object per token, beside a placeholder whose identity the skeleton cache holds stable. */
 function listRowsFor(
   window: TranscriptWindow,
   assistantContent: string,
@@ -141,11 +137,8 @@ describe("chat turn minimap logic", () => {
     );
   });
 
-  // The skeleton ships one char past the minimap's budget so the compactor
-  // can see a 201st character and know to append "…" (row-skeleton.ts's
-  // ROW_SKELETON_PREVIEW_MAX_CHARS doc). If the minimap cap ever rises to
-  // meet or pass the protocol cap, every long user turn silently loses its
-  // truncation ellipsis.
+  // The skeleton ships one char past the minimap's budget so the compactor can see a 201st character and know to append "…" (row-skeleton.ts's ROW_SKELETON_PREVIEW_MAX_CHARS doc).
+  // If the minimap cap ever rises to meet or pass the protocol cap, every long user turn silently loses its truncation ellipsis.
   it("stays strictly below the protocol row-skeleton preview cap", () => {
     expect(CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS).toBeLessThan(
       ROW_SKELETON_PREVIEW_MAX_CHARS,
@@ -153,20 +146,7 @@ describe("chat turn minimap logic", () => {
   });
 });
 
-/**
- * The rail's derive is a whole-transcript scan plus a per-turn allocation and
- * preview compaction. `rows` is rebuilt on every streaming token, so keying the
- * derive on it ran all of that dozens of times a second - O(history) work in
- * the structure that exists to make long chats cheap.
- *
- * A block delta folds into `messages` and never touches the `TranscriptWindow`
- * (`applyBufferedDeltas`), so the window is the identity that survives exactly
- * that churn. These pin the derive to it.
- *
- * The assertions are on REFERENTIAL identity, deliberately: a `toEqual` here
- * passes against the bug, because re-deriving produces an equal answer. Only
- * "the same array came back" says the scan did not run.
- */
+/** A block delta folds into `messages` and never touches the `TranscriptWindow` (`applyBufferedDeltas`), so the window is the identity that survives exactly that churn. */
 describe("chatTurnMinimapItems caching", () => {
   const skeleton: ReadonlyArray<RowSkeletonEntry> = [
     skeletonEntry("r-0", "user", "first question"),
@@ -185,10 +165,8 @@ describe("chatTurnMinimapItems caching", () => {
       skeletonComplete: true,
       // Fully delivered: the prefix reached the end of the index.
       skeletonStreamCoveredThrough: entries.length,
-      // The assistant row is hydrated - it is the one taking tokens. It
-      // draws no ledger record in this fixture (the minimap derive reads only
-      // `skeleton`/`spans` shape, never record bodies or byte figures), so
-      // the ledger stays empty and the span references nothing.
+      // The assistant row is hydrated - it is the one taking tokens.
+      // It draws no ledger record in this fixture (the minimap derive reads only `skeleton`/`spans` shape, never record bodies or byte figures), so the ledger stays empty and the span references nothing.
       records: { messages: new Map(), events: new Map(), revision: 0 },
       spans: [
         {
@@ -276,14 +254,8 @@ describe("chatTurnMinimapItems caching", () => {
   });
 
   it("re-derives when a PLACED row is dropped by renderer suppression", () => {
-    // The case the trailing-unplaced key cannot see. `rendered` is post-filter:
-    // the pinned-todo pass drops an assistant row whose only segments were
-    // lifted into the dock, and that decision comes from the live turn - so it
-    // flips per token while the window's identity holds still.
-    //
-    // Reusing the derive here is not a stale label, it is a stale INDEX: the
-    // items cache list positions, so every turn below the omitted row would
-    // scroll to the wrong place.
+    // The case the trailing-unplaced key cannot see.
+    // Reusing the derive here is not a stale label, it is a stale INDEX: the items cache list positions, so every turn below the omitted row would scroll to the wrong place.
     const window = windowWith(skeleton);
     const rows = listRowsFor(window, "reply");
     const first = chatTurnMinimapItems({ rows, window });

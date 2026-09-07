@@ -15,11 +15,6 @@ export interface GitPanelActiveFile {
   readonly group: GitDiffBundleGroup;
 }
 
-/**
- * The file the user is "looking at" on the canvas, scoped to the worktree
- * this panel is showing. Returns null when the focused tile belongs to
- * another worktree - the panel never follows across worktrees.
- */
 export function useGitPanelActiveFile(args: {
   readonly viewTabId: string;
   readonly hostId: string;
@@ -55,10 +50,8 @@ export function gitPanelActiveFilePathForGroup(
 }
 
 /**
- * Write-through section reveal: when canvas focus lands on a file whose
- * stage section is collapsed, un-collapse it via the same persisted
- * toggle a manual header click uses. Runs once per focused tile so a
- * deliberate re-collapse afterwards is respected until focus moves again.
+ * Write-through section reveal: when canvas focus lands on a file whose stage section is collapsed, un-collapse it via the same persisted toggle a manual header click uses.
+ * Runs once per focused tile so a deliberate re-collapse afterwards is respected until focus moves again.
  */
 export function useGitPanelRevealSection(args: {
   readonly epicId: string;

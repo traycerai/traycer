@@ -28,23 +28,7 @@ interface RemovePackVersionMutationContext {
   readonly panel: VersionManagerPanelToken | null;
 }
 
-/**
- * Delete one installed pack version's bytes.
- *
- * Typed `ok: false` results (is-current, holder-reserved, quarantine-reserved,
- * deferred-locked) are success responses the panel renders on the row — not
- * thrown host errors, so deferred-locked is never drawn as a failure.
- *
- * Real transport/host bugs do throw, and toast from HERE rather than from a
- * per-call `onError`: this panel lives inside an unforced Radix popover, so
- * closing the version menu mid-flight unmounts the mutation observer and
- * TanStack drops the per-call callback.
- *
- * `panel` is the token of the panel making the request, captured at `onMutate`
- * so delivery asks about THAT panel rather than about panels in general. Pass
- * null from any caller with no inline surface of its own: the hook then owns
- * every outcome.
- */
+/** ok false is success, not error. Mutation-level toast: the popover unmounts on close. */
 export function useProvidersRemovePackVersion(
   panel: VersionManagerPanelToken | null,
 ): RemovePackVersionMutationResult {
@@ -78,9 +62,7 @@ export function useProvidersRemovePackVersionForClient(
         }
         if (response.result.ok) return;
         // Typed refusals ride the success path, so `onError` cannot see them.
-        // Only cover the case the panel cannot: the panel that asked unmounted
-        // mid-flight. Another pack's panel being open is not a substitute - it
-        // has no row for this version and never made the request.
+        // Another pack's panel being open is not a substitute - it has no row for this version and never made the request.
         if (versionManagerPanelIsMounted(context.panel)) return;
         const message = removeResultUserMessage(response.result);
         // `deferred-locked` is not a failure - the delete is recorded and runs

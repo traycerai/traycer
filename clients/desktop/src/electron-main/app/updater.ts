@@ -74,36 +74,12 @@ interface AppUpdateSnapshotPatch {
   readonly lastCheckIntent?: DesktopAppUpdateCheckIntent | null;
 }
 
-// Set once at `installAutoUpdater` time from the `package-type` file
-// (deb/rpm only - AppImage never gets this file and keeps electron-updater's
-// default silent-update path untouched). Drives the `autoInstallOnAppQuit`
-// gate below and scopes every other Linux-guidance code path.
+// Set once at `installAutoUpdater` time from the `package-type` file (deb/rpm only - AppImage never gets this file and keeps electron-updater's default silent-update path untouched).
 let linuxPackageType: LinuxPackageType | null = null;
-// Whether an in-place `dpkg -i`/`rpm -U` upgrade would actually succeed and
-// replace the binary we're running from (see `linux-update-guidance.ts`).
-// Only meaningful when `linuxPackageType !== null`; UX gate, not a safety
-// net - `autoInstallOnAppQuit` is disabled for deb/rpm regardless of this.
 let linuxSilentInstallSupported = true;
-// Path electron-updater downloaded the update to, captured off the
-// `update-downloaded` event. Threaded into the guidance command so the user
-// runs `dpkg -i`/`rpm -U` against the file we already fetched instead of
-// re-downloading by hand.
 let linuxDownloadedFile: string | null = null;
-// Built once, exactly when we learn silent install won't/didn't work for this
-// update cycle - either decided up front (`linuxSilentInstallSupported ===
-// false` at download-complete time) or discovered the hard way (a live
-// "Restart to update" click hit an escalation failure despite looking safe up
-// front). Echoed by reference on every subsequent `emitSnapshot` call rather
-// than rebuilt fresh each time, so `sameSnapshot`'s renderer-side dedup (which
-// compares this field) doesn't see spurious changes on unrelated re-emits
-// while status stays "ready".
 let linuxInstallGuidance: DesktopAppUpdateGuidance | null = null;
 
-// Injected from `desktop-startup` so the updater can decide whether to raise an
-// OS notification (only when no app window is focused) and bring the app
-// forward when the user clicks it. Focus across all windows is only knowable in
-// the main process, so the notification decision lives here rather than in any
-// single renderer.
 export interface AppUpdaterDeps {
   readonly isAnyWindowFocused: () => boolean;
   readonly focusPrimaryWindow: () => void;
@@ -119,31 +95,18 @@ const PRIVATE_UPDATE_REPO = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ?? "";
 const PRIVATE_UPDATE_TOKEN =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN ?? "";
 
-// User-facing copy for the update failure classes. Deliberately generic and
-// reassuring - users shouldn't see release-feed internals, HTTP bodies, or be
-// asked to reason about repository visibility. The raw error is still logged,
-// and the renderer offers "Report an issue" (which privately attaches logs) so
-// support has the real diagnostics for anything the user can't resolve.
+// The raw error is still logged, and the renderer offers "Report an issue" (which privately attaches logs) so support has the real diagnostics for anything the user can't resolve.
 const UPDATE_ERROR_OFFLINE_MESSAGE =
   "Traycer couldn't connect to check for updates. Please check your internet connection and try again.";
 const UPDATE_ERROR_SERVICE_MESSAGE =
   "Traycer couldn't reach the update service right now. Please try again in a little while.";
 const UPDATE_ERROR_DOWNLOAD_MESSAGE =
   "Traycer couldn't download and install the latest update. Please try again in a little while.";
-// The download itself succeeded and its checksum matched; what failed is the
-// authenticity check on the downloaded installer. "Try again" is the wrong
-// advice - a retry re-downloads bytes that were never the problem - and the
-// artifact to distrust is the UPDATE, not the copy already installed.
+// "Try again" is the wrong advice - a retry re-downloads bytes that were never the problem - and the artifact to distrust is the UPDATE, not the copy already installed.
 const UPDATE_ERROR_SIGNATURE_MESSAGE =
   "Traycer couldn't verify this update and did not install it. Please download Traycer again from traycer.ai.";
 const UPDATE_ERROR_GENERIC_MESSAGE =
   "Traycer ran into a problem while updating. Please try again in a little while.";
-// Linux deb/rpm only: a live install attempt hit an escalation failure
-// (pkexec/sudo/dpkg/rpm). Unlike the other generic messages, this one points
-// at the guidance dialog rather than suggesting a retry - the escalation path
-// is now known not to work on this machine, so `installGuidance` is populated
-// alongside this message (see `handleUpdaterError`'s `installingUpdate`
-// branch).
 const UPDATE_ERROR_LINUX_MANUAL_INSTALL_MESSAGE =
   "Traycer couldn't finish installing the update automatically. Follow the instructions below to finish it manually.";
 
@@ -184,18 +147,7 @@ let checkErrorEmitted = false;
 let downloadInProgress = false;
 let downloadIntent: DesktopAppUpdateCheckIntent | null = null;
 let lastResumeCheckAtMs = 0;
-// The channel mode the updater is CONFIGURED with right now: what
-// `autoUpdater.allowPrerelease` was derived from, and what the namespaced
-// selector is filtering candidates for. Set once at initialization and moved
-// only by a channel change that genuinely alters discovery behavior, so it can
-// be compared against a freshly requested mode to tell a real transition from a
-// preference write that changes nothing the updater does.
 let activeChannelMode: DesktopUpdateChannelMode = "stable-only";
-// Monotonic channel epoch, bumped by every `setAllowPrereleaseUpdates` call.
-// A channel change makes any discovery/candidate produced under a prior
-// generation stale: `checkForUpdatesNow` rejects a stale discovery before
-// touching the feed, the availability/download handlers ignore stale events,
-// and download/install refuse a candidate whose generation no longer matches.
 let channelGeneration = 0;
 // Generation the in-flight check was started under (null when idle). Compared
 // against `channelGeneration` to detect a channel change mid-check.
@@ -210,49 +162,13 @@ let pendingRecheck: {
   readonly isDev: boolean;
   readonly intent: DesktopAppUpdateCheckIntent;
 } | null = null;
-// Serializes the whole channel-change operation. `setAllowPrereleaseUpdates`
-// enqueues onto this chain synchronously (before any await), so admission order
-// equals call order and each operation's idempotence check + refusal +
-// persistence + generation/feed/snapshot run to completion before the next
-// begins. Without this, two windows toggling opposite directions can interleave
-// - the second reads the pre-persist value, returns "unchanged", and the first
-// then persists the opposite - stranding the channel on the wrong value. The
-// chain swallows each operation's settlement so one rejection can't wedge every
-// later change.
+// `setAllowPrereleaseUpdates` enqueues onto this chain synchronously (before any await), so admission order equals call order and each operation's idempotence check + refusal +.
 let channelChangeQueue: Promise<void> = Promise.resolve();
-// GitHub release discovery walks at most this many 100-item pages. Hitting the
-// cap with a still-full final page is surfaced as a discovery error rather than
-// "no update", so a real release beyond the cap is never mistaken for "up to
-// date".
+// Hitting the cap with a still-full final page is surfaced as a discovery error rather than "no update", so a real release beyond the cap is never mistaken for "up to date".
 const MAX_DISCOVERY_PAGES = 10;
-// Raised the moment we hand off to `quitAndInstall`. The `before-quit`
-// handler reads this to let the install-driven `app.quit()` through instead
-// of intercepting it with the unsynced-edits prompt - the user already chose
-// to restart, so blocking the quit would silently swallow the install.
 let installingUpdate = false;
-// A downloaded update artifact is staged inside electron-updater from the moment
-// an `update-downloaded` event fires; from then on its normal-quit install
-// handler (`autoInstallOnAppQuit`, enabled on macOS/Windows/AppImage) can apply
-// it. Crucially this stays raised through an install *attempt that then errors* -
-// a failed install does not un-stage the artifact - so a channel switch must be
-// refused as long as any staged artifact could still auto-install on quit, not
-// merely while the status reads "ready" (cold-review finding 2). Never lowered
-// within the process: a successful install ends the process, and any other
-// transition leaves the artifact staged.
 let updateArtifactStaged = false;
 
-// Serialized updater-initialization barrier. `installAutoUpdater` runs in a
-// deferred startup phase, but the update IPC and the menu "Check for updates"
-// affordance are wired earlier, in the window phase. Until initialization
-// finishes, electron-updater's `allowPrerelease` still reflects the running
-// build (an RC build implicitly allows prereleases) and no event listeners are
-// attached, so an early check/action must not touch electron-updater or it would
-// act on that implicit channel. Every externally reachable check/set awaits
-// `updaterInitialized`; the synchronous download/install entry points are guarded
-// by `updaterInitState` (they are only reachable after a candidate has been
-// surfaced, which itself requires initialization). Failure is explicit: the
-// barrier always settles, and a failed init refuses checks rather than letting
-// them fall through to the implicit channel or leaving callers hanging.
 type UpdaterInitState = "pending" | "initialized" | "failed";
 let updaterInitState: UpdaterInitState = "pending";
 let signalUpdaterInitialized: (() => void) | null = null;
@@ -268,16 +184,6 @@ function markUpdaterInitialized(state: "initialized" | "failed"): void {
   }
 }
 
-/**
- * Wires `electron-updater` to the GitHub Releases publish target declared in
- * `package.json` (`build.publish`). Actual release channels, signing, and
- * promotion flows are set up in T5 (CI/CD) - here we only install the core
- * wiring so the desktop shell checks for updates at startup and surfaces
- * progress through `electron-log`.
- *
- * `isDev` (resolved once into DesktopConfig) gates updates off when the dev
- * orchestrator is in charge.
- */
 export async function installAutoUpdater(
   isDev: boolean,
   deps: AppUpdaterDeps,
@@ -288,11 +194,7 @@ export async function installAutoUpdater(
   installed = true;
   try {
     await configureAutoUpdater(deps);
-    // Initialization is complete: the persisted channel is applied, the feed is
-    // configured, and every event listener is attached. Release the barrier now,
-    // BEFORE the initial check below, so the fire-and-forget check (and any early
-    // IPC/menu check already parked on the barrier) runs against authoritative
-    // state and never deadlocks awaiting an unresolved barrier.
+    // Release the barrier now, BEFORE the initial check below, so the fire-and-forget check (and any early IPC/menu check already parked on the barrier) runs against authoritative state.
     markUpdaterInitialized("initialized");
   } catch (err) {
     // Initialization failed partway. Settle the barrier as failed so parked
@@ -308,29 +210,8 @@ export async function installAutoUpdater(
 }
 
 /**
- * Windows only: an update whose signature check could not RUN must not be
- * thrown away, but one that genuinely FAILED still must be.
- *
- * `NsisUpdater.verifySignature` settles five different ways, and only one of
- * the rejecting ones means "the verifier itself broke":
- *
- * | branch                                          | settles                | meaning                |
- * | ----------------------------------------------- | ---------------------- | ---------------------- |
- * | publisher mismatch, or `Status !== 0`           | `resolve(<reason>)`    | genuine mismatch       |
- * | Windows 6.x, or the `ConvertTo-Json` probe threw | `resolve(null)`        | can't run - upstream already proceeds |
- * | `execFile` failed and the probe passed          | `reject(execFile err)` | can't run - **ours**   |
- * | `LiteralPath` !== the file we downloaded        | `reject(new Error)`    | ANTI-SUBSTITUTION check |
- * | exit 0 but stderr non-empty                     | `reject(new Error)`    | upstream's deliberate fail-closed |
- *
- * So a blanket `catch` would also swallow the verify-one-file/install-another
- * check and upstream's fail-closed branch - downgrading two security controls
- * to a log line. Only the third row is ours to tolerate.
- *
- * The discriminator is structural, never textual: Node stamps `cmd` onto every
- * error `execFile` raises - a timeout kill and a non-zero exit alike, which are
- * exactly the two modes seen in the field - while the two rejections
- * electron-updater mints by hand carry no such property. Matching on message
- * text instead would quietly stop working the next time upstream rewords one.
+ * Windows only: an update whose signature check could not RUN must not be thrown away, but one that genuinely FAILED still must be.
+ * The discriminator is structural, never textual: Node stamps `cmd` onto every error `execFile` raises.
  */
 export function tolerateUnrunnableSignatureCheck(
   base: VerifyUpdateCodeSignature,
@@ -357,11 +238,6 @@ function isChildProcessFailure(error: unknown): boolean {
   );
 }
 
-// The `verifyUpdateCodeSignature` accessor exists only on `NsisUpdater`. We
-// feature-detect rather than `instanceof NsisUpdater`, because importing that
-// class as a VALUE would resolve to the unit suite's `electron-updater`
-// package-root mock (which exports `autoUpdater` alone) and make every test
-// throw on `instanceof undefined`.
 interface CodeSignatureVerifyingUpdater {
   verifyUpdateCodeSignature: VerifyUpdateCodeSignature;
 }
@@ -384,10 +260,6 @@ function installWindowsSignatureTolerance(): void {
   );
 }
 
-// Applies the persisted channel, configures the update feed, and attaches every
-// electron-updater event listener. Extracted so `installAutoUpdater` can wrap it
-// in a single initialization boundary that always settles the readiness barrier
-// (cold-review finding 1).
 async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   updaterDeps = deps;
   resolveInstallBlockedReason = deps.installBlockedReason;
@@ -406,28 +278,11 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
         await resolveLinuxSilentInstallSupported(linuxPackageType);
     }
   }
-  // deb/rpm installs require root escalation (pkexec/sudo) to apply -
-  // unlike macOS/Windows/AppImage, that escalation can fail in ways that are
-  // invisible when attempted from the quit-teardown path (see `doInstall` in
-  // `DebUpdater`/`RpmUpdater`): a failure there dispatches an error, but
-  // Electron's quit proceeds regardless, so the user just reopens the old
-  // binary with no explanation. Disabling this unconditionally for deb/rpm -
-  // regardless of `linuxSilentInstallSupported` - means a privileged install
-  // is only ever attempted synchronously from the user's explicit "Restart to
-  // update" click, where a failure is guaranteed to surface visibly (see
-  // `handleUpdaterError`'s `installingUpdate` branch).
   autoUpdater.autoInstallOnAppQuit = linuxPackageType === null;
   // Windows: keep a completed, sha512-verified download from being discarded
   // when the Authenticode check can't execute (its PowerShell call carries a
   // hardcoded 20s timeout that a full ~138MB installer hash routinely exceeds).
   installWindowsSignatureTolerance();
-  // electron-updater auto-enables prereleases when the running build is an RC,
-  // and then selects the newest prerelease it can see - across release lines,
-  // and across the `host-v*` / `cli-v*` tags this repository also publishes.
-  // Both halves of that are wrong here, so the flag is replaced by a mode
-  // derived from the persisted preference and the installed version, and every
-  // prerelease check is routed through the desktop-tag selector in
-  // `resolveDesktopReleaseFeed` below, which receives that mode.
   await hydrateUpdatePreferences();
   activeChannelMode = effectiveChannelMode();
   autoUpdater.allowPrerelease = modeAllowsPrerelease(activeChannelMode);
@@ -493,11 +348,6 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     emitSnapshot({
       status: intent === "manual" ? "up-to-date" : "idle",
       latestVersion: info.version ?? null,
-      // Read off THIS check's `info`, same as `latestVersion` above: the pair
-      // describes the feed's current latest build even when it is not an
-      // upgrade for us. That freshness is what recovery routing needs - a
-      // previously cached epoch could describe a build the feed no longer
-      // offers, and `null`ing it would hide a generation the feed does state.
       latestCompatibilityEpoch: readCandidateCompatibilityEpoch(info),
       errorMessage: null,
       lastCheckedAt: new Date().toISOString(),
@@ -521,10 +371,6 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   });
   autoUpdater.on("update-downloaded", (info) => {
     log.info("[updater] update downloaded - ready to install", info);
-    // An artifact is now physically staged on disk and electron-updater's
-    // quit-time handler could apply it. Record that before any early return so a
-    // later channel switch is refused (finding 2) even if this event is dropped
-    // by a guard below or the ready status is later replaced by an install error.
     updateArtifactStaged = true;
     if (currentSnapshot.status === "ready") {
       return;
@@ -566,15 +412,6 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   });
 }
 
-/**
- * The mode a check would run under RIGHT NOW: the durable explicit preference
- * plus the installed version.
- *
- * Read from the persisted preference rather than `autoUpdater.allowPrerelease`
- * for the same reason `getAppUpdateSnapshot` reconciles: the flag is a derived
- * effect that a half-applied or not-yet-initialized updater can lag behind,
- * while the preference and the app version are always authoritative.
- */
 function effectiveChannelMode(): DesktopUpdateChannelMode {
   return resolveUpdateChannelMode(prereleaseUpdatesEnabled(), CURRENT_VERSION);
 }
@@ -583,10 +420,7 @@ export async function checkForUpdatesNow(
   isDev: boolean,
   intent: DesktopAppUpdateCheckIntent,
 ): Promise<DesktopAppUpdateSnapshot> {
-  // Serialize behind updater initialization: a check reaching here in the window
-  // phase (menu / IPC) before the deferred `installAutoUpdater` runs must wait
-  // for the persisted channel, feed, and listeners to be authoritative rather
-  // than query electron-updater's implicit (build-derived) channel (finding 1).
+  // Serialize behind updater initialization: a check reaching here in the window phase (menu / IPC) before the deferred `installAutoUpdater` runs must wait for the persisted channel.
   await updaterInitialized;
   if (updaterInitState === "failed") {
     // Initialization failed: never fall through to electron-updater's implicit
@@ -642,11 +476,7 @@ export async function checkForUpdatesNow(
     }
     return currentSnapshot;
   }
-  // Fail closed on a misconfigured private feed: a token set against an invalid
-  // repository coordinate must never fall through to the packaged/public
-  // `app-update.yml`. Refuse every check (stable and RC) before any network
-  // access rather than authenticate against, or move the build onto, the public
-  // feed (review amendment 2).
+  // Fail closed on a misconfigured private feed: a token set against an invalid repository coordinate must never fall through to the packaged/public `app-update.yml`.
   if (invalidPrivateConfig()) {
     log.warn(
       "[updater] refusing update check: VITE_TRAYCER_DESKTOP_UPDATE_TOKEN is set but VITE_TRAYCER_DESKTOP_UPDATE_REPO is not a valid owner/repo coordinate",
@@ -696,27 +526,8 @@ export async function checkForUpdatesNow(
     });
   }
   try {
-    // THE MODE decides whether the namespaced selector runs, not the flag it
-    // derived: `allowPrerelease` is now an effect of the mode, and reading the
-    // effect back to re-decide the cause is how the two drift.
-    //
-    // Stable deliberately does NOT run discovery, and is safe without it only
-    // because of an invariant that lives in the release workflows rather than
-    // here: electron-updater's stable path resolves this repository's
-    // `/releases/latest`, and although the repo also publishes `host-v*` and
-    // `cli-v*` stable tags, both are created with `--latest=false`
-    // (`release-host.yml`: "host version releases must never become the
-    // latest"; same in `release-cli.yml`), while only a stable desktop publish
-    // passes `--latest`. So `/releases/latest` can only ever be a `desktop-v*`
-    // stable release. If that ever changes, a host-only release becomes the
-    // latest, its `latest.yml` does not exist, and EVERY stable check starts
-    // failing - at which point stable needs the selector too.
     if (modeAllowsPrerelease(activeChannelMode)) {
       const feed = await resolveDesktopReleaseFeed(activeChannelMode);
-      // Discovery is async: if the channel changed while it ran, reject this
-      // stale result before touching the feed or publishing any state - the
-      // superseding channel's own check (queued below via `pendingRecheck`)
-      // owns the outcome now.
       if (checkGeneration !== channelGeneration) {
         return currentSnapshot;
       }
@@ -768,11 +579,7 @@ export type {
 export function setAllowPrereleaseUpdates(
   allowPrerelease: boolean,
 ): Promise<DesktopAppUpdateChannelChange> {
-  // Enqueue synchronously (no await before this line) so admission order equals
-  // call order: the entire operation below - idempotence, refusal, persistence,
-  // generation/feed/snapshot - runs serialized, and the last admitted request
-  // wins. Two windows requesting opposite channels can no longer interleave the
-  // idempotence check across the async persistence and strand the wrong value.
+  // Enqueue synchronously (no await before this line) so admission order equals call order: the entire operation below - idempotence, refusal, persistence, generation/feed/snapshot.
   const run = channelChangeQueue.then(() =>
     performChannelChange(allowPrerelease),
   );
@@ -788,10 +595,7 @@ export function setAllowPrereleaseUpdates(
 async function performChannelChange(
   allowPrerelease: boolean,
 ): Promise<DesktopAppUpdateChannelChange> {
-  // Serialize behind updater initialization so a channel change can never race
-  // ahead of the deferred `installAutoUpdater` and mutate a half-initialized
-  // feed/listener set (finding 1). The barrier always settles, so this never
-  // hangs; the preference persistence below is independent of updater health.
+  // Serialize behind updater initialization so a channel change can never race ahead of the deferred `installAutoUpdater` and mutate a half-initialized feed/listener set (finding 1)..
   await updaterInitialized;
   // The mode this request asks for. Read inside the serialized section so the
   // persisted value it is compared against reflects any preceding queued change.
@@ -809,31 +613,8 @@ async function performChannelChange(
       }),
     };
   }
-  // PAST HERE THE PREFERENCE MOVES, AND SO DOES THE EFFECTIVE MODE - always,
-  // and there is deliberately no third branch for "persisted moved, mode did
-  // not".
-  //
-  // Persisting intent and transitioning the channel are still two different
-  // things, and the code below keeps them ordered accordingly. They just cannot
-  // currently come apart: `resolveUpdateChannelMode(true, …)` is always
-  // `explicit-prerelease` and `resolveUpdateChannelMode(false, …)` never is, so
-  // a changed preference always crosses that boundary. A branch guarding the
-  // other case would be unreachable defensive code, and the cold review was
-  // right that shipping one - with a test that has to construct an impossible
-  // updater state to reach it - is worse than not having it.
-  //
-  // If the derivation ever gains a mode that BOTH preference values can select,
-  // this is the point that needs the split back: persist, re-emit, and return
-  // `unchanged` WITHOUT running any of the destructive choreography below (epoch
-  // bump, candidate invalidation, staged-artifact refusal/discard, feed
-  // replacement, quit-install disarm), none of which a change that selects no
-  // different candidate can justify.
+  // They just cannot currently come apart: `resolveUpdateChannelMode(true, …)` is always `explicit-prerelease` and `resolveUpdateChannelMode(false, …)` never is, so a changed.
 
-  // A DOWNLOAD IN PROGRESS refuses on every platform, and this half of the
-  // guard is not negotiable: `startUpdateDownload` calls
-  // `autoUpdater.downloadUpdate()` with no `CancellationToken`, so there is no
-  // supported way to stop the transfer that is already writing into the
-  // updater's `pending/` directory. Nothing here can make that safe.
   if (downloadInProgress || currentSnapshot.status === "downloading") {
     log.warn(
       "[updater] refusing channel change while an update is downloading",
@@ -846,27 +627,6 @@ async function performChannelChange(
       snapshot: emitSnapshot({}),
     };
   }
-  // A STAGED ARTIFACT is where the platforms diverge, and the divergence is a
-  // fact about electron-updater rather than a preference of ours.
-  //
-  // The original blanket refusal rested on two hazards: the artifact could
-  // still auto-install on quit, and it could be reused by a later download.
-  // On Windows/AppImage both are dissolved - `BaseUpdater`'s quit handler
-  // RE-READS `autoInstallOnAppQuit` at quit time, so lowering the flag now
-  // provably disarms it, and `DownloadedUpdateHelper` re-hashes the cached file
-  // against the current feed candidate, so an RC artifact can never be mistaken
-  // for the stable one it replaces. `discardStagedUpdate` performs exactly that
-  // disarm, which is what makes the switch admissible here rather than a
-  // hopeful one.
-  //
-  // On macOS neither is dissolved. Squirrel.Mac has already been handed the
-  // update by `MacUpdater.updateDownloaded`, it registers no quit handler and
-  // re-reads no flag, and no supported API withdraws a natively staged update.
-  // The refusal therefore STANDS, and it is not a transient one the user can
-  // wait out: the staged build applies at the next quit, and RC opt-in becomes
-  // reachable only after that hop. `resolveCompatRecovery` routes that case to
-  // `restart-to-clear-staged` so the dialog says so instead of offering a
-  // button that errors.
   if (updateArtifactStaged) {
     if (!canDiscardStagedUpdate()) {
       log.warn(
@@ -890,12 +650,7 @@ async function performChannelChange(
     configureStableGitHubUpdateFeed();
   }
 
-  // Any not-yet-downloading candidate the previous channel produced (an
-  // "available"/"checking" result) no longer matches the selected channel, so
-  // drop it. Downloading/ready states never reach here - the guard above rejects
-  // a switch while an artifact exists. The caller (app-update IPC) follows this
-  // with a check for the new channel; if a stale check is still resolving, that
-  // check is queued via `pendingRecheck`.
+  // Downloading/ready states never reach here - the guard above rejects a switch while an artifact exists.
   downloadInProgress = false;
   downloadIntent = null;
   candidateGeneration = null;
@@ -905,10 +660,6 @@ async function performChannelChange(
       allowPrerelease: autoUpdater.allowPrerelease,
       status: "idle",
       latestVersion: null,
-      // Cleared WITH the version. These two describe one candidate, and a null
-      // version beside a live epoch would read as "some build of unknown
-      // version declares epoch N" to every consumer that treats a non-null
-      // epoch as sufficient.
       latestCompatibilityEpoch: null,
       downloadProgress: null,
       errorMessage: null,
@@ -917,43 +668,13 @@ async function performChannelChange(
   };
 }
 
-/**
- * Whether a staged update can be withdrawn on THIS platform.
- *
- * `darwin` is the whole of the exception and the reason is Squirrel.Mac, not
- * macOS: `MacUpdater.updateDownloaded` hands the artifact to the native updater
- * the moment the download completes (under `autoInstallOnAppQuit`, which this
- * app deliberately keeps enabled), and from then on the staging lives in
- * ShipIt's own cache with no supported API to revoke it. Reaching into
- * `~/Library/Caches/<appId>.ShipIt/` was investigated and rejected: it races
- * the already-spawned watcher and is version-fragile.
- *
- * Everywhere else the artifact is inert until something acts on it, and both
- * of the things that could act are ours to stop - see the call sites.
- */
 function canDiscardStagedUpdate(): boolean {
   return process.platform !== "darwin";
 }
 
 /**
- * Disarms quit-time install for the rest of this process.
- *
- * WHY THIS IS SUFFICIENT rather than hopeful, at the pinned electron-updater:
- * `BaseUpdater` registers its quit handler once, at download completion, and
- * that handler RE-READS `this.autoInstallOnAppQuit` when the quit actually
- * arrives ("Update will not be installed on quit because autoInstallOnAppQuit
- * is set to false"). So lowering the public flag after the fact genuinely
- * disarms an already-registered handler, and lowering it before a download
- * completes stops the handler being registered at all. A contract test pins
- * that re-read, because the whole Windows/AppImage half of this policy rests
- * on it.
- *
- * It is deliberately NOT re-raised later in the process. Re-arming would mean
- * deciding, at some future download completion, that the artifact then staged
- * is one we still want applied silently - and the explicit "Restart to update"
- * affordance covers that case with the user present. deb/rpm never had it
- * raised (`configureAutoUpdater` sets it false there), so this is a no-op for
- * them.
+ * So lowering the public flag after the fact genuinely disarms an already-registered handler, and lowering it before a download completes stops the handler being registered at all.
+ * deb/rpm never had it raised (`configureAutoUpdater` sets it false there), so this is a no-op for them.
  */
 function disarmQuitInstall(): void {
   if (!autoUpdater.autoInstallOnAppQuit) {
@@ -963,31 +684,7 @@ function disarmQuitInstall(): void {
   autoUpdater.autoInstallOnAppQuit = false;
 }
 
-/**
- * Withdraws a staged artifact from every path that could still apply it, and
- * transitions the snapshot out of the states that offer it.
- *
- * Three paths, all closed:
- *
- *  - QUIT-TIME install, by {@link disarmQuitInstall} above.
- *  - The MANUAL install affordance, by leaving `ready`: `installDownloadedUpdate`
- *    refuses unless `status === "ready"`, and every renderer affordance is gated
- *    on the same status.
- *  - REUSE by a later download, by `DownloadedUpdateHelper`'s own re-hash: it
- *    records and re-verifies the cached file's `sha512` against the CURRENT feed
- *    candidate and empties `pending/` on any mismatch. An RC artifact never
- *    matches a stable one's hash.
- *
- * The bytes on disk are deliberately left alone. `DownloadedUpdateHelper.clear()`
- * is `@private` and reachable only through a cast this repo's lint bans, and
- * deleting `pending/` by hand races a download that may be writing into it - the
- * one non-idempotent operation in this design, and the one it refuses. The
- * helper's own cleanup covers it without the race.
- *
- * Idempotent: every step is a flag or a snapshot transition, so a crash between
- * them leaves at worst "flag cleared, snapshot stale", which fails in the safe
- * direction and converges on the next call or restart.
- */
+/** An RC artifact never matches a stable one's hash. */
 function discardStagedUpdate(): DesktopAppUpdateSnapshot {
   disarmQuitInstall();
   updateArtifactStaged = false;
@@ -1006,78 +703,17 @@ function discardStagedUpdate(): DesktopAppUpdateSnapshot {
   });
 }
 
-/**
- * How many RC candidates the recovery probe will fetch a manifest for.
- *
- * The listing walk is already bounded by {@link MAX_DISCOVERY_PAGES}; this
- * bounds the SECOND cost, one HTTP round trip per surviving candidate. Newest
- * first, so the cap only ever truncates the tail - and a floor that no RC build
- * in the five newest can clear is not one an older RC build is going to clear
- * either. Truncation is logged rather than silent, because "we found nothing"
- * and "we stopped looking" are different answers.
- */
 const MAX_RC_RECOVERY_MANIFEST_FETCHES = 5;
 
-/**
- * Wall-clock ceiling for the whole RC probe.
- *
- * The fetch-count budget above bounds how many requests are made; it does not
- * bound how long one of them takes. A stalled TCP connection never rejects, so
- * without a deadline the `manual` fallback this design leans on is simply never
- * reached and the blocking dialog sits on a spinner indefinitely - the one
- * outcome every arm of this surface is written to avoid.
- *
- * THE WHOLE PROBE, not per request, and deliberately: the two fetch helpers are
- * shared with the shipping discovery path (`resolveDesktopReleaseFeed`), and
- * threading a signal through them would change update behaviour well outside
- * this recovery flow. Racing the composed probe bounds the answer without
- * touching either.
- *
- * The loser of the race is abandoned rather than cancelled - its socket closes
- * when the runtime gives up - which is acceptable because the probe is
- * read-only and mutates nothing on timeout.
- */
+/** A stalled TCP connection never rejects, so without a deadline the `manual` fallback this design leans on is simply never reached and the blocking dialog sits on a spinner. */
 const RC_RECOVERY_PROBE_DEADLINE_MS = 15_000;
 
-/**
- * In-flight RC probes, keyed by the floor they are probing for.
- *
- * Every window renders its own copy of the blocking recovery surface, and they
- * all mount at once when a host raises its floor mid-session - so without this
- * one rejection fans out into one paginated GitHub walk per window. Keyed by
- * epoch rather than shared outright because two hosts with different floors are
- * two different questions, and the cheaper answer must not be reused for the
- * stricter one.
- *
- * Only the IN-FLIGHT promise is shared; nothing is cached past settlement. A
- * probe is cheap relative to how rarely this surface opens, and a cached "no RC
- * build clears this" would outlive the publication of the build that does.
- */
+/** Keyed by epoch rather than shared outright because two hosts with different floors are two different questions, and the cheaper answer must not be reused for the stricter one. */
 const rcRecoveryProbesInFlight = new Map<
   number,
   Promise<DesktopReleaseCandidate | null>
 >();
 
-/**
- * THE recovery decision for a client the host refused at its epoch gate.
- *
- * Decided here, in main, because every input lives here - see
- * {@link DesktopCompatRecoveryPlan} for why the renderer gets a route and not
- * the facts behind it.
- *
- * `hostAllowsRcRecovery` is passed in rather than read from the requirement,
- * because the requirement is a wire object and its interpretation
- * (`hostReleaseChannelAllowsRcRecovery` - only the exact string `rc`) belongs to
- * the protocol package the renderer already imports. Main is told the verdict,
- * not the channel string, so there is no second place that could decide `dev`
- * or an unknown future line authorizes an RC hop.
- *
- * IT HAS ONE SIDE EFFECT, and only in the direction of safety: an insufficient
- * held candidate is discarded where the platform permits (§5's disarm-on-
- * detection). That is not incidental to answering the question - a Windows user
- * who quits while an insufficient build is staged installs it and relaunches
- * into the same rejection, and this is the moment we learn it is insufficient.
- */
 export async function resolveCompatRecovery(input: {
   readonly minimumEpoch: number;
   readonly hostAllowsRcRecovery: boolean;
@@ -1088,10 +724,7 @@ export async function resolveCompatRecovery(input: {
     // is the only honest answer, and it is the one this surface falls back to.
     return manualRecoveryPlan();
   }
-  // An automatic check deliberately leaves the public snapshot at `idle`.
-  // Wait for it before deciding the selected feed cannot help; otherwise a
-  // faster RC probe can offer an unnecessary prerelease opt-in while the
-  // stable check is about to publish a sufficient candidate.
+  // Wait for it before deciding the selected feed cannot help.
   while (checkInFlight) {
     await checkSettled;
   }
@@ -1105,10 +738,7 @@ export async function resolveCompatRecovery(input: {
     held.latestCompatibilityEpoch !== null &&
     held.latestCompatibilityEpoch >= input.minimumEpoch
   ) {
-    // The selected feed already holds a build that clears the floor. No channel
-    // change is offered even if the host is on RC - the update the user already
-    // has is the shorter path, and an RC opt-in they did not need is one they
-    // cannot easily undo.
+    // No channel change is offered even if the host is on RC - the update the user already has is the shorter path, and an RC opt-in they did not need is one they cannot easily undo.
     return {
       route: "update-available",
       rcCandidateVersion: null,
@@ -1130,48 +760,19 @@ export async function resolveCompatRecovery(input: {
     }
     discardStagedUpdate();
   } else if (holdsCandidate && canDiscardStagedUpdate()) {
-    // Nothing staged YET, but the updater is holding or fetching a candidate we
-    // have just established cannot clear the floor. Lowering the flag now means
-    // the download's completion never registers a quit handler at all, which is
-    // better than lowering it after the artifact lands.
-    //
-    // GATED ON `holdsCandidate` deliberately. Disarming on the bare insufficient
-    // path would also fire when the updater holds NOTHING - the common case for
-    // this dialog - and quit-time install stays off for the rest of the process
-    // once lowered. That would silently cost a user their auto-install for a
-    // perfectly good update they fetch later in the same session, to defend
-    // against an artifact that does not exist.
+    // Nothing staged YET, but the updater is holding or fetching a candidate we have just established cannot clear the floor.
+    // Lowering the flag now means the download's completion never registers a quit handler at all, which is better than lowering it after the artifact lands.
     disarmQuitInstall();
   }
   if (!input.hostAllowsRcRecovery) {
     return manualRecoveryPlan();
   }
-  // AN ACTIVE DOWNLOAD FORECLOSES THE RC HOP, whatever the probe would find.
-  // `performChannelChange` refuses unconditionally while a transfer is in
-  // flight - there is no `CancellationToken` plumbed, so that refusal cannot be
-  // relaxed - and offering `enable-rc` here would put up a button whose only
-  // possible outcome is `refused-update-pending`, reported to the user as
-  // nothing happening at all. The download settles on its own; recovery
-  // re-resolves and reaches the RC offer then.
+  // `performChannelChange` refuses unconditionally while a transfer is in flight - there is no `CancellationToken` plumbed, so that refusal cannot be relaxed.
   if (downloadInProgress || currentSnapshot.status === "downloading") {
     return manualRecoveryPlan();
   }
-  // THE EFFECTIVE MODE, not the persisted preference and not
-  // `currentSnapshot.allowPrerelease`.
-  //
-  // `explicit-prerelease` is the case this guard has always covered: the feed
-  // checked above WAS the prerelease feed, so there is no second line left to
-  // look on, and `setAllowPrereleaseUpdates(true)` would answer `unchanged` -
-  // a button that reports success and changes nothing.
-  //
-  // `implicit-rc-line` is the case the mode model adds, and it is worse than a
-  // no-op. An RC build already receives its own line's candidates, so the
-  // probe would offer an opt-in that changes no current discovery behavior
-  // while PERSISTING a broad prerelease preference the user never asked for -
-  // one that outlives the RC install and keeps them on prereleases after they
-  // reach stable. Implicit participation is derived and must never be written
-  // to disk, so the `enable-rc` route stays reserved for a stable-only app
-  // giving explicit consent.
+  // An RC build already receives its own line's candidates, so the probe would offer an opt-in that changes no current discovery behavior while PERSISTING a broad prerelease.
+  // Implicit participation is derived and must never be written to disk, so the `enable-rc` route stays reserved for a stable-only app giving explicit consent.
   if (effectiveChannelMode() !== "stable-only") {
     return manualRecoveryPlan();
   }
@@ -1191,26 +792,8 @@ function manualRecoveryPlan(): DesktopCompatRecoveryPlan {
 }
 
 /**
- * Does an RC build exist that would clear this floor?
- *
- * READ-ONLY, and that is the property that makes it safe to run from a blocking
- * dialog on a channel the user has not opted into: no `setFeedURL`, no
- * `channelGeneration` bump, no snapshot mutation, no `autoUpdater` touch of any
- * kind. `resolveDesktopReleaseFeed` - the shipping discovery path - does all
- * four, which is exactly why this is a separate function rather than a flag on
- * that one.
- *
- * SELECTOR-FAITHFUL: enabling prereleases makes the shipping resolver consider
- * stable and RC tags together, newest-first. The probe must inspect that same
- * ordered set and decide from the FIRST usable candidate. Skipping an
- * insufficient stable candidate to offer an older sufficient RC would promise
- * a build the updater will never select after consent.
- *
- * DEEP-VALIDATED before its epoch or channel can authorize an offer, with the same
- * `validateDesktopReleaseManifest` the shipping path uses: a candidate that
- * would fail the OS floor, the architecture filter, or a missing checksum is
- * not a remedy, and offering it would spend the user's channel opt-in on a
- * build their updater then refuses to install.
+ * The probe must inspect that same ordered set and decide from the FIRST usable candidate.
+ * Skipping an insufficient stable candidate to offer an older sufficient RC would promise a build the updater will never select after consent.
  */
 async function probeRcRecoveryCandidate(
   minimumEpoch: number,
@@ -1224,10 +807,6 @@ async function probeRcRecoveryCandidate(
     runRcRecoveryProbe(minimumEpoch, controller.signal),
     controller,
   ).catch((error: unknown) => {
-    // A probe failure is not a verdict about RC - it is "we could not find
-    // out". Route it exactly like "nothing found": the manual link. Surfacing
-    // a discovery error on top of "your app is too old" adds noise to a state
-    // that already has one clear instruction.
     log.warn("[updater] RC recovery probe failed", error);
     return null;
   });
@@ -1240,18 +819,8 @@ async function probeRcRecoveryCandidate(
 }
 
 /**
- * Resolves to the probe's answer, or to `null` once
- * {@link RC_RECOVERY_PROBE_DEADLINE_MS} elapses - whichever happens first.
- *
- * Timing out is reported as "no sufficient RC candidate", which is the same
- * conservative answer a failed probe gives. It is never reported as an error:
- * the caller's only use for the distinction would be to show it, and a network
- * diagnostic stacked on "your app is too old" is noise in a state that already
- * has one clear instruction.
- *
- * The timer is unref'd so a probe running as the app quits cannot hold the
- * process open, and cleared on the winning path so a resolved probe leaves no
- * pending handle behind.
+ * It is never reported as an error: the caller's only use for the distinction would be to show it, and a network diagnostic stacked on "your app is too old" is noise in a state that.
+ * The timer is unref'd so a probe running as the app quits cannot hold the process open, and cleared on the winning path so a resolved probe leaves no pending handle behind.
  */
 function withRcRecoveryProbeDeadline(
   probe: Promise<DesktopReleaseCandidate | null>,
@@ -1367,26 +936,11 @@ export function checkForUpdatesAfterResume(isDev: boolean): void {
   void checkForUpdatesNow(isDev, "automatic");
 }
 
-/**
- * Starts downloading the update the user just opted into from the header
- * button. Only valid once the feed reported an update as `available`; a
- * second call while already downloading is a no-op (re-asserts the state).
- */
 export function startUpdateDownload(): DesktopAppUpdateSnapshot {
-  // Readiness guard (finding 1): a download is only reachable once a candidate
-  // has been surfaced as `available`, which requires initialization to have
-  // completed and attached the listeners that produce that state. This synchronous
-  // guard keeps the entry point (and its download/error UX) unchanged while making
-  // it impossible to touch electron-updater before the persisted channel/feed are
-  // authoritative or after a failed init.
   if (updaterInitState !== "initialized") {
     return currentSnapshot;
   }
-  // Updates can't be installed from this location (read-only volume), so never
-  // start a download that would fail at install time. The renderer also
-  // disables the trigger, but guard here too. Re-emit so the live blocked
-  // reason (resolved lazily) reaches the renderer instead of returning a
-  // snapshot frozen at the last emit.
+  // Updates can't be installed from this location (read-only volume), so never start a download that would fail at install time.
   if (currentInstallBlockedReason() !== null) {
     return emitSnapshot({});
   }
@@ -1411,13 +965,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
     lastCheckedAt: new Date().toISOString(),
     lastCheckIntent: "manual",
   });
-  // Some installed updater implementations throw *synchronously* while resolving
-  // the download (e.g. during file resolution) rather than returning a rejected
-  // promise. Attaching `.catch` to the call result would miss that throw, leaving
-  // `downloadInProgress`/`downloading` stranded forever (finding 7). Wrapping the
-  // call in an async IIFE funnels both a synchronous throw and an async rejection
-  // into the one `.catch`, so either way the download takes the single
-  // reset/error transition in `handleUpdaterError`.
+  // Some installed updater implementations throw *synchronously* while resolving the download (e.g. during file resolution) rather than returning a rejected promise.
   void (async () => {
     await autoUpdater.downloadUpdate();
   })().catch((err: unknown) => {
@@ -1443,12 +991,6 @@ export function installDownloadedUpdate(): DesktopAppUpdateSnapshot {
     });
     return currentSnapshot;
   }
-  // Re-entrancy guard. The quit this triggers is bounded but not instant, and
-  // the restart affordances live in every window, so a second request can
-  // arrive mid-quit. `status` is still "ready" at that point (the artifact is
-  // staged until the process ends), so the check above can't catch it - handing
-  // a second `quitAndInstall` to electron-updater mid-install is not something
-  // we rely on it to tolerate.
   if (installingUpdate) {
     log.info("[updater] install already in flight - ignoring repeat request");
     return currentSnapshot;
@@ -1461,41 +1003,18 @@ export function installDownloadedUpdate(): DesktopAppUpdateSnapshot {
   try {
     autoUpdater.quitAndInstall(false, true);
   } catch (err) {
-    // Some installed updater implementations throw *synchronously* here rather
-    // than rejecting (same hazard the download path guards against). Without
-    // this, `handleUpdaterError` never runs: no error snapshot is emitted, so
-    // `installInFlight` stays raised and every restart affordance is left
-    // permanently disabled with no way back. Route it through the same handler
-    // as an async failure - its `installingUpdate` branch lowers the flag and
-    // emits the error. Call it BEFORE clearing the flag; that branch is
-    // selected by it.
+    // Some installed updater implementations throw *synchronously* here rather than rejecting (same hazard the download path guards against).
+    // Without this, `handleUpdaterError` never runs: no error snapshot is emitted, so `installInFlight` stays raised and every restart affordance is left permanently disabled with no.
     log.warn("[updater] install handoff threw", err);
     handleUpdaterError(err);
   }
   return currentSnapshot;
 }
 
-/**
- * True once {@link installDownloadedUpdate} has handed off to
- * `quitAndInstall`. The `before-quit` handler uses this to authorize the
- * resulting quit rather than intercepting it with the unsynced-edits prompt.
- */
 export function isInstallingUpdate(): boolean {
   return installingUpdate;
 }
 
-/**
- * `allowPrerelease` reports whether THE CURRENT CHECK effectively allows
- * prereleases - the derived effect of the mode, not the saved preference.
- *
- * An RC build following its own line reports `true` while its persisted
- * preference is `false`, and that is the honest answer to the question every
- * consumer is actually asking ("could this updater hand me an RC?"). If product
- * UI ever needs to distinguish "the user asked for prereleases" from "this
- * build follows its own line", that is a DISTINCT field - overloading this one
- * is how the recovery dialog came to offer an opt-in to a build that already
- * had one.
- */
 export function getAppUpdateSnapshot(): DesktopAppUpdateSnapshot {
   const allowPrerelease = modeAllowsPrerelease(effectiveChannelMode());
   return currentSnapshot.allowPrerelease === allowPrerelease
@@ -1514,13 +1033,7 @@ async function canCheckForUpdates(isDev: boolean): Promise<boolean> {
   // `isDev` is the dev deploy slot (the development build) - it never has a
   // real update feed, so skip the updater entirely.
   if (isDev) return false;
-  // `electron-builder --dir` (used by `make install-desktop-staging`
-  // and `make install-desktop-production` for dogfood installs)
-  // never emits `app-update.yml`. With no feed config on disk,
-  // `electron-updater` throws ENOENT every launch and clutters the
-  // log. Real CI release builds DO emit the file via the `publish`
-  // configuration, so the file's presence is a faithful "has a real
-  // update feed" signal.
+  // `electron-builder --dir` (used by `make install-desktop-staging` and `make install-desktop-production` for dogfood installs) never emits `app-update.yml`.
   const feedConfigPath = join(process.resourcesPath, "app-update.yml");
   return access(feedConfigPath).then(
     () => true,
@@ -1553,11 +1066,7 @@ function configurePrivateGitHubUpdateFeed(): void {
   });
 }
 
-// Resolves the repository the update feed targets. Without a private token, an
-// unset/invalid coordinate falls back to the public production repo. WITH a
-// token, an invalid coordinate returns null so callers fail closed: a private
-// token must never authenticate against, or move the build onto, the public
-// feed (review finding 2).
+// WITH a token, an invalid coordinate returns null so callers fail closed: a private token must never authenticate against, or move the build onto, the public feed (review finding.
 function resolveUpdateRepo(): GitHubRepoCoordinate | null {
   const parsed = parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO);
   if (PRIVATE_UPDATE_TOKEN.trim().length > 0) {
@@ -1566,10 +1075,6 @@ function resolveUpdateRepo(): GitHubRepoCoordinate | null {
   return parsed ?? { owner: "traycerai", repo: "traycer" };
 }
 
-// True when a private update token is configured but its repository coordinate
-// is invalid. In that state no feed can be safely resolved, so every check is
-// refused up front (fail closed) rather than falling through to the packaged
-// public feed.
 function invalidPrivateConfig(): boolean {
   return (
     PRIVATE_UPDATE_TOKEN.trim().length > 0 &&
@@ -1578,21 +1083,8 @@ function invalidPrivateConfig(): boolean {
 }
 
 /**
- * The stable feed: electron-updater's own GitHub provider, which resolves the
- * repository's `/releases/latest`.
- *
- * That is only correct because of an invariant enforced OUTSIDE this file. The
- * repository publishes `host-v*` and `cli-v*` releases beside `desktop-v*`, and
- * GitHub would by default hand `/releases/latest` to whichever of them is the
- * newest non-prerelease - a host-only release such as `host-v1.1.11` (which has
- * no `desktop-v1.1.11` counterpart) would then win it, and every stable check
- * would fail on its absent `latest.yml`. It cannot, because both other release
- * workflows publish with `--latest=false` ("host version releases must never
- * become the latest") while only a stable desktop publish passes `--latest`.
- *
- * If that ever changes, stable must move to `resolveDesktopReleaseFeed` like
- * the prerelease modes already have - the namespaced selector is the only
- * in-process defence.
+ * It cannot, because both other release workflows publish with `--latest=false` ("host version releases must never become the latest") while only a stable desktop publish passes.
+ * If that ever changes, stable must move to `resolveDesktopReleaseFeed` like the prerelease modes already have - the namespaced selector is the only in-process defence.
  */
 function configureStableGitHubUpdateFeed(): void {
   const coordinate = resolveUpdateRepo();
@@ -1624,15 +1116,6 @@ function configureStableGitHubUpdateFeed(): void {
   autoUpdater.setFeedURL(feed);
 }
 
-/**
- * Resolves the compatible desktop-tagged GitHub Release this MODE selects
- * across pagination, and builds the feed that points electron-updater at that
- * exact release. The repository also hosts host and CLI releases, so
- * electron-updater's built-in `allowPrerelease` GitHub path is unsafe: it
- * selects the newest prerelease without respecting the `desktop-v` namespace.
- * Returns null when no selectable desktop release exists (genuine "up to
- * date"); throws on a discovery error (surfaced as a check failure).
- */
 async function resolveDesktopReleaseFeed(
   mode: DesktopUpdateChannelMode,
 ): Promise<DesktopUpdateFeed | null> {
@@ -1673,19 +1156,6 @@ async function findNewestDesktopRelease(
     coordinate,
     undefined,
   );
-  // Evaluate candidates newest-first, actually fetching + parsing each channel
-  // manifest and fully validating it (tag/version agreement, checksums,
-  // referenced installer assets, applicable installer, OS compatibility). The
-  // first genuinely usable release wins; a broken, partial, or incompatible
-  // newer release is skipped so an older applicable one is chosen instead of
-  // committing the feed to a candidate that only fails once electron-updater
-  // parses its manifest (cold-review finding 4).
-  //
-  // MODE FILTERS FIRST, and newest-first ordering is what gives the implicit
-  // line its stable priority for free: the comparator ranks stable `X.Y.Z`
-  // above every `X.Y.Z-rc.M`, so once the line's stable release is published it
-  // is simply the head of the ordered list. The eligibility filter is what
-  // keeps `X.Y+1.0-rc.1` out of that list entirely.
   const ordered = [...candidates]
     .filter((candidate) =>
       isSelectableCandidate({
@@ -1758,11 +1228,8 @@ async function findNewestDesktopRelease(
   return null;
 }
 
-// Collects every `desktop-v*` candidate (RC-only consent applied by
-// `projectDesktopRelease`) across pagination, without a manifest fetch, so the
-// caller can order them and validate newest-first. Hitting the page cap with a
-// still-full final page is a discovery error, not "no update", so a real release
-// beyond the cap is never mistaken for "up to date".
+// Collects every `desktop-v*` candidate (RC-only consent applied by `projectDesktopRelease`) across pagination, without a manifest fetch, so the caller can order them and validate.
+// Hitting the page cap with a still-full final page is a discovery error, not "no update", so a real release beyond the cap is never mistaken for "up to date".
 async function collectDesktopReleaseCandidates(
   coordinate: GitHubRepoCoordinate,
   signal: AbortSignal | undefined,
@@ -1795,11 +1262,6 @@ async function collectDesktopReleaseCandidates(
   );
 }
 
-// Fetches a candidate's channel manifest bytes for validation. An HTTP error
-// (404/403 - a broken or unpublished manifest) returns null so discovery treats
-// the release as unusable and falls back to the next; a transport-level failure
-// rejects so a genuine connectivity problem surfaces as a discovery error rather
-// than a false "up to date".
 async function fetchDesktopReleaseManifest(
   request: {
     readonly url: string;
@@ -1817,10 +1279,6 @@ async function fetchDesktopReleaseManifest(
   return response.text();
 }
 
-// Whether the running macOS build should be treated as arm64 for update-file
-// selection, resolved once and cached for the process. Mirrors
-// `MacUpdater.doDownloadUpdate`'s determination so discovery filters the same
-// architecture the installed updater will at download time.
 let cachedIsArm64Mac: boolean | null = null;
 
 function isArm64MacTarget(): boolean {
@@ -1830,11 +1288,6 @@ function isArm64MacTarget(): boolean {
   return cachedIsArm64Mac;
 }
 
-// `TEST_UPDATER_ARCH` (the same override electron-updater's `Provider` honors)
-// short-circuits the probe deterministically. Otherwise a native arm64 build is
-// arm64 outright; an x64 build additionally probes for Rosetta / arm64 hardware
-// (an x64 binary translated onto Apple Silicon), which MacUpdater treats as
-// arm64 and offers arm64 (or universal/x64) artifacts to.
 function resolveIsArm64Mac(): boolean {
   const overrideArch = process.env.TEST_UPDATER_ARCH;
   if (overrideArch !== undefined && overrideArch.length > 0) {
@@ -1878,10 +1331,6 @@ function parseGitHubRepoCoordinate(value: string): GitHubRepoCoordinate | null {
   return { owner: parts[0], repo: parts[1] };
 }
 
-// Raises an OS notification only when none of the app's windows is focused -
-// while the user is in the app the header button is the affordance, so a
-// notification would be noise. Clicking the notification brings the app
-// forward. Fired on the "available" and "ready" transitions only.
 function notifyUpdateWhenUnfocused(
   kind: "available" | "ready",
   version: string | null,
@@ -1910,29 +1359,8 @@ function notifyUpdateWhenUnfocused(
 }
 
 /**
- * The compatibility epoch an updater candidate declares, read off the raw feed
- * document electron-updater parsed.
- *
- * DELEGATES to `desktop-release-feed.ts` rather than re-deriving the rule: the
- * RC probe reads the same key straight out of a channel manifest it fetched
- * itself, and a probe that called a candidate sufficient while this call site
- * later called the same candidate insufficient would offer the user a remedy
- * that immediately withdraws itself.
- *
- * WHY THE KEY SURVIVES AT ALL, verified against the pinned electron-updater
- * rather than assumed: `parseUpdateInfo` is a bare `js-yaml` load of the whole
- * document, `GitHubProvider.getLatestVersion` returns `{ tag, ...result }`,
- * `update-available` emits `result.info` unmodified, and `update-downloaded`
- * emits `{ ...updateInfo, downloadedFile }`. Every hop preserves unknown keys.
- * That is a property of a PINNED dependency, so it is pinned by a contract test
- * and must be re-checked at every dependency bump.
- *
- * ANYTHING UNREADABLE IS `null`, and `null` is insufficient everywhere it is
- * consumed. An absent key, a string `"2"`, a float, a zero: each means we could
- * not establish the candidate's generation, and a candidate whose generation is
- * unknown must never be offered as the remedy for a compatibility rejection.
- * Refusing to guess here is what keeps a wrong stamp a routing inconvenience
- * rather than a restart into the same rejection.
+ * The compatibility epoch an updater candidate declares, read off the raw feed document electron-updater parsed.
+ * That is a property of a PINNED dependency, so it is pinned by a contract test and must be re-checked at every dependency bump.
  */
 function readCandidateCompatibilityEpoch(info: unknown): number | null {
   return readCompatibilityEpoch(info);
@@ -1998,38 +1426,12 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
   return currentSnapshot;
 }
 
-// REMOVED with the three-mode channel model: the "no production release exists
-// yet" fallback.
-//
-// It existed because an RC build used to check the STABLE `/releases/latest`
-// feed, which 404s until the line's first GA release is published, and
-// reporting that 404 as a service failure to every RC user was noise. Under the
-// mode model a canonical `X.Y.Z-rc.N` build is never on the stable feed - it
-// derives `implicit-rc-line`, configures `allowPrerelease: true`, and resolves
-// its candidate through the namespaced `desktop-v*` selector, which answers
-// "nothing selectable" by returning a null feed (a genuine up-to-date), not by
-// raising an updater error. The only builds still on the stable feed are stable
-// releases and non-canonical prereleases, and for both of those a 404 from the
-// release feed IS a service problem worth surfacing.
-//
-// Keeping the fallback would have meant keeping a second, contradictory
-// definition of "is this a prerelease" (`version.includes("-")`) alive purely
-// to suppress an error path that the supported builds can no longer reach.
+// Under the mode model a canonical `X.Y.Z-rc.N` build is never on the stable feed.
 
 function handleUpdaterError(error: unknown): void {
-  // An error after the user chose "Restart" (quitAndInstall) must NOT be
-  // swallowed by the "ready" guard below: the install failed, the app won't
-  // relaunch, and the user is left staring at a confirmation that did nothing
-  // (e.g. macOS "read-only volume" / App Translocation). Surface it and clear
-  // the install flag so they can retry once the cause is fixed.
+  // An error after the user chose "Restart" (quitAndInstall) must NOT be swallowed by the "ready" guard below: the install failed, the app won't relaunch, and the user is left staring.
   if (installingUpdate) {
     installingUpdate = false;
-    // Pre-flight said this install could self-update, but the live escalation
-    // attempt (pkexec/sudo/dpkg/rpm) still failed - e.g. a minimal window
-    // manager with no polkit agent. We now know for certain silent install
-    // doesn't work here, so switch to the same guidance a blocked pre-flight
-    // would have shown instead of a generic "try again later" that just
-    // invites the same doomed retry.
     const isLinuxEscalationFailure =
       linuxPackageType !== null &&
       isLinuxEscalationError(rawErrorMessage(error));
@@ -2077,13 +1479,7 @@ function handleUpdaterError(error: unknown): void {
   emitCheckErrorFromCatch(error, checkIntent ?? "automatic");
 }
 
-// True when the in-flight check was started under a channel that has since been
-// superseded by a `setAllowPrereleaseUpdates` call. Used to drop a stale check's
-// terminal emission (its failure or "no stable release" outcome) so it cannot
-// overwrite the current channel's snapshot; the re-check queued for the new
-// channel owns the authoritative outcome (finding 8). Deliberately scoped to the
-// check path only - genuine current download/install errors carry no
-// `checkGeneration` and are never generation-gated, so they still surface.
+// Used to drop a stale check's terminal emission (its failure or "no stable release" outcome) so it cannot overwrite the current channel's snapshot.
 function isSupersededCheckGeneration(): boolean {
   return checkGeneration !== null && checkGeneration !== channelGeneration;
 }
@@ -2124,18 +1520,9 @@ function readErrorMessage(error: unknown): string {
   return formatUserVisibleUpdateError(rawErrorMessage(error));
 }
 
-// Maps any `electron-updater` failure onto one of a few generic, user-safe
-// messages. Crucially the raw text is NEVER returned - even an unrecognized
-// error falls through to the generic message - so HTTP bodies, response
-// headers, cookies, and auth-token hints can't leak into the UI. The hint sets
-// below only pick which reassuring message to show, not whether to sanitize.
+// Crucially the raw text is NEVER returned - even an unrecognized error falls through to the generic message.
 function formatUserVisibleUpdateError(rawMessage: string): string {
   const message = rawMessage.toLowerCase();
-  // macOS-only: App Translocation / read-only volume - the user is running from
-  // a read-only path so the installer can't replace the app. The remedy ("move
-  // to Applications") is macOS-specific, so only map it on darwin; on
-  // Windows/Linux a read-only/permission failure falls through to the generic
-  // install message below.
   if (
     process.platform === "darwin" &&
     includesAny(message, READ_ONLY_VOLUME_ERROR_HINTS)
@@ -2167,21 +1554,12 @@ function includesAny(message: string, hints: readonly string[]): boolean {
   return hints.some((hint) => message.includes(hint));
 }
 
-// A bare `"500"` hint is an unanchored substring match, so it also fires inside
-// `chcp 65001` - which appears in every Windows signature-verifier error - and
-// `"404"` fires inside any longer id ending in those digits. Word boundaries
-// pin each code to a standalone number: `\b500\b` does NOT match `65001`,
-// because the digits either side of it are word characters.
 const SERVICE_HTTP_STATUS_PATTERN = /\b(?:401|403|404|500|502|503|504)\b/;
 
 function includesHttpStatusCode(message: string): boolean {
   return SERVICE_HTTP_STATUS_PATTERN.test(message);
 }
 
-// macOS Squirrel.Mac refuses to apply an update when the running app sits on a
-// read-only volume - typically Gatekeeper App Translocation running a
-// quarantined copy from a randomized read-only mount. User-fixable by moving
-// the app to /Applications and reopening it.
 const READ_ONLY_VOLUME_ERROR_HINTS: readonly string[] = [
   "read-only volume",
   "read only volume",
@@ -2218,20 +1596,7 @@ const CONNECTIVITY_ERROR_HINTS: readonly string[] = [
   "offline",
 ];
 
-// The downloaded installer is not authentic, or its authenticity could not be
-// established for a reason that is NOT an infrastructure failure. Exactly three
-// texts reach here, all Windows, and none of them mentions a checksum - so a
-// `sha512` mismatch still lands in the install bucket where it belongs:
-//   1. `New version X is not signed by the application owner: …`
-//      (`ERR_UPDATER_INVALID_SIGNATURE`) - the publisher genuinely mismatched.
-//   2. `LiteralPath of A is different than B` - upstream's verify-one-file /
-//      install-another check; rethrown by `tolerateUnrunnableSignatureCheck`.
-//   3. `… Failing signature validation due to unknown stderr.` - upstream's
-//      deliberate fail-closed branch; likewise rethrown.
-// Each hint must match the MINTED message and not the command echo that every
-// `Command failed:` error carries. `"literalpath"` alone would match the echoed
-// `-LiteralPath '<file>'` present in every verifier invocation, and so would
-// classify an ordinary timeout as a tampered installer.
+// Each hint must match the MINTED message and not the command echo that every `Command failed:` error carries.
 const SIGNATURE_ERROR_HINTS: readonly string[] = [
   "is not signed by the application owner",
   "literalpath of ",
@@ -2255,11 +1620,7 @@ const INSTALL_ERROR_HINTS: readonly string[] = [
   "differential download",
 ];
 
-// The update feed/service was reachable but returned an error response, or a
-// raw HTTP error body leaked through (GitHub `releases.atom` 404, status codes,
-// missing channel manifests). All of these are transient/server-side.
-// Numeric status codes are NOT listed here as bare strings - see
-// `includesHttpStatusCode`, which matches them as whole numbers instead.
+// The update feed/service was reachable but returned an error response, or a raw HTTP error body leaked through (GitHub `releases.atom` 404, status codes, missing channel manifests).
 const SERVICE_ERROR_HINTS: readonly string[] = [
   "releases.atom",
   "status code",

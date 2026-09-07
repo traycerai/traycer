@@ -11,19 +11,8 @@ import {
 } from "react";
 
 /**
- * Pane activation deferral contract.
- *
- * Pane roots normally claim ownership on `pointerdowncapture`. Subtrees whose
- * action must finish against the old layout opt out by spreading
- * {@link paneActivationDeferProps}. The owning pane records that gesture, sees
- * its click from native document capture, then activates in the next task after
- * all child click handlers. A microtask is deliberately insufficient here:
- * browsers may run its checkpoint between capture listeners, before the click
- * reaches its target. The task boundary survives stopped propagation, React
- * portals, and a child replacing/removing itself during the action.
- *
- * Both the producer (the marker) and the consumer (the selector) derive from
- * the single attribute name below, so the contract cannot silently drift.
+ * Pane roots normally claim ownership on `pointerdowncapture`.
+ * Subtrees whose action must finish against the old layout opt out by spreading {@link paneActivationDeferProps}.
  */
 const PANE_ACTIVATION_DEFER_ATTRIBUTE = "data-pane-activation-defer";
 
@@ -78,10 +67,8 @@ const DEFAULT_FOCUS_INTENT: PaneActivationFocusIntent = {
   shouldYieldAutoFocus: () => false,
 };
 
-// Covers the complete pointer/focus/route stabilization window without making
-// the intent sticky across a later non-pointer navigation. A new pointer
-// gesture clears it immediately; this is only the keyboard/programmatic
-// fallback for an activation whose route commit resolves asynchronously.
+// Covers the complete pointer/focus/route stabilization window without making the intent sticky across a later non-pointer navigation.
+// A new pointer gesture clears it immediately; this is only the keyboard/programmatic fallback for an activation whose route commit resolves asynchronously.
 const PANE_ACTIVATION_FOCUS_INTENT_TTL_MS = 2_000;
 
 interface PaneActivationControlFocusOrigin {
@@ -108,11 +95,7 @@ function markPaneActivationControlFocusOrigin(
 
 /**
  * Route synchronization normally focuses the newly selected tile container.
- * During a control-initiated activation, doing so would pull focus out of a
- * freshly opened portalled surface (Radix popover/menu) and dismiss it. The
- * pointer origin remains inside the target tile even when the active element
- * is in a document portal, so it is the durable ownership proof for this short
- * window.
+ * During a control-initiated activation, doing so would pull focus out of a freshly opened portalled surface (Radix popover/menu) and dismiss it.
  */
 export function shouldYieldPaneActivationRouteFocus(
   routeTarget: Element,
@@ -146,12 +129,8 @@ export function usePaneActivationFocusIntent(): PaneActivationFocusIntent {
 }
 
 /**
- * Runs a cleanup only after an in-flight pane-control activation has had its
- * bounded route/focus stabilization window. Consumers use this when their
- * ordinary inactive-state cleanup would otherwise erase the child action that
- * initiated activation (for example, opening a controlled popover in an
- * inactive pane). A genuine later pane deactivation has no focus intent and
- * therefore runs the cleanup immediately.
+ * Runs a cleanup only after an in-flight pane-control activation has had its bounded route/focus stabilization window.
+ * Consumers use this when their ordinary inactive-state cleanup would otherwise erase the child action that initiated activation (for example, opening a controlled popover in an inactive pane).
  */
 export function runAfterPaneActivationFocusIntent(
   focusIntent: PaneActivationFocusIntent,
@@ -296,11 +275,8 @@ function subscribeToPaneGestures(
 }
 
 /**
- * Owns one pane's activation gesture and composes with an enclosing pane (an
- * inner Epic canvas pane inside a top-level split surface). Automatic primary
- * focus yields throughout the activation's route-stabilization window, so a
- * control/portal keeps focus across transient pane bounces while a
- * blank-surface click retains editor/xterm focus.
+ * Owns one pane's activation gesture and composes with an enclosing pane (an inner Epic canvas pane inside a top-level split surface).
+ * Automatic primary focus yields throughout the activation's route-stabilization window, so a control/portal keeps focus across transient pane bounces while a blank-surface click retains editor/xterm focus.
  */
 export function usePaneActivationOwnership(input: {
   readonly active: boolean;

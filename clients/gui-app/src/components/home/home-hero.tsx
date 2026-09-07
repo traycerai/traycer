@@ -46,9 +46,7 @@ interface HomeHeroProps {
 }
 
 export function HomeHero({ workspaceFolders }: HomeHeroProps) {
-  // The hero is a landing surface: its folder fallback follows the landing
-  // composer's own placement (pin ?? effective) - the bucket must describe
-  // the machine the composer beside it will actually create on.
+  // effective) - the bucket must describe the machine the composer beside it will actually create on.
   const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
   const globalFolders = useWorkspaceFoldersStore(
     (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,

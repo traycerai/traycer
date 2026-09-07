@@ -45,11 +45,7 @@ interface ResolvedInterviewCardProps {
   readonly interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
 }
 
-/**
- * Historical interview disclosure and read-only pager. It never shares the
- * pending card's form controls: selection rows are static and only pager,
- * details, disclosure, and eligible fork actions remain interactive.
- */
+/** Historical interview disclosure and read-only pager. It never shares the pending card's form controls: selection rows are static and only pager, details, disclosure, and eligible fork actions remain interactive. */
 export function ResolvedInterviewCard(props: ResolvedInterviewCardProps) {
   const model = useMemo(
     () => deriveInterviewReviewModel(props.reviewInput),
@@ -72,10 +68,8 @@ export function ResolvedInterviewCard(props: ResolvedInterviewCardProps) {
     ? null
     : props.forkAction;
 
-  // Find is a transient override, but only a mounted/revealable field may
-  // become a real local disclosure choice before the controller releases the
-  // force key. Forced content is mounted first to break the disclosure/find
-  // catch-22; stale or absent targets therefore leave no local open residue.
+  // Find is a transient override, but only a mounted/revealable field may become a real local disclosure choice before the controller releases the force key.
+  // Forced content is mounted first to break the disclosure/find catch-22; stale or absent targets therefore leave no local open residue.
   useLayoutEffect(() => {
     if (!findForcedOpen || activeFindField === null || open) {
       return undefined;

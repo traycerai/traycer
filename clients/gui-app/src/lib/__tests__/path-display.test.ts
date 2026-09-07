@@ -150,9 +150,7 @@ describe("tildeCollapse", () => {
 
 describe("commonBasePath on a UNC share", () => {
   it("keeps a separator between the share root and the first segment", () => {
-    // A UNC root carries no trailing separator, unlike `/` and `C:\\`, so
-    // joining segments straight onto it would fuse the share name to the
-    // first segment and name a share that does not exist.
+    // A UNC root carries no trailing separator, unlike `/` and `C:\\`, so joining segments straight onto it would fuse the share name to the first segment and name a share that does not exist.
     const base = commonBasePath([
       "\\\\server\\share\\a\\x",
       "\\\\server\\share\\a\\y",

@@ -28,17 +28,8 @@ import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
 /**
- * F2: the in-Epic new-conversation modal shares the landing composer's
- * placement SEMANTICS (one chip, one frozen submit client, one refusal),
- * resolved for its EPIC (`useEpicConversationPlacement`: per-Epic pin - the
- * Epic's last created chat's host - ?? the session's host ?? effective).
- *
- * These target the CALLER, not `resolveLandingPlacement` (already unit-tested):
- * the class of bug here is a caller that never asks, which no test of the
- * resolver can catch. The ordering assertions are the load-bearing ones —
- * `cleanupAfterSubmit` clears the draft, the staged workspace and the modal
- * SYNCHRONOUSLY, long before an async create could report failure, so a
- * refusal that arrives after it has run has already destroyed the user's work.
+ * F2: the in-Epic new-conversation modal shares the landing composer's placement SEMANTICS (one chip, one frozen submit client, one refusal), resolved for its EPIC (`useEpicConversationPlacement`: per-Epic pin - the Epic's last created chat's host - ?? the session's host ?? effective).
+ * These target the CALLER, not `resolveLandingPlacement` (already unit-tested): the class of bug here is a caller that never asks, which no test of the resolver can catch.
  */
 
 const DIRTY_CONTENT: JsonContent = {
@@ -65,11 +56,7 @@ function stagedIntent(): WorktreeIntent | undefined {
   return useWorktreeIntentStagingStore.getState().intentByKey[STAGING_KEY_ID];
 }
 
-// The G4 toast, mocked so these tests assert the modal's decision to fire it
-// (and with what label) rather than sonner's internals. The staging store
-// itself stays REAL below (unlike the landing composer's wiring suite) - the
-// modal's `readStagedWorktreeIntent`/`clearForAllHosts` calls are exercised
-// against it directly.
+// The G4 toast, mocked so these tests assert the modal's decision to fire it (and with what label) rather than sonner's internals.
 const toastMocks = vi.hoisted(() => ({
   toastRepointedStagingReset: vi.fn<(hostLabel: string) => void>(),
 }));
@@ -86,9 +73,7 @@ interface PlacementTargetShape {
 }
 
 /**
- * Annotated rather than asserted: the holder must be WIDE enough for a test to
- * present a null client or a different host, which an inferred literal type
- * would refuse.
+ * Annotated rather than asserted: the holder must be WIDE enough for a test to present a null client or a different host, which an inferred literal type would refuse.
  */
 function placementHolder(): { current: PlacementTargetShape } {
   return {
@@ -116,12 +101,6 @@ const testState = vi.hoisted(() => ({
   /** Drives what the modal's placement resolves to, per test. */
   placement: placementHolder(),
   pinIsPinned: { current: false },
-  /**
-   * Whether `effective` answered the placement (no override, no pin in force,
-   * no session-host default in force) - the ONLY state a derivation move
-   * re-points (G4). Independent of `pinIsPinned` on purpose: a modal resting
-   * on the Epic's host is unpinned AND not following.
-   */
   followsEffective: { current: true },
   /** The Epic's placement memory write - what a create RECORDS. */
   recordPlacement: vi.fn<(hostId: string | null) => void>(),
@@ -132,12 +111,9 @@ const testState = vi.hoisted(() => ({
     readonly sessionHostId: string | null;
   }>,
   /**
-   * The workspace-controls element the body was handed (Codex T-50). The
-   * ComposerBody mock renders only the banner, so the picker's `hostScope`
-   * is read off the element's props rather than through a render.
+   * The ComposerBody mock renders only the banner, so the picker's `hostScope` is read off the element's props rather than through a render.
    */
   workspaceControlsElements: [] as unknown[],
-  /** The pin the latest-conversation seed was read for (Codex T-50). */
   latestSeedPins: [] as unknown[],
 }));
 
@@ -179,10 +155,7 @@ function editorHandle(): ComposerPromptEditorHandle {
   };
 }
 
-// THE seam under test's input. Mocked so each case can present a specific
-// placement (dead pin, moved client) without standing up a real fleet. The
-// modal resolves the per-EPIC placement, not the landing composer's
-// window-keyed one - a mock of `useComposerPlacement` here would be stranded.
+// Mocked so each case can present a specific placement (dead pin, moved client) without standing up a real fleet.
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useEpicConversationPlacement: (input: {
     readonly epicId: string;
@@ -207,9 +180,7 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
   },
 }));
 
-// The Epic session's host, the modal's DEFAULT placement tier - handed to the
-// (mocked) placement above, so this suite pins that the modal asks for the
-// session's host and not the app-wide one.
+// The Epic session's host, the modal's DEFAULT placement tier - handed to the (mocked) placement above, so this suite pins that the modal asks for the session's host and not the app-wide one.
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => "host-session",
 }));
@@ -217,9 +188,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
     isPending: false,
-    // `mutateAsync`, matching the modal: it closes itself on submit, so its
-    // completion handling rides a promise chain rather than the per-call
-    // callbacks TanStack drops with the observer.
+    // `mutateAsync`, matching the modal: it closes itself on submit, so its completion handling rides a promise chain rather than the per-call callbacks TanStack drops with the observer.
     mutateAsync: testState.createChat,
   }),
 }));
@@ -389,9 +358,7 @@ function Harness() {
 }
 
 /**
- * The `hostScope` prop of the `<ActiveHostWorkspaceControls>` element the
- * body was handed. `null` when the element is not that component (the arm
- * then fails on the shape assertion rather than on a thrown read).
+ * `null` when the element is not that component (the arm then fails on the shape assertion rather than on a thrown read).
  */
 function workspaceControlsHostScope(element: unknown): unknown {
   if (!isValidElement<{ readonly hostScope: unknown }>(element)) return null;
@@ -461,10 +428,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     );
   });
 
-  // A pin never sets `namedHostDead` (D6): by the time `useComposerPlacement`
-  // resolves, a pinned host that died has already auto-followed to the
-  // effective host - `resolvedHostId` names the LIVE host, and the create
-  // must land there instead of being refused.
+  // A pin never sets `namedHostDead` (D6): by the time `useComposerPlacement` resolves, a pinned host that died has already auto-followed to the effective host - `resolvedHostId` names the LIVE host, and the create must land there instead of being refused.
   it("creates on the effective host once a pinned host has auto-followed through death", () => {
     testState.pinIsPinned.current = true;
     testState.placement.current = {
@@ -527,10 +491,6 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(noticeText()).toContain("Build Box");
   });
 
-  // Codex review finding: a §54 refusal names the placement it refused, so
-  // ANY change of the RESOLVED host retires it - a derivation move or the
-  // picker writing a new pin. A surviving alert would keep naming a placement
-  // this modal has already left.
   it("clears a refused notice when the resolved host changes", () => {
     testState.placement.current = {
       resolvedHostId: "host-b",
@@ -547,9 +507,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
 
     expect(noticeText()).toContain("Build Box");
 
-    // The resolved host moves - to a placement that would itself be usable,
-    // which is the point: the notice must clear on the move alone, not on
-    // whether the new placement also refuses.
+    // The resolved host moves - to a placement that would itself be usable, which is the point: the notice must clear on the move alone, not on whether the new placement also refuses.
     testState.placement.current = {
       resolvedHostId: "host-c",
       client: { getActiveHostId: () => "host-c" },
@@ -565,10 +523,6 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("P2 FIX - and keeps it retired across a round trip back to the refused host", () => {
-    // The per-Epic pin is as sticky as the landing composer's, so B -> C -> B
-    // happens on its own. Retiring the refusal on the FIRST move is what makes
-    // the return quiet; comparing it against the host it was raised for would
-    // bring the alert back with no submit behind it.
     const resolveTo = (hostId: string, hostLabel: string): void => {
       testState.placement.current = {
         resolvedHostId: hostId,
@@ -690,10 +644,6 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("G4: a modal resting on the EPIC's host (default tier, unpinned) keeps its staged intent", () => {
-    // The third state the per-Epic placement introduced: no pin, but the
-    // session's host answered rather than `effective`. A gate keyed on
-    // `isPinned` alone would clear this modal's staged intent and announce a
-    // move that did not happen to it.
     testState.pinIsPinned.current = false;
     testState.followsEffective.current = false;
     testState.placement.current = {
@@ -719,12 +669,6 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("asks the per-EPIC placement for THIS epic with the session's host as its default", () => {
-    // Codex #1243 T-48: the modal used to resolve the landing composer's
-    // window-keyed pin ?? effective, so a new agent in an Epic served from B
-    // landed on wherever the window's landing chip pointed. The placement now
-    // resolves per Epic with the session's host as the default tier; this
-    // pins the modal hands it exactly that - not the app-wide host, and not
-    // nothing.
     renderModal();
     expect(testState.placementInputs.length).toBeGreaterThan(0);
     for (const input of testState.placementInputs) {
@@ -737,12 +681,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("keeps the workspace picker selectable on the RESOLVED host and seeds from it", () => {
-    // Codex #1243 T-50: the request is unnamed (`hostId: null`) and the
-    // placement resolves it to host-a through the Epic's tiers. The picker
-    // and the seed used to key on the raw request field, so they browsed and
-    // seeded from the app-wide host while the create went to host-a. An
-    // unnamed request must still expose the Epic-local placement callback so
-    // the user can switch hosts before submitting.
+    // An unnamed request must still expose the Epic-local placement callback so the user can switch hosts before submitting.
     testState.placement.current = {
       resolvedHostId: "host-session",
       client: { getActiveHostId: () => "host-session" },
@@ -772,9 +711,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("records the host it created on as the Epic's placement memory, on submit", () => {
-    // "Last created chat's host": the create WRITES the per-Epic pin with the
-    // host it resolved, at submit (beside the settings memory), so the next
-    // new agent in this Epic opens on it - the model picker's memory shape.
+    // "Last created chat's host": the create WRITES the per-Epic pin with the host it resolved, at submit (beside the settings memory), so the next new agent in this Epic opens on it - the model picker's memory shape.
     renderModal();
     act(() => {
       testState.bodySubmit?.();
@@ -783,11 +720,8 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(testState.recordPlacement).toHaveBeenCalledWith("host-a");
   });
 
-  // Codex review finding: `clearForAllHosts` reaches every host's copy of the
-  // slot, so the "was anything staged" check that decides whether to toast
-  // must reach just as far. The narrower `readStagedWorktreeIntent` (scoped to
-  // the RESOLVED bucket) reported "nothing staged" here even though the clear
-  // below deleted the host-b copy - silently dropping the toast.
+  // Codex review finding: `clearForAllHosts` reaches every host's copy of the slot, so the "was anything staged" check that decides whether to toast must reach just as far.
+  // The narrower `readStagedWorktreeIntent` (scoped to the RESOLVED bucket) reported "nothing staged" here even though the clear below deleted the host-b copy - silently dropping the toast.
   it("G4: toasts when the staged intent lives under a DIFFERENT host bucket than the resolved one", () => {
     const otherHostKey = newConversationModalStagingKey(
       "host-b",

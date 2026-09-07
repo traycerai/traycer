@@ -17,9 +17,6 @@ describe("FUZZY_TIER_* constants", () => {
 describe("fuzzyMatchNames tier ordering", () => {
   it("ranks a prefix match above a substring match above a scattered subsequence match", () => {
     // Same query "cam", one hit per tier:
-    //  - "campaign-credits-service" starts with "cam"            -> prefix
-    //  - "traycer-campaign-credits" has "cam" inside "campaign"  -> substring
-    //  - "core-account-manager" only has c, a, m in order, apart -> subsequence
     const names = [
       "core-account-manager",
       "traycer-campaign-credits",
@@ -40,10 +37,7 @@ describe("fuzzyMatchNames tier ordering", () => {
   });
 
   it("ranks the tightest subsequence span ahead of a smeared one within the same tier", () => {
-    // Both only match "tam" as a scattered subsequence (neither is a prefix
-    // or contains "tam" consecutively):
-    //  - "team-app" matches over a 4-char span: t(0) a(2) m(3)
-    //  - "traycer-campaign-mobile" matches over an 11-char span: t(0) a(2) m(10)
+    // Both only match "tam" as a scattered subsequence (neither is a prefix or contains "tam" consecutively):
     const names = ["traycer-campaign-mobile", "team-app"];
     const result = fuzzyMatchNames(names, (name) => name, "tam");
 
@@ -101,9 +95,7 @@ describe("fuzzyMatchNames no match", () => {
 
 describe("fuzzyMatchNames ranges", () => {
   it("coalesces adjacent matched characters into one range instead of one range per character", () => {
-    // "mobile-app": m(0) o b i l e - a(7) p(8) p(9)
-    // query "map" matches m@0 standalone, then a@7 and p@8 are adjacent and
-    // must coalesce into a single {start:7, end:9} range rather than two.
+    // "mobile-app": m(0) o b i l e - a(7) p(8) p(9) query "map" matches m@0 standalone, then a@7 and p@8 are adjacent and must coalesce into a single {start:7, end:9} range rather than two.
     const [match] = fuzzyMatchNames(["mobile-app"], (name) => name, "map");
 
     expect(match).toBeDefined();
@@ -161,9 +153,7 @@ describe("fuzzyMatchNames case-insensitivity", () => {
 
 describe("index alignment and span minimisation", () => {
   it("marks the character the user actually matched when folding resizes", () => {
-    // `\u0130`.toLowerCase() is TWO code units, so a naive fold shifts every
-    // later index and the highlight lands on the wrong character - and these
-    // ranges are used to slice the ORIGINAL name.
+    // `\u0130`.toLowerCase() is TWO code units, so a naive fold shifts every later index and the highlight lands on the wrong character - and these ranges are used to slice the ORIGINAL name.
     const ranked = fuzzyMatchNames(["\u0130foo"], (name) => name, "f");
     expect(ranked).toHaveLength(1);
     const range = ranked[0].ranges[0];

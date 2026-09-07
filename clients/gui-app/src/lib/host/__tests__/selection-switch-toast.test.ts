@@ -36,9 +36,8 @@ describe("toastSelectionSwitched", () => {
   });
 
   it("I3: cause recovery with previousEffectiveHostId null (first provision) is SILENT", () => {
-    // Fresh install: the local host becoming usable for the first time is
-    // the app starting, not a switch a user experienced. Toasting here would
-    // narrate a move that never happened from the user's perspective.
+    // Fresh install: the local host becoming usable for the first time is the app starting, not a switch a user experienced.
+    // Toasting here would narrate a move that never happened from the user's perspective.
     toastSelectionSwitched({
       cause: "recovery",
       previousEffectiveHostId: null,

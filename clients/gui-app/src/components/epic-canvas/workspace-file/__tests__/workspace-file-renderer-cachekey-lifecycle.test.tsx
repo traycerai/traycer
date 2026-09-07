@@ -128,13 +128,7 @@ describe("<WorkspaceFileRenderer /> cacheKey lifecycle", () => {
     state.capture.mockClear();
 
     fireEvent.click(screen.getByRole("button", { name: "Click source" }));
-    // Wait for the re-render this click causes, not for a button that is
-    // already on screen: activation is async (`onActivate` awaits
-    // `editorReady` before `setEditing`), and the "Type" button is rendered
-    // unconditionally, so `findByRole` on it resolves without that chain
-    // having settled. The assertion below then reads an untouched mock and
-    // fails on a FAST machine - the slower the host, the more likely the
-    // stray microtasks let it through.
+    // Wait for the re-render this click causes, not for a button that is already on screen: activation is async (`onActivate` awaits `editorReady` before `setEditing`), and the "Type" button is rendered unconditionally, so `findByRole` on it resolves without that chain having settled.
     await waitFor(() => {
       expect(state.capture).toHaveBeenCalled();
     });

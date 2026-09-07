@@ -6,11 +6,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 
 /**
- * Projects a live binding entry into the folder-intent shape the unified picker
- * stages: a worktree-bound entry maps to `import` (adopt the existing worktree),
- * a local entry to `local`. Used both to render an existing owner's rows and to
- * seed a new owner's picker from another chat's binding (the fork dialog
- * inheriting the source chat's workspace).
+ * Projects a live binding entry into the folder-intent shape the unified picker stages: a worktree-bound entry maps to `import` (adopt the existing worktree), a local entry to `local`.
  */
 export function bindingEntryToFolderIntent(
   entry: WorktreeBindingEntry | null,
@@ -36,9 +32,8 @@ export function bindingEntryToFolderIntent(
 }
 
 /**
- * Projects a full binding into a stageable intent (each entry re-stamped from its
- * own `repoIdentifier` / `isPrimary`). `null` when the binding is absent or
- * empty - the caller then falls back to the default seeding.
+ * Projects a full binding into a stageable intent (each entry re-stamped from its own `repoIdentifier` / `isPrimary`).
+ * `null` when the binding is absent or empty - the caller then falls back to the default seeding.
  */
 export function bindingToWorktreeIntent(
   binding: WorktreeBinding | null,

@@ -33,29 +33,14 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 import type { TabRef } from "@/stores/tabs/types";
 
-/**
- * True when `ref` is currently part of a split item in the tab strip. Feeds
- * step 4's revalidation, where it catches both a step-2 separation that was
- * refused outright (e.g. a locked split partner - still grouped) and a
- * re-pair into a NEW split that happened while the flush await was in
- * flight. A ref absent from the layout entirely (e.g. a `useTabsStore` not
- * yet synced) is treated as not grouped - nothing here for a group to have
- * survived in. Shared with the draft move flow, which revalidates the same
- * way.
- */
+/** Feeds step 4's revalidation, where it catches both a step-2 separation that was refused outright (e.g. a
+ * locked split partner. */
 export function isRefGroupedInLayout(ref: TabRef): boolean {
   const item = findStripItemForRef(readTabStripLayout(), ref);
   return item !== null && item.kind === "split";
 }
 
-/**
- * Revalidation for the grouped-move adapter's step 4: the tab must still be
- * open, unlocked, and ungrouped after the persistence flush settles - not
- * closed, not re-locked (e.g. entered a Phase migration), and not re-paired
- * into a new split by something that ran during the await. Any of these
- * means the move must abort cleanly rather than hand a stale ref to the
- * move IPC.
- */
+/** Any of these means the move must abort cleanly rather than hand a stale ref to the move IPC. */
 function isOrdinaryMovableEpicTab(tabId: string): boolean {
   if (!useEpicCanvasStore.getState().openTabOrder.includes(tabId)) {
     return false;
@@ -111,35 +96,17 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
       const movingViewKeys = Object.keys(
         stateBeforeMove.canvasByTabId[request.tabId]?.tilesByInstanceId ?? {},
       );
-      // Grouped-move adapter (renderer-only; the move IPC itself, step 5
-      // below, is unchanged): a tab paired into a split cannot be handed to
-      // another window still grouped, so this separates it first and makes
-      // sure that separation is durably acknowledged by the T4 persistence
-      // layer BEFORE the move IPC fires - otherwise a main-pushed snapshot
-      // racing the move could restore the pre-separation pairing.
+      // Grouped-move adapter (renderer-only; the move IPC itself, step 5 below, is unchanged).
       void (async () => {
         const ref: TabRef = { kind: "epic", id: request.tabId };
-        // Publish the source renderer's last coherent reading snapshots before
-        // any structural mutation can conceal or unmount their DOM. The flush
-        // drains the service's debounced localStorage writes synchronously;
-        // the destination still tolerates cross-process storage-event delay.
+        // Publish the source renderer's last coherent reading snapshots before any structural mutation can conceal or
+        // unmount their DOM.
         flushLiveReadingPositions(request.epicId);
-        // Step 2: synchronous separate. `separateBeforeMove` refuses
-        // identically (`{separated: false, splitId: null}`) whether the ref
-        // was never grouped or is grouped but has a locked partner, so its
-        // return value can't tell "fine to proceed" apart from "still
-        // grouped, must abort" - step 4's revalidation below re-reads the
-        // layout itself and catches a failed separation the same way it
-        // catches a later re-pair, so no separate check is needed here.
+        // `separateBeforeMove` refuses identically (`{separated: false, splitId: null}`) whether the ref was never
+        // grouped or is grouped but has a locked partner.
         tabCommandCoordinator.separateBeforeMove(ref);
-        // Step 3: flush + await the T4 acknowledgement - the move barrier.
-        // Only a *genuine* write failure (the update IPC rejecting, an
-        // unrecognizable acknowledgement, a stale revision) can leave the
-        // separation's durability unconfirmed, so only that case aborts the
-        // move. A window with no persistence controller, or one with
-        // nothing pending (the separate above was a true no-op), has
-        // nothing that could race the move with a stale main-pushed
-        // snapshot - skip the flush/abort dance entirely in that case.
+        // A window with no persistence controller, or one with nothing pending (the separate above was a true no-op),
+        // has nothing that could race the move with a stale main-pushed snapshot.
         if (hasPendingDesktopTabsWrite()) {
           const flushed = await flushDesktopTabsPersistence().then(
             () => true,
@@ -147,22 +114,18 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
           );
           if (!flushed) return;
         }
-        // Canvas projection is a separate 100ms-debounced channel from the
-        // tab strip. Flush it independently so a just-mutated layout and its
-        // stable tile instance ids arrive before the move IPC hydrates the
-        // destination renderer.
+        // Flush it independently so a just-mutated layout and its stable tile instance ids arrive before the move IPC
+        // hydrates the destination renderer.
         const canvasFlushed =
           await flushActiveDesktopPerWindowProjection().then(
             () => true,
             () => false,
           );
         if (!canvasFlushed) return;
-        // Step 4: revalidate - abort if anything changed the ref's status
-        // while the flush was in flight (closed, re-locked, re-paired), or
-        // if step 2's separation was refused outright (e.g. a locked split
-        // partner) and the ref is still grouped.
+        // Step 4: revalidate - abort if anything changed the ref's status while the flush was in flight (closed,
+        // re-locked, re-paired).
         if (!isOrdinaryMovableEpicTab(request.tabId)) return;
-        // Step 5: the existing, UNCHANGED move IPC.
+        // Step 5: the existing, unchanged move IPC.
         const result = await bridge.requestOpenEpicInNewWindow(
           request.epicId,
           request.title,
@@ -170,14 +133,7 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
         );
         if (result.result !== "moved") return;
         preserveReadingPositionViewsForMove(movingViewKeys);
-        // Step 6: post-move removal routed through the coordinator (which
-        // applies its own echo suppression around the same underlying
-        // `discardTabState` source mutation) instead of calling the source
-        // store directly. `removeMovedRef` only acts when the coordinator's
-        // OWN layout still tracks this ref; fall back to a direct
-        // `discardTabState` so a moved epic's now-dangling canvas-store
-        // record is never left behind even when the strip layout doesn't
-        // (yet) know about it.
+        // `removeMovedRef` only acts when the coordinator's own layout still tracks this ref.
         if (!tabCommandCoordinator.removeMovedRef(ref)) {
           useEpicCanvasStore.getState().discardTabState(ref.id);
         }
@@ -219,10 +175,8 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
           undefined,
         );
       })().catch((error: unknown) => {
-        // Fire-and-forget from a click handler: by the time the move IPC can
-        // reject, step 2 has already separated the tab. Without this the
-        // rejection is an unhandled promise and the half-applied move leaves
-        // no trace at all.
+        // Fire-and-forget from a click handler: by the time the move IPC can reject, step 2 has already separated the
+        // tab. Without this the rejection is an unhandled promise and the half-applied move leaves no trace at all.
         appLogger.warn("[windows] open epic in new window failed", {
           epicId: request.epicId,
           tabId: request.tabId,
@@ -290,10 +244,8 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
     };
   }, [executeMove, queuedMove]);
 
-  // Memoize so the returned flow keeps a stable identity across renders where
-  // nothing it carries changed. Consumers thread it into effect deps (e.g.
-  // `UnsyncedEpicMoveDialog`'s registry subscription); a fresh object each
-  // render would churn those subscriptions on every unrelated re-render.
+  // Consumers thread it into effect deps (e.g. `UnsyncedEpicMoveDialog`'s registry subscription); a fresh object
+  // each render would churn those subscriptions on every unrelated re-render.
   return useMemo(
     () => ({
       isAvailable,

@@ -1,15 +1,6 @@
 /**
- * The address invariant `artifact.subscribe@1.0` states and the client must
- * ENFORCE.
- *
- * Every non-`pong` server frame names the artifact it belongs to, and the
- * schema is explicit that a frame naming a different one "is a host bug, not a
- * routing instruction". Bodies share a single multiplexed connection with every
- * other open tile's lane, and the lane adapter above this client relabels each
- * frame with its OWN captured artifact id - so an unchecked misroute installs
- * one body's bytes into another's replica and retires coverage a body never
- * sent. Both are silent document corruptions, which is why the client drops
- * rather than honouring the wire address.
+ * The address invariant `artifact.subscribe@1.0` states and the client must enforce.
+ * Every non-`pong` server frame names the artifact it belongs to, and the schema is explicit that a frame naming a different one "is a host bug, not a routing instruction".
  */
 import { describe, expect, it, vi } from "vitest";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -160,7 +151,7 @@ describe("ArtifactStreamClient - frame addressing", () => {
       null,
     );
 
-    // The control. Without it a guard that dropped EVERYTHING would pass the
+    // The control. Without it a guard that dropped everything would pass the
     // refusals below while breaking the lane outright.
     expect(seen.doc).toEqual([OURS]);
     expect(seen.docAck).toEqual([OURS]);
@@ -223,9 +214,7 @@ describe("ArtifactStreamClient - frame addressing", () => {
       null,
     );
 
-    // A `doc` here would install another body's seed over this replica, and a
-    // `docAck` would retire coverage this body never sent - the two silent
-    // corruptions the guard exists for.
+    // A `doc` here would install another body's seed over this replica, and a `docAck` would retire coverage this body never sent - the two silent corruptions the guard exists for.
     expect(seen).toEqual({
       doc: [],
       docUpdate: [],

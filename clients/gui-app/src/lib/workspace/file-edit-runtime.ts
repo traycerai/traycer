@@ -122,13 +122,7 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * The non-React authority for one editable file in one renderer window.
- *
- * Host writes are injected by an attached surface. That keeps every RPC on the
- * app's TanStack Query mutation path while the save queue remains alive when a
- * tile unmounts or another duplicate surface becomes visible.
- */
+/** The non-React authority for one editable file in one renderer window. */
 export class FileEditRuntime {
   readonly store: StoreApi<FileEditRuntimeState>;
 
@@ -200,11 +194,7 @@ export class FileEditRuntime {
 
     if (this.store.getState().ownerSurfaceId === surfaceId) {
       // Retain the Query-backed writer while recovery persistence is awaited.
-      // The tile may disappear immediately, but its mutation function remains
-      // safe to invoke and lets this renderer-owned runtime finish the flush.
-      // Null-safe like `releaseOwnership` below: a `null` attachment writer
-      // (surface detached before ever gaining one) must not clobber a writer
-      // already retained from an earlier detach of the same owner.
+      // The tile may disappear immediately, but its mutation function remains safe to invoke and lets this renderer-owned runtime finish the flush.
       this.detachedOwnerWriter = attachment.writer ?? this.detachedOwnerWriter;
       void this.flush();
       this.store.setState({ ownerSurfaceId: null });
@@ -245,14 +235,8 @@ export class FileEditRuntime {
     if (current.draftContent === content) return true;
 
     const contentRevision = current.contentRevision + 1;
-    // "offline" means the write attempt threw instead of getting a definite
-    // response (network drop, host unreachable) - the host may have already
-    // committed it. `baselineContent` still reflects the pre-attempt read, so
-    // it cannot be trusted to decide "nothing to save": if the user edits the
-    // draft back to match it, that's not proof the disk matches too. Stay
-    // dirty so `retry()` sends a real round-trip (idempotent per the write
-    // contract) instead of silently discarding the recovery journal while the
-    // outcome is still ambiguous.
+    // "offline" means the write attempt threw instead of getting a definite response (network drop, host unreachable) - the host may have already committed it.
+    // `baselineContent` still reflects the pre-attempt read, so it cannot be trusted to decide "nothing to save": if the user edits the draft back to match it, that's not proof the disk matches too.
     const isDirty =
       current.status === "offline" || content !== current.baselineContent;
     const blockedStatus =

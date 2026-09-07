@@ -10,63 +10,30 @@ import type {
 
 export const VERSION_LIST_PREVIEW = 10;
 
-// Renderer-facing alias so call sites don't reach for the wire type name
-// directly - this is the canonical mutation-lane status the progress banner
-// renders, unchanged in shape from `MutationLaneStatus`.
+// Renderer-facing alias so call sites don't reach for the wire type name directly - this is the canonical
+// mutation-lane status the progress banner renders, unchanged in shape from `MutationLaneStatus`.
 export type HostProgressState = MutationLaneStatus;
 
-/**
- * The name triple, as either source states it.
- *
- * `HostNameSettings` (the local CLI bridge) and `HostIdentity` (the host's own
- * `host.identity.get`) are the same three fields, which is not a coincidence —
- * the host took over the file the bridge used to own. Naming the shape lets one
- * edit form serve both the RPC page and the recovery console instead of
- * cloning it per transport.
- */
+/** Naming the shape lets one edit form serve both the RPC page and the recovery console instead of cloning it
+ * per transport. */
 export interface HostDisplayIdentity {
   readonly systemName: string;
   readonly customName: string | null;
   readonly effectiveName: string;
 }
 
-/**
- * The string an untouched name form opens with, and the baseline its dirtiness
- * is measured against — derived ONCE, for both transports.
- *
- * It existed twice, and the two copies did not agree: the bridge card seeded
- * `customName ?? systemName` while the RPC page seeded `customName ??
- * effectiveName`. That only looks equivalent under the unwritten assumption
- * that `effectiveName === customName ?? systemName`, which is exactly what a
- * PROVISIONED host breaks — its effective name folds a registration label, so
- * the two seeds differ and an untouched form reads as dirty on one path.
- *
- * `effectiveName` is the correct fallback: it is the name the host actually
- * publishes, so an unnamed provisioned host opens showing its label rather
- * than a hostname nobody chose.
- */
+/** `effectiveName` is the correct fallback: it is the name the host actually publishes, so an unnamed
+ * provisioned host opens showing its label rather than a hostname nobody chose. */
 export function persistedDraftFromIdentity(
-  // Both absences, because the two transports spell it differently: the bridge
-  // card holds `undefined` while the RPC view holds `null`. Widening here beats
-  // making one call site launder its own value.
+  // Both absences, because the two transports spell it differently: the bridge card holds `undefined` while the
+  // RPC view holds `null`.
   identity: HostDisplayIdentity | null | undefined,
 ): string {
   if (identity === null || identity === undefined) return "";
   return identity.customName ?? identity.effectiveName;
 }
 
-/**
- * The BRIDGE path's draft rule, used only by the recovery console.
- *
- * Typing the machine's own name means "clear the override", which is correct
- * here and only here: the bridge writes this computer's name file, and a
- * desktop host on this computer registers under `os.hostname()` — so clearing
- * lands back on exactly the string that was typed.
- *
- * The RPC path deliberately does NOT share this rule — see
- * `customNameFromIdentityDraft`, which explains what breaks when a host was
- * started with a registration label that is not its hostname.
- */
+/** The bridge path's draft rule, used only by the recovery console. */
 export function customNameFromDraft(
   draftName: string,
   settings: HostDisplayIdentity | undefined,
@@ -263,12 +230,8 @@ export function formatSource(source: HostInstalledRecord["source"]): string {
     : "Local file";
 }
 
-// `formatProgressKind` / `formatTransfer` / `formatBytes` lived here and are
-// DELETED, not moved with a re-export (F19). They were this file's private
-// answer to "what is the host controller doing, and how big is it" - the boot
-// surface had its own, and the two disagreed on both the wording and the unit.
-// The one answer is `@/lib/host/host-progress-copy`, which every surface now
-// reads; a shim here would be exactly the second table that let them drift.
+// The one answer is `@/lib/host/host-progress-copy`, which every surface now reads; a shim here would be
+// exactly the second table that let them drift.
 
 export function formatPackageManagerSource(
   source: NonNullable<

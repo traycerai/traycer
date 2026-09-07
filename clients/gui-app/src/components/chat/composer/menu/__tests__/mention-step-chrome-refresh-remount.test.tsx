@@ -8,15 +8,7 @@ import type {
 
 import { MentionStepChromeBar } from "../mention-step-chrome-bar";
 
-/**
- * The refresh button belongs to ONE target.
- *
- * `useRefreshSpinner` holds its own `localRefreshing`, and the button stays
- * mounted while the host, the epic, the folders or the section move underneath
- * it. Without a remount, a refresh issued for the scope the user left holds the
- * new scope's button disabled until that promise settles or its leash expires -
- * 20s for a GitHub sweep, on a request the new scope never made.
- */
+/** Without a remount, a refresh issued for the scope the user left holds the new scope's button disabled until that promise settles or its leash expires - 20s for a GitHub sweep, on a request the new scope never made. */
 
 function chromeWith(refresh: MentionStepChromeRefresh): MentionStepChrome {
   return {
@@ -79,9 +71,7 @@ describe("MentionStepChromeBar refresh button", () => {
   });
 
   it("keeps the spinner while the target is unchanged", () => {
-    // The control. A re-render for any other reason - a freshness tick, a
-    // notice arriving - must not cancel the spinner on a refresh that is still
-    // genuinely running.
+    // The control. A re-render for any other reason - a freshness tick, a notice arriving - must not cancel the spinner on a refresh that is still genuinely running.
     const onReturnFocus = vi.fn();
     const refresh = pendingRefresh("scope-apull-requests");
     const { rerender } = render(

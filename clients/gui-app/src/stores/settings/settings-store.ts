@@ -57,13 +57,7 @@ export interface TilePlacementSettings {
   conversation: TilePlacement;
   browser: BrowserTilePlacement;
 }
-/**
- * Whether a tab the AGENT opens via its browser REPL (`openTab`) reaches the
- * canvas at all. `surface` places it using the browser tile placement; `off`
- * keeps it fully in the background (hidden view + sidebar listing).
- * Deliberately default-off: surfacing is opt-in, unlike the pre-setting
- * behavior which always split the canvas.
- */
+/** Whether a tab the AGENT opens via its browser REPL (`openTab`) reaches the canvas at all. */
 export type AgentTabSurfacing = "off" | "surface";
 
 const DEFAULT_LINK_OPEN_MODE: LinkOpenMode = "in-app";
@@ -91,10 +85,7 @@ export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
 export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
 export const DEFAULT_MINIMAP_SIDE: MinimapPlacement = "right";
 
-// Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
-// which never blinks). Bar/underline mirror the chosen shape so the cursor
-// keeps its identity on blur; block falls back to a hollow outline so an
-// unfocused pane stays visually distinct from a focused non-blinking block.
+// Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`, which never blinks).
 export type TerminalInactiveCursorStyle =
   | TerminalCursorStyle
   | "outline"
@@ -111,9 +102,8 @@ export function inactiveCursorStyleFor(
 export const DEFAULT_UI_FONT_SIZE = 15;
 export const DEFAULT_CODE_FONT_SIZE = 12;
 
-// Default worktree branch prefix, shared with the General panel so its
-// reset-to-default affordance and the store's initial state stay a single
-// source of truth.
+// Default worktree branch prefix, shared with the General panel so its reset-to-default affordance
+// and the store's initial state stay a single source of truth.
 export const DEFAULT_WORKTREE_BRANCH_PREFIX = "traycer/";
 
 export interface SettingsState {
@@ -134,9 +124,8 @@ export interface SettingsState {
   /** Show inline resource usage chips in task navigator/sidebar rows. */
   showNavigatorResourceStats: boolean;
   /**
-   * Keep the chat context-window breakdown pinned near the composer instead of
-   * the compact-only chip. Global preference, default off; chats without
-   * reliable context-window data still render nothing.
+   * Keep the chat context-window breakdown pinned near the composer instead of the compact-only
+   * chip.
    */
   pinContextUsageBreakdown: boolean;
   /** Shared edge used by chat and artifact minimaps, or `hide` for both. */
@@ -161,11 +150,7 @@ export interface SettingsState {
   terminalCursorBlink: boolean;
   artifactIconColorMode: EpicNodeIconColorMode;
   artifactIconColors: EpicNodeIconColors;
-  /**
-   * What the open-in-editor surfaces default to. Widened past `EditorId`
-   * because Finder is a first-class choice in those menus; `"system"` is not,
-   * being a PDF routing decision rather than something a user picks.
-   */
+  /** What the open-in-editor surfaces default to. */
   defaultEditor: DefaultOpenTarget | null;
   /**
    * Voice input (on-device dictation). Opt-in: enabling it surfaces the mic
@@ -175,15 +160,13 @@ export interface SettingsState {
   /** BCP-47-ish dictation language hint, or "auto". */
   voiceLanguage: string;
   /**
-   * Prefix prepended verbatim to the branch name pre-filled when creating a
-   * new worktree (no separator is auto-appended - the user types it, e.g.
-   * `traycer/`, `anurag/`, `feat-`). Empty string means no prefix.
+   * Prefix prepended verbatim to the branch name pre-filled when creating a new worktree (no
+   * separator is auto-appended - the user types it, e.g. `traycer/`, `anurag/`, `feat-`).
    */
   worktreeBranchPrefix: string;
   /**
-   * Quote-to-composer affordance. Opt-out: enabling it (default) surfaces a
-   * quote button when selecting assistant text, inserting the selection into
-   * the chat composer as a blockquote.
+   * Quote-to-composer affordance. Opt-out: enabling it (default) surfaces a quote button when
+   * selecting assistant text, inserting the selection into the chat composer as a blockquote.
    */
   quoteReplyEnabled: boolean;
   /** Where app-rendered http(s) links open: default plus per-kind overrides. */
@@ -193,37 +176,18 @@ export interface SettingsState {
   /** Where a tile lands on the canvas: default plus per-category overrides. */
   tilePlacement: TilePlacementSettings;
   /**
-   * What happens visually when the agent opens a browser tab. The agent's
-   * REPL tabs are a host capability, separate from link routing, and this
-   * preference also governs suppressing them.
+   * What happens visually when the agent opens a browser tab. The agent's REPL tabs are a host
+   * capability, separate from link routing, and this preference also governs suppressing them.
    */
   agentTabSurfacing: AgentTabSurfacing;
-  /**
-   * Cmd/Ctrl+Enter mid-turn steering. Opt-out (default ON): when enabled,
-   * pressing Cmd+Enter while a turn is running on a steer-capable harness sends
-   * the composer text as a same-turn steering message that jumps the pending
-   * queue; plain Enter keeps queueing. Disabling it reverts Cmd+Enter to the
-   * plain-Enter submit alias. Idle behavior is identical either way.
-   */
+  /** Cmd/Ctrl+Enter mid-turn steering. */
   steerOnModEnterEnabled: boolean;
   /**
-   * Shared, user-level diff viewer configuration consumed by every git and
-   * snapshot diff renderer. Persisted globally so the choice survives restarts
-   * and live-updates all mounted viewers. Tile-local state (collapsed files)
-   * is not part of this shape - it stays on the diff tile payload.
+   * Shared, user-level diff viewer configuration consumed by every git and snapshot diff renderer.
+   * Persisted globally so the choice survives restarts and live-updates all mounted viewers.
    */
   diffViewerPreferences: DiffViewerPreferences;
-  /**
-   * Line wrapping in the workspace file viewer. `null` means the user has made
-   * no choice, and the render site resolves it from the pointer type instead -
-   * a persisted boolean would carry one device's answer to every other device,
-   * and whether wrapping is the right default is a fact about the input
-   * hardware, not about the account.
-   *
-   * Deliberately separate from `diffViewerPreferences.wordWrap`: a file being
-   * read is not a diff, and a wrap choice made while reading one must not
-   * re-render every open diff.
-   */
+  /** Line wrapping in the workspace file viewer. */
   workspaceFileWordWrap: boolean | null;
   /** App-wide audible cues selected for each notification event type. */
   notificationChimeSounds: NotificationChimeSoundsByEvent;
@@ -538,21 +502,8 @@ export const useSettingsStore = create<SettingsState>()(
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
       partialize: partializeSettingsState,
-      // Defensive re-derivation of `worktreeBranchPrefix` on every rehydration
-      // (mirrors `workspace-folders-store.ts`'s `merge`): a hand-edited or
-      // otherwise corrupted localStorage value would otherwise rehydrate
-      // verbatim (the default shallow merge takes persisted fields as-is),
-      // flow straight into branch composition, and still mount the editor
-      // showing it as healthy. `workspaceFileWordWrap` is re-derived for a
-      // narrower reason: its `null` carries meaning ("the user has not
-      // chosen"), and any non-boolean that rehydrated verbatim would be
-      // neither `true`, `false`, nor that third state - a truthy string would
-      // read as "wrap on, chosen deliberately" and the pointer-type default
-      // could never be reached again. `linkOpen`, `tilePlacement` and
-      // `agentTabSurfacing` are resolved from the persisted record rather than
-      // from `merged` because this is also where the one-shot migration off
-      // their pre-refactor keys runs. Every other field keeps the default
-      // shallow merge behavior.
+      // Defensive re-derivation of `worktreeBranchPrefix` on every rehydration (mirrors
+      // `workspace-folders-store.ts`'s `merge`): a hand-edited or otherwise corrupted localStorage value
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -678,14 +629,6 @@ export function tilePlacementForCategory(
     : settings.default;
 }
 
-/**
- * Rehydration for the link/tile/agent settings, which doubles as the one-shot
- * migration off the pre-refactor keys (`browserLinkDefaultMode`,
- * `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`). The old
- * keys are read here and nowhere else; `partialize` does not list them, so the
- * next write drops them. `github` and `image` are new kinds with no legacy
- * value - they take the default.
- */
 function resolvePersistedLinkOpen(
   persisted: Record<string, unknown>,
 ): LinkOpenSettings {
@@ -726,12 +669,8 @@ function resolveLinkOpenMode(value: unknown, legacy: unknown): LinkOpenMode {
 }
 
 /**
- * The retired `agentTabSurfacingMode` migrates into `agentTabSurfacing` ONLY
- * (see `resolvePersistedAgentTabSurfacing`). It described what an
- * AGENT-opened tab did, and the new browser placement governs every browser
- * open - so carrying `pip` across would float every link the user clicks,
- * which is not what the old setting ever said. Both legacy values leave the
- * browser placement at its default.
+ * The retired `agentTabSurfacingMode` migrates into `agentTabSurfacing` ONLY (see
+ * `resolvePersistedAgentTabSurfacing`).
  */
 function resolvePersistedTilePlacement(
   persisted: Record<string, unknown>,

@@ -51,9 +51,7 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   }),
 }));
 
-// The pointer class is the whole input to the default, and jsdom's
-// `matchMedia` answers `false` to every query - so it is stubbed here rather
-// than inferred from the environment.
+// The pointer class is the whole input to the default, and jsdom's `matchMedia` answers `false` to every query - so it is stubbed here rather than inferred from the environment.
 vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
   useCoarsePointer: () => state.coarsePointer,
 }));

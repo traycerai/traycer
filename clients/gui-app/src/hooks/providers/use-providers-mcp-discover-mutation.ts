@@ -33,11 +33,7 @@ interface McpDiscoverContext {
   };
 }
 
-/**
- * Discovers tools/schemas/instructions for one server via `providers.list`
- * with `native.kind: "mcpDiscover"` and merges the returned row into the
- * semantic mcp list cache.
- */
+/** Discovers tools/schemas/instructions for one server via `providers.list` with `native.kind: "mcpDiscover"` and merges the returned row into the semantic mcp list cache. */
 export function useProvidersMcpDiscover(): UseMutationResult<
   McpDiscoverData,
   HostRpcError,

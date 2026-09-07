@@ -20,12 +20,8 @@ import {
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
 import { WorkspaceBranchLabel } from "./workspace-branch-label";
 
-/**
- * The per-row Branch control. In Local / Existing-worktree mode the branch is
- * fixed, so this renders a read-only label (`item.branchLabel`). In New-worktree
- * mode it is an interactive chip that opens the {@link NewWorktreeForm} in a
- * popover. Disabled (with the rebind tooltip) when `item.modeDisabled`.
- */
+/** In Local / Existing-worktree mode the branch is fixed, so this renders a read-only label
+ * (`item.branchLabel`). */
 export function FolderBranchControl(props: {
   readonly item: WorkspaceRunItem;
   /** Collision boundary for the source dropdown nested inside the form. When
@@ -37,12 +33,9 @@ export function FolderBranchControl(props: {
   const sourceLabel = workspaceRunBranchSourceLabel(item.currentIntent);
   const tooltipLabel = branchTooltipLabel(item);
   const [open, setOpen] = useState(false);
-  // The popover's own content node, used to tell a nested overlay (stacked
-  // above) from the host dialog (an ancestor) on outside-click - see
-  // preserveWhenNestedOverlay.
   const contentRef = useRef<HTMLDivElement>(null);
-  // Closing restores focus to the chip (keyboard a11y). That focus would also
-  // open the branch tooltip with the pointer away — suppress the open once.
+  // Closing restores focus to the chip (keyboard a11y). That focus would also open the branch tooltip with the
+  // pointer away - suppress the open once.
   const [chipTooltipOpen, setChipTooltipOpen] = useState(false);
   const suppressChipTooltipRef = useRef(false);
   // Owns the focusin listener + fallback timer for one suppress cycle.
@@ -58,9 +51,8 @@ export function FolderBranchControl(props: {
 
   const handlePopoverOpenChange = (next: boolean): void => {
     setOpen(next);
-    // Do not arm tooltip suppress here — Radix restores focus from its own
-    // setTimeout(0) after content unmount; arming in onOpenChange clears too
-    // early. onCloseAutoFocus arms it right before the trigger is focused.
+    // Do not arm tooltip suppress here - Radix restores focus from its own setTimeout(0) after content unmount;
+    // arming in onOpenChange clears too early. onCloseAutoFocus arms it right before the trigger is focused.
     if (!next) {
       setChipTooltipOpen(false);
     }
@@ -72,8 +64,8 @@ export function FolderBranchControl(props: {
   };
 
   const handleCloseAutoFocus = (): void => {
-    // Fires immediately before Radix focuses the trigger. Do not preventDefault
-    // — keyboard a11y needs focus-return on Escape.
+    // Fires immediately before Radix focuses the trigger. Do not preventDefault - keyboard a11y needs focus-return
+    // on Escape.
     clearTooltipSuppressRef.current?.();
     suppressChipTooltipRef.current = true;
     setChipTooltipOpen(false);
@@ -104,9 +96,8 @@ export function FolderBranchControl(props: {
     clearTooltipSuppressRef.current = clear;
   };
 
-  // Read-only branch label for every mode except an editable new worktree.
-  // Derived from the intent kind, not `mode`: an adopted worktree (`import`) is
-  // `mode: "worktree"` but its branch is fixed, so it must stay read-only.
+  // Derived from the intent kind, not `mode`: an adopted worktree (`import`) is `mode: "worktree"` but its
+  // branch is fixed, so it must stay read-only.
   const location = folderLocationValue(item);
   if (location === "import") {
     const details = importedWorktreeBranchDetails(item);

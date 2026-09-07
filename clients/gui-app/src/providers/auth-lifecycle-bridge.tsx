@@ -17,18 +17,7 @@ import {
   type AuthIdentityTransition,
 } from "@/hooks/auth/use-auth-identity-transition";
 
-/**
- * Renderer-side bridge that disposes every live Epic, chat, and terminal
- * session whenever the authenticated identity changes - sign-out, user-switch,
- * or a token expiry that lands the user back on the signed-out auth surface.
- *
- * The teardown is deliberately whole-registry: even resources the new identity
- * also has access to must be re-acquired so the next snapshot and chat
- * subscription land fresh. Without this, prior-user Y.Doc bytes, unsynced
- * edits, last-focused state, and live chat/terminal stream state (including a
- * warm terminal-agent session, which the terminal registry keeps lease-free
- * with no idle TTL) would leak into the next session.
- */
+/** Dispose every live Epic, chat, and terminal on identity change so prior-user Y.Doc, edits, and streams cannot leak into the next session. */
 export interface EpicSessionLifecycleBridgeProps {
   readonly children: ReactNode;
 }
@@ -56,47 +45,24 @@ export function EpicSessionLifecycleBridge(
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.
       clearSessionCreatedEpics();
-      // Settings' viewing scope is a host id, and host ids belong to an
-      // ACCOUNT. Left standing across a switch it names the previous account's
-      // machine, which the new account's lists will never contain — so Settings
-      // opens `vanished`, reporting a host id the person signing in has never
-      // seen and cannot dismiss except by re-picking. `null` is not "no host",
-      // it is "follow the active host", so this returns the surface to its
-      // default rather than emptying it.
+      // Clear Settings viewing scope: a leftover host id belongs to the previous
+      // account. null means follow the active host, not empty.
       useSettingsHostScopeStore.getState().setScopedHostId(null);
-      // The Usage popover pins a host id on the same account-owned terms, and
-      // it PERSISTS — left standing it survives the restart into the next
-      // sign-in and opens Usage on a `vanished` host the new account has never
-      // seen. Same rule, same `null`-means-follow default. Tab and size stay:
-      // they are window habits, not account facts.
+      // Clear Usage's pinned host id; it persists across sign-in. null means
+      // follow the active host. Tab and size stay.
       useRateLimitPopoverStore.getState().setScopedHostId(null);
-      // The resource monitor pins a host id on exactly the same persisted,
-      // account-owned terms, so it needs the same reset - otherwise it survives
-      // the restart into the next sign-in and opens on a `vanished` host the
-      // new account has never seen.
+      // Clear the resource monitor's pinned host id; it persists across
+      // sign-in.
       useResourceMonitorStore.getState().setScopedHostId(null);
-      // The Add-host dialog is module-level too, and it carries more than a
-      // boolean: `knownHostIds` is the snapshot the arrival watcher diffs
-      // against to decide which machine is NEW. Left standing across a switch
-      // it reopens for account B unasked, holding account A's fleet — so a
-      // host B already owns is absent from that snapshot and gets announced as
-      // the machine that just connected.
+      // Close Add-host: leftover knownHostIds is A's fleet, so B's own host
+      // would be announced as newly connected.
       useAddHostDialogStore.getState().closeDialog();
-      // The Providers deep-link intent is the third module-level store on this
-      // boundary, and the most dangerous of them: `focusHostId` names account
-      // A's machine and `startSignIn` asks Providers to begin a sign-in flow
-      // the moment it consumes the intent. Left armed, account B's Providers
-      // could select A's host id and then run A's pending profile sign-in on
-      // whichever host B lands on. `clearFocusHarnessId` drops the harness,
-      // host, profile and sign-in flag together; the tab half is separate.
+      // Disarm Providers deep-link: leftover focusHostId + startSignIn would
+      // run A's pending sign-in on B's host. clearFocusHarnessId drops all four.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
-      // A last-copy draft toast is minted with NO duration, and the app-level
-      // `<Toaster />` is mounted outside this tree - so it is the one piece of
-      // renderer state that survives everything disposed above and keeps the
-      // outgoing account's message on screen for whoever signs in next. Scoped
-      // to this boundary only: a chat or epic closing must NOT take it down,
-      // because the text it holds is still the user's only copy.
+      // Dismiss last-copy draft toasts here only; Toaster is outside this tree
+      // and they have no duration. Chat/epic close must not take them down.
       dismissRetainedDraftToasts();
     }
   }, []);

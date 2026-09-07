@@ -14,21 +14,8 @@ import type { EpicSweepWorktreeRow } from "@/hooks/epic/use-epic-sweep-worktree-
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
 
-/**
- * The host as a CONTROL inside the confirmation - the whole of what replaced
- * the standalone "which host?" step.
- *
- * These cases drive the REAL dialog, because every claim here is about the two
- * halves being one surface: the chip names the machine the census in front of
- * it was taken on, switching it re-proves against the other machine's client,
- * and the popover's worktree-count pill is a live question asked of every
- * other selectable host. The flow's own latch and its fallbacks are asserted
- * separately, against a captured dialog, in `sweep-worktrees-flow.test.tsx`.
- *
- * Everything is asserted against the client's HOST ID rather than against
- * copy: "the census moved" means the candidates query ran on the other
- * machine's client, which is the only thing that makes a sweep safe.
- */
+/** Everything is asserted against the client's host ID rather than against copy: "the census moved" means the
+ * candidates query ran on the other machine's client, which is the only thing that makes a sweep safe. */
 
 interface SweepCensusClient {
   readonly getActiveHostId: () => string | null;
@@ -51,15 +38,9 @@ const state = vi.hoisted(() => ({
   /** Paths whose sweep is already streaming, from any surface. */
   sweepingPaths: [] as readonly string[],
   refreshing: false,
-  /** Rows the classifier could not prove landed — the route to Review. */
   unproven: false,
-  /** The directory has said what the fleet is. */
   fleetResolved: true,
-  /**
-   * What `useEpicSweepHostWorktreeCount` reports for a NON-censused host, keyed
-   * by the client's host id. A missing key answers `null`, matching the real
-   * hook's "not known" answer.
-   */
+  /** What `useEpicSweepHostWorktreeCount` reports for a non-censused host, keyed by the client's host id. */
   countByHost: {} as Record<string, number | null>,
 }));
 
@@ -158,11 +139,8 @@ vi.mock("@/components/worktree/worktree-pr-metadata", () => ({
   WorktreePrPills: () => null,
 }));
 
-/**
- * Three hosts, covering every row class the popover must draw at once: the one
- * being censused, a dialable one the Task has agents on, and a dead one that
- * must still be LISTED.
- */
+/** Three hosts, covering every row class the popover must draw at once: the one being censused, a dialable one
+ * the Task has agents on, and a dead one that must still be listed. */
 function hostOptions(): readonly HostScopeOption[] {
   return [
     hostScopeOptionFixture({
@@ -238,11 +216,8 @@ function sweepRow(worktreePath: string): EpicSweepWorktreeRow {
   };
 }
 
-/**
- * Built through a typed factory rather than a cast, matching
- * `landing-placement.test.ts`: the ban on `as any` / `as unknown` applies in
- * tests too.
- */
+/** Built through a typed factory rather than a cast, matching `landing-placement.test.ts`: the ban on `as any`
+ * / `as unknown` applies in tests too. */
 function clientAddressing(hostId: string): HostClient<HostRpcRegistry> {
   const client: Pick<HostClient<HostRpcRegistry>, "getActiveHostId"> = {
     getActiveHostId: () => hostId,
@@ -264,7 +239,6 @@ function renderSweep() {
   return render(sweep(SURFACE_ON_A));
 }
 
-/** The same flow with the Sweep shut, so a re-open can be driven. */
 function closedSweep() {
   return (
     <SweepWorktreesFlow
@@ -320,9 +294,8 @@ describe("Sweep host chip", () => {
     state.pathsByHost = { "host-a": [] };
     renderSweep();
 
-    // The hard requirement: a single-host install sees byte-for-byte the Sweep
-    // it had before multi-host Sweep existed - no chip, and the same empty
-    // sentence, even though a record names another machine.
+    // The hard requirement: a single-host install sees byte-for-byte the Sweep it had before multi-host Sweep
+    // existed - no chip, and the same empty sentence, even though a record names another machine.
     expect(screen.queryByTestId("sweep-host-chip")).toBeNull();
     expect(screen.getByTestId("sweep-worktrees-empty").textContent).toBe(
       "No worktrees on this host for the selected tasks.",
@@ -426,8 +399,7 @@ describe("Sweep host chip", () => {
     fireEvent.click(screen.getByTestId("sweep-host-switch-confirm-action"));
 
     expect(lastCensusHostId()).toBe("host-b");
-    // The new host's rows are at THEIR default, not carrying host-a's
-    // deselection across a machine boundary.
+    // The new host's rows are at their default, not carrying host-a's deselection across a machine boundary.
     expect(screen.getByTestId("sweep-worktrees-count").textContent).toContain(
       "1 of 1",
     );
@@ -435,9 +407,7 @@ describe("Sweep host chip", () => {
 
   it("switches nothing, and asks nothing, when the current host's own row is clicked", () => {
     renderSweep();
-    // With a hand-made selection on screen, so the no-op has something to
-    // threaten: picking the host you are already on is not a host change, and
-    // warning that it would clear the list is a lie the popover must not tell.
+    // With a hand-made selection on screen, so the no-op has something to threaten.
     fireEvent.click(screen.getByTestId("sweep-worktrees-checkbox"));
     const popover = openHostPopover();
     fireEvent.click(within(popover).getByRole("button", { name: /Laptop/ }));
@@ -450,10 +420,8 @@ describe("Sweep host chip", () => {
   });
 
   it("leaves a host whose client cannot be built inert, and stays put", () => {
-    // `connectable` is a directory fact and stays TRUE here: the client fails
-    // to build for a reason the route knows nothing about (no request context
-    // / no bound user). Without the row asking for itself, the row stays
-    // enabled and every click re-enters the same unresolved pick in silence.
+    // Without the row asking for itself, the row stays enabled and every click re-enters the same unresolved pick
+    // in silence.
     state.unresolvableHostIds = ["host-b"];
     renderSweep();
     const popover = openHostPopover();
@@ -521,9 +489,7 @@ describe("Sweep host chip", () => {
       (await screen.findByTestId("sweep-review-host")).textContent,
     ).toContain("On Laptop");
 
-    // History's surface props are the app-wide effective host. Laptop dies,
-    // selection fails over to Studio, and the props this dialog was opened
-    // with now describe a different machine.
+    // History's surface props are the app-wide effective host.
     view.rerender(
       sweep({
         client: clientAddressing("host-b"),
@@ -531,9 +497,8 @@ describe("Sweep host chip", () => {
       }),
     );
 
-    // Following that would move the dialog's session key, and
-    // `applySelectionRetarget` would throw away a proof somebody is part-way
-    // through confirming - with no gesture from anybody.
+    // Following that would move the dialog's session key, and `applySelectionRetarget` would throw away a proof
+    // somebody is part-way through confirming - with no gesture from anybody.
     expect(screen.getByTestId("sweep-review-host").textContent).toContain(
       "On Laptop",
     );
@@ -550,9 +515,8 @@ describe("Sweep host chip", () => {
     state.unresolvableHostIds = ["host-b"];
     view.rerender(sweep(SURFACE_ON_A));
 
-    // The dialog holds the host it was pointed at and says what happened. It
-    // does NOT slide back to Laptop, and it does not claim Studio is clean -
-    // the census never ran.
+    // The dialog holds the host it was pointed at and says what happened. It does not slide back to Laptop, and it
+    // does not claim Studio is clean - the census never ran.
     expect(
       screen.getByTestId("sweep-worktrees-host-unreachable").textContent,
     ).toContain("Can't reach Studio");
@@ -606,9 +570,8 @@ describe("Sweep host chip", () => {
   it("asks, on screen and cancellably, when the surface cannot name its host", () => {
     const view = render(sweep({ client: SURFACE_CLIENT, hostId: null }));
 
-    // The dialog is UP. Rendering nothing here was the defect: the caller's
-    // "sweep is open" state is only ever cleared from `onOpenChange`, so an
-    // invisible wait is a request nobody can see, cancel, or wait out.
+    // Rendering nothing here was the defect: the caller's "sweep is open" state is only ever cleared from
+    // `onOpenChange`, so an invisible wait is a request nobody can see, cancel, or wait out.
     expect(screen.getByTestId("sweep-worktrees-dialog")).toBeTruthy();
     expect(screen.getByTestId("sweep-host-chip").textContent).toContain(
       "Choose a host",
@@ -637,9 +600,8 @@ describe("Sweep host chip", () => {
     expect(
       screen.getByTestId("sweep-worktrees-fleet-pending").textContent,
     ).toBe("Checking which hosts are available…");
-    // No chip AT ALL - not even the unchosen one. We do not yet know whether
-    // this account has a choice, and a chooser flashing at a single-host
-    // install is the byte-identical promise broken for a query's length.
+    // We do not yet know whether this account has a choice, and a chooser flashing at a single-host install is the
+    // byte-identical promise broken for a query's length.
     expect(screen.queryByTestId("sweep-host-chip")).toBeNull();
     // Nothing is claimed about a disk, and nothing is walked.
     expect(screen.queryByTestId("sweep-worktrees-empty")).toBeNull();
@@ -672,11 +634,8 @@ describe("Sweep host chip", () => {
 
     // Cancel parks the session, exactly as it does for an ordinary re-open.
     view.rerender(closedSweep());
-    // Re-opened while the window cannot name its host: "no host" and "not
-    // open" are both absences, and sharing one session key made this look
-    // like the gap between two opens - so host A's Review survived, naming a
-    // machine this dialog is no longer pointed at, over a Sweep button that
-    // silently did nothing.
+    // Re-opened while the window cannot name its host: "no host" and "not open" are both absences, and sharing one
+    // session key made this look like the gap between two opens.
     view.rerender(sweep({ client: SURFACE_CLIENT, hostId: null }));
 
     expect(screen.queryByTestId("sweep-review-host")).toBeNull();
@@ -704,10 +663,7 @@ describe("Sweep host chip", () => {
       screen.getByTestId("sweep-worktrees-fleet-pending").textContent,
     ).toBe("Checking which hosts are available…");
 
-    // ...and it must not come BACK when the fleet answers with the same host.
-    // Hiding it only while pending would have left the parked session intact,
-    // so the restored `host:A` key would match and the stale Review would
-    // paint again the moment the directory replied.
+    // ...and it must not come back when the fleet answers with the same host.
     state.fleetResolved = true;
     view.rerender(sweep(SURFACE_ON_A));
 
@@ -729,11 +685,8 @@ describe("Sweep host chip", () => {
       (await screen.findByTestId("sweep-review-host")).textContent,
     ).toContain("On Studio");
 
-    // Studio leaves the directory with its Review on screen. The host is
-    // SETTLED, so the flow holds it - and the dialog holds the snapshot too,
-    // because its session key goes null and parks. What must not survive that
-    // is the confirmation itself: a receipt for a proof we can no longer act
-    // on, whose Sweep button would silently do nothing.
+    // What must not survive that is the confirmation itself: a receipt for a proof we can no longer act on, whose
+    // Sweep button would silently do nothing.
     state.unresolvableHostIds = ["host-b"];
     view.rerender(sweep(SURFACE_ON_A));
 
@@ -753,9 +706,8 @@ describe("Sweep host chip", () => {
     view.rerender(closedSweep());
     state.fleetResolved = false;
     view.rerender(sweep(SURFACE_ON_A));
-    // The single-host resolution takes the `surface` arm, which carries no
-    // host choice at all - so it is the arm most likely to look like the
-    // dialog never lost its host.
+    // The single-host resolution takes the `surface` arm, which carries no host choice at all - so it is the arm
+    // most likely to look like the dialog never lost its host.
     state.fleetResolved = true;
     state.connectableHostIds = ["host-a"];
     view.rerender(sweep(SURFACE_ON_A));
@@ -779,10 +731,8 @@ describe("Sweep host chip", () => {
     // including the window's own machine, is a plain row in the popover.
     fireEvent.click(within(popover).getByRole("button", { name: /Laptop/ }));
 
-    // Answering "which host" with the SAME machine still has to land on
-    // Choose. Without an identity of its own, the unchosen detour reads as the
-    // closed gap - so picking Laptop would resume a receipt from before the
-    // question was asked, which is not what the person just agreed to.
+    // Without an identity of its own, the unchosen detour reads as the closed gap - so picking Laptop would resume
+    // a receipt from before the question was asked, which is not what the person just agreed to.
     expect(lastCensusHostId()).toBe("host-a");
     expect(screen.queryByTestId("sweep-review-host")).toBeNull();
     expect(screen.getByTestId("sweep-worktrees-checkbox")).toBeTruthy();

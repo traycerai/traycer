@@ -34,11 +34,7 @@ type AwaitLoginContext = { readonly hostId: string | null };
 // capability-stripping helper below states its own contract.
 type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
 
-/**
- * Drops `loginCapability` from a mutation state echo so an overlay cannot
- * narrow the cached capability. See the call site for why this one field is
- * different from every other field on the echo.
- */
+/** Drops `loginCapability` from a mutation state echo so an overlay cannot narrow the cached capability. */
 function withoutLoginCapability(
   state: AwaitLoginProviderState,
   cachedProfiles: readonly ProviderProfile[],
@@ -63,15 +59,7 @@ function withoutLoginCapability(
 }
 
 /**
- * Awaits the honest login-completion edge for a provider on the CURRENT tab's
- * host: the host blocks the response until the `<cli> auth login` child
- * closes, then re-probes and returns that provider's fresh state. This replaces
- * the old 2s `forceAuthRefresh` poll - one request, resolving exactly when the
- * browser flow finishes, so there is no flaky-probe flicker mid-sign-in.
- *
- * On success the returned state is merged into the tab host's `providers.list`
- * cache, so the re-auth gate flips (and unmounts the banner) without a second
- * probe. A `null` state means nothing was in flight to await - left untouched.
+ * Host blocks until the auth child closes, then returns fresh state. Merge into the tab host's `providers.list`; `null` means nothing was in flight.
  */
 export function useProvidersAwaitLogin(): UseMutationResult<
   AwaitLoginResponse,
@@ -87,10 +75,7 @@ export function useProvidersAwaitLogin(): UseMutationResult<
   });
 }
 
-/**
- * Settings-panel variant. It follows the selected host via
- * `HostRuntimeContext`, not a tab-bound host.
- */
+/** It follows the selected host via `HostRuntimeContext`, not a tab-bound host. */
 export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
   AwaitLoginResponse,
   HostRpcError,
@@ -104,13 +89,7 @@ export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
   });
 }
 
-/** Client-scoped variant, keyed by a caller-supplied cache host id - lets a
- *  caller outside `HostRuntimeContext` (e.g. the picker's tab-scoped
- *  "Create new profile" flow) target an explicit host instead of the
- *  app-wide default. `getCacheHostId` is a separate parameter (not derived
- *  from `client.getActiveHostId()`) so the cache write lands under the
- *  caller's KNOWN host id even while `client` itself is still resolving
- *  (mirrors `useProvidersAwaitLogin`'s tab-scoped `getCacheHostId`). */
+/** the picker's tab-scoped "Create new profile" flow) target an explicit host instead of the app-wide default. */
 export function useProvidersAwaitLoginForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly getCacheHostId: () => string | null;
@@ -129,10 +108,7 @@ export function useProvidersAwaitLoginForClient(args: {
     client: args.client,
     method: "providers.awaitLogin",
     mapVariables: (variables: AwaitLoginRequest) => variables,
-    // Long-poll: the host holds the response until the OAuth child
-    // terminates (bounded by its own 3-minute login timeout). The default
-    // ~30 s frame timeout would abandon a healthy sign-in as soon as the
-    // user takes longer than that in the browser.
+    // Long-poll: the host holds the response until the OAuth child terminates (bounded by its own 3-minute login timeout).
     responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
     options: {
       mutationKey: providersMutationKeys.awaitLogin(),
@@ -148,26 +124,7 @@ export function useProvidersAwaitLoginForClient(args: {
             return {
               providers: prev.providers.map((p) =>
                 p.providerId === next.providerId
-                  ? // Overlay the echo onto the cached entry rather than
-                    // replacing it. The echo is pinned to the frozen
-                    // `providerMutationCliStateSchemaV21`, so it does not
-                    // carry the provider-pack-registry fields
-                    // (`managedInstallState`, `versionVisibility`,
-                    // `advisory`) - only `providers.list@5.0` does. A
-                    // straight replace would blank whatever the last list
-                    // fetch established, since a login cannot change what is
-                    // installed. The echo stays authoritative for every
-                    // field it does model.
-                    //
-                    // `loginCapability` is the one field it must NOT be
-                    // authoritative for. It is PRESENT on the echo but frozen
-                    // at the v4.0 shape, so it lacks `terminalLogin` - and a
-                    // present-but-narrower object overwrites wholesale. That
-                    // would silently retract the terminal sign-in affordance
-                    // the moment any login echo landed, which is exactly when
-                    // the user is looking at it. Capability is a property of
-                    // the installed CLI, not of a login attempt; only
-                    // `providers.list` may set it.
+                  ? // Overlay the echo; do not replace. loginCapability must stay from providers.list (echo lacks terminalLogin).
                     {
                       ...p,
                       ...withoutLoginCapability(next, p.profiles),
@@ -178,27 +135,7 @@ export function useProvidersAwaitLoginForClient(args: {
             };
           },
         });
-        // The overlay above is optimistic-only, and deliberately cannot be
-        // the last word. The echo is pinned to
-        // `providerMutationCliStateSchemaV21`, whose field set is the
-        // hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
-        // the live `providers.list` row, and a login is exactly the moment the
-        // rest of that row moves too (the profile list gains the new account,
-        // its ambient identity resolves). Left at the overlay, the screens the
-        // user is looking at would keep rendering pre-login values for every
-        // field the echo does not model.
-        //
-        // `commitAuthoritativeProvidersList` invalidates every
-        // `PROVIDER_INVALIDATIONS` entry EXCEPT `providers.list` (the one it
-        // just wrote), which is right for the force-refresh callers - their
-        // payload IS a full list response. It is wrong here, so this path adds
-        // the one invalidation the helper withholds: without it the stale
-        // fields stand for a full `staleTime` (15 minutes).
-        //
-        // Note what the refetch will NOT do: enable the provider. Signing in
-        // never changes enablement - the row comes back with the same sticky
-        // `enabled` it had. Onboarding, the one screen where a sign-in is
-        // meant to enable, sends that toggle itself.
+        // Overlay is narrower than providers.list. Invalidate providers.list here (commitAuthoritativeProvidersList withholds it). Sign-in does not enable.
         await queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
         });

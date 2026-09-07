@@ -24,19 +24,7 @@ interface MarkdownAnchorProps {
 }
 
 /**
- * Anchor renderer for all markdown surfaces. React-markdown's default `<a>`
- * lets the browser perform a real navigation on click, which in this SPA
- * unloads the React app (the chat-link routing crash). We intercept every
- * click and route links that leave the current document explicitly:
- *
- * - web-safe links (`http(s):`, `mailto:`) go to {@link useOpenLink}, which
- *   opens them in a browser tile or the OS browser per the user's setting;
- * - file links (bare paths, rooted paths, Windows drives, `file://` URIs) are
- *   handed to the surface's `MarkdownLinkContext` policy.
- *
- * A BLANK href never reaches the DOM ({@link navigableHref}): `<a href="">`
- * resolves to the current document, so a click on one navigates for real and
- * unloads the app - the same crash, reached without any scheme we could route.
+ * Intercept markdown clicks. Web-safe hrefs go to `useOpenLink`; file hrefs to `MarkdownLinkContext`. A blank href never reaches the DOM.
  */
 export function MarkdownAnchor({
   href,
@@ -50,12 +38,8 @@ export function MarkdownAnchor({
   const reportIssueAvailable = useDesktopDialogStore(
     (state) => state.reportIssueAvailable,
   );
-  // `defaultUrlTransform` empties every href it rejects, and an empty href is
-  // not inert - it points at the current document, so the browser treats a
-  // click as a real navigation and the whole renderer reloads. Drop the
-  // attribute instead, the way the sanitize layer already does for a rejected
-  // scheme: an anchor with no href has nothing to navigate to, whatever the
-  // event (click, keyboard, middle-click).
+  // Empty href is the current document; drop the attribute so click/keyboard
+  // cannot reload the renderer.
   const navigableHref =
     href === undefined || href.trim().length === 0 ? undefined : href;
   const routeLinkClick = useCallback(
@@ -72,12 +56,8 @@ export function MarkdownAnchor({
       if (classified.kind === "ignore") return;
 
       if (classified.kind === "file") {
-        // `openFileLink` returns `false` when the surface can't resolve the
-        // link (path outside the workspace, a directory ref, a torn-down tab).
-        // `preventDefault` already swallowed the native navigation, so without
-        // feedback that click is a silent no-op - surface a subtle toast. A
-        // missing policy (`undefined`) is left silent: the surface simply opts
-        // out of file routing.
+        // openFileLink false after preventDefault is a silent no-op; toast.
+        // undefined policy is opt-out and stays silent.
         const opened = linkPolicy?.openFileLink({
           path: classified.path,
           line: classified.line,
@@ -107,20 +87,15 @@ export function MarkdownAnchor({
       }
 
       linkPolicy?.supersedePendingFileLink();
-      // Unconditional: the handler has already prevented the native
-      // navigation, so gating on a RunnerHost would make the link a no-op on
-      // a surface without one. `openLink` picks its own fallback (and toasts
-      // when the bridge is missing).
+      // Already preventDefaulted. Do not gate on RunnerHost; openLink toasts
+      // if the bridge is missing.
       void openLink(classified.url, "markdown", event);
     },
     [navigableHref, linkPolicy, openLink, reportIssueAvailable],
   );
 
-  // Native `title` ON PURPOSE - see the eslint exemption for this file. This
-  // is not app chrome: it is the link title the DOCUMENT AUTHOR wrote, and
-  // `title` is where a Markdown link title belongs. Routing it through the
-  // app's tooltip surface would restyle author content as UI and strip the
-  // attribute off the rendered anchor.
+  // Native title is the author-written Markdown link title, not app chrome.
+  // A tooltip would restyle it as UI and strip the attribute.
   return (
     <a
       href={navigableHref}

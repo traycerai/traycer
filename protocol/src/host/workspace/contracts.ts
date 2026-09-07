@@ -46,10 +46,6 @@ export const workspacePrepareFoldersV10 = defineRpcContract({
   responseSchema: prepareWorkspaceFoldersResponseSchema,
 });
 
-// v1.1 folds the 4 standalone workspace-picker methods (T14) onto this
-// existing method name instead of shipping new ones (T18) - see the RPC
-// backward-compat decision log and `workspace/unary-schemas.ts`'s doc
-// comment on `workspacePrepareFoldersRequestSchemaV11` for the full design.
 export const workspacePrepareFoldersV11 = defineRpcContract({
   method: "workspace.prepareFolders",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -128,13 +124,8 @@ export const workspaceResolvePathsByRepoIdentifiersV10 = defineRpcContract({
 });
 
 /**
- * @deprecated Legacy "ship the whole tree" snapshot (flat list of up to 50k
- * paths + workspace-wide git status), superseded by the live single-level
- * stream `workspace.subscribeFileList` (file explorer) and the host-ranked
- * `workspace.searchPaths` (path search). It CANNOT be removed - the method is
- * on the released floor, so hosts must keep serving already-shipped clients -
- * but its only remaining first-party caller is the file tree's fallback for
- * hosts that predate `workspace.subscribeFileList`. Do not add new consumers.
+ * @deprecated Legacy "ship the whole tree" snapshot (flat list of up to 50k paths + workspace-wide git status), superseded by the live single-level stream `workspace.subscribeFileList` (file explorer) and the host-ranked.
+ * It CANNOT be removed - the method is on the released floor, so hosts must keep serving already-shipped clients - but its only remaining first-party caller is the file tree's fallback for hosts that predate.
  */
 export const workspaceListFileTreeV10 = defineRpcContract({
   method: "workspace.listFileTree",

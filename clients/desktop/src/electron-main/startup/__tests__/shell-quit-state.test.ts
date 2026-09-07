@@ -42,12 +42,6 @@ describe("ShellQuitState", () => {
   });
 
   it("pins the regression: an aborted quit must not preserve a later non-last window close", () => {
-    // Mirrors `before-quit` in desktop-startup.ts: the first pass marks
-    // quitting, then a stay-alive branch (install failure / rejected quit
-    // decision / failed fresh-snapshot query) fires and must reset the flag -
-    // otherwise a later mid-session close of a non-last window is wrongly
-    // treated as part of that abandoned quit and its restore snapshot
-    // survives when it should be pruned.
     const state = new ShellQuitState();
     state.markQuitting();
     state.resetQuitting();

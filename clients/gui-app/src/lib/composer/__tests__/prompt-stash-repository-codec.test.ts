@@ -40,9 +40,8 @@ describe("prompt-stash-repository codec", () => {
     await repo.savePromptStashSnapshot(textSnapshot(older));
     await repo.savePromptStashSnapshot(textSnapshot(newer));
 
-    // Inject a malformed row through a raw write. Empty-id records have no
-    // recoverable identity and stay invisible; an identifiable broken record
-    // surfaces as unavailable rather than disappearing.
+    // Inject a malformed row through a raw write.
+    // Empty-id records have no recoverable identity and stay invisible; an identifiable broken record surfaces as unavailable rather than disappearing.
     const db = await openDb(DB_NAME, undefined, undefined);
     try {
       const tx = db.transaction("entries", "readwrite");

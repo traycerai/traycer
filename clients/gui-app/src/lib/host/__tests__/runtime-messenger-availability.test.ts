@@ -1,18 +1,5 @@
 /**
- * `RuntimeHostMessenger`'s ready-boundary forwarding for a PICKER-selected
- * remote host - the one host scope nothing else holds a session for (the
- * active host is wired by `stream-runtime`, tab-bound hosts by the durable
- * per-tab transport).
- *
- * What these pin down is the interaction with the session cache's keep-warm
- * linger. This messenger holds ONE remote binding and ANY request for another
- * host replaces it - an interleaved background request against the active
- * local host is enough. Releasing a session no longer closes it, so a session
- * that was still dialing when the slot flipped goes on to reach its first
- * ready boundary; if the binding took its availability listener down on the
- * way out, that boundary reaches nobody and the queries that already errored
- * against it sit on an error card until their own retry backoff fires. So the
- * subscription has to outlive the binding.
+ * `RuntimeHostMessenger`'s ready-boundary forwarding for a PICKER-selected remote host - the one host scope nothing else holds a session for (the active host is wired by `stream-runtime`, tab-bound hosts by the durable per-tab transport).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -60,17 +47,12 @@ interface ControllableSession extends IRemoteSession<
   readonly availabilityListenerCount: number;
   readonly closeCalls: number;
   /**
-   * Settable, because "already ready when the binding subscribes" is a state
-   * the cache produces routinely (a warm keep-warm hit) and one in which NO
-   * boundary will ever be emitted - `subscribeAvailabilityRecovered` reports a
-   * recovery, not the current state.
+   * Settable, because "already ready when the binding subscribes" is a state the cache produces routinely (a warm keep-warm hit) and one in which NO boundary will ever be emitted - `subscribeAvailabilityRecovered` reports a recovery, not the current state.
    */
   ready: boolean;
   /**
-   * Settable BEFORE `emitClosed()` to play a terminal session fatal (the real
-   * session records the verdict, then closes and notifies). Left null,
-   * `emitClosed` plays a routine cache retirement - the distinction the
-   * messenger's `onClosed` handler keys on.
+   * Settable BEFORE `emitClosed()` to play a terminal session fatal (the real session records the verdict, then closes and notifies).
+   * Left null, `emitClosed` plays a routine cache retirement - the distinction the messenger's `onClosed` handler keys on.
    */
   fatal: FatalErrorDetails | null;
   emitReady(): void;
@@ -92,9 +74,7 @@ function controllableSession(): ControllableSession {
       return closeCalls;
     },
     emitReady: () => {
-      // Mirror production ordering: the phase flips to ready BEFORE the
-      // boundary listeners run, so a listener that re-reads `isReady()` sees
-      // the state its notification describes.
+      // Mirror production ordering: the phase flips to ready BEFORE the boundary listeners run, so a listener that re-reads `isReady()` sees the state its notification describes.
       session.ready = true;
       for (const listener of [...availability]) {
         listener();
@@ -106,16 +86,10 @@ function controllableSession(): ControllableSession {
       for (const listener of [...closed]) {
         listener();
       }
-      // Deliberately does NOT clear the listener sets, though a real session
-      // does: `availabilityListenerCount` assertions must keep measuring
-      // whether the code under test detached, not whether the fake swept.
+      // Deliberately does NOT clear the listener sets, though a real session does: `availabilityListenerCount` assertions must keep measuring whether the code under test detached, not whether the fake swept.
     },
     start: vi.fn(),
-    // False while merely RELEASED - a released session lingers, which is
-    // exactly the state this file is about - but true once `emitClosed` has
-    // fired, matching a real session that is already closed when it notifies
-    // its closed-listeners. NOT flipped by `close()`, which plays the cache
-    // view's release, not a terminal close.
+    // False while merely RELEASED - a released session lingers, which is exactly the state this file is about - but true once `emitClosed` has fired, matching a real session that is already closed when it notifies its closed-listeners.
     isClosed: () => terminallyClosed,
     isReady: () => session.ready,
     sendUnary: vi.fn(() => Promise.resolve({}) as never),
@@ -132,9 +106,7 @@ function controllableSession(): ControllableSession {
     wake: vi.fn(),
     forceReconnect: vi.fn(),
     onClosed: (listener) => {
-      // Production refuses new listeners once closed and hands back a noop
-      // unsubscribe; a fake that kept accepting them could mint a
-      // wrong-reason pass for lifecycle tests.
+      // Production refuses new listeners once closed and hands back a noop unsubscribe; a fake that kept accepting them could mint a wrong-reason pass for lifecycle tests.
       if (terminallyClosed) {
         return () => undefined;
       }
@@ -351,9 +323,8 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.requestRemote();
     expect(h.session.availabilityListenerCount).toBe(1);
 
-    // The interleaving the fix is about: a background request for the active
-    // local host flips the single binding slot while the remote session is
-    // still dialing. The session is RELEASED, not closed - it keeps dialing.
+    // The interleaving the fix is about: a background request for the active local host flips the single binding slot while the remote session is still dialing.
+    // The session is RELEASED, not closed - it keeps dialing.
     h.requestLocal();
     expect(h.session.closeCalls).toBe(1);
     expect(h.session.availabilityListenerCount).toBe(1);
@@ -406,9 +377,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     expect(h.recovered).toEqual([REMOTE_HOST_ID]);
 
     h.requestLocal();
-    // Keeping it attached here is what accumulates listeners: a picker toggled
-    // N times would leave N of them on a session another consumer holds open,
-    // and every later reconnect would fan out N duplicate invalidations.
+    // Keeping it attached here is what accumulates listeners: a picker toggled N times would leave N of them on a session another consumer holds open, and every later reconnect would fan out N duplicate invalidations.
     expect(h.session.availabilityListenerCount).toBe(0);
 
     h.session.emitReady();
@@ -431,10 +400,8 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("detaches on release when the session was ALREADY ready at subscribe time", () => {
-    // The warm keep-warm hit: the cache hands this binding a session that is
-    // already up. `subscribeAvailabilityRecovered` reports a RECOVERY, not the
-    // current state, so no boundary will ever arrive for it - the orphan would
-    // wait on one forever and never detach.
+    // The warm keep-warm hit: the cache hands this binding a session that is already up.
+    // `subscribeAvailabilityRecovered` reports a RECOVERY, not the current state, so no boundary will ever arrive for it - the orphan would wait on one forever and never detach.
     const h = harness();
     h.session.ready = true;
 
@@ -449,9 +416,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("does not accumulate listeners across picker switches over a WARM session", () => {
-    // The accumulation the previous test's single case adds up to, and the one
-    // actually reachable in the app: after the first visit the session stays
-    // ready, so every later visit adopts it warm and would strand a listener.
+    // The accumulation the previous test's single case adds up to, and the one actually reachable in the app: after the first visit the session stays ready, so every later visit adopts it warm and would strand a listener.
     const h = harness();
     h.requestRemote();
     h.session.emitReady();
@@ -475,9 +440,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("still keeps an orphan attached when the session is NOT yet ready", () => {
-    // The negative control: the readiness check must not swallow the case the
-    // orphan exists for - a session still dialing when the picker flipped away
-    // owes its boundary to the queries that already errored against it.
+    // The negative control: the readiness check must not swallow the case the orphan exists for - a session still dialing when the picker flipped away owes its boundary to the queries that already errored against it.
     const h = harness();
     h.requestRemote();
     h.requestLocal();
@@ -508,9 +471,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("a mid-dial re-visit takes over the orphan's debt - one boundary, one delivery", () => {
-    // Without the takeover, the warm re-adopt of the SAME still-dialing
-    // session leaves the old orphan AND the new binding's listener attached,
-    // and the one ready boundary would deliver twice in the same tick.
+    // Without the takeover, the warm re-adopt of the SAME still-dialing session leaves the old orphan AND the new binding's listener attached, and the one ready boundary would deliver twice in the same tick.
     const h = harness();
     h.requestRemote();
     h.requestLocal();
@@ -528,10 +489,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("does not accumulate orphans across visits to a NEVER-ready host", () => {
-    // The documented no-pile-up promise, for the host that never gets ready:
-    // each visit releases while still owed, and each new visit must retire
-    // the previous orphan - otherwise the host's eventual recovery fans out
-    // one invalidation per abandoned visit.
+    // The documented no-pile-up promise, for the host that never gets ready: each visit releases while still owed, and each new visit must retire the previous orphan - otherwise the host's eventual recovery fans out one invalidation per abandoned visit.
     const h = harness();
     for (let visit = 0; visit < 5; visit += 1) {
       h.requestRemote();
@@ -546,10 +504,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("re-arms the orphan debt when released MID-RECONNECT after a delivered boundary", () => {
-    // Owedness is decided from the session's LIVE state at release, not a
-    // delivered-once flag: a binding that saw its first boundary, then had
-    // the session drop underneath it, still owes the queries the NEXT
-    // boundary if it is released while the reconnect is in flight.
+    // Owedness is decided from the session's LIVE state at release, not a delivered-once flag: a binding that saw its first boundary, then had the session drop underneath it, still owes the queries the NEXT boundary if it is released while the reconnect is in.
     const h = harness();
     h.requestRemote();
     h.session.emitReady();
@@ -602,9 +557,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("dispose() hard-detaches the current binding's listener", () => {
-    // Terminal teardown: after dispose there is no runtime left to receive a
-    // boundary, so unlike reset/replacement the listener must NOT survive as
-    // an orphan - a late delivery would fire into a torn-down provider.
+    // Terminal teardown: after dispose there is no runtime left to receive a boundary, so unlike reset/replacement the listener must NOT survive as an orphan - a late delivery would fire into a torn-down provider.
     const h = harness();
     h.requestRemote();
     expect(h.session.availabilityListenerCount).toBe(1);
@@ -630,18 +583,13 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("refuses an already-aborted authority before it reaches the session cache", async () => {
-    // The cache's supersession sweep treats the acquiring identity as the
-    // NEWEST auth context. A retired (aborted) authority reaching it would
-    // supersede the live entry and build a doomed successor - the retrying
-    // wrapper gates this three layers up, but the assumption is load-bearing
-    // HERE, so the seam enforces it itself.
+    // The cache's supersession sweep treats the acquiring identity as the NEWEST auth context.
+    // A retired (aborted) authority reaching it would supersede the live entry and build a doomed successor - the retrying wrapper gates this three layers up, but the assumption is load-bearing HERE, so the seam enforces it itself.
     const h = harness();
     const aborted = new AbortController();
     aborted.abort();
 
-    // Abort-classified, not the invalid-transport error: downstream surfaces
-    // render the latter as an actionable failure card, which is wrong for a
-    // request whose owner already moved on.
+    // Abort-classified, not the invalid-transport error: downstream surfaces render the latter as an actionable failure card, which is wrong for a request whose owner already moved on.
     await expect(h.requestRemoteWithSignal(aborted.signal)).rejects.toThrow(
       "Request authority was aborted before dispatch",
     );
@@ -652,9 +600,8 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("rejects a request after dispose instead of rebuilding a binding", async () => {
-    // A rebuilt post-dispose binding would re-subscribe with nothing left to
-    // ever release it. The messenger's own contract has to refuse, not rely
-    // on upstream fences.
+    // A rebuilt post-dispose binding would re-subscribe with nothing left to ever release it.
+    // The messenger's own contract has to refuse, not rely on upstream fences.
     const h = harness();
     h.dispose();
 
@@ -665,9 +612,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("an aborted authority is inert on the LOCAL branch too - it must not release the live remote binding as a side effect", async () => {
-    // The local branch runs `closeRemoteTransport()` before dispatching, so
-    // gating only the remote branch would let a stale aborted background
-    // request for the local host tear down a binding whose owner is mid-dial.
+    // The local branch runs `closeRemoteTransport()` before dispatching, so gating only the remote branch would let a stale aborted background request for the local host tear down a binding whose owner is mid-dial.
     const h = harness();
     h.requestRemote();
     expect(h.session.closeCalls).toBe(0);
@@ -704,9 +649,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.requestRemote();
     expect(h.recovered).toEqual([]);
 
-    // The dial ends terminally (incompatible handshake / plan restriction /
-    // revoked credential) - the ready boundary the stranded query was owed
-    // will never come, so the close itself must deliver the invalidation.
+    // The dial ends terminally (incompatible handshake / plan restriction / revoked credential) - the ready boundary the stranded query was owed will never come, so the close itself must deliver the invalidation.
     h.session.fatal = incompatibleFatal();
     h.session.emitClosed();
     expect(h.recovered).toEqual([REMOTE_HOST_ID]);
@@ -740,10 +683,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       h.session.fatal = incompatibleFatal();
       h.session.emitClosed();
 
-      // The invalidation-triggered refetch lands HERE: a transparent rebuild
-      // would dial fresh, error retryable before ITS fatal, and re-strand the
-      // spinner - the exact loop the verdict exists to break. The rejection
-      // carries the fatal so the surface can say why.
+      // The invalidation-triggered refetch lands HERE: a transparent rebuild would dial fresh, error retryable before ITS fatal, and re-strand the spinner - the exact loop the verdict exists to break.
       const error: unknown = await h.requestRemoteRaw().then(
         () => null,
         (reason: unknown) => reason,
@@ -815,11 +755,8 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("drops the verdict early when the host's transport identity changes - a host update must not wait out the TTL", async () => {
-    // An INCOMPATIBLE fatal is resolved exactly by a version change, and the
-    // directory publishes that as a new transport key. The verdict describes
-    // a session that can no longer even be built, so a key mismatch discards
-    // it immediately instead of fail-fasting the just-fixed host for the
-    // rest of the TTL.
+    // An INCOMPATIBLE fatal is resolved exactly by a version change, and the directory publishes that as a new transport key.
+    // The verdict describes a session that can no longer even be built, so a key mismatch discards it immediately instead of fail-fasting the just-fixed host for the rest of the TTL.
     const session = controllableSession();
     mocks.createRemoteHostTransport.mockImplementation(() => ({
       session,

@@ -17,17 +17,7 @@ import {
   LIGHT_THEME_SURFACES,
 } from "../../../../../__tests__/contrast";
 
-// The owner badges read the per-Epic projection (chat/terminal-agent titles off
-// `OpenEpicState.chats` - the host's record plane unioned with the doc's
-// not-yet-swept residue) and the tile-navigation stack, both of which need a
-// live `OpenEpicStoreHandle` this presentational test has no use for. Stubbed
-// to a minimal badge per owner so the row's OWN wiring (which owners it passes
-// down, and to which epic) stays observable.
-//
-// Spread from the ACTUAL module rather than replaced wholesale: the row's hover
-// card (`pr-owner-hover.tsx`, deliberately not mocked - it must return the row
-// untouched here) imports this module's owner list and noun helper, and a
-// factory that lists only `PrOwnerBadges` hands those back as `undefined`.
+// Spread from the ACTUAL module rather than replaced wholesale: the row's hover card (`pr-owner-hover.tsx`, deliberately not mocked - it must return the row untouched here) imports this module's owner list and noun helper, and a factory that lists only `PrOwnerBadges` hands those back as `undefined`.
 const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 /** The bridge mutation's pending flag, driven per test. */
 const bridge = vi.hoisted(() => ({ isPending: false }));
@@ -240,10 +230,7 @@ describe("PrRow band 2-4: title, branches, owners", () => {
     ).toBeTruthy();
   });
 
-  // A never-swept row has `title: null`. The element used to render anyway, so
-  // the card read as "number badge, blank line, branch" - reported as the PR
-  // summary going missing. The identity already lives in the number badge, so
-  // the row drops the element rather than leaving a gap where a title was.
+  // The identity already lives in the number badge, so the row drops the element rather than leaving a gap where a title was.
   it("renders no title element at all when the PR has no observed title", () => {
     renderRow({ title: null });
 
@@ -294,10 +281,7 @@ describe("PrRow status badges", () => {
     );
   });
 
-  // jsdom does not evaluate container queries, so the drop ORDER is asserted
-  // through the classes that encode it: the review badge (longest label) must
-  // go at a wider breakpoint than the checks badge, and the number badge - the
-  // row's identity and its state - must carry no drop rule at all.
+  // jsdom does not evaluate container queries, so the drop ORDER is asserted through the classes that encode it: the review badge (longest label) must go at a wider breakpoint than the checks badge, and the number badge - the row's identity and its state - must carry no drop rule at all.
   it("sheds in priority order: review, then checks - never the number or the comment count", () => {
     renderRow({
       reviewDecision: "changes_requested",
@@ -330,13 +314,7 @@ describe("PrRow status badges", () => {
     expect(review.querySelector(".truncate")).not.toBeNull();
   });
 
-  // The reported bug: at a width past the review badge's drop point but above
-  // the checks badge's own, "1 running" kept its full width and painted over
-  // the comment count and timestamp. Those are pinned right and `shrink-0` by
-  // design, and the column holding the badges is `min-w-0` with overflow
-  // visible - so anything in it that cannot shrink overflows ONTO them rather
-  // than pushing them. Every badge in that column except the identity one has
-  // to be able to give width back.
+  // Those are pinned right and `shrink-0` by design, and the column holding the badges is `min-w-0` with overflow visible - so anything in it that cannot shrink overflows ONTO them rather than pushing them.
   it("lets the checks badge shrink instead of overflowing onto the trailing slot", () => {
     renderRow({
       checksRollup: { success: 0, failure: 0, pending: 1, total: 1 },
@@ -390,9 +368,7 @@ describe("PrRow activity metadata", () => {
 
 describe("PrRow submodule PRs", () => {
   it("renders a submodule PR with the same full row as any other PR", () => {
-    // No compact child variant any more: a submodule PR is its own review, so
-    // it gets the same four bands - and it reaches the row through its own
-    // repo group (see `groupPrItemsByRepo`), not as somebody's nested detail.
+    // No compact child variant any more: a submodule PR is its own review, so it gets the same four bands - and it reaches the row through its own repo group (see `groupPrItemsByRepo`), not as somebody's nested detail.
     renderRow({
       base: { owner: "traycerai", repo: "traycer", prNumber: 675 },
       prUrl: "https://github.com/traycerai/traycer/pull/675",
@@ -414,16 +390,6 @@ describe("PrRow submodule PRs", () => {
 });
 
 describe("PrRow selection surface", () => {
-  // The shared PR palette's contrast numbers are computed against a state tint
-  // composited over a THEME SURFACE. Selection changes that surface, so what
-  // selection paints has to be re-checked against the same floor.
-  //
-  // The first attempt was a solid `bg-accent` fill, copied from the one-line
-  // chat row. Measured, it is not a WCAG failure - it bottoms out at 3.08:1 on
-  // `traycer-green` dark, whose `--accent` is its saturated `--primary`
-  // (#257174) - but that is the 3:1 graphic floor with nothing to spare, on a
-  // row whose whole job is carrying status colour. The wash restores the
-  // margin; these two tests pin both halves of that.
   const ROW_ACCENT_ALPHA = 0.35;
   const TINT_ALPHA = 0.1;
   const STATE_TONES = [
@@ -510,10 +476,6 @@ describe("PrRow selection surface", () => {
   );
 
   it("buys real margin over the solid fill it replaced", () => {
-    // The reason the wash is not cosmetic bikeshedding, as a number: a solid
-    // accent fill leaves the worst preset sitting on the 3:1 floor, the wash
-    // lifts it clear. Guards against someone reading `/35` as noise and
-    // "simplifying" it back to `bg-accent`.
     const solid = worstRatio(1);
     const wash = worstRatio(ROW_ACCENT_ALPHA);
     expect(solid).toBeLessThan(3.5);
@@ -557,9 +519,7 @@ describe("PrRow active-tile highlight", () => {
       "true",
     );
 
-    // Ties the "PrRow selection surface" matrix above to what actually ships:
-    // that matrix is pure maths over the palette, so without this a revert to
-    // the solid `bg-accent` fill would leave every contrast test still green.
+    // Ties the "PrRow selection surface" matrix above to what actually ships: that matrix is pure maths over the palette, so without this a revert to the solid `bg-accent` fill would leave every contrast test still green.
     const tokens = screen.getByTestId("pr-row-main").className.split(/\s+/);
     expect(tokens).toContain("bg-accent/35");
     expect(tokens).not.toContain("bg-accent");

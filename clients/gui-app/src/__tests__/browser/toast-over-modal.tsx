@@ -14,19 +14,7 @@ import { Button } from "@/components/ui/button";
 import "@/index.css";
 
 /**
- * Hit-test fixture: is a Sonner toast's button clickable while a Radix `modal`
- * Dialog is open?
- *
- * jsdom cannot answer this - `fireEvent.click` dispatches straight at the node
- * and never consults `pointer-events`, so a jsdom test would report "clickable"
- * whatever the truth is. Radix's modal Dialog sets `pointer-events: none` on
- * `document.body` and re-enables it only on the layer node itself, so the
- * question is whether anything in the toaster subtree re-enables it.
- *
- * The toast mirrors `app-update-toast-controller`'s `available` variant: a
- * content node carrying an action button, `duration: Infinity`, plus Sonner's
- * own close button (our `Toaster` defaults `closeButton` to true), which is the
- * only dismissal that variant has.
+ * Hit-test: is a Sonner toast button clickable while a Radix modal Dialog is open? jsdom never consults `pointer-events`.
  */
 export function ToastOverModalFixture(): React.ReactElement {
   const [dialogOpen, setDialogOpen] = useState(true);
@@ -34,10 +22,7 @@ export function ToastOverModalFixture(): React.ReactElement {
   const [closeClicks, setCloseClicks] = useState(0);
 
   useEffect(() => {
-    // The control arm needs the modal gone without depending on a click to get
-    // there - what the control has to prove is that a real CDP click on the
-    // TOAST registers once nothing is locking the body, so the dialog-closing
-    // gesture must not be part of what is under test.
+    // Control: modal gone without a click. Closing by click is not under test.
     const probeWindow = window as Window & {
       __probeCloseDialog?: () => void;
     };
@@ -83,11 +68,8 @@ export function ToastOverModalFixture(): React.ReactElement {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent
           data-testid="probe-dialog"
-          // Mirrors `window-host-modal.tsx:68`. Load-bearing for the
-          // measurement, not decoration: without it the first probe click -
-          // which lands outside the dialog because the toast cannot receive
-          // it - is itself an outside pointer-down that dismisses the dialog,
-          // and every later reading is then taken with no modal open.
+          // Without this, the first miss is an outside pointer-down that
+          // dismisses the dialog and later readings have no modal.
           onEscapeKeyDown={(event) => {
             event.preventDefault();
           }}

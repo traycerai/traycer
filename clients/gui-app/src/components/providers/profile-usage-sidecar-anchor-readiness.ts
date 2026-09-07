@@ -22,36 +22,8 @@ function isPopperWrapperPlaced(wrapper: HTMLElement): boolean {
   );
 }
 
-/**
- * Radix's Popper (the machinery behind DropdownMenuContent, PopoverContent,
- * etc. - see `@radix-ui/react-popper`'s `PopperContent`) renders its
- * `[data-radix-popper-content-wrapper]` at `transform: translate(0, -200%)`
- * until Floating UI's first placement pass completes, then replaces that
- * sentinel with the real computed transform. Browsers may serialize its
- * unitless zero as `0px`, so both CSSOM-equivalent forms are treated as the
- * sentinel. Content's entrance animation is *also* explicitly suppressed
- * (`animation: "none"`) during this phase, so it doesn't race the
- * pre-placement layout. Because poppers can be nested, every wrapper in the
- * anchor's ancestor chain must leave the sentinel before the anchor's rect is
- * trustworthy.
- *
- * Viewport intersection is not a placement signal. A transformed outer
- * popper is the containing block for a nested wrapper's `position: fixed`, so
- * the nested wrapper's pre-placement sentinel can land inside the viewport.
- * Instead, inspect each wrapper's own inline transform and observe the style
- * attributes of wrappers that still hold the sentinel. Resolves immediately
- * when the anchor isn't inside a Radix popper wrapper (a static anchor), or
- * every wrapper is already placed (e.g. re-anchoring on hover within an
- * already-open menu).
- *
- * There is deliberately no fallback timeout. If placement never lands (the
- * anchor is detached, or Radix never resolves it), the correct behavior is
- * to stay hidden indefinitely, not to eventually paint at a coordinate
- * clamped from an invalid off-screen rect - that would just be this bug
- * again, delayed. `signal` is the only way out: aborting (component
- * unmount / anchor change) resolves the wait and disconnects the observer
- * without ever calling `update()`.
- */
+/** Because poppers can be nested, every wrapper in the anchor's ancestor chain must leave the sentinel before
+ * the anchor's rect is trustworthy. */
 export function waitForAnchorPlacement(
   anchor: HTMLElement,
   signal: AbortSignal,
@@ -82,11 +54,8 @@ export function waitForAnchorPlacement(
   });
 }
 
-/** `Document.getAnimations` is typed as always-present in lib.dom.d.ts, but
- *  environments that don't implement the Web Animations API (older
- *  webviews, jsdom in tests) leave it `undefined` at runtime. This shape
- *  reflects that real-world optionality so the runtime check below is
- *  meaningful to the type checker instead of flagged as dead code. */
+/** `Document.getAnimations` is typed as always-present in lib.dom.d.ts, but environments that don't implement
+ * the Web Animations API (older webviews, jsdom in tests) leave it `undefined` at runtime. */
 interface DocumentMaybeWithAnimations {
   readonly getAnimations: (() => ReadonlyArray<Animation>) | undefined;
 }
@@ -107,16 +76,8 @@ function hasFiniteDuration(animation: Animation): boolean {
   return iterations === undefined || Number.isFinite(iterations);
 }
 
-/**
- * Once placed (see `waitForAnchorPlacement`), Radix menu/popover content
- * plays a brief zoom+slide entrance animation (see `dropdown-menu.tsx` /
- * `popover.tsx`: `data-open:zoom-in-95`, `slide-in-from-*`). Wait for any
- * in-flight, finite-duration animation on the anchor or one of its
- * ancestors to finish before a measurement is trusted, so the sidecar
- * doesn't show mid zoom/slide either. Infinite animations are excluded so a
- * stray unrelated looping animation elsewhere on the page can never block
- * this indefinitely.
- */
+/** Infinite animations are excluded so a stray unrelated looping animation elsewhere on the page can never
+ * block this indefinitely. */
 export async function waitForAnchorEntranceAnimations(
   anchor: HTMLElement,
 ): Promise<void> {
@@ -132,14 +93,8 @@ export async function waitForAnchorEntranceAnimations(
   );
 }
 
-/**
- * Full anchor-readiness sequence: wait for Radix's Popper to land its first
- * real placement (not the off-screen measuring position), then wait for any
- * entrance animation that placement unblocked to settle. Order matters -
- * the entrance animation doesn't even start until placement lands (Radix
- * suppresses it via `animation: "none"` until then), so checking animations
- * first would miss the placement phase entirely.
- */
+/** Full anchor-readiness sequence: wait for Radix's Popper to land its first real placement (not the off-screen
+ * measuring position), then wait for any entrance animation that placement unblocked to settle. */
 export async function waitForAnchorReady(
   anchor: HTMLElement,
   signal: AbortSignal,

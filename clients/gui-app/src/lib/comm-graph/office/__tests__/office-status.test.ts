@@ -136,10 +136,7 @@ describe("officeAgentStatuses", () => {
   });
 
   it("leaves this moment's failure, attention and turn out of the past", () => {
-    // Nothing records what these three sources said at an earlier moment, so
-    // on a historical cursor they are not applied at all: a crash that
-    // happened this morning is not painted on every frame of last week. What
-    // the event prefix can answer (awaiting) still is.
+    // Nothing records what these three sources said at an earlier moment, so on a historical cursor they are not applied at all: a crash that happened this morning is not painted on every frame of last week.
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],
       cursorMs: 20,
@@ -255,11 +252,8 @@ describe("officeAgentStatuses", () => {
   });
 
   /**
-   * Archival is a MOMENT on the timeline the cursor scrubs, not a property of
-   * the record as it stands today. Reading the present-day flag gave a
-   * scrubbed-back floor an agent with a dead monitor and no idle life, sitting
-   * at a desk the scene had correctly seated it at - the two halves of the
-   * same floor disagreeing about the same agent.
+   * Archival is a MOMENT on the timeline the cursor scrubs, not a property of the record as it stands today.
+   * Reading the present-day flag gave a scrubbed-back floor an agent with a dead monitor and no idle life, sitting at a desk the scene had correctly seated it at - the two halves of the same floor disagreeing about the same agent.
    */
   it("does not call an agent archived before it was archived", () => {
     const statuses = officeAgentStatuses({

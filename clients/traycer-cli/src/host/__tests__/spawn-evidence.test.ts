@@ -172,9 +172,8 @@ describe("spawn-evidence substrate", () => {
       );
       expect((await reader.read())[0]?.fields.attempt).toBe("a");
 
-      // Rewriting the file in place preserves its inode but leaves its new
-      // marker below the previous cursor. Resuming at the old baseline (or
-      // cursor) would skip the start of this replacement content.
+      // Rewriting the file in place preserves its inode but leaves its new marker below the previous cursor.
+      // Resuming at the old baseline (or cursor) would skip the start of this replacement content.
       const second =
         "[2026-01-01T00:02:00.000Z] phase=failed-to-spawn attempt=b supervisorPid=2\n";
       await writeFile(mocks.logPath, `${second}${"z".repeat(120)}`, "utf8");
@@ -197,7 +196,7 @@ describe("spawn-evidence substrate", () => {
       expect(baseline.exists).toBe(true);
       expect(baseline.pid).toBe(401);
 
-      // Same file, same pid, same mtime — not post-baseline.
+      // Same file, same pid, same mtime - not post-baseline.
       const result = await hasPostBaselinePidMetadata(baseline, "production");
       expect(result.evidence).toBe(false);
     });
@@ -318,10 +317,7 @@ describe("spawn-evidence substrate", () => {
     });
 
     it("tolerates crash-diagnostic fields while still extracting known keys", () => {
-      // Additive fields (exitMeaning/report/stderrTail) must not break
-      // consumers that only project phase + code/error — the same contract
-      // host-status, spawn-evidence, and the GUI bootstrap-attempt summary
-      // rely on.
+      // Additive fields (exitMeaning/report/stderrTail) must not break consumers that only project phase + code/error - the same contract host-status, spawn-evidence, and the GUI bootstrap-attempt summary rely on.
       const line =
         '[2026-01-01T00:00:00.000Z] phase=crashed code=3221226505 exitMeaning="0xC0000409 STATUS_STACK_BUFFER_OVERRUN" report=report.2026.json stderrTail="FATAL ERROR:\\nheap OOM" attempt=a1 supervisorPid=9';
       const parsed = parseBootstrapLogLine(line);
@@ -376,10 +372,7 @@ describe("spawn-evidence substrate", () => {
     });
   });
 
-  // Literal `writer=supervisor` throughout rather than the exported
-  // constant: these fixtures stand in for bytes already on disk, and a test
-  // written against the constant would follow a rename that silently broke
-  // every log written before it.
+  // Literal `writer=supervisor` throughout rather than the exported constant: these fixtures stand in for bytes already on disk, and a test written against the constant would follow a rename that silently broke every log written before it.
   describe("writer identity across incremental reads", () => {
     it("rejects a marker-shaped burst without losing the stamped marker", async () => {
       const baseline = await captureLogFileBaseline(mocks.logPath);
@@ -391,10 +384,8 @@ describe("spawn-evidence substrate", () => {
       );
       expect(await reader.read()).toHaveLength(1);
 
-      // A burst of marker-shaped host output, larger than the reader's
-      // window. None of it may be trusted, and it must not displace the
-      // real marker either - filtering happens before the cap, so the
-      // burst never occupies the window in the first place.
+      // A burst of marker-shaped host output, larger than the reader's window.
+      // None of it may be trusted, and it must not displace the real marker either - filtering happens before the cap, so the burst never occupies the window in the first place.
       const burst = Array.from(
         { length: 70 },
         (_unused, i) =>
@@ -408,10 +399,8 @@ describe("spawn-evidence substrate", () => {
     });
 
     it("reads the era from the whole file, not just the post-baseline slice", async () => {
-      // The verified marker sits BEFORE the baseline - a service-managed
-      // start writes no CLI marker for this attempt. Deciding the era from
-      // the slice alone would call this log legacy and promote the host's
-      // stderr line to `starting-marker` evidence.
+      // The verified marker sits BEFORE the baseline - a service-managed start writes no CLI marker for this attempt.
+      // Deciding the era from the slice alone would call this log legacy and promote the host's stderr line to `starting-marker` evidence.
       await writeFile(
         mocks.logPath,
         "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
@@ -455,10 +444,8 @@ describe("spawn-evidence substrate", () => {
     });
 
     it("does not let raw output evict an authentic marker from the window", async () => {
-      // `runTaskAndVerifyStart` polls this reader and gives up if no marker
-      // appears. Capping before filtering would let a burst of marker-shaped
-      // host output push the real terminal marker out of the window, so a
-      // spawn that DID leave evidence reports none and the verifier times out.
+      // `runTaskAndVerifyStart` polls this reader and gives up if no marker appears.
+      // Capping before filtering would let a burst of marker-shaped host output push the real terminal marker out of the window, so a spawn that DID leave evidence reports none and the verifier times out.
       await writeFile(
         mocks.logPath,
         "[2026-01-01T00:00:00.000Z] phase=exited code=0 writer=supervisor\n",
@@ -487,11 +474,8 @@ describe("spawn-evidence substrate", () => {
     });
 
     it("remembers a stamped marker seen in the stream across a rotation", async () => {
-      // The stamped marker arrives POST-baseline (the ordinary case - the
-      // supervisor writes `starting` after the baseline is taken), so the
-      // pre-baseline seed never sees it. If that is not latched, rotation
-      // clears `observed`, the replacement has no stamped prefix to re-seed
-      // from, and a marker-shaped host line in the new file is trusted.
+      // The stamped marker arrives POST-baseline (the ordinary case - the supervisor writes `starting` after the baseline is taken), so the pre-baseline seed never sees it.
+      // If that is not latched, rotation clears `observed`, the replacement has no stamped prefix to re-seed from, and a marker-shaped host line in the new file is trusted.
       const baseline = await captureLogFileBaseline(mocks.logPath);
       const reader = createPostBaselineMarkerReader(baseline);
 
@@ -514,9 +498,7 @@ describe("spawn-evidence substrate", () => {
     });
 
     it("scans a pre-baseline region larger than one chunk without buffering it whole", async () => {
-      // The prefix is streamed in 64KiB chunks, so a stamped marker beyond
-      // the first chunk must still be found - and a marker split across a
-      // chunk boundary must not be missed.
+      // The prefix is streamed in 64KiB chunks, so a stamped marker beyond the first chunk must still be found - and a marker split across a chunk boundary must not be missed.
       const filler = `${"x".repeat(120)}\n`.repeat(2000); // ~240KB, > 3 chunks
       await writeFile(
         mocks.logPath,
@@ -549,9 +531,8 @@ describe("spawn-evidence substrate", () => {
           "[2026-01-01T00:00:02.000Z] phase=starting\n",
       );
 
-      // The first line stays - it precedes the boundary, so demoting it
-      // would delete a genuine older marker on every upgrade. The third
-      // does not: it arrives after the writer proved it stamps.
+      // The first line stays - it precedes the boundary, so demoting it would delete a genuine older marker on every upgrade.
+      // The third does not: it arrives after the writer proved it stamps.
       const markers = await reader.read();
       expect(markers.map((m) => m.phase)).toEqual(["starting", "crashed"]);
       expect(markers[0]?.writer).toBe("unverified");
@@ -559,12 +540,8 @@ describe("spawn-evidence substrate", () => {
     });
 
     it("keeps the pre-boundary line on later polls of the same file", async () => {
-      // The boundary is positional WITHIN a file. A stamped marker in the
-      // window proves the writer stamps from here on - it does not
-      // retroactively convict the lines before it, which is the whole point
-      // of the N-1 overlap. Re-deriving the era from that marker on the next
-      // poll would delete the previous CLI's evidence one read late, so the
-      // marker would be reported once and then vanish.
+      // The boundary is positional WITHIN a file.
+      // A stamped marker in the window proves the writer stamps from here on - it does not retroactively convict the lines before it, which is the whole point of the N-1 overlap.
       const baseline = await captureLogFileBaseline(mocks.logPath);
       const reader = createPostBaselineMarkerReader(baseline);
 

@@ -22,31 +22,13 @@ export interface DraftState {
   readonly selection: DraftSelection | null;
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /**
-   * Bumped only when the draft is replaced from outside the editor
-   * (queue-edit restore, failed-send handoff, submit-clear). The composer
-   * watches this counter to push the new content into Tiptap; routine
-   * keystroke snapshots from the editor never bump it.
-   *
-   * The sidecar array (`browserAnnotations`) deliberately does NOT bump it:
-   * it is not the DOCUMENT, so a bump there would replay a stale
-   * content+selection into a live editor for a change the document does not
-   * contain. The attachment strip subscribes to `browserAnnotations`
-   * directly.
+   * Bumped only when the draft is replaced from outside the editor (queue-edit restore, failed-send
+   * handoff, submit-clear).
    */
   readonly resetEpoch: number;
   /**
-   * Bumped on every real content change - typed/pasted edits via
-   * `setSnapshot` AND external replacements via `replaceDraft` (queue-edit
-   * restore, failed-send handoff, `clearDraft`). The prompt-stash source
-   * adapter captures this alongside the taskId as a compare-and-swap token:
-   * a stash only clears this draft when the revision it captured still
-   * matches, so an edit made while the stash was durably saving is kept.
-   *
-   * The sidecar mutation bumps it too, unlike `resetEpoch`: the stash carries
-   * only the DOCUMENT, while the `clearDraft` it performs on a matching token
-   * wipes `browserAnnotations` as well. An annotation attached while that
-   * IndexedDB save was in flight would otherwise be destroyed with nothing
-   * holding it.
+   * Bumped on every real content change - typed/pasted edits via `setSnapshot` AND external
+   * replacements via `replaceDraft` (queue-edit restore, failed-send handoff, `clearDraft`).
    */
   readonly revision: number;
 }
@@ -54,9 +36,8 @@ export interface DraftState {
 interface ComposerDraftStore {
   readonly drafts: Partial<Record<string, DraftState>>;
   /**
-   * Records a real document mutation - callers must only invoke this from the
-   * editor boundary's document-change signal (never a selection-only echo),
-   * so every call unconditionally bumps `revision` without comparing content.
+   * Records a real document mutation - callers must only invoke this from the editor boundary's
+   * document-change signal (never a selection-only echo), so every call unconditionally bumps
    */
   readonly setSnapshot: (
     taskId: string,
@@ -85,20 +66,16 @@ interface ComposerDraftStore {
     annotationId: string,
   ) => void;
   /**
-   * Rejected-send restore: put records back without duplicating an id that
-   * is already on the draft (the user may have re-attached while the send
-   * was in flight).
+   * Rejected-send restore: put records back without duplicating an id that is already on the draft
+   * (the user may have re-attached while the send was in flight).
    */
   readonly restoreBrowserAnnotations: (
     taskId: string,
     records: ReadonlyArray<BrowserAnnotationRecord>,
   ) => void;
   /**
-   * Resets a task's draft in place (empty content + empty annotations + bumped
-   * resetEpoch/revision) instead of deleting the map entry. A delete can't
-   * reliably notify every mounted composer for this `taskId` (split panes,
-   * keep-alive tabs): a sibling's `resetEpoch` selector falls back to the same
-   * `?? 0` whether the entry never existed or was just removed.
+   * Resets a task's draft in place (empty content + empty annotations + bumped resetEpoch/revision)
+   * instead of deleting the map entry.
    */
   readonly clearDraft: (taskId: string) => void;
 }
@@ -278,9 +255,8 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.composerDraft)),
-      // Synchronous localStorage hydration can finish during `create(...)`,
-      // before an `onFinishHydration` subscriber can be registered. Normalize
-      // at the merge boundary so legacy revisions are safe on initial import.
+      // Synchronous localStorage hydration can finish during `create(...)`, before an
+      // `onFinishHydration` subscriber can be registered.
       merge: (persistedState, currentState) => {
         if (!hasDraftMap(persistedState)) {
           return currentState;
@@ -316,17 +292,8 @@ function normalizedLegacyResetEpoch(rawDraft: Record<string, unknown>): number {
 }
 
 /**
- * Storage written before `revision` existed lacks the field despite the
- * static `DraftState` type - JSON crossing the localStorage boundary is not
- * guaranteed to match it. `current.revision + 1` on an `undefined` value
- * produces `NaN`, which then never compares equal to itself
- * (`NaN !== NaN` is always `true`), permanently blocking the prompt-stash CAS
- * from ever clearing that draft again. Normalize once, here, at the one
- * place untrusted persisted data enters the store - everywhere else
- * (`ensureDraft`, `setSnapshot`, `replaceDraft`) only ever reads a value this
- * function already produced or `EMPTY_COMPOSER_DRAFT.revision`, both real
- * numbers, so `no-unnecessary-condition` correctly stays clean past this
- * boundary.
+ * Storage written before `revision` existed lacks the field despite the static `DraftState` type -
+ * JSON crossing the localStorage boundary is not guaranteed to match it.
  */
 function normalizedLegacyRevision(rawDraft: unknown): number {
   const revision = (rawDraft as { revision?: unknown } | null)?.revision;

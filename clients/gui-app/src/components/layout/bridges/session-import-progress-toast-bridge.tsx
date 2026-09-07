@@ -14,24 +14,8 @@ import {
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
 
-/**
- * The ambient window onto every import run: one persistent bottom-corner
- * toast PER HOST while its run goes, each resolving into its own transient
- * summary when that run completes.
- *
- * It reads the app-wide run store, never a wizard, so it behaves the same for
- * a run started from Settings, one started from the tour, and one this window
- * merely attached to. While the tour is on screen every toast HOLDS - the
- * act's copy already promises the import runs in the background, and the
- * toast greeting the user as they land in the real app is that promise kept.
- *
- * One child per host rather than one effect over the map: a host's toast has
- * its own bookkeeping - the run the user dismissed by hand, the summary
- * already shown, whether the progress toast is up - and folding two hosts'
- * bookkeeping into one set of refs is how a dismissal on one machine silenced
- * the other. A child mounts when a host's slice appears and unmounts when it
- * is retired, taking its toast down with it.
- */
+/** It reads the app-wide run store, never a wizard, so it behaves the same for a run started from Settings, one
+ * started from the tour, and one this window merely attached to. */
 export function SessionImportProgressToastBridge(): ReactNode {
   const tourOpen = useOnboardingTourOpenStore((state) => state.open);
   const hostIds = useSessionImportRunStore(
@@ -61,9 +45,8 @@ function HostImportToast(props: {
       };
     }),
   );
-  // Which machine this toast speaks for. With two hosts importing at once
-  // the two toasts are otherwise identical lines, and even alone the name
-  // says where the sessions landed.
+  // With two hosts importing at once the two toasts are otherwise identical lines, and even alone the name says
+  // where the sessions landed.
   const hostLabel = useHostDirectoryEntry(hostId)?.label ?? null;
   // The run whose progress toast the user closed by hand: stay quiet for the
   // rest of that run, but let the next one toast again.
@@ -93,10 +76,8 @@ function HostImportToast(props: {
         {
           id: toastId,
           duration: Infinity,
-          // Always one line: the toast's height is then the same from the first
-          // frame to the last, instead of jumping as titles wrap. Before the
-          // first session lands there is no title yet, and a blank line there
-          // read as a gap - so the line says what the run is doing instead.
+          // Always one line: the toast's height is then the same from the first frame to the last, instead of jumping as
+          // titles wrap.
           description: (
             <span className="block truncate">
               {withHostLabel(
@@ -126,9 +107,8 @@ function HostImportToast(props: {
       return;
     }
 
-    // idle (the store reset) or error (the stream was lost): nothing to show,
-    // and a lingering progress toast would be reporting a run this window no
-    // longer watches.
+    // idle (the store reset) or error (the stream was lost): nothing to show, and a lingering progress toast would
+    // be reporting a run this window no longer watches.
     if (progressVisibleRef.current) {
       progressVisibleRef.current = false;
       toast.dismiss(toastId);

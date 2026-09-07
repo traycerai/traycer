@@ -1,18 +1,6 @@
 /**
- * The manifest-driven legacy→lanes arm swap REPLACES the sockets, so its reset
- * must put the transport legs back to `connecting`.
- *
- * ## Why this suite exists
- *
- * `resetAllPlanes` keeps the transport legs for an in-band authority
- * replacement, because those sessions stay open and never re-report `open`
- * (see `lane-arm-authority-replacement-keeps-transport-legs.test.ts`). The
- * arm swap in `executeTransition` goes through the SAME reset but detaches the
- * outgoing arm first and attaches the incoming one after: its replacement
- * sessions start from `connecting` and report `open` on their own. Keeping the
- * outgoing arm's `open` there would read as synced while the new sockets were
- * still dialing, and a stalled dial would never be seen. `replacesTransportUnderReset`
- * is the split this pins.
+ * The manifest-driven legacy→lanes arm swap REPLACES the sockets, so its reset must put the
+ * transport legs back to `connecting`.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { EPIC_LANE_METHODS } from "@traycer-clients/shared/epic-lanes";
@@ -171,16 +159,13 @@ describe("a manifest-driven arm swap resets the transport legs", () => {
     expect(rig.projection().recordsTransportStatus).toBe("open");
 
     // The host upgraded under the tab: the manifest now serves the lanes.
-    // `executeTransition` detaches legacy, resets with `manifest-changed`,
-    // and attaches the lanes - whose sockets have not reported anything.
     rig.setSupport("supported");
     rig.notifySupport();
 
     expect(rig.legacyCloseCount()).toBe(1);
     expect(rig.laneOpenCount()).toBe(2);
-    // THE REDDENING ASSERTION: with the in-band cycle applied here too, the
-    // retired arm's `open` survived into the new arm and the pill read synced
-    // over sockets that were still dialing.
+    // THE REDDENING ASSERTION: with the in-band cycle applied here too, the retired arm's `open`
+    // survived into the new arm and the pill read synced over sockets that were still dialing.
     expect(rig.projection().hostTransportStatus).toBe("connecting");
     expect(rig.projection().recordsTransportStatus).toBe("connecting");
     expect(rig.projection().hasConnectedOnce).toBe(false);

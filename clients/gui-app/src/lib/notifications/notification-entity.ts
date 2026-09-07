@@ -5,12 +5,8 @@ import type {
 } from "@traycer/protocol/host/notifications/contracts";
 
 /**
- * The entity a HOST notification addresses, from the wire entry's typed
- * entity fields (sourced host-side from the row's durable columns). This is
- * the one contract for host rows: a payload the semantic parse rejects still
- * addresses its entity, and a payload cannot claim an entity its row does
- * not have. The payload-based reader below serves app-local notifications
- * only, whose payloads are renderer-typed.
+ * The entity a HOST notification addresses, from the wire entry's typed entity fields (sourced host-side from the row's durable columns).
+ * This is the one contract for host rows: a payload the semantic parse rejects still addresses its entity, and a payload cannot claim an entity its row does not have.
  */
 export function notificationEntityFromHostEntry(
   entry: HostNotificationEntryV22,
@@ -44,11 +40,7 @@ export function notificationEntitiesMatch(
 }
 
 /**
- * Whether a notification's entity is covered by a focused presence entity,
- * mirroring the host emission service's suppression semantics: the epic must
- * match, and a chat-addressed notification additionally needs the same chat
- * in focus. An epic-level notification is covered by any focused tile inside
- * that epic; a chat-level one is not covered by a sibling chat.
+ * Whether a notification's entity is covered by a focused presence entity, mirroring the host emission service's suppression semantics: the epic must match, and a chat-addressed notification additionally needs the same chat in focus.
  */
 export function notificationEntityMatchesPresence(
   entity: HostNotificationsEntityRef,

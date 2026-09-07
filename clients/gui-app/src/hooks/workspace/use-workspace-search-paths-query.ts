@@ -22,12 +22,7 @@ const WORKSPACE_SEARCH_PATHS_LIMIT = 50;
 export interface UseWorkspaceSearchPathsArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
-  /**
-   * The selected workspace/worktree root - a binding `runningDir` or resolved
-   * workspace-folder path the Epic pickers expose. The host authorizes it
-   * against the Epic's attached roots; the renderer never sends an arbitrary
-   * absolute path expecting it to be trusted.
-   */
+  /** The host authorizes it against the Epic's attached roots; the renderer never sends an arbitrary absolute path expecting it to be trusted. */
   readonly root: string | null;
   readonly query: string;
   readonly kinds: WorkspaceSearchPathsKindFilter;
@@ -35,18 +30,7 @@ export interface UseWorkspaceSearchPathsArgs {
 }
 
 /**
- * Scoped, host-ranked file/folder NAME search over one Epic-attached root
- * (`workspace.searchPaths`). Enumeration + Fuse ranking live in the host, so a
- * query never ships or scans the full tree in the renderer.
- *
- * The query key is `[host, method, { epicId, reference.root, query, ... }]`, so
- * a change of Epic, host, root, or query mints a new key and a late in-flight
- * response for the previous selection is discarded rather than applied. The
- * response also echoes `epicId`/`root` so callers can defensively drop a stale
- * payload. Same-host `keepPreviousData` keeps the last results visible while
- * the next keystroke's request is in flight (no blank between strokes), but
- * drops the prior payload across a host switch so another host's filesystem
- * never renders as this one's results.
+ * Query key includes epic/host/root/query so a late in-flight response is discarded. Same-host `keepPreviousData` holds last results across keystrokes; a host switch drops the prior payload.
  */
 export function useWorkspaceSearchPaths(
   args: UseWorkspaceSearchPathsArgs,
@@ -73,27 +57,14 @@ export function useWorkspaceSearchPaths(
 export interface UseWorkspaceSearchPathsForSourceArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
-  /**
-   * The scoped search source: either an attached workspace/worktree `{ root }`
-   * or the host-derived `{ kind: "epic-artifacts" }` mirror. Pass a STABLE
-   * object (module constant or memoized) so the query key is stable across
-   * renders. `null` disables the query.
-   */
+  /** The scoped search source: either an attached workspace/worktree `{ root }` or the host-derived `{ kind: "epic-artifacts" }` mirror. */
   readonly source: WorkspaceSearchSource | null;
   readonly query: string;
   readonly kinds: WorkspaceSearchPathsKindFilter;
   readonly enabled: boolean;
 }
 
-/**
- * Source-capable variant of {@link useWorkspaceSearchPaths} for callers (the
- * new-tab Files opener) that search EITHER an attached root OR the Epic artifact
- * mirror. Unlike the root-only hook it does NOT gate on a non-empty query - the
- * opener wants an empty-query passthrough (the host returns a bounded browse
- * list) - so the caller owns the enable gate. The response is a discriminated
- * union; read it through {@link readSearchPathsResponseForSource} to echo-guard
- * a late reply against the requested source.
- */
+/** Unlike the root-only hook it does NOT gate on a non-empty query - the opener wants an empty-query passthrough (the host returns a bounded browse list) - so the caller owns the enable gate. */
 export function useWorkspaceSearchPathsForSource(
   args: UseWorkspaceSearchPathsForSourceArgs,
 ): UseQueryResult<
@@ -159,12 +130,7 @@ export interface WorkspaceSearchPathsView {
   readonly truncated: boolean;
 }
 
-/**
- * Reads a `workspace.searchPaths` response for a specific requested source,
- * discriminating the attached-root vs artifact response branch and dropping a
- * late/stale reply whose echoed `epicId`/source no longer matches the request.
- * Returns `null` for "no usable data yet" (undefined response or echo mismatch).
- */
+/** Reads a `workspace.searchPaths` response for a specific requested source, discriminating the attached-root vs artifact response branch and dropping a late/stale reply whose echoed `epicId`/source no longer matches the request. */
 export function readSearchPathsResponseForSource(
   response: WorkspaceSearchPathsResponse | undefined,
   epicId: string,

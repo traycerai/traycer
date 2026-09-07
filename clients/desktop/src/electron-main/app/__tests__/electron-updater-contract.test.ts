@@ -10,10 +10,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-// Deep module paths, matching how `desktop-release-feed.ts` imports the same
-// provider module: electron-updater ships no `exports` map, so these resolve
-// under both `moduleResolution: bundler` and the esbuild bundle - and the
-// values are the REAL ones, which is the point of a contract test.
 import {
   findFile,
   parseUpdateInfo,
@@ -21,32 +17,8 @@ import {
 import { DownloadedUpdateHelper } from "electron-updater/out/DownloadedUpdateHelper";
 import type { ResolvedUpdateFileInfo } from "electron-updater/out/types";
 
-/**
- * Vendored-source contracts at the pinned electron-updater.
- *
- * The Windows/AppImage disarm, the macOS standing refusal, and custom-key
- * survival of `compatibilityEpoch` are not our code - they are facts about
- * 6.8.9. A bump that quietly drops the quit-handler re-read, starts staging
- * on macOS even with the flag down, or starts projecting channel-file keys
- * would compile and pass every other suite while making recovery lie.
- *
- * Re-check these anchors when bumping the pin (`/update-dependencies`).
- */
+/** Vendored-source contracts at the pinned electron-updater. */
 
-/**
- * The package that DECLARES the pin, which is not necessarily the directory the
- * vendored source is installed under.
- *
- * Bun hoists `electron-updater` to the repository root whenever nothing forces
- * a nested copy, so {@link findUpdaterInstallRoot} below can legitimately land
- * on the workspace root - whose `package.json` does not mention
- * `electron-updater` at all. Reading the pin from there asserted against the
- * wrong manifest and would fail (or throw on a missing `dependencies`) for a
- * reason having nothing to do with the contract under test.
- *
- * Identified by NAME rather than by path depth, so it is correct from any
- * working directory the suite might be invoked in.
- */
 const DESKTOP_PACKAGE_NAME = "@traycer-clients/desktop";
 
 function findDesktopPackageJson(): string {
@@ -71,14 +43,6 @@ function findDesktopPackageJson(): string {
   );
 }
 
-/**
- * Where the vendored source actually lives, which may be a hoisted root.
- *
- * Located by walking up from the working directory rather than from
- * `import.meta.url`, which under Vite's module runner is not a `file:` URL and
- * makes `fileURLToPath` throw. Walking up also means the suite works whether it
- * is invoked from this package or from the repo root.
- */
 function findUpdaterInstallRoot(): string {
   let dir = process.cwd();
   for (let depth = 0; depth < 8; depth += 1) {
@@ -118,12 +82,7 @@ function readStringField(value: unknown, key: string): string | null {
   return typeof field === "string" ? field : null;
 }
 
-/**
- * Reads `compatibilityEpoch` off a value whose declared type does not have it -
- * the same narrowing production uses (`readCompatibilityEpoch`), rather than a
- * cast this repo's lint bans. Returns the raw value so the test can assert its
- * TYPE, which a coercing reader would hide.
- */
+/** Returns the raw value so the test can assert its TYPE, which a coercing reader would hide. */
 function customKey(value: object): unknown {
   const record: Record<string, unknown> = { ...value };
   return record["compatibilityEpoch"];
@@ -138,12 +97,6 @@ describe("electron-updater 6.8.9 vendored contracts", () => {
   });
 
   it("BaseUpdater re-reads autoInstallOnAppQuit INSIDE the registered quit callback", () => {
-    // The disarm rests on the re-read happening at QUIT time, inside the
-    // callback, not merely on the flag being consulted somewhere in the file.
-    // A refactor that kept the registration gate and hoisted the check out of
-    // the callback would still satisfy a whole-file `toContain` while silently
-    // making `disarmQuitInstall` a no-op for an already-registered handler -
-    // so this slices the method and asserts the ORDER within it.
     const source = readOut("BaseUpdater.js");
     const start = source.indexOf("addQuitHandler() {");
     expect(start).toBeGreaterThan(-1);
@@ -187,10 +140,6 @@ describe("electron-updater 6.8.9 vendored contracts", () => {
     expect(parsed.version).toBe("1.2.0");
     expect(customKey(parsed)).toBe(2);
 
-    // `update-downloaded` is emitted as `{ ...updateInfo, downloadedFile }`.
-    // Reproduce that spread against the REAL parsed object so a future parser
-    // that returned a class instance with non-enumerable members would fail
-    // here rather than in production.
     const emitted = { ...parsed, downloadedFile: "/tmp/Traycer-1.2.0.exe" };
     expect(customKey(emitted)).toBe(2);
     expect(emitted.downloadedFile).toBe("/tmp/Traycer-1.2.0.exe");
@@ -202,19 +151,9 @@ describe("electron-updater 6.8.9 vendored contracts", () => {
   });
 
   it("DownloadedUpdateHelper empties pending/ when the cached sha512 does not match", async () => {
-    // EXECUTED. This is what dissolves the "a staged artifact could be reused
-    // by a later download" half of the old blanket channel-change refusal: an
-    // RC candidate never matches a stable artifact's hash, and the helper
-    // cleans up on its own. `discardStagedUpdate` relies on it rather than
-    // deleting `pending/` itself, which would race an in-flight write.
+    // This is what dissolves the "a staged artifact could be reused by a later download" half of the old blanket channel-change refusal: an RC candidate never matches a stable.
     const cacheDir = mkdtempSync(join(tmpdir(), "traycer-updater-cache-"));
     const helper = new DownloadedUpdateHelper(cacheDir);
-    // ELEMENT ACCESS, deliberately: `getValidCachedUpdateFile` is declared
-    // private, and TypeScript permits reaching a private member this way
-    // without the `as any` this repo bans. That it is private is itself part of
-    // what this test records - the cleanup the staged-update policy leans on is
-    // not public API, so it has to be pinned by test rather than trusted, and
-    // `discardStagedUpdate` deliberately never calls it.
     const probe = helper["getValidCachedUpdateFile"].bind(helper);
     const pending = helper.cacheDirForPendingUpdate;
     mkdirSync(pending, { recursive: true });
@@ -277,15 +216,7 @@ describe("electron-updater 6.8.9 vendored contracts", () => {
     expect(source).not.toMatch(/return \{[^}]*version:/u);
   });
 
-  // `findFile` reads the installer's EXTENSION out of `url.pathname`, twice -
-  // once to filter for the wanted one, once to exclude the unwanted. A feed
-  // whose file URLs carry no filename satisfies neither test, and the fallback
-  // is `files[0]`. This is the whole of the Linux defect: `_DebUpdater` asked
-  // for a `.deb`, got the AppImage that happens to be first in
-  // `latest-linux.yml`, and ran `dpkg -i` on it.
-  //
-  // EXECUTED against the real `findFile`, not text-matched, and asserted in
-  // both directions so the fix is pinned alongside the bug.
+  // EXECUTED against the real `findFile`, not text-matched, and asserted in both directions so the fix is pinned alongside the bug.
   describe("findFile resolves the installer by pathname extension", () => {
     // The exact arguments `_DebUpdater.doDownloadUpdate` passes.
     function pickDeb(

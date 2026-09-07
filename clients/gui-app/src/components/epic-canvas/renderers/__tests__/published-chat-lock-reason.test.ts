@@ -7,16 +7,7 @@ import {
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
- * The locked composer's footer is the ONE sentence a reader of a read-only
- * copy gets, and it has to survive being read on the machine it is talking
- * about. `PublishedChatTile` reaches this surface for a foreign owner (the
- * sidebar's locked row, a cross-host chat) AND for this device's own
- * connected host (tickets 47/48: the host answered `CHAT_NOT_VISIBLE` about
- * itself, so the canvas substituted the published copy) - and the
- * foreign-owner sentence, read in that second case, tells the user their own
- * machine "lives on" somewhere else and is not available "from this device".
- * That copy is what sent two live debugging sessions after a healthy host on
- * 2026-08-11, so each state is pinned separately here.
+ * The locked composer's footer is the ONE sentence a reader of a read-only copy gets, and it has to survive being read on the machine it is talking about.
  */
 describe("publishedChatLockReason", () => {
   it("names the owning machine and this device when the owner is someone else", () => {
@@ -55,9 +46,8 @@ describe("publishedChatLockReason", () => {
   });
 
   it("keeps the offline sentence for an unreachable owner regardless of whose host it is", () => {
-    // Nothing answered, so there is no "the host said it is not here" to
-    // report - only a host to wait for. The same-host reword is a
-    // REACHABLE-owner distinction and must not leak into this arm.
+    // Nothing answered, so there is no "the host said it is not here" to report - only a host to wait for.
+    // The same-host reword is a REACHABLE-owner distinction and must not leak into this arm.
     for (const ownerIsThisHost of [false, true]) {
       const reason = publishedChatLockReason({
         ownerIsReachable: false,
@@ -74,12 +64,7 @@ describe("publishedChatLockReason", () => {
   });
 
   it("says whose agent it is - and claims no liveness - for a collaborator's chat", () => {
-    // A collaborator's machine can never appear in this account's host
-    // directory, so it reads "unreachable" unconditionally - "which is
-    // offline" would assert liveness this device cannot observe, the label
-    // has fallen back to a raw host id, and "sending resumes" promises a
-    // composer this viewer does not get. The ownership arm outranks BOTH
-    // reachability arms for exactly that reason.
+    // A collaborator's machine can never appear in this account's host directory, so it reads "unreachable" unconditionally - "which is offline" would assert liveness this device cannot observe, the label has fallen back to a raw host id, and "sending resumes" promises a composer this viewer does not get.
     for (const ownerIsReachable of [false, true]) {
       const reason = publishedChatLockReason({
         ownerIsReachable,
@@ -147,9 +132,8 @@ describe("publishedChatLockReason", () => {
 
   describe("published-at clause", () => {
     it("says nothing about age when the row carries no publish time", () => {
-      // A row published by a build that predates the stamp, or a read that
-      // has not settled. Silence, not an invented date and not a "behind"
-      // guess - the clause states a fact or stays out of the sentence.
+      // A row published by a build that predates the stamp, or a read that has not settled.
+      // Silence, not an invented date and not a "behind" guess - the clause states a fact or stays out of the sentence.
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
@@ -164,9 +148,8 @@ describe("publishedChatLockReason", () => {
     });
 
     it("states when the copy was published, and claims nothing further", () => {
-      // The date is the whole of what this tile can honestly say about
-      // freshness: it holds no record head to compare against. Pinned so a
-      // future "behind"/"current" verdict has to earn its evidence first.
+      // The date is the whole of what this tile can honestly say about freshness: it holds no record head to compare against.
+      // Pinned so a future "behind"/"current" verdict has to earn its evidence first.
       const publishedAt = Date.parse("2026-08-14T12:00:00Z");
       const reason = publishedChatLockReason({
         ownerIsReachable: true,

@@ -1,14 +1,6 @@
 /**
  * A real `IStreamClient` that records instead of dialling.
- *
- * Not a mock of the proxy - a stand-in for the SOCKET, which is the only thing
- * a suite cannot have. Every session it hands back is a genuine `IStreamSession`
- * with working handler registration, so the proxy host under test wires and
- * drives production objects; what is faked is the wire beneath them.
- *
- * The recorded lists are what the leak pin reads: `openCount` alone cannot tell
- * "three sessions, three closes" from "three sessions, one closed three times",
- * and those are different bugs.
+ * Not a mock of the proxy - a stand-in for the socket, which is the only thing a suite cannot have.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";

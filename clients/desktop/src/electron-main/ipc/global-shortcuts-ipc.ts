@@ -66,10 +66,6 @@ function parseGlobalShortcutId(value: unknown): GlobalShortcutId {
 
 function parseGlobalShortcutIntent(value: unknown): GlobalShortcutIntent {
   const intent = globalShortcutIntentSchema.parse(value);
-  // Structural validity (a string) isn't semantic validity - reject a
-  // non-canonical chord (e.g. "mod+", wrong token order, an unsupported key)
-  // here rather than letting it reach `reconcile()`/Electron (amended
-  // decision 3).
   if (intent.chord !== null && !isValidChordString(intent.chord)) {
     throw new Error("Malformed global shortcut intent: chord is not valid");
   }

@@ -7,11 +7,7 @@ interface TileMinimapScopeProps {
 }
 
 /**
- * Names the tile a render subtree belongs to, so content deep inside it can
- * publish an outline the phone tile bar renders a button for.
- *
- * Provider only, no DOM - a plain string value, so it never re-renders the
- * subtree for a reason of its own.
+ * Provider only, no DOM - a plain string value, so it never re-renders the subtree for a reason of its own.
  */
 export function TileMinimapScope(props: TileMinimapScopeProps): ReactNode {
   return (

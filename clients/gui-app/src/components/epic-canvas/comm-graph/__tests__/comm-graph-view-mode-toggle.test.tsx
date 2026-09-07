@@ -131,9 +131,7 @@ function seedDoc(doc: Y.Doc): void {
 }
 
 /**
- * The tile is read back out of the REAL canvas store rather than held in local
- * state, so a toggle only reaches the screen by way of the persisted view -
- * which is the whole claim under test.
+ * The tile is read back out of the REAL canvas store rather than held in local state, so a toggle only reaches the screen by way of the persisted view - which is the whole claim under test.
  */
 function TileFromStore() {
   const tile = commGraphTileIn(useEpicCanvas(TAB_ID));
@@ -160,9 +158,7 @@ async function renderTile(): Promise<void> {
 }
 
 /**
- * The tab's comm-graph tile, narrowed once. The store's tile map is keyed by
- * instance id and its values are optional, so both readers below go through
- * here rather than each re-deciding what a missing entry means.
+ * The store's tile map is keyed by instance id and its values are optional, so both readers below go through here rather than each re-deciding what a missing entry means.
  */
 function commGraphTileIn(canvas: EpicCanvasState): CommGraphTileRef | null {
   for (const ref of Object.values(canvas.tilesByInstanceId)) {
@@ -225,9 +221,7 @@ describe("comm-graph view mode", () => {
   });
 
   it("resets the viewport on a mode switch so the incoming mode fits itself", async () => {
-    // Sprite pixels and flow units are not the same measure, so a framing made
-    // in one mode would land the other off-screen while still counting as
-    // "the user framed this" and suppressing its fit.
+    // Sprite pixels and flow units are not the same measure, so a framing made in one mode would land the other off-screen while still counting as "the user framed this" and suppressing its fit.
     act(() => {
       useEpicCanvasStore
         .getState()
@@ -267,9 +261,7 @@ describe("comm-graph view mode", () => {
   it("floats the toggle inside the canvas area, not over the whole tile", async () => {
     await renderTile();
 
-    // Containment, not coordinates: a detail panel is the canvas's SIBLING and
-    // puts its close button at its own top-right, so a toggle anchored to the
-    // tile would sit on top of that button whenever a panel is open.
+    // Containment, not coordinates: a detail panel is the canvas's SIBLING and puts its close button at its own top-right, so a toggle anchored to the tile would sit on top of that button whenever a panel is open.
     expect(
       screen
         .getByTestId("comm-graph-office-canvas")
@@ -281,10 +273,8 @@ describe("comm-graph view mode", () => {
     await renderTile();
     const graphButton = screen.getByTestId("comm-graph-mode-graph");
     const surface = screen.getByTestId("comm-graph-office-canvas");
-    // The office's camera gestures must not take pointer capture on an
-    // ancestor of this button. Capture RETARGETS the following `click` to the
-    // capturing element, so the button would never see its own click - which
-    // is invisible to `fireEvent.click`, and was exactly the reported bug.
+    // The office's camera gestures must not take pointer capture on an ancestor of this button.
+    // Capture RETARGETS the following `click` to the capturing element, so the button would never see its own click - which is invisible to `fireEvent.click`, and was exactly the reported bug.
     const capture = vi.spyOn(surface, "setPointerCapture");
 
     await act(async () => {

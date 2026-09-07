@@ -37,19 +37,8 @@ import { useProviderNativeScope } from "./use-provider-native-scope";
 
 const EMPTY_PLUGINS: readonly ProviderPlugin[] = [];
 
-/**
- * Shown for every provider whose contract sets `traycerSessionToolsNotice`
- * (amp and cursor today). There used to be two strings selected by
- * `providerId === "cursor"`, which was the tail of a redundancy: cursor's
- * contract ALREADY sets the flag (`contract-registry/cursor.ts`), so the id
- * arms could never change what rendered - only which sentence did. Two
- * sentences for one flag is how the flag stops being the thing that decides,
- * and the next provider to set it would have got amp's copy anyway.
- *
- * The wording is the union of what both said that the user can act on. Cursor's
- * old copy also asserted "listing is read-only", which its `addModes:
- * ["read-only"]` already renders on screen without being told.
- */
+/** Two sentences for one flag is how the flag stops being the thing that decides, and the next provider to set
+ * it would have got amp's copy anyway. */
 const SESSION_TOOLS_NOTICE =
   "Plugin tools may not appear in Traycer-launched sessions. They load for this provider's own CLI, but not for the session stream Traycer drives.";
 
@@ -301,12 +290,8 @@ function ProviderPluginsTabBody({
 
   return (
     <div className="flex flex-col gap-3">
-      {/*
-       * `sessionNotice` is now the whole gate: `sessionNoticeFor` returns null
-       * unless the contract sets `traycerSessionToolsNotice`, so the separate
-       * `showSessionNotice` flag (which also special-cased cursor by id) would
-       * only re-ask a question the notice already answers.
-       */}
+      {/* `sessionNotice` is now the whole gate: `sessionNoticeFor` returns null unless the contract sets
+         `traycerSessionToolsNotice`. */}
       <PluginsNotices
         sessionNotice={sessionNotice}
         reloadHint={reloadHint}
@@ -551,10 +536,8 @@ function PluginsListBody({
       />
     );
   }
-  // A list-level decision, not a per-row one: the icon column is reserved for
-  // every row as soon as ANY row has artwork, so the names keep one left edge.
-  // For a provider that ships no plugin icons at all this is false everywhere
-  // and the column simply does not exist.
+  // A list-level decision, not a per-row one: the icon column is reserved for every row as soon as any row has
+  // artwork, so the names keep one left edge.
   const reserveIconSpace = plugins.some((plugin) => plugin.hasIcon === true);
   return (
     <ul className="flex flex-col gap-2">
@@ -615,18 +598,15 @@ function PluginRow({
   const canEnableDisable =
     caps.actionScopes.setEnabled.includes(effectiveScope);
   const sourceBadge = plugin.source ?? null;
-  // Gated on the list's own `hasIcon`, so rows with no artwork never make the
-  // request. Per row rather than batched: each resolves independently and the
-  // list renders immediately without waiting on the slowest image.
+  // Gated on the list's own `hasIcon`, so rows with no artwork never make the request. Per row rather than
+  // batched: each resolves independently and the list renders immediately without waiting on the slowest image.
   const iconQuery = useProvidersPluginIcon({
     providerId,
     scope,
     workspaceRoot,
     pluginId: plugin.id,
-    // Cache identity, not a request field: an upgrade installed outside the
-    // app arrives on this list, and without it here the icon query - which is
-    // `staleTime: Infinity`, `poll: false` - would serve the old version's
-    // artwork for the rest of the session.
+    // Cache identity, not a request field: an upgrade installed outside the app arrives on this list, and without
+    // it here the icon query - which is `staleTime: Infinity`, `poll: false`.
     version: plugin.version,
     hasDarkIcon: plugin.hasDarkIcon === true,
     enabled: plugin.hasIcon === true,
@@ -641,9 +621,7 @@ function PluginRow({
         pending && "opacity-70",
       )}
     >
-      {/* Icon column first, name/description second, controls last - the
-          three-column rhythm of a plugin manager. Absent for providers that
-          ship no plugin artwork, which is most of them. */}
+      {/* Icon column first, name/description second, controls last - the three-column rhythm of a plugin manager. */}
       <ProviderEntryIcon
         iconUrl={iconQuery.data?.icon.dataUri ?? null}
         reserveSpace={reserveIconSpace}

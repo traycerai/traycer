@@ -48,30 +48,8 @@ import {
 import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
- * Pull Requests panel body. Subscribes in foreground mode on the canvas host
- * stream client with an explicit visibility gate:
- *   enabled = surface showing this body ∧ method supported
- *
- * On the sidebar, "showing" means sidebar expanded ∧ section expanded.
- * Whole-sidebar collapse is CSS-only (`hidden` on the column) and would leave
- * the body mounted without this gate. Per-section collapse already unmounts
- * the body; the section check is still included so the gate is complete and
- * testable if mount semantics change.
- *
- * Below the mobile breakpoint the sidebar column is not rendered at all, so
- * both collapse flags are stale desktop chrome there and answer nothing about
- * whether this body is on screen. Its host is then the mobile switcher sheet,
- * which mounts the body only while the Pull requests category is showing -
- * mounted IS visible - so the collapse half of the gate is skipped.
- *
- * Layout mirrors the Settings > Worktrees repo listing: a collapsible repo
- * header (chevron + icon + owner/repo + count) over full-bleed rows separated
- * by hairlines - no cards, no per-row accordion. Clicking a row opens the
- * full-view tile. An owned-submodule PR gets its own repo header and its own
- * full row, placed directly under the superproject it shipped with (see
- * `orderRepoGroupKeys`).
- *
- * Host switcher: omitted (list follows the canvas-serving host). See PrPanelActions.
+ * Subscribes in foreground mode on the canvas host stream client with an explicit visibility gate: enabled = surface showing this body ∧ method supported On the sidebar, "showing" means sidebar expanded ∧ section expanded.
+ * Whole-sidebar collapse is CSS-only (`hidden` on the column) and would leave the body mounted without this gate.
  */
 export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
   const hostId = useCanvasHostId();
@@ -93,12 +71,7 @@ export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
     enabled,
   });
 
-  // The rail's presence gate is fed from HERE - the open panel's own stream.
-  // Opening an epic performs no PR work at all, which is why an epic's PR icon
-  // appears from the second open onward rather than the first (see
-  // `pr-presence-store`). A surface that gates the panel's own reachability on
-  // presence and offers no force-visible affordance has to bootstrap the signal
-  // itself, through the probe in `use-pr-presence-probe`.
+  // Opening an epic performs no PR work at all, which is why an epic's PR icon appears from the second open onward rather than the first (see `pr-presence-store`).
   useRecordPrPresence(hostId, props.epicId, subscription.data?.items ?? null);
 
   if (!methodSupported) {
@@ -250,10 +223,8 @@ function PrPanelBodyContent(props: {
   return (
     <div
       ref={regionRef}
-      // Groups are separated by WHITESPACE, not another hairline. With every
-      // repo header and every row sharing one continuous ruled stack, a header
-      // read as just another row and the eye could not find where one repo's
-      // block ended - the gap is what makes a group a block.
+      // Groups are separated by WHITESPACE, not another hairline.
+      // With every repo header and every row sharing one continuous ruled stack, a header read as just another row and the eye could not find where one repo's block ended - the gap is what makes a group a block.
       className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto py-2"
       data-testid="pr-panel-body"
       data-source-status={props.sourceStatus ?? "none"}
@@ -296,9 +267,7 @@ function PrPanelBodyContent(props: {
 }
 
 /**
- * One repo's rows under a collapsible header. Rows are full-bleed and split by
- * hairlines (`divide-y`) rather than boxed, so the eye tracks one column of
- * titles down the panel instead of re-entering a card border per PR.
+ * Rows are full-bleed and split by hairlines (`divide-y`) rather than boxed, so the eye tracks one column of titles down the panel instead of re-entering a card border per PR.
  */
 function PrRepoGroupSection(props: {
   readonly epicId: string;
@@ -320,9 +289,7 @@ function PrRepoGroupSection(props: {
         aria-expanded={!props.collapsed}
         aria-label={`${props.collapsed ? "Expand" : "Collapse"} ${label}`}
         onClick={handleToggle}
-        // Reads as a section label rather than a row: uppercase + tracking put
-        // it in a different register from the PR titles below it, so the two
-        // are never scanned as the same kind of thing.
+        // Reads as a section label rather than a row: uppercase + tracking put it in a different register from the PR titles below it, so the two are never scanned as the same kind of thing.
         className="flex w-full min-w-0 items-center gap-1.5 px-3 py-1 text-left text-ui-xs font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
         data-testid="pr-repo-group-header"
       >
@@ -416,9 +383,7 @@ function PrStatusBanner(props: {
       data-testid={props.testId}
       className={cn(
         "m-2 rounded-md border px-2.5 py-2 text-ui-xs",
-        // Theme tokens, not a fixed Tailwind ramp - see `pr-detail-tone.ts`:
-        // the nine theme presets each redefine `--warning`, and an amber ramp
-        // opts this banner out of every one of them.
+        // Theme tokens, not a fixed Tailwind ramp - see `pr-detail-tone.ts`: the nine theme presets each redefine `--warning`, and an amber ramp opts this banner out of every one of them.
         props.tone === "warning" &&
           "border-warning/30 bg-warning/10 text-warning-foreground",
         props.tone === "error" &&

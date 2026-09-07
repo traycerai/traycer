@@ -4,16 +4,8 @@ import {
 } from "../installer/download-stage";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
-// `traycer host download [version] [--automatic]` - stages a host version
-// without touching the running host: download + verify + extract happen
-// with NO `cli-lock` held and no busy check (Host Update Layer Redesign
-// Tech Plan, "CLI: two-phase split with a staged store"). Only the brief
-// eligibility-check and promote sections take the lock - see
-// `installer/download-stage.ts`.
-//
-// `--automatic` is hidden: it's the controller's contract (desktop main's
-// `stageLatest`), not a user-facing switch - it additionally refuses to
-// stage when the installed version is incomparable (a `local-*` pin).
+// `traycer host download [version] [--automatic]` - stages a host version without touching the running host: download + verify + extract happen with NO `cli-lock` held and no busy check (Host Update Layer Redesign Tech Plan, "CLI: two-phase split with a staged store").
+// Only the brief eligibility-check and promote sections take the lock - see `installer/download-stage.ts`.
 export interface HostDownloadArgs {
   readonly versionRequest: string | null;
   readonly automatic: boolean;

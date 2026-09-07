@@ -35,9 +35,8 @@ const SCRIPTS = {
   },
 };
 
-// Stamped with the host the hook targets: the store files a folder only in
-// the bucket of the host it was actually prepared on, so an unstamped fixture
-// would be silently dropped and never reach the cap at all.
+// Stamped with the host the hook targets: the store files a folder only in the bucket of the host it was
+// actually prepared on, so an unstamped fixture would be silently dropped and never reach the cap at all.
 function numberedFolder(index: number): WorkspaceFolderInfo {
   return {
     path: `/tmp/cap-workspace-${index}`,
@@ -70,12 +69,7 @@ beforeEach(() => {
   useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
-  // `landing-draft-store.ts`'s `createDraft` snapshots the workspace/settings
-  // bucket of the composer's resolved placement host
-  // (`readComposerHostIdSnapshot()`, real and unmocked here). No surface pin
-  // is set in this suite, so it falls through to the app-wide effective host
-  // - seed that to TEST_HOST_ID so the bucket this suite stages into and the
-  // one a freshly-created draft inherits cannot drift apart.
+  // No surface pin is set in this suite, so it falls through to the app-wide effective host.
   useSelectionAuthorityStore.setState({
     attached: true,
     effectiveHostId: TEST_HOST_ID,
@@ -98,11 +92,7 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
       useHomeWorkspaceSource(STAGING_KEY, null, TEST_HOST_ID),
     );
 
-    // Fill to the cap with 50 folders (0..49). Folder 0 implicitly resolves
-    // as primary (nothing explicit set) and is preserved by the cap; stage
-    // an intent entry for every folder so whichever one the cap actually
-    // evicts (the oldest SECONDARY - folder 1) still has a staged entry to
-    // clean up.
+    // Fill to the cap with 50 folders (0..49).
     act(() => {
       result.current.addResolvedFolders(
         Array.from({ length: 50 }, (_, i) => numberedFolder(i)),
@@ -137,9 +127,8 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
     // The primary (folder 0) must survive the cap.
     expect(afterFolders).toContain(numberedFolder(0).path);
 
-    // The evicted folder's staged intent entry must be gone too - otherwise
-    // it can still ride along in an outgoing WorktreeIntent even though the
-    // row/persistence has already dropped it.
+    // The evicted folder's staged intent entry must be gone too - otherwise it can still ride along in an outgoing
+    // WorktreeIntent even though the row/persistence has already dropped it.
     const stagedEntries =
       useWorktreeIntentStagingStore.getState().intentByKey[
         worktreeStagingKeyString(STAGING_KEY)
@@ -147,7 +136,7 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
     expect(stagedEntries.some((e) => e.workspacePath === evictedPath)).toBe(
       false,
     );
-    // Every OTHER folder's staged entry survives untouched.
+    // Every other folder's staged entry survives untouched.
     expect(stagedEntries.length).toBe(afterFolders.length - 1);
   });
 
@@ -160,10 +149,8 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
       .addResolvedFolders(TEST_HOST_ID, initialFolders);
     const draftId = useLandingDraftStore.getState().createDraft(null);
 
-    // Keep both representations at the supported 50-folder cap while making
-    // their membership and primary choices diverge. On the next add, global
-    // evicts folder 1, while the active draft preserves folder 1 as primary
-    // and evicts folder 0 instead.
+    // Keep both representations at the supported 50-folder cap while making their membership and primary choices
+    // diverge.
     useLandingDraftStore
       .getState()
       .setDraftWorkspacePrimary(draftId, numberedFolder(1).path);

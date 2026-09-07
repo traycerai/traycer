@@ -93,9 +93,8 @@ export function PlanSegment(props: PlanSegmentProps) {
     [segment],
   );
   const cardHeadline = planHeadline(segment, markdownFallback);
-  // Uniform plan action across harnesses: a live plan card shows a single
-  // Implement button that sends a follow-up "implement the plan" message. Plan
-  // mode is non-blocking (no approval gate), so there is no Reject action.
+  // Uniform plan action across harnesses: a live plan card shows a single Implement button that sends a follow-up "implement the plan" message.
+  // Plan mode is non-blocking (no approval gate), so there is no Reject action.
   const actionsVisible =
     segment.planStatus === "drafting" || segment.planStatus === "ready";
   const actionsDisabled =
@@ -229,9 +228,8 @@ interface PlanModalProps {
 }
 
 function PlanModal(props: PlanModalProps) {
-  // Hookless dispatcher - see `FileChangeInlineDiff`'s note. A live plan must
-  // not mount the cloud payload observer at all, so the two sources are
-  // component boundaries rather than two disabled queries side by side.
+  // Hookless dispatcher - see `FileChangeInlineDiff`'s note.
+  // A live plan must not mount the cloud payload observer at all, so the two sources are component boundaries rather than two disabled queries side by side.
   const published = usePublishedChatSource();
   if (published === null) return <LivePlanModal {...props} />;
   return <PublishedPlanModal {...props} source={published} />;
@@ -276,16 +274,8 @@ function PublishedPlanModal(
     <PlanModalView
       {...props}
       modalMarkdown={publishedPlan.markdown ?? markdownFallback}
-      // A plan with no `fullContentRef` has no external content to be missing:
-      // its saved preview IS the whole plan, and the payload query is disabled
-      // on purpose. Without the first clause that disabled query's `null`
-      // markdown read as "unavailable" and warned about content that was
-      // already on screen - the live path gates the same way.
-      //
-      // The last clause is the same shape of mistake one layer up: a read that
-      // FAILED also leaves `markdown === null`, and calling that "unavailable"
-      // told the reader their plan was gone when the network was the only thing
-      // missing. That case draws the retry below instead.
+      // A plan with no `fullContentRef` has no external content to be missing: its saved preview IS the whole plan, and the payload query is disabled on purpose.
+      // Without the first clause that disabled query's `null` markdown read as "unavailable" and warned about content that was already on screen - the live path gates the same way.
       unavailable={
         segment.fullContentRef !== null &&
         !publishedPlan.isLoading &&
@@ -308,28 +298,15 @@ function PlanModalView(
   props: PlanModalProps & {
     readonly modalMarkdown: string;
     readonly unavailable: boolean;
-    /** Whether the full markdown is still on its way, from either source. */
     readonly isFetching: boolean;
-    /**
-     * Set when the markdown is a PREFIX of the real plan. Null on the live
-     * path; a cloud payload past the reader's preview bound arrives truncated,
-     * and a plan cut mid-step must not read as the whole plan.
-     */
+    /** Set when the markdown is a PREFIX of the real plan. Null on the live path; a cloud payload past the reader's preview bound arrives truncated, and a plan cut mid-step must not read as the whole plan. */
     readonly truncationNotice: string | null;
-    /**
-     * Set when the full markdown's read FAILED on the wire. Null on the live
-     * path. Drawn in place of the unavailable banner: the saved preview still
-     * shows, but the reader is told the full plan is one request away rather
-     * than gone.
-     */
+    /** Drawn in place of the unavailable banner: the saved preview still shows, but the reader is told the full plan is one request away rather than gone. */
     readonly failure: PayloadReadFailure | null;
   },
 ) {
   const { segment, open, modalMarkdown, unavailable } = props;
-  // The Dialog portals to <body>; re-assert the active theme on the modal so its
-  // tokens (e.g. --primary-foreground for the Implement button) resolve to the
-  // SAME values as the inline card, even if the portal escapes the themed root in
-  // some shells.
+  // The Dialog portals to <body>; re-assert the active theme on the modal so its tokens (e.g. --primary-foreground for the Implement button) resolve to the SAME values as the inline card, even if the portal escapes the themed root in some shells.
   const { resolvedTheme, themePreset } = useResolvedTheme();
   const modalHeadline = planHeadline(segment, modalMarkdown);
   const modalBody = stripRedundantTitleHeading(modalMarkdown, modalHeadline);

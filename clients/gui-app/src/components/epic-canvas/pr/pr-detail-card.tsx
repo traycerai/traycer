@@ -79,28 +79,12 @@ export interface PrDetailCardProps {
 }
 
 /**
- * The context card: the second column of the detail shell's row, sticky as the
- * document scrolls.
- *
- * It carries the facts a reader consults rather than reads: the proportional
- * check meter, the review decision, per-reviewer state, the size and freshness
- * of the change, and the chats it came from.
- *
- * Those last two moved DOWN here from the header. The header now pins itself
- * to the top of the scroll, and a pinned bar has to earn every line it spends:
- * "which PR" and "what is it merging into" are re-read constantly while
- * scrolling a diff, whereas "+47402 −1646" and "updated just now" are consulted
- * once. A sticky bar is the wrong home for a fact you look at once; a sidebar
- * that is always in view is the right one.
- *
- * Below the container-width threshold the card is simply absent, and nothing
- * takes its place. Checks reach the reader through the tab badge and the Checks
- * tab, reviewers through Feedback, and the diffstat through the Files tab - so
- * its absence costs convenience, never capability.
+ * It carries the facts a reader consults rather than reads: the proportional check meter, the review decision, per-reviewer state, the size and freshness of the change, and the chats it came from.
+ * Checks reach the reader through the tab badge and the Checks tab, reviewers through Feedback, and the diffstat through the Files tab - so its absence costs convenience, never capability.
  */
 export function PrDetailCard(props: PrDetailCardProps): ReactNode {
   const reviewers = prReviewerRows(props.core, props.activity);
-  // A tile is bound to its host for life (CLAUDE.md, host identity rule 2).
+  // A tile is bound to its host for life.
   const tabHostId = useTabHostId();
   return (
     <div
@@ -110,9 +94,7 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
         props.className,
       )}
     >
-      {/* Still no state row and no branches: the pinned header carries both,
-          and a card beside the thing it repeats doubles the reading without
-          adding a fact. */}
+      {/* Still no state row and no branches: the pinned header carries both, and a card beside the thing it repeats doubles the reading without adding a fact. */}
       <PrCardSection heading="Health">
         <PrCardHealth core={props.core} counts={props.queue.checkCounts} />
       </PrCardSection>
@@ -184,10 +166,7 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
           ) : null}
         </div>
       </PrCardSection>
-      {/* The chats this PR came from, as the SAME clickable pills the panel row
-          renders. They answer "which conversation produced this?" - a question
-          a reader returns to, which is why they sit in the always-visible card
-          rather than in a header that scrolls past. */}
+      {/* They answer "which conversation produced this?" - a question a reader returns to, which is why they sit in the always-visible card rather than in a header that scrolls past. */}
       {props.core.owners.length > 0 ? (
         <EpicSessionGate fallback={null}>
           <PrOwnerCardSection
@@ -203,17 +182,7 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
 
 /**
  * The "Chats" section, present only when an owner survives to fill it.
- *
- * The raw owner array cannot decide that. A PR keeps naming chats the user
- * deleted (worktree bindings cascade on epic delete, not on chat delete), and
- * `PrOwnerBadges` drops those - so gating the section on `core.owners` would
- * leave a bordered heading standing over nothing for exactly the all-deleted
- * case the dropping exists to clean up. The heading has to answer to the same
- * surviving set its contents do.
- *
- * Re-filtering inside `PrOwnerBadges` is free: `usePresentPrOwners` returns the
- * caller's own array when it drops nothing, so the second pass is identity-
- * stable and re-renders no chip.
+ * The raw owner array cannot decide that.
  */
 function PrOwnerCardSection(props: {
   readonly owners: PrDetailCore["owners"];
@@ -279,9 +248,7 @@ function PrCardGauge(props: {
 }
 
 /**
- * Proportional check meter. Segments are flex-weighted by count rather than a
- * fixed number of ticks, so a 2-of-200 failure still reads as a thin red sliver
- * instead of being rounded away to nothing or exaggerated to a tenth of the bar.
+ * Segments are flex-weighted by count rather than a fixed number of ticks, so a 2-of-200 failure still reads as a thin red sliver instead of being rounded away to nothing or exaggerated to a tenth of the bar.
  */
 function PrHealthMeter(props: { readonly counts: PrCheckCounts }): ReactNode {
   const { failing, pending, passed, total } = props.counts;

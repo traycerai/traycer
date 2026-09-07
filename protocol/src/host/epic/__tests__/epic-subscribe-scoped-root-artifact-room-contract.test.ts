@@ -1,16 +1,5 @@
 /**
- * B6 scoped root/artifact-room protocol-boundary characterization
- * (ticket:e86b8372-ad33-45d7-9672-2e1851d777e8/900a0484).
- *
- * `epic.subscribe@1.0` is now scope-aware. These tests pin the
- * post-cutover contract:
- *
- *   - Root snapshot/update/awareness frames continue to identify only
- *     `epicId` - no `artifactRoomId` on root-scoped frames.
- *   - Artifact-room-scoped frames MUST carry `artifactRoomId`.
- *   - The artifact-room frame kinds (`artifactRoomSnapshot`, `artifactRoomUpdate`,
- *     `artifactRoomAwareness`, `artifactRoomState`, plus client `artifactRoomApplyUpdate` /
- *     `artifactRoomAwareness`) are recognized; other invented kinds still fail.
+ * `epic.subscribe@1.0` - B6 scoped root/artifact-room protocol-boundary characterization (ticket:e86b8372-ad33-45d7-9672-2e1851d777e8/900a0484).
  */
 import { describe, expect, it } from "vitest";
 import {

@@ -6,15 +6,7 @@ export interface UseMeasuredElementHeightResult {
   readonly height: number;
 }
 
-/**
- * ResizeObserver-measured height of a callback-ref'd element, rounded up to
- * the nearest pixel. A callback ref (`setElement`, not a plain `useRef`) so
- * the measuring effect re-runs precisely when the underlying DOM node
- * attaches or detaches (conditional rendering, not just a resize) - a plain
- * ref would not re-fire for that transition. A non-positive reading is
- * ignored (height keeps its last known value) rather than collapsing
- * reserved layout space to zero.
- */
+/** A callback ref (`setElement`, not a plain `useRef`) so the measuring effect re-runs precisely when the underlying DOM node attaches or detaches (conditional rendering, not just a resize) - a plain ref would not re-fire for that transition. */
 export function useMeasuredElementHeight(): UseMeasuredElementHeightResult {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [height, setHeight] = useState(0);

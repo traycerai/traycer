@@ -12,10 +12,6 @@ import {
 
 const storeState = vi.hoisted(() => ({
   payload: { pins: {} as Record<string, string> },
-  /**
-   * R3-9: lets a test hold `load()` open so two concurrent first-sight pins
-   * can both be driven before either underlying load settles.
-   */
   loadGate: null as Promise<void> | null,
   /** Makes the durable write reject, the way a read-only userData does. */
   saveError: null as Error | null,
@@ -92,11 +88,7 @@ describe("desktop host key pins", () => {
   });
 
   it("reports a first-sight pin the disk refused, and stays unpinned for the retry", async () => {
-    // A swallowed write logged a pin nothing persisted: `onPinWriteFailed`
-    // never ran, and the mutated in-memory map made every later read look
-    // pinned, so the retry the next registry read would perform could not
-    // happen and the pin was simply gone after a restart. TOFU protection for
-    // this host is the whole of what that costs.
+    // A swallowed write logged a pin nothing persisted: `onPinWriteFailed` never ran, and the mutated in-memory map made every later read look pinned, so the retry the next registry.
     storeState.saveError = new Error("EROFS: read-only file system");
 
     // Still admitted - nothing is pinned, so nothing disagrees.
@@ -134,10 +126,8 @@ describe("desktop host key pins", () => {
   });
 
   it("R3-9: two hosts' first-sight pins started before either load settles both survive", async () => {
-    // RULE: the load is memoised on the PROMISE, not on its settled result -
-    // two first-sight pins racing the same cold load must not let the second
-    // write clobber the first. Before the fix, both saw an empty map and the
-    // second save dropped the first pin.
+    // RULE: the load is memoised on the PROMISE, not on its settled result - two first-sight pins racing the same cold load must not let the second write clobber the first.
+    // Before the fix, both saw an empty map and the second save dropped the first pin.
     let releaseLoad: () => void = () => undefined;
     storeState.loadGate = new Promise<void>((resolve) => {
       releaseLoad = resolve;

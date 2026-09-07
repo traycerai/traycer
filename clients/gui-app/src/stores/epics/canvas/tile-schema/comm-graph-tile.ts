@@ -1,15 +1,4 @@
-/**
- * Schema + factory for the `comm-graph` tile (the per-epic communication
- * graph).
- *
- * Follows the `git-diff` precedent: non-record-backed, and `parse` RECOMPUTES
- * the tile `id` from the persisted payload (`commGraphTileId(epicId)`) instead
- * of trusting the stored value, so dedup is self-healing with no migration
- * step. The identity is the EPIC - one graph per epic - which is also why the
- * ref carries no host binding: the tile fans one subscription out per host the
- * epic's agents live on, so `hostId` is the inert placeholder the blank tile
- * uses and the tile body never reads a per-tab host.
- */
+/** Schema + factory for the `comm-graph` tile (the per-epic communication graph). */
 import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -20,12 +9,7 @@ import { readTileInstanceId } from "./instance-id";
 
 export const COMM_GRAPH_TILE_NAME = "Communication graph";
 
-/**
- * Neutral starting viewport; the canvas fits the graph on first layout.
- *
- * `mode` defaults to the office floor - it is the readable rendering of the
- * same projection, and the node graph stays one click away.
- */
+/** Neutral starting viewport; the canvas fits the graph on first layout. */
 export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   x: 0,
   y: 0,
@@ -34,16 +18,8 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
 };
 
 /**
- * Whether this tile has never been framed by the user, so the renderer should
- * derive its own first viewport.
- *
- * `mode` is deliberately NOT compared: it is a rendering choice, not a framing.
- * Folding it in would mean a tile that was only ever toggled to the office and
- * back reads as user-framed at the schema default, and would then open at
- * (0, 0) zoom 1 instead of fitting.
- *
- * Lives beside the default it compares against, and not in either renderer:
- * both ask the same question of the same schema value.
+ * Whether this tile has never been framed by the user, so the renderer should derive its own first
+ * viewport. `mode` is deliberately NOT compared: it is a rendering choice, not a framing.
  */
 export function isDefaultCommGraphView(view: CommGraphTileViewState): boolean {
   return (
@@ -77,26 +53,13 @@ function readFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-/**
- * What a PERSISTED tile falls back to when its view is unreadable.
- *
- * The mode deliberately differs from {@link DEFAULT_COMM_GRAPH_VIEW}: a tile
- * saved before the office existed rendered the node graph, so reopening it on
- * the floor would change what a person already had open. Only a tile created
- * NOW starts on the floor.
- */
+/** What a PERSISTED tile falls back to when its view is unreadable. */
 const PERSISTED_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   ...DEFAULT_COMM_GRAPH_VIEW,
   mode: "graph",
 };
 
-/**
- * Anything that is not the literal `"office"` reads as the node graph. That
- * covers a tile persisted before the mode existed - which rendered the graph,
- * and must keep rendering it - as well as a value from a future build, which
- * degrades to the rendering that has always existed rather than to a blank
- * canvas.
- */
+/** Anything that is not the literal `"office"` reads as the node graph. */
 function readCommGraphViewMode(value: unknown): CommGraphTileViewState["mode"] {
   return value === "office" ? "office" : "graph";
 }
@@ -109,9 +72,8 @@ export function parseCommGraphTileViewState(
   return {
     x: readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
     y: readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
-    // A persisted zoom of 0 (or negative) would render an invisible canvas the
-    // user cannot recover from, so it degrades to the default rather than
-    // failing the whole tile.
+    // A persisted zoom of 0 (or negative) would render an invisible canvas the user cannot recover
+    // from, so it degrades to the default rather than failing the whole tile.
     zoom: zoom > 0 ? zoom : PERSISTED_COMM_GRAPH_VIEW.zoom,
     mode: readCommGraphViewMode(value.mode),
   };

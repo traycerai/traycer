@@ -25,21 +25,7 @@ import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-ow
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
- * D-series cross-host clone edges (durability audit): "target host with
- * empty profiles[] (flag off) and transient-client failure mid-mapping -
- * resolve-cloned-chat-settings must fall back to ambient + notice, never
- * throw unhandled."
- *
- * `resolve-cloned-chat-settings.test.ts` already adversarially covers most
- * of `resolveClonedChatSettings` in isolation (unreachable source, no
- * matching accountUuid, source-side RPC failure). This file adds the two
- * gaps that file doesn't: (1) an explicitly EMPTY target `profiles[]`
- * (mirrors ticket 04's documented "flag off -> profiles: []" contract, as
- * opposed to a non-empty array that merely lacks a match), a TARGET-side (not
- * source-side) RPC failure, and (2) the orchestrating
- * `cloneChatOnHostSwitch` itself - which had ZERO existing test coverage -
- * including the "target host isn't even in the directory" case that never
- * reaches `resolveClonedChatSettings` at all.
+ * D-series cross-host clone edges (durability audit): "target host with empty profiles[] (flag off) and transient-client failure mid-mapping - resolve-cloned-chat-settings must fall back to ambient + notice, never throw unhandled."
  */
 
 const BASE_SETTINGS: ChatRunSettings = {
@@ -227,8 +213,7 @@ function baseCloneArgs(
     epicId: "epic-1",
     tabId: "tab-1",
     sourceChatId: "source-chat-1",
-    // Ticket 37: these edge cases are about orchestration, not the owner hint,
-    // so they answer it the way a surface that does not know does.
+    // These edge cases are about orchestration, not the owner hint, so they answer it the way a surface that does not know does.
     sourceOwnerUserId: null,
     sourceHostId: "source-host",
     sourceTitle: "",
@@ -264,9 +249,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         version: "0.0.0-mock",
         transportDialability: "dialable",
       },
-      // target-host is deliberately absent - simulates it having gone
-      // unreachable / been removed from the directory between offering the
-      // clone action and the user confirming it.
+      // target-host is deliberately absent - simulates it having gone unreachable / been removed from the directory between offering the clone action and the user confirming it.
     ]);
 
     cloneChatOnHostSwitch(
@@ -483,10 +466,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
       },
     ]);
 
-    // What `useCloneSourceOwnerUserId` answers for a chat this device holds no
-    // record of but whose cloud row it just rendered the tile from - the exact
-    // case the host's cloud tier refused before this ticket, degrading the
-    // clone to settings-only.
+    // What `useCloneSourceOwnerUserId` answers for a chat this device holds no record of but whose cloud row it just rendered the tile from - the exact case the host's cloud tier refused before this ticket, degrading the clone to settings-only.
     const resolvedOwner = resolveCloneSourceOwnerUserId({
       chatId: "source-chat-1",
       localRecordOwnerUserId: null,
@@ -565,11 +545,8 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
   });
 });
 
-// chat-sync-v2 ticket 34B1: the clone is a latest-checkpoint fork
-// (`forkSource: {boundary: "latest"}`) of the source chat, not an empty
-// chat. A source with no assistant turn yet has no checkpoint to fork
-// through - the host answers that as a typed refusal, and this flow retries
-// EXACTLY once without `forkSource` so the clone still lands.
+// chat-sync-v2 ticket 34B1: the clone is a latest-checkpoint fork (`forkSource: {boundary: "latest"}`) of the source chat, not an empty chat.
+// A source with no assistant turn yet has no checkpoint to fork through - the host answers that as a typed refusal, and this flow retries EXACTLY once without `forkSource` so the clone still lands.
 describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
   const TARGET_DIRECTORY = fakeDirectory([
     {
@@ -594,11 +571,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
   }
 
   /**
-   * The failure mode every released host produces for `boundary: "latest"`
-   * today: the transport's same-major minor-downgrade cannot represent the
-   * request against `epic.createChat@1.0` (no `assistantMessageId` to put in
-   * the older schema's required field) and refuses BEFORE a frame is sent -
-   * see `classifyHostRequestFailure`.
+   * The failure mode every released host produces for `boundary: "latest"` today: the transport's same-major minor-downgrade cannot represent the request against `epic.createChat@1.0` (no `assistantMessageId` to put in the older schema's required field) and.
    */
   function downgradeUnsupportedError(): HostRpcError {
     return new HostRpcError({
@@ -656,10 +629,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
   });
 
   it("carries the decorated title through to the settings-only retry too, where no fork seed exists to gap-fill it", async () => {
-    // The fork BOUNDARY rather than the whole `forkSource`: it is the only
-    // part this test is about, and recording the discriminator keeps the
-    // assertion a plain value comparison (an `expect.objectContaining` here
-    // would be an `any` assignment).
+    // The fork BOUNDARY rather than the whole `forkSource`: it is the only part this test is about, and recording the discriminator keeps the assertion a plain value comparison (an `expect.objectContaining` here would be an `any` assignment).
     const calls: Array<{
       readonly boundary: string | null;
       readonly title: string;
@@ -730,9 +700,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // Exactly two attempts - the fork attempt, then the settings-only
-    // retry - never a third: the retry's own request carries no
-    // `forkSource`, so it cannot produce this same refusal to retry on.
+    // Exactly two attempts - the fork attempt, then the settings-only retry - never a third: the retry's own request carries no `forkSource`, so it cannot produce this same refusal to retry on.
     expect(calls).toEqual([
       {
         boundary: "latest",
@@ -778,11 +746,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     expect(onCloneFailed).toHaveBeenCalledTimes(1);
   });
 
-  // The blocker the cold review found: every released host is
-  // `epic.createChat@1.0`-only, so the FIRST attempt against a real host
-  // never even reaches the server - the client-side downgrade fails before
-  // a frame is sent. Pre-B1 behavior always landed settings-only; this must
-  // still be true post-B1.
+  // The blocker the cold review found: every released host is `epic.createChat@1.0`-only, so the FIRST attempt against a real host never even reaches the server - the client-side downgrade fails before a frame is sent.
   it("retries settings-only exactly once when the target host cannot receive a latest-checkpoint fork (DOWNGRADE_UNSUPPORTED)", async () => {
     const calls: unknown[] = [];
     const createChat: CreateChatCommand = (request, callbacks) => {
@@ -918,10 +882,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
   });
 
   it("reports include_history: false for the settings-only retry that followed a checkpoint-unavailable refusal", async () => {
-    // The flag must reflect what the REQUEST that actually succeeded sent,
-    // not the flow's original intent - the retry carries no `forkSource`, so
-    // no history came along, and `include_history: true` here would be a
-    // known-false analytics value on the exact path ticket 34B1 built.
+    // The flag must reflect what the REQUEST that actually succeeded sent, not the flow's original intent - the retry carries no `forkSource`, so no history came along, and `include_history: true` here would be a known-false analytics value on the exact path.
     const track = vi.spyOn(Analytics.getInstance(), "track");
     const createChat: CreateChatCommand = (request, callbacks) => {
       if (request.forkSource !== null && request.forkSource !== undefined) {
@@ -951,11 +912,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
   });
 
   it("a settings resolution that REJECTS ends the flow through onCloneFailed, never silently", async () => {
-    // `resolveClonedChatSettings` itself never throws, so this covers the
-    // seams around it (a directory lookup, transient-client construction)
-    // rejecting - without the catch arm the flow just stopped, leaving the
-    // caller's "cloning…" state pending forever with no clone and no
-    // terminal signal.
+    // `resolveClonedChatSettings` itself never throws, so this covers the seams around it (a directory lookup, transient-client construction) rejecting - without the catch arm the flow just stopped, leaving the caller's "cloning…" state pending forever with no.
     const createChat = vi.fn<CreateChatCommand>();
     const onCloneFailed = vi.fn();
     const throwingDirectory: IHostDirectoryService = {
@@ -981,23 +938,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
   });
 
   it("clones onto the target host regardless of app-wide selection (redesign P1.2, D6)", async () => {
-    // Previously (`selectedHostIdAtStart` / the app-wide-selection guard,
-    // deleted by D6): a mid-resolution move of the ACTIVE host failed the
-    // clone rather than risk landing it on the moved-to host, because the
-    // create mutation used to stamp the ambient active host at mutate time.
-    // Now the clone always creates on the TARGET host's own client
-    // (`useEpicCreateChatForHostClient`), which never reads the app-wide
-    // selection at all.
-    //
-    // This used to also simulate a mid-flight selection MOVE (a mutable
-    // `getSelected()` override flipped while `resolveSettingsForClone`'s
-    // microtask was pending) to prove that move didn't disturb the clone.
-    // P4.2 deleted `getSelected` from `IHostDirectoryService` entirely -
-    // there is no longer any selection concept on the directory for
-    // anything to move, so that half of the claim has no post-slot
-    // equivalent and is dropped. What survives, and is still worth pinning,
-    // is the plain claim the comment above states: cloning succeeds and
-    // targets correctly off a directory that carries more than one entry.
+    // Previously (`selectedHostIdAtStart` / the app-wide-selection guard, deleted by D6): a mid-resolution move of the ACTIVE host failed the clone rather than risk landing it on the moved-to host, because the create mutation used to stamp the ambient active.
     const createChat = vi.fn<CreateChatCommand>();
     const onCloneFailed = vi.fn();
     const targetEntry: HostDirectoryEntry = {

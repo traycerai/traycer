@@ -6,9 +6,7 @@ vi.mock("@/components/epic-canvas/tile-find/tile-find-adapter-context", () => ({
   useRegisterTileFindAdapter: registerFindAdapterMock,
 }));
 
-// The floor signs resolve host display names through the host directory, which
-// is a Query like every other host read - so this suite needs the provider and
-// an inert binding, the same pair the other comm-graph suites install.
+// The floor signs resolve host display names through the host directory, which is a Query like every other host read - so this suite needs the provider and an inert binding, the same pair the other comm-graph suites install.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
 }));
@@ -20,10 +18,6 @@ vi.mock("@/providers/use-resolved-theme", () => ({
   }),
 }));
 
-// `useEpicAgentActivityTiers` resolves the open-epic session handle, which this
-// suite has no use for: the office statuses it feeds are covered in
-// `lib/comm-graph/office/__tests__/office-status.test.ts`. PARTIAL, because the
-// detail panel this suite opens reaches other selectors in the same module.
 vi.mock("@/lib/epic-selectors", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
   return { ...actual, useEpicAgentActivityTiers: () => new Map() };
@@ -193,16 +187,6 @@ function officeAgentInput(agent: CommGraphAgentNode): OfficeAgentInput {
   };
 }
 
-/**
- * Where the envelope for {@link IN_FLIGHT} sits, from a scene built the same
- * way the canvas builds its own and fed the same two syncs.
- *
- * Reading the component's own scene is not possible and re-deriving the
- * geometry by hand would be a second implementation of it. The scene is pure
- * and deterministic by construction - same agents, same input, same box - so a
- * parallel instance answers the identical question, and if that ever stopped
- * being true this test failing is the correct outcome.
- */
 function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
   const scene = new OfficeScene(layoutOffice);
   const agents = [ORCHESTRATOR, REVIEWER].map(officeAgentInput);
@@ -221,9 +205,7 @@ function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
     playing: false,
     reducedMotion: false,
   };
-  // The first sync MATERIALIZES the floor and never replays its row, so the
-  // envelope only exists after a second sync carrying a new key - exactly the
-  // sequence the canvas performs across the two renders below.
+  // The first sync MATERIALIZES the floor and never replays its row, so the envelope only exists after a second sync carrying a new key - exactly the sequence the canvas performs across the two renders below.
   scene.sync(base);
   scene.sync({ ...base, pulse: REQUEST_PULSE, pulseKey: "row-1" });
   const regions = scene.frame().envelopeHitRegions;
@@ -244,12 +226,8 @@ afterEach(() => {
 });
 
 /**
- * jsdom has no 2d canvas context, so nothing here can assert a pixel. That is
- * deliberate rather than a gap being tolerated: the drawing is a pure function
- * of the frame (covered where the frame is built, in the scene's own suite),
- * while what a person can DO with the floor - reach an agent, open it, and not
- * lose the surface when there is no context at all - is exactly what survives
- * the missing context and is asserted below.
+ * jsdom has no 2d canvas context, so nothing here can assert a pixel.
+ * That is deliberate rather than a gap being tolerated: the drawing is a pure function of the frame (covered where the frame is built, in the scene's own suite), while what a person can DO with the floor - reach an agent, open it, and not lose the surface when there is no context at all - is exactly what survives the missing context and is asserted below.
  */
 describe("CommGraphOfficeCanvas", () => {
   it("renders the floor without a 2d context instead of throwing", () => {
@@ -300,17 +278,11 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
     expect(screen.getAllByText("Reviewer").length).toBeGreaterThan(0);
 
-    // The cursor moves back before Reviewer existed: it drops out of
-    // agentIds, so the surface is handed the as-of set rather than the full
-    // present-day roster.
+    // The cursor moves back before Reviewer existed: it drops out of agentIds, so the surface is handed the as-of set rather than the full present-day roster.
     view.rerender(
       withQueryClient(officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE)),
     );
 
-    // The panel's own selection is still Reviewer's id, but that id is no
-    // longer among the agents the surface was handed, so it resolves
-    // nothing to show and renders nothing at all - it does not fall back to
-    // stale data.
     expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
     expect(screen.queryByText("Reviewer")).toBeNull();
   });
@@ -358,9 +330,7 @@ describe("CommGraphOfficeCanvas", () => {
     });
     expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
 
-    // `next` moves off the first match and focuses the one it lands on;
-    // focusing is what opens the panel, so a match is readable and not merely
-    // pointed at.
+    // `next` moves off the first match and focuses the one it lands on; focusing is what opens the panel, so a match is readable and not merely pointed at.
     await act(async () => {
       await latestFindAdapter().next();
     });
@@ -375,9 +345,7 @@ describe("CommGraphOfficeCanvas", () => {
     // not replay the row its very first sync arrives on.
     view.rerender(withQueryClient(officeElement(both, IN_FLIGHT)));
     const rect = envelopeRect(both);
-    // The gestures live on the CANVAS, not on the wrapper - the wrapper is the
-    // parent of the overlay controls, and taking pointer capture there stole
-    // their clicks.
+    // The gestures live on the CANVAS, not on the wrapper - the wrapper is the parent of the overlay controls, and taking pointer capture there stole their clicks.
     const surface = screen.getByRole("img", {
       name: "Office view of the communication graph",
     });
@@ -398,10 +366,8 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   it("does not open anything on a cancelled pointer", () => {
-    // A cancel is not a click - the browser took the pointer mid-press, and
-    // `handlePointerCancel` only clears the drag and releases capture. It
-    // must not fall through to either open path a `pointerUp` at the same
-    // spot would take.
+    // A cancel is not a click - the browser took the pointer mid-press, and `handlePointerCancel` only clears the drag and releases capture.
+    // It must not fall through to either open path a `pointerUp` at the same spot would take.
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
     const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
     view.rerender(withQueryClient(officeElement(both, IN_FLIGHT)));
@@ -422,13 +388,8 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   it("stays mounted and reachable while its frame loop is paused", () => {
-    // The floor pauses when its tile is not being painted - an unselected
-    // Traycer tab keeps its tiles mounted under `display:none`. What pauses is
-    // the LOOP and nothing else: the tile is not unmounted, its agents stay
-    // reachable, and the surface is still there to come back to. Only the
-    // mounting half is observable here, since jsdom's missing 2d context means
-    // the loop never started in the first place; the pausing half is
-    // `office-frame-gate.test.ts`.
+    // The floor pauses when its tile is not being painted - an unselected Traycer tab keeps its tiles mounted under `display:none`.
+    // Only the mounting half is observable here, since jsdom's missing 2d context means the loop never started in the first place; the pausing half is `office-frame-gate.test.ts`.
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
 

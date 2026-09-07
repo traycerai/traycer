@@ -17,14 +17,7 @@ import {
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import { composeCloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
 
-/**
- * The composition rule, asserted directly.
- *
- * Every case here is about ORDER rather than content, which is exactly why the
- * rule was extracted out of the hook: a `renderHook` version would have to
- * drive two queries into a specific interleaving to say the same thing, and
- * would then be testing TanStack's scheduling as much as this decision.
- */
+/** The composition rule, asserted directly. */
 
 async function readFixture(): Promise<CloudChatRead> {
   const published = await publishCloudChat(DEFAULT_PUBLISH);
@@ -36,9 +29,7 @@ async function readFixture(): Promise<CloudChatRead> {
   });
 }
 
-// The CONCRETE union, not `string`: the helper builds a real `HostRpcError`,
-// and widening its code here is what made the OSS compile gate red while the
-// per-package `tsc --noEmit` stayed quiet.
+// The CONCRETE union, not `string`: the helper builds a real `HostRpcError`, and widening its code here is what made the OSS compile gate red while the per-package `tsc --noEmit` stayed quiet.
 function rpcError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
     code,
@@ -170,10 +161,8 @@ describe("what counts as an error", () => {
       read,
       readError: null,
       payloadsOutcome: undefined,
-      // Still in flight - and for a refusal it may stay that way. The remedy is
-      // known, no transcript is presented, and there is no fidelity count for a
-      // late list to contradict; holding the spinner on an unrelated request is
-      // an indefinite wait for nothing.
+      // Still in flight - and for a refusal it may stay that way.
+      // The remedy is known, no transcript is presented, and there is no fidelity count for a late list to contradict; holding the spinner on an unrelated request is an indefinite wait for nothing.
       payloadsSettled: false,
     });
 

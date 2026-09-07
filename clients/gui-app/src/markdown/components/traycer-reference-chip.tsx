@@ -24,21 +24,7 @@ interface TraycerReferenceChipProps {
 }
 
 /**
- * Shared inline chip for the legacy `<traycer-*>` reference components. Mirrors
- * the visual treatment of the prior `TraycerFileReference` chip: a small inline
- * button with an icon and the model-authored label.
- *
- * When `onOpen` is `null` the reference is not openable (missing id, no epic
- * context, or an unresolved same-epic node) and the chip degrades to the plain
- * label text - no button, no dead click.
- *
- * A same-epic `spec` / `ticket` reference doubles as a drag source into the
- * canvas (mirroring the sidebar): the whole pill is the drag surface. Only that
- * case mounts `DraggableReferenceChip`, which owns the canvas-store subscription
- * and the `useDraggable` registration. Every other openable chip (chat, epic,
- * cross-epic `navigate`) renders the plain, presentational button and pays no
- * drag cost - so the generic chip never couples to the canvas for references
- * that can never be dragged.
+ * Legacy `<traycer-*>` chip. `onOpen === null` renders plain text. Only same-epic spec/ticket chips mount `DraggableReferenceChip`.
  */
 export function TraycerReferenceChip(props: TraycerReferenceChipProps) {
   // Inert reference: plain label text, no button, no canvas/DnD coupling.
@@ -61,12 +47,7 @@ export function TraycerReferenceChip(props: TraycerReferenceChipProps) {
   );
 }
 
-/**
- * Drag eligibility narrower than click: only a resolved same-epic `spec` /
- * `ticket` node is a canvas drag source. Computed from props alone (no hooks),
- * so the parent can decide whether to mount the drag-capable child without
- * itself subscribing to the canvas store.
- */
+/** Drag-eligible only for a resolved same-epic spec/ticket. Props only, so the parent can choose the child without subscribing to the canvas store. */
 function isChatArtifactDragCandidate(
   props: TraycerReferenceChipProps,
 ): boolean {
@@ -78,13 +59,7 @@ function isChatArtifactDragCandidate(
   );
 }
 
-/**
- * The drag-capable variant, mounted only for same-epic spec/ticket references.
- * Delegates the canvas-store subscription (`viewTabId`) and the `useDraggable`
- * registration to the shared `useArtifactDragSource` hook; a non-draggable
- * result (e.g. no open tab for the epic) still renders the same button but
- * disables the drag surface.
- */
+/** Same-epic spec/ticket drag source. A non-draggable result still renders the button with the drag surface disabled. */
 function DraggableReferenceChip(
   props: TraycerReferenceChipProps & {
     readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
@@ -92,11 +67,8 @@ function DraggableReferenceChip(
 ) {
   const { refKind, sameEpicNodeRef, epicId } = props;
   const viewTabId = useEpicViewTabId();
-  // Build the artifact identity from the resolved same-epic ref, guarding the
-  // kind to the artifact-only payload type. `null` when the ref is absent or is
-  // not an artifact kind, which disables the drag surface. This component only
-  // mounts for spec/ticket candidates (see `isChatArtifactDragCandidate`), so
-  // the shared hook's own gate is `enabled: true`.
+  // Artifact identity from the same-epic ref; null disables drag. Mounted only
+  // for spec/ticket so the hook gate is enabled: true.
   const identity: ArtifactDragIdentity | null =
     sameEpicNodeRef === null || !isEpicArtifactKind(sameEpicNodeRef.type)
       ? null
@@ -139,13 +111,7 @@ interface ReferenceChipDragWiring {
   readonly isDragging: boolean;
 }
 
-/**
- * The presentational reference button. `drag` is `null` for click-only chips and
- * carries the dnd-kit wiring for an active drag source. The drag surface is
- * attached only when `drag` is non-null, so a click-only chip is never announced
- * as `draggable` / `aria-disabled` and its click/navigate semantics stay
- * untouched.
- */
+/** Attach the drag surface only when drag is non-null so a click-only chip is never announced as draggable. */
 function ReferenceChipButton(props: {
   readonly icon: ReactNode;
   readonly children: ReactNode;

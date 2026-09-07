@@ -197,9 +197,8 @@ function unavailableBrowserSessionsState(
     hostId,
     lifecycle: "connecting",
     inventoryReady: false,
-    // No coordinator, so nothing has established this client can place a
-    // native tab on that host. Surfaces gate a native branch on it, and the
-    // safe answer is the viewer one.
+    // No coordinator, so nothing has established this client can place a native tab on that host.
+    // Surfaces gate a native branch on it, and the safe answer is the viewer one.
     canMaterializeElectron: false,
     items: [],
     errorMessage: null,

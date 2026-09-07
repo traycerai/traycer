@@ -12,11 +12,7 @@ interface SetEnvOverrideInput {
   readonly value: string | null;
 }
 
-/**
- * Inserts or updates a single env override. The host picks up the new
- * value on its next bootstrap (the CLI's `host start` reads the table
- * before exec'ing the bundle).
- */
+/** Inserts or updates a single env override. */
 export function useRunnerTraycerEnvOverrideSetMutation(): UseMutationResult<
   void,
   Error,

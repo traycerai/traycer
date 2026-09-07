@@ -11,12 +11,7 @@ import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-cat
 const PROVIDERS_LIST_REFRESH_MS = 15 * 60 * 1_000;
 
 /**
- * Tab-scoped `providers.list`: identical to `useProvidersList` but bound to the
- * CURRENT tab's host (`useTabHostClient`) rather than the app-wide active
- * host. The composer runs turns on the tab's host and those two scopes can
- * diverge (CLAUDE.md host model), so the re-auth gate must read auth from the
- * host the turn actually runs on. Keyed on the tab host id, so it dedupes
- * with the banner's context-reprovided read of the same provider state.
+ * `providers.list` on the current tab's host (`useTabHostClient`), not the app-wide active host.
  */
 export function useTabProvidersList(
   activity: QueryActivityOptions,

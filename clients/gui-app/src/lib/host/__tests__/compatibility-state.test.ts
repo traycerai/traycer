@@ -31,11 +31,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * The argument `TransportEvidenceRelay.reportCompatVerdict` takes, named here
- * so the spy below carries a concrete type. Spelling it out rather than
- * reaching for `ReturnType<typeof vi.spyOn>` is what keeps `.mock.calls`
- * typed - the unparameterized form degrades to `any` and every read off it
- * becomes an unsafe access.
+ * The argument `TransportEvidenceRelay.reportCompatVerdict` takes, named here so the spy below carries a concrete type.
+ * Spelling it out rather than reaching for `ReturnType<typeof vi.spyOn>` is what keeps `.mock.calls` typed - the unparameterized form degrades to `any` and every read off it becomes an unsafe access.
  */
 interface CompatVerdictReport {
   readonly hostId: string;
@@ -47,26 +44,13 @@ interface CompatVerdictReport {
 type CompatReportSpy = MockInstance<(input: CompatVerdictReport) => void>;
 
 /**
- * P5.2 T9-T11: the compat probe now binds the session id it resolved on into
- * the verdict it reports to the selection authority (`compatAnchorAtSuccess` /
- * `compatAnchorAtFailure` in `compatibility-state.ts`).
- *
- * A minimal render harness rather than `mountStartupConsumers` from
- * `host-compatibility-provider.test.tsx` (read-only for this suite): these
- * tests need no epic tabs, no `epic.getTaskContexts` / `agent.gui.listHarnesses`
- * consumers, and no reconciler - only `host.status` and the compatibility
- * provider itself. Written without JSX (this file is `.test.ts`, and the
- * vitest config's esbuild loader for `.ts` does not parse JSX).
+ * P5.2 T9-T11: the compat probe now binds the session id it resolved on into the verdict it reports to the selection authority (`compatAnchorAtSuccess` / `compatAnchorAtFailure` in `compatibility-state.ts`).
  */
 
 type HostStatusResponse = ResponseOfMethod<HostRpcRegistry, "host.status">;
 
 /**
- * `AuthService.start()` fetches `/api/v3/user` to rehydrate the signed-in
- * user before the runtime finishes startup - without this stub `fetch` is
- * unmocked in jsdom and startup never resolves, so every test hangs on the
- * `fallback` node forever. Mirrors `installAuthFetch` in
- * `host-compatibility-provider.test.tsx` (read-only for this suite).
+ * `AuthService.start()` fetches `/api/v3/user` to rehydrate the signed-in user before the runtime finishes startup - without this stub `fetch` is unmocked in jsdom and startup never resolves, so every test hangs on the `fallback` node forever.
  */
 function installAuthFetch(): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
@@ -133,11 +117,8 @@ function installAuthFetch(): () => void {
 let restoreFetch: () => void = () => undefined;
 
 /**
- * Each test gets its OWN host id. `compatAnchorAtSuccess` /
- * `compatAnchorAtFailure` in `compatibility-state.ts` and
- * `transportEvidenceRelay`'s session maps are module singletons that
- * `queryClient.clear()` / `cleanup()` never reset - a shared host id would
- * let one test read a slot another test wrote.
+ * Each test gets its OWN host id.
+ * `compatAnchorAtSuccess` / `compatAnchorAtFailure` in `compatibility-state.ts` and `transportEvidenceRelay`'s session maps are module singletons that `queryClient.clear()` / `cleanup()` never reset - a shared host id would let one test read a slot another.
  */
 function buildLocalSnapshot(hostId: string): LocalHostSnapshot {
   return {
@@ -243,9 +224,7 @@ function mount(
   const queryClient = buildQueryClient();
   const reportSpy = vi.spyOn(transportEvidenceRelay, "reportCompatVerdict");
 
-  // `children` is passed INSIDE props rather than as `createElement`'s third
-  // argument: `RunnerHostProviderProps` declares it required, and the variadic
-  // children overload does not satisfy a required `children` prop.
+  // `children` is passed INSIDE props rather than as `createElement`'s third argument: `RunnerHostProviderProps` declares it required, and the variadic children overload does not satisfy a required `children` prop.
   render(
     React.createElement(RunnerHostProvider, {
       runnerHost: host,
@@ -399,14 +378,7 @@ describe("compatibility-state - compat verdict session anchoring (P5.2)", () => 
       transportEvidenceRelay.sessionEstablished(hostId, "s-B", "local-ws");
     });
 
-    // A refetch starts and FAILS - the verdict is served HELD: `probe.data`
-    // survives from the original success, `degraded` becomes true.
-    //
-    // NOT awaited: `invalidateQueries()` awaits the refetch it triggers, and
-    // that refetch resolves on `reprobe.promise` - which this test does not
-    // reject until below. Awaiting it here would deadlock the test on its own
-    // unsettled promise. Fire it, wait for the refetch to actually start
-    // (`probes > 1`), then reject.
+    // A refetch starts and FAILS - the verdict is served HELD: `probe.data` survives from the original success, `degraded` becomes true.
     act(() => {
       void queryClient.invalidateQueries();
     });
@@ -424,12 +396,8 @@ describe("compatibility-state - compat verdict session anchoring (P5.2)", () => 
     });
     expect(getCompatibilityStatusText()).toBe("compatible");
 
-    // THE DISCRIMINATOR: every report for this host still names A. A
-    // report-time lookup implementation would emit a "B" report on the failed
-    // refetch above, which is exactly the bug this anchor exists to prevent.
-    // The retry predicate runs on every failure and `hostStatus` keeps
-    // returning the same already-rejected promise on retries, so this checks
-    // ALL reports for the host, not just the last one.
+    // THE DISCRIMINATOR: every report for this host still names A.
+    // A report-time lookup implementation would emit a "B" report on the failed refetch above, which is exactly the bug this anchor exists to prevent.
     const reportsForHost = reportSpy.mock.calls
       .map(([input]) => input)
       .filter((input) => input.hostId === hostId);
@@ -450,12 +418,7 @@ describe("compatibility-state - compat verdict session anchoring (P5.2)", () => 
       throw terminalIncompatibleError();
     });
 
-    // NOT asserted via the rendered status text: the real selection bridge is
-    // mounted here, so the incompatible verdict moves `effectiveHostId` off
-    // this host (D13/C4) and the probe's own status falls back to `checking`
-    // with nothing bound - see `authorityIncompatibleCode` in
-    // `host-compatibility-provider.test.tsx` for the same reasoning. The
-    // report to the authority is the thing under test, so wait on it directly.
+    // NOT asserted via the rendered status text: the real selection bridge is mounted here, so the incompatible verdict moves `effectiveHostId` off this host (D13/C4) and the probe's own status falls back to `checking` with nothing bound - see.
     await waitFor(() => {
       expect(lastReportFor(reportSpy, hostId)).toBeDefined();
     });

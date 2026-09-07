@@ -1,24 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// `maybeProvisionCredential`'s own decision logic, which had no direct
-// coverage: every command suite that exercises it (`host-install`,
-// `host-ensure`, `service-install`) mocks this function wholesale to pin its
-// own wiring, so nothing tested what it decides.
-//
-// The decision it makes is a two-part gate - did this run START anything,
-// and can we mint for it - and the second half deliberately does NOT trust
-// the pre-flight's verdict. The pre-flight runs before a stage + install
-// that can take minutes, and the credentials file moves in BOTH directions
-// across that window: a concurrent `traycer login` in another terminal
-// invalidates an `unauthenticated` verdict exactly as a concurrent sign-out
-// invalidates a `signed-in` one. So the auth is re-read at probe time and
-// the pre-flight's verdict survives only as the thing that decides what a
-// still-missing credential MEANS.
-//
-// `resolveHostAuth` and `provisionInstalledHostCredential` are mocked: the
-// real ones read the operator's actual `~/.traycer` credentials and open a
-// WebSocket to a host. The probe's own internals have their own suite in
-// `credential-provisioning.test.ts`.
+// `maybeProvisionCredential`'s own decision logic, which had no direct coverage: every command suite that exercises it (`host-install`, `host-ensure`, `service-install`) mocks this function wholesale to pin its own wiring, so nothing tested what it decides.
+// The decision it makes is a two-part gate - did this run START anything, and can we mint for it - and the second half deliberately does NOT trust the pre-flight's verdict.
 
 const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(),
@@ -95,10 +78,8 @@ describe("maybeProvisionCredential", () => {
   });
 
   it("returns null without reading credentials when nothing was started", async () => {
-    // `"none"` is the one gate independent of auth state - it covers the
-    // no-op ensure and the bytes-only install alike. Reading credentials
-    // here would be pointless work, and probing would dial a host this run
-    // never touched.
+    // `"none"` is the one gate independent of auth state - it covers the no-op ensure and the bytes-only install alike.
+    // Reading credentials here would be pointless work, and probing would dial a host this run never touched.
     const result = await maybeProvisionCredential(
       fakeCtx(),
       "none",
@@ -111,11 +92,7 @@ describe("maybeProvisionCredential", () => {
   });
 
   it("probes when credentials appeared after an unauthenticated pre-flight", async () => {
-    // The regression: a signed-out pre-flight used to short-circuit before
-    // the re-read, so a `traycer login` that completed in another terminal
-    // while this install was downloading left the just-started host
-    // unprovisioned - despite perfectly good credentials being on disk by
-    // the time it came up.
+    // The regression: a signed-out pre-flight used to short-circuit before the re-read, so a `traycer login` that completed in another terminal while this install was downloading left the just-started host unprovisioned - despite perfectly good credentials being on disk by the time it came up.
     mocks.resolveHostAuthMock.mockResolvedValue(storedAuth());
     const outcome: HostCredentialProvisionOutcome = {
       kind: "active",
@@ -134,9 +111,8 @@ describe("maybeProvisionCredential", () => {
   });
 
   it("stays silent when the pre-flight was unauthenticated and credentials are still absent", async () => {
-    // Nothing changed across the install, so there is nothing new to say -
-    // the pre-flight already warned. In particular this must NOT claim
-    // `unauthorized`, which tells the operator their sign-in went bad.
+    // Nothing changed across the install, so there is nothing new to say - the pre-flight already warned.
+    // In particular this must NOT claim `unauthorized`, which tells the operator their sign-in went bad.
     mocks.resolveHostAuthMock.mockResolvedValue(null);
 
     const result = await maybeProvisionCredential(
@@ -150,10 +126,8 @@ describe("maybeProvisionCredential", () => {
   });
 
   it("reports unauthorized when a signed-in pre-flight's credentials disappeared", async () => {
-    // A concurrent sign-out (or a corrupted file) between the pre-flight and
-    // the probe. Returning null would print a summary claiming a signed-in
-    // user with no provisioning attempt at all, while the just-started host
-    // cannot serve work.
+    // A concurrent sign-out (or a corrupted file) between the pre-flight and the probe.
+    // Returning null would print a summary claiming a signed-in user with no provisioning attempt at all, while the just-started host cannot serve work.
     mocks.resolveHostAuthMock.mockResolvedValue(null);
 
     const result = await maybeProvisionCredential(

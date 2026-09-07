@@ -8,23 +8,7 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
-/**
- * The in-Epic new-conversation modal's placement (user ruling 2026-08-18,
- * Codex #1243 T-48): the landing composer's chip pattern, resolved per EPIC
- * with a memory tier -
- *
- *     override ?? pin(epic) ?? Epic session's host ?? effective
- *
- * where `pin(epic)` is that Epic's "last created chat's host" (written by the
- * picker, re-recorded by every create). These pin the TIERS and the KEY: which
- * host answers in each state, that the per-Epic pin is per Epic (two Epics,
- * two memories; the landing composer's window pin untouched), and that only
- * the `effective` tier reports itself as following a derivation move.
- *
- * Same harness as `composer-placement-freeze.test.tsx`: the pin store and the
- * authority store are real; only the client resolver, the effective pointer
- * and the directory are stubbed at their hook seams.
- */
+/** override ?? pin(epic) ?? session host ?? effective. Per-epic pin is per epic, not the landing window pin. */
 
 vi.mock("@/lib/browser-tab-identity", () => ({
   browserTabId: () => "tab-test",
@@ -115,14 +99,7 @@ describe("useEpicConversationPlacement", () => {
     expect(result.current.submitTarget.client?.getActiveHostId()).toBe(
       "host-session",
     );
-    // The READ client too - not only the frozen submit client. The read
-    // client used to be keyed on `pin.honoredSelection`, which is null on the
-    // default tier as well as on the effective one, so every read (folder
-    // picker, harness/model catalog, workspace seed) went to the app-wide
-    // host while the chip, the staging key and the create all named the
-    // session host: a chat created on one machine carrying folders that exist
-    // only on the other. Under this file's mock the app-wide client answers
-    // "app-wide-mutable", which is what this arm rules out.
+    // The READ client too - not only the frozen submit client.
     expect(result.current.target.client?.getActiveHostId()).toBe(
       "host-session",
     );
@@ -166,10 +143,7 @@ describe("useEpicConversationPlacement", () => {
   });
 
   it("keys the memory per EPIC: another Epic's pin, and the window's landing pin, are not this Epic's", () => {
-    // The mechanism the whole change turns on. The modal used to share the
-    // landing composer's WINDOW-keyed pin, so a pick in one Epic moved every
-    // other Epic's default and the landing chip with it. Two Epics, one
-    // window: two memories, and the landing pin untouched by both.
+    // The mechanism the whole change turns on.
     act(() => {
       useSurfaceHostSelectionStore
         .getState()
@@ -197,7 +171,6 @@ describe("useEpicConversationPlacement", () => {
     // not the landing pin.
     expect(epicA.current.target.resolvedHostId).toBe("host-session");
     expect(epicA.current.pin.isPinned).toBe(false);
-    // Epic B opens on its own memory.
     expect(epicB.current.target.resolvedHostId).toBe("host-b-memory");
 
     // Writing A's memory through the placement's own pin lands under A's key
@@ -274,10 +247,7 @@ describe("useEpicConversationPlacement", () => {
   });
 
   it("a DEAD session host falls through to effective, and then FOLLOWS it", () => {
-    // Death is judged for the default tier on the pin's own rule
-    // (`isSurfacePinDeposed`), so "cannot serve" means one thing across all
-    // three tiers - and once effective is the answer, the modal is a
-    // following surface (G4 applies).
+    // Death is judged for the default tier on the pin's own rule (`isSurfacePinDeposed`), so "cannot serve" means one thing across all three tiers - and once effective is the answer, the modal is a following surface (G4 applies).
     act(() => {
       publishFleet(
         [

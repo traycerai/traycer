@@ -1,20 +1,6 @@
 /**
- * Projected slices owned by `OpenEpicStore` and produced by
- * `epic-projector.ts` from the per-Epic Y.Doc.
- *
- * Identity contract:
- *   - Every entry under a `byId` table only changes its `===` reference
- *     when one of its projected fields changes. Rewriting an unrelated
- *     entry leaves siblings untouched, so `useEpicStore(s => s.x.byId[id])`
- *     skips the render when nothing changed for that id.
- *   - `allIds` / `idsByChatId` / `childrenByParent[parent]` arrays only
- *     change reference when set membership or order changes. Title /
- *     status / content edits that don't move a node leave the array
- *     reference identical.
- *
- * The projector is the only writer into these slices. Components MUST
- * NOT reach into the Y.Doc directly except through
- * `OpenEpicState.getArtifactFragment(id)` - the editor escape hatch.
+ * Projected slices owned by `OpenEpicStore` and produced by `epic-projector.ts` from the per-Epic
+ * Y.Doc. Identity contract:
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type {
@@ -34,12 +20,8 @@ export interface ArtifactProjection {
   readonly kind: EpicArtifactKind;
   readonly title: string;
   /**
-   * On-disk folder name for this artifact's `index.md` (its own directory
-   * under `epics/<epicId>/artifacts/...`, distinct from `title`, which the
-   * user can rename freely afterward). Empty string for a legacy/malformed
-   * entry that predates the field. Root-to-leaf folder names walked via
-   * `parentId` reconstruct an artifact-shaped path for a relative markdown
-   * link authored inside this artifact - see `artifact-folder-chain.ts`.
+   * On-disk folder name for this artifact's `index.md` (its own directory under
+   * `epics/<epicId>/artifacts/...`, distinct from `title`, which the user can rename freely
    */
   readonly folderName: string;
   readonly parentId: string | null;
@@ -49,10 +31,8 @@ export interface ArtifactProjection {
   /** Status numeric code (0=Todo, 1=InProgress, 2=Done). Null for spec/review. */
   readonly status: number | null;
   /**
-   * True for artifacts the user created by hand (host `epic.createArtifact`
-   * RPC or a file authored directly on disk), false for agent-created ones.
-   * Gates hand-authoring affordances like the doc-title → artifact-title
-   * follow in the collab editor.
+   * True for artifacts the user created by hand (host `epic.createArtifact` RPC or a file authored
+   * directly on disk), false for agent-created ones.
    */
   readonly createdManually: boolean;
 }
@@ -62,13 +42,7 @@ export interface ArtifactsSlice {
   readonly allIds: readonly string[];
 }
 
-/**
- * A deleted-artifact tombstone, projected from `epic.deletedArtifacts`. The
- * host writes one of these when an artifact is removed; it retains the kind,
- * title, and (for ticket/story) last status so the chat's `artifact_operation`
- * delete card can render a strikethrough label + deletion info after the live
- * artifact entry is gone. `deletedAt` is the ISO timestamp the host stamped.
- */
+/** A deleted-artifact tombstone, projected from `epic.deletedArtifacts`. */
 export interface DeletedArtifactProjection {
   readonly id: string;
   readonly kind: EpicArtifactKind;
@@ -91,45 +65,15 @@ export interface ChatProjection {
   readonly updatedAt: number;
   readonly userId: string | null;
   /**
-   * Host hosting this chat. `null` for legacy chats that predate the
-   * field and for the optimistic overlay (where the active host is the
-   * implied host). Real projections carry the persisted `Chat.hostId`.
+   * Host hosting this chat. `null` for legacy chats that predate the field and for the optimistic
+   * overlay (where the active host is the implied host).
    */
   readonly hostId: string | null;
   readonly isTitleEditedByUser: boolean;
-  /**
-   * Whether the epic doc is this chat's authoritative HOME, and the gate every
-   * registry-plane mutation consults - the chat twin of
-   * {@link TuiAgentProjection.docResident}, with one member the terminal plane
-   * does not need.
-   *
-   * `null` is "the plane that delivered this row did not say", and it is
-   * REACHABLE rather than defensive: `host.chatRecords.subscribe` carries the
-   * BASE row, which has no `docResident`, and the host deliberately announces
-   * doc-homed chats on it - `ChatRegistryService.acquire` calls
-   * `hydrateLegacyDocSecondary(legacyDocChats, true)` so a chat-list stream
-   * that won the first acquire with no Y.Doc learns its baseline grew. So a
-   * delta-delivered row genuinely can be either, and the terminal plane's
-   * justification for stamping `false` ("a doc-resident agent has no registry
-   * row, so it can never produce a delta") does not hold here.
-   *
-   * `true` and `null` are both NOT-registry-addressable for write routing.
-   * `renameChat` / `reparentChat` / `setChatArchived` / `deleteChat` reach a
-   * writer that cannot address a record the store does not hold, so a guess in
-   * the `false` direction fails host-side on the WRITE - long after the row
-   * rendered fine. The `@1.1` poll states the home for every row and settles it
-   * within one refresh, and a create invalidates that query immediately, so the
-   * unknown window is one round trip rather than a poll interval.
-   */
   readonly docResident: boolean | null;
   /** Persisted run settings (harness/model/permission). `null` until set. */
   readonly settings: ChatRunSettings | null;
-  /**
-   * Host-backed archive flag (`epic.setChatArchived`). `null` = active. The
-   * sidebar applies the selected archive visibility to this timestamp. Records
-   * written before the field existed project as `null`, so pre-archive chats
-   * read as active.
-   */
+  /** Host-backed archive flag (`epic.setChatArchived`). `null` = active. */
   readonly archivedAt: number | null;
 }
 
@@ -139,26 +83,14 @@ export interface ChatsSlice {
 }
 
 /**
- * One chat record as the CLIENT holds it: the wire row plus the home the plane
- * that delivered it stated.
- *
- * A client type rather than a wire one, because the two delivery planes state
- * different amounts. `epic.listChatRecords@1.1` answers with
- * `ChatRecordSummaryV11`, whose `docResident` is authoritative for every row it
- * carries. `host.chatRecords.subscribe` answers with the BASE row and says
- * nothing about the home. Widening the field here is what lets one held row
- * type serve both without either plane having to fabricate the other's fact -
- * see {@link ChatProjection.docResident}.
+ * One chat record as the CLIENT holds it: the wire row plus the home the plane that delivered it
+ * stated.
  */
 export interface HeldChatRecordRow extends ChatRecordSummary {
   readonly docResident: boolean | null;
 }
 
-/**
- * Projected representation of an `epic.tuiAgents[id]` Y.Map entry.
- * Mirrors `TuiAgent` from the persistence registry but keeps the fields
- * the renderer needs to surface a tile + cascade them into the tree slice.
- */
+/** Projected representation of an `epic.tuiAgents[id]` Y.Map entry. */
 /**
  * The three planes a terminal-agent row can reach this renderer from, mirroring
  * `epic.listTuiAgents@1.2`'s `origin`. See {@link TuiAgentProjection.origin}.
@@ -167,41 +99,10 @@ export type TuiAgentProjectionOrigin = "registry" | "doc" | "cloud";
 
 export interface TuiAgentProjection {
   readonly id: string;
-  /**
-   * Whether this agent's parent pointer still lives in the epic Y.Doc rather
-   * than on the host's record plane - the routing fact `isDocOnlyTerminalAgent`
-   * needs, carried on the agent instead of inferred from which slice produced
-   * it.
-   *
-   * Inference used to be sound: the doc arm meant doc, the record arm meant
-   * registry. `epic.listTuiAgents@1.1` broke that by serving the doc-resident
-   * remainder AS records (an agent bound to an un-upgraded peer host), and
-   * `epic.subscribe@2` finishes the job by removing the doc arm entirely - at
-   * which point "which slice was it in" has no answer at all and every agent
-   * looks registry-backed. Routing one of these to `epic.reparentChat` names
-   * no registry chat and fails host-side.
-   */
   readonly docResident: boolean;
   /**
-   * WHICH PLANE this agent's row came from, and therefore how much of the
-   * projection below is real.
-   *
-   * `registry` and `doc` are LOCAL to the host serving this epic and carry the
-   * whole record. `cloud` is a read-only REPLICA of an agent bound to another
-   * of the user's machines, and the cloud metadata projection it came from has
-   * no resume metadata in it at all - so on a `cloud` row `workspaceFolders`
-   * is empty, `agentMode` is the launch default, and every launch override and
-   * `harnessSessionId` is null. Those are PLACEHOLDERS, not values.
-   *
-   * Read this before any of them. It is not a decoration on `docResident` - it
-   * answers a different question ("does this row have the fields") from the one
-   * `docResident` answers ("is this row addressable through the registry
-   * affordances"), which is why both are carried.
-   *
-   * The one thing it settles for good: a `cloud` row can never be cloned,
-   * forked or resumed onto this machine. There is no `harnessSessionId` to
-   * resume from and there never will be - which is also the no-double-driver
-   * property, one driver per provider CLI session, by construction.
+   * WHICH PLANE this agent's row came from, and therefore how much of the projection below is real.
+   * `registry` and `doc` are LOCAL to the host serving this epic and carry the whole record.
    */
   readonly origin: TuiAgentProjectionOrigin;
   readonly harnessId: TuiHarnessId | null;
@@ -217,15 +118,13 @@ export interface TuiAgentProjection {
   readonly reasoningEffort: string | null;
   readonly agentMode: AgentMode;
   /**
-   * Host-backed archive flag, the terminal-agent twin of
-   * {@link ChatProjection.archivedAt} - one `epic.setChatArchived` RPC keyed by
-   * id covers both record kinds, so the sidebar treats them identically.
+   * Host-backed archive flag, the terminal-agent twin of {@link ChatProjection.archivedAt} - one
+   * `epic.setChatArchived` RPC keyed by id covers both record kinds, so the sidebar treats them
    */
   readonly archivedAt: number | null;
   /**
-   * Which of the harness's logged-in profiles (subscriptions) this agent runs
-   * on. `null` = the ambient/host login, so agents persisted before profiles
-   * existed still project cleanly. See the multi-profile decision log.
+   * Which of the harness's logged-in profiles (subscriptions) this agent runs on. `null` = the
+   * ambient/host login, so agents persisted before profiles existed still project cleanly.
    */
   readonly profileId: string | null;
   /**
@@ -233,13 +132,7 @@ export interface TuiAgentProjection {
    * `null` for Codex until `thread/started` back-fills the saved-session id.
    */
   readonly harnessSessionId: string | null;
-  /**
-   * Raw durable per-agent CLI args override (source of truth for relaunch).
-   * `null` for legacy/absent records and untouched Settings-prefilled values
-   * ("resolve provider Settings default"); `""` is an explicit "no extra
-   * args" override; a non-empty string is a durable override. Distinct from
-   * the computed `terminalShellArgs` below, which is cached launch output.
-   */
+  /** Raw durable per-agent CLI args override (source of truth for relaunch). */
   readonly terminalAgentArgs: string | null;
   readonly terminalShellCommand: string | null;
   readonly terminalShellArgs: readonly string[] | null;
@@ -254,30 +147,7 @@ export interface AgentRolesSlice {
   readonly byAgentId: Readonly<Record<string, readonly RoleClaim[]>>;
 }
 
-/**
- * Comment threads as the records lane serves them, grouped by artifact.
- *
- * The element type is `CommentThreadWire` - the SAME shape
- * `epic.listCommentThreads` returns - and that is a contract, not a
- * convenience: `epicCommentThreadRecordSchema` extends
- * `commentThreadWireSchema` verbatim precisely so the cold read and the push
- * cannot disagree about what a thread is. Consumers therefore need no second
- * shape, and the list RPC stays usable as the cold-read path beside this.
- *
- * `artifactId` and `revision` ride the WIRE row and are deliberately absent
- * here: the artifact id is the grouping key, and a revision is sync bookkeeping
- * that nothing rendering may read.
- *
- * ## Absence is not emptiness
- *
- * An artifact with no entry has had nothing SAID about it on this lane, which
- * is different from an artifact the lane has told us has zero threads. A
- * consumer that renders "no comments" off a missing key asserts something no
- * frame said - the same rule the freshness model applies one level up - so the
- * empty array is written explicitly whenever the lane reports a thread set, and
- * a surface that needs the distinction must read the plane's freshness rather
- * than the shape of this map.
- */
+/** Comment threads as the records lane serves them, grouped by artifact. */
 export interface CommentThreadsSlice {
   readonly byArtifactId: Readonly<Record<string, readonly CommentThreadWire[]>>;
 }
@@ -304,33 +174,12 @@ export interface EpicHeader {
 }
 
 /**
- * Whether an artifact's BODY is being served. Mirrored from the host's
- * artifact-room manager on `epic.subscribe@1.0`, and from `artifact.subscribe`'s
- * ready/unavailable pair on the lane arm. An artifact not present in this record
- * is implicitly `unavailable`.
+ * Whether an artifact's BODY is being served. Mirrored from the host's artifact-room manager on
+ * `epic.subscribe@1.0`, and from `artifact.subscribe`'s ready/unavailable pair on the lane arm.
  */
 export type EpicArtifactRoomAvailability = "ready" | "unavailable" | "retrying";
 
-/**
- * Availability keyed by ARTIFACT id, on both arms.
- *
- * It used to be keyed by artifact-ROOM id, which is the `@1` wire's own
- * addressing and nothing else's: a room hosts MANY artifact bodies (one
- * `artifactBodyFragmentName(artifactId)` fragment each), and `artifact.subscribe`
- * has no rooms at all - it addresses a body by artifact id under an authority
- * epoch. Publishing the wire's key forced every consumer to hold the
- * artifact→room mapping just to ask whether a body was renderable, and gave the
- * lane arm nothing to publish.
- *
- * The fan-out happens at PUBLISH, not at decode, and that placement is
- * load-bearing: a `@1` room reports `ready` INDEPENDENTLY of any snapshot (the
- * state `LeaseGrant`'s `"awaiting-seed"` arm exists for), so a room frame can
- * legitimately arrive before the snapshot that says which artifacts live in it.
- * Translating at the adapter would find no artifacts and drop the frame, and
- * nothing re-delivers it - the host emits availability on transition, not on
- * demand. Keeping the room-keyed value internally and deriving this map on every
- * publish means such a frame is simply retained until the mapping exists.
- */
+/** Availability keyed by ARTIFACT id, on both arms. */
 export interface ArtifactRoomsSlice {
   readonly stateByArtifactId: Readonly<
     Record<string, EpicArtifactRoomAvailability>
@@ -338,31 +187,20 @@ export interface ArtifactRoomsSlice {
 }
 
 /**
- * Single projected snapshot of the entire Epic Y.Doc. Returned by
- * `projectFullState` on attach and on every `onSnapshot` so the store
- * can apply it as one atomic `setState` (no per-slice flicker).
+ * Single projected snapshot of the entire Epic Y.Doc. Returned by `projectFullState` on attach and
+ * on every `onSnapshot` so the store can apply it as one atomic `setState` (no per-slice flicker).
  */
 export interface EpicProjectedSlices {
   readonly epic: EpicHeader;
   readonly artifacts: ArtifactsSlice;
   readonly deletedArtifacts: DeletedArtifactsSlice;
-  /**
-   * The Y.Doc's own chat entries, before the host's store-backed records are
-   * folded in. Not for components - it is the projector's INPUT state, kept
-   * separate so an incremental doc patch (including the upgrade sweep's
-   * DELETE of a proven-published entry) reconciles against the doc's history
-   * rather than against the union, which would let a doc removal take a live
-   * store-backed chat with it.
-   */
+  /** The Y.Doc's own chat entries, before the host's store-backed records are folded in. */
   readonly docChats: ChatsSlice;
   /** Doc entries unioned with the host's records. Components read THIS. */
   readonly chats: ChatsSlice;
   /**
-   * The Y.Doc's own terminal-agent entries, before the host's registry rows
-   * (`epic.listTuiAgents`) are folded in - the terminal-agent twin of
-   * {@link EpicProjectedSlices.docChats}, kept separate for the same reason: a
-   * doc removal must reconcile against the doc's own history rather than
-   * against the union, or it would take a live registry-backed agent with it.
+   * The Y.Doc's own terminal-agent entries, before the host's registry rows (`epic.listTuiAgents`)
+   * are folded in - the terminal-agent twin of {@link EpicProjectedSlices.docChats}, kept separate
    */
   readonly docTuiAgents: TerminalAgentsSlice;
   /** Doc entries unioned with the host's registry rows. Components read THIS. */
@@ -379,20 +217,13 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
   ),
 });
 
-/**
- * Starting value for the per-artifact-room host-dirty mirror. Empty means
- * "nothing known to be dirty", which is also the correct RESET value on every
- * re-subscribe: the host tracks what it has emitted per subscription, so a
- * fresh subscription re-emits `artifactRoomDirty` for whatever is still dirty
- * and never re-states what is clean.
- */
+/** Starting value for the per-artifact-room host-dirty mirror. */
 export const EMPTY_ARTIFACT_ROOM_DIRTY: Readonly<Record<string, boolean>> =
   Object.freeze({} as Record<string, boolean>);
 
 /**
- * The empty chat table, shared by the doc slice, the record slice and the union
- * so "nothing here" is one reference everywhere - a fresh empty object per
- * source would make every downstream `Object.is` check see a change.
+ * The empty chat table, shared by the doc slice, the record slice and the union so "nothing here"
+ * is one reference everywhere - a fresh empty object per source would make every downstream
  */
 export const EMPTY_CHATS_SLICE: ChatsSlice = Object.freeze({
   byId: Object.freeze({} as Record<string, ChatProjection>),
@@ -413,10 +244,8 @@ export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
 });
 
 /**
- * "Nothing said about any artifact's threads" - the pre-lane state, and the
- * state of every legacy connection, whose comment threads still come from the
- * poll. One shared reference so a session that never opens a comment surface
- * hands the same value to every subscriber.
+ * "Nothing said about any artifact's threads" - the pre-lane state, and the state of every legacy
+ * connection, whose comment threads still come from the poll.
  */
 export const EMPTY_COMMENT_THREADS_SLICE: CommentThreadsSlice = Object.freeze({
   byArtifactId: Object.freeze(

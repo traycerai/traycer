@@ -37,10 +37,7 @@ const mockVirtuosoState = vi.hoisted(() => ({
   captureConfiguration: vi.fn(),
   scrollIntoView: vi.fn(),
   transientUndefinedIndexes: new Set<number>(),
-  /**
-   * When true, scrollIntoView does not apply centerIndex / call `done` until
-   * `flushPendingScroll()` runs. Models a lagging virtual window for ARIA tests.
-   */
+  /** When true, scrollIntoView does not apply centerIndex / call `done` until `flushPendingScroll` runs. */
   delayedScroll: false,
   pendingScrollApply: null as null | (() => void),
   flushPendingScroll(): void {
@@ -117,9 +114,8 @@ vi.mock("react-virtuoso", async () => {
           const apply = (): void => {
             pendingDoneRef.current = location.done ?? null;
             setCenterIndex((prev) => {
-              // Same center: React bails out so layout-effect won't re-run.
-              // Fire done immediately — the target is already in the mounted
-              // window (Virtuoso's "immediate if no scroll" contract).
+              // Same center: React bails out so layout-effect won't re-run. Fire done immediately - the target is already in
+              // the mounted window (Virtuoso's "immediate if no scroll" contract).
               if (prev === location.index) {
                 const done = pendingDoneRef.current;
                 pendingDoneRef.current = null;
@@ -302,7 +298,7 @@ function renderFormWithSummary(
 
 async function selectSource(name: string): Promise<void> {
   await Promise.resolve();
-  // The source list is inline in the form (always rendered) — pick a row from it.
+  // The source list is inline in the form (always rendered) - pick a row from it.
   const listbox = screen.getByRole("listbox", {
     name: "Worktree source branch",
   });
@@ -1047,8 +1043,8 @@ describe("NewWorktreeForm — new-branch name", () => {
     const emitted: WorktreeFolderIntent[] = [];
     renderForm((intent) => emitted.push(intent), null);
     const search = screen.getByRole("combobox", { name: "Search branches" });
-    // Default active = the selected current-branch fork (development, index 0);
-    // ArrowDown moves to chore/cleanup, Enter selects it WITHOUT leaving the box.
+    // Default active = the selected current-branch fork (development, index 0); ArrowDown moves to chore/cleanup,
+    // Enter selects it without leaving the box.
     fireEvent.keyDown(search, { key: "ArrowDown" });
     fireEvent.keyDown(search, { key: "Enter" });
     flushAutosave();
@@ -1098,9 +1094,6 @@ describe("NewWorktreeForm — new-branch name", () => {
     const option = within(listbox).getByRole("option", {
       name: /chore\/cleanup/,
     });
-    // Browser focuses the option on mouse activation; if Virtuoso remounted on
-    // selection the focused node would unmount and focus would fall to body,
-    // which used to flush the draft before the 500ms debounce.
     option.focus();
     fireEvent.click(option);
 

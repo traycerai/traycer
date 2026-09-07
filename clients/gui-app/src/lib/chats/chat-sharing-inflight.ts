@@ -1,15 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 
-/**
- * One in-flight sharing write per (task, viewer).
- *
- * The host coordinator queues by method + full params, so
- * `epic.setChatSharingDefault` and `epic.setCloudChatVisibility` never share a
- * queue — a paused share-all can resume after a later make-private and
- * re-expose the chat. This gate is the actual ordering: a second request is
- * refused, not queued, so the last user action cannot be overtaken.
- */
+/** One in-flight sharing write per (task, viewer). */
 
 const pendingScopes = new Set<string>();
 const listeners = new Set<() => void>();
@@ -71,9 +63,8 @@ export function resetChatSharingInFlightForTests(): void {
 }
 
 /**
- * Whether any sharing write (master toggle or per-chat) is in flight for
- * this task and the signed-in viewer. Snapshot is a boolean so a
- * `useSyncExternalStore` subscription cannot loop.
+ * Whether any sharing write (master toggle or per-chat) is in flight for this task and the signed-in viewer.
+ * Snapshot is a boolean so a `useSyncExternalStore` subscription cannot loop.
  */
 export function useChatSharingInFlight(taskId: string): boolean {
   const viewerUserId = useCloudChatViewerId();

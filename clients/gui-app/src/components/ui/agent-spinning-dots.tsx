@@ -586,9 +586,8 @@ const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
     intervalMs: 60,
     widthCh: 4,
   },
-  // Not a spinner: a cursor-style blink for the "blocked, awaiting your
-  // approval" state. Motion absence (vs the busy braille spin) + the terminal
-  // cursor idiom reads as "your move" rather than "working".
+  // Not a spinner: a cursor-style blink for the "blocked, awaiting your approval" state. Motion absence (vs the
+  // busy braille spin) + the terminal cursor idiom reads as "your move" rather than "working".
   waiting: {
     frames: ["⠶"],
     intervalMs: 530,
@@ -611,7 +610,6 @@ export interface AgentSpinningDotsProps {
 
 const WORKING_DOTS_CYCLE_MS = 1400;
 const WORKING_DOTS_STAGGER_MS = 200;
-/** Fraction of the cycle spent rising and falling; the rest is rest. */
 const WORKING_DOTS_ACTIVE_FRACTION = 0.8;
 const WORKING_DOTS_REST_OPACITY = 0.3;
 
@@ -619,7 +617,6 @@ function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) * (-2 * t + 2)) / 2;
 }
 
-/** 0 at rest, 1 at the top of the bounce, eased, per dot. */
 function dotLift(elapsedMs: number, index: number): number {
   const shifted = elapsedMs - index * WORKING_DOTS_STAGGER_MS;
   const phase = (((shifted / WORKING_DOTS_CYCLE_MS) % 1) + 1) % 1;
@@ -629,15 +626,8 @@ function dotLift(elapsedMs: number, index: number): number {
   return easeInOut(linear);
 }
 
-/**
- * The `typing` variant: three steadily, sequentially pulsing dots. Private
- * to this module - `AgentSpinningDots` is the only spinner seam, so cadence,
- * reduced-motion and pane-visibility behaviour cannot diverge between
- * spinner APIs. Static layout comes from the `.working-dots` rules in
- * index.css; the bounce is written as inline styles from the shared status
- * animation clock (see `status-animation-clock.ts` for why it is not a CSS
- * animation).
- */
+/** Private to this module - `AgentSpinningDots` is the only spinner seam, so cadence, reduced-motion and
+ * pane-visibility behaviour cannot diverge between spinner APIs. */
 function WorkingDots(props: {
   readonly className: string | undefined;
   readonly testId: string | undefined;
@@ -684,27 +674,8 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   const presetFrames = preset?.frames ?? null;
   const presetIntervalMs = preset?.intervalMs ?? null;
 
-  // Advance the frames imperatively instead of via React state. The old
-  // `useState(frameIndex)` re-rendered this component every `intervalMs` (up to
-  // 12.5Hz per spinner); on a busy loading surface like the providers settings
-  // panel - which mounts several spinners at once - that flickered the whole
-  // subtree on every frame. The span renders NO JSX children, so a parent
-  // re-render never resets the glyph; the layout effect (runs pre-paint, so
-  // the first frame shows immediately) is the sole owner of the text.
-  //
-  // Two details are load-bearing for the renderer's memory, not just its CPU:
-  //
-  // - The glyph is written to ONE text node's `data`, never via `textContent`.
-  //   `textContent =` removes the old text node and inserts a new one, and a
-  //   child-list mutation inside a `:has()` subject (the tab strip's
-  //   `.group/tab:has(:focus-visible)`) invalidates the whole tab's style,
-  //   destroys and recreates the spinner's layout object, and wakes every
-  //   `childList` MutationObserver on `document.body`. A character-data
-  //   mutation does none of that: one text run relayouts.
-  // - Every spinner advances from the shared status animation clock, so N
-  //   spinners on screen are one timer task and one style/layout/paint pass
-  //   per tick, not N. Presets keep their own cadence, quantized to the
-  //   clock's 40 ms tick.
+  // The span renders NO JSX children, so a parent re-render never resets the glyph; the layout effect (runs
+  // pre-paint, so the first frame shows immediately) is the sole owner of the text.
   const paneVisible = usePaneVisible();
   useLayoutEffect(() => {
     // The `typing` variant renders `WorkingDots` below, which has no frames.
@@ -735,10 +706,7 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
       data-testid={props.testId}
       aria-hidden="true"
       className={cn(
-        // `font-normal` is load-bearing on macOS: the mono stack has no braille
-        // coverage, and an inherited 500 (active tab / Button `font-medium`)
-        // makes Chromium's fallback pick the hollow-grid "Apple Braille
-        // Outline" faces instead of the filled-dot regular face.
+        // `font-normal` is load-bearing on macOS: the mono stack has no braille coverage.
         "inline-flex h-3.5 min-w-3.5 shrink-0 items-center justify-center whitespace-pre font-mono text-code font-normal leading-none tabular-nums",
         props.className,
       )}

@@ -24,11 +24,7 @@ import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useCanCopyImages } from "@/hooks/images/use-can-copy-images";
 
 export interface UseUsageImageExportParams {
-  /**
-   * Resolves the region to rasterise at click time - `null` while no
-   * loaded body is mounted (callers also disable the buttons then, so a
-   * `null` here is a race, not a state).
-   */
+  /** Resolves the region to rasterise at click time - `null` while no loaded body is mounted (callers also disable the buttons then, so a `null` here is a race, not a state). */
   readonly getExportNode: () => HTMLElement | null;
   readonly fileName: string;
   /** Heading drawn above the captured region ("Usage"). */
@@ -42,15 +38,7 @@ export interface UseUsageImageExportParams {
   readonly analyticsSource: AnalyticsUsageImageExportSource;
 }
 
-/**
- * Which export a run is, and everything that leg needs.
- *
- * The copy leg carries an ALREADY RUNNING promise rather than the node to
- * capture: the clipboard write has to be issued inside the click's user
- * activation, and a `mutationFn` body can run a tick later. The share and
- * download legs have no such constraint, so they hand over the node and
- * capture inside the mutation.
- */
+/** The copy leg carries an ALREADY RUNNING promise rather than the node to capture: the clipboard write has to be issued inside the click's user activation, and a `mutationFn` body can run a tick later. */
 export type UsageImageExportInput =
   | { readonly action: "copy"; readonly started: Promise<void> }
   | { readonly action: "share"; readonly node: HTMLElement }
@@ -59,12 +47,7 @@ export type UsageImageExportInput =
 /** Which export control a run belongs to, for the per-button spinner. */
 export type UsageImageExportAction = UsageImageExportInput["action"];
 
-/**
- * The saved file on a completed download or share, `null` on a copy (nothing
- * is saved) and on a run the user cancelled out of the save picker or share
- * sheet. Callers discriminate on the VARIABLES, never on this - every no-file
- * case is the same `null`.
- */
+/** Callers discriminate on the VARIABLES, never on this - every no-file case is the same `null`. */
 export type UsageImageExportMutation = UseMutationResult<
   SavedFile | null,
   Error,
@@ -73,19 +56,9 @@ export type UsageImageExportMutation = UseMutationResult<
 
 export interface UseUsageImageExportResult {
   readonly mutation: UsageImageExportMutation;
-  /**
-   * Which control's export is in flight, or `null` when none is. Derived here
-   * rather than at each surface: one export runs at a time, so this is also
-   * "an export is running", and the two facts must not be read differently by
-   * two surfaces.
-   */
+  /** Derived here rather than at each surface: one export runs at a time, so this is also "an export is running", and the two facts must not be read differently by two surfaces. */
   readonly pendingAction: UsageImageExportAction | null;
-  /**
-   * `null` where the shell cannot put an image on the system clipboard, in
-   * which case the share sheet is where a user copies one (see
-   * {@link useUsageImageExport}). Independent of {@link shareImage}: a shell
-   * can offer both, one, or neither.
-   */
+  /** `null` where the shell cannot put an image on the system clipboard, in which case the share sheet is where a user copies one (see {@link useUsageImageExport}). */
   readonly copyImage: (() => void) | null;
   /** `null` where the shell owns no OS share surface to hand the image to. */
   readonly shareImage: (() => void) | null;
@@ -93,35 +66,7 @@ export interface UseUsageImageExportResult {
   readonly downloadImage: (() => void) | null;
 }
 
-/**
- * The export controls for a usage surface: rasterise the surface's summary
- * region (headline, tiles, trend chart) to a PNG, then hand it to the
- * clipboard, the OS share sheet, or the device's file storage. Every leg
- * reuses the app-wide runtime-aware plumbing - `copyImageBlobPromiseToClipboard`
- * falls back to the desktop nativeImage bridge, `saveBlobToDisk` and
- * `downloadBlobToDevice` to whichever routes this shell owns - so this hook
- * only owns capture, which controls exist, and the toasts.
- *
- * WHICH CONTROLS EXIST is decided here, once, off shell capability rather than
- * per surface, so no usage surface can drift into a different set:
- *
- * - A shell with a chooser-free download (`IFileSaveHost.downloadFile`) is one
- *   whose `saveFile` goes through an OS chooser instead - the installed mobile
- *   app, whose sheet hands the file to another app. There, share and download
- *   are genuinely two different acts and both are offered.
- * - Copy is offered wherever the shell can actually reach the system clipboard
- *   with an image (`IRunnerHost.canCopyImages`), which is everywhere except
- *   Android's WebView. That one resolves the write having written nothing, so
- *   the button would report a success the clipboard never received - worse
- *   than no button. The two questions are INDEPENDENT: iOS answers yes to both
- *   and offers all three controls, and the share sheet's own Copy action is
- *   the fallback where it answers no.
- *
- * ONE mutation carries every leg, discriminated by its variables: a capture
- * is an expensive full-region rasterisation, so two of them must never be in
- * flight at once. A single pending flag is what lets every export button
- * disable while any export runs.
- */
+/** One mutation for every leg so two captures cannot run at once. */
 export function useUsageImageExport(
   params: UseUsageImageExportParams,
 ): UseUsageImageExportResult {

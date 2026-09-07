@@ -2,13 +2,6 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { SwitcherRenameDialog } from "../switcher-rename-dialog";
 
-/**
- * Geometry contract for the mobile switcher's rename dialog: the same three
- * regions every dialog holding a text field uses. Return still saves here (the
- * form's `onSubmit`), so Save being reachable is a second route rather than the
- * only one - which is exactly why the shape has to be asserted rather than
- * assumed to have been noticed.
- */
 describe("<SwitcherRenameDialog /> height cap and footer", () => {
   afterEach(cleanup);
 

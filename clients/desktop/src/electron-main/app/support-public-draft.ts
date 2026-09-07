@@ -13,13 +13,6 @@ import type {
 } from "../../ipc-contracts/window-types";
 import { scrubSupportText } from "./support-scrubber";
 
-/**
- * Pure field composition + title derivation behind `support:buildPublicDraft`
- * (ticket 09 / T6, extended by ticket 07's type-to-template routing). Kept
- * separate from `support.ts` so this - the actual public-text mechanism - is
- * testable without mocking Electron/Sentry: the service class only resolves
- * frozen evidence and hands this module plain data.
- */
 
 const COMPONENT_DESKTOP_APP = "Desktop app";
 const GENERIC_FALLBACK_TITLE = "Traycer desktop issue";
@@ -30,19 +23,6 @@ const TITLE_MAX_CHARS = 80;
 const PLACEHOLDER_NO_REPORT = "Filed from the in-app reporter.";
 
 const ISSUE_FORM_MAX_URL_LENGTH = 8 * 1024;
-// `issue-reporter.ts` (clients/shared, Vite-bundled renderer code) assembles
-// the real URL as `${TRAYCER_OSS_REPO}/issues/new?template=<name>.yml&
-// title=...&...`. This module runs in Electron main, which has no access to
-// `VITE_TRAYCER_OSS_REPO` (a Vite-only `import.meta.env` binding) and so
-// cannot build or measure the real, final URL - only `issue-reporter.ts` can.
-// Rather than duplicate that env plumbing into the main-process build config
-// (`config.ts`) for one constant, this reserves conservative headroom for
-// everything it cannot see (the repo origin, `/issues/new?`, and the
-// `template=` param): that total runs under 200 bytes today, so 1 KiB of
-// margin is generous. As long as that holds, fitting fields to
-// `ISSUE_FORM_MAX_URL_LENGTH - ISSUE_FORM_RESERVED_OVERHEAD_BYTES` guarantees
-// the real, fully-assembled URL `issue-reporter.ts` produces never exceeds
-// the 8 KiB budget - `issue-reporter.ts` itself does no truncation of its own.
 const ISSUE_FORM_RESERVED_OVERHEAD_BYTES = 1024;
 const ISSUE_FORM_FIELD_BUDGET =
   ISSUE_FORM_MAX_URL_LENGTH - ISSUE_FORM_RESERVED_OVERHEAD_BYTES;
@@ -73,16 +53,8 @@ export interface BuildPublicDraftInput {
   // public draft; this just drives the "N screenshot(s) attached to the
   // private report" line below.
   readonly imageCount: number;
-  // What (if anything) the private channel actually did with this draft -
-  // controls whether the report-ID reference, the repro/proposal
-  // placeholder, and the screenshot-count line may honestly point at a
-  // private report at all. See `SupportPrivateOutcome`.
   readonly privateOutcome: SupportPrivateOutcome;
-  // The user's as-typed preview-title edit, when re-invoking the builder to
-  // open the GitHub draft (not the initial preview fetch, where this is
-  // null and the title is derived normally). Always re-scrubbed and re-fit
-  // through the same budget pipeline as a derived title - `issue-reporter.ts`
-  // is assembly-only and must never see raw, unbounded user text.
+  // Always re-scrubbed and re-fit through the same budget pipeline as a derived title - `issue-reporter.ts` is assembly-only and must never see raw, unbounded user text.
   readonly overrideTitle: string | null;
 }
 
@@ -215,18 +187,7 @@ function composeEnvironmentSummary(input: {
   return scrubSupportText(parts.join(" · "));
 }
 
-// The richer publish body (tech-plan T4): the user's narrative, a sanitized
-// environment summary, frequency (if given), the support report id, and
-// (ticket 08) whether screenshots were attached - folded into whichever
-// template field carries the narrative (what-happened for bug, problem for
-// idea, details for other), since GitHub issue forms take one text box per
-// field, not a separate box per line here.
-//
-// Every reference to the report id or an attachment is honest about
-// `privateOutcome`: "none" means nothing was ever uploaded (no-DSN, or a
-// definite `failed` submit) - there is no private report to point readers
-// at, so the report-ID line and the screenshot-count line are both omitted
-// entirely rather than pointing at an id nothing was ever filed under.
+// Every reference to the report id or an attachment is honest about `privateOutcome`: "none" means nothing was ever uploaded (no-DSN, or a definite `failed` submit).
 function composeReportBody(input: {
   readonly narrative: string;
   readonly environmentSummary: string;
@@ -246,10 +207,7 @@ function composeReportBody(input: {
   const metaLine = [frequencyLine, reportLine]
     .filter((line): line is string => line !== null)
     .join(" · ");
-  // Never "N screenshots attached" bare - a public reader must not learn
-  // image content exists without also learning where it actually lives
-  // (never here, never the GitHub URL - only the private report, and only
-  // when a private report actually exists to hold them).
+  // Never "N screenshots attached" bare - a public reader must not learn image content exists without also learning where it actually lives (never here, never the GitHub URL.
   const attachmentLine =
     input.privateOutcome === "none"
       ? null
@@ -265,10 +223,7 @@ function composeReportBody(input: {
     .join("\n\n");
 }
 
-// "rpt_x" when delivered, "rpt_x (upload unconfirmed)" when the transport
-// never confirmed - honest about what state the reader would actually find
-// if they went looking, never a bare id that implies certainty this module
-// does not have.
+// "rpt_x" when delivered, "rpt_x (upload unconfirmed)" when the transport never confirmed.
 function reportReferenceText(
   reportId: string,
   privateOutcome: "delivered" | "unconfirmed",
@@ -284,14 +239,6 @@ function attachmentLineFor(imageCount: number): string | null {
   return `${imageCount} ${noun} attached to the private report.`;
 }
 
-// Shared shape for a required template field this ticket has no direct UI
-// capture for (bug's `repro`, idea's `proposal`): points at the private
-// report rather than silently leaving the field's own required validation to
-// block the organic-filer flow it also serves - but only when a private
-// report actually exists to point at (`privateOutcome !== "none"`); the
-// no-DSN and definite-failure routes fall back to the generic placeholder
-// even when a `reportId` happens to be known (frozen evidence resolved but
-// nothing was ever uploaded under it).
 function composePlaceholderField(
   whatWasNotCaptured: string,
   reportId: string | null,
@@ -303,16 +250,6 @@ function composePlaceholderField(
   return PLACEHOLDER_NO_REPORT;
 }
 
-/**
- * `overrideTitle` is the user's as-typed preview-title edit, re-submitted
- * when they click "Open GitHub draft" - it must go through the exact same
- * scrub-and-cap treatment as a derived title (`truncatedTitleText`) rather
- * than riding into `fitFieldsToUrlBudget` raw, or a path/token typed into the
- * preview would reach the URL verbatim and unbounded (`issue-reporter.ts` is
- * assembly-only by design and does no scrubbing of its own). An override that
- * scrubs down to nothing (the user cleared the field) falls back to the
- * generic title rather than shipping an empty one.
- */
 function resolveTitle(
   overrideTitle: string | null,
   intent: string,
@@ -323,15 +260,7 @@ function resolveTitle(
   return scrubbed !== "" ? scrubbed : GENERIC_FALLBACK_TITLE;
 }
 
-/**
- * "Chat error"-style bare category titles must be impossible (tech-plan T6):
- * whenever an error envelope exists, the result always leads with the
- * failing operation and/or a stable symptom (an error code, or a short
- * scrubbed slice of the message) ahead of the user's own intent text - never
- * category-only. With no cause at all (manual reports have no error envelope
- * to derive from), the user's own words (the intent question) are the title;
- * that is the honest signal there, not a defect this guardrail covers.
- */
+/** "Chat error"-style bare category titles must be impossible (tech-plan T6): whenever an error envelope exists, the result always leads with the failing operation and/or a stable. */
 function deriveTitle(
   intent: string,
   cause: SupportPrivateDiagnosticsCause | null | undefined,
@@ -384,14 +313,6 @@ function truncatedTitleText(value: string): string {
     : scrubbed;
 }
 
-// Binary-searches each shrinkable field (in the given, largest/most-likely-
-// oversized-first order, "title" included as just another key) down to the
-// longest prefix whose truncated-plus-marker form keeps the whole encoded
-// param set within budget, measuring the actual percent-encoded length each
-// step rather than assuming an encoding-expansion ratio. Operates on a plain
-// string-keyed bag - not a template's concrete field interface - so
-// bug/idea/other's differently-shaped field records share one implementation;
-// each call site reconstructs its own typed result from the returned bag.
 function fitFieldsToUrlBudget(
   fields: Readonly<Record<string, string>>,
   shrinkOrder: ReadonlyArray<string>,

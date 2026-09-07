@@ -33,12 +33,8 @@ interface EpicsFilterPopoverProps {
   readonly search: HistorySearchState;
   readonly onSearchChange: (patch: HistorySearchPatch) => void;
   readonly facets: HistoryFacets | undefined;
-  /**
-   * `false` when the serving host negotiated `epic.listTasks` below @1.3 and
-   * would silently discard a host filter. The section still renders any
-   * ALREADY-selected host so a deep link can be undone, but offers no new
-   * ones - an affordance that cannot do what it says is worse than none.
-   */
+  /** `false` when the serving host negotiated `epic.listTasks` below @1.3 and would silently discard a host
+   * filter. */
   readonly chatHostFilterSupported: boolean;
 }
 
@@ -222,9 +218,8 @@ function ChatHostFilterSection(props: {
   const counts = new Map(
     props.facets?.chatHosts?.map((facet) => [facet.hostId, facet.count]) ?? [],
   );
-  // A host the peer cannot filter by is not offered, so an unsupported peer
-  // contributes no options and only an already-selected host survives - see
-  // `buildChatHostOptions`.
+  // A host the peer cannot filter by is not offered, so an unsupported peer contributes no options and only an
+  // already-selected host survives - see `buildChatHostOptions`.
   const options = buildChatHostOptions(
     props.supported
       ? (props.facets?.chatHosts?.map((facet) => facet.hostId) ?? [])
@@ -377,20 +372,7 @@ function withToggledWorkspace(
     : [...values, value];
 }
 
-/**
- * The host rows, ordered by display name.
- *
- * The facet is the source of WHICH hosts to offer - only hosts that actually
- * own chats in the caller's tasks - and the directory supplies the name. The
- * two sets deliberately do not have to agree: a host the directory no longer
- * knows (deregistered, or another machine of the user's that this one has
- * never seen) still owns chats in past tasks, so it stays selectable under its
- * raw id rather than vanishing from a filter that would still match rows.
- *
- * Selected ids are unioned in for the same reason a repo/workspace selection
- * is: a filter narrow enough to zero out its own facet must still render its
- * checkbox, or it cannot be unchecked.
- */
+/** The two sets deliberately do not have to agree. */
 function buildChatHostOptions(
   facetHostIds: ReadonlyArray<string>,
   selectedHostIds: ReadonlyArray<string>,

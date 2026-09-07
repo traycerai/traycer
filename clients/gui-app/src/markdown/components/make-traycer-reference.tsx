@@ -10,19 +10,7 @@ interface TraycerReferenceProps {
 }
 
 /**
- * Builds a legacy `<traycer-*>` reference component. The four reference tags
- * (`spec` / `ticket` / `chat` / `epic`) are byte-identical apart from the icon,
- * the embedded node-id attribute, and the `refKind`, so they share one
- * config-driven body.
- *
- * - `idAttr` is the `data-*-id` attribute holding the embedded node id, or
- *   `null` for `<traycer-epic>`, which references no node.
- * - `requiresNode` mirrors the open hook: `true` for node refs (a missing id
- *   degrades to plain text), `false` for the epic ref.
- *
- * Every component renders a clickable chip that opens by its embedded id
- * (render-time only - no migration); without a resolvable id / epic context the
- * chip degrades to the plain label text.
+ * Factory for legacy `<traycer-*>` chips. Missing id / epic context degrades to plain text.
  */
 export function makeTraycerReference(config: {
   readonly icon: ReactNode;

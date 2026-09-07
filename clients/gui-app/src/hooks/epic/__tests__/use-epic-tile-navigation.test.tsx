@@ -1,10 +1,4 @@
-/**
- * `openTile` is the wiring, not the policy: the resolver owns placement
- * (`resolve-tile-open.test.ts`) and the executor owns dispatch
- * (`execute-tile-open.test.ts`). What this suite pins is that the hook feeds
- * the RIGHT inputs - the target tab's canvas, resolved from either target
- * shape - and commits through the nested-focus boundary.
- */
+/** `openTile` is the wiring, not the policy: the resolver owns placement (`resolve-tile-open.test.ts`) and the executor owns dispatch (`execute-tile-open.test.ts`). */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";

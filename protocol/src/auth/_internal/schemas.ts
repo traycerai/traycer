@@ -1,28 +1,7 @@
 import { z } from "zod";
 
 /**
- * Private Zod values for the auth / session / MCP-server records and
- * their non-record extension shapes.
- *
- * These schemas are the contract authority. Types for the records they
- * define are derived in `protocol/auth/registry.ts` via `RecordValue<>`,
- * so the runtime check and the compile-time shape stay in lock-step
- * automatically - there is no plain TS duplicate that could drift.
- *
- * Non-record extension shapes (e.g. `traycerUserSubscriptionSchema`)
- * compose against the registered base schemas using `.extend(...)`, so
- * the inferred TypeScript shape of any record that embeds them lines up
- * with the public extension types in `protocol/auth/user.ts` by
- * construction - no `satisfies` annotation needed.
- *
- * Only `protocol/auth/registry.ts` is allowed to import from this
- * module. Every other consumer reaches a record through
- * `getRecordSchema(authRecordRegistry, "<record-name>")` and reads
- * record types from the registry.
- *
- * Date fields use `z.coerce.date()` so wire JSON (ISO strings) and
- * native `Date` instances both validate; the inferred TypeScript type
- * remains `Date`.
+ * Private Zod values. Only `protocol/auth/registry.ts` may import this module. Date fields use `z.coerce.date()`.
  */
 
 // ---- Enums -------------------------------------------------------------- //
@@ -172,11 +151,7 @@ export const authenticatedUserBaseSchema = z.object({
 // ---- Authenticated-user response records ------------------------------- //
 
 export const authenticatedUserSchema = authenticatedUserBaseSchema.extend({
-  /**
-   * Verified device identity for a host-audience bearer. User-audience and
-   * legacy bearers resolve to null/absence. Data-plane writers that require
-   * device ownership bind their request hostId to this claim.
-   */
+  /** Verified device identity for a host-audience bearer. */
   hostId: z.string().nullable().optional(),
   teamSubscriptions: z.array(traycerTeamSubscriptionSchema),
 });
@@ -193,9 +168,7 @@ export const legacyAuthenticatedUserSchema = authenticatedUserBaseSchema.extend(
 
 // ---- HTTP response envelopes (token / auth) ---------------------------- //
 
-// Existing cloud-ui/extension auth routes return a single opaque combined JWE
-// token. The app-stack `/api/v3/auth/*` routes return a JWS access token plus
-// a separate refresh token.
+// Existing cloud-ui/extension auth routes return a single opaque combined JWE token.
 export const providerLoginResponseSchema = z.object({
   token: z.string(),
   refreshToken: z.string().optional(),

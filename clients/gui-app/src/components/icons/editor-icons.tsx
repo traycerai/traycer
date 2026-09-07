@@ -146,17 +146,13 @@ export function WindsurfIcon({ className, ...props }: EditorIconProps) {
   );
 }
 
-/**
- * VSCodium's official mark. The gradient id is `useId`-scoped because several
- * of these icons can be mounted at once and a duplicate SVG id would make
- * every instance paint whichever definition rendered last.
- */
+/** The gradient id is `useId`-scoped because several of these icons can be mounted at once and a duplicate SVG
+ * id would make every instance paint whichever definition rendered last. */
 export function VSCodiumIcon({ className, ...props }: EditorIconProps) {
   const id = useId();
   const gradientId = `${id}-vscodium-a`;
-  // VSCodium's own mark (`icons/stable/codium_cnl.svg` in the VSCodium repo,
-  // MIT), with its gradient's `gradientTransform` folded into the stop
-  // coordinates so the whole icon lives in one 100x100 user space.
+  // VSCodium's own mark (`icons/stable/codium_cnl.svg` in the VSCodium repo, mit), with its gradient's
+  // `gradientTransform` folded into the stop coordinates so the whole icon lives in one 100x100 user space.
   return (
     <svg {...props} viewBox="0 0 100 100" className={cn(className)}>
       <defs>
@@ -180,14 +176,8 @@ export function VSCodiumIcon({ className, ...props }: EditorIconProps) {
   );
 }
 
-/**
- * The macOS Finder face: one rounded square split down the middle, the left
- * half blue and the right half near-white, with the smile crossing both. The
- * smile is stroked twice under per-half clips because a single colour is
- * invisible on one side or the other; ids are `useId`-scoped so several
- * instances cannot collide on them. Kept to flat shapes so the split still
- * reads at 14px.
- */
+/** The smile is stroked twice under per-half clips because a single colour is invisible on one side or the
+ * other; ids are `useId`-scoped so several instances cannot collide on them. */
 export function FinderIcon({ className, ...props }: EditorIconProps) {
   const id = useId();
   const squareId = `${id}-finder-a`;

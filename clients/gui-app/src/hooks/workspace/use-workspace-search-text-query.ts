@@ -19,39 +19,14 @@ const WORKSPACE_SEARCH_TEXT_LIMIT = 200;
 export interface UseWorkspaceSearchTextArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
-  /**
-   * The search source. Either an attached workspace/worktree root selector (a
-   * binding `runningDir` the Epic pickers expose - the host authorizes it, the
-   * renderer never sends an arbitrary trusted path) or the typed Epic-artifact
-   * mirror source (`{ kind: "epic-artifacts" }`, whose host-local directory the
-   * resolver derives from `epicId`). `null` disables the query.
-   */
+  /** Either an attached workspace/worktree root selector (a binding `runningDir` the Epic pickers expose - the host authorizes it, the renderer never sends an arbitrary trusted path) or the typed Epic-artifact mirror source (`{ kind: "epic-artifacts" }`, whose host-local directory the resolver derives from `epicId`). */
   readonly reference: WorkspaceSearchSource | null;
   readonly query: string;
   readonly options: WorkspaceSearchTextOptions;
   readonly enabled: boolean;
 }
 
-/**
- * Scoped, host-run TEXT (file-content) search over one source
- * (`workspace.searchText`) - either an Epic-attached code root or the Epic's
- * artifact mirror. ripgrep runs in the host; the renderer never scans contents.
- *
- * The query key is `[host, method, { epicId, reference, query, options, limit }]`,
- * so a change of Epic, host, source (root or artifact), query, or any option
- * mints a new key and a late in-flight response for the previous selection is
- * discarded rather than applied. The response also echoes `epicId` and its
- * source (`root` for a code root, `source` for artifacts) so the caller can
- * defensively drop a stale payload that crosses a source/target change.
- * Same-host `keepPreviousData` keeps the last results visible while the next
- * keystroke's request is in flight (no blank between strokes), but drops the
- * prior payload across a host switch so another host's matches never render
- * as this one's results.
- *
- * `workspace.searchText` is an optional (non-floor) capability: an old host
- * rejects with `E_HOST_UNSUPPORTED`, surfaced here as `query.error.code` for the
- * consumer to render a degraded state without a toast.
- */
+/** Renderer never scans contents. keepPreviousData is same-host only. E_HOST_UNSUPPORTED is a degraded state, no toast. */
 export function useWorkspaceSearchText(
   args: UseWorkspaceSearchTextArgs,
 ): UseQueryResult<

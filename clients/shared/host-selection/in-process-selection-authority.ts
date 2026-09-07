@@ -1,21 +1,6 @@
 /**
- * Browser/dev binding for the selection authority (P1.1): the SAME engine
- * module mounted in the single window, behind an in-process transport.
- *
- * The contract's topology note is the whole design here - "Browser/dev: same
- * engine in-window behind an in-process adapter (constant reporterId, seq
- * from the same `allocateAttachSeq`, identical claim + atomic-inventory
- * rules)". So this module adds no rules of its own: it forwards to the engine
- * with a fixed reporter id and reuses
- * {@link BufferedSelectionAuthorityClient} for the attach choreography, which
- * is what keeps the two topologies from drifting. Multi-window without a main
- * process is not a supported topology, so one constant reporter id is exact
- * rather than a simplification.
- *
- * There is no wire, so no parser runs here: the values already have their
- * contract types. `refuseMalformedAttach` likewise has no caller - a typed
- * in-process caller constructs `SelectionAttachRequest` directly and cannot
- * produce a malformed envelope.
+ * Multi-window without a main process is not a supported topology, so one constant reporter id is exact rather than a simplification.
+ * `refuseMalformedAttach` likewise has no caller - a typed in-process caller constructs `SelectionAttachRequest` directly and cannot produce a malformed envelope.
  */
 import {
   type AuthorityIdentitySource,
@@ -40,14 +25,8 @@ import {
   type SelectionAuthorityEngineOptions,
 } from "./selection-authority-engine";
 
-/**
- * The single window's reporter id. Constant by construction: with no main
- * process there is exactly one reporter, and its attach generations are
- * ordered by the engine's own allocator.
- */
 export const IN_PROCESS_SELECTION_REPORTER_ID = "in-process-window";
 
-/** Binds a transport to `engine` under the constant reporter id. */
 export function createInProcessSelectionTransport(
   engine: SelectionAuthorityEngine,
 ): SelectionAuthorityClientTransport {
@@ -68,9 +47,7 @@ export function createInProcessSelectionTransport(
 }
 
 /**
- * The consumer-facing client for the browser/dev topology: rotation on
- * `reattachRequired` included, so an identity transition behaves exactly as
- * it does on desktop.
+ * The consumer-facing client for the browser/dev topology: rotation on `reattachRequired` included, so an identity transition behaves exactly as it does on desktop.
  */
 export function createInProcessSelectionAuthorityClient(
   engine: SelectionAuthorityEngine,
@@ -83,14 +60,12 @@ export function createInProcessSelectionAuthorityClient(
   );
 }
 
-/** An engine plus the single window's client, disposed together. */
 export interface InProcessSelectionAuthority {
   readonly engine: SelectionAuthorityEngineImpl;
   readonly client: SelectionAuthorityClient;
   dispose(): void;
 }
 
-/** Composition root for a shell with no main process. */
 export function createInProcessSelectionAuthority(
   options: SelectionAuthorityEngineOptions,
 ): InProcessSelectionAuthority {
@@ -106,13 +81,6 @@ export function createInProcessSelectionAuthority(
   };
 }
 
-/**
- * A {@link HostFleetSource} backed by an in-memory snapshot - the browser/dev
- * and test composition of the port. It keeps the contract's race rules
- * honest: `publish` hands the new snapshot to every listener itself (so
- * subscribe-before-read cannot lose a change), the tuple is replaced whole,
- * and the revision it stamps is process-lifetime monotonic.
- */
 export class InMemoryHostFleetSource implements HostFleetSource {
   private current: HostFleetSnapshot;
   private revisionCounter: number;
@@ -157,7 +125,6 @@ export class InMemoryHostFleetSource implements HostFleetSource {
   }
 }
 
-/** An {@link AuthorityIdentitySource} over an in-memory identity. */
 export class InMemoryAuthorityIdentitySource implements AuthorityIdentitySource {
   private identity: { identityKey: string | null; generation: number };
   private readonly listeners = new Set<
@@ -199,9 +166,8 @@ export class InMemoryAuthorityIdentitySource implements AuthorityIdentitySource 
 }
 
 /**
- * A {@link PreferredHostStore} kept in memory - browser/dev and tests. It is
- * identity-bucketed like the durable one, so the "another account inherits
- * nothing" property is exercised here too rather than only on desktop.
+ * A {@link PreferredHostStore} kept in memory - browser/dev and tests.
+ * It is identity-bucketed like the durable one, so the "another account inherits nothing" property is exercised here too rather than only on desktop.
  */
 export class InMemoryPreferredHostStore implements PreferredHostStore {
   private readonly byIdentity = new Map<string, string>();
@@ -226,20 +192,15 @@ export class InMemoryPreferredHostStore implements PreferredHostStore {
 }
 
 /**
- * The local expected-outage signal for shells that own no host process. Always
- * false - and honestly so: without a HostController mutation lane there is no
- * deliberate local outage to exempt.
+ * The local expected-outage signal for shells that own no host process.
+ * Always false - and honestly so: without a HostController mutation lane there is no deliberate local outage to exempt.
  */
 export const inertLocalHostOutageSignal: LocalHostOutageSignal = {
   inExpectedOutage: () => false,
   onChanged: () => ({ dispose: () => undefined }),
 };
 
-/**
- * The local-provisioning port for shells that cannot provision (browser/dev,
- * tests). Refusing here is what makes the ∅ definition come out right in
- * P1.3: no usable lease AND no ensure available.
- */
+/** The local-provisioning port for shells that cannot provision (browser/dev, tests). */
 export const unavailableLocalHostEnsurePort: LocalHostEnsurePort = {
   ensureReady: () =>
     Promise.resolve({

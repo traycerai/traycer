@@ -1,18 +1,4 @@
-// `useLocalHostUpdateOperation` is the LANDING BANNER's whole data source: it
-// resolves this machine's host id, reads the LIVE `host.status` leg over a
-// real client, reads the DURABLE-RECORD leg off `useRunnerHostControllerStatusQuery()`
-// via `recordObservationFromLocalAttempt`, and combines the two through
-// `preferLiveOverRecord` into one `FleetUpdateView` (Ticket 07 §5.2.7 — the
-// host-down window).
-//
-// This is a PRODUCTION-WIRING witness, not a pure-module test: it drives the
-// REAL hook, over a REAL `HostClient` (in-memory messenger, mirroring
-// `host-update-banner-bound.test.tsx`'s harness) for the live leg, and a real
-// `RunnerHostProvider` + `IHostManagement.getHostControllerStatus()` for the
-// record leg. Only `useHostBinding` and `useHostClientForHostId` are mocked —
-// the same two seams `host-update-banner-bound.test.tsx` mocks, and for the
-// same reason: this suite is not about the directory/selection machinery
-// behind them.
+// Drive the real hook over a real client and runner host. Mock only `useHostBinding` and `useHostClientForHostId`.
 interface HostBindingFixture {
   readonly directory: {
     readonly getLocalHostId: () => string | null;
@@ -146,14 +132,7 @@ function notImplementedManagement(
   };
 }
 
-/**
- * Binds the local host id and a real `HostClient` whose `host.status`
- * handler always REJECTS — the live leg never resolves a fresh read, so
- * `statusQuery.data` stays `undefined` forever. This is what "the host is
- * unreachable / the wire read is stale or absent" looks like at this seam:
- * `preferLiveOverRecord` then has no fresh wire observation to prefer, and
- * the durable-record leg is what the projector falls through to.
- */
+/** Binds the local host id and a real `HostClient` whose `host.status` handler always REJECTS - the live leg never resolves a fresh read, so `statusQuery.data` stays `undefined` forever. */
 function bindUnreachableLocalHost(): HostClient<HostRpcRegistry> {
   const fixture = buildOverviewHostFixture({
     hostId: LOCAL_HOST_ID,
@@ -197,13 +176,8 @@ afterEach(() => {
   clientForHostIdMock.current = () => null;
 });
 
-/**
- * The instant the CONTROLLER query resolves, frozen so the record's observation
- * time can be asserted EXACTLY rather than as `> 0`.
- *
- * Only `Date` is faked. `setTimeout` stays real because `waitFor` schedules on
- * it, and faking it would hang the poll rather than test it.
- */
+/** The instant the CONTROLLER query resolves, frozen so the record's observation time can be asserted EXACTLY rather than as `> 0`.
+ * `setTimeout` stays real because `waitFor` schedules on it, and faking it would hang the poll rather than test it. */
 const CONTROLLER_READ_AT_MS = 1_774_000_000_000;
 
 describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7)", () => {
@@ -229,45 +203,18 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
       expect(result.current.view.targetVersion).toBe("2.5.0");
       expect(result.current.hostId).toBe(LOCAL_HOST_ID);
 
-      // R2 fix-round-2 pin: the record's observation time must be stamped by
-      // the CONTROLLER query that actually read it, never by the live
-      // `host.status` query. In this fixture `host.status` throws and never
-      // succeeds, so its `dataUpdatedAt` is `0` — the previous source, which
-      // reported a record freshly read from disk as observed at the Unix epoch.
-      //
-      // Asserted EXACTLY against the frozen controller-read instant rather than
-      // as `> 0`: `> 0` would also pass if someone later routed this through
-      // some other non-zero clock, and the property being pinned is WHICH read
-      // this timestamp describes, not merely that it is non-empty.
+      // Record observation time is the controller query's instant, never live `host.status` `dataUpdatedAt`. Assert the frozen instant, not merely `> 0`.
       expect(result.current.view.lastObservedAtMs).toBe(CONTROLLER_READ_AT_MS);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  /**
-   * ABLATION-RESISTANCE CHECK, actually run (not merely reasoned about):
-   * verified by mocking `recordObservationFromLocalAttempt` to always return
-   * `null` — the exact downstream effect of deleting the `localAttempt` read
-   * in `useLocalHostUpdateOperation` (its own real implementation already
-   * returns `null` whenever `facts === null`) — in a throwaway copy of the
-   * test above. Chose a mocked leaf over editing the production hook file
-   * directly: this worktree is shared with the agent doing the Ticket 07
-   * production wiring, and it was mid-edit on this exact file during this
-   * session, so a live on-disk ablation risked colliding with that work.
-   * The throwaway file was deleted immediately after confirming the result;
-   * it is not part of this suite.
-   *
-   * Result: RED, as expected. With the leg forced `null`, the live leg is
-   * also unreachable (per this fixture), so `preferLiveOverRecord(null,
-   * null, …)` returns `null` and the view collapses to
-   * `UNKNOWN_FLEET_UPDATE_VIEW` — `lastKnownKind: null`, `attemptId: null`,
-   * `targetVersion: null` — failing every assertion in the test above.
-   */
+  /** Ablation: forcing the local-attempt observation to null collapses the view to unknown. */
   it("positive control — with NO local attempt on the record, the same unreachable host projects a BARE unknown (no retained phase)", async () => {
     bindUnreachableLocalHost();
     const management = notImplementedManagement(CONTROLLER_STATUS_BASE);
-    // `localAttempt: null` on the controller status — the base fixture carries
+    // `localAttempt: null` on the controller status - the base fixture carries
     // it explicitly. Proves the test above is discriminating on the attempt's
     // presence, not merely on the host being unreachable.
     const { result } = renderOperation(management);

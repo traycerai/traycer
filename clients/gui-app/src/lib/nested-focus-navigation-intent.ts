@@ -16,9 +16,8 @@ function pendingKey(epicId: string, tabId: string): string {
 }
 
 /**
- * Records the locally prepared target before its async router navigation can
- * commit. Route synchronization must not reapply the old URL target during
- * this short optimistic window or it will bounce focus back to the old pane.
+ * Records the locally prepared target before its async router navigation can commit.
+ * Route synchronization must not reapply the old URL target during this short optimistic window or it will bounce focus back to the old pane.
  */
 export function beginNestedFocusNavigation(
   epicId: string,
@@ -32,9 +31,8 @@ export function beginNestedFocusNavigation(
 }
 
 /**
- * Returns true only while the route still exposes the stale pre-navigation
- * target. Seeing the pending target means the router caught up and clears the
- * optimistic guard; expiration keeps a failed navigation from becoming sticky.
+ * Returns true only while the route still exposes the stale pre-navigation target.
+ * Seeing the pending target means the router caught up and clears the optimistic guard; expiration keeps a failed navigation from becoming sticky.
  */
 export function shouldDeferNestedRouteApplication(
   epicId: string,
@@ -47,8 +45,7 @@ export function shouldDeferNestedRouteApplication(
 }
 
 /**
- * Returns the remaining optimistic window so route synchronization can wake
- * itself when a router navigation never commits its target.
+ * Returns the remaining optimistic window so route synchronization can wake itself when a router navigation never commits its target.
  */
 export function getNestedRouteApplicationDeferralMs(
   epicId: string,

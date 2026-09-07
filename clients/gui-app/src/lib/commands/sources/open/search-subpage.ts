@@ -1,13 +1,6 @@
 /**
- * Opener "Text search" sub-page - STEP 1 of the two-step content-search flow:
- * pick a search target. The list is the explicitly labeled artifact
- * workspace (always present, even with no code workspace attached) plus every
- * attached workspace/worktree root browsable for the active Epic/host.
- *
- * Selecting a target pushes a step-2 sub-page ({@link searchRunSubpageId}); the
- * pane opener recognizes that id and renders `SearchRunView` (query + options +
- * results) rather than the generic fuzzy list. Artifact targets run
- * `epic.searchArtifacts`; code targets run `workspace.searchText`.
+ * Opener "Text search" sub-page - STEP 1 of the two-step content-search flow: pick a search target.
+ * The list is the explicitly labeled artifact workspace (always present, even with no code workspace attached) plus every attached workspace/worktree root browsable for the active Epic/host.
  */
 import { useMemo } from "react";
 import { getBasename } from "@/lib/path/cross-platform-path";
@@ -30,18 +23,15 @@ function makeRunSubpage(
   target: SearchRunTarget,
   title: string,
 ): CommandSubpage {
-  // `useItems` is never consulted: the pane opener special-cases this id and
-  // renders `SearchRunView` instead of the generic list. Kept as an empty
-  // passthrough so the shared `CommandSubpage` shape needs no new field.
+  // `useItems` is never consulted: the pane opener special-cases this id and renders `SearchRunView` instead of the generic list.
+  // Kept as an empty passthrough so the shared `CommandSubpage` shape needs no new field.
   return { id: searchRunSubpageId(target), title, useItems: () => [] };
 }
 
 export function useSearchOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  // The epic's worktree bindings are host-local records of the host serving
-  // the epic - read them there (`useActiveEpicHostId`), not from whichever
-  // host the app points at.
+  // The epic's worktree bindings are host-local records of the host serving the epic - read them there (`useActiveEpicHostId`), not from whichever host the app points at.
   const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
   const bindingsQuery = useWorktreeListBindingsForEpicForClient({
     client: useHostClientForHostId(activeEpicHostId),

@@ -1,14 +1,7 @@
 import type { WorktreeBindingEntryMode } from "@traycer/protocol/host/worktree-schemas";
 
-/**
- * In-Epic chip mode + label for a single folder row.
- *
- * A staged "Create new worktree" is deferred to the next message send and never
- * lands in the binding, so it must win over the binding's still-"local" mode
- * here - otherwise the chip reads "Local" right after the user queued a new
- * worktree. This mirrors the landing page, where a captured create intent (not
- * the bound mode) drives the label.
- */
+/** A staged "Create new worktree" is deferred to the next message send and never lands in the binding, so it
+ * must win over the binding's still-"local" mode here. */
 export function computeInEpicFolderMode(args: {
   readonly boundMode: WorktreeBindingEntryMode | null;
   readonly boundBranch: string | null;

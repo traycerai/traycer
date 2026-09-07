@@ -38,9 +38,7 @@ describe("chatForkTargetSupport", () => {
     });
   });
 
-  // `1.0` is the ONLY same-major minor below the gate: the owner hint arrived on
-  // an unreleased `1.2` that the release collapsed into `1.1`, so the boundary
-  // this asserts is 1.0-refused / 1.1-supported, one minor lower than it was.
+  // `1.0` is the ONLY same-major minor below the gate: the owner hint arrived on an unreleased `1.2` that the release collapsed into `1.1`, so the boundary this asserts is 1.0-refused / 1.1-supported, one minor lower than it was.
   it("refuses a same-major build below 1.1 as needs-update", () => {
     expect(chatForkTargetSupport({ major: 1, minor: 0 })).toEqual({
       kind: "refused",
@@ -73,9 +71,7 @@ describe("chatForkTargetSupport", () => {
 });
 
 describe("chatForkHostRefusals", () => {
-  // `source-host` and `old-host` deliberately sit on the SAME refused minor:
-  // the source exemption is keyed on host identity, not on version, and
-  // pairing them here is what proves that rather than assuming it.
+  // `source-host` and `old-host` deliberately sit on the SAME refused minor: the source exemption is keyed on host identity, not on version, and pairing them here is what proves that rather than assuming it.
   const versionByHostId = new Map<string, NegotiatedMethodVersion>([
     ["source-host", { major: 1, minor: 0 }],
     ["old-host", { major: 1, minor: 0 }],
@@ -284,16 +280,8 @@ describe("publication gate treatment follows how long the condition lasts", () =
     expect(verdictAllowsSubmit(unpublished)).toBe(false);
     expect(verdictNotice(unpublished)).toBe(CHAT_NOT_BACKED_UP_NOTICE);
 
-    // Blocks submit while leaving the row selectable - the two halves are
-    // independent, deliberately. Production INVERTED this: the host's old
-    // coverage check is presence-only (`containsMessageId`), so a boundary
-    // turn published mid-stream and since finalized locally reads as covered
-    // at its partial version. Leaving submit enabled here would let a fork
-    // sail through Layer 2 and seed a silently TRUNCATED turn - the poll
-    // lane this method carries is what makes the row worth keeping
-    // selectable instead of a dead end (see `boundarySyncing`'s own note in
-    // chat-fork-target.ts). A future reader must not "fix" this back to
-    // `true`.
+    // Leaving submit enabled here would let a fork sail through Layer 2 and seed a silently TRUNCATED turn - the poll lane this method carries is what makes the row worth keeping selectable instead of a dead end (see `boundarySyncing`'s own note in chat-fork-target.ts).
+    // A future reader must not "fix" this back to `true`.
     expect(syncing.kind).toBe("boundarySyncing");
     expect(
       remoteClassIsUnreachable(chatForkRemoteClassState(BOUNDARY_UNCOVERED)),
@@ -378,11 +366,8 @@ describe("publicationStateFromResponse layers `definitive` on top of the ordinar
     });
   });
 
-  // Counterfactual for the two blocks above: same base fixture, only the
-  // reason changes. `backup-halted` is the pure freeze - publication
-  // stopped, but whatever had already been acknowledged is still there to be
-  // pulled - so it must NOT contradict the coverage fact this client already
-  // read.
+  // Counterfactual for the two blocks above: same base fixture, only the reason changes.
+  // `backup-halted` is the pure freeze - publication stopped, but whatever had already been acknowledged is still there to be pulled - so it must NOT contradict the coverage fact this client already read.
   it("backup-halted does NOT invalidate an otherwise-covered head", () => {
     expect(
       publicationStateFromResponse({
@@ -392,9 +377,7 @@ describe("publicationStateFromResponse layers `definitive` on top of the ordinar
     ).toEqual(COVERED);
   });
 
-  // Same counterfactual again: an unrecognised reason is a licence to stop
-  // polling (see chat-publication-definitive.test.ts), never a licence to
-  // contradict a coverage fact this client actually read.
+  // Same counterfactual again: an unrecognised reason is a licence to stop polling (see chat-publication-definitive.test.ts), never a licence to contradict a coverage fact this client actually read.
   it("an unrecognised reason does NOT invalidate an otherwise-covered head either", () => {
     expect(
       publicationStateFromResponse({
@@ -414,9 +397,7 @@ describe("publicationStateFromResponse layers `definitive` on top of the ordinar
   });
 
   it("keeps boundaryCovered: null uncollapsed when a definitive field is also present", () => {
-    // Guards the tri-state discipline against the new field: `definitive:
-    // null` must not be mistaken for a boundaryCovered value, and must not
-    // itself collapse the tri-state to false.
+    // Guards the tri-state discipline against the new field: `definitive: null` must not be mistaken for a boundaryCovered value, and must not itself collapse the tri-state to false.
     expect(
       publicationStateFromResponse({
         published: true,
@@ -516,11 +497,8 @@ describe("verdictAllowsSubmit is true only for the allowed verdict", () => {
   });
 
   it("keeps the permissive publication states allowing submit - an unsupported or unreachable source host must not start blocking the fork", () => {
-    // `unknown` publication is what a source host that predates
-    // `epic.chatPublicationState`, or one that is currently unreachable,
-    // resolves to (see use-chat-publication-state-query.ts's "every failure
-    // resolves to unknown"). Neither must be swept into the blocking
-    // behaviour added for `boundarySyncing` and `definitivelyUnavailable`.
+    // `unknown` publication is what a source host that predates `epic.chatPublicationState`, or one that is currently unreachable, resolves to (see use-chat-publication-state-query.ts's "every failure resolves to unknown").
+    // Neither must be swept into the blocking behaviour added for `boundarySyncing` and `definitivelyUnavailable`.
     expect(
       verdictAllowsSubmit(
         chatForkTargetVerdict({

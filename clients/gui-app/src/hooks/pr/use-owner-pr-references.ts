@@ -15,12 +15,7 @@ export interface OwnerListPrReferencesResult {
   readonly sendRefresh: () => void;
 }
 
-/**
- * The single owner-association view used by chat UI. Membership comes from
- * `pr.subscribeListForEpic` - the same host projection that feeds the PR
- * sidebar - while the transport is pinned to the owner's host rather than the
- * app-wide effective host.
- */
+/** Membership comes from `pr.subscribeListForEpic` - the same host projection that feeds the PR sidebar - while the transport is pinned to the owner's host rather than the app-wide effective host. */
 export function useOwnerListPrReferences(args: {
   readonly hostId: string;
   readonly epicId: string;

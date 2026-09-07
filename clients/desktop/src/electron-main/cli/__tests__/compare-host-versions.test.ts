@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-// `cli-discovery.ts` imports the desktop logger, whose `electron` dependency
-// otherwise boots Vitest's real Electron runtime. These tests exercise only a
-// pure comparator, so keep the suite independent of a downloaded Electron
-// binary and the app lifecycle.
 vi.mock("electron", () => ({
   app: { getPath: (): string => "/tmp/desktop-app" },
 }));
@@ -23,10 +19,7 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// `compareHostVersions` drives the host "update available?" decision in
-// `buildUpdateState` and supplies SemVer precedence for CLI reconciliation.
-// A pre-release must sort below its GA so a `1.0.0-rc.1` host upgrades to
-// `1.0.0`.
+// A pre-release must sort below its GA so a `1.0.0-rc.1` host upgrades to `1.0.0`.
 describe("compareHostVersions", () => {
   it("returns 0 for unparseable input so no spurious update is advertised", async () => {
     const { compareHostVersions } = await import("../cli-discovery");
@@ -41,22 +34,6 @@ describe("compareHostVersions", () => {
   });
 });
 
-/**
- * PARITY WITH THE CLIENT-SHARED COMPARATOR.
- *
- * The desktop app updater's release selector orders `desktop-v*` candidates
- * with THIS comparator, while the host update surfaces order the same kinds of
- * version strings with `@traycer-clients/shared`'s. Two comparators deciding
- * "which build is newer" for one product is a drift risk, and the one that
- * would hurt is silent: an RC-line follower and a Settings row disagreeing
- * about whether `2.0.0` outranks `2.0.0-rc.2`.
- *
- * These pin agreement over the domain the selector actually sees - versions
- * that survived `projectDesktopRelease`'s strict `X.Y.Z[-rc.N]` tag grammar -
- * and state the one place outside that domain where the two deliberately
- * differ. If a bump or refactor makes them disagree inside it, this fails
- * before a release does.
- */
 describe("compareHostVersions parity with @traycer-clients/shared", () => {
   // Every pair the desktop selector can be asked to order: same line, across
   // lines, RC vs its GA, and RC vs RC.
@@ -98,13 +75,7 @@ describe("compareHostVersions parity with @traycer-clients/shared", () => {
     const { compareHostVersions } = await import("../cli-discovery");
     const { compareHostVersions: sharedCompare } =
       await import("@traycer-clients/shared/host-version/compare-host-versions");
-    // A leading-zero numeric identifier is not valid SemVer. The shared
-    // comparator rejects it outright; this one's looser `\d+` grammar compares
-    // it. Harmless HERE because `projectDesktopRelease` rejects
-    // `desktop-v2.0.0-rc.01` at the tag gate, so no such version ever reaches
-    // the selector - and `isCanonicalReleaseCandidate` rejects it a second time
-    // before it could name a release line. Pinned so the divergence stays a
-    // known, contained one rather than a surprise at the next bump.
+    // Pinned so the divergence stays a known, contained one rather than a surprise at the next bump.
     expect(sharedCompare("2.0.0-rc.01", "2.0.0-rc.2").comparable).toBe(false);
     expect(compareHostVersions("2.0.0-rc.01", "2.0.0-rc.2")).toBe(-1);
   });

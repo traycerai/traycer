@@ -9,10 +9,8 @@ import {
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
 
-/**
- * Controllable open-epic handle: desktop EpicSessionProvider intentionally
- * supplies null during ownership/session acquisition (Ticket-08 cold path).
- */
+/** Controllable open-epic handle: desktop EpicSessionProvider intentionally supplies null during
+ * ownership/session acquisition (Ticket-08 cold path). */
 const openEpicHandleState = vi.hoisted(() => ({
   handle: null as { readonly epicId: string } | null,
 }));
@@ -33,9 +31,8 @@ const pipMountState = vi.hoisted(() => ({
   nextId: 1,
 }));
 
-// No epic route match anywhere in this suite: that is the phone cold-restore
-// state, where the layout has restored the tab but the router is still on the
-// landing route it booted at.
+// No epic route match anywhere in this suite: that is the phone cold-restore state, where the layout has
+// restored the tab but the router is still on the landing route it booted at.
 vi.mock("@tanstack/react-router", () => ({
   useMatch: () => undefined,
 }));
@@ -77,10 +74,8 @@ vi.mock("@/providers/epic-session-provider", () => ({
   ),
 }));
 
-/**
- * BrowserSessionsProvider stand-in: publishes the same cold/live transition as
- * the real continuously mounted provider without pulling in the host stream.
- */
+/** BrowserSessionsProvider stand-in: publishes the same cold/live transition as the real continuously mounted
+ * provider without pulling in the host stream. */
 vi.mock(
   "@/components/epic-canvas/renderers/browser-sessions-provider",
   async () => {
@@ -155,7 +150,6 @@ vi.mock("@/components/epic-canvas/pip/agent-browser-pip", async () => {
   };
 });
 
-/** Probe consumer under EpicBrowserSessionsScope (real cold/ready context). */
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-column", async () => {
   const { useBrowserSessionsContext } =
     await import("@/components/epic-canvas/renderers/browser-sessions-context");
@@ -331,10 +325,8 @@ describe("<EpicSurface />", () => {
     expect(screen.getByRole("button", { name: "Switch tab" })).not.toBeNull();
   });
 
-  // A retained-but-unfocused pane registers too: a focus switch onto an
-  // already-retained tab must resolve its trigger in that same commit, so the
-  // entry has to exist BEFORE the focus flip. Keeping it off the header while
-  // unfocused is resolution's job, not the writer's.
+  // A retained-but-unfocused pane registers too: a focus switch onto an already-retained tab must resolve its
+  // trigger in that same commit, so the entry has to exist before the focus flip.
   it("registers its entry from a retained unfocused pane", () => {
     viewport.mobile = true;
     render(

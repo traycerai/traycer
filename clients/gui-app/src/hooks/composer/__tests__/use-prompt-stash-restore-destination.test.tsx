@@ -34,10 +34,7 @@ const storeMocks = vi.hoisted(() => ({
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
-/**
- * Optional delayed materialize for destination-race tests. When `impl` is set,
- * restore uses it instead of the real blob-read path.
- */
+/** When `impl` is set, restore uses it instead of the real blob-read path. */
 const materializeMocks = vi.hoisted(() => ({
   impl: null as null | ((entry: PromptStashEntry) => Promise<JsonContent>),
 }));

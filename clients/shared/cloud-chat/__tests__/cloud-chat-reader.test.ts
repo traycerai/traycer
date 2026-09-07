@@ -35,12 +35,7 @@ import {
 
 /**
  * The client read path, asserted where its promises actually live.
- *
- * Every incremental claim here is a CALL COUNT on the port, never a property of
- * what was returned. That distinction is the whole point of the suite: a reader
- * that ignored its cache and refetched every part still produces a byte-identical
- * transcript, so an assertion on the assembled chat cannot tell the incremental
- * read from the whole one. Only `port.partCalls` can.
+ * Every incremental claim here is a call count on the port, never a property of what was returned.
  */
 
 function read(
@@ -57,10 +52,7 @@ function read(
 
 /**
  * The same bytes with one bit changed - same length, different content.
- *
- * The mutation every hash-guard test here uses. A wrong-LENGTH corruption is
- * caught by the length check on its own, so it cannot witness whether anything
- * hashes; only an equal-length one can.
+ * A wrong-length corruption is caught by the length check on its own, so it cannot witness whether anything hashes; only an equal-length one can.
  */
 function flipOneByte(bytes: Uint8Array): Uint8Array {
   const mutated = new Uint8Array(bytes);
@@ -68,7 +60,6 @@ function flipOneByte(bytes: Uint8Array): Uint8Array {
   return mutated;
 }
 
-/** The fixture chat with one more message appended to its TAIL cohort. */
 function publishOneMoreTurn(): Promise<PublishedCloudChat> {
   return publishCloudChat({
     ...DEFAULT_PUBLISH,
@@ -101,9 +92,8 @@ describe("cold read", () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const serving = servingBehaviour(published);
     const firstCohort = published.parts[0].address.sha256;
-    // The tail cohort settles first and the head cohort last, so completion
-    // order is the exact reverse of head order. Without the sort in
-    // `assembleChat`, this is the test that goes red.
+    // The tail cohort settles first and the head cohort last, so completion order is the exact reverse of head order.
+    // Without the sort in `assembleChat`, this is the test that goes red.
     const port = recordingPort({
       resolve: serving.resolve,
       part: async (sha256) => {
@@ -241,7 +231,7 @@ describe("cold read", () => {
       sha256Hex: webCryptoSha256Hex,
     });
 
-    // Saturate the gate, so the remaining parts are genuinely QUEUED behind it
+    // Saturate the gate, so the remaining parts are genuinely queued behind it
     // rather than already dialled, then fail the read.
     await saturated;
     failFirstPart(new Error("part transport failure"));
@@ -252,10 +242,7 @@ describe("cold read", () => {
     for (const release of releases) release();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // A rejected fetch abandons the queue directly, so the failing wave is all
-    // that is ever dialled. The tolerance covers the other failure shape - a
-    // part that RESOLVES and is then rejected by verification - where the read
-    // dies a few microtask hops later and one queued part can slip in first.
+    // A rejected fetch abandons the queue directly, so the failing wave is all that is ever dialled.
     expect(dialled).toBeLessThanOrEqual(CLOUD_CHAT_PART_FETCH_CONCURRENCY + 1);
     expect(dialled).toBeLessThan(published.parts.length);
   });
@@ -279,9 +266,7 @@ describe("the incremental read", () => {
     // part is fetched, and it is the tail cohort whose contents actually moved.
     expect(secondPort.resolveCalls).toHaveLength(1);
     expect(secondPort.partCalls).toEqual([second.parts[1].address.sha256]);
-    // ...and the head cohort's address is untouched, which is why it was not
-    // fetched: a deterministic re-cut of an unchanged prefix produces the same
-    // cohort, so the same bytes, so the same address.
+    // ...and the head cohort's address is untouched, which is why it was not fetched: a deterministic re-cut of an unchanged prefix produces the same cohort, so the same bytes, so the same address.
     expect(second.parts[0].address.sha256).toBe(first.parts[0].address.sha256);
   });
 
@@ -299,9 +284,7 @@ describe("the incremental read", () => {
     expect(reopen.partCalls).toEqual([]);
   });
 
-  // The ablation: without a cache the SAME sequence refetches everything. If
-  // this passed too, the assertions above would be measuring something other
-  // than the cache.
+  // The ablation: without a cache the same sequence refetches everything.
   it("ABLATION - with no cache, reopening refetches every part", async () => {
     const first = await publishCloudChat(DEFAULT_PUBLISH);
     expect(
@@ -319,10 +302,7 @@ describe("the incremental read", () => {
   it("a cache hit is re-hashed, so a poisoned entry is refetched not trusted", async () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const cache = new InMemoryChatPartCache();
-    // A SAME-LENGTH mutation, which is the only shape that tests what this
-    // claims to. Bytes of the wrong length are caught by the length guard
-    // whether or not anything re-hashes, so a wrong-length fixture here would
-    // stay green with the hash check deleted - a test that witnesses nothing.
+    // A same-length mutation, which is the only shape that tests what this claims to.
     await cache.put(
       published.parts[0].address.sha256,
       flipOneByte(published.parts[0].bytes),
@@ -331,15 +311,11 @@ describe("the incremental read", () => {
     const port = recordingPort(servingBehaviour(published));
     const result = await read(port, cache);
 
-    // Not trusted, and not fatal either: a store that answers with the wrong
-    // bytes is a MISS, so the read falls through to the authority that has the
-    // right ones. Refusing here instead would make one bad 64 KiB on disk an
-    // unreadable chat forever - nothing evicts the entry, so every reopen would
-    // re-read it and reach the same verdict.
+    // Not trusted, and not fatal either: a store that answers with the wrong bytes is a miss, so the read falls through to the authority that has the right ones.
     expect(result.outcome.kind).toBe("ok");
-    // The DIGEST is what caught it: the length matched exactly.
+    // The digest is what caught it: the length matched exactly.
     expect(port.partCalls).toContain(published.parts[0].address.sha256);
-    // And the correct bytes are filed under the key now, so the NEXT read is
+    // And the correct bytes are filed under the key now, so the next read is
     // incremental again rather than paying for the same repair.
     expect(await cache.get(published.parts[0].address.sha256)).toEqual(
       published.parts[0].bytes,
@@ -411,7 +387,7 @@ describe("failing closed", () => {
   it("a substituted part refuses the chat rather than shortening it", async () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const serving = servingBehaviour(published);
-    // Serve the SECOND cohort's bytes when the first is asked for: correct,
+    // Serve the second cohort's bytes when the first is asked for: correct,
     // parseable, well-formed shard bytes - just not the ones the head named.
     const port = recordingPort({
       resolve: serving.resolve,
@@ -533,9 +509,7 @@ describe("failing closed", () => {
 
 describe("the version gate", () => {
   it("refuses a head above this reader's minimum WITHOUT fetching a part", async () => {
-    // A 1.4 writer that declares older readers cannot safely INTERPRET this
-    // publication. The minimum may not exceed the head's own version, so
-    // exercising it at all requires publishing as a future writer.
+    // A 1.4 writer that declares older readers cannot safely interpret this publication.
     const published = await publishCloudChat({
       ...DEFAULT_PUBLISH,
       payloadMinor: 4,
@@ -548,10 +522,7 @@ describe("the version gate", () => {
     expect(result.outcome.kind).toBe("needs-newer-app");
     if (result.outcome.kind !== "needs-newer-app") return;
     expect(result.outcome.reason).toBe("reader-below-minimum");
-    // The property the whole ordering exists for: a chat this build cannot
-    // interpret costs one row read and ZERO part egress. Asserted as a call
-    // count, because "nothing rendered" would also be true if the parts had
-    // been fetched and then discarded.
+    // The property the whole ordering exists for: a chat this build cannot interpret costs one row read and zero part egress.
     expect(port.partCalls).toEqual([]);
     expect(port.resolveCalls).toHaveLength(1);
   });
@@ -574,11 +545,7 @@ describe("the version gate", () => {
   it("refuses a head on another MAJOR", async () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const serving = servingBehaviour(published);
-    // Forged at the document level: the major is pinned in both the writer AND
-    // the reader schema, so no schema in this build will produce one. The minor
-    // is read off the published document rather than written in, because a
-    // literal turns every minor bump into a silently-passing test - the forge
-    // stops matching, the head stays valid, and the gate is never exercised.
+    // Forged at the document level: the major is pinned in both the writer and the reader schema, so no schema in this build will produce one.
     const canonicalVersion = `"schemaVersion":{"major":${CHAT_SYNC_SCHEMA_VERSION.major},"minor":${CHAT_SYNC_SCHEMA_VERSION.minor}}`;
     expect(published.headDocument).toContain(canonicalVersion);
     const foreign = published.headDocument.replace(
@@ -622,10 +589,8 @@ describe("the states that are not failures", () => {
   });
 
   it("a chat with NO cloud row at all reads as unpublished, with no summary and no part calls", async () => {
-    // The resolve's `missing` arm: doc-era chats that predate publication,
-    // guessed ids, and rows this viewer may not read all land here. To a
-    // reader they are all the same fact - nothing published to show - and
-    // must never surface as a transport error.
+    // The resolve's `missing` arm: doc-era chats that predate publication, guessed ids, and rows this viewer may not read all land here.
+    // To a reader they are all the same fact - nothing published to show - and must never surface as a transport error.
     const port = recordingPort({
       resolve: () => ({
         chat: null,
@@ -662,11 +627,8 @@ describe("the states that are not failures", () => {
   });
 
   it("a head describing ANOTHER chat is refused before any part is fetched", async () => {
-    // The row resolved for the identity that was asked for, and its head is
-    // internally perfect - correct digest, correct envelope, shards that
-    // cross-check against it. Only the identity INSIDE it disagrees, which no
-    // other check on this path can see: the shard cross-check compares parts
-    // with the head, never the head with the request.
+    // The row resolved for the identity that was asked for, and its head is internally perfect - correct digest, correct envelope, shards that cross-check against it.
+    // Only the identity inside it disagrees, which no other check on this path can see: the shard cross-check compares parts with the head, never the head with the request.
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const port = recordingPort(servingBehaviour(published));
 
@@ -693,9 +655,8 @@ describe("the states that are not failures", () => {
           ? {
               outcome: {
                 status: "ok",
-                // Declared honestly; the BODY is what lies. `atob` would expand
-                // all of it before any check could run, which is the allocation
-                // this refusal exists to avoid.
+                // Declared honestly; the body is what lies.
+                // `atob` would expand all of it before any check could run, which is the allocation this refusal exists to avoid.
                 byteLength: published.parts[0].bytes.byteLength,
                 bytesBase64: "A".repeat(
                   published.parts[0].bytes.byteLength * 8,

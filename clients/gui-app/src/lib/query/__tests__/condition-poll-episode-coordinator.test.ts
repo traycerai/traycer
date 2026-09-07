@@ -151,11 +151,8 @@ describe("condition-poll episode coordinator", () => {
     // and replaces options.meta (Infinity would short-circuit on fresh cache).
     vi.setSystemTime(Date.now() + 60_000);
 
-    // A raw same-key fetch (an imperative `fetchQuery`/`ensureQueryData`, or the
-    // worktree-enrichment batched `useQueries` leg) clears the stamped meta.
-    // That is an ABSENT opinion, not a method change: the latch holds, the
-    // fetch resolves, and the app does NOT crash. Before the fix this rejected
-    // with the identity assertion — the crash that surfaced in <WorktreesBody>.
+    // A raw same-key fetch (an imperative `fetchQuery`/`ensureQueryData`, or the worktree-enrichment batched `useQueries` leg) clears the stamped meta.
+    // That is an ABSENT opinion, not a method change: the latch holds, the fetch resolves, and the app does NOT crash.
     await expect(
       client.fetchQuery({
         queryKey: key,
@@ -172,11 +169,7 @@ describe("condition-poll episode coordinator", () => {
   });
 
   it("does not crash when a raw unstamped same-key observer (batched enrichment) clears meta", () => {
-    // Production shape: `useWorktreeOwnerMetadata` (a stamped `useHostQuery`)
-    // and `useBatchedEnrichmentQueries` (a RAW `useQueries` leg that omits the
-    // meta stamp for its coalesced transport) build the SAME host query key.
-    // TanStack's last-writer `query.options.meta` flips to unstamped when the
-    // raw leg mounts; the latch must hold rather than throw `→ missing`.
+    // Production shape: `useWorktreeOwnerMetadata` (a stamped `useHostQuery`) and `useBatchedEnrichmentQueries` (a RAW `useQueries` leg that omits the meta stamp for its coalesced transport) build the SAME host query key.
     const key = nextKey("raw-unstamped-coobserver");
     const interval = coordinator.refetchIntervalFor(HARNESS_METHOD);
     client.setQueryData(key, unavailable(0));
@@ -194,7 +187,7 @@ describe("condition-poll episode coordinator", () => {
 
     let rawUnsubscribe: (() => void) | undefined;
     expect(() => {
-      // No meta stamp, no branded interval — the raw enrichment leg.
+      // No meta stamp, no branded interval - the raw enrichment leg.
       const raw = new QueryObserver(client, {
         queryKey: key,
         queryFn: () => Promise.resolve(unavailable(1)),
@@ -702,7 +695,7 @@ describe("condition-poll episode coordinator", () => {
     readonly key: QueryKey;
     readonly method: typeof HARNESS_METHOD | typeof PROVIDERS_METHOD;
   }): { readonly unsubscribe: () => void } {
-    // poll: false — stamped, but no branded refetchInterval, so never owns.
+    // poll: false - stamped, but no branded refetchInterval, so never owns.
     const observer = new QueryObserver(client, {
       queryKey: args.key,
       queryFn: () => Promise.resolve(unavailable(99)),

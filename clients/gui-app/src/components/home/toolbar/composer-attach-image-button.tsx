@@ -7,15 +7,8 @@ interface ComposerAttachImageButtonProps {
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
 }
 
-/**
- * The composer's "Attach image" control and the hidden file input it drives,
- * as one unit. Shared by the desktop toolbar's left group and the phone row.
- *
- * The value reset happens twice on purpose - once before opening the picker and
- * once after reading the selection - so re-picking the same file still fires a
- * `change` event. Keeping both halves here means neither caller can copy one
- * and forget the other.
- */
+/** The value reset happens twice on purpose - once before opening the picker and once after reading the
+ * selection - so re-picking the same file still fires a `change` event. */
 export function ComposerAttachImageButton(
   props: ComposerAttachImageButtonProps,
 ) {

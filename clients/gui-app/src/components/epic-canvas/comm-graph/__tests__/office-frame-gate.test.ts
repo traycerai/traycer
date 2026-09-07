@@ -21,10 +21,8 @@ const STILL: OfficeFloorMotion = {
 };
 
 /**
- * The rAF loop these rules govern cannot be exercised through the component:
- * jsdom has no 2d context, so the loop returns before its first frame. The
- * rules are therefore the loop's only testable part, and the loop is wiring
- * around them rather than a second copy of them.
+ * The rAF loop these rules govern cannot be exercised through the component: jsdom has no 2d context, so the loop returns before its first frame.
+ * The rules are therefore the loop's only testable part, and the loop is wiring around them rather than a second copy of them.
  */
 describe("OfficeFrameGate rate cap", () => {
   it("skips frames arriving faster than the drawing rate", () => {
@@ -69,9 +67,8 @@ describe("OfficeFrameGate rate cap", () => {
       ticked += gate.elapsed(16) ?? 0;
     }
 
-    // 960ms in, 960ms out bar the slice still in the accumulator. Dropping
-    // time here is invisible per frame and shows up as a floor that moves
-    // slower the faster the display refreshes.
+    // 960ms in, 960ms out bar the slice still in the accumulator.
+    // Dropping time here is invisible per frame and shows up as a floor that moves slower the faster the display refreshes.
     expect(ticked).toBeGreaterThan(60 * 16 - OFFICE_FRAME_INTERVAL_MS);
     expect(ticked).toBeLessThanOrEqual(60 * 16);
   });
@@ -114,9 +111,7 @@ describe("OfficeFrameGate rate cap", () => {
 
     gate.resume();
 
-    // The canvas still holds the pre-pause image, so the idle skip has to
-    // stand aside too. Standing aside only for the RATE cap left the tile
-    // showing a stale frame until something happened to move.
+    // Standing aside only for the RATE cap left the tile showing a stale frame until something happened to move.
     expect(gate.elapsed(1)).not.toBeNull();
     expect(gate.shouldDraw(STILL)).toBe(true);
     // ...and settles again straight after, rather than staying awake.
@@ -168,9 +163,7 @@ describe("OfficeFrameGate idle skip", () => {
 
     gate.invalidate();
 
-    // A resize, or a device-pixel-ratio change, assigns to the canvas's
-    // dimensions - which clears it. The skip's whole premise is that the last
-    // frame is still up there, so a still floor would otherwise stay blank.
+    // The skip's whole premise is that the last frame is still up there, so a still floor would otherwise stay blank.
     expect(gate.shouldDraw(STILL)).toBe(true);
     expect(gate.shouldDraw(STILL)).toBe(false);
   });
@@ -202,9 +195,7 @@ describe("officeCatchUpMs", () => {
 describe("isElementVisible", () => {
   it("asks the browser directly where it can", () => {
     const element = document.createElement("div");
-    // jsdom implements neither, so both branches are installed explicitly -
-    // and this one must win, because a laid-out-but-hidden tile has an empty
-    // rect list AND a definitive answer available.
+    // jsdom implements neither, so both branches are installed explicitly - and this one must win, because a laid-out-but-hidden tile has an empty rect list AND a definitive answer available.
     element.checkVisibility = () => true;
     element.getClientRects = () => document.createElement("p").getClientRects();
 
@@ -215,9 +206,7 @@ describe("isElementVisible", () => {
     const element = document.createElement("div");
     element.checkVisibility = () => false;
 
-    // This is the case the pause exists for: an unselected Traycer tab keeps
-    // its tiles mounted under `display:none`, where nothing is painted and no
-    // page-level event says so.
+    // This is the case the pause exists for: an unselected Traycer tab keeps its tiles mounted under `display:none`, where nothing is painted and no page-level event says so.
     expect(isElementVisible(element)).toBe(false);
   });
 

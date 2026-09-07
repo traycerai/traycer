@@ -48,11 +48,8 @@ export function SplitSlotChooserContent(
 ): ReactNode {
   const navigate = useNavigate();
   const headerItems = useHeaderStripItems();
-  // Store focus can land on this empty side without any DOM focus following
-  // it (keyboard "add split", focus-side commands). Mirroring the focused
-  // side into the search's focus effect gives typing somewhere to go - which
-  // is worth nothing on a touch pointer, where there is no typing until a tap
-  // and a raised keyboard would cover the chooser it belongs to.
+  // Store focus can land on this empty side without any DOM focus following it (keyboard "add split", focus-side
+  // commands).
   const coarsePointer = useCoarsePointer();
   const sideFocused = useTabsStore((state) =>
     state.items.some(
@@ -104,10 +101,7 @@ export function SplitSlotChooserContent(
         destination,
         activateFocusedRef,
       });
-      // Rows come from shared surfaces (History) that cannot pre-filter every
-      // invalid state - a structurally locked legacy Phase being the settled
-      // example. A click that resolves invalid must say so, not silently
-      // leave the slot empty.
+      // A click that resolves invalid must say so, not silently leave the slot empty.
       if (resolution.kind === "invalid") {
         toast.error(
           destination.kind === "phase-migration"
@@ -222,10 +216,8 @@ export function SplitSlotChooserContent(
               onOpenItem={openHistoryItem}
               routeSearch={null}
               historyNowMs={null}
-              // A ternary, not `&&`: the leaked-render lint rewrites a JSX
-              // `&&` into a null-armed ternary, and this prop is strictly
-              // boolean - spelling both arms keeps the fixer away and the
-              // types exact.
+              // A ternary, not `&&`: the leaked-render lint rewrites a JSX `&&` into a null-armed ternary, and this prop is
+              // strictly boolean - spelling both arms keeps the fixer away and the types exact.
               autoFocusSearch={sideFocused ? !coarsePointer : false}
             />
           ) : (

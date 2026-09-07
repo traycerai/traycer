@@ -152,9 +152,8 @@ describe("<ChatUsageDialog />", () => {
     usageSummaryCallCount.current = 0;
     renderWithClient();
     expect(screen.queryByTestId("chat-usage-dialog")).toBeNull();
-    // "On-demand" is about the REQUEST, not just the markup: this dialog is
-    // mounted for the whole session, so an ungated query here would price
-    // every chat in the background. `enabled` is what has to hold.
+    // "On-demand" is about the REQUEST, not just the markup: this dialog is mounted for the whole session, so an ungated query here would price every chat in the background.
+    // `enabled` is what has to hold.
     await act(async () => {
       await Promise.resolve();
     });
@@ -219,9 +218,7 @@ describe("<ChatUsageDialog />", () => {
     });
 
     await screen.findByTestId("usage-dialog-empty");
-    // Without this the dialog makes an account-wide claim out of a
-    // machine-local result - the qualification the cost figure carries on
-    // the loaded branch has to survive the route into empty.
+    // Without this the dialog makes an account-wide claim out of a machine-local result - the qualification the cost figure carries on the loaded branch has to survive the route into empty.
     expect(
       screen.getByTestId("usage-served-by-local-note").textContent,
     ).toContain("This machine's usage only");
@@ -238,9 +235,7 @@ describe("<ChatUsageDialog />", () => {
     });
     await screen.findByTestId("usage-cost-figure");
 
-    // The epic dialog's footer takes this inset for it; this dialog has no
-    // footer, so the body is what reaches the sheet's `bottom-0` and an
-    // expanded drilldown would otherwise scroll under the home indicator.
+    // The epic dialog's footer takes this inset for it; this dialog has no footer, so the body is what reaches the sheet's `bottom-0` and an expanded drilldown would otherwise scroll under the home indicator.
     expect(screen.getByTestId("chat-usage-dialog").className).toContain(
       "max-[28rem]:bottom-0",
     );

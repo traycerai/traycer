@@ -262,9 +262,7 @@ describe("chatViewportAnchorRowIndex + viewportActiveUserMessageId", () => {
   });
 
   it("subtracts the header offset before comparing (decision #18 - positionAtIndex is content-relative, scroll is not)", () => {
-    // Row 0 is short (position 0), row 1 starts right after it at content
-    // position 10 - both fall within an 80px header, so an unadjusted
-    // comparison against raw scroll=80 would spuriously pick row 1.
+    // Row 0 is short (position 0), row 1 starts right after it at content position 10 - both fall within an 80px header, so an unadjusted comparison against raw scroll=80 would spuriously pick row 1.
     const state = {
       scroll: 80,
       positionAtIndex: (index: number) => [0, 10][index],

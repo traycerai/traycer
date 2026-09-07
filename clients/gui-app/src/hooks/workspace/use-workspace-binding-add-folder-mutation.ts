@@ -10,13 +10,7 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 
-/**
- * Adds a folder to the owner binding as a Local entry. This shares the
- * `worktree.setEntryMode` RPC with the per-row "switch to Local" action, but
- * carries add-specific error copy and its own pending key - so the "Add folder"
- * affordance never surfaces the row action's "switch to Local" message, and its
- * spinner is not toggled by an unrelated row mode flip.
- */
+/** This shares the `worktree.setEntryMode` RPC with the per-row "switch to Local" action, but carries add-specific error copy and its own pending key - so the "Add folder" affordance never surfaces the row action's "switch to Local" message, and its spinner is not toggled by an unrelated row mode flip. */
 export function useWorkspaceBindingAddFolderForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<

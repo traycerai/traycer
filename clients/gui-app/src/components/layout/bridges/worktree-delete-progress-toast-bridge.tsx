@@ -24,11 +24,8 @@ export function WorktreeDeleteProgressToastBridge(): null {
   const summary = useWorktreeDeleteProgressSummary();
   const lastToastKeyRef = useRef<string | null>(null);
   const dismissedProgressScopeKeysRef = useRef<Set<string>>(new Set());
-  // Whether the toast currently on screen is one that will NOT expire on its
-  // own: the in-progress toast and the failure toast both use
-  // `duration: Infinity`. A terminal success resets to a short duration.
-  // Tracked so that when the runs drain we dismiss the former two but leave a
-  // success toast to live out its time.
+  // Tracked so that when the runs drain we dismiss the former two but leave a success toast to live out its
+  // time.
   const lastToastPersistentRef = useRef<boolean>(false);
 
   useEffect(() => {
@@ -69,9 +66,8 @@ export function WorktreeDeleteProgressToastBridge(): null {
 
     lastToastPersistentRef.current = summary.active > 0 || summary.failed > 0;
     showWorktreeDeleteProgressToast(summary, () => {
-      // Sonner also invokes `onDismiss` for programmatic `toast.dismiss`.
-      // Those paths clear this ref before Sonner runs its asynchronous
-      // callback, so only a user closing a live toast suppresses its scope.
+      // Those paths clear this ref before Sonner runs its asynchronous callback, so only a user closing a live toast
+      // suppresses its scope.
       if (!lastToastPersistentRef.current) return;
       summary.scopeKeys.forEach((key) => {
         dismissedProgressScopeKeysRef.current.add(key);
@@ -107,9 +103,8 @@ function showWorktreeDeleteProgressToast(
     });
     return;
   }
-  // A failure toast persists (no auto-expiry) and is directly dismissable, so a
-  // user who never reopens the Worktrees panel to dismiss the strip can still
-  // clear it.
+  // A failure toast persists (no auto-expiry) and is directly dismissable, so a user who never reopens the
+  // Worktrees panel to dismiss the strip can still clear it.
   reportableErrorToast(
     worktreeDeleteFailureTitle(summary),
     {

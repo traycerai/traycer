@@ -1,9 +1,5 @@
 /**
- * The renderer wrapper's `deleteIfToken` contract: it FORWARDS the whole
- * conditional delete to the backing store as one operation (the atomicity
- * lives at the store's own authority — main's file lock — never composed
- * from `get()` + `delete()` here), and it joins the renderer's mutation
- * chain so it is ordered against this window's own `signIn`/`delete`.
+ * The renderer wrapper's `deleteIfToken` contract: it FORWARDS the whole conditional delete to the backing store as one operation (the atomicity lives at the store's own authority - main's file lock - never composed from `get()` + `delete()` here), and it.
  */
 import { describe, expect, it } from "vitest";
 import type {
@@ -143,7 +139,7 @@ describe("AuthTokenStore.deleteIfToken", () => {
     await expect(store.deleteIfToken("a-token")).rejects.toThrow(
       "EIO: credentials file unwritable",
     );
-    // The pair the delete failed to remove is still there — the caller must
+    // The pair the delete failed to remove is still there - the caller must
     // hear about it, which is exactly why the rejection is not swallowed.
     expect(backing.state.current?.token).toBe("a-token");
   });

@@ -60,15 +60,7 @@ interface AuthSessionBridgeTestHarness {
   readonly unmount: () => void;
 }
 
-/**
- * A faithful boundary fake for the real startup race:
- *
- * - AuthService replays its restored session synchronously when the outbound
- *   subscription is installed.
- * - Main still reports its default signed-out snapshot from `get()` while the
- *   asynchronous bearer verification in `set()` is pending.
- * - The bridge can deliver live sibling-window changes through `onChange`.
- */
+/** AuthService replays restored session synchronously; main get() is still signed-out until set() verifies; onChange delivers sibling-window updates. */
 function renderWithFakes(
   setResult: DesktopAuthSessionSetResult,
   options: RenderWithFakesOptions,
@@ -201,10 +193,7 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   });
 
   it("re-attempts the same session after a refusal instead of latching it", async () => {
-    // The refusal is the transient case that matters: authn unreachable at
-    // launch. A latch held over a write that landed nowhere makes the next
-    // projection of the same snapshot a no-op, and the jar plane stays closed
-    // until an unrelated rotation changes the bytes.
+    // Refused write must clear the latch so the next same snapshot is retried.
     const { emitOutbound, set } = renderWithFakes(
       {
         outcome: "refused",

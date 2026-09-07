@@ -7,10 +7,7 @@ export interface WireframeBlockToolbarProps {
   readonly onCopyHtml: () => void;
 }
 
-/**
- * Action bar for an inline wireframe. Read-only and editable users see
- * the same actions - both are non-destructive.
- */
+/** Action bar for an inline wireframe. Read-only and editable users see the same actions - both are non-destructive. */
 export function WireframeBlockToolbar(props: WireframeBlockToolbarProps) {
   const { onOpenFullscreen, onCopyHtml } = props;
   return (

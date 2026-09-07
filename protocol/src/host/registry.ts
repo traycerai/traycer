@@ -853,30 +853,9 @@ export { hostUsageSummaryV10 };
 
 /**
  * Traycer 3.0 host RPC protocol.
- *
- * Authoritative home for contracts the local host publishes (`host.*`,
- * `agent.*`, and `epic.*` methods). Every host consumer - the host
- * dispatcher itself, the `gui-app` client, the desktop shell - must resolve
- * contracts from here so request shapes on the wire and response shapes on
- * the wire line up.
- *
- * Growth rules:
- *
- * 1. Add new methods as top-level keys (for example `host.ping`).
- * 2. Add new minors within a major line for backward-compatible changes;
- *    each non-initial minor must declare `upgradeFromPreviousVersion`.
- * 3. Add new majors when a contract actually breaks compatibility (a
- *    field is removed or its JSON Schema narrows). Declare a
- *    `downgradePathsFromLatest` bridge back to every older major the
- *    host still accepts from older clients.
- *
- * `validateVersionedRpcRegistry()` - which
- * `defineVersionedRpcRegistry()` runs automatically at module load - is
- * the single contract future growth has to keep passing.
+ * Add new minors within a major line for backward-compatible changes; each non-initial minor must declare `upgradeFromPreviousVersion`.
  */
-// `snapshots.*@1.0` - local-only snapshot storage management. Contracts land
-// inline here pending a per-domain contracts file. Schemas live in
-// `protocol/host/snapshot-schemas.ts`.
+// `snapshots.*@1.0` - local-only snapshot storage management.
 export const snapshotsGetLocalStorageSizeV10 = defineRpcContract({
   method: "snapshots.getLocalStorageSize",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -898,9 +877,7 @@ export const snapshotsReadSnapshotDiffV10 = defineRpcContract({
   responseSchema: snapshotsReadSnapshotDiffResponseSchema,
 });
 
-// `worktree.*@1.0` - local-only worktree binding lifecycle. Contracts land
-// inline here pending a per-domain contracts file. Schemas live in
-// `protocol/host/worktree-schemas.ts`.
+// `worktree.*@1.0` - local-only worktree binding lifecycle.
 export const worktreeListByWorkspacePathsV10 = defineRpcContract({
   method: "worktree.listByWorkspacePaths",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -908,12 +885,8 @@ export const worktreeListByWorkspacePathsV10 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchema,
 });
 
-// v1.1 adds the per-ref committed-scripts preview (`scriptRefs` ->
-// `scriptsAtRefs`) the create-worktree Environment editor uses. Folded onto this
-// existing method instead of a standalone `worktree.readScriptsAtRef` so the wire
-// method-set stays identical to v1.0.0 - a new method name fatally fails the
-// equal-set handshake against an already-shipped host. See the RPC backward-compat
-// decision log.
+// v1.1 adds the per-ref committed-scripts preview (`scriptRefs` -> `scriptsAtRefs`) the create-worktree Environment editor uses.
+// Folded onto this existing method instead of a standalone `worktree.readScriptsAtRef` so the wire method-set stays identical to v1.0.0 - a new method name fatally fails the equal-set handshake against an already-shipped.
 export const worktreeListByWorkspacePathsV11 = defineRpcContract({
   method: "worktree.listByWorkspacePaths",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -921,9 +894,7 @@ export const worktreeListByWorkspacePathsV11 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchemaV11,
 });
 
-// Additive upgrade from v1.0: an older peer carries no ref-scripts, so the new
-// fields default to empty. The newer side runs this when bridging a v1.0 peer up
-// to canonical (host: inbound v1.0 request; client: inbound v1.0 response).
+// Additive upgrade from v1.0: an older peer carries no ref-scripts, so the new fields default to empty.
 export const worktreeListByWorkspacePathsUpgradeV10ToV11 = defineUpgradePath<
   typeof worktreeListByWorkspacePathsV10,
   typeof worktreeListByWorkspacePathsV11
@@ -940,9 +911,7 @@ export const worktreeListByWorkspacePathsUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-// v1.2 adds `forceRefresh`, the manual-refresh escape hatch over the
-// minutes-scale TTL cache `WorktreeService` now serves `listForWorkspace`
-// summaries from. Response shape is identical to v1.1.
+// v1.2 adds `forceRefresh`, the manual-refresh escape hatch over the minutes-scale TTL cache `WorktreeService` now serves `listForWorkspace` summaries from.
 export const worktreeListByWorkspacePathsV12 = defineRpcContract({
   method: "worktree.listByWorkspacePaths",
   schemaVersion: { major: 1, minor: 2 } as const,
@@ -950,10 +919,7 @@ export const worktreeListByWorkspacePathsV12 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchemaV12,
 });
 
-// Additive upgrade from v1.1: an older peer never asks for a forced
-// recompute, so the request defaults `forceRefresh: false` (cached-read
-// behavior, unchanged from what v1.1 always did). The response is passed
-// through unchanged.
+// Additive upgrade from v1.1: an older peer never asks for a forced recompute, so the request defaults `forceRefresh: false` (cached-read behavior, unchanged from what v1.1 always did).
 export const worktreeListByWorkspacePathsUpgradeV11ToV12 = defineUpgradePath<
   typeof worktreeListByWorkspacePathsV11,
   typeof worktreeListByWorkspacePathsV12
@@ -976,11 +942,7 @@ export const worktreeListByWorkspacePathsV13 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchemaV13,
 });
 
-// A v1.2 host predates `resolvedAt` and never emits one, so its rows bridge to
-// the resolved sentinel (NOT `null`): its summaries are authoritative, and
-// stamping `null` would strand every folder as perpetually pending in the home
-// workspace selector (non-selectable, no git eligibility). See
-// LEGACY_HOST_RESOLVED_AT.
+// A v1.2 host predates `resolvedAt` and never emits one, so its rows bridge to the resolved sentinel (NOT `null`): its summaries are authoritative, and stamping `null` would strand every folder as perpetually pending in.
 export const worktreeListByWorkspacePathsUpgradeV12ToV13 = defineUpgradePath<
   typeof worktreeListByWorkspacePathsV12,
   typeof worktreeListByWorkspacePathsV13
@@ -997,9 +959,7 @@ export const worktreeListByWorkspacePathsUpgradeV12ToV13 = defineUpgradePath<
   }),
 });
 
-// v1.4 adds per-summary `repoBranchPrefix`, the resolved repository-local
-// worktree branch-prefix override read from `.traycer/environment.json`.
-// Request is unchanged from v1.3.
+// v1.4 adds per-summary `repoBranchPrefix`, the resolved repository-local worktree branch-prefix override read from `.traycer/environment.json`.
 export const worktreeListByWorkspacePathsV14 = defineRpcContract({
   method: "worktree.listByWorkspacePaths",
   schemaVersion: { major: 1, minor: 4 } as const,
@@ -1007,12 +967,7 @@ export const worktreeListByWorkspacePathsV14 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchemaV14,
 });
 
-// A v1.3 host predates the repository branch-prefix override entirely and
-// never emits one, so its rows bridge to `{ status: "absent" }` - the same
-// answer a git-eligible workspace with no override gets on a current host -
-// so the client silently falls back to the global default rather than
-// surfacing a false "malformed" warning for a host that simply doesn't know
-// about the feature yet.
+// A v1.3 host predates the repository branch-prefix override entirely and never emits one, so its rows bridge to `{ status: "absent" }` - the same answer a git-eligible workspace with no override gets on a current host -.
 export const worktreeListByWorkspacePathsUpgradeV13ToV14 = defineUpgradePath<
   typeof worktreeListByWorkspacePathsV13,
   typeof worktreeListByWorkspacePathsV14
@@ -1025,9 +980,6 @@ export const worktreeListByWorkspacePathsUpgradeV13ToV14 = defineUpgradePath<
     workspaces: response.workspaces.map((workspace) => ({
       ...workspace,
       repoBranchPrefix: { status: "absent" as const },
-      // A v1.3 host's summary was authoritative for a path it listed, so its
-      // rows read as present rather than being mistaken for a missing remote
-      // directory - the established pre-`presence` behaviour.
       presence: "present" as const,
     })),
   }),
@@ -1129,10 +1081,7 @@ export const worktreeImportV10 = defineRpcContract({
   responseSchema: worktreeImportResponseSchema,
 });
 
-// Per-folder mode flip. Only "local" is settable through this RPC -
-// transitions into "worktree" go through `worktree.create` /
-// `worktree.import`, which already write per-entry mode and carry the
-// branch / worktreePath the entry needs.
+// Per-folder mode flip.
 export const worktreeSetEntryModeV10 = defineRpcContract({
   method: "worktree.setEntryMode",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1161,13 +1110,7 @@ export const worktreeDeleteV10 = defineRpcContract({
   responseSchema: worktreeDeleteResponseSchema,
 });
 
-/**
- * `worktree.delete@1.1` - optional `stopOwners`. Absent/false reproduces
- * today's refuse-on-busy. True asks the host to stop enumerated holders,
- * then delete. Response is unchanged. The typed holder list on a busy
- * refusal rides the `WORKTREE_BUSY` error envelope (`holders`), not this
- * response — old clients keep the prose `message`.
- */
+/** `worktree.delete@1.1` - optional `stopOwners`. */
 export const worktreeDeleteV11 = defineRpcContract({
   method: "worktree.delete",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -1188,11 +1131,7 @@ export const worktreeDeleteUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-/**
- * `worktree.delete@1.2` - optional `expectedHoldersRevision`. Absent
- * reproduces @1.1 (stop whatever the fresh inventory finds). Present
- * with `stopOwners: true` is a digest-equality compare before teardown.
- */
+/** `worktree.delete@1.2` - optional `expectedHoldersRevision`. */
 export const worktreeDeleteV12 = defineRpcContract({
   method: "worktree.delete",
   schemaVersion: { major: 1, minor: 2 } as const,
@@ -1214,10 +1153,7 @@ export const worktreeDeleteUpgradeV11ToV12 = defineUpgradePath<
 });
 
 /**
- * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES`),
- * registered with `degrade: { kind: "unsupported" }`: an old host simply
- * lacks it, and callers get per-call upgrade guidance instead of a fatal
- * handshake mismatch. Old clients never call it.
+ * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES`), registered with `degrade: { kind: "unsupported" }`: an old host simply lacks it, and callers get per-call upgrade guidance instead of a fatal handshake.
  */
 export const worktreeListHoldersV10 = defineRpcContract({
   method: "worktree.listHolders",
@@ -1226,10 +1162,7 @@ export const worktreeListHoldersV10 = defineRpcContract({
   responseSchema: worktreeListHoldersResponseSchema,
 });
 
-// Host-wide worktree surface for Settings ▸ Worktrees. `listAllForHost`
-// is a disk walk of `~/.traycer/worktrees/` (surfaces orphans);
-// `deleteByPath` is path-keyed and resolves the main repo from the worktree
-// path itself, so it works without an epic/workspace context.
+// Host-wide worktree surface for Settings ▸ Worktrees.
 export const worktreeListAllForHostV10 = defineRpcContract({
   method: "worktree.listAllForHost",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1237,14 +1170,8 @@ export const worktreeListAllForHostV10 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchema,
 });
 
-// v1.1 adds caller-bounded pagination (`cursor`, `limit`, `nextCursor`), the
-// staleness signals (`includeActivity` request flag; per-entry `lastActivityAt`,
-// `owners`, `branchStatus`, `createdAt`) the housekeeping skill and Settings ▸
-// Worktrees tab consume, plus the `activityPaths` request field for per-viewport
-// lazy enrichment (enrich only the requested rows, no matter `includeActivity`).
-// Folded onto this existing method - never a new method name - so the wire
-// method-set stays identical to v1.0.0; see `worktreeListByWorkspacePathsV11`
-// and the RPC backward-compat decision log.
+// v1.1 adds caller-bounded pagination (`cursor`, `limit`, `nextCursor`), the staleness signals (`includeActivity` request flag; per-entry `lastActivityAt`, `owners`, `branchStatus`, `createdAt`) the housekeeping skill.
+// Folded onto this existing method - never a new method name - so the wire method-set stays identical to v1.0.0; see `worktreeListByWorkspacePathsV11` and the RPC backward-compat decision log.
 export const worktreeListAllForHostV11 = defineRpcContract({
   method: "worktree.listAllForHost",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -1252,9 +1179,7 @@ export const worktreeListAllForHostV11 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchemaV11,
 });
 
-// v1.2 adds `submodules[].atPinnedCommit`, a positive proof that the submodule
-// branch/tip equals the superproject's pinned gitlink. Request shape is
-// identical to v1.1.
+// v1.2 adds `submodules[].atPinnedCommit`, a positive proof that the submodule branch/tip equals the superproject's pinned gitlink.
 export const worktreeListAllForHostV12 = defineRpcContract({
   method: "worktree.listAllForHost",
   schemaVersion: { major: 1, minor: 2 } as const,
@@ -1262,16 +1187,6 @@ export const worktreeListAllForHostV12 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchemaV12,
 });
 
-// Additive upgrade from v1.0: an older peer neither asks for activity nor
-// carries pagination posture or the enriched fields, so the request defaults
-// `includeActivity: false`, `activityPaths: null` (whole-list mode, no
-// per-viewport selection), `cursor: null`, and `limit: null`. Each response
-// entry defaults empty `owners` / `null` timestamps & `branchStatus`, plus the
-// merge-provenance fields (PR bundle and `submodules`) default to their absent
-// shape (`null` / `false` / `[]`), and `nextCursor: null` marks the upgraded
-// full-list response exhausted. The
-// newer side runs this when bridging a v1.0 peer up to canonical (host: inbound
-// v1.0 request; client: inbound v1.0 response).
 export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
   typeof worktreeListAllForHostV10,
   typeof worktreeListAllForHostV11
@@ -1323,10 +1238,6 @@ export const worktreeListAllForHostUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
-// v1.3 adds `forceRefresh`, the manual-refresh escape hatch over the
-// minutes-scale TTL cache `WorktreeService` now serves the disk-truth
-// enumeration + per-worktree status from. Response shape is identical to
-// v1.2.
 export const worktreeListAllForHostV13 = defineRpcContract({
   method: "worktree.listAllForHost",
   schemaVersion: { major: 1, minor: 3 } as const,
@@ -1334,10 +1245,7 @@ export const worktreeListAllForHostV13 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchemaV13,
 });
 
-// Additive upgrade from v1.2: an older peer never asks for a forced
-// recompute, so the request defaults `forceRefresh: false` (cached-read
-// behavior, unchanged from what v1.2 always did). The response is passed
-// through unchanged.
+// Additive upgrade from v1.2: an older peer never asks for a forced recompute, so the request defaults `forceRefresh: false` (cached-read behavior, unchanged from what v1.2 always did).
 export const worktreeListAllForHostUpgradeV12ToV13 = defineUpgradePath<
   typeof worktreeListAllForHostV12,
   typeof worktreeListAllForHostV13
@@ -1360,12 +1268,7 @@ export const worktreeListAllForHostV14 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchemaV14,
 });
 
-// A v1.3 host predates `resolvedAt` and never emits one, so its rows bridge to
-// the resolved sentinel (NOT `null`): stamping `null` would strand every
-// worktree in the settings panel as perpetually "checking" - non-selectable,
-// non-deletable, no enrichment ever accepted by the staleness merge. Every row
-// from the legacy host shares the same sentinel, so that merge's timestamp
-// comparison degrades to a no-op accept. See LEGACY_HOST_RESOLVED_AT.
+// A v1.3 host predates `resolvedAt` and never emits one, so its rows bridge to the resolved sentinel (NOT `null`): stamping `null` would strand every worktree in the settings panel as perpetually "checking" -.
 export const worktreeListAllForHostUpgradeV13ToV14 = defineUpgradePath<
   typeof worktreeListAllForHostV13,
   typeof worktreeListAllForHostV14
@@ -1382,14 +1285,8 @@ export const worktreeListAllForHostUpgradeV13ToV14 = defineUpgradePath<
   }),
 });
 
-// v1.5 adds the same `presence` fact to the host-wide worktree listing. The two
-// methods deliberately DIVERGE on the minor that carries it: this one shipped
-// 1.4, so `presence` had to open a new 1.5, while
-// `worktree.listByWorkspacePaths` never shipped its 1.4 and absorbed `presence`
-// into that still-mutable minor instead. Do not "re-pair" them by reopening a
-// `listByWorkspacePaths@1.5` - the fact rides `@1.4` there. What stays true is
-// the upgrade semantics: a v1.4 host's rows were already authoritative and
-// therefore upgrade as present.
+// v1.5 adds the same `presence` fact to the host-wide worktree listing.
+// Do not "re-pair" them by reopening a `listByWorkspacePaths@1.5` - the fact rides `@1.4` there.
 export const worktreeListAllForHostV15 = defineRpcContract({
   method: "worktree.listAllForHost",
   schemaVersion: { major: 1, minor: 5 } as const,
@@ -1443,14 +1340,7 @@ export const worktreeSetRepoScriptsV10 = defineRpcContract({
   responseSchema: worktreeSetRepoScriptsResponseSchema,
 });
 
-// `worktree.setRepoBranchPrefix@1.0` - a brand-new method (not a version bump
-// of an existing one: there is no floor method this naturally extends), added
-// AFTER the released floor was frozen. Registered with
-// `degrade: { kind: "unsupported" }` in the version table below, so it rides
-// the optional-capabilities channel rather than the floor: an old host that
-// predates it negotiates the method away (the GUI gates the affordance with
-// `useHostSupportsMethod`) instead of failing the whole `/rpc` handshake -
-// the exact failure class `released-surface-compat.test.ts` guards against.
+// `worktree.setRepoBranchPrefix@1.0` - a brand-new method (not a version bump of an existing one: there is no floor method this naturally extends), added AFTER the released floor was frozen.
 export const worktreeSetRepoBranchPrefixV10 = defineRpcContract({
   method: "worktree.setRepoBranchPrefix",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1458,10 +1348,7 @@ export const worktreeSetRepoBranchPrefixV10 = defineRpcContract({
   responseSchema: worktreeSetRepoBranchPrefixResponseSchema,
 });
 
-// `worktree.getBinding@1.0` - owner-scoped binding read used by GUI surfaces
-// that do not subscribe to a chat (TUI-agent toolbar). Returns `null`
-// when the orchestrator has no row yet so the chip can render "not selected"
-// without a special-case error path.
+// `worktree.getBinding@1.0` - owner-scoped binding read used by GUI surfaces that do not subscribe to a chat (TUI-agent toolbar).
 export const worktreeGetBindingV10 = defineRpcContract({
   method: "worktree.getBinding",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1469,13 +1356,8 @@ export const worktreeGetBindingV10 = defineRpcContract({
   responseSchema: worktreeGetBindingResponseSchema,
 });
 
-// `providers.*@1.0` - per-device provider CLI resolution. Lists each
-// provider's resolved binary path + version, lets the user override the
-// binary per provider, and previews a candidate-path version without
-// committing it. Schemas live in `protocol/host/provider-schemas.ts`.
-// `providers.list` always returns every provider; v1.0 is frozen without the
-// ACP GUI harness providers, v2.0 carries them, and the v2→v1 bridge drops them
-// for v1.0 clients.
+// `providers.*@1.0` - per-device provider CLI resolution.
+// `providers.list` always returns every provider; v1.0 is frozen without the ACP GUI harness providers, v2.0 carries them, and the v2→v1 bridge drops them for v1.0 clients.
 export const providersListV10 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1502,11 +1384,7 @@ function unsupportedProviderStateDowngrade(
   };
 }
 
-// `DowngradableToV10ProviderState` (imported) accepts either the live (latest)
-// state or the frozen v2.0 state - see `downgradeProviderCliStateToV10`'s
-// comment, which owns the shape. `providersListDowngradeV2ToV1` downgrades from
-// v2.0 (already `profiles`-free); every other caller downgrades from the live
-// state.
+// `DowngradableToV10ProviderState` (imported) accepts either the live (latest) state or the frozen v2.0 state - see `downgradeProviderCliStateToV10`'s comment, which owns the shape.
 function downgradeProviderStateForV10(
   state: DowngradableToV10ProviderState,
 ): DowngradeResult<ProviderCliStateV10> {
@@ -1526,44 +1404,22 @@ function downgradeProviderStateListForV10(
   });
 }
 
-// Upgrades a v1.0 state to the frozen major-2 mutation-response shape -
-// shared by every provider.* state-echo mutation's v1.0 -> v2.0 bridge
-// (`providers.list` freezes its own v2.0 shape and upgrades via
-// `upgradeProviderCliStateV10ToV20` inline below instead). Like the v1.0
-// host itself, the frozen 2.0 shape predates `profiles`; each method's
-// 2.0 -> 2.1 upgrade fills `profiles: []` for the caller's canonical.
+// Upgrades a v1.0 state to the frozen major-2 mutation-response shape - shared by every provider.* state-echo mutation's v1.0 -> v2.0 bridge (`providers.list` freezes its own v2.0 shape and upgrades via.
+// Like the v1.0 host itself, the frozen 2.0 shape predates `profiles`; each method's 2.0 -> 2.1 upgrade fills `profiles: []` for the caller's canonical.
 function upgradeProviderStateFromV10(
   state: ProviderCliStateV10,
 ): ProviderMutationCliStateV20 {
   return upgradeProviderCliStateV10ToMutationV20(state);
 }
 
-// Applied where `providers.list`'s pre-v4.0 line upgrades to the live shape,
-// alongside the existing `profiles: []` fill. An old host predates the
-// provider pack registry entirely, so it has no managed-install lifecycle, no
-// other-session version-visibility signal, and no Phase-2 advisory to report -
-// "nothing to show" is the honest projection, matching how `profiles: []`
-// reads "old host never had this feature."
-//
-// `providers.list` is the ONLY carrier: the provider.* mutation echoes are
-// pinned to the frozen `providerMutationCliStateSchemaV21`, which does not
-// model these fields at all (a state echo cannot change what is installed -
-// see that schema's comment), so their 2.0 -> 2.1 upgrades must not fill
-// them.
+// Applied where `providers.list`'s pre-v4.0 line upgrades to the live shape, alongside the existing `profiles: []` fill.
 const PROVIDER_LIVE_FIELDS_PRE_REGISTRY = {
   managedInstallState: null,
   versionVisibility: null,
   advisory: null,
 } as const;
 
-// Fills the code-paste capability slot a frozen pre-`codePaste` state (v1.0,
-// v2.0, v3.0) never carries - same "old host never had this feature"
-// semantics as the `profiles: []` fill these upgrade bridges already apply
-// to the same state. Every v2.0 -> v2.1 (and v3.0 -> v4.0) response upgrade
-// that lifts a frozen state onto the live `ProviderCliState` shape must call
-// this alongside its `profiles: []` fill, or the live shape's `codePaste`
-// key is silently absent on the wire (`upgradeResponseToVersion` chains
-// these callbacks by cast, with no re-parse step to apply `.catch(null)`).
+// Fills the code-paste capability slot a frozen pre-`codePaste` state (v1.0, v2.0, v3.0) never carries - same "old host never had this feature" semantics as the `profiles: []` fill these upgrade bridges already apply to.
 function upgradeLoginCapabilityFromV10(
   loginCapability: ProviderLoginCapabilityV10 | null,
 ): ProviderLoginCapabilityV40 | null {
@@ -1572,22 +1428,8 @@ function upgradeLoginCapabilityFromV10(
     : { ...loginCapability, codePaste: null };
 }
 
-// Fills the terminal-login capability slot a frozen V40-shaped state (the
-// v4.0/v5.0/v6.0 list lines and every @2.1 mutation echo) never carries -
-// same "old host never had this feature" semantics as the `codePaste` fill
-// above, one line later. `terminalLogin` ships with the v7.0 line, so a v6.0
-// host either predates it or never reported it, and "sign in from a terminal
-// is not offered" is the honest projection.
-//
-// Filling this MATTERS on the client, not just for type completeness: a
-// client decodes an old host's payload through the negotiated FROZEN schema,
-// so the live `.catch(null)` never runs and the key comes out of the DECODE
-// absent. This bridge is what turns that into `null` before any GUI code sees
-// it, on the only hop that lands on the live shape. GUI gates still spell
-// their check `!== null && !== undefined`, but for their own reason - a
-// provider whose whole `loginCapability` is null makes the optional chain
-// yield `undefined` - not because an old host's payload reaches them with the
-// key missing. It does not.
+// Fills the terminal-login capability slot a frozen V40-shaped state (the v4.0/v5.0/v6.0 list lines and every @2.1 mutation echo) never carries - same "old host never had this feature" semantics as the `codePaste` fill.
+// `terminalLogin` ships with the v7.0 line, so a v6.0 host either predates it or never reported it, and "sign in from a terminal is not offered" is the honest projection.
 function upgradeLoginCapabilityFromV40(
   loginCapability: ProviderLoginCapabilityV40 | null,
 ): ProviderLoginCapability | null {
@@ -1652,9 +1494,6 @@ export const providersListUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  // A v2.0 response without Amp is a valid v3.0 response, and the request
-  // shape is identical - both upgrades are identity. (`profiles` belongs to
-  // the v4.0 line; the v3→v4 upgrade below fills it.)
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1689,21 +1528,11 @@ export const providersListDowngradeV3ToV1 = defineDowngradePath<
   }),
 });
 
-// v4.0 adds `profiles` (multi-profile management), `nativeCapabilities` (per-
-// provider MCP/plugins/skills facts), Devin/Pi, and folds native list/discover
-// onto optional `native` request/response fields. A genuine major: v3.0
-// predates `profiles` entirely (it never reached a released host on that
-// line - see `providerCliStateBaseShapeV30`'s comment), so growing the
-// response with a new non-optional-shaped field is a breaking change per
-// `assertSchemaCompatibility`, not something a minor bump can carry.
+// v4.0 adds `profiles` (multi-profile management), `nativeCapabilities` (per- provider MCP/plugins/skills facts), Devin/Pi, and folds native list/discover onto optional `native` request/response fields.
 export const providersListV40 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 4, minor: 0 } as const,
-  // Frozen: `cli-v1.1.4` shipped this line, and `host-v1.1.10` re-froze it
-  // without `native`. It pointed at the live request schema until then, which
-  // is how the native list/discover carrier grew three already-released
-  // request lines at once - the response side of this same method was frozen
-  // per line for the identical reason (see `providersListV50`/`V60`).
+  // Frozen: `cli-v1.1.4` shipped this line, and `host-v1.1.10` re-froze it without `native`.
   requestSchema: providersListRequestSchemaBeforeV70,
   responseSchema: providersListResponseSchemaV40,
 });
@@ -1714,26 +1543,8 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
 >({
   from: { major: 3, minor: 0 },
   to: { major: 4, minor: 0 },
-  // The request shape is identical - the request upgrade is identity. The
-  // response gains `profiles`, which ships with the v4.0 line: every host on
-  // the v3.0 line (and below) predates it, so its providers upgrade to
-  // `profiles: []` (same "old host never had this feature" semantics as the
-  // v1.0 -> v2.0 `availabilityPending` fill above). Devin/Pi absence needs no
-  // transform - a v3.0 provider set is a valid v4.0 subset.
-  //
-  // The provider-pack-registry fields are deliberately NOT filled here. This
-  // bridge's target, `providersListResponseSchemaV40`, is frozen and does not
-  // model them, so a fill here is discarded - they are filled on the
-  // v6.0 -> v7.0 hop instead, the first hop whose target models them. (That
-  // fill has moved twice as each line was frozen in turn: v3->v4, then v5->v6,
-  // now v6->v7. Exactly ONE bridge targets the live shape at any time - the
-  // one into the head line, today v7->v8 - and every other target is a frozen
-  // schema. So "the target is the live shape" identifies the head hop, never a
-  // reason a fill lands on a middle hop.)
-  //
-  // The request upgrade is identity: v3.0 and v4.0 are both pinned to
-  // `providersListRequestSchemaBeforeV70`. `native` rides v7.0 alone and is
-  // filled on the v6.0 -> v7.0 hop, the first bridge whose target models it.
+  // The request shape is identical - the request upgrade is identity.
+  // So "the target is the live shape" identifies the head hop, never a reason a fill lands on a middle hop.)
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     providers: response.providers.map((provider) => ({
@@ -1810,9 +1621,7 @@ export const providersListV50 = defineRpcContract({
   // Frozen without `native` for the same reason as the v4.0 line above:
   // `host-v1.1.10` shipped this request shape.
   requestSchema: providersListRequestSchemaBeforeV70,
-  // Frozen: `cli-v1.1.8` shipped this line, so it must serve the v5.0 id set
-  // rather than the live one. Before that release it pointed at the canonical
-  // schema, which is exactly how `omp` first tried to ride v5.0.
+  // Frozen: `cli-v1.1.8` shipped this line, so it must serve the v5.0 id set rather than the live one.
   responseSchema: providersListResponseSchemaV50,
 });
 
@@ -1822,100 +1631,16 @@ export const providersListV60 = defineRpcContract({
   // Frozen without `native` for the same reason as the v4.0 line above:
   // `host-v1.1.10` shipped this request shape.
   requestSchema: providersListRequestSchemaBeforeV70,
-  // Frozen: `cli-v1.1.9` shipped this line. It pointed at the canonical schema
-  // until then, which is how the provider-pack-registry fields grew an
-  // already-released version - the same way `omp` first tried to ride v5.0.
+  // Frozen: `cli-v1.1.9` shipped this line.
   responseSchema: providersListResponseSchemaV60,
 });
 
-// v7.0 carries the per-pack managed-version manager:
-// `packId`, `managedVersions`, `managedVersionsUnavailable`, `nextRunBinary`,
-// and a `version` on `managedInstallState`'s non-`absent` arms. Those fields
-// opened a v8.0 while v7.0 was still unreleased; both lines were tree-only, so
-// the release collapsed them back into one rather than negotiating a major that
-// no peer had ever seen. The v8.0 line's schemas, bridges and tests are what
-// this line now is - only its number changed.
-//
-// This line originally pointed at the CANONICAL schemas, which is what "head"
-// meant here:
-// exactly one line tracks live at any time, and an UNRELEASED line widens in
-// place instead of minting a new major for every field (see
-// `providersSetEnabledRequestSchemaV21`). The defect the v4.0/v5.0/v6.0 freezes
-// fixed was never "a line points at live", it was "a line that has STOPPED
-// being the head still points at live".
-//
-// So the rule to carry forward is unchanged: FREEZE LINE N WHEN LINE N+1 OPENS,
-// or before N ships, whichever comes first. The pre-ship half of that is
-// mechanized - `__tests__/__fixtures__/frozen-catalog-lines.ts` pins this
-// line's ENTIRE serialized shape, so any growth of the live schemas (or of any
-// sub-schema they reach) fails `frozen-catalog-lines.test.ts` in a plain
-// `bun run test`, with no tags to resolve. When it fails, do not regenerate to
-// green: hand-freeze THIS line, then open v8.0 against the live shape, and
-// only then let the new field land.
-//
-// Mind which line the freeze names. A `VN0` schema is the shape line N.0
-// SERIALIZES - that is what `providerIdSchemaV40` / `V50` / `V60` each are. The
-// line that stops being head when v8.0 opens is v7.0, so the freeze that has to
-// be taken is a v7.0 one and takes `V70` names. `V80` names belong to the new
-// head, which keeps pointing at the canonical schemas; freezing under `V80`
-// would leave v7.0 bound to a schema that keeps moving.
-//
-// The response-side `V70` names are FREE for that freeze. They were occupied
-// until this line's pre-image was renamed out of the way: the
-// `*V70Preimage` exports (`providersListResponseSchemaV70Preimage`,
-// `providerCliStateSchemaV70Preimage` and the leaves they reach) are the shape
-// this line had BEFORE the version-manager fields arrived, back when those
-// fields sat on a v8.0 above it. No peer ever negotiated that shape and no
-// contract binds it.
-//
-// It is not dead code, so do not delete it to make room: the v6 -> v7 bridge's
-// FIRST pass re-parses every row through it before the version-manager fill
-// lands on top (see `upgradeProviderCliStateListToV70Preimage` below), and the
-// provider compat suites share it as their v7-era shape. Take the real v7.0
-// freeze under the `V70` names and leave the pre-image beside it - do not add a
-// third naming scheme.
-//
-// The REQUEST side needs no such work. The collapse moved only the response, so
-// `providersListRequestSchemaV70` still equals what v7.0 serializes and is
-// already the real freeze; `providersListRequestSchemaBeforeV70` covers
-// v1.0-v6.0. Only the response ever diverged.
-// THE FREEZE DESCRIBED ABOVE HAS NOW BEEN TAKEN, one line earlier than that
-// text anticipates and for a reason it explicitly discounts. Read both.
-//
-// A v7.1 opened for the auth-aware enablement fields (`enablementMode`,
-// `enablementSource` on `providerCliStateBaseShape`), so v7.0 stopped being the
-// head and is pinned to `providersListResponseSchemaV70` - the real v7.0
-// freeze, taken under the `V70` names reserved for it above, sitting beside the
-// untouched `*V70Preimage` shapes exactly as instructed. THE FREEZE STANDS; the
-// 7.1 line above it does not. Those two fields were that minor's entire delta,
-// and they were removed with the tri-state enablement model before any tag
-// shipped them, which left an empty minor - so v8.0 upgrades straight from
-// v7.0. The v7.0 pin is unaffected: it is what the rc peers negotiate, whatever
-// sits above it.
-//
-// The head-line note above says an UNRELEASED line widens in place, and by
-// `scripts/compat/support-floor.json` (`includeReleaseCandidates: false`) v7.0
-// is formally unreleased. That is a compat-FLOOR policy - it decides which tags
-// CI must stay compatible with - not evidence that no peer speaks 7.0.
-// `cli-v1.2.0-rc.1` / `host-v1.2.0-rc.1` (2026-08-19) ship it. Widening in
-// place would leave two different shapes negotiating as "7.0", which the
-// handshake cannot distinguish and these strict-parsing schemas cannot absorb:
-// an rc peer that negotiated 7.0 and is handed 7.1 keys can reject the response
-// outright. That is the failure class `frozen-catalog-lines.test.ts`'s "do not
-// regenerate to green" exists to stop, so the fixture was NOT regenerated over
-// this line - v7.0's row now names the frozen schema and dumps identically.
-//
-// Profile eligibility then opened v8.0, which is a real major (the response
-// grows a per-profile `enabled` a v7 peer must not silently ignore) and is now
-// the sole live response line. v7.0 is the last frozen line under it.
+// `providers.list@7.0` response is frozen at `providersListResponseSchemaV70`. Freeze line N when N+1 opens, or before N ships.
+// Do not regenerate frozen-catalog-lines to green. Keep `*V70Preimage` for the v6->v7 bridge; v8.0 is the live response line.
 export const providersListV70 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 7, minor: 0 } as const,
-  // The REQUEST is deliberately still the live schema: the freeze moved only
-  // the response, and `providersListRequestSchemaV70` remains the hand-copy
-  // that `provider-schemas-v70-pins.test.ts` holds equal to it. A request field
-  // added to the live schema would still reach this line - unchanged from
-  // before, and still the part to watch.
+  // The REQUEST is deliberately still the live schema: the freeze moved only the response, and `providersListRequestSchemaV70` remains the hand-copy that `provider-schemas-v70-pins.test.ts` holds equal to it.
   requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchemaV70,
 });
@@ -1952,18 +1677,8 @@ export const providersListUpgradeV5ToV6 = defineUpgradePath<
 >({
   from: { major: 5, minor: 0 },
   to: { major: 6, minor: 0 },
-  // Purely additive: a v5.0 provider set is already a valid v6.0 one (omp
-  // simply never appears).
-  //
-  // NOTHING is filled here - not the provider-pack-registry fields, not
-  // `native`, not per-provider `nativeCapabilities`. Once `cli-v1.1.9` froze
-  // v6.0, `providersListResponseSchemaV60` stopped modelling any of them, and
-  // `upgradeResponseToVersion` chains these callbacks by cast with no re-parse
-  // - so a fill onto a frozen target is simply dropped. They are all filled on
-  // the v6.0 -> v7.0 hop instead, whose target
-  // (`providersListResponseSchemaV70Preimage`) is the first one that models them. That
-  // target is now frozen too, which does not move the fill: v7.0 models these
-  // fields, and freezing a shape pins what it models rather than removing it.
+  // Purely additive: a v5.0 provider set is already a valid v6.0 one (omp simply never appears).
+  // That target is now frozen too, which does not move the fill: v7.0 models these fields, and freezing a shape pins what it models rather than removing it.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1974,63 +1689,11 @@ export const providersListUpgradeV6ToV7 = defineUpgradePath<
 >({
   from: { major: 6, minor: 0 },
   to: { major: 7, minor: 0 },
-  // The fill's home for the registry fields, `native`, and per-provider
-  // `nativeCapabilities` alike, moved up one line for the same reason the
-  // registry fields moved from v3->v4 to v5->v6 before: this is now the first
-  // bridge whose TARGET schema actually models them. It is also the LAST hop,
-  // so the fill stops moving here.
-  //
-  // It absorbed a second fill when v8.0 collapsed into v7.0. That hop's job -
-  // the version-manager fields and `modelProviders` - is now the second half of
-  // `upgradeResponse` below, applied AFTER the v7-era projection rather than
-  // instead of it, so the composition a v6 -> v7 -> v8 chain used to perform
-  // survives verbatim in one hop. Deleting a version is never just deleting its
-  // contract: whatever its bridge did has to land on the surviving hop.
-  //
-  // A v6.0 host either predates the registry and the native surface or never
-  // reported them on this line, so "no managed packs / served no native
-  // result" is the honest projection - same "old host never had this feature"
-  // semantics as the `profiles: []` fill on the v3->v4 hop.
-  //
-  // `terminalLogin` is filled here for the same reason and on the same hop:
-  // this is the first bridge whose target models it. Stated explicitly rather
-  // than left to `upgradeProviderCliStateListToV70Preimage`'s live re-parse, whose
-  // job is `nativeCapabilities` - the fill must not silently depend on a
-  // re-parse that exists for another field. See
-  // `upgradeLoginCapabilityFromV40`.
-  //
-  // The REQUEST is not identity either, and for the same reason: v7.0 is the
-  // first line whose request models the `native` list/discover carrier, so a
-  // v6.0-or-older caller upgrades to `native: null` ("classic caller, no
-  // native query"). This fill used to sit on the v3.0 -> v4.0 hop, back when
-  // v4.0/v5.0/v6.0 were still pinned to the live request schema.
+  // The fill's home for the registry fields, `native`, and per-provider `nativeCapabilities` alike, moved up one line for the same reason the registry fields moved from v3->v4 to v5->v6 before: this is now the first bridge.
+  // Deleting a version is never just deleting its contract: whatever its bridge did has to land on the surviving hop.
   upgradeRequest: (request) => ({ ...request, native: null }),
   // Two passes, in order, and the order is load-bearing.
-  //
-  // `upgradeProviderCliStateListToV70Preimage` first: it re-parses each row through the
-  // v7-era shape, which is what normalizes a v6.0 row (dropping what v6.0 alone
-  // carried, applying the `.catch()` defaults) before anything is added on top.
-  // Running the version-manager fill first and this second would strip the very
-  // keys the fill just added, because that re-parse keeps only what its own
-  // schema models.
-  //
-  // Then the fields v8.0 introduced, filled with "this host never had the
-  // feature" - the same honest projection every upgrade in this file applies. A
-  // v6.0 host predates the version manager, so it has no pack identity to
-  // report (`packId: null`), no version list (`managedVersions: null`) and no
-  // next-run simulation (`nextRunBinary: null`).
-  //
-  // `managedInstallState` is filled `null` rather than lifted arm by arm, and
-  // that is a REDUCTION the collapse earned rather than a shortcut. While v8.0
-  // existed, its bridge's source was a v7.0 peer whose state could carry a
-  // populated (version-less) arm, so it had to map each arm onto the live one -
-  // the live arms require `version` (nullable, not optional) and
-  // `upgradeResponseToVersion` chains these callbacks BY CAST with no re-parse,
-  // so a pass-through would surface as a failed decode on some later consumer
-  // rather than here. With v8.0 collapsed away, v6.0 is the only source this
-  // hop ever has, and `PROVIDER_LIVE_FIELDS_PRE_REGISTRY` nulls the slot
-  // unconditionally (it spreads AFTER the row), so no arm can reach this point.
-  // The unconditional `null` is what that mapping already evaluated to.
+  // Then the fields v8.0 introduced, filled with "this host never had the feature" - the same honest projection every upgrade in this file applies.
   upgradeResponse: (response) => ({
     providers: upgradeProviderCliStateListToV70Preimage(
       response.providers.map((provider) => ({
@@ -2139,22 +1802,16 @@ export const providersListDowngradeV7ToV6 = defineDowngradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 6, minor: 0 },
-  // v7.x is the only line whose request models `native`; every target below
-  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
-  // field rather than passed through, so the carrier can never reach a peer
-  // whose schema does not model it.
+  // v7.x is the only line whose request models `native`; every target below it is pinned to `providersListRequestSchemaBeforeV70`.
+  // Re-parsed field by field rather than passed through, so the carrier can never reach a peer whose schema does not model it.
   downgradeRequest: (request) => ({
     ok: true,
     value: providersListRequestSchemaBeforeV70.parse({
       forceAuthRefresh: request.forceAuthRefresh,
     }),
   }),
-  // Two jobs on the response: drop post-v6.0 providers (`huggingface`) and
-  // strip the provider-pack-registry fields the frozen v6.0 state does not
-  // model. The shared filter-by-reparse helper does both - a row whose id is
-  // not in the frozen v6.0 enum does not survive its parse, and the keys v6.0
-  // never modelled are dropped from the rows that do. A straight pass-through
-  // would throw the WHOLE response away on the first Hugging Face row.
+  // Two jobs on the response: drop post-v6.0 providers (`huggingface`) and strip the provider-pack-registry fields the frozen v6.0 state does not model.
+  // The shared filter-by-reparse helper does both - a row whose id is not in the frozen v6.0 enum does not survive its parse, and the keys v6.0 never modelled are dropped from the rows that do.
   downgradeResponse: (response) => ({
     ok: true,
     value: providersListResponseSchemaV60.parse({
@@ -2169,10 +1826,8 @@ export const providersListDowngradeV7ToV5 = defineDowngradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 5, minor: 0 },
-  // v7.x is the only line whose request models `native`; every target below
-  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
-  // field rather than passed through, so the carrier can never reach a peer
-  // whose schema does not model it.
+  // v7.x is the only line whose request models `native`; every target below it is pinned to `providersListRequestSchemaBeforeV70`.
+  // Re-parsed field by field rather than passed through, so the carrier can never reach a peer whose schema does not model it.
   downgradeRequest: (request) => ({
     ok: true,
     value: providersListRequestSchemaBeforeV70.parse({
@@ -2193,10 +1848,8 @@ export const providersListDowngradeV7ToV4 = defineDowngradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 4, minor: 0 },
-  // v7.x is the only line whose request models `native`; every target below
-  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
-  // field rather than passed through, so the carrier can never reach a peer
-  // whose schema does not model it.
+  // v7.x is the only line whose request models `native`; every target below it is pinned to `providersListRequestSchemaBeforeV70`.
+  // Re-parsed field by field rather than passed through, so the carrier can never reach a peer whose schema does not model it.
   downgradeRequest: (request) => ({
     ok: true,
     value: providersListRequestSchemaBeforeV70.parse({
@@ -2217,10 +1870,8 @@ export const providersListDowngradeV7ToV3 = defineDowngradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 3, minor: 0 },
-  // v7.x is the only line whose request models `native`; every target below
-  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
-  // field rather than passed through, so the carrier can never reach a peer
-  // whose schema does not model it.
+  // v7.x is the only line whose request models `native`; every target below it is pinned to `providersListRequestSchemaBeforeV70`.
+  // Re-parsed field by field rather than passed through, so the carrier can never reach a peer whose schema does not model it.
   downgradeRequest: (request) => ({
     ok: true,
     value: providersListRequestSchemaBeforeV70.parse({
@@ -2241,10 +1892,8 @@ export const providersListDowngradeV7ToV2 = defineDowngradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 2, minor: 0 },
-  // v7.x is the only line whose request models `native`; every target below
-  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
-  // field rather than passed through, so the carrier can never reach a peer
-  // whose schema does not model it.
+  // v7.x is the only line whose request models `native`; every target below it is pinned to `providersListRequestSchemaBeforeV70`.
+  // Re-parsed field by field rather than passed through, so the carrier can never reach a peer whose schema does not model it.
   downgradeRequest: (request) => ({
     ok: true,
     value: providersListRequestSchemaBeforeV70.parse({
@@ -2265,10 +1914,8 @@ export const providersListDowngradeV7ToV1 = defineDowngradePath<
 >({
   from: { major: 7, minor: 0 },
   to: { major: 1, minor: 0 },
-  // v7.x is the only line whose request models `native`; every target below
-  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
-  // field rather than passed through, so the carrier can never reach a peer
-  // whose schema does not model it.
+  // v7.x is the only line whose request models `native`; every target below it is pinned to `providersListRequestSchemaBeforeV70`.
+  // Re-parsed field by field rather than passed through, so the carrier can never reach a peer whose schema does not model it.
   downgradeRequest: (request) => ({
     ok: true,
     value: providersListRequestSchemaBeforeV70.parse({
@@ -2440,9 +2087,7 @@ export const providersListUpgradeV4ToV5 = defineUpgradePath<
 >({
   from: { major: 4, minor: 0 },
   to: { major: 5, minor: 0 },
-  // A v4.0 response without Hermes is a valid v5.0 response (purely
-  // additive), and both lines are pinned to the same frozen pre-v7.0 request
-  // schema - both upgrades are identity.
+  // A v4.0 response without Hermes is a valid v5.0 response (purely additive), and both lines are pinned to the same frozen pre-v7.0 request schema - both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -2535,10 +2180,7 @@ export const providersSetSelectionUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-// v2.1 carries the live state shape - `profiles` ships with the 2.1 line
-// (the released 2.0 response above is frozen pre-profiles), so a released
-// 2.0 host's response upgrades to `profiles: []` ("old host never had this
-// feature"). The request is unchanged.
+// v2.1 carries the live state shape - `profiles` ships with the 2.1 line (the released 2.0 response above is frozen pre-profiles), so a released 2.0 host's response upgrades to `profiles: []` ("old host never had this.
 export const providersSetSelectionV21 = defineRpcContract({
   method: "providers.setSelection",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -2629,10 +2271,7 @@ export const providersAddCustomPathUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-// v2.1 carries the live state shape - `profiles` ships with the 2.1 line
-// (the released 2.0 response above is frozen pre-profiles), so a released
-// 2.0 host's response upgrades to `profiles: []` ("old host never had this
-// feature"). The request is unchanged.
+// v2.1 carries the live state shape - `profiles` ships with the 2.1 line (the released 2.0 response above is frozen pre-profiles), so a released 2.0 host's response upgrades to `profiles: []` ("old host never had this.
 export const providersAddCustomPathV21 = defineRpcContract({
   method: "providers.addCustomPath",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -2723,10 +2362,7 @@ export const providersRemoveCustomPathUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-// v2.1 carries the live state shape - `profiles` ships with the 2.1 line
-// (the released 2.0 response above is frozen pre-profiles), so a released
-// 2.0 host's response upgrades to `profiles: []` ("old host never had this
-// feature"). The request is unchanged.
+// v2.1 carries the live state shape - `profiles` ships with the 2.1 line (the released 2.0 response above is frozen pre-profiles), so a released 2.0 host's response upgrades to `profiles: []` ("old host never had this.
 export const providersRemoveCustomPathV21 = defineRpcContract({
   method: "providers.removeCustomPath",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -2805,15 +2441,7 @@ export const providersStartLoginV10 = defineRpcContract({
   responseSchema: providersStartLoginResponseSchemaV10,
 });
 
-// v1.1 adds `profileId` / `createProfile` to the request and `profileId` to
-// the response - re-authenticate an existing managed profile, or mint a
-// brand-new one, instead of a standalone `providers.createProfile` method (a
-// new method name fatally fails the released-peer equal-set handshake, see
-// `worktree.listBindingsForEpic@1.1`'s note and the multi-profile decision
-// log). Shipped as a minor (not an in-place edit to v1.0): both new fields
-// default to `null`, which is byte-identical to today's request/response, so
-// a v1.0.0 host still negotiates and old clients are unaffected. MCP auth does
-// NOT ride this carrier - see `providers.mcpAuth@1.0` below.
+// `worktree.listBindingsForEpic@1.1` - v1.1 adds `profileId` / `createProfile` to the request and `profileId` to the response - re-authenticate an existing managed profile, or mint a brand-new one, instead of a.
 export const providersStartLoginV11 = defineRpcContract({
   method: "providers.startLogin",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -2858,9 +2486,7 @@ export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
-  // Frozen v2.0 request/response are byte-identical to v1.0's shape (plus the
-  // state upgrade) - `profileId`/`existingProfileId` are v2.1-only additions,
-  // see `providersAwaitLoginUpgradeV20ToV21` below.
+  // Frozen v2.0 request/response are byte-identical to v1.0's shape (plus the state upgrade) - `profileId`/`existingProfileId` are v2.1-only additions, see `providersAwaitLoginUpgradeV20ToV21` below.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     state:
@@ -2870,12 +2496,8 @@ export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-// v2.1 adds `profileId` to the request (await the same profile-scoped login
-// child `providers.startLogin@1.1` started) and, on the response, `profiles`
-// on the echoed state plus `existingProfileId` (duplicate-account detection
-// for create-profile logins). The released 2.0 shapes above are frozen
-// without all three; this upgrade fills the "old host never had this
-// feature" defaults.
+// v2.1 adds `profileId` to the request (await the same profile-scoped login child `providers.startLogin@1.1` started) and, on the response, `profiles` on the echoed state plus `existingProfileId` (duplicate-account.
+// The released 2.0 shapes above are frozen without all three; this upgrade fills the "old host never had this feature" defaults.
 export const providersAwaitLoginV21 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -2942,9 +2564,7 @@ export const providersAwaitLoginDowngradeV21ToV10 = defineDowngradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
-  // Drop `profileId` before the parse: `providersAwaitLoginRequestSchemaV10`
-  // is a strict object that never learned it, so passing the full request
-  // through would fail the strict parse and drop the whole downgrade.
+  // Drop `profileId` before the parse: `providersAwaitLoginRequestSchemaV10` is a strict object that never learned it, so passing the full request through would fail the strict parse and drop the whole downgrade.
   downgradeRequest: (request) => {
     const { profileId, ...legacyRequest } = request;
     return downgradeProviderRequestForV10(
@@ -2977,11 +2597,7 @@ export const providersCancelLoginV10 = defineRpcContract({
   responseSchema: providersCancelLoginResponseSchemaV10,
 });
 
-// v1.1 adds `profileId`, mirroring `providers.startLogin@1.1` - cancel the
-// same profile-scoped login child that was started. Shipped as a minor (not
-// an in-place edit to v1.0): `profileId` defaults to `null`, so a v1.0.0
-// host still negotiates and old clients are unaffected. MCP cancel does NOT
-// ride this carrier - see `providers.cancelMcpAuth@1.0` below.
+// v1.1 adds `profileId`, mirroring `providers.startLogin@1.1` - cancel the same profile-scoped login child that was started.
 export const providersCancelLoginV11 = defineRpcContract({
   method: "providers.cancelLogin",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -3005,25 +2621,8 @@ export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
 });
 
 /**
- * Native MCP/plugins/skills surface: four brand-new v1.0 methods, none of them
- * on `RELEASED_FLOOR_METHOD_NAMES`, all registered below with
- * `degrade: { kind: "unsupported" }`.
- *
- * These payloads originally folded onto the released `providers.startLogin@1.1`
- * / `awaitLogin@2.1` / `cancelLogin@1.1` / `setEnabled@2.1` carriers, because a
- * new method NAME used to be handshake-fatal against a released peer. The
- * optional-capability channel removed that constraint, and folding was the
- * worse trade: it grew four already-released wire shapes (and demoted
- * `setEnabled`'s required `enabled` to optional), which the compat gate
- * correctly rejects as breaking against every `cli-v1.1.7+` / `host-v1.1.7+`
- * peer. Released lines are frozen; new capability belongs on new methods.
- *
- * Missing-peer behavior: a host that predates this surface reports
- * `nativeCapabilities: null` for every provider (the `providers.list` response
- * defaults it via `.catch`), and the GUI only renders the MCP/Plugins/Skills
- * tabs when the matching capability is non-null. So these methods are
- * unreachable on such a host by construction, and `E_HOST_UNSUPPORTED` is a
- * backstop rather than the primary guard.
+ * `providers.startLogin@1.1` - Native MCP/plugins/skills surface: four brand-new v1.0 methods, none of them on `RELEASED_FLOOR_METHOD_NAMES`, all registered below with `degrade: { kind: "unsupported" }`.
+ * Released lines are frozen; new capability belongs on new methods.
  */
 export const providersMcpAuthV10 = defineRpcContract({
   method: "providers.mcpAuth",
@@ -3056,23 +2655,7 @@ export const providersNativeMutateV10 = defineRpcContract({
   responseSchema: providersNativeMutateResponseSchema,
 });
 
-// ── Per-pack version-manager methods + the on-demand discovery refresh ─────
-//
-// BRAND-NEW method names, each at `@1.0`, all registered below with
-// `degrade: { kind: "unsupported" }` - none is in
-// `RELEASED_FLOOR_METHOD_NAMES`, so a host that predates them refuses these
-// calls per-call with upgrade guidance rather than failing the handshake, the
-// same channel `providers.mcpAuth` / `nativeMutate` / `submitLoginCode` ride.
-//
-// `providers.ensurePack@1.0` is deliberately left EXACTLY as it is. It would
-// have been tempting to bump it to @2.0 with a `version` argument and call
-// these its richer form, but a rename is not a version bump: `ensurePack`
-// means "get the pack's chosen target ready", and "install this specific
-// version without making it current" is a different operation with a different
-// effect on `current`. Overloading the released name would make an old
-// client's `ensurePack` and a new client's mean different things on the same
-// wire, and dropping the name outright is fatal to every peer still listing
-// it. See `released-surface-compat.test.ts`, which freezes the name set.
+// `providers.ensurePack@1.0` - ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 
 /** User-requested download of one version, without flipping `current`. */
 export const providersInstallPackVersionV10 = defineRpcContract({
@@ -3106,13 +2689,7 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   responseSchema: providersSetPackPolicyResponseSchema,
 });
 
-/**
- * Run the pack-discovery poll for one pack now, instead of waiting out the
- * jittered ticker period. Another new name at `@1.0` on the same
- * optional-capability channel as the four above, and registered below the same
- * way - it reads a head rather than mutating the store, which is why it is not
- * one of them.
- */
+/** Run the pack-discovery poll for one pack now, instead of waiting out the jittered ticker period. */
 export const providersRefreshPackDiscoveryV10 = defineRpcContract({
   method: "providers.refreshPackDiscovery",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -3121,24 +2698,7 @@ export const providersRefreshPackDiscoveryV10 = defineRpcContract({
 });
 
 /**
- * Model Providers surface: four brand-new v1.0 methods, none of them on
- * `RELEASED_FLOOR_METHOD_NAMES`, all registered below with
- * `degrade: { kind: "unsupported" }` - the same optional-capability channel
- * the `providers.mcpAuth` trio rides, and for the same reason: a brand-new
- * method NAME must not be handshake-fatal against a host that predates it.
- *
- * Dedicated methods rather than new arms on the released `native` carrier or
- * on `providers.nativeMutate`: those payloads bake the MCP model in (a scope
- * tuple every arm must answer, a `serverName` on every auth action), neither
- * of which has a referent for upstream LLM credentials, and widening them
- * would grow already-released wire shapes.
- *
- * Missing-peer behavior: a host that predates this surface reports
- * `nativeCapabilities.modelProviders: null` for every provider (through the
- * v6 -> v7 upgrade bridge), and the GUI only renders the tab when that block
- * is non-null. So these methods are unreachable on such a host by
- * construction, and `E_HOST_UNSUPPORTED` is a backstop rather than the primary
- * guard - the same layering the MCP surface uses.
+ * Model Providers surface: four brand-new v1.0 methods, none of them on `RELEASED_FLOOR_METHOD_NAMES`, all registered below with `degrade: { kind: "unsupported" }` - the same optional-capability channel the.
  */
 export const providersListModelProvidersV10 = defineRpcContract({
   method: "providers.listModelProviders",
@@ -3172,11 +2732,7 @@ export const providersCancelModelProviderAuthV10 = defineRpcContract({
 });
 
 /**
- * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` - this
- * whole code-paste surface is unreleased), registered below with
- * `degrade: { kind: "unsupported" }`: an old host simply lacks it, and
- * callers get per-call upgrade guidance instead of a fatal handshake
- * mismatch (see `agent/profiles.ts`'s note on the same pattern).
+ * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` - this whole code-paste surface is unreleased), registered below with `degrade: { kind: "unsupported" }`: an old host simply lacks it, and callers get.
  */
 export const providersSubmitLoginCodeV10 = defineRpcContract({
   method: "providers.submitLoginCode",
@@ -3197,16 +2753,8 @@ export const providersTouchLoginV10 = defineRpcContract({
 });
 
 /**
- * Brand-new v1.0 method, registered the same way as
- * `providers.submitLoginCode`/`touchLogin` above: outside
- * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`,
- * because a new method NAME is handshake-fatal against a released peer.
- *
- * Missing-peer behavior is safe by construction: a host that predates this
- * method also predates the `terminalLogin` capability, so it reports that
- * capability absent and the client never draws the affordance that would call
- * this. The degrade arm covers the remaining sliver (a client that somehow
- * calls anyway) with per-call upgrade guidance rather than a dead handshake.
+ * Brand-new v1.0 method, registered the same way as `providers.submitLoginCode`/`touchLogin` above: outside `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`, because a new method NAME is.
+ * The degrade arm covers the remaining sliver (a client that somehow calls anyway) with per-call upgrade guidance rather than a dead handshake.
  */
 export const providersStartTerminalLoginV10 = defineRpcContract({
   method: "providers.startTerminalLogin",
@@ -3216,14 +2764,7 @@ export const providersStartTerminalLoginV10 = defineRpcContract({
 });
 
 /**
- * `scope` replaces the v1.0 request's `epicId` so a sign-in terminal can be
- * minted in the landing page's independent scope. A field rename is not
- * additive (the minor-additivity checker rejects it inside a line), so this
- * is a new major on the `terminal.create@2.0` pattern: the upgrade folds an
- * old client's `epicId` into `{ kind: "epic" }`, the downgrade folds an epic
- * scope back and REFUSES an independent one - an old host has no surface to
- * put it in, and that typed refusal is the feature gate. The response is
- * byte-identical across the majors.
+ * `terminal.create@2.0` - `scope` replaces the v1.0 request's `epicId` so a sign-in terminal can be minted in the landing page's independent scope.
  */
 export const providersStartTerminalLoginV20 = defineRpcContract({
   method: "providers.startTerminalLogin",
@@ -3269,27 +2810,7 @@ export const providersStartTerminalLoginDowngradeV20ToV10 = defineDowngradePath<
 });
 
 /**
- * Brand-new v1.0 method (outside `RELEASED_FLOOR_METHOD_NAMES` - a new method
- * NAME is handshake-fatal against a released peer, so it rides the optional-
- * capability channel with `degrade: { kind: "unsupported" }`, exactly like
- * `providers.submitLoginCode`/`touchLogin` above).
- *
- * Missing-peer behavior: a host that predates the provider pack registry has
- * no managed packs to ensure, so there is nothing for the client to do about
- * `E_HOST_UNSUPPORTED` here beyond not offering the retry affordance - which
- * it already will not, because such a host reports `managedInstallState: null`
- * and the affordance only exists on the `downloading`/`error` arms.
- *
- * That last clause used to be the WHOLE safety argument, and
- * `trust-unavailable` retired it: a host whose keyring could not be verified
- * now reports the `error` arm, so "null means no affordance" no longer covers
- * every host this method cannot serve. Two mechanisms replace it, and both are
- * load-bearing - neither is defence in depth for the other. The client must not
- * draw a retry affordance for `trust-unavailable` (see
- * `providerManagedInstallErrorReasonSchema`), and a host with no install
- * machinery must REFUSE this call with a typed error rather than answering
- * `managedInstallState: null`, which is indistinguishable from success on a
- * pack that is simply absent and turns a click into a silent no-op forever.
+ * Brand-new v1.0 method (outside `RELEASED_FLOOR_METHOD_NAMES` - a new method NAME is handshake-fatal against a released peer, so it rides the optional- capability channel with `degrade: { kind: "unsupported" }`, exactly.
  */
 export const providersEnsurePackV10 = defineRpcContract({
   method: "providers.ensurePack",
@@ -3324,22 +2845,7 @@ export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-// v2.1 adds `profileAction` (discriminated rename/remove/recolor of a profile) to
-// the request - folded onto this existing "administer this provider's
-// configuration" mutation instead of standalone `providers.renameProfile` /
-// `removeProfile` / `recolorProfile` methods, because a new method name fatally fails the
-// released-peer equal-set handshake (see `worktree.listBindingsForEpic@1.1`'s
-// note and `released-surface-compat.test.ts`). Chosen over the other
-// provider.* mutations because its response already returns the full
-// `ProviderCliState` (so the mutated `profiles[]` is visible for free) and
-// it is already the closest thing to a generic per-provider admin action -
-// the CLI-path (`setSelection`/`addCustomPath`), credential
-// (`setApiKey`/`clearApiKey`), and login-lifecycle (`startLogin`/
-// `awaitLogin`/`cancelLogin`) methods all have narrower, unrelated
-// semantics. `recolor` rides the same unreleased profile-management surface
-// because profile colors are host-owned profile metadata. `profileAction:
-// null` is byte-identical to today's plain enable/disable request, so a v2.0
-// client is unaffected.
+// `worktree.listBindingsForEpic@1.1` - v2.1 adds `profileAction` (discriminated rename/remove/recolor of a profile) to the request - folded onto this existing "administer this provider's configuration" mutation instead.
 export const providersSetEnabledV21 = defineRpcContract({
   method: "providers.setEnabled",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -3375,21 +2881,15 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
-// Bridges from v2.1 (the latest installed version of major 2's line) down to
-// the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's
-// latest. Used directly by `provider-profiles-compat.test.ts` to assert
-// `profileAction` never reaches a v1.0 caller; the registered
-// `downgradePathsFromLatest` bridge is `providersSetEnabledDowngradeV21ToV10`
-// below.
+// Bridges from v2.1 (the latest installed version of major 2's line) down to the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's latest.
+// Used directly by `provider-profiles-compat.test.ts` to assert `profileAction` never reaches a v1.0 caller; the registered `downgradePathsFromLatest` bridge is `providersSetEnabledDowngradeV21ToV10` below.
 export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
   typeof providersSetEnabledV21,
   typeof providersSetEnabledV10
 >({
   from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
-  // Drop `profileAction` before the parse: `providersSetEnabledRequestSchemaV10`
-  // is a strict object that never learned it, so passing the full request
-  // through would fail the strict parse and drop the whole downgrade.
+  // Drop `profileAction` before the parse: `providersSetEnabledRequestSchemaV10` is a strict object that never learned it, so passing the full request through would fail the strict parse and drop the whole downgrade.
   downgradeRequest: (request) => {
     const { profileAction, ...legacyRequest } = request;
     return downgradeProviderRequestForV10(
@@ -3454,11 +2954,8 @@ export const providersSetEnabledDowngradeV21ToV10 = defineDowngradePath<
   },
 });
 
-// THERE IS NO `providers.setEnabled@2.2`. It was opened to carry an optional
-// tri-state `mode` for a three-way Auto/On/Off settings control; `mode` was
-// its entire delta over 2.1, and both went away with that control. 2.1 is the
-// head minor again, and `providersSetEnabledDowngradeV21ToV10` above is once
-// more the registered bridge down to the frozen v1.0.
+// THERE IS NO `providers.setEnabled@2.2`.
+// 2.1 is the head minor again, and `providersSetEnabledDowngradeV21ToV10` above is once more the registered bridge down to the frozen v1.0.
 
 export const providersSetApiKeyV10 = defineRpcContract({
   method: "providers.setApiKey",
@@ -3916,12 +3413,8 @@ export const worktreeListBindingsForEpicV10 = defineRpcContract({
   responseSchema: worktreeListBindingsForEpicResponseSchema,
 });
 
-// v1.1 adds `folderlessCwd` - the host-owned fallback cwd for terminal
-// launches on an epic with no bound workspace rows. Folded onto this existing
-// method instead of a standalone `terminal.defaultCwd` so the wire method-set
-// stays identical to v1.0.0 - a new method name fatally fails the equal-set
-// handshake against an already-shipped host. See the RPC backward-compat
-// decision log.
+// v1.1 adds `folderlessCwd` - the host-owned fallback cwd for terminal launches on an epic with no bound workspace rows.
+// Folded onto this existing method instead of a standalone `terminal.defaultCwd` so the wire method-set stays identical to v1.0.0 - a new method name fatally fails the equal-set handshake against an already-shipped host.
 export const worktreeListBindingsForEpicV11 = defineRpcContract({
   method: "worktree.listBindingsForEpic",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -3929,11 +3422,6 @@ export const worktreeListBindingsForEpicV11 = defineRpcContract({
   responseSchema: worktreeListBindingsForEpicResponseSchemaV11,
 });
 
-// Additive upgrade from v1.0: an old host that predates folderless workspaces,
-// so there is no fallback cwd to synthesize - `null` tells the picker to keep
-// its folderless launch action disabled. The newer side runs this when
-// bridging a v1.0 peer up to canonical (host: inbound v1.0 request; client:
-// inbound v1.0 response).
 export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
   typeof worktreeListBindingsForEpicV10,
   typeof worktreeListBindingsForEpicV11
@@ -3947,10 +3435,6 @@ export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-// v1.2 adds per-row `isGitResolvePending`, the host's authoritative signal
-// that a row's git facts (`isGitRepo` and the `missing_worktree_path` reason
-// derived from it) are still an unverified placeholder - pickers render such
-// rows as pending ("checking") instead of dead.
 export const worktreeListBindingsForEpicV12 = defineRpcContract({
   method: "worktree.listBindingsForEpic",
   schemaVersion: { major: 1, minor: 2 } as const,
@@ -3958,13 +3442,8 @@ export const worktreeListBindingsForEpicV12 = defineRpcContract({
   responseSchema: worktreeListBindingsForEpicResponseSchemaV12,
 });
 
-// Additive upgrade from v1.1: a v1.1 host has no pending concept and never
-// emits a signal that would later clear it, so every bridged row is stamped
-// `isGitResolvePending: false` - the old host's answer is authoritative and
-// must render as-is (its truthful `not git` / `missing` label, and the
-// recoverable empty-state), NOT as perpetual "checking". Bridging to `true`
-// would strand every correctly-resolved old-host row in a pending state that
-// never converges against a v1.1 host.
+// Additive upgrade from v1.1: a v1.1 host has no pending concept and never emits a signal that would later clear it, so every bridged row is stamped `isGitResolvePending: false` - the old host's answer is authoritative.
+// Bridging to `true` would strand every correctly-resolved old-host row in a pending state that never converges against a v1.1 host.
 export const worktreeListBindingsForEpicUpgradeV11ToV12 = defineUpgradePath<
   typeof worktreeListBindingsForEpicV11,
   typeof worktreeListBindingsForEpicV12
@@ -3984,13 +3463,6 @@ export const worktreeListBindingsForEpicUpgradeV11ToV12 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-// v1.1 folds the 4 standalone workspace-picker methods (T14) onto
-// `workspace.prepareFolders` instead of shipping new names (T18) - see the
-// RPC backward-compat decision log. An older peer's request only ever
-// carries the "prepare" shape, so the bridge maps it 1:1 onto the new
-// `operation` envelope; a v1.0 peer's response likewise only ever carried
-// `folders`/`repoIdentifiers`, so the new operation-specific fields default
-// to `null`.
 export const workspacePrepareFoldersUpgradeV10ToV11 = defineUpgradePath<
   typeof workspacePrepareFoldersV10,
   typeof workspacePrepareFoldersV11
@@ -4061,11 +3533,7 @@ export const workspaceBrowseFoldersUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-// Additive upgrade from v1.0: a peer on the frozen v1.0 line predates fork
-// provenance entirely, so its creates carry no fork source. The newer side
-// runs this when bridging a v1.0 peer up to canonical (host: inbound v1.0
-// request). The response is unchanged across the two minors, so its upgrade is
-// identity.
+// Additive upgrade from v1.0: a peer on the frozen v1.0 line predates fork provenance entirely, so its creates carry no fork source.
 export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
   typeof epicCreateTuiAgentV10,
   typeof epicCreateTuiAgentV11
@@ -4081,14 +3549,7 @@ export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
 
 const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "browser.savedLoginSites": {
-    // Settings > Browser's "Sites with saved logins" list (keychain refactor
-    // ticket 10). Brand-new v1.0 and not part of `RELEASED_FLOOR_METHOD_NAMES`
-    // - the whole saved-logins surface is unreleased - so it rides the
-    // optional-capability channel: a host that predates it advertises nothing,
-    // and the client renders the group without the list rather than failing the
-    // connection. Read-only and names-only; the clearing half is the
-    // `clearSite` frame on `browser.sessions`, which needs the elected-desktop
-    // gate a unary RPC has no notion of.
+    // Settings > Browser's "Sites with saved logins" list (keychain refactor ticket 10).
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -4101,10 +3562,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Machine-user-global config store capabilities. None were part of the
-  // released method floor, so a peer that predates them advertises neither
-  // handler nor capability; clients feature-detect and render their explicit
-  // unsupported state rather than making the whole connection incompatible.
+  // Machine-user-global config store capabilities.
   "config.shell.get": {
     degrade: { kind: "unsupported" },
     1: {
@@ -4329,9 +3787,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
   },
   "host.restart": {
-    // Restart authority is meaningful only on hosts that can atomically close
-    // work admission before testing drain state; older hosts must not emulate
-    // it with a racy activity read.
+    // Restart authority is meaningful only on hosts that can atomically close work admission before testing drain state; older hosts must not emulate it with a racy activity read.
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 2,
@@ -4353,9 +3809,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
   },
   "host.identity.get": {
-    // The host is the master copy of its own name. An older host has no reader
-    // for `host-name.json` at all, so there is nothing to degrade to on-box -
-    // clients fall back to the registry `displayName` instead.
+    // The host is the master copy of its own name.
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -4396,13 +3850,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // v1.1 adds the tri-state catalog override and the resolved-inclusion +
-  // provenance the Settings copy reads. A minor, not a major: the request
-  // only grows a third (absent) state on an already-optional key and the `ok`
-  // response only gains fields, so `upgradeFromPreviousVersion` is the whole
-  // bridge and no `downgradePathsFromLatest` entry is warranted - those cross
-  // majors. A v1.0 peer keeps stable-only default semantics; provenance is
-  // reported only where v1.1 is negotiated.
+  // v1.1 adds the tri-state catalog override and the resolved-inclusion + provenance the Settings copy reads.
   "host.update.check": {
     degrade: { kind: "unsupported" },
     1: {
@@ -4432,22 +3880,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostUpdateInstallV11,
           upgradeFromPreviousVersion: hostUpdateInstallUpgradeV10ToV11,
-          // The `dispatch-indeterminate` arm is response VALUE growth: a `@1.0`
-          // peer parses with its own schema, and a discriminated union refuses
-          // an unknown discriminator outright rather than ignoring it. So the
-          // arm is only safe if the host never sends it to such a peer, and
-          // this annotation is the reviewed claim that it does not.
-          //
-          // ⚠ TODAY THE CLAIM IS TRIVIALLY TRUE AND TOMORROW IT IS AN
-          // OBLIGATION. Nothing emits this arm yet — Ticket 06 added the
-          // decoder only, so that no `@1.1` peer generation exists that knows
-          // `attemptId` and cannot decode "there is no attempt id for this
-          // dispatch". When Ticket 07 wires the executor ACK and starts
-          // EMITTING it, that resolver must derive the arm from the version the
-          // caller negotiated and emit `cli-failed` (or whatever the ruling
-          // settles) to a `@1.0` caller. A post-hoc filter is not sufficient
-          // and neither is "we only call it from new clients": the validator
-          // cannot check this, which is exactly why it is written down here.
+          // The `dispatch-indeterminate` arm is response VALUE growth: a `@1.0` peer parses with its own schema, and a discriminated union refuses an unknown discriminator outright rather than ignoring it.
+          // So the arm is only safe if the host never sends it to such a peer, and this annotation is the reviewed claim that it does not.
           responseGrowthProjectionGated: true,
         },
         2: {
@@ -4475,14 +3909,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The three OS-service methods: brand-new v1.0, outside
-  // `RELEASED_FLOOR_METHOD_NAMES`, `unsupported` degrade. A host that predates
-  // them simply lacks them and the client hides the OS service section on the
-  // handshake answer rather than offering buttons that cannot land. Registered
-  // separately rather than as one `host.service` method taking a verb, because
-  // the read is safe to run whenever the section is open and the two writes
-  // stop the host — collapsing them would put one capability answer, and one
-  // degrade decision, over three very different risks.
+  // The three OS-service methods: brand-new v1.0, outside `RELEASED_FLOOR_METHOD_NAMES`, `unsupported` degrade.
+  // A host that predates them simply lacks them and the client hides the OS service section on the handshake answer rather than offering buttons that cannot land.
   "host.service.status": {
     degrade: { kind: "unsupported" },
     1: {
@@ -4523,11 +3951,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
   },
   "host.usage.summary": {
-    // Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` -
-    // this whole usage-summary surface is unreleased), registered like
-    // `snapshots.getLocalStorageSize` above: an old host simply lacks it,
-    // and the client feature-detects at handshake and hides the usage
-    // surface instead of hitting a fatal mismatch.
+    // Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` - this whole usage-summary surface is unreleased), registered like `snapshots.getLocalStorageSize` above: an old host simply lacks it, and the client.
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -4545,11 +3969,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     // claim, so reconciliation must re-probe and use its legacy-safe path.
     degrade: { kind: "unsupported" },
     1: {
-      // @1.1 adds the additive `intent`, which is how a coordinator tells the
-      // host a start follows the stop - the only way the host can know, and
-      // what lets it publish its restart tombstone (D5/M1). @1.0 stays
-      // installed: its requests upgrade to `intent: "shutdown"`, reproducing
-      // today's no-tombstone behaviour exactly.
       latestMinor: 1,
       versions: {
         0: {
@@ -4715,12 +4134,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostNotificationsListV21,
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
-          // The `host.operation.finished` arm added in 2.1 is emission-gated
-          // by design: the resolver derives arm inclusion from the version
-          // the caller negotiated, and the entry union's own contract
-          // (host-notifications.ts) mandates "a host-side projection that
-          // keeps the arm out of every older version's rows ... never a
-          // post-query filter". See host-notifications-resolvers.ts.
+          // The `host.operation.finished` arm added in 2.1 is emission-gated by design: the resolver derives arm inclusion from the version the caller negotiated, and the entry union's own contract (host-notifications.ts) mandates.
           responseGrowthProjectionGated: true,
         },
         // 2.2 adds `browser.human.needed` under the same projection gate. It is
@@ -5006,17 +4420,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The contents behind an accumulated-change summary on the windowed
-  // `chat.subscribe` line, which ships summaries and leaves the file bodies to
-  // be fetched on demand. Off-floor, so a GUI meeting an older host falls back
-  // to its legacy full-contents-in-snapshot path instead of losing the diff.
-  //
-  // Registered AHEAD of `chatSubscribeV18`, and that ordering was not an
-  // oversight: a stream minor negotiates to the highest the peers share, so
-  // registering that one IS the switch to windowed frames - it waited until
-  // the renderer could draw placeholder rows and drive viewport hydration. A
-  // unary method flips no negotiation - a client that never calls it cannot
-  // tell it exists.
+  // The contents behind an accumulated-change summary on the windowed `chat.subscribe` line, which ships summaries and leaves the file bodies to be fetched on demand.
+  // A unary method flips no negotiation - a client that never calls it cannot tell it exists.
   "chat.readAccumulatedFileChange": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5030,11 +4435,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Where a cross-tile jump target sits, for the two target kinds a client
-  // identifies by walking rendered models - which a COLD row does not have.
-  // Off-floor for the same reason as the read above: a GUI meeting an older
-  // host degrades to waiting for the row, which on a non-windowed host always
-  // arrives because that host serves the whole transcript.
+  // Where a cross-tile jump target sits, for the two target kinds a client identifies by walking rendered models - which a COLD row does not have.
   "chat.locateRow": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5232,14 +4633,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Optional (non-floor) capability: read-only cross-profile fork-admission
-  // preflight (tech plan governing mechanism 2). The `degrade: unsupported`
-  // strategy EXCLUDES it from the released floor and the released-method-
-  // names snapshot - adding it to the floor would be handshake-fatal for
-  // existing clients. Old peers lack it in their optional manifest; the GUI's
-  // `useHostSupportsMethod` gate hides the cross-profile fork affordance
-  // rather than calling a method the host would reject. Mirrors
-  // `epic.setChatArchived`'s degrade strategy.
+  // Optional (non-floor) capability: read-only cross-profile fork-admission preflight (tech plan governing mechanism 2).
+  // The `degrade: unsupported` strategy EXCLUDES it from the released floor and the released-method- names snapshot - adding it to the floor would be handshake-fatal for existing clients.
   "agent.tui.validateForkProfile": {
     1: {
       latestMinor: 0,
@@ -5293,14 +4688,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Optional (non-floor) capability: the `UserPromptSubmit` hook's combined
-  // activity-edge + roles-digest-pull call (roles-snapshot-delivery pull
-  // point 1). The `degrade: unsupported` strategy EXCLUDES it from the
-  // released floor and the released-method-names snapshot - adding it to the
-  // floor would be handshake-fatal for existing clients. An old host lacks
-  // it in its optional manifest; the CLI hook falls back to plain
-  // `recordActivity` rather than calling a method the host would reject.
-  // Mirrors `agent.tui.validateForkProfile`'s degrade strategy above.
+  // Optional (non-floor) capability: the `UserPromptSubmit` hook's combined activity-edge + roles-digest-pull call (roles-snapshot-delivery pull point 1).
+  // The `degrade: unsupported` strategy EXCLUDES it from the released floor and the released-method-names snapshot - adding it to the floor would be handshake-fatal for existing clients.
   "agent.tui.promptSubmitted": {
     1: {
       latestMinor: 1,
@@ -5576,17 +4965,11 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Agent role claims. Non-floor, so each declares its missing-peer behavior:
-  // an old host simply does not advertise them and the caller gets
-  // E_HOST_UNSUPPORTED for these calls only. Registered here in the SAME change
-  // that adds the resolvers - advertising a method the host cannot dispatch is
-  // exactly how `agent.tui.listHarnesses` shipped broken.
+  // Agent role claims.
+  // Registered here in the SAME change that adds the resolvers - advertising a method the host cannot dispatch is exactly how `agent.tui.listHarnesses` shipped broken.
   "agent.roles.claim": {
     1: {
-      // @1.1 adds `deferredToPrompt` on the awareness report. @1.0 stays
-      // installed and FROZEN; a negotiated v1.0 peer gets deferred ids folded
-      // into `unreachable` at host dispatch after canonical v1.1 validation
-      // (not via a preprocess wrapper on the released v1.0 schema).
+      // @1.1 adds `deferredToPrompt` on the awareness report. @1.0 stays installed and FROZEN; a negotiated v1.0 peer gets deferred ids folded into `unreachable` at host dispatch after canonical v1.1 validation (not via a.
       latestMinor: 1,
       versions: {
         0: {
@@ -5679,10 +5062,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Brand-new v1.0 method on the same `degrade: unsupported` channel as
-  // `terminal.readOutput` above: a host predating the wrapper fork RPC simply
-  // lacks it, so a caller (the CLI) gets per-call upgrade guidance instead of
-  // a fatal handshake mismatch.
+  // Brand-new v1.0 method on the same `degrade: unsupported` channel as `terminal.readOutput` above: a host predating the wrapper fork RPC simply lacks it, so a caller (the CLI) gets per-call upgrade guidance instead of a.
   "agent.fork": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5759,8 +5139,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     degrade: { kind: "unsupported" },
   },
   // Optional (non-floor): batch task-context by id for title resolution.
-  // Old peers lack it in their optional manifest; callers get
-  // E_HOST_UNSUPPORTED for this call only and degrade to cache-only titles.
   "epic.getTaskContexts": {
     1: {
       // @1.1's new row-union values are projection-gated in host dispatch:
@@ -5863,12 +5241,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Additive, post-v1.0.0 optional method: pre-workspace folder browsing for
-  // the remote folder picker. A host that predates it simply lacks it: the
-  // picker's browse request degrades to E_HOST_UNSUPPORTED and the picker
-  // shows update-the-host guidance. It rides the optional-capability channel
-  // (`degrade: unsupported`) and stays out of the released floor / baseline
-  // surface.
+  // Additive, post-v1.0.0 optional method: pre-workspace folder browsing for the remote folder picker.
+  // It rides the optional-capability channel (`degrade: unsupported`) and stays out of the released floor / baseline surface.
   "workspace.browseFolders": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5898,10 +5272,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Additive, post-v1.0.0 optional method: a host that predates it simply lacks
-  // it and the renderer falls back to its local file-tree filter, so it rides
-  // the optional-capability channel (`degrade: unsupported`) and stays out of
-  // the released floor / baseline surface.
+  // Additive, post-v1.0.0 optional method: a host that predates it simply lacks it and the renderer falls back to its local file-tree filter, so it rides the optional-capability channel (`degrade: unsupported`) and stays.
   "workspace.searchPaths": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5915,10 +5286,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Additive, post-v1.0.0 optional method: scoped code TEXT search. A host that
-  // predates it simply lacks it and the renderer disables the text-search flow,
-  // so it rides the optional-capability channel (`degrade: unsupported`) and
-  // stays out of the released floor / baseline surface.
+  // Additive, post-v1.0.0 optional method: scoped code TEXT search.
+  // A host that predates it simply lacks it and the renderer disables the text-search flow, so it rides the optional-capability channel (`degrade: unsupported`) and stays out of the released floor / baseline surface.
   "workspace.searchText": {
     degrade: { kind: "unsupported" },
     1: {
@@ -6168,12 +5537,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: epicCreateChatV10,
           upgradeFromPreviousVersion: null,
         },
-        // v1.1: `forkSource` widened to name a latest-checkpoint boundary
-        // alongside the existing precise one (chat-sync-v2 ticket 34B1), and
-        // the PRECISE-boundary variant carries the `sourceOwnerUserId` hint so
-        // a cross-host fork's target host can satisfy the cloud tier's owner
-        // check for a chat it holds no registry facts about (cross-host fork
-        // ticket A1).
         1: {
           contract: epicCreateChatV11,
           upgradeFromPreviousVersion: epicCreateChatUpgradeV10ToV11,
@@ -6195,9 +5558,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
   },
   // Optional (non-floor) capability: settings-only chat update, no send.
-  // Old peers lack it in their optional manifest; callers get
-  // E_HOST_UNSUPPORTED for this call only and degrade to the legacy
-  // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
       latestMinor: 1,
@@ -6206,10 +5566,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: epicUpdateChatRunSettingsV10,
           upgradeFromPreviousVersion: null,
         },
-        // v1.1: wire-strict settings tuple - a subset-field patch fails
-        // validation at the canonical minor instead of silently null-
-        // clobbering omitted fields. Profile-only changes belong on
-        // `epic.updateChatProfile`.
+        // v1.1: wire-strict settings tuple - a subset-field patch fails validation at the canonical minor instead of silently null- clobbering omitted fields.
         1: {
           contract: epicUpdateChatRunSettingsV11,
           upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV10ToV11,
@@ -6222,22 +5579,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 } as const;
 
 // The tail of the base literal, cut out for one reason only: `.d.ts` emission.
-// `HostRpcRegistryDefinition` names these consts from an EXPORTED type
-// position, and a single literal holding every non-editing method exceeds
-// TS7056's declaration-serialization ceiling. Two nodes, each under it, keep
-// the definition FULLY precise - no method slot is widened, unlike
-// `hostStreamRpcRegistry`, whose weight sits in one indivisible method.
-//
-// Where the cut falls carries no meaning: move methods between the two freely,
-// and add a third literal if either crosses the ceiling again. The
-// `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from
-// silently existing in more than one of them.
+// The `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
-  // Optional (non-floor) capability: narrow profile-only update of a chat's
-  // persisted run settings - the host patches its own authoritative tuple, so
-  // clients never rebuild (and stale-patch) the full tuple to move a chat's
-  // profile. Old peers lack it; callers get E_HOST_UNSUPPORTED for this call
-  // only and degrade to persist-on-next-send.
+  // Optional (non-floor) capability: narrow profile-only update of a chat's persisted run settings - the host patches its own authoritative tuple, so clients never rebuild (and stale-patch) the full tuple to move a chat's.
   "epic.updateChatProfile": {
     1: {
       latestMinor: 0,
@@ -6251,11 +5595,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Optional (non-floor) capability: the only way to ask whether a session
-  // import is in flight without subscribing to `sessionImport.run` and thereby
-  // attaching to (or starting) one. `unsupported` degrade because a host that
-  // predates session import cannot be running an import, and the surface that
-  // reads this is hidden anyway when the stream methods are missing.
+  // Optional (non-floor) capability: the only way to ask whether a session import is in flight without subscribing to `sessionImport.run` and thereby attaching to (or starting) one.
+  // `unsupported` degrade because a host that predates session import cannot be running an import, and the surface that reads this is hidden anyway when the stream methods are missing.
   "sessionImport.status": {
     degrade: { kind: "unsupported" },
     1: {
@@ -6293,21 +5634,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Optional (non-floor) capability: on-demand publication coverage for a chat
-  // this host OWNS, so the fork dialog can tell a user BEFORE they fork that a
-  // cross-host target could not read the transcript. Registered exactly like
-  // `epic.setChatArchived` below and for the same reason: decision #15/R4-D2
-  // says a new capability must ride a `{major, minor}` bump of an EXISTING
-  // method, never a new NAME, because the floor handshake is fail-closed on the
-  // method-name SET - a name only one peer knows is fatal for the WHOLE
-  // connection, not just for this call. The `degrade: unsupported` strategy is
-  // what makes a new name landable at all: it keeps the method OFF
-  // `RELEASED_FLOOR_METHOD_NAMES` and OUT of the frozen released-method-names
-  // snapshot, so an old peer simply does not advertise it and the caller gets
-  // E_HOST_UNSUPPORTED for this call alone. That refusal IS the gate's
-  // "unknown" row - the dialog then allows the fork and lets the host-side
-  // refusal backstop it, rather than asserting a publication fact it could not
-  // read.
+  // Optional (non-floor) capability: on-demand publication coverage for a chat this host OWNS, so the fork dialog can tell a user BEFORE they fork that a cross-host target could not read the transcript.
   "epic.chatPublicationState": {
     1: {
       latestMinor: 0,
@@ -6321,13 +5648,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Optional (non-floor) capability: durable host-backed archive toggle for a
-  // chat OR terminal-agent record (single method keyed by id). The
-  // `degrade: unsupported` strategy EXCLUDES it from the released floor and the
-  // released-method-names snapshot - adding it to the floor would be
-  // handshake-fatal for existing clients. Old peers lack it in their optional
-  // manifest; the caller gets E_HOST_UNSUPPORTED for this call only and hides
-  // the archive affordance.
+  // Optional (non-floor) capability: durable host-backed archive toggle for a chat OR terminal-agent record (single method keyed by id).
+  // The `degrade: unsupported` strategy EXCLUDES it from the released floor and the released-method-names snapshot - adding it to the floor would be handshake-fatal for existing clients.
   "epic.setChatArchived": {
     1: {
       latestMinor: 0,
@@ -6551,9 +5873,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Optional (non-floor) capability: Epic-scoped artifact search. An old peer
-  // lacks it in its optional manifest; callers get E_HOST_UNSUPPORTED for this
-  // call only and the sidebar degrades to no search (no cross-Epic fallback).
+  // Optional (non-floor) capability: Epic-scoped artifact search.
   "epic.searchArtifacts": {
     1: {
       latestMinor: 0,
@@ -6567,15 +5887,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Optional (non-floor) cloud-chat READ surface: the host is a byte pipe and
-  // the client does every interpretation. See `epic/cloud-chat.ts` for the whole
-  // argument; the short version is that the head is opaque to the server AND to
-  // the host, so gating, digest verification, assembly and caching all belong to
-  // the only party that parses it.
-  //
-  // All five degrade `unsupported` together, and the client hides the cloud-chat
-  // surface rather than rendering a failure - a host that predates the surface
-  // has nothing a user can do about except update it.,
+  // Optional (non-floor) cloud-chat READ surface: the host is a byte pipe and the client does every interpretation.
   "epic.listCloudChats": {
     1: {
       latestMinor: 0,
@@ -6641,10 +5953,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Visibility mutations. Same optional-channel / hide-the-affordance rule as
-  // the five reads above (new names, so they must not enter the released
-  // floor). A host that predates them answers E_HOST_UNSUPPORTED and the
-  // client hides Share / Mark-all-private rather than rendering a failure.
+  // Visibility mutations.
+  // Same optional-channel / hide-the-affordance rule as the five reads above (new names, so they must not enter the released floor).
   "epic.setCloudChatVisibility": {
     1: {
       latestMinor: 0,
@@ -6671,12 +5981,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Optional (non-floor), and deliberately NOT part of the byte-pipe set above:
-  // this one reads the host's OWN fork-redirect rows, so it exists only where a
-  // chat-sync publisher is installed and has to degrade on its own. A client
-  // without it folds a task's cloud list on `chatId` equality, which is exactly
-  // right until a chat forks and exactly wrong afterwards - see
-  // `epic/chat-publication-identity.ts`.
   "epic.listChatPublicationTargets": {
     1: {
       latestMinor: 0,
@@ -6690,9 +5994,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Optional local observability. Older hosts omit the quiet sidebar signal;
-  // there is no cloud fallback because publication lag belongs to the machine
-  // whose durable store and publisher are being compared.
+  // Optional local observability.
   "epic.chatBackupStatus": {
     1: {
       latestMinor: 0,
@@ -6706,10 +6008,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Doc-replica fallback for the unreachable-owner view (chat-sync-v2 ticket
-  // 34A). Local-only, same reasoning as `epic.chatBackupStatus` immediately
-  // above: an older host omits it and the client keeps the notice it already
-  // renders.
+  // Doc-replica fallback for the unreachable-owner view (chat-sync-v2 ticket 34A).
   "epic.chatReplicaRead": {
     1: {
       latestMinor: 0,
@@ -6723,12 +6022,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // The store-backed chat RECORD channel (chat-sync-v2 ticket 49). Optional and
-  // host-LOCAL for the same reason as the two above: it answers out of this
-  // host's own chat registry, which is the only place those rows exist. A
-  // client talking to a host without it runs doc-only - the record table it
-  // already had before the single-write pivot - so the degrade arm needs no
-  // surface of its own, only the absence of the union.
+  // The store-backed chat RECORD channel (chat-sync-v2 ticket 49).
   "epic.listChatRecords": {
     1: {
       latestMinor: 1,
@@ -6740,48 +6034,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicListChatRecordsV11,
           upgradeFromPreviousVersion: epicListChatRecordsUpgradeV10ToV11,
-          // The chat half of the doc-remainder union, and deliberately the
-          // SAME registry shape as `epic.listTuiAgents@1.1` - including what it
-          // does NOT declare.
-          //
-          // REQUEST: `hasDocReplica` is required at 1.1 and the upgrade path
-          // fills it for a 1.0 caller. That fill is load-bearing rather than
-          // cosmetic - it decides whether the caller is served the doc-resident
-          // rows at all - and it is safe because the dispatcher validates params
-          // against the NEGOTIATED contract and hands the resolver the upgraded
-          // value, so a 1.0 peer can neither send the field nor be read as
-          // having sent one.
-          //
-          // RESPONSE: NO `responseGrowthProjectionGated`. 1.1 does return MORE
-          // ROWS than 1.0, and the instinct to annotate that is strong, but the
-          // annotation covers response VALUE growth an older peer's schema would
-          // actively REFUSE - a new enum member, a new union arm. `docResident`
-          // is a plain added object key, which zod strips unconditionally. Row
-          // COUNT is not something the validator can see at all; the resolver's
-          // request-driven gate is the entire mechanism.
-          //
-          // Declaring it anyway is not inert: `assertSchemaCompatibility`
-          // rejects an annotation it cannot justify, and it runs at MODULE
-          // IMPORT, so the registry would throw for every consumer - the app,
-          // not just a test - while `bun run compile` passed clean through it.
+          // The chat half of the doc-remainder union, and deliberately the SAME registry shape as `epic.listTuiAgents@1.1` - including what it does NOT declare.
         },
       },
       downgradePathsFromLatest: {},
     },
     degrade: { kind: "unsupported" },
   },
-  // The workspace context a tab needs before any lane can answer - repos,
-  // workspaces, repo mapping, resolved folders, `epicLight`, permission role.
-  // Exactly the payload `epic.subscribe@1`'s `earlyMeta` frame carried, and a
-  // unary because that is what it always was: a read the host can serve from
-  // `resolveWorkspaceContext` before a cloud room exists.
-  //
-  // Optional and never on the released floor (a new floor name is
-  // handshake-fatal against every released peer). A host that predates this is
-  // by definition one still serving `epic.subscribe@1`, whose `earlyMeta` frame
-  // IS this payload - so the degrade arm is the legacy adapter that is already
-  // there, not a blank surface. The refetch obligation (reconnect, and every
-  // control-lane migration/permission frame) is documented on the contract.
+  // The workspace context a tab needs before any lane can answer - repos, workspaces, repo mapping, resolved folders, `epicLight`, permission role.
+  // Optional and never on the released floor (a new floor name is handshake-fatal against every released peer).
   "epic.getWorkspaceContext": {
     1: {
       latestMinor: 0,
@@ -6795,15 +6056,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Re-run a failed major migration. Replaces the monolith's `retryMigration`
-  // CLIENT FRAME, which could not answer the caller at all - "the host refused"
-  // and "the host never received it" were the same observation from the modal's
-  // Retry button. Progress still arrives on `epic.status.subscribe`; this call
-  // starts the work, it does not report it.
-  //
-  // Optional, off the released floor, same degrade story as the read above: an
-  // older host still understands the frame, so the legacy adapter covers it and
-  // a client must not surface a dead Retry button.
+  // Re-run a failed major migration.
+  // Optional, off the released floor, same degrade story as the read above: an older host still understands the frame, so the legacy adapter covers it and a client must not surface a dead Retry button.
   "epic.retryMigration": {
     1: {
       latestMinor: 0,
@@ -6817,14 +6071,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // One chat image attachment's bytes off the CHAT plane, resolved by the
-  // viewer's tab host (its own disk store, else a bearer pass-through to the
-  // published cloud blob). Optional for the usual reason - a new method name is
-  // handshake-fatal against a released peer - and the degrade needs no surface
-  // at all: a host without it is a host whose images only ever lived in the
-  // epic doc, and the client's doc-replica fallback is exactly what it already
-  // did. `chatId` rides the request so a LOCAL hit can be gated by the same
-  // per-chat visibility rule as live viewing; see `epic/chat-attachment.ts`.
+  // One chat image attachment's bytes off the CHAT plane, resolved by the viewer's tab host (its own disk store, else a bearer pass-through to the published cloud blob).
   "epic.readChatAttachment": {
     1: {
       latestMinor: 0,
@@ -6838,11 +6085,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // Artifact attachment bytes still live in the root-doc attachment map, but
-  // @2 does not replicate that map to clients. This optional read keeps the
-  // artifact/epic authorization subject on the request; a hash alone is never
-  // a capability. Older hosts continue serving attachments through their @1
-  // root-doc replicas, so absence degrades cleanly to that existing path.
+  // Artifact attachment bytes still live in the root-doc attachment map, but @2 does not replicate that map to clients.
+  // This optional read keeps the artifact/epic authorization subject on the request; a hash alone is never a capability.
   "epic.fetchArtifactAttachment": {
     1: {
       latestMinor: 0,
@@ -6856,12 +6100,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // The per-chat run-settings tuple the record row above summarises down to a
-  // harness id. Optional and host-LOCAL for the same reason as the list - it
-  // answers out of this host's own chat store, the only place the tuple lives
-  // once the single-write pivot stopped writing doc chat entries. A client
-  // talking to a host without it renders the harness mark alone, which is what
-  // that host's client already showed.
+  // The per-chat run-settings tuple the record row above summarises down to a harness id.
   "epic.getChatRunSettings": {
     1: {
       latestMinor: 0,
@@ -6873,9 +6112,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
-    // Major 2 carries the post-v1.2.0 harness ids. v1.0 is frozen at the id set
-    // those tags shipped: its response embeds the PERSISTED harness enum, so it
-    // absorbed every new id silently until the tag-based gate caught it.
+    // Major 2 carries the post-v1.2.0 harness ids. v1.0 is frozen at the id set those tags shipped: its response embeds the PERSISTED harness enum, so it absorbed every new id silently until the tag-based gate caught it.
     2: {
       latestMinor: 0,
       versions: {
@@ -6890,12 +6127,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // The terminal-agent record read (the TUI eviction). Optional and
-  // host-local for the reason `epic.listChatRecords` is: it answers out of
-  // this host's own registry. A client talking to a host without it runs
-  // DOC-ONLY - that host still writes the `tuiAgents` map, which is exactly
-  // the projection the renderer already renders - so the degrade arm needs no
-  // surface of its own. Never on the unary released floor.
+  // The terminal-agent record read (the TUI eviction).
   "epic.listTuiAgents": {
     1: {
       latestMinor: 2,
@@ -6907,61 +6139,13 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicListTuiAgentsV11,
           upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV10ToV11,
-          // 1.1 grows BOTH halves, and only the request half needs anything
-          // from this table.
-          //
-          // REQUEST: `hasDocReplica` is required at 1.1, and the upgrade path
-          // fills it for a 1.0 caller. That fill is load-bearing rather than
-          // cosmetic - it is what decides whether the caller is served the
-          // doc-resident rows at all - and it is safe because the dispatcher
-          // validates params against the NEGOTIATED contract and hands the
-          // resolver the upgraded value, so a 1.0 peer can neither send the
-          // field nor be read as having sent one. Same shape as
-          // `epic.subscribe@1.3`'s `seedOffer`.
-          //
-          // RESPONSE: NO `responseGrowthProjectionGated`, and the reason is
-          // worth stating because the instinct to add it is strong: 1.1 does
-          // return MORE ROWS than 1.0 (the doc-resident remainder).
-          //
-          // But that annotation is not about rows. It covers response VALUE
-          // growth an older peer's schema would actively REFUSE - a new enum
-          // member, a new union arm. `docResident` is a plain added object
-          // key, which zod strips unconditionally, so 1.0 is safe with no
-          // gate to declare. Row COUNT is not something the validator can see
-          // at all; the resolver's request-driven gate is the entire
-          // mechanism, and it needs no registry annotation.
-          //
-          // Declaring it anyway is not inert: `assertSchemaCompatibility`
-          // rejects an annotation it cannot justify, and it runs at MODULE
-          // IMPORT, so the registry throws for every consumer - the app, not
-          // just a test. `bun run compile` passes clean through that, because
-          // it is a runtime assertion over registry values, not a type.
+          // `epic.subscribe@1.3` - 1.1 grows BOTH halves, and only the request half needs anything from this table.
+          // Declaring it anyway is not inert: `assertSchemaCompatibility` rejects an annotation it cannot justify, and it runs at MODULE IMPORT, so the registry throws for every consumer - the app, not just a test.
         },
         2: {
           contract: epicListTuiAgentsV12,
           upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV11ToV12,
-          // 1.2 DOES declare it, and the contrast with 1.1 above is the
-          // whole rule rather than an inconsistency.
-          //
-          // 1.1 added a plain object KEY (`docResident`), which zod strips
-          // unconditionally - nothing an older peer's schema refuses, so
-          // there was no growth to gate and declaring it would have thrown.
-          //
-          // 1.2 replaces the row OBJECT with a discriminated `origin` union
-          // whose third arm (`cloud`) is NARROW: it carries no
-          // `workspaceFolders` and no `agentMode`, both required on the 1.0
-          // row a 1.1 peer validates against. That is exactly the response
-          // VALUE GROWTH an older peer actively refuses, and the annotation
-          // is the reviewed claim that its emission is gated: the resolver
-          // serves cloud replicas only when `ctx.schemaVersion` is at least
-          // 1.2, so a 1.1 caller receives none and keeps parsing every row
-          // it is handed. The `registry` / `doc` arms are the 1.1 row plus
-          // one added key, which is why the older shape still projects.
-          //
-          // The gate is the NEGOTIATED VERSION here, unlike 1.1's, because
-          // the question is what the caller can PARSE rather than what it
-          // already holds - `hasDocReplica` answers the second and is
-          // untouched by this minor.
+          // 1.2 DOES declare it, and the contrast with 1.1 above is the whole rule rather than an inconsistency.
           responseGrowthProjectionGated: true,
         },
       },
@@ -7001,9 +6185,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // `getFileDiff` / `getFileDiffs` stay v1.0-only: the submodule work needs no
-  // request changes (working-tree files diff stage-based against the submodule
-  // repo root), so there is no v1.1 for these methods.
   "git.getFileDiff": {
     1: {
       latestMinor: 0,
@@ -7078,9 +6259,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Brand-new v1.0 method (not on `RELEASED_FLOOR_METHOD_NAMES`): an old host
-  // simply lacks it, so callers get per-call upgrade guidance instead of a
-  // fatal handshake mismatch. Same pattern as `providers.submitLoginCode`.
+  // Brand-new v1.0 method (not on `RELEASED_FLOOR_METHOD_NAMES`): an old host simply lacks it, so callers get per-call upgrade guidance instead of a fatal handshake mismatch.
   "resources.kill": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7107,12 +6286,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The human lifecycle controls for monitors and shells. Brand-new v1.0
-  // methods on the same `degrade: unsupported` channel as `resources.kill`
-  // above: a host without the managed-command subsystem simply lacks them.
-  // `1.1` on start/stop returns the command with `relaunchOnHostRestart`;
-  // the shipped `1.0` stays pinned to the pre-relaunch command shape (see
-  // `managedCommandSchemaPreRelaunch`).
+  // The human lifecycle controls for monitors and shells.
   "managedCommand.start": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7160,12 +6334,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The one human-editable setting: relaunch after a host restart. Same
-  // channel as the lifecycle three; a host too old to have the flag lacks the
-  // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
-  // commands read `relaunchOnHostRestart: true` by default - which is what
-  // such a host does (it respawns every survivor; it never offered the
-  // choice).
+  // The one human-editable setting: relaunch after a host restart.
   "managedCommand.configure": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7179,12 +6348,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Releasing a Stop fence's durable holds. `degrade: unsupported` like its
-  // siblings, and the degrade matters more here than for the other three: a
-  // host without it is not merely missing a button, it is holding output that
-  // has no other way out. The client renders the held rows (they ride
-  // `chat.subscribe`, which negotiates separately) with the action disabled
-  // rather than offering one that cannot be served.
+  // Releasing a Stop fence's durable holds.
+  // The client renders the held rows (they ride `chat.subscribe`, which negotiates separately) with the action disabled rather than offering one that cannot be served.
   "managedCommand.deliverHeld": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7232,10 +6397,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: { 1: terminalListDowngradeV23ToV10 },
     },
   },
-  // Brand-new v1.0 method on the same `degrade: unsupported` channel as
-  // `resources.kill` above: a host predating agent terminal reads simply
-  // lacks it, so the CLI gets per-call upgrade guidance instead of a fatal
-  // handshake mismatch.
+  // Brand-new v1.0 method on the same `degrade: unsupported` channel as `resources.kill` above: a host predating agent terminal reads simply lacks it, so the CLI gets per-call upgrade guidance instead of a fatal handshake.
   "terminal.readOutput": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7615,9 +6777,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
   },
   "worktree.setRepoBranchPrefix": {
-    // Not on the released floor (added after it was frozen) and has no
-    // sensible fallback target, so an old host simply lacks the affordance -
-    // the GUI gates it with `useHostSupportsMethod` before offering the edit.
+    // Not on the released floor (added after it was frozen) and has no sensible fallback target, so an old host simply lacks the affordance - the GUI gates it with `useHostSupportsMethod` before offering the edit.
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -7664,10 +6824,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // `speech.*@1.0` - on-device dictation model lifecycle. The live audio
-  // stream rides `speech.dictate` in `hostStreamRpcRegistry` below; these
-  // unary methods only manage the recognizer's model files. Schemas live in
-  // `protocol/host/speech/`.
+  // `speech.*@1.0` - on-device dictation model lifecycle.
   "speech.getModelStatus": {
     1: {
       latestMinor: 0,
@@ -7895,12 +7052,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
     },
   },
-  // Additive, post-v1.0.0 optional method: a PR's patch read from the local
-  // checkout. A host that predates it simply lacks it and the PR view falls
-  // back to the GitHub-sourced file list (which is all the detail stream ever
-  // carried), so it rides the optional-capability channel
-  // (`degrade: unsupported`) and stays out of the released floor / baseline
-  // surface.
+  // Additive, post-v1.0.0 optional method: a PR's patch read from the local checkout.
   "pr.getLocalDiff": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7914,19 +7066,13 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The split form of `pr.getLocalDiff` - a cheap metadata frame plus one
-  // patch per file, fetched per visible row. Same optional-capability posture
-  // as the monolith above (and always registered together with it): a client
-  // that finds these missing calls `pr.getLocalDiff` instead, so neither
-  // touches the released floor / baseline surface.
+  // The split form of `pr.getLocalDiff` - a cheap metadata frame plus one patch per file, fetched per visible row.
+  // Same optional-capability posture as the monolith above (and always registered together with it): a client that finds these missing calls `pr.getLocalDiff` instead, so neither touches the released floor / baseline.
   "pr.getLocalDiffSummary": {
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
-        // Byte-path sidecars (`pathBytes`/`previousPathBytes`) ride the only
-        // minor: non-UTF-8 paths survive the summary -> per-file round trip
-        // for every peer, because no peer predates them.
         0: {
           contract: prGetLocalDiffSummaryV10,
           upgradeFromPreviousVersion: null,
@@ -7980,17 +7126,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
 } as const;
 
-/**
- * The `providers.*` family, split out of the base definition purely to keep
- * declaration emit under `tsc`'s serialization ceiling (TS7056) - the same
- * reason `HOST_RPC_EDITING_REGISTRY_DEFINITION` exists. `providers.list`
- * alone carries seven majors and their bridges, and the inferred type of one
- * object literal holding every method crossed the limit as this family grew.
- *
- * Purely a compile-time seam: the four definitions are intersected into one
- * `HostRpcRegistryDefinition` below, so nothing about registration, ordering
- * or negotiation changes.
- */
 const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.list": {
     1: {
@@ -8079,10 +7214,6 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           upgradeFromPreviousVersion: providersListUpgradeV6ToV7,
         },
       },
-      // Every older major needs its own entry: `downgradePathsFromLatest` is
-      // keyed by TARGET major and the framework applies exactly one hop, so a
-      // missing key is not a slower path, it is an unbridgeable peer.
-      // `two-sided-release-invariant.test.ts` is what catches an omission.
       downgradePathsFromLatest: {
         1: providersListDowngradeV7ToV1,
         2: providersListDowngradeV7ToV2,
@@ -8385,10 +7516,8 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The four per-pack version-manager methods. All `degrade: unsupported`:
-  // they are new names outside `RELEASED_FLOOR_METHOD_NAMES`, so a host that
-  // predates them must fail these calls individually rather than refuse the
-  // connection. `providers.ensurePack` above keeps its own name and shape.
+  // The four per-pack version-manager methods.
+  // All `degrade: unsupported`: they are new names outside `RELEASED_FLOOR_METHOD_NAMES`, so a host that predates them must fail these calls individually rather than refuse the connection.
   "providers.installPackVersion": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8442,8 +7571,6 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
     },
   },
   // The on-demand discovery poll the version popover's check button drives.
-  // Not one of the four above - it reads a head instead of writing the store -
-  // but a new name outside the floor all the same, so it degrades identically.
   "providers.refreshPackDiscovery": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8727,16 +7854,8 @@ const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
   },
 } as const;
 
-// The three literals must not declare the same method. Nothing about the merge
-// below would tell you if they did: the spread silently keeps the LAST
-// occurrence, while the intersection claims a method that has two
-// contradictory version lines - so a duplicate would compile, type-check, and
-// then dispatch against whichever literal happened to be spread last.
-//
-// `AssertNever` fails the moment this resolves to anything but `never`, and the
-// error names the offending method. It is consumed by
-// `HostRpcRegistryDefinition` rather than left as a standalone alias so it
-// cannot be dropped as unused (`tsc -b` reports TS6196 for one).
+// The three literals must not declare the same method.
+// `AssertNever` fails the moment this resolves to anything but `never`, and the error names the offending method.
 type AssertNever<T extends never> = T;
 
 type DuplicateHostRpcMethodNames =
@@ -8789,76 +7908,15 @@ export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
 export type HostRpcRegistry = typeof hostRpcRegistry;
 
 /**
- * Combined streaming-RPC registry for the `/stream` WS manifest.
- *
- * One manifest per `/stream` WS: `epic.subscribe@1.1`,
- * `chat.subscribe@1.6`, `notifications.subscribe@1.1`,
- * `terminal.subscribe@1.6`, `git.subscribeStatus@1.3`,
- * `browser.sessions@1.0`, `browser.screencast@1.0`,
- * `resources.subscribe@1.4`, `agent.inbox.subscribe@1.2`,
- * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
- * `pr.subscribeListForEpic@1.0`, `pr.subscribeDetail@1.0`, and
- * `migration.run@1.0` are negotiated from this registry. Later minors within
- * the same major line must be
- * additive; later majors must carry a real breaking change and ship without a
- * cross-major downgrade bridge (streams reconnect on mismatched majors in v1).
- *
- * Unlike `hostRpcRegistry`, this registry has no floor list: the `/stream`
- * handshake checks compatibility PER METHOD at subscribe time
- * (`checkStreamMethodCompatibility`), so a method one peer lacks is a
- * per-feature degrade (`onMethodSupport(..., "unsupported")`), not a fatal
- * connection error. Every method added here after host-v1.0.0 is therefore
- * implicitly optional and MUST document what its consumer renders when the
- * peer does not advertise it (see `resources.subscribe` and
- * `epic.communicationGraph.subscribe`).
- *
- * Growth rules mirror `hostRpcRegistry` above:
- *
- * 1. Add new methods as top-level keys.
- * 2. Add new minors within a major line for additive changes.
- * 3. Add new majors only when a sub-schema actually breaks compatibility -
- *    and never for a shipped method with a peer still in the field, since a
- *    stream major bump has no downgrade bridge (see `chat.subscribe`'s
- *    history: `1.0` is frozen and kept registered forever; `1.1` added
- *    background-items controls as an additive minor instead of a major, to
- *    stay compatible with host-v1.0.0).
+ * `epic.subscribe@1.1` - Combined streaming-RPC registry for the `/stream` WS manifest.
+ * Later minors within the same major line must be additive; later majors must carry a real breaking change and ship without a cross-major downgrade bridge (streams reconnect on mismatched majors in v1).
  */
-// Named ahead of `hostStreamRpcRegistry` (mirrors `HOST_RPC_REGISTRY_DEFINITION`
-// above), which still validates every entry against this literal's precise
-// type at the `defineVersionedStreamRpcRegistry` call site below - only the
-// EXPORTED const's declared type is widened (see the comment there).
-//
-// `chat.subscribe` is deliberately declared apart from every other method
-// here, then merged back in via spread into `HOST_STREAM_RPC_REGISTRY_DEFINITION`
-// below: its 7-minor discriminated-union snapshot schema is large enough that
-// referencing `typeof` on a merged const that includes it - from ANY exported
-// type position - hits TS7056 during `.d.ts` emission, even when that
-// position only picks OTHER methods out of the merge. Keeping this const free
-// of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
-// never has to expand it (see `HostStreamRpcMethodMap` below).
+// Named ahead of `hostStreamRpcRegistry` (mirrors `HOST_RPC_REGISTRY_DEFINITION` above), which still validates every entry against this literal's precise type at the `defineVersionedStreamRpcRegistry` call site below -.
+// Keeping this const free of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION` never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
-      // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
-      // `rootDirty`. @1.0 stays installed and FROZEN: a renderer that
-      // negotiated it never receives the new kinds, and the resolver gates
-      // emission on the negotiated version rather than assuming the peer will
-      // tolerate an unknown frame.
-      //
-      // @1.2 adds `roomId` to the snapshot frame's `meta`. Unlike the @1.1
-      // frame KINDS, this one needs no emission gate - a peer on an older
-      // minor parses with its own frozen schema and strips the unknown key
-      // (see the @1.2 note in `epic/subscribe.ts` for the full asymmetry).
-      // @1.0 and @1.1 keep the pre-roomId meta shape.
-      // @1.3 adds the optional `seedOffer` to the OPEN REQUEST (a reattaching
-      // client's root-doc state vector) and `seededFromOffer` to the snapshot
-      // frame's `meta`, so a reattach transfers what changed instead of the
-      // whole document. Like @1.2 - and unlike @1.1's frame kinds - neither
-      // needs an emission gate: both are new PROPERTIES on existing shapes.
-      // The request half additionally self-gates, because the dispatcher
-      // validates params against the NEGOTIATED contract and passes the parsed
-      // value on, so a sub-@1.3 peer's offer is stripped before any resolver
-      // runs.
+      // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and `rootDirty`. @1.0 stays installed and FROZEN: a renderer that negotiated it never receives the new kinds, and the resolver gates emission on the negotiated.
       latestMinor: 3,
       versions: {
         0: {
@@ -8875,35 +7933,10 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
       },
     },
-    // ONE major, and permanently so. `@2` (a typed metadata plane plus explicit
-    // per-artifact attaches, on the same single subscription) was installed here
-    // and removed without ever being released: no client advertised it
-    // (`CLIENT_SERVED_STREAM_MAJORS` pinned this method to `[1]`) and it is
-    // absent from `released-baseline-surface.json`, so no freeze rule attached
-    // to it. Its planes are inherited by `epic.state.subscribe`,
-    // `epic.status.subscribe` and `artifact.subscribe` below - see the
-    // retirement note at the foot of `epic/subscribe.ts` for what moved where.
-    //
-    // `@1` stays installed and served indefinitely for GUIs that have not
-    // updated. That is a support-horizon policy decision, not a plan item.
+    // ONE major, and permanently so.
   },
   // ─── The epic LANES ───────────────────────────────────────────────────────
-  //
-  // Three subscriptions replacing the monolith above, one per data CLASS, each
-  // on its own `{major, minor}` line so the record plane, the control plane and
-  // the body plane version independently forever. All three are post-v1.0.0
-  // stream methods and therefore implicitly OPTIONAL: the `/stream` handshake
-  // checks compatibility PER METHOD at subscribe time, so a host that lacks one
-  // is a per-feature degrade (`onMethodSupport(..., "unsupported")`), never a
-  // fatal connection error.
-  //
-  // What a client renders when a peer does not advertise them: a host without
-  // these lanes is a host that still serves `epic.subscribe@1`, and the client's
-  // `@1` legacy adapter produces the same read model from the root Y.Doc. So the
-  // degrade is today's behaviour, not a degraded one - and the three lanes must
-  // be treated as ONE capability by a client (advertising two of three is a host
-  // that cannot serve an epic at all). None may ever be added to the unary
-  // released floor (`released-floor.ts`), which is fail-closed on the name set.
+  // None may ever be added to the unary released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
       latestMinor: 0,
@@ -8924,10 +7957,6 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // A new TOP-LEVEL namespace, deliberately: this lane is addressed by
-  // `artifactId` and is opened per open tile, so naming it `epic.*` would imply
-  // an epic-lifetime subscription it is emphatically not. It mirrors
-  // `chat.subscribe`'s lifetime, not `epic.subscribe`'s.
   "artifact.subscribe": {
     1: {
       latestMinor: 0,
@@ -8940,11 +7969,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "notifications.subscribe": {
     1: {
-      // @1.1 adds the additive, server-only `awareness` frame (agent-activity
-      // presence on the per-user notification room). @1.0 stays installed and
-      // FROZEN: a client that negotiated it must never receive the new kind -
-      // the emitting resolver MUST gate on the negotiated version rather than
-      // assuming the peer will tolerate an unknown frame.
+      // @1.1 adds the additive, server-only `awareness` frame (agent-activity presence on the per-user notification room). @1.0 stays installed and FROZEN: a client that negotiated it must never receive the new kind - the.
       latestMinor: 1,
       versions: {
         0: {
@@ -9042,11 +8067,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // The "Monitors & Shells" surface: one stream per command for its output.
-  // Brand-new at 1.0 - a host that lacks the managed-command subsystem rejects
-  // the open as an unknown method. The SET of a chat's commands is not a method
-  // here: it rides `chat.subscribe@1.6` (see the re-entry note in
-  // `host/managed-command/subscribe.ts` for what a global panel would re-add).
+  // `chat.subscribe@1.6` - The "Monitors & Shells" surface: one stream per command for its output.
   "managedCommand.subscribeOutput": {
     1: {
       // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
@@ -9064,11 +8085,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "browser.sessions": {
     1: {
-      // Shared-browser-runtime ticket 01: `browser.sessions` never shipped,
-      // so its prior in-repo minor history (@1.0-@1.4) is collapsed into one
-      // fresh @1.0 baseline carrying every frame kind - see the doc comment
-      // on `browserSessionsV1` in `contracts.ts`. Agent-browser PiP ticket 01
-      // extends that same 1.0 in place.
+      // Shared-browser-runtime ticket 01: `browser.sessions` never shipped, so its prior in-repo minor history (@1.0-@1.4) is collapsed into one fresh @1.0 baseline carrying every frame kind - see the doc comment on.
       latestMinor: 0,
       versions: {
         0: {
@@ -9094,33 +8111,20 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         0: {
           contract: gitSubscribeStatusV10,
         },
-        // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1
-        // file rows on server frames. Additive; the HOST resolver projects
-        // frames per negotiated minor (streams have no version bridges). See
-        // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
+        // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1 file rows on server frames.
         1: {
           contract: gitSubscribeStatusV11,
         },
-        // Guaranteed-fresh stream replacement: required `freshNonce` on the
-        // v1.2 open and snapshot/updated frames. Lower-minor projection stays
-        // explicit in the host resolver because streams have no bridges.
+        // Guaranteed-fresh stream replacement: required `freshNonce` on the v1.2 open and snapshot/updated frames.
         2: {
           contract: gitSubscribeStatusV12,
         },
-        // Watcher health: `watcher: { state, detail }` on snapshot/updated
-        // frames, so a client can tell "watching" from "fell back to polling"
-        // - and a user-fixable capacity fallback from a terminal one. Additive;
-        // the open request is v1.2's verbatim. Projection for lower minors
-        // stays explicit in the host resolver (streams have no bridges).
         3: {
           contract: gitSubscribeStatusV13,
         },
       },
     },
   },
-  // Additive stream, deliberately absent from every released host: a client
-  // whose open is rejected as an unknown method falls back to the unary
-  // `workspace.listFileTree` snapshot (see the contract's degrade note).
   "workspace.subscribeFileList": {
     1: {
       latestMinor: 0,
@@ -9175,10 +8179,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         3: {
           contract: resourcesSubscribeV13,
         },
-        // @1.4 widens the owner kind vocabulary by `managed-command`. A peer
-        // below it keeps the frozen three-kind enum and never receives one of
-        // those owners: the resolver folds their usage into `other`, as it did
-        // for every minor before this one.
+        // @1.4 widens the owner kind vocabulary by `managed-command`.
+        // A peer below it keeps the frozen three-kind enum and never receives one of those owners: the resolver folds their usage into `other`, as it did for every minor before this one.
         4: {
           contract: resourcesSubscribeV14,
         },
@@ -9192,17 +8194,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "agent.inbox.subscribe": {
     1: {
-      // @1.1 adds the additive `role-awareness` frame. @1.0 stays installed and
-      // FROZEN: a monitor that negotiated it never receives the new kind, and
-      // the resolver gates on the negotiated version rather than assuming the
-      // peer will tolerate an unknown frame.
-      //
-      // @1.2 adds `eventId` to the EXISTING "message" item (not a new frame
-      // kind) - unlike a new frame kind, an unrecognized extra field inside an
-      // already-known object is silently dropped by a @1.0/@1.1 monitor's own
-      // non-strict zod parse, so the resolver builds the @1.2 shape
-      // unconditionally rather than branching on negotiated minor.
-      // @1.3 adds structured stop-initiator provenance to notice frames.
+      // @1.1 adds the additive `role-awareness` frame. @1.0 stays installed and FROZEN: a monitor that negotiated it never receives the new kind, and the resolver gates on the negotiated version rather than assuming the peer.
       latestMinor: 3,
       versions: {
         0: {
@@ -9220,12 +8212,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // One activity capability, with its read plane selected by the host. Current
-  // production wiring selects cloud everywhere; local remains dormant until an
-  // explicit host mode exists. State frames report the selected plane, while
-  // renderers never choose a different RPC from entitlement state.
-  // `1.1` stamps `cloudSyncStatus` on cloud-served `state` frames. `1.0` stays
-  // registered verbatim so a `1.1` client bridges down to a `1.0` host.
+  // One activity capability, with its read plane selected by the host.
+  // State frames report the selected plane, while renderers never choose a different RPC from entitlement state.
   "agent.activity.subscribe": {
     1: {
       latestMinor: 1,
@@ -9239,12 +8227,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Additive, post-v1.0.0 OPTIONAL stream method: the per-epic communication
-  // event log behind the Communication Graph tile. A host that predates it
-  // never advertises it, so the tile's per-host subscription degrades to
-  // `unsupported` and that host's agents render with a "no edge data"
-  // affordance while every other host in the epic keeps streaming. Never add
-  // it to the unary released floor - that list is fail-closed on the name set.
+  // Additive, post-v1.0.0 OPTIONAL stream method: the per-epic communication event log behind the Communication Graph tile.
+  // Never add it to the unary released floor - that list is fail-closed on the name set.
   "epic.communicationGraph.subscribe": {
     1: {
       latestMinor: 0,
@@ -9255,12 +8239,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Additive, post-v1.0.0 OPTIONAL stream method: the cloud-relayed
-  // counterpart of `epic.communicationGraph.subscribe` above. A host built
-  // without cloud replication, or one that predates this method, never
-  // advertises it, so the client's subscription degrades to `unsupported`
-  // and falls back to the local per-host stream. Never add it to the unary
-  // released floor - that list is fail-closed on the name set.
+  // Additive, post-v1.0.0 OPTIONAL stream method: the cloud-relayed counterpart of `epic.communicationGraph.subscribe` above.
+  // Never add it to the unary released floor - that list is fail-closed on the name set.
   "host.communicationGraph.subscribe": {
     1: {
       latestMinor: 0,
@@ -9271,26 +8251,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Additive, post-v1.0.0 OPTIONAL stream method: the chat-RECORD delta push,
-  // freshness counterpart of the `epic.listChatRecords` read. HOST-SCOPED on
-  // purpose - one subscription covers every epic that host has open plus its
-  // own-row changes, which exist outside any epic subscription's lifetime, so
-  // frames name their epic and the client filters. A host that predates it
-  // never advertises it and the client's subscription degrades to
-  // `unsupported`, whose contract is simply that the 20s
-  // `epic.listChatRecords` poll remains the record table's only refresh -
-  // latency, never missing rows. Never add it to the unary released floor -
-  // that list is fail-closed on the name set.
-  // @1.1 adds the terminal-agent delta frames (`tuiUpsert` / `tuiRemove`) -
-  // the TUI eviction's freshness half, riding the same host-scoped stream.
-  // @1.0 stays installed and FROZEN: a client that negotiated it never
-  // receives the new kinds, and the host gates emission on the negotiated
-  // version.
-  // @1.2 keeps the same four frame kinds and widens the row `tuiUpsert`
-  // carries to the three-arm `origin` union, so a delta about a terminal agent
-  // owned by ANOTHER of the viewer's hosts can be pushed. @1.1 stays installed
-  // and FROZEN on its registry-shaped row; the host gates the narrow `cloud`
-  // arm on the negotiated version exactly as it gates the @1.1 kinds.
+  // Additive, post-v1.0.0 OPTIONAL stream method: the chat-RECORD delta push, freshness counterpart of the `epic.listChatRecords` read.
+  // A host that predates it never advertises it and the client's subscription degrades to `unsupported`, whose contract is simply that the 20s `epic.listChatRecords` poll remains the record table's only refresh - latency.
   "host.chatRecords.subscribe": {
     1: {
       latestMinor: 2,
@@ -9317,11 +8279,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Additive, post-v1.0.0 OPTIONAL stream methods: session import. A host that
-  // predates them never advertises them, so the wizard's subscription degrades
-  // to `unsupported` and the client hides the "Import sessions" entry
-  // entirely - the feature is de-emphasised by design (spec §5), so there is
-  // nothing to fall back to and nothing lost by its absence.
+  // Additive, post-v1.0.0 OPTIONAL stream methods: session import.
   "sessionImport.scan": {
     1: {
       latestMinor: 0,
@@ -9358,13 +8316,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Separate method, not a minor of `worktree.deleteByPath`: its request and
-  // frames are released and frozen, and a client that lands on the batch
-  // method must be able to discover THAT, not negotiate down to a per-target
-  // stream it would then have to drive N times. An older host simply omits
-  // this method from its manifest, so the compatibility check rejects it at
-  // openAck - before the subscribe frame, therefore before any host work -
-  // which is what makes fallback safe for a destructive operation.
+  // Separate method, not a minor of `worktree.deleteByPath`: its request and frames are released and frozen, and a client that lands on the batch method must be able to discover THAT, not negotiate down to a per-target.
   "worktree.deleteBatchByPath": {
     1: {
       latestMinor: 1,
@@ -9468,19 +8420,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   },
 } as const;
 
-// `chat.subscribe`'s value slot is widened to the generic
-// `UncheckedStreamMethodVersionRegistry` shape here rather than reusing
-// `typeof HOST_STREAM_RPC_REGISTRY_DEFINITION` (which includes it): every
-// OTHER streaming method is built from `typeof
-// HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`, a const that never contains
-// `chat.subscribe`'s 6-minor discriminated-union schema, so `.d.ts` emission
-// never has to print it - `keyof HostStreamRpcRegistry` and `ParamsOf<...>`
-// stay precise for every method except `chat.subscribe`. Its callers (e.g.
-// `ChatStreamClient`) lose compile-time verification of their open-request
-// shape against this registry alone; they still get it from the
-// directly-imported contract const (`chatSubscribeV15`), so this is a
-// narrow, intentional trade-off - confirmed by a full workspace
-// compile+build with this annotation in place.
+// `chat.subscribe`'s value slot is widened to the generic `UncheckedStreamMethodVersionRegistry` shape here rather than reusing `typeof HOST_STREAM_RPC_REGISTRY_DEFINITION` (which includes it): every OTHER streaming.
 type HostStreamRpcMethodMap =
   typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
     readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
@@ -9489,15 +8429,5 @@ type HostStreamRpcMethodMap =
 export type HostStreamRpcRegistry =
   VersionedStreamRpcRegistry<HostStreamRpcMethodMap>;
 
-// Annotated with `HostStreamRpcRegistry` itself (not `typeof
-// HOST_STREAM_RPC_REGISTRY_DEFINITION`, which is more precise but exceeds
-// TS7056's declaration-emit ceiling once `chat.subscribe` alone carries this
-// many minors): `defineVersionedStreamRpcRegistry` still validates the full
-// precise literal at this call site (nothing here weakens that check), and
-// its precise return type remains assignable to this narrower annotation
-// (the only difference is `chat.subscribe`'s widened value slot, and a
-// branded, more precise value is always assignable into an unbranded,
-// less precise hole) - confirmed by a full workspace compile+build with
-// this annotation in place.
 export const hostStreamRpcRegistry: HostStreamRpcRegistry =
   defineVersionedStreamRpcRegistry(HOST_STREAM_RPC_REGISTRY_DEFINITION);

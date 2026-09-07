@@ -77,19 +77,14 @@ describe("buildUsageChartOption", () => {
   });
 
   it("colors every series with a var() reference, never a resolved value", () => {
-    // The SVG renderer writes these strings into DOM attributes where the
-    // `.usage-chart-root` scoped palette (and its `.dark` override) resolves
-    // them live - a resolved hex here would freeze the mount-time theme.
+    // The SVG renderer writes these strings into DOM attributes where the `.usage-chart-root` scoped palette (and its `.dark` override) resolves them live - a resolved hex here would freeze the mount-time theme.
     for (const entry of seriesList(option)) {
       expect(entry.color).toMatch(/^var\(--usage-series-/);
     }
   });
 
   it("pins explicit emphasis colors so hover never runs the default color lift", () => {
-    // Regression: with no explicit emphasis color, ECharts "lifts" the
-    // series color on hover by parsing it - `var(...)` doesn't parse, the
-    // lift returns undefined, and the whole chart blanked out under the
-    // axis pointer (2026-08-11 live report).
+    // Regression: with no explicit emphasis color, ECharts "lifts" the series color on hover by parsing it - `var(...)` doesn't parse, the lift returns undefined, and the whole chart blanked out under the axis pointer (2026-08-11 live report).
     for (const entry of seriesList(option)) {
       const emphasis = entry.emphasis;
       expect(emphasis?.lineStyle?.color).toMatch(/^var\(--usage-series-/);
@@ -138,9 +133,7 @@ describe("buildUsageChartOption", () => {
   });
 
   it("draws nothing for a hidden series - zeroed values alone still stroke a line", () => {
-    // A stacked line at zero rides the baseline (or the series below it) and
-    // stays visible with its 2px stroke, so filtering it out of the legend
-    // has to suppress the stroke/area/symbol too, not just the values.
+    // A stacked line at zero rides the baseline (or the series below it) and stays visible with its 2px stroke, so filtering it out of the legend has to suppress the stroke/area/symbol too, not just the values.
     const filtered = buildUsageChartOption({
       columns: applyUsageSeriesVisibility(columns, new Set(["codex"])),
       scale,
@@ -163,10 +156,7 @@ describe("buildUsageChartOption", () => {
 
 describe("buildUsageChartOption — all-zero visible series", () => {
   it("draws no stroke for a series whose every value is zero", () => {
-    // Ticket 19 (live staging): an unpriced grok turn contributed $0, yet
-    // its stacked boundary line traced the top of claude's mass in grok's
-    // color - a $0 harness read as owning the whole total. All-zero
-    // series render nothing; the legend chip and tooltip stay.
+    // All-zero series render nothing; the legend chip and tooltip stay.
     const zeroScale = buildUsageSeriesScale(["claude", "grok"]);
     const option = buildUsageChartOption({
       columns: buildUsageChartColumns({

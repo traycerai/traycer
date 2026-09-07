@@ -1,13 +1,4 @@
-/**
- * Docs: see ./README.md
- *
- * Canonical "new epic" flow. Builds a controller-owned creation request for
- * UI callers with `useNavigate`, while keybinding dispatch and the palette use
- * the full `openNewEpic` convenience action.
- *
- * The controller creates the draft only after it captures the current selection,
- * keeping navigation cancellation able to restore the tab the user started on.
- */
+/** Docs: see ./README.md */
 import { newDraftTabIntent } from "@/lib/tab-navigation/intents";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 

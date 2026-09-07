@@ -8,12 +8,7 @@ import {
   hostUpdateInstallV12,
 } from "../contracts";
 
-// `host.update.install@1.1` (Ticket 06): the same dispatch, additionally
-// naming the durable update attempt when there is one to name. The two arms
-// that gain `attemptId` are deliberately ASYMMETRIC - `already-updating`
-// carries the observed non-terminal attempt id (or `null`), while `accepted`
-// carries `null` always, pre-cutover - so this suite pins both arms
-// separately rather than asserting one shared shape for "carries attemptId".
+// `host.update.install@1.1` (Ticket 06): the same dispatch, additionally naming the durable update attempt when there is one to name.
 
 describe("hostUpdateInstallResponseV11Schema", () => {
   it("parses 'accepted' with a non-null attemptId (post-cutover shape, reserved for ticket 07)", () => {
@@ -94,12 +89,6 @@ describe("hostUpdateInstallResponseV11Schema", () => {
   });
 });
 
-// G9: the `dispatch-indeterminate` arm, shipped into `@1.1` (not a later
-// minor) precisely so a `@1.1` decoder already tolerates it from birth - see
-// the schema's own header comment for why a `z.discriminatedUnion` makes a
-// later-minor arm a hard decode failure on every peer between the two
-// versions. Nothing PRODUCES this arm yet; this suite is purely about the
-// decoder's shape.
 describe("hostUpdateInstallResponseV11Schema — the dispatch-indeterminate arm", () => {
   it("parses with a non-null reason", () => {
     const parsed = hostUpdateInstallV11.responseSchema.parse({
@@ -123,9 +112,7 @@ describe("hostUpdateInstallResponseV11Schema — the dispatch-indeterminate arm"
     });
   });
 
-  // The load-bearing negative control: if the OLDER v1.0 schema also accepted
-  // this arm, the versioning would be a no-op - a v1.0-registered peer would
-  // silently decode a v1.1-only shape it was never negotiated to receive.
+  // The load-bearing negative control: if the OLDER v1.0 schema also accepted this arm, the versioning would be a no-op - a v1.0-registered peer would silently decode a v1.1-only shape it was never negotiated to receive.
   it("the v1.0 responseSchema REJECTS the arm outright", () => {
     const result = hostUpdateInstallV10.responseSchema.safeParse({
       outcome: "dispatch-indeterminate",

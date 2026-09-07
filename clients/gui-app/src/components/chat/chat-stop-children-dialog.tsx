@@ -9,12 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 
-/**
- * Shown when the owner stops a chat that has active sub-agents it spawned.
- * Lets them either stop just this agent's turn or cascade the stop to the
- * whole delegated subtree. Only raised when at least one descendant is
- * actively working - a leaf chat stops with no prompt.
- */
+/** Shown when the owner stops a chat that has active sub-agents it spawned. Lets them either stop just this agent's turn or cascade the stop to the whole delegated subtree. */
 export function StopChildrenDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;

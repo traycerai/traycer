@@ -1,21 +1,3 @@
-/**
- * `waitForWriteCommand` is a bare `new Promise((resolve) => …)` with no
- * reject, no timeout, no signal (`store.ts:1524-1543`). On a cross-host
- * re-point the registry disposes the outgoing handle, the worker's command
- * queue splices its records, and the waiter hangs forever - so
- * `enqueueAndWait` (`use-epic-node-mutations.ts`) never returns and the
- * sidebar's bulk delete leaves `deletePending` stuck true for the life of the
- * tab.
- *
- * Post-fix, `store.ts` exports `EpicSessionEndedError`, and
- * `waitForWriteCommand` rejects with it when the store disposes or detaches
- * its transport - and rejects immediately if called after either.
- *
- * `EpicSessionEndedError` does not exist yet, so a static import of it would
- * fail this file at IMPORT (a crash, not a red assertion). Assert on the
- * error's `name` instead via `errorName`, which keeps the file importable
- * before the fix and exact after it.
- */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -62,10 +44,8 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 /**
- * Opens a store with the write gate already passed (transport open, a fresh
- * root snapshot) and one artifact seeded in the doc, and a `writeCommand`
- * that NEVER settles - so an enqueued command stays genuinely in flight, the
- * exact window `waitForWriteCommand` hangs in today.
+ * Opens a store with the write gate already passed (transport open, a fresh root snapshot) and one
+ * artifact seeded in the doc, and a `writeCommand` that NEVER settles - so an enqueued command
  */
 function openRigWithNeverSettlingWrite(): {
   readonly handle: OpenedStoreForTest;

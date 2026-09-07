@@ -33,7 +33,6 @@ const guideMocks = vi.hoisted(
   (): {
     activeHostId: string;
     scopedHostId: string;
-    /** What the sidebar picker has selected; `null` follows the active host. */
     pickedHostId: string | null;
     queryData: GuideData | undefined;
     queryDataByHost: Record<string, GuideData>;
@@ -105,11 +104,8 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
   },
 }));
 
-// The in-panel host dropdown is gone: the ONE picker lives in the sidebar and
-// this panel just reads its selection. So the suite drives `pickedHostId` and
-// lets the scope hook resolve it, exactly as the real hook does - including
-// the `vanished` verdict, which is the state that used to let a panel silently
-// read through the active host.
+// The in-panel host dropdown is gone: the one picker lives in the sidebar and this panel just reads its
+// selection.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -160,8 +156,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
         activeHost,
         isViewingActive: host.hostId === guideMocks.activeHostId,
         status: "ready",
-        // Only a resolved scope hands back a client, and it is the PICKED
-        // host's - never the ambient one.
+        // Only a resolved scope hands back a client, and it is the picked host's - never the ambient one.
         client: { getActiveHostId: () => host.hostId } as never,
       });
     },
@@ -380,10 +375,8 @@ describe("AgentSelectionGuideSection", () => {
     expect(screen.queryByTestId("agents-selection-guide-input")).toBeNull();
   });
 
-  // Regression: the scope refactor wrapped the loaded state in a frame that
-  // printed the title, while `AgentSelectionGuideEditorSurface` was already
-  // printing its own - so the panel showed the heading and description twice.
-  // Every other assertion in this file passed throughout.
+  // Regression: the scope refactor wrapped the loaded state in a frame that printed the title, while
+  // `AgentSelectionGuideEditorSurface` was already printing its own.
   it("prints the guide heading exactly once in each state", () => {
     const { rerender, unmount } = renderPanel();
     expect(screen.getAllByText("Agent selection guide")).toHaveLength(1);

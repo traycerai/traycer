@@ -142,10 +142,6 @@ vi.mock("react-zoom-pan-pinch", () => {
       }
 
       const ref: MockTransformRef = {
-        // Live (not a snapshot), matching the real library: `onInit` fires
-        // once transformRef.current is already seeded from the initial
-        // props, so a live getter (not a value captured at `ref` creation
-        // time) is what makes that ordering matter for the test too.
         get state() {
           return (
             transformRef.current ?? {
@@ -189,10 +185,6 @@ vi.mock("react-zoom-pan-pinch", () => {
             offsetWidth: 640,
             offsetHeight: 480,
           },
-          // Live (not a snapshot) - matches the real library keeping
-          // `instance.setup` in sync with the current props on every
-          // update, since production reads `minScale`/`maxScale` off this
-          // at both `onInit` and every `onTransform` firing.
           get setup() {
             return {
               minScale: propsRef.current.minScale,
@@ -225,9 +217,7 @@ vi.mock("react-zoom-pan-pinch", () => {
     instance.disabled = props.disabled === true;
     useImperativeHandle(forwardedRef, () => instance.ref, [instance.ref]);
 
-    // Fires exactly once at mount, matching the real library's `onInit`
-    // (production relies on this - RZPP applies its initial transform
-    // without ever calling `onTransform`).
+    // Fires exactly once at mount, matching the real library's `onInit` (production relies on this - RZPP applies its initial transform without ever calling `onTransform`).
     const initializedRef = useRef(false);
     useLayoutEffect(() => {
       if (initializedRef.current) return;
@@ -269,9 +259,7 @@ vi.mock("react-zoom-pan-pinch", () => {
               ...transform,
               scale: 0.19,
             };
-            // Ctrl-wheel/trackpad zoom reports a transform without a
-            // panning-start callback; this is the path that used to leave a
-            // manually tracked `isFitted` flag stale.
+            // Ctrl-wheel/trackpad zoom reports a transform without a panning-start callback; this is the path that used to leave a manually tracked `isFitted` flag stale.
             emitTransform(transformRef.current);
           }}
         >
@@ -283,9 +271,7 @@ vi.mock("react-zoom-pan-pinch", () => {
           onClick={() => {
             const transform = transformRef.current;
             if (transform === null) return;
-            // Synthetic wheel gesture for the mismatched-dimensions test:
-            // deliberately put the source position outside the peer's
-            // visible bounds so the peer must clamp at its own scale.
+            // Synthetic wheel gesture for the mismatched-dimensions test: deliberately put the source position outside the peer's visible bounds so the peer must clamp at its own scale.
             transformRef.current = {
               ...transform,
               positionX: 1_000,

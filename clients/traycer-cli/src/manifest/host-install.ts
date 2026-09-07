@@ -14,15 +14,8 @@ import { createCliLogger, errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { hostInstallRecordPath, ensureHostInstallDir } from "../store/paths";
 
-// HostInstallRecord - the single authoritative record describing the
-// host currently installed at ~/.traycer/host[/dev]/install/. Written
-// atomically by the installer after staging + verification, replaced
-// in-place on update, and consulted by every supervisor/doctor surface
-// that needs to know "which host binary is supposed to run here".
-//
-// Schema mirrors the Tech Plan: there is exactly one record per environment
-// (no multi-version store, no `current.json`, no symlink). Absence of
-// the file means "no host installed on this environment".
+// HostInstallRecord - the single authoritative record describing the host currently installed at ~/.traycer/host[/dev]/install/.
+// Written atomically by the installer after staging + verification, replaced in-place on update, and consulted by every supervisor/doctor surface that needs to know "which host binary is supposed to run here".
 
 export type {
   HostInstallArch,
@@ -32,11 +25,8 @@ export type {
   HostInstallSourceKind,
 } from "@traycer/protocol/config/installation";
 
-// Returns null when the record file is absent (no host installed on
-// this environment). Throws HOST_INSTALL_RECORD_INVALID for a present but
-// malformed record - we refuse to silently overwrite a corrupt record
-// because that often signals a half-completed install that operators
-// should see, not paper over.
+// Returns null when the record file is absent (no host installed on this environment).
+// Throws HOST_INSTALL_RECORD_INVALID for a present but malformed record - we refuse to silently overwrite a corrupt record because that often signals a half-completed install that operators should see, not paper over.
 export async function readHostInstallRecord(
   environment: Environment,
 ): Promise<HostInstallRecord | null> {
@@ -96,13 +86,8 @@ async function writeHostInstallRecordAtPath(
   await rename(tmp, targetPath);
 }
 
-// Writes the record atomically at an explicit install directory (rather
-// than always the canonical `hostInstallRecordPath(environment)`) - used to
-// materialize `install.json` INSIDE a not-yet-promoted source tree before
-// the commit rename (`installer/install.ts`'s `commitInstallFromSource`),
-// so the record moves atomically WITH the bytes in one rename instead of a
-// separate post-swap write that could land bytes with no record on a crash
-// in between. Mirrors `host-staged.ts`'s `writeHostStagedRecordAt`.
+// Writes the record atomically at an explicit install directory (rather than always the canonical `hostInstallRecordPath(environment)`) - used to materialize `install.json` INSIDE a not-yet-promoted source tree before the commit rename (`installer/install.ts`'s `commitInstallFromSource`), so the record moves atomically WITH the bytes in one rename instead of a separate post-swap write that could land bytes with no record on a crash in between.
+// Mirrors `host-staged.ts`'s `writeHostStagedRecordAt`.
 export async function writeHostInstallRecordAt(
   installDirPath: string,
   record: HostInstallRecord,

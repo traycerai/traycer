@@ -19,8 +19,8 @@ const tilesByKeyId = new Map<string, TileRegistration>();
 const listeners = new Set<() => void>();
 
 /**
- * Register a tile's surface element. Rects are measured at read time, so a
- * tile that MOVES without resizing is never stale.
+ * Register a tile's surface element.
+ * Rects are measured at read time, so a tile that MOVES without resizing is never stale.
  */
 export function registerTileRect(
   key: BrowserViewTileKey,

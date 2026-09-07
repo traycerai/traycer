@@ -4,10 +4,7 @@ import type { BrowserViewFindRequest } from "@traycer-clients/shared/platform/br
 import { createBrowserTileFindAdapter } from "../browser-tile-find-adapter";
 
 /**
- * Records `findInPage` calls. `FakeBrowserViewBridge`'s own `findInPage` is a
- * no-op stub shared by suites that don't care about its arguments; this
- * suite's whole point is those arguments, so it subclasses rather than
- * teaching the shared fake to track calls nobody else needs.
+ * `FakeBrowserViewBridge`'s own `findInPage` is a no-op stub shared by suites that don't care about its arguments; this suite's whole point is those arguments, so it subclasses rather than teaching the shared fake to track calls nobody else needs.
  */
 class RecordingBrowserViewBridge extends FakeBrowserViewBridge {
   readonly findInPageCalls: BrowserViewFindRequest[] = [];

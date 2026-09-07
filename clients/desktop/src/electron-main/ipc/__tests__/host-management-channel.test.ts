@@ -36,19 +36,6 @@ import type {
   UninstallOk,
 } from "../../host/host-controller-types";
 
-// Ticket 29cf341f - Desktop host-management IPC must respect the same
-// prod/dev environment selected by Desktop main and `HostLifecycle`. These
-// tests pin:
-//
-//   - Settings → Host installed-record read paths
-//     (prod = ~/.traycer/host/install/install.json,
-//     dev   = ~/.traycer/host/dev/install/install.json).
-//   - Every long-running and short-lived host/service CLI call goes out
-//     WITHOUT `--environment`; the CLI derives its slot from
-//     `config.environment`, so it touches only the active environment's
-//     pid/log/install paths.
-//   - Dev Desktop never reads or mutates the prod install record even
-//     when both records exist on disk.
 
 vi.mock("electron", () => ({
   app: {
@@ -150,18 +137,6 @@ interface RecordedControllerCall {
   readonly args: readonly unknown[];
 }
 
-/**
- * Fake `HostController` for the handlers `host-management-ipc.ts` now
- * delegates to (install/update/uninstall/remove/restart/register/deregister
- * /free-port-and-restart/ensure). Records every call so a test can assert
- * delegation + argument threading without spawning a real CLI subprocess;
- * `installVersionResult` / `applyStagedResult` / etc. are mutable so a test
- * can steer a specific outcome kind (busy/deferred/failed) before invoking
- * the handler. Deep behavioural coverage of what each `HostController`
- * method itself does (macOS SMAppService cycles, busy detection, dev-slot
- * CLI argv, ...) lives in `host-controller.test.ts` - this fake only proves
- * the IPC layer wires the right method + args and re-shapes the outcome.
- */
 class FakeHostController implements IpcHostController {
   readonly calls: RecordedControllerCall[] = [];
   // Idle by default: the maintenance install handler tests the lane before it
@@ -218,10 +193,6 @@ class FakeHostController implements IpcHostController {
     kind: "ok",
     value: { running: true, version: "1.7.0" },
   };
-  // Fixup B1: `refreshRegistryUpdateState` now reads `getStatus().updateReady`
-  // to project the legacy `updateAvailable` field - every handler that
-  // force-refreshes after a mutation calls it, so this fake must answer
-  // rather than throw.
   getStatusResult: HostControllerStatus = {
     download: null,
     mutation: null,
@@ -258,10 +229,6 @@ class FakeHostController implements IpcHostController {
   async stageLatest(): Promise<void> {
     this.calls.push({ method: "stageLatest", args: [] });
   }
-  // Set to defer `applyStaged`'s resolution until `resolveApplyStaged` is
-  // called - lets a test observe an in-flight mutation (progress broadcast,
-  // status-get mid-operation, a second concurrent call landing) instead of
-  // the call resolving synchronously.
   applyStagedDeferred = false;
   private pendingApplyStaged: Array<
     (outcome: MutationOutcome<ApplyStagedOk>) => void
@@ -280,14 +247,7 @@ class FakeHostController implements IpcHostController {
     return this.applyStagedResult;
   }
 
-  // Fixup B16: resolves exactly the OLDEST still-pending `applyStaged` call
-  // (FIFO), one per invocation - mirrors the real `HostController`'s
-  // exclusive mutation lane, where a second concurrent call doesn't settle
-  // until the first one's own job has. The previous version resolved every
-  // pending call at once regardless of submission order, which is why the
-  // concurrent-call test never actually exercised the legacy shim's
-  // cross-attribution bug (fixup B16) - nothing ever queued behind
-  // anything else's still-running progress window.
+  // The previous version resolved every pending call at once regardless of submission order, which is why the concurrent-call test never actually exercised the legacy shim's.
   resolveApplyStaged(outcome: MutationOutcome<ApplyStagedOk>): void {
     const resolve = this.pendingApplyStaged.shift();
     if (resolve !== undefined) resolve(outcome);
@@ -363,11 +323,7 @@ interface FakeBridge {
     readonly host: {
       readonly reloadSnapshotFromDisk: Mock;
       readonly getSnapshot: Mock;
-      // The identity-fenced handlers classify this machine from these two
-      // files. Pointed into the test home with NEITHER written, which is the
-      // `unenrolled` arm - a legacy install with no identity machinery, where
-      // the fence has nothing to compare and admits. That keeps these argv
-      // tests about argv; the fence itself is pinned in the maintenance suite.
+      // That keeps these argv tests about argv; the fence itself is pinned in the maintenance suite.
       readonly identityEnrollmentFile: string;
       readonly pidMetadataFile: string;
     };
@@ -590,14 +546,6 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     }
   });
 
-  // Host Update Layer Redesign Tech Plan ("Single-writer cutover"): install /
-  // update / uninstall / remove / restart / register / deregister /
-  // free-port-and-restart no longer shell out to the CLI directly from this
-  // IPC layer - they delegate to `HostController`, the single writer, which
-  // owns the CLI invocation (and the macOS SMAppService path) itself. These
-  // tests pin the delegation + argument threading; `HostController`'s own
-  // CLI argv (including the dev-slot service-install flags) is covered by
-  // `host-controller.test.ts`.
   it("delegates install/update/uninstall/remove/restart/register/deregister/free-port to HostController with the right args", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
@@ -830,14 +778,8 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     }
   });
 
-  // Dev-slot CLI argv (the `--allow-self-invocation` dev wrapper flag,
-  // Ticket f0ae4530) is now HostController's own concern
-  // (`devServiceInstallExtras()` on the controller, environment-aware since
-  // it already carries `environment`) - pinned by `host-controller.test.ts`.
-  // This IPC layer only has to prove it delegates register/deregister/
-  // install/uninstall/restart to the controller regardless of which
-  // environment is active, and never itself threads an `--environment` flag
-  // anywhere (there is nothing left here that could).
+  // Dev-slot CLI argv (the `--allow-self-invocation` dev wrapper flag, Ticket f0ae4530) is now HostController's own concern (`devServiceInstallExtras()` on the controller.
+  // This IPC layer only has to prove it delegates register/deregister/ install/uninstall/restart to the controller regardless of which environment is active, and never itself threads.
   it("dev environment delegates install/uninstall/restart/register/deregister to HostController", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
@@ -874,12 +816,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     ]);
   });
 
-  // Pin the per-environment CLI manifest path read by Settings → Host
-  // (Ticket: agent-7 second-pass). The handler must read
-  //   prod → ~/.traycer/cli/manifest.json
-  //   dev  → ~/.traycer/cli/dev/manifest.json
-  // and never cross-read the other environment's file. We capture the actual
-  // path by spying on `fs/promises.readFile`.
+  // The handler must read prod → ~/.traycer/cli/manifest.json dev → ~/.traycer/cli/dev/manifest.json and never cross-read the other environment's file.
   it("traycerCliManifestRead reads ~/.traycer/cli/manifest.json on prod environment", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const prodDir = join(workHome, ".traycer", "cli");
@@ -965,15 +902,6 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
   });
 });
 
-// Dev builds ship without trusted registry signing keys, so the CLI rejects
-// `host available --json` and the registry probe with
-// `E_HOST_VERIFY_FAILED`. There's no user action that can recover from
-// that - Settings → Host used to surface the raw stderr ("host registry:
-// no trusted signing keys are configured for this build, …") in the Updates
-// row and the Pick-a-version list. The IPC handlers now normalise this into
-// a "no updates available" / empty version snapshot for dev/staging and
-// keep propagating it for production (where the same error means a real
-// signing-key bug).
 function installFakeCliRejectingWithVerifyFailed(): {
   readonly calls: RecordedCall[];
 } {
@@ -1076,22 +1004,7 @@ describe("host-management IPC - verify-disabled normalisation for dev builds", (
   });
 });
 
-// Renderer surfaces cutover (Host Update Layer Redesign Tech Plan): the old
-// `traycerHostEnsure` handler (collapsed in from the deleted
-// `host-ensure-ipc.ts`) re-shaped `HostController.convergeReady`'s outcome
-// into a bespoke `HostEnsureResult` union (`action: "provisioned" |
-// "removed" | "host-busy"`) and rejected the invoke on a deferred/failed
-// outcome. `traycerHostConvergeReady` replaces it with a raw pass-through of
-// `MutationOutcome<ConvergeReadyOk>` - every renderer surface branches on
-// `kind` itself now, so there is no re-shaping left to pin, and "wait-never-
-// reject" means a failed/deferred outcome resolves rather than rejects. The
-// busy-outcome-triggers-a-disk-reload side effect is gone too: the old
-// mapping needed a live `version` to synthesize a plausible
-// `HostEnsureResult`; the new outcome only needs to forward `continuation`
-// and `message`, so nothing needs re-reading from disk. What every branch
-// still owned by `HostController.convergeReady` itself (reachability,
-// SMAppService registration, busy detection, readiness polling) does is
-// covered by `host-controller.test.ts`.
+// `traycerHostConvergeReady` replaces it with a raw pass-through of `MutationOutcome<ConvergeReadyOk>`.
 describe("host-management IPC - traycerHostConvergeReady delegates to HostController.convergeReady", () => {
   it("forwards force and returns the raw ok outcome unchanged", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
@@ -1193,30 +1106,3 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
   });
 });
 
-// Renderer surfaces cutover (Host Update Layer Redesign Tech Plan): this
-// whole describe block ("legacy progress broadcast over HostController's
-// mutation lane") pinned the caller-supplied-`operationId` attribution layer
-// - `cliOperationProgress`/`hostOperationStatusChange` events,
-// `getHostOperationStatus()`/`traycerHostOperationStatusGet`, and the
-// `*ForOperation` fake-controller overloads that carried a renderer-chosen id
-// through to progress ticks. None of it exists in production
-// `host-management-ipc.ts` anymore (`registerHostManagementIpc` no longer
-// registers those channels or exports `getHostOperationStatus`) - it's
-// superseded by `host-controller-status-broadcast.ts`, which pushes the
-// single canonical `HostControllerStatus.mutation` value (no caller-supplied
-// id) to every window.
-//
-// The "attribution" problem these tests solved (which of several concurrent
-// legacy calls does a progress tick belong to?) does not exist in the new
-// model: `HostController`'s mutation lane is exclusive - there is only ever
-// one lane-owning operation, so there is nothing to attribute between. That
-// exclusivity, and "a second concurrent submission is served (FIFO), never
-// rejected," are pinned at the source in `host-controller.test.ts` (see "two
-// concurrent applyStaged submissions both resolve - no 'Another host
-// operation' rejection" and the "P10: ... coalesce" cluster). "Status clears
-// so a retry isn't blocked" is structural in the new design too: the
-// broadcaster always re-reads `hostController.getStatus()` fresh, so a
-// settled/failed mutation is reflected as `mutation: null` on the very next
-// tick, with no separate clear-up step that could leave a wedge.
-// `host-controller-status-broadcast.test.ts` covers the broadcaster's own
-// push/poll behavior directly.

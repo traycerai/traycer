@@ -55,12 +55,6 @@ export interface WindowRegistryRecord<
 
 type WindowRegistryListener = () => void;
 
-/**
- * `change` = the windows list itself changed (add/remove/focus/visibility/
- * title), i.e. a new `WindowSummary[]`. `geometry` = one window minimized /
- * restored / (un)maximized - nothing the summary carries, so only listeners
- * that actually reposition native content subscribe to it.
- */
 type WindowRegistryEvent = "change" | "geometry";
 
 export class WindowRegistry<

@@ -97,9 +97,7 @@ function range(from: number, to: number, step: number): ReadonlyArray<number> {
 describe("header strip drag model", () => {
   describe("hysteresis is derived from the swap rule", () => {
     it("depends on the source width alone, not the mean of the pair", () => {
-      // The two formulations coincide only for equal widths, which is exactly
-      // why the mean is the wrong figure: a split group is one strip item of
-      // its own width.
+      // The two formulations coincide only for equal widths, which is exactly why the mean is the wrong figure: a split group is one strip item of its own width.
       expect(swapHysteresisPx(191)).toBe(191);
       expect(swapHysteresisPx(382)).toBe(382);
       expect(swapHysteresisPx(120)).toBe(120);
@@ -141,10 +139,7 @@ describe("header strip drag model", () => {
       }
       expect(swapBackX).not.toBeNull();
       const measured = (swapForward?.x ?? 0) - (swapBackX ?? 0);
-      // Both crossings are at neighbour centres, so the reversal distance is
-      // exactly the source width. They are found by walking integer x against a
-      // strict inequality, so each lands up to 1px beyond its threshold and the
-      // measurement can only ever overshoot by the 2px of sampling granularity.
+      // They are found by walking integer x against a strict inequality, so each lands up to 1px beyond its threshold and the measurement can only ever overshoot by the 2px of sampling granularity.
       const derived = swapHysteresisPx(120);
       expect(derived).toBe(120);
       expect(measured).toBeGreaterThanOrEqual(derived);
@@ -340,10 +335,6 @@ describe("header strip drag model", () => {
     });
 
     it("merges the moment the centre reaches a neighbour's half - no dwell", () => {
-      // The state is a pure function of position: there is no timer and no
-      // arming period, so a single resolve on the neighbour's half IS the
-      // merge. (The 400ms dwell this replaced existed to disambiguate a
-      // full-tab merge target; the approach-half split killed the ambiguity.)
       const geometry = geometryFor([191, 191, 191], 0);
       const merged = resolveStripDragState({
         geometry,
@@ -385,11 +376,7 @@ describe("header strip drag model", () => {
     });
 
     it("re-arms merge on a passed neighbour when reversing after a swap", () => {
-      // The direction-lock regression: filtering candidates by NET travel
-      // (targetIndex vs sourceIndex) made a reversal dead. Drag item-0 right
-      // past item-1 (swap), then bring the centre back onto item-1's right
-      // half: item-1 now occupies the leading slot, the centre is visibly on
-      // it, and the merge must arm - side "right", the approach side.
+      // Drag item-0 right past item-1 (swap), then bring the centre back onto item-1's right half: item-1 now occupies the leading slot, the centre is visibly on it, and the merge must arm - side "right", the approach side.
       const geometry = geometryFor([100, 100, 100], 0);
       const swapped = resolveStripDragState({
         geometry,
@@ -431,22 +418,15 @@ describe("header strip drag model", () => {
     });
 
     it("follows the dragged tab's centre, so an edge grab cannot dead-zone a neighbour", () => {
-      // The reported regression: zones resolved against the raw POINTER. Grab
-      // the second tab by its trailing (right) edge and drag left, and the
-      // tab visibly sits on top of the first tab while the pointer is still
-      // back over the source slot - the pointer never enters the target, so
-      // nothing highlighted and nothing swapped. The user watches the tab in
-      // their hand; the zones must follow its centre, wherever it was grabbed.
+      // Grab the second tab by its trailing (right) edge and drag left, and the tab visibly sits on top of the first tab while the pointer is still back over the source slot - the pointer never enters the target, so nothing highlighted and nothing swapped.
+      // The user watches the tab in their hand; the zones must follow its centre, wherever it was grabbed.
       const widths = [100, 100, 100];
       const targetCentre = ORIGIN + 50;
       const centreGrab = geometryFor(widths, 1);
       const edgeGrab: StripDragGeometry = { ...centreGrab, grabOffsetX: 95 };
 
       for (const geometry of [centreGrab, edgeGrab]) {
-        // Dragged tab's centre on the target's near (right) half: merge, with
-        // the dragged tab taking the pair's right side. For the edge grab the
-        // POINTER is still right of the target's slot here - that must not
-        // matter.
+        // For the edge grab the POINTER is still right of the target's slot here - that must not matter.
         const nearHalf = resolveStripDragState({
           geometry,
           contentOriginX: ORIGIN,
@@ -567,10 +547,6 @@ describe("header strip drag model", () => {
     const W = 191;
 
     it("tracks the pointer with a constant grab offset across the strip", () => {
-      // The defect: the overlay pinned at the source's ORIGINAL right edge
-      // partway through a drag and stopped tracking, because the clamp was
-      // computed against a rect that follows the sliding placeholder while the
-      // transform was measured from the original position.
       for (const grabOffsetX of [0, 95, W]) {
         for (
           let pointerX = STRIP_LEFT + grabOffsetX;
@@ -590,10 +566,6 @@ describe("header strip drag model", () => {
     });
 
     it("never pins at the source's original right edge", () => {
-      // 213/404/594.4 are the three source positions whose right edge WAS the
-      // observed pin. At pointerX 888 the true answer is the strip's right
-      // bound (784.16), which is legitimately clamped - the defect pinned at
-      // 404.3, a third of the strip away and unrelated to any bound.
       const left = overlayLeftForPointer({
         pointerX: 888,
         grabOffsetX: 95,
@@ -605,10 +577,7 @@ describe("header strip drag model", () => {
       for (const sourceLeft of [213, 404]) {
         expect(left).not.toBeCloseTo(sourceLeft + W, 0);
       }
-      // Index 2 is the trap, and it is worth stating numerically: that tab is
-      // 190.25 wide, so its original right edge (784.91) EQUALS its own correct
-      // bound. Verifying on that one position cannot distinguish a correct
-      // build from the broken one.
+      // Verifying on that one position cannot distinguish a correct build from the broken one.
       const trapWidth = 190.25;
       expect(594.66 + trapWidth).toBeCloseTo(STRIP_RIGHT - trapWidth, 1);
     });
@@ -790,9 +759,7 @@ describe("header strip drag model", () => {
 
   describe("insertion index conversion", () => {
     it("round-trips every source/target pair through reorderStripItem's rule", () => {
-      // `reorderStripItem` removes the item, then inserts at
-      // `from < target ? target - 1 : target`. Feed it our insertion index and
-      // the result must equal our own provisional order - for every pair.
+      // Feed it our insertion index and the result must equal our own provisional order - for every pair.
       const items = ["a", "b", "c", "d", "e"];
       for (let source = 0; source < items.length; source += 1) {
         for (let target = 0; target < items.length; target += 1) {

@@ -1,15 +1,5 @@
 /**
- * Focused unit coverage for `useProviderRateLimitRefresh` - the single source
- * of truth for a provider's refresh action + spinner state, shared by the
- * popover's `RateLimitProviderBlock` and the Settings card. The consumers'
- * own tests exercise this logic only through their full component trees;
- * these pin the lane routing and the per-target queue-phase fold-in directly,
- * so a regression is caught even if a consumer's test setup masks it.
- *
- * `rateLimitFetchLane` stays REAL (it is a pure provider-id classifier):
- * codex exercises the ephemeralProcess lane and openrouter the httpFetch
- * lane, so the routing under test is the true production mapping rather than
- * a mocked one.
+ * Pin lane routing and per-target queue-phase fold-in. `rateLimitFetchLane` stays real so the mapping is production, not a stub.
  */
 import {
   afterEach,
@@ -37,17 +27,7 @@ const mocks = vi.hoisted(
   }),
 );
 
-// Keyed on the exact target, not a single flag: a mock that ignored
-// `providerId`/`profileId` would still pass if the hook asked the registry
-// about a DIFFERENT target, which is the whole property under test here.
-//
-// JSON for the same reason `rateLimitTargetsKey` uses it in the hook under
-// test: a profile id is a free-form string off the provider, so `null` (follow
-// the default profile) and `""` are distinct targets to the queue, and no
-// separator is provably absent from an id. A `${p}:${id ?? ""}` key collapses
-// the first pair and lets a `:` in an id shift the second - so the fixture
-// would answer for a target the hook never asked about while still looking
-// exact.
+// Key the mock on the exact JSON target. `null` and `""` are distinct; a separator key would collapse them or shift on `:` in an id.
 function targetKey(providerId: string, profileId: string | null): string {
   return JSON.stringify([providerId, profileId]);
 }
@@ -184,10 +164,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
     expect(result.current.isRefreshing).toBe(true);
   });
 
-  // `null` (follow the default profile) and `""` are DISTINCT targets to the
-  // queue. The fixture key has to keep them apart or the suite reports on a
-  // target the hook never asked about - and every assertion above would still
-  // look exact while doing it.
+  // The fixture key has to keep them apart or the suite reports on a target the hook never asked about - and every assertion above would still look exact while doing it.
   it("does NOT read the default profile's phase for an empty-string profile id", () => {
     mocks.targetPhases = { [targetKey("codex", null)]: "fetching" };
     const { result } = renderHook(() =>
@@ -206,10 +183,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
 
   it("stays NOT refreshing while this target is queued but NOT yet forced, so the control can still promote it", () => {
     // `RefreshIconButton` disables on `isRefreshing` and no-ops its trigger.
-    // An enqueue for an already-queued target promotes it
-    // (`pending.force = true`), which is the only thing that stops the pull
-    // being skipped by its second freshness/cool-down check or answered from
-    // the host gauge cache - so a queued target must stay clickable.
+    // An enqueue for an already-queued target promotes it (`pending.force = true`), which is the only thing that stops the pull being skipped by its second freshness/cool-down check or answered from the host gauge cache - so a queued target must stay clickable.
     mocks.targetPhases = { [targetKey("codex", null)]: "queued" };
     const { result } = renderHook(() =>
       useProviderRateLimitRefresh({
@@ -226,10 +200,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
   });
 
   it("DOES report refreshing once a queued target is already forced - the click that would promote it has happened", () => {
-    // The other half of the queued rule. `RefreshIconButton` caps its internal
-    // spinner at 10s, so without this the user's own request goes visually
-    // idle while still waiting behind the lane - and the Settings consumers
-    // render no "Queued…" label to compensate.
+    // `RefreshIconButton` caps its internal spinner at 10s, so without this the user's own request goes visually idle while still waiting behind the lane - and the Settings consumers render no "Queued…" label to compensate.
     mocks.targetPhases = { [targetKey("codex", null)]: "queued" };
     mocks.forcedTargets = { [targetKey("codex", null)]: true };
     const { result } = renderHook(() =>

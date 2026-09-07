@@ -19,12 +19,7 @@ describe("useWorktreeListByWorkspacePathsForClient", () => {
     cleanup();
   });
 
-  // The folder picker keys this query on the path set, so adding/removing a
-  // folder lands on a fresh cache entry. Without same-host `keepPreviousData`
-  // the new key reports `isLoading`, which the picker projects onto every row
-  // as "Loading folder metadata…" — the whole list flashes on each edit. This
-  // locks in the retain-previous-while-refetching behavior that keeps the
-  // surviving rows (only under the same host — see the host-switch test).
+  // Without same-host `keepPreviousData` the new key reports `isLoading`, which the picker projects onto every row as "Loading folder metadata…" - the whole list flashes on each edit.
   it("retains the prior result while a changed path set refetches", async () => {
     const fixture = createFixture();
     const rendered = renderHook(

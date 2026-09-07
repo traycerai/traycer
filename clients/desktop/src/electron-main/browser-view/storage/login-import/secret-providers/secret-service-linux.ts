@@ -2,15 +2,6 @@ import type { ChromiumImportBrowser } from "../chromium-browsers";
 import type { CommandRunner } from "./run-command";
 import type { SecretReadResult } from "./secret-read-result";
 
-/**
- * The Linux half of Chromium's `v11` key: the browser's password in the
- * Secret Service keyring (GNOME Keyring, KeePassXC's bridge, ...), read with
- * `secret-tool`. The `application` attribute is what the browsers file their
- * item under, and it is not always the browser's own name.
- *
- * A KWallet-only desktop has no Secret Service and answers `unavailable`;
- * the cookie-file import is the way through there.
- */
 
 const SECRET_TOOL_BINARY = "secret-tool";
 /** An unlock dialog for a locked keyring waits on a person. */

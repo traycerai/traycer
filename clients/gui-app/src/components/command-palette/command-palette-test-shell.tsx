@@ -1,13 +1,5 @@
-/**
- * Test-only palette mount. Includes every source that only reads
- * from non-host / non-query stores - pure sources
- * (`getAllItems`) plus the React sources whose hooks stay safe
- * outside a full provider stack (`actionsSource`, `navigationSource`,
- * `helpSource` - they read keybinding / desktop-dialog stores only).
- * Skips `epicsSource` + `composerSource` so palette tests can
- * exercise shell mechanics without mounting
- * `HostRuntimeProvider` or `QueryClientProvider`.
- */
+/** Test-only palette mount. Skips `epicsSource` + `composerSource` so palette tests can exercise shell
+ * mechanics without mounting `HostRuntimeProvider` or `QueryClientProvider`. */
 import { useMemo } from "react";
 import {
   CommandPaletteShell,

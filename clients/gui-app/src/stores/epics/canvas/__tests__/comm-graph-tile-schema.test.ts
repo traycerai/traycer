@@ -40,9 +40,8 @@ describe("comm-graph tile schema", () => {
   });
 
   it("opens a NEWLY CREATED tile on the office floor", () => {
-    // The new-tile default and the parse fallback deliberately disagree: the
-    // floor is the better first look, but only for a tile that has no history
-    // of rendering anything else.
+    // The new-tile default and the parse fallback deliberately disagree: the floor is the better first
+    // look, but only for a tile that has no history of rendering anything else.
     expect(makeCommGraphTileRef(EPIC_ID).view.mode).toBe("office");
   });
 
@@ -58,9 +57,8 @@ describe("comm-graph tile schema", () => {
     });
     expect(parsed?.type).toBe("comm-graph");
     if (parsed === null || parsed.type !== "comm-graph") return;
-    // The framing the user chose survives, and the missing mode is filled in
-    // with what that tile ALWAYS rendered - reopening it on the floor would
-    // silently change a surface the person already had set up.
+    // The framing the user chose survives, and the missing mode is filled in with what that tile
+    // ALWAYS rendered - reopening it on the floor would silently change a surface the person already
     expect(parsed.view).toEqual({ x: 4, y: 5, zoom: 2, mode: "graph" });
   });
 

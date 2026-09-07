@@ -1,11 +1,5 @@
 /**
- * Client remote transport (Ticket T12) — a persistent, E2E-encrypted, multiplexed
- * session behind the same `IHostMessenger` / `IStreamClient` interfaces the local
- * transports implement, selected by `HostDirectoryEntry.kind === "remote"`.
- *
- * The client↔host mux wire contract this transport speaks is documented for the
- * T11 host responder in `../host-client/REMOTE-TRANSPORT.md` and codified in
- * `@traycer/protocol/host-transport/mux`.
+ * The client↔host mux wire contract this transport speaks is documented for the T11 host responder in `../host-client/remote-transport.md` and codified in `@traycer/protocol/host-transport/mux`.
  */
 
 export {
@@ -28,9 +22,7 @@ export {
   hasBorrowableRemoteSession,
   tryAcquireReadyRemoteSession,
   type BorrowedRemoteSession,
-  // Part of the public surface since the borrower hands it back on
-  // `BorrowedRemoteSession.identity` - a consumer that stamps an observation
-  // with which connection answered needs to be able to name the type.
+  // Part of the public surface since the borrower hands it back on `BorrowedRemoteSession.identity` - a consumer that stamps an observation with which connection answered needs to be able to name the type.
   type RemoteSessionIdentity,
   // `acquireRemoteSession` is exported above and requires a policy, so the
   // policy type is part of the same public surface.

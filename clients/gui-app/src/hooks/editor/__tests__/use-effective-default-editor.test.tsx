@@ -1,14 +1,5 @@
 /**
- * `useEffectiveDefaultEditor` resolves the stored, app-wide default against ONE
- * host's offerable targets, falling back to the first offerable one when the
- * stored id cannot be told to that host. Finder obeys the same rule as an
- * editor: it is a legal default only where its own gate holds.
- *
- * This suite drives the REAL hook (and the real `useOfferableEditors` /
- * `useFinderOpenAvailability` / settings store it composes), mocking only the
- * hook's inputs - the host handshake, the host directory entry, and the
- * platform/product signals. The stored default is set through the real Zustand
- * store rather than mocked, so its read/write wiring stays exercised too.
+ * Drive the real hook; mock only handshake, directory entry, and platform signals. Stored default goes through the real settings store.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";

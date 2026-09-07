@@ -48,9 +48,7 @@ describe("agentAppearance", () => {
   });
 
   it("gives every harness the app can run a parsable accent", () => {
-    // A missing entry resolves to `undefined` and paints that agent's
-    // envelopes with nothing at all, which reads as a rendering bug rather
-    // than as a harness nobody assigned a color to.
+    // A missing entry resolves to `undefined` and paints that agent's envelopes with nothing at all, which reads as a rendering bug rather than as a harness nobody assigned a color to.
     for (const harnessId of guiHarnessIdSchema.options) {
       const accent = agentAppearance("a", "terminal-agent", harnessId).accent;
       expect(accent, harnessId).toBe(HARNESS_ACCENT[harnessId]);

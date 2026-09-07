@@ -159,9 +159,8 @@ describe("visibleRailEntries: managed-pack readiness", () => {
   function unavailable(id: "claude" | "codex"): HarnessOption {
     return { ...harness(id), available: false };
   }
-  // `fallbackRunnable: false` on purpose: this block is about the provider
-  // that has NO binary yet (see the comment below), which is exactly the case
-  // that still gates.
+  // `fallbackRunnable: false` on purpose: this block is about the provider that has NO binary yet (see the
+  // comment below), which is exactly the case that still gates.
   const downloading: ProviderPackPreparing = {
     kind: "downloading",
     percent: 42,
@@ -170,12 +169,8 @@ describe("visibleRailEntries: managed-pack readiness", () => {
     fallbackRunnable: false,
   };
 
-  // The load-bearing one. On a first boot the host converges EVERY enabled
-  // provider (~1.6 GB), so a provider that is downloading is also
-  // `available: false` - it has no binary yet. Under the pre-R11 visibility
-  // rule that combination is invisible, which would empty the picker on first
-  // run and then silently repopulate it. The user must see the row and be told
-  // why it is not pickable.
+  // Under the pre- visibility rule that combination is invisible, which would empty the picker on first run and
+  // then silently repopulate it. The user must see the row and be told why it is not pickable.
   it("keeps a downloading provider VISIBLE even though it has no binary yet", () => {
     const entries = visibleRailEntries({
       harnesses: [unavailable("claude")],
@@ -218,10 +213,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
   });
 
   it("sorts a preparing provider below the ready ones", () => {
-    // Preparing `codex`, which sorts FIRST canonically. Preparing `claude`
-    // here - as this test used to - asserted the order the canonical sort
-    // already produces, so it passed with the deprioritization removed
-    // entirely.
+    // Preparing `codex`, which sorts first canonically.
     const entries = visibleRailEntries({
       harnesses: [harness("claude"), unavailable("codex")],
       fallbackHarnesses: [],
@@ -237,15 +229,8 @@ describe("visibleRailEntries: managed-pack readiness", () => {
     ]);
   });
 
-  // P5. The rail deprioritized on "has a pack state at all", which was
-  // coherent while a preparing tab was unselectable. Once a download behind a
-  // runnable binary stopped taking the provider away, that rule made the rail
-  // reorder itself throughout a first-boot convergence - every provider sinks,
-  // then pops back up as its own install finishes - and `PickerLeaderBadge`
-  // reads the rail index, so every Cmd-digit reassigns each time.
-  //
-  // The control below is the whole point: the SAME downloading state, differing
-  // only in whether a runnable binary exists, must sort differently.
+  // The control below is the whole point: the same downloading state, differing only in whether a runnable
+  // binary exists, must sort differently.
   const downloadingBehindRunnableBinary: ProviderPackPreparing = {
     kind: "downloading",
     percent: 30,
@@ -255,9 +240,8 @@ describe("visibleRailEntries: managed-pack readiness", () => {
   };
 
   it("does not move a provider that is downloading behind a runnable binary", () => {
-    // Preparing the provider that sorts FIRST canonically. Doing it to the one
-    // that already sorts last proves nothing - the expected order would hold
-    // whether or not anything was deprioritized.
+    // Doing it to the one that already sorts last proves nothing - the expected order would hold whether or not
+    // anything was deprioritized.
     const order = (preparing: ProviderPackPreparing): readonly string[] =>
       visibleRailEntries({
         harnesses: [harness("claude"), harness("codex")],
@@ -290,11 +274,8 @@ describe("visibleRailEntries: managed-pack readiness", () => {
 
 describe("railHarnessDegraded", () => {
   it("degrades a signed-out provider even while its harness reports available", () => {
-    // Availability probes binary presence, never auth - an installed but
-    // signed-out provider (Copilot after a real logout) keeps reporting
-    // `available: true`. The signed-out set must degrade WITHOUT the
-    // availability gate, or the rail offers a fully-lit, selectable tab for a
-    // provider the send gate then refuses to run.
+    // Availability probes binary presence, never auth - an installed but signed-out provider (Copilot after a real
+    // logout) keeps reporting `available: true`.
     expect(
       railHarnessDegraded(harness("claude"), new Set<GuiHarnessId>(["claude"])),
     ).toBe(true);
@@ -373,11 +354,8 @@ describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7
   });
 
   it("widening authStatus to unknown/unavailable would also widen visibility - asserted through visibleRailHarnesses, not just degradation", () => {
-    // A sticky-enabled provider reporting `available: false` (no CLI
-    // installed) with a non-definitive row verdict must stay HIDDEN, not
-    // merely non-degraded - `railHarnessVisible` ORs degraded into
-    // visibility, so widening the predicate to `unknown`/`unavailable` would
-    // give this provider a permanent, un-runnable tab.
+    // A sticky-enabled provider reporting `available: false` (no CLI installed) with a non-definitive row verdict
+    // must stay hidden, not merely non-degraded.
     const unreachable: HarnessOption = {
       ...harness("claude"),
       available: false,
@@ -391,9 +369,8 @@ describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7
     );
     expect(visible).toEqual([]);
 
-    // Contrast: a DEFINITIVE unauthenticated row on the same unreachable
-    // provider keeps it visible - that is the "recoverable, needs
-    // attention" case the degraded set exists to surface.
+    // Contrast: a definitive unauthenticated row on the same unreachable provider keeps it visible - that is the
+    // "recoverable, needs attention" case the degraded set exists to surface.
     const signedOutUnreachable: HarnessOption = {
       ...harness("claude"),
       available: false,
@@ -423,13 +400,8 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
     ).toEqual([]);
   });
 
-  // Enablement is no longer tri-state: there is no "auto, undetected" middle
-  // ground distinct from an explicit off, so a disabled provider can no
-  // longer stay visible as a "sign in to enable" offer - it is gone from the
-  // picker like any other disabled provider, same as the case above.
-  // Removed: "still degrades and shows an auto-mode, signed-out provider even
-  // though enabled is false", which asserted exactly that now-nonexistent
-  // distinction.
+  // Removed: "still degrades and shows an auto-mode, signed-out provider even though enabled is false", which
+  // asserted exactly that now-nonexistent distinction.
 
   it("still degrades and shows a sticky-on, signed-out provider", () => {
     const stickyOn: HarnessOption = {
@@ -444,14 +416,8 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
     ).toEqual(["claude"]);
   });
 
-  // Was "keeps the other two degradation arms unaffected by an explicit off -
-  // the gate is narrow": under the retired tri-state model the disabled early
-  // return only covered the signed-out arm, so `degradedHarnessIds`
-  // membership and the API-key arm still fired underneath it. The current
-  // gate is one unconditional `if (!harness.enabled) return false` ahead of
-  // all three arms (see the doc comment on `railHarnessDegraded`), so it is
-  // no longer narrow - disabled now blocks every arm, which is what this case
-  // asserts instead.
+  // The current gate is one unconditional `if (!harness.enabled) return false` ahead of all three arms (see the
+  // doc comment on `railHarnessDegraded`), so it is no longer narrow.
   it("an explicit off blocks every degradation arm, not just the signed-out one", () => {
     const offButFlagged: HarnessOption = {
       ...harness("claude"),
@@ -482,11 +448,7 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
 
 describe("visibleRailEntries: signed-out while available", () => {
   it("keeps a signed-out-but-available provider IN PLACE, carrying only the degraded flag", () => {
-    // Degrading codex, which sorts FIRST canonically (see the pack-readiness
-    // block above). The old rail sank degraded rows below the ready ones;
-    // that re-sort is deliberately gone - a late auth verdict may change a
-    // row's appearance (the dim), never its position, so rows stop moving
-    // under the pointer seconds after the rail rendered.
+    // The old rail sank degraded rows below the ready ones; that re-sort is deliberately gone.
     const entries = visibleRailEntries({
       harnesses: [harness("claude"), harness("codex")],
       fallbackHarnesses: [],

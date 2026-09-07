@@ -40,15 +40,8 @@ type HostMethodSupportArgs = {
   readonly method: string;
 };
 
-/**
- * Which capability methods the panel asked about for one host, deduplicated
- * and in ask order.
- *
- * The gate asks once per pack-version RPC, so the old "last call" assertion
- * would stay green if three of the four stopped being consulted — the exact
- * regression that let a host advertising a strict subset light up controls
- * whose calls deterministically return unsupported-method.
- */
+/** The gate asks once per pack-version RPC, so the old "last call" assertion would stay green if three of the
+ * four stopped being consulted. */
 function methodsAskedFor(hostId: string | null): readonly string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
@@ -118,10 +111,8 @@ type SetPackPolicyVariables = {
   readonly autoDownload: boolean;
 };
 
-// Derived from the protocol rather than restated. The local unions this
-// replaces would have kept compiling after an enum or field change on the wire
-// while silently no longer describing it - which is the one thing a mock of a
-// wire-shaped call must not do.
+// The local unions this replaces would have kept compiling after an enum or field change on the wire while
+// silently no longer describing it - which is the one thing a mock of a wire-shaped call must not do.
 type CheckMutateOptions = {
   readonly onSuccess?: (response: {
     readonly result: ProvidersRefreshPackDiscoveryResult;
@@ -131,20 +122,13 @@ type CheckMutateOptions = {
 
 const mocks = vi.hoisted(() => {
   const supportByHostId = new Map<string, boolean | null>();
-  // Per-`${hostId}::${method}` override, independent of `supportByHostId`
-  // above (which drives `useHostMethodSupport`, the four-method capability
-  // gate — host-scoped only, blind to which method was asked).
-  // `providers.refreshPackDiscovery` is gated through `useHostSupportsMethod`
-  // directly, not through the four-method array, so this map is what lets a
-  // test express "host has the version manager but not the check RPC".
+  // `providers.refreshPackDiscovery` is gated through `useHostSupportsMethod` directly, not through the
+  // four-method array.
   const supportByMethodOverride = new Map<string, boolean>();
   let lastSupportArgs: HostMethodSupportArgs | null = null;
   let supportCalls: HostMethodSupportArgs[] = [];
   let defaultSupport: boolean | null = true;
-  // Independent fallback for `useHostSupportsMethod` (refreshPackDiscovery)
-  // only — decoupled from `defaultSupport`, which the four-method capability
-  // gate's `useHostMethodSupport` mock consults. Without this, a test cannot
-  // prove an explicit override is what enables the discovery check, since
+  // Without this, a test cannot prove an explicit override is what enables the discovery check, since
   // `defaultSupport` already defaults to `true` for the capability gate.
   let defaultDiscoverySupport = true;
   let installIsPending = false;
@@ -179,10 +163,8 @@ const mocks = vi.hoisted(() => {
           options: CheckMutateOptions,
         ) => void
       >(),
-    /**
-     * Per-host capability map. The gate must consult the *passed* hostId, not an
-     * ambient default — regressions would re-introduce scoped-host bugs.
-     */
+    /** The gate must consult the *passed* hostId, not an ambient default - regressions would re-introduce
+     * scoped-host bugs. */
     get supportByHostId() {
       return supportByHostId;
     },
@@ -196,11 +178,8 @@ const mocks = vi.hoisted(() => {
       lastSupportArgs = value;
       if (value === null) supportCalls = [];
     },
-    /**
-     * EVERY capability question the panel asked, in order. The gate asks one
-     * per pack-version RPC now, so asserting only the last call would let three
-     * of the four silently stop being consulted.
-     */
+    /** The gate asks one per pack-version RPC now, so asserting only the last call would let three of the four
+     * silently stop being consulted. */
     get supportCalls() {
       return supportCalls;
     },
@@ -260,12 +239,8 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     }
     return mocks.defaultSupport;
   },
-  // Deliberately does NOT consult `supportByHostId`. That map is the
-  // four-method gate's knob and is host-scoped, so honouring it here would
-  // let a future test set `supportByHostId.set("host-1", true)` alongside
-  // `defaultDiscoverySupport = false` and silently get a button — the exact
-  // per-method ambiguity this second fallback exists to remove.
-  // `supportByMethodOverride` is already the precise knob for this hook.
+  // That map is the four-method gate's knob and is host-scoped, so honouring it here would let a future test set
+  // `supportByHostId.set("host-1", true)` alongside `defaultDiscoverySupport = false` and silently get a button.
   useHostSupportsMethod: (hostId: string | null, method: string) => {
     if (hostId === null) return false;
     const overrideKey = `${hostId}::${method}`;
@@ -361,20 +336,11 @@ function renderPanel(options: {
   );
 }
 
-/** Row action buttons are icon-only; their accessible name carries the version. */
 function rowActionName(label: string, version: string): string {
   return `${label} ${version}`;
 }
 
-/**
- * The check control is queried BY ROLE AND NAME, so these tests also fail if
- * its accessible name regresses.
- *
- * The notice it produces is the opposite case and stays on `getByTestId`: the
- * visible notice is deliberately `aria-hidden` (the sr-only live region does
- * the announcing), so no role or text query can reach it — and its message is
- * intentionally in the DOM twice, which would make `getByText` throw.
- */
+/** The notice it produces is the opposite case and stays on `getByTestId`. */
 const CHECK_BUTTON_NAME = "Check for updates";
 
 describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
@@ -543,10 +509,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 
   it("hides Retry/Download for a condemned install and states the reason inline", () => {
-    // The row used to carry a `condemned-no-retry` sentence that repeated the
-    // meta line directly above it, then later a hover-card detail. Both are
-    // gone; the reason is now the row's own trouble line, and "no retry" is
-    // still carried by the ABSENCE of the button.
+    // Both are gone; the reason is now the row's own trouble line, and "no retry" is still carried by the absence
+    // of the button.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -571,10 +535,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 
   it("wears ONE chip — Current outranks Recommended rather than stacking", () => {
-    // Both flags are set. The row used to render both badges plus a meta line
-    // that said "pairs with this Traycer release" a third time; both the
-    // second badge and the meta line are gone now, with no replacement
-    // surface — a current row simply does not say "recommended" anywhere.
+    // Both flags are set.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -615,8 +576,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
     const row = screen.getByTestId("provider-pack-version-row-1.0.0");
     expect(row).toBeTruthy();
-    // Composition: allow-list denies retry AND download eligibility denies —
-    // no actionable install-fetch button under either label.
+    // Composition: allow-list denies retry and download eligibility denies - no actionable install-fetch button
+    // under either label.
     expect(
       screen.queryByRole("button", {
         name: rowActionName("Download", "1.0.0"),
@@ -684,12 +645,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
   });
 
-  // The regression this exists for: a clear-pin refusal used to be reported
-  // through a notice keyed by the PINNED VERSION and rendered inside
-  // `VersionRow`, so it vanished whenever that version had no row - and then
-  // through the update banner, which only mounts when an update is pending.
-  // Both dropped the message in the case that matters most, and the user saw a
-  // click that did nothing. `updateAvailable` is deliberately null here.
+  // `updateAvailable` is deliberately null here.
   it("shows a clear-pin refusal even with no update pending and no row for the pinned version", async () => {
     const user = userEvent.setup();
     mocks.useMutate.mockImplementation((_variables, options) => {
@@ -746,9 +702,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    // Certification and install-state are independent axes. This row wears
-    // the Unpublished chip (certification) AND states its install trouble
-    // inline (install-state) — the two must not collapse into one claim.
+    // This row wears the Unpublished chip (certification) and states its install trouble inline (install-state) -
+    // the two must not collapse into one claim.
     expect(screen.getByTestId("version-row-chip-unpublished").textContent).toBe(
       "Unpublished",
     );
@@ -760,10 +715,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 
   it("offers Use on an installed non-current version even offline with no recommended row (D1 as revised 2026-08-12)", () => {
-    // Formerly this failed closed on the missing baseline. The client no
-    // longer does baseline math: the host refuses the signed ineligibilities
-    // server-side, and those arrive as row certification - absent here, so
-    // the installed retained version is honestly selectable.
+    // Formerly this failed closed on the missing baseline.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -967,9 +919,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    // Keyboard activation, because that is the path that breaks: arming
-    // unmounts the trash button, so without the mount-focus the second press
-    // lands on <body> and the two-step flow is unreachable without a mouse.
+    // Keyboard activation, because that is the path that breaks: arming unmounts the trash button, so without the
+    // mount-focus the second press lands on <body> and the two-step flow is unreachable without a mouse.
     const trash = screen.getByRole("button", {
       name: rowActionName("Delete", "1.5.0"),
     });
@@ -990,11 +941,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 
   it("disarms a delete when the settings scope follows to another host carrying the same version", async () => {
-    // The panel is mounted unkeyed under a scope whose host can auto-follow
-    // while the popover is open. If the arming were a bare version string it
-    // would survive the move, and the new host's identical row would mount
-    // already armed — one press from deleting on a machine nothing was armed
-    // on. Same pack, same version, different host: must NOT be armed.
+    // Same pack, same version, different host: must not be armed.
     const user = userEvent.setup();
     const rows = [
       version({ version: "1.5.0", installState: { status: "installed" } }),
@@ -1146,9 +1093,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 
   it("hides Check for updates when the host has the version manager but not the discovery RPC, and keeps the auto-download row's original full-width layout", () => {
-    // The discriminating shape: all four PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS
-    // answer true (the panel itself renders), while providers.refreshPackDiscovery
-    // answers false.
+    // The discriminating shape: all four PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS answer true (the panel
+    // itself renders), while providers.refreshPackDiscovery answers false.
     mocks.defaultSupport = true;
     mocks.supportByMethodOverride.set(
       "host-1::providers.refreshPackDiscovery",
@@ -1164,14 +1110,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(
       screen.queryByRole("button", { name: CHECK_BUTTON_NAME }),
     ).toBeNull();
-    // F3: with the button absent the label must keep the band's ORIGINAL
-    // layout — every host older than this release, for as long as it stays
-    // older.
-    //
-    // `classList.contains` and not `className.toContain`: the latter is a
-    // substring match, so it reads `max-w-full` as `w-full` and
-    // `sm:justify-between` as `justify-between` — and this file already
-    // carries `sm:justify-between` on other surfaces.
+    // : with the button absent the label must keep the band's original layout - every host older than this
+    // release, for as long as it stays older.
     const label = screen
       .getByRole("switch", { name: "Auto-download updates" })
       .closest("label");
@@ -1179,17 +1119,13 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(label?.classList.contains("w-full")).toBe(true);
     expect(label?.classList.contains("justify-between")).toBe(true);
     expect(label?.classList.contains("ml-auto")).toBe(false);
-    // The row must be able to WRAP. Nothing in it can give width back — the
-    // Button primitive is `shrink-0 whitespace-nowrap` and the label is
-    // `shrink-0` — so without this the popover's `overflow-hidden` clips a
-    // control on a narrow viewport instead of reflowing.
+    // The row must be able to wrap.
     expect(label?.parentElement?.classList.contains("flex-wrap")).toBe(true);
   });
 
   it("shows Check for updates when the host supports the discovery RPC, and clusters the auto-download row against the right edge", () => {
-    // Discriminating in the opposite direction: `defaultDiscoverySupport`
-    // starts this test FALSE, so the override below is what makes the button
-    // appear — not an ambient default that already reads true.
+    // Discriminating in the opposite direction: `defaultDiscoverySupport` starts this test false, so the override
+    // below is what makes the button appear - not an ambient default that already reads true.
     mocks.defaultSupport = true;
     mocks.defaultDiscoverySupport = false;
     mocks.supportByMethodOverride.set(
@@ -1216,9 +1152,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     // would also match a `sm:justify-between` someone adds later.
     expect(label?.classList.contains("w-full")).toBe(false);
     expect(label?.classList.contains("justify-between")).toBe(false);
-    // Right-edge clustering and wrapping are not alternatives: the row wraps
-    // in BOTH branches, and this is the branch where it has two children to
-    // fit rather than one.
+    // Right-edge clustering and wrapping are not alternatives: the row wraps in both branches, and this is the
+    // branch where it has two children to fit rather than one.
     expect(label?.parentElement?.classList.contains("flex-wrap")).toBe(true);
   });
 
@@ -1235,9 +1170,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     "drops a check result that lands after the panel changed $label",
     async ({ next }) => {
       const user = userEvent.setup();
-      // A check is budgeted minutes because it can join the host's whole
-      // discovery tick. Over that window this unkeyed panel can be re-pointed
-      // at another pack, or auto-follow to another host, without remounting.
+      // A check is budgeted minutes because it can join the host's whole discovery tick. Over that window this
+      // unkeyed panel can be re-pointed at another pack, or auto-follow to another host, without remounting.
       const deliver: Array<
         (response: {
           readonly result: ProvidersRefreshPackDiscoveryResult;
@@ -1267,9 +1201,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
         />,
       );
 
-      // `unusable` on purpose: the loudest sentence on this surface, and the
-      // one whose claim ("this pack's update knowledge was cleared") would be
-      // flatly false about the pack now on screen.
+      // `unusable` on purpose: the loudest sentence on this surface, and the one whose claim ("this pack's update
+      // knowledge was cleared") would be flatly false about the pack now on screen.
       act(() => {
         deliver[0]?.({ result: { ok: true, outcome: "unusable" } });
       });
@@ -1277,8 +1210,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       expect(
         screen.queryByTestId("provider-pack-discovery-check-notice"),
       ).toBeNull();
-      // And nothing is announced either — the stale result must not reach the
-      // live region any more than the visible line.
+      // And nothing is announced either - the stale result must not reach the live region any more than the visible
+      // line.
       expect(screen.getByRole("status").textContent).toBe("");
     },
   );
@@ -1299,8 +1232,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     );
     await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
 
-    // The mutation is shared by the panel, so its `isPending` says nothing
-    // about WHICH pack asked. Only the identity captured at dispatch does.
+    // The mutation is shared by the panel, so its `isPending` says nothing about which pack asked. Only the
+    // identity captured at dispatch does.
     mocks.checkIsPending = true;
     rerender(
       <ProviderPackVersionManagerPanel
@@ -1320,23 +1253,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
   it("does not let a superseded check's settle re-enable the button of the check still running", async () => {
     const user = userEvent.setup();
-    // READ THIS BEFORE JUDGING THE PIN. The sequence below - two live
-    // dispatches, the first one settling second - is one production cannot
-    // currently reach: `MutationObserver.mutate` keeps a SINGLE
-    // `#mutateOptions` and `removeObserver`s the superseded mutation, so the
-    // second press silently drops the first press's `onSettled` instead of
-    // racing it. This mock does not model that, by design: it is a `vi.fn`
-    // that hands every call's callbacks back to the test.
-    //
-    // So this pins the panel's own guard, not a live defect - it goes red on
-    // deleting the `current === identity` comparison and green on restoring
-    // it, both under the same @tanstack/query-core. That is deliberate: the
-    // slot is the panel's, its correctness should not rest on a supersession
-    // rule that lives in a dependency and is written down nowhere here, and
-    // the ONE edit most likely to reintroduce the bug - simplifying the
-    // functional update back to `setCheckInFlight(null)` - is exactly what
-    // this catches. Do not delete it as unreachable without also deleting the
-    // guard, and do not read it as evidence the race is live.
+    // Do not delete it as unreachable without also deleting the guard, and do not read it as evidence the race is
+    // live.
     const settles: Array<() => void> = [];
     mocks.checkMutate.mockImplementation((_variables, options) => {
       if (options.onSettled !== undefined) settles.push(options.onSettled);
@@ -1364,15 +1282,12 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
     expect(settles).toHaveLength(2);
 
-    // The FIRST pack's request settles while the second pack's is still
-    // running.
+    // The first pack's request settles while the second pack's is still running.
     act(() => {
       settles[0]?.();
     });
 
-    // Still disabled: codex's own check has not settled. The spinner rides
-    // the same `checkPending` this attribute is derived from, so there is one
-    // value here to pin, not two.
+    // Still disabled: codex's own check has not settled.
     expect(
       screen
         .getByRole("button", { name: CHECK_BUTTON_NAME })
@@ -1393,18 +1308,12 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 
   it("keeps rows and the auto-download switch enabled while a check is pending, but disables the check button itself", async () => {
-    // `isPending: false` on the rows/switch is also the DEFAULT, so that half
-    // alone would be vacuous — asserting the check button IS disabled in the
-    // same render is what proves check.isPending was actually plumbed in and
-    // deliberately excluded from `anyPending`.
-    //
-    // The check has to be DISPATCHED rather than just flagged pending: the
-    // button disables on the identity captured at dispatch, so a bare
-    // `isPending` with nothing in flight is not a state production can reach.
+    // The check has to be dispatched rather than just flagged pending: the button disables on the identity
+    // captured at dispatch, so a bare `isPending` with nothing in flight is not a state production can reach.
     const user = userEvent.setup();
     mocks.checkIsPending = true;
     mocks.checkMutate.mockImplementation(() => {
-      // Never settles — still joined to the host's discovery tick.
+      // Never settles - still joined to the host's discovery tick.
     });
     renderPanel({
       hostId: "host-1",
@@ -1464,9 +1373,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
         managedOverrides: null,
       });
 
-      // The live region is PERMANENTLY mounted and starts empty. That is the
-      // whole contract: a region inserted together with its first content is
-      // the case assistive tech most reliably misses.
+      // The live region is permanently mounted and starts empty.
       expect(screen.getByRole("status").textContent).toBe("");
 
       await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
@@ -1478,27 +1385,13 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
       const notice = screen.getByTestId("provider-pack-discovery-check-notice");
       expect(notice.textContent).toBe(expected);
-      // F5: `kind` decides the visible class; a version that always answers
-      // "info" would pass every case above while the two failure sentences
-      // render in muted grey.
+      // : `kind` decides the visible class; a version that always answers "info" would pass every case above while
+      // the two failure sentences render in muted grey.
       expect(notice.className).toContain(
         expectedKind === "error" ? "text-destructive" : "text-muted-foreground",
       );
 
-      // The announcement itself. Without this the live region can be deleted
-      // outright and every assertion above still passes, leaving the notice
-      // invisible to assistive tech.
-      //
-      // `getByRole("status")` is unambiguous here BY CONSTRUCTION, and the
-      // singular query is doing double duty: the visible notice is
-      // `aria-hidden`, so it is not in the accessibility tree, the panel's
-      // only other `role="status"` lives in the `!methodSupport` early return,
-      // which never renders alongside the footer, and `renderPanel` mounts the
-      // panel bare (no toaster, no portal host) so nothing outside it
-      // contributes. `getByRole` THROWS on more than one match, so the same
-      // line also pins "exactly one status-role node" - re-adding
-      // `role="status"` to the visible notice fails here. Keep it singular;
-      // `getAllByRole(...)[0]` would silently drop that half.
+      // Keep it singular; `getAllByRole(...)[0]` would silently drop that half.
       const live = screen.getByRole("status");
       expect(live.getAttribute("aria-live")).toBe("polite");
       expect(live.classList.contains("sr-only")).toBe(true);
@@ -1527,9 +1420,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    // Permanent mount, empty before the click - asserted here as well as in
-    // the outcome table so each table pins the F2 contract on its own: the
-    // post-click query below would find a conditionally mounted region too.
+    // Permanent mount, empty before the click - asserted here as well as in the outcome table so each table pins
+    // the contract on its own: the post-click query below would find a conditionally mounted region too.
     expect(screen.getByRole("status").textContent).toBe("");
 
     await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
@@ -1538,9 +1430,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(notice.textContent).toBe(expected);
     // Both refusals are hard policy, never "info".
     expect(notice.className).toContain("text-destructive");
-    // A refusal is announced on the same terms as an outcome — see the
-    // outcome table above for why one `getByRole("status")` match is also the
-    // no-double-announcement pin.
+    // A refusal is announced on the same terms as an outcome - see the outcome table above for why one
+    // `getByRole("status")` match is also the no-double-announcement pin.
     const live = screen.getByRole("status");
     expect(live.getAttribute("aria-live")).toBe("polite");
     expect(live.classList.contains("sr-only")).toBe(true);
@@ -1576,17 +1467,10 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   });
 });
 
-/**
- * The list is a list. Everything a version says about itself beyond "here I
- * am, here is my one state, here is the button" lives in its hover card.
- *
- * Reported from the running app: the dropdown carried version + three badges +
- * a meta line repeating two of them + a Delete, per row.
- */
+/** The list is a list. */
 describe("ProviderPackVersionManagerPanel: row density", () => {
-  // This file's other `afterEach(cleanup)` is scoped INSIDE its describe, so a
-  // new top-level block gets none and every render accumulates in the same
-  // document - which surfaces as "Found multiple elements", not as a leak.
+  // This file's other `afterEach(cleanup)` is scoped inside its describe, so a new top-level block gets none and
+  // every render accumulates in the same document - which surfaces as "Found multiple elements", not as a leak.
   afterEach(cleanup);
 
   it("keeps a plain published version down to its number and its button", () => {
@@ -1608,8 +1492,8 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
 
     const row = screen.getByTestId("provider-pack-version-row-1.2.0");
     expect(row.textContent).toBe("1.2.0");
-    // The row action column is icon-only now; the bare number must not read
-    // as "no button" — the download control still has to be there.
+    // The row action column is icon-only now; the bare number must not read as "no button" - the download control
+    // still has to be there.
     expect(
       screen.getByRole("button", { name: rowActionName("Download", "1.2.0") }),
     ).toBeTruthy();
@@ -1637,9 +1521,7 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
   });
 
   it("gives a non-current uncertified version its Unpublished chip, outranking Recommended", () => {
-    // `uncertified` used to earn no chip at all (informational, stays
-    // installed and usable). It earns one now: it is the one state that
-    // decides whether a delete can be undone, which outranks a mere
+    // It earns one now: it is the one state that decides whether a delete can be undone, which outranks a mere
     // suggestion.
     renderPanel({
       hostId: "host-1",
@@ -1661,9 +1543,8 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
   });
 
   it("suppresses the Unpublished chip on the current row (states Current instead)", () => {
-    // THE REPORTED ROW. On a current row the reversibility question the
-    // Unpublished chip exists to flag does not apply — delete is already
-    // disabled for the current version — so the chip goes unsaid.
+    // On a current row the reversibility question the Unpublished chip exists to flag does not apply - delete is
+    // already disabled for the current version - so the chip goes unsaid.
     renderPanel({
       hostId: "host-1",
       available: [

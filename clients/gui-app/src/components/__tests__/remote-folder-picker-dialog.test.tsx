@@ -58,12 +58,8 @@ vi.mock("@/hooks/workspace/use-workspace-browse-folders-query", () => ({
   },
 }));
 
-/**
- * `workspace.prepareFolders` conveniences, faked at the same seam as the
- * browse query. `undefined` data stands in for the fail-closed
- * `DOWNGRADE_UNSUPPORTED` a v1.0 host answers these with - the picker must
- * treat that as "absent", never as an error.
- */
+/** `undefined` data stands in for the fail-closed `DOWNGRADE_UNSUPPORTED` a v1.0 host answers these with - the
+ * picker must treat that as "absent", never as an error. */
 let recentEntries: readonly WorkspaceRecentEntry[] | undefined;
 let reportedHomeDir: string | null | undefined;
 function prepareFoldersResponse(
@@ -114,10 +110,8 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersion: () => negotiatedVersion.current,
 }));
 
-/**
- * A real (mock-messenger) HostClient: the store's request contract takes the
- * requester's client verbatim, so identity is what the dialog must preserve.
- */
+/** A real (mock-messenger) HostClient: the store's request contract takes the requester's client verbatim, so
+ * identity is what the dialog must preserve. */
 function makeClient(): HostClient<HostRpcRegistry> {
   return new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -158,7 +152,6 @@ const CODE_RESPONSE: WorkspaceBrowseFoldersResponseV11 = {
   entries: [],
 };
 
-/** The always-visible path combobox. */
 function pathInput(): HTMLInputElement {
   const element = screen.getByTestId("remote-folder-picker-path");
   if (!(element instanceof HTMLInputElement)) {
@@ -200,8 +193,8 @@ describe("<RemoteFolderPickerDialog />", () => {
       ),
       refetch: () => Promise.resolve(),
     });
-    // Default: a host that answers neither convenience operation, so every
-    // pre-existing expectation describes the picker WITHOUT recents.
+    // Default: a host that answers neither convenience operation, so every pre-existing expectation describes the
+    // picker without recents.
     recentEntries = undefined;
     reportedHomeDir = undefined;
     negotiatedVersion.current = { major: 1, minor: 4 };
@@ -433,9 +426,7 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   it("browses every level through exactly the requester's client", async () => {
-    // The dialog is globally mounted, but a pick can start from a tab bound
-    // to a different host than the app-wide active one. The query must
-    // receive the client handed to requestPick - never resolve its own.
+    // The query must receive the client handed to requestPick - never resolve its own.
     const requesterClient = makeClient();
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(requesterClient);
@@ -565,8 +556,8 @@ describe("<RemoteFolderPickerDialog />", () => {
     await screen.findAllByTestId("remote-folder-picker-row");
     fireEvent.keyDown(pathInput(), { key: "Enter", isComposing: true });
     expect(pathInput().value).toBe("/Users/tester/");
-    // The same key OUTSIDE composition still opens the selected row. The
-    // resting selection is the first real FOLDER, not `..`, so it descends.
+    // The same key outside composition still opens the selected row. The resting selection is the first real
+    // folder, not `..`, so it descends.
     fireEvent.keyDown(pathInput(), { key: "Enter" });
     expect(pathInput().value).toBe("/Users/tester/code/");
   });
@@ -586,10 +577,8 @@ describe("<RemoteFolderPickerDialog />", () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());
     await screen.findAllByTestId("remote-folder-picker-row");
-    // `..` occupies option 0, so the first real folder is option 1 - and it
-    // is where the selection RESTS before any key is pressed. "Go up" is a
-    // poor default for Enter, and on touch the resting fill is all the
-    // highlight communicates.
+    // `..` occupies option 0, so the first real folder is option 1 - and it is where the selection rests before
+    // any key is pressed.
     expect(pathInput().getAttribute("aria-activedescendant")).toBe(
       "remote-folder-picker-option-1",
     );
@@ -701,10 +690,7 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   it("a failed refetch stops navigation addressing the rows it hid", async () => {
-    // TanStack keeps the last successful `data` when a REFETCH fails, and
-    // this query is `staleTime: 10_000` - stepping back into a directory
-    // serves cache and refetches behind it. The listing hides every entry
-    // while the error is up, so navigation must stop counting them too.
+    // The listing hides every entry while the error is up, so navigation must stop counting them too.
     queryByPath.set(pathKey("/Users/tester/code"), {
       data: {
         directoryPath: "/Users/tester/code",
@@ -816,9 +802,7 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   it("keeps focus on the field when a recent is picked by keyboard", async () => {
-    // Picking a recent unmounts the whole row, including the button that was
-    // just activated. `onMouseDown` covers a pointer, but Enter/Space never
-    // fires it - focus would be left on a removed node.
+    // `onMouseDown` covers a pointer, but Enter/Space never fires it - focus would be left on a removed node.
     recentEntries = [
       { path: "/Users/tester/code", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
     ];
@@ -827,9 +811,8 @@ describe("<RemoteFolderPickerDialog />", () => {
     const chip = (
       await screen.findAllByTestId("remote-folder-picker-recent")
     )[0];
-    // Tab to the chip first: that is what makes this discriminating. Clicking
-    // without focusing leaves the field focused anyway, so the assertion would
-    // hold with or without the fix.
+    // Clicking without focusing leaves the field focused anyway, so the assertion would hold with or without the
+    // fix.
     if (!(chip instanceof HTMLElement))
       throw new Error("chip is not an element");
     chip.focus();
@@ -840,8 +823,8 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   it("treats a backslash as an ordinary character in a POSIX folder name", async () => {
-    // A POSIX host may legitimately have a folder named `foo\bar`; splitting
-    // at the backslash would browse `/Users/tester/foo` instead.
+    // A POSIX host may legitimately have a folder named `foo\bar`; splitting at the backslash would browse
+    // `/Users/tester/foo` instead.
     queryByPath.set(
       pathKey("/Users/tester"),
       readyLevel({
@@ -877,9 +860,8 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   it("preserves trailing whitespace in a directory name through Add", async () => {
-    // `/srv/project ` and `/srv/project` are distinct POSIX siblings, so
-    // trimming before submit would silently pick the one the field never
-    // showed. Reachable by typing too, but a recent is how it arrives verbatim.
+    // `/srv/project ` and `/srv/project` are distinct POSIX siblings, so trimming before submit would silently
+    // pick the one the field never showed.
     recentEntries = [
       { path: "/srv/project ", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
     ];
@@ -952,9 +934,8 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   it("shows the getHomeDir fallback rather than arming Add over a blank field", async () => {
-    // Root listing fails, getHomeDir answers - the supported unlistable-home
-    // case. Add falls back to that home, so the field must show it: an enabled
-    // Add over an empty field would submit a path never displayed.
+    // Add falls back to that home, so the field must show it: an enabled Add over an empty field would submit a
+    // path never displayed.
     queryByPath.set(pathKey(null), {
       data: undefined,
       isPending: false,
@@ -981,9 +962,8 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   it("expands ~ off getHomeDir when the home listing never answers", async () => {
-    // The whole point of reading getHomeDir separately: home is unlistable, so
-    // the root browse can never teach the field where `~` points - but Add
-    // needs no listing, so picking out of it must still work.
+    // The whole point of reading getHomeDir separately: home is unlistable, so the root browse can never teach the
+    // field where `~` points - but Add needs no listing, so picking out of it must still work.
     queryByPath.set(pathKey(null), {
       data: undefined,
       isPending: false,
@@ -1005,11 +985,8 @@ describe("<RemoteFolderPickerDialog />", () => {
       folderPaths: ["/Users/tester/code"],
     });
   });
-  /**
-   * Paths are HOST-native: `workspace.browseFolders` runs on the host, so a
-   * Windows host answers `C:\Users\tester` and the picker has to browse,
-   * filter, walk up and Add with those - no POSIX rewriting anywhere.
-   */
+  /** Paths are host-native: `workspace.browseFolders` runs on the host, so a Windows host answers
+   * `C:\Users\tester` and the picker has to browse, filter, walk up and Add with those. */
   describe("against a Windows host", () => {
     const WINDOWS_HOME: WorkspaceBrowseFoldersResponseV11 = {
       directoryPath: "C:\\Users\\tester",
@@ -1089,8 +1066,8 @@ describe("<RemoteFolderPickerDialog />", () => {
       fireEvent.click(screen.getByTestId("remote-folder-picker-up-row"));
       expect(pathInput().value).toBe("C:\\Users\\");
       fireEvent.click(screen.getByTestId("remote-folder-picker-up-row"));
-      // `C:\` is the fixpoint - never `C:`, which is drive-RELATIVE and would
-      // resolve against the host's working directory instead of the root.
+      // `C:\` is the fixpoint - never `C:`, which is drive-relative and would resolve against the host's working
+      // directory instead of the root.
       expect(pathInput().value).toBe("C:\\");
       expect(screen.queryByTestId("remote-folder-picker-up-row")).toBeNull();
     });
@@ -1175,9 +1152,8 @@ describe("<RemoteFolderPickerDialog />", () => {
     });
 
     it("browses a UNC share root typed WITHOUT a trailing separator", async () => {
-      // The form a user types first. Unlike `/` and `C:\`, a share root does
-      // not end in a separator, so deriving the filter from the last one would
-      // filter the share by its own name ("shared") and hide every row.
+      // Unlike `/` and `C:\`, a share root does not end in a separator, so deriving the filter from the last one
+      // would filter the share by its own name ("shared") and hide every row.
       queryByPath.set(
         pathKey("\\\\build\\shared"),
         readyLevel({
@@ -1200,9 +1176,8 @@ describe("<RemoteFolderPickerDialog />", () => {
     });
 
     it("recognizes a UNC root typed with forward slashes", async () => {
-      // Windows resolves `//build/shared` as UNC just like the backslash
-      // form. Falling through to POSIX handling would browse `//build`
-      // filtered by "shared" and never list the share itself.
+      // Falling through to POSIX handling would browse `//build` filtered by "shared" and never list the share
+      // itself.
       queryByPath.set(
         pathKey("//build/shared"),
         readyLevel({
@@ -1274,9 +1249,7 @@ describe("<RemoteFolderPickerDialog />", () => {
       fireEvent.change(pathInput(), {
         target: { value: "/Users/tester/mpt" },
       });
-      // Prefix, then substring, then scattered subsequence - and within the
-      // subsequence tier the tighter run first ("mp-tools" spans 4
-      // characters, "my-prototype" spans 7). Listing order does not survive.
+      // Listing order does not survive.
       expect(rowNames()).toEqual([
         "mpt",
         "old-mpt-runner",
@@ -1286,9 +1259,7 @@ describe("<RemoteFolderPickerDialog />", () => {
     });
 
     it("hides the .. row while a search is running", async () => {
-      // `..` is navigation, not an answer to the query. The accepted cost is
-      // that going up means clearing the search first - there is no back
-      // arrow to fall back on.
+      // `..` is navigation, not an answer to the query.
       render(<RemoteFolderPickerDialog />);
       void useRemoteFolderPickerStore.getState().requestPick(makeClient());
       await screen.findAllByTestId("remote-folder-picker-row");
@@ -1412,14 +1383,10 @@ describe("<RemoteFolderPickerDialog />", () => {
   });
 
   describe("hover reveals the absolute path", () => {
-    // Long-press is touch-only (`useLongPress`), so a mouse user's only route
-    // to the same absolute path is hover - this is the pointer half of the
-    // two long-press tests above.
+    // Long-press is touch-only (`useLongPress`), so a mouse user's only route to the same absolute path is hover -
+    // this is the pointer half of the two long-press tests above.
     it("a recent row keeps its short name visible but hovers to the full path", async () => {
-      // Two entries under a shared base, same as the "offers the host's
-      // recent workspaces" fixture above - a single entry has no base to
-      // collapse against and would render its full path as the label too,
-      // which is not the pairing this test is about.
+      // Two entries under a shared base, same as the "offers the host's recent workspaces" fixture above.
       recentEntries = [
         { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
         { path: "/srv/api", lastOpenedAt: "2026-07-30T00:00:00.000Z" },
@@ -1451,17 +1418,15 @@ describe("<RemoteFolderPickerDialog />", () => {
       fireEvent.click(
         (await screen.findAllByTestId("remote-folder-picker-row"))[0],
       );
-      // Now inside /Users/tester/code, whose parent is /Users/tester - the
-      // ".." row names no path itself, so hover is the only thing that says
-      // where it goes.
+      // Now inside /Users/tester/code, whose parent is /Users/tester - the ".." row names no path itself, so hover
+      // is the only thing that says where it goes.
       const upRow = screen.getByTestId("remote-folder-picker-up-row");
       expect(tooltipTextFor(upRow)).toBe("/Users/tester");
     });
 
     it("the group header hovers to the absolute base, not the ~ it displays", async () => {
-      // A base UNDER the host's home is the case the two collapse steps can
-      // silently agree on: if the header were handed an already-collapsed
-      // base, hover would repeat `~/code` and reveal nothing.
+      // A base under the host's home is the case the two collapse steps can silently agree on: if the header were
+      // handed an already-collapsed base, hover would repeat `~/code` and reveal nothing.
       recentEntries = [
         {
           path: "/Users/tester/code/app",

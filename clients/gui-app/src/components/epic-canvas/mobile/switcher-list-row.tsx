@@ -3,18 +3,8 @@ import { Check, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /**
- * One flat row in a switcher category list: leading icon, truncating label, an
- * optional second line of row metadata, an optional trailing badge slot, a
- * check on the active tile, and an optional trailing "…" actions slot. Tapping
- * the row body activates the tile; the actions slot (null for viewers) is a
- * sibling button so its taps never trigger a row open. The 44px min height plus
- * the sheet's coarse-pointer touch scope satisfy the touch-target guideline.
- *
- * `secondaryLabel` and `badge` exist so a category whose desktop row carries
- * per-row metadata (a terminal's runtime status, its resource usage) can show
- * the same thing here instead of dropping it: the row is one component, so a
- * surface cannot quietly say less than its desktop counterpart. Categories
- * with nothing to add pass null.
+ * Tapping the row body activates the tile; the actions slot (null for viewers) is a sibling button so its taps never trigger a row open.
+ * `secondaryLabel` and `badge` exist so a category whose desktop row carries per-row metadata (a terminal's runtime status, its resource usage) can show the same thing here instead of dropping it: the row is one component, so a surface cannot quietly say less than its desktop counterpart.
  */
 export function SwitcherListRow(props: {
   readonly icon: ReactNode;
@@ -37,10 +27,8 @@ export function SwitcherListRow(props: {
     selectTestId,
   } = props;
   return (
-    // `min-w-0` at both this wrapper and the button: the label's truncate
-    // only engages while every flex level above it may shrink below its
-    // content. One level with an auto min-width re-inflates the row to the
-    // full label width, and the list scrolls sideways instead of ellipsizing.
+    // `min-w-0` at both this wrapper and the button: the label's truncate only engages while every flex level above it may shrink below its content.
+    // One level with an auto min-width re-inflates the row to the full label width, and the list scrolls sideways instead of ellipsizing.
     <div className="flex min-w-0 items-center gap-1">
       <Button
         type="button"
@@ -77,9 +65,7 @@ export function SwitcherListRow(props: {
 }
 
 /**
- * The "make another one" row at the head of a category list. Same geometry and
- * weight as the item rows below it, so creating reads as one more entry in the
- * list rather than a banner over it; the leading "+" is what marks it apart.
+ * Same geometry and weight as the item rows below it, so creating reads as one more entry in the list rather than a banner over it; the leading "+" is what marks it apart.
  */
 export function SwitcherNewItemRow(props: {
   readonly label: string;
@@ -104,10 +90,7 @@ export function SwitcherNewItemRow(props: {
 }
 
 /**
- * The "nothing to show" body for a category list. `description` carries the
- * second line a NARROWED empty state needs - which control is doing the hiding
- * - so an empty list the user filtered into never reads as an epic with nothing
- * in it. Categories with nothing to add pass null.
+ * `description` carries the second line a NARROWED empty state needs - which control is doing the hiding - so an empty list the user filtered into never reads as an epic with nothing in it.
  */
 export function SwitcherListEmpty(props: {
   readonly message: string;
@@ -124,16 +107,8 @@ export function SwitcherListEmpty(props: {
 }
 
 /**
- * Header bar for a category: its search field, its "+" create affordance, and
- * its view (ordering / filter) menu. Renders nothing when every slot is null -
- * a viewer with no create rights in a category with nothing to search or
- * narrow.
- *
- * Search takes the row's width and the buttons trail it; with no search field
- * the buttons sit right, against the edge the thumb reaches. The view menu is
- * LAST either way, matching the desktop section headers - create is what the
- * user came to the header for, and a control that changes position between
- * surfaces is one the muscle memory has to relearn.
+ * Header bar for a category: its search field, its "+" create affordance, and its view (ordering / filter) menu.
+ * Renders nothing when every slot is null - a viewer with no create rights in a category with nothing to search or narrow.
  */
 export function SwitcherListHeader(props: {
   readonly search: ReactNode;

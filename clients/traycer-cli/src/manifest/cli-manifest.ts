@@ -6,22 +6,8 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { Environment } from "../runner/environment";
 import { cliManifestPath, ensureCliInstallHomeDir } from "../store/paths";
 
-// CLI install manifest schema, per the Native Packaging tech plan. Lives at
-// ~/.traycer/cli/manifest.json for prod, ~/.traycer/cli/dev/manifest.json for
-// legacy/no-slot dev, and ~/.traycer/cli/dev-runs/<slot>/manifest.json for
-// multi-run dev. Read by the CLI itself on every install/update/uninstall to
-// know what state it's already in; written atomically via rename so a crash
-// mid-install can't leave a partially-written file.
-//
-// `pendingUpgrade` records that a newer CLI binary has been downloaded
-// and staged, but the live binary is still the old one. The next CLI
-// process is expected to detect a pending upgrade, finalise it (swap
-// binaries + update top-level fields), and clear the field.
-//
-// Absence of a manifest file means "no recorded install on this environment
-// yet" - readCliManifest() returns null for that state rather than
-// fabricating a half-populated manifest, since the persisted contract
-// requires every top-level field to be present.
+// CLI install manifest schema, per the Native Packaging tech plan.
+// Lives at ~/.traycer/cli/manifest.json for prod, ~/.traycer/cli/dev/manifest.json for legacy/no-slot dev, and ~/.traycer/cli/dev-runs/<slot>/manifest.json for multi-run dev.
 
 export type CliInstallSource =
   | "desktop"
@@ -65,10 +51,7 @@ export const VALID_CLI_INSTALL_SOURCES: ReadonlySet<CliInstallSource> =
   ]);
 
 // Package-manager-owned sources for the upgrade-ownership contract.
-// `cli upgrade` refuses to self-replace these binaries; `cli mark-source`
-// is the only entrypoint a PM hook should call. The dedicated
-// `cli re-anchor` command lives next to `cli mark-source` and is the
-// user-facing way to record a manual install - see `cli-re-anchor.ts`.
+// `cli upgrade` refuses to self-replace these binaries; `cli mark-source` is the only entrypoint a PM hook should call.
 export const PACKAGE_MANAGER_CLI_SOURCES: ReadonlySet<CliInstallSource> =
   new Set<CliInstallSource>([
     "homebrew",
@@ -79,12 +62,8 @@ export const PACKAGE_MANAGER_CLI_SOURCES: ReadonlySet<CliInstallSource> =
     "rpm",
   ]);
 
-// Canonical per-package-manager upgrade hint, written ONCE and shared by the
-// `cli upgrade` package-manager-owned refusal (cli-upgrade.ts) and the
-// protocol-incompatibility recovery hint (compat-recovery.ts). The desktop and
-// manual vectors are phrased differently per caller and are supplied by each
-// map, not here - so a package-manager command (e.g. the formula name) changes
-// in exactly one place instead of drifting between the two surfaces.
+// Canonical per-package-manager upgrade hint, written ONCE and shared by the `cli upgrade` package-manager-owned refusal (cli-upgrade.ts) and the protocol-incompatibility recovery hint (compat-recovery.ts).
+// The desktop and manual vectors are phrased differently per caller and are supplied by each map, not here - so a package-manager command (e.g. the formula name) changes in exactly one place instead of drifting between the two surfaces.
 export const PACKAGE_MANAGER_UPGRADE_HINT: Record<
   Exclude<CliInstallSource, "desktop" | "manual">,
   string
@@ -110,19 +89,14 @@ function readDistributionInstallSourceFromEnv(): CliInstallSource | null {
   return null;
 }
 
-// System-wide install-source markers written by .deb / .rpm post-install
-// scripts (see release-cli-linux.yml). These let the CLI know it was
-// installed through a system package manager even when the per-user
-// manifest at ~/.traycer/cli/manifest.json hasn't been written yet
-// (e.g. first invocation after an unattended apt install).
+// System-wide install-source markers written by .deb / .rpm post-install scripts (see release-cli-linux.yml).
+// These let the CLI know it was installed through a system package manager even when the per-user manifest at ~/.traycer/cli/manifest.json hasn't been written yet (e.g. first invocation after an unattended apt install).
 const DEFAULT_SYSTEM_SOURCE_MARKER_DIR = "/var/lib/traycer";
 const SYSTEM_SOURCE_MARKER_APT_BASENAME = "source.apt";
 const SYSTEM_SOURCE_MARKER_RPM_BASENAME = "source.rpm";
 
-// Mutable override for the marker directory, used exclusively by the
-// system-marker test suite so it can point the reader at a tmp dir
-// without touching `/var/lib/traycer`. Production code never calls
-// `__setSystemSourceMarkerDirForTest`.
+// Mutable override for the marker directory, used exclusively by the system-marker test suite so it can point the reader at a tmp dir without touching `/var/lib/traycer`.
+// Production code never calls `__setSystemSourceMarkerDirForTest`.
 let systemSourceMarkerDir = DEFAULT_SYSTEM_SOURCE_MARKER_DIR;
 
 // Test-only seam - pass `null` to restore the default. The function
@@ -141,10 +115,8 @@ interface SystemSourceMarker {
   readonly markerPath: string;
 }
 
-// Read /var/lib/traycer/source.{apt,rpm} if present. Best-effort:
-// returns null on any parse failure (markers are advisory; the in-home
-// manifest is still authoritative for everything else). Only called on
-// Linux - other platforms return null without touching the filesystem.
+// Read /var/lib/traycer/source.{apt,rpm} if present.
+// Best-effort: returns null on any parse failure (markers are advisory; the in-home manifest is still authoritative for everything else).
 async function readSystemSourceMarker(): Promise<SystemSourceMarker | null> {
   if (process.platform !== "linux") return null;
   const dir = systemSourceMarkerDir;
@@ -193,22 +165,8 @@ async function readSystemSourceMarker(): Promise<SystemSourceMarker | null> {
   return null;
 }
 
-// Read the persisted manifest for `environment`. Returns null when no
-// manifest file exists yet (i.e. nothing has been installed on this
-// environment). Throws CLI_MANIFEST_INVALID if the file is present but
-// malformed - we refuse to silently overwrite a corrupt manifest
-// because that state is often a sign of a half-completed install or
-// foreign tampering, both of which deserve operator attention.
-//
-// On Linux, if no per-user prod manifest exists yet but a system marker
-// (/var/lib/traycer/source.{apt,rpm}) is present, synthesize a manifest
-// from the marker so `cli upgrade` correctly refuses self-replacement
-// of a dpkg/rpm-owned binary. The fallback is **prod-only**: the system
-// markers are written by the prod-environment .deb / .rpm post-install
-// scripts only, so honouring them for a dev-environment read would
-// mis-attribute a dev install to apt/rpm whenever a sibling prod
-// package is present on the same host. Dev environment callers therefore
-// see `null` when no dev manifest exists, regardless of marker state.
+// Read the persisted manifest for `environment`.
+// Returns null when no manifest file exists yet (i.e. nothing has been installed on this environment).
 export async function readCliManifest(
   environment: Environment,
 ): Promise<CliInstallManifest | null> {
@@ -278,11 +236,8 @@ export async function readCliManifest(
   try {
     manifest = await readStoredCliInstallManifestAtPath(path);
   } catch (err) {
-    // Only a parse failure means "invalid". The reader already turns ENOENT
-    // into null and rethrows every other I/O error, so swallowing those here
-    // reported a permissions or disk fault as a corrupt manifest and told the
-    // user to fix a file that is fine. Same narrowing as the sibling
-    // host-install reader.
+    // Only a parse failure means "invalid".
+    // The reader already turns ENOENT into null and rethrows every other I/O error, so swallowing those here reported a permissions or disk fault as a corrupt manifest and told the user to fix a file that is fine.
     if (!(err instanceof SyntaxError) && !(err instanceof ZodError)) throw err;
     throw cliError({
       code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
@@ -332,13 +287,8 @@ export async function writeCliManifest(
   });
 }
 
-// Read-modify-write convenience. Requires an existing manifest -
-// patching a non-existent install is a programming error, since the
-// persisted contract has no representation for "partially installed".
-// Callers performing an initial install should build a complete
-// CliInstallManifest and pass it to writeCliManifest directly. The
-// caller owns concurrency - wrap with the CLI lock if multiple
-// processes might race.
+// Read-modify-write convenience.
+// Requires an existing manifest - patching a non-existent install is a programming error, since the persisted contract has no representation for "partially installed".
 export async function updateCliManifest(
   environment: Environment,
   patch: Partial<Omit<CliInstallManifest, never>>,

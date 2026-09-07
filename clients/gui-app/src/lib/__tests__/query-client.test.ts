@@ -3,15 +3,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppQueryClient } from "@/lib/query-client";
 
-// Regression coverage for the wake-from-sleep freeze: Chromium can report
-// `navigator.onLine === false` indefinitely after an OS sleep/wake in the
-// desktop shell, and under TanStack's default `networkMode: "online"` that
-// silently parked every query (`fetchStatus: "paused"`) and every mutation
-// (paused-pending) until the app was relaunched - send / next-steps buttons
-// went inert while the stream layer (wired to the OS resume pulse) kept
-// flowing. The app's `networkMode: "always"` default must keep both running
-// regardless of what the browser thinks connectivity is; host RPCs target the
-// loopback host anyway.
+// Regression coverage for the wake-from-sleep freeze: Chromium can report `navigator.onLine === false` indefinitely after an OS sleep/wake in the desktop shell, and under TanStack's default `networkMode: "online"` that silently parked every query.
 describe("createAppQueryClient while the browser reports offline", () => {
   afterEach(() => {
     onlineManager.setOnline(true);
@@ -51,10 +43,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Runs a failing query through the real client and returns the `error` object
- * the app-wide `onError` actually emitted, parsed back out of the structured
- * console line. No mocking of the logger: what this asserts is exactly the text
- * a support log would carry.
+ * Runs a failing query through the real client and returns the `error` object the app-wide `onError` actually emitted, parsed back out of the structured console line.
+ * No mocking of the logger: what this asserts is exactly the text a support log would carry.
  */
 async function loggedErrorFieldsForQueryFailure(
   failure: Error,
@@ -64,10 +54,8 @@ async function loggedErrorFieldsForQueryFailure(
     const client = createAppQueryClient();
     await client
       .fetchQuery({
-        // `failure` belongs in the key because `queryFn` closes over it. The
-        // name is carried too: keys hash through `JSON.stringify`, an `Error`
-        // serializes to `{}`, and without it both cases would collide on one
-        // cache entry.
+        // `failure` belongs in the key because `queryFn` closes over it.
+        // The name is carried too: keys hash through `JSON.stringify`, an `Error` serializes to `{}`, and without it both cases would collide on one cache entry.
         queryKey: ["failure-logging", failure.name, failure],
         queryFn: () => Promise.reject(failure),
         retry: false,
@@ -93,18 +81,7 @@ async function loggedErrorFieldsForQueryFailure(
   }
 }
 
-// This callback fires BEFORE a hook's own `onError`, so what it records is what
-// a support log actually carries - and it cannot be undone downstream.
-//
-// A `HostRpcError` must be logged in FULL: summarizing it reduced every report
-// to `{ name: "HostRpcError", messageLength: 198, stack: null }`, which is why
-// traycerai/traycer#1556 could not be diagnosed from its own logs.
-//
-// Everything else must stay SUMMARIZED. Six hooks feeding this cache
-// deliberately call `appLogger.errorSummary` in their own `onError` because
-// their messages quote the user - `use-epic-export-artifacts-mutation` throws
-// `"<artifact.title>" is still loading.`. A global full log defeats all six,
-// and it does so silently, which is how it shipped the first time.
+// This callback fires BEFORE a hook's own `onError`, so what it records is what a support log actually carries - and it cannot be undone downstream.
 describe("createAppQueryClient failure logging", () => {
   it("summarizes a non-host error whose message quotes the user", async () => {
     const described = await loggedErrorFieldsForQueryFailure(

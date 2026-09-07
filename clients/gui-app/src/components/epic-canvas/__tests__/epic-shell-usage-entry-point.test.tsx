@@ -30,16 +30,6 @@ import {
 import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 
-/**
- * Ticket 12 successor to `epic-shell-cost-badge.test.tsx` (ticket-7
- * fixup-01's regression coverage): the AMBIENT badge is gone by design, so
- * its "renders a stuck-pending query self-heals via poll" scenario no
- * longer has a subject. What survives is the mount-composition discipline
- * that test existed to prove - a real `<EpicShell>` / `<EpicSessionProvider>`
- * tree over a real `HostClient` + `MockHostMessenger`, not a module-mocked
- * substitute - now applied to the numberless entry point and the dialog it
- * opens on demand.
- */
 
 const HOST_ID = mockLocalHostEntry.hostId;
 const EPIC_ID = "epic-usage-entry-point-live";
@@ -184,21 +174,12 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === HOST_ID ? liveHostClient : null,
 }));
 
-// The app-wide EFFECTIVE host, kept MOVABLE so one arm below can pull it away
-// from the Epic session's host. `EpicUsageEntryPoint` used to read this hook
-// and now reads the session's host instead; with both pinned to `HOST_ID` the
-// two are indistinguishable, and the suite would go on passing against the
-// defect it is meant to hold closed.
 const effectiveHostId = vi.hoisted(() => ({ current: "" }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => effectiveHostId.current,
 }));
 
-// Threw until the stream-factory override was deleted and `EpicSessionProvider`
-// started opening its transport unconditionally; the throw was safe only while
-// that branch made the opener unreachable. The fake supplies "no socket in
-// tests" instead - this suite's real subject is the host RPC round trip, and
-// the session's stream is driven at the WORKER seam below.
+// Threw until the stream-factory override was deleted and `EpicSessionProvider` started opening its transport unconditionally; the throw was safe only while that branch made the opener unreachable.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -291,12 +272,7 @@ function buildSnapshot(title: string): Uint8Array {
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 
 /**
- * The suite's stream, one seam over.
- *
- * The factory body is unchanged. What changed is where it is installed: a
- * stream factory built on MAIN cannot cross `postMessage` to a runtime that
- * lives in the worker, so it is supplied to the worker's own composition -
- * a FRESH one per spawn, since one helper instance owns one bridge pair.
+ * What changed is where it is installed: a stream factory built on MAIN cannot cross `postMessage` to a runtime that lives in the worker, so it is supplied to the worker's own composition - a FRESH one per spawn, since one helper instance owns one bridge pair.
  */
 function installControlledFactory(): {
   readonly streams: () => ReadonlyArray<ControlledStream>;
@@ -385,23 +361,8 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
   });
 
   it("stays on the RETAINED session's host while a re-point to another host establishes", async () => {
-    // The reachable divergence, driven rather than asserted: the effective
-    // host moves from A to B, `EpicSessionProvider` starts a replacement, and
-    // it does NOT complete - the second stream is never given a snapshot here,
-    // which is exactly what a slow or failed re-point looks like. Through all
-    // of it the A handle stays registered and RENDERED, and only the canvas is
-    // made inert (`epic-shell.tsx` passes `readOnly` to the tile subtree
-    // alone), so this status row remains interactive.
-    //
-    // Note the test could not create this state by starting at B: the session's
-    // host is derived FROM the effective host, so the two only diverge once a
-    // session already exists. That is why the flip happens after the first
-    // snapshot lands.
-    //
-    // ONLY A advertises the method, which is what makes the assertion decisive
-    // rather than decorative: a build reading `useEffectiveHostId()` resolves
-    // `host-elsewhere`, whose manifest has no `host.usage.summary`, and the
-    // entry point disappears.
+    // The reachable divergence, driven rather than asserted: the effective host moves from A to B, `EpicSessionProvider` starts a replacement, and it does NOT complete - the second stream is never given a snapshot here, which is exactly what a slow or failed re-point looks like.
+    // Through all of it the A handle stays registered and RENDERED, and only the canvas is made inert (`epic-shell.tsx` passes `readOnly` to the tile subtree alone), so this status row remains interactive.
     recordNegotiatedHostMethods(HOST_ID, ["host.usage.summary"]);
     const controlled = installControlledFactory();
     const queryClient = new QueryClient({
@@ -420,9 +381,8 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
         buildSnapshot("Live Epic"),
       );
 
-    // Premise: the entry point is up on the session's own host before anything
-    // moves. Without this the assertion after the flip proves nothing - an
-    // element that was never there cannot survive.
+    // Premise: the entry point is up on the session's own host before anything moves.
+    // Without this the assertion after the flip proves nothing - an element that was never there cannot survive.
     await screen.findByTestId("epic-usage-entry-point");
 
     effectiveHostId.current = "host-elsewhere";

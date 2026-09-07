@@ -121,13 +121,6 @@ afterEach(() => {
   cleanup();
 });
 
-/**
- * The office draws a harness logo on every desk and names the model on hover,
- * so both have to reach the canvas as facts about the AGENT. They come from
- * two differently-shaped records - a chat's persisted run settings, a terminal
- * agent's own columns - and this is where those two shapes are flattened into
- * one.
- */
 describe("useCommGraphAgents harness and model", () => {
   it("reads a chat's harness and model out of its run settings", async () => {
     const { result } = renderHook(() => useCommGraphAgents(), { wrapper });

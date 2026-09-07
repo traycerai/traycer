@@ -1,21 +1,5 @@
 /**
- * Human formatters for the agent-facing provider-profile family
- * (`agent.listProviderProfiles`, `agent.getProviderProfileRateLimits`,
- * `agent.configure` - see `host/agent/profiles.ts`), alongside the existing
- * agent-list and harness-model formatters.
- *
- * Two rules shape every line here:
- *
- *   - **Reusable selections.** A profile is always rendered as the exact
- *     `--profile <value>` token the next command takes (`ambient`, or the
- *     managed profile id), so an agent can copy a row straight into
- *     `traycer agent create` / `profile-rate-limits` / `configure` without
- *     transcribing an id out of prose.
- *   - **Never invent availability.** The unavailable rate-limit arm renders
- *     its reason; a `null` window or an uncaptured `usageUpdatedAt` renders
- *     as unknown rather than as a zero reading.
- *
- * `--json` bypasses all of this and emits the RPC DTO unchanged.
+ * Human formatters for the agent-facing provider-profile family (`agent.listProviderProfiles`, `agent.getProviderProfileRateLimits`, `agent.configure` - see `host/agent/profiles.ts`), alongside the existing agent-list.
  */
 import type {
   AgentConfigureResponse,
@@ -27,13 +11,6 @@ import type {
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
 
-/**
- * The `--profile` token that reselects this profile in a later command: the
- * literal `ambient` for the provider's ambient CLI login, or the managed
- * profile's stable id. The single place the wire selection becomes a
- * user-facing value, so every formatter below (and the CLI's own parser)
- * agrees on the round-trip.
- */
 export function formatProfileSelection(
   selection: ConcreteProfileSelection,
 ): string {
@@ -64,13 +41,6 @@ function formatProviderProfileSummary(
   return `--profile ${formatProfileSelection(profile.selection)} - ${profile.label} [auth: ${profile.authStatus}] [limits: ${profile.rateLimitStatus}, captured ${formatTimestamp(profile.usageUpdatedAt)}]${lastUsed}`;
 }
 
-/**
- * The requested selection is a formatter argument rather than a response
- * field: `agent.getProviderProfileRateLimits` deliberately answers with the
- * provider-tagged `rateLimits` union alone (its `provider` is the single
- * source of provider identity), so the caller supplies the profile it asked
- * about to label the read.
- */
 export function formatAgentProviderProfileRateLimitsResponse(
   selection: ConcreteProfileSelection,
   response: AgentGetProviderProfileRateLimitsResponse,
@@ -206,13 +176,8 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       rateLimits.otherModels === null
         ? null
         : formatWindowLine("other models", rateLimits.otherModels),
-      // "Included usage" is Cursor's own name for the blended $400 pool - a
-      // DIFFERENT denominator than the bucket windows above (each bucket is
-      // measured against its own unpublished limit), so this line reads as
-      // money, never as a percentage that could contradict the windows.
-      // Spend-only when the limit was not reported, exactly like the Hugging
-      // Face arm above: the fields are independently nullable, and a missing
-      // denominator must not hide the spend that IS known.
+      // "Included usage" is Cursor's own name for the blended $400 pool - a DIFFERENT denominator than the bucket windows above (each bucket is measured against its own unpublished limit), so this line reads as money, never as.
+      // Spend-only when the limit was not reported, exactly like the Hugging Face arm above: the fields are independently nullable, and a missing denominator must not hide the spend that IS known.
       rateLimits.includedLimitUsd !== null
         ? `included usage: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`
         : rateLimits.usedUsd === null && rateLimits.remainingUsd === null
@@ -239,9 +204,7 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
 }
 
 /**
- * A `null` window is a window this provider did not report - rendered as
- * unknown, never as `0% used`, so a formatted read can't imply headroom the
- * provider never claimed.
+ * A `null` window is a window this provider did not report - rendered as unknown, never as `0% used`, so a formatted read can't imply headroom the provider never claimed.
  */
 function formatWindowLine(
   label: string,
@@ -259,11 +222,6 @@ function formatWindowLine(
   return `${label}: ${window.usedPercent}% used${resets}${duration}`;
 }
 
-/**
- * The target agent id is a formatter argument for the same reason the
- * selection is above: `agent.configure` answers with the committed run tuple
- * and its warnings, and the caller already knows which agent it configured.
- */
 export function formatAgentConfigureResponse(
   agentId: string,
   response: AgentConfigureResponse,
@@ -285,9 +243,8 @@ Warnings:
 ${response.warnings.map((warning) => `- ${warning}`).join("\n")}`;
 }
 
-// Epoch-ms → ISO 8601. `null` means no reading has ever been captured for
-// this profile (never ran a turn, no probe) - reported as such rather than
-// as an epoch-zero timestamp.
+// Epoch-ms → ISO 8601.
+// `null` means no reading has ever been captured for this profile (never ran a turn, no probe) - reported as such rather than as an epoch-zero timestamp.
 function formatTimestamp(epochMs: number | null): string {
   if (epochMs === null) return "never";
   return new Date(epochMs).toISOString();

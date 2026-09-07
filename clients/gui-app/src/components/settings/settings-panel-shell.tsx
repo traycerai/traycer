@@ -5,16 +5,10 @@ import { useSettingsDensity } from "@/providers/settings-density-context";
 interface SettingsPanelShellProps {
   title: string;
   description?: string;
-  /** Optional control rendered at the top-right of the header (e.g. refresh). */
   headerAction?: ReactNode;
-  /**
-   * Stretch the panel to the settings scroll container's height so its body can
-   * own an internal scroll instead of growing the outer settings overlay scroll.
-   * The body's root element must stretch (e.g. `h-full`). Screen-size aware: the
-   * height follows the modal/route scroll container, never overflowing it.
-   */
+  /** The body's root element must stretch (e.g. `h-full`). Screen-size aware: the height follows the modal/route
+   * scroll container, never overflowing it. */
   fillHeight?: boolean;
-  /** Extra classes for the body card - e.g. a `max-h-*` cap under `fillHeight`. */
   bodyClassName?: string;
   children: ReactNode;
 }

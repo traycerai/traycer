@@ -449,9 +449,8 @@ function otherIntentField() {
   });
 }
 
-// VITE_TRAYCER_OSS_REPO is empty in unit tests, so buildGitHubIssueUrl returns
-// a path-only string (`/issues/new?...`) that `new URL(url)` rejects. Parse
-// the query string directly.
+// VITE_TRAYCER_OSS_REPO is empty in unit tests, so buildGitHubIssueUrl returns a path-only string
+// (`/issues/new?...`) that `new URL(url)` rejects.
 function paramsOfOpenedLink(url: string): URLSearchParams {
   const queryStart = url.indexOf("?");
   if (queryStart < 0) return new URLSearchParams();
@@ -915,9 +914,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
       );
       expect(switchState("Include browser diagnostics")).toBe("checked");
 
-      // A later type switch must not clobber the user's own opt-in: the
-      // type defaults speak for the desktop/host logs only, and browser
-      // diagnostics is opt-in on every report.
+      // A later type switch must not clobber the user's own opt-in: the type defaults speak for the desktop/host
+      // logs only, and browser diagnostics is opt-in on every report.
       fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
       expect(switchState("Include browser diagnostics")).toBe("checked");
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
@@ -955,11 +953,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(form.includeHostLog).toBe(false);
     });
 
-    // Ticket 03 / plan D3: one switch covers both browser diagnostic files.
-    // Unlike the other two log toggles it starts OFF on every report type
-    // (root cause H): `browser-trace.jsonl` records the agent's cell source
-    // and every page it drove, so it is opt-in per report rather than
-    // opted-out - and the toggle-on has to reach the wire.
+    // Unlike the other two log toggles it starts off on every report type (root cause H): `browser-trace.jsonl`
+    // records the agent's cell source and every page it drove, so it is opt-in per report rather than opted-out.
     it("defaults includeBrowserDiagnostics off and submits true only when the user turns it on", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
@@ -1009,9 +1004,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
           name: /You may contact me at test@example.com/,
         }),
       );
-      // Diagnostics default on; toggle off so includeDiagnostics is false.
-      // main is the sole authority on what that gates - the request still
-      // carries privateDiagnostics regardless of the toggle.
+      // main is the sole authority on what that gates - the request still carries privateDiagnostics regardless of
+      // the toggle.
       fireEvent.click(
         screen.getByRole("switch", {
           name: "Diagnostics (crash context, versions, provider info)",
@@ -1177,9 +1171,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
     });
 
     it("shows the typed label for the current route on a plain manual open, never 'Current location' (ADV-L6)", async () => {
-      // The plain manual open never assembles a `draftContext` at all
-      // (`openReportIssue()` sets it to null) - this is the actual repro:
-      // the current-location option must still read the live registry.
+      // The plain manual open never assembles a `draftContext` at all (`openReportIssue` sets it to null) - this is
+      // the actual repro: the current-location option must still read the live registry.
       setSupportContextSnapshot({ routeTemplate: knownField("/") });
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
@@ -1288,7 +1281,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
       expect(harness.openedLinks).toEqual([]);
 
-      // Fallback must go through the publish PREVIEW, never open immediately.
+      // Fallback must go through the publish preview, never open immediately.
       fireEvent.click(
         screen.getByRole("button", { name: "Report on GitHub instead" }),
       );
@@ -1971,9 +1964,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
     });
 
     it("keeps the preview when the final draft rebuild fails, with a retryable toast", async () => {
-      // One of the two steps that can fail with the report still in hand: the
-      // REBUILD that folds the edited title back through the scrubbing
-      // pipeline (the other is the OS handoff, below).
+      // One of the two steps that can fail with the report still in hand: the rebuild that folds the edited title
+      // back through the scrubbing pipeline (the other is the OS handoff, below).
       let builds = 0;
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
@@ -2365,9 +2357,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      // The gate is satisfied by the image alone (tech-plan T4/T5's "text or
-      // image, either satisfies") - Send must complete without ever typing
-      // into the intent field.
+      // The gate is satisfied by the image alone (tech-plan T4/T5's "text or image, either satisfies") - Send must
+      // complete without ever typing into the intent field.
       await attachPngAndWaitForThumbnail("image-only.png");
       await screen.findByRole("img", { name: "image-only.png" });
       const intentField = bugIntentField();

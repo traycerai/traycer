@@ -77,18 +77,14 @@ interface SurfaceAttachmentState {
 
 interface AgentTileSessionFacts {
   /**
-   * The host's session record is the only source for the profile; a tile
-   * cannot infer a private session from its own state, and a tile whose
-   * session is not in the context yet is treated as primary.
+   * The host's session record is the only source for the profile; a tile cannot infer a private session from its own state, and a tile whose session is not in the context yet is treated as primary.
    */
   readonly profile: BrowserSessionProfileKind;
   readonly drivenBy: readonly BrowserTabDriver[];
 }
 
 /**
- * Kept extracted rather than inlined into {@link ElectronTabSurface}: folding
- * these lookups back into that component puts it over the complexity budget,
- * which is the objective signal that the extraction is carrying its weight.
+ * Kept extracted rather than inlined into {@link ElectronTabSurface}: folding these lookups back into that component puts it over the complexity budget, which is the objective signal that the extraction is carrying its weight.
  */
 function agentTileSessionFacts(
   sessions: BrowserSessionsState | null,
@@ -120,10 +116,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const [status, setStatus] = useState<BrowserViewStatus>("loading");
   const [statusReason, setStatusReason] = useState<string | null>(null);
   const [statusUrl, setStatusUrl] = useState("");
-  // A wire `loading` with no follow-up settle would spin forever; a silent
-  // stretch resolves to a terminal retry surface instead. `loadingNonce`
-  // bumps on every incoming `loading`, so ongoing progress keeps rearming
-  // the clock and only a genuinely stalled tab trips it.
+  // `loadingNonce` bumps on every incoming `loading`, so ongoing progress keeps rearming the clock and only a genuinely stalled tab trips it.
   const [stalledNonce, setStalledNonce] = useState<number | null>(null);
   const [loadingNonce, setLoadingNonce] = useState(0);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
@@ -207,18 +200,11 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       statusReason,
     );
 
-  // Terminal stall is derived, not a synchronously-reset flag: the tile is
-  // stalled only when the current loading episode is the one the timer fired
-  // for. A new episode - a status flip or a `loadingNonce` bump from a fresh
-  // progress report - clears it for free, with no setState in the effect.
+  // Terminal stall is derived, not a synchronously-reset flag: the tile is stalled only when the current loading episode is the one the timer fired for.
   const navigationStalled =
     effectiveStatus === "loading" && stalledNonce === loadingNonce;
 
-  // Deterministic terminal transition: a `loading` that neither settles nor
-  // reports further progress within the window trips the stalled surface.
-  // `loadingNonce` restarts the timer on each progress report, so only true
-  // silence trips it. ponytail: fixed 30s ceiling; a page still streaming
-  // status updates keeps rearming, a wedged navigation does not.
+  // `loadingNonce` restarts the timer on each progress report, so only true silence trips it. ponytail: fixed 30s ceiling; a page still streaming status updates keeps rearming, a wedged navigation does not.
   useEffect(() => {
     if (effectiveStatus !== "loading") return;
     const timer = setTimeout(() => {
@@ -288,18 +274,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       void browserSessions
         .openTab(props.node.sessionId, url)
         .then((opened) => {
-          // Browser semantics, never the placement setting (A4): the popup is
-          // a tab of THIS pane's session, and a background disposition
-          // (middle/ctrl/cmd-click) leaves the current tab active.
+          // Browser semantics, never the placement setting (A4): the popup is a tab of THIS pane's session, and a background disposition (middle/ctrl/cmd-click) leaves the current tab active.
           openTile({
             node: makeBrowserSessionTileRef({
               hostId: props.node.hostId,
               sessionId: opened.sessionId,
               tabId: opened.tabId,
             }),
-            // Resolved after the await, not before: the view tab can close
-            // while `openTab` is in flight, and opening into a closed tab id
-            // mutates a canvas with no route (R8).
+            // Resolved after the await, not before: the view tab can close while `openTab` is in flight, and opening into a closed tab id mutates a canvas with no route (R8).
             target: currentPopupTarget(props.viewTabId, epicId),
             gesture: disposition === "background" ? "host" : "explicit",
             modifiers: null,
@@ -369,9 +351,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const chromeCapabilities = PRIMARY_TILE_CHROME_CAPABILITIES;
   const latchAttemptedUrl = useCallback((url: string) => {
     const current = attemptedNavigationRef.current;
-    // Same URL as the in-flight attempt: keep echoSeen. The manager
-    // skips navigate when requestedUrl already matches, so a reset
-    // would wait for an echo that never comes.
+    // The manager skips navigate when requestedUrl already matches, so a reset would wait for an echo that never comes.
     if (current !== null && current.url === url) return;
     const next: AttemptedNavigation = { url, echoSeen: false };
     attemptedNavigationRef.current = next;
@@ -395,10 +375,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     onAttemptedUrl: latchAttemptedUrl,
   });
 
-  // Browser-scoped reserved chords: main claimed the keystroke from the guest
-  // page (the app renderer never sees it) and named what the browser should
-  // do. The policy table lives in
-  // `@/lib/browser-view/reserved-chords-registration`.
+  // Browser-scoped reserved chords: main claimed the keystroke from the guest page (the app renderer never sees it) and named what the browser should do.
   const {
     controller: chromeController,
     navigateToUrl,
@@ -553,17 +530,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         />
         <div
           hidden={showStartPage}
-          // Transparent is not hidden: without this a presented, live guest
-          // still exposes the loader's role and "Reconnecting" text to
-          // assistive tech. Hide it from AT whenever it is not the shown layer.
+          // Transparent is not hidden: without this a presented, live guest still exposes the loader's role and "Reconnecting" text to assistive tech.
           aria-hidden={!overlay.visible}
           className={cn(
             "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
             overlay.visible ? "opacity-100" : "opacity-0",
-            // Pointer events are gated on the guest not yet being interactive,
-            // NOT on the same flag that hides the overlay: a presented, live
-            // guest must never be click-blocked by a stale loader. A terminal
-            // surface keeps them so its Retry stays clickable.
+            // Pointer events are gated on the guest not yet being interactive, NOT on the same flag that hides the overlay: a presented, live guest must never be click-blocked by a stale loader.
             overlay.blocking ? "pointer-events-auto" : "pointer-events-none",
           )}
           role={overlay.surface === "loading" ? "status" : "alert"}
@@ -770,11 +742,8 @@ interface AttemptedNavigation {
 }
 
 /**
- * True when a settle's URL is the latched attempt's own page completing,
- * tolerating the trailing-slash / hash / http↔https differences a site
- * introduces between the submitted URL and where the tab commits.
- * `samePageKey` keys http(s) URLs on host+path+query (scheme-insensitive);
- * a non-http(s) latch (e.g. `about:blank`) falls back to exact equality.
+ * True when a settle's URL is the latched attempt's own page completing, tolerating the trailing-slash / hash / http↔https differences a site introduces between the submitted URL and where the tab commits.
+ * `samePageKey` keys http(s) URLs on host+path+query (scheme-insensitive); a non-http(s) latch (e.g.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- test-only export; the component's own callers use this helper directly, the export exists only for the latch unit tests.
 export function settleMatchesLatch(
@@ -787,33 +756,8 @@ export function settleMatchesLatch(
 }
 
 /**
- * Address submit (and back/forward) latches {url, echoSeen:false}.
- * navigate() emits a synchronous `loading` echo before loadURL, so the
- * first loading status after such an attempt is its echo (echoSeen=true),
- * and a later `ready` then clears the latch. A `ready` that arrives before
- * that echo is normally a stale settle from a previous attempt - ignore it
- * (newest submit wins; do not let it replace the latch or feed the toolbar
- * state).
- *
- * Exception: a back/forward history nav or a session reconnect re-attach
- * settles straight to `ready` with NO loading echo. Such a settle whose URL
- * matches the latch (`settleMatchesLatch`) is that very attempt completing,
- * not a stale one - accept it and clear the latch. Only an echo-less `ready`
- * whose URL does NOT match the latch is still dropped as stale.
- *
- * That URL-match also closes the "Residual B" resubmit-same-URL cases:
- * resubmitting B when the manager skips navigate (requestedUrl already B)
- * emits no echo, but the eventual `ready` for B now matches the latch and
- * clears it instead of sitting inert.
- *
- * A submit whose URL equals the active latch is a no-op (echoSeen stays) -
- * see `latchAttemptedUrl`.
- *
- * `dead` keeps the latch so a later Retry still upserts the submitted URL
- * rather than the pre-submit page. The dead branch currently has no Retry
- * button; if Retry is ever exposed there it must force reload (user-tile
- * `reloadTile`), not rely on upsert identity - manager already set
- * requestedUrl to the attempt before loadURL failed.
+ * Address submit (and back/forward) latches {url, echoSeen:false}. navigate() emits a synchronous `loading` echo before loadURL, so the first loading status after such an attempt is its echo (echoSeen=true), and a later `ready` then clears the latch.
+ * A `ready` that arrives before that echo is normally a stale settle from a previous attempt - ignore it (newest submit wins; do not let it replace the latch or feed the toolbar state).
  */
 function nextAttemptedNavigationAfterStatus(
   current: AttemptedNavigation | null,
@@ -828,9 +772,8 @@ function nextAttemptedNavigationAfterStatus(
     if (current.echoSeen) return current;
     return { url: current.url, echoSeen: true };
   }
-  // Echo-less `ready` for a different page is still a stale pre-echo settle;
-  // keep waiting. Echo seen, or a settle that matches the latch (echo-less
-  // history/reconnect settle), is this attempt completing - clear it.
+  // Echo-less `ready` for a different page is still a stale pre-echo settle; keep waiting.
+  // Echo seen, or a settle that matches the latch (echo-less history/reconnect settle), is this attempt completing - clear it.
   if (!current.echoSeen && !settleMatchesLatch(current.url, settledUrl)) {
     return current;
   }
@@ -851,9 +794,7 @@ function isStaleSettleBeforeEcho(
 }
 
 /**
- * The popup's own canvas tab while it still exists, else the epic - which
- * lets the resolver pick (or create) a live tab instead of writing a tile
- * into a tab that closed while `openTab` was in flight (R8).
+ * The popup's own canvas tab while it still exists, else the epic - which lets the resolver pick (or create) a live tab instead of writing a tile into a tab that closed while `openTab` was in flight (R8).
  */
 function currentPopupTarget(
   viewTabId: string,

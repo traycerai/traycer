@@ -23,15 +23,7 @@ export type SnapshotsClearLocalSnapshotsResponse = z.infer<
   typeof snapshotsClearLocalSnapshotsResponseSchema
 >;
 
-/**
- * Lazy before/after fetch for a single `file_change` block's snapshot diff. The
- * block stores only the content-addressed `beforeHash`/`afterHash`; the GUI
- * calls this on expand to read the decoded contents out of the on-disk
- * SnapshotStore and synthesize the unified patch. A `null` hash means that side
- * doesn't exist (create ⇒ no before, delete ⇒ no after). `reason` carries the
- * same `fileEditReason` codes as the block when content can't be served
- * (`blob_missing`/`too_large`/`binary`); `snapshot` when contents are present.
- */
+/** Lazy before/after fetch for a single `file_change` block's snapshot diff. */
 export const snapshotsReadSnapshotDiffRequestSchema = z.object({
   beforeHash: z.string().nullable(),
   afterHash: z.string().nullable(),

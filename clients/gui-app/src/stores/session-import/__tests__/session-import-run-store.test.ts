@@ -306,10 +306,8 @@ describe("useSessionImportRunStore", () => {
     it("a progress entry whose key is not in titles leaves lastTitle at its previous value", () => {
       const knownKey = sessionImportSelectionKey("claude", "s1");
       const titles = new Map([[knownKey, "Known Session"]]);
-      // The attach-mid-run case: the client has no submission of its own, so
-      // markStarting is never called and titles stays empty via applyStarted
-      // alone - simulate that by starting with titles present, then feeding a
-      // progress frame for a session absent from the map.
+      // The attach-mid-run case: the client has no submission of its own, so markStarting is never
+      // called and titles stays empty via applyStarted alone - simulate that by starting with titles
       useSessionImportRunStore.getState().markStarting(HOST, titles);
       useSessionImportRunStore
         .getState()
@@ -365,9 +363,8 @@ describe("useSessionImportRunStore", () => {
         .getState()
         .applyProgress(HOST, entryFor("claude", "s1", IMPORTED));
 
-      // A physical reconnect resubscribes, and the host answers `attached:
-      // true` for the run this window submitted - which is a reattach, not
-      // somebody else's import.
+      // A physical reconnect resubscribes, and the host answers `attached: true` for the run this window
+      // submitted - which is a reattach, not somebody else's import.
       useSessionImportRunStore
         .getState()
         .applyStarted(HOST, { runId: RUN_ID, total: 2, attached: true });

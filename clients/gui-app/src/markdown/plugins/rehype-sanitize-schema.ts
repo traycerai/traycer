@@ -9,13 +9,8 @@ import {
 import type { Schema } from "hast-util-sanitize";
 import { defaultSchema } from "rehype-sanitize";
 
-// Windows drive pseudo-schemes (`C:\…` → scheme `c`). Sanitize runs before
-// react-markdown's urlTransform, so a bare drive href is dropped here unless its
-// single-letter scheme is allow-listed. `hast-util-sanitize` matches the scheme
-// case-sensitively, so both `A`–`Z` (drives are usually upper-case) and `a`–`z`
-// are listed. A single ASCII letter can never collide with an exact-match
-// dangerous scheme (`javascript`, `data`, `vbscript`), so permitting these for
-// `href` is safe; do not broaden to multi-letter schemes.
+// Sanitize runs before urlTransform; allow single-letter drive schemes (A-Z/a-z).
+// Do not broaden to multi-letter schemes.
 const DRIVE_LETTER_SCHEMES = Array.from({ length: 26 }, (_, index) => [
   String.fromCharCode(65 + index),
   String.fromCharCode(97 + index),
@@ -39,10 +34,7 @@ const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
   [TRAYCER_MERMAID_TAG]: ["data-code"],
 };
 
-/**
- * Merge product attribute allowlists onto a base schema without dropping
- * caller-supplied attributes for the same tag (spread overwrite would).
- */
+/** Merge product attribute allowlists onto a base schema without dropping caller-supplied attributes for the same tag (spread overwrite would). */
 function mergeTraycerTagAttributes(
   baseAttributes: Schema["attributes"],
 ): Schema["attributes"] {
@@ -63,11 +55,7 @@ function mergeTraycerTagAttributes(
   return merged;
 }
 
-/**
- * Extend Tailmark's (or any base) sanitize schema with Traycer product tags and
- * file-link protocols. Used as `StreamingMarkdown`'s `sanitizeSchema` so the
- * base `streamdown:` incomplete-link protocol is preserved.
- */
+/** Extend the base sanitize schema with Traycer tags and file-link protocols. Preserve streamdown: incomplete-link. */
 export function extendTraycerSanitizeSchema(schema: Schema): Schema {
   return {
     ...schema,
@@ -102,9 +90,6 @@ export function extendAssistantImageSanitizeSchema(schema: Schema): Schema {
   };
 }
 
-/**
- * Standalone product schema (tests / docs). Prefer
- * {@link extendTraycerSanitizeSchema} when composing with Tailmark's base.
- */
+/** Standalone product schema (tests / docs). Prefer {@link extendTraycerSanitizeSchema} when composing with Tailmark's base. */
 export const TRAYCER_SANITIZE_SCHEMA: Schema =
   extendTraycerSanitizeSchema(defaultSchema);

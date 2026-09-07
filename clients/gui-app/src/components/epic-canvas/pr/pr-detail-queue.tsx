@@ -41,11 +41,7 @@ const KIND_SOURCE_LABEL = {
 
 /**
  * The Overview tab's hero: what needs a decision, each row routable to an agent.
- *
- * The calm state is a DESIGNED state, not an empty one. An attention queue that
- * renders as a blank box when a PR is green would make the most common healthy
- * outcome feel like a failure to load, so zero items produces an affirmative
- * "Nothing blocking" with the evidence that backs it.
+ * The calm state is a DESIGNED state, not an empty one.
  */
 export function PrDetailQueue(props: {
   readonly queue: PrAttentionQueue;
@@ -107,16 +103,7 @@ export function PrDetailQueue(props: {
   );
 }
 
-/**
- * The caveat on the queue's own completeness, as an icon rather than a line.
- *
- * It used to be a full-width warning-toned row at the foot of the card, which
- * made the least urgent thing on the page the brightest: the eye landed on a
- * caveat about the derivation before it reached the thing that actually needs
- * a decision. The fact still has to be reachable - a queue derived from a
- * capped window can be wrong by omission - but it belongs where a reader goes
- * looking for provenance, not in their way.
- */
+/** The caveat on the queue's own completeness, as an icon rather than a line. */
 const QUEUE_WINDOW_NOTE =
   "Derived from the last 20 activity items and first 50 checks — older feedback may exist on GitHub.";
 
@@ -141,10 +128,8 @@ function PrQueueWindowNote(): ReactNode {
 }
 
 /**
- * The row's one identity slot, in order of how much it actually identifies:
- * the person or bot behind it, then the app that reported it, then the kind's
- * own mark as a last resort. A check has no actor but is very much
- * attributable, and the generic glyph threw that away.
+ * The row's one identity slot, in order of how much it actually identifies: the person or bot behind it, then the app that reported it, then the kind's own mark as a last resort.
+ * A check has no actor but is very much attributable, and the generic glyph threw that away.
  */
 function PrQueueRowMark(props: {
   readonly item: PrAttentionItem;
@@ -202,10 +187,7 @@ function PrQueueRow(props: {
       data-testid="pr-detail-queue-row"
       data-kind={item.kind}
     >
-      {/* One glyph slot, whatever the source: an avatar when a person or bot
-          is behind it, the kind's own mark otherwise. Keeping the slot a fixed
-          size is what lets several rows read as a column rather than a list of
-          differently-indented paragraphs. */}
+      {/* Keeping the slot a fixed size is what lets several rows read as a column rather than a list of differently-indented paragraphs. */}
       <span className="inline-flex size-6 shrink-0 items-center justify-center">
         <PrQueueRowMark item={item} tone={tone} Glyph={Glyph} />
       </span>
@@ -213,9 +195,7 @@ function PrQueueRow(props: {
       <div className="min-w-0 flex-1">
         {/* The HEADLINE is what needs doing, not who said it. A check leads
             with its name, a review with its finding. */}
-        {/* The name IS the link, as on the Checks tab: the row's subject is
-            the thing a reader wants to open, so it should not need a separate
-            target beside it. No url means plain text, never a dead control. */}
+        {/* No url means plain text, never a dead control. */}
         <TooltipWrapper
           label={text.headline}
           side="top"
@@ -269,10 +249,8 @@ function PrQueueRow(props: {
             ? "Choose a chat to send to first"
             : `Send \u201c${text.headline}\u201d to ${props.target.title}`
         }
-        // Deliberately NOT hover-revealed. Routing a finding into the agent
-        // that wrote the branch is the one thing this view does that GitHub
-        // cannot; hiding it until the pointer lands would make the whole
-        // differentiator invisible to anyone who did not think to look.
+        // Deliberately NOT hover-revealed.
+        // Routing a finding into the agent that wrote the branch is the one thing this view does that GitHub cannot; hiding it until the pointer lands would make the whole differentiator invisible to anyone who did not think to look.
         className={cn(
           "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-ui-xs",
           "border-border/60 text-muted-foreground transition-colors",

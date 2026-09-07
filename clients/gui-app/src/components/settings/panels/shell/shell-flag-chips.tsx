@@ -1,10 +1,7 @@
 import { useCallback, useState } from "react";
 import { Input } from "@/components/ui/input";
 
-/**
- * Renders shell flags as removable chips with an inline "+ flag" affordance.
- * Mutations are committed by the parent (auto-save) on add/remove.
- */
+/** Renders shell flags as removable chips with an inline "+ flag" affordance. */
 export function ShellFlagChips(props: {
   readonly args: readonly string[];
   readonly disabled: boolean;

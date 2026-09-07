@@ -13,49 +13,12 @@ import {
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
-// The shared half of the fold, from protocol. It used to be a cross-repo
-// relative path into `traycer-host/`, which resolves only in the internal
-// monorepo - so this corpus was silently unrunnable in a standalone OSS clone,
-// i.e. exactly where it needs to run. Now that the fold lives in
-// `@traycer/protocol`, this suite is an ordinary in-package import and runs
-// anywhere the package does.
+// The shared half of the fold, from protocol.
 import {
   contentBlocksById,
   foldPinnedTodo,
 } from "@traycer/protocol/persistence/chat-transcript/pinned-todo-fold";
 
-/**
- * # Pinned-todo fold: renderer/host equivalence
- *
- * `foldPinnedTodo` lives in `@traycer/protocol`
- * (`persistence/chat-transcript/pinned-todo-fold.ts`), so this suite imports it
- * exactly as `fork-boundary-equivalence.test.tsx` imports
- * `latestForkableAssistantMessageId` - no repo boundary is crossed and no
- * sibling checkout is required. The prose here used to describe the pre-move
- * state (a hand-ported host mirror, reachable only from the internal monorepo)
- * and contradicted the import above it.
- *
- * The debt that REMAINS is narrower, and is why this equivalence suite still
- * earns its keep: the renderer and the host each keep their own fold, and only
- * the shared half moved. Until the segmentization extraction lands, a change to
- * the renderer's fold still has to be reflected on the other side - which is
- * what these cases catch.
- *
- * Each case below runs one fixture through BOTH the renderer's REAL projection
- * (`useRenderedMessages` -> `planAssistantTurnRows` -> steer-row splitting ->
- * `buildPinnedTodoRenderState`) and the host's REAL `foldPinnedTodo` over
- * `projectTranscriptRows`'s output, and asserts they agree - the same shape as
- * `fork-boundary-equivalence.test.tsx`, just crossing a repo boundary that one
- * function doesn't have to.
- *
- * The steer-row case is the one worth pinning here specifically: it settles
- * (with real code, not by inspection) that a steer block splits into its own
- * `role: "user"` row rather than nesting inside the assistant row's segments -
- * see `renderSteerBlockUserMessage` / `renderAssistantTurnRows` in
- * `rendered-messages.ts`. The host's `foldPinnedTodo` relies on exactly that:
- * it treats `source.kind === "steer"` as arming the reset rule the same way a
- * top-level user row does.
- */
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -211,15 +174,10 @@ function hostPinnedTodoTexts(input: RenderedMessagesInput): string[] {
     events: input.events,
     activeTurnId: input.activeTurn?.turnId ?? null,
     // `ownerId`, matching what the renderer builds setup-card row ids from.
-    // No fixture here produces one, so the two are interchangeable today -
-    // which is exactly why they should agree now, rather than the first
-    // `setup.*` fixture failing for a reason unrelated to the pinned-todo fold.
     chatId: input.ownerId,
   });
-  // `.todo` is the SELECTED todo; the fold's other half (`taskItems`, the task
-  // accumulator) is what the windowed client resumes from and is compared by
-  // `chat-pinned-todos.test.ts` rather than here - this suite is about the two
-  // implementations agreeing on the SELECTION.
+  // `.todo` is the SELECTED todo; the fold's other half (`taskItems`, the task accumulator) is what
+  // the windowed client resumes from and is compared by `chat-pinned-todos.test.ts` rather than here
   const folded = foldPinnedTodo(rows, contentBlocksById(input.messages));
   return (folded.todo?.items ?? []).map((item) => item.text);
 }
@@ -298,12 +256,8 @@ describe("pinned-todo fold: renderer/host equivalence (real code, both sides)", 
         }),
       ],
     });
-    // A steer block splits the turn into its own `role: "user"` row on the
-    // renderer side (`renderAssistantTurnRows` / `renderSteerBlockUserMessage`)
-    // and into its own `kind: "steer"` row on the host side
-    // (`row-projection.ts`) - if either treated it as nested inside the
-    // assistant row instead, the reset would never arm and this would read
-    // ["Old task", "New task"].
+    // A steer block splits the turn into its own `role: "user"` row on the renderer side
+    // (`renderAssistantTurnRows` / `renderSteerBlockUserMessage`) and into its own `kind: "steer"` row
     expect(rendererTexts).toEqual(["New task"]);
     expect(hostTexts).toEqual(rendererTexts);
   });

@@ -1,21 +1,5 @@
 /**
- * External-resolution regression: a same-tab commit must not enter the tab
- * command coordinator, and a correction must aim at the layout rather than at
- * the literal landing.
- *
- * The defect these cover is a two-phase chain. First the URL drifts silently:
- * `resolveExternalEpic` re-activated the routed tab for EVERY un-enveloped
- * commit, including the search-only replaces the epic canvas issues to record
- * tile focus, and when that activation failed - a re-entrant commit observed
- * while a coordinator transaction is open throws - the controller replaced a
- * live epic URL with `/`. Nothing on screen moved, because the strip renders
- * from the layout store. Then the drift became visible: the Settings overlay
- * pushes onto whatever the URL currently is, so closing it popped back onto
- * that stale `/` and the stepped-landing resolver minted a fresh Home draft -
- * a phantom "Start Page" tab in place of the epic the user was on.
- *
- * Drives the real controller, coordinator, and stores; fakes only the router
- * commit boundary.
+ * External-resolution regression: a same-tab commit must not enter the tab command coordinator, and a correction must aim at the layout rather than at the literal landing.
  */
 import type {
   HistoryState,
@@ -262,10 +246,8 @@ describe("external epic resolution: same-tab commits skip the coordinator", () =
     resetStores();
   });
 
-  // Trigger: `use-epic-route-synchronization` replaces its own route to record
-  // tile focus, observed while a tab command transaction is open. This is the
-  // REAL re-entrancy, driven from the coordinator's own ledger notification -
-  // no stubbing - so the throw is the production one.
+  // Trigger: `use-epic-route-synchronization` replaces its own route to record tile focus, observed while a tab command transaction is open.
+  // This is the REAL re-entrancy, driven from the coordinator's own ledger notification - no stubbing - so the throw is the production one.
   it("a re-entrant, search-only commit on the active tab neither activates nor corrects", () => {
     const a = openEpic("epic-a", "A");
     const b = openEpic("epic-b", "B");
@@ -370,10 +352,8 @@ describe("landing correction aims at the layout, not the literal landing", () =>
     resetStores();
   });
 
-  // Trigger: an external commit naming a KNOWN tab that is not the active one,
-  // whose activation fails. The location is unresolvable, but the strip is
-  // still showing A - correcting to `/` would point the URL at nothing on
-  // screen.
+  // Trigger: an external commit naming a KNOWN tab that is not the active one, whose activation fails.
+  // The location is unresolvable, but the strip is still showing A - correcting to `/` would point the URL at nothing on screen.
   it("corrects to the layout's backing tab when a known non-active tab fails to activate", () => {
     const a = openEpic("epic-a", "A");
     const b = openEpic("epic-b", "B");
@@ -412,11 +392,8 @@ describe("landing correction aims at the layout, not the literal landing", () =>
     });
   });
 
-  // The correction is aimed at a ref, and the intent for that ref must be
-  // built from the ref - not from the location that just failed. A Settings
-  // tab restored from a snapshot has no entry in the controller's route cache
-  // yet, so the fallback is the only thing standing between the user and a
-  // silently reset section.
+  // The correction is aimed at a ref, and the intent for that ref must be built from the ref - not from the location that just failed.
+  // A Settings tab restored from a snapshot has no entry in the controller's route cache yet, so the fallback is the only thing standing between the user and a silently reset section.
   it("corrects to the Settings tab's remembered sub-route, not the failing path's section", () => {
     const settingsRef: TabRef = { kind: "settings", id: "settings" };
     useTabsStore.setState({
@@ -532,9 +509,8 @@ describe("landing correction aims at the layout, not the literal landing", () =>
 });
 
 /**
- * The chain, end to end, through a router that actually applies what the
- * controller asks for. Without a committing router the drift cannot happen,
- * and without the drift the phantom mint cannot be reproduced.
+ * The chain, end to end, through a router that actually applies what the controller asks for.
+ * Without a committing router the drift cannot happen, and without the drift the phantom mint cannot be reproduced.
  */
 interface AppliedHistory {
   push: (pathname: string, search: Record<string, unknown> | undefined) => void;
@@ -705,9 +681,8 @@ describe("closing the Settings overlay over a populated strip", () => {
     expect(history.currentPathname()).toBe(a.pathname);
   });
 
-  // Negative exemplar: stepping back onto a REAL landing entry is a genuine
-  // request for Home, and Home on this shell is a draft. That mint must
-  // survive the fix.
+  // Negative exemplar: stepping back onto a REAL landing entry is a genuine request for Home, and Home on this shell is a draft.
+  // That mint must survive the fix.
   it("still mints Home when the user genuinely steps back onto the landing", () => {
     const a = openEpic("epic-a", "A");
     seedCommittedLayout({

@@ -9,13 +9,6 @@ import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 
-/**
- * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
- * exposes a bridge at module load, so each test dynamically imports the
- * preload after resetting the fake `electron` module state - otherwise
- * `contextBridge.exposeInMainWorld` and the eagerly-registered `ipcRenderer`
- * listeners would leak across tests.
- */
 
 type IpcHandler = (event: unknown, payload: unknown) => void;
 
@@ -1121,25 +1114,8 @@ describe("preload new-capability wiring", () => {
 });
 
 /**
- * Regression guard for the delivery half of int #48.
- *
- * `localHostChange` is an edge-triggered push onto a preload-module cache that
- * starts at `null`, and `null` is not "unknown" downstream - it is the
- * renderer's only way of saying "this machine has no host", which the directory
- * turns into an explicitly unavailable row and which turns every chat owned by
- * that host into a read-only published copy.
- *
- * So every delivery hazard on that channel lies rather than degrades, and lies
- * in the direction that costs the user their session: a window registering
- * after the install-time fan-out, a ⌘R that re-executes this module and resets
- * the cache, a send dropped mid-navigation. None of them self-correct on a
- * steady-state host, because the correction would have to be a `change` event
- * and nothing is changing. On 2026-08-11 the renderer sat snapshot-less while
- * its own helper process held a dozen live TCP connections to the very host it
- * was rendering as gone.
- *
- * The fix is that a subscriber ASKS. These tests pin that it asks, that the
- * answer reaches handlers, and that it never overwrites a push.
+ * So every delivery hazard on that channel lies rather than degrades, and lies in the direction that costs the user their session: a window registering after the install-time.
+ * These tests pin that it asks, that the answer reaches handlers, and that it never overwrites a push.
  */
 describe("preload local-host snapshot convergence", () => {
   beforeEach(() => {
@@ -1201,10 +1177,7 @@ describe("preload local-host snapshot convergence", () => {
   });
 
   it("retries the pull for a later subscriber after a rejected invoke", async () => {
-    // The repair must not consume its once-per-preload slot on failure: a
-    // boot-time rejection (main not ready yet) with the flag left set would
-    // freeze the cache at `null` - "this machine has no host" - until a
-    // `change` event a steady-state host never sends.
+    // The repair must not consume its once-per-preload slot on failure: a boot-time rejection (main not ready yet) with the flag left set would freeze the cache at `null`.
     const snapshot: PreloadLocalHostSnapshot = {
       hostId: "host-a",
       availability: "available",

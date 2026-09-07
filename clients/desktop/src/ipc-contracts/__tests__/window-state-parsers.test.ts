@@ -47,7 +47,7 @@ describe("parseLandingDraft", () => {
   it("rejects a legacy prompt-only entry (no `content`)", () => {
     // T6 dropped the `prompt` bridge: a draft that carries only the old
     // text `prompt` has no `content` object and must fail the new parser.
-    // No back-compat — this is a dev feature, so the stale entry is dropped.
+    // No back-compat  -  this is a dev feature, so the stale entry is dropped.
     expect(
       parseLandingDraft({
         id: "draft-a",

@@ -8,21 +8,7 @@ import {
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { roundPerfMs } from "@/components/settings/panels/worktrees-settings-perf";
 
-/**
- * Wraps the worktree list in a React `Profiler` so the render pass is timed by
- * React itself (no impure `performance.now()` in render). Emits
- * `worktree.list_render` on the first commit and whenever the row/visible-row
- * counts change, so keystrokes that leave the set unchanged don't flood.
- *
- * NOTE: `Profiler.onRender` only fires under a profiling-enabled React build
- * (`react-dom/profiling`); the desktop app ships the standard production
- * bundle, so `worktree.list_render` is effectively dev/profiling-build-only -
- * unlike the `localStorage["traycer:perf:telemetry"]` opt-in that gates other
- * perf events, there is no runtime flag that makes this one fire in a shipped
- * build. Aliasing the renderer to the profiling build would enable it, but
- * that carries render overhead for every user, not just this one signal - not
- * a decision to make for a single instrumentation point.
- */
+/** NOTE: `Profiler.onRender` only fires under a profiling-enabled React build */
 export function WorktreeListRenderProfiler(props: {
   readonly rowCount: number;
   readonly visibleRowCount: number;

@@ -214,10 +214,7 @@ describe("projectProfileUsage", () => {
   });
 
   it("projects Hugging Face included credits as a Credits meter with the projected severity", () => {
-    // Regression guard: `classifyProviderRateLimits` answers "unknown" for a
-    // credit provider (it has no windows by design), so taking severity from
-    // there instead of from the projected window discarded the bar entirely and
-    // reported the profile as unavailable.
+    // Regression guard: `classifyProviderRateLimits` answers "unknown" for a credit provider (it has no windows by design), so taking severity from there instead of from the projected window discarded the bar entirely and reported the profile as unavailable.
     const projection = project(
       "ok",
       NOW,
@@ -309,9 +306,7 @@ describe("projectProfileUsage", () => {
   });
 
   it("projects Grok's billing-period window via the shared window path", () => {
-    // Grok rides `rateLimits.period` through the shared window projection, not
-    // the OpenRouter-style credit path - a live period yields a real compact
-    // bar and a non-unknown severity.
+    // Grok rides `rateLimits.period` through the shared window projection, not the OpenRouter-style credit path - a live period yields a real compact bar and a non-unknown severity.
     const projection = project(
       "ok",
       NOW,
@@ -337,11 +332,8 @@ describe("projectProfileUsage", () => {
   });
 
   it("projects a period-less Grok snapshot as unmeasured, not unavailable", () => {
-    // Zero-usage SuperGrok returns tier + period bounds only - no synthesized
-    // period window - so there is nothing to meter. That is available-but-
-    // unmeasured (severity `unknown`, consistent with protocol semantics), not
-    // the alarming unavailable/`missing_windows` state that reads as a fetch or
-    // account failure for a perfectly healthy account.
+    // Zero-usage SuperGrok returns tier + period bounds only - no synthesized period window - so there is nothing to meter.
+    // That is available-but- unmeasured (severity `unknown`, consistent with protocol semantics), not the alarming unavailable/`missing_windows` state that reads as a fetch or account failure for a perfectly healthy account.
     expect(project("ok", NOW, envelope(grok(null), NOW), false)).toEqual({
       kind: "not_checked",
       severity: "unknown",
@@ -352,12 +344,7 @@ describe("projectProfileUsage", () => {
   });
 
   it("projects a bucket-less Cursor snapshot as unmeasured, not unavailable", () => {
-    // Cursor synthesizes its bucket windows only when the payload reports the
-    // Spending-page percentages, and proto3 JSON omits zero-valued fields - so
-    // a reachable account can legitimately arrive with both windows null.
-    // Without the unmeasured arm it renders as unavailable/`missing_windows`,
-    // reading as a fetch or account failure purely because Cursor reported
-    // nothing to meter.
+    // Cursor synthesizes its bucket windows only when the payload reports the Spending-page percentages, and proto3 JSON omits zero-valued fields - so a reachable account can legitimately arrive with both windows null.
     expect(
       project("ok", NOW, envelope(cursor(null, null), NOW), false),
     ).toEqual({
@@ -370,10 +357,7 @@ describe("projectProfileUsage", () => {
   });
 
   it("meters both Cursor buckets and headlines the most consumed one", () => {
-    // Guards the unmeasured arm from over-reaching, and pins the live-account
-    // regression: the compact bar must be a Spending-page bucket ("Other
-    // Models" 38%), never the blended included-usage pool (78%) that appears
-    // nowhere on Cursor's dashboard.
+    // Guards the unmeasured arm from over-reaching, and pins the live-account regression: the compact bar must be a Spending-page bucket ("Other Models" 38%), never the blended included-usage pool (78%) that appears nowhere on Cursor's dashboard.
     const projection = project(
       "ok",
       NOW,

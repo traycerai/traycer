@@ -1,71 +1,6 @@
 /**
- * Owed #4: the body lifetime charges the SAME bytes whether the core ports are
- * called in-process or reached across the bridge.
- *
- * **What the two arms are.** Both run the real composition — the real replica
- * runtime, the real tier, the real `buildEpicRuntimeCorePorts`. The single
- * variable is how a body call reaches those ports:
- *
- * - **Arm A** calls `ports.bodies.*` directly, on a second set of ports built
- *   over the harness's own runtime with `epicRuntimeCorePortSourceOf` — the
- *   mapping production passes, not a copy. A hand-written mapping here would be
- *   a second implementation, so a miswired entry would sit on one side of the
- *   comparison only and this pin would read green while comparing production
- *   against its own restatement.
- * - **Arm B** posts `body/*` frames at `workerPort`, which is the bridge:
- *   dispatch, `structuredClone`, the worker host, the core, the same ports.
- *
- * Each arm opens its own store, so each mints its own runtime token and
- * therefore its own `epicReplicaBookKey`. That is required, not incidental:
- * one book key shared by two arms would let Arm A's charges satisfy Arm B's
- * assertions.
- *
- * **On the LANE arm, deliberately.** `@1` bodies are forward-only and carry
- * `docGuid: null` by design, so there is no cold state to settle and the
- * demote half of the lifetime is unreachable there — a `@1` version of this
- * script would compare two arms that both skipped the interesting call. The
- * lane arm has real cold state, so `materialize -> edit -> settle -> release`
- * is a lifetime rather than a subset of one.
- *
- * **Why the transfer list cannot be the difference.** Arm B's bytes cross a
- * `structuredClone` pipe that genuinely detaches what it transfers; Arm A hands
- * the ports a buffer the tier can still see. The books cannot observe that,
- * and the reason is a property with its own pin rather than an argument: every
- * charge is a byte COUNT taken from what the tier stored
- * (`epic-runtime-core-ports.test.ts`'s "reports settledBytes from what the TIER
- * stored, not from the input"), never from the caller's buffer. The one read
- * that WOULD differ is `update.byteLength` on the sender's copy after the call
- * — zero on Arm B, intact on Arm A — and no accounting path performs it. If a
- * future change makes the books read the input, that pin goes red first and
- * this one second.
- *
- * ## What the ablations proved, and the one they did NOT
- *
- * | Ablation | Result |
- * | --- | --- |
- * | `epic-runtime-core.ts` `demoteBody` drops the settle for a non-empty update | **RED**, both tests — `hotSettled` diverges at the `settled` checkpoint and `settlement.accepted` diverges with it |
- * | `epic-runtime-worker-host.ts` `body/materialize` materializes twice | green, and correctly so: `holdResidentLease` drops the second lease, so a repeated materialize charges once by design |
- * | `main-accounting-bridge.ts` `hot-doc` settles twice | **green here — and COVERED elsewhere**, see below |
- *
- * That last row is the honest boundary, and it is a boundary rather than a hole.
- * BOTH arms compose their runtime with `host.accounting`, so the worker→main
- * accounting seam is common to them and a defect inside it moves both totals by
- * the same amount. This pin therefore covers the CALL path (dispatch,
- * clone/transfer, the host handlers, the core's gate and its idempotence cache)
- * and NOT the seam itself.
- *
- * The seam has its own owner, and the same ablation was run against it: a
- * doubled `hot-doc` settle turns **`accounting-seam.test.ts`'s "routes each of
- * the six reporting members to its own book call"** RED (8 recorded book calls
- * against the expected 7). So the double-count property IS pinned — at the layer
- * that owns it, which is where it belongs. Making it observable from here would
- * mean building Arm A on a directly-constructed
- * `createProcessBackedAccountingPort` rather than on the harness, forking
- * `open-store-for-test.ts` against its own "one helper, not a pattern to copy"
- * rule to re-pin a property that is already pinned.
- *
- * Recorded rather than left implicit, so nobody writes either ablation a second
- * time to rediscover this.
+ * Body lifetime charges the same bytes in-process and across the bridge.
+ * Separate stores so one book key cannot satisfy both arms.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -178,18 +113,11 @@ function createLaneRig(epicId: string): LaneRig {
     },
     async seed(): Promise<void> {
       if (bodyCallbacks === null) {
-        // Reached only if the script seeds before anything subscribed. On this
-        // arm the subscribe IS the materialize, so that ordering would seed a
-        // lane nobody opened - a silent no-op rather than an error, which is
-        // why it is checked.
+        // Reached only if the script seeds before anything subscribed.
         throw new Error("no body lane was opened - subscribe before seeding");
       }
       const donor = new Y.Doc();
-      // Pinned for the reason `runScript`'s `edited` is - see the comment
-      // there. The two are the COMPLETE set of docs in this file whose bytes
-      // reach the books, and a pin on one of them is worth nothing: the first
-      // fix pinned only `edited` and the suite still failed one run in three,
-      // one byte apart, on this doc's id instead.
+      // Pinned for the reason `runScript`'s `edited` is - see the comment there.
       donor.clientID = 2;
       donor
         .getXmlFragment(artifactBodyFragmentName(ARTIFACT))
@@ -206,24 +134,13 @@ function createLaneRig(epicId: string): LaneRig {
         throw new Error(`expected a doc frame, got ${parsed.kind}`);
       }
       bodyCallbacks.onDoc(parsed, Y.encodeStateAsUpdate(donor));
-      // Two drains, for the reason `lane-body-awaiting-seed.test.ts` states:
-      // the frame's projection turns the room `ready`, and the retry that
-      // projection triggers is issued DURING that delivery, so its answer is
-      // queued behind the drain that caused it.
       await handle.flush();
       await handle.flush();
     },
   };
 }
 
-/**
- * The three plane figures plus residency, read at one instant.
- *
- * `holderCount` rides along with the byte figures deliberately: two arms can
- * agree on bytes while disagreeing on how many holders those bytes are spread
- * across, and a leaked holder is exactly the shape a bridged release would fail
- * at. Bytes alone would not see it.
- */
+/** The three plane figures plus residency, read at one instant. */
 interface Checkpoint {
   readonly label: string;
   readonly hotSettled: number;
@@ -238,10 +155,7 @@ interface Checkpoint {
 function takeCheckpoint(label: string): Checkpoint {
   const memory = ensureProcessMemoryRuntime(createRendererRuntimeEnvironment());
   const snapshot = memory.accountant.snapshot();
-  // The CONSTANTS, never string literals. `BudgetPlaneId` is wide enough that
-  // `plane.planeId === "hotDocs"` - the object's KEY rather than its value -
-  // compiles clean and matches nothing, which is how the first version of this
-  // helper was written. The guard below is what caught it.
+  // The CONSTANTS, never string literals.
   const hot = snapshot.planes.find(
     (plane) => plane.planeId === BUDGET_PLANE_IDS.hotDocs,
   );
@@ -249,9 +163,7 @@ function takeCheckpoint(label: string): Checkpoint {
     (plane) => plane.planeId === BUDGET_PLANE_IDS.epicReplicas,
   );
   if (hot === undefined || replicas === undefined) {
-    // A throw rather than a zero default. A plane missing from the snapshot is
-    // "this arm never registered its books", which a zero would report as "this
-    // arm charged nothing" - and the two arms would then agree on being broken.
+    // A throw rather than a zero default.
     throw new Error(`[${label}] expected both planes in the snapshot`);
   }
   return {
@@ -266,7 +178,6 @@ function takeCheckpoint(label: string): Checkpoint {
   };
 }
 
-/** One arm's normalised materialize answer. */
 interface MaterializeAnswer {
   readonly docKey: string | null;
   readonly update: Uint8Array | null;
@@ -305,9 +216,6 @@ function directCalls(ports: EpicRuntimeCorePorts): ArmCalls {
     materialize: async (artifactId) => {
       const answer = await ports.bodies.materialize(artifactId);
       // The ports answer `null` for not-held; the wire answers `docKey: null`.
-      // Normalised HERE rather than asserted apart, so the comparison below is
-      // between two identical shapes and a difference is a difference in fact,
-      // not in spelling.
       if (answer === null) {
         return { docKey: null, update: null, docGuid: null };
       }
@@ -352,15 +260,7 @@ interface ArmRun {
   readonly releaseAfterSettle: ReleaseAnswer;
 }
 
-/**
- * The one script, run by both arms.
- *
- * `release` AFTER `settle` on purpose. The settle is the terminal move for a
- * body with bytes, so the release that follows it must be refused - and the
- * REFUSAL is part of what the two arms have to agree on. An arm that answered
- * `released: true` here would be letting go of a hold twice, which is the
- * double-release no byte total shows.
- */
+/** The one script, run by both arms. `release` AFTER `settle` on purpose. */
 async function runScript(rig: LaneRig, calls: ArmCalls): Promise<ArmRun> {
   const checkpoints: Checkpoint[] = [];
   const opened = rig.handle;
@@ -369,10 +269,8 @@ async function runScript(rig: LaneRig, calls: ArmCalls): Promise<ArmRun> {
   await opened.flush();
   checkpoints.push(takeCheckpoint("lanes-installed"));
 
-  // On this arm the materialize IS the subscribe, so the first one legitimately
-  // finds no bytes and answers AWAITING. Asserted rather than skipped: an arm
-  // that answered NOT-HELD here would have closed the subscription that is
-  // about to deliver, which is the cold-open defect this ticket fixed.
+  // On this arm the materialize IS the subscribe, so the first one legitimately finds no bytes and
+  // answers AWAITING.
   const awaiting = await calls.materialize(ARTIFACT);
   await opened.flush();
   checkpoints.push(takeCheckpoint("awaiting"));
@@ -391,19 +289,10 @@ async function runScript(rig: LaneRig, calls: ArmCalls): Promise<ArmRun> {
     throw new Error("expected the seeded body to materialize with bytes");
   }
 
-  // The edit, made against a doc built from what the arm was handed - what an
-  // editor does with the materialize answer. It is what makes the settle carry
-  // MORE bytes than the materialize did: settling the same bytes back would not
-  // distinguish an arm that charged the growth from one that charged nothing.
+  // The edit, made against a doc built from what the arm was handed - what an editor does with the
+  // materialize answer.
   const edited = new Y.Doc({ guid: docGuid });
-  // PINNED, and this is a correctness fix to the measurement rather than
-  // tidiness. A `Y.Doc` mints a RANDOM `clientID`, every struct the edit below
-  // creates is tagged with it, and its varint encoding is one to five bytes -
-  // so two arms running the identical script encode updates of DIFFERENT
-  // lengths, and the byte totals differ by the clientID delta. The first run of
-  // this pin failed exactly that way (68 vs 71 provisional bytes) and the
-  // difference was the random id, not the bridge. Left unpinned the pin would
-  // be a coin flip that occasionally accuses the seam.
+  // PINNED, and this is a correctness fix to the measurement rather than tidiness.
   edited.clientID = 1;
   Y.applyUpdate(edited, grantedUpdate);
   edited.transact(() => {
@@ -447,14 +336,7 @@ describe("owed #4 - the body lifetime charges identically on both arms", () => {
     resetProcessMemoryRuntimeForTests();
   });
 
-  /**
-   * Runs Arm A then Arm B, each from a FRESH set of process books.
-   *
-   * Absolute totals rather than deltas, which is only comparable from a clean
-   * accountant - and the reset between the arms is what makes it clean. Arm A
-   * is disposed before Arm B opens so its books are gone rather than merely
-   * ignored: a still-attached book would answer the reconcile Arm B triggers.
-   */
+  /** Runs Arm A then Arm B, each from a FRESH set of process books. */
   async function runBothArms(): Promise<{ armA: ArmRun; armB: ArmRun }> {
     resetProcessMemoryRuntimeForTests();
     const rigA = createLaneRig("epic-arm-a");
@@ -478,10 +360,7 @@ describe("owed #4 - the body lifetime charges identically on both arms", () => {
   it("produces the same plane totals and residency at every checkpoint", async () => {
     const { armA, armB } = await runBothArms();
 
-    // Checkpoint by checkpoint rather than only at the end. Two arms that agree
-    // on the final total while disagreeing in the middle have a charge that was
-    // made and unmade on one side, which is the shape a double-charge takes
-    // when its release is doubled too.
+    // Checkpoint by checkpoint rather than only at the end.
     expect(armB.checkpoints).toEqual(armA.checkpoints);
     expect(armA.checkpoints.map((point) => point.label)).toEqual([
       "lanes-installed",
@@ -492,12 +371,8 @@ describe("owed #4 - the body lifetime charges identically on both arms", () => {
       "settled",
       "released",
     ]);
-    // The comparison above is vacuous if the script charged nothing anywhere,
-    // so the run has to be shown to have MOVED the books at all.
-    // By LABEL, not by index. `checkpoints[3]` is typed non-optional here, so
-    // its `undefined` guard is dead code the linter rejects - and an index
-    // would silently name a different point the moment a checkpoint is added
-    // ahead of it, which is the failure the guard was reaching for anyway.
+    // The comparison above is vacuous if the script charged nothing anywhere, so the run has to be
+    // shown to have MOVED the books at all. By LABEL, not by index.
     const materialized = armA.checkpoints.find(
       (point) => point.label === "materialized",
     );

@@ -27,16 +27,8 @@ export interface SettingsModalContentProps {
   readonly section: SettingsSectionId | null;
 }
 
-/**
- * Renders the settings UI inside the modal: sidebar (modal mode) +
- * the panel for the active section. Falls back to the General panel
- * when `section` is null (e.g., on the very first open).
- *
- * The section is REMEMBERED across launches, so it can also name a section
- * this build does not offer - and the rail beside it would then have no row
- * for the panel on screen. That falls back to General too, keyed off the
- * offered list rather than off the reason a section is missing from it.
- */
+/** That falls back to General too, keyed off the offered list rather than off the reason a section is missing
+ * from it. */
 export function SettingsModalContent(
   props: SettingsModalContentProps,
 ): ReactNode {
@@ -64,11 +56,8 @@ export function SettingsModalContent(
   );
 }
 
-/**
- * The panel each section renders. A `Record` keyed by the union rather than a
- * `switch`: `satisfies` keeps it exhaustive (a new section id is a compile
- * error here) without a `case` per entry.
- */
+/** A `Record` keyed by the union rather than a `switch`: `satisfies` keeps it exhaustive (a new section id is a
+ * compile error here) without a `case` per entry. */
 const SETTINGS_PANELS = {
   general: GeneralSettingsPanel,
   appearance: AppearanceSettingsPanel,

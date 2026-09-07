@@ -1,11 +1,6 @@
 /**
- * Consistent formatting for the live resource metrics carried by
- * `resources.subscribe`. Shared by every owner chip and the epic aggregate so a
- * CPU / memory / process reading reads the same everywhere.
- *
- * `cpuPercent` is host-local instantaneous CPU over the sampling interval and
- * may exceed 100 on a multi-core host - it is rendered verbatim, never clamped.
- * `rssBytes` is summed resident set across the owner's process tree.
+ * Consistent formatting for the live resource metrics carried by `resources.subscribe`.
+ * Shared by every owner chip and the epic aggregate so a CPU / memory / process reading reads the same everywhere.
  */
 
 export function formatCpuPercent(cpuPercent: number): string {

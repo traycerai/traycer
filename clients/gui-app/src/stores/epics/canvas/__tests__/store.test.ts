@@ -341,10 +341,8 @@ describe("epic canvas store header tabs", () => {
   });
 
   it("keeps legacy persisted tabs regardless of a now-removed lastSeenAt", async () => {
-    // `lastSeenAt` was removed (write-only dead weight). Legacy persisted data
-    // may omit it or carry a stale/invalid value; tabs are kept on the strength
-    // of tabId/epicId/name alone. Each tab still gets an (empty) canvas in the
-    // top-level `canvasByTabId` map.
+    // `lastSeenAt` was removed (write-only dead weight). Legacy persisted data may omit it or carry a
+    // stale/invalid value; tabs are kept on the strength of tabId/epicId/name alone.
     window.localStorage.setItem(
       epicCanvasKey(null),
       JSON.stringify({
@@ -486,9 +484,8 @@ describe("epic canvas store header tabs", () => {
     expect(state.openTabOrder).toEqual([]);
     expect(state.activeTabId).toBeNull();
     expect(state.canvasByTabId[tabId]).toBe(beforeCloseCanvas);
-    // Hiding preserves the tab record BY IDENTITY (closing no longer bumps a
-    // lastSeenAt), so header-strip / command-palette consumers that read tab
-    // metadata don't re-render on close.
+    // Hiding preserves the tab record BY IDENTITY (closing no longer bumps a lastSeenAt), so
+    // header-strip / command-palette consumers that read tab metadata don't re-render on close.
     expect(state.tabsById[tabId]).toBe(beforeCloseTab);
     expect(state.mostRecentTabIdByEpicId["epic-restore"]).toBe(tabId);
 
@@ -506,11 +503,8 @@ describe("epic canvas store header tabs", () => {
   });
 
   it("openEpicTabWithId reveals a preserved-but-closed record instead of no-op", () => {
-    // The id handed to this action is routinely a PRESERVED one (callers resolve
-    // it via `resolveTabIdForEpic`, which reads `mostRecentTabIdByEpicId` -
-    // a pointer `closeTab` sets). "Already have the record" must therefore not
-    // be read as "already open": the caller's postcondition is an open tab, and
-    // strip reconciliation drops any layout ref `openTabOrder` does not back.
+    // The id handed to this action is routinely a PRESERVED one (callers resolve it via
+    // `resolveTabIdForEpic`, which reads `mostRecentTabIdByEpicId` - a pointer `closeTab` sets).
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-preserved", "Preserved");
     store.openTileInTab(tabId, SPEC_A);
@@ -572,9 +566,6 @@ describe("epic canvas store header tabs", () => {
     const tabId = store.openEpicTab("epic-1", "Epic One");
     const before = requireTab(tabId);
 
-    // The desktop sync echoes our own state back: a projection carrying the same
-    // tab metadata must reuse the existing record (so header / palette / route
-    // consumers don't re-render), while a changed name must mint a new one.
     const echo: DesktopPerWindowSnapshot = {
       epicTabs: [{ id: tabId, epicId: "epic-1", name: "Epic One" }],
       activeTabId: tabId,
@@ -602,8 +593,6 @@ describe("epic canvas store header tabs", () => {
     const before = requireCanvas(tabId);
 
     // The desktop sync echoes our own write back as a freshly-parsed canvas.
-    // A structurally-equal echo must reuse the existing state reference so
-    // pane views never re-render for it; a real change must mint a new one.
     const echo: DesktopPerWindowSnapshot = {
       epicTabs: [{ id: tabId, epicId: "epic-1", name: "Epic One" }],
       activeTabId: tabId,
@@ -747,11 +736,8 @@ describe("epic canvas store header tabs", () => {
       "epic-prepare-preview",
       "Prepare Preview",
     );
-    // Same CONTENT id as `SPEC_A`, opened into a different epic tab - per the
-    // instanceId-per-tab contract (`EpicArtifactRef`'s doc comment), that
-    // gets its OWN instanceId. Reusing `SPEC_A`'s instanceId across two
-    // unrelated tabs would violate the canvas-wide immutable identity tuple
-    // (same instanceId, different epicId).
+    // Same CONTENT id as `SPEC_A`, opened into a different epic tab - per the instanceId-per-tab
+    // contract (`EpicArtifactRef`'s doc comment), that gets its OWN instanceId.
     const specAInPreviewTab: EpicCanvasTileRef = {
       ...SPEC_A,
       instanceId: "inst-a-preview",
@@ -985,11 +971,8 @@ describe("epic canvas store header tabs", () => {
   });
 
   it("keeps a freshly-created untitled (empty-name) tab through a projection round-trip", () => {
-    // Epics/agents are created with an empty stored title, so the projected
-    // tab `name` is "". The tab is a real, structurally-valid tab (id +
-    // epicId), and the display layer derives the shown title. It must survive
-    // the desktop window-state projection round-trip and not be evicted as if
-    // it were junk. A genuinely-malformed sibling (empty epicId) is dropped.
+    // Epics/agents are created with an empty stored title, so the projected tab `name` is "". The tab
+    // is a real, structurally-valid tab (id + epicId), and the display layer derives the shown title.
     const snapshot: DesktopPerWindowSnapshot = {
       epicTabs: [
         { id: "tab-untitled", epicId: "epic-untitled", name: "" },
@@ -1059,12 +1042,8 @@ describe("epic canvas store header tabs", () => {
   });
 
   /**
-   * Cross-tab canvas isolation guard (ticket 12).
-   *
-   * Tab A's mutations must not touch tab B's canvas reference. The
-   * regression this guards against: a shared canvas reference (or a
-   * mutation that walks the wrong tab's tree) would re-render every
-   * other tab's tiles whenever any one tab moves a tile around.
+   * Cross-tab canvas isolation guard (ticket 12). Tab A's mutations must not touch tab B's canvas
+   * reference.
    */
   it("keeps tab B's canvas identity stable across tab A mutations (cross-tab isolation)", () => {
     const store = useEpicCanvasStore.getState();
@@ -1133,14 +1112,8 @@ describe("epic canvas store header tabs", () => {
   });
 
   /**
-   * Ticket 20: backs the corrected doc comment at `commitHeaderStripDrop`
-   * (`root-dnd-commits.ts`) - the tile that tears off keeps its OWN
-   * instanceId; only the new HEADER TAB record gets a fresh id
-   * (`newTabId` above, an `EpicViewTab.tabId`, not a tile instanceId). The
-   * old comment's "clone semantics: new instance ids" conflated the two.
-   * Mutation-verified: temporarily minting a fresh instanceId for the moved
-   * tile in `tearOffTabIntoNewHeaderTab` (simulating what the old comment
-   * claimed) turns this red.
+   * backs the corrected doc comment at `commitHeaderStripDrop` (`root-dnd-commits.ts`) -
+   * the tile that tears off keeps its OWN instanceId; only the new HEADER TAB record gets a fresh id
    */
   it("ticket 20: tearing a tab off preserves the tile's own instanceId (MOVE, not clone)", () => {
     const store = useEpicCanvasStore.getState();
@@ -1278,9 +1251,8 @@ describe("makeSelectIsActiveTile", () => {
     store.openTileInTab(tabId, tile);
 
     const state = useEpicCanvasStore.getState();
-    // The artifact selector returns null for a PR tile by design (its id must
-    // never become `lastFocusedArtifactId`), which is exactly why the PR panel
-    // cannot reuse it to light up its row.
+    // The artifact selector returns null for a PR tile by design (its id must never become
+    // `lastFocusedArtifactId`), which is exactly why the PR panel cannot reuse it to light up its row.
     expect(makeSelectActiveEpicArtifactId(tabId)(state)).toBeNull();
     expect(makeSelectIsActiveTile(tabId, tile.id, null)(state)).toBe(true);
   });
@@ -1337,9 +1309,8 @@ describe("makeSelectIsActiveTile", () => {
       name: "Right",
     });
     store.openTileInTab(tabId, left);
-    // Two `openTileInTab` calls land in the SAME pane, which makes this the
-    // active-TAB case, not the active-PANE one - and the assertions below pass
-    // either way. Split first so `right` genuinely sits in another pane.
+    // Two `openTileInTab` calls land in the SAME pane, which makes this the active-TAB case, not the
+    // active-PANE one - and the assertions below pass either way.
     const sourcePaneId = requireCanvas(tabId).activePaneId;
     if (sourcePaneId === null) throw new Error("expected an active pane");
     const otherPaneId = useEpicCanvasStore
@@ -1410,9 +1381,6 @@ describe("makeSelectIsActiveTile", () => {
   });
 });
 
-// A deterministic two-group split: `group-left` is the globally-active group and
-// holds an active (SPEC_A) + preview (SPEC_B) tab; `group-right` holds its own
-// active tab (SPEC_C) but is NOT the globally-active group.
 function seedTwoGroupSplit(): void {
   const leftPane: TilePane = {
     kind: "pane",
@@ -2348,13 +2316,8 @@ describe("restoreClosedTilePreview", () => {
 });
 
 /**
- * Ticket 20: the 5 mechanism pins in chat-messages.test.tsx prove the
- * handoff registry works; the tear-off instanceId pin above proves MOVE
- * semantics. These wiring tests pin that EACH of the 9 structural action
- * creators calls `flushChatTabViewportHandoff` with the correct instanceId
- * set, from PRE-mutation tree state, and that the sibling paths that must
- * NOT remount anything skip the flush (or flush `[]` for the dissolve
- * predictor's no-op).
+ * the 5 mechanism pins in chat-messages.test.tsx prove the handoff registry works; the
+ * tear-off instanceId pin above proves MOVE semantics.
  */
 function spyOnFlushChatTabViewportHandoff() {
   return vi.spyOn(chatTabViewportHandoff, "flushChatTabViewportHandoff");
@@ -2539,10 +2502,8 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   }
 
   /**
-   * Two panes where the target's painted tab must be resolved from its first
-   * live tab because activeTabId is absent or stale. The source keeps a second
-   * tab so splitPaneWithTab does not add a dissolve-survivor target that could
-   * mask the target-pane assertion.
+   * Two panes where the target's painted tab must be resolved from its first live tab because
+   * activeTabId is absent or stale.
    */
   function fallbackActiveSplitCanvas(
     targetActiveTabId: string | null,
@@ -2583,9 +2544,8 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   }
 
   /**
-   * When the flush fires, the pre-mutation tree must still be intact - i.e.
-   * the action creator called it BEFORE its own `set()`. The spy records the
-   * call either way; this implementation only asserts timing.
+   * When the flush fires, the pre-mutation tree must still be intact - i.e. the action creator
+   * called it BEFORE its own `set()`.
    */
   function withPreMutationCheck(
     tabId: string,
@@ -2599,7 +2559,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     });
   }
 
-  // ---- moveTabOnTabStrip ------------------------------------------------
 
   it("moveTabOnTabStrip: cross-pane move flushes the dragged tab (and not a no-op sibling)", () => {
     seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
@@ -2649,7 +2608,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(flushSpy).not.toHaveBeenCalled();
   });
 
-  // ---- insertNodeOnTabStrip ---------------------------------------------
 
   it("insertNodeOnTabStrip: cross-pane re-insert of an already-open node flushes it", () => {
     seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
@@ -2678,7 +2636,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(flushSpy).not.toHaveBeenCalled();
   });
 
-  // ---- splitPaneWithNode ------------------------------------------------
 
   it("splitPaneWithNode: flushes the target pane's active tab (wrap or flat)", () => {
     seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A), "epic-t20");
@@ -2694,15 +2651,8 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   /**
-   * Ticket 20 review round 1, finding 1 (CONFIRMED HIGH): `splitPaneAtEdge`
-   * resolves a `node` source whose content is ALREADY OPEN elsewhere into a
-   * `tab`-kind cross-pane MOVE before doing anything else - the same
-   * "already open" resolution `insertNodeOnTabStrip` performs - but this
-   * production creator only flushed the target pane's active tab, missing
-   * the moved instance and its source-pane dissolve survivors entirely.
-   * Mutation-verified: reverting the `existing`/dissolve branch (leaving
-   * only the target-active flush) drops `SPEC_B.instanceId` and
-   * `SPEC_C.instanceId` from the flushed set - red.
+   * `splitPaneAtEdge` resolves a `node` source whose content is ALREADY OPEN elsewhere into a
+   * `tab`-kind cross-pane MOVE before doing anything else - the same "already open" resolution
    */
   it(
     "splitPaneWithNode: existing-node edge split (already open elsewhere) " +
@@ -2711,12 +2661,8 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
       seedHeaderTab("tab-1", nestedSurvivorDissolveCanvas(), "epic-t20");
       withPreMutationCheck("tab-1", "pane-keep-1");
 
-      // SPEC_B is already open (as the only tab) in the nested pane-keep-1,
-      // sibling to pane-keep-2 (SPEC_C) under split-survivor. Edge-splitting
-      // it onto the UNRELATED pane-gone (SPEC_A) resolves internally to a
-      // cross-pane tab move: the moved tab (B) always lands in a brand-new
-      // pane, the target (A) may wrap, and pane-keep-1 emptying dissolves
-      // split-survivor, promoting pane-keep-2 (C) to a new ancestor.
+      // SPEC_B is already open (as the only tab) in the nested pane-keep-1, sibling to pane-keep-2
+      // (SPEC_C) under split-survivor.
       useEpicCanvasStore
         .getState()
         .splitPaneWithNode("tab-1", "pane-gone", "right", SPEC_B);
@@ -2742,15 +2688,11 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
   });
 
-  // ---- splitPaneWithTab -------------------------------------------------
 
   it("splitPaneWithTab: flushes the dragged tab + target active + dissolve survivors", () => {
     seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
     withPreMutationCheck("tab-1", "pane-right");
 
-    // Drag SPEC_C (only tab in pane-right) onto an edge of pane-left →
-    // remounts the dragged tab, may wrap pane-left (its active is A), and
-    // dissolves pane-right's parent (survivor is pane-left → A again).
     useEpicCanvasStore.getState().splitPaneWithTab("tab-1", {
       sourcePaneId: "pane-right",
       tabId: SPEC_C.instanceId,
@@ -2853,7 +2795,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     },
   );
 
-  // ---- splitPaneEmptyInTab ----------------------------------------------
 
   it("splitPaneEmptyInTab: flushes the target pane's active tab", () => {
     seedHeaderTab("tab-1", singlePaneCanvas(SPEC_A), "epic-t20");
@@ -2867,7 +2808,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(flushSpy).toHaveBeenCalledWith([SPEC_A.instanceId]);
   });
 
-  // ---- closeCanvasTab ---------------------------------------------------
 
   it("closeCanvasTab: last-tab close that dissolves flushes survivor actives", () => {
     seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
@@ -2903,7 +2843,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(flushSpy).toHaveBeenCalledWith([]);
   });
 
-  // ---- closeAllCanvasTabs -----------------------------------------------
 
   it("closeAllCanvasTabs: dissolve flushes survivor actives", () => {
     seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
@@ -2924,7 +2863,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     expect(flushSpy).toHaveBeenCalledWith([]);
   });
 
-  // ---- closeCanvasPane --------------------------------------------------
 
   it("closeCanvasPane: dissolve flushes survivor actives", () => {
     seedHeaderTab("tab-1", twoPaneSplitCanvas(), "epic-t20");
@@ -2958,7 +2896,6 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
     ]);
   });
 
-  // ---- tearOffTabIntoNewHeaderTab ---------------------------------------
 
   it("tearOffTabIntoNewHeaderTab: always flushes the torn-off tile instanceId", () => {
     // Two tabs in one pane: tear-off does not dissolve a sibling pane.

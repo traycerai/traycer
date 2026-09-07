@@ -1,42 +1,10 @@
 /**
- * Throttled "this session cannot connect, here is why" logging for the client
- * remote session's forever-retrying connect loop (`RemoteSession`).
- *
- * The loop is, by design, infinite: any failure - grant mint, relay dial,
- * Noise handshake, open/openAck - re-arms the backoff timer and nothing
- * escalates. That is the right BEHAVIOUR (the session self-heals the moment
- * the fault clears), but with no logging it produced a renderer that dialed a
- * relay hostname that did not even resolve in DNS, failed every attempt in
- * milliseconds, and wrote NOTHING anywhere: the only visible symptom was
- * every host-scoped query erroring "Remote session is not ready" while the
- * host itself showed Online. Diagnosing that took authn request logs plus
- * relay-side telemetry to prove the dial never left the machine.
- *
- * Two failure modes to avoid, hence this type rather than a bare
- * `console.warn` (same contract as the host's `UplinkFailureLog` - the other
- * half of this tunnel logs identically):
- *
- *  1. Logging every attempt. A 30s-capped backoff writes ~120 lines/hour
- *     forever, which buries everything else in the forwarded renderer log.
- *  2. Logging only the FIRST occurrence. Whoever reads the log is reading its
- *     TAIL, long after the single line scrolled away, and concludes nothing
- *     is wrong. The periodic re-statement below exists specifically so the
- *     cause is present in the window a reader actually looks at.
- *
- * So: log on the first failure, log again whenever the CAUSE changes, and
- * otherwise re-state on a slow interval with a count of what was suppressed.
- * Recovery gets its own line - "it is working again, after N failures over
- * M seconds" is the other half of the story.
+ * Throttled "this session cannot connect, here is why" logging for the client remote session's forever-retrying connect loop (`RemoteSession`).
+ * Diagnosing that took authn request logs plus relay-side telemetry to prove the dial never left the machine.
  */
 
 export interface DialFailure {
-  /**
-   * WHY the attempt failed, in words. This doubles as the dedup key, so it
-   * must NOT embed values that change every attempt (attempt counters,
-   * backoff delays, countdowns) - a cause that is never equal to the previous
-   * one defeats the throttle and re-creates failure mode 1 above. Put
-   * anything that moves in {@link DialFailure.context}.
-   */
+  /** Why the attempt failed, in words. */
   readonly cause: string;
   /**
    * Live detail worth printing but NOT worth re-logging for. Reported, never
@@ -96,11 +64,8 @@ export class DialFailureLog {
   }
 
   /**
-   * The session was torn down (caller `close()` — linger expiry, supersession,
-   * retirement) while the connect loop was still failing. Without this line
-   * the tail reads "…retrying in Nms" followed by silence, which failure
-   * mode 2 above says a reader takes as recovery. One line, no-op when
-   * nothing had failed, so a healthy close stays silent.
+   * The session was torn down (caller `close()` - linger expiry, supersession, retirement) while the connect loop was still failing.
+   * Without this line the tail reads "…retrying in Nms" followed by silence, which failure mode 2 above says a reader takes as recovery.
    */
   recordAbandoned(): void {
     if (this.consecutiveFailures === 0) {
@@ -114,7 +79,7 @@ export class DialFailureLog {
   }
 
   /**
-   * The session reached its ready boundary. Logs the recovery ONLY if
+   * The session reached its ready boundary. Logs the recovery only if
    * something had actually failed, so a healthy session never emits it.
    */
   recordSuccess(): void {

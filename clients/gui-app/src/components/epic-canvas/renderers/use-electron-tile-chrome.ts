@@ -49,9 +49,7 @@ interface ElectronTabChrome {
 }
 
 /**
- * Builds chrome for one host-owned Electron tab. Navigation and page controls
- * use the durable tab identity; the tile key is reserved for services that
- * exist only while this particular surface is mounted.
+ * Navigation and page controls use the durable tab identity; the tile key is reserved for services that exist only while this particular surface is mounted.
  */
 export function useElectronTabChrome(
   args: UseElectronTabChromeArgs,

@@ -19,25 +19,7 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
 import { validateStoredCredentials } from "./validate";
 
-/**
- * `traycer link-phone` - the terminal's half of the confirm-gated QR handoff.
- *
- * This CLI is the MINTER, not the phone: it prints a public code (as an ANSI QR
- * and as typeable text), watches it, and asks the human at this terminal to
- * approve the phone that scans it. A scan alone signs nothing in; the approval
- * here does, and only for the claimant whose metadata is shown.
- *
- * The server keeps at most ONE live unclaimed code per account, across every
- * surface. So a code printed here can be superseded by a mint elsewhere (the
- * desktop panel, the web portal), which this flow reports and exits on rather
- * than leaving a dead QR on screen.
- *
- * Two streams, on purpose. The blocks a person reads go through the output
- * sink (stdout); everything transient - the ticking line under the code and
- * the approval prompt - goes to stderr, so a piped stdout carries only the
- * command's own output. Colour is decided per stream, since only the stream
- * being written to knows whether it is a terminal.
- */
+/** `traycer link-phone` - the terminal's half of the confirm-gated QR handoff. This CLI is the MINTER, not the phone: it prints a public code (as an ANSI QR and as typeable text), watches it, and asks the human at this terminal to approve the phone that scans it. */
 
 // One rotation of the printed code, comfortably inside its 60s server TTL so a
 // phone scanning just before rotation still has seconds to claim.
@@ -52,11 +34,7 @@ export type LinkPhoneDecision = "approved" | "rejected";
 export interface LinkPhoneResult {
   readonly decision: LinkPhoneDecision;
   readonly claimant: {
-    /**
-     * The claimant's self-description, verbatim. Nothing else about the
-     * phone is carried: the service reports no address it can vouch for and
-     * no location at all, so there is nothing to put beside this.
-     */
+    /** The claimant's self-description, verbatim. Nothing else about the phone is carried: the service reports no address it can vouch for and no location at all, so there is nothing to put beside this. */
     readonly userAgent: string | null;
   };
 }
@@ -71,16 +49,10 @@ function stdoutColors(ctx: CommandContext): Colorizer {
   return makeColorizer(shouldUseColor(ctx.runtime, process.stdout));
 }
 
-/**
- * Encodes the code as an ANSI QR. Returns `null` when the encoder refuses,
- * which is not fatal: the typeable code beside it is the guaranteed path, the
- * same way the device flow's printed `user_code` is.
- */
+/** Encodes the code as an ANSI QR. Returns `null` when the encoder refuses, which is not fatal: the typeable code beside it is the guaranteed path, the same way the device flow's printed `user_code` is. */
 async function renderQr(code: string): Promise<string | null> {
   try {
-    // `cloudUiBaseUrl` IS the platform origin the QR's universal link
-    // addresses, and it already carries this CLI's dev-gated override - so a
-    // terminal pointed at a dev deploy prints a QR for that deploy.
+    // `cloudUiBaseUrl` IS the platform origin the QR's universal link addresses, and it already carries this CLI's dev-gated override - so a terminal pointed at a dev deploy prints a QR for that deploy.
     return await QRCode.toString(
       buildLinkLoginQrPayload(config.cloudUiBaseUrl, code),
       {
@@ -115,33 +87,17 @@ const CODE_FOOTER = "one phone per code · you approve here";
 /** Wide enough to blank the longest footer the ticker can print. */
 const TICKER_BLANK = " ".repeat(64);
 
-/**
- * Whether stderr is a terminal a carriage return rewrites in place. On a file
- * or a pipe `\r` appends rather than rewrites, and a line meant to be redrawn
- * once a second would land fifty times in a log.
- */
+/** Whether stderr is a terminal a carriage return rewrites in place. On a file or a pipe `\r` appends rather than rewrites, and a line meant to be redrawn once a second would land fifty times in a log. */
 function stderrRewritesInPlace(): boolean {
   return process.stderr.isTTY === true;
 }
 
-/**
- * Whether readline will REPAINT a prompt on stderr rather than print it
- * again: its refresh needs a terminal AND cursor controls, and it skips both
- * on `TERM=dumb` even when the stream is a TTY.
- */
+/** Whether readline will REPAINT a prompt on stderr rather than print it again: its refresh needs a terminal AND cursor controls, and it skips both on `TERM=dumb` even when the stream is a TTY. */
 function readlineRepaintsPrompt(): boolean {
   return stderrRewritesInPlace() && process.env.TERM !== "dumb";
 }
 
-/**
- * The footer under the code: one stderr line rewritten in place until the
- * code rotates, carrying the rotation clock and the two facts a person needs
- * while they wait. It bypasses the output sink on purpose - that sink is
- * line-oriented and feeds the NDJSON stream, and a carriage-returned counter
- * is neither a log line nor an event. Only started on a non-quiet run; the
- * caller prints the same facts once, statically, when quiet - and so does
- * this, on a stderr that is not a terminal, where there is no line to rewrite.
- */
+/** The footer under the code: one stderr line rewritten in place until the code rotates, carrying the rotation clock and the two facts a person needs while they wait. It bypasses the output sink on purpose - that sink is line-oriented and feeds the NDJSON stream, and a carriage-returned counter is neither a log line nor an event. */
 function startCodeFooter(ctx: CommandContext, rotateAtMs: number): () => void {
   const c = stderrColors(ctx);
   if (!stderrRewritesInPlace()) {
@@ -162,23 +118,7 @@ function startCodeFooter(ctx: CommandContext, rotateAtMs: number): () => void {
   };
 }
 
-/**
- * Asks the human at this terminal. Defaults to NO on anything but an explicit
- * yes, including a bare newline: the confirm gate exists to make an unwanted
- * sign-in take a deliberate keystroke. Prompt and echo go to stderr so a piped
- * stdout carries only the command's own output.
- *
- * With a deadline, the prompt is two lines - the claim's remaining window
- * above the question - and it is readline that redraws them once a second,
- * through `setPrompt` + `prompt(true)`, which repaints the whole prompt and
- * the answer typed so far with the cursor where it was. Writing the clock to
- * the stream directly would land on readline's own line and walk over the
- * question, or over a half-typed answer, on a prompt whose whole point is
- * being read carefully. The redraw is only asked for where readline will
- * repaint (a terminal that is not `TERM=dumb`): anywhere else readline prints
- * the prompt again per tick instead, and the first line then simply states
- * the window once.
- */
+/** Asks the human at this terminal. Defaults to NO on anything but an explicit yes, including a bare newline: the confirm gate exists to make an unwanted sign-in take a deliberate keystroke. */
 async function askApproval(
   ctx: CommandContext,
   question: string,
@@ -202,16 +142,8 @@ async function askApproval(
         }, 1_000);
   try {
     const answer = await new Promise<string>((resolve) => {
-      // Registered BEFORE `question`, not after: stdin can already be at EOF
-      // when the prompt goes up (a piped or closed input), in which case the
-      // close lands during `question` itself and a listener attached on the
-      // next line would never hear it - the flow then waits forever on an
-      // answer that can no longer come.
-      //
-      // Ctrl-D ends the stream without ever answering, and `question`'s
-      // callback never fires. Closing is not a yes, so it resolves to the same
-      // empty answer a bare newline gives and the default-to-NO rule below
-      // does the rest.
+      // Registered BEFORE `question`, not after: stdin can already be at EOF when the prompt goes up (a piped or closed input), in which case the close lands during `question` itself and a listener attached on the next line would never hear it - the flow then waits forever on an answer that can no longer come.
+      // Ctrl-D ends the stream without ever answering, and `question`'s callback never fires.
       rl.once("close", () => {
         resolve("");
       });
@@ -231,11 +163,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Resolves the bearer this flow mints under. Mirrors `whoami`'s vocabulary so
- * "not signed in" and "the service is unreachable" stay distinguishable in a
- * script's exit code.
- */
+/** Resolves the bearer this flow mints under. Mirrors `whoami`'s vocabulary so "not signed in" and "the service is unreachable" stay distinguishable in a script's exit code. */
 async function requireBearerToken(): Promise<string> {
   const validation = await validateStoredCredentials();
   if (validation.kind === "network-error") {
@@ -309,11 +237,7 @@ function mintFailure(outcome: MintLinkLoginCodeFetchResult): never {
   }
 }
 
-/**
- * Prints one code: the QR (unless suppressed) and the typeable text. The
- * footer beneath it is the ticking line on a normal run; a quiet run has no
- * ticker, so the same two facts are printed once, plainly.
- */
+/** Prints one code: the QR (unless suppressed) and the typeable text. The footer beneath it is the ticking line on a normal run; a quiet run has no ticker, so the same two facts are printed once, plainly. */
 async function printCode(
   ctx: CommandContext,
   minted: MintLinkLoginCodeResponse,
@@ -343,11 +267,7 @@ interface WatchedCode {
   readonly rotateAtMs: number;
 }
 
-/**
- * Watches the printed code until a phone claims it, rotating the code whenever
- * the current one nears expiry. Returns the claim, or throws the terminal state
- * that ended the watch.
- */
+/** Watches the printed code until a phone claims it, rotating the code whenever the current one nears expiry. Returns the claim, or throws the terminal state that ended the watch. */
 async function watchUntilClaimed(
   ctx: CommandContext,
   bearerToken: string,
@@ -359,11 +279,8 @@ async function watchUntilClaimed(
 }> {
   const { authnBaseUrl } = config;
 
-  // `claim-pending` is returned rather than fatal: at ROTATION time it means a
-  // phone claimed the code on screen since the last poll and the server refuses
-  // to rotate over a live claim - which is success, not failure. The first mint
-  // has no such code to fall back on, so the caller below still treats it as
-  // terminal there.
+  // `claim-pending` is returned rather than fatal: at ROTATION time it means a phone claimed the code on screen since the last poll and the server refuses to rotate over a live claim - which is success, not failure.
+  // The first mint has no such code to fall back on, so the caller below still treats it as terminal there.
   const mintAndPrint = async (): Promise<WatchedCode | "claim-pending"> => {
     const outcome = await mintLinkLoginCodeViaHttp(
       authnBaseUrl,
@@ -394,10 +311,8 @@ async function watchUntilClaimed(
     for (;;) {
       await sleep(LINK_PHONE_POLL_INTERVAL_MS);
 
-      // Rotation runs BEFORE the status call, so a status outage cannot park a
-      // dead QR on screen: an unreachable service fails the mint instead and
-      // exits, while a status-only outage still reprints a live code. Leaving
-      // it after the call meant a `network-error` skipped it entirely.
+      // Rotation runs BEFORE the status call, so a status outage cannot park a dead QR on screen: an unreachable service fails the mint instead and exits, while a status-only outage still reprints a live code.
+      // Leaving it after the call meant a `network-error` skipped it entirely.
       if (Date.now() >= watched.rotateAtMs) {
         stopFooter();
         const next = await mintAndPrint();
@@ -432,10 +347,8 @@ async function watchUntilClaimed(
         });
       }
       if (status.kind === "gone") {
-        // Unknown, expired, consumed and SUPERSEDED all read alike here. The
-        // code was rotated well inside its TTL, so in practice this is another
-        // surface having minted over it - and only one code per account can be
-        // live, so this one will never be claimable again.
+        // Unknown, expired, consumed and SUPERSEDED all read alike here.
+        // The code was rotated well inside its TTL, so in practice this is another surface having minted over it - and only one code per account can be live, so this one will never be claimable again.
         throw cliError({
           code: CLI_ERROR_CODES.AUTH_REJECTED,
           message:
@@ -455,10 +368,8 @@ async function watchUntilClaimed(
         return { code: watched.minted.code, claimant };
       }
       if (state === "claimed") {
-        // The schema permits `claimed` with a null claimant, and there is
-        // nothing to show or approve in that state: the prompt IS the claimant
-        // metadata. Polling on would spin until the code expired while the
-        // phone waits on a decision this terminal can never ask for.
+        // The schema permits `claimed` with a null claimant, and there is nothing to show or approve in that state: the prompt IS the claimant metadata.
+        // Polling on would spin until the code expired while the phone waits on a decision this terminal can never ask for.
         throw cliError({
           code: CLI_ERROR_CODES.AUTH_REJECTED,
           message:
@@ -482,20 +393,7 @@ async function watchUntilClaimed(
   }
 }
 
-/**
- * The scan announcement and the question that follows it, one of three
- * pairs. With a match code the question IS the code: the phone in the user's
- * hand shows the same two digits, and agreement between the two screens
- * proves the prompt belongs to that phone - which the self-reported
- * description cannot, since the claimant chooses it. An explicit null is the
- * server saying the phone presented NO code: a legitimate older app, or a
- * leaked-QR holder withholding the flag to dodge the check - this terminal
- * cannot tell, so it warns loudly rather than reading like an ordinary claim.
- * No word at all (an older server) is the plain prompt.
- *
- * The announcement names the device once and states the one condition for
- * approving once; the question does not repeat either.
- */
+/** The scan announcement and the question that follows it, one of three pairs. With a match code the question IS the code: the phone in the user's hand shows the same two digits, and agreement between the two screens proves the prompt belongs to that phone - which the self-reported description cannot, since the claimant chooses it. */
 function scanPrompt(
   ctx: CommandContext,
   claimant: NonNullable<LinkLoginStatusResponse["claimant"]>,
@@ -528,19 +426,13 @@ function scanPrompt(
   };
 }
 
-/**
- * Runs the whole flow: authenticate, mint, print, watch, ask, decide.
- *
- * Interrupting at any point before the decision is safe and needs no cleanup -
- * an unclaimed code is not a grant, and it dies with its own TTL.
- */
+/** Runs the whole flow: authenticate, mint, print, watch, ask, decide. Interrupting at any point before the decision is safe and needs no cleanup - an unclaimed code is not a grant, and it dies with its own TTL. */
 export async function runLinkPhoneFlow(
   ctx: CommandContext,
   options: { readonly showQr: boolean },
 ): Promise<LinkPhoneResult> {
-  // The decision is the whole point of this command, and only a human at this
-  // terminal can give it. Refuse up front rather than printing a QR nobody can
-  // approve.
+  // The decision is the whole point of this command, and only a human at this terminal can give it.
+  // Refuse up front rather than printing a QR nobody can approve.
   if (ctx.runtime.json) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -580,9 +472,8 @@ export async function runLinkPhoneFlow(
   const prompt = scanPrompt(ctx, claim.claimant);
   ctx.output.humanRequired(prompt.announcement);
 
-  // The claim's deadline, when the server states one: the question below is
-  // answerable only until then, so the prompt counts it down while it is
-  // open. An older server states none and the question stands alone.
+  // The claim's deadline, when the server states one: the question below is answerable only until then, so the prompt counts it down while it is open.
+  // An older server states none and the question stands alone.
   const claimExpiresAt = claim.claimant.claimExpiresAt;
   const approve = await askApproval(
     ctx,

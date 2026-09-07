@@ -5,11 +5,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { worktreeFolderRowBadge } from "@/lib/worktree/worktree-folder-disabled-reason";
 
-/**
- * Loading / error / list states shared by the standard worktree pickers
- * (terminal creation, file tree). Surfaces that need custom row rules (the git
- * diff picker) use `WorktreeFolderList` directly.
- */
+/** Loading / error / list states shared by the standard worktree pickers (terminal creation, file tree). */
 export interface WorktreeFolderListBodyProps {
   readonly isPending: boolean;
   readonly isError: boolean;
@@ -17,9 +13,7 @@ export interface WorktreeFolderListBodyProps {
   readonly selectedRow: WorktreeBindingSelectorRowV12 | null;
   readonly secondaryLabel: (row: WorktreeBindingSelectorRowV12) => string;
   readonly onSelect: (row: WorktreeBindingSelectorRowV12) => void;
-  /** Forwarded to {@link WorktreeFolderList}: auto-focus the search input. */
   readonly autoFocusSearch: boolean;
-  /** Forwarded to {@link WorktreeFolderList}: shown when `rows` is empty. */
   readonly emptyMessage: string;
 }
 

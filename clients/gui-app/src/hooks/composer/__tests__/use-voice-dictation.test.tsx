@@ -4,11 +4,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { appLogger } from "@/lib/logger";
 import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
 
-// ---------------------------------------------------------------------------
-// Module fakes. The hook's true external boundaries are the speech stream
-// client (host transport), the runner host (permission IPC), and the Web
-// Audio / getUserMedia browser APIs - everything else runs real.
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Module fakes.
 
 const speech = vi.hoisted(() => {
   interface FakeSpeechCallbacks {
@@ -380,18 +376,7 @@ describe("useVoiceDictation lifecycle", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Failure-class observability. Two field reports (oss #945, #1003) were
-// root-caused only by elimination because `fail()` wrote no log line at all.
-// These cover the classes a support bundle actually turns on - the transport
-// pair, the host error frame, the mic split, and the two paths that used to
-// emit their own warn - plus the two rules that make a class worth trusting:
-// a line describes THIS attempt (never the previous one), and an attempt
-// produces exactly one class (a late-resolving capture task must not overwrite
-// the cause that killed the session). They do not exhaust all ten classes;
-// `fail()` writing the line centrally is what makes the rest structural rather
-// than test-enforced.
-// ---------------------------------------------------------------------------
+// A fail() line describes this attempt, never the previous one, and an attempt produces exactly one class.
 
 describe("useVoiceDictation failure logging", () => {
   // Returns an accessor rather than the spy itself: naming a vitest spy's type
@@ -605,10 +590,7 @@ describe("useVoiceDictation failure logging", () => {
       lastSpeechClient().callbacks.onReady();
     });
     expect(result.current.state).toBe("recording");
-    // Record a live status BEFORE tearing down: after cancel() the hook has
-    // dropped its client reference and ignores further status callbacks, so a
-    // status fired post-cancel would leave the ref null and this test would
-    // assert "none" vacuously - passing even without the reset.
+    // Record a live status BEFORE tearing down: after cancel() the hook has dropped its client reference and ignores further status callbacks, so a status fired post-cancel would leave the ref null and this test would assert "none" vacuously - passing even without the reset.
     act(() => {
       lastSpeechClient().callbacks.onConnectionStatus("open", null);
     });
@@ -642,10 +624,7 @@ describe("useVoiceDictation failure logging", () => {
     });
     expect(result.current.failureClass).toBe("not_connected");
 
-    // The host link comes back. `rerender` is what feeds the hook the new
-    // client - mutating the module state alone leaves the previous render's
-    // closure holding the null one, which is exactly the stale-session bug
-    // the generation pin exists to prevent.
+    // The host link comes back.
     streamRuntimeState.wsStreamClient = {};
     rerender();
     act(() => {
@@ -658,10 +637,7 @@ describe("useVoiceDictation failure logging", () => {
   });
 
   it("does not carry a denied attempt's microphone remedy into a host-link failure", async () => {
-    // `permissionDenied` drives the composer's "Open Settings" action. Since
-    // the failure class now rides the PUBLIC Report Issue prefill, a stale flag
-    // produces one self-contradicting report: code `not_connected`, next to a
-    // button that opens microphone settings.
+    // `permissionDenied` drives the composer's "Open Settings" action.
     runnerHostState.requestMicrophoneAccess = () => Promise.resolve("denied");
     const { result, rerender } = renderDictation();
 
@@ -684,11 +660,7 @@ describe("useVoiceDictation failure logging", () => {
   });
 
   it("does not let a late microphone acquisition overwrite the failure that killed the session", async () => {
-    // The host can fail a session while the permission prompt is still up.
-    // `startAudioGraph` captured the AudioContext before that await, so the
-    // resumed task would find it closed and report `audio_context_not_running`
-    // over the real cause - burying the class this whole change exists to
-    // deliver.
+    // `startAudioGraph` captured the AudioContext before that await, so the resumed task would find it closed and report `audio_context_not_running` over the real cause - burying the class this whole change exists to deliver.
     let resolveStream: (stream: FakeMediaStream) => void = () => undefined;
     getUserMediaImpl = () =>
       new Promise<FakeMediaStream>((resolve) => {

@@ -87,10 +87,8 @@ function abortableRequest<Value>(
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        // Normalized, not passed through raw: this queryFn writes the same
-        // `terminal.list` cache slot that `useTerminalListFor` types as
-        // `HostRpcError`. The abort path above stays a DOMException so
-        // TanStack's cancellation handling is untouched.
+        // Normalized, not passed through raw: this queryFn writes the same `terminal.list` cache slot that
+        // `useTerminalListFor` types as `HostRpcError`.
         reject(toHostRpcError(error, "terminal.list"));
       },
     );
@@ -104,13 +102,8 @@ interface LandingTerminalReconciliationArgs {
   readonly panelOpen: boolean;
   readonly primaryWorkspacePath: string | null;
   readonly generation: number;
-  /**
-   * The host client this generation must query. `null` is the fail-closed
-   * signal: an opening gesture that could not pin a transient client to its
-   * captured host projects `null` here, and the effect no-ops rather than
-   * falling back to the live default client (which follows runtime host
-   * selection and would reconcile the wrong host).
-   */
+  /** `null` is the fail-closed signal: an opening gesture that could not pin a transient client to its captured
+   * host projects `null` here. */
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly plainAuthority: LandingTerminalAuthorityEntry | null;
   readonly killTerminal: (
@@ -119,12 +112,7 @@ interface LandingTerminalReconciliationArgs {
   readonly onReconciled: (context: LandingTerminalHostContext) => void;
   /** Runs when the fresh terminal list cannot be fetched for this generation. */
   readonly onError: () => void;
-  /**
-   * Runs after a reconciliation generation has fully applied (store updated,
-   * host context published). Receives the same generation's host context so
-   * auto-spawn does not depend on a React state round-trip or read an earlier
-   * host's home path. The panel owns auto-spawn and open-gesture retargeting.
-   */
+  /** Runs after a reconciliation generation has fully applied (store updated, host context published). */
   readonly onSettled: (
     generation: number,
     context: LandingTerminalHostContext,
@@ -133,9 +121,7 @@ interface LandingTerminalReconciliationArgs {
 
 function landingTerminalListQueryOptions(client: HostClient<HostRpcRegistry>) {
   return queryOptions({
-    // `HostClient.getActiveHostId()` is the same host id captured by the
-    // reconciliation effect. It makes the cache entry explicitly host-scoped:
-    // ["host", hostId, "terminal.list", { scope: "independent" }].
+    // `HostClient.getActiveHostId` is the same host id captured by the reconciliation effect.
     queryKey: hostQueryKeys.method<HostRpcRegistry, "terminal.list">(
       client.getActiveHostId(),
       "terminal.list",
@@ -153,12 +139,8 @@ function landingTerminalListQueryOptions(client: HostClient<HostRpcRegistry>) {
   });
 }
 
-/**
- * Runs the landing terminal lifecycle as one abortable generation. A cached
- * capability probe may show the panel, but only this zero-stale list fetch may
- * classify a session, clear a tombstone, adopt an orphan, publish `homeCwd`,
- * or auto-spawn.
- */
+/** A cached capability probe may show the panel, but only this zero-stale list fetch may classify a session,
+ * clear a tombstone, adopt an orphan, publish `homeCwd`, or auto-spawn. */
 export function useLandingTerminalReconciliation(
   args: LandingTerminalReconciliationArgs,
 ): void {
@@ -179,29 +161,14 @@ export function useLandingTerminalReconciliation(
   const queryClient = useQueryClient();
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const reconciliationRef = useRef<string | null>(null);
-  // The THIRD wake. Sign-in provenance is read imperatively inside the pass
-  // (`providerLoginProviderFor`), so a record arriving after the pass ran - a
-  // peer window's `storage` event - would otherwise never re-run the matched-
-  // tab classification, and the tab it should have marked stays importable
-  // and recreatable until some unrelated host event happens along.
+  // Sign-in provenance is read imperatively inside the pass (`providerLoginProviderFor`), so a record arriving
+  // after the pass ran - a peer window's `storage` event.
   const provenanceRevision = useProviderLoginTerminalsStore(
     (state) => state.revision,
   );
 
-  // TWO WAKES, because two different things can make this panel's list stale
-  // and only one of them is an event about the client.
-  //
-  // The row signal is the host's: its directory entry moving (a restart that
-  // re-published an endpoint, a re-enrollment) means the terminals the panel
-  // listed were listed against a route that no longer exists. That used to
-  // arrive as `bind()`'s `host-updated`, which required this host to be the
-  // BOUND one - the registry reports it per host, so P4.2 deleted the slot arm
-  // without deleting the wake. `host-bound` needed no replacement at all: this
-  // hook is keyed on `activeHostId`, so a host becoming effective already
-  // re-runs the reconciliation below through the key.
-  //
-  // Availability recovery stays on the client, because it is not a row change:
-  // nothing about the host moved, a stalled endpoint started answering again.
+  // Two wakes, because two different things can make this panel's list stale and only one of them is an event
+  // about the client.
   useEffect(() => {
     if (activeHostId === null) return;
     return subscribeHostRowChanged(activeHostId, () => {
@@ -288,28 +255,14 @@ export function useLandingTerminalReconciliation(
       const initial = useLandingTerminalStore.getState();
 
       if (plainAuthority.authority.capability.status === "capable") {
-        // From `terminal.list`, which the capable pass below never reads: a
-        // host-created sign-in session has no plain-terminal row, so the
-        // projection cannot adopt it, and a sign-in started in another window
-        // - whose record reached this one through the shared registry - would
-        // otherwise have no tab here. FIRST, ahead of the plain authority's
-        // own gates: the list that just answered is all this needs, and a
-        // sign-in is short-lived - one that exits while the stream is
-        // read-only or non-fresh could never be adopted afterwards (running
-        // sessions only), and its restart surface with it. Only for the
-        // selected host: the bound host fleet reconciles other hosts from
-        // their projections alone and fetches no list for them.
+        // From `terminal.list`, which the capable pass below never reads: a host-created sign-in session has no
+        // plain-terminal row, so the projection cannot adopt it, and a sign-in started in another window.
         adoptListedSignInSessions({
           activeHostId,
           landingPageId,
           sessions: freshSessions,
         });
-        // A read-only authority is a reconnecting list stream, not a failed
-        // fetch. `onError` clears the picker's selected target and reports
-        // "The terminal directory could not be opened.", which is simply
-        // untrue here - and destroys a directory choice the user must then
-        // make again. The reconciliation latch keys on `canMutate`, so this
-        // pass re-runs by itself the moment mutability returns.
+        // A read-only authority is a reconnecting list stream, not a failed fetch.
         if (!plainAuthority.authority.canMutate) {
           releaseLatch();
           return;
@@ -334,9 +287,8 @@ export function useLandingTerminalReconciliation(
             (settled) => settled,
             (): "failed" => "failed",
           );
-        // Same reasoning as the read-only guard above: a snapshot that went
-        // non-fresh mid-pass is a wait, not a fetch failure, and only a real
-        // rejection may surface the directory error.
+        // Same reasoning as the read-only guard above: a snapshot that went non-fresh mid-pass is a wait, not a fetch
+        // failure, and only a real rejection may surface the directory error.
         if (outcome !== "reconciled") {
           if (outcome === "failed") onError();
           releaseLatch();
@@ -430,11 +382,8 @@ export function useLandingTerminalReconciliation(
   ]);
 }
 
-/**
- * Adds a tab for every registry-claimed sign-in session the host lists that
- * has none, keeping the current selection. See
- * `adoptListedProviderLoginSessions` for why the capable arm needs this.
- */
+/** Adds a tab for every registry-claimed sign-in session the host lists that has none, keeping the current
+ * selection. */
 function adoptListedSignInSessions(args: {
   readonly activeHostId: string;
   readonly landingPageId: string;
@@ -457,9 +406,8 @@ function adoptListedSignInSessions(args: {
     providerLoginProviderFor: (sessionId) =>
       providerLoginTerminalProviderId(activeHostId, sessionId),
   });
-  // The predecessors the listing supersedes - a restart another window
-  // pressed killed them, and only that window retired its tab. Independent of
-  // what this pass adopted: the successor may already be a tab here.
+  // The predecessors the listing supersedes - a restart another window pressed killed them, and only that window
+  // retired its tab. Independent of what this pass adopted: the successor may already be a tab here.
   const retired = new Set(
     retiredProviderLoginPredecessors({
       tabs: current.tabs,
@@ -480,24 +428,14 @@ function adoptListedSignInSessions(args: {
   );
 }
 
-/**
- * `"snapshot-not-fresh"` is a wait, not a failure: the list stream is
- * reconnecting or its snapshot has been invalidated, so this pass has nothing
- * authoritative to classify against and the next fresh projection re-runs it.
- * Genuine failures (a rejected close or import) still reject.
- */
+/** `"snapshot-not-fresh"` is a wait, not a failure: the list stream is reconnecting or its snapshot has been
+ * invalidated. */
 export type CapableLandingTerminalReconciliationOutcome =
   | "reconciled"
   | "snapshot-not-fresh";
 
-/**
- * The LEGACY arm of the tombstone drain: retire what the host's own list proves
- * dead, and kill what it still lists.
- *
- * Exported for the same reason `reconcileCapableLandingTerminals` is - it is the
- * half of the reconciliation that has to be driven directly to be tested at all,
- * and both of its rules are ones a silent regression would leak a PTY over.
- */
+/** Exported for the same reason `reconcileCapableLandingTerminals` is - it is the half of the reconciliation
+ * that has to be driven directly to be tested at all. */
 export async function drainLegacyLandingTombstones(args: {
   readonly hostTombstones: ReadonlyArray<LandingTerminalPendingKill>;
   readonly listedSessionIds: ReadonlySet<string>;
@@ -507,12 +445,7 @@ export async function drainLegacyLandingTombstones(args: {
   }) => Promise<unknown>;
 }): Promise<void> {
   for (const pending of args.hostTombstones) {
-    // Absence from the host's own list is only proof of death for a session it
-    // had already acknowledged. A `terminal.plain.create` that has not settled
-    // is not listed YET, and its terminal lands under this exact session id, so
-    // clearing here drops the record in front of the terminal it was written to
-    // kill. Left outstanding, the recovery bridge drains it on the next dialable
-    // edge.
+    // Absence from the host's own list is only proof of death for a session it had already acknowledged.
     if (
       !args.listedSessionIds.has(pending.sessionId) &&
       absentListingProvesDeath(pending)
@@ -526,21 +459,8 @@ export async function drainLegacyLandingTombstones(args: {
     args.hostTombstones
       .filter((pending) => args.listedSessionIds.has(pending.sessionId))
       .map((pending) =>
-        // Through the shared coordinator, for the same reason the capable arm
-        // and the panel's own legacy fast path use it: the recovery bridge
-        // drains this identical tombstone set and routes an unacknowledged
-        // record to `terminal.kill` too. `terminal.kill` is scheduled `fifo` and
-        // `selectJob` returns null for fifo rather than joining an identical
-        // queued job, so an unmediated duplicate is two real RPCs and two
-        // `terminal.list` invalidations for one gesture - the second answering
-        // `killed: false` about a session the first removed, which for a
-        // `pendingCreate` record is the very answer the reprieve has to keep
-        // treating as ambiguous.
-        //
-        // Variables built explicitly rather than passing the tombstone. The two
-        // shapes were structurally identical until the tombstone grew
-        // provenance, so this type-checked while quietly sending fields the RPC
-        // has no use for.
+        // `terminal.kill` is scheduled `fifo` and `selectJob` returns null for fifo rather than joining an identical
+        // queued job.
         requestLandingTerminalClose({
           hostId: pending.hostId,
           sessionId: pending.sessionId,
@@ -570,11 +490,7 @@ export async function reconcileCapableLandingTerminals(args: {
   readonly importLegacyTerminal: (
     request: ImportLegacyPlainTerminalRequest,
   ) => Promise<ImportLegacyPlainTerminalResponse>;
-  /**
-   * The provider a session was opened to sign in to, already bound to
-   * `activeHostId`. Injected for the same reason the legacy arm injects it:
-   * `terminal.list` and the plain projection both carry the origin nowhere.
-   */
+  /** The provider a session was opened to sign in to, already bound to `activeHostId`. */
   readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
   readonly queryClient: QueryClient;
 }): Promise<CapableLandingTerminalReconciliationOutcome> {
@@ -601,19 +517,7 @@ export async function reconcileCapableLandingTerminals(args: {
         getPlainTerminal(collection, pending.hostId, pending.sessionId) !==
         undefined;
       if (projected) {
-        // Through the shared coordinator, never straight at the mutation. The
-        // recovery bridge watches this same tombstone set and this same
-        // projection, so a retained tombstone whose create lands late wakes
-        // BOTH drains for one terminal. `terminal.plain.close` is fifo rather
-        // than coalescing, so that is two real RPCs: the loser finds a terminal
-        // the winner already removed and the mutation's `onError` raises
-        // "Couldn't close the terminal." for a close that in fact succeeded.
-        //
-        // Retaining the tombstone here is what opened that window - it used to
-        // be cleared on this pass, so it could never survive to be closed
-        // twice. Joining does NOT stand in for sending it: the settlement
-        // belongs to the request that ran, so the tombstone below clears only
-        // for the owner, and a joiner leaves the record for the next pass.
+        // Through the shared coordinator, never straight at the mutation.
         const outcome = await requestLandingTerminalClose({
           hostId: pending.hostId,
           sessionId: pending.sessionId,
@@ -622,20 +526,12 @@ export async function reconcileCapableLandingTerminals(args: {
               .closeTerminal({ terminalId: pending.sessionId })
               .then(() => undefined),
         });
-        // Only the OWNER of the request may retire the record. The coordinator
-        // keys by the terminal's lifetime, not by RPC, so this close can join an
-        // in-flight `terminal.kill` - and that kill answers an already-gone
-        // session with `killed: false`, which for a `pendingCreate` record the
-        // kill mutation deliberately treats as "not created YET" and keeps the
-        // tombstone for. Clearing on a joined promise would drop the record in
+        // Only the owner of the request may retire the record. Clearing on a joined promise would drop the record in
         // front of the PTY that create is about to produce.
         if (!outcome.owned) return;
       } else if (!absentListingProvesDeath(pending)) {
-        // The close was never sent and absence proves nothing here - an
-        // in-flight create is simply not projected yet, and a legacy session
-        // never appears in a plain collection at all. Clearing regardless is how
-        // the same tombstone was being discarded on a plain reconcile, not just
-        // by the recovery bridge. Leave it for that bridge to drain.
+        // The close was never sent and absence proves nothing here - an in-flight create is simply not projected yet,
+        // and a legacy session never appears in a plain collection at all.
         return;
       }
       useLandingTerminalStore
@@ -650,15 +546,8 @@ export async function reconcileCapableLandingTerminals(args: {
     return "snapshot-not-fresh";
   }
 
-  // A host-created sign-in session is manager-owned and import-exempt: it is
-  // not legacy evidence, and `importLegacy` under its id would hand the plain
-  // registry a session it never spawned. Its tab stays unacknowledged for
-  // life and attaches through the legacy reattach path instead.
-  //
-  // The REGISTRY decides that, not the ref alone. A tab adopted while the host
-  // still read `legacy` carries no marker, and after the capability switch it
-  // is unacknowledged and unprojected - which is precisely the shape this
-  // filter treats as legacy evidence.
+  // A host-created sign-in session is manager-owned and import-exempt: it is not legacy evidence, and
+  // `importLegacy` under its id would hand the plain registry a session it never spawned.
   const legacyTabs = useLandingTerminalStore
     .getState()
     .tabs.filter(

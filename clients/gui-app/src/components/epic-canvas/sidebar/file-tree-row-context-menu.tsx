@@ -1,20 +1,5 @@
 /**
- * The right-click menu for the sidebar file tree's rows.
- *
- * Pierre renders its rows inside a shadow root, so there is no per-row element
- * to hang a menu on: the whole tree container is the trigger and the row is
- * recovered from the event's composed path.
- *
- * Radix opens the menu from two events - `contextMenu` for a mouse, and a
- * 700ms long-press timer armed on a touch or pen `pointerDown` - so the row
- * has to be captured on both or a long-press opens the root with no content
- * mounted. Both handlers are composed with Radix's own through
- * `composeEventHandlers`, which skips a default-prevented event: calling
- * `preventDefault()` when the press hit no row is what keeps an empty menu
- * from opening over the tree's blank space.
- *
- * The items live in a child mounted only while a row is captured, keeping the
- * menu's host-scoped data hooks off the panel's render path.
+ * The items live in a child mounted only while a row is captured, keeping the menu's host-scoped data hooks off the panel's render path.
  */
 import {
   useCallback,
@@ -65,9 +50,8 @@ export interface FileTreeRowContextMenuProps {
   readonly hostId: string | null;
   readonly workspacePath: string;
   /**
-   * The tree container, which becomes the menu's trigger. Exactly ONE element:
-   * `ContextMenuTrigger asChild` merges its props onto this node through
-   * Radix's `Slot`, which throws on text, `null`, or an array.
+   * The tree container, which becomes the menu's trigger.
+   * Exactly ONE element: `ContextMenuTrigger asChild` merges its props onto this node through Radix's `Slot`, which throws on text, `null`, or an array.
    */
   readonly children: ReactElement;
 }
@@ -169,15 +153,11 @@ function FileTreeRowContextMenuContent(
     onError: reportCopyFailure,
   });
 
-  // An editor launches through a URL-scheme handler registered on the host's
-  // own machine, so the open items are local-host-only for the same reason the
-  // workspace header's are (see `OpenInEditorButton`).
+  // An editor launches through a URL-scheme handler registered on the host's own machine, so the open items are local-host-only for the same reason the workspace header's are (see `OpenInEditorButton`).
   const hostIsLocal =
     hostEntry !== null &&
     (hostEntry.kind === "local" || hostEntry.kind === "mock");
-  // A row menu has no primary half and does not record a default, so no stored
-  // target is consulted - it simply lists what this host and machine can open
-  // the row with, Finder last.
+  // A row menu has no primary half and does not record a default, so no stored target is consulted - it simply lists what this host and machine can open the row with, Finder last.
   const { targets } = resolveOpenMenuState({
     catalog: offerableEditors,
     availableEditorIds: availability.data ?? null,
@@ -193,11 +173,7 @@ function FileTreeRowContextMenuContent(
     ? row.treePath.slice(0, -1)
     : row.treePath;
 
-  // One launch at a time. The menu can be reopened and a target reselected
-  // while a slow open is still in flight, and every mutate is queued rather
-  // than coalesced, so an unguarded handler launches the same path twice.
-  // The launching items swap their leading icon for the spinner and keep
-  // their label, so the disabled state reads as work in progress.
+  // The menu can be reopened and a target reselected while a slow open is still in flight, and every mutate is queued rather than coalesced, so an unguarded handler launches the same path twice.
   const opening = mutation.isPending || openFeedbackActive;
 
   const openPath = (editorId: OpenPathsTarget) => {

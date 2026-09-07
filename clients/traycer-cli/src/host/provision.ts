@@ -42,21 +42,8 @@ import { compareHostVersions } from "@traycer-clients/shared/host-version/compar
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
 
-// The single host-provisioning core behind `host ensure` (the desktop's
-// post-auth call and the CLI's convergent provisioning verb). It reads the
-// current state, then does the minimal work to reach installed + registered
-// + running, reporting exactly what it did.
-//
-// It once had a second caller, `maybeAutoBootstrap`, which ran this pipeline
-// implicitly from `traycer login` and `traycer host status`. Both were
-// removed - a sign-in and a status read must not install software (audit
-// finding CLI-001) - so every entry point into this core is now a command
-// that says provisioning is what it does.
-//
-// Source resolution and idempotency policy differ per caller, so both are
-// injected: `resolveInstallSource` is only invoked on the install branch,
-// and `satisfaction` (presence / exact / implicit-registry-minimum, finding
-// D) controls the fast no-op.
+// The single host-provisioning core behind `host ensure` (the desktop's post-auth call and the CLI's convergent provisioning verb).
+// It reads the current state, then does the minimal work to reach installed + registered + running, reporting exactly what it did.
 
 export type HostProvisionAction =
   | "noop"
@@ -67,17 +54,8 @@ export type HostProvisionAction =
 export interface HostProvisionServiceLifecycle {
   readonly priorServiceState: ServiceState;
   readonly stoppedBeforeSwap: boolean;
-  // Wider than `service/install-lifecycle.ts`'s own
-  // `ServiceInstallLifecycleState.postSwapAction` (`"install" | "none"` -
-  // narrowed there because a binary swap must never plain start/restart a
-  // cached macOS launchd definition). The install branch's value here is
-  // still transitively constrained to that narrower set (it's copied
-  // straight from the lifecycle handle below), but `runServiceRegister`/
-  // `runStart` never touch a swap at all - `"install"` accurately reports
-  // a first-time register+start, and `"start"` accurately reports a plain
-  // start of an already-correctly-configured, already-registered service.
-  // Neither is the unsafe post-swap case the narrower type guards against;
-  // `"restart"` is omitted because nothing on this path ever produces it.
+  // Wider than `service/install-lifecycle.ts`'s own `ServiceInstallLifecycleState.postSwapAction` (`"install" | "none"` - narrowed there because a binary swap must never plain start/restart a cached macOS launchd definition).
+  // The install branch's value here is still transitively constrained to that narrower set (it's copied straight from the lifecycle handle below), but `runServiceRegister`/ `runStart` never touch a swap at all - `"install"` accurately reports a first-time register+start, and `"start"` accurately reports a plain start of an already-correctly-configured, already-registered service.
   readonly postSwapAction: "start" | "install" | "none";
   readonly postSwapError: string | null;
 }
@@ -87,31 +65,20 @@ export interface HostProvisionResult {
   readonly registered: boolean;
   readonly running: boolean;
   readonly version: string | null;
-  // The installed archive's own build stamp (install record
-  // `runtimeVersion`) - what the running host will actually report. Display
-  // truth only; `version` remains the idempotency identity.
+  // The installed archive's own build stamp (install record `runtimeVersion`) - what the running host will actually report.
+  // Display truth only; `version` remains the idempotency identity.
   readonly runtimeVersion: string | null;
   readonly action: HostProvisionAction;
-  // Present on every branch that starts or cycles the service (install,
-  // service-register, start) so the caller can attribute a subsequent
-  // readiness observation to THIS command's cycle; `null` only on noop,
-  // where nothing was touched (Tech Plan, "Attested generation in
-  // results": ensure's cycle/start outcome extends this payload beyond
-  // the install branch it was previously scoped to).
+  // Present on every branch that starts or cycles the service (install, service-register, start) so the caller can attribute a subsequent readiness observation to THIS command's cycle; `null` only on noop, where nothing was touched (Tech Plan, "Attested generation in results": ensure's cycle/start outcome extends this payload beyond the install branch it was previously scoped to).
   readonly serviceLifecycle: HostProvisionServiceLifecycle | null;
   readonly postSwapError: string | null;
-  // The canonical install-generation fingerprint, read/minted under the
-  // lock on every branch that starts or cycles the service - never a
-  // later disk re-read, so the controller can't race a subsequent
-  // mutation. `null` on noop: nothing was attested because nothing ran.
+  // The canonical install-generation fingerprint, read/minted under the lock on every branch that starts or cycles the service - never a later disk re-read, so the controller can't race a subsequent mutation.
+  // `null` on noop: nothing was attested because nothing ran.
   readonly installGeneration: string | null;
 }
 
 // The installed-version predicate for a provisioning run (RCA finding D).
-// Local files and an explicit `--release` request demand an exact match;
-// the build-stamped registry default accepts an installed version NEWER
-// than the target (a host updated out-of-band must not be downgraded back
-// to the stamped build), yank-checked against the manifest and fail-open.
+// Local files and an explicit `--release` request demand an exact match; the build-stamped registry default accepts an installed version NEWER than the target (a host updated out-of-band must not be downgraded back to the stamped build), yank-checked against the manifest and fail-open.
 export type HostSatisfactionPolicy =
   | { readonly kind: "presence" }
   | { readonly kind: "exact"; readonly version: string }
@@ -121,52 +88,26 @@ export interface ProvisionHostOptions {
   readonly runtime: RuntimeContext;
   // Invoked only when an install is actually required.
   readonly resolveInstallSource: () => Promise<InstallSourceArg>;
-  // The idempotency predicate. `exact`/`presence` behave like the old
-  // `targetVersion` concrete/`null`; the bundled-host callers pass this
-  // build's `config.version` as `exact` so a rebuilt (same-channel) host is
-  // detected and replaced even without a semver bump. The registry default
-  // uses `implicit-registry-minimum` so a newer non-yanked install is kept.
+  // The idempotency predicate.
+  // `exact`/`presence` behave like the old `targetVersion` concrete/`null`; the bundled-host callers pass this build's `config.version` as `exact` so a rebuilt (same-channel) host is detected and replaced even without a semver bump.
   readonly satisfaction: HostSatisfactionPolicy;
-  // Recorded as the install version for a local-file install (the
-  // bundled-host callers pass `config.version` so the recorded version
-  // matches the exact satisfaction policy and the next launch is a no-op
-  // until the build changes). `null` keeps the installer's derived default.
+  // Recorded as the install version for a local-file install (the bundled-host callers pass `config.version` so the recorded version matches the exact satisfaction policy and the next launch is a no-op until the build changes).
+  // `null` keeps the installer's derived default.
   readonly recordVersionOverride: string | null;
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
-  // When false, install the host BYTES only and never touch the OS service
-  // (no plist write, no launchctl, no start). The desktop sets this because
-  // it registers the macOS login item via SMAppService itself; otherwise the
-  // CLI registers and starts the service.
+  // When false, install the host BYTES only and never touch the OS service (no plist write, no launchctl, no start).
+  // The desktop sets this because it registers the macOS login item via SMAppService itself; otherwise the CLI registers and starts the service.
   readonly registerService: boolean;
   readonly lockReason: string;
-  /**
-   * A parent executor's live-lock proof, when this provision runs as one step
-   * inside a held segment (Ticket 05, Ruling 1). `undefined` for every ordinary
-   * invocation, which keeps the acquire-or-refuse path exactly as it was.
-   */
+  /** A parent executor's live-lock proof, when this provision runs as one step inside a held segment (Ticket 05, Ruling 1). `undefined` for every ordinary invocation, which keeps the acquire-or-refuse path exactly as it was. */
   readonly adoption: UpdateMutationCapabilityAdoption | undefined;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
-  // When true, skip the pre-reinstall busy probe and replace a running host
-  // unconditionally (the desktop's "Force restart"). Default callers pass
-  // false so in-progress chat/terminal/CLI work is protected.
+  // When true, skip the pre-reinstall busy probe and replace a running host unconditionally (the desktop's "Force restart").
+  // Default callers pass false so in-progress chat/terminal/CLI work is protected.
   readonly force: boolean;
-  // Invoked once this call has committed to MUTATING the host (install,
-  // register or start) and never on the no-op fast path - so a caller can
-  // run a step that is only warranted when a host will actually be started.
-  // `host ensure` hangs its sign-in pre-flight here: prompting a signed-out
-  // operator before the no-op decision would interrogate them for a command
-  // that then does nothing.
-  //
-  // The hook point is sound in the direction that matters: the fast path
-  // above RETURNS on a satisfied read, so "no-op predicted" can never become
-  // a start, and a caller that skips its step on no-op cannot be surprised
-  // by one. The reverse (this fires, then the locked re-read finds the state
-  // satisfied after all) needs a genuinely concurrent provisioner and costs
-  // only a redundant call, never a missed one.
-  //
-  // Runs OUTSIDE cli-lock and before staging, so a hook that blocks on a
-  // human neither holds the lock nor waits out a download.
+  // Invoked once this call has committed to MUTATING the host (install, register or start) and never on the no-op fast path - so a caller can run a step that is only warranted when a host will actually be started.
+  // `host ensure` hangs its sign-in pre-flight here: prompting a signed-out operator before the no-op decision would interrogate them for a command that then does nothing.
   readonly beforeMutate: (() => Promise<void>) | null;
 }
 
@@ -184,10 +125,8 @@ export async function provisionHost(
   const progress = opts.onProgress ?? noopProgress;
   const controller = createServiceController();
   const label = serviceLabelFor(opts.runtime.environment);
-  // The manifest fetch is shareable across state snapshots within this run
-  // (finding D). Created once and threaded through the locked re-reads so a
-  // lock-race loser re-evaluates the winner's install record without a
-  // second network probe.
+  // The manifest fetch is shareable across state snapshots within this run (finding D).
+  // Created once and threaded through the locked re-reads so a lock-race loser re-evaluates the winner's install record without a second network probe.
   const yankLookup = createRegistryYankLookup(opts.runtime.environment);
   opts.runtime.logger.info("Host provisioning started", {
     environment: opts.runtime.environment,
@@ -212,9 +151,7 @@ export async function provisionHost(
     running: fast.running,
     hasVersion: fast.version !== null,
   });
-  // `--force` (the desktop "Force restart", D5) must reinstall + restart even
-  // when the install record already matches, so it never takes the satisfied
-  // no-op fast path.
+  // `--force` (the desktop "Force restart", D5) must reinstall + restart even when the install record already matches, so it never takes the satisfied no-op fast path.
   if (
     !opts.force &&
     (await isSatisfied(
@@ -242,10 +179,8 @@ export async function provisionHost(
     adoption: opts.adoption,
   };
   return withCliUpdateExecutionSegment(contenderOptions, async (capability) => {
-    // Past the no-op return: this call is going to install, register or
-    // start something. Keep the outer capability from that decision through
-    // source resolution and staging, while preserving the short CLI-lock
-    // scope around only the final lifecycle mutation.
+    // Past the no-op return: this call is going to install, register or start something.
+    // Keep the outer capability from that decision through source resolution and staging, while preserving the short CLI-lock scope around only the final lifecycle mutation.
     if (opts.beforeMutate !== null) {
       await opts.beforeMutate();
     }
@@ -270,17 +205,7 @@ export async function provisionHost(
   });
 }
 
-// A lost prediction ("no install needed" at the fast read, but the locked
-// re-read now selects the install branch - only possible via a genuinely
-// concurrent provisioning actor) must never fall back to staging INSIDE
-// cli-lock: staging is a network transfer, and the plan's no-transfer-in-
-// a-critical-section rule is absolute, not "vanishingly rare so it's fine
-// to bend once." So a lost prediction returns a `"need-stage"` signal from
-// the locked callback instead of staging there; the lock is released,
-// staging happens outside it (same as the initial prediction), and the
-// whole attempt retries with the freshly staged source - at most one
-// retry, since the retry's `preStaged` is never null, so `"need-stage"`
-// cannot recur.
+// A lost prediction ("no install needed" at the fast read, but the locked re-read now selects the install branch - only possible via a genuinely concurrent provisioning actor) must never fall back to staging INSIDE cli-lock: staging is a network transfer, and the plan's no-transfer-in- a-critical-section rule is absolute, not "vanishingly rare so it's fine to bend once." So a lost prediction returns a `"need-stage"` signal from the locked callback instead of staging there; the lock is released, staging happens outside it (same as the initial prediction), and the whole attempt retries with the freshly staged source - at most one retry, since the retry's `preStaged` is never null, so `"need-stage"` cannot recur.
 type ProvisionAttemptOutcome =
   | { readonly kind: "result"; readonly result: HostProvisionResult }
   | { readonly kind: "need-stage" };
@@ -313,9 +238,7 @@ async function provisionUnderLock(
       capability,
       contenderOptions,
       async (): Promise<ProvisionAttemptOutcome> => {
-        // Re-read inside the lock so a caller that lost the race observes the
-        // now-provisioned state and short-circuits instead of redundantly
-        // downloading.
+        // Re-read inside the lock so a caller that lost the race observes the now-provisioned state and short-circuits instead of redundantly downloading.
         const state = await readProvisionState(controller, label, opts.runtime);
         opts.runtime.logger.debug("Host provisioning locked state read", {
           environment: opts.runtime.environment,
@@ -362,16 +285,8 @@ async function provisionUnderLock(
           );
           return { kind: "result", result: noopResult(state) };
         }
-        // Every remaining path replaces or cycles a LIVE host - reinstall
-        // (forced, or bytes absent/stale), (re)register, or (re)start - so the
-        // busy guard must cover ALL of them, not just the install branch.
-        // Unless forced, refuse if a live host reports busy (or can't be
-        // confirmed idle - fail safe). `assertHostNotBusy` returns when there
-        // is no live host to protect, judging liveness from pid.json + the
-        // process rather than the OS service-controller `running` flag
-        // (unreliable on the macOS host-owned path where the CLI does not own
-        // the service registration, and on a status drift where the
-        // controller reports stopped while a process is still live and busy).
+        // Every remaining path replaces or cycles a LIVE host - reinstall (forced, or bytes absent/stale), (re)register, or (re)start - so the busy guard must cover ALL of them, not just the install branch.
+        // Unless forced, refuse if a live host reports busy (or can't be confirmed idle - fail safe).
         if (!opts.force) {
           opts.runtime.logger.debug("Host provisioning running busy guard", {
             environment: opts.runtime.environment,
@@ -387,11 +302,8 @@ async function provisionUnderLock(
             },
           );
         }
-        // Reinstall when the bytes are absent/stale, OR when forced (D5: Force =
-        // reinstall + restart onto this build even if the install record matches).
-        // Evaluate the (async, yank-checked) predicate once and reuse it for
-        // both the branch decision and the log so the manifest lookup runs at
-        // most once here.
+        // Reinstall when the bytes are absent/stale, OR when forced (D5: Force = reinstall + restart onto this build even if the install record matches).
+        // Evaluate the (async, yank-checked) predicate once and reuse it for both the branch decision and the log so the manifest lookup runs at most once here.
         const reinstallVersionSatisfied = await versionSatisfied(
           state,
           opts.satisfaction,
@@ -471,9 +383,8 @@ async function provisionUnderLock(
     if (outcome.kind === "result") {
       return outcome.result;
     }
-    // Lock released. Stage outside it (network transfer never runs inside
-    // cli-lock), then reacquire and retry - `preStaged` is non-null on this
-    // retry, so the callback above cannot select `"need-stage"` again.
+    // Lock released.
+    // Stage outside it (network transfer never runs inside cli-lock), then reacquire and retry - `preStaged` is non-null on this retry, so the callback above cannot select `"need-stage"` again.
     const staged = await prepareInstallStage(
       opts,
       progress,
@@ -491,11 +402,8 @@ async function provisionUnderLock(
       contenderOptions,
     );
   } finally {
-    // Anything staged in anticipation of the install branch that the lock
-    // callback never consumed (raced to noop/register/start, or an earlier
-    // step inside the callback threw before reaching `commitInstall`) must
-    // be scrubbed here. Once `commitInstall` runs, `commitHostInstallSource`
-    // owns cleanup itself - never double-discard.
+    // Anything staged in anticipation of the install branch that the lock callback never consumed (raced to noop/register/start, or an earlier step inside the callback threw before reaching `commitInstall`) must be scrubbed here.
+    // Once `commitInstall` runs, `commitHostInstallSource` owns cleanup itself - never double-discard.
     if (preStaged !== null && !stagedConsumed) {
       await discardStagedHostInstallSource(
         opts.runtime.environment,
@@ -562,9 +470,8 @@ async function commitInstall(
     readonly admission: "legacy-update-shadow";
   },
 ): Promise<HostProvisionResult> {
-  // When the host owns service registration, install the bytes without service
-  // bootstrap. On Windows, still stop the slot first so stale processes do not
-  // keep the install directory open during the swap.
+  // When the host owns service registration, install the bytes without service bootstrap.
+  // On Windows, still stop the slot first so stale processes do not keep the install directory open during the swap.
   const handle = opts.registerService
     ? createServiceInstallLifecycle({
         environment: opts.runtime.environment,
@@ -572,10 +479,7 @@ async function commitInstall(
           enableLinger: opts.enableLinger,
           allowSelfInvocation: opts.allowSelfInvocation,
         },
-        // Threaded through to the pre-swap stop, not just the busy
-        // pre-check above: without it, a busy Desktop-managed host still
-        // denied the cooperative shutdown claim and `--force` aborted
-        // anyway.
+        // Threaded through to the pre-swap stop, not just the busy pre-check above: without it, a busy Desktop-managed host still denied the cooperative shutdown claim and `--force` aborted anyway.
         force: opts.force,
       })
     : null;
@@ -588,10 +492,8 @@ async function commitInstall(
     lifecycleEnabled: handle !== null,
     preSwapCleanupEnabled: handle === null && process.platform === "win32",
   });
-  // Already inside the per-environment CLI lock - commit the pre-staged
-  // source directly (it expects the caller to hold the lock). Reconcile
-  // wiring (Tech Plan: "Install/ensure re-run reconcile after a successful
-  // commit") comes from `commitHostInstallSource` itself.
+  // Already inside the per-environment CLI lock - commit the pre-staged source directly (it expects the caller to hold the lock).
+  // Reconcile wiring (Tech Plan: "Install/ensure re-run reconcile after a successful commit") comes from `commitHostInstallSource` itself.
   const result = await commitHostInstallSourceWithAttempt(
     capability,
     contenderOptions,
@@ -698,10 +600,7 @@ async function runServiceRegister(
     version: post.version,
     runtimeVersion: post.runtimeVersion,
     action: "service-registered",
-    // `controller.install` both registers and starts the service -
-    // `postSwapAction: "install"` mirrors the install branch's own
-    // bootstrap-registration facts (`service/install-lifecycle.ts`'s
-    // `afterSwap`) for the same first-registration case.
+    // `controller.install` both registers and starts the service - `postSwapAction: "install"` mirrors the install branch's own bootstrap-registration facts (`service/install-lifecycle.ts`'s `afterSwap`) for the same first-registration case.
     serviceLifecycle: {
       priorServiceState: "not-installed",
       stoppedBeforeSwap: false,
@@ -746,10 +645,8 @@ async function runStart(
       label,
     );
   } catch (firstError) {
-    // Escalate once: full task/launcher rewrite (the install-branch
-    // registration - the field-proven manual recovery "we had to manually
-    // `service install`") -> retry start -> then an honest error. Exactly one
-    // rewrite; a second failure does not loop.
+    // Escalate once: full task/launcher rewrite (the install-branch registration - the field-proven manual recovery "we had to manually `service install`") -> retry start -> then an honest error.
+    // Exactly one rewrite; a second failure does not loop.
     opts.runtime.logger.warn(
       "Host provisioning start failed; escalating once with full service re-register",
       {
@@ -784,10 +681,8 @@ async function runStart(
         },
       );
     } catch (cause) {
-      // A retry is valid only after the rewritten task was successfully
-      // registered and its own `/Run`/verification failed. Retrying after a
-      // failed definition write would start the stale task and mask the repair
-      // failure as success.
+      // A retry is valid only after the rewritten task was successfully registered and its own `/Run`/verification failed.
+      // Retrying after a failed definition write would start the stale task and mask the repair failure as success.
       if (
         !(cause instanceof CliError) ||
         cause.code !== CLI_ERROR_CODES.SERVICE_CONTROL_FAILED
@@ -814,11 +709,8 @@ async function runStart(
         errorFromUnknown(cause),
       );
     }
-    // Service installation is itself the recovery launch: Windows verifies
-    // the `/Run` issued while recreating its task, and the other controllers
-    // start as part of registration. A second Windows `/Run` would baseline
-    // after that evidence; IgnoreNew then suppresses it and reports a healthy
-    // repaired host as failed. Only retry when install's own launch failed.
+    // Service installation is itself the recovery launch: Windows verifies the `/Run` issued while recreating its task, and the other controllers start as part of registration.
+    // A second Windows `/Run` would baseline after that evidence; IgnoreNew then suppresses it and reports a healthy repaired host as failed.
     if (rewriteError !== null) {
       try {
         await startHostServiceWithAttempt(
@@ -863,9 +755,7 @@ async function runStart(
     version: state.version,
     runtimeVersion: state.runtimeVersion,
     action: "started",
-    // Reached only when installed + registered + stopped (see the branch
-    // selection above) - the service was registered but not running before
-    // this call.
+    // Reached only when installed + registered + stopped (see the branch selection above) - the service was registered but not running before this call.
     serviceLifecycle: {
       priorServiceState: "stopped",
       stoppedBeforeSwap: false,
@@ -877,11 +767,7 @@ async function runStart(
   };
 }
 
-// Reads the current install record under the caller's already-held
-// cli-lock and encodes its canonical generation - used by the
-// service-register/start branches, which don't touch install bytes but
-// still owe the caller an attested generation for the record that is
-// about to start/cycle (Tech Plan: "Attested generation in results").
+// Reads the current install record under the caller's already-held cli-lock and encodes its canonical generation - used by the service-register/start branches, which don't touch install bytes but still owe the caller an attested generation for the record that is about to start/cycle (Tech Plan: "Attested generation in results").
 async function attestedGenerationFromCurrentRecord(
   environment: Environment,
 ): Promise<string | null> {
@@ -944,13 +830,8 @@ async function readProvisionState(
   };
 }
 
-// The installed-version predicate (RCA finding D). "latest"/`--from`/the
-// packaged archive carry synthetic local versions and use `presence`; an
-// explicit `--release` or the bundled build use `exact`; the registry
-// default uses `implicit-registry-minimum`, which accepts an installed
-// version NEWER than the target (an out-of-band host update must not be
-// downgraded) unless the manifest has explicitly yanked it - an absent
-// entry or a failed/expired lookup deliberately fails open.
+// The installed-version predicate (RCA finding D).
+// "latest"/`--from`/the packaged archive carry synthetic local versions and use `presence`; an explicit `--release` or the bundled build use `exact`; the registry default uses `implicit-registry-minimum`, which accepts an installed version NEWER than the target (an out-of-band host update must not be downgraded) unless the manifest has explicitly yanked it - an absent entry or a failed/expired lookup deliberately fails open.
 async function versionSatisfied(
   state: ProvisionState,
   satisfaction: HostSatisfactionPolicy,

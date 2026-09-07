@@ -12,22 +12,11 @@ import {
 export interface ManagedCommandOutputSession {
   /** `null` until the subscribing effect has created the stream. */
   readonly session: ManagedCommandOutputStoreHandle | null;
-  /**
-   * Tears the stream down and opens it again from a fresh tail - the same
-   * path a closed-and-reopened tab takes. The way back from a stream the host
-   * closed for good; a mere drop reconnects on its own and needs no help.
-   */
+  /** Tears the stream down and opens it again from a fresh tail - the same path a closed-and-reopened tab takes. */
   readonly reopen: () => void;
 }
 
-/**
- * Opens one command's output stream for as long as its window is mounted.
- *
- * Unlike a terminal session there is nothing to keep warm: the window is a
- * viewer over a log the host owns, so closing the tab closes the stream and
- * reopening it re-reads the tail. The transport is owned by the stream client
- * (see `openOwnedDurableStreamClient`) and bound to the tab's host for life.
- */
+/** Opens one command's output stream for as long as its window is mounted. */
 export function useManagedCommandOutputSession(args: {
   readonly epicId: string;
   readonly commandId: string;

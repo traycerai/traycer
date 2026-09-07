@@ -1,18 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 
 /**
- * The address-bar draft policy both browser chromes share.
- *
- * One policy, because the same toolbar renders over both transports and a URL
- * half-typed in an Electron tile must not be discarded on rules a screencast
- * tile would have kept it under. The screencast rule is the one that survived:
- *
- * - the draft is OWNED BY FOCUS - while the caret is in the field, a navigation
- *   arriving underneath (an agent driving the page, a redirect) never rewrites
- *   what the user is typing;
- * - a SUBMITTED draft outlives blur but yields to the next navigation, so the
- *   field shows where the page actually landed rather than what was asked for;
- * - blur without a submit drops the draft and the live URL comes back.
+ * One policy, because the same toolbar renders over both transports and a URL half-typed in an Electron tile must not be discarded on rules a screencast tile would have kept it under.
+ * The screencast rule is the one that survived: - the draft is OWNED BY FOCUS - while the caret is in the field, a navigation arriving underneath (an agent driving the page, a redirect) never rewrites what the user is typing; - a SUBMITTED draft outlives blur but yields to the next navigation, so the field shows where the page actually landed rather than what was asked for; - blur without a submit drops the draft and the live URL comes back.
  */
 interface AddressDraft {
   readonly focused: boolean;
@@ -30,17 +20,13 @@ export interface AddressDraftController {
   /** What the address field renders: the draft while it owns the field. */
   readonly addressValue: string;
   /**
-   * Callback ref for the rendered field. A plain function, not a `RefObject`:
-   * `react-hooks/refs` rejects a ref object travelling through render, and
-   * this controller is passed to the toolbar as a prop.
+   * Callback ref for the rendered field.
+   * A plain function, not a `RefObject`: `react-hooks/refs` rejects a ref object travelling through render, and this controller is passed to the toolbar as a prop.
    */
   readonly setAddressInput: (node: HTMLInputElement | null) => void;
   /**
-   * Put the caret in the address field - Cmd+L while a native guest holds
-   * focus (see `@/lib/browser-view/reserved-chords-registration`; main takes
-   * OS keyboard focus off the guest first, or the caret would render here
-   * while typing still reached the page). Focus still ARRIVES as the input's
-   * own event, so the draft policy above is unchanged by it.
+   * Put the caret in the address field - Cmd+L while a native guest holds focus (see `@/lib/browser-view/reserved-chords-registration`; main takes OS keyboard focus off the guest first, or the caret would render here while typing still reached the page).
+   * Focus still ARRIVES as the input's own event, so the draft policy above is unchanged by it.
    */
   readonly focusAddress: () => void;
   readonly onAddressChange: (value: string) => void;

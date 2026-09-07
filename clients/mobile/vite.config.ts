@@ -19,29 +19,16 @@ import {
 } from "./scripts/bundled-build-reload";
 import { sentryDsnFromEnv } from "./scripts/sentry-dsn";
 
-// Dev-server endpoint that re-reads the host's pid.json on every request. The
-// baked define config only captures the host port as of Vite startup; the dev
-// host allocates a fresh port each stack restart and often comes up AFTER
-// Vite has read the previous run's file, so the client must be able to ask
-// for the current address at runtime.
-//
-// BROWSER-TESTING SCAFFOLDING: this exists only for driving the web entry
-// against a local `make dev-desktop` host. The shipped mobile client reaches
-// remote hosts through real host discovery and must not depend on this.
+// Dev-server endpoint that re-reads the host's pid.json on every request.
+// Browser-testing scaffolding: this exists only for driving the web entry against a local `make dev-desktop` host.
 const DEV_HOST_PATH = "/__traycer/dev-host";
 const BUNDLED_BUILD_PATH = "/__traycer/bundled-build";
 const GUI_MODE_ENV = "TRAYCER_GUI_MODE";
-/** Mirrors the desktop's baked value (`clients/desktop/src/config.ts`). */
 const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
 
 /**
- * Deployed backend sets for shipped bundles, selected with
- * `TRAYCER_MOBILE_ENV=staging|production` (default: `dev`, the loopback
- * scaffolding below). The values mirror the desktop's `config.ts` and the
- * host's `set-deploy-target` targets — these three endpoints move together.
- * A shipped bundle bakes its environment as a literal, so a stray env var
- * cannot repoint an installed app; only the dev config reads `TRAYCER_DEV_*`
- * overrides.
+ * Deployed backend sets for shipped bundles, selected with `TRAYCER_MOBILE_ENV=staging|production` (default: `dev`, the loopback scaffolding below).
+ * A shipped bundle bakes its environment as a literal, so a stray env var cannot repoint an installed app; only the dev config reads `TRAYCER_DEV_*` overrides.
  */
 const SHIPPED_ENVIRONMENTS = {
   staging: {
@@ -57,14 +44,8 @@ const SHIPPED_ENVIRONMENTS = {
 } as const;
 
 /**
- * Per-lane sign-in return scheme. The iOS release workflow stamps the staging
- * app into a SEPARATE identity (bundle id `ai.traycer.app.ios.staging` + this
- * URL scheme) so both lanes install side by side and the browser's sign-in
- * return reopens the right app; the baked value and the stamped scheme move
- * together - change one, change both (release-mobile-ios.yaml, "Stamp staging
- * app identity"). A staging bundle built locally in Xcode keeps the
- * checked-in `traycer` scheme, so its sign-in return cannot come back - use
- * the dev loop for local work.
+ * Per-lane sign-in return scheme.
+ * A staging bundle built locally in Xcode keeps the checked-in `traycer` scheme, so its sign-in return cannot come back - use the dev loop for local work.
  */
 const SHIPPED_RETURN_SCHEMES = {
   staging: "traycer-staging",
@@ -80,11 +61,8 @@ interface SentrySourcemapUpload {
 }
 
 /**
- * Sourcemap upload credentials, or `null` when the build should not upload -
- * every local build, and any CI lane that has not exported all three. Mirrors
- * the desktop renderer's gate (`vite.renderer.config.ts`), split out because
- * here the answer ALSO decides whether sourcemaps are emitted at all: see the
- * `build.sourcemap` note below.
+ * Sourcemap upload credentials, or `null` when the build should not upload - every local build, and any CI lane that has not exported all three.
+ * Mirrors the desktop renderer's gate (`vite.renderer.config.ts`), split out because here the answer also decides whether sourcemaps are emitted at all: see the `build.sourcemap` note below.
  */
 function sentrySourcemapUploadFromEnv(
   env: NodeJS.ProcessEnv,
@@ -307,9 +285,8 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
     environment: "dev",
     authnBaseUrl,
     signInUrl: new URL("/sign-in", cloudUiBaseUrl).toString(),
-    // Same dev-gated posture as the desktop's `config.ts`: the shipped relay
-    // endpoint unless this run exports its own (`make dev-remote` does). This
-    // config only ever builds in dev, so the environment argument is fixed.
+    // Same dev-gated posture as the desktop's `config.ts`: the shipped relay endpoint unless this run exports its own (`make dev-remote` does).
+    // This config only ever builds in dev, so the environment argument is fixed.
     relayBaseUrl: devRelayBaseUrlFromEnv(
       "dev",
       "TRAYCER_DEV_RELAY_BASE_URL",
@@ -320,21 +297,14 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
     // The checked-in scheme both native projects register; dev builds are
     // never re-stamped.
     returnScheme: "traycer",
-    // Off unless a developer exports the DSN deliberately - the one way to
-    // verify reporting end to end from the dev loop. Events then land tagged
-    // `environment: "dev"`.
+    // Off unless a developer exports the DSN deliberately - the one way to verify reporting end to end from the dev loop.
     sentryDsn: sentryDsnFromEnv(process.env),
     devHost: {
       devHostPath: DEV_HOST_PATH,
       host: {
         hostId: host.hostId,
         label: slot,
-        // `local`, not `remote`: this entry IS a 127.0.0.1 host the browser
-        // dials directly on its own `websocketUrl`, which is what `local` means
-        // (`host-client/host-directory.ts`). `remote` now denotes the relay
-        // path - an authn-minted attach grant plus a Noise-NK handshake against
-        // the host's registry-published public key - and never dials this URL,
-        // so a local address behind `remote` has no transport to build.
+        // `local`, not `remote`: this entry IS a 127.0.0.1 host the browser dials directly on its own `websocketUrl`, which is what `local` means (`host-client/host-directory.ts`).
         kind: "local",
         websocketUrl: host.websocketUrl,
         version: host.version,
@@ -361,11 +331,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
     : sentrySourcemapUploadFromEnv(process.env);
   const webOutDir = resolve(mobileRoot, "dist", "web");
 
-  // The dev server (and its pid.json endpoint) exist only for the loopback
-  // scaffolding; a shipped build neither serves nor needs a port. The
-  // physical-device lane (`dev:ios:device`) overrides the bind address so a
-  // phone on the same LAN can load the bundle; everything else stays on
-  // loopback.
+  // The dev server (and its pid.json endpoint) exist only for the loopback scaffolding; a shipped build neither serves nor needs a port.
   let server: UserConfig["server"];
   let preview: UserConfig["preview"];
   if (environment === "dev") {
@@ -386,14 +352,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
         host,
         port,
         strictPort: true,
-        // Pre-transform the app from its entry at server start instead of on
-        // the first browser request: the entry pulls in effectively all of
-        // gui-app through the react-compiler babel pass, which otherwise
-        // makes the first page load of a fresh stack take tens of seconds.
-        // Warmup shares the normal transform cache and module graph, so HMR,
-        // invalidation, and every later request behave exactly as before —
-        // nothing observes the request-triggered laziness, it only moves the
-        // same work earlier.
+        // Warmup shares the normal transform cache and module graph, so HMR, invalidation, and every later request behave exactly as before - nothing observes the request-triggered laziness, it only moves the same work earlier.
         warmup: { clientFiles: ["./main.tsx"] },
       };
     }
@@ -426,10 +385,6 @@ export default defineConfig(async (): Promise<UserConfig> => {
         ...plugin,
         enforce: "post" as const,
       })),
-      // Uploads the hidden sourcemaps (and injects the debug ids + release
-      // that let Sentry match an event to them), then DELETES the `.map`
-      // files: `webDir` is copied wholesale into both native projects by
-      // `cap sync`, so anything left in `dist/web` ships inside the IPA/APK.
       ...(sentryUpload === null
         ? []
         : [
@@ -456,13 +411,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       target: "es2022",
       emptyOutDir: true,
       outDir: webOutDir,
-      // The tunnel-friendly development bundle favors rebuild speed and
-      // debuggability (full sourcemaps, no minification). Ordinary builds keep
-      // Vite's minification, and emit sourcemaps ONLY when an upload is
-      // configured: `"hidden"` (no `sourceMappingURL` comment) so the WebView
-      // never fetches them, and the upload plugin above removes the files
-      // once Sentry has them. With no upload there is nothing to emit them
-      // FOR - and every `.map` left in `dist/web` would ship in the app.
+      // The tunnel-friendly development bundle favors rebuild speed and debuggability (full sourcemaps, no minification).
       minify: bundledDevelopment ? false : undefined,
       sourcemap: bundledDevelopment
         ? true

@@ -1,8 +1,4 @@
-/**
- * The phone's native save leg. A WKWebView honours no browser save route, so
- * these cases are the whole difference between an export that reaches the user
- * and one that resolves successfully having written nothing.
- */
+/** The phone's native save leg. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   FileSaveRequest,
@@ -35,7 +31,6 @@ vi.mock("@capacitor/share", () => ({
   Share: { share: nativeMocks.share },
 }));
 
-/** The nth `writeFile` payload, as the plugin received it. */
 function writtenFile(index: number): {
   path: string;
   data: string;
@@ -52,18 +47,15 @@ function writtenFile(index: number): {
   };
 }
 
-/** The file name the OS would show, i.e. the last segment of a staged path. */
 function stagedBaseName(index: number): string {
   return writtenFile(index).path.split("/").at(-1) ?? "";
 }
 
-/** The directory a request staged into, everything above its basename. */
 function stagingDirectory(index: number): string {
   const segments = writtenFile(index).path.split("/");
   return segments.slice(0, -1).join("/");
 }
 
-/** The bytes the plugin was handed, decoded back out of its base64 payload. */
 function writtenBytes(): Uint8Array {
   const binary = atob(writtenFile(0).data);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
@@ -84,9 +76,8 @@ function request(name: string, bytes: Uint8Array) {
 }
 
 /**
- * The byte bound a single path component may occupy, as `file-save.ts`
- * enforces it. Restated here rather than exported, so a test that pushes a
- * name to the limit is pinned to the platform's rule and not to the module's.
+ * The byte bound a single path component may occupy, as `file-save.ts` enforces it.
+ * Restated here rather than exported, so a test that pushes a name to the limit is pinned to the platform's rule and not to the module's.
  */
 const MAX_FILE_NAME_BYTES = 255;
 
@@ -113,13 +104,11 @@ function directDownload(): (
   return download;
 }
 
-/** The set of paths a stat should report as already taken. */
 function occupyDocuments(paths: readonly string[]): void {
   nativeMocks.stat.mockImplementation((options: { path: string }) =>
     paths.includes(options.path)
       ? Promise.resolve({ uri: `file:///docs/${options.path}` })
-      : // The plugin REJECTS a stat of a missing file rather than reporting
-        // absence - "not there" only ever arrives as a failure.
+      : // The plugin rejects a missing-file stat rather than reporting absence.
         Promise.reject(fileNotFoundRejection()),
   );
 }
@@ -165,10 +154,8 @@ describe("supportsDirectDownload", () => {
   });
 
   it("assumes the capability when the probe fails", async () => {
-    // A false negative would hide a working Download from every modern
-    // Android; a false positive costs one API level a loud error beside a
-    // Share that still works. The probe failing is a runtime anomaly and must
-    // not take the common case down with it.
+    // A false negative would hide a working Download from every modern Android; a false positive costs one API level a loud error beside a Share that still works.
+    // The probe failing is a runtime anomaly and must not take the common case down with it.
     nativeMocks.getPlatform.mockReturnValue("android");
     nativeMocks.getInfo.mockRejectedValue(new Error("plugin unavailable"));
 
@@ -313,7 +300,7 @@ describe("MobileFileSave", () => {
       request(" . ", new Uint8Array([1])),
     );
 
-    // The property is that it names a FILE, not the directory or its parent -
+    // The property is that it names a file, not the directory or its parent -
     // asserted as such, so the fallback's exact spelling stays free to move.
     expect(stagedBaseName(0)).not.toBe(".");
     expect(stagedBaseName(0)).not.toBe("..");
@@ -331,10 +318,7 @@ describe("MobileFileSave", () => {
   });
 
   it("stages a repeat of the same name somewhere else, so it cannot overwrite the first", async () => {
-    // The sheet resolves on dismissal, which on Android can precede the
-    // receiving app finishing its read of the granted URI. Two exports sharing
-    // a path would let the second replace bytes the first recipient is still
-    // consuming - the same late-read fact that makes deleting unsafe.
+    // The sheet resolves on dismissal, which on Android can precede the receiving app finishing its read of the granted URI.
     const host = new MobileFileSave(true);
     await host.saveFile(request("mermaid-diagram.png", new Uint8Array([1])));
     await host.saveFile(request("mermaid-diagram.png", new Uint8Array([2])));
@@ -345,10 +329,8 @@ describe("MobileFileSave", () => {
   });
 
   it("bounds a staged name by encoded bytes, not characters, keeping its extension", async () => {
-    // Callers bound their suggestions by CODE POINT - artifact export allows
-    // 120 - which says nothing about bytes. 120 CJK characters is 360 bytes,
-    // past the component limit, and the write would reject before the sheet
-    // was ever reached.
+    // Callers bound their suggestions by code point - artifact export allows 120 - which says nothing about bytes.
+    // 120 cjk characters is 360 bytes, past the component limit, and the write would reject before the sheet was ever reached.
     const title = "経過報告".repeat(30);
     expect(title.length).toBe(120);
 
@@ -390,11 +372,7 @@ describe("MobileFileSave", () => {
   });
 
   it("gives an extensionless name one from the blob's own type", async () => {
-    // `imageFileName` returns a source URL's last path segment verbatim, so an
-    // attachment URL ending in an id arrives here with no extension. The sheet
-    // is handed a file URI and nothing else, so the OS infers the type from
-    // the path - extensionless reads as generic data, and "Save Image" is not
-    // offered for it.
+    // `imageFileName` returns a source URL's last path segment verbatim, so an attachment URL ending in an id arrives here with no extension.
     const saved = await new MobileFileSave(true).saveFile(
       requestOfType("a1b2c3d4", new Uint8Array([1]), "image/png"),
     );
@@ -510,9 +488,7 @@ describe("MobileFileSave.downloadFile", () => {
   });
 
   it("still writes something unique when every numbered name is taken", async () => {
-    // The numbering is bounded so a pathological directory cannot turn one
-    // download into an unbounded walk of the filesystem - but the download
-    // must still land, and still not clobber anything.
+    // The numbering is bounded so a pathological directory cannot turn one download into an unbounded walk of the filesystem - but the download must still land, and still not clobber anything.
     nativeMocks.stat.mockResolvedValue({ uri: "file:///docs/taken" });
 
     await directDownload()(request("usage.png", new Uint8Array([1])));
@@ -525,10 +501,8 @@ describe("MobileFileSave.downloadFile", () => {
   });
 
   it("keeps the collision suffix on a name already at the byte limit", async () => {
-    // The insert is the ONLY thing making an occupied name free. Composing
-    // first and bounding after truncates from the end and eats it, so every
-    // numbered candidate would come back as the occupied name and the write
-    // would replace the download it was meant to sit beside.
+    // The insert is the only thing making an occupied name free.
+    // Composing first and bounding after truncates from the end and eats it, so every numbered candidate would come back as the occupied name and the write would replace the download it was meant to sit beside.
     const stem = "a".repeat(MAX_FILE_NAME_BYTES - ".png".length);
     const name = `${stem}.png`;
     expect(new TextEncoder().encode(name).length).toBe(MAX_FILE_NAME_BYTES);
@@ -547,10 +521,7 @@ describe("MobileFileSave.downloadFile", () => {
   });
 
   it("does not hand the same path to two downloads started in one tick", async () => {
-    // The hard case: neither has claimed anything yet while both are awaiting
-    // their stat, so the claim set alone closes no window - only serialising
-    // the search does. Separate export surfaces have independent mutations, so
-    // two overlapping downloads are reachable.
+    // The hard case: neither has claimed anything yet while both are awaiting their stat, so the claim set alone closes no window - only serialising the search does.
     const host = directDownload();
 
     await Promise.all([
@@ -604,10 +575,7 @@ describe("MobileFileSave.downloadFile", () => {
   });
 
   it("treats a stat that failed for any other reason as occupied", async () => {
-    // The two mistakes are not equal. Reading an unknown failure as "free"
-    // lets the write replace a file that was there all along - the exact loss
-    // this collision handling exists to prevent - while reading it as "taken"
-    // costs the download nothing but a numbered name.
+    // The two mistakes are not equal.
     nativeMocks.stat.mockRejectedValue(new Error("I/O error"));
 
     await directDownload()(request("usage.png", new Uint8Array([1])));

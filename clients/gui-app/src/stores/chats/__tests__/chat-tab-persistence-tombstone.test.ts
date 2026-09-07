@@ -68,11 +68,8 @@ describe("chat-tab-persistence-tombstone", () => {
     // first, in one call - matches `evictChatTabPersistenceForEpics`.
     tombstoneEpicPrefixes(epicIds.map((epicId) => `${epicId}:`));
 
-    // Simulates the canvas close sweep running AFTER the full batch has
-    // been tombstoned (the real ordering) - epic 0 (the FIRST tombstoned,
-    // and thus the one plain FIFO pruning would have evicted to make room
-    // for epic 500) must still be fenced when its own "durable write back"
-    // attempt would land.
+    // Simulates the canvas close sweep running AFTER the full batch has been tombstoned (the real
+    // ordering) - epic 0 (the FIRST tombstoned, and thus the one plain FIFO pruning would have evicted
     expect(isChatKeyTombstoned("epic-batch-0:chat-x")).toBe(true);
     // The other end of the batch is fenced too - not just the survivors of
     // a partial prune.

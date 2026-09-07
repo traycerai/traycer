@@ -18,9 +18,8 @@ export type SwitcherRowKind =
   | "terminal";
 
 /**
- * The renameable kind behind a canvas tile, or null for a tile that carries no
- * name of its own (file previews, diffs, output windows, and the rest of the
- * derived kinds). Callers use null to render a title as plain text.
+ * The renameable kind behind a canvas tile, or null for a tile that carries no name of its own (file previews, diffs, output windows, and the rest of the derived kinds).
+ * Callers use null to render a title as plain text.
  */
 export function tileRenameKind(ref: EpicCanvasTileRef): SwitcherRowKind | null {
   switch (ref.type) {
@@ -41,25 +40,8 @@ export function tileRenameKind(ref: EpicCanvasTileRef): SwitcherRowKind | null {
 }
 
 /**
- * Fires the canonical rename mutation for a renameable kind: the same host RPCs
- * the desktop sidebar rows drive, so every mobile rename affordance - list rows
- * and the current-tile title alike - lands through one path.
- *
- * `nodeId` is the content id for agents and artifacts, the session id for a raw
- * terminal.
- *
- * ## Why this stamps an overlay now
- *
- * This hook had NO local update: it fired the RPC and waited. That was not a
- * mobile product decision - `useIsMobileViewport()` is a 768px media query, so
- * the same user on the same device got different persistence feedback either
- * side of a window drag. The overlay is what removes that width dependency;
- * the wide-viewport twin is `use-rename-canvas-tab.ts`, and the two must stay
- * observably identical (the resize test is 1.1's acceptance criterion).
- *
- * A raw `terminal` is deliberately excluded: it is a host session rather than
- * an epic node, has no row in the projection to patch, and its own rename
- * mutation already carries an optimistic `terminal.list` patch.
+ * The overlay is what removes that width dependency; the wide-viewport twin is `use-rename-canvas-tab.ts`, and the two must stay observably identical (the resize test is 1.1's acceptance criterion).
+ * A raw `terminal` is deliberately excluded: it is a host session rather than an epic node, has no row in the projection to patch, and its own rename mutation already carries an optimistic `terminal.list` patch.
  */
 export function useSwitcherRename(
   epicId: string,
@@ -67,9 +49,7 @@ export function useSwitcherRename(
   const epicHandle = useOpenEpicHandle();
   const renameChat = useEpicRenameChat();
   const renameTuiAgent = useEpicRenameTuiAgent();
-  // `null`: the node being renamed arrives as an argument to the returned
-  // callback, not at hook-call time, and no caller of this hook reads
-  // `isPending`.
+  // `null`: the node being renamed arrives as an argument to the returned callback, not at hook-call time, and no caller of this hook reads `isPending`.
   const renameArtifact = useEpicRenameArtifact(null, true);
   const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
 
@@ -79,39 +59,19 @@ export function useSwitcherRename(
       nodeId: string,
       title: string,
     ): Promise<void> => {
-      // Trimmed for BOTH the stamp and the RPC - and for the raw terminal
-      // too, whose arm previously sat above this guard and would send a
-      // whitespace-only title straight to `terminal.rename`. The overlay
-      // stamps the trimmed value, so sending the raw string would make the
-      // host land a value the landed-entry bookkeeping never acked - and the
-      // desktop twin already trims, which the 768px parity contract makes
-      // binding here.
+      // Trimmed for BOTH the stamp and the RPC - and for the raw terminal too, whose arm previously sat above this guard and would send a whitespace-only title straight to `terminal.rename`.
+      // The overlay stamps the trimmed value, so sending the raw string would make the host land a value the landed-entry bookkeeping never acked - and the desktop twin already trims, which the 768px parity contract makes binding here.
       const trimmed = title.trim();
       if (trimmed.length === 0) return;
       if (kind === "terminal") {
         renameTerminal.mutate({ sessionId: nodeId, title: trimmed });
         return;
       }
-      // DOC-RESIDENT terminal agents keep the direct doc write - see the
-      // same branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent`
-      // refuses a row the serving host has no registry entry for
-      // (`E_AGENT_NOT_LOCAL`), so the overlay path would only ever roll
-      // back. No snapshot on this surface; the doc write is its own
-      // synchronous feedback.
+      // DOC-RESIDENT terminal agents keep the direct doc write - see the same branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`), so the overlay path would only ever roll back.
       if (kind === "terminal-agent") {
         const agents = epicHandle.store.getState().tuiAgents.byId;
         if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
-          // `void`: the doc write is a round trip now, and this arm's whole
-          // point is that it needs no stamp to retire and nothing to await.
-          //
-          // Detached is not the same as unhandled, though. The write crosses
-          // the worker bridge, and `mutation/apply` rejects for faults that
-          // are not disposal - a handler throw, a malformed bridge response -
-          // so without a terminal rejection arm this surface is an unhandled
-          // rejection rather than a rename that quietly did not happen. There
-          // is nothing to roll back (no optimistic stamp was taken) and
-          // nothing to tell the user that the doc itself will not tell them:
-          // the title simply stays as it was. So this records and stops.
+          // The write crosses the worker bridge, and `mutation/apply` rejects for faults that are not disposal - a handler throw, a malformed bridge response - so without a terminal rejection arm this surface is an unhandled rejection rather than a rename that quietly did not happen.
           settleDetachedEpicMutation(
             epicHandle.store.getState().renameArtifact(nodeId, trimmed),
             "mobile switcher",
@@ -124,15 +84,8 @@ export function useSwitcherRename(
         renameArtifact.mutate({ epicId, artifactId: nodeId, title: trimmed });
         return;
       }
-      // Last line for a chat the host's chat store cannot address. The menu
-      // entry that reaches this is already disabled (`switcher-row-actions`),
-      // so this catches the surfaces that rename without one - the current-tile
-      // bar's inline edit. Nothing is sent AND nothing is written to the doc:
-      // on a host with a record plane the doc is not the authority, so a local
-      // write loses to record-wins on the next answer. No overlay stamp
-      // either - an optimistic patch for a mutation that is never sent is a
-      // row that renames and then snaps back, which is the dnd commit's rule
-      // for a move it cannot make.
+      // Last line for a chat the host's chat store cannot address.
+      // The menu entry that reaches this is already disabled (`switcher-row-actions`), so this catches the surfaces that rename without one - the current-tile bar's inline edit.
       if (
         resolveChatWriteRoute({
           chatsById: epicHandle.store.getState().chats.byId,
@@ -146,9 +99,7 @@ export function useSwitcherRename(
       const requestId = await epicHandle.store
         .getState()
         .beginRenameMutation(nodeId, trimmed);
-      // Retire rides the `mutateAsync` promise - never a per-call
-      // `onSettled`, which TanStack drops on unmount and replaces on a
-      // consecutive `mutate()`. Contract note in `use-rename-canvas-tab.ts`.
+      // Retire rides the `mutateAsync` promise - never a per-call `onSettled`, which TanStack drops on unmount and replaces on a consecutive `mutate()`.
       const retire = async (outcome: "landed" | "failed"): Promise<void> => {
         if (requestId === null) return;
         await epicHandle.store
@@ -189,12 +140,7 @@ export function useSwitcherRename(
     ],
   );
 
-  // The returned callback stays VOID-returning, which is what the declared
-  // type says and what a DOM handler needs - so the fire-and-forget is made
-  // explicit here rather than left as a promise assignable-to-void by
-  // accident, and terminated rather than merely discarded: `commit` awaits the
-  // write-route resolution and the doc-resident arm, either of which can
-  // reject after the row has already been handed back to the switcher.
+  // The returned callback stays VOID-returning, which is what the declared type says and what a DOM handler needs - so the fire-and-forget is made explicit here rather than left as a promise assignable-to-void by accident, and terminated rather than merely discarded: `commit` awaits the write-route resolution and the doc-resident arm, either of which can reject after the row has already been handed back to the switcher.
   return useCallback(
     (kind: SwitcherRowKind, nodeId: string, title: string): void => {
       settleDetachedEpicMutation(

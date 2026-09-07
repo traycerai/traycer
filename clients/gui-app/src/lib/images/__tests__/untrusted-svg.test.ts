@@ -43,9 +43,7 @@ describe("sanitizeUntrustedSvg malicious fixtures", () => {
   });
 
   it("strips external href and xlink:href", () => {
-    // Declare the xlink namespace so DOMParser accepts the attribute; the
-    // sanitizer strips any attribute whose localName is `href` (covers both
-    // plain href and xlink:href).
+    // Declare the xlink namespace so DOMParser accepts the attribute; the sanitizer strips any attribute whose localName is `href` (covers both plain href and xlink:href).
     const source = `<svg ${SVG_NS} xmlns:xlink="http://www.w3.org/1999/xlink"><a href="https://evil.example/phish"><text>click</text></a><image xlink:href="https://evil.example/sprite.svg#icon" width="10" height="10"/><image href="https://evil.example/direct.png" width="10" height="10"/></svg>`;
     const cleaned = sanitizeUntrustedSvg(source);
     expect(cleaned).not.toMatch(/https:\/\/evil\.example/i);

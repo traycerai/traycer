@@ -16,35 +16,19 @@ export interface SessionImportScanHandle {
   readonly dispatch: (action: SessionImportWizardAction) => void;
 }
 
-/**
- * Runs one scan while `active` and folds its frames into the wizard reducer.
- *
- * Subscribing is what makes the host read `~/.claude` and `~/.codex` at all,
- * so the caller decides when that starts: the Settings dialog on open, the
- * tour on its first act so the list is filled in by the time the import act
- * is reached (D13, revised 2026-09-02). Nothing reads those folders outside
- * one of those two surfaces. Unlike the run, a dropped scan costs nothing but
- * a re-read, so there is no attach-and-resume story here.
- */
+/** Subscribing is what makes the host read `~/.claude` and `~/.codex` at all, so the caller decides when that
+ * starts. */
 export function useSessionImportScan(active: boolean): SessionImportScanHandle {
   const wsStreamClient = useWsStreamClient();
-  // Taken off the same binding as the client above, never from the active-host
-  // hook, so the machine named here is the machine this scan is reading (see
-  // `StreamRuntimeBinding.hostId`).
+  // Taken off the same binding as the client above, never from the active-host hook, so the machine named here
+  // is the machine this scan is reading (see `StreamRuntimeBinding.hostId`).
   const streamHostId = useStreamHostId();
   const [state, dispatch] = useReducer(
     sessionImportWizardReducer,
     SESSION_IMPORT_INITIAL_STATE,
   );
-  // What the live subscription is reading - the machine AND the scan window -
-  // or `null` while there is no subscription. It is what tells the two
-  // restarts apart, and both halves are load-bearing: a replacement client
-  // dialing the SAME machine over the SAME window is the transport coming
-  // back under a user halfway through picking rows, so their groups and ticks
-  // survive it, while a different machine is a different set of sessions
-  // entirely and a different window is a different question - both start
-  // clean. An unnameable host falls to the clearing restart on purpose -
-  // unable to prove it is the same machine is not evidence that it is.
+  // What the live subscription is reading - the machine and the scan window - or `null` while there is no
+  // subscription.
   const scannedKeyRef = useRef<string | null>(null);
   const scanWindow = state.scanWindow;
 

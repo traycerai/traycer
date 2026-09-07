@@ -323,9 +323,7 @@ describe("isEvictableTraycerIdentity", () => {
 });
 
 /**
- * §2.1.2 — attestation must parse what launchd really emits, and the
- * label-suppresses-refutation rule is a **decision**, not an accident of the
- * order in which signals happen to be pushed.
+ * §2.1.2 - attestation must parse what launchd really emits, and the label-suppresses-refutation rule is a **decision**, not an accident of the order in which signals happen to be pushed.
  */
 describe("identity attestation over real launchd bytes (annex §2.1.2)", () => {
   const KNOWN_LABELS = traycerLabelIdsForBase("ai.traycer.host");
@@ -344,9 +342,8 @@ describe("identity attestation over real launchd bytes (annex §2.1.2)", () => {
 
     expect(attestation.kind).toBe("attested");
     if (attestation.kind === "attested") {
-      // The finding was that this reduced to a label match alone, because the
-      // args reader returned `null` for every real job. Invocation evidence
-      // must actually be present.
+      // The finding was that this reduced to a label match alone, because the args reader returned `null` for every real job.
+      // Invocation evidence must actually be present.
       expect(attestation.signals.map((s) => s.kind)).toContain(
         "program-arguments",
       );
@@ -388,14 +385,7 @@ describe("identity attestation over real launchd bytes (annex §2.1.2)", () => {
   });
 
   /**
-   * DECISION, recorded and tested rather than left emergent: a squatter on one
-   * of **our** labels, running a provably foreign program, still attests — the
-   * label is the thing we own, and refusing to evict a squatter is how a
-   * lockout survives its own repair.
-   *
-   * Previously this behaviour fell out of `if (signals.length === 0)`, so
-   * moving the label block below the arguments block would have silently
-   * reversed it with every test still green.
+   * Previously this behaviour fell out of `if (signals.length === 0)`, so moving the label block below the arguments block would have silently reversed it with every test still green.
    */
   it("still attests a squatter on OUR label running a foreign program (intended)", () => {
     const attestation = attestTraycerRegistration({

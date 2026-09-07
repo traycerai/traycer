@@ -1,17 +1,5 @@
 /**
- * Search-mode input for the Epic sidebar's agent (chat) panel.
- *
- * Same shape as artifact search - search is a MODE, the header row is traded
- * for the input rather than growing a second row, the overflow menu and
- * type-to-filter both enter it, Escape leaves it - but the body below is
- * unchanged: matches narrow the TREE through `SidebarFilterVisibilityContext`
- * instead of replacing it with a result list, so every row keeps its progress
- * icon, notification indicators, and row menus while searching. See
- * `chat-search-fuzzy.ts` for why an agent's search is local, not an RPC.
- *
- * The input's DOM is portaled into the header's slot while the component itself
- * stays mounted in the panel body, so its ref and focus handling live next to
- * the tree they drive.
+ * Same shape as artifact search - search is a MODE, the header row is traded for the input rather than growing a second row, the overflow menu and type-to-filter both enter it, Escape leaves it - but the body below is unchanged: matches narrow the TREE through `SidebarFilterVisibilityContext` instead of replacing it with a result list, so every row keeps its progress icon, notification indicators, and row menus while searching.
  */
 import { useCallback, useEffect, useRef, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
@@ -88,9 +76,7 @@ export function ChatSearchHeaderInput(props: ChatSearchHeaderInputProps) {
 
   return (
     <>
-      {/* The header slot is written by a ref callback during the header's
-          commit, so it is null only on this component's very first render;
-          the resulting store write re-renders us with the target in hand. */}
+      {/* The header slot is written by a ref callback during the header's commit, so it is null only on this component's very first render; the resulting store write re-renders us with the target in hand. */}
       {headerSlot === null ? null : createPortal(inputRow, headerSlot)}
       <p className="sr-only" role="status" aria-live="polite">
         {chatSearchStatusMessage(searchQuery, props.resultCount)}

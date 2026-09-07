@@ -18,9 +18,7 @@ import {
 } from "../selection-evidence-kernel";
 
 /**
- * Records every call the kernel makes, in order, and gives the test full
- * control over the attach result - the plan wants a fake
- * `SelectionAuthorityClient`, not a real engine, for this file.
+ * Records every call the kernel makes, in order, and gives the test full control over the attach result - the plan wants a fake `SelectionAuthorityClient`, not a real engine, for this file.
  */
 class FakeAuthorityClient implements SelectionAuthorityClient {
   readonly callOrder: string[] = [];
@@ -479,10 +477,8 @@ describe("SelectionEvidenceKernel - C2: only the latest attach attempt may publi
     client.emitReattach({ revision: 1 }); // starts attempt #2, also pending
     expect(resolvers.length).toBe(2);
 
-    // #2 (the latest) resolves first with account B's state; #1 (stale)
-    // resolves after with account A's state, at a HIGHER revision than B's -
-    // so a pure revision-ordering guard alone would let it through. Only the
-    // attempt gate (not the revision) is what must reject it.
+    // resolves after with account A's state, at a higher revision than B's - so a pure revision-ordering guard alone would let it through.
+    // Only the attempt gate (not the revision) is what must reject it.
     const resolveAttempt1 = resolvers[0];
     const resolveAttempt2 = resolvers[1];
     resolveAttempt2(okAttachWithTarget(5, "B-host"));
@@ -536,10 +532,8 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
 
     const startPromise = kernel.start();
 
-    // Exactly the real order: the client replays buffered events before its
-    // attach promise settles. Only leasesChanged is replayed here - the
-    // selection slice has nothing newer than the snapshot that is about to
-    // land.
+    // Exactly the real order: the client replays buffered events before its attach promise settles.
+    // Only leasesChanged is replayed here - the selection slice has nothing newer than the snapshot that is about to land.
     const replayedLeases: readonly HostLeaseSnapshot[] = [
       { hostId: "L1", status: "ready", dead: null },
     ];
@@ -562,11 +556,8 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
       targetHostId: "H",
       effectiveHostId: "H",
       leases: replayedLeases,
-      // The selection slice took the SNAPSHOT, so it reports the snapshot's
-      // revision - not the replayed leases' higher one. Per-slice is the whole
-      // point, and the bridge's narration gate reads exactly this number to
-      // decide whether the window has applied the event it is about to
-      // narrate.
+      // The selection slice took the snapshot, so it reports the snapshot's revision - not the replayed leases' higher one.
+      // Per-slice is the whole point, and the bridge's narration gate reads exactly this number to decide whether the window has applied the event it is about to narrate.
       selectionRevision: 5,
     });
   });
@@ -620,7 +611,7 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
       targetHostId: "S-host",
       effectiveHostId: "S-host",
       leases: snapshotLeases,
-      // Mirror of the case above: here the REPLAY won the selection slice, so
+      // Mirror of the case above: here the replay won the selection slice, so
       // the reported revision is the replay's, not the snapshot's.
       selectionRevision: 6,
     });
@@ -663,9 +654,7 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
       selectionRevision: 5,
     });
 
-    // The identity transition: the client rotates to a fresh generation and
-    // the kernel re-attaches with a strictly higher-revision snapshot
-    // carrying account B's state.
+    // The identity transition: the client rotates to a fresh generation and the kernel re-attaches with a strictly higher-revision snapshot carrying account B's state.
     client.emitReattach({ revision: 10 });
     expect(resolvers.length).toBe(2);
     const leasesB: readonly HostLeaseSnapshot[] = [

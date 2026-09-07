@@ -8,13 +8,7 @@ import {
   sessionKeyOf,
 } from "@traycer-clients/shared/replica-runtime";
 
-/**
- * Projection-row telemetry for one epic replica. These counts are the
- * exit-criteria row totals, not a second budget — charging the projected
- * JSON on top of the root Y.Doc would double-count the same rows. The six
- * whole-set *chat* snapshot slices (queue / approvals / interviews /
- * background / commands) live on the chat-windows plane.
- */
+/** Projection-row telemetry for one epic replica. */
 export interface EpicReplicaProjectionCounts {
   readonly artifacts: number;
   readonly chats: number;
@@ -25,11 +19,8 @@ export interface EpicReplicaProjectionCounts {
 }
 
 /**
- * One live epic's replica as the epic-replicas plane sees it.
- *
- * While `@1` is the wire the root Y.Doc must stay resident (it is the only
- * record source). The eviction hook therefore reports the root as
- * `"required"` and reclaims nothing from it.
+ * One live epic's replica as the epic-replicas plane sees it. While `@1` is the wire the root
+ * Y.Doc must stay resident (it is the only record source).
  */
 export interface EpicReplicaBudgetSession {
   readonly key: string;
@@ -70,9 +61,8 @@ export function epicReplicaBookKey(
 }
 
 /**
- * Fixed holder kinds charged against one epic replica. Settle builders
- * and `release` both derive ids from this list so a new kind cannot be
- * added on one side only.
+ * Fixed holder kinds charged against one epic replica. Settle builders and `release` both derive
+ * ids from this list so a new kind cannot be added on one side only.
  */
 const EPIC_REPLICA_ROOT_KIND = "root";
 const EPIC_REPLICA_COMMAND_OVERLAY_KIND = "command-overlay";

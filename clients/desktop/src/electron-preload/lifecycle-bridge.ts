@@ -14,12 +14,6 @@ import type {
 import { subscribe } from "./subscribe";
 
 export interface LifecycleBridgeSurface {
-  /**
-   * Desktop-only namespace. Not part of the cross-shell `IRunnerHost`
-   * contract - renderer code must feature-detect
-   * `window.runnerHost?.appLifecycle` before using it (mobile / gui-app-dev
-   * shells leave this undefined).
-   */
   appLifecycle: AppLifecycleBridge;
 }
 

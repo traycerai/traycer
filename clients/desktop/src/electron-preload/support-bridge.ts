@@ -34,11 +34,6 @@ interface ForegroundNotificationDisplayChannel {
   ): Disposable;
 }
 
-/**
- * Installs the main -> preload listener as soon as the bridge is built, before
- * React can mount. Events that arrive during renderer startup/reload are kept
- * until the first GUI subscriber is ready, then delivered exactly once.
- */
 function createForegroundNotificationDisplayChannel(): ForegroundNotificationDisplayChannel {
   const handlers = new Set<Listener<DesktopNotificationForegroundDisplay>>();
   const buffered: DesktopNotificationForegroundDisplay[] = [];

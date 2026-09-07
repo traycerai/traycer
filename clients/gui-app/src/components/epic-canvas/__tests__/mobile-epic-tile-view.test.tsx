@@ -15,9 +15,7 @@ import type {
 
 const VIEW_TAB_ID = "view-tab-1";
 
-// ActiveTabBody reads permission/snapshot/artifact state through epic-selectors;
-// stub them so the shared tile body mounts without a HostRuntimeProvider /
-// EpicSessionProvider (mirrors tab-group-view.test).
+// ActiveTabBody reads permission/snapshot/artifact state through epic-selectors; stub them so the shared tile body mounts without a HostRuntimeProvider / EpicSessionProvider (mirrors tab-group-view.test).
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id }),
   useEpicChatRecordListAuthoritative: () => true,
@@ -43,9 +41,7 @@ vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
   PaneOpener: () => <div data-testid="pane-opener" />,
 }));
 
-// The current-tile bar is covered by its own test; stub it here to a marker
-// carrying the tile it was handed, so the view test can assert WHICH tile the
-// bar reflects without pulling the bar's host/title hooks.
+// The current-tile bar is covered by its own test; stub it here to a marker carrying the tile it was handed, so the view test can assert WHICH tile the bar reflects without pulling the bar's host/title hooks.
 vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
   MobileCurrentTileBar: ({ tile }: { readonly tile: EpicCanvasTileRef }) => (
     <div data-testid="current-tile-bar" data-tile-id={tile.id} />
@@ -58,13 +54,7 @@ vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", () => ({
   TabSwitcherSheet: () => null,
 }));
 
-// ActiveTabBody's published-copy fallback (`usePublishedChatFallbackRef`)
-// reads reachability, the active host, the host client, cloud chats, and the
-// chat session registry through these hook seams, unconditionally on every
-// render regardless of tab type - stubbed the same way `tab-group-view.test`
-// stubs them so this provider-less suite never reaches `useQueryClient`. None
-// of this file's fixtures are chat tabs, so every seam here answers the
-// "nothing special" default.
+// ActiveTabBody's published-copy fallback (`usePublishedChatFallbackRef`) reads reachability, the active host, the host client, cloud chats, and the chat session registry through these hook seams, unconditionally on every render regardless of tab type - stubbed the same way `tab-group-view.test` stubs them so this provider-less suite never reaches `useQueryClient`.
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({ status: "reachable", hostLabel: "host-A" }),
 }));
@@ -284,9 +274,7 @@ describe("<MobileEpicTileView />", () => {
   });
 
   it("renders the inline opener (not a blank screen) for an empty pane", () => {
-    // A non-null root whose only pane holds no tiles - the user closed the last
-    // tab. selectMobileTile returns null; the view must still offer an
-    // affordance, not a dead-end.
+    // A non-null root whose only pane holds no tiles - the user closed the last tab. selectMobileTile returns null; the view must still offer an affordance, not a dead-end.
     seed({
       root: makePane("pane-A", [], null),
       activePaneId: "pane-A",

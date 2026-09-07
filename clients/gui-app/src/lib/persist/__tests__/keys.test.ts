@@ -26,11 +26,8 @@ import {
   worktreeListingCacheKey,
 } from "@/lib/persist/keys";
 
-// CRITICAL: every literal below is HAND-TRANSCRIBED from the current store
-// source (its `name:` / `*PersistKey` builder), NOT derived from the builders
-// or a sibling constant. A wrong leaf must fail HERE, before any store adopts
-// the builder. Do not "simplify" these to `persistKey(STORE_KEYS.x)` — that
-// would make the test circular and unable to catch a divergence.
+// CRITICAL: every literal below is HAND-TRANSCRIBED from the current store source (its `name:` / `*PersistKey` builder), NOT derived from the builders or a sibling constant.
+// A wrong leaf must fail HERE, before any store adopts the builder.
 
 describe("persist key builders — output-preserving against current source", () => {
   it("emits the current localStorage key for each static store", () => {
@@ -44,7 +41,7 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("composer-drafts")).toBe(
       "traycer-gui-app:composer-drafts",
     );
-    // Source: src/stores/composer/interview-draft-store.ts — leaf prefix only;
+    // Source: src/stores/composer/interview-draft-store.ts - leaf prefix only;
     // drafts persist as one key per (chatId, blockId) via interviewDraftKey.
     expect(persistKey("interview-drafts")).toBe(
       "traycer-gui-app:interview-drafts",

@@ -27,15 +27,8 @@ function cliLockPathFor(environment: Environment): string {
   return join(cliHome, ".lock");
 }
 
-// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
-// load - any export this mock leaves un-overridden (falls through via
-// `...actual` below) would otherwise resolve against the REAL production
-// `~/.traycer`, not this sandbox. Redirect the `os` boundary itself so
-// `vi.importActual`'s fresh module evaluation picks up the sandbox
-// (falling back to the real tmpdir, never the real home, before the first
-// `beforeEach` has set it). `vi.mock` factories are hoisted above this
-// file's own top-level `let sandboxRoot` - a direct reference hits a TDZ
-// `ReferenceError`, so the live value has to live in `vi.hoisted` instead.
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module load - any export this mock leaves un-overridden (falls through via `...actual` below) would otherwise resolve against the REAL production `~/.traycer`, not this sandbox.
+// Redirect the `os` boundary itself so `vi.importActual`'s fresh module evaluation picks up the sandbox (falling back to the real tmpdir, never the real home, before the first `beforeEach` has set it).
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -95,8 +88,7 @@ const stampRuntime = (
   });
 
 // The worker invokes the source CLI, whose baked source environment is dev.
-// Keep the parent on that same environment so both genuine command paths
-// address the exact sandboxed install record.
+// Keep the parent on that same environment so both genuine command paths address the exact sandboxed install record.
 const ENV: Environment = "dev";
 
 async function writeInstall(
@@ -259,10 +251,7 @@ describe("stampRuntime", () => {
   });
 
   it("superseded: generation mismatch when a different install now occupies the record - uninstall/reinstall between readiness and stamp, debt preserved on the NEW record", async () => {
-    // Simulates the controller observing readiness of install A's fresh
-    // process, then - before it calls stampRuntime - an
-    // uninstall/reinstall lands (install B, also null-runtime, its own
-    // independent debt).
+    // Simulates the controller observing readiness of install A's fresh process, then - before it calls stampRuntime - an uninstall/reinstall lands (install B, also null-runtime, its own independent debt).
     const installA = await writeInstall({ installId: "install-a" });
     const pid = writePid({});
     const expectedGenerationFromA = generationFor(installA);
@@ -403,15 +392,8 @@ describe("stampRuntime", () => {
   });
 });
 
-// Finding 3 (ticket-2 review round 1): the static pid.json comparison
-// above proves pid.json wasn't rewritten out from under the caller, but
-// says nothing about whether that pid is actually alive - a crashed host
-// that left pid.json behind would satisfy every check with a fabricated
-// pid (the pre-fix `writePid({})` default of 4242 is never a real
-// process). These tests spawn a REAL process so the new liveness probe
-// has genuine positive evidence to find - `sleep` has no Windows
-// equivalent fixture, matching `store/__tests__/process-identity.test.ts`'s
-// own convention of skipping this exact scenario there.
+// Finding 3 (ticket-2 review round 1): the static pid.json comparison above proves pid.json wasn't rewritten out from under the caller, but says nothing about whether that pid is actually alive - a crashed host that left pid.json behind would satisfy every check with a fabricated pid (the pre-fix `writePid({})` default of 4242 is never a real process).
+// These tests spawn a REAL process so the new liveness probe has genuine positive evidence to find - `sleep` has no Windows equivalent fixture, matching `store/__tests__/process-identity.test.ts`'s own convention of skipping this exact scenario there.
 describe.skipIf(process.platform === "win32")(
   "stampRuntime - live pid probe (Finding 3)",
   () => {
@@ -482,9 +464,8 @@ describe.skipIf(process.platform === "win32")(
     it("stamps when pid.json is published more than five seconds after the process started", async () => {
       const installed = await writeInstall({});
       const live = await spawnLiveProcess();
-      // A host may take a while to bind and publish readiness. This is the
-      // timestamp domain pid.json owns, and deliberately differs from the
-      // OS process-start value by more than the old 5s identity tolerance.
+      // A host may take a while to bind and publish readiness.
+      // This is the timestamp domain pid.json owns, and deliberately differs from the OS process-start value by more than the old 5s identity tolerance.
       await wait(6_000);
       const pid = writePid({
         pid: live.pid,
@@ -581,9 +562,7 @@ describe.skipIf(process.platform === "win32")(
           }
           const pid = writePid({
             pid: live.pid,
-            // Five seconds beyond the allowance keeps this real-reader
-            // regression far from ps's one-second rollover quantum; the
-            // synthetic cases above exclusively own the exact boundary.
+            // Five seconds beyond the allowance keeps this real-reader regression far from ps's one-second rollover quantum; the synthetic cases above exclusively own the exact boundary.
             startedAt: new Date(
               processStartedAtMs -
                 PROCESS_START_PUBLICATION_ALLOWANCE_MS -
@@ -631,10 +610,7 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("superseded: pid-not-live when pid.json matches statically but the process has exited (crashed host, stale pid.json)", async () => {
-      // The exact miss Finding 3 closes: every static check (generation,
-      // pid, startedAt, version) passes because pid.json was never
-      // cleaned up after the crash - only a genuine liveness probe can
-      // tell this apart from a real live host.
+      // The exact miss Finding 3 closes: every static check (generation, pid, startedAt, version) passes because pid.json was never cleaned up after the crash - only a genuine liveness probe can tell this apart from a real live host.
       const installed = await writeInstall({});
       const live = await spawnLiveProcess();
       const pid = writePid({ pid: live.pid, startedAt: live.startedAt });
@@ -659,15 +635,8 @@ describe.skipIf(process.platform === "win32")(
   },
 );
 
-// Finding 5 (ticket-2 review round 1): the in-process "generation
-// mismatch" test above proves the CAS logic itself is correct, but two
-// sequential in-process writes can't reveal anything a single-threaded
-// test couldn't already guarantee by ordering its own calls - it's not a
-// genuine race. This spawns a REAL separate OS process
-// (`fixtures/stamp-runtime-terminal-install-worker.ts`) that invokes the
-// real terminal `host install --no-service-register` command between the
-// moment command A returns its attested generation and the stamp call. This
-// proves the CAS consumes the command result, never a post-race disk reread.
+// Finding 5 (ticket-2 review round 1): the in-process "generation mismatch" test above proves the CAS logic itself is correct, but two sequential in-process writes can't reveal anything a single-threaded test couldn't already guarantee by ordering its own calls - it's not a genuine race.
+// This spawns a REAL separate OS process (`fixtures/stamp-runtime-terminal-install-worker.ts`) that invokes the real terminal `host install --no-service-register` command between the moment command A returns its attested generation and the stamp call.
 describe.skipIf(process.platform === "win32")(
   "stampRuntime - genuine two-process attested-generation CAS race (Finding 5)",
   () => {
@@ -710,10 +679,8 @@ describe.skipIf(process.platform === "win32")(
     }
 
     it("a real terminal install landing in a separate OS process between the attested generation and the stamp call is superseded, never stamped onto the interloper's record", async () => {
-      // The controller's cycle: a real command A lands an install and
-      // returns its generation. Capture that return value exactly as the
-      // caller does; computing it from a fixture would not exercise the
-      // attestation boundary this race protects.
+      // The controller's cycle: a real command A lands an install and returns its generation.
+      // Capture that return value exactly as the caller does; computing it from a fixture would not exercise the attestation boundary this race protects.
       mkdirSync(join(sandboxRoot, ".traycer", "cli", ENV), {
         recursive: true,
       });
@@ -735,16 +702,13 @@ describe.skipIf(process.platform === "win32")(
         throw new Error("command A did not write an install record");
       }
       const canonicalGenerationA = generationFor(recordA);
-      // This independently checks the command's returned attestation before
-      // B lands, but deliberately does not retain the result as stamp input.
+      // This independently checks the command's returned attestation before B lands, but deliberately does not retain the result as stamp input.
       // The consumer below must read from commandAResult only after the race.
       expect(commandAResult.data).toMatchObject({
         installGeneration: canonicalGenerationA,
       });
 
-      // Before the caller gets to call stampRuntime, a REAL separate
-      // process performs a terminal bytes-only install - install B -
-      // landing via actual cross-process filesystem writes.
+      // Before the caller gets to call stampRuntime, a REAL separate process performs a terminal bytes-only install - install B - landing via actual cross-process filesystem writes.
       const sourceB = join(sandboxRoot, "source-b");
       writeLocalHostSource(sourceB);
       const worker = spawnTerminalInstallWorker(sourceB);
@@ -756,9 +720,7 @@ describe.skipIf(process.platform === "win32")(
       }
       expect(generationFor(recordB)).not.toBe(canonicalGenerationA);
 
-      // The caller calls stampRuntime with the generation it ATTESTED
-      // from A's own command result only AFTER B landed - never a post-race
-      // disk read substituted for the command's attested value.
+      // The caller calls stampRuntime with the generation it ATTESTED from A's own command result only AFTER B landed - never a post-race disk read substituted for the command's attested value.
       const expectedGenerationFromA =
         installGenerationFromCommandResult(commandAResult);
       expect(expectedGenerationFromA).toBe(canonicalGenerationA);

@@ -20,9 +20,9 @@ import {
 let mockBinding: WorktreeBinding | null = null;
 let mockBindingResolved = true;
 
-/** The subset of `TerminalAgentForkDialogProps` this file's tests read off a
- *  captured open call - not the real (unexported) prop type, since the mock
- *  below stands in for the whole component and only these fields matter here. */
+/**
+ * The subset of `TerminalAgentForkDialogProps` this file's tests read off a captured open call - not the real (unexported) prop type, since the mock below stands in for the whole component and only these fields matter here.
+ */
 interface CapturedForkDialogProps {
   readonly open: boolean;
   readonly target: { readonly intent: string } | null;
@@ -262,10 +262,6 @@ async function openContinueMenuItem(): Promise<HTMLElement> {
   const trigger = screen.getByRole("button", { name: "More fork options" });
   fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
   fireEvent.click(trigger);
-  // The accessible name gains an appended disabled reason on an old host
-  // (`tui-agent-tile.tsx`'s `aria-label`, amend-01 Fix 5) - match the stable
-  // prefix so this helper finds the item in both the enabled and disabled
-  // cell.
   return waitFor(() =>
     screen.getByRole("menuitem", {
       name: /^Continue under another profile…/,
@@ -357,11 +353,8 @@ describe("<TuiAgentTile /> fork split button", () => {
     expect(tooltipTextNear(item)).toBe(
       "Update Traycer host to continue this session under another profile.",
     );
-    // amend-02 a11y fix: Radix's roving-tabindex skips this disabled item
-    // entirely, so keyboard/AT users never focus it to hear the aria-label
-    // or trigger the hover-only tooltip above. The reason must also render
-    // as static, always-visible text inside the item - reachable without
-    // focus or hover.
+    // amend-02 a11y fix: Radix's roving-tabindex skips this disabled item entirely, so keyboard/AT users never focus it to hear the aria-label or trigger the hover-only tooltip above.
+    // The reason must also render as static, always-visible text inside the item - reachable without focus or hover.
     expect(
       within(item).getByText(
         "Update Traycer host to continue this session under another profile.",

@@ -20,11 +20,8 @@ import {
 } from "@/stores/epics/initial-chat-handoff-store";
 
 /**
- * `startSideChat` (`/btw`): forks the current chat and asks the remainder of
- * the prompt there. Modeled on
- * `clone-chat-on-host-switch`/`profile-durability-clone-host-switch-edges.test.ts`
- * for the recoverable-fork-refusal retry shape, and `new-chat.test.ts` for the
- * canvas-store seeding conventions.
+ * `startSideChat` (`/btw`): forks the current chat and asks the remainder of the prompt there.
+ * Modeled on `clone-chat-on-host-switch`/`profile-durability-clone-host-switch-edges.test.ts` for the recoverable-fork-refusal retry shape, and `new-chat.test.ts` for the canvas-store seeding conventions.
  */
 
 const EPIC_ID = "epic-side-chat";

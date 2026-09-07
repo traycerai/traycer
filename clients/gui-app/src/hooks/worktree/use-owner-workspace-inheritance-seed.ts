@@ -16,16 +16,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeGetBinding } from "./use-worktree-get-binding-query";
 
-// While the parent binding read is still in flight we must hand the picker a
-// non-null but EMPTY workspace seed rather than `null`. `null` makes
-// `useResolvedWorkspaceFolders` fall back to the global (start-page) folders,
-// which the picker's auto-seed effect then stages as a default intent under the
-// launch staging key - and that staged default both slips past the launch gate
-// and blocks the real parent seed (via `alreadyStaged`) once it arrives. An
-// empty snapshot resolves to zero folders, so nothing auto-stages and the
-// launch gate stays blocked until the binding settles. Frozen at module scope
-// for referential stability so the picker's seed identity does not churn while
-// pending.
+// In-flight parent binding: empty seed, not `null`. `null` falls back to global folders and auto-stages a default that blocks the real parent seed.
 const PENDING_OWNER_WORKSPACE_INHERITANCE_SEED: ForkWorkspaceSeed = {
   intent: null,
   workspace: emptyLandingDraftWorkspaceSnapshot(),

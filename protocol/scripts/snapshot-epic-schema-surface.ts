@@ -1,15 +1,6 @@
 /**
- * Emits both JSON-Schema IO surfaces of the registered epic persistence
- * contract. The committed result is a review gate for changes to top-level
- * fields, chats, artifacts, deleted artifacts, and TUI agents.
- *
- * Do not edit the generated fixture by hand. When the guard fails, classify the
- * change using `src/persistence/COMPATIBILITY.md`. Regenerate only after a
- * compatible change has been reviewed or the required breaking-version and
- * migration work is in place:
- *
- *   bun run protocol/scripts/snapshot-epic-schema-surface.ts > \
- *     protocol/src/persistence/epic/__tests__/__fixtures__/epic-schema-surface.ts
+ * Emits both JSON-Schema IO surfaces of the registered epic persistence contract.
+ * Do not edit the generated fixture by hand.
  */
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";

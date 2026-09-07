@@ -25,10 +25,7 @@ function renderDialog(args: {
       takenIds={args.takenIds}
       disabledIds={args.disabledIds}
       initial={args.initial}
-      // What the CATALOG says is declared. These cases open on a settled
-      // config, so it matches the row's own values; the mid-retry case that
-      // makes the two diverge lives in the tab suite, where a refetch can
-      // actually land under an open form.
+      // What the catalog says is declared.
       stored={{
         models: (args.initial?.models ?? []).map((model) => model.id),
         headers: (args.initial?.headers ?? []).map((header) => header.key),
@@ -197,9 +194,8 @@ describe("custom model provider dialog", () => {
   });
 
   it("stays live on a blank form and reports everything on the first attempt", () => {
-    // Upstream's shape, and the reason for it: a Submit disabled until valid is
-    // a dead button on a blank form whose reasons are exactly the errors a
-    // blank form has. Nothing is red until asked.
+    // Upstream's shape, and the reason for it: a Submit disabled until valid is a dead button on a blank form
+    // whose reasons are exactly the errors a blank form has.
     const onSubmit = vi.fn();
     renderDialog({
       initial: null,
@@ -255,7 +251,7 @@ describe("custom model provider dialog", () => {
     expect(screen.getByText("That provider ID already exists")).toBeTruthy();
     unmount();
 
-    // Re-declaring into a DISABLED id is upstream's re-enable.
+    // Re-declaring into a disabled id is upstream's re-enable.
     renderDialog({
       initial: null,
       takenIds: ["myprovider"],
@@ -289,11 +285,8 @@ describe("custom model provider dialog", () => {
     expect(screen.getByLabelText("Provider ID").hasAttribute("disabled")).toBe(
       true,
     );
-    // The stored secret is never read back, so the field cannot show it - and
-    // the helper has to distinguish UNTOUCHED from EMPTIED, because those are
-    // now different instructions: one keeps the declaration, the other deletes
-    // it. "Leave empty and nothing happens" was true only while clearing was
-    // unspellable.
+    // The stored secret is never read back, so the field cannot show it - and the helper has to distinguish
+    // untouched from emptied, because those are now different instructions.
     expect(screen.getByLabelText("API key").getAttribute("value")).toBe("");
     expect(
       screen.getByText(
@@ -315,10 +308,8 @@ describe("custom model provider dialog", () => {
   });
 
   it("locks a STORED row's key and leaves its value editable", () => {
-    // The write is a deep merge with no way to say "delete this key", so
-    // changing one is not a rename - it adds the new key and leaves the old one
-    // behind, which is a duplicate plus an orphan nothing can now remove. The
-    // value beside it carries no such risk.
+    // The write is a deep merge with no way to say "delete this key", so changing one is not a rename - it adds
+    // the new key and leaves the old one behind, which is a duplicate plus an orphan nothing can now remove.
     const onSubmit = vi.fn();
     renderDialog({
       initial: STORED,
@@ -427,11 +418,8 @@ describe("custom model provider dialog", () => {
   });
 
   it("round-trips a dotted id like wafer.ai through Edit -> Save", () => {
-    // `updateCustom` takes any non-empty existing id on the wire now, because
-    // the minting pattern was never a judgement to make about an id already in
-    // someone's config. `wafer.ai` is the shape that motivated it: legal to the
-    // host, unmintable by us, and previously stuck - no re-enable and an Edit
-    // whose id field could not be changed.
+    // `updateCustom` takes any non-empty existing id on the wire now, because the minting pattern was never a
+    // judgement to make about an id already in someone's config.
     const onSubmit = vi.fn();
     renderDialog({
       initial: {
@@ -469,9 +457,8 @@ describe("custom model provider dialog", () => {
   });
 
   it("still refuses to MINT a dotted id", () => {
-    // Create stays a naming surface: the strict pattern is ours to impose on an
-    // id we are proposing, and the wire agrees - `createCustom` keeps the regex
-    // that `updateCustom` dropped.
+    // Create stays a naming surface: the strict pattern is ours to impose on an id we are proposing, and the wire
+    // agrees - `createCustom` keeps the regex that `updateCustom` dropped.
     renderDialog({
       initial: null,
       takenIds: [],
@@ -489,9 +476,8 @@ describe("custom model provider dialog", () => {
   });
 
   it("refuses a second submit while one is in flight", () => {
-    // The label does NOT change while pending (repo rule: disable, never swap
-    // to "Submitting…"), so the guard is the only thing standing between an
-    // impatient double click and two writes to one config file.
+    // The label does not change while pending (repo rule: disable, never swap to "Submitting…"), so the guard is
+    // the only thing standing between an impatient double click and two writes to one config file.
     const onSubmit = vi.fn();
     renderDialog({
       initial: null,

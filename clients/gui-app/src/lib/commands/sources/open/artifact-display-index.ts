@@ -1,16 +1,5 @@
 /**
- * Display index for the Files opener's Epic-artifacts step: a
- * `logicalPath -> { id, kind, title, titlePath }` map for rendering + opening a
- * `workspace.searchPaths` artifact result.
- *
- * Path resolution is delegated to the SHARED, fail-closed
- * {@link buildArtifactPathIndex} (Ticket 7's `artifact-path-resolver.ts`) so the
- * two opener flows cannot diverge: a logical path claimed by two or more live
- * artifacts is ambiguous and resolves to NO identity (never first/last-writer
- * wins), so an ambiguous result opens nothing. This module only layers the
- * display fields the Files rows need on top of that shared resolution: the
- * user-facing {@link displayTitle} and an ancestor-title path that distinguishes
- * duplicate leaf titles.
+ * Display index for the Files opener's Epic-artifacts step: a `logicalPath -> { id, kind, title, titlePath }` map for rendering + opening a `workspace.searchPaths` artifact result.
  */
 import { displayTitle } from "@/lib/display-title";
 import { buildArtifactPathIndex } from "@/lib/commands/sources/open/artifact-path-resolver";
@@ -27,9 +16,8 @@ export interface ArtifactPathEntry {
   /** Stable ancestor-to-leaf artifact IDs parallel to `titleSegments`. */
   readonly idSegments: ReadonlyArray<string>;
   /**
-   * Ancestor-to-leaf display titles joined by " / ". Distinguishes duplicate
-   * leaf titles by their parent context and reads better than the folder slug
-   * path, while the slug path stays available as a search keyword.
+   * Ancestor-to-leaf display titles joined by " / ".
+   * Distinguishes duplicate leaf titles by their parent context and reads better than the folder slug path, while the slug path stays available as a search keyword.
    */
   readonly titlePath: string;
 }

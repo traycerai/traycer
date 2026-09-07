@@ -266,9 +266,7 @@ describe("TileSurfaceSlot environment publish", () => {
         topLevelFocused: true,
       });
     });
-    // Collapsed form (visible && focused) would be false here - asserting the
-    // published value is true is the direct signal that the slot did NOT go
-    // through usePaneFocused().
+    // Collapsed form (visible && focused) would be false here - asserting the published value is true is the direct signal that the slot did NOT go through usePaneFocused().
     const published = getTileSurfaceEnvironment(INSTANCE_ID)?.presentation;
     if (published === undefined) {
       throw new Error("expected published presentation");

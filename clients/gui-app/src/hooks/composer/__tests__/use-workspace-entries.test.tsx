@@ -171,10 +171,7 @@ describe("useWorkspaceEntries", () => {
 
     await waitFor(() => expect(result.current.data).toHaveLength(1));
 
-    // A host switch is now a NEW pinned requester, not a mutation of the
-    // same client (redesign P4.2 deleted the active-slot change event that
-    // `bind()` used to drive `useReactiveHostReadiness` off). The hook
-    // reads whatever `client` it is re-rendered with.
+    // A host switch is now a NEW pinned requester, not a mutation of the same client (redesign P4.2 deleted the active-slot change event that `bind()` used to drive `useReactiveHostReadiness` off).
     act(() => {
       hostClient = hostClientSpine.createRequester(OTHER_HOST_ENTRY);
     });

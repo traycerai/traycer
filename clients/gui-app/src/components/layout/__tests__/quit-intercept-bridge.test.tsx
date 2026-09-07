@@ -39,17 +39,12 @@ type QuitDecisionPayload =
   | QuitDecision
   | { readonly requestId: string; readonly decision: QuitDecision };
 
-/**
- * Minimal state slice exercised by the quit-intercept bridge and the
- * registry's `getUnsyncedEdits()` aggregator. Everything else defaults to
- * values that will never be read in this test.
- */
+/** Everything else defaults to values that will never be read in this test. */
 interface FakeSessionState {
   isDirty: boolean;
   unsyncedQueueSize: number;
-  // Read by the registry's eligibility key on every session it materializes
-  // (the cap's data-loss gate is `isDirty` + these two), so a fake that omits
-  // it fails inside the registry rather than in anything this suite asserts.
+  // Read by the registry's eligibility key on every session it materializes (the cap's data-loss gate is
+  // `isDirty` + these two).
   writeCommands: readonly never[];
   hostTransportStatus: "open";
   snapshotMeta: { epicLight: { title: string } | null } | null;
@@ -364,9 +359,8 @@ describe("QuitInterceptBridge", () => {
       ]);
     });
 
-    // Neither half may promise that syncing is under way or that waiting is
-    // the user's only option: a buffer retained across a host re-point has no
-    // transport, so it never syncs, and `userCancelled` is a real exit.
+    // Neither half may promise that syncing is under way or that waiting is the user's only option: a buffer
+    // retained across a host re-point has no transport, so it never syncs, and `userCancelled` is a real exit.
     expect(screen.getByText("You have unsynced changes.")).not.toBeNull();
     expect(
       screen.getByText(
@@ -379,14 +373,8 @@ describe("QuitInterceptBridge", () => {
     expect(list.textContent).toContain("Beta");
   });
 
-  // F: `unsyncable` was declared on `AppLifecycleUnsyncedEditsEntry` but the
-  // parser never read it off the wire payload, so it was permanently
-  // `undefined` regardless of what main sent. Pins both directions: an
-  // explicit `false` must round-trip as `false` (not get coerced to the
-  // absent-value default), and an explicit `true` and a genuinely absent
-  // field must both come out `true` - the safe reading when durability is
-  // unknown, since main's own parser (ipc-parsers.ts) refuses a row missing
-  // it outright rather than guessing.
+  // F: `unsyncable` was declared on `AppLifecycleUnsyncedEditsEntry` but the parser never read it off the wire
+  // payload, so it was permanently `undefined` regardless of what main sent.
   it("round-trips unsyncable: true, false, and defaults an absent field to true", () => {
     const parsed = __parseQuitSnapshotForTests([
       { epicId: "eA", title: "Alpha", queueSize: 2, unsyncable: true },
@@ -420,12 +408,8 @@ describe("QuitInterceptBridge", () => {
     const buttons = Array.from(footer.querySelectorAll("button"));
     expect(buttons.length).toBe(3);
 
-    // `DialogFooter` is `flex flex-col-reverse … sm:flex-row sm:justify-end`,
-    // so at `sm:` and above DOM order paints left to right: the last child is
-    // the rightmost control. This dialog family reserves that slot for the safe
-    // action (`unsynced-close-dialog`, `unsynced-epic-move-dialog`), and it
-    // used to hold "Wait" - which has no `onClick` and, against a retained
-    // buffer, can never resolve.
+    // `DialogFooter` is `flex flex-col-reverse … sm:flex-row sm:justify-end`, so at `sm:` and above DOM order
+    // paints left to right: the last child is the rightmost control.
     expect(buttons.map((button) => button.getAttribute("data-testid"))).toEqual(
       [
         "quit-intercept-discard",
@@ -434,10 +418,8 @@ describe("QuitInterceptBridge", () => {
       ],
     );
 
-    // Stated as "which controls carry the primary fill", not as "Wait does
-    // not", so the assertion reports the real ranking on failure and cannot be
-    // satisfied by a footer where nothing is emphasised at all. On the unfixed
-    // tree this reads `["quit-intercept-wait"]`.
+    // Stated as "which controls carry the primary fill", not as "Wait does not", so the assertion reports the real
+    // ranking on failure and cannot be satisfied by a footer where nothing is emphasised at all.
     const primaryFilled = buttons
       .filter((button) => button.className.split(" ").includes("bg-primary"))
       .map((button) => button.getAttribute("data-testid"));
@@ -633,9 +615,8 @@ describe("QuitInterceptBridge", () => {
   });
 
   it("defers the fresh-snapshot reply until the per-window projection flush has landed in main", async () => {
-    // The quit intercept must not answer main until the debounced per-window
-    // projection (tabs/canvas/drafts) has been flushed to main, so main's
-    // subsequent `desktopStateStore.flush()` persists the latest layout.
+    // The quit intercept must not answer main until the debounced per-window projection (tabs/canvas/drafts) has
+    // been flushed to main, so main's subsequent `desktopStateStore.flush` persists the latest layout.
     const fake = installAppLifecycleFake();
     const registry = __getOpenEpicRegistryForTests();
     const handleA = buildHandle("eA", "Alpha");
@@ -738,9 +719,7 @@ describe("QuitInterceptBridge", () => {
   });
 
   it("does not leave an unhandled rejection when the fresh-snapshot reply IPC itself rejects", async () => {
-    // `respondFreshUnsyncedSnapshot` is an `ipcRenderer.invoke` that can
-    // reject (main handler removed / sender gone). The response chain must
-    // terminate in a `.catch` rather than surfacing an unhandled rejection.
+    // The response chain must terminate in a `.catch` rather than surfacing an unhandled rejection.
     const errorSpy = vi
       .spyOn(appLogger, "error")
       .mockImplementation(() => undefined);
@@ -810,23 +789,11 @@ describe("QuitInterceptBridge", () => {
     expect(screen.queryByTestId("quit-intercept-dialog")).toBeNull();
   });
 
-  // T-userCancelled: prior to the third quit-decision verb, Escape / the close
-  // button / an outside click were all swallowed by `onOpenChange` refusing
-  // every close - the only working control was "Quit and discard". These
-  // fixtures pin the reopened doors: each one now RESPONDS "userCancelled",
-  // not just dismisses. A path that dismisses without responding leaves main
-  // waiting forever - that is the original hang reintroduced, so these stay
-  // as separate `it`s rather than one collapsed assertion.
+  // A path that dismisses without responding leaves main waiting forever - that is the original hang
+  // reintroduced, so these stay as separate `it`s rather than one collapsed assertion.
 
-  /**
-   * Builds a dirty buffer retained across a host re-point (F10): acquire a
-   * dirty live handle, mark it dirty, then `replaceMounted` it with a clean
-   * one. The registry retains the outgoing dirty handle because
-   * `detachTransport()` has already been called on it - it can never sync,
-   * so its row never clears on its own. Verifies the retention actually
-   * happened before returning: a fixture built on a retention that silently
-   * did not occur would prove nothing about what depends on it.
-   */
+  /** Verifies the retention actually happened before returning: a fixture built on a retention that silently did
+   * not occur would prove nothing about what depends on it. */
   function buildRetainedDirtyBuffer(
     registry: OpenEpicSessionRegistry,
     epicId: string,
@@ -845,9 +812,8 @@ describe("QuitInterceptBridge", () => {
     if (!replaced) {
       throw new Error("replaceMounted did not accept the outgoing handle");
     }
-    // Positive checks on the premise, not just its consequence: the row
-    // exists in the aggregated read path AND the retention count says one
-    // buffer is actually held.
+    // Positive checks on the premise, not just its consequence: the row exists in the aggregated read path and the
+    // retention count says one buffer is actually held.
     expect(registry.retainedCountForTests(epicId)).toBe(1);
     const rows = registry.getUnsyncedEdits();
     expect(rows.some((row) => row.epicId === epicId)).toBe(true);
@@ -870,9 +836,8 @@ describe("QuitInterceptBridge", () => {
     });
 
     expect(screen.getByTestId("quit-intercept-dialog")).not.toBeNull();
-    // Radix locks the page while a modal dialog is open - confirm the locked
-    // value first so the post-cancel assertion is checking the opposite of
-    // what is actually true while the dialog is up, not a guess.
+    // Radix locks the page while a modal dialog is open - confirm the locked value first so the post-cancel
+    // assertion is checking the opposite of what is actually true while the dialog is up, not a guess.
     expect(document.body.style.pointerEvents).toBe("none");
 
     act(() => {
@@ -887,9 +852,8 @@ describe("QuitInterceptBridge", () => {
     });
     // (b) the modal is gone.
     expect(screen.queryByTestId("quit-intercept-dialog")).toBeNull();
-    // (c) the surface is interactive again - a decision going out and the
-    // dialog staying mounted (or the lock staying on) both pass on a broken
-    // version that leaves the app covered.
+    // (c) the surface is interactive again - a decision going out and the dialog staying mounted (or the lock
+    // staying on) both pass on a broken version that leaves the app covered.
     expect(document.body.style.pointerEvents).not.toBe("none");
   });
 
@@ -976,36 +940,7 @@ describe("QuitInterceptBridge", () => {
     expect(screen.queryByTestId("quit-intercept-dialog")).toBeNull();
   });
 
-  // NOT COVERED HERE - COVERED IN A REAL BROWSER: the third dismissal path, an
-  // outside/overlay pointer-down, is asserted end to end by
-  // `scripts/quit-intercept-cancel-browser.mjs` (headless Chrome over CDP,
-  // wired into `scripts/run-tests.ts` behind the same env flag CI already sets
-  // for the diff-edit browser regression). There it responds `userCancelled`,
-  // unmounts, and the window is measurably interactive again afterwards. Read
-  // the rest of this note as "why not in jsdom", not as "untested".
-  //
-  // It could not be driven in this jsdom/vitest
-  // setup, in or out of this file. Confirmed by direct repro against a bare
-  // `radix-ui` `Dialog.Root`/`Content` (no app code at all): firing
-  // `fireEvent.pointerDown(document.body)` after flushing the real macrotask
-  // Radix's `DismissableLayer` defers its listener registration by
-  // (`await act(async () => { await new Promise(r => setTimeout(r, 0)); })`)
-  // does dispatch `dismissableLayer.pointerDownOutside` in an *isolated*
-  // scratch file, but the identical sequence against this repo's actual
-  // `<Dialog><DialogContent>` wrapper (still with zero other app code
-  // mounted) never fires it - `onOpenChange` is not called. `vi.useFakeTimers()`
-  // is not the variable: the failure reproduces with real timers throughout.
-  // This repo's own `promotable-modal-frame.test.tsx` documents the same
-  // class of gap ("a bare unguarded dialog does NOT dismiss on
-  // `fireEvent.pointerDown` in jsdom either") for a different modal, so this
-  // is a pre-existing environment limitation, not something introduced by
-  // this change. Escape and the close button both route through the exact
-  // same `onOpenChange(false)` callback this component wires up (see the
-  // `handleCancel` call site in `quit-intercept-bridge.tsx`'s `onOpenChange`),
-  // so the two fixtures above exercise all of the app-level wiring an outside
-  // click would also exercise; the part this environment cannot drive is
-  // Radix's own decision to call `onOpenChange` on that gesture - which is
-  // exactly what the browser regression named above does drive.
+  // Confirmed by direct repro against a bare `radix-ui` `Dialog.Root`/`Content` (no app code at all).
 
   it("re-arms quitDecisionResolvedRef/quitRequestIdRef after Cancel, so a later quit request gets a fresh decision", () => {
     const fake = installAppLifecycleFake();

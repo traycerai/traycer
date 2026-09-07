@@ -2,15 +2,7 @@ import type { Terminal } from "@xterm/xterm";
 import { appLogger } from "@/lib/logger";
 
 /**
- * Coalesce xterm.js texture-atlas clears across all mounted terminals into a
- * single requestAnimationFrame so a theme/preset toggle that affects N
- * terminals doesn't fire N independent atlas rebuilds on the main thread.
- *
- * Keyed by the Terminal instance - multiple `scheduleAtlasClear` calls for
- * the same terminal within a frame collapse into one. Disposed addons are
- * tolerated: passing `null` (or a dropped reference) skips the clear and
- * lets xterm's DOM fallback re-render glyphs naturally. Renderer-agnostic:
- * both the canvas and WebGL addons expose `clearTextureAtlas()`.
+ * Coalesce xterm.js texture-atlas clears across all mounted terminals into a single requestAnimationFrame so a theme/preset toggle that affects N terminals doesn't fire N independent atlas rebuilds on the main thread.
  */
 type AtlasClearable = { clearTextureAtlas(): void };
 

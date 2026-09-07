@@ -61,9 +61,7 @@ export function appendImageAttachmentAtoms(
 }
 
 /**
- * Content hash is the identity everywhere else (`excludeHashes`, the landing
- * image store), so exclusion is by hash - a pasted image that happens to share
- * a crop's file name must not vanish from the rendered message.
+ * Content hash is the identity everywhere else (`excludeHashes`, the landing image store), so exclusion is by hash - a pasted image that happens to share a crop's file name must not vanish from the rendered message.
  */
 export function omitImageAtomsByHash(
   content: JsonContent,

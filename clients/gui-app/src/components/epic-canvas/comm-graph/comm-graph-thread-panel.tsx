@@ -1,18 +1,4 @@
-/**
- * Click-through for one PAIR: every raw A2A row between two agents, both
- * directions interleaved chronologically, uncollapsed.
- *
- * DIRECTION LIVES ON THE ROWS, and only there. The canvas edge is undirected and
- * its label is recency only, so this list is where who-spoke-to-whom is
- * expressed - every row leads with `sender → receiver` through the same
- * component the timeline uses. There is deliberately no per-direction summary in
- * the header: it restated what every row already says, and the counts are
- * readable off the rows themselves.
- *
- * Interleaving is free: the rows arrive in the merged array's order and the
- * aggregation appends in one pass, so a reply always sits after the request it
- * answers.
- */
+/** DIRECTION LIVES ON THE ROWS, and only there. */
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import { commGraphAgentLabel } from "@/lib/comm-graph/comm-graph-labels";
 import type { CommGraphAggregatedEdge } from "@/lib/comm-graph/comm-graph-model";

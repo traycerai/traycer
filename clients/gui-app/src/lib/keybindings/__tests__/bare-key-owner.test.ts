@@ -25,11 +25,8 @@ function pressR(init: KeyboardEventInit | undefined): KeyboardEvent {
 
 describe("claimBareKey", () => {
   it("delivers a bare letter to ONE owner, not to every surface that wants it", () => {
-    // The folder-mapping picker and the worktree owner hover card can both be
-    // open in the same pane. Two raw `window` listeners would both fire for one
-    // keystroke - `preventDefault` stops the browser, not a sibling listener -
-    // so `R` would refresh both, including the card, which deliberately does
-    // not defer to text fields.
+    // The folder-mapping picker and the worktree owner hover card can both be open in the same pane.
+    // Two raw `window` listeners would both fire for one keystroke - `preventDefault` stops the browser, not a sibling listener - so `R` would refresh both, including the card, which deliberately does not defer to text fields.
     const first = vi.fn();
     const second = vi.fn();
     claim(first);

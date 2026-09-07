@@ -1,25 +1,6 @@
 /**
- * The client half of the selection-authority attach choreography (P1.1),
- * transport-agnostic so exactly ONE implementation serves both bindings:
- *
- *  - desktop: the preload builds it over `ipcRenderer` (parsers at ingress);
- *  - browser/dev: the in-process adapter builds it over the engine directly.
- *
- * Two layers, matching the contract's two ideas:
- *
- *  - {@link BufferedSelectionAuthorityClient} is ONE client instance: one
- *    engine-issued `attachSeq`, at most one attach, and the
- *    buffer-then-install-then-replay protocol (module header rules 2-7).
- *  - {@link RotatingSelectionAuthorityClient} is the stable object a consumer
- *    holds. `reattachRequired` is the MANDATORY post-identity-transition
- *    trigger, and the contract's answer to it is a NEW instance with a
- *    FRESHLY ALLOCATED seq - so this layer retires the current instance,
- *    builds the next one (which starts buffering immediately), and only then
- *    tells the consumer, whose `attach()` therefore lands on the new
- *    generation with its own live-session inventory.
- *
- * Neither layer parses: the transport hands over values that already crossed
- * their parser boundary, so domain code here never sees unparsed input.
+ * - {@link RotatingSelectionAuthorityClient} is the stable object a consumer holds.
+ * Neither layer parses: the transport hands over values that already crossed their parser boundary, so domain code here never sees unparsed input.
  */
 import {
   type ActivateResult,
@@ -36,17 +17,10 @@ import {
 } from "./selection-authority-contract";
 import { type AuthorityLog } from "./selection-authority-engine";
 
-/**
- * What one client instance needs from its binding. Every method is the
- * post-parse form: the desktop transport runs the wire parsers, the
- * in-process transport has no wire to cross.
- */
 export interface SelectionAuthorityClientTransport {
   /**
-   * The engine-issued attach generation for THIS instance (module header
-   * rule 1). Called exactly once, at instance construction - allocation
-   * advances the reporter's supersession fence, so an instance that is built
-   * and never attached still supersedes its predecessor.
+   * The engine-issued attach generation for this instance (module header rule 1).
+   * Called exactly once, at instance construction - allocation advances the reporter's supersession fence, so an instance that is built and never attached still supersedes its predecessor.
    */
   allocateAttachSeq(): number;
   attach(request: SelectionAttachRequest): Promise<SelectionAttachResult>;
@@ -87,17 +61,6 @@ type BufferedEvent =
 
 type InstancePhase = "buffering" | "live" | "disposed";
 
-/**
- * One client instance: attach-once, buffer-then-replay.
- *
- * Lifecycle (module header rules 2-7): construction allocates the seq and
- * starts BUFFERING every event the transport delivers. `attach` installs the
- * returned snapshot, discards buffered events at or below its revision,
- * replays the rest in revision order, and goes live. Every `ok: false` arm -
- * including an unparseable result the transport reports as a rejection -
- * disposes the instance's listeners and buffer, because each of them is
- * terminal for this generation.
- */
 export class BufferedSelectionAuthorityClient implements SelectionAuthorityClient {
   private readonly transport: SelectionAuthorityClientTransport;
   private readonly log: AuthorityLog;
@@ -106,12 +69,7 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
   private phase: InstancePhase = "buffering";
   private attachStarted = false;
   private incarnationId: string | null = null;
-  /**
-   * The client's single high-water mark. Because no two events ever share a
-   * revision, this one number totally orders all THREE event kinds - which is
-   * also what makes a post-transition client drop the transition's stale
-   * `reattachRequired` through the ordinary filter rather than a special case.
-   */
+  /** The client's single high-water mark. */
   private highWaterRevision = -1;
   private buffer: BufferedEvent[] = [];
   /** Evidence produced while the attach claim is in flight; see reportEvidence. */
@@ -154,20 +112,14 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
     liveSessions: readonly LiveSessionAnnouncement[],
   ): Promise<SelectionAttachResult> {
     if (this.attachSeq < 0) {
-      // The binding could not obtain an issued generation (an unknown or
-      // untrusted sender at the sync channel). Presenting a seq the engine
-      // never issued could only ever be refused, so the refusal is answered
-      // here rather than round-tripped.
+      // The binding could not obtain an issued generation (an unknown or untrusted sender at the sync channel).
+      // Presenting a seq the engine never issued could only ever be refused, so the refusal is answered here rather than round-tripped.
       this.log.warn("[selection-client] attach without an issued seq", {});
       this.dispose();
       return Promise.resolve({ ok: false, kind: "superseded" });
     }
     if (this.attachStarted || this.phase === "disposed") {
-      // Attach-once is a terminal state of the INSTANCE (module header rule
-      // 2). A second attach on the same instance is exactly the situation
-      // `superseded` describes - this seq can no longer be claimed - so the
-      // answer is the same one the engine would give, without an IPC round
-      // trip that could be mistaken for a fresh claim.
+      // Attach-once is a terminal state of the instance (module header rule 2).
       return Promise.resolve({ ok: false, kind: "superseded" });
     }
     this.attachStarted = true;
@@ -179,10 +131,8 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
       })
       .then((result) => {
         if (this.phase === "disposed") {
-          // Retired while the claim was in flight (the consumer tore down, or
-          // a rotation replaced this generation). The completion belongs to a
-          // generation nobody owns any more, so it is never installed and
-          // never reported as a success - `superseded` is the truthful arm.
+          // Retired while the claim was in flight (the consumer tore down, or a rotation replaced this generation).
+          // The completion belongs to a generation nobody owns any more, so it is never installed and never reported as a success - `superseded` is the truthful arm.
           this.log.debug("[selection-client] attach completed after retire", {
             ok: result.ok,
           });
@@ -207,12 +157,8 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
           error: String(error),
         });
         this.dispose();
-        // A rejected or unparseable completion leaves the ENGINE's state
-        // unknown to this side: the claim may well have been consumed. So the
-        // arm reported is `superseded`, which asserts only what the client can
-        // actually know - this instance will never attach again - rather than
-        // `malformed-request{claimed:false}`, which would assert that nothing
-        // mutated.
+        // A rejected or unparseable completion leaves the engine's state unknown to this side: the claim may well have been consumed.
+        // So the arm reported is `superseded`, which asserts only what the client can actually know - this instance will never attach again - rather than `malformed-request{claimed:false}`, which would assert that nothing mutated.
         const failed: SelectionAttachResult = {
           ok: false,
           kind: "superseded",
@@ -222,19 +168,8 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
   }
 
   /**
-   * Reports evidence under the accepted incarnation, QUEUEING it while the
-   * attach claim is still in flight.
-   *
-   * The queue is not a nicety. Attach carries a session inventory captured
-   * when the request was built, and the kernel keeps observing its transports
-   * while the claim travels. Dropping reports in that window loses both
-   * directions: a session announced in the inventory but LOST before the claim
-   * landed would stay live in the authority forever - phantom liveness that
-   * suppresses the death counter for that host indefinitely - and a session
-   * ESTABLISHED after capture would be absent from both the inventory and the
-   * dropped report, so refusals would count against a socket that is up.
-   * Queueing in order and flushing after the inventory is installed makes the
-   * window a delay rather than a hole.
+   * Reports evidence under the accepted incarnation, queueing it while the attach claim is still in flight.
+   * The queue is not a nicety.
    */
   reportEvidence(report: SelectionEvidenceReport): Promise<void> {
     if (this.phase === "disposed") return Promise.resolve();
@@ -261,11 +196,7 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
       });
   }
 
-  /**
-   * Flushes the deferred reports in arrival order, under the incarnation the
-   * engine just accepted. Order is preserved by the transport (one channel,
-   * FIFO), which is what keeps an established/lost pair from inverting.
-   */
+  /** Flushes the deferred reports in arrival order, under the incarnation the engine just accepted. */
   private flushPendingEvidence(incarnationId: string): void {
     const queued = this.pendingEvidence;
     this.pendingEvidence = [];
@@ -334,9 +265,7 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
     }
     this.subscriptions.length = 0;
     this.buffer = [];
-    // Deferred reports die with the generation that produced them: they carry
-    // no incarnation yet, and the next generation re-announces its own
-    // inventory from the kernel's live state.
+    // Deferred reports die with the generation that produced them: they carry no incarnation yet, and the next generation re-announces its own inventory from the kernel's live state.
     this.pendingEvidence = [];
   }
 
@@ -351,17 +280,7 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
     this.deliver(entry);
   }
 
-  /**
-   * Installs the snapshot and drains the buffer in revision order.
-   *
-   * The phase stays `buffering` until the drain is complete, and the drain
-   * loops until nothing new has arrived. That matters for the in-process
-   * binding, where delivery is synchronous: a consumer that reacts to a
-   * replayed event by driving the engine produces a NEW event re-entrantly,
-   * and going live before the drain finished would deliver that newer event
-   * ahead of older buffered ones - the exact ordering inversion the single
-   * high-water mark exists to prevent.
-   */
+  /** Installs the snapshot and drains the buffer in revision order. */
   private install(incarnationId: string, snapshotRevision: number): void {
     this.incarnationId = incarnationId;
     this.highWaterRevision = snapshotRevision;
@@ -375,10 +294,7 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
       }
       pending = this.takePending();
     }
-    // A replayed event can retire this instance from under us: the rotating
-    // layer disposes it the moment a `reattachRequired` reaches the consumer.
-    // Going live afterwards would resurrect a retired generation - listeners
-    // re-armed on an instance nobody owns.
+    // A replayed event can retire this instance from under us: the rotating layer disposes it the moment a `reattachRequired` reaches the consumer.
     if (this.phase === "disposed") return;
     this.phase = "live";
   }
@@ -421,14 +337,7 @@ export class BufferedSelectionAuthorityClient implements SelectionAuthorityClien
 }
 
 /**
- * The stable {@link SelectionAuthorityClient} a consumer holds for the life of
- * the renderer, rotating the underlying instance on every `reattachRequired`.
- *
- * Rotation order matters and is the whole reason this layer exists: the new
- * instance is constructed (allocating its seq, which advances the fence, and
- * starting to buffer) BEFORE the consumer is told to re-attach, so the
- * consumer's `attach()` cannot land on the retired generation and no event
- * emitted in between is lost.
+ * The stable {@link SelectionAuthorityClient} a consumer holds for the life of the renderer, rotating the underlying instance on every `reattachRequired`.
  */
 export class RotatingSelectionAuthorityClient implements SelectionAuthorityClient {
   private readonly createInstance: () => BufferedSelectionAuthorityClient;
@@ -459,11 +368,8 @@ export class RotatingSelectionAuthorityClient implements SelectionAuthorityClien
   }
 
   /**
-   * Delegates to the CURRENT instance and refuses a completion that arrives
-   * for a generation this layer has since rotated away from. Without that
-   * check, an identity transition landing mid-claim would resolve a
-   * `ok: true` carrying the OUTGOING account's snapshot and incarnation -
-   * observable state from before the wipe, handed to the consumer after it.
+   * Delegates to the current instance and refuses a completion that arrives for a generation this layer has since rotated away from.
+   * Without that check, an identity transition landing mid-claim would resolve a `ok: true` carrying the outgoing account's snapshot and incarnation - observable state from before the wipe, handed to the consumer after it.
    */
   attach(
     callerContractVersion: number,

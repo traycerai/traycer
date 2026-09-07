@@ -15,12 +15,8 @@ import {
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 
-/**
- * ONE modal for the whole app, whichever machine raised it: it blocks the app
- * while a migration runs, so a second host migrating at the same time is not a
- * second modal. `migrationModalRun` picks whose progress it shows - a live
- * migration first, then a failure nobody has acknowledged.
- */
+/** One modal for the whole app, whichever machine raised it: it blocks the app while a migration runs, so a
+ * second host migrating at the same time is not a second modal. */
 export function MigrationBlockingModalHost(): ReactNode {
   const runs = useMigrationRunStore((s) => s.runs);
   const remoteRunning = useMigrationRunStore((s) => s.remoteRunning);
@@ -57,10 +53,7 @@ export function MigrationBlockingModalHost(): ReactNode {
           onInteractOutside={(event) => {
             if (isRunning) event.preventDefault();
           }}
-          // Safe centre on both axes, not the viewport's halfway marks: this
-          // frame is portalled and `fixed`, so it centres over the status-bar
-          // strip and the landscape sensor housing too unless it is told where
-          // the app's part of the screen is.
+          // Safe centre on both axes, not the viewport's halfway marks.
           className="fixed top-safe-center-y left-safe-center-x z-[60] flex w-[min(90vw,28rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
         >
           {isRunning ? (

@@ -14,34 +14,14 @@ export interface MermaidCodeEditorProps {
   readonly onCommit: () => void;
   readonly onCancel: () => void;
   /**
-   * When `true`, the editor grabs focus on mount. We do this imperatively
-   * via a `ref` + `requestAnimationFrame` rather than CodeMirror's
-   * `autoFocus` prop so we don't trip the `jsx-a11y/no-autofocus` rule -
-   * the effect still runs on mount, but the intent is deliberate (the
-   * user opened the edit panel themselves).
+   * Focus on mount via rAF, not CodeMirror autoFocus (jsx-a11y/no-autofocus).
    */
   readonly focusOnMount: boolean;
   readonly placeholder: string;
 }
 
 /**
- * CodeMirror-backed editor for the Mermaid source. Kept deliberately small -
- * no gutter, no line numbers, no folding. The focus here is a keymap that
- * mirrors the reference Traycer views behaviour:
- *
- *   - `Mod-Enter` commits and closes the panel.
- *   - `Escape`    closes without requiring an additional save step (the
- *                 live `onChange` has already pushed the latest text).
- *   - `Tab`       inserts two spaces; indent is significant in a few
- *                 mermaid dialects (`classDiagram` body, `subgraph`).
- *   - `Mod-z` / `Mod-Shift-z` fall through to CodeMirror's local history,
- *                 which is correct: the enclosing Yjs undo manager owns
- *                 the artifact's history, but while the panel is open the
- *                 user wants source-level undo, not a full code-block
- *                 revert.
- *
- * The parent owns the `value`; we forward every change via `onChange` so
- * the Tiptap node attr stays authoritative.
+ * Small Mermaid source editor. `Mod-Enter` commits; `Escape` closes (live `onChange` already pushed). Undo is CodeMirror-local while the panel is open.
  */
 export function MermaidCodeEditor(props: MermaidCodeEditorProps) {
   const { value, onChange, onCommit, onCancel, focusOnMount, placeholder } =

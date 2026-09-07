@@ -31,12 +31,8 @@ export const hostQueryKeys = {
       { scope },
     ),
   /**
-   * Named alias for the imperative `epic.resolveArtifactByPath` read so the key
-   * stays discoverable at the call site. A click resolving an artifact-shaped
-   * markdown link fires this via `queryClient.fetchQuery`; keying on
-   * `{ epicId, filePath }` dedupes repeated clicks on the same link and reuses
-   * the cached id within the stale window. Delegates to the generic `method`
-   * builder so the key shape is defined in exactly one place (CL-10).
+   * Named alias for the imperative `epic.resolveArtifactByPath` read so the key stays discoverable at the call site.
+   * A click resolving an artifact-shaped markdown link fires this via `queryClient.fetchQuery`; keying on `{ epicId, filePath }` dedupes repeated clicks on the same link and reuses the cached id within the stale window.
    */
   resolveArtifactByPath: (
     hostId: string | null,
@@ -48,11 +44,7 @@ export const hostQueryKeys = {
       params,
     ),
   /**
-   * Named alias for the imperative `workspace.readFile` existence probe a
-   * relative chat markdown link fires per candidate root - keyed on
-   * `{ workspacePath, filePath, maxBytes }` so the probe (small `maxBytes`)
-   * and the preview tile's full read (large `maxBytes`) never collide on the
-   * same cache slot. Delegates to the generic `method` builder (CL-10).
+   * Named alias for the imperative `workspace.readFile` existence probe a relative chat markdown link fires per candidate root - keyed on `{ workspacePath, filePath, maxBytes }` so the probe (small `maxBytes`) and the preview tile's full read (large.
    */
   readWorkspaceFile: (
     hostId: string | null,
@@ -64,10 +56,7 @@ export const hostQueryKeys = {
       params,
     ),
   /**
-   * Named alias for the Traycer-sourced `host.getRateLimitUsage` aperture
-   * call (`{ accountContext }`, no `providerId`) - distinct from the
-   * per-provider pull's `{ accountContext, providerId }` key. Centralized so
-   * the header popover and its tests can't drift on this key's shape.
+   * Named alias for the Traycer-sourced `host.getRateLimitUsage` aperture call (`{ accountContext }`, no `providerId`) - distinct from the per-provider pull's `{ accountContext, providerId }` key.
    */
   traycerRateLimitUsage: (
     hostId: string | null,
@@ -79,17 +68,7 @@ export const hostQueryKeys = {
       { accountContext, profileId: null },
     ),
   /**
-   * The Sweep dialog's act-time candidate probe: a composed fetch (un-probed
-   * base walk to find the selected Tasks' paths, then a selection-mode
-   * `forceRefresh` enrichment of exactly those paths). `epicKey` is the
-   * sorted, comma-joined selection, so the same set reuses one slot whatever
-   * the click order. Selection-scoped and deliberately OUTSIDE
-   * the `worktree.listAllForHost` method scope: the forced probe itself makes
-   * the host publish a `worktree.changed` burst, and the client's blanket
-   * listing invalidation (refetchType "active") would refetch this very query
-   * while the dialog is open - re-probing its own just-settled proof and
-   * flashing the candidate list back to "Checking…". External invalidation
-   * buys it nothing anyway: `staleTime: 0` already re-proves on every open.
+   * The Sweep dialog's act-time candidate probe: a composed fetch (un-probed base walk to find the selected Tasks' paths, then a selection-mode `forceRefresh` enrichment of exactly those paths).
    */
   sweepWorktreeCandidates: (hostId: string | null, epicKey: string) =>
     [
@@ -105,9 +84,7 @@ export const hostQueryKeys = {
     ] as const,
   /**
    * Named alias for `host.usage.summary` (Usage page + epic cost badge).
-   * Keyed on the full request (`timezone`/`windowDays`/`epicId`), so the
-   * window picker, metric toggle's underlying data, and the epic-scoped
-   * badge each land on their own cache slot without hand-building the key.
+   * Keyed on the full request (`timezone`/`windowDays`/`epicId`), so the window picker, metric toggle's underlying data, and the epic-scoped badge each land on their own cache slot without hand-building the key.
    */
   usageSummary: (
     hostId: string | null,
@@ -119,10 +96,8 @@ export const hostQueryKeys = {
       params,
     ),
   /**
-   * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
-   * what `useHostQuery` / `useHostQueries` produce for that method with
-   * `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.
-   * Callers must pass a sorted `taskIds` array for stable cache identity.
+   * Batch task-context title lookup (`epic.getTaskContexts`).
+   * Key shape matches what `useHostQuery` / `useHostQueries` produce for that method with `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.
    */
   epicTaskContexts: (
     hostId: string | null,

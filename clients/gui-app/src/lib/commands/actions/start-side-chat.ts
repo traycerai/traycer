@@ -30,31 +30,7 @@ import {
 } from "./new-chat";
 
 /**
- * The `/btw` side chat (`lib/chats/side-chat-command.ts`): fork the source chat
- * at its latest checkpoint and ask `content` there, leaving the source
- * untouched - mid-turn included, which is the point.
- *
- * One `epic.createChat` does all of it: `forkSource: {boundary: "latest"}`
- * seeds the history (the host resolves the boundary itself and natively forks
- * the provider session on the fork's first turn), `initialMessage` starts that
- * first turn before the renderer has even subscribed, and `parentId` files the
- * side chat under the conversation it was asked from.
- *
- * ## The question is never lost
- *
- * With something to ask, the message rides the same initial-chat handoff the
- * in-Epic new-conversation modal uses: registered BEFORE the create so the
- * canvas eager-opens the tile at `placement`, and driven to a fallback `send`
- * by the tile if the host answers without `initialTurnStarted`. A bare `/btw`
- * has nothing to hand off and opens the fork once it projects, like the fork
- * dialog.
- *
- * The two ways a latest-checkpoint fork can be refused without anything being
- * wrong - the source has not replied yet, or the target host predates
- * `epic.createChat@1.1` - are the clone flow's two recoverable arms
- * (`classifyRecoverableForkFailure`), and get its recovery: retry EXACTLY once
- * without `forkSource`, so the question is still asked, just without history.
- * The shared create toast stays silent on those two by the same classifier.
+ * The `/btw` side chat (`lib/chats/side-chat-command.ts`): fork the source chat at its latest checkpoint and ask `content` there, leaving the source untouched - mid-turn included, which is the point.
  */
 export interface StartSideChatArgs {
   readonly epicId: string;
@@ -66,9 +42,7 @@ export interface StartSideChatArgs {
   /** The source's RAW stored title (`""` when untitled), for the fallback. */
   readonly sourceChatTitle: string;
   /**
-   * The owner this tile renders for the source chat, or `null` when it does
-   * not know - the host's anti-squatting hint, never a guess (see the
-   * `sourceOwnerUserId` docs on `epic.createChat`'s fork source).
+   * The owner this tile renders for the source chat, or `null` when it does not know - the host's anti-squatting hint, never a guess (see the `sourceOwnerUserId` docs on `epic.createChat`'s fork source).
    */
   readonly sourceOwnerUserId: string | null;
   /** The prompt with the command stripped; empty for a bare `/btw`. */
@@ -151,9 +125,8 @@ export function startSideChat(args: StartSideChatArgs): CancelFn {
             include_history: forkSource !== null,
           });
           if (hasMessage) {
-            // The handoff owns the open and the send from here. Turn-overlap:
-            // the host already started the turn from `initialMessage`, so the
-            // tile's driver must not send it again.
+            // The handoff owns the open and the send from here.
+            // Turn-overlap: the host already started the turn from `initialMessage`, so the tile's driver must not send it again.
             if (result.initialTurnStarted === true) {
               useInitialChatHandoffStore
                 .getState()
@@ -175,10 +148,7 @@ export function startSideChat(args: StartSideChatArgs): CancelFn {
               return;
             }
           }
-          // `markFailedByAction`, not `markFailed`: the handoff key is
-          // {user, epic} only, so a later create in this epic may already have
-          // replaced the entry; fail only the handoff still carrying these ids.
-          // The toast (with the host's reason) is the shared create hook's.
+          // `markFailedByAction`, not `markFailed`: the handoff key is {user, epic} only, so a later create in this epic may already have replaced the entry; fail only the handoff still carrying these ids.
           if (hasMessage) {
             useInitialChatHandoffStore
               .getState()
@@ -207,12 +177,7 @@ export function startSideChat(args: StartSideChatArgs): CancelFn {
       projectionCancel();
       projectionCancel = null;
     }
-    // The handoff is registered BEFORE the create and lives in a global store,
-    // so cancelling only the projection would leave it behind: a create answer
-    // arriving after the source tile unmounted would still eager-open the tab
-    // and send the question. `markFailedByAction` is terminal for exactly the
-    // handoff carrying these ids - a later create in this epic has replaced the
-    // {user, epic} entry with its own and must not be failed by this cancel.
+    // The handoff is registered BEFORE the create and lives in a global store, so cancelling only the projection would leave it behind: a create answer arriving after the source tile unmounted would still eager-open the tab and send the question.
     if (hasMessage) {
       useInitialChatHandoffStore
         .getState()
@@ -241,13 +206,7 @@ function openIntentForPlacement(
 }
 
 /**
- * Where a side chat asked from `sourceChatId`'s tile lands: split to the RIGHT
- * of the pane showing that tile, so the source keeps streaming in view - a
- * side chat is read beside its conversation, not instead of it. Returns `null`
- * - "use the configured conversation placement" - when the source is not on
- * this tab's canvas (or on a phone, which shows one tile at a time), and the
- * handoff degrades the same way on its own if the pane closes before the fork
- * projects.
+ * Where a side chat asked from `sourceChatId`'s tile lands: split to the RIGHT of the pane showing that tile, so the source keeps streaming in view - a side chat is read beside its conversation, not instead of it.
  */
 export function sideChatPlacementForTile(
   tabId: string,

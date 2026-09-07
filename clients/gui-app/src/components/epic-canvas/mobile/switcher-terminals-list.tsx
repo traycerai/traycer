@@ -33,19 +33,8 @@ interface SwitcherListProps {
 }
 
 /**
- * Terminals category. Rows, load/error/empty states and every mutation come
- * from `useEpicTerminalsPanel`, the same layer the desktop Terminals panel
- * mounts - so a phone lists the identical reconciled set (durable
- * `terminal.plain.list` projections included, which a raw `terminal.list` read
- * cannot see once a host is capable) and never opens a durable terminal as a
- * legacy-authority tile. Sessions on an unreachable host are still shown
- * (decision); opening one is refused with a reason rather than landing a dead
- * tile.
- *
- * This file owns only the touch chrome: a flat scroller instead of the
- * desktop's draggable tree rows. The tap itself goes through
- * {@link useSwitcherActivate}, so this category recycles the one shown tile on
- * exactly the terms every other category does.
+ * Rows, load/error/empty states and every mutation come from `useEpicTerminalsPanel`, the same layer the desktop Terminals panel mounts - so a phone lists the identical reconciled set (durable `terminal.plain.list` projections included, which a raw `terminal.list` read cannot see once a host is capable) and never opens a durable terminal as a legacy-authority tile.
+ * Sessions on an unreachable host are still shown (decision); opening one is refused with a reason rather than landing a dead tile.
  */
 export function SwitcherTerminalsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
@@ -67,9 +56,7 @@ export function SwitcherTerminalsList(props: SwitcherListProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-      {/* Editor-gated: a viewer's create is server-rejected, so an ungated row
-          would only lead to a dead end. Inside the scroll region and above the
-          items, so it is the first thing in the list either way. */}
+      {/* Editor-gated: a viewer's create is server-rejected, so an ungated row would only lead to a dead end. */}
       {canMutate ? (
         <SwitcherNewTerminalRow
           epicId={epicId}

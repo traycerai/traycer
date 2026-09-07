@@ -86,18 +86,12 @@ import {
   toastFromRunnerErrorWithOptions,
 } from "@/lib/runner-error-toast";
 
-// "opened" is the honest terminal state for a public-draft open when nothing
-// was ever privately delivered (no-DSN Case B, or a definite failure) - never
-// "confirmed", which claims a private send that did not happen.
+// "opened" is the honest terminal state for a public-draft open when nothing was ever privately delivered
+// (no-dsn Case B, or a definite failure) - never "confirmed", which claims a private send that did not happen.
 type ReportIssueScreen = "capture" | "confirmed" | "preview" | "opened";
 
-// Keyed by the generated route tree's `fullPaths` union (not a plain
-// `string`) so adding a route fails compile here until it gets a human
-// label - compiler-guaranteed completeness, zero manual drift. The registry
-// can still hold a `routeTemplate` captured by an older session/build that
-// no longer exists in the current tree, so `humanRouteLabel`'s `?? "This
-// screen"` fallback below is load-bearing at runtime even though every key
-// here is exhaustive at compile time.
+// The registry can still hold a `routeTemplate` captured by an older session/build that no longer exists in
+// the current tree, so `humanRouteLabel`'s `??
 const ROUTE_TEMPLATE_LABELS: Readonly<
   Record<FileRouteTypes["fullPaths"], string>
 > = {
@@ -129,20 +123,13 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/worktrees": "Settings - Worktrees",
 };
 
-// Widened for runtime lookup: `ROUTE_TEMPLATE_LABELS` above is exhaustive
-// over the CURRENT route tree, but a registry value from an older
-// session/build can be a template that no longer exists in it - indexing
-// with an arbitrary `string` must stay honestly `string | undefined`, not
-// inherit the literal's exhaustiveness, or the fallback below reads as
-// unreachable when it is exactly what stale input needs.
+// Widened for runtime lookup: `ROUTE_TEMPLATE_LABELS` above is exhaustive over the current route tree.
 const ROUTE_TEMPLATE_LABEL_LOOKUP: Readonly<
   Record<string, string | undefined>
 > = ROUTE_TEMPLATE_LABELS;
 
-// Shared between an unmapped-but-known template (`humanRouteLabel`'s own
-// fallback) and a template that was never captured at all
-// (`currentLocationLabel`'s "unavailable" case, ADV-L6) - one constant so the
-// two paths can never drift into two different-sounding generic strings.
+// Shared between an unmapped-but-known template (`humanRouteLabel`'s own fallback) and a template that was
+// never captured at all (`currentLocationLabel`'s "unavailable" case, adv-L6).
 const ROUTE_TEMPLATE_FALLBACK_LABEL = "This screen";
 
 function humanRouteLabel(template: string): string {
@@ -200,9 +187,8 @@ const INITIAL_FORM_STATE: ReportIssueFormState = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
-  // Default OFF, unlike the other two log toggles: `browser-trace.jsonl`
-  // records the agent's cell source and every page it drove, so it is opt-in
-  // per report rather than opted-out. Touched-by-user tracking is unchanged.
+  // Default off, unlike the other two log toggles: `browser-trace.jsonl` records the agent's cell source and
+  // every page it drove, so it is opt-in per report rather than opted-out.
   includeBrowserDiagnostics: false,
   includeDiagnostics: true,
 };
@@ -223,11 +209,8 @@ function errorEnvelopeFromContext(
   };
 }
 
-// What the private channel actually did with this draft, as known by the
-// renderer right now - main has no memory of a prior `submitReport` call, so
-// this travels on every `buildPublicDraft` request. A definite `failed`
-// result and "never attempted" both collapse to "none": neither left
-// anything on the Sentry side for the public draft to honestly reference.
+// A definite `failed` result and "never attempted" both collapse to "none": neither left anything on the
+// Sentry side for the public draft to honestly reference.
 function privateOutcomeFor(
   deliveryResult: DesktopSubmitReportResult | null,
 ): DesktopPrivateOutcome {
@@ -237,11 +220,8 @@ function privateOutcomeFor(
   return "none";
 }
 
-// Both `delivered` and `unconfirmed` carry a reportId - a private report was
-// actually minted and (at least attempted to be) filed, unlike `failed`/
-// `unavailable`/never-attempted. `ConfirmationScreen` requires this be
-// non-null so the false "sent privately" state is unrepresentable: it is
-// simply never rendered when this returns null (KB1).
+// Both `delivered` and `unconfirmed` carry a reportId - a private report was actually minted and (at least
+// attempted to be) filed, unlike `failed`/ `unavailable`/never-attempted.
 function confirmedReportId(
   deliveryResult: DesktopSubmitReportResult | null,
 ): string | null {
@@ -250,10 +230,8 @@ function confirmedReportId(
   return null;
 }
 
-// The preview is only ever entered from "capture" or "confirmed" - never
-// from "preview"/"opened" themselves (neither renders a button that opens
-// the preview) - but `screen` is typed as the full union at the call site,
-// so this narrows it explicitly rather than asserting.
+// The preview is only ever entered from "capture" or "confirmed" - never from "preview"/"opened" themselves
+// (neither renders a button that opens the preview).
 function previewOriginFor(screen: ReportIssueScreen): "capture" | "confirmed" {
   return screen === "confirmed" ? "confirmed" : "capture";
 }
@@ -278,18 +256,13 @@ function deriveDeliveryFlags(input: {
   const deliveryUnavailableUpfront =
     input.snapshotIsError ||
     (input.snapshot !== null && !input.snapshot.privateDeliveryAvailable);
-  // A rejected submitReport promise (IPC/parser/bridge exception - not a
-  // typed `{status:"failed"}` result) must still land on the same terminal
-  // action set as a definite failure - "Try again" + "Report on GitHub
-  // instead" - never silently fall through to a bare, misleadingly-fresh
-  // "Send report" because `deliveryResult` stayed null.
+  // A rejected submitReport promise (IPC/parser/bridge exception - not a typed `{status:"failed"}` result) must
+  // still land on the same terminal action set as a definite failure - "Try again" + "Report on GitHub instead".
   const rejectedResult: DesktopSubmitReportResult | null = input.submitIsError
     ? { status: "failed", reason: "error" }
     : null;
-  // Known unavailable up front (DSN presence is known at startup) synthesizes
-  // the same terminal state a submit attempt would eventually reach, so the
-  // dialog can state it and offer the two honest actions before the user
-  // invests any effort.
+  // Known unavailable up front (dsn presence is known at startup) synthesizes the same terminal state a submit
+  // attempt would eventually reach.
   const effectiveDeliveryResult: DesktopSubmitReportResult | null =
     deliveryResult ??
     rejectedResult ??
@@ -312,10 +285,8 @@ interface ReportIssueGateFlags {
   readonly showLocationSelector: boolean;
 }
 
-// Consolidates every UI-gating boolean derived from render state into one
-// call so `ReportIssueDialog` itself stays a thin orchestrator - splitting
-// these into a dozen separate `&&`/`||`/`?:` consts inline pushed its own
-// cyclomatic complexity well past the repo's lint budget.
+// Consolidates every UI-gating boolean derived from render state into one call so `ReportIssueDialog` itself
+// stays a thin orchestrator.
 type ReportIssueDerivedFlags = ReportIssueDeliveryFlags &
   ReportIssueGateFlags & { readonly contactCheckboxVisible: boolean };
 
@@ -415,21 +386,13 @@ export function ReportIssueDialog(
     (state) => state.setLastConfirmedReport,
   );
 
-  // Flow 1 (error-triggered) vs Flow 2 (manual): an error envelope is either
-  // a structured cause or a fingerprint captured at catch time. The evidence
-  // gate (D7/tech-plan T4) and the type-chip row are both keyed off this.
+  // Flow 1 (error-triggered) vs Flow 2 (manual): an error envelope is either a structured cause or a fingerprint
+  // captured at catch time. The evidence gate and the type-chip row are both keyed off this.
   const { cause, fingerprint, hasErrorEnvelope } =
     errorEnvelopeFromContext(draftContext);
 
-  // ADV-L6: a plain manual open (Flow 2) never assembles a `draftContext` at
-  // all (`openReportIssue()` sets it to null - there is no error to capture),
-  // so the location selector's current-location option had nothing to read
-  // and fell back to a hardcoded "Current location" string instead of the
-  // real route. Reuse the draft's own captured registry when one exists
-  // (error-triggered/legacy-context opens); otherwise read the live registry
-  // once at mount - the "where the user is/was right now" this option means
-  // either way. Lazy `useState` initializer: evaluated once, matching
-  // `draftContext`'s own "immutable for the draft's life" invariant above.
+  // Adv-L6: a plain manual open (Flow 2) never assembles a `draftContext` at all (`openReportIssue` sets it to
+  // null.
   const [routeTemplateField] = useState<CapturedField<string>>(
     () =>
       draftContext?.privateDiagnostics.registry.routeTemplate ??
@@ -440,36 +403,20 @@ export function ReportIssueDialog(
   const intentRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [screen, setScreen] = useState<ReportIssueScreen>("capture");
-  // Non-migrated error surfaces still call `openReportIssueWithContext` with
-  // only a public `ReportIssueContext` (no structured private cause) - that
-  // context would otherwise be silently dropped by a redesign built around
-  // the structured capture. It used to be prefilled straight into the intent
-  // textarea (mirroring the old five-field form's `whatHappened`
-  // composition), but machine text ("Area: ... Error code: ...") answering
-  // the human question both buried the actual prompt and trivially satisfied
-  // the evidence gate with zero human signal. It's rendered as its own
-  // captured-context row instead (`legacyContext`, below the type chips) and
-  // still folded into the submitted intent (`composeIntentForSubmission`) -
-  // just never into the user-editable textarea the gate reads from.
-  // Error-triggered opens (a structured cause) never have this - the
-  // evidence strip already shows that.
+  // Non-migrated error surfaces still call `openReportIssueWithContext` with only a public `ReportIssueContext`
+  // (no structured private cause).
   const legacyContext = intentFromUnmigratedContext(draftContext);
   const [form, setForm] = useState<ReportIssueFormState>(INITIAL_FORM_STATE);
   const [reviewExpanded, setReviewExpanded] = useState(false);
   const [gateErrorVisible, setGateErrorVisible] = useState(false);
   const [logsTouchedByUser, setLogsTouchedByUser] = useState(false);
-  // Flow 1 (error-triggered) shows every toggle expanded by default; Flow 2
-  // (manual, either type) collapses the consent panel to one summary line
-  // with a "details" expand affordance - both flows' own wireframes draw it
-  // this way.
+  // Flow 1 (error-triggered) shows every toggle expanded by default; Flow 2 (manual, either type) collapses the
+  // consent panel to one summary line with a "details" expand affordance.
   const [consentExpanded, setConsentExpanded] = useState(hasErrorEnvelope);
   const [previewDraft, setPreviewDraft] =
     useState<DesktopSupportBuildPublicDraftResult | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
-  // KB1: the preview is entered from either "capture" (the two fallback
-  // routes) or "confirmed" (opt-in publish) - Back must return there, never
-  // unconditionally to "confirmed" (which would claim a private send that
-  // never happened on the fallback routes).
+  // KB1: the preview is entered from either "capture" (the two fallback routes) or "confirmed" (opt-in publish).
   const [previewOrigin, setPreviewOrigin] = useState<"capture" | "confirmed">(
     "capture",
   );
@@ -498,33 +445,24 @@ export function ReportIssueDialog(
 
   useEffect(() => {
     if (support === null) return;
-    // Fingerprint (when present) records an install-local sighting on first
-    // freeze admission - powers "Nth time on this install". The mutation
-    // state keeps a rejected host call visible so the dialog can fail closed
-    // to its bundle/GitHub fallbacks instead of silently disabling Send.
+    // The mutation state keeps a rejected host call visible so the dialog can fail closed to its bundle/GitHub
+    // fallbacks instead of silently disabling Send.
     freezeEvidence();
     return () => {
       void support.discardFrozenEvidence(draftId).catch(() => null);
     };
-    // draftId is this component's identity for its whole mounted lifetime -
-    // the host remounts it under a fresh `key` per draft, so this effect
-    // only ever re-runs here if `support` itself changes identity.
-    // draftContext is captured at open and is immutable for the draft's life.
+    // draftId is this component's identity for its whole mounted lifetime - the host remounts it under a fresh
+    // `key` per draft, so this effect only ever re-runs here if `support` itself changes identity.
   }, [draftId, support, draftContext, fingerprint, freezeEvidence]);
 
-  // `includeDiagnostics` no longer decides whether `privateDiagnostics` rides
-  // the wire at all - main is the sole authority on what it honors from it
-  // (fix: the diagnostics toggle used to only omit this object, while main
-  // independently computed layer-0/process-metrics/version tags regardless).
-  // `privateDiagnostics` is always sent when a draft context exists; the
-  // `includeDiagnostics` flag below is what main actually gates on.
+  // `privateDiagnostics` is always sent when a draft context exists; the `includeDiagnostics` flag below is what
+  // main actually gates on.
   function buildRequest(overrideTitle: string | null): DesktopReportIssueForm {
     return {
       draftId,
       type: form.type,
-      // The legacy machine-text context rides along here (unchanged from
-      // before KB2) - just appended to the user's own words instead of
-      // masquerading as them in the textarea/gate.
+      // The legacy machine-text context rides along here (unchanged from before KB2) - just appended to the user's
+      // own words instead of masquerading as them in the textarea/gate.
       intent: composeIntentForSubmission(form.intent, legacyContext),
       frequency: form.frequency,
       location:
@@ -596,9 +534,7 @@ export function ReportIssueDialog(
       toastFromRunnerError(error, "Could not save the diagnostic bundle"),
   });
 
-  // Single source of truth for what the private channel actually did with
-  // this draft - shared by `buildRequest`'s wire field, the confirmation
-  // screen's reportId, and the post-open screen branch below (KB1).
+  // Single source of truth for what the private channel actually did with this draft.
   const lastSubmitResult = submitMutation.isSuccess
     ? submitMutation.data
     : null;
@@ -632,12 +568,7 @@ export function ReportIssueDialog(
     submitErrorRef.current?.focus();
   }, [showsHonestBanner]);
 
-  // Sole call site for `support:buildPublicDraft` (ticket 09/07) across every
-  // route to GitHub - the opt-in "Also post publicly", the unconfirmed/failed
-  // "Report on GitHub instead" fallback, and the no-DSN "Open a GitHub issue"
-  // fallback all fetch the same preview before anything opens, so the preview
-  // is the consent event for public exposure everywhere, not just the
-  // opt-in path (publish flow, Flow 3b).
+  // Sole call site for `support:buildPublicDraft` (ticket 09/07) across every route to GitHub.
   const buildDraftMutation = useMutation({
     mutationKey: runnerMutationKeys.supportBuildPublicDraft(),
     mutationFn: async (): Promise<DesktopSupportBuildPublicDraftResult> => {
@@ -670,33 +601,25 @@ export function ReportIssueDialog(
     mutationFn: async (): Promise<void> => {
       if (support === null) throw new Error("Support bridge unavailable");
       if (previewDraft === null) throw new Error("No draft to open");
-      // Re-invokes the builder with the user's as-typed preview-title edit
-      // as the override: `issue-reporter.ts` is assembly-only and must never
-      // see raw text, so the edited title is re-scrubbed and re-fit through
-      // the same budget pipeline as a derived title before it can reach the
-      // URL - never the raw `previewTitle` state swapped in directly.
+      // Re-invokes the builder with the user's as-typed preview-title edit as the override.
       const finalDraft = await support.buildPublicDraft(
         buildRequest(previewTitle),
       );
       const url = buildGitHubIssueUrl(finalDraft);
-      // The event is about the user ASKING to open, so it is tracked before
-      // the handoff and regardless of its outcome.
+      // The event is about the user asking to open, so it is tracked before the handoff and regardless of its
+      // outcome.
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePublicOpenAttempted,
         null,
       );
-      // A GitHub issue draft is a `docs`-class page, so it always leaves for
-      // the OS browser (A2). AWAITED, and the rejection is left to propagate:
-      // `onError` is what keeps the preview screen and its retry toast, so a
-      // failed OS handoff must never advance to the confirmation (L1).
+      // Awaited, and the rejection is left to propagate: `onError` is what keeps the preview screen and its retry
+      // toast, so a failed OS handoff must never advance to the confirmation (L1).
       await openLink(url, "docs", null);
     },
     onSuccess: () => {
       toast.success("Opened in your browser");
-      // KB1: "confirmed" claims a private send happened - only true when
-      // delivered/unconfirmed actually minted a report. A no-DSN or definite-
-      // failure open (privateOutcome "none") lands on the honest "opened"
-      // terminal state instead, never the green confirmation.
+      // KB1: "confirmed" claims a private send happened - only true when delivered/unconfirmed actually minted a
+      // report.
       setScreen(privateOutcome === "none" ? "opened" : "confirmed");
     },
     onError: (error) => {
@@ -739,12 +662,7 @@ export function ReportIssueDialog(
     });
   }
 
-  // N1: every capture-screen action that produces a report artifact - Send,
-  // the two GitHub-fallback buttons, and Save diagnostic bundle - must pass
-  // the same evidence gate Send always did; only Send used to check it, so
-  // e.g. the no-DSN "Open a GitHub issue" primary action could open a public
-  // preview off zero evidence. Same focus + inline-copy behavior for all
-  // four, same telemetry (now tagged with which action was blocked).
+  // Same focus + inline-copy behavior for all four, same telemetry (now tagged with which action was blocked).
   function runIfGateSatisfied(
     blockedAction:
       | "send"
@@ -769,19 +687,13 @@ export function ReportIssueDialog(
     runIfGateSatisfied("send", () => submitMutation.mutate());
   }
 
-  // Shared by all three routes into the preview - the no-DSN "Open a GitHub
-  // issue", the unconfirmed/failed "Report on GitHub instead", and the
-  // confirmed screen's opt-in "Also post publicly on GitHub". Captures which
-  // screen we're leaving so the preview's Back can return there (KB1)
-  // instead of always landing on "confirmed".
+  // Captures which screen we're leaving so the preview's Back can return there (KB1) instead of always landing
+  // on "confirmed".
   function enterPreview(): void {
     setPreviewOrigin(previewOriginFor(screen));
     buildDraftMutation.mutate();
   }
 
-  // Case B's primary action (no-DSN) - N1: previously ungated, so an empty
-  // report with only the un-actioned default location could still open a
-  // public preview.
   function handleOpenGithubIssue(): void {
     runIfGateSatisfied("open_github_issue", enterPreview);
   }
@@ -1004,24 +916,14 @@ function CaptureScreenBody({
   readonly onLogsTouched: () => void;
   readonly onSelectType: (type: DesktopReportType) => void;
   readonly attachments: UseReportIssueAttachmentsResult;
-  // KB2: the legacy machine-text context (non-migrated surfaces) is no
-  // longer prefilled into the intent textarea - it renders as its own
-  // captured-context row instead, so it never buries the actual question or
-  // trivially satisfies the evidence gate with zero human signal.
+  // KB2: the legacy machine-text context (non-migrated surfaces) is no longer prefilled into the intent
+  // textarea.
   readonly legacyContext: string;
-  // ADV-L6: resolved once at report-open regardless of whether a
-  // `draftContext` exists (a plain manual open never assembles one) - the
-  // single source for the location selector's current-location option.
+  // Adv-L6: resolved once at report-open regardless of whether a `draftContext` exists (a plain manual open
+  // never assembles one) - the single source for the location selector's current-location option.
   readonly routeTemplateField: CapturedField<string>;
 }): ReactNode {
-  // Paste is bound at this wrapper, not on the attachment target below: a
-  // `paste` DOM event only bubbles through the FOCUSED element's ancestors,
-  // and the intent textarea (the dialog's natural focus target) is this
-  // div's sibling, not the target's descendant - scoping the handler to the
-  // small target box would silently never fire while the user is typing.
-  // `handleBodyPaste` only intercepts when the clipboard actually carries a
-  // claimable image (mirrors the composer's own `hasClaimableFileTransfer`
-  // gate), so ordinary text paste into the textarea is untouched.
+  // Paste is bound at this wrapper, not on the attachment target below.
   function handleBodyPaste(event: ClipboardEvent<HTMLDivElement>): void {
     if (isPending) return;
     if (!hasClaimableFileTransfer(event.clipboardData)) return;
@@ -1204,10 +1106,7 @@ function CaptureScreenBody({
   );
 }
 
-// KB2: a compact, read-only line for the legacy machine-text context - never
-// editable (it isn't the user's words) and never counted by the evidence
-// gate; it still rides in the submitted report via
-// `composeIntentForSubmission`.
+// KB2: a compact, read-only line for the legacy machine-text context.
 function LegacyCapturedContextRow({
   context,
 }: {
@@ -1230,12 +1129,8 @@ function ReportIssueDialogFooter(props: {
   readonly isSaveBundlePending: boolean;
   readonly isBuildingDraft: boolean;
   readonly isOpeningPublicDraft: boolean;
-  // Screenshot ingest (paste/drop/browse, ticket 08) runs async; `buildRequest`
-  // only ever snapshots already-committed images, so any capture-screen
-  // action that fires while a paste is still being read would silently ship
-  // without it. Gates Send/Try again/Report on GitHub instead/Save
-  // diagnostic bundle - not "confirmed"/"preview" screen actions, which have
-  // no attachment UI and can never race an in-flight ingest.
+  // Screenshot ingest (paste/drop/browse, ticket 08) runs async; `buildRequest` only ever snapshots
+  // already-committed images.
   readonly isIngesting: boolean;
   readonly canSubmit: boolean;
   readonly onCancel: () => void;
@@ -1410,9 +1305,8 @@ function intentFromUnmigratedContext(
   return lines.join("\n\n");
 }
 
-// The legacy context still rides in the submitted report (unchanged from
-// before it stopped being prefilled into the textarea) - just appended to
-// whatever the user actually typed, rather than masquerading as their words.
+// The legacy context still rides in the submitted report (unchanged from before it stopped being prefilled
+// into the textarea).
 function composeIntentForSubmission(
   userIntent: string,
   legacyContext: string,
@@ -1428,11 +1322,7 @@ function legacyContextSummaryLine(legacyContext: string): string {
   return legacyContext.split("\n\n").join(" · ");
 }
 
-// ADV-L6: routes through the exact same `humanRouteLabel` path as the
-// evidence review's "Where" row - a genuinely unavailable field (the
-// registry never observed a route this session) gets the same generic
-// fallback an unmapped-but-known template gets, never a third,
-// differently-worded "Current location" string.
+// Adv-L6: routes through the exact same `humanRouteLabel` path as the evidence review's "Where" row.
 function currentLocationLabel(field: CapturedField<string>): string {
   if (field.status === "unavailable") return ROUTE_TEMPLATE_FALLBACK_LABEL;
   return humanRouteLabel(field.value);
@@ -1635,14 +1525,8 @@ function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
 }
 
-/**
- * The dialog's attachment target (ticket 08 / T5): paste, drop, and
- * click-to-browse all funnel into `attachments.addFiles`, which owns every
- * attach-time rejection (count/type/size/budget - see
- * `use-report-issue-attachments.ts`). The review-warning line renders only
- * once the first thumbnail exists - never beside an empty target - per the
- * capture flow's wireframe.
- */
+/** The review-warning line renders only once the first thumbnail exists - never beside an empty target - per
+ * the capture flow's wireframe. */
 function AttachmentSection({
   attachments,
   disabled,
@@ -1811,12 +1695,7 @@ function ConsentPanel(props: {
   readonly onToggleDiagnostics: (checked: boolean) => void;
   readonly onToggleAllowContact: (checked: boolean) => void;
 }): ReactNode {
-  // Honest per build: the no-DSN bundle never includes screenshots (a
-  // deliberate ticket 08 choice - see `saveDiagnosticBundle`'s own doc
-  // comment) and log tails only when their toggle is on below, so the
-  // summary must say exactly that rather than implying screenshots are
-  // "in the GitHub draft" (the public draft never carries images either -
-  // only a private-report reference, and only when one exists).
+  // Honest per build: the no-dsn bundle never includes screenshots (a deliberate ticket 08 choice.
   const summary = props.deliveryUnavailable
     ? "Included in your diagnostic bundle: your words, type/frequency, and any log tails still toggled on below. Screenshots stay on this device - attach them manually if you post a GitHub issue."
     : "Sent privately to the Traycer team: adds your words, screenshots and logs to the crash data we already receive.";
@@ -1942,12 +1821,8 @@ function ConsentLogToggleRow(props: {
   );
 }
 
-// One consent flag, one row, two files (ticket 03 / plan D3): there is no
-// scenario where a user wants `browser-telemetry.jsonl` attached but not
-// `browser-trace.jsonl` (or vice versa), so a single switch covers both -
-// unlike `ConsentLogToggleRow`'s single target, this offers two independent
-// "view" affordances (each opening its own `FrozenLogTailView`, same as any
-// other log) since the row still spans two distinct log targets.
+// One consent flag, one row, two files: there is no scenario where a user wants `browser-telemetry.jsonl`
+// attached but not `browser-trace.jsonl` (or vice versa), so a single switch covers both.
 function ConsentBrowserDiagnosticsRow(props: {
   readonly draftId: number;
   readonly support: DesktopSupportDialogProps["support"];
@@ -2058,10 +1933,7 @@ function FrozenLogTailView(props: {
   );
 }
 
-// KB1: `reportId` is required, not `string | null` - the caller only renders
-// this screen when `confirmedReportId` returned non-null, so the false
-// "sent privately" state (no private report ever minted) is unrepresentable
-// here rather than merely avoided by caller discipline.
+// KB1: `reportId` is required, not `string | null`.
 function ConfirmationScreen({
   reportId,
 }: {
@@ -2091,9 +1963,8 @@ function ConfirmationScreen({
   );
 }
 
-// KB1's honest terminal state for a public-draft open when nothing was ever
-// privately delivered (no-DSN Case B, or a definite `failed`/rejected
-// submit) - never the green "Sent privately" confirmation.
+// KB1's honest terminal state for a public-draft open when nothing was ever privately delivered (no-dsn Case
+// B, or a definite `failed`/rejected submit) - never the green "Sent privately" confirmation.
 function GithubDraftOpenedScreen(): ReactNode {
   return (
     <div className="grid gap-2 rounded-md border border-border bg-foreground/3 px-3 py-3 text-ui-sm">
@@ -2110,11 +1981,7 @@ interface PreviewFieldRow {
   readonly value: string;
 }
 
-// Explicit per-template field lists (not a generic label lookup): each
-// template's field set is a concrete, named interface, and this keeps the
-// preview exhaustive over `draft.template` the same way the main-process
-// composer is - a new/renamed field id fails to compile here, not silently
-// falls back to its raw key.
+// Explicit per-template field lists (not a generic label lookup).
 function previewFieldRows(
   draft: DesktopSupportBuildPublicDraftResult,
 ): readonly PreviewFieldRow[] {

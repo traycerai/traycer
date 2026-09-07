@@ -1,18 +1,6 @@
 /**
- * Viewport-parity acceptance criterion for Phase 1.1: the narrow-viewport
- * rename path never had a local update at all before the optimistic overlay,
- * so this pins that `useSwitcherRename` now stamps + retires it exactly like
- * the desktop tab-strip rename does.
- *
- * Mocks ONLY the network layer (the three rename mutation hooks, the raw
- * terminal rename mutation, and the session host client); `useOpenEpicHandle`
- * is backed by a REAL `createOpenEpicStore` session so `beginRenameMutation` /
- * `retirePendingMutation` run for real against a real Y.Doc.
- *
- * Call sites use `void mutateAsync(vars).then(landed, failed)`, and
- * `retirePendingMutation` takes a required `outcome` argument. Mocks below
- * expose `mutateAsync` returning a controllable Promise instead of a
- * synchronous `mutate`.
+ * Viewport-parity acceptance criterion for Phase 1.1: the narrow-viewport rename path never had a local update at all before the optimistic overlay, so this pins that `useSwitcherRename` now stamps + retires it exactly like the desktop tab-strip rename does.
+ * Mocks ONLY the network layer (the three rename mutation hooks, the raw terminal rename mutation, and the session host client); `useOpenEpicHandle` is backed by a REAL `createOpenEpicStore` session so `beginRenameMutation` / `retirePendingMutation` run for real against a real Y.Doc.
  */
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -47,9 +35,7 @@ const mocks = vi.hoisted(() => ({
   terminalCalls: [] as { readonly sessionId: string; readonly title: string }[],
   settleAs: "success",
   /**
-   * One settle function per `mutateAsync` call, in call order - a queue
-   * rather than a single slot, so a test firing two consecutive renames can
-   * settle each independently and assert BOTH stamps retire.
+   * One settle function per `mutateAsync` call, in call order - a queue rather than a single slot, so a test firing two consecutive renames can settle each independently and assert BOTH stamps retire.
    */
   pendingSettles: [] as (() => void)[],
 }));
@@ -162,14 +148,6 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-/**
- * A real `HostRequester` wired to an in-memory `MockHostMessenger`, in place
- * of the `mutateAsync` control the retired `use-epic-node-mutations` mock
- * used to hand tests. `epic.renameArtifact` is the one handler these suites
- * drive - `pendingSettles` and `artifactCalls` are the SAME hoisted queues
- * the chat/tui-agent mocks still push into, so a test that mixes tile types
- * sees one call-order queue regardless of which path produced each entry.
- */
 function buildCommandRequester(): HostRequester<HostRpcRegistry> {
   const entry: HostDirectoryEntry = {
     hostId: HOST_ID,
@@ -229,9 +207,7 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -296,11 +272,6 @@ describe("useSwitcherRename", () => {
       await flushMicrotasks();
     });
 
-    // A "landed" retire is NOT a deletion (item 8 of the contract): the
-    // entry survives until the doc visibly echoes the ack, so the row keeps
-    // showing the optimistic value here. If the hook wired success to
-    // `retirePendingMutation(id, "failed")` instead of `"landed"` by
-    // mistake, this would immediately revert to "New spec" and fail.
     expect(handle.store.getState().artifacts.byId[id].title).toBe(
       "Trimmed title",
     );
@@ -333,11 +304,7 @@ describe("useSwitcherRename", () => {
   it("retire still fires after the hook's component UNMOUNTS before settle", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // An ERROR settle is used here (not the default success) because only
-    // a failed retire is immediately OBSERVABLE through the store (it
-    // deletes the entry outright) - a landed retire keeps the row showing
-    // the optimistic value either way, which would prove nothing about
-    // whether retire actually ran post-unmount.
+    // An ERROR settle is used here (not the default success) because only a failed retire is immediately OBSERVABLE through the store (it deletes the entry outright) - a landed retire keeps the row showing the optimistic value either way, which would prove nothing about whether retire actually ran post-unmount.
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
@@ -349,9 +316,8 @@ describe("useSwitcherRename", () => {
       "Unmount-race rename",
     );
 
-    // The component is gone before the RPC promise settles. Retire is
-    // driven by the mutateAsync promise chain, not by a React effect
-    // cleanup, so it must still land against the (still-alive) store.
+    // The component is gone before the RPC promise settles.
+    // Retire is driven by the mutateAsync promise chain, not by a React effect cleanup, so it must still land against the (still-alive) store.
     unmount();
 
     await act(async () => {
@@ -362,22 +328,10 @@ describe("useSwitcherRename", () => {
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
   });
 
-  // Replaces a stamp-order/out-of-order-settle assertion. The write-command
-  // queue serializes sends on a single `sendingCommandId`
-  // (`command-overlay.ts:295` - "the queue serializes calls in issue order"
-  // per `CommandQueueOptions.send`'s own doc, and `retryPending`'s comment:
-  // "two renames of one row applied out of order leave the wrong title").
-  // So the second rename can no longer be sent while the first is still in
-  // flight, and there is nothing left to settle "out of order" - what
-  // replaces that race is pinning the serialization itself: the second
-  // stamp lands immediately, but its RPC is not attempted until the first
-  // settles, and both stamps still retire.
   it("a second rename enqueued while the first is still in flight is stamped immediately but not SENT until the first settles, and both stamps still retire", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // ERROR settles for the same observability reason as the unmount test
-    // above: a failed retire deletes immediately, so reaching "New spec"
-    // after both settle proves BOTH stamps were retired, not just one.
+    // ERROR settles for the same observability reason as the unmount test above: a failed retire deletes immediately, so reaching "New spec" after both settle proves BOTH stamps were retired, not just one.
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
@@ -424,9 +378,7 @@ describe("useSwitcherRename", () => {
     const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
 
-    // AWAITED: the overlay stamp is minted by the worker's queue, so the
-    // mutation fires only after that round trip resolves. A synchronous `act`
-    // here asserts on a chain still in flight and reads an empty call list.
+    // AWAITED: the overlay stamp is minted by the worker's queue, so the mutation fires only after that round trip resolves.
     await act(async () => {
       result.current("chat", chatId, "New chat name");
       await flushMicrotasks();
@@ -441,9 +393,7 @@ describe("useSwitcherRename", () => {
   it("a REGISTRY-backed terminal-agent rename routes through beginRenameMutation and the tui-agent mutation", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // A registry row (docResident: false) is what routes to the RPC; a
-    // doc-resident agent takes the doc-write branch instead (pinned in
-    // `use-rename-canvas-tab.test.tsx`, whose hook shares the routing).
+    // A registry row (docResident: false) is what routes to the RPC; a doc-resident agent takes the doc-write branch instead (pinned in `use-rename-canvas-tab.test.tsx`, whose hook shares the routing).
     handle.store.getState().applyTuiAgentRecords(
       [
         {

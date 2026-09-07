@@ -24,10 +24,7 @@ afterEach(() => {
 const DEFAULT_TITLE = "New spec";
 
 /**
- * Mirrors the hook's state machine: threads `lastDocTitle` through a sequence
- * of edits and applies each rename to the simulated artifact title (as the
- * local Y.Doc rename does). `set:X` models an external rename (sidebar / other
- * client) that mutates the artifact title without a doc event.
+ * `set:X` models an external rename (sidebar / other client) that mutates the artifact title without a doc event.
  */
 function drive(
   steps: ReadonlyArray<

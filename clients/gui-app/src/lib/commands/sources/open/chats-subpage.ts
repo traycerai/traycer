@@ -1,16 +1,5 @@
 /**
- * Chat-interface half of the opener's unified **Agents** sub-page (see
- * `agents-subpage.ts`): the "New agent (Chat)" creation leaf plus the Task's
- * existing chat-interface Agents from the live projection (each opens a fresh
- * instance into the bound target group).
- *
- * Returns the creation leaf SEPARATELY from the records so the merged sub-page
- * can group both interfaces' creation entries at the top instead of
- * interleaving them - which would read as two entity collections again.
- *
- * The `open:chats:*` leaf ids are load-bearing beyond routing: the palette maps
- * that prefix to the `open_chat` analytics command
- * (`palette-cmdk-controller.ts`), so they survive the category merge unchanged.
+ * Chat-interface half of the opener's unified **Agents** sub-page (see `agents-subpage.ts`): the "New agent (Chat)" creation leaf plus the Task's existing chat-interface Agents from the live projection (each opens a fresh instance into the bound target group).
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -31,9 +20,8 @@ import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-su
 import type { CommandContext } from "@/lib/commands/types";
 
 export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
-  // The host serving the active epic's projection: the fallback a chat with
-  // no recorded host binds to, and the reference a cross-host badge is judged
-  // against. Not the app-wide host - see `useActiveEpicHostId`.
+  // The host serving the active epic's projection: the fallback a chat with no recorded host binds to, and the reference a cross-host badge is judged against.
+  // Not the app-wide host - see `useActiveEpicHostId`.
   const activeHostId = useActiveEpicHostId(ctx.activeEpicId);
   const defaultHostId = activeHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
@@ -67,12 +55,8 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
     if (projection === null) return { create: newChat, existing: [] };
     const existing = projection.chats.allIds.map((id) => {
       const chat = projection.chats.byId[id];
-      // A chat with no recorded hostId falls back to (and thus matches) the
-      // epic's host, so only a real, differing hostId ever earns a badge.
-      // Requires `activeHostId` to be genuinely resolved first - while it's
-      // still `null` (boot, host reconnect window) `defaultHostId` would be
-      // the `UNKNOWN_HOST_PLACEHOLDER` sentinel, which no real hostId can
-      // ever equal, false-badging every chat as cross-host.
+      // A chat with no recorded hostId falls back to (and thus matches) the epic's host, so only a real, differing hostId ever earns a badge.
+      // Requires `activeHostId` to be genuinely resolved first - while it's still `null` (boot, host reconnect window) `defaultHostId` would be the `UNKNOWN_HOST_PLACEHOLDER` sentinel, which no real hostId can ever equal, false-badging every chat as cross-host.
       const hostBadge =
         activeHostId !== null &&
         chat.hostId !== null &&

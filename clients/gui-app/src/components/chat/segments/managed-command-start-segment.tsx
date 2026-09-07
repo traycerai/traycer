@@ -21,34 +21,13 @@ import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 
-/**
- * The `traycer_run_shell` call, rendered as the shell it started rather than as
- * a generic wrench row.
- *
- * A shell outlives the turn that created it, so this is the one segment in the
- * feed that keeps changing after its call finished: status is read LIVE off the
- * chat's own set, keyed by the id the host stamped on the block, so the single
- * card updates in place - Running, then Exited · code 0 - instead of the
- * transcript growing a second entry nobody asked for.
- *
- * Interaction is deliberately the provider command card's, not a new one:
- * chevron to a framed copyable command panel, elapsed counter and pulse while
- * live, no total once settled. Shells stop being the odd row out in a feed full
- * of command cards.
- */
+/** The `traycer_run_shell` call, rendered as the shell it started rather than as a generic wrench row. Interaction is deliberately the provider command card's, not a new one: chevron to a framed copyable command panel, elapsed counter and pulse while live, no total once settled. */
 export interface ManagedCommandStartSegmentProps {
   /** The tool_call block id, which scopes this card's open state. */
   readonly id: string;
   /** Identity stamped at the call; survives the live record's death. */
   readonly managedCommand: ToolCallManagedCommandStarted;
-  /**
-   * The command as the agent WROTE it, off the block's own `inputDetail`.
-   *
-   * Deliberately not the live record's `command`: a restart can re-spec a
-   * shell, and this card is the record of one call - what that call asked for.
-   * The output window is where the effective, current spec is reported.
-   * `null` on a block whose input was never captured.
-   */
+  /** Deliberately not the live record's `command`: a restart can re-spec a shell, and this card is the record of one call - what that call asked for. `null` on a block whose input was never captured. */
   readonly command: string | null;
   readonly variant: "card" | "row";
   readonly headerFindUnitId: string | null;
@@ -73,11 +52,8 @@ export function ManagedCommandStartSegment(
   );
   const setToolOpen = useToolOpenStore((state) => state.setOpen);
 
-  // Only an authoritative absence is a deletion: the owning chat's stream is
-  // open and its set omits the shell. Before that set has arrived - a chat
-  // still hydrating, a dropped connection, a transcript with no live session -
-  // absence proves nothing, and the card must not claim a deletion it cannot
-  // see; the door stays open, and the window it opens says what it finds.
+  // Only an authoritative absence is a deletion: the owning chat's stream is open and its set omits the shell.
+  // Before that set has arrived - a chat still hydrating, a dropped connection, a transcript with no live session - absence proves nothing, and the card must not claim a deletion it cannot see; the door stays open, and the window it opens says what it finds.
   const gone = presence.kind === "absent";
   const monitoring =
     live === null ? managedCommand.monitoring : live.monitoring;
@@ -91,16 +67,11 @@ export function ManagedCommandStartSegment(
         decorative
         className="size-3.5"
       />
-      {/* No cwd here by design: it is a host-disk detail that reads as noise
-          on a card about what the agent ran, and the output window's details
-          popover carries the effective cwd for anyone who needs it. The block
-          still stamps it, so a later restart card can say "cwd changed". */}
+      {/* No cwd here by design: it is a host-disk detail that reads as noise on a card about what the agent ran, and the output window's details popover carries the effective cwd for anyone who needs it. The block still stamps it, so a later restart card can say "cwd changed". */}
       <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85">
         {managedCommandTitle({ description, monitoring })}
       </span>
-      {/* A deleted shell keeps its name and drops its state: there is no status
-          left to report, and "Exited" frozen from before the delete would be
-          the card claiming to know something it does not. */}
+      {/* A deleted shell keeps its name and drops its state: there is no status left to report, and "Exited" frozen from before the delete would be the card claiming to know something it does not. */}
       {live === null ? null : (
         <>
           <span aria-hidden className="shrink-0 text-muted-foreground/40">
@@ -115,10 +86,7 @@ export function ManagedCommandStartSegment(
           </span>
         </>
       )}
-      {/* The live cluster, in the trailing position every other segment uses.
-          Only while it runs: a settled shell shows no total, matching
-          `CommandSegment`'s density call rather than inventing a duration this
-          feed shows nowhere else. */}
+      {/* The live cluster, in the trailing position every other segment uses. Only while it runs: a settled shell shows no total, matching `CommandSegment`'s density call rather than inventing a duration this feed shows nowhere else. */}
       <span className="ml-auto flex shrink-0 items-center gap-1.5">
         {live !== null && live.status.state === "running" ? (
           <>
@@ -146,9 +114,7 @@ export function ManagedCommandStartSegment(
     />
   );
 
-  // The command stays expandable forever, deleted or not: it is the record of
-  // what this call asked for, and it is persisted with the block rather than
-  // read off a shell that may no longer exist.
+  // The command stays expandable forever, deleted or not: it is the record of what this call asked for, and it is persisted with the block rather than read off a shell that may no longer exist.
   const body =
     open && command !== null ? (
       <SegmentPanel
@@ -171,17 +137,14 @@ export function ManagedCommandStartSegment(
   if (variant === "row") {
     return (
       <SegmentRow
-        // Sibling of the row's trigger, never inside it: the trigger is a
-        // button, so a door nested in `header` was a button in a button - and
-        // a click on the disabled one toggled the disclosure instead.
+        // Sibling of the row's trigger, never inside it: the trigger is a button, so a door nested in `header` was a button in a button - and a click on the disabled one toggled the disclosure instead.
         headerAction={headerAction}
         open={open}
         onOpenChange={setOpen}
         header={header}
         body={body}
-        // Never destructive. A non-zero exit is routine for a shell the agent
-        // started on purpose; the red dot beside the label is the whole of the
-        // signal, per the demotion decision.
+        // Never destructive.
+        // A non-zero exit is routine for a shell the agent started on purpose; the red dot beside the label is the whole of the signal, per the demotion decision.
         tone="default"
         stickyHeader
         expandable={command !== null}

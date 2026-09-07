@@ -46,10 +46,7 @@ describe("epic message schemas", () => {
   });
 
   it("REJECTS the action-only terminal statuses on non-action blocks", () => {
-    // The accumulator never assigns interrupted/superseded to text/reasoning/
-    // todo/error/compaction/steer/approval/interview, so the schema must not
-    // model them either - it should reject such a record rather than silently
-    // accept one the renderer doesn't produce.
+    // The accumulator never assigns interrupted/superseded to text/reasoning/ todo/error/compaction/steer/approval/interview, so the schema must not model them either - it should reject such a record rather than silently.
     for (const status of ["interrupted", "superseded"] as const) {
       const result = contentBlockSchema.safeParse({
         blockId: `text-${status}`,

@@ -15,18 +15,7 @@ import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 
-// `useFleetUpdateViews` is the Settings selector's WHOLE data source (Ticket
-// 06, subject F): one bounded sweep over borrowed sessions, projected per
-// host id from a map keyed by that id. Per-host isolation is therefore a
-// property of the DATA SHAPE (`ObservationsByHostId`, read by exact hostId
-// key) rather than of any per-row rendering code - this suite proves it at
-// that source, which every consumer (`HostOptionRow` via `HostSwitcher`)
-// inherits by construction.
-//
-// Real `acquireRemoteSession`/borrow machinery (same fake-`IRemoteSession`
-// double subject A's suites use) rather than a mocked hook - the whole point
-// is that the SWEEP reads through the real borrow surface, and a mock here
-// would just be asserting the hook calls its own dependency.
+// Drive the real sweep through real borrow machinery. Per-host isolation is the data shape (`ObservationsByHostId`), not per-row rendering.
 
 interface FakeSession extends IRemoteSession<
   VersionedRpcRegistry,
@@ -176,10 +165,7 @@ describe("useFleetUpdateViews — per-host isolation (Ticket 06 subject F)", () 
     // state did not leak across the map.
     expect(result.current(hostB).kind).toBe("idle");
 
-    // Positive control #1: driving B into the SAME active state changes
-    // ONLY B's answer, proving the assertion above could have failed had
-    // isolation been broken (a shared/aliased entry would show both flipping
-    // together).
+    // Positive control #1: driving B into the SAME active state changes ONLY B's answer, proving the assertion above could have failed had isolation been broken (a shared/aliased entry would show both flipping together).
     sessionB.statusResponse = downloadingStatus("3.0.0");
     await queryClient.invalidateQueries();
     await waitFor(() => {
@@ -238,12 +224,7 @@ describe("useFleetUpdateViews — per-host isolation (Ticket 06 subject F)", () 
   });
 });
 
-// G3: per-host cadence, coalescing with the canonical `host.status` cache, and
-// retention across a declined read. The independent cold review's finding 2
-// (HIGH) was that a single fleet-shaped query applied ONE cadence to the whole
-// list — an active host on one machine fast-polled every idle host — and that
-// selected/local reads issued a parallel fleet read instead of reusing the
-// canonical cache entry.
+// The independent cold review's finding 2 (HIGH) was that a single fleet-shaped query applied ONE cadence to the whole list - an active host on one machine fast-polled every idle host - and that selected/local reads issued a parallel fleet read instead of reusing the canonical cache entry.
 describe("useFleetUpdateViews — per-host cadence (G3a)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -300,7 +281,7 @@ describe("useFleetUpdateViews — coalescing with the canonical host.status cach
   it("a FRESH canonical host.status cache entry serves the host's observation WITHOUT issuing a borrowed read", async () => {
     const hostId = "host-canonical";
     const session = fakeSession();
-    // If the coalescing failed, this is what WOULD get read — a distinct
+    // If the coalescing failed, this is what WOULD get read - a distinct
     // version from the seeded canonical entry, so a leaked borrow is visible.
     session.statusResponse = downloadingStatus("9.9.9");
     const owner = acquireRemoteSession(
@@ -330,7 +311,7 @@ describe("useFleetUpdateViews — coalescing with the canonical host.status cach
     await waitFor(() => {
       expect(result.current(hostId).kind).toBe("idle");
     });
-    // The canonical entry's own version, NOT the borrowed session's — proving
+    // The canonical entry's own version, NOT the borrowed session's - proving
     // the canonical read served this host rather than a borrow.
     expect(result.current(hostId).kind).not.toBe("downloading");
     expect(session.statusCalls).toBe(0);
@@ -348,7 +329,7 @@ describe("useFleetUpdateViews — coalescing with the canonical host.status cach
       () => session,
     );
 
-    // No canonical `host.status` cache entry seeded at all — the query state
+    // No canonical `host.status` cache entry seeded at all - the query state
     // simply does not exist for this host.
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useFleetUpdateViews([hostId]), {
@@ -369,19 +350,7 @@ describe("useFleetUpdateViews — coalescing with the canonical host.status cach
 });
 
 describe("useFleetUpdateViews — global concurrency across real per-host queries (G3c)", () => {
-  // NOTE ON WHERE THIS CLAIM ACTUALLY LIVES: the peak-of-4 assertion belongs to
-  // `fleet-read-gate.test.ts`'s dedicated concurrency suite, which counts
-  // concurrency itself (`active`/`peak` local counters) rather than sampling
-  // `fleetReadSlotsInUseForTest()` — that instrument reads the SAME counter the
-  // barging defect corrupts, so a peak assertion built on it can read "4" at
-  // the exact moment 5+ tasks are in flight. Reproducing the gate's own
-  // arrival-after-hand-off timing (submit N, let some resolve, THEN submit the
-  // rest) through ten real per-host TanStack queries and borrowed sessions is
-  // not controllable at this seam — `useQueries` mounts all ten queries in the
-  // same commit, so there is no "then submit 4 more" moment to aim at here.
-  // This suite's job is therefore narrower and honest about it: prove that ten
-  // concurrent per-host reads, funneled through the SAME shared gate, all
-  // complete without deadlocking or dropping a host.
+  // Ten concurrent per-host reads through the same shared gate complete without deadlock or a dropped host. Peak-of-4 lives in `fleet-read-gate.test.ts`, which counts concurrency itself.
   it("ten hosts reading concurrently through the shared fleet gate all resolve, with none starved indefinitely", async () => {
     const hostIds = Array.from(
       { length: 10 },
@@ -468,10 +437,7 @@ describe("useFleetUpdateViews — retention across a declined read (G3e)", () =>
     await waitFor(() => {
       expect(result.current(hostId).kind).toBe("unknown");
     });
-    // THE RETENTION CLAIM: the view did not vanish into a bare unknown — it
-    // still names the phase and target the last successful read observed,
-    // exactly the "last seen downloading" evidence a declined read must not
-    // discard.
+    // THE RETENTION CLAIM: the view did not vanish into a bare unknown - it still names the phase and target the last successful read observed, exactly the "last seen downloading" evidence a declined read must not discard.
     expect(result.current(hostId).lastKnownKind).toBe("downloading");
     expect(result.current(hostId).targetVersion).toBe("2.1.0");
     expect(result.current(hostId).attemptId).toBe("attempt-2.1.0");

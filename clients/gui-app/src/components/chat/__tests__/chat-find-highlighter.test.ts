@@ -4,9 +4,7 @@ import { queryMountedChatFindUnit } from "@/components/chat/chat-find";
 describe("queryMountedChatFindUnit", () => {
   it("resolves a unit id containing selector-significant characters", () => {
     const messageRoot = document.createElement("div");
-    // Persisted segment/message ids flow into unit ids unescaped, so an id can
-    // carry quotes, brackets, and backslashes that would break or mis-target a
-    // raw `[data-chat-find-unit="..."]` attribute selector.
+    // Persisted segment/message ids flow into unit ids unescaped, so an id can carry quotes, brackets, and backslashes that would break or mis-target a raw `[data-chat-find-unit="..."]` attribute selector.
     const trickyUnitId = "segment:weird\"]\\:id [data-x='y']";
     const decoy = document.createElement("div");
     decoy.dataset.chatFindUnit = "segment:other";

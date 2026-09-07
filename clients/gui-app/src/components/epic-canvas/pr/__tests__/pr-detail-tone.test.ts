@@ -4,16 +4,10 @@ import {
   prChecksTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 
-/**
- * `total` is not the sum of the three buckets: GitHub also reports skipped,
- * neutral and cancelled contexts, which land in `total` alone. The gauge must
- * not read a run where nothing passed as a green one.
- */
+/** The gauge must not read a run where nothing passed as a green one. */
 describe("prChecksTone / formatPrChecksValue - contexts outside the buckets", () => {
   it("does not report a green run when every check settled outside the buckets", () => {
-    // Four checks, all skipped/neutral/cancelled. Before this was handled,
-    // the tone fell through to "ok" and the value read "0 passed" - a green
-    // dot next to a count of zero passes.
+    // Before this was handled, the tone fell through to "ok" and the value read "0 passed" - a green dot next to a count of zero passes.
     const counts = { passed: 0, failing: 0, pending: 0, total: 4 };
     expect(prChecksTone(counts)).toBe("none");
     expect(formatPrChecksValue(counts)).toBe("4 checks");

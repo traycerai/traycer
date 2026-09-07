@@ -1,13 +1,4 @@
-/**
- * The capture→route seam for a QR scanned by the SYSTEM camera. jsdom cannot
- * produce a real deep link, so what is exercised here is the boundary the OS
- * hands to: a faked `@capacitor/app` slice on one side, the subscription the
- * GUI bridge makes on the other, and the two delivery orders in between.
- *
- * The orders are the point. A WARM open has a subscriber already; a COLD start
- * does not exist yet when the URL arrives, and if the code is not retained
- * across that gap the launch that caused the sign-in is the one that loses it.
- */
+/** The capture→route seam for a QR scanned by the system camera. */
 import { describe, expect, it, vi } from "vitest";
 import type { LinkLoginDeepLinkDelivery } from "@traycer-clients/shared/platform/runner-host";
 import {
@@ -26,9 +17,7 @@ interface FakeApp {
 }
 
 /**
- * `launchUrl` is what the plugin reports for the URL that STARTED the app -
- * `undefined` when the app was opened normally, which is the plugin's own
- * spelling for "nothing launched it".
+ * `launchUrl` is what the plugin reports for the URL that started the app - `undefined` when the app was opened normally, which is the plugin's own spelling for "nothing launched it".
  */
 function fakeApp(launchUrl: string | undefined): FakeApp {
   const listeners: ((event: { readonly url: string }) => void)[] = [];
@@ -97,9 +86,8 @@ describe("MobileLinkLoginDeepLinks", () => {
   });
 
   it("emits once when the launch URL is also announced as an open", async () => {
-    // iOS can do both for a single cold launch. Two claims is not a harmless
-    // repeat: the second one is rejected, and the user sees "invalid code" on
-    // a sign-in that was working.
+    // iOS can do both for a single cold launch.
+    // Two claims is not a harmless repeat: the second one is rejected, and the user sees "invalid code" on a sign-in that was working.
     const app = fakeApp(PAYLOAD);
     const deepLinks = new MobileLinkLoginDeepLinks(app.plugin);
     deepLinks.start();
@@ -149,10 +137,7 @@ describe("MobileLinkLoginDeepLinks", () => {
 
   it("delivers a deliberate rescan once the delivery burst has passed", async () => {
     // The dedupe exists for one arrival announced twice, milliseconds apart.
-    // It must not outlive that: scanning while signed in is discarded upstream
-    // with a notice, and the user's answer to that notice is to sign out and
-    // scan the same still-live QR again. A lifetime memory swallows exactly
-    // that second, deliberate scan.
+    // It must not outlive that: scanning while signed in is discarded upstream with a notice, and the user's answer to that notice is to sign out and scan the same still-live QR again.
     vi.useFakeTimers();
     try {
       const app = fakeApp(undefined);
@@ -174,9 +159,7 @@ describe("MobileLinkLoginDeepLinks", () => {
   });
 
   it("gives every accepted arrival its own identity, repeats included", async () => {
-    // The consumer must be able to ask "have I acted on THIS arrival" without
-    // using the code as its own identity - two arrivals of one code are a
-    // rescan the second time, and a value-keyed guard cannot tell them apart.
+    // The consumer must be able to ask "have I acted on this arrival" without using the code as its own identity - two arrivals of one code are a rescan the second time, and a value-keyed guard cannot tell them apart.
     vi.useFakeTimers();
     try {
       const app = fakeApp(undefined);

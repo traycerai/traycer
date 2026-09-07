@@ -4,16 +4,7 @@ import path from "node:path";
 import { authQueryKeys } from "@/lib/query-keys";
 
 /**
- * Static census for redesign P4.1 / F22: push replaced the two 1s readiness
- * polls, and the app's only remaining standing timer against `GET
- * /api/v3/hosts` is the 60s `HOST_DIRECTORY_REFRESH_POLL_MS` interval.
- *
- * This is an ABSENCE search (no 1s poll survives), and an absence search that
- * is silently broken (wrong path, a typo'd regex) returns the empty set and
- * reads as success either way. Every "must be absent" assertion below is
- * paired with a positive control in the same suite that proves the search
- * machinery can still find something when something is actually there - see
- * `describe("positive controls")`.
+ * Static census for redesign P4.1 / F22: push replaced the two 1s readiness polls, and the app's only remaining standing timer against `GET /api/v3/hosts` is the 60s `HOST_DIRECTORY_REFRESH_POLL_MS` interval.
  */
 const guiAppSrc = path.resolve(import.meta.dirname, "../../..");
 
@@ -67,10 +58,7 @@ describe("poll census — exactly one 60s registry poller in production", () => 
       // `refetchInterval` to `false` unconditionally, never a poll duration.
       expect(site).not.toMatch(/\d/);
     }
-    // Every CALL site into the query-options builder (excluding its own
-    // `function registeredHostsQueryOptions(...)` declaration, which the same
-    // pattern also matches) passes `false` as the trailing `pollMs` argument,
-    // never a named interval constant.
+    // Every CALL site into the query-options builder (excluding its own `function registeredHostsQueryOptions(...)` declaration, which the same pattern also matches) passes `false` as the trailing `pollMs` argument, never a named interval constant.
     const builderCallSites = [
       ...source.matchAll(/registeredHostsQueryOptions\([^)]*\)/g),
     ]
@@ -128,12 +116,7 @@ describe("positive controls — the search machinery can still find something re
   });
 
   it("the declaration-count search finds a real hit before it is asked to find only one", () => {
-    // Guards the "only ONE file declares this constant" test above: run the
-    // SAME scan with a pattern known to match every source file's own
-    // filename comment-free content at least twice (any gui-app file plus
-    // this very file, which is excluded by the `__tests__` filter) - proving
-    // `sourceFiles` walks more than a single directory and the filter is
-    // doing real work, not vacuously passing because the walk found nothing.
+    // Guards the "only ONE file declares this constant" test above: run the SAME scan with a pattern known to match every source file's own filename comment-free content at least twice (any gui-app file plus this very file, which is excluded by the `__tests__`.
     const anyFile = sourceFiles(guiAppSrc).filter(
       (relativePath) => !relativePath.includes("__tests__"),
     );
@@ -143,26 +126,14 @@ describe("positive controls — the search machinery can still find something re
 });
 
 describe("registeredHostsAll is a genuine PREFIX of registeredHosts (F22 invalidation)", () => {
-  // The directory's poll invalidates through `registeredHostsAll()` because
-  // it runs outside React with no `AuthService` reference to build the exact
-  // `registeredHosts(authService, userId)` key - it relies on TanStack's
-  // prefix matching to catch every entry in the family at once. If the two
-  // builders ever drift (a field reordered, a segment renamed on one but not
-  // the other), the poll tick keeps running, `invalidateQueries` keeps
-  // returning normally, and NOTHING in the suite goes red - Settings
-  // liveness just quietly stops refreshing. A string-equality check on some
-  // fixed length would not catch a genuine drift (it would need to already
-  // know the "right" length), so this asserts prefix membership element-wise
-  // against the ACTUAL longer key, which is what TanStack itself checks.
+  // The directory's poll invalidates through `registeredHostsAll()` because it runs outside React with no `AuthService` reference to build the exact `registeredHosts(authService, userId)` key - it relies on TanStack's prefix matching to catch every entry in.
   it("every element of registeredHostsAll() matches the corresponding element of registeredHosts(...) in order", () => {
     const authServiceStub = {};
     const all = authQueryKeys.registeredHostsAll();
     const full = authQueryKeys.registeredHosts(authServiceStub, "user-1");
 
     expect(all.length).toBeGreaterThan(0);
-    // A prefix cannot be longer than the key it prefixes - if it ever grew
-    // to equal or exceed `full`'s length, TanStack's `partialMatchKey` would
-    // stop treating it as a wildcard prefix.
+    // A prefix cannot be longer than the key it prefixes - if it ever grew to equal or exceed `full`'s length, TanStack's `partialMatchKey` would stop treating it as a wildcard prefix.
     expect(all.length).toBeLessThan(full.length);
     for (let i = 0; i < all.length; i += 1) {
       expect(full[i]).toBe(all[i]);

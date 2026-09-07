@@ -55,27 +55,7 @@ import {
 
 const COPY_CONFIRMATION_RESET_MS = 1600;
 
-/**
- * Whether a new managed profile for this provider can SHARE the ambient
- * `skills/` and `plugins/` directories instead of copying them - i.e. whether
- * the "Share skills and plugins" checkbox does anything.
- *
- * The real driver is host-side: `seedManagedProfileDir` honours
- * `shareSkillsAndPlugins` only on the `partial-overlay` layout branch
- * (`profile-seeding.ts`), which today is claude-code alone. Codex also has
- * profiles and is also excluded, and that exclusion is CORRECT rather than an
- * oversight: codex takes the `overlay` branch, whose seeding never reads the
- * flag, so offering the checkbox there would send a request the host silently
- * discards.
- *
- * Exhaustive rather than the `providerId === "claude-code"` test it replaces.
- * The old check would have kept quietly answering "no" for a future provider on
- * the partial-overlay layout - a checkbox that should render and doesn't is
- * invisible, so nothing would ever have reported it. This is still a second
- * registration point for a host-side fact; a capability flag on the wire would
- * be the deeper fix, and is deliberately not being minted for a single-member
- * set on a released schema.
- */
+/** Codex also has profiles and is also excluded, and that exclusion is correct rather than an oversight. */
 const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
   ProviderCliState["providerId"],
   boolean
@@ -119,9 +99,6 @@ export function AddProviderProfileDialog({
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  /** `null` retracts a previously reported failure: fired when a new attempt
-   *  starts and when an attempt completes, so a stale "sign-in did not
-   *  finish" banner never sits next to a profile that DID sign in. */
   readonly onFailedAttempt: (
     attempt: FailedProviderProfileAttempt | null,
   ) => void;
@@ -139,12 +116,8 @@ export function AddProviderProfileDialog({
   );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
-  // Set once naming is committed (a rename RPC succeeded, or none was needed
-  // because the label was left at its default) for a given profileId - marks
-  // the transition from the naming step into the ordinary finalize/recolor
-  // path below, so a later recolor failure/retry never re-shows naming. State
-  // (not a ref) because it feeds the naming-step derivation below, which runs
-  // during render.
+  // Set once naming is committed (a rename RPC succeeded, or none was needed because the label was left at its
+  // default) for a given profileId.
   const [namingCommittedFor, setNamingCommittedFor] = useState<string | null>(
     null,
   );
@@ -187,13 +160,7 @@ export function AddProviderProfileDialog({
     renameError: renameProfile.error,
   });
 
-  // Post-auth naming step: a freshly created (non-duplicate) profile whose
-  // resolved email matches another active profile of the same provider -
-  // the split-by-organization case now possible now that same-email,
-  // different-org sign-ins mint distinct profiles instead of deduping. Holds
-  // the dialog open on the resolved identity so the user can tell the two
-  // apart before the default label sticks. Cleared once `namingCommittedFor`
-  // is set (see `commitNaming`), so a later recolor retry never re-shows it.
+  // Cleared once `namingCommittedFor` is set (see `commitNaming`), so a later recolor retry never re-shows it.
   const naming = resolveNamingStep(flow.state, namingCommittedFor);
 
   const complete = (profileId: string): void => {
@@ -221,10 +188,7 @@ export function AddProviderProfileDialog({
     if (trimmedLabel.length === 0) return;
     if (trimmedLabel === profile.label) {
       setNamingCommittedFor(profile.profileId);
-      // Claim the attempt before finalizing directly - otherwise the render
-      // this triggers flips `naming` to null, and the effect below (which
-      // has no dependency array) sees an unclaimed `finalizeAttemptRef` and
-      // calls `finalizeProfile` a second time.
+      // Claim the attempt before finalizing directly - otherwise the render this triggers flips `naming` to null.
       finalizeAttemptRef.current = profile.profileId;
       finalizeProfile(profile);
       return;
@@ -276,8 +240,6 @@ export function AddProviderProfileDialog({
 
   const linkAccount = (): void => {
     if (trimmedLabel.length === 0) return;
-    // A fresh attempt supersedes any previously reported failure - covers
-    // both the initial "Link account" and the failed-state Retry.
     onFailedAttempt(null);
     flow.start({
       label: trimmedLabel,
@@ -652,11 +614,7 @@ export function AddProfileWaitingStep({
   readonly cancelRequested: boolean;
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
-  /** True only once the flow has reached `waiting` (a live profileId/child
-   *  exists). The paste field renders only then - during `starting` there
-   *  is nothing yet for a submit to reach, and rendering it anyway would
-   *  let a user's paste silently lock the field without ever being sent
-   *  (fixup review finding 2). */
+  /** The paste field renders only then - during `starting` there is nothing yet for a submit to reach. */
   readonly waiting: boolean;
   readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly onOpenExternalLink: (url: string) => void;
@@ -862,14 +820,8 @@ function nextAvailableAccentColor(
   );
 }
 
-/**
- * Another active profile of the same provider sharing `profile`'s email -
- * the split-by-organization case (same Anthropic account, different
- * subscription/org) the naming step exists for. Independent of the host's
- * `duplicateOfProfileId` verdict, which is org-aware and deliberately does
- * NOT mark this pair - this check only needs "tell them apart", not "are
- * these the same account".
- */
+/** Independent of the host's `duplicateOfProfileId` verdict, which is org-aware and deliberately does not mark
+ * this pair - this check only needs "tell them apart", not "are these the same account". */
 function findEmailCollisionProfile(
   profiles: readonly ProviderProfile[],
   profile: ProviderProfile,
@@ -894,7 +846,6 @@ interface DialogLockState {
   readonly dismissalLocked: boolean;
 }
 
-/** Same complexity-budget rationale as `resolveNamingStep` below. */
 function resolveDialogLockState({
   flowState,
   commitPending,
@@ -927,9 +878,8 @@ interface NamingStepState {
   readonly collisionProfile: ProviderProfile;
 }
 
-/** Pulled out of the dialog component to keep its own branching out of the
- *  component's cyclomatic complexity count (react-doctor/eslint `complexity`
- *  budget) - see `naming`'s call site for what this gates. */
+/** Pulled out of the dialog component to keep its own branching out of the component's cyclomatic complexity
+ * count (react-doctor/eslint `complexity` budget) - see `naming`'s call site for what this gates. */
 function resolveNamingStep(
   flowState: ProviderProfileLoginFlowState,
   namingCommittedFor: string | null,

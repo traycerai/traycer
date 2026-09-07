@@ -12,13 +12,7 @@ import {
   resetBrowserStoreKeyLedgerForTests,
 } from "../browser-store-key-ledger";
 
-/**
- * A stand-in for `safeStorage` that is reversible without being secret, so the
- * tests can tell "this desktop refused" from "the keystore failed": every
- * refusal below must happen with `decryptString` never reaching the keystore
- * at all, which is the whole point of the ledger - the oracle is the CALL, not
- * its answer.
- */
+/** A stand-in for `safeStorage` that is reversible without being secret, so the tests can tell "this desktop refused" from "the keystore failed": every refusal below must happen with. */
 const keystore = vi.hoisted(() => ({
   available: true,
   backend: "gnome_libsecret",
@@ -81,11 +75,7 @@ describe("desktop store-key custody", () => {
   });
 
   it("refuses a blob it did not wrap, without asking the keystore", async () => {
-    // The refused input is a blob this stand-in COULD open. A desktop that
-    // decrypts whatever an attached host names is a padding oracle against its
-    // own cookie database (OSCrypt is AES-CBC, fixed IV, no MAC), and a forged
-    // blob that decrypted would install a host-chosen store key. So the pin is
-    // that the keystore is never reached, not that the answer was null.
+    // So the pin is that the keystore is never reached, not that the answer was null.
     const foreign = Buffer.from("sealed:someone-elses-key").toString("base64");
 
     expect(unwrapStoreKey(foreign, USER_A)).toBeNull();
@@ -93,10 +83,6 @@ describe("desktop store-key custody", () => {
   });
 
   it("refuses to wrap when the keystore does not encrypt", async () => {
-    // Linux with no keyring: `safeStorage` silently falls back to `basic_text`,
-    // which round-trips, so a wrap would SUCCEED and hand the host a blob
-    // anyone holding the file can open. `null` leaves the host sealed, which is
-    // the honest state for such a machine.
     const platform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux" });
     keystore.backend = "basic_text";
@@ -125,11 +111,7 @@ describe("desktop store-key custody", () => {
   });
 
   it("bounds the ledger by (user, host) pair, not by blob count - another host's digest survives a busy host filling its own pair", async () => {
-    // The cap is a file-size bound over PAIRS, not a shared FIFO over blobs:
-    // one busy host wrapping 65 times for its own pair must not spend the
-    // room of a DIFFERENT host's single digest - that was the old shared
-    // 64-entry FIFO's bug (64 re-wraps from one host evicted every other
-    // host).
+    // The cap is a file-size bound over PAIRS, not a shared FIFO over blobs: one busy host wrapping 65 times for its own pair must not spend the room of a DIFFERENT host's single digest.
     const otherHostBlob = wrapStoreKey(`${RAW_KEY}-other-host`, USER_A, HOST_B);
     if (otherHostBlob === null) throw new Error("expected a wrap");
 
@@ -156,10 +138,6 @@ describe("desktop store-key custody", () => {
   });
 
   it("refuses this machine's own blob when another account names it", async () => {
-    // A store key is per USER. Without the account in the entry, one signed-in
-    // account's host could name another account's blob and this machine would
-    // open it - handing a slice of someone else's jar to a host that was never
-    // given custody of it.
     const wrapped = wrapStoreKey(RAW_KEY, USER_A, HOST_A);
     if (wrapped === null) throw new Error("expected a wrap");
     keystore.decrypt.mockClear();

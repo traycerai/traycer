@@ -1,11 +1,5 @@
 /**
- * Schema + version-negotiation tests for the `worktree.listAllForHost`
- * pagination and staleness signals added at v1.1. The critical invariant is
- * that a v1.0 caller (the
- * current Settings tab, an older host) keeps negotiating against a v1.1 peer:
- * v1.1 rode a new minor of the EXISTING method, never a new method name, so the
- * frozen host-v1.0.0 method-name set (see released-surface-compat.test.ts) is
- * untouched and the per-method handshake bridges v1.0 <-> v1.1.
+ * Schema + version-negotiation tests for the `worktree.listAllForHost` pagination and staleness signals added at v1.1.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -205,9 +199,6 @@ const v10Entry = {
   scripts: null,
 };
 
-// The merge-provenance fields in their absent shape - what an unprobed entry
-// (and the v1.0 -> v1.1 upgrade) fills in: no PR bundle, no owned submodules,
-// not at-base. `mergedHeadShaMatches` is `false` (not null) - it is a boolean.
 const mergeProvenanceAbsent = {
   prState: null,
   prNumber: null,
@@ -316,9 +307,7 @@ describe("worktreeHostEntrySchemaV11", () => {
 
 describe("worktreeBranchStatusSchema (upstream-independent reshape)", () => {
   it("accepts null ahead/behind for a never-pushed branch proven merged", () => {
-    // The win: a never-pushed branch whose HEAD is contained in the default
-    // branch carries a real object with a proven `mergedIntoDefault` and null
-    // upstream diff.
+    // The win: a never-pushed branch whose HEAD is contained in the default branch carries a real object with a proven `mergedIntoDefault` and null upstream diff.
     const parsed = worktreeBranchStatusSchema.parse({
       ahead: null,
       behind: null,
@@ -886,9 +875,7 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
       V14,
       response,
     );
-    // NEW CLIENT + OLD HOST: a v1.3 host has no `resolvedAt` and never sends
-    // one, so bridging to `null` would strand its rows perpetually "checking".
-    // The resolved sentinel keeps them authoritative.
+    // NEW CLIENT + OLD HOST: a v1.3 host has no `resolvedAt` and never sends one, so bridging to `null` would strand its rows perpetually "checking".
     expect(upgraded.worktrees[0].resolvedAt).toBe(LEGACY_HOST_RESOLVED_AT);
     expect(worktreeListAllForHostResponseSchemaV14.parse(upgraded)).toEqual(
       upgraded,
@@ -960,9 +947,7 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
       V15,
       response,
     );
-    // NEW CLIENT + OLD HOST: a v1.4 host never sends `presence`; the bridge
-    // stamps `"present"` so previously authoritative rows keep reading as
-    // available rather than being mistaken for missing remote directories.
+    // NEW CLIENT + OLD HOST: a v1.4 host never sends `presence`; the bridge stamps `"present"` so previously authoritative rows keep reading as available rather than being mistaken for missing remote directories.
     expect(upgraded.worktrees[0].presence).toBe("present");
     expect(upgraded.worktrees[1].presence).toBe("present");
     expect(worktreeListAllForHostResponseSchemaV15.parse(upgraded)).toEqual(
@@ -1112,9 +1097,7 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
       V13,
       response,
     );
-    // NEW CLIENT + OLD HOST: a v1.2 host never sends `resolvedAt`; the resolved
-    // sentinel (not `null`) keeps its summaries authoritative so the home
-    // workspace selector does not strand every folder as perpetually pending.
+    // NEW CLIENT + OLD HOST: a v1.2 host never sends `resolvedAt`; the resolved sentinel (not `null`) keeps its summaries authoritative so the home workspace selector does not strand every folder as perpetually pending.
     expect(upgraded.workspaces[0].resolvedAt).toBe(LEGACY_HOST_RESOLVED_AT);
     expect(
       worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded),
@@ -1126,10 +1109,7 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
     ).not.toHaveProperty("resolvedAt");
   });
 
-  // Tops out one minor BELOW `worktree.listAllForHost`, deliberately: this
-  // method's released floor is 1.3, so its unshipped 1.4 absorbed the presence
-  // fact instead of opening a 1.5. `listAllForHost` shipped 1.4, so its
-  // presence minor had to stay a separate 1.5.
+  // Tops out one minor BELOW `worktree.listAllForHost`, deliberately: this method's released floor is 1.3, so its unshipped 1.4 absorbed the presence fact instead of opening a 1.5.
   it("exposes v1.4 as the latest installed minor of major 1", () => {
     expect(listByWorkspacePathsRegistry[1].latestMinor).toBe(4);
     expect(
@@ -1180,18 +1160,14 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
       V14,
       response,
     );
-    // NEW CLIENT + OLD HOST: a v1.3 host never sends `repoBranchPrefix`; the
-    // bridge stamps `{status:"absent"}` so the client inherits the global
-    // default rather than warning about a missing field.
+    // NEW CLIENT + OLD HOST: a v1.3 host never sends `repoBranchPrefix`; the bridge stamps `{status:"absent"}` so the client inherits the global default rather than warning about a missing field.
     expect(upgraded.workspaces[0].repoBranchPrefix).toEqual({
       status: "absent",
     });
     expect(upgraded.workspaces[1].repoBranchPrefix).toEqual({
       status: "absent",
     });
-    // The same bridge stamps `presence: "present"`: a v1.3 host's summary was
-    // authoritative for a path it listed, so its rows must keep reading as
-    // available rather than being mistaken for missing remote directories.
+    // The same bridge stamps `presence: "present"`: a v1.3 host's summary was authoritative for a path it listed, so its rows must keep reading as available rather than being mistaken for missing remote directories.
     expect(upgraded.workspaces[0].presence).toBe("present");
     expect(upgraded.workspaces[1].presence).toBe("present");
     expect(
@@ -1306,10 +1282,7 @@ describe("worktree.setRepoBranchPrefix schemas", () => {
   });
 });
 
-// A binding entry as an older (pre-migration) row would carry it, before the
-// `ownedSubmodules` field existed. The host binding-v1->v2 migration backfills
-// `ownedSubmodules: []`; here we assert the schema round-trips both the
-// backfilled-empty and the fully-populated shapes.
+// A binding entry as an older (pre-migration) row would carry it, before the `ownedSubmodules` field existed.
 const bindingEntryBase = {
   workspacePath: "/Users/dev/acme/web",
   mode: "worktree" as const,
@@ -1362,9 +1335,7 @@ describe("worktreeBindingEntrySchema (ownedSubmodules addition)", () => {
   });
 
   it("accepts an entry missing ownedSubmodules (wire compat with pre-existing released hosts)", () => {
-    // This entry shape rides several already-released response/stream
-    // payloads unversioned; a released host from before this field existed
-    // omits the key entirely, and that must still parse.
+    // This entry shape rides several already-released response/stream payloads unversioned; a released host from before this field existed omits the key entirely, and that must still parse.
     const parsed = worktreeBindingEntrySchema.parse(bindingEntryBase);
     expect(parsed.ownedSubmodules).toBeUndefined();
   });
@@ -1413,10 +1384,8 @@ describe("worktreeListBindingsForEpicResponseSchemaV11 (folderlessCwd)", () => {
 });
 
 describe("worktree.listBindingsForEpic v1.1 <-> v1.2 negotiation", () => {
-  // NEW CLIENT + OLD HOST: a v1.2 client bridges an inbound v1.1 response up to
-  // canonical. Every bridged row must be stamped isGitResolvePending:false - a
-  // pre-v1.2 host has no pending concept and never sends a signal to clear it,
-  // so its answer is authoritative and must NOT read as perpetually "checking".
+  // NEW CLIENT + OLD HOST: a v1.2 client bridges an inbound v1.1 response up to canonical.
+  // Every bridged row must be stamped isGitResolvePending:false - a pre-v1.2 host has no pending concept and never sends a signal to clear it, so its answer is authoritative and must NOT read as perpetually "checking".
   it("upgrades a v1.1 response to v1.2 by stamping isGitResolvePending:false on every row", () => {
     const response = {
       rows: [
@@ -1440,9 +1409,7 @@ describe("worktree.listBindingsForEpic v1.1 <-> v1.2 negotiation", () => {
     ).toEqual(upgraded);
   });
 
-  // OLD CLIENT + NEW HOST: a v1.2 host serves a v1.1 caller by downgrading its
-  // canonical response - the within-major Zod strip drops isGitResolvePending,
-  // so a pre-v1.2 client (which never knew the field) sees the v1.1 shape.
+  // OLD CLIENT + NEW HOST: a v1.2 host serves a v1.1 caller by downgrading its canonical response - the within-major Zod strip drops isGitResolvePending, so a pre-v1.2 client (which never knew the field) sees the v1.1 shape.
   it("strips isGitResolvePending when a v1.2 response is served to a v1.1 caller", () => {
     const v12Response = {
       rows: [{ ...v11SelectorRow, isGitResolvePending: true }],

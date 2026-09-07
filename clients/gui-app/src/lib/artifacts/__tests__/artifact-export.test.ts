@@ -7,10 +7,7 @@ import { createArtifactExport } from "@/lib/artifacts";
 import { unzipSync } from "fflate";
 
 /**
- * Still round-trips through a real `Y.XmlFragment` rather than handing the
- * builder its input string back: the export used to serialize the fragment
- * itself, so parsing and re-serializing here keeps these expectations pinned to
- * the same bytes that change moved OUT of the builder.
+ * Still round-trips through a real `Y.XmlFragment` rather than handing the builder its input string back: the export used to serialize the fragment itself, so parsing and re-serializing here keeps these expectations pinned to the same bytes that change moved.
  */
 function createBody(markdown: string): string {
   const doc = new Y.Doc();

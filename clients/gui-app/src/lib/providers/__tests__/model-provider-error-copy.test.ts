@@ -11,15 +11,13 @@ import {
 
 describe("model provider error copy", () => {
   it("prefers the host's detail over the fallback sentence", () => {
-    // The detail is the provider's own wording for a flow Traycer does not
-    // understand ("expected one of: ANTHROPIC_API_KEY"), already redacted
-    // host-side. Our sentence exists for a bare code.
+    // The detail is the provider's own wording for a flow Traycer does not understand ("expected one of: ANTHROPIC_API_KEY"), already redacted host-side.
+    // Our sentence exists for a bare code.
     expect(
       modelProviderAuthErrorMessage("invalid_input", "expected one of: X"),
     ).toBe("expected one of: X");
-    // A whitespace-only detail is NOT a detail: it must fall through to the
-    // same sentence a null one produces. `not.toBe("")` passed even when the
-    // blank string was handed straight back.
+    // A whitespace-only detail is NOT a detail: it must fall through to the same sentence a null one produces.
+    // `not.toBe("")` passed even when the blank string was handed straight back.
     expect(modelProviderAuthErrorMessage("invalid_input", "   ")).toBe(
       modelProviderAuthErrorMessage("invalid_input", null),
     );
@@ -30,8 +28,6 @@ describe("model provider error copy", () => {
 
   it("has copy for every member of both wire enums", () => {
     // The tables are `Record<Code, string>`, so a new member fails compilation
-    // - this asserts the runtime half: every member resolves to a non-empty
-    // line without a detail to fall back on.
     for (const code of modelProviderAuthErrorCodeSchema.options) {
       expect(modelProviderAuthErrorMessage(code, null).length).toBeGreaterThan(
         0,
@@ -82,11 +78,7 @@ describe("modelProviderAuthErrorDisposition", () => {
 });
 
 describe("a config the provider cannot parse", () => {
-  // There is no code of its own for this any more, and that is the point: a
-  // config the provider rejects is a server that never boots, so the condition
-  // is not observable here as anything else. It arrives as
-  // `server_unavailable` carrying the redacted parse error, and the detail rule
-  // is what turns a generic sentence into an actionable one.
+  // There is no code of its own for this any more, and that is the point: a config the provider rejects is a server that never boots, so the condition is not observable here as anything else.
 
   it("shows the host's parse error rather than our generic sentence", () => {
     // File, line and column - the three things that say where to go, none of
@@ -113,9 +105,8 @@ describe("a config the provider cannot parse", () => {
   });
 
   it("is REPORTED, not restarted or re-prompted", () => {
-    // No attempt was lost, so `restart` would invent one; and nothing the user
-    // types in the dialog fixes a file the parser choked on, so `reprompt`
-    // would ask for input that cannot help. The next move is in an editor.
+    // No attempt was lost, so `restart` would invent one; and nothing the user types in the dialog fixes a file the parser choked on, so `reprompt` would ask for input that cannot help.
+    // The next move is in an editor.
     expect(modelProviderAuthErrorDisposition("server_unavailable")).toBe(
       "report",
     );
@@ -123,10 +114,8 @@ describe("a config the provider cannot parse", () => {
 });
 
 describe("detail normalization on the LIST helper", () => {
-  // The two helpers implement the same rule separately, so covering it through
-  // the auth one only proved the auth one. These are the cases that would go
-  // unnoticed if the list copy ever drifted: a whitespace-only detail is the
-  // shape that turns a useful message into a blank line.
+  // The two helpers implement the same rule separately, so covering it through the auth one only proved the auth one.
+  // These are the cases that would go unnoticed if the list copy ever drifted: a whitespace-only detail is the shape that turns a useful message into a blank line.
   it("falls back to the table for a blank or whitespace detail", () => {
     expect(modelProviderListErrorMessage("server_unavailable", "")).toBe(
       modelProviderListErrorMessage("server_unavailable", null),

@@ -15,13 +15,7 @@ export interface WorkspacePickerWithOpenerProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
 }
 
-/**
- * Pure layout wrapper pairing a workspace picker with the IDE opener so both
- * the file-tree and git-diff panels present an identical control. Owns the
- * flex geometry only - the picker stretches (`min-w-0 flex-1`) and the opener
- * stays `shrink-0`. Visibility/gating stays with each caller; the combo adds
- * no padding or background of its own.
- */
+/** Owns the flex geometry only - the picker stretches (`min-w-0 flex-1`) and the opener stays `shrink-0`. */
 export function WorkspacePickerWithOpener(
   props: WorkspacePickerWithOpenerProps,
 ) {

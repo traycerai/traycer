@@ -241,11 +241,8 @@ function applyGuestPresentation(
     );
     return;
   }
-  // Independently composited <webview> can leak under visibility:hidden, and
-  // display:none stops it compositing altogether (CDP/PiP frames go blank).
-  // Opacity makes one compositor group; the offscreen inset keeps it out of
-  // the window even if that group still produces pixels. Retained and unbound
-  // share that posture - only the state attribute differs.
+  // Independently composited <webview> can leak under visibility:hidden, and display:none stops it compositing altogether (CDP/PiP frames go blank).
+  // Opacity makes one compositor group; the offscreen inset keeps it out of the window even if that group still produces pixels.
   applyGuestPosture(
     guest.wrapper,
     placement === null ? "unbound" : "retained",

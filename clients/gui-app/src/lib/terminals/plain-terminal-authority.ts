@@ -52,8 +52,8 @@ export function plainTerminalCapabilityTopology(
 }
 
 /**
- * Resolves the optional family as a unit. The frozen v1 family is local-only
- * durable authority; v2.1 is fleet authority. A partial mix is legacy.
+ * Resolves the optional family as a unit.
+ * The frozen v1 family is local-only durable authority; v2.1 is fleet authority.
  */
 export function resolvePlainTerminalCapability(input: {
   readonly manifestKnown: boolean;
@@ -103,15 +103,14 @@ export function getPlainTerminal(
 export interface PlainTerminalCollection {
   /**
    * Current renderable authority keyed by canonical `(hostId, terminalId)`.
-   * Replacement states replace this map atomically; it is never a union with
-   * a previous complete snapshot.
+   * Replacement states replace this map atomically; it is never a union with a previous complete snapshot.
    */
   readonly terminalsByIdentity: Readonly<
     Partial<Record<string, PlainTerminalProjection>>
   >;
   /**
-   * Explicit lifetime-delete revisions only. Host withdrawal is absence from
-   * a later replacement state and must not write these.
+   * Explicit lifetime-delete revisions only.
+   * Host withdrawal is absence from a later replacement state and must not write these.
    */
   readonly deletedRevisionByIdentity: Readonly<Partial<Record<string, number>>>;
   /** Accepted unary deletions whose presentation sweep awaits settlement. */
@@ -199,8 +198,7 @@ export function capturePlainTerminalProjectionBarrier(
 
 /**
  * Atomically replaces the renderable collection with a schema-checked state.
- * A partial-serving-host state keeps only the serving-host slice; a previous
- * complete snapshot is never retained or promoted.
+ * A partial-serving-host state keeps only the serving-host slice; a previous complete snapshot is never retained or promoted.
  */
 export function replacePlainTerminalState(
   current: PlainTerminalCollection | undefined,
@@ -301,9 +299,7 @@ export function markPlainTerminalStreamIncompatible(
 
 /**
  * Unary list seeds the collection but never creates stream freshness.
- * A replacement state accepted after the request barrier dominates the
- * entire delayed response. Independent complete-local states stay isolated
- * from fleet coverage rather than merging into it.
+ * A replacement state accepted after the request barrier dominates the entire delayed response.
  */
 export function seedPlainTerminalList(
   current: PlainTerminalCollection | undefined,
@@ -324,8 +320,8 @@ export function seedPlainTerminalList(
 }
 
 /**
- * Adopts one projection by fleet identity. Used by unary mutation results
- * and tests; stream collection updates use replacement states instead.
+ * Adopts one projection by fleet identity.
+ * Used by unary mutation results and tests; stream collection updates use replacement states instead.
  */
 export function upsertPlainTerminal(
   current: PlainTerminalCollection | undefined,
@@ -365,9 +361,7 @@ export function upsertPlainTerminal(
 }
 
 /**
- * Adopts a canonical unary projection under the collection ordering rule:
- * higher durable revisions win; at equal revision, a stream projection
- * accepted after request start wins; and a later replacement's absence wins.
+ * Adopts a canonical unary projection under the collection ordering rule: higher durable revisions win; at equal revision, a stream projection accepted after request start wins; and a later replacement's absence wins.
  */
 export function adoptPlainTerminalUnary(
   current: PlainTerminalCollection | undefined,
@@ -602,11 +596,7 @@ export interface PlainTerminalMigrationAuthority {
   readonly hostId: string;
   readonly scope: PlainTerminalScope;
   /**
-   * Only the status gates a migration, so callers may pass the bare status
-   * and key their effects on that primitive: an effect keyed on the
-   * capability OBJECT re-fired on every re-render (the authority hook
-   * rebuilds it each render), and after a failed import each re-fire was
-   * another import, another failure, another toast - a storm at RPC speed.
+   * Only the status gates a migration, so callers may pass the bare status and key their effects on that primitive: an effect keyed on the capability OBJECT re-fired on every re-render (the authority hook rebuilds it each render), and after a failed import.
    */
   readonly capability: Pick<PlainTerminalCapability, "status">;
   readonly canMutate: boolean;
@@ -616,8 +606,7 @@ export interface PlainTerminalMigrationAuthority {
 }
 
 /**
- * Coordinates one first-host-import-wins attempt and never rewrites legacy
- * evidence before a capable, fresh host returns its canonical answer.
+ * Coordinates one first-host-import-wins attempt and never rewrites legacy evidence before a capable, fresh host returns its canonical answer.
  */
 export class PlainTerminalMigrationCoordinator {
   private readonly inFlight = new Map<
@@ -656,9 +645,8 @@ export class PlainTerminalMigrationCoordinator {
       sharedHostResult = trackedAttempt;
     }
 
-    // Only the host operation is deduplicated. Every surface adopts a
-    // canonical winner; deleted results are committed exclusively by the
-    // shared QueryClient deletion boundary inside the mutation.
+    // Only the host operation is deduplicated.
+    // Every surface adopts a canonical winner; deleted results are committed exclusively by the shared QueryClient deletion boundary inside the mutation.
     return sharedHostResult.then(
       async (response): Promise<PlainTerminalMigrationOutcome> => {
         if (response.status !== "deleted") {
@@ -676,8 +664,7 @@ export function plainTerminalScopeKey(scope: PlainTerminalScope): string {
 
 /**
  * Injective `(hostId, scope.kind, epicId|"")` key for shared stream ownership.
- * Scope is a separate tuple member so epic ids cannot collide with the
- * independent sentinel or with host-id delimiters.
+ * Scope is a separate tuple member so epic ids cannot collide with the independent sentinel or with host-id delimiters.
  */
 export function plainTerminalHostScopeIdentityKey(
   hostId: string,
@@ -691,9 +678,8 @@ export function plainTerminalHostScopeIdentityKey(
 }
 
 /**
- * Injective `(hostId, scope.kind, epicId|"", terminalId)` key for migration
- * in-flight dedup. Same tuple encoding as fleet identity: quotes, NULs, and
- * backslashes stay distinct.
+ * Injective `(hostId, scope.kind, epicId|"", terminalId)` key for migration in-flight dedup.
+ * Same tuple encoding as fleet identity: quotes, NULs, and backslashes stay distinct.
  */
 export function plainTerminalMigrationIdentityKey(
   hostId: string,

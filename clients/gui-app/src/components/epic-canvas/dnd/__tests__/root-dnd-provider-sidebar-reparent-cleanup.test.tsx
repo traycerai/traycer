@@ -1,27 +1,6 @@
 /**
- * Task 4.3a - the structural half of the fix, in `handleDragEnd`
- * (`root-dnd-provider.tsx`). Before the fix, the four end-of-drag cleanup
- * lines - `dragEnded()` included - sat AFTER the `commitSidebarReparentDrop`
- * call with no try/catch: a throw out of the commit (the doc-only
- * terminal-agent -> record-backed-chat pairing this ticket fixes, or any
- * future one) skipped every one of them and wedged the store mid-drag with
- * stale refs until the tree remounted.
- *
- * `commitSidebarReparentDrop` itself no longer throws for that specific
- * pairing (see `sidebar-reparent-commit-doc-projected-agreement.test.ts` -
- * it is caught one layer down now). So the only way to exercise THIS file's
- * belt-and-suspenders - the provider's own try/catch/finally around the
- * commit call - is to force the commit to throw for some OTHER reason and
- * prove the drag still ends. That is deliberately a stub, not the real
- * throw: this test's subject is the provider's cleanup structure, not the
- * doc/projected divergence (which the sibling test above drives for real).
- *
- * Drives the REAL `RootDndProvider` with a real dnd-kit pointer gesture
- * (mirrors `root-dnd-provider-t9-round4.test.tsx`) - a `sidebar-node` drag
- * released over a `sidebar-reparent-row` target - against a real open-epic
- * store registered in the real session registry, so the collision/preview
- * layer's `canReparentProjected` pre-flight (which reads the live store) is
- * exercised unstubbed.
+ * Before the fix, the four end-of-drag cleanup lines - `dragEnded()` included - sat AFTER the `commitSidebarReparentDrop` call with no try/catch: a throw out of the commit (the doc-only terminal-agent -> record-backed-chat pairing this ticket fixes, or any future one) skipped every one of them and wedged the store mid-drag with stale refs until the tree remounted.
+ * So the only way to exercise THIS file's belt-and-suspenders - the provider's own try/catch/finally around the commit call - is to force the commit to throw for some OTHER reason and prove the drag still ends.
  */
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -127,11 +106,6 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-1",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -276,9 +250,7 @@ describe("RootDndProvider ends the drag even when commitSidebarReparentDrop thro
       });
     });
 
-    // The reparent pre-flight (real store, real `canReparentProjected`) passed
-    // and lit the row highlight - proof the gesture reached a valid reparent
-    // target before the drop.
+    // The reparent pre-flight (real store, real `canReparentProjected`) passed and lit the row highlight - proof the gesture reached a valid reparent target before the drop.
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBe(parent);
 
     act(() => {

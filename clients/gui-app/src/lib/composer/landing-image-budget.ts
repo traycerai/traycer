@@ -1,35 +1,6 @@
 /**
- * Canonical owner of landing-composer image capacity: the byte budget, live-root
- * / measured-referenced-byte accounting, and the in-flight reservation ledger.
- * Both normal landing paste (`use-landing-composer-paste.ts`,
- * `landing-composer.tsx`) and prompt-stash import (`landing-stash-import.ts`)
- * admit work through the single `reserveLandingImageBudget` below - there is no
- * second budget authority.
- *
- * `landing-image-gc.ts` imports `landingLiveImageRootHashes` from here for its
- * own orphan-reconcile sweep; this module never touches storage or deletion
- * itself, only admission math.
- *
- * A candidate's `hash` is `null` when the caller hasn't computed one yet (paste
- * hashes bytes only as part of writing them via `putImage`). An unhashed
- * candidate can never be recognized as already-live or as overlapping another
- * reservation - it always gets its own ledger slot - so it costs exactly its
- * own bytes, same as before this consolidation. A hashed candidate (stash
- * import, which resolves bytes - and therefore hashes - before writing) is
- * deduped against current live roots and against every other outstanding
- * reservation for that same hash.
- *
- * This module deliberately has NO static import of `landing-draft-store.ts`.
- * That store imports `landing-image-gc.ts`, which imports this module for
- * `landingLiveImageRootHashes` - a static import back to the store here would
- * close a cycle (store → gc → budget → store) and risk a temporal-dead-zone
- * read of the store binding during startup reconcile. Instead
- * `landing-draft-store.ts` calls `registerLandingDraftRootSource` once, right
- * after its own store is constructed (mirroring how that same file wires
- * `draftRuntimeRegistry.configure` for the same reason). Before that
- * registration happens - e.g. a test that imports only this module - every
- * draft-derived read below is empty/zero: safe and deterministic, never a
- * crash or a read against a partially-initialized store.
+ * Sole landing-composer image budget.
+ * No static import of `landing-draft-store.ts` (that would cycle store -> gc -> budget -> store).
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -46,10 +17,8 @@ export interface LandingDraftRootSource {
 let draftRootSource: LandingDraftRootSource | null = null;
 
 /**
- * Installs the live draft reader. Called exactly once, by
- * `landing-draft-store.ts` immediately after `useLandingDraftStore` is
- * constructed. See the module doc for why this is a registration rather than
- * a static import.
+ * Installs the live draft reader.
+ * Called exactly once, by `landing-draft-store.ts` immediately after `useLandingDraftStore` is constructed.
  */
 export function registerLandingDraftRootSource(
   source: LandingDraftRootSource,
@@ -58,9 +27,8 @@ export function registerLandingDraftRootSource(
 }
 
 /**
- * Extra content hashes that must survive landing GC. Chat-composer annotation
- * crops live in this same store (hash + filename on the draft record) and are
- * not present in landing draft content.
+ * Extra content hashes that must survive landing GC.
+ * Chat-composer annotation crops live in this same store (hash + filename on the draft record) and are not present in landing draft content.
  */
 export interface ExtraImageRootSource {
   hashes(): ReadonlyArray<string>;
@@ -79,17 +47,15 @@ function currentDrafts(): ReadonlyArray<LandingDraftTab> {
 }
 
 /**
- * Per-partition byte budget for stored landing images. Flagged TUNABLE - shipped
- * at 64 MB (≈ 12× the 5 MB per-image cap). Per-runtime partitioning already
- * isolates this to the current window, so the budget is scoped to this window's
- * drafts; there is no cross-window accounting.
+ * Per-partition byte budget for stored landing images.
+ * Flagged TUNABLE - shipped at 64 MB (≈ 12× the 5 MB per-image cap).
  */
 export const LANDING_IMAGE_BUDGET_BYTES = 64 * 1024 * 1024;
 
 export interface LandingImageBudgetCandidate {
   /**
-   * Canonical content hash, or `null` when unknown at reservation time. See
-   * the module doc for what `null` means for admission.
+   * Canonical content hash, or `null` when unknown at reservation time.
+   * See the module doc for what `null` means for admission.
    */
   readonly hash: string | null;
   readonly bytes: number;
@@ -98,9 +64,8 @@ export interface LandingImageBudgetCandidate {
 /** Opaque handle on an admitted reservation. `release` is idempotent. */
 export interface LandingImageBudgetReservation {
   /**
-   * Releases this call's share of every candidate it was charged for. A
-   * second call is a no-op - it can never decrement another reservation's
-   * share, including one for the same hash held by an overlapping caller.
+   * Releases this call's share of every candidate it was charged for.
+   * A second call is a no-op - it can never decrement another reservation's share, including one for the same hash held by an overlapping caller.
    */
   release(): void;
 }
@@ -114,10 +79,8 @@ function imageHashesOf(content: JsonContent): Set<string> {
 }
 
 /**
- * Every hash that must NOT be collected: union of all persisted drafts'
- * content and every keyed live runtime. Exposed (read-only) for
- * `landing-image-gc.ts`'s orphan-reconcile sweep and used internally here to
- * skip charging a reservation candidate that is already live.
+ * Every hash that must NOT be collected: union of all persisted drafts' content and every keyed live runtime.
+ * Exposed (read-only) for `landing-image-gc.ts`'s orphan-reconcile sweep and used internally here to skip charging a reservation candidate that is already live.
  */
 export function landingLiveImageRootHashes(): Set<string> {
   const roots = new Set<string>();
@@ -132,12 +95,8 @@ export function landingLiveImageRootHashes(): Set<string> {
 }
 
 function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
-  // Bytes are content-addressed: a hash present in N drafts occupies the store
-  // ONCE, so dedupe by hash before summing - counting it per-draft would evict or
-  // block too eagerly. Base64-only atoms (no hash) aren't in the store; skip them.
-  // A node with no `size` attr - only a 0-byte file yields that - counts as 0; the
-  // per-image 5 MB paste cap bounds the untracked slack, so the soft budget stays
-  // meaningful.
+  // Bytes are content-addressed: a hash present in N drafts occupies the store ONCE, so dedupe by hash before summing - counting it per-draft would evict or block too eagerly.
+  // Base64-only atoms (no hash) aren't in the store; skip them.
   const sizeByHash = new Map<string, number>();
   for (const draft of drafts) {
     for (const atom of collectImageAtoms(draft.content)) {
@@ -166,11 +125,8 @@ interface LedgerEntry {
 }
 
 /**
- * In-flight reservation ledger, keyed by content hash for hash-aware
- * candidates or a fresh synthetic key per call for unhashed ones. Module-level
- * singleton state, mirroring `landing-image-store.ts`'s session cache: this is
- * process-local contention hygiene, not a durability boundary. It never
- * persists and is rebuilt as empty on reload.
+ * In-flight reservation ledger, keyed by content hash for hash-aware candidates or a fresh synthetic key per call for unhashed ones.
+ * Module-level singleton state, mirroring `landing-image-store.ts`'s session cache: this is process-local contention hygiene, not a durability boundary.
  */
 const inFlight = new Map<string, LedgerEntry>();
 
@@ -207,20 +163,8 @@ function showBudgetExceededToast(draftId: string | null): void {
 }
 
 /**
- * Reserves capacity for every candidate, charged against current live usage
- * PLUS every other outstanding reservation. A candidate whose hash is already
- * a live root costs nothing. A candidate whose hash matches another
- * outstanding reservation (or another candidate in THIS same call) is
- * refcounted onto one ledger entry rather than double-charged - overlapping
- * reservations for the same hash reserve its bytes once. A candidate with no
- * hash always gets its own ledger slot and can never be deduped. All-or-
- * nothing: on rejection nothing is reserved and the shared budget-exceeded
- * toast is shown.
- *
- * Returns `null` when combined usage would exceed the cap. Otherwise returns
- * an opaque reservation; the caller must call `release()` on it exactly once,
- * after it either commits the reserved content or discovers it will not be
- * committed (rejected, stale destination, or a thrown write).
+ * Reserves capacity for every candidate, charged against current live usage PLUS every other outstanding reservation.
+ * A candidate whose hash is already a live root costs nothing.
  */
 export function reserveLandingImageBudget(
   draftId: string | null,

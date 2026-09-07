@@ -17,7 +17,6 @@ export type HostRequestControlFlowReason =
   | "authority-superseded"
   | "coordinator-disposed";
 
-/** Expected local request control flow, deliberately distinct from HostRpcError. */
 export class HostRequestControlFlowError extends Error {
   readonly reason: HostRequestControlFlowReason;
 
@@ -34,7 +33,6 @@ export function isHostRequestControlFlowError(
   return error instanceof HostRequestControlFlowError;
 }
 
-/** Exact GUI authority identity used for latest-tail replacement decisions. */
 export interface HostRequestAuthorityDomain {
   readonly bindingToken: object;
   readonly requestContext: object;
@@ -99,9 +97,8 @@ interface HostTransitionJobSnapshot {
 }
 
 /**
- * Renderer-local coordinator for unary RPCs. It deliberately owns no cache,
- * directory, or transport state: callers capture authority and provide the
- * frozen raw dispatch closure for every submitted job.
+ * Renderer-local coordinator for unary RPCs.
+ * It deliberately owns no cache, directory, or transport state: callers capture authority and provide the frozen raw dispatch closure for every submitted job.
  */
 export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   private readonly registry: Registry;
@@ -162,8 +159,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
 
   /**
    * Captures the read jobs that existed when a host/context transition began.
-   * The caller must later apply this snapshot after cancelling that host's
-   * Query scope, so work submitted while cancellation is in flight is spared.
+   * The caller must later apply this snapshot after cancelling that host's Query scope, so work submitted while cancellation is in flight is spared.
    */
   snapshotHostTransition(hostId: string): HostTransitionAbortSnapshot {
     const prefix = `[${JSON.stringify(hostId)},`;
@@ -171,14 +167,8 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * {@link snapshotHostTransition} for EVERY host this coordinator serves.
-   *
-   * An identity transition is not a statement about one host: the request
-   * context is shared by every requester the client hands out, so work issued
-   * under the outgoing credential is stale wherever it was aimed. This is
-   * what the per-host snapshot became when the active slot was deleted
-   * (redesign D17 / P4.2) - there is no privileged host left to name, and
-   * naming one was always the narrower claim.
+   * {@link snapshotHostTransition} for every host this coordinator serves.
+   * An identity transition is not a statement about one host: the request context is shared by every requester the client hands out, so work issued under the outgoing credential is stale wherever it was aimed.
    */
   snapshotAllTransitions(): HostTransitionAbortSnapshot {
     return this.snapshotTransition(() => true);
@@ -235,8 +225,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
 
   /**
    * Cancels one active read after its exact TanStack Query was cancelled.
-   * Unlike a host transition, this deliberately frees the current key's raw
-   * slot so a just-invalidated latest tail can issue fresh data.
+   * Unlike a host transition, this deliberately frees the current key's raw slot so a just-invalidated latest tail can issue fresh data.
    */
   cancelActiveRead<Method extends keyof Registry & string>(
     hostId: string,

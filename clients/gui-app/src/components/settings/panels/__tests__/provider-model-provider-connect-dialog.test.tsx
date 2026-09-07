@@ -103,11 +103,7 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
 }));
 
-// Radix's Select needs a pointer-capable layout to open its listbox, which
-// jsdom does not provide. The stand-in keeps the same element structure with
-// every option always rendered, following the mock the host-workspace selector
-// suites already use - and it forwards `onValueChange` so a test can pick an
-// option by clicking it, which is what keeps non-default selections testable.
+// Radix's Select needs a pointer-capable layout to open its listbox, which jsdom does not provide.
 vi.mock("@/components/ui/select", async () => {
   const { createContext, useContext } = await import("react");
   const ValueChangeContext = createContext<(value: string) => void>(() => {});
@@ -165,9 +161,8 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
     configDeclaredCustom: false,
     custom: null,
     connected: false,
-    // What the host really sends when `/provider/auth` advertises nothing: it
-    // synthesizes this generic key method itself, so the client never sees an
-    // empty list for an ordinary provider.
+    // What the host really sends when `/provider/auth` advertises nothing: it synthesizes this generic key method
+    // itself, so the client never sees an empty list for an ordinary provider.
     methods: [{ type: "api", label: "API key", prompts: [] }],
     ...overrides,
   };
@@ -199,12 +194,8 @@ const OAUTH_ONLY = entry({
   methods: [{ type: "oauth", label: "Sign in with GitHub", prompts: [] }],
 });
 
-/**
- * Resolves a recorded call the way TanStack does: `onSuccess`, then
- * `onSettled`. The second half matters - the poll schedules its NEXT tick from
- * `onSettled`, so a mock that skipped it would make single-flight polling look
- * like it had stopped after one request.
- */
+/** The second half matters - the poll schedules its next tick from `onSettled`, so a mock that skipped it would
+ * make single-flight polling look like it had stopped after one request. */
 function settle(call: AuthCall, result: ModelProviderAuthResult): void {
   act(() => {
     call.onSuccess({ result });
@@ -237,9 +228,8 @@ afterEach(() => {
 
 describe("connectChoicesFor", () => {
   it("maps the host's synthesized key method like any other", () => {
-    // Synthesis is host-side now, so this only ever maps what it was given -
-    // and every provider, Bedrock included, arrives with the same generic key
-    // method rather than a classifier deciding who deserves one.
+    // Synthesis is host-side now, so this only ever maps what it was given - and every provider, Bedrock included,
+    // arrives with the same generic key method rather than a classifier deciding who deserves one.
     expect(connectChoicesFor(entry({}), FULL_CAPS).map((c) => c.label)).toEqual(
       ["API key"],
     );
@@ -252,9 +242,8 @@ describe("connectChoicesFor", () => {
   });
 
   it("offers NOTHING when the host offered nothing", () => {
-    // An empty method list no longer means "we forgot to synthesize"; it means
-    // the host had nothing for this provider, and inventing a field here would
-    // put back the second source of truth the host now owns.
+    // An empty method list no longer means "we forgot to synthesize"; it means the host had nothing for this
+    // provider, and inventing a field here would put back the second source of truth the host now owns.
     expect(connectChoicesFor(entry({ methods: [] }), FULL_CAPS)).toEqual([]);
   });
 
@@ -274,9 +263,8 @@ describe("connectChoicesFor", () => {
   });
 
   it("drops the plain path when the provider ADVERTISES an api method", () => {
-    // That method is the key path, with the extra fields it wants. Two "API
-    // key" rows differing only in whether they ask the provider's own questions
-    // is a choice nobody can make correctly.
+    // Two "API key" rows differing only in whether they ask the provider's own questions is a choice nobody can
+    // make correctly.
     const choices = connectChoicesFor(
       entry({
         methods: [
@@ -289,13 +277,8 @@ describe("connectChoicesFor", () => {
   });
 
   it("drops the plain path for an OAUTH-ONLY provider that still has an env var", () => {
-    // github-copilot, verified live: it advertises `['oauth']` and nothing
-    // else, while carrying `env: ['GITHUB_TOKEN']`. That env entry is for
-    // DETECTION, not a field to type into - Copilot needs the GitHub token
-    // exchanged for a Copilot API token, which pasting cannot do. Every
-    // provider that DOES accept a pasted key advertises an `api` arm of its own
-    // (openai, xai, poe, gitlab, digitalocean, snowflake-cortex all do), so
-    // "advertises any method" is the rule, not "advertises an api method".
+    // That env entry is for detection, not a field to type into - Copilot needs the GitHub token exchanged for a
+    // Copilot API token, which pasting cannot do.
     const choices = connectChoicesFor(
       entry({
         id: "github-copilot",
@@ -312,9 +295,8 @@ describe("connectChoicesFor", () => {
   });
 
   it("leaves an advertised api method usable - nothing gates it now", () => {
-    // This used to be marked unavailable whenever the classifier returned null
-    // for the provider. The host takes the pasted value regardless, so the only
-    // reason left to disable an `api` arm is the host withholding `connect`.
+    // The host takes the pasted value regardless, so the only reason left to disable an `api` arm is the host
+    // withholding `connect`.
     const choices = connectChoicesFor(
       entry({
         methods: [
@@ -343,12 +325,11 @@ describe("connect with an API key", () => {
       action: {
         action: "connect",
         modelProviderId: "anthropic",
-        // The host's synthesized key method is a real entry in `methods[]`, so
-        // it is addressed by INDEX like any other. `methodIndex: null` still
-        // reaches the same host path; we simply have an index to send now.
+        // The host's synthesized key method is a real entry in `methods[]`, so it is addressed by index like any
+        // other.
         methodIndex: 0,
-        // `key` is the pasted SECRET - upstream's `ApiAuth.key`, which reads
-        // like an identifier and is not one. No env-var name travels any more.
+        // `key` is the pasted secret - upstream's `ApiAuth.key`, which reads like an identifier and is not one. No
+        // env-var name travels any more.
         key: "sk-secret",
         inputs: {},
       },
@@ -498,10 +479,8 @@ describe("connect with an API key", () => {
 
 describe("credential precedence", () => {
   it("warns when something else already supplies the credential, naming it", () => {
-    // Observed live: a stored openai OAuth credential still reports
-    // `source: env` while OPENAI_API_KEY is exported. The sign-in is still
-    // legitimate and still stored - it just will not take effect until the
-    // variable is unset - so this is a warning, not a block.
+    // The sign-in is still legitimate and still stored - it just will not take effect until the variable is unset
+    // - so this is a warning, not a block.
     renderDialog({
       entry: entry({
         id: "openai",
@@ -539,9 +518,8 @@ describe("credential precedence", () => {
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
     });
-    // "takes precedence" is the phrase every notice shares, so its absence is
-    // the assertion that NO notice rendered - not that one particular wording
-    // happened to change.
+    // "takes precedence" is the phrase every notice shares, so its absence is the assertion that NO notice
+    // rendered - not that one particular wording happened to change.
     expect(screen.queryByText(/takes precedence/)).toBeNull();
   });
 });
@@ -558,9 +536,8 @@ describe("method picker", () => {
     expect(screen.queryByText("Sign-in method")).toBeNull();
     cleanup();
 
-    // Two ways in means the provider ADVERTISED two - the real shape for
-    // openai / xai / poe / gitlab, which pair an OAuth arm with an explicit
-    // "Manually enter API Key" one.
+    // Two ways in means the provider advertised two - the real shape for openai / xai / poe / gitlab, which pair
+    // an OAuth arm with an explicit "Manually enter API Key" one.
     renderDialog({
       entry: entry({
         id: "xai",
@@ -664,21 +641,11 @@ describe("OAuth code flow", () => {
   });
 
   it("does not double-submit one attempt on two fast Enters", () => {
-    // The button is disabled while the mutation is pending; the paste field's
-    // Enter handler was not, so a second Enter sent the SAME attemptId again.
-    // The host consumes the first, so the second returns a failure against an
-    // attempt that actually succeeded - the user is told their code was
-    // rejected when it was not.
-    //
-    // The dialog is RERENDERED rather than remounted: the mocked hook reads
-    // `authIsPending` at render time, and a fresh mount would have no live
-    // attempt at all - the second Enter would land on a Continue button and
-    // the test would pass with the guard deleted.
+    // The dialog is rerendered rather than remounted: the mocked hook reads `authIsPending` at render time, and a
+    // fresh mount would have no live attempt at all.
     mocks.authIsPending = false;
-    // A FACTORY, not a stored element: React bails out of a re-render when the
-    // root element is referentially identical, so reusing one object would
-    // leave the mocked hook's `isPending` at its old value and the test would
-    // report a double-submit that never happened.
+    // A factory, not a stored element: React bails out of a re-render when the root element is referentially
+    // identical.
     const element = (): ReactNode => (
       <ProviderModelProviderConnectDialog
         open
@@ -818,9 +785,7 @@ describe("OAuth code flow", () => {
 
 describe("OAuth auto flow", () => {
   it("promotes a transcribable confirmation code to a copyable field", () => {
-    // Some `auto` flows want the user to READ a code off this screen and type
-    // it into the browser. The instructions stay above it verbatim; this only
-    // lifts the fragment that has to be transcribed.
+    // The instructions stay above it verbatim; this only lifts the fragment that has to be transcribed.
     renderDialog({
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
@@ -850,9 +815,6 @@ describe("OAuth auto flow", () => {
   });
 
   it("polls until the browser round trip completes, opening the browser ONCE", () => {
-    // The host answers a still-pending attempt with the STORED
-    // `authorizationUrl`, not `{kind:"pending"}` - so this is the real wire
-    // shape, and the one that used to reopen the sign-in tab every tick.
     vi.useFakeTimers();
     const onDone = vi.fn();
     renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });
@@ -915,9 +877,8 @@ describe("OAuth auto flow", () => {
   });
 
   it("is single-flight: no new poll while one is still open", () => {
-    // A `setInterval` keeps firing through a slow request, stacking overlapping
-    // polls on one attempt - each re-leasing the managed server this flow is
-    // trying not to churn.
+    // A `setInterval` keeps firing through a slow request, stacking overlapping polls on one attempt - each
+    // re-leasing the managed server this flow is trying not to churn.
     vi.useFakeTimers();
     renderDialog({
       entry: OAUTH_ONLY,
@@ -950,11 +911,8 @@ describe("OAuth auto flow", () => {
   ] as const)(
     "ends the attempt when a poll reports a terminal %s",
     (code, detail) => {
-      // The host only answers a status read this way once the background
-      // callback has already failed and released its lease - the row is
-      // settled. Reporting it while the panel keeps saying "Waiting" strands
-      // the user: nothing further arrives, and Stop waiting has no live
-      // attempt left to cancel.
+      // The host only answers a status read this way once the background callback has already failed and released
+      // its lease - the row is settled.
       vi.useFakeTimers();
       renderDialog({
         entry: OAUTH_ONLY,
@@ -1049,8 +1007,8 @@ describe("OAuth auto flow", () => {
       attemptId: "attempt-1",
     });
 
-    // Still waiting until the host CONFIRMS: an optimistic teardown would leave
-    // a live attempt holding a server lease with no surface able to retry.
+    // Still waiting until the host confirms: an optimistic teardown would leave a live attempt holding a server
+    // lease with no surface able to retry.
     expect(useModelProviderPendingAuthStore.getState().entries).not.toEqual({});
     settleCancel(cancel, { cancelled: true, result: { kind: "done" } });
     expect(useModelProviderPendingAuthStore.getState().entries).toEqual({});
@@ -1061,9 +1019,7 @@ describe("OAuth auto flow", () => {
   });
 
   it("does NOT report a confirmed cancel as a successful connect", () => {
-    // The host answers a real teardown with `{cancelled: true, result: done}`,
-    // where `done` describes the CANCEL. Treating it as a credential result
-    // would close the dialog claiming the provider had connected.
+    // Treating it as a credential result would close the dialog claiming the provider had connected.
     vi.useFakeTimers();
     const onDone = vi.fn();
     renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });

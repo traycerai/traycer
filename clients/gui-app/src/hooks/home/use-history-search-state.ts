@@ -16,27 +16,13 @@ export interface HistorySearchController {
   readonly clear: () => void;
 }
 
-/**
- * Route-owned history search/filter/sort controller.
- *
- * `/epics` is the canonical, deep-linkable surface, so its search state stays in
- * that route's validated search params and updates navigate the route-local URL.
- * This hook deliberately does not subscribe to `useHistorySearchStore`; ambient
- * modal/home state must not wake the route tree.
- */
+/** This hook deliberately does not subscribe to `useHistorySearchStore`; ambient modal/home state must not wake the route tree. */
 export function useRouteHistorySearchState(
   routeSearch: HistorySearchState,
 ): HistorySearchController {
   const router = useRouter();
 
-  // The route owns the live truth; the ambient store owns the MEMORY. Mirror
-  // every state the route reaches into the store, so the next bare entry to
-  // any history surface (the phone's full-page route, the modal, the home
-  // list) reopens where the user left off. Write-only `getState()` access:
-  // subscribing would wake the route tree on ambient changes, which this hook
-  // deliberately avoids. Spreading the full state makes the patch an
-  // overwrite, so the store adopts the route's state verbatim rather than
-  // merging into whatever it held before.
+  // Spreading the full state makes the patch an overwrite, so the store adopts the route's state verbatim rather than merging into whatever it held before.
   useEffect(() => {
     useHistorySearchStore.getState().update({ ...routeSearch });
   }, [routeSearch]);
@@ -67,14 +53,6 @@ export function useRouteHistorySearchState(
   return { search: routeSearch, update, clear };
 }
 
-/**
- * Ambient history search/filter/sort controller.
- *
- * History modal and home-embedded lists are root-level siblings of the page
- * content. Routing their high-frequency search through the URL would update the
- * root route and re-render the shell behind the modal on every keystroke, so
- * those surfaces use the persisted ambient store instead.
- */
 export function useAmbientHistorySearchState(): HistorySearchController {
   const search = useHistorySearchStore((state) => state.search);
   const update = useHistorySearchStore((state) => state.update);

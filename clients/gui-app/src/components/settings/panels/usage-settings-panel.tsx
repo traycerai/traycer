@@ -10,76 +10,24 @@ import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { UsageSummaryPanel } from "@/components/usage-analytics/usage-summary-panel";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
-/**
- * The route / modal entry point. `host.usage.summary` is an OPTIONAL RPC
- * (see the protocol registry's `degrade: { kind: "unsupported" }`), so an
- * older host simply omits it from its handshake - this section stays in the
- * static `SETTINGS_SECTIONS` list either way (that list's ordering is
- * load-bearing for the leader-digit shortcuts, so it cannot vanish based on
- * runtime host capability) and instead swaps its BODY for a capability
- * notice, presented the same way `HostScopeGate` already presents every
- * other "nothing to show for this host" case - a normal host-capability
- * gap, not an error.
- *
- * Ticket 13 moved this section out of the HOST group and into ACCOUNT.
- * `settings-sections.ts` states the rule the groups encode - "if it varies
- * by host it sits under the picker" - and usage stopped varying by host the
- * moment the dashboard gained its own All-hosts default: what it reports is
- * the ACCOUNT's spend, with the host as one filter inside the page rather
- * than as the page's scope. Leaving it under the sidebar's host picker would
- * have put two competing host scopes on one screen, with the outer one
- * unable to describe the number the inner one produced.
- *
- * It still reads through a host CLIENT - every RPC does - but that transport
- * comes from the APP-WIDE active host, not from the sidebar's host-group
- * picker. The two are different questions, and conflating them was a real
- * defect: the picker's pick is remembered across sections, so choosing an
- * unreachable or since-removed host under the Host group left
- * `HostScopeGate` hiding this account-level dashboard behind that host's
- * notice - even though the active host was perfectly able to serve the
- * account-wide request, and even though the page's own default is "All
- * hosts". `group: "account"` in `settings-sections.ts` is the statement that
- * this section is not host-scoped; the gate is for the sections that are.
- *
- * `useHostScope` stays, but only as the NAME DIRECTORY: `scope.hosts` is the
- * merged directory-plus-registry host model, which is what turns the host
- * ids in the summary into names for the filter and the by-host breakdown. No
- * client, no gating, no status - none of which this section's scope depends
- * on.
- */
+/** `host.usage.summary` is an optional RPC (see the protocol registry's `degrade: { kind: "unsupported" }`), so
+ * an older host simply omits it from its handshake. */
 export function UsageSettingsPanel(): ReactNode {
   const activeHostId = useAddressableHostId();
   const client = useHostClient();
   const scope = useHostScope();
-  // Names come from the scope's merged host model - the union of the runtime
-  // directory and the account's registry (see SETTINGS.md's "One host
-  // model"), so a host the account owns but this client cannot dial is still
-  // named rather than falling back to its id. The summary itself carries no
-  // host name: a name is directory state that changes without the fact
-  // changing, so it is joined here, at read time.
+  // Names come from the scope's merged host model.
   const hostNames = useMemo(
     () => new Map(scope.hosts.map((host) => [host.hostId, host.name])),
     [scope.hosts],
   );
-  // `useHostMethodSupport`, not the boolean `useUsageSummarySupported`: this
-  // distinguishes "the host answered and does not have it" from "no
-  // handshake has completed yet", so a cold start shows a spinner instead of
-  // claiming the active host is too old to report usage.
+  // `useHostMethodSupport`, not the boolean `useUsageSummarySupported`: this distinguishes "the host answered
+  // and does not have it" from "no handshake has completed yet".
   const support = useHostMethodSupport(activeHostId, "host.usage.summary");
   return (
     <SettingsPanelShell
       title="Usage"
-      // Scope-neutral by design. The read's actual scope is a property of
-      // the RESPONSE plus the in-page host filter, not of the section's
-      // placement: `servedBy: "cloud"` spans every device on the account
-      // (narrowed only if the reader picks a host), while `"local"` is this
-      // machine only. A static "on this host" was therefore a standing false
-      // claim for every cloud-served read, and nothing corrected it - the
-      // corrective note `servedByScopeNote` renders under the headline is
-      // deliberately `null` only for an unfiltered cloud read, where the
-      // account-wide total is exactly what the reader expects. Leaving that
-      // helper as the one place scope is asserted keeps a single source of
-      // truth for it.
+      // A static "on this host" was therefore a standing false claim for every cloud-served read.
       description="Token and cost usage across your agents."
       fillHeight
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
@@ -98,7 +46,6 @@ export function UsageSettingsPanel(): ReactNode {
 }
 
 function UsageSettingsPanelBody(props: {
-  /** `null` = no handshake yet, so neither "supported" nor "too old" is known. */
   readonly support: boolean | null;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostNames: ReadonlyMap<string, string>;
@@ -107,12 +54,8 @@ function UsageSettingsPanelBody(props: {
   /** The host lists are still in flight, so a null active host is not yet an answer. */
   readonly hostsResolving: boolean;
 }): ReactNode {
-  // Checked BEFORE `support`, because with no active host `support` is
-  // permanently `null` - there is no host to hand shake with, so the pending
-  // branch below could never resolve and would spin forever. This section is
-  // reachable on a fresh install, so that state is genuinely reachable and
-  // needs a terminal answer, which is what
-  // `HostScopeGate`'s own empty branch used to provide here.
+  // Checked before `support`, because with no active host `support` is permanently `null` - there is no host to
+  // hand shake with, so the pending branch below could never resolve and would spin forever.
   if (props.activeHostId === null && !props.hostsResolving) {
     return (
       <UsageNotice
@@ -155,13 +98,8 @@ function UsageSettingsPanelBody(props: {
   );
 }
 
-/**
- * Direct-client entry point for tests - bypasses `useHostScope`, mirroring
- * `NotificationsSettingsPanelForClient`. Passes an EMPTY host-name map,
- * which is the honest shape without the settings shell around it: every host
- * id then renders through the truncated-id fallback, exactly as one absent
- * from a real directory would.
- */
+/** Passes an empty host-name map, which is the honest shape without the settings shell around it: every host id
+ * then renders through the truncated-id fallback, exactly as one absent from a real directory would. */
 export function UsageSettingsPanelForClient(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
 }): ReactNode {
@@ -185,15 +123,10 @@ export function UsageSettingsPanelForClient(props: {
   );
 }
 
-/** Stable identity so the panel's `hostOptions` memo is not invalidated every render. */
 const EMPTY_HOST_NAMES: ReadonlyMap<string, string> = new Map();
 
-/**
- * Same anatomy as `HostScopeGate`'s internal `HostScopeNotice` (icon chip +
- * title + detail, `role="status"` since this is an idle capability gap, not
- * an error) so it reads as one honest-state vocabulary across Settings
- * rather than a bespoke banner.
- */
+/** Same anatomy as `HostScopeGate`'s internal `HostScopeNotice` (icon chip + title + detail, `role="status"`
+ * since this is an idle capability gap. */
 function UsageNotice(props: {
   readonly title: string;
   readonly detail: string;

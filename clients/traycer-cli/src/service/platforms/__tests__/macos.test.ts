@@ -59,32 +59,22 @@ const MOCKS = vi.hoisted(() => ({
   forceStopHostProcess: vi.fn(),
 }));
 
-// The cooperative-shutdown RPC flow and the forced-kill path each have their
-// own unit suite (`desktop-agent-shutdown.test.ts`); here they are a seam so
-// the controller tests pin the ROUTING (which outcome leads to which launchd
-// calls and which error) without dialing a WebSocket or signalling a real
-// pid. This is a WHOLE-MODULE factory - every export of
-// `desktop-agent-shutdown` used by `macos.ts` must be listed here, or the
-// missing one comes back `undefined` and silently breaks the caller.
+// The cooperative-shutdown RPC flow and the forced-kill path each have their own unit suite (`desktop-agent-shutdown.test.ts`); here they are a seam so the controller tests pin the ROUTING (which outcome leads to which launchd calls and which error) without dialing a WebSocket or signalling a real pid.
+// This is a WHOLE-MODULE factory - every export of `desktop-agent-shutdown` used by `macos.ts` must be listed here, or the missing one comes back `undefined` and silently breaks the caller.
 vi.mock("../desktop-agent-shutdown", () => ({
   requestCooperativeShutdown: MOCKS.requestCooperativeShutdown,
   forceStopHostProcess: MOCKS.forceStopHostProcess,
 }));
 
-// `uninstallService` warns through the real CLI logger when it boots out an
-// SMAppService-owned label. The real logger appends to the invoking user's
-// actual `~/.traycer` log file - stub it so the suite stays hermetic and the
-// warning is assertable.
+// `uninstallService` warns through the real CLI logger when it boots out an SMAppService-owned label.
+// The real logger appends to the invoking user's actual `~/.traycer` log file - stub it so the suite stays hermetic and the warning is assertable.
 vi.mock("../../../logger", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../logger")>();
   return {
     ...actual,
     createCliLogger: () => ({
       debug: vi.fn(),
-      // `info` is assertable (not an anonymous fn) because the eviction line
-      // IS the contract: `retireCompetingRegistration`'s outcome is
-      // deliberately not threaded through the install lifecycle, so this log
-      // is the only record that a running host was booted out.
+      // `info` is assertable (not an anonymous fn) because the eviction line IS the contract: `retireCompetingRegistration`'s outcome is deliberately not threaded through the install lifecycle, so this log is the only record that a running host was booted out.
       info: MOCKS.cliLoggerInfo,
       warn: MOCKS.cliLoggerWarn,
       error: vi.fn(),
@@ -110,13 +100,8 @@ vi.mock("../../../store/cli-lock", async (importOriginal) => {
   return { ...actual, isProcessAlive: MOCKS.isProcessAlive };
 });
 
-// Test isolation: `serviceManifestPath` normally resolves to the REAL
-// `~/Library/LaunchAgents/<label>.plist` (via `os.homedir()`, which ignores
-// `$HOME`), so running this suite would write - and `afterEach`-remove - the
-// developer's actual host LaunchAgent, deregistering a running host.
-// Redirect the manifest path to a private, uniquely-created temp dir so the
-// suite never touches real macOS service registration or follows a predictable
-// path another local user could pre-create.
+// Test isolation: `serviceManifestPath` normally resolves to the REAL `~/Library/LaunchAgents/<label>.plist` (via `os.homedir()`, which ignores `$HOME`), so running this suite would write - and `afterEach`-remove - the developer's actual host LaunchAgent, deregistering a running host.
+// Redirect the manifest path to a private, uniquely-created temp dir so the suite never touches real macOS service registration or follows a predictable path another local user could pre-create.
 const TEST_LAUNCH_AGENTS_DIR = mkdtempSync(
   join(tmpdir(), "traycer-macos-service-test-"),
 );
@@ -129,12 +114,8 @@ vi.mock("../../label", async (importOriginal) => {
   };
 });
 
-// Ticket a849b064: macOS CLI service install must distinguish benign
-// idempotent launchctl states (service already loaded) from real
-// failures (permission denied, malformed plist, missing program, ...).
-// Real failures should surface as `SERVICE_INSTALL_FAILED` /
-// `SERVICE_CONTROL_FAILED` so Doctor + first-launch can rely on the
-// signal. Tests below stub `launchctl` to exercise each path.
+// Ticket a849b064: macOS CLI service install must distinguish benign idempotent launchctl states (service already loaded) from real failures (permission denied, malformed plist, missing program, ...).
+// Real failures should surface as `SERVICE_INSTALL_FAILED` / `SERVICE_CONTROL_FAILED` so Doctor + first-launch can rely on the signal.
 
 interface RecordedCall {
   readonly command: string;
@@ -213,13 +194,8 @@ describe("macOS service lifecycle", () => {
     ).toBe(true);
   });
 
-  // Change 9 (PR #1480 review round 4): the desktop-agent probe's `.catch`
-  // used to fold EVERY launchctl failure into `not-loaded`, including a
-  // revoked mutation capability - which would route adoption to the CLI's
-  // own logical label and publish a grant the Desktop supervisor rejects.
-  // The probe is advisory only for genuine launchctl faults (a hung/
-  // unspawnable process, "not found"); an authority loss must propagate so
-  // the caller parks/aborts instead of silently mis-adopting.
+  // Change 9 (PR #1480 review round 4): the desktop-agent probe's `.catch` used to fold EVERY launchctl failure into `not-loaded`, including a revoked mutation capability - which would route adoption to the CLI's own logical label and publish a grant the Desktop supervisor rejects.
+  // The probe is advisory only for genuine launchctl faults (a hung/ unspawnable process, "not found"); an authority loss must propagate so the caller parks/aborts instead of silently mis-adopting.
   it("propagates a service-mutation-authority loss from the desktop-agent probe instead of reading it as not-loaded", async () => {
     const agentLabelId = smAppServiceAgentLabelId(label);
     const authorityError = new ServiceMutationAuthorityError(
@@ -242,11 +218,8 @@ describe("macOS service lifecycle", () => {
     );
   });
 
-  // Without this key, background-task management names the login item
-  // after ProgramArguments[0] - literally "sh" from an "Unknown
-  // Developer" - on every CLI-registered install (dev machines and the
-  // desktop's takeover fallback alike). The association groups it under
-  // the Traycer app in System Settings → Login Items.
+  // Without this key, background-task management names the login item after ProgramArguments[0] - literally "sh" from an "Unknown Developer" - on every CLI-registered install (dev machines and the desktop's takeover fallback alike).
+  // The association groups it under the Traycer app in System Settings → Login Items.
   it("associates the LaunchAgent with the Traycer desktop app so Login Items does not show it as 'sh'", () => {
     const plist = buildLaunchAgentPlist({
       label,
@@ -267,9 +240,8 @@ describe("macOS service lifecycle", () => {
     const newArgs = join(work, "new-args.txt");
     const script = buildCompatibleHostStartScript("ai.traycer.host.compat");
     try {
-      // An N-1 CLI has no `host capabilities` subcommand at all: commander
-      // prints "unknown command" on stderr and exits 1. Reproduced exactly,
-      // including the non-empty stderr the emitted script must swallow.
+      // An N-1 CLI has no `host capabilities` subcommand at all: commander prints "unknown command" on stderr and exits 1.
+      // Reproduced exactly, including the non-empty stderr the emitted script must swallow.
       await writeFile(
         oldCli,
         `#!/bin/sh
@@ -388,12 +360,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
     },
   );
-  // Field observation 2026-07-28 (sfltool dumpbtm): with `/bin/sh` as
-  // ProgramArguments[0], BTM recorded `Name: sh, Parent Identifier:
-  // Unknown Developer` for every CLI-registered install, and
-  // AssociatedBundleIdentifiers alone was probed and ignored for that
-  // shape. The plist must execute the per-label launcher file, whose
-  // basename is what macOS shows.
+  // Field observation 2026-07-28 (sfltool dumpbtm): with `/bin/sh` as ProgramArguments[0], BTM recorded `Name: sh, Parent Identifier: Unknown Developer` for every CLI-registered install, and AssociatedBundleIdentifiers alone was probed and ignored for that shape.
+  // The plist must execute the per-label launcher file, whose basename is what macOS shows.
   it("puts the per-label launcher file first in ProgramArguments so BTM names the item traycer-host-start", () => {
     const plist = buildLaunchAgentPlist({
       label,
@@ -411,11 +379,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(plist).not.toContain("/bin/sh");
   });
 
-  // The blocker this contract replaces: `--service-label` used to be passed
-  // only when it appeared in `host start --help` output, so applying the
-  // file's own `.hideHelp()` convention to an "Internal:" option silently
-  // dropped the identity binding with every test still green. Pin that the
-  // emitted script asks the machine contract and nothing else.
+  // The blocker this contract replaces: `--service-label` used to be passed only when it appeared in `host start --help` output, so applying the file's own `.hideHelp()` convention to an "Internal:" option silently dropped the identity binding with every test still green.
+  // Pin that the emitted script asks the machine contract and nothing else.
   it("probes the capability subcommand, never help output", () => {
     const script = buildCompatibleHostStartScript("ai.traycer.host.compat");
     expect(script).toContain("host capabilities --has service-label");
@@ -423,9 +388,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(script).not.toContain("grep");
   });
 
-  // systemd's ExecStart guard rejects these characters outright, and the
-  // macOS plist shares this exact script - keep the one emitter honest for
-  // both consumers.
+  // systemd's ExecStart guard rejects these characters outright, and the macOS plist shares this exact script - keep the one emitter honest for both consumers.
   it("emits a single-line script free of characters systemd mis-parses", () => {
     const script = buildCompatibleHostStartScript("ai.traycer.host.compat");
     expect(script).not.toMatch(/[%;\n\t]/);
@@ -440,9 +403,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     MOCKS.cliLoggerWarn.mockReset();
     MOCKS.cliLoggerInfo.mockReset();
     MOCKS.requestCooperativeShutdown.mockReset();
-    // No test may reach the cooperative flow without staging an explicit
-    // outcome - an unstaged call resolving `undefined` would satisfy
-    // loosely-written assertions by accident.
+    // No test may reach the cooperative flow without staging an explicit outcome - an unstaged call resolving `undefined` would satisfy loosely-written assertions by accident.
     MOCKS.requestCooperativeShutdown.mockRejectedValue(
       new Error("requestCooperativeShutdown outcome not staged in this test"),
     );
@@ -455,10 +416,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
   afterEach(async () => {
     vi.useRealTimers();
-    // installService writes a plist to ~/Library/LaunchAgents/<label>.plist
-    // - clean it up so a failed run doesn't leak between tests. We only
-    // touch the specific test label to avoid clobbering a real install
-    // on the developer's machine.
+    // installService writes a plist to ~/Library/LaunchAgents/<label>.plist - clean it up so a failed run doesn't leak between tests.
+    // We only touch the specific test label to avoid clobbering a real install on the developer's machine.
     if (createdPlistPath !== null) {
       await rm(createdPlistPath, { force: true });
     }
@@ -481,11 +440,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       cli: { command: "/usr/local/bin/traycer", args: [] },
       enableLinger: false,
     });
-    // `print` probes whether the service is already loaded; when it is
-    // (mock returns exit=0), the install path tears down the existing
-    // registration via bootout before bootstrapping the freshly-written
-    // plist - that's what makes Re-register survive the "already
-    // loaded" / EIO case launchctl bootstrap would otherwise hit.
+    // `print` probes whether the service is already loaded; when it is (mock returns exit=0), the install path tears down the existing registration via bootout before bootstrapping the freshly-written plist - that's what makes Re-register survive the "already loaded" / EIO case launchctl bootstrap would otherwise hit.
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
       "print",
@@ -544,10 +499,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     const runner: ProcessRunner = async (command, args, options) => {
       calls.push({ command, args });
       if (args[0] === "print") {
-        // `launchctl print` returns non-zero when the service isn't
-        // loaded. isServiceLoaded honours `tolerateNonZeroExit:true` by
-        // resolving with a non-zero `RunResult` rather than throwing,
-        // so the install path observes "not loaded" and skips bootout.
+        // `launchctl print` returns non-zero when the service isn't loaded. isServiceLoaded honours `tolerateNonZeroExit:true` by resolving with a non-zero `RunResult` rather than throwing, so the install path observes "not loaded" and skips bootout.
         if (options.tolerateNonZeroExit) {
           return {
             stdout: "",
@@ -621,10 +573,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       calls.push({ command, args });
       if (args[0] === "bootstrap") {
         bootstrapAttempts += 1;
-        // First bootstrap loses a race (another process re-loaded the
-        // job). Retry path must bootout + bootstrap again so launchd
-        // reads the on-disk plist; a bare kickstart would keep the
-        // cached definition.
+        // First bootstrap loses a race (another process re-loaded the job).
+        // Retry path must bootout + bootstrap again so launchd reads the on-disk plist; a bare kickstart would keep the cached definition.
         if (bootstrapAttempts === 1) {
           throw buildLaunchctlError({
             command,
@@ -710,9 +660,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("treats a second 'already loaded' after the reload bootout as a concurrent installer's fresh definition - install succeeds and kickstarts it", async () => {
-    // Every path that bootstraps this label rewrites the manifest first, so
-    // a racer that re-bootstrapped between our bootout and bootstrap loaded
-    // a freshly regenerated plist - NOT the stale cache the reload evicts.
+    // Every path that bootstraps this label rewrites the manifest first, so a racer that re-bootstrapped between our bootout and bootstrap loaded a freshly regenerated plist - NOT the stale cache the reload evicts.
     // This used to be misreported as SERVICE_INSTALL_FAILED.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
@@ -751,10 +699,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     ]);
   });
   it("refuses to bootout Desktop's SMAppService job when it wins the reload race before the recovery bootout", async () => {
-    // A competing registrar that re-loads the label between the CLI's
-    // failed first bootstrap and the reload recovery's own bootout may be
-    // Desktop's SMAppService, not another CLI process. The reload must
-    // re-verify ownership and refuse to bootout/bootstrap Desktop's job.
+    // A competing registrar that re-loads the label between the CLI's failed first bootstrap and the reload recovery's own bootout may be Desktop's SMAppService, not another CLI process.
+    // The reload must re-verify ownership and refuse to bootout/bootstrap Desktop's job.
     const calls: RecordedCall[] = [];
     const smPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
@@ -771,9 +717,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           };
         }
         cliPrintAttempts += 1;
-        // First CLI-label print (installService's upfront check) sees no
-        // SMAppService owner; the reload recovery's re-check (second
-        // CLI-label print) finds Desktop's SMAppService won the race.
+        // First CLI-label print (installService's upfront check) sees no SMAppService owner; the reload recovery's re-check (second CLI-label print) finds Desktop's SMAppService won the race.
         if (cliPrintAttempts >= 2) {
           return { stdout: `path = ${smPath}\n`, stderr: "", exitCode: 0 };
         }
@@ -815,10 +759,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("refuses to treat a post-bootout 'already loaded' as a benign race win when Desktop's SMAppService is the new owner", async () => {
-    // Mirror of the above, one step later: Desktop's SMAppService can also
-    // win the race in the window between the reload's OWN bootout and its
-    // bootstrap retry. The existing "concurrent installer" benign-success
-    // path must not kickstart Desktop's job.
+    // Mirror of the above, one step later: Desktop's SMAppService can also win the race in the window between the reload's OWN bootout and its bootstrap retry.
+    // The existing "concurrent installer" benign-success path must not kickstart Desktop's job.
     const calls: RecordedCall[] = [];
     const smPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
@@ -955,10 +897,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     ]);
   });
 
-  // `registrationCommitted: true` is the signal `didServiceRegistrationCommit`
-  // reads: `bootstrap` already succeeded here (launchd holds the
-  // registration), so a caller holding a host-start adoption lease must
-  // honour it rather than treat this as a clean pre-registration failure.
+  // `registrationCommitted: true` is the signal `didServiceRegistrationCommit` reads: `bootstrap` already succeeded here (launchd holds the registration), so a caller holding a host-start adoption lease must honour it rather than treat this as a clean pre-registration failure.
   it("marks a kickstart failure after a successful bootstrap as a committed registration", async () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
@@ -1174,31 +1113,15 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     await vi.runAllTimersAsync();
 
     await result;
-    // Without --force this is a dead end unless the message names the way
-    // out - never escalates to SIGKILL on its own. Re-assert against the
-    // SAME already-settled promise (not a fresh call) - a second `stop()`
-    // would need its own ~32s fake-timer advance to time out too.
+    // Without --force this is a dead end unless the message names the way out - never escalates to SIGKILL on its own.
+    // Re-assert against the SAME already-settled promise (not a fresh call) - a second `stop()` would need its own ~32s fake-timer advance to time out too.
     await expect(stopping).rejects.toMatchObject({
       message: expect.stringContaining("Re-run with --force"),
     });
   });
 
-  // CLI-owned `stop --force` goes straight to the child-kill engine
-  // (`forceStopHostProcess`) from the OUTSET - no launchd TERM relay first,
-  // no wait, no launchd kill of ANY kind, KILL or otherwise. Round 5 had
-  // force escalate ONLY after outliving the plain SIGTERM's wait (stacking
-  // a second full exit grace on a wedged host); round 6 removed that double
-  // grace entirely, so these cases no longer need fake timers - the force
-  // path never waits inside `stopService` at all. `launchctl kill KILL` is
-  // still never used at the job: the job's service process is the
-  // `host start` SUPERVISOR, and SIGKILL is untrappable -
-  // `KeepAlive{Crashed:true}` would respawn a replacement that reads the
-  // on-disk stop intent as already-served and starts a FRESH host, undoing
-  // the stop. Escalating against the identity-verified HOST CHILD instead
-  // leaves the supervisor alive to consume the intent and exit cleanly, so
-  // the job stays down. Reuses the exact `MOCKS.forceStopHostProcess`
-  // stubbing pattern the Desktop-managed force tests below already
-  // establish - same seam, same outcome union, different caller.
+  // CLI-owned `stop --force` goes straight to the child-kill engine (`forceStopHostProcess`) from the OUTSET - no launchd TERM relay first, no wait, no launchd kill of ANY kind, KILL or otherwise.
+  // Round 5 had force escalate ONLY after outliving the plain SIGTERM's wait (stacking a second full exit grace on a wedged host); round 6 removed that double grace entirely, so these cases no longer need fake timers - the force path never waits inside `stopService` at all.
   describe("CLI-owned stop --force (straight to forceStopHostProcess, no launchd kill of any kind)", () => {
     function stageForceStop(): {
       calls: RecordedCall[];
@@ -1230,9 +1153,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         (call) => call.command === "launchctl" && call.args[0] === "kill",
       );
       expect(launchctlKillCalls).toEqual([]);
-      // The instance-matched pid.json purge lives entirely inside
-      // `forceStopHostProcess` (mocked here) - `stopService` itself never
-      // reads pid.json on the force path.
+      // The instance-matched pid.json purge lives entirely inside `forceStopHostProcess` (mocked here) - `stopService` itself never reads pid.json on the force path.
       expect(MOCKS.readHostPidMetadata).not.toHaveBeenCalled();
     });
 
@@ -1289,21 +1210,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("forces a recycle on the CLI-owned restart, because the supervisor outlives the host pid it waited on", async () => {
-    // `stopService` waits on the pid `pid.json` publishes - the HOST. The
-    // launchd job is the SUPERVISOR, and it outlives its child by the whole
-    // post-mortem (stderr end wait, tee flush, crash-report scan), longer still
-    // when a grandchild holds the inherited stderr open. In that window the
-    // host is gone, this call has returned, and launchd still considers the job
-    // running - so the plain kickstart `forcedRecycle: false` selects is a
-    // silent no-op and the "successful" restart leaves no host.
-    //
-    // It used to be survivable by accident: the supervisor exited with its
-    // signalled child's code and `KeepAlive{SuccessfulExit:false}` respawned it.
-    // That respawn is exactly what made `host stop` come back, so removing it
-    // was the point - and it left this path with nothing underneath.
-    //
-    // This whole branch of `stopForRestart` had no test; all four lived on the
-    // Desktop-managed path.
+    // `stopService` waits on the pid `pid.json` publishes - the HOST.
+    // The launchd job is the SUPERVISOR, and it outlives its child by the whole post-mortem (stderr end wait, tee flush, crash-report scan), longer still when a grandchild holds the inherited stderr open.
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(false);
     const runner: ProcessRunner = async () => buildSuccessResult();
@@ -1318,9 +1226,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
   it("recycles rather than plain-kickstarts when relaunching a CLI-owned restart", async () => {
     // The other half: `forcedRecycle` only matters if the relaunch honours it.
-    // Assert the exact invocation, not "some argument list contains -k": the
-    // latter passes for any call carrying that flag anywhere, which is not
-    // evidence that `launchctl kickstart -k` was the thing issued.
+    // Assert the exact invocation, not "some argument list contains -k": the latter passes for any call carrying that flag anywhere, which is not evidence that `launchctl kickstart -k` was the thing issued.
     const calls: { command: string; args: readonly string[] }[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -1368,11 +1274,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     });
   });
 
-  // Verbatim `launchctl print` output captured from a macOS build that
-  // reports SMAppService jobs WITHOUT an in-bundle plist path. Keying
-  // ownership on the bundle path alone classified this as `cli-or-other`,
-  // which silently disarmed every SMAppService guard at once and let
-  // `host install` bootstrap a second host beside Desktop's agent.
+  // Verbatim `launchctl print` output captured from a macOS build that reports SMAppService jobs WITHOUT an in-bundle plist path.
+  // Keying ownership on the bundle path alone classified this as `cli-or-other`, which silently disarmed every SMAppService guard at once and let `host install` bootstrap a second host beside Desktop's agent.
   it("classifies an SMAppService job that reports no bundle path", () => {
     const printOutput = [
       "gui/501/ai.traycer.host.staging.agent = {",
@@ -1446,12 +1349,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("reports externally-managed when launchd loads the label from an SMAppService path even if a stale raw plist exists", async () => {
-    // Collision case: leftover CLI LaunchAgents file + Desktop SMAppService
-    // already owns the same label. Status must not claim CLI-"registered"
-    // (host update would take the existing-registration reload path against
-    // Desktop's BTM registration) but must also not claim "not-installed"
-    // (auto-bootstrap would select "service repair" and run into
-    // installService's SMAppService refusal on every `traycer login`).
+    // Collision case: leftover CLI LaunchAgents file + Desktop SMAppService already owns the same label.
+    // Status must not claim CLI-"registered" (host update would take the existing-registration reload path against Desktop's BTM registration) but must also not claim "not-installed" (auto-bootstrap would select "service repair" and run into installService's SMAppService refusal on every `traycer login`).
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await writeFile(createdPlistPath, "stale cli plist", "utf8");
     const smPath =
@@ -1483,11 +1382,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("uninstall still boots out an SMAppService-owned label but warns about the surviving login-item record", async () => {
-    // Asymmetry with install's refusal is deliberate: removal intent wins
-    // (a user whose .app is already gone must not be stranded with an
-    // un-removable agent), but on macOS <= 25 the SMAppService record can
-    // survive the bootout and respawn the host at next login - that residue
-    // must not be silent.
+    // Asymmetry with install's refusal is deliberate: removal intent wins (a user whose .app is already gone must not be stranded with an un-removable agent), but on macOS <= 25 the SMAppService record can survive the bootout and respawn the host at next login - that residue must not be silent.
     const calls: RecordedCall[] = [];
     const smPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
@@ -1514,11 +1409,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("attempts the CLI-label bootout even when the agent-label bootout fails hard, and preserves the manifest since teardown is unconfirmed", async () => {
-    // Agent label is iterated first (it's the live job on migrated
-    // machines); a hard failure there must not skip the CLI-label bootout -
-    // "best-effort per target", not "stop at the first failure". The
-    // manifest survives because teardown never fully confirmed - deleting
-    // it here would make a still-loaded CLI job misreport as not-installed.
+    // Agent label is iterated first (it's the live job on migrated machines); a hard failure there must not skip the CLI-label bootout - "best-effort per target", not "stop at the first failure".
+    // The manifest survives because teardown never fully confirmed - deleting it here would make a still-loaded CLI job misreport as not-installed.
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await writeFile(createdPlistPath, "test manifest", "utf8");
     const calls: RecordedCall[] = [];
@@ -1547,10 +1439,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "bootout",
       "bootout",
     ]);
-    // Pin the actual targets, not just the command names: a buggy
-    // implementation that bootouts the agent target twice (and never
-    // touches the CLI label) would also produce two "bootout" calls and a
-    // ".agent"-containing error message, passing the assertions above.
+    // Pin the actual targets, not just the command names: a buggy implementation that bootouts the agent target twice (and never touches the CLI label) would also produce two "bootout" calls and a ".agent"-containing error message, passing the assertions above.
     const bootoutTargets = calls
       .filter((call) => call.args[0] === "bootout")
       .map((call) => call.args[call.args.length - 1]);
@@ -1593,10 +1482,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: expect.stringContaining("SMAppService"),
     });
-    // The advice must work from this exact state: `service uninstall`
-    // deliberately never refuses. `host ensure --no-service-register` is a
-    // bytes-only no-op on an installed, satisfied machine and must never
-    // reappear as the suggested fix.
+    // The advice must work from this exact state: `service uninstall` deliberately never refuses.
+    // `host ensure --no-service-register` is a bytes-only no-op on an installed, satisfied machine and must never reappear as the suggested fix.
     expect(rejection).toMatchObject({
       message: expect.stringContaining("traycer host service uninstall"),
     });
@@ -1609,10 +1496,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("refuses install when Desktop's post-label-split AGENT label is SMAppService-loaded - the CLI label itself reads clean", async () => {
-    // Post-split Desktop machines run the host under `<label>.agent` and
-    // leave the CLI label unloaded with no raw manifest. A manual
-    // `service install` here would bootstrap a SECOND host beside
-    // Desktop's - the agent-label probe must refuse it.
+    // Post-split Desktop machines run the host under `<label>.agent` and leave the CLI label unloaded with no raw manifest.
+    // A manual `service install` here would bootstrap a SECOND host beside Desktop's - the agent-label probe must refuse it.
     const calls: RecordedCall[] = [];
     const smAgentPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
@@ -1664,10 +1549,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("reports externally-managed when only the post-label-split AGENT label is SMAppService-loaded", async () => {
-    // Migrated machine: CLI label unloaded, raw manifest deleted by the
-    // desktop's register cycle, host running under `<label>.agent`.
-    // `not-installed` here would send doctor/auto-bootstrap into
-    // installService's agent-label refusal on every `traycer login`.
+    // Migrated machine: CLI label unloaded, raw manifest deleted by the desktop's register cycle, host running under `<label>.agent`.
+    // `not-installed` here would send doctor/auto-bootstrap into installService's agent-label refusal on every `traycer login`.
     const smAgentPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
     const runner: ProcessRunner = async (command, args, options) => {
@@ -1697,13 +1580,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   describe("Desktop-managed stop/start/restart (cooperative, never a refusal)", () => {
-    // On a migrated machine the host runs under `<label>.agent` and the CLI
-    // label has no job. These operations used to refuse outright ("use the
-    // Traycer app") - which cornered exactly the users whose Desktop app
-    // was the broken part. Now: stop/restart ask the RUNNING HOST to stand
-    // down over its lifecycle-claim RPCs, start/restart relaunch via
-    // kickstart of the AGENT label, and no arm ever bootouts/bootstraps
-    // the registration Desktop owns.
+    // On a migrated machine the host runs under `<label>.agent` and the CLI label has no job.
+    // These operations used to refuse outright ("use the Traycer app") - which cornered exactly the users whose Desktop app was the broken part.
     const smAgentPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
     const agentTarget = `gui/${process.getuid?.() ?? 0}/${label.id}.agent`;
@@ -1730,11 +1608,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await expect(
         controller.stop(label, { force: false }),
       ).resolves.toBeUndefined();
-      // The third argument is the RESTART INTENT the host acts on: a plain
-      // stop must say `"shutdown"`, or the host would publish a restart
-      // tombstone and every attached window would sit in
-      // `restarting-expected` for the full episode waiting for a host that is
-      // not coming back.
+      // The third argument is the RESTART INTENT the host acts on: a plain stop must say `"shutdown"`, or the host would publish a restart tombstone and every attached window would sit in `restarting-expected` for the full episode waiting for a host that is not coming back.
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
         label.environment,
         "stop",
@@ -1754,9 +1628,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         code: CLI_ERROR_CODES.HOST_BUSY,
         message: expect.stringContaining("work in progress"),
       });
-      // The denial is a dead end without knowing the escape hatch exists -
-      // the message names it rather than leaving the user to find `--force`
-      // in `--help`.
+      // The denial is a dead end without knowing the escape hatch exists - the message names it rather than leaving the user to find `--force` in `--help`.
       await expect(
         controller.stop(label, { force: false }),
       ).rejects.toMatchObject({
@@ -1806,11 +1678,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     });
 
     it("stop with --force surfaces a control-failed error when the pid's identity could not be verified", async () => {
-      // `forceStopHostProcess` itself refuses to signal a pid it cannot
-      // prove is still the host (a recycled-pid impostor risk) - this pins
-      // that the macOS routing surfaces that refusal as an honest error
-      // rather than silently reporting success or crashing on an unhandled
-      // outcome variant.
+      // `forceStopHostProcess` itself refuses to signal a pid it cannot prove is still the host (a recycled-pid impostor risk) - this pins that the macOS routing surfaces that refusal as an honest error rather than silently reporting success or crashing on an unhandled outcome variant.
       const { controller } = stageDesktopManagedRunner();
       MOCKS.forceStopHostProcess.mockResolvedValue({
         kind: "identity-unverified",
@@ -1840,9 +1708,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message: expect.stringContaining(`${label.id}.agent`),
       });
-      // The routing must include a path the user can take when the Desktop
-      // app itself is the thing that is broken - and never the
-      // `--no-service-register` no-op.
+      // The routing must include a path the user can take when the Desktop app itself is the thing that is broken - and never the `--no-service-register` no-op.
       expect(rejection).toMatchObject({
         message: expect.stringContaining("traycer host service uninstall"),
       });
@@ -1869,10 +1735,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
       await expect(controller.restart(label)).resolves.toBeUndefined();
-      // ...and the restart half says `"restart"`, which is the whole point:
-      // it is what lets the host tell every client the outage is deliberate.
-      // The two call sites must DIFFER - an intent hardcoded the same in both
-      // places would pass a presence-only assertion.
+      // ...and the restart half says `"restart"`, which is the whole point: it is what lets the host tell every client the outage is deliberate.
+      // The two call sites must DIFFER - an intent hardcoded the same in both places would pass a presence-only assertion.
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
         label.environment,
         "restart",
@@ -1910,16 +1774,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
     });
 
-    /*
-     * The restart HALVES, which is what `traycer host restart` actually calls.
-     *
-     * `restart()` above has always recycled an unreachable host, but the
-     * command could never reach it: it was spelled `stop()` then `start()`,
-     * and `stop()` throws on exactly the unreachable/hung outcomes the
-     * recycle exists for. So the command died on the broken-host state it
-     * was added to repair while these platform tests stayed green against a
-     * primitive production never called. These rows pin the halves instead.
-     */
+    /** The restart HALVES, which is what `traycer host restart` actually calls. `restart()` above has always recycled an unreachable host, but the command could never reach it: it was spelled `stop()` then `start()`, and `stop()` throws on exactly the unreachable/hung outcomes the recycle exists for. */
     it("stopForRestart does NOT throw where stop does - an unreachable host reports forcedRecycle so the command reaches its relaunch", async () => {
       const { calls, controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({
@@ -1933,8 +1788,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         forcedRecycle: true,
       });
       // Contrast, on the identical staged outcome: `stop` is terminal here.
-      // If this ever stops throwing, the two are the same operation and the
-      // finding this row exists for has been re-introduced by convergence.
+      // If this ever stops throwing, the two are the same operation and the finding this row exists for has been re-introduced by convergence.
       await expect(
         controller.stop(label, { force: false }),
       ).rejects.toMatchObject({
@@ -1944,10 +1798,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
     });
 
-    /*
-     * Unreadable pid metadata is not proof the host is gone, and each half
-     * takes the safe direction for its own operation.
-     */
+    /** Unreadable pid metadata is not proof the host is gone, and each half takes the safe direction for its own operation. */
     it("stop refuses rather than reporting success when no endpoint is published", async () => {
       const { calls, controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({
@@ -2012,9 +1863,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "restart",
       );
       expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
-      // Every force outcome recycles the job on relaunch - the kill (or the
-      // attempt) already happened, so a plain kickstart could still no-op
-      // against a supervisor mid-teardown.
+      // Every force outcome recycles the job on relaunch - the kill (or the attempt) already happened, so a plain kickstart could still no-op against a supervisor mid-teardown.
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
     });
     it("relaunchAfterRestart recycles the agent job when the stop half could not ask the host to exit", async () => {
@@ -2023,9 +1872,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await expect(
         controller.relaunchAfterRestart(label, { forcedRecycle: true }),
       ).resolves.toBeUndefined();
-      // `-k` is load-bearing: the old process was never asked to leave, and
-      // launchd treats a plain kickstart of a running job as satisfied - the
-      // host would keep serving the old bytes after a "successful" restart.
+      // `-k` is load-bearing: the old process was never asked to leave, and launchd treats a plain kickstart of a running job as satisfied - the host would keep serving the old bytes after a "successful" restart.
       expect(calls[1]?.args).toEqual(["kickstart", "-k", agentTarget]);
     });
 
@@ -2040,12 +1887,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   describe("takeoverDesktopRegistration", () => {
-    // `service install --takeover`: the explicit-consent path out of the
-    // agent refusal. Contract under test: cooperative stop first (busy
-    // aborts BEFORE launchd is touched), bootout verified by re-probe
-    // (a silently failed bootout must fail the takeover, not surface as a
-    // confusing second refusal from `install`), and the pre-split arm
-    // stays refused (that label is Desktop's own registration).
+    // `service install --takeover`: the explicit-consent path out of the agent refusal.
+    // Contract under test: cooperative stop first (busy aborts BEFORE launchd is touched), bootout verified by re-probe (a silently failed bootout must fail the takeover, not surface as a confusing second refusal from `install`), and the pre-split arm stays refused (that label is Desktop's own registration).
     const smAgentPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
     const agentTarget = `gui/${process.getuid?.() ?? 0}/${label.id}.agent`;
@@ -2172,17 +2015,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       );
     });
 
-    /*
-     * Verification must be POSITIVE, in both indeterminate shapes.
-     *
-     * The takeover proceeds on "the agent is gone". Every non-zero
-     * `launchctl print` used to collapse to not-loaded, and a thrown probe
-     * was caught into not-loaded as well - so an EPERM, a timeout, or a
-     * launchctl that could not spawn all read as proof the bootout worked.
-     * Registering the CLI LaunchAgent on that evidence leaves BOTH
-     * registrations live: two hosts, one data dir - the dual-host state this
-     * command exists to resolve.
-     */
+    /** Verification must be POSITIVE, in both indeterminate shapes. The takeover proceeds on "the agent is gone". */
     it("aborts the takeover when the post-bootout probe fails rather than treating it as proof of absence", async () => {
       const calls: RecordedCall[] = [];
       let agentPrints = 0;
@@ -2282,23 +2115,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       ]);
     });
 
-    /**
-     * The barrier, pinned in the states that need it.
-     *
-     * `--wait` is the difference between "launchd accepted the request" and
-     * "the process is gone". Takeover reaches the bootout with the old host
-     * still running in exactly these three outcomes - only `stopped` waited
-     * for exit - and the evicted host publishes `pid.json` until the very end
-     * of teardown. `service install` then starts the CLI-label host, whose
-     * first act is `findLiveIncumbentHost`: a bare bootout lets it read the
-     * corpse as a live incumbent, decline, and exit 0, and
-     * `KeepAlive{SuccessfulExit: false}` leaves it DOWN until the next login.
-     *
-     * Asserted per outcome rather than once, because the bug is not "the flag
-     * is missing" but "the flag is missing on the path where the host is
-     * still alive" - a single row over `stopped` would pass while every
-     * dangerous arm regressed.
-     */
+    /** The barrier, pinned in the states that need it. `--wait` is the difference between "launchd accepted the request" and "the process is gone". */
     it.each([
       ["unreachable", { kind: "unreachable", cause: "dial failed" }],
       ["hung", { kind: "hung", pid: 4242 }],
@@ -2323,11 +2140,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   });
 
   it("stop/start/restart proceed normally when the agent probe reads not-loaded (CLI-managed machine)", async () => {
-    // The guard must never block a genuinely CLI-managed machine - the
-    // probe is advisory and a not-loaded agent label falls through to the
-    // normal launchctl path. Exercises all three operations (not just
-    // start): a regression where the guard incorrectly blocks a legitimate
-    // stop/restart on a CLI-managed machine must be caught here too.
+    // The guard must never block a genuinely CLI-managed machine - the probe is advisory and a not-loaded agent label falls through to the normal launchctl path.
+    // Exercises all three operations (not just start): a regression where the guard incorrectly blocks a legitimate stop/restart on a CLI-managed machine must be caught here too.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -2341,9 +2155,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       return buildSuccessResult();
     };
     const controller = createMacosController(runner);
-    // `readHostPidMetadata` resolves null throughout - stop's own
-    // wait-for-exit path is exercised separately below; here it's enough
-    // that `before === null` lets stop return right after the kill call.
+    // `readHostPidMetadata` resolves null throughout - stop's own wait-for-exit path is exercised separately below; here it's enough that `before === null` lets stop return right after the kill call.
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
 
     for (const [op, expectedSecondCall] of [
@@ -2386,11 +2198,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     });
   });
 
-  // The repair counterpart to the SMAppService refusals: the classifier fix
-  // stops a dual registration being CREATED, this removes one already on
-  // disk from the v1.1.7 window. Both preconditions are load-bearing and
-  // asymmetric - failing to retire leaves a duplicate host, but retiring on
-  // the wrong machine takes away its ONLY host.
+  // The repair counterpart to the SMAppService refusals: the classifier fix stops a dual registration being CREATED, this removes one already on disk from the v1.1.7 window.
+  // Both preconditions are load-bearing and asymmetric - failing to retire leaves a duplicate host, but retiring on the wrong machine takes away its ONLY host.
   describe("retireCompetingRegistration (dual-registration repair)", () => {
     const agentLabelId = smAppServiceAgentLabelId(label);
 
@@ -2462,21 +2271,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await expect(readFile(createdPlistPath, "utf8")).rejects.toThrow();
     });
 
-    /*
-     * The availability gate, in both directions.
-     *
-     * "Desktop's agent is loaded" is the only thing the ownership probe
-     * proves, and it is not enough to justify deleting the other
-     * registration. On a machine where the agent is loaded but cannot spawn
-     * (stale LWCR after an app replace, EX_CONFIG), the CLI job may be the
-     * ONLY host that runs - very possibly because the user created it with
-     * `service install --takeover` for exactly this reason. Retiring it there
-     * boots out the working host and kickstarts one already known to fail:
-     * the hostless lockout, produced by the repair.
-     *
-     * Desktop's launch-time retirement already gates the identical
-     * destructive direction; this is the CLI-side half of that rule.
-     */
+    /** The availability gate, in both directions. "Desktop's agent is loaded" is the only thing the ownership probe proves, and it is not enough to justify deleting the other registration. */
     const WEDGED_AGENT_PRINT = [
       "\tpath = (submitted by smd.321)",
       "\ttype = Submitted",
@@ -2501,9 +2296,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         probe: "wedged",
       });
 
-      // Nothing destructive ran: the CLI job still exists and its manifest
-      // is still on disk. Asserting the outcome alone would pass even if the
-      // bootout had happened and only the return value changed.
+      // Nothing destructive ran: the CLI job still exists and its manifest is still on disk.
+      // Asserting the outcome alone would pass even if the bootout had happened and only the return value changed.
       expect(bootoutTargets(calls)).toEqual([]);
       expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual([]);
       await expect(readFile(createdPlistPath, "utf8")).resolves.toBe(
@@ -2513,9 +2307,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     it("keeps the competing CLI registration when the agent's health cannot be read at all", async () => {
       const calls: RecordedCall[] = [];
-      // The ownership probe answers (so the repair is in scope), then the
-      // wedge probe cannot run. An unreadable health probe must fail toward
-      // keeping the registration, exactly like positive wedge evidence.
+      // The ownership probe answers (so the repair is in scope), then the wedge probe cannot run.
+      // An unreadable health probe must fail toward keeping the registration, exactly like positive wedge evidence.
       let printsSeen = 0;
       const runner: ProcessRunner = async (command, args) => {
         calls.push({ command, args });
@@ -2547,13 +2340,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       );
     });
 
-    // The availability step. The agent job being LOADED (which is all the
-    // ownership probe proves) does not mean it has a live process: the loser
-    // of the login race declines and exits 0, and
-    // `KeepAlive{SuccessfulExit:false}` never respawns a clean exit. Without
-    // this kickstart, evicting the CLI-label job can leave the machine with
-    // no running host at all, and the CLI cannot recover - start/restart both
-    // refuse via `assertNotDesktopAgentManaged` on exactly this machine.
+    // The availability step.
+    // The agent job being LOADED (which is all the ownership probe proves) does not mean it has a live process: the loser of the login race declines and exits 0, and `KeepAlive{SuccessfulExit:false}` never respawns a clean exit.
     it("kickstarts Desktop's agent after evicting the competing host", async () => {
       const calls: RecordedCall[] = [];
       const runner = makeRunner(
@@ -2569,18 +2357,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // Never `-k`: the plist sets ThrottleInterval 10, so force-killing a
       // healthy agent would make launchd block its respawn.
       expect(kickstarts[0]?.args).not.toContain("-k");
-      // `--wait` on the eviction is what makes the kickstart meaningful: a
-      // bare bootout returns before the process is gone, and the agent we
-      // just started would then see the corpse as a live incumbent, decline,
-      // and exit 0 - leaving the machine with no host at all.
+      // `--wait` on the eviction is what makes the kickstart meaningful: a bare bootout returns before the process is gone, and the agent we just started would then see the corpse as a live incumbent, decline, and exit 0 - leaving the machine with no host at all.
       const booted = calls.find((call) => call.args[0] === "bootout");
       expect(booted?.args).toContain("--wait");
     });
-    // The eviction log is the CONTRACT, not decoration: this function's
-    // outcome is deliberately not threaded through the install lifecycle, so
-    // this line is the only record anywhere that a running host was booted
-    // out. It must survive a later step failing, which is why it is emitted
-    // immediately and not folded into the success line.
+    // The eviction log is the CONTRACT, not decoration: this function's outcome is deliberately not threaded through the install lifecycle, so this line is the only record anywhere that a running host was booted out.
+    // It must survive a later step failing, which is why it is emitted immediately and not folded into the success line.
     it("logs the eviction as soon as it happens, even when a later step fails", async () => {
       const calls: RecordedCall[] = [];
       const runner: ProcessRunner = async (command, args) => {
@@ -2615,10 +2397,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(evictionLogged).toBe(true);
     });
 
-    // The manifest removal is the durable half of the repair and is local and
-    // instantaneous; the kickstart is a subprocess that can burn its timeout.
-    // Ordering them the other way risks losing the durable half to a slow
-    // launchctl.
+    // The manifest removal is the durable half of the repair and is local and instantaneous; the kickstart is a subprocess that can burn its timeout.
+    // Ordering them the other way risks losing the durable half to a slow launchctl.
     it("removes the manifest before starting the agent", async () => {
       let manifestPresentAtKickstart: boolean | null = null;
       const manifestPath = join(tempPlistDir, `${label.id}.plist`);
@@ -2644,10 +2424,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(manifestPresentAtKickstart).toBe(false);
     });
 
-    // A hard bootout failure must not read as "this machine was already
-    // clean". Loaded job + already-removed manifest is a NORMAL steady state
-    // now that Desktop's launch repair deletes manifests without booting out,
-    // so this exact combination is reachable in the field.
+    // A hard bootout failure must not read as "this machine was already clean".
+    // Loaded job + already-removed manifest is a NORMAL steady state now that Desktop's launch repair deletes manifests without booting out, so this exact combination is reachable in the field.
     it("reports retire-failed when a loaded job survives a failed bootout", async () => {
       const calls: RecordedCall[] = [];
       const runner: ProcessRunner = async (command, args) => {
@@ -2669,9 +2447,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         });
       };
 
-      // Only the loaded job remains to retire - assert that rather than
-      // assume it, so a manifest leaked by an earlier test cannot silently
-      // change which branch this exercises.
+      // Only the loaded job remains to retire - assert that rather than assume it, so a manifest leaked by an earlier test cannot silently change which branch this exercises.
       expect(existsSync(join(tempPlistDir, `${label.id}.plist`))).toBe(false);
 
       await expect(
@@ -2685,19 +2461,13 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         manifestRemoved: false,
       });
 
-      // The competing host is STILL RUNNING (its bootout failed), so starting
-      // the agent now would manufacture the exact dual-host state this repair
-      // exists to remove. The `bootedOut` guard - not merely "the CLI label
-      // was loaded" - is what prevents that.
+      // The competing host is STILL RUNNING (its bootout failed), so starting the agent now would manufacture the exact dual-host state this repair exists to remove.
+      // The `bootedOut` guard - not merely "the CLI label was loaded" - is what prevents that.
       expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual([]);
     });
 
     it("a bootout whose launchctl could not be spawned is a failed, NOT indeterminate, eviction", async () => {
-      // `ProcessSpawnError` means the binary never started, so the request
-      // never reached launchd and the registration is provably untouched -
-      // the record decorator must not invalidate for it, unlike a bootout
-      // that ran and failed (which may have been accepted before the waiter
-      // died).
+      // `ProcessSpawnError` means the binary never started, so the request never reached launchd and the registration is provably untouched - the record decorator must not invalidate for it, unlike a bootout that ran and failed (which may have been accepted before the waiter died).
       const runner: ProcessRunner = async (command, args) => {
         if (args[0] === "print") {
           const target = args[1] ?? "";
@@ -2730,9 +2500,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
-    // The availability guard. Without an SMAppService-owned agent there is
-    // no proof anything else would start a host at login, so the CLI
-    // registration may be the machine's only one.
+    // The availability guard.
+    // Without an SMAppService-owned agent there is no proof anything else would start a host at login, so the CLI registration may be the machine's only one.
     it("does nothing when Desktop's agent does not own the host", async () => {
       const calls: RecordedCall[] = [];
       const runner = makeRunner({ [label.id]: CLI_PRINT }, calls);
@@ -2749,10 +2518,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       );
     });
 
-    // Pre-label-split machine: the CLI label IS Desktop's SMAppService
-    // registration. Booting it out or deleting a manifest here would
-    // corrupt the BTM state Desktop manages - the exact thing
-    // `installService`'s first refusal exists to prevent.
+    // Pre-label-split machine: the CLI label IS Desktop's SMAppService registration.
+    // Booting it out or deleting a manifest here would corrupt the BTM state Desktop manages - the exact thing `installService`'s first refusal exists to prevent.
     it("never touches a CLI label that is itself SMAppService-owned", async () => {
       const calls: RecordedCall[] = [];
       const runner = makeRunner(
@@ -2774,9 +2541,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "<plist/>",
       );
     });
-    // Contractually non-throwing: this runs as a side effect of an install
-    // whose bytes are already swapped in, so it must never fail it. The
-    // manifest removal is the durable half and still applies.
+    // Contractually non-throwing: this runs as a side effect of an install whose bytes are already swapped in, so it must never fail it.
+    // The manifest removal is the durable half and still applies.
     it("removes the manifest and resolves even when the bootout fails", async () => {
       const calls: RecordedCall[] = [];
       const runner: ProcessRunner = async (command, args) => {
@@ -2862,17 +2628,14 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         manifestRemoved: true,
       });
 
-      // Never bootout an owner we could not identify: the CLI label may BE
-      // Desktop's pre-split SMAppService registration, and evicting that
-      // corrupts the BTM state Desktop manages.
+      // Never bootout an owner we could not identify: the CLI label may BE Desktop's pre-split SMAppService registration, and evicting that corrupts the BTM state Desktop manages.
       expect(bootoutTargets(calls)).toHaveLength(0);
       expect(calls.some((call) => call.args[0] === "kickstart")).toBe(false);
       // The durable half is safe either way, so it still happens.
       await expect(readFile(createdPlistPath, "utf8")).rejects.toThrow();
     });
-    // Runs the body with the LaunchAgents directory unreadable, so `stat` on
-    // the manifest inside it fails with EACCES rather than ENOENT. Skipped
-    // under root, which bypasses permission checks entirely.
+    // Runs the body with the LaunchAgents directory unreadable, so `stat` on the manifest inside it fails with EACCES rather than ENOENT.
+    // Skipped under root, which bypasses permission checks entirely.
     const itUnlessRoot = it.skipIf(process.getuid?.() === 0);
 
     async function withUnreadableLaunchAgentsDir(
@@ -2989,9 +2752,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       );
       await expect(readRegisteredCliInvocation(label)).resolves.toBeNull();
 
-      // Well-formed shape but the registered command is gone from disk -
-      // preserving it would re-register a dead program; fall back to
-      // normal resolution instead.
+      // Well-formed shape but the registered command is gone from disk - preserving it would re-register a dead program; fall back to normal resolution instead.
       await writeFile(
         createdPlistPath,
         buildLaunchAgentPlist({
@@ -3004,13 +2765,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     });
 
     it("refuses a launcher-form manifest whose path is not this label's own serviceLauncherScriptPath", async () => {
-      // Same basename, wrong path - e.g. an attacker-writable plist
-      // engineered to look like the launcher-file form. Matching on the
-      // `traycer-host-start` basename alone would treat this as a genuine
-      // registration and PRESERVE its command across the next `host
-      // update`, persisting an arbitrary CLI path into the freshly
-      // rewritten plist. Only the exact path this label's own
-      // `serviceLauncherScriptPath` resolves to may attest.
+      // Same basename, wrong path - e.g. an attacker-writable plist engineered to look like the launcher-file form.
+      // Matching on the `traycer-host-start` basename alone would treat this as a genuine registration and PRESERVE its command across the next `host update`, persisting an arbitrary CLI path into the freshly rewritten plist.
       createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
       await writeFile(
         createdPlistPath,

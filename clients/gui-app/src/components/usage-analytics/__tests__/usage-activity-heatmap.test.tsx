@@ -17,12 +17,8 @@ afterEach(() => {
   restoreScrollWidth = null;
 });
 
-/**
- * jsdom does no layout, so `scrollWidth` is 0 everywhere and an
- * "anchored to the end" assertion would pass against a scroller that was
- * never touched. Stub a real content width so the assertion can only pass
- * if the component actually drove `scrollLeft`.
- */
+/** jsdom does no layout, so `scrollWidth` is 0 everywhere and an "anchored to the end" assertion would pass
+ * against a scroller that was never touched. */
 const YEAR_GRID_WIDTH = 650;
 let restoreScrollWidth: (() => void) | null = null;
 function stubScrollWidth(): void {
@@ -99,10 +95,7 @@ describe("<UsageActivityHeatmap />", () => {
   });
 
   it("keeps 365 marks out of the tab order and states the values in a table instead", () => {
-    // Each tile as a tab stop made the calendar a keyboard trap: the first
-    // Tab landed a year back (DOM is oldest-first, the scroller is anchored
-    // right), dragged the scroll position with it, and the stats below were
-    // hundreds of presses away.
+    // Each tile as a tab stop made the calendar a keyboard trap.
     render(
       <TooltipProvider>
         <UsageActivityHeatmap calendar={calendar} metric="cost" />
@@ -119,10 +112,8 @@ describe("<UsageActivityHeatmap />", () => {
   });
 
   it("hovering a tile states the day's cost AND tokens, whichever metric colors it", async () => {
-    // The tile is colored by one metric, but a reader comparing days wants
-    // both numbers in one hover - not a metric-picker round trip. Rendered
-    // under the Tokens metric so the cost line can only come from the
-    // cell's own cost field, not from `value`.
+    // The tile is colored by one metric, but a reader comparing days wants both numbers in one hover - not a
+    // metric-picker round trip.
     render(
       <TooltipProvider delayDuration={0}>
         <UsageActivityHeatmap
@@ -185,9 +176,8 @@ describe("<UsageActivityHeatmap />", () => {
   });
 
   it("opens on the most recent weeks, not the oldest", () => {
-    // The year grid is wider than a narrow Settings pane. A fresh scroller
-    // sits at scrollLeft 0 - the OLDEST weeks - so the current period, the
-    // reason to open this at all, would hide behind a scrollbar.
+    // A fresh scroller sits at scrollLeft 0 - the oldest weeks - so the current period, the reason to open this at
+    // all, would hide behind a scrollbar.
     stubScrollWidth();
     render(
       <TooltipProvider>

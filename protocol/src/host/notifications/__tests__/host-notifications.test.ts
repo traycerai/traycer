@@ -613,9 +613,8 @@ describe("host.notifications.subscribe@1.0 frozen legacy stream", () => {
         summary: SUMMARY,
       }).success,
     ).toBe(false);
-    // Zod object schemas strip unknown keys by default. Successor-only
-    // fields on an otherwise-valid flat upserted frame must not survive
-    // the frozen schema - the released shape is entry-only.
+    // Zod object schemas strip unknown keys by default.
+    // Successor-only fields on an otherwise-valid flat upserted frame must not survive the frozen schema - the released shape is entry-only.
     const strippedUpsert = hostNotificationsSubscribeServerFrameSchemaV10.parse(
       {
         kind: "upserted",
@@ -805,9 +804,7 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
     expect(row.entryId).toBe("0195a1f0-7c2a-7b1e-9f3d-8a4c1e2b6d70");
     expect(row.originHostId).toBe("host-a");
     expect(row.coalesceKey).toBe("approval.requested:chat-1");
-    // The retired ordered-replication row fields must not survive parsing:
-    // an occurrence token or a per-row revision would reintroduce exactly the
-    // guards the immutable-entry model exists to delete.
+    // The retired ordered-replication row fields must not survive parsing: an occurrence token or a per-row revision would reintroduce exactly the guards the immutable-entry model exists to delete.
     expect(Object.hasOwn(row, "occurrenceToken")).toBe(false);
     expect(Object.hasOwn(row, "feedRevision")).toBe(false);
     expect(Object.hasOwn(row, "notificationId")).toBe(false);
@@ -1076,10 +1073,8 @@ describe("host.notifications registry membership", () => {
 });
 
 /**
- * Ticket 11 (cross-host browser): the parked-session kind is carried only by
- * the newest version of each surface. A released peer must never be handed a
- * row its closed entry union cannot represent - the failure mode there is a
- * 500 or a reconnect loop, not a missing row.
+ * Ticket 11 (cross-host browser): the parked-session kind is carried only by the newest version of each surface.
+ * A released peer must never be handed a row its closed entry union cannot represent - the failure mode there is a 500 or a reconnect loop, not a missing row.
  */
 describe("browser.human.needed stays off every released contract", () => {
   const PARKED_ENTRY = {

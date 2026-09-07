@@ -69,12 +69,10 @@ interface TestState {
   canvasRoot: TileLayoutNode | null;
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
   records: ReadonlyArray<{ readonly id: string }>;
-  /** Chat ids the `useCloudChatList` mock answers as present
-   * (chat-sync-v2 ticket 36's same-host cloud-known reap exemption). */
   cloudChatIds: ReadonlySet<string>;
-  /** Chat ids the mock answers as present but owned by a COLLABORATOR
-   * (`isOwnedByViewer: false`) - rows the sweep's liveness set must ignore,
-   * because the substitution resolver refuses to serve them. */
+  /**
+   * Chat ids the mock answers as present but owned by a COLLABORATOR (`isOwnedByViewer: false`) - rows the sweep's liveness set must ignore, because the substitution resolver refuses to serve them.
+   */
   cloudCollaboratorChatIds: ReadonlySet<string>;
   chatRecordListAuthoritative: boolean;
   canvasStore: CanvasStoreSlice;
@@ -91,9 +89,7 @@ const testState = vi.hoisted<TestState>(() => ({
   nestedFocusEnabled: false,
   useRealCanvasStore: false,
   routerPathname: "/epics/route-sync-epic/route-sync-tab",
-  // `useNavigate()` returns a function returning a PROMISE; callers attach
-  // rejection handlers to it. A bare `vi.fn()` answers `undefined` and makes
-  // those call sites throw here for a reason the real API never would.
+  // A bare `vi.fn()` answers `undefined` and makes those call sites throw here for a reason the real API never would.
   navigate: vi.fn(() => Promise.resolve()),
   canvasActivePaneId: null,
   canvasRoot: null,
@@ -202,8 +198,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTitle: () => "",
 }));
 
-// The host whose projection feeds `records` - the Epic session's (the canvas
-// host), which is the policing identity `isTileRefRecordLive` judges against.
+// The host whose projection feeds `records` - the Epic session's (the canvas host), which is the policing identity `isTileRefRecordLive` judges against.
 // This suite used to seed the app-wide read; the sync no longer reads it.
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => testState.sessionHostId,
@@ -217,25 +212,13 @@ vi.mock("@/lib/epic-auto-open", () => ({
   resolveAutoOpenTarget: () => testState.autoOpenTarget,
 }));
 
-// The reap effect's same-host cloud-known exemption (chat-sync-v2 ticket
-// 36) reads these two - stubbed at the hook boundary, same reason as every
-// other seam in this provider-less suite.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
 });
 
-// A SETTLED, successful list - the sweep under test refuses to run until the
-// cloud list has produced an answer that can AUTHORIZE it (success,
-// `E_HOST_UNSUPPORTED`, or a disabled query), because an in-flight or
-// transiently failed list reads every cloud row as absent and would reap the
-// never-adopted same-host chat the exemption exists for. A stub that enumerates only the flags its
-// consumer read when it was written answers `undefined` for `isSuccess`, which
-// that gate takes as "still in flight" - the sweep then never runs at all and
-// every assertion about it times out instead of failing on its subject. Rows
-// are whole `CloudChatSummary` values for the same reason: the next field a
-// consumer starts reading fails `compile` here rather than silently reading
-// `undefined`.
+// A stub that enumerates only the flags its consumer read when it was written answers `undefined` for `isSuccess`, which that gate takes as "still in flight" - the sweep then never runs at all and every assertion about it times out instead of failing on its subject.
+// Rows are whole `CloudChatSummary` values for the same reason: the next field a consumer starts reading fails `compile` here rather than silently reading `undefined`.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
   const cloudRow = (
     chatId: string,
@@ -272,11 +255,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
           ),
         ],
       },
-      // `isEnabled` too: the sweep asks `cloudChatListAuthorizesRecordSweep`,
-      // which reads a DISABLED query as authorizing (nothing will answer it).
-      // A stub omitting this answers `undefined`, which that predicate reads
-      // as disabled - the gate would then be open in every test whatever the
-      // other flags said.
       isEnabled: true,
       isSuccess: true,
       isError: false,
@@ -449,9 +427,7 @@ function lastNavigateSearchPatch(): Readonly<Record<string, unknown>> {
 }
 
 /**
- * The applied-nested-target focus restore runs inside a `requestAnimationFrame`.
- * Await two frames (wrapped in `act` so React state settles) to let that
- * scheduled `.focus()` land before asserting.
+ * Await two frames (wrapped in `act` so React state settles) to let that scheduled `.focus()` land before asserting.
  */
 async function flushFocusRestore(): Promise<void> {
   await act(async () => {
@@ -1239,9 +1215,6 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
-  // chat-sync-v2 ticket 36: a chat with no local record but still known to
-  // `epic.listCloudChats` must NOT be reaped - a leased identity that never
-  // adopted this chat's rows, not a genuine deletion.
   it("does not close a record-less chat tile that is still cloud-known", async () => {
     testState.autoOpenTarget = null;
     testState.records = [{ id: "live-artifact" }];
@@ -1261,12 +1234,7 @@ describe("useEpicRouteSynchronization", () => {
       previewTabId: null,
       activationHistory: [cloudKnownChat.instanceId],
     };
-    // The POSITIVE control, in the same pane: a chat that is neither
-    // record-backed nor cloud-known, which the sweep must close. Waiting for
-    // THAT close is what proves the sweep ran at all - `not.toHaveBeenCalled()`
-    // on its own is satisfied by the first poll and passes just as happily when
-    // `snapshotLoaded` or the cloud-list gate left the effect switched off,
-    // which is the failure this suite's own mock comment warns about.
+    // The POSITIVE control, in the same pane: a chat that is neither record-backed nor cloud-known, which the sweep must close.
     const reapedChat: EpicCanvasTileRef = {
       id: "unknown-chat",
       instanceId: "inst-unknown-chat",
@@ -1316,11 +1284,6 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
-  // A COLLABORATOR's row with the same host-minted chatId is not evidence the
-  // viewer's tab is alive: the substitution resolver refuses to serve rows the
-  // viewer does not own, so keeping the tab open on that row's strength would
-  // leave it permanently loading. The liveness set filters by viewer
-  // ownership, same as the resolver.
   it("closes a record-less chat tile whose only cloud row belongs to a collaborator", async () => {
     testState.autoOpenTarget = null;
     testState.records = [{ id: "live-artifact" }];
@@ -1392,9 +1355,7 @@ describe("useEpicRouteSynchronization", () => {
       "tile-current",
     );
 
-    // Mirror the canvas DOM the focus restore queries: the selected tab layer
-    // (an ancestor with `tabIndex=-1`) wraps the editable artifact body, just
-    // like pane → tab layer → ProseMirror surface in the app.
+    // Mirror the canvas DOM the focus restore queries: the selected tab layer (an ancestor with `tabIndex=-1`) wraps the editable artifact body, just like pane → tab layer → ProseMirror surface in the app.
     const paneEl = document.createElement("div");
     paneEl.setAttribute("data-group-id", "pane-current");
     paneEl.setAttribute("data-active", "true");
@@ -1434,10 +1395,7 @@ describe("useEpicRouteSynchronization", () => {
       editorEl.focus();
       expect(document.activeElement).toBe(editorEl);
 
-      // A title rename (Notion-style doc-title-follow, or a tab rename) mutates
-      // the canvas, so `useEpicCanvas` hands back a new identity and the focus
-      // effect re-runs with the SAME, still-applied target. It must not yank
-      // focus back up to the tab container and eject the user from edit mode.
+      // It must not yank focus back up to the tab container and eject the user from edit mode.
       testState.canvasTiles = {
         "tile-current": specTile("artifact-current", "tile-current", "Renamed"),
       };
@@ -1659,10 +1617,8 @@ describe("useEpicRouteSynchronization", () => {
       "tile-hosted",
     );
 
-    // Physical pane AND the real selected-tab wrapper `TabGroupView` keeps
-    // mounted around `TileSurfaceSlot`'s bare geometry anchor for a hosted
-    // chat - both carry the SAME instanceId a naive physical-only query would
-    // match first. Its presence must not shadow the hosted fallback.
+    // Physical pane AND the real selected-tab wrapper `TabGroupView` keeps mounted around `TileSurfaceSlot`'s bare geometry anchor for a hosted chat - both carry the SAME instanceId a naive physical-only query would match first.
+    // Its presence must not shadow the hosted fallback.
     const paneEl = document.createElement("div");
     paneEl.setAttribute("data-group-id", "pane-hosted");
     paneEl.setAttribute("data-active", "true");
@@ -1706,9 +1662,7 @@ describe("useEpicRouteSynchronization", () => {
       );
 
       await flushFocusRestore();
-      // Direct signal: focus landed on the hosted record, NOT the real
-      // selected physical wrapper that is also present and would otherwise
-      // be found first by the physical query.
+      // Direct signal: focus landed on the hosted record, NOT the real selected physical wrapper that is also present and would otherwise be found first by the physical query.
       expect(document.activeElement).toBe(hostedRecord);
       expect(document.activeElement).not.toBe(selectedWrapperEl);
     } finally {
@@ -1727,9 +1681,7 @@ describe("useEpicRouteSynchronization", () => {
       "tile-unhosted",
     );
 
-    // No hosted record anywhere - mirrors the switch-off / non-chat-tile
-    // shape, where `findHostedTileElement` always misses and the ORIGINAL
-    // physical lookup must still resolve exactly as it did before F4.
+    // No hosted record anywhere - mirrors the switch-off / non-chat-tile shape, where `findHostedTileElement` always misses and the ORIGINAL physical lookup must still resolve exactly as it did before F4.
     const selectedWrapperEl = document.createElement("div");
     selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-unhosted");
     selectedWrapperEl.setAttribute("data-selected", "true");

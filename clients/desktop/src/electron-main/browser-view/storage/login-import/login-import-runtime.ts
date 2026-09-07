@@ -26,50 +26,18 @@ import { readLinuxSecretServicePassphrase } from "./secret-providers/secret-serv
 /** Snapshot copies of source jars live here, `0700`, swept on every use. */
 const SNAPSHOT_DIRECTORY_NAME = "login-import-snapshots";
 
-/**
- * The jar coordination the IPC layer owns and the import borrows: the one
- * `BrowserJarSerializer` every jar mutation goes through.
- */
 export interface LoginImportJarCoordination {
-  /**
-   * `BrowserJarSerializer.runOnEveryDomain` with the import's own budget -
-   * the whole-jar barrier, whose abort signal the write loop reads between
-   * rows so an import the barrier gave up on stops before queued work runs.
-   */
   readonly serializeJarWrite: <T>(
     action: (signal: AbortSignal) => Promise<T>,
   ) => Promise<T>;
-  /**
-   * The localStorage half of a site clear on the durable jar, plus the
-   * capture coordinator's prune for the site - what the IPC layer's own
-   * site clear does after its cookie half, borrowed so a site the import
-   * writes does not keep the previous account's localStorage. Reads the
-   * barrier's signal between origins.
-   */
   readonly clearSiteLocalStorage: (
     site: string,
     signal: AbortSignal,
   ) => Promise<void>;
-  /**
-   * `BrowserSessionsRegistry.capturePrimaryProfileOnEveryHost`: the jar
-   * pushed to every host, made by the import inside its barrier. Answers the
-   * hosts that acked; never rejects.
-   */
+  /** Answers the hosts that acked; never rejects. */
   readonly pushJarToHosts: () => Promise<number>;
 }
 
-/**
- * How long the import may hold the whole-jar barrier. Far above what a large
- * profile needs (the source read, then thousands of `cookies.set` calls take
- * seconds, plus the settle window) AND the keystore prompt, which is taken
- * inside the barrier like the read - the barrier is held from the user's
- * confirmation on - and can hold the user for a couple of minutes - because
- * expiry is not a
- * soft limit here: the serializer aborts the write and admits the queued jar
- * work, and the import answers `incomplete` for a jar it only partly wrote
- * (the serializer lets the import settle within its grace and hands that
- * answer up, rather than rejecting the caller the moment the timer fires).
- */
 export const LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS = 10 * 60_000;
 
 /** The service wired to Electron, the OS keystores, and the durable jar. */
@@ -111,10 +79,6 @@ export function createLoginImportService(
       });
     },
     suppressDeltas: suppressAllBrowserPrimaryProfileDeltas,
-    // What the change observer does for an ordinary local write, done by
-    // hand because the observer is muted for this one: the applier's
-    // pending marks for these keys first (no insert is coming to spend
-    // them), then the durable ownership release.
     releaseHostOwnedKeys: async (keys) => {
       forgetBrowserPrimaryProfileAppliedKeys(keys);
       await releaseHeadlessOriginCookieKeys(keys);

@@ -1,8 +1,7 @@
 import type { CSSProperties } from "react";
 
-// `@pierre/trees` exposes a parameterized theme through CSS custom
-// properties. These values pass into the library's internal row layout and
-// match the File Tree panel's compact sidebar treatment.
+// `@pierre/trees` exposes a parameterized theme through CSS custom properties.
+// These values pass into the library's internal row layout and match the File Tree panel's compact sidebar treatment.
 export const PIERRE_FILE_TREE_THEME_STYLE = {
   height: "100%",
   "--trees-font-size-override": "var(--text-ui-sm)",
@@ -12,15 +11,7 @@ export const PIERRE_FILE_TREE_THEME_STYLE = {
   "--trees-border-radius-override": "0.375rem",
   "--trees-icon-width-override": "14px",
   "--trees-scrollbar-gutter-override": "0px",
-  // Pierre paints this on the list container, on every row, and on the sticky
-  // overlay - so it must be the surface the tree is actually sitting on, not a
-  // fixed token. The desktop sidebar is `bg-background`, which is why the
-  // fallback is `--background` and desktop renders identically; a host on any
-  // other surface (the mobile switcher sheet is `bg-popover`) declares
-  // `--pierre-tree-surface` and the tree stops painting a slab of the wrong
-  // colour over it. Not `transparent`: the sticky-header overlay and the rows
-  // repainted while scrolling are opaque on purpose, to mask the content
-  // passing underneath them.
+  // Pierre paints this on the list container, on every row, and on the sticky overlay - so it must be the surface the tree is actually sitting on, not a fixed token.
   "--trees-bg-override": "var(--pierre-tree-surface, var(--background))",
   "--trees-fg-override":
     "color-mix(in oklab, var(--foreground) 75%, transparent)",
@@ -44,15 +35,7 @@ export const GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE = {
 } as CSSProperties;
 
 /**
- * Pierre detects middle-truncation by asking whether a hidden measurement
- * container is taller than one line. At fractional browser zoom levels that
- * measurement can exceed `1lh` by a subpixel even when the name fits, which
- * makes the library paint both ellipsis markers over otherwise roomy rows.
- *
- * Keep the workaround at the library boundary: `unsafeCSS` is injected after
- * Pierre's own styles, so this repeats its marker rule with a one-physical-px
- * rounding allowance. A genuinely wrapped name is taller by a full line and
- * still clears the threshold.
+ * At fractional browser zoom levels that measurement can exceed `1lh` by a subpixel even when the name fits, which makes the library paint both ellipsis markers over otherwise roomy rows.
  */
 export const PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS = `
 [data-truncate-marker] {

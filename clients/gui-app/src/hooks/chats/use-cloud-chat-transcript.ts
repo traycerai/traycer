@@ -11,15 +11,7 @@ import {
   type CloudChatTranscriptState,
 } from "@/lib/chats/cloud-chat-transcript-state";
 
-/**
- * Read + payload list + presentation + display, composed once.
- *
- * The composition ORDER is the whole reason this exists rather than four calls
- * at a call site, and the rule it enforces lives in
- * `composeCloudChatTranscriptState` as a pure function so it can be asserted
- * without a renderer. This hook is only the wiring: two queries in, one state
- * out.
- */
+/** The composition ORDER is the whole reason this exists rather than four calls at a call site, and the rule it enforces lives in `composeCloudChatTranscriptState` as a pure function so it can be asserted without a renderer. */
 export function useCloudChatTranscript(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly identity: CloudChatIdentity | null;

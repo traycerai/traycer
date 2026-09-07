@@ -1,11 +1,5 @@
 /**
- * Schema + version-negotiation tests for the lifecycle protocol minors:
- * `terminal.subscribe@1.6` viewer intent, `WORKTREE_BUSY` holders,
- * `worktree.delete@1.1` stopOwners, `worktree.deleteByPath@1.1`, and the
- * submit-time workspace intent on `agent.tui.promptSubmitted@1.1`.
- *
- * Chat send already carries `worktreeIntent` (same rebind-mutation shape);
- * that field is reused, not reminted.
+ * Schema + version-negotiation tests for the lifecycle protocol minors: `terminal.subscribe@1.6` viewer intent, `WORKTREE_BUSY` holders, `worktree.delete@1.1` stopOwners, `worktree.deleteByPath@1.1`, and the submit-time.
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";

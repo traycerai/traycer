@@ -1,10 +1,8 @@
 import type { SVGProps } from "react";
 import { cn } from "@/lib/utils";
 
-// Custom diff-view glyphs modelled on diffshub's split control: a rounded square
-// halved by a divider, with a deletion mark (-) on one side and an addition mark
-// (+) on the other. Lucide has no +/- split icon, so these are hand-rolled to
-// match lucide's API (currentColor fill, sizing via className).
+// Custom diff-view glyphs modelled on diffshub's split control: a rounded square halved by a divider, with a deletion mark (-) on one side and an addition mark (+) on the other.
+// Lucide has no +/- split icon, so these are hand-rolled to match lucide's API (currentColor fill, sizing via className).
 
 // Split view: vertical divider, "-" left cell, "+" right cell.
 export function DiffSplitIcon(props: SVGProps<SVGSVGElement>) {

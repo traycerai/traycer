@@ -649,7 +649,6 @@ describe("<QueuedMessagePanel />", () => {
     expect(screen.getByText("Agent response")).not.toBeNull();
 
     const agentRow = screen.getAllByTestId("queued-message-row")[1];
-    // The received row carries no owner actions...
     expect(
       within(agentRow).queryByRole("button", { name: "Edit queued message" }),
     ).toBeNull();
@@ -794,9 +793,8 @@ describe("<QueuedMessagePanel />", () => {
       onReorder: null,
     });
 
-    // The handover window: the digest is being delivered into the running
-    // turn. The label is what tells the user why the controls went away -
-    // without it the row locks silently.
+    // The handover window: the digest is being delivered into the running turn.
+    // The label is what tells the user why the controls went away - without it the row locks silently.
     const managedRow = screen.getByTestId("queued-message-row");
     expect(within(managedRow).getByText("Delivering")).not.toBeNull();
     expect(managedRow.getAttribute("aria-busy")).toBe("true");
@@ -805,9 +803,7 @@ describe("<QueuedMessagePanel />", () => {
     ).toBeNull();
   });
 
-  // The next two pin `readOnly` and `canAct` one at a time: the cancel action
-  // reads them independently, so a single test setting both to their hiding
-  // value would still pass with either check regressed.
+  // The next two pin `readOnly` and `canAct` one at a time: the cancel action reads them independently, so a single test setting both to their hiding value would still pass with either check regressed.
   it("hides the managed-command cancel action in read-only mode", () => {
     renderPanel({
       queue: queueState([

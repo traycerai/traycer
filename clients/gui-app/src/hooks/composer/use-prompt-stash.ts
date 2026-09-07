@@ -40,18 +40,9 @@ interface UsePromptStashArgs {
   readonly disabled: boolean;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly readHashImage: PromptStashImageResolver;
-  /**
-   * Reads content out of, and conditionally clears, the canonical owner of
-   * this surface (chat draft store / landing draft runtime / new-
-   * conversation modal draft) - not the live editor. `stashCurrentAsync`
-   * captures a token before the durable save and only clears when the owner
-   * still matches it afterward, so edits made during the save are kept.
-   */
+  /** Reads content out of, and conditionally clears, the canonical owner of this surface (chat draft store / landing draft runtime / new- conversation modal draft) - not the live editor. */
   readonly source: PromptStashSourceAdapter;
-  /**
-   * Exact-destination restore: capture identity before materialization, then
-   * only insert/consume when that same destination still accepts the write.
-   */
+  /** Exact-destination restore: capture identity before materialization, then only insert/consume when that same destination still accepts the write. */
   readonly destination: PromptStashDestinationAdapter;
 }
 
@@ -84,16 +75,7 @@ export function usePromptStash(
   const [menuOpen, setMenuOpenState] = useState(false);
   const stashInFlightRef = useRef(false);
   const busyEntryRef = useRef<string | null>(null);
-  // Kept fresh via a LAYOUT effect, not a passive `useEffect`: layout effects
-  // run synchronously in the same commit, before paint and before control
-  // returns to the browser event loop, whereas passive effects are scheduled
-  // and can be deferred past a promise continuation (e.g. `await save(...)`
-  // resolving via IndexedDB) that lands in the same window. (Writing directly
-  // during render - the usual "latest ref" pattern - is disallowed here by
-  // `react-hooks/refs`, hence the layout effect instead.) This guarantees the
-  // post-save `clearIfUnchanged` and post-materialize `importAndInsert` calls
-  // always resolve the LATEST adapters - reflecting the current identity -
-  // rather than a stale one closed over when the async work started.
+  // Layout effect, not `useEffect`: a passive effect can defer past an IndexedDB continuation and leave post-save adapters stale. Direct render writes are banned by `react-hooks/refs`.
   const sourceRef = useRef(source);
   const destinationRef = useRef(destination);
   useLayoutEffect(() => {
@@ -102,29 +84,7 @@ export function usePromptStash(
   useLayoutEffect(() => {
     destinationRef.current = destination;
   }, [destination]);
-  // Hook-instance lifetime guard for the stash capture path. A stash save is
-  // fire-and-forget from the caller's perspective (`stashCurrent` doesn't
-  // await it), so it can still be in flight when this exact hook instance
-  // unmounts - composer unmount/reopen (chat), surface detach/reattach
-  // (landing), or close/reopen (modal) all mint a NEW hook instance for what
-  // may be the same identity/revision pair. `sourceRef.current` stops
-  // tracking `source` the moment this happens (the layout effect above no
-  // longer runs), so a naive post-save `clearIfUnchanged` would run against
-  // whatever adapter/closure was current right before unmount - which can
-  // legitimately match a newer occupant's identity+revision (ABA) and erase
-  // its content. Retirement must be a hard gate: the durable save is kept,
-  // but this instance never touches a source or reports feedback again.
-  //
-  // LAYOUT effect, not passive: a passive cleanup can still be pending when
-  // the `await save(...)` continuation (a promise microtask) resumes in the
-  // same window, the same hazard `sourceRef`/`destinationRef` above are
-  // guarded against - a passive-effect gate would leave a real window where
-  // the retiring instance's own continuation reads `retiredRef.current` as
-  // still `false`. The setup body resets the ref to `false`, not just the
-  // initial `useRef` value: React 18 Strict Mode double-invokes mount effects
-  // (setup, cleanup, setup) for the same still-mounted instance to surface
-  // exactly this class of bug - without the reset, that simulated
-  // cleanup would leave every real, live instance permanently retired.
+  // Layout effect: retire this instance on unmount so a fire-and-forget save cannot ABA-clear a newer occupant's draft. Reset retiredRef on setup for Strict Mode.
   const retiredRef = useRef(false);
   useLayoutEffect(() => {
     retiredRef.current = false;
@@ -168,19 +128,10 @@ export function usePromptStash(
         content: snapshot.content,
         readHashImage,
       });
-      // The repository commits the manifest and every referenced image in one
-      // IndexedDB transaction before any source is touched. Clearing before
-      // this await would turn a quota or byte-resolution failure into prompt
-      // loss; clearing unconditionally after it would erase edits made while
-      // this await was in flight, so the source only clears if it still
-      // matches the token captured before the save.
+      // Clearing before this await would turn a quota or byte-resolution failure into prompt loss; clearing unconditionally after it would erase edits made while this await was in flight, so the source only clears if it still matches the token captured before the save.
       await save(entrySnapshot);
       if (retiredRef.current) {
-        // This hook instance unmounted while the save was in flight. The
-        // durable stash is already committed; whatever now occupies this
-        // identity/revision belongs to a different (possibly reopened)
-        // instance, so never clear it and never surface feedback for a
-        // composer that is gone.
+        // The durable stash is already committed; whatever now occupies this identity/revision belongs to a different (possibly reopened) instance, so never clear it and never surface feedback for a composer that is gone.
         return;
       }
       const cleared = sourceRef.current.clearIfUnchanged(snapshot.token);
@@ -219,13 +170,7 @@ export function usePromptStash(
       busyEntryRef.current = entry.id;
       setBusyEntryId(entry.id);
       try {
-        // Materialize through whichever adapter generation is current right
-        // now - a destination-owned `materialize` (landing) has no
-        // freshness requirement of its own, since `importAndInsert` below is
-        // always invoked through `destinationRef.current` read AFTER this
-        // await, picking up any switch/remount that happened during it. A
-        // missing blob leaves both the source stash and current composer
-        // untouched (propagates to the catch below).
+        // Materialize through whichever adapter generation is current right now - a destination-owned `materialize` (landing) has no freshness requirement of its own, since `importAndInsert` below is always invoked through `destinationRef.current` read AFTER this await, picking up any switch/remount that happened during it.
         const materializer = destinationRef.current.materialize;
         const materialized: PromptStashMaterializedContent | null =
           materializer !== undefined
@@ -238,10 +183,8 @@ export function usePromptStash(
           });
           return false;
         }
-        // `release` must run exactly once no matter how insertion finishes -
-        // accepted, stale, or thrown. A throw from `importAndInsert`
-        // would otherwise jump straight to the catch below and skip it,
-        // leaking a still-held reservation (e.g. landing's measured budget).
+        // `release` must run exactly once no matter how insertion finishes - accepted, stale, or thrown.
+        // A throw from `importAndInsert` would otherwise jump straight to the catch below and skip it, leaking a still-held reservation (e.g.
         let result: PromptStashDestinationResult;
         try {
           result = await destinationRef.current.importAndInsert({
@@ -268,11 +211,7 @@ export function usePromptStash(
         }
         return true;
       } catch (error: unknown) {
-        // A blob that's missing or fails byte-level validation makes this
-        // row genuinely unrestorable, not just a one-off failure - flip it
-        // to the unavailable state now instead of waiting for the next
-        // repository load, so retrying Insert doesn't repeat the same
-        // failed read.
+        // A blob that's missing or fails byte-level validation makes this row genuinely unrestorable, not just a one-off failure - flip it to the unavailable state now instead of waiting for the next repository load, so retrying Insert doesn't repeat the same failed read.
         if (
           error instanceof PromptStashMissingBlobError ||
           error instanceof PromptStashCorruptBlobError
@@ -336,14 +275,7 @@ export function usePromptStash(
   };
 }
 
-/**
- * Paired with the "Could not stash this prompt" toast title, so the copy
- * here only needs the reason plus confirmation the composer was left alone
- * - never repeated with the title. Every branch fires strictly before
- * `save` is attempted (capacity is checked inside the save transaction;
- * compression/resolution failures throw before it even opens), so the
- * composer really is untouched in every case.
- */
+/** never repeated with the title. */
 function stashFailureDescription(error: unknown): string {
   if (error instanceof PromptStashCapacityExceededError) {
     return "The prompt stash is full. Delete an older stashed prompt to free space; this prompt was left in the composer.";
@@ -357,10 +289,7 @@ function stashFailureDescription(error: unknown): string {
   return "The composer was left unchanged because durable storage did not complete.";
 }
 
-/**
- * Paired with the "Could not restore this prompt" toast title. Every branch
- * confirms the stash entry itself was preserved, not consumed.
- */
+/** Paired with the "Could not restore this prompt" toast title. */
 function restoreFailureDescription(error: unknown): string {
   if (error instanceof PromptStashCorruptBlobError) {
     return "An attached image is damaged. The stash was kept intact.";

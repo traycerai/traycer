@@ -1,10 +1,7 @@
 import { vi } from "vitest";
 
 /**
- * Import-free half of the shared idb-keyval fixture: `vi.mock("idb-keyval")`
- * factories dynamic-import THIS module, so it must not (transitively) import
- * `idb-keyval` itself - `browser-annotation-idb-fixtures.ts` does, via the
- * landing-image store, which is why the two halves are separate files.
+ * Import-free half of the shared idb-keyval fixture: `vi.mock("idb-keyval")` factories dynamic-import THIS module, so it must not (transitively) import `idb-keyval` itself - `browser-annotation-idb-fixtures.ts` does, via the landing-image store, which is why.
  */
 export function idbStringKey(key: IDBValidKey): string {
   if (typeof key !== "string") {

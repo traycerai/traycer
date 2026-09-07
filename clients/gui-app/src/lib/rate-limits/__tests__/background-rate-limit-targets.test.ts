@@ -313,9 +313,7 @@ describe("selectBackgroundRateLimitTargets", () => {
       NOW,
       BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
     );
-    // A never-read profile (`usageUpdatedAt: null`) sorts as the oldest
-    // possible reading (`Number.NEGATIVE_INFINITY`), ahead of any timestamped
-    // stale reading.
+    // A never-read profile (`usageUpdatedAt: null`) sorts as the oldest possible reading (`Number.NEGATIVE_INFINITY`), ahead of any timestamped stale reading.
     expect(targets.map((t) => t.profileId)).toEqual([
       "never-read",
       "oldest-stale",

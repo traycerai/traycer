@@ -21,13 +21,7 @@ import { __resetRateLimitQueueForTests } from "@/lib/rate-limits/ephemeral-fetch
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
 import { rateLimitProviderState } from "./profile-usage-fixtures";
 
-// `useProfileUsageComparison` builds its target-host scope through
-// `useRunTargetHost`, which is separately covered by
-// `use-run-target-host.test.tsx` (default vs tab vs unreachable-host
-// resolution). Here we mock it to hand back scopes built from two real
-// `HostClient`s over independently-spyable `MockHostMessenger`s, so these
-// tests can assert exactly which host's transport received a request without
-// standing up real WebSocket connections.
+// Here we mock it to hand back scopes built from two real `HostClient`s over independently-spyable `MockHostMessenger`s, so these tests can assert exactly which host's transport received a request without standing up real WebSocket connections.
 const scopesRef = vi.hoisted(() => ({
   byHostId: new Map<string | null, RunTargetHost>(),
 }));

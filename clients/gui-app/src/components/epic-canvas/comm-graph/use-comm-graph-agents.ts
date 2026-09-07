@@ -1,15 +1,5 @@
 /**
- * Canvas node set for the comm-graph tile: the epic's agents, projected from
- * the per-epic Y.Doc (GUI chats + terminal agents). Agents are the ONLY node
- * class: the log records who talked to whom, so anything else on the canvas
- * would be a node with no edges to justify it.
- *
- * Every value here comes from EPIC DATA only. In particular there is no
- * fallback to the app's active host for a legacy chat that predates
- * `Chat.hostId`: that is reactive global state, and reading it would make the
- * node's host - and therefore the subscription set, its events and its cursor -
- * change whenever the user switches hosts anywhere else in the app. Legacy
- * chats stay unattributed and render as "host unknown".
+ * Agents are the ONLY node class: the log records who talked to whom, so anything else on the canvas would be a node with no edges to justify it.
  */
 import { useMemo } from "react";
 import {
@@ -21,11 +11,7 @@ import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 export interface CommGraphAgents {
   readonly nodes: ReadonlyArray<CommGraphAgentNode>;
   /**
-   * Distinct hosts the agents live on - one `epic.communicationGraph.subscribe`
-   * each. Sorted so the array identity only changes when the SET changes,
-   * keeping the subscription effect from churning on unrelated projection
-   * updates (titles, `updatedAt`, ...). Agents with an unresolved host
-   * contribute nothing here - there is no host to subscribe to.
+   * Sorted so the array identity only changes when the SET changes, keeping the subscription effect from churning on unrelated projection updates (titles, `updatedAt`, ...).
    */
   readonly hostIds: ReadonlyArray<string>;
   readonly agentIds: ReadonlySet<string>;
@@ -65,11 +51,7 @@ export function useCommGraphAgents(): CommGraphAgents {
     return [...chatNodes, ...agentNodes];
   }, [chats, terminalAgents]);
 
-  // Derived through a string key so the array identity is stable across
-  // projection churn: the subscription effect keys on `hostIds`, and a fresh
-  // array on every title / `updatedAt` update would reopen every host socket.
-  // JSON round-trip rather than a delimiter join: host ids are opaque, so no
-  // separator is collision-safe by contract.
+  // JSON round-trip rather than a delimiter join: host ids are opaque, so no separator is collision-safe by contract.
   const hostKey = useMemo(
     () =>
       JSON.stringify(

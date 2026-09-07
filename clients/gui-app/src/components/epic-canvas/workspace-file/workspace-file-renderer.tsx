@@ -43,17 +43,12 @@ interface WorkspaceFileSourceFindTargetWithNonce extends WorkspaceFileSourceFind
   readonly nonce: number;
 }
 
-// `File` virtualizes rows, so a target line's row may not exist yet right
-// after mount/scroll. Retry across a few frames to let virtualization settle,
-// then give up rather than polling forever - matches the retry bound used for
-// the comparable "wait for a virtualized DOM node after a jump" concern in
-// `use-chat-find-controller.ts` (`FIND_REVEAL_ANCHOR_RETRY_LIMIT`).
+// Retry across a few frames to let virtualization settle, then give up rather than polling forever - matches the retry bound used for the comparable "wait for a virtualized DOM node after a jump" concern in `use-chat-find-controller.ts` (`FIND_REVEAL_ANCHOR_RETRY_LIMIT`).
 const WORKSPACE_FILE_REVEAL_RETRY_LIMIT = 3;
 
 /**
- * The shared Diffs-backed source surface for both reading and editing a
- * workspace file. Canvas find/reveal is projected into Diffs' open shadow DOM
- * so adopting the library renderer does not regress tile navigation.
+ * The shared Diffs-backed source surface for both reading and editing a workspace file.
+ * Canvas find/reveal is projected into Diffs' open shadow DOM so adopting the library renderer does not regress tile navigation.
  */
 export function WorkspaceFileRenderer(props: {
   readonly content: string;
@@ -61,21 +56,14 @@ export function WorkspaceFileRenderer(props: {
   readonly language: string;
   readonly editing: boolean;
   readonly editAdapter: DiffClickToEditAdapter;
-  /**
-   * Wrap long lines instead of scrolling them. Unwrapped, Diffs gives its code
-   * area its own horizontal scroll box (`overflow-x` on `[data-code]`, with the
-   * gutter stuck to its left edge), which sits inside the tile's vertical
-   * scroller; wrapped, that box does not exist and the tile scrolls in one axis.
-   */
+  /** Wrap long lines instead of scrolling them. */
   readonly wordWrap: boolean;
   readonly revealLine: number | null;
   readonly revealNonce: number | null;
   readonly findTarget: WorkspaceFileSourceFindTargetWithNonce | null;
   readonly onRevealConsumed: () => void;
   /**
-   * Stable file identity for cross-surface find/navigation and exact-host
-   * resolution (parity with `DiffContentFrame`/`DiffBundleFileSectionFrame`)
-   * - `null` while this tab's file identity isn't resolved yet.
+   * Stable file identity for cross-surface find/navigation and exact-host resolution (parity with `DiffContentFrame`/`DiffBundleFileSectionFrame`) - `null` while this tab's file identity isn't resolved yet.
    */
   readonly fileIdentity: DiffContentFrameFileIdentity | null;
 }): ReactNode {
@@ -94,39 +82,15 @@ export function WorkspaceFileRenderer(props: {
   const { resolvedTheme } = useResolvedTheme();
   const themeName = resolveDiffThemeName(resolvedTheme);
   const [container, setContainer] = useState<HTMLElement | null>(null);
-  // `cacheKey` must stay unique-and-stable for as long as `Editor`'s
-  // `persistState` (always on - see `editorOptions` in
-  // `use-diff-click-to-edit.ts`) needs to recognize "this is the same
-  // session" - but it must NOT stay stable forever, because
-  // `@pierre/diffs`' line-count cache only compares `contents` for an
-  // UNKEYED file (`FileRenderer.isLineCacheForFile`); a cacheKey that's
-  // stable across editing sessions tells it "same key, trust the cache"
-  // regardless of content, so a render whose content shrank back (e.g. a
-  // discarded draft reverting an empty file after typing, once blurred)
-  // can leave the cached line count higher than what the freshly-rendered
-  // code actually has, and `processFileResult` throws reading a line that
-  // no longer exists. Bumping a generation on every `editing` transition -
-  // the render-phase "storing information from previous renders" pattern
-  // (https://react.dev/reference/react/useState#storing-information-from-previous-renders),
-  // not an effect, so the very next render already carries the new key -
-  // keeps the key stable for the whole of one attached session (persistState
-  // still works) while guaranteeing the key differs the moment that session
-  // ends, so a post-session render can never hit the stale cache above.
+  // `cacheKey` must stay unique-and-stable for as long as `Editor`'s `persistState` (always on - see `editorOptions` in `use-diff-click-to-edit.ts`) needs to recognize "this is the same session" - but it must NOT stay stable forever, because `@pierre/diffs`' line-count cache only compares `contents` for an UNKEYED file (`FileRenderer.isLineCacheForFile`); a cacheKey that's stable across editing sessions tells it "same key, trust the cache" regardless of content, so a render whose content shrank back (e.g. a discarded draft reverting an empty file after typing, once blurred) can leave the cached line count higher than what the freshly-rendered code actually has, and `processFileResult` throws reading a line that no longer exists.
+  // Bumping a generation on every `editing` transition - the render-phase "storing information from previous renders" pattern (https://react.dev/reference/react/useState#storing-information-from-previous-renders), not an effect, so the very next render already carries the new key - keeps the key stable for the whole of one attached session (persistState still works) while guaranteeing the key differs the moment that session ends, so a post-session render can never hit the stale cache above.
   const [wasEditing, setWasEditing] = useState(editing);
   const [cacheKeyGeneration, setCacheKeyGeneration] = useState(0);
   if (wasEditing !== editing) {
     setWasEditing(editing);
     setCacheKeyGeneration((generation) => generation + 1);
   }
-  // Only an attached editing session needs a key at all (`persistState`'s
-  // own requirement, above) - a read-only render supplies none, so Diffs
-  // falls back to its own identity/content comparison
-  // (`lineCache.file === file && lineCache.sourceContents === file.contents`)
-  // and rebuilds the line cache on every real content change (e.g. an
-  // external disk edit picked up by a reactivation refetch, which changes
-  // `content` without ever flipping `editing`). A stable explicit key here
-  // would keep telling `isLineCacheForFile` to trust a cache the content
-  // comparison would have invalidated.
+  // Only an attached editing session needs a key at all (`persistState`'s own requirement, above) - a read-only render supplies none, so Diffs falls back to its own identity/content comparison (`lineCache.file === file && lineCache.sourceContents === file.contents`) and rebuilds the line cache on every real content change (e.g. an external disk edit picked up by a reactivation refetch, which changes `content` without ever flipping `editing`).
   const file = useMemo<FileContents>(
     () => ({
       name: fileName,
@@ -241,10 +205,7 @@ export function WorkspaceFileRenderer(props: {
     };
   }, [container, content, findTarget]);
 
-  // Zero-line content has no clickable line/token, in read mode or while an
-  // activation is still attaching - keep the affordance up until
-  // `editAdapter.attached` confirms the real editor took over, not merely
-  // until `editing` flips (which happens before the editor exists).
+  // Zero-line content has no clickable line/token, in read mode or while an activation is still attaching - keep the affordance up until `editAdapter.attached` confirms the real editor took over, not merely until `editing` flips (which happens before the editor exists).
   const showEmptyOriginAffordance = content === "" && !editAdapter.attached;
 
   return (

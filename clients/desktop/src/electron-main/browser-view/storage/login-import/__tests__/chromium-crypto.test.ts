@@ -9,14 +9,6 @@ import {
   type ChromiumKeyMaterial,
 } from "../chromium-crypto";
 
-/**
- * Known-answer vectors built with the exact construction the decryptor
- * expects: `v10`/`v11` CBC (AES-128-CBC, PKCS#7, 16-space IV, PBKDF2-SHA1 over
- * "saltysalt") and the Windows `v10` GCM shell (AES-256-GCM, 12-byte nonce at
- * bytes 3..15, 16-byte tag at the end). The 3-byte version prefix
- * (`decryptChromiumValue` always strips it) is included in every fixture so
- * the vectors read the same way a real `encrypted_value` column would.
- */
 
 const CBC_IV = Buffer.alloc(16, 0x20);
 const VERSION_PREFIX = Buffer.from("v10", "ascii");
@@ -164,10 +156,8 @@ describe("decryptChromiumValue - empty-passphrase fallback", () => {
       Buffer.from("empty-passphrase-value", "utf8"),
       emptyKey,
     );
-    // The material is built from the REAL passphrase - as the caller would
-    // hand it in from the keychain - not the empty string. Recovery has to
-    // come from chromiumCbcKeyMaterial's own second key, not from the caller
-    // knowing to retry.
+    // The material is built from the REAL passphrase - as the caller would hand it in from the keychain - not the empty string.
+    // Recovery has to come from chromiumCbcKeyMaterial's own second key, not from the caller knowing to retry.
     const material = chromiumCbcKeyMaterial(PASSPHRASE, iterations);
 
     const result = decryptChromiumValue(

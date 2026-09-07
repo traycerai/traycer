@@ -1,10 +1,6 @@
 import { createContext } from "react";
 
-/**
- * Present-tense "thinking" verbs shown while a turn is live (Claude-CLI style),
- * a playful stand-in for a static "Working…". Companion to the past-tense
- * `ELAPSED_VERBS` the completed-turn footer uses.
- */
+/** Present-tense "thinking" verbs shown while a turn is live (Claude-CLI style), a playful stand-in for a static "Working…". Companion to the past-tense `ELAPSED_VERBS` the completed-turn footer uses. */
 const WORKING_VERBS = [
   "Cogitating",
   "Pondering",
@@ -38,14 +34,5 @@ export function pickWorkingVerb(seed: string): string {
   return WORKING_VERBS[index] ?? WORKING_VERBS[0];
 }
 
-/**
- * The active run's working verb, resolved once per turn by the chat tile and
- * read by the in-progress indicator. Seeding the verb here - rather than off
- * the indicator row's `messageId` - keeps the word fixed for the whole turn:
- * the pre-turn placeholder row swaps its id from `assistant:live` to
- * `assistant:<turnId>` when the host exposes the turn (~seconds in), which
- * would otherwise reshuffle a `messageId`-seeded verb mid-turn. `null` outside
- * a chat (e.g. isolated component tests) - the indicator then falls back to a
- * `messageId` seed.
- */
+/** Seeding the verb here - rather than off the indicator row's `messageId` - keeps the word fixed for the whole turn: the pre-turn placeholder row swaps its id from `assistant:live` to `assistant:<turnId>` when the host exposes the turn (~seconds in), which would otherwise reshuffle a `messageId`-seeded verb mid-turn. */
 export const WorkingVerbContext = createContext<string | null>(null);

@@ -57,9 +57,8 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     });
     expect(toast.error).not.toHaveBeenCalled();
 
-    // ANTI-VACUITY ANCHOR for the refusal cases below: this spy DOES fire
-    // for a real success, so a broken/uninstalled spy cannot make a refusal
-    // test's "not called" assertion pass for free.
+    // Anti-vacuity anchor for the refusal cases below: this spy does fire for a real success, so a
+    // broken/uninstalled spy cannot make a refusal test's "not called" assertion pass for free.
   });
 
   it("ok:true reports host_kind: remote for a non-local option", async () => {
@@ -138,14 +137,7 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
   });
 
   it("reason persist-failed: no analytics, toasts the retry-safe copy WITHOUT naming the host (option-independent)", async () => {
-    // Nothing moved and no event fired, so the same Activate is safe to
-    // retry verbatim - which is why the copy says "try again", not "it may
-    // or may not have applied". And it must NOT name the host, same family
-    // as `not-attached`: this is a failure of this window's own machinery
-    // (the preference could not be made durable), not a fact about the host,
-    // so naming it would misattribute the fault to a machine that is fine.
-    // Asserting the literal string (not just "no host name substring")
-    // catches a future edit that starts interpolating the label in here.
+    // And it must not name the host, same family as `not-attached`.
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: false, reason: "persist-failed" }),

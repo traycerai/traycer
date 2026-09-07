@@ -1,28 +1,12 @@
 /**
- * What each character on the floor is DOING, folded from the same three
- * sources the graph mode already reads: the event prefix as of the time
- * cursor, the live activity tiers, and whatever the app considers to need a
- * person.
- *
- * Pure, and derived from a PREFIX - so scrubbing the cursor backwards recovers
- * exactly the statuses that were true at that moment, with no "now" leaking in.
+ * What each character on the floor is DOING, folded from the same three sources the graph mode already reads: the event prefix as of the time cursor, the live activity tiers, and whatever the app considers to need a person.
  */
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import { openCommGraphRequests } from "@/lib/comm-graph/comm-graph-model";
 import type { OfficeAgentStatus } from "@/lib/comm-graph/office/office-types";
 import type { AgentActivityTier } from "@/lib/agent-activity";
 
-/**
- * Whether a record is archived AS OF a cursor.
- *
- * `archivedAt` is a moment on the same timeline the cursor sits on, so a
- * record archived AFTER the cursor is still at its desk in that view. The
- * present-day boolean cannot answer this: it is true from the moment the
- * archive happens, for every point in history the person scrubs back to.
- *
- * Shared with the scene rather than restated there, so the desk a floor draws
- * and the status the floor reads cannot disagree about the same agent.
- */
+/** Whether a record is archived AS OF a cursor. */
 export function officeArchivedAsOf(
   archivedAt: number | null,
   cursorMs: number | null,
@@ -49,12 +33,7 @@ export interface OfficeAgentStatusInput {
 }
 
 /**
- * How many unanswered requests are sitting on each RECEIVER's desk, which is
- * the pile of envelopes the office draws there.
- *
- * The mirror image of `awaitingSenderIds`: the same open-request set read from
- * the other end. Only receivers on the floor are counted - a pile belongs to a
- * desk, and an id this epic does not project has none.
+ * How many unanswered requests are sitting on each RECEIVER's desk, which is the pile of envelopes the office draws there.
  */
 export function officeOpenRequestCounts(
   events: ReadonlyArray<CommGraphEvent>,
@@ -70,13 +49,7 @@ export function officeOpenRequestCounts(
   return counts;
 }
 
-/**
- * Agents that are the SENDER of a request still waiting on its reply.
- *
- * The receiver is deliberately not required to be on the floor: waiting is a
- * fact about the sender alone, and a half-edge to an agent this epic does not
- * project does not make the wait less real.
- */
+/** Agents that are the SENDER of a request still waiting on its reply. */
 function awaitingSenderIds(
   events: ReadonlyArray<CommGraphEvent>,
   visibleAgentIds: ReadonlySet<string>,
@@ -99,21 +72,7 @@ interface OfficeStatusSources {
   readonly failureAgentIds: ReadonlySet<string>;
 }
 
-/**
- * Precedence, highest first: `failure`, `attention`, `awaiting`, `working`,
- * `archived`, `background`, `idle`.
- *
- * `failure` tops the list because it is the one reading that says the agent
- * cannot continue on its own. Everything below it describes work in some state
- * of progress; a crashed screen says there is none.
- *
- * `archived` sits in the MIDDLE rather than at the bottom on purpose. It
- * outranks `background` and `idle` because a ghosted desk is the more
- * informative reading of a quiet archived agent. It loses to the ones above it
- * because those describe the record actually saying something is happening -
- * an archived agent should not be mid-turn, but if the data says it is, the
- * floor shows what the data says instead of hiding it behind the archive flag.
- */
+/** Precedence, highest first: `failure`, `attention`, `awaiting`, `working`, `archived`, `background`, `idle`. */
 function statusFor(
   agent: { readonly id: string; readonly archivedAt: number | null },
   sources: OfficeStatusSources,
@@ -132,16 +91,7 @@ function statusFor(
 const NO_TIERS: ReadonlyMap<string, AgentActivityTier> = new Map();
 const NO_AGENT_IDS: ReadonlySet<string> = new Set();
 
-/**
- * Statuses for the agents that exist as of the cursor; nobody else has one.
- *
- * The activity tiers, the attention set and the failure set are LIVE-ONLY
- * sources: they describe this moment, and nothing records what they said at
- * any earlier one. On a historical cursor they are left out entirely rather
- * than applied to the past, or a crash that happened this morning would be
- * painted on every frame of last week's replay. What survives a historical
- * cursor is what the event prefix and the archive moment can answer.
- */
+/** Statuses for the agents that exist as of the cursor; nobody else has one. */
 export function officeAgentStatuses(
   args: OfficeAgentStatusInput,
 ): ReadonlyMap<string, OfficeAgentStatus> {

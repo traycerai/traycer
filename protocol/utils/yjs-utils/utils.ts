@@ -25,9 +25,7 @@ export function clearXmlFragment(fragment: Y.XmlFragment): void {
   }
 }
 
-/** Recursively extract a plain typed JS object from a TypedYMap.
- *  Inverse of createTypedMap: Y.Map → plain object, Y.Array → plain array.
- *  Y.XmlFragment / Y.Text pass through as live instances (matches schema types). */
+/** Recursively extract a plain typed JS object from a TypedYMap. */
 export function toObject<S>(map: Readonly<TypedYMap<S>>): S {
   return fromYjsValue(map) as S;
 }

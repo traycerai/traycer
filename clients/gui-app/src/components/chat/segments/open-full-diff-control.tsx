@@ -7,23 +7,7 @@ import {
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-/**
- * Floating "open full diff" affordance for the artifact diff viewer. Opens the
- * merged diff in a canvas tab, mirroring a `file_change` path-click: single
- * click = a non-sticky preview tab (replaced by the next preview), double click
- * = a pinned tab.
- *
- * Positioning: it is rendered INSIDE the card / row's sticky header and pinned
- * to that header's bottom (`top-full`), so it floats at the top-right of the
- * diff just BELOW the header and stays there while a large diff scrolls - both
- * the header and this button pin together, the button always under the header,
- * never overlapping it (no header-height measurement needed).
- *
- * Rendered as a `role="button"` span (not a `<button>`) because the surrounding
- * header is already a `<button>` / CollapsibleTrigger; nesting buttons is
- * invalid HTML. `stopPropagation` keeps clicks off that header trigger. Renders
- * nothing when no chat diff target is in context (isolated render).
- */
+/** Positioning: it is rendered INSIDE the card / row's sticky header and pinned to that header's bottom (`top-full`), so it floats at the top-right of the diff just BELOW the header and stays there while a large diff scrolls - both the header and this button pin together, the button always under the header, never overlapping it (no header-height measurement needed). */
 export function OpenFullDiffControl(props: {
   readonly filePath: string;
   readonly beforeHash: string | null;
@@ -71,9 +55,8 @@ export function OpenFullDiffControl(props: {
         }}
         className={cn(
           "absolute top-full right-2 z-30 mt-2 flex size-7 items-center justify-center",
-          // A solid surface so the button reads clearly over diff rows. `--muted`
-          // is the distinct neutral (unlike `--popover`/`--card`, which equal
-          // `--background` in most themes and so blend into the diff base rows).
+          // A solid surface so the button reads clearly over diff rows.
+          // `--muted` is the distinct neutral (unlike `--popover`/`--card`, which equal `--background` in most themes and so blend into the diff base rows).
           "cursor-pointer rounded-md border border-border bg-muted text-muted-foreground shadow-md",
           "transition-colors hover:bg-accent hover:text-foreground",
           "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",

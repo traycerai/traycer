@@ -74,13 +74,8 @@ import { useProviderNativeScope } from "./use-provider-native-scope";
 
 const EMPTY_MCP_SERVERS: readonly ProviderMcpServer[] = [];
 
-/**
- * The one definition of "this server's auth has not settled yet". Both the
- * prune below and the pending-entry sweep effect decide settledness from the
- * same list, so they have to agree by construction — two copies of the status
- * set would silently diverge the moment a new pending-ish status appears.
- * A server missing from the list has settled by disappearing.
- */
+/** Both the prune below and the pending-entry sweep effect decide settledness from the same list, so they have
+ * to agree by construction. */
 function isServerAuthPending(server: ProviderMcpServer | undefined): boolean {
   return (
     server !== undefined &&
@@ -88,11 +83,8 @@ function isServerAuthPending(server: ProviderMcpServer | undefined): boolean {
   );
 }
 
-/**
- * Drop names that have settled (gone / not connecting|needs_auth).
- * Returns the same `awaiting` reference when nothing changed so render-time
- * state adjustment can compare by identity.
- */
+/** Returns the same `awaiting` reference when nothing changed so render-time state adjustment can compare by
+ * identity. */
 function pruneAuthAwaiting(
   awaiting: ReadonlySet<string>,
   servers: readonly ProviderMcpServer[],
@@ -139,14 +131,7 @@ function resumeOauthPollingInputsEqual(
   );
 }
 
-/**
- * Resumes OAuth polling after a settings navigation, from the pending-auth
- * store. Adjusted during render (guarded by comparing against the
- * last-applied inputs) rather than in an effect - `pendingAuthEntries` is
- * already reactive via the Zustand selector hook, so no effect is needed to
- * detect changes; see `useResetFormOnReopen` in provider-mcp-add-dialog.tsx
- * for the same pattern.
- */
+/** Resumes OAuth polling after a settings navigation, from the pending-auth store. */
 function useResumeOauthPolling(
   inputs: ResumeOauthPollingInputs,
   setAuthInstruction: (instruction: string) => void,
@@ -196,11 +181,8 @@ function useResumeOauthPolling(
   });
 }
 
-/**
- * Action affordances for the currently selected scope. R04 advertises
- * per-action scope tables — a verb supported only for global must not appear
- * when the user is viewing project (and vice versa).
- */
+/** Advertises per-action scope tables - a verb supported only for global must not appear when the user is
+ * viewing project (and vice versa). */
 function mcpMutationFlags(
   capabilities: ProviderMcpCapabilities,
   effectiveScope: ProviderNativeScope,
@@ -208,10 +190,8 @@ function mcpMutationFlags(
   const scopes = capabilities.actionScopes;
   const canAdd = scopes.add.includes(effectiveScope);
   const canRemove = scopes.remove.includes(effectiveScope);
-  // update is intentionally omitted: every contract sets updateServer: "none"
-  // and actionScopes.update: [], so the edit affordance was maintained dead
-  // code. Restore canUpdate + pencil + editTarget + dialog mode="edit" when a
-  // provider actually implements update.
+  // update is intentionally omitted: every contract sets updateServer: "none" and actionScopes.update: [], so
+  // the edit affordance was maintained dead code.
   const canToggleServer = scopes.toggleServer.includes(effectiveScope);
   const canToggleTool = scopes.toggleTool.includes(effectiveScope);
   const canDiscover = scopes.discover.includes(effectiveScope);
@@ -234,12 +214,8 @@ export function ProviderMcpTab(props: {
   readonly providerId: ProviderId;
   readonly capabilities: ProviderMcpCapabilities;
   readonly providerLabel: string;
-  /**
-   * `state.cliBinaryResolved` - whether the host resolved a runnable CLI for
-   * this provider. Passed down rather than re-derived from `candidates`: it is
-   * the same value that decided whether the capabilities above were gated, so
-   * the explanation can never disagree with what it explains.
-   */
+  /** Passed down rather than re-derived from `candidates`: it is the same value that decided whether the
+   * capabilities above were gated, so the explanation can never disagree with what it explains. */
   readonly cliBinaryResolved: boolean;
 }): ReactNode {
   const { providerId, capabilities, providerLabel, cliBinaryResolved } = props;
@@ -309,22 +285,8 @@ export function ProviderMcpTab(props: {
   );
   const serverSearchActive = isProviderListSearchActive(searchQuery);
 
-  // Adjust auth-awaiting set from latest list data during render (React
-  // "storing information from previous renders" pattern) — avoids setState
-  // inside an effect.
-  //
-  // Gated on having list data, for the same reason the store sweep below is:
-  // `servers` falls back to empty whenever a fetch is in flight, and an empty
-  // list reads as "everything awaited has settled".
-  //
-  // Reachable on a plain mount, not just in theory. `useResumeOauthPolling`
-  // runs during render, so a resumed entry lands in `authAwaitingNames` on the
-  // FIRST pass — and the second pass prunes it while the list request is still
-  // in flight. The set empties, `pollWhilePending` goes false, and nothing
-  // picks the finished OAuth up: `needs_auth` alone does not drive the poll
-  // cadence, only `discoveryPending`/`connecting` do. A scope or workspace
-  // switch mid-login hits the same window, since swapping the query key drops
-  // `data` back to undefined with no `placeholderData` covering the gap.
+  // Gated on having list data, for the same reason the store sweep below is: `servers` falls back to empty
+  // whenever a fetch is in flight, and an empty list reads as "everything awaited has settled".
   const prunedAuthAwaiting =
     listData === undefined
       ? authAwaitingNames
@@ -333,19 +295,11 @@ export function ProviderMcpTab(props: {
     setAuthAwaitingNames(prunedAuthAwaiting);
   }
 
-  // The store cleanup that used to run in the render body above. It cannot
-  // stay there: the write notifies this very component (it subscribes to
-  // `entries`), and a render React discards would have mutated it anyway. It
-  // also cannot be handed down from the prune — `setAuthAwaitingNames` above
-  // re-renders immediately with nothing left to diff, so by the time effects
-  // run for the committed render the retired names are gone. So this reads the
-  // store directly and re-derives settledness from the list through the same
-  // `isServerAuthPending` rule the prune uses. Self-limiting: removing an entry is what
-  // changes `pendingAuthEntries`, and the next pass finds nothing to remove.
+  // It also cannot be handed down from the prune - `setAuthAwaitingNames` above re-renders immediately with
+  // nothing left to diff, so by the time effects run for the committed render the retired names are gone.
   useEffect(() => {
-    // A list we have not received yet says nothing about what settled. Without
-    // this, first paint sees an empty `servers` and would wipe every pending
-    // entry the resume path just restored.
+    // Without this, first paint sees an empty `servers` and would wipe every pending entry the resume path just
+    // restored.
     if (listData === undefined) return;
     const byName = new Map(listData.servers.map((s) => [s.name, s]));
     for (const entry of Object.values(pendingAuthEntries)) {
@@ -384,9 +338,8 @@ export function ProviderMcpTab(props: {
 
   const existingNames = useMemo(() => servers.map((s) => s.name), [servers]);
 
-  // Hoisted out of JSX: `eslint --fix` (react/jsx-no-leaked-render) rewrites a
-  // logical `&&` inside a JSX attribute into `cond ? value : null`, which makes
-  // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
+  // Hoisted out of JSX: `eslint --fix` (react/jsx-no-leaked-render) rewrites a logical `&&` inside a JSX
+  // attribute into `cond ?
   const deleteDialogPending = mutate.isPending && deleteTarget !== null;
 
   const {
@@ -670,9 +623,8 @@ export function ProviderMcpTab(props: {
     setRowError,
   ]);
 
-  // A freshly added folder is what the user just went looking for, so it
-  // becomes the selection - otherwise the picker closes back onto Global and
-  // the add reads as having done nothing.
+  // A freshly added folder is what the user just went looking for, so it becomes the selection - otherwise the
+  // picker closes back onto Global and the add reads as having done nothing.
   const handleBrowse = useCallback(() => {
     void browseForWorkspace()
       .then((path) => {
@@ -680,11 +632,8 @@ export function ProviderMcpTab(props: {
         setWorkspaceRoot(path);
         setScope("project");
       })
-      // `pickAndPrepareFolders` guards only its `prepareFoldersAsync` call;
-      // the shared folder picker's `requestPick` is awaited bare, so a failure
-      // there rejects out of `browseForWorkspace`. Without this the rejection is
-      // unhandled and the user is told nothing at all - the popover simply
-      // stays as it was, which reads as the click having missed.
+      // `pickAndPrepareFolders` guards only its `prepareFoldersAsync` call; the shared folder picker's `requestPick`
+      // is awaited bare, so a failure there rejects out of `browseForWorkspace`.
       .catch(() => {
         reportableErrorToast("Couldn't open the folder picker.", undefined, {
           title: "Could not add workspace folders",
@@ -829,24 +778,14 @@ function McpScopeHeader(props: {
   readonly onWorkspaceRootChange: (path: string) => void;
   readonly onAdd: () => void;
 }): ReactNode {
-  // A provider that lists only globally has no destination to choose, so it
-  // gets a plain statement rather than a picker holding one dead option. The
-  // wording is the same promise the Global row makes inside the picker, so the
-  // two surfaces never describe the same scope differently.
+  // A provider that lists only globally has no destination to choose, so it gets a plain statement rather than a
+  // picker holding one dead option.
   const globalOnly = !props.multiScope && props.effectiveScope === "global";
 
-  // The picker is NEVER disabled, and that is load-bearing rather than an
-  // oversight. It used to go dead on "zero resolvable workspaces and no Global
-  // to fall back to" - which is precisely the project-only provider on a host
-  // this client has opened no folders on. The add-a-folder action lives INSIDE
-  // the popover, so disabling the trigger sealed off the only way out of that
-  // state: no workspaces, no way to add one, and Project is the only scope.
-  // An empty list is now something the user can act on, so the trigger stays
-  // live and the popover explains itself.
+  // The picker is never disabled, and that is load-bearing rather than an oversight.
 
-  // One toolbar row, two controls of the SAME height (`h-7` / `size="sm"`).
-  // `items-center` rather than `items-start`: nothing here is taller than one
-  // line any more, which is the whole point of the single-line trigger.
+  // `items-center` rather than `items-start`: nothing here is taller than one line any more, which is the whole
+  // point of the single-line trigger.
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
       {globalOnly ? (
@@ -867,10 +806,8 @@ function McpScopeHeader(props: {
             props.onScopeChange("global");
           }}
           onSelectProject={(path) => {
-            // Order matters only for readability - both land in the same commit
-            // phase - but picking a folder IS picking Project scope. Making the
-            // row do both is the point: the old chip pair let you sit in Global
-            // with a folder selected and no indication which one.
+            // Order matters only for readability - both land in the same commit phase - but picking a folder IS picking
+            // Project scope.
             props.onWorkspaceRootChange(path);
             props.onScopeChange("project");
           }}
@@ -893,12 +830,7 @@ function McpCapabilityNotices(props: {
 }): ReactNode {
   return (
     <>
-      {/*
-        First, and the only one of these three painted as a warning rather than
-        a muted aside: the others describe a permanent property of the provider,
-        while this one describes controls that are missing RIGHT NOW from the
-        pane the user is looking at, and names the fix.
-      */}
+      {/* First, and the only one of these three painted as a warning rather than a muted aside. */}
       {props.binaryAbsentNotice !== null ? (
         <p
           className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-ui-xs text-muted-foreground"
@@ -1490,18 +1422,8 @@ function ServerToolsPanel(props: {
             >
               Disable all
             </button>
-            {/*
-             * The scope caveat sits on the control it qualifies rather than in
-             * a banner above the list: it only ever describes what these two
-             * buttons (and the per-tool switches) do, and as a full-width
-             * notice it read as a warning about the whole server.
-             *
-             * A real `<button>`, not an icon with `tabIndex`: Radix's
-             * `TooltipTrigger` opens on focus as well as hover, but only for an
-             * element that can natively take focus - and a `tabIndex` on a
-             * non-interactive element without a role fails
-             * jsx-a11y/no-noninteractive-tabindex.
-             */}
+            {/* A real `<button>`, not an icon with `tabIndex`: Radix's `TooltipTrigger` opens on focus as well as hover,
+               but only for an element that can natively take focus. */}
             {capabilities.traycerSessionsOnlyEnforcement ? (
               <Tooltip>
                 <TooltipTrigger asChild>

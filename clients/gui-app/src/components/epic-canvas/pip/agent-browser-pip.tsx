@@ -123,9 +123,7 @@ function AgentBrowserPipSurface(props: {
 }): ReactElement {
   const { epicId, snapshot } = props;
   const preview = usePipOwnedFrame(epicId, snapshot);
-  // The DISPLAYED target, not the pending one: a switch keeps painting the old
-  // tab until its replacement has frames, and the video plane must not jump
-  // ahead of that.
+  // The DISPLAYED target, not the pending one: a switch keeps painting the old tab until its replacement has frames, and the video plane must not jump ahead of that.
   const stream = usePipSharedVideoStream({
     hostId: snapshot.target?.hostId ?? "",
     sessionId: snapshot.target?.sessionId ?? "",
@@ -628,11 +626,8 @@ function usePipTargetMeta(
 }
 
 /**
- * Restoring a PiP to the canvas is a MOVE back, not a placement decision: the
- * browser category's setting would split (or re-pip) it, so the intent names
- * an explicit tab placement in the canvas's active pane - the pane the
- * floating window was detached over. `dedupe` still focuses the tile when it
- * is already open somewhere in this tab.
+ * Restoring a PiP to the canvas is a MOVE back, not a placement decision: the browser category's setting would split (or re-pip) it, so the intent names an explicit tab placement in the canvas's active pane - the pane the floating window was detached over.
+ * `dedupe` still focuses the tile when it is already open somewhere in this tab.
  */
 function useOpenPipTarget(
   viewTabId: string,

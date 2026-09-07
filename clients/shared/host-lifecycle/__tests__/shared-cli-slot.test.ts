@@ -71,10 +71,8 @@ describe("classifyCliSlot", () => {
     });
   });
 
-  // `attested` reports the invocation probe, not the structural verdict. It
-  // used to be a literal `true`, which said "attested" for a slot whose
-  // invocation probe had never run — collapsing exactly the distinction the
-  // F8 phase-2 probe exists to draw.
+  // `attested` reports the invocation probe, not the structural verdict.
+  // It used to be a literal `true`, which said "attested" for a slot whose invocation probe had never run - collapsing exactly the distinction the F8 phase-2 probe exists to draw.
   it("is valid but NOT attested when the invocation probe was not run (null)", () => {
     expect(classifyCliSlot({ ...BASE, invocationAttested: null })).toEqual({
       kind: "valid",

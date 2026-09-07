@@ -1,11 +1,5 @@
-/**
- * View state for the Settings ▸ Providers rail: the text query and the
- * enabled/disabled filter behind its search row.
- *
- * The matching rule lives here rather than inside the panel so it is testable
- * without rendering the pane, and so the rows, the empty state and the
- * result-count announcement all derive from ONE definition of "matches".
- */
+/** The matching rule lives here rather than inside the panel so it is testable without rendering the pane, and
+ * so the rows, the empty state and the result-count announcement all derive from one definition of "matches". */
 import type {
   ProviderCliState,
   ProviderId,
@@ -40,7 +34,6 @@ export const DEFAULT_PROVIDER_RAIL_VIEW: ProviderRailView = {
   status: PROVIDER_RAIL_STATUS.All,
 };
 
-/** Whether the rail is showing a subset - drives the empty state and the badge. */
 export function isProviderRailViewActive(view: ProviderRailView): boolean {
   return (
     view.query.trim().length > 0 || view.status !== PROVIDER_RAIL_STATUS.All
@@ -54,15 +47,8 @@ export function providerRailStatusLabel(status: ProviderRailStatus): string {
   return match === undefined ? "All" : match.label;
 }
 
-/**
- * Matches on the name the rail actually RENDERS plus the wire id, so both
- * "Traycer Inference" and "traycer" find the same row - `providerDisplayName`
- * overrides the protocol's display name for that one provider, and matching the
- * protocol string instead would leave the visible words unsearchable.
- *
- * Descriptions are deliberately not searched: the rail never shows them, and a
- * row surfacing for text you cannot see reads as a bug rather than a match.
- */
+/** Descriptions are deliberately not searched: the rail never shows them, and a row surfacing for text you
+ * cannot see reads as a bug rather than a match. */
 function matchesQuery(providerId: ProviderId, needle: string): boolean {
   if (needle.length === 0) return true;
   if (providerDisplayName(providerId).toLowerCase().includes(needle)) {
@@ -76,11 +62,8 @@ function matchesStatus(enabled: boolean, status: ProviderRailStatus): boolean {
   return status === PROVIDER_RAIL_STATUS.Enabled ? enabled : !enabled;
 }
 
-/**
- * Providers the rail should show. Returns the input array UNCHANGED (same
- * identity) while no filter is active, so the common case costs nothing and
- * memoized consumers don't churn.
- */
+/** Returns the input array unchanged (same identity) while no filter is active, so the common case costs
+ * nothing and memoized consumers don't churn. */
 export function filterProviderRail(
   providers: readonly ProviderCliState[],
   view: ProviderRailView,

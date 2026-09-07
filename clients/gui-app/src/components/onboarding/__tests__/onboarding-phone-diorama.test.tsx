@@ -10,10 +10,8 @@ import {
   storyStepDuration,
 } from "@/components/onboarding/onboarding-story-script";
 
-// `useReducedMotion` memoises the media-query answer in a module-level ref the
-// first time any component calls it, so a `matchMedia` stub can only decide the
-// answer once per file. Driving the hook itself keeps both arms — animated and
-// pinned — in one suite.
+// `useReducedMotion` memoises the media-query answer in a module-level ref the first time any component calls
+// it, so a `matchMedia` stub can only decide the answer once per file.
 const motionState = vi.hoisted(() => ({ reducedMotion: false }));
 vi.mock("motion/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("motion/react")>();
@@ -40,7 +38,6 @@ function texts(testId: string): ReadonlyArray<string> {
 
 const LAST_STORY_STEP = STORY_STEPS.length - 1;
 
-/** Hold out the beat at `step`, so the next one reveals. */
 function advanceStoryBeat(step: number): void {
   act(() => {
     vi.advanceTimersByTime(storyStepDuration(step, LAST_STORY_STEP));
@@ -181,8 +178,8 @@ describe("OnboardingPhoneDiorama", () => {
     it("reveals the story beats in script order, then loops", () => {
       renderScene("story");
 
-      // Every beat, in order, attributed to the agent the script names — the
-      // phone folds three desktop panes into one column, not into one voice.
+      // Every beat, in order, attributed to the agent the script names - the phone folds three desktop panes into
+      // one column, not into one voice.
       for (let step = 1; step <= LAST_STORY_STEP; step++) {
         advanceStoryBeat(step - 1);
         expect(attributes("onboarding-phone-story-beat", "data-pane")).toEqual(

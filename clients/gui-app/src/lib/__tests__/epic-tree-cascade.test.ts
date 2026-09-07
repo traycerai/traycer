@@ -23,9 +23,9 @@ function makeRecord(
   };
 }
 
-/** Build a `TreeSlice` from a flat record list so the two count functions can
- * be checked against the same fixtures (the tree is the records' parent/child
- * graph). */
+/**
+ * Build a `TreeSlice` from a flat record list so the two count functions can be checked against the same fixtures (the tree is the records' parent/child graph).
+ */
 function treeFromRecords(records: ReadonlyArray<EpicTreeRecord>): TreeSlice {
   const nodeById: Record<string, TreeNode> = {};
   const childrenByParent: Record<string, string[]> = {};

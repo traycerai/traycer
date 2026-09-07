@@ -6,52 +6,13 @@ import {
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 
-// NUL byte: a separator that cannot appear inside any host field value, so
-// distinct field tuples can never collide into the same key. Matches the
-// separator the app-wide `HostStreamProvider` has always used.
+// NUL byte: a separator that cannot appear inside any host field value, so distinct field tuples can never collide into the same key.
+// Matches the separator the app-wide `HostStreamProvider` has always used.
 const SEPARATOR = String.fromCharCode(0);
 
 /**
- * Canonical value-identity of a host's stream transport.
- *
- * Two `HostDirectoryEntry` objects with identical connection details produce
- * the same key, so a same-content re-emit of the entry - which happens on every
- * `onLocalHostChange` (each one rebuilds `localEntry` and, on desktop, crosses
- * the IPC bridge as a fresh object) - does NOT change the key. Callers that
- * memoize a `WsStreamClient` on this key therefore keep the SAME client instance
- * across benign directory churn, instead of tearing the socket down and
- * rebuilding it.
- *
- * Returns `null` when the host cannot be dialed (no `websocketUrl`, or a
- * CONFIRMED refusal); callers treat `null` as "no client" and the session
- * registries release the handle they hold.
- *
- * That release is why this cannot gate on the coarse bit. It used to refuse
- * anything not `available`, which folded in `indeterminate` — a failed liveness
- * read — and so a single degraded read on the cloud side tore down a live E2E
- * session and left the tile loading forever. The reachability hook had already
- * been taught that a live session outranks the cloud; this layer was still
- * quietly overruling it one call below.
- *
- * `indeterminate` therefore DIALS. That is the same asymmetry the hook uses and
- * it holds in both directions: with a session open, keeping the key keeps the
- * session; with no session, attempting the dial is the "recoverable failure"
- * the hook's rationale assumes — a null here would have silently prevented the
- * attempt it promised.
- *
- * The verdict is deliberately NOT part of the key. It is a gate, not an
- * identity: including it meant a `dialable` → `indeterminate` flip changed the
- * key and churned a transport whose address never moved.
- *
- * `isConfirmedTransportRefusal` lives in `remote-fetcher.ts` rather than here
- * because `host-client`'s rebind sweep and the binding-authority registry ask
- * the same question about the same entry, and a second copy of it is how the
- * layers drift back apart.
- *
- * Shared by the app-wide `HostStreamProvider` (via
- * `readHostTransportKey(client.getActiveHost())`) and the per-tab
- * `useHostStreamClientFor`, so both streams compute the same notion of "same
- * transport" from the same fields and cannot drift.
+ * Canonical stream-transport identity.
+ * `indeterminate` still dials; confirmed refusal returns null.
  */
 export function hostTransportKey(
   entry: HostDirectoryEntry | null,
@@ -63,10 +24,7 @@ export function hostTransportKey(
 }
 
 /**
- * The parametric core of {@link hostTransportKey}, for the same reason
- * {@link dialableHostEndpointFor} exists: a memoized render path that gates on
- * this key must subscribe to session readiness and thread the current answer
- * through, because the ambient cache read above freezes inside a memo.
+ * The parametric core of {@link hostTransportKey}, for the same reason {@link dialableHostEndpointFor} exists: a memoized render path that gates on this key must subscribe to session readiness and thread the current answer through, because the ambient cache.
  */
 export function hostTransportKeyFor(
   entry: HostDirectoryEntry | null,
@@ -83,17 +41,8 @@ export function hostTransportKeyFor(
 }
 
 /**
- * The dialable `{ hostId, websocketUrl }` endpoint for a directory entry, or
- * `null` when the host cannot currently be dialed (no `websocketUrl`, or a
- * CONFIRMED refusal). Same dialability rule as `hostTransportKey`, including
- * that a failed liveness read (`indeterminate`) still dials — these two must
- * agree or a live session keeps a key while its re-dials are refused.
- *
- * Read LIVE on every (re)dial by the session-owned durable streams (chat /
- * terminal) so a host that respawns on a new `websocketUrl` while the session
- * is warm - with no React tile mounted to recompute a memo - reconnects to the
- * new address instead of retrying the dead one. Mirrors the app-wide stream's
- * `endpoint: () => hostClient.getActiveHost()` live read.
+ * The dialable `{ hostId, websocketUrl }` endpoint for a directory entry, or `null` when the host cannot currently be dialed (no `websocketUrl`, or a CONFIRMED refusal).
+ * Same dialability rule as `hostTransportKey`, including that a failed liveness read (`indeterminate`) still dials - these two must agree or a live session keeps a key while its re-dials are refused.
  */
 export function dialableHostEndpoint(
   entry: HostDirectoryEntry | null,
@@ -105,14 +54,8 @@ export function dialableHostEndpoint(
 }
 
 /**
- * The parametric core of {@link dialableHostEndpoint}: the caller supplies
- * the ready-session answer instead of this function reading the pull-only
- * cache itself. For a React render path that must UPDATE when a session dies
- * or appears, the ambient read above is a frozen answer (the cache emits no
- * event and changes no directory value) - such callers subscribe
- * (`useRemoteSessionPollReadiness` / `useRemoteSessionsPollReadiness`) and
- * thread the current answer through here. Non-render callers (live re-dial
- * paths that re-read on every attempt) keep using the ambient form.
+ * The parametric core of {@link dialableHostEndpoint}: the caller supplies the ready-session answer instead of this function reading the pull-only cache itself.
+ * For a React render path that must UPDATE when a session dies or appears, the ambient read above is a frozen answer (the cache emits no event and changes no directory value) - such callers subscribe (`useRemoteSessionPollReadiness` /.
  */
 export function dialableHostEndpointFor(
   entry: HostDirectoryEntry | null,
@@ -124,52 +67,8 @@ export function dialableHostEndpointFor(
 }
 
 /**
- * Canonical identity a long-lived REMOTE-AWARE stream OWNER - the app-wide
- * `HostStreamProvider`, the durable chat/terminal registries, and the epic
- * session mount - rebuilds on (R-1: closing the S1 rotation gap). Mode-aware:
- *
- *  - `remote`: `hostId + userId + publicKey + relay attach identity
- *    (websocketUrl)`, mirroring the `RemoteSessionIdentity` the shared
- *    `(hostId, userId, hostPublicKey, relayAttachUrl)` session cache keys on
- *    (`active-remote-sessions.ts`). Every remote host shares one fixed relay
- *    attach URL, so a same-host public-key rotation (re-enrollment /
- *    corruption recovery - `registerOrAdoptHost` overwrites the key on the
- *    same `hostId`) is a genuine identity change here, not something a URL
- *    move happens to also cover.
- *  - anything else (`local` / `mock`): `hostId + userId` only - a websocket
- *    URL move under a stable `hostId` is healed LIVE by the owned transport's
- *    endpoint re-dial (`dialableHostEndpoint` / `reconnectAll`), not by
- *    rebuilding the owner; folding the URL in here would turn a routine
- *    same-host respawn into full owner churn.
- *
- * Deliberately separate from `hostTransportKey` / `hostStreamTransportKeyFor`,
- * which encode DIALABILITY (can a socket be opened right now - and
- * deliberately omit the public key so a same-content directory re-emit does
- * not churn a live transport). This key encodes IDENTITY (should the owner
- * that decides whether to `acquireRemoteSession` again keep or replace what
- * it holds) and must not be conflated with dialability.
- */
-/**
- * LATENT HAZARD, harmless only while the relay attach URL is shared.
- *
- * ⚠ Read the scope precisely, because an earlier wording of this note said the
- * comment above "argues it should not be folded in" full stop, and that is not
- * what it says. The argument against folding the URL in is made for
- * LOCAL/MOCK, and the local arm below duly omits it. For REMOTE the comment
- * above positively endorses including it - one fixed relay URL for every
- * remote host is exactly what makes a same-host public-key rotation legible as
- * an identity change. So the code and the comment above AGREE today, and a
- * reader who checked the imprecise version against them would have found no
- * contradiction and been entitled to delete this note along with the real
- * warning it carries.
- *
- * The hazard is a PREMISE, not an inconsistency: the remote arm's safety rests
- * on `remote-fetcher.ts` supplying one shared relay attach URL. If that ever
- * becomes per-instance, every routine same-host respawn changes the key, the
- * epic session provider's identity comparison takes the rebuild arm, and the
- * handle is disposed. That is not a re-render cost; it is the data-loss path
- * (audit finding B5) reached by a different trigger. Make the URL per-instance
- * and this needs the same treatment the room-swap path got.
+ * Identity a long-lived remote-aware stream owner rebuilds on: remote includes publicKey + relay URL; local/mock is hostId+userId only.
+ * Remote safety assumes one shared relay attach URL (`remote-fetcher.ts`); a per-instance URL would dispose handles on respawn.
  */
 export function remoteAwareOwnerIdentity(
   target: HostDirectoryEntry,
@@ -188,10 +87,8 @@ export function remoteAwareOwnerIdentity(
 }
 
 /**
- * Nullable convenience wrapper over {@link remoteAwareOwnerIdentity} for
- * callers that only have a possibly-absent target / signed-in user on hand.
- * Returns `null` when there is no target or no signed-in user - "not ready
- * to own a stream" for every caller.
+ * Nullable convenience wrapper over {@link remoteAwareOwnerIdentity} for callers that only have a possibly-absent target / signed-in user on hand.
+ * Returns `null` when there is no target or no signed-in user - "not ready to own a stream" for every caller.
  */
 export function remoteAwareOwnerIdentityKey(
   target: HostDirectoryEntry | null,

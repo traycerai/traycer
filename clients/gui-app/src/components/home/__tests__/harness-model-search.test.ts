@@ -326,9 +326,8 @@ describe("harness model search", () => {
     ];
     const rows = buildHarnessModelRows(OPENCODE_HARNESS, models);
 
-    // Concrete rows sort by provider label (Anthropic < OpenCode Zen <
-    // Perplexity), then model name (Sonar < Sonar Pro). browseLabel drops the
-    // provider prefix that the group header now carries.
+    // Concrete rows sort by provider label (Anthropic < OpenCode Zen < Perplexity), then model name (Sonar < Sonar
+    // Pro).
     expect(
       rows.map((row) => [row.providerGroupLabel, row.browseLabel]),
     ).toEqual([
@@ -441,10 +440,6 @@ describe("harness model search", () => {
     const rows = buildHarnessModelRows(OPENROUTER_HARNESS, models);
 
     // Harness-agnostic grouping off the host-declared metadata, by vendor label.
-    // browseLabel drops the vendor prefix the name carries: ": " for normal names
-    // ("Z.ai: GLM 4.6" -> "GLM 4.6"), " " for the "latest" aliases ("OpenAI GPT
-    // Latest" -> "GPT Latest"); a label with no vendor prefix ("Owl Alpha") is
-    // left untouched.
     expect(
       rows.map((row) => [row.providerGroupLabel, row.browseLabel]),
     ).toEqual([

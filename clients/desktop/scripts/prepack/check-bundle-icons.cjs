@@ -2,19 +2,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-/**
- * Precheck for native app icons consumed by electron-builder. These are distinct
- * from the runtime tray PNGs: Windows Start menu and desktop shortcuts resolve
- * their image from the icon resource embedded in the packaged executable, so a
- * missing `icon.ico` silently falls back to Electron's generic executable icon.
- *
- * Linux fails the same way for a subtler reason: the freedesktop icon theme
- * spec only searches size directories declared in the theme's `index.theme`,
- * and hicolor stops at 512x512. Given a lone 1024x1024 source PNG,
- * electron-builder installs exactly one icon at `hicolor/1024x1024/apps/` -
- * which no icon lookup visits - so the `.desktop` entry's `Icon=` key resolves
- * to nothing. The `icons/` set below is what `build.linux.icon` points at.
- */
 
 const { openSync, fstatSync, readSync, closeSync } = require("node:fs");
 const { resolve } = require("node:path");

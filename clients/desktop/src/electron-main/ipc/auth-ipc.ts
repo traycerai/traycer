@@ -49,39 +49,15 @@ function assertBoolean(
   }
 }
 
-/**
- * The identity the provisioning memo is scoped to. Only a fully signed-in
- * session names one: `signing-in` and `signed-out` both collapse to null, so a
- * sign-out clears the memo and a sign-in as the same user restores it.
- */
 function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
   return snapshot.status === "signed-in"
     ? (snapshot.profile?.userId ?? null)
     : null;
 }
 
-/**
- * Auth IPC handlers: token *validation* against the authn service, plus the
- * credentials-file token store (tech plan §3). Credential persistence now lives
- * in the main-process `FileTokenStore` (single machine-local file + lock/WAL),
- * reached through the `authTokenStore*` channels; the renderer's `ITokenStore`
- * is an IPC client of it. Validation stays access-only here — a token *spend*
- * happens only inside `tokenStore.rotate`, under the file lock.
- */
 export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   let retainedStepUpCredential: RetainedStepUpCredential | null = null;
-  /**
-   * The retained step-up bearer if it is still usable, dropping an expired one
-   * on the way out.
-   *
-   * The drop is the point. An expired token is already refused by the server, so
-   * holding it grants nothing - but it is still a secret sitting in main-process
-   * memory with no remaining reason to be there, kept alive until some later
-   * `step-up-required`, `revokeAllSessions`, or session change happens to clear
-   * it. `MockRunnerHost.activeRetainedStepUpToken` self-nulls for the same
-   * reason; a closure rather than a free function is what lets this one do it
-   * too, so the pair cannot drift.
-   */
+  /** `MockRunnerHost.activeRetainedStepUpToken` self-nulls for the same reason; a closure rather than a free function is what lets this one do it too, so the pair cannot drift. */
   const activeRetainedStepUpToken = (nowMs: number): string | null => {
     if (retainedStepUpCredential === null) {
       return null;

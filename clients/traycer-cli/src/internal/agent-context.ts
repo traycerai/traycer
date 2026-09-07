@@ -1,12 +1,4 @@
-/**
- * Resolves the ambient agent/epic identifiers the `traycer agent`
- * subcommands operate under. A Traycer-launched session carries
- * `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID` in its environment.
- *
- * `read*` variants return `null` when neither flag nor env supplies a
- * value - used by hook-driven commands where missing context is a
- * benign no-op. `resolve*` variants throw `INVALID_ARGUMENT` instead.
- */
+/** Resolves the ambient agent/epic identifiers the `traycer agent` subcommands operate under. A Traycer-launched session carries `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID` in its environment. */
 
 import { cliError, CLI_ERROR_CODES } from "../runner/errors";
 

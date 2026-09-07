@@ -42,12 +42,7 @@ function peerHarness(): PeerHarness {
         closeCount: 0,
         answerOffer: (sdp) => {
           peer.offers.push(sdp);
-          // Real gathering completing before the answer settles is one of
-          // the two A12 flush triggers; the harness models that as the
-          // common case so pre-existing assertions can read `port.answers`
-          // right after the promise resolves. The dedicated batching tests
-          // below construct a peer that does NOT do this, to exercise the
-          // 500ms deadline and the early-candidate batch instead.
+          // Real gathering completing before the answer settles is one of the two A12 flush triggers; the harness models that as the common case so pre-existing assertions can read `port.answers` right after the promise resolves.
           handlers.onIceGatheringComplete();
           return Promise.resolve(`answer-for:${sdp}`);
         },
@@ -112,8 +107,7 @@ function recordingPortWithRtt(rttMs: number | null): RecordingPort {
 }
 
 /**
- * jsdom has no `MediaStream`; the registry only ever carries the value
- * through, so a downcast stand-in is enough to pin the pass-through.
+ * jsdom has no `MediaStream`; the registry only ever carries the value through, so a downcast stand-in is enough to pin the pass-through.
  */
 function fakeStream(id: string): MediaStream {
   const partial: Pick<MediaStream, "id"> = { id };
@@ -224,9 +218,7 @@ describe("webrtc media registry", () => {
     harness.peers[0]?.handlers.onStream(fakeStream("live-track"));
 
     before.release();
-    // Not a same-tick remount: the tile can pass through its "Reconnecting
-    // browser tab…" branch before the replacement mounts, so the grace has to
-    // be a real window, not just a deferred close.
+    // Not a same-tick remount: the tile can pass through its "Reconnecting browser tab…" branch before the replacement mounts, so the grace has to be a real window, not just a deferred close.
     await vi.advanceTimersByTimeAsync(GRACE_MS / 2);
     const after = acquireBrowserMediaEntry({
       key,
@@ -512,11 +504,8 @@ describe("webrtc media registry", () => {
   });
 
   /**
-   * The reconnect shape: the stream the round was negotiated over dies, the
-   * tile re-subscribes, and the host's fresh subscription offers a new round
-   * over a NEW reply channel. There is no resume - the registry's whole job
-   * here is that the surviving entry adopts the new round and never answers
-   * back down the dead one.
+   * The reconnect shape: the stream the round was negotiated over dies, the tile re-subscribes, and the host's fresh subscription offers a new round over a NEW reply channel.
+   * There is no resume - the registry's whole job here is that the surviving entry adopts the new round and never answers back down the dead one.
    */
   it("adopts a superseding offer on a fresh port after the transport dies", async () => {
     const key = nextKey();
@@ -540,9 +529,8 @@ describe("webrtc media registry", () => {
       { negotiationId: 4, state: "live", reason: null, detail: null },
     ]);
 
-    // Transport death: the stream is gone, so nothing tells the registry. The
-    // media survives the tile's remount, and the re-subscription's offer -
-    // higher round, new port - is what re-establishes video.
+    // Transport death: the stream is gone, so nothing tells the registry.
+    // The media survives the tile's remount, and the re-subscription's offer - higher round, new port - is what re-establishes video.
     const livePort = recordingPort();
     held.entry.acceptOffer({
       negotiationId: 9,
@@ -739,9 +727,7 @@ describe("webrtc media registry", () => {
 
   describe("A12 batched ICE trickle", () => {
     /**
-     * Unlike `peerHarness()`, this one does NOT signal gathering-complete
-     * from inside `answerOffer` - these tests drive that signal (or the
-     * 500ms deadline) themselves.
+     * Unlike `peerHarness()`, this one does NOT signal gathering-complete from inside `answerOffer` - these tests drive that signal (or the 500ms deadline) themselves.
      */
     function controlledPeerHarness(): PeerHarness {
       const peers: FakePeer[] = [];
@@ -988,9 +974,7 @@ describe("webrtc media registry", () => {
         { negotiationId: 5, sdp: "answer-for:first-offer", candidates: [] },
       ]);
 
-      // The host restarts on the SAME negotiationId, over a fresh reply
-      // channel (a genuine reconnect can bring one), with different SDP
-      // (a real ICE restart offer, not a resend).
+      // The host restarts on the SAME negotiationId, over a fresh reply channel (a genuine reconnect can bring one), with different SDP (a real ICE restart offer, not a resend).
       const restartPort = recordingPort();
       held.entry.acceptOffer({
         negotiationId: 5,
@@ -1020,9 +1004,7 @@ describe("webrtc media registry", () => {
         negotiationId: 5,
       });
 
-      // The restart reopens the live latch: the host's restart deadline is
-      // cancelled only by a fresh `live`, so the next decoded frame must
-      // re-report it - exactly once, however many frames follow.
+      // The restart reopens the live latch: the host's restart deadline is cancelled only by a fresh `live`, so the next decoded frame must re-report it - exactly once, however many frames follow.
       expect(restartPort.states).toEqual([]);
       held.entry.reportFirstDecodedFrame();
       held.entry.reportFirstDecodedFrame();
@@ -1060,9 +1042,7 @@ describe("webrtc media registry", () => {
         port,
         iceServers: [],
       });
-      // The re-offer's answer has not shipped yet: `live` here would reach
-      // the host ahead of the answer on the same FIFO stream and be rejected
-      // as an invalid transition, so it must be deferred, not swallowed.
+      // The re-offer's answer has not shipped yet: `live` here would reach the host ahead of the answer on the same FIFO stream and be rejected as an invalid transition, so it must be deferred, not swallowed.
       held.entry.reportFirstDecodedFrame();
       expect(port.answers).toHaveLength(1);
       expect(port.states).toHaveLength(1);
@@ -1203,9 +1183,8 @@ describe("webrtc media registry", () => {
 });
 
 /**
- * A minimal `RTCStatsReport`-shaped report: one inbound-rtp video stat. The
- * WebRTC stats spec reports `jitter` in SECONDS - same convention
- * `mapWebrtcVideoStats` reads - so callers pass seconds, not milliseconds.
+ * A minimal `RTCStatsReport`-shaped report: one inbound-rtp video stat.
+ * The WebRTC stats spec reports `jitter` in SECONDS - same convention `mapWebrtcVideoStats` reads - so callers pass seconds, not milliseconds.
  */
 function jitterStatsReport(jitterSeconds: number | null): RTCStatsReport {
   const entries: [string, Record<string, unknown>][] =
@@ -1233,11 +1212,8 @@ interface FakeTrackEvent {
 }
 
 /**
- * jsdom has no `RTCPeerConnection`; stood in as the GLOBAL constructor
- * (`vi.stubGlobal`) so `createBrowserMediaPeer`'s own `new RTCPeerConnection`
- * picks it up. Only what these tests actually drive is modeled: the
- * negotiation methods (for the minor-8 order pin) and `connectionState` +
- * `onconnectionstatechange` (for the blocker-2 grace timer).
+ * jsdom has no `RTCPeerConnection`; stood in as the GLOBAL constructor (`vi.stubGlobal`) so `createBrowserMediaPeer`'s own `new RTCPeerConnection` picks it up.
+ * Only what these tests actually drive is modeled: the negotiation methods (for the minor-8 order pin) and `connectionState` + `onconnectionstatechange` (for the blocker-2 grace timer).
  */
 class FakeConnection {
   readonly calls: string[] = [];
@@ -1334,10 +1310,7 @@ describe("createBrowserMediaPeer.answerOffer codec-order pin (minor 8)", () => {
     const peer = createBrowserMediaPeer(NOOP_HANDLERS, []);
     await peer.answerOffer("a=rtpmap:96 H264/90000\r\n");
 
-    // `getTransceivers` is `preferH264IfCapable`'s only observable call on
-    // this fake (it finds no video transceiver to touch and returns) - its
-    // position between `setRemoteDescription` and `createAnswer` is the
-    // order the review asked to pin.
+    // `getTransceivers` is `preferH264IfCapable`'s only observable call on this fake (it finds no video transceiver to touch and returns) - its position between `setRemoteDescription` and `createAnswer` is the order the review asked to pin.
     expect(connection.calls).toEqual([
       "setRemoteDescription",
       "getTransceivers",
@@ -1416,9 +1389,8 @@ describe("createBrowserMediaPeer connectionState 'failed' grace (blocker 2)", ()
   });
 
   it("disarms the grace timer when the peer is closed without a state event", () => {
-    // What supersede and `fail()` do: `close()` alone, which the spec updates
-    // `connectionState` for WITHOUT dispatching the event. A timer left armed
-    // here reports a dead peer's failure into the round that reuses its id.
+    // What supersede and `fail()` do: `close()` alone, which the spec updates `connectionState` for WITHOUT dispatching the event.
+    // A timer left armed here reports a dead peer's failure into the round that reuses its id.
     const connection = stubPeerConnection();
     const failures: string[] = [];
     const peer = createBrowserMediaPeer(
@@ -1482,11 +1454,8 @@ describe("createBrowserMediaPeer.getStats rejection ownership", () => {
 });
 
 /**
- * A4/F6 media tuning, driven through the peer the registry actually builds:
- * the jitter-buffer target is applied inside `getStats()`, and the codec
- * preference inside `answerOffer()`. Both were exported only so a test could
- * call them; going through `createBrowserMediaPeer` also pins that they are
- * still WIRED, which a direct call never could.
+ * A4/F6 media tuning, driven through the peer the registry actually builds: the jitter-buffer target is applied inside `getStats()`, and the codec preference inside `answerOffer()`.
+ * Both were exported only so a test could call them; going through `createBrowserMediaPeer` also pins that they are still WIRED, which a direct call never could.
  */
 describe("createBrowserMediaPeer adaptive jitter buffer (A4/F6)", () => {
   afterEach(() => {

@@ -10,26 +10,13 @@ import type {
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 
 /**
- * Renderer-side handle onto the shell's credentials-file token store (tech plan
- * §3). The single machine-local `~/.traycer/cli/<env>/credentials` file is owned
- * by the shell (desktop main's `FileTokenStore`, reached over IPC); this wrapper
- * only serializes the mutating operations and exposes the typed seam.
- *
- * Post-§3 the store carries the FULL identity (`StoredCredentials`) and every
- * token *spend* happens inside `rotate` (under the file lock, in main) — the
- * renderer never refreshes a token itself. Interactive sign-in is `signIn`; the
- * file is destroyed only by `delete` (reachable from `AuthService.signOut()`).
+ * Renderer-side handle onto the shell's credentials-file token store (tech plan §3).
+ * The single machine-local `~/.traycer/cli/<env>/credentials` file is owned by the shell (desktop main's `FileTokenStore`, reached over IPC); this wrapper only serializes the mutating operations and exposes the typed seam.
  */
 export class AuthTokenStore {
   private readonly tokenStore: ITokenStore;
-  // Serializes the mutating operations. `signIn`/`rotate`/`delete` are dispatched
-  // from independently-awaiting flows (sign-in finalization, sign-out, the
-  // refresh scheduler), and the IPC layer gives no cross-call ordering guarantee.
-  // The chain makes the last-dispatched mutation own the final request order; the
-  // main-process file lock is the real cross-process guarantee, this just keeps
-  // one renderer from racing its own two mutations onto it (e.g. a sign-out's
-  // delete overtaking a still-in-flight sign-in). Reads never join the chain —
-  // reads never lock (§3), and a slow in-flight `rotate` must not stall a `get`.
+  // Serializes the mutating operations.
+  // `signIn`/`rotate`/`delete` are dispatched from independently-awaiting flows (sign-in finalization, sign-out, the refresh scheduler), and the IPC layer gives no cross-call ordering guarantee.
   private opChain: Promise<unknown> = Promise.resolve();
 
   constructor(tokenStore: ITokenStore) {
@@ -50,7 +37,7 @@ export class AuthTokenStore {
     return this.tokenStore.get();
   }
 
-  /** Interactive create/replace — the device-flow sign-in. Main stamps the rest. */
+  /** Interactive create/replace - the device-flow sign-in. Main stamps the rest. */
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
@@ -66,19 +53,14 @@ export class AuthTokenStore {
     return this.enqueue(() => this.tokenStore.rotate(expected));
   }
 
-  /** Sign-out delete — the only file-destroying path from the app. */
+  /** Sign-out delete - the only file-destroying path from the app. */
   delete(): Promise<void> {
     return this.enqueue(() => this.tokenStore.delete());
   }
 
   /**
-   * Compare-and-delete for undoing a superseded sign-in's write: destroys the
-   * stored pair ONLY if it still holds exactly `expectedToken`. Forwarded as
-   * ONE backing-store operation — the comparison and the delete are atomic at
-   * the store's own authority (main's file lock), so a sibling window's
-   * `signIn` can never be interleaved between them, and joining this
-   * renderer's chain additionally orders it against our own mutations.
-   * Resolves with what happened; a store fault rejects.
+   * Compare-and-delete for undoing a superseded sign-in's write: destroys the stored pair ONLY if it still holds exactly `expectedToken`.
+   * Forwarded as ONE backing-store operation - the comparison and the delete are atomic at the store's own authority (main's file lock), so a sibling window's `signIn` can never be interleaved between them, and joining this renderer's chain additionally orders.
    */
   deleteIfToken(expectedToken: string): Promise<"deleted" | "kept"> {
     return this.enqueue(() => this.tokenStore.deleteIfToken(expectedToken));
@@ -90,10 +72,8 @@ export class AuthTokenStore {
   }
 
   /**
-   * One-time legacy→file migration (§6). A startup one-shot: main single-flights
-   * it and serializes its own store ops under the file lock, so it deliberately
-   * does NOT join the mutation chain — it must not stall a sign-in behind its
-   * several-second reconcile, and it never mutates through this renderer wrapper.
+   * One-time legacy→file migration (§6).
+   * A startup one-shot: main single-flights it and serializes its own store ops under the file lock, so it deliberately does NOT join the mutation chain - it must not stall a sign-in behind its several-second reconcile, and it never mutates through this.
    */
   migrateLegacyCredentials(
     legacy: StoredAuthTokens,

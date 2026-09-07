@@ -319,7 +319,7 @@ describe("decideAttemptClaim - resume: each action against each parked continuat
 });
 
 describe("decideAttemptClaim - recovery outranks supersession", () => {
-  // §1.1: `requires-recovery` must be checked for EVERY active record, before
+  // §1.1: `requires-recovery` must be checked for every active record, before
   // the target comparison, regardless of what the new request's target is.
   it("requires recovery for an active record even when the request names a different target", () => {
     const active = makeRecord({ generation: 2, sequence: 5 });
@@ -626,7 +626,7 @@ describe("decideAttemptClaim - identity-bound requests are bound to target, not 
       execution: "parked",
       continuation: "resume-apply",
     });
-    // Correct identity and target, but the action asks for the OTHER
+    // Correct identity and target, but the action asks for the other
     // continuation. Must refuse, not silently resume the wrong one.
     const decision = decideAttemptClaim({
       current: { kind: "valid", version: 2, value: resumeApplyParked },
@@ -1165,14 +1165,6 @@ describe("advanceAttempt", () => {
   });
 });
 
-// ---- decideAttemptRecovery ---------------------------------------------------
-//
-// The evidence-based recovery arm for `requires-recovery` (§ ticket 03 scope
-// item 1). Pure, clock-free, and lock-scoped: `holder` must already be
-// `recovery-lock-held` by the time this runs, so the only interesting inputs
-// are the record's execution/identity and the typed install/stage/running
-// evidence triple.
-
 const LOCK_HELD: AttemptRecoveryHolderDisposition = {
   kind: "recovery-lock-held",
 };
@@ -1199,10 +1191,8 @@ function recoveryContext(overrides: {
     current,
     request: {
       expected: attemptIdentityOf(current),
-      // `force` is the broadest resume authorization (covers resume-apply)
-      // so it is a safe default for every test that returns before the
-      // action/continuation check is even reached. Tests that exercise an
-      // `activate` continuation must override this explicitly.
+      // `force` is the broadest resume authorization (covers resume-apply) so it is a safe default for every test that returns before the action/continuation check is even reached.
+      // Tests that exercise an `activate` continuation must override this explicitly.
       action: "force",
       requestedTargetVersion: current.targetVersion,
       evidence: NO_EVIDENCE,
@@ -1500,9 +1490,7 @@ describe("decideAttemptRecovery - target change supersedes rather than resuming 
     // The new target is NOT minted here - two durable writes, matching the
     // `decideAttemptClaim` supersede/create split.
     expect(decision.record.targetVersion).toBe("1.2.3");
-    // Unlike `decideAttemptClaim`'s own parked-target supersede (which
-    // attaches no recovery provenance), a recovery-driven supersede must
-    // preserve the evidence that reconciled this attempt.
+    // Unlike `decideAttemptClaim`'s own parked-target supersede (which attaches no recovery provenance), a recovery-driven supersede must preserve the evidence that reconciled this attempt.
     expect(decision.record.recovery).toEqual({
       recoveredBy: "attempt-executor",
       outcome: "superseded",
@@ -1515,10 +1503,6 @@ describe("decideAttemptRecovery - target change supersedes rather than resuming 
   });
 
   it("terminalizes complete rather than superseding when the OLD target's evidence proves completion", () => {
-    // Recovery must not silently "complete" an attempt for a target the
-    // caller no longer wants, then separately create the new one - the old
-    // target's own evidence match is irrelevant once requestedTargetVersion
-    // has moved on for THIS record.
     const active = makeRecord({ targetVersion: "1.2.3" });
     const decision = decideAttemptRecovery(
       recoveryContext({
@@ -1538,9 +1522,8 @@ describe("decideAttemptRecovery - target change supersedes rather than resuming 
       }),
     );
     expect(decision.kind).toBe("terminalize-complete");
-    // Complete is checked first (installed+running match), which is
-    // correct: the old target genuinely finished. Only when it did NOT
-    // finish does target-change fall through to supersede.
+    // Complete is checked first (installed+running match), which is correct: the old target genuinely finished.
+    // Only when it did not finish does target-change fall through to supersede.
     if (decision.kind === "terminalize-complete") {
       expect(decision.record.targetVersion).toBe("1.2.3");
     }
@@ -1745,9 +1728,8 @@ describe("decideAttemptRecovery - request action authorizes only its own continu
         owner: "host-home-bound" as const,
       },
     };
-    // Complete/supersede never consult the action - they are reconciliations
-    // of physical fact, not claims. `defer` genuinely can reach them; what it
-    // must never reach is `resume-new-generation`, which starts new work.
+    // Complete/supersede never consult the action - they are reconciliations of physical fact, not claims.
+    // `defer` genuinely can reach them; what it must never reach is `resume-new-generation`, which starts new work.
     const completeDecision = decideAttemptRecovery(
       recoveryContext({
         current: active,

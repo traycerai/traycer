@@ -75,43 +75,13 @@ afterEach(async () => {
   tempDirs.length = 0;
 });
 
-/**
- * Local-identity re-reads go through real `fs.readFile` (libuv I/O, not just
- * a microtask), so a couple of `Promise.resolve()` turns are not enough to
- * observe their completion. A real macrotask tick is.
- */
 function flushIo(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 /**
- * A `listRegisteredHosts` double that hands every caller its OWN deferred and
- * announces when each call STARTS.
- *
- * ## Why the obvious shape is a deadlock
- *
- * The natural double for "two overlapping refreshes" is one keyed on call
- * order - `calls.length === 1 ? firstCall : secondCall`. It encodes an
- * assumption that is not true: WHICH refresh arrives first is decided by an
- * async race, not by the order the test started them. `refreshOrThrow` awaits
- * `readLocalHostId()` - a REAL filesystem read - before it ever calls this
- * double, so two overlapping refreshes are both suspended in libuv's
- * threadpool, and under a saturated pool their reads complete out of
- * submission order. When the second refresh wins, it receives `firstCall`, the
- * test resolves `firstCall` believing it belongs to the first refresh, and
- * `await inFlight` then waits on a deferred the test only resolves AFTER that
- * await. That is a HANG, not slowness - no timeout budget can fix an await
- * that never settles, which is why this is a fixture bug and not a timing one.
- *
- * ## What this replaces it with
- *
- * Per-call deferreds (so no call can be mistaken for another) plus a start
- * signal per call, so a test can WAIT for the fact it needs - "refresh #1 is
- * now inside the fetch" - instead of assuming it. The signal is resolved from
- * inside the double itself, so it is exact under any load. `flushIo`'s 10ms
- * sleep is the weaker form of the same barrier and is deliberately not used
- * for this: a sleep long enough today is a sleep too short on a busier
- * machine.
+ * A `listRegisteredHosts` double that hands every caller its OWN deferred and announces when each call STARTS.
+ * That is a HANG, not slowness - no timeout budget can fix an await that never settles, which is why this is a fixture bug and not a timing one.
  */
 function recordingRegistryFetch(): {
   readonly fetch: () => Promise<HostListFetchResult>;
@@ -142,9 +112,6 @@ function recordingRegistryFetch(): {
   };
 }
 
-// ---------------------------------------------------------------------------
-// DesktopAuthorityIdentitySource
-// ---------------------------------------------------------------------------
 
 describe("DesktopAuthorityIdentitySource", () => {
   it("does not bump the generation or fire onChanged on a token-only refresh (same user)", () => {
@@ -236,9 +203,6 @@ describe("DesktopAuthorityIdentitySource", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// DesktopHostFleetSource
-// ---------------------------------------------------------------------------
 
 class FakeIdentitySource implements AuthorityIdentitySource {
   private identityKey: string | null;
@@ -345,10 +309,6 @@ function buildFleetSource(overrides: {
     bearerToken: string,
   ) => Promise<HostListFetchResult>;
 }): DesktopHostFleetSource {
-  // A recording fake, not a no-op: `publishRegistryResponse` is a required
-  // option (P4.1/F22), and callers that don't care what lands here still need
-  // a real sink rather than a silently-dropping one. Tests that DO care what
-  // was published use `buildFleetSourceWithPublisher` below instead.
   const published: RegisteredHostsPush[] = [];
   return new DesktopHostFleetSource({
     authnBaseUrl: "http://localhost:5005",
@@ -363,12 +323,6 @@ function buildFleetSource(overrides: {
   });
 }
 
-/**
- * Same composition as {@link buildFleetSource}, but hands back the recording
- * array too - for the P4.1/F22 `publishRegistryResponse` assertions, which
- * need to inspect what actually got published rather than just that the
- * option was wired.
- */
 function buildFleetSourceWithPublisher(overrides: {
   identity: AuthorityIdentitySource;
   authSession: DesktopAuthSession;
@@ -715,11 +669,7 @@ describe("DesktopHostFleetSource", () => {
     host.emitChange();
     await flushIo();
 
-    // The republish must carry B's cached membership, NOT the late A
-    // completion that resolved after it. If the port's own cache had
-    // adopted A's rows/localHostId, this republish - stamped honestly with
-    // the CURRENT generation (1) - would carry account A's rows straight
-    // past the engine's identityGeneration guard.
+    // The republish must carry B's cached membership, NOT the late A completion that resolved after it.
     const finalSnapshot = snapshots.at(-1);
     expect(finalSnapshot?.identityGeneration).toBe(1);
     const finalHostIds = finalSnapshot?.hosts.map((entry) => entry.hostId);
@@ -752,13 +702,7 @@ describe("DesktopHostFleetSource", () => {
   });
 
   it("a failed fetch on a COLD source still publishes this machine's local host - usability does not wait on the cloud", async () => {
-    // The old pin here said "publishes nothing", and that absolutism was the
-    // regression: at cold boot the source's default is an EMPTY fleet, so a
-    // flaky registry read left `effectiveHostId` null - "No host is
-    // available" over a machine with a durable, dialable local host - until
-    // the 60s poll or a host-change event happened to rescue it. The local
-    // id was already read from disk before the fetch; a cloud failure keeps
-    // the rows unknown, not the machine.
+    // The local id was already read from disk before the fetch; a cloud failure keeps the rows unknown, not the machine.
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
@@ -798,11 +742,6 @@ describe("DesktopHostFleetSource", () => {
   });
 
   it("a failed fetch AFTER adopted membership keeps the rows and publishes nothing new - known membership is not clobbered", async () => {
-    // The half of the old pin that was always right, now stated on the
-    // fixture that actually exercises it: membership has to exist before a
-    // failure can be accused of clobbering it. The failed refresh re-adopts
-    // the same local id (a no-op by the value guard) and leaves the rows
-    // alone, so no snapshot is published at all.
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
@@ -947,11 +886,6 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     const authSession = new DesktopAuthSession();
-    // Signed out throughout: this isolates `refreshLocalIdentity` from
-    // `refresh()`'s own auto-triggered fetch (which would need a bearer
-    // token to reach `listRegisteredHosts` at all), so the only thing that
-    // can publish a snapshot here is the local-identity re-read this test is
-    // pinning.
     const identity = new FakeIdentitySource(null, 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -967,11 +901,7 @@ describe("DesktopHostFleetSource", () => {
     const snapshots: HostFleetSnapshot[] = [];
     fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
-    // Fire the `host` change: `refreshLocalIdentity` captures generation 0
-    // and starts its (real, libuv-backed) enrollment read. `fs.readFile`
-    // cannot resolve before this synchronous block finishes, so switching
-    // the identity here lands strictly BEFORE the read completes - the
-    // exact race the fix closes.
+    // `fs.readFile` cannot resolve before this synchronous block finishes, so switching the identity here lands strictly BEFORE the read completes - the exact race the fix closes.
     host.emitChange();
     identity.set("user-b", 1);
 
@@ -1009,17 +939,8 @@ describe("DesktopHostFleetSource", () => {
       hosts: [],
     });
 
-    // ANTI-VACUITY ANCHOR, in two halves. The negative assertions above are
-    // only meaningful if the enrollment read actually had time to complete
-    // inside `flushIo`; a read still in flight would satisfy them for the
-    // wrong reason. But a signed-out read publishes NOTHING (eligibility, not
-    // just staleness, gates it - a durable local id must not repopulate a
-    // fleet `refresh` has declared empty), so "nothing was published" cannot
-    // by itself prove the pipeline ran.
-    //
-    // Half 1: SIGN IN, then drive a local-host change. The read must land and
-    // publish the id - this is what proves the pipeline completes inside the
-    // flush window, so the silence above was a decision and not a delay.
+    // But a signed-out read publishes NOTHING (eligibility, not just staleness, gates it.
+    // The read must land and publish the id - this is what proves the pipeline completes inside the flush window, so the silence above was a decision and not a delay.
     authSession.set(signedInSnapshot("user-b", "token-b"));
     host.emitChange();
     await flushIo();
@@ -1043,11 +964,6 @@ describe("DesktopHostFleetSource", () => {
   });
 
   it("keeps a NEWER local identity when an older refresh completes after it", async () => {
-    // The two writers of `localHostId` race: `refresh()` reads the id BEFORE
-    // its registry fetch and adopts it AFTER, so a local-host change that
-    // lands during that fetch was published and then overwritten by the id the
-    // refresh had already read - the authority then called the stale host
-    // local and this machine remote until the next event or the 60s poll.
     const dir = await makeTempDir();
     const enrollmentFile = join(dir, "enrollment.json");
     await writeFile(
@@ -1151,9 +1067,6 @@ describe("DesktopHostFleetSource", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// DesktopHostFleetSource / publishRegistryResponse (redesign P4.1/F22)
-// ---------------------------------------------------------------------------
 
 describe("DesktopHostFleetSource publishRegistryResponse", () => {
   it("publishes ONCE per successful refresh, carrying the FULL response rows and the identityKey captured at fetch start", async () => {
@@ -1196,21 +1109,6 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
     fleet.dispose();
   });
 
-  /**
-   * ONE fetch per refresh - the arithmetic the whole move rests on.
-   *
-   * Added after a probe: doubling the fetch inside `refreshOrThrow` DID turn
-   * this suite red, but for the wrong reason. The arm it broke drives
-   * `listRegisteredHosts` with a CALL-ORDERED fake (`calls.length === 1 ? … : …`),
-   * so an extra call shifts which promise each caller gets and the failure is
-   * the fixture's sequencing, not a statement about how many requests the app
-   * makes. Nothing asserted the count itself.
-   *
-   * That distinction matters here more than usual: "N windows now produce ONE
-   * poll" is this change's entire claim, and a claim whose only guard is a
-   * fixture's call ordering would survive any refactor that kept the ordering
-   * and doubled the requests.
-   */
   it("issues exactly ONE registry request per refresh - the claim the move rests on", async () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
@@ -1321,10 +1219,6 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
     registry.calls[1]?.resolve({ kind: "ok", response: { hosts: [] } });
     await Promise.resolve();
 
-    // The FIRST (stale) fetch's completion is still published - a late
-    // completion is published so the renderer can drop it by its own stamp -
-    // but stamped with the identity it was FETCHED under, "user-a", never
-    // the "user-b" that was current when it happened to resolve.
     const stalePush = published.find((push) => push.identityKey === "user-a");
     expect(stalePush).toBeDefined();
     expect(stalePush?.response.hosts.map((row) => row.hostId)).toEqual([
@@ -1365,9 +1259,6 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// DesktopLocalHostOutageSignal
-// ---------------------------------------------------------------------------
 
 function buildControllerStatus(
   mutation: HostControllerStatus["mutation"],
@@ -1534,9 +1425,6 @@ describe("DesktopLocalHostOutageSignal", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// createDesktopLocalHostEnsurePort
-// ---------------------------------------------------------------------------
 
 class FakeHostController implements IpcHostController {
   outcome: MutationOutcome<ConvergeReadyOk> = {
@@ -1643,14 +1531,6 @@ describe("createDesktopLocalHostEnsurePort", () => {
   it("refuses to call a REMOVED host alive, even though its converge answers ok", async () => {
     const controller = new FakeHostController();
     const port = createDesktopLocalHostEnsurePort(controller);
-    // The exact short-circuit `HostController.convergeReady` returns while the
-    // removal sentinel stands: `ok`, because nothing failed - and `running:
-    // false`, because by consent nothing ran either. The engine reads a bare
-    // `ok` as FIRSTHAND proof of life (`onHostProvedAlive` clears the refusal
-    // streak and makes the lease usable), so mapping this one to `{ok: true}`
-    // handed failover a host that is not installed, and re-cleared that streak
-    // every pacing hold. Now it is a plain failure - and NOT deferred, because
-    // nothing here changes on its own until the user reinstalls.
     controller.outcome = {
       kind: "ok",
       value: { running: false, version: null },
@@ -1665,16 +1545,8 @@ describe("createDesktopLocalHostEnsurePort", () => {
   it("does NOT treat a busy refusal as proof of life - E_HOST_BUSY is a fail-safe", async () => {
     const controller = new FakeHostController();
     const port = createDesktopLocalHostEnsurePort(controller);
-    // The tempting reading is "a host that is up with active work", and an
-    // earlier revision of this port resolved `{ok: true}` on it to spare a
-    // non-target local host one CLI spawn per pacing hold. `assertHostNotBusy`
-    // says otherwise in its own words: it raises `E_HOST_BUSY` when a live
-    // PID's idle state CANNOT BE DETERMINED - `/activity` timed out, refused,
-    // answered malformed, or 404'd - exactly as it does when the host reports
-    // real work. A WEDGED host is the first case, so `{ok: true}` handed
-    // `onHostProvedAlive` a host that cannot serve: refusal evidence cleared,
-    // lease usable, failover free to choose it, and each later ensure clearing
-    // the refusals its failed dials had just rebuilt.
+    // `assertHostNotBusy` says otherwise in its own words: it raises `E_HOST_BUSY` when a live PID's idle state CANNOT BE DETERMINED.
+    // A WEDGED host is the first case, so `{ok: true}` handed `onHostProvedAlive` a host that cannot serve: refusal evidence cleared, lease usable, failover free to choose it, and each.
     controller.outcome = {
       kind: "busy",
       continuation: "retry-with-force",

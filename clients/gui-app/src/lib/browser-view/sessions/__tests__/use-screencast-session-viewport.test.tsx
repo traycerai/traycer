@@ -17,12 +17,7 @@ function unusedClientMethod(): never {
 }
 
 /**
- * A fake `browser.screencast` client with the REAL transport's send contract:
- * `WsStreamSession.sendClientFrame` silently drops every frame whose phase is
- * not `subscribed`, so this session records one only while it is open. A
- * fixture that recorded regardless is what let a viewport bridge that only ever
- * wrote into the pre-subscribe window pass its test and state nothing in the
- * field.
+ * A fake `browser.screencast` client with the REAL transport's send contract: `WsStreamSession.sendClientFrame` silently drops every frame whose phase is not `subscribed`, so this session records one only while it is open.
  */
 function createScreencastClientHarness(id: string): {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
@@ -84,11 +79,7 @@ function viewportFrames(
 }
 
 /**
- * Mounts the hook with a real DOM tile: `viewportRef`'s element is stubbed to
- * report a nonzero `clientWidth`/`clientHeight` (jsdom has no layout, so both
- * default to 0) via a callback ref that runs at commit - before any passive
- * effect, including the viewport bridge's - so the bridge's first-measurement
- * check sees real dimensions on the very first render.
+ * Mounts the hook with a real DOM tile: `viewportRef`'s element is stubbed to report a nonzero `clientWidth`/`clientHeight` (jsdom has no layout, so both default to 0) via a callback ref that runs at commit - before any passive effect, including the viewport.
  */
 function Harness(props: {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
@@ -102,10 +93,7 @@ function Harness(props: {
     visible: true,
     captureDormantSnapshot: () => {},
   });
-  // Destructured to locals before any JSX use: `react-hooks/refs` rejects a
-  // `session.refs.x` member expression as a `ref=` prop (reading a ref during
-  // render), and `react-hooks/immutability` rejects writing `.current` through
-  // one. Same idiom as the `browser-peek-tile-*` fixtures.
+  // Destructured to locals before any JSX use: `react-hooks/refs` rejects a `session.refs.x` member expression as a `ref=` prop (reading a ref during render), and `react-hooks/immutability` rejects writing `.current` through one.
   const {
     tileRef,
     viewportRef,
@@ -172,9 +160,7 @@ describe("useScreencastSession viewport bridge", () => {
       harnessA.setStatus("open");
     });
 
-    // No `vi.advanceTimersByTime` call: the first measurement is not resize
-    // churn, so it must not wait out VIEWPORT_DEBOUNCE_MS (200ms) on top of the
-    // handshake it already waited for.
+    // No `vi.advanceTimersByTime` call: the first measurement is not resize churn, so it must not wait out VIEWPORT_DEBOUNCE_MS (200ms) on top of the handshake it already waited for.
     expect(viewportFrames(harnessA.sentClientFrames)).toEqual([
       { ...MEASURED_VIEWPORT_FRAME },
     ]);

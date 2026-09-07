@@ -22,7 +22,6 @@ const testState = vi.hoisted(() => ({
   createPending: false,
   pasteDisabled: false,
   resolvingPaths: false,
-  /** Captures the real-ish pending job runner used by in-place landing paste. */
   runPendingImageJob: null as
     | ((job: (signal: AbortSignal) => Promise<void>) => void)
     | null,
@@ -71,9 +70,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
     createDraft: vi.fn(() => "draft-for-test"),
-    // handleSnapshot's unbound-create branch now calls createDraftWithId
-    // (reusing a pre-minted pendingCreateId when present) rather than
-    // createDraft directly.
+    // handleSnapshot's unbound-create branch now calls createDraftWithId (reusing a pre-minted pendingCreateId
+    // when present) rather than createDraft directly.
     createDraftWithId: vi.fn(() => "draft-for-test"),
     restoreDraftWorkspaceForHost: vi.fn(),
     setDraftContent: vi.fn(),
@@ -125,12 +123,8 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
     submit: testState.submit,
     selectTerminalAgent: vi.fn(),
-    // `isSubmitting` now reads `actions.isPending` (the real hook's
-    // `createEpic.isPending || terminalAgentCreate.isPending`) rather than a
-    // permanently-false placeholder - mirror `testState.createPending` here
-    // too, the same flag the neighboring `useEpicCreateForClient` mock below
-    // already drives, so this gate suite's "a create is in flight" setup
-    // still reaches the composer now that it goes through this seam.
+    // `isSubmitting` now reads `actions.isPending` (the real hook's `createEpic.isPending ||
+    // terminalAgentCreate.isPending`) rather than a permanently-false placeholder.
     isPending: testState.createPending,
   }),
 }));
@@ -204,10 +198,7 @@ vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
-  // Same treatment as `use-composer-dictation` above: a host-backed readiness
-  // hook stubbed to its "nothing to report" answer so these gate tests stay
-  // about the gate they name. `blocked: false` is also the hook's real
-  // fail-open answer before `providers.list` resolves.
+  // `blocked: false` is also the hook's real fail-open answer before `providers.list` resolves.
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
@@ -234,22 +225,8 @@ vi.mock("@/hooks/composer/use-composer-dictation", () => ({
 vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
   useLandingImageFetcher: () => vi.fn(),
 }));
-// `useEpicCreateForClient`/`useCreateTuiAgentForClient` mocks used to live
-// here, driven by `testState.createPending`. Before the isSubmitting change,
-// `landing-composer.tsx` called `useEpicCreateForClient` itself and these
-// mocks were reachable - that is what made "locks editor input... during a
-// submission" pass for a reason production could never produce: the
-// composer's own `isPending` observer was permanently false, so the mock was
-// supplying the very behaviour the real code was incapable of. Now that
-// `isSubmitting` reads `actions.isPending` through the (fully-stubbed)
-// `useLandingComposerActions` mock above instead, nothing in the mounted
-// tree reaches these two hooks - confirmed by removing them and finding the
-// suite stays green. Left removed rather than kept as a second, unreachable
-// copy of the same intent.
-// P1.2: the composer resolves its placement (pin ?? effective) through this
-// one hook. These suites are about paste/gating/banner behaviour, not
-// selection derivation, so it is stubbed at that single boundary - the same
-// treatment the other host-backed hooks above get.
+// during a submission" pass for a reason production could never produce: the composer's own `isPending`
+// observer was permanently false, so the mock was supplying the very behaviour the real code was incapable of.
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => ({
     pin: {
@@ -273,7 +250,7 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => null,
 }));
 vi.mock(
@@ -361,13 +338,8 @@ describe("LandingComposer direct submit gate", () => {
   });
 
   it("submits the draft handleSnapshot minted, not null, while props.draftId is still catching up", () => {
-    // The real race: the first submittable edit mints an unbound draft inside
-    // this component, but `props.draftId` only flips on the parent's next
-    // render - so a type-then-Enter submits with the prop still `null`. If that
-    // `null` reaches the action, `ensureSubmissionDraft` mints a SECOND draft
-    // and the one already holding the user's content is stranded. Nothing
-    // re-render carries a new `draftId`, so the prop is still `null` at submit
-    // time exactly as it is in the app.
+    // The real race: the first submittable edit mints an unbound draft inside this component, but `props.draftId`
+    // only flips on the parent's next render - so a type-then-Enter submits with the prop still `null`.
     const view = render(
       <LandingComposer
         draftId={null}

@@ -2,19 +2,10 @@ import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 
-/**
- * A toast body with one primary action and "Later": the app-update toasts'
- * shape, shared with the feature announcements so a second toast with a
- * button does not grow a second button layout.
- *
- * The primary action fires once. A toast dismisses on a delay, so a second
- * click can land while it is on its way out; the ref (not only the state)
- * is what makes the guard hold inside the same tick. Either button dismisses
- * the toast by the id its caller shows it under.
- */
+/** A toast dismisses on a delay, so a second click can land while it is on its way out; the ref (not only the
+ * state) is what makes the guard hold inside the same tick. */
 export function ActionToastContent(props: {
   readonly toastId: string;
-  /** A small uppercase line above the title, or `null` for none. */
   readonly eyebrow: string | null;
   readonly title: string;
   readonly description: string;

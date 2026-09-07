@@ -11,19 +11,14 @@ import { cn } from "@/lib/utils";
 
 export interface ManagedCommandChatBacklinkProps {
   readonly tabId: string;
-  /** The agent that created the command - the list record's `chatId`. */
   readonly chatId: string;
   readonly fallbackHostId: string;
   readonly testId: string;
   readonly className: string | undefined;
 }
 
-/**
- * The backlink every managed-command surface carries (`UI.md` §1): from a
- * command back to the agent that created it. Renders nothing when that agent
- * is not in this epic's projection - another user's private chat, or one not
- * yet hydrated - because there would be nothing to open.
- */
+/** Renders nothing when that agent is not in this epic's projection - another user's private chat, or one not
+ * yet hydrated - because there would be nothing to open. */
 export function ManagedCommandChatBacklink(
   props: ManagedCommandChatBacklinkProps,
 ) {
@@ -38,10 +33,8 @@ export function ManagedCommandChatBacklink(
 
   const open = (event: MouseEvent<HTMLButtonElement>) => {
     openTile({
-      // The chat's OWN host when the projection knows it, else the surface's
-      // bound host. `dedupe` matches on that pair, so a clone that holds two
-      // tabs for one copied chat id activates the one this window actually
-      // belongs to rather than whichever came first.
+      // `dedupe` matches on that pair, so a clone that holds two tabs for one copied chat id activates the one this
+      // window actually belongs to rather than whichever came first.
       node: makeOpenableNodeRef({
         id: chatId,
         instanceId: uuidv4(),

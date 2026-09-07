@@ -9,9 +9,7 @@ import type {
   TilePane,
 } from "@/stores/epics/canvas/types";
 
-// Run the prepared focus mutation synchronously and skip route focus routing,
-// so the real `openTile` seam - resolver, executor and canvas store - runs in
-// the test (mirrors the tile-view test's direct-prepare approach).
+// Run the prepared focus mutation synchronously and skip route focus routing, so the real `openTile` seam - resolver, executor and canvas store - runs in the test (mirrors the tile-view test's direct-prepare approach).
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation:
     () => (_epicId: string, _tabId: string, prepare: () => unknown) => {
@@ -38,10 +36,6 @@ function chat(id: string, instanceId: string, hostId: string): EpicArtifactRef {
   return { id, instanceId, type: "chat", name: id, hostId };
 }
 
-/**
- * `inst-1` is a KEPT tile and `inst-2` the pane's preview - the two states a
- * tap has to tell apart.
- */
 function singlePaneCanvas(): EpicCanvasState {
   const root: TilePane = {
     kind: "pane",
@@ -80,10 +74,7 @@ function pane(): TilePane {
 }
 
 /**
- * The pane opener mints a fresh `instanceId` for every tile it lands (a second
- * view of the same content is a distinct tab), so the pane's membership is
- * identified by CONTENT id here - the instance ids these tests hand in are
- * only meaningful for the tiles already seeded in the canvas.
+ * The pane opener mints a fresh `instanceId` for every tile it lands (a second view of the same content is a distinct tab), so the pane's membership is identified by CONTENT id here - the instance ids these tests hand in are only meaningful for the tiles already seeded in the canvas.
  */
 function paneContentIds(): (string | null)[] {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];

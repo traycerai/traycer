@@ -7,12 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ResponseOfMethod } from "../../../../shared/host-transport/host-messenger";
 
-// Same sandboxing convention as manifest/__tests__/host-install.test.ts and
-// manifest/__tests__/host-staged.test.ts: pin every environment-aware path
-// helper at a tmpdir sandbox so the reader can never touch the real user
-// home, and redirect `node:os`'s `homedir()` too (`store/paths` computes its
-// root from it once at module load; overriding only the module export would
-// leave that frozen constant pointed at the real home).
+// Same sandboxing convention as manifest/__tests__/host-install.test.ts and manifest/__tests__/host-staged.test.ts: pin every environment-aware path helper at a tmpdir sandbox so the reader can never touch the real user home, and redirect `node:os`'s `homedir()` too (`store/paths` computes its root from it once at module load; overriding only the module export would leave that frozen constant pointed at the real home).
 let sandboxRoot = "";
 
 const osHome = vi.hoisted(() => ({ current: "" }));
@@ -50,13 +45,8 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
-// Mirrors `host/__tests__/incumbent-check.test.ts`'s existing convention:
-// the process-liveness probe itself is mocked at its module boundary rather
-// than driven with real OS processes, since "dead"/"mismatch"/"indeterminate"
-// are not reliably reproducible from a real pid in CI. `vi.mock` factories
-// are hoisted above this file's own top-level bindings, so the mock
-// functions themselves have to live in `vi.hoisted` to avoid a TDZ
-// `ReferenceError` (same reason `osHome` above does).
+// Mirrors `host/__tests__/incumbent-check.test.ts`'s existing convention: the process-liveness probe itself is mocked at its module boundary rather than driven with real OS processes, since "dead"/"mismatch"/"indeterminate" are not reliably reproducible from a real pid in CI.
+// `vi.mock` factories are hoisted above this file's own top-level bindings, so the mock functions themselves have to live in `vi.hoisted` to avoid a TDZ `ReferenceError` (same reason `osHome` above does).
 const mocks = vi.hoisted(() => ({
   identityVerdictMock: vi.fn(),
   readHostPidMetadataMock: vi.fn(),
@@ -69,13 +59,8 @@ vi.mock("../../store/process-identity", () => ({
   getPublishedProcessIdentityVerdict: mocks.identityVerdictMock,
 }));
 
-// `readHostPidMetadata` defaults to the REAL reader (against the sandboxed
-// `pid.json` path) so every ordinary test exercises the genuine file read.
-// Only the flap test below overrides it with `mockResolvedValueOnce` twice,
-// to observe two distinct pid.json snapshots from the two reads
-// `observeAttemptRecoveryEvidence` performs inside one call - there is no
-// awaited gap in production a test could otherwise rewrite the real file
-// into between them.
+// `readHostPidMetadata` defaults to the REAL reader (against the sandboxed `pid.json` path) so every ordinary test exercises the genuine file read.
+// Only the flap test below overrides it with `mockResolvedValueOnce` twice, to observe two distinct pid.json snapshots from the two reads `observeAttemptRecoveryEvidence` performs inside one call - there is no awaited gap in production a test could otherwise rewrite the real file into between them.
 vi.mock("../pid-metadata", async () => {
   const actual =
     await vi.importActual<typeof import("../pid-metadata")>("../pid-metadata");
@@ -83,11 +68,8 @@ vi.mock("../pid-metadata", async () => {
   return { ...actual, readHostPidMetadata: mocks.readHostPidMetadataMock };
 });
 
-// The running leg's healthy-host proof is a real WebSocket RPC call in
-// production (`callHostRpcAtEndpoint("host.status", ...)`). Its own
-// transport/auth machinery is out of scope here - this test-only module
-// boundary mock is the same convention as the process-identity mock above,
-// not a new production hook.
+// The running leg's healthy-host proof is a real WebSocket RPC call in production (`callHostRpcAtEndpoint("host.status", ...)`).
+// Its own transport/auth machinery is out of scope here - this test-only module boundary mock is the same convention as the process-identity mock above, not a new production hook.
 vi.mock("../../internal/host-rpc", () => ({
   callHostRpcAtEndpoint: mocks.callHostRpcMock,
 }));
@@ -107,9 +89,7 @@ function sha256Of(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-// The digest that a genuine materialization would have recorded for the
-// bytes this file actually places on disk - "binary-bytes" everywhere below
-// unless a test deliberately wants a stable-but-WRONG digest.
+// The digest that a genuine materialization would have recorded for the bytes this file actually places on disk - "binary-bytes" everywhere below unless a test deliberately wants a stable-but-WRONG digest.
 const GENUINE_EXECUTABLE_SHA256 = sha256Of("binary-bytes");
 
 function installRecord(
@@ -240,10 +220,8 @@ beforeEach(() => {
   osHome.current = sandboxRoot;
   identityVerdictMock.mockReset();
   callHostRpcMock.mockReset();
-  // `mockClear()`, not `mockReset()`: clear call history only, so the
-  // real-reader default implementation set in the `vi.mock` factory above
-  // survives into every test. Individual tests that need the flap scenario
-  // layer `mockResolvedValueOnce` on top of it.
+  // `mockClear()`, not `mockReset()`: clear call history only, so the real-reader default implementation set in the `vi.mock` factory above survives into every test.
+  // Individual tests that need the flap scenario layer `mockResolvedValueOnce` on top of it.
   mocks.readHostPidMetadataMock.mockClear();
 });
 
@@ -293,9 +271,7 @@ describe("observeAttemptRecoveryEvidence - installed/staged artifacts: absent, v
   });
 
   it("never verifies an installed executable whose placed bytes are STABLE but do not match the recorded digest - proves double observation cannot upgrade untrusted bytes into attested bytes", async () => {
-    // The bytes are wrong BEFORE the first observation and never change
-    // across it - exactly the "stable but wrong" gap the cold review found:
-    // a fingerprint that only proves the same (wrong) bytes were seen twice.
+    // The bytes are wrong BEFORE the first observation and never change across it - exactly the "stable but wrong" gap the cold review found: a fingerprint that only proves the same (wrong) bytes were seen twice.
     await writeInstalledExecutable(
       "1.2.3",
       true,
@@ -405,10 +381,7 @@ describe("observeAttemptRecoveryEvidence - installed/staged artifacts: absent, v
       "production",
       paths.hostHomeDir("production"),
     );
-    // `readHostStagedRecordAt` is deliberately tolerant and returns `null`
-    // for malformed JSON (legacy reconciliation) - recovery must still
-    // distinguish "present but unusable" from "genuinely absent" by
-    // re-probing the path directly.
+    // `readHostStagedRecordAt` is deliberately tolerant and returns `null` for malformed JSON (legacy reconciliation) - recovery must still distinguish "present but unusable" from "genuinely absent" by re-probing the path directly.
     expect(evidence.staged).toEqual({ kind: "unreadable" });
   });
 
@@ -448,10 +421,8 @@ describe("observeAttemptRecoveryEvidence - installed/staged artifacts: absent, v
     );
     identityVerdictMock.mockResolvedValue("dead");
 
-    // Bounded: a FIFO with nothing on the other end would hang a naive open
-    // for read. `placedFileFingerprint` must reject on the pre-open `lstat`
-    // identity check (not `.isFile()`) before ever calling `open()`, so this
-    // resolves promptly rather than hanging until the test timeout.
+    // Bounded: a FIFO with nothing on the other end would hang a naive open for read.
+    // `placedFileFingerprint` must reject on the pre-open `lstat` identity check (not `.isFile()`) before ever calling `open()`, so this resolves promptly rather than hanging until the test timeout.
     const evidence = await Promise.race([
       readAttemptRecoveryEvidence(
         "production",
@@ -484,9 +455,7 @@ describe("observeAttemptRecoveryEvidence - installed/staged artifacts: absent, v
   });
 
   it("fails closed as unreadable when the staged record's stageId is empty - an incomplete/legacy attestation is not a weaker verified", async () => {
-    // `stageId` on the wire schema defaults to non-empty via `z.string().min(1)`;
-    // the reader itself additionally requires it non-null before trusting the
-    // placed bytes as a verified stage.
+    // `stageId` on the wire schema defaults to non-empty via `z.string().min(1)`; the reader itself additionally requires it non-null before trusting the placed bytes as a verified stage.
     const stagedDir = paths.hostStagedDir("production");
     mkdirSync(stagedDir, { recursive: true });
     const relativeExecutablePath = "traycer-host";
@@ -667,9 +636,7 @@ describe("observeAttemptRecoveryEvidence - running evidence: owner-bound vs dead
         processStartIdentity: "linux:boot-a 4242",
       })
       .mockResolvedValueOnce({
-        // Recycled onto a different pid after the RPC returned - the
-        // post-RPC re-bind check must catch this even though the RPC itself
-        // reported healthy.
+        // Recycled onto a different pid after the RPC returned - the post-RPC re-bind check must catch this even though the RPC itself reported healthy.
         ...baseMetadata,
         pid: 5252,
         processStartIdentity: "linux:boot-c 5252",
@@ -786,16 +753,8 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
   });
 
   it("fails closed as unreadable when the published process identity differs between the two internal reads within ONE observation at the SAME version - a restart mid-read, not a stable process", async () => {
-    // `observeAttemptRecoveryEvidence` re-reads pid.json between its two
-    // internal running-evidence snapshots. Overriding the top-level,
-    // statically hoisted `readHostPidMetadata` mock for exactly these two
-    // calls is the only way to observe two DIFFERENT snapshots from within
-    // one synchronous call with no awaited gap a test could otherwise
-    // rewrite the real file into - reusing the same module-mock seam
-    // `incumbent-check.test.ts` already uses for `readHostPidMetadata`, not
-    // a new production hook. Every OTHER test in this file relies on this
-    // same mock's real-reader default implementation, set once in the
-    // `vi.mock("../pid-metadata", ...)` factory above.
+    // `observeAttemptRecoveryEvidence` re-reads pid.json between its two internal running-evidence snapshots.
+    // Overriding the top-level, statically hoisted `readHostPidMetadata` mock for exactly these two calls is the only way to observe two DIFFERENT snapshots from within one synchronous call with no awaited gap a test could otherwise rewrite the real file into - reusing the same module-mock seam `incumbent-check.test.ts` already uses for `readHostPidMetadata`, not a new production hook.
     const baseMetadata = {
       pid: 4242,
       hostId: "host-1",
@@ -825,23 +784,11 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
       "production",
       paths.hostHomeDir("production"),
     );
-    // The pre/post-RPC mismatch inside the FIRST internal running read
-    // already resolves that read to unreadable; the second internal running
-    // read (this call site's own before/after flap check) falls back to the
-    // real reader, which finds no pid.json at all and reads absent. Either
-    // way the two internal reads' fingerprints disagree, so the outer
-    // evidence stays unreadable rather than silently trusting either half.
+    // The pre/post-RPC mismatch inside the FIRST internal running read already resolves that read to unreadable; the second internal running read (this call site's own before/after flap check) falls back to the real reader, which finds no pid.json at all and reads absent.
+    // Either way the two internal reads' fingerprints disagree, so the outer evidence stays unreadable rather than silently trusting either half.
     expect(evidence.running).toEqual({ kind: "unreadable" });
   });
 });
 
-// KNOWN GAP: `sameRegularFileIdentity` also fails closed when either side's
-// `dev`/`ino` reads as `0` (the Windows convention for "not a meaningful
-// identity"). That branch has no test here: forcing a zero-identity `Stats`
-// through `placedFileFingerprint` would require mocking `node:fs/promises`'s
-// `lstat`/`open`/`FileHandle.stat` at the module boundary, and this file's
-// fixture writers (`writeHostInstallRecord`, `writeHostStagedRecordAt`, and
-// `readHostPidMetadata`'s real-reader default) all go through that same
-// module - a targeted mock risks silently breaking every other fixture in
-// this file rather than proving the one branch. Real coverage needs either a
-// genuine Windows CI runner or a narrower seam than exists today.
+// KNOWN GAP: `sameRegularFileIdentity` also fails closed when either side's `dev`/`ino` reads as `0` (the Windows convention for "not a meaningful identity").
+// That branch has no test here: forcing a zero-identity `Stats` through `placedFileFingerprint` would require mocking `node:fs/promises`'s `lstat`/`open`/`FileHandle.stat` at the module boundary, and this file's fixture writers (`writeHostInstallRecord`, `writeHostStagedRecordAt`, and `readHostPidMetadata`'s real-reader default) all go through that same module - a targeted mock risks silently breaking every other fixture in this file rather than proving the one branch.

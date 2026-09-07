@@ -7,16 +7,7 @@ import { buildForkWorkspaceSeedFromWorkspaceFolders } from "./fork-workspace-see
 import { resolvePrimaryPath } from "./resolve-primary-path";
 
 /**
- * The canonical launch-time WorktreeIntent for a workspace snapshot: every
- * folder in `workspace.folders` gets exactly one entry (staged, else the
- * seed's own entry, else a synthesized `local` default - never a gap), and
- * every entry's `isPrimary` is stamped from `resolvePrimaryPath(workspace.
- * folders, workspace.primaryPath)`, NOT from whatever the staged/seed entry's
- * own `isPrimary` bit says. This is the single canonicalizer shared by the
- * new-conversation modal and the seeded pre-create launchers (fork dialogs,
- * terminal-agent launcher) so a primary switch - even onto a folder with no
- * staged entry (a non-git folder, never auto-seeded) - always reaches launch
- * correctly instead of silently producing a zero-primary intent.
+ * The canonical launch-time WorktreeIntent for a workspace snapshot: every folder in `workspace.folders` gets exactly one entry (staged, else the seed's own entry, else a synthesized `local` default - never a gap), and every entry's `isPrimary` is stamped.
  */
 export function effectiveWorktreeIntent(input: {
   readonly workspace: LandingDraftWorkspaceSnapshot;

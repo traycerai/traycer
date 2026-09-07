@@ -25,39 +25,11 @@ import type {
   DesktopAppUpdatesBridge,
 } from "@/lib/windows/types";
 
-/**
- * REPRODUCTION - an app-update install destroys a RETAINED unsynced buffer
- * with nothing asked.
- *
- * Scoped deliberately to a retained buffer rather than to "any unsynced
- * edits". A dirty session that still holds a transport drains through it, and
- * `b2a1097a` removed the restart confirmation on exactly that reasoning; a
- * reproduction seeded with a generic dirty session would therefore reproduce a
- * case we are deliberately NOT fixing, and a fix built from it would revert
- * that commit. Retention is the narrower state `30819ce6` created three weeks
- * afterwards: `retainDirtyHandle` calls `detachTransport()`, so the buffer is
- * a live `Y.Doc` with no socket, un-syncable by construction.
- *
- * Every arm asserts its premise positively before anything is clicked, and
- * names WHICH of the three states it is in rather than inheriting whatever the
- * seeding happened to leave: a retained buffer exists, and the live session is
- * explicitly clean or explicitly dirty. Neither half alone identifies the case
- * - "an unsynced row exists" is equally true of the syncable case, and "the
- * live session is clean" is true of a healthy app with nothing pending at all.
- *
- * The clean arms isolate the case; the dirty arm exists so the isolation is
- * not mistaken for the fix's trigger. A reproduction narrows deliberately, and
- * a predicate must not inherit that narrowing - see the mixed-case arm at the
- * bottom for the predicate this distinction rules out.
- */
+/** A reproduction narrows deliberately, and a predicate must not inherit that narrowing - see the mixed-case
+ * arm at the bottom for the predicate this distinction rules out. */
 
-/**
- * The toast never reaches the DOM on its own - `showAppUpdateToast` hands its
- * content to sonner, which owns the host. Mocked so the fixture can render the
- * real toast content and click the real "Restart" affordance, rather than
- * calling the `onRestart` callback directly: invoking the handler would prove
- * the handler installs, not that the SURFACE a user actually clicks does.
- */
+/** The toast never reaches the DOM on its own - `showAppUpdateToast` hands its content to sonner, which owns
+ * the host. */
 const toastMock = vi.hoisted(() => {
   const calls: { last: ReactNode | null } = { last: null };
   const toast = vi.fn((message: ReactNode) => {
@@ -118,10 +90,7 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   snapshot: DesktopAppUpdateSnapshot;
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
-  // Annotated with the full change type. Inference from this default narrows
-  // `outcome` to the literal `"changed"`, which then rejects a
-  // `mockResolvedValue` for `refused-update-pending` - the macOS standing
-  // refusal, which is exactly the case worth testing.
+  // Annotated with the full change type.
   readonly setAllowPrerelease = vi.fn(
     (): Promise<DesktopAppUpdateChannelChange> =>
       Promise.resolve({ outcome: "changed", snapshot: this.snapshot }),
@@ -201,13 +170,7 @@ function renderWithHost(
 
 const EPIC_ID = "epic-retained-update";
 
-/**
- * Drives the real retention path rather than poking the registry's internals:
- * a dirty outgoing handle replaced by a clean incoming one is what
- * `replaceMounted` turns into a retention, and `retainDirtyHandle` is what
- * detaches its transport. Constructing the retained state any other way would
- * be testing a state the product cannot reach.
- */
+/** Constructing the retained state any other way would be testing a state the product cannot reach. */
 function seedRetainedBuffer(liveDirty: boolean): {
   readonly liveIsDirty: () => boolean;
 } {
@@ -215,11 +178,7 @@ function seedRetainedBuffer(liveDirty: boolean): {
   const outgoing = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in this thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -235,11 +194,7 @@ function seedRetainedBuffer(liveDirty: boolean): {
   const incoming = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in this thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -264,39 +219,24 @@ function assertRetainedPremise(
   expectedLiveDirty: boolean,
 ): void {
   const registry = __getOpenEpicRegistryForTests();
-  // Half 1: the un-syncable buffer really is retained. `retainedCountForTests`
-  // is the ONLY accessor that can see this - the public reads merge live and
-  // retained deliberately - which is itself why the fix needs new plumbing.
+  // `retainedCountForTests` is the only accessor that can see this - the public reads merge live and retained
+  // deliberately - which is itself why the fix needs new plumbing.
   expect(registry.retainedCountForTests(EPIC_ID)).toBe(1);
-  // Half 2: the live session's dirtiness is PINNED, so each arm states which
-  // of the three states it is in rather than inheriting whatever the seeding
-  // happened to leave. The clean arms are what keep this fixture off the
-  // syncable case that `b2a1097a` deliberately left alone.
+  // Half 2: the live session's dirtiness is pinned, so each arm states which of the three states it is in rather
+  // than inheriting whatever the seeding happened to leave.
   expect(live.liveIsDirty()).toBe(expectedLiveDirty);
-  // And the merged row exists off the retained buffer alone - which is exactly
-  // why `getUnsyncedEdits().length > 0` cannot be the fix's predicate: it is
-  // equally true here and in the syncable case.
+  // And the merged row exists off the retained buffer alone - which is exactly why `getUnsyncedEdits.length > 0`
+  // cannot be the fix's predicate: it is equally true here and in the syncable case.
   expect(registry.getUnsyncedEdits().length).toBe(1);
 }
 
-/**
- * The fixed behaviour, asserted as a POSITIVE consequence.
- *
- * "`installUpdate` was not called" alone is an absence, and the absence is also
- * what a build that never wired the button produces - so it is paired with the
- * confirmation actually being raised, NAMING the epic whose work is at risk.
- * A gate that fired but raised nothing would be a worse bug than the one being
- * fixed: the user would click Restart and simply get nothing.
- */
+/** "`installUpdate` was not called" alone is an absence, and the absence is also what a build that never wired
+ * the button produces. */
 async function expectPromptedInsteadOfInstalling(
   bridge: FakeAppUpdatesBridge,
   epicId: string,
 ): Promise<void> {
-  // AWAITED because the check is now a round trip: the install door asks MAIN
-  // for the unsyncable set across every window, since `installUpdate()`
-  // restarts the whole app and one renderer can only see its own registry.
-  // The dialog therefore opens a microtask after the click rather than inside
-  // it.
+  // The dialog therefore opens a microtask after the click rather than inside it.
   await waitFor(() => {
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "update-unsynced-confirm",
@@ -309,15 +249,8 @@ async function expectPromptedInsteadOfInstalling(
   expect(__getOpenEpicRegistryForTests().retainedCountForTests(epicId)).toBe(1);
 }
 
-/**
- * Installs the desktop-only `appLifecycle` namespace this shell would carry,
- * answering with work held by ANOTHER window. Returns the teardown.
- *
- * The namespace is read off `window`, not off the React host context, because
- * that is how every gui-app consumer of a desktop-only namespace feature
- * detects it - the renderer must run unchanged on shells that have no Electron
- * preload at all.
- */
+/** Installs the desktop-only `appLifecycle` namespace this shell would carry, answering with work held by
+ * another window. */
 interface WindowWithRunnerHost {
   runnerHost?: unknown;
 }
@@ -404,22 +337,8 @@ describe("app update install vs a retained unsynced buffer", () => {
     await expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
   });
 
-  /**
-   * The MIXED case, and the one a predicate mirroring this fixture's premise
-   * pair would silently drop.
-   *
-   * An epic can hold a retained buffer AND a dirty live session at once. The
-   * live half will drain through its transport; the retained half never can,
-   * and the restart destroys it just the same - so this must prompt. A
-   * predicate written as `retained && !liveDirty`, which is the natural thing
-   * to write from the two arms above, drops exactly this case, and drops it in
-   * the direction of data loss.
-   *
-   * `unsyncableWork()` must therefore read the retained bucket ALONE and ignore
-   * live state entirely - which is also the honest reading of its name: which
-   * work here can never sync? Without this arm the two candidate predicates are
-   * indistinguishable on the fixture set.
-   */
+  /** The live half will drain through its transport; the retained half never can, and the restart destroys it
+   * just the same - so this must prompt. */
   it("a retained buffer beside a DIRTY live session still prompts", async () => {
     const live = seedRetainedBuffer(true);
     assertRetainedPremise(live, true);
@@ -429,25 +348,13 @@ describe("app update install vs a retained unsynced buffer", () => {
 
     fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
-    // Fires even though the live session is dirty: the predicate reads the
-    // retention ALONE. `retained && !liveDirty` would drop exactly this case.
+    // Fires even though the live session is dirty: the predicate reads the retention alone. `retained &&
+    // !liveDirty` would drop exactly this case.
     await expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
   });
 
-  /**
-   * THE MULTI-WINDOW CASE, and the one every arm above is blind to.
-   *
-   * `installUpdate()` quits and relaunches the whole Electron app, and the
-   * update quit deliberately bypasses the unsynced-edits interception - so this
-   * prompt is the only thing standing between the restart and a retained
-   * buffer. But the check used to read a MODULE-SCOPED registry, which holds
-   * only the Epics open in the window that was clicked. A user with a retained
-   * buffer in window B who clicked Update in window A saw no prompt at all and
-   * lost it.
-   *
-   * This renderer's own registry is deliberately EMPTY here: every other arm
-   * would pass on a build that never asks main, and this one cannot.
-   */
+  /** This renderer's own registry is deliberately empty here: every other arm would pass on a build that never
+   * asks main, and this one cannot. */
   it("prompts for a retained buffer held by ANOTHER window", async () => {
     const restore = installOtherWindowUnsyncable([
       { epicId: "epic-in-window-b", title: "Rewrite the onboarding" },
@@ -468,8 +375,8 @@ describe("app update install vs a retained unsynced buffer", () => {
         );
       });
       expect(bridge.installUpdate).not.toHaveBeenCalled();
-      // NAMED, not merely counted: main's answer has to reach the dialog, or
-      // the user gets a confirmation about nothing.
+      // Named, not merely counted: main's answer has to reach the dialog, or the user gets a confirmation about
+      // nothing.
       expect(
         useDesktopDialogStore
           .getState()
@@ -481,10 +388,8 @@ describe("app update install vs a retained unsynced buffer", () => {
   });
 
   it("a REJECTED app-wide check fails closed: prompts (naming the unchecked windows) instead of installing on this window's answer", async () => {
-    // Codex #1243 T-51: window A has nothing local; window B holds a retained
-    // buffer; the IPC that would have said so rejects. The old fallback took
-    // A's own "nothing" as the app's answer and installed - destroying B's
-    // work. A failed check is not a clean check.
+    // Codex #1243 T-51: window A has nothing local; window B holds a retained buffer; the IPC that would have said
+    // so rejects. A failed check is not a clean check.
     const restore = installAppLifecycle(() =>
       Promise.reject(new Error("ipc: main is not answering")),
     );
@@ -516,16 +421,8 @@ describe("app update install vs a retained unsynced buffer", () => {
   });
 
   it("a RESOLVED app-wide check that main marked incomplete also fails closed", async () => {
-    // Codex #1243 T-56, renderer half. The IPC did not reject - main answered,
-    // and answered "no unsyncable epics". What it ALSO said is that a window
-    // missed its fresh-snapshot deadline and its cached row stood in, so that
+    // What it also said is that a window missed its fresh-snapshot deadline and its cached row stood in, so that
     // empty list is a lower bound, not a census.
-    //
-    // Distinct from the rejection arm above in exactly the way that matters:
-    // there, the failure is visible as a thrown error and any conservative
-    // handler catches it. Here the promise RESOLVES, so a door that reads only
-    // the payload sees a clean, complete-looking "nothing to lose" and
-    // installs. Flattening main's flag to `false` is the whole defect.
     const restore = installAppLifecycle(() =>
       Promise.resolve({ epics: [], otherWindowsUnknown: true }),
     );
@@ -554,19 +451,13 @@ describe("app update install vs a retained unsynced buffer", () => {
   });
 
   it("a syncable dirty session installs with NO prompt - b2a1097a is preserved", async () => {
-    // The negative control, and the reason this fix is not a revert of #683.
-    // A dirty LIVE session with no retention still holds its transport and
-    // drains, which is the world the user removed the confirmation for. If this
-    // ever starts prompting, the scope has widened into their decision.
+    // The negative control, and the reason this fix is not a revert of #683. A dirty live session with no
+    // retention still holds its transport and drains, which is the world the user removed the confirmation for.
     const registry = __getOpenEpicRegistryForTests();
     const handle = openStoreForTest({
       epicId: "epic-syncable",
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
+      // `handle.doc` still resolves because this harness builds the runtime in this thread.
       factories: {
         streamClientFactory: noopStreamClientFactory,
         laneSelection: null,

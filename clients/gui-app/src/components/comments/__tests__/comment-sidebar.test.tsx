@@ -23,26 +23,12 @@ const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "artifact-1";
 const QUOTED_TEXT = "the sentence this thread hangs off";
 
-// The client is a PROP now, not an ambient read. `CommentSidebar` is mounted
-// from `epic-sidebar.tsx`, which is a sibling of the canvas and therefore
-// outside every `<TabHostProvider>`; its owner resolves the EPIC SESSION's
-// client and hands it down (D15). Nothing under `components/comments/` reads a
-// host itself any more, so the `@/lib/host/runtime` mock this file used to
-// carry is gone - and its absence is the positive control: a re-added app-wide
-// read would throw outside a provider instead of quietly answering.
-//
-// Everything else stays real - the real `useEpicCommentThreadsForClient`, the
-// real `useHostQuery`, the real query client and the real error path - which is
-// the point: the defect under test is what the component does with a query
-// result the host actually produced.
+// The client is a prop now, not an ambient read.
 const hostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
   current: null,
 };
 
-// A SECOND live client on a DIFFERENT host, standing in for the app-wide one
-// during an A->B re-point. Nothing this file renders may reach it: the sidebar
-// is handed the Epic session's client and every hook below it takes that
-// client as an argument.
+// A second live client on a different host, standing in for the app-wide one during an A->B re-point.
 const otherHostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
   current: null,
 };
@@ -57,9 +43,8 @@ let respondToListThreads: () =>
 });
 
 function unavailableHost(): never {
-  // What the host really throws while the artifact room's collab provider is
-  // null: `comment-thread-rpc-core.ts` raises `no_active_session`, the resolver
-  // rethrows, and the client sees an RPC error with no body.
+  // What the host really throws while the artifact room's collab provider is null: `comment-thread-rpc-core.ts`
+  // raises `no_active_session`, the resolver rethrows, and the client sees an RPC error with no body.
   throw new Error("no_active_session");
 }
 
@@ -171,11 +156,8 @@ function renderSidebar(laneThreads: readonly CommentThreadWire[] | null) {
   );
 }
 
-// Queried by role, which is also the assertion that the correction is
-// announced: it is the only `status` region the sidebar renders. The empty and
-// loading panels below stay on `data-slot` deliberately — neither is a live
-// region, and giving static content a `status` role to make it queryable would
-// announce "No open comments" as if something had just changed.
+// Queried by role, which is also the assertion that the correction is announced: it is the only `status`
+// region the sidebar renders.
 function unavailablePanel(): Element | null {
   return screen.queryByRole("status");
 }
@@ -219,10 +201,8 @@ describe("<CommentSidebar /> read failures", () => {
 
     await act(async () => {
       resolveResponse({ threads: [] });
-      // Flush the query promise's resolution INSIDE `act`, so the state update
-      // it triggers is covered rather than firing after act has exited (which
-      // React reports as an un-acted update). Also what makes this arrow
-      // genuinely async - `require-await` correctly rejected it without this.
+      // Flush the query promise's resolution inside `act`, so the state update it triggers is covered rather than
+      // firing after act has exited (which React reports as an un-acted update).
       await Promise.resolve();
     });
     expect(await screen.findByText(/No open comments/)).not.toBeNull();
@@ -305,12 +285,7 @@ describe("<CommentSidebar /> read failures", () => {
   });
 });
 
-// D15. The sidebar sits outside every `<TabHostProvider>`, so before this it
-// read the app-wide client - and during an A->B re-point the A-backed Epic kept
-// rendering while that client already answered B, sending
-// `epic.listCommentThreads` to the wrong machine and caching the answer under
-// B's key. Both clients below are live; only the one passed as a prop may be
-// reached.
+// Both clients below are live; only the one passed as a prop may be reached.
 describe("<CommentSidebar /> host scope", () => {
   it("reads threads on the PASSED client and keys the cache under ITS host", async () => {
     respondToListThreads = () => ({ threads: [threadFixture()] });
@@ -334,9 +309,8 @@ describe("<CommentSidebar /> host scope", () => {
 
     // The session host answered...
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
-    // ...and the other host - live, and one prop away from being asked - did
-    // not. Asserting the miss as well as the hit is what makes this arm fail
-    // when the read goes ambient again rather than merely when it breaks.
+    // Asserting the miss as well as the hit is what makes this arm fail when the read goes ambient again rather
+    // than merely when it breaks.
     expect(otherHostListCalls).toBe(0);
     expect(otherHostClientRef.current?.getActiveHostId()).toBe(
       mockRemoteHostEntry.hostId,
@@ -352,11 +326,8 @@ describe("<CommentSidebar /> host scope", () => {
   });
 });
 
-// The list RPC is the released floor - every host serves it - and the state
-// lane is the newer, pushed source that only lane-serving hosts also answer.
-// These pin `resolveArtifactCommentThreads` (`use-lane-comment-threads.ts`) as
-// wired into the sidebar: which source wins, and that a missing lane key is
-// UNKNOWN, never "zero comments".
+// These pin `resolveArtifactCommentThreads` (`use-lane-comment-threads.ts`) as wired into the sidebar: which
+// source wins, and that a missing lane key is unknown, never "zero comments".
 describe("<CommentSidebar /> state-lane threads", () => {
   it("renders the lane's thread over the poll's when both answer", async () => {
     respondToListThreads = () => ({

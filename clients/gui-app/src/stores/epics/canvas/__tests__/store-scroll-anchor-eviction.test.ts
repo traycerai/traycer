@@ -56,11 +56,7 @@ import type {
 } from "@/stores/epics/canvas/types";
 import { CHAT_A, SPEC_A } from "./canvas-test-fixtures";
 
-/**
- * A second chat, so a preview open can recycle {@link CHAT_A}'s preview in the
- * same pane. Only the identity fields differ - the sweep resolves a removed
- * tile by kind, content id and epic, so the rest is irrelevant to it.
- */
+/** A second chat, so a preview open can recycle {@link CHAT_A}'s preview in the same pane. */
 const CHAT_B: EpicNodeRef = {
   ...CHAT_A,
   id: "chat-b",
@@ -103,12 +99,8 @@ const ANCHOR: TileScrollAnchor = {
 };
 
 /**
- * Ticket 15 review round 3: the canvas close sweep now resolves a removed
- * tile's durable identity from the REAL canvas tree (`node.type === "chat"`,
- * `node.id` as chatId, `tabsById[tabId].epicId`) - so these tests use
- * `CHAT_A` (a real chat-kind fixture), not `SPEC_A`, and `epicId` must be
- * whichever epic the test actually opened the tab under (the sweep would
- * resolve nothing for a mismatched epicId).
+ * the canvas close sweep now resolves a removed tile's durable identity from the REAL canvas tree
+ * (`node.type === "chat"`, `node.id` as chatId, `tabsById[tabId].epicId`) - so these tests use
  */
 function identityFor(epicId: string): ChatTabPersistenceIdentity {
   return {
@@ -139,17 +131,13 @@ function seedTicket5PerTabState(epicId: string): void {
     .setOpen("activity-g1", true);
   getOrCreateA2AOpenStore(identity).getState().setSentOpen("a2a-sent", true);
   useToolOpenStore.getState().setOpen(CHAT_A.instanceId, "tool-1", true);
-  // Ticket 15 review round 3: the sweep's promotion is a no-op for a tab
-  // scope that was never marked initialized (see
-  // `chat-scoped-open-store-dual-key.ts`'s doc comment) - mark it here to
-  // simulate a component that actually mounted and seeded this tab this
-  // session, same as the real `useChatScopedOpenStoreDualKeySeed` hook would.
+  // the sweep's promotion is a no-op for a tab scope that was never marked initialized (see
+  // `chat-scoped-open-store-dual-key.ts`'s doc comment) - mark it here to simulate a component that
   toolOpenInitializedScopes.add(CHAT_A.instanceId);
   useSubagentOpenStore.getState().setOpen(CHAT_A.instanceId, "sub-1", true);
   subagentOpenInitializedScopes.add(CHAT_A.instanceId);
-  // F4: models a chat tile whose find bar was open when it switched away
-  // (unregistered while live, so scheduleUiReclaim left this `ui` entry in
-  // place) - the sweep below is the ONLY thing that can ever reclaim it now.
+  // F4: models a chat tile whose find bar was open when it switched away (unregistered while live,
+  // so scheduleUiReclaim left this `ui` entry in place) - the sweep below is the ONLY thing that can
   useTileFindStore.setState((state) => ({
     uiByTileInstanceId: {
       ...state.uiByTileInstanceId,
@@ -190,11 +178,7 @@ function expectTicket5PerTabStatePresent(epicId: string): void {
 
 function expectTicket5TabKeysEvicted(epicId: string): void {
   const identity = identityFor(epicId);
-  // Tab-key half is gone (canvas close sweep). Durable chat-key half of the
-  // dual-key registries still has the scroll/A2A/activity-group/
-  // tool/subagent entries (ticket 15) - the SWEEP ITSELF promoted them
-  // (round 3), not a separate component/hook commit - so a reopen via
-  // getOrCreate re-seeds from durable.
+  // Tab-key half is gone (canvas close sweep).
   expect(
     useToolOpenStore
       .getState()
@@ -222,20 +206,12 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   expect(
     getOrCreateA2AOpenStore(identity).getState().sentOpenIds.has("a2a-sent"),
   ).toBe(true);
-  // Ticket 15 review round 3: the sweep's promotion for tool/subagent must
-  // also have re-seeded a fresh mount - simulate one via getOrCreate-style
-  // durable read is not directly exposed for these two (global stores), so
-  // this is asserted through the dual-key test suite instead; here we only
-  // confirm the tab-key side is gone and the durable-backed registries
-  // above answer correctly, matching the ticket-5 sweep contract.
+  // the sweep's promotion for tool/subagent must also have re-seeded a fresh mount - simulate one
+  // via getOrCreate-style durable read is not directly exposed for these two (global stores), so
 }
 
-// Ticket 15 review round 3: uses the individual (non-tombstoning) per-epic
-// evict functions directly, NOT the orchestrated
-// `evictChatTabPersistenceForEpic` - that one is a TERMINAL deletion (it
-// tombstones the epic prefix, per the round-3 fence), which would
-// permanently block the sweep's own promotion inside the actual test if
-// used here for mere test-isolation cleanup between runs.
+// uses the individual (non-tombstoning) per-epic evict functions directly, NOT the orchestrated
+// `evictChatTabPersistenceForEpic` - that one is a TERMINAL deletion (it tombstones the epic
 function clearTicket5PerTabState(instanceId: string, epicId: string): void {
   evictChatTabState([instanceId]);
   evictActivityGroupOpenStores([instanceId]);
@@ -302,12 +278,8 @@ describe("canvas store scroll-anchor sweep", () => {
   });
 
   it("keys a published copy WITHOUT the host that happened to serve it", () => {
-    // The whole reason this kind is keyed by cloud identity: the same published
-    // transcript reopened while a different host is serving must find the
-    // position it was left at. `recordMatches` compares the record's `hostId`
-    // with the request's, so a durable identity that kept the reading host made
-    // the host-free content key unreachable - the record was rejected and then
-    // removed, silently.
+    // The whole reason this kind is keyed by cloud identity: the same published transcript reopened
+    // while a different host is serving must find the position it was left at.
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-published", "Published");
     const readThroughHostA: PublishedChatTileRef = {
@@ -322,9 +294,8 @@ describe("canvas store scroll-anchor sweep", () => {
       ownerHostId: "owner-host",
     };
     store.openTileInTab(tabId, readThroughHostA);
-    // A SECOND tab on the same epic, standing in for the later reopen: opening
-    // the same content id into one tab reveals the tile that is already there,
-    // so the two serving hosts can only be observed side by side.
+    // A SECOND tab on the same epic, standing in for the later reopen: opening the same content id
+    // into one tab reveals the tile that is already there, so the two serving hosts can only be
     const secondTabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-published", "Published again");
@@ -392,11 +363,8 @@ describe("canvas store ticket-5 per-tab persistence sweep", () => {
     seedTicket5PerTabState(epicId);
     expectTicket5PerTabStatePresent(epicId);
 
-    // A second preview into the same pane evicts the first ENTIRELY - the
-    // tile leaves `tabInstanceIds`, and that removal is the only signal the
-    // sweep needs. No close action is involved, and the chat's view never
-    // unmounts through a component lifecycle, so this promotion is the ONLY
-    // thing standing between a recycled chat and a lost draft.
+    // A second preview into the same pane evicts the first ENTIRELY - the tile leaves
+    // `tabInstanceIds`, and that removal is the only signal the sweep needs.
     store.openTilePreviewInTab(tabId, CHAT_B);
 
     expectTicket5TabKeysEvicted(epicId);

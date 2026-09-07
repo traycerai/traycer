@@ -26,11 +26,6 @@ import { AgentCursorOverlay } from "@/components/epic-canvas/renderers/agent-cur
 import { containBox } from "@/components/epic-canvas/renderers/agent-cursor-contain-box";
 import type { AgentCursorPosition } from "@/lib/browser-view/sessions/screencast-input-encoding";
 
-/**
- * Ticket 10, the client half: the agent ghost cursor through the REAL hook,
- * transport and tile - the host's normalized coordinates in, a positioned
- * overlay out, on both display planes.
- */
 const peers = vi.hoisted(
   () => [] as Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }>,
 );
@@ -82,11 +77,8 @@ function liveStream(): FakeStreamSession {
 }
 
 /**
- * The overlay's contain-fit is pure CSS (a size-query container clamping on
- * whichever axis runs out first), so a cursor's position is a percentage
- * inside the painted box and needs no measured overlay - which jsdom could not
- * lay out anyway. Longer than any linger the overlay could reasonably use, so
- * the fade assertions observe the fade rather than restating its constant.
+ * The overlay's contain-fit is pure CSS (a size-query container clamping on whichever axis runs out first), so a cursor's position is a percentage inside the painted box and needs no measured overlay - which jsdom could not lay out anyway.
+ * Longer than any linger the overlay could reasonably use, so the fade assertions observe the fade rather than restating its constant.
  */
 const PAST_ANY_LINGER_MS = 30_000;
 
@@ -290,10 +282,7 @@ describe("BrowserPeekTile agent ghost cursor", () => {
 });
 
 /**
- * The two properties the tile cannot reach: the contain-fit CSS text (jsdom
- * evaluates no `cqw`/`cqh`, so the strings themselves are the pin) and the
- * PiP-only lifecycle where ONE overlay outlives the selection whose cursor ids
- * it saw.
+ * The two properties the tile cannot reach: the contain-fit CSS text (jsdom evaluates no `cqw`/`cqh`, so the strings themselves are the pin) and the PiP-only lifecycle where ONE overlay outlives the selection whose cursor ids it saw.
  */
 describe("AgentCursorOverlay", () => {
   const FRAME_SIZE = { width: 800, height: 600 };
@@ -325,11 +314,7 @@ describe("AgentCursorOverlay", () => {
   });
 
   it("drops the press latch when the cursor clears, so ids may restart at 1", () => {
-    // LIVE BUG pin: PiP mints cursor ids per SELECTION, so they restart at 1
-    // on a tab switch while this overlay stays mounted. Mutation: dropping the
-    // `cursor === null` reset of `pressedId` - the retained 1 then matches the
-    // NEXT selection's first cursor, and a plain move draws a phantom ripple
-    // for a press that never happened.
+    // Mutation: dropping the `cursor === null` reset of `pressedId` - the retained 1 then matches the NEXT selection's first cursor, and a plain move draws a phantom ripple for a press that never happened.
     const { rerender } = renderPeekTile(
       <AgentCursorOverlay
         cursor={cursorAt({ type: "down", id: 1 })}

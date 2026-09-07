@@ -29,10 +29,8 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 
-// `attached` is the authority's "has anyone answered yet" flag, and it is a
-// SEPARATE axis from `id`: the pair (attached: false, id: null) is bootstrap,
-// while (attached: true, id: null) is the real ∅. Defaults to attached so every
-// pre-existing case here reads exactly as it did before that axis existed.
+// attached:false,id:null is bootstrap. attached:true,id:null is the real empty.
+// Default attached so older cases still read the same.
 const hostState = vi.hoisted((): { id: string | null; attached: boolean } => ({
   id: "host-a",
   attached: true,
@@ -44,10 +42,8 @@ const navigateMock = vi.hoisted(() => vi.fn());
 const reprobeCallbacks = vi.hoisted((): { callbacks: Array<() => void> } => ({
   callbacks: [],
 }));
-// Real (non-null) `useHostBinding()` for the R-1 owner-identity rotation test
-// below - every other test in this file relies on the default `null` (no
-// `HostClient` needed to drive `sessionKey`, which is `activeHostId` +
-// `sessionUserId` only), so this stays `null` until that test opts in.
+// useHostBinding stays null unless the R-1 rotation test opts in. sessionKey
+// is activeHostId + sessionUserId only.
 const hostBindingRef = vi.hoisted(
   (): {
     value: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
@@ -55,14 +51,7 @@ const hostBindingRef = vi.hoisted(
     value: null,
   }),
 );
-/**
- * The rows `useHostClientForHostId` resolves against, keyed by host id.
- *
- * The provider reads its owner-identity discriminator off THE SESSION'S client
- * (redesign P4.2), so a rotation is now expressed the way production expresses
- * it - the host's directory row changes - rather than by binding a new entry
- * into a slot that no longer exists.
- */
+/** Directory rows keyed by host id. Rotation is a row change on the session's client, not a new slot binding. */
 const sessionHostRows = vi.hoisted(
   (): { byHostId: Map<string, unknown>; userId: string | null } => ({
     byHostId: new Map(),
@@ -73,13 +62,7 @@ interface StubSessionHostClient {
   readonly request: Mock;
   readonly getActiveHost: () => unknown;
   /**
-   * The host this client addresses.
-   *
-   * Absent from this stub since T11 gave the store a memory book keyed by host
-   * (`store.ts` reads it at construction), which made every test in this file
-   * throw `getActiveHostId is not a function` before the store was built. The
-   * stub is already one object per host id, so the honest answer is the id it
-   * was resolved for.
+   * Store construction reads getActiveHostId; the stub is one object per host id.
    */
   readonly getActiveHostId: () => string;
   readonly getRequestContextUserId: () => string | null;
@@ -89,12 +72,7 @@ const sessionHostClients = vi.hoisted(
     byHostId: new Map(),
   }),
 );
-/**
- * One stable client object per host id - stable because a consumer-identity
- * assertion below ("shares one resolved host client") is about the resolver
- * handing every consumer the SAME object, and a fresh stub per call would
- * pass that test for the wrong reason.
- */
+/** One stable client per host id. A fresh stub per call would pass the shared-object assertion for the wrong reason. */
 const resolveSessionHostClient = vi.hoisted(
   () =>
     (hostId: string | null): unknown => {
@@ -112,20 +90,7 @@ const resolveSessionHostClient = vi.hoisted(
     },
 );
 
-// The provider opens its own durable transport via this factory, and
-// UNCONDITIONALLY. This stub used to THROW - "openTransport must not be called
-// when the factory is overridden" - and the name of the thing it referred to is
-// the point: the `__setEpicStreamClientFactoryForTests` override made the
-// provider short-circuit before the opener ran, so every test in this file
-// passed WITHOUT one. That override is deleted (a stream factory built on MAIN
-// cannot cross `postMessage` to a runtime living in the worker), and with it the
-// only reason a throw here was safe.
-//
-// The fake supplies "no socket in tests" at the opener instead. It keeps the
-// property the old stub's comment named as load-bearing: the real hook returns a
-// referentially-STABLE opener, and this one is a single module-scoped instance
-// for the same reason - so the acquire effect's `openTransport` dep never churns.
-// Resetting it clears the record array in place rather than replacing it.
+// Unconditional fake opener. Referentially stable so the acquire effect's `openTransport` dep never churns. Reset clears the record array in place.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -176,11 +141,7 @@ vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
 });
 
 /**
- * A pass-through spy on `spawnEpicRuntimeWorker`, so a pin can reach the exact
- * `laneUnary` closure the provider hands each worker it spawns. The real spawn
- * still runs underneath - this only records the option object on the way
- * through. Order matches spawn order: index 0 is the first handle this
- * provider acquires, index 1 a re-point's candidate, and so on.
+ * Spy spawnEpicRuntimeWorker options in spawn order; real spawn still runs.
  */
 const spawnedRuntimeOptions = vi.hoisted(
   (): {
@@ -249,54 +210,23 @@ import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 
-/**
- * The jsdom setup file's coreless worker, captured before this suite can
- * replace it. A `null` override would fall through to the production Worker
- * constructor, which jsdom cannot run.
- */
+/** Capture the jsdom coreless worker before this suite replaces it. A null override would fall through to production Worker, which jsdom cannot run. */
 const setupWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
 
 /** The worker override present at the start of the current test. */
 let workerFactoryBeforeTest: (() => RuntimeWorkerLike) | null = null;
 
 /**
- * Install this test's stream factory, one seam over.
- *
- * Every call site below used to read `installStreamFactory(fn)`
- * and passed the SAME `fn` unchanged; only the seam moved, because a factory
- * built on MAIN cannot cross `postMessage` to a runtime living in the worker.
- * Keeping one helper rather than inlining the composition twenty-two times is
- * what makes that a rename at each site instead of twenty-two chances to differ.
- *
- * A FRESH worker per spawn: one helper instance owns one bridge pair and one
- * composition, so a shared instance would hand two sessions the same runtime -
- * and this file re-points sessions across hosts, which acquires a second one.
- * The deleted stream override was called once per session too, so this matches
- * what these tests have always exercised.
+ * Install this test's worker factory. Fresh worker per spawn: a shared instance would hand two sessions the same runtime.
  */
-/**
- * What {@link installWorkerWithFatalOnFirstSpawn} hands back.
- *
- * `spawnCount` is the pin's real observable: "Retry rebuilt" and "Retry
- * re-presented the corpse" both end with a `ready` presentation, and only the
- * number of workers actually started tells them apart.
- */
+/** spawnCount distinguishes Retry rebuilt from Retry re-presenting the corpse; both end ready. */
 interface FatalWorkerRig {
   /** Report a runtime fatal from the FIRST worker, as a live one would. */
   fatal(): void;
   spawnCount(): number;
 }
 
-/**
- * A worker that answers the handshake and then dies ON COMMAND, followed by
- * real in-process workers for every later spawn.
- *
- * The first worker is a fake rather than a real composition because a fatal has
- * no product trigger - it is what a crashed thread produces - and the second
- * onwards are real because the whole question is whether a REPLACEMENT gets
- * built and reaches `ready`. A rig that faked both halves could not tell a
- * rebuild from a re-presentation.
- */
+/** First worker is a fake that dies on command; later spawns are real so a replacement can be distinguished from a re-presentation. */
 function installWorkerWithFatalOnFirstSpawn(
   factory: EpicStreamClientFactory,
 ): FatalWorkerRig {
@@ -349,10 +279,8 @@ function installWorkerWithFatalOnFirstSpawn(
         listeners.delete(listener);
       },
       terminate: (): void => {},
-      // This rig's whole subject is a worker that ANSWERS and then dies, so
-      // the fault path - a worker whose module never ran at all - is not the
-      // failure under test here. Its own pin lives in
-      // `spawn-epic-runtime-worker.test.ts`.
+      // This rig is a worker that answers then dies, not a worker whose module
+      // never ran.
       onWorkerFault: (): void => {},
     };
   });
@@ -367,12 +295,7 @@ function installWorkerWithFatalOnFirstSpawn(
   };
 }
 
-/**
- * A worker factory that THROWS, which is what a runtime with no Worker or a
- * Content-Security-Policy refusing the script URL produces - a synchronous
- * failure of the environment rather than of the transport, raised before any
- * bridge exists to report a `fatal` through.
- */
+/** Factory that throws: no Worker or CSP refusing the script URL, before any bridge exists to report fatal. */
 function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
   let spawns = 0;
   __setEpicRuntimeWorkerFactoryForTests(() => {
@@ -692,16 +615,7 @@ function ownerIdentityRemoteTarget(
   };
 }
 
-/**
- * Publishes `hostId`'s directory row and returns a rotate function.
- *
- * The connection registry is installed for real rather than mocked, because
- * the wake path is the subject: `useReactiveOwnerIdentityKey` subscribes to
- * `subscribeAnyHostRowChanged`, and a rotation that changed the row without
- * emitting would leave the projection reading a stale key and every assertion
- * below would pass for the wrong reason (or fail for an unrelated one). The
- * emit is what `bind()` used to do and what the registry does now.
- */
+/** Real connection registry: wake subscribes to subscribeAnyHostRowChanged; a silent row change would leave a stale ownerIdentityKey. */
 function installOwnerIdentityRows(): (
   hostId: string,
   publicKey: string | null,
@@ -741,16 +655,7 @@ function installOwnerIdentityRows(): (
   };
 }
 
-/**
- * Seed a LOCAL root edit without reaching for a `Y.Doc`.
- *
- * The handle a provider hands back no longer exposes one, and that is the
- * relocation rather than an omission: the replica lives on the worker thread
- * and a `Y.Doc` cannot cross a structured clone. `applyRootUpdate(update,
- * true)` is the production member that puts local bytes into the root
- * replica - the same one a session-to-session transfer uses - so these tests
- * now seed through the surface production actually has.
- */
+/** Seed local root bytes via applyRootUpdate(update, true); the replica lives on the worker and Y.Doc cannot structured-clone. */
 async function seedLocalRootEdit(
   handle: { applyRootUpdate: (u: Uint8Array, l: boolean) => Promise<boolean> },
   key: string,
@@ -844,10 +749,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("preserves the setup worker after a fixture-only test installs nothing", () => {
-    // This deliberately follows the fixture-construction guard above. That
-    // test never installs a worker factory, but its `afterEach` still runs. The
-    // setup override must survive; `null` would select the production Worker
-    // constructor and make the next jsdom session crash.
+    // afterEach must not null the setup override; production Worker crashes
+    // jsdom.
     expect(setupWorkerFactory).not.toBeNull();
     expect(getEpicRuntimeWorkerFactoryOverride()).toBe(setupWorkerFactory);
   });
@@ -1095,10 +998,8 @@ describe("<EpicSessionProvider />", () => {
     );
 
     await waitFor(() => {
-      // The SAME object, not merely two truthy clients: the point of the
-      // shared resolver is that every consumer addresses one client for one
-      // host, so an identity compare is the only assertion that can fail when
-      // the resolver starts minting per-consumer clients.
+      // Same object, not two truthy clients. Identity compare fails if the
+      // resolver mints per-consumer clients.
       const resolved = resolveSessionHostClient(hostState.id);
       expect(seenClients.filter((client) => client === resolved)).toHaveLength(
         2,
@@ -1163,13 +1064,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("keys the session identity on the canonical user id, so two accounts sharing an email do NOT share a session", async () => {
-    // Codex #1243 T-66. The arm above seeds `userId: email`, so it is green
-    // whether the provider reads the id or the address - it cannot tell them
-    // apart. This one seeds DIFFERENT canonical ids behind ONE address, which
-    // is the real-world shape: keyed on the email the identity comparison saw
-    // no change, the previous user's handle stayed mounted, and the incoming
-    // account inherited the outgoing account's persisted focus state and
-    // retained unsynced `Y.Doc`.
+    // Different canonical ids behind one address: email-keyed identity would
+    // keep the previous handle and leak focus + unsynced Y.Doc.
     const SHARED_EMAIL = "shared@example.com";
     const signInAs = (userId: string): void => {
       useAuthStore.setState({
@@ -1235,14 +1131,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("adopts a legacy email-keyed persisted blob onto the canonical userId key on first acquire", async () => {
-    // Pins `adoptLegacyOpenEpicKey` (epic-session-provider.tsx), which has no
-    // coverage of its own: it runs once, inside `createHandle()`, BEFORE the
-    // per-Epic store is constructed - because `persist` reads its key at
-    // construction time, moving a pre-userId-scoping bucket onto the new one
-    // is silent by construction. A broken adoption looks exactly like a fresh
-    // install (empty `lastFocusedArtifactId`), so the only way to catch a
-    // regression here is to seed the legacy key and assert the NEW key ends
-    // up holding it - a green "nothing there" tells you nothing.
+    // adoptLegacyOpenEpicKey runs in createHandle before persist reads the key.
+    // Seed the legacy key; assert the new key holds it - empty looks like a fresh install.
     const EPIC_ID = "epic-session-test";
     const LEGACY_EMAIL = "shared@example.com";
     const CANONICAL_USER_ID = "user-alice";
@@ -1301,12 +1191,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("never overwrites an existing canonical-key blob with a legacy one", async () => {
-    // The control for the arm above: adoption must be a one-shot claim, not a
-    // standing sync. Two accounts can share the legacy email bucket - the
-    // FIRST to sign in adopts it, and every later sign-in (this account's own
-    // second launch, or a different account sharing the same address) must
-    // see its own already-adopted state win rather than being clobbered back
-    // to the shared legacy blob.
+    // Adoption is one-shot: later sign-ins under the same email must keep
+    // their already-adopted state, not the shared legacy blob.
     const EPIC_ID = "epic-session-test";
     const LEGACY_EMAIL = "shared@example.com";
     const CANONICAL_USER_ID = "user-alice";
@@ -1498,10 +1384,8 @@ describe("<EpicSessionProvider />", () => {
         });
 
         await waitFor(() => expect(fixture.opens.state).toBe(2));
-        // The candidate must still be ESTABLISHING - its snapshot is
-        // deliberately never delivered, because that is the window the
-        // defect lives in: once the replacement commits, the bug is
-        // unobservable.
+        // Candidate stays establishing: never deliver its snapshot. After
+        // commit the defect is unobservable.
         expect(fixture.stateStreams[1]?.closeCount()).toBe(0);
         expect(fixture.opens.legacy).toBe(0);
         expect(__getOpenEpicRegistryForTests().size()).toBe(1);
@@ -1601,15 +1485,8 @@ describe("<EpicSessionProvider />", () => {
       deliverSnapshot(streams[1], "room-b");
     });
     await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
-    // The flag's VALUE, observed through the retention it decides. A
-    // different room means no transfer, so the outgoing dirty handle is the
-    // only copy of its edits and MUST be retained; a flag stuck at `true`
-    // would report those edits as already in the replacement and retire the
-    // only thing holding them.
-    //
-    // This assertion exists because ablating the flag to a hard-coded `true`
-    // left all 374 provider tests green: the transfer itself was covered four
-    // times over, its DERIVATION not once.
+    // Different room means no transfer: retain the outgoing dirty handle. A flag
+    // stuck at true would retire the only copy of those edits.
     expect(__getOpenEpicRegistryForTests().getUnsyncedEdits()).toHaveLength(1);
     expect(
       await readRootEdit(seenHandles.at(-1), "local-repoint-edit"),
@@ -1617,12 +1494,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("two mounted tabs of ONE epic re-point once: the loser adopts the winner's handle instead of parking in establishing", async () => {
-    // A duplicated tab mounts a second provider for the same epic; both share
-    // the registry's mounted handle, so both start the A -> B re-point with
-    // their own candidate. `replaceMounted` lets exactly one win. The loser
-    // used to dispose its candidate and return - past a deadline `settled`
-    // had already disarmed - and present `establishing` forever on the old
-    // handle the winner had just disposed.
+    // Duplicate-tab re-point: replaceMounted lets one win. The loser must not
+    // present establishing on the handle the winner just disposed.
     const streams: ControlledEpicStream[] = [];
     const handlesA: OpenEpicStoreHandle[] = [];
     const handlesB: OpenEpicStoreHandle[] = [];
@@ -1699,22 +1572,8 @@ describe("<EpicSessionProvider />", () => {
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
   });
 
-  /**
-   * A worker that cannot be CONSTRUCTED must present `failed`, not crash the
-   * Epic.
-   *
-   * `createHandle` builds the worker synchronously inside
-   * `registry.acquireMounted`, so a runtime with no `Worker` - or a CSP that
-   * refuses the script URL - throws there. That throw used to escape the effect
-   * body, and an effect that throws goes to the component error boundary, which
-   * replaces the Epic wholesale and takes the Retry control down with it. Retry
-   * is the only affordance that could recover a session whose worker never
-   * started, so the boundary removed the recovery for the one failure that
-   * needed it most.
-   *
-   * The rollback already ran `closeSessionTransport()` before rethrowing, which
-   * is why this reads as a clean failure rather than a leak - the missing half
-   * was purely the PRESENTATION.
+    /**
+   * A worker that cannot be constructed must present `failed`, not crash the Epic. Retry is the recovery for a worker that never started.
    */
   it("presents failed - not an error boundary - when the runtime worker cannot be constructed", async () => {
     const presentations: Array<EpicSessionPresentation | null> = [];
@@ -1809,16 +1668,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("(R-1, PINNED) keys owner identity on the SESSION's host, not the effective one", async () => {
-    // THE DISCRIMINATOR for reading `ownerIdentityKey` off
-    // `resolvedSessionHostClient` instead of the app-wide client (redesign
-    // P4.2). Every other R-1 case leaves the session UNPINNED, where the two
-    // hosts coincide and both readings pass - so this is the only case that
-    // can tell them apart, and without it the change would be uncovered.
-    //
-    // Both directions are asserted, because the old reading was wrong in both:
-    // a rotation on the session's own host was invisible (the one thing this
-    // discriminator exists to catch), and a rotation on an unrelated effective
-    // host tore a live session down.
+    // Pinned session: ownerIdentityKey must come from resolvedSessionHostClient,
+    // not the app-wide client. Both rotation directions.
     vi.useFakeTimers();
     try {
       const streams: ControlledEpicStream[] = [];
@@ -1915,12 +1766,8 @@ describe("<EpicSessionProvider />", () => {
       retryMigration: () => undefined,
       close: () => undefined,
     }));
-    // STABLE callback: `PresentationProbe` re-fires when EITHER its callback or
-    // the presentation changes, so an inline arrow would record a churn of its
-    // own making. A FRESH element per render, though - `rerender` with an
-    // identical element reference lets React bail out of the subtree, and the
-    // provider would never re-read the churned dependency at all. Both mistakes
-    // were made writing this pin; the mutation probe caught the first.
+    // Stable callback, fresh element per render: an inline arrow records its
+    // own churn; a reused element lets React bail out of the subtree.
     const record = (presentation: EpicSessionPresentation | null): void => {
       presentations.push(presentation);
     };
@@ -1934,12 +1781,8 @@ describe("<EpicSessionProvider />", () => {
     await act(() => Promise.resolve());
     const settled = presentations.length;
 
-    // The REAL transport hook returns a referentially stable opener, and the
-    // acquire effect depends on it. Nothing enforces that stability, so the
-    // provider must absorb a churning identity rather than store a fresh
-    // presentation per commit: an unconditional write here re-renders, which
-    // churns the dependency again, which writes again - an infinite render
-    // loop, not a wasted render. `epic-surface-isolation` hung on exactly this.
+    // Absorb a churning opener identity. An unconditional write per commit
+    // re-renders, churns the dep, and loops.
     act(() => {
       // Still a THROW, and still correct after the deletion: the pin is that
       // the provider does NOT re-acquire, so the churned opener must never be
@@ -2086,11 +1929,8 @@ describe("<EpicSessionProvider />", () => {
       throw new Error("expected initial handle");
     }
 
-    // Same hostId (`activeHostId` never changes), same signed-in user, same
-    // websocketUrl/version/status - ONLY the remote host's public key rotates
-    // (re-enrollment / corruption recovery). `sessionKey` is unaffected by
-    // this, so a pass here proves `ownerIdentityKey` alone drives the
-    // release+reacquire, not a coincident `sessionKey`/hostId churn.
+    // Only the public key rotates. sessionKey is unchanged, so a pass proves
+    // ownerIdentityKey alone drives release+reacquire.
     act(() => {
       rotateRow(OWNER_IDENTITY_HOST_ID, "pubkey-b");
     });
@@ -2122,10 +1962,7 @@ describe("<EpicSessionProvider />", () => {
       };
     });
 
-    // The directory has not bound a default host yet: the factory would throw
-    // "without an active host id" - escaping the acquire effect to the root
-    // error boundary - if the effect did not gate on a non-null host. Mounting
-    // must NOT crash and must NOT create a session.
+    // No default host yet. Mount must not crash and must not create a session.
     hostState.id = null;
     const view = render(
       <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
@@ -2186,16 +2023,8 @@ describe("<EpicSessionProvider />", () => {
       hasMore: false,
     });
     const seenHandles: OpenEpicStoreHandle[] = [];
-    // The stream is CAPTURED, where it used to be discarded. The assertion
-    // below begins an epic-title write command, and
-    // `beginEpicTitleMutationWithId` refuses one outright unless
-    // `session.writeGateRole()` is writable - a role that arrives only with a
-    // snapshot. A session that never received one has `permissionRole: null`,
-    // so the mutation returned `null`, stamped no overlay, and the title this
-    // test reads through the cache stayed "". That gate is not new; what was
-    // new is the caller. This test used to drive `setEpicTitle`, which had no
-    // permission gate, and the write-command conversion swapped it for a gated
-    // one without giving the session a role to pass the gate with.
+    // Capture the stream so writeGateRole is writable; beginEpicTitleMutationWithId
+    // refuses without a snapshot permission role.
     const streams: ControlledEpicStream[] = [];
     installStreamFactory((_epicId, callbacks) => {
       streams.push({ callbacks, closeCount: 0 });
@@ -2229,10 +2058,8 @@ describe("<EpicSessionProvider />", () => {
     });
     expect(seenHandles[0].userId).toBe(sessionUserId);
 
-    // The role, before the write. `snapshotMeta` carries `"editor"`, which is
-    // what makes the gate above passable. Synchronous `act`: `deliverSnapshot`
-    // is a plain callback invocation, and an `async` wrapper with nothing to
-    // await is what `require-await` rejects.
+    // snapshotMeta editor makes writeGateRole passable. deliverSnapshot is
+    // sync; do not wrap it in async act.
     act(() => {
       deliverSnapshot(streams[0], "room-history");
     });
@@ -2267,12 +2094,8 @@ describe("<EpicSessionProvider />", () => {
       LIST_CLOUD_TASKS_REQUEST,
     );
     const seenHandles: OpenEpicStoreHandle[] = [];
-    // Same translation as the test above, and for the same reason: the epic
-    // title is a WRITE COMMAND on this branch, and
-    // `beginEpicTitleMutationWithId` refuses one unless
-    // `session.writeGateRole()` is writable - a role that arrives only with a
-    // snapshot. So the stream is captured rather than discarded, and a
-    // snapshot is delivered before the write.
+    // Capture the stream and deliver a snapshot before the title write;
+    // beginEpicTitleMutationWithId refuses without writeGateRole.
     const streams: ControlledEpicStream[] = [];
     installStreamFactory((_epicId, callbacks) => {
       streams.push({ callbacks, closeCount: 0 });
@@ -2540,17 +2363,7 @@ describe("<EpicSessionProvider />", () => {
       );
     }
 
-    /**
-     * The production path, and the one cell the shipped suite never ran: a
-     * re-point that SUCCEEDS while directory rows exist for both hosts.
-     *
-     * The pre-existing merge test publishes no rows, so `ownerIdentityKey` is
-     * a constant `null` for both hosts and the identity branch is unreachable
-     * in the only test that would exercise it. Publishing rows is the whole
-     * difference - it is what lets the tuple carry a key at all, and so what
-     * lets a key recorded for host-a be compared against one read from
-     * host-b.
-     */
+    /** Re-point that succeeds while both hosts have directory rows, so ownerIdentityKey is comparable across hosts. */
     it("does not rebuild after the merge commits, with rows published for both hosts", async () => {
       const streams: ControlledEpicStream[] = [];
       installControlledFactory(streams);
@@ -2581,10 +2394,8 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
       await act(() => Promise.resolve());
 
-      // The merged edit must SURVIVE the commit. Today the tuple written at
-      // commit pairs host-b's handle with host-a's key, the next render reads
-      // host-b's key, and the mismatch takes the hard-rebuild arm - disposing
-      // the handle that is holding the merge.
+      // Merged edit must survive commit. Pairing host-b's handle with host-a's
+      // key would hard-rebuild and dispose the merge.
       expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
         "pending",
       );
@@ -2592,12 +2403,7 @@ describe("<EpicSessionProvider />", () => {
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
     });
 
-    /**
-     * The control arm: identical to the catch except the signed-in user is
-     * cleared, so the key is `null` on BOTH sides and nothing else moves.
-     * Must pass before AND after the fix - if it fails, the cause is the rows
-     * or the registry emit, not the identity discriminator.
-     */
+    /** Control: signed-in user cleared so the key is null on both sides. Failure here is rows/emit, not the identity discriminator. */
     it("survives a re-point when no owner identity is readable at all", async () => {
       const streams: ControlledEpicStream[] = [];
       installControlledFactory(streams);
@@ -2633,12 +2439,7 @@ describe("<EpicSessionProvider />", () => {
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
     });
 
-    /**
-     * The failover shape. A transport-death failover reaches this provider
-     * with input BYTE-IDENTICAL to a manual Activate, so the ∅ transit is not
-     * a mitigation - and it is the worse case, because the host that would
-     * have acknowledged the pending edits is the one that died.
-     */
+    /** Transport-death failover is byte-identical to Activate; empty transit is worse because the host that would ack pending edits is the one that died. */
     it("keeps the merged document across an A -> null -> B transit", async () => {
       const streams: ControlledEpicStream[] = [];
       installControlledFactory(streams);
@@ -2677,15 +2478,7 @@ describe("<EpicSessionProvider />", () => {
       expect(streams).toHaveLength(2);
     });
 
-    /**
-     * The null-at-commit arm. host-b's directory row is deliberately absent
-     * when the replacement commits, so the honest record is "not read yet",
-     * and the row lands afterwards.
-     *
-     * This is NOT covered by the control arm above, which holds the key at
-     * `null` on both sides and so never performs a `null -> key` transition.
-     * Without this fixture the null-tolerance half ships unproven.
-     */
+    /** Null-at-commit: host-b has no directory row yet. The control arm keeps null on both sides and never exercises null -> key. */
     it("does not rebuild when the new host's row lands after the commit", async () => {
       const streams: ControlledEpicStream[] = [];
       installControlledFactory(streams);
@@ -2727,12 +2520,8 @@ describe("<EpicSessionProvider />", () => {
       expect(streams).toHaveLength(2);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
 
-      // The survival above pins the null TOLERANCE, and tolerance alone is
-      // satisfied by doing nothing at all - so it cannot see whether the late
-      // row was actually RECORDED. This arm is what proves the completion
-      // fired on the re-point path: a genuine rotation on the new host must
-      // now tear down. Without it the R-1 boundary would be dead for every
-      // re-pointed session and every assertion above would still be green.
+      // Null tolerance is satisfied by doing nothing. This arm proves the late
+      // row was recorded: a rotation on the new host must now tear down.
       act(() => {
         rotateRow("host-b", "pubkey-b1");
       });
@@ -2809,16 +2598,12 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(remountHandles).toHaveLength(1));
       expect(remountHandles[0]).toBe(warmHandle);
 
-      // The stamp names the host the handle is actually bound to - the six
-      // stamp consumers (chat-backup RPC, capability gates, artifact image
-      // ops, tab model) must route to the machine that owns the stream, not
-      // the one the window moved to while the tab was closed.
+      // Stamp is the handle's bound host, not the window's current host while
+      // the tab was closed.
       expect(getEpicSessionHandleHostId(warmHandle)).toBe("host-a");
 
-      // And the provider takes the SAFE RE-POINT arm toward host-b: a second
-      // stream client is constructed while the warm handle stays mounted and
-      // its stream stays open. (Relabelling the warm handle instead leaves
-      // one stream and a stamp that lies "host-b".)
+      // Safe re-point: second stream while the warm handle stays mounted.
+      // Relabelling would leave one stream and a lying stamp.
       await waitFor(() => expect(streams).toHaveLength(2));
       expect(streams[0].closeCount).toBe(0);
       expect(getEpicSessionHandleHostId(warmHandle)).toBe("host-a");
@@ -2842,10 +2627,8 @@ describe("<EpicSessionProvider />", () => {
       view.unmount();
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
 
-      // Same remount, host unmoved: adoption must stay a silent no-op. This
-      // arm passes before AND after the F1 fix - it pins the fix against
-      // over-widening (an adoption that rebuilds or re-points here would
-      // churn every tab reopen).
+      // Remount, host unmoved: adoption is a no-op. A rebuild here would
+      // churn every tab reopen.
       const remountHandles: OpenEpicStoreHandle[] = [];
       render(providerBody((handle) => remountHandles.push(handle)));
       await waitFor(() => expect(remountHandles).toHaveLength(1));
@@ -2870,31 +2653,22 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
 
-      // The first real reading for the session's own host lands late. An
-      // absent reading is NOT a rotation: the tuple is completed IN PLACE -
-      // no rebuild, no second stream, the handle survives. (A refresh loop
-      // here fails as "Maximum update depth exceeded"; a rebuild fails the
-      // stream count.)
+      // Late first reading is not a rotation: complete in place. A refresh
+      // loop fails as max update depth; a rebuild fails the stream count.
       act(() => {
         rotateRow("host-a", "pubkey-a0");
       });
       await act(() => Promise.resolve());
       expect(streams).toHaveLength(1);
       expect(streams[0].closeCount).toBe(0);
-      // Reference identity, not just "a handle is still there": a completion
-      // implemented as a rebuild produces correct-looking state, no loop and
-      // no red anywhere else - while discarding the Y.Doc, which is the class
-      // this remediation exists to close. Only an identity compare forbids it.
+      // Identity compare: a rebuild looks correct but discards the Y.Doc.
       expect(seenHandles.at(-1)).toBe(firstHandle);
       expect(__getOpenEpicRegistryForTests().peek("epic-session-test")).toBe(
         firstHandle,
       );
 
-      // The completion must KEEP the R-1 boundary armed: a genuine same-host
-      // public-key rotation after it still tears down and rebuilds. If this
-      // arm fails, the in-place completion recorded nothing and rotation
-      // detection died with it - the security boundary the discriminator
-      // exists for.
+      // After in-place completion, a same-host public-key rotation must still
+      // tear down. Failure means the completion recorded nothing.
       act(() => {
         rotateRow("host-a", "pubkey-a1");
       });
@@ -2917,11 +2691,8 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
 
-      // The serving host is deregistered: its row is removed and the owner
-      // reading goes null while the session is mounted. An absent reading is
-      // not a rotation - tearing down the live session (and its unsynced
-      // edits) on a directory removal would be the discard path by another
-      // door.
+      // Directory removal is not a rotation. Do not tear down the live session
+      // (and its unsynced edits) when the owner reading goes null.
       act(() => {
         rotateRow("host-a", null);
       });
@@ -2973,11 +2744,8 @@ describe("<EpicSessionProvider />", () => {
 
   it("gives up the create-host seed when the effective host moves", async () => {
     const EPIC_ID = "epic-create-host-move-test";
-    // The effective host at mount ("host-a", the `beforeEach` default) is
-    // deliberately DIFFERENT from both the create-host marker and the host it
-    // later moves to, so a pass here can only mean the seed was actually
-    // given up on the move - not that the effective host never differed from
-    // the seed in the first place.
+    // effectiveHostId at mount differs from the create-host seed and from the
+    // later host, so a pass means the seed was given up on the move.
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
     installStreamFactory((_epicId, callbacks) => {
@@ -3033,10 +2801,8 @@ describe("<EpicSessionProvider />", () => {
 
   it("keeps the create-host seed when the selection authority merely answers for the first time", async () => {
     const EPIC_ID = "epic-create-host-baseline-test";
-    // Bootstrap, on BOTH axes: nobody has answered yet. `(attached: false,
-    // id: null)` is the pair this file calls bootstrap, and it is the one the
-    // seed exists to survive - `(attached: true, id: null)` is the real ∅ and
-    // a different case entirely.
+    // Bootstrap is attached:false,id:null. attached:true,id:null is the real
+    // empty and a different case.
     hostState.attached = false;
     hostState.id = null;
     markEpicCreatedThisSession(EPIC_ID, "host-create");
@@ -3098,13 +2864,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("Retry releases the create-host seed and re-points to the effective host", async () => {
-    // hostState.id/attached are left at their `beforeEach` defaults ("host-a",
-    // attached) for the ENTIRE test - a DIFFERENT, live host than the
-    // create-host marker below, and one that never changes. The give-up-on-a-
-    // derivation-move effect (`lastEffectiveHostIdRef` in
-    // epic-session-provider.tsx) only fires on a CHANGE to `effectiveHostId`,
-    // so it never runs here: this is precisely the case it cannot cover, and
-    // the only thing that can release the seed is `retryRepoint` itself.
+    // effectiveHostId never changes, so lastEffectiveHostIdRef cannot give up
+    // the seed; only retryRepoint can.
     vi.useFakeTimers();
     try {
       const EPIC_ID = "epic-create-host-retry-test";
@@ -3144,12 +2905,8 @@ describe("<EpicSessionProvider />", () => {
       expect(streams).toHaveLength(1);
       expect(presentations.at(-1)?.kind).toBe("ready");
 
-      // First Retry. With the fix, this releases the seed and re-points
-      // toward `effectiveHostId` ("host-a") - a second stream opens even
-      // though nothing ever touched `hostState.id`. Under the ablated
-      // `retryRepoint` (seed never released), `targetHostId` stays
-      // "host-create" == `current.hostId`, no re-point starts, and every
-      // assertion from here on fails.
+      // First Retry must release the create-host seed and re-point to
+      // effectiveHostId even though hostState.id never moved.
       act(() => {
         presentations.at(-1)?.retry();
       });
@@ -3195,11 +2952,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("retires the handle a worker fatal killed, so Retry rebuilds instead of re-presenting the corpse", async () => {
-    // A fatal only moved the PRESENTATION to `failed`. The handle stayed
-    // registered and undisposed, so Retry - which bumps `retryGeneration` and
-    // re-runs the acquire effect - reached `current.hostId === targetHostId`
-    // and presented that same dead handle as `ready`. The recovery affordance
-    // could not recover from the one failure it is shown for.
+    // Fatal only moves presentation to failed. Retry must not re-present the
+    // undisposed dead handle as ready.
     const EPIC_ID = "epic-worker-fatal-retry";
     const streams: ControlledEpicStream[] = [];
     const rig = installWorkerWithFatalOnFirstSpawn((_epicId, callbacks) => {
@@ -3258,15 +3012,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("hands a FRESH surface a new handle during the corpse window, before any Retry", async () => {
-    // The path finding 8's first fix could not reach. `retireDeadMounted` was
-    // called from the acquire effect, gated on the surface ALREADY holding the
-    // dead handle - so a second tab opening this epic between the fatal and any
-    // Retry has no `current`, skips that gate entirely, and adopts the corpse
-    // from `acquireMounted`. Same bug shape, one path over.
-    //
-    // A fix on one path to a state has to enumerate EVERY path to it, and
-    // `acquireMounted` is the seam every path goes through: it has exactly one
-    // production caller, and it is the line that hands out the handle.
+    // Second tab between fatal and Retry has no current, skips retireDeadMounted,
+    // and would adopt the corpse from acquireMounted - the one production seam.
     const EPIC_ID = "epic-corpse-window";
     const streams: ControlledEpicStream[] = [];
     const rig = installWorkerWithFatalOnFirstSpawn((_epicId, callbacks) => {
@@ -3325,12 +3072,8 @@ describe("<EpicSessionProvider />", () => {
   });
 
   it("disposes the replacement candidate when the provider unmounts mid-transfer", async () => {
-    // `commitReplacement` sets `settled = true` before dispatching the
-    // transfer, which permanently disarms `disposePending` and the deadline -
-    // so from that assignment the transfer tail OWNS the candidate on every
-    // exit. Its cancellation exit returned bare, leaving a fully built
-    // session - worker, stream transport, socket, accounting registrations -
-    // alive with nothing holding a reference that could ever end it.
+    // commitReplacement sets settled before transfer, disarming disposePending.
+    // The transfer tail owns the candidate on every exit, including cancel.
     const EPIC_ID = "epic-cancelled-transfer";
     const streams: ControlledEpicStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];

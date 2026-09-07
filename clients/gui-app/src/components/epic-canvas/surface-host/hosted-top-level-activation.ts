@@ -1,6 +1,5 @@
 /**
- * A hosted tile body is a SIBLING of the physical top-level wrappers, not a
- * descendant, so it resolves its own owning tab from the event target.
+ * A hosted tile body is a SIBLING of the physical top-level wrappers, not a descendant, so it resolves its own owning tab from the event target.
  * `refsMatch`/`refIsFocused` live here so `top-level-tab-host.tsx` shares them.
  */
 import {

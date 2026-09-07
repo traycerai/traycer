@@ -3,13 +3,8 @@ import { createContext, use } from "react";
 export const TabHostContext = createContext<string | null>(null);
 
 /**
- * Returns the host id the surrounding tile is bound to. Throws when
- * called outside `<TabHostProvider>` - consumers that legitimately need the
- * canvas-serving host must use `useCanvasHostId()` instead.
- *
- * Kept in its own module (separate from `TabHostProvider`) so the
- * provider file exports only the component - required for Vite's
- * react-refresh to handle HMR cleanly.
+ * Throws when called outside `<TabHostProvider>` - consumers that legitimately need the canvas-serving host must use `useCanvasHostId()` instead.
+ * Kept in its own module (separate from `TabHostProvider`) so the provider file exports only the component - required for Vite's react-refresh to handle HMR cleanly.
  */
 export function useTabHostId(): string {
   const value = use(TabHostContext);

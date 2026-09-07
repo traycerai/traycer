@@ -20,13 +20,7 @@ import HuggingFaceColor from "@lobehub/icons/es/HuggingFace/components/Color";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
-// Brand logos come from @lobehub/icons (every provider lives there, so we don't
-// hand-roll SVGs). Most imports use leaf component files to avoid pulling extra
-// variants; this includes OpenRouter, whose package barrels pull generated
-// feature exports that are not needed here. The mono variants and Factory Droid
-// mark paint with `currentColor`, so they follow the light/dark theme via the
-// `text-*` class applied by `HarnessIcon`; Claude uses the colored sunburst so
-// it keeps its brand orange in both themes.
+// Brand logos come from @lobehub/icons (every provider lives there, so we don't hand-roll SVGs).
 export const CodexIcon: HarnessIcon = (props) => <CodexMono {...props} />;
 export const ClaudeAIIcon: HarnessIcon = (props) => <ClaudeColor {...props} />;
 export const OpenCodeIcon: HarnessIcon = (props) => <OpenCodeMono {...props} />;
@@ -53,10 +47,8 @@ export const HuggingFaceIcon: HarnessIcon = (props) => (
 );
 export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 
-// Amp (Ampcode / Sourcegraph) has no lobehub entry — the official brand mark
-// (three ascending bars) from coder/registry's `sourcegraph-amp.svg`. Painted in
-// Amp's brand red so it keeps its identity in both light and dark themes, like
-// the Claude colored sunburst.
+// Amp (Ampcode / Sourcegraph) has no lobehub entry - the official brand mark (three ascending bars) from
+// coder/registry's `sourcegraph-amp.svg`.
 export const AmpIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox="0 0 19 19" fill="none">
     <path
@@ -74,18 +66,16 @@ export const AmpIcon: HarnessIcon = (props) => (
   </svg>
 );
 
-// Devin (Cognition) — lobehub monochrome brand mark (`currentColor` theming).
+// Devin (Cognition) - lobehub monochrome brand mark (`currentColor` theming).
 export const DevinIcon: HarnessIcon = (props) => <DevinMono {...props} />;
 
-// Hermes Agent (Nous Research) — lobehub monochrome brand mark (`currentColor`
-// theming), same pattern as Devin.
+// Hermes Agent (Nous Research) - lobehub monochrome brand mark (`currentColor` theming), same pattern as
+// Devin.
 export const HermesIcon: HarnessIcon = (props) => (
   <HermesAgentMono {...props} />
 );
 
-// Pi (pi.dev) has no lobehub entry — official badge mark from pi.dev/favicon.svg
-// (press kit). Brand dark plate + white glyph so it keeps identity in both themes
-// (same idea as Amp brand red / Claude colored sunburst).
+// Pi (pi.dev) has no lobehub entry - official badge mark from pi.dev/favicon.svg (press kit).
 export const PiIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox="0 0 800 800" fill="none">
     <rect width="800" height="800" rx="120" fill="#09090b" />
@@ -98,19 +88,8 @@ export const PiIcon: HarnessIcon = (props) => (
   </svg>
 );
 
-// omp (Oh My Pi, can1357/oh-my-pi) has no lobehub entry, so this is upstream's
-// own mark from `assets/icon.svg`: a Greek π whose short right leg ends in a
-// plug connector. Geometry and the brand orange are verbatim; the viewBox is
-// upstream's too, so the mark keeps its intended framing and renders wider than
-// tall next to the square sibling icons.
-//
-// One deliberate deviation: upstream fills the π strokes `#fafafa`, which is
-// near-white because its icon sits on a dark plate. Ours has no plate, so the
-// strokes use `currentColor` and follow the theme — `#fafafa` would be
-// invisible in light mode. The `#f97316` connector and dots stay literal: they
-// are the brand accent and read on both themes, and they are also what keeps
-// this distinguishable from `PiIcon` in the adjacent "Pi" / "Oh My Pi" provider
-// rows (the two products are unrelated despite the shared lineage).
+// Ours has no plate, so the strokes use `currentColor` and follow the theme - `#fafafa` would be invisible in
+// light mode.
 export const OmpIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox="0 0 120 90" fill="currentColor">
     {/* π: horizontal bar, long left leg, short right leg */}
@@ -126,10 +105,8 @@ export const OmpIcon: HarnessIcon = (props) => (
   </svg>
 );
 
-// Reasonix's official app badge, from the upstream website favicon. Keep the
-// literal brand blue and white glyph: unlike the monochrome harness marks, the
-// blue rounded square is part of Reasonix's identity and remains legible in
-// both themes.
+// Keep the literal brand blue and white glyph: unlike the monochrome harness marks, the blue rounded square is
+// part of Reasonix's identity and remains legible in both themes.
 export const ReasonixIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox="0 0 64 64" fill="none">
     <rect width="64" height="64" rx="20.22" fill="#0153e5" />
@@ -140,7 +117,7 @@ export const ReasonixIcon: HarnessIcon = (props) => (
   </svg>
 );
 
-// Traycer does not have a lobehub entry — hand-rolled from the brand mark.
+// Traycer does not have a lobehub entry - hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox={TRAYCER_MARK_VIEWBOX} fill="currentColor">
     <path fillRule="evenodd" clipRule="evenodd" d={TRAYCER_MARK_PATH_D} />

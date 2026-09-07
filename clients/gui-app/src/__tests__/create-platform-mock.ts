@@ -1,14 +1,5 @@
-// Shared factory for the `@/lib/keybindings/platform` mock used by the
-// keybinding tests. Centralizing it means a new platform export only needs to
-// be added here, not kept in sync across every test file that mocks the module.
-//
-// Usage (the control must come from `vi.hoisted` so the hoisted `vi.mock`
-// factory can read it):
-//
-//   const platformMock = vi.hoisted(() => ({ mac: false }));
-//   vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
-//
-// Flip `platformMock.mac` per-test to switch platform.
+// Shared @/lib/keybindings/platform mock. Hoist the control so vi.mock can
+// read it: vi.hoisted(() => ({ mac: false })).
 
 export interface PlatformMockControl {
   mac: boolean;

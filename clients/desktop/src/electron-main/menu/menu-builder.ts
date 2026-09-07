@@ -162,17 +162,6 @@ function buildEditMenu(
   };
 }
 
-/**
- * Electron's native undo/redo roles consume their accelerators and call
- * `webContents.undo()` / `webContents.redo()`. That bypasses editors with a
- * JavaScript-owned history, including @pierre/diffs. Keep the roles for menu
- * clicks, but leave the keyboard event with the renderer so the focused editor
- * can run its own unmodified Cmd/Ctrl-Z and Shift-Cmd/Ctrl-Z commands.
- *
- * `registerAccelerator` releases the chord on Windows/Linux. Electron ignores
- * that flag on macOS, so an explicit empty accelerator is required there to
- * override the role's built-in keyboard equivalent.
- */
 function rendererOwnedHistoryRole(
   role: "undo" | "redo",
   platform: NodeJS.Platform,
@@ -295,11 +284,6 @@ function buildHelpMenu(
           actions.command("app.reportIssue", browserWindow ?? null),
       },
       { type: "separator" },
-      // DevTools are available in non-production builds. Production drops the
-      // menu role so an end-user can't open a privileged inspector against the
-      // renderer.
-      // (`Ctrl+Shift+I` / `Cmd+Opt+I` accelerators land on the same role and
-      // are filtered out by Electron when the menu item is absent.)
       ...(state.canOpenDevTools
         ? [{ role: "toggleDevTools" } satisfies MenuItemConstructorOptions]
         : []),
@@ -339,12 +323,7 @@ function registerTerminalConflictingAccelerator(
   return platform === "darwin";
 }
 
-/**
- * Electron's role defaults register these Ctrl accelerators before the
- * renderer can apply its focused-terminal policy. Keep the native menu action,
- * but release its accelerator on Windows/Linux so the renderer or xterm owns
- * the key event. macOS keeps its native menu key equivalents.
- */
+/** Electron's role defaults register these Ctrl accelerators before the renderer can apply its focused-terminal policy. */
 function terminalConflictingRole(
   role: "close" | "quit" | "reload" | "selectAll",
   platform: NodeJS.Platform,

@@ -25,29 +25,7 @@ export interface RenameTerminalMutationContext {
 }
 
 /**
- * Renames a terminal session on an EXPLICIT host client rather than the
- * app-wide active host (a canvas tab is bound to its own host for life, which
- * may not be the default host).
- *
- * The host session record is the single source of truth for terminal titles;
- * every surface (sidebar rows, canvas tab strips, command palette) renders
- * from the host's cached `terminal.list` rows. The rename therefore fans out
- * through ONE optimistic patch of those cached rows - an explicitly justified
- * `setQueriesData`: the requested title IS the resulting host state, and the
- * host's `sessionUpdated` stream frame re-asserts it idempotently. No
- * stream-driven invalidation - the metadata stream subscription must never
- * trigger `terminal.list` refetches (see the feedback-loop note in
- * `terminal-session-registry.ts`).
- *
- * On success the persisted tile-name snapshots (the restart-recovery fallback
- * rendered only while the host has no row for the session) are refreshed in
- * every view tab, guarded latest-wins against out-of-order settles. On error
- * the patch is rolled back with a compare-and-swap guard plus a one-shot
- * mutation-boundary refetch as the authoritative repair.
- *
- * Every caller passes the client of the host that OWNS the session (a tile's
- * or the Epic session's); the app-wide convenience wrapper that used to
- * sit beside this hook had no caller left and was removed (PR #1243).
+ * Rename on the owning host client, never the app-wide one. Optimistic terminal.list patch; the metadata stream must never refetch that list.
  */
 export function useTerminalRenameFor(
   client: HostClient<HostRpcRegistry> | null,
@@ -103,9 +81,6 @@ export function useTerminalRenameFor(
       onSuccess: (_data, variables, ctx) => {
         if (ctx.hostId === null) return;
         // Latest-wins guard: two successful renames can settle out of order.
-        // If any cached row already carries a DIFFERENT title, a newer rename
-        // superseded this one - writing this title into the persisted
-        // snapshots would preserve a stale fallback name.
         const superseded = queryClient
           .getQueriesData<ListTerminalsResponseV23>({
             queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
@@ -131,14 +106,7 @@ export function useTerminalRenameFor(
       onError: (error, variables, ctx) => {
         toastFromHostError(error, "Couldn't rename the terminal.");
         if (ctx === undefined || ctx.hostId === null) return;
-        // Instant unwind first (CAS-guarded below), then a one-shot refetch
-        // as the authoritative repair: with overlapping renames the snapshots
-        // can legitimately disagree about the pre-mutation title (a later
-        // mutation's snapshot captured an earlier one's optimistic value), so
-        // local unwind alone can strand a title the host never accepted. A
-        // mutation-boundary invalidation is safe - the documented feedback
-        // loop only applies to invalidating from the STREAM metadata
-        // subscription.
+        // Instant unwind first (CAS-guarded below), then a one-shot refetch as the authoritative repair: with overlapping renames the snapshots can legitimately disagree about the pre-mutation title (a later mutation's snapshot captured an earlier one's optimistic value), so local unwind alone can strand a title the host never accepted.
         ctx.previous.forEach(([queryKey, snapshot]) => {
           const previousRow = snapshot?.sessions.find(
             (session) => session.sessionId === variables.sessionId,

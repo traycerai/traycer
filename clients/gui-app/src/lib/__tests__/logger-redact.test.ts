@@ -8,9 +8,7 @@ describe("redactLogText", () => {
     ['{"api_key":"sk-x"}', "sk-x"],
     ["Authorization: Basic YWJj", "YWJj"],
     ["Authorization: Bearer abc", "abc"],
-    // Schemes are matched generically: enumerating Basic/Bearer/Digest let an
-    // unlisted scheme (GitHub's `token`) be eaten as the credential, leaving
-    // the real secret behind as `authorization: <redacted> ghs_x`.
+    // Schemes are matched generically: enumerating Basic/Bearer/Digest let an unlisted scheme (GitHub's `token`) be eaten as the credential, leaving the real secret behind as `authorization: <redacted> ghs_x`.
     ["authorization: token ghs_x", "ghs_x"],
     ["Authorization: Digest xyz789", "xyz789"],
     ["Proxy-Authorization: Bearer px_1", "px_1"],
@@ -55,7 +53,7 @@ describe("redactLogText", () => {
     expect(multi).not.toContain("SECRET3");
     expect(multi).toBe("Cookie: <redacted>");
 
-    // Naive multi-Set-Cookie joining (and Expires= commas) — never stop at `,`.
+    // Naive multi-Set-Cookie joining (and Expires= commas) - never stop at `,`.
     const multiSet = redactLogText(
       "Set-Cookie: a=SECRET1; Path=/, b=SECRET2; HttpOnly",
     );

@@ -9,14 +9,7 @@ import { cn } from "@/lib/utils";
 import { DeviceCodeFallback } from "./device-code-fallback";
 import { useRemainingSeconds } from "./use-remaining-seconds";
 
-/**
- * Active device-flow progress. The app already auto-opens the pre-filled
- * approval page; this surface leads with a one-click "open approval page"
- * affordance (re-opening `verification_uri_complete`, code embedded) so the
- * user only ever has to click Approve - never type the code. The code + bare
- * URL remain as a manual fallback, and the spinner keeps it from being a silent
- * wait. Rendered while a device attempt is in flight.
- */
+/** The app already auto-opens the pre-filled approval page. */
 export function DeviceCodeProgress(props: {
   readonly progress: DeviceFlowProgress;
   readonly isHero: boolean;

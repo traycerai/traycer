@@ -9,9 +9,8 @@ import type {
 } from "@/stores/tile-find";
 
 export interface ChatFindAdapter extends TileFindAdapter {
-  // Signals that the transcript changed. The adapter rebuilds rows from
-  // `getRows()` and rescans matches only while a find session has an active
-  // query, so a closed bar pays no projection cost on streaming updates.
+  // Signals that the transcript changed.
+  // The adapter rebuilds rows from `getRows()` and rescans matches only while a find session has an active query, so a closed bar pays no projection cost on streaming updates.
   notifyRowsChanged(): void;
   syncMountedHighlight(): void;
   /** Leave the current result without closing the query or discarding matches. */
@@ -21,19 +20,10 @@ export interface ChatFindAdapter extends TileFindAdapter {
 
 interface ChatFindAdapterOptions {
   readonly tileInstanceId: string;
-  // Lazy supplier of the current transcript projection. Invoked when a search
-  // opens, the query changes, or a notified message change must be rescanned -
-  // never while the bar is closed.
+  // Lazy supplier of the current transcript projection.
+  // Invoked when a search opens, the query changes, or a notified message change must be rescanned - never while the bar is closed.
   readonly getRows: () => ReadonlyArray<ChatFindRow>;
-  /**
-   * Lazy supplier of the caveat describing what `getRows()` could NOT see, read
-   * at exactly the moments the rows are.
-   *
-   * On the windowed line (`chat.subscribe@1.8`) the transcript the client holds
-   * is a subset, so every count this adapter publishes is a count over a
-   * subset. `null` when the scan was complete - the legacy line always, and the
-   * windowed line once every row is hydrated.
-   */
+  /** Lazy supplier of the caveat describing what `getRows()` could NOT see, read at exactly the moments the rows are. On the windowed line (`chat.subscribe@1.8`) the transcript the client holds is a subset, so every count this adapter publishes is a count over a subset. */
   readonly getCoverageMessage: () => string | null;
   readonly revealMatch: (target: ChatFindRevealTarget) => void;
   readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
@@ -72,13 +62,10 @@ interface ChatFindMatch {
   // and the match key.
   readonly occurrenceInUnit: number;
   // Occurrence ordinal across the WHOLE message (all units, in render order).
-  // Drives the message-scope fallback paint, whose root walks every unit - the
-  // per-unit ordinal would point at the wrong occurrence there.
+  // Drives the message-scope fallback paint, whose root walks every unit - the per-unit ordinal would point at the wrong occurrence there.
   readonly occurrenceInMessage: number;
-  // Surrounding unit text immediately before/after this occurrence (capped to a
-  // small window). Used to re-anchor the active match across mid-unit streaming
-  // inserts, where neither the occurrence ordinal nor the absolute offset is
-  // stable but the immediate neighbours are.
+  // Surrounding unit text immediately before/after this occurrence (capped to a small window).
+  // Used to re-anchor the active match across mid-unit streaming inserts, where neither the occurrence ordinal nor the absolute offset is stable but the immediate neighbours are.
   readonly contextBefore: string;
   readonly contextAfter: string;
   readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
@@ -87,24 +74,11 @@ interface ChatFindMatch {
 const CHAT_FIND_CAPABILITIES: ReadonlySet<TileFindCapability> =
   new Set<TileFindCapability>(["find"]);
 const EMPTY_MATCHES: ReadonlyArray<ChatFindMatch> = [];
-// How much neighbouring unit text to snapshot on each side of an occurrence for
-// active-match re-anchoring across streaming inserts. Long enough to
-// disambiguate occurrences of the same query, short enough to ignore edits that
-// land elsewhere in the (often concatenated) unit.
+// How much neighbouring unit text to snapshot on each side of an occurrence for active-match re-anchoring across streaming inserts.
+// Long enough to disambiguate occurrences of the same query, short enough to ignore edits that land elsewhere in the (often concatenated) unit.
 const FIND_RECONCILE_CONTEXT_WINDOW = 32;
 
-/**
- * The find bar's caveat for a transcript the client only partly holds.
- *
- * Takes the count rather than the window so the copy stays a pure function of
- * one number and this module keeps no dependency on the transcript store.
- * Phrased like the diff tiles' `bundleCoverageMessage`, because a user meets
- * these two caveats in the same bar and they should read as one feature.
- *
- * The case this matters most for is not a short count - it is **zero** matches
- * over a subset, which without the caveat reads as a definitive "not in this
- * chat".
- */
+/** Takes the count rather than the window so the copy stays a pure function of one number and this module keeps no dependency on the transcript store. The case this matters most for is not a short count - it is **zero** matches over a subset, which without the caveat reads as a definitive "not in this chat". */
 export function chatFindCoverageMessage(unhydratedRows: number): string | null {
   if (unhydratedRows <= 0) return null;
   const noun = unhydratedRows === 1 ? "message is" : "messages are";
@@ -138,18 +112,15 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   private readonly highlighter: ChatFindHighlighter;
 
   private rows: ReadonlyArray<ChatFindRow> = [];
-  // Refreshed with `rows`, never independently: the caveat has to describe the
-  // very scan whose counts are being published, and a window that hydrates
-  // between the two reads would otherwise let a stale caveat outlive its scan.
+  // Refreshed with `rows`, never independently: the caveat has to describe the very scan whose counts are being published, and a window that hydrates between the two reads would otherwise let a stale caveat outlive its scan.
   private coverage: string | null = null;
   private matches: ReadonlyArray<ChatFindMatch> = EMPTY_MATCHES;
   private activeMatchIndex = 0;
   private snapshot: TileFindStateSnapshot;
   private paintFrameId: number | null = null;
   private paintGeneration = 0;
-  // Clearing the find target is an explicit user dismissal. Passive rescans
-  // and virtual-row mount syncs must preserve that state until navigation or a
-  // new search deliberately selects an active match again.
+  // Clearing the find target is an explicit user dismissal.
+  // Passive rescans and virtual-row mount syncs must preserve that state until navigation or a new search deliberately selects an active match again.
   private activeMatchDismissed = false;
 
   constructor(options: ChatFindAdapterOptions) {
@@ -244,13 +215,8 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.clearReveal();
     this.cancelScheduledPaint();
     this.highlighter.clear();
-    // Closing the bar must end scanning. notifyRowsChanged runs from a layout
-    // effect on every `messages` change (i.e. every streaming token) and is
-    // gated only on `snapshot.query.length`, so leaving the query/matches set
-    // keeps re-building rows and re-running findMatches over the whole
-    // transcript forever. Reset the scan state and publish an idle, empty
-    // snapshot so a closed bar does no per-token work; reopening re-runs search
-    // from scratch.
+    // Closing the bar must end scanning. notifyRowsChanged runs from a layout effect on every `messages` change (i.e. every streaming token) and is gated only on `snapshot.query.length`, so leaving the query/matches set keeps re-building rows and re-running findMatches over the whole transcript forever.
+    // Reset the scan state and publish an idle, empty snapshot so a closed bar does no per-token work; reopening re-runs search from scratch.
     this.matches = EMPTY_MATCHES;
     this.coverage = null;
     this.activeMatchIndex = 0;
@@ -269,9 +235,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   notifyRowsChanged(): void {
-    // While the bar is closed (empty query) we never build the projection: this
-    // is the closed-find fast path that keeps streaming token cost off the
-    // transcript projection and markdown tokenizer.
+    // While the bar is closed (empty query) we never build the projection: this is the closed-find fast path that keeps streaming token cost off the transcript projection and markdown tokenizer.
     if (this.snapshot.query.length === 0) return;
     this.rows = this.getRows();
     this.coverage = this.getCoverageMessage();
@@ -489,10 +453,8 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       }
       return;
     }
-    // The unit-scope root walks only the active unit, so the per-unit ordinal is
-    // correct. The message-scope fallback root walks every unit in the message,
-    // so it must use the message-wide ordinal - otherwise an earlier matching
-    // unit steals the highlight.
+    // The unit-scope root walks only the active unit, so the per-unit ordinal is correct.
+    // The message-scope fallback root walks every unit in the message, so it must use the message-wide ordinal - otherwise an earlier matching unit steals the highlight.
     const activeOccurrence =
       scope === "message"
         ? currentMatch.occurrenceInMessage
@@ -607,14 +569,8 @@ function findMatches(input: {
   return matches;
 }
 
-// Re-anchor the active match after a rescan. Streaming rebuilds the match set
-// every keystroke/update, so the previously active occurrence must be tracked to
-// the same logical spot without re-navigating. The catch: in a concatenated unit
-// (subagent task+progress+result) a streamed insert that lands BEFORE the active
-// occurrence shifts BOTH its per-unit ordinal (a query insert adds an earlier
-// occurrence) AND its absolute offset, so neither alone is a stable identity.
-// The occurrence's immediate neighbours are what stay put, so context wins before
-// ordinal/offset fallbacks.
+// Re-anchor the active match after a rescan.
+// Streaming rebuilds the match set every keystroke/update, so the previously active occurrence must be tracked to the same logical spot without re-navigating.
 function nextActiveMatchIndex(
   matches: ReadonlyArray<ChatFindMatch>,
   previousActive: ChatFindMatch | null,
@@ -650,13 +606,8 @@ function nextActiveMatchIndex(
   return Math.min(fallbackIndex, matches.length - 1);
 }
 
-// Among the candidates in the previously active unit, pick the one whose
-// before/after neighbours best overlap the previous active occurrence's
-// neighbours. The score is the shared run lengths (suffix of `contextBefore`
-// plus prefix of `contextAfter`); an insert that lands on only one side leaves
-// the other side fully intact, so the true occurrence still outscores a
-// freshly-inserted duplicate. Ties resolve toward the prior ordinal, then the
-// nearest offset, for determinism. Returns -1 when nothing overlaps.
+// Among the candidates in the previously active unit, pick the one whose before/after neighbours best overlap the previous active occurrence's neighbours.
+// The score is the shared run lengths (suffix of `contextBefore` plus prefix of `contextAfter`); an insert that lands on only one side leaves the other side fully intact, so the true occurrence still outscores a freshly-inserted duplicate.
 function bestContextMatchIndexInSameUnit(
   matches: ReadonlyArray<ChatFindMatch>,
   previousActive: ChatFindMatch,

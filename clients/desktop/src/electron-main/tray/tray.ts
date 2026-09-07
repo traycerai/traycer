@@ -17,13 +17,6 @@ const TRAY_GUID = "9b1d3a7e-4c52-4f8a-bd62-3e7f1a8c5d09";
 // Recent epics rendered inline; any beyond this collapse into a "More" submenu.
 const TRAY_EPIC_PRIMARY_LIMIT = 5;
 
-/**
- * Inputs to `resolveTrayIconPath`. Kept as plain data so the helper is
- * unit-testable without spinning up an Electron process. The `trayDir`
- * field is the absolute directory that contains the tray asset PNGs -
- * shipped builds populate it from `<process.resourcesPath>/tray`, the dev
- * slot resolves it from the workspace `resources/tray`.
- */
 export interface TrayAssetContext {
   readonly platform: NodeJS.Platform;
   readonly trayDir: string;
@@ -48,28 +41,13 @@ function resolveTrayDir(): string {
     : join(process.resourcesPath, "tray");
 }
 
-/**
- * Resolves the on-disk location of the tray icon for the current platform.
- * macOS uses a black-on-alpha template image so AppKit inverts it for the
- * active menu-bar appearance; every other platform uses an opaque white
- * glyph so the icon stays visible against dark trays.
- */
 export function resolveTrayIconPath(ctx: TrayAssetContext): TrayIconAsset {
   const isMac = ctx.platform === "darwin";
   const baseName = isMac ? "trayTemplate.png" : "tray.png";
   return { path: join(ctx.trayDir, baseName), isTemplate: isMac };
 }
 
-/**
- * Loads the resolved tray asset into a `nativeImage`. Throws with a
- * targeted message when the file is missing or fails to decode so the caller
- * (`createTraySafe`) logs an actionable diagnostic instead of silently
- * falling back to an invisible tray.
- *
- * Resolved and awaited in `createTraySafe` before the `Tray` is
- * constructed, so the asset probe and image decode can be async: we
- * `await access(F_OK)` (throws on missing) then decode.
- */
+/** Resolved and awaited in `createTraySafe` before the `Tray` is constructed, so the asset probe and image decode can be async: we `await access(F_OK)` (throws on missing) then. */
 export async function loadTrayIconImage(
   asset: TrayIconAsset,
 ): Promise<Electron.NativeImage> {
@@ -92,30 +70,14 @@ export async function loadTrayIconImage(
   return image;
 }
 
-/**
- * Optional wiring the desktop entrypoint passes in so the tray controller
- * stays free of `ipcMain` imports. `RunnerIpcBridge` owns the actual IPC send
- * and exposes a `deliverTrayEpicSelected` helper that the entrypoint binds
- * into this callback after both the bridge and the tray exist.
- */
 export interface DesktopTrayControllerOptions {
   readonly onEpicSelected: ((epicId: string) => void) | null;
-  // `hostUpdateVersion` is the version captured into a `host.installUpdate`
-  // item when that row was built ("Update to <version>"). Every other command
-  // passes `null`. The callback must not re-read live presentation state -
-  // an already-open native menu can still fire the old item's click after
-  // presentation has moved on.
+  // The callback must not re-read live presentation state - an already-open native menu can still fire the old item's click after presentation has moved on.
   readonly onCommand:
     | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
     | null;
 }
 
-/**
- * Subset of `BrowserWindow` the tray controller depends on. Declaring the
- * minimum surface keeps the controller testable without constructing a
- * real Electron window - callers still pass a full `BrowserWindow` at
- * runtime because that shape structurally satisfies this interface.
- */
 export interface TrayManagedWindow {
   isDestroyed(): boolean;
   isVisible(): boolean;
@@ -142,22 +104,12 @@ export interface DesktopTrayPresentation {
   readonly hostUpdateAvailableVersion: string | null;
 }
 
-/**
- * Identity line shown beside the Sign Out action: `Name (email)` when a
- * display name is known, otherwise just the email.
- */
 function formatAccountLabel(account: DesktopTrayAccount): string {
   return account.name !== null
     ? `${account.name} (${account.email})`
     : account.email;
 }
 
-/**
- * Native tray controller. The recent-epic list and indicator transitions are
- * driven by the renderer via `ipcRenderer.invoke` (`tray:setEpics` /
- * `tray:setIndicator`); `gui-app` sources the epics from the same history
- * store that backs the in-app epic list.
- */
 export class DesktopTrayController {
   private readonly tray: Tray;
   private readonly window: TrayManagedWindow;
@@ -173,12 +125,7 @@ export class DesktopTrayController {
   private onCommand:
     | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
     | null;
-  // Display-only - `registerAccelerator: false` on the "Open Traycer" item's
-  // `accelerator` below means the OS never binds this key combo from the
-  // menu; the real registration lives solely in the global-shortcuts
-  // registry (`electron-main/app/shortcuts.ts`). `null` when the summon
-  // shortcut is disabled or the OS refused it, so the item shows no
-  // accelerator rather than one that wouldn't actually fire.
+  // Display-only - `registerAccelerator: false` on the "Open Traycer" item's `accelerator` below means the OS never binds this key combo from the menu.
   private summonAccelerator: string | null = null;
 
   constructor(
@@ -195,10 +142,7 @@ export class DesktopTrayController {
     this.rebuildMenu();
   }
 
-  /**
-   * Lets the entrypoint install the epic-selected sink after the
-   * controller and the `RunnerIpcBridge` have both been constructed.
-   */
+  /** Lets the entrypoint install the epic-selected sink after the controller and the `RunnerIpcBridge` have both been constructed. */
   setEpicSelectedHandler(handler: ((epicId: string) => void) | null): void {
     this.onEpicSelected = handler;
   }
@@ -249,11 +193,6 @@ export class DesktopTrayController {
   }
 
   private rebuildMenu(): void {
-    // Text-forward, grouped layout that mirrors the native system menus:
-    // primary action, the recent-epic list (overflow folds into a "More"
-    // submenu), quick actions, the signed-in identity beside Sign Out, and
-    // Quit isolated at the bottom. No per-item icons - they read as oversized
-    // clutter in a native menu and the references we match are plain text.
     const toEpicItem = (epic: DesktopTrayEpic) => ({
       label: epic.title,
       sublabel: epic.subtitle,
@@ -285,18 +224,10 @@ export class DesktopTrayController {
 
     const { authStatus, account } = this.presentation;
     const isSignedIn = authStatus === "signed-in";
-    // `account` is contractually only populated when signed in. Gate on
-    // `isSignedIn` too so a sign-out/sign-in transition that leaves stale
-    // account data in the presentation can't render the previous identity
-    // above the "Sign In" row.
     const accountItems =
       isSignedIn && account !== null
         ? [{ label: formatAccountLabel(account), enabled: false }]
         : [];
-    // Capture the labelled version into the item's click closure. An open
-    // native tray menu can still fire this click after presentation has been
-    // rebuilt to a different version; re-reading live state would send the
-    // new version and defeat main's expected-version guard (cold-review #3).
     const hostUpdateVersion = this.presentation.hostUpdateAvailableVersion;
     const updateItems =
       hostUpdateVersion !== null
@@ -311,10 +242,7 @@ export class DesktopTrayController {
     const menu = Menu.buildFromTemplate([
       {
         label: "Open Traycer",
-        // Display-only: `registerAccelerator: false` means the OS never
-        // binds this from the menu - the global-shortcuts registry owns the
-        // real registration. `undefined` (not `null`) is what Electron's
-        // MenuItemConstructorOptions expects for "no accelerator".
+        // Display-only: `registerAccelerator: false` means the OS never binds this from the menu - the global-shortcuts registry owns the real registration.
         accelerator: this.summonAccelerator ?? undefined,
         registerAccelerator: false,
         click: () => this.showMainWindow(),
@@ -367,10 +295,6 @@ export class DesktopTrayController {
     if (this.onCommand === null) {
       return;
     }
-    // Tray commands fire while the app is backgrounded or hidden, and the
-    // renderer that handles them lives in the main window - surface it so
-    // the user sees the result (settings pane, sign-in screen, confirm
-    // modal) instead of it landing in an invisible window.
     this.showMainWindow();
     this.onCommand(command, hostUpdateVersion);
   }

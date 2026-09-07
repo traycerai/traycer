@@ -15,9 +15,7 @@ export interface WireframeIframeProps {
   readonly title: string;
   readonly className: string;
   /**
-   * When `fill`, the iframe stretches to the container - used for the
-   * fullscreen dialog. When `auto`, the iframe grows to the measured
-   * document height (clamped) - used for inline preview.
+   * fill stretches for fullscreen. auto grows to measured (clamped) height.
    */
   readonly mode: "auto" | "fill";
   readonly ref?: Ref<HTMLIFrameElement>;
@@ -167,19 +165,7 @@ function clampManualHeight(height: number, maxHeight: number): number {
 }
 
 /**
- * Sandboxed preview iframe. `allow-scripts` enables artifact-authored
- * interactions and the appended height reporter. Deliberately omitting
- * `allow-same-origin` gives the document an opaque origin, so its scripts
- * cannot access the parent DOM, storage, or cookies. The remaining sandbox
- * restrictions also block top-level navigation, form submission, and popups.
- *
- * The opaque origin makes `contentDocument` inaccessible from the parent.
- * Auto-sized previews therefore inject a trusted script before artifact
- * markup (but after an initial doctype) and receive its ResizeObserver
- * measurements via postMessage. Putting the reporter first prevents malformed
- * trailing raw-text/comment contexts from swallowing it. Document generations
- * reject reports queued by an earlier srcdoc, while request IDs correlate
- * explicit reset/load measurements with their replies.
+ * Sandboxed preview iframe. Omit `allow-same-origin` (opaque origin). Height reports via postMessage from a reporter injected before artifact markup.
  */
 export function WireframeIframe(props: WireframeIframeProps) {
   const { htmlContent, title, className, mode, ref: forwardedRef } = props;

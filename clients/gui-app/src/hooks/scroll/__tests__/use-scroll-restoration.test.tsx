@@ -204,10 +204,8 @@ describe("useScrollRestoration", () => {
 
     unmount();
 
-    // The store's anchor sweep owns clearing on a permanent close; the hook
-    // must not re-commit a dead tile (would resurrect a swept anchor) and must
-    // not clear (would duplicate the sweep). So the pre-set anchor is left
-    // untouched here, and capture is never called.
+    // So the pre-set anchor is left untouched here, and capture is never called.
+    // The store's anchor sweep owns clearing on a permanent close; the hook must not re-commit a dead tile (would resurrect a swept anchor) and must not clear (would duplicate the sweep).
     expect(mock.captureCalls).toBe(0);
     expect(read("t2")).toEqual(ANCHOR);
   });

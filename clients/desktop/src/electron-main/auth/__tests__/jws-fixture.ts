@@ -1,10 +1,5 @@
 import { createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 
-/**
- * A real RS256 signing key plus the JWK authn-v3 would publish for it, so the
- * bearer-verification suites drive the actual crypto rather than a stubbed
- * "is valid" answer. Shared with the auth-IPC arms in `runner-ipc.test.ts`.
- */
 export interface BearerSigningKey {
   readonly kid: string;
   /** The published public JWK, tagged with its signing class. */

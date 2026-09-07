@@ -1,10 +1,4 @@
-/**
- * What a floor's sign says.
- *
- * The host's own display name where the directory knows it, a short prefix of
- * the id where it does not. Never the raw id in full: it is long, opaque, and
- * the sign is two tiles wide.
- */
+/** What a floor's sign says. */
 const SHORT_ID_LENGTH = 8;
 
 export function officeFloorName(

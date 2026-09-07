@@ -3,14 +3,8 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import type { TabRef } from "@/stores/tabs/types";
 
 /**
- * The canonical set of refs a strip layout may reference: every open Epic tab
- * in canvas order, then every landing draft.
- *
- * Defined once on purpose. Reconciliation (the command coordinator) and
- * hydration/sanitize (desktop persistence) have to agree on exactly what counts
- * as a source ref; when each kept its own copy, a new source kind or a changed
- * filter could reach one side only and silently desync placement from
- * hydration.
+ * The canonical set of refs a strip layout may reference: every open Epic tab in canvas order,
+ * then every landing draft. Defined once on purpose.
  */
 export function tabSourceRefs(): ReadonlyArray<TabRef> {
   const canvas = useEpicCanvasStore.getState();

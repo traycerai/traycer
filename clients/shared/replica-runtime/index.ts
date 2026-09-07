@@ -1,13 +1,4 @@
-// The client replica runtime's interface seam — the contracts the replica,
-// its adapters, its leases, its registry, its accountant, and its command
-// overlay are all written against.
-//
-// This directory is types plus the few pure helpers whose semantics would
-// otherwise be re-invented once per plane. It moves no existing code; the
-// extraction that fills these seams in is a separate change.
-//
-// See `README.md` in this directory for what each seam is for, which existing
-// code it is destined to absorb, and the rules that are non-negotiable.
+// The client replica runtime's interface seam - the contracts the replica, its adapters, its leases, its registry, its accountant, and its command overlay are all written against.
 
 export type {
   MonotonicSequence,

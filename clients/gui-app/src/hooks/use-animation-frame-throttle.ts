@@ -1,15 +1,7 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 
 /**
- * Returns a stable `schedule(arg)` that runs `callback` at most once per
- * animation frame, always with the most recently scheduled `arg` and the
- * latest `callback` identity. A pending frame is cancelled on unmount.
- *
- * Use this to coalesce layout reads (e.g. `getBoundingClientRect`) driven by
- * high-frequency events (scroll, rendered-data changes) into one read per
- * frame, without the scheduler's identity churning when `callback` closes over
- * changing values - so the returned function is safe in otherwise-stable event
- * handler dependency arrays.
+ * Stable `schedule(arg)`: at most one callback per frame, latest arg and callback. Identity does not churn with the callback closure.
  */
 export function useAnimationFrameThrottle<TArg>(
   callback: (arg: TArg) => void,

@@ -59,9 +59,8 @@ interface HarnessModelPickerPanelProps {
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
   readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
   readonly profileEnablementPending: (profileId: string | null) => boolean;
-  /** The browsed provider's CLI state, for the ambient-auth line shown when
-   *  the provider has under 2 profiles (the profile dropdown owns identity
-   *  above that). `null` when `providers.list` hasn't resolved it. */
+  /** The browsed provider's CLI state, for the ambient-auth line shown when the provider has under 2 profiles
+   * (the profile dropdown owns identity above that). */
   readonly activeProviderState: ProviderCliState | null;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
@@ -79,9 +78,8 @@ interface HarnessModelPickerPanelProps {
   readonly onRefreshCatalog: () => Promise<void>;
   readonly hostUnavailableLabel: string | null;
   readonly onOpenProviderSettings: () => void;
-  /** Closes the picker popover without opening Settings - used by the profile
-   *  dropdown's "Create new profile" row, which opens the add-profile flow in
-   *  its own global host, not Settings. */
+  /** Closes the picker popover without opening Settings - used by the profile dropdown's "Create new profile"
+   * row, which opens the add-profile flow in its own global host, not Settings. */
   readonly onClosePicker: () => void;
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly listKey: string;
@@ -195,22 +193,18 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       collisionPadding={12}
       role="dialog"
       aria-label="Select model"
-      // Opts this popover out of the keybinding provider's dialog block so the
-      // picker's leader-digit shortcuts fire while it's open (see
-      // `isAnyDialogOpen` in keybinding-provider.tsx).
+      // Opts this popover out of the keybinding provider's dialog block so the picker's leader-digit shortcuts fire
+      // while it's open (see `isAnyDialogOpen` in keybinding-provider.tsx).
       data-leader-scope={LEADER_SCOPE_MODEL_PICKER}
       className="h-[min(var(--radix-popover-content-available-height),23rem)] w-[min(86vw,30rem)] gap-0 overflow-hidden rounded-xl p-0"
-      // Return focus to the composer editor (not the trigger pill) on close so
-      // the user can keep typing after picking a model. No-op on surfaces with
-      // no registered composer (e.g. the terminal launcher), where Radix's
-      // default focus restore stands.
+      // Return focus to the composer editor (not the trigger pill) on close so the user can keep typing after
+      // picking a model.
       onCloseAutoFocus={(event) => {
         if (focusActiveComposer()) event.preventDefault();
       }}
       ref={contentRef}
-      // The search field is the first tabbable descendant, so Radix's own
-      // open-autofocus takes it whether or not the panel's search effect runs.
-      // Both halves have to move together or the gate is a no-op.
+      // The search field is the first tabbable descendant, so Radix's own open-autofocus takes it whether or not the
+      // panel's search effect runs. Both halves have to move together or the gate is a no-op.
       onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={onKeyDown}
       onEscapeKeyDown={(event) => {
@@ -230,9 +224,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
         listboxId={listboxId}
         activeDescendant={activeDescendant}
       />
-      {/* The provider rail stays mounted while searching: search is local to the
-          active harness, so the rail keeps its role as the only way to switch
-          scope. The grid is always two columns - no width jump on query. */}
+      {/* The provider rail stays mounted while searching: search is local to the active harness, so the rail keeps
+         its role as the only way to switch scope. The grid is always two columns - no width jump on query. */}
       <div className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] overflow-hidden">
         <ProviderRail
           harnesses={catalogHarnesses}
@@ -254,11 +247,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           ref={bindProfileDropdownContainer}
           className="flex min-h-0 min-w-0 flex-col overflow-hidden"
         >
-          {/* The dropdown is the picker's second interaction level: only when
-              the active provider has 2+ profiles, and it persists while
-              typing - search stays scoped to the active provider+profile
-              pair. Under 2 profiles the same slot carries the ambient-auth
-              line instead, so account identity has one home either way. */}
+          {/* The dropdown is the picker's second interaction level: only when the active provider has 2+ profiles, and it
+             persists while typing - search stays scoped to the active provider+profile pair. */}
           {activeProviderProfiles.length >= 2 ? (
             <div className="shrink-0 border-b p-2">
               <PickerProfileDropdown

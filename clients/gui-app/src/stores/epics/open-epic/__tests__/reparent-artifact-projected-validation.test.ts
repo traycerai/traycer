@@ -1,14 +1,3 @@
-/**
- * Task 4.3: `reparentArtifactAction` now VALIDATES against the projected
- * tree (`evaluateProjectedReparent`) and WRITES to the doc entry resolved
- * separately (`resolveReparentNode`). These are store-level tests of that
- * new validation surface - the doc-only-terminal-agent-onto-record-chat
- * pairing (the acceptance criterion this task exists for) is pinned as an
- * inversion of the old divergence fixture in
- * `components/epic-canvas/dnd/__tests__/sidebar-reparent-commit-doc-projected-agreement.test.ts`;
- * this file covers the rest of the matrix directly against
- * `reparentArtifact`, one level below the DnD commit helper.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
@@ -68,11 +57,7 @@ function newSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: "epic-1",
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // `handle.doc` still resolves because this harness builds the runtime in THIS thread.
     factories: {
       streamClientFactory: factory,
       laneSelection: null,
@@ -121,9 +106,6 @@ function seedTerminalAgent(
   (tuiAgents as Y.Map<unknown>).set(id, makeTerminalAgentEntry(id, title));
 }
 
-/** Sets a doc-backed `chats` entry with a specific `parentId`, bypassing
- * `createArtifactInDocForTests` (which always seeds `parentId: null`). Used
- * to build the doc arm of a cross-arm cycle. */
 function seedDocChat(
   handle: OpenedStoreForTest,
   id: string,
@@ -218,10 +200,7 @@ describe("reparentArtifact validates against the projected tree", () => {
 
   it("catches a cycle that spans the doc and record arms", async () => {
     handle = newSession();
-    // chat-registry (record-only, root) <- chat-doc (doc-backed, parented
-    // under chat-registry). The chain crosses both arms: this could not be
-    // detected before 4.3, since the doc-only evaluator never saw
-    // chat-registry at all.
+    // chat-registry (record-only, root) <- chat-doc (doc-backed, parented under chat-registry).
     handle.store
       .getState()
       .applyChatRecords(
@@ -256,29 +235,16 @@ describe("reparentArtifact validates against the projected tree", () => {
       .getState()
       .reparentArtifact("chat-registry", docParent);
 
-    // The projection accepted the move (legal, not a no-op), but there is no
-    // doc entry for "chat-registry" to write to - `epic.reparentChat` owns
-    // that node's pointer instead.
+    // The projection accepted the move (legal, not a no-op), but there is no doc entry for
+    // "chat-registry" to write to - `epic.reparentChat` owns that node's pointer instead.
     expect(mutated).toBe(false);
     const after = handle.store.getState();
     expect(after.tree.nodeById["chat-registry"].parentId).toBeNull();
   });
 
   /**
-   * The nuance flagged in the task handoff: the projected tree's `parentId`
-   * is the EFFECTIVE parent - `resolveEffectiveParent` promotes an unknown
-   * raw pointer to root (`null`, see `projection-helpers.ts`). So a node
-   * whose raw doc `parentId` dangles (points at an id nothing resolves to)
-   * reads as `parentId: null` in the tree, and dropping it at root is now
-   * `same-parent` - a silent no-op that leaves the dangling raw pointer in
-   * place. The OLD doc-based evaluator read the raw `parentId` directly, saw
-   * it did not equal `null`, and would have written `null` - cleaning the
-   * dangling pointer as a side effect of an ordinary "un-nest" drop.
-   *
-   * This is pinned as CURRENT behaviour, not fixed: the projection is the
-   * single source of truth for "where does this node currently sit," and by
-   * that source the node already sits at root. Flagged to the assigning
-   * agent per the handoff - not treated as a bug to work around here.
+   * The nuance flagged in the task handoff: the projected tree's `parentId` is the EFFECTIVE parent
+   * - `resolveEffectiveParent` promotes an unknown raw pointer to root (`null`, see
    */
   it("pins current behaviour: root drop on a dangling raw parentId is a no-op and leaves the raw pointer dirty", async () => {
     handle = newSession();

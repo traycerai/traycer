@@ -15,11 +15,7 @@ type SetGlobalContext = {
   readonly hostId: string | null;
 };
 
-/**
- * Writes the global agent selection guide for the active host. Backs both the
- * debounced auto-save and explicit user edits. The read query is updated
- * in-place instead of refetched so active editor drafts stay local.
- */
+/** The read query is updated in-place instead of refetched so active editor drafts stay local. Backs both the debounced auto-save and explicit user edits. */
 export function useAgentSelectionGuideSetGlobalMutation(): UseMutationResult<
   AgentSelectionGuideGlobalSetResponse,
   HostRpcError,

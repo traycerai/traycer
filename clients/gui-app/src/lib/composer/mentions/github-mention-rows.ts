@@ -10,10 +10,8 @@ import type {
 import { foldGithubIdentitySegment } from "@traycer/protocol/common/github-mention-identity";
 
 /**
- * Pure row algebra for the PR/Issue mention sections: GitHub identity, the
- * cache/remote merge, bucket-then-recency ranking, the client-side filter, and
- * reference-query recognition. Deliberately free of React and of the host
- * client so the parts that decide what the user sees can be tested directly.
+ * Pure row algebra for the PR/Issue mention sections: GitHub identity, the cache/remote merge, bucket-then-recency ranking, the client-side filter, and reference-query recognition.
+ * Deliberately free of React and of the host client so the parts that decide what the user sees can be tested directly.
  */
 
 export type GithubMentionFilter =
@@ -70,16 +68,7 @@ const ISSUE_INVOLVEMENTS: ReadonlyArray<
   GithubIssueMentionFilter["involvement"]
 > = ["everyone", "assigned", "authored", "mentions"];
 
-/**
- * Narrows a stored filter to the arm its section's wire request needs.
- *
- * The two arms are NOT interchangeable - only PRs have `review-requested`,
- * only issues have `mentions` - and the store is persisted, so a value written
- * by an older build (or by the other section, through a bug) can be shaped
- * wrong. These rebuild the filter field by field and fall back to the default
- * for anything unrecognized, which is why neither needs a type assertion: the
- * result is constructed, not claimed.
- */
+/** Narrows a stored filter to the arm its section's wire request needs. */
 export function asPullRequestMentionFilter(
   filter: GithubMentionFilter,
 ): GithubPullRequestMentionFilter {
@@ -109,9 +98,8 @@ export function asIssueMentionFilter(
 }
 
 /**
- * The section's coercion, chosen by section. The dispatch itself is the point:
- * a filter is only ever valid FOR a section, so any code holding one that was
- * not built for the section it is about to qualify goes through here.
+ * The section's coercion, chosen by section.
+ * The dispatch itself is the point: a filter is only ever valid FOR a section, so any code holding one that was not built for the section it is about to qualify goes through here.
  */
 export function withGithubMentionSectionShape(
   section: GithubMentionSection,
@@ -121,10 +109,8 @@ export function withGithubMentionSectionShape(
     section === "pull-requests"
       ? asPullRequestMentionFilter(filter)
       : asIssueMentionFilter(filter);
-  // Identity-preserving when there was nothing to coerce, which is every
-  // ordinary read. A store selector's result is compared by identity to decide
-  // whether to re-render, so handing back a fresh-but-equal object on each call
-  // is not a wasted allocation - it is an unbroken render loop.
+  // Identity-preserving when there was nothing to coerce, which is every ordinary read.
+  // A store selector's result is compared by identity to decide whether to re-render, so handing back a fresh-but-equal object on each call is not a wasted allocation - it is an unbroken render loop.
   return coerced.state === filter.state &&
     coerced.involvement === filter.involvement
     ? filter
@@ -132,9 +118,8 @@ export function withGithubMentionSectionShape(
 }
 
 /**
- * Replaces a repository selection. Written as an explicit per-section rebuild
- * for the same reason as the coercions above - spreading a union member does
- * not narrow, and the two arms must stay distinguishable.
+ * Replaces a repository selection.
+ * Written as an explicit per-section rebuild for the same reason as the coercions above - spreading a union member does not narrow, and the two arms must stay distinguishable.
  */
 export function withGithubMentionRepository(
   section: GithubMentionSection,
@@ -148,16 +133,8 @@ export function withGithubMentionRepository(
 }
 
 /**
- * The one identity a PR/issue row has, everywhere: GitHub host, owner, repo,
- * number. The de-duplication, the preview lookup, and the picker row key all
- * read through this, so a cached row and its remote-search duplicate can never
- * be treated as two different things.
- *
- * Folded like every identity comparison in this file: GitHub treats these
- * segments case-insensitively, and a repository whose casing was renamed
- * between the cached sweep and the live search would otherwise arrive as two
- * spellings of one artifact - the merge would append a duplicate row instead
- * of replacing the stale payload, and either copy could be committed.
+ * The one identity a PR/issue row has, everywhere: GitHub host, owner, repo, number.
+ * The de-duplication, the preview lookup, and the picker row key all read through this, so a cached row and its remote-search duplicate can never be treated as two different things.
  */
 export function githubMentionRowKey(
   row: Pick<GithubMentionRow, "githubHost" | "owner" | "repo" | "number">,
@@ -178,24 +155,7 @@ export function githubMentionEntryId(
   return `github:${section}:${githubMentionRowKey(row)}`;
 }
 
-/**
- * Keeps only the rows that BELONG to `section`.
- *
- * This is an entity-type boundary, and it is enforced here - where the rows
- * are consumed - rather than trusted from where they arrive. One
- * `useGithubMentionSearch` observer serves both sections, so switching section
- * changes that observer's query key, and `placeholderData: keepPreviousData`
- * answers the new key with the PREVIOUS key's data (query-core never clears
- * its `lastQueryWithDefinedData` on a key change). For the seconds until the
- * new search resolves, the Issues section would otherwise be handed pull
- * requests - which pass the state/involvement filter, rank first for a `#4917`
- * query, sit pre-highlighted, and insert a `github_pull_request` chip from the
- * Issues list.
- *
- * Returns the input array unchanged when nothing is dropped, so the common
- * case costs no identity churn and the merge's same-reference fast path still
- * applies.
- */
+/** Keeps only the rows that BELONG to `section`. */
 export function githubMentionRowsForSection(
   rows: ReadonlyArray<GithubMentionRow>,
   section: GithubMentionSection,
@@ -205,21 +165,7 @@ export function githubMentionRowsForSection(
   return rows.filter((row) => row.kind === wanted);
 }
 
-/**
- * Keeps only the rows whose repository is in the RESOLVED scope.
- *
- * Repository membership is a property of the scope's freshest resolved answer,
- * not of whichever response a row happens to ride in on. Two carriers can
- * outlive a repository leaving the scope: the sibling section's catalog entry
- * inside its `staleTime`, and the session store's published rows. Both are
- * still served as rows, so without this boundary a repository detached moments
- * ago keeps offering references the current scope can no longer resolve - and
- * the user can commit one as a mention.
- *
- * Identity-preserving on the common path: when nothing is out of scope the
- * input array is returned as-is, so appliers inside memos do not re-key the
- * picker on every render.
- */
+/** Keeps only the rows whose repository is in the RESOLVED scope. */
 export function githubMentionRowsWithinScope(
   rows: ReadonlyArray<GithubMentionRow>,
   repositories: ReadonlyArray<GithubMentionRepository>,
@@ -232,14 +178,8 @@ export function githubMentionRowsWithinScope(
 }
 
 /**
- * One casing rule for a repository's identity. GitHub hosts, owners and repo
- * names are case-insensitive, and the two sides of a comparison here can come
- * from DIFFERENT pipelines with different casing: rows carry the API's
- * canonical spelling, while the scope's repositories are parsed from the
- * folder's configured remote - whatever casing the user happened to type
- * there. Compared verbatim, a `TraycerAI/Traycer` remote dropped every row
- * the API returned as `traycerai/traycer`, as if the repository had left the
- * scope. Same rule `referenceMatchesRow` already applies to pasted URLs.
+ * One casing rule for a repository's identity.
+ * GitHub hosts, owners and repo names are case-insensitive, and the two sides of a comparison here can come from DIFFERENT pipelines with different casing: rows carry the API's canonical spelling, while the scope's repositories are parsed from the folder's.
  */
 export function githubRepositoryIdentityKey(entry: {
   readonly githubHost: string;
@@ -253,25 +193,7 @@ export function githubRepositoryIdentityKey(entry: {
   ].join("\x1f");
 }
 
-/**
- * Merges remote search hits into the cached catalog rows.
- *
- * On a collision the cached row keeps its POSITION and its key, and the remote
- * row supplies the payload. Both halves of that matter, and they used to be
- * conflated:
- *
- * - the key is what the picker lists by, so preserving it is what keeps the
- *   highlight from jumping while the user is typing. It is derived from
- *   `(githubHost, owner, repo, number)`, none of which a refresh can change,
- *   so it survives taking the fresh payload;
- * - the payload is the part that goes stale. Keeping the cached one discarded
- *   the very state the search was issued to discover: searching with the
- *   Merged filter returns a PR the sweep still records as Open, the stale Open
- *   copy wins here, and the state filter downstream then drops it - so a
- *   search that succeeded renders as no results at all.
- *
- * Remote-only rows append in the order the host returned them.
- */
+/** Merges remote search hits into the cached catalog rows. */
 export function mergeGithubMentionRows(
   cached: ReadonlyArray<GithubMentionRow>,
   remote: ReadonlyArray<GithubMentionRow>,
@@ -291,9 +213,8 @@ export function mergeGithubMentionRows(
     seen.add(key);
     return true;
   });
-  // Nothing appended and nothing actually swapped: hand back the very array
-  // that came in. Allocating a twin here would re-key the picker on every
-  // search response that told us only what we already knew.
+  // Nothing appended and nothing actually swapped: hand back the very array that came in.
+  // Allocating a twin here would re-key the picker on every search response that told us only what we already knew.
   if (additions.length === 0) return replaced ? refreshed : cached;
   return [...refreshed, ...additions];
 }
@@ -319,8 +240,7 @@ const ISSUE_BUCKET_ORDER: ReadonlyArray<GithubMentionBucket> = [
 ];
 
 /**
- * A row's rank among the involvement buckets: its BEST bucket wins, because a
- * PR that is both this task's own and merely recent is a task PR.
+ * A row's rank among the involvement buckets: its BEST bucket wins, because a PR that is both this task's own and merely recent is a task PR.
  */
 export function githubMentionBucketRank(
   section: GithubMentionSection,
@@ -336,13 +256,8 @@ export function githubMentionBucketRank(
 }
 
 /**
- * Client-side match strength for a typed query, or null when the row does not
- * match at all. Lower is better, matching the fuzzy-ranking convention used
- * elsewhere in the picker.
- *
- * Number matches are deliberately first and by a wide margin: `#4917` and
- * `4917` are exact-reference intents, and a title that merely contains "4917"
- * must never outrank the PR that IS 4917.
+ * Client-side match strength for a typed query, or null when the row does not match at all.
+ * Lower is better, matching the fuzzy-ranking convention used elsewhere in the picker.
  */
 export function githubMentionMatchScore(
   row: GithubMentionRow,
@@ -359,12 +274,8 @@ export function githubMentionMatchScore(
   if (title.startsWith(query)) return 200;
   if (title.includes(query)) return 300;
 
-  // One host-qualified haystack, because `repo` and `owner/repo` are both
-  // substrings of it. The host segment must be searchable: the UI itself
-  // prints `host/owner/repo` when a scope holds the same name on two hosts
-  // (see `githubRepositoryQualification`), and a matcher that cannot re-match
-  // the identity the row DISPLAYS drops the row the moment the user types
-  // what they see.
+  // One host-qualified haystack, because `repo` and `owner/repo` are both substrings of it.
+  // The host segment must be searchable: the UI itself prints `host/owner/repo` when a scope holds the same name on two hosts (see `githubRepositoryQualification`), and a matcher that cannot re-match the identity the row DISPLAYS drops the row the moment the.
   const qualified = `${row.githubHost}/${row.owner}/${row.repo}`.toLowerCase();
   if (qualified.includes(query)) return 400;
 
@@ -377,8 +288,7 @@ export function githubMentionMatchScore(
 
 /**
  * Exact-reference intent, or null when the query is not about a number at all.
- * Split out of the score above so each function stays readable, and because
- * these are the only two scores that must outrank every text match.
+ * Split out of the score above so each function stays readable, and because these are the only two scores that must outrank every text match.
  */
 function numberMatchScore(
   row: GithubMentionRow,
@@ -400,14 +310,7 @@ export interface RankGithubMentionRowsInput {
   readonly limit: number;
 }
 
-/**
- * The section's row order.
- *
- * With no query this is purely the product's default ordering: involvement
- * bucket, then recency. Once the user types, match strength leads and the
- * bucket becomes the tiebreak - the same philosophy as `resortByNameTier` in
- * root search, where what you typed outranks where a row came from.
- */
+/** The section's row order. */
 export function rankGithubMentionRows(
   input: RankGithubMentionRowsInput,
 ): ReadonlyArray<GithubMentionRow> {
@@ -430,10 +333,8 @@ export function rankGithubMentionRows(
 }
 
 /**
- * Applies the funnel's selection to already-cached rows, so a filter change
- * re-renders instantly instead of waiting on the network. Anything the cache
- * cannot answer (a `merged`/`closed`/`all` state the sweep never fetched) is
- * served by the search unary; this only narrows what is already here.
+ * Applies the funnel's selection to already-cached rows, so a filter change re-renders instantly instead of waiting on the network.
+ * Anything the cache cannot answer (a `merged`/`closed`/`all` state the sweep never fetched) is served by the search unary; this only narrows what is already here.
  */
 export function filterGithubMentionRows(
   rows: ReadonlyArray<GithubMentionRow>,
@@ -466,9 +367,8 @@ function rowMatchesState(row: GithubMentionRow, state: string): boolean {
 }
 
 /**
- * Involvement is answered from the row's own buckets. `everyone` never
- * narrows; a bucket the host did not emit for this row means the row is not in
- * it, which is exactly what a filter should conclude.
+ * Involvement is answered from the row's own buckets.
+ * `everyone` never narrows; a bucket the host did not emit for this row means the row is not in it, which is exactly what a filter should conclude.
  */
 function rowMatchesInvolvement(
   row: GithubMentionRow,
@@ -495,29 +395,16 @@ function involvementBucket(
 }
 
 /**
- * A query the user clearly meant as a REFERENCE rather than as prose: a bare
- * number (`123` or `#123`), an `org/repo#123`, or a pasted GitHub PR/issue
- * URL. The hash is optional on the bare form because `numberMatchScore`
- * already treats bare digits as exact-number intent - one answer to "is this
- * query a number naming a row?", not a ranker that says yes while the
- * exemption and the `Resolve in ...` rows say no.
- *
- * Two rules read this. Ranking puts an exact number match on top, and the root
- * step's zero-match auto-close is suppressed for these - a reference that the
- * cache happens not to hold is precisely the case where closing the menu is
- * wrong, because the section can still resolve it.
+ * A query the user clearly meant as a REFERENCE rather than as prose: a bare number (`123` or `#123`), an `org/repo#123`, or a pasted GitHub PR/issue URL.
+ * The hash is optional on the bare form because `numberMatchScore` already treats bare digits as exact-number intent - one answer to "is this query a number naming a row?", not a ranker that says yes while the exemption and the `Resolve in ...` rows say no.
  */
 export type GithubReferenceQuery =
   | { readonly kind: "number"; readonly number: number }
   | {
       readonly kind: "repository";
       /**
-       * Null for the two-segment `owner/repo#123` form. Three segments parse
-       * as `host/owner/repo#123` - the exact identity the UI prints when a
-       * scope holds the same `owner/repo` on two hosts, so typing that
-       * displayed form back must rank as the reference it is. A repository
-       * name cannot contain `/`, which is what makes the segment count
-       * unambiguous.
+       * Null for the two-segment `owner/repo#123` form.
+       * Three segments parse as `host/owner/repo#123` - the exact identity the UI prints when a scope holds the same `owner/repo` on two hosts, so typing that displayed form back must rank as the reference it is.
        */
       readonly githubHost: string | null;
       readonly owner: string;
@@ -597,16 +484,7 @@ export function parseGithubReferenceQuery(
   return null;
 }
 
-/**
- * The number a reference names, or `null` when it cannot name anything.
- *
- * The patterns above match `\d{1,7}`, which accepts `0` and `000`, while the
- * wire row schema requires a positive number. Without this, `@#0` classifies
- * as a resolvable reference: it suppresses root's zero-match auto-close and
- * offers `Resolve in Pull requests…` for an identity that no catalog or search
- * response can ever contain, so the menu stays open on a promise it cannot
- * keep. Treating it as ordinary prose is the honest answer.
- */
+/** The number a reference names, or `null` when it cannot name anything. */
 function referenceNumber(raw: string): number | null {
   const parsed = Number(raw);
   return parsed > 0 ? parsed : null;
@@ -639,38 +517,21 @@ function referenceMatchesRow(
   ) {
     return false;
   }
-  // Case-folded like `owner` and `repo` above: hostnames are case-insensitive,
-  // so a pasted `https://GitHub.com/org/repo/pull/1` must still match the row
-  // it names rather than losing its exact-reference rank to text scoring.
+  // Case-folded like `owner` and `repo` above: hostnames are case-insensitive, so a pasted `https://GitHub.com/org/repo/pull/1` must still match the row it names rather than losing its exact-reference rank to text scoring.
   if (reference.kind === "url") {
     if (reference.githubHost.toLowerCase() !== row.githubHost.toLowerCase()) {
       return false;
     }
-    // A URL says WHICH KIND it names, and only a URL does. `#123` and
-    // `org/repo#123` are deliberately kind-agnostic - GitHub numbers pull
-    // requests and issues from one sequence, so a bare number legitimately
-    // resolves to either - but `/pull/123` cannot name issue 123. Ignoring the
-    // parsed section scored that issue an exact 0, floated it to the top, and
-    // let Enter insert a `github_issue` chip for a `/pull/` URL.
+    // A URL says WHICH KIND it names, and only a URL does.
+    // `#123` and `org/repo#123` are deliberately kind-agnostic - GitHub numbers pull requests and issues from one sequence, so a bare number legitimately resolves to either - but `/pull/123` cannot name issue 123.
     return referenceSectionMatchesKind(reference.section, row.kind);
   }
   return true;
 }
 
 /**
- * Cache identity for a mention scope. The host keys its catalog by the repos
- * reachable from these folders; the client cannot see that mapping, so it keys
- * by the folder set itself - order-independent, because the same attached
- * folders in a different order are the same scope.
- *
- * The host and the epic are part of that identity, not decoration. The row
- * store is a single app-wide zustand store, while the rows it holds are
- * answers to a per-host, per-epic question: the `epic` bucket ranks THIS
- * epic's PRs first, and two hosts can serve entirely different repositories
- * from identical absolute paths. Keying on paths alone lets a second tab read
- * the first one's rows and - because root rows are immediately insertable -
- * commit a reference belonging to another host or task before its own catalog
- * answer replaces them.
+ * Cache identity for a mention scope.
+ * The host keys its catalog by the repos reachable from these folders; the client cannot see that mapping, so it keys by the folder set itself - order-independent, because the same attached folders in a different order are the same scope.
  */
 export function githubMentionScopeKey(
   input: GithubMentionScopeIdentity,

@@ -138,16 +138,7 @@ function modelListboxLabel(hasQuery: boolean): string {
   return "Provider models";
 }
 
-/**
- * Provider label to render above `row`, or `null` when no header belongs here.
- * Headers appear in both browse and (harness-scoped) search results, at the
- * boundary where a row's provider group (keyed by the stable `providerGroupId`,
- * not the display label) differs from the row above it - so each contiguous
- * OpenCode provider run gets exactly one header. Two providers sharing a
- * display name still get separate headers because the boundary uses the stable
- * provider id. Non-grouped harnesses carry `providerGroupId === null` and never
- * show one.
- */
+/** Non-grouped harnesses carry `providerGroupId === null` and never show one. */
 function providerGroupHeader(
   row: HarnessModelRow,
   previous: HarnessModelRow | null,

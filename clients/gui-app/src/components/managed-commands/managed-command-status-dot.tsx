@@ -11,11 +11,7 @@ const TONE_CLASS = {
   idle: "bg-muted-foreground/50",
 } as const;
 
-/**
- * The passive status signal (`UI.md` §7): a dot that changes and nothing that
- * toasts, badges or pings. Its accessible name carries the same text the row
- * shows, so a screen reader is not left with a colour.
- */
+/** The passive status signal (`UI.md` §7): a dot that changes and nothing that toasts, badges or pings. */
 export function ManagedCommandStatusDot(props: {
   readonly status: ManagedCommandStatus;
   readonly className: string | undefined;

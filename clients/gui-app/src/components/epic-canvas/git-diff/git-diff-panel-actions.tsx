@@ -27,10 +27,8 @@ import {
 const GIT_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * The Git Diff panel's overflow-menu items and the mutations behind them. Every
- * container that hosts the menu mounts these - the sidebar header below, and the
- * phone body header, which has no panel header to hang a slot from. Placement is
- * the container's business; what the menu DOES is not.
+ * The Git Diff panel's overflow-menu items and the mutations behind them.
+ * Every container that hosts the menu mounts these - the sidebar header below, and the phone body header, which has no panel header to hang a slot from.
  */
 function GitDiffPanelMenuItems(props: { readonly epicId: string }): ReactNode {
   const listLayout = useGitPanelStore(
@@ -50,11 +48,7 @@ function GitDiffPanelMenuItems(props: { readonly epicId: string }): ReactNode {
     useGitPanelStore.getState().setListLayout(props.epicId, nextLayout);
   }, [listLayout, props.epicId]);
 
-  // Manual refresh is an explicit generation-aware unary fetch of the active
-  // root's nested snapshot slot (the panel's source of truth for parent files
-  // + submodules) - see `useGitSubmoduleSnapshotRefresh` for why it is not a
-  // plain invalidate. The worktree-scoped request hits the correct host; on
-  // an old host it still degrades to a parent-only snapshot.
+  // The worktree-scoped request hits the correct host; on an old host it still degrades to a parent-only snapshot.
   const { refresh: handleRefresh, isRefreshing } =
     useGitSubmoduleSnapshotRefresh({
       hostId: selectedRepo?.hostId ?? null,
@@ -144,15 +138,8 @@ export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
 }
 
 /**
- * The same overflow menu, for the phone tab switcher - which mounts the panel
- * BODY alone, with no left-panel header to carry the Actions slot. Without it
- * the list-layout toggle and the manual refresh have no reachable trigger on a
- * phone at all. The items and their mutations are the sidebar's; only the
- * trigger's home and the menu's placement differ, so the menu opens downward
- * from the body header instead of sideways out of a rail.
- *
- * Open state is local rather than the panel-header menu store: that store exists
- * to survive a collapsing sidebar section, and there is no such section here.
+ * Without it the list-layout toggle and the manual refresh have no reachable trigger on a phone at all.
+ * The items and their mutations are the sidebar's; only the trigger's home and the menu's placement differ, so the menu opens downward from the body header instead of sideways out of a rail.
  */
 export function GitDiffPanelInlineActions(props: {
   readonly epicId: string;
@@ -177,9 +164,7 @@ export function GitDiffPanelInlineActions(props: {
         side="bottom"
         align="end"
         sideOffset={4}
-        // No `max-w-*` here: the primitive owns `max-w-safe-dvw`, and CSS
-        // allows one width clamp per element, so a cap named by the caller
-        // DISPLACES the safe-area one instead of tightening it.
+        // No `max-w-*` here: the primitive owns `max-w-safe-dvw`, and CSS allows one width clamp per element, so a cap named by the caller DISPLACES the safe-area one instead of tightening it.
         className="min-w-0"
       >
         <GitDiffPanelMenuItems epicId={props.epicId} />

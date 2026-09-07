@@ -5,13 +5,8 @@ import type {
   ProviderModelProvidersCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
 
-/**
- * The callbacks the tab hands `mutate`, named so a test can fire one by hand.
- *
- * Typed on the mock rather than reached for through `mock.calls`, which is
- * `any` - and firing a completion by hand is the only way to reach the
- * late-arrival case at all.
- */
+/** Typed on the mock rather than reached for through `mock.calls`, which is `any` - and firing a completion by
+ * hand is the only way to reach the late-arrival case at all. */
 type AuthMutateOptions = {
   readonly onSuccess: (data: {
     readonly result: ModelProviderAuthResult;
@@ -55,7 +50,7 @@ vi.mock("@/lib/host/runtime", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
@@ -159,9 +154,8 @@ afterEach(() => {
 
 describe("sortModelProviderEntries", () => {
   it("puts connected providers first, then sorts by name", () => {
-    // One list, not two sections: search has to be able to find a connected
-    // provider, and a "connected" section above a searchable catalog is exactly
-    // the shape where it cannot.
+    // One list, not two sections: search has to be able to find a connected provider, and a "connected" section
+    // above a searchable catalog is exactly the shape where it cannot.
     const sorted = sortModelProviderEntries([
       entry({ id: "zzz", name: "Zed" }),
       entry({ id: "openai", name: "OpenAI", connected: true, source: "api" }),
@@ -179,18 +173,15 @@ describe("sortModelProviderEntries", () => {
 
 describe("ProviderModelProvidersTab list states", () => {
   it("SAYS it is refreshing rather than letting stale rows look final", () => {
-    // The host rotates its managed server on every write, so the refetch after
-    // a mutation pays a cold `opencode serve` boot - seconds, against the
-    // fraction of a second a warm one costs. For that whole window the rows are
-    // the pre-mutation answer, and nothing on screen says so.
+    // The host rotates its managed server on every write, so the refetch after a mutation pays a cold `opencode
+    // serve` boot - seconds, against the fraction of a second a warm one costs.
     hostMocks.listFetching = true;
     renderTab({
       result: { ok: true, providers: [entry({})] },
       capabilities: FULL_CAPS,
     });
-    // Queried by text: the search controls also publish a polite live region,
-    // so `getByRole("status")` is ambiguous here and asserting on the wrong one
-    // would pass for the wrong reason.
+    // Queried by text: the search controls also publish a polite live region, so `getByRole("status")` is
+    // ambiguous here and asserting on the wrong one would pass for the wrong reason.
     expect(screen.getByText("Refreshing providers")).toBeTruthy();
     // The rows stay on screen - they are mostly right, and a skeleton would
     // throw away more than it protects.
@@ -221,9 +212,8 @@ describe("ProviderModelProvidersTab list states", () => {
   });
 
   it("reports capability_unavailable WITHOUT a retry", () => {
-    // The surface is not offered on this host at all. A retry button would be
-    // guaranteed to do nothing, which is the offered-then-failed shape this
-    // repo refuses everywhere else.
+    // A retry button would be guaranteed to do nothing, which is the offered-then-failed shape this repo refuses
+    // everywhere else.
     renderTab({
       result: {
         ok: false,
@@ -251,9 +241,8 @@ describe("ProviderModelProvidersTab list states", () => {
   });
 
   it("renders a still-downloading pack as a WAIT, not a failure", () => {
-    // Reaching the catalog needs a managed server, and every reason it would
-    // not start arrives as one `server_unavailable`. The provider row is what
-    // knows the difference.
+    // Reaching the catalog needs a managed server, and every reason it would not start arrives as one
+    // `server_unavailable`.
     hostMocks.listResult = {
       ok: false,
       code: "server_unavailable",
@@ -297,11 +286,8 @@ describe("ProviderModelProvidersTab list states", () => {
   });
 });
 
-/**
- * Radix opens on pointerdown, not click - firing only `click` leaves the menu
- * shut and every following query passing vacuously. Mirrors
- * `provider-rail-controls.test`'s helper.
- */
+/** Radix opens on pointerdown, not click - firing only `click` leaves the menu shut and every following query
+ * passing vacuously. */
 function selectFilter(name: string): void {
   fireEvent.pointerDown(
     screen.getByRole("button", { name: /^Filter model providers/ }),
@@ -327,25 +313,22 @@ describe("ProviderModelProvidersTab method filter", () => {
     renderTab({ result: MIXED, capabilities: FULL_CAPS });
     expect(screen.getByText("Anthropic")).toBeTruthy();
     expect(screen.getByText("GitHub Copilot")).toBeTruthy();
-    // The bare accessible name IS the unfiltered state: once a filter is
-    // picked the name grows a ", showing ..." suffix, so an exact-name match
-    // here proves no filter is marked active.
+    // The bare accessible name IS the unfiltered state: once a filter is picked the name grows a ", showing..."
+    // suffix, so an exact-name match here proves no filter is marked active.
     expect(
       screen.getByRole("button", { name: "Filter model providers" }),
     ).toBeTruthy();
   });
 
   it("narrows to browser sign-in and names the filter on the trigger", () => {
-    // ~10 of ~180 catalog rows advertise OAuth, which is the whole reason this
-    // control exists - per-row badges would have marked the other ~170 with a
-    // label that says nothing.
+    // ~10 of ~180 catalog rows advertise OAuth, which is the whole reason this control exists - per-row badges
+    // would have marked the other ~170 with a label that says nothing.
     renderTab({ result: MIXED, capabilities: FULL_CAPS });
     selectFilter("Browser sign-in");
 
     expect(screen.getByText("GitHub Copilot")).toBeTruthy();
     expect(screen.queryByText("Anthropic")).toBeNull();
-    // The accessible name carries the CURRENT value: the dot alone says only
-    // that something is filtered.
+    // The accessible name carries the current value: the dot alone says only that something is filtered.
     expect(
       screen.getByRole("button", {
         name: "Filter model providers, showing browser sign-in",
@@ -422,24 +405,18 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     expect(screen.getByText("Environment")).toBeTruthy();
-    // The badge is the ONLY origin marker now. A trailing "Set by environment"
-    // beside a badge reading "Environment" spent the row's last words saying
-    // the same thing twice, in a row that has to stay scannable.
+    // The badge is the only origin marker now.
     expect(screen.queryByText("Set by environment")).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Disconnect Groq" }),
     ).toBeNull();
-    // Connect STAYS: `source` is a status, not a permission. Setting a
-    // provider up and choosing which credential wins are different decisions,
-    // and the dialog carries the precedence warning.
+    // Connect stays: `source` is a status, not a permission.
     expect(screen.getByRole("button", { name: "Connect Groq" })).toBeTruthy();
   });
 
   it("splits Config from Custom on the host's flag, not on source alone", () => {
-    // `source: "config"` covers two different rows - a provider the user
-    // DECLARED as a custom endpoint, and one a config file merely supplies a
-    // key for. Upstream badges those "Custom" and "Config", and the difference
-    // is not recoverable from `source`, which is why the host sends the flag.
+    // `source: "config"` covers two different rows - a provider the user declared as a custom endpoint, and one a
+    // config file merely supplies a key for.
     renderTab({
       result: {
         ok: true,
@@ -477,9 +454,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("shows Disconnect ALONE on a connected row the host will disconnect", () => {
-    // Upstream's rule, and the reason this is not "Connect plus Disconnect":
-    // their app offers exactly one action per row, and replacing a stored key
-    // is disconnect-then-connect there too.
+    // Upstream's rule, and the reason this is not "Connect plus Disconnect": their app offers exactly one action
+    // per row, and replacing a stored key is disconnect-then-connect there too.
     renderTab({
       result: {
         ok: true,
@@ -503,10 +479,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("labels an env-sourced row without taking its Connect away", () => {
-    // Observed live: an account with a stored openai OAuth credential still
-    // reports `source: env` while OPENAI_API_KEY is exported. Without this the
-    // row is a dead end - no Connect, no Remove, and no hint that signing in
-    // again would succeed and change nothing visible.
+    // Without this the row is a dead end - no Connect, no Remove, and no hint that signing in again would succeed
+    // and change nothing visible.
     renderTab({
       result: {
         ok: true,
@@ -527,16 +501,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     });
     expect(screen.getByText("Environment")).toBeTruthy();
     // Still configurable - the warning belongs in the dialog, not in a block.
-    // This is also the ONE case a connected row still shows Connect: the host
-    // will not disconnect it, so a bare "Disconnect only" would leave the row
-    // with no action at all.
     expect(screen.getByRole("button", { name: "Connect OpenAI" })).toBeTruthy();
   });
 
   it("gates the disconnect affordance on canDisconnect ALONE", () => {
-    // `hasStoredCredential` answers a different question, and a later host may
-    // answer the two differently - reading either for the other is how a button
-    // appears that the host will refuse.
+    // `hasStoredCredential` answers a different question, and a later host may answer the two differently -
+    // reading either for the other is how a button appears that the host will refuse.
     renderTab({
       result: {
         ok: true,
@@ -581,10 +551,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("names the provider's own store on the api badge", () => {
-    // A key entered here is written to OpenCode's `auth.json` via `auth.set`
-    // and never mirrored into Traycer - that ownership is what keeps
-    // `opencode auth login` and this tab interchangeable, so a "Saved in
-    // Traycer" badge described the one thing the design avoids.
+    // A key entered here is written to OpenCode's `auth.json` via `auth.set` and never mirrored into Traycer.
     renderTab({
       result: {
         ok: true,
@@ -623,9 +590,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     const remove = screen.getByRole("button", { name: "Disconnect OpenAI" });
-    // TEXT, not a glyph. An unplug icon in a row of quiet text was the one
-    // control the user could not read: it named neither what it removes nor
-    // that it is the destructive one.
+    // Text, not a glyph.
     expect(remove.textContent).toBe("Disconnect");
     // Destructive intent still arrives on hover rather than as permanent red,
     // matching the pattern the rest of Settings uses.
@@ -651,10 +616,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     fireEvent.click(screen.getByRole("button", { name: "Disconnect OpenAI" }));
-    // Says what removal GUARANTEES and no more: an env var or config file
-    // underneath can take over the moment the stored credential is gone, so
-    // promising the provider stops working would contradict the row's own
-    // read-only copy.
+    // Says what removal guarantees and no more: an env var or config file underneath can take over the moment the
+    // stored credential is gone.
     expect(screen.getByText(/keeps working from that source/)).toBeTruthy();
     expect(
       screen.queryByText(/stop working until you connect it again/),
@@ -668,9 +631,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("keeps Add custom provider reachable while a search is filtering", () => {
-    // It is not a provider the catalog can match, so a search that filtered it
-    // away would hide the one row whose purpose is "what you want isn't in this
-    // list" - which is exactly when someone is typing in that box.
+    // It is not a provider the catalog can match, so a search that filtered it away would hide the one row whose
+    // purpose is "what you want isn't in this list" - which is exactly when someone is typing in that box.
     renderTab({
       result: {
         ok: true,
@@ -735,9 +697,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("says DISABLE, not remove, when disconnecting a declared custom provider", () => {
-    // Upstream's disconnect for a config-declared custom disables the block
-    // rather than deleting a credential it may not even have - so the copy that
-    // promises a credential is removed would describe a different action.
+    // Upstream's disconnect for a config-declared custom disables the block rather than deleting a credential it
+    // may not even have - so the copy that promises a credential is removed would describe a different action.
     renderTab({
       result: {
         ok: true,
@@ -826,12 +787,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("shows the host's refusal when a removal-shaped update reaches it", () => {
-    // The form cannot express a removal - stored rows have no trash and their
-    // keys are read-only - so this is the STALE CLIENT case: a renderer built
-    // before the lock, or a config that changed under an open dialog. The host
-    // refuses it, and its detail is the only text that can say which key went
-    // missing, so it belongs on the form rather than in a toast the user reads
-    // after the dialog is gone.
+    // The form cannot express a removal - stored rows have no trash and their keys are read-only - so this is the
+    // stale client case: a renderer built before the lock, or a config that changed under an open dialog.
     renderTab({
       result: {
         ok: true,
@@ -873,10 +830,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("keeps a REFUSED new row editable, and the stored ones locked", () => {
-    // The retry form is rebuilt from flattened values, which carry no
-    // provenance - so a row the host never persisted must not come back
-    // wearing the lock that belongs to stored rows. It is the row that caused
-    // the refusal, so locking it would leave the failure unrepairable.
+    // The retry form is rebuilt from flattened values, which carry no provenance - so a row the host never
+    // persisted must not come back wearing the lock that belongs to stored rows.
     renderTab({
       result: {
         ok: true,
@@ -918,8 +873,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       });
     });
 
-    // Nothing was written - the host refuses before the config PATCH - so the
-    // stored row is still the only stored row.
+    // Nothing was written - the host refuses before the config PATCH - so the stored row is still the only stored
+    // row.
     expect(screen.getAllByLabelText("ID")[0].hasAttribute("readonly")).toBe(
       true,
     );
@@ -931,11 +886,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("locks a row the CATALOG says got written, even mid-retry", () => {
-    // The other direction, and the one that actually bit: locks are provenance
-    // captured when the form opened, so a write that PARTIALLY committed left
-    // the retry form still offering a trash on a row that is now stored. The
-    // host refuses the removal, so nothing corrupts - but the form invites an
-    // action it knows cannot succeed. The refetched catalog is the authority.
+    // The other direction, and the one that actually bit: locks are provenance captured when the form opened, so a
+    // write that partially committed left the retry form still offering a trash on a row that is now stored.
     renderTab({
       result: {
         ok: true,
@@ -1010,9 +962,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("re-enables a disabled declaration with no form in between", () => {
-    // A declared row that is off re-enables through `updateCustom` with its OWN
-    // values - the wire has no enable verb, deliberately. Connect would demand
-    // a key for a provider whose credential is not what was turned off.
+    // Connect would demand a key for a provider whose credential is not what was turned off.
     renderTab({
       result: {
         ok: true,
@@ -1048,19 +998,16 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         models: [{ id: "a", name: "a" }],
         headers: [],
         key: null,
-        // Re-enable carries no env instruction. Echoing the read side's array
-        // back would be a replace-with-identical, and this row's empty one
-        // would arrive as the wire's CLEAR signal - deleting a declaration
-        // because a button that means "turn it on" said nothing about env.
+        // Echoing the read side's array back would be a replace-with-identical, and this row's empty one would arrive
+        // as the wire's clear signal.
         env: null,
       },
     });
   });
 
   it("offers Edit but NOT one-click re-enable for a broken declaration", () => {
-    // `opencode.json` is hand-editable and the read side reports what it finds.
-    // Sending those values straight back would report a failure the user never
-    // had a chance to fix; Edit opens the form on exactly what is wrong.
+    // Sending those values straight back would report a failure the user never had a chance to fix; Edit opens the
+    // form on exactly what is wrong.
     renderTab({
       result: {
         ok: true,
@@ -1119,9 +1066,6 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
 
   it("round-trips a non-slug id through Edit and Re-enable", () => {
     // `my_gateway` is hand-written, legal on the wire and legal to the host.
-    // The create-time slug rules used to be applied to it, which left the row
-    // with no re-enable AND an Edit whose id field is disabled - a permanent
-    // lock on the one row that needed fixing.
     renderTab({
       result: {
         ok: true,
@@ -1179,10 +1123,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
     });
     const button = screen.getByRole("button", { name: "Re-enable My gateway" });
-    // BOTH clicks inside one `act`, so React has not re-rendered between them
-    // and the button is still enabled for the second. Clicking twice with a
-    // render in between only proves the disabled attribute works; a real double
-    // click lands in one tick, and what has to stop it there is the guard.
+    // Clicking twice with a render in between only proves the disabled attribute works; a real double click lands
+    // in one tick, and what has to stop it there is the guard.
     act(() => {
       fireEvent.click(button);
       fireEvent.click(button);
@@ -1244,10 +1186,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("closes a DECLARED row's Disconnect while another row is being written", () => {
-    // Both writes edit one config file: re-enable rewrites the block and clears
-    // its disable entry, a declared row's disconnect appends one. Guarded writes
-    // stop a silent loss, but the loser fails on drift - an error the user did
-    // nothing to cause.
+    // Both writes edit one config file: re-enable rewrites the block and clears its disable entry, a declared
+    // row's disconnect appends one.
     renderTab({
       result: {
         ok: true,
@@ -1300,9 +1240,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         .getByRole("button", { name: "Disconnect Gateway B" })
         .hasAttribute("disabled"),
     ).toBe(true);
-    // A PLAIN disconnect is `auth.remove` through the server - no config file,
-    // nothing to contend with, so locking it would serialize two actions that
-    // never collide.
+    // A plain disconnect is `auth.remove` through the server - no config file, nothing to contend with, so locking
+    // it would serialize two actions that never collide.
     expect(
       screen
         .getByRole("button", { name: "Disconnect OpenAI" })
@@ -1354,11 +1293,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       screen.getByRole("button", { name: "Disconnect Gateway A" }),
     );
     fireEvent.click(screen.getByTestId("confirm-action"));
-    // Queried off the DOM rather than by role: the open confirm dialog puts the
-    // rest of the page behind `aria-hidden`, so it is not in the accessibility
-    // tree at all. That inertness is Radix's and it ends when the dialog closes
-    // - the disabled state asserted here is OURS, and it has to hold on its own
-    // rather than leaning on a modal that is about to go away.
+    // Queried off the DOM rather than by role: the open confirm dialog puts the rest of the page behind
+    // `aria-hidden`, so it is not in the accessibility tree at all.
     for (const label of ["Re-enable Gateway B", "Edit Gateway B"]) {
       const button = document.querySelector(`button[aria-label="${label}"]`);
       expect(button?.hasAttribute("disabled")).toBe(true);
@@ -1372,10 +1308,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("closes a PLAIN Config row's Disconnect during a config write", () => {
-    // A config row whose key lives in
-    // `provider.x.options.apiKey` has nothing for `auth.remove` to take, so its
-    // disconnect is suppressed through `disabled_providers` - a config write,
-    // even though the row is not a declared custom.
+    // A config row whose key lives in `provider.x.options.apiKey` has nothing for `auth.remove` to take, so its
+    // disconnect is suppressed through `disabled_providers`.
     renderTab({
       result: {
         ok: true,
@@ -1455,9 +1389,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       screen.getByRole("button", { name: "Re-enable My gateway" }),
     );
     const first = hostMocks.authMutate.mock.calls[0][1];
-    // First write settles clean, so the surface is free again. Wrapped in
-    // `act` because these are the mutation's own callbacks fired by hand - the
-    // state they set has to be committed before the next click reads it.
+    // Wrapped in `act` because these are the mutation's own callbacks fired by hand - the state they set has to be
+    // committed before the next click reads it.
     act(() => {
       first.onSuccess({ result: { kind: "done" } });
       first.onSettled();
@@ -1466,8 +1399,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       screen.getByRole("button", { name: "Re-enable My gateway" }),
     );
     expect(hostMocks.authMutate).toHaveBeenCalledTimes(2);
-    // ...and now the FIRST write reports a rejection, late. Applying it would
-    // open an error form over a write that has already been superseded.
+    // ...and now the first write reports a rejection, late. Applying it would open an error form over a write that
+    // has already been superseded.
     act(() => {
       first.onSuccess({
         result: { kind: "error", code: "invalid_input", detail: "stale" },
@@ -1478,11 +1411,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("treats a null source on a CONNECTED row as unlabelled, not absent", () => {
-    // The wire contract runs ONE WAY: a non-null source implies connected, and
-    // nothing may be concluded from null. Null covers two cases - not connected,
-    // or connected through an origin the closed enum cannot name (fail-soft for
-    // a source value newer than this client). Reading it as "no credential"
-    // would report a provider that is serving requests right now as disconnected.
+    // Null covers two cases - not connected, or connected through an origin the closed enum cannot name (fail-soft
+    // for a source value newer than this client).
     renderTab({
       result: {
         ok: true,
@@ -1558,10 +1488,8 @@ describe("ProviderModelProvidersTab resume", () => {
   };
 
   it("auto-adopts the NEWER attempt, and still resumes the older row on click", () => {
-    // Two upstream providers can each hold a live attempt at once - the host's
-    // single-flight rule is per (providerId, modelProviderId). The newest is
-    // what re-opens by itself; the older one must still be reachable, or its
-    // live attempt is restart-only while the host holds its server lease.
+    // The newest is what re-opens by itself; the older one must still be reachable, or its live attempt is
+    // restart-only while the host holds its server lease.
     seedAttempt({
       modelProviderId: "anthropic",
       attemptId: "older",
@@ -1580,7 +1508,7 @@ describe("ProviderModelProvidersTab resume", () => {
       screen.getByText("Waiting for the browser to finish signing in"),
     ).toBeTruthy();
 
-    // Dismiss it, then open the OLDER row by hand.
+    // Dismiss it, then open the older row by hand.
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getAllByRole("button", { name: /Connect/ })[0]);
 
@@ -1602,9 +1530,8 @@ describe("ProviderModelProvidersTab resume", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getAllByRole("button", { name: /Connect/ })[0]);
     expect(screen.getByText("Connect Anthropic")).toBeTruthy();
-    // The sign-in FORM, not a resumed waiting panel. These rows advertise an
-    // oauth method, so the form's action is Continue - and the plain API-key
-    // field is correctly absent, since the provider never advertised one.
+    // The sign-in form, not a resumed waiting panel. These rows advertise an oauth method, so the form's action is
+    // Continue - and the plain API-key field is correctly absent, since the provider never advertised one.
     expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
     expect(screen.queryByLabelText("API key")).toBeNull();
     expect(
@@ -1615,10 +1542,7 @@ describe("ProviderModelProvidersTab resume", () => {
 
 describe("ProviderModelProvidersTab layout", () => {
   it("keeps ONE scroll context - the panel's", () => {
-    // jsdom has no layout engine, so this is structural: the list must not cap
-    // itself or scroll internally. It used to do both, which nested a second
-    // scrollbar inside the panel's own - two tracks for one list, the outer
-    // moving the tab while the inner moved the rows.
+    // jsdom has no layout engine, so this is structural: the list must not cap itself or scroll internally.
     renderTab({
       result: { ok: true, providers: [entry({})] },
       capabilities: FULL_CAPS,
@@ -1627,11 +1551,8 @@ describe("ProviderModelProvidersTab layout", () => {
     expect(list.className).toContain("w-full");
     expect(list.className).not.toContain("overflow-y-auto");
     expect(list.className).not.toMatch(/max-h-/);
-    // No fixed layout BOX in either unit - a rem cap freezes with the text size
-    // instead of following the window, which a px-only assertion would miss.
-    // Anchored to the sizing utilities on purpose: the looser form also matched
-    // bounded-fluid values like `min(85vh,52rem)`, which are exactly what this
-    // rule wants people to use.
+    // No fixed layout box in either unit - a rem cap freezes with the text size instead of following the window,
+    // which a px-only assertion would miss.
     expect(list.className).not.toMatch(
       /\b(?:w|h|min-w|min-h|max-w|max-h|size)-\[\d*\.?\d+(?:px|rem)\]/,
     );
@@ -1651,15 +1572,8 @@ describe("ProviderModelProvidersTab layout", () => {
   });
 
   it("keeps the search controls an ORDINARY header control", () => {
-    // Deliberately NOT sticky. Pinning needs a fill, and this pane is
-    // `bg-card/40` composited over the settings background - a pinned child
-    // cannot reproduce that composite across bounds it does not own, so the
-    // repainted fill stops at the padded container's edges and leaves a visible
-    // band beside the input. The Skills tab's plain placement is the
-    // convention; scrolling up to search a long catalog is the accepted trade.
-    //
-    // Structural, because jsdom has no layout engine: what can be asserted is
-    // that no ancestor pins the control and no composite fill survives.
+    // Structural, because jsdom has no layout engine: what can be asserted is that no ancestor pins the control
+    // and no composite fill survives.
     renderTab({
       result: { ok: true, providers: [entry({}), entry({ id: "openai" })] },
       capabilities: FULL_CAPS,

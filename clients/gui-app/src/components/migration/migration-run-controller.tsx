@@ -23,16 +23,8 @@ import {
   type MigrationRunTarget,
 } from "@/components/migration/migration-run-handle";
 
-/**
- * Owns the `migration.run` subscriptions - ONE PER HOST. A migration moves one
- * machine's local data, so two machines can be migrating at once and each has
- * its own progress; a second start for a host that is already migrating is
- * refused, as it always was.
- *
- * The target travels with the request (`MigrationRunTarget`) rather than being
- * read from this component's ambient binding, so a migration started from a
- * host-scoped panel runs on the host that panel is showing.
- */
+/** The target travels with the request (`MigrationRunTarget`) rather than being read from this component's
+ * ambient binding, so a migration started from a host-scoped panel runs on the host that panel is showing. */
 export function MigrationRunController(): null {
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
@@ -43,9 +35,7 @@ export function MigrationRunController(): null {
     if (run === undefined) return;
     runsRef.current.delete(hostId);
     run.client.close();
-    // Returns the transport reference this run took at subscribe. A scoped
-    // transport closes here if nothing else is reading it; the ambient one
-    // has no lease to return.
+    // Returns the transport reference this run took at subscribe.
     run.release?.();
   }, []);
 
@@ -56,9 +46,8 @@ export function MigrationRunController(): null {
 
       useMigrationRunStore.getState().markRunning(hostId);
 
-      // Pinned FIRST: the run outlives the surface that handed the binding
-      // over, and a scoped transport closes at that surface's unmount
-      // otherwise, taking this subscription with it.
+      // Pinned first: the run outlives the surface that handed the binding over, and a scoped transport closes at
+      // that surface's unmount otherwise, taking this subscription with it.
       const release = target.binding.retain?.() ?? null;
       const client = new MigrationStreamClient({
         wsStreamClient: target.binding.wsStreamClient,
@@ -144,9 +133,8 @@ export function MigrationRunController(): null {
     [closeRun],
   );
 
-  // Cross-window sync: a freshly opened window may have missed prior fan-outs,
-  // so seed `remoteRunning` from the latest IPC snapshot before binding the
-  // listener. The blocking modal subscribes to the resolved bit.
+  // Cross-window sync: a freshly opened window may have missed prior fan-outs, so seed `remoteRunning` from the
+  // latest IPC snapshot before binding the listener. The blocking modal subscribes to the resolved bit.
   useEffect(() => {
     const migration = runnerHost.migration;
     if (migration === null) return;
@@ -168,15 +156,8 @@ export function MigrationRunController(): null {
     };
   }, [runnerHost]);
 
-  // Outgoing announce: fire only on running <-> not-running transitions.
-  // Without the wasRunning/isRunning guard, every progress increment would
-  // re-broadcast and churn IPC traffic across windows.
-  //
-  // The bit is about the WINDOW, not a host: the IPC contract carries one
-  // running flag and the window that owns it, so what is announced is "some
-  // host in this window is migrating". A second host starting while the first
-  // still runs is not a transition and stays silent, which is what the
-  // receiving windows already assume.
+  // Outgoing announce: fire only on running <-> not-running transitions. Without the wasRunning/isRunning guard,
+  // every progress increment would re-broadcast and churn IPC traffic across windows.
   useEffect(() => {
     const migration = runnerHost.migration;
     if (migration === null) return;
@@ -200,15 +181,10 @@ export function MigrationRunController(): null {
 
 interface HostRun {
   readonly client: MigrationStreamClient;
-  /** Returns the transport lease this run took; `null` for the ambient one. */
   readonly release: (() => void) | null;
 }
 
-// The shared `IRunnerHost` does not expose `windows` (mobile/web don't have
-// multiple windows). This narrowing is only reached when `migration !== null`,
-// i.e. on desktop, where the field is guaranteed to be present. The zod
-// schema validates the shape at runtime so the cast soup ("host as
-// { windows?: unknown }", etc.) stays out of the call path.
+// The shared `IRunnerHost` does not expose `windows` (mobile/web don't have multiple windows).
 const WINDOW_ID_HOST_SCHEMA = z.looseObject({
   windows: z.looseObject({ windowId: z.string() }).optional(),
 });

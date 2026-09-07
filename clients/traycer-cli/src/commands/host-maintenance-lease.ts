@@ -35,14 +35,7 @@ export {
 } from "./host-maintenance-target";
 export type { HostMaintenanceLeaseTarget } from "./host-maintenance-target";
 
-/**
- * Versioned line protocol used only by the internal root install scripts.
- * The child keeps both lock levels live while the root process performs its
- * platform-owned work, and requires a fresh capability check before each
- * named actuator. An older CLI neither advertises nor speaks this protocol,
- * so scripts fail closed instead of treating an arbitrary zero exit as a
- * transferable admission lease.
- */
+/** Versioned line protocol used only by the internal root install scripts. The child keeps both lock levels live while the root process performs its platform-owned work, and requires a fresh capability check before each named actuator. */
 export const HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION = 1;
 
 export type HostMaintenanceLeaseAdmission =
@@ -103,25 +96,7 @@ type LeaseResponse =
       readonly message: string;
     };
 
-/**
- * Refuse unless this process's own path helpers resolve to the SAME account
- * the caller sealed into the target.
- *
- * `--host-home` and `TRAYCER_ROOT_MAINTENANCE_HOME` name the target account
- * explicitly, and the v2 protocol fields honour them — but `executeAction`'s
- * `host-uninstall-all` reaches `uninstallHost`, whose paths all descend from
- * `store/paths.ts`'s module-level `join(homedir(), ".traycer")`. Nothing
- * threads the target through that. The root script binds it by setting `HOME`
- * on the child's environment, which works on POSIX because Node's
- * `os.homedir()` prefers `$HOME` there — and does NOT work on win32, where
- * `os.homedir()` reads the OS profile API and ignores `HOME` entirely.
- *
- * So the binding is real but implicit, and its failure mode is silent and
- * severe: sweeping a different account's `.traycer` tree while reporting
- * success. Rather than re-thread a module constant, assert the binding held
- * and fail closed when it did not — the same posture the parent takes when it
- * cannot canonicalize the target home.
- */
+/** Refuse unless this process's own path helpers resolve to the SAME account the caller sealed into the target. `--host-home` and `TRAYCER_ROOT_MAINTENANCE_HOME` name the target account explicitly, and the v2 protocol fields honour them - but `executeAction`'s `host-uninstall-all` reaches `uninstallHost`, whose paths all descend from `store/paths.ts`'s module-level `join(homedir(), ".traycer")`. */
 function assertPathHelpersBoundToTarget(): void {
   const sealed = process.env.TRAYCER_ROOT_MAINTENANCE_HOME;
   if (typeof sealed !== "string" || sealed.length === 0) return;
@@ -156,16 +131,11 @@ export async function runHostMaintenanceLease(
     pollIntervalMs: 100,
     admission,
   };
-  // A privileged root helper must never let the macOS controller fall back to
-  // its effective uid (`gui/0`). The root script supplied and this endpoint
-  // validated the target desktop uid; bind it in an AsyncLocalStorage scope
-  // rather than trusting a caller-controlled environment variable.
+  // A privileged root helper must never let the macOS controller fall back to its effective uid (`gui/0`).
+  // The root script supplied and this endpoint validated the target desktop uid; bind it in an AsyncLocalStorage scope rather than trusting a caller-controlled environment variable.
   await withMacosMaintenanceServiceUid(target.serviceUid, () =>
-    // The root script can spend time copying an app bundle or waiting for a
-    // platform uninstaller. Hold only the outer attempt capability for that
-    // whole segment; `executeAction` takes the legacy CLI lock only around
-    // the actual service/install-tree mutation. This retains attempt-lock →
-    // cli-lock ordering without turning the CLI lock into a root-script lease.
+    // The root script can spend time copying an app bundle or waiting for a platform uninstaller.
+    // Hold only the outer attempt capability for that whole segment; `executeAction` takes the legacy CLI lock only around the actual service/install-tree mutation.
     withCliUpdateExecutionSegment(contenderOptions, (capability) =>
       serveMaintenanceLease(capability, contenderOptions),
     ),
@@ -239,24 +209,14 @@ async function serveMaintenanceLease(
   }
 }
 
-/**
- * The lock owner starts and waits for the root-platform executor. The root
- * caller can request only a closed operation name; it cannot obtain a bare
- * "verified" token and then run launchctl/rm/dpkg itself. The executor asks
- * us to revalidate before each individual edge over stdio, so a capability
- * loss aborts its remaining work. When this helper dies, the executor's
- * parent-liveness monitor terminates its active actuator before the lock can
- * become breakable.
- */
+/** The lock owner starts and waits for the root-platform executor. The root caller can request only a closed operation name; it cannot obtain a bare "verified" token and then run launchctl/rm/dpkg itself. */
 async function superviseRootMaintenanceExecutor(
   executor: RootMaintenanceExecutor,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
 ): Promise<unknown> {
-  // C is about to own the published liveness envelope for D's raw platform
-  // work. Revalidate at that spawn edge rather than relying on the protocol
-  // dispatch check above: parsing, target validation, and previous requests
-  // can all have yielded before this particular executor is created.
+  // C is about to own the published liveness envelope for D's raw platform work.
+  // Revalidate at that spawn edge rather than relying on the protocol dispatch check above: parsing, target validation, and previous requests can all have yielded before this particular executor is created.
   await requireCliUpdateMutationCapability(capability, contenderOptions);
   const child = spawn(
     executor.runtime,
@@ -275,30 +235,7 @@ async function superviseRootMaintenanceExecutor(
       },
     },
   );
-  // EVERY subscription — terminal evidence AND the stdout parser — is
-  // attached here, from the instant of spawn: before the guards below (which
-  // throw), and before any await. `error`, `close`, and the stream's chunks
-  // are emitted once and never replayed, so where these subscriptions sit
-  // decides what is observable at all:
-  //
-  // - The pid guard below throws synchronously for a spawn that will still
-  //   emit ENOENT asynchronously; with no `error` listener that emission is
-  //   an uncaught event that kills the lease process on exactly the failure
-  //   the guard reports politely.
-  // - With the first terminal subscription after the liveness rebind — a
-  //   filesystem round trip — an executor that died in that window emitted
-  //   into no listener: the error crashed the process, the exit left the
-  //   supervision promise pending forever with the attempt lock held.
-  // - With the `data` subscription after that same await, a short-lived
-  //   executor's `complete` frame sat in a paused stream while the recorded
-  //   `close` was reconciled, so a completed operation classified as
-  //   `completed === null` — a confident failure over finished root work.
-  //
-  // `close`, not `exit`, for the terminal event: `exit` can be delivered
-  // while the final stdout chunk is still in the pipe; `close` fires only
-  // after the stdout stream has ended, and a stream's events are ordered, so
-  // every `data` callback (and therefore `finish`) has run before
-  // classification.
+  // Every subscription - terminal evidence and the stdout parser - is torn down in finally, including on a thrown start.
   type ExecutorTermination =
     | { readonly kind: "spawn-error"; readonly error: Error }
     | {
@@ -325,19 +262,11 @@ async function superviseRootMaintenanceExecutor(
     child.kill("SIGTERM");
     throw new Error("maintenance executor could not establish protocol pipes");
   }
-  // A refusal or acknowledgement can land on an executor that just died, and
-  // stdin reports that EPIPE asynchronously on its own emitter — an unhandled
-  // stream `error` is a throw. Deliberately inert: the `close` above carries
-  // the exit evidence an EPIPE does not.
+  // A refusal or acknowledgement can land on an executor that just died, and stdin reports that EPIPE asynchronously on its own emitter - an unhandled stream `error` is a throw.
+  // Deliberately inert: the `close` above carries the exit evidence an EPIPE does not.
   child.stdin.on("error", () => undefined);
-  // The read side is its own emitter too — an EIO mid-rebind or mid-operation
-  // with no listener is the same uncaught throw. But inert is NOT enough
-  // here: a broken protocol pipe means no frame can ever arrive again, while
-  // the executor itself may keep running, and `close` (which gates every
-  // settlement above) waits on process exit. Terminate the executor so the
-  // ordinary `close` classification runs; with no completion frame it takes
-  // the supervised failure arm — dispatch tail drained, actuator group
-  // reaped, holder restored — instead of hanging unsupervised.
+  // The read side is its own emitter too - an EIO mid-rebind or mid-operation with no listener is the same uncaught throw.
+  // But inert is NOT enough here: a broken protocol pipe means no frame can ever arrive again, while the executor itself may keep running, and `close` (which gates every settlement above) waits on process exit.
   child.stdout.on("error", () => {
     child.kill("SIGTERM");
   });
@@ -347,19 +276,8 @@ async function superviseRootMaintenanceExecutor(
   }
   const supervisorPid = child.pid;
   let settled = false;
-  // A BOX, not the value itself. `undefined` was doing double duty as "no
-  // completion frame has arrived", which made an actuator that legitimately
-  // completes with `undefined` indistinguishable from one that never
-  // completed at all — and `JSON.stringify({ value: undefined })` drops the
-  // key outright, so that is exactly what an executor returning nothing
-  // sends. The close handler would then take the failure path on a clean
-  // exit 0 and report `maintenance executor exited (0, none)` for a
-  // successful operation.
-  //
-  // `null` is not usable as the sentinel either: it is a legitimate actuator
-  // result with its own meaning (the Linux platform install returns it for
-  // "left for the developer to install by hand"). Only a wrapper can say
-  // "completed" without also claiming something about the value.
+  // A BOX, not the value itself.
+  // `undefined` was doing double duty as "no completion frame has arrived", which made an actuator that legitimately completes with `undefined` indistinguishable from one that never completed at all - and `JSON.stringify({ value: undefined })` drops the key outright, so that is exactly what an executor returning nothing sends.
   let completed: { readonly value: unknown } | null = null;
   let buffer = "";
   let actuatorGroupId: number | null = null;
@@ -372,25 +290,11 @@ async function superviseRootMaintenanceExecutor(
     if (settled || completed !== null) return;
     completed = { value };
   };
-  // Chunks are CAPTURED from spawn; frames are DISPATCHED only once the
-  // initial liveness rebind below has landed. The split is deliberate: a
-  // `bind-actuator` arriving mid-rebind would run its own group-bound
-  // publication concurrently with the plain one, and whichever landed second
-  // would win — the plain one landing last would strip
-  // `retainOnPublisherDeath` from a group already released to run. Deferring
-  // dispatch keeps the publication order the protocol assumes, while the
-  // early capture means no frame is ever lost to the await.
+  // Chunks are CAPTURED from spawn; frames are DISPATCHED only once the initial liveness rebind below has landed.
+  // The split is deliberate: a `bind-actuator` arriving mid-rebind would run its own group-bound publication concurrently with the plain one, and whichever landed second would win - the plain one landing last would strip `retainOnPublisherDeath` from a group already released to run.
   let frameDispatchArmed = false;
-  // ONE dispatch tail, and settlement awaits it. Handlers are asynchronous —
-  // an `execute` runs a real service stop or uninstall — and a fire-and-
-  // forget dispatch let the close path restore the holder and reject while
-  // that destructive handler was still mid-flight: the outer execution
-  // segment then released its lock and admitted the next contender INTO the
-  // running operation. A buffered `bind-actuator` had the analogous race,
-  // able to land its group-bound publication after the restoration it was
-  // supposed to precede. Serializing on the tail also matches the executor
-  // protocol, which is strictly request/response; every link catches into
-  // `refuse`, so the tail itself never rejects and awaiting it cannot throw.
+  // ONE dispatch tail, and settlement awaits it.
+  // Handlers are asynchronous - an `execute` runs a real service stop or uninstall - and a fire-and- forget dispatch let the close path restore the holder and reject while that destructive handler was still mid-flight: the outer execution segment then released its lock and admitted the next contender INTO the running operation.
   let dispatchTail: Promise<void> = Promise.resolve();
   const drainFrames = (): void => {
     for (;;) {
@@ -424,30 +328,14 @@ async function superviseRootMaintenanceExecutor(
     }
   };
   child.stdout.setEncoding("utf8");
-  // LATCHED, not just cleared: SIGTERM does not synchronously stop `data`
-  // events, and stdout already queued in the pipe keeps arriving after the
-  // overflow. Without the latch, a later newline-delimited frame would still
-  // reach `drainFrames()` — a damaged executor could dispatch an `execute`
-  // AFTER violating the protocol, and one that handles SIGTERM and emits
-  // `complete` could even resolve the supervision successfully. Once
-  // violated, no subsequent frame is trusted: dispatch is off for good, so a
-  // post-overflow `complete` never sets `completed` and the `close`
-  // classification takes the supervised failure arm. (A `complete` that
-  // dispatched BEFORE the overflow keeps its meaning — the work finished,
-  // and failing it retroactively would be a confident false negative over a
-  // completed root mutation.)
+  // LATCHED, not just cleared: SIGTERM does not synchronously stop `data` events, and stdout already queued in the pipe keeps arriving after the overflow.
+  // Without the latch, a later newline-delimited frame would still reach `drainFrames()` - a damaged executor could dispatch an `execute` AFTER violating the protocol, and one that handles SIGTERM and emits `complete` could even resolve the supervision successfully.
   let protocolViolated = false;
   child.stdout.on("data", (chunk: string) => {
     if (protocolViolated) return;
     buffer += chunk;
-    // Protocol frames are single JSON lines of at most a few KiB; an
-    // executor streaming an unterminated or runaway line is damaged, and
-    // because supervision legitimately spans an unbounded platform
-    // operation, an unbounded `buffer += chunk` is a slow memory exhaustion
-    // rather than a quick failure. Same terminal action as a stdout stream
-    // error below: no frame arriving on that line is deliverable, so
-    // terminate the executor and let the ordinary `close` classification
-    // take the supervised failure arm.
+    // Protocol frames are single JSON lines of at most a few KiB; an executor streaming an unterminated or runaway line is damaged, and because supervision legitimately spans an unbounded platform operation, an unbounded `buffer += chunk` is a slow memory exhaustion rather than a quick failure.
+    // Same terminal action as a stdout stream error below: no frame arriving on that line is deliverable, so terminate the executor and let the ordinary `close` classification take the supervised failure arm.
     if (buffer.length > EXECUTOR_PROTOCOL_BUFFER_LIMIT_BYTES) {
       protocolViolated = true;
       buffer = "";
@@ -456,20 +344,13 @@ async function superviseRootMaintenanceExecutor(
     }
     if (frameDispatchArmed) drainFrames();
   });
-  // C is only a liveness publisher, not a capability recipient. Until it
-  // obtains D's detached group and receives B's acknowledgement, D is held
-  // at its start gate and cannot run a raw actuator. The later group-bound
-  // publication closes the hard-C-death interval without retaining a lock
-  // forever for a supervisor that died before starting any work.
+  // C is only a liveness publisher, not a capability recipient.
+  // Until it obtains D's detached group and receives B's acknowledgement, D is held at its start gate and cannot run a raw actuator.
   try {
     await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {});
   } catch (rebindError) {
-    // Every failure exit of this function must take the child with it. The
-    // executor is parked at its start gate waiting for frames that will now
-    // never come, and its live handle would keep this CLI's event loop alive
-    // after the outer request already reported refusal — a privileged flow
-    // hung on a process nothing supervises. The throwing guards above kill
-    // before throwing for the same reason.
+    // Every failure exit of this function must take the child with it.
+    // The executor is parked at its start gate waiting for frames that will now never come, and its live handle would keep this CLI's event loop alive after the outer request already reported refusal - a privileged flow hung on a process nothing supervises.
     child.kill("SIGTERM");
     throw rebindError;
   }
@@ -481,10 +362,8 @@ async function superviseRootMaintenanceExecutor(
     const settleFailureAfterTail = async (error: Error): Promise<void> => {
       if (actuatorGroupId !== null) {
         if (process.platform === "win32") {
-          // Node has no Job-object membership proof. Keep the token published
-          // with retain-on-death so release refuses to unlink it; a repair can
-          // resolve this fail-closed state, but no contender can race an
-          // actuator whose tree we cannot positively enumerate.
+          // Node has no Job-object membership proof.
+          // Keep the token published with retain-on-death so release refuses to unlink it; a repair can resolve this fail-closed state, but no contender can race an actuator whose tree we cannot positively enumerate.
           reject(error);
           return;
         }
@@ -496,13 +375,8 @@ async function superviseRootMaintenanceExecutor(
     const settleFailure = async (error: Error): Promise<void> => {
       if (settled) return;
       settled = true;
-      // The dispatch tail FIRST, before any teardown or restoration: a
-      // handler still mid-flight holds real work (an `execute`'s service
-      // stop, a `bind-actuator`'s publication), and restoring the holder
-      // under it re-opens exactly the ordering this settlement exists to
-      // close. The tail never rejects (every link catches into `refuse`),
-      // and no new frames can arrive after `close`, so this await is
-      // bounded by work already accepted.
+      // The dispatch tail FIRST, before any teardown or restoration: a handler still mid-flight holds real work (an `execute`'s service stop, a `bind-actuator`'s publication), and restoring the holder under it re-opens exactly the ordering this settlement exists to close.
+      // The tail never rejects (every link catches into `refuse`), and no new frames can arrive after `close`, so this await is bounded by work already accepted.
       await dispatchTail;
       await settleFailureAfterTail(error);
     };
@@ -516,13 +390,8 @@ async function superviseRootMaintenanceExecutor(
       }
       settled = true;
       void (async () => {
-        // The dispatch tail BEFORE classification, not merely before the
-        // teardown: `completed` is set by a handler QUEUED on the tail, so
-        // an executor that wrote its `complete` frame and closed during the
-        // initial liveness rebind has its completion still in flight right
-        // here. Reading `completed` first classified that clean exit 0 as
-        // `maintenance executor exited (0, none)` — a finished platform
-        // install or uninstall reported as a failure.
+        // The dispatch tail BEFORE classification, not merely before the teardown: `completed` is set by a handler QUEUED on the tail, so an executor that wrote its `complete` frame and closed during the initial liveness rebind has its completion still in flight right here.
+        // Reading `completed` first classified that clean exit 0 as `maintenance executor exited (0, none)` - a finished platform install or uninstall reported as a failure.
         await dispatchTail;
         const completion: { readonly value: unknown } | null = completed;
         if (completion !== null && event.code === 0) {
@@ -540,16 +409,11 @@ async function superviseRootMaintenanceExecutor(
         );
       })().catch(reject);
     };
-    // Arm dispatch and drain whatever the capture accumulated during the
-    // rebind, IN THIS ORDER — frames first, then the recorded termination.
-    // A completed executor that died mid-rebind has its `complete` frame in
-    // the buffer and its `close` in `termination`; draining first is what
-    // lets the classification below see the completion it earned.
+    // Arm dispatch and drain whatever the capture accumulated during the rebind, IN THIS ORDER - frames first, then the recorded termination.
+    // A completed executor that died mid-rebind has its `complete` frame in the buffer and its `close` in `termination`; draining first is what lets the classification below see the completion it earned.
     frameDispatchArmed = true;
     drainFrames();
-    // The executor can have terminated while the liveness rebind above was in
-    // flight; the recorded evidence is reconciled here, once the supervision
-    // promise owns settlement.
+    // The executor can have terminated while the liveness rebind above was in flight; the recorded evidence is reconciled here, once the supervision promise owns settlement.
     if (termination !== null) onTermination();
   });
 }
@@ -581,18 +445,12 @@ async function handleRootExecutorRequest(
     value.kind === "bind-actuator" &&
     typeof value.pid === "number" &&
     Number.isSafeInteger(value.pid) &&
-    // > 1, not > 0, same floor as the lock parsers (cross-process-lock,
-    // host-update-attempt-liveness): this value becomes a NEGATED
-    // process-group target, and `kill(-1, ...)` is "every process I may
-    // signal", not group 1 — from a root maintenance lease that is a
-    // system-wide signal.
+    // > 1, not > 0, same floor as the lock parsers (cross-process-lock, host-update-attempt-liveness): this value becomes a NEGATED process-group target, and `kill(-1, ...)` is "every process I may signal", not group 1 - from a root maintenance lease that is a system-wide signal.
     value.pid > 1
   ) {
     await requireCliUpdateMutationCapability(capability, contenderOptions);
-    // C remains the publisher, while D's detached group supplies supplemental
-    // kernel liveness after a hard C death. D waits at its start gate until
-    // this atomic token-preserving publication succeeds, so B always knows
-    // the exact group before any irreversible edge can run.
+    // C remains the publisher, while D's detached group supplies supplemental kernel liveness after a hard C death.
+    // D waits at its start gate until this atomic token-preserving publication succeeds, so B always knows the exact group before any irreversible edge can run.
     await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {
       supervisedProcessGroupId: value.pid,
       retainOnPublisherDeath: true,
@@ -617,29 +475,19 @@ async function handleRootExecutorRequest(
   refuse("maintenance executor requested an unsupported action");
 }
 
-// Ceiling on proving a supervised actuator group gone, on both the clean and
-// the terminating path. Without it, ONE surviving group member (a
-// SIGKILL-resistant D-state process, or a descendant that double-forked into
-// the group) parks these polls forever: the supervision promise never
-// settles, `runHostMaintenanceLease` never returns, and the update-attempt
-// capability stays held by a process nobody is watching. Hitting the deadline
-// throws, and every reject path here deliberately SKIPS `restoreHolder` — the
-// published retain-on-death token stays, so no contender can race the group
-// we failed to prove dead. That wedges THIS lease, not the machine.
+// Ceiling on proving a supervised actuator group gone, on both the clean and the terminating path.
+// Without it, ONE surviving group member (a SIGKILL-resistant D-state process, or a descendant that double-forked into the group) parks these polls forever: the supervision promise never settles, `runHostMaintenanceLease` never returns, and the update-attempt capability stays held by a process nobody is watching.
 const PROCESS_GROUP_EXIT_DEADLINE_MS = 60_000;
 
-// Executor protocol frames are single JSON lines of at most a few KiB; the
-// bound exists so a damaged executor streaming an unterminated line costs a
-// terminated supervision, never an unbounded accumulation in the CLI.
+// Executor protocol frames are single JSON lines of at most a few KiB; the bound exists so a damaged executor streaming an unterminated line costs a terminated supervision, never an unbounded accumulation in the CLI.
 const EXECUTOR_PROTOCOL_BUFFER_LIMIT_BYTES = 1024 * 1024;
 
 async function terminateAndReapProcessGroup(groupId: number): Promise<void> {
   try {
     process.kill(-groupId, "SIGTERM");
   } catch {
-    // The group may have completed while C was reporting its failure. The
-    // liveness wait below, not a failed signal, is the proof it is safe to
-    // hand publication back to B.
+    // The group may have completed while C was reporting its failure.
+    // The liveness wait below, not a failed signal, is the proof it is safe to hand publication back to B.
   }
   const escalationAt = Date.now() + 2_000;
   const deadline = Date.now() + PROCESS_GROUP_EXIT_DEADLINE_MS;
@@ -732,9 +580,7 @@ async function executeAction(
       {
         createServiceController,
         uninstallHost,
-        // Same wiring as `buildHostUninstallCommand`: liveness comes from
-        // process identity against the published pid metadata, never from a
-        // resolved teardown call.
+        // Same wiring as `buildHostUninstallCommand`: liveness comes from process identity against the published pid metadata, never from a resolved teardown call.
         readPublishedHost: async (env) => {
           const metadata = await readHostPidMetadata(env);
           if (metadata === null) return null;

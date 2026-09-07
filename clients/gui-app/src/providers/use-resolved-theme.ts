@@ -13,17 +13,7 @@ export const ResolvedThemeContext =
   createContext<ResolvedThemeContextValue | null>(null);
 
 /**
- * Read the resolved light/dark mode and active preset. Used by surfaces
- * that paint outside the Tailwind cascade (xterm.js, mermaid, canvas-
- * backed renderers) and need to recompute their palette when the user
- * toggles theme or the OS dark-mode preference flips while
- * `theme === "system"`.
- *
- * The DOM cascade is owned by `theme-applier.ts`, which mutates `<html>`
- * synchronously inside the Zustand store listener - *before* React
- * re-renders the consumer tree. By the time this hook's snapshot
- * propagates and a child component reads `getComputedStyle`, the cascade
- * already reflects the new theme.
+ * Resolved light/dark and preset for surfaces outside Tailwind. `theme-applier.ts` mutates `<html>` before this hook's snapshot propagates.
  */
 export function useResolvedTheme(): ResolvedThemeContextValue {
   const value = use(ResolvedThemeContext);

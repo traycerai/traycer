@@ -1,6 +1,6 @@
 /**
- * Pure helpers for organizing palette items into the groups the
- * renderer draws. No React; unit-testable in isolation.
+ * Pure helpers for organizing palette items into the groups the renderer draws.
+ * No React; unit-testable in isolation.
  */
 import type {
   CommandGroupId,
@@ -36,10 +36,8 @@ const DEFAULT_GROUP_ORDER: ReadonlyArray<CommandGroupId> = [
 ];
 
 /**
- * Partition items into their declared groups, drop empty groups,
- * and sort each group's items alphabetically by label. Returns the
- * groups in `DEFAULT_GROUP_ORDER`; `pinned` and `recents` are
- * composed separately by the renderer so they always appear on top.
+ * Partition items into their declared groups, drop empty groups, and sort each group's items alphabetically by label.
+ * Returns the groups in `DEFAULT_GROUP_ORDER`; `pinned` and `recents` are composed separately by the renderer so they always appear on top.
  */
 export function bucketItems(
   items: ReadonlyArray<CommandItem>,
@@ -65,10 +63,8 @@ export function bucketItems(
 }
 
 /**
- * Build the recents group from a list of item ids + the current
- * item pool. Unknown ids (e.g. a source that no longer emits the
- * item) are silently pruned so stale ids never surface an empty
- * row.
+ * Build the recents group from a list of item ids + the current item pool.
+ * Unknown ids (e.g. a source that no longer emits the item) are silently pruned so stale ids never surface an empty row.
  */
 export function buildRecentsBucket(
   recentIds: ReadonlyArray<string>,
@@ -86,8 +82,8 @@ export function buildRecentsBucket(
 }
 
 /**
- * Build the pinned group. Pinned ids preserve user-defined order
- * rather than re-sorting alphabetically.
+ * Build the pinned group.
+ * Pinned ids preserve user-defined order rather than re-sorting alphabetically.
  */
 export function buildPinnedBucket(
   pinnedIds: ReadonlyArray<string>,

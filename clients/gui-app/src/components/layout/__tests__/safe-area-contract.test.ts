@@ -3,10 +3,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-/**
- * Every `.ts`/`.tsx` file under `src/`, eagerly loaded as raw text so the
- * contracts below can grep production source without rendering it.
- */
+/** Every `.ts`/`.tsx` file under `src/`, eagerly loaded as raw text so the contracts below can grep production
+ * source without rendering it. */
 const allSources = import.meta.glob<string>("../../../**/*.{ts,tsx}", {
   query: "?raw",
   import: "default",
@@ -14,11 +12,8 @@ const allSources = import.meta.glob<string>("../../../**/*.{ts,tsx}", {
 });
 
 function productionSourceEntries(): readonly (readonly [string, string])[] {
-  // Vite emits glob keys RELATIVE to this file ("../../ui/sidebar.tsx"), so
-  // resolve each against this file's directory before matching: every suffix
-  // and allowlist below is written against the src-rooted path, and a
-  // relative key would silently match none of them (which reads as "no
-  // violations" for a grep contract - the failure mode is invisible).
+  // Vite emits glob keys relative to this file ("../../ui/sidebar.tsx"), so resolve each against this file's
+  // directory before matching.
   const testDir = dirname(fileURLToPath(import.meta.url));
   return Object.entries(allSources)
     .map(([filePath, source]) => [join(testDir, filePath), source] as const)
@@ -40,49 +35,27 @@ function findSource(suffix: string): string {
   return entry[1];
 }
 
-/**
- * Strips `//` and `/* *\/` comments so a prose mention of a class token (e.g.
- * "not `h-svh`, because...") cannot be mistaken for the token actually being
- * used. Good enough for this narrow scan: none of the files these contracts
- * touch embed a `//` inside a string on the same line as a class list.
- */
+/** Strips `//` and `/* *\/` comments so a prose mention of a class token (e.g. "not `h-svh`, because...")
+ * cannot be mistaken for the token actually being used. */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
-/**
- * `sidebar.tsx` is a desktop-only shadcn primitive that predates the
- * safe-area token layer and is never rendered on the mobile shell that needs
- * it.
- */
+/** `sidebar.tsx` is a desktop-only shadcn primitive that predates the safe-area token layer and is never
+ * rendered on the mobile shell that needs it. */
 const RAW_VIEWPORT_HEIGHT_ALLOWLIST = ["components/ui/sidebar.tsx"];
 
 const RAW_VIEWPORT_HEIGHT_TOKENS = ["min-h-dvh", "h-dvh", "min-h-svh", "h-svh"];
 
-/**
- * `w-screen` is `100vw`, which ignores the landscape sensor housing. A `fixed`
- * surface spanning the screen wants `w-safe-dvw`; an in-flow one wants
- * `w-full`, since `#root` has already narrowed the box it lives in.
- */
+/** A `fixed` surface spanning the screen wants `w-safe-dvw`; an in-flow one wants `w-full`, since `#root` has
+ * already narrowed the box it lives in. */
 const RAW_VIEWPORT_WIDTH_TOKENS = ["w-screen"];
 
-/**
- * The halfway marks a `fixed` surface must not centre on. It resolves against
- * the viewport, so `top-1/2` runs through the status-bar strip and `left-1/2`
- * ignores the landscape sensor housing - and the housing is on ONE side, so
- * the safe centre is displaced by half the difference between the two side
- * insets rather than sitting at the middle of a narrower box.
- */
+/** The halfway marks a `fixed` surface must not centre on. */
 const VIEWPORT_CENTRE_TOKENS = ["top-1/2", "left-1/2"];
 
-/**
- * True when a single class string positions something `fixed` and centres it
- * on a viewport halfway mark.
- *
- * Matched per string literal rather than per file, so a class list that merely
- * mentions `fixed` somewhere else in the same component cannot pair with an
- * unrelated centring utility.
- */
+/** Matched per string literal rather than per file, so a class list that merely mentions `fixed` somewhere else
+ * in the same component cannot pair with an unrelated centring utility. */
 function centresFixedOnTheViewport(source: string): boolean {
   const literals = stripComments(source).match(/"[^"\n]*"/g) ?? [];
   return literals.some(
@@ -96,19 +69,10 @@ function centresFixedOnTheViewport(source: string): boolean {
   );
 }
 
-/**
- * The portalled frames that centre themselves over the viewport. Each has to
- * carry its own width cap, because `#root`'s padding never reaches a `fixed`
- * element and CSS allows exactly one width clamp per element - so the cap is a
- * default a call site can displace, not a floor it cannot. That is what makes
- * it worth asserting: the guarantee is only ever one unmodified `max-w-*`
- * away from being gone, and nothing else would notice.
- */
-/**
- * The anchored (trigger-positioned) primitives, which Radix places against the
- * viewport rather than inside `#root`. `tooltip.tsx` is deliberately absent: it
- * reads the insets inline and predates the shared hook.
- */
+/** Each has to carry its own width cap, because `#root`'s padding never reaches a `fixed` element and CSS
+ * allows exactly one width clamp per element. */
+/** The anchored (trigger-positioned) primitives, which Radix places against the viewport rather than inside
+ * `#root`. */
 const ANCHORED_PRIMITIVES = [
   "components/ui/dropdown-menu.tsx",
   "components/ui/popover.tsx",
@@ -117,26 +81,7 @@ const ANCHORED_PRIMITIVES = [
   "components/ui/hover-card.tsx",
 ];
 
-/**
- * The surfaces allowed to switch Radix's collision handling off outright.
- *
- * `avoidCollisions={false}` is the one call-site prop the primitive defaults
- * cannot rescue: with collisions off, Radix runs neither the inset-aware
- * `collisionPadding` the menu/popover primitives now default to nor the shift
- * that would keep the surface inside the viewport, so a wide anchored menu
- * leaves the screen on a phone with nothing to catch it.
- *
- * Every entry here is a sidebar-header menu that opens sideways into the
- * canvas, and `EpicSurface` drops the desktop sidebar below `md` - so none of
- * them mounts at a width where the clamp would matter. That is the whole
- * justification, and it is why the list is closed: a new one is either a
- * desktop-only surface (extend this list, with the reason) or a phone escape.
- *
- * A placement-gated expression is NOT this prop and needs no entry -
- * `add-node-dropdown.tsx` disables collisions only for its header placement
- * and keeps them for every other, which is the shape a mixed surface should
- * take.
- */
+/** `avoidCollisions={false}` is the one call-site prop the primitive defaults cannot rescue. */
 const AVOID_COLLISIONS_ALLOWLIST = [
   "components/epic-canvas/sidebar/epic-sidebar.tsx",
   "components/epic-canvas/sidebar/epic-sidebar-filter-menu.tsx",
@@ -152,10 +97,8 @@ const WIDTH_CAPPED_FIXED_FRAMES = [
 ];
 
 describe("safe-area token contract", () => {
-  // No allowlist, deliberately: `index.css` is the one place the insets are
-  // read from the platform, and it is not a TypeScript source. Comments are
-  // stripped first so prose naming the thing a surface must not write - this
-  // file's own failure message included - stays writable.
+  // Comments are stripped first so prose naming the thing a surface must not write - this file's own failure
+  // message included - stays writable.
   it("keeps env(safe-area-inset-*) out of every source file", () => {
     const offenders = productionSourceEntries()
       .filter(([, source]) =>
@@ -174,10 +117,7 @@ describe("safe-area token contract", () => {
   });
 
   it("keeps h-dvh/min-h-dvh/h-svh/min-h-svh out of every .tsx file except the allowlisted desktop sidebar", () => {
-    // Precise per the token, not a substring match: `(?<![\w-])` / `(?![\w-])`
-    // exclude both "max-h-[85dvh]" (bracketed, arbitrary value) and
-    // "h-safe-dvh" (a longer hyphenated token that happens to end the same
-    // way) from tripping the bare-utility check.
+    // Precise per the token, not a substring match.
     const offenders = productionSourceEntries()
       .filter(([filePath]) => filePath.endsWith(".tsx"))
       .filter(
@@ -298,7 +238,6 @@ describe("safe-area token layer (index.css)", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const cssSource = readFileSync(join(here, "../../../index.css"), "utf8");
 
-  /** One custom-property declaration, whitespace-normalised for matching. */
   function declarationOf(token: string): string {
     const match = cssSource.match(new RegExp(`${token}:([^;]*);`));
     expect(match, `${token} declaration in index.css`).not.toBeNull();
@@ -316,10 +255,8 @@ describe("safe-area token layer (index.css)", () => {
   });
 
   it("declares the safe region's width under its own name, not only as a theme token", () => {
-    // The width is composed by hand-written CSS - a frame's cap is the smaller
-    // of its own width and this - and `--safe-area-width` is the name that
-    // composition should depend on. `--spacing-safe-dvw` is named for the
-    // utility namespace it serves, so it is Tailwind's to rename.
+    // The width is composed by hand-written CSS - a frame's cap is the smaller of its own width and this - and
+    // `--safe-area-width` is the name that composition should depend on.
     expect(cssSource).toMatch(
       /--safe-area-width:\s*calc\(\s*100dvw\s*-\s*var\(--safe-area-inset-left\)\s*-\s*var\(--safe-area-inset-right\)\s*\)/,
     );
@@ -347,15 +284,8 @@ describe("safe-area token layer (index.css)", () => {
   });
 
   it("takes the keyboard off every token that bounds the region an overlay may occupy", () => {
-    // The soft keyboard shortens that region from below exactly as the status
-    // bar shortens it from above, so a token which MEASURES the region or
-    // CENTRES on it has to account for both. `center-y` is the one that did
-    // not: the window-filling surfaces tracked the keyboard correctly while
-    // every centred dialog stayed centred on the whole screen, which on a
-    // phone left the bottom of it - composer, submit button - behind the
-    // keyboard. It divides because moving a midpoint is half of what you did
-    // to the edge; subtracting the whole height would overshoot into the
-    // status bar.
+    // It divides because moving a midpoint is half of what you did to the edge; subtracting the whole height would
+    // overshoot into the status bar.
     expect(declarationOf("--spacing-safe-dvh")).toContain(
       "- var(--keyboard-inset)",
     );
@@ -368,11 +298,8 @@ describe("safe-area token layer (index.css)", () => {
   });
 
   it("glides the centred overlays with the keyboard, not only the window-filling ones", () => {
-    // Re-centring lands in one frame while the keyboard takes ~250ms to
-    // arrive, so without a transition the dialog teleports past a keyboard
-    // still sliding - the abrupt feel iOS overlay mode was chosen to avoid.
-    // Both rules hang off `traycer-native-keyboard`, which only the installed
-    // app's bridge sets, so both stay inert everywhere else.
+    // Re-centring lands in one frame while the keyboard takes ~250ms to arrive, so without a transition the dialog
+    // teleports past a keyboard still sliding - the abrupt feel iOS overlay mode was chosen to avoid.
     expect(cssSource).toMatch(
       /\.traycer-native-keyboard\s+\.top-safe-center-y\s*\{\s*transition:\s*top\s/,
     );
@@ -417,25 +344,17 @@ describe("the one sanctioned full-bleed surface", () => {
   });
 
   it("restores EVERY reservation the full-bleed shell escapes on the onboarding content layer", () => {
-    // The inverse of every other surface in the app: onboarding sits inside
-    // the full-bleed exception, so the backdrop it renders is meant to run
-    // under the status bar and the grid holding the Skip control is not.
-    //
-    // All three, not just the top. `fixed` escapes `#root` wholesale, so an
-    // exception that restores one reservation reads as handled while leaving
-    // the other two open - and the landscape ones fail on a device nobody
-    // checks first.
+    // `fixed` escapes `#root` wholesale, so an exception that restores one reservation reads as handled while
+    // leaving the other two open - and the landscape ones fail on a device nobody checks first.
     const source = stripComments(findSource("onboarding/onboarding-page.tsx"));
-    // Matched as "the same class list carries all of them", order-independent:
-    // the Tailwind class sorter owns the order and would otherwise decide
-    // whether this passes.
+    // Matched as "the same class list carries all of them", order-independent: the Tailwind class sorter owns the
+    // order and would otherwise decide whether this passes.
     const contentLayer = (source.match(/"[^"\n]*"/g) ?? []).find((literal) =>
       literal.includes("--onboarding-shell-rows"),
     );
     expect(contentLayer, "onboarding content grid class list").toBeDefined();
-    // Four, not three: the bottom is not one of the reservations the shell
-    // escapes, but this surface's last row centres a line box in a band only
-    // a little taller than the home indicator, so the surface opts in.
+    // Four, not three: the bottom is not one of the reservations the shell escapes, but this surface's last row
+    // centres a line box in a band only a little taller than the home indicator, so the surface opts in.
     for (const token of [
       "pt-safe-top",
       "pr-safe-right",
@@ -448,14 +367,8 @@ describe("the one sanctioned full-bleed surface", () => {
   });
 
   it("restores them on the sign-in content layers too, where gutters already exist to compose with", () => {
-    // Sign-in states each edge as `max(gutter, inset)` rather than as a bare
-    // token, because its gutters are part of the composition.
-    //
-    // Pinned per class list, not per file. Its two content layers face
-    // different edges, and a file-wide search would let one layer's reference
-    // vouch for the other - deleting the section's right inset would leave
-    // this green on the strength of the footer's, which is the landscape bug
-    // this exists to catch.
+    // Sign-in states each edge as `max(gutter, inset)` rather than as a bare token, because its gutters are part
+    // of the composition.
     const literals =
       stripComments(findSource("auth/auth-landing-page.tsx")).match(
         /"[^"\n]*"/g,

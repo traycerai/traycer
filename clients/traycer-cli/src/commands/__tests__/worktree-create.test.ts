@@ -248,14 +248,8 @@ describe("resolveWorktreeBranchSelection", () => {
   });
 });
 
-// The `new` selection is itself a two-arm union - `collision?: "fail"` carries
-// no `retryIdentity`, `collision: "random"` requires one - so a bare
-// `Extract<…, { type: "new" }>` keeps both arms and TS resolves the spread
-// against the wrong one. Dropping the random arm leaves the single shape
-// `resolveWorktreeBranchSelection` actually produces, which lets this use the
-// same `Partial<…>` override idiom as `createResponse` below. (Extracting on
-// `collision: "fail"` directly yields `never` - it is OPTIONAL on that arm, so
-// the arm is not assignable to a required-property matcher.)
+// The `new` selection is itself a two-arm union - `collision?: "fail"` carries no `retryIdentity`, `collision: "random"` requires one - so a bare `Extract<…, { type: "new" }>` keeps both arms and TS resolves the spread against the wrong one.
+// Dropping the random arm leaves the single shape `resolveWorktreeBranchSelection` actually produces, which lets this use the same `Partial<…>` override idiom as `createResponse` below.
 type NewBranchSelection = Exclude<
   Extract<WorktreeBranchSelection, { readonly type: "new" }>,
   { readonly collision: "random" }
@@ -392,11 +386,8 @@ describe("formatWorktreeCreateResult", () => {
     expect(summary).not.toContain("Uncommitted changes");
   });
 
-  // Regression: `entry.branch` is nullable
-  // (`worktreeCreatedPathEntrySchema`), and the requested name used to fill
-  // the gap dressed as an observed outcome - "(new branch, forked from x)"
-  // even though the host never said the branch materialized. A null is the
-  // host DECLINING to state the result, not "same as requested".
+  // Regression: `entry.branch` is nullable (`worktreeCreatedPathEntrySchema`), and the requested name used to fill the gap dressed as an observed outcome - "(new branch, forked from x)" even though the host never said the branch materialized.
+  // A null is the host DECLINING to state the result, not "same as requested".
   it("REGRESSION: new-branch success with entry.branch: null reports the request was made, not an assumed outcome", () => {
     const branch = newBranchSelection({ name: "feature/x", source: "main" });
     const response = createResponse({

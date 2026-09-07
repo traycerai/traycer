@@ -54,19 +54,8 @@ const state = vi.hoisted(() => ({
   asset: null as FileAssetState | null,
 }));
 
-// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
-// to, so `git.subscribeStatus` cannot ride the window's effective host while
-// carrying the tile's host id as a param. `null` is that hook's FOLLOWING
-// answer, so the tile falls back to the ambient binding this suite supplies -
-// which is what every assertion here is about. Which transport a host resolves
-// to is a different question with its own suite:
-// `use-surface-host-stream-binding.test.tsx`.
-// The hook returns the value to PROVIDE: the ambient binding while following
-// (this suite's), the pin's own once built, null while pending. Following here.
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
+// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND to, so `git.subscribeStatus` cannot ride the window's effective host while carrying the tile's host id as a param.
+// These tiles resolve the user's default open target, which asks whether the tile's host is the LOCAL one before it may offer Finder.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -118,10 +107,6 @@ vi.mock("@/hooks/use-refresh-spinner", () => ({
   useRefreshSpinner: () => ({ refreshing: false, trigger: vi.fn() }),
 }));
 
-// The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
-// mocked hook ignores the client it is handed; what this repoint pins is that
-// the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpenForClient: () => ({ mutate: state.open, isPending: false }),
 }));
@@ -206,10 +191,6 @@ vi.mock("@/components/epic-canvas/binary-placeholder", () => ({
   ),
 }));
 
-// The compact PDF diff block pulls in useDraggable/useEpicCanvasStore
-// selectors this suite does not stub end to end - the routing contract under
-// test is only "a PDF row shows the compact block and skips the text query",
-// which a stub component pins the same way `ImagePreview` is stubbed above.
 vi.mock("@/components/epic-canvas/pdf-preview/pdf-diff-view", () => ({
   PdfDiffView: (props: { readonly filePath: string }) => (
     <div data-testid="pdf-diff-block" data-file-name={props.filePath} />
@@ -530,9 +511,7 @@ describe("<GitDiffTile /> image routing", () => {
     expect(changedRevisionSides[1]?.getAttribute("data-status")).toBe("header");
   });
 
-  // Deliberate residual: when degraded mode leaves both OIDs null, a content
-  // swap that preserves insertions, deletions, and sizeBytes at the same
-  // headSha remains unobservable and is intentionally not asserted here.
+  // Deliberate residual: when degraded mode leaves both OIDs null, a content swap that preserves insertions, deletions, and sizeBytes at the same headSha remains unobservable and is intentionally not asserted here.
   it("remounts a degraded git image when fallback stats change", () => {
     const initial = changedFile({
       path: "assets/degraded.png",
@@ -711,12 +690,7 @@ describe("<GitDiffTile /> image routing", () => {
   });
 
   it("keeps the text diff for an svg -> pdf rename toggled to source, instead of the PDF block", () => {
-    // Straddles both allowlists: the current path (.pdf) routes to
-    // `gitRoutesToPdfDiffCards`, the previous path (.svg) routes to the image
-    // diff with a source toggle. `showsPdfDiffBlock` must key off the RAW
-    // image-routing decision (always true here), not the post-toggle
-    // `showImageDiff` - otherwise picking Source would hand the row to the
-    // PDF block instead of revealing the text diff.
+    // `showsPdfDiffBlock` must key off the RAW image-routing decision (always true here), not the post-toggle `showImageDiff` - otherwise picking Source would hand the row to the PDF block instead of revealing the text diff.
     const changed = changedFile({
       path: "assets/new.pdf",
       previousPath: "assets/old.svg",
@@ -726,9 +700,7 @@ describe("<GitDiffTile /> image routing", () => {
 
     renderTile(changed);
 
-    // Old side (`old.svg`) is a previewable image; new side (`new.pdf`) is
-    // not, so it renders the PDF placeholder copy rather than a second
-    // image-preview-side.
+    // Old side (`old.svg`) is a previewable image; new side (`new.pdf`) is not, so it renders the PDF placeholder copy rather than a second image-preview-side.
     expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
     expect(screen.getByText("PDF diffs aren't previewed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
@@ -742,11 +714,7 @@ describe("<GitDiffTile /> image routing", () => {
   });
 
   it("offers no source toggle for a BINARY svg -> pdf rename, keeping the side-by-side view", () => {
-    // The same straddling rename as above, but git calls it binary (a PDF
-    // with a NUL byte - the ordinary case). The text diff is never fetched
-    // for a binary row, so a Source toggle here could only drop the tile
-    // onto the bare binary placeholder, losing the one view that names both
-    // sides. The toggle is therefore not offered at all.
+    // The text diff is never fetched for a binary row, so a Source toggle here could only drop the tile onto the bare binary placeholder, losing the one view that names both sides.
     const changed = changedFile({
       path: "assets/new.pdf",
       previousPath: "assets/old.svg",
@@ -774,9 +742,7 @@ describe("<GitDiffTile /> image routing", () => {
   it("routes an ASCII-authored .pdf row to the compact PDF block and skips the text diff query", () => {
     const changed = changedFile({
       path: "docs/report.pdf",
-      // The git numstat path can report a PDF as non-binary (e.g. a mostly-
-      // text PDF stream) - routing must still key off the EXTENSION, not
-      // `isBinary`, so this deliberately sets it false.
+      // The git numstat path can report a PDF as non-binary (e.g. a mostly- text PDF stream) - routing must still key off the EXTENSION, not `isBinary`, so this deliberately sets it false.
       isBinary: false,
     });
 
@@ -788,15 +754,7 @@ describe("<GitDiffTile /> image routing", () => {
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
 
-  // Live E2E (ticket 06) found a real conflicted binary image falling
-  // through to the old generic BinaryPlaceholder instead of ImageDiffView.
-  // The host's bulk listChangedFiles numstat path has no MERGE_HEAD-aware
-  // fallback for unmerged paths (unlike its single-file getFileDiff path),
-  // so `isBinary: false` is the REAL shape a two-sided binary UU conflict
-  // can carry here - this pins the dispatch against that exact shape, not
-  // an idealized isBinary: true. The existing ImageDiffView-level Conflicted
-  // badge test doesn't cover this: it never exercises the GitChangedFile ->
-  // routing dispatch this test targets.
+  // The existing ImageDiffView-level Conflicted badge test doesn't cover this: it never exercises the GitChangedFile -> routing dispatch this test targets.
   it("routes a conflicted image to ImageDiffView with the Conflicted badge even when isBinary is false", () => {
     const changed = changedFile({
       path: "assets/conflict.png",

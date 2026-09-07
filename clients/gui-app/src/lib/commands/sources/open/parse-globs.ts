@@ -1,18 +1,4 @@
-/**
- * Split a raw include/exclude field into ripgrep glob patterns.
- *
- * Patterns are comma-separated, but a comma is NOT a separator when it is:
- *   - inside a brace expression `{a,b}` (ripgrep alternation) — tracked by depth;
- *     an UNBALANCED `{` swallows the rest of the field into one pattern (which rg
- *     then rejects), a defined outcome rather than a silent mis-split; or
- *   - backslash-escaped (`\,`) — a literal comma within a single pattern.
- *
- * Each resulting pattern is trimmed of surrounding whitespace and empty patterns
- * are dropped, so a blank field, whitespace, or stray separators impose no
- * filter. A bare extension such as `.md` is accepted as friendly shorthand for
- * `*.md`. Braces and escapes are otherwise passed through to ripgrep verbatim —
- * rg owns their meaning; this parser only decides the split points.
- */
+/** Split a raw include/exclude field into ripgrep glob patterns. */
 export function parseGlobs(text: string): string[] {
   const patterns: string[] = [];
   let current = "";

@@ -18,11 +18,7 @@ import {
   UNKNOWN_FLEET_UPDATE_VIEW,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-// `projectFleetUpdateView` is the ONE pure projection every update surface
-// (landing banner, Settings selector badge, selected-host Overview) derives
-// from - see the module's own doc for the rule it exists to enforce: absence
-// of evidence is never evidence of absence. Table-driven because it is a pure
-// function with no I/O and no clock of its own - the caller supplies `nowMs`.
+// `projectFleetUpdateView` is the ONE pure projection every update surface (landing banner, Settings selector badge, selected-host Overview) derives from - see the module's own doc for the rule it exists to enforce: absence of evidence is never evidence of.
 
 const NOW_MS = 1_000_000;
 const FRESH_UNTIL_MS = NOW_MS + 30_000;
@@ -55,9 +51,7 @@ const TRANSACTION: HostUpdateTransactionCapability = {
   authority: "attempt",
 };
 
-// Builds a WIRE observation. Retyped (annotation only — no assertion changed)
-// when Ticket 07 §5.2.7 made `FleetUpdateObservation` a union: `Partial<union>`
-// does not narrow, so the literal below no longer identified an arm.
+// `Partial<union>` does not narrow, so the literal below no longer identified an arm.
 function observation(
   overrides: Partial<FleetUpdateWireObservation>,
 ): FleetUpdateWireObservation {
@@ -104,13 +98,7 @@ describe("projectFleetUpdateView — no observation / operation: null", () => {
 });
 
 describe("projectFleetUpdateView — operation: null + coarse updateProgress (pre-1.3 peer)", () => {
-  // A pre-@1.3 peer cannot report an attempt at all, but it CAN report the
-  // coarse `updateProgress` marker (`host.status@1.1`) — for that cohort the
-  // marker is the ONLY update signal there is, and `coarseProgressView` is
-  // now consulted here FIRST, exactly as it already is for `kind: "none"`.
-  // These mirror the assertions in the "coarse updateProgress beside
-  // {kind:'none'}" describe below, because the two arms share one helper and
-  // must not drift on how they render it.
+  // A pre-@1.3 peer cannot report an attempt at all, but it CAN report the coarse `updateProgress` marker (`host.status@1.1`) - for that cohort the marker is the ONLY update signal there is, and `coarseProgressView` is now consulted here FIRST, exactly as it.
 
   const UPDATING: HostStatusUpdateProgress = { state: "updating", error: null };
   const FAILED_WITH_ERROR: HostStatusUpdateProgress = {
@@ -182,11 +170,7 @@ describe("projectFleetUpdateView — operation: null + coarse updateProgress (pr
     expect(view.lastObservedAtMs).toBe(NOW_MS - 5_000);
   });
 
-  // `coarseProgress: null` here still falls through to UNKNOWN_FLEET_UPDATE_VIEW
-  // (never `idle`) — already covered above by "operation: null ... projects
-  // unknown - NEVER idle" and the STALE variant right before this describe,
-  // both of which use the `observation()` fixture's `coarseProgress: null`
-  // default. Not duplicated here.
+  // `coarseProgress: null` here still falls through to UNKNOWN_FLEET_UPDATE_VIEW (never `idle`) - already covered above by "operation: null ... projects unknown - NEVER idle" and the STALE variant right before this describe, both of which use the.
 
   it("operation: null and operation: {kind:'none'} project IDENTICAL views for the same fresh coarse marker - the two arms share one helper and must not drift", () => {
     const viaOperationNull = projectFleetUpdateView({
@@ -332,12 +316,8 @@ describe("projectFleetUpdateView — staleness", () => {
   });
 });
 
-// G4 (independent cold review, finding 4): staleness used to overwrite the
-// observed phase with `unknown` and drop it. `lastKnownKind` is what a surface
-// reads to say "last seen preparing v1.2.3" instead of a bare "offline" — and
-// the invariant that makes it SAFE to add beside `kind` is that it can never
-// leak into a gate or a cadence decision: `lastKnownKind !== null` implies
-// `kind === "unknown"`, and every gate reads `kind`.
+// G4 (independent cold review, finding 4): staleness used to overwrite the observed phase with `unknown` and drop it.
+// `lastKnownKind` is what a surface reads to say "last seen preparing v1.2.3" instead of a bare "offline" - and the invariant that makes it SAFE to add beside `kind` is that it can never leak into a gate or a cadence decision: `lastKnownKind !== null`.
 describe("projectFleetUpdateView — retained last-known phase (lastKnownKind)", () => {
   it("a stale attempt retains the phase AND its observed time", () => {
     const view = projectFleetUpdateView({
@@ -610,11 +590,7 @@ describe("projectFleetUpdateView — progress", () => {
     });
   });
 
-  // G5 (independent cold review, finding 5): the wire makes `percent`,
-  // `bytes` and `totalBytes` independently nullable, so an active operation
-  // with no percentage can still have MEASURED bytes — a host streaming an
-  // unsized body. The first shape of `projectProgress` discarded them the
-  // moment `percent` was null, leaving a bar with no counters beside it.
+  // G5 (independent cold review, finding 5): the wire makes `percent`, `bytes` and `totalBytes` independently nullable, so an active operation with no percentage can still have MEASURED bytes - a host streaming an unsized body.
   it("active execution with bytes measured but percent: null carries the bytes on the INDETERMINATE arm — never dropped", () => {
     const view = projectFleetUpdateView({
       observation: observation({
@@ -782,9 +758,7 @@ describe("warrantsFastPoll", () => {
   );
 });
 
-// G8: direct `holdsLifecycleGate` unit coverage, independently of any banner
-// or Overview seam — the finding-7 gap was that the only proof lived behind an
-// interaction test that could not fail for the right reason.
+// G8: direct `holdsLifecycleGate` unit coverage, independently of any banner or Overview seam - the finding-7 gap was that the only proof lived behind an interaction test that could not fail for the right reason.
 describe("holdsLifecycleGate — direct unit coverage", () => {
   function viewOf(kind: FleetUpdateView["kind"]): FleetUpdateView {
     return { ...UNKNOWN_FLEET_UPDATE_VIEW, kind };
@@ -823,17 +797,13 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
   );
 
   it("THE PRE-@1.3 BOUNDARY: `unknown` fails OPEN — a peer that never speaks the attempt protocol must never lock the page through this predicate", () => {
-    // A pre-1.3 peer produces `updateOperation: null`, which `projectFleetUpdateView`
-    // maps to `UNKNOWN_FLEET_UPDATE_VIEW` — `kind: "unknown"`. Consumers at the
-    // banner/Overview layer fall back to the coarse `updateProgress.state ===
-    // "updating"` field for such a peer; this predicate's own contract is that
-    // it never holds for `unknown` regardless of how it got there, which is
-    // what makes that fallback safe to layer on top rather than racing it.
+    // A pre-1.3 peer produces `updateOperation: null`, which `projectFleetUpdateView` maps to `UNKNOWN_FLEET_UPDATE_VIEW` - `kind: "unknown"`.
+    // Consumers at the banner/Overview layer fall back to the coarse `updateProgress.state === "updating"` field for such a peer; this predicate's own contract is that it never holds for `unknown` regardless of how it got there, which is what makes that fallback.
     expect(holdsLifecycleGate(UNKNOWN_FLEET_UPDATE_VIEW)).toBe(false);
   });
 });
 
-// ---- Ticket 07 §5.2.7 — the record-derived arm ----------------------------
+// Record-derived arm.
 
 function recordObservation(
   overrides: Partial<FleetUpdateRecordObservation>,
@@ -851,20 +821,8 @@ function recordObservation(
 
 describe("projectFleetUpdateView — the durable-record arm (host-down window)", () => {
   it("a FAILED record projects unknown + lastKnownKind:'failed', never a live failure", () => {
-    // Codex round 3, end to end. The read boundary now lets `failed` through
-    // (it used to be dropped with every terminal phase), and this asserts what
-    // it becomes: the retained-phase channel, not a live `kind`.
-    //
-    // Both halves matter. `kind` must stay `unknown` because every gate and
-    // cadence decision reads it, so a host we cannot reach must hold no gate
-    // and earn no active poll; `lastKnownKind` must be `failed` so a surface
-    // can say "last seen failed" instead of rendering a blank offline badge for
-    // the one outcome a person needs to act on.
-    // Composed through the REAL read boundary, not a hand-built observation
-    // literal. Building the observation directly would bypass
-    // `recordObservationFromLocalAttempt` entirely, so the assertion would hold
-    // whether or not `failed` is admitted there - which is exactly what an
-    // ablation caught this test doing on its first draft.
+    // Codex round 3, end to end.
+    // The read boundary now lets `failed` through (it used to be dropped with every terminal phase), and this asserts what it becomes: the retained-phase channel, not a live `kind`.
     const observed = recordObservationFromLocalAttempt({
       hostId: "host-1",
       localAttempt: {
@@ -930,9 +888,8 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
 
     expect(view.attemptId).toBe("attempt-1");
     expect(view.targetVersion).toBe("2.0.0");
-    // NOT fabricated: a record says nothing about progress, busy sessions or
-    // errors, so none of them may appear. A synthesized `operation` would have
-    // had to invent all three.
+    // NOT fabricated: a record says nothing about progress, busy sessions or errors, so none of them may appear.
+    // A synthesized `operation` would have had to invent all three.
     expect(view.progress).toEqual({ kind: "none" });
     expect(view.blockingSessionCount).toBeNull();
     expect(view.blockingBreakdown).toBeNull();
@@ -952,11 +909,8 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
   });
 
   it("maps `restarting` to `reconnecting` — reading the record IS the disconnected vantage", () => {
-    // This is the pin-4 detector. A second, local copy of the phase->kind
-    // mapping would almost certainly return "restarting" here, because the
-    // vantage split is the one rule that is easy to omit when copying a switch.
-    // It also proves `connected: true` from the caller cannot leak in: the host
-    // is not answering, which is why we are reading a file about it.
+    // This is the pin-4 detector.
+    // A second, local copy of the phase->kind mapping would almost certainly return "restarting" here, because the vantage split is the one rule that is easy to omit when copying a switch.
     const view = projectFleetUpdateView({
       observation: recordObservation({ phase: "restarting" }),
       nowMs: NOW_MS,
@@ -992,9 +946,8 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
   });
 
   it("a fresh wire read wins even when the record was observed MORE recently", () => {
-    // Why this is not "whichever is newest": the record is re-read every tick,
-    // so its `observedAtMs` is always the newer one. A recency rule would let
-    // it permanently suppress real progress from a healthy host.
+    // Why this is not "whichever is newest": the record is re-read every tick, so its `observedAtMs` is always the newer one.
+    // A recency rule would let it permanently suppress real progress from a healthy host.
     const wire = observation({
       freshUntilMs: NOW_MS + 1000,
       observedAtMs: NOW_MS - 5000,
@@ -1017,20 +970,10 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
 });
 
 // ---- coarse `updateProgress`, carried beside `updateOperation: {kind:"none"}` ----
-//
-// The shipped legacy `traycer host update` path never writes a schema-v2
-// attempt record: it reports through this two-state marker alone. A @1.3 host
-// running it answers `updateOperation: {kind:"none"}` (it looked; there is no
-// attempt) AND `updateProgress: {state:"updating"}` at the same time, and only
-// this field lets the projector tell that host apart from a genuinely quiet
-// one — see `coarseKind`'s doc.
 describe("projectFleetUpdateView — coarse updateProgress beside {kind:'none'}", () => {
   it("updating: projects kind 'updating', indeterminate progress, unqualified - and is INFORMATIONAL: it neither holds the lifecycle gate nor earns the fast poll", () => {
-    // The marker carries no liveness: a legacy updater that crashed after
-    // writing it leaves a host serving `{state:"updating"}` forever. A gate
-    // held by it would disable Restart / Diagnostics / the service verbs
-    // indefinitely (the fail-open rule `unknown` already follows), and a fast
-    // poll earned by it would be the unbounded cadence the poll policy forbids.
+    // The marker carries no liveness: a legacy updater that crashed after writing it leaves a host serving `{state:"updating"}` forever.
+    // A gate held by it would disable Restart / Diagnostics / the service verbs indefinitely (the fail-open rule `unknown` already follows), and a fast poll earned by it would be the unbounded cadence the poll policy forbids.
     const view = projectFleetUpdateView({
       observation: observation({
         operation: { kind: "none" },

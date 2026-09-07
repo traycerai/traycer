@@ -20,9 +20,8 @@ describe("lastNCalendarDays", () => {
   });
 
   it("resolves through the given IANA zone, not the runtime's local zone", () => {
-    // At 2026-08-09T05:00:00Z, Tokyo (UTC+9) has already turned over to the
-    // 9th (14:00 local); American Samoa (UTC-11) is still on the 8th (18:00
-    // the previous day). Same instant, different last day.
+    // At 2026-08-09T05:00:00Z, Tokyo (UTC+9) has already turned over to the 9th (14:00 local); American Samoa (UTC-11) is still on the 8th (18:00 the previous day).
+    // Same instant, different last day.
     const nowMs = Date.parse("2026-08-09T05:00:00Z");
     const tokyo = lastNCalendarDays(1, "Asia/Tokyo", nowMs);
     const samoa = lastNCalendarDays(1, "Pacific/Pago_Pago", nowMs);
@@ -31,9 +30,8 @@ describe("lastNCalendarDays", () => {
   });
 
   it("covers every local date across a spring-forward boundary", () => {
-    // 2026-03-08 is the US spring-forward date (a 23h local day). A 24h
-    // stride can step straight over a date here, dropping a column whose
-    // usage still counts toward the totals.
+    // 2026-03-08 is the US spring-forward date (a 23h local day).
+    // A 24h stride can step straight over a date here, dropping a column whose usage still counts toward the totals.
     const days = lastNCalendarDays(
       10,
       "America/New_York",
@@ -54,9 +52,8 @@ describe("lastNCalendarDays", () => {
   });
 
   it("covers every local date across a fall-back boundary", () => {
-    // 2026-11-01 is the US fall-back date (a 25h local day). A 24h stride
-    // maps two samples onto the same date here, so the axis used to come
-    // back one column SHORT - silently dropping its oldest day.
+    // 2026-11-01 is the US fall-back date (a 25h local day).
+    // A 24h stride maps two samples onto the same date here, so the axis used to come back one column SHORT - silently dropping its oldest day.
     const days = lastNCalendarDays(
       10,
       "America/New_York",

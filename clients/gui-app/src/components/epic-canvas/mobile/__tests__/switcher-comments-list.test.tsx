@@ -28,9 +28,7 @@ const ARTIFACT_ID = "spec-1";
 const QUOTED_TEXT = "the sentence this thread hangs off";
 const REPLY_CONTENT: JsonContent = { type: "doc", content: [] };
 
-// The coarse-pointer hit-slop rules the sheet imports. jsdom computes no
-// pseudo-element under a media query, so the rule is read from source. Vitest's
-// cwd is the gui-app root.
+// The coarse-pointer hit-slop rules the sheet imports. jsdom computes no pseudo-element under a media query, so the rule is read from source.
 const touchTargetsCss = readFileSync(
   join(
     process.cwd(),
@@ -39,10 +37,6 @@ const touchTargetsCss = readFileSync(
   "utf8",
 );
 
-// The panel resolves the artifact RECORD (for its kind) from the epic
-// projection, which needs a live Y.Doc; the tile ref the list reads is seeded
-// into the real canvas store below, so the resolution under test - shown tile ->
-// artifact - stays real.
 const artifactKind = { value: "spec" as string | null };
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () =>
@@ -57,9 +51,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => hostClientRef.current,
 }));
 
-// The reply composer is a Tiptap editor; stand in for it with the submit
-// control alone, so this file exercises what a reply DOES (the mutation, on the
-// session host) rather than Tiptap's jsdom behavior.
+// The reply composer is a Tiptap editor; stand in for it with the submit control alone, so this file exercises what a reply DOES (the mutation, on the session host) rather than Tiptap's jsdom behavior.
 vi.mock("@/components/comments/comment-composer", () => ({
   CommentComposer: (props: {
     readonly submitLabel: string;
@@ -111,12 +103,6 @@ function terminalRef(): EpicCanvasTileRef {
   };
 }
 
-/**
- * Seed the one tile the phone shows, exactly as the canvas store holds it.
- * `activePaneId` is explicit because `null` - a pane the store has not marked
- * active, which the phone still renders - is a state under test here, not an
- * edge case to default away.
- */
 function seedShownTile(
   ref: EpicCanvasTileRef | null,
   activePaneId: string | null,
@@ -217,9 +203,7 @@ describe("<SwitcherCommentsList />", () => {
     renderList();
     await screen.findByText(QUOTED_TEXT);
 
-    // Expanding is how a phone user reads a thread: the card is collapsed to
-    // its quoted snapshot until then, and the reply composer comes with the
-    // expansion.
+    // Expanding is how a phone user reads a thread: the card is collapsed to its quoted snapshot until then, and the reply composer comes with the expansion.
     await user.click(screen.getByRole("button", { name: /1 comment/ }));
     await user.click(screen.getByRole("button", { name: "Reply" }));
 
@@ -231,10 +215,7 @@ describe("<SwitcherCommentsList />", () => {
   });
 
   it("gives the thread's expand control a slot the coarse-pointer slop addresses", async () => {
-    // The control is a raw `<button>`, not a `ui/button`, and on a thread with
-    // no quoted snapshot its box is one line of meta text - well under 44px. The
-    // slop rules address controls by `data-slot`, so it only earns the hit area
-    // by declaring one.
+    // The slop rules address controls by `data-slot`, so it only earns the hit area by declaring one.
     threads = [threadFixture()];
     seedShownTile(artifactRef(), "pane-A");
 
@@ -264,10 +245,6 @@ describe("<SwitcherCommentsList />", () => {
   });
 
   it("follows the shown tile even when no pane is marked active", async () => {
-    // `selectMobileTile` falls back to the first pane, so the phone shows an
-    // artifact with `activePaneId` null - the state the canvas store's own
-    // active-tile selectors answer `null` for. Reading those here would blank
-    // the panel underneath a visibly-open artifact.
     threads = [threadFixture()];
     seedShownTile(artifactRef(), null);
 

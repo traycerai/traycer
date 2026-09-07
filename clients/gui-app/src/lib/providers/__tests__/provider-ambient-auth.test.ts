@@ -117,16 +117,7 @@ describe("isProviderAmbientAuthenticated", () => {
 });
 
 /**
- * The verdict is typed by the two fields it reads, not by one concrete state,
- * so the shape a MUTATION echo carries gets the identical answer.
- *
- * `ProviderMutationCliStateV21` is not assignable to `ProviderCliState` in
- * either direction - it has no `nativeCapabilities` and none of the
- * provider-pack-registry fields - but it shares `PROVIDER_AUTH_SCHEMA_V20` for
- * `auth` and builds `profiles` from the same `providerProfileShapeV70`. Before
- * the parameter was structural, onboarding's `awaitLogin` completion could not
- * call this at all, so it open-coded `state.auth.status === "authenticated"`
- * and silently dropped the profile half of the verdict.
+ * The verdict is typed by the two fields it reads, not by one concrete state, so the shape a MUTATION echo carries gets the identical answer.
  */
 function mutationState(
   providerAuthStatus: ProviderAuthStatus,

@@ -25,9 +25,6 @@ import type { TileFindStateSnapshot } from "@/stores/tile-find/types";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 // Keystrokes are coalesced into a single search instead of one per character.
-// Chat scans the whole transcript; a browser page re-highlights the active
-// match on every findInPage, which flashes while typing. Mirrors the artifact
-// adapter's rescan debounce window (ARTIFACT_FIND_RESCAN_DEBOUNCE_MS).
 const TYPED_FIND_QUERY_DEBOUNCE_MS = 80;
 
 interface TileFindBarProps {
@@ -88,10 +85,7 @@ export function TileFindBar(props: TileFindBarProps) {
     };
   }, [cancelPendingSearch]);
 
-  // Expose the flush to the store so store-driven navigation (the desktop menu's
-  // Find Next/Previous, which bypasses this bar's `handleNavigate`) flushes a
-  // pending debounced search before advancing, instead of advancing the prior
-  // query's stale matches.
+  // Expose the flush to the store so store-driven navigation (the desktop menu's Find Next/Previous, which bypasses this bar's `handleNavigate`) flushes a pending debounced search before advancing, instead of advancing the prior query's stale matches.
   useEffect(() => {
     registerPendingSearchFlush(tileInstanceId, flushPendingSearch);
     return () => {
@@ -103,9 +97,8 @@ export function TileFindBar(props: TileFindBarProps) {
     (event: ChangeEvent<HTMLInputElement>) => {
       const nextQuery = event.target.value;
       setQuery(tileInstanceId, nextQuery);
-      // Always cancel any in-flight debounce so the latest query wins. Chat
-      // debounces non-empty queries; every other tile kind (and an emptied
-      // query, which clears instantly) searches immediately.
+      // Always cancel any in-flight debounce so the latest query wins.
+      // Chat debounces non-empty queries; every other tile kind (and an emptied query, which clears instantly) searches immediately.
       cancelPendingSearch();
       if (debounceSearch && nextQuery.length > 0) {
         searchDebounceRef.current = window.setTimeout(() => {
@@ -130,9 +123,8 @@ export function TileFindBar(props: TileFindBarProps) {
 
   const handleNavigate = useCallback(
     (direction: 1 | -1) => {
-      // A still-pending debounced search means the adapter holds stale matches;
-      // flush it now (which reveals the first match) instead of advancing past
-      // them. Otherwise navigate immediately.
+      // A still-pending debounced search means the adapter holds stale matches; flush it now (which reveals the first match) instead of advancing past them.
+      // Otherwise navigate immediately.
       if (flushPendingSearch()) return;
       if (direction === 1) next(tileInstanceId);
       else previous(tileInstanceId);

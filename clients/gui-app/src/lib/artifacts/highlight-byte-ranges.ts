@@ -1,20 +1,4 @@
-/**
- * Turn a body-snippet's UTF-8 byte highlight ranges into ordered, renderable
- * JS-string segments.
- *
- * `epic.searchArtifacts` returns snippet highlight ranges as BYTE offsets into
- * the UTF-8 encoding of `snippet.text` (ripgrep submatch offsets), not UTF-16 /
- * JS string indices. A naive `text.slice(startByte, endByte)` would mis-slice
- * any snippet containing a multibyte character (e.g. `naïve`, emoji, CJK). This
- * maps each byte boundary to its UTF-16 index by walking the string's code
- * points once, then slices on those boundaries.
- *
- * The host already bounds snippet text and clamps/drops ranges so every range
- * addresses the returned text (Ticket 2 hardening), but this stays defensive:
- * ranges are clamped to the snippet's byte length, empty/inverted ranges are
- * dropped, and overlapping ranges are merged so the output is always a clean,
- * gap-free left-to-right partition of `text`.
- */
+/** Turn a body-snippet's UTF-8 byte highlight ranges into ordered, renderable JS-string segments. */
 
 export interface SnippetByteRange {
   readonly startByte: number;
@@ -60,11 +44,8 @@ function mergeSortedRanges(
 }
 
 /**
- * Partition `text` into highlighted / non-highlighted segments from UTF-8 byte
- * ranges. Segments are contiguous and cover the whole string in order, so a
- * consumer renders them as a flat run of `<span>`s. Returns a single
- * non-highlighted segment when there is nothing to highlight, and `[]` for an
- * empty string.
+ * Partition `text` into highlighted / non-highlighted segments from UTF-8 byte ranges.
+ * Segments are contiguous and cover the whole string in order, so a consumer renders them as a flat run of `<span>`s.
  */
 export function highlightSegmentsFromByteRanges(
   text: string,

@@ -13,27 +13,15 @@ import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
- * The row's HOST SCOPE, pinned.
- *
- * This is a regression, not a coverage exercise: the row first shipped reading
- * `useTabHostId()`, and the sidebar is not a tab - it renders outside
- * `<TabHostProvider>`. The guard threw, an error boundary caught it, and the
- * production failure mode was therefore a silently missing row rather than a
- * crash. Nothing about that is visible in a type check, so it needs a mount.
- *
- * The assertion is the MECHANISM: this suite deliberately does NOT wrap the row
- * in a `<TabHostProvider>`, so a tab-scoped host read throws and the render
- * fails. Nothing here clicks anything - jsdom passes clicks on pointer-inert
- * elements, so the open path is verified in the live app instead.
+ * The guard threw, an error boundary caught it, and the production failure mode was therefore a silently missing row rather than a crash.
+ * Nothing here clicks anything - jsdom passes clicks on pointer-inert elements, so the open path is verified in the live app instead.
  */
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
 }));
 
-// Typed against the hook's own union so the stand-in cannot produce a status
-// the production code has no branch for - an unchecked string here would let a
-// typo silently render the unreachable arm under a "reachable" test name.
+// Typed against the hook's own union so the stand-in cannot produce a status the production code has no branch for - an unchecked string here would let a typo silently render the unreachable arm under a "reachable" test name.
 const reachability: { status: HostReachabilityStatus; hostLabel: string } = {
   status: "unreachable",
   hostLabel: "Tanveer's laptop",
@@ -60,13 +48,6 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile }),
 }));
 
-/**
- * What the tab's active pane is showing, as the two per-row store selectors
- * read it: the active RECORD-BACKED artifact id (a live chat tile), and the
- * active raw tile id (which is all a non-record-backed published copy has).
- * Driven per-test; both hooks answer against this exactly as the real
- * selectors answer against the store.
- */
 const activeInTab: { artifactId: string | null; tileId: string | null } = {
   artifactId: null,
   tileId: null,
@@ -138,10 +119,7 @@ describe("EpicSidebarCloudChatRow", () => {
   });
 
   it("names the owning host in the ROW's accessible name, not on the glyph", () => {
-    // Hosts are a property of the row now, and so is being locked. An
-    // `aria-label` on the glyph inside a labelled button never surfaces, and the
-    // tooltip beside it is hover-only, so the state has to reach the name the
-    // row announces or it reaches nobody.
+    // An `aria-label` on the glyph inside a labelled button never surfaces, and the tooltip beside it is hover-only, so the state has to reach the name the row announces or it reaches nobody.
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
@@ -158,9 +136,7 @@ describe("EpicSidebarCloudChatRow", () => {
   });
 
   it("keeps a reachable row's accessible name to the chat title", () => {
-    // The row carries a timestamp with its own text; without an explicit label
-    // it would announce as both run together - the same reason the local rows
-    // set one. A row that is NOT locked has nothing to add to the title.
+    // The row carries a timestamp with its own text; without an explicit label it would announce as both run together - the same reason the local rows set one.
     reachability.status = "reachable";
     render(
       <EpicSidebarCloudChatRow
@@ -174,10 +150,7 @@ describe("EpicSidebarCloudChatRow", () => {
   });
 
   it("drops the lock when the chat is here and its owner is reachable", () => {
-    // The lock is the chat's STATE. It is dropped for a row that will really
-    // open live - which needs the chat present on this device as well as its
-    // owner answering; a reachable host that does not hold the chat cannot
-    // steer it, so claiming otherwise would be the false statement.
+    // It is dropped for a row that will really open live - which needs the chat present on this device as well as its owner answering; a reachable host that does not hold the chat cannot steer it, so claiming otherwise would be the false statement.
     reachability.status = "reachable";
     render(
       <EpicSidebarCloudChatRow
@@ -219,10 +192,6 @@ describe("EpicSidebarCloudChatRow", () => {
     }
 
     it("opens LIVE, bound to the owner host, when the owner is reachable", () => {
-      // Host ids are unique (2026-08-07 ruling): a reachable owner IS the
-      // machine that holds this chat, so the click opens the ordinary live
-      // chat ref against it - the same ref shape a tree row opens - and the
-      // tile subscribes cross-host without needing a local projection record.
       reachability.status = "reachable";
       renderRow();
       clickRow();
@@ -240,9 +209,7 @@ describe("EpicSidebarCloudChatRow", () => {
     });
 
     it("opens NOTHING while the sidebar is in bulk-selection mode", () => {
-      // A cloud row is not selectable - archive and delete are the bulk actions
-      // and neither belongs to a chat this device does not own - so it goes
-      // inert rather than navigating away from a selection in progress.
+      // A cloud row is not selectable - archive and delete are the bulk actions and neither belongs to a chat this device does not own - so it goes inert rather than navigating away from a selection in progress.
       reachability.status = "unreachable";
       render(
         <EpicSidebarCloudChatRow
@@ -300,12 +267,7 @@ describe("EpicSidebarCloudChatRow", () => {
     });
 
     it("tints the chat glyph exactly as a local row does", () => {
-      // The regression: this row hardcoded `text-muted-foreground` while local
-      // rows resolved the settings-driven per-type color, so the icon column
-      // encoded row ORIGIN (own = colored, cloud = grey). Read-only-ness is
-      // the trailing lock's job; the leading glyph's tint must follow the one
-      // shared rule. Default settings = "byType", so the glyph carries the
-      // chat color as an inline style and no muted class.
+      // Read-only-ness is the trailing lock's job; the leading glyph's tint must follow the one shared rule.
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
@@ -321,9 +283,7 @@ describe("EpicSidebarCloudChatRow", () => {
       if (!(glyph instanceof SVGElement)) {
         throw new Error("cloud row rendered no chat glyph");
       }
-      // jsdom normalizes the hex to rgb(); compare through a probe element so
-      // the assertion states "same color as the settings default" rather than
-      // hardcoding one serialization.
+      // jsdom normalizes the hex to rgb(); compare through a probe element so the assertion states "same color as the settings default" rather than hardcoding one serialization.
       const probe = document.createElement("span");
       probe.style.color = DEFAULT_EPIC_NODE_ICON_COLORS.chat;
       expect(glyph.style.color).toBe(probe.style.color);
@@ -331,9 +291,7 @@ describe("EpicSidebarCloudChatRow", () => {
     });
 
     it("follows a USER-CUSTOMIZED chat color, not a hardcoded default", () => {
-      // The default-color case above cannot tell "resolves the settings-driven
-      // color" apart from "hardcodes the default" - they render identically
-      // until the user actually customizes the color.
+      // The default-color case above cannot tell "resolves the settings-driven color" apart from "hardcodes the default" - they render identically until the user actually customizes the color.
       useSettingsStore.setState({
         artifactIconColors: {
           ...DEFAULT_EPIC_NODE_ICON_COLORS,
@@ -401,9 +359,7 @@ describe("EpicSidebarCloudChatRow", () => {
   });
 
   describe("the row highlights when ITS chat is what the tab is showing", () => {
-    // The regression: the row hardcoded `aria-selected={false}` and carried
-    // only the inactive styling arm, so the active chat's own sidebar row sat
-    // unhighlighted while every tree row lit up via the same selectors.
+    // The regression: the row hardcoded `aria-selected={false}` and carried only the inactive styling arm, so the active chat's own sidebar row sat unhighlighted while every tree row lit up via the same selectors.
     function renderRow(): void {
       render(
         <EpicSidebarCloudChatRow
@@ -460,9 +416,7 @@ describe("EpicSidebarCloudChatRow", () => {
 });
 
 /**
- * A cloud row inside a mounted surface. Its tap must dismiss the surface the
- * same way a local row's does - it sits in the same tree, and a row that opens
- * a tile behind a sheet nothing closes is the bug this covers.
+ * Its tap must dismiss the surface the same way a local row's does - it sits in the same tree, and a row that opens a tile behind a sheet nothing closes is the bug this covers.
  */
 describe("EpicSidebarCloudChatRow on a mounting surface", () => {
   function surfaceValue(onRowActivated: () => void): ChatTreeSurface {

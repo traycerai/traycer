@@ -28,16 +28,13 @@ import {
   type GitBundleDiffTileRef,
 } from "./git-diff-tile-shared";
 
-// Stable identity for a bundle file within the find index. Used by both the
-// find machinery and the section renderer so coverage/patch registration and
-// reveal target the same file id.
+// Stable identity for a bundle file within the find index.
+// Used by both the find machinery and the section renderer so coverage/patch registration and reveal target the same file id.
 export function gitBundleDiffFindFileId(file: GitChangedFile): string {
   return `git:${file.stage}:${file.path}`;
 }
 
-// Cache key for a loaded inline patch registered against the bundle find
-// session; identifies the exact diff bytes so the find index can keep an
-// already-loaded patch searchable after its virtualized row unmounts.
+// Cache key for a loaded inline patch registered against the bundle find session; identifies the exact diff bytes so the find index can keep an already-loaded patch searchable after its virtualized row unmounts.
 export function gitBundleLoadedPatchCacheKey(args: {
   readonly node: GitBundleDiffTileRef;
   readonly file: GitChangedFile;
@@ -133,10 +130,7 @@ function gitBundleDiffFindContentIdentity(args: {
   ]);
 }
 
-// Owns the bundle find session: file-input construction, content identity,
-// collapsed-file expansion, navigation, and adapter registration. The renderer
-// stays responsible only for the changed-file list, scroll restoration, and
-// composing the result into the virtualized tree.
+// The renderer stays responsible only for the changed-file list, scroll restoration, and composing the result into the virtualized tree.
 export function useGitBundleDiffFind(args: {
   readonly node: GitBundleDiffTileRef;
   readonly viewTabId: string;

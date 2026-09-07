@@ -53,31 +53,19 @@ import {
   visibleModelProviderPrompts,
 } from "./model-provider-prompts";
 
-/**
- * How often the `auto` flow asks the host whether the browser round trip
- * finished. The call is a bounded registry read, not a long poll, so the
- * cadence is ours to pick: fast enough that a completed sign-in does not sit
- * unnoticed, slow enough that a user who wandered off is not generating a
- * request per second for the length of an OAuth consent screen.
- */
+/** The call is a bounded registry read, not a long poll, so the cadence is ours to pick. */
 const OAUTH_AUTO_POLL_MS = 1_500;
 
-/** The live attempt a waiting panel is rendered from. */
 type LiveAttempt = {
   readonly attemptId: string;
   readonly authorizationUrl: string;
   readonly method: "auto" | "code";
   readonly instructions: string | null;
-  /** When this attempt STARTED, never when it was last polled. */
+  /** When this attempt started, never when it was last polled. */
   readonly startedAt: number;
 };
 
-/**
- * Same attempt, same data. Returns the previous object so a steady poll - which
- * re-sends the identical authorization payload every tick - produces no state
- * change, and so nothing downstream of it (the polling effect included) churns
- * once per second for the length of an OAuth consent screen.
- */
+/** Same attempt, same data. */
 function sameLiveAttempt(left: LiveAttempt, right: LiveAttempt): boolean {
   return (
     left.attemptId === right.attemptId &&
@@ -95,11 +83,7 @@ export function ProviderModelProviderConnectDialog(props: {
   readonly entry: ModelProviderEntry;
   readonly capabilities: ProviderModelProvidersCapabilities;
   readonly hostId: string | null;
-  /**
-   * An attempt this dialog is resuming after a navigation, or null for a fresh
-   * open. Read once at mount (the dialog is keyed by model provider, so a
-   * different provider is a different component instance).
-   */
+  /** An attempt this dialog is resuming after a navigation, or null for a fresh open. */
   readonly resumedAttempt: ModelProviderPendingAuthEntry | null;
   readonly onDone: () => void;
 }): ReactNode {
@@ -151,9 +135,8 @@ export function ProviderModelProviderConnectDialog(props: {
   const pendingAuthRemove = useModelProviderPendingAuthStore((s) => s.remove);
   const pendingAuthGet = useModelProviderPendingAuthStore((s) => s.get);
 
-  // Null while the host binding has not settled: an attempt cannot be filed
-  // under an unknown host, and a record filed under the wrong one can never be
-  // resumed against the list it started from.
+  // Null while the host binding has not settled: an attempt cannot be filed under an unknown host, and a record
+  // filed under the wrong one can never be resumed against the list it started from.
   const pendingKey = useMemo(
     () =>
       hostId === null
@@ -162,9 +145,8 @@ export function ProviderModelProviderConnectDialog(props: {
     [hostId, providerId, entry.id],
   );
 
-  // Switching sign-in method rebuilds the form: the prompts belong to the
-  // METHOD, so carrying answers across would submit one method's fields under
-  // another's keys - which the host rejects as an unexpected field, correctly.
+  // Switching sign-in method rebuilds the form: the prompts belong to the method, so carrying answers across
+  // would submit one method's fields under another's keys.
   const handleChoiceChange = useCallback(
     (nextId: string) => {
       setChoiceId(nextId);
@@ -184,10 +166,8 @@ export function ProviderModelProviderConnectDialog(props: {
     });
   }, []);
 
-  // Drops the LOCAL panel and, only if the store still holds this exact
-  // attempt, its resume record. Both halves are guarded by `attemptId`: a
-  // teardown that resolves after the user started a newer attempt for the same
-  // row must not take the newer one's surface or its record with it.
+  // Both halves are guarded by `attemptId`: a teardown that resolves after the user started a newer attempt for
+  // the same row must not take the newer one's surface or its record with it.
   const forgetAttempt = useCallback(
     (attemptId: string) => {
       setAttempt((current) =>
@@ -201,18 +181,8 @@ export function ProviderModelProviderConnectDialog(props: {
 
   const liveAttemptId = attempt === null ? null : attempt.attemptId;
 
-  /**
-   * The one place a wire result becomes UI state, so every call site (connect,
-   * startOauth, submitCode, a status tick, a settled cancel) agrees about what
-   * `attempt_superseded` or `unsupported` means.
-   *
-   * It deliberately CANNOT reach the browser. Opening the sign-in page belongs
-   * to {@link applyStartResult} alone - see its note for why a status tick that
-   * carries an `authorizationUrl` must not be treated as a fresh start.
-   *
-   * `fromPoll` exists because ONE disposition means different things depending
-   * on who asked. See the `report` arm.
-   */
+  /** It deliberately cannot reach the browser. Opening the sign-in page belongs to applyStartResult alone - see
+   * its note for why a status tick that carries an `authorizationUrl` must not be treated as a fresh start. */
   const applyResult = useCallback(
     (result: ModelProviderAuthResult, fromPoll: boolean) => {
       switch (result.kind) {
@@ -236,9 +206,8 @@ export function ProviderModelProviderConnectDialog(props: {
               authorizationUrl: result.authorizationUrl,
               method: result.method,
               instructions: result.instructions,
-              // A tick REFRESHES an attempt the panel already holds; only a
-              // genuinely new attempt starts a new clock. Restamping every tick
-              // would make the newest-wins resume ordering meaningless.
+              // A tick refreshes an attempt the panel already holds; only a genuinely new attempt starts a new clock.
+              // Restamping every tick would make the newest-wins resume ordering meaningless.
               startedAt:
                 current !== null && current.attemptId === result.attemptId
                   ? current.startedAt
@@ -259,12 +228,8 @@ export function ProviderModelProviderConnectDialog(props: {
           );
           switch (modelProviderAuthErrorDisposition(result.code)) {
             case "stand-down":
-              // A newer attempt owns this provider now. Say nothing and drop
-              // this panel - the surface belongs to the other attempt.
-              //
-              // The LOCAL panel only: the store slot for this row has already
-              // been claimed by the newer attempt, whose resume record must
-              // survive.
+              // Say nothing and drop this panel - the surface belongs to the other attempt. The local panel only: the store
+              // slot for this row has already been claimed by the newer attempt, whose resume record must survive.
               setAttempt(null);
               setCode("");
               return;
@@ -278,14 +243,8 @@ export function ProviderModelProviderConnectDialog(props: {
               setErrorMessage(message);
               return;
             case "report":
-              // A `report` from a SUBMIT is advice: the attempt is untouched
-              // and the user can try again against it. A `report` from a POLL
-              // is a post-mortem - the host only answers a status read this way
-              // once the attempt has already terminalized (the background
-              // callback failed, its lease was released, the row is settled).
-              // Leaving the panel "Waiting" on that answer strands the user
-              // forever: nothing further will ever arrive, and Stop waiting has
-              // no live attempt left to cancel.
+              // A `report` from a poll is a post-mortem - the host only answers a status read this way once the attempt has
+              // already terminalized (the background callback failed, its lease was released, the row is settled).
               if (fromPoll) {
                 if (liveAttemptId !== null) forgetAttempt(liveAttemptId);
                 setRestartNotice(message);
@@ -300,18 +259,8 @@ export function ProviderModelProviderConnectDialog(props: {
     [forgetAttempt, liveAttemptId, onDone],
   );
 
-  /**
-   * The START path: the user asked for this sign-in just now. Records the
-   * attempt so it survives a navigation, then opens the provider's page.
-   *
-   * This is the ONLY function in the file that reaches the browser, and that
-   * matters because of how the host answers a status poll: a still-pending
-   * attempt comes back as the STORED `authorizationUrl`, not as
-   * `{ kind: "pending" }`, so a re-attaching client can still show the
-   * provider's page and instructions. That is the right wire shape and the
-   * wrong thing to open a tab on - handling both paths in one place reopened
-   * the sign-in page on every tick of a flow the user was already inside.
-   */
+  /** This is the only function in the file that reaches the browser, and that matters because of how the host
+   * answers a status poll: a still-pending attempt comes back as the stored `authorizationUrl`, not as `{ kind. */
   const applyStartResult = useCallback(
     (result: ModelProviderAuthResult) => {
       applyResult(result, false);
@@ -333,10 +282,8 @@ export function ProviderModelProviderConnectDialog(props: {
     [applyResult, openLink, pendingAuthUpsert, pendingKey],
   );
 
-  /**
-   * A status tick. Refreshes what the resume record knows - the host may have
-   * learned the provider's instructions since - and never touches the browser.
-   */
+  /** Refreshes what the resume record knows - the host may have learned the provider's instructions since - and
+   * never touches the browser. */
   const applyPollResult = useCallback(
     (result: ModelProviderAuthResult) => {
       applyResult(result, true);
@@ -362,16 +309,8 @@ export function ProviderModelProviderConnectDialog(props: {
     [applyResult, pendingAuthGet, pendingAuthUpsert, pendingKey],
   );
 
-  /**
-   * The `auto` arm completes on the server's own loopback, so the only way to
-   * learn about it is to ask.
-   *
-   * SINGLE-FLIGHT: the next tick is scheduled when the previous one settles,
-   * never on a fixed interval. A `setInterval` keeps firing while a slow or
-   * stalled request is still open, so a host that takes longer than the cadence
-   * accumulates overlapping polls for one attempt - each one re-leasing the
-   * managed server this flow is trying not to churn.
-   */
+  /** The `auto` arm completes on the server's own loopback, so the only way to learn about it is to ask.
+   * Single-flight: the next tick is scheduled when the previous one settles, never on a fixed interval. */
   const awaitMutate = awaitAuth.mutate;
   const shouldPoll = attempt !== null && attempt.method === "auto";
   const pollAttemptId = attempt === null ? null : attempt.attemptId;
@@ -446,10 +385,8 @@ export function ProviderModelProviderConnectDialog(props: {
       );
       return;
     }
-    // `key` is the pasted SECRET, not a key name - upstream's `ApiAuth.key`,
-    // which reads like an identifier and is not one. The client no longer says
-    // anything about where the credential belongs: the provider's own store
-    // takes whatever is sent.
+    // `key` is the pasted secret, not a key name - upstream's `ApiAuth.key`, which reads like an identifier and is
+    // not one.
     auth.mutate(
       {
         providerId,
@@ -475,11 +412,8 @@ export function ProviderModelProviderConnectDialog(props: {
   ]);
 
   const handleSubmitCode = useCallback(() => {
-    // Guarded HERE, not only on the button: the paste field submits on Enter
-    // too, and two fast Enters would send the same `attemptId` twice. The host
-    // consumes the first, so the second comes back as a failure against an
-    // attempt that actually succeeded - the user is told their code was
-    // rejected when it was not.
+    // Guarded here, not only on the button: the paste field submits on Enter too, and two fast Enters would send
+    // the same `attemptId` twice.
     if (attempt === null || auth.isPending || code.trim().length === 0) return;
     setErrorMessage(null);
     auth.mutate(
@@ -496,16 +430,7 @@ export function ProviderModelProviderConnectDialog(props: {
     );
   }, [applyResult, attempt, auth, code, entry.id, providerId]);
 
-  /**
-   * "Stop waiting". Best-effort and LOCAL - upstream exposes no OAuth-cancel
-   * endpoint, so this asks the host to drop its pending attempt and release the
-   * server lease it is holding.
-   *
-   * The attempt and its resume record are kept until the host CONFIRMS. Tearing
-   * them down optimistically was worse than it looks: a transport failure then
-   * left a live attempt on the host, holding a lease, with no surface left that
-   * could retry the cancel or reach the flow again.
-   */
+  /** "Stop waiting". */
   const handleCancelAttempt = useCallback(() => {
     if (attempt === null) return;
     const attemptId = attempt.attemptId;
@@ -515,16 +440,13 @@ export function ProviderModelProviderConnectDialog(props: {
       {
         onSuccess: (data) => {
           if (data.cancelled) {
-            // A live attempt was found and torn down. The host reports that as
-            // `{ cancelled: true, result: done }` - `done` describing the
-            // cancel, NOT a credential. Feeding it to `applyResult` would close
-            // the dialog claiming the provider had connected.
+            // The host reports that as `{ cancelled: true, result: done }` - `done` describing the cancel, not a
+            // credential. Feeding it to `applyResult` would close the dialog claiming the provider had connected.
             forgetAttempt(attemptId);
             return;
           }
-          // Nothing was pending: the attempt had already settled, expired or
-          // been superseded while the click was in flight, and `result` says
-          // which. That one IS a real outcome.
+          // Nothing was pending: the attempt had already settled, expired or been superseded while the click was in
+          // flight, and `result` says which.
           applyResult(data.result, false);
         },
         onError: () => {
@@ -536,15 +458,8 @@ export function ProviderModelProviderConnectDialog(props: {
     );
   }, [applyResult, attempt, cancelAuth, entry.id, forgetAttempt, providerId]);
 
-  // Three mutually exclusive bodies, resolved as statements rather than nested
-  // ternaries inside the JSX: the surface a live attempt owns is not a variant
-  // of the form, it replaces it.
-  //
-  // The empty case is reachable again, and means something different than it
-  // used to. Synthesis moved host-side, so this file no longer invents a
-  // plain-key choice for a row that arrived without methods - an empty
-  // `choices` now means the HOST offered nothing for this provider, which is
-  // worth saying rather than rendering a picker with no options in it.
+  // Three mutually exclusive bodies, resolved as statements rather than nested ternaries inside the JSX: the
+  // surface a live attempt owns is not a variant of the form, it replaces it.
   let body: ReactNode;
   if (choices.length === 0) {
     body = (
@@ -625,12 +540,8 @@ export function ProviderModelProviderConnectDialog(props: {
 
 function ConnectForm(props: {
   readonly providerLabel: string;
-  /**
-   * What already supplies this provider's credential, when something does.
-   * Shown BEFORE the fields rather than gating them: the sign-in is legitimate
-   * and will be stored, it just may not take effect while the other source
-   * outranks it.
-   */
+  /** Shown before the fields rather than gating them: the sign-in is legitimate and will be stored, it just may
+   * not take effect while the other source outranks it. */
   readonly precedenceNotice: string | null;
   readonly choices: readonly ConnectChoice[];
   readonly choice: ConnectChoice | null;
@@ -718,15 +629,10 @@ function ConnectForm(props: {
   );
 }
 
-/**
- * A single choice is not a choice: with one way in, the picker would be a
- * control whose only job is to display a constant.
- */
-/**
- * Shown BEFORE the fields, not in place of them: what already supplies this
- * provider's credential outranks what the user is about to save, but the
- * sign-in is still legitimate and still stored.
- */
+/** A single choice is not a choice: with one way in, the picker would be a control whose only job is to display
+ * a constant. */
+/** Shown before the fields, not in place of them: what already supplies this provider's credential outranks
+ * what the user is about to save, but the sign-in is still legitimate and still stored. */
 function PrecedenceNotice(props: {
   readonly notice: string | null;
 }): ReactNode {
@@ -785,10 +691,8 @@ function CredentialField(props: {
         disabled={props.disabled}
         onChange={(event) => props.onSecretChange(event.target.value)}
       />
-      {/* No env-var name any more: that came from `credentialKey`, which went
-          with the classifier that decided which providers could be given a key
-          at all. The destination is still worth stating - it is what makes this
-          tab and the provider's own CLI interchangeable. */}
+      {/* No env-var name any more: that came from `credentialKey`, which went with the classifier that decided which
+         providers could be given a key at all. */}
       <p className="text-ui-xs text-muted-foreground">
         Stored by {props.providerLabel}. It is never shown again.
       </p>
@@ -841,17 +745,7 @@ function PromptField(props: {
   );
 }
 
-/**
- * The code some `auto` flows ask the user to READ off this screen and type into
- * the browser, lifted out of the instructions and given a field of its own.
- *
- * The instructions stay above it verbatim rather than being replaced: they are
- * the provider's own wording for a flow Traycer does not otherwise understand,
- * and this only promotes the one fragment that has to be transcribed. When
- * nothing code-shaped can be lifted (see `extractConfirmationCode`), this
- * renders nothing and the prose is all there is - which is exactly what the
- * panel showed before.
- */
+/** The instructions stay above it verbatim rather than being replaced. */
 function ConfirmationCodeField(props: {
   readonly code: string | null;
 }): ReactNode {
@@ -894,13 +788,8 @@ function ConfirmationCodeField(props: {
   );
 }
 
-/**
- * The panel a live OAuth attempt owns.
- *
- * Both arms show the provider's own `instructions` verbatim when it sent any -
- * it is the only honest copy for a flow Traycer does not otherwise understand,
- * and paraphrasing it would invent steps.
- */
+/** Both arms show the provider's own `instructions` verbatim when it sent any - it is the only honest copy for
+ * a flow Traycer does not otherwise understand, and paraphrasing it would invent steps. */
 function OauthWaitingPanel(props: {
   readonly attempt: LiveAttempt;
   readonly code: string;
@@ -911,7 +800,6 @@ function OauthWaitingPanel(props: {
   readonly submitting: boolean;
   readonly cancelling: boolean;
   readonly errorMessage: string | null;
-  /** A cancel that could not be delivered - the attempt is still live. */
   readonly cancelError: string | null;
 }): ReactNode {
   const codeId = useId();
@@ -986,9 +874,7 @@ function OauthWaitingPanel(props: {
           <ExternalLink className="size-3.5" />
           Reopen sign-in page
         </Button>
-        {/* Honest label: upstream has no OAuth-cancel endpoint, so this stops
-            Traycer waiting and releases the server it was holding. It does not
-            revoke anything at the provider. */}
+        {/* It does not revoke anything at the provider. */}
         <Button
           type="button"
           size="sm"

@@ -41,20 +41,12 @@ export function useProvidersSkillsList(args: {
     options: {
       enabled: args.enabled,
       staleTime: 30_000,
-      // Same reason as the plugins list: `providers.list` is condition-polled
-      // and condition queries join the table-owned poll BY DEFAULT.
-      // `refetchInterval` fires regardless of `staleTime`, so omitting this
-      // would re-list on the shared ~800ms cadence.
+      // `refetchInterval` fires regardless of `staleTime`, so omitting this would re-list on the shared ~800ms cadence.
       poll: false,
     },
   });
 
   // Opting out of the table poll removed the last thing that refetched this.
-  // Mutations update the cache themselves, but skills also change outside
-  // the GUI (npx skills, a terminal, another provider tab) and nothing else
-  // would notice: the app's QueryClient sets refetchOnWindowFocus/Reconnect
-  // false, and the Providers header refresh only targets the classic
-  // `{ native: null }` query.
   const { refetch } = query;
   const enabled = args.enabled;
   useEffect(() => {

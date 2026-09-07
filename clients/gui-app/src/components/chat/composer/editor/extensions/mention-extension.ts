@@ -29,13 +29,7 @@ export interface MentionExtensionDeps {
   readonly pickerStore: ComposerPickerStore;
 }
 
-/**
- * Stable key for the `@` mention suggestion plugin. Exported (and pinned via the
- * suggestion config below, overriding extension-mention's auto-generated key) so
- * code outside the editor can imperatively exit an open suggestion by
- * dispatching `setMeta(mentionSuggestionPluginKey, { exit: true })` - see the
- * editor's `dismissActiveSuggestion` handle.
- */
+/** Stable key for the `@` mention suggestion plugin. Exported (and pinned via the suggestion config below, overriding extension-mention's auto-generated key) so code outside the editor can imperatively exit an open suggestion by dispatching `setMeta(mentionSuggestionPluginKey, { exit: true })` - see the editor's `dismissActiveSuggestion` handle. */
 export const mentionSuggestionPluginKey = new PluginKey(
   "composer-mention-suggestion",
 );
@@ -83,10 +77,8 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
       pluginKey: mentionSuggestionPluginKey,
       char: "@",
       allowSpaces: true,
-      // Word-boundary trigger only: `@` opens the menu at the start of a
-      // block or after a space, never mid-word - typing an email
-      // (`user@host.com`) must not pop the menu at `@host`. (`null` here
-      // means "trigger anywhere".)
+      // Word-boundary trigger only: `@` opens the menu at the start of a block or after a space, never mid-word - typing an email (`user@host.com`) must not pop the menu at `@host`.
+      // (`null` here means "trigger anywhere".)
       allowedPrefixes: [" "],
       decorationTag: "span",
       decorationClass: "",
@@ -122,12 +114,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
   return ChatMention;
 }
 
-/**
- * A cross-host tab commits its text line synchronously - the pick must feel
- * immediate, and the line is the part that always exists - then appends the
- * screenshot when the owning host answers. A capture that fails or is refused
- * (a dormant tab is never woken for a preview) simply appends nothing.
- */
+/** A cross-host tab commits its text line synchronously - the pick must feel immediate, and the line is the part that always exists - then appends the screenshot when the owning host answers. A capture that fails or is refused (a dormant tab is never woken for a preview) simply appends nothing. */
 export function commitBrowserTabPreviewInsertion(
   editor: Editor,
   range: { from: number; to: number },
@@ -146,10 +133,8 @@ export function commitBrowserTabPreviewInsertion(
   const draftGeneration = composerDraftGeneration(editor);
   void fetchBrowserTabPreviewImage(entry).then((image) => {
     if (image === null || editor.isDestroyed) return;
-    // The draft this pick belonged to is gone (the user sent it, or it was
-    // replaced): the editor is still alive, so without this the screenshot
-    // would land in the NEXT message. No `.focus()` either - a late insert
-    // must not steal the caret from whatever the user is doing now.
+    // The draft this pick belonged to is gone (the user sent it, or it was replaced): the editor is still alive, so without this the screenshot would land in the NEXT message.
+    // No `.focus()` either - a late insert must not steal the caret from whatever the user is doing now.
     if (composerDraftGeneration(editor) !== draftGeneration) return;
     editor.chain().insertImageAttachment(image).run();
   });

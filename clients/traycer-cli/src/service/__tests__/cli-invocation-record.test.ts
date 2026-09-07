@@ -65,41 +65,21 @@ const mocks = vi.hoisted(() => ({
   crashOnLifecycleRename: false,
   failNextWrite: false,
   failLifecycleTempWrite: false,
-  // 1-indexed call number of writeFile to fail (txn=1, staging=2,
-  // stale-marker=3 on the commit-failure path). 0 means "use failNextWrite".
-  // txn=1: the unique transaction contender write in `createUniqueContender`,
-  // which happens before the staging write (staging=2) in
-  // `runServiceRegistrationWithInvocationRecord`.
+  // 1-indexed call number of writeFile to fail (txn=1, staging=2, stale-marker=3 on the commit-failure path). 0 means "use failNextWrite". txn=1: the unique transaction contender write in `createUniqueContender`, which happens before the staging write (staging=2) in `runServiceRegistrationWithInvocationRecord`.
   failWriteCallNumber: 0,
   writeFileCallCount: 0,
-  // Fails the NEXT `rm` call whose target path equals `failRmPath` (or, when
-  // `failRmPath` is null, any `rm` call at all) with an EACCES-shaped error.
-  // Used to simulate the live-record removal in
-  // `runServiceUninstallWithInvocationRecord` failing after a confirmed OS
-  // uninstall.
+  // Fails the NEXT `rm` call whose target path equals `failRmPath` (or, when `failRmPath` is null, any `rm` call at all) with an EACCES-shaped error.
+  // Used to simulate the live-record removal in `runServiceUninstallWithInvocationRecord` failing after a confirmed OS uninstall.
   failNextRm: false,
   failRmPath: null as string | null,
-  // Makes the NEXT `rm` call whose target path equals `noopRmPath` resolve
-  // successfully WITHOUT touching the file - unlike `failRmPath`, which
-  // makes `rm` reject. This is the only way this suite can express "the OS
-  // call reported success but the file is still there" (a real-world
-  // Windows sharing-violation-shaped case that a plain rejection cannot
-  // model): production code has no seam for it, so it is approximated here,
-  // entirely inside this test file's own `vi.mock`, by simply not calling
-  // through to the real `rm`. Reset after one use, symmetric with
-  // `failRmPath`.
+  // Makes the NEXT `rm` call whose target path equals `noopRmPath` resolve successfully WITHOUT touching the file - unlike `failRmPath`, which makes `rm` reject.
+  // This is the only way this suite can express "the OS call reported success but the file is still there" (a real-world Windows sharing-violation-shaped case that a plain rejection cannot model): production code has no seam for it, so it is approximated here, entirely inside this test file's own `vi.mock`, by simply not calling through to the real `rm`.
   noopRmPath: null as string | null,
-  // Fails the NEXT `open` call whose target basename equals
-  // `failOpenForBasename`, but ONLY on a read-shaped open (flags without
-  // `O_CREAT` - `openFlagsForAuthorityRead`). A create-shaped open
-  // (`openFlagsForExclusiveCreate`, which always carries `O_CREAT`) is left
-  // alone, so a marker/record/stale WRITE through the same basename still
-  // succeeds while a READ of it is what fails.
+  // Fails the NEXT `open` call whose target basename equals `failOpenForBasename`, but ONLY on a read-shaped open (flags without `O_CREAT` - `openFlagsForAuthorityRead`).
+  // A create-shaped open (`openFlagsForExclusiveCreate`, which always carries `O_CREAT`) is left alone, so a marker/record/stale WRITE through the same basename still succeeds while a READ of it is what fails.
   failOpenForBasename: null as string | null,
   failOpenCode: "EBUSY",
-  // Makes the NEXT `close()` of a handle whose basename starts with this
-  // prefix reject with an EIO-shaped error AFTER the real close succeeded -
-  // the delayed write-back failure a filesystem reports only at close.
+  // Makes the NEXT `close()` of a handle whose basename starts with this prefix reject with an EIO-shaped error AFTER the real close succeeded - the delayed write-back failure a filesystem reports only at close.
   // Reset after one use.
   failCloseForPrefix: null as string | null,
   // 1-indexed `readdir` call number (counted only while non-zero) to reject
@@ -109,9 +89,8 @@ const mocks = vi.hoisted(() => ({
   // Every `handle.readFile()` on a handle this suite opened. Production must
   // never read an authority file unbounded, so a test can assert zero.
   unboundedReadFileCalls: 0,
-  // When > 0, every positional `handle.read` returns at most this many bytes,
-  // the short-read behaviour a real file may exhibit and a reader must loop
-  // over. Reset per test.
+  // When > 0, every positional `handle.read` returns at most this many bytes, the short-read behaviour a real file may exhibit and a reader must loop over.
+  // Reset per test.
   shortReadChunkBytes: 0,
 }));
 
@@ -290,10 +269,7 @@ const WORKER_SCRIPT = join(__dirname, "fixtures", "cli-invocation-worker.ts");
 
 let hostHome = "";
 let scriptPath = "";
-// A regular, executable, non-node-family file: usable as `command` in tests
-// that need to exercise argument validation without also tripping the
-// npm-shape "leading arg must be absolute" rule (that rule only applies to
-// a `node`/`bun` command basename).
+// A regular, executable, non-node-family file: usable as `command` in tests that need to exercise argument validation without also tripping the npm-shape "leading arg must be absolute" rule (that rule only applies to a `node`/`bun` command basename).
 let standaloneCliPath = "";
 
 beforeEach(async () => {
@@ -539,10 +515,8 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
         },
       }),
     ).rejects.toThrow("os-refused");
-    // The controllers do not roll back, so the prior live record - matching
-    // this label - may now describe a registration that no longer exists. It
-    // is removed, and a stale marker carrying our label sends the host to the
-    // OS definition instead.
+    // The controllers do not roll back, so the prior live record - matching this label - may now describe a registration that no longer exists.
+    // It is removed, and a stale marker carrying our label sends the host to the OS definition instead.
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
     const stale = parseCliInvocationStaleMarker(
       JSON.parse(
@@ -688,9 +662,7 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
       }),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
     expect(osMutated).toBe(true);
-    // Stale write failed, so the txn marker is deliberately kept: the host
-    // must not persist a recovery while either marker exists, and this is
-    // the only remaining signal that the live record predates the OS change.
+    // Stale write failed, so the txn marker is deliberately kept: the host must not persist a recovery while either marker exists, and this is the only remaining signal that the live record predates the OS change.
     expect(await transactionMarkerNames()).toHaveLength(1);
     expect(await exists(cliInvocationRecordStaleMarkerPath(hostHome))).toBe(
       false,
@@ -873,14 +845,8 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
   });
   it("commits the record but reports stale-clear failure when `rm` resolves yet the own-label marker is still readable afterward", async () => {
-    // `removeStaleMarkerIfOwn` treats `rm` resolving as necessary but not
-    // sufficient: it must also CONFIRM the marker is gone afterward
-    // (`confirmAbsent`). Mechanism: `mocks.noopRmPath` (this test file's own
-    // seam, see its definition above) makes the `rm` call for this exact
-    // path resolve successfully without removing the file - modelling a
-    // Windows-shaped "the OS call reported success but a handle elsewhere
-    // still holds the file open" case that a rejecting seam cannot express.
-    // No production file is touched to do this.
+    // `removeStaleMarkerIfOwn` treats `rm` resolving as necessary but not sufficient: it must also CONFIRM the marker is gone afterward (`confirmAbsent`).
+    // Mechanism: `mocks.noopRmPath` (this test file's own seam, see its definition above) makes the `rm` call for this exact path resolve successfully without removing the file - modelling a Windows-shaped "the OS call reported success but a handle elsewhere still holds the file open" case that a rejecting seam cannot express.
     const stalePath = cliInvocationRecordStaleMarkerPath(hostHome);
     await writeFile(
       stalePath,
@@ -906,9 +872,7 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
         registrationCommitted: true,
       },
     });
-    // The registration and record commit completed; only the strict clear of
-    // the own-label stale marker - `rm` resolved but the file is still
-    // there - failed.
+    // The registration and record commit completed; only the strict clear of the own-label stale marker - `rm` resolved but the file is still there - failed.
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(true);
     expect(await exists(cliInvocationLifecyclePath(hostHome))).toBe(true);
     expect(await transactionMarkerNames()).toEqual([]);
@@ -917,9 +881,7 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
     expect(await exists(stalePath)).toBe(true);
   });
   it("succeeds when a symlink occupies the stale-marker path (skip-not-live, absent not foreign)", async () => {
-    // The stale marker is read O_NOFOLLOW; a symlink there reads as absent,
-    // not foreign or failed, so a successful registration is not blocked by
-    // it and the planted link is left untouched.
+    // The stale marker is read O_NOFOLLOW; a symlink there reads as absent, not foreign or failed, so a successful registration is not blocked by it and the planted link is left untouched.
     if (process.platform === "win32") return;
     const sentinel = join(hostHome, "stale-sentinel");
     await writeFile(sentinel, "sentinel\n", { mode: 0o600 });
@@ -945,13 +907,8 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
 
   if (process.platform !== "win32") {
     it("when the state directory identity changes after the record and lifecycle are committed, fails the final stale-clear check without touching either", async () => {
-      // Registration performs five `assertStateDirUnchanged` checks with no
-      // contention: acquiring the transaction, before staging, before the
-      // commit rename, before the lifecycle write, and this one - the final
-      // check that gates clearing an earlier stale marker. Swapping on the
-      // 5th call means the record and lifecycle have already committed for
-      // real (through the untouched directory) before the identity check
-      // that is under test ever runs.
+      // Registration performs five `assertStateDirUnchanged` checks with no contention: acquiring the transaction, before staging, before the commit rename, before the lifecycle write, and this one - the final check that gates clearing an earlier stale marker.
+      // Swapping on the 5th call means the record and lifecycle have already committed for real (through the untouched directory) before the identity check that is under test ever runs.
       let assertCalls = 0;
       const original = cliInvocationStateDir(hostHome);
       const movedAside = join(hostHome, "original-state-post-lifecycle");
@@ -996,11 +953,7 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
         },
       });
       expect(didServiceRegistrationCommit(caught)).toBe(true);
-      // The record and lifecycle generation were committed for real, through
-      // the directory this transaction validated - which is now at
-      // `movedAside`, not at the live path (the swapped-in directory is a
-      // fresh, empty one the production code never wrote through, since the
-      // final check failed before any further write was attempted).
+      // The record and lifecycle generation were committed for real, through the directory this transaction validated - which is now at `movedAside`, not at the live path (the swapped-in directory is a fresh, empty one the production code never wrote through, since the final check failed before any further write was attempted).
       expect(await exists(join(movedAside, recordBasename))).toBe(true);
       expect(await exists(join(movedAside, lifecycleBasename))).toBe(true);
       const committedRecord = parseCliInvocationRecord(
@@ -1011,15 +964,8 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
         JSON.parse(await readFile(join(movedAside, lifecycleBasename), "utf8")),
       );
       expect(committedLifecycle?.event).toBe("registered");
-      // Retained, not released: the transaction marker this run created
-      // lives inside `movedAside` (it moved with the directory), and
-      // nothing in the "stale-clear" catch block attempts a write or an
-      // unlink - there is no `markStale*` call on this path, unlike every
-      // other failure branch in this function. `unlinkIfUnchanged` is
-      // therefore never called with `held.txnPath`, which is a fixed
-      // pathname that - after the swap - resolves into the fresh, empty
-      // directory rather than `movedAside`, so a release attempt could not
-      // have reached this marker even if one had been made.
+      // Retained, not released: the transaction marker this run created lives inside `movedAside` (it moved with the directory), and nothing in the "stale-clear" catch block attempts a write or an unlink - there is no `markStale*` call on this path, unlike every other failure branch in this function.
+      // `unlinkIfUnchanged` is therefore never called with `held.txnPath`, which is a fixed pathname that - after the swap - resolves into the fresh, empty directory rather than `movedAside`, so a release attempt could not have reached this marker even if one had been made.
       const movedMarkers = (await readdir(movedAside)).filter(
         isCliInvocationTransactionMarkerBasename,
       );
@@ -1033,15 +979,8 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
       );
       expect(marker?.operation).toBe("install");
       expect(marker?.serviceLabel).toBe(LABEL);
-      // "No stale marker was written" is observable at both locations, but
-      // for different reasons: `movedAside` because the catch block makes
-      // no marker writes at all on this path, and the fresh `original`
-      // because it is a directory the code never wrote through in the
-      // first place - any stale-marker attempt would itself have re-run
-      // `assertStateDirUnchanged` and failed the same way. Both are
-      // asserted since the swap makes the second one somewhat trivial by
-      // construction, not because it is uninformative: it confirms the
-      // fresh directory was never touched either.
+      // "No stale marker was written" is observable at both locations, but for different reasons: `movedAside` because the catch block makes no marker writes at all on this path, and the fresh `original` because it is a directory the code never wrote through in the first place - any stale-marker attempt would itself have re-run `assertStateDirUnchanged` and failed the same way.
+      // Both are asserted since the swap makes the second one somewhat trivial by construction, not because it is uninformative: it confirms the fresh directory was never touched either.
       expect(await exists(join(movedAside, staleBasename))).toBe(false);
       expect(
         (await readdir(original)).filter(
@@ -1063,12 +1002,8 @@ describe("runServiceRegistrationWithInvocationRecord", () => {
         serviceLabel: LABEL,
         cli: npmCli(),
         register: async () => {
-          // The transaction marker is already on disk by the time `register`
-          // runs (acquireTransaction completed and staging was written
-          // before this callback). Target its own-marker unlink specifically
-          // - the mocked `rm` fails only the NEXT call whose path equals
-          // `failRmPath`, so the staging-file removal (a different path)
-          // that also runs through `rm` later is untouched.
+          // The transaction marker is already on disk by the time `register` runs (acquireTransaction completed and staging was written before this callback).
+          // Target its own-marker unlink specifically - the mocked `rm` fails only the NEXT call whose path equals `failRmPath`, so the staging-file removal (a different path) that also runs through `rm` later is untouched.
           markerPath = join(
             cliInvocationStateDir(hostHome),
             (await readSoleTransactionMarker()).name,
@@ -1148,10 +1083,8 @@ describe("runServiceUninstallWithInvocationRecord", () => {
         },
       }),
     ).rejects.toThrow("indeterminate");
-    // The backend may have removed the service before the step that threw,
-    // so the live record - matching this label - may now describe a
-    // service that no longer exists. It is removed, and a stale marker
-    // carrying our label sends the host to the OS definition instead.
+    // The backend may have removed the service before the step that threw, so the live record - matching this label - may now describe a service that no longer exists.
+    // It is removed, and a stale marker carrying our label sends the host to the OS definition instead.
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
     const stale = parseCliInvocationStaleMarker(
       JSON.parse(
@@ -1299,9 +1232,7 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       cli: npmCli(),
       register: async () => undefined,
     });
-    // Written AFTER the registration so it is not this test's registration
-    // that has to clear it; uninstall's clear is best-effort, unlike
-    // registration's strict clear.
+    // Written AFTER the registration so it is not this test's registration that has to clear it; uninstall's clear is best-effort, unlike registration's strict clear.
     await writeFile(
       cliInvocationRecordStaleMarkerPath(hostHome),
       serializeCliInvocationStaleMarker({
@@ -1366,19 +1297,8 @@ describe("runServiceUninstallWithInvocationRecord", () => {
         cli: npmCli(),
         register: async () => undefined,
       });
-      // Uninstall performs three `assertStateDirUnchanged` checks with no
-      // contention on the happy path: acquiring the transaction, then the
-      // PRE-READ check inside `assertStateDirUnchangedAfterUninstall` - which
-      // now runs right after `options.uninstall()` resolves and BEFORE
-      // `liveRecordMatchesLabel`, so a "foreign" classification is always of
-      // the directory this transaction validated, not of whatever got
-      // swapped in - and only then the second `assertStateDirUnchangedAfterUninstall`
-      // call after the label compare (the pre-existing position). This is
-      // the point under test: swapping on the 2nd call means the (still-live)
-      // record and the freshly acquired transaction marker are already on
-      // disk, through the untouched directory, before the PRE-READ identity
-      // check fails - it never reaches the label compare or the record
-      // removal at all.
+      // Uninstall performs three `assertStateDirUnchanged` checks with no contention on the happy path: acquiring the transaction, then the PRE-READ check inside `assertStateDirUnchangedAfterUninstall` - which now runs right after `options.uninstall()` resolves and BEFORE `liveRecordMatchesLabel`, so a "foreign" classification is always of the directory this transaction validated, not of whatever got swapped in - and only then the second `assertStateDirUnchangedAfterUninstall` call after the label compare (the pre-existing position).
+      // This is the point under test: swapping on the 2nd call means the (still-live) record and the freshly acquired transaction marker are already on disk, through the untouched directory, before the PRE-READ identity check fails - it never reaches the label compare or the record removal at all.
       let assertCalls = 0;
       const original = cliInvocationStateDir(hostHome);
       const movedAside = join(hostHome, "original-state-post-uninstall");
@@ -1411,12 +1331,7 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       }
       expect(assertCalls).toBe(3);
       expect(uninstalled).toBe(true);
-      // The catch block in `runServiceUninstallWithInvocationRecord` rethrows
-      // `cause` unmodified - the state-dir-unsafe `CliError` this check
-      // itself throws, not a re-wrapped one, so it carries `causeCode: null`
-      // (an identity mismatch, not an errno) and `phase:
-      // "invocation-state-dir"` rather than the registration path's
-      // "stale-clear" wrapper.
+      // The catch block in `runServiceUninstallWithInvocationRecord` rethrows `cause` unmodified - the state-dir-unsafe `CliError` this check itself throws, not a re-wrapped one, so it carries `causeCode: null` (an identity mismatch, not an errno) and `phase: "invocation-state-dir"` rather than the registration path's "stale-clear" wrapper.
       expect(caught).toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
         details: {
@@ -1425,14 +1340,8 @@ describe("runServiceUninstallWithInvocationRecord", () => {
           causeCode: null,
         },
       });
-      // `markStaleAndUnpreferLive` ran on the way out: its own
-      // `writeStaleMarker` re-runs `assertStateDirUnchanged` against the
-      // same (still-swapped) identity and fails the same way, so it never
-      // gets far enough to write the stale-marker temp file, and returns
-      // `false`. Because it returned `false`, the `if (staleWritten)` guard
-      // around `unlinkIfUnchanged(held.txnPath, held.rawMarker)` is never
-      // entered - the retained transaction marker is that bypass, not a
-      // deliberate skip keyed on the identity check.
+      // `markStaleAndUnpreferLive` ran on the way out: its own `writeStaleMarker` re-runs `assertStateDirUnchanged` against the same (still-swapped) identity and fails the same way, so it never gets far enough to write the stale-marker temp file, and returns `false`.
+      // Because it returned `false`, the `if (staleWritten)` guard around `unlinkIfUnchanged(held.txnPath, held.rawMarker)` is never entered - the retained transaction marker is that bypass, not a deliberate skip keyed on the identity check.
       const movedMarkers = (await readdir(movedAside)).filter(
         isCliInvocationTransactionMarkerBasename,
       );
@@ -1446,23 +1355,14 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       );
       expect(marker?.operation).toBe("uninstall");
       expect(marker?.serviceLabel).toBe(LABEL);
-      // `liveRecordMatchesLabel(held.livePath, ...)` inside
-      // `markStaleAndUnpreferLive` reads through the fixed `livePath`
-      // pathname, which after the swap resolves into the fresh, empty
-      // directory rather than `movedAside` - so it reads "absent", the
-      // removal branch is skipped, and the actual live record (inside
-      // `movedAside`) is never touched. "Live record still exists" is this:
-      // the compare-then-unlink never had the record in its sights once the
-      // path stopped resolving to it.
+      // `liveRecordMatchesLabel(held.livePath, ...)` inside `markStaleAndUnpreferLive` reads through the fixed `livePath` pathname, which after the swap resolves into the fresh, empty directory rather than `movedAside` - so it reads "absent", the removal branch is skipped, and the actual live record (inside `movedAside`) is never touched.
+      // "Live record still exists" is this: the compare-then-unlink never had the record in its sights once the path stopped resolving to it.
       expect(await exists(join(movedAside, recordBasename))).toBe(true);
       const stillLive = parseCliInvocationRecord(
         JSON.parse(await readFile(join(movedAside, recordBasename), "utf8")),
       );
       expect(stillLive?.source.serviceLabel).toBe(LABEL);
-      // No stale marker anywhere: `writeStaleMarker` fails its own identity
-      // re-check before ever creating the temp file, so nothing is written
-      // to `movedAside`; and the fresh `original` is a directory production
-      // code never wrote through for the same reason.
+      // No stale marker anywhere: `writeStaleMarker` fails its own identity re-check before ever creating the temp file, so nothing is written to `movedAside`; and the fresh `original` is a directory production code never wrote through for the same reason.
       expect(await exists(join(movedAside, staleBasename))).toBe(false);
       expect(await exists(join(original, staleBasename))).toBe(false);
       expect(
@@ -1482,23 +1382,8 @@ describe("runServiceUninstallWithInvocationRecord", () => {
         cli: npmCli(),
         register: async () => undefined,
       });
-      // The swap and the foreign plant happen INSIDE `options.uninstall()`
-      // itself - the exact moment `assertStateDirUnchangedAfterUninstall`'s
-      // pre-read call is meant to catch, independent of how many
-      // `assertStateDirUnchanged` calls happen to precede it. Keying this on
-      // a call COUNT (like the test above) would not distinguish the fixed
-      // ordering from the old one: with the pre-read call removed, the very
-      // next `assertStateDirUnchanged` invocation is the post-label-compare
-      // one, which still happens to observe the same mismatch - just one
-      // step too late, AFTER `liveRecordMatchesLabel` already read the
-      // planted record as "foreign" and returned clean. Swapping inside the
-      // callback pins the ordering itself: a VALID live record for a
-      // DIFFERENT label is planted in the freshly recreated directory before
-      // `options.uninstall()` returns, so a caller withOUT the pre-read
-      // check reads that planted record, classifies it "foreign", and
-      // returns CLEAN - leaving the real LABEL record (now sitting in
-      // `movedAside`) behind forever. The pre-read check exists precisely to
-      // fail before that read ever happens.
+      // The swap and the foreign plant happen INSIDE `options.uninstall()` itself - the exact moment `assertStateDirUnchangedAfterUninstall`'s pre-read call is meant to catch, independent of how many `assertStateDirUnchanged` calls happen to precede it.
+      // Keying this on a call COUNT (like the test above) would not distinguish the fixed ordering from the old one: with the pre-read call removed, the very next `assertStateDirUnchanged` invocation is the post-label-compare one, which still happens to observe the same mismatch - just one step too late, AFTER `liveRecordMatchesLabel` already read the planted record as "foreign" and returned clean.
       const original = cliInvocationStateDir(hostHome);
       const movedAside = join(hostHome, "original-state-foreign-swap");
       const plantedForeignRecord = {
@@ -1551,10 +1436,7 @@ describe("runServiceUninstallWithInvocationRecord", () => {
           causeCode: null,
         },
       });
-      // The retained transaction marker lives in the moved-aside directory -
-      // `writeStaleMarker`'s own identity re-check (inside
-      // `markStaleAndUnpreferLive`) fails the same way, so it never writes a
-      // stale marker or releases the transaction marker.
+      // The retained transaction marker lives in the moved-aside directory - `writeStaleMarker`'s own identity re-check (inside `markStaleAndUnpreferLive`) fails the same way, so it never writes a stale marker or releases the transaction marker.
       const movedMarkers = (await readdir(movedAside)).filter(
         isCliInvocationTransactionMarkerBasename,
       );
@@ -1568,17 +1450,13 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       );
       expect(marker?.operation).toBe("uninstall");
       expect(marker?.serviceLabel).toBe(LABEL);
-      // The original label's live record is still in the moved-aside
-      // directory, untouched - the compare-then-unlink never had it in its
-      // sights once the fixed `livePath` pathname stopped resolving there.
+      // The original label's live record is still in the moved-aside directory, untouched - the compare-then-unlink never had it in its sights once the fixed `livePath` pathname stopped resolving there.
       expect(await exists(join(movedAside, recordBasename))).toBe(true);
       const stillLive = parseCliInvocationRecord(
         JSON.parse(await readFile(join(movedAside, recordBasename), "utf8")),
       );
       expect(stillLive?.source.serviceLabel).toBe(LABEL);
-      // The planted foreign record sits in the fresh `original` directory
-      // exactly where it was planted - the pre-read check fails before any
-      // read of it, so it is never touched, referenced, or removed.
+      // The planted foreign record sits in the fresh `original` directory exactly where it was planted - the pre-read check fails before any read of it, so it is never touched, referenced, or removed.
       const plantedStillThere = parseCliInvocationRecord(
         JSON.parse(await readFile(join(original, recordBasename), "utf8")),
       );
@@ -1625,9 +1503,7 @@ describe("runServiceUninstallWithInvocationRecord", () => {
       },
     });
     expect(uninstalled).toBe(true);
-    // The record was removed and an "uninstalled" lifecycle written even
-    // though the marker release failed; only the marker's own unlink could
-    // not be confirmed.
+    // The record was removed and an "uninstalled" lifecycle written even though the marker release failed; only the marker's own unlink could not be confirmed.
     expect(await exists(cliInvocationRecordPath(hostHome))).toBe(false);
     const lifecycle = await readLifecycle();
     expect(lifecycle?.event).toBe("uninstalled");
@@ -1675,10 +1551,7 @@ describe("runServiceUninstallWithInvocationRecord", () => {
         residue: [],
       },
     });
-    // The foreign record was left exactly as it was - "nothing removed, or a
-    // foreign record" is the `reportRetainedRelease` path, distinct from the
-    // strict post-removal release check: only this owner's marker had to go,
-    // and it did not.
+    // The foreign record was left exactly as it was - "nothing removed, or a foreign record" is the `reportRetainedRelease` path, distinct from the strict post-removal release check: only this owner's marker had to go, and it did not.
     const live = parseCliInvocationRecord(
       JSON.parse(await readFile(cliInvocationRecordPath(hostHome), "utf8")),
     );
@@ -1784,10 +1657,8 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
   });
 
   it("removes the contender it created when closing its file fails after the write", async () => {
-    // A delayed write-back error surfaces only at `close()`. It used to
-    // escape the exclusive-write cleanup and leave a valid, positively live
-    // marker owned by a process that believes it acquired nothing - so every
-    // retry in that process waited behind its own residue.
+    // A delayed write-back error surfaces only at `close()`.
+    // It used to escape the exclusive-write cleanup and leave a valid, positively live marker owned by a process that believes it acquired nothing - so every retry in that process waited behind its own residue.
     mocks.failCloseForPrefix = CLI_INVOCATION_RECORD_TXN_FILENAME_PREFIX;
     let registered = false;
     await expect(
@@ -1811,12 +1682,8 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
   });
 
   it("a transient readdir failure during the confirmation scan keeps the contender owned and the command succeeds", async () => {
-    // Scan 1 elects (nothing present, contender created), scan 2 re-checks
-    // for competitors, scan 3 is the confirmation of this process's own
-    // marker. Failing scan 3 used to read as an EMPTY directory: the loop
-    // concluded its contender had vanished, dropped ownership without
-    // unlinking the file, and then waited out the deadline behind the marker
-    // it still positively owned - a self-inflicted `txn-busy`.
+    // Scan 1 elects (nothing present, contender created), scan 2 re-checks for competitors, scan 3 is the confirmation of this process's own marker.
+    // Failing scan 3 used to read as an EMPTY directory: the loop concluded its contender had vanished, dropped ownership without unlinking the file, and then waited out the deadline behind the marker it still positively owned - a self-inflicted `txn-busy`.
     mocks.readdirCallCount = 0;
     mocks.failReaddirOnCallNumber = 3;
     let registered = false;
@@ -1841,11 +1708,7 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
 
   it("a losing contender that cannot remove its own marker keeps owning it and retries, instead of leaving a live orphan beside the winner", async () => {
     if (process.platform === "win32") return;
-    // The competing contender: owned by THIS process (so it is positively
-    // live for as long as the test runs), identity-less (so liveness comes
-    // from the pid alone), and back-dated by a second so the election's
-    // earliest-mtime rule makes it the winner over the marker this command
-    // creates.
+    // The competing contender: owned by THIS process (so it is positively live for as long as the test runs), identity-less (so liveness comes from the pid alone), and back-dated by a second so the election's earliest-mtime rule makes it the winner over the marker this command creates.
     const winnerToken = "11111111-2222-4333-8444-555555555555";
     const winnerPath = join(
       cliInvocationStateDir(hostHome),
@@ -1873,14 +1736,7 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
       const older = new Date(Date.now() - 1_000);
       await utimes(winnerPath, older, older);
     };
-    // One pause per election pass, AFTER that pass observed the directory.
-    //   1: the directory was empty - plant the winner now, so this pass
-    //      creates our contender and the NEXT pass sees two live markers.
-    //   2: two live markers, we lose - make our unlink fail, so the marker
-    //      survives and `unlinkIfUnchanged` reports it retained.
-    //   3: still two, still losing - the retried unlink succeeds.
-    //   4: only the winner remains - retire it, so the pass after this one
-    //      finds an empty directory and acquires cleanly.
+    // One pause per election pass, AFTER that pass observed the directory. 1: the directory was empty - plant the winner now, so this pass creates our contender and the NEXT pass sees two live markers. 2: two live markers, we lose - make our unlink fail, so the marker survives and `unlinkIfUnchanged` reports it retained. 3: still two, still losing - the retried unlink succeeds. 4: only the winner remains - retire it, so the pass after this one finds an empty directory and acquires cleanly.
     let pass = 0;
     const previous = __setCliInvocationTxnObservePauseForTest(async () => {
       pass += 1;
@@ -1893,9 +1749,7 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
       await runServiceRegistrationWithInvocationRecord({
         environment: "production",
         hostHomeDir: hostHome,
-        // Below vitest's 5 s test timeout on purpose: without the retry the
-        // loop cannot converge, and the failure should be the `txn-busy`
-        // error this deadline produces rather than the runner giving up.
+        // Below vitest's 5 s test timeout on purpose: without the retry the loop cannot converge, and the failure should be the `txn-busy` error this deadline produces rather than the runner giving up.
         waitMs: 3_000,
         pollIntervalMs: 20,
         serviceLabel: LABEL,
@@ -1908,10 +1762,7 @@ describe("runServiceRemovalWithInvocationRecord (generic)", () => {
       __setCliInvocationTxnObservePauseForTest(previous);
     }
     expect(registered).toBe(true);
-    // The simulated failure was consumed by the loser's first unlink, and
-    // the command still converged: without the retry the orphaned marker
-    // stays positively live (its owner is this process) and every later
-    // pass waits behind it until the deadline.
+    // The simulated failure was consumed by the loser's first unlink, and the command still converged: without the retry the orphaned marker stays positively live (its owner is this process) and every later pass waits behind it until the deadline.
     expect(mocks.failNextRm).toBe(false);
     expect(pass).toBeGreaterThanOrEqual(5);
     expect(await transactionMarkerNames()).toEqual([]);
@@ -2017,12 +1868,8 @@ describe("readAuthorityFile unreadable handling", () => {
     );
     await utimes(path, staleTime, staleTime);
     mocks.failOpenForBasename = basename(path);
-    // Aged out, so registration proceeds around it as abandoned residue - but
-    // it stays unreadable through the sweep too (the seam never resets), so
-    // compare-then-unlink never sees its bytes and it survives the sweep. A
-    // surviving residue entry is now reported rather than silently ignored:
-    // the OS registration and record commit still succeeded, so this is the
-    // "release" phase, not "stage" or "commit".
+    // Aged out, so registration proceeds around it as abandoned residue - but it stays unreadable through the sweep too (the seam never resets), so compare-then-unlink never sees its bytes and it survives the sweep.
+    // A surviving residue entry is now reported rather than silently ignored: the OS registration and record commit still succeeded, so this is the "release" phase, not "stage" or "commit".
     await expect(
       runServiceRegistrationWithInvocationRecord({
         environment: "production",
@@ -2069,9 +1916,7 @@ describe("readAuthorityFile unreadable handling", () => {
     mocks.failOpenForBasename = basename(path);
     mocks.failOpenCode = "EISDIR";
     let osMutated = false;
-    // Unlike EBUSY (which blocks as an unreadable-but-live marker), an
-    // EISDIR-classified entry is `not-a-file` - skip-not-live - so a new
-    // registration proceeds around it rather than reporting `txn-busy`.
+    // Unlike EBUSY (which blocks as an unreadable-but-live marker), an EISDIR-classified entry is `not-a-file` - skip-not-live - so a new registration proceeds around it rather than reporting `txn-busy`.
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
       hostHomeDir: hostHome,
@@ -2362,9 +2207,7 @@ describe("lifecycle generation", () => {
     // The lifecycle generation write failed, so the OLD generation is
     // unchanged...
     expect((await readLifecycle())?.generation).toBe(prior?.generation);
-    // ...but the RECORD was already committed by this second call's rename
-    // before the lifecycle write was attempted, so it reflects THIS
-    // invocation, not the prior one.
+    // ...but the RECORD was already committed by this second call's rename before the lifecycle write was attempted, so it reflects THIS invocation, not the prior one.
     const committedRecordRaw = await readFile(
       cliInvocationRecordPath(hostHome),
       "utf8",
@@ -2422,11 +2265,7 @@ describe("lifecycle generation", () => {
   });
 
   it("names a CORRUPT legacy exact marker by the digest of its raw bytes - not of a UTF-8 re-encoding - so the host's digest of the same file can match", async () => {
-    // Bytes that are not valid UTF-8: decoding and re-encoding them yields
-    // replacement characters the file does not contain, and a digest of that
-    // could never equal the host's digest of the bytes on disk - which is the
-    // one comparison that lets the host stop bypassing the record this
-    // command commits.
+    // Bytes that are not valid UTF-8: decoding and re-encoding them yields replacement characters the file does not contain, and a digest of that could never equal the host's digest of the bytes on disk - which is the one comparison that lets the host stop bypassing the record this command commits.
     const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
     const corrupt = Buffer.from([0x7b, 0xff, 0xfe, 0x22, 0x7d, 0x0a]);
     expect(Buffer.from(corrupt.toString("utf8"), "utf8").equals(corrupt)).toBe(
@@ -2455,10 +2294,8 @@ describe("lifecycle generation", () => {
   });
 
   it("reads an OVERSIZED corrupt legacy exact marker through a bounded read, names it by the digest of its prefix, and never calls readFile()", async () => {
-    // The bounded digest exists to discharge exactly this file. Reading all of
-    // it first would make one past the Buffer limit `unreadable` - and this
-    // command would then mutate the service and fail its release while every
-    // host kept bypassing the record it committed.
+    // The bounded digest exists to discharge exactly this file.
+    // Reading all of it first would make one past the Buffer limit `unreadable` - and this command would then mutate the service and fail its release while every host kept bypassing the record it committed.
     const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
     const oversized = Buffer.alloc(300 * 1024, 0x41);
     oversized[0] = 0x7b; // "{" - still not JSON, still not ours
@@ -2469,9 +2306,7 @@ describe("lifecycle generation", () => {
     );
     await utimes(exactPath, past, past);
     mocks.unboundedReadFileCalls = 0;
-    // And every positional read comes back SHORT (1 KiB at a time), so the
-    // digest below is only right if the reader loops until the prefix is
-    // filled rather than hashing whatever the first read returned.
+    // And every positional read comes back SHORT (1 KiB at a time), so the digest below is only right if the reader loops until the prefix is filled rather than hashing whatever the first read returned.
     mocks.shortReadChunkBytes = 1024;
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
@@ -2521,11 +2356,7 @@ describe("lifecycle generation", () => {
       startedAt: "2020-01-01T00:00:00.000Z",
     });
     await writeFile(exactPath, exactRaw, { mode: 0o600 });
-    // Age the marker's mtime so `observeTransactionMarkers` classifies it as
-    // abandoned by the age window: for an UNREADABLE entry the owner cannot
-    // be identified (no bytes to parse), so age is the only abandonment
-    // signal available, unlike the readable-and-parseable digest case above
-    // where a dead pid abandons it regardless of mtime.
+    // Age the marker's mtime so `observeTransactionMarkers` classifies it as abandoned by the age window: for an UNREADABLE entry the owner cannot be identified (no bytes to parse), so age is the only abandonment signal available, unlike the readable-and-parseable digest case above where a dead pid abandons it regardless of mtime.
     const staleTime = new Date(
       Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 5_000,
     );
@@ -2533,12 +2364,7 @@ describe("lifecycle generation", () => {
     // Prefer the suite's read-failure seam over a chmod: it works on every
     // platform (chmod 0o000 is unreliable on Windows and as root).
     mocks.failOpenForBasename = basename(exactPath);
-    // `unreadable` evidence never discharges the legacy marker (it is
-    // causal evidence like `none`, not an absence of it - see the protocol
-    // module), so `sweepAbandonedResidue` reports the legacy basename as
-    // surviving residue and the registration rejects on the release phase
-    // even though the OS registration, the record, and the lifecycle all
-    // committed successfully.
+    // `unreadable` evidence never discharges the legacy marker (it is causal evidence like `none`, not an absence of it - see the protocol module), so `sweepAbandonedResidue` reports the legacy basename as surviving residue and the registration rejects on the release phase even though the OS registration, the record, and the lifecycle all committed successfully.
     await expect(
       runServiceRegistrationWithInvocationRecord({
         environment: "production",
@@ -2570,10 +2396,7 @@ describe("lifecycle generation", () => {
 
   it("tells an unreadable legacy marker apart from a readable EMPTY one: the latter digests actual empty bytes", async () => {
     const exactPath = cliInvocationRecordTransactionMarkerPath(hostHome);
-    // Readable, but empty: unparseable JSON, so it is classified abandoned
-    // by the same age window as the unreadable case above, but this time the
-    // read genuinely succeeds and returns zero bytes - a real digest of the
-    // empty buffer, not the sentinel `unreadable` state.
+    // Readable, but empty: unparseable JSON, so it is classified abandoned by the same age window as the unreadable case above, but this time the read genuinely succeeds and returns zero bytes - a real digest of the empty buffer, not the sentinel `unreadable` state.
     await writeFile(exactPath, "", { mode: 0o600 });
     const staleTime = new Date(
       Date.now() - CLI_INVOCATION_TXN_ABANDON_AFTER_MS - 5_000,
@@ -2829,11 +2652,9 @@ describe("cross-process transaction ownership", () => {
         "utf8",
       ),
     ).toBe('{"kind"');
-  }); // The abandoned marker `writeDeadUniqueMarker` plants is no longer removed
-  // during election (only swept after the new owner's lifecycle write), so
-  // `readSoleTransactionMarker` - which asserts exactly one marker on disk -
-  // cannot be used while that residue is still present. This variant filters
-  // it out to find the live owner's marker instead.
+  });
+  // Abandoned markers stay through election, so `readSoleTransactionMarker` cannot be used while that residue is present.
+  // This variant filters it out to find the live owner's marker instead.
   async function readSoleTransactionMarkerExcluding(
     excludeBasename: string,
   ): Promise<{ readonly name: string; readonly raw: string }> {
@@ -2993,9 +2814,7 @@ describe("cross-process transaction ownership", () => {
       const deadBasename = basename(dead.path);
       const owner = await readSoleTransactionMarkerExcluding(deadBasename);
       expect(owner.name).not.toBe("cli-invocation.txn");
-      // Elected AROUND, not unlinked: the abandoned marker this owner
-      // observed is only swept after ITS lifecycle write, which has not
-      // happened yet - `first` is still parked inside `register()`.
+      // Elected AROUND, not unlinked: the abandoned marker this owner observed is only swept after ITS lifecycle write, which has not happened yet - `first` is still parked inside `register()`.
       expect(await exists(dead.path)).toBe(true);
       await writeFile(secondPauseRelease, "go\n");
       expect(await waitForExit(second)).toBe(1);
@@ -3070,9 +2889,8 @@ describe("cross-process transaction ownership", () => {
     let secondExited = false;
     let thirdExited = false;
     try {
-      // All three actors must hold the same abandoned snapshot before any one
-      // is allowed to clean it. This is the interleaving that used to let a
-      // delayed compare/unlink reach a pathname after its replacement.
+      // All three actors must hold the same abandoned snapshot before any one is allowed to clean it.
+      // This is the interleaving that used to let a delayed compare/unlink reach a pathname after its replacement.
       await waitForFile(firstPauseReady);
       await waitForFile(secondPauseReady);
       await waitForFile(thirdPauseReady);
@@ -3083,14 +2901,11 @@ describe("cross-process transaction ownership", () => {
       const deadBasename = basename(dead.path);
       const owner = await readSoleTransactionMarkerExcluding(deadBasename);
       expect(owner.name).not.toBe("cli-invocation.txn");
-      // Elected AROUND, not unlinked: nothing has swept it yet - `first` is
-      // still parked inside `register()`, and its lifecycle has not been
-      // written.
+      // Elected AROUND, not unlinked: nothing has swept it yet - `first` is still parked inside `register()`, and its lifecycle has not been written.
       expect(await exists(dead.path)).toBe(true);
 
-      // Each delayed reclaimer still has the abandoned marker in its local
-      // snapshot. Releasing it now must not remove the first actor's newly
-      // live unique marker or enter the OS mutation itself.
+      // Each delayed reclaimer still has the abandoned marker in its local snapshot.
+      // Releasing it now must not remove the first actor's newly live unique marker or enter the OS mutation itself.
       await writeFile(secondPauseRelease, "go\n");
       expect(await waitForExit(second)).toBe(1);
       secondExited = true;
@@ -3155,9 +2970,7 @@ describe("cross-process transaction ownership", () => {
         },
       }),
     ).rejects.toThrow("os-install-refused");
-    // A throw from `register()` never reaches the lifecycle write, so
-    // `sweepAbandonedResidue` never runs - the abandoned residue this owner
-    // elected around stays exactly where it was.
+    // A throw from `register()` never reaches the lifecycle write, so `sweepAbandonedResidue` never runs - the abandoned residue this owner elected around stays exactly where it was.
     expect(await exists(dead.path)).toBe(true);
   });
 
@@ -3176,17 +2989,12 @@ describe("cross-process transaction ownership", () => {
         },
       }),
     ).rejects.toThrow("os-install-refused");
-    // A throw from `register()` never reaches the lifecycle write, so
-    // `sweepAbandonedResidue` never runs - the abandoned residue this owner
-    // elected around stays exactly where it was.
+    // A throw from `register()` never reaches the lifecycle write, so `sweepAbandonedResidue` never runs - the abandoned residue this owner elected around stays exactly where it was.
     expect(await exists(dead.path)).toBe(true);
   });
 
   it("leaves the abandoned marker in place when the transaction fails before mutating the OS", async () => {
-    // One prior writeFile (planting the dead marker) precedes this owner's
-    // own txn-marker write (call 2) and staging write (call 3); see the
-    // `failWriteCallNumber` doc comment at the top of this file for the
-    // fresh-home numbering this offsets from.
+    // One prior writeFile (planting the dead marker) precedes this owner's own txn-marker write (call 2) and staging write (call 3); see the `failWriteCallNumber` doc comment at the top of this file for the fresh-home numbering this offsets from.
     const dead = await writeDeadUniqueMarker();
     mocks.failWriteCallNumber = 3;
     let osMutated = false;
@@ -3369,9 +3177,7 @@ describe("invocation validation", () => {
   });
 
   it("accepts a non-node command with a relative leading argument (not the npm shape)", async () => {
-    // Only a node-family basename (`node`/`node.exe`/`bun`/`bun.exe`) triggers
-    // the "leading arg must be an absolute script" rule; a standalone binary
-    // is free to carry other leading args, e.g. a preserved flag.
+    // Only a node-family basename (`node`/`node.exe`/`bun`/`bun.exe`) triggers the "leading arg must be an absolute script" rule; a standalone binary is free to carry other leading args, e.g. a preserved flag.
     await runServiceRegistrationWithInvocationRecord({
       environment: "production",
       hostHomeDir: hostHome,

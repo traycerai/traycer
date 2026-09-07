@@ -7,10 +7,6 @@ import {
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { cssPixelsToWindowDips } from "../windows/css-pixel-scale";
 
-/**
- * Opens a submenu from Electron's canonical application menu for the visible
- * menu labels drawn inside the Windows frameless title bar.
- */
 export function registerMenuIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.menuOpenTopLevel,

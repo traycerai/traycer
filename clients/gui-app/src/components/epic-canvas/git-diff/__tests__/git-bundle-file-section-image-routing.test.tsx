@@ -277,11 +277,7 @@ describe("<BundleFileSection /> image routing", () => {
     );
   });
 
-  // The compact height bound now lives INSIDE `ImageDiffView` itself (it
-  // needs both sides' decoded dimensions, which only it has - see
-  // `image-diff-view.test.tsx` for the sizing contract); `ImageDiffView` is
-  // mocked at this routing level, so there is no wrapper class to pin here
-  // anymore.
+  // The compact height bound now lives INSIDE `ImageDiffView` itself (it needs both sides' decoded dimensions, which only it has - see `image-diff-view.test.tsx` for the sizing contract); `ImageDiffView` is mocked at this routing level, so there is no wrapper class to pin here anymore.
 
   it("routes SVG files to compact ImageDiffView even though git marks them as text", () => {
     const changedFile = file({ path: "assets/icon.svg", isBinary: false });
@@ -403,12 +399,6 @@ describe("<BundleFileSection /> image routing", () => {
     expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(2);
   });
 
-  // Live E2E (ticket 06) found a real conflicted binary image falling
-  // through to the old generic bundle placeholder instead of ImageDiffView.
-  // The host's bulk listChangedFiles numstat path has no MERGE_HEAD-aware
-  // fallback for unmerged paths, so `isBinary: false` is the REAL shape a
-  // two-sided binary UU conflict can carry here - this pins the dispatch
-  // against that exact shape, not an idealized isBinary: true.
   it("routes a conflicted image to compact ImageDiffView even when isBinary is false", () => {
     const changedFile = file({
       path: "assets/conflict.png",

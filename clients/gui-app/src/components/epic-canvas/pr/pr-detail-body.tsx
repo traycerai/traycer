@@ -61,34 +61,10 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * The shell is a TWO-COLUMN ROW, not a centred column with the card parked
- * beside it.
- *
- * Three geometries were tried before this one, and each failed the same way -
- * by insisting the reading column stay centred in something:
- *
- * 1. Card overlaying a symmetric gutter. Needed BOTH gutters wide enough, so
- *    the threshold sat near real window widths and the card never appeared.
- * 2. Same, with the card shrunk to 224px to drag the threshold down. Appeared,
- *    but too narrow to read - branch names broke mid-word.
- * 3. Card in a reserved right band, column centred in what was left. The card
- *    was full width again, but centring in the remainder pushed the column
- *    RIGHT, opening a ~195px hole between the prose and the card.
- *
- * A flex row has none of those failure modes: the column takes the space that
- * is actually there, the gap is a gap and not a leftover, and the card is a
- * stretched flex item, so `sticky` works with no absolute positioning at all.
- * `max-w-3xl` when alone keeps the chat transcript's measure; the wider cap
- * applies only when the card is in the row beside it.
- *
- * Still a container query rather than a pane or tab count: "one tab open" is
- * only a proxy for "there is room", and the proxy leaks - collapsing the left
- * sidebar widens the tile without changing tab count, and a two-pane split can
- * still leave one pane very wide.
+ * Three geometries were tried before this one, and each failed the same way - by insisting the reading column stay centred in something: 1.
+ * Needed BOTH gutters wide enough, so the threshold sat near real window widths and the card never appeared. 2.
  */
-// Both caps pair their rem ceiling with a viewport term, the `min(Xvw, Yrem)`
-// form used throughout the app, so neither is a fixed layout dimension: the
-// rem is only the upper bound once the viewport is wide enough to afford it.
+// Both caps pair their rem ceiling with a viewport term, the `min(Xvw, Yrem)` form used throughout the app, so neither is a fixed layout dimension: the rem is only the upper bound once the viewport is wide enough to afford it.
 const PR_DETAIL_SHELL_WIDTH = "max-w-3xl @min-[1180px]:max-w-[min(92vw,72rem)]";
 const CARD_AT_WIDE = "hidden @min-[1180px]:block";
 const CARD_WIDTH = "w-full max-w-[min(24vw,18rem)]";
@@ -139,9 +115,7 @@ export function PrDetailBody(props: {
         />
       );
     }
-    // Invariant 6: this spinner had no end. The tile's reachability gate
-    // catches a host the directory dropped; a host that stays listed while its
-    // detail stream never delivers landed exactly here, forever.
+    // The tile's reachability gate catches a host the directory dropped; a host that stays listed while its detail stream never delivers landed exactly here, forever.
     return (
       <BoundedTileLoad
         hostId={detailTabHostId}
@@ -205,20 +179,8 @@ export function PrDetailBody(props: {
 }
 
 /**
- * The loaded view: a document (header, tabs, content) inside a centred reading
- * column, with the context card overlaying the gutter that column already
- * leaves empty.
- *
- * The card OVERLAYS rather than reserves. A reserved band would pad the pane
- * and shift the column, so the card's presence and absence would produce two
- * different layouts; overlaying dead space means the column renders identically
- * either way and toggling the card costs no reflow. It also cannot cover a
- * "Fix in chat" button, because the column ends before the gutter starts.
- *
- * Inside that gutter the card is `sticky`, not pinned to the top: on a PR with
- * a long description the reader is several screens down by the time they want
- * to know what is blocking it, and a card that scrolled away would be visible
- * exactly when it is least needed.
+ * The card OVERLAYS rather than reserves.
+ * It also cannot cover a "Fix in chat" button, because the column ends before the gutter starts.
  */
 function PrDetailLoaded(props: {
   readonly data: PrDetailSubscriptionData;
@@ -252,16 +214,7 @@ function PrDetailLoaded(props: {
   );
 
   /**
-   * "Fix in chat" reported as a dead button, and it was not disabled - it wrote
-   * the quote into the target's composer draft and left the reader looking at
-   * the PR. If that chat's tab is not the visible one, a correct send and a
-   * no-op are indistinguishable.
-   *
-   * So the imperative affordance FINISHES the gesture: it reveals the chat it
-   * just wrote to, composer focused, quote in place, one keystroke from sent.
-   * The passive `⌁` glyphs (description, a comment, a file row) deliberately do
-   * NOT - those are for stacking context before you go, and yanking the tab out
-   * from under someone collecting three quotes would be its own bug.
+   * The passive `⌁` glyphs (description, a comment, a file row) deliberately do NOT - those are for stacking context before you go, and yanking the tab out from under someone collecting three quotes would be its own bug.
    */
   const revealTarget = useCallback(
     (next: PrQuoteTarget): void => {
@@ -289,10 +242,7 @@ function PrDetailLoaded(props: {
       // A queue row is a one-line projection, so re-resolve the fact it came
       // from and quote the FULL body rather than the row's summary.
       if (item.kind === "check-failure") {
-        // Rebuild the queue's own key rather than guessing at `entry.name`:
-        // `derivePrAttentionQueue` keys on `prCheckContextKey(context, index)`
-        // over this same `checks.contexts`, so anything else never matches and
-        // silently downgrades the quote to the generic overview.
+        // Rebuild the queue's own key rather than guessing at `entry.name`: `derivePrAttentionQueue` keys on `prCheckContextKey(context, index)` over this same `checks.contexts`, so anything else never matches and silently downgrades the quote to the generic overview.
         const context = checks.contexts.find(
           (entry, index) =>
             `check:${prCheckContextKey(entry, index)}` === item.key,
@@ -347,12 +297,7 @@ function PrDetailLoaded(props: {
   }, [target, core]);
 
   return (
-    // `shrink-0`, NOT `flex-1 min-h-0`: this row has to be as tall as the
-    // DOCUMENT for the card's `sticky` to have anywhere to travel. Inside a
-    // scrolling flex column a grown-or-shrunk child resolves to exactly one
-    // viewport, which would pin the card to the first screen and let it scroll
-    // away after that. The card is a stretched flex ITEM, so it inherits that
-    // full height without any absolute positioning.
+    // The card is a stretched flex ITEM, so it inherits that full height without any absolute positioning.
     <div
       className={cn(
         "mx-auto flex w-full min-w-0 shrink-0 gap-8 px-6",
@@ -364,11 +309,7 @@ function PrDetailLoaded(props: {
         className="flex min-w-0 flex-1 flex-col gap-5"
         data-testid="pr-detail-column"
       >
-        {/* Title + tabs travel together in ONE sticky bar, so the strip needs
-            no hard-coded offset for the title's height - a wrapping title on a
-            narrow tile would break any number chosen here. `bg-canvas` is
-            load-bearing: a transparent sticky bar lets the diff scroll
-            visibly through it. */}
+        {/* Title + tabs travel together in ONE sticky bar, so the strip needs no hard-coded offset for the title's height - a wrapping title on a narrow tile would break any number chosen here. `bg-canvas` is load-bearing: a transparent sticky bar lets the diff scroll visibly through it. */}
         <div
           className="sticky top-0 z-20 -mx-1 flex min-w-0 flex-col gap-3 bg-canvas px-1 pt-8 pb-3"
           data-testid="pr-detail-sticky-bar"
@@ -387,9 +328,7 @@ function PrDetailLoaded(props: {
             tab={tab}
             onSelectTab={(next) => setTab(viewKey, next)}
             counts={{
-              // Inline findings ARE feedback, and on a bot-reviewed PR they are
-              // most of it - counting only the top-level entries reported "1"
-              // for a review carrying five objections.
+              // Inline findings ARE feedback, and on a bot-reviewed PR they are most of it - counting only the top-level entries reported "1" for a review carrying five objections.
               feedback: activity.items.length + reviewThreads.threads.length,
               files: files.totalCount ?? files.files.length,
               checks: checks.contexts.length,
@@ -487,16 +426,8 @@ function resolvePrDetailBannerState(
 }
 
 /**
- * The single staleness hint shown in the header is the OLDEST of the six
- * per-section `observedAt` timestamps - the view as a whole is only as fresh
- * as its stalest section. Files, commits and review threads are independently
- * timestamped protocol sections, so a cached/mixed frame with differing
- * section freshness is reported honestly rather than trusting one heavy
- * timestamp everywhere.
- *
- * Every section carrying an `observedAt` belongs here. Omitting one lets the
- * header claim the view is fresher than its stalest visible content actually
- * is, which is the exact dishonesty this hint exists to prevent.
+ * The single staleness hint shown in the header is the OLDEST of the six per-section `observedAt` timestamps - the view as a whole is only as fresh as its stalest section.
+ * Files, commits and review threads are independently timestamped protocol sections, so a cached/mixed frame with differing section freshness is reported honestly rather than trusting one heavy timestamp everywhere.
  */
 function oldestObservedAt(data: PrDetailSubscriptionData): number | null {
   return [

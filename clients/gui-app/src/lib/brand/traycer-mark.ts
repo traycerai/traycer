@@ -1,8 +1,5 @@
 /**
- * The Traycer brand mark's vector data, shared by every surface that draws
- * the mark - the React icon (`TraycerIcon`) and imperative DOM builders
- * (the usage image export's branding footer) - so the path lives exactly
- * once.
+ * The Traycer brand mark's vector data, shared by every surface that draws the mark - the React icon (`TraycerIcon`) and imperative DOM builders (the usage image export's branding footer) - so the path lives exactly once.
  */
 export const TRAYCER_MARK_VIEWBOX = "0 0 211 218";
 

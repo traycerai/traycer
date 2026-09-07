@@ -109,9 +109,7 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     options: Record<string, unknown>;
     readonly buffer = { active: { baseY: 0, length: 24 } };
-    // Real cell-width behaviour is covered in
-    // terminal-xterm-host-unicode-width.test.tsx against a real Terminal; here
-    // the addon just needs somewhere to register.
+    // Real cell-width behaviour is covered in terminal-xterm-host-unicode-width.test.tsx against a real Terminal; here the addon just needs somewhere to register.
     readonly unicode = { activeVersion: "6", register: vi.fn() };
     readonly textarea = document.createElement("textarea");
     readonly focus = vi.fn(() => this.textarea.focus());
@@ -449,18 +447,12 @@ describe("<TerminalXtermHost /> terminal find", () => {
       </StrictMode>,
     );
 
-    // StrictMode mounts → unmounts → remounts synchronously. The unmount's
-    // disposal is deferred (a macrotask), so the remount's re-acquire cancels
-    // it and reclaims the SAME engine instead of building a fresh one. Eager
-    // disposal here is the blank-terminal-on-refresh bug: it throws away the
-    // engine that already rendered the one-shot host snapshot.
+    // The unmount's disposal is deferred (a macrotask), so the remount's re-acquire cancels it and reclaims the SAME engine instead of building a fresh one.
     expect(xtermMocks.terminals).toHaveLength(1);
     expect(() => vi.runOnlyPendingTimers()).not.toThrow();
     expect(xtermMocks.terminals[0].isDisposed()).toBe(false);
 
-    // A real unmount has no remount to cancel the deferred disposal, so the
-    // engine is torn down. The startup Viewport timer must still drain first
-    // without throwing.
+    // The startup Viewport timer must still drain first without throwing.
     rendered.unmount();
     expect(() => vi.runAllTimers()).not.toThrow();
     expect(xtermMocks.terminals[0].isDisposed()).toBe(true);
@@ -539,22 +531,8 @@ describe("<TerminalXtermHost /> terminal find", () => {
       );
     });
 
-    // Two repaints, in this order. This host was born hidden and never held an
-    // addon, so the first refresh is the FIRST presentation loading one - not a
-    // restoration after disposal, which is covered in
-    // terminal-xterm-host-presentation.test.tsx. What this pins is the call
-    // ORDER of the two effects:
-    //   1. the presentation gate loads the canvas addon and repaints into it;
-    //   2. the reshow repair then clears the (possibly invalidated) glyph atlas
-    //      BEFORE forcing its own full repaint, so every cell re-rasterizes in
-    //      the current theme instead of painting from a stale/cleared atlas -
-    //      the blank-grid / default-color regression after returning from
-    //      `display:none`.
-    // Deliberately NOT evidence that the restore happens before paint: the
-    // presentation effect is declared ahead of the repair, so this sequence
-    // would hold even if it were passive. The layout-vs-passive claim is pinned
-    // by the ordering observer in the presentation suite, and first-frame
-    // pixels only by the live render check.
+    // This host was born hidden and never held an addon, so the first refresh is the FIRST presentation loading one - not a restoration after disposal, which is covered in terminal-xterm-host-presentation.test.tsx.
+    // What this pins is the call ORDER of the two effects: 1. the presentation gate loads the canvas addon and repaints into it; 2. the reshow repair then clears the (possibly invalidated) glyph atlas BEFORE forcing its own full repaint, so every cell re-rasterizes in the current theme instead of painting from a stale/cleared atlas - the blank-grid / default-color regression after returning from `display:none`.
     expect(xtermMocks.repaintLog).toEqual(["refresh", "clearAtlas", "refresh"]);
   });
 
@@ -611,11 +589,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       </>,
     );
 
-    // Both split members mount presented, so each one's presentation layout
-    // effect loads a canvas addon and repaints (the two leading refreshes, both
-    // before paint) and each one's passive reshow repair then clears its atlas
-    // and repaints again. Neither pane's presentation is suppressed by the
-    // other's - being unfocused is not being unpresented.
+    // Both split members mount presented, so each one's presentation layout effect loads a canvas addon and repaints (the two leading refreshes, both before paint) and each one's passive reshow repair then clears its atlas and repaints again.
     expect(xtermMocks.repaintLog).toEqual([
       "refresh",
       "refresh",
@@ -1173,13 +1147,6 @@ describe("<TerminalXtermHost /> terminal find", () => {
   });
 
   it("never forwards xterm's OSC 10/11 colour reports as user input", async () => {
-    // The HOST is the single authority for colour queries (it answers with
-    // the session's spawn-time themeHint). A live query still reaches this
-    // client's xterm through the output stream and xterm generates a reply;
-    // forwarding it would race the host's answer with one reply per attached
-    // viewer, each reporting its own theme. Suppression is gated on the host
-    // actually having the responder (terminal.create@2.1+), so the test
-    // seeds the negotiated manifest a real handshake would have recorded.
     recordNegotiatedHostManifest("host-1", {
       "terminal.create": { major: 2, minor: 1 },
     });
@@ -1225,18 +1192,14 @@ describe("<TerminalXtermHost /> terminal find", () => {
     getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
     expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
 
-    // The filter matches only the report grammar xterm generates: an OSC
-    // 10/11 QUERY or colour-SET arriving as genuine user input (a paste)
-    // must reach the PTY untouched.
+    // The filter matches only the report grammar xterm generates: an OSC 10/11 QUERY or colour-SET arriving as genuine user input (a paste) must reach the PTY untouched.
     onUserInput.mockClear();
     xtermMocks.terminals[0].paste("\x1b]11;#112233\x07");
     expect(onUserInput).toHaveBeenCalledWith(
       "\x1b[200~\x1b]11;#112233\x07\x1b[201~",
     );
 
-    // Even a byte-exact colour REPORT pasted while the terminal is idle is
-    // user input, not a generated reply: replies only ever surface while a
-    // live output chunk is mid-parse, and the filter is gated on that window.
+    // Even a byte-exact colour REPORT pasted while the terminal is idle is user input, not a generated reply: replies only ever surface while a live output chunk is mid-parse, and the filter is gated on that window.
     onUserInput.mockClear();
     xtermMocks.terminals[0].paste("\x1b]11;rgb:1111/2222/3333\x07");
     expect(onUserInput).toHaveBeenCalledWith(
@@ -1245,10 +1208,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
   });
 
   it("keeps forwarding colour replies to a host without the OSC responder", async () => {
-    // A pre-terminal.create@2.1 host has no host-side answer for OSC 10/11.
-    // This viewer's xterm reply - late-query-only and per-viewer as it is -
-    // is the only answer a probing TUI gets there, so suppression must not
-    // engage (Codex review on #1424).
+    // This viewer's xterm reply - late-query-only and per-viewer as it is - is the only answer a probing TUI gets there, so suppression must not engage (Codex review on #1424).
     recordNegotiatedHostManifest("host-1", {
       "terminal.create": { major: 2, minor: 0 },
     });
@@ -1292,13 +1252,8 @@ describe("<TerminalXtermHost /> terminal find", () => {
   });
 
   it("resets the buffer before replaying a reconnect snapshot", async () => {
-    // A transport reconnect re-sends a full snapshot into the same kept-alive
-    // engine that still holds pre-disconnect content. The engine must reset the
-    // buffer before replaying so the authoritative snapshot lands clean instead
-    // of colliding with the stale screen (the dropped-tail / lost-theme bug).
-    // We assert this indirectly: replaying identical content twice leaves the
-    // cursor in the SAME place only if the second snapshot reset first; without
-    // a reset the second snapshot would append and the cursor would advance.
+    // The engine must reset the buffer before replaying so the authoritative snapshot lands clean instead of colliding with the stale screen (the dropped-tail / lost-theme bug).
+    // We assert this indirectly: replaying identical content twice leaves the cursor in the SAME place only if the second snapshot reset first; without a reset the second snapshot would append and the cursor would advance.
     const inputReports: string[] = [];
     const onUserInput = vi.fn((data: string) => {
       inputReports.push(data);
@@ -1365,10 +1320,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
   });
 
   it("resets the buffer before replaying a reconnect snapshot given as Uint8Array (terminal.subscribe@1.2)", async () => {
-    // Same reset-before-replay guarantee as the string case above, but for a
-    // `@1.2` binary connection's `Uint8Array` snapshot chunk - exercises
-    // `prependResetEscape`'s byte-concatenation path against a real xterm
-    // engine instead of just checking the produced bytes in isolation.
+    // Same reset-before-replay guarantee as the string case above, but for a `@1.2` binary connection's `Uint8Array` snapshot chunk - exercises `prependResetEscape`'s byte-concatenation path against a real xterm engine instead of just checking the produced bytes in isolation.
     const inputReports: string[] = [];
     const onUserInput = vi.fn((data: string) => {
       inputReports.push(data);
@@ -1420,9 +1372,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     const afterFirst = inputReports.at(-1);
     expect(afterFirst).toBeDefined();
 
-    // Reconnect: the SAME bytes replayed. With a correctly-prepended reset
-    // the cursor lands in the same spot; without one (or with corrupted
-    // reset bytes) it would append after the first copy or garble entirely.
+    // With a correctly-prepended reset the cursor lands in the same spot; without one (or with corrupted reset bytes) it would append after the first copy or garble entirely.
     getWriter()({
       kind: "snapshot",
       chunk: snapshotBytes,

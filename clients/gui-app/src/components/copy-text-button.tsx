@@ -14,13 +14,8 @@ interface CopyTextButtonProps {
   readonly disabled: boolean;
 }
 
-/**
- * Copies `value` to the clipboard and briefly confirms with a check. With a
- * `label` it renders an outline button (icon + text) sized to sit next to other
- * `size="sm"` actions; with `label: null` it renders a compact icon-only
- * button. Reuses {@link useClipboardCopy}, so an insecure-context clipboard
- * failure surfaces a toast.
- */
+/** With a `label` it renders an outline button (icon + text) sized to sit next to other `size="sm"` actions;
+ * with `label: null` it renders a compact icon-only button. */
 export function CopyTextButton(props: CopyTextButtonProps) {
   const { value, label, ariaLabel, disabled } = props;
   const { copied, copy } = useClipboardCopy({

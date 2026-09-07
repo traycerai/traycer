@@ -56,9 +56,7 @@ describe("prompt-stash-repository refresh", () => {
   });
   it("re-arms dbPromise after a failed open so a later call succeeds", async () => {
     const realFactory = new FakeIDBFactory();
-    // Fail only the prompt-stash DB open - other modules (e.g. landing-images)
-    // also open IndexedDB during import/side effects and must not consume the
-    // one-shot failure.
+    // Fail only the prompt-stash DB open - other modules (e.g. landing-images) also open IndexedDB during import/side effects and must not consume the one-shot failure.
     let failPromptStashOpenOnce = true;
     let promptStashOpenCalls = 0;
 
@@ -223,9 +221,8 @@ describe("prompt-stash-repository refresh", () => {
     );
     expect((await repo.loadPromptStashSnapshot()).rows).toHaveLength(1);
 
-    // deleteDatabase forces onversionchange on the repository's held
-    // connection (same path as wipe / cross-window upgrade). The handler
-    // must close and null dbPromise so the next open is fresh.
+    // deleteDatabase forces onversionchange on the repository's held connection (same path as wipe / cross-window upgrade).
+    // The handler must close and null dbPromise so the next open is fresh.
     await new Promise<void>((resolve, reject) => {
       const request = indexedDB.deleteDatabase(DB_NAME);
       request.onsuccess = () => resolve();

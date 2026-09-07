@@ -26,11 +26,7 @@ interface InterviewSegmentProps {
   readonly interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
 }
 
-/**
- * Pending interviews render in the composer slot. Terminal interviews stay in
- * their original assistant turn and delegate all history-only behavior to the
- * resolved card.
- */
+/** Pending interviews render in the composer slot. Terminal interviews stay in their original assistant turn and delegate all history-only behavior to the resolved card. */
 export function InterviewSegment(props: InterviewSegmentProps) {
   if (props.status === "streaming") return null;
   return (

@@ -19,9 +19,7 @@ import { ModelRowsState } from "../harness-model-picker-empty";
 
 const mocks = vi.hoisted(() => ({
   start: vi.fn(),
-  // The host's negotiated `providers.startTerminalLogin` major, which decides
-  // whether the LANDING action can be sent at all. `"supported"` here is the
-  // modern host; the gate's own rules live in
+  // `"supported"` here is the modern host; the gate's own rules live in
   // `use-provider-terminal-login-scope-support.test.tsx`.
   scopeSupported: {
     current: "supported",
@@ -65,9 +63,8 @@ function harnessEntry(
   };
 }
 
-// The `providers.list` row for `providerId`, carrying a `loginCapability` that
-// declares terminal-login support - this is what gates the setup CTA now,
-// not the guidance table alone (see `resolveProviderTerminalSetup`).
+// The `providers.list` row for `providerId`, carrying a `loginCapability` that declares terminal-login support
+// - this is what gates the setup cta now, not the guidance table alone (see `resolveProviderTerminalSetup`).
 function terminalLoginCapableState(
   providerId: ProviderId,
   oauthArgs: ReadonlyArray<string>,
@@ -178,10 +175,8 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     ).toBeDefined();
     expect(screen.getByText("Refresh this list.")).toBeDefined();
 
-    // No button of any kind - not "Open Settings" (the CTA no longer writes
-    // the focus store or takes a click handler), and not "Report issue"
-    // (reportIssueAvailable is true here, so its absence is the CTA's own
-    // doing, not the feature being globally off).
+    // No button of any kind - not "Open Settings" (the cta no longer writes the focus store or takes a click
+    // handler), and not "Report issue" (reportIssueAvailable is true here, so its absence is the cta's own doing.
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -264,9 +259,8 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: null,
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
-        // A landing surface IS available here, to prove the button's absence
-        // comes from `canStartTerminal: false` (the host never declared the
-        // capability), not merely from having nowhere to open a terminal.
+        // A landing surface IS available here, to prove the button's absence comes from `canStartTerminal: false` (the
+        // host never declared the capability), not merely from having nowhere to open a terminal.
         terminalLoginSurface: {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
@@ -328,9 +322,8 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
 
     const button = screen.getByRole("button", { name: /Set up in terminal/ });
     expect(button).toBeDefined();
-    // With the terminal action present the step list is just the post-action
-    // steps - it no longer opens with the no-surface sentence naming where the
-    // button lives, since the button is right here.
+    // With the terminal action present the step list is just the post-action steps - it no longer opens with the
+    // no-surface sentence naming where the button lives, since the button is right here.
     const steps = screen.getAllByRole("listitem");
     expect(steps[0]?.textContent).toContain(
       "Paste your provider API key when asked",
@@ -378,13 +371,11 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
 
     expect(resolveLandingPageId).toHaveBeenCalledTimes(1);
     expect(mocks.start).toHaveBeenCalledTimes(1);
-    // The resolver's return - not the surface literal, not a stale id - is
-    // exactly what reaches `start`, which is what the landing hook opens the
-    // panel with (see `useLandingProviderStartTerminalLogin`'s own tests).
+    // The resolver's return - not the surface literal, not a stale id - is exactly what reaches `start`, which is
+    // what the landing hook opens the panel with (see `useLandingProviderStartTerminalLogin`'s own tests).
     expect(mocks.start).toHaveBeenCalledWith("resolved-draft-7");
-    // And it ran BEFORE start, per `LandingSetupTerminalButton`'s ordering:
-    // the draft has to be bound before the host can be asked to open a
-    // terminal against it.
+    // And it ran before start, per `LandingSetupTerminalButton`'s ordering: the draft has to be bound before the
+    // host can be asked to open a terminal against it.
     const resolveOrder = resolveLandingPageId.mock.invocationCallOrder[0];
     const startOrder = mocks.start.mock.invocationCallOrder[0];
     expect(resolveOrder).toBeDefined();
@@ -489,10 +480,8 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       }),
     );
 
-    // Identical props to the CTA test above; only the host's negotiated
-    // `providers.startTerminalLogin` major differs. Copilot is the sharpest
-    // case: on the generic guidance its `manualCommand` is null, so a button
-    // that always fails would be the user's ONLY affordance.
+    // Copilot is the sharpest case: on the generic guidance its `manualCommand` is null, so a button that always
+    // fails would be the user's only affordance.
     expect(
       screen.queryByRole("button", { name: /Sign in from a terminal/ }),
     ).toBeNull();

@@ -1,35 +1,6 @@
 /**
- * Cross-window image-byte handoff for a landing draft MOVE.
- *
- * A draft's persisted content is hash-only, and each window keeps its image
- * bytes in its OWN IndexedDB partition (`landing-image-store`). Moving a draft
- * to a new window therefore has to move bytes too, but the destination's
- * partition is keyed by a windowId that does not exist until the move IPC has
- * created the window - by which point its renderer is already loading. The
- * handoff closes that gap with a third, draftId-keyed database:
- *
- *   source:      stageDraftImageHandoff  - copy the draft's bytes into
- *                `…:draft-move:{draftId}:landing-images` BEFORE the move IPC.
- *   destination: adoptDraftImageHandoff  - on first projection, any referenced
- *                hash missing from the local partition is imported from the
- *                handoff DB (via `putImage`, which re-hashes and so verifies
- *                content addressing), then the handoff DB is deleted.
- *   source:      discardDraftImageHandoff - delete the handoff when the move
- *                is refused, so a cancelled move leaves nothing behind.
- *
- * Adoption is self-gating (it only opens the handoff DB when a hash is
- * actually missing locally), so ordinary restores never touch it, and a
- * destination that crashed before adopting simply retries on its next launch -
- * the handoff DB is deleted only after an adoption pass ran.
- *
- * The handoff DB is driven with RAW IndexedDB rather than `idb-keyval`
- * deliberately: `createStore` holds its connection open forever (no close is
- * exposed), and `indexedDB.deleteDatabase` BLOCKS until every connection to
- * that database closes - so a delete after an idb-keyval read/write in the
- * same window never resolves, silently stranding the handoff. Every open here
- * is paired with a `close()` before any delete can run. (The schema matches
- * what `createStore(name, "bytes")` would produce - version 1, one "bytes"
- * store - so tooling can still read a staged handoff either way.)
+ * Cross-window landing-draft image handoff: stage bytes into a draftId-keyed DB before the move IPC; adopt on first missing hash; discard on refuse.
+ * Use raw IndexedDB (not idb-keyval): `deleteDatabase` blocks until every connection closes, and `createStore` never closes.
  */
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -80,12 +51,8 @@ function awaitTransaction(tx: IDBTransaction): Promise<void> {
 }
 
 /**
- * Whether the draft's handoff DB exists, without creating it. A draft can
- * reference a hash that is missing locally AND was never staged (a manually
- * wiped restore); without this check every adoption probe for it would create
- * an empty handoff DB just to delete it again. `databases()` is feature-probed
- * because not every engine ships it; when absent the answer defaults to true
- * and the open-adopt-delete path handles the empty DB as before.
+ * Whether the draft's handoff DB exists, without creating it.
+ * A draft can reference a hash that is missing locally AND was never staged (a manually wiped restore); without this check every adoption probe for it would create an empty handoff DB just to delete it again.
  */
 async function handoffDbExists(draftId: string): Promise<boolean> {
   if (typeof indexedDB.databases !== "function") return true;
@@ -103,10 +70,8 @@ function deleteHandoffDb(draftId: string): Promise<void> {
     request.onerror = () => {
       reject(request.error ?? new Error("deleteDatabase failed"));
     };
-    // Another WINDOW holding the DB open defers the delete; the request still
-    // completes once it closes, so treat blocked as pending, not failed. This
-    // window's own connections are all closed before a delete is issued - see
-    // the module doc - so a block can only be cross-window.
+    // Another WINDOW holding the DB open defers the delete; the request still completes once it closes, so treat blocked as pending, not failed.
+    // This window's own connections are all closed before a delete is issued - see the module doc - so a block can only be cross-window.
     request.onblocked = () => undefined;
   });
 }
@@ -122,24 +87,15 @@ export function draftImageHashes(content: JsonContent): ReadonlyArray<string> {
 
 /**
  * Whether the draft still holds an attachment that has not finished ingesting.
- * An in-place structured paste leaves the image in the document as base64 with
- * NO hash until the background `putImage` rewrites that node
- * (`startPendingImageIngest`), and such an atom is invisible to every part of
- * the move: `draftImageHashes` has no hash to stage, and the desktop
- * projection strips base64 before the snapshot the destination is seeded from.
- * Moving in that gap would carry the draft over without the attachment and
- * then close the only copy that still had it - so the move waits it out.
+ * An in-place structured paste leaves the image in the document as base64 with NO hash until the background `putImage` rewrites that node (`startPendingImageIngest`), and such an atom is invisible to every part of the move: `draftImageHashes` has no hash to.
  */
 export function draftHasIngestingImages(content: JsonContent): boolean {
   return collectImageAtoms(content).some((atom) => atom.hash === null);
 }
 
 /**
- * Copy the draft's reachable bytes into its handoff DB. A hash with no local
- * bytes (a manually wiped restore) is skipped: the moved draft renders that
- * chip broken in the destination exactly as it would have here, and the move
- * itself must not be blocked on it. No handoff DB is created when nothing is
- * reachable.
+ * Copy the draft's reachable bytes into its handoff DB.
+ * A hash with no local bytes (a manually wiped restore) is skipped: the moved draft renders that chip broken in the destination exactly as it would have here, and the move itself must not be blocked on it.
  */
 export async function stageDraftImageHandoff(
   draftId: string,
@@ -166,10 +122,8 @@ export async function stageDraftImageHandoff(
 }
 
 /**
- * Import any of `hashes` missing from this window's partition from the
- * draft's handoff DB, then delete the handoff. No-op (and no handoff DB is
- * created) when every hash is already locally reachable, or when nothing was
- * ever staged for the draft.
+ * Import any of `hashes` missing from this window's partition from the draft's handoff DB, then delete the handoff.
+ * No-op (and no handoff DB is created) when every hash is already locally reachable, or when nothing was ever staged for the draft.
  */
 export async function adoptDraftImageHandoff(
   draftId: string,
@@ -190,9 +144,7 @@ export async function adoptDraftImageHandoff(
       missing.map((hash) => awaitRequest<unknown>(store.get(hash))),
     );
     for (const value of values) {
-      // Copy into a fresh plain-ArrayBuffer view: narrows the untyped IDB
-      // read to exactly what `putImage` takes, whatever realm or buffer kind
-      // the driver handed back.
+      // Copy into a fresh plain-ArrayBuffer view: narrows the untyped IDB read to exactly what `putImage` takes, whatever realm or buffer kind the driver handed back.
       if (ArrayBuffer.isView(value)) {
         imported.push(
           new Uint8Array(
@@ -204,9 +156,7 @@ export async function adoptDraftImageHandoff(
   } finally {
     db.close();
   }
-  // `putImage` re-hashes the bytes, so a corrupted or mismatched handoff entry
-  // lands under its true hash and simply stays "missing" for the draft - it
-  // can never impersonate the expected content.
+  // `putImage` re-hashes the bytes, so a corrupted or mismatched handoff entry lands under its true hash and simply stays "missing" for the draft - it can never impersonate the expected content.
   for (const bytes of imported) {
     await putImage(bytes);
   }

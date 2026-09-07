@@ -54,13 +54,8 @@ vi.mock("@/components/layout/header/app-header", () => ({
 // diagnostics correctly stay hidden.
 const hostStatus = vi.hoisted(() => ({ data: undefined }));
 
-// This suite never supplies a snapshot, so all three fields are the no-read
-// state and are written as such - `data !== undefined` would be a comparison
-// the type already decides (and ESLint says so). The reader flags exist
-// because `LocalBootstrapAttempts` refuses a cached snapshot and refuses the
-// one a failed refetch retained; see the note in
-// `default-host-ready-gate.test.tsx`. The local-bootstrap diagnostics
-// correctly stay hidden here either way.
+// This suite never supplies a snapshot, so all three fields are the no-read state and are written as such -
+// `data !== undefined` would be a comparison the type already decides (and ESLint says so).
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
   useRunnerTraycerHostStatusQuery: () => ({
     data: hostStatus.data,
@@ -100,15 +95,7 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   },
 };
 
-/**
- * Presence assertions cannot tell "never unmounted" from "unmounted and
- * rebuilt identically" - and a remount is precisely the failure these tests
- * exist to catch: it is what threw away editors, terminals, scroll positions
- * and popovers on every switch. So the app body carries state React does NOT
- * own: an uncontrolled input whose value is written directly into the DOM. A
- * remount replaces that node and the value is gone. The mount counter is the
- * second, independent readout.
- */
+/** Presence assertions cannot tell "never unmounted" from "unmounted and rebuilt identically". */
 const sentinelMounts = { count: 0 };
 
 function AppSentinel(): ReactNode {
@@ -131,16 +118,8 @@ function typeIntoScratch(text: string): void {
   screen.getByTestId<HTMLInputElement>("app-scratch").value = text;
 }
 
-/**
- * No window-scope banner is on screen (D11's first acceptance bullet).
- *
- * Asserted by ROLE, not by the deleted strip's test id. A `queryByTestId
- * ("host-status-strip")` would be unfalsifiable now - nothing in the tree can
- * produce that id any more, so it would pass forever regardless of what any
- * future code did. `status` is the role an `<output>` live region reports, and
- * the strip was exactly that: any replacement banner announcing host state at
- * window scope lands in this query, whatever it calls itself.
- */
+/** A `queryByTestId ("host-status-strip")` would be unfalsifiable now - nothing in the tree can produce that id
+ * any more, so it would pass forever regardless of what any future code did. */
 function expectNoWindowScopeBanner(): void {
   expect(screen.queryAllByRole("status")).toHaveLength(0);
 }
@@ -157,17 +136,7 @@ function controllerFor(
   };
 }
 
-/**
- * Moves the app-wide pointer - which is what "switching hosts" IS since P4.2
- * deleted the active slot.
- *
- * These cases used to drive `hostClient.bind(entry)` on one client instance,
- * because the slot's change event was the switch. There is no slot now: the
- * selection authority names the effective host, the readiness controller
- * resolves a requester from that id, and a switch is this store moving. The
- * assertions are unchanged - what a switch means changed, not what the app
- * must do across one.
- */
+/** The assertions are unchanged - what a switch means changed, not what the app must do across one. */
 function setEffectiveHost(hostId: string): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,
@@ -183,8 +152,8 @@ function buildHostClient(): HostClient<HostRpcRegistry> {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
-    // The SPINE: the controller derives its own requester off this by id, so
-    // the lookup has to answer for BOTH hosts these cases switch between.
+    // The spine: the controller derives its own requester off this by id, so the lookup has to answer for both
+    // hosts these cases switch between.
     findHostById: (hostId) => {
       if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
       if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
@@ -213,11 +182,8 @@ interface SwitchHarness {
   ) => void;
 }
 
-/**
- * Mounts the gate under a real HostClient so a genuine `host-bound` switch and
- * the cold-start latch are exercised together - the acceptance line "switching
- * hosts keeps the app mounted" for both directions.
- */
+/** Mounts the gate under a real HostClient so a genuine `host-bound` switch and the cold-start latch are
+ * exercised together - the acceptance line "switching hosts keeps the app mounted" for both directions. */
 function mountSwitchSurface(
   initialReadiness: SurfaceReadiness,
   presentation: DefaultHostReadinessPresentation,
@@ -242,10 +208,8 @@ function mountSwitchSurface(
 
   let readiness = initialReadiness;
   let currentPresentation = presentation;
-  // The gate's latch moved into the readiness controller (the window modal has
-  // to read it too), and this suite hand-supplies that context - so the harness
-  // has to model it or the gate never latches and every post-latch pin below
-  // fails against a correct gate. Monotonic, exactly like the provider.
+  // The gate's latch moved into the readiness controller (the window modal has to read it too), and this suite
+  // hand-supplies that context.
   let hasBeenReady = initialReadiness.kind === "ready";
 
   const tree = (
@@ -287,35 +251,16 @@ afterEach(() => {
   cleanup();
   bindingRef.value = null;
   useAuthStore.getState().setSignedOut();
-  // Module state: a case that moved the pointer would hand its host to the
-  // next one, and these cases are ABOUT which host is effective.
+  // Module state: a case that moved the pointer would hand its host to the next one, and these cases are about
+  // which host is effective.
   useSelectionAuthorityStore.getState().reset();
 });
 
-/**
- * TITLES CORRECTED TO WHAT THIS SUITE MEASURES (redesign P4.2).
- *
- * It was called "switching hosts keeps the app mounted", and it does not
- * measure that: the harness supplies `HostReadinessControllerContext` from a
- * hand-made `controllerFor(...)`, so the controller that would read the host
- * never mounts and a host move has no path to the subject. Neutering the move
- * entirely leaves both cases passing - and that was equally true BEFORE the
- * migration, measured by neutering the pre-P4.2 `bind()` drives on the same
- * file at HEAD. Inherited vacuity, not introduced.
- *
- * What it does measure is worth keeping: the gate does not remount the app
- * when its readiness CONTEXT changes. The acceptance line "the app stays
- * mounted across a host switch" is carried by no case here and is recorded as
- * an open residual - a title is a claim, and a false one left standing green
- * is how the next reader inherits a hole.
- */
+/** It was called "switching hosts keeps the app mounted", and it does not measure that. */
 describe("the ready gate does not remount the app when readiness context changes", () => {
   it("ready→ready under a pointer move keeps the app mounted and narrates nothing at window scope", async () => {
-    // Local → remote never produces a non-ready readiness kind (remote targets
-    // pass readiness through as ready the moment the entry is dialable), so
-    // this moves the app-wide pointer and the switch carries no readiness
-    // event at all. That is the whole D2/D11 claim: a switch needs no
-    // narration, because nothing about it is a failure.
+    // Local → remote never produces a non-ready readiness kind (remote targets pass readiness through as ready the
+    // moment the entry is dialable).
     mountSwitchSurface({ kind: "ready" }, PRESENTATION, mockLocalHostEntry);
     expect(screen.getByTestId("app-shell")).toBeTruthy();
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
@@ -327,9 +272,8 @@ describe("the ready gate does not remount the app when readiness context changes
       setEffectiveHost(mockRemoteHostEntry.hostId);
     });
 
-    // Settle whatever the bind schedules before asserting on silence: asserting
-    // "nothing appeared" on the synchronous frame would pass even if a banner
-    // were one microtask away.
+    // Settle whatever the bind schedules before asserting on silence: asserting "nothing appeared" on the
+    // synchronous frame would pass even if a banner were one microtask away.
     await waitFor(() => {
       expect(screen.getByTestId("app-shell")).toBe(shellBefore);
     });
@@ -342,10 +286,8 @@ describe("the ready gate does not remount the app when readiness context changes
   });
 
   it("a loading-host readiness change does not full-screen the app once the gate has latched", () => {
-    // After the first ready, even a local loading-host (the direction that
-    // previously replaced the whole shell on switch-back) must keep the app
-    // mounted. Whatever needs saying about that wait is the window modal's,
-    // mounted outside this tree - never a card that replaces the app.
+    // Whatever needs saying about that wait is the window modal's, mounted outside this tree - never a card that
+    // replaces the app.
     const remotePresentation: DefaultHostReadinessPresentation = {
       ...PRESENTATION,
       targetKind: "remote",

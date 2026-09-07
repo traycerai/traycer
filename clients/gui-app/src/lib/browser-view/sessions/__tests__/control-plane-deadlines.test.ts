@@ -2,15 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
 import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
 
-/**
- * Each spec's floor and roundTrips multiplier, stated once here rather than
- * restated per assertion below.
- *
- * What is pinned here is only THIS k-table: that each viewer window carries
- * the floor and multiplier it is supposed to. The arithmetic itself (clamps,
- * variance, rounding) belongs to `deriveRttDeadlineMs` and is pinned in
- * `protocol/src/host-transport/__tests__/rtt-deadlines.test.ts`.
- */
+/** Each spec's floor and roundTrips multiplier, stated once here rather than restated per assertion below. */
 const SPECS = [
   {
     name: "armBuffer",

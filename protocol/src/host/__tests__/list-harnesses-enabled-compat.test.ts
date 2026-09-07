@@ -12,13 +12,8 @@ import {
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 
 /**
- * `agent.gui.listHarnesses` released-line coverage: `enabled` (#178) and
- * `availabilityPending` (#147) landed mid-line on the released 1.0/2.0
- * shapes via zod tolerances - the same class as the providers.list #258
- * incident. The 1.0/2.0 shapes are frozen pre-feature here; the fields
- * formally enter major 2 with the 2.1 minor, whose upgrade fills the
- * "old host never had this feature" defaults. This suite pins both
- * directions: upgrades fill, frozen parses strip.
+ * `agent.gui.listHarnesses` released-line coverage: `enabled` (#178) and `availabilityPending` (#147) landed mid-line on the released 1.0/2.0 shapes via zod tolerances - the same class as the providers.list #258 incident.
+ * This suite pins both directions: upgrades fill, frozen parses strip.
  */
 
 function harnessRow(id: string, enabled: boolean) {
@@ -101,9 +96,7 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
   });
 
   it("latest → major-2 downgrade lands on 2.1 and preserves a real enabled value", () => {
-    // The host-side caller-contract parse (not this bridge) is what strips
-    // `enabled` for a frozen-2.0 caller; the bridge itself must keep the real
-    // value so 2.1 callers are never fed a fabricated default.
+    // The host-side caller-contract parse (not this bridge) is what strips `enabled` for a frozen-2.0 caller; the bridge itself must keep the real value so 2.1 callers are never fed a fabricated default.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["agent.gui.listHarnesses"],
       8,
@@ -113,9 +106,7 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
     expect(downgraded.value.harnesses[0].enabled).toBe(false);
-    // A released ≤1.1.2 caller negotiates 2.0; its frozen contract parse
-    // strips the 2.1-only field, so the wire shape matches what those
-    // clients have always decoded.
+    // A released ≤1.1.2 caller negotiates 2.0; its frozen contract parse strips the 2.1-only field, so the wire shape matches what those clients have always decoded.
     const asFrozen20Caller = listGuiHarnessesResponseSchemaV20.parse(
       downgraded.value,
     );
@@ -141,9 +132,6 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
   });
 
   it("the 2.1 row still tolerates an old wire payload directly", () => {
-    // Defense in depth for paths that parse a released host's 2.0 payload
-    // with the 2.1 schema (no upgrade chain): the live tolerances fill the
-    // same defaults the upgrade would.
     const parsed = listGuiHarnessesResponseSchemaV21.parse({
       harnesses: [released20WireRow("claude")],
     });

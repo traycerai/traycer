@@ -6,9 +6,8 @@ import {
   type ForegroundStartModeInput,
 } from "../foreground-console";
 
-// `resolveForegroundStartMode`: pure decision table for what `host start` is
-// allowed to print. `openForegroundConsole`: the announce side effects for each
-// mode, fully dependency-injected.
+// `resolveForegroundStartMode`: pure decision table for what `host start` is allowed to print.
+// `openForegroundConsole`: the announce side effects for each mode, fully dependency-injected.
 
 describe("resolveForegroundStartMode", () => {
   const BASE: ForegroundStartModeInput = {
@@ -41,10 +40,8 @@ describe("resolveForegroundStartMode", () => {
       { json: true, quiet: true },
       "events",
     ],
-    // The only structured thing this command emits is a `progress` event, so
-    // `--no-progress` - documented as "suppress progress events" - has to
-    // suppress it. Without this, `--json --no-progress` put a
-    // `type: "progress"` line on the stdout of automation that asked for none.
+    // The only structured thing this command emits is a `progress` event, so `--no-progress` - documented as "suppress progress events" - has to suppress it.
+    // Without this, `--json --no-progress` put a `type: "progress"` line on the stdout of automation that asked for none.
     [
       "json + --no-progress suppresses the lifecycle event",
       { json: true, noProgress: true },
@@ -72,9 +69,7 @@ describe("resolveForegroundStartMode", () => {
     );
   });
 
-  // serviceManaged is checked FIRST and unconditionally - it is positive
-  // evidence a service manager produced the invocation, so it must win over
-  // every other combination, not just the ones above.
+  // serviceManaged is checked FIRST and unconditionally - it is positive evidence a service manager produced the invocation, so it must win over every other combination, not just the ones above.
   it("serviceManaged is silent across the full remaining flag matrix", () => {
     for (const json of [false, true]) {
       for (const quiet of [false, true]) {
@@ -97,12 +92,8 @@ describe("resolveForegroundStartMode", () => {
 });
 
 describe("openForegroundConsole", () => {
-  // There is no mirroring mode at all: writing arbitrary log volume from the
-  // supervisor's own event-loop thread blocks on a TTY (measured: 64 KiB into
-  // an unread PTY delayed a SIGINT handler past 1.5s), which would stop Ctrl-C
-  // reaching the host. The banner carries everything the audit asked for and
-  // points at `host logs --follow`, which streams from a process that is not
-  // supervising anything.
+  // There is no mirroring mode at all: writing arbitrary log volume from the supervisor's own event-loop thread blocks on a TTY (measured: 64 KiB into an unread PTY delayed a SIGINT handler past 1.5s), which would stop Ctrl-C reaching the host.
+  // The banner carries everything the audit asked for and points at `host logs --follow`, which streams from a process that is not supervising anything.
   it("banner mode: announces once and points at 'host logs --follow'", () => {
     const written: string[] = [];
 

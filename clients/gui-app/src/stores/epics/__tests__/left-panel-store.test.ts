@@ -27,9 +27,8 @@ import {
 const PERSIST_KEY = "traycer-gui-app:left-panel";
 
 /**
- * Apply a group move through the public pipeline (the DnD commit path):
- * resolve the next groups with the pure `moveLeftPanelGroup` helper, then
- * commit them atomically via `applyPanelGroups`.
+ * Apply a group move through the public pipeline (the DnD commit path): resolve the next groups
+ * with the pure `moveLeftPanelGroup` helper, then commit them atomically via `applyPanelGroups`.
  */
 function applyPanelGroupMove(
   sourcePanelId: LeftPanelId,
@@ -99,9 +98,8 @@ const SPLIT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
 ];
 
 /**
- * Exactly what a user who last wrote sidebar state before the Pull Requests
- * panel shipped has in `localStorage`: every id valid, so the value survives
- * `readPersistedPanelGroups`, but `pull-requests` absent.
+ * Exactly what a user who last wrote sidebar state before the Pull Requests panel shipped has in
+ * `localStorage`: every id valid, so the value survives `readPersistedPanelGroups`, but
  */
 const PRE_PULL_REQUESTS_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats", "artifacts"] },
@@ -221,9 +219,6 @@ describe("useLeftPanelStore", () => {
 
     await useLeftPanelStore.persist.rehydrate();
 
-    // Chats keeps the group it was given (rather than the default's merged
-    // chats+artifacts), and the ids this build knows but the stored value did
-    // not mention are appended - the same treatment a newly added panel gets.
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
@@ -240,9 +235,8 @@ describe("useLeftPanelStore", () => {
     );
   });
 
-  // Every user who ever rearranged their sidebar carries the id of a panel the
-  // release retires, because it shipped in the defaults. Rejecting the whole
-  // persisted value over it sent all of them back to defaults on upgrade.
+  // Every user who ever rearranged their sidebar carries the id of a panel the release retires,
+  // because it shipped in the defaults.
   it("keeps a user's grouping when it names a panel this build has retired", async () => {
     window.localStorage.setItem(
       PERSIST_KEY,
@@ -819,13 +813,8 @@ describe("useLeftPanelStore", () => {
     expect(hook.result.current).toBe(before);
   });
 
-  // A build that adds a panel id reaches users whose persisted `panelGroups`
-  // predate it, so the stored array can NEVER satisfy the already-normalized
-  // fast path - the missing group has to be appended on every read. The hook
-  // feeds `useSyncExternalStore`, whose `getSnapshot` is called on every
-  // commit with no memoization (zustand v5), so handing back a freshly built
-  // array each time makes React see a changed snapshot forever and re-render
-  // until it throws "Maximum update depth exceeded" (minified error #185).
+  // A build that adds a panel id reaches users whose persisted `panelGroups` predate it, so the
+  // stored array can NEVER satisfy the already-normalized fast path - the missing group has to be
   it("keeps the panel groups hook snapshot stable when stored groups predate a new panel id", () => {
     useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
 
@@ -840,12 +829,8 @@ describe("useLeftPanelStore", () => {
   });
 
   it("caches the normalized groups per stored-array identity, surviving a read of a different identity in between", () => {
-    // A `WeakMap` keyed by the stored array's own identity, not a single
-    // last-input slot: a single slot only stays stable while every reader
-    // passes the SAME input, so alternating between two identities (as two
-    // independent store readers naturally would) would miss on every read
-    // and hand back a fresh array each time - the exact "Maximum update
-    // depth exceeded" condition this cache exists to prevent.
+    // A `WeakMap` keyed by the stored array's own identity, not a single last-input slot: a single
+    // slot only stays stable while every reader passes the SAME input, so alternating between two
     useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
     const firstRead = useLeftPanelStore.getState().getPanelGroups();
 
@@ -1041,9 +1026,7 @@ describe("useLeftPanelStore", () => {
   });
 
   it("refuses to activate a panel the user explicitly hid", () => {
-    // `collab-tile-body` / `start-comment-draft` switch the sidebar to Comments
-    // on the user's behalf. If Comments is switched off, that must be a no-op
-    // rather than pointing the sidebar at a panel with no rail icon.
+    // `collab-tile-body` / `start-comment-draft` switch the sidebar to Comments on the user's behalf.
     useLeftPanelStore.getState().setPanelVisibilityOverride("comments", false);
     useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
 

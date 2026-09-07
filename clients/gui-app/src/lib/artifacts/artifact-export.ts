@@ -13,18 +13,7 @@ export type ArtifactExportFormat = "markdown" | "pdf";
 export interface ArtifactExportSource {
   readonly id: string;
   readonly title: string;
-  /**
-   * The artifact's body, ALREADY SERIALIZED - not the live fragment.
-   *
-   * A fragment is only readable while its room is leased, so taking one here
-   * made every selected body resident for the whole build: the caller had to
-   * hold N leases at once, and a bulk export's memory grew with the combined
-   * size of the selection. Text has no such lifetime, so the caller can
-   * serialize and release one artifact at a time.
-   *
-   * `null` is "this client could not read it", and it still fails the export
-   * by title rather than exporting an empty file.
-   */
+  /** The artifact's body, ALREADY SERIALIZED - not the live fragment. */
   readonly markdown: string | null;
 }
 
@@ -98,14 +87,7 @@ function requireAvailableMarkdown(artifact: ArtifactExportSource): string {
   return artifact.markdown;
 }
 
-/**
- * The body of one artifact, as the export format wants it.
- *
- * Exported because the read and the build are now separate steps: the caller
- * serializes each artifact while it holds that one lease, and hands the text
- * on. Same serializer the builder used inline before, so the bytes are
- * unchanged.
- */
+/** The body of one artifact, as the export format wants it. */
 export function serializeArtifactMarkdown(fragment: Y.XmlFragment): string {
   return artifactDocumentBundle.markdown.serialize(fragment);
 }

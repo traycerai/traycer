@@ -1,13 +1,3 @@
-/**
- * Hydration race regression guard for ticket 03.
- *
- * `WindowsBridgeProvider` registers a one-shot hydration promise with
- * the reconciler at module load. Until the promise resolves, the
- * reconciler must NOT mutate `stripOrder` in response to source-store
- * changes - otherwise the persisted strip refs get filtered out before
- * the desktop snapshot's epic / draft data lands, then re-appended in
- * snapshot order, scrambling the user's tab arrangement on restart.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   __resetTabSyncCoordinatorForTesting,
@@ -58,9 +48,8 @@ describe("tabs-store reconciliation hydration gate", () => {
     useEpicCanvasStore.setState({ openTabOrder: [] });
     expect(useTabsStore.getState().stripOrder).toEqual([PERSISTED_REF]);
 
-    // Resolve the gate AFTER landing the projected canvas tab; the
-    // post-hydration reconcile keeps the persisted ref and adds the
-    // hydrated one.
+    // Resolve the gate AFTER landing the projected canvas tab; the post-hydration reconcile keeps the
+    // persisted ref and adds the hydrated one.
     useEpicCanvasStore.setState({
       openTabOrder: [PERSISTED_REF.id, HYDRATED_REF.id],
       tabsById: {

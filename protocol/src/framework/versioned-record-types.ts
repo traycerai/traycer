@@ -3,31 +3,7 @@ import { z } from "zod";
 declare const validatedRecordVersionRegistryBrand: unique symbol;
 declare const validatedVersionedRecordRegistryBrand: unique symbol;
 
-/**
- * Versioned **record** framework - the persistence counterpart to the
- * versioned **RPC** framework.
- *
- * An RPC contract pairs a request schema with a response schema because both
- * sides of the wire call have to evolve together. A stored record only has
- * one shape, so this module mirrors every structural invariant of
- * `versioned-rpc-types.ts` with a single `schema` instead.
- *
- * Invariants enforced (see `validateVersionedRecordRegistry()`):
- *
- * - `latestMinor` is installed and is the highest installed minor in its line
- * - each contract matches its major/minor slot and `name` key
- * - each non-initial installed version defines an upgrade from the previous
- *   installed version
- * - downgrades originate at the latest installed version of the source major
- *   and target the latest installed version of an older major
- * - minors within a major line are purely additive; a minor may not drop a
- *   field that an earlier minor had
- * - major bumps must carry at least one breaking change (a removed field or
- *   a changed field schema) on the latest minor of each side
- *
- * The framework does not chain downgrades: persistence migration bridges are
- * authored as direct hops from a latest to a latest.
- */
+/** Versioned **record** framework - the persistence counterpart to the versioned **RPC** framework. */
 
 export type SchemaVersion = {
   major: number;
@@ -93,12 +69,7 @@ export type RecordDowngradePath<
 
 /**
  * Erased upgrade bridge used by registry storage and traversal internals.
- *
- * Author bridges with `defineRecordUpgradePath()` instead of constructing
- * this type directly. The `never` parameter keeps narrower adapters
- * assignable after erasure; `unknown` (rather than `object`) on the
- * return side accommodates non-object records (enums, unions of
- * literals).
+ * The `never` parameter keeps narrower adapters assignable after erasure; `unknown` (rather than `object`) on the return side accommodates non-object records (enums, unions of literals).
  */
 export type AnyRecordUpgradePath = {
   from: SchemaVersion;
@@ -146,13 +117,7 @@ type AnyMajorRecordVersionLine = MajorRecordVersionLine<
   Readonly<Record<number, AnyRecordDowngradePath>>
 >;
 
-/**
- * Raw record-name registry shape before validation.
- *
- * Promote it to `RecordVersionRegistry` with
- * `defineVersionedRecordRegistry()` or `validateVersionedRecordRegistry()`
- * before calling traversal helpers.
- */
+/** Raw record-name registry shape before validation. */
 export type UncheckedRecordVersionRegistry = Readonly<
   Record<number, AnyMajorRecordVersionLine>
 >;

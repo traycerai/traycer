@@ -6,23 +6,13 @@ import { cn } from "@/lib/utils";
 
 const LIVE_RING_PEAK_OPACITY = 0.6;
 
-/**
- * A host's glyph.
- *
- * The old list drew a CLOUD on every row — including the laptop the app was
- * running on. That single wrong icon is most of why the local host read as
- * a different species from itself in the section below. The glyph now answers
- * "what kind of host is this?": the one on this computer, another host you own,
- * or something reached over a relay.
- */
+/** A host's glyph. */
 export function HostGlyph(props: {
   readonly host: HostScopeOption;
   readonly className: string | undefined;
 }): ReactNode {
-  // Each branch returns a fixed element rather than picking a component and
-  // rendering it as `<Icon />`. Selecting the TYPE at render time makes it a
-  // component created during render, which remounts the subtree whenever the
-  // host changes kind (and trips `react-hooks/static-components`).
+  // Selecting the type at render time makes it a component created during render, which remounts the subtree
+  // whenever the host changes kind (and trips `react-hooks/static-components`).
   const className = cn("shrink-0", props.className);
   if (props.host.isLocalMachine) {
     return <Laptop className={className} aria-hidden />;
@@ -42,15 +32,8 @@ const DOT_TONE = {
   idle: "bg-muted-foreground/45",
 } as const;
 
-/**
- * The presence dot.
- *
- * `live` is the ONLY tone that animates, and it animates only when real live
- * evidence backs it (`health.live`) — a fresh lease or an open session. A
- * pinging dot with nothing behind it is the exact lie the presence model was
- * built to refuse, so the ping is gated on the evidence flag rather than on
- * the tone.
- */
+/** A pinging dot with nothing behind it is the exact lie the presence model was built to refuse, so the ping is
+ * gated on the evidence flag rather than on the tone. */
 export function HostPresenceDot(props: {
   readonly tone: "live" | "warn" | "idle";
   readonly animate: boolean;

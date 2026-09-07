@@ -15,13 +15,9 @@ interface EnsureModelMutationContext {
   readonly hostId: string | null;
 }
 
-/**
- * The on-device model is being readied (engine present but not yet usable): the
- * composer shows a "preparing" indicator instead of silently nothing.
- */
+/** The on-device model is being readied (engine present but not yet usable): the composer shows a "preparing" indicator instead of silently nothing. */
 export interface DictationPreparingStatus {
   readonly downloadState: "absent" | "downloading" | "ready" | "error";
-  // 0..1 while downloading, else null.
   readonly progress: number | null;
 }
 
@@ -34,37 +30,12 @@ export interface DictationAvailability {
   readonly preparing: DictationPreparingStatus | null;
 }
 
-/**
- * Dictation readiness: polls `speech.getModelStatus`, silently kicks off
- * `speech.ensureModel` when the model is absent, and reports a usable/preparing
- * status. Composers gate the mic button + shortcut on `ready` (so dictation is
- * never offered, and the OS mic prompt never fires, before the on-device model
- * exists) and surface `preparing` as a status indicator while it downloads.
- *
- * DELIBERATELY the app-wide host (`useHostClient()`), not the composer's target
- * host - the documented exception to the composer host-scope rule in
- * `AGENTS.md`. Dictation describes the person at the keyboard, not the run:
- * `speech.dictate` streams live microphone audio and `speech.ensureModel`
- * downloads an on-device model, so following a remote run target would ship a
- * user's audio to a machine they only picked to execute a turn on, and drop a
- * model download there. The accepted cost is that a composer pinned to another
- * host gates its mic on the app-wide host's model rather than that host's. Do
- * not "fix" this by threading a target client through - it is a change to where
- * a user's voice goes, and wants that conversation first.
- */
+/** Dictation readiness on the app-wide host (`useHostClient()`), never the composer's target.
+ * `speech.dictate` streams microphone audio; a remote run target must not receive it. */
 export function useDictationAvailability(
   enabled: boolean,
 ): DictationAvailability {
-  // The installed mobile app never offers dictation, whatever the setting says.
-  // Dictation is HOST-executed: `speech.dictate` streams live microphone audio
-  // to the app-wide host (see above) and that host's on-device engine
-  // transcribes it. On desktop the app-wide host is the same machine, which is
-  // what Settings' "audio never leaves your machine" promise rests on. The
-  // mobile app has no local host - every host it can reach is a remote machine
-  // - so offering the mic there would stream phone microphone audio off the
-  // device and break that promise. Hence the gate is on the BUILD
-  // (`isMobileApp()`) and not on viewport width: a phone-width desktop browser
-  // can still be talking to an honest localhost host, and keeps its mic.
+  // Installed mobile app never offers dictation: every reachable host is remote, so mic audio would leave the device. Gate is `isMobileApp()`, not viewport width.
   const available = enabled && !isMobileApp();
   const client = useHostClient();
   const queryClient = useQueryClient();
@@ -103,10 +74,7 @@ export function useDictationAvailability(
     },
   });
 
-  // Self-heal: if the engine can run but the model isn't present (or a prior
-  // download errored), download it - no UI, the mic simply appears once ready.
-  // Don't download where the engine is unavailable (e.g. a build without the
-  // sherpa addon). Capped retries so a persistent failure can't loop.
+  // Capped retries so a persistent failure can't loop. a build without the sherpa addon).
   const engineAvailable = statusQuery.data?.engineAvailable ?? false;
   const downloadState = statusQuery.data?.downloadState ?? null;
   const downloadProgress = statusQuery.data?.downloadProgress ?? null;

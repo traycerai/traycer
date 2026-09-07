@@ -2,12 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * `TraycerMarkdown` keys its parse `useMemo` - and `MarkdownBlock` its memo
- * comparator - on the `components` object's IDENTITY. Capturing that identity
- * across renders is the observable for "does an unrelated rerender reparse every
- * markdown block on the surface".
- */
+/** `TraycerMarkdown` keys its parse `useMemo` - and `MarkdownBlock` its memo comparator - on the `components` object's IDENTITY. Capturing that identity across renders is the observable for "does an unrelated rerender reparse every markdown block on the surface". */
 const captured = vi.hoisted(() => {
   const seen: unknown[] = [];
   return seen;

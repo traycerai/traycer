@@ -26,13 +26,7 @@ type HookEntry = NonNullable<
   NotificationHooksStatusQuery["data"]
 >["hooks"][number];
 
-/**
- * Settings surface for the host's notification hooks. The JSON file on the
- * host stays the source of truth and remains hand-editable; this form is a
- * second editor over it. Each save rewrites the whole file from the hooks the
- * form last read, so a save built on a stale read wins over an outside edit
- * (last write wins - deliberate, see the hooks file docs).
- */
+/** Settings surface for the host's notification hooks. */
 export function NotificationHooksSection(props: {
   readonly statusQuery: NotificationHooksStatusQuery;
   readonly testHook: NotificationHooksTestMutation;
@@ -265,10 +259,8 @@ function HooksEditor(props: {
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
 }) {
-  // Plain local state is enough here: `HostScopeGate` holds this section in a
-  // hidden `<Activity>` through transient same-host disconnects, so an open
-  // editor and its typed draft survive without being parked anywhere. A real
-  // host switch remounts through the gate's key and correctly starts closed.
+  // Plain local state is enough here: `HostScopeGate` holds this section in a hidden `<Activity>` through
+  // transient same-host disconnects.
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
   const [pendingDelete, setPendingDelete] = useState<HookEntry | null>(null);
 

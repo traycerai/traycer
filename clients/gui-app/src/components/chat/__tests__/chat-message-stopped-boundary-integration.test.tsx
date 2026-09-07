@@ -26,15 +26,7 @@ import {
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
 
-/**
- * Both round-2 review bugs (wrong empty-branch variant, 1ms-short duration
- * anchor) only surfaced once the hook's synthesized boundary row was actually
- * rendered through `ChatMessage`/`AssistantMessageBody` - the hook-only tests
- * in `rendered-messages.test.tsx` verify the row's fields, and the
- * component-only tests in `chat-message-assistant-body.test.tsx` verify
- * rendering from hand-built props, but neither composes the two. These tests
- * close that gap.
- */
+/** These tests close that gap. */
 
 function render(ui: ReactNode) {
   return rtlRender(
@@ -289,9 +281,7 @@ describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody
       </>,
     );
 
-    // The turn's true duration (13_000 - 10_000 = 3000ms) renders as "3s" -
-    // exactly the boundary this test guards: the pre-fix ordering-only
-    // `startedAt + 1` anchor made this "2s" (formatWorkedFor floors seconds).
+    // The turn's true duration (13_000 - 10_000 = 3000ms) renders as "3s" - exactly the boundary this test guards: the pre-fix ordering-only `startedAt + 1` anchor made this "2s" (formatWorkedFor floors seconds).
     const footer = screen.getByTestId("assistant-elapsed-footer");
     expect(footer.textContent).toBe("Stopped · 3s");
     expect(
@@ -305,9 +295,7 @@ describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody
     ).toBeNull();
     expect(screen.getByTestId("assistant-fork-chat")).not.toBeNull();
 
-    // The copy control renders on the boundary row (its own segments are
-    // empty) and copies the turn's actual assistant text, sourced from the
-    // text chunk above the steer bubble.
+    // The copy control renders on the boundary row (its own segments are empty) and copies the turn's actual assistant text, sourced from the text chunk above the steer bubble.
     const copyButton = screen.getByTestId("assistant-reply-copy");
     fireEvent.click(copyButton);
     expect(clipboard.writeText).toHaveBeenCalledWith("Working on it");

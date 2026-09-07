@@ -1,22 +1,6 @@
 /**
- * How each plane answers `ClassFreshness`, and what the `@1` line can honestly
- * say.
- *
- * Per class, never blended: there is deliberately no helper here that folds
- * three planes into one verdict. An aggregate `synced` boolean hides per-class
- * staleness - a live control lane with a three-minute-old record lane reads as
- * "synced" - and, worse, hides rejected writes.
- *
- * ## What `@1` cannot say
- *
- * `watermark` is always `null` and `trust` is always `null` on this line, and
- * both are honest rather than unimplemented. `epic.subscribe@1` has no
- * `(authorityEpoch, lane, position)` cursor - its resume is a Yjs state vector,
- * which is a different coordinate system and not orderable as a position - and
- * it carries no seed-vs-reconciled marker, so a legacy adapter genuinely cannot
- * report either. Filling them in with a synthesised value would make a claim the
- * wire never made; `null` for trust is "not applicable", and a caller gating a
- * privileged action must treat it exactly as `"seed-only"`.
+ * How each plane answers `ClassFreshness`, and what the `@1` line can honestly say. Per class,
+ * never blended: there is deliberately no helper here that folds three planes into one verdict.
  */
 import type {
   ClassFreshness,

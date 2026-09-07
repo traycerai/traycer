@@ -21,11 +21,6 @@ import type { IHostStreamClient } from "./host-stream-client";
 
 export const WORKTREE_DELETE_BATCH_STREAM_METHOD = "worktree.deleteBatchByPath";
 
-/**
- * Typed handlers for one `worktree.deleteBatchByPath@1.0` command. Frames flow
- * server → client only (apart from the transport heartbeat), so there is no
- * upstream application API on the wrapper.
- */
 export interface WorktreeDeleteBatchStreamCallbacks {
   readonly onTargetStarted: (
     worktreePath: string,
@@ -49,7 +44,7 @@ export interface WorktreeDeleteBatchStreamCallbacks {
     holders: readonly WorktreeBusyHolder[] | undefined,
     code: "WORKTREE_BUSY" | undefined,
   ) => void;
-  /** Terminal for the COMMAND, after every target settled. */
+  /** Terminal for the command, after every target settled. */
   readonly onCommandComplete: (counts: {
     readonly requestedCount: number;
     readonly deletedCount: number;
@@ -59,19 +54,12 @@ export interface WorktreeDeleteBatchStreamCallbacks {
   readonly onCommandFailed: (reason: string) => void;
   /**
    * The host does not implement this method at all - an older build.
-   *
-   * Delivered instead of a connection failure because the two demand opposite
-   * responses: a failure means "the delete may have half-happened, tell the
-   * user", while this means "nothing was attempted, run the older path". The
-   * distinction is safe to act on because the compatibility check that
-   * produces it runs on the openAck, BEFORE the subscribe frame - so the host
-   * has not been asked to delete anything.
+   * Delivered instead of a connection failure because the two demand opposite responses: a failure means "the delete may have half-happened, tell the user", while this means "nothing was attempted, run the older path".
    */
   readonly onUnsupported: () => void;
   /**
-   * Connection-status changes. `reason` is non-null only on the `closed`
-   * transition. An unsupported-method close is reported through
-   * `onUnsupported` instead and never reaches this handler.
+   * Connection-status changes.
+   * `reason` is non-null only on the `closed` transition.
    */
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
@@ -93,32 +81,7 @@ export interface WorktreeDeleteBatchStreamClientOptions {
 
 /**
  * Typed wrapper over `WsStreamClient` for `worktree.deleteBatchByPath@1.0`.
- *
- * Subscribing opens ONE host-owned deletion command over every target. Unlike
- * the released single-target wrapper, closing this session does not stop the
- * work: the host keeps deleting and still writes the completion notification.
- * Closing means "stop telling me", which is what makes it safe to close a
- * Settings tab mid-bulk-delete.
- *
- * ## Why this wrapper owns a session SWAP
- *
- * `WsStreamClient` re-sends a session's original open request on every
- * reconnect, forever. For a destructive command that is not something the host
- * can fully defend against on its own: its single-flight map is process-local
- * and evicted a minute after completion, so a long outage or a host restart
- * would let an automatic re-subscribe execute the same command twice.
- *
- * So this wrapper never lets a `start` be the thing that gets replayed. It
- * subscribes once in `start` mode, and the moment that session drops AFTER
- * reaching the host, it closes it and opens a fresh session in `observe` mode
- * for the same `commandId`. Every subsequent reconnect - however many, however
- * long after - re-sends `observe`, which can attach to a live command but can
- * never create one.
- *
- * A drop BEFORE the session ever opened is left alone: the subscribe frame
- * never reached the host, so nothing was started and the transport's own
- * retry of `start` is both safe and the behaviour the user wants (a host that
- * was briefly unreachable still runs the delete they asked for).
+ * So this wrapper never lets a `start` be the thing that gets replayed.
  */
 export class WorktreeDeleteBatchStreamClient {
   private session: IStreamSession;
@@ -129,9 +92,7 @@ export class WorktreeDeleteBatchStreamClient {
   private readonly hasForceTargets: boolean;
   private mode: "start" | "observe";
   /**
-   * True once a session reached `open`, which is the moment the subscribe
-   * frame was handed to a live socket - i.e. the first instant the host may
-   * have created the command.
+   * True once a session reached `open`, which is the moment the subscribe frame was handed to a live socket - i.e. the first instant the host may have created the command.
    */
   private reachedHost: boolean;
   /** Suppresses the `closed` callback from a swap's own deliberate close. */
@@ -202,14 +163,7 @@ export class WorktreeDeleteBatchStreamClient {
     return session;
   }
 
-  /**
-   * Replaces the `start` session with an `observe` one for the same command.
-   *
-   * Runs inside the `reconnecting` transition, which `WsStreamClient` emits
-   * BEFORE it arms the redial timer - so closing here cancels the pending
-   * re-subscribe rather than racing it, and the `start` request can never go
-   * out a second time.
-   */
+  /** Replaces the `start` session with an `observe` one for the same command. */
   private swapToObserve(): void {
     this.mode = "observe";
     this.swapping = true;
@@ -237,16 +191,8 @@ export class WorktreeDeleteBatchStreamClient {
       this.callbacks.onConnectionStatus(status, reason);
       return;
     }
-    // Local transports cache unsupported-method evidence on the client. Remote
-    // mux sessions deliberately do not, so their only capability evidence is
-    // the incompatible close emitted before the subscribe frame is enqueued.
-    //
-    // Only BEFORE the host has seen the command. `onUnsupported` is the
-    // caller's licence to run the legacy per-path delete because nothing was
-    // attempted; once `reachedHost` is true the command may be running or
-    // finished, so an incompatible close on a later observe session (a host
-    // swapped for a build without this method) is a connection failure, never
-    // a fallback trigger - the fallback would run the deletion a second time.
+    // Local transports cache unsupported-method evidence on the client.
+    // Remote mux sessions deliberately do not, so their only capability evidence is the incompatible close emitted before the subscribe frame is enqueued.
     if (
       status === "closed" &&
       !this.reachedHost &&

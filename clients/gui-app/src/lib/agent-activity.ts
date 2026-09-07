@@ -25,8 +25,7 @@ export const EMPTY_AGENT_ACTIVITY_TIERS: ReadonlyMap<
 > = new Map<string, AgentActivityTier>();
 
 /**
- * Converts a host-served replacement into selector-friendly sets, preserving
- * bucket and map identity when membership did not change.
+ * Converts a host-served replacement into selector-friendly sets, preserving bucket and map identity when membership did not change.
  */
 export function reconcileAgentActivityByEpic(
   byEpic: AgentActivityByEpic,

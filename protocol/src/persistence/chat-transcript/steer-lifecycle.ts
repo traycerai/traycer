@@ -5,35 +5,8 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * # Which user messages completed an interrupt-restart steer
- *
- * A running fold over the chat's `queue.*` events. A `queue.steerRequested`
- * carrying an `interrupt_restart` request badges the user message it names;
- * a later `queue.fallback` / `queue.resumed` / `queue.cancelled` /
- * `queue.steerAborted` can RETRACT that badge, either by naming the message or
- * the queue item directly, or by carrying a queue snapshot in which the item no
- * longer holds an active steer.
- *
- * ## Why this is shared code rather than the renderer's own
- *
- * The answer is derived from the event log AROUND a row, not from the row. A
- * windowed client hydrating an old interrupt-restart user row is served that
- * row's own records - `rowRecordIds` for a user row is its message and nothing
- * else - so it holds none of the `queue.*` lifecycle and re-derives "not
- * steered". The badge is then present during the live session and gone from
- * cold history, which is the shape of bug this whole area keeps paying for.
- *
- * The fix is to carry the ANSWER per row
- * ({@link TranscriptRowContext.completedSteer}), which means the host has to
- * run this fold. Serving the events instead is not the alternative it looks
- * like: a retraction can arrive arbitrarily later than the request, so "the
- * events this row needs" is not bounded by the row.
- *
- * And it MOVED here rather than being copied. Two implementations of a fold
- * that must agree is precisely what `row-projection.ts`'s "consume, do not
- * mirror" rule exists to prevent - the module records a predicate that shipped
- * with a renderer-side copy disagreeing on the empty string. The renderer
- * imports this one.
+ * A running fold over the chat's `queue.*` events.
+ * Two implementations of a fold that must agree is precisely what `row-projection.ts`'s "consume, do not mirror" rule exists to prevent - the module records a predicate that shipped with a renderer-side copy disagreeing.
  */
 export function steeredMessageIdsFromEvents(
   events: ReadonlyArray<ChatEvent>,

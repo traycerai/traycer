@@ -9,19 +9,13 @@ export interface MermaidBlockToolbarProps {
   readonly onCopyCode: () => void;
   /** `null` where this device has no download destination at all. */
   readonly onDownloadPng: (() => void) | null;
-  /**
-   * Hands the PNG to the OS share sheet, or `null` where the shell owns no
-   * chooser and Download is already the only route out.
-   */
+  /** Hands the PNG to the OS share sheet, or `null` where the shell owns no chooser and Download is already the only route out. */
   readonly onSharePng: (() => void) | null;
   readonly downloadDisabled: boolean;
 }
 
 /**
- * Floating action bar for a mermaid block. Layout mirrors the global
- * BubbleMenu (same chrome, same `ToolbarButton` primitive) so the two
- * surfaces read as variants of one toolbar system rather than ad-hoc
- * buttons. Edit is hidden for read-only viewers.
+ * Mermaid floating bar, same chrome as BubbleMenu. Edit is hidden for viewers.
  */
 export function MermaidBlockToolbar(props: MermaidBlockToolbarProps) {
   const {

@@ -4,10 +4,7 @@ import { isMac } from "@/lib/keybindings/platform";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 
-// The dictation shortcut is a first-class, rebindable keybinding (see
-// `ACTION_META`); default Control+Shift+M (the Control key dodges the
-// Command-based conflicts on macOS). We read the live binding from the store at
-// event time so rebinds apply immediately and Settings stays the source of truth.
+// The dictation shortcut is a first-class, rebindable keybinding (see `ACTION_META`); default Control+Shift+M (the Control key dodges the Command-based conflicts on macOS).
 export const DICTATION_ACTION_ID = "composer.dictation.toggle" as const;
 
 function boundChord(): string | null {
@@ -17,12 +14,7 @@ function boundChord(): string | null {
   return useKeybindingStore.getState().bindings[DICTATION_ACTION_ID] ?? null;
 }
 
-// Strict modifier match (the app's shared matching treats `mod` as Meta OR Ctrl,
-// which would fire on both ⌘ and Ctrl). Each chord modifier maps to an exact
-// physical key:
-//   - `ctrl`: the Control key SPECIFICALLY (⌃), never Command - the dictation
-//     default, so it dodges the Command-based conflicts.
-//   - `mod`:  the platform-primary modifier - ⌘ on macOS, Ctrl elsewhere.
+// `ctrl`: the Control key SPECIFICALLY (⌃), never Command - the dictation
 function chordMatchesStrict(chord: string, event: KeyboardEvent): boolean {
   const parts = parseChordString(chord);
   if (parts === null) return false;
@@ -47,21 +39,10 @@ interface DictationHotkeyTarget {
 
 type DictationTargetGetter = () => DictationHotkeyTarget;
 
-// Module-level singleton: the window listeners are installed once, and only the
-// most-recently-enabled composer (top of stack) handles a keypress. This
-// prevents two mounted composers (e.g. landing + an active chat tile) from each
-// binding the window and firing two dictations on one shortcut. On unmount a
-// composer pops and the previous owner resumes.
+// Module-level singleton: the window listeners are installed once, and only the most-recently-enabled composer (top of stack) handles a keypress.
 const targetStack: DictationTargetGetter[] = [];
 let listenersInstalled = false;
-// A press is in progress. A hold (push-to-talk) is detected purely by OS
-// key-repeat events the held key emits - `sawRepeat`. (A timer fallback was
-// dropped: it misread a slow-but-deliberate tap as a hold. A genuine
-// push-to-talk holds long enough to auto-repeat; a quick tap doesn't.)
-// `wasActiveAtPress` records whether a session was already running when the
-// press started (so the press toggles it off). `pressOwner` is the composer
-// that owned the keydown, so the release acts on THAT composer even if the
-// active one changed mid-press.
+// `pressOwner` is the composer that owned the keydown, so the release acts on THAT composer even if the active one changed mid-press.
 let keyHeld = false;
 let sawRepeat = false;
 let wasActiveAtPress = false;
@@ -148,12 +129,7 @@ function onWindowBlur(): void {
   resolveRelease();
 }
 
-// Capture phase: the central KeybindingProvider listens on window in capture and
-// `stopPropagation()`s any bound chord (and dictation is now a bound action).
-// A same-target capture listener still fires after a sibling's stopPropagation,
-// and this hook's effect (a composer descendant) registers before the provider's
-// (effects run child→parent), so this runs first and owns the dual tap/hold
-// gesture the tap-only central dispatcher can't express.
+// A same-target capture listener still fires after a sibling's stopPropagation, and this hook's effect (a composer descendant) registers before the provider's (effects run child→parent), so this runs first and owns the dual tap/hold gesture the tap-only central dispatcher can't express.
 function installListeners(): void {
   if (listenersInstalled) return;
   window.addEventListener("keydown", onKeyDown, { capture: true });
@@ -181,14 +157,7 @@ interface UseDictationHotkeyArgs {
 }
 
 /**
- * Binds the dual tap/hold dictation shortcut (window-scoped via a shared
- * singleton, active only when `enabled`):
- *   - quick tap  → toggle recording on/off
- *   - hold       → push-to-talk; transcribe on release (or on focus loss)
- *   - Esc        → cancel an in-progress recording/transcription (discard)
- *
- * Hold vs tap is detected from OS key-repeat events, not a timer, so releasing
- * the multi-key chord at a natural pace still reads as a tap.
+ * Tap toggles; hold is push-to-talk. Hold vs tap comes from OS key-repeat, not a timer, so a natural chord release still reads as a tap.
  */
 export function useDictationHotkey(args: UseDictationHotkeyArgs): void {
   const { enabled } = args;

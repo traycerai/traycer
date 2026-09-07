@@ -82,10 +82,8 @@ export function ThemeProvider(props: ThemeProviderProps) {
     })),
   );
 
-  // Resolved light/dark mode is owned by `theme-applier.ts`; we only
-  // mirror its snapshot into a React-readable value so consumers can use
-  // it to key memos. The applier already wrote the cascade by the time
-  // this returns the new snapshot.
+  // Mirror theme-applier's snapshot for React memos. The cascade is already
+  // written when this returns.
   const resolvedTheme = useSyncExternalStore(
     subscribeResolvedTheme,
     getResolvedTheme,

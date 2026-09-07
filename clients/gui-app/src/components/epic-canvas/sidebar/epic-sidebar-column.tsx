@@ -1,19 +1,6 @@
 /**
- * Per-pane Epic sidebar. It is mounted beneath the same `EpicSessionProvider`
- * as its canvas, so split Epics retain independent sidebar/session ownership.
- *
- * Collapse is CSS-only for the panel column (`hidden`, stays mounted) so
- * expanding is instant and panel DOM/scroll state survives; nothing in the
- * canvas is touched, so the canvas can never remount from a collapse. The
- * rails still swap (vertical when collapsed, horizontal when expanded)
- * because both orientations register the same dnd-kit droppable ids and must
- * never be mounted together.
- *
- * Width is a single global persisted px value (`sidebarWidthPx`); the
- * resize handle mutates `style.width` per frame (zero React renders during
- * the drag) and commits once on pointer-up. The render-time `max-w-[50vw]`
- * cap matches the drag-time cap of half the layout row, so a persisted
- * width never starves the canvas on a small window.
+ * Collapse is CSS-only for the panel column (`hidden`, stays mounted) so expanding is instant and panel DOM/scroll state survives; nothing in the canvas is touched, so the canvas can never remount from a collapse.
+ * The rails still swap (vertical when collapsed, horizontal when expanded) because both orientations register the same dnd-kit droppable ids and must never be mounted together.
  */
 import { memo, useMemo, useRef, type ReactNode } from "react";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -47,9 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Live drag additionally caps the sidebar at half the layout row so the
- * canvas always keeps space; the render-time `50vw` cap mirrors it (the row
- * spans the viewport under the header).
+ * Live drag additionally caps the sidebar at half the layout row so the canvas always keeps space; the render-time `50vw` cap mirrors it (the row spans the viewport under the header).
  */
 const MAX_SIDEBAR_DRAG_FRACTION = 0.5;
 const KEYBOARD_RESIZE_STEP_PX = 24;
@@ -59,9 +44,8 @@ export interface EpicSidebarColumnProps {
   readonly tabId: string;
 }
 
-// Top-level activation rerenders every retained EpicSurface with new activity
-// context values. The sidebar identity does not change, and its live inputs use
-// context or component-owned store subscriptions that update through this memo.
+// Top-level activation rerenders every retained EpicSurface with new activity context values.
+// The sidebar identity does not change, and its live inputs use context or component-owned store subscriptions that update through this memo.
 export const EpicSidebarColumn = memo(function EpicSidebarColumn(
   props: EpicSidebarColumnProps,
 ): ReactNode {
@@ -133,10 +117,7 @@ function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {
 }
 
 /**
- * Live rail when the session handle is available, static rail (no
- * session-bound selectors) while it is not - mirrors the old per-pane
- * `EpicSessionGate` rail fallback. The vertical and horizontal variants are
- * never mounted together: both register the same dnd-kit droppable ids.
+ * The vertical and horizontal variants are never mounted together: both register the same dnd-kit droppable ids.
  */
 function ColumnRail(props: {
   readonly epicId: string;
@@ -162,11 +143,7 @@ function ColumnRail(props: {
   );
 }
 
-/**
- * Panel bodies gate on snapshot state via `SnapshotGate`; this scope feeds
- * them the same context the canvas side provides in `epic-shell.tsx`. Only
- * rendered while the session handle is non-null (the selectors require it).
- */
+/** Only rendered while the session handle is non-null (the selectors require it). */
 function SidebarSnapshotScope(props: { readonly children: ReactNode }) {
   const snapshotLoaded = useEpicSnapshotLoaded();
   const snapshotFetchError = useEpicSnapshotFetchError();
@@ -200,13 +177,8 @@ function isSidebarPanelElement(
 }
 
 /**
- * Custom sidebar-width handle on the shared `usePointerDragCommit` state
- * machine: per-frame direct `style.width` mutation on the panel element,
- * one store commit on release, `traycer-panel-resizing` freeze for the
- * drag's duration. Double-click resets to the default width; arrow keys
- * nudge by a fixed step (committed immediately). Cancel restores the
- * inline width string captured at drag start (the canvas handle instead
- * recomputes from its committed fractions).
+ * Custom sidebar-width handle on the shared `usePointerDragCommit` state machine: per-frame direct `style.width` mutation on the panel element, one store commit on release, `traycer-panel-resizing` freeze for the drag's duration.
+ * Double-click resets to the default width; arrow keys nudge by a fixed step (committed immediately).
  */
 function SidebarWidthResizeHandle(props: { readonly hidden: boolean }) {
   const sidebarWidthPx = useSidebarWidthPx();

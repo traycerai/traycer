@@ -18,9 +18,8 @@ import type {
   TabStripItem,
 } from "@/stores/tabs/layout";
 
-// The host's own mount lifetime is what is under test; the provider and panel
-// are stubbed so a remount shows up as a fresh DOM node rather than as a
-// terminal bootstrap.
+// The host's own mount lifetime is what is under test; the provider and panel are stubbed so a remount shows
+// up as a fresh DOM node rather than as a terminal bootstrap.
 vi.mock(
   "@/components/home/terminal-panel/landing-terminal-gesture-provider",
   () => ({
@@ -34,9 +33,8 @@ vi.mock(
     ),
   }),
 );
-// The stub reports the pane context it is rendered under: the panel is portaled
-// out of its React parent, so "which pane state does it actually read" is a real
-// question about the host, not about the panel's internals.
+// The stub reports the pane context it is rendered under: the panel is portaled out of its React parent, so
+// "which pane state does it actually read" is a real question about the host, not about the panel's internals.
 vi.mock("@/components/home/terminal-panel/landing-terminal-panel", async () => {
   const { usePaneFocused, usePaneVisible } =
     await import("@/components/epic-tabs/pane-visibility-context");
@@ -174,9 +172,8 @@ describe("<LandingTerminalHost /> retention", () => {
     );
     const body = screen.getByTestId("landing-terminal-panel-body");
 
-    // The start page stays mounted behind the epic tab (its anchor is still
-    // registered), so the panel must not be torn down and rebuilt - that
-    // teardown is what made every returning terminal re-attach from scratch.
+    // The start page stays mounted behind the epic tab (its anchor is still registered), so the panel must not be
+    // torn down and rebuilt - that teardown is what made every returning terminal re-attach from scratch.
     act(() => seedLayout([DRAFT_TAB, EPIC_TAB], EPIC_TAB.id));
 
     expect(screen.getByTestId("landing-terminal-panel-body")).toBe(body);
@@ -213,11 +210,8 @@ describe("<LandingTerminalHost /> pane projection", () => {
 
   it("gives the panel the hosting pane's activity, not the app-global default", () => {
     seedLayout([DRAFT_TAB, EPIC_TAB], EPIC_TAB.id);
-    // The anchor lives inside its pane's boundary; the host does not. Without
-    // the projection the portaled panel reads the permissive context defaults
-    // (visible/focused), so xterm never sees the hidden->visible edge that is
-    // its ONLY repair after a `display:none` cycle, and the panel's focus grabs
-    // and pane-local portals stay eligible behind the epic tab.
+    // Without the projection the portaled panel reads the permissive context defaults (visible/focused), so xterm
+    // never sees the hidden->visible edge that is its only repair after a `display:none` cycle.
     render(
       <>
         <SurfacePresentationBoundary visible={false} focused={false}>
@@ -242,9 +236,7 @@ describe("<LandingTerminalHost /> pane projection", () => {
       </>,
     );
     const body = panelBody();
-    // Anchoring the START of the edge is what makes the rest of this test mean
-    // anything: the permissive defaults are visible/focused, so asserting only
-    // the post-switch state would pass just as well with no projection at all.
+    // Anchoring the start of the edge is what makes the rest of this test mean anything.
     expect(body.dataset.paneVisible).toBe("false");
 
     act(() => {
@@ -259,8 +251,8 @@ describe("<LandingTerminalHost /> pane projection", () => {
       );
     });
 
-    // Both halves matter: the edge has to ARRIVE (or nothing repaints), and it
-    // has to arrive at the same node (or the terminals were rebuilt anyway).
+    // Both halves matter: the edge has to arrive (or nothing repaints), and it has to arrive at the same node (or
+    // the terminals were rebuilt anyway).
     expect(panelBody().dataset.paneVisible).toBe("true");
     expect(panelBody().dataset.paneFocused).toBe("true");
     expect(panelBody()).toBe(body);
@@ -281,9 +273,8 @@ describe("selectLandingTerminalSurfaceActive", () => {
   });
 
   it("is inactive while an epic tab is active, though the panel stays mounted", () => {
-    // The panel outliving activation is exactly why its chord registrations
-    // have to gate on this: a registered dynamic handler would swallow the
-    // epic canvas's `tab.*` chords instead of letting the static one run.
+    // The panel outliving activation is exactly why its chord registrations have to gate on this: a registered
+    // dynamic handler would swallow the epic canvas's `tab.*` chords instead of letting the static one run.
     expect(activeFor([DRAFT_TAB, EPIC_TAB], EPIC_TAB.id)).toBe(false);
   });
 

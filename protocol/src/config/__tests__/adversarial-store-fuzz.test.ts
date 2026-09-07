@@ -4,20 +4,6 @@ import { join } from "node:path";
 import type { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same harness seams the sibling store.test.ts uses: redirect the config file
-// to a per-test temp home via os.homedir, and pin the passwd login shell so
-// defaultShellPath() is deterministic (the mirror's args-only-auto branch reads
-// it). os.platform() stays real: on the macOS/Linux CI runner isWindows === false,
-// so path comparison is case-sensitive throughout.
-//
-// The home is BOUND per test via AsyncLocalStorage, not just read from the
-// shared mutable: when vitest times a test out, its async body keeps running
-// (a "zombie"), and any store mutator it is mid-await on resolves
-// cliConfigPath() during that in-flight work. With only a shared `h.home`,
-// that resolution can land in the NEXT test's freshly-minted store. Under
-// ALS every continuation of the zombie keeps ITS OWN home for life, so its
-// reads and writes stay in its own dead directory. `h.home` remains as the
-// fallback for any execution context the ALS binding does not reach.
 const h = vi.hoisted(() => ({
   home: "",
   passwdShell: "/bin/zsh",
@@ -57,15 +43,7 @@ beforeEach(async () => {
   h.passwdShell = "/bin/zsh";
 });
 
-/**
- * Run a test body with its home pinned for every continuation via
- * AsyncLocalStorage. `run()` (not `enterWith`) is essential: an `enterWith`
- * issued inside one beforeEach does not reliably reach the NEXT test's body
- * under vitest's hook/test chaining — sequential tests then all inherit the
- * first binding and poison each other. `run()` scopes the binding exactly to
- * this body and all of its async descendants, which is also what pins a
- * timed-out zombie to its own dead directory forever.
- */
+/** Run a test body with its home pinned for every continuation via AsyncLocalStorage. */
 function withPinnedHome(body: () => Promise<void>): Promise<void> {
   const ctx = h.homeCtx;
   if (ctx === null) {
@@ -74,11 +52,7 @@ function withPinnedHome(body: () => Promise<void>): Promise<void> {
   return ctx.run({ home: h.home }, body);
 }
 
-// ------------------------------------------------------------------ //
-// Independent reference model of the intended (contract) semantics.
-// Deliberately NOT sharing code with the store: divergence between this
-// and the real store on any op sequence is a finding.
-// ------------------------------------------------------------------ //
+// ------------------------------------------------------------------ // Independent reference model of the intended (contract) semantics.
 
 type RefEntry = { path: string; args: string[] | null };
 interface RefState {
@@ -174,9 +148,6 @@ function refReset(s: RefState): void {
   s.args = null;
 }
 
-// ------------------------------------------------------------------ //
-// Deterministic PRNG (mulberry32) so every seed is reproducible.
-// ------------------------------------------------------------------ //
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -231,10 +202,6 @@ function assertInvariants(cfg: CliConfig, entryPathsBefore: Set<string>): void {
     const dev = cfg.shell.entries.find((e) => e.path === path)?.args;
     expect(cfg.shell.args).toEqual(dev ?? famDefault(path));
   }
-  // path:null + args:null only in the pure-auto state (there is no other way to
-  // reach null/null); trivially satisfied by the schema, but assert consistency
-  // with synthesised on the resolve side is covered elsewhere.
-  // Canonicalisation: no entry args may be deep-equal to the family default.
   for (const e of cfg.shell.entries) {
     if (e.args !== null) {
       expect(eq(e.args, famDefault(e.path))).toBe(false);
@@ -248,10 +215,7 @@ function assertInvariants(cfg: CliConfig, entryPathsBefore: Set<string>): void {
 describe("adversarial: property-style op-sequence fuzz vs reference model", () => {
   const SEEDS = Array.from({ length: 30 }, (_, i) => i * 1013 + 7);
   const OPS_PER_SEED = 500;
-  // Correctness-only test: the timeout exists to catch hangs, not to assert
-  // speed. 500 ops typically finish in <1s, but a contended 2-core CI runner
-  // has pushed marginal seeds past vitest's 5s default (seed 7 twice on
-  // 2026-07-16). 12x headroom keeps load out of the verdict.
+  // Correctness-only test: the timeout exists to catch hangs, not to assert speed.
   const FUZZ_TEST_TIMEOUT_MS = 60_000;
 
   it.each(SEEDS)(
@@ -260,12 +224,7 @@ describe("adversarial: property-style op-sequence fuzz vs reference model", () =
       withPinnedHome(async () => {
         const rng = mulberry32(seed);
         const ref: RefState = { path: null, args: null, entries: [] };
-        // Zombie fallback guard: the ALS home binding (see the os mock) is
-        // the primary isolation — a timed-out seed's continuations keep their
-        // own dead home, so in-flight mutator writes cannot land in the next
-        // seed's store (observed in CI: seed 7 timed out at ~5s, then seed
-        // 1020 "failed" at 60ms). This check only stops the zombie's pointless
-        // work in any execution context the ALS binding does not reach.
+        // Zombie fallback guard: the ALS home binding (see the os mock) is the primary isolation - a timed-out seed's continuations keep their own dead home, so in-flight mutator writes cannot land in the next seed's store.
         const myHome = h.home;
 
         for (let step = 0; step < OPS_PER_SEED; step++) {

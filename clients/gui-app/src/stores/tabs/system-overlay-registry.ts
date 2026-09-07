@@ -1,13 +1,6 @@
 /**
- * Registry for system overlay kinds (history | settings).
- *
- * System tabs have a dual presentation mode:
- *  - URL `?settingsOverlay=` / `?historyOverlay=` query param → MODAL
- *  - URL `/settings/...` / `/epics` path                       → STRIP TAB
- *
- * This file centralises all overlay-specific dispatch so consumer code
- * can call `renderOverlayBody(active, onClose)` instead of switching on
- * `active.kind`.
+ * Registry for system overlay kinds (history | settings). System tabs have a dual presentation
+ * mode:
  */
 import type { ComponentType, ReactNode } from "react";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
@@ -23,9 +16,6 @@ const SYSTEM_OVERLAYS = {
   settings: settingsOverlayModule,
 } as const;
 
-// ---------------------------------------------------------------------------
-// Module shape
-// ---------------------------------------------------------------------------
 
 export interface SystemOverlayModule<K extends SystemOverlayKind> {
   readonly kind: K;
@@ -33,36 +23,15 @@ export interface SystemOverlayModule<K extends SystemOverlayKind> {
   readonly label: string;
   /** Lucide icon component shown next to the label. */
   readonly Icon: ComponentType<{ className: string | undefined }>;
-  /**
-   * Renders the body component for this overlay kind.
-   * The dispatch helpers guarantee `active.kind === kind` at call time.
-   */
   readonly renderBody: (
     active: SystemModalActive,
     onClose: () => void,
   ) => ReactNode;
-  /**
-   * Builds the `TabNavigationIntent` used when the overlay is promoted
-   * to a strip tab.
-   * The dispatch helpers guarantee `active.kind === kind` at call time.
-   */
   readonly promotionIntent: (active: SystemModalActive) => TabNavigationIntent;
-  /**
-   * Returns `true` when `pathname` matches this overlay's strip-tab
-   * route (used to light up the header trigger even when on the tab
-   * rather than the modal).
-   */
   readonly isOverlayPath: (pathname: string) => boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch helpers
-// ---------------------------------------------------------------------------
 
-/**
- * Renders the modal body component for the currently active overlay.
- * Eliminates `if (kind === "settings") / else` switches in the modal host.
- */
 export function renderOverlayBody(
   active: SystemModalActive,
   onClose: () => void,
@@ -75,10 +44,6 @@ export function renderOverlayBody(
   }
 }
 
-/**
- * Returns the label and Icon for the active overlay kind.
- * Used by the modal header to avoid per-kind switches in the component.
- */
 export function overlayMeta(active: SystemModalActive): {
   readonly label: string;
   readonly Icon: ComponentType<{ className: string | undefined }>;
@@ -86,15 +51,7 @@ export function overlayMeta(active: SystemModalActive): {
   return SYSTEM_OVERLAYS[active.kind];
 }
 
-/**
- * Attempts to route a system-tab `intent` through the modal bridge API.
- * Returns `true` when the intent was handled (the API is live and the
- * intent kind is a known overlay kind); `false` when the caller should
- * fall through to direct TanStack navigation.
- *
- * `api.openSettings` receives `section` extracted from the intent;
- * `api.openHistory` receives no arguments.
- */
+/** Attempts to route a system-tab `intent` through the modal bridge API. */
 export function routeIntentViaModalBridge(
   intent: TabNavigationIntent,
   api: {

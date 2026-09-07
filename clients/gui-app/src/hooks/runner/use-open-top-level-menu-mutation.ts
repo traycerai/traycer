@@ -12,14 +12,7 @@ export interface OpenTopLevelMenuVariables {
   readonly anchorY: number;
 }
 
-/**
- * Asks the desktop shell to pop up a native top-level submenu beneath the
- * Windows frameless title-bar menu strip. The mutation owns the query key and
- * the standard runner-error mapping so the menu bar never dispatches the popup
- * IPC or handles its failures ad hoc. A no-op off the desktop shell (no popup
- * bridge) rather than a surfaced error, since the strip only renders when the
- * bridge is present.
- */
+/** The mutation owns the query key and the standard runner-error mapping so the menu bar never dispatches the popup IPC or handles its failures ad hoc. */
 export function useRunnerOpenTopLevelMenuMutation(): UseMutationResult<
   void,
   Error,

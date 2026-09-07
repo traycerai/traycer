@@ -3,9 +3,7 @@ import { createDebouncedDesktopPerWindowProjectionBridge } from "@/lib/windows/p
 import type { DesktopPerWindowStatePatch } from "@/lib/windows/types";
 
 /**
- * The debounce interval is parked far past the test so only the explicit
- * `flush()` calls drive the write chain; each test disposes the bridge to drop
- * the trailing timer.
+ * The debounce interval is parked far past the test so only the explicit `flush()` calls drive the write chain; each test disposes the bridge to drop the trailing timer.
  */
 const NEVER_FIRES_MS = 60_000;
 
@@ -37,9 +35,7 @@ describe("createDebouncedDesktopPerWindowProjectionBridge", () => {
     await bridge.update({ activeTabId: "tab-a" });
     await expect(bridge.flush()).rejects.toThrow("projection failed");
 
-    // Without recovering the chain the rejected promise is what the next patch
-    // chains off, so `target.update` is never reached again for the rest of the
-    // session and the window silently stops persisting.
+    // Without recovering the chain the rejected promise is what the next patch chains off, so `target.update` is never reached again for the rest of the session and the window silently stops persisting.
     await bridge.update({ activeTabId: "tab-b" });
     await expect(bridge.flush()).resolves.toBeUndefined();
 

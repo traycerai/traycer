@@ -10,20 +10,12 @@ import {
 } from "@/lib/composer/landing-placement";
 
 /**
- * Submit-time re-validation for the landing composer (redesign P1.2,
- * selection model §54): "submit re-validates the resolved host is usable
- * (refuse with an inline error, never create on a silently different host)".
- *
- * The property under test is the second clause. Before P1.2 the composer's
- * picker moved the app-wide selection, so "the host the chip shows" and "the
- * host the create lands on" were the same thing by construction. Now they are
- * two values, and this is the gate that refuses to let them differ.
+ * Submit-time re-validation for the landing composer (redesign P1.2, selection model §54): "submit re-validates the resolved host is usable (refuse with an inline error, never create on a silently different host)".
  */
 
 /**
- * A client is only ever asked for its host IDENTITY here, so the fake answers
- * exactly that. Built through a typed factory rather than a cast: the ban on
- * `as any` / `as unknown` applies in tests too.
+ * A client is only ever asked for its host IDENTITY here, so the fake answers exactly that.
+ * Built through a typed factory rather than a cast: the ban on `as any` / `as unknown` applies in tests too.
  */
 function clientAddressing(
   hostId: string,
@@ -123,9 +115,8 @@ describe("resolveLandingPlacement", () => {
     );
   });
 
-  // `namedHostDead` is ONLY ever set for a caller-NAMED host (the row-scoped
-  // modal's `overrideHostId`) - never for a pin. Naming a device IS the
-  // request, so a dead one is refused rather than silently substituted.
+  // `namedHostDead` is ONLY ever set for a caller-NAMED host (the row-scoped modal's `overrideHostId`) - never for a pin.
+  // Naming a device IS the request, so a dead one is refused rather than silently substituted.
   it("refuses a named (override) host that is dead, and names it", () => {
     const placement = resolveLandingPlacement(
       targetWith({
@@ -190,9 +181,7 @@ describe("resolveLandingPlacement", () => {
     });
   });
 
-  // The defect this whole row exists to prevent: the chip says one machine,
-  // the client would send to another. Refusing is the ONLY correct answer -
-  // proceeding would place the epic (for life) on a host the user never saw.
+  // Refusing is the ONLY correct answer - proceeding would place the epic (for life) on a host the user never saw.
   it("refuses rather than creating on a host the chip never showed", () => {
     const placement = resolveLandingPlacement(
       targetWith({
@@ -205,9 +194,7 @@ describe("resolveLandingPlacement", () => {
     expect(placement.kind).toBe("refused");
   });
 
-  // A following composer takes the same arm: the authority can name the new
-  // effective host before the directory row that makes it dialable arrives,
-  // and the app-wide client is still on the old one in that window.
+  // A following composer takes the same arm: the authority can name the new effective host before the directory row that makes it dialable arrives, and the app-wide client is still on the old one in that window.
   it("refuses a following composer mid-switch, before the client rebinds", () => {
     const placement = resolveLandingPlacement(
       targetWith({
@@ -219,10 +206,8 @@ describe("resolveLandingPlacement", () => {
     expect(placement.kind).toBe("refused");
   });
 
-  // D6: a pin is never blocked by the `namedHostDead` arm. A pinned host that
-  // dies has already auto-followed to `effective` by the time this runs -
-  // `resolvedHostId` names the live host, `namedHostDead` stays false, and a
-  // good client for it resolves ready, exactly like an unpinned target.
+  // D6: a pin is never blocked by the `namedHostDead` arm.
+  // A pinned host that dies has already auto-followed to `effective` by the time this runs - `resolvedHostId` names the live host, `namedHostDead` stays false, and a good client for it resolves ready, exactly like an unpinned target.
   it("does not refuse a pinned target through the namedHostDead arm", () => {
     const client = clientAddressing("host-a");
     const placement = resolveLandingPlacement(

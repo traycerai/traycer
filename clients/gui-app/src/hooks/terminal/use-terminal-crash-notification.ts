@@ -12,11 +12,7 @@ export function isTerminalCrashExit(input: {
   readonly exitReason: TerminalSessionExitReason | null;
   readonly isExitSuppressed: () => boolean;
 }): boolean {
-  // `killed` and `reaped` are lifecycle events, not process failures. The
-  // current terminal protocol has no separate crash reason on live exit
-  // frames, so a non-zero exit code is the authoritative signal there. Should
-  // the protocol add a dedicated reason later, an unrecognized non-null reason
-  // is deliberately treated as a crash too.
+  // Should the protocol add a dedicated reason later, an unrecognized non-null reason is deliberately treated as a crash too.
   const crashReason =
     input.exitReason !== null &&
     !["process-exit", "killed", "reaped"].includes(input.exitReason);

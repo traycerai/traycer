@@ -14,23 +14,7 @@ import {
   type CloudChatTranscript,
 } from "@/lib/chats/cloud-chat-transcript-display";
 
-/**
- * Two queries and their outcomes -> the one state a reader surface renders.
- *
- * A pure function rather than a body inside the hook, because the rule it
- * encodes is the subtle part of this whole surface and it deserves to be
- * assertable without a renderer: **the payload list must be SETTLED before
- * presentation runs.** `presentChat`'s payload resolver is synchronous, and the
- * fidelity count it produces has to be complete by the time a transcript
- * exists - so presenting while the list is still in flight yields a transcript
- * claiming "0 attachments unavailable" that silently disagrees with itself a
- * moment later.
- *
- * Settled is not the same as successful, and that difference is the second
- * rule here: a FAILED list is an answer too. It degrades to exactly the markers
- * this surface rendered before the payload channel existed, rather than holding
- * a fully-downloaded chat behind a call that is not coming back.
- */
+/** Two queries and their outcomes -> the one state a reader surface renders. */
 
 export type CloudChatTranscriptState =
   /** Still resolving, downloading, or waiting on the payload list. */
@@ -40,9 +24,8 @@ export type CloudChatTranscriptState =
   /** A genuine transport failure. The only arm a retry could change. */
   | { readonly kind: "failed"; readonly error: HostRpcError }
   /**
-   * The read completed and did NOT produce a chat. Each arm has its own remedy,
-   * which is why they are not collapsed into one "error" state - see
-   * `describeCloudChatRefusal`.
+   * The read completed and did NOT produce a chat.
+   * Each arm has its own remedy, which is why they are not collapsed into one "error" state - see `describeCloudChatRefusal`.
    */
   | { readonly kind: "refused"; readonly read: CloudChatRead }
   | {
@@ -73,12 +56,8 @@ export function composeCloudChatTranscriptState(
   if (inputs.read === undefined) {
     return { kind: "loading" };
   }
-  // A REFUSAL needs no payload list. The settle rule below exists so a presented
-  // transcript's fidelity count cannot disagree with itself a moment later, and
-  // a refused read presents no transcript to count: its remedy is already known,
-  // and the list can only describe attachments for a chat this surface will
-  // never show. Waiting anyway held the tile on a spinner for as long as an
-  // independent request took to answer - indefinitely, if it stalled.
+  // A REFUSAL needs no payload list.
+  // The settle rule below exists so a presented transcript's fidelity count cannot disagree with itself a moment later, and a refused read presents no transcript to count: its remedy is already known, and the list can only describe attachments for a chat this.
   if (inputs.read.outcome.kind !== "ok") {
     return { kind: "refused", read: inputs.read };
   }
@@ -86,9 +65,7 @@ export function composeCloudChatTranscriptState(
     return { kind: "loading" };
   }
 
-  // An `ambiguous-identity` list describes a DIFFERENT owner's chat, so it is
-  // treated as no list at all rather than as an empty one - an empty list would
-  // render "no attachments" for a chat that has them.
+  // An `ambiguous-identity` list describes a DIFFERENT owner's chat, so it is treated as no list at all rather than as an empty one - an empty list would render "no attachments" for a chat that has them.
   const outcome = inputs.payloadsOutcome;
   const resolvePayload =
     outcome !== undefined && outcome.status === "ok"

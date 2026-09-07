@@ -6,26 +6,19 @@ import { SVGRenderer } from "echarts/renderers";
 import type { EChartsType } from "echarts/core";
 import type { UsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
 
-// Tree-shaken registration: only the pieces the usage chart draws with. The
-// SVG renderer is load-bearing, not a preference - the palette reaches the
-// chart as CSS `var(...)` strings that only resolve because they end up in
-// DOM attributes (see `buildUsageChartOption`).
+// The SVG renderer is load-bearing, not a preference - the palette reaches the chart as CSS `var(...)` strings
+// that only resolve because they end up in DOM attributes (see `buildUsageChartOption`).
 echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
 
 export interface EChartsContainerProps {
   readonly option: UsageChartOption;
   readonly className: string;
-  /** The chart is a single opaque graphic to assistive tech - name it. */
   readonly ariaLabel: string;
   readonly testId: string;
 }
 
-/**
- * Imperative ECharts lifecycle behind a plain div: init once, `setOption`
- * per option change, resize with the container, dispose on unmount. Every
- * usage surface renders charts through this one wrapper so the
- * renderer/theming decisions live in exactly one place.
- */
+/** Imperative ECharts lifecycle behind a plain div: init once, `setOption` per option change, resize with the
+ * container, dispose on unmount. */
 export function EChartsContainer(props: EChartsContainerProps): ReactNode {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<EChartsType | null>(null);
@@ -35,9 +28,8 @@ export function EChartsContainer(props: EChartsContainerProps): ReactNode {
     if (container === null) return;
     const chart = echarts.init(container, null, { renderer: "svg" });
     chartRef.current = chart;
-    // The container mounts before layout settles (and at 0×0 inside a
-    // just-opening dialog); the observer's initial callback delivers the
-    // real size, and later ones track panel/window resizes.
+    // The container mounts before layout settles (and at 0×0 inside a just-opening dialog); the observer's initial
+    // callback delivers the real size, and later ones track panel/window resizes.
     const observer = new ResizeObserver(() => {
       chart.resize();
     });
@@ -49,10 +41,7 @@ export function EChartsContainer(props: EChartsContainerProps): ReactNode {
     };
   }, []);
 
-  // Runs after the init effect on mount (declaration order), then alone on
-  // every option change. `notMerge` so a window/metric switch REPLACES the
-  // option - merged leftovers from the previous shape (an extra series, a
-  // stale formatter closure) are exactly the bugs merging invites.
+  // Runs after the init effect on mount (declaration order), then alone on every option change.
   useEffect(() => {
     chartRef.current?.setOption(props.option, { notMerge: true });
   }, [props.option]);

@@ -20,13 +20,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 export interface AppRouterContext {
   queryClient: QueryClient;
   getAuthSnapshot: () => AuthState;
-  /**
-   * The app-wide host client, already pinned to the effective host. A loader
-   * that needs the host ID reads it off this client rather than from a second
-   * accessor: the pair used to be two independent reads of the active slot,
-   * which could disagree across a move mid-loader, and the ID half was the
-   * privileged identity P4.2 deleted.
-   */
+  /** App-wide host client, already pinned to the effective host. Loaders read the host id off this client, not a second accessor. */
   getHostClient: () => HostClient<HostRpcRegistry> | null;
 }
 
@@ -41,16 +35,10 @@ export function createAppRouter(
     routeTree,
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
-    // Show a neutral loading screen once a navigation has pended past this
-    // threshold instead of holding the previous screen. The pend is dominated
-    // by code-split chunk download on first visit (see `warmRouteChunks`); warm
-    // navigations resolve well under this threshold so the screen never flashes.
+    // Neutral loading screen after this pend. Warm navigations resolve well under it.
     defaultPendingMs: 200,
     defaultPendingComponent: RoutePendingScreen,
-    // Catch-all for any error thrown inside a route match (loader, beforeLoad,
-    // or component render) that the route's own `errorComponent` didn't handle.
-    // Without it an uncaught render error tears the whole tree down to a blank
-    // canvas; with it the failure lands on the shared recovery card.
+    // Catch-all for route errors the route's own `errorComponent` did not handle. Without it an uncaught render tears the tree to a blank canvas.
     defaultErrorComponent: RouteErrorComponent,
     context: {
       queryClient,
@@ -67,14 +55,7 @@ export function createAppRouter(
 export interface AuthInvalidationRouter {
   readonly state: {
     readonly status: "pending" | "idle";
-    /**
-     * Assigned once the first load's render is acknowledged (after its match
-     * set commits) and never cleared afterwards — `undefined` means no load
-     * has ever fully resolved, which conservatively includes the
-     * just-committed-but-unacknowledged instant. `matches` is NOT usable
-     * here: a cold load that outlives `defaultPendingMs` publishes
-     * provisional pending matches before anything commits.
-     */
+    /** Set after the first load's match set commits; undefined includes committed-but-unacknowledged. matches is unusable: pending matches publish first. */
     readonly resolvedLocation?: unknown;
   };
   invalidate: () => Promise<void> | void;
@@ -84,11 +65,7 @@ export interface AuthInvalidationRouter {
 export function bindAuthInvalidation(
   router: AuthInvalidationRouter,
 ): () => void {
-  // At most one recovery load per uncommitted window, however many auth
-  // changes land inside it: `router.load()` on these router-core versions
-  // ABORTS its predecessor transaction rather than joining it, so issuing one
-  // per auth flip multiplies route passes (and each continuation's invalidate
-  // would fan out further).
+  // At most one recovery load per uncommitted window: `router.load()` aborts its predecessor rather than joining it.
   let recovery: Promise<void> | null = null;
   return useAuthStore.subscribe((state, prevState) => {
     if (
@@ -97,14 +74,7 @@ export function bindAuthInvalidation(
     ) {
       return;
     }
-    // On a cold launch the auth status flips (e.g. signed-out → signed-in as
-    // stored tokens validate) while the router's INITIAL load may still be in
-    // flight — no match set has ever committed. Invalidating in that window
-    // retires the in-flight load inside router-core's scheduler and nothing
-    // reschedules it: the router sits at `status: "pending"` forever and the
-    // app renders a permanently blank screen (no error, no pending component —
-    // there is no committed match to hang either on). A fresh mobile install
-    // hits this window on nearly every launch.
+    // Cold launch: auth can flip while the initial load is still in flight. Invalidating then orphans the load and leaves a blank screen.
     const uncommitted =
       router.state.status === "pending" &&
       router.state.resolvedLocation === undefined;
@@ -113,16 +83,12 @@ export function bindAuthInvalidation(
       return;
     }
     if (recovery !== null) {
-      // The active recovery's post-settle invalidate re-runs route guards
-      // against the auth store's LATEST snapshot, so this later change is
-      // already covered.
+      // The active recovery's post-settle invalidate already re-runs guards against the latest auth snapshot.
       return;
     }
     const invalidateAfterSettle = () => {
       recovery = null;
-      // A rejected load still owes the auth change its recheck — invalidating
-      // on failure also gives the failed load a retry with the fresh auth
-      // snapshot.
+      // A rejected load still owes the auth change its recheck.
       void router.invalidate();
     };
     recovery = Promise.resolve(router.load()).then(
@@ -134,14 +100,10 @@ export function bindAuthInvalidation(
 
 function isElectronContext(): boolean {
   if (typeof window === "undefined") return false;
-  // Packaged production renderer loads the privileged `app://` scheme;
-  // a `file://` fallback covers edge cases. Both signals are reliable.
+  // Packaged production renderer loads `app://`; `file://` covers edge cases.
   const protocol = window.location.protocol;
   if (protocol === "app:" || protocol === "file:") return true;
-  // Electron dev (`make dev-desktop`) loads the Vite dev server over
-  // `http://localhost:*`, so the protocol alone is indistinguishable
-  // from the browser web app. Fall back to the User-Agent string, which
-  // Electron stamps as `... Electron/<version> ...` even under Vite.
+  // Electron dev loads Vite over `http://localhost:*`. Fall back to the User-Agent `Electron/` stamp.
   const ua = window.navigator.userAgent;
   return ua.length > 0 && ua.indexOf("Electron/") !== -1;
 }
@@ -151,36 +113,16 @@ function createAppHistory(
   windowId: string | null,
 ): RouterHistory | undefined {
   if (typeof window === "undefined") return undefined;
-  // Browser web app (http: / https:): let TanStack pick `createBrowserHistory`
-  // automatically so the URL bar drives navigation, deep links from sharing
-  // work natively, and reload survives via the browser. A shell-injected
-  // `initialRoute` still overrides via memory history below.
+  // Browser web app: TanStack `createBrowserHistory`. A shell-injected `initialRoute` still overrides via memory history.
   if (!isElectronContext()) {
-    // The installed mobile app owns its back stack, because it is the one
-    // non-Electron shell whose ONLY history affordance is in-app: the phone has
-    // no URL bar, no back button, and no room in its header for the desktop's
-    // arrows - the edge swipe is the whole of back and forward there. TanStack's
-    // own history would leave that gesture reading a stack nothing in this app
-    // fills, which is a gesture that recognizes perfectly and then navigates
-    // nowhere.
-    //
-    // `windowId` is deliberately `null`, which is what makes the stack
-    // SESSION-scoped: both halves of the persistence layer no-op on a null
-    // window, so nothing is read at boot and nothing is written. A phone's
-    // process outlives every navigation the user makes inside one sitting, so
-    // the in-memory stack already survives everything a resume can do to it; a
-    // stack restored across a COLD launch would instead hand the first swipe
-    // after opening the app a surface from yesterday, which reads as the app
-    // going somewhere the user never was.
+    // Installed mobile app owns its back stack. `windowId` is null so the stack is session-scoped: a cold-launch restore would swipe to yesterday's surface.
     if (isMobileApp()) return createPersistentMemoryHistory(initialRoute, null);
     if (initialRoute === null) return undefined;
     return createMemoryHistory({
       initialEntries: [normalizeInitialRoute(initialRoute)],
     });
   }
-  // Electron renderer: no URL bar, the scheme drops the path on relaunch.
-  // Use a memory history seeded from `localStorage` so the router boots at
-  // the last visited route synchronously, with no async gate.
+  // Electron renderer: memory history seeded from `localStorage` so the last route boots synchronously.
   return createPersistentMemoryHistory(initialRoute, windowId);
 }
 

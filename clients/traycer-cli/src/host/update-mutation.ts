@@ -27,14 +27,7 @@ import type {
   UninstallServiceOptions,
 } from "../service";
 
-/**
- * The only contender-aware way for commands to mutate the install tree.
- *
- * The raw installer functions are intentionally still useful to the legacy
- * installer tests and bootstrapping internals, but command-level execution
- * must come through this module. The verifier is carried down to the exact
- * record-write, stop, rename and start edges in `installer/install.ts`.
- */
+/** The only contender-aware way for commands to mutate the install tree. The raw installer functions are intentionally still useful to the legacy installer tests and bootstrapping internals, but command-level execution must come through this module. */
 export async function applyHostWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
@@ -221,11 +214,8 @@ async function runWithHostStartAdoption(
   label: ServiceLabel,
   start: () => Promise<void>,
 ): Promise<void> {
-  // Resolving the effective service label and publishing the one-shot
-  // adoption proof can both take long enough for a released or forged
-  // capability to surface. Revalidate again at the exact service start edge;
-  // otherwise the service manager could launch bytes selected by a stale
-  // caller after its outer authority scope was established.
+  // Resolving the effective service label and publishing the one-shot adoption proof can both take long enough for a released or forged capability to surface.
+  // Revalidate again at the exact service start edge; otherwise the service manager could launch bytes selected by a stale caller after its outer authority scope was established.
   await verifyServiceMutationAuthority();
   const serviceLabel = await controller.hostStartAdoptionLabel(label);
   const adoption = await publishHostStartAdoption(
@@ -238,19 +228,14 @@ async function runWithHostStartAdoption(
     await start();
     await adoption.waitForSpawn();
   } catch (error) {
-    // A record-step failure after the service manager accepted the
-    // registration means the supervisor is already launching and will present
-    // this lease; cancelling first would refuse an admitted child. Honour the
-    // lease, then surface the record error unchanged (a failed wait must not
-    // replace it - see the cleanup rule below).
+    // A record-step failure after the service manager accepted the registration means the supervisor is already launching and will present this lease; cancelling first would refuse an admitted child.
+    // Honour the lease, then surface the record error unchanged (a failed wait must not replace it - see the cleanup rule below).
     if (didServiceRegistrationCommit(error)) {
       await adoption.waitForSpawn().catch(() => undefined);
     }
     throw error;
   } finally {
-    // Cleanup must never replace the actuator error: callers classify it to
-    // choose between park/abort and an ordinary busy refusal, and a rejected
-    // cancel() propagating out of this `finally` would swap in its own error.
+    // Cleanup must never replace the actuator error: callers classify it to choose between park/abort and an ordinary busy refusal, and a rejected cancel() propagating out of this `finally` would swap in its own error.
     await adoption.cancel().catch(() => undefined);
   }
 }
@@ -269,11 +254,8 @@ export async function takeoverDesktopRegistrationWithAttempt(
   );
 }
 
-// Legacy-core facades keep raw service calls physically inside this actuator
-// module. They exist only for pre-cutover command cores and test seams: all
-// production contender paths above consume a live attempt capability. Naming
-// them as legacy (rather than "without attempt") makes an unguarded escape
-// impossible to introduce by accidentally importing a tempting bypass API.
+// Legacy-core facades keep raw service calls physically inside this actuator module.
+// They exist only for pre-cutover command cores and test seams: all production contender paths above consume a live attempt capability.
 export async function uninstallHostServiceLegacy(
   controller: Pick<ServiceController, "uninstall">,
   options: UninstallServiceOptions,

@@ -12,36 +12,7 @@ import {
 } from "@traycer/protocol/host/notifications/contracts";
 
 /**
- * Cross-surface conformance: for EVERY registered serving path and EVERY
- * installed version of it, every notification kind is either representable by
- * that version's wire schema or excluded by the central
- * `visibleHostNotificationKinds` projection - never neither, never both.
- *
- * This is the tripwire the `host.operation.finished` cloud-feed bug proved
- * missing. The kind shipped with a complete LOCAL compat ladder on 2026-07-28;
- * the cloud feed shipped two days later pinning the frozen V1 union, and no
- * test tied "kinds the enum knows" to "kinds each read path can carry" - so
- * for a month the relay counted rows into the badge that no client could
- * render. The invariant this file pins is exactly the one that broke:
- *
- *   representable(surface, version, kind) ⇔ visible(surface, version, kind)
- *
- * A kind a version cannot parse must be centrally hidden from it (so the
- * serving side filters rows AND summaries in one place), and a kind a version
- * CAN parse must not be hidden (a silent exclusion is a row the user never
- * sees on a client that could have shown it).
- *
- * Everything below is derived from the registries, not hand-listed:
- * - The set of entry-carrying methods is DETECTED by scanning every
- *   `host.notifications.*` registry contract's wire schemas for entry-kind
- *   literals. A new read path that carries entries joins the matrix or fails
- *   the completeness check - it cannot sit out, which is how the cloud feed
- *   sat out.
- * - The versions per method come from the registry's installed
- *   (major, minor) set, so a new minor is exercised the moment it is
- *   registered.
- * - The kinds come from `ALL_HOST_NOTIFICATION_KINDS`, and a fixture-coverage
- *   check makes a new kind fail here until it gets a representative entry.
+ * Cross-surface conformance: for EVERY registered serving path and EVERY installed version of it, every notification kind is either representable by that version's wire schema or excluded by the central.
  */
 
 // ---- representative entries, one per kind ------------------------------- //
@@ -55,9 +26,7 @@ const ENTRY_BASE = {
   chatId: "chat-1",
 };
 
-/** Minimal VALID entry per kind on the widest union. Arm-specific fields
- * (outcome nullability, resolvedAt, strict payloads) matter: an invalid
- * fixture would read as "not representable" and corrupt the matrix. */
+/** Minimal VALID entry per kind on the widest union. */
 const REPRESENTATIVE_ENTRIES: Readonly<
   Record<HostNotificationKind, Record<string, unknown>>
 > = {
@@ -119,10 +88,9 @@ const REPRESENTATIVE_ENTRIES: Readonly<
 
 // ---- per-method wire embedding ------------------------------------------ //
 
-/** How one representative entry rides each method's wire, and which schema
- * of the registered contract validates that shape. The embedding SHAPE is
- * per method; the entry union inside it is whatever the negotiated version's
- * schema says - which is exactly what the matrix probes. */
+/**
+ * How one representative entry rides each method's wire, and which schema of the registered contract validates that shape.
+ */
 type ServingPath = {
   readonly registry: "rpc" | "stream";
   readonly embed: (entry: Record<string, unknown>) => unknown;
@@ -212,9 +180,10 @@ function installedVersions(
   return versions;
 }
 
-/** A contract carries notification entries iff its wire schemas mention an
- * entry-kind literal. Dump-based on purpose: it inspects what is actually on
- * the wire, so a new method cannot opt out by simply not being hand-listed. */
+/**
+ * A contract carries notification entries iff its wire schemas mention an entry-kind literal.
+ * Dump-based on purpose: it inspects what is actually on the wire, so a new method cannot opt out by simply not being hand-listed.
+ */
 function carriesNotificationEntries(contract: unknown): boolean {
   const schemas = Object.entries(contract as Record<string, unknown>).filter(
     ([, value]) => value instanceof z.ZodType,
@@ -265,10 +234,7 @@ describe("notification kind ↔ surface conformance", () => {
   });
 
   it("covers exactly the entry-carrying methods the registries actually serve", () => {
-    // Detected from the wire schemas, not hand-listed. A new
-    // `host.notifications.*` method that carries entries fails here until it
-    // gets an embedding above AND a `HostNotificationsSurface` arm - the two
-    // things the cloud feed shipped without.
+    // Detected from the wire schemas, not hand-listed.
     const expected = Object.entries(SERVING_PATHS)
       .map(([method, path]) => `${path.registry}:${method}`)
       .sort();
@@ -289,10 +255,7 @@ describe("notification kind ↔ surface conformance", () => {
         for (const kind of ALL_HOST_NOTIFICATION_KINDS) {
           const candidate = path.embed(REPRESENTATIVE_ENTRIES[kind]);
           const representable = wireSchema.safeParse(candidate).success;
-          // The one line the cloud-feed bug would have tripped:
-          // `cloudFeed.subscribe@1.0` could not represent
-          // `host.operation.finished`, but nothing hid the kind from that
-          // surface, so it was counted, then silently dropped.
+          // The one line the cloud-feed bug would have tripped: `cloudFeed.subscribe@1.0` could not represent `host.operation.finished`, but nothing hid the kind from that surface, so it was counted, then silently dropped.
           expect
             .soft(
               representable,

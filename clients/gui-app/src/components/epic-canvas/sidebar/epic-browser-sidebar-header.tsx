@@ -206,9 +206,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
 }
 
 /**
- * The radio list behind the panel's host filter: follow the active host, or pin
- * a specific one. Exported because the mobile switcher's Browsers category
- * mounts the same choices in its own menu shell rather than restating them.
+ * Exported because the mobile switcher's Browsers category mounts the same choices in its own menu shell rather than restating them.
  */
 export function BrowserHostFilterChoices(props: {
   readonly surfaceKey: string;
@@ -299,9 +297,7 @@ export function BrowserHostFilterChoices(props: {
 }
 
 /**
- * Search mode for the browsers panel - the same shape as the agent and
- * artifact panels (`ChatSearchHeaderInput`): one shared `PanelSearchField`
- * portaled into the header slot the panel traded its title row for.
+ * Search mode for the browsers panel - the same shape as the agent and artifact panels (`ChatSearchHeaderInput`): one shared `PanelSearchField` portaled into the header slot the panel traded its title row for.
  */
 export function BrowserSearchHeaderInput(props: {
   readonly tabId: string;

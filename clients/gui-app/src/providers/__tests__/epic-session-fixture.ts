@@ -64,14 +64,7 @@ function legacySnapshotMeta(roomId: string): SnapshotMetaEpic {
   };
 }
 
-/**
- * The host's state-lane boundary, represented in the fixture by the same
- * JSON-only frame contract the real `EpicLaneSession.snapshotFrame` emits.
- *
- * Reading the title from `sourceRoot` makes the source relationship
- * observable in the provider test. The root's `attachments` map has no field
- * in this contract, so it cannot cross this boundary with the projected state.
- */
+/** JSON-only snapshotFrame: title from sourceRoot. attachments has no field in this contract and cannot cross the boundary. */
 function stateSnapshot(sourceRoot: Y.Doc): EpicStateSnapshotFrame {
   const title: unknown = sourceRoot.getMap("epic").get("title");
   if (typeof title !== "string") {

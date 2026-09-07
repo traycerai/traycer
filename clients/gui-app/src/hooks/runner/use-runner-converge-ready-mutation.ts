@@ -17,15 +17,7 @@ export interface ConvergeReadyVariables {
 }
 
 /**
- * Post-auth host provisioning. Delegates to `IHostManagement.convergeReady`,
- * the intent-lane replacement for the old `ensureHost`. The lane is
- * "wait-never-reject" - every intent resolves a `MutationOutcome`, it never
- * rejects - so this hook does the settle mapping itself: `"ok"`/`"busy"`
- * resolve (the caller's gate distinguishes them via `outcome.kind`), while
- * `"deferred"` (incl. exhausted lock-retry), `"failed"`,
- * `"installed-not-converged"`, and `"stage-fingerprint-mismatch"` are
- * terminal per-intent convergence failures and reject, so `mutation.error`
- * drives the gate's existing error-card/Retry rendering unchanged.
+ * Intent lane never rejects. Map `"ok"`/`"busy"` to resolve; `"deferred"`, `"failed"`, `"installed-not-converged"`, and `"stage-fingerprint-mismatch"` reject so `mutation.error` drives the gate.
  */
 export function useRunnerConvergeReady(): UseMutationResult<
   MutationOutcome<ConvergeReadyOk>,

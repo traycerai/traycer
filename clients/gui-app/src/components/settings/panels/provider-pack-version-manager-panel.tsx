@@ -59,41 +59,16 @@ import {
   type VersionUseEligibility,
 } from "./provider-pack-version-manager-model";
 
-/** Pending key for "Use latest automatically" (clear pin / version: null). */
 const CLEAR_PIN_PENDING_KEY = "__auto__";
 
-/**
- * Public props for the per-pack version manager. The CLI candidates table
- * ticket mounts this panel and supplies the wire fields from `providers.list`
- * v7.0 (`packId` + `managedVersions`) plus the **settings-scoped** `hostId`
- * already threaded through this tree (`scope.hostId`). Do not ambiently
- * re-read the globally active host — the settings surface can display one
- * host while another is active.
- *
- * Capability: gated on every member of
- * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS} via
- * {@link useProviderPackVersionManagerSupport} (three-valued) against the
- * **passed** `hostId`.
- * - `hostId === null` or support `null` → pending (not unsupported).
- * - support `false` → clear "host too old" (no action buttons).
- * - support `true` → full panel.
- */
+/** Do not ambiently re-read the globally active host - the settings surface can display one host while another
+ * is active. */
 export type ProviderPackVersionManagerPanelProps = {
-  /**
-   * Settings-scoped host this panel is about. Same source as every other
-   * child under `providers-settings-panel` (`scope.hostId`). Null when the
-   * scope has no host yet — treated like capability-unknown (pending), never
-   * as "unsupported".
-   */
+  /** Null when the scope has no host yet - treated like capability-unknown (pending), never as "unsupported". */
   readonly hostId: string | null;
-  /** Machine-shared pack id (e.g. `opencode`). Keys every mutation. */
   readonly packId: string;
-  /**
-   * Short pack title for the header, e.g. `"opencode CLI"`. Not a provider
-   * id — shared packs have one name that is not any single provider.
-   */
+  /** Not a provider id - shared packs have one name that is not any single provider. */
   readonly packDisplayName: string;
-  /** Per-pack manager state from the provider row. */
   readonly managedVersions: ProviderManagedVersions;
 };
 
@@ -103,16 +78,13 @@ type RowNotice = {
   readonly message: string;
 };
 
-/** Banner-scoped notice when the durable update version has no row to attach. */
 type BannerNotice = {
   readonly kind: "error";
   readonly message: string;
 };
 
-/**
- * The row whose Delete is armed — identified by WHERE it is, not just which
- * version, so the arming cannot outlive the host and pack it was made on.
- */
+/** The row whose Delete is armed - identified by where it is, not just which version, so the arming cannot
+ * outlive the host and pack it was made on. */
 type ArmedDelete = {
   readonly hostId: string | null;
   readonly packId: string;
@@ -130,29 +102,13 @@ function armedVersionWithin(
   return armed.version;
 }
 
-/**
- * WHERE a check was dispatched from — same shape and same reason as
- * {@link ArmedDelete}.
- *
- * An update check is the longest-lived request on this surface by a wide
- * margin: it can join the host's in-flight discovery tick, so one press is
- * budgeted `PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS` — minutes, not seconds.
- * Over that window the panel it was pressed in can stop being the panel it
- * comes back to, in two independent ways, because it is mounted UNKEYED under
- * a settings scope: the scope's host can AUTO-FOLLOW to another machine, and
- * the popover can be re-pointed at another pack. Neither remounts this
- * component, so neither resets a bare notice.
- *
- * Without the identity, host X's "Couldn't reach the registry" lands in host
- * Y's footer, and pack A's still-running check keeps pack B's button disabled.
- * Both read as a statement about what the user is looking at now.
- */
+/** An update check is the longest-lived request on this surface by a wide margin: it can join the host's
+ * in-flight discovery tick, so one press is budgeted `PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS`. */
 type CheckIdentity = {
   readonly hostId: string | null;
   readonly packId: string;
 };
 
-/** Whether an identity captured at dispatch is still the one on screen. */
 function checkIdentityMatches(
   identity: CheckIdentity | null,
   hostId: string | null,
@@ -162,13 +118,8 @@ function checkIdentityMatches(
   return identity.hostId === hostId && identity.packId === packId;
 }
 
-/**
- * Whether the check still running is the one THIS host and pack dispatched.
- *
- * A module-level predicate rather than an inline `&&` for the same reason
- * `armedVersionWithin` is one: the panel body is at its complexity ceiling, and
- * this is a fact about an identity, not about rendering.
- */
+/** A module-level predicate rather than an inline `&&` for the same reason `armedVersionWithin` is one: the
+ * panel body is at its complexity ceiling, and this is a fact about an identity, not about rendering. */
 function checkIsPendingWithin(
   identity: CheckIdentity | null,
   isPending: boolean,
@@ -190,45 +141,13 @@ function checkNoticeWithin(
   return scoped.notice;
 }
 
-/** A check outcome plus the identity it is an answer about. */
 type ScopedCheckNotice = {
   readonly identity: CheckIdentity;
   readonly notice: PackDiscoveryCheckNotice;
 };
 
-/**
- * Per-pack version manager panel (B5-T2).
- *
- * Three regions, in the order a reader needs them: what is true of the pack
- * right now (sharing, a pin, an available update), the versions themselves,
- * and one persistent setting pinned to the bottom.
- *
- * The panel used to open with a titled header bar — `<pack> CLI · versions`,
- * a footprint line, and the auto-download switch. All three were dropped:
- *
- * - The TITLE restated the row the popover is anchored to. It is opened from
- *   one specific CLI's version cell, so naming that CLI again is the widest,
- *   loudest element on the surface saying the one thing the user cannot have
- *   forgotten. `aria-label` on the section keeps it for screen readers, which
- *   do NOT get the anchoring for free.
- * - The FOOTPRINT was `managedVersions.totalSizeBytes` — the whole pack cell
- *   across every retained version — sitting directly above rows whose own
- *   sizes are per-version. Two numbers on different axes, one labelled "on
- *   disk" and neither summing to the other, read as an error in the smaller
- *   one. The per-version sizes stayed (they answer "what will this cost me");
- *   the total left, because a pack-wide figure belongs wherever pack-wide
- *   storage is managed, not in a version picker.
- * - The SWITCH moved to the footer. It is a durable preference, not an action
- *   on any version, so it wants the calmest position on the surface rather
- *   than the most prominent — and out of the header it stops competing with
- *   the pin banner for the same corner.
- *
- * Mutations go through the v7.0 pack RPCs; the footer's update check is a read
- * on a separate optional method, gated separately.
- *
- * Capability-gated (non-floor optional RPCs): see
- * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS}.
- */
+/** It is opened from one specific CLI's version cell, so naming that CLI again is the widest, loudest element
+ * on the surface saying the one thing the user cannot have forgotten. */
 export function ProviderPackVersionManagerPanel(
   props: ProviderPackVersionManagerPanelProps,
 ): JSX.Element {
@@ -236,24 +155,14 @@ export function ProviderPackVersionManagerPanel(
   // Gate against the settings-scoped host only. The hook already returns null
   // when hostId is null (no handshake possible yet).
   const methodSupport = useProviderPackVersionManagerSupport(hostId);
-  // Read unconditionally, beside the gate above, so hook order is fixed. The
-  // BOOLEAN form is right because this control merely hides: an unanswered
-  // handshake reads as absent, the button appears once the manifest arrives,
-  // and nothing is stranded meanwhile. Gated here rather than through
-  // {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS} so it can hide
-  // alone - see that array's doc for why it is not a member.
+  // Gated here rather than through PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS so it can hide alone - see
+  // that array's doc for why it is not a member.
   const canCheckForUpdates = useHostSupportsMethod(
     hostId,
     "providers.refreshPackDiscovery",
   );
 
-  // This panel's own identity, handed to every mutation it starts so the
-  // outcome comes back to THIS panel rather than to whichever panel happens to
-  // be mounted when the response lands. Re-minted when the pack changes: an
-  // RPC still in flight for the old pack then holds a token this panel no
-  // longer registers, and the hook toasts it instead of trusting a panel that
-  // has no row for it. A recomputation for any other reason degrades the same
-  // way - toward a toast, never toward silence.
+  // A recomputation for any other reason degrades the same way - toward a toast, never toward silence.
   const panelToken = useMemo(
     () => createVersionManagerPanelToken(packId),
     [packId],
@@ -267,62 +176,27 @@ export function ProviderPackVersionManagerPanel(
 
   const [rowNotice, setRowNotice] = useState<RowNotice | null>(null);
   const [bannerNotice, setBannerNotice] = useState<BannerNotice | null>(null);
-  // Pin-scoped, and NOT the update banner. `bannerNotice` renders only inside
-  // `UpdateAvailableBanner`, which only mounts when `updateAvailable !== null`
-  // - so routing a clear-pin refusal there still dropped it whenever no update
-  // was pending, which is most of the time. The pinned banner below renders on
-  // exactly the condition that makes a clear-pin refusal possible.
+  // `bannerNotice` renders only inside `UpdateAvailableBanner`, which only mounts when `updateAvailable !==
+  // null`.
   const [pinNotice, setPinNotice] = useState<BannerNotice | null>(null);
-  // Footer-scoped, and the only notice on this surface that can be GOOD news:
-  // a check answers neutrally as often as not, so unlike the row and banner
-  // notices it carries a tone rather than being error-only.
-  //
-  // Carries the host and pack it is an answer ABOUT, and is read through
-  // `checkNoticeWithin` — the same derived-identity-match shape `armedDelete`
-  // uses, for the same auto-follow reason, and here also for a pack change.
+  // Footer-scoped, and the only notice on this surface that can be good news: a check answers neutrally as often
+  // as not, so unlike the row and banner notices it carries a tone rather than being error-only.
   const [checkNotice, setCheckNotice] = useState<ScopedCheckNotice | null>(
     null,
   );
-  // The identity the in-flight check was dispatched FOR, so `check.isPending`
-  // — which belongs to the mutation, not to any one pack — only ever disables
-  // the button that started it.
+  // The identity the in-flight check was dispatched for, so `check.isPending` - which belongs to the mutation,
+  // not to any one pack - only ever disables the button that started it.
   const [checkInFlight, setCheckInFlight] = useState<CheckIdentity | null>(
     null,
   );
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
-  // The version whose Delete is ARMED — its icon has been clicked once and is
-  // now showing a labelled "Delete?" awaiting the second click.
-  //
-  // Delete used to be a word-labelled button that fired on its only click. It
-  // is now a 28px unlabelled trash icon sitting one gap away from the other
-  // row actions, which makes a mis-click both likelier and less obviously a
-  // mistake while it is happening. Re-downloading is usually the whole cost of
-  // one, but not always: an `uncertified` version is still installed, still
-  // usable, and NOT re-downloadable, so for that row a slip is irreversible.
-  //
-  // Deliberately not a timeout — a self-disarming control is untestable
-  // without fake timers and, worse, can disarm between a user deciding and
-  // clicking. It disarms on any other action in the panel (via `clearNotice`)
-  // and on unmount, which closing the popover does.
-  //
-  // Keyed by host and pack as well as version, because this panel is mounted
-  // unkeyed under a settings scope whose host can AUTO-FOLLOW to another
-  // machine while the popover is open. A bare version string would survive
-  // that move, and if the new host also carries `1.5.0` its row would mount
-  // already armed — one press from deleting something on a machine the user
-  // never armed anything on. Matching the full key makes the move disarm for
-  // free, with no effect and no remount.
+  // Deliberately not a timeout - a self-disarming control is untestable without fake timers and, worse, can
+  // disarm between a user deciding and clicking.
   const [armedDelete, setArmedDelete] = useState<ArmedDelete | null>(null);
   const armedVersion = armedVersionWithin(armedDelete, hostId, packId);
 
-  // Tell the mutation hooks this panel is on screen to render outcomes. While
-  // it is, refusals draw inline below, anchored to what they are about; once
-  // the popover closes this unregisters and the hooks toast instead. Without
-  // it, an outcome that lands after close is either dropped or double-drawn.
-  //
-  // Registered only for the render that actually HAS those inline surfaces.
-  // The pending and unsupported branches below return early, before any notice
-  // is drawn, so a registration there would claim an outcome it cannot show.
+  // The pending and unsupported branches below return early, before any notice is drawn, so a registration there
+  // would claim an outcome it cannot show.
   const canRenderOutcome = hostId !== null && methodSupport === true;
   useEffect(() => {
     if (!canRenderOutcome) return undefined;
@@ -359,39 +233,19 @@ export function ProviderPackVersionManagerPanel(
     [clearNotice, packId, setPolicy],
   );
 
-  // No `pendingVersion`: a check is about the PACK, and `check.isPending` is
-  // the whole of its pending state. Both arms land here rather than only the
-  // refusal, because an outcome is the only thing this action produces - a
-  // successful check with nothing to say would otherwise look like a button
-  // that did nothing.
+  // Both arms land here rather than only the refusal, because an outcome is the only thing this action produces
+  // - a successful check with nothing to say would otherwise look like a button that did nothing.
   const onCheckForUpdates = useCallback(() => {
     clearNotice();
-    // Captured at DISPATCH, not read at delivery: by the time this answers,
-    // `hostId` and `packId` may name a different panel (see `CheckIdentity`).
-    // Stamping the result means a stale one is filtered on render instead of
-    // overwriting an identity it says nothing about.
+    // Captured at dispatch, not read at delivery: by the time this answers, `hostId` and `packId` may name a
+    // different panel (see `CheckIdentity`).
     const identity: CheckIdentity = { hostId, packId };
     setCheckInFlight(identity);
     check.mutate(
       { packId },
       {
-        // Clears the slot only while it still holds THIS dispatch, so a
-        // callback that no longer owns it cannot re-enable a button whose
-        // check is still running.
-        //
-        // Unreachable today, and deliberately not left resting on that:
-        // `MutationObserver.mutate` overwrites its single `#mutateOptions`
-        // and `removeObserver`s the superseded mutation, and `#notify` is
-        // only ever reached from that observer list - so a second press
-        // silently drops the first press's callbacks rather than racing
-        // them. That is a fact about @tanstack/query-core, not about this
-        // panel, and this slot is the panel's. One line up, `onSuccess`
-        // already declines to rest on it for the same reason.
-        //
-        // REFERENCE equality, not `checkIdentityMatches`: two dispatches for
-        // the same host and pack are value-equal but are not the same
-        // request, so a value comparison would let a re-pointed-away-and-back
-        // A's settle clear the slot the SECOND A owns - the bug this guards.
+        // Clears the slot only while it still holds this dispatch, so a callback that no longer owns it cannot
+        // re-enable a button whose check is still running.
         onSettled: () =>
           setCheckInFlight((current) =>
             current === identity ? null : current,
@@ -432,8 +286,7 @@ export function ProviderPackVersionManagerPanel(
               if (hasRow) {
                 setRowNotice({ version, kind: "error", message });
               } else {
-                // Durable banner may name a version with no row — surface on
-                // the banner, not a phantom row notice.
+                // Durable banner may name a version with no row - surface on the banner, not a phantom row notice.
                 setBannerNotice({ kind: "error", message });
               }
             }
@@ -478,11 +331,7 @@ export function ProviderPackVersionManagerPanel(
         // Refusal only; the hook owns the success confirmation.
         onSuccess: (response) => {
           if (response.result.ok) return;
-          // The PIN banner. Not a row notice: those render inside `VersionRow`
-          // keyed by version, and the pinned version has no row exactly when a
-          // user is most likely to be clearing the pin (a pin on a build the
-          // channel no longer lists). Not the update banner either: that one
-          // only mounts when an update is pending.
+          // Not the update banner either: that one only mounts when an update is pending.
           setPinNotice({
             kind: "error",
             message: packVersionUseRefusalMessage(response.result.code),
@@ -562,22 +411,16 @@ export function ProviderPackVersionManagerPanel(
     comparePackVersionsDescending(a.version, b.version),
   );
 
-  // `check.isPending` is deliberately NOT a member. Every other action here
-  // mutates the pack, so one in flight is a reason to hold the rest; a check
-  // only reads a head, and it can hold the join window for minutes because the
-  // host answers it from the whole enabled set's poll. Locking Download / Use /
-  // Delete and the auto-download switch for that long - over a read - is the
-  // wrong trade. The check's own button still disables on `anyPending`, so the
-  // exclusion is one-way.
+  // `check.isPending` is deliberately not a member. Locking Download / Use / Delete and the auto-download switch
+  // for that long - over a read - is the wrong trade.
   const anyPending =
     install.isPending ||
     remove.isPending ||
     useVersion.isPending ||
     setPolicy.isPending;
 
-  // Both scoped to the identity that DISPATCHED the check, so a request still
-  // in flight for another host or pack neither speaks for this one nor holds
-  // its button down.
+  // Both scoped to the identity that dispatched the check, so a request still in flight for another host or pack
+  // neither speaks for this one nor holds its button down.
   const visibleCheckNotice = checkNoticeWithin(checkNotice, hostId, packId);
   const checkPendingHere = checkIsPendingWithin(
     checkInFlight,
@@ -591,18 +434,8 @@ export function ProviderPackVersionManagerPanel(
       data-testid="provider-pack-version-manager"
       data-pack-id={packId}
       data-host-id={hostId}
-      // `min-h-0` so the list below can actually scroll inside a height-capped
-      // container instead of forcing this section past it.
-      //
-      // NO frame of its own. This panel only ever mounts inside
-      // `VersionMenuTrigger`'s `PopoverContent`, which already draws the
-      // surface: `rounded-lg bg-popover ring-1 shadow-md`, with `p-0` and
-      // `overflow-hidden` so a full-bleed child clips to its corners. The
-      // `rounded-xl border border-border bg-card` this used to add put a
-      // SECOND 1px line inside the ring at a LARGER radius than the container
-      // it sat in, so the popover's own corners showed through as four slivers
-      // behind the card's — the frayed edge in the report. `bg-card` over
-      // `bg-popover` was a second, quieter mismatch of the same kind.
+      // `min-h-0` so the list below can actually scroll inside a height-capped container instead of forcing this
+      // section past it.
       className="flex w-full min-h-0 flex-col overflow-hidden"
       aria-label={`${packDisplayName} versions`}
     >
@@ -631,19 +464,8 @@ export function ProviderPackVersionManagerPanel(
         />
       ) : null}
 
-      {/*
-        Capped so the list SHOWS about four rows and scrolls the rest, instead
-        of growing to whatever the popover's own `max-h` allows. Two reasons
-        the outer cap was not enough: `managedVersions.available` is every
-        published version plus every retained install, so on a mature pack the
-        popover simply became a full-height wall of near-identical rows; and
-        the footer only reads as a footer when the list visibly ends above it.
-        Viewport-derived, per the repo's fluid-sizing rule. A row is ~41px
-        (`py-1.5` around a 28px icon button, plus its 1px rule), so 10.5rem
-        lands PART-WAY THROUGH the fifth: four rows read whole and the clipped
-        one is the scroll affordance. A cap on a row boundary would look like
-        the list simply ends.
-      */}
+      {/* Capped so the list shows about four rows and scrolls the rest, instead of growing to whatever the popover's
+         own `max-h` allows. A cap on a row boundary would look like the list simply ends. */}
       <ul className="flex max-h-[min(45vh,10.5rem)] w-full min-h-0 flex-col overflow-y-auto">
         {rows.map((row) => (
           <VersionRow
@@ -688,19 +510,8 @@ export function ProviderPackVersionManagerPanel(
   );
 }
 
-/**
- * What is true of the PACK, above the list of versions.
- *
- * Everything here is conditional, and on the common pack — unshared, unpinned,
- * up to date — the whole region renders nothing and the popover opens directly
- * onto the versions. That is the point of it having replaced a header: a header
- * is chrome and is always there, whereas each of these is a fact that is only
- * sometimes worth a line.
- *
- * The sharing line is the one that had to survive the header's removal. It is
- * the only warning that a pack backs several providers, which is what makes a
- * delete here reach further than the CLI the user opened this from.
- */
+/** That is the point of it having replaced a header: a header is chrome and is always there, whereas each of
+ * these is a fact that is only sometimes worth a line. */
 function VersionManagerBanners(props: {
   readonly sharedLine: string | null;
   readonly pinnedVersion: string | null;
@@ -762,26 +573,8 @@ function VersionManagerBanners(props: {
   );
 }
 
-/**
- * The band below the list: how this pack learns about updates, and how it takes
- * them. One on-demand action on the left, one durable preference on the right.
- *
- * Outside the scrolling `<ul>` rather than `position: sticky` inside it: the
- * list is a sibling that scrolls its own overflow, so this row is always
- * visible by construction and never overlaps a row it is scrolling past.
- *
- * The band used to BE the `<label>`, so the whole width toggled the switch.
- * Splitting it costs that: the label now wraps only its own text and control.
- *
- * The label's own layout is conditional, because a host without the check
- * method is not a rare state - it is every host older than this release, for as
- * long as it stays older, plus the first paint on a supported host while the
- * capability hook is still failing closed. Those hosts keep the original band
- * exactly: `w-full justify-between`, text at the left edge and switch at the
- * right. With the button present the label clusters right instead. The switch
- * is pinned to the right edge either way, so when a manifest lands and the
- * button appears, the label's TEXT moves and no control does.
- */
+/** Outside the scrolling `<ul>` rather than `position: sticky` inside it: the list is a sibling that scrolls
+ * its own overflow. */
 function VersionManagerFooter(props: {
   readonly autoDownload: boolean;
   readonly policyPending: boolean;
@@ -794,15 +587,8 @@ function VersionManagerFooter(props: {
 }): JSX.Element {
   return (
     <div className="flex w-full shrink-0 flex-col gap-1.5 border-t border-border bg-foreground/5 px-4 py-2.5 text-ui-xs text-muted-foreground">
-      {/*
-        `flex-wrap` because nothing in this row can give width back: the Button
-        primitive is `shrink-0 whitespace-nowrap` and the label is `shrink-0`
-        too, so on the narrow-viewport popover (`max-w-safe-dvw` minus this
-        band's padding) two labels, a switch and the gaps exceed the line and
-        the popover's `overflow-hidden` CLIPS a control rather than adapting.
-        Wrapping drops the label to a second line instead; the right-edge
-        clustering below is unchanged whenever both do fit.
-      */}
+      {/* Wrapping drops the label to a second line instead; the right-edge clustering below is unchanged whenever
+         both do fit. */}
       <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2">
         {props.canCheckForUpdates ? (
           <Button
@@ -856,22 +642,8 @@ function VersionManagerFooter(props: {
   );
 }
 
-/**
- * Screen-reader-only counterpart to the footer's check notice, which stays
- * `aria-hidden`.
- *
- * Mounted permanently and changing only its text, which is the point: a live
- * region inserted into the DOM together with its first content is the case
- * assistive tech most reliably misses. That matters more here than for the row
- * and banner notices, which accompany a visible change to the thing they are
- * about - a row's buttons, the banner. A check that answers "No changes found."
- * changes nothing else on screen, so a missed announcement leaves a
- * screen-reader user with no answer at all.
- *
- * `sr-only` is `position: absolute`, so this is not a flex item and adds no gap
- * to the band while it is empty. Same shape as
- * `WorktreeBranchPrefixLiveStatus`.
- */
+/** Screen-reader-only counterpart to the footer's check notice, which stays `aria-hidden`. `sr-only` is
+ * `position: absolute`, so this is not a flex item and adds no gap to the band while it is empty. */
 function VersionManagerCheckLiveStatus(props: {
   readonly notice: PackDiscoveryCheckNotice | null;
 }): JSX.Element {
@@ -892,15 +664,7 @@ function UpdateAvailableBanner(props: {
   readonly onDownload: (version: string) => void;
 }): JSX.Element {
   return (
-    // A full-width strip, not the inset rounded card this was. Floating a
-    // second bordered box inside a bordered popover, inset from both edges,
-    // gave the surface three nested frames before the first version; every
-    // other region here is a bordered band, so this one is too.
-    //
-    // Its Download keeps a WORD while the rows' went to icons. The rows have a
-    // repeating action column where labels are redundant by the second row —
-    // this is a one-off call to action attached to a sentence, and it is the
-    // only control on the surface that acts on a version with no row.
+    // A full-width strip, not the inset rounded card this was.
     <div
       data-testid="provider-pack-update-available-banner"
       className="flex w-full shrink-0 flex-col gap-2 border-b border-border bg-foreground/3 px-4 py-2.5"
@@ -955,36 +719,8 @@ type VersionRowProps = {
   readonly onDelete: (version: string) => void;
 };
 
-/**
- * ONE LINE PER VERSION: the number, at most one chip, one action.
- *
- * This row used to carry the number, up to three badges, a meta line that
- * repeated two of those badges, a condemned sentence that repeated the meta,
- * a `Use disabled: …` line, and up to three buttons. A list whose job is
- * "pick a version" was the hardest thing on the screen to read.
- *
- * That first pass moved the surplus into a hover card on the version number.
- * The card is now gone too, because hiding redundancy is not removing it —
- * three of its five lines restated the row. `Installed` was already told by
- * WHICH action the row offers (`Use` means installed, `Download` means not);
- * `pairs with this Traycer release` is the `Recommended` chip in prose; and
- * `Can't switch to it — …` became a second copy of the disabled `Use` button's
- * own tooltip the moment those buttons went icon-only. Size went with it: it
- * decides one question, "what do I delete to reclaim space", and a figure you
- * must hover each row in turn to collect is a poor way to answer it.
- *
- * Only the certification survived, as a chip, because it is the one thing here
- * that changes whether an ACTION IS REVERSIBLE — see `versionRowChip`.
- *
- * The card also cost more than its content. It made the version number a
- * focusable button with a ring, so a number read as an editable field, and its
- * content opened directly over the rows below it — a list you cannot see while
- * inspecting a member of it.
- *
- * Two things were never in the card and still are not, because a surface you
- * have to go find is the wrong home for them: live download progress, and the
- * notice returned by an action you just took.
- */
+/** Size went with it: it decides one question, "what do I delete to reclaim space", and a figure you must hover
+ * each row in turn to collect is a poor way to answer it. */
 function VersionRow(props: VersionRowProps): JSX.Element {
   const {
     row,
@@ -1015,9 +751,8 @@ function VersionRow(props: VersionRowProps): JSX.Element {
       data-testid={`provider-pack-version-row-${row.version}`}
       data-version={row.version}
       className={cn(
-        // `first:border-t-0` because the list no longer has a header above it
-        // to divide from — a top border on row one drew a line directly under
-        // the popover's own edge, or under a banner's, doubling it.
+        // `first:border-t-0` because the list no longer has a header above it to divide from - a top border on row one
+        // drew a line directly under the popover's own edge, or under a banner's, doubling it.
         "w-full border-t border-border px-4 py-1.5 first:border-t-0",
         greyed && "opacity-70",
       )}
@@ -1056,14 +791,7 @@ function VersionRow(props: VersionRowProps): JSX.Element {
   );
 }
 
-/**
- * At most ONE line under a row, and the action notice wins.
- *
- * Both answer "what is wrong here", but the notice is the fresher answer — it
- * is the outcome of something the user just did, whereas the trouble line is
- * the standing state they did it FROM. Stacking them shows a refusal directly
- * above the condition that caused it, which reads as two separate problems.
- */
+/** At most one line under a row, and the action notice wins. */
 function VersionRowFootnote(props: {
   readonly notice: RowNotice | null;
   readonly trouble: string | null;
@@ -1112,20 +840,7 @@ type ChipStyle = {
   readonly className: string | undefined;
 };
 
-/**
- * Tone → Badge styling, loudest first.
- *
- * `recommended` used to be `secondary`, which is a fill this surface cannot
- * carry: `--secondary` is identical to `--popover` in the amoled and
- * traycer-green dark presets, so the chip was invisible on exactly the themes
- * that collapse it — the same class of defect as the repo's `bg-muted` rule,
- * one token over, and one the `bg-muted` lint cannot see. `outline` is safe by
- * construction because `--border` never collapses.
- *
- * `unpublished` is the same outline with the text dimmed. That is deliberate:
- * a chip warning you that deleting is permanent should be READABLE, not
- * ALARMING — alarm belongs to `blocked`, which is a refusal.
- */
+/** `outline` is safe by construction because `--border` never collapses. */
 function chipStyle(tone: VersionRowChip["tone"]): ChipStyle {
   if (tone === "current") return { variant: "default", className: undefined };
   if (tone === "blocked") {
@@ -1235,19 +950,8 @@ function VersionRowActions(props: {
   );
 }
 
-/**
- * Delete, in its two shapes.
- *
- * Disabled it stays an icon and explains itself through the tooltip, from
- * `versionDeleteEligibility` — one reason string, whether the block is "this is
- * the version you are running" or "quarantine is holding these bytes". The
- * component no longer decides which blocks exist; asking the model is what
- * keeps a new block from silently rendering no control at all.
- *
- * Armed it becomes a word, which is the whole mechanism: nothing about a second
- * click on an unchanged icon tells the user their first click registered as a
- * request rather than as the deletion.
- */
+/** The component no longer decides which blocks exist; asking the model is what keeps a new block from silently
+ * rendering no control at all. */
 function DeleteAction(props: {
   readonly version: string;
   readonly armed: boolean;
@@ -1283,21 +987,8 @@ function DeleteAction(props: {
   );
 }
 
-/**
- * The armed half of the two-step delete, split out for the focus effect.
- *
- * Arming REPLACES a DOM node rather than restyling one: the trash
- * `ActionButton` (tooltip → span → button) unmounts and this button mounts in
- * its place. Whatever the pointer does, that drops a keyboard user's focus to
- * `<body>`, so the second press of a two-press flow has nothing to land on and
- * the state change is never announced — the confirmation step becomes a
- * mouse-only affordance. Focusing on mount is what keeps the two presses on one
- * control, and it is imperative because `jsx-a11y` forbids the `autoFocus` prop.
- *
- * The visible word can't carry the version the way the icon buttons' labels do
- * ("Delete?" has to stay short), so the accessible name restates it: in a
- * five-row list an unqualified "Delete?" names no version at all.
- */
+/** Whatever the pointer does, that drops a keyboard user's focus to `<body>`, so the second press of a
+ * two-press flow has nothing to land on and the state change is never announced. */
 function ArmedDeleteButton(props: {
   readonly version: string;
   readonly pending: boolean;
@@ -1327,16 +1018,7 @@ function ArmedDeleteButton(props: {
   );
 }
 
-/**
- * One icon-only row control.
- *
- * `label` does triple duty — the accessible name (with the version appended, so
- * the buttons of a five-row list are distinguishable), the tooltip when the
- * control is live, and the thing a refusal replaces when it is not. A tooltip
- * is therefore ALWAYS rendered: an icon button with nothing to hover is a
- * guessing game, which is the standing cost of dropping the words and the
- * reason this component has no "no tooltip" path.
- */
+/** One icon-only row control. */
 function ActionButton(props: {
   readonly label: string;
   readonly version: string;
@@ -1376,11 +1058,8 @@ function ActionButton(props: {
       sideOffset={4}
       align="center"
     >
-      {/*
-        The span is load-bearing on the disabled path: `disabled` buttons emit
-        no pointer events, so a tooltip bound to the button itself never opens
-        for exactly the states whose reason the user most needs.
-      */}
+      {/* The span is load-bearing on the disabled path: `disabled` buttons emit no pointer events, so a tooltip bound
+         to the button itself never opens for exactly the states whose reason the user most needs. */}
       <span className="inline-flex">{button}</span>
     </TooltipWrapper>
   );
@@ -1389,7 +1068,7 @@ function ActionButton(props: {
 function DownloadProgress(props: {
   readonly percent: number | null;
 }): JSX.Element {
-  // percent null = sibling host owns the transfer — indeterminate, not error.
+  // percent null = sibling host owns the transfer - indeterminate, not error.
   if (props.percent === null) {
     return (
       <div

@@ -1,11 +1,6 @@
 /**
- * Pure logic for the artifact heading minimap: the read-only heading walk, the
- * scroller-relative offset cache, and current-section resolution.
- *
- * Read-only is load-bearing. The artifact body is a collaborative `Y.Doc`, so
- * anything that stamped ids onto headings (what `@tiptap/extension-table-of-
- * contents` does via `appendTransaction`) would be a persisted mutation fired
- * by every client on every doc change. Nothing here touches the document.
+ * Pure logic for the artifact heading minimap: the read-only heading walk, the scroller-relative offset cache, and current-section resolution.
+ * Read-only is load-bearing.
  */
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 
@@ -18,17 +13,12 @@ export type ArtifactHeadingLevel = 1 | 2;
 
 export interface ArtifactHeadingItem {
   /**
-   * ProseMirror position. Ephemeral by nature - it shifts under edits above the
-   * heading - which is fine because the list is rebuilt on every doc change.
-   * Callers holding focus must preserve the active item deliberately rather
-   * than relying on this to be stable.
+   * Callers holding focus must preserve the active item deliberately rather than relying on this to be stable.
    */
   readonly id: number;
   /**
    * Render key: level, label and how many identical headings preceded it.
-   * Position would be the obvious key and is the wrong one - it changes under
-   * every edit above the heading, remounting rows the reader may be pointing
-   * at. Two headings with the same text are disambiguated by occurrence.
+   * Position would be the obvious key and is the wrong one - it changes under every edit above the heading, remounting rows the reader may be pointing at.
    */
   readonly key: string;
   readonly level: ArtifactHeadingLevel;
@@ -45,10 +35,8 @@ function readHeadingLevel(node: ProseMirrorNode): number | null {
 }
 
 /**
- * Collapses whitespace and caps the label. Unlike the chat rail's preview this
- * runs over heading text only, so a bounded-scan walk would be premature - a
- * heading long enough to matter does not exist in practice, and the cap below
- * bounds what is retained either way.
+ * Collapses whitespace and caps the label.
+ * Unlike the chat rail's preview this runs over heading text only, so a bounded-scan walk would be premature - a heading long enough to matter does not exist in practice, and the cap below bounds what is retained either way.
  */
 export function compactArtifactHeadingLabel(text: string): string {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -57,9 +45,7 @@ export function compactArtifactHeadingLabel(text: string): string {
 }
 
 /**
- * Every non-empty `h1`/`h2` in document order. Empty headings are skipped: a
- * freshly seeded artifact carries an empty leading `# ` title line
- * (`seedArtifactTitleHeading`), which would otherwise show as a blank row.
+ * Empty headings are skipped: a freshly seeded artifact carries an empty leading `# ` title line (`seedArtifactTitleHeading`), which would otherwise show as a blank row.
  */
 export function deriveArtifactHeadingItems(
   doc: ProseMirrorNode,
@@ -83,9 +69,8 @@ export function deriveArtifactHeadingItems(
 }
 
 /**
- * What the rail renders: the heading skeleton with no document positions in
- * it. Positions shift under every edit, so keeping them out of the rendered
- * model is what lets the rail ignore typing that does not change the outline.
+ * What the rail renders: the heading skeleton with no document positions in it.
+ * Positions shift under every edit, so keeping them out of the rendered model is what lets the rail ignore typing that does not change the outline.
  */
 export interface ArtifactHeadingOutlineEntry {
   readonly key: string;
@@ -117,16 +102,8 @@ export interface ArtifactHeadingViewLike {
 }
 
 /**
- * Scroller-relative top of every heading, in the order the positions are given.
- *
- * Measured as `headingRect.top - scrollerRect.top + scroller.scrollTop` rather
- * than `offsetTop`: offset parents inside the editor (tables, node views, the
- * comment decoration layer) are not guaranteed to be the scroller, so
- * `offsetTop` silently measures against the wrong box.
- *
- * A heading with no resolvable element yet (node view still mounting) inherits
- * the previous heading's top, keeping the array monotonic and the same length
- * as `positions` so index-keyed lookups never shift.
+ * Measured as `headingRect.top - scrollerRect.top + scroller.scrollTop` rather than `offsetTop`: offset parents inside the editor (tables, node views, the comment decoration layer) are not guaranteed to be the scroller, so `offsetTop` silently measures against the wrong box.
+ * A heading with no resolvable element yet (node view still mounting) inherits the previous heading's top, keeping the array monotonic and the same length as `positions` so index-keyed lookups never shift.
  */
 export function measureArtifactHeadingTops(input: {
   readonly view: ArtifactHeadingViewLike;
@@ -172,20 +149,10 @@ export function resolveArtifactHeadingActiveIndex(input: {
 /** Breathing room above a heading the reader jumped to. */
 export const ARTIFACT_HEADING_SCROLL_PADDING = 24;
 
-/** Matches the rail's `left-3` / `right-3` inset. */
 export const ARTIFACT_HEADING_RAIL_EDGE_INSET = 12;
 export const ARTIFACT_HEADING_HIT_STRIP_MAX_WIDTH = 40;
 
-/**
- * Width of the transparent pointer target, capped to the real gutter between
- * the scroller's left edge and the text column.
- *
- * Measured, not derived from a content-width constant the way the chat rail
- * does it: that formula assumes a viewport-centered column and returns zero in
- * a narrow pane, whereas this scroller carries its own horizontal padding, so a
- * usable gutter exists even when the column fills the tile. Zero means no safe
- * room, and the caller makes the target inert rather than let it cover text.
- */
+/** Zero means no safe room, and the caller makes the target inert rather than let it cover text. */
 export function resolveArtifactHeadingHitStripWidth(gutter: number): number {
   if (!Number.isFinite(gutter) || gutter <= 0) return 0;
   return Math.max(

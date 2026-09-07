@@ -21,10 +21,7 @@ import { __resetRateLimitQueueForTests } from "@/lib/rate-limits/ephemeral-fetch
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
 import { rateLimitProviderState } from "./profile-usage-fixtures";
 
-// Mirrors `use-profile-usage-comparison.test.tsx`'s mocking approach:
-// `useProfileUsagePresentation` calls straight through to
-// `useProfileUsageComparison` with no new host surface, so the same
-// two-real-`HostClient`-scopes-over-spyable-messengers pattern applies here.
+// Mirrors `use-profile-usage-comparison.test.tsx`'s mocking approach: `useProfileUsagePresentation` calls straight through to `useProfileUsageComparison` with no new host surface, so the same two-real-`HostClient`-scopes-over-spyable-messengers pattern applies here.
 const scopesRef = vi.hoisted(() => ({
   byHostId: new Map<string | null, RunTargetHost>(),
 }));
@@ -329,10 +326,7 @@ describe("useProfileUsagePresentation", () => {
     const refreshA = result.current.entries.get("p-a")?.refresh();
     await waitFor(() => expect(order).toEqual(["start:p-a"]));
 
-    // The shared ephemeralProcess queue is now draining, so the raw
-    // comparison would mark p-b "queued" too - but p-b's own refresh was
-    // never invoked through this presentation hook, so its entry must stay
-    // "idle" while only p-a reads as pending.
+    // The shared ephemeralProcess queue is now draining, so the raw comparison would mark p-b "queued" too - but p-b's own refresh was never invoked through this presentation hook, so its entry must stay "idle" while only p-a reads as pending.
     expect(result.current.entries.get("p-a")?.refreshStatus).toBe("refreshing");
     expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle");
 

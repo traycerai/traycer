@@ -32,14 +32,7 @@ import {
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 
-/**
- * These drive the real derivation end to end: a real `HostClient` over
- * `MockHostMessenger` (so "did the v1 indicator RPC happen?" is observed, not
- * asserted on a spy shape), the real cloud store fed by real snapshot frames,
- * the real `NotificationIndicatorsProvider` context, and the real merged
- * mark-read action. Only the two seams a renderer cannot supply in jsdom - the
- * host runtime binding and stream capability negotiation - are stubbed.
- */
+/** Only the two seams a renderer cannot supply in jsdom - the host runtime binding and stream capability negotiation - are stubbed. */
 
 const hostClientRef = vi.hoisted(() => ({
   current: null as HostClient<HostRpcRegistry> | null,
@@ -54,11 +47,8 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
   return client;
 }
 
-// The binding carries a `directory` as well as a client: the indicator hook
-// now resolves its host EXPLICITLY (`useHostClientForHostId`), and that
-// resolution consults the directory listing so an explicit id keeps pointing
-// at the same machine when the app-wide default moves. A binding without one
-// is not a shape the app ever publishes.
+// A binding without one is not a shape the app ever publishes.
+// The binding carries a `directory` as well as a client: the indicator hook now resolves its host EXPLICITLY (`useHostClientForHostId`), and that resolution consults the directory listing so an explicit id keeps pointing at the same machine when the app-wide default moves.
 const hostDirectoryStub = {
   list: () => Promise.resolve([mockLocalHostEntry]),
   onChange: () => ({ dispose: () => undefined }),
@@ -76,10 +66,7 @@ vi.mock("@/lib/host", async (importActual) => {
   };
 });
 
-// `useHostClientForHostId` reaches the runtime through BOTH entry points: the
-// directory listing via `@/lib/host`, and the pinned-requester builder via
-// `@/lib/host/runtime`. Mocking only the first leaves the second on the real
-// provider, which throws outside `<HostRuntimeProvider>`.
+// Mocking only the first leaves the second on the real provider, which throws outside `<HostRuntimeProvider>`.
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
   return {
@@ -99,11 +86,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => mockLocalHostEntry.hostId,
 }));
 
-// The fixture used to say "which host" by binding one into the client's slot.
-// P4.2 deleted the slot, so the app-wide host is the SELECTION layer's answer
-// and a fixture that never seeds it resolves a requester addressing no host -
-// which fails as a silent no-op (an action that marks nothing read), not as a
-// missing method.
+// P4.2 deleted the slot, so the app-wide host is the SELECTION layer's answer and a fixture that never seeds it resolves a requester addressing no host - which fails as a silent no-op (an action that marks nothing read), not as a missing method.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => mockLocalHostEntry.hostId,
 }));

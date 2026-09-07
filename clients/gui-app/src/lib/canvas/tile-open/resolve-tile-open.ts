@@ -1,9 +1,4 @@
-/**
- * The one placement decision (plan §5.1 steps 1-7; decisions C3-C7, C10).
- *
- * Pure: everything it reads is an argument, so the whole placement contract is
- * table-testable and the executor stays a dumb dispatcher.
- */
+/** The one placement decision (plan §5.1 steps 1-7; decisions C3-C7, C10). */
 import { findPaneTabForRef } from "@/stores/epics/canvas/actions";
 import { TILE_KIND_BLANK } from "@/stores/epics/canvas/tile-kinds";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
@@ -41,9 +36,10 @@ function resolveMode(
   return gesture === "single" ? "preview" : "permanent";
 }
 
-/** Step 4 (C3, C4). Setting for the category, then `shift` forces a split and
- * `alt` inverts tab<->split. `pip` is untouched by `alt` - it inverts the two
- * placements it names, not "whatever is configured". */
+/**
+ * Step 4 (C3, C4).
+ * Setting for the category, then `shift` forces a split and `alt` inverts tab<->split.
+ */
 function resolvePlacement(
   settings: TilePlacementSettings,
   category: TileCategory,
@@ -58,9 +54,8 @@ function resolvePlacement(
 }
 
 /**
- * How recently `category` was looked at inside one pane: the smallest
- * `activationHistory` index among its same-category tabs (0 = the pane's
- * current tab). `null` when the pane hosts none.
+ * How recently `category` was looked at inside one pane: the smallest `activationHistory` index among its same-category tabs (0 = the pane's current tab).
+ * `null` when the pane hosts none.
  */
 function categoryRecency(
   canvas: EpicCanvasState,
@@ -78,15 +73,7 @@ function categoryRecency(
   return best;
 }
 
-/**
- * Step 6 (C5): the most recently active pane already hosting this category.
- *
- * ponytail: the store keeps no cross-pane activation order - only
- * `activePaneId` and a per-pane tab `activationHistory` - so recency across
- * panes is approximated by how recent the category is WITHIN each pane, with
- * the active pane winning outright. Swap in a real pane-activation history if
- * this ever picks wrong.
- */
+/** Step 6 (C5): the most recently active pane already hosting this category. */
 function affinityPaneId(
   canvas: EpicCanvasState,
   category: TileCategory,
@@ -106,10 +93,8 @@ function affinityPaneId(
 }
 
 /**
- * A pane with nothing to show: no tabs at all (a fresh pane opener), or the
- * blank "New tab" placeholder on top. Same tie-breaking as
- * {@link affinityPaneId} - the active pane wins outright, else the first one
- * found.
+ * A pane with nothing to show: no tabs at all (a fresh pane opener), or the blank "New tab" placeholder on top.
+ * Same tie-breaking as {@link affinityPaneId} - the active pane wins outright, else the first one found.
  */
 function emptyPaneId(canvas: EpicCanvasState): string | null {
   let firstId: string | null = null;
@@ -139,9 +124,8 @@ function anchorPaneId(canvas: EpicCanvasState): string | null {
 }
 
 /**
- * Steps 4a + 5 (C7, C10): a placement the caller already decided. A single-tile
- * viewport has nowhere to split into, and a background open never creates
- * geometry, so both degrade a split to a tab in the pane that was named.
+ * Steps 4a + 5 (C7, C10): a placement the caller already decided.
+ * A single-tile viewport has nowhere to split into, and a background open never creates geometry, so both degrade a split to a tab in the pane that was named.
  */
 function resolveExplicitPlan(
   tabId: string,
@@ -286,10 +270,8 @@ export function resolveTileOpen(input: {
     );
   }
 
-  // A background open never creates geometry: `split` and `pip` carry no
-  // background mode by construction. Category grouping still applies (C5) -
-  // a middle-clicked link belongs beside the other browser tabs, not in
-  // whatever pane happens to be active.
+  // A background open never creates geometry: `split` and `pip` carry no background mode by construction.
+  // Category grouping still applies (C5) - a middle-clicked link belongs beside the other browser tabs, not in whatever pane happens to be active.
   if (mode === "background") {
     return {
       kind: "open-in-pane",

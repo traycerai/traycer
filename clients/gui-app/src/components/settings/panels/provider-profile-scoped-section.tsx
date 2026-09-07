@@ -73,21 +73,15 @@ interface ProviderProfileScopedSectionProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
-  /**
-   * Why sign-in is unavailable, or null when it is available. Supplied rather
-   * than reconstructed here: the panel owns the three facts that decide it
-   * (host locality, browser-sign-in capability, managed-pack readiness), and a
-   * second derivation is how the previous hardcoded sentence went stale.
-   */
+  /** Supplied rather than reconstructed here: the panel owns the three facts that decide it (host locality,
+   * browser-sign-in capability, managed-pack readiness). */
   readonly signInUnavailableHint: string | null;
   readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
   readonly onDismissFailedAttempt: () => void;
-  /** Which profile this section is inspecting - local UI state owned by
-   *  `ProviderDetail` (never the composer's committed profile or last-used
-   *  memory). Controlled so `ProviderDetail` can jump it to a newly created
-   *  profile via `AddProviderProfileDialog`'s `onProfileCreated`. */
+  /** Which profile this section is inspecting - local UI state owned by `ProviderDetail` (never the composer's
+   * committed profile or last-used memory). */
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
   readonly profileEnablementAvailable: boolean;
@@ -168,19 +162,8 @@ function ProfileScopedSectionMessages(props: {
   );
 }
 
-/**
- * Settings > Providers profile-scoped section (multi-profile UX overhaul,
- * T10): the old `ProviderProfilesSection` (list of rows) and the provider's
- * usage-limits card merge into one section. Any provider-reported profile
- * count above zero is headed by the same `ProfileDropdown` the picker uses,
- * even when there is only the terminal/default profile, so the page does not
- * switch visual languages after the first managed profile is added.
- * Everything below the header - the selected profile's details, usage limits,
- * and actions - is scoped to `selectedProfileId`. Renders nothing when the
- * provider reports zero profiles (the pre-multi-profile / flag-off shape);
- * the caller keeps the plain unscoped `ProviderRateLimitForProvider` mounted
- * for that case.
- */
+/** Any provider-reported profile count above zero is headed by the same `ProfileDropdown` the picker uses, even
+ * when there is only the terminal/default profile. */
 export function ProviderProfileScopedSection(
   props: ProviderProfileScopedSectionProps,
 ): ReactNode {
@@ -258,9 +241,8 @@ export function ProviderProfileScopedSection(
               sideOffset={6}
               align="start"
             >
-              {/* Span between the tooltip and the button because a `disabled`
-                  button emits no pointer events for Radix to hover-detect -
-                  and the reason it is disabled is exactly what this says. */}
+              {/* Span between the tooltip and the button because a `disabled` button emits no pointer events for Radix to
+                 hover-detect - and the reason it is disabled is exactly what this says. */}
               <span className="inline-flex">
                 <Button
                   type="button"
@@ -318,11 +300,8 @@ export function ProviderProfileScopedSection(
         />
         <div
           data-slot="profile-summary-actions"
-          // Wraps because every item except the email is a fixed-width chip:
-          // in a single-line row a narrow viewport collapses the email to
-          // nothing and then pushes the chips into one another, since none of
-          // them can shrink. Wrapping drops the buttons onto their own line
-          // instead, keeping every chip whole.
+          // Wraps because every item except the email is a fixed-width chip: in a single-line row a narrow viewport
+          // collapses the email to nothing and then pushes the chips into one another, since none of them can shrink.
           className="flex min-w-0 flex-wrap items-center justify-end gap-2"
         >
           <ProfileSummary
@@ -428,15 +407,8 @@ function ProfileSummary({
 
   return (
     <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-      {/* The email (and its reveal toggle) is the one shrinkable item; the
-          badges are whole-or-nothing chips. `flex-auto`, not `flex-1`: the
-          wrap threshold is computed from each unit's flex BASIS, and `flex-1`
-          zeroes it - a zero-basis email reserves no width during line
-          collection, so the fixed chips would stay on the line and still
-          paint over the toggle. With its content as its basis the email
-          claims its width first, whole chips move down when the line cannot
-          hold everything, and the email truncates only once it has a line
-          largely to itself. */}
+      {/* With its content as its basis the email claims its width first, whole chips move down when the line cannot
+         hold everything, and the email truncates only once it has a line largely to itself. */}
       <div className="flex min-w-0 flex-auto items-center gap-1">
         <TooltipWrapper
           label={emailRevealed ? email : null}

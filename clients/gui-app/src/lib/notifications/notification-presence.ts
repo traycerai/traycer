@@ -66,18 +66,16 @@ export function subscribeHostNotificationPresence(
 }
 
 /**
- * The entity this window is actively looking at, or `null` when the window is
- * blurred or no epic/chat tile is active. Read live (canvas store + document
- * focus) so display-time gates see the current state rather than the last
- * presence frame that happened to be sent.
+ * The entity this window is actively looking at, or `null` when the window is blurred or no epic/chat tile is active.
+ * Read live (canvas store + document focus) so display-time gates see the current state rather than the last presence frame that happened to be sent.
  */
 export function readFocusedHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
   return readFocusedHostNotificationPresence()?.entity ?? null;
 }
 
 /**
- * The focused entity together with the host-bound tile that owns it. Epic-only
- * surfaces have no unambiguous host and therefore return a `null` origin.
+ * The focused entity together with the host-bound tile that owns it.
+ * Epic-only surfaces have no unambiguous host and therefore return a `null` origin.
  */
 export function readFocusedHostNotificationPresence(): FocusedHostNotificationPresence | null {
   if (!isDocumentFocused()) return null;

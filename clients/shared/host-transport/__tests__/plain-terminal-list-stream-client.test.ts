@@ -54,10 +54,7 @@ function makeWsStreamClient(
   const client = new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
-    // Required since this branch made transport evidence a construction
-    // input rather than an optional hook: every WsStreamClient reports
-    // dial outcomes to the selection authority. This suite asserts stream
-    // framing, not selection, so it reports into the no-op sink.
+    // Required since this branch made transport evidence a construction input rather than an optional hook: every WsStreamClient reports dial outcomes to the selection authority.
     evidence: NO_TRANSPORT_EVIDENCE,
     endpoint: () => null,
     hostId: null,

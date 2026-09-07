@@ -59,23 +59,7 @@ function repoIdentifierLookupToken(repo: TaskRepoIdentifier): string {
   return formatRepoIdentifier(repo).toLowerCase();
 }
 
-/**
- * Joins the GUI's global `useWorkspaceFoldersStore` against the bound
- * host's `RepoWorkspacePersistence` lookup, producing a unified list
- * of `ResolvedFolder` rows that the combined chip can render directly.
- *
- * Folders without a `repoIdentifier` are projected as `local-only`
- * without hitting the host - they only mean something on the host
- * where they were added. Folders with a `repoIdentifier` round-trip
- * through `workspace.resolvePathsByRepoIdentifiers`; missing rows are
- * `unresolved`.
- *
- * `client` is the host the repo-identifier resolution runs against. Callers
- * MUST pass the scope-correct client: the active/default host for landing &
- * chat surfaces, the source agent's FIXED host for the terminal-agent fork
- * dialog (otherwise paths would resolve on the wrong machine on multi-host
- * setups).
- */
+/** Pass the scope-correct client. Fork dialogs use the source agent's fixed host, not the active host. */
 export function useResolvedWorkspaceFolders(
   source: WorkspaceFoldersSource | null,
   client: HostClient<HostRpcRegistry> | null,
@@ -179,10 +163,7 @@ export function useResolvedWorkspaceFolders(
   ]);
 }
 
-/**
- * Project one persisted folder against a bound host. Exported for B6 tests:
- * non-git (`local-only`) rows must not cross hosts.
- */
+/** Exported for B6 tests: non-git (`local-only`) rows must not cross hosts. */
 export function projectWorkspaceFolderForHost(
   info: WorkspaceFolderInfo,
   resolvedByKey: ReadonlyMap<string, ReadonlySet<string>>,

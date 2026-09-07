@@ -16,20 +16,15 @@ import {
 } from "@/lib/worktree/worktree-changed-invalidation-scheduler";
 
 /**
- * A session that stayed open at least this long before closing counts as
- * healthy, resetting the reopen lane's backoff even if it carried no events.
- * Mirrors the reconnect engine's rebuild-pacer healthy-lifetime constant.
+ * Open this long before close resets reopen backoff even with no events.
  */
 const HEALTHY_SESSION_RESET_MS = 30_000;
 
 export function WorktreeChangedStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("worktree.changed");
-  // Both the rebuild key AND the identity the reopen lane and the query
-  // invalidations below are scoped to - so it must come off the same
-  // `StreamRuntimeBinding` as `wsStreamClient` (one binding, one answer),
-  // never a separately-updating resolver like `useAddressableHostId`, which
-  // can name a different machine mid-swap.
+  // Rebuild key and reopen/invalidation identity from the same binding as
+  // wsStreamClient. useAddressableHostId can name a different machine mid-swap.
   const hostId = useStreamHostId();
   const queryClient = useQueryClient();
 
@@ -41,24 +36,16 @@ export function WorktreeChangedStreamMount(): ReactNode {
     ) {
       return;
     }
-    // The host's freshness sweep pushes one event per re-derived row; the
-    // scheduler collapses each wave into a single invalidation flush so the
-    // base-list/workspace-paths refetch pair runs once per burst, not once
-    // per row (providers-list storm RCA, live CDP audit).
+    // Collapse a freshness-sweep wave into one invalidation so refetch runs
+    // once per burst, not once per row.
     const scheduler = createWorktreeChangedInvalidationScheduler({
       onFlush: (scopes) =>
         invalidateWorktreeChangedCaches(queryClient, hostId, scopes),
       debounceMs: WORKTREE_CHANGED_INVALIDATION_DEBOUNCE_MS,
       maxWaitMs: WORKTREE_CHANGED_INVALIDATION_MAX_WAIT_MS,
     });
-    // A terminal close disposes the transport session, and a disposed session
-    // ignores `requestReconnect` / wake-time `forceReconnect` - this mount
-    // used to swallow connection status, so one terminal close (e.g. the
-    // bounded UNAUTHORIZED give-up) left worktree push-invalidation dead
-    // until reload. The reopen lane rebuilds the client on the host's shared
-    // backoff instead.
-    // Narrowed capture: the guard above does not narrow `wsStreamClient`
-    // inside the nested `openClient` function declaration.
+    // Terminal close disposes the session; requestReconnect is ignored. Reopen
+    // on the host's shared backoff. Capture wsStreamClient; the guard does not narrow inside openClient.
     const streamClient = wsStreamClient;
     const hostConnection = acquireHostConnection(hostId);
     let disposed = false;

@@ -11,12 +11,6 @@ import {
   validateVersionedRecordRegistry,
 } from "@traycer/protocol/framework/index";
 
-/**
- * Coverage for the generalized record framework: enum and union schemas
- * (in addition to the existing z.object support), plus the three
- * registry-driven helpers that codify the privacy-boundary entry points
- * (getRecordSchema with optional version, parseRecord, loadRecord).
- */
 
 const objectV100 = defineRecordContract({
   name: "object-record",

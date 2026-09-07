@@ -24,11 +24,8 @@ export const lifecycleClaimShutdownV10 = defineRpcContract({
 });
 
 /**
- * @1.1 declares whether the coordinator will bring the host back up. A host
- * that knows a restart follows publishes its restart tombstone to every
- * attached client (D5/M1); one told `"shutdown"` behaves exactly as it does
- * today. Additive minor on an EXISTING method per the two-sided release
- * invariant - a new method name would break the fail-closed handshake.
+ * @1.1 declares whether the coordinator will bring the host back up.
+ * Additive minor on an EXISTING method per the two-sided release invariant - a new method name would break the fail-closed handshake.
  */
 export const lifecycleClaimShutdownV11 = defineRpcContract({
   method: "lifecycle.claimShutdown",
@@ -37,14 +34,7 @@ export const lifecycleClaimShutdownV11 = defineRpcContract({
   responseSchema: claimShutdownResponseSchema,
 });
 
-/**
- * A @1.0 caller said nothing about what happens after the stop, so it is read
- * as `"shutdown"`. That is the conservative direction AND the honest one: it
- * reproduces today's behaviour byte for byte (no tombstone published, the
- * client bounces), where fabricating `"restart"` would put a promise in an old
- * CLI's mouth and hold every attached window in `restarting-expected` for a
- * host that is never coming back.
- */
+/** A @1.0 caller said nothing about what happens after the stop, so it is read as `"shutdown"`. */
 export const lifecycleClaimShutdownUpgradeV10ToV11 = defineUpgradePath<
   typeof lifecycleClaimShutdownV10,
   typeof lifecycleClaimShutdownV11

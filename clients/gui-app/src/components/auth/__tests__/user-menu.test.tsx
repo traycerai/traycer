@@ -93,9 +93,8 @@ function mountMenu(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  // Tiny memory router so modal action hooks and any other router-dependent
-  // hooks the menu pulls in transitively have a valid TanStack context to read
-  // from.
+  // Tiny memory router so modal action hooks and any other router-dependent hooks the menu pulls in transitively
+  // have a valid TanStack context to read from.
   const rootRoute = createRootRoute({
     component: () => (
       <RunnerHostProvider runnerHost={host}>
@@ -251,9 +250,8 @@ describe("<UserMenu />", () => {
     expect(await host.tokenStore.get()).not.toBeNull();
     fireEvent.click(await screen.findByTestId("confirm-action"));
 
-    // The cleared token store, not `useAuthStore.status`: this harness's auth
-    // bootstrap lands on "signed-out" at mount regardless, so asserting the
-    // status alone would pass whether or not sign-out ran.
+    // The cleared token store, not `useAuthStore.status`: this harness's auth bootstrap lands on "signed-out" at
+    // mount regardless, so asserting the status alone would pass whether or not sign-out ran.
     await waitFor(async () => {
       expect(await host.tokenStore.get()).toBeNull();
     });
@@ -289,13 +287,11 @@ describe("<UserMenu />", () => {
   });
 
   it("renders the avatar image when an avatarUrl is provided", async () => {
-    // Radix `AvatarImage` only commits the <img> once the image "loads", but
-    // jsdom never fires load events - stub Image so the load resolves
-    // synchronously and the loaded <img> renders.
+    // Radix `AvatarImage` only commits the <img> once the image "loads", but jsdom never fires load events - stub
+    // Image so the load resolves synchronously and the loaded <img> renders.
     const originalImage: unknown = (globalThis as { Image?: unknown }).Image;
-    // Radix resolves "loaded" from `image.complete && image.naturalWidth > 0`
-    // (and a "load" event); jsdom's Image never satisfies either, so stub a
-    // synchronously-complete image.
+    // Radix resolves "loaded" from `image.complete && image.naturalWidth > 0` (and a "load" event); jsdom's Image
+    // never satisfies either, so stub a synchronously-complete image.
     class ImmediateImage {
       complete = true;
       naturalWidth = 1;

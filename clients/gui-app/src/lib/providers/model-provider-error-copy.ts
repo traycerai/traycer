@@ -6,11 +6,8 @@ import type {
 const LIST_ERROR_COPY: Readonly<Record<ModelProviderListErrorCode, string>> = {
   capability_unavailable:
     "Model providers aren't available for this provider on this host.",
-  // Also the answer for a config the provider cannot parse: a config it rejects
-  // is a server that never boots, so the condition is not separately observable
-  // here. The `detail` carries the redacted parse error - file, line, column -
-  // and the rule below prefers it, which is why this generic sentence is only
-  // ever the fallback for a bare code.
+  // Also the answer for a config the provider cannot parse: a config it rejects is a server that never boots, so the condition is not separately observable here.
+  // The `detail` carries the redacted parse error - file, line, column - and the rule below prefers it, which is why this generic sentence is only ever the fallback for a bare code.
   server_unavailable:
     "The provider's local server couldn't be started, so its catalog is unavailable.",
 };
@@ -29,10 +26,7 @@ const AUTH_ERROR_COPY: Readonly<Record<ModelProviderAuthErrorCode, string>> = {
 };
 
 /**
- * The host's `detail` wins whenever it has one, and it usually does: it is the
- * provider's own wording for a flow Traycer does not otherwise understand
- * (which env var it expected, which field it did not recognise), already
- * redacted host-side. The tables above are the fallback for a bare code.
+ * The host's `detail` wins whenever it has one, and it usually does: it is the provider's own wording for a flow Traycer does not otherwise understand (which env var it expected, which field it did not recognise), already redacted host-side.
  */
 export function modelProviderListErrorMessage(
   code: ModelProviderListErrorCode,
@@ -51,19 +45,8 @@ export function modelProviderAuthErrorMessage(
 }
 
 /**
- * What a client DOES about a failed auth call. Every member of the wire enum
- * earns its place by mapping to a different move here - so this is the enum's
- * contract restated as behaviour, in one place, instead of a switch per call
- * site that quietly handles four of the eight.
- *
- * - `stand-down` — a NEWER attempt owns this provider's surface. Drop this
- *   attempt's panel without a word: an error here would accuse the user of
- *   breaking the flow they just restarted.
- * - `restart` — the attempt is gone (expired, or never minted). Offer a fresh
- *   start; there is nothing left to resume.
- * - `reprompt` — the code was refused and the attempt is STILL LIVE. Ask again
- *   rather than tearing down a usable authorization.
- * - `report` — show the message and let the user decide.
+ * What a client DOES about a failed auth call.
+ * Every member of the wire enum earns its place by mapping to a different move here - so this is the enum's contract restated as behaviour, in one place, instead of a switch per call site that quietly handles four of the eight.
  */
 export type ModelProviderAuthErrorDisposition =
   | "stand-down"

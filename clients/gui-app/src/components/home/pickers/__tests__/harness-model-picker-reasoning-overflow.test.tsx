@@ -10,9 +10,8 @@ import type {
   ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 
-// Harness-reported reasoning levels are unbounded (some harnesses advertise
-// many more than a footer row can lay out side by side), so the fixture
-// intentionally carries more options than a narrow strip could show at once.
+// Harness-reported reasoning levels are unbounded (some harnesses advertise many more than a footer row can
+// lay out side by side).
 const SEVEN_OPTIONS: ReadonlyArray<ReasoningLevelOption> = [
   { id: "minimal", label: "Minimal", description: null },
   { id: "low", label: "Low", description: null },
@@ -23,9 +22,8 @@ const SEVEN_OPTIONS: ReadonlyArray<ReasoningLevelOption> = [
   { id: "ultra", label: "Ultra", description: null },
 ];
 
-// A model whose service tiers resolve to a single "Fast" upgrade over its
-// declared default - the shape `findUpgradeServiceTierForModel` needs to
-// surface the footer's Fast toggle.
+// A model whose service tiers resolve to a single "Fast" upgrade over its declared default - the shape
+// `findUpgradeServiceTierForModel` needs to surface the footer's Fast toggle.
 const FAST_MODEL: ModelOption = {
   harnessId: "codex",
   slug: "gpt-test",

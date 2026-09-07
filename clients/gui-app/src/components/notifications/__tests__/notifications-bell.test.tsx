@@ -151,7 +151,6 @@ function createTestQueryClient(): QueryClient {
   });
 }
 
-/** Minimal stream client whose method-support map is fully test-controlled. */
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   methodSupportByName = new Map<string, StreamMethodSupport>();
 
@@ -260,11 +259,8 @@ const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
   canGoForward: () => false,
 };
 
-/** The default `app.notifications.open` chord as a keyboard event, pressed the
- * way a user on THIS platform presses it. `hasPlatformModKey` accepts
- * `metaKey || ctrlKey` off macOS, so a Command press would match there too -
- * and would leave the Ctrl half, the one every Windows/Linux user actually
- * hits, untested. */
+/** `hasPlatformModKey` accepts `metaKey || ctrlKey` off macOS, so a Command press would match there too - and
+ * would leave the Ctrl half, the one every Windows/Linux user actually hits, untested. */
 function pressNotificationsChord(): void {
   fireEvent.keyDown(window, {
     key: "B",
@@ -353,9 +349,8 @@ describe("NotificationsBell", () => {
       screen.getByRole("heading", { name: "Notifications" }),
     );
 
-    // Dispatch can't deliver the second press: an open Radix popover is a
-    // `role="dialog"`, which the keybinding provider treats as a chord
-    // barrier. The bell's own window listener is what closes it.
+    // Dispatch can't deliver the second press: an open Radix popover is a `role="dialog"`, which the keybinding
+    // provider treats as a chord barrier.
     act(() => {
       pressNotificationsChord();
     });

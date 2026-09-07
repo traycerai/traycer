@@ -8,9 +8,7 @@ import type { GitFileSectionBodyRenderProps } from "./git-file-section-stack";
 import type { GitDiffSectionCollapseController } from "./git-diff-section";
 import type { GitDiffRepositoryContext } from "@/stores/epics/canvas/types";
 
-// Deliberate hover dwell for the per-row path tooltips: long enough that
-// sweeping the cursor across the list never pops them, and skipDelay 0 so
-// every row requires the same full dwell (no instant chain-popping).
+// Deliberate hover dwell for the per-row path tooltips: long enough that sweeping the cursor across the list never pops them, and skipDelay 0 so every row requires the same full dwell (no instant chain-popping).
 const FILE_ROW_TOOLTIP_DELAY_MS = 700;
 
 export interface FileSectionsProps {

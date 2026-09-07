@@ -1,9 +1,5 @@
 /**
- * `loadPdfPreview()`'s memoization contract (pdf-preview-loader.ts): ONE
- * import per module lifetime, whether it resolved or rejected. A rejection
- * is deliberately not retried - the browser's module map would reject the
- * same URL again without refetching - so a second call must hand back the
- * same promise rather than evaluate the chunk a second time.
+ * A rejection is deliberately not retried - the browser's module map would reject the same URL again without refetching - so a second call must hand back the same promise rather than evaluate the chunk a second time.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,10 +13,6 @@ vi.mock("../pdf-preview", () => {
   return { default: (): null => null };
 });
 
-// Rejection first: Vitest keeps a SUCCESSFULLY evaluated mock module cached
-// across `vi.resetModules()`, while a factory that threw is re-run on the
-// next import - so the order below is what lets both cases observe a fresh
-// factory evaluation.
 describe("loadPdfPreview", () => {
   afterEach(() => {
     state.attempts = 0;

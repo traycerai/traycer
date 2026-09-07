@@ -15,12 +15,6 @@ import type {
   RendererJsHeapIsolate,
 } from "../../ipc-contracts/platform-types";
 
-/**
- * Snapshots process-wide and per-process resource usage for support
- * bundles. Combines `process.getProcessMemoryInfo()` (current process)
- * with `app.getAppMetrics()` (per child process: type, pid, cpu, memory).
- * Renderer attaches the result to bug reports.
- */
 export async function handleGetMetrics(): Promise<{
   readonly main: Electron.ProcessMemoryInfo;
   readonly appMetrics: ReadonlyArray<Electron.ProcessMetric>;
@@ -34,11 +28,6 @@ export async function handleGetMetrics(): Promise<{
   };
 }
 
-/**
- * On-demand V8 heap snapshot of the sender renderer. Returns the path the
- * snapshot was written to (a temp directory). Heavy operation - expect
- * the renderer to freeze for hundreds of ms while the heap walks.
- */
 export async function handleTakeHeapSnapshot(
   event: IpcMainInvokeEvent,
 ): Promise<string | null> {
@@ -56,12 +45,6 @@ export async function handleTakeHeapSnapshot(
   }
 }
 
-/**
- * Bounds the whole measurement. Every step is a single round trip to a
- * renderer that is alive enough to have sent this request, so a wait past this
- * is a wedged protocol session, not a slow one - and the `finally` below must
- * get to detach.
- */
 const JS_HEAP_MEASURE_TIMEOUT_MS = 10_000;
 
 interface AttachedWorkerTarget {
@@ -86,14 +69,6 @@ function readOptionalSize(value: unknown): number | null {
   return typeof value === "number" ? value : null;
 }
 
-/**
- * `usedSize` / `totalSize` are the JS heap. `embedderHeapUsedSize` and
- * `backingStorageSize` are the memory attributed to the isolate that sits
- * OUTSIDE it - Blink's own objects, and `ArrayBuffer`/WASM backing stores such
- * as a diff highlighter worker's Oniguruma engine. Both are experimental
- * protocol fields, so each is carried only when the build answers with it;
- * dropping them would undercount precisely the workers this readout measures.
- */
 function readHeapUsage(
   result: unknown,
 ): Omit<RendererJsHeapIsolate, "kind" | "url"> | null {
@@ -111,11 +86,6 @@ function readHeapUsage(
   };
 }
 
-/**
- * `Target.attachedToTarget` params. Only dedicated workers are collected: a
- * service worker or a shared worker belongs to the browser context, not to
- * this window's process, and would be counted against the wrong renderer.
- */
 function readAttachedWorkerTarget(
   params: unknown,
 ): AttachedWorkerTarget | null {
@@ -129,16 +99,8 @@ function readAttachedWorkerTarget(
 }
 
 /**
- * Set when the measurement has lost its awaiter, so the work still running
- * behind it stops touching the debugger.
- *
- * CDP commands cannot be cancelled - `sendCommand` resolves when the browser
- * answers, and a timed-out `measureIsolates` keeps going. Left alone it would
- * reach its own cleanup and send `Target.setAutoAttach: false` after the outer
- * `finally` detached; the harmful case is not the detached session (that command
- * simply fails) but a LATER measurement having re-attached by then, whose
- * auto-attach the straggler would switch off mid-flight, costing it every worker
- * row and reporting a page-only breakdown as if that were the truth.
+ * CDP commands cannot be cancelled - `sendCommand` resolves when the browser answers, and a timed-out `measureIsolates` keeps going.
+ * Left alone it would reach its own cleanup and send `Target.setAutoAttach: false` after the outer `finally` detached.
  */
 interface MeasurementCancellation {
   cancelled: boolean;
@@ -164,30 +126,8 @@ function withTimeout<T>(
 }
 
 /**
- * Per-isolate JS heap usage for the sender renderer: the page, plus every
- * dedicated worker it currently runs.
- *
- * WHY. A heap snapshot (`handleTakeHeapSnapshot`) walks the main thread's
- * isolate and nothing else. The renderer also runs one V8 isolate per
- * dedicated worker - an epic runtime worker per live epic session, a pool of
- * diff highlighter workers - and none of their memory shows up in that file.
- * The 2026-09-03 staging investigation had a 1.5 GB renderer whose snapshot
- * accounted for 190 MB; this readout is what was missing to say where the rest
- * lived.
- *
- * HOW. Chrome DevTools Protocol over `webContents.debugger`, the same channel
- * the browser tiles use. A page-scoped session cannot list targets
- * (`Target.getTargets` is browser-scoped), so the workers are reached the way
- * DevTools reaches them: `Target.setAutoAttach` with `flatten: true`, which
- * attaches to every existing dedicated worker and announces each one with a
- * `Target.attachedToTarget` event carrying a session id. `Runtime.getHeapUsage`
- * on that session id answers for that isolate. Nothing is paused
- * (`waitForDebuggerOnStart: false`) and nothing is enabled, so the workers
- * never notice; the whole thing is a handful of round trips.
- *
- * Refuses, rather than shares, a debugger someone else has attached: the
- * auto-attach toggle is session-wide state, and flipping it under a browser
- * tile's debug session would detach the workers that session was tracking.
+ * A page-scoped session cannot list targets (`Target.getTargets` is browser-scoped), so the workers are reached the way DevTools reaches them: `Target.setAutoAttach` with `flatten.
+ * Nothing is paused (`waitForDebuggerOnStart: false`) and nothing is enabled, so the workers never notice; the whole thing is a handful of round trips.
  */
 export async function handleMeasureJsHeaps(
   event: IpcMainInvokeEvent,
@@ -321,10 +261,6 @@ async function measureIsolates(
       }
     }
   } finally {
-    // A cancelled measurement skips its own cleanup: the outer `finally` is
-    // detaching, and auto-attach is session state that dies with the
-    // attachment, so there is nothing left to turn off - only someone else's
-    // attachment to damage.
     if (!cancellation.cancelled) {
       try {
         await debuggerApi.sendCommand("Target.setAutoAttach", {
@@ -333,12 +269,6 @@ async function measureIsolates(
           flatten: true,
         });
       } catch (err) {
-        // A `finally` that throws replaces what the `try` returned, so an
-        // unguarded cleanup would trade a complete breakdown for a failure
-        // toast - and this command rejects for reasons that say nothing about
-        // the rows already read (the page navigated, the session went away).
-        // The outer `finally` detaches either way, which is what actually
-        // undoes the auto-attach.
         log.debug("[diagnostics] auto-attach cleanup failed", {
           error: describeLogError(err),
         });
@@ -349,24 +279,11 @@ async function measureIsolates(
 }
 
 const MEMORY_SAMPLE_INTERVAL_MS = 5 * 60_000;
-// Renderer working-set (KB) past which we surface a breadcrumb. The renderer
-// old-space ceiling is 4 GB (see `configureV8HeapSize`), raised
-// "conservatively; bump if telemetry shows usage approaching this" - 3 GB
-// working-set is that "approaching the cap" signal made observable.
 const RENDERER_MEMORY_WARN_KB = 3 * 1024 * 1024;
-// A renderer that legitimately sits above the cap would otherwise fire a
-// breadcrumb every sample tick; throttle the warn + Sentry event to at most
-// once per renderer per hour so a sustained high-memory tab stays a signal,
-// not a flood.
 const MEMORY_WARN_THROTTLE_MS = 60 * 60_000;
 const lastMemoryWarnAtByPid = new Map<number, number>();
 
-/**
- * Low-frequency renderer-memory sampler. Logs per-renderer working-set and
- * breadcrumbs to Sentry when a renderer approaches the old-space cap, so the
- * "bump 4 GB if telemetry shows" loop the heap-size comment asks for actually
- * exists. `.unref()` so it never holds the process open.
- */
+/** `.unref()` so it never holds the process open. */
 export function startRendererMemorySampler(): void {
   const timer = setInterval(() => {
     const renderers = app
@@ -406,12 +323,6 @@ export function startRendererMemorySampler(): void {
 
 let activeTraceCategories: readonly string[] | null = null;
 
-/**
- * Starts Chrome content tracing for in-the-field perf bugs. Captures a
- * curated set of categories - Chromium accepts a large set, but most
- * apps only need devtools + v8 + blink. Renderer should call `traceStop`
- * within a bounded time to avoid filling disk.
- */
 export async function handleTraceStart(): Promise<boolean> {
   if (activeTraceCategories !== null) {
     log.warn("[diagnostics] trace already running");
@@ -433,10 +344,6 @@ export async function handleTraceStart(): Promise<boolean> {
   return true;
 }
 
-/**
- * Stops the active trace and writes it to a temp file. Returns the path
- * so the renderer can attach it to a support ticket.
- */
 export async function handleTraceStop(): Promise<string | null> {
   if (activeTraceCategories === null) {
     log.warn("[diagnostics] trace stop called with no active trace");

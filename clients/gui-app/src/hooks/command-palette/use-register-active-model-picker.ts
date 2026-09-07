@@ -1,12 +1,4 @@
-/**
- * Registers the active composer's model-picker controller for the life of the
- * host component while `enabled`. Mirrors `useRegisterFocusedComposerControls`:
- * the controller is parked in a ref so the picker's per-render handler-identity
- * churn doesn't thrash the registry - the registry always invokes the latest
- * `toggle` / `getSelectionSummary` through the ref. When `enabled` is false
- * (inactive surface, disabled picker, or a non-composer host), the registration
- * lifts automatically.
- */
+/** Registers the active composer's model-picker controller for the life of the host component while `enabled`. */
 import { useEffect, useRef } from "react";
 import {
   registerActiveModelPicker,

@@ -1,10 +1,7 @@
 import { createLucideIcon } from "lucide-react";
 
-/**
- * Lucide-style message-square glyph with a clock badge. The bubble follows the
- * app's canonical chat icon and opens at the lower-right so the clock remains
- * legible at the compact indicator size.
- */
+/** Lucide-style message-square glyph with a clock badge. The bubble follows the app's canonical chat icon and
+ * opens at the lower-right so the clock remains legible at the compact indicator size. */
 export const MessageSquareClock = createLucideIcon("message-square-clock", [
   [
     "path",

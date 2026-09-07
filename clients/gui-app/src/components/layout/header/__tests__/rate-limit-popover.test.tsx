@@ -77,15 +77,12 @@ type MockState = {
   }>;
   results: Record<string, QueryResult>;
   draining: boolean;
-  // Keyed the same way as `mocks.results` (`resultKey`) - the per-target
-  // queued/fetching registry snapshot `useRateLimitQueueTargetPhase` reads.
-  // Defaults to `null` (not tracked) for any key not present.
+  // Keyed the same way as `mocks.results` (`resultKey`) - the per-target queued/fetching registry snapshot
+  // `useRateLimitQueueTargetPhase` reads.
   targetPhases: Record<string, "queued" | "fetching">;
   forcedTargets: Record<string, boolean>;
-  // Targets whose single delayed follow-up read is spent, so nothing is coming
-  // back to collect an answer we stopped waiting for. Its own fixture rather
-  // than derived from the phase: the whole point is that an IDLE target can be
-  // in either state, and only this one stops the failure being suppressed.
+  // Its own fixture rather than derived from the phase: the whole point is that an idle target can be in either
+  // state, and only this one stops the failure being suppressed.
   followUpExhaustedTargets: Record<string, boolean>;
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
@@ -100,13 +97,11 @@ type MockState = {
     ) => void
   >;
   authUser: MockAuthUser;
-  // Last `options` object `RateLimitRefreshAllButton` passed to
-  // `useHostQueries`, so a test can assert it reused the real lane options
-  // (e.g. `retry: false`) instead of dropping them.
+  // Last `options` object `RateLimitRefreshAllButton` passed to `useHostQueries`, so a test can assert it reused
+  // the real lane options (e.g. `retry: false`) instead of dropping them.
   lastUseHostQueriesOptions: { retry: boolean | undefined } | null;
-  // Provider ids of the last `requests` batch passed to `useHostQueries`, so
-  // a test can assert the button subscribes to EVERY configured httpFetch
-  // provider's query state, not just the first.
+  // Provider ids of the last `requests` batch passed to `useHostQueries`, so a test can assert the button
+  // subscribes to every configured httpFetch provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
   profileSelection: {
     activeChatSettings: ChatRunSettings | null;
@@ -184,11 +179,8 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
     providerId: string,
     profileId: string | null,
   ) => mocks.targetPhases[resultKey(providerId, profileId)] ?? null,
-  // Folded from the same fixture the single-target hook reads, so one test
-  // fixture drives the row copy AND the button state consistently. Only
-  // "fetching" counts - a merely QUEUED target must stay clickable so the
-  // click can promote it - and a target NOT in this list can never affect a
-  // control.
+  // Only "fetching" counts - a merely queued target must stay clickable so the click can promote it - and a
+  // target not in this list can never affect a control.
   useAnyRateLimitQueueTargetFetching: (
     targets: ReadonlyArray<{
       readonly providerId: string;
@@ -200,10 +192,7 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
         mocks.targetPhases[resultKey(target.providerId, target.profileId)] ===
         "fetching",
     ),
-  // Read from its own fixture rather than derived from the phase: the point of
-  // the flag is that two targets in the SAME "queued" phase behave
-  // differently, so a mock that inferred it from the phase could not express
-  // the case under test.
+  // Read from its own fixture rather than derived from the phase.
   useIsRateLimitQueueTargetForced: (
     providerId: string,
     profileId: string | null,
@@ -220,13 +209,8 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
     profileId: string | null,
   ) => mocks.results[resultKey(providerId, profileId)] ?? readyResult(null),
 }));
-// `RateLimitRefreshAllButton` reads each configured httpFetch provider's
-// query state directly (to fold its `isFetching` into the button's own
-// spinner) via the same fixture map every other mocked query hook here uses.
-// Production calls `useHostQueriesWithResponseMap` (not the plain
-// `useHostQueries`) for this - see that hook's own doc comment - so this mock
-// exports both names with equivalent behavior; the extra `mapResponse` field
-// production passes is irrelevant to this fixture-backed double.
+// Production calls `useHostQueriesWithResponseMap` (not the plain `useHostQueries`) for this - see that hook's
+// own doc comment.
 function mockUseHostQueriesImpl(args: {
   requests: ReadonlyArray<{
     params:
@@ -309,25 +293,20 @@ vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
     mocks.enqueueBatch(...args),
   enqueueRateLimitFetchForScope: (...args: unknown[]) =>
     mocks.enqueue(...args.slice(1)),
-  // The scope argument is dropped so the batch assertions keep asserting what
-  // they always did - WHICH targets are enqueued. That the scope is this
-  // subtree's rather than the app-shell default is a different claim, proved
-  // by `use-rate-limit-queue-scope`'s own suite.
+  // That the scope is this subtree's rather than the app-shell default is a different claim, proved by
+  // `use-rate-limit-queue-scope`'s own suite.
   enqueueRateLimitFetchBatchForScope: (...args: unknown[]) =>
     mocks.enqueueBatch(...args.slice(1)),
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));
-// The Traycer tab reads the signed-in user's subscription (AuthService), not a
-// host RPC. Default is a signed-out/cold user -> no Traycer tab, so the
-// host-RPC-provider tests below behave exactly as before.
+// The Traycer tab reads the signed-in user's subscription (AuthService), not a host RPC.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => mocks.authUser,
 }));
-// The aperture usage query + its turn-refresh only mount inside the shared
-// RateLimitView (rate-limit-based Traycer plans). Stub them so no real host
-// query fires; the Traycer tests below use a credit-based plan anyway.
+// The aperture usage query + its turn-refresh only mount inside the shared RateLimitView (rate-limit-based
+// Traycer plans).
 vi.mock("@/hooks/host/use-host-rate-limit-usage-query", () => ({
   useHostRateLimitUsageQuery: () => ({ data: undefined }),
 }));
@@ -340,11 +319,8 @@ import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popove
 
 const NOW = Date.now();
 
-/**
- * One host, followed. The picker row only appears when there is a choice to
- * make, so this is the scope under which every assertion in this suite about
- * the rail/detail layout is the same one it made before the picker existed.
- */
+/** The picker row only appears when there is a choice to make, so this is the scope under which every assertion
+ * in this suite about the rail/detail layout is the same one it made before the picker existed. */
 const SINGLE_HOST_SCOPE = hostScopeFixture({});
 
 function resultKey(providerId: string, profileId: string | null): string {
@@ -384,9 +360,8 @@ function readyResult(
   };
 }
 
-/** A `ready` result whose envelope retains `lastGood` across a transient
- * unavailable `latest` - the "dimmed reading + specific transient message"
- * scenario this ticket's retention treatment adds. */
+/** A `ready` result whose envelope retains `lastGood` across a transient unavailable `latest` - the "dimmed
+ * reading + specific transient message" scenario this ticket's retention treatment adds. */
 function degradedRetainedResult(
   lastGood: AvailableProviderRateLimits,
   reason: "usage_fetch_failed" | "timeout" | "connection_failed",
@@ -609,12 +584,6 @@ function renderPopover() {
   return renderPopoverWithScope(SINGLE_HOST_SCOPE, false);
 }
 
-/**
- * `hasExplicitPick` is required, not defaulted: every caller states outright
- * whether it is testing the "following the active host" world (unaffected by
- * a pick) or the "someone picked a host" world (where an unusable scope earns
- * the unavailable notice instead of the rail/detail panes).
- */
 function renderPopoverWithScope(scope: HostScope, hasExplicitPick: boolean) {
   const client = new QueryClient();
   const rendered = render(
@@ -635,11 +604,8 @@ function renderPopoverWithScope(scope: HostScope, hasExplicitPick: boolean) {
   return { ...rendered, client };
 }
 
-/**
- * A second host beside `SINGLE_HOST_SCOPE`'s lone one, still following (no
- * pick) unless a test overrides it - the picker row's own presence only
- * depends on host count, not on a pick having been made.
- */
+/** A second host beside `SINGLE_HOST_SCOPE`'s lone one, still following (no pick) unless a test overrides it -
+ * the picker row's own presence only depends on host count, not on a pick having been made. */
 function twoHostScope(overrides: Partial<HostScope>): HostScope {
   const hostA = hostScopeOptionFixture({ hostId: "host-a", name: "Alpha" });
   const hostB = hostScopeOptionFixture({ hostId: "host-b", name: "Bravo" });
@@ -1158,9 +1124,7 @@ describe("<RateLimitPopover /> rail", () => {
       "min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))]",
     );
     expect(surface.className).toContain("overflow-hidden");
-    // The surface owns the height; the rail/detail row is pinned to it one
-    // level down, below the host picker row. Both halves are asserted because
-    // dropping either one is what lets a pane grow past the popover instead of
+    // Both halves are asserted because dropping either one is what lets a pane grow past the popover instead of
     // scrolling inside it.
     expect(surface.className).toContain("flex-col");
     expect(screen.getByTestId("rate-limit-popover-panes").className).toContain(
@@ -1219,9 +1183,8 @@ describe("<RateLimitPopover /> rail", () => {
     // Both provider blocks render their header name (rail buttons are icon-only).
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
-    // Popover variant renders "% used" copy (codex primary 4% used, claude
-    // fiveHour 22% used - both windows are the 5-hour session window, so the
-    // bare "Current session" label renders once per provider).
+    // Popover variant renders "% used" copy (codex primary 4% used, claude fiveHour 22% used - both windows are
+    // the 5-hour session window, so the bare "Current session" label renders once per provider).
     expect(screen.getAllByText("Current session")).toHaveLength(2);
     expect(screen.getByText("4% used")).toBeTruthy();
     expect(screen.getByText("22% used")).toBeTruthy();
@@ -1515,10 +1478,7 @@ describe("<RateLimitPopover /> rail", () => {
   });
 
   it("shows a signed-out message and label for an unauthenticated ambient profile with no cached usage at all", () => {
-    // Distinct from "keeps an unauthenticated ambient row with cached
-    // lastGood data visible" above: here there is no `mocks.results` entry
-    // whatsoever for the ambient key, so `query.data` is `undefined` rather
-    // than a retained `lastGood` reading.
+    // Distinct from "keeps an unauthenticated ambient row with cached lastGood data visible" above.
     mocks.configured = [
       {
         providerId: "codex",
@@ -1579,12 +1539,8 @@ describe("<RateLimitPopover /> rail", () => {
   });
 
   it("skips open-time refresh only for a row whose summary is fresh AND cached; a stale-summary cached row still enqueues", () => {
-    // The mount hook (`useRefreshProviderRateLimitsOnMount`) now skips ONLY
-    // when the host-persisted summary (`usageUpdatedAt`) is fresh AND a
-    // detailed value is cached - see its own suite's skip matrix. The ambient
-    // row here has both, so it stays passive on open; the work-profile row's
-    // summary is past the freshness window despite carrying a cached value,
-    // so opening the popover still enqueues a pull for it.
+    // The ambient row here has both, so it stays passive on open; the work-profile row's summary is past the
+    // freshness window despite carrying a cached value, so opening the popover still enqueues a pull for it.
     mocks.configured = [
       {
         providerId: "codex",
@@ -1636,18 +1592,14 @@ describe("<RateLimitPopover /> rail", () => {
       "claude-code": readyResult(claudeReady()),
     };
     renderPopover();
-    // Fixup C #4: the "All providers" header (and its divider) is gone; only the
-    // between-block dividers remain: 2 providers -> 1 divider. PopoverContent
-    // portals to body.
+    // Fixup C #4: the "All providers" header (and its divider) is gone; only the between-block dividers remain: 2
+    // providers -> 1 divider.
     expect(document.querySelectorAll('[class*="bg-border/70"]').length).toBe(1);
   });
 
   it("wraps an ambient (profile-less) provider's block in the same card codex/claude profiles use, in both tabs", () => {
-    // Design-language fix: grok/openrouter/kilocode render via the
-    // profile-less block, which used to float flat while codex/claude's
-    // per-profile rows sat in a `rounded-lg border ... bg-background/40 p-2`
-    // card. The ambient block now reuses that exact card container so every
-    // provider's usage sits inside a card - in Overview and the detail tab.
+    // The ambient block now reuses that exact card container so every provider's usage sits inside a card - in
+    // Overview and the detail tab.
     mocks.configured = [
       { providerId: "grok", lane: "ephemeralProcess", profiles: undefined },
     ];
@@ -1860,11 +1812,8 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
   });
 
   it("reveals an uncached signed-out provider with its signed-out message instead of leaving Overview loading forever", async () => {
-    // A signed-out, never-cached provider now renders `SignedOutRateLimitMessage`
-    // rather than the cold-state skeleton (production: `signedOutWithoutUsage`
-    // short-circuits before `RateLimitProviderBody`) - the point either way is
-    // that Overview reveals it instead of leaving it stuck behind the combined
-    // "Fetching usage limits" loader forever.
+    // A signed-out, never-cached provider now renders `SignedOutRateLimitMessage` rather than the cold-state
+    // skeleton (production: `signedOutWithoutUsage` short-circuits before `RateLimitProviderBody`).
     mocks.configured = [
       {
         providerId: "codex",
@@ -2049,12 +1998,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
     renderPopover();
     const skeleton = screen.getByTestId("rate-limit-detail-skeleton");
     expect(skeleton).toBeTruthy();
-    // Regression: every dark theme preset sets `--muted` equal to
-    // `--popover`, so a plain `bg-muted` skeleton block is the same color as
-    // the popover background and reads as an empty section, not a loading
-    // one. This popover used to carry its own `bg-foreground/15` override;
-    // the fill now comes from the `Skeleton` primitive itself, so what has
-    // to hold here is that no block falls back to a muted-valued fill.
+    // Regression: every dark theme preset sets `--muted` equal to `--popover`, so a plain `bg-muted` skeleton
+    // block is the same color as the popover background and reads as an empty section, not a loading one.
     const blocks = skeleton.querySelectorAll('[data-slot="skeleton"]');
     expect(blocks.length).toBeGreaterThan(0);
     blocks.forEach((block) => {
@@ -2080,11 +2025,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("dims the last good reading and shows the specific transient message when the envelope retains it across a usage_fetch_failed poll", () => {
-    // Distinct from the test above: this is NOT a thrown query exception
-    // (`isError`) - it's a successful RPC whose payload itself says
-    // `usage_fetch_failed`, with a `lastGood` retained from an earlier poll.
-    // The dimmed treatment is the same, but the trailing note names the
-    // specific transient reason instead of the generic "refresh failed".
+    // Distinct from the test above: this is not a thrown query exception (`isError`) - it's a successful RPC whose
+    // payload itself says `usage_fetch_failed`, with a `lastGood` retained from an earlier poll.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
@@ -2103,9 +2045,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("replaces the picture entirely (no dimmed data) for an authoritative unavailable reason, even with a lastGood on hand", () => {
-    // `rate_limits_not_available` (and friends) are account-capability
-    // reasons, not transient - they must never be shown alongside a stale
-    // reading the way a transient failure is.
+    // `rate_limits_not_available` (and friends) are account-capability reasons, not transient - they must never be
+    // shown alongside a stale reading the way a transient failure is.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
@@ -2139,10 +2080,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("shows Refreshing instead of an updated timestamp while this target is fetching", () => {
-    // The label's `refreshing` state is now driven by this exact target's own
-    // queue-registry phase (`useRateLimitQueueTargetPhase`), not the
-    // lane-wide `draining` flag - see the "queued/fetching" describe block
-    // below for the row-level truthful-copy coverage this replaces.
+    // The label's `refreshing` state is now driven by this exact target's own queue-registry phase
+    // (`useRateLimitQueueTargetPhase`), not the lane-wide `draining` flag.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
@@ -2162,8 +2101,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    // A DIFFERENT target occupies the shared lane; this provider's own target
-    // is untracked (not queued, not fetching).
+    // A different target occupies the shared lane; this provider's own target is untracked (not queued, not
+    // fetching).
     mocks.draining = true;
     renderPopover();
 
@@ -2193,9 +2132,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
-    // No `mocks.results` entry at all - `query.data` resolves `undefined`,
-    // the "never even a cached reading" case distinct from the retained
-    // `lastGood` case covered by the rail's own suite above.
+    // No `mocks.results` entry at all - `query.data` resolves `undefined`, the "never even a cached reading" case
+    // distinct from the retained `lastGood` case covered by the rail's own suite above.
     renderPopover();
 
     expect(
@@ -2223,14 +2161,11 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(
       screen.getByText("Couldn't load usage limits right now."),
     ).toBeTruthy();
-    // No separate "Retry" link - the header's own refresh icon already covers
-    // it (feedback: "we already have a reload button"). That icon is
-    // detail-tab-only (Overview relies on "Refresh all"), so switch there first.
+    // No separate "Retry" link - the header's own refresh icon already covers it (feedback: "we already have a
+    // reload button"). That icon is detail-tab-only (Overview relies on "Refresh all"), so switch there first.
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh Codex" }));
-    // Codex is ephemeralProcess -> the header's refresh routes through the
-    // serial queue, same as retrying used to.
     expect(mocks.enqueue).toHaveBeenCalledWith(
       "codex",
       { type: "PERSONAL" },
@@ -2331,11 +2266,8 @@ describe("<RateLimitPopover /> Refresh all", () => {
   });
 
   it("stays clickable while its target is merely QUEUED, so the click can promote it", () => {
-    // An enqueue for an already-queued target sets `pending.force = true`.
-    // That promotion is the only thing stopping the pull being skipped by its
-    // second freshness/cool-down check, or reaching the host as `force: false`
-    // and being answered from the gauge cache - so disabling here would make
-    // the click that does that work impossible.
+    // That promotion is the only thing stopping the pull being skipped by its second freshness/cool-down check, or
+    // reaching the host as `force: false` and being answered from the gauge cache.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
@@ -2347,11 +2279,8 @@ describe("<RateLimitPopover /> Refresh all", () => {
   });
 
   it("stays enabled while the lane drains for a target this button does not refresh", () => {
-    // The dead-control regression: `RefreshIconButton` DISABLES on `refreshing`
-    // and its trigger no-ops while set, with no timeout cap on the external
-    // half - so gating on the lane-wide draining flag meant a background sweep
-    // of a provider this popover isn't even showing turned "Refresh all" off
-    // for that sweep's full response budget.
+    // The dead-control regression: `RefreshIconButton` disables on `refreshing` and its trigger no-ops while set,
+    // with no timeout cap on the external half.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
@@ -2364,10 +2293,6 @@ describe("<RateLimitPopover /> Refresh all", () => {
   });
 
   it("is disabled while an httpFetch provider is fetching, even though the ephemeralProcess queue isn't draining", () => {
-    // Regression: "Refresh all" used to read only the ephemeralProcess queue's
-    // draining flag, so an all-httpFetch popover (or one mid-invalidation on
-    // just its httpFetch providers) never visibly spun despite actively
-    // refreshing.
     mocks.configured = [
       { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
     ];
@@ -2389,16 +2314,7 @@ describe("<RateLimitPopover /> Refresh all", () => {
   });
 
   it("passes the httpFetch lane's real query options (e.g. retry: false) to useHostQueries for every configured httpFetch provider", () => {
-    // Regression 1: an earlier version passed `options: null`, so this batch
-    // of queries silently inherited the global QueryClient's default retry
-    // policy for the exact same query key `RateLimitProviderBlock`'s own
-    // `useHostProviderRateLimitsQuery` deliberately sets `retry: false` for.
-    // Regression 2 (review feedback): both httpFetch providers are configured
-    // here - not just one - because production derives the shared options from
-    // `httpFetchProviders[0]` (safe today: `providerRateLimitQueryOptions`
-    // branches on lane, never provider id, so all httpFetch options are
-    // identical) and must still subscribe to EVERY provider's query state.
-    // Passed in non-canonical order to exercise the sort in front of `[0]`.
+    // Regression 2 (review feedback): both httpFetch providers are configured here - not just one.
     mocks.configured = [
       { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
       { providerId: "openrouter", lane: "httpFetch", profiles: undefined },
@@ -2523,9 +2439,6 @@ describe("<RateLimitPopover /> Refresh all", () => {
   });
 
   it("targets the managed profile id, not null, when refreshing a provider with exactly one managed profile", () => {
-    // Regression: refreshTargetsForProvider used to short-circuit to [null]
-    // whenever profiles.length <= 1, so a lone managed profile's card
-    // (keyed by work-profile) never received the Refresh-all invalidation.
     mocks.configured = [
       {
         providerId: "codex",
@@ -2710,10 +2623,7 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     // The per-provider refresh only lives in the single-provider detail tab now
     // (item 2 feedback: Overview keeps only the rail's "Refresh all").
     fireEvent.click(screen.getByRole("tab", { name: "Kilo Code" }));
-    // The mount-refresh hook's own cold-start reads (Overview's block plus the
-    // now-mounted detail tab's own instance) already exercise `refetch` before
-    // the click - see its own suite's skip matrix. Isolate the CLICK's effect
-    // by diffing from here, rather than asserting a brittle absolute count.
+    // Isolate the click's effect by diffing from here, rather than asserting a brittle absolute count.
     const callsBeforeClick = refetch.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh Kilo Code" }));
     expect(refetch.mock.calls.length).toBe(callsBeforeClick + 1);
@@ -2816,25 +2726,8 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     expect(screen.getAllByText("Refreshing")).toHaveLength(1);
   });
 
-  // REPLACES a pin that asserted the opposite - that the lane-wide `draining`
-  // flag SHOULD disable every ephemeralProcess control, on the reasoning that
-  // "queue items run one at a time (each provider click is one parallel profile
-  // batch), so this matches a 'refresh round is in progress' mental model".
-  //
-  // That reasoning rested on a premise that no longer holds: draining used to
-  // imply a round the USER started. Background target polling
-  // (`selectBackgroundRateLimitTargets`) now drains the lane on a timer with no
-  // user action at all, so the lane-wide rule silently disabled every control
-  // for a sweep nobody asked for. Combined with `RefreshIconButton` both
-  // disabling AND no-opping its trigger, and no timeout cap on the external
-  // half of `useRefreshSpinner`, one wedged probe held every control dead for
-  // its full response budget - and made the queue's force promotion
-  // unreachable, since the click that promotes a queued pull was blocked in
-  // exactly the state where promoting matters.
-  //
-  // Pinned in the new direction: a control reflects ONLY its own targets. Do
-  // not restore the lane-wide gate without also removing the no-op-while-
-  // disabled behaviour of the trigger.
+  // Background target polling (`selectBackgroundRateLimitTargets`) now drains the lane on a timer with no user
+  // action at all, so the lane-wide rule silently disabled every control for a sweep nobody asked for.
   it("leaves each ephemeralProcess provider's control live while only the OTHER provider's targets are in the queue", () => {
     mocks.configured = [
       {
@@ -2910,9 +2803,8 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
   });
 });
 
-// Guards that a stacked Overview keeps each provider's block scoped, and that
-// it has no per-provider refresh controls (item 2 feedback: only the rail's
-// "Refresh all" - the single-provider detail tab keeps its own).
+// Guards that a stacked Overview keeps each provider's block scoped, and that it has no per-provider refresh
+// controls (item 2 feedback: only the rail's "Refresh all" - the single-provider detail tab keeps its own).
 describe("<RateLimitPopover /> Overview block scoping", () => {
   it("shows no per-provider refresh controls on Overview, only Refresh all", () => {
     mocks.configured = [
@@ -3139,9 +3031,8 @@ describe("<RateLimitPopover /> host picker", () => {
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
   });
 
-  // The `vanished` exception: a pick that no longer resolves is not a choice,
-  // it's the way OUT, so the row must stay reachable even though the account
-  // is back down to one host.
+  // The `vanished` exception: a pick that no longer resolves is not a choice, it's the way out, so the row must
+  // stay reachable even though the account is back down to one host.
   it("keeps the host picker row reachable when the pick vanished, even with only one host left", () => {
     const remaining = hostScopeOptionFixture({
       hostId: "host-a",
@@ -3233,10 +3124,8 @@ describe("<RateLimitPopover /> unusable explicit host pick", () => {
     ).toContain("Finding Office Linux");
   });
 
-  // The no-regression case: following the active host (no explicit pick),
-  // an `unreachable` status is the routine blip the rate-limit envelope's own
-  // lastGood/degraded retention already rides out - it must not be traded for
-  // a notice that would leave every single-host user worse off.
+  // The no-regression case: following the active host (no explicit pick), an `unreachable` status is the routine
+  // blip the rate-limit envelope's own lastGood/degraded retention already rides out.
   it("keeps rendering the rail and detail panes while following the active host, even when its status looks unreachable", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },

@@ -27,12 +27,7 @@ const state = vi.hoisted(() => ({
   pendingLoad: null as Deferred<FileEditRecoveryEntry | null> | null,
 }));
 
-// The reconciliation effect under test races an auto-attached runtime's own
-// recovery (IndexedDB journal load) against a reactivation refetch. The real
-// `fileEditRuntimeRegistry` singleton is fixed to the real IndexedDB journal
-// at module load, so this substitutes a test-controllable journal for just
-// this file - other test files' use of the shared singleton is unaffected
-// (Vitest module mocks are scoped per test file).
+// The reconciliation effect under test races an auto-attached runtime's own recovery (IndexedDB journal load) against a reactivation refetch.
 vi.mock("@/lib/workspace/file-edit-recovery-store", () => ({
   indexedDbFileEditRecoveryJournal: {
     load: (): Promise<FileEditRecoveryEntry | null> => {
@@ -87,10 +82,8 @@ describe("useFileEditSession reconciliation vs recovery race (RESUME13)", () => 
       { initialProps: { diskContent: "V1" }, wrapper: Wrapper },
     );
 
-    // The auto-attach effect has captured its own `fileContentRevision("V1")`
-    // and called `registry.attach`, which starts recovery - still pending.
-    // `fileContentRevision` goes through real `crypto.subtle.digest`, so this
-    // polls rather than assuming a fixed microtask count settles it.
+    // `fileContentRevision` goes through real `crypto.subtle.digest`, so this polls rather than assuming a fixed microtask count settles it.
+    // The auto-attach effect has captured its own `fileContentRevision("V1")` and called `registry.attach`, which starts recovery - still pending.
     await waitFor(() => {
       expect(state.pendingLoad).not.toBeNull();
     });
@@ -101,12 +94,7 @@ describe("useFileEditSession reconciliation vs recovery race (RESUME13)", () => 
     rerender({ diskContent: "V2" });
     expect(currentRuntimeState()?.status).toBe("recovering");
 
-    // Real, unmocked `fileContentRevision` (crypto.subtle.digest) gets ample
-    // time here to resolve and reach `refreshCleanDisk` - deterministically
-    // BEFORE recovery settles, since `pendingLoad` is still held open. This
-    // is what actually forces the race: without it, the two promises could
-    // resolve in either order and the assertion below would pass by luck
-    // regardless of whether the reconciliation waits for recovery.
+    // This is what actually forces the race: without it, the two promises could resolve in either order and the assertion below would pass by luck regardless of whether the reconciliation waits for recovery.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(currentRuntimeState()?.status).toBe("recovering");
 

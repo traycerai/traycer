@@ -7,19 +7,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { MentionFlowStep } from "@/lib/composer/mentions/providers";
 import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
 
-/**
- * Changing a funnel must not flash the section list away and back.
- *
- * The catalog only ever sweeps the DEFAULT view, so a filter it cannot answer
- * ("State: Merged" over a cache of open PRs) excludes every cached row the
- * instant it is selected, and the remote answer is a round trip away. Without
- * the hold, that window renders as an empty list - which is what made the
- * funnel read as "changing it does nothing".
- *
- * The catalog and search hooks are mocked at their boundary so the in-flight
- * window can be held open; everything under test (the local funnel, the merge,
- * the hold) is the real code.
- */
+/** Changing a funnel must not flash the section list away and back. The catalog only ever sweeps the DEFAULT view, so a filter it cannot answer ("State: Merged" over a cache of open PRs) excludes every cached row the instant it is selected, and the remote answer is a round trip away. */
 
 type CatalogResult = {
   rows: ReadonlyArray<GithubMentionRow>;
@@ -41,10 +29,8 @@ type CatalogResult = {
 const mocks = vi.hoisted(() => {
   const catalog = (): CatalogResult => ({
     rows: [],
-    // A RESOLVED answer must name the repository its rows belong to - the
-    // host derives both from the same sweep, and the sections hook now drops
-    // rows the resolved set does not cover. `[]` here would be the
-    // authoritative "these folders hold no GitHub repo".
+    // A RESOLVED answer must name the repository its rows belong to - the host derives both from the same sweep, and the sections hook now drops rows the resolved set does not cover.
+    // `[]` here would be the authoritative "these folders hold no GitHub repo".
     repositories: [
       { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
     ],
@@ -74,11 +60,8 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/hooks/composer/use-github-mention-catalog", () => ({
-  // A shallow copy per call so the result identity churns the way the real
-  // hook's does - but the `rows` array inside it must stay STABLE. A fresh
-  // `[]` literal per render re-arms the row-publication effect, whose store
-  // write re-renders, which mints another `[]`: an update loop authored
-  // entirely by the harness.
+  // A shallow copy per call so the result identity churns the way the real hook's does - but the `rows` array inside it must stay STABLE.
+  // A fresh `[]` literal per render re-arms the row-publication effect, whose store write re-renders, which mints another `[]`: an update loop authored entirely by the harness.
   useGithubMentionCatalog: (args: { readonly section: string }) => ({
     ...(args.section === "issues" ? mocks.issues : mocks.pullRequests),
   }),
@@ -302,10 +285,8 @@ describe("useGithubMentionSections filter swap", () => {
     const { result, rerender } = renderSectionsForRoots(["/repo"]);
     expect(prNumbers(result.current.context.pullRequests.rows)).toEqual([1]);
 
-    // The composer's roots changed, so these rows belong to a scope the user
-    // has left. Holding them through the replacement search is worse than a
-    // brief empty list: every held row is selectable, and committing one
-    // inserts a mention naming a repository this scope cannot resolve.
+    // The composer's roots changed, so these rows belong to a scope the user has left.
+    // Holding them through the replacement search is worse than a brief empty list: every held row is selectable, and committing one inserts a mention naming a repository this scope cannot resolve.
     mocks.pullRequests.rows = [];
     mocks.search.isSearching = true;
     rerender({ mentionRoots: ["/other-repo"] });
@@ -320,10 +301,7 @@ describe("useGithubMentionSections filter swap", () => {
     // Nothing is held yet - these are the live cached answer.
     expect(result.current.context.pullRequests.rowsHeld).toBe(false);
 
-    // The funnel moves to a state the cache cannot answer, and the remote
-    // search that CAN answer it has not come back yet - the previous
-    // answer's rows are standing in, and `providers.tsx` reads this flag to
-    // render them non-committable.
+    // The funnel moves to a state the cache cannot answer, and the remote search that CAN answer it has not come back yet - the previous answer's rows are standing in, and `providers.tsx` reads this flag to render them non-committable.
     selectMergedState();
     mocks.search.isSearching = true;
     rerender({ query: "" });
@@ -337,12 +315,8 @@ describe("useGithubMentionSections filter swap", () => {
   });
 
   it("reports repositories as null when both catalogs are unresolved, even with rows from two repositories", () => {
-    // Null is ignorance, not an authoritative empty scope: the live search
-    // can put rows on screen before either catalog resolves. Qualifying them
-    // against an empty `[]` would read as "these folders hold no GitHub
-    // repo" when the truth is just "no answer yet" - collapsing two
-    // DIFFERENT repositories' rows onto the same bare `#N` label, which is
-    // the real defect this pins.
+    // Null is ignorance, not an authoritative empty scope: the live search can put rows on screen before either catalog resolves.
+    // Qualifying them against an empty `[]` would read as "these folders hold no GitHub repo" when the truth is just "no answer yet" - collapsing two DIFFERENT repositories' rows onto the same bare `#N` label, which is the real defect this pins.
     mocks.pullRequests.scopeResolved = false;
     mocks.issues.scopeResolved = false;
     mocks.search.rows = [

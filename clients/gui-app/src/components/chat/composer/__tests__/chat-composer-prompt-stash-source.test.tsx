@@ -1,11 +1,4 @@
-/**
- * Chat surface prompt-stash CAS + destination acknowledgement: exercises the
- * REAL chat production adapters (`useChatPromptStashSource` /
- * `useChatPromptStashDestination`) against `useComposerDraftStore` (not a
- * fake or mirrored token source). Locks H1 (stale capture must not cancel a
- * newer queue edit) and Ticket 2 exact-destination races without mounting
- * the full ChatComposer tree.
- */
+/** Chat surface prompt-stash CAS + destination acknowledgement: exercises the REAL chat production adapters (`useChatPromptStashSource` / `useChatPromptStashDestination`) against `useComposerDraftStore` (not a fake or mirrored token source). Locks H1 (stale capture must not cancel a newer queue edit) and exact-destination races without mounting the full ChatComposer tree. */
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -138,9 +131,7 @@ function makeEditor(content: JsonContent): {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly focuses: number[];
   readonly handle: ComposerPromptEditorHandle;
-  /**
-   * Simulates React Compiler facade churn: new handle, same Tiptap editor.
-   */
+  /** Simulates React Compiler facade churn: new handle, same Tiptap editor. */
   replaceFacade: () => ComposerPromptEditorHandle;
   /** Simulates a real editor remount under the same task id. */
   remount: () => ComposerPromptEditorHandle;
@@ -380,12 +371,7 @@ describe("chat composer prompt-stash source CAS", () => {
   });
 
   it("delayed save survives composer unmount/reopen for the same task without cancelling the new queue edit", async () => {
-    // Composer unmount retires the usePromptStash instance mid-save. A later
-    // remount for the same taskId binds a different onCancelQueueEdit (user
-    // moved on to queue edit B). Without retiredRef, the retired instance's
-    // clearIfUnchanged would clear the reopened draft and cancel queue edit A
-    // even though A is no longer active — and with an equal revision ABA,
-    // would also wipe content that legitimately matches the capture token.
+    // Without retiredRef, the retired instance's clearIfUnchanged would clear the reopened draft and cancel queue edit A even though A is no longer active - and with an equal revision ABA, would also wipe content that legitimately matches the capture token.
     let resolveSave: (() => void) | undefined;
     storeMocks.save.mockImplementationOnce(
       () =>
@@ -422,8 +408,8 @@ describe("chat composer prompt-stash source CAS", () => {
 
     unmount();
 
-    // Reopen: same taskId, equal revision (content restored as-is), new queue
-    // edit association. Do not bump revision — this is the ABA case.
+    // Reopen: same taskId, equal revision (content restored as-is), new queue edit association.
+    // Do not bump revision - this is the ABA case.
     const editorB = makeEditor(original);
     renderHook(() =>
       useChatPromptStashController({
@@ -522,8 +508,7 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
   });
 
   it("does not insert or consume when taskId changes during delayed materialize", async () => {
-    // Hook materializes, then re-reads destinationRef for importAndInsert —
-    // so a task rebind mid-materialize must leave both drafts untouched.
+    // Hook materializes, then re-reads destinationRef for importAndInsert - so a task rebind mid-materialize must leave both drafts untouched.
     const taskA = "task-a";
     const taskB = "task-b";
     useComposerDraftStore.getState().setSnapshot(taskA, emptyDoc(), null);

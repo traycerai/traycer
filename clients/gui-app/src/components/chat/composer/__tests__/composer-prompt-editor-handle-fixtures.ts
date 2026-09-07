@@ -1,11 +1,4 @@
-/**
- * Shared fake `ComposerPromptEditorHandle` for tests.
- *
- * The production handle now requires both `setContent` (emit update) and
- * `syncContent` (silent apply). Tests that hand-rolled incomplete object
- * literals broke when `syncContent` was added - use this factory instead of
- * scattering partial fixtures.
- */
+/** Shared fake `ComposerPromptEditorHandle` for tests. The production handle now requires both `setContent` (emit update) and `syncContent` (silent apply). */
 import { vi, type Mock } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -155,10 +148,7 @@ export function createFakeComposerPromptEditorHandle(
   };
 }
 
-/**
- * Minimal complete handle for prompt-based submit-gate fixtures that only
- * care about `getJSON` / `isEmpty` return values.
- */
+/** Minimal complete handle for prompt-based submit-gate fixtures that only care about `getJSON` / `isEmpty` return values. */
 export function createPromptTextEditorHandle(
   prompt: string,
 ): ComposerPromptEditorHandle {

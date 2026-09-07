@@ -23,15 +23,8 @@ function withPermissionModeInstruction(content: string): string {
 }
 
 /**
- * The single place that renders the agent selection guide into the text both
- * the CLI command and the GUI A2A tool hand to an agent.
- *
- * The host returns the contributing guide files unjoined. This formatter owns
- * their precedence framing and layout. A lone global guide is plain attributed
- * content. Workspace guides retain their path scope, and multiple guides are
- * ordered by priority and explain how workspace instructions refine the global
- * guide. The permission invariant is always appended so silence about
- * permissions cannot authorize a restrictive mode.
+ * The single place that renders the agent selection guide into the text both the CLI command and the GUI A2A tool hand to an agent.
+ * The permission invariant is always appended so silence about permissions cannot authorize a restrictive mode.
  */
 export function formatAgentSelectionGuideResponse(
   response: AgentSelectionGuideResponse,

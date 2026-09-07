@@ -1,8 +1,4 @@
-/**
- * New-conversation modal prompt-stash destination acknowledgement. Uses
- * production `useNewConversationPromptStashDestination` without mounting the
- * full modal tree. Materialization is owned by the restore hook.
- */
+/** Uses production `useNewConversationPromptStashDestination` without mounting the full modal tree. */
 import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";

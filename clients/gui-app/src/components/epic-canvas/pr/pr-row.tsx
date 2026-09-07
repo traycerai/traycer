@@ -48,10 +48,7 @@ import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { SIDEBAR_REVEAL_HIGHLIGHT_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
- * Every badge on row 1 speaks the hover card's dialect: borderless tint,
- * `text-foreground` label, meaning carried by a tinted leading glyph. Only the
- * glyph is coloured, so three badges side by side read as three facts rather
- * than three alarms.
+ * Only the glyph is coloured, so three badges side by side read as three facts rather than three alarms.
  */
 const BADGE_CLASS = "gap-1 rounded-full px-2 font-medium";
 
@@ -128,25 +125,7 @@ export interface PrRowEntry {
 }
 
 /**
- * One PR as a flat list row - four bands, each with a single job, all sharing
- * one left edge:
- *
- *   1. badges: PR number (tinted by state), CI, review · time on the far right
- *   2. the title, truncated to one line
- *   3. `base ← head`
- *   4. the owning chat(s), as badges that open their tile
- *
- * Nothing wraps except by design, so a row is a fixed four-line block and a
- * list of them scans as four columns of the same kinds of thing. Row 1 is where
- * the state lives: the number badge carries it as tint + glyph (the hover
- * card's idiom), which is why there is no separate "Open" pill competing with
- * the title.
- *
- * Every PR gets this row, including an owned-submodule one: it sits in its own
- * repo group (see `orderRepoGroupKeys`, which places that group directly under
- * its superproject's) rather than collapsing to a one-line child. A submodule
- * PR is its own review, with its own checks and its own conversation, so it
- * gets the same four bands to say so.
+ * Every PR gets this row, including an owned-submodule one: it sits in its own repo group (see `orderRepoGroupKeys`, which places that group directly under its superproject's) rather than collapsing to a one-line child.
  */
 export function PrRow(props: {
   readonly entry: PrRowEntry;
@@ -154,19 +133,13 @@ export function PrRow(props: {
   readonly tabId: string;
 }): ReactNode {
   const item = props.entry.item;
-  // A never-swept row has no title, and `prRowIdentity` already carries the
-  // whole label in the number badge above. Rendering the element anyway left
-  // an empty line, so the row read as "number badge, blank, branch" - the
-  // missing-summary report. Dropping the element is what the projection's own
-  // contract asks for: a null title means the identity IS the label, not that
-  // the PR is untitled.
+  // A never-swept row has no title, and `prRowIdentity` already carries the whole label in the number badge above.
+  // Rendering the element anyway left an empty line, so the row read as "number badge, blank, branch" - the missing-summary report.
   const titleText = prRowTitleText(item);
   const identified = fullyIdentifiedPrBase(item);
   const clickable = props.entry.onOpen !== null;
   const onOpen = props.entry.onOpen;
-  // Mirrors how a chat/terminal row lights up when its tile is the one showing
-  // (`useIsActiveEpicArtifact`); a PR tile is renderer-only, so it matches on
-  // the tile id instead of an artifact record.
+  // Mirrors how a chat/terminal row lights up when its tile is the one showing (`useIsActiveEpicArtifact`); a PR tile is renderer-only, so it matches on the tile id instead of an artifact record.
   const isActive = useIsActiveTile(props.tabId, props.entry.tileId, null);
   // The panel is canvas-serving, so its host follows the selection authority.
   // A tile still nominates its own bound host - see `PrOwnerBadges.fallbackHostId`.
@@ -178,10 +151,8 @@ export function PrRow(props: {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>): void => {
-      // Only the row itself activates on Enter/Space. Without this guard a
-      // keydown on a nested badge bubbles up here and opens the detail tile in
-      // addition to the badge's own action (and it's an invalid
-      // nested-interactive pattern for assistive tech).
+      // Only the row itself activates on Enter/Space.
+      // Without this guard a keydown on a nested badge bubbles up here and opens the detail tile in addition to the badge's own action (and it's an invalid nested-interactive pattern for assistive tech).
       if (event.target !== event.currentTarget) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
@@ -203,11 +174,7 @@ export function PrRow(props: {
       data-pr-state={item.state}
       data-pr-identified={identified !== null ? "true" : "false"}
     >
-      {/* The WHOLE row is the hover trigger, not just the owner band: the band
-          is the last of four and the easiest to miss, and "which chats produced
-          this?" is the question a reader has while scanning the row, not after
-          finding its badges. Returns this div untouched when the row has no
-          resolvable owners. */}
+      {/* The WHOLE row is the hover trigger, not just the owner band: the band is the last of four and the easiest to miss, and "which chats produced this?" is the question a reader has while scanning the row, not after finding its badges. Returns this div untouched when the row has no resolvable owners. */}
       <PrRowOwnerHover
         owners={item.owners}
         epicId={props.epicId}
@@ -226,17 +193,8 @@ export function PrRow(props: {
             "relative flex min-w-0 flex-col gap-1.5 py-2.5 pr-3 pl-3 text-left transition-colors",
             clickable &&
               "cursor-pointer focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none",
-            // Selection reads as a WASH plus the rail's active bar, not the solid
-            // `bg-accent` fill a chat/terminal row uses. Those rows are one line
-            // of plain text, so a flat fill costs nothing; this row carries the
-            // status palette (state tint, failing checks, review decision), and
-            // most presets keep `--accent` a near-grey while `traycer-green` sets
-            // it to its saturated `--primary` (#257174) - a full fill there stacks
-            // the row's hues on a competing one and leaves the state glyph at
-            // 3.08:1, the WCAG 1.4.11 graphic floor with nothing to spare. The
-            // wash lifts the worst preset past 4:1 and keeps the same token, so
-            // the sidebar still speaks one selection language. See
-            // `pr-row.test.tsx`'s "PrRow selection surface" matrix.
+            // Selection reads as a WASH plus the rail's active bar, not the solid `bg-accent` fill a chat/terminal row uses.
+            // Those rows are one line of plain text, so a flat fill costs nothing; this row carries the status palette (state tint, failing checks, review decision), and most presets keep `--accent` a near-grey while `traycer-green` sets it to its saturated `--primary` (#257174) - a full fill there stacks the row's hues on a competing one and leaves the state glyph at 3.08:1, the WCAG 1.4.11 graphic floor with nothing to spare.
             isActive ? "bg-accent/35" : clickable && "hover:bg-accent/20",
             item.state === "closed" && "opacity-70",
           )}
@@ -270,16 +228,8 @@ export function PrRow(props: {
 }
 
 /**
- * Band 2: the title, truncated to one line, with the full text on hover.
- *
- * Its own component only so it can read {@link PrRowHoverCardContext} - it
- * renders INSIDE `PrRowOwnerHover`, and `PrRow` itself is above the provider.
- * When the row's hover card is live that card heads itself with the untitled
- * title, so the tooltip stands down: both fire at 500ms from the same pointer,
- * and this element is the row's largest hover target, so leaving both wired
- * meant two floating surfaces from one hover over most of the row. A row
- * without a hover card (no owners, or no epic session yet) keeps the tooltip -
- * nothing else is showing the full title there.
+ * Its own component only so it can read {@link PrRowHoverCardContext} - it renders INSIDE `PrRowOwnerHover`, and `PrRow` itself is above the provider.
+ * A row without a hover card (no owners, or no epic session yet) keeps the tooltip - nothing else is showing the full title there.
  */
 function PrRowTitle(props: { readonly title: string }): ReactNode {
   const hoverCardShowsTitle = use(PrRowHoverCardContext);
@@ -313,15 +263,8 @@ function PrRowBadges(props: { readonly item: PrLightItem }): ReactNode {
       ? props.item.commentCount
       : null;
   return (
-    // Band 1 stays ONE line at every width. Narrowing shrinks the badges
-    // (`shrink` + `truncate`), and past the point where shrinking stops buying
-    // anything a badge DROPS rather than sitting there as an unreadable sliver
-    // - review first (longest label, and the whole decision is one click away
-    // in the detail tile), checks next. The number badge never drops: it is the
-    // row's identity and its tint is the row's state.
-    //
-    // Container queries, not viewport ones: this panel is user-resizable and
-    // also renders inside a split pane, so only its OWN width is meaningful.
+    // Narrowing shrinks the badges (`shrink` + `truncate`), and past the point where shrinking stops buying anything a badge DROPS rather than sitting there as an unreadable sliver - review first (longest label, and the whole decision is one click away in the detail tile), checks next.
+    // The number badge never drops: it is the row's identity and its tint is the row's state.
     <div className="@container flex min-w-0 items-start gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         <PrNumberBadge item={props.item} />
@@ -357,10 +300,8 @@ function PrRowBadges(props: { readonly item: PrLightItem }): ReactNode {
         ) : null}
         {commentCount === null ? null : (
           <span
-            // Never dropped. It was briefly the first thing shed to buy the
-            // review badge room, but a count that blinks out while you drag the
-            // panel edge reads as a glitch rather than as a layout decision -
-            // and unlike a badge it costs only ~30px.
+            // Never dropped.
+            // It was briefly the first thing shed to buy the review badge room, but a count that blinks out while you drag the panel edge reads as a glitch rather than as a layout decision - and unlike a badge it costs only ~30px.
             className="flex items-center gap-1"
             data-testid="pr-row-comments"
           >
@@ -380,9 +321,8 @@ function PrRowBadges(props: { readonly item: PrLightItem }): ReactNode {
 }
 
 /**
- * The PR number, tinted by state - the hover card's pill, reused. It is also
- * the row's GitHub link (the external-link glyph reveals on hover), so the
- * number carries three jobs at the width of one: identity, state, link out.
+ * The PR number, tinted by state - the hover card's pill, reused.
+ * It is also the row's GitHub link (the external-link glyph reveals on hover), so the number carries three jobs at the width of one: identity, state, link out.
  */
 function PrNumberBadge(props: { readonly item: PrLightItem }): ReactNode {
   const state: PrState = props.item.state;
@@ -420,10 +360,7 @@ function PrNumberBadge(props: { readonly item: PrLightItem }): ReactNode {
         </Badge>
       ) : (
         <Badge asChild variant="outline" className={badgeClass}>
-          {/* `asChild` hands the badge's own className to this child AS A PROP -
-              a component child that doesn't forward it renders unstyled (and,
-              without the badge's `inline-flex`, wraps its glyph onto its own
-              line). Forward it explicitly; see `WorktreePrAnchor`. */}
+          {/* `asChild` hands the badge's own className to this child AS A PROP - a component child that doesn't forward it renders unstyled (and, without the badge's `inline-flex`, wraps its glyph onto its own line). */}
           <PrNumberAnchor
             prUrl={prUrl}
             ariaLabel={`Open ${label} on GitHub`}
@@ -460,15 +397,7 @@ function PrChecksBadge(props: {
         variant="outline"
         className={cn(
           BADGE_CLASS,
-          // Same `min-w-0 shrink` contract as the review badge, and for the
-          // same reason. Left at the variant's `shrink-0` this badge could not
-          // give a pixel back, so between the width that drops the review badge
-          // and the one that drops this one, "N running" simply outgrew the
-          // flex-1 column - and since that column is `min-w-0` (so it MAY be
-          // narrower than its content) with overflow visible, the surplus
-          // painted straight over the comment count and timestamp pinned right.
-          // Dropped only at the extreme, after the review badge has already
-          // gone: its label is short, so it stays readable far longer.
+          // Dropped only at the extreme, after the review badge has already gone: its label is short, so it stays readable far longer.
           "min-w-0 shrink tabular-nums @max-[13rem]:hidden",
           tone.surface,
         )}

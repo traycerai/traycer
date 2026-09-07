@@ -30,38 +30,24 @@ interface AppShellProps {
   children: ReactNode;
 }
 
-/**
- * Root layout shell for the signed-in main app. Auth-scoped data lifecycle
- * providers mount above the router so they survive request-context fallback
- * renders while sign-out is completing.
- */
+/** Auth-scoped data lifecycle providers mount above the router so they survive request-context fallback renders
+ * while sign-out is completing. */
 export function AppShell(props: AppShellProps) {
   const { children } = props;
   const activeHostId = useAddressableHostId();
   // Phones get the hamburger navigation drawer; it is only mounted below md so
   // desktop mounts nothing extra and stays unchanged.
   const isMobile = useIsMobileViewport();
-  // Observed, never rendered. A publication fork resolves itself now - the
-  // banner and the dialog that used to read this query are gone - but the
-  // per-chat `pendingFork` indicator is derived from an open fork episode and
-  // its own query has no push channel for the moment one opens or closes. One
-  // app-wide mount supplies that edge, because an episode is a HOST fact and
-  // not a property of any open tab.
+  // Observed, never rendered. One app-wide mount supplies that edge, because an episode is a host fact and not a
+  // property of any open tab.
   useChatForkEventQuery();
-  // App-wide rather than composer-local: every text entry in the app raises the
-  // same keyboard, and the drag that dismisses it usually starts on the content
-  // above rather than on the field itself. Self-gated on the mobile-app product
-  // flag, so desktop attaches nothing.
+  // App-wide rather than composer-local: every text entry in the app raises the same keyboard, and the drag that
+  // dismisses it usually starts on the content above rather than on the field itself.
   useDragToDismissKeyboard();
-  // App-wide for the same reason: the swipe answers wherever the user is, and
-  // the surface it navigates away from has no say in it. Self-gated on the
-  // mobile-app product flag, so desktop attaches nothing and keeps its arrows.
-  // Renders nothing until a swipe is actually in flight.
+  // Self-gated on the mobile-app product flag, so desktop attaches nothing and keeps its arrows.
   const historySwipeTransition = useMobileHistorySwipes();
-  // The OS back request, where the shell raises one (Android's key and system
-  // gesture, which never reach the swipe above as a touch). Walks the same
-  // history through the same `goBack`. Self-gated on the shell capability, so
-  // every other shell attaches nothing.
+  // The OS back request, where the shell raises one (Android's key and system gesture, which never reach the
+  // swipe above as a touch). Self-gated on the shell capability, so every other shell attaches nothing.
   useSystemBack();
 
   return (
@@ -69,33 +55,18 @@ export function AppShell(props: AppShellProps) {
       <DiffWorkerPoolProvider>
         <div className="min-h-safe-dvh bg-canvas text-canvas-foreground">
           <RootDndProvider>
-            {/* The screen, as a history swipe understands one: the header and
-              the content viewport travel together, because a transition that
-              moved only the content would leave the title of the screen you
-              are leaving sitting above the screen you are arriving at. */}
+            {/* The screen, as a history swipe understands one. */}
             <div
               className="relative flex h-safe-dvh w-full flex-col"
               {...{ [SWIPE_NAV_SCREEN_ATTRIBUTE]: "" }}
             >
               <AppHeader variant="app" />
-              {/* Above the session strip: a wrong clock is the CAUSE of the
-                interruption the strip reports, so if both are showing the
-                actionable one has to be read first. */}
+              {/* Above the session strip: a wrong clock is the cause of the interruption the strip reports, so if both are
+                 showing the actionable one has to be read first. */}
               <ClockSkewBanner />
               <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
-                {/* The app's edge-to-edge content viewport. Individual surfaces
-                  own their internal overflow, including the landing terminal.
-
-                  `overflow-clip`, NOT `overflow-hidden`: a hidden-overflow box
-                  is still a scroll container, so a `focus()` without
-                  `preventScroll` or a `scrollIntoView` on any descendant can
-                  scroll it programmatically - and nothing ever scrolls it
-                  back. Seen live when the window moved onto an external
-                  display: the transient relayout left this viewport scrolled
-                  by one toolbar row, so the epic status row and sidebar rail
-                  sat under the app header until a tab switch remounted the
-                  surface. A clipped box has no scroll offset to drift. */}
+                {/* The app's edge-to-edge content viewport. */}
                 <div className="relative flex min-h-0 flex-1 overflow-clip">
                   <TopLevelSurfaceActivationProvider>
                     <TopLevelTabHost />
@@ -106,11 +77,8 @@ export function AppShell(props: AppShellProps) {
                   >
                     {children}
                   </div>
-                  {/* Single window-wide terminal mount: the gesture provider's
-                    state must survive draft/split focus changes, so it lives
-                    here rather than inside any one landing pane. The panel's
-                    DOM is portaled into the selected pane's anchor, which owns
-                    its layout and clipping. */}
+                  {/* Single window-wide terminal mount: the gesture provider's state must survive draft/split focus changes, so
+                     it lives here rather than inside any one landing pane. */}
                   <HostScopeReady scope="default-host">
                     <LandingTerminalHost />
                   </HostScopeReady>
@@ -125,20 +93,14 @@ export function AppShell(props: AppShellProps) {
               <MigrationRunController />
               <MigrationBlockingModalHost />
               {isMobile ? <MobileNavDrawer /> : null}
-              {/* Test-only probe: binds the active hostId to a hidden DOM
-                attribute so the mobile-cardinality integration tests can
-                assert the runner-host auto-bind machinery without depending
-                on the now-removed host-status footer. Hidden from a11y
-                and visual layout. */}
               <span
                 aria-hidden
                 data-testid="active-host-probe"
                 data-bound-host-id={activeHostId === null ? "" : activeHostId}
                 className="sr-only"
               />
-              {/* Last child, so the frozen screens cover everything they were
-                copied from. Inside this box rather than portalled, because they
-                are this screen leaving rather than a layer over the app. */}
+              {/* Inside this box rather than portalled, because they are this screen leaving rather than a layer over the
+                 app. */}
               {historySwipeTransition}
             </div>
           </RootDndProvider>

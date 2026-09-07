@@ -21,15 +21,7 @@ function openCodeRateLimitKey() {
 }
 
 /**
- * Does a settled credential mutation actually bring the TAB's own list back to
- * truth?
- *
- * Written as a repro for a live report: a disconnected provider kept showing
- * Disconnect until the panel's manual refresh. The two candidate mechanisms
- * were "the list key is never invalidated" and "it is, but the refetch answers
- * from a pre-rotation server". This settles the first one at the layer that
- * owns it, so the second is diagnosed against evidence rather than by
- * elimination.
+ * Pin that a settled credential mutation invalidates the tab's own `providers.list` key.
  */
 
 const hostMocks = vi.hoisted(() => ({
@@ -41,11 +33,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    // A full-enough client: `useHostQuery` builds its key off
-    // `useReactiveHostReadiness`, which reads BOTH ids and subscribes for
-    // changes. A stub missing either makes the query throw rather than
-    // register - which would have made this test unable to see the very thing
-    // it exists to check.
+    // A stub missing either makes the query throw rather than register - which would have made this test unable to see the very thing it exists to check.
     useHostClient: () => ({
       getActiveHostId: () => hostMocks.activeHostId,
       getRequestContextUserId: () => "user-1",
@@ -115,11 +103,7 @@ describe("model provider auth invalidation", () => {
   });
 
   it("invalidates the EXACT key the catalog query registers under", () => {
-    // Asserting the invalidate call only proves the key we passed; it says
-    // nothing about whether that key is a prefix of the one the list query
-    // actually holds. A scope that does not match is indistinguishable from no
-    // invalidation at all, and it is the shape of bug that survives a green
-    // suite - so this pins the two builders against each other.
+    // A scope that does not match is indistinguishable from no invalidation at all, and it is the shape of bug that survives a green suite - so this pins the two builders against each other.
     const client = new QueryClient();
     const liveKey = queryKeys.hostMethod<
       HostRpcRegistry,
@@ -135,10 +119,7 @@ describe("model provider auth invalidation", () => {
   });
 
   it("retires the caches for a PARTIALLY failed config write", async () => {
-    // The host commits the config block and rotates before it reports the
-    // credential step, so a `createCustom` whose key failed has still changed
-    // what the next list says. Reporting the failure while leaving the row on
-    // its old state is exactly the staleness this surface is prone to.
+    // The host commits the config block and rotates before it reports the credential step, so a `createCustom` whose key failed has still changed what the next list says.
     const client = new QueryClient({
       defaultOptions: {
         mutations: { retry: false },
@@ -183,10 +164,7 @@ describe("model provider auth invalidation", () => {
   });
 
   it("invalidates the host the mutation STARTED on, not the one it ended on", async () => {
-    // `onMutate` captures the host id for exactly this: Settings can be
-    // re-pointed mid-flight, and reading the active host in `onSuccess` would
-    // retire the NEW host's caches with the old host's result - leaving the
-    // host that actually changed showing stale rows.
+    // `onMutate` captures the host id for exactly this: Settings can be re-pointed mid-flight, and reading the active host in `onSuccess` would retire the NEW host's caches with the old host's result - leaving the host that actually changed showing stale rows.
     const client = new QueryClient({
       defaultOptions: {
         mutations: { retry: false },

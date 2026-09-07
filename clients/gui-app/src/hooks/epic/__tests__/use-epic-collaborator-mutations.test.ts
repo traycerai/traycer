@@ -10,13 +10,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 const mockGetActiveHostId = vi.fn<() => string | null>(() => "host-1");
-// The EPIC SESSION's client, which is what these three hooks resolve: they are
-// mounted only by the Sharing panel, inside the Epic canvas, and their cache
-// writes must key the host that panel's list is read on. This suite used to
-// mock the app-wide `useHostClient` instead - a mock that, after the hooks
-// were re-pointed, would have been stranded (still installed, no longer read)
-// and the suite would have gone red at the ctx read below rather than told
-// us which host it was testing.
+// The EPIC SESSION's client, which is what these three hooks resolve: they are mounted only by the Sharing panel, inside the Epic canvas, and their cache writes must key the host that panel's list is read on.
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => ({ getActiveHostId: mockGetActiveHostId }),
 }));
@@ -49,11 +43,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
-/**
- * Drives `onSuccess` the way `useHostMutation` does: the context is whatever
- * `onMutate` captured at mutate time (the host-swap convention), so a hook
- * that reads the host at success time instead of mutate time cannot pass.
- */
+/** Drives `onSuccess` the way `useHostMutation` does: the context is whatever `onMutate` captured at mutate time (the host-swap convention), so a hook that reads the host at success time instead of mutate time cannot pass. */
 function fireSuccess(method: string, data: unknown, variables: unknown): void {
   const options = capturedOptions[method];
   const ctx = options.onMutate?.() ?? { hostId: null };

@@ -30,10 +30,6 @@ const testState = vi.hoisted(() => ({
   },
   navigateResults: [] as Array<NestedFocusTarget | null>,
   navigateNested: vi.fn(),
-  // The bootstrap's verdict for the tile under test. `attached` means it got a
-  // live session handle; `hostSessionExited` is the host still listing this PTY
-  // inside its ~60s post-exit grace window. The two are independent: a tile can
-  // attach and then have its session exit, or open onto one that already has.
   bootstrap: {
     attached: true,
     hostSessionExited: false,
@@ -114,12 +110,6 @@ vi.mock("@/lib/perf/terminal-load-perf", () => ({
   beginTerminalLoad: vi.fn(),
 }));
 
-// The tab's host client is reached twice here: an exited sign-in tile renders
-// the restart button (which instantiates the terminal-login mutation), and the
-// live tile resolves its terminal title through `terminal.list`. Neither is
-// under test, so a stub answering the identity reads and readiness
-// subscription every host query makes is enough - the full host runtime is not
-// what these cases exercise.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({
     getActiveHostId: () => HOST_ID,
@@ -146,9 +136,7 @@ const EPIC_ID = "epic-1";
 const HOST_ID = "host-1";
 
 function withTabHost(node: ReactNode): ReactNode {
-  // A sign-in tile that has exited renders the restart button, and that button
-  // instantiates the terminal-login mutation hook - so this wrapper needs a
-  // QueryClient even though the ordinary-terminal cases never reach one.
+  // A sign-in tile that has exited renders the restart button, and that button instantiates the terminal-login mutation hook - so this wrapper needs a QueryClient even though the ordinary-terminal cases never reach one.
   return (
     <QueryClientProvider client={new QueryClient()}>
       <TabHostProvider hostId={HOST_ID}>{node}</TabHostProvider>
@@ -338,10 +326,7 @@ describe("<TerminalTile /> close navigation", () => {
   });
 
   it("closes a tile that opens onto an already-exited session instead of hanging on startup", async () => {
-    // Reopening a terminal whose PTY died inside the host's grace window: the
-    // bootstrap refuses to respawn under that id, so no handle ever arrives.
-    // Without the close, the tile sits on "Starting terminal session…" until the
-    // grace lapses and then silently spawns a fresh shell in its place.
+    // Without the close, the tile sits on "Starting terminal session…" until the grace lapses and then silently spawns a fresh shell in its place.
     testState.bootstrap = { attached: false, hostSessionExited: true };
     const fixture = openTerminalFixture(false);
 
@@ -367,11 +352,7 @@ describe("<TerminalTile /> close navigation", () => {
   });
 
   it("keeps a crashed tile mounted even while the host still lists its exited session", async () => {
-    // The close above is gated on never having attached. Once a tile HAS a
-    // handle, its exit belongs to the live-stream path, which deliberately keeps
-    // a crash on screen so the failure indicator has a tab to hang on - and the
-    // host reports that same session as `exited` for 60s, so an ungated close
-    // would rip the crashed terminal away.
+    // The close above is gated on never having attached.
     testState.bootstrap = { attached: true, hostSessionExited: true };
     exitedHandle.store.setState({ exitCode: 1, exitReason: "process-exit" });
     useAppLocalNotificationsStore.getState().activateIdentity("user-a");
@@ -424,14 +405,7 @@ describe("<TerminalTile /> close navigation", () => {
     expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
   });
 
-  // A sign-in terminal is exempt from the clean-exit auto-close every
-  // ordinary terminal gets (the "routes PTY-exit close" case above): it is
-  // the only surface that can restart the sign-in, and closing it on a clean
-  // exit (the user typing `exit` after signing in) would retract that
-  // restart affordance and the CLI's last words with no explanation.
-  // Probed: dropping `isSignInTerminal` from `TerminalLive`'s exit effect
-  // dependency guard makes this tile close identically to the ordinary one -
-  // confirmed and reverted.
+  // A sign-in terminal is exempt from the clean-exit auto-close every ordinary terminal gets (the "routes PTY-exit close" case above): it is the only surface that can restart the sign-in, and closing it on a clean exit (the user typing `exit` after signing in) would retract that restart affordance and the CLI's last words with no explanation.
   it("keeps a sign-in terminal tile open after a clean exit, unlike an ordinary terminal", async () => {
     const store = useEpicCanvasStore.getState();
     const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
@@ -462,14 +436,8 @@ describe("<TerminalTile /> close navigation", () => {
     expectTileOpen(viewTabId, signInNode.instanceId);
     expect(testState.navigateNested).not.toHaveBeenCalled();
 
-    // Staying open is only half the contract: the tile has to SAY the shell
-    // ended and offer the restart. `signInSessionGone` in the parent cannot
-    // cover this - it reads `terminal.list`, which has a 60s staleTime and
-    // never polls, so on the ATTACHED path it still believes the session is
-    // live long after the store's stream-driven status says otherwise. Before
-    // `TerminalLive` learned to render the panel itself, this assertion failed
-    // while the one above passed: an open tile holding a dead, torn-down xterm
-    // with no explanation and no way back.
+    // Staying open is only half the contract: the tile has to SAY the shell ended and offer the restart.
+    // `signInSessionGone` in the parent cannot cover this - it reads `terminal.list`, which has a 60s staleTime and never polls, so on the ATTACHED path it still believes the session is live long after the store's stream-driven status says otherwise.
     expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
     expect(screen.getByRole("button", { name: /Start again/ })).toBeDefined();
   });
@@ -502,17 +470,8 @@ describe("<TerminalTile /> close navigation", () => {
 });
 
 /**
- * The `basis` notification gate (`terminal-tile.tsx`'s
- * `if (reachability.basis !== "directory") return;`). Zero prior suite
- * asserted either direction of this: `app-local-notifications-store.test.ts`
- * covers the emitter, never the tile's decision to call it. A `directory`
- * verdict is proof a session ended; a `starting-deadline` one is only the
- * UI's patience running out on a host that is very likely still up, so
- * writing "Terminal closed" into the persisted feed off THAT would be a
- * false claim. Both cases render the SAME dead banner - `basis` is read only
- * by the notification effect, never by the render branch above - so a
- * passing render assertion here would prove nothing about the gate; only the
- * notification-store side effect does.
+ * Zero prior suite asserted either direction of this: `app-local-notifications-store.test.ts` covers the emitter, never the tile's decision to call it.
+ * A `directory` verdict is proof a session ended; a `starting-deadline` one is only the UI's patience running out on a host that is very likely still up, so writing "Terminal closed" into the persisted feed off THAT would be a false claim.
  */
 describe("<TerminalTile /> basis notification gate", () => {
   beforeEach(() => {
@@ -581,19 +540,12 @@ describe("<TerminalTile /> basis notification gate", () => {
       ),
     );
 
-    // The render branch does not key on `basis` at all - the dead banner
-    // fires off `status` alone - so this must still appear even though the
-    // notification below is withheld. A test that only checked the
-    // notification's absence could not tell "gate correctly withheld" apart
-    // from "tile crashed and rendered nothing".
+    // The render branch does not key on `basis` at all - the dead banner fires off `status` alone - so this must still appear even though the notification below is withheld.
+    // A test that only checked the notification's absence could not tell "gate correctly withheld" apart from "tile crashed and rendered nothing".
     expect(
       await screen.findByRole("button", { name: "Close tab" }),
     ).toBeDefined();
 
-    // Give the exit/reachability effect the same couple of ticks the other
-    // notification-asserting cases in this file await, then assert the feed
-    // stayed empty - not just that no wait resolved, which would pass
-    // vacuously if the effect were simply slow.
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -602,14 +554,6 @@ describe("<TerminalTile /> basis notification gate", () => {
   });
 });
 
-/**
- * S5: this tile used to render a wordless skeleton for BOTH `checking` and
- * `host-starting` - indistinguishable from a terminal about to appear, and
- * neither state ended. It now names the host it is waiting on (invariant 6).
- * Asserted on the rendered SENTENCE, not on the absence of a spinner - an
- * empty starved mount also has no visible spinner, which is exactly the
- * vacuous shape this pin exists to avoid.
- */
 describe("<TerminalTile /> S5 bounded pre-bootstrap wait", () => {
   beforeEach(() => {
     cleanup();
@@ -649,9 +593,7 @@ describe("<TerminalTile /> S5 bounded pre-bootstrap wait", () => {
       const load = screen.getByTestId(`terminal-tile-${fixture.paneId}`);
       expect(load.textContent).toContain(expectedNaming);
       expect(load.textContent).not.toBe("");
-      // The old skeleton this replaces was a `role="status"` region with NO
-      // text at all - present in the DOM, invisible to this assertion if it
-      // only checked for the region's existence.
+      // The old skeleton this replaces was a `role="status"` region with NO text at all - present in the DOM, invisible to this assertion if it only checked for the region's existence.
       expect(screen.queryByText("Starting terminal session…")).toBeNull();
     },
   );

@@ -18,21 +18,8 @@ import { readEpicTitlesFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/
 const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
 const EMPTY_TITLE_RECORD: Record<string, string> = {};
 
-/**
- * Resolves each owner `epicId` on the listing to its Task title in two tiers:
- *
- * 1. **Tier 1 (free):** scan cloud epic-tasks caches the app already maintains
- *    for the signed-in user (`readEpicTitlesFromCloudTaskCaches`). Scope is
- *    `hostId: null` so an epic cached under any host still resolves. We warm
- *    those caches with the shared first-page query History/home use.
- * 2. **Tier 2:** one (or cap-sized) `epic.getTaskContexts` batch for the
- *    still-unresolved ids, keyed by `(hostId, userId, sorted id set)` via the
- *    host-query wrapper. `null` (deleted / not permitted) stays absent → the
- *    chip renderer keeps the muted "Owner unresolved" demotion. Older hosts
- *    that lack the method fail with `E_HOST_UNSUPPORTED` and we fall back to
- *    tier 1 only (today's behavior). Generic/network errors leave rows
- *    unresolved without a new failure surface.
- */
+/** Older hosts that lack the method fail with `E_HOST_UNSUPPORTED` and we fall back to tier 1 only (today's
+ * behavior). Generic/network errors leave rows unresolved without a new failure surface. */
 export function useWorktreeTaskTitles(
   client: HostClient<HostRpcRegistry> | null,
   worktrees: readonly WorktreeHostEntryV14[],
@@ -92,9 +79,8 @@ export function useWorktreeTaskTitles(
     cacheKeyIdentity: userId === null ? undefined : userId,
     options: {
       enabled: userId !== null && unresolvedIds.length > 0,
-      // Same presentation-only window as the History reader: the Settings
-      // panel remounts on every open, and a title next to a worktree row does
-      // not need a round trip each time.
+      // Same presentation-only window as the History reader: the Settings panel remounts on every open, and a title
+      // next to a worktree row does not need a round trip each time.
       staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,
     },
     combine: combineTaskContextTitleResults,

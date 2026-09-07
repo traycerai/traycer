@@ -28,9 +28,8 @@ function upsertCloudChat(
 }
 
 /**
- * Fold the returned visibility row into the viewer's `epic.listCloudChats`
- * cache so the sidebar menu label and glyph update without waiting for a
- * refetch. Identity is the triple — `chatId` alone is not unique under a task.
+ * Fold the returned visibility row into the viewer's `epic.listCloudChats` cache so the sidebar menu label and glyph update without waiting for a refetch.
+ * Identity is the triple - `chatId` alone is not unique under a task.
  */
 export function reconcileCloudChatSummary(
   queryClient: QueryClient,
@@ -56,8 +55,7 @@ export function reconcileCloudChatSummary(
 
 /**
  * Apply a master-toggle write to every row the viewer owns on the task.
- * `applyToExisting: true` means "all" in both directions, so every own row
- * takes the written visibility.
+ * `applyToExisting: true` means "all" in both directions, so every own row takes the written visibility.
  */
 export function applyOwnCloudChatVisibility(
   queryClient: QueryClient,
@@ -89,10 +87,8 @@ export function applyOwnCloudChatVisibility(
 }
 
 /**
- * Drop every cloud-chat READ keyed for this viewer on this host (assembled
- * chat, payload bytes). The list itself is a `useHostQuery` key and is
- * updated by {@link reconcileCloudChatSummary} /
- * {@link applyOwnCloudChatVisibility} rather than this prefix.
+ * Drop every cloud-chat READ keyed for this viewer on this host (assembled chat, payload bytes).
+ * The list itself is a `useHostQuery` key and is updated by {@link reconcileCloudChatSummary} / {@link applyOwnCloudChatVisibility} rather than this prefix.
  */
 export function invalidateCloudChatViewerScope(
   queryClient: QueryClient,

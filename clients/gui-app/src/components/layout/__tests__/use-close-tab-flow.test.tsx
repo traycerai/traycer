@@ -46,12 +46,8 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: () => windowsBridgeState.bridge,
 }));
 
-// `peek` / `getEpicSessionHandleHostId` are here because the epic tab's
-// `build()` now PROJECTS the serving host off this registry. A partial mock of
-// this module therefore reaches the tab projection, and every close flow in
-// this file runs through `getHeaderTabs()`. `peek: () => null` is the honest
-// answer for a harness with no live session: the tab gets `hostId: null` and
-// its consumers fall back to the app-wide client.
+// `peek` / `getEpicSessionHandleHostId` are here because the epic tab's `build` now projects the serving host
+// off this registry.
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   epicHasUnsyncedEdits: () => false,
   releaseOpenEpicSessionIfUnused: () => undefined,
@@ -235,11 +231,8 @@ describe("useCloseTabFlow", () => {
   });
 
   it("closes the route-backed tab when a split focuses its fillable half", () => {
-    // "Add tab to new split view" lands focus on the EMPTY half, so the split
-    // keeps `focusedSide: "right"` with `routeBackingSide: "left"` - the one
-    // state where the two diverge, because a side that holds no tab can never
-    // back the route. `selectHostFocusedRef` reads null there, so gating the
-    // close on it made Cmd+W silently do nothing right after the split command.
+    // `selectHostFocusedRef` reads null there, so gating the close on it made Cmd+W silently do nothing right
+    // after the split command.
     const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
     routerState.pathname = `/epics/epic-a/${a}`;
 

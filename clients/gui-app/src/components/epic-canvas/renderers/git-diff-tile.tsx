@@ -151,27 +151,8 @@ export function GitDiffTile(props: GitDiffTileProps): ReactNode {
 }
 
 /**
- * Re-provides `StreamRuntimeContext` for the host this TILE is bound to.
- *
- * `useGitListChangedFilesSubscription` takes no client - it reads
- * `useWsStreamClient()` out of context - and `hostId` is only its session and
- * cache key. So a tile bound to host B while the window's effective host moved
- * to A subscribed on A for B's repository path, carrying B's id as a param the
- * whole way: every call site looked correct, and A's status was written into
- * B-keyed data this tile then displayed.
- *
- * This is NOT the pinned sidebar panel's case, which `3b689fe9` fixed the same
- * way. A tab tile's host is a PERMANENT binding rather than a pin that can be
- * deposed, so there is no auto-follow here: the tile either talks to its own
- * host or shows the unreachable banner above.
- *
- * Rendered UNCONDITIONALLY (`?? ambient`), mirroring the file tree and the
- * resource monitor: swapping between a provider and no provider changes the
- * element type at this position, so React would unmount the tile - discarding
- * its scroll position, expansion and find state - at the moment the effective
- * host moves. `null` from the binding means "this IS the ambient host", and
- * falling back there keeps the tile sharing one subscription with everything
- * else on that host rather than opening a second.
+ * `useGitListChangedFilesSubscription` takes no client - it reads `useWsStreamClient()` out of context - and `hostId` is only its session and cache key.
+ * A tab tile's host is a PERMANENT binding rather than a pin that can be deposed, so there is no auto-follow here: the tile either talks to its own host or shows the unreachable banner above.
  */
 function GitDiffTileStreamScope(props: {
   readonly hostId: string;
@@ -191,12 +172,7 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
-  // Gate on tile visibility: a diff tile in a background canvas tab must not
-  // hold the host's status poller (and its watcher set) alive. On
-  // re-activation, a still-running poller (another consumer kept it alive)
-  // replays its cached snapshot immediately; if this tile was the sole
-  // consumer, a fresh poller computes its first snapshot while the TanStack
-  // cache keeps the previous data rendered - no blank frame either way.
+  // Gate on tile visibility: a diff tile in a background canvas tab must not hold the host's status poller (and its watcher set) alive.
   const subscription = useGitListChangedFilesSubscription({
     hostId: props.node.hostId,
     runningDir: props.node.diff.runningDir,
@@ -225,9 +201,7 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
         <>
           {/* Renders only while degraded, so the toolbar is unchanged in the
               healthy case rather than carrying a permanent empty slot. */}
-          {/* Compact here, full-width in the panel header: a tile pane can be
-              dragged to 240px and `DiffTabShell` makes the toolbar `shrink-0`,
-              so a non-shrinking label would push the icon controls out. */}
+          {/* Compact here, full-width in the panel header: a tile pane can be dragged to 240px and `DiffTabShell` makes the toolbar `shrink-0`, so a non-shrinking label would push the icon controls out. */}
           <GitWatcherStatusNotice
             status={subscription.watcherStatus}
             className={undefined}
@@ -496,13 +470,7 @@ interface GitFileDiffPanelProps {
 }
 
 /**
- * Whether this row renders the compact PDF diff block. Keyed on the RAW
- * image-routing decision, not the post-toggle `showImageDiff`: a rename
- * straddling the SVG and PDF allowlists (`a.svg -> b.pdf`) routes to the
- * image diff and offers the Source toggle, and picking Source must reveal
- * the text diff - not hand the row to the PDF block. No host-version gate:
- * the open tile's own stream negotiation is the authority on whether the
- * host can serve the bytes.
+ * Keyed on the RAW image-routing decision, not the post-toggle `showImageDiff`: a rename straddling the SVG and PDF allowlists (`a.svg -> b.pdf`) routes to the image diff and offers the Source toggle, and picking Source must reveal the text diff - not hand the row to the PDF block.
  */
 function showsPdfDiffBlock(args: {
   readonly file: GitChangedFile;
@@ -525,9 +493,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const { routeToImageDiff, showImageDiff, svgToggle } = useGitImageDiffRouting(
     props.file,
   );
-  // Decided BEFORE the diff surface below so an ASCII-authored `.pdf`
-  // (numstat says text) never fetches and find-indexes a patch the block
-  // will not render.
+  // Decided BEFORE the diff surface below so an ASCII-authored `.pdf` (numstat says text) never fetches and find-indexes a patch the block will not render.
   const showPdfBlock = showsPdfDiffBlock({
     file: props.file,
     routeToImageDiff,
@@ -753,10 +719,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
 }
 
 /**
- * SVG keeps a per-tile, non-persisted toggle back to the existing text-diff
- * path, portaled into the tile's shared header (mirrors `editStatus` below)
- * - the routing decision itself is shared with bundle sections, see
- * `gitImageDiffRouting`.
+ * SVG keeps a per-tile, non-persisted toggle back to the existing text-diff path, portaled into the tile's shared header (mirrors `editStatus` below) - the routing decision itself is shared with bundle sections, see `gitImageDiffRouting`.
  */
 function useGitImageDiffRouting(file: GitChangedFile): {
   readonly routeToImageDiff: boolean;
@@ -765,13 +728,8 @@ function useGitImageDiffRouting(file: GitChangedFile): {
 } {
   const { routeToImageDiff, isSvg } = gitImageDiffRouting(file);
   const [viewAsSource, setViewAsSource] = useState(false);
-  // Only offer Source where a source view actually exists. The text diff is
-  // never fetched for a file git calls binary (`queryEnabled` below), so on
-  // a binary row picking Source dropped the tile onto the bare binary
-  // placeholder: a dead end for a binary `.svg`, and worse for a rename
-  // straddling the allowlists (`old.svg -> new.pdf` with a NUL byte), where
-  // it also gave up the side-by-side view that names the PDF side. Gating
-  // the toggle keeps such a row on the view that can render it.
+  // Only offer Source where a source view actually exists.
+  // The text diff is never fetched for a file git calls binary (`queryEnabled` below), so on a binary row picking Source dropped the tile onto the bare binary placeholder: a dead end for a binary `.svg`, and worse for a rename straddling the allowlists (`old.svg -> new.pdf` with a NUL byte), where it also gave up the side-by-side view that names the PDF side.
   const sourceViewAvailable = !file.isBinary;
   const showImageDiff =
     routeToImageDiff && !(isSvg && sourceViewAvailable && viewAsSource);
@@ -958,9 +916,7 @@ function GitBundleDiffTileBody(props: GitBundleDiffTileBodyProps): ReactNode {
     return <SubscriptionErrorState event={props.subscription.error} />;
   }
   if (props.subscription.isPending) {
-    // Invariant 6. The reachability gate above catches a host the directory
-    // knows is gone; this catches the other half - a host that stays listed
-    // while its subscription never delivers - which had no end at all.
+    // The reachability gate above catches a host the directory knows is gone; this catches the other half - a host that stays listed while its subscription never delivers - which had no end at all.
     return (
       <BoundedTileLoad
         hostId={bundleTabHostId}

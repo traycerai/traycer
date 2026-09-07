@@ -32,11 +32,6 @@ type CdpRequestFrame = Extract<
   { readonly kind: "cdpRequest" }
 >;
 
-/**
- * The native surface this lifecycle drives, which is the `BrowserViewManager`
- * in production. Declared structurally so the suites drive the real frame flow
- * against a recording double instead of an Electron app.
- */
 export interface BrowserSessionsTabPort {
   ensureTab(
     windowId: string,
@@ -57,18 +52,9 @@ export interface ElectronTabsOptions {
   /** The window this stream belongs to; every native tab is born into it. */
   readonly windowId: string;
   readonly tabs: BrowserSessionsTabPort;
-  /**
-   * The live stream incarnation, read at call time rather than captured: a
-   * birth outlives no connection, but the value is minted and dropped by the
-   * stream around this layer. The seed's jar write is priced against it,
-   * exactly as an observed frame is.
-   */
   readonly connectionId: () => string | null;
   readonly sendFrame: (frame: BrowserSessionsClientFrame) => void;
-  /**
-   * The renderer's half of a native tab: identity only, never the seed. It is
-   * what lets the renderer bind a surface to a tab main created.
-   */
+  /** The renderer's half of a native tab: identity only, never the seed. */
   readonly onTabBound: (capability: BrowserViewNativeTabCapability) => void;
   readonly onTabReleased: (capability: BrowserViewNativeTabCapability) => void;
 }
@@ -86,25 +72,13 @@ interface ElectronTabBirth {
 
 export interface ElectronTabs {
   handleFrame(frame: BrowserSessionsServerFrame): void;
-  /**
-   * Is the guest behind `tabId` on screen right now? `null` when this stream
-   * owns no native guest for it, which is the ordinary answer for a tab that
-   * lives on the host's own side.
-   *
-   * The reading is the manager's `viewed`, the same fact `electronTabState`
-   * reports: a tile bound to this guest and visible.
-   */
   isTabViewed(tabId: string): boolean | null;
   connect(): void;
   disconnect(): void;
   dispose(): void;
 }
 
-/**
- * A birth's position in the create -> provision -> accept lifecycle. `accepted`
- * outranks `retired` deliberately: cancelling a birth the host already accepted
- * must not make it look releasable.
- */
+/** `accepted` outranks `retired` deliberately: cancelling a birth the host already accepted must not make it look releasable. */
 type ElectronTabBirthStatus =
   | "pending"
   | "provisioned"
@@ -130,17 +104,6 @@ function acceptedProvisioning(
   return birthStatus(birth) === "accepted" ? birth.provisioned : null;
 }
 
-/**
- * Owns Electron births for one durable `browser.sessions` lifecycle, in the
- * MAIN process.
- *
- * This is the renderer's `electron-tabs.ts` with the IPC taken out of the
- * middle: `createElectronTab` - the frame that carries `seedStorageState` - is
- * consumed here and handed straight to the native manager, so the seed never
- * exists in a renderer heap and no IPC channel can be asked for one. The
- * renderer keeps the surface directory, fed by `tabBound` / `tabReleased`,
- * which carry identity and nothing else.
- */
 export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   let disposed = false;
   let connected = true;
@@ -198,13 +161,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     return pending;
   }
 
-  /**
-   * Drops a birth's bookkeeping. `notifyReleased` is explicit because
-   * `rollbackUnacceptedBirth` follows this with `releaseBirth`, which emits
-   * `onTabReleased` itself once the tab is actually released - so notifying
-   * here too sent the same `registrationId` twice on every disconnect,
-   * dispose and stale-provision rollback.
-   */
   const retireBirth = (
     birth: ElectronTabBirth,
     notifyReleased: boolean,
@@ -547,10 +503,6 @@ function sendTabState(
     url: change.url,
     title: change.title,
     status: electronTabStateStatus(change.status),
-    // The manager's own reading, not an inference: `viewed` is whether a tile
-    // is showing this guest right now, which is a fact of the entry (surface
-    // bound and visible) rather than of a lease object on the far side of an
-    // IPC boundary.
     viewed: change.viewed,
   });
 }

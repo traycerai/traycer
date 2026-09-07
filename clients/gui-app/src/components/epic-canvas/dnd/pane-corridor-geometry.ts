@@ -1,33 +1,5 @@
 /**
- * Pane-body drop resolution with a NEUTRAL CORRIDOR.
- *
- * Supersedes the nearest-edge fallback in `pane-drop-geometry.ts`, which
- * resolved every point inside a pane to one of five positions - so ~84% of a
- * pane's area committed a split on release and no region was neutral anywhere.
- * A tile crossing a pane to reach another group therefore travelled a corridor
- * that was positively split-armed the whole way.
- *
- * Here the pane has three kinds of region:
- *
- *   edge bands    a directional split, previewed
- *   centre box    move-into-pane, previewed
- *   corridor      INERT - no preview, no arm, no commit
- *
- * **Intentional shipped-gesture change** (planner-assented): a release in the
- * former fallback region no longer splits the pane; it cancels and returns the
- * tile to its origin.
- *
- * Targets are absolute with a proportional floor, deliberately mirroring the
- * header's `min(16, 0.25 * width)` merge band. Pure ratios were the first
- * proposal and they fail for a reason Sprint 01 already settled: a precision
- * gesture's demanded precision must not vary with the size of the thing it is
- * aimed at. Under ratios an edge band is 35.9px on the narrowest pane and 107px
- * on a wide one - the same gesture three times harder - and within a single pane
- * an aspect ratio makes "split left" a three-times harder target than "split
- * top". The clamp is inactive at the 239px pane floor, so the narrowest case is
- * unchanged, and above ~320px targets pin at a constant size while the corridor
- * absorbs all the growth. Slack belongs in the region that should be easy to sit
- * in, not in the target.
+ * Pure ratios were the first proposal and they fail for a reason Sprint 01 already settled: a precision gesture's demanded precision must not vary with the size of the thing it is aimed at.
  */
 import type { EdgeDropPosition } from "@/components/epic-canvas/dnd/dnd";
 
@@ -44,9 +16,7 @@ export const PANE_CENTRE_BOX_MAX_PX = 140;
 export const PANE_CENTRE_BOX_RATIO = 0.28;
 
 /**
- * Smallest pane the layout permits, measured rather than assumed: the divider
- * clamps here and widens again, so it is a real floor and not a failed drag.
- * At this size the clamp is inactive and the corridor is still ~50px per side.
+ * Smallest pane the layout permits, measured rather than assumed: the divider clamps here and widens again, so it is a real floor and not a failed drag.
  */
 export const MIN_PANE_DIMENSION_PX = 239;
 
@@ -68,11 +38,8 @@ export interface PaneRelativePoint {
 }
 
 /**
- * How deeply the point sits inside an edge band, as a fraction of that band's
- * width: 0 at the band's inner boundary, 1 at the pane edge. Negative means
- * outside the band. Expressed as a fraction precisely so the corner rule can
- * compare a horizontal band against a vertical one that may be a different
- * size on a non-square pane.
+ * How deeply the point sits inside an edge band, as a fraction of that band's width: 0 at the band's inner boundary, 1 at the pane edge.
+ * Negative means outside the band.
  */
 function bandPenetration(distanceFromEdge: number, bandPx: number): number {
   if (bandPx <= 0) return -1;
@@ -80,12 +47,8 @@ function bandPenetration(distanceFromEdge: number, bandPx: number): number {
 }
 
 /**
- * Resolve a point inside a pane body.
- *
- * Returns `"corridor"` for the inert region. Callers must treat that as "no
- * target": no preview, no dwell arming, and a release that commits nothing.
- * Preview and commit must consult the same result, or the gesture can commit
- * something it never showed.
+ * Callers must treat that as "no target": no preview, no dwell arming, and a release that commits nothing.
+ * Preview and commit must consult the same result, or the gesture can commit something it never showed.
  */
 export function resolvePaneCorridorPosition(
   point: PaneRelativePoint,
@@ -100,11 +63,8 @@ export function resolvePaneCorridorPosition(
   const top = bandPenetration(y, verticalBand);
   const bottom = bandPenetration(height - y, verticalBand);
 
-  // Corner rule: a point can sit inside a horizontal AND a vertical band at
-  // once, and removing the nearest-edge fallback removed the resolution but not
-  // the overlap. Deeper fractional penetration wins; an exact tie resolves
-  // horizontal. Deterministic and previewable - lockstep needs exactly one
-  // outcome, not whichever branch happens to run first.
+  // Corner rule: a point can sit inside a horizontal AND a vertical band at once, and removing the nearest-edge fallback removed the resolution but not the overlap.
+  // Deeper fractional penetration wins; an exact tie resolves horizontal.
   const candidates: ReadonlyArray<{
     readonly position: EdgeDropPosition;
     readonly depth: number;
@@ -140,7 +100,6 @@ export function resolvePaneCorridorPosition(
   return insideCentre ? "center" : "corridor";
 }
 
-/** Whether a resolved position restructures anything on release. */
 export function paneCorridorCommits(position: PaneCorridorPosition): boolean {
   return position !== "corridor";
 }

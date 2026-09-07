@@ -36,16 +36,10 @@ export type RevokeAllSessionsFetchResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
-/**
- * Outcomes of the delegated host-credential mint.
- *
- * `superseded` is the 409: another client provisioned this same host
- * concurrently and won the server's ordering, so THIS request's row was retired
- * server-side. There is no credential to hand over - the caller must treat it as
- * retry-WITHOUT-handoff and never pass a 409 body to a host. The winner's
- * credential is already on its way, so the honest recovery is to do nothing and
- * let the next connection's `hostCredentialState` report `active`.
- */
+  /**
+   * Outcomes of the delegated host-credential mint.
+   * `superseded` is the 409: another client provisioned this same host concurrently and won the server's ordering, so this request's row was retired server-side.
+   */
 export type MintHostCredentialFetchResult =
   | { readonly kind: "ok"; readonly response: MintHostCredentialResponse }
   | { readonly kind: "step-up-required" }
@@ -91,10 +85,8 @@ function jsonHeaders(bearerToken: string): Record<string, string> {
 }
 
 /**
- * Every call is bounded by the same timeout. `callerSignal` additionally lets a
- * caller abandon the request early - today only the session list, whose reader
- * is a TanStack query that can be cancelled by a refetch, an unmount, or an
- * account switch. Callers with no cancellation of their own pass `null`.
+ * Every call is bounded by the same timeout.
+ * `callerSignal` additionally lets a caller abandon the request early - today only the session list, whose reader is a TanStack query that can be cancelled by a refetch, an unmount, or an account switch.
  */
 function requestSignal(callerSignal: AbortSignal | null): AbortSignal {
   const timeout = AbortSignal.timeout(DEVICES_SESSIONS_FETCH_TIMEOUT_MS);
@@ -154,14 +146,7 @@ async function parseOk<T>(
 }
 
 /**
- * The shared tail of every fetcher below: once an endpoint's own status
- * branches (`unauthorized`, `not-found`, `step-up-required`, `rejected`, ...)
- * have returned, the only remaining outcomes are a 2xx that parses and
- * everything else - and "everything else" collapses to `network-error`,
- * including a 2xx whose body does not match the schema.
- *
- * Shared rather than written out per endpoint so a fetcher added later cannot
- * silently drop the status check or the parse check.
+ * Shared rather than written out per endpoint so a fetcher added later cannot silently drop the status check or the parse check.
  */
 async function finalizeResult<T>(
   response: Response,
@@ -179,12 +164,6 @@ async function finalizeResult<T>(
     : { kind: "ok", response: parsed };
 }
 
-/**
- * Reads the account session list. `signal` is the reader's own cancellation
- * (the TanStack query's); an abort collapses into `network-error` like any
- * other transport failure, because the only caller re-checks its signal before
- * interpreting this result and never reaches that branch.
- */
 export async function listUserSessionsViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
@@ -263,13 +242,8 @@ export async function revokeAllSessionsViaHttp(
 }
 
 /**
- * Mints a device credential for `hostId` on the caller's behalf. Always
- * step-up-gated server-side, including for a host that already has one - the
- * re-mint path is exactly the shape a stolen bearer's attack takes, so it is not
- * exempted.
- *
- * `bearerToken` must be the step-up-fresh token when one is held; on desktop
- * that swap happens in the main process, so the renderer never sees it.
+ * Mints a device credential for `hostId` on the caller's behalf.
+ * `bearerToken` must be the step-up-fresh token when one is held; on desktop that swap happens in the main process, so the renderer never sees it.
  */
 export async function mintHostCredentialViaHttp(
   authnBaseUrl: string,
@@ -300,15 +274,11 @@ export async function mintHostCredentialViaHttp(
     return { kind: "unauthorized" };
   }
   if (response.status === 400) {
-    // The server refused this hostId outright (not a UUID, or oversized). No
-    // retry can fix it, and a host that cannot hold a delegated credential is
-    // meant to stay on the client-lease fallback - so this is terminal for the
-    // host, not an error to surface to the user.
+    // The server refused this hostId outright (not a UUID, or oversized).
+    // No retry can fix it, and a host that cannot hold a delegated credential is meant to stay on the client-lease fallback - so this is terminal for the host, not an error to surface to the user.
     return { kind: "rejected" };
   }
-  // A non-2xx here includes 429 (the per-user mint budget): transient from the
-  // client's point of view, and the fallback while it lasts is simply no host
-  // credential - which is what `finalizeResult`'s `network-error` means.
+  // A non-2xx here includes 429 (the per-user mint budget): transient from the client's point of view, and the fallback while it lasts is simply no host credential - which is what `finalizeResult`'s `network-error` means.
   return finalizeResult(response, mintHostCredentialResponseSchema);
 }
 

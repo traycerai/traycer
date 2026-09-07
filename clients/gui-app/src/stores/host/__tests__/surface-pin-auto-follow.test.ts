@@ -8,17 +8,6 @@ import {
   type SurfacePinFleetView,
 } from "@/stores/host/surface-host-selection-store";
 
-/**
- * Pure-function suite over the per-surface pin's auto-follow / sticky-return
- * rule (redesign, host-lifecycle epic): a pin resolves to its own host while
- * that host can serve, and to `effective` while it cannot - and the pin
- * itself is NEVER cleared by death, which is what makes the return sticky.
- *
- * `isSurfacePinDeposed` is exercised both directly and through
- * `resolvedSurfaceHostId` (which is defined in terms of it), so a regression
- * in either shows up here without standing up React or a fleet-reporting
- * hook.
- */
 
 function readyLease(hostId: string): HostLeaseSnapshot {
   return { hostId, status: "ready", dead: null };
@@ -48,9 +37,8 @@ describe("surface pin auto-follow / sticky return", () => {
   beforeEach(resetStore);
 
   it("1. unpinned resolves to effective, whatever the fleet says", () => {
-    // Even a fleet where the effective host itself reads dead must not change
-    // this: `resolvedSurfaceHostId` only consults the fleet when a pin is
-    // present (`selection !== null`).
+    // Even a fleet where the effective host itself reads dead must not change this:
+    // `resolvedSurfaceHostId` only consults the fleet when a pin is present (`selection !== null`).
     expect(
       resolvedSurfaceHostId(
         null,
@@ -117,11 +105,8 @@ describe("surface pin auto-follow / sticky return", () => {
   });
 
   it("5. pinned host with a restarting-expected lease resolves to the pin (a hold, not a death)", () => {
-    // This is the case that distinguishes `status === "dead"` from
-    // `!isUsableForSelection`: `restarting-expected` is not usable for
-    // candidate selection, but it is also not `dead`. A pin is an incumbent,
-    // not a candidate, so it holds through an expected restart exactly like
-    // the app-wide failover does.
+    // This is the case that distinguishes `status === "dead"` from `!isUsableForSelection`:
+    // `restarting-expected` is not usable for candidate selection, but it is also not `dead`.
     expect(
       resolvedSurfaceHostId(
         "host-pin",

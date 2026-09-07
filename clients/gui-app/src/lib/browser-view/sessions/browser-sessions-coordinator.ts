@@ -36,9 +36,7 @@ export interface BrowserSessionsState {
   readonly inventoryReady: boolean;
   /**
    * Can THIS client put a native Electron tab on this coordinator's host?
-   * See {@link canMaterializeElectronTab} - surfaces read it to decide whether
-   * a native branch is reachable for them at all, rather than inferring one
-   * from host-side facts that describe some other client's window.
+   * See {@link canMaterializeElectronTab} - surfaces read it to decide whether a native branch is reachable for them at all, rather than inferring one from host-side facts that describe some other client's window.
    */
   readonly canMaterializeElectron: boolean;
   readonly items: readonly BrowserSessionInfo[];
@@ -53,14 +51,7 @@ export interface BrowserSessionsState {
 
 /**
  * One epic's browser inventory, keyed by {epic, host, authenticated owner}.
- * The registry is module-global because several React surfaces (the canvas
- * tiles, the sidebar, the PiP bridge) subscribe to the same stream and must
- * not each open one - consumers refcount into a single coordinator.
- *
- * On the desktop the SOCKET is not here: main owns it, and this coordinator
- * holds the UX projection of it (browser-security-hardening H10). What the
- * coordinator kept is exactly what it is for - which streams should exist, the
- * session inventory it renders, and the three user-initiated tab requests.
+ * The registry is module-global because several React surfaces (the canvas tiles, the sidebar, the PiP bridge) subscribe to the same stream and must not each open one - consumers refcount into a single coordinator.
  */
 export interface BrowserSessionsOwner {
   readonly hostId: string;
@@ -70,30 +61,23 @@ export interface BrowserSessionsOwner {
 interface BrowserSessionsCoordinatorRuntime {
   readonly browserView: BrowserViewBridge | null;
   /**
-   * The signed-in user this stream is opened for. Not sent to main, which
-   * reads it from the desktop auth session it owns; it only decides whether
-   * asking is worth an IPC. `null` until the request context resolves - the
-   * coordinator exists, and restarts when the identity arrives.
+   * The signed-in user this stream is opened for.
+   * Not sent to main, which reads it from the desktop auth session it owns; it only decides whether asking is worth an IPC.
    */
   readonly userId: string | null;
   /**
-   * THIS machine's host id, or null on a shell with no local host. A UX gate
-   * only: the Electron lifecycle election runs in main (H10), which declares
-   * its own id, so this decides whether a surface may offer a native branch at
-   * all rather than what the host elects.
+   * THIS machine's host id, or null on a shell with no local host.
+   * A UX gate only: the Electron lifecycle election runs in main (H10), which declares its own id, so this decides whether a surface may offer a native branch at all rather than what the host elects.
    */
   readonly localHostId: string | null;
   /**
    * The retained Epic surface this consumer can present a host-opened tab in.
-   * Null for app-global consumers (for example the command palette) which can
-   * use the coordinator but do not own a canvas destination.
+   * Null for app-global consumers (for example the command palette) which can use the coordinator but do not own a canvas destination.
    */
   readonly presentation: BrowserSessionsPresentation | null;
   /**
-   * Router-bound nested-focus commit supplied by this React consumer. The
-   * coordinator is shared outside React, so server-pushed foreground tabs use
-   * the callback paired with the selected presenter instead of reaching for a
-   * module-global router.
+   * Router-bound nested-focus commit supplied by this React consumer.
+   * The coordinator is shared outside React, so server-pushed foreground tabs use the callback paired with the selected presenter instead of reaching for a module-global router.
    */
   readonly navigateNested: NavigateNestedFocus;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
@@ -112,11 +96,7 @@ interface BrowserSessionsPresenter {
 
 /**
  * Resource ownership and presentation ownership are deliberately separate.
- * The first coordinator consumer owns the stream/browserView until release,
- * but a host push belongs in the currently focused retained Epic surface.
- * Falling back focused -> visible -> retained preserves hidden-Epic surfacing
- * when no surface is currently presented without letting insertion order pick
- * a background duplicate while a focused one exists.
+ * The first coordinator consumer owns the stream/browserView until release, but a host push belongs in the currently focused retained Epic surface.
  */
 function selectBrowserSessionsPresenters(
   runtimes: ReadonlyMap<symbol, BrowserSessionsCoordinatorRuntime>,
@@ -147,22 +127,7 @@ function selectBrowserSessionsPresenters(
     .map(({ presenter }) => presenter);
 }
 
-/**
- * Can this client materialize an Electron tab on `hostId`?
- *
- * The client half of the host's `isCoLocatedLifecycleCandidate`: a native
- * `browserView` bridge to place the tab in, and a host that is THIS machine's
- * own - the host refuses the lifecycle election otherwise, and the transport
- * vantage it actually decides on (`local-ws`) is exactly the one a client in
- * that position reaches it over. A GUI attached to a remote host is a pure
- * viewer, however capable its own shell is.
- *
- * Deliberately NOT gated on the stream handshake having completed:
- * `electronTabLifecycleReady` is per connection, and a surface asking whether
- * a native branch exists for it at all is asking a durable question. The
- * per-connection half it would add is `inventoryReady`, which every such
- * surface already reads.
- */
+/** Can this client materialize an Electron tab on `hostId`? */
 function canMaterializeElectronTab(
   runtime: BrowserSessionsCoordinatorRuntime,
   hostId: string,
@@ -184,10 +149,8 @@ interface BrowserSessionsCoordinator {
   readonly epicId: string;
   state: BrowserSessionsState;
   /**
-   * Snapshot-only capture of one tab on this coordinator's host, for a chat
-   * pinned to ANOTHER host (spec decision #10). It hangs off the coordinator
-   * rather than off `BrowserSessionsState` because only the mention picker
-   * calls it, keyed by coordinator.
+   * Snapshot-only capture of one tab on this coordinator's host, for a chat pinned to ANOTHER host (spec decision #10).
+   * It hangs off the coordinator rather than off `BrowserSessionsState` because only the mention picker calls it, keyed by coordinator.
    */
   captureTabPreview: (tabId: string) => Promise<BrowserTabPreview>;
   upsertConsumer: (
@@ -204,10 +167,7 @@ const browserSessionsCoordinators = new Map<
 >();
 const browserSessionsCoordinatorListeners = new Map<string, Set<() => void>>();
 /**
- * Listeners on the REGISTRY rather than one coordinator: the mention picker
- * aggregates every host whose browser surfaces are open in this epic, so it
- * has to hear a coordinator appearing or disappearing too, not just a frame
- * on a key it already knows.
+ * Listeners on the REGISTRY rather than one coordinator: the mention picker aggregates every host whose browser surfaces are open in this epic, so it has to hear a coordinator appearing or disappearing too, not just a frame on a key it already knows.
  */
 const browserSessionsRegistryListeners = new Set<() => void>();
 
@@ -223,9 +183,7 @@ export function hasBrowserSessionsCoordinator(key: string): boolean {
 }
 
 /**
- * Bound on one `captureTabPreview`: a preview is a live screenshot of a tab
- * that may be dormant, wedged or gone, and the mention picker awaiting it has
- * no other way out.
+ * Bound on one `captureTabPreview`: a preview is a live screenshot of a tab that may be dormant, wedged or gone, and the mention picker awaiting it has no other way out.
  */
 const TAB_PREVIEW_TIMEOUT_MS = 5_000;
 
@@ -316,15 +274,7 @@ export function browserSessionsCoordinatorsForEpic(
   return out;
 }
 
-/**
- * The live session with this id on ANY host whose coordinator is open, or
- * `null`.
- *
- * Composer chips (browser-tab mentions, annotation cards) carry a
- * `sessionId`/`tabId` and no host, and they render inside a chat tile that is
- * bound to ONE host's sessions stream. Session ids are host-minted uuids, so
- * scanning the registry cannot resolve the wrong session.
- */
+/** The live session with this id on ANY host whose coordinator is open, or `null`. */
 export function browserSessionAcrossCoordinators(
   sessionId: string,
 ): BrowserSessionInfo | null {
@@ -338,8 +288,8 @@ export function browserSessionAcrossCoordinators(
 }
 
 /**
- * Requests one snapshot preview over the named coordinator's stream. Rejects
- * when that coordinator is gone or its stream is not live.
+ * Requests one snapshot preview over the named coordinator's stream.
+ * Rejects when that coordinator is gone or its stream is not live.
  */
 export function captureBrowserTabPreview(
   key: string,
@@ -403,10 +353,8 @@ function createBrowserSessionsCoordinator(args: {
   };
 
   /**
-   * Republishes the Electron capability after `runtime` was swapped. A
-   * `browserView` swap restarts the stream and republishes it anyway, but a
-   * `localHostId` that only resolves later does not - and that is the ordinary
-   * case on a cold desktop start.
+   * Republishes the Electron capability after `runtime` was swapped.
+   * A `browserView` swap restarts the stream and republishes it anyway, but a `localHostId` that only resolves later does not - and that is the ordinary case on a cold desktop start.
    */
   const publishElectronCapability = (): void => {
     const capable = canMaterializeElectronTab(runtime, args.owner.hostId);
@@ -415,10 +363,8 @@ function createBrowserSessionsCoordinator(args: {
   };
 
   /**
-   * Sends one request frame and resolves on the answer that carries its
-   * `requestId`. `timeoutMs` bounds the wait for a host that never answers at
-   * all; a closed stream rejects every pending request through
-   * `rejectPendingRequests` instead.
+   * Sends one request frame and resolves on the answer that carries its `requestId`.
+   * `timeoutMs` bounds the wait for a host that never answers at all; a closed stream rejects every pending request through `rejectPendingRequests` instead.
    */
   const sendRequest = <T>(
     pending: PendingRequests<T>,
@@ -659,9 +605,8 @@ function handleCloseAck(
 }
 
 /**
- * The one router for the frames a renderer may see. Its parameter is the
- * protocol's UX projection, so a jar frame is not merely unhandled here - it
- * cannot be handed to it (H10).
+ * The one router for the frames a renderer may see.
+ * Its parameter is the protocol's UX projection, so a jar frame is not merely unhandled here - it cannot be handed to it (H10).
  */
 function handleBrowserSessionsFrame(args: {
   readonly frame: BrowserSessionsUxServerFrame;
@@ -732,9 +677,7 @@ function handleBrowserSessionsFrame(args: {
     case "burstEnded":
       return;
     default: {
-      // Unreachable: the union is the protocol's own UX projection, so the
-      // `never` binding turns a new renderer-reachable frame kind into a
-      // compile error.
+      // Unreachable: the union is the protocol's own UX projection, so the `never` binding turns a new renderer-reachable frame kind into a compile error.
       const unhandled: never = frame;
       void unhandled;
       appLogger.warn("[browser] unhandled browser.sessions frame", {

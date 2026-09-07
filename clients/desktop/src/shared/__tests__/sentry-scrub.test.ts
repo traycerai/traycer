@@ -15,18 +15,9 @@ const GUI_APP_SRC = path.resolve(CLIENTS_ROOT, "gui-app", "src");
 const SHARED_ROOT = path.resolve(CLIENTS_ROOT, "shared");
 const MOBILE_SRC = path.resolve(CLIENTS_ROOT, "mobile", "src");
 
-/**
- * The scrub functions themselves are exercised in
- * `clients/shared/platform/__tests__/sentry-scrub.test.ts`. What stays here is
- * the desktop's WIRING of them, pinned at the source.
- */
+/** What stays here is the desktop's WIRING of them, pinned at the source. */
 describe("desktop Sentry scrub wiring", () => {
-  /**
-   * Ruling 3: the renderer used to install only the breadcrumb URL rewrite, so
-   * every `exception.value` and console breadcrumb argument uploaded raw. The
-   * hooks live in `Sentry.init`'s options object, which is why this is pinned
-   * at the source rather than by driving the SDK.
-   */
+  /** The hooks live in `Sentry.init`'s options object, which is why this is pinned at the source rather than by driving the SDK. */
   it("wires both hooks into the renderer-shell Sentry init", async () => {
     const source = await fs.readFile(
       path.join(DESKTOP_SRC, "renderer-shell", "main.tsx"),
@@ -36,12 +27,7 @@ describe("desktop Sentry scrub wiring", () => {
     expect(source).toContain("scrubSentryBreadcrumbInPlace(breadcrumb)");
   });
 
-  /**
-   * Ruling 5: the detection set is a security control and must not differ by
-   * call site. Every client redaction path reaches
-   * `@traycer/protocol/utils/text/redaction`; a module that declares a
-   * credential pattern of its own has, by definition, forked the set.
-   */
+  /** Ruling 5: the detection set is a security control and must not differ by call site. */
   it("declares no credential pattern outside the shared leaf", async () => {
     const offenders: string[] = [];
     const stack = [DESKTOP_SRC, GUI_APP_SRC, SHARED_ROOT, MOBILE_SRC];

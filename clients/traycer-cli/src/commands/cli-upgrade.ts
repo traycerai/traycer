@@ -31,55 +31,14 @@ import { stageWellKnownCliBinary } from "../store/well-known-cli";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { withCliLock } from "../store/cli-lock";
 
-// `traycer cli upgrade` - self-upgrade the installed CLI binary.
-//
-// Decision matrix based on the CLI install manifest's `source`:
-//
-//   desktop / manual                → self-replace the binary in place.
-//                                     If the live binary is locked
-//                                     (Windows supervisor running, or
-//                                     POSIX EBUSY), stage the new
-//                                     binary and record pendingUpgrade
-//                                     so the next controlled service
-//                                     restart finalises the swap.
-//   homebrew / winget / scoop /
-//   apt / rpm                       → refuse self-upgrade and tell the
-//                                     user to run the package
-//                                     manager's upgrade command. Do
-//                                     NOT touch the package-manager-
-//                                     owned binary.
-//
-// Pending-upgrade semantics:
-//
-//   * The first attempt always tries an atomic rename (verify → write
-//     to a sibling temp path → rename over the live binary).
-//   * If the rename fails with EBUSY/EPERM/EACCES (typical when a
-//     long-running supervisor has the binary open on Windows), we
-//     keep the staged binary, record it in `pendingUpgrade`, and exit
-//     0 with a "staged" status. Future CLI invocations (or the
-//     supervisor restart) finalise the swap.
-//   * On success we update the manifest's top-level version/path and
-//     clear any prior pendingUpgrade.
-//
-// Target-version contract (audit CLI-013):
-//
-//   The rolling feed publishes ONE build's platform assets. There is no
-//   per-version asset map, so no historical version is resolvable. The
-//   version stamped into the manifest is therefore always the feed's
-//   own `version` - the one its `platforms` map describes - and
-//   `--target` is a GUARD, not a selector: it asserts which build the
-//   caller expected and fails when the feed no longer serves it. That
-//   keeps installed bytes and recorded version inseparable; the
-//   previous behaviour downloaded the feed's build and recorded the
-//   caller's arbitrary string.
+// Self-upgrade the installed CLI binary. Package-manager-owned sources refuse; live-locked binaries record `pendingUpgrade`.
 
 export interface CliUpgradeArgs {
   // When true, fetch the CLI manifest and report what would be done
   // without actually replacing or staging anything.
   readonly dryRun: boolean;
   // Optional assertion that the feed still serves this exact version.
-  // Not a selector - see the target-version contract above. `null`
-  // accepts whatever the feed currently publishes.
+  // Not a selector - see the target-version contract above.
   readonly targetVersion: string | null;
 }
 
@@ -124,9 +83,8 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           });
         }
 
-        // Package-manager-owned CLIs must go through the package
-        // manager. We refuse self-replace even with --force to honour
-        // the ownership contract spelled out in the Tech Plan.
+        // Package-manager-owned CLIs must go through the package manager.
+        // We refuse self-replace even with --force to honour the ownership contract spelled out in the Tech Plan.
         if (PACKAGE_MANAGER_CLI_SOURCES.has(manifest.source)) {
           const hint = UPGRADE_HINT_FOR_SOURCE[manifest.source];
           ctx.runtime.logger.warn(
@@ -159,10 +117,8 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           workUnits: null,
         });
         const versions = await fetchCliVersions();
-        // The feed's own `version`, never `latest` and never the
-        // caller's string: this is the only version whose bytes we can
-        // actually resolve, so it is the only one we may install or
-        // record. See the target-version contract at the top of the file.
+        // The feed's own `version`, never `latest` and never the caller's string: this is the only version whose bytes we can actually resolve, so it is the only one we may install or record.
+        // See the target-version contract at the top of the file.
         const targetVersion = cliAssetVersion(versions);
         if (
           args.targetVersion !== null &&
@@ -234,9 +190,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
               source: manifest.source,
               binaryPath: manifest.binaryPath,
               downloadUrl: asset.url,
-              // Emitted so callers (and the end-to-end test the audit
-              // asks for) can tie the reported version to the exact
-              // bytes it names, rather than trusting the number alone.
+              // Emitted so callers (and the end-to-end test the audit asks for) can tie the reported version to the exact bytes it names, rather than trusting the number alone.
               downloadSha256: asset.sha256,
             },
             human: `would upgrade cli ${manifest.version} → ${targetVersion} (source=${manifest.source}, url=${asset.url})`,
@@ -244,15 +198,8 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           };
         }
 
-        // Staging goes NEXT TO the live binary so publication is a
-        // same-filesystem rename. An unwritable install directory is
-        // therefore fatal, and fatal HERE - before the download - rather
-        // than after it: publishing atomically means creating a file in
-        // that directory, so a directory we cannot create files in has no
-        // successful path left. The old code staged into the OS tempdir
-        // instead, which only deferred the problem to a cross-device
-        // publication that fails the same way, having first downloaded
-        // (and then leaked) a full executable per attempt.
+        // Staging goes NEXT TO the live binary so publication is a same-filesystem rename.
+        // An unwritable install directory is therefore fatal, and fatal HERE - before the download - rather than after it: publishing atomically means creating a file in that directory, so a directory we cannot create files in has no successful path left.
         const installDir = dirname(manifest.binaryPath);
         if (!(await directoryWritable(installDir))) {
           ctx.runtime.logger.warn(
@@ -324,10 +271,8 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
                     ? "CLI download stalled; retrying"
                     : `CLI download ${heartbeat.phase} ${heartbeat.attempt}`,
                 percent: null,
-                // Attempt counters are not a transfer measurement. Feeding
-                // them to the byte fields made the progress bar redraw as
-                // "1 of 200" on every retry; all three stay null so the
-                // renderer holds the last real download values.
+                // Attempt counters are not a transfer measurement.
+                // Feeding them to the byte fields made the progress bar redraw as "1 of 200" on every retry; all three stay null so the renderer holds the last real download values.
                 bytes: null,
                 totalBytes: null,
                 workUnits: null,
@@ -454,23 +399,13 @@ async function tryReplaceLiveBinary(opts: {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  // The release digest, when the caller has one in scope. The
-  // same-volume rename path moves the already-verified staged file
-  // byte-for-byte and never consults it; it matters on the EXDEV path,
-  // where the bytes go through `copyFile`. Callers without it (the
-  // deferred finalize path, whose persisted `pendingUpgrade` record
-  // carries no digest) pass `null` and get the staged file's own digest
-  // instead - see `publishAcrossFilesystems`, which never publishes
-  // unverified bytes either way.
+  // The release digest, when the caller has one in scope.
+  // The same-volume rename path moves the already-verified staged file byte-for-byte and never consults it; it matters on the EXDEV path, where the bytes go through `copyFile`.
   readonly expectedSha256: string | null;
   readonly logger: ILogger;
 }): Promise<ReplaceResult> {
-  // On Windows the rename will fail with EBUSY/EPERM if the live binary
-  // is mapped into a running process. We catch those, treat them as
-  // "locked", and leave the staged binary in place for the supervisor
-  // to pick up on next restart. POSIX rename succeeds even if the file
-  // is open, but EACCES from a read-only filesystem still indicates
-  // "we can't swap, keep it staged".
+  // On Windows the rename will fail with EBUSY/EPERM if the live binary is mapped into a running process.
+  // We catch those, treat them as "locked", and leave the staged binary in place for the supervisor to pick up on next restart.
   try {
     opts.logger.info("CLI upgrade attempting live binary replacement", {
       environment: opts.environment,
@@ -495,9 +430,8 @@ async function tryReplaceLiveBinary(opts: {
         errorMessage: err instanceof Error ? err.message : String(err),
       };
     }
-    // POSIX cross-device rename: the staged bytes are on another
-    // volume, so they have to be copied. Publication still goes through
-    // a destination-side temp + rename - see publishAcrossFilesystems.
+    // POSIX cross-device rename: the staged bytes are on another volume, so they have to be copied.
+    // Publication still goes through a destination-side temp + rename - see publishAcrossFilesystems.
     if (code === "EXDEV") {
       opts.logger.info("CLI upgrade falling back to cross-device publication", {
         environment: opts.environment,
@@ -525,28 +459,7 @@ async function tryReplaceLiveBinary(opts: {
   }
 }
 
-// Cross-filesystem publication of the staged binary (audit CLI-014).
-//
-// `rename` refused with EXDEV, so the bytes genuinely have to be copied.
-// They are never copied INTO the live path: an interrupted process, a
-// full disk, or a short write there leaves the user holding a truncated
-// executable, and the previous implementation's digest check then
-// unlinked the live path outright - turning a corrupt CLI into no CLI.
-//
-// Instead the copy lands on a sibling temp file on the DESTINATION
-// filesystem, is verified there, and is published with the same atomic
-// rename the same-volume path uses. That is also what "retain/recover
-// the previous binary" reduces to once publication is atomic: every
-// failure mode before the rename leaves the previous binary
-// byte-for-byte intact, so there is no window in which it is gone and
-// nothing to restore from.
-//
-// `cli upgrade` no longer reaches this: it stages beside the live binary
-// and refuses outright when that directory is unwritable, so its rename
-// is same-volume by construction. What still reaches it is the deferred
-// finalize path holding a `pendingUpgrade` an OLDER CLI staged in the OS
-// tempdir - which is exactly the compatibility case this must keep
-// handling, and the one whose record carries no release digest.
+// Cross-filesystem publication of the staged binary: copy then rename, never rename across devices.
 async function publishAcrossFilesystems(opts: {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
@@ -564,26 +477,13 @@ async function publishAcrossFilesystems(opts: {
       .slice(2, 8)}.tmp`,
   );
   try {
-    // What the published copy must hash to. Prefer the release digest;
-    // when the caller has none - the deferred finalize path, whose
-    // persisted `pendingUpgrade` record carries no digest - fall back to
-    // the staged file's own digest, read here, immediately before the
-    // copy. That is strictly weaker: it proves the published bytes equal
-    // the staged bytes, NOT that the staged bytes are still the release.
-    // Authenticating a staged file that was tampered with between
-    // download and finalize needs the digest persisted alongside
-    // `pendingUpgrade`, which is a `@traycer/protocol` schema change.
-    // But it does close the gap that matters here - copyFile is not
-    // byte-for-byte safe, so an unverified cross-volume copy could
-    // publish a short or corrupt file over a working CLI and report
-    // success. There is now no publication path that skips verification.
+    // What the published copy must hash to.
+    // Prefer the release digest; when the caller has none - the deferred finalize path, whose persisted `pendingUpgrade` record carries no digest - fall back to the staged file's own digest, read here, immediately before the copy.
     const expectedPublishedSha256 =
       opts.expectedSha256 ??
       (await hashFileSha256(opts.stagedBinaryPath, null));
     await copyFile(opts.stagedBinaryPath, publishPath);
-    // The staged binary already carries the executable bit on POSIX, but
-    // it is set on the staged path, not inherited by a fresh copy under
-    // every umask - stamp it on the file that is actually published.
+    // The staged binary already carries the executable bit on POSIX, but it is set on the staged path, not inherited by a fresh copy under every umask - stamp it on the file that is actually published.
     if (process.platform !== "win32") {
       await chmod(publishPath, 0o755);
     }
@@ -626,11 +526,8 @@ async function publishAcrossFilesystems(opts: {
       },
       errorFromUnknown(prepareErr),
     );
-    // The common cause is an install directory the user cannot write
-    // to - which is also why staging landed on another volume in the
-    // first place. There is no atomic publication without creating a
-    // file next to the live binary, so say what to fix rather than
-    // streaming bytes over the live path the way the old fallback did.
+    // The common cause is an install directory the user cannot write to - which is also why staging landed on another volume in the first place.
+    // There is no atomic publication without creating a file next to the live binary, so say what to fix rather than streaming bytes over the live path the way the old fallback did.
     throw cliError({
       code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
       message:
@@ -655,9 +552,8 @@ async function publishAcrossFilesystems(opts: {
     const publishCode = errnoCodeOf(publishErr);
     await safeUnlink(publishPath, opts.environment, opts.logger);
     if (isBinaryLockedCode(publishCode)) {
-      // Same contract as the same-volume path: a held binary is a
-      // deferrable state, not a failure. The staged binary is still
-      // where the caller left it, so `pendingUpgrade` stays finalisable.
+      // Same contract as the same-volume path: a held binary is a deferrable state, not a failure.
+      // The staged binary is still where the caller left it, so `pendingUpgrade` stays finalisable.
       opts.logger.warn("CLI upgrade live binary is locked", {
         environment: opts.environment,
         errorCode: publishCode,
@@ -703,22 +599,7 @@ async function publishAcrossFilesystems(opts: {
 }
 
 // Where the download lands, guaranteed NOT to be the live binary.
-//
-// `downloadToFile` treats its destination as a RESUMABLE PARTIAL: it
-// reads the existing size to resume from, and discards or truncates it
-// on a restart. Pointed at the live executable that is not a download,
-// it is destruction - resuming "from" a working CLI's bytes yields a
-// corrupt file, and a restart deletes it outright, before any digest is
-// ever checked.
-//
-// The old name (`traycer-<version>-<platform>`) could collide: it is
-// exactly the shape a re-anchored manual install may already have, and
-// `cli re-anchor` records the version it is told rather than the one in
-// the filename, so `manifest.version != targetVersion` while
-// `basename(binaryPath) == <staging template>` is reachable. The leading
-// dot plus the explicit alias check below take the collision from
-// "unlikely" to "not reachable by naming", within the limit stated on
-// `pathsMayAlias`.
+// `downloadToFile` treats its destination as a RESUMABLE PARTIAL: it reads the existing size to resume from, and discards or truncates it on a restart.
 function resolveStagingPath(opts: {
   readonly installDir: string;
   readonly targetVersion: string;
@@ -729,46 +610,23 @@ function resolveStagingPath(opts: {
     opts.installDir,
     `.traycer-upgrade-${opts.targetVersion}-${opts.platformKey}.download${binaryExtension()}`,
   );
-  // Deterministic on purpose - a retry reuses one staging file instead of
-  // littering the install directory. `.staged` only ever applies to a
-  // live path pathological enough to be named like the staging file, and
-  // cannot itself collide, since one path cannot equal both spellings.
-  //
-  // NOTE for anyone asserting on this directory's contents: two unrelated
-  // temp families live here and both carry `.traycer-upgrade-`. THIS one
-  // ends in `.download` and is deliberately LEFT BEHIND after a failure
-  // so the next attempt reuses it. The other ends in `.tmp` (see
-  // `publishAcrossFilesystems`) and is always cleaned up. Match on the
-  // suffix, never on the shared prefix.
+  // Deterministic on purpose - a retry reuses one staging file instead of littering the install directory.
+  // `.staged` only ever applies to a live path pathological enough to be named like the staging file, and cannot itself collide, since one path cannot equal both spellings.
   return pathsMayAlias(candidate, opts.livePath)
     ? `${candidate}.staged`
     : candidate;
 }
 
-// Whether two paths might name the SAME file, for the purpose of refusing
-// to stage onto the live binary.
-//
-// A plain string comparison is not enough: Windows filesystems are
-// case-insensitive (and macOS is by default), so a re-anchored live
-// binary differing from the staging name only in letter case IS that
-// file, while `===` says otherwise - and the cost of getting it wrong is
-// `downloadToFile` resuming from or truncating the working CLI. Either an
-// exact or a case-folded match counts as an alias: a needless `.staged`
-// suffix on a case-sensitive filesystem is harmless, a missed alias is
-// not.
-//
-// LIMIT, stated rather than implied: this catches naming and casing, NOT
-// every filesystem alias. Symlinks, hardlinks and Windows 8.3 short names
-// can still make two spellings the same file and are not detected here.
+// Whether two paths might name the SAME file, for the purpose of refusing to stage onto the live binary.
+// A plain string comparison is not enough: Windows filesystems are case-insensitive (and macOS is by default), so a re-anchored live binary differing from the staging name only in letter case IS that file, while `===` says otherwise - and the cost of getting it wrong is `downloadToFile` resuming from or truncating the working CLI.
 function pathsMayAlias(a: string, b: string): boolean {
   const ra = resolve(a);
   const rb = resolve(b);
   return ra === rb || ra.toLowerCase() === rb.toLowerCase();
 }
 
-// Codes that mean "the live binary is held open / not replaceable right
-// now" rather than "the upgrade is broken". Callers turn these into a
-// retained `pendingUpgrade` instead of an error.
+// Codes that mean "the live binary is held open / not replaceable right now" rather than "the upgrade is broken".
+// Callers turn these into a retained `pendingUpgrade` instead of an error.
 function isBinaryLockedCode(code: string | null): boolean {
   return (
     code === "EBUSY" ||
@@ -801,10 +659,8 @@ async function safeUnlink(
   }
 }
 
-// Loose equality for a user-supplied `--target` assertion against the
-// feed's version. Only surface noise is normalised (whitespace, a
-// leading `v`) - `--target 1.2` never matches `1.2.0`, because the point
-// of the flag is to assert an EXACT build.
+// Loose equality for a user-supplied `--target` assertion against the feed's version.
+// Only surface noise is normalised (whitespace, a leading `v`) - `--target 1.2` never matches `1.2.0`, because the point of the flag is to assert an EXACT build.
 function sameCliVersion(a: string, b: string): boolean {
   return normalizeCliVersion(a) === normalizeCliVersion(b);
 }
@@ -816,13 +672,8 @@ function normalizeCliVersion(value: string): string {
     : trimmed;
 }
 
-// Live CLI bytes just changed at `livePath`; refresh the well-known slot
-// so it keeps serving the current binary. The slot is a byte COPY (see
-// `stageWellKnownCliBinary` for why it is not a symlink), so every writer
-// of live CLI bytes must re-stage it - a stale copy is what the host
-// daemon would keep shelling for doctor / update. Best-effort like every
-// other slot write: a failure leaves the previous slot contents serving,
-// which is the accepted stale-but-functional worst case.
+// Live CLI bytes just changed at `livePath`; refresh the well-known slot so it keeps serving the current binary.
+// The slot is a byte COPY (see `stageWellKnownCliBinary` for why it is not a symlink), so every writer of live CLI bytes must re-stage it - a stale copy is what the host daemon would keep shelling for doctor / update.
 async function refreshWellKnownSlot(
   environment: Environment,
   livePath: string,
@@ -856,9 +707,8 @@ function binaryExtension(): string {
   return process.platform === "win32" ? ".exe" : "";
 }
 
-// Probe whether a pending-upgrade can now be finalised - invoked by
-// future CLI bootstrap paths and Doctor checks. Exported so the
-// Desktop bridge can call it via NDJSON without subprocessing twice.
+// Probe whether a pending-upgrade can now be finalised - invoked by future CLI bootstrap paths and Doctor checks.
+// Exported so the Desktop bridge can call it via NDJSON without subprocessing twice.
 export async function pendingUpgradeFinalisable(opts: {
   readonly stagedBinaryPath: string;
 }): Promise<boolean> {
@@ -885,12 +735,8 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly livePath: string;
       readonly errorMessage: string;
     }
-  // Publication genuinely failed (full disk, unwritable install dir,
-  // digest mismatch on a cross-filesystem copy). Reported rather than
-  // thrown: `host restart` stops the service BEFORE calling this and
-  // relaunches only after it returns, so throwing here would leave the
-  // host down because a bolt-on CLI self-upgrade failed. The live binary
-  // is untouched and `pendingUpgrade` is retained either way.
+  // Publication genuinely failed (full disk, unwritable install dir, digest mismatch on a cross-filesystem copy).
+  // Reported rather than thrown: `host restart` stops the service BEFORE calling this and relaunches only after it returns, so throwing here would leave the host down because a bolt-on CLI self-upgrade failed.
   | {
       readonly status: "publish-failed";
       readonly stagedBinaryPath: string;
@@ -912,16 +758,8 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly binaryPath: string;
     };
 
-// Attempt to complete a previously-staged CLI upgrade. The expected
-// caller is a controlled supervisor restart that has just stopped the
-// host service (which releases the CLI binary lock on Windows). If
-// the staged binary is still present and the live binary can be
-// replaced, the swap happens here and `pendingUpgrade` is cleared.
-//
-// This is intentionally idempotent and tolerant of "nothing to do"
-// states: callers can invoke it on every restart without checking
-// readiness first, and Doctor uses the same function to surface the
-// "still locked" diagnostic without re-running the upgrade download.
+// Attempt to complete a previously-staged CLI upgrade.
+// The expected caller is a controlled supervisor restart that has just stopped the host service (which releases the CLI binary lock on Windows).
 export async function finalizePendingCliUpgrade(opts: {
   readonly environment: Environment;
 }): Promise<FinalizePendingCliUpgradeOutcome> {
@@ -974,9 +812,7 @@ export async function finalizePendingCliUpgrade(opts: {
       environment: opts.environment,
       stagedBinaryPath: pending.stagedBinaryPath,
       livePath: manifest.binaryPath,
-      // The persisted `pendingUpgrade` record carries no release digest,
-      // so this path pins the copy to the staged file's own digest
-      // instead - see `publishAcrossFilesystems`.
+      // The persisted `pendingUpgrade` record carries no release digest, so this path pins the copy to the staged file's own digest instead - see `publishAcrossFilesystems`.
       expectedSha256: null,
       logger,
     });
@@ -1052,9 +888,8 @@ export async function finalizePendingCliUpgrade(opts: {
   };
 }
 
-// Inspect manifest for an outstanding pending-upgrade without
-// touching the live binary. Doctor uses this read-only path to render
-// the pending-upgrade issue card.
+// Inspect manifest for an outstanding pending-upgrade without touching the live binary.
+// Doctor uses this read-only path to render the pending-upgrade issue card.
 export async function readPendingCliUpgrade(opts: {
   readonly environment: Environment;
 }): Promise<{

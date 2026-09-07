@@ -1,13 +1,4 @@
-/**
- * Content fingerprints for caches that must key on large strings without
- * retaining them.
- *
- * Both callers here (the shiki highlight cache, the accumulated-changes diff
- * counter) sit in front of work that is far more expensive than a linear pass
- * over the source, and both are fed fresh string instances on every frame - so
- * identity comparison is useless and embedding the source in the key would
- * double its retained size.
- */
+/** Content fingerprints for caches that must key on large strings without retaining them. */
 
 /**
  * 53-bit string hash (cyrb53).
@@ -30,8 +21,7 @@ export function hash53(text: string, seed: number): number {
 }
 
 /**
- * Two independently seeded hashes plus the exact length: ~106 bits of
- * discrimination, and no reference to `text` survives in the result.
+ * Two independently seeded hashes plus the exact length: ~106 bits of discrimination, and no reference to `text` survives in the result.
  */
 export function contentFingerprint(text: string): string {
   const low = hash53(text, 0).toString(36);

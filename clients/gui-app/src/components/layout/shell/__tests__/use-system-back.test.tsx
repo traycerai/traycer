@@ -1,11 +1,4 @@
-/**
- * What an OS back request does, in the order Android users expect: an open
- * drawer closes, a covering modal dismisses, otherwise the app's own history
- * steps back through the SAME `goBack` the edge swipe and the desktop arrows
- * call, and with nothing behind the app steps out of the way.
- *
- * The shell is a fake `systemBack` capability; every other piece is real.
- */
+/** What an OS back request does, in the order Android users expect. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -79,9 +72,7 @@ afterEach(() => {
 });
 
 describe("useSystemBack", () => {
-  // The shell mounts under every route-level test, and not all of them stand
-  // up a runner host. No host is the same answer as a host with no capability:
-  // nothing to attach to, nothing attached.
+  // The shell mounts under every route-level test, and not all of them stand up a runner host.
   it("attaches nothing when mounted outside a runner host provider", () => {
     const router = makeRouter(createMemoryHistory({ initialEntries: ["/"] }));
 
@@ -130,11 +121,8 @@ describe("useSystemBack", () => {
     expect(systemBack.minimize).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * Driven through a REAL sheet, uncontrolled so that the dismissal the press
-   * triggers is the primitive's own. Setting the barrier style by hand would
-   * pass against a signal no surface ever produces.
-   */
+  /** Driven through a real sheet, uncontrolled so that the dismissal the press triggers is the primitive's own.
+   * Setting the barrier style by hand would pass against a signal no surface ever produces. */
   it("dismisses a covering modal rather than navigating beneath it", async () => {
     const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
     const backSpy = vi.spyOn(history, "back");

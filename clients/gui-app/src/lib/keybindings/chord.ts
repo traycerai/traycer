@@ -14,24 +14,8 @@ import {
 } from "@traycer-clients/shared/keybindings/chord-core";
 
 /**
- * Canonical chord string: `mod+ctrl+shift+alt+key` where modifiers appear in
- * this fixed order and only when active. `mod` is the platform-primary
- * modifier (Meta on Mac, Control elsewhere); `ctrl` is the Control key
- * SPECIFICALLY (distinct from `mod` on macOS, where Control ≠ Command). `key`
- * is the normalized physical key identifier (see `normalizeCode`).
- *
- * Examples: `mod+1`, `mod+shift+h`, `mod+alt+arrowleft`, `mod+,`, `ctrl+shift+m`.
- *
- * Note: `chordFromEvent` never emits `ctrl`. It treats `mod` as the
- * platform-primary modifier: Command on macOS, Command/Control elsewhere.
- * `ctrl` chords are matched by consumers that need a Control-specific binding
- * (e.g. the dictation hotkey).
- *
- * The parse/format core (`formatChord`/`parseChordString` and their types)
- * lives in `@traycer-clients/shared/keybindings/chord-core` - it has no
- * `navigator`/DOM dependency, so it's also importable from the Electron main
- * process (global-shortcut registration). Everything below that touches
- * `KeyboardEvent` or platform display labels stays here.
+ * Canonical chord string: `mod+ctrl+shift+alt+key` where modifiers appear in this fixed order and only when active.
+ * `mod` is the platform-primary modifier (Meta on Mac, Control elsewhere); `ctrl` is the Control key SPECIFICALLY (distinct from `mod` on macOS, where Control ≠ Command).
  */
 export type { ChordKey, ChordParts, ChordString };
 export { formatChord, parseChordString };
@@ -136,10 +120,7 @@ export function parseChordFromEvent(event: KeyboardEvent): ChordParts | null {
   return { mod, ctrl: false, shift, alt, key };
 }
 
-/**
- * Returns the canonical chord string if `event` encodes a complete chord
- * (not a bare modifier), otherwise null.
- */
+/** Returns the canonical chord string if `event` encodes a complete chord (not a bare modifier), otherwise null. */
 export function chordFromEvent(event: KeyboardEvent): ChordString | null {
   const parts = parseChordFromEvent(event);
   if (parts === null) return null;
@@ -147,12 +128,8 @@ export function chordFromEvent(event: KeyboardEvent): ChordString | null {
 }
 
 /**
- * Like `parseChordFromEvent` but distinguishes the Control key from the
- * platform-primary modifier on macOS (where ⌃ ≠ ⌘): Command → `mod`,
- * Control → `ctrl`. Non-mac is unchanged (Control IS the primary, captured as
- * `mod`). Used by the chord-capture UI and the provider so a Control-specific
- * binding (e.g. dictation) can be authored and matched - Control is also the
- * only modifier macOS lets us detect on key-release, which push-to-talk needs.
+ * Like `parseChordFromEvent` but distinguishes the Control key from the platform-primary modifier on macOS (where ⌃ ≠ ⌘): Command → `mod`, Control → `ctrl`.
+ * Non-mac is unchanged (Control IS the primary, captured as `mod`).
  */
 export function parseChordFromEventCtrlAware(
   event: KeyboardEvent,
@@ -177,13 +154,7 @@ export function chordFromEventCtrlAware(
 }
 
 /**
- * The single chord an event should be matched against, applying the
- * ctrl-aware-vs-platform-primary precedence: when the Control-specific chord
- * (macOS ⌃, distinct from ⌘) differs from the platform-primary chord, the
- * event matches ONLY that ctrl chord - so a bare macOS Control chord can't fall
- * through to a plain key binding. Otherwise the platform-primary chord is used.
- * Centralizes this security-relevant contract for every consumer (event→action
- * matching in the provider, and `chordMatchesEvent`).
+ * The single chord an event should be matched against, applying the ctrl-aware-vs-platform-primary precedence: when the Control-specific chord (macOS ⌃, distinct from ⌘) differs from the platform-primary chord, the event matches ONLY that ctrl chord - so a.
  */
 export function resolveMatchingChord(event: KeyboardEvent): ChordString | null {
   const eventChord = chordFromEvent(event);
@@ -215,18 +186,8 @@ export function formatChordForDisplay(chord: ChordString): string {
   return isMac() ? segs.join("") : segs.join("+");
 }
 
-// ---------------------------------------------------------------------------
-// Modifier-only chords - used by "digit" actions whose effective key is one
-// of 0..9 at runtime (e.g. `epic.switch.byDigit` can compose multi-digit tab
-// numbers from those keys). Stored as `mod`, `alt`, `mod+alt`, etc. (no key
-// token).
-//
-// These intentionally support only `mod`/`shift`/`alt` - NOT the Control-
-// specific `ctrl` token. Digit/leader actions are not rebindable to a chord in
-// the Settings UI (they render read-only), so a `ctrl` leader can't be authored;
-// `parseModifierChord` returning null for a `ctrl` token is the correct
-// "unsupported" outcome rather than a gap.
-// ---------------------------------------------------------------------------
+// Modifier-only chords - used by "digit" actions whose effective key is one of 0..9 at runtime (e.g.
+// `epic.switch.byDigit` can compose multi-digit tab numbers from those keys).
 
 export interface ModifierMask {
   readonly mod: boolean;
@@ -276,8 +237,8 @@ export function modifierMaskMatches(
 }
 
 /**
- * Human label for a modifier-only chord with a specific digit suffix -
- * e.g. `formatModifierChordForDisplay("mod", "1")` → `⌘1`.
+ * Human label for a modifier-only chord with a specific digit suffix - e.g.
+ * `formatModifierChordForDisplay("mod", "1")` → `⌘1`.
  */
 export function formatModifierChordForDisplay(
   chord: ChordString,

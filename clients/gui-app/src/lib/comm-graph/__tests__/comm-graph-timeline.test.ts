@@ -114,9 +114,8 @@ describe("commGraphEventsAsOfCursor", () => {
   });
 
   it("still names the same row after an older event is merged in behind it", () => {
-    // Snapshot overflow and reconnect gap-fill legally arrive as `event`
-    // frames, so a row can land BEFORE the cursor in the merged array. An
-    // index-based cursor would slide onto its neighbour here.
+    // Snapshot overflow and reconnect gap-fill legally arrive as `event` frames, so a row can land BEFORE the cursor in the merged array.
+    // An index-based cursor would slide onto its neighbour here.
     const hostA = [
       a2a({ id: 1, timestamp: 10 }),
       a2a({ id: 2, timestamp: 30 }),

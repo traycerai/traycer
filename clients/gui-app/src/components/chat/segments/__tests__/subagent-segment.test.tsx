@@ -200,10 +200,8 @@ describe("<SubagentSegment /> promoted feed", () => {
     expect(screen.getByText("Scanner").closest("[data-find-skip]")).toBeNull();
     expect(screen.getByText("analysis").closest("[data-find-skip]")).toBeNull();
 
-    // The latest-progress header mirror duplicates the body's last progress line
-    // (see "shows ... in both the header summary and the history list" above).
-    // The projection does not index it, so it must be skipped by the highlighter
-    // to keep count == highlightable.
+    // The latest-progress header mirror duplicates the body's last progress line (see "shows ... in both the header summary and the history list" above).
+    // The projection does not index it, so it must be skipped by the highlighter to keep count == highlightable.
     expect(
       screen.getByText("Scanning").closest("[data-find-skip]"),
     ).not.toBeNull();
@@ -693,9 +691,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     );
 
     const trigger = screen.getByRole("button", { name: /Subagent/ });
-    // The name + agent type render inside the always-visible header trigger, and
-    // that trigger carries the header find-unit anchor so the painter can target
-    // it without expanding the body.
+    // The name + agent type render inside the always-visible header trigger, and that trigger carries the header find-unit anchor so the painter can target it without expanding the body.
     expect(trigger.getAttribute("data-chat-find-unit")).toBe(
       chatFindSubagentHeaderUnitId("test-header-anchor"),
     );
@@ -831,10 +827,7 @@ describe("<SubagentSegment /> promoted feed", () => {
   });
 
   it("shows a neutral stopped badge for a subagent whose terminal status is errored but stopped is true", () => {
-    // `status: "errored"` with `stopped: true` is how the host reports a
-    // subagent that was explicitly stopped (e.g. a deadline-killed run) rather
-    // than one that genuinely failed - distinct from `endState`, which only
-    // covers `interrupted`/`superseded` statuses.
+    // `status: "errored"` with `stopped: true` is how the host reports a subagent that was explicitly stopped (e.g. a deadline-killed run) rather than one that genuinely failed - distinct from `endState`, which only covers `interrupted`/`superseded` statuses.
     render(
       <SubagentSegment
         id="test-subagent-stopped"

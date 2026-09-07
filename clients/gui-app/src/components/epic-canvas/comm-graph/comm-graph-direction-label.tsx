@@ -1,34 +1,14 @@
 /**
- * `sender → receiver` for one A2A row.
- *
- * Shared by both detail panels ON PURPOSE. The canvas edge is undirected, so
- * these lists are the ONLY places direction is expressed - if they rendered it
- * differently, a reader moving between them would have to re-learn it. One
- * component, one shape.
- *
- * BOTH ENDPOINTS ARE REACHABLE, and the affordance says WHICH KIND of
- * reachable. Two link species exist and they must not share one look - the
- * live pass proved that when they do, every link is read as the stronger one
- * and the weaker one reads as broken navigation:
- *
- * - a SCROLL link (plain underline-on-hover name) opens the agent's chat AND
- *   lands somewhere specific - a delivered message, a resolved "Sent message"
- *   card, the transcript's start or end. Its `scrollSuffix` names the landing
- *   in the accessible label.
- * - a PLAIN OPEN (name + ↗) only focuses the agent's tile. The glyph is the
- *   same "opens elsewhere" cue the detail panel's header button uses.
- *
- * An endpoint with no id, or one this epic does not project, renders as plain
- * text: a dead-looking link is the one wrong answer.
+ * The canvas edge is undirected, so these lists are the ONLY places direction is expressed - if they rendered it differently, a reader moving between them would have to re-learn it.
+ * Two link species exist and they must not share one look - the live pass proved that when they do, every link is read as the stronger one and the weaker one reads as broken navigation: - a SCROLL link (plain underline-on-hover name) opens the agent's chat AND lands somewhere specific - a delivered message, a resolved "Sent message" card, the transcript's start or end.
  */
 import { ArrowUpRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { commGraphAgentLabel } from "@/lib/comm-graph/comm-graph-labels";
 
 /**
- * What one endpoint does when clicked. `onOpen: null` renders plain text;
- * `scrollSuffix: null` is a plain tile open (↗); a non-null suffix names the
- * scroll landing (" and scroll to this message" / " to the start" / ...).
+ * What one endpoint does when clicked.
+ * `onOpen: null` renders plain text; `scrollSuffix: null` is a plain tile open (↗); a non-null suffix names the scroll landing (" and scroll to this message" / " to the start" / ...).
  */
 export interface CommGraphEndpointAction {
   readonly onOpen: (() => void) | null;

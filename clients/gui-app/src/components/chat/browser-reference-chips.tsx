@@ -5,9 +5,7 @@ import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
 export function BrowserReferenceChips(props: {
   readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
 }) {
-  // Every other message renders this unconditionally with an empty array, so
-  // the common case must stay cheap - only a message with annotations
-  // attached does real work here.
+  // Every other message renders this unconditionally with an empty array, so the common case must stay cheap - only a message with annotations attached does real work here.
   if (props.annotations.length === 0) return null;
   return (
     <div className="mb-2 flex w-full min-w-0 flex-col gap-1.5">

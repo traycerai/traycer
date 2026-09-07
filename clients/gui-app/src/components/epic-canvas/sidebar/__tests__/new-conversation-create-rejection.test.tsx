@@ -21,26 +21,7 @@ import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
 /**
- * The in-Epic new-agent modal's CREATE-REJECTED path.
- *
- * Staging finding, 2026-08-19: a "New worktree" whose branch name already
- * existed made the host hard-fail `epic.createChat` (409, the `git worktree
- * add` reason on the message). The eager-opened "Untitled agent" tab then sat
- * there - "Loading this agent from <host>…", then, once the 15s tile budget
- * elapsed, "That host hasn't answered." The host HAD answered; it refused.
- *
- * The mechanism that takes such a tab down already existed - a `failed` handoff
- * is terminal, which releases `pendingCreateArtifactIds` and lets the record
- * sweep close the tile - but the modal marked the failure from `mutate`'s
- * per-call `onError`, and TanStack Query v5 drops those once the observer has
- * no listeners. This modal closes itself SYNCHRONOUSLY on submit, so that
- * callback could never run: the handoff stayed non-terminal until the 60s
- * orphan deadline, which is a backstop written for a host that says nothing.
- *
- * So the assertions here are about the handoff reaching `failed` DESPITE the
- * unmount. The harness reproduces the unmount exactly as the real dialog does
- * it (`props.open ? <Body/> : null`), because a harness that keeps the body
- * mounted passes either way and proves nothing.
+ * This modal closes itself SYNCHRONOUSLY on submit, so that callback could never run: the handoff stayed non-terminal until the 60s orphan deadline, which is a backstop written for a host that says nothing.
  */
 
 const DIRTY_CONTENT: JsonContent = {
@@ -51,11 +32,8 @@ const DIRTY_CONTENT: JsonContent = {
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-a";
 /**
- * Signed in for every case here, deliberately. `userId` is half the handoff
- * key, and it is also what decides whether the request carries an
- * `initialMessage` at all - which is the only way a host can answer
- * `initialTurnStarted: true`. A signed-out harness would let the success case
- * assert a response the system cannot actually produce.
+ * `userId` is half the handoff key, and it is also what decides whether the request carries an `initialMessage` at all - which is the only way a host can answer `initialTurnStarted: true`.
+ * A signed-out harness would let the success case assert a response the system cannot actually produce.
  */
 const USER_ID = "user-1";
 
@@ -284,9 +262,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 }));
 
 /**
- * The real dialog renders its body behind `props.open`, so submitting UNMOUNTS
- * the component that owns the create mutation. That is the whole point of this
- * suite, so the harness reproduces it rather than keeping the body alive.
+ * That is the whole point of this suite, so the harness reproduces it rather than keeping the body alive.
  */
 function Harness() {
   const [open, setOpen] = useState(true);
@@ -318,10 +294,8 @@ function Harness() {
 }
 
 /**
- * The handoff for this epic, read by SCOPE - the modal mints its own chat id,
- * so the test cannot name it up front. `initialChatHandoffKey` is
- * {user, epic}, and the host segment is data on the record rather than part of
- * the key.
+ * The handoff for this epic, read by SCOPE - the modal mints its own chat id, so the test cannot name it up front.
+ * `initialChatHandoffKey` is {user, epic}, and the host segment is data on the record rather than part of the key.
  */
 function handoff(): InitialChatHandoff | null {
   return selectInitialChatHandoff(useInitialChatHandoffStore.getState(), {
@@ -338,11 +312,6 @@ function renderModal(): void {
   });
 }
 
-/**
- * Submit, then drain the microtasks the create's promise chain settles on.
- * `.then` and `.catch` are separate links, so an already-rejected `mutateAsync`
- * still needs more than one turn to reach the failure arm.
- */
 async function submitAndSettle(): Promise<void> {
   await act(async () => {
     testState.bodySubmit?.();
@@ -400,11 +369,6 @@ describe("new-conversation modal: a rejected create leaves no live pending tab",
     expect(settled?.failureReason).toBe("Couldn't create the agent.");
   });
 
-  // Review #1297 finding 3, the symmetric case. `markInitialTurnStarted` was
-  // dead for the SAME observer-unmount reason as the failure arm: the host has
-  // already kicked the provider turn from `initialMessage`, and this is what
-  // tells the handoff driver not to send it again. A regression leaves the
-  // handoff short of `sending` and costs a redundant round trip.
   it("marks the initial turn started when the create resolves after the modal has closed", async () => {
     testState.createChat.mockResolvedValue({ initialTurnStarted: true });
     renderModal();
@@ -425,10 +389,6 @@ describe("new-conversation modal: a rejected create leaves no live pending tab",
   });
 
   it("fails only the handoff that was actually rejected, never a later create's", async () => {
-    // The handoff key is {user, epic}, so a second create in this epic REPLACES
-    // the entry. Now that the rejection arm actually runs, an unguarded
-    // `markFailed` would close the second agent's tab when the first one's
-    // rejection landed - which is why the modal uses `markFailedByAction`.
     let rejectFirst: (error: HostRpcError) => void = () => undefined;
     testState.createChat.mockReturnValueOnce(
       new Promise((_resolve, reject) => {

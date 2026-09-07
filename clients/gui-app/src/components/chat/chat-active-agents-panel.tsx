@@ -11,16 +11,7 @@ import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { cn } from "@/lib/utils";
 
-/**
- * Collapsible "Active agents" panel docked above the composer, mirroring
- * the Todo / Diff pinned panels. "Stop all" stops this chat + its whole
- * delegated subtree. While collapsed it sits in the header (like the
- * accumulated-changes "Undo all") for one-click access; expanding moves it down
- * onto the current chat's own row, where it belongs alongside the agent it acts
- * on, so it is never shown twice. The expanded list shows the current chat and
- * its active sub-agents, each individually stoppable on hover. Stops cascade so
- * stopping an agent also stops the agents it in turn delegated to.
- */
+/** While collapsed it sits in the header (like the accumulated-changes "Undo all") for one-click access; expanding moves it down onto the current chat's own row, where it belongs alongside the agent it acts on, so it is never shown twice. */
 export function ActiveAgentsPanel(props: {
   readonly epicId: string;
   readonly viewTabId: string;
@@ -71,9 +62,8 @@ export function ActiveAgentsPanel(props: {
           </span>
         </CollapsibleTrigger>
         {open ? null : (
-          // Collapsed: a one-click "Stop all" lives in the header (like the
-          // accumulated-changes "Undo all"). Expanding moves it onto the
-          // current chat's row, so it is never shown in both places at once.
+          // Collapsed: a one-click "Stop all" lives in the header (like the accumulated-changes "Undo all").
+          // Expanding moves it onto the current chat's row, so it is never shown in both places at once.
           <div className="flex shrink-0 items-center gap-1 pr-1.5">
             <AgentStopButton
               epicId={props.epicId}

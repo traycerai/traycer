@@ -13,14 +13,8 @@ import {
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 
-/**
- * "Stop all" over a chat's host-supervised commands, driven against a real
- * `HostClient` and a mock host that refuses some of the stops.
- *
- * The point of the aggregate is what it does NOT do: one dead or unhappy host
- * used to produce one toast per row, because each stop was its own mutation
- * judging its own failure.
- */
+/** "Stop all" over a chat's host-supervised commands, driven against a real `HostClient` and a mock host that refuses some of the stops.
+ * The point of the aggregate is what it does NOT do: one dead or unhappy host used to produce one toast per row, because each stop was its own mutation judging its own failure. */
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 const directoryState = vi.hoisted(() => ({ available: true }));

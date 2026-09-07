@@ -82,9 +82,8 @@ const activeHostEntry = vi.hoisted(() => ({
 
 const activeHostClient = vi.hoisted(() => {
   const client = {
-    // The remote-aware owner identity key (R-1) reads the full active entry, not
-    // just its id, so the fake must answer `getActiveHost` too - with the real
-    // entry, matching `resolveHostById` below rather than contradicting it.
+    // The remote-aware owner identity key (R-1) reads the full active entry, not just its id, so the fake must
+    // answer `getActiveHost` too.
     getActiveHost: () => activeHostEntry,
     getActiveHostId: () => "default-host",
     getRequestContext: () => null,
@@ -93,45 +92,24 @@ const activeHostClient = vi.hoisted(() => {
     request: () => Promise.resolve({}),
     resolveHostById: (hostId: string) =>
       hostId === activeHostEntry.hostId ? activeHostEntry : null,
-    // Redesign P4.2's introduced symbol: `useAddressableHostId` resolves the
-    // effective host through an id-pinned requester now that the active slot is
-    // gone, so a hand-rolled client that does not answer this throws on the
-    // first render that reaches the hook - here, transitively, via the sidebar
-    // rail. Added under an explicit grant rather than by P4.2's own sweep so
-    // this file keeps one writer; the line belongs to their class and their
-    // census, and is attributed there.
-    //
-    // SELF-RETURNING, and only honestly so because this fixture has exactly ONE
-    // host: the requester for `default-host` IS this client. A fixture with a
-    // second host would have to resolve per id, and returning `this` would then
-    // hand back a client addressing the wrong machine.
+    // Added under an explicit grant rather than by own sweep so this file keeps one writer; the line belongs to
+    // their class and their census, and is attributed there.
     createRequesterForHostId: (): unknown => null,
   };
   client.createRequesterForHostId = () => client;
   return client;
 });
 
-// ONE hoisted opener, not a fresh closure per render. This suite is the one
-// that hung for over nine minutes during P2.4 — a synchronous render loop
-// starves the event loop, so `--testTimeout` cannot fire and the run simply
-// stops terminating — and an unstable opener is exactly the dep churn that
-// feeds that shape. The mechanism was fixed at its owner (the provider's
-// presentation writes are idempotent by value), so this is the fixture no
-// longer contradicting the contract of the hook it doubles, not a live fix.
-// Full rationale: `lib/registries/__tests__/chat-session-registry.test.ts`.
+// This suite is the one that hung for over nine minutes during - a synchronous render loop starves the event
+// loop, so `--testTimeout` cannot fire and the run simply stops terminating.
 const hostDirectory = vi.hoisted(() => ({
   findById: (hostId: string) =>
     hostId === activeHostEntry.hostId ? activeHostEntry : null,
   onChange: () => ({ dispose: () => undefined }),
 }));
 
-// This opener REFUSED - "the Epic stream override must prevent socket
-// creation" - and that name described a real contract while the stream
-// override made `EpicSessionProvider` skip opening a transport. The override is
-// gone (a factory built on MAIN cannot cross `postMessage` to a runtime living
-// in the worker), the provider opens unconditionally, and a refusing opener now
-// fails the file. "No socket in tests" is supplied by the fake instead; the
-// suite drives both sessions' streams at the WORKER seam below.
+// The override is gone (a factory built on main cannot cross `postMessage` to a runtime living in the worker),
+// the provider opens unconditionally, and a refusing opener now fails the file.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -149,12 +127,8 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importOriginal) => ({
   useHostStreamClientBindingFor: () => null,
 }));
 
-// Spread the real module rather than enumerate the three exports this suite
-// overrides: this is a whole-app render, so it reaches host hooks no one
-// listed here (`useHostDirectory`, via the status row's sweep dialog). An
-// enumerating factory does not leave those undefined - Vitest THROWS on the
-// access, and the nearest boundary swallows it into a degraded subtree, so
-// the suite fails on an unrelated assertion instead of on the missing export.
+// Spread the real module rather than enumerate the three exports this suite overrides: this is a whole-app
+// render, so it reaches host hooks no one listed here (`useHostDirectory`, via the status row's sweep dialog).
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -179,18 +153,15 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     }),
     useHostBinding: () => ({ hostClient: activeHostClient }),
     useHostClient: () => activeHostClient,
-    // An `importOriginal` spread hands back the REAL spine hook, which throws
-    // outside a provider; `useHostRuntimeClient` is a separate export since
-    // redesign P2.1 and must be overridden explicitly.
+    // An `importOriginal` spread hands back the real spine hook, which throws outside a provider;
+    // `useHostRuntimeClient` is a separate export since redesign and must be overridden explicitly.
     useHostRuntimeClient: () => activeHostClient,
     useHostDirectory: () => hostDirectory,
   };
 });
 
-// `EpicSessionProvider` resolves its host through the selection authority's
-// derived pointer (selection model §1), whose store only a mounted kernel
-// bridge writes - no component test mounts one. Seed it with the same id
-// `activeHostClient.getActiveHostId()` answers, so both scopes agree.
+// `EpicSessionProvider` resolves its host through the selection authority's derived pointer (selection model
+// §1), whose store only a mounted kernel bridge writes - no component test mounts one.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "default-host",
 }));
@@ -198,11 +169,8 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useRemoteSessionPollReadiness: () => false,
   useHostReachability: (hostId: string) => {
-    // `UNKNOWN_HOST_PLACEHOLDER` is the sentinel tab-kind-agnostic callers
-    // pass to keep hook order stable across tab kinds - the real hook answers
-    // "reachable" for it without consulting the directory. It names no host,
-    // so recording it would put a value in `seenTileHostIds` that the
-    // isolation assertion below is not about.
+    // `UNKNOWN_HOST_PLACEHOLDER` is the sentinel tab-kind-agnostic callers pass to keep hook order stable across
+    // tab kinds - the real hook answers "reachable" for it without consulting the directory.
     if (!isUnknownHost(hostId)) {
       hostBoundary.seenTileHostIds.add(hostId);
     }
@@ -365,9 +333,8 @@ describe("<EpicSurface /> split isolation", () => {
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    // RESTORED to the jsdom setup file's coreless worker, never nulled: `null`
-    // means "use the production constructor", which is `new Worker(new
-    // URL(...))` - the one form jsdom cannot execute.
+    // Restored to the jsdom setup file's coreless worker, never nulled: `null` means "use the production
+    // constructor", which is `new Worker(new URL(...))` - the one form jsdom cannot execute.
     __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLeftPanelStore.setState(useLeftPanelStore.getInitialState(), true);
@@ -376,13 +343,8 @@ describe("<EpicSurface /> split isolation", () => {
 
   it("keeps two live Epic bodies isolated across sessions, sidebars, canvases, hosts, and scrolling", async () => {
     const streams: FakeStream[] = [];
-    // A FRESH in-process worker per spawn, which is the whole point in this
-    // file: the two Epic surfaces are two sessions, and one helper instance
-    // owns one bridge pair and one composition - sharing it would give both
-    // sessions the same runtime and quietly defeat the isolation this suite
-    // exists to pin. The stream factory itself is unchanged and still
-    // accumulates into one `streams` array, exactly as the deleted stream
-    // override did when the provider called it once per session.
+    // A fresh in-process worker per spawn, which is the whole point in this file: the two Epic surfaces are two
+    // sessions, and one helper instance owns one bridge pair and one composition.
     __setEpicRuntimeWorkerFactoryForTests(() =>
       createInProcessEpicRuntimeWorker({
         streamClientFactory: (epicId, callbacks) => {

@@ -12,9 +12,8 @@ vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div data-testid="tab-strip" />,
 }));
 
-// Router-dependent like TabStrip: the app-variant header mounts these arrows
-// inside the router tree, but this AppShell unit test renders without a
-// RouterProvider, so stub them out the same way.
+// Router-dependent like TabStrip: the app-variant header mounts these arrows inside the router tree, but this
+// AppShell unit test renders without a RouterProvider, so stub them out the same way.
 vi.mock("@/components/layout/header/history-nav-buttons", () => ({
   HistoryNavButtons: () => <div data-testid="history-nav-buttons" />,
 }));
@@ -65,19 +64,13 @@ vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <div data-testid="rate-limit-header-button" />,
 }));
 
-// The Windows menu strip routes its popup through a TanStack mutation; this
-// provider-light AppShell test has no QueryClient, so stub it like the other
-// host/query-backed header children above.
+// The Windows menu strip routes its popup through a TanStack mutation; this provider-light AppShell test has
+// no QueryClient, so stub it like the other host/query-backed header children above.
 vi.mock("@/components/layout/header/windows-menu-bar", () => ({
   WindowsMenuBar: () => null,
 }));
 
 // NOTE: there is deliberately NO stub for `use-epic-open-in-new-window` here.
-// `RootDndProvider` used to call that flow, which reaches `useRouterState` and
-// throws without a router, so this provider-light test needed a stub. The flow
-// now lives in `TabDetachOwner`, mounted in the ROUTE tree - so it never mounts
-// here at all. If a stub for it ever becomes necessary again, the dependency
-// has moved back into the provider and the fix has regressed.
 vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ResourceMonitorPopover: () => (
     <div data-testid="resource-monitor-header-button" />
@@ -148,10 +141,7 @@ function renderAppShell(): QueryClient {
 }
 
 describe("<AppShell />", () => {
-  // Undefined until a test renders, and reset after every one: a teardown that
-  // dereferences this unconditionally throws over the top of the assertion
-  // error that stopped the render, and a binding that survived the test would
-  // let a test that forgets to render clear the PREVIOUS test's client.
+  // Undefined until a test renders, and reset after every one.
   let queryClient: QueryClient | undefined;
 
   beforeEach(() => {
@@ -202,20 +192,7 @@ describe("<AppShell />", () => {
 
     await screen.findByTestId("app-shell-child");
 
-    // The terminal panel sits in this row as a sibling of the tab host, and its
-    // 1px resize handle carries a 10px `::after` hit area centred on it. With
-    // the panel collapsed the handle is pinned to the row's right edge, so half
-    // that hit area lands outside the viewport. The panel used to be nested
-    // inside the landing page's own `overflow-hidden` box, which absorbed the
-    // overhang; hoisted up here it needs the row to clip, or the overhang
-    // becomes document-level scrollable width and the landing page grows a
-    // horizontal scrollbar. `TopLevelTabHost` already clips itself for the same
-    // reason - this covers everything mounted beside it.
-    //
-    // `overflow-clip` specifically, not `overflow-hidden`: hidden still makes
-    // the row a scroll container that a stray `focus()` / `scrollIntoView` can
-    // scroll and never scroll back (the epic toolbar rows once vanished under
-    // the header this way). Clip has no scroll offset at all.
+    // `TopLevelTabHost` already clips itself for the same reason - this covers everything mounted beside it.
     const surfaceRow = screen.getByTestId("route-adapter-layer").parentElement;
     expect(surfaceRow).not.toBeNull();
     expect(

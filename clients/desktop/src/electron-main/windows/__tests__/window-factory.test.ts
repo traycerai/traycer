@@ -20,10 +20,6 @@ const perfTelemetryState = vi.hoisted(() => ({
   events: [] as unknown[],
 }));
 
-// The renderer-load branch keys off the deploy slot (`config.isDevBuild`),
-// not `app.isPackaged`: dev → Vite dev server, shipped → `app://`.
-// DevTools have their own production-only policy so staging can keep the
-// inspector while still using shipped renderer/runtime wiring.
 const configState = vi.hoisted(() => ({
   isDevBuild: true,
   canOpenDevTools: true,
@@ -206,10 +202,7 @@ describe("loadMainWindow", () => {
 
     await loadMainWindow(target);
 
-    // Shipped (non-dev) builds load through the privileged `app://` scheme so
-    // the renderer gets a real web origin (service workers, strict CSP). The
-    // protocol handler serves files from disk, so app routes must travel via
-    // preload bootstrap args rather than the app:// URL path.
+    // The protocol handler serves files from disk, so app routes must travel via preload bootstrap args rather than the app:// URL path.
     expect(target.loadedUrls).toEqual(["app://renderer/"]);
   });
 

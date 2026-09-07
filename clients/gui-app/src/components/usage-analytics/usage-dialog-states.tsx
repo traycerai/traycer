@@ -9,23 +9,15 @@ export interface UsageDialogSkeletonProps {
   readonly variant: "epic" | "chat";
 }
 
-/**
- * Loading fill that mirrors the loaded layout - the same hero grid, chart
- * clamp, and row rhythm as the data that replaces it, so nothing shifts
- * when it lands. Deliberately not a spinner (and outside the
- * `AgentSpinningDots` rule for that reason): a skeleton at the loaded
- * layout's own shape IS the fixed frame's no-jump guarantee.
- */
+/** Deliberately not a spinner (and outside the `AgentSpinningDots` rule for that reason): a skeleton at the
+ * loaded layout's own shape IS the fixed frame's no-jump guarantee. */
 export function UsageDialogSkeleton(
   props: UsageDialogSkeletonProps,
 ): ReactNode {
   return (
     <div role="status" aria-busy="true" data-testid="usage-dialog-skeleton">
-      {/* The blocks below are decorative (`aria-hidden`), so without this the
-          state has no accessible name at all and a screen reader gets nothing
-          between open and data - the spinner this replaced at least carried a
-          "Loading usage…" label. `role="status"` announces it politely and
-          again when the data swaps it out. */}
+      {/* The blocks below are decorative (`aria-hidden`), so without this the state has no accessible name at all and
+         a screen reader gets nothing between open and data. */}
       <span className="sr-only">Loading usage…</span>
       <div
         aria-hidden
@@ -44,11 +36,8 @@ export function UsageDialogSkeleton(
   );
 }
 
-/**
- * Mirrors `EpicUsageLoadedBody`: hero zone (headline + split left, 2x2
- * tiles right, folding to one column with the same container query), the
- * chart at its exact height clamp, then breakdown table lines.
- */
+/** Mirrors `EpicUsageLoadedBody`: hero zone (headline + split left, 2x2 tiles right, folding to one column with
+ * the same container query), the chart at its exact height clamp, then breakdown table lines. */
 function EpicUsageSkeletonBlocks(): ReactNode {
   return (
     <>
@@ -80,7 +69,6 @@ function EpicUsageSkeletonBlocks(): ReactNode {
   );
 }
 
-/** Mirrors the chat dialog's loaded body: hero figure + turn-row lines. */
 function ChatUsageSkeletonBlocks(): ReactNode {
   return (
     <>
@@ -100,13 +88,8 @@ function ChatUsageSkeletonBlocks(): ReactNode {
 export interface UsageDialogEmptyProps {
   readonly headline: string;
   readonly hint: string;
-  /**
-   * The plane/scope qualification that `UsageCostFigure` carries on a loaded
-   * read (`servedByScopeNote`) - `null` when the read needs none. Empty is a
-   * CLAIM ("no usage"), and a local-plane zero only means this machine has
-   * none, so the qualification has to survive the route into this state
-   * rather than disappearing with the figure that used to render it.
-   */
+  /** The plane/scope qualification that `UsageCostFigure` carries on a loaded read (`servedByScopeNote`) - `null`
+   * when the read needs none. */
   readonly note: string | null;
   /** Action chips below the hint (the epic dialog's wider-window offers) - `null` when the state has no action to offer. */
   readonly children: ReactNode;
@@ -119,9 +102,8 @@ export function UsageDialogEmpty(props: UsageDialogEmptyProps): ReactNode {
       className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-4 py-6 text-center"
       data-testid="usage-dialog-empty"
     >
-      {/* `bg-foreground/10`, not `bg-muted`, for the SKELETON_ON_POPOVER
-          reason: preset themes collapse `--muted` into `--popover`, which
-          would leave the icon floating without its ring. */}
+      {/* `bg-foreground/10`, not `bg-muted`, for the SKELETON_ON_POPOVER reason: preset themes collapse `--muted`
+         into `--popover`, which would leave the icon floating without its ring. */}
       <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-muted-foreground">
         <LineChart className="size-5" aria-hidden />
       </div>
@@ -162,7 +144,6 @@ export function UsageDialogErrorState(
   );
 }
 
-/** The settled-but-dataless fill (no error, no response), centered in the same frame. */
 export function UsageDialogUnavailable(): ReactNode {
   return (
     <div className="flex h-full items-center justify-center py-6">

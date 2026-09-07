@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -544,12 +542,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   });
 
   it("Run doctor leaves SERVICE_STOPPED ACTIONABLE on this lane", async () => {
-    // Inverted deliberately. The disproven-by-transport bucket exists because
-    // a host answering over loopback proves its own listener is live - but
-    // this lane's report comes from the bundled CLI over IPC and completes
-    // with the host down, so it has no such proof to offer. Bucketing
-    // SERVICE_STOPPED as disproven here hides a real outage behind a green
-    // card, which is the one direction that actually costs the user.
+    // The disproven-by-transport bucket exists because a host answering over loopback proves its own listener is
+    // live.
     const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -569,9 +563,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         expectedHostId: HOST_ID,
       });
     });
-    // Reported, not swallowed: the issue renders in the actionable list and
-    // no disproven bucket is offered at all, because this projection sends an
-    // empty trivially-green set.
+    // Reported, not swallowed: the issue renders in the actionable list and no disproven bucket is offered at all,
+    // because this projection sends an empty trivially-green set.
     expect(
       await screen.findByTestId("host-doctor-issue-SERVICE_STOPPED"),
     ).toBeTruthy();
@@ -729,10 +722,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   });
 
   it("a host-restart doctor fix on a capability-false local host opens the page confirm, then dispatches on confirm", async () => {
-    // Discriminator: the P1 was a one-click `forceRestart.mutate()` from
-    // the Doctor sheet — skipping the same RestartHostConfirmDialog the
-    // header uses. Click must open the dialog; confirm then fires the
-    // page's forceRestart once. `onLocalFix` would land on `hostRunDoctor`.
+    // Click must open the dialog; confirm then fires the page's forceRestart once. `onLocalFix` would land on
+    // `hostRunDoctor`.
     const { management, fixture, queryClient } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -798,10 +789,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   });
 
   it("a host-restart doctor fix is disabled while a same-key hostRestart is in flight, and a click does not dispatch", async () => {
-    // Discriminator: if `DoctorFixControl` still reads `localFixPending` on
-    // the local-bridge restart route, the button stays enabled (and the
-    // click is only a silent no-op). `bridgeRestartPending` owning that
-    // route's pending state disables it.
+    // Discriminator: if `DoctorFixControl` still reads `localFixPending` on the local-bridge restart route, the
+    // button stays enabled (and the click is only a silent no-op).
     let releaseExternal: (() => void) | null = null;
     const externalGate = new Promise<void>((resolve) => {
       releaseExternal = resolve;
@@ -968,9 +957,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      // Carries the identity fence: this read projects THIS machine's log
-      // under a scope frozen on HOST_ID, so a replaced local host must be
-      // refused rather than answered with its successor's log.
+      // Carries the identity fence: this read projects this machine's log under a scope frozen on HOST_ID, so a
+      // replaced local host must be refused rather than answered with its successor's log.
       expect(management.getHostLogs).toHaveBeenCalledWith({
         tailLines: 200,
         expectedHostId: HOST_ID,
@@ -1410,10 +1398,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   });
 
   it("an HOST_NOT_INSTALLED fix is disabled while a same-key hostRestart is in flight, and a click does not dispatch", async () => {
-    // Discriminator: round 4 only gated the restart pair. Widening to EVERY
-    // bridge-routed repair disables Install host while the page's lifecycle
-    // gate is armed. Red against 8816fab7^ if DoctorFixControl still uses
-    // isBridgeRestart.
+    // Discriminator: round 4 only gated the restart pair. Widening to every bridge-routed repair disables Install
+    // host while the page's lifecycle gate is armed.
     let releaseExternal: (() => void) | null = null;
     const externalGate = new Promise<void>((resolve) => {
       releaseExternal = resolve;

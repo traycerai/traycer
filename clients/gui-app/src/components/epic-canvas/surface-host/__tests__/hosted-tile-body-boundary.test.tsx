@@ -201,11 +201,8 @@ function canvasWithChats(
   instanceIds: ReadonlyArray<string>,
 ): EpicCanvasState {
   return {
-    // NOT the shared `pane()` fixture: it only seeds `activationHistory`
-    // with the FIRST tab id, but retention (`retained-pane-chats.ts`) reads
-    // membership off `activationHistory`, capped at
-    // `RETAINED_PANE_CHAT_CAP` (2). Both chats here must be retained, so
-    // both must be recorded as recently-active.
+    // NOT the shared `pane()` fixture: it only seeds `activationHistory` with the FIRST tab id, but retention (`retained-pane-chats.ts`) reads membership off `activationHistory`, capped at `RETAINED_PANE_CHAT_CAP` (2).
+    // Both chats here must be retained, so both must be recorded as recently-active.
     root: {
       kind: "pane",
       id: paneId,

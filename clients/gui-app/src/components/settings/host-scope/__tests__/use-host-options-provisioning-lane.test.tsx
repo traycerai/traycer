@@ -13,25 +13,8 @@ import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 
-/**
- * The "setting up" row state must come from the mutation lane's KIND, not
- * merely its presence (Y5 regression): `deregister` / `uninstallHost` /
- * `removeTraycer` are just as busy as `ensure` / `install` / etc., but they
- * take the local host DOWN, and crediting them with "setting up" tells the
- * person watching the row the opposite of what is actually happening.
- *
- * This exercises `useHostOptions` end to end (through a real `MockRunnerHost`
- * for the mutation-lane status query) rather than stubbing the derivation, so
- * a regression in the WIRING - not just the exclusion list - fails here too.
- *
- * `settingUp` starts `false` (query unresolved) for EVERY lane, `false` being
- * indistinguishable from "not settled yet" - so a test that only polls
- * `settingUp` for the false cases would pass on the very first render, before
- * the mocked `getHostControllerStatus()` promise ever resolves. Each case
- * therefore first proves the controller-status QUERY itself has settled
- * (read straight from the query cache by the same key the hook builds), and
- * only then reads `settingUp` off the hook's result.
- */
+/** `settingUp` starts `false` (query unresolved) for every lane, `false` being indistinguishable from "not
+ * settled yet". */
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
@@ -54,11 +37,8 @@ vi.mock("@/hooks/host/use-host-lease", () => ({
 vi.mock("@/hooks/host/use-selection-authority-attached", () => ({
   useSelectionAuthorityAttached: () => true,
 }));
-// `useHostOptions` (and, transitively, `useRunnerHostControllerStatusQuery`)
-// resolve `@/providers/use-runner-host` at STATIC import time, so the mock
-// factory has to be the hoisted `vi.mock` form - a per-test `vi.doMock` runs
-// too late to affect an already-resolved binding. The box is what lets each
-// test still swap in its own `MockRunnerHost`.
+// `useHostOptions` (and, transitively, `useRunnerHostControllerStatusQuery`) resolve
+// `@/providers/use-runner-host` at static import time.
 const runnerHostBox = vi.hoisted<{ current: MockRunnerHost | null }>(() => ({
   current: null,
 }));
@@ -164,10 +144,8 @@ function renderWithLane(kind: MutationKind | null) {
   return { ...rendered, queryClient, hostManagement };
 }
 
-/** Proves the controller-status query has SETTLED (success or error), not
- * merely that its `queryFn` was invoked - `settingUp` starts `false` the
- * instant the query goes from unresolved to a real "no lane" answer, so this
- * is the one signal a false-expecting case can actually wait on. */
+/** Proves the controller-status query has settled (success or error), not merely that its `queryFn` was
+ * invoked. */
 async function waitForControllerStatusSettled(
   queryClient: QueryClient,
   hostManagement: IHostManagement,
@@ -198,7 +176,7 @@ describe("useHostOptions provisioning lane", () => {
     });
   });
 
-  // The Y5 regression: a TEARDOWN lane must not read as "setting up".
+  // The Y5 regression: a teardown lane must not read as "setting up".
   it("does not read a removeTraycer lane as setting up", async () => {
     const { result, queryClient, hostManagement } =
       renderWithLane("removeTraycer");

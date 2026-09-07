@@ -1,38 +1,6 @@
 /**
- * ONE RAW event row - exactly one captured event, never a fold - in ONE grammar
- * shared by every surface that lists events (the Communication timeline, the
- * pair detail, the agent detail).
- *
- * THE GRAMMAR, two tiers, identical for all four kinds (Request / Reply /
- * Notice / Created):
- *
- *   identity  SUBJECT ("Sender → Receiver", or the acting agent) …  time  [⌄]
- *   content   [KIND] primary text                  · muted qualifiers ·
- *
- * SUBJECT LEADS. The timestamp used to hold the first line on its own, which
- * ranked the least identifying fact in the row above the only one a reader scans
- * for; it now trails the subject as a `<time>`, quiet and small.
- *
- * Exactly one kind badge (Request / Reply / Notice / Created) from one
- * component, and every secondary qualifier in one trailing muted cluster
- * ("expects reply", the notice reason). Qualifiers are TEXT, never badges -
- * one badge per row is what makes the badge mean something.
- *
- * The detail panels keep that order but BREAK THE LINE - header above, body
- * below, header sticky on expansion. Every row defaults to the same two-line
- * plain-text preview; only a long/multiline body offers expansion, which swaps
- * the preview for one framed markdown body.
- *
- * NO RAW MARKDOWN OUTSIDE AN EXPANDED DETAIL BODY. Snippets and collapsed
- * previews run through `markdownToPlainText`, so a preview shows the message
- * rather than its source. The timeline never renders markdown at all.
- *
- * NO COALESCING, on any of these surfaces: five messages between the same pair
- * of agents are five rows, however alike they look. The log is an append-only
- * record and these lists render it one row per row.
- *
- * COLLAPSING IS NOT COALESCING: a collapsed row is still exactly one row, still
- * present, still counted. It is the body that is folded, never the event.
+ * ONE RAW event row - exactly one captured event, never a fold - in ONE grammar shared by every surface that lists events (the Communication timeline, the pair detail, the agent detail).
+ * The timestamp used to hold the first line on its own, which ranked the least identifying fact in the row above the only one a reader scans for; it now trails the subject as a `<time>`, quiet and small.
  */
 import {
   Fragment,
@@ -101,11 +69,7 @@ const KIND_CHIP_LABELS: Readonly<Record<CommGraphRowKind, string>> = {
 };
 
 /**
- * Outline badges throughout, so weight comes from the border and not a solid
- * fill competing with the subject. Only a request is tinted - it is the row that
- * may still be owed an answer; a notice keeps amber because it is the broker
- * reporting a failure; a created row keeps sky, matching its canvas pulse -
- * lineage, not conversation.
+ * Only a request is tinted - it is the row that may still be owed an answer; a notice keeps amber because it is the broker reporting a failure; a created row keeps sky, matching its canvas pulse - lineage, not conversation.
  */
 const KIND_CHIP_CLASSES: Readonly<Record<CommGraphRowKind, string>> = {
   request: "border-primary/25 bg-primary/5 text-primary",
@@ -150,9 +114,8 @@ const COMM_GRAPH_MARKDOWN_COMPONENTS: Record<
 > = { a: CommGraphMarkdownAnchor };
 
 /**
- * The source-length guard catches messages deliberately shortened by
- * `previewText`. Rendered overflow is measured separately because a shorter
- * message can still wrap past the two-line clamp in a narrow panel.
+ * The source-length guard catches messages deliberately shortened by `previewText`.
+ * Rendered overflow is measured separately because a shorter message can still wrap past the two-line clamp in a narrow panel.
  */
 const PREVIEW_MAX_CHARS = 180;
 
@@ -165,10 +128,8 @@ function previewText(text: string): string {
 }
 
 /**
- * Keyed on the ORIGINAL SOURCE, deliberately, not on the projection. Expanding
- * reveals the rendered markdown - headings, list structure, a fenced diagram -
- * so a body whose projection is short can still be a screenful once open. A
- * newline counts under the length cap for the same reason.
+ * Keyed on the ORIGINAL SOURCE, deliberately, not on the projection.
+ * Expanding reveals the rendered markdown - headings, list structure, a fenced diagram - so a body whose projection is short can still be a screenful once open.
  */
 function bodyIsCollapsible(text: string): boolean {
   const trimmed = text.trim();
@@ -293,14 +254,7 @@ const SUBJECT_CLASS =
 
 /**
  * WHICH ENDPOINT CAN SCROLL WHERE - the whole mapping, as data.
- *
  * Ordered, first match wins: a captured anchor beats one resolved at jump time.
- * A row not listed here is a PLAIN OPEN (↗) - reachable, claiming nothing. That
- * is the honest default, and it is where a notice's idle agent lands: the
- * broker OBSERVED it going quiet, so nothing in its transcript is this row.
- *
- * `endpoint` names a RAW log field, not the arrow's side - a notice reverses
- * the two for display (`commGraphEventDirection`).
  */
 interface CommGraphScrollClaim {
   readonly jump: CommGraphJumpKind;
@@ -335,15 +289,8 @@ const SCROLL_CLAIMS: ReadonlyArray<CommGraphScrollClaim> = [
 ];
 
 /**
- * The two endpoints, each reachable in the way its transcript can support - see
- * `SCROLL_CLAIMS` for which is which, and `CommGraphDirectionLabel` for the two
- * link species.
- *
- * A capability being on never by itself grants a claim: `canJump` is also true
- * for rows whose jump degrades to a plain tile open, so the claim must match
- * the ENDPOINT too. Claiming a landing the jump cannot deliver reads as broken
- * navigation, not honesty. An agent this epic does not project renders as plain
- * text - a dead-looking link is the one wrong answer.
+ * A capability being on never by itself grants a claim: `canJump` is also true for rows whose jump degrades to a plain tile open, so the claim must match the ENDPOINT too.
+ * Claiming a landing the jump cannot deliver reads as broken navigation, not honesty.
  */
 function CommGraphSubject(props: {
   readonly event: CommGraphEvent;
@@ -374,9 +321,8 @@ function CommGraphSubject(props: {
   const { fromAgentId: senderId, toAgentId: receiverId } =
     commGraphEventDirection(event);
   const jumpTarget = canJump ? commGraphJumpTarget(event) : null;
-  // The table's two lookups. `anchor` is the chat the captured origin ref points
-  // at - null when the row has none, or when its jump degrades to a plain tile
-  // open, which is what keeps `canJump` alone from granting a claim.
+  // The table's two lookups.
+  // `anchor` is the chat the captured origin ref points at - null when the row has none, or when its jump degrades to a plain tile open, which is what keeps `canJump` alone from granting a claim.
   const endpointIds: Readonly<
     Record<CommGraphScrollClaim["endpoint"], string | null>
   > = {
@@ -429,26 +375,8 @@ function CommGraphSubject(props: {
 }
 
 /**
- * A detail-panel row: sticky header, body underneath, long bodies collapsed.
- *
- * STICKY because a single expanded report can be taller than the panel, and a
- * reader who has scrolled into the middle of one otherwise has nothing on screen
- * saying which message they are in. The panel's own header is a sibling OUTSIDE
- * the scroll container, so it stays above these without a z-index fight, and
- * successive headers displace each other in the ordinary way.
- *
- * The sticky header is deliberately OPAQUE (`bg-background`) rather than
- * carrying the notice row's amber wash: a translucent sticky element lets the
- * text it is pinned over bleed through it. A notice still reads as one - its
- * amber badge is in the header, so the signal travels with the part that stays
- * on screen.
- *
- * ONE ROW SPECIES, NOT TWO. Every row - short, long, message, notice - shows the
- * SAME clamped preview by default. Only expansion swaps it for the framed
- * markdown body. Previously a short body rendered straight into that frame while
- * a long one showed a preview, so a list of both read as two different kinds of
- * object and the eye had to re-learn the layout mid-scroll. A complete preview
- * that fits has no chevron; a visually clamped preview always does.
+ * STICKY because a single expanded report can be taller than the panel, and a reader who has scrolled into the middle of one otherwise has nothing on screen saying which message they are in.
+ * The panel's own header is a sibling OUTSIDE the scroll container, so it stays above these without a z-index fight, and successive headers displace each other in the ordinary way.
  */
 function CommGraphSectionedRow(props: {
   readonly event: CommGraphEvent;
@@ -530,9 +458,8 @@ function CommGraphSectionedRow(props: {
   );
 
   const body = hasBody ? (
-    // Framed like chat's A2A body, so a long report reads as a quoted block
-    // rather than as loose text abutting the next row. No max-height: the panel
-    // is the scroller. ONLY ever rendered on expansion.
+    // Framed like chat's A2A body, so a long report reads as a quoted block rather than as loose text abutting the next row.
+    // ONLY ever rendered on expansion.
     <div className="mx-2.5 mb-2 rounded-md border border-border/40 bg-muted/15 px-2.5 py-2">
       <CommGraphMarkdownBody
         text={text}
@@ -544,9 +471,7 @@ function CommGraphSectionedRow(props: {
   // The default presentation for EVERY row, collapsible or not.
   const preview =
     text === null || text.length === 0 ? null : (
-      // Spacing lives on this wrapper, NEVER on the clamped element: padding on
-      // a `line-clamp` box is inside the clamp's overflow, so the last visible
-      // line gets sliced through its glyphs.
+      // Spacing lives on this wrapper, NEVER on the clamped element: padding on a `line-clamp` box is inside the clamp's overflow, so the last visible line gets sliced through its glyphs.
       <div className="px-2.5 pb-2">
         <p
           ref={setPreviewElement}
@@ -600,13 +525,7 @@ function CommGraphSectionedRow(props: {
           open && "border-b border-border/30 shadow-sm",
         )}
       >
-        {/*
-          THE HEADING IS NO LONGER THE TRIGGER. Its two agent names are buttons
-          now, and a button inside a button is invalid HTML that browsers
-          reparent and screen readers cannot describe. So the chevron became its
-          own control and the heading is plain content beside it - the smaller
-          hit target is the price of the endpoints being reachable at all.
-        */}
+        {/* Its two agent names are buttons now, and a button inside a button is invalid HTML that browsers reparent and screen readers cannot describe. */}
         <div className="min-w-0 flex-1 px-2.5 py-2">{header(null)}</div>
         <CollapsibleTrigger
           data-testid={`${testIdPrefix}-toggle-${rowId}`}
@@ -628,9 +547,8 @@ function CommGraphSectionedRow(props: {
 }
 
 /**
- * The ONE trailing qualifier cluster. Every secondary fact lives here, in a
- * fixed order, for every kind - so no qualifier is a badge on one row and plain
- * text on another, or floated to the opposite end of the line.
+ * The ONE trailing qualifier cluster.
+ * Every secondary fact lives here, in a fixed order, for every kind - so no qualifier is a badge on one row and plain text on another, or floated to the opposite end of the line.
  */
 function CommGraphQualifiers(props: {
   readonly event: CommGraphEvent;

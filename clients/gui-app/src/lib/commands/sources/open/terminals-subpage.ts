@@ -1,11 +1,5 @@
 /**
- * Opener "Terminals" sub-page: pinned "Create new terminal" (which drills into
- * workspace selection without leaving cmdk), then existing terminals from
- * `useTerminalList`.
- *
- * The active host's workspaces are shown directly. Other available hosts are
- * nested sub-pages backed by transient clients, so cross-host creation remains
- * possible without changing the app-wide active host or opening a modal.
+ * Opener "Terminals" sub-page: pinned "Create new terminal" (which drills into workspace selection without leaving cmdk), then existing terminals from `useTerminalList`.
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -75,14 +69,9 @@ function terminalWorkspaceLeaf(props: {
     run: () => {
       if (hasLaunched) return;
       const liveEntry = hostClient.resolveHostById(target.hostId);
-      // Coarse, through the canonical rule: this is the launch gate for a
-      // terminal on a named host — a pure "can we dial it" with nothing to
-      // explain to anyone, and it must give the same answer the tile's own
-      // dial will give a moment later.
+      // Coarse, through the canonical rule: this is the launch gate for a terminal on a named host - a pure "can we dial it" with nothing to explain to anyone, and it must give the same answer the tile's own dial will give a moment later.
       if (liveEntry === null || dialableHostEndpoint(liveEntry) === null) {
-        // Silent refusal used to look like a broken row - the palette entry
-        // that offered this launch a moment ago went stale between listing
-        // and selection (host dropped its lease, session died).
+        // Silent refusal used to look like a broken row - the palette entry that offered this launch a moment ago went stale between listing and selection (host dropped its lease, session died).
         toast(
           `Can't create a terminal on ${liveEntry?.label ?? target.hostId} right now - it's not reachable.`,
         );
@@ -202,9 +191,8 @@ function terminalWorkspaceLeaves(
   ) {
     return [...leaves, ...checkingHints, ...disabledHints];
   }
-  // Match the sidebar picker: the host-owned fallback cwd is valid only when
-  // the Epic truly has no live binding rows on any host. Disabled bindings do
-  // not silently degrade to an unrelated default directory.
+  // Match the sidebar picker: the host-owned fallback cwd is valid only when the Epic truly has no live binding rows on any host.
+  // Disabled bindings do not silently degrade to an unrelated default directory.
   if (
     rowsWithoutResolvedMissing.length === 0 &&
     workspace.folderlessCwd !== null
@@ -334,12 +322,7 @@ function useNewTerminalWorkspaceItems(
   // workspace chooser the same freshly-reachable host list as the old dialog.
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
-  // Dialability depends on the pull-only session cache, so a memo keyed on
-  // directory state alone freezes the row list while the palette is open: a
-  // session dying under an `offline`/plan-restricted host would keep offering a
-  // row whose launch gate then silently declines. The subscription re-renders
-  // on a readiness flip; the launch-time gate inside `run` stays an ambient
-  // live read, which is correct for an action.
+  // Dialability depends on the pull-only session cache, so a memo keyed on directory state alone freezes the row list while the palette is open: a session dying under an `offline`/plan-restricted host would keep offering a row whose launch gate then silently.
   const hasReadySessionFor = useRemoteSessionsPollReadiness(
     useMemo(
       () => (directory.data ?? []).map((entry) => entry.hostId),
@@ -362,11 +345,8 @@ function useNewTerminalWorkspaceItems(
             hostClient,
           );
     const otherHosts = (directory.data ?? [])
-      // Coarse, through the canonical rule: a palette row here leads to a
-      // launch, so it is offered exactly when the launch gate above would
-      // accept it. That deliberately keeps an `indeterminate` host listed —
-      // the picker's stated rule — rather than hiding a machine because one
-      // liveness read came back blind.
+      // Coarse, through the canonical rule: a palette row here leads to a launch, so it is offered exactly when the launch gate above would accept it.
+      // That deliberately keeps an `indeterminate` host listed - the picker's stated rule - rather than hiding a machine because one liveness read came back blind.
       .filter(
         (entry) =>
           entry.hostId !== activeHostId &&
@@ -404,10 +384,8 @@ const NEW_TERMINAL_WORKSPACE_SUBPAGE: CommandSubpage = {
 export function useTerminalsOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  // The epic's terminals are listed on, and their tiles bind to, the host
-  // serving the epic's projection - see `useActiveEpicHostId`. (Creating a
-  // NEW terminal below is a placement flow with its own host picker and
-  // deliberately keeps the app-wide default.)
+  // The epic's terminals are listed on, and their tiles bind to, the host serving the epic's projection - see `useActiveEpicHostId`.
+  // (Creating a NEW terminal below is a placement flow with its own host picker and deliberately keeps the app-wide default.)
   const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
   const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const hostClient = useHostClientForHostId(activeEpicHostId);
@@ -416,10 +394,7 @@ export function useTerminalsOpenerItems(
   const sessionsData = terminals.data;
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
-    // `terminal.list` also returns `terminal-agent` backing PTYs; those belong
-    // to the "TUI agents" category, so filter to raw terminals only (shared
-    // predicate with the sidebar) - otherwise an agent double-lists here as a
-    // plain terminal and, worse, opens as a raw terminal tile on its PTY.
+    // `terminal.list` also returns `terminal-agent` backing PTYs; those belong to the "TUI agents" category, so filter to raw terminals only (shared predicate with the sidebar) - otherwise an agent double-lists here as a plain terminal and, worse, opens as a raw.
     const sessions = (sessionsData?.sessions ?? []).filter((session) =>
       isVisibleEpicTerminalSession(session, scope.epicId),
     );
@@ -447,11 +422,8 @@ export function useTerminalsOpenerItems(
             currentCwd: session.currentCwd,
           }),
         },
-        // `terminal.list` is issued against the epic's host client
-        // (`hostClient` above) - there is no cross-host terminal listing
-        // today, so every session here IS already on `defaultHostId`. A badge
-        // can never legitimately apply until that plumbing exists (flagged
-        // back per T22's scope - inventing it is a separate, larger change).
+        // `terminal.list` is issued against the epic's host client (`hostClient` above) - there is no cross-host terminal listing today, so every session here IS already on `defaultHostId`.
+        // A badge can never legitimately apply until that plumbing exists (flagged back per T22's scope - inventing it is a separate, larger change).
         null,
       );
     });

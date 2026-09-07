@@ -1,37 +1,8 @@
 import { z } from "zod";
 
 /**
- * Versioned **streaming RPC** framework - the long-lived-subscription
- * counterpart to the request/response versioned RPC framework in
- * `versioned-rpc.ts`.
- *
- * A streaming RPC contract pairs three Zod schemas:
- *
- * - `openRequestSchema` - the parameters a client sends when opening a
- *   subscription. Always a `z.object(...)`.
- * - `serverFrameSchema` - the tagged union of frames the server pushes on
- *   the stream. Always a `z.discriminatedUnion(...)`.
- * - `clientFrameSchema` - the tagged union of frames the client can push
- *   back after the subscription opens. Always a `z.discriminatedUnion(...)`.
- *
- * The framework mirrors every structural invariant of the RPC framework:
- * `{ major, minor }` versioning, `latestMinor` must be the highest installed
- * minor in its line, contracts must line up with their registry slot and
- * registry key. Stream major changes do not need cross-major payload
- * transforms: when two peers retain an installed major, their handshake
- * selects that shared line before subscribing.
- *
- * Schema compatibility is evaluated **separately** for each of the three
- * sub-schemas (open request, server frame, client frame):
- *
- * - Minors within a major line must be additive - no sub-schema may drop a
- *   field (or a discriminated-union variant) that an earlier minor of the
- *   same major declared.
- * - A major bump must carry at least one breaking change (a dropped field,
- *   a dropped variant, or a changed field schema) on the latest minor of
- *   either side of the bump, across any of the three sub-schemas. A
- *   purely-additive major bump is rejected - it should have shipped as a
- *   minor.
+ * Versioned **streaming RPC** framework - the long-lived-subscription counterpart to the request/response versioned RPC framework in `versioned-rpc.ts`.
+ * Stream major changes do not need cross-major payload transforms: when two peers retain an installed major, their handshake selects that shared line before subscribing.
  */
 
 export type SchemaVersion = {
@@ -158,11 +129,7 @@ export function defineStreamRpcContract<
   return contract;
 }
 
-/**
- * Preferred authoring path for stream registries declared in source code.
- * Runs `validateVersionedStreamRpcRegistry` at module load so misconfigurations
- * surface immediately with readable errors.
- */
+/** Preferred authoring path for stream registries declared in source code. */
 export function defineVersionedStreamRpcRegistry<
   const Registry extends UncheckedVersionedStreamRpcRegistry,
 >(registry: Registry): VersionedStreamRpcRegistry<Registry> {
@@ -171,15 +138,7 @@ export function defineVersionedStreamRpcRegistry<
 }
 
 /**
- * Promotes a raw registry to the validated brand after checking every
- * invariant the stream framework cares about:
- *
- * 1. Structural - `latestMinor` points at the highest installed minor in its
- *    line, contracts line up with their slot and registry key.
- * 2. Schema - minors within a major line are additive for every sub-schema
- *    (no dropped fields, no dropped discriminated-union variants), and
- *    major bumps must carry at least one breaking change across any
- *    sub-schema on the latest minor of each side.
+ * Promotes a raw registry to the validated brand after checking every invariant the stream framework cares about
  */
 export function validateVersionedStreamRpcRegistry<
   Registry extends UncheckedVersionedStreamRpcRegistry,
@@ -330,18 +289,7 @@ function assertSchemaCompatibility(
   }
 }
 
-/**
- * Flattens a stream sub-schema to a `Record<path, serialized-field-json-schema>`:
- *
- * - For a plain `z.object({...})`, keys are field names.
- * - For a `z.discriminatedUnion("kind", [z.object(...), ...])`, keys are
- *   `"<discriminator-value>.<field-name>"`, so adding a new variant or adding
- *   a field to an existing variant looks like a key addition, while dropping
- *   a variant or a field looks like a key removal.
- *
- * The comparison uses JSON-Schema serialization of each field, so "field schema
- * changed" is detected by string inequality of the serialized form.
- */
+/** Flattens a stream sub-schema to a `Record<path, serialized-field-json-schema>`: */
 function flattenToFieldMap(schema: z.ZodType, context: string): FieldMap {
   if (schema instanceof z.ZodObject) {
     return flattenObjectShape(schema, context);

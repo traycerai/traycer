@@ -6,12 +6,6 @@ import type {
 } from "../host/host-controller-types";
 import type { IpcHostController } from "./runner-ipc-bridge";
 
-// The download lane has no live push observer on `HostController` (by
-// design - `runDownloadLane` only mutates `this.downloadStatus` in place;
-// see its cleanup-path comment anticipating this ticket). Poll tightly only
-// while a download is actually in flight; a low-frequency idle floor
-// catches any other externally-driven transition (e.g. a `stageLatest()`
-// kicked off by the launch converge reconcile before any window subscribed).
 const ACTIVE_DOWNLOAD_POLL_MS = 750;
 const IDLE_POLL_MS = 5_000;
 
@@ -29,31 +23,17 @@ function hasMutationStatus(
 
 type StatusListener = (status: HostControllerStatus) => void;
 
-// Structural surface of `RunnerIpcBridge` this module depends on - declared
-// here (like `IpcHostController` itself) so tests can pass a lightweight
-// double instead of constructing the real class, whose private members make
-// it unsatisfiable structurally.
 export interface HostControllerStatusBroadcastBridge {
   readonly options: { readonly hostController: IpcHostController };
   readonly disposeFns: Array<() => void>;
   fanOut(channel: string, payload: unknown): void;
 }
 
-// Extra in-process listeners keyed by bridge instance, so main-process code
-// outside the IPC layer (the app-menu "Update to X" gating in
-// `desktop-startup.ts`) can react to the same broadcast ticks that already
-// drive the renderer push, instead of standing up a second poll loop.
 const extraListeners = new WeakMap<
   HostControllerStatusBroadcastBridge,
   Set<StatusListener>
 >();
 
-/**
- * Subscribes to every status tick this module already computes (mutation
- * push + download-lane poll). Returns an unsubscribe function. Safe to call
- * before or after `registerHostControllerStatusBroadcast` - the listener
- * set is created lazily.
- */
 export function onHostControllerStatusBroadcast(
   bridge: HostControllerStatusBroadcastBridge,
   listener: StatusListener,
@@ -69,16 +49,7 @@ export function onHostControllerStatusBroadcast(
   };
 }
 
-/**
- * Broadcasts the canonical two-lane `HostControllerStatus` (Host Update
- * Layer Redesign Tech Plan) to every renderer window on
- * `RunnerHostEvent.hostControllerStatusChange`. The mutation lane pushes
- * immediately via `HostController`'s own observers
- * (`onMutationProgress`/`onMutationStatus`); the download lane is polled
- * (see interval rationale above). Returns a disposer, wired into
- * `bridge.disposeFns` by the caller like every other subscription in this
- * module.
- */
+/** Returns a disposer, wired into `bridge.disposeFns` by the caller like every other subscription in this module. */
 export function registerHostControllerStatusBroadcast(
   bridge: HostControllerStatusBroadcastBridge,
 ): void {
@@ -107,10 +78,7 @@ export function registerHostControllerStatusBroadcast(
     try {
       bridge.fanOut(RunnerHostEvent.hostControllerStatusChange, status);
     } catch (err) {
-      // Isolated like the listener loop below so a dispatch failure (e.g. a
-      // window destroyed mid-send) is never mistaken for an unhealthy
-      // controller - the status read succeeded and polling cadence decisions
-      // below still deserve to run on it.
+      // Isolated like the listener loop below so a dispatch failure (e.g. a window destroyed mid-send) is never mistaken for an unhealthy controller.
       log.warn("[host-controller-status-broadcast] fanOut threw", { err });
     }
     for (const listener of extraListeners.get(bridge) ?? []) {
@@ -129,23 +97,6 @@ export function registerHostControllerStatusBroadcast(
     }
   };
 
-  // One `broadcast` fires per mutation-progress event, and a host install
-  // streams thousands of them while it downloads. `getStatus()` is not cheap
-  // (three JSON reads plus a TCP reachability probe), so letting those calls
-  // overlap buried libuv's four-thread pool under thousands of concurrent fs
-  // operations and starved the main process event loop - the "Traycer is not
-  // responding" dialogs seen while installing.
-  //
-  // Serializing collapses a burst into the only status the renderer actually
-  // needs: whatever holds once the burst settles. The trailing re-run keeps
-  // the last event from being the one dropped. Ordering is structural now,
-  // so the publication-generation counters this used to carry are gone -
-  // nothing can arrive out of order when only one read is ever in flight.
-  //
-  // A failed read costs only its own publication: the drain loop keeps going,
-  // so a tick queued behind the failure (which may carry the mutation's
-  // terminal status) still gets its re-read instead of waiting out the idle
-  // interval with the renderer stuck on a stale "active" status.
   const broadcast = async (): Promise<void> => {
     if (disposed) return;
     if (broadcastInFlight) {

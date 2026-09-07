@@ -32,17 +32,7 @@ interface SendChatMessageInput {
 }
 
 /**
- * Memoised stable callbacks bound to a `ChatSessionStoreHandle`.
- *
- * The chat tile previously called `handle.store.getState().X()` from
- * inside callbacks. Each call read the store fresh, which is correct,
- * but the callbacks themselves were created on every render. That was
- * harmless but spread the host-RPC surface across the renderer.
- *
- * `useChatActions(handle)` consolidates every action the tile needs into
- * a single memoised object. The actions read store state fresh on
- * invocation (via `handle.store.getState()`), so the chat-session store
- * remains the single source of truth - these are just typed proxies.
+ * Stable callbacks that read `handle.store.getState()` on invoke. The chat-session store stays the source of truth.
  */
 export interface ChatActions {
   readonly sendMessage: (
@@ -123,12 +113,7 @@ export interface ChatActions {
   ) => JsonContent | null;
 }
 
-/**
- * Emits the semantic event only when the store accepted the dispatch (a
- * `null` result means the action was rejected locally and never left the
- * renderer). Analytics is best-effort by design: a dispatch the host later
- * rejects still counts as the user taking the action.
- */
+/** Emits the semantic event only when the store accepted the dispatch (a `null` result means the action was rejected locally and never left the renderer). */
 function tracked<Result>(
   result: Result | null,
   emit: () => void,

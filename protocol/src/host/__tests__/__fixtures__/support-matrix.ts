@@ -1,15 +1,7 @@
 import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 
 /**
- * One historically-released, still-supported app/host version's frozen
- * `ConnectionManifest` - the per-method `{ major, minor }` canonical it
- * advertised at that version - plus a human-readable label.
- *
- * Complementary to `released-method-names.ts` (which freezes only the
- * method-NAME set for the same `host-v1.0.0` baseline): this captures the
- * full per-method version so `two-sided-release-invariant.test.ts` can run
- * `compatibility-checker.check()` against the CURRENT live registry, not
- * just diff name sets.
+ * One historically-released, still-supported app/host version's frozen `ConnectionManifest` - the per-method `{ major, minor }` canonical it advertised at that version - plus a human-readable label.
  */
 export type SupportMatrixEntry = {
   readonly version: string;
@@ -19,44 +11,6 @@ export type SupportMatrixEntry = {
 /**
  * AUTO-GENERATED entries come from `protocol/scripts/snapshot-support-matrix.ts`.
  * Do not hand-edit an entry's `manifest` - regenerate it instead.
- *
- * ## Appending a new version at release-cut time
- *
- * 1. On the commit/tag being released, run:
- *      bun run protocol/scripts/snapshot-support-matrix.ts <version-label>
- *    e.g. `host-v1.2.0` (match the tag naming already used for
- *    `host-v1.0.0`, `host-v1.1.0`, ... in this repo's git tags).
- * 2. Paste the printed entry as a NEW element appended to the array below.
- *    Never edit or reorder existing entries in the same change - append only.
- * 3. Only DROP an entry when a coordinated release deliberately ends support
- *    for that version (mirrors how `released-method-names.ts` is
- *    regenerated only for that same class of decision). The diff that
- *    removes it is the reviewable record.
- *
- * ## Why only `host-v1.0.0` is seeded today
- *
- * `host-v1.0.0` is the oldest still-supported floor - it's the exact
- * baseline `released-method-names.ts` already freezes the method-name set
- * against, so reusing it here keeps both guards anchored to the same
- * historical release instead of inventing a second, unrelated baseline.
- * Its manifest below was captured from this repo's `fd65a24` commit (#84,
- * "fix(protocol): keep the RPC method-set compatible with the v1.0.0 host"),
- * which is the commit that produced the currently-committed
- * `released-method-names.ts` fixture - i.e. this manifest and that
- * name-only fixture describe the exact same registry state. (Note: the
- * literal git tag `host-v1.0.0` in this repo points at an unrelated, much
- * earlier commit from before the protocol registry reached its shipped
- * v1.0.0 shape - it predates `agent.gui.*`, `worktree.*`, etc. entirely, so
- * it is NOT the right source for this baseline. `fd65a24` is the actual
- * shipped-v1.0.0-compatible registry state; that is what is snapshotted
- * here.)
- *
- * The CURRENT dev-tip registry itself is intentionally NOT a frozen entry
- * here - `two-sided-release-invariant.test.ts` reads `hostRpcRegistry`
- * live and checks it against every entry below, so the "current" side of
- * the matrix is always up to date by construction and never goes stale.
- * Once a second real release ships (e.g. `host-v1.1.0`), append it via the
- * procedure above to grow this to a true N-entry matrix.
  */
 export const supportMatrix: readonly SupportMatrixEntry[] = [
   {

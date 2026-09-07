@@ -63,9 +63,8 @@ describe("appendTerminalQuoteToDraft", () => {
       epicId: "epic-1",
       terminalId: "term-9",
       label: "repo · zsh",
-      // The chip's tooltip answers "which repo is this shell in", the way the
-      // @-picker's terminal rows do. Repeating the label there would say
-      // nothing the chip does not already show.
+      // The chip's tooltip answers "which repo is this shell in", the way the @-picker's terminal rows do.
+      // Repeating the label there would say nothing the chip does not already show.
       description: "/work/repo",
     });
   });
@@ -76,9 +75,7 @@ describe("appendTerminalQuoteToDraft", () => {
       terminalCwd: null,
     });
 
-    // No directory to show, so the chip takes the same no-description fallback
-    // every entity mention takes - its own token - rather than echoing the
-    // title back at the user.
+    // No directory to show, so the chip takes the same no-description fallback every entity mention takes - its own token - rather than echoing the title back at the user.
     expect(
       mentionAttachmentFromAttrs(chipParagraph.content?.[0]?.attrs),
     ).toMatchObject({
@@ -108,9 +105,8 @@ describe("appendTerminalQuoteToDraft", () => {
     appendTerminalQuoteToDraft("chat-1", QUOTE);
     const draft = readComposerDraftSnapshot("chat-1");
 
-    // `selection: null` is the composer's focus-at-end signal, and the bumped
-    // `resetEpoch` is what makes a mounted composer pick the quote up. Nothing
-    // here submits: the draft is where the message stays until the user sends.
+    // `selection: null` is the composer's focus-at-end signal, and the bumped `resetEpoch` is what makes a mounted composer pick the quote up.
+    // Nothing here submits: the draft is where the message stays until the user sends.
     expect(draft.selection).toBeNull();
     expect(draft.resetEpoch).toBeGreaterThan(0);
   });
@@ -131,9 +127,8 @@ describe("appendTerminalQuoteToDraft", () => {
   });
 
   it("is a node the composer's own schema keeps", () => {
-    // Tiptap silently DROPS unknown node types on `setContent`. Without
-    // `sourcedQuote` registered, loading this draft would strip the quote's
-    // source and leave the coding agent an excerpt it cannot trace.
+    // Tiptap silently DROPS unknown node types on `setContent`.
+    // Without `sourcedQuote` registered, loading this draft would strip the quote's source and leave the coding agent an excerpt it cannot trace.
     const schema = getSchema(
       buildComposerExtensions({
         pickerStore: createComposerPickerStore(),
@@ -155,10 +150,8 @@ describe("appendTerminalQuoteToDraft", () => {
   });
 
   it("keeps the quote's source through an HTML round-trip", () => {
-    // A paste (or any clipboard round-trip) re-parses the draft from HTML. The
-    // plain `blockquote` rule matches the same element, so without the sourced
-    // rule outranking it the quote comes back as an ordinary blockquote and the
-    // agent loses the terminal it was told to go read.
+    // A paste (or any clipboard round-trip) re-parses the draft from HTML.
+    // The plain `blockquote` rule matches the same element, so without the sourced rule outranking it the quote comes back as an ordinary blockquote and the agent loses the terminal it was told to go read.
     const schema = getSchema(
       buildComposerExtensions({
         pickerStore: createComposerPickerStore(),

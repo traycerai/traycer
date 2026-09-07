@@ -2,10 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeContext } from "../../runner/runtime";
 import { noopLogger } from "../../logger";
 
-// Pins the `host ensure` state machine: a lock-free fast no-op when the
-// host is already installed + registered + running, and the three
-// mutating branches (full install, service-only register, start) keyed
-// off the current install record + service status.
+// Pins the `host ensure` state machine: a lock-free fast no-op when the host is already installed + registered + running, and the three mutating branches (full install, service-only register, start) keyed off the current install record + service status.
 
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
@@ -46,12 +43,8 @@ vi.mock("../../installer", () => ({
   currentInstallPlatform: mocks.currentInstallPlatformMock,
 }));
 
-// `commitHostInstallSourceWithAttempt` (update-mutation.ts) imports
-// `commitHostInstallSource` straight from `../../installer/install`, not
-// the barrel above - that direct import bypasses the barrel mock, so the
-// REAL committer (and the real attempt-lock machinery it drives) would
-// otherwise run against this process's actual host home. Mirror the same
-// fake here.
+// `commitHostInstallSourceWithAttempt` (update-mutation.ts) imports `commitHostInstallSource` straight from `../../installer/install`, not the barrel above - that direct import bypasses the barrel mock, so the REAL committer (and the real attempt-lock machinery it drives) would otherwise run against this process's actual host home.
+// Mirror the same fake here.
 vi.mock("../../installer/install", () => ({
   commitHostInstallSource: async (
     ...callArgs: Parameters<typeof mocks.commitHostInstallSourceMock>
@@ -91,11 +84,8 @@ vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
 }));
 
-// The real `publishHostStartAdoption` waits (up to 30s) for a service-
-// manager child to ack a spawn that never happens under a stubbed
-// controller. This suite pins `ensureHost`'s orchestration, not the
-// adoption handshake (that's `host-start-adoption.test.ts`), so replace it
-// with an immediately-satisfied lease.
+// The real `publishHostStartAdoption` waits (up to 30s) for a service- manager child to ack a spawn that never happens under a stubbed controller.
+// This suite pins `ensureHost`'s orchestration, not the adoption handshake (that's `host-start-adoption.test.ts`), so replace it with an immediately-satisfied lease.
 vi.mock("../host-start-adoption", () => ({
   publishHostStartAdoption: async () => ({
     waitForSpawn: async () => undefined,
@@ -580,8 +570,7 @@ describe("ensureHost", () => {
 
     const result = await ensureHost(makeOpts({}));
 
-    // The gate no longer keys on the service `running` flag; the busy-check
-    // module itself returns for a dead/absent host (see busy-check.test.ts).
+    // The gate no longer keys on the service `running` flag; the busy-check module itself returns for a dead/absent host (see busy-check.test.ts).
     // Here the mock no-ops, so the install proceeds.
     expect(assertHostNotBusyMock).toHaveBeenCalledTimes(1);
     expect(result.action).toBe("installed");
@@ -690,10 +679,7 @@ describe("ensureHost", () => {
   });
 
   it("a lost race (locked recheck finds the host already provisioned by another actor) discards the pre-staged temp and never commits", async () => {
-    // Fast (lock-free) read predicts install is needed (not installed yet);
-    // by the time the lock is acquired, a concurrent actor has already
-    // installed - the locked recheck must win and the speculative stage
-    // must be discarded rather than committed on top.
+    // Fast (lock-free) read predicts install is needed (not installed yet); by the time the lock is acquired, a concurrent actor has already installed - the locked recheck must win and the speculative stage must be discarded rather than committed on top.
     readHostInstallRecordMock
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ version: "1.6.0" });

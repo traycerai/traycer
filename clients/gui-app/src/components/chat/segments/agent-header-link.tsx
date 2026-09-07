@@ -1,14 +1,6 @@
 import type { ReactNode } from "react";
 
-/**
- * Clickable agent name used inside an A2A send/received segment header.
- * Rendered as a span (not a button/anchor) because `SegmentCard`/`SegmentRow`
- * already wrap the whole header in a Radix `CollapsibleTrigger` `<button>`;
- * nesting buttons is invalid HTML. `role="button"` + keydown keep it
- * keyboard-operable as a link. Falls back to plain text when `onOpen` is
- * null (no resolvable target - e.g. a cross-host agent not in this epic's
- * projection).
- */
+/** Rendered as a span (not a button/anchor) because `SegmentCard`/`SegmentRow` already wrap the whole header in a Radix `CollapsibleTrigger` `<button>`; nesting buttons is invalid HTML. */
 export function AgentHeaderLink(props: {
   readonly name: string;
   readonly onOpen: (() => void) | null;

@@ -14,25 +14,8 @@ import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-sou
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 
 /**
- * Drag-source wiring for a shell's output window, wherever a surface offers a
- * shell as a door - the transcript's start and restart cards, the resume
- * divider - so a drag out of any of them lands the same tile the Background
- * panel's rows already drop, on the same payload. The canvas needs to know
- * nothing about where the gesture started.
- *
- * Same discipline as `useArtifactDragSource`:
- *
- *   - the caller supplies its exact owning `viewTabId`; with none (a transcript
- *     outside a canvas view) the source is simply not draggable, never resolved
- *     against some active tab;
- *   - the drag id keys on `useId()`, because the same shell can be a door many
- *     times in one thread (a start card and every restart card of it) and
- *     dnd-kit's registry collides on duplicate ids;
- *   - the payload is minted once per identity and reference-stable, so
- *     `useDraggable` never sees a fresh `data` object each render.
- *
- * `enabled` is the caller's own gate - a door for a shell the host no longer
- * has must not drag a window onto the canvas that would open onto nothing.
+ * Same discipline as `useArtifactDragSource`: - the caller supplies its exact owning `viewTabId`; with none (a transcript outside a canvas view) the source is simply not draggable, never resolved against some active tab; - the drag id keys on `useId()`, because the same shell can be a door many times in one thread (a start card and every restart card of it) and dnd-kit's registry collides on duplicate ids; - the payload is minted once per identity and reference-stable, so `useDraggable` never sees a fresh `data` object each render.
+ * `enabled` is the caller's own gate - a door for a shell the host no longer has must not drag a window onto the canvas that would open onto nothing.
  */
 export function useManagedCommandOutputDragSource(args: {
   readonly epicId: string | null;
@@ -68,9 +51,7 @@ export function useManagedCommandOutputDragSource(args: {
   const dragDisabled = useDragSourceDisabled();
   const isDraggable = dragData !== undefined && !dragDisabled;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    // Pane-scoped like the menu and Background rows, so one root registry does
-    // not collide across retained epic panes; the occurrence key keeps the
-    // start card and every restart card of the same shell apart.
+    // Pane-scoped like the menu and Background rows, so one root registry does not collide across retained epic panes; the occurrence key keeps the start card and every restart card of the same shell apart.
     id: getPaneScopedDndId(
       viewTabId ?? "",
       getManagedCommandOutputDragId(`${commandId}:${occurrenceId}`),

@@ -278,9 +278,8 @@ describe("ProfileUsageSidecar entrance-animation readiness", () => {
     const sidecar = screen.getByRole("complementary", {
       name: "Usage details for Work",
     });
-    // Flush pending microtasks (but not the animation's `finished` promise,
-    // which stays pending) - the sidecar must remain hidden throughout, with
-    // no interim position ever committed.
+    // Flush pending microtasks (but not the animation's `finished` promise, which stays pending) - the sidecar
+    // must remain hidden throughout, with no interim position ever committed.
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -293,15 +292,8 @@ describe("ProfileUsageSidecar entrance-animation readiness", () => {
   });
 });
 
-// Models the real Radix Popper sequence (see `@radix-ui/react-popper`'s
-// `PopperContent`, node_modules/.../@radix-ui/react-popper/dist/index.mjs):
-// `[data-radix-popper-content-wrapper]` holds the unpositioned sentinel while
-// measuring, which CSSOM may serialize as `translate(0px, -200%)`. Content's
-// entrance animation is explicitly suppressed (`animation: "none"`) until
-// Floating UI's `isPositioned` flips true. In a nested transformed popper the
-// sentinel can produce an in-viewport phantom rect, while
-// `document.getAnimations()` is genuinely empty, so neither animation state
-// nor viewport intersection can prove placement.
+// In a nested transformed popper the sentinel can produce an in-viewport phantom rect, while
+// `document.getAnimations` is genuinely empty.
 describe("ProfileUsageSidecar Radix placement readiness", () => {
   let wrapper: HTMLDivElement;
   let anchor: HTMLButtonElement;
@@ -362,24 +354,16 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
       name: "Usage details for Work",
     });
 
-    // Phase 1: Radix's genuine unpositioned window. No animation exists
-    // (Radix suppresses it), and the nested-popover failure mode can report
-    // an on-screen phantom rect even though the sentinel is still present.
-    // This is exactly the condition an animation-only wait cannot detect -
-    // it would find `getAnimations()` empty and show immediately using the
-    // invalid phantom rect. Flushed via `act` + a real macrotask tick (not
-    // just microtasks) so any React work a premature `setPosition` schedules
-    // is fully applied before asserting - a bare microtask flush can race a
-    // real bug into passing vacuously if React defers the commit.
+    // This is exactly the condition an animation-only wait cannot detect - it would find `getAnimations` empty and
+    // show immediately using the invalid phantom rect.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(sidecar.dataset.visible).toBe("false");
     expect(sidecar.dataset.side).toBeUndefined();
 
-    // Phase 2: Floating UI lands its first real placement - the wrapper's
-    // style mutates, the anchor's rect is now on-screen, and Radix's
-    // suppression lifts so the entrance animation begins.
+    // Phase 2: Floating UI lands its first real placement - the wrapper's style mutates, the anchor's rect is now
+    // on-screen, and Radix's suppression lifts so the entrance animation begins.
     let releaseAnimation: (value: undefined) => void = () => undefined;
     const finished = new Promise<undefined>((resolve) => {
       releaseAnimation = resolve;
@@ -400,10 +384,8 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     releaseAnimation(undefined);
     await waitFor(() => expect(sidecar.dataset.visible).toBe("true"));
     expect(sidecar.dataset.side).toBe("right");
-    // Discriminates the stale phantom measurement (anchor at x=0,y=0,
-    // width=240 -> left=248 and top clamped to the 12px viewport padding)
-    // from the real one (anchor at x=100,y=100,width=240 -> left=348,
-    // top=100). `data-side` alone is "right" either way.
+    // Discriminates the stale phantom measurement (anchor at x=0,y=0, width=240 -> left=248 and top clamped to the
+    // 12px viewport padding) from the real one (anchor at x=100,y=100,width=240 -> left=348, top=100).
     expect(sidecar.getAttribute("style")).toContain("left: 348px");
     expect(sidecar.getAttribute("style")).toContain("top: 100px");
   });

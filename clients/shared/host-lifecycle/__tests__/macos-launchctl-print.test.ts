@@ -75,7 +75,7 @@ describe("parseLaunchctlPrintFields", () => {
     expect(fields.get("state")).toBe("running");
   });
 
-  // Finding 10 — measured against real bytes, not argued about.
+  // Finding 10 - measured against real bytes, not argued about.
   it("does NOT harvest keys nested inside a block, on real launchctl output", () => {
     const fields = parseLaunchctlPrintFields(THIRD_PARTY_HAS_LWCR_PRINT);
 
@@ -218,9 +218,7 @@ describe("classifyLabelOwnership", () => {
 });
 
 describe("extractProgramArgumentsFromPrint", () => {
-  // The finding: the previous quoted-token reader returned `null` here — for
-  // *every* real launchd job — which silently reduced launchd-derived
-  // attestation to label matching alone.
+  // The finding: the previous quoted-token reader returned `null` here - for *every* real launchd job - which silently reduced launchd-derived attestation to label matching alone.
   it("reads the bare one-per-line arguments launchd actually emits", () => {
     expect(
       extractProgramArgumentsFromPrint(HEALTHY_TRAYCER_AGENT_PRINT),
@@ -270,7 +268,7 @@ describe("extractProgramArgumentsFromPrint", () => {
 });
 
 describe("parseLwcrEvidence", () => {
-  // BLOCKER C-B1. `has LWCR` is the healthy signed state, and both real
+  // blocker C-B1. `has lwcr` is the healthy signed state, and both real
   // captures below carry it.
   it("is absent for the live, healthy Traycer agent that prints `has LWCR`", () => {
     expect(parseLwcrEvidence(HEALTHY_TRAYCER_AGENT_PRINT)).toEqual({
@@ -328,10 +326,6 @@ describe("wedge verdict over real launchd bytes", () => {
     );
   }
 
-  // The v1.1.8 lockout shape, reproduced by construction and then closed: a
-  // healthy signed agent must never derive a wedge, because the planner turns
-  // `wedged` into `transition-to-fallback` — provision raw fallback, boot out
-  // the agent, i.e. tear down its own working registration.
   it("does not wedge the live, healthy Traycer agent", () => {
     expect(wedgeFor(HEALTHY_TRAYCER_AGENT_PRINT).kind).toBe(
       "healthy-or-unknown",
@@ -361,7 +355,7 @@ describe("parseLaunchdRunState", () => {
     expect(runState.jobState).toEqual({ kind: "observed", value: "running" });
     expect(runState.pid).toEqual({ kind: "observed", value: 98634 });
     expect(runState.runs).toEqual({ kind: "observed", value: 1 });
-    // `last exit code = (never exited)` is not a number — absent, not 0.
+    // `last exit code = (never exited)` is not a number - absent, not 0.
     expect(runState.lastExitCode).toEqual({ kind: "absent" });
     expect(runState.lwcr).toEqual({ kind: "absent" });
   });

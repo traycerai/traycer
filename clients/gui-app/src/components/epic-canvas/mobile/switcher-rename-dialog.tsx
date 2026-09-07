@@ -10,11 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 /**
- * Rename dialog for a switcher row. Desktop renames inline in the tree row,
- * which has no touch analog, so mobile drives the same canonical rename
- * mutations from a minimal dialog (mirrors the P1.3 epic-rename dialog shape).
- * The caller's `onSubmit` fires the matching mutation; the dialog closes on
- * submit and the new name lands via the projection.
+ * Rename dialog for a switcher row.
+ * Desktop renames inline in the tree row, which has no touch analog, so mobile drives the same canonical rename mutations from a minimal dialog (mirrors the P1.3 epic-rename dialog shape).
  */
 export function SwitcherRenameDialog(props: {
   readonly open: boolean;
@@ -28,11 +25,7 @@ export function SwitcherRenameDialog(props: {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        // Capped and split into header / scroller / footer like every other
-        // dialog that holds a text field: a soft keyboard shrinks the layout
-        // viewport in both mobile shells, so `dvh` resolves against the
-        // uncovered strip and Save stays above the keyboard rather than under
-        // it.
+        // Capped and split into header / scroller / footer like every other dialog that holds a text field: a soft keyboard shrinks the layout viewport in both mobile shells, so `dvh` resolves against the uncovered strip and Save stays above the keyboard rather than under it.
         className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0"
         data-testid="switcher-rename-dialog"
       >

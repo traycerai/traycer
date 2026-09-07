@@ -16,9 +16,8 @@ import {
 
 const STORAGE_KEY = composerHarnessMemoryKey(null);
 
-// Two distinct hosts so a test can prove a read/write on one never leaks into
-// the other, and that a host with no record of its own falls through to the
-// frozen `legacy` bucket.
+// Two distinct hosts so a test can prove a read/write on one never leaks into the other, and that
+// a host with no record of its own falls through to the frozen `legacy` bucket.
 const HOST_A = "host-a";
 const HOST_B = "host-b";
 
@@ -318,9 +317,8 @@ describe("composer harness memory store", () => {
     expect(useComposerHarnessMemoryStore.persist.getOptions().name).toBe(
       composerHarnessMemoryKey("alice@example.com"),
     );
-    // v1 data with no host coordinate lands entirely in the read-only
-    // `legacy` bucket; `byHost` stays empty (a migration cannot know which
-    // host the flat data belonged to).
+    // v1 data with no host coordinate lands entirely in the read-only `legacy` bucket; `byHost` stays
+    // empty (a migration cannot know which host the flat data belonged to).
     expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
     expect(
       useComposerHarnessMemoryStore.getState().legacy.lastModelByHarness,
@@ -395,13 +393,8 @@ describe("composer harness memory store", () => {
   });
 
   it("loads and migrates a pre-profile localStorage blob", async () => {
-    // Simulates a user's real, already-serialized state from before profiles
-    // existed: `lastModelByHarness` keyed by bare harnessId,
-    // `effortByHarnessModel` keyed by the old space-joined `"harness model"`
-    // format. These keys are already the v2 provider/model identity, so the
-    // migration preserves them unchanged - and, since v3 now wraps v1/v2
-    // output verbatim as `legacy`, a host with no record of its own still
-    // resolves through it.
+    // These keys are already the v2 provider/model identity, so the migration preserves them unchanged
+    // - and, since v3 now wraps v1/v2 output verbatim as `legacy`, a host with no record of its own
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({

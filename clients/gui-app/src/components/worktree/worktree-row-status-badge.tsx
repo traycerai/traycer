@@ -8,12 +8,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-/**
- * Shared status badge for worktree-picker rows. Pending verification renders
- * muted with a spinner; incomplete setup renders as a warning, and an unusable
- * path renders destructive. Row selectability is owned by the picker model,
- * independently from whether status is visible.
- */
+/** Row selectability is owned by the picker model, independently from whether status is visible. */
 export function WorktreeRowStatusBadge(props: {
   readonly label: string;
   readonly pending: boolean;

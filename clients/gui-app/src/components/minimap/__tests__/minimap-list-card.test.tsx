@@ -2,11 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MinimapListCard } from "@/components/minimap/minimap-list-card";
 
-/**
- * jsdom does not lay out, and it does not apply `zoom-in-95`. Stub the opening
- * scale onto `getBoundingClientRect` so converting that visual delta into
- * `scrollTop` under-scrolls the current row, matching the live popover.
- */
+/** jsdom does not lay out, and it does not apply `zoom-in-95`. */
 const OPENING_ZOOM = 0.95;
 const VIEWPORT_HEIGHT = 200;
 const ROW_HEIGHT = 40;

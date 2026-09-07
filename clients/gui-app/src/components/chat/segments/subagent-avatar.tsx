@@ -1,13 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 
-// A deterministic, identicon-style pixel avatar keyed on the subagent's stable
-// block id. The id is the canonical per-subagent key (it also drives
-// subagent open state), so the same subagent always renders the same icon -
-// available from the first frame, before Codex's async nickname/role resolve.
-// While the subagent works its pixels drift upward (rising one row at a time
-// and wrapping back to the bottom, like Codex); idle freezes them into the
-// stable symmetric identicon.
+// A deterministic, identicon-style pixel avatar keyed on the subagent's stable block id.
+// The id is the canonical per-subagent key (it also drives subagent open state), so the same subagent always renders the same icon - available from the first frame, before Codex's async nickname/role resolve.
 
 const GRID = 5;
 // Generate the left half (incl. center column) and mirror it for a face-like,
@@ -147,9 +142,7 @@ export function SubagentAvatar(props: SubagentAvatarProps) {
     paint();
     if (!active || prefersReduced) return;
 
-    // Motion is discrete (pixels snap to cells every STEP_MS), so only repaint
-    // on a step that actually moved a pixel - not every animation frame. rAF
-    // (vs setInterval) auto-pauses when the tab is hidden, saving battery.
+    // Motion is discrete (pixels snap to cells every STEP_MS), so only repaint on a step that actually moved a pixel - not every animation frame. rAF (vs setInterval) auto-pauses when the tab is hidden, saving battery.
     let raf = 0;
     let last = performance.now();
     let acc = 0;

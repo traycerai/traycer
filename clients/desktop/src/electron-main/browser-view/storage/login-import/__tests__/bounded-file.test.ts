@@ -4,14 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readBoundedFile } from "../bounded-file";
 
-/**
- * `readBoundedFile` in isolation: the size/kind checks `import-logins.ts`
- * depends on, against real files in a temp dir. Production uses
- * `MAX_LOGIN_IMPORT_FILE_BYTES` (64 MiB); a small bound is used here instead
- * so the "too-large" case does not have to allocate anything close to that -
- * `truncate` makes the fixture sparse, so even the 64 MiB case elsewhere
- * (covered in `import-logins.test.ts`) is instant on disk.
- */
 
 let root: string;
 

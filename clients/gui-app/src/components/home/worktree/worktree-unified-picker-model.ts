@@ -8,27 +8,13 @@ import { stripRemotePrefix } from "@/lib/worktree/strip-remote-prefix";
 
 type RepoIdentifier = WorktreeFolderIntent["repoIdentifier"];
 
-/**
- * The unified branch/worktree picker keeps location choices and source-branch
- * choices separate:
- *
- *  - Existing on-disk worktrees appear under the Location control (→ `import`).
- *  - The New worktree source list shows every branch returned by
- *    `worktree.listBranches`, de-duping the current branch because it is already
- *    represented by the clean current-branch fork row.
- *  - Every New worktree source creates a new branch (`branch.new`). The source
- *    list never performs a direct checkout of an existing branch.
- */
+/** The source list never performs a direct checkout of an existing branch. */
 export interface UnifiedPickerModelInput {
   readonly summary: WorktreeWorkspaceSummary;
   readonly branches: ReadonlyArray<WorktreeBranch>;
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly defaultNewBranchName: string;
-  /**
-   * Distinct paths from `git status --porcelain` on the main checkout. A dirty
-   * tree (`> 0`) is what unlocks the "Working tree · <branch>" carry source above
-   * the clean current-branch fork; a clean tree has nothing to carry.
-   */
+  /** Distinct paths from `git status --porcelain` on the main checkout. */
   readonly uncommittedFileCount: number;
 }
 
@@ -43,13 +29,9 @@ export interface UnifiedPickerWorktreeRow {
 }
 
 export interface UnifiedPickerSourceOption {
-  /**
-   * Stable selection identity. Equals `name` for every source EXCEPT the
-   * working-tree carry source, which shares the current branch's `name` with the
-   * clean fork and so needs a distinct id ({@link WORKING_TREE_SOURCE_ID}).
-   */
+  /** Equals `name` for every source except the working-tree carry source, which shares the current branch's
+   * `name` with the clean fork and so needs a distinct id (WORKING_TREE_SOURCE_ID). */
   readonly id: string;
-  /** The branch this forks from (→ `branch.source` and secondary source context). */
   readonly name: string;
   readonly label: string;
   /** Snapshots the source's uncommitted WIP into the new worktree. Only ever
@@ -61,13 +43,12 @@ export interface UnifiedPickerSourceOption {
 }
 
 export interface UnifiedPickerModel {
-  /** The branch checked out at the workspace folder itself (the main worktree). */
   readonly currentBranch: string | null;
   /** Full source list for the "New worktree" form's source selector, ordered:
    * working-tree carry (dirty only), clean current-branch fork, then branches. */
   readonly sourceOptions: ReadonlyArray<UnifiedPickerSourceOption>;
-  /** Default selected source id — the clean current-branch fork, or the prior
-   * staged source when re-opening a staged new-worktree intent. */
+  /** Default selected source id - the clean current-branch fork, or the prior staged source when re-opening a
+   * staged new-worktree intent. */
   readonly newBranchSourceId: string | null;
 }
 
@@ -102,9 +83,8 @@ export function buildUnifiedPickerModel(
   return {
     currentBranch,
     sourceOptions,
-    // Default to the clean current-branch fork (a fresh worktree, no carry); when
-    // re-opening a staged new-worktree, the prior source wins; otherwise fall back
-    // to the first branch source when there is no current branch.
+    // Default to the clean current-branch fork (a fresh worktree, no carry); when re-opening a staged
+    // new-worktree, the prior source wins.
     newBranchSourceId:
       stagedNewBranchSourceId(input.currentIntent) ??
       currentBranch ??
@@ -112,11 +92,8 @@ export function buildUnifiedPickerModel(
   };
 }
 
-/**
- * The current branch as a New-worktree source in fork-only form: a clean fork
- * always, plus a "Working tree" carry source above it when the tree is dirty
- * (there is WIP to carry).
- */
+/** The current branch as a New-worktree source in fork-only form: a clean fork always, plus a "Working tree"
+ * carry source above it when the tree is dirty (there is wip to carry). */
 function currentBranchSourceOptions(input: {
   readonly currentBranch: string | null;
   readonly uncommittedFileCount: number;
@@ -215,14 +192,8 @@ function buildBranchSources(input: {
     });
 }
 
-/**
- * The existing-worktree submenu rows for the Location control, built from the
- * summary's sibling worktrees ALONE — no `worktree.listBranches` needed. Each
- * row carries an `import` intent for its disk path, the branch label, and the
- * locked badge.
- * One click adopts the worktree (→ `import`), preserving the partition invariant
- * (existing worktrees are reached only through import, never `git worktree add`).
- */
+/** One click adopts the worktree (→ `import`), preserving the partition invariant (existing worktrees are
+ * reached only through import, never `git worktree add`). */
 export function worktreeImportRows(input: {
   readonly workspacePath: string;
   readonly repoIdentifier: RepoIdentifier;
@@ -254,7 +225,6 @@ export function worktreeImportRows(input: {
     }));
 }
 
-/** The intent emitted by the "New worktree" form for a source + branch name. */
 type NewWorktreeIntentInput = {
   readonly workspacePath: string;
   readonly repoIdentifier: RepoIdentifier;

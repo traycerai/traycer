@@ -16,14 +16,7 @@ const handleCopyError = (): void => {
   });
 };
 
-/**
- * Floating copy affordance pinned to the top-right corner of an A2A
- * send/received message body, mirroring `OpenFullDiffControl`'s always-visible
- * corner placement over the artifact diff viewer. Absolutely positioned over
- * the scrollable message box (which carries `pr-10` so text clears it); the
- * box keeps its own border and native scrollbar, so the scrollbar stays flush
- * against that border rather than being pushed inward by a reserved gutter.
- */
+/** Floating copy affordance pinned to the top-right corner of an A2A send/received message body, mirroring `OpenFullDiffControl`'s always-visible corner placement over the artifact diff viewer. Absolutely positioned over the scrollable message box (which carries `pr-10` so text clears it); the box keeps its own border and native scrollbar, so the scrollbar stays flush against that border rather than being pushed inward by a reserved gutter. */
 export function AgentMessageCopyButton(props: {
   readonly value: string;
 }): ReactNode {

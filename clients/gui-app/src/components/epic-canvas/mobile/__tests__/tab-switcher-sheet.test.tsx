@@ -18,10 +18,7 @@ import type {
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 
-// Source of the mobile-shell hit-slop CSS the sheet imports (via
-// `data-mobile-shell-touch-scope`), read so the root-fix invariant - the slop
-// `::after` must never paint - is asserted against the real rule; jsdom can't
-// compute a coarse-pointer pseudo-element. Vitest's cwd is the gui-app root.
+// Source of the mobile-shell hit-slop CSS the sheet imports (via `data-mobile-shell-touch-scope`), read so the root-fix invariant - the slop `::after` must never paint - is asserted against the real rule; jsdom can't compute a coarse-pointer pseudo-element.
 const touchTargetsCss = readFileSync(
   join(
     process.cwd(),
@@ -48,11 +45,7 @@ vi.mock("@/components/epic-canvas/mobile/switcher-terminals-list", () => ({
   SwitcherTerminalsList: () => <div data-testid="mock-terminals-list" />,
 }));
 vi.mock("@/components/epic-canvas/mobile/switcher-browsers-list", () => ({
-  // Named for what it stands in FOR, not for what the real list renders. A
-  // stub that reproduces the real component's own accessible name would let
-  // this assertion read as "the browsers list rendered" when all it can ever
-  // witness is "the sheet routed this category to its body" - which is the
-  // claim this file exists to make.
+  // A stub that reproduces the real component's own accessible name would let this assertion read as "the browsers list rendered" when all it can ever witness is "the sheet routed this category to its body" - which is the claim this file exists to make.
   SwitcherBrowsersList: () => (
     <div role="note" aria-label="browsers category body" />
   ),
@@ -72,10 +65,8 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => HOST_ID,
 }));
 
-// Method support is client-wide handshake evidence; drive it directly so the
-// sheet's "presence AND not known-unsupported" rule is testable without a
-// transport. Only this one export is displaced - `StreamRuntimeContext` itself
-// stays real for anything else in the tree that reads it.
+// Method support is client-wide handshake evidence; drive it directly so the sheet's "presence AND not known-unsupported" rule is testable without a transport.
+// Only this one export is displaced - `StreamRuntimeContext` itself stays real for anything else in the tree that reads it.
 const streamState = vi.hoisted((): { prSupport: string | null } => ({
   prSupport: "supported",
 }));
@@ -86,10 +77,7 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
   useStreamMethodSupport: () => streamState.prSupport,
 }));
 
-// The presence probe is a live PR subscription; stand in for it with a fake
-// that reports whatever this test wants the host to have answered, so the
-// bootstrap path (probe -> presence -> tab) stays observable without a
-// transport.
+// The presence probe is a live PR subscription; stand in for it with a fake that reports whatever this test wants the host to have answered, so the bootstrap path (probe -> presence -> tab) stays observable without a transport.
 const probeState = vi.hoisted(() => ({
   mounts: 0,
   reports: null as boolean | null,
@@ -180,11 +168,7 @@ describe("<TabSwitcherSheet />", () => {
   });
 
   it("keeps the Comments tab on the bar with no artifact tile open", () => {
-    // Desktop hides Comments until an artifact tile reveals it; the phone sheet
-    // is the only route to a thread list, so a tab that came and went with the
-    // shown tile would leave an anchor tap with nowhere to land. The category's
-    // own body says what it is waiting for when no artifact is open - the
-    // canvas here holds no tiles at all.
+    // Desktop hides Comments until an artifact tile reveals it; the phone sheet is the only route to a thread list, so a tab that came and went with the shown tile would leave an anchor tap with nowhere to land.
     renderSheet(true, () => {});
     expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
   });
@@ -193,26 +177,14 @@ describe("<TabSwitcherSheet />", () => {
     renderSheet(true, () => {});
     const active = screen.getByRole("tab", { name: "Chats" });
     expect(active.getAttribute("data-state")).toBe("active");
-    // The visible active indicator is a collision-free `::before` underline. The
-    // trigger's single `::after` is claimed by the mobile touch hit-slop, so
-    // ui/tabs' `after:bg-foreground` indicator legitimately stays in the class
-    // list (the shared touch CSS neutralises its paint) and is NOT re-overridden
-    // here - re-adding `after:bg-transparent` would be a redundant second
-    // mechanism.
     expect(active.className).toContain("after:bg-foreground");
     expect(active.className).toContain("before:bg-foreground");
-    // That the underline actually fires, and that the base fill is neutralised
-    // rather than merely competed with, both hang on the bar spelling its
-    // active-state modifier the way ui/tabs spells its own. Restating that
-    // spelling here would only re-assert what the bar's own source says, so
-    // `switcher-category-tabs.test.tsx` derives it from the primitive instead.
+        // That the underline actually fires, and that the base fill is neutralised rather than merely competed with, both hang on the bar spelling its active-state modifier the way ui/tabs spells its own.
+  // Restating that spelling here would only re-assert what the bar's own source says, so `switcher-category-tabs.test.tsx` derives it from the primitive instead.
   });
 
   it("forces the mobile touch hit-slop ::after transparent so a merged indicator can't box the tab", () => {
-    // Root fix (mobile-shell-touch-targets.css): the hit-slop shares each
-    // trigger's single `::after`; without a transparent background it merges with
-    // ui/tabs' `after:bg-foreground` active indicator and paints a full-cover,
-    // near-white box over the label on touch (coarse-pointer) devices.
+    // Root fix (mobile-shell-touch-targets.css): the hit-slop shares each trigger's single `::after`; without a transparent background it merges with ui/tabs' `after:bg-foreground` active indicator and paints a full-cover, near-white box over the label on touch (coarse-pointer) devices.
     expect(touchTargetsCss).toMatch(
       /tabs-trigger"\][^)]*\)::after\s*\{[^}]*background:\s*transparent/,
     );
@@ -302,9 +274,7 @@ describe("<TabSwitcherSheet />", () => {
   });
 
   it("opens straight onto a browsers selection the desktop rail persisted", () => {
-    // Selection is shared with the rail through this one store; clamping it
-    // away would strand a phone user on Agents after choosing Browsers on the
-    // desktop.
+    // Selection is shared with the rail through this one store; clamping it away would strand a phone user on Agents after choosing Browsers on the desktop.
     useLeftPanelStore.setState({
       activePanelIdByTabId: { [TAB_ID]: "browsers" },
     });
@@ -328,9 +298,7 @@ describe("<TabSwitcherSheet />", () => {
   });
 
   it("opens straight onto a comments selection written by an anchor tap", () => {
-    // The tap path selects the category in this same store and opens the sheet;
-    // the thread is only reachable if the sheet lands on that category with no
-    // further click.
+    // The tap path selects the category in this same store and opens the sheet; the thread is only reachable if the sheet lands on that category with no further click.
     useLeftPanelStore.setState({
       activePanelIdByTabId: { [TAB_ID]: "comments" },
     });
@@ -353,11 +321,7 @@ describe("<TabSwitcherSheet />", () => {
   });
 
   it("opens straight onto a persisted sharing selection instead of clamping it away", async () => {
-    // `sharing` is shared with the desktop rail through this one store, so a
-    // selection made on a desktop lands here on the phone. While the category
-    // was uncurated `clampToSwitcherCategory` sent it back to Chats, which is
-    // the regression this guards: the tab must be the active one on first
-    // paint, with no click to get there.
+    // While the category was uncurated `clampToSwitcherCategory` sent it back to Chats, which is the regression this guards: the tab must be the active one on first paint, with no click to get there.
     useLeftPanelStore.setState({
       activePanelIdByTabId: { [TAB_ID]: "sharing" },
     });
@@ -410,9 +374,8 @@ describe("<TabSwitcherSheet />", () => {
   });
 
   it("omits the tab against a host that does not advertise the PR stream, however stale the recorded presence", () => {
-    // Presence is persisted per (host, epic) and outlives the host build that
-    // recorded it. Showing the tab here would land the panel's visible "Update
-    // required" surface; on a phone the category is simply absent instead.
+    // Presence is persisted per (host, epic) and outlives the host build that recorded it.
+    // Showing the tab here would land the panel's visible "Update required" surface; on a phone the category is simply absent instead.
     setPullRequestPresence(true);
     streamState.prSupport = "unsupported";
     renderSheet(true, () => {});
@@ -450,9 +413,7 @@ describe("<TabSwitcherSheet />", () => {
   });
 
   it("reveals the tab on a device with no recorded presence once the probe reports PRs", () => {
-    // The bootstrap case: nothing in the presence store, so without the probe
-    // the tab could never appear and the body that writes presence could never
-    // mount. The probe answers first, and the bar picks it up live.
+    // The bootstrap case: nothing in the presence store, so without the probe the tab could never appear and the body that writes presence could never mount.
     probeState.reports = true;
     renderSheet(true, () => {});
     expect(screen.getByRole("tab", { name: "Pull Requests" })).toBeTruthy();
@@ -590,9 +551,7 @@ describe("<TabSwitcherSheet /> close-on-open", () => {
   });
 
   it("closes when the FIRST tile of an empty pane is a PR detail", () => {
-    // The switcher is the way back from an empty pane, so its first observation
-    // there is `null` - which must not read as "nothing observed yet" and
-    // suppress the close, leaving the drawer over the tile just opened.
+    // The switcher is the way back from an empty pane, so its first observation there is `null` - which must not read as "nothing observed yet" and suppress the close, leaving the drawer over the tile just opened.
     setPullRequestPresence(true);
     seedCanvasWithNoTiles();
     const onOpenChange = vi.fn();

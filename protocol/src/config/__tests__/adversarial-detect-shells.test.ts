@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Virtual filesystem + platform, mirroring the sibling detect-shells.test.ts,
-// with two extra hostile seams: realpath can be made to throw a chosen errno
-// (symlink loops / files disappearing after a successful probe), and access
-// can be made to throw on a specific path (permission errors mid-scan).
 const world = vi.hoisted(() => ({
   platform: "linux" as NodeJS.Platform,
   files: new Map<string, boolean>(),
@@ -161,11 +157,8 @@ describe("adversarial: listShells dedupe against hostile config entries", () => 
     process.env.SHELL = "/bin/zsh";
     process.env.PATH = "/usr/bin";
     world.files.set("/bin/zsh", true);
-    // Two identical remembered entries for the same non-detected path. The
-    // store's own writes can never produce this (upsert dedupes), but a
-    // hand-edited config.json can - the schema accepts it. The contract for
-    // listShells says the merged list is deduped; here it is not deduped
-    // against itself, so the picker would show two identical removable rows.
+    // Two identical remembered entries for the same non-detected path.
+    // The store's own writes can never produce this (upsert dedupes), but a hand-edited config.json can - the schema accepts it.
     writeConfig([
       { path: "/opt/custom/mysh", args: null },
       { path: "/opt/custom/mysh", args: null },

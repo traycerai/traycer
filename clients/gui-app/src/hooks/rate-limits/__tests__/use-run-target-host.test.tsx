@@ -16,10 +16,7 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
-// One global (default-host) client shared between the mocked `useHostClient`
-// and the tests, mirroring `use-host-client-for.test.tsx`'s harness so
-// `useHostClientForHostId`'s internal `useHostClientFor` builds real
-// transient clients against it.
+// One global (default-host) client shared between the mocked `useHostClient` and the tests, mirroring `use-host-client-for.test.tsx`'s harness so `useHostClientForHostId`'s internal `useHostClientFor` builds real transient clients against it.
 const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
 }));

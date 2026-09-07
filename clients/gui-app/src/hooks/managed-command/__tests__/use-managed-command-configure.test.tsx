@@ -13,13 +13,7 @@ import {
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 
-/**
- * `managedCommand.configure`, driven against a real `HostClient` and a mock
- * host. What this suite pins is ORDERING: two presses on one command's switch
- * reach the host in the order they were pressed, even though the request
- * coordinator keys its queues by the full params (which include the value) and
- * would otherwise run an "on" and an "off" as two independent jobs.
- */
+/** What this suite pins is ORDERING: two presses on one command's switch reach the host in the order they were pressed, even though the request coordinator keys its queues by the full params (which include the value) and would otherwise run an "on" and an "off" as two independent jobs. */
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), warning: vi.fn(), success: vi.fn(), info: vi.fn() },
@@ -180,10 +174,7 @@ describe("useManagedCommandConfigure", () => {
       false,
     );
 
-    // Both answers carry the SAME `updatedAtMs` (the mock host stamps every
-    // write identically, as two presses in one millisecond would). The
-    // effective value must be the later-submitted write's - off - not the
-    // first's; a strict timestamp comparison alone kept "on" here.
+    // The effective value must be the later-submitted write's - off - not the first's; a strict timestamp comparison alone kept "on" here.
     const effective = renderHook(
       () => useManagedCommandRelaunchOnHostRestart(target, COMMAND),
       { wrapper },
@@ -281,11 +272,7 @@ describe("useManagedCommandConfigure", () => {
       { wrapper },
     );
     expect(caughtUp.result.current).toBe(false);
-    // An EQUAL stamp is the stream's too: another client's write in the same
-    // millisecond as ours is causally newer and lives in no local cache, so
-    // no local order could rank it. (For our own answer it changes nothing -
-    // the values agree.) Settled precedence here would show the obsolete
-    // value indefinitely.
+    // An EQUAL stamp is the stream's too: another client's write in the same millisecond as ours is causally newer and lives in no local cache, so no local order could rank it.
     const sameStamp = renderHook(
       () =>
         useManagedCommandRelaunchOnHostRestart(target, {
@@ -309,10 +296,8 @@ describe("useManagedCommandConfigure", () => {
   });
 
   it("does not serialize writes to DIFFERENT commands behind each other", async () => {
-    // The scope is per command: a slow write to one shell must not hold up a
-    // press on another. Asserted positively (both requests arrive while the
-    // first is still unanswered) so a scope that accidentally covered the
-    // whole method would fail here rather than pass by being extra-safe.
+    // The scope is per command: a slow write to one shell must not hold up a press on another.
+    // Asserted positively (both requests arrive while the first is still unanswered) so a scope that accidentally covered the whole method would fail here rather than pass by being extra-safe.
     const a = renderHook(
       () =>
         useManagedCommandConfigure({

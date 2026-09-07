@@ -20,9 +20,7 @@ const downloadBlobToDeviceMock = vi.hoisted(() =>
     Promise.resolve({ name: "generated.png", path: null }),
   ),
 );
-/** Whether the shell under test hands files to an OS chooser. */
 const hasShareRoute = vi.hoisted(() => vi.fn<() => boolean>(() => false));
-/** Whether a Download can be honoured at all on that shell. */
 const canDownload = vi.hoisted(() => vi.fn<() => boolean>(() => true));
 const copyImageMock = vi.hoisted(() =>
   vi.fn<(blob: Blob) => Promise<void>>(() => Promise.resolve()),

@@ -21,16 +21,7 @@ const AGENT_REFERENCE_MARKDOWN_COMPONENTS: Record<
   code: AgentAwareCodeBlock as ComponentType<Record<string, unknown>>,
 };
 
-/**
- * Renders a markdown string through {@link TraycerMarkdown} with the
- * agent-reference plugin set wired in: complete or uniquely-matching UUID
- * prefixes for agents and role claims resolve to live
- * {@link AgentReferenceChip}s. This is
- * the single renderer shared by assistant text segments and the A2A
- * sent/received message cards so all three surface the same formatted
- * markdown (lists, headings, tables, code, agent chips) instead of a raw
- * single-line blob.
- */
+/** Renders a markdown string through {@link TraycerMarkdown} with the agent-reference plugin set wired in: complete or uniquely-matching UUID prefixes for agents and role claims resolve to live {@link AgentReferenceChip}s. This is the single renderer shared by assistant text segments and the A2A sent/received message cards so all three surface the same formatted markdown (lists, headings, tables, code, agent chips) instead of a raw single-line blob. */
 export function AgentReferenceMarkdown({
   isStreaming,
   markdown,
@@ -44,21 +35,14 @@ export function AgentReferenceMarkdown({
   readonly proseSize: "compact" | "normal";
   readonly quotable: boolean;
   readonly imageRendering?: "assistant" | "standard";
-  /**
-   * Per-surface overrides merged OVER the shared agent-reference set, for a
-   * surface whose link semantics differ from chat's. `null` for surfaces that
-   * want the shared behaviour unchanged - which is every chat surface.
-   */
+  /** Per-surface overrides merged OVER the shared agent-reference set, for a surface whose link semantics differ from chat's. `null` for surfaces that want the shared behaviour unchanged - which is every chat surface. */
   readonly components: Record<
     string,
     ComponentType<Record<string, unknown>>
   > | null;
 }): ReactNode {
-  // MEMOIZED, and above the early return so the hook order is unconditional.
-  // `TraycerMarkdown` keys its parse `useMemo` - and `MarkdownBlock` its memo
-  // comparator - on this object's IDENTITY, so minting a fresh merge per render
-  // would reparse every block of every body on any unrelated rerender of the
-  // surface. Callers pass a module-level constant, so this key never churns.
+  // `TraycerMarkdown` keys its parse `useMemo` - and `MarkdownBlock` its memo comparator - on this object's IDENTITY, so minting a fresh merge per render would reparse every block of every body on any unrelated rerender of the surface.
+  // Callers pass a module-level constant, so this key never churns.
   const mergedComponents = useMemo(
     () =>
       components === null

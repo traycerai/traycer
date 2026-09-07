@@ -95,12 +95,8 @@ import {
   type LandingTerminalHostContext,
 } from "./landing-terminal-host-context";
 
-/**
- * The panel's own surface. Desktop is a docked split, so it reads as chrome
- * beside the content and carries the seam borders. The phone overlay covers the
- * page rather than sitting next to it, so `bg-canvas` there laid a white sheet
- * under the `bg-background` header, and the borders divide nothing.
- */
+/** The phone overlay covers the page rather than sitting next to it, so `bg-canvas` there laid a white sheet
+ * under the `bg-background` header, and the borders divide nothing. */
 function landingTerminalPanelSurfaceClass(isMobile: boolean): string {
   return isMobile
     ? "bg-background"
@@ -130,23 +126,8 @@ interface LandingTerminalDirectoryRequest {
   readonly selectedTarget: LandingTerminalTarget | null;
 }
 
-/**
- * Whether this host's authority can back a LIVE tab mutation right now - the
- * predicate behind create and rename, and the fast path of close.
- *
- * A missing or `"unknown"` entry means the capability probe has not answered,
- * so neither branch of the tile lifecycle can be chosen yet; a `"capable"`
- * host that cannot mutate has a stale or reconnecting list stream. `"legacy"`
- * needs no stream - its tiles create and kill through the session RPCs.
- *
- * Creation gates on this too, and must: a tab persisted while the probe is
- * unresolved lands as `hostAuthorityAcknowledged: false, pendingCreate: false`,
- * which is precisely the shape of LEGACY evidence. The next capable pass then
- * tries to `importLegacy` a terminal that was never created on any host.
- *
- * Close deliberately does NOT gate on this - it is tombstone-first and drains
- * later. See {@link dispatchLandingTerminalClose}.
- */
+/** A missing or `"unknown"` entry means the capability probe has not answered, so neither branch of the tile
+ * lifecycle can be chosen yet; a `"capable"` host that cannot mutate has a stale or reconnecting list stream. */
 function landingTerminalAuthorityReady(
   entry: LandingTerminalAuthorityEntry | null | undefined,
 ): entry is LandingTerminalAuthorityEntry {
@@ -156,22 +137,7 @@ function landingTerminalAuthorityReady(
   return capability.status === "capable" && entry.authority.canMutate;
 }
 
-/**
- * Sends the kill for an ALREADY-TOMBSTONED tab, when its bound host can be
- * asked right now.
- *
- * A host that cannot be asked - offline, or a capability probe that has not
- * answered - is not a failure here and must not block the close: the store
- * wrote the tombstone before the tab was removed, and two existing mechanisms
- * carry it from there. Reconciliation excludes a tombstoned session from
- * re-adoption when the host returns, and
- * `LandingTerminalTombstoneRecoveryBridge` (mounted above the router, so
- * leaving the landing page cannot strand it) dispatches the capability-correct
- * kill on the edge where that host becomes dialable again, with backoff.
- *
- * So this is only the fast path. It never falls back to another host: the
- * tombstone and the mutation both carry the tab's own bound `hostId`.
- */
+/** A host that cannot be asked - offline, or a capability probe that has not answered. */
 function dispatchLandingTerminalClose(args: {
   readonly entry: LandingTerminalAuthorityEntry | undefined;
   readonly closed: LandingTerminalTabRef;
@@ -181,22 +147,14 @@ function dispatchLandingTerminalClose(args: {
 }): void {
   const { entry, closed, killTerminal } = args;
   if (!landingTerminalAuthorityReady(entry)) return;
-  // A provider-login session is MANAGER-owned on every host capability - the
-  // host made it for `providers.startTerminalLogin`, never through
-  // `terminal.plain.create` - so it has no plain-terminal row. The capable arm
-  // below requires one (`requireOwnerRow`) and would reject before sending,
-  // raising "Couldn't close the terminal." over a sign-in shell that is still
-  // running, with a tombstone the plain reconciliation cannot drain. Session
-  // level is the only level this session exists at.
+  // The capable arm below requires one (`requireOwnerRow`) and would reject before sending, raising "Couldn't
+  // close the terminal." over a sign-in shell that is still running.
   if (
     isProviderLoginLandingTab(closed) ||
     entry.authority.capability.status !== "capable"
   ) {
-    // Same boundary as the capable arm below, for the same reason. `terminal.kill`
-    // is scheduled `fifo`, and `selectJob` returns null for fifo rather than
-    // joining an identical queued job - so an unmediated duplicate is two real
-    // RPCs and two `terminal.list` invalidations on every ordinary legacy close,
-    // the second answering `killed: false` about a session the first removed.
+    // `terminal.kill` is scheduled `fifo`, and `selectJob` returns null for fifo rather than joining an identical
+    // queued job.
     void requestLandingTerminalClose({
       hostId: closed.hostId,
       sessionId: closed.sessionId,
@@ -208,14 +166,8 @@ function dispatchLandingTerminalClose(args: {
     }).catch(() => undefined);
     return;
   }
-  // Through the shared close boundary, not straight at the mutation. The
-  // tombstone this close follows is also watched by
-  // `LandingTerminalTombstoneRecoveryBridge`, which sends the close for any key
-  // it has not dispatched before - so on an already-drainable host both fire for
-  // one gesture, from separate mutation instances that cannot see each other.
-  // The coordinator collapses them onto one request; without it the loser fails
-  // on a terminal the winner already removed and raises "Couldn't close the
-  // terminal." for a close that worked.
+  // The tombstone this close follows is also watched by `LandingTerminalTombstoneRecoveryBridge`, which sends
+  // the close for any key it has not dispatched before.
   void requestLandingTerminalClose({
     hostId: closed.hostId,
     sessionId: closed.sessionId,
@@ -225,12 +177,8 @@ function dispatchLandingTerminalClose(args: {
         .then(() => undefined),
   })
     .then((outcome) => {
-      // Only the OWNER retires the record. The coordinator keys by the
-      // terminal's lifetime rather than by RPC, so this close can join an
-      // in-flight `terminal.kill`, and that answers an already-gone session with
-      // `killed: false` DATA - the one answer the kill mutation keeps a
-      // `pendingCreate` tombstone for. A joiner that cleared on it would drop
-      // the record in front of the PTY that create is about to produce.
+      // The coordinator keys by the terminal's lifetime rather than by RPC, so this close can join an in-flight
+      // `terminal.kill`, and that answers an already-gone session with `killed: false` data.
       if (!outcome.owned) return;
       useLandingTerminalStore
         .getState()
@@ -258,10 +206,8 @@ function directoryRequestFor(
   };
 }
 
-// Matched against the resolved launch cwd (primary folder, else the settled
-// context's home), not merely `target.primaryWorkspacePath` - so a
-// gesture-opened panel with no primary folder still re-targets an existing
-// terminal already running at the reconciled host's home.
+// Matched against the resolved launch cwd (primary folder, else the settled context's home), not merely
+// `target.primaryWorkspacePath`.
 function terminalForTarget(
   tabs: ReadonlyArray<LandingTerminalTabRef>,
   activeInstanceId: string | null,
@@ -333,10 +279,8 @@ function settleDirectoryRequest(args: {
       }
     }
   }
-  // Creation refused: the host's authority went unready between this
-  // generation's reconciliation and its settlement. Surface the same
-  // recoverable state as an unusable target rather than consuming the
-  // selection silently - the picker stays up and the choice can be remade.
+  // Surface the same recoverable state as an unusable target rather than consuming the selection silently - the
+  // picker stays up and the choice can be remade.
   if (instanceId === null) {
     args.replaceDirectoryRequest({
       ...request,
@@ -351,12 +295,8 @@ function settleDirectoryRequest(args: {
   return true;
 }
 
-/**
- * Landing-only independent-terminal surface. It is a CONSUMER of
- * `LandingTerminalGestureProvider`: routing identity comes from its captured
- * target, while chooser presentation reads the provider's workspace source for
- * that same captured draft. No consumer reads live host or draft focus.
- */
+/** It is a consumer of `LandingTerminalGestureProvider`: routing identity comes from its captured target, while
+ * chooser presentation reads the provider's workspace source for that same captured draft. */
 export function LandingTerminalPanel(): ReactNode {
   const {
     focusedLandingPageId,
@@ -369,9 +309,8 @@ export function LandingTerminalPanel(): ReactNode {
     selectWorkspacePath,
     clearPending,
   } = useLandingTerminalGesture();
-  // Layout belongs to the focused start page. This is deliberately independent
-  // of `target`: a pending gesture may retain an earlier page's host/folder
-  // routing while focus has already moved to another page.
+  // Layout belongs to the focused start page. This is deliberately independent of `target`: a pending gesture
+  // may retain an earlier page's host/folder routing while focus has already moved to another page.
   const landingPageId = focusedLandingPageId ?? UNBOUND_LANDING_PAGE_ID;
   const targetLandingPageId = target.draftId ?? UNBOUND_LANDING_PAGE_ID;
   const tabs = useLandingTerminalStore((state) => state.tabs);
@@ -445,11 +384,8 @@ export function LandingTerminalPanel(): ReactNode {
     [],
   );
 
-  // The chooser's field is not why the chooser is on screen: a directory is
-  // picked from the list beneath it, and on a touch pointer focusing the field
-  // covers that list with a software keyboard. Skipping the REQUEST rather
-  // than the endpoint's focus is what keeps the coordinator's bookkeeping
-  // honest - an intent no endpoint will ever satisfy would stay pending.
+  // Skipping the request rather than the endpoint's focus is what keeps the coordinator's bookkeeping honest -
+  // an intent no endpoint will ever satisfy would stay pending.
   const coarsePointer = useCoarsePointer();
   const requestDirectoryPickerFocus = useCallback(
     (requestKey: number): void => {
@@ -485,12 +421,8 @@ export function LandingTerminalPanel(): ReactNode {
     [landingPageId, setPanelMaximizedForPage],
   );
 
-  // The single creation point every path funnels through - the "+", the
-  // `app.terminal.new` / `tab.new` chords, the directory picker's settlement,
-  // and reconciliation's auto-spawn - so the authority gate lives here rather
-  // than being restated at each caller. `null` means "not created": the host's
-  // authority is not ready, and a tab written now would be indistinguishable
-  // from legacy evidence.
+  // `null` means "not created": the host's authority is not ready, and a tab written now would be
+  // indistinguishable from legacy evidence.
   const addTerminalTab = useCallback(
     (hostId: string, cwd: string): string | null => {
       const authority = authorityEntries[hostId];
@@ -515,20 +447,14 @@ export function LandingTerminalPanel(): ReactNode {
     [addTab, authorityEntries],
   );
 
-  // Manual create paths: the routing target's primary folder, else the last
-  // reconciled home for that target's still-active host. Never invents a path
-  // or uses another host's home. Re-read the routing client's active host at
-  // invocation time: keyboard handlers can fire after a host switch but before
-  // React re-renders, so the captured `routing.hostId` alone is not enough to
-  // satisfy the host-identity guardrail.
+  // Re-read the routing client's active host at invocation time.
   const createTerminalTab = useCallback(
     (routing: LandingTerminalTarget): string | null => {
       if (routing.hostId === null || routing.availability !== "supported") {
         return null;
       }
-      // Fail-closed: no host client (a gesture that could not pin one) means we
-      // cannot reconcile the terminal, so we do not create it. In non-gesture
-      // operation the target carries the default client, so this never blocks.
+      // Fail-closed: no host client (a gesture that could not pin one) means we cannot reconcile the terminal, so we
+      // do not create it. In non-gesture operation the target carries the default client, so this never blocks.
       const client = routing.client;
       if (client === null) return null;
       const currentHostId = client.getActiveHostId();
@@ -546,10 +472,7 @@ export function LandingTerminalPanel(): ReactNode {
     [addTerminalTab, reconciledContext],
   );
 
-  // The tab-family chord ("new terminal"): if the panel is closed, capture the
-  // open gesture and create from THAT captured snapshot up-front (the non-empty
-  // set suppresses the open reconciliation's auto-spawn). If already open, it is
-  // just a `+` - create against the effective target, never re-capturing.
+  // If already open, it is just a `+` - create against the effective target, never re-capturing.
   const revealAndCreateTerminal = useCallback(() => {
     if (directoryRequestRef.current !== null) {
       if (panelOpen) return;
@@ -666,10 +589,8 @@ export function LandingTerminalPanel(): ReactNode {
     [activateTab, clearPending, replaceDirectoryRequest],
   );
 
-  // Focus follows the open/collapse *transition*, never the mount: a landing
-  // page that mounts with the panel already open (new tab, tab switch back)
-  // must leave focus with the composer. Opening also arms the launch-cwd
-  // intent that reconciliation consumes once the host's session list settles.
+  // Focus follows the open/collapse *transition*, never the mount: a landing page that mounts with the panel
+  // already open (new tab, tab switch back) must leave focus with the composer.
   const previousPanelLayoutRef = useRef({ landingPageId, panelOpen });
   useEffect(() => {
     const previous = previousPanelLayoutRef.current;
@@ -677,9 +598,8 @@ export function LandingTerminalPanel(): ReactNode {
     const store = useLandingTerminalStore.getState();
     if (previous.landingPageId !== landingPageId) {
       clearPendingTerminalFocus(null);
-      // A reveal written for the page just left has had its transition there
-      // or never will; left standing it would suppress this page's next real
-      // gesture.
+      // A reveal written for the page just left has had its transition there or never will; left standing it would
+      // suppress this page's next real gesture.
       store.clearPanelReveal();
       return;
     }
@@ -687,11 +607,8 @@ export function LandingTerminalPanel(): ReactNode {
     if (wasOpen === panelOpen) return;
     if (panelOpen) {
       const openActiveInstanceId = store.activeInstanceId;
-      // An open made to SHOW the active tab is not an opening gesture. Settling
-      // it as one re-targets the launch cwd, which a host-created sign-in tab
-      // (display-only `"~"`) never matches - so it would spawn a bare shell
-      // over the tab the open was for. Consumed here whatever it named, so a
-      // reveal cannot outlive the one transition it describes.
+      // Settling it as one re-targets the launch cwd, which a host-created sign-in tab (display-only `"~"`) never
+      // matches - so it would spawn a bare shell over the tab the open was for.
       const revealed =
         store.panelReveal !== null &&
         store.panelReveal === openActiveInstanceId;
@@ -705,11 +622,8 @@ export function LandingTerminalPanel(): ReactNode {
       }
       return;
     }
-    // Every collapse path converges on this store transition: the chord, the
-    // header button, closing the last tab, close-all, and a shell exiting.
-    // All of them should hand the keyboard back to the composer. A reveal that
-    // found the panel already open never saw a transition; it retires here so
-    // the NEXT open - a real gesture - is settled as one.
+    // A reveal that found the panel already open never saw a transition; it retires here so the next open - a real
+    // gesture - is settled as one.
     store.clearPanelReveal();
     clearPendingTerminalFocus(null);
     focusActiveComposer();
@@ -721,13 +635,8 @@ export function LandingTerminalPanel(): ReactNode {
     [],
   );
 
-  // Runs after every settled reconciliation pass (the reconciliation key
-  // includes the open/closed bit, so every panel-open transition lands here).
-  // Empty panels auto-spawn at the resolved launch cwd (the routing target's
-  // primary folder, else the settled context's home); a gesture-opened panel
-  // additionally re-targets that cwd: reuse a terminal already running there,
-  // otherwise spawn a fresh one, and focus it either way. The settled
-  // generation's context is authoritative - not React state.
+  // Runs after every settled reconciliation pass (the reconciliation key includes the open/closed bit, so every
+  // panel-open transition lands here).
   const runReconciliationSettlement = useCallback(
     (generation: number, context: LandingTerminalHostContext) => {
       const state = useLandingTerminalStore.getState();
@@ -759,10 +668,8 @@ export function LandingTerminalPanel(): ReactNode {
       // A settlement for a superseded generation must neither act nor clear the
       // newer pending gesture that replaced it.
       if (pending && pendingGeneration !== generation) return;
-      // Any pending gesture now matches this settled generation and is consumed
-      // exactly once. Clear it on EVERY outcome below (spawn, reuse, no-op) so a
-      // later gesture projects live focus instead of this stale snapshot, and
-      // `+`/workspace projection follow the newly focused draft after settling.
+      // Clear it on every outcome below (spawn, reuse, no-op) so a later gesture projects live focus instead of this
+      // stale snapshot, and `+`/workspace projection follow the newly focused draft after settling.
       const clearIfPending = (): void => {
         if (pending) clearPending();
       };
@@ -781,19 +688,15 @@ export function LandingTerminalPanel(): ReactNode {
         clearIfPending();
         return;
       }
-      // Creation can be refused (the host's authority went unready between
-      // this generation's reconciliation and its settlement), so the focus
-      // hand-off is conditional on a tab actually existing.
+      // Creation can be refused (the host's authority went unready between this generation's reconciliation and its
+      // settlement), so the focus hand-off is conditional on a tab actually existing.
       const spawnAndFocus = (focus: boolean): void => {
         const created = addTerminalTab(context.hostId, launchCwd);
         if (focus && created !== null) focusTerminalInstance(created);
       };
       if (state.tabs.length === 0) {
-        // Empty-panel auto-spawn is pinned to the opening draft. A gesture
-        // spawns its captured draft; a gesture-less live settlement (post-clear,
-        // or a pre-opened panel whose folder just arrived) only spawns while
-        // focus still rests on the opening draft, so switching drafts mid-flight
-        // never spawns a terminal in the draft the user merely moved to.
+        // A gesture spawns its captured draft; a gesture-less live settlement (post-clear, or a pre-opened panel whose
+        // folder just arrived) only spawns while focus still rests on the opening draft.
         if (!pending && target.draftId !== openEpisodeDraftId) {
           clearIfPending();
           return;
@@ -832,19 +735,8 @@ export function LandingTerminalPanel(): ReactNode {
     ],
   );
 
-  // Settlement is the panel's other outward-facing act, and it must gate on
-  // surface activity for the same reason the chords do. Before the panel
-  // outlived its page's activation, a tab switch UNMOUNTED it and aborted the
-  // in-flight pass; now the pass survives, so an `open -> switch away ->
-  // settle` sequence would auto-spawn a terminal into a `display:none` pane
-  // (which cannot be measured, so it lands at the 80x24 fallback grid) and pull
-  // the keyboard out of whatever the user switched to.
-  //
-  // Held rather than dropped: the reconciliation key does not change on the way
-  // back, so a discarded settlement would never be recomputed and a panel
-  // opened just before the switch would sit empty forever. The newest
-  // settlement wins - an older one is superseded, which is what the generation
-  // and host-identity guards inside the body already check for.
+  // Held rather than dropped: the reconciliation key does not change on the way back, so a discarded settlement
+  // would never be recomputed and a panel opened just before the switch would sit empty forever.
   const surfaceActive = useLandingTerminalSurfaceActive();
   const deferredSettlementRef = useRef<{
     readonly generation: number;
@@ -883,28 +775,18 @@ export function LandingTerminalPanel(): ReactNode {
     onSettled: handleReconciliationSettled,
   });
 
-  // Rename is a LIVE mutation with no durable fallback - only the host can
-  // record a manual title - so its affordance gates on that host's authority
-  // being ready, and the gate and the action stay one predicate. Close is
-  // deliberately NOT here: it is tombstone-first, so it stays available for a
-  // host that cannot be asked right now.
+  // Close is deliberately not here: it is tombstone-first, so it stays available for a host that cannot be asked
+  // right now.
   const canRenameTab = useCallback(
     (tab: LandingTerminalTabRef): boolean =>
-      // A provider-login tab is never renameable: `terminal.plain.rename` is
-      // the only rename there is here, and it rejects for a manager-owned
-      // session that has no plain-terminal row - so the action could only ever
-      // raise an error and change nothing. Its title is `manual` and host-set
-      // ("<Provider> sign-in") for the same reason.
+      // A provider-login tab is never renameable: `terminal.plain.rename` is the only rename there is here, and it
+      // rejects for a manager-owned session that has no plain-terminal row.
       !isProviderLoginLandingTab(tab) &&
       landingTerminalAuthorityReady(authorityEntries[tab.hostId]),
     [authorityEntries],
   );
 
-  // Closing always removes the tab and records its tombstone, whatever the
-  // bound host's authority looks like - a tab bound to an offline host is
-  // closable, and its shell is killed when that host comes back. The dispatch
-  // is the fast path only; `dispatchLandingTerminalClose` documents who carries
-  // the kill otherwise.
+  // The dispatch is the fast path only; `dispatchLandingTerminalClose` documents who carries the kill otherwise.
   const closeTerminalTab = useCallback(
     (tab: LandingTerminalTabRef) => {
       replaceDirectoryRequest(null);
@@ -917,9 +799,7 @@ export function LandingTerminalPanel(): ReactNode {
         closed,
         killTerminal: killTerminalAsync,
       });
-      // Closing a non-last tab promotes a surviving neighbor - keep the
-      // keyboard with the panel. The last-tab case collapses the panel, and
-      // the open-transition effect hands focus back to the composer instead.
+      // Closing a non-last tab promotes a surviving neighbor - keep the keyboard with the panel.
       const state = useLandingTerminalStore.getState();
       if (
         landingTerminalLayoutFor(state, landingPageId).panelOpen &&
@@ -942,15 +822,8 @@ export function LandingTerminalPanel(): ReactNode {
   );
 
   const closeAllTerminalTabs = useCallback(() => {
-    // Every tab closes - "Close All" means all of them, including tabs whose
-    // host cannot be asked yet, whose kills the recovery bridge drains later.
-    //
-    // This replays a single close per tab, so the durability ordering is
-    // per-tab: each tombstone is written with its own tab's removal, then that
-    // tab's kill dispatches. An interruption mid-loop therefore leaves every
-    // tab either untouched or tombstoned, never removed without a tombstone -
-    // which is the invariant that matters, and it keeps focus handling and the
-    // fast-path dispatch in one place instead of duplicating them per tab.
+    // An interruption mid-loop therefore leaves every tab either untouched or tombstoned, never removed without a
+    // tombstone.
     replaceDirectoryRequest(null);
     clearPending();
     useLandingTerminalStore.getState().tabs.forEach(closeTerminalTab);
@@ -1035,11 +908,8 @@ export function LandingTerminalPanel(): ReactNode {
     return viewModels;
   }, [authorityEntries, tabs]);
 
-  // Several remote hosts can exist without a default selection. This is a
-  // real page state, not an unsupported/unknown verdict: leave persistence
-  // untouched and render no terminal affordance until one is selected. Read the
-  // captured verdict so a mid-gesture switch to an unsupported host cannot
-  // unmount the panel (and destroy the captured host's reconciliation).
+  // Several remote hosts can exist without a default selection. Read the captured verdict so a mid-gesture
+  // switch to an unsupported host cannot unmount the panel (and destroy the captured host's reconciliation).
   const panelUnavailable =
     target.availability === "no-active-host" ||
     target.availability === "unsupported";
@@ -1155,23 +1025,14 @@ function LandingTerminalPanelContents(
     setPanelWidthFraction: props.onSetPanelWidthFraction,
     onLayoutSettled: scheduleTerminalLayoutReconcile,
   });
-  // Below the mobile breakpoint a side-by-side split leaves both halves
-  // unusably narrow and the drag handle has no pointer to serve, so an open
-  // panel always renders through the maximized full-overlay path instead.
-  // The overlay geometry applies only while actually open: a closed panel
-  // physically collapses to the 0%-width in-flow strip on every device
-  // rather than lingering as an invisible full-viewport layer.
+  // The overlay geometry applies only while actually open: a closed panel physically collapses to the 0%-width
+  // in-flow strip on every device rather than lingering as an invisible full-viewport layer.
   const isMobile = useIsMobileViewport();
   const fullOverlay = props.maximized || isMobile;
   const overlayActive = fullOverlay && props.panelOpen;
-  // Same touch-key treatment as the epic terminal tiles: at phone width the
-  // open panel is a full overlay, so the key bar mounts under the body and
-  // the keyboard inset pads the covered strip (0 wherever the platform
-  // resizes the layout itself). Desktop keeps its physical keyboard.
+  // Same touch-key treatment as the epic terminal tiles.
   const keyboardInset = useVirtualKeyboardInset();
-  // Under the installed app's native-resize keyboard mode the measured inset
-  // stays 0 while the keyboard is up; the plugin-fed native state is the live
-  // signal there (drives the key bar's padding, not the overlay geometry).
+  // Under the installed app's native-resize keyboard mode the measured inset stays 0 while the keyboard is up.
   const nativeKeyboardOpen = useNativeKeyboardOpen();
   const keyBarActive = isMobile && props.panelOpen;
   useLandingTerminalShortcuts({
@@ -1190,9 +1051,8 @@ function LandingTerminalPanelContents(
     overlayActive,
     panelOpen: props.panelOpen,
     panelWidthFraction: props.panelWidthFraction,
-    // Browser-only, like the epic tile view's padding: the installed app's
-    // shell already subtracts `--keyboard-inset` in its safe-height tokens,
-    // so the measured inset would double the lift there.
+    // Browser-only, like the epic tile view's padding: the installed app's shell already subtracts
+    // `--keyboard-inset` in its safe-height tokens, so the measured inset would double the lift there.
     keyboardInsetPx: keyBarActive && !isMobileApp() ? keyboardInset : 0,
   });
   const handlePanelTransitionEnd = useCallback(
@@ -1234,11 +1094,8 @@ function LandingTerminalPanelContents(
 
   return (
     <>
-      {/* Reveal-only affordance. Once open, the panel header owns collapse -
-          rendering both would stack two controls in the same corner. On a phone
-          it lives in the header's route-actions slot instead of floating in the
-          content area, where it was the only element in an otherwise empty
-          region with nothing to align to. */}
+      {/* Reveal-only affordance. On a phone it lives in the header's route-actions slot instead of floating in the
+         content area, where it was the only element in an otherwise empty region with nothing to align to. */}
       {isMobile ? (
         <MobileLandingTerminalActionBinder
           landingPageId={props.landingPageId}
@@ -1271,10 +1128,8 @@ function LandingTerminalPanelContents(
         className={cn(
           "flex h-full min-h-0 shrink-0 flex-col overflow-hidden",
           landingTerminalPanelSurfaceClass(isMobile),
-          // The width transition exists for open/collapse only. During a
-          // resize drag the global freeze class suspends it - otherwise every
-          // per-frame `style.width` write eases over the default duration and
-          // the panel rubber-bands behind the pointer.
+          // During a resize drag the global freeze class suspends it - otherwise every per-frame `style.width` write
+          // eases over the default duration and the panel rubber-bands behind the pointer.
           "[.traycer-panel-resizing_&]:transition-none",
           props.panelOpen
             ? "transition-[width]"
@@ -1329,12 +1184,8 @@ function LandingTerminalPanelContents(
   );
 }
 
-/**
- * In-flow width for the docked split; in overlay mode (maximized / mobile)
- * the panel is absolutely positioned instead, and at phone width the measured
- * keyboard inset pads the covered strip so the key bar rides above the soft
- * keyboard (0 wherever the platform resizes the layout itself).
- */
+/** In-flow width for the docked split; in overlay mode (maximized / mobile) the panel is absolutely positioned
+ * instead. */
 function landingTerminalPanelStyle(args: {
   readonly overlayActive: boolean;
   readonly panelOpen: boolean;
@@ -1368,15 +1219,8 @@ function LandingTerminalMobileKeyBar(
   );
 }
 
-/**
- * Why the strip's "+" is unavailable (surfaced as its tooltip), `null` when
- * creating is live. Mirrors the empty-state copy so the strip explains itself
- * even when tabs are already open (e.g. the last folder was removed after the
- * terminals were spawned and the host cannot report a home directory).
- * `clientReady` is false when the host client cannot be pinned (fail-closed):
- * the action stays disabled rather than falling back to the live default
- * client.
- */
+/** `clientReady` is false when the host client cannot be pinned (fail-closed): the action stays disabled rather
+ * than falling back to the live default client. */
 function landingTerminalCreateDisabledReason(args: {
   readonly availability: LandingTerminalAvailability;
   readonly primaryWorkspacePath: string | null;
@@ -1408,13 +1252,8 @@ function landingTerminalCreateDisabledReason(args: {
   return null;
 }
 
-/**
- * The create gate, resolved once from either the captured opening-gesture
- * snapshot or live focus (the caller decides which by passing the effective
- * values). `createEnabled` drives the terminal tiles; `createDisabledReason`
- * drives the `+` button's disabled state and tooltip. Both stay in lockstep so
- * a fail-closed client or an unsupported host disables the action either way.
- */
+/** The create gate, resolved once from either the captured opening-gesture snapshot or live focus (the caller
+ * decides which by passing the effective values). */
 function landingTerminalCreateGate(args: {
   readonly panelOpen: boolean;
   readonly availability: LandingTerminalAvailability;
@@ -1436,42 +1275,20 @@ function landingTerminalCreateGate(args: {
     authority: args.authority,
   });
   // Derived from the reason rather than restated, so the two cannot drift.
-  // They previously did: a captured workspace path makes the reason `null`
-  // (the launch cwd is that folder, so no reconciled `homeCwd` is needed),
-  // while this condition still demanded a reconciled context matching the
-  // captured host - leaving the "+" enabled with its tooltip clear but the
-  // tiles' create affordance shut.
   const createEnabled =
     args.panelOpen && args.hostId !== null && createDisabledReason === null;
   return { createEnabled, createDisabledReason };
 }
 
-/**
- * The system-tab modal (Settings / History) is transparent to chord dispatch
- * (it hosts its own leader scope), so the terminal tab shortcuts gate
- * themselves at dispatch time: acting on tabs the modal fully occludes would
- * be invisible. The epic canvas handlers for the same chords no-op while the
- * overlay is open for the same reason.
- */
+/** The system-tab modal (Settings / History) is transparent to chord dispatch (it hosts its own leader scope),
+ * so the terminal tab shortcuts gate themselves at dispatch time. */
 function systemTabOverlayActive(): boolean {
   const api = getSystemTabModalApi();
   if (api === null) return false;
   return api.isOverlayActive("settings") || api.isOverlayActive("history");
 }
 
-/**
- * Binds the panel's chords. Registered here (not in `LandingTerminalPanel`)
- * so they exist exactly while the panel is a real affordance: an unsupported
- * host or no selected host renders nothing, and the chords must not silently
- * flip persisted panel state behind an invisible surface.
- *
- * Beyond the panel-chrome chords (`app.terminal.*`), the hook claims the
- * epic canvas's tab-family actions - `tab.new`, `tab.close`, `tab.close-all`,
- * `tab.next`/`tab.prev`, and `mod`-digit switching - so the terminal strip
- * answers the same chords a canvas group's tab strip does. Those actions'
- * static handlers all no-op on the landing route, so the dynamic
- * registrations shadow nothing.
- */
+/** Registered here (not in `LandingTerminalPanel`) so they exist exactly while the panel is a real affordance. */
 function useLandingTerminalShortcuts(args: {
   readonly landingPageId: string;
   readonly panelOpen: boolean;
@@ -1496,23 +1313,15 @@ function useLandingTerminalShortcuts(args: {
     onCloseTab,
     onCloseAllTabs,
   } = args;
-  // The panel now outlives its start page's ACTIVATION (it stays mounted while
-  // the page is merely retained, so terminals survive a header-tab switch), but
-  // these registrations must not. `dispatchAction` hands a registered dynamic
-  // handler absolute precedence over the static one and reports the chord as
-  // handled, so a backgrounded panel that kept its slots would not just answer
-  // the epic canvas's `tab.*` chords - it would SWALLOW them. Skipping the
-  // registration (rather than no-oping inside the handler) is what lets the
-  // static canvas handler run.
+  // The panel now outlives its start page's activation (it stays mounted while the page is merely retained, so
+  // terminals survive a header-tab switch), but these registrations must not.
   const surfaceActive = useLandingTerminalSurfaceActive();
   useEffect(() => {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("app.terminal.toggle", onTogglePanel);
   }, [onTogglePanel, surfaceActive]);
-  // Reveal-and-create is one gesture in the panel: a collapsed panel captures
-  // the open gesture and creates from that captured snapshot up-front (the
-  // non-empty set suppresses reconciliation's auto-spawn), while an open panel
-  // is just a `+`. It self-gates, so this is safe while the host is connecting.
+  // Reveal-and-create is one gesture in the panel: a collapsed panel captures the open gesture and creates from
+  // that captured snapshot up-front (the non-empty set suppresses reconciliation's auto-spawn).
   useEffect(() => {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("app.terminal.new", onRevealAndCreate);
@@ -1637,10 +1446,8 @@ function LandingTerminalPanelToggle(props: {
       size="icon-sm"
       aria-label="Open terminal panel"
       data-testid="landing-terminal-toggle"
-      // Occupies exactly the box the header's collapse button renders in
-      // while the panel is open (1px panel border + an icon-sm button
-      // centered in the h-9 header row, inset by the header's px-2), so
-      // toggling the panel never moves the control under the pointer.
+      // Occupies exactly the box the header's collapse button renders in while the panel is open (1px panel border +
+      // an icon-sm button centered in the h-9 header row, inset by the header's px-2).
       className="absolute top-[5px] right-2 z-10"
       onClick={props.onOpenPanel}
     >
@@ -1649,24 +1456,8 @@ function LandingTerminalPanelToggle(props: {
   );
 }
 
-/**
- * Both directions of the panel control, rendered into the mobile header's
- * route-actions slot instead of floating in the content area. Free to leave
- * that corner at phone width because the open panel goes through the
- * full-overlay path there, so there is no docked-split geometry to stay
- * aligned with.
- *
- * It carries collapse as well as reveal because the overlay is `absolute
- * inset-0` inside the PAGE container, which sits below the app header - so it
- * never covers the header, and a collapse button inside the panel would stack a
- * second bar under a header that is still on screen. One control in one bar
- * instead.
- *
- * Reads the store itself rather than taking handlers as props: the slot holds a
- * baked `ReactNode`, and one closing over a caller's handler would go stale
- * (see `MobileEpicHeaderActionsBinder`). The page id is data, not a handler:
- * the binder re-bakes the slot whenever it changes, so it stays current.
- */
+/** It carries collapse as well as reveal because the overlay is `absolute inset-0` inside the page container,
+ * which sits below the app header. */
 function LandingTerminalHeaderToggle(props: {
   readonly landingPageId: string;
 }): ReactNode {
@@ -1697,20 +1488,7 @@ function LandingTerminalHeaderToggle(props: {
   );
 }
 
-/**
- * Registers the panel toggle in the mobile header's right-actions registry
- * while the panel is mounted. Rendered from the panel contents, so it inherits
- * the availability guard above - no toggle is registered where no terminal can
- * run.
- *
- * Registration is availability, not presentation: the panel deliberately
- * OUTLIVES its page's activation (it stays mounted behind an epic tab, History
- * or Settings to keep its PTYs warm), and whether the toggle is SHOWN is the
- * header's resolution from the presented surface. So the entry stays put while
- * the landing surface is backgrounded - invisible there by resolution - and is
- * showing again the moment the landing surface is presented, with no event on
- * this side.
- */
+/** Registers the panel toggle in the mobile header's right-actions registry while the panel is mounted. */
 function MobileLandingTerminalActionBinder(props: {
   readonly landingPageId: string;
 }): ReactNode {
@@ -1721,9 +1499,8 @@ function MobileLandingTerminalActionBinder(props: {
     (state) => state.unregisterRightActions,
   );
   useEffect(() => {
-    // Keyed and re-baked by the hosting landing page, so the entry both names
-    // and toggles the page that hosts the panel - a hosting move retires the
-    // old page's entry with its own key before registering the new one.
+    // Keyed and re-baked by the hosting landing page, so the entry both names and toggles the page that hosts the
+    // panel - a hosting move retires the old page's entry with its own key before registering the new one.
     const key = landingTerminalRightActionsKey(props.landingPageId);
     registerRightActions(
       key,
@@ -1736,14 +1513,7 @@ function MobileLandingTerminalActionBinder(props: {
   return null;
 }
 
-/**
- * Desktop-only chrome row. Both of its controls are meaningless at phone width:
- * the open panel is a full overlay regardless of the maximized bit, so
- * Maximize/Restore is a no-op, and collapse lives in the app header's slot
- * because the overlay never covers that header - keeping a collapse button here
- * would stack a second bar directly under one that is still on screen. The tab
- * strip becomes the panel's top row there instead.
- */
+/** Both of its controls are meaningless at phone width. */
 function LandingTerminalPanelHeader(props: {
   readonly isMobile: boolean;
   readonly maximized: boolean;
@@ -1919,9 +1689,7 @@ function resolveLandingTerminalResizeContainer(
   const parent = handle.parentElement;
   if (parent === null) return null;
 
-  // Split landing panes portal the handle and panel into a `display: contents`
-  // anchor. That anchor preserves flex layout but has no box of its own, so its
-  // bounding rect is always zero-sized. Measure the pane's flex row instead.
+  // That anchor preserves flex layout but has no box of its own, so its bounding rect is always zero-sized.
   return window.getComputedStyle(parent).display === "contents"
     ? parent.parentElement
     : parent;
@@ -2027,11 +1795,8 @@ function useLandingTerminalLayoutReconcile(args: {
   useEffect(() => {
     const reopened = args.panelOpen && !previousPanelOpenRef.current;
     previousPanelOpenRef.current = args.panelOpen;
-    // A normal reveal reconciles on its final width transition. If another
-    // resize has globally suppressed transitions, the panel jumps straight to
-    // its target width and needs the next-frame fallback instead. An active-tab
-    // change while already open also lands here, including a delayed
-    // reconciliation that selects a different terminal after reveal.
+    // An active-tab change while already open also lands here, including a delayed reconciliation that selects a
+    // different terminal after reveal.
     if (args.panelOpen && (!reopened || isPanelResizeInteractionActive())) {
       scheduleReconcile();
     }

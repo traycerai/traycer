@@ -10,24 +10,12 @@ function matchTokens(value: string): ReadonlyArray<string> {
     .filter((token) => token.length > 0);
 }
 
-// Provider-generic tokens carry no model-family information: they appear both
-// in family names ("Claude Opus") and in every model slug of the provider
-// (`claude-fable-5[1m]`), so matching through them would gate every model.
-// Stripped from the FAMILY side only - a family that is nothing but generic
-// tokens falls through to the err-toward-matching path below.
+// Provider-generic tokens carry no model-family information: they appear both in family names ("Claude Opus") and in every model slug of the provider (`claude-fable-5[1m]`), so matching through them would gate every model.
 const PROVIDER_GENERIC_TOKENS = new Set(["claude", "anthropic"]);
 
 /**
- * Whether a limited scope's `family` gates `model`. `null` is a shared window
- * that gates every model. Otherwise both sides tokenize on non-alphanumerics
- * and the scope matches when ANY informative family token appears among the
- * model's slug/label tokens ("Fable" -> `claude-fable-5[1m]`, "opus" ->
- * `opus[1m]`, "Claude Opus" -> `claude-opus-4-7` but NOT
- * `claude-fable-5[1m]`). Purely numeric family tokens are version noise and
- * provider-generic tokens ("claude") match every model of the provider, so
- * both are ignored; a family with no informative token left cannot be judged
- * and errs toward matching - every uncertain path here fails toward SHOWING
- * the warning, never hiding a real one.
+ * Whether a limited scope's `family` gates `model`.
+ * `null` is a shared window that gates every model.
  */
 export function rateLimitScopeAffectsModel(
   family: string | null,
@@ -46,10 +34,7 @@ export function rateLimitScopeAffectsModel(
 }
 
 /**
- * The subset of a profile's limited scopes that gate `model`, or `null` when
- * per-scope data is unavailable (an old host build, or a profile whose gauge
- * was never read / went stale) or no model is resolved - callers fall back to
- * the profile-level `rateLimitStatus` in that case.
+ * The subset of a profile's limited scopes that gate `model`, or `null` when per-scope data is unavailable (an old host build, or a profile whose gauge was never read / went stale) or no model is resolved - callers fall back to the profile-level.
  */
 export function matchingRateLimitScopes(
   profile: ProviderProfile,
@@ -63,10 +48,7 @@ export function matchingRateLimitScopes(
 }
 
 /**
- * The profile's near/hard-limit severity as it applies to the selected model:
- * the worst severity among the scopes gating `model`, the profile-level
- * `rateLimitStatus` when per-scope data is unavailable, and `null` (not
- * limited for this model) when scopes exist but none gate it.
+ * The profile's near/hard-limit severity as it applies to the selected model: the worst severity among the scopes gating `model`, the profile-level `rateLimitStatus` when per-scope data is unavailable, and `null` (not limited for this model) when scopes.
  */
 export function effectiveProfileRateLimitSeverity(
   profile: ProviderProfile,
@@ -85,9 +67,7 @@ export function effectiveProfileRateLimitSeverity(
 }
 
 /**
- * Orders severities for "is this destination in a strictly better tier than
- * the limited current profile" comparisons: not-limited (0) < near_limit (1)
- * < hard_limit (2).
+ * Orders severities for "is this destination in a strictly better tier than the limited current profile" comparisons: not-limited (0) < near_limit (1) < hard_limit (2).
  */
 export function rateLimitSeverityTier(
   severity: ProfileRateLimitSeverity | null,
@@ -97,13 +77,8 @@ export function rateLimitSeverityTier(
 }
 
 /**
- * Two-dimensional rate-limit evidence for destination ranking: whether the
- * profile's state is KNOWN at all, and - only when known - its severity for
- * the selected model. Unknown is incomparable, not a tier: a profile whose
- * gauge was never read, went stale, or last probed with a failure must never
- * satisfy a "strictly better" comparison, no matter how limited the current
- * profile is. (`effectiveProfileRateLimitSeverity` stays the WARNING-side
- * read, where unknown and healthy both mean "don't warn".)
+ * Two-dimensional rate-limit evidence for destination ranking: whether the profile's state is KNOWN at all, and - only when known - its severity for the selected model.
+ * Unknown is incomparable, not a tier: a profile whose gauge was never read, went stale, or last probed with a failure must never satisfy a "strictly better" comparison, no matter how limited the current profile is.
  */
 export type ProfileRateLimitAssessment =
   | { readonly known: false }
@@ -128,10 +103,8 @@ export function assessProfileRateLimit(
         : "near_limit",
     };
   }
-  // No per-scope data (old host / never-read / stale / failed-probe gauge)
-  // or no resolved model: the profile-level enum is the remaining evidence.
-  // "ok" is a real derivation from a successful read - known healthy;
-  // "unknown" is the absence (or failure) of evidence.
+  // No per-scope data (old host / never-read / stale / failed-probe gauge) or no resolved model: the profile-level enum is the remaining evidence.
+  // "ok" is a real derivation from a successful read - known healthy; "unknown" is the absence (or failure) of evidence.
   if (profile.rateLimitStatus === "near_limit") {
     return { known: true, severity: "near_limit" };
   }

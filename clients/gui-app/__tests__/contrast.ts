@@ -1,22 +1,6 @@
 /// <reference types="node" />
 /**
- * WCAG contrast-ratio calculator for `oklch(...)`/hex color strings, plus a
- * snapshot of `src/index.css`'s per-preset surface tokens. Lets tests assert
- * real contrast ratios against resolved theme colors instead of only
- * checking for a Tailwind class name.
- *
- * The surface tables below mirror `src/index.css` and must be kept in sync
- * with it by hand - accent-only presets (rose/blue/violet/green/orange/pink)
- * are omitted because they inherit the default `:root`/`.dark`
- * background/canvas/popover unchanged.
- *
- * `resolveThemeTokens` at the bottom is the successor to that hand-sync: it
- * parses `src/index.css` and cascades the theme blocks itself, and its preset
- * set is pinned to the app's own `THEME_PRESETS` registry so a preset added to
- * one and not the other fails loudly. Prefer it for new tests. It resolves
- * every custom property `index.css` declares, but only OPAQUE colors are
- * measurable - read them through `themeToken`, which rejects the rest by name
- * (see its docstring).
+ * WCAG contrast for `oklch`/hex plus `index.css` surface tokens. Prefer `resolveThemeTokens` (pinned to `THEME_PRESETS`); read opaque colors through `themeToken`.
  */
 
 import { readFileSync } from "node:fs";
@@ -29,10 +13,7 @@ export interface ThemeSurfaces {
   readonly canvas: string;
   readonly popover: string;
   /**
-   * `--accent`. Carried because selection surfaces wash it over the row and
-   * then composite a state tint on top, and most presets keep it a near-grey
-   * while `traycer-green` sets it to its saturated `--primary` - the one case
-   * that decides whether a tinted glyph survives being selected.
+   * --accent: selection washes it then tints. traycer-green sets it to --primary.
    */
   readonly accent: string;
 }
@@ -292,9 +273,7 @@ export function contrastRatio(foreground: string, background: string): number {
 }
 
 /**
- * Alpha-composites `foreground` at `alpha` over `background` in sRGB gamma
- * space (matching how browsers paint a translucent CSS background color),
- * returning a hex string usable with `contrastRatio`.
+ * Composite foreground at alpha over background in sRGB gamma (browser paint).
  */
 export function compositeOverBackground(
   foreground: string,
@@ -325,9 +304,7 @@ export function compositeOverBackground(
 // ---------------------------------------------------------------------------
 
 /**
- * Which of the two palettes is on `<html>`. Named after `theme-applier`'s
- * `ResolvedTheme` rather than reusing `ThemeMode`, which the settings store
- * already exports as the THREE-member `"system" | "light" | "dark"`.
+ * html palette. Not ThemeMode (that is system|light|dark).
  */
 export type ResolvedThemeMode = "light" | "dark";
 
@@ -350,18 +327,7 @@ const MEASURABLE_COLOR =
 
 let cachedThemeBlocks: ReadonlyArray<ThemeBlock> | null = null;
 
-/**
- * Every rule in `index.css` whose selector list is made only of theme
- * selectors, with the at-rules enclosing it.
- *
- * Brace-depth tracked rather than pattern-matched. The distinction matters
- * because a pattern that merely fails to match a block DROPS it, and every
- * sweep built on this asserts an empty failure list - so a dropped preset
- * makes those tests strictly easier to pass. It is also why this is hand-rolled
- * instead of reaching for postcss: `postcss` is not a declared dependency of
- * the OSS repo (only of the internal monorepo this happens to be nested in),
- * so importing it here passes locally and fails in `traycer`'s own CI.
- */
+/** Theme-selector rules plus enclosing at-rules. Brace-depth, not pattern-match: a dropped block would make empty-failure sweeps pass. No postcss - not an OSS dep. */
 function parseThemeRules(css: string): ReadonlyArray<{
   readonly selectors: ReadonlyArray<string>;
   readonly body: string;
@@ -425,10 +391,8 @@ function matchingBrace(css: string, open: number): number {
 
 function themeBlocks(): ReadonlyArray<ThemeBlock> {
   if (cachedThemeBlocks !== null) return cachedThemeBlocks;
-  // Resolved off `process.cwd()` - vitest runs from the project root here. NOT
-  // `import.meta.url`: Vite rewrites that to a non-file URL for this module
-  // when the importing test lives under `src/**`. A `?raw` import is not an
-  // option either - vitest does not process CSS, so it yields "".
+  // process.cwd(), not import.meta.url (Vite rewrites it) and not ?raw
+  // (vitest does not process CSS).
   const stylesheet = join(process.cwd(), "src", "index.css");
   // Comments can hold braces and stray selector text; drop them before any
   // structural scanning.
@@ -441,11 +405,8 @@ function themeBlocks(): ReadonlyArray<ThemeBlock> {
       if (parsed !== null) declarations.set(parsed[1], parsed[2]);
     }
     if (declarations.size === 0) continue;
-    // Neither cascade layers nor media/support conditions are modelled by the
-    // specificity+order ranking below, so a palette token inside one is
-    // refused rather than ranked wrongly. `@layer base`'s `:root` holds only
-    // `--traycer-code-*`, which nothing here measures, so it is skipped
-    // silently - it is a theme block by selector, not by content.
+    // Refuse palette tokens inside layers/media. @layer base :root is
+    // --traycer-code-* only and is skipped.
     if (rule.atRules.length > 0) {
       const measurable = [...declarations].filter(([, value]) =>
         MEASURABLE_COLOR.test(value),
@@ -485,15 +446,7 @@ function splitDeclarations(body: string): ReadonlyArray<string> {
   return out;
 }
 
-/**
- * The completeness guard. A scanner that silently sees FEWER presets than exist
- * makes every sweep pass more easily, so the derived set is checked against the
- * app's own registry - the one the theme picker offers and `theme-applier`
- * writes to `data-theme`. `THEME_PRESETS` calls the unthemed palette
- * `"neutral"`; this module calls it `"default"`, since it has no `data-theme`
- * block of its own. A dropped `:root`/`.dark` block is caught separately, by
- * `themeToken` throwing on the tokens that would go missing.
- */
+/** Derived presets must match THEME_PRESETS. Unthemed palette is "default" here, "neutral" in the picker; dropped :root/.dark is caught by themeToken throw. */
 function assertPaletteCoverage(
   blocks: ReadonlyArray<ThemeBlock>,
   stylesheet: string,
@@ -537,14 +490,7 @@ function selectorApplies(
   return themed[1] === theme;
 }
 
-/**
- * The custom properties in effect on `<html>` for a given preset and mode,
- * cascaded by specificity then source order, later writes winning. `theme` is
- * `"default"` for the unthemed `:root`/`.dark` palette, or a `data-theme`
- * value. Every block reaching this point is unlayered and unconditional -
- * `themeBlocks` refuses a palette token declared inside an at-rule rather than
- * rank it by a model that ignores layer origin and media conditions.
- */
+/** Cascaded html custom properties for a preset+mode. themeBlocks refuses palette tokens inside at-rules rather than ranking them. */
 export function resolveThemeTokens(
   theme: string,
   mode: ResolvedThemeMode,
@@ -571,13 +517,7 @@ export function resolveThemeTokens(
 }
 
 /**
- * Reads a token that must exist AND must be an opaque color the math here can
- * consume. Both halves matter: the resolver returns raw declaration text, so
- * plenty of real tokens are alpha-carrying oklch (`--border`, `--input`),
- * `var()` indirection (`--app-background`), or not colors at all (`--radius`,
- * the font stacks). Failing here names the token; failing inside
- * `parseColorToLinearSrgb` does not - which is why both gates share
- * `MEASURABLE_COLOR` rather than keeping two patterns that can drift.
+ * Token must exist and be an opaque color. Fail here to name it; parseColorToLinearSrgb does not.
  */
 export function themeToken(
   tokens: ReadonlyMap<string, string>,
@@ -593,12 +533,7 @@ export function themeToken(
   return value;
 }
 
-/**
- * `"default"` plus every `data-theme` value `index.css` defines. Derived, and
- * `assertPaletteCoverage` pins it to the app's own registry, so a preset added
- * to both is swept by existing tests without touching this file - and one
- * added to only one of them fails loudly.
- */
+/** default plus every data-theme in index.css. assertPaletteCoverage pins this to THEME_PRESETS. */
 export function themePresets(): ReadonlyArray<string> {
   const presets = new Set<string>(["default"]);
   for (const block of themeBlocks()) {
@@ -610,17 +545,7 @@ export function themePresets(): ReadonlyArray<string> {
   return [...presets];
 }
 
-/**
- * A full-palette preset repaints the surfaces; an accent-only one
- * (rose/blue/violet/green/orange/pink) overrides `--primary` and friends on
- * top of the default light/dark palette.
- *
- * Decided on the RESOLVED `--background` for the mode asked about, not on
- * which block happens to declare one: a preset that repaints surfaces in light
- * only shares the default `--background` in dark, and inspecting blocks would
- * call it full-palette in both (a bare `[data-theme="x"]` selector applies in
- * either mode).
- */
+/** Full-palette presets repaint surfaces; accent-only override --primary on the default. Classify from resolved --background for the asked mode, not which block declares one. */
 export function isFullPalettePreset(
   theme: string,
   mode: ResolvedThemeMode,

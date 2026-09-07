@@ -3,9 +3,7 @@ import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
 import { noopLogger } from "../../logger";
 
-// Shared fixtures for the provider-hook command tests (activity-from-hook /
-// session-observed-from-hook), which drive the same command shape: a mocked
-// runner context, a stubbed `process.stdin`, and TRAYCER_* env save/restore.
+// Shared fixtures for the provider-hook command tests (activity-from-hook / session-observed-from-hook), which drive the same command shape: a mocked runner context, a stubbed `process.stdin`, and TRAYCER_* env save/restore.
 
 export function makeRuntime(): RuntimeContext {
   return {
@@ -56,9 +54,7 @@ export function restoreStdin(): void {
   }
 }
 
-// Snapshot the agent-identity env once at import, then set test values on
-// `beforeEach` and restore the snapshot on `afterEach`, so a test that mutates
-// or clears these vars cannot leak into the surrounding process env.
+// Snapshot the agent-identity env once at import, then set test values on `beforeEach` and restore the snapshot on `afterEach`, so a test that mutates or clears these vars cannot leak into the surrounding process env.
 const PREV_ENV = {
   epic: process.env.TRAYCER_EPIC_ID,
   agent: process.env.TRAYCER_AGENT_ID,

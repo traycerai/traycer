@@ -40,21 +40,7 @@ function errorStack(error: unknown): string | null {
 }
 
 /**
- * Captures a renderer error AT THE MOMENT it is caught (boundary
- * `componentDidCatch`, or a function component's idempotent capture adapter -
- * NEVER an unguarded render body, since this mints ids and calls Sentry): mints the
- * correlation id and computes the `fp:v1` fingerprint once, then reports the
- * exception to renderer Sentry tagged with both, so the private report a user
- * files later can be joined back to the actual Sentry event. Call this
- * exactly once per caught error and thread the returned bundle through to
- * `createReportIssueDraftContext`'s `capture` field - re-deriving it at
- * draft-open time would mint a mismatched id and could fingerprint against a
- * session snapshot that has since drifted.
- *
- * Cause presence is gated on whether an error was actually caught, never on
- * whether it has a displayable message: `new Error("")`, a thrown non-Error,
- * and a blank string all still carry a type/stack/componentStack worth an
- * envelope and a fingerprint.
+ * Captures a renderer error AT THE MOMENT it is caught (boundary `componentDidCatch`, or a function component's idempotent capture adapter - NEVER an unguarded render body, since this mints ids and calls Sentry): mints the correlation id and computes the.
  */
 export function captureReportIssueError(
   input: ReportIssueErrorCaptureInput,
@@ -77,10 +63,7 @@ export function captureReportIssueError(
   });
   const correlationId = crypto.randomUUID();
 
-  // Boundary-caught render errors never reach Sentry's default global
-  // handlers (window.onerror / unhandledrejection) - React swallows them
-  // before they get there - so this is the only capture that will ever
-  // happen for them, never a double-report alongside an automatic one.
+  // Boundary-caught render errors never reach Sentry's default global handlers (window.onerror / unhandledrejection) - React swallows them before they get there - so this is the only capture that will ever happen for them, never a double-report alongside an.
   if (isInitialized()) {
     captureException(input.error, {
       tags: {
@@ -110,14 +93,8 @@ export function captureReportIssueError(
 }
 
 /**
- * Capture for a dictation failure being reported from the error toast. Like
- * {@link capturePersistedAgentError} and unlike {@link captureReportIssueError}
- * this never calls Sentry: most dictation failures are environmental (mic
- * blocked, host link down), so a `captureException` per attempt would mint an
- * event stream of user-caused conditions rather than defects.
- *
- * `failureClass` is a fixed app-defined identifier and also travels in the
- * PUBLIC prefill; the message may carry browser/host text, so it stays here.
+ * Capture for a dictation failure being reported from the error toast.
+ * Like {@link capturePersistedAgentError} and unlike {@link captureReportIssueError} this never calls Sentry: most dictation failures are environmental (mic blocked, host link down), so a `captureException` per attempt would mint an event stream of.
  */
 export function captureDictationFailure(input: {
   readonly failureClass: string;
@@ -151,20 +128,8 @@ export function captureDictationFailure(input: {
 }
 
 /**
- * Capture for a PERSISTED agent error row (a chat transcript `error` block)
- * being reported after the fact. Unlike {@link captureReportIssueError} this
- * never calls Sentry: the failure already happened host-side when the turn
- * ran, so a fresh renderer `captureException` per row mount would mint an
- * unrelated event stream untied to the original failure. It still mints the
- * correlation id and fingerprint so the private report clusters with its
- * siblings.
- *
- * Both `message` and `code` are host/harness-supplied free text; they belong
- * ONLY in this private cause, never in the public prefill (see the hostile
- * transcript-code test on `<ErrorSegment />`). `recoverable` rides in the
- * `type` discriminant rather than a new field: `PrivateErrorCause` is the
- * fixed shape desktop main forwards (`SupportPrivateDiagnostics`), so this
- * surface does not widen it.
+ * Capture for a PERSISTED agent error row (a chat transcript `error` block) being reported after the fact.
+ * Unlike {@link captureReportIssueError} this never calls Sentry: the failure already happened host-side when the turn ran, so a fresh renderer `captureException` per row mount would mint an unrelated event stream untied to the original failure.
  */
 export function capturePersistedAgentError(input: {
   readonly message: string;

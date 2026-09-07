@@ -39,57 +39,15 @@ export interface BrowserSessionsHostTransport {
   readonly close: () => void;
 }
 
-/**
- * The one place main answers "which host is this id, and how do I dial it".
- *
- * The renderer passes an ID and nothing else. The directory row
- * carries the host's static Noise key, so accepting a renderer-supplied row
- * would let a compromised renderer point main's jar stream at a host it
- * controls - which is the whole ticket.
- */
 export interface BrowserSessionsHostDirectory {
   resolve(hostId: string): Promise<HostDirectoryEntry | null>;
-  /**
-   * The address to dial RIGHT NOW, re-read on every (re)dial.
-   *
-   * A local host that respawns on a new port while a stream is warm is
-   * ordinary - a `traycer host restart`, an update install - and a transport
-   * holding the address it was built with would retry a dead port until the
-   * renderer happened to re-open the stream. `null` while no address is known,
-   * which the transport treats as "not dialable yet" and retries.
-   */
   endpoint(hostId: string): HostTransportEndpoint | null;
-  /**
-   * Forgets what was cached for one host, so the next `resolve` re-reads the
-   * registry.
-   *
-   * The cached row is not just an address: it carries the host's static Noise
-   * key and its relay attach url, and both are frozen into a remote transport
-   * when it is built. A rotated key or a deregistered host therefore strands
-   * the stream for as long as the row survives, and nothing about a failed
-   * dial would evict it - which is why the stream calls this on the way to a
-   * restart rather than waiting for a miss.
-   */
   invalidate(hostId: string): void;
-  /**
-   * Drops the whole cached registry, and the cooldown that guards refetching
-   * it, because the identity it was read for has changed.
-   *
-   * The rows are per ACCOUNT - `listRegisteredHosts` answers for the bearer it
-   * was given - but the cache is keyed by host id alone, so a sign-out or an
-   * account switch would otherwise let the next account dial the previous
-   * account's row for the same id. The cooldown goes with it: a fresh identity
-   * is exactly the moment one read is owed rather than deferred.
-   */
   reset(): void;
 }
 
 export interface BrowserSessionsHostDirectoryDeps {
-  /**
-   * Read at call time, not at registration: the IPC layer is wired before the
-   * bridge's options are anything a directory read could use, and a value
-   * captured then would pin the process to whatever was configured first.
-   */
+  /** Read at call time, not at registration: the IPC layer is wired before the bridge's options are anything a directory read could use, and a value captured then would pin the process. */
   readonly authnBaseUrl: () => string;
   readonly relayBaseUrl: string;
   /** This machine's own host, or null while none is published. */
@@ -104,25 +62,9 @@ export interface BrowserSessionsHostDirectoryDeps {
   readonly now: () => number;
 }
 
-/**
- * The floor between two registry reads a MISS provokes.
- *
- * A miss is renderer-triggered (it names the host id), so an unknown id is a
- * request this process makes to authn on someone else's say-so. One read per
- * window of unknown ids is enough to learn about a host that appeared; a
- * renderer looping ids gets the cached "no" instead of an amplifier. An
- * explicit `invalidate` is not a miss and is never throttled.
- */
+/** An explicit `invalidate` is not a miss and is never throttled. */
 const MISS_REFRESH_COOLDOWN_MS = 30_000;
 
-/**
- * Resolves a host id against this machine's own published host first, then the
- * account's registry.
- *
- * The registry answer is CACHED and refetched on a miss (rate-limited) or when
- * a caller invalidates a row: a stream opens rarely, and the renderer's own
- * directory poll remains the app's cadence. No timer of its own, deliberately.
- */
 export function createBrowserSessionsHostDirectory(
   deps: BrowserSessionsHostDirectoryDeps,
 ): BrowserSessionsHostDirectory {
@@ -141,10 +83,6 @@ export function createBrowserSessionsHostDirectory(
     if (result.kind !== "ok") return;
     const next = new Map<string, HostDirectoryEntry>();
     for (const item of result.response.hosts) {
-      // `planAllowsRemote: true` - main holds no plan state, and the fetcher's
-      // own contract says a not-yet-known plan reads as allowed: a wasted dial
-      // meets the relay's 403, while refusing here would silently strand the
-      // jar plane for a paying account.
       next.set(
         item.hostId,
         hostListItemToDirectoryEntry(item, deps.relayBaseUrl, true),
@@ -156,12 +94,6 @@ export function createBrowserSessionsHostDirectory(
   const refreshOnce = (): Promise<void> => {
     const running = inFlight;
     if (running !== null) return running;
-    // No bearer, no read - and therefore nothing to spend. Checked HERE as
-    // well as inside `refresh`, because reaching that early return still
-    // consumed the forced flag and still stamped the cooldown from the
-    // `finally` below: an account switch sets `forced = true`, and any resolve
-    // landing before the new bearer is installed would burn the one fresh read
-    // it asked for and arm the floor against the read that could have answered.
     if (deps.bearerToken() === null) return Promise.resolve();
     const since = lastRefreshAt;
     if (
@@ -182,10 +114,6 @@ export function createBrowserSessionsHostDirectory(
         });
       })
       .finally(() => {
-        // Stamped on every completed ATTEMPT, not on success. The floor
-        // exists because a miss is renderer-triggered, and an unhealthy authn
-        // is exactly when a loop of unknown ids would otherwise become one
-        // request each - the failure a rate limit is most needed for.
         lastRefreshAt = deps.now();
         inFlight = null;
       });
@@ -240,19 +168,6 @@ export interface BrowserSessionsTransportDeps {
   readonly appVersion: string | null;
 }
 
-/**
- * One `browser.sessions` transport, owned by main.
- *
- * `auth: null` and `hostCredentialMint: null` are the two deliberate
- * differences from the renderer's durable transport, and both are for the same
- * reason: those recoveries are app-wide single-flight machinery that lives in
- * the renderer, and a second implementation here would double-spend a
- * single-use refresh token or race a concurrent mint. What main loses is
- * self-healing on an `UNAUTHORIZED`: the stream goes terminal, the renderer
- * sees `failed`, and its own `retry()` re-opens on the bearer the renderer has
- * meanwhile rotated into this process. Since the bearer is read LIVE off the
- * desktop auth session, that retry dials with the fresh credential.
- */
 export function openBrowserSessionsTransport(
   target: HostDirectoryEntry,
   userId: string,

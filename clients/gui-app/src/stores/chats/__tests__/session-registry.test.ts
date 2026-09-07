@@ -122,13 +122,7 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST)).not.toBeNull();
   });
 
-  // The headline of ticket 43. Two tiles, ONE (epic, chat), TWO hosts - which
-  // is reachable in production (post-fork twins keep the source's chat id) and
-  // trivially reachable in dev (`--adopt-store` copies one identity store onto
-  // a second host). The pre-fix registry keyed entries on `epic:chat` only, so
-  // the second `acquire` found the first host's entry, read a scope key that
-  // legitimately differed (the scope carries the host), and DISPOSED a session
-  // whose tile was still mounted and still holding the handle.
+  // The headline of ticket 43.
   it("does not dispose a live session when the same chat is opened on another host", () => {
     const registry = new ChatSessionRegistry({
       idleTtlMs: TTL_MS,
@@ -169,9 +163,8 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST)).toBe(handleA);
     expect(registry.peek("epic-1", "chat-1", HOST_B)).toBe(handleB);
 
-    // Releasing one leaves the other leased and untouched: host A's tile
-    // closes, host B's stays open past the idle TTL that would have expired an
-    // unleased session.
+    // Releasing one leaves the other leased and untouched: host A's tile closes, host B's stays open
+    // past the idle TTL that would have expired an unleased session.
     registry.releaseHandle("epic-1", "chat-1", HOST, handleA);
     vi.advanceTimersByTime(TTL_MS);
     expect(onHostA.closeCount()).toBe(1);
@@ -180,10 +173,6 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST_B)).toBe(handleB);
   });
 
-  // The other half of the same rule: within ONE host the old semantics are
-  // unchanged - a same-scope re-acquire still dedups onto the live session,
-  // and a genuine scope change (user / transport / owner-identity) still
-  // rebuilds it in place.
   it("still dedups and still rebuilds on scope change within one host", () => {
     const registry = new ChatSessionRegistry({
       idleTtlMs: TTL_MS,
@@ -291,9 +280,7 @@ describe("ChatSessionRegistry", () => {
     hostIds.set(acquired, "host-original");
     markRunning(acquired);
 
-    // The tile lease can disappear during a transient offline/null directory
-    // state. The active turn must keep the retained session handle alive past
-    // the normal idle TTL instead of closing the GUI stream handle.
+    // The tile lease can disappear during a transient offline/null directory state.
     registry.release("epic-1", "chat-1", HOST);
     vi.advanceTimersByTime(TTL_MS);
 

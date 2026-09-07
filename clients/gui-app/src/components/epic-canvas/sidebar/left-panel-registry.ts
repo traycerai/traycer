@@ -39,33 +39,20 @@ export interface LeftPanelMetadataDefinition {
   readonly title: string;
   readonly icon: LucideIcon;
   /**
-   * Whether the panel earns a rail slot on its own. Most panels are
-   * unconditional; `pull-requests` and `comments` are presence-gated. This is
-   * the DEFAULT, not the answer: the user's override is applied on top of it by
-   * {@link isLeftPanelVisible}, which is what every render path calls.
+   * Whether the panel earns a rail slot on its own.
+   * Most panels are unconditional; `pull-requests` and `comments` are presence-gated.
    */
   readonly isAutoVisible: (context: LeftPanelAvailabilityContext) => boolean;
-  /**
-   * Muted note shown beside this panel in the rail context menu while the user
-   * is forcing it visible against `isAutoVisible` - it explains up front why
-   * the panel they just revealed can be empty. `null` for panels that are
-   * always auto-visible, where the case cannot arise.
-   */
+  /** `null` for panels that are always auto-visible, where the case cannot arise. */
   readonly forcedOnHint: string | null;
-  /**
-   * Whether this panel's header row can be traded for a search input while
-   * searching (see `panel-header-search-store`). Panels that opt out never
-   * render the portal target, so their header is always the standard row.
-   */
+  /** Panels that opt out never render the portal target, so their header is always the standard row. */
   readonly supportsHeaderSearch: boolean;
 }
 
 export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> =
   [
     {
-      // `id` is an internal panel identifier on the compatibility boundary
-      // (persisted layout, selection state, command ids) - only the product
-      // copy moves to the Agent model.
+      // `id` is an internal panel identifier on the compatibility boundary (persisted layout, selection state, command ids) - only the product copy moves to the Agent model.
       id: "chats",
       title: "Agents",
       icon: MessagesSquare,
@@ -106,10 +93,7 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       supportsHeaderSearch: false,
     },
     {
-      // Presence-gated like `comments`: an epic whose chats produced no PR
-      // gets no rail slot for one. Checking it in the rail context menu is the
-      // escape hatch for a user who wants the panel there before any PR
-      // exists (see `isLeftPanelVisible`).
+      // Checking it in the rail context menu is the escape hatch for a user who wants the panel there before any PR exists (see `isLeftPanelVisible`).
       id: "pull-requests",
       title: "Pull Requests",
       icon: GitPullRequest,
@@ -158,13 +142,7 @@ export function isLeftPanelVisible(
 }
 
 /**
- * Which of the visible rail groups owns `activePanelId` - or, when that panel
- * is not currently visible, the group the sidebar body falls back to.
- *
- * Rail and body both resolve through here so hiding the active panel cannot
- * leave them disagreeing: the icon that lights up is the one whose body is on
- * screen. `null` means nothing is visible at all, which the body answers with
- * the default panel.
+ * Rail and body both resolve through here so hiding the active panel cannot leave them disagreeing: the icon that lights up is the one whose body is on screen.
  */
 export function resolveActiveVisibleGroupIndex(
   visibleGroupPanelIds: ReadonlyArray<ReadonlyArray<LeftPanelId>>,

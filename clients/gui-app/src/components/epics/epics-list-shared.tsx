@@ -1,16 +1,5 @@
-/**
- * The chrome the desktop task list and the phone task list both render: the
- * non-row states (loading / error / empty), the row's status glyph, and the
- * "Show more" pager.
- *
- * They live outside both list bodies because the two bodies differ only in how
- * a ROW looks and what a touch on it means. Everything around the rows is the
- * same surface, and a second copy of it would be a second place for the empty
- * copy, the retry affordance and the pager to drift.
- *
- * Components only - the shared row-label rule is a plain function and lives in
- * `history-item-title`, so this module stays hot-reloadable.
- */
+/** They live outside both list bodies because the two bodies differ only in how a row looks and what a touch on
+ * it means. */
 import { useState, type ReactNode } from "react";
 import { Layers } from "lucide-react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -24,12 +13,8 @@ import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 
-/**
- * The row's status glyph: the epic's notification indicator when it has one,
- * its running state when an agent is working, and a plain layers icon
- * otherwise. Status rather than an action, which is why both list bodies keep
- * it however far they trim the rest of the row.
- */
+/** Status rather than an action, which is why both list bodies keep it however far they trim the rest of the
+ * row. */
 export function HistoryRowLeadingIcon(props: {
   readonly item: HistoryItem;
 }): ReactNode {
@@ -91,12 +76,7 @@ export function EpicsListFilteringLoading(): ReactNode {
   );
 }
 
-/**
- * Shown when a host filter is active but the serving peer cannot apply it, so
- * the rows were withheld. Deliberately NOT an empty-history message: the
- * account's tasks exist, this client just declined to show a list it could not
- * honestly call filtered.
- */
+/** Shown when a host filter is active but the serving peer cannot apply it, so the rows were withheld. */
 export function EpicsListChatHostFilterUnsupported(): ReactNode {
   return (
     <div

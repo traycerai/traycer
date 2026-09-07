@@ -5,30 +5,10 @@ import path from "node:path";
 const testArgs = process.argv.slice(2);
 
 /**
- * Vitest runs under **Node**, not under whichever runtime launched this
- * script.
- *
- * This file is started by `bun run test`, so `process.execPath` is the Bun
- * binary and the previous `spawnSync(process.execPath, ["x", "vitest", ...])`
- * ran Vitest's main process and its forked workers on Bun. That is the
- * least-hardened combination for Vitest's process management, and it matches
- * the CI shard failures exactly: the run dies with every visible test passing,
- * the log truncated mid-write, and exit 1 with no failure summary - a process
- * disappearing rather than an assertion failing.
- *
- * Pinning Node also restores the standard diagnostics for that class: V8 heap
- * caps (`NODE_OPTIONS=--max-old-space-size=...`) produce a real, attributable
- * OOM error naming the offending file, instead of a silent kill.
- *
- * The entry is resolved from Vitest's own `package.json` `bin` field rather
- * than a `.bin` shim (whose shebang would reintroduce the ambient runtime) or
- * a hardcoded path (which the store layout would break). `vitest.mjs` is not
- * reachable through the package's `exports`, so resolve the manifest and join.
+ * Spawn Vitest under Node, not Bun (`process.execPath` here is Bun). Resolve the entry from Vitest's `package.json` `bin`, not a `.bin` shim.
  */
 /**
- * Exit codes for the signals a killed Vitest run realistically reports.
- * 128+n is the shell convention, so 137 reads as SIGKILL (the OOM killer's
- * signal) and 139 as SIGSEGV without needing a lookup.
+ * 128+n shell convention: 137 is SIGKILL, 139 is SIGSEGV.
  */
 const SIGNAL_EXIT_CODES: Readonly<Record<string, number>> = {
   SIGHUP: 129,
@@ -67,13 +47,8 @@ function runVitest(configPath: string, filePath: string | undefined): void {
     throw result.error;
   }
 
-  // A child killed by a SIGNAL reports `status: null` with `signal` set. The
-  // previous `result.status ?? 1` collapsed that to a bare exit 1, which is
-  // why every shard death in CI has looked like an ordinary failure: an OOM
-  // kill (137) and a segfault (139) were both reported as 1, with no summary
-  // because the child never got to print one. Surface the signal explicitly
-  // and exit 128+n, the shell convention, so the next occurrence is
-  // self-identifying instead of ambiguous.
+  // Signal kill reports status null; do not collapse to exit 1. Exit 128+n
+  // so OOM/segfault are self-identifying.
   if (result.signal !== null) {
     const signalExit = SIGNAL_EXIT_CODES[result.signal] ?? 1;
     console.error(
@@ -125,32 +100,15 @@ if (runsFirstShard) {
   if (runsBrowserRegressions) {
     runBrowserRegression("scripts/diff-edit-browser-regression.mjs");
     runBrowserRegression("scripts/pierre-tree-zoom-browser-regression.mjs");
-    // Same gate, same reason: the claim is "after Cancel the window is usable
-    // again", and jsdom has no hit testing, so only a real layout engine can
-    // tell a released modal from a modal that merely stopped being asserted
-    // about. Runs behind the same env flag rather than a second one - a browser
-    // check nobody enables is a coverage gap wearing a test's name.
+    // Cancel-path usability needs a real layout engine; jsdom has no hit
+    // testing. Same env flag as the other browser gates.
     runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs");
     runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs");
-    // Same gate again, and the strongest case for it in this list: the boot
-    // card's escape hatch is lost to an INPUT-DISPATCH rule - a press whose
-    // element is removed before release emits no click at all - and jsdom
-    // dispatches `click` directly, so every jsdom test of that button passes
-    // on the broken build. Ablated before wiring: reverting the button to
-    // `onClick` turns this red (0 activations) while its ordinary-click
-    // premise stays green.
+    // Escape hatch: element removed before release emits no click. jsdom
+    // dispatches click directly, so jsdom tests pass on the broken build.
     runBrowserRegression("scripts/boot-escape-hatch-press-browser.mjs");
-    // NOT here, deliberately, and each for its own reason:
-    // - `scripts/window-host-modal-alignment-browser.mjs` measures the
-    //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
-    //   `HostBootCard` superseded when the boot card became a CENTRED surface
-    //   (`local-host-loading.tsx`: "the card is centred now"). Run against the
-    //   current component it reports the centring as a 58px misalignment. It
-    //   is a manual instrument for the left-aligned arrangement it was written
-    //   for, not a gate on the current one; re-base it before wiring it here.
-    // - `scripts/toast-over-modal-hittest.mjs` prints hit-test figures and
-    //   asserts nothing, so a gate on it would be a gate on a number nobody
-    //   reads - run it by hand.
+    // Not gated: window-host-modal-alignment is a left-edge instrument for a
+    // superseded layout; toast-over-modal-hittest asserts nothing.
   }
 }
 

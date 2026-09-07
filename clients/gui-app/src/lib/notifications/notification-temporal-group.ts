@@ -9,10 +9,8 @@ function startOfDay(timestamp: number): number {
 }
 
 /**
- * Calendar-day bucket for Recent's temporal separators, based on local
- * midnight boundaries. Distinct from `relative-time.ts`'s elapsed-duration
- * buckets, which only flip to "Yesterday" after a full 24h rather than at
- * the calendar day boundary.
+ * Calendar-day bucket for Recent's temporal separators, based on local midnight boundaries.
+ * Distinct from `relative-time.ts`'s elapsed-duration buckets, which only flip to "Yesterday" after a full 24h rather than at the calendar day boundary.
  */
 export function temporalGroupForTimestamp(
   timestamp: number,

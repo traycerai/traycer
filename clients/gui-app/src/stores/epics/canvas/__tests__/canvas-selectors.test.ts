@@ -82,10 +82,8 @@ describe("isTileRefRecordLive", () => {
   });
 
   it("exempts a CHAT ref bound to another host from projection policing", () => {
-    // A reachable owner's chat opened live from the unified sidebar has no
-    // record in THIS device's projection - chat records are host-
-    // authoritative. Reaping it made the sidebar click a silent no-op
-    // (caught in the two-slot live check, 2026-08-08).
+    // A reachable owner's chat opened live from the unified sidebar has no record in THIS device's
+    // projection - chat records are host- authoritative.
     expect(
       isTileRefRecordLive(
         chatTile("chat-remote", "host-b"),
@@ -130,16 +128,8 @@ describe("isTileRefRecordLive", () => {
   });
 
   it("TRIPWIRE: exempts a cross-host TERMINAL-AGENT ref, or the tile self-closes", () => {
-    // The roster's phase 2 put terminal agents into the host-authoritative
-    // population: this device may hold a REPLICA of an agent bound to another
-    // of the user's machines, and a replica arrives on the record feed's
-    // schedule. Any window before the inbox has caught up - a cold open, a
-    // reconnect - has the tile bound to `host-b` with no local record.
-    //
-    // ABLATION: narrow `isHostAuthoritativeRef` back to `chat` and this
-    // answers `false`, which the route-synchronization cleanup reads as
-    // "remotely deleted" and auto-closes the tile of an agent that is alive
-    // and running on its own host. Nothing errors; the tab just vanishes.
+    // Any window before the inbox has caught up - a cold open, a reconnect - has the tile bound to
+    // `host-b` with no local record.
     expect(
       isTileRefRecordLive(
         terminalAgentTile("tui-remote", "host-b"),
@@ -224,9 +214,8 @@ describe("isTileRefRecordLive", () => {
   });
 
   it("does not extend the cloud-known exemption to a non-chat ref", () => {
-    // The exemption is scoped to `ref.type === "chat"` deliberately -
-    // artifact/terminal-agent records are doc-shared and a cloud-chat id
-    // match would be a coincidence, never a real exemption.
+    // The exemption is scoped to `ref.type === "chat"` deliberately - artifact/terminal-agent records
+    // are doc-shared and a cloud-chat id match would be a coincidence, never a real exemption.
     expect(
       isTileRefRecordLive(
         specTile("art-1"),

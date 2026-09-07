@@ -3,17 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Doctor's port-conflict path:
-//   - When `readHostPidMetadata()` returns a live host pid but its
-//     websocket URL does not accept a TCP connection, the engine MUST
-//     try to identify a foreign listener on that port via the
-//     platform-aware `resolvePortConflict(...)` helper.
-//   - If a foreign listener is found → emit `PORT_CONFLICT` with
-//     `fixAction = "host-free-port-and-restart"` and full
-//     `port/conflictingPid/conflictingProcess` details.
-//   - If not → emit `PORT_UNREACHABLE` with `fixAction = "host-restart"`
-//     (the ticket explicitly forbids the GUI presenting Free Port +
-//     Restart with port 0 / unknown pid).
+// Doctor's port-conflict path: - When `readHostPidMetadata()` returns a live host pid but its websocket URL does not accept a TCP connection, the engine MUST try to identify a foreign listener on that port via the platform-aware `resolvePortConflict(...)` helper. - If a foreign listener is found → emit `PORT_CONFLICT` with `fixAction = "host-free-port-and-restart"` and full `port/conflictingPid/conflictingProcess` details. - If not → emit `PORT_UNREACHABLE` with `fixAction = "host-restart"` (the ticket explicitly forbids the GUI presenting Free Port + Restart with port 0 / unknown pid).
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -114,9 +104,7 @@ function stageMocks(opts: {
 describe("runDoctor port-conflict detection", () => {
   it("emits PORT_CONFLICT with full identity when a foreign listener is found", async () => {
     stageMocks({
-      // process.pid keeps isProcessAlive(...) truthy so the engine
-      // enters the port-probe branch rather than emitting
-      // PID_METADATA_STALE.
+      // process.pid keeps isProcessAlive(...) truthy so the engine enters the port-probe branch rather than emitting PID_METADATA_STALE.
       hostPid: process.pid,
       websocketUrl: "ws://127.0.0.1:1/socket",
     });
@@ -218,10 +206,8 @@ describe("runDoctor port-conflict detection", () => {
         runCommand: async () => null,
       },
     });
-    // With no port we don't bother probing. So no port-related issue.
-    // The acceptance criterion is: the GUI never receives port=0; here
-    // the engine simply doesn't emit PORT_UNREACHABLE at all because
-    // there's nothing to probe.
+    // With no port we don't bother probing.
+    // So no port-related issue.
     expect(
       result.issues.find((i) => i.code === "PORT_CONFLICT"),
     ).toBeUndefined();

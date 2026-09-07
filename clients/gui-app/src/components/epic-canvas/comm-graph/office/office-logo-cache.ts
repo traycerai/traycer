@@ -1,24 +1,6 @@
 /**
- * Harness logos as 12x12 pixel-art sprites, for the nameplate on an agent's
- * desk.
- *
- * THE APP'S OWN ICONS, NOT A SECOND SET. The office draws the same brand marks
- * every picker and chat row draws (`PROVIDER_ICON_CONFIG`), so a harness cannot
- * end up with two different faces in one product. They arrive as React SVG
- * components, and a canvas cannot draw a React component - so each one is
- * rendered once, serialized, and rasterized into a tiny offscreen canvas with
- * smoothing off, which is what makes a vector mark land as pixel art.
- *
- * RASTERIZING IS ASYNCHRONOUS and the frame loop is not. `officeHarnessLogo`
- * therefore never blocks: it returns `null` until a logo is ready and starts
- * the work on the first miss. A frame that finds `null` draws nothing, and a
- * finished decode announces itself through `onOfficeLogoReady` - because the
- * frame that would pick the logo up is exactly the one a STILL floor skips,
- * and a paused historical cursor is still for as long as it is looked at.
- *
- * WHERE THERE IS NO CANVAS AND NO IMAGE DECODER (jsdom), every path here is a
- * silent no-op. That is not defensive: the office's own suite runs there, and a
- * missing logo is exactly what an unfinished decode looks like anyway.
+ * The office draws the same brand marks every picker and chat row draws (`PROVIDER_ICON_CONFIG`), so a harness cannot end up with two different faces in one product.
+ * They arrive as React SVG components, and a canvas cannot draw a React component - so each one is rendered once, serialized, and rasterized into a tiny offscreen canvas with smoothing off, which is what makes a vector mark land as pixel art.
  */
 import { createElement } from "react";
 import { flushSync } from "react-dom";
@@ -29,17 +11,12 @@ import { HARNESS_ACCENT } from "@/lib/comm-graph/office/office-appearance";
 import { OFFICE_LOGO_SIZE } from "@/lib/comm-graph/office/office-types";
 
 /**
- * A logo's slot in the cache. `null` means "asked for, still rasterizing or
- * permanently unavailable" - both are drawn the same way (not at all), so they
- * do not need telling apart, and keeping the key present is what stops a
- * failed build from being retried on every frame.
+ * `null` means "asked for, still rasterizing or permanently unavailable" - both are drawn the same way (not at all), so they do not need telling apart, and keeping the key present is what stops a failed build from being retried on every frame.
  */
 type LogoSlot = HTMLCanvasElement | null;
 
 /**
- * Keyed by harness ALONE. The mark is recolored to the harness accent, which
- * is one colour per harness in both themes, so a theme segment in the key only
- * ever bought a second identical raster.
+ * The mark is recolored to the harness accent, which is one colour per harness in both themes, so a theme segment in the key only ever bought a second identical raster.
  */
 const logoCache = new Map<GuiHarnessId, LogoSlot>();
 
@@ -58,9 +35,7 @@ export function onOfficeLogoReady(listener: () => void): () => void {
 }
 
 /**
- * A 2d context, or `null` where the platform has no canvas. jsdom throws
- * "Not implemented" rather than returning null, so this is the one boundary
- * where catching is the cleanest capability probe.
+ * A 2d context, or `null` where the platform has no canvas. jsdom throws "Not implemented" rather than returning null, so this is the one boundary where catching is the cleanest capability probe.
  */
 function offscreenContext(
   canvas: HTMLCanvasElement,
@@ -73,13 +48,7 @@ function offscreenContext(
 }
 
 /**
- * The harness icon's SVG markup, recolored to the harness accent and sized to
- * the sprite box.
- *
- * Rendered through a REAL React root into a detached element rather than
- * through a server renderer: the icons are ordinary components, and pulling a
- * server-rendering entry point into the browser bundle to stringify twenty
- * small SVGs is a dependency this earns nothing by having.
+ * Rendered through a REAL React root into a detached element rather than through a server renderer: the icons are ordinary components, and pulling a server-rendering entry point into the browser bundle to stringify twenty small SVGs is a dependency this earns nothing by having.
  */
 function renderLogoMarkup(harnessId: GuiHarnessId): string | null {
   if (typeof document === "undefined") return null;
@@ -95,9 +64,8 @@ function renderLogoMarkup(harnessId: GuiHarnessId): string | null {
     if (svg === null) return null;
     svg.setAttribute("width", String(OFFICE_LOGO_SIZE));
     svg.setAttribute("height", String(OFFICE_LOGO_SIZE));
-    // The icons paint with `currentColor`, which resolves against a cascade a
-    // detached node does not have. Naming the accent explicitly is what makes
-    // the mark visible once it is a standalone document.
+    // The icons paint with `currentColor`, which resolves against a cascade a detached node does not have.
+    // Naming the accent explicitly is what makes the mark visible once it is a standalone document.
     svg.setAttribute("color", HARNESS_ACCENT[harnessId]);
     svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     return svg.outerHTML;

@@ -17,14 +17,7 @@ import {
 
 type ReadyListener = () => void;
 
-/**
- * Theme-aware StreamingHighlighter over Traycer's multi-preset Shiki core and
- * byte-budgeted MRU cache. Tailmark's cache key is (code, lang); theme is
- * resolved live so light/dark and preset swaps stay correct.
- *
- * Module singleton: one readiness bus and one engine for every markdown and
- * workspace surface.
- */
+/** Tailmark cache key is (code, lang); theme is resolved live. Module singleton for one engine across markdown and workspace surfaces. */
 class TraycerStreamingHighlighter implements StreamingHighlighter {
   private core: HighlighterCore | null = null;
   private readonly listeners = new Set<ReadyListener>();
@@ -33,9 +26,7 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
   /** One-time document/preset observers - not cleared on core load failure. */
   private observersAttached = false;
   /**
-   * In-flight core load. Cleared on rejection so a later `highlight` /
-   * `subscribe` can retry after a transient chunk or theme failure. Successful
-   * loads leave the promise settled with `core` set.
+   * In-flight core load. Cleared on rejection so a later highlight can retry.
    */
   private coreLoad: Promise<void> | null = null;
 

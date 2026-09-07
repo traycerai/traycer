@@ -23,9 +23,8 @@ export interface TileChromeCapabilities {
 export interface TileController {
   readonly capabilities: TileChromeCapabilities;
   /**
-   * The session's credential-sharing profile. `isolated` is a private
-   * session: the toolbar says so, and offers no action, because there is
-   * nothing here to save or clear.
+   * The session's credential-sharing profile.
+   * `isolated` is a private session: the toolbar says so, and offers no action, because there is nothing here to save or clear.
    */
   readonly profile: BrowserSessionProfileKind;
   readonly url: string;
@@ -47,9 +46,7 @@ export interface TileController {
   ) => void;
   readonly onAddressChange: (value: string) => void;
   /**
-   * Caret entering or leaving the address field. The draft is focus-owned
-   * (`use-address-draft.ts`), so the toolbar reports it rather than each tile
-   * sniffing focus events off its own DOM subtree.
+   * The draft is focus-owned (`use-address-draft.ts`), so the toolbar reports it rather than each tile sniffing focus events off its own DOM subtree.
    */
   readonly onAddressFocusChange: (focused: boolean) => void;
   readonly onBack: () => void;
@@ -63,12 +60,7 @@ export interface TileController {
   ) => void;
   readonly onOpenDevTools: () => void;
   /**
-   * "Clear cookies for this site" (spec §6.5): removes this tile's registrable
-   * domain from the shared `primary` jar, here and - through the host's
-   * tombstones - in every other live context for this user. `null` where there
-   * is no desktop jar to clear (a screencast tile). The site is derived in the
-   * main process from this tile's own URL, so the toolbar names it but never
-   * chooses it.
+   * The site is derived in the main process from this tile's own URL, so the toolbar names it but never chooses it.
    */
   readonly onClearSite: (() => void) | null;
 }

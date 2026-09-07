@@ -86,9 +86,7 @@ describe("credentials mutation store", () => {
     workDir = mkdtempSync(join(tmpdir(), "traycer-cred-mut-test-"));
     credentialsPath = join(workDir, "credentials");
     metaPath = join(workDir, "credentials.meta.json");
-    // The lock lives in its own subdir so the commit-failure tests can freeze
-    // only the credentials+meta dir (blocking their writes) while lock
-    // acquisition and reads still work (0o500 keeps search+read).
+    // The lock lives in its own subdir so the commit-failure tests can freeze only the credentials+meta dir (blocking their writes) while lock acquisition and reads still work (0o500 keeps search+read).
     mkdirSync(join(workDir, "lock"), { recursive: true, mode: 0o700 });
     lockPath = join(workDir, "lock", "credentials.lock");
   });
@@ -360,9 +358,7 @@ describe("credentials mutation store", () => {
         refreshToken: "rt-b",
       };
 
-      // Order 1: B's sign-in lands first. A's conditional delete compares
-      // INSIDE its own lock acquisition, observes B's pair, and keeps it —
-      // the interleave that a composed get()+delete() would have destroyed.
+      // Order 1: B's sign-in lands first.
       await storeA.signIn(CREDS, false, null);
       expect((await storeB.signIn(bPair, false, null)).outcome).toBe("applied");
       const staleUndo = await storeA.signOutIfToken("tok-0", null);
@@ -370,7 +366,7 @@ describe("credentials mutation store", () => {
       expect((await readCredentialsFile(credentialsPath))?.token).toBe("tok-b");
 
       // Order 2: A's undo lands first (deletes its own stale pair), then B
-      // signs in — B's pair is the end state either way.
+      // signs in - B's pair is the end state either way.
       rmSync(credentialsPath, { force: true });
       await storeA.signIn(CREDS, false, null);
       expect((await storeA.signOutIfToken("tok-0", null)).outcome).toBe(
@@ -410,9 +406,7 @@ describe("credentials mutation store", () => {
       expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
       expect(await store.read()).toBeNull();
 
-      // RELAUNCH: a brand-new store over the same files (the app restarted
-      // after a failed delete). Suppression holds from the persisted record,
-      // and the startup drain completes the delete before anything adopts.
+      // RELAUNCH: a brand-new store over the same files (the app restarted after a failed delete).
       const relaunched = makeStore(refreshStub(rotateOk).fn);
       expect(await relaunched.read()).toBeNull();
       expect(await relaunched.drainQuarantine(null)).toBe(true);
@@ -494,7 +488,7 @@ describe("credentials mutation store", () => {
       expect(mismatch.credentials).toBeNull();
       // The refresh transport was never invoked for either case.
       expect(refresh.calls()).toBe(0);
-      // The pair is still durable — the DRAIN heals it, never a rotate.
+      // The pair is still durable - the DRAIN heals it, never a rotate.
       expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
     });
 
@@ -901,10 +895,7 @@ describe("credentials mutation store", () => {
         const mintedToken = failed.credentials?.token ?? "";
         expect(mintedToken).toBe("tok-0::r");
         chmodSync(workDir, 0o700);
-        // The scheduler now holds the minted token in memory and rotates again
-        // with it as the expected base. The disk still has the spent base until
-        // the continuation lands, so a naive raw CAS would read `superseded` and
-        // adopt the spent base back. The first-gate rule must prevent that.
+        // The scheduler now holds the minted token in memory and rotates again with it as the expected base.
         const next = await store.rotate({
           expectedUserId: CREDS.user.id,
           expectedToken: mintedToken,
@@ -936,10 +927,8 @@ describe("credentials mutation store", () => {
         });
         expect(first.outcome).toBe("commit-failed");
         expect(refresh.calls()).toBe(1);
-        // Dir stays frozen -> the continuation cannot resolve. A second rotate
-        // must NOT run its body against the spent base on disk (which would
-        // return `superseded` with the base, or re-spend it): it is refused as
-        // commit-failed carrying the still-pending minted pair.
+        // Dir stays frozen -> the continuation cannot resolve.
+        // A second rotate must NOT run its body against the spent base on disk (which would return `superseded` with the base, or re-spend it): it is refused as commit-failed carrying the still-pending minted pair.
         const second = await store.rotate({
           expectedUserId: CREDS.user.id,
           expectedToken: "tok-0::r",
@@ -956,9 +945,6 @@ describe("credentials mutation store", () => {
   });
 
   describe("spent-base marker (cross-process double-spend gate)", () => {
-    // The production path, not a local rebuild of the suffix: if this drifted,
-    // every `existsSync(markerPath())` assertion below would hold against a
-    // file nothing writes and the "marker is cleared" cases would go vacuous.
     function markerPath(): string {
       return spentBaseMarkerPath(credentialsPath);
     }
@@ -967,17 +953,13 @@ describe("credentials mutation store", () => {
       return createHash("sha256").update(token, "utf8").digest("hex");
     }
 
-    // A marker as another LIVE process would have armed it: the vitest
-    // parent's pid + real fingerprint, so the provably-dead probe sees a
-    // living foreign owner.
+    // A marker as another LIVE process would have armed it: the vitest parent's pid + real fingerprint, so the provably-dead probe sees a living foreign owner.
     function writeForeignMarker(over: {
       readonly token: string;
       readonly ageMs: number;
     }): void {
-      // Every deferral case below turns on this owner being a DIFFERENT live
-      // process. If the runner ever gives a worker no distinguishable parent,
-      // the marker would read as OUR OWN and the `spend-pending` assertions
-      // would silently invert into "reclaimed and spent" - fail loudly instead.
+      // Every deferral case below turns on this owner being a DIFFERENT live process.
+      // If the runner ever gives a worker no distinguishable parent, the marker would read as OUR OWN and the `spend-pending` assertions would silently invert into "reclaimed and spent" - fail loudly instead.
       expect(process.ppid).not.toBe(process.pid);
       writeFileSync(
         markerPath(),
@@ -1209,9 +1191,7 @@ describe("credentials mutation store", () => {
         const stub = refreshStub(rotateOk);
         const store = makeStore(stub.fn);
         await seedSignedIn(store);
-        // Freeze the credentials+meta dir BEFORE the rotate: the arm write is
-        // the first mutation to hit it, and must refuse the spend outright -
-        // a store that cannot record the spend would also fail the commit.
+        // Freeze the credentials+meta dir BEFORE the rotate: the arm write is the first mutation to hit it, and must refuse the spend outright - a store that cannot record the spend would also fail the commit.
         chmodSync(workDir, 0o500);
 
         await expect(
@@ -1331,10 +1311,6 @@ describe("credentials mutation store", () => {
           expect(existsSync(markerPath())).toBe(true);
 
           chmodSync(workDir, 0o700);
-          // Wait on the marker too, not just the flag: the continuation clears
-          // `pending` BEFORE it awaits the marker unlink (both still under the
-          // lock, so no other process can observe the gap - but this in-process
-          // reader can, and did, flakily).
           await waitUntil(
             () => !store.hasPendingContinuation() && !existsSync(markerPath()),
           );
@@ -1354,11 +1330,7 @@ describe("credentials mutation store", () => {
           chmodSync(workDir, 0o500);
           return rotateOk(token);
         });
-        // Park the automatic retry. `driveContinuation()` takes the same lock B's
-        // observe needs; under parallel load that hold outlives B's 500ms
-        // wait and the pin reads `lock-busy` instead of the marker gate.
-        // `continuationRetryMs` is the injected test hook; we drive the
-        // parked continuation explicitly after the sibling observe.
+        // Park the automatic retry.
         const storeA = createCredentialsMutationStore({
           paths: { credentialsPath, metaPath, lockPath },
           refresh: stubA.fn,
@@ -1398,9 +1370,6 @@ describe("credentials mutation store", () => {
         expect(stubB.calls()).toBe(0);
 
         // Unfreeze and land A's parked continuation under the lock preamble.
-        // Rotate against the spent base: land first, then the body sees the
-        // successor and returns superseded - no second spend. After this
-        // returns, `pending` and the marker are both gone (no timer race).
         chmodSync(workDir, 0o700);
         const landed = await storeA.rotate({
           expectedUserId: CREDS.user.id,

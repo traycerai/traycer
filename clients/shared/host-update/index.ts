@@ -1,8 +1,4 @@
-// Durable host-update attempt core — the shared foundation the CLI, the
-// desktop, and (later) the host reconciler all contend through.
-//
-// See `README.md` in this directory for the lock-order rule, the ordering
-// key, and what this layer deliberately does NOT do yet.
+// Durable host-update attempt core - the shared foundation the CLI, the desktop, and (later) the host reconciler all contend through.
 
 export {
   UPDATE_ATTEMPT_LOCK_FILENAME,
@@ -49,9 +45,8 @@ export type {
 } from "./decode";
 export { decodeHostUpdateAttempt, fileReadToDurableBytes } from "./decode";
 
-// NOTE: there is deliberately no raw write or delete here. The canonical
-// record changes only through the two handle-bound operations below, which
-// verify live lock ownership and re-read disk before touching anything.
+// NOTE: there is deliberately no raw write or delete here.
+// The canonical record changes only through the two handle-bound operations below, which verify live lock ownership and re-read disk before touching anything.
 export type {
   AttemptCommitOutcome,
   PublicAttemptMutationIntent,
@@ -148,11 +143,6 @@ export {
   withUpdateContenderAdoption,
 } from "./contender";
 
-// The parent-to-child adoption proof transport (Ticket 05, Ruling 1). The
-// MINT is deliberately not here: it is a two-line composition of
-// `createUpdateMutationCapabilityAdoption` with `writeAdoptionProof` at each
-// call site, which is what keeps this module free of any reference to
-// `contender.ts` and therefore out of that module's pinned importer set.
 export {
   UPDATE_ADOPTION_MAX_AGE_MS,
   writeAdoptionProof,
@@ -164,9 +154,7 @@ export type {
   ConsumedUpdateAdoption,
 } from "./adoption-transport";
 
-// Ticket 07's compatibility fence. Pure decisions only - no filesystem, no
-// clock - so the whole matrix is exhaustively testable and both the CLI and
-// Desktop consume ONE definition of the floors rather than each keeping a copy.
+// Pure decisions only - no filesystem, no clock - so the whole matrix is exhaustively testable and both the CLI and Desktop consume one definition of the floors rather than each keeping a copy.
 export {
   COMPATIBILITY_FLOOR_UNPINNED,
   LOCK_AWARE_CLI_FLOOR,
@@ -189,9 +177,7 @@ export type {
   SignedCohortPolicy,
 } from "./compatibility-fence";
 
-// Ticket 07 §4.2 shadow/telemetry gates. Pure shaping only; the collection
-// side supplies counts. `insufficient-data` is a first-class arm because a
-// ratio over an empty denominator is unknown, not zero.
+// Pure shaping only; the collection side supplies counts.
 export {
   evaluateGate,
   gateClears,

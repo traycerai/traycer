@@ -8,10 +8,8 @@ const SCROLL_WINDOW_SECONDS = 4;
 const BAR_WIDTH = 2;
 const BAR_GAP = 2;
 const BAR_RADIUS = 2;
-// Purely-visual vertical scaling. AGC'd speech peaks only reach ~0.1–0.3 of full
-// scale, so without this the bars look tiny; this exaggerates them for the
-// visualization only (it does not touch the captured audio). Bars still clamp at
-// the canvas height for loud input.
+// Agc'd speech peaks only reach ~0.1-0.3 of full scale, so without this the bars look tiny; this exaggerates
+// them for the visualization only (it does not touch the captured audio).
 const BAR_HEIGHT_SCALE = 4;
 
 interface DictationWaveformProps {
@@ -19,13 +17,8 @@ interface DictationWaveformProps {
   readonly className: string | undefined;
 }
 
-/**
- * Live scrolling dictation waveform, rendered by wavesurfer.js's RecordPlugin
- * straight from the capture MediaStream. The browser's noise suppression keeps
- * silence flat and AGC normalizes speech, so the library just renders amplitude
- * - no custom gating/auto-gain. RecordPlugin owns its own AudioContext tap on
- * the stream; we keep the stream alive for STT separately.
- */
+/** Live scrolling dictation waveform, rendered by wavesurfer.js's RecordPlugin straight from the capture
+ * MediaStream. */
 export function DictationWaveform({
   getStream,
   className,

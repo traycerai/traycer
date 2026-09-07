@@ -32,14 +32,10 @@ const skillMocks = vi.hoisted(() => ({
   editScopes: [] as string[],
   updateScopes: [] as string[],
   mutate: vi.fn(),
-  // Captured through the wrapper below rather than read off
-  // `mutate.mock.calls`, which types as `any[]` and trips the repo's
-  // no-unsafe-member-access rule the moment a test looks inside it.
+  // Captured through the wrapper below rather than read off `mutate.mock.calls`, which types as `any[]` and
+  // trips the repo's no-unsafe-member-access rule the moment a test looks inside it.
   mutations: [] as ProvidersSkillsMutateAction[],
-  // The whole variables object, so the suite can assert the flags riding
-  // alongside the mutation - `suppressToast` in particular, which is what
-  // stops the hook's global toast from double-reporting the error this dialog
-  // already renders inline.
+  // The whole variables object, so the suite can assert the flags riding alongside the mutation.
   mutateVariables: [] as Array<{ readonly suppressToast: boolean }>,
   mutateIsPending: false,
   onMutateAsync: (
@@ -68,9 +64,7 @@ const skillMocks = vi.hoisted(() => ({
   },
 }));
 
-// Detail suite is about open/remove/readFile — not scope switching. Stub the
-// shared hook so F5's workspace resolution does not require a QueryClient.
-// Dynamic import: `vi.mock` is hoisted above static imports.
+// Stub the shared hook so workspace resolution does not require a QueryClient.
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
   const { GLOBAL_ONLY_NATIVE_SCOPE } =
     await import("@/components/settings/panels/__tests__/provider-native-scope-test-mocks");
@@ -133,10 +127,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => null };
 });
 
-// The dialog reads SKILL.md off disk. Mocked at the hook so the suite can say
-// what came back - including the failure shape `workspace.readFile` actually
-// uses, which RESOLVES with `content: null` and an `error` string rather than
-// rejecting.
+// Mocked at the hook so the suite can say what came back - including the failure shape `workspace.readFile`
+// actually uses, which resolves with `content: null` and an `error` string rather than rejecting.
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: (
     _client: null,
@@ -154,19 +146,16 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
 }));
 
 function advertisedScopes(names: readonly string[]): ProviderNativeScope[] {
-  // Narrowed off the mock's loose `string[]` so a typo in a test reads as an
-  // empty scope list (no Remove/Edit/Update button) instead of type-checking
-  // as one.
+  // Narrowed off the mock's loose `string[]` so a typo in a test reads as an empty scope list (no
+  // Remove/Edit/Update button) instead of type-checking as one.
   return names.flatMap((scope) =>
     scope === "global" || scope === "project" ? [scope] : [],
   );
 }
 
 function skillsState(): ProviderCliState {
-  // `list` only by default: create/import are deliberately empty so the "New"
-  // dropdown never mounts here - this suite is about opening an existing skill.
-  // `edit` / `update` keys stay omitted unless a test advertises them: absent
-  // is the old-host skew gate and is not the same as an empty array.
+  // `list` only by default: create/import are deliberately empty so the "New" dropdown never mounts here - this
+  // suite is about opening an existing skill.
   const edit = advertisedScopes(skillMocks.editScopes);
   const update = advertisedScopes(skillMocks.updateScopes);
   return {
@@ -208,17 +197,8 @@ function renderTab(): void {
   render(<ProviderSkillsTab state={skillsState()} />);
 }
 
-/**
- * The confirmation's destructive button, by role.
- *
- * Scoped through the dialog rather than queried globally even though a bare
- * `getByRole("button", { name: "Remove" })` happens to work: the skill dialog
- * behind it has its own "Remove", and the only reason that one is not also a
- * match is that Radix `aria-hidden`s the background while a modal is open. So
- * the global query returns the CONFIRM button here and the SKILL dialog's
- * button two lines later, which reads as a bug even when it isn't. Scoping
- * says which one is meant.
- */
+/** Scoped through the dialog rather than queried globally even though a bare `getByRole("button", { name:
+ * "Remove" })` happens to work. */
 function confirmAction(): HTMLElement {
   return within(screen.getByTestId("confirm-destructive-dialog")).getByRole(
     "button",
@@ -343,13 +323,8 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     expect(screen.getByRole("status").textContent).toBe("No skills match.");
   });
 
-  // Rows are keyed `source:path`, so the SAME name under two roots is a shape
-  // the protocol allows outright. An `aria-label` replaces every descendant
-  // string, so a name-only label hides the source badge that distinguishes
-  // them and hands a screen reader two identical "Open find-skills" buttons.
-  // Asserted through a strict role query, which THROWS on an ambiguous match -
-  // a `getAllBy` length check here would pass just as well with both labels
-  // identical.
+  // An `aria-label` replaces every descendant string, so a name-only label hides the source badge that
+  // distinguishes them and hands a screen reader two identical "Open find-skills" buttons.
   it("distinguishes same-named skills from different roots by accessible name", () => {
     skillMocks.skills = [
       FIND_SKILLS,
@@ -377,12 +352,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     renderTab();
     expect(screen.getByText("find-skills")).toBeDefined();
 
-    // Asserted as a COUNT, not as "every call was disabled": the dialog is
-    // mounted conditionally, so a `.every()` over an empty array would pass
-    // for the wrong reason (and keep passing if the gate were removed but the
-    // hook happened to be called with nulls). The list may hold dozens of
-    // skills; reading every body on mount pays for content nobody asked for,
-    // and the host query is what makes the tab need a QueryClient at all.
+    // Asserted as a count, not as "every call was disabled".
     expect(skillMocks.readFileCalls).toHaveLength(0);
 
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
@@ -424,11 +394,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   });
 
   it("gives a skill no icon tile, in the row or the dialog", () => {
-    // Skills have no artwork source in any provider's format, so a tile here
-    // could only be a glyph we invented. Now that plugin rows render a real
-    // `<img>` and nothing else, the element check is the meaningful one - and
-    // "fs" (what the deleted monogram would have drawn for "find-skills")
-    // guards against a text-based tile coming back in its place.
+    // Skills have no artwork source in any provider's format, so a tile here could only be a glyph we invented.
     const { container } = render(<ProviderSkillsTab state={skillsState()} />);
     expect(screen.queryByText("fs")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
@@ -512,48 +478,30 @@ describe("<ProviderSkillsTab /> skill detail", () => {
         path: FIND_SKILLS.path,
       },
     ]);
-    // `suppressToast` rides with it because this dialog renders the failure
-    // inline (see the two error tests below). Without the flag the hook's
-    // `toastFromHostError` reports the same failure a second time, over a
-    // dialog that is already showing it.
+    // Without the flag the hook's `toastFromHostError` reports the same failure a second time, over a dialog that
+    // is already showing it.
     expect(skillMocks.mutateVariables).toEqual([{ suppressToast: true }]);
   });
 
   it("disables Remove for ANY pending skill mutation, but only spins for its own", () => {
-    // A destructive action's pending state is where a double-submit does
-    // damage, and nothing else in this suite exercises it.
-    //
-    // Removal is disabled by any in-flight skill mutation, not only by another
-    // removal: every one of them goes through a SINGLE `useMutation` observer,
-    // and a second `mutate()` on it replaces the first call's
-    // `onSuccess`/`onError`. Starting a removal on top of a pending create can
-    // therefore swallow that create's failure with no inline error and no
-    // toast - and both share the one `pendingKey`, so whichever settles first
-    // clears it while the other is still running.
-    //
-    // The SPINNER stays specific, which is why these are two props and not
-    // one: an unrelated create must not make this button claim to be doing the
-    // removing.
+    // The spinner stays specific, which is why these are two props and not one: an unrelated create must not make
+    // this button claim to be doing the removing.
     skillMocks.removeScopes = ["global"];
     skillMocks.mutateIsPending = true;
     renderTab();
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
-    // The native `disabled` property, not `toBeDisabled()`: jest-dom's
-    // matchers are not wired into this suite, so the matcher would be
-    // undefined rather than failing informatively.
+    // The native `disabled` property, not `toBeDisabled`: jest-dom's matchers are not wired into this suite, so
+    // the matcher would be undefined rather than failing informatively.
     const remove = screen.getByRole("button", { name: "Remove" });
     expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(true);
-    // Still the trash ICON, not the spinner: the pending operation is somebody
-    // else's. The spinner renders a `<span>` of braille frames, so the lucide
-    // `<svg>` surviving here is what says the button is not claiming the work.
+    // Still the trash icon, not the spinner: the pending operation is somebody else's.
     expect(remove.querySelector("svg")).not.toBeNull();
   });
 
   it("disables Remove and spins it once THIS removal is in flight", () => {
-    // The confirmation is driven for real - the mutate mock takes the call and
-    // settles nothing, which is exactly "in flight" - because `pendingKey` is
-    // internal state that only the real path sets.
+    // The confirmation is driven for real - the mutate mock takes the call and settles nothing, which is exactly
+    // "in flight" - because `pendingKey` is internal state that only the real path sets.
     skillMocks.removeScopes = ["global"];
     renderTab();
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
@@ -576,8 +524,8 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   });
 
   it("blocks removal of a built-in skill and says why, under the same provider", () => {
-    // The contract advertises `remove` here - what stops it is the SOURCE.
-    // Offering the button would offer a guaranteed host-side failure.
+    // The contract advertises `remove` here - what stops it is the source. Offering the button would offer a
+    // guaranteed host-side failure.
     skillMocks.removeScopes = ["global"];
     skillMocks.skills = [{ ...FIND_SKILLS, source: "managed" }];
     renderTab();
@@ -623,9 +571,8 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     fireEvent.click(confirmAction());
 
-    // The confirmation closes (re-confirming what just failed is not the next
-    // step) but the skill dialog stays - the tab's own error banner would be
-    // behind it and invisible.
+    // The confirmation closes (re-confirming what just failed is not the next step) but the skill dialog stays -
+    // the tab's own error banner would be behind it and invisible.
     expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
     expect(screen.getByRole("dialog").textContent).toContain(
       "outside writable skill roots",

@@ -148,16 +148,8 @@ describe("prompt-stash ownership transfer: landing", () => {
   });
 
   it("landing A→different window partition (modeled via runnerHost.windowId)", async () => {
-    // LIMITATION: not a true multi-Electron-renderer test. Models the
-    // production partition boundary by flipping globalThis.runnerHost.windows
-    // .windowId between stash/source (window-a) and restore/destination
-    // (window-b). Real multi-window would also involve separate JS heaps and
-    // BroadcastChannel - only the landing-image DB name partition is covered.
-    //
-    // Starts from landing's native HASH-ONLY representation in window-A's
-    // real partitioned store, stashes with the production getImageBytes
-    // resolver, then deletes window-A's source before restore so window-B
-    // can only succeed from stash-owned durable bytes.
+    // LIMITATION: not a true multi-Electron-renderer test.
+    // Models the production partition boundary by flipping globalThis.runnerHost.windows .windowId between stash/source (window-a) and restore/destination (window-b).
     const h = await loadHarness();
     const { act, cleanup, renderHook } = h.testing;
     const draftId = "landing-window-a";
@@ -237,10 +229,8 @@ describe("prompt-stash ownership transfer: landing", () => {
     expect(entry.blobHashes).toHaveLength(1);
     expect(entry.blobHashes[0]).toBeTruthy();
 
-    // Make window-A's source bytes UNAVAILABLE before restore. Session is
-    // process-global (not window-partitioned), so both durable delete and
-    // releaseSession are required - otherwise getImageBytes still hits the
-    // in-memory session cache.
+    // Make window-A's source bytes UNAVAILABLE before restore.
+    // Session is process-global (not window-partitioned), so both durable delete and releaseSession are required - otherwise getImageBytes still hits the in-memory session cache.
     await h.landingImages.deleteImage(hashA);
     h.landingImages.releaseSession(hashA);
     expect(await h.landingImages.getImageBytes(hashA)).toBeUndefined();

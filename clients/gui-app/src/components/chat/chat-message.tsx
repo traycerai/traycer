@@ -20,23 +20,7 @@ interface ChatMessageProps {
   nextStepActions: NextStepActionHandler | null;
 }
 
-/**
- * How a fork is seeded.
- *
- *  - `plain` - the ordinary per-message fork button: source binding verbatim,
- *    no special question handling. Titled "Fork".
- *  - `cross-question` - a fork FROM a pending question: same working copy (its
- *    binding verbatim: local stays local, an existing worktree is adopted) to
- *    interrogate the assistant, with the question carried as inline reference
- *    and the composer immediately free. Titled "Cross Question".
- *  - `ab-worktree` - a fork FROM a pending question into NEW worktrees off each
- *    folder's current branch carrying uncommitted + staged changes, to proceed
- *    down an alternate path in parallel, with the question re-opened as an
- *    answerable card. Titled "A/B Fork".
- *
- * `cross-question` / `ab-worktree` are offered on pending-question cards and
- * resolved Q&A rows; the per-message footer button is always `plain`.
- */
+/** How a fork is seeded. - `plain` - the ordinary per-message fork button: source binding verbatim, no special question handling. Titled "Fork". - `cross-question` - a fork FROM a pending question: same working copy (its binding verbatim: local stays local, an existing worktree is adopted) to interrogate the assistant, with the question carried as inline reference and the composer immediately free. */
 export type ChatForkMode = "plain" | "cross-question" | "ab-worktree";
 
 export interface ChatMessageEditing {
@@ -102,10 +86,8 @@ function messageAlignmentClass(message: ChatMessageModel): string {
   return "items-start";
 }
 
-// A synthesized row can carry a single full-width "special" segment (a
-// setup-card, a forked-chat-link or an imported-chat-marker) with no
-// sender/body. Render it directly,
-// bypassing the role branches below.
+// A synthesized row can carry a single full-width "special" segment (a setup-card, a forked-chat-link or an imported-chat-marker) with no sender/body.
+// Render it directly, bypassing the role branches below.
 function renderSingleSpecialSegment(
   message: ChatMessageModel,
 ): ReactElement | null {
@@ -225,10 +207,5 @@ function ChatMessageImpl(props: ChatMessageProps) {
   );
 }
 
-/**
- * Collapsible open state lives in provider-scoped stores under `ChatMessages`;
- * toggling one card only re-renders the subscribing leaf segment, not every
- * visible row. That leaves `ChatMessage` free to bail on default shallow
- * equality whenever its render-driving props are reference-equal.
- */
+/** Collapsible open state lives in provider-scoped stores under `ChatMessages`; toggling one card only re-renders the subscribing leaf segment, not every visible row. That leaves `ChatMessage` free to bail on default shallow equality whenever its render-driving props are reference-equal. */
 export const ChatMessage = memo(ChatMessageImpl);

@@ -1,12 +1,5 @@
-/**
- * Palette-specific row wrapper around cmdk's raw
- * `Command.Item`. The shadcn `CommandItem` primitive renders a
- * hidden `CheckIcon` with `ml-auto` that, even with `opacity-0`,
- * still takes layout width - visible as a ~16px gap at the right
- * edge of every palette row that has no `CommandShortcut`. The
- * palette never uses the check behavior, so we skip the primitive
- * and apply its className directly here.
- */
+/** Palette-specific row wrapper around cmdk's raw `Command.Item`. The palette never uses the check behavior, so
+ * we skip the primitive and apply its className directly here. */
 import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { cn } from "@/lib/utils";

@@ -20,29 +20,20 @@ const settingsSurface = lazy(() =>
   })),
 );
 
-// Exported for the mobile settings gate in `use-system-tab-modal.ts`: on
-// phones there is no two-pane modal, so opening a section navigates straight
-// to its route.
+// Exported for the mobile settings gate in `use-system-tab-modal.ts`: on phones there is no
+// two-pane modal, so opening a section navigates straight to its route.
 export function settingsRouteOptions(section: SettingsSectionId) {
-  // Every section id has a `src/routes/settings.<id>.tsx` route, so the path
-  // IS the id — a per-section `case` was sixteen lines restating that. The
-  // template literal keeps the union of literal route strings TanStack needs,
-  // and an id added without its route file fails to type-check here.
+  // Every section id has a `src/routes/settings.<id>.tsx` route, so the path IS the id - a
+  // per-section `case` was sixteen lines restating that.
   return { to: `${SETTINGS_PATH_PREFIX}/${section}` } as const;
 }
 
-/**
- * Module for `kind: "settings"` tabs. Singleton; no duplication.
- * Route defaults to the last remembered sub-path, or the general
- * section fallback.
- */
+/** Module for `kind: "settings"` tabs. Singleton; no duplication. */
 export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
   kind: "settings",
   build: (source) => {
-    // Canonicalize against the known section list so stale/renamed paths
-    // (e.g. `/settings/old-section` from an earlier build) cannot leak into
-    // the tab's `route` or `lastPath`. `settingsSectionFromPath` falls back
-    // to `general` for unknown ids and remaps legacy aliases.
+    // Canonicalize against the known section list so stale/renamed paths (e.g. `/settings/old-section`
+    // from an earlier build) cannot leak into the tab's `route` or `lastPath`.
     const canonicalPath =
       source.lastPath === null
         ? null
@@ -113,9 +104,8 @@ export function settingsSectionFromPath(
   pathname: string | null,
 ): SettingsSectionId {
   if (pathname === null) return "general";
-  // Legacy `/settings/service` resolves to the Host section so a
-  // remembered tab path from before the rename still lands on the
-  // current native-packaging surface (the route itself redirects).
+  // Legacy `/settings/service` resolves to the Host section so a remembered tab path from before the
+  // rename still lands on the current native-packaging surface (the route itself redirects).
   if (pathname === LEGACY_SERVICE_PATH) return "host";
   const match = SETTINGS_SECTIONS.find(
     (section) => settingsSectionPath(section.id) === pathname,

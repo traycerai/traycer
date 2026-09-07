@@ -16,45 +16,7 @@ type GetChatRunSettingsResponse = ResponseOfMethod<
   "epic.getChatRunSettings"
 >;
 
-/**
- * One chat's persisted run-settings tuple, read from the host that OWNS it.
- *
- * ## Why a host read at all
- *
- * The renderer's chat record table used to carry `settings` because the epic
- * Y.Doc's chat entry did. Since the single-write pivot nothing writes that
- * entry - `chatProjectionFromRecord` honestly reports `settings: null`, because
- * the registry row it projects carries only a harness-id summary - so every
- * surface rendering resolved settings for a chat it has not opened has no local
- * source left. This is that source.
- *
- * ## Passive, and gated by the caller's MOUNT
- *
- * No polling and no focus refetch. Run settings change only when the user
- * changes them, and settings mutations explicitly invalidate this cache. The
- * `staleTime` keeps passive consumers from re-asking the host on every mount.
- *
- * ## `client` decides WHICH host, and it is not the tab's
- *
- * Callers pass a client pinned to the chat's own `originHostId`
- * (`useHostClientForHostId`), never the tab-bound or app-active one. A chat
- * living on another of the viewer's hosts is served by that host, which is the
- * only machine holding its chat store - asking the tab's host would get a
- * truthful `null` for a chat whose settings exist perfectly well elsewhere.
- * When that host is not in the directory there is no client to pin, the query
- * never runs, and the caller renders what the record row already gave it.
- *
- * ## VIEWER-scoped, because the RESPONSE is
- *
- * The resolver answers from the calling identity's own registry entry and hands
- * back `{ settings: null }` for a chat the caller does not own, so the reply is
- * a fact about one viewer and must not be cached as a fact about the host/chat
- * pair. The viewer rides the cache key for the same reason spelled out in
- * `use-chat-replica-read.ts`: an auth transition invalidates host queries but
- * does not EVICT their data, so an unscoped slot could hand the next account
- * the previous account's model, permission mode and profile. No viewer resolved
- * means no request, rather than an unattributed one.
- */
+/** `client` is originHostId, never the tab host. No polling; mutations invalidate. */
 export function useChatRunSettings(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
@@ -75,28 +37,14 @@ export function useChatRunSettings(args: {
       enabled: args.enabled && viewerUserId.length > 0,
       staleTime: 60_000,
       refetchOnWindowFocus: false,
-      // A host predating this method answers the declared `E_HOST_UNSUPPORTED`,
-      // which is PERMANENT - retrying it just doubles a doomed request and its
-      // warning log on every hover, and an errored query refetches on the next
-      // mount no matter what `staleTime` says. Same predicate as every other
-      // optional chat read here. Note this cannot be left to the poll table:
-      // `epic.getChatRunSettings` is a `poll: null` method, so `useHostQuery`
-      // injects no `retry: false` of its own (only `kind: "condition"` methods
-      // get that), and the production default retry would otherwise apply.
+      // Note this cannot be left to the poll table: `epic.getChatRunSettings` is a `poll: null` method, so `useHostQuery` injects no `retry: false` of its own (only `kind: "condition"` methods get that), and the production default retry would otherwise apply.
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
   });
 }
 
-/**
- * Persisted run-settings tuples for a set of chats owned by one host.
- *
- * The caller must establish the ownership boundary before passing `chatIds`:
- * one requester cannot resolve records owned by another host. Keeping the
- * batch on `useHostQueries` starts the independent reads together and reuses
- * the same viewer-scoped cache entries as {@link useChatRunSettings}.
- */
+/** The caller must establish the ownership boundary before passing `chatIds`: one requester cannot resolve records owned by another host. */
 export function useChatRunSettingsBatch(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
@@ -126,22 +74,7 @@ export function useChatRunSettingsBatch(args: {
   });
 }
 
-/**
- * Drop this host's cached run-settings tuples after a write.
- *
- * The host store is the only thing a settings write updates - for a
- * registry-only chat the record row still summarises to a harness id, and for a
- * pre-pivot chat the doc entry is frozen - so nothing about a successful
- * `epic.updateChatRunSettings` / `epic.updateChatProfile` reaches this cache on
- * its own. Without this, changing a model or profile in the composer leaves
- * mounted consumers showing the old values because a fresh cached entry does
- * not refetch merely because an observer is present.
- *
- * Method-scoped rather than per chat: the key carries the params AND the viewer,
- * so a `chatId`-precise invalidation would have to reconstruct both, and the
- * entries this drops are single small tuples refetched only while a passive
- * consumer needs them.
- */
+/** Method-scoped invalidation after a run-settings write. Observer presence does not refetch a fresh cache entry. */
 export function invalidateChatRunSettings(
   queryClient: QueryClient,
   hostId: string | null,

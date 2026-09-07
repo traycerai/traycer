@@ -11,9 +11,7 @@ const TILE_A = "inst-a";
 const TILE_B = "inst-b";
 
 /**
- * Two tiles plus app chrome, in the same shape the canvas renders: the tile
- * wrapper carries `data-tile-instance-id`, the content root carries
- * `data-selection-root`, and the tile header sits outside it.
+ * Two tiles plus app chrome, in the same shape the canvas renders: the tile wrapper carries `data-tile-instance-id`, the content root carries `data-selection-root`, and the tile header sits outside it.
  */
 function mountCanvas(): void {
   document.body.innerHTML = `
@@ -150,9 +148,8 @@ describe("TileSelectAllBridge", () => {
     expect(pressSelectAll(window).defaultPrevented).toBe(false);
   });
 
-  // jsdom never runs Chromium's document-wide select-all, so this pins the
-  // mechanism that suppresses it - preventDefault - plus the selection staying
-  // put. The real default is covered by the CDP pass, not here.
+  // jsdom never runs Chromium's document-wide select-all, so this pins the mechanism that suppresses it - preventDefault - plus the selection staying put.
+  // The real default is covered by the CDP pass, not here.
   it("swallows the key when an overlay covers a live canvas", () => {
     makeOwner(TILE_A);
     block("app-dialog");

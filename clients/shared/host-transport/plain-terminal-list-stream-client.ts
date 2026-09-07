@@ -38,7 +38,6 @@ export interface PlainTerminalListStreamClientOptions {
   readonly callbacks: PlainTerminalListStreamCallbacks;
 }
 
-/** Typed client surface for replacement-state durable terminal collection. */
 export class PlainTerminalListStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: PlainTerminalListStreamCallbacks;

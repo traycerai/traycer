@@ -1,15 +1,3 @@
-/**
- * Pins the NEW shared surface `@traycer/protocol/config/host-stop-intent`
- * adds for the host's SIGTERM-time reader: `hostStopIntentPath` (the
- * cross-repo on-disk filename contract) and `isStopIntentWithin` (the
- * window-parameterized freshness check both the supervisor and the host
- * bind to their own, deliberately different, bounds).
- *
- * `parseStopIntent`'s parse behaviour is already covered end to end through
- * the CLI's own `readStopIntent` in
- * `clients/traycer-cli/src/host/__tests__/stop-intent.test.ts` - not
- * duplicated here.
- */
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,10 +11,6 @@ describe("hostStopIntentPath", () => {
     const dir = "/fake/host-home";
     const path = hostStopIntentPath(dir);
 
-    // The literal tail is a cross-repo on-disk contract: the CLI writes this
-    // exact filename before every kill and the host reads it back through
-    // this same function at SIGTERM. A silent rename on either side would
-    // desync the two without either failing to compile.
     expect(path.endsWith("stop-intent.json")).toBe(true);
     expect(path).toBe(join(dir, "stop-intent.json"));
   });
@@ -62,11 +46,6 @@ describe("isStopIntentWithin", () => {
   });
 
   it("is window-parameterized - the SAME record reads inside a wide window and outside a narrow one", () => {
-    // This is exactly the property the two production callers depend on:
-    // the supervisor's STOP_INTENT_STALE_MS (300_000ms) has to outlive
-    // stop -> kill -> settle, while the host's EXTERNAL_RESTART_INTENT_FRESH_MS
-    // (30_000ms) only has to outlive the CLI writing the record and the
-    // SIGTERM landing. One shared function, two independently-chosen bounds.
     const stamped = recordAt(NOW_MS - 60_000);
 
     expect(isStopIntentWithin(stamped, NOW_MS, 300_000)).toBe(true);

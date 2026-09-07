@@ -20,11 +20,7 @@ function authUserQueryOptions(auth: AuthService, enabled: boolean) {
   });
 }
 
-/**
- * Fetches the signed-in user's full identity + credits via `AuthService`
- * (`/api/v3/user`). Disabled while signed-out. Credits live only in this query
- * cache - never the auth store, which keeps only its narrow projections.
- */
+/** Credits live only in this query cache - never the auth store, which keeps only its narrow projections. */
 export function useAuthUser(): UseQueryResult<AuthenticatedUser | null> {
   const auth = useAuthService();
   const signedIn = useAuthStore((s) => s.status === "signed-in");

@@ -20,13 +20,7 @@ interface EpicAgentOpenInput {
   readonly type: "chat" | "terminal-agent";
 }
 
-/**
- * Mints the tile ref for an agent reference at click time.
- *
- * This hook samples reachability for the decision but never follows it after
- * the tile opens. Live refs remain bound to their owner host for life;
- * published refs remain bound to the Epic session host that serves the read.
- */
+/** This hook samples reachability for the decision but never follows it after the tile opens. */
 export function useEpicAgentOpenRef(
   input: EpicAgentOpenInput,
 ): () => EpicArtifactRef | PublishedChatTileRef {

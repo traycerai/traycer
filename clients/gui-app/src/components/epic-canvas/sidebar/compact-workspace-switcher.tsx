@@ -38,10 +38,8 @@ export function CompactWorkspaceSwitcher(props: CompactWorkspaceSwitcherProps) {
         align="start"
         className={props.contentClassName}
         data-testid={props.contentTestId}
-        // The host picker's list is a nested Radix popover: it portals OUTSIDE
-        // this content, so every click in it arrives here as an interaction
-        // from outside. Dismissing on those would close the panel the picker
-        // exists to scope, and no host could ever be chosen from it.
+        // The host picker's list is a nested Radix popover: it portals OUTSIDE this content, so every click in it arrives here as an interaction from outside.
+        // Dismissing on those would close the panel the picker exists to scope, and no host could ever be chosen from it.
         onInteractOutside={(event) => {
           if (isHostSwitcherListInteraction(event.target)) {
             event.preventDefault();

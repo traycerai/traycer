@@ -138,10 +138,8 @@ function makeHost(management: IHostManagement | null): IRunnerHost {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  // Preserve MockRunnerHost's prototype methods (signIn, signOut, …) while
-  // overriding the readonly fields the test needs to vary. Spreading a class
-  // instance only copies own enumerable fields, so we keep the prototype
-  // chain via Object.create.
+  // Spreading a class instance only copies own enumerable fields, so we keep the prototype chain via
+  // Object.create.
   const proto = Object.getPrototypeOf(host) as object;
   return Object.assign(Object.create(proto) as IRunnerHost, host, {
     hostManagement: management,
@@ -214,12 +212,8 @@ function queryHostUpdateBanner(): HTMLElement | null {
   });
 }
 
-/**
- * Synchronize on host-controller status query completion (and the cache
- * update that drives the banner render). Negative "stays hidden" assertions
- * must wait here first: while the query is still loading, `status` is
- * undefined and the banner is null for the wrong reason.
- */
+/** Negative "stays hidden" assertions must wait here first: while the query is still loading, `status` is
+ * undefined and the banner is null for the wrong reason. */
 async function waitForHostControllerStatusReady(
   management: IHostManagement,
   queryClient: QueryClient,
@@ -458,15 +452,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     });
   });
 
-  // G6(i): a CONTROLLER-LANE terminal failure while the local rich view is
-  // idle/unknown (this file's whole premise — no host binding at all) must
-  // still announce with alert semantics. `describeUpdateOperation` has
-  // nothing to say here (the attempt is idle/unknown), so `aria-live` MUST be
-  // derived from the branch actually rendered (`terminal-outcome`), not from
-  // the local view's own copy — which is exactly the defect the independent
-  // cold review's finding 6 named: the live region kept reading the
-  // non-rendered attempt lane while the visible text, label and styling all
-  // correctly said "failed".
+  // G6(i): a controller-lane terminal failure while the local rich view is idle/unknown (this file's whole
+  // premise - no host binding at all) must still announce with alert semantics.
   it("G6(i) — a controller-lane terminal outcome is aria-live: assertive even though the local rich view has nothing to say", async () => {
     const applyStaged = vi.fn().mockResolvedValueOnce({
       kind: "deferred" as const,
@@ -509,9 +496,7 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     expect(queryHostUpdateBanner()).toBeNull();
   });
 
-  // Snooze flow - keyed to the persistent `useHostUpdateBannerStore`.
-  // The store is reset in beforeEach so these tests cannot bleed into
-  // each other.
+  // The store is reset in beforeEach so these tests cannot bleed into each other.
   it("hides the banner after clicking the snooze (X) button", async () => {
     const management = makeManagement({ status: READY_STATUS });
     renderBanner(makeHost(management));

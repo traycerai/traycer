@@ -1,50 +1,6 @@
 /**
- * Regression coverage for the "release-packaging-relocatable-plist" ticket:
- * a real `bun run package:dir` run (the documented, RELEASE.md-sanctioned
- * local-packaging entry point: `build:app` + all three prepack checks +
- * `electron-builder --dir --publish never`), production-stamped via the real
- * `set-deploy-target.cjs` exactly the way `.github/workflows/
- * release-desktop.yml` (internal repo) drives a release build against THIS
- * package.json, with no internal script involved. Unlike
- * `inject-host-launch-agent.test.ts` (which drives the exported hook
- * functions directly against a scaffolded fixture), this test proves the
- * hook is actually WIRED into the real package.json `build.afterPack` config
- * and fires during a genuine electron-builder pack.
- *
- * `--dir` (via `package:dir`, no dmg/zip/notarization) plus
- * `CSC_IDENTITY_AUTO_DISCOVERY=false` mean this never needs real Developer ID
- * certs and produces a plain ad-hoc-signed `.app` - "ad-hoc signing is fine
- * and expected locally" per the ticket. Slow (a real electron-builder pack)
- * and darwin-only (shells out to the real `codesign`/`plutil`, mirroring
- * what the hook itself does), so it's gated the same way
- * `install-desktop.test.mjs`'s own real-build suite is in the internal repo.
- *
- * Safety: every path this test touches - the staged fake CLI binary under
- * `resources/cli/darwin-<arch>/` (gitignored - see `.gitignore`) and the
- * packaged output under `release/` (also gitignored) - lives inside this
- * workspace only. It never touches `/Applications`, a real running Traycer
- * host, or calls `launchctl`. `src/config.ts` is stamped to `"production"`
- * for the duration of the pack and unconditionally restored to `"dev"` in a
- * `finally`, exactly mirroring the real release workflow's own
- * stamp/build/restore sequence - never left mutated even if the build
- * throws.
- *
- * Why this lives in `__integration_tests__`, not `__tests__`, and runs via
- * `bun run test:packaging` (see `vitest.config.packaging.ts`) instead of the
- * default `bun run test`: `src/config.ts` is a real file shared by the whole
- * workspace, and several unrelated suites (`config-dev-backend-urls.test.ts`,
- * `sign-in-url.test.ts`, `deep-link.test.ts`, ...) import the real `../config`
- * module and assert on its dev-slot values. Vitest's default `vitest run`
- * runs test files concurrently across a worker pool; with this test in that
- * same pool, its `beforeAll` stamping `src/config.ts` to `"production"`
- * raced with those other files' imports mid-run and produced spurious
- * failures unrelated to anything this ticket changed. Being production
- * -stamped for the ~10s a real pack takes is unavoidable - the whole point
- * is exercising the actual `package.json` build config with no internal
- * script involved - so instead this file (and thus its stamp/restore
- * window) is excluded from the default suite's `include` glob and only
- * ever runs alone, one file at a time, never racing another suite's import
- * of `../config`.
+ * `--dir` (via `package:dir`, no dmg/zip/notarization) plus `CSC_IDENTITY_AUTO_DISCOVERY=false` mean this never needs real Developer ID certs and produces a plain ad-hoc-signed.
+ * It never touches `/Applications`, a real running Traycer host, or calls `launchctl`.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -86,18 +42,7 @@ const CLI_ARCH_DIR = path.join(
   "cli",
   `darwin-${process.arch}`,
 );
-// A developer may have a REAL staged CLI + host archive in the (gitignored)
-// arch dir - e.g. from `make dev-desktop` or a local install build. The test
-// must not destroy it: the real content is moved aside here and restored in
-// `afterAll` (plus a stale-backup recovery in `beforeAll` for a previous run
-// that died between the two).
 const CLI_ARCH_DIR_BACKUP = `${CLI_ARCH_DIR}.packaging-test-backup`;
-// The OTHER macOS arch. The release job stages `darwin-arm64` and
-// `darwin-x64` side by side before one `electron-builder --mac` packs both
-// apps, and an arch-blind `resources/cli` -> `cli` mapping shipped the x86_64
-// SEA inside the arm64 bundle (traycerai/traycer#1528). Staging a decoy here
-// reproduces that release-job layout so the pack below proves the `${arch}`
-// scoped mapping keeps the foreign arch out.
 const FOREIGN_ARCH = process.arch === "arm64" ? "x64" : "arm64";
 const CLI_FOREIGN_ARCH_DIR = path.join(
   DESKTOP_ROOT,
@@ -161,14 +106,6 @@ function twoArchVersion(arch: MacPackArch): string {
   return `${PACKAGING_TEST_VERSION}-two-arch-${arch}`;
 }
 
-/**
- * The arch of the app's OWN Mach-O, read with `lipo`. The two-arch assertions
- * key each app's expected CLI off this rather than off the output directory
- * name: electron-builder names the per-arch dirs `mac-arm64` and (for the
- * default arch) a bare `mac`, which is an implementation detail that would
- * make the test read as passing for the wrong reason if it ever changed.
- * Matching binary-arch to CLI-arch is the property actually under test.
- */
 function appArchOf(appPath: string): MacPackArch {
   const raw = execFileSync(
     "lipo",
@@ -226,10 +163,6 @@ describe.skipIf(process.platform !== "darwin")(
         { cwd: DESKTOP_ROOT, stdio: "inherit" },
       );
       try {
-        // `package:dir` is the real, documented (RELEASE.md) local-packaging
-        // entry point: build:app + all three prepack checks (CLI/icons/tray)
-        // + `electron-builder --dir --publish never` - the exact chain a
-        // contributor or CI would run, not a hand-picked subset of it.
         execFileSync("bun", ["run", "package:dir"], {
           cwd: DESKTOP_ROOT,
           stdio: "inherit",
@@ -426,22 +359,6 @@ describe.skipIf(process.platform !== "darwin")(
   },
 );
 
-/**
- * The release topology, which the block above does NOT cover: the macOS job
- * stages `darwin-arm64` AND `darwin-x64`, then ONE `electron-builder --mac`
- * packs both apps (`build.mac.target` lists both arches). `package:dir` above
- * packs a single arch, so it can only prove the mapping picks the right dir -
- * not that two packs inside one invocation resolve `${arch}` independently.
- * That distinction is the whole fix for traycerai/traycer#1528: the arch-blind
- * mapping it replaced put BOTH staged CLIs into BOTH apps, and the arm64 DMG
- * shipping an x86_64 Mach-O is what made macOS 26 flag the app as Intel.
- *
- * Deliberately NOT production-stamped, unlike the block above: nothing here
- * asserts on the LaunchAgent/helper that `afterPack` injects (that hook
- * early-returns when unstamped), so this avoids a second window in which
- * `src/config.ts` is mutated. It invokes electron-builder directly rather
- * than through `package:dir`, because no package script packs two arches.
- */
 describe.skipIf(process.platform !== "darwin")(
   "real electron-builder --mac packaging, BOTH arches in one invocation (release topology)",
   () => {
@@ -474,10 +391,7 @@ describe.skipIf(process.platform !== "darwin")(
           cwd: DESKTOP_ROOT,
           stdio: "inherit",
         });
-        // electron-builder cannot resolve Bun's `catalog:` protocol from the
-        // package.json devDependency, and electron is hoisted, so its
-        // project-level lookup misses too - pin the installed version
-        // explicitly, exactly as `release-desktop.yml` does.
+        // electron-builder cannot resolve Bun's `catalog:` protocol from the package.json devDependency, and electron is hoisted, so its project-level lookup misses too.
         const electronVersion = execFileSync(
           "node",
           ["-p", "require('electron/package.json').version"],

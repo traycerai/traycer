@@ -11,16 +11,7 @@ import type {
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { hostQueryKeys } from "@/lib/query-keys";
 
-// Regression coverage for the terminal reattach loop: stream-pushed metadata
-// (snapshot / `sessionUpdated` title + activeProcessName) must be written
-// into the cached `terminal.list` rows via `setQueriesData`, NEVER via
-// `invalidateQueries`. Invalidating refetched the list, the tile bootstrap's
-// fetch gate released the session handle, the re-subscribe's snapshot
-// re-set the metadata, and the cycle repeated forever - bouncing the PTY
-// stream ~3x/second and leaving reattached terminals permanently blank.
-//
-// Also covers `homeCwd` preservation on those session-row patches: top-level
-// response metadata must survive title / activeProcessName updates.
+// Regression coverage for the terminal reattach loop: stream-pushed metadata (snapshot / `sessionUpdated` title + activeProcessName) must be written into the cached `terminal.list` rows via `setQueriesData`, NEVER via `invalidateQueries`.
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
@@ -36,9 +27,7 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   authenticatedHostStreamKey: () => null,
 }));
 
-// The acquire effect keys on `openTransport` identity, so the mocked factory
-// must return a REFERENTIALLY STABLE function - a fresh closure per render
-// would release/reacquire the handle in an endless effect loop.
+// The acquire effect keys on `openTransport` identity, so the mocked factory must return a REFERENTIALLY STABLE function - a fresh closure per render would release/reacquire the handle in an endless effect loop.
 vi.mock("@/lib/host/use-durable-stream-transport", () => {
   const stableOpenTransport = () => {
     throw new Error("not reachable: test factory override is installed");

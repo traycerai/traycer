@@ -10,9 +10,6 @@ export type NotificationEntityConsumer = (
   scope: NotificationConsumptionScope,
 ) => void;
 
-/**
- * Explicit view gestures feed the same read-consumption path as passive focus
- * presence. `null` keeps isolated canvas previews/tests provider-optional.
- */
+/** Explicit view gestures feed the same read-consumption path as passive focus presence. */
 export const NotificationConsumptionContext =
   createContext<NotificationEntityConsumer | null>(null);

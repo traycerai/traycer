@@ -17,47 +17,20 @@ import {
 } from "../store/cli-lock";
 import { hostHomeDir } from "../store/paths";
 
-/**
- * The CLI's only bridge from legacy mutation code into the shared update
- * contender boundary. The shared attempt lock is always acquired before the
- * CLI lock, and the capability is checked again after the inner lock wins.
- *
- * This is intentionally a shadow bridge: it never creates or advances a
- * schema-v2 attempt record. A nonterminal record is instead surfaced as a
- * conflict until the schema-v2 executor owns the legacy operation.
- */
+/** The CLI's only bridge from legacy mutation code into the shared update contender boundary. The shared attempt lock is always acquired before the CLI lock, and the capability is checked again after the inner lock wins. */
 export interface WithCliUpdateContenderOptions {
   readonly environment: Environment;
-  /**
-   * Internal root-maintenance may target a sudo caller's canonical host home
-   * while the CLI process itself runs elevated. Normal CLI calls omit this
-   * and retain the environment-derived path.
-   */
+  /** Internal root-maintenance may target a sudo caller's canonical host home while the CLI process itself runs elevated. Normal CLI calls omit this and retain the environment-derived path. */
   readonly hostHomeDir?: string;
   readonly reason: string;
   readonly waitMs: number;
   readonly pollIntervalMs: number;
   readonly admission: UpdateContenderAdmission;
-  /**
-   * A parent segment's live-lock proof, when this invocation was spawned by an
-   * executor that already holds the canonical lock (Ticket 05, Ruling 1).
-   *
-   * ADDITIVE. Absent - which is every solo invocation of every command - takes
-   * the acquire-or-refuse path below, byte-identically to before this existed.
-   * Present, the segment validates the parent's proof instead of contending
-   * with it, because acquiring here would deadlock against the very process
-   * that spawned this child: the parent holds the lock for its whole segment,
-   * and this child is one step inside it.
-   */
+  /** A parent segment's live-lock proof, when this invocation was spawned by an executor that already holds the canonical lock (Ticket 05, Ruling 1). ADDITIVE. */
   readonly adoption?: UpdateMutationCapabilityAdoption;
 }
 
-/**
- * The executor's narrow admission shape. It intentionally does not accept an
- * arbitrary `admission`: schema-v2 claim/recovery is reachable only through
- * this API, while current command callers keep their reviewed shadow or
- * maintenance routes.
- */
+/** The executor's narrow admission shape. It intentionally does not accept an arbitrary `admission`: schema-v2 claim/recovery is reachable only through this API, while current command callers keep their reviewed shadow or maintenance routes. */
 export interface WithCliAttemptExecutorOptions {
   readonly environment: Environment;
   readonly hostHomeDir?: string;
@@ -66,12 +39,7 @@ export interface WithCliAttemptExecutorOptions {
   readonly pollIntervalMs: number;
 }
 
-/**
- * Own the outer attempt capability for a whole execution segment. Network
- * resolution, download, verification and extraction belong inside this
- * segment; callers take the CLI lock only through `withCliAttemptMutation`
- * immediately around a durable promotion or service lifecycle mutation.
- */
+/** Own the outer attempt capability for a whole execution segment. Network resolution, download, verification and extraction belong inside this segment; callers take the CLI lock only through `withCliAttemptMutation` immediately around a durable promotion or service lifecycle mutation. */
 export async function withCliUpdateExecutionSegment<T>(
   options: WithCliUpdateContenderOptions,
   run: (
@@ -84,10 +52,7 @@ export async function withCliUpdateExecutionSegment<T>(
   if (adoption !== undefined) {
     if (options.admission === "attempt-executor") {
       // Unreachable through the executor entries, which never carry a proof.
-      // Stated anyway because the two authority models must not blend: an
-      // adopted child works inside its parent's segment and is never itself
-      // an attempt executor. The shared layer refuses this too; refusing here
-      // as well means the mistake cannot even be constructed.
+      // Stated anyway because the two authority models must not blend: an adopted child works inside its parent's segment and is never itself an attempt executor.
       throw cliError({
         code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
         message: "an adopted segment cannot claim attempt-executor admission",
@@ -107,10 +72,8 @@ export async function withCliUpdateExecutionSegment<T>(
           admission: options.admission,
         },
         (capability) =>
-          // The parent already read the record under the lock and decided this
-          // child may run. Re-reading here would be a second, later read that
-          // could disagree with the decision this invocation exists to carry
-          // out - so the child inherits the admitted context instead.
+          // The parent already read the record under the lock and decided this child may run.
+          // Re-reading here would be a second, later read that could disagree with the decision this invocation exists to carry out - so the child inherits the admitted context instead.
           run(capability, {
             activeAttempt: null,
             recoveryAction: "restart-current",
@@ -156,13 +119,7 @@ export async function withCliAttemptExecutor<T>(
   );
 }
 
-/**
- * Read recovery evidence under the same outer-attempt → inner-CLI ordering
- * as an install or service mutation. This keeps a mixed-version CLI that
- * only knows `cli-lock` from changing `install.json` or staged bytes midway
- * through the executor's recovery decision, while still holding the short
- * lock only for the observation itself.
- */
+/** Read recovery evidence under the same outer-attempt → inner-CLI ordering as an install or service mutation. This keeps a mixed-version CLI that only knows `cli-lock` from changing `install.json` or staged bytes midway through the executor's recovery decision, while still holding the short lock only for the observation itself. */
 export async function withCliExecutorRecoveryEvidence<T>(
   capability: UpdateMutationCapability,
   options: WithCliAttemptExecutorOptions,
@@ -175,12 +132,7 @@ export async function withCliExecutorRecoveryEvidence<T>(
   );
 }
 
-/**
- * Capability-consuming inner mutation boundary. The update capability stays
- * held by its execution segment while the existing CLI lock is acquired only
- * for the short reconcile/promotion/service operation. It verifies after the
- * inner lock wins so a released or stolen capability cannot run an actuator.
- */
+/** Capability-consuming inner mutation boundary. The update capability stays held by its execution segment while the existing CLI lock is acquired only for the short reconcile/promotion/service operation. */
 export async function withCliAttemptMutation<T>(
   capability: UpdateMutationCapability,
   options: WithCliUpdateContenderOptions,
@@ -208,12 +160,7 @@ export async function withCliUpdateContender<T>(
   );
 }
 
-/**
- * Context-preserving name for an independent recovery action. The policy
- * context comes from the same canonical record read that admitted the outer
- * lock; no caller may re-read and race it after deciding whether to relaunch.
- * An alias, not a copy: the two entry points must never drift apart.
- */
+/** Context-preserving name for an independent recovery action. The policy context comes from the same canonical record read that admitted the outer lock; no caller may re-read and race it after deciding whether to relaunch. */
 export const withCliUpdateContenderContext = withCliUpdateContender;
 
 export async function requireCliUpdateMutationCapability(

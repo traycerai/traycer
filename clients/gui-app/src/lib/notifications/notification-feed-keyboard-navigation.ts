@@ -1,8 +1,5 @@
 /**
- * Rows are located by the same `data-notification-id` attribute the scroll
- * anchor measures with, so traversal order is exactly the rendered feed order
- * (Needs attention, then Recent activity) with no second source of truth to
- * drift.
+ * Rows are located by the same `data-notification-id` attribute the scroll anchor measures with, so traversal order is exactly the rendered feed order (Needs attention, then Recent activity) with no second source of truth to drift.
  */
 const ROW_SELECTOR = "[data-notification-id]";
 
@@ -21,10 +18,8 @@ function nextRowIndex(
 ): number {
   if (key === "Home") return 0;
   if (key === "End") return count - 1;
-  // Wraps at both ends, so holding one arrow cycles the whole feed rather
-  // than dead-ending. `currentIndex === -1` means focus is somewhere in the
-  // surface that isn't a row (the heading a keyboard open lands on, a header
-  // control): Down enters at the top, Up enters at the bottom.
+  // Wraps at both ends, so holding one arrow cycles the whole feed rather than dead-ending.
+  // `currentIndex === -1` means focus is somewhere in the surface that isn't a row (the heading a keyboard open lands on, a header control): Down enters at the top, Up enters at the bottom.
   if (key === "ArrowDown") {
     return currentIndex === -1 ? 0 : (currentIndex + 1) % count;
   }
@@ -32,18 +27,8 @@ function nextRowIndex(
 }
 
 /**
- * Up/Down/Home/End traversal of the notification feed. Bound to the center's
- * shell (see `useNotificationFeedKeyboardNavigation`) so it works from
- * anywhere inside the surface, including the heading a keyboard open focuses.
- *
- * Focus lands on the row element itself (`tabIndex={-1}`), not on one of its
- * controls, so every row is reachable - a read, non-navigable row has no
- * focusable control at all and would otherwise be skipped straight over. Tab
- * order is untouched: the rows are not tab stops, and their controls still
- * are.
- *
- * Bare keys only. A modified arrow belongs to whatever else claims it (the
- * global keybinding map runs in the capture phase and never reaches here).
+ * Up/Down/Home/End traversal of the notification feed.
+ * Bound to the center's shell (see `useNotificationFeedKeyboardNavigation`) so it works from anywhere inside the surface, including the heading a keyboard open focuses.
  */
 export function handleNotificationFeedKeyboardNavigation(
   shell: HTMLElement,

@@ -1,26 +1,6 @@
 /**
- * Single pointer sensor for the root DndContext. It mirrors the stock
- * `PointerSensor` activation (primary button only) and adds the Pierre
- * shadow-DOM bridge: when the pressed draggable is a Pierre host (its
- * `data` is a {@link PierreDragHostData} holder), the activator resolves
- * the file row under the pointer BEFORE activation:
- *
- * - a non-row press leaves `payload` null and returns `false`, vetoing the
- *   drag so Pierre keeps its own click / select gesture;
- * - a row press writes the resolved payload into the holder (read later by
- *   the root drag handlers via `active.data.current`) and re-anchors the
- *   draggable's measured node to the grabbed row, so the drag overlay and
- *   collision rect track the row instead of the whole-tree wrapper.
- *
- * The holder is a stable object whose fields are mutated per press - core
- * keeps `data` in a ref, so mutation is visible to handlers without any
- * re-render. This replaces @dnd-kit/dom's `preventActivation` +
- * `source.element` swap, neither of which exists in @dnd-kit/core.
- *
- * There is intentionally NO keyboard sensor on the root context: every root
- * payload is a typed canvas/header source whose keyboard activation was
- * already suppressed under @dnd-kit/react (see git history of
- * `epic-canvas-dnd-activation.ts`).
+ * It mirrors the stock `PointerSensor` activation (primary button only) and adds the Pierre shadow-DOM bridge: when the pressed draggable is a Pierre host (its `data` is a {@link PierreDragHostData} holder), the activator resolves the file row under the pointer BEFORE activation: - a non-row press leaves `payload` null and returns `false`, vetoing the drag so Pierre keeps its own click / select gesture; - a row press writes the resolved payload into the holder (read later by the root drag handlers via `active.data.current`) and re-anchors the draggable's measured node to the grabbed row, so the drag overlay and collision rect track the row instead of the whole-tree wrapper.
+ * The holder is a stable object whose fields are mutated per press - core keeps `data` in a ref, so mutation is visible to handlers without any re-render.
  */
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
@@ -48,12 +28,7 @@ export interface PierreDragHost {
 }
 
 /**
- * Stable marker every Pierre host draggable passes as its `data`. The live
- * per-press state lives in the module registry below, keyed by draggable id
- * - a plain module map (not React state/refs), so the bridge hook can keep
- * the resolver current from an effect and the activator can mutate the
- * payload during a DOM pointer-down without touching anything the React
- * Compiler considers frozen.
+ * The live per-press state lives in the module registry below, keyed by draggable id - a plain module map (not React state/refs), so the bridge hook can keep the resolver current from an effect and the activator can mutate the payload during a DOM pointer-down without touching anything the React Compiler considers frozen.
  */
 export const PIERRE_HOST_DATA: { readonly pierreHost: true } = {
   pierreHost: true,
@@ -97,14 +72,7 @@ const activators: Activators<PointerSensorOptions> = [
       if (!nativeEvent.isPrimary || nativeEvent.button !== 0) {
         return false;
       }
-      // A touch press is a scroll until proven otherwise, and nothing proves
-      // otherwise: the sensor activates on 5px of movement, which is the start
-      // of every flick. `useDragSourceDisabled` already keeps these listeners
-      // off a touch-primary device, but a HYBRID one - a fine-primary laptop
-      // with a touchscreen - reports `(pointer: coarse)` false and still has a
-      // finger on the glass. Vetoing per GESTURE rather than per device is what
-      // covers it: the same machine's mouse and pen still drag, because their
-      // press cannot be mistaken for a scroll.
+      // Vetoing per GESTURE rather than per device is what covers it: the same machine's mouse and pen still drag, because their press cannot be mistaken for a scroll.
       if (nativeEvent.pointerType === "touch") return false;
       if (isPierreHostData(context.active.data.current)) {
         const host = getPierreDragHost(String(context.active.id));
@@ -121,12 +89,7 @@ const activators: Activators<PointerSensorOptions> = [
 ];
 
 /**
- * Widen the base's static side to the public `Sensor` contract before
- * extending: `PointerSensor.activators` is declared with two-parameter
- * handlers, so overriding with the three-parameter `Activators` form (the
- * shape the runtime actually invokes, and the one that carries the active
- * draggable context the Pierre branch needs) would otherwise fail the
- * static-side compatibility check.
+ * Widen the base's static side to the public `Sensor` contract before extending: `PointerSensor.activators` is declared with two-parameter handlers, so overriding with the three-parameter `Activators` form (the shape the runtime actually invokes, and the one that carries the active draggable context the Pierre branch needs) would otherwise fail the static-side compatibility check.
  */
 const BasePointerSensor: Sensor<PointerSensorOptions> = PointerSensor;
 

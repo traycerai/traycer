@@ -16,17 +16,7 @@ import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-cat
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * What the live search may and may not hold across.
- *
- * `keepPreviousData` is on this query so a typed query does not blank the
- * remote hits on every keystroke. The axis it must NOT hold across is the
- * SCOPE: rows kept from the previous host/epic/roots are merged into the new
- * scope's list and stay selectable, so a user can commit a mention naming a
- * pull request the current scope cannot resolve.
- *
- * Driven through the real hook and a real QueryClient - the placeholder is
- * TanStack's own behaviour, so a test that stubbed it would only assert its
- * own stub.
+ * `keepPreviousData` must not hold across host/epic/roots. Drive the real hook; stubbing the placeholder would only assert the stub.
  */
 
 const request = vi.fn();
@@ -42,10 +32,7 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 
 import { useGithubMentionSearch } from "../use-github-mention-search";
 
-// `HostClient` is a class with ~40 private fields, so a structural stand-in
-// cannot be asserted into it. `{} as HostClient<...>` is what this suite's
-// neighbours already use; grafting on the one method `useHostQuery` calls is
-// the same stand-in with behaviour attached.
+// `HostClient` is a class with ~40 private fields, so a structural stand-in cannot be asserted into it.
 const client = Object.assign({} as HostClient<HostRpcRegistry>, {
   requestWithSignal: request,
 });
@@ -136,13 +123,7 @@ afterEach(() => {
 
 describe("useGithubMentionSearch request canonicalization", () => {
   it("canonicalizes folder order in the search request", async () => {
-    // `buildSearchRequest` sorts `workspacePaths` for the same reason the
-    // catalog hook does: the request is what the query key hashes, so an
-    // order-only change in the same folder set must not fork the search
-    // cache into a second slot. Answering ONLY the sorted shape - rather
-    // than asserting after the fact - proves the request actually left the
-    // hook sorted, not merely that some later assertion happens to match
-    // whichever order was sent.
+    // `buildSearchRequest` sorts `workspacePaths` for the same reason the catalog hook does: the request is what the query key hashes, so an order-only change in the same folder set must not fork the search cache into a second slot.
     let capturedPaths: ReadonlyArray<string> | null = null;
     request.mockImplementation(
       (_method: string, params: MentionGithubSearchRequest) => {

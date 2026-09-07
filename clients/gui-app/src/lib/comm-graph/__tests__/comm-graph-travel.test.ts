@@ -23,9 +23,7 @@ describe("commGraphEdgeTravel", () => {
   });
 
   it("REVERSES a reply, so it travels back the way its request came", () => {
-    // The drawn edge is undirected and its endpoints are in canonical order, so
-    // the same edge carries both directions - this is what makes the two read
-    // differently on screen.
+    // The drawn edge is undirected and its endpoints are in canonical order, so the same edge carries both directions - this is what makes the two read differently on screen.
     expect(
       commGraphEdgeTravel(edgePulse("b", "a", "reply"), EDGE_ID, "a", "b"),
     ).toEqual({ kind: "reply", reversed: true });

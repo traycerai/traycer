@@ -1,14 +1,4 @@
-/**
- * Protocol-boundary contract for the B3 metadata-only artifact schema.
- *
- * Root artifact metadata no longer carries inline body content. Each
- * spec/ticket/story/review entry instead carries a `artifactRoomId` pointing
- * to the artifact-room that hosts the artifact's
- * `artifact-body:{artifactId}` fragment.
- *
- * Self-contained per the protocol-test convention (no cross-workspace
- * fixture imports).
- */
+/** Protocol-boundary contract for the B3 metadata-only artifact schema. */
 import { describe, expect, it } from "vitest";
 import {
   epicArtifactSchema,
@@ -117,9 +107,6 @@ describe("epic artifact schema metadata-only contract", () => {
   });
 
   it("epicArtifactSchema strips a stray content field if present", () => {
-    // Inline body fields written by pre-cutover writers are not part of the
-    // target shape; Zod's `.object()` strips unknown keys by default, so
-    // parsing succeeds but `content` is dropped from the parsed value.
     const withStrayContent = epicArtifactSchema.safeParse({
       kind: "spec",
       ...BASE_ARTIFACT_FIELDS,

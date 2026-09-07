@@ -13,15 +13,6 @@ import { sandboxHome } from "../../__tests__/sandbox-home";
 import devWrapperPaths from "../dev-wrapper-paths.json";
 import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
 
-// The desktop's `~/.traycer/cli/` paths are environment-scoped (matching the
-// CLI package's store/paths.ts): the dev slot lives under
-// `~/.traycer/cli/dev/`, or `~/.traycer/cli/dev-runs/<slot>/` when a
-// multi-run dev slot is active. CLI discovery resolves: (1) dev-slot manifest,
-// then (2) the staged dev wrapper. The PATH lookup step is intentionally
-// SKIPPED in dev - a dev workspace inevitably has `node_modules/.bin/traycer`
-// on PATH (bun's bin hoisting), and falling through PATH first would pick the
-// package symlink ahead of the wrapper `make dev-desktop` staged. These tests
-// pin both halves plus the PATH regression.
 
 let work: string;
 let homeDir: string;
@@ -77,11 +68,6 @@ vi.mock("../../../config", async (importActual) => {
   };
 });
 
-// Snapshot env vars at module load so the test cases below can mutate
-// `process.env.PATH` (and HOME/USERPROFILE) freely without leaking into
-// sibling test files when this suite finishes. `afterEach` restores
-// every test, not just the one that mutated, so a test that throws
-// before its own cleanup still leaves the env clean for the next.
 const ORIGINAL_PATH = process.env.PATH;
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
@@ -141,10 +127,7 @@ describe("resolveTraycerCliInvocation (dev slot) - env-scoped resolution", () =>
   });
 
   it("falls back to the staged dev wrapper when the dev manifest is absent", async () => {
-    // The dev slot ships no manifest: only the wrapper is staged by
-    // `make dev-desktop`. PATH is wiped so we don't depend on the host's
-    // workspace `node_modules/.bin/traycer` being absent - the staged
-    // wrapper is the only candidate and resolves directly.
+    // PATH is wiped so we don't depend on the host's workspace `node_modules/.bin/traycer` being absent - the staged wrapper is the only candidate and resolves directly.
     process.env.PATH = "";
     const wrapper = devWrapperPath(null);
     writeExecutable(wrapper);
@@ -155,13 +138,7 @@ describe("resolveTraycerCliInvocation (dev slot) - env-scoped resolution", () =>
   });
 
   it("prefers the staged dev wrapper over a `traycer` on PATH (the workspace symlink case)", async () => {
-    // Regression: a dev workspace has `node_modules/.bin/traycer` on PATH
-    // because bun hoists package bins for `bun run` scripts. Before the
-    // dev-skip in `discoverCli`, that symlink hijacked discovery and the
-    // desktop ended up invoking it instead of the wrapper `make
-    // dev-desktop` staged. Pin that the wrapper wins regardless of what's
-    // on PATH so the OS service registration and ad-hoc CLI calls always
-    // run through the orchestrator's wrapper.
+    // Before the dev-skip in `discoverCli`, that symlink hijacked discovery and the desktop ended up invoking it instead of the wrapper `make dev-desktop` staged.
     const fakePathBinDir = join(work, "fake-node-modules-bin");
     const fakePathBin = join(
       fakePathBinDir,

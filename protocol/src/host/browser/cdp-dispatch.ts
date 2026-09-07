@@ -1,14 +1,3 @@
-/**
- * The curated CDP vocabulary's encode/decode table: one `BrowserCdpCommand`
- * becomes one raw CDP method call, and that call's unvalidated reply becomes
- * one `BrowserCdpResult`.
- *
- * Pure over `send`, so both runtimes that reach a real CDP endpoint - the
- * host's in-process Playwright session and the desktop shell's
- * `webContents.debugger` behind the host-to-renderer-to-IPC bridge - drive the
- * same decode. The method each kind sends comes from `contracts.ts`'s
- * `CURATED_CDP_METHOD_BY_KIND`, so the enumerated method set has one home.
- */
 import {
   browserCdpValueSchema,
   CURATED_CDP_METHOD_BY_KIND,
@@ -24,9 +13,7 @@ export type CuratedCdpSend = (
 ) => Promise<unknown>;
 
 /**
- * Rejects (never resolves `ok: false`) when the transport rejects or the reply
- * is malformed; each runtime classifies that rejection into its own transport
- * error vocabulary.
+ * Rejects (never resolves `ok: false`) when the transport rejects or the reply is malformed; each runtime classifies that rejection into its own transport error vocabulary.
  */
 export async function dispatchCuratedCdp(
   send: CuratedCdpSend,
@@ -123,14 +110,6 @@ function sendCommand(
   );
 }
 
-/**
- * Null is absence throughout the curated vocabulary, so a null-valued field is
- * omitted rather than sent as a literal null - an omitted param is exactly what
- * makes CDP apply its own default (`Runtime.evaluate` without `contextId`
- * evaluates in the main world). `target` is the one curated-only field: it is
- * addressing rather than a CDP param, and flattens into the two mutually
- * exclusive raw fields `Runtime.callFunctionOn` accepts.
- */
 function encodeCdpParams(command: BrowserCdpCommand): Record<string, unknown> {
   const fields: Readonly<Record<string, unknown>> = command;
   const params: Record<string, unknown> = {};
@@ -172,19 +151,6 @@ function remoteObjectResult(
   };
 }
 
-/**
- * `exceptionDetails.text` alone is a generic CDP placeholder ("Uncaught" /
- * "Uncaught (in promise)") whenever the thrown/rejected value isn't itself an
- * `Error` with a message baked into that placeholder - a syntax error's real
- * reason lives only in `exceptionDetails.exception.description`, and a
- * rejected primitive (`Promise.reject("boom")`) has no `description` at all
- * and would otherwise vanish entirely behind the bare placeholder. Enriching
- * only when `text` is one of the known-generic placeholders leaves the
- * already-informative case (a thrown `Error`, whose `text` already includes
- * its message) untouched. `browser-cell-runner-page.ts` keeps a separate
- * first-line-only variant for cell output; the two are intentionally not
- * shared.
- */
 const GENERIC_EXCEPTION_TEXT = new Set(["Uncaught", "Uncaught (in promise)"]);
 
 function describeException(exceptionDetails: Record<string, unknown>): string {

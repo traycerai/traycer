@@ -101,12 +101,7 @@ describe("decideSteerSettings", () => {
     expect(result.kind).toBe("silent_inject");
   });
 
-  // Backward-compat: a turn received from a host (or read from persisted
-  // state) before `profileId` existed on the wire parses with the schema's
-  // `null` default - indistinguishable here from a turn that genuinely ran
-  // ambient. Comparing against ANY selected managed profile must still force
-  // a restart (never silently fold a real profile into a turn of unknown
-  // profile) - the safe direction, matching this file's doc comment.
+  // Backward-compat: a turn received from a host (or read from persisted state) before `profileId` existed on the wire parses with the schema's `null` default - indistinguishable here from a turn that genuinely ran ambient.
   it("restarts when the active turn has no recorded profileId (old-turn default) and a managed profile is now selected", () => {
     const result = decideSteerSettings(TURN, {
       ...SETTINGS,

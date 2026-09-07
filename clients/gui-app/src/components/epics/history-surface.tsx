@@ -3,7 +3,6 @@ import { useMatch } from "@tanstack/react-router";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
 import { parseHistorySearch } from "@/lib/history-search";
 
-/** Route-independent History body retained by the top-level surface host. */
 export function HistorySurface() {
   const route = useMatch({
     from: "/epics/",

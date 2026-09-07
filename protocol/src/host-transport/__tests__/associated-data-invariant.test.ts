@@ -17,32 +17,7 @@ import {
   type EncodeMuxFrameInput,
 } from "../mux";
 
-/**
- * AEAD associated-data invariant (S5 / fix #5, mechanism 3; architecture §3,
- * §4). Per the mux layering contract (`../mux.ts` header comment), the ONLY
- * thing the relay/host-leg framing ever puts outside the Noise ciphertext is
- * `sid` (+ the transport suite-version byte) — every mux field (`type`,
- * `streamId`, `seq`, `qos`/flags, `json`, `binary`) is folded into the
- * plaintext that gets encrypted whole. Both production channels
- * (`traycer-host/src/transport/remote/noise-responder.ts` and
- * `clients/shared/host-transport/remote/noise-channel.ts`) call
- * `NoiseSession.encrypt`/`decrypt` with an EMPTY associated-data array — that
- * is correct *only* as long as the invariant above holds. This suite pins it:
- *
- *  - "wire shape" cases assert the transport frame's only plaintext bytes are
- *    `[v:1][counter:8]` (`TRANSPORT_HEADER_LEN`) for a battery of mux frames
- *    spanning every `MuxFrameType`, streamId/seq values, and json/binary
- *    payloads — i.e. no mux field is ever duplicated outside the ciphertext.
- *  - the AD-mismatch case proves the associated-data parameter is genuinely
- *    load-bearing (encrypt/decrypt reject a mismatched AD), so if a future
- *    change ever DOES externalize a mux field, binding it via AD is a real,
- *    enforced fix rather than a parameter nobody checks.
- *
- * If this suite ever needs to change because a mux field starts appearing
- * outside `TRANSPORT_HEADER_LEN`, that is the systemic drift this ticket
- * exists to catch — the fix is to either move the field back inside the
- * encrypted payload, or bind it via associated data (not to relax this test).
- */
+/** AEAD associated-data invariant (S5 / fix #5, mechanism 3; architecture §3, §4). */
 
 const EMPTY_ASSOCIATED_DATA = new Uint8Array(0);
 const enc = new TextEncoder();
@@ -153,10 +128,7 @@ describe("AEAD associated-data invariant: no mux field is externalized without A
         EMPTY_ASSOCIATED_DATA,
       );
 
-      // Structural check: header + ciphertext + tag, nothing more. If a
-      // routing field were ever pulled out of the mux frame and appended/
-      // prepended to the wire frame, this length would grow and this
-      // assertion would catch it immediately.
+      // Structural check: header + ciphertext + tag, nothing more.
       expect(wireFrame.length).toBe(
         TRANSPORT_HEADER_LEN + encodedMuxFrameSize(frame) + TAG_LEN,
       );
@@ -199,9 +171,6 @@ describe("AEAD associated-data invariant: no mux field is externalized without A
       routingTagUsedAtEncrypt,
     );
 
-    // A future change that externalizes a mux/routing field would bind it
-    // via AD like `routingTagUsedAtEncrypt` above — this proves that binding
-    // is actually enforced, not a parameter nobody checks:
     await expect(
       responder.decrypt(wireFrame, new Uint8Array([9, 9, 9, 9])),
     ).rejects.toThrow(NoiseDecryptError);

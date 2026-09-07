@@ -38,9 +38,6 @@ describe("createRelayPathEstimator", () => {
     estimator.notePingSent(0);
     estimator.notePongReceived(MAX_RELAY_PATH_RTT_MS + 50_000);
 
-    // srtt clamps to the ceiling (10s) and seeds rttvar at half of it, so the
-    // window is round(3 * (10_000 + 4 * 5_000)) rather than the ~9 minutes the
-    // raw sample would have produced.
     expect(estimator.deadlineMs(0)).toBe(90_000);
   });
 

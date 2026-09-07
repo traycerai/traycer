@@ -66,11 +66,7 @@ describe("createRichSlotRequest", () => {
   it("reissues after an ownership epoch bump - cache is NOT authoritative for epoch drift", async () => {
     const queryClient = new QueryClient();
     const key = richSlotOrderingKey(SLOT);
-    // A cached value exists, but an epoch bump (ownership/client transition)
-    // proves nothing about its freshness - unlike stream-generation drift,
-    // where the stream demonstrably wrote the slot mid-flight. The wrapper
-    // must re-issue the request rather than resurrect the cache OR return
-    // the proven-superseded first response.
+    // A cached value exists, but an epoch bump (ownership/client transition) proves nothing about its freshness - unlike stream-generation drift, where the stream demonstrably wrote the slot mid-flight.
     queryClient.setQueryData(
       gitQueryKeys.listChangedFilesWithSubmodules(
         SLOT.hostId,
@@ -156,9 +152,7 @@ describe("createRichSlotRequest", () => {
       request: requestMock,
     });
 
-    // Every attempt is superseded by a fresh epoch bump and the cache stays
-    // empty: the wrapper must never hand back a response it just proved
-    // superseded - it throws into TanStack's retry/error machinery instead.
+    // Every attempt is superseded by a fresh epoch bump and the cache stays empty: the wrapper must never hand back a response it just proved superseded - it throws into TanStack's retry/error machinery instead.
     await expect(
       request({ signal: new AbortController().signal }),
     ).rejects.toThrow(/superseded/u);

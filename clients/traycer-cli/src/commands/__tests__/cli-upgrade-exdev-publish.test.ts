@@ -15,22 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliVersionsManifest } from "../../registry/cli-versions";
 import type { HostPlatformKey } from "../../registry/types";
 
-// Cross-filesystem CLI binary publication (audit CLI-014): when `rename`
-// refuses with EXDEV, the old fallback copied straight onto the live
-// path and unlinked it outright on a digest mismatch - turning a corrupt
-// CLI into no CLI. The fix (`publishAcrossFilesystems` in
-// `commands/cli-upgrade.ts`) copies to a sibling temp file on the
-// DESTINATION filesystem, verifies there, and publishes with the same
-// atomic rename the same-volume path uses - so the live binary is never
-// touched until the copy is already known-good.
-//
-// `node:fs/promises`'s `rename` is mocked to fail exactly once with
-// EXDEV for a specific (src, dest) pair, forcing the EXDEV fallback
-// without needing an actual second filesystem. `copyFile` is mocked to
-// write corrupt bytes for the digest-mismatch case, standing in for
-// "a short write or a hostile local actor" the module doc comment
-// describes. Everything else goes through the real implementation
-// against a tmp HOME, matching `doctor/__tests__/pending-upgrade.test.ts`.
+// Cross-filesystem CLI binary publication (audit CLI-014): when `rename` refuses with EXDEV, the old fallback copied straight onto the live path and unlinked it outright on a digest mismatch - turning a corrupt CLI into no CLI.
+// The fix (`publishAcrossFilesystems` in `commands/cli-upgrade.ts`) copies to a sibling temp file on the DESTINATION filesystem, verifies there, and publishes with the same atomic rename the same-volume path uses - so the live binary is never touched until the copy is already known-good.
 
 const mocks = vi.hoisted(() => ({
   failRenameOnceFor: null as { src: string; dest: string } | null,
@@ -173,15 +159,8 @@ function readManifest(): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-// The cross-device PUBLISH temp only - `.<live-basename>.traycer-upgrade-
-// <pid>-<rand>.tmp`, cleaned up (successfully or via `safeUnlink`) by
-// `publishAcrossFilesystems` either way. Deliberately narrower than "any
-// name containing .traycer-upgrade-": `buildCliUpgradeCommand`'s staged
-// DOWNLOAD file now also lives under that prefix
-// (`.traycer-upgrade-<version>-<platform>.download<ext>`, see
-// `resolveStagingPath`) and is left in place on purpose so a retry can
-// reuse it - that is a deliberate design choice, not a leak, so it must
-// not be conflated with the publish temp this helper exists to catch.
+// The cross-device PUBLISH temp only - `.<live-basename>.traycer-upgrade- <pid>-<rand>.tmp`, cleaned up (successfully or via `safeUnlink`) by `publishAcrossFilesystems` either way.
+// Deliberately narrower than "any name containing .traycer-upgrade-": `buildCliUpgradeCommand`'s staged DOWNLOAD file now also lives under that prefix (`.traycer-upgrade-<version>-<platform>.download<ext>`, see `resolveStagingPath`) and is left in place on purpose so a retry can reuse it - that is a deliberate design choice, not a leak, so it must not be conflated with the publish temp this helper exists to catch.
 function leftoverPublishTempFiles(dir: string): string[] {
   return readdirSync(dir).filter(
     (name) => name.includes(".traycer-upgrade-") && name.endsWith(".tmp"),
@@ -272,25 +251,8 @@ describe("cross-filesystem CLI binary publication (CLI-014)", () => {
   });
 
   it("deferred finalize path (no release digest in scope) still verifies against the staged file's own digest: a corrupted cross-device copy leaves the live binary untouched, the pending upgrade retained, and returns publish-failed rather than throwing", async () => {
-    // `finalizePendingCliUpgrade` never has the release sha256 in scope
-    // (the persisted `pendingUpgrade` record doesn't carry one), so it
-    // calls `tryReplaceLiveBinary` with `expectedSha256: null`. Before
-    // the digest fix, `publishAcrossFilesystems` skipped verification
-    // entirely whenever `expectedSha256` was `null` - a corrupt
-    // cross-device copy on THIS path would have published silently and
-    // reported "finalised". The digest fix falls back to hashing the
-    // staged file itself immediately before the copy, so this path is
-    // verified too.
-    //
-    // Separately (Codex P1 #2, fixed after the above), the resulting
-    // failure must not ESCAPE as an exception: `finalizePendingCliUpgrade`
-    // is called by `restartWithPendingCliUpgradeFinalize` between
-    // `stopForRestart` and `relaunchAfterRestart`, and a throw here used
-    // to skip the relaunch entirely, leaving the host stopped because a
-    // bolt-on CLI swap failed. It now catches the publication failure and
-    // returns `{status:"publish-failed", ...}` instead - see
-    // `host-restart-publish-failed.test.ts` for the restart-level
-    // regression this enables fixing.
+    // `finalizePendingCliUpgrade` never has the release sha256 in scope (the persisted `pendingUpgrade` record doesn't carry one), so it calls `tryReplaceLiveBinary` with `expectedSha256: null`.
+    // Before the digest fix, `publishAcrossFilesystems` skipped verification entirely whenever `expectedSha256` was `null` - a corrupt cross-device copy on THIS path would have published silently and reported "finalised".
     const liveBinaryPath = join(workHome, "bin", "traycer");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writeFileSync(liveBinaryPath, "original-live-bytes");
@@ -332,15 +294,12 @@ describe("cross-filesystem CLI binary publication (CLI-014)", () => {
       expect(outcome.errorMessage.length).toBeGreaterThan(0);
     }
 
-    // The staged binary was never touched by the corrupt copy - only the
-    // sibling publish temp was - so hashing it again would still match.
+    // The staged binary was never touched by the corrupt copy - only the sibling publish temp was - so hashing it again would still match.
     // What matters is the LIVE binary: still the pre-upgrade bytes.
     expect(readFileSync(liveBinaryPath, "utf8")).toBe("original-live-bytes");
     expect(leftoverPublishTempFiles(join(workHome, "bin"))).toEqual([]);
 
-    // The pending upgrade is RETAINED, not cleared: the swap never
-    // completed, and `pendingUpgrade` is the only record that a
-    // finalized upgrade was ever requested.
+    // The pending upgrade is RETAINED, not cleared: the swap never completed, and `pendingUpgrade` is the only record that a finalized upgrade was ever requested.
     const manifest = readManifest();
     expect(manifest.version).toBe("1.4.0");
     expect(manifest.pendingUpgrade).toMatchObject({
@@ -387,10 +346,7 @@ describe("cross-filesystem CLI binary publication (CLI-014)", () => {
       },
     };
 
-    // Same naming `resolveStagingPath` uses for the staged download
-    // (audit CLI-014 Codex fix: dotted, `.download`-suffixed, never the
-    // live path), staged in the (writable) install dir since it's a
-    // sibling of the live binary.
+    // Same naming `resolveStagingPath` uses for the staged download (audit CLI-014 Codex fix: dotted, `.download`-suffixed, never the live path), staged in the (writable) install dir since it's a sibling of the live binary.
     const stagedBinaryPath = join(
       installDir,
       `.traycer-upgrade-1.5.0-${platformKey}.download${binaryExtension()}`,

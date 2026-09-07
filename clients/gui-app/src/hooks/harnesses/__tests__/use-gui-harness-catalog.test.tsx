@@ -70,11 +70,7 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostRuntimeClient: () => hostBindingMock.current?.hostClient ?? null,
 }));
 
-/**
- * The default-host wrappers resolve the SELECTION LAYER's effective host, so a
- * fixture that only binds the client leaves every one of them addressing ∅.
- * Naming the effective host is part of building an app-wide host fixture.
- */
+/** The default-host wrappers resolve the SELECTION LAYER's effective host, so a fixture that only binds the client leaves every one of them addressing ∅. */
 function setEffectiveHostId(hostId: string | null): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,
@@ -148,13 +144,7 @@ function isRefetchInterval(
   return typeof value === "function";
 }
 
-// Real-hook regression coverage for the removed model-query interval (F1 /
-// R2-F1): unlike availability above, model queries must never install a
-// `refetchInterval` - on success OR error - at EITHER call site
-// (`useGuiHarnessModelsQuery` and `useGuiHarnessCatalog`'s batched fan-out).
-// A surviving interval on a persistently-failing model fetch would keep
-// hitting `OpenCodeAdapter.listModels` forever, resetting the host's 15-min
-// idle clock and making a spawned-but-failing server permanently unreapable.
+// Real-hook regression coverage for the removed model-query interval (F1 / R2-F1): unlike availability above, model queries must never install a `refetchInterval` - on success OR error - at EITHER call site (`useGuiHarnessModelsQuery` and `useGuiHarnessCatalog`'s batched fan-out).
 function harnesses(
   ids: ReadonlyArray<GuiHarnessId>,
 ): ListGuiHarnessesResponse["harnesses"] {
@@ -780,14 +770,7 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
   });
 });
 
-// Coverage for the composer host-scoping migration: every `…ForClient`
-// catalog hook takes its client explicitly rather than resolving the
-// app-wide default via `useHostBinding()`. These guard the two invariants a
-// regression to the old default-host resolution would break: a refresh must
-// hit ONLY the client's own host (never bleed into a sibling host's cache),
-// and a `null` client (a composer whose host hasn't resolved yet) must
-// disable the query outright rather than quietly falling back to whatever
-// `useHostBinding()` currently reports.
+// Coverage for the composer host-scoping migration: every `…ForClient` catalog hook takes its client explicitly rather than resolving the app-wide default via `useHostBinding()`.
 describe("…ForClient catalog hooks are scoped to the client argument, not the app-wide default", () => {
   afterEach(() => {
     hostBindingMock.current = null;
@@ -802,12 +785,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     commands: number;
   }
 
-  // Trivial default for callers that never exercise the refresh path (the
-  // two default-host fixtures below): the mock messenger throws for any
-  // method with no registered handler, and `providers.list` is now dispatched
-  // unconditionally by `useRefreshProvidersForClient`'s mutation, so every
-  // `buildHostClient` caller needs SOME handler even when its test never
-  // reads the response.
+  // Trivial default for callers that never exercise the refresh path (the two default-host fixtures below): the mock messenger throws for any method with no registered handler, and `providers.list` is now dispatched unconditionally by `useRefreshProvidersForClient`'s mutation, so every `buildHostClient` caller needs SOME handler even when its test never reads the response.
   function acceptingProvidersListHandler(): ResponseOfMethod<
     HostRpcRegistry,
     "providers.list"
@@ -815,11 +793,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     return { providers: [] as ProviderCliState[], native: null };
   }
 
-  // A provider row carrying a value nothing else in the test produces, so
-  // "the forced response was committed" is an assertion about THIS response
-  // and not about any empty list that happened to land on the key. An empty
-  // `providers` array would have been satisfied by the seeded sentinel, by
-  // the other host's handler, and by a commit of the wrong response alike.
+  // An empty `providers` array would have been satisfied by the seeded sentinel, by the other host's handler, and by a commit of the wrong response alike.
   function markerProvider(label: string): ProviderCliState {
     return {
       providerId: "claude-code",
@@ -974,19 +948,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
       expect(hostBCalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
     });
 
-    // Seed host A's classic key and host B's native-scoped key with a
-    // sentinel, so "untouched" below means neither invalidated nor
-    // overwritten - the commit's exact-key write is the only thing that
-    // should ever move these.
-    //
-    // The sentinel's MARKER is what gives those assertions teeth, and it is
-    // load-bearing: while both it and the forced response were `{ providers:
-    // [], native: null }`, a commit that reached the wrong key would have
-    // written a value equal to what was already there, and the assertion
-    // could not fail. Nor would `toBe` have rescued it - `setQueryData`
-    // applies structural sharing, so a structurally-equal write KEEPS the
-    // prior reference and identity holds exactly when equality does.
-    // Distinct contents are the only signal either check can read.
+    // Seed both keys with a distinct sentinel. Structural sharing would keep the prior reference on an equal write, so identical contents could not fail the untouched check.
     const sentinel: ResponseOfMethod<HostRpcRegistry, "providers.list"> = {
       providers: [markerProvider("seeded-sentinel")],
       native: null,
@@ -1013,10 +975,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     expect(hostBProvidersListCalls).toEqual([
       { forceAuthRefresh: true, native: null },
     ]);
-    // ...whose response is now committed under host B's exact classic key
-    // (a direct write, not an invalidation - `commitAuthoritativeProvidersList`
-    // sets the cache entry itself so a stale background refetch can never
-    // clobber the fresh probe)...
+    // ...whose response is now committed under host B's exact classic key (a direct write, not an invalidation - `commitAuthoritativeProvidersList` sets the cache entry itself so a stale background refetch can never clobber the fresh probe)...
     expect(queryClient.getQueryData(hostBClassicKey)).toEqual(
       hostBProvidersListResponse,
     );
@@ -1029,23 +988,12 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     // reaches.
     expect(queryClient.getQueryData(hostBNativeMcpKey)).toEqual(sentinel);
 
-    // Host B's three catalog methods were re-fetched. Observed: harnesses
-    // lands at 2 (not 3) - `commitAuthoritativeProvidersList` invalidates
-    // every `PROVIDER_INVALIDATIONS` scope except `providers.list` itself,
-    // which includes `agent.gui.listHarnesses` and refetches it once as an
-    // active query; the refresh's OWN second invalidation pass then filters
-    // `agent.gui.listHarnesses` back out (it is already in
-    // `PROVIDER_INVALIDATIONS`) and only covers `agent.gui.listModels` /
-    // `agent.gui.listCommands`, so those land at 2 via that second pass.
-    // That filter is conditional on the commit having run at all - the
-    // failure-path test below is its other half.
+    // Host B: `listHarnesses` is 2 (commit invalidates it, then the refresh's second pass filters it out). `listModels`/`listCommands` land at 2 via that second pass.
     await waitFor(() => {
       expect(hostBCalls).toEqual({ harnesses: 2, models: 2, commands: 2 });
     });
-    // ...and host A's cache - a DIFFERENT client, never passed to the
-    // refresh - was never touched. A regression that resolved the refresh
-    // target through the app-wide default (rather than the `client`
-    // argument) would either refresh the wrong host or refresh both.
+    // ...and host A's cache - a DIFFERENT client, never passed to the refresh - was never touched.
+    // A regression that resolved the refresh target through the app-wide default (rather than the `client` argument) would either refresh the wrong host or refresh both.
     expect(hostACalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
   });
 
@@ -1096,10 +1044,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
       () => useRefreshHarnessCatalogForClient(clientB),
       { wrapper: Wrapper },
     );
-    // The forced request failed, but the mutation's own `onError` toasts it
-    // (`toastFromHostError`) and the refresh hook swallows the rejection
-    // (`.catch(() => undefined)`) rather than propagating it - the caller
-    // still gets a definite outcome to drive its spinner off of.
+    // The forced request failed, but the mutation's own `onError` toasts it (`toastFromHostError`) and the refresh hook swallows the rejection (`.catch(() => undefined)`) rather than propagating it - the caller still gets a definite outcome to drive its spinner off of.
     await act(async () => {
       await expect(result.current()).resolves.toEqual({ kind: "refreshed" });
     });
@@ -1107,12 +1052,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     expect(hostBProvidersListCalls).toEqual([
       { forceAuthRefresh: true, native: null },
     ]);
-    // The catalog invalidation still ran despite the failed commit - and it
-    // covered ALL THREE methods, `agent.gui.listHarnesses` included. On the
-    // success path that one is deducted because the commit already
-    // invalidated it; here the commit never ran, so deducting it would leave
-    // the rail's own row (`enabled` / `available` / `authStatus`) stale
-    // behind a click that reported `refreshed`.
+    // On the success path that one is deducted because the commit already invalidated it; here the commit never ran, so deducting it would leave the rail's own row (`enabled` / `available` / `authStatus`) stale behind a click that reported `refreshed`.
     await waitFor(() => {
       expect(hostBCalls).toEqual({ harnesses: 2, models: 2, commands: 2 });
     });
@@ -1277,11 +1217,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
         {props.children}
       </QueryClientProvider>
     );
-    // A live default-host binding IS present (mirrors a real app where some
-    // OTHER host is the app-wide default) - if `client: null` ever fell back
-    // to it, this fixture would make that fallback observable as fetched
-    // data. `useGuiHarnessesQueryForClient` never reads `useHostBinding()`,
-    // so the fixture is a negative control: it must never be consulted.
+    // `useGuiHarnessesQueryForClient` never reads `useHostBinding()`, so the fixture is a negative control: it must never be consulted.
     const defaultHostCalls: HostCallCounts = {
       harnesses: 0,
       models: 0,
@@ -1352,10 +1288,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
       await Promise.resolve();
     });
 
-    // The underlying query is disabled (`isPending: true` forever, see the
-    // sibling test) - the composed catalog must not surface that as
-    // "loading", or every consumer (the picker rail, the palette) would spin
-    // for a fetch that never starts.
+    // The underlying query is disabled (`isPending: true` forever, see the sibling test) - the composed catalog must not surface that as "loading", or every consumer (the picker rail, the palette) would spin for a fetch that never starts.
     expect(result.current.harnesses).toEqual([]);
     expect(result.current.harnessesLoading).toBe(false);
     expect(result.current.modelsLoading).toBe(false);
@@ -1364,11 +1297,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
   });
 });
 
-// The intent-edge freshness predicate, as a unit: the in-flight arm cannot be
-// proven through a mocked transport (it honors the abort before its handler
-// runs, so the canceled first request of a cancel-and-re-issue never shows in
-// an RPC count), but on a real host both requests arrive - the picker's
-// intent-rpc suite counts the OTHER arms and leans on this one directly.
+// The intent-edge freshness predicate, as a unit: the in-flight arm cannot be proven through a mocked transport (it honors the abort before its handler runs, so the canceled first request of a cancel-and-re-issue never shows in an RPC count), but on a real host both requests arrive - the picker's intent-rpc suite counts the OTHER arms and leans on this one directly.
 describe("harnessCatalogEntryNeedsRefresh", () => {
   it("never reports an in-flight entry as due - refetch() defaults to cancelRefetch, so 'due' would cancel and re-issue the request underway", () => {
     // The cold browse-commit race: the enabled-transition fetch has already
@@ -1422,14 +1351,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
   });
 });
 
-// Coverage for the cold-host narrowing: the all-harness `listModels` fan-out
-// belongs to the app-load fill alone (`modelsFetch: "all-harnesses"`); every
-// user-facing surface passes `"cached-only"` and warms specific harnesses
-// through its own targeted query on the shared cache slot. TanStack's no-data
-// path ignores `staleTime`, so before this scope existed ANY enabled catalog
-// mount on a cold (non-prefetched, usually remote) host fanned `listModels`
-// across every available harness - one spawned provider server per rail entry,
-// on first picker open.
+// TanStack's no-data path ignores `staleTime`, so before this scope existed ANY enabled catalog mount on a cold (non-prefetched, usually remote) host fanned `listModels` across every available harness - one spawned provider server per rail entry, on first picker open.
 describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
   afterEach(() => {
     hostBindingMock.current = null;
@@ -1566,10 +1488,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
   });
 
   it("reports modelsLoading for exactly the harness a targeted fetch is filling, while it is in flight", async () => {
-    // The initializer is unreachable: a Promise executor runs synchronously,
-    // so `release` is the real resolver before the fixture is even built -
-    // but TS cannot see that, and a `| null` type would narrow the later call
-    // to `null`.
+    // The initializer is unreachable: a Promise executor runs synchronously, so `release` is the real resolver before the fixture is even built - but TS cannot see that, and a `| null` type would narrow the later call to `null`.
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;

@@ -5,18 +5,8 @@ import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
-/**
- * One lifecycle affordance for a managed command: icon button, verb tooltip,
- * and a spinner in place of the glyph while its mutation is in flight.
- *
- * `ariaLabel` is separate from the tooltip because a surface that lists several
- * shells at once needs each button to name ITS shell, while the tooltip stays
- * the bare verb.
- *
- * `pressed` turns the button into a toggle (`aria-pressed`), for the one
- * setting a person edits on a command - relaunch after a host restart. Omit it
- * (`undefined`) for an action, which has no state to press.
- */
+/** `pressed` turns the button into a toggle (`aria-pressed`), for the one setting a person edits on a command -
+ * relaunch after a host restart. */
 export function ManagedCommandActionButton(props: {
   readonly label: string;
   readonly ariaLabel: string;
@@ -67,16 +57,7 @@ export function ManagedCommandActionButton(props: {
   );
 }
 
-/**
- * The Stop affordance itself - square glyph, "Stop" tooltip - with no opinion
- * about WHICH mutation fires it.
- *
- * The Shells surfaces stop one command through their own hook; the resource
- * monitor stops whole selections through a batched one. Sharing the button
- * rather than the hook is what keeps a shell looking stoppable everywhere it
- * appears - which matters most in the monitor, where the affordance next to it
- * says "Kill" in words and a supervised shell must never read as one of those.
- */
+/** Sharing the button rather than the hook is what keeps a shell looking stoppable everywhere it appears. */
 export function ManagedCommandStopButton(props: {
   readonly commandId: string;
   readonly ariaLabel: string;

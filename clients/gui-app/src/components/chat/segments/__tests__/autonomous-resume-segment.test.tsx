@@ -51,11 +51,8 @@ describe("<AutonomousResumeSegment />", () => {
   });
 
   it("never claims a still-running producer finished", () => {
-    // `status` is a persisted enum with no value for "running", so a digest
-    // from a shell still streaming carries
-    // `completed` for older readers. A reader that understands `live` must
-    // prefer it - otherwise the most glanceable line in the turn says the
-    // command is done while it is still going.
+    // `status` is a persisted enum with no value for "running", so a digest from a shell still streaming carries `completed` for older readers.
+    // A reader that understands `live` must prefer it - otherwise the most glanceable line in the turn says the command is done while it is still going.
     render(
       <AutonomousResumeSegment
         triggers={[

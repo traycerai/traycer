@@ -10,17 +10,7 @@ export interface EffectiveTerminalFont {
 }
 
 /**
- * The Terminal typography settings resolved to concrete values (`SETTINGS.md`
- * §Typography): a `null` terminal field means "follow the Code font/size",
- * which itself falls back to the default mono stack.
- *
- * Every surface that shows command output has to resolve this the same way, and
- * none of them can read it from CSS: `--traycer-font-mono` carries the CODE
- * font, so `font-mono` silently ignores a Terminal override. xterm additionally
- * measures glyph cells on a hidden canvas where CSS variables do not resolve at
- * all. So the answer is computed from the store and applied inline, here, once
- * - the xterm host, the Appearance preview and the managed-command output
- * window all read this hook rather than each keeping its own copy.
+ * Resolve Terminal typography from the store, not CSS: `--traycer-font-mono` is the Code font, and xterm measures on a canvas where CSS variables do not resolve.
  */
 export function useEffectiveTerminalFont(): EffectiveTerminalFont {
   const terminalFontFamily = useSettingsStore((s) => s.terminalFontFamily);

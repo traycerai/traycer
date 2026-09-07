@@ -40,10 +40,8 @@ describe("openSource", () => {
 
   it("emits exactly one Agent category, ahead of the other openers", () => {
     const items = readSyncItems(openSource.getItems(ctx("group-1")));
-    // ONE Agent category: Chat and Terminal are interfaces inside it, never
-    // peer entity collections. The communication graph trails them as a LEAF -
-    // one graph per epic, so a sub-page listing a single row would be a wasted
-    // step.
+    // ONE Agent category: Chat and Terminal are interfaces inside it, never peer entity collections.
+    // The communication graph trails them as a LEAF - one graph per epic, so a sub-page listing a single row would be a wasted step.
     expect(items.map((item) => item.label)).toEqual([
       "Agents",
       "Terminals",

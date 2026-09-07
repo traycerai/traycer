@@ -10,12 +10,8 @@ import type {
 } from "@/components/session-import/session-import-model";
 import type { SessionImportTone } from "@/components/session-import/session-import-tone";
 
-/**
- * Checkbox visual with no interactive element of its own: the row around it is
- * the control (`role="checkbox"`), so the whole row is the hit target and
- * nothing nests a button inside a button. Exported for the wizard's
- * master checkbox, which heads the same column these boxes form.
- */
+/** Checkbox visual with no interactive element of its own: the row around it is the control
+ * (`role="checkbox"`), so the whole row is the hit target and nothing nests a button inside a button. */
 export function SelectionBox(props: {
   readonly state: SessionImportGroupSelectionState;
   readonly disabled: boolean;
@@ -38,10 +34,8 @@ export function SelectionBox(props: {
   );
 }
 
-/**
- * Its own component so the shared 60s clock behind `useCompactRelativeTime`
- * repaints just this label, instead of waking every row it ticks under.
- */
+/** Its own component so the shared 60s clock behind `useCompactRelativeTime` repaints just this label, instead
+ * of waking every row it ticks under. */
 function SessionRowTimestamp(props: {
   readonly updatedAt: number;
   readonly tone: SessionImportTone;
@@ -60,12 +54,8 @@ function SessionRowTimestamp(props: {
   );
 }
 
-/**
- * One number, not a fraction: a fully picked folder reads as its count alone.
- * "All" counts what is actually submitted (the selectable rows), because
- * unavailable rows never import; an untouched or cleared folder shows
- * everything it holds.
- */
+/** "All" counts what is actually submitted (the selectable rows), because unavailable rows never import; an
+ * untouched or cleared folder shows everything it holds. */
 function groupCountLabel(group: SessionImportGroupView): string {
   if (group.selectionState === "partial") {
     return `${group.selectedCount.toLocaleString()} of ${group.selectableCount.toLocaleString()}`;
@@ -79,10 +69,7 @@ function groupCountLabel(group: SessionImportGroupView): string {
 function SessionRow(props: {
   readonly row: SessionImportRowView;
   readonly tone: SessionImportTone;
-  /**
-   * Whether to show the folder the session ran in under its title. Only the
-   * Deleted Folders group does: everywhere else the header names the folder.
-   */
+  /** Only the Deleted Folders group does: everywhere else the header names the folder. */
   readonly showFolder: boolean;
   readonly onToggle: (selectionKey: string) => void;
 }) {
@@ -100,14 +87,11 @@ function SessionRow(props: {
         type="button"
         role="checkbox"
         aria-checked={row.selected}
-        // `aria-disabled`, never the `disabled` attribute: a disabled button
-        // emits no pointer events, so the tooltip explaining WHY the row is
-        // unavailable could never open - which is the only explanation the
-        // user gets.
+        // `aria-disabled`, never the `disabled` attribute: a disabled button emits no pointer events, so the tooltip
+        // explaining why the row is unavailable could never open - which is the only explanation the user gets.
         aria-disabled={!row.selectable}
-        // Inside Deleted Folders the header names no folder, so the folder
-        // has to be part of the name: two "Fix the build" rows from different
-        // gone checkouts are otherwise indistinguishable to a screen reader.
+        // Inside Deleted Folders the header names no folder, so the folder has to be part of the name: two "Fix the
+        // build" rows from different gone checkouts are otherwise indistinguishable to a screen reader.
         aria-label={
           showFolder ? `${row.title} in ${row.folderPath}` : row.title
         }
@@ -116,9 +100,8 @@ function SessionRow(props: {
         onClick={() => {
           if (row.selectable) onToggle(row.selectionKey);
         }}
-        // px-1.5 under the list's own p-1 lands this checkbox on the group
-        // header's 10px left edge; the chevron up there and the harness icon
-        // here then share a column, and the titles start flush with each other.
+        // px-1.5 under the list's own p-1 lands this checkbox on the group header's 10px left edge; the chevron up
+        // there and the harness icon here then share a column, and the titles start flush with each other.
         className={cn(
           "flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
           row.selectable ? tone.rowHover : "cursor-default",
@@ -177,10 +160,7 @@ export function SessionImportGroupItem(props: {
     <div
       data-testid="session-import-group"
       data-group-key={group.groupKey}
-      // shrink-0 is load-bearing: overflow-hidden drops a flex item's automatic
-      // minimum size to zero, so inside the wizard's scrolling column every
-      // card would compress to a sliver (many groups) or swallow its own rows
-      // (one tall group) instead of making the column overflow and scroll.
+      // shrink-0 is load-bearing: overflow-hidden drops a flex item's automatic minimum size to zero.
       className={cn("shrink-0 overflow-hidden rounded-lg border", tone.border)}
     >
       <div
@@ -200,11 +180,8 @@ export function SessionImportGroupItem(props: {
           onClick={() =>
             onSetGroupSelection(group.groupKey, group.selectionState !== "all")
           }
-          // ring-inset on both header controls: the card clips at its rounded
-          // border, so an outset ring would render cut off. p-2.5 all round
-          // keeps this checkbox on the same left edge - and the same distance
-          // from what follows it - as the row checkboxes below (4px list
-          // padding + 6px row padding = the same 10px).
+          // ring-inset on both header controls: the card clips at its rounded border, so an outset ring would render cut
+          // off.
           className={cn(
             "flex shrink-0 items-center rounded-md p-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
             group.selectableCount > 0 && tone.rowHover,
@@ -249,11 +226,8 @@ export function SessionImportGroupItem(props: {
               {group.path}
             </span>
           </span>
-          {/*
-            One number, not a fraction: a folder the user has not touched is
-            fully picked, so "431 of 431" is noise on every row. The fraction
-            appears exactly when it says something - the folder is half in.
-          */}
+          {/* One number, not a fraction: a folder the user has not touched is fully picked, so "431 of 431" is noise on
+             every row. */}
           <span
             data-testid="session-import-group-count"
             className={cn("shrink-0 text-ui-xs tabular-nums", tone.muted)}

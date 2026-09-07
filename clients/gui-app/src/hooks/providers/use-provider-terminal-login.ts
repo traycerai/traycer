@@ -15,66 +15,24 @@ import {
 } from "@/stores/epics/canvas/store";
 import { recordProviderLoginTerminal } from "@/stores/providers/provider-login-terminals";
 
-/**
- * The tile's `cwd` is display-only for a sign-in terminal: the host chose the
- * working directory (the user's home) when it created the PTY, and this tile
- * never runs `terminal.create`, so there is nothing for a real path to feed.
- * `"~"` reads correctly and satisfies the ref schema's non-empty requirement.
- */
+/** The tile's `cwd` is display-only for a sign-in terminal: the host chose the working directory (the user's home) when it created the PTY, and this tile never runs `terminal.create`, so there is nothing for a real path to feed. */
 const SIGN_IN_TERMINAL_CWD = "~";
 
 /**
- * The full mutation result plus the gesture that runs it, rather than a
- * narrowed `{ start, isPending }`: a host-RPC hook returns its whole
- * `UseMutationResult` (gui-app AGENTS.md), so a consumer can read `error`,
- * `status` or `reset` without a second hook. `start` is what every consumer
- * actually presses - it fills in the fixed request this gesture always sends.
+ * Full mutation result plus `start`, so consumers can read `error`/`status`/`reset` without a second hook.
  */
 export type ProviderTerminalLoginStarter =
   StartTerminalLoginMutationResult<undefined> & {
     readonly start: () => void;
   };
 
-/**
- * Runs the whole terminal sign-in gesture for an EPIC surface: ask the host
- * for a fresh sign-in terminal in this epic's scope, retire the one it
- * replaced, and put the new one in front of the user in THIS view. The
- * landing page's counterpart is `useLandingProviderStartTerminalLogin`, which
- * lands the terminal in the landing panel instead of a canvas tile.
- *
- * Tab-bound by construction (`useTabHostClient` / `useTabHostId`): the tile
- * this opens is bound to the tab's host, so the PTY has to be minted there.
- * A surface whose composer resolves its host separately from the tab (the
- * in-epic new-conversation modal) must not call this.
- *
- * Ordering is deliberate. Closing the retired tiles first and opening second is
- * one synchronous store sequence, so a close cannot land after the open; and
- * the terminal registry is keyed by tile `instanceId`, not by session id, so
- * closing a predecessor cannot touch the new tile's stream state. Focusing
- * (rather than opening in the background) is what makes the button feel like it
- * did something - the user has to READ this terminal, it is the only place the
- * device code exists.
- *
- * All of it hangs off the MUTATION's `onSuccess`, not a per-`mutate` one: this
- * call has a host-side effect (a PTY is created, the previous one killed), so
- * a caller that unmounts mid-flight - a canvas tab switch, a host-binding blip
- * that unmounts the banner - must not be able to leave a live sign-in terminal
- * with no tile in front of it.
- */
+/** Do not call from a surface whose composer host differs from the tab. */
 export function useProviderTerminalLogin(args: {
   readonly providerId: ProviderId;
   readonly epicId: string | null;
   readonly viewTabId: string | null;
   /**
-   * The tile this gesture was launched FROM, when it was launched from one (the
-   * "Start again" button on a dead sign-in tile). Closed on success unless the
-   * host already reported it as the replaced session.
-   *
-   * The host reports `replacedSessionId: null` whenever its pointer map has no
-   * predecessor - after a host restart, which is exactly when the user is
-   * looking at a dead tile and pressing "Start again". Without this the dead
-   * panel stays open beside the new terminal, still offering "Start again", and
-   * every press adds another tile.
+   * Close the launching tile on success unless the host already reported it as the replaced session. `replacedSessionId: null` after restart would otherwise leave the dead panel offering Start again.
    */
   readonly launchedFromTile: {
     readonly sessionId: string;
@@ -115,12 +73,7 @@ export function useProviderTerminalLogin(args: {
           result.replacedSessionId,
         );
         if (replaced !== null) {
-          // Provider-login terminals are host-spawned and import-exempt, so
-          // their presentation close is always local. Its own `navigateNested`
-          // rather than one composed with the open below: `prepare` runs
-          // synchronously inside the call, so the close still lands before the
-          // open, and the open's target - committed second - is the one the
-          // route ends on.
+          // Its own `navigateNested` rather than one composed with the open below: `prepare` runs synchronously inside the call, so the close still lands before the open, and the open's target - committed second - is the one the route ends on.
           navigateNested(epicId, viewTabId, () =>
             prepareCloseCanvasTabFocusTarget(
               viewTabId,

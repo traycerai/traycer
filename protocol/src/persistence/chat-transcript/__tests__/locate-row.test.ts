@@ -21,15 +21,7 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 
 /**
- * `locateTranscriptRowOrdinal` answers a cross-tile jump for the three target
- * kinds a windowed client cannot resolve on its own: a `block` (walking the
- * rendered segment tree), a `sent-message` (matching an `agentMessageSend`
- * enrichment), and a `message` naming an ASSISTANT record, whose rows are
- * turn-keyed and therefore never named by the durable id. The invariant these
- * tests exist to pin is that the ordinal it returns is an index into the SAME
- * enumeration `buildRowSkeleton` publishes - by construction, since both are
- * built from `projectTranscriptRows` - so every assertion here is phrased
- * against the skeleton, never against a hand-counted ordinal.
+ * `locateTranscriptRowOrdinal` answers a cross-tile jump for the three target kinds a windowed client cannot resolve on its own: a `block` (walking the rendered segment tree), a `sent-message` (matching an.
  */
 
 const previewText: TranscriptPreviewProjection = (content: JsonContent) =>
@@ -50,12 +42,6 @@ function humanUserMessage(fields: {
   });
 }
 
-/**
- * An assistant turn built from raw block shapes, parsed through
- * `messageSchema` so every defaulted field (`agentMessageSend`,
- * `parentBlockId`, `imageResults`, ...) is filled the way a real persisted
- * record would be - mirrors `build-skeleton.test.ts`'s own fixtures.
- */
 function assistantMessageWithBlocks(fields: {
   readonly messageId: string;
   readonly timestamp: number;
@@ -274,9 +260,7 @@ describe("locateTranscriptRowOrdinal: block targets", () => {
   });
 
   it("resolves a nested tool_call block (parentBlockId -> a subagent card) to the row that renders its parent", () => {
-    // Blocks are persisted FLAT on the message - the nesting is a
-    // rendering-time grouping - so the nested block must resolve to the row
-    // that renders its parent's card without walking `parentBlockId` at all.
+    // Blocks are persisted FLAT on the message - the nesting is a rendering-time grouping - so the nested block must resolve to the row that renders its parent's card without walking `parentBlockId` at all.
     const turn = assistantMessageWithBlocks({
       messageId: "m-turn-3",
       timestamp: 20,
@@ -402,9 +386,6 @@ describe("locateTranscriptRowOrdinal: sent-message targets", () => {
   });
 
   it("breaks a tie between two matching sends by the one nearest the target timestamp", () => {
-    // Two DIFFERENT turns so the winning block is observable at the row
-    // level: if both candidates folded into one row this could not
-    // distinguish "picked the nearest" from "picked either".
     const far = assistantMessageWithBlocks({
       messageId: "m-far",
       timestamp: 40,
@@ -517,12 +498,7 @@ describe("locateTranscriptRowOrdinal: sent-message targets", () => {
 });
 
 describe("locateTranscriptRowOrdinal: message targets", () => {
-  /**
-   * One human turn, one steer, one assistant turn split by it. Enough to make
-   * every distinction this locator has to draw: a user row named by its own id,
-   * a steer row named by the record it steered, and an assistant record that
-   * names TWO rows and no row id at all.
-   */
+  /** One human turn, one steer, one assistant turn split by it. */
   function splitTurnTranscript(): TranscriptRowProjectionInput {
     return {
       messages: [
@@ -586,9 +562,7 @@ describe("locateTranscriptRowOrdinal: message targets", () => {
       messageId: "m-turn",
     });
 
-    // The TRAILING slice, matching the client's own `messageIdForTranscriptTarget`:
-    // a completion or failure notification describes the terminal edge of the
-    // record, and the two resolvers must not disagree about which row that is.
+    // The TRAILING slice, matching the client's own `messageIdForTranscriptTarget`: a completion or failure notification describes the terminal edge of the record, and the two resolvers must not disagree about which row that.
     expect(skeleton[ordinal]?.rowId).toBe(
       assistantSliceRowId("turn-1", 1, true),
     );
@@ -608,9 +582,6 @@ describe("locateTranscriptRowOrdinal: message targets", () => {
   });
 
   it("resolves a STEERED record to its steer row, not to the turn that names it", () => {
-    // `m-steer` appears in `steeredMessageIds` on every slice of the turn, so a
-    // search that matched anywhere the id occurs would answer with an assistant
-    // slice - and jump the reader past the bubble they asked for.
     const input = splitTurnTranscript();
     const rows = projectTranscriptRows(input);
     const skeleton = buildRowSkeleton(input, previewText);

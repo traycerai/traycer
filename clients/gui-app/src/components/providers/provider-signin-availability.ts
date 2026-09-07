@@ -7,39 +7,8 @@ import {
 } from "@/components/providers/provider-pack-readiness";
 import { providerDisplayName } from "@/lib/provider-ordering";
 
-/**
- * Whether this provider can actually be signed in from a real terminal, rather
- * than through a headless browser-OAuth child.
- *
- * ONE helper, five consumers (this module's two exports, the composer re-auth
- * banner's `deriveLoginOptions`, the picker's `resolveCreateProfileGate`, and
- * the picker's setup CTA via `resolveProviderTerminalSetup`) so a surface
- * cannot drift into offering the headless button for a provider the host will
- * refuse, or the terminal one for a provider it cannot open.
- *
- * It reads `terminalLogin` ALONE. The command the terminal runs is host-owned
- * (the host's `CliProfile.terminalLaunchArgs`), not `oauthArgs`: `oauthArgs`
- * is the HEADLESS command, and the providers whose sign-in lives inside their
- * own TUI (Qwen, Droid, OMP, OpenCode) ship `terminalLogin` with
- * `oauthArgs: null` precisely so a client that predates this field never
- * offers them a headless button. Requiring `oauthArgs` here - which this
- * helper once did, when Copilot and Reasonix were the only terminal-login
- * providers and both happened to carry one - hid the terminal button for
- * exactly those four. Every consumer's own `oauthArgs` branch is therefore
- * ordered AFTER this check, never before it: a terminal-login provider with
- * `oauthArgs: null` must not fall into a "no browser sign-in, use its CLI"
- * sentence when Traycer can open that CLI for the user.
- *
- * The `!== null && !== undefined` spelling is load-bearing, not defensive
- * noise, though not for the reason it is tempting to assume. An old host's
- * payload arrives with the key filled to `null` by the v6 -> v7 upgrade bridge
- * (`registry.ts`), not absent. `undefined` comes from the optional chain: a
- * provider whose `loginCapability` is itself `null` (Cursor, Traycer) or not
- * yet loaded (a map lookup before `providers.list` resolves). A bare `!== null`
- * would read those as "supports terminal login" and tell every such provider's
- * user to sign in from a composer affordance that will never appear. `!= null`
- * would be equivalent but `eqeqeq: ["error", "always"]` forbids it.
- */
+/** Every consumer's own `oauthArgs` branch is therefore ordered after this check, never before it: a
+ * terminal-login provider with `oauthArgs. */
 export function providerSupportsTerminalLogin(
   loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): boolean {
@@ -47,24 +16,8 @@ export function providerSupportsTerminalLogin(
   return terminalLogin !== null && terminalLogin !== undefined;
 }
 
-/**
- * The pack state that BLOCKS a terminal sign-in right now, or `null` when the
- * host would spawn the provider's CLI.
- *
- * A terminal login spawns that CLI exactly as a chat turn does, so it is gated
- * by the same question (`providerPackBlocksExecution`, which reads
- * `fallbackRunnable`). The headless path already folds this into
- * `providerSignInUnavailableHint` below - but that helper answers the terminal
- * case FIRST, with a permanent "signed in from a terminal" sentence, so the
- * pack check there is never reached for a terminal-login provider. Every
- * terminal action (the picker's setup CTA on both of its surfaces, the composer
- * banner's row) asks this instead, so none of them can offer a button whose
- * only possible answer is the host's `preparing` error.
- *
- * `null` state (the `providers.list` row has not arrived) reads as not blocked:
- * the same fail-open every pack gate takes, with the host resolver's typed
- * outcome as the backstop.
- */
+/** The pack state that blocks a terminal sign-in right now, or `null` when the host would spawn the provider's
+ * CLI. */
 export function providerTerminalLoginPackBlock(
   state: ProviderCliState | null,
 ): ProviderPackPreparing | null {
@@ -76,15 +29,8 @@ export function providerTerminalLoginPackBlock(
   return preparing;
 }
 
-/**
- * The login gate. A provider login SPAWNS that provider's CLI, so it needs the
- * managed pack exactly as much as a chat turn does - and unlike a chat turn it
- * has no composer in front of it to explain the wait.
- *
- * Folded into the existing capability gate rather than added as a parallel
- * check, so there is one answer to "can this provider start an OAuth login"
- * and the Sign in affordance cannot disagree with it.
- */
+/** The login gate. Folded into the existing capability gate rather than added as a parallel check, so there is
+ * one answer to "can this provider start an OAuth login" and the Sign in affordance cannot disagree with it. */
 export function providerCanStartProfileOauth(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
@@ -92,43 +38,19 @@ export function providerCanStartProfileOauth(
   return providerSignInUnavailableHint(state, isSelectedHostLocal) === null;
 }
 
-/**
- * WHY sign-in is unavailable, or null when it is available.
- *
- * The tooltip used to be one hardcoded sentence - "Sign in requires a local
- * host with browser sign-in available" - shown for every reason the button was
- * disabled. On a local host, which is most of them, that sentence is simply
- * false, and it is the same misdirection class `providerCliNotFoundMessage`
- * exists to kill: a user reads a precondition they already satisfy and has
- * nowhere to go.
- *
- * Derived from the same three facts the boolean is, and the boolean is now
- * derived from THIS - so the affordance and its explanation cannot disagree
- * about whether sign-in is possible, which is how the stale sentence survived.
- */
+/** Derived from the same three facts the boolean is, and the boolean is now derived from this. */
 export function providerSignInUnavailableHint(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
 ): string | null {
   if (providerSupportsTerminalLogin(state.loginCapability)) {
-    // A permanent provider property, so it outranks every situational reason
-    // below - and it has to precede the "no browser sign-in" branch too: a
-    // terminal-login provider may ship `oauthArgs: null` (Qwen, Droid, OMP
-    // and OpenCode have no headless command at all), and that branch would
-    // send its user to "its own CLI" when Traycer can open that CLI for them.
-    // It is also FALSE for the host check: a device flow needs no loopback,
-    // so terminal login works on a remote host.
+    // A permanent provider property, so it outranks every situational reason below.
     return `${providerDisplayName(state.providerId)} is signed in from a terminal. Use the sign-in option in the chat composer.`;
   }
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
   if (oauthArgs === null || oauthArgs.length === 0) {
-    // A permanent property of the provider, so it outranks the situational
-    // reasons below: telling this user to switch hosts would waste their time.
-    // Unreachable today for profile-capable providers (they all ship
-    // oauthArgs) and for zero-profile hosts the profile section returns null
-    // before calling this — kept accurate so a future call site is not wrong.
-    // "Above" is intentionally gone: the API key field lives on the Account
-    // tab after the providers tab split, not above this hint.
+    // A permanent property of the provider, so it outranks the situational reasons below: telling this user to
+    // switch hosts would waste their time.
     const name = providerDisplayName(state.providerId);
     if (state.providerId === "traycer") {
       return `${name} does not support browser sign-in.`;
@@ -139,10 +61,8 @@ export function providerSignInUnavailableHint(
     return "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.";
   }
   const packPreparing = providerPackPreparingForProvider(state);
-  // Blocking, not merely preparing: a login spawns whatever the resolver
-  // spawns, so a managed pack downloading behind a runnable bundled/PATH/custom
-  // binary takes nothing away. Withholding Sign in there would strand a user
-  // whose CLI works, on a screen that shows them it works.
+  // Blocking, not merely preparing: a login spawns whatever the resolver spawns, so a managed pack downloading
+  // behind a runnable bundled/PATH/custom binary takes nothing away.
   if (packPreparing !== null && providerPackBlocksExecution(packPreparing)) {
     return providerPackPreparingLabel(
       packPreparing,

@@ -1,12 +1,6 @@
 /**
- * Presentation split for a disabled control that must still surface a
- * tooltip. A natively `disabled` button swallows pointer events, so a Radix
- * tooltip anchored on it never opens on hover - the "locked, not hidden"
- * pattern depends on the explanation being reachable. When there is tooltip
- * copy to show, the control disables via `aria-disabled` (the caller blocks
- * activation itself) and styles the disabled look with
- * `ARIA_DISABLED_TRIGGER_CLASS`; native `disabled` is kept only when there is
- * no tooltip to surface (e.g. a brief pending state).
+ * Presentation split for a disabled control that must still surface a tooltip.
+ * A natively `disabled` button swallows pointer events, so a Radix tooltip anchored on it never opens on hover - the "locked, not hidden" pattern depends on the explanation being reachable.
  */
 export interface DisabledPresentation {
   readonly ariaDisabled: boolean;

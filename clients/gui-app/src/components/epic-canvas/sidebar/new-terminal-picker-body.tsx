@@ -1,16 +1,5 @@
 /**
- * Host+folder selection for terminal creation from the sidebar "+" popover:
- * host section, folder list, and Launch action. CMD-T's in-pane opener uses
- * native fuzzy sub-pages instead, while sharing the same host bindings and
- * terminal tile-ref builder.
- *
- * The caller mounts this only while its popover is open (and unmounts it on
- * close), so its state - the explicit row pick and the launch latch - starts
- * fresh every time without needing an imperative reset.
- *
- * When the epic has no worktree folders bound at all, there is no row to
- * select from, but a terminal can still be launched "folderless" - bound to
- * the active host's default cwd from `worktree.listBindingsForEpic@1.1`.
+ * The caller mounts this only while its popover is open (and unmounts it on close), so its state - the explicit row pick and the launch latch - starts fresh every time without needing an imperative reset.
  * `launchTarget` unifies both paths so callers only ever handle one shape.
  */
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
@@ -36,10 +25,7 @@ export interface NewTerminalPickerBodyProps {
   readonly epicId: string;
   readonly surfaceKey: string;
   /**
-   * Focus the workspace search input once the list mounts. The caller owns
-   * this because focusing a text field is a request for a keyboard, and
-   * whether that keyboard costs anything depends on the shell the surface is
-   * rendered in, which this body cannot see.
+   * The caller owns this because focusing a text field is a request for a keyboard, and whether that keyboard costs anything depends on the shell the surface is rendered in, which this body cannot see.
    */
   readonly autoFocusSearch: boolean;
   readonly onLaunch: (target: TerminalLaunchTarget) => void;
@@ -56,9 +42,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     epicId,
     enabled: pin.resolvedHostId !== null,
   });
-  // Host-proven-missing rows are hidden here (a deleted worktree can't host a
-  // terminal); the explicit pick is exempt so a worktree deleted while this
-  // picker is open degrades to its disabled badge instead of vanishing.
+  // Host-proven-missing rows are hidden here (a deleted worktree can't host a terminal); the explicit pick is exempt so a worktree deleted while this picker is open degrades to its disabled badge instead of vanishing.
   const rows = useMemo(
     () =>
       withoutResolvedMissingRows(
@@ -75,9 +59,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   );
   const hasLoadedNoRows =
     !bindingsQuery.isPending && !bindingsQuery.isError && rows.length === 0;
-  // The fallback cwd rides the bindings response. `null` means the host
-  // predates folderless workspaces (bridged v1.0 response), so launch stays
-  // disabled.
+  // `null` means the host predates folderless workspaces (bridged v1.0 response), so launch stays disabled.
   const folderlessCwd = bindingsQuery.data?.folderlessCwd ?? null;
   const folderlessCwdFailed = hasLoadedNoRows && folderlessCwd === null;
   const launchTarget = useMemo(
@@ -92,10 +74,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     [folderlessCwd, hasLoadedNoRows, pin.resolvedHostId, selectedRow],
   );
 
-  // A double-click on Launch fires the handler twice before React can flush
-  // the state update that unmounts this body, so each click would mint a
-  // fresh terminal. This synchronous latch collapses one open->launch session
-  // to a single terminal.
+  // A double-click on Launch fires the handler twice before React can flush the state update that unmounts this body, so each click would mint a fresh terminal.
   const hasLaunchedRef = useRef(false);
   const handleLaunch = useCallback(() => {
     if (hasLaunchedRef.current || launchTarget === null) return;

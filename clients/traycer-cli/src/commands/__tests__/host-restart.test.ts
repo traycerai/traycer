@@ -4,15 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeAttemptRecordForEnvironment } from "./attempt-record-test-support";
 
-// `host restart`'s command-level wiring (Host Update Layer Redesign Tech
-// Plan, "Lifecycle lock coverage" + "host restart --if-idle"): the whole
-// marker-reconcile -> stop -> finalize -> start sequence runs inside ONE
-// `cli-lock` acquisition, and `--if-idle` gates immediately before it
-// with a fresh busy probe. `restartWithPendingCliUpgradeFinalize` itself
-// is already covered end-to-end (stub controller, real manifest I/O)
-// by host-restart-finalize.test.ts - these tests only need to prove the
-// NEW command-level wrapping (lock span, ordering, --if-idle gating),
-// so the service controller is stubbed here too.
+// `host restart`'s command-level wiring (Host Update Layer Redesign Tech Plan, "Lifecycle lock coverage" + "host restart --if-idle"): the whole marker-reconcile -> stop -> finalize -> start sequence runs inside ONE `cli-lock` acquisition, and `--if-idle` gates immediately before it with a fresh busy probe.
+// `restartWithPendingCliUpgradeFinalize` itself is already covered end-to-end (stub controller, real manifest I/O) by host-restart-finalize.test.ts - these tests only need to prove the NEW command-level wrapping (lock span, ordering, --if-idle gating), so the service controller is stubbed here too.
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
@@ -60,11 +53,8 @@ vi.mock("../../service", async (importOriginal) => {
   };
 });
 
-// The real `publishHostStartAdoption` waits (up to 30s) for a service-
-// manager child to ack a spawn that never happens under a stubbed
-// controller. This suite pins `host restart`'s command-level wiring, not
-// the adoption handshake (that's `host-start-adoption.test.ts`), so
-// replace it with an immediately-satisfied lease.
+// The real `publishHostStartAdoption` waits (up to 30s) for a service- manager child to ack a spawn that never happens under a stubbed controller.
+// This suite pins `host restart`'s command-level wiring, not the adoption handshake (that's `host-start-adoption.test.ts`), so replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
   publishHostStartAdoption: async () => ({
     waitForSpawn: async () => undefined,
@@ -162,9 +152,7 @@ describe("buildHostRestartCommand", () => {
     osHome.current = workHome;
     process.env.HOME = workHome;
     process.env.USERPROFILE = workHome;
-    // `store/paths` captures `homedir()` once at module load - drop the
-    // module cache so each test (and the dynamic import below) sees its
-    // own tmp HOME, matching host-restart-finalize.test.ts's pattern.
+    // `store/paths` captures `homedir()` once at module load - drop the module cache so each test (and the dynamic import below) sees its own tmp HOME, matching host-restart-finalize.test.ts's pattern.
     vi.resetModules();
     mocks.controllerCalls = [];
     mocks.busyOverride = null;
@@ -272,10 +260,7 @@ describe("buildHostRestartCommand", () => {
   });
 
   it("--if-idle and --force together throw E_INVALID_ARGUMENT before the lock is ever taken", async () => {
-    // One flag widens the busy gate, the other removes it - a command
-    // carrying both has no coherent intent, so this must be refused before
-    // any lock/probe/stop side effect runs, not merely resolved in favour
-    // of one flag over the other.
+    // One flag widens the busy gate, the other removes it - a command carrying both has no coherent intent, so this must be refused before any lock/probe/stop side effect runs, not merely resolved in favour of one flag over the other.
     const { buildHostRestartCommand } = await import("../host-restart");
     const command = buildHostRestartCommand({
       ifIdle: true,
@@ -319,13 +304,7 @@ describe("buildHostRestartCommand", () => {
     expect(mocks.stopForRestartForceValues).toEqual([false]);
   });
 
-  // `--defer-if-parked` (Desktop's force-restart path, round-2 revalidation
-  // redesign): the classification and the action it authorizes happen under
-  // ONE contender-lock acquisition, so these tests drive it via a REAL
-  // attempt record on disk (read by the real, unmocked shared contender
-  // layer) rather than a stubbed `recoveryAction` - a stub would only prove
-  // the wiring reads a field, not that the field is derived from the record
-  // this flag exists to protect.
+  // `--defer-if-parked` (Desktop's force-restart path, round-2 revalidation redesign): the classification and the action it authorizes happen under ONE contender-lock acquisition, so these tests drive it via a REAL attempt record on disk (read by the real, unmocked shared contender layer) rather than a stubbed `recoveryAction` - a stub would only prove the wiring reads a field, not that the field is derived from the record this flag exists to protect.
   describe("--defer-if-parked", () => {
     it("a stop-only record + --defer-if-parked refuses WITHOUT ever stopping the service", async () => {
       await writeAttemptRecordForEnvironment("production", {
@@ -422,14 +401,8 @@ describe("buildHostRestartCommand", () => {
     });
   });
 
-  // Codex P2 (round 5): `reconcilePostFinalizeMarker` used to drop the
-  // marker's `serviceStartError` on the floor while consuming the marker
-  // - the one durable record of why the host was left stopped rather
-  // than merely un-upgraded. `describeMarkerReconcile` is where that
-  // value (if any) is supposed to surface in `host restart`'s human
-  // output, so these two tests pin the human-output half of the fix
-  // (the reconcile-outcome half is covered by
-  // `upgrade/__tests__/finalize-helper.test.ts`).
+  // Codex P2 (round 5): `reconcilePostFinalizeMarker` used to drop the marker's `serviceStartError` on the floor while consuming the marker - the one durable record of why the host was left stopped rather than merely un-upgraded.
+  // `describeMarkerReconcile` is where that value (if any) is supposed to surface in `host restart`'s human output, so these two tests pin the human-output half of the fix (the reconcile-outcome half is covered by `upgrade/__tests__/finalize-helper.test.ts`).
   function writePriorSwapFailedMarker(opts: {
     readonly serviceStartError: string | null;
   }): { readonly liveBinaryPath: string; readonly stagedBinaryPath: string } {

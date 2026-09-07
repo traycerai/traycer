@@ -12,13 +12,6 @@ const ALLOWED_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
   "mailto:",
 ]);
 
-/**
- * Schemes safe to hand STRAIGHT to the OS with no extra confirmation - the OS
- * handler (mail client, dialer) is itself the gate and these carry no local-app
- * launch risk. The one source of truth for the guest hand-off policy, consumed
- * by `browser-guest-navigation.ts`; it lives here so the launch primitives
- * below can self-guard against the dangerous set rather than trusting a caller.
- */
 export const SAFE_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
   "mailto:",
   "tel:",
@@ -28,11 +21,8 @@ export const SAFE_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Schemes that must NEVER be handed to `shell.openExternal` - the ones that
- * turn an OS hand-off into a local-code or credential-exfiltration primitive.
- * `file:` is here (and also stays blocked as a guest navigation), so an http(s)
- * page cannot reach it by any door. `about:` is dangerous for every value but
- * `about:blank`, which callers handle before this set is consulted.
+ * Schemes that must NEVER be handed to `shell.openExternal` - the ones that turn an OS hand-off into a local-code or credential-exfiltration primitive.
+ * `file:` is here (and also stays blocked as a guest navigation), so an http(s) page cannot reach it by any door.
  */
 export const DANGEROUS_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
   "javascript:",
@@ -49,11 +39,8 @@ export const DANGEROUS_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The scheme is never allowed near `shell.openExternal`: it is in the dangerous
- * denylist, or it is an `about:` other than `about:blank`. Both launch
- * primitives self-guard on this so a future or mistaken caller cannot turn the
- * OS hand-off into a local-code door - defense in depth behind the caller's own
- * allow/deny classification.
+ * The scheme is never allowed near `shell.openExternal`: it is in the dangerous denylist, or it is an `about:` other than `about:blank`.
+ * Both launch primitives self-guard on this so a future or mistaken caller cannot turn the OS hand-off into a local-code door.
  */
 function isRefusedGuestLaunchScheme(scheme: string): boolean {
   return DANGEROUS_EXTERNAL_SCHEMES.has(scheme) || scheme === "about:";
@@ -80,12 +67,6 @@ function isAllowedNavigationOrigin(origin: string): boolean {
   }
 }
 
-/**
- * Centralized gate for `shell.openExternal`. Rejects opaque/non-web schemes
- * (`javascript:`, `data:`, `file:`, `vbscript:`, `chrome:`...) which can
- * exfiltrate credentials or invoke local apps. Renderer call sites should
- * route through this rather than calling `shell.openExternal` directly.
- */
 export async function safelyOpenExternal(url: string): Promise<boolean> {
   let parsed: URL;
   try {
@@ -111,19 +92,8 @@ export async function safelyOpenExternal(url: string): Promise<boolean> {
 }
 
 /**
- * Fire-and-forget hand-off of a browser GUEST's non-web navigation to the OS
- * default handler (Chrome's "open in <app>?" behaviour for `mailto:`, `tel:`,
- * `zoommtg://`, `slack://`, ...). The OS presents its own confirmation, so a
- * real external scheme is never a silent no-op.
- *
- * Deliberately DISTINCT from {@link safelyOpenExternal}, which gates the
- * renderer's user-initiated in-app link egress against the fixed
- * {@link ALLOWED_EXTERNAL_SCHEMES} allow-list. The guest hand-off is instead
- * denylist-gated by its caller (`handleExternalGuestScheme` in
- * `browser-guest-navigation.ts`), so this helper only performs the launch and
- * reports failure - it must NOT be reached for a renderer link, and the two
- * policies stay separate on purpose. The scheme (never the URL) is logged: a
- * guest URL can carry attacker-chosen bytes.
+ * The OS presents its own confirmation, so a real external scheme is never a silent no-op.
+ * The guest hand-off is instead denylist-gated by its caller (`handleExternalGuestScheme` in `browser-guest-navigation.ts`), so this helper only performs the launch and reports.
  */
 export async function launchExternalFromGuest(url: string): Promise<boolean> {
   let scheme = "<unparseable>";
@@ -148,34 +118,13 @@ export async function launchExternalFromGuest(url: string): Promise<boolean> {
   }
 }
 
-/**
- * Schemes a guest hand-off has confirmed this app run. An arbitrary app deep
- * link (`zoommtg:`, `slack:`, ...) prompts once; a later hand-off to the SAME
- * scheme opens without re-prompting - "one-time per app". Cleared only by
- * restarting the app.
- *
- * ponytail: process-wide, not per browser session. Thread a session key
- * through {@link confirmAndLaunchExternalScheme} if we ever want the grant to
- * reset per session.
- */
 const confirmedGuestExternalSchemes = new Set<string>();
 
-/**
- * Confirm dialogs in flight, keyed by scheme. A page firing two `zoommtg:`
- * navigations in the same tick would otherwise open two identical dialogs (the
- * "remembered" set is only written after approval); a concurrent second call
- * for the same scheme joins the first dialog's result instead.
- */
 const pendingGuestExternalConfirms = new Map<string, Promise<boolean>>();
 
 /**
- * The "middle path" hand-off for an ARBITRARY app scheme a guest tries to open
- * (not the always-safe `mailto:`/`tel:` set, not the dangerous denylist - those
- * are decided by the caller). Prompts the user with a native dialog the first
- * time a given scheme is seen this app run; on "Open" it launches AND remembers
- * the scheme so it never re-prompts, on "Cancel" it does nothing. Awaited only
- * internally - callers fire-and-forget so a `setWindowOpenHandler` can still
- * return synchronously.
+ * Prompts the user with a native dialog the first time a given scheme is seen this app run.
+ * Awaited only internally - callers fire-and-forget so a `setWindowOpenHandler` can still return synchronously.
  */
 export async function confirmAndLaunchExternalScheme(
   url: string,
@@ -227,21 +176,15 @@ export async function confirmAndLaunchExternalScheme(
   return launchExternalFromGuest(url);
 }
 
-/**
- * Test-only reset for the per-app-run confirmed-scheme set, so a suite's
- * "prompts once" and "prompts again" cases don't leak grants into each other.
- */
+/** Test-only reset for the per-app-run confirmed-scheme set, so a suite's "prompts once" and "prompts again" cases don't leak grants into each other. */
 export function resetConfirmedGuestExternalSchemesForTest(): void {
   confirmedGuestExternalSchemes.clear();
   pendingGuestExternalConfirms.clear();
 }
 
 /**
- * Blocks the renderer from navigating to off-origin URLs. The renderer is a
- * SPA - any `<a href>` to an external site should open in the user's browser
- * via `window.open` (already routed through `setWindowOpenHandler`), never
- * inside the Electron window. Same-document hash navigations are allowed
- * because they don't change origin and don't trigger a network fetch.
+ * External `<a href>` must open via `window.open`, never inside the renderer.
+ * Same-document hash navigations are allowed; they do not change origin.
  */
 export function installNavigationGuard(webContents: WebContents): void {
   webContents.on("will-navigate", (event, navigationUrl) => {
@@ -275,22 +218,8 @@ export function installNavigationGuard(webContents: WebContents): void {
 }
 
 /**
- * Default-deny permission handlers for geolocation/notifications/etc. The
- * renderer is a desktop SPA, not a browser - it should never need geolocation,
- * midi, etc. Notifications are surfaced through our IPC-driven native path, so
- * the web Notification permission is also denied to avoid permission-prompt UI.
- *
- * `media` is the one exception: voice dictation needs `getUserMedia({audio})`,
- * so we allow it for **audio only** (camera/video stays denied). The macOS TCC
- * prompt is gated by `NSMicrophoneUsageDescription` + the audio-input
- * entitlement; this handler is the Chromium-layer gate.
- *
- * That audio allowance is load-bearing beyond dictation: Chromium's WebRTC port
- * allocator consults this same permission CHECK, and a denial makes it gather
- * from one wildcard-bound socket with mDNS-obfuscated candidates instead of
- * real per-interface ones - which removes the VPN/tailnet host candidate the
- * remote browser video plane's direct path depends on. Do not narrow this
- * without re-reading `traycer-host`'s `BROWSER_CAPTURE_HELPER_PERMISSIONS`.
+ * The renderer is a desktop SPA, not a browser.
+ * Do not narrow this without re-reading `traycer-host`'s `BROWSER_CAPTURE_HELPER_PERMISSIONS`.
  */
 const ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
   "clipboard-read",
@@ -344,12 +273,6 @@ export function installPermissionHandlers(target: Session): void {
   });
 }
 
-/**
- * Header layer of the renderer Content-Security-Policy. The directive list
- * lives in `shared/content-security-policy.ts` so this header and the
- * index.html `<meta>` tag (injected by `vite.renderer.config.ts`) are sourced
- * from one constant and cannot drift.
- */
 const CSP_HEADER_VALUE: readonly string[] = [CONTENT_SECURITY_POLICY];
 
 export function installContentSecurityPolicy(target: Session): void {
@@ -360,21 +283,12 @@ export function installContentSecurityPolicy(target: Session): void {
   });
 }
 
-/**
- * Clamps the default session to TLS 1.2+ so renderer/main HTTP traffic
- * can't be downgraded to TLS 1.0/1.1 by a hostile network. The host
- * runs over loopback so this only affects outbound calls.
- */
 export function clampSessionTls(target: Session): void {
   target.setSSLConfig({
     minVersion: "tls1.2",
   });
 }
 
-/**
- * Convenience wrapper for the default session - applies the full security
- * suite at app-ready time.
- */
 export function hardenDefaultSession(): void {
   const defaultSession = session.defaultSession;
   installPermissionHandlers(defaultSession);

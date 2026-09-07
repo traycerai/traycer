@@ -6,9 +6,7 @@ const missing: DurableBytes = { kind: "missing" };
 const unreadable: DurableBytes = { kind: "unreadable", cause: "EACCES" };
 const bytes = (text: string): DurableBytes => ({ kind: "bytes", text });
 
-// A minimally valid v2 record - `downloading` is active, so `execution` and
-// `continuation` are the values every other field-corruption test mutates
-// away from.
+// A minimally valid v2 record - `downloading` is active, so `execution` and `continuation` are the values every other field-corruption test mutates away from.
 const VALID_ACTIVE: Record<string, unknown> = {
   schemaVersion: 2,
   attemptId: "attempt-1",
@@ -122,9 +120,7 @@ describe("decodeHostUpdateAttempt", () => {
     ).toEqual({ kind: "corrupt" });
   });
 
-  // NaN/Infinity are not valid JSON syntax, so bytes carrying either fail
-  // JSON.parse itself and land here rather than in the progress parser -
-  // still `corrupt`, which is the contract that matters to callers.
+  // NaN/Infinity are not valid JSON syntax, so bytes carrying either fail JSON.parse itself and land here rather than in the progress parser - still `corrupt`, which is the contract that matters to callers.
   it("reports corrupt for NaN or Infinity literals anywhere in the bytes", () => {
     expect(
       decodeHostUpdateAttempt(

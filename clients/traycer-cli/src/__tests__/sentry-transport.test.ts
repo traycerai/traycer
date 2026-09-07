@@ -7,23 +7,10 @@ import {
   trackingHttpModule,
 } from "../sentry-transport";
 
-// int#4840. Sentry's node transport installs no request timeout and keeps its
-// `http.Agent` private, so a DSN endpoint that accepts the connection and then
-// goes quiet leaves a socket alive after `Sentry.close()` has already
-// returned. That socket holds the event loop open, so the CLI's "let the loop
-// drain" exit never completes and its watchdog force-exits with live handles -
-// the exact teardown shape the win32 libuv assertion fires in.
-//
-// These tests drive a REAL loopback server rather than a stub: the property
-// under test is whether an actual socket is released, which a fake request
-// object cannot demonstrate.
+// int#4840.
+// Sentry's node transport installs no request timeout and keeps its `http.Agent` private, so a DSN endpoint that accepts the connection and then goes quiet leaves a socket alive after `Sentry.close()` has already returned.
 
-/**
- * Resolve when the request is fully torn down.
- *
- * Not `events.once(request, "close")`: that installs its own `error` listener
- * and REJECTS on it, and a destroyed request always emits ECONNRESET first.
- */
+/** Resolve when the request is fully torn down. Not `events.once(request, "close")`: that installs its own `error` listener and REJECTS on it, and a destroyed request always emits ECONNRESET first. */
 function closed(request: http.ClientRequest): Promise<void> {
   return new Promise<void>((resolve) => {
     request.once("close", () => resolve());
@@ -97,9 +84,7 @@ describe("tracking http module", () => {
   });
 
   it("routes by protocol rather than assuming https", async () => {
-    // Sentry passes one `httpModule` for both schemes and picks the native
-    // module by DSN protocol itself; this wrapper has to make the same choice
-    // or every http DSN would be dialled as TLS.
+    // Sentry passes one `httpModule` for both schemes and picks the native module by DSN protocol itself; this wrapper has to make the same choice or every http DSN would be dialled as TLS.
     const request = trackingHttpModule.request(
       {
         protocol: "http:",

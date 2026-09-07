@@ -2,10 +2,8 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 
 type PrimaryActionGetter = () => () => void;
 
-// Window-scoped primary actions are stacked so a newer overlay owns the chord
-// without also firing an older surface underneath it. The action itself stays
-// behind a ref: changing form state must not move an older owner back to the
-// top of the stack.
+// The action itself stays behind a ref: changing form state must not move an older owner back to the top of the stack.
+// Window-scoped primary actions are stacked so a newer overlay owns the chord without also firing an older surface underneath it.
 const ownerStack: PrimaryActionGetter[] = [];
 let listenerInstalled = false;
 
@@ -44,11 +42,7 @@ function removeListener(): void {
   listenerInstalled = false;
 }
 
-/**
- * Gives the active surface ownership of Cmd/Ctrl+Enter. The latest active
- * owner wins, matching the visual stacking order of dialogs and popovers.
- * Callers pass the same guarded callback used by their primary button.
- */
+/** Gives the active surface ownership of Cmd/Ctrl+Enter. */
 export function usePrimaryActionShortcut(
   active: boolean,
   action: () => void,

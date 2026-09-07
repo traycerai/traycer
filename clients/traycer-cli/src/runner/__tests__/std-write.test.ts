@@ -2,26 +2,7 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// Regression coverage for the `host available --include-pre-releases`
-// truncation (Settings -> Host -> "Pick a different version" reporting
-// `traycer-cli emitted no terminal result line`).
-//
-// The runner emits its terminal NDJSON line and immediately `process.exit()`s.
-// `process.stdout.write` is asynchronous on a PIPE, and exit does not drain
-// the stream buffer, so before the `std-write` fix only the first 64 KiB (the
-// kernel pipe buffer) survived - the rest was dropped and the process still
-// exited 0. Desktop saw half a JSON line and no envelope.
-//
-// Why a real subprocess over a real pipe: the bug lives in the interaction
-// between the OS pipe buffer and process teardown. Nothing in-process can
-// reproduce it, and neither can a shell redirect to a FILE - file writes are
-// synchronous, so `traycer host available --json > out.json` succeeds at any
-// size and hides the defect completely. That false-negative is exactly how
-// this shipped.
-//
-// Both payloads run through the identical code path; only the size differs.
-// The small case is the control that keeps the large case honest - if the
-// worker were silently failing to emit anything at all, both would fail.
+// Real subprocess over a real pipe: file redirects are synchronous and hide stdout truncation on exit.
 
 const WORKER = join(import.meta.dirname, "fixtures", "large-result-worker.ts");
 
@@ -40,10 +21,8 @@ interface WorkerRun {
   readonly error: Error | null;
 }
 
-// `bun` rather than the vitest host process: the CLI ships as a
-// `bun --compile` binary, so bun is the runtime whose flush-on-exit behaviour
-// has to hold. (Node truncates identically here, but pinning the shipped
-// runtime is what makes this test evidence about the artifact we release.)
+// `bun` rather than the vitest host process: the CLI ships as a `bun --compile` binary, so bun is the runtime whose flush-on-exit behaviour has to hold.
+// (Node truncates identically here, but pinning the shipped runtime is what makes this test evidence about the artifact we release.)
 function runWorker(payloadBytes: number): Promise<WorkerRun> {
   return new Promise((resolve) => {
     execFile(
@@ -90,12 +69,7 @@ describe("runner stdout survives process.exit", () => {
   it(
     "delivers a terminal result line larger than the 64 KiB pipe buffer",
     async () => {
-      // Guard on the CONSTANT, not on observed stdout: this is what keeps
-      // the test meaningful if the payload is ever tuned down, and unlike
-      // an assertion on `run.stdout.length` it stays independent of the
-      // defect under test (a truncated run lands at exactly 65,536 bytes,
-      // which would report as a byte-count mismatch rather than as the
-      // missing envelope that actually breaks Desktop).
+      // Guard on the CONSTANT, not on observed stdout: this is what keeps the test meaningful if the payload is ever tuned down, and unlike an assertion on `run.stdout.length` it stays independent of the defect under test (a truncated run lands at exactly 65,536 bytes, which would report as a byte-count mismatch rather than as the missing envelope that actually breaks Desktop).
       expect(LARGE_PAYLOAD_BYTES).toBeGreaterThan(PIPE_BUFFER_BYTES);
 
       const run = await runWorker(LARGE_PAYLOAD_BYTES);

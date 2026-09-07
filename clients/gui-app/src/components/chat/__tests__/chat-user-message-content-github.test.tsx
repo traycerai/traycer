@@ -9,13 +9,7 @@ afterEach(() => {
   cleanup();
 });
 
-/**
- * A GitHub mention attachment as the composer builds it. `path` is a synthetic
- * token rather than a filesystem path - which is the whole reason the sent
- * message needs its own branch: the generic chip reads a basename off `path`
- * and shows `absolutePath ?? path` as the tooltip, so this attachment would
- * render as `traycer#4917` with the raw `github-pr:` token hanging off it.
- */
+/** A GitHub mention attachment as the composer builds it. `path` is a synthetic token rather than a filesystem path - which is the whole reason the sent message needs its own branch: the generic chip reads a basename off `path` and shows `absolutePath ?? path` as the tooltip, so this attachment would render as `traycer#4917` with the raw `github-pr:` token hanging off it. */
 function pullRequestMention(): MentionAttachment {
   return {
     kind: "mention",
@@ -35,11 +29,7 @@ function pullRequestMention(): MentionAttachment {
   };
 }
 
-/**
- * Written out rather than spread over the pull-request fixture: `contextType`
- * is the union's discriminant, and overriding it through a spread widens the
- * result instead of narrowing it to the issue arm.
- */
+/** Written out rather than spread over the pull-request fixture: `contextType` is the union's discriminant, and overriding it through a spread widens the result instead of narrowing it to the issue arm. */
 function issueMention(): MentionAttachment {
   return {
     kind: "mention",
@@ -70,13 +60,8 @@ describe("ChatUserMessageContent GitHub chips", () => {
 
     const chip = screen.getByText("#4917");
     expect(chip).toBeTruthy();
-    // The tooltip carries the title, not the token: a reader hovering a sent
-    // chip is asking what it refers to, and the raw path answers nothing.
-    //
-    // Asserted by OPENING it. "the token does not appear" passes just as well
-    // when the tooltip is empty, or gone - the generic branch this chip exists
-    // to avoid would satisfy it too, since that renders the token as a `title`
-    // attribute rather than as text.
+    // The tooltip carries the title, not the token: a reader hovering a sent chip is asking what it refers to, and the raw path answers nothing.
+    // "the token does not appear" passes just as well when the tooltip is empty, or gone - the generic branch this chip exists to avoid would satisfy it too, since that renders the token as a `title` attribute rather than as text.
     expect(tooltipTextNear(chip)).toBe(
       "traycerai/traycer#4917 · Stop the busy-loop",
     );
@@ -94,10 +79,8 @@ describe("ChatUserMessageContent GitHub chips", () => {
       />,
     );
 
-    // `traycer#812` is the multi-repository label the composer chose. The
-    // basename of the token happens to read the same way, so the label alone
-    // cannot tell the two branches apart - the tooltip can, and it is the
-    // thing a reader actually consults.
+    // `traycer#812` is the multi-repository label the composer chose.
+    // The basename of the token happens to read the same way, so the label alone cannot tell the two branches apart - the tooltip can, and it is the thing a reader actually consults.
     const chip = screen.getByText("traycer#812");
     expect(chip).toBeTruthy();
     expect(tooltipTextNear(chip)).toBe(

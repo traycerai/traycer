@@ -115,12 +115,8 @@ export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
   readonly draftId: string | null;
   readonly editor: ComposerPromptEditorHandle | null;
-  /**
-   * The composer's loaded command catalog, or null when it has not loaded.
-   * Submit-time chip conversion resolves a written `/command` / `$skill`
-   * against it - see `buildSubmittedChatJSONContent`. Read at submit time by
-   * the caller, which owns the picker store.
-   */
+  /** Submit-time chip conversion resolves a written `/command` / `$skill` against it - see
+   * `buildSubmittedChatJSONContent`. Read at submit time by the caller, which owns the picker store. */
   readonly slashCatalog: SlashCommandCatalog | null;
   readonly toolbar: {
     readonly selection: HarnessModelSelection;
@@ -140,12 +136,8 @@ export interface TerminalAgentLaunch {
   readonly profileId: string | null;
 }
 
-/**
- * Both actions return the submit-time placement refusal (selection model §54)
- * instead of dispatching, or `null` when the create was dispatched. The caller
- * renders the message inline on the composer - never a toast-and-proceed, and
- * never a silent fallback onto another host.
- */
+/** Both actions return the submit-time placement refusal (selection model §54) instead of dispatching, or
+ * `null` when the create was dispatched. */
 export interface LandingComposerActions {
   readonly submit: (
     args: LandingComposerSubmitArgs,
@@ -154,21 +146,7 @@ export interface LandingComposerActions {
     launch: TerminalAgentLaunch,
     draftId: string | null,
   ) => LandingPlacementRefusal | null;
-  /**
-   * Whether a create started here is still running.
-   *
-   * Exposed rather than left to the composer to observe, because the composer
-   * CANNOT observe it: TanStack v5 mutation state is per-OBSERVER, so the
-   * `useEpicCreateForClient` / `useCreateTuiAgentForClient` pair the composer
-   * used to build for itself tracked a second, never-mutated observer and its
-   * `isPending` was permanently false. A shared `mutationKey` would not have
-   * fixed it either (keys do not sync observers; only `useIsMutating` reads
-   * across them, and that is a GLOBAL count that would also light up for a
-   * create fired from the new-conversation modal on the same key - trading an
-   * inert read for a false-positive one).
-   *
-   * The observers that actually run live here, so the honest answer does too.
-   */
+  /** A shared `mutationKey` would not have fixed it either (keys do not sync observers. */
   readonly isPending: boolean;
 }
 
@@ -182,30 +160,12 @@ interface FinalizeLandingSubmissionInput {
   readonly args: LandingComposerSubmitArgs;
   readonly workspaceContext: LandingWorkspaceContext;
   readonly attempt: DraftSubmissionAttempt;
-  /**
-   * The placement host, re-validated at submit by `resolveLandingPlacement`
-   * and carried down verbatim. Never re-read off a client here: a second read
-   * could answer with a host the user was never shown.
-   */
+  /** Never re-read off a client here: a second read could answer with a host the user was never shown. */
   readonly hostId: string;
 }
 
-/**
- * Composes host mutations + store writes + navigation behind two stable
- * callbacks. Identities change only when the underlying mutation handles,
- * `navigate`, or the composer's PLACEMENT target change - the first two are
- * stable for the lifetime of a route, and the third moves only when the user
- * pins a different host (or the effective host moves under a following
- * composer), which is exactly when these callbacks must stop addressing the
- * old machine.
- *
- * `target` is the composer's resolved placement (selection model §54), and it
- * is the ONLY host any create below touches: the epic create, its folded chat
- * seed, and the terminal-agent chain all run on `target.client`, whose host
- * identity is re-validated at the top of each action. There is deliberately no
- * `useHostClient()` here - resolving the app-wide client would let the chip
- * name one machine while the create landed on another.
- */
+/** Identities change only when the underlying mutation handles, `navigate`, or the composer's placement target
+ * change. */
 export function useLandingComposerActions(
   target: LandingPlacementTarget,
 ): LandingComposerActions {
@@ -219,16 +179,11 @@ export function useLandingComposerActions(
   const createEpicMutateAsync = createEpic.mutateAsync;
   const terminalAgentCreateFn = terminalAgentCreate.create;
 
-  // Guards the async (session-cold image) submit path against re-entry: on that
-  // path `createEpic.isPending` — and thus the composer's `canSubmit` — only flips
-  // inside the deferred `finalizeSubmission`, so without this a second submit
-  // during the IndexedDB read would create a second epic.
+  // Guards the async (session-cold image) submit path against re-entry: on that path `createEpic.isPending` -
+  // and thus the composer's `canSubmit`.
   const submissionInFlightRef = useRef(false);
 
-  // Single create path shared by the GUI-chat and terminal-agent flows so the
-  // epic.create request (epic light + repos + workspaces + folded chat) - and
-  // therefore the optimistic history insert in `useEpicCreate.onSuccess` - is
-  // built identically and cannot drift between the two entry points.
+  // Single create path for GUI-chat and terminal-agent so epic.create and the optimistic history insert stay aligned.
   const createLandingEpic = useCallback(
     (input: {
       readonly epicId: string;
@@ -250,13 +205,8 @@ export function useLandingComposerActions(
         input.workspaceFolderInfoByPath,
         hostId,
       );
-      // The seed is keyed by the composer's PLACEMENT host - the same host the
-      // new epic's chat / terminal tabs bind to, so the tab-scoped readers
-      // (e.g. chat-tile's availability query, which resolves via the tab host)
-      // read this seed. Keep the create-time tab binding and the placement
-      // host in lockstep, or seed under the host the initial tabs bind to
-      // instead. (Before P1.2 this was the app-wide active host, which the
-      // picker rebound; it is now the surface pin's resolved host.)
+      // Keep the create-time tab binding and the placement host in lockstep, or seed under the host the initial tabs
+      // bind to instead.
       const seededBindingsKey =
         optimisticRows.length > 0
           ? hostQueryKeys.method<
@@ -272,15 +222,10 @@ export function useLandingComposerActions(
           readonly rows: WorktreeBindingSelectorRowV12[];
         }>(seededBindingsKey, { rows: [...optimisticRows] });
       };
-      // Seed the binding-list query cache with the folders the user just picked
-      // BEFORE the create resolves, so the in-epic chip and the command-palette
-      // Files/Diff openers show them immediately instead of flashing empty
-      // during the in-flight create.
+      // Seed the binding-list query cache with the folders the user just picked before the create resolves.
       seedBindings();
-      // While the create is in flight the seed is authoritative: a
-      // `worktree.changed` burst refetch could return pre-binding
-      // `{ rows: [] }` and clobber it, so the burst invalidation only MARKS
-      // this epic's binding queries until the create settles.
+      // While the create is in flight the seed is authoritative: a `worktree.changed` burst refetch could return
+      // pre-binding `{ rows.
       if (seededBindingsKey !== null) {
         markEpicCreateSeedPending(input.epicId);
       }
@@ -303,11 +248,8 @@ export function useLandingComposerActions(
         chat: input.chat,
       })
         .then((response) => {
-          // Re-assert the seed after success to overwrite a racing first fetch
-          // that returned `[]` before the host's warm-slot create seed landed
-          // (no flicker). `useEpicCreateForClient`'s invalidation then
-          // reconciles to the host's truth, including later removals, so the
-          // chip can't get stuck showing removed folders.
+          // `useEpicCreateForClient`'s invalidation then reconciles to the host's truth, including later removals, so
+          // the chip can't get stuck showing removed folders.
           seedBindings();
           clearEpicCreateSeedPending(input.epicId);
           return response;
@@ -325,12 +267,8 @@ export function useLandingComposerActions(
     [createEpicMutateAsync, queryClient],
   );
 
-  // Everything from building `submittedContent` through the optimistic
-  // local-state writes + navigation + host create. Pulled into its own callback
-  // so the dispatcher below can feed it either the synchronously re-inlined
-  // content (cached images, no await) or the IndexedDB-resolved content
-  // (restored draft) while the sync local-state/nav block stays byte-identical
-  // across both paths.
+  // Pulled into its own callback so the dispatcher below can feed it either the synchronously re-inlined content
+  // (cached images.
   const finalizeSubmission = useCallback(
     (input: FinalizeLandingSubmissionInput) => {
       const { resolvedContent, text, args, workspaceContext, attempt } = input;
@@ -373,18 +311,8 @@ export function useLandingComposerActions(
       const messageId = uuidv4();
       const clientActionId = uuidv4();
       const now = Date.now();
-      // The folded chat is bound to a device for life. `activeHostId` is the
-      // composer's re-validated placement host (see the input's `hostId`), so
-      // there is no "no active device" arm left here - a missing/unusable
-      // placement was already refused inline before this ran.
-      // The workspace context and the target host arrive as two SEPARATE
-      // fields of this input, and on the session-cold image path an IndexedDB
-      // await separates their capture from this run. Nothing structural forces
-      // a future caller to derive both from one placement, so fail closed if
-      // they name different machines: creating on B with A's paths binds the
-      // epic to a machine the user never composed against. The draft, staged
-      // intent and placement survive, so a resubmit lands cleanly. A context
-      // with no host of its own captured nothing host-specific.
+      // Nothing structural forces a future caller to derive both from one placement, so fail closed if they name
+      // different machines.
       if (
         workspaceContext.hostId !== null &&
         workspaceContext.hostId !== activeHostId
@@ -418,11 +346,8 @@ export function useLandingComposerActions(
             }
           : null;
 
-      // The host request remains a one-shot mutation. Local handoff state is
-      // prepared before it, but the draft/layout is deliberately untouched
-      // until this exact runtime's create reports success. Last-run memory is
-      // keyed by the host the chat is created on (`activeHostId`, resolved
-      // and null-guarded above).
+      // Local handoff state is prepared before it, but the draft/layout is deliberately untouched until this exact
+      // runtime's create reports success.
       useComposerRunSettingsStore
         .getState()
         .setGlobalRunSettings(activeHostId, settings, now);
@@ -450,11 +375,8 @@ export function useLandingComposerActions(
       // Spinner anchor is the pre-generation title (empty here); it clears once
       // a non-empty title is projected or the backstop fires.
       if (initialMessage !== null) {
-        // Anchor the chat-title spinner on the empty store (mirrors the epic
-        // spinner above and `dispatchTerminalAgent`): the chat is created with
-        // an empty title, so the expected pre-generation value is `""`. The
-        // spinner shows while the projected title is still empty and clears once
-        // a non-empty AI title is projected (or the 30s backstop fires).
+        // The spinner shows while the projected title is still empty and clears once a non-empty AI title is projected
+        // (or the 30s backstop fires).
         useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
       }
 
@@ -462,11 +384,8 @@ export function useLandingComposerActions(
         draftRuntimeRegistry.complete(attempt);
         return;
       }
-      // Mark before the one-shot create request so the existence reconciler
-      // cannot prune the result while `epic.listTasks` still lags it. The
-      // create host rides along so the epic session opens against the machine
-      // that holds the local-first warm slot - any other host cold-opens into
-      // a cloud NOT_FOUND until the create host's background connect lands.
+      // Mark before the one-shot create request so the existence reconciler cannot prune the result while
+      // `epic.listTasks` still lags it.
       markEpicCreatedThisSession(epicId, activeHostId);
 
       void createLandingEpic({
@@ -499,16 +418,10 @@ export function useLandingComposerActions(
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
           clearConsumedLandingWorktreeIntent(workspaceContext);
-          // Re-anchor the create-race window on COMPLETION - see the terminal
-          // flow's copy for why. This flow needs it most: the tab is opened
-          // below, INSIDE this handler, so a create slower than the window
-          // would hand the session an already-expired seed and open it on the
-          // effective host - the exact race this marker exists to prevent.
+          // Re-anchor the create-race window on completion - see the terminal flow's copy for why.
           markEpicCreatedThisSession(epicId, activeHostId);
-          // The host already kicked the provider turn from `initialMessage`;
-          // jump the handoff straight to `sending` so the driver does not
-          // re-send. (Re-sends are harmless - the host dedupes on
-          // `messageId` - but skipping the round-trip is cheaper.)
+          // The host already kicked the provider turn from `initialMessage`; jump the handoff straight to `sending` so
+          // the driver does not re-send.
           if (response.initialTurnStarted === true) {
             useInitialChatHandoffStore
               .getState()
@@ -526,10 +439,8 @@ export function useLandingComposerActions(
               editor,
               placement: attempt.placement,
               activate: () => {
-                // The create continuation can settle after the user opens
-                // Settings / History. Keep the normal underlying transition
-                // from draft to Epic, but carry that foreground overlay onto
-                // the Epic route so async completion cannot dismiss it.
+                // Keep the normal underlying transition from draft to Epic, but carry that foreground overlay onto the Epic
+                // route so async completion cannot dismiss it.
                 const preserveSystemOverlay =
                   (getSystemTabModalApi()?.active ?? null) !== null;
                 activateTabIntent(
@@ -542,19 +453,14 @@ export function useLandingComposerActions(
               },
             });
           } else {
-            // A user close and an out-of-band post-intent content change both
-            // preserve their current draft state. The successful server result
-            // remains discoverable without replacing or focusing either one.
+            // The successful server result remains discoverable without replacing or focusing either one.
             placeCreatedEpicInBackground(epicId, epicTitle);
           }
           draftRuntimeRegistry.complete(attempt);
         })
         .catch(() => {
-          // A retired attempt takes the same exit as the success path above:
-          // the id-scoped leftovers still have to go, but `markFailed` must
-          // not - it would re-insert a handoff entry keyed to an identity the
-          // bridge already tore down, and the next identity would surface a
-          // failure banner for a submission it never made.
+          // A retired attempt takes the same exit as the success path above: the id-scoped leftovers still have to go,
+          // but `markFailed` must not.
           if (draftRuntimeRegistry.settlement(attempt).kind === "retired") {
             discardRetiredLandingEpic({ epicId, chatId });
             draftRuntimeRegistry.complete(attempt);
@@ -602,13 +508,8 @@ export function useLandingComposerActions(
       );
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
       if (runtime === null) return;
-      // The runtime's stored content already reflects the latest edit (every
-      // keystroke flows through `onDocumentChange` synchronously, well before
-      // a later submit click) or was just seeded verbatim by
-      // `ensureSubmissionDraft` - so only a genuine legacy-shape rewrite here
-      // is a real document mutation worth recording. `normalized.changed` is
-      // a cheap structural flag, not a document comparison, so this never
-      // walks/serializes the (possibly multi-megabyte inline-image) content.
+      // `normalized.changed` is a cheap structural flag, not a document comparison, so this never walks/serializes
+      // the (possibly multi-megabyte inline-image) content.
       if (normalized.changed) {
         runtime.setSnapshot(editorContent, runtime.store.getState().selection);
       }
@@ -618,13 +519,7 @@ export function useLandingComposerActions(
       if (attempt === null) return;
       const exactArgs = { ...args, draftId };
 
-      // The live editor content is hash-only (landing pastes hashes, never
-      // base64). Re-inline each image hash back to base64 so the host ingests it
-      // exactly like a fresh paste. Fast path: every hash is in the session cache
-      // (the common "you just typed it" case) → resolve synchronously and keep
-      // the optimistic local-state + navigation block synchronous. Slow path: a
-      // restored (session-cold) draft → await IndexedDB BEFORE that block; a hash
-      // with no bytes (manual wipe) blocks the send with a toast.
+      // The live editor content is hash-only (landing pastes hashes, never base64).
       const hashes = imageHashesFromContent(editorContent);
       if (hashes.length === 0) {
         finalizeSubmission({
@@ -649,18 +544,11 @@ export function useLandingComposerActions(
         });
         return;
       }
-      // Async (session-cold / restored draft) path only — the sync paths above
-      // finalize in-stack and clear the editor before any re-entry is possible, so
-      // they need no guard. `.catch` surfaces an IndexedDB read failure (private
-      // browsing, quota exceeded, corrupt DB) instead of failing silently; `.finally`
-      // clears the flag on success, missing-bytes, and a rejected read alike, so the
-      // guard can never get stuck.
+      // `.catch` surfaces an IndexedDB read failure (private browsing, quota exceeded, corrupt DB) instead of
+      // failing silently.
       if (submissionInFlightRef.current) {
-        // `startSubmission` already flipped this attempt's draft to
-        // `isSubmitting`, but this guard is per-composer while the attempt is
-        // per-draft: a re-entrant submit that resolved to a DIFFERENT draft
-        // gets a live attempt and then bails here, so without completing it
-        // that draft stays `isSubmitting` with nothing left to settle it.
+        // `startSubmission` already flipped this attempt's draft to `isSubmitting`, but this guard is per-composer
+        // while the attempt is per-draft.
         draftRuntimeRegistry.complete(attempt);
         return;
       }
@@ -733,31 +621,16 @@ export function useLandingComposerActions(
       const epicId = uuidv4();
       const now = Date.now();
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
-      // The identity this create belongs to, captured synchronously. The
-      // create's continuation outlives this component, and the completion
-      // re-anchor below is an INSERT into account-scoped memory - see its own
-      // comment for why that has to be checked. `dispatchSubmission` needs no
-      // equivalent capture: its retired-settlement early return already turns
-      // the whole continuation back on an identity teardown.
+      // The identity this create belongs to, captured synchronously.
       const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
-      // Stored untitled; the title is generated from the first terminal prompt,
-      // and render surfaces fall back via `epicDisplayTitle` meanwhile. (The
-      // tui-agent tile is named separately in `use-create-tui-agent.ts`.)
+      // Stored untitled; the title is generated from the first terminal prompt, and render surfaces fall back via
+      // `epicDisplayTitle` meanwhile.
       const epicTitle = "";
 
-      // Local state + navigation happen synchronously before the host
-      // round-trip, mirroring `dispatchSubmission`. The placeholder tile
-      // opened inside `terminalAgentCreateFn` renders "Loading terminal
-      // agent…" for the whole setup wait, so the user lands on the epic
-      // immediately instead of the landing page freezing on the ~3-4s
-      // `agent.tui.prepareLaunch` round-trip.
+      // Local state + navigation happen synchronously before the host round-trip, mirroring `dispatchSubmission`.
       const tabId = uuidv4();
-      // Terminal-agent create registers no initial-chat handoff, so this
-      // synchronous marker is what keeps the existence reconciler from
-      // force-closing the tab before `epic.listTasks` reflects the new epic.
-      // The create host rides along for session placement; this flow
-      // navigates BEFORE the host round-trip, so the session provider mounts
-      // while only the create host can ever serve the epic.
+      // The create host rides along for session placement; this flow navigates before the host round-trip, so the
+      // session provider mounts while only the create host can ever serve the epic.
       markEpicCreatedThisSession(epicId, hostId);
       const replaced =
         workspaceContext.draftId === null
@@ -787,13 +660,8 @@ export function useLandingComposerActions(
         );
       }
 
-      // Create the epic, then the tui-agent off the navigation critical
-      // path. Chaining preserves the host ordering the blocking flow
-      // relied on (`epic.create` → `agent.tui.prepareLaunch` →
-      // `epic.createTuiAgent`); errors surface via each mutation hook's
-      // `onError` toast.
-      // Terminal agents are epic-only at create time (`chat: null`); the
-      // tui-agent is created by the chained `terminalAgentCreateFn` below.
+      // Terminal agents are epic-only at create time (`chat: null`); the tui-agent is created by the chained
+      // `terminalAgentCreateFn` below.
       void createLandingEpic({
         epicId,
         hostId,
@@ -809,21 +677,8 @@ export function useLandingComposerActions(
             // This staged selection now belongs to a successfully-created
             // epic. Until this point a retry must see the exact same intent.
             clearConsumedLandingWorktreeIntent(workspaceContext);
-            // Re-anchor the create-race window on COMPLETION. The marker
-            // above is written before the request because the reconciler
-            // needs it that early, but the race it bounds - the host's
-            // deferred cloud connect - only starts now, and `epic.create`
-            // can legitimately hold a 30s host-side deadline before landing.
-            // Measured from the request instead, a slow create burns its own
-            // window and the session it protects opens unprotected.
-            //
-            // Only for the identity that dispatched it. These markers are
-            // account-scoped, and `auth-lifecycle-bridge` clears them on
-            // sign-out/user-switch precisely so the NEXT identity's persisted
-            // tabs reconcile normally. This continuation survives that
-            // teardown, so an unguarded re-mark would restore the outgoing
-            // account's host seed and reconciliation exemption for an epic id
-            // the incoming account may also have a tab for.
+            // The marker above is written before the request because the reconciler needs it that early, but the race it
+            // bounds - the host's deferred cloud connect.
             if (
               (useAuthStore.getState().profile?.userId ?? null) ===
               dispatchUserId
@@ -849,11 +704,7 @@ export function useLandingComposerActions(
               profileId,
             });
           },
-          // Only `epic.create` rejection reaches this arm (a later tui-agent
-          // failure goes to the trailing `.catch`). The epic never landed, so
-          // drop the create marker to let the reconciler prune the orphan tab.
-          // A downstream tui-agent failure leaves the marker in place - the epic
-          // exists, so it must stay protected until `epic.listTasks` reflects it.
+          // The epic never landed, so drop the create marker to let the reconciler prune the orphan tab.
           () => {
             unmarkEpicCreatedThisSession(epicId);
           },
@@ -863,15 +714,8 @@ export function useLandingComposerActions(
     [createLandingEpic, navigate, terminalAgentCreateFn],
   );
 
-  // Selection model §54's submit-time re-validation, and the FIRST thing both
-  // actions do. It runs before any store write, navigation, or optimistic
-  // seed: a refusal must leave the composer exactly as the user left it, with
-  // the message rendered inline next to the send button.
-  //
-  // `placement.hostId` is then the only host id that reaches the request, the
-  // workspace-context read, the tab binding and the handoff registration - and
-  // `placement.client` is the only client the requests go out on, so "created
-  // on a host the chip never showed" is unreachable rather than unlikely.
+  // `placement.hostId` is then the only host id that reaches the request, the workspace-context read, the tab
+  // binding and the handoff registration.
   const submit = useCallback(
     (args: LandingComposerSubmitArgs): LandingPlacementRefusal | null => {
       const placement = resolveLandingPlacement(target);
@@ -935,9 +779,8 @@ function ensureSubmissionDraft(
   const createdDraftId = useLandingDraftStore.getState().createDraft(
     useComposerRunSettingsStore
       .getState()
-      // The placement host is the same one whose workspace is restored below;
-      // a pinned pristine composer must not seed either setting from the
-      // app-wide active host.
+      // The placement host is the same one whose workspace is restored below; a pinned pristine composer must not
+      // seed either setting from the app-wide active host.
       .getGlobalRunSettings(hostId),
   );
   useLandingDraftStore
@@ -956,9 +799,8 @@ function captureSubmissionPlacement(draftId: string): DraftSubmissionPlacement {
     refKey: `draft:${draftId}`,
     activeItemId: tabs.activeItemId,
     focusedRefKey: focused === null ? null : `${focused.kind}:${focused.id}`,
-    // There is no independent numeric layout revision in the renderer store.
-    // Capture the exact structural projection at intent; success re-preflights
-    // rather than relying on this potentially stale evidence.
+    // Capture the exact structural projection at intent; success re-preflights rather than relying on this
+    // potentially stale evidence.
     layoutRevision: JSON.stringify({
       items: tabs.items,
       active: tabs.activeItemId,
@@ -1011,10 +853,8 @@ function placeCreatedEpicInBackground(epicId: string, epicTitle: string): void {
 function placementOwnedFocusedRoute(
   placement: DraftSubmissionPlacement,
 ): boolean {
-  // `captureSubmissionPlacement` builds `refKey` as `draft:<draftId>`, so a
-  // placement already names its own draft. Taking a separate `draftId` here
-  // and re-checking the two agree expressed the invariant twice and only
-  // created a way for a caller to pass a mismatched pair.
+  // `captureSubmissionPlacement` builds `refKey` as `draft:<draftId>`, so a placement already names its own
+  // draft.
   return (
     placement.activeItemId !== null &&
     placement.focusedRefKey === placement.refKey
@@ -1037,9 +877,8 @@ function discardRetiredLandingEpic(input: {
   readonly epicId: string;
   readonly chatId: string;
 }): void {
-  // The identity bridge already cleared session-local handoff and created-epic
-  // markers. These id-scoped leftovers were installed before the one-shot host
-  // request and must not be observed by the next identity after a late reply.
+  // These id-scoped leftovers were installed before the one-shot host request and must not be observed by the
+  // next identity after a late reply.
   unmarkEpicCreatedThisSession(input.epicId);
   useComposerRunSettingsStore.getState().clearEpicRunSettings([input.epicId]);
   useEpicCanvasStore.getState().clearEpicTitlePending(input.epicId);
@@ -1055,9 +894,7 @@ interface LandingWorkspaceContext {
   readonly worktreeIntentSuspended: boolean;
   readonly workspaceMode: WorktreeBindingWorkspaceMode;
   readonly draftId: string | null;
-  // The DISPATCH-TIME host this context was read for - the same one its folder
-  // bucket and cached default intent came from. Carried rather than re-read at
-  // the write, so a host switch landing mid-dispatch cannot file this launch's
+  // Carried rather than re-read at the write, so a host switch landing mid-dispatch cannot file this launch's
   // remembered worktree intent under the host that just became active.
   readonly hostId: string | null;
 }
@@ -1122,23 +959,8 @@ function readLandingWorkspaceContext(
   };
 }
 
-// Launch-boundary canonicalization shared by the draft and global paths, and
-// the same `effectiveWorktreeIntent` the new-conversation modal and every
-// seeded launcher route through: give each folder exactly one entry -
-// synthesizing a `local` default for a folder that never reached the staging
-// store - drop entries whose folder left the workspace, and stamp `isPrimary`
-// from the resolved primary rather than the staged bit.
-//
-// The synthesis is what keeps a primary switch onto a NON-GIT folder honest.
-// Non-git folders are never auto-staged, so restamping alone would flip the
-// only staged (git) entry to `isPrimary: false` with nothing taking its
-// place, sending a zero-primary intent.
-//
-// A nothing-staged launch only stays `null` when the cached workspace summaries
-// do not identify a resolved git folder. When the picker is visibly showing its
-// derived "New worktree" default but branch-dependent memory is still being
-// validated, `cachedDefaultWorktreeIntent` closes that transient gap at the
-// submit boundary without trusting the unvalidated remembered branch.
+// Non-git folders are never auto-staged, so restamping alone would flip the only staged (git) entry to
+// `isPrimary: false` with nothing taking its place, sending a zero-primary intent.
 function canonicalLaunchWorkspace(
   workspace: LandingDraftWorkspaceSnapshot,
   stagedWorktreeIntent: WorktreeIntent | null,
@@ -1242,10 +1064,8 @@ function rememberLandingWorktreeIntent(
   epicId: string,
   now: number,
 ): void {
-  // Restores the exact branches next time the epic opens. The per-folder default
-  // memory is persisted eagerly on each selection, so send only writes the
-  // per-epic tier. Keyed by the context's dispatch-time host - the intent names
-  // paths and branches that only exist on that machine.
+  // Restores the exact branches next time the epic opens. Keyed by the context's dispatch-time host - the intent
+  // names paths and branches that only exist on that machine.
   const { worktreeIntent } = workspaceContext;
   if (worktreeIntent === null) return;
   useWorktreeIntentMemoryStore
@@ -1261,20 +1081,12 @@ function clearConsumedLandingWorktreeIntent(
     hostId: workspaceContext.hostId,
     draftId: workspaceContext.draftId,
   };
-  // Every host's copy, and unconditionally: the landing picker rebinds the
-  // app-wide host in place, so a pick staged on another host belongs to this
-  // same consumed session. Gating on the SUBMITTING host having an intent
-  // would skip the whole consume when the user staged on host A and then
-  // submitted from a folderless host B - leaving A's slot to seed the next
-  // landing session (null draft) or linger against the staging cap (minted
-  // draft). This only runs once a create has actually succeeded, so there is
-  // no retry left that needs the staged intent.
+  // Every host's copy, and unconditionally: the landing picker rebinds the app-wide host in place, so a pick
+  // staged on another host belongs to this same consumed session.
   useWorktreeIntentStagingStore.getState().clearForAllHosts(stagingKey);
 }
 
-// Distinct image hashes referenced by the (hash-only) editor content. Base64
-// nodes carry no hash and are left out — they pass through `inlineImageHashes`
-// untouched and reach the host as-is.
+// Distinct image hashes referenced by the (hash-only) editor content.
 function imageHashesFromContent(content: JsonContent): string[] {
   return Array.from(
     new Set(
@@ -1285,9 +1097,8 @@ function imageHashesFromContent(content: JsonContent): string[] {
   );
 }
 
-// Synchronous resolve of every hash from the session cache. Returns null if any
-// hash is missing, signalling the caller to fall back to the async IndexedDB
-// path; a complete map keeps the submit fully synchronous.
+// Returns null if any hash is missing, signalling the caller to fall back to the async IndexedDB path; a
+// complete map keeps the submit fully synchronous.
 function readSessionImageBytes(
   hashes: ReadonlyArray<string>,
 ): Map<string, Uint8Array> | null {
@@ -1315,9 +1126,7 @@ async function resolveImageBytes(
   return bytesByHash;
 }
 
-// Replace each resolvable `imageAttachment` hash with inline base64, matching a
-// fresh base64 paste's node shape (`b64content` set, `hash` cleared) so the host
-// ingests it identically. Nodes without resolvable bytes are left unchanged.
+// Nodes without resolvable bytes are left unchanged.
 function inlineImageHashes(
   node: JsonContent,
   bytesByHash: ReadonlyMap<string, Uint8Array>,
@@ -1376,9 +1185,7 @@ function buildWorkspaceAssociations(
   );
 }
 
-// Minimal binding rows from the picked folders for the optimistic chip. Git
-// details are unknown here and are filled in by the host's
-// `worktree.listBindingsForEpic` response, which supersedes this seed.
+// Minimal binding rows from the picked folders for the optimistic chip.
 function buildOptimisticWorkspaceBindingRows(
   workspaceFolders: ReadonlyArray<string>,
   workspaceFolderInfoByPath: Readonly<
@@ -1411,11 +1218,7 @@ function buildOptimisticWorkspaceBindingRows(
         setupState: "not_required",
         disabledReason: null,
         sources: [],
-        // The seed's git facts are a client-side guess (cloud association ≠
-        // a git probe). A folder we could not associate to a repo is
-        // git-unverified, so it renders as "checking" until the host's real
-        // listing supersedes this seed; an associated (git) folder is shown
-        // as-is.
+        // The seed's git facts are a client-side guess (cloud association ≠ a git probe).
         isGitResolvePending: repoIdentifier === null,
       },
     ];

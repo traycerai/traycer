@@ -17,18 +17,10 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 
-/**
- * The phone app header. Replaces the desktop tab strip + control cluster with a
- * hamburger (opens the navigation drawer), the current surface title, and a
- * right slot the focused surface fills with its own actions. Rendered only
- * below md (see `AppHeader`), so desktop is untouched.
- */
+/** Rendered only below md (see `AppHeader`), so desktop is untouched. */
 export function MobileAppHeader(): ReactNode {
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
-  // Resolved, not read from a cell: the presented surface's registered actions,
-  // derived from the same tab layout the title comes from. See
-  // `useMobileHeaderRightActions` for why display is a resolution rather than
-  // something surfaces write here.
+  // See `useMobileHeaderRightActions` for why display is a resolution rather than something surfaces write here.
   const rightActions = useMobileHeaderRightActions();
   const showGlobalResourceMonitor = useSettingsStore(
     (state) => state.showGlobalResourceMonitor,
@@ -43,15 +35,8 @@ export function MobileAppHeader(): ReactNode {
       data-testid="app-header"
       data-variant="app"
       data-mobile-shell-touch-scope=""
-      // `bg-background`, not the desktop header's `bg-canvas`: canvas exists to
-      // mark window chrome (title bar + tab strip) apart from content, and at
-      // this width there is no tab strip - the row is just a title sitting on
-      // the page, so the 1.5% lightness step between the two tokens read as a
-      // seam rather than as intent.
-      // The row is a plain header height: the status-bar strip above it is
-      // reserved by `#root`, and `bg-background` is the same token the strip
-      // shows, so the two read as one surface without the header having to
-      // reach under the bar.
+      // `bg-background`, not the desktop header's `bg-canvas`: canvas exists to mark window chrome (title bar + tab
+      // strip) apart from content, and at this width there is no tab strip.
       className="relative z-20 flex h-10 shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome"
     >
       <Button
@@ -70,11 +55,8 @@ export function MobileAppHeader(): ReactNode {
         settingsSection={settingsSection}
         epicId={epicId}
       />
-      {/* Right cluster: global status controls sit parallel to the hamburger,
-          mirroring the desktop header's rate-limit + resource-monitor gating
-          (navDisabled never applies here - MobileAppHeader only renders for the
-          "app" variant). They come before the surface-provided actions so a
-          surface's own controls (e.g. the epic overflow) land outermost. */}
+      {/* Right cluster: global status controls sit parallel to the hamburger, mirroring the desktop header's
+         rate-limit + resource-monitor gating (navDisabled never applies here. */}
       <div className="flex shrink-0 items-center gap-1">
         <RateLimitIconButton />
         {showGlobalResourceMonitor ? (
@@ -96,25 +78,14 @@ interface MobileHeaderTitleSlotProps {
   readonly epicId: string | null;
 }
 
-/**
- * The header's centre slot. Always claims the row's spare width so the right
- * cluster stays pinned right, even on the landing route where there is no title
- * to show.
- *
- * An epic's name is the one title the user owns, so it renders as an inline
- * editable field rather than static text; every other surface's title names a
- * place in the app and is not the user's to change.
- */
+/** An epic's name is the one title the user owns, so it renders as an inline editable field rather than static
+ * text; every other surface's title names a place in the app and is not the user's to change. */
 function MobileHeaderTitleSlot(props: MobileHeaderTitleSlotProps): ReactNode {
   const { title, settingsSection, epicId } = props;
   if (settingsSection !== null) {
     return (
-      // Drill-down breadcrumb for settings section routes: the parent crumb
-      // navigates back to the full-screen section list, replacing the
-      // dedicated back-link row the settings layout used to render.
-      // Unpadded crumbs so "Settings" sits exactly where the plain title
-      // does on the index route - no shift when the section crumb appears.
-      // The link's tap target comes from the full header-row height.
+      // Unpadded crumbs so "Settings" sits exactly where the plain title does on the index route - no shift when the
+      // section crumb appears.
       <span
         className="flex h-full min-w-0 flex-1 items-center gap-1"
         data-testid="mobile-header-title"
@@ -158,13 +129,8 @@ function MobileHeaderTitleSlot(props: MobileHeaderTitleSlotProps): ReactNode {
   );
 }
 
-/**
- * The surface this phone is presenting. `composer` covers the landing and draft
- * surfaces plus an empty layout - everything the header does not title.
- *
- * The settings arm carries the settings tab's own remembered path, which is
- * where its drill-down crumb comes from.
- */
+/** `composer` covers the landing and draft surfaces plus an empty layout - everything the header does not
+ * title. */
 type MobileHeaderSurface =
   | { readonly kind: "epic"; readonly tabId: string }
   | { readonly kind: "history" }
@@ -174,19 +140,7 @@ type MobileHeaderSurface =
 const COMPOSER_SURFACE: MobileHeaderSurface = { kind: "composer" };
 const HISTORY_SURFACE: MobileHeaderSurface = { kind: "history" };
 
-/**
- * Resolves the presented surface from the tab layout that renders it, NOT from
- * a route match.
- *
- * The two are one activation seen twice, and only the layout survives a cold
- * start: the phone shell has no URL bar and no route persistence (that is the
- * Electron-only `createPersistentMemoryHistory`), so its WebView always boots
- * at `/`, and `TabNavigationController` deliberately leaves a landing location
- * alone rather than clobber the restored focus. A relaunch therefore paints the
- * restored tab under a router still matching the landing route, and a header
- * keyed on that match names nothing while the surface it belongs to fills the
- * screen - for an epic, for History and for Settings alike.
- */
+/** The two are one activation seen twice, and only the layout survives a cold start. */
 function useMobileHeaderSurface(): MobileHeaderSurface {
   return useTabsStore(
     useShallow((state): MobileHeaderSurface => {
@@ -209,23 +163,15 @@ function useMobileHeaderSurface(): MobileHeaderSurface {
   );
 }
 
-/**
- * The presented epic's id, resolved through its tab record.
- */
+/** The presented epic's id, resolved through its tab record. */
 function useMobileHeaderEpicId(epicTabId: string | null): string | null {
   return useEpicCanvasStore((state) =>
     epicTabId === null ? null : (state.tabsById[epicTabId]?.epicId ?? null),
   );
 }
 
-/**
- * The presented settings section's label when the settings tab is drilled into
- * a section (depth 1), null on its index and on every other surface.
- *
- * The path is the settings tab's remembered `lastPath`, rewritten at every
- * committed settings navigation - so it names the section on a cold restore
- * too, where the router has not been to `/settings` at all.
- */
+/** The presented settings section's label when the settings tab is drilled into a section (depth 1), null on
+ * its index and on every other surface. */
 function settingsSectionLabel(surface: MobileHeaderSurface): string | null {
   if (surface.kind !== "settings" || surface.path === null) return null;
   const path = surface.path;
@@ -235,21 +181,8 @@ function settingsSectionLabel(surface: MobileHeaderSurface): string | null {
   return section === undefined ? null : section.label;
 }
 
-/**
- * Derives the header title from the presented surface: the open epic's name on
- * an epic tab, otherwise a per-surface label.
- *
- * An epic's name has two sources and the LIVE session wins. The tab record's
- * name is a persisted cache of that same title, so it is the faster of the two
- * and carries the header until the session projects - but it is only written
- * back by the epic route's active-session effects, which a phone sitting on a
- * cold restore never mounts. Reading the cache first would therefore show a
- * name that no longer updates, and the header's own rename field commits into
- * the live session: the committed title would land, and the row would keep
- * displaying the stale one. The registered session is the authority whenever it
- * is up, which is the same registry the title control reads its permission role
- * from.
- */
+/** The tab record's name is a persisted cache of that same title, so it is the faster of the two and carries
+ * the header until the session projects. */
 function useMobileHeaderTitle(
   surface: MobileHeaderSurface,
   epicId: string | null,
@@ -259,24 +192,18 @@ function useMobileHeaderTitle(
     epicTabId === null ? null : (state.tabsById[epicTabId]?.name ?? null),
   );
   const liveTitle = useRegisteredEpicTitle(epicId);
-  // An epic whose name has not resolved yet falls through to no title rather
-  // than to a placeholder, so the header never flashes a stand-in and then
-  // swaps it for the real name.
+  // An epic whose name has not resolved yet falls through to no title rather than to a placeholder, so the
+  // header never flashes a stand-in and then swaps it for the real name.
   if (surface.kind === "epic") return firstResolvedTitle(liveTitle, tabName);
   if (surface.kind === "settings") return "Settings";
   if (surface.kind === "history") return "History";
-  // Titles name a place you navigated TO. The composer surfaces - landing and
-  // drafts - are where you already are, and each one opens with a hero greeting
-  // that carries the page, so "Traycer" and "New task" were both labelling the
-  // obvious. History, Settings and an epic's name are the ones that earn a row.
+  // The composer surfaces - landing and drafts - are where you already are, and each one opens with a hero
+  // greeting that carries the page, so "Traycer" and "New task" were both labelling the obvious.
   return null;
 }
 
-/**
- * The first candidate that carries an actual name. Blank is "not resolved
- * yet", not a title: a tab record can hold an empty name, and rendering it
- * would present an empty rename field as though the epic were untitled.
- */
+/** Blank is "not resolved yet", not a title: a tab record can hold an empty name, and rendering it would
+ * present an empty rename field as though the epic were untitled. */
 function firstResolvedTitle(
   preferred: string | null,
   fallback: string | null,

@@ -280,8 +280,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
   it("routes data:image/svg+xml through the loadable image + SVG lightbox path", () => {
     renderImage({ src: SVG_DATA_URL, alt: undefined, context: undefined });
 
-    // Thumbnails stay <img>; the lightbox owns the sanitizer on open.
-    // Ticket 07: never fail-chip SVG data URLs on the assistant surface.
+    // Thumbnails stay <img>; the lightbox owns the sanitizer on open. never fail-chip SVG data URLs on the assistant surface.
     expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
     const img = screen.getByRole("img", { name: "diagram" });
     expect(img.getAttribute("src")).toBe(SVG_DATA_URL);
@@ -383,11 +382,8 @@ describe("AssistantMarkdownImage source classification matrix", () => {
   });
 
   it("sanitizes bytes the host says are SVG even when the message claims PNG", async () => {
-    // The stored `mediaType` is written by whichever composer produced the
-    // message and describes bytes nobody re-checked; `epic.readChatAttachment`
-    // sniffs the delivered bytes' magic bytes and is host-authoritative. Gating
-    // sanitization on the stored claim let SVG-filed-as-PNG reach the renderer
-    // with `sanitizeUntrustedSvg` skipped entirely.
+    // The stored `mediaType` is written by whichever composer produced the message and describes bytes nobody re-checked; `epic.readChatAttachment` sniffs the delivered bytes' magic bytes and is host-authoritative.
+    // Gating sanitization on the stored claim let SVG-filed-as-PNG reach the renderer with `sanitizeUntrustedSvg` skipped entirely.
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -706,10 +702,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
               ]),
             }}
           >
-            {/*
-              Echo lives on a later virtualized row; the generation card's
-              owning row is unmounted (no data-message-id match in the DOM).
-            */}
+            {/* Echo lives on a later virtualized row; the generation card's owning row is unmounted (no data-message-id match in the DOM). */}
             <div data-message-id="assistant-row-post-steer">
               <AssistantMarkdownImageNode
                 src="/workspace/echoed.png"

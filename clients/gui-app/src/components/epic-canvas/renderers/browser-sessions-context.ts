@@ -19,15 +19,7 @@ export function useBrowserSessionsContext(): BrowserSessionsState {
 }
 
 /**
- * The coordinator's registry key, set once per host/epic/owner and STABLE
- * across every sessions-stream frame - unlike `BrowserSessionsContext`, whose
- * value is a fresh object every frame (`browser-sessions-coordinator.ts`'s
- * `patchState` spreads state on each server frame). A consumer that only
- * needs to read the coordinator's state passively (not on every render) reads
- * it via this key against `browserSessionsCoordinatorState` /
- * `subscribeToBrowserSessionsCoordinator` at query time, instead of
- * subscribing through the churning context value. See
- * `use-mention-items.ts`'s browser-tab source for the consumer.
+ * A consumer that only needs to read the coordinator's state passively (not on every render) reads it via this key against `browserSessionsCoordinatorState` / `subscribeToBrowserSessionsCoordinator` at query time, instead of subscribing through the churning context value.
  */
 export const BrowserSessionsCoordinatorKeyContext = createContext<
   string | null
@@ -43,14 +35,8 @@ export interface BrowserSessionsSnapshot {
 }
 
 /**
- * A STABLE handle onto the same value {@link BrowserSessionsContext} carries,
- * for consumers that only need it inside an event handler.
- *
- * Reading the context itself re-renders on every sessions-stream frame (see
- * the note on `BrowserSessionsCoordinatorKeyContext` above); `useOpenBrowserUrl`
- * is mounted by ~30 link surfaces at once and wants the sessions ONLY at click
- * time, so it reads `.current` off this ref instead. The ref object identity
- * never changes, so consuming this context subscribes to nothing.
+ * A STABLE handle onto the same value {@link BrowserSessionsContext} carries, for consumers that only need it inside an event handler.
+ * Reading the context itself re-renders on every sessions-stream frame (see the note on `BrowserSessionsCoordinatorKeyContext` above); `useOpenBrowserUrl` is mounted by ~30 link surfaces at once and wants the sessions ONLY at click time, so it reads `.current` off this ref instead.
  */
 export const BrowserSessionsSnapshotContext =
   createContext<BrowserSessionsSnapshot | null>(null);

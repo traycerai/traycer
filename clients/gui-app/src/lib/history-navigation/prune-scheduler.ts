@@ -4,22 +4,17 @@ import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
 export interface PruneSchedulerOptions {
   /**
    * Reads the CURRENT router-history controller (or `null` outside Electron).
-   * Re-read at execution time so the scheduler always prunes the live history,
-   * never a captured singleton. A `null` result makes the prune a no-op.
+   * Re-read at execution time so the scheduler always prunes the live history, never a captured singleton.
    */
   readonly getController: () => PersistentHistoryController | null;
   /**
-   * Subscribes to the backing stores whose mutations can render a history entry
-   * dead (canvas tabs + landing drafts). Receives the scheduler's "schedule a
-   * prune" callback and MUST return an unsubscribe function. The scheduler
-   * calls it once at install and the returned function once at uninstall.
+   * Subscribes to the backing stores whose mutations can render a history entry dead (canvas tabs + landing drafts).
+   * Receives the scheduler's "schedule a prune" callback and MUST return an unsubscribe function.
    */
   readonly subscribeStores: (onChange: () => void) => () => void;
   /**
-   * `true` while a router load/navigation is in progress. The scheduler skips
-   * pruning then (store mutations and the explicit replacement navigation often
-   * land in the same user action, e.g. close-tab → navigate-next) and re-tries
-   * on the next frame once the load settles (tech plan §3.3).
+   * `true` while a router load/navigation is in progress.
+   * The scheduler skips pruning then (store mutations and the explicit replacement navigation often land in the same user action, e.g. close-tab → navigate-next) and re-tries on the next frame once the load settles (tech plan §3.3).
    */
   readonly isLoadInFlight: () => boolean;
   /** Schedules one sanitation pass even when no source store changes. */
@@ -27,23 +22,8 @@ export interface PruneSchedulerOptions {
 }
 
 /**
- * PURE installer for the load-free prune scheduler. It does NOT mount itself —
- * the prune-lifecycle ticket calls this once the canvas + draft stores have
- * hydrated and the router has mounted, wiring `getController`,
- * `subscribeStores`, and `isLoadInFlight` to the live app.
- *
- * Behavior (tech plan §3.3):
- * - **Coalesce**: a burst of store mutations schedules at most one pending
- *   prune (one animation frame, microtask fallback when rAF is unavailable).
- * - **Single-flight**: never re-enters a prune that is already running.
- * - **Skip while loading**: defers to the next frame while `isLoadInFlight()`,
- *   instead of dropping the request.
- * - **Re-read at execution**: passes `isHistoryEntryDead` straight to
- *   `controller.prune`, so href liveness is evaluated against the live stores
- *   at flush time, not at schedule time.
- *
- * Returns an uninstall function that unsubscribes from the stores and cancels
- * any pending prune.
+ * PURE installer for the load-free prune scheduler.
+ * It does NOT mount itself - the prune-lifecycle ticket calls this once the canvas + draft stores have hydrated and the router has mounted, wiring `getController`, `subscribeStores`, and `isLoadInFlight` to the live app.
  */
 export function installPruneScheduler(
   options: PruneSchedulerOptions,
@@ -69,9 +49,8 @@ export function installPruneScheduler(
     if (running) {
       return;
     }
-    // A router load is mid-flight; re-try next frame rather than prune against a
-    // half-applied navigation. Loads settle in a handful of frames, so this is
-    // bounded (one callback per frame), never a tight loop.
+    // A router load is mid-flight; re-try next frame rather than prune against a half-applied navigation.
+    // Loads settle in a handful of frames, so this is bounded (one callback per frame), never a tight loop.
     if (isLoadInFlight()) {
       schedule();
       return;
@@ -81,9 +60,8 @@ export function installPruneScheduler(
       return;
     }
     running = true;
-    // `finally` (not `catch`) so a throw still re-arms the single-flight gate:
-    // leaving `running` stuck `true` would silently disable pruning for the rest
-    // of the session. The error itself is left to propagate to the host handler.
+    // `finally` (not `catch`) so a throw still re-arms the single-flight gate: leaving `running` stuck `true` would silently disable pruning for the rest of the session.
+    // The error itself is left to propagate to the host handler.
     try {
       controller.prune(isHistoryEntryDead);
     } finally {
@@ -112,10 +90,8 @@ export function installPruneScheduler(
 }
 
 /**
- * Schedule `callback` on the next animation frame, falling back to a microtask
- * when `requestAnimationFrame` is unavailable (non-DOM environments). Returns a
- * canceller; the microtask fallback guards a flag instead of cancelling the
- * already-queued microtask.
+ * Schedule `callback` on the next animation frame, falling back to a microtask when `requestAnimationFrame` is unavailable (non-DOM environments).
+ * Returns a canceller; the microtask fallback guards a flag instead of cancelling the already-queued microtask.
  */
 function scheduleFlush(callback: () => void): () => void {
   if (typeof requestAnimationFrame === "function") {

@@ -13,15 +13,8 @@ import {
 import { createChatRequestSchema } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ReactNode } from "react";
 
-// The whole point of this suite is that the create mutation is REAL: the bug
-// it guards lives in which client the mutation resolves, so a stubbed
-// `createChat` cannot see it. Only the host transport below is faked.
-//
-// The control no longer creates the chat itself - it opens the New
-// Conversation modal, which creates on send. The routing therefore has two
-// halves, and both are pinned below: the control publishes the tab's host on
-// the open request, and the modal's create hooks issue to whatever host that
-// request pins.
+// The whole point of this suite is that the create mutation is REAL: the bug it guards lives in which client the mutation resolves, so a stubbed `createChat` cannot see it.
+// Only the host transport below is faked.
 const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
 }));
@@ -33,9 +26,7 @@ const messengerRef = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
-  // The SPINE and the app-wide client are separate exports since redesign
-  // P2.1; this stub stands in for both, which is what `useHostClientFor` and
-  // `useHostClientForHostId` each reach for.
+  // The SPINE and the app-wide client are separate exports since redesign P2.1; this stub stands in for both, which is what `useHostClientFor` and `useHostClientForHostId` each reach for.
   useHostRuntimeClient: () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
@@ -65,9 +56,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryRef.entries }),
 }));
-// What the app-wide active host resolves to. The tab is bound elsewhere, so
-// anything reading this instead of the tab's binding lands on the wrong host -
-// which is exactly the failure this suite reproduces.
+// The tab is bound elsewhere, so anything reading this instead of the tab's binding lands on the wrong host - which is exactly the failure this suite reproduces.
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => DEFAULT_HOST.hostId,
 }));
@@ -157,11 +146,6 @@ function renderActions() {
   const handle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -203,10 +187,7 @@ describe("useTerminalQuoteActions host routing", () => {
   });
 
   /**
-   * The tile is bound to its tab's host for life and the terminal it quotes
-   * only exists there, so the chat has to be created on that host. The two
-   * hosts are made to differ here on purpose: with them equal (the common
-   * case) the bug is invisible.
+   * The tile is bound to its tab's host for life and the terminal it quotes only exists there, so the chat has to be created on that host.
    */
   it("pins the modal to the tab's host and prefills it with the quote", () => {
     globalClientRef.value = buildGlobalClient();
@@ -217,9 +198,7 @@ describe("useTerminalQuoteActions host routing", () => {
       result.current.quoteToNewChat("total 0\ndrwxr-xr-x  4 me  staff");
     });
 
-    // Nothing was created: the modal is composer-first, so no chat exists
-    // until the user sends - which is what stopped this control from leaving
-    // an empty chat behind on every dismissed quote.
+    // Nothing was created: the modal is composer-first, so no chat exists until the user sends - which is what stopped this control from leaving an empty chat behind on every dismissed quote.
     expect(messengerRef.value?.calls).toHaveLength(0);
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: EPIC_ID,
@@ -238,13 +217,6 @@ describe("useTerminalQuoteActions host routing", () => {
     expect(draft?.selection).toBeNull();
   });
 
-  /**
-   * The other half: the modal creates on the host its open request pinned,
-   * not the app-wide active one. This is the composition the modal body makes
-   * (`useHostClientForHostId` -> `useEpicCreateChatForHostClient`), driven
-   * against the same real transport, so a regression that sends this request
-   * on the app-wide active host fails here.
-   */
   it("creates on the host the open request pinned, never the active one", async () => {
     globalClientRef.value = buildGlobalClient();
     directoryRef.entries = [DEFAULT_HOST, TAB_HOST];
@@ -252,11 +224,6 @@ describe("useTerminalQuoteActions host routing", () => {
     const handle = openStoreForTest({
       epicId: EPIC_ID,
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
       factories: {
         streamClientFactory: noopStreamClientFactory,
         laneSelection: null,

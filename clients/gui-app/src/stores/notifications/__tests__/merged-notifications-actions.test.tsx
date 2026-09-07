@@ -48,11 +48,8 @@ interface StubHostClient {
   readonly request: typeof hostRequestMock;
   readonly getActiveHostId: () => string | null;
   /**
-   * The spine resolves a host id into a client (redesign P4.2); production
-   * calls this instead of reading a bound host off the client itself. This
-   * fixture has exactly one host, so the requester IS the client - what
-   * matters is that the method EXISTS, since a stub missing it takes the
-   * subject down at first render rather than failing an assertion.
+   * The spine resolves a host id into a client (redesign P4.2); production calls this instead of
+   * reading a bound host off the client itself.
    */
   readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
 }
@@ -445,9 +442,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     vi.mocked(toast.error).mockClear();
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
-    // The feed version is monotonic within a session, so a snapshot below the
-    // one already applied is dropped as a stale frame. Leaking it across tests
-    // would silently swallow the next test's seed.
+    // The feed version is monotonic within a session, so a snapshot below the one already applied is
+    // dropped as a stale frame. Leaking it across tests would silently swallow the next test's seed.
     useCloudNotificationsStore.getState().reset();
     __resetAppLocalNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
@@ -500,10 +496,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
   }
 
   it("invalidates the row's entity-scoped indicator queries on mark-read success", async () => {
-    // The tab/sidebar error badges refetch off `indicatorState` queries. The
-    // host's `readStateChanged` echo on the feed stream is one invalidation
-    // trigger, but a successful unary mark-read must clear them on its own -
-    // otherwise a stream outage freezes badges while the popover row greys out.
+    // The tab/sidebar error badges refetch off `indicatorState` queries.
     bindHostClient();
     applyHostSnapshot([hostDone("done-1", 100, null)], {
       unreadCount: 1,
@@ -527,11 +520,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
   });
 
   it("falls back to the full indicator scope when the marked row names no entity", async () => {
-    // A row can leave `byId` before its mark-read settles (retention pruning,
-    // a snapshot swap), and a row with no `epicId` never named an entity at
-    // all. Neither can produce an entity-scoped invalidation, so the fallback
-    // must refresh the whole host scope rather than silently skip — a skip
-    // would strand exactly the badges this change exists to clear.
+    // A row can leave `byId` before its mark-read settles (retention pruning, a snapshot swap), and a
+    // row with no `epicId` never named an entity at all.
     bindHostClient();
     applyHostSnapshot([hostDone("done-1", 100, null)], {
       unreadCount: 1,
@@ -608,9 +598,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
       result.current.actions.clear(captured);
     });
 
-    // The command still names `entry-a`. That is the whole guard: a stale
-    // action can only reference a superseded entry, where the cloud no-ops it
-    // - so no occurrence token is needed to keep it off `entry-b`.
+    // The command still names `entry-a`. That is the whole guard: a stale action can only reference a
+    // superseded entry, where the cloud no-ops it
     await waitFor(() => {
       const call = hostRequestMock.mock.calls.find(
         (entry) => entry[0] === "host.notifications.cloudFeed.clear",
@@ -661,9 +650,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
       );
     });
 
-    // `entry-a` is now read in the cloud, and the reopen arrives as its own
-    // immutable entry with its own null markers. Nothing can carry the read
-    // across: there is no shared row for a marker to have been written on.
+    // `entry-a` is now read in the cloud, and the reopen arrives as its own immutable entry with its
+    // own null markers.
     act(() => {
       useCloudNotificationsStore.getState().applySnapshot({
         rows: [cloudDone("entry-b", 2, null)],
@@ -735,9 +723,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
 
     act(() => {
       result.current.clearAll();
-      // A newer entry lands between the click and the request. Membership is
-      // decided by the observed version, not by a timestamp threshold, so this
-      // one is simply not in the set - whatever its clock says.
+      // A newer entry lands between the click and the request.
       useCloudNotificationsStore.getState().applySnapshot({
         rows: [cloudDone("entry-later", 2, null)],
         summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
@@ -791,11 +777,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
       wrapper: createWrapper(),
     });
 
-    // A relay frame whose rendered rows are identical but whose version moved:
-    // something changed in the feed that this build cannot display. The
-    // clear-all the user issues next must name THAT feed, not the one from
-    // before - otherwise the change it could not render also escapes the
-    // clear.
+    // A relay frame whose rendered rows are identical but whose version moved: something changed in
+    // the feed that this build cannot display.
     act(() => {
       useCloudNotificationsStore.getState().applySnapshot({
         rows: [row],

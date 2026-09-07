@@ -67,9 +67,7 @@ describe("useRegisteredEpicLiveAgents", () => {
     const handle = openStoreForTest({
       epicId: "epic-late-handle",
       userId: null,
-      // The factories go to the COMPOSITION now: the store stopped
-      // constructing a runtime, so a `streamClientFactory` has nowhere
-      // else to go.
+      // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
       factories: {
         streamClientFactory: fakeStreamClientFactory,
         laneSelection: null,
@@ -119,9 +117,7 @@ describe("useRegisteredEpicLiveAgents", () => {
     const handle = openStoreForTest({
       epicId: "epic-stable-refs",
       userId: null,
-      // The factories go to the COMPOSITION now: the store stopped
-      // constructing a runtime, so a `streamClientFactory` has nowhere
-      // else to go.
+      // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
       factories: {
         streamClientFactory: fakeStreamClientFactory,
         laneSelection: null,
@@ -162,9 +158,7 @@ describe("useRegisteredEpicLiveAgents", () => {
     const handle = openStoreForTest({
       epicId: "epic-terminal-agent",
       userId: null,
-      // The factories go to the COMPOSITION now: the store stopped
-      // constructing a runtime, so a `streamClientFactory` has nowhere
-      // else to go.
+      // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
       factories: {
         streamClientFactory: fakeStreamClientFactory,
         laneSelection: null,
@@ -562,9 +556,7 @@ function createHandle(epicId: string): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: epicId,
     userId: null,
-    // The factories go to the COMPOSITION now: the store stopped
-    // constructing a runtime, so a `streamClientFactory` has nowhere
-    // else to go.
+    // The factories go to the COMPOSITION now: the store stopped constructing a runtime, so a `streamClientFactory` has nowhere else to go.
     factories: {
       streamClientFactory: fakeStreamClientFactory,
       laneSelection: null,

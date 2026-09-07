@@ -25,32 +25,8 @@ import { cn } from "@/lib/utils";
 
 const SET_REPO_BRANCH_PREFIX_METHOD = "worktree.setRepoBranchPrefix";
 
-/**
- * The "Branch prefix" section of the Environment dialog - the layered-setting
- * redesign of the old unlabeled-switch card (core-flows/worktree-environment-
- * layered-settings). Users configure a PREFIX only; the full worktree branch
- * is always `prefix + generated name`, shown as a compact preview (prefix
- * emphasized, tail muted). Always targets `workspacePath` - the exact source
- * checkout shown in the picker - never a staged/existing worktree's own file
- * (unlike the scripts editor in the same dialog, which follows the resolved
- * target).
- *
- * Renders one of five bodies (`<BranchNamingShell>` supplies the shared
- * eyebrow + repository identity around all of them), gated in this priority
- * order:
- *  1. Unsupported host (`!supported`) - read-only, no edit affordance at all.
- *  2. Malformed stored file (`status: "malformed"`) - the host REFUSES to
- *     merge-write onto unparseable JSON (`writeAuthorizedEnvironmentPatch`),
- *     so offering an editor here would always fail; show the warning only.
- *  3. Editing (local `mode`) - a fresh draft (no saved value yet) or an
- *     edit of an already-saved value; the two-column choice selector only
- *     appears for the fresh-draft path (see `editingFromExisting` below).
- *  4. Saved override present (`status: "present"`, viewing) - summary +
- *     Edit/Remove. A `"present"` value that fails client validation still
- *     renders here (with a warning) rather than as state 2, because the JSON
- *     itself is valid - the host CAN accept a repair write.
- *  5. Inherited (`status: "absent"`, viewing) - the two explicit choice rows.
- */
+/** Always targets `workspacePath` - the exact source checkout shown in the picker - never a staged/existing
+ * worktree's own file (unlike the scripts editor in the same dialog, which follows the resolved target). */
 export function RepoBranchPrefixSection(props: {
   readonly workspacePath: string;
   readonly repoIdentifier: {
@@ -60,48 +36,21 @@ export function RepoBranchPrefixSection(props: {
   readonly repoBranchPrefixState: RepoBranchPrefixState;
   readonly epicId: string;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  // The picker's actual current proposal for this workspace - `resolved
-  // .branchName` when a staged `type: "new"` branch exists, else `null`.
-  // Takes priority over any composed illustrative preview in every viewing
-  // state EXCEPT while `activeRegenerateCandidate` is set (below): the
-  // effective-branch row must show the TRUTH of what's staged when one
-  // exists, not an unrelated fabricated example.
+  // Takes priority over any composed illustrative preview in every viewing state except while
+  // `activeRegenerateCandidate` is set (below).
   readonly currentProposedBranchName: string | null;
-  // Non-null exactly while the caller's post-save/remove regeneration offer
-  // ("Keep current" / "Use new prefix") is visible, carrying the SAME exact
-  // candidate that offer would stage. Takes priority over
-  // `currentProposedBranchName` for the whole time the offer is up: showing
-  // the old proposal here while the offer proposes to replace it with a
-  // different, invisible value would make "what's displayed" and "what gets
-  // staged" diverge at the exact moment the user decides. `null` resumes the
-  // ordinary `currentProposedBranchName` precedence (including immediately
-  // after "Keep current").
+  // Non-null exactly while the caller's post-save/remove regeneration offer ("Keep current" / "Use new prefix")
+  // is visible, carrying the same exact candidate that offer would stage.
   readonly activeRegenerateCandidate: string | null;
-  // Composes the branch name `prefixState` would produce at `suffix`, via
-  // the same production composition path real branch staging uses
-  // (`default-branch-name.ts`: multi-repo repository slugging + truncation
-  // included). `null` only if the host never resolved this workspace into
-  // the picker's summary list (defensively handled, not expected in
-  // practice - this section only renders for a workspace the picker itself
-  // opened Environment for).
+  // `null` only if the host never resolved this workspace into the picker's summary list (defensively handled,
+  // not expected in practice.
   readonly composeCandidateBranch: (
     prefixState: RepoBranchPrefixState,
     suffix: string,
   ) => string | null;
-  // Reports the section's current cancel-editing handler (`null` whenever
-  // it isn't actively editing) so the containing dialog can intercept
-  // Escape at the Radix dismissable-layer boundary instead of letting it
-  // fall through to the dialog's own dismiss (which Radix's capture-phase
-  // document listener would otherwise win before any bubbling `onKeyDown`
-  // inside this section ever ran).
   readonly onEditingCancelAvailable: (cancel: (() => void) | null) => void;
-  // Called ONLY when the host actually persisted the write (`updated: true`)
-  // - never for a non-git/no-op response - with the newly-saved state AND
-  // the exact candidate branch name that was displayed as "Effective
-  // branch" at that moment (`null` if `composeCandidateBranch` couldn't
-  // resolve one). The caller stages this captured string directly for "Use
-  // new prefix" rather than recomputing - recomputing would hand back a
-  // different random suffix than whatever was just shown.
+  // The caller stages this captured string directly for "Use new prefix" rather than recomputing - recomputing
+  // would hand back a different random suffix than whatever was just shown.
   readonly onSaved: (
     newState: RepoBranchPrefixState,
     candidateBranchName: string | null,
@@ -115,41 +64,22 @@ export function RepoBranchPrefixSection(props: {
   );
   const saveMutation = useWorktreeSetRepoBranchPrefixFor(props.hostClient);
 
-  // Holds the state a save/remove just persisted, so the UI can render the
-  // resulting frame (saved summary, or back to inherited) immediately rather
-  // than waiting on the `worktree.listByWorkspacePaths` invalidation this
-  // mutation triggers to refetch and flow back down through `props`. Once
-  // set it permanently shadows `props.repoBranchPrefixState` for the rest of
-  // this mount (the dialog fully remounts per open/workspace via `key`), which
-  // is safe because it always equals what that refetch will confirm.
+  // Holds the state a save/remove just persisted, so the UI can render the resulting frame (saved summary.
   const [optimisticState, setOptimisticState] =
     useState<RepoBranchPrefixState | null>(null);
   const repoState = optimisticState ?? props.repoBranchPrefixState;
 
   const [mode, setMode] = useState<"viewing" | "editing">("viewing");
   const [draft, setDraft] = useState("");
-  // The async "this folder isn't a git repository (or is no longer one)"
-  // outcome - distinct from client-side draft validation, which is derived
-  // fresh from `draft` on every render instead of tracked in state.
+  // The async "this folder isn't a git repository (or is no longer one)" outcome - distinct from client-side
+  // draft validation, which is derived fresh from `draft` on every render instead of tracked in state.
   const [saveFailedNote, setSaveFailedNote] = useState<string | null>(null);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
-  // A fresh illustrative suffix per mount, held stable while the user reads
-  // or edits - mirrors the global Settings editor's `previewSuffix`
-  // (`worktree-branch-prefix-section.tsx`), except now fed through
-  // `composeCandidateBranch` (the real composition path) instead of naive
-  // string concatenation, so multi-repo slugging/truncation are respected
-  // and the exact same suffix is reused for both the live preview and
-  // whatever gets captured for "Use new prefix" at Apply/Remove time.
+  // A fresh illustrative suffix per mount, held stable while the user reads or edits.
   const [previewSuffix] = useState(() => pickFriendlyBranchSuffix());
   const uid = useId();
-  // Set right before a transition that swaps the visible body (Cancel,
-  // successful Apply, successful Remove) so the resulting view's own mount
-  // captures `true` and moves focus to its stable landing control - but NOT
-  // on a cold/initial mount (the dialog opening must never steal focus).
-  // Never reset back to `false`: each transition mounts a genuinely NEW view
-  // instance (Inherited/Saved/Editing are mutually-exclusive branches), so a
-  // fresh mount's own `useState(() => ...)` capture of this value is only
-  // ever read once, at the moment it's actually true.
+  // Set right before a transition that swaps the visible body (Cancel, successful Apply, successful Remove) so
+  // the resulting view's own mount captures `true` and moves focus to its stable landing control.
   const [pendingFocusRestore, setPendingFocusRestore] = useState(false);
 
   const effective = resolveEffectiveBranchPrefix(
@@ -168,14 +98,7 @@ export function RepoBranchPrefixSection(props: {
   const dirty = currentSavedValue === null || draft !== currentSavedValue;
   const applyDisabled = draftError !== null || saveMutation.isPending || !dirty;
   const globalDisplay = globalPrefix.length > 0 ? globalPrefix : "No prefix";
-  // The truthful full-branch preview for every non-editing view (and the
-  // invalid-draft fallback while editing): the active regeneration offer's
-  // candidate while one is up (see `activeRegenerateCandidate`'s doc
-  // comment), else the picker's actual staged proposal, else an illustrative
-  // candidate composed via the real production path, else (only if that
-  // composition couldn't resolve this workspace at all) the bare
-  // prefix+suffix as a last resort. This is NOT the value the user edits -
-  // they edit the prefix; the preview shows prefix + generated name.
+  // This is not the value the user edits - they edit the prefix; the preview shows prefix + generated name.
   const currentEffectiveBranch = resolveCurrentEffectiveBranch(
     props.activeRegenerateCandidate,
     props.currentProposedBranchName,
@@ -197,10 +120,8 @@ export function RepoBranchPrefixSection(props: {
     setSaveFailedNote(null);
   }, []);
 
-  // Registers/unregisters `cancelEditing` with the containing dialog so its
-  // `onEscapeKeyDown` can reach it - see the `onEditingCancelAvailable` doc
-  // comment above. Destructured to a local so the effect's dependency array
-  // can name it directly instead of deep-reading `props.x`.
+  // Destructured to a local so the effect's dependency array can name it directly instead of deep-reading
+  // `props.x`.
   const { onEditingCancelAvailable } = props;
   useEffect(() => {
     onEditingCancelAvailable(mode === "editing" ? cancelEditing : null);
@@ -216,9 +137,6 @@ export function RepoBranchPrefixSection(props: {
   const handleApply = (): void => {
     if (applyDisabled) return;
     setSaveFailedNote(null);
-    // Computed with the SAME inputs (`draft`, `previewSuffix`) the editing
-    // view's own live preview just used to render "Effective branch" -
-    // guarantees the candidate captured here is exactly what was on screen.
     const candidate = props.composeCandidateBranch(
       { status: "present", value: draft },
       previewSuffix,
@@ -315,12 +233,8 @@ export function RepoBranchPrefixSection(props: {
   );
 }
 
-/**
- * The priority-ordered body selection documented on {@link
- * RepoBranchPrefixSection} above, split out purely to keep that component's
- * own cyclomatic complexity down - every input here is already resolved by
- * the caller, so this is a straight dispatch with no independent state.
- */
+/** The priority-ordered body selection documented on RepoBranchPrefixSection above, split out purely to keep
+ * that component's own cyclomatic complexity down. */
 function selectBranchNamingBody(input: {
   readonly supported: boolean;
   readonly repoState: RepoBranchPrefixState;
@@ -540,11 +454,8 @@ function InheritedBranchNaming(props: {
   readonly previewLabel: string;
   readonly previewBranch: string;
   readonly previewPrefix: string;
-  // Whether THIS mount is the result of a flagged transition (Cancel or a
-  // confirmed Remove) rather than the dialog's cold/initial open - captured
-  // ONCE via the lazy `useState` initializer below, since Inherited/Saved/
-  // Editing are mutually-exclusive branches in the parent and every
-  // transition between them mounts a genuinely fresh instance.
+  // Whether this mount is the result of a flagged transition (Cancel or a confirmed Remove) rather than the
+  // dialog's cold/initial open.
   readonly shouldFocusOnMount: boolean;
   readonly onChooseOverride: () => void;
 }): ReactNode {
@@ -619,9 +530,8 @@ function EditingBranchNaming(props: {
   readonly onCancel: () => void;
 }): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
-  // Imperative focus (not the `autoFocus` JSX prop, which jsx-a11y forbids).
-  // This component only mounts when `mode` flips to "editing", so a
-  // mount-only effect fires exactly once per entry into the editor.
+  // Imperative focus (not the `autoFocus` JSX prop, which jsx-a11y forbids). This component only mounts when
+  // `mode` flips to "editing", so a mount-only effect fires exactly once per entry into the editor.
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -871,11 +781,8 @@ function ChoiceRow(props: {
   );
 }
 
-/**
- * Full-branch preview for a prefix setting. Emphasizes the configurable
- * prefix and mutes the generated tail so the control reads as "prefix" rather
- * than "full branch name" - without an explanatory paragraph.
- */
+/** Emphasizes the configurable prefix and mutes the generated tail so the control reads as "prefix" rather than
+ * "full branch name" - without an explanatory paragraph. */
 function BranchPreviewRow(props: {
   readonly label: string;
   readonly branch: string;
@@ -917,14 +824,8 @@ function lastPathSegment(path: string): string {
   return parts.at(-1) ?? path;
 }
 
-/**
- * An active regeneration-offer candidate always wins first (it must match
- * exactly what "Use new prefix" is about to stage). Otherwise the picker's
- * actual current proposal wins over an illustrative composed candidate,
- * which itself wins over the last-resort bare prefix+suffix (only reached if
- * `composeCandidateBranch` couldn't resolve this workspace at all - see its
- * doc comment).
- */
+/** An active regeneration-offer candidate always wins first (it must match exactly what "Use new prefix" is
+ * about to stage). */
 function resolveCurrentEffectiveBranch(
   activeRegenerateCandidate: string | null,
   currentProposedBranchName: string | null,
@@ -939,12 +840,8 @@ function resolveCurrentEffectiveBranch(
   );
 }
 
-/**
- * Editing preview: live draft example while the draft is valid, or the
- * unchanged current/staged value (relabeled) while invalid - see the ticket's
- * "preserve the currently saved effective result" requirement. Labels stay
- * short: Example / Staged branch / Current example / Current staged.
- */
+/** Editing preview: live draft example while the draft is valid, or the unchanged current/staged value
+ * (relabeled) while invalid - see the ticket's "preserve the currently saved effective result" requirement. */
 function editingPreview(input: {
   readonly draftError: string | null;
   readonly draftCandidate: string | null;

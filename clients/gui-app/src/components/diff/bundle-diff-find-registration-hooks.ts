@@ -32,11 +32,7 @@ export interface BundleDiffFindFileNavigationInput {
   readonly filePath: string;
 }
 
-// Bundle navigation extends the shared single-file renderer with two
-// bundle-only affordances: a root element setter (the Virtuoso scroll
-// container) and a no-scroll repaint driven when a virtualized section mounts.
-// Single-file diff keeps using the plain `DiffTileFindRenderer` and never has
-// to implement these.
+// Single-file diff keeps using the plain `DiffTileFindRenderer` and never has to implement these.
 export interface BundleDiffTileFindRenderer extends DiffTileFindRenderer {
   readonly setRootElement: (element: HTMLDivElement | null) => void;
   readonly repaintMountedSection: (fileId: string) => void;
@@ -49,15 +45,8 @@ export interface BundleDiffFindRegistrationContextValue {
     state: BundleDiffFindCoverageState,
   ) => void;
   readonly registerLoadedPatch: (entry: BundleDiffFindLoadedPatchInput) => void;
-  /**
-   * Drop a retained patch. A loaded patch outlives its section on purpose
-   * (see `registerLoadedPatch`), and takes precedence over any coverage
-   * state in the coverage counts - so a section whose LATER request for the
-   * same content fails ("Load Full" past a truncation, a refetch) must
-   * unregister the bytes it no longer renders, or find keeps matching text
-   * that is not in the DOM and reports the file as truncated instead of
-   * failed. Idempotent: an unknown file id is a no-op.
-   */
+  /** A loaded patch outlives its section on purpose (see `registerLoadedPatch`), and takes precedence over any
+   * coverage state in the coverage counts. */
   readonly unregisterLoadedPatch: (fileId: string) => void;
 }
 
@@ -107,11 +96,8 @@ export function useRegisterBundleDiffTileFindAdapter(args: {
     [activeSession.coverageByFileId, args.files],
   );
   const source = useMemo(() => {
-    // A section mounting changes DOM availability, not the indexed text, so it
-    // must NOT recreate the source (that would spawn a new adapter + replay and
-    // reset the active match). The source recomputes only on genuine content
-    // changes: `registerLoadedPatch` returns a fresh `loadedPatches` Map (a
-    // direct dep) and `registerCoverageState` flows through the `files` memo.
+    // A section mounting changes DOM availability, not the indexed text, so it must not recreate the source (that
+    // would spawn a new adapter + replay and reset the active match).
     return (
       args.sourceOverride ??
       createBundleDiffFindSource({
@@ -128,10 +114,8 @@ export function useRegisterBundleDiffTileFindAdapter(args: {
     renderer: args.renderer,
   });
 
-  // Hold the latest renderer in a ref so `notifySectionMounted` stays
-  // referentially stable. If it depended on the renderer object directly, the
-  // registration context value would change on every collapse/expand, which
-  // would re-fire the `registerLoadedPatch`/`registerCoverageState` effects.
+  // If it depended on the renderer object directly, the registration context value would change on every
+  // collapse/expand, which would re-fire the `registerLoadedPatch`/`registerCoverageState` effects.
   const rendererRef = useRef(args.renderer);
   useEffect(() => {
     rendererRef.current = args.renderer;
@@ -162,9 +146,8 @@ export function useRegisterBundleDiffTileFindAdapter(args: {
     (entry: BundleDiffFindLoadedPatchInput): void => {
       setSession((current) =>
         ensureSession(current, args.contentIdentity, (next) => {
-          // Idempotent: a virtualized section remounting and re-registering an
-          // identical patch must not churn `loadedPatches` identity (which the
-          // source memo keys on), so bail when the entry is unchanged.
+          // Idempotent: a virtualized section remounting and re-registering an identical patch must not churn
+          // `loadedPatches` identity (which the source memo keys on), so bail when the entry is unchanged.
           const existing = next.loadedPatches.get(entry.fileId);
           if (
             existing !== undefined &&
@@ -243,10 +226,8 @@ export function useBundleDiffFindNavigation(args: {
   }, []);
 
   const clear = useCallback((): void => {
-    // Drop the retained reveal state so a later section mount cannot repaint a
-    // ghost highlight for a search that is no longer active. Both the adapter's
-    // clear() and the zero-match revealCurrent path funnel through here, so this
-    // covers every "no active match" transition (clear, refine-to-zero, close).
+    // Drop the retained reveal state so a later section mount cannot repaint a ghost highlight for a search that
+    // is no longer active.
     lastMatchesRef.current = [];
     lastActiveMatchRef.current = null;
     const root = rootRef.current;
@@ -308,10 +289,8 @@ export function useBundleDiffFindNavigation(args: {
     [collapsedFileIds, expandFile, files, filesById, virtuosoRef],
   );
 
-  // Paint-only response to a section mount: re-reveal the retained highlight
-  // for the section that owns the active match, WITHOUT scrolling or expanding.
-  // Other sections were never painted (reveal scopes highlights to the active
-  // file), so nothing to repaint there; the active position is left untouched.
+  // Other sections were never painted (reveal scopes highlights to the active file), so nothing to repaint
+  // there; the active position is left untouched.
   const repaintMountedSection = useCallback((fileId: string): void => {
     const root = rootRef.current;
     if (root === null) return;

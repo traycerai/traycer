@@ -1,8 +1,4 @@
-/**
- * Freehand ink for the isolated-world overlay: perfect-freehand path building
- * plus the in-progress draft stroke. Coordinates are page-space; the caller
- * supplies the page → viewport conversion.
- */
+/** Coordinates are page-space; the caller supplies the page → viewport conversion. */
 import { getStroke } from "perfect-freehand";
 import {
   ANNOTATION_STROKE_HALO_SIZE_PX,

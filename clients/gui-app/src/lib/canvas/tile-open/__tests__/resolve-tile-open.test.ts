@@ -1,7 +1,5 @@
 /**
- * The resolver IS the placement spec (plan §5.1 steps 1-7, decisions C3-C7,
- * C10), so this suite is the spec's executable form: one case per rule, built
- * on the real canvas fixtures the store suites use.
+ * The resolver IS the placement spec (plan §5.1 steps 1-7, decisions C3-C7, C10), so this suite is the spec's executable form: one case per rule, built on the real canvas fixtures the store suites use.
  */
 import { describe, expect, it } from "vitest";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
@@ -52,9 +50,7 @@ const BROWSER_A = makeBrowserSessionTileRef({
   tabId: "browser-tab-1",
 });
 
-// ---------------------------------------------------------------------------
 // Builders
-// ---------------------------------------------------------------------------
 
 function canvasOf(input: {
   readonly root: TileLayoutNode | null;
@@ -144,9 +140,6 @@ function resolveDefault(intent: TileOpenIntent): TileOpenPlan {
   });
 }
 
-// ---------------------------------------------------------------------------
-// 1. Target tab
-// ---------------------------------------------------------------------------
 
 describe("tileIntent", () => {
   it("fills the common case: no modifiers, no placement, dedupe on", () => {
@@ -177,9 +170,6 @@ describe("target", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 2. Dedupe (C6, B4)
-// ---------------------------------------------------------------------------
 
 describe("dedupe", () => {
   it("focuses the open instance wherever it lives", () => {
@@ -320,9 +310,6 @@ describe("dedupe", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 3. Gesture -> mode (C4)
-// ---------------------------------------------------------------------------
 
 describe("gesture -> mode", () => {
   const CASES: ReadonlyArray<{
@@ -367,9 +354,6 @@ describe("gesture -> mode", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 4. Explicit placement (C7)
-// ---------------------------------------------------------------------------
 
 describe("explicit placement", () => {
   it("beats the category setting", () => {
@@ -426,9 +410,8 @@ describe("explicit placement", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 4b. Setting + modifiers (C3, C4)
-// ---------------------------------------------------------------------------
+// 4b.
+// Setting + modifiers (C3, C4)
 
 describe("setting and modifiers", () => {
   const SPLIT_EVERYWHERE: TilePlacementSettings = {
@@ -491,9 +474,6 @@ describe("setting and modifiers", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 5. Viewport clamp (C10) and pip
-// ---------------------------------------------------------------------------
 
 describe("single-tile viewport", () => {
   it("clamps a shift-split to the anchor pane", () => {
@@ -563,9 +543,6 @@ describe("pip", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 6. Category affinity (C5)
-// ---------------------------------------------------------------------------
 
 describe("category affinity", () => {
   // p1 (active) holds content only; p2 holds a chat buried behind a spec;
@@ -683,9 +660,8 @@ describe("category affinity", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 6a. Empty panes beat a new split
-// ---------------------------------------------------------------------------
+// 6a.
+// Empty panes beat a new split
 
 describe("empty panes", () => {
   const BLANK_A: EpicCanvasTileRef = {
@@ -799,9 +775,7 @@ describe("empty panes", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // tileCategoryOf (C2)
-// ---------------------------------------------------------------------------
 
 describe("tileCategoryOf", () => {
   it("maps conversations, browsers and content", () => {

@@ -33,11 +33,6 @@ class FakeDebugger implements BrowserViewDebugger {
   off(_event: string, _listener: (...args: unknown[]) => void): void {}
 }
 
-/**
- * The desktop's half of the curated table: `BrowserDebugSession.dispatch`
- * binds the attached debugger and the addressed child session, and this
- * exercises the encode/decode that binding drives.
- */
 function dispatchBrowserCdpCommand(
   browserDebugger: BrowserViewDebugger,
   sessionId: string | undefined,

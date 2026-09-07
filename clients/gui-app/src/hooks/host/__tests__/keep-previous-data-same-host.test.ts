@@ -44,17 +44,10 @@ describe("keepPreviousDataForSameHost", () => {
   });
 });
 
-/**
- * Wiring pins: each D1 hook must pass its live hostId into this helper. A
- * regression that deletes `placeholderData` or wires bare `keepPreviousData`
- * fails here (source-level) and in the per-hook host-switch integration tests.
- *
- * `use-workspace-entries` has TWO option sites (scoped search + legacy) — both
- * must wire the helper; counting occurrences catches deleting one of them.
- */
+/** Wiring pins: each D1 hook must pass its live hostId into this helper.
+ * `use-workspace-entries` has TWO option sites (scoped search + legacy) - both must wire the helper; counting occurrences catches deleting one of them. */
 describe("D1 wiring pins", () => {
   it("wires keepPreviousDataForSameHost in all four host-keyed hooks", () => {
-    // hooks/host/__tests__ → hooks/
     const hooksRoot = join(import.meta.dirname, "../..");
     const files: ReadonlyArray<{
       readonly rel: string;
@@ -81,10 +74,7 @@ describe("D1 wiring pins", () => {
     for (const file of files) {
       const source = readFileSync(join(hooksRoot, file.rel), "utf8");
       const matches = source.match(/keepPreviousDataForSameHost/g) ?? [];
-      // Import + each call site. For entries: import + one shared const used twice
-      // still only 2 mentions (import + const), or import + 2 inlines = 3.
-      // Require at least import + one usage; for entries require the identifier
-      // appears ≥2 times AND both option objects use `placeholderData`.
+      // Import + each call site.
       expect(
         matches.length,
         `${file.rel} must reference keepPreviousDataForSameHost`,

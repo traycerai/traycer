@@ -35,23 +35,13 @@ interface ComposerMobileToolbarProps {
   readonly dictation: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
   readonly settingsLocked: boolean;
-  /** The host "Create new profile" creates on - see `HarnessModelPicker`. */
   readonly createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
-  /** Where the picker's setup terminal lands - see `HarnessModelPicker`. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
 }
 
-/**
- * Phone-width toolbar row. It keeps the DESKTOP arrangement - attach on the
- * left, model / mic / send on the right - so the composer does not read as a
- * different control set between the two clients. Only the agent-mode pill
- * moves out, into `ComposerOptionsSheet`, because six pills do not fit a
- * ~21rem row; the permission pill doubles as that sheet's trigger.
- *
- * The desktop `ComposerToolbar` is untouched and still serves every other
- * composer surface.
- */
+/** Only the agent-mode pill moves out, into `ComposerOptionsSheet`, because six pills do not fit a ~21rem row;
+ * the permission pill doubles as that sheet's trigger. */
 function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   const {
     store,
@@ -118,15 +108,8 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   return (
     <div className="flex min-w-0 items-center gap-1 px-2.5 pb-2.5 pt-1">
       <ComposerAttachImageButton onAttachImages={onAttachImages} />
-      {/* Icon-only, exactly as `PermissionsPicker` renders itself under
-          `@max-lg` on desktop - the label would truncate to "Full acce..." at
-          this width and steal room the model name needs. The mode still reads
-          from the glyph, and the accessible name spells it out.
-
-          Not `PermissionsPicker` itself: its dropdown would nest a Radix layer
-          inside the vaul drawer. Deliberately not disabled by `settingsLocked`
-          either - this is also the only route to the agent-mode rows, which
-          must stay reachable; the sheet's own rows carry the lock. */}
+      {/* Deliberately not disabled by `settingsLocked` either - this is also the only route to the agent-mode rows,
+         which must stay reachable; the sheet's own rows carry the lock. */}
       <ToolbarPillButton
         aria-label={`Permissions: ${permissionOption.label}`}
         data-testid="composer-mobile-options-trigger"

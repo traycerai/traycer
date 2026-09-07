@@ -22,51 +22,12 @@ import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-term
 import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
 import { useProviderTerminalLoginScopeSupported } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 
-/**
- * The ambient account line for the browsed provider - rendered in the slot the
- * profile dropdown occupies for multi-profile providers, so account identity
- * always lives in the same place regardless of profile count.
- *
- * This exists because a single-profile provider can authenticate through a
- * credential the user never handed to it (Copilot silently rides the GitHub
- * CLI's login after its own token is cleared). The probe already names that
- * source (`auth.badgeText`, e.g. "GitHub CLI") and the account
- * (`auth.label`, "Authenticated as <login>") - the same fields Settings →
- * Providers renders - so surfacing them here lets the picker explain a state
- * that otherwise looks like a stale cache.
- *
- * Renders nothing when there is nothing definitive to say: a disabled
- * provider, a probe still settling, or an authenticated account with no
- * badge/label. The signed-out line is the one exception - it pairs with the
- * rail tab's degraded treatment so the gray-out is never unexplained.
- *
- * The signed-out verdict is read from THREE sources, OR'd and definitive-only:
- * the `providers.list` state (the two-signal predicate the rail's degraded
- * treatment reads), the catalog row's own `authStatus`, and the model list's
- * signed-out failure. They are separately timed - the list state is held for
- * fifteen minutes, the row's verdict lapses after thirty seconds, and the
- * model failure is what the user is looking at right now - so a line that
- * read only one of them contradicted the dimmed tab beside it or the setup
- * CTA below it. For the same reason the row alone is enough when the
- * `providers.list` state has not arrived or has failed: the rail dims from
- * that row, so this line must be able to explain it from that row.
- *
- * For a provider with setup guidance the bare label is replaced by the steps
- * that actually fix the state. The generic label is what sent users to export
- * a shell variable that the provider never reads. The steps live HERE only
- * while the model list below still has rows to show (the host serves the last
- * good catalog through a sign-out); once the list itself is in the signed-out
- * error state, `ModelRowsState` renders the full setup CTA in that space and
- * this line drops back to the compact label, so the popover never says the
- * same thing twice.
- */
+/** This exists because a single-profile provider can authenticate through a credential the user never handed to
+ * it (Copilot silently rides the GitHub CLI's login after its own token is cleared). */
 export function PickerProviderAuthLine(props: {
   readonly state: ProviderCliState | null;
-  /** The catalog entry for the same provider, when the picker has one. */
   readonly harness: GuiHarnessCatalogEntry | null;
-  /** Where a provider's setup terminal lands - see the type's doc. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
-  /** The picker's run-target host, which that terminal is minted on. */
   readonly runTargetHostId: string | null;
   /** Closes the picker without opening anything else. */
   readonly onClosePicker: () => void;
@@ -108,10 +69,7 @@ type PickerAuthLineVerdict =
       readonly label: string | null;
     };
 
-/**
- * What the line says, decided from both sources. Pure so the rules in the
- * component doc above are one function rather than a chain of early returns.
- */
+/** Pure so the rules in the component doc above are one function rather than a chain of early returns. */
 function pickerAuthLineVerdict(
   state: ProviderCliState | null,
   harness: GuiHarnessCatalogEntry | null,
@@ -205,9 +163,8 @@ function SetupGuidanceRow(props: {
     terminalLoginSurface,
     props.runTargetHostId,
   );
-  // ONE placement decides both the button and the steps, so they cannot
-  // disagree about whether there is a button - the defect this seam exists to
-  // prevent. The surface is handed over only where the placement draws it.
+  // One placement decides both the button and the steps, so they cannot disagree about whether there is a button
+  // - the defect this seam exists to prevent. The surface is handed over only where the placement draws it.
   const placement = providerSetupActionPlacement(
     setup,
     terminalLoginSurface !== null,
@@ -245,11 +202,8 @@ function SetupGuidanceRow(props: {
   );
 }
 
-/**
- * The self-installed alternative, phrased so nobody reads it as the primary
- * path: the bundled pack is not on PATH, and on a remote host this shell is
- * the wrong machine.
- */
+/** The self-installed alternative, phrased so nobody reads it as the primary path: the bundled pack is not on
+ * PATH, and on a remote host this shell is the wrong machine. */
 export function ProviderSetupManualCommand(props: {
   readonly command: string;
 }): ReactNode {

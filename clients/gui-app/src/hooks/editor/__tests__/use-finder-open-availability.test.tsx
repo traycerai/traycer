@@ -1,19 +1,5 @@
 /**
- * `useFinderOpenAvailability` gates a Finder affordance behind four
- * independent conditions (host is local, client is a Mac, not the installed
- * mobile app, negotiated `editor.openPaths` >= 1.1), and
- * `useEditorOpenPathsSupportsV11` is the version half of that gate on its
- * own. This suite drives the REAL hooks and mocks only their inputs: the host
- * handshake (`useHostMethodSchemaVersion`), the host directory entry
- * (`useHostDirectoryEntry`), and the platform/product signals (`isMac`,
- * `isMobileApp`). Mocking any of the hook's own boolean arithmetic instead of
- * these boundaries would stop the test from noticing a dropped or loosened
- * condition.
- *
- * Every case below starts from an all-true baseline and flips exactly ONE
- * condition, so a condition silently dropped from the hook (or loosened, e.g.
- * accepting minor 0) shows up as a specific failing test rather than a
- * generic "gate is broken" failure.
+ * Drive the real hook; mock only its inputs. Each case starts all-true and flips one condition.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";

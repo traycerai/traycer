@@ -1,15 +1,8 @@
 import type { TeardownStopTarget } from "@/lib/worktree/owner-teardown-snapshot";
 
 /**
- * Phase-1 GUI-composed teardown. `worktree.create` has no `commitIntent`
- * (protocol is frozen behind the pin), so the GUI stops exactly the
- * owner-scoped holders it disclosed — managed-command stop for supervised
- * shells, `agent.stop` for a chat turn — then mutates the binding. Upgrade
- * with `listHolders` + create-with-intent in the same follow-up as the
- * snapshot provider.
- *
- * Partial failure is consequential: if any stop fails, the caller must not
- * proceed with remove/create, and must name the failure on that holder row.
+ * Phase-1 GUI-composed teardown.
+ * `worktree.create` has no `commitIntent` (protocol is frozen behind the pin), so the GUI stops exactly the owner-scoped holders it disclosed - managed-command stop for supervised shells, `agent.stop` for a chat turn - then mutates the binding.
  */
 export type HolderTeardownFailure = {
   readonly holderKey: string;

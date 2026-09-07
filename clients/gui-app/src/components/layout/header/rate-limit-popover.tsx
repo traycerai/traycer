@@ -135,12 +135,7 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { cn } from "@/lib/utils";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
-/**
- * A rail/Overview entry, in draw order: either a host-RPC provider or the
- * synthetic Traycer entry. `railTabProviderId` maps each to a `ProviderId` so a
- * single `sortProviderStatesByProviderOrder` positions Traycer at its
- * `PROVIDER_ID_ORDER` slot among the providers.
- */
+/** A rail/Overview entry, in draw order: either a host-RPC provider or the synthetic Traycer entry. */
 type RailTabDescriptor =
   | { readonly kind: "provider"; readonly providerId: RateLimitProviderId }
   | { readonly kind: "traycer" };
@@ -233,11 +228,8 @@ const RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES = {
 
 const RATE_LIMIT_POPOVER_COLLISION_PADDING_PX = 12;
 
-// Radix owns the floating wrapper's transform and rewrites it whenever content
-// size changes. Lock that transform for the rest of this popover opening so a
-// resize can move the exact active edge without Radix re-anchoring underneath
-// the pointer. The observer only restores one expected transform; it never
-// derives another offset from the moved element, avoiding a feedback loop.
+// The observer only restores one expected transform; it never derives another offset from the moved element,
+// avoiding a feedback loop.
 function createRateLimitPopoverPositionLock(
   wrapperElement: HTMLElement,
 ): RateLimitPopoverPositionLock {
@@ -420,14 +412,8 @@ function rateLimitProfileId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
 }
 
-/**
- * The header rate-limit popover content: a left rail (Overview + one tab per
- * connected provider) and a detail pane, mirroring the composer's model-picker
- * shell (Core Flows: "same interaction family as the composer's model picker").
- * The whole body is a child of `PopoverContent`, so Radix only mounts it - and
- * runs its queries - while the popover is open. The selected tab is persisted
- * separately so reopening restores the provider the user last inspected.
- */
+/** The whole body is a child of `PopoverContent`, so Radix only mounts it - and runs its queries - while the
+ * popover is open. */
 export function RateLimitPopover({
   onClose,
   profileSelection,
@@ -448,13 +434,8 @@ export function RateLimitPopover({
       role="dialog"
       aria-label="Usage limits"
       className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
-      // Radix auto-focuses the first focusable child on open. Here that's the
-      // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
-      // (keyboard a11y) - so it would pop open the instant the popover mounts
-      // and never receive a mouseleave/blur to close it. This popover has no
-      // field to type into (unlike the composer's model picker, whose first
-      // focusable is its search input, so it wants and keeps the auto-focus), so
-      // opting out of the initial focus is harmless and stops the stuck tooltip.
+      // Here that's the Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus (keyboard a11y) - so it
+      // would pop open the instant the popover mounts and never receive a mouseleave/blur to close it.
       onOpenAutoFocus={(event) => event.preventDefault()}
       onInteractOutside={(event) => {
         const target = event.target;
@@ -463,11 +444,8 @@ export function RateLimitPopover({
           (target.closest('[data-testid="confirm-destructive-dialog"]') !==
             null ||
             target.closest('[data-slot="dialog-overlay"]') !== null ||
-            // The host switcher's own list is a nested Radix popover, so it
-            // portals OUTSIDE this content and every click in it reads as an
-            // interaction outside. Without this, opening the picker closed the
-            // surface the picker exists to scope, and no host could ever be
-            // chosen. Shared with every other container that embeds it.
+            // Without this, opening the picker closed the surface the picker exists to scope, and no host could ever be
+            // chosen.
             isHostSwitcherListInteraction(target))
         ) {
           event.preventDefault();
@@ -484,11 +462,8 @@ export function RateLimitPopover({
   );
 }
 
-/**
- * Viewport-bounded resize surface with OS-style hit areas on every edge and
- * corner. Drag frames mutate inline dimensions directly, while pointer release
- * commits the final measured size once so subsequent opens restore it.
- */
+/** Drag frames mutate inline dimensions directly, while pointer release commits the final measured size once so
+ * subsequent opens restore it. */
 function RateLimitPopoverResizeSurface({
   variant,
   children,
@@ -707,38 +682,23 @@ function RateLimitPopoverBody({
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
 }): ReactNode {
-  // The picker earns its row once there is a choice to make. One host means
-  // one possible answer, and a control whose only outcome is the state you are
-  // already in is chrome. The `vanished` exception is not a choice but a way
-  // OUT: a pick that no longer resolves must never leave someone stranded on a
-  // notice with the only control that could clear it hidden.
+  // The `vanished` exception is not a choice but a way out: a pick that no longer resolves must never leave
+  // someone stranded on a notice with the only control that could clear it hidden.
   const showHostPicker =
     scope.hosts.length > 1 || scope.vanishedHostId !== null;
   const header = showHostPicker ? (
     <RateLimitHostPickerRow scope={scope} onClose={onClose} />
   ) : null;
 
-  // Everything below reads through this subtree's host binding, and a PICK
-  // that is not `ready` did not produce one - so the providers, the rail and
-  // every block would silently describe the AMBIENT host under the name this
-  // header just printed. Say what happened instead.
-  //
-  // Gated on there being a pick at all, because without one the ambient host
-  // is not a substitution for anything: it is the host this surface has always
-  // reported, an `unreachable` blip on it is what the envelope's last-good
-  // retention exists to survive, and swapping that for a notice would take
-  // working usage away from every single-host user.
+  // Everything below reads through this subtree's host binding, and a pick that is not `ready` did not produce
+  // one.
   if (hasExplicitPick && !isHostScopeUsable(scope.status)) {
     return (
       <RateLimitPopoverResizeSurface variant="content">
         {header}
         <div className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-y-auto p-3">
           <RateLimitHostUnavailableNotice scope={scope} />
-          {/* The ACCOUNT-scoped half survives the host being down: Traycer
-              Inference usage comes through the AuthService with no host
-              binding involved, so only the host-RPC provider panes go with
-              the route. Hiding this too both took working data away and had
-              the notice claim more than is true. */}
+          {/* Hiding this too both took working data away and had the notice claim more than is true. */}
           <UnscopedTraycerUsage />
         </div>
       </RateLimitPopoverResizeSurface>
@@ -755,13 +715,7 @@ function RateLimitPopoverBody({
   );
 }
 
-/**
- * The rail + detail body, mounted only once the surface is bound to the host
- * it names. Split from `RateLimitPopoverBody` so the provider queries below
- * are not mounted at all under an unusable scope - a hook that runs anyway and
- * has its output hidden still fires against the ambient host and caches the
- * answer under its key (`isHostScopeUsable`).
- */
+/** The rail + detail body, mounted only once the surface is bound to the host it names. */
 function RateLimitPopoverScopedBody({
   onClose,
   profileSelection,
@@ -771,7 +725,6 @@ function RateLimitPopoverScopedBody({
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
   readonly header: ReactNode;
-  /** The host this popover is SHOWING - pinned or followed - for deep links. */
   readonly displayedHostId: string | null;
 }): ReactNode {
   const displayProviders = useVisibleRateLimitProviders();
@@ -781,10 +734,8 @@ function RateLimitPopoverScopedBody({
     [displayProviders],
   );
 
-  // Traycer is a GUI-only rail entry (AuthService subscription, not a host RPC),
-  // gated on the *selected* account being paid or credit-bundled. Recomputed
-  // reactively from the auth query + account-context store, so the tab appears /
-  // disappears live as either changes - not snapshotted at popover-open time.
+  // Traycer is a GUI-only rail entry (AuthService subscription, not a host RPC), gated on the *selected* account
+  // being paid or credit-bundled.
   const traycerSubscription = useTraycerSubscription();
 
   const railTabs = useMemo(
@@ -806,10 +757,8 @@ function RateLimitPopoverScopedBody({
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
-    // The zero state keeps its own compact surface when nothing scopes it. With
-    // a host picker present the row has to stay reachable, or picking the one
-    // host with no providers configured would remove the only way to pick a
-    // different one.
+    // With a host picker present the row has to stay reachable, or picking the one host with no providers
+    // configured would remove the only way to pick a different one.
     if (header === null) {
       return (
         <RateLimitPopoverResizeSurface variant="empty">
@@ -833,9 +782,8 @@ function RateLimitPopoverScopedBody({
     );
   }
 
-  // A credential removed (or Traycer becoming ineligible) mid-session can drop
-  // the active tab from the rail; fall back to Overview rather than rendering a
-  // tab that no longer exists.
+  // A credential removed (or Traycer becoming ineligible) mid-session can drop the active tab from the rail;
+  // fall back to Overview rather than rendering a tab that no longer exists.
   const validTabs = new Set<RateLimitPopoverTab>([
     "overview",
     ...railTabs.map((tab) =>
@@ -846,17 +794,13 @@ function RateLimitPopoverScopedBody({
     ? activeTab
     : "overview";
 
-  // The default target height keeps the popover stable across tabs. The resize
-  // surface applies the remembered user size within fluid viewport bounds.
-  // `minmax(0,1fr)` pins the row to that height, and both columns keep their
-  // own `min-h-0` + `overflow-y-auto` scrolling.
+  // `minmax(0,1fr)` pins the row to that height, and both columns keep their own `min-h-0` + `overflow-y-auto`
+  // scrolling.
   return (
     <RateLimitPopoverResizeSurface variant="content">
       {header}
-      {/* The rail/detail grid, now a row of the surface's flex column rather
-          than the surface itself, so the host picker can head both panes.
-          `minmax(0,1fr)` still pins this row to the surface's height and both
-          columns keep their own `min-h-0` + `overflow-y-auto` scrolling. */}
+      {/* The rail/detail grid, now a row of the surface's flex column rather than the surface itself, so the host
+         picker can head both panes. */}
       <div
         data-testid="rate-limit-popover-panes"
         className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
@@ -898,19 +842,7 @@ function RateLimitPopoverScopedBody({
   );
 }
 
-/**
- * The host row above the rail: which machine's usage the whole surface is
- * reporting. It heads the rail + detail grid rather than sitting inside either
- * one, because it scopes BOTH - a picker in the detail pane would read as
- * scoping only the provider whose tab happens to be open, and the 3rem rail
- * has no room to say a host's name at all.
- *
- * `HostSwitcher` is Settings' picker, reused rather than re-skinned. The two
- * surfaces answer different questions (administer vs. watch) but the rows
- * answer the same one - which machine is this, can I reach it, which one is
- * active - and a second picker over one concept is how two vocabularies for it
- * start.
- */
+/** It heads the rail + detail grid rather than sitting inside either one, because it scopes both. */
 function RateLimitHostPickerRow({
   scope,
   onClose,
@@ -919,19 +851,12 @@ function RateLimitHostPickerRow({
   readonly onClose: () => void;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
-  // The registry list this picker renders is served by a NON-polling observer;
-  // the Settings sidebar is normally the surface that opts the window into the
-  // liveness poll. When this popover is the only host-list surface mounted, a
-  // row would otherwise keep an Online dot from the last registry DTO until
-  // something else happened to refetch - so this picker carries the same
-  // opt-in for exactly as long as it is on screen.
+  // When this popover is the only host-list surface mounted, a row would otherwise keep an Online dot from the
+  // last registry DTO until something else happened to refetch.
   useRegisteredHostsPollLiveness();
   return (
-    // Full-bleed on purpose: the strip's own edges ARE the card's, so the
-    // picker's list can drop from it at exactly the card's width. Padding here
-    // would inset the trigger, and with it the list anchored to the trigger,
-    // leaving a few pixels of card showing down both sides of the open list —
-    // the nested-panel look this row is meant to avoid.
+    // Padding here would inset the trigger, and with it the list anchored to the trigger, leaving a few pixels of
+    // card showing down both sides of the open list - the nested-panel look this row is meant to avoid.
     <div
       className="flex shrink-0 items-center border-b"
       data-testid="rate-limit-host-picker-row"
@@ -943,11 +868,8 @@ function RateLimitHostPickerRow({
         onSelect={scope.setHostId}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
-        // Managing hosts — adding, renaming, updating, removing — is Settings'
-        // job, with its own dialogs and failure states; this popover reports
-        // usage. So the list ends in the same gear the model picker offers for
-        // provider settings: one link to where that work already lives, rather
-        // than a second copy of one verb from it.
+        // So the list ends in the same gear the model picker offers for provider settings: one link to where that work
+        // already lives, rather than a second copy of one verb from it.
         action={{
           kind: "manage-hosts",
           onSelect: () => {
@@ -970,12 +892,7 @@ function RateLimitHostPickerRow({
   );
 }
 
-/**
- * Why this surface is showing nothing rather than showing the active host's
- * numbers under another host's name. Each branch names the remedy it has,
- * because the three states differ in exactly that: `vanished` needs the pick
- * dropped, `unreachable` needs the machine back, `connecting` needs a moment.
- */
+/** Why this surface is showing nothing rather than showing the active host's numbers under another host's name. */
 function RateLimitHostUnavailableNotice({
   scope,
 }: {
@@ -1020,11 +937,8 @@ function RateLimitHostUnavailableNotice({
   );
 }
 
-/**
- * The single-tab detail pane: the synthetic Traycer block, or a host-RPC
- * provider block. Split out so `RateLimitPopoverBody` picks Overview-vs-detail
- * with one ternary instead of a nested one.
- */
+/** The single-tab detail pane: the synthetic Traycer block, or a host-RPC provider block. Split out so
+ * `RateLimitPopoverBody` picks Overview-vs-detail with one ternary instead of a nested one. */
 function RateLimitDetailPane({
   tab,
   providers,
@@ -1051,15 +965,8 @@ function RateLimitDetailPane({
   );
 }
 
-/**
- * The left rail: an Overview tab, one tab per connected provider, then a
- * "Refresh all" and a "Provider settings" icon pinned to the bottom - the same
- * structural shell as the composer model picker's `ProviderRail` (scrollable
- * `role="tablist"` as a `flex-1` sibling, action icons after it). The two
- * bottom icons are deliberately siblings of the tablist, not tabs inside it, so
- * only real tab elements live under `role="tablist"` for correct screen-reader
- * nav.
- */
+/** The two bottom icons are deliberately siblings of the tablist, not tabs inside it, so only real tab elements
+ * live under `role="tablist"` for correct screen-reader nav. */
 function RateLimitRail({
   railTabs,
   providers,
@@ -1177,28 +1084,8 @@ function RailTab({
   );
 }
 
-/**
- * The Overview tab: every rail entry's *condensed* block
- * (`variant="popover-overview"`), in rail order, each separated by a divider.
- * For host-RPC providers that's their 5h/Weekly windows plus credit/balance
- * figures; for the Traycer entry it's the tier badge + credit/rate-limit
- * breakdown. Per-model breakdowns, spend controls, badges, plan labels, and the
- * Traycer account picker are single-provider-tab detail, not shown here. The
- * "Refresh all" and settings controls live on the rail (shared across every
- * tab), so this pane is pure content - no header row, and dividers only
- * *between* consecutive blocks. Not capped at 3 (unlike the header glyph) -
- * it's a scroll, not a summary.
- *
- * Every tab's block stays mounted the whole time (so its query keeps running
- * regardless of what's visible), but a tab that hasn't reported readiness yet
- * (`onReady`, fired once its own state moves past `cold`) is hidden rather
- * than painted as its own blank/loading section - it's revealed in place once
- * its data arrives, so the list grows one provider at a time instead of every
- * slot appearing empty up front. While nothing has reported ready yet, a
- * single centered "Fetching usage limits" indicator stands in for the whole
- * list (feedback: "just a modal centered fetching usage limits instead of
- * empty provider sections").
- */
+/** Every tab's block stays mounted the whole time (so its query keeps running regardless of what's visible),
+ * but a tab that hasn't reported readiness yet (`onReady`. */
 function RateLimitOverview({
   railTabs,
   providers,
@@ -1267,13 +1154,8 @@ function RateLimitOverview({
   );
 }
 
-/**
- * The Overview's combined "nothing has arrived yet" state - a single centered
- * indicator standing in for every provider's still-blank section, rather than
- * painting N blank/loading sections at once. `flex-1` on a `min-h-full`
- * column centers it within the popover's full pane height rather than
- * collapsing to the height of the (hidden, zero-height) sibling blocks.
- */
+/** `flex-1` on a `min-h-full` column centers it within the popover's full pane height rather than collapsing to
+ * the height of the (hidden, zero-height) sibling blocks. */
 function RateLimitOverviewLoading(): ReactNode {
   return (
     <div className="flex flex-1 items-center justify-center gap-2 py-10 text-ui-sm text-muted-foreground">
@@ -1319,25 +1201,8 @@ function useTraycerRateLimitUsageState(
   };
 }
 
-/**
- * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
- * refresh as one queued batch whose profile pulls run concurrently
- * (`force: true`), while httpFetch providers refresh concurrently alongside via
- * a direct query invalidation - a plain GET has no subprocess cost to serialize.
- * The synthetic Traycer entry refreshes here too: it refetches the AuthService
- * subscription query, and rate-limit based plans additionally invalidate the
- * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
- * bar.
- * `refreshing` combines all lanes' real query state - this button's OWN
- * ephemeral targets (which stay pending until every profile in the batch has
- * settled, even after one provider's own `isFetching` clears), each configured
- * httpFetch provider's own
- * `isFetching` (read via `useHostQueries` against the exact same query keys the
- * invalidation below targets), plus Traycer's auth/aperture fetch state - so
- * the icon spins for the whole round regardless of which lane(s) are actually
- * configured, not just when an ephemeralProcess provider happens to be in the
- * mix.
- */
+/** The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers refresh as one queued batch
+ * whose profile pulls run concurrently (`force. */
 function RateLimitRefreshAllButton({
   providers,
   traycerRefreshTarget,
@@ -1348,10 +1213,8 @@ function RateLimitRefreshAllButton({
   const queryClient = useQueryClient();
   const hostId = useAddressableHostId();
   const client = useHostClient();
-  // The ephemeral lane's app-shell default is configured to the app-wide host,
-  // so the unscoped `enqueueRateLimitFetchBatch` would refresh a machine this
-  // popover may not be showing. This scope is derived from the same context
-  // binding as `hostId` and `client` above, so all three name one host.
+  // The ephemeral lane's app-shell default is configured to the app-wide host, so the unscoped
+  // `enqueueRateLimitFetchBatch` would refresh a machine this popover may not be showing.
   const queueScope = useRateLimitQueueScope();
   const traycerRateLimitUsageState = useTraycerRateLimitUsageState(
     traycerRefreshTarget.rateLimitAccountContexts,
@@ -1374,16 +1237,8 @@ function RateLimitRefreshAllButton({
         profileId,
       })),
     );
-  // Every httpFetch provider resolves to the exact same lane options (the
-  // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
-  // provider id) - reusing the first one's is safe without the "verify every
-  // request shares one lane" check `useHeaderRateLimitBars` needs (that hook's
-  // provider list isn't pre-filtered to a single lane the way `httpFetchProviders`
-  // is here). Passing this through (rather than `null`) matters:
-  // `RateLimitProviderBlock`'s own query for these same providers sets
-  // `retry: false`, and TanStack keys retry/staleTime/refetchOnMount per query
-  // key - an unset `options` here would silently inherit the global
-  // QueryClient's defaults (one retry) for this same key instead.
+  // Passing this through (rather than `null`) matters: `RateLimitProviderBlock`'s own query for these same
+  // providers sets `retry: false`, and TanStack keys retry/staleTime/refetchOnMount per query key.
   const httpFetchOptions =
     httpFetchProviders.length === 0
       ? null
@@ -1410,9 +1265,8 @@ function RateLimitRefreshAllButton({
     options: httpFetchOptions,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
-  // The ephemeral half of "Refresh all" is scoped to the targets this button
-  // actually enqueues, not the whole lane, so a background sweep of a provider
-  // this popover isn't showing can no longer disable it.
+  // The ephemeral half of "Refresh all" is scoped to the targets this button actually enqueues, not the whole
+  // lane, so a background sweep of a provider this popover isn't showing can no longer disable it.
   const ephemeralProcessFetching = useAnyRateLimitQueueTargetFetching(
     ephemeralProcessRequests,
   );
@@ -1428,12 +1282,8 @@ function RateLimitRefreshAllButton({
     ephemeralProcessRequests.length > 0 ||
     traycerRefreshTarget.enabled;
 
-  // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation, ephemeralProcess profiles fan out inside one queued
-  // batch, and Traycer refetches its subscription/usage queries. Returns
-  // an already-resolved promise so `RefreshIconButton` gets its
-  // `() => Promise<void>` contract without gating the spinner on the fetches
-  // themselves - `refreshing` (above) owns that.
+  // Returns an already-resolved promise so `RefreshIconButton` gets its ` => Promise<void>` contract without
+  // gating the spinner on the fetches themselves - `refreshing` (above) owns that.
   const refreshAll = (): Promise<void> => {
     httpFetchRequests.forEach(({ providerId, profileId }) => {
       void queryClient.invalidateQueries({
@@ -1483,29 +1333,12 @@ function RateLimitRefreshAllButton({
   );
 }
 
-/**
- * The two popover surfaces a provider's block renders on: the single-provider
- * tab (full detail) and the Overview tab (condensed). Both draw windows the
- * same way; they differ only in how much detail is shown.
- */
+/** The two popover surfaces a provider's block renders on: the single-provider tab (full detail) and the
+ * Overview tab (condensed). Both draw windows the same way; they differ only in how much detail is shown. */
 type PopoverBlockVariant = "popover-detail" | "popover-overview";
 
-/**
- * One provider's block. Providers with profile metadata always render the
- * same profile-card layout, whether they have one profile or many; older hosts
- * that do not report profiles fall back to the provider-wide reading. Shared by the
- * single-provider tab (`variant="popover-detail"`, full detail) and each
- * Overview entry (`variant="popover-overview"`, condensed). The plan/tier
- * chip (`resolveProviderPlanLabel`) is single-provider-tab only, same scoping
- * Overview already applies to every other detail field; the rest of the
- * header renders identically across both variants.
- *
- * `onReady` fires once (and again on every later state change, harmlessly -
- * the callback is expected to be idempotent) `state.kind` moves past `cold`,
- * so `RateLimitOverview` can reveal this block in place instead of painting
- * it as a blank/loading section from mount. `null` on the single-provider
- * detail tab, which always renders regardless of state.
- */
+/** Providers with profile metadata always render the same profile-card layout, whether they have one profile or
+ * many; older hosts that do not report profiles fall back to the provider-wide reading. */
 function RateLimitProviderBlock({
   providerId,
   profiles,
@@ -1566,9 +1399,8 @@ function SingleProfileRateLimitProviderBlock({
   // Only this lane's reads are owned by the serial queue, so only they have a
   // follow-up standing behind a read we stopped waiting for.
   const queueOwned = rateLimitFetchLane(providerId) === "ephemeralProcess";
-  // ...and that follow-up is a single delayed attempt, so once it is spent this
-  // read has nothing left coming for it and must report rather than keep
-  // vouching for the cached reading.
+  // ...and that follow-up is a single delayed attempt, so once it is spent this read has nothing left coming for
+  // it and must report rather than keep vouching for the cached reading.
   const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
     providerId,
     null,
@@ -1576,9 +1408,8 @@ function SingleProfileRateLimitProviderBlock({
   const targetFetching = queueOwned
     ? targetPhase === "fetching"
     : query.isFetching;
-  // Single source of truth for this provider's refresh action + spinner state
-  // (fresh-on-open, queue routing, and this target's own queue-phase fold-in),
-  // shared verbatim with the Settings card so they can't drift apart.
+  // Single source of truth for this provider's refresh action + spinner state (fresh-on-open, queue routing, and
+  // this target's own queue-phase fold-in), shared verbatim with the Settings card so they can't drift apart.
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId: null,
@@ -1609,35 +1440,23 @@ function SingleProfileRateLimitProviderBlock({
       ? (query.data?.lastGoodAt ?? query.dataUpdatedAt)
       : query.dataUpdatedAt;
   useEffect(() => {
-    // A disabled query with no cache stays pending forever by design: it is a
-    // passive observer for a signed-out provider, not a queue-owned cold
-    // read. Reveal that provider in Overview so its unavailable state cannot
-    // remain hidden behind the global loading indicator.
+    // A disabled query with no cache stays pending forever by design: it is a passive observer for a signed-out
+    // provider, not a queue-owned cold read.
     if ((!fetchEligible || state.kind !== "cold") && onReady !== null) {
       onReady();
     }
   }, [fetchEligible, onReady, state.kind]);
 
-  // Chip next to the name, single-provider tab only (Overview stays
-  // condensed - same scoping the plan/tier line used before it moved into
-  // this header). `null` for a provider that doesn't report a plan/tier
-  // (`resolveProviderPlanLabel`), so no chip renders for e.g. OpenRouter.
+  // Chip next to the name, single-provider tab only (Overview stays condensed - same scoping the plan/tier line
+  // used before it moved into this header).
   const planLabel = resolveSingleProfilePlanLabel(variant, state);
 
   return (
-    // Ambient (profile-less) providers - grok, openrouter, kilocode - reuse the
-    // exact per-profile card container `RateLimitProviderProfileRow` gives
-    // codex/claude, so every provider's usage sits inside the same card in both
-    // popover tabs (the header+body flat block otherwise floated loose against
-    // the sibling cards - the design-language gap the user flagged). Overview
-    // keeps its between-provider dividers; this cards each block's own content.
+    // Ambient (profile-less) providers - grok, openrouter, kilocode - reuse the exact per-profile card container
+    // `RateLimitProviderProfileRow` gives codex/claude.
     <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
-          {/* Overview stacks every provider's block in one scrollable list with
-              no rail-tab context alongside it, so the name alone doesn't say
-              which provider this is; the single-provider detail tab already has
-              that context from its selected rail icon. */}
           {variant === "popover-overview" ? (
             <HarnessIcon harnessId={providerIdToGuiHarnessId(providerId)} />
           ) : null}
@@ -1661,17 +1480,14 @@ function SingleProfileRateLimitProviderBlock({
               state.kind === "ready" ? state.degradedReason : null
             }
           />
-          {/* Overview has its own "Refresh all" on the rail (item 2 feedback:
-              a per-provider icon there was redundant); only the single-provider
-              detail tab keeps this one. */}
+          {/* Overview has its own "Refresh all" on the rail (item 2 feedback: a per-provider icon there was redundant);
+             only the single-provider detail tab keeps this one. */}
           {variant === "popover-detail" && fetchEligible ? (
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
-              // `isRefreshing` (from useProviderRateLimitRefresh) already folds
-              // in THIS target's own queue phase, so the button reflects its own
-              // pull from the moment it is enqueued - and stays live while an
-              // unrelated provider's sweep runs.
+              // `isRefreshing` (from useProviderRateLimitRefresh) already folds in this target's own queue phase, so the
+              // button reflects its own pull from the moment it is enqueued.
               refreshing={isRefreshing}
             />
           ) : null}
@@ -1784,9 +1600,8 @@ function ProfileRateLimitProviderBlock({
       : passiveQueries[index];
   });
   const lane = rateLimitFetchLane(providerId);
-  // This provider's OWN queue entries, never the lane-wide draining flag: the
-  // button both disables and no-ops on this value, so a lane-wide gate made an
-  // unrelated provider's background sweep turn this control off.
+  // This provider's own queue entries, never the lane-wide draining flag: the button both disables and no-ops on
+  // this value, so a lane-wide gate made an unrelated provider's background sweep turn this control off.
   const anyOwnTargetFetching = useAnyRateLimitQueueTargetFetching(
     refreshEligibleTargets.map((target) => ({
       providerId,
@@ -2206,15 +2021,7 @@ function ProfileUsageUpdatedLabel({
   return <span className="text-ui-xs text-muted-foreground">{ago}</span>;
 }
 
-/**
- * "Updated Xm ago", only once a reading actually exists - and a trailing
- * degraded note appended when a last-known-good reading is being shown after
- * a failed poll (Core Flows degraded state): the specific transient reason's
- * plain-language copy (e.g. "couldn't fetch usage - will retry") when the
- * envelope itself is why (`degradedReason` non-null), or the generic
- * "· refresh failed" when the degrade is only a thrown query-level exception
- * with no specific reason to report.
- */
+/** "Updated Xm ago", only once a reading actually exists. */
 function UsageLimitUpdatedLabel({
   ready,
   updatedAt,
@@ -2388,26 +2195,9 @@ function SignedOutRateLimitMessage(): ReactNode {
   );
 }
 
-/**
- * The synthetic "Traycer" block - the GUI-sourced analogue of
- * `RateLimitProviderBlock`. Its data is the signed-in user's subscription
- * (`useAuthUser`) for the globally-selected account (`useAccountContextStore`),
- * NOT a `host.getRateLimitUsage` provider pull. Header mirrors the provider
- * blocks (name + plan/tier chip + "Updated Xm ago" + refresh) - the chip
- * (`subscriptionPlanLabel`) reflects whichever account is currently selected
- * and is shown on each account card in the single-provider tab. The detail
- * variant and Overview both render Personal/Team cards like the Codex and
- * Claude profile cards; selecting a card updates the global account selection
- * (and therefore Overview, the Settings card, and what a Traycer run bills).
- * Both variants render through the shared `TraycerSubscriptionView`. `onReady` mirrors
- * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
- * `null` on the single-provider detail tab.
- */
-/**
- * The account-scoped Usage half for a popover whose host-scoped half cannot
- * render: eligible Traycer Inference usage, framed like a pane. Returns null
- * for ineligible accounts, so the caller mounts it unconditionally.
- */
+/** The synthetic "Traycer" block - the GUI-sourced analogue of `RateLimitProviderBlock`. */
+/** The account-scoped Usage half for a popover whose host-scoped half cannot render: eligible Traycer Inference
+ * usage, framed like a pane. Returns null for ineligible accounts, so the caller mounts it unconditionally. */
 function UnscopedTraycerUsage(): ReactNode {
   const traycerSubscription = useTraycerSubscription();
   if (!traycerSubscription.eligible) return null;
@@ -2444,9 +2234,8 @@ function TraycerRateLimitBlock({
   );
   const isRefreshing =
     traycerSubscription.query.isFetching || rateLimitUsageState.isFetching;
-  // Refetch the subscription and every rendered rate-limit account. Exact
-  // invalidation targets only aperture `{ accountContext }` keys, never provider
-  // `{ accountContext, providerId }` pulls.
+  // Exact invalidation targets only aperture `{ accountContext }` keys, never provider `{ accountContext,
+  // providerId }` pulls.
   const refresh = async (): Promise<void> => {
     const result = await traycerSubscription.query.refetch();
     traycerSubscription.rateLimitAccountContexts.forEach((accountContext) => {
@@ -2646,10 +2435,6 @@ function TraycerRateLimitBody({
   }
 }
 
-// No inline retry action here - the block's own header refresh icon (detail
-// tab) or the rail's "Refresh all" (Overview) already covers it, so a second
-// retry control right below the message would just be a redundant control
-// for the same action.
 function RateLimitErrorMessage({
   message,
   reportContext,
@@ -2672,16 +2457,8 @@ function RateLimitErrorMessage({
   );
 }
 
-/**
- * Cold load (first open this session, no data yet): skeleton bars previewing
- * the eventual window layout, not a spinner replacing the panel (Core Flows -
- * a deliberate difference from the Settings card's spinner).
- *
- * The per-block `bg-foreground/15` overrides these carried are gone: the
- * `Skeleton` primitive now defaults to a foreground-alpha fill for exactly
- * the reason discovered here (see `ui/skeleton.tsx`), so the default is
- * already correct on this popover.
- */
+/** Cold load (first open this session, no data yet): skeleton bars previewing the eventual window layout, not a
+ * spinner replacing the panel (Core Flows - a deliberate difference from the Settings card's spinner). */
 function RateLimitDetailSkeleton(): ReactNode {
   return (
     <div
@@ -2701,10 +2478,8 @@ function RateLimitDetailSkeleton(): ReactNode {
   );
 }
 
-/**
- * Zero-provider state (Core Flows): no rail, no tabs - a single CTA linking to
- * Settings › Providers, since there's nothing yet to switch between.
- */
+/** Zero-provider state (Core Flows): no rail, no tabs - a single cta linking to Settings › Providers, since
+ * there's nothing yet to switch between. */
 function RateLimitZeroState({
   onClose,
   displayedHostId,

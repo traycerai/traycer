@@ -1,20 +1,8 @@
 import type { MarkdownToken } from "@tiptap/core";
 
-/**
- * Shared helpers for serializing / parsing atom-block nodes that persist as
- * standard fenced code blocks in markdown. Mermaid uses ` ```mermaid `,
- * wireframe uses ` ```wireframe `. By routing both through the same helpers
- * we get identical fence fencing logic (triple-backtick length bump if the
- * body itself contains backticks) and a single place to tweak whitespace
- * handling.
- */
+/** Atom blocks persist as mermaid/wireframe fences. Shared fence-length bump when the body contains backticks. */
 
-/**
- * Returns a fence delimiter of at least three backticks that is guaranteed
- * not to collide with any run of backticks inside `body`. Mermaid diagrams
- * rarely contain backticks, but wireframe HTML does - e.g. `<code>` inside
- * the rendered HTML won't confuse the parser with a 4-backtick fence.
- */
+/** Fence of at least three backticks that does not collide with any run inside body (wireframe HTML can contain <code>). */
 function pickFence(body: string): string {
   const matches = body.match(/`{3,}/g);
   if (matches === null) return "```";
@@ -23,21 +11,14 @@ function pickFence(body: string): string {
 }
 
 /**
- * Formats a fenced code block for markdown output. A trailing newline is
- * NOT included - the Markdown extension joins block siblings with `\n\n`
- * so nodes must not over-emit newlines.
+ * No trailing newline: the Markdown extension joins block siblings with \\n\\n.
  */
 export function renderFencedBlock(language: string, body: string): string {
   const fence = pickFence(body);
   return `${fence}${language}\n${body}\n${fence}`;
 }
 
-/**
- * Returns `true` when the incoming `code` token matches the expected fence
- * language. Called from each node's `parseMarkdown` so the manager can try
- * the next registered handler (CodeBlockLowlight) when the language does
- * not match.
- */
+/** True when the code token's fence language matches. False lets the manager try CodeBlockLowlight next. */
 export function matchesFenceLanguage(
   token: MarkdownToken,
   language: string,

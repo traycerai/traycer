@@ -1,11 +1,4 @@
-/**
- * The stream proxy, driven through BOTH real halves.
- *
- * `createWorkerStreamClient` and `createStreamProxyHost` are the production
- * objects; what is faked is the socket (`createRecordingStreamClient`) and the
- * pipe. So a test here exercises the real correlation, the real params
- * narrowing and the real close semantics against a real serialization boundary.
- */
+/** The stream proxy, driven through both real halves. */
 import { stubMainCallHandlers } from "../test-support/stub-main-call-handlers";
 import { describe, expect, it } from "vitest";
 import { createWorkerStreamClient } from "../worker-stream-client";
@@ -36,14 +29,8 @@ import {
 } from "../bridge-protocol";
 
 /**
- * Wires the two halves through the REAL bridge pair.
- *
- * An earlier version of this helper handed each side's event straight to the
- * other through a callback. Every pin in this file passed against it - and one
- * of them was asserting about traffic that, in production, was posted into a
- * bridge that had already been disposed. A harness that bypasses the channel
- * cannot observe the channel; it reports on a path the code does not take. So
- * the pipe here is the production pipe, and only the thread is not.
+ * Wires the two halves through the real bridge pair.
+ * A harness that bypasses the channel cannot observe the channel; it reports on a path the code does not take.
  */
 function connect() {
   const recording = createRecordingStreamClient();
@@ -75,12 +62,7 @@ function connect() {
   );
 
   mainBridge.onEvent((event) => {
-    // The SAME peel main does in `spawn-epic-runtime-worker.ts`, through the
-    // same imported predicate. This rig used to forward the whole worker->main
-    // union and lean on the host's `default` arm to ignore what was not its
-    // own - so it exercised `handle` on inputs production never delivers, and
-    // it is the reason that arm looked load-bearing. The host now takes the
-    // narrowed family, and this line is where the rig earns it.
+    // The same peel main does in `spawn-epic-runtime-worker.ts`, through the same imported predicate.
     if (isStreamProxyEvent(event)) host.handle(event);
   });
   workerBridge.onEvent((event) => {
@@ -114,7 +96,7 @@ function connect() {
 
 describe("the closed method union", () => {
   it("names exactly the four methods the epic's wrappers subscribe", () => {
-    // BY NAME, not counted: `toHaveLength(4)` would survive a member being
+  // BY name, not counted: `toHaveLength(4)` would survive a member being
     // swapped for a different method, and which four is the whole ruling.
     expect([...EPIC_WORKER_STREAM_METHOD_LIST].sort()).toEqual([
       "artifact.subscribe",
@@ -125,16 +107,7 @@ describe("the closed method union", () => {
   });
 
   it("parses each method's params with the registry's HIGHEST installed line", () => {
-    // The drift this guards is silent by construction. `OPEN_PARAMS_PARSERS`
-    // names each contract BY HAND (there is no latest-line accessor for a
-    // stream registry). When a method grows a new line, the worker - built from
-    // the registry - emits latest-line params while main still parses with the
-    // old schema: a strict schema rejects the open, a loose one strips the new
-    // field, and NEITHER is a compile error, because `ParamsOf`'s union still
-    // contains the old output. `epic.subscribe` is already at @1.3.
-    //
-    // Identity (`toBe`), not shape: two schemas for adjacent minors can have
-    // identical shapes, which is exactly when the drift is most invisible.
+    // The drift this guards is silent by construction.
     for (const method of EPIC_WORKER_STREAM_METHOD_LIST) {
       const methodRegistry: unknown = hostStreamRpcRegistry[method];
       expect(isRecord(methodRegistry)).toBe(true);
@@ -167,20 +140,8 @@ describe("the closed method union", () => {
 
 describe("the bridge vocabulary and its version", () => {
   it("names every event kind in both directions, beside the version", () => {
-    // This pin exists because the version constant FAILED to move when 2c
-    // replaced the vocabulary, and no pin could see it: the skew test compares
-    // `VERSION - 1` against `VERSION`, so it stays green at any value. A
-    // relative pin proves the refusal MECHANISM, never the NUMBER.
-    //
-    // Nothing can prove a number should have changed. What this does is couple
-    // the two: editing either union reddens this test, and the comment the
-    // reader lands on is the one telling them to bump. That is a prompt, not a
-    // proof, and it is named as such rather than dressed up as coverage.
-    // 13 since `apply-confirmed-chat-mutation`. The event unions below did
-    // NOT change: the new kind rides `runtime/command`, which was already
-    // declared and handled. An older worker cannot dispatch the
-    // renderer-local archive/delete reconciliation, a change no event-kind
-    // comparison can see.
+    // This pin exists because the version constant failed to move when 2c replaced the vocabulary, and no pin could see it: the skew test compares `version - 1` against `version`, so it stays green at any value.
+    // A relative pin proves the refusal mechanism, never the number.
     expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(13);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
@@ -209,21 +170,11 @@ describe("the bridge vocabulary and its version", () => {
       "body/doc-in",
       "body/awareness-in",
     ]);
-    // CALLS too, which this pin did not cover until `mutation/apply` was added
-    // without the version moving. Events were coupled to the version and calls
-    // were not, so the one direction that can silently do nothing was the one
-    // direction nothing watched.
+    // Calls too, which this pin did not cover until `mutation/apply` was added without the version moving.
     expect(RUNTIME_WORKER_CALL_KINDS).toEqual([
       "attachment/read",
       "body/materialize",
-      // `body/release` reached the vocabulary in `38b903ca` ("body/release
-      // forward-only lifecycle both sides") and this pin was not moved with it.
-      // It stayed red from that commit until the gate ran the shared suites
-      // again - the pin worked exactly as designed and nobody was reading it,
-      // which is the same failure mode as the `mutation/apply` gap the comment
-      // above records. The rule the pin exists to enforce is that BOTH pins
-      // move on every vocabulary change; the rule that was actually missing is
-      // that the shared suite gets run.
+      // `body/release` reached the vocabulary in `38b903ca` ("body/release forward-only lifecycle both sides") and this pin was not moved with it.
       "body/release",
       "body/demote",
       "body/update",
@@ -239,11 +190,7 @@ describe("the bridge vocabulary and its version", () => {
 
 describe("the worker->main calls", () => {
   it("names exactly its two members", () => {
-    // BY NAME, not counted. This map went 0 -> 2 -> 0 -> 1 -> 2 across five
-    // rulings; the count alone would have read the same at three of those
-    // points while naming entirely different calls - and the first `2` was
-    // `main/auth-revalidate` + `main/mint-credential`, which share not one
-    // member with today's.
+    // BY name, not counted.
     expect([...MAIN_CALL_KINDS]).toEqual([
       "main/write-command",
       "main/lane-unary",
@@ -252,9 +199,8 @@ describe("the worker->main calls", () => {
 
   it("round-trips a classified failure without an Error crossing", async () => {
     const pair = createFakeBridgePair("queued");
-    // Main CLASSIFIES; the wire carries the verdict. An `Error` does not
-    // survive structured clone, so a handler that threw would reach the worker
-    // as a `BridgeCallError` with the classification lost.
+    // Main classifies; the wire carries the verdict.
+    // An `Error` does not survive structured clone, so a handler that threw would reach the worker as a `BridgeCallError` with the classification lost.
     createMainBridgeEndpoint(
       pair.main,
       stubMainCallHandlers({
@@ -279,9 +225,7 @@ describe("the worker->main calls", () => {
     });
     await pair.flush();
 
-    // `unknown-outcome` specifically: a response typed `queued | dropped` would
-    // have flattened it, and it is the arm that exists so an ambiguous keyed
-    // attempt is NOT retried blindly.
+    // `unknown-outcome` specifically: a response typed `queued | dropped` would have flattened it, and it is the arm that exists so an ambiguous keyed attempt is not retried blindly.
     await expect(answered).resolves.toEqual({
       ok: false,
       failure: {
@@ -304,9 +248,8 @@ describe("the worker->main calls", () => {
           listener({
             frame: "main-result",
             callId: message.callId,
-            // `boundedRetry` missing. It decides whether a queued command may
-            // wait offline without a deadline, so a defaulted one is a command
-            // with no retry policy at all.
+            // `boundedRetry` missing.
+            // It decides whether a queued command may wait offline without a deadline, so a defaulted one is a command with no retry policy at all.
             result: {
               outcome: "ok",
               value: { ok: false, failure: { kind: "queued", reason: "x" } },
@@ -375,9 +318,8 @@ describe("stream proxy — opening", () => {
     const opened = recording.opened()[0];
     expect(opened?.paramsProvider).not.toBeNull();
 
-    // A reconnect re-declare reads the provider again. Main answers from the
-    // last value the worker pushed - the provider itself cannot cross, because
-    // `WsStreamClient` invokes it synchronously.
+    // A reconnect re-declare reads the provider again.
+    // Main answers from the last value the worker pushed - the provider itself cannot cross, because `WsStreamClient` invokes it synchronously.
     resume = { authorityEpoch: "epoch-1", position: 7 };
     opened?.emitStatus("reconnecting", null);
     expect(opened?.readParams()).toEqual({
@@ -402,9 +344,7 @@ describe("stream proxy — opening", () => {
           ? refusal.status.reason.details.code
           : null,
       ).toBe(STREAM_PROXY_UNKNOWN_METHOD_CODE);
-      // NOT `INCOMPATIBLE`: that is read by `isMethodIncompatibleClose` as a
-      // verdict about the HOST's capability, and would pin a permanent "too
-      // old" on a host that serves the method perfectly well.
+      // Not `incompatible`: that is read by `isMethodIncompatibleClose` as a verdict about the host's capability, and would pin a permanent "too old" on a host that serves the method perfectly well.
       expect(
         refusal.status.reason?.kind === "fatalError"
           ? refusal.status.reason.details.code
@@ -460,9 +400,8 @@ describe("stream proxy — versions", () => {
       minor: 1,
     });
 
-    // A host restart heals through `reconcileMethodSchemaVersion`, so the
-    // manifest is re-pushed. A worker holding the previous incarnation's
-    // version would gate an additive minor-line feature on the wrong answer.
+    // A host restart heals through `reconcileMethodSchemaVersion`, so the manifest is re-pushed.
+    // A worker holding the previous incarnation's version would gate an additive minor-line feature on the wrong answer.
     worker.deliverManifest({
       methodVersions: [
         { method: "epic.subscribe", version: { major: 1, minor: 3 } },
@@ -503,13 +442,6 @@ describe("stream proxy — messages for something that is gone", () => {
     const { recording, host } = connect();
 
     // Never opened on this host - an older worker generation still draining.
-    //
-    // Asserted on what is OBSERVABLE, now that `handle` answers nothing. The
-    // retired `toBe(false)` looked like the stronger pin and was the weaker
-    // one: its failure mode was "returned true", which no caller read. What
-    // production actually requires is that an unknown id neither throws - a
-    // throw here is an unhandled error inside a `message` listener, with no
-    // route back to anyone - nor mints a session.
     expect(() => {
       host.handle({
         kind: "stream/send",
@@ -527,9 +459,7 @@ describe("stream proxy — messages for something that is gone", () => {
 
 describe("stream proxy — payload validation on receive", () => {
   it("accepts bytes that crossed a realm, and an explicit null", () => {
-    // `instanceof Uint8Array` would REJECT the first of these under jsdom, where
-    // the clone arrives from Node's realm while the module's binding is jsdom's.
-    // The check reads an internal slot and the type's own tag instead.
+    // `instanceof Uint8Array` would reject the first of these under jsdom, where the clone arrives from Node's realm while the module's binding is jsdom's.
     for (const payload of [Uint8Array.from([1, 2, 3]), null]) {
       const parsed = parseStreamProxyFrame({
         streamId: 1,
@@ -544,9 +474,7 @@ describe("stream proxy — payload validation on receive", () => {
     ["DataView", new DataView(new ArrayBuffer(4))],
     ["Int16Array", Int16Array.from([1, 2])],
   ])("rejects a %s with a named reason", (_label, payload) => {
-    // Both pass `ArrayBuffer.isView`; only the tag separates them. Handed to a
-    // consumer expecting Yjs bytes, either produces a decode failure far from
-    // this boundary.
+    // Both pass `ArrayBuffer.isView`; only the tag separates them.
     const parsed = parseStreamProxyFrame({
       streamId: 1,
       envelope: { kind: "update", hasBinaryPayload: true },
@@ -558,14 +486,7 @@ describe("stream proxy — payload validation on receive", () => {
 
   it("drops a bad payload on BOTH receive paths, naming the reason", () => {
     const { pair, rejected } = connect();
-    // Entered through the pair's UNTYPED inlet - `post(message: unknown, …)` -
-    // which is the same `unknown` a real `message` listener sees.
-    //
-    // Handing this to `host.handle(...)` or `worker.deliverFrame(...)` does not
-    // compile, and that is the contract working rather than an obstacle: those
-    // parameters are `StreamProxyFrame`, so a frame with a `DataView` payload
-    // cannot be constructed as one. A negative test has to be BORN `unknown`;
-    // casting it into shape would assert the very thing under test.
+    // Entered through the pair's untyped inlet - `post(message: unknown, …)` - which is the same `unknown` a real `message` listener sees.
     const bad = {
       streamId: 1,
       envelope: { kind: "update", hasBinaryPayload: true },
@@ -600,25 +521,21 @@ describe("stream proxy — disposal", () => {
     host.dispose();
     host.dispose();
 
-    // N opened, N closed, ONCE each: a total alone cannot tell three sessions
+    // N opened, N closed, once each: a total alone cannot tell three sessions
     // closed once from one session closed three times.
     expect(recording.closedCount()).toBe(3);
     for (const session of recording.opened()) {
       expect(session.closeCount()).toBe(1);
     }
     expect(host.openCount()).toBe(0);
-    // Each session was TOLD, not merely closed. On the detach-keep-replica
-    // path the worker survives its transport, and a stream that just goes
-    // quiet is indistinguishable from a slow host.
+    // Each session was told, not merely closed.
     const closes = toWorker.filter(
       (event) =>
         event.kind === "stream/status" && event.status.status === "closed",
     );
     expect(closes).toHaveLength(3);
-    // A frame arriving after disposal hits the same drop rule. With `handle`
-    // answering nothing, the observable claim is stronger than the retired
-    // `toBe(false)`: a post-disposal frame must reach neither a session nor
-    // the worker, so NOTHING new may appear on the outbound queue.
+    // A frame arriving after disposal hits the same drop rule.
+    // With `handle` answering nothing, the observable claim is stronger than the retired `toBe(false)`: a post-disposal frame must reach neither a session nor the worker, so nothing new may appear on the outbound queue.
     const settled = toWorker.length;
     expect(() =>
       host.handle({
@@ -650,10 +567,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * The highest numeric key of a registry level.
- *
- * Walked rather than read off a field, because the point of this pin is to
- * agree with the registry as it IS - a helper that trusted `latestMinor` would
- * be trusting the same declaration the drift can move.
+ * Walked rather than read off a field, because the point of this pin is to agree with the registry as it IS - a helper that trusted `latestMinor` would be trusting the same declaration the drift can move.
  */
 function highestNumericKey(record: Record<string, unknown>): number {
   return Object.keys(record)

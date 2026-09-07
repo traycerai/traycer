@@ -7,9 +7,7 @@ import {
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 
 /**
- * Derived from the registry rather than restated, so the coupling is the test:
- * a panel added to the desktop rail and left off the phone bar fails here
- * instead of silently becoming a surface only a desktop can reach.
+ * Derived from the registry rather than restated, so the coupling is the test: a panel added to the desktop rail and left off the phone bar fails here instead of silently becoming a surface only a desktop can reach.
  */
 const RAIL_PANEL_IDS = LEFT_PANEL_DEFINITIONS.map(
   (definition) => definition.id,

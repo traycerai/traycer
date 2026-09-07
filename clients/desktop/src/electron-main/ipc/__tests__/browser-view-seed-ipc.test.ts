@@ -5,19 +5,6 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewEnsureTab } from "../../browser-view/browser-view-port";
 
-/**
- * The `createElectronTab` storage seed, through the same lock as the observed
- * applier (browser security review, root cause C).
- *
- * The seed used to be a bare `cookies.set` loop into `persist:traycer-browser`
- * with no domain scope, no expiry classification, no bound, no ledger gate and
- * no serializer, while the very same bytes arriving as `primaryProfileObserved`
- * got all five. These pin that it is now one door with one lock: what reaches
- * the jar is only ever what `applyBrowserObservedProfile` let through.
- *
- * The applier itself is REAL here - mocking it would leave nothing under test
- * but the shape of a call. What is faked is the jar underneath it.
- */
 
 interface SeededCookie {
   readonly name: string;
@@ -73,10 +60,6 @@ vi.mock("../../app/cert-trust", () => ({
   trustBrowserCertificate: vi.fn(() => Promise.resolve()),
 }));
 
-/**
- * Only the constructor options are wanted: `seedStorageState` is what the
- * provisioning path calls, and it is the unit under test.
- */
 const managerOptions = vi.hoisted(() => ({
   seedStorageState: null as
     | ((
@@ -188,10 +171,6 @@ function makeBridge() {
     fanOut: vi.fn(),
     markRendererUnavailable: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
-    // The jar-plane registry is built during registration (H10), so a bridge
-    // double now has to answer for the host snapshot it subscribes to and the
-    // auth session its bearer comes from. Nothing here dials: no stream is
-    // opened unless a renderer asks for one.
     options: {
       authnBaseUrl: "https://authn.test",
       host: {
@@ -226,10 +205,7 @@ function seedCookie(
   };
 }
 
-/**
- * One seed through the real path, answering what the caller may install as a
- * localStorage document script - `null` when the seed was refused whole.
- */
+/** One seed through the real path, answering what the caller may install as a localStorage document script - `null` when the seed was refused whole. */
 async function seed(
   cookies: BrowserStorageCookie[],
   origins: {
@@ -268,10 +244,7 @@ describe("createElectronTab storage seed", () => {
     fixture.merged = [];
     fixture.retained = [];
     fixture.connectionId = "connection-1";
-    // A fresh userData directory and module registry per test: the forget
-    // ledger is real and persists both on disk and in module state, so the
-    // custody marks one test records must not decide the next test's
-    // ownership answer.
+    // A fresh userData directory and module registry per test: the forget ledger is real and persists both on disk and in module state, so the custody marks one test records must not.
     fixture.userDataDir = `/tmp/traycer-desktop-seed-test-${seedRun}`;
     seedRun += 1;
     vi.resetModules();
@@ -332,16 +305,8 @@ describe("createElectronTab storage seed", () => {
     registerBrowserViewIpc(makeBridge() as never);
     const revision = await ledger.recordForgottenBrowserSite("example.test");
 
-    // The user forgot this site and this connection has not yet said it
-    // pruned, so the seed is exactly the resurrection the ledger gate exists
-    // to refuse - including its localStorage half, which is why the caller is
-    // handed nothing to install.
     expect(await seed([seedCookie("sid", {})], [ORIGIN])).toBeNull();
     expect(fixture.merged).toEqual([]);
-    // Nothing retained either. These origins are what a quit capture reads
-    // localStorage from and ships back to the host, so retaining a refused
-    // seed's would hand the forgotten site back through the capture door -
-    // which the ledger gate does not watch.
     expect(fixture.retained).toEqual([]);
 
     // The ack is clamped to what this connection was actually SENT, so the
@@ -372,13 +337,6 @@ describe("createElectronTab storage seed", () => {
     expect(fixture.merged).toEqual([]);
   });
 
-  // The cookie half's verdict decides the localStorage half. A seed whose
-  // every cookie names a key the desktop's own browsing already owns applied
-  // nothing, so installing its localStorage would `clear()` and rewrite the
-  // origin's storage for a site the cookies were just refused for - the user's
-  // own session overwritten through the one door the cookie rule does not
-  // watch. The applier's own outcome is still "applied", so the count is what
-  // decides.
   it("installs no localStorage when every seeded cookie is one the desktop owns", async () => {
     fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
 
@@ -392,10 +350,6 @@ describe("createElectronTab storage seed", () => {
     expect(fixture.retained).toEqual([]);
   });
 
-  // One unrelated cookie landing beside a refusal buys no right to clear the
-  // origin: the refused key names a site the user's own browsing signed into
-  // here, so its localStorage is the desktop's too and `clear()` would take
-  // the very login the cookie rule just protected.
   it("installs no localStorage when any seeded cookie is one the desktop owns", async () => {
     fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
 

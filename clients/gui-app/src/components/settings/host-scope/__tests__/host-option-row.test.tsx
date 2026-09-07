@@ -8,25 +8,11 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-// Ticket 06 subject F, the row half: `HostOptionRow` renders EXACTLY the
-// `updateView` prop it was handed, and nothing else - the isolation the hook
-// test (`use-fleet-update-views.test.tsx`) proves at the data source, this
-// proves at the LAST consumer, so a future prop threaded through some shared
-// context (breaking the "opt-in by data, not a flag" design the component's
-// own doc comment calls out) would be caught here even if the hook stayed
-// correct.
-//
-// Also pins the row's OTHER isolation property: it is pure content, with no
-// interactive element of its own for any banner/update state to disable -
-// `HostSwitcher`'s cmdk `CommandItem` is the only thing that can ever gate
-// selection, so proving the row emits none is what makes "no update state
-// disables a row" a structural fact instead of a per-badge checklist.
+// Also pins the row's other isolation property: it is pure content, with no interactive element of its own for
+// any banner/update state to disable.
 
 function fleetView(overrides: Partial<FleetUpdateView>): FleetUpdateView {
-  // Built by spreading the shared "we know nothing" constant rather than
-  // hand-writing every field: a new field on `FleetUpdateView` should not need
-  // an edit in each fixture, and a fixture that lists fields explicitly quietly
-  // becomes a second definition of the type.
+  // Built by spreading the shared "we know nothing" constant rather than hand-writing every field.
   return {
     ...UNKNOWN_FLEET_UPDATE_VIEW,
     kind: "idle",
@@ -36,10 +22,7 @@ function fleetView(overrides: Partial<FleetUpdateView>): FleetUpdateView {
 }
 
 describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F)", () => {
-  // This suite has no RTL auto-cleanup configured (confirmed project-wide
-  // gap) - without this, `queryByTestId` in a later test can match a DOM node
-  // left mounted by an earlier one, since these tests intentionally reuse the
-  // same host-a/host-b testids across cases.
+  // This suite has no RTL auto-cleanup configured (confirmed project-wide gap).
   afterEach(cleanup);
 
   it("renders each row's badge from its OWN updateView prop only, independent of a sibling row's state", () => {
@@ -162,10 +145,8 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
         })}
       />,
     );
-    // Structural, not a checklist of specific attributes: NOTHING this row
-    // renders is a button, link, or anything carrying `disabled` /
-    // `aria-disabled` — every one of those properties belongs to whatever
-    // container (`CommandItem`, a dialog radio) wraps this content.
+    // Structural, not a checklist of specific attributes: nothing this row renders is a button, link, or anything
+    // carrying `disabled` / `aria-disabled`.
     expect(
       container.querySelectorAll("button, a, [role='button']"),
     ).toHaveLength(0);

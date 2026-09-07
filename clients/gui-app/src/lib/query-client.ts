@@ -27,12 +27,8 @@ const SAFE_QUERY_KEY_MARKERS = new Set([
 ]);
 
 /**
- * Builds a `QueryClient` with the app's production configuration. Exported
- * (rather than only the singleton below) so integration tests can run against
- * the exact defaults the app runs with - the global `staleTime` in particular
- * changes `fetchQuery` semantics (it serves still-fresh cache without
- * fetching), and a test-local bare `new QueryClient()` silently exercises a
- * different behavior than production.
+ * Builds a `QueryClient` with the app's production configuration.
+ * Exported (rather than only the singleton below) so integration tests can run against the exact defaults the app runs with - the global `staleTime` in particular changes `fetchQuery` semantics (it serves still-fresh cache without fetching), and a test-local.
  */
 export function createAppQueryClient(): QueryClient {
   const client = new QueryClient({
@@ -60,26 +56,13 @@ export function createAppQueryClient(): QueryClient {
     defaultOptions: {
       queries: {
         staleTime: 60 * 1000,
-        // A `RetryableTransportError` has already been retried to exhaustion by
-        // the transport layer (`createRetryingMessenger`); retrying it again here
-        // multiplies the dial-timeout cost (transport attempts × query attempts).
-        // Let it surface immediately; everything else keeps the single retry.
+        // A `RetryableTransportError` has already been retried to exhaustion by the transport layer (`createRetryingMessenger`); retrying it again here multiplies the dial-timeout cost (transport attempts × query attempts).
         retry: (failureCount, error) =>
           !(error instanceof RetryableTransportError) && failureCount < 1,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
-        // Never let `onlineManager` pause work. Its inputs (`navigator.onLine`
-        // + window online/offline events) are exactly the browser signals the
-        // wake-reconnect layer already documents as unreliable in the desktop
-        // shell: after a sleep/wake Chromium can report offline indefinitely,
-        // which under the default `networkMode: "online"` silently parked
-        // every query (`fetchStatus: "paused"`) and every mutation
-        // (paused-pending, so `disabled={isPending}` gates froze) until the
-        // app was relaunched - the whole UI went inert while the streams
-        // (wired to the OS resume pulse instead) kept flowing. Host RPCs
-        // target the loopback host anyway, so "the network is down" must not
-        // gate them even when true; cloud-bound calls fail fast into the
-        // existing toast/error paths instead of pausing.
+        // Never let `onlineManager` pause work.
+        // Its inputs (`navigator.onLine` + window online/offline events) are exactly the browser signals the wake-reconnect layer already documents as unreliable in the desktop shell: after a sleep/wake Chromium can report offline indefinitely, which under the.
         networkMode: "always",
       },
       mutations: {
@@ -96,40 +79,8 @@ export function createAppQueryClient(): QueryClient {
 export const queryClient = createAppQueryClient();
 
 /**
- * The app-wide catch-all for failed host RPCs, so this is the ONE log line most
- * support reports carry about a failure.
- *
- * It used to record `describeLogErrorSummary` for EVERY error, which keeps the
- * name and replaces the text with `messageLength` - a number. That reduced every
- * report to `{ name: "HostRpcError", messageLength: 198, stack: null }`, which
- * identifies nothing: two unrelated failures with equal-length messages are
- * indistinguishable, and no failure can be diagnosed at all.
- *
- * The split is by error TYPE, because the two kinds have different AUTHORS:
- *
- * - `HostRpcError` is host-authored diagnostic text and the thing support
- *   reports actually need. Logged in full, plus the structured `code` /
- *   `method` / `requestId` the message does not carry and which were dropped
- *   entirely.
- * - Everything else reaching these callbacks is app-authored and can quote the
- *   USER. `use-epic-export-artifacts-mutation` throws
- *   `"<artifact.title>" is still loading.`, and SIX hooks feeding this cache
- *   deliberately call `appLogger.errorSummary` in their own `onError`
- *   (export-artifacts, send-queued-invites, open-saved-file, mermaid-png-
- *   download, usage-image-export, git-file-diffs-batched). A global full log
- *   fires BEFORE theirs and would defeat every one of those decisions, so this
- *   branch keeps the summary.
- *
- * On the host branch specifically: `redactLogText` (inside `describeLogError`)
- * is a CREDENTIAL scrubber - it removes no filesystem path, URL, or other
- * request-derived text, so do not cite it as though it made arbitrary text
- * safe. What justifies the full message is the destination: it lands in a LOCAL
- * log file (`console.warn` -> the desktop shell's `console-message` handler ->
- * `traycer-desktop.log`) with no telemetry sink, and the support bundle that
- * log feeds already tails the HOST's own log verbatim (`diagnostics.logs.tail`),
- * which carries absolute paths by construction. A new sink for these logs
- * (telemetry, auto-upload) invalidates that, and this call site must be
- * revisited with it.
+ * App-wide failed-host-RPC log: `HostRpcError` in full (local log file, no telemetry); everything else stays summarized because it can quote the user.
+ * `redactLogText` is a credential scrubber only - it does not strip paths.
  */
 function describeRequestError(error: unknown): AppLogFields {
   if (!(error instanceof HostRpcError)) {

@@ -19,12 +19,7 @@ export interface DraftRuntimeSource {
     content: JsonContent,
     selection: DraftSelection | null,
   ) => void;
-  /**
-   * Durably persists a caret move alone. Kept separate from `write` so a
-   * selection-only debounced flush never reaches a content-comparing writer
-   * (`setDraftContent`'s `sameJsonContent`) - it must stay O(1), never
-   * O(document-size), even for a multi-megabyte inline-image draft.
-   */
+  /** Durably persists a caret move alone. */
   readonly writeSelection: (
     draftId: string,
     selection: DraftSelection | null,
@@ -61,10 +56,8 @@ export interface DraftRuntimeState {
 }
 
 /**
- * A started create may settle after the draft has been closed, but never after
- * the renderer identity/window that started it has been torn down. Keep those
- * cases distinct: the former needs one discoverable background result, while
- * the latter must be invisible to the next identity.
+ * A started create may settle after the draft has been closed, but never after the renderer
+ * identity/window that started it has been torn down.
  */
 export type DraftSubmissionSettlement =
   | { readonly kind: "current" }
@@ -73,14 +66,8 @@ export type DraftSubmissionSettlement =
   | { readonly kind: "retired" };
 
 /**
- * A pending durable write is either a document mutation (content + the
- * selection alongside it) or a pure selection move. Keeping them distinct
- * lets `flush()` route each to the correct source capability - a selection
- * move following a still-unflushed document write coalesces into that same
- * document operation's selection (one `write` call lands both, and the
- * pending content is never dropped); a selection move with nothing else
- * pending stays a standalone selection-only operation through to
- * `writeSelection`.
+ * A pending durable write is either a document mutation (content + the selection alongside it) or
+ * a pure selection move.
  */
 type PendingDraftWrite =
   | {
@@ -129,14 +116,7 @@ export class DraftRuntime {
     return this.attachmentCount > 0;
   }
 
-  /**
-   * Records a real document mutation. Callers must only invoke this from the
-   * editor boundary's document-change signal (Tiptap's own `docChanged`-gated
-   * `update` event) - never a selection-only echo - so every call
-   * unconditionally bumps `contentRevision` without comparing content.
-   * `contentRevision` answers "did the user change what was sent?", so a
-   * caret move must go through `setSelection` instead and leave it alone.
-   */
+  /** Records a real document mutation. */
   setSnapshot(content: JsonContent, selection: DraftSelection | null): void {
     const current = this.store.getState();
     this.pending = { kind: "document", content, selection };
@@ -149,15 +129,7 @@ export class DraftRuntime {
     });
   }
 
-  /**
-   * Persists a caret move alone. Never touches `contentRevision` or compares
-   * /serializes `content`. A document write already pending (not yet
-   * flushed) absorbs this selection instead of being replaced - the flush
-   * still lands the newer content, just with the latest caret alongside it.
-   * With nothing else pending, this schedules a standalone selection-only
-   * flush through `writeSelection`, never a content-comparing writer, so a
-   * (possibly multi-megabyte inline-image) document is never walked.
-   */
+  /** Persists a caret move alone. Never touches `contentRevision` or compares /serializes `content`. */
   setSelection(selection: DraftSelection | null): void {
     const current = this.store.getState();
     if (sameSelection(current.selection, selection)) return;
@@ -288,11 +260,7 @@ export class DraftRuntime {
   }
 }
 
-/**
- * Renderer-local runtime owner. It is deliberately module-local rather than
- * persisted: recovery hydrates only this window's durable drafts and can never
- * pull a mirror, pending writer, or submission from another renderer window.
- */
+/** Renderer-local runtime owner. */
 export class DraftRuntimeRegistry {
   private source: DraftRuntimeSource | null = null;
   private readonly runtimes = new Map<string, DraftRuntime>();

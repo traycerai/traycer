@@ -21,16 +21,7 @@ const ARTIFACT_ID = "artifact-1";
 const METHOD = "epic.listCommentThreads";
 
 /**
- * The comment poll's WIRE, through the public hook.
- *
- * `use-lane-comment-threads.test.ts` pins the two halves separately - that
- * `commentThreadsShouldPoll` answers correctly, and that the table carries a
- * cadence for it to opt into. Neither observes the hook actually JOINING them:
- * delete the `poll:` line from `useEpicCommentThreadsForClient` and every one
- * of those assertions still passes, because the pure function and the table
- * entry are both still exactly right. That is the same shape as the bug this
- * fixes - a mechanism that reads as wired and schedules nothing - so it is
- * pinned here from the outside, on the query TanStack actually built.
+ * Pin that the public hook actually joins `commentThreadsShouldPoll` to the poll table. The halves passing in isolation still schedule nothing.
  */
 describe("useEpicCommentThreadsForClient poll wiring", () => {
   afterEach(() => {

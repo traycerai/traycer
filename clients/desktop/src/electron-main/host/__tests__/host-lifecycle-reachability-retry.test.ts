@@ -30,10 +30,6 @@ import {
 import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
 import type { HostFsLayout } from "../host-paths";
 
-// The retry scenarios use a stable synthetic pid while the test controls the
-// endpoint probe. A platform liveness probe has no positive result for that
-// pid, so model the indeterminate branch locally: the handshake remains
-// authoritative while a positively dead/recycled pid is rejected elsewhere.
 function useIndeterminateProcessLiveness(): () => void {
   const restore = __setAsyncProcessLivenessReaderForTest(
     async () => "indeterminate",
@@ -44,19 +40,7 @@ function useIndeterminateProcessLiveness(): () => void {
 /** The ladder's first rung, mirrored from `host-lifecycle.ts`. */
 const REACHABILITY_RETRY_INITIAL_MS_FOR_TEST = 250;
 
-/**
- * Lets the REAL work a fired ladder timer starts actually finish.
- * `advanceTimersByTimeAsync` only drains microtasks, and a reload does real
- * libuv-threadpool filesystem reads (`pid.json`, host-name settings) - so the
- * probe fires, and the NEXT ladder rung is re-armed, only after real
- * event-loop turns whose count depends on machine load. A fixed number of
- * turns is therefore a race on a slow CI runner; instead, yield real turns
- * until the reload has observably settled: the expected probe count was
- * reached AND the ladder re-armed its next fake timer. These tests never call
- * `bootstrap()` (no watcher, no readiness wait), so the ladder owns the only
- * fake `setTimeout` and `vi.getTimerCount()` is exactly "next rung armed".
- * The deadline reads `performance.now()` because `Date` is faked here.
- */
+/** These tests never call `bootstrap()` (no watcher, no readiness wait), so the ladder owns the only fake `setTimeout` and `vi.getTimerCount()` is exactly "next rung armed". */
 async function settleLadderReload(probeSettled: () => boolean): Promise<void> {
   const deadline = performance.now() + 10_000;
   while (!(probeSettled() && vi.getTimerCount() > 0)) {
@@ -120,13 +104,6 @@ const REPLACEMENT_PID_METADATA = JSON.stringify({
   pid: 4242,
 });
 
-/**
- * A liveness reader that COUNTS, which is what makes the identity throttle
- * observable: `getPublishedProcessIdentityVerdict` asks liveness first and
- * every verdict read therefore lands here exactly once. In production the same
- * read continues into a child process (`ps` / `tasklist` + `powershell`) - the
- * cost the throttle exists to bound.
- */
 function countingProcessLiveness(verdictOf: () => ProcessLivenessVerdict): {
   readonly reads: () => number;
   readonly restore: () => void;
@@ -142,19 +119,6 @@ function countingProcessLiveness(verdictOf: () => ProcessLivenessVerdict): {
   };
 }
 
-/**
- * Regression guard for the 2026-07-14 incident (production desktop log,
- * first launch after a reinstall): bootstrap timed out with HOST_NOT_READY,
- * the host then published pid.json and became reachable 7s later - and the
- * snapshot stayed null for the rest of the session because the pid.json
- * watcher is edge-triggered on file WRITES while reachability is
- * time-varying. A single probe failure at the only watcher edge used to be
- * terminal ("Bound host is offline" on every chat until an app restart).
- *
- * The fix is the retry-until-reachable ladder in `reloadSnapshot`: whenever
- * pid metadata exists but its endpoint didn't answer, a backoff timer keeps
- * re-probing until the endpoint answers (or the metadata disappears).
- */
 describe("HostLifecycle reachability retry ladder", () => {
   it(
     "converges after the host outlives a failed probe at the only watcher " +
@@ -190,11 +154,6 @@ describe("HostLifecycle reachability retry ladder", () => {
         expect(errors).toEqual([{ code: "HOST_NOT_READY" }]);
         expect(lifecycle.getSnapshot()).toBeNull();
 
-        // Host publishes pid.json, but the probe fails at the watcher edge
-        // (a just-spawned host exceeding the 750ms connect budget). The
-        // process is live, so the host is published as BUSY rather than
-        // withheld - int #48. Withholding it is what let the registry twin
-        // stand in as a hardcoded-unavailable row and lock every chat.
         await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
         await waitUntil(() => lifecycle.getSnapshot() !== null, 10_000);
         expect(lifecycle.getSnapshot()?.availability).toBe("busy");
@@ -203,10 +162,6 @@ describe("HostLifecycle reachability retry ladder", () => {
         );
         expect(changes.at(-1)?.pid).toBe(18841);
 
-        // The host is now genuinely reachable. No further fs event will
-        // fire - only the retry ladder can converge. The ladder has to be
-        // armed by the DEGRADED verdict, not by a null snapshot, which is the
-        // state that no longer occurs here.
         probeResult = true;
         await waitUntil(
           () => lifecycle.getSnapshot()?.availability === "available",
@@ -250,10 +205,6 @@ describe("HostLifecycle reachability retry ladder", () => {
     lifecycle.on("error", () => {});
 
     try {
-      // pid.json is present but the endpoint refuses: bootstrap times out and
-      // the ladder ARMS, so this test actually exercises the clear path (the
-      // previous version left the probe reachable, so no ladder ever armed and
-      // deleting the clear would not have failed it).
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
       await lifecycle.bootstrap({ hostInstalled: true });
       expect(lifecycle.getSnapshot()).toBeNull();
@@ -274,13 +225,6 @@ describe("HostLifecycle reachability retry ladder", () => {
   }, 20_000);
 });
 
-/**
- * The tests above drive the ladder through real `fs.watch` edges. These
- * exercise the retry PREDICATE directly - no `bootstrap()`, no watcher - by
- * calling `reloadSnapshotFromDisk()` ourselves and advancing fake timers, so a
- * regression that made the predicate arm/clear on the wrong condition fails
- * here even if a stray watcher edge would otherwise have masked it.
- */
 describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", () => {
   it("converges via the retry timer when malformed metadata becomes valid", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-retry-direct-"));
@@ -349,10 +293,8 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
       await sleep(1_000);
       expect(lifecycle.getSnapshot()).toBeNull();
 
-      // A later valid, reachable file appears - but with the ladder cleared
-      // and no watcher installed (bootstrap() was never called), nothing
-      // re-reads it. The snapshot must stay null; only an explicit reload (a
-      // real watcher event in production) would surface it.
+      // A later valid, reachable file appears - but with the ladder cleared and no watcher installed (bootstrap() was never called), nothing re-reads it.
+      // The snapshot must stay null; only an explicit reload (a real watcher event in production) would surface it.
       reachable = true;
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
       await sleep(1_500);
@@ -364,18 +306,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
   }, 20_000);
 });
 
-/**
- * The ladder's re-probe is cheap; the IDENTITY read behind it is not - it
- * spawns a child process. Since int #48 the busy hold no longer expires, so a
- * host that wedges for an afternoon keeps the ladder running at its 5s cap for
- * as long as the wedge lasts: ~720 spawns an hour, for an answer that changes
- * at most once. The health monitor already throttles this exact cost at 120s
- * (`ALIVE_RECHECK_INTERVAL_MS`); these pin the same shape here.
- *
- * Time is faked, timers are not advanced: every reload below is driven
- * explicitly, so what is counted is the throttle's decision and never a ladder
- * tick that happened to fire.
- */
+/** Time is faked, timers are not advanced: every reload below is driven explicitly, so what is counted is the throttle's decision and never a ladder tick that happened to fire. */
 describe("HostLifecycle process-identity throttle", () => {
   const cleanups: (() => void)[] = [];
 
@@ -467,24 +398,12 @@ describe("HostLifecycle process-identity throttle", () => {
       await lifecycle.reloadSnapshotFromDisk();
     }
 
-    // `dead`/`mismatch` are what `readPublishedHostPresence` turns into
-    // `absent`, and absence is positive evidence with no hysteresis behind it -
-    // it must never come from a cache. It is also free: a dead pid loses the
-    // liveness probe before any child process is spawned.
+    // `dead`/`mismatch` are what `readPublishedHostPresence` turns into `absent`, and absence is positive evidence with no hysteresis behind it - it must never come from a cache.
     expect(identity.reads()).toBe(3);
     expect(lifecycle.getSnapshot()).toBeNull();
   });
 });
 
-/**
- * `readPidMetadataState` separates "the file is gone" from "I could not read
- * it". Only the first is evidence about the HOST; the second is a failed
- * observation, and folding it as `absent` runs it through the one arm of
- * `foldHostAvailability` with no hysteresis at all - momentarily publishing a
- * live host as dead over a transient EACCES/EIO or a read that landed
- * mid-write, faults which cluster with exactly the load that makes a host slow
- * to answer.
- */
 describe("HostLifecycle pid.json read outcomes", () => {
   it("HOLDS the published verdict on an unreadable pid.json, and keeps the ladder armed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-indeterminate-"));
@@ -568,13 +487,7 @@ describe("HostLifecycle pid.json read outcomes", () => {
   }, 20_000);
 });
 
-/**
- * `notifyRespawning` is a hand-written demotion: the caller knows the current
- * host is going away and a replacement is coming. The ladder it arms is the
- * only thing scheduled to find that replacement, so it has to start at the
- * BOTTOM - an arm that inherits the outage's own ratcheted delay makes the new
- * host's first probe wait up to the 5s cap.
- */
+/** `notifyRespawning` is a hand-written demotion: the caller knows the current host is going away and a replacement is coming. */
 describe("HostLifecycle respawn re-arm", () => {
   it("re-arms the ladder at its initial delay when a respawn is announced", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });

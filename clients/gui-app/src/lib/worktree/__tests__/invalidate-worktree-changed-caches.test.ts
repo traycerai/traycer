@@ -14,10 +14,7 @@ const REPO = "/repo";
 
 describe("invalidateWorktreeChangedCaches + branch lists", () => {
   it("refetches a MOUNTED branch list, so the deleted branch actually leaves the source picker", async () => {
-    // A real observer, not just `setQueryData`: `isInvalidated` alone cannot
-    // tell `refetchType: "active"` from `"none"`, and "the entry was marked"
-    // is not the contract - the contract is that the open picker stops offering
-    // a branch that no longer exists.
+    // A real observer, not just `setQueryData`: `isInvalidated` alone cannot tell `refetchType: "active"` from `"none"`, and "the entry was marked" is not the contract - the contract is that the open picker stops offering a branch that no longer exists.
     const queryClient = createAppQueryClient();
     let served: ReadonlyArray<string> = ["main", "feature/login"];
     const observer = new QueryObserver(queryClient, {
@@ -41,10 +38,8 @@ describe("invalidateWorktreeChangedCaches + branch lists", () => {
   });
 
   it("marks an UNMOUNTED branch list so it re-reads on its next mount", async () => {
-    // The branch list lives in a nested form that is usually closed, and the
-    // app leaves `refetchOnMount` at its default. `refetchType: "active"` is
-    // therefore the right cost here - one refetch per open picker, not one per
-    // cached list - and this is the half of that bargain worth pinning.
+    // The branch list lives in a nested form that is usually closed, and the app leaves `refetchOnMount` at its default.
+    // `refetchType: "active"` is therefore the right cost here - one refetch per open picker, not one per cached list - and this is the half of that bargain worth pinning.
     const queryClient = createAppQueryClient();
     let served: ReadonlyArray<string> = ["main", "feature/login"];
     let fetches = 0;

@@ -1,12 +1,4 @@
-/**
- * Intent shapes + factories for the tab-navigation seam.
- *
- * Carved out of `lib/tab-navigation.ts` so per-kind descriptors
- * (`stores/tabs/kinds/*.tsx`) can build intents without forming a
- * module-eval cycle with `navigateToTabIntent` and the registry's
- * per-concern dispatch fns (`tabResolveIntent`, `tabActivate`,
- * `tabRouteOptions`) that themselves need the descriptor registry.
- */
+/** Intent shapes + factories for the tab-navigation seam. */
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -25,11 +17,8 @@ export type EpicPostResolvePreparation =
       readonly kind: "open-tile";
       readonly node: EpicCanvasTileRef;
       /**
-       * The gesture the open is resolved with. `single` lands a preview tab
-       * (italic, evicted by the next preview, promoted by a double-click /
-       * deliberate re-open / drag); anything deliberate lands a permanent one.
-       * Explicit at every construction site: whether a jump-to-owner is a
-       * glance or a keep is the caller's judgement, not a default.
+       * The gesture the open is resolved with.
+       * `single` lands a preview tab (italic, evicted by the next preview, promoted by a double-click / deliberate re-open / drag); anything deliberate lands a permanent one.
        */
       readonly gesture: TileOpenGesture;
     }
@@ -46,9 +35,8 @@ export type TabNavigationIntent =
       readonly tabId: string;
       readonly focus: EpicRouteFocus;
       /**
-       * Pane/tile target prepared after the controller resolves the exact tab
-       * and before it issues the correlated route navigation. `null` for plain
-       * tab switches, which intentionally clear nested route focus.
+       * Pane/tile target prepared after the controller resolves the exact tab and before it issues the correlated route navigation.
+       * `null` for plain tab switches, which intentionally clear nested route focus.
        */
       readonly nestedFocus: NestedFocusTarget | null;
     }
@@ -57,9 +45,8 @@ export type TabNavigationIntent =
   | { readonly kind: "settings"; readonly section: SettingsSectionId };
 
 /**
- * Requests that need source resolution are deliberately distinct from canonical
- * route intents. The navigation controller resolves them after taking its
- * rollback snapshot, then delegates only a canonical intent to tab descriptors.
+ * Requests that need source resolution are deliberately distinct from canonical route intents.
+ * The navigation controller resolves them after taking its rollback snapshot, then delegates only a canonical intent to tab descriptors.
  */
 export type TabActivationIntent =
   | TabNavigationIntent
@@ -82,11 +69,8 @@ export type TabActivationIntent =
        */
       readonly name: string | undefined;
       /**
-       * When set, the controller swaps this empty draft for the resolved epic
-       * AT THE DRAFT'S STRIP SLOT (the epic-list "replace empty draft in place"
-       * UX). Resolution runs INSIDE the controller, after it snapshots the true
-       * pre-command selection, so a rejected navigation still rolls back to the
-       * tab the user actually started on. `null` for every other opener.
+       * When set, the controller swaps this empty draft for the resolved epic AT THE DRAFT'S STRIP SLOT (the epic-list "replace empty draft in place" UX).
+       * Resolution runs INSIDE the controller, after it snapshots the true pre-command selection, so a rejected navigation still rolls back to the tab the user actually started on.
        */
       readonly replaceEmptyDraftId: string | null;
       /** Canvas work that needs the exact resolved tab id. */
@@ -123,13 +107,7 @@ export function existingEpicTabIntent(input: {
 }
 
 /**
- * Cross-route variant of `existingEpicTabIntent`: carries a store-prepared
- * nested focus target (pane/tile) so a single top-level navigation commits
- * both the header-tab switch and the canvas focus atomically, instead of
- * wiping nested search and relying on route-sync canonicalization to
- * self-heal it back in on a later pass. Callers already sitting on the
- * target epic/tab route should use `useEpicNestedFocusNavigation` directly
- * instead of this factory.
+ * Cross-route variant of `existingEpicTabIntent`: carries a store-prepared nested focus target (pane/tile) so a single top-level navigation commits both the header-tab switch and the canvas focus atomically, instead of wiping nested search and relying on.
  */
 export function existingEpicTabIntentWithNestedFocus(input: {
   readonly epicId: string;
@@ -175,10 +153,8 @@ export function openEpicTabIntent(input: {
 }
 
 /**
- * Epic-list opener variant: carries the row's title and the id of an empty
- * draft to replace in place. The controller captures its rollback snapshot
- * BEFORE resolving/creating the epic, so a rejected navigation restores the
- * genuine prior tab rather than the just-opened epic.
+ * Epic-list opener variant: carries the row's title and the id of an empty draft to replace in place.
+ * The controller captures its rollback snapshot BEFORE resolving/creating the epic, so a rejected navigation restores the genuine prior tab rather than the just-opened epic.
  */
 export function openEpicFromListIntent(input: {
   readonly epicId: string;

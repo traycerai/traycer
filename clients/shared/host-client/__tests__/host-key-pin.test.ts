@@ -104,7 +104,7 @@ describe("host Noise static key TOFU pin", () => {
       item("host-2", "pk-2"),
     ]);
 
-    // The impostor is GONE from the list, so nothing downstream can dial it;
+    // The impostor is gone from the list, so nothing downstream can dial it;
     // an unrelated host in the same answer is unaffected.
     expect(admitted.map((host) => host.hostId)).toEqual(["host-2"]);
     expect(pins["host-1"]).toBe("pk-1");
@@ -126,11 +126,8 @@ describe("host Noise static key TOFU pin", () => {
   });
 
   it("R3-5: still admits a first-sight host when the store's write rejects, and reports the failure instead of a mismatch", async () => {
-    // RULE: applyHostKeyPins must not let a pin WRITE failure fail the whole
-    // registry read - the caller's contract is a `{ kind }` union, and a
-    // read-only userData or ENOSPC must not refuse every host in the answer.
-    // Nothing is pinned, so nothing disagrees: this is a write failure, not a
-    // mismatch.
+    // Rule: applyHostKeyPins must not let a pin write failure fail the whole registry read - the caller's contract is a `{ kind }` union, and a read-only userData or enospc must not refuse every host in the answer.
+    // Nothing is pinned, so nothing disagrees: this is a write failure, not a mismatch.
     const writeFailures: Array<{
       readonly hostId: string;
       readonly cause: unknown;
@@ -157,11 +154,7 @@ describe("host Noise static key TOFU pin", () => {
   });
 
   it("R3-10: one of two concurrent first-sight pins for the same host wins and the other is refused, not reported as a write failure", async () => {
-    // RULE: first sight is atomic per host. Both calls read an unpinned host,
-    // so the decision cannot live between `read` and `pin` - it has to be the
-    // store's own read-and-first-write, and the loser is a MISMATCH (a key
-    // disagrees with what is pinned) rather than a write failure (nothing is
-    // pinned, so nothing disagrees, and the host is admitted).
+    // Rule: first sight is atomic per host.
     const mismatches: HostKeyPinMismatchError[] = [];
     const writeFailures: string[] = [];
     const { store, pins } = memoryStore({});

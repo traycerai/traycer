@@ -1,9 +1,4 @@
-/**
- * Resting chip label deriver. Produces `<host> · <primary>` with an
- * optional `+N` badge count for the trigger; mode is intentionally
- * dropped when the binding has multiple folders since per-folder modes
- * can differ.
- */
+/** Resting chip label deriver. */
 export interface HostWorkspaceChipLabel {
   readonly hostLabel: string;
   readonly primaryFolderLabel: string | null;

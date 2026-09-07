@@ -1,14 +1,4 @@
-/**
- * Pure projection helpers for the `workspace.subscribeFileList` stream.
- *
- * The stream serves SINGLE-LEVEL listings keyed by the trailing-slash
- * directory token the client already received as that directory's entry
- * `path` (`"src/"`), with `""` naming the workspace root. Everything here
- * treats those tokens as opaque directory keys and only ever splits them on
- * `/` to answer parent/descendant questions - the same shape `@pierre/trees`
- * uses for its canonical directory paths, which is why the union of covered
- * listings can be handed to the tree adapter as a flat path list unchanged.
- */
+/** Pure projection helpers for the `workspace.subscribeFileList` stream. */
 import type { WorkspaceFileListEntry } from "@traycer/protocol/host/workspace/subscribe";
 
 /** The workspace root's directory token; always covered while a stream is open. */
@@ -31,10 +21,8 @@ export interface WorkspaceFileListProjection {
 }
 
 /**
- * True when `path` is `directoryPath` itself or lives underneath it. Both
- * arguments are directory tokens, so the trailing slash makes a prefix test
- * exact (`"src/"` never matches `"src-gen/x"`); the root token `""` is a
- * prefix of everything, which is what "the workspace root vanished" means.
+ * True when `path` is `directoryPath` itself or lives underneath it.
+ * Both arguments are directory tokens, so the trailing slash makes a prefix test exact (`"src/"` never matches `"src-gen/x"`); the root token `""` is a prefix of everything, which is what "the workspace root vanished" means.
  */
 export function isWithinDirectory(
   path: string,
@@ -44,8 +32,7 @@ export function isWithinDirectory(
 }
 
 /**
- * The parent directory token of a directory token, or `null` for the root
- * (and for any non-canonical input, which never comes off the wire).
+ * The parent directory token of a directory token, or `null` for the root (and for any non-canonical input, which never comes off the wire).
  */
 export function parentDirectoryPathOf(directoryPath: string): string | null {
   if (directoryPath.length === 0 || !directoryPath.endsWith("/")) return null;
@@ -63,8 +50,7 @@ function directoryDepthOf(directoryPath: string): number {
 }
 
 /**
- * Orders directory tokens ancestors-first, which is the order the host applies
- * the paths of a single `watch` frame in.
+ * Orders directory tokens ancestors-first, which is the order the host applies the paths of a single `watch` frame in.
  */
 export function sortDirectoryPathsAncestorsFirst(
   directoryPaths: ReadonlyArray<string>,
@@ -75,19 +61,7 @@ export function sortDirectoryPathsAncestorsFirst(
   });
 }
 
-/**
- * Narrows an expansion set to the directories this client may legally watch,
- * ordered ancestors-first.
- *
- * The contract enforces the ancestor precondition: a `watch` for a directory
- * whose parent is not covered is refused. Expansion state does not satisfy
- * that on its own - collapsing `"src/"` leaves a nested `"src/lib/"` marked
- * expanded (so re-expanding the parent restores the subtree), and watching it
- * while its parent is uncovered would be refused and pruned. Keeping only the
- * paths whose every ancestor is also expanded reproduces exactly "the rows the
- * user can see", which is what the contract says satisfies the precondition
- * for free. The root is always covered, so it is never named.
- */
+/** Narrows an expansion set to the directories this client may legally watch, ordered ancestors-first. */
 export function selectWatchableDirectoryPaths(
   expandedPaths: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
@@ -109,10 +83,8 @@ export function selectWatchableDirectoryPaths(
 }
 
 /**
- * Every ancestor directory token of a path, root-first: `"src/lib/a.ts"` ->
- * `["src/", "src/lib/"]`. Mirrors how the tree adapter derives directory rows
- * from a flat path list, so a caller can name exactly the rows that have to be
- * open for that path to be visible.
+ * Every ancestor directory token of a path, root-first: `"src/lib/a.ts"` -> `["src/", "src/lib/"]`.
+ * Mirrors how the tree adapter derives directory rows from a flat path list, so a caller can name exactly the rows that have to be open for that path to be visible.
  */
 export function ancestorDirectoryPathsOf(path: string): ReadonlyArray<string> {
   const withoutTrailingSlash = path.endsWith("/") ? path.slice(0, -1) : path;
@@ -122,20 +94,7 @@ export function ancestorDirectoryPathsOf(path: string): ReadonlyArray<string> {
     .map((_segment, index) => `${segments.slice(0, index + 1).join("/")}/`);
 }
 
-/**
- * Folds the tree's live expansion back into the durable set.
- *
- * A directory the tree does not know about YET must survive: on mount (and on
- * every reconnect) the restored set names directories whose listings have not
- * arrived, and reading the tree alone would report them collapsed and wipe the
- * restore before the batched `watch` frame could ask for them. A directory the
- * tree DOES know is authoritative - that is where a real collapse comes from.
- *
- * The mirror case is deliberate too: collapsing `"src/"` makes `"src/lib/"`
- * unknown (its rows go with the coverage), so the nested expansion is
- * remembered and comes back when the parent re-opens. `selectWatchableDirectoryPaths`
- * keeps those remembered paths out of the coverage request in the meantime.
- */
+/** Folds the tree's live expansion back into the durable set. */
 export function mergeExpandedDirectoryPaths(
   storedPaths: ReadonlyArray<string>,
   knownDirectoryPaths: ReadonlyArray<string>,
@@ -148,18 +107,7 @@ export function mergeExpandedDirectoryPaths(
   ];
 }
 
-/**
- * Flattens the covered listings into the tree adapter's inputs.
- *
- * Only listings for CURRENTLY covered directories are read: a directory the
- * user collapsed keeps no rows, so re-expanding it shows the fresh listing the
- * host answers the new `watch` with rather than a stale snapshot.
- *
- * An entry inside an already-ignored directory contributes no `ignored` marker
- * of its own - the tree adapter inherits ignored status down a subtree, and
- * emitting one per entry would decorate every ancestor of, say, `node_modules`
- * with a "contains git status items" dot.
- */
+/** Flattens the covered listings into the tree adapter's inputs. */
 export function projectWorkspaceFileList(
   listingsByDirectory: ReadonlyMap<string, WorkspaceFileListDirectoryListing>,
   coveredDirectoryPaths: ReadonlySet<string>,

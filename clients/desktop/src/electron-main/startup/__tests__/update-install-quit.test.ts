@@ -26,11 +26,6 @@ function snapshotWithTab(tabId: string, name: string): PerWindowSnapshot {
   };
 }
 
-// Fixup B4: quit is instant everywhere else - the tech plan's ONE deliberate
-// bounded exception is "quit keeps a <=10s best-effort drain of an in-flight
-// mutation." This used to be 2 minutes (matching the CLI runner's own per-
-// call timeout headroom instead of the quit-time bound), so "Restart to
-// install" could hang the app open for two minutes behind a wedged mutation.
 describe("QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS", () => {
   it("is bounded at 10 seconds, per the tech plan's quit-time drain exception", () => {
     expect(QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS).toBeLessThanOrEqual(10_000);
@@ -65,10 +60,6 @@ describe("runUpdateInstallQuitSequence", () => {
   it("still drains and quits when the host mutation drain throws (fail-open)", async () => {
     const order: string[] = [];
     await runUpdateInstallQuitSequence({
-      // Fixup D2: push a marker before rejecting - a plain
-      // `Promise.reject(...)` leaves no trace that `drainHostMutation` was
-      // ever invoked, so a regression that dropped the call entirely would
-      // still produce the same ["drain", "authorize"] order.
       drainHostMutation: () => {
         order.push("host-drain-attempt");
         return Promise.reject(new Error("drain blew up"));

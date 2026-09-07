@@ -1,12 +1,5 @@
 /**
- * jsdom has no `PointerEvent` constructor, so Testing Library's
- * `fireEvent.pointerDown(...)` falls back to a bare `Event` and silently
- * drops `clientX` / `button` / `pointerId`. This helper builds a
- * MouseEvent-backed pointer event (MouseEvent carries the coordinate and
- * button fields) with `pointerId` defined on top - enough for React's
- * `onPointer*` synthetic events, which dispatch by event TYPE, not by
- * constructor. Fire it with `fireEvent(target, pointerEvent(...))` so the
- * dispatch stays act()-wrapped.
+ * jsdom has no `PointerEvent` constructor, so Testing Library's `fireEvent.pointerDown(...)` falls back to a bare `Event` and silently drops `clientX` / `button` / `pointerId`.
  */
 export interface PointerEventOptions {
   readonly pointerId: number;

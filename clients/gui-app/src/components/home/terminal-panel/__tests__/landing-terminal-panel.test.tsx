@@ -56,16 +56,7 @@ const mocks = vi.hoisted(() => {
   const initialPlainAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   let plainCollection: PlainTerminalCollection | undefined;
-  // Per-host authority overrides for tests that need a MIX of readiness across
-  // hosts in one render (e.g. "Close All" spanning a ready host and a not-ready
-  // one). A host absent from either map falls back to the two globals below, so
-  // every existing single-authority test is unaffected.
-  //
-  // Declared and annotated here rather than asserted on the literal below: the
-  // lint rule that bans `as` on an object literal auto-strips such a cast, and
-  // a bare `{}` then infers a type whose index access is an error type.
-  // `Partial<Record<…>>` also mirrors the production shape these stand in for
-  // (`LandingTerminalAuthorityEntries`) and is what makes the `??` well-typed.
+  // Declared and annotated here rather than asserted on the literal below.
   const plainAuthorityStatusByHost: Partial<
     Record<string, "legacy" | "capable" | "unknown">
   > = {};
@@ -74,8 +65,8 @@ const mocks = vi.hoisted(() => {
     // React reactive host (useAddressableHostId) vs client host (getActiveHostId).
     // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
     activeHostId: null as string | null,
-    // The COMPOSER placement's resolved host (the window pin). Follows
-    // `activeHostId` unless a test sets it, so one arm can make the two differ.
+    // The composer placement's resolved host (the window pin). Follows `activeHostId` unless a test sets it, so
+    // one arm can make the two differ.
     placementHostId: null as string | null,
     clientActiveHostId: null as string | null,
     probeData: undefined as TerminalListFixture | undefined,
@@ -111,9 +102,7 @@ const mocks = vi.hoisted(() => {
         readonly reason: string;
       }) => void
     >,
-    // The connection registry's per-host row signal. The panel used to be told
-    // "this host's transport moved" by the active slot's `host-updated` event;
-    // P4.2 deleted the slot, and the registry reports the same move per host.
+    // The connection registry's per-host row signal.
     rowChangedListeners: [] as Array<{
       readonly hostId: string;
       readonly listener: () => void;
@@ -157,10 +146,8 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => mocks.activeHostId,
 }));
-// The gesture provider resolves the COMPOSER'S placement (the window's surface
-// pin ?? effective), not the app-wide host, so the landing terminals and the
-// composer beside them describe one machine. Mocked at its seam with the same
-// `mocks.activeHostId` / `mocks.defaultClient` the rest of this suite drives.
+// effective), not the app-wide host, so the landing terminals and the composer beside them describe one
+// machine.
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => {
     const resolvedHostId = mocks.placementHostId ?? mocks.activeHostId;
@@ -187,9 +174,8 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
     };
   },
 }));
-// Partial, not whole-module: the registry also owns `acquireHostConnection`
-// and the equality helpers, and replacing the module wholesale would strand
-// whatever else in this graph reaches for them.
+// Partial, not whole-module: the registry also owns `acquireHostConnection` and the equality helpers, and
+// replacing the module wholesale would strand whatever else in this graph reaches for them.
 vi.mock(
   "@traycer-clients/shared/host-client/host-connection-registry",
   async (importOriginal) => {
@@ -220,7 +206,7 @@ vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.defaultClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The spine, a separate export since redesign.
   useHostRuntimeClient: () => mocks.defaultClient,
   useHostDirectory: () => ({
     findById: (hostId: string) => ({ hostId, websocketUrl: "ws://test" }),
@@ -247,8 +233,8 @@ vi.mock(
       // No staged worktree intent in this suite's fixtures; keeps
       // `resolveWorkspaceLaunchPath` on its no-entry fallback (raw path).
       capturedIntent: null,
-      // Tag the source with the draft it was keyed by so a test can assert the
-      // provider keys it to the CAPTURED draft while a gesture pins.
+      // Tag the source with the draft it was keyed by so a test can assert the provider keys it to the captured
+      // draft while a gesture pins.
       draftId: key.surface === "landing" ? key.draftId : null,
     }),
   }),
@@ -346,13 +332,8 @@ function layoutFor(landingPageId: string) {
   );
 }
 
-/**
- * The app mounts one `TooltipProvider` at the root; the strip's disabled "+"
- * tooltip needs it, so every render goes through this wrapper. The gesture
- * provider (the single live-value reader) wraps the panel exactly as
- * `LandingTerminalHost` does in production; `draftId` models the focused draft
- * the host projects, so a rerender with a new `draftId` models a focus switch.
- */
+/** The app mounts one `TooltipProvider` at the root; the strip's disabled "+" tooltip needs it, so every render
+ * goes through this wrapper. */
 function panelUi() {
   return panelUiForDraft(TEST_LANDING_PAGE_ID);
 }
@@ -498,18 +479,11 @@ const openOverlayApi: SystemTabModalApi = {
   isOverlayActive: () => true,
 };
 
-/** ⌘1-style event: `metaKey` counts as `mod` on every platform. */
 function leaderDigitEvent(code: string): KeyboardEvent {
   return new KeyboardEvent("keydown", { code, metaKey: true });
 }
 
-/**
- * Resolves every deferred `fetchQuery` a reconciliation generation issues,
- * repeatedly: a generation only calls `fetchQuery` after an internal await, so
- * a single splice would race it and leave the live generation hanging. Each
- * pass yields a macrotask so continuations (including newly started
- * generations) run before the next drain.
- */
+/** Resolves every deferred `fetchQuery` a reconciliation generation issues, repeatedly. */
 async function drainDeferredListFetches(
   resolvers: Array<(value: unknown) => void>,
 ): Promise<void> {
@@ -546,18 +520,14 @@ function testRect(width: number, height: number, left: number): DOMRect {
   };
 }
 
-/**
- * Stands in for MobileAppHeader: renders what the header would resolve for the
- * presented surface, so these cases exercise the same read path the real
- * header uses - registration alone puts nothing on screen.
- */
+/** Stands in for MobileAppHeader: renders what the header would resolve for the presented surface, so these
+ * cases exercise the same read path the real header uses - registration alone puts nothing on screen. */
 function MobileHeaderSlotProbe() {
   return <>{useMobileHeaderRightActions()}</>;
 }
 
-// The panel outlives its start page's activation, so several behaviors now
-// depend on which top-level surface owns the screen. Default layout = a start
-// page is active, which is what every other case in this file assumes.
+// The panel outlives its start page's activation, so several behaviors now depend on which top-level surface
+// owns the screen.
 const PANEL_DRAFT_TAB: TabStripItem = {
   kind: "tab",
   id: "item-draft-a",
@@ -617,9 +587,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.plainImportAsync.mockImplementation(() =>
       Promise.reject(new Error("unexpected legacy import")),
     );
-    // Reset (not just clear): a test may override the return with a fail-closed
-    // `null`, and mockClear would leak that override into later tests. Restore
-    // the default host-pinned client here.
+    // Reset (not just clear): a test may override the return with a fail-closed `null`, and mockClear would leak
+    // that override into later tests.
     mocks.buildDialableHostClient.mockReset();
     mocks.buildDialableHostClient.mockImplementation(
       (_client: unknown, entry: { readonly hostId: string }) => ({
@@ -658,9 +627,8 @@ describe("<LandingTerminalPanel />", () => {
       mocks.isMobile = true;
       mocks.activeHostId = "host-a";
       mocks.clientActiveHostId = "host-a";
-      // The hosting start page is FOCUSED by default - resolution keys the
-      // landing entry by the presented draft, so the probe (standing in for
-      // the header) only renders the toggle while that page is on screen.
+      // The hosting start page is focused by default - resolution keys the landing entry by the presented draft, so
+      // the probe (standing in for the header) only renders the toggle while that page is on screen.
       seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
       mocks.probeData = emptyList("/Users/dev");
     });
@@ -693,9 +661,8 @@ describe("<LandingTerminalPanel />", () => {
       expect(testLayout().panelOpen).toBe(true);
     });
 
-    // The overlay is absolute inside the PAGE container, so it never covers the
-    // app header - collapse therefore belongs in the same slot rather than in a
-    // panel bar stacked under a header that is still on screen.
+    // The overlay is absolute inside the page container, so it never covers the app header - collapse therefore
+    // belongs in the same slot rather than in a panel bar stacked under a header that is still on screen.
     it("turns into collapse in the same slot while the panel is open", async () => {
       useLandingTerminalStore
         .getState()
@@ -747,11 +714,8 @@ describe("<LandingTerminalPanel />", () => {
       expect(useMobileHeaderStore.getState().rightActionEntries.size).toBe(0);
     });
 
-    // The panel outlives its page's activation to keep its PTYs warm - it
-    // stays mounted behind an epic tab, History or Settings - so being
-    // mounted is not a claim on the header. The header belongs to the surface
-    // on screen: the entry stays registered, and resolution keeps it off a
-    // surface it does not act on.
+    // The panel outlives its page's activation to keep its PTYs warm - it stays mounted behind an epic tab,
+    // History or Settings - so being mounted is not a claim on the header.
     it("shows no toggle while another surface is presented", async () => {
       seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
       render(
@@ -776,10 +740,8 @@ describe("<LandingTerminalPanel />", () => {
       ).toBeNull();
     });
 
-    // The return leg of a launch round-trip: leaving for a task and coming
-    // back re-presents a panel that never unmounted. Its long-lived
-    // registration resolves again with no re-publish - the toggle must be
-    // back on the start page.
+    // The return leg of a launch round-trip: leaving for a task and coming back re-presents a panel that never
+    // unmounted.
     it("shows the toggle again when the landing surface is presented again", async () => {
       seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
       render(
@@ -805,11 +767,7 @@ describe("<LandingTerminalPanel />", () => {
       ).not.toBeNull();
     });
 
-    // Launching a task from this page replaces it with the epic it created,
-    // and this panel is torn down a commit later than the epic's surface
-    // registers: its existence follows the pane ANCHOR. A late teardown can
-    // only remove the panel's OWN entry - the epic's stays for the header to
-    // resolve.
+    // A late teardown can only remove the panel's own entry - the epic's stays for the header to resolve.
     it("leaves another surface's entry alone when torn down afterwards", async () => {
       const view = render(panelUi());
       await waitFor(() => {
@@ -1048,12 +1006,6 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("creates on the COMPOSER's placement host, not the app-wide one, when the two differ", async () => {
-    // The landing page's composer, hero and folder picker all resolve the
-    // window's surface pin; the terminal panel used to read the app-wide host
-    // (`useAddressableHostId` / `useHostClient`), so a page pinned to host-b
-    // listed, dialed and CREATED terminals on host-a - bound for life - under
-    // a chip that said host-b, and its folder picker staged under
-    // `{landing, host-a, draft}` beside the composer's `{landing, host-b, draft}`.
     mocks.activeHostId = "host-a";
     mocks.placementHostId = "host-b";
     mocks.clientActiveHostId = "host-b";
@@ -1075,11 +1027,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    // Open the panel, then switch to the epic tab before `terminal.list`
-    // settles. The panel used to UNMOUNT here, which aborted the pass; now it
-    // survives, so the settlement has to gate itself - a terminal spawned into
-    // a `display:none` pane cannot be measured and lands at the 80x24 fallback,
-    // and the focus grab would pull the keyboard off the epic canvas.
+    // Open the panel, then switch to the epic tab before `terminal.list` settles.
     seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
     useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
@@ -1094,10 +1042,8 @@ describe("<LandingTerminalPanel />", () => {
     });
     expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
 
-    // Returning must still open the terminal the user asked for: the
-    // reconciliation key is unchanged on the way back, so a settlement that was
-    // DROPPED rather than held would never be recomputed and the panel would
-    // sit empty forever.
+    // Returning must still open the terminal the user asked for: the reconciliation key is unchanged on the way
+    // back.
     await act(async () => {
       seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
       await Promise.resolve();
@@ -1414,19 +1360,16 @@ describe("<LandingTerminalPanel />", () => {
     useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
-    // Rename is disabled - the tab strip does not even attempt an inline
-    // edit, since `terminal.plain.rename` would reject a manager-owned
-    // session with no plain-terminal row.
+    // Rename is disabled - the tab strip does not even attempt an inline edit, since `terminal.plain.rename` would
+    // reject a manager-owned session with no plain-terminal row.
     fireEvent.contextMenu(
       await screen.findByTestId("landing-terminal-tab-sign-in-instance"),
     );
     const renameItem = await screen.findByRole("menuitem", { name: "Rename" });
     expect(renameItem.getAttribute("data-disabled")).not.toBeNull();
 
-    // `fireEvent.click` targets the node directly (no pointer hit-testing),
-    // and the strip's `ContextMenu` is `modal={false}` (see
-    // `landing-terminal-tab-strip.tsx`), so the still-open menu blocks
-    // nothing here - closing it first would only add noise.
+    // `fireEvent.click` targets the node directly (no pointer hit-testing), and the strip's `ContextMenu` is
+    // `modal={false}` (see `landing-terminal-tab-strip.tsx`), so the still-open menu blocks nothing here.
     fireEvent.click(
       screen.getByRole("button", { name: "Close Reasonix sign-in" }),
     );
@@ -1452,9 +1395,8 @@ describe("<LandingTerminalPanel />", () => {
     // A fresh projection, or the capable pass waits instead of settling and
     // the gesture below would never be acted on either way.
     mocks.plainCollection = freshPlainCollection([]);
-    // Panel closed when the host answers `providers.startTerminalLogin`. The
-    // mount pass runs closed and fetches too; let it fetch and settle first so
-    // the count below is the TRANSITION's own pass, not the mount's.
+    // The mount pass runs closed and fetches too; let it fetch and settle first so the count below is the
+    // transition's own pass, not the mount's.
     render(panelUi());
     await waitFor(() => {
       expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
@@ -1481,12 +1423,8 @@ describe("<LandingTerminalPanel />", () => {
       ).panelOpen,
     ).toBe(true);
 
-    // The closed-to-open transition used to be read as the user's opening
-    // gesture, which settles by re-targeting the launch cwd. The sign-in
-    // tab's display-only `"~"` matches none, so settlement spawned a plain
-    // shell and activated it - over the tab that carries the sign-in code.
-    // The transition re-keys reconciliation; wait for its fresh list, then
-    // let the settlement run, so "nothing spawned" is an ordering claim.
+    // The transition re-keys reconciliation; wait for its fresh list, then let the settlement run, so "nothing
+    // spawned" is an ordering claim.
     await waitFor(() => {
       expect(mocks.queryClient.fetchQuery.mock.calls.length).toBeGreaterThan(
         fetchesBeforeOpen,
@@ -1545,9 +1483,7 @@ describe("<LandingTerminalPanel />", () => {
       origin: "provider-login",
       originProviderId: "reasonix",
     });
-    // Adopted as the host's session, never created or imported under its id:
-    // the durable bootstrap would `terminal.plain.create` a bare shell, and
-    // an import would hand the plain registry a session it never spawned.
+    // Adopted as the host's session, never created or imported under its id.
     expect(mocks.plainCreateAsync).not.toHaveBeenCalled();
     expect(mocks.plainImportAsync).not.toHaveBeenCalled();
   });
@@ -1562,10 +1498,8 @@ describe("<LandingTerminalPanel />", () => {
     );
     mocks.freshProbeData = mocks.probeData;
     mocks.plainAuthorityStatus = "capable";
-    // A reconnecting list stream: the capable pass waits for mutability and
-    // returns without settling. A sign-in is short-lived; one that exits
-    // during that wait could never be adopted afterwards (running sessions
-    // only), and its restart surface with it.
+    // A sign-in is short-lived; one that exits during that wait could never be adopted afterwards (running
+    // sessions only), and its restart surface with it.
     mocks.plainCanMutate = false;
     mocks.plainCollection = freshPlainCollection([]);
     recordProviderLoginTerminal({
@@ -1587,12 +1521,8 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("leaves the tombstone to the owner when its close merely joins one", async () => {
-    // The close coordinator keys by the terminal's LIFETIME, not by RPC, so
-    // this close can join an in-flight `terminal.kill` the recovery bridge
-    // already sent. A kill answers an already-gone session with `killed: false`
-    // as data, and for a `pendingCreate` record the kill mutation deliberately
-    // KEEPS the tombstone - so a joiner that retired it here would overrule the
-    // owner and strand the PTY the create is about to produce.
+    // The close coordinator keys by the terminal's lifetime, not by RPC, so this close can join an in-flight
+    // `terminal.kill` the recovery bridge already sent.
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1688,11 +1618,8 @@ describe("<LandingTerminalPanel />", () => {
       screen.queryByTestId("landing-terminal-tab-input-stale-instance"),
     ).toBeNull();
 
-    // Close is deliberately NOT gated on authority readiness: the ×
-    // affordance stays enabled, and clicking it still tombstones and
-    // removes the tab even though this host cannot be asked right now. The
-    // fast-path RPC dispatch is skipped - the tombstone recovery bridge
-    // drains it once the host's authority becomes ready.
+    // Close is deliberately not gated on authority readiness: the × affordance stays enabled, and clicking it
+    // still tombstones and removes the tab even though this host cannot be asked right now.
     const closeButton = screen.getByRole("button", {
       name: "Close Cached title",
     });
@@ -1807,11 +1734,8 @@ describe("<LandingTerminalPanel />", () => {
     const plus = await screen.findByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(plus);
-    // Bypasses the disabled "+" affordance: before the fix, every creation
-    // path funneled into `addTerminalTab` without consulting the host's
-    // authority readiness, so a chord could still persist a tab that looked
-    // exactly like legacy import evidence for a terminal never created on any
-    // host.
+    // Bypasses the disabled "+" affordance: before the fix, every creation path funneled into `addTerminalTab`
+    // without consulting the host's authority readiness.
     act(() => {
       dispatchAction("tab.new", router);
     });
@@ -1849,11 +1773,7 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
     });
     expect(testLayout().panelOpen).toBe(false);
-    // Every closed shell gets its own kill. (The tombstones they were written
-    // with are drained by the reconciliation that follows, once the host list
-    // confirms the sessions are gone - the durable write itself is pinned in
-    // the store test.)
-    // Dispatched through the shared close boundary, which hops a microtask.
+    // Every closed shell gets its own kill.
     await waitFor(() => {
       before.forEach((tab) => {
         expect(mocks.killAsync).toHaveBeenCalledWith({
@@ -1874,9 +1794,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.plainCanMutate = true;
     mocks.plainAuthorityStatusByHost = { "host-b": "capable" };
     mocks.plainCanMutateByHost = { "host-b": false };
-    // The ready host's close hangs until resolved below, so the assertions
-    // in between observe the tombstone-first write before either RPC has
-    // had a chance to settle and clear it.
+    // The ready host's close hangs until resolved below, so the assertions in between observe the tombstone-first
+    // write before either RPC has had a chance to settle and clear it.
     let resolveReadyClose: (() => void) | null = null;
     mocks.plainCloseAsync.mockImplementation(
       () =>
@@ -1918,9 +1837,8 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     });
-    // Tombstone-first, batched: both refs are durably recorded - the
-    // not-ready host's tombstone is the recovery bridge's only record that a
-    // shell needs killing once that host becomes dialable.
+    // Tombstone-first, batched: both refs are durably recorded - the not-ready host's tombstone is the recovery
+    // bridge's only record that a shell needs killing once that host becomes dialable.
     expect(useLandingTerminalStore.getState().pendingKills).toEqual(
       expect.arrayContaining([
         {
@@ -2742,8 +2660,8 @@ describe("<LandingTerminalPanel />", () => {
     view.rerender(panelUiForDraft("draft-b"));
     await drainDeferredListFetches(resolvers);
 
-    // A folderless gesture resolves to the settled host home (#567), never to
-    // draft-b's folder - that folder only became focused AFTER the capture.
+    // A folderless gesture resolves to the settled host home (#567), never to draft-b's folder - that folder only
+    // became focused after the capture.
     const tabs = useLandingTerminalStore.getState().tabs;
     expect(tabs).toHaveLength(1);
     expect(tabs[0]?.cwd).toBe("/Users/dev");
@@ -2822,9 +2740,8 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
-    // ...then the default host switches to host-b whose probe has not resolved,
-    // so the LIVE availability is "unknown". The captured supported verdict must
-    // still drive creation on host-a; the live host's verdict must not gate it.
+    // The captured supported verdict must still drive creation on host-a; the live host's verdict must not gate
+    // it.
     mocks.activeHostId = "host-b";
     mocks.probeData = undefined;
     view.rerender(panelUiForDraft("draft-b"));
@@ -2858,9 +2775,8 @@ describe("<LandingTerminalPanel />", () => {
         .getAttribute("aria-disabled"),
     ).toBeNull();
 
-    // Focus moves to a folderless draft B AFTER the gesture settled. A stale A
-    // snapshot would keep + enabled from A's pinned folder; the cleared gesture
-    // makes + reflect the live folderless B instead.
+    // Focus moves to a folderless draft B after the gesture settled. A stale A snapshot would keep + enabled from
+    // A's pinned folder; the cleared gesture makes + reflect the live folderless B instead.
     mocks.primaryWorkspacePath = null;
     view.rerender(panelUiForDraft("draft-b"));
 
@@ -2955,16 +2871,15 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
-    // host-a's capability then downgrades while host-a is STILL selected.
+    // host-a's capability then downgrades while host-a is still selected.
     mocks.probeData = undefined;
     view.rerender(panelUiForDraft("draft-a"));
     // Focus then moves to draft B on a different host.
     mocks.activeHostId = "host-b";
     view.rerender(panelUiForDraft("draft-b"));
 
-    // The + button must reflect host-a's LAST observed (downgraded) verdict, not
-    // the initial captured "supported": a forgotten downgrade would leave it
-    // enabled.
+    // The + button must reflect host-a's last observed (downgraded) verdict, not the initial captured "supported":
+    // a forgotten downgrade would leave it enabled.
     await waitFor(() => {
       expect(
         screen
@@ -3598,9 +3513,8 @@ describe("<LandingTerminalPanel />", () => {
     const first = useLandingTerminalStore.getState().tabs[0];
     expect(first.cwd).toBe("/workspace/project");
 
-    // Collapse, repoint the composer's pinned folder, re-expand: the panel
-    // must land on a terminal running in the new folder - here by spawning
-    // one, since none matches - while the old terminal stays as a tab.
+    // Collapse, repoint the composer's pinned folder, re-expand: the panel must land on a terminal running in the
+    // new folder - here by spawning one, since none matches - while the old terminal stays as a tab.
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
@@ -3881,10 +3795,8 @@ describe("<LandingTerminalPanel />", () => {
     const hostATab = useLandingTerminalStore.getState().tabs[0];
     expect(hostATab.hostId).toBe("host-a");
     expect(hostATab.cwd).toBe("/Users/host-a");
-    // Subscribed BY HOST since P4.2: the panel is told "host-a's row moved",
-    // not "the bound host changed". Asserted rather than assumed, because a
-    // registry arm that never subscribed would make the drive below a no-op
-    // and this whole case would pass without ever starting a generation.
+    // Asserted rather than assumed, because a registry arm that never subscribed would make the drive below a
+    // no-op and this whole case would pass without ever starting a generation.
     const hostARowListeners = mocks.rowChangedListeners.filter(
       (entry) => entry.hostId === "host-a",
     );
@@ -3992,11 +3904,8 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("rejects a stale manual create with the old primary workspace when the client host switches ahead of React", async () => {
-    // With a primary workspace, the cwd resolver returns the workspace path
-    // before consulting the reconciled host context, so the render-vs-client
-    // host identity comparison in createTerminalTab is the only guard in this
-    // window. A stale Host-A closure must not persist Host A's workspace path
-    // onto a tab once the client host has moved to B.
+    // A stale Host-A closure must not persist Host A's workspace path onto a tab once the client host has moved to
+    // B.
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/host-a-project";

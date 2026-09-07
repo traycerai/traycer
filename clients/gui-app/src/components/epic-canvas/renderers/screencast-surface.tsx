@@ -11,16 +11,7 @@ import { AgentCursorOverlay } from "./agent-cursor-overlay";
 import { BrowserVideoStatsOverlay } from "./browser-video-stats-overlay";
 
 /**
- * The pixels of a browser mirror: a JPEG frame, an optional video track over
- * it, the agent's ghost cursor, and a loader for the gaps.
- *
- * Shared by the tile ({@link ScreencastSurface}) and by PiP
- * (`pip-preview-surface.tsx`). The two differ only in what feeds them - the
- * tile hands over its `ScreencastSession`, PiP its own subscription plus the
- * tile's borrowed track - and in which of them keeps a live JPEG under the
- * video (the tile's host stops its cast for the whole video attempt, PiP's
- * never stops). Both are `object-contain` in one box, which is what lets one
- * cursor mapping serve either plane.
+ * The two differ only in what feeds them - the tile hands over its `ScreencastSession`, PiP its own subscription plus the tile's borrowed track - and in which of them keeps a live JPEG under the video (the tile's host stops its cast for the whole video attempt, PiP's never stops).
  */
 export function ScreencastPixels(props: {
   readonly imageSrc: string | null;
@@ -75,21 +66,7 @@ export function ScreencastPixels(props: {
 }
 
 /**
- * The tile's half. ONE plane paints at a time, and the loader covers every gap
- * between two (ticket 26):
- *
- * ```
- *   loader ──video live──▶ VIDEO ──track death──▶ loader ──JPEG frames──▶ JPEG
- *   loader ──deadline/no-capability──▶ JPEG
- *   JPEG ──renegotiation──▶ loader ──▶ VIDEO
- * ```
- *
- * The `<img>` and the `<video>` share one overlay button and the same
- * `object-contain` geometry, so the overlay handlers, the arm ring and the
- * hit-test normalization are shared rather than duplicated per plane. The
- * `<video>` still mounts before it can paint - an element has to be in the tree
- * to decode - but it mounts over the LOADER: the host has stopped the JPEG cast
- * for the whole attempt, so there is no frame left underneath it.
+ * The `<video>` still mounts before it can paint - an element has to be in the tree to decode - but it mounts over the LOADER: the host has stopped the JPEG cast for the whole attempt, so there is no frame left underneath it.
  */
 export function ScreencastSurface(props: {
   readonly session: ScreencastSession;

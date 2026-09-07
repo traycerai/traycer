@@ -7,11 +7,8 @@ import { HERO_PRIMARY_BUTTON_CLASS } from "./styles";
 export function PrimarySignInButton(props: {
   readonly isHero: boolean;
   readonly isSigningIn: boolean;
-  /**
-   * Visual weight, not behavior: the mobile app's sign-in screen leads with
-   * the scan action and demotes the browser device flow to a same-width
-   * secondary button beneath it; everywhere else this stays the primary.
-   */
+  /** Visual weight, not behavior: the mobile app's sign-in screen leads with the scan action and demotes the
+   * browser device flow to a same-width secondary button beneath it; everywhere else this stays the primary. */
   readonly emphasis: "primary" | "secondary";
 }) {
   const signInMutation = useAuthSignInMutation();
@@ -57,10 +54,8 @@ export function RetrySignInButton(props: {
   if (!props.isSigningIn) return null;
 
   return (
-    // A stalled browser attempt (callback never returns) would otherwise leave
-    // the user stuck on "Signing in" until the timeout. `signIn()` is
-    // re-entrant - it supersedes the in-flight attempt and re-opens the sign-in
-    // surface - so this gives an immediate escape hatch.
+    // A stalled browser attempt (callback never returns) would otherwise leave the user stuck on "Signing in"
+    // until the timeout.
     <Button
       type="button"
       size={props.isHero ? "default" : "sm"}

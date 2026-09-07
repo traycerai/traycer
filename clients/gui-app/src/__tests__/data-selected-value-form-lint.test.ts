@@ -5,43 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-/**
- * `data-selected` is written in the arbitrary form, `data-[selected=true]:`.
- *
- * It matters because cmdk sets the attribute on every item it renders
- * (`"data-selected": !!selected`, which React stringifies to `"false"` rather
- * than omitting it), so a variant that matched by PRESENCE would style every
- * row in the list as selected at once - and would read as a theme rather than
- * as a bug, since the variant drives a row's fill, border, shadow and icon tint
- * together and there would be no unselected row to compare against.
- *
- * Both spellings do match by value. `shadcn/tailwind.css` registers
- * `@custom-variant data-selected { &:where([data-selected="true"]) { … } }`, so
- * the bare form is not the presence selector a bare `data-*` variant would
- * compile to unregistered. What the two forms do NOT share is specificity: the
- * registration is `:where()`-wrapped and contributes zero, while
- * `data-[selected=true]:` contributes a real attribute. A zero-specificity rule
- * holds only while nothing else states the same property, and loses silently
- * the moment something does - so this guard keeps the styling on the form that
- * can hold its own, and keeps the tree from depending on a registration living
- * in a dependency's stylesheet.
- *
- * Scoped to `data-selected` rather than banning bare `data-*` variants in
- * general: the other `data-*` attributes here are written as
- * `data-x={cond ? "true" : undefined}`, where presence and truth coincide.
- *
- * `components/ui/__tests__/command-selected-state.test.tsx` is the other half:
- * this file keeps the bare form out of the tree, that one checks the compiled
- * rules actually discriminate a selected row from an unselected one.
- */
+/** Require `data-[selected=true]:`. cmdk sets `data-selected` on every item (including `"false"`), so a presence matcher would select every row. The registered `data-selected` variant is `:where()`-wrapped (zero specificity) and would lose silently. */
 const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/**
- * A Tailwind variant keyed on bare `data-selected`, in either the plain or the
- * `group-`/`peer-` scoped form. The negative lookbehind keeps this off the
- * attribute WRITE (`data-selected="true"`) and off the already-correct value
- * form (`data-[selected=true]:`), both of which contain the same letters.
- */
+/** Bare data-selected variant (plain/group-/peer-). Lookbehind skips the attribute write and data-[selected=true]:. */
 const BARE_VARIANT = /(?:group-|peer-)?data-selected(?:\/[a-z0-9-]+)?:/;
 
 function collectSourceFiles(dir: string): readonly string[] {

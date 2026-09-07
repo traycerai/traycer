@@ -67,9 +67,8 @@ function candidates(
 }
 
 /**
- * Stable dependency key for eligibility/selection changes. Persisted freshness
- * is deliberately excluded: one completed pull must not refill the budget
- * immediately; the next interval chooses the next-oldest stale targets.
+ * Stable dependency key for eligibility/selection changes.
+ * Persisted freshness is deliberately excluded: one completed pull must not refill the budget immediately; the next interval chooses the next-oldest stale targets.
  */
 export function backgroundRateLimitMembershipKey(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
@@ -85,8 +84,8 @@ export function backgroundRateLimitMembershipKey(
 }
 
 /**
- * Selected stale targets first, then oldest persisted reading, globally capped
- * per window. Signed-out profiles never enter the candidate set.
+ * Selected stale targets first, then oldest persisted reading, globally capped per window.
+ * Signed-out profiles never enter the candidate set.
  */
 export function selectBackgroundRateLimitTargets(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,

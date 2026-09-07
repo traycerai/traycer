@@ -5,14 +5,7 @@ import {
 } from "@/lib/host/fleet-refresh";
 
 /**
- * F6, renderer half: deregistering a host refreshes renderer state only, so
- * the selection authority's fleet (desktop main) keeps a host the account no
- * longer has and can derive `effectiveHostId` onto a machine that is gone.
- *
- * The contract is result-free and idempotent, which is what makes calling it
- * fire-and-forget from a success path safe rather than sloppy - so the only
- * things worth pinning are that it is announced at all, and that a rejection
- * cannot escape into the caller's success path.
+ * F6, renderer half: deregistering a host refreshes renderer state only, so the selection authority's fleet (desktop main) keeps a host the account no longer has and can derive `effectiveHostId` onto a machine that is gone.
  */
 
 function shell(
@@ -41,9 +34,7 @@ describe("fleet refresh seam", () => {
       requestFleetRefresh(shell(refreshHostFleet));
     }).not.toThrow();
 
-    // A swallowed rejection must also not survive as an unhandled one: a
-    // failed refresh leaves main exactly as stale as it already was, and the
-    // authority's own evidence kernel is what recovers.
+    // A swallowed rejection must also not survive as an unhandled one: a failed refresh leaves main exactly as stale as it already was, and the authority's own evidence kernel is what recovers.
     await Promise.resolve();
     await Promise.resolve();
   });

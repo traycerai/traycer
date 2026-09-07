@@ -8,24 +8,7 @@ import { setAppLogLevel } from "@/lib/logger";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
 
-/**
- * Connects GUI-owned runtime state to the always-present tray and
- * notification surfaces `IRunnerHost` exposes.
- *
- * - Sources the tray's recent-epic list from the history store
- *   (`useTrayEpicsSource`) and forwards it + the indicator to `runnerHost.tray`
- *   via `useTrayProjection`.
- * - Subscribes to `runnerHost.notifications.onClick` and routes payloads
- *   into the notification-events store.
- * - Subscribes to `runnerHost.tray.onEpicSelected` and records an open
- *   request in the tray-projection store; `TrayOpenEpicBridge` (mounted inside
- *   the router) consumes it and navigates, since this component sits above
- *   `RouterProvider` and has no `useNavigate`.
- *
- * The runner host contract guarantees tray/notifications are always
- * present (no-op on shells without a native surface), so this bridge does
- * not branch on capability.
- */
+/** Connects GUI-owned runtime state to the always-present tray and notification surfaces `IRunnerHost` exposes. */
 export function RunnerHostBridges(): null {
   useTrayEpicsSource();
   const epics = useTrayProjectionStore((state) => state.epics);

@@ -14,18 +14,7 @@ import {
   HOST_RESTARTING_FATAL_CODE,
 } from "@traycer/protocol/framework/ws-protocol";
 
-/**
- * Canonical-schema coverage for every WS frame kind.
- *
- * The per-request WebSocket session has a short, fixed frame vocabulary: the
- * client sends `open` → `request` (plus an optional `fatalError`), and the
- * host replies with `openAck` → `response` (plus an optional `fatalError`
- * at any point). These tests assert that the Zod schemas exported from
- * `@traycer/protocol/framework/ws-protocol` accept a minimal representative of
- * each frame shape, so the authoritative wire contract is exercised from one
- * place regardless of which consumer (host-side dispatcher, client-side
- * transport) is parsing.
- */
+/** Canonical-schema coverage for every WS frame kind. */
 
 describe("ws-protocol canonical Zod schemas", () => {
   describe("client frames", () => {

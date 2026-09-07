@@ -11,12 +11,7 @@ import {
 
 const PANEL_RESIZING_CLASS = "traycer-panel-resizing";
 
-/** Pure DOM, no LegendList/React involved - deliberately sidesteps the
- *  shared `installLegendListViewportMetrics()` shim, which stubs every
- *  element's `getBoundingClientRect` to the SAME `(0, 0)`-origin rect (see
- *  `legend-list-test-environment.ts`), so it cannot distinguish visible from
- *  off-screen rows. Per-element rect overrides here give each row/scroller a
- *  distinct, real position instead. */
+/** Pure DOM, no LegendList/React involved - deliberately sidesteps the shared `installLegendListViewportMetrics()` shim, which stubs every element's `getBoundingClientRect` to the SAME `(0, 0)`-origin rect (see `legend-list-test-environment.ts`), so it cannot distinguish visible from off-screen rows. Per-element rect overrides here give each row/scroller a distinct, real position instead. */
 function rectOf(top: number, height: number): DOMRect {
   return {
     top,
@@ -180,10 +175,8 @@ describe("end-to-end recovery through the real registry (review F1)", () => {
     });
     onTestFinished(unregister);
 
-    // Drag 1: row visible -> marked. Its clear() throws; the registry
-    // isolates the failure (class lifecycle still completes normally, per
-    // the existing isolation pins) but the marker is never actually
-    // cleared as a side effect.
+    // Drag 1: row visible -> marked.
+    // Its clear() throws; the registry isolates the failure (class lifecycle still completes normally, per the existing isolation pins) but the marker is never actually cleared as a side effect.
     const stop1 = beginPanelResizeInteraction(1, () => undefined);
     expect(row.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(true);
     stop1();
@@ -192,9 +185,7 @@ describe("end-to-end recovery through the real registry (review F1)", () => {
     // Row scrolls below the viewport before the next drag starts.
     row.getBoundingClientRect = () => rectOf(1000, 100);
 
-    // Drag 2: recapture. The stale marker must not survive into this
-    // drag's freeze - self-healing capture removes it even though nothing
-    // ever successfully cleared it.
+    // Drag 2: recapture. The stale marker must not survive into this drag's freeze - self-healing capture removes it even though nothing ever successfully cleared it.
     const stop2 = beginPanelResizeInteraction(2, () => undefined);
     expect(row.hasAttribute(PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE)).toBe(false);
     stop2();

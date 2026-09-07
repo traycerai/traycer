@@ -1,12 +1,6 @@
 /**
- * Schemas for the `git.*` host RPC surface - Git status polling,
- * file diff querying, and repo capability detection.
- *
- * `runningDir` values are canonical absolute host paths. Git file paths are
- * repo-relative Git paths; see ADR-0008.
+ * Schemas for the `git.*` host RPC surface - Git status polling, file diff querying, and repo capability detection.
  * OID fields are nullable to support ADR-0007 degraded mode (very large repos).
- * `pollStartedAtMs` on subscription events enables post-hoc debugging of skew
- * per ADR-0004.
  */
 import { z } from "zod";
 import {
@@ -42,18 +36,8 @@ export const gitStageSchema = z.enum([
 export type GitStage = z.infer<typeof gitStageSchema>;
 
 /**
- * Per-file metadata from a `git status` poll - the FROZEN v1.0 file shape.
- *
- * `path` and `previousPath` are repo-relative Git paths.
- * `previousPath` is set only for renamed/copied files (ADR-0002).
+ * `git.listChangedFiles@1.0` - Per-file metadata from a `git status` poll - the FROZEN v1.0 file shape.
  * `stagedOid` + `worktreeOid` are nullable in degraded mode (ADR-0007).
- *
- * This is the ONLY file schema on `git.subscribeStatus` minor-0 frames and the
- * `git.listChangedFiles@1.0` response. It must NOT be mutated: stream methods
- * carry no version bridge, so a connection negotiated at minor 0 receives
- * frames RESOLVER-PROJECTED onto this exact shape - any added field would
- * silently break old peers on the live path. Submodule-aware (v1.1) additions
- * live on the DISTINCT `gitChangedFileV11Schema` below, never here.
  */
 export const gitChangedFileV10Schema = z.object({
   path: z.string(),
@@ -69,12 +53,7 @@ export const gitChangedFileV10Schema = z.object({
 });
 export type GitChangedFileV10 = z.infer<typeof gitChangedFileV10Schema>;
 
-/**
- * Back-compat alias for the frozen v1.0 file schema. Existing consumers import
- * `gitChangedFileSchema`; new code should reference `gitChangedFileV10Schema`
- * (unary v1.0 + stream minor-0 frames) or `gitChangedFileV11Schema` (unary
- * v1.1 + stream v1.1 frames).
- */
+/** Back-compat alias for the frozen v1.0 file schema. */
 export const gitChangedFileSchema = gitChangedFileV10Schema;
 export type GitChangedFile = GitChangedFileV10;
 
@@ -116,20 +95,11 @@ export const repoStateSchema = z.discriminatedUnion("kind", [
 ]);
 export type RepoState = z.infer<typeof repoStateSchema>;
 
-/**
- * Host-side polling mode for a running directory.
- * `normal`: all metrics available, polling fast.
- * `degraded`: large repo, skipping OID computation, polling slower.
- * `refused`: repo exceeds hard cap (5M files), unsupported.
- */
+/** Host-side polling mode for a running directory. */
 export const repoModeSchema = z.enum(["normal", "degraded", "refused"]);
 export type RepoMode = z.infer<typeof repoModeSchema>;
 
-/**
- * `git.listChangedFiles` request.
- * `ignoreWhitespace` is accepted for compatibility but status/list output is
- * whitespace-independent; only diff-content RPCs apply whitespace filtering.
- */
+/** `git.listChangedFiles` request. */
 export const gitListChangedFilesRequestSchema = z.object({
   hostId: z.string(),
   runningDir: z.string(),
@@ -139,11 +109,7 @@ export type GitListChangedFilesRequest = z.infer<
   typeof gitListChangedFilesRequestSchema
 >;
 
-/**
- * `git.listChangedFiles` response.
- * Returns the current file list, fingerprint, and repo state.
- * `runningDir` is canonical absolute. File paths are repo-relative Git paths.
- */
+/** `git.listChangedFiles` response. */
 export const gitListChangedFilesResponseSchema = z.object({
   runningDir: z.string(),
   headSha: z.string(),
@@ -157,13 +123,7 @@ export type GitListChangedFilesResponse = z.infer<
   typeof gitListChangedFilesResponseSchema
 >;
 
-/**
- * `git.getFileDiff` request.
- * `filePath` is a repo-relative Git path.
- * `previousPath` is populated for renamed/copied files so git can render
- * rename-aware patches instead of a pure add for the new path.
- * `byteBudget: null` requests the full diff without server-side truncation.
- */
+/** `git.getFileDiff` request. */
 export const gitGetFileDiffRequestSchema = z.object({
   hostId: z.string(),
   runningDir: z.string(),
@@ -180,13 +140,7 @@ export const gitGetFileDiffRequestSchema = z.object({
 });
 export type GitGetFileDiffRequest = z.infer<typeof gitGetFileDiffRequestSchema>;
 
-/**
- * `git.getFileDiff` response.
- * `filePath` is a repo-relative Git path.
- * Includes `isTruncated` / `truncatedAfterBytes` for large diffs.
- * Response-side `(stagedOid, worktreeOid)` enable ADR-0004 OID mismatch
- * detection in the renderer.
- */
+/** `git.getFileDiff` response. */
 export const gitGetFileDiffResponseSchema = z.object({
   filePath: z.string(),
   headSha: z.string(),
@@ -201,12 +155,7 @@ export type GitGetFileDiffResponse = z.infer<
   typeof gitGetFileDiffResponseSchema
 >;
 
-/**
- * `git.getFileDiffs` request - batch diff query.
- * `files[].filePath` is a repo-relative Git path.
- * `files[].previousPath` follows `git.getFileDiff.previousPath`.
- * `files` is 1-10 items per spec; `byteBudget` defaults to 1MiB.
- */
+/** `git.getFileDiffs` request - batch diff query. */
 export const gitGetFileDiffsRequestSchema = z.object({
   hostId: z.string(),
   runningDir: z.string(),
@@ -231,11 +180,7 @@ export type GitGetFileDiffsRequest = z.infer<
   typeof gitGetFileDiffsRequestSchema
 >;
 
-/**
- * `git.getFileDiffs` response - array of per-file diffs.
- * `runningDir` is canonical absolute. Diff `filePath` values are repo-relative
- * Git paths.
- */
+/** `git.getFileDiffs` response - array of per-file diffs. */
 export const gitGetFileDiffsResponseSchema = z.object({
   runningDir: z.string(),
   headSha: z.string(),
@@ -246,9 +191,8 @@ export type GitGetFileDiffsResponse = z.infer<
 >;
 
 /**
- * On-demand full text needed to hydrate a patch-backed Diffs editor. Kept out
- * of the ordinary diff response so opening a read-only diff never transfers
- * both complete file versions.
+ * On-demand full text needed to hydrate a patch-backed Diffs editor.
+ * Kept out of the ordinary diff response so opening a read-only diff never transfers both complete file versions.
  */
 export const gitGetFileContentsRequestSchema = z.object({
   hostId: z.string(),
@@ -281,13 +225,7 @@ export type GitGetFileContentsResponse = z.infer<
   typeof gitGetFileContentsResponseSchema
 >;
 
-/**
- * `git.getCapabilities` response.
- * `available` indicates if git feature is supported on this host.
- * `reason` is populated only if `available === false`.
- * `repoMode` is optional, populated only on capability check failure due
- * to repo size (refused mode).
- */
+/** `git.getCapabilities` response. */
 export const gitGetCapabilitiesResponseSchema = z.discriminatedUnion(
   "available",
   [
@@ -315,17 +253,7 @@ export type GitGetCapabilitiesResponse = z.infer<
 
 /**
  * `git.subscribeStatus` event - the FROZEN minor-0 status subscription frame.
- * Discriminated union: snapshot (initial full state), updated (incremental
- * change with affected paths), or error (fatal/non-fatal).
- *
- * Both snapshot and updated carry `pollStartedAtMs` per ADR-0004 for debugging.
- * `changedPaths` is an array of repo-relative Git paths that changed since the
- * last event.
- *
- * Frozen at minor 0: connections negotiated at 1.0 receive frames the host
- * resolver projects onto exactly this shape (v1.0 file rows, parent-only
- * `fingerprint`, no submodule fields). The nested-snapshot frame lives on the
- * DISTINCT `gitSubscribeStatusEventSchemaV11` below.
+ * Frozen at minor 0: connections negotiated at 1.0 receive frames the host resolver projects onto exactly this shape (v1.0 file rows, parent-only `fingerprint`, no submodule fields).
  */
 export const gitSubscribeStatusEventSchema = z.discriminatedUnion("type", [
   z.object({
@@ -362,14 +290,8 @@ export type GitSubscribeStatusEvent = z.infer<
 >;
 
 /**
- * `git.subscribeStatus` request - shared verbatim by minors 0 and 1 (v1.1
- * deliberately adds NO `includeSubmodules` knob; the host always computes the
- * nested snapshot and the resolver projects per negotiated minor).
- * No `pollIntervalMs` per ADR-0003 - the host owns the refresh cadence
- * (watcher-driven with a fallback tick on v1.1 hosts; fixed-interval polling
- * before that), and it is never a client knob.
- * `ignoreWhitespace` is accepted for compatibility but status events are
- * whitespace-independent.
+ * `git.subscribeStatus` request - shared verbatim by minors 0 and 1 (v1.1 deliberately adds NO `includeSubmodules` knob; the host always computes the nested snapshot and the resolver projects per negotiated minor).
+ * No `pollIntervalMs` per ADR-0003 - the host owns the refresh cadence (watcher-driven with a fallback tick on v1.1 hosts; fixed-interval polling before that), and it is never a client knob.
  */
 export const gitSubscribeStatusRequestSchema = z.object({
   hostId: z.string(),
@@ -381,12 +303,8 @@ export type GitSubscribeStatusRequest = z.infer<
 >;
 
 /**
- * `git.subscribeStatus@1.2` open request. `freshNonce` is opaque correlation
- * for a manual stream replacement: `null` preserves an ordinary subscription;
- * a string asks the host to wait for a poll that starts after registration.
- *
- * This deliberately lives on a distinct schema. The v1.0/v1.1 request shape is
- * released and must stay byte-for-byte stable for negotiated older peers.
+ * `git.subscribeStatus@1.2` open request.
+ * The v1.0/v1.1 request shape is released and must stay byte-for-byte stable for negotiated older peers.
  */
 export const gitSubscribeStatusRequestSchemaV12 =
   gitSubscribeStatusRequestSchema.extend({
@@ -396,23 +314,12 @@ export type GitSubscribeStatusRequestV12 = z.infer<
   typeof gitSubscribeStatusRequestSchemaV12
 >;
 
-// ---- Submodule-aware v1.1 ------------------------------------------------ //
-//
-// Everything below is exclusive to the v1.1 surfaces: the unary
-// `git.listChangedFiles@1.1` response and the `git.subscribeStatus@1.1` stream
-// frames (defined further below). None of it may reach a peer negotiated at
-// minor 0 - `git.subscribeStatus@1.0` stays frozen and parent-only via
-// resolver-side projection. The host composes one nested snapshot: the parent
-// changeset plus a `submodules[]` array of working-tree changesets.
-// `git.getFileDiff`/`git.getFileDiffs` stay v1.0-only - a submodule's
-// working-tree files are diffed by pointing `runningDir` at the submodule repo
-// root (plain stage-based diff, no request change). See plan §2.
+// `git.listChangedFiles@1.1` - ---- Submodule-aware v1.1 ------------------------------------------------ //
+// None of it may reach a peer negotiated at minor 0 - `git.subscribeStatus@1.0` stays frozen and parent-only via resolver-side projection.
 
 /**
- * Base/ours/theirs pins carried by a conflicted (`u UU S...`) parent gitlink
- * row. A conflicted gitlink has no single recorded pin (`<hH>`), so the ordinary
- * pin model does not apply; these three SHAs are the only pointer facts. Each is
- * nullable because a stage may be absent (e.g. an add/add conflict has no base).
+ * Base/ours/theirs pins carried by a conflicted (`u UU S...`) parent gitlink row.
+ * Each is nullable because a stage may be absent (e.g. an add/add conflict has no base).
  */
 const submoduleConflictShas = {
   baseSha: z.string().nullable(),
@@ -421,32 +328,8 @@ const submoduleConflictShas = {
 };
 
 /**
- * The parent's view of a gitlink row - the descriptor hung off a parent file
- * row via `gitChangedFileV11Schema.gitlink`, and the SINGLE canonical home for a
- * submodule pointer conflict. A discriminated union so a normal pin-and-flags
- * row can never also carry conflict SHAs (an unrepresentable mixture):
- *
- * - `normal` carries the minimal pointer facts of an ordinary dirty gitlink: the
- *   parent-recorded pin (`<hH>`), the submodule's checkout `HEAD`, whether the
- *   two `diverged` (a plain pin-vs-HEAD inequality - NO ahead/behind/merge-base
- *   direction), and the dirty flags from `<sub>` (`c`/`m`/`u`). Both SHAs are
- *   nullable to tolerate added/removed gitlink edge cases and a missing HEAD.
- * - `conflicted` carries the unmerged base/ours/theirs pins of a pointer-only
- *   `u UU S...` row - which has no single recorded pin and earns no
- *   `submodules[]` section (plan §1.1), so its conflict facts live only here.
- *
- * The same descriptor is reused as `submoduleChangesetSchema.pointer`; the client
- * joins a parent gitlink row to its submodule section by the gitlink row `path`
- * <-> `submoduleChangeset.parentPath`.
- *
- * UNION-EVOLUTION RULE: adding a `kind` variant is NOT an additive minor change.
- * Minor-skew projection strips unknown object KEYS, but a discriminated union
- * hard-rejects an unknown discriminator VALUE - a v1.1 caller re-parsing a
- * response that carries a new `kind` fails, and the dispatcher turns that into a
- * 500 for the ENTIRE `listChangedFiles` response (`handler.ts` caller-schema
- * re-parse). A new variant must therefore ship as a MAJOR bump, or the newer
- * side must explicitly project it onto one of the variants below before the
- * payload reaches a peer negotiated at 1.1.
+ * The parent's view of a gitlink row - the descriptor hung off a parent file row via `gitChangedFileV11Schema.gitlink`, and the SINGLE canonical home for a submodule pointer conflict.
+ * A discriminated union so a normal pin-and-flags row can never also carry conflict SHAs (an unrepresentable mixture)
  */
 export const submodulePointerSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -463,12 +346,7 @@ export const submodulePointerSchema = z.discriminatedUnion("kind", [
 export type SubmodulePointer = z.infer<typeof submodulePointerSchema>;
 
 /**
- * The v1.1 file shape: the frozen v1.0 file EXTENDED with a nullable
- * `gitlink` descriptor. Additive by construction (`.default(null)`), so a v1.0
- * response upgrades cleanly. Only a parent gitlink row carries a non-null
- * `gitlink`; every ordinary file row keeps it `null`. Carried by the unary
- * v1.1 response AND `git.subscribeStatus@1.1` frames; minor-0 stream
- * connections receive resolver-projected frames on `gitChangedFileV10Schema`.
+ * `git.subscribeStatus@1.1` - The v1.1 file shape: the frozen v1.0 file EXTENDED with a nullable `gitlink` descriptor.
  */
 export const gitChangedFileV11Schema = gitChangedFileV10Schema.extend({
   gitlink: submodulePointerSchema.nullable().default(null),
@@ -476,30 +354,8 @@ export const gitChangedFileV11Schema = gitChangedFileV10Schema.extend({
 export type GitChangedFileV11 = z.infer<typeof gitChangedFileV11Schema>;
 
 /**
- * Whether the host could actually inspect a discovered submodule. `ok` is the
- * normal case. `unavailable` marks an initialized submodule the host failed to read
- * (broken worktree, permissions, timeout, or any git error - the production
- * command runner collapses those to an unresolved checkout HEAD), so the client
- * renders a visible "details unavailable" degrade instead of a silent empty
- * section (plan: "visible degrade, never silent omission").
- *
- * `reason` is a single coarse value today but tolerant by construction:
- * `.catch("git-error")` degrades any UNKNOWN future reason (e.g. a later host
- * that emits `"timeout"`) to `"git-error"` rather than hard-failing the entire
- * `listChangedFiles@1.1` response on an already-shipped GUI. This is the trap the
- * plain enum hid: minor-skew projection strips unknown KEYS, not unknown enum
- * VALUES in a retained field, so a bare `z.enum(["git-error"])` would reject the
- * whole response the moment a future host widens this reason. The tolerance has a
- * deliberate side effect: `.catch` also absorbs a MISSING `reason`, defaulting it
- * to `"git-error"` instead of rejecting the payload.
- *
- * UNION-EVOLUTION RULE: the `.catch` tolerance covers ONLY the `reason` enum
- * axis. Adding a `state` variant is NOT an additive minor change - a
- * discriminated union hard-rejects an unknown discriminator VALUE, so a v1.1
- * caller re-parsing a response carrying a new `state` fails and the whole
- * `listChangedFiles` response 500s. A new `state` must ship as a MAJOR bump, or
- * the newer side must explicitly project it onto `ok`/`unavailable` before the
- * payload reaches a peer negotiated at 1.1.
+ * Whether the host could actually inspect a discovered submodule.
+ * A new `state` must ship as a MAJOR bump, or the newer side must explicitly project it onto `ok`/`unavailable` before the payload reaches a peer negotiated at 1.1.
  */
 export const submoduleAvailabilitySchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("ok") }),
@@ -511,21 +367,7 @@ export const submoduleAvailabilitySchema = z.discriminatedUnion("state", [
 export type SubmoduleAvailability = z.infer<typeof submoduleAvailabilitySchema>;
 
 /**
- * One initialized submodule section in the `git.listChangedFiles@1.1` response
- * (plan §1.3) - working-tree only, NO commits-ahead. Dirty and unavailable
- * submodules carry visible status/files, while clean initialized submodules may
- * also be present so clients can show clean-module affordances. Conflicted or
- * removed gitlinks remain pointer-only and surface solely on the parent gitlink
- * row.
- *
- * `repoRoot` is a canonical absolute host path (realpath/NFC-normalized).
- * `parentPath` is the gitlink's parent-repo-relative Git path - the join key
- * back to the parent gitlink row. `files` are the submodule's own worktree/
- * index/untracked/conflicted files (v1.1 file shape). `branch`/`repoState`
- * describe the submodule checkout itself. `pointer` is the minimal gitlink
- * descriptor (pin equality via `diverged` + dirty/conflicted flags) - the same
- * shape carried on the parent gitlink row. `availability` flags a submodule the
- * host could not inspect; it defaults to `ok` so the field is additive.
+ * One initialized submodule section in the `git.listChangedFiles@1.1` response (plan §1.3) - working-tree only, NO commits-ahead.
  */
 export const submoduleChangesetSchema = z.object({
   repoRoot: z.string(),
@@ -539,11 +381,8 @@ export const submoduleChangesetSchema = z.object({
 export type SubmoduleChangeset = z.infer<typeof submoduleChangesetSchema>;
 
 /**
- * `git.listChangedFiles@1.1` request. The frozen v1.0 request plus
- * `includeSubmodules`: the host runs the per-submodule fan-out (discovery +
- * git status into initialized submodules + `.gitmodules` enumeration) only when
- * asked. Defaults to false so lightweight callers (and v1.0 requests upgraded
- * to canonical) get the cheap parent-only snapshot with `submodules: []`.
+ * `git.listChangedFiles@1.1` request.
+ * The frozen v1.0 request plus `includeSubmodules`: the host runs the per-submodule fan-out (discovery + git status into initialized submodules + `.gitmodules` enumeration) only when asked.
  */
 export const gitListChangedFilesRequestSchemaV11 =
   gitListChangedFilesRequestSchema.extend({
@@ -554,10 +393,8 @@ export type GitListChangedFilesRequestV11 = z.infer<
 >;
 
 /**
- * `git.listChangedFiles@1.1` response. The frozen v1.0 response with two
- * additive fields: parent `files` carry the v1.1 file shape (nullable `gitlink`),
- * and `submodules` is the host-composed nested snapshot. `submodules` is
- * `.default([])` so a v1.0 host's response upgrades to a parent-only view.
+ * `git.listChangedFiles@1.1` response.
+ * The frozen v1.0 response with two additive fields: parent `files` carry the v1.1 file shape (nullable `gitlink`), and `submodules` is the host-composed nested snapshot.
  */
 export const gitListChangedFilesResponseSchemaV11 =
   gitListChangedFilesResponseSchema.extend({
@@ -568,33 +405,11 @@ export type GitListChangedFilesResponseV11 = z.infer<
   typeof gitListChangedFilesResponseSchemaV11
 >;
 
-// `git.getFileDiff` / `git.getFileDiffs` have NO v1.1 schema - they stay
-// v1.0-only. A submodule's working-tree files are diffed stage-based by pointing
-// `runningDir` at the submodule repo root, so the v1.0 request/response shapes
-// are unchanged.
+// `git.getFileDiff` / `git.getFileDiffs` have NO v1.1 schema - they stay v1.0-only.
 
-// ---- Stream v1.1: git.subscribeStatus nested-snapshot frames ------------- //
-//
-// `git.subscribeStatus@1.1` folds the SAME host-composed nested snapshot the
-// unary v1.1 response carries into the stream frames, so a v1.1 subscriber
-// stops needing the separate 5s unary refetch loop for submodule state. The
-// v1.0 frame schema above stays byte-frozen: minor-0 connections receive
-// resolver-projected frames, so nothing here mutates any v1.0 export.
-//
-// Fingerprint semantics (stream <-> unary parity invariant):
-// - `fingerprint` keeps PARENT-ONLY semantics on both minors - identical to
-//   the v1.0 stream field and to what a projected minor-0 frame carries.
-// - `nestedFingerprint` (parent + submodules, `fingerprintNested` semantics)
-//   is the rich-slot identity, coherent with the unary v1.1 response
-//   `fingerprint`. It must NEVER appear in (or fold into) a minor-0 frame.
+// `git.subscribeStatus@1.1` - ---- Stream v1.1: git.subscribeStatus nested-snapshot frames ------------- //
+// It must NEVER appear in (or fold into) a minor-0 frame.
 
-/**
- * One submodule section on an `updated` v1.1 frame: the working-tree changeset
- * plus `changedPaths` - the submodule-root-relative Git paths that changed
- * since the last event (same `diffPaths` semantics as the parent-level
- * `changedPaths`). Snapshot frames carry plain `submoduleChangesetSchema`
- * sections (full state, no delta).
- */
 export const submoduleChangesetUpdatedSchemaV11 =
   submoduleChangesetSchema.extend({
     changedPaths: z.array(z.string()),
@@ -603,23 +418,7 @@ export type SubmoduleChangesetUpdatedV11 = z.infer<
   typeof submoduleChangesetUpdatedSchemaV11
 >;
 
-/**
- * `git.subscribeStatus@1.1` event - the nested-snapshot frame. Relative to the
- * frozen v1.0 frame, `snapshot`/`updated` additionally carry:
- * - `files[]` in the v1.1 shape (`gitlink` descriptor on parent gitlink rows);
- * - `submodules[]` - the host-composed nested snapshot (mirrors the unary
- *   v1.1 `submodules`), with per-submodule `changedPaths` on `updated`;
- * - `nestedFingerprint` - the rich-slot identity (see section note above).
- * The `error` variant is unchanged.
- *
- * COMPAT POSTURE: `gitlink` inside `files[]` rows is a WITHIN-FIELD change the
- * minor-additivity checker does not inspect (it only detects dropped fields).
- * It is wire-safe via two independent guards: the host resolver projects
- * frames for minor-0 connections onto the frozen v1.0 schema (v1.0 file rows,
- * no `submodules`/`nestedFingerprint`), and released clients parse frames with
- * non-strict zod, which strips unknown fields. See the matching comment on the
- * `gitSubscribeStatusV11` contract.
- */
+/** `git.subscribeStatus@1.1` event - the nested-snapshot frame. */
 export const gitSubscribeStatusEventSchemaV11 = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("snapshot"),
@@ -659,12 +458,6 @@ export type GitSubscribeStatusEventV11 = z.infer<
 >;
 
 // ---- Stream v1.2: guaranteed-fresh replacement correlation -------------- //
-//
-// `freshNonce` is required on every snapshot/updated v1.2 frame. Ordinary
-// subscriptions carry `null`; a targeted replacement snapshot echoes the
-// opaque nonce supplied at open. Errors remain shape-identical to older
-// minors. Resolver projection explicitly strips this additive field for
-// negotiated minors 0 and 1.
 
 export const gitSubscribeStatusEventSchemaV12 = z.discriminatedUnion("type", [
   z.object({
@@ -707,42 +500,10 @@ export type GitSubscribeStatusEventV12 = z.infer<
 >;
 
 // ---- Stream v1.3: watcher health ---------------------------------------- //
-//
-// The host keeps a filesystem watcher per subscribed repo and falls back to
-// adaptive polling when it cannot. Both modes are correct - polling heals every
-// missed event on its next tick - but they differ by up to 30s of staleness,
-// and one of the fallback causes is a machine-level limit the USER can lift
-// (Linux `fs.inotify.max_user_watches`). Until this minor the difference was
-// invisible on the wire: "my Git changes are slow" and "this host ran out of
-// inotify watches" produced identical frames.
-//
-// Deliberately NOT on `git.getCapabilities`: watcher health is dynamic, not a
-// property of the host install. A capacity degrade reverses on its own when a
-// neighbouring repo frees watches, so a unary read would have to be polled -
-// exactly what this stream exists to avoid.
 
 /**
- * Watcher health for the subscribed repo, carried on `snapshot`/`updated` v1.3
- * frames. Platform-neutral: every platform falls back to polling on a watcher
- * runtime error; only the `detail` text is platform-specific.
- *
- * `state` is the CONTRACT; `detail` is diagnostics:
- * - `starting` - no watcher yet. Every subscription begins here (the watcher
- *   arms against the repo root resolved by the first poll), so this is a normal
- *   opening state, not a fault. Frames still flow, on the polling cadence.
- * - `watching` - armed; frames are event-driven.
- * - `degraded-capacity` - nothing is armed because the watch budget could not
- *   cover this repo. RETRYABLE and self-healing: the host re-arms when capacity
- *   frees. This is the state whose `detail` carries a user-actionable remedy.
- * - `degraded-error` - the watcher failed and will NOT be retried for the life
- *   of this host process (a retry would stack kernel resource liabilities).
- *   Polling continues indefinitely; the remedy is a host restart.
- *
+ * Watcher health for the subscribed repo, carried on `snapshot`/`updated` v1.3 frames.
  * `detail` is a HUMAN-READABLE diagnostic string - render it, never parse it.
- * Its wording, precision and language are all unstable by design (it carries
- * things like measured directory counts and a sysctl remedy), which is exactly
- * why they are not schema. `null` whenever there is nothing to add, which
- * includes every non-degraded state.
  */
 export const gitWatcherStatusSchema = z.object({
   state: z.enum([
@@ -755,22 +516,7 @@ export const gitWatcherStatusSchema = z.object({
 });
 export type GitWatcherStatus = z.infer<typeof gitWatcherStatusSchema>;
 
-/**
- * `git.subscribeStatus@1.3` event - v1.2 frames plus `watcher` on
- * `snapshot`/`updated`. The `error` variant is unchanged: a git-compute failure
- * says nothing about watcher health, and the two degrade independently.
- *
- * COMPAT POSTURE: additive, same two independent guards as v1.1's `submodules`
- * - the host resolver projects frames onto the negotiated minor's frozen shape
- * (explicit field picks, never a spread), and released clients parse with
- * non-strict zod, which strips unknown fields. Do not remove either guard.
- *
- * Frames are NOT emitted per watcher transition: the field rides the ordinary
- * snapshot/updated cadence, so a transition surfaces on the next frame. The
- * host widens its emission gate so a transition on an otherwise-unchanged repo
- * still produces one - without that, an idle repo would sit on a stale value
- * until its next real change, which is unbounded.
- */
+/** `git.subscribeStatus@1.3` event - v1.2 frames plus `watcher` on `snapshot`/`updated`. */
 export const gitSubscribeStatusEventSchemaV13 = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("snapshot"),

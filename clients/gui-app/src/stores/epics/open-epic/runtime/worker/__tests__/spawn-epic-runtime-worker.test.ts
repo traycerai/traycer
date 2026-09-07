@@ -34,26 +34,14 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
 
-/**
- * Projection handlers that accept nothing, for tests that are not about
- * projections. `accept` answering `null` is honest here: these fixtures never
- * emit a projection, so nothing should ever be applied.
- */
+/** Projection handlers that accept nothing, for tests that are not about projections. */
 const SILENT_PROJECTION: RuntimeProjectionHandlers<never> = {
   accept: () => null,
   apply: () => {},
   reject: () => {},
 };
 
-/**
- * One construction site for the spawner's options.
- *
- * `SpawnEpicRuntimeWorkerOptions` MIRRORS what the worker needs from the main
- * thread, so it grows every time a channel is added - this file had SIX
- * literals when the worker->main direction landed, which was six compile errors
- * for one ruling and six more when that ruling was withdrawn. One site makes
- * the next such change one failure.
- */
+/** One construction site for the spawner's options. */
 function spawnOptions<TProjection>(
   required: Pick<
     SpawnEpicRuntimeWorkerOptions<TProjection>,
@@ -83,9 +71,7 @@ function spawnOptions<TProjection>(
         ok: false,
         reason: "no lane unary transport in this fixture",
       }),
-    // Nothing negotiated. `"unknown"` is the honest fixture answer and it is
-    // also what the manifest this spawner now emits will carry - which is a
-    // fact these tests can assert on rather than a stub that hides one.
+    // Nothing negotiated.
     methodSupport: {
       getMethodSupport: () => "unknown",
       subscribeMethodSupport: () => () => {},
@@ -103,12 +89,8 @@ interface SpawnFixture {
   readonly terminate: () => void;
   readonly host: EpicRuntimeWorkerHost | null;
   /**
-   * Fires the DOM-level fault a real `Worker` reports when its module fails to
-   * load - the one failure the bridge cannot carry, because no code of ours
-   * ever runs to send a `fatal`.
-   *
-   * A recorded listener rather than a no-op, so this fixture can drive the
-   * path instead of merely satisfying its type.
+   * Fires the DOM-level fault a real `Worker` reports when its module fails to load - the one
+   * failure the bridge cannot carry, because no code of ours ever runs to send a `fatal`.
    */
   readonly faultWorker: (message: string) => void;
 }
@@ -154,17 +136,6 @@ describe("spawnEpicRuntimeWorker", () => {
     );
 
     await expect(handle.ready).resolves.toBeUndefined();
-    // The preamble is the handshake plus the negotiated MANIFEST, and the
-    // second one arrived with a ruling: this event was declared by the protocol
-    // and consumed by the worker host from the start, and no emitter was ever
-    // written - which pinned every worker-hosted runtime to the fail-closed
-    // legacy arm for its whole life. Nothing this spawner sends is a credential
-    // or an address (the socket never left this thread), so a THIRD event here
-    // would still mean a channel came back without one.
-    //
-    // ORDER is asserted, not just membership: the manifest follows the
-    // bootstrap, because the bootstrap is the protocol handshake and a worker
-    // that has not validated its version has no business acting on state.
     expect(mainEvents(fixture.pair).map((event) => event.kind)).toEqual([
       "bootstrap",
       "stream/manifest",
@@ -208,17 +179,7 @@ describe("spawnEpicRuntimeWorker", () => {
   });
 
   it("surfaces a worker fault as a fatal, with no bridge traffic at all", async () => {
-    // THE FAILURE THE BRIDGE CANNOT CARRY. `new Worker(url, {type:"module"})`
-    // returns synchronously, so a module that then fails to fetch, parse or
-    // evaluate leaves a live handle attached to a thread that never ran a line
-    // of our code: no `ready`, no `fatal`, nothing to time out on. Production
-    // does not await `handle.ready`, so the session is already presented as
-    // ready and the epic spins on a snapshot that cannot arrive, with no Retry
-    // offered.
-    //
-    // Driven with ZERO prior posts, deliberately - the whole point is that
-    // this arrives on a bridge that has never carried a frame, so a pin that
-    // handshook first would be testing a different failure.
+    // THE FAILURE THE BRIDGE CANNOT CARRY.
     const fixture = createFixture(false);
     const relay = { log: vi.fn(), fatal: vi.fn() };
     const handle = spawnEpicRuntimeWorker(
@@ -230,9 +191,8 @@ describe("spawnEpicRuntimeWorker", () => {
 
     fixture.faultWorker("the epic runtime worker module failed to load");
 
-    // Routed through the SAME path the bridge `fatal` takes: the relay is told
-    // (which is what presents `failed` and its Retry), and the handshake
-    // promise is rejected rather than left pending forever.
+    // Routed through the SAME path the bridge `fatal` takes: the relay is told (which is what presents
+    // `failed` and its Retry), and the handshake promise is rejected rather than left pending forever.
     expect(relay.fatal).toHaveBeenCalledWith(
       "the epic runtime worker module failed to load",
       null,
@@ -242,21 +202,7 @@ describe("spawnEpicRuntimeWorker", () => {
   });
 
   it("survives a fault delivered while the handle is still constructing", async () => {
-    // THE TEMPORAL DEAD ZONE THE FATAL TEARDOWN OPENED. `surfaceFatal` now
-    // calls `disposeHandle()`, which reads `disposed` and three unsubscribes
-    // declared far BELOW the `onWorkerFault` subscription - subscribed early
-    // on purpose, because a module that fails to evaluate can have faulted
-    // before this handle finishes constructing. An implementation that
-    // answers that by replaying the fault synchronously on subscribe would
-    // hit those bindings in their TDZ, and the `ReferenceError` would come
-    // out of the CONSTRUCTOR - replacing the failed presentation and the
-    // rejected `ready` with a crash, which is strictly worse than the leak
-    // the teardown was added to fix.
-    //
-    // Nothing in `RuntimeWorkerLike` forbids that implementation; the DOM
-    // adapter merely happens not to be one, since `error` arrives as a task.
-    // The bridge's own `fatal` reaches the same place by the other road, from
-    // inside the synchronous `bootstrap` emit.
+    // THE TEMPORAL DEAD ZONE THE FATAL TEARDOWN OPENED.
     const pair = createFakeBridgePair("sync");
     const terminate = vi.fn();
     const worker: RuntimeWorkerLike = {
@@ -334,9 +280,7 @@ describe("spawnEpicRuntimeWorker", () => {
   }
 
   it("detach reports every close to a worker that SURVIVES", () => {
-    // Path 2 (`detachTransport`): the transport ends, the replica does not. The
-    // reports are the only signal the surviving worker gets - without them its
-    // streams merely go quiet, which is indistinguishable from a slow host.
+    // Path 2 (`detachTransport`): the transport ends, the replica does not.
     const fixture = createFixture(false);
     const recording = createRecordingStreamClient();
     const handle = spawnEpicRuntimeWorker(
@@ -361,20 +305,7 @@ describe("spawnEpicRuntimeWorker", () => {
     handle.dispose();
   });
 
-  // RETIRED WITH ITS SUBJECT: "attach re-binds to a NEW host, leaving none open
-  // on the old". `EpicRuntimeWorkerHandle.attach` is deleted - it had no callers
-  // and could not have done what it promised: it re-detached (emitting a second
-  // detach-transport) and installed a main-side proxy the worker never reopens
-  // through, so the worker stayed detached with no sessions. Production
-  // rebinding is a RESPAWN, where the retained handle merges into a new session.
-  //
-  // Worth naming rather than just deleting: this test was GREEN throughout, and
-  // it was green because `openStreams(fixture, 2)` after the attach FABRICATED
-  // the step production has no path to - the worker asking the new proxy to open
-  // streams. The pin supplied the missing half of the mechanism itself, so it
-  // could only ever confirm the half that worked. A green test is not evidence a
-  // member is wired; this one is why the member survived twelve unwired
-  // instances' worth of sweeps.
+  // RETIRED WITH ITS SUBJECT: "attach re-binds to a NEW host, leaving none open on the old".
 
   it("dispose reports every close BEFORE it tears the bridge down", () => {
     const fixture = createFixture(false);
@@ -390,9 +321,7 @@ describe("spawnEpicRuntimeWorker", () => {
     handle.dispose();
 
     expect(recording.closedCount()).toBe(2);
-    // Both reports landed, and the shutdown came AFTER them. Tearing down
-    // first posts them into a disposed bridge, where they are dropped - which
-    // is what shipped, and what a proxy-level pin could not see.
+    // Both reports landed, and the shutdown came AFTER them.
     const kinds = mainEvents(fixture.pair).map((event) => event.kind);
     expect(kinds.filter((kind) => kind === "stream/status")).toHaveLength(2);
     expect(kinds.lastIndexOf("stream/status")).toBeLessThan(
@@ -401,19 +330,8 @@ describe("spawnEpicRuntimeWorker", () => {
   });
 
   it("releases the transport when the worker fatals, without waiting for a retry", () => {
-    // THE LEAK THE FATAL PATH USED TO LEAVE BEHIND. `surfaceFatal` freed the
-    // accounting books and presented Retry, and stopped there - so `proxy`
-    // kept every real `IStreamSession` the worker had opened. Nothing else
-    // collected them: the provider MARKS the handle dead rather than
-    // disposing it (registry mutation belongs to the acquire effect), and
-    // that pass only runs if the user retries or reopens the epic. A user who
-    // does neither leaves host subscriptions live indefinitely, forwarding
-    // frames toward a bridge nothing reads.
-    //
-    // Cap-eviction cannot stand in for it either: the registry's prune walk
-    // only ever tears down UNMOUNTED, over-cap entries - a fatal can land on
-    // a session whose Epic tab is still open (mounted), and a mounted entry
-    // is never a candidate no matter what `isEvictable` says.
+    // `surfaceFatal` freed the accounting books and presented Retry, and stopped there - so `proxy`
+    // kept every real `IStreamSession` the worker had opened.
     const fixture = createFixture(false);
     const recording = createRecordingStreamClient();
     const relay = { log: vi.fn(), fatal: vi.fn() };
@@ -441,10 +359,7 @@ describe("spawnEpicRuntimeWorker", () => {
     // The relay still ran, and FIRST: the teardown must not cost the user the
     // presentation that carries Retry.
     expect(relay.fatal).toHaveBeenCalledWith("runtime blew up", null);
-    // And the handshake still rejects with the CAUSE. `dispose()` rejects an
-    // unsettled `ready` with its own "disposed before it was ready", so a
-    // teardown ordered before the rejection would replace the reason with the
-    // consequence.
+    // And the handshake still rejects with the CAUSE.
     return expect(handle.ready).rejects.toThrow("runtime blew up");
   });
 
@@ -492,12 +407,8 @@ interface Slice {
 }
 
 /**
- * The projection path END TO END: a worker emitting `projection` frames, the
- * spawner's one reducer, and the handlers the composition root supplies.
- *
- * The reducer's own suite lives in `clients/shared` and passes whether or not
- * the spawner ever calls it — which is exactly the gap these pins close. What
- * is under test here is the WIRING.
+ * The projection path END TO END: a worker emitting `projection` frames, the spawner's one
+ * reducer, and the handlers the composition root supplies.
  */
 describe("spawnEpicRuntimeWorker — the projection path", () => {
   function setupProjection() {
@@ -505,9 +416,8 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
     const worker: RuntimeWorkerLike = {
       ...createFakeWorkerTarget(pair),
       terminate: () => {},
-      // Not driven by these pins - the projection path is bridge traffic, and
-      // a faulted worker sends none. `createFixture` above is the one that
-      // records the listener.
+      // Not driven by these pins - the projection path is bridge traffic, and a faulted worker sends
+      // none. `createFixture` above is the one that records the listener.
       onWorkerFault: () => {},
     };
 
@@ -594,31 +504,10 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
 });
 
 /**
- * The negotiated manifest actually crosses, and a host that upgrades under an
- * open tab moves the arm.
- *
- * `stream/manifest` was declared by the protocol and consumed by the worker
- * host, and NOTHING on main ever emitted one. That is not a missing
- * optimisation. `support(method)` answers `"unknown"` against a null manifest,
- * `"unknown"` is deliberately not a selection, and the fail-closed default is
- * the legacy `@1` arm - so every worker-hosted runtime held legacy for its
- * whole life, on lane-serving hosts included. The capability PROBE masks the
- * cold case (the status lane's own subscribe settles a connection's verdict),
- * which is exactly why this went unnoticed; what a probe cannot do is move a
- * tab whose host upgraded underneath it, because that signal exists only here.
- *
- * The chain is pinned END TO END rather than at the emit: main emits, the REAL
- * worker host applies, the PRODUCTION support reader reads what it applied, and
- * the PRODUCTION verdict function turns that into an arm. A pin that stopped at
- * "an event was posted" would have passed against a payload no reader could
- * use.
+ * The negotiated manifest actually crosses, and a host that upgrades under an open tab moves the
+ * arm.
  */
-/**
- * A host that serves BOTH record-list methods, at the minor that carries the
- * doc remainder. `epic.listTuiAgents` needs `@1.1` specifically - at `@1.0`
- * the host withholds doc-only entries, so the doc arm stays on - which is why
- * this names a version rather than just a method.
- */
+/** A host that serves BOTH record-list methods, at the minor that carries the doc remainder. */
 const RECORD_SERVING_MANIFEST: ConnectionManifest = {
   "epic.listChatRecords": { major: 1, minor: 1 },
   "epic.listTuiAgents": { major: 1, minor: 1 },
@@ -668,20 +557,13 @@ describe("the negotiated manifest crossing to the worker", () => {
       ),
     );
 
-    // The INITIAL push, which `subscribeMethodSupport` alone cannot deliver:
-    // it reports movement, not state, so a worker spawned onto a transport
-    // whose handshake already resolved would otherwise wait for an edge that
-    // has been and gone. `"unknown"` is not a selection, so the verdict is
-    // undecided rather than legacy - which is the distinction the probe
-    // depends on.
+    // The INITIAL push, which `subscribeMethodSupport` alone cannot deliver: it reports movement, not
+    // state, so a worker spawned onto a transport whose handshake already resolved would otherwise
     expect(armOf(host)).toBe("undecided");
 
     support.set("supported");
     expect(armOf(host)).toBe("lanes");
 
-    // And back through unknown, because a reconnect CLEARS the support map and
-    // re-probes - the window every healthy reconnect on a lane host passes
-    // through, and the one a raw digest would read as a manifest change.
     support.set("unknown");
     expect(armOf(host)).toBe("undecided");
 
@@ -693,22 +575,8 @@ describe("the negotiated manifest crossing to the worker", () => {
   });
 
   /**
-   * The `docArm` half, which has a DIFFERENT source from the other two fields
-   * and therefore a different edge.
-   *
-   * `methodSupport` is the stream client's learned support; `docArm` comes off
-   * the negotiated-UNARY registry. Subscribing only to the first was right for
-   * a reconnect - one re-handshake rewrites both - and wrong for the ordinary
-   * case of the first unary handshake completing after this worker spawned,
-   * which is the usual order on a warm tab. The worker then held the
-   * fail-closed doc arm against a host that serves the record-list methods, so
-   * it went on unioning a live root row with a poll row and a newer rename
-   * stayed hidden behind the older poll value.
-   *
-   * The stimulus is deliberately a registry write with NO support movement -
-   * `methodSupport` here is the default frozen `"unknown"` source with a no-op
-   * listener, which is also literally what a relay gives - so the only thing
-   * that can carry the new arm across is the registry subscription.
+   * The `docArm` half, which has a DIFFERENT source from the other two fields and therefore a
+   * different edge.
    */
   it("re-emits the manifest when the negotiated UNARY registry moves, with no stream-support edge at all", () => {
     resetNegotiatedManifests();
@@ -730,10 +598,7 @@ describe("the negotiated manifest crossing to the worker", () => {
       tuiAgents: true,
     });
 
-    // The first unary handshake with `host-1` completes. Nothing about STREAM
-    // support changed, and nothing here could tell the worker if this were not
-    // subscribed - the spawn fixture's `subscribeMethodSupport` is `() => () =>
-    // {}`.
+    // The first unary handshake with `host-1` completes.
     recordNegotiatedHostManifest("host-1", RECORD_SERVING_MANIFEST);
 
     expect(host.streams.manifest()?.docArm).toEqual({
@@ -760,9 +625,8 @@ describe("the negotiated manifest crossing to the worker", () => {
     );
     handle.dispose();
 
-    // The registry is module-scoped and PROCESS-wide, so a listener leaked
-    // there outlives not just this transport but every session on it - and it
-    // would emit onto a disposed bridge on every later host's handshake.
+    // The registry is module-scoped and PROCESS-wide, so a listener leaked there outlives not just
+    // this transport but every session on it - and it would emit onto a disposed bridge on every later
     const before = host.streams.manifest()?.docArm;
     recordNegotiatedHostManifest("host-1", RECORD_SERVING_MANIFEST);
     expect(host.streams.manifest()?.docArm).toEqual(before);
@@ -785,10 +649,8 @@ describe("the negotiated manifest crossing to the worker", () => {
     );
     handle.dispose();
 
-    // The TRANSPORT outlives this worker on the retained-buffer path, so a
-    // listener left behind would emit onto a disposed bridge every time that
-    // connection re-handshakes. Observed through the reader rather than by
-    // counting posts: what matters is that the worker's view stopped moving.
+    // The TRANSPORT outlives this worker on the retained-buffer path, so a listener left behind would
+    // emit onto a disposed bridge every time that connection re-handshakes.
     const before = armOf(host);
     support.set("supported");
     expect(armOf(host)).toBe(before);

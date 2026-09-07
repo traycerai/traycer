@@ -26,9 +26,7 @@ const durableCloseMutateAsync =
       readonly terminalId: string;
     }) => Promise<void>
   >();
-// Never invokes any settle callback - and no longer takes one. The editor
-// settles on `submitRename`'s SYNCHRONOUS return instead, so a rename that
-// stays on the wire for the whole test is exactly the state under assertion.
+// Never invokes any settle callback - and no longer takes one.
 const durableRenameMutate =
   vi.fn<
     (request: {
@@ -66,9 +64,7 @@ const terminalSessions = vi.hoisted<{
   >;
 }>(() => ({ value: [] }));
 
-// The sidebar is outside every tile `TabHostProvider`, so its client and its
-// ref host both come from the Epic SESSION - not from the app-wide effective
-// host, which this panel deliberately no longer reads.
+// The sidebar is outside every tile `TabHostProvider`, so its client and its ref host both come from the Epic SESSION - not from the app-wide effective host, which this panel deliberately no longer reads.
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
@@ -303,11 +299,6 @@ function seedEmptyTab(): void {
   });
 }
 
-/**
- * Setup and provider-login shells are host-created `terminal.list`
- * compatibility rows: import-exempt, so their canvas ref stays legacy-shaped
- * even against a capable host, and absent from the durable collection.
- */
 function seedOpenCompatibilityTab(origin: "setup" | "provider-login"): void {
   seedEmptyTab();
   const base = {
@@ -793,11 +784,7 @@ describe("terminal sidebar Close", () => {
       fireEvent.change(input, { target: { value: "Committed title" } });
       fireEvent.keyDown(input, { key: "Enter" });
 
-      // Neither rename mock ever calls a settle callback, so the request is
-      // still outstanding here. Both paths used to close only from a
-      // `mutate`-scoped `onSuccess`, which meant this editor stayed mounted for
-      // the whole round trip - and, because no arm called back on rejection,
-      // stayed mounted indefinitely after a failed rename.
+      // Both paths used to close only from a `mutate`-scoped `onSuccess`, which meant this editor stayed mounted for the whole round trip - and, because no arm called back on rejection, stayed mounted indefinitely after a failed rename.
       expect(mutateSpy()).toHaveBeenCalledTimes(1);
       expect(
         queryByTestId(`epic-terminal-sidebar-rename-input-${SESSION_ID}`),
@@ -806,14 +793,7 @@ describe("terminal sidebar Close", () => {
   );
 
   it("keeps a terminal rename editor from opening while one is pending", () => {
-    // The counterpart to closing on commit: `canRename` folds in the pending
-    // flag, so the editor cannot be OPENED mid-flight - both rename paths share
-    // one mutation observer and cannot carry two renames at once.
-    //
-    // This closes the common case but NOT every case, and reading it as "so a
-    // refusal is unreachable from the UI" was wrong: it reasons about the state
-    // at OPEN time only. The pair below covers an editor that is already up
-    // when availability drops underneath it.
+    // The counterpart to closing on commit: `canRename` folds in the pending flag, so the editor cannot be OPENED mid-flight - both rename paths share one mutation observer and cannot carry two renames at once.
     durableAuthority.capability = "capable";
     durableAuthority.canMutate = true;
     durableAuthority.collectionIncludesSession = true;
@@ -861,10 +841,6 @@ describe("terminal sidebar Close", () => {
       { target: { value: "Typed title" } },
     );
 
-    // `canRename` is a CONJUNCTION, and the editor was legitimately opened
-    // while all of it held. Either conjunct can go false underneath it:
-    // `canMutate` is host-wide (a disconnect, a permission change), and the
-    // pending flag is PANEL-wide, since one mutation observer serves every row.
     apply();
     view.rerender(
       wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
@@ -911,9 +887,8 @@ describe("terminal sidebar Close", () => {
   });
 
   it("keeps legacy rename for a capable host's compatibility row", () => {
-    // Setup and provider-login shells stay `terminal.list` rows and never
-    // enter the durable collection. The host still serves `terminal.rename`
-    // for them, so a capable host must not strand them with rename disabled.
+    // Setup and provider-login shells stay `terminal.list` rows and never enter the durable collection.
+    // The host still serves `terminal.rename` for them, so a capable host must not strand them with rename disabled.
     durableAuthority.capability = "capable";
     durableAuthority.canMutate = true;
     durableAuthority.collectionIncludesSession = false;

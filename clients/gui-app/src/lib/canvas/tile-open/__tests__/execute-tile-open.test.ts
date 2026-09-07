@@ -1,8 +1,5 @@
 /**
- * The executor is a dispatcher, so this suite pins the dispatch table: one
- * plan kind -> one `prepare*FocusTarget`, always wrapped in `navigateNested`
- * (the nested-focus boundary), except `pip`, which leaves the tile tree and
- * therefore commits no route.
+ * The executor is a dispatcher, so this suite pins the dispatch table: one plan kind -> one `prepare*FocusTarget`, always wrapped in `navigateNested` (the nested-focus boundary), except `pip`, which leaves the tile tree and therefore commits no route.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -49,8 +46,7 @@ const BROWSER_A = makeBrowserSessionTileRef({
 });
 
 /**
- * Replace exactly the prepare* actions the executor may reach, so a wrong
- * dispatch shows up as "the other spy was called" rather than a canvas diff.
+ * Replace exactly the prepare* actions the executor may reach, so a wrong dispatch shows up as "the other spy was called" rather than a canvas diff.
  */
 function installPrepareSpies() {
   const spies = {

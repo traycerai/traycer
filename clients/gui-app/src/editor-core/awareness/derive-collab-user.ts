@@ -1,9 +1,4 @@
-/**
- * Curated palette of 12 caret colors. Hand-picked for AA contrast against
- * both light and dark editor backgrounds and intentionally biased away from
- * the primary action blue used by the app so a remote caret never visually
- * masquerades as the local selection highlight.
- */
+/** 12 caret colors, AA on both editor backgrounds, biased off the app's primary blue so a remote caret is not the local selection. */
 export const COLLAB_COLOR_PALETTE: readonly string[] = [
   "#ef4444", // red-500
   "#f97316", // orange-500
@@ -19,14 +14,7 @@ export const COLLAB_COLOR_PALETTE: readonly string[] = [
   "#f43f5e", // rose-500
 ] as const;
 
-/**
- * FNV-1a 32-bit. Picked over a naive `charCodeAt` sum because it spreads
- * adjacent ids (e.g. `user_1`, `user_2`) across different palette buckets,
- * and it's cheap enough to run inline on every store update without a memo.
- *
- * The return value is the raw 32-bit hash; callers take `% palette.length`
- * to land on a bucket so the palette can grow without a migration.
- */
+/** FNV-1a 32-bit so adjacent ids land in different buckets. Callers take `% palette.length` so the palette can grow without a migration. */
 export function hashUserIdToColorIndex(userId: string): number {
   let hash = 0x811c9dc5; // FNV offset basis
   for (let i = 0; i < userId.length; i++) {
@@ -39,11 +27,7 @@ export function hashUserIdToColorIndex(userId: string): number {
   return hash >>> 0;
 }
 
-/**
- * Minimum auth-profile surface needed to derive a caret identity. Kept
- * permissive so consumers on `AuthProfile`-shaped types from any store can
- * pass directly without a mapper.
- */
+/** Minimum auth-profile surface. Permissive so AuthProfile-shaped types pass without a mapper. */
 export interface CollabAuthUser {
   readonly userName: string | null | undefined;
   readonly email: string | null | undefined;
@@ -55,10 +39,8 @@ export interface CollabUser {
 }
 
 function deriveStableId(user: CollabAuthUser): string {
-  // Prefer email as the stable identifier. `userName` can be edited;
-  // `email` is the AuthnV3 primary key surfaced to the GUI. Fall back to
-  // userName then a literal so two guests still land on distinct colors
-  // (their awareness state is distinguished upstream by client id).
+  // Prefer email (AuthnV3 primary key). Fall back to userName then a literal
+  // so two guests still get distinct colors.
   if (user.email !== null && user.email !== undefined && user.email.length > 0)
     return user.email;
   if (
@@ -83,9 +65,7 @@ function deriveDisplayName(user: CollabAuthUser): string {
 }
 
 /**
- * Resolve an `{name, color}` identity for the CollaborationCaret extension
- * from an auth profile. Deterministic: same stable id → same color across
- * devices and sessions.
+ * {name, color} for CollaborationCaret. Same stable id yields the same color.
  */
 export function deriveCollabUser(user: CollabAuthUser): CollabUser {
   const stableId = deriveStableId(user);

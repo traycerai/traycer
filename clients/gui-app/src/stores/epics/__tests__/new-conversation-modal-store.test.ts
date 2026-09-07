@@ -85,9 +85,8 @@ describe("useNewConversationModalStore setPrimaryFolder", () => {
       .getState()
       .setPrimaryFolder("epic-1", seed, WORKSPACE_B.path);
 
-    // "Never touches" means the byHost map itself stays empty - not merely
-    // that a particular host's bucket reads as empty (which the shared empty
-    // bucket would show trivially regardless).
+    // "Never touches" means the byHost map itself stays empty - not merely that a particular host's
+    // bucket reads as empty (which the shared empty bucket would show trivially regardless).
     expect(useWorkspaceFoldersStore.getState().byHost).toEqual({});
     expect(
       useLandingDraftStore.getState().drafts.find((d) => d.id === draftId)

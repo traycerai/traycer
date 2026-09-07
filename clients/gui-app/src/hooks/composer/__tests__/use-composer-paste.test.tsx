@@ -224,12 +224,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     expect(image.size).toBe(5);
   });
 
-  // `attachImageFiles` backs the image-only picker button (see
-  // `onAttachImages` in chat-composer.tsx), not the shared paste/drop path -
-  // it only ever calls the image ingest (`onFiles`), never
-  // `attachFilePaths`. A non-image file handed to it is therefore correctly
-  // dropped silently rather than turned into a path span; that only happens
-  // via `onPaste`/`onDrop`, covered below.
+  // `attachImageFiles` backs the image-only picker button (see `onAttachImages` in chat-composer.tsx), not the shared paste/drop path - it only ever calls the image ingest (`onFiles`), never `attachFilePaths`.
   it("drops non-image files and keeps only images from a mixed list", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
@@ -1165,12 +1160,7 @@ function PasteStateHarness({
   );
 }
 
-/**
- * A fake `IFileDropHost` that resolves per single-file / single-url calls
- * (mirroring how `resolveFileToPath`/`resolveUrlPathToPath` invoke it) by
- * looking up the file name / url in the given maps. A name/url absent from
- * its map resolves to `[]` (matches the real "couldn't resolve" contract).
- */
+/** A fake `IFileDropHost` that resolves per single-file / single-url calls (mirroring how `resolveFileToPath`/`resolveUrlPathToPath` invoke it) by looking up the file name / url in the given maps. */
 function makeFileDrops(
   resolveByFileName: Readonly<Record<string, readonly string[]>>,
   copyByUrlPath: Readonly<Record<string, readonly string[]>>,

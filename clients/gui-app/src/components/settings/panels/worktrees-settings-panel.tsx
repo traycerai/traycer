@@ -145,13 +145,10 @@ import {
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 type WorktreeRowDeleteStatus = "deleting";
-// Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
-// `ready` = enriched (real tier), `pending` = in flight ("Checking…" spinner),
-// `unknown` = the first probe settled to an error (no tier is known), and
-// `unavailable` = a refresh failed but a last-known tier remains displayable.
+// Per-row activity-enrichment state, driving only the tier pill's presentation.
 type WorktreeEnrichmentState = "ready" | "pending" | "unknown" | "unavailable";
-// Multi-select status filter. An EMPTY set means "no filter" (show every tier);
-// a non-empty set shows only the selected tiers (union). Composes with search.
+// Multi-select status filter. An empty set means "no filter" (show every tier); a non-empty set shows only the
+// selected tiers (union). Composes with search.
 type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
 
 const STALE_CLASSIFICATION_ENTRY_CACHE = new WeakMap<
@@ -161,34 +158,19 @@ const STALE_CLASSIFICATION_ENTRY_CACHE = new WeakMap<
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 
-// Virtualization tuning. Row/header heights are estimates only - each rendered
-// item is measured (`virtualizer.measureElement`) so variable-height rows (a
-// wrapping Task-chip line, an optional facts line) still position correctly.
-// These are the one legitimately-fixed pixel constant in this surface: they seed
-// the window before the first measure, nothing more.
+// Row/header heights are estimates only - each rendered item is measured (`virtualizer.measureElement`) so
+// variable-height rows (a wrapping Task-chip line, an optional facts line) still position correctly.
 const WORKTREE_ROW_ESTIMATE_PX = 88;
 const WORKTREE_REPO_HEADER_ESTIMATE_PX = 40;
 const WORKTREE_VIRTUAL_OVERSCAN = 8;
 
-// Scroll-viewport clearance for the floating selection action bar (see
-// `WorktreeSelectionActionBar`). The bar's real height is measured live via
-// `useObservedHeight` so a wrapped bar (narrow width, or the `Checking`
-// notice pushing it to two lines) still gets full clearance. `GAP_PX` covers
-// the bar's own `bottom-4` offset plus breathing room above it; `MIN_PX`
-// matches the bar's normal single-line height and only seeds the very first
-// frame, before the observer reports a real measurement.
+// `GAP_PX` covers the bar's own `bottom-4` offset plus breathing room above it; `MIN_PX` matches the bar's
+// normal single-line height and only seeds the very first frame.
 const WORKTREE_ACTION_BAR_GAP_PX = 32;
 const WORKTREE_ACTION_BAR_MIN_CLEARANCE_PX = 64;
 
-/**
- * Live element-height observer: a callback ref plus `useSyncExternalStore` over
- * a `ResizeObserver`, so the caller reads the CURRENT rendered height of
- * whatever DOM node the ref attaches to - re-rendering exactly when that height
- * changes (including back to 0 once the node unmounts). Mirrors the
- * `useComposerNarrowObserver` pattern in
- * `src/components/home/composer/composer-narrow-hooks.ts`; kept local here
- * because nothing else in the app needs it yet.
- */
+/** Mirrors the `useComposerNarrowObserver` pattern in `src/components/home/composer/composer-narrow-hooks.ts`;
+ * kept local here because nothing else in the app needs it yet. */
 function useObservedHeight(): {
   readonly ref: RefCallback<HTMLDivElement>;
   readonly height: number;
@@ -217,29 +199,12 @@ function useObservedHeight(): {
   };
 }
 
-/**
- * Inventory-only: this panel lists every git worktree under the selected
- * host's `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
- * owning chat/agent was deleted still appear) and lets the user delete ones
- * they no longer need. The branch-prefix default lives in General settings;
- * a per-repository override lives in that repo's Environment dialog - this
- * page carries neither, so the inventory's own host/search/filter toolbar is
- * the only chrome above the list.
- *
- * The scoped host comes from the ONE picker in the sidebar (`useHostScope`),
- * which reaches a non-active host through a transient client, so viewing
- * another host's worktrees never swaps the app-wide active host or reloads the
- * Epic list. This panel used to carry its own host `<Select>` in the
- * toolbar; that slot is gone entirely — the sidebar names the scoped host,
- * and the toolbar keeps only the refresh control and its own filters.
- */
+/** The scoped host comes from the one picker in the sidebar (`useHostScope`), which reaches a non-active host
+ * through a transient client. */
 export function WorktreesSettingsPanel(): ReactNode {
   const scope = useHostScope();
-  // One-shot `worktree.deleteByPath` stream transport: it survives the panel
-  // unmounting (a backgrounded delete keeps its socket) but wires no proactive
-  // reconnect and no auth revalidation, so an OS wake / host respawn does not
-  // silently re-subscribe and re-run the delete pipeline. A dropped socket
-  // surfaces the failure instead.
+  // One-shot `worktree.deleteByPath` stream transport: it survives the panel unmounting (a backgrounded delete
+  // keeps its socket) but wires no proactive reconnect and no auth revalidation.
   const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
   const compact = useSettingsDensity() === "compact";
 
@@ -296,9 +261,8 @@ function WorktreesToolbar(props: {
 
   return (
     <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
-      {/* The slot on the left held first a host `<Select>`, then a readout of
-          the scoped host. Both are gone: the sidebar names that host one row
-          away and never scrolls, so this toolbar carries only what it owns. */}
+      {/* Both are gone: the sidebar names that host one row away and never scrolls, so this toolbar carries only what
+         it owns. */}
       <div className="flex items-center justify-end gap-2">
         <div
           className="flex shrink-0 items-center gap-2"
@@ -328,14 +292,8 @@ function WorktreesToolbar(props: {
   );
 }
 
-/**
- * "Updated Xm ago" beside the Refresh button. Under the manual-refresh model
- * (listing `staleTime: Infinity`, no host freshness sweep) this is the only
- * signal of how old the list is - a warm-open seed shows its snapshot-era
- * save time, so a relaunch honestly reads as hours old until refreshed.
- * Split into an outer null-gate and an inner hook caller so the shared 60s
- * relative-time clock only re-renders this leaf, never the toolbar.
- */
+/** Split into an outer null-gate and an inner hook caller so the shared 60s relative-time clock only re-renders
+ * this leaf, never the toolbar. */
 function WorktreesUpdatedAgoLabel(props: {
   readonly updatedAt: number | null;
 }): ReactNode {
@@ -409,14 +367,8 @@ function worktreeTierFilterLabel(
   return `${active.length} tiers`;
 }
 
-/**
- * Status filter - now MULTI-select: "All" (clears the filter) plus each tier
- * actually present in this host's list (zero-count tiers are not offered).
- * Checking several tiers shows their union; composes with the search box (both
- * apply). Tier comes from the shared classifier, so the options match the row
- * pills exactly. Kept open across toggles (`onSelect` preventDefault) so the user
- * can pick e.g. Landed + At base commit in one visit.
- */
+/** Kept open across toggles (`onSelect` preventDefault) so the user can pick e.g. Landed + At base commit in
+ * one visit. */
 function WorktreeFilterMenu(props: {
   readonly tierFilters: WorktreeTierFilterSet;
   readonly availableTiers: readonly WorktreeTier[];
@@ -480,10 +432,7 @@ const WORKTREE_SORT_LABEL: Record<WorktreeSortMode, string> = {
   oldest: "Oldest",
 };
 
-/**
- * Standard sort control: a small dropdown with checkmarked items. Orders rows
- * WITHIN each repo group by creation time - "Newest" (default) or "Oldest".
- */
+/** Orders rows within each repo group by creation time - "Newest" (default) or "Oldest". */
 function WorktreeSortMenu(props: {
   readonly sortMode: WorktreeSortMode;
   readonly onSortModeChange: (mode: WorktreeSortMode) => void;
@@ -532,19 +481,14 @@ function WorktreesBody(props: {
 }): ReactNode {
   const { client, openStreamTransport, hostId, scope } = props;
   const reachability = useHostReachability(hostId ?? "");
-  // Two reachability opinions used to disagree here. `useHostReachability` is
-  // the TAB-binding check and can call a host reachable that this settings
-  // scope cannot dial (a registry row with no websocket URL), which surfaced
-  // as a bogus "Sign in to manage worktrees" on a host that was simply not
-  // routable from here. The scope's verdict wins: it is the one that knows
-  // whether a client exists.
+  // `useHostReachability` is the tab-binding check and can call a host reachable that this settings scope cannot
+  // dial (a registry row with no websocket URL).
   const scopeUsable = isHostScopeUsable(scope.status);
   const reachable =
     scopeUsable && hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
-  // The full listing's paths seed the background enrichment sweep: rows the
-  // user never scrolls to still get probed (in bounded chunks), so tier pills
-  // and filtered counts converge without manual scrolling.
+  // The full listing's paths seed the background enrichment sweep: rows the user never scrolls to still get
+  // probed (in bounded chunks), so tier pills and filtered counts converge without manual scrolling.
   const worktreePaths = useMemo(
     () => listing.worktrees.map((entry) => entry.worktreePath),
     [listing.worktrees],
@@ -567,10 +511,7 @@ function WorktreesBody(props: {
   }, [listing, prepareEnrichmentRefresh]);
   const toolbarProps = {
     onRefresh,
-    // Only the explicit Refresh mutation locks the button - NOT enrichment.
-    // A cold fleet enriches for tens of seconds; gating on that stranded the
-    // manual escape hatch (and the "Updated Xm ago" label) for the whole
-    // convergence, which is exactly when the user most wants to re-pull.
+    // Only the explicit Refresh mutation locks the button - not enrichment.
     refreshing: listing.isRefreshPending,
     canRefresh,
     lastUpdatedAt: listing.lastUpdatedAt,
@@ -591,10 +532,8 @@ function WorktreesBody(props: {
       </WorktreesStateMessage>
     );
   } else if (!reachable) {
-    // The hook's REASON, not one sentence for every non-reachable result. A
-    // `plan-restricted` host is running and its worktrees are intact; saying it
-    // is offline sends someone to fix a machine that is fine and hides the only
-    // thing that would actually restore this panel.
+    // A `plan-restricted` host is running and its worktrees are intact; saying it is offline sends someone to fix
+    // a machine that is fine and hides the only thing that would actually restore this panel.
     content = (
       <WorktreesStateMessage tone="muted" spinner={false}>
         {reachability.unavailability === "plan-restricted"
@@ -629,12 +568,8 @@ function WorktreesBody(props: {
   } else {
     listOwnsToolbar = true;
     content = (
-      // Key by host so a host swap remounts the list with fresh selection /
-      // search / collapse state - a pending selection from another host is
-      // never carried across. (A same-host refresh keeps the mount; the
-      // selectable set is recomputed from the freshest listing every render and
-      // `selectedTargets` intersects with it, so a vanished row drops out of the
-      // effective selection on its own.)
+      // Key by host so a host swap remounts the list with fresh selection / search / collapse state - a pending
+      // selection from another host is never carried across.
       <WorktreesList
         key={hostId}
         openStreamTransport={openStreamTransport}
@@ -661,22 +596,8 @@ function WorktreesBody(props: {
           filterControls={null}
         />
       ) : null}
-      {/* The gate owns every state where the scope has no client: it names
-          the host, distinguishes deregistered from unroutable, and offers the
-          way back to the active host — the old `hostId === null` branch
-          flattened all of that into "Select a host". The reachability/listing
-          content renders as the gate's CHILDREN (not beside it) so the list —
-          a script review mid-read, an armed delete, selection and collapse
-          state — is preserved through a transient same-host disconnect
-          instead of being unmounted, exactly as the other host-scoped panels
-          do. The partial-listing banner is a child too: today it could not
-          outlive a disconnect either way (a scope with no client drops the
-          listing data, and `isPartial` with it — measured), but it is
-          host-scoped content, and behind the boundary its concealment stays
-          correct even if the listing cache ever learns to survive a client
-          loss. A usable scope is `following` or `ready`, both of which
-          require a resolved host, so no "Select a host" branch is needed
-          inside. */}
+      {/* The reachability/listing content renders as the gate's children (not beside it) so the list - a script
+         review mid-read, an armed delete, selection and collapse state. */}
       <HostScopeGate
         scope={scope}
         skeleton={
@@ -697,12 +618,8 @@ function WorktreesBody(props: {
   );
 }
 
-/**
- * A later listing page failed after earlier pages already landed - `worktrees`
- * is real but an INCOMPLETE prefix of the host's full list. The list still
- * renders below (partial data is useful), but this banner is the only signal
- * that it is truncated, so it must never be dropped silently.
- */
+/** The list still renders below (partial data is useful), but this banner is the only signal that it is
+ * truncated, so it must never be dropped silently. */
 function WorktreesPartialListingBanner(props: {
   readonly message: string | null;
   readonly onRetry: () => Promise<unknown>;
@@ -741,14 +658,8 @@ function WorktreesPartialListingBanner(props: {
   );
 }
 
-/**
- * One virtualized row of the flattened worktree list. The grouped-by-repo tree
- * (collapsible repo headers + their rows) is flattened into this single stream so
- * a single windowed list can render it: only the items intersecting the viewport
- * mount. A collapsed group contributes just its header. `firstInGroup` /
- * `showDivider` carry the hairline borders the old nested `divide-y` layout gave
- * for free (absolutely-positioned virtual items can't rely on `:first-child`).
- */
+/** `firstInGroup` / `showDivider` carry the hairline borders the old nested `divide-y` layout gave for free
+ * (absolutely-positioned virtual items can't rely on `:first-child`). */
 type WorktreeFlatItem =
   | {
       readonly kind: "header";
@@ -790,17 +701,9 @@ function buildWorktreeFlatItems(
   return items;
 }
 
-// List renders many per-worktree states (loading / empty / error / per-row
-// actions); branches are independent, not reducible nesting.
 // eslint-disable-next-line complexity
-/**
- * Identity-stable wrapper for callbacks passed to memoized rows: the returned
- * function never changes identity, but always invokes the latest render's
- * closure (kept fresh in a layout effect, so it is committed before any user
- * event can fire). Without this, a handler whose dependencies churn on every
- * enrichment pass busts every row's memo - a full-list re-render per probe.
- * Not `useEffectEvent`: React documents those as not-for-props.
- */
+// List renders many per-worktree states (loading / empty / error / per-row
+/** Identity-stable wrapper for callbacks passed to memoized rows. */
 function useStableRowCallback<Args extends readonly unknown[]>(
   callback: (...args: Args) => void,
 ): (...args: Args) => void {
@@ -819,27 +722,15 @@ export function WorktreesList(props: {
   // The BASE listing (cheap fields for every row). Per-row activity enrichment
   // arrives lazily through `enrichedByPath`.
   readonly worktrees: readonly WorktreeHostEntryV14[];
-  // The enrichment overlay, keyed by `worktreePath`. A row present here carries
-  // its full activity-probed fields (branchStatus, prState, …); a row ABSENT
-  // here is un-enriched - its tier is unknown, so it stays out of tier-based
-  // filtering either way. Absence splits on `erroredPaths`: absent + errored
-  // renders a settled "Unknown" pill, absent + not errored is still pending
-  // ("Checking…"). On-screen rows fill in first; the background sweep covers
-  // the rest of the list without scrolling.
+  // On-screen rows fill in first; the background sweep covers the rest of the list without scrolling.
   readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
-  // Paths whose enrichment SETTLED to an error. Such a row is un-enriched just like
-  // a pending one (kept out of tier filtering, base presentation), but its pill
-  // reads a non-animated "Unknown" instead of an infinite "Checking…" spinner.
+  // Such a row is un-enriched just like a pending one (kept out of tier filtering, base presentation), but its
+  // pill reads a non-animated "Unknown" instead of an infinite "Checking…" spinner.
   readonly erroredPaths: ReadonlySet<string>;
-  // Paths whose overlay entry is the restored warm-open SEED (last run's data,
-  // not yet re-verified by this session's probes). Their tier pill renders
-  // normally, but delete surfaces treat them as still-checking: a seeded
-  // "Landed" may have gained commits since the snapshot was written, so no
-  // delete confirmation may trust it.
+  // Paths whose overlay entry is the restored warm-open seed (last run's data, not yet re-verified by this
+  // session's probes).
   readonly seededPaths: ReadonlySet<string>;
-  // Reports the worktree paths currently on screen (from the virtualizer) so the
-  // owner can enrich just those. Called whenever the on-screen set changes; the
-  // owner debounces + batches.
+  // Called whenever the on-screen set changes; the owner debounces + batches.
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
@@ -860,10 +751,8 @@ export function WorktreesList(props: {
     openStreamTransport,
   } = props;
   const queryClient = useQueryClient();
-  // TanStack retains invalidated enrichment rows, so presence alone cannot make
-  // one authoritative. A newly-unresolved base row must fail closed even when a
-  // previous resolved overlay is still cached; resolved overlays only win when
-  // they are at least as fresh as the resolved base row.
+  // A newly-unresolved base row must fail closed even when a previous resolved overlay is still cached; resolved
+  // overlays only win when they are at least as fresh as the resolved base row.
   const acceptedEnrichedByPath = useMemo(() => {
     const accepted = new Map<string, WorktreeHostEntryV14>();
     for (const base of worktrees) {
@@ -879,10 +768,7 @@ export function WorktreesList(props: {
     }
     return accepted;
   }, [worktrees, enrichedByPath]);
-  // Classification is stale-while-revalidate. TanStack retains an invalidated
-  // query's data while its refetch runs, and that last-known evidence is exactly
-  // what keeps an active tier filter stable. It is DISPLAY-ONLY: destructive
-  // actions continue to use `acceptedEnrichedByPath` below and therefore never
+  // It is display-only: destructive actions continue to use `acceptedEnrichedByPath` below and therefore never
   // trust an overlay older than the refreshed base row.
   const classificationEntryByPath = useMemo(() => {
     const known = new Map<string, WorktreeHostEntryV14>();
@@ -910,10 +796,8 @@ export function WorktreesList(props: {
       ),
     [worktrees, acceptedEnrichedByPath],
   );
-  // Search/display may keep using a last-known overlay while it revalidates.
-  // This mirrors tier filtering: entering a loading state must not erase a PR
-  // number the user could search a moment earlier. Safety-sensitive consumers
-  // continue to read `mergedWorktrees` / `acceptedEnrichedByPath` instead.
+  // Search/display may keep using a last-known overlay while it revalidates. This mirrors tier filtering:
+  // entering a loading state must not erase a PR number the user could search a moment earlier.
   const displayWorktrees = useMemo(
     () =>
       mergedWorktrees.map(
@@ -933,13 +817,8 @@ export function WorktreesList(props: {
     },
     [classificationEntryByPath, erroredPaths],
   );
-  // DELETE surfaces read this variant instead: a snapshot-seeded row reads
-  // "pending" (its restored tier is last-run display data, not verified
-  // truth), so it can't unlock a delete confirmation, is excluded at
-  // confirm-time re-checks, and counts into the action bar's Checking notice
-  // - until this session's live probe replaces the seed. Display (the pill,
-  // tier filters) keeps using `enrichmentStateFor`, so warm-open tiers still
-  // paint instantly.
+  // DELETE surfaces read this variant instead: a snapshot-seeded row reads "pending" (its restored tier is
+  // last-run display data, not verified truth), so it can't unlock a delete confirmation.
   const deleteEnrichmentStateFor = useCallback(
     (worktreePath: string): WorktreeEnrichmentState => {
       if (seededPaths.has(worktreePath)) return "pending";
@@ -948,12 +827,8 @@ export function WorktreesList(props: {
     },
     [seededPaths, acceptedEnrichedByPath, erroredPaths],
   );
-  // True-AND merge rollup per owning Task (epic), aggregated across every worktree
-  // entry the epic owns (superproject branch + each entry's owned submodules). Same
-  // map is read on every row a Task appears on, so a multi-worktree Task shows one
-  // consistent rollup. Built from the MERGED view: an un-enriched entry contributes
-  // its base (no-PR) fields, so the rollup can only UNDER-count merged branches and
-  // fills UP as rows enrich - it never over-claims a merge.
+  // Built from the merged view: an un-enriched entry contributes its base (no-PR) fields, so the rollup can only
+  // under-count merged branches and fills UP as rows enrich - it never over-claims a merge.
   const taskRollupByEpicId = useMemo(
     () => buildTaskMergeRollups(mergedWorktrees),
     [mergedWorktrees],
@@ -984,37 +859,27 @@ export function WorktreesList(props: {
     () => buildWorktreeSearchHaystackByPath(worktrees, taskTitlesByEpicId),
     [worktrees, taskTitlesByEpicId],
   );
-  // Keyed on the ENRICHED list, unlike the text haystack above: a PR number only
-  // exists once a path's activity probe has landed.
+  // Keyed on the enriched list, unlike the text haystack above: a PR number only exists once a path's activity
+  // probe has landed.
   const prHaystackByPath = useMemo(
     () => buildWorktreePrHaystackByPath(displayWorktrees),
     [displayWorktrees],
   );
-  // Only offer filter options for tiers actually present in this host's list.
-  // Un-enriched rows have no known tier, so they cannot contribute an option -
-  // the menu fills in as rows enrich (on-screen rows first, then the
-  // background sweep over the rest).
+  // Un-enriched rows have no known tier, so they cannot contribute an option - the menu fills in as rows enrich
+  // (on-screen rows first, then the background sweep over the rest).
   const availableTiers = useMemo(() => {
     const present = new Set<WorktreeTier>();
     for (const entry of classificationEntryByPath.values()) {
       present.add(classifyWorktreeTier(entry));
     }
-    // A persisted/selected tier remains visible even when it currently has no
-    // matches. Otherwise its trigger would silently read "All" and broaden the
-    // list while never-classified rows are still resolving.
+    // A persisted/selected tier remains visible even when it currently has no matches. Otherwise its trigger would
+    // silently read "All" and broaden the list while never-classified rows are still resolving.
     return WORKTREE_TIER_ORDER.filter(
       (tier) => present.has(tier) || tierFilters.has(tier),
     );
   }, [classificationEntryByPath, tierFilters]);
-  // Rows still waiting on their first probe. A PR-number query CANNOT match them yet
-  // (their `prNumber` is null), so an empty result set only honestly reads "no
-  // matches" once this hits zero - until then the empty state says "still
-  // checking". Errored rows are excluded deliberately: they settle to "Unknown"
-  // and will never enrich, so counting them would hold the notice open forever.
-  //
-  // This count is also shown beside an active tier filter: unknown rows remain
-  // outside the strict result set, but the user can still see that classification
-  // is incomplete.
+  // A PR-number query cannot match them yet (their `prNumber` is null), so an empty result set only honestly
+  // reads "no matches" once this hits zero - until then the empty state says "still checking".
   const stillCheckingCount = useMemo(() => {
     return mergedWorktrees.filter(
       (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
@@ -1046,18 +911,8 @@ export function WorktreesList(props: {
       }).length,
     [mergedWorktrees, enrichmentStateFor],
   );
-  // The status filter composes with the search box (both apply) before repo
-  // grouping. The repo / branch / path / Task legs of search run on cheap base
-  // fields, so they work before enrichment; only the PR-number leg waits on a
-  // probe, and the empty state owns that gap.
-  // Tier comes from the shared classifier, so the filter options exactly match the
-  // row pills. Selected zero-match tiers remain active and visible in the control;
-  // only an explicit "All" action broadens the result set.
-  //
-  // A tier selection is strict: only rows with last-known evidence in a selected
-  // tier enter the result set. Never-classified rows are accounted for by the
-  // checking/unavailable status outside the results, then appear only if their
-  // first successful classification matches.
+  // Never-classified rows are accounted for by the checking/unavailable status outside the results, then appear
+  // only if their first successful classification matches.
   const filteredWorktrees = useMemo(() => {
     const searched = filterWorktrees(
       mergedWorktrees,
@@ -1081,9 +936,8 @@ export function WorktreesList(props: {
     tierFilters,
     classificationEntryByPath,
   ]);
-  // Refresh the host-wide list plus the shared worktree/binding caches the
-  // file-tree / home / create-worktree surfaces read, captured against the
-  // host the delete ran on.
+  // Refresh the host-wide list plus the shared worktree/binding caches the file-tree / home / create-worktree
+  // surfaces read, captured against the host the delete ran on.
   const invalidate = useCallback(() => {
     invalidateWorktreeDeleteCaches(queryClient, hostId);
   }, [queryClient, hostId]);
@@ -1218,18 +1072,12 @@ export function WorktreesList(props: {
     [selectablePathSet, selectedPaths, visibleWorktrees],
   );
   const selectedCount = selectedTargets.length;
-  // Select-all's checked state is the intersection with its own eligible
-  // set, not the full selection: in-use rows are deliberately selectable
-  // but never select-all-eligible, so counting them would mark the toggle
-  // checked while idle rows stay unselected.
+  // Select-all's checked state is the intersection with its own eligible set, not the full selection.
   const selectAllSelectedCount = selectAllWorktreePaths.filter((path) =>
     selectedPaths.has(path),
   ).length;
-  // Live-measured height of the floating selection action bar (see
-  // `WorktreeSelectionActionBar` / `WORKTREE_ACTION_BAR_GAP_PX`), so the scroll
-  // viewport's bottom clearance tracks the bar's REAL rendered height - including
-  // a wrapped two-line bar (narrow width, or the `Checking` notice) - instead of
-  // a fixed padding that can undershoot it.
+  // Live-measured height of the floating selection action bar (see `WorktreeSelectionActionBar` /
+  // `WORKTREE_ACTION_BAR_GAP_PX`).
   const actionBarHeightObserver = useObservedHeight();
   const actionBarClearancePx =
     selectedCount > 0
@@ -1247,25 +1095,13 @@ export function WorktreesList(props: {
       ).length,
     [selectedTargets, deleteEnrichmentStateFor],
   );
-  // Freshest listing keyed by path, so a pending delete captured at dialog-open
-  // is always re-resolved to its CURRENT entry (a background refresh may have
-  // made a row in-use / mid-delete since the dialog opened).
+  // Freshest listing keyed by path, so a pending delete captured at dialog-open is always re-resolved to its
+  // current entry (a background refresh may have made a row in-use / mid-delete since the dialog opened).
   const worktreesByPath = useMemo(
     () => new Map(mergedWorktrees.map((entry) => [entry.worktreePath, entry])),
     [mergedWorktrees],
   );
-  // Re-resolve the pending targets against the freshest listing and split into
-  // the rows still eligible to delete vs. the ones dropped (gone from the list,
-  // mid-delete, or regressed to `Checking`). In-use rows stay eligible: the
-  // busy refusal with typed holders opens the force-delete confirm. All
-  // selection is user-driven now, so the remaining confirm-time gates are
-  // "still selectable" and "not Checking"; a hand-picked dirty / ahead row
-  // proceeds with its FRESHEST loss copy (per-row opt-in is intentional). Both
-  // the dialog copy and the confirm action read from this, so what the user
-  // sees is what gets deleted - a row that opened confirmation while
-  // ready/unknown but becomes `Checking` before confirm (e.g. a refresh
-  // re-arms its enrichment) must not delete, matching the rule that
-  // `Checking` rows are never deletable.
+  // Both the dialog copy and the confirm action read from this, so what the user sees is what gets deleted.
   const pendingResolution = useMemo(() => {
     if (pendingDeleteTargets === null) return null;
     const kept: WorktreeHostEntryV14[] = [];
@@ -1295,14 +1131,8 @@ export function WorktreesList(props: {
     visibleWorktrees,
     erroredPaths,
   );
-  // A non-null resolution that drops EVERY pending target (most commonly
-  // because they all regressed to `Checking`) never renders a dialog -
-  // `singleDialogCopy` and `bulkDeleteSummary` are both null for zero kept
-  // targets - so nothing else clears `pendingDeleteTargets`. Left alone, that
-  // stale intent would silently reopen the old confirmation once the rows
-  // settle back to ready/unknown, without the user choosing Delete again.
-  // Clear it and tell the user why, using the same skipped-row message the
-  // confirm-time drop path uses.
+  // Left alone, that stale intent would silently reopen the old confirmation once the rows settle back to
+  // ready/unknown, without the user choosing Delete again.
   useEffect(() => {
     if (pendingResolution === null) return;
     const { kept, dropped } = pendingResolution;
@@ -1321,32 +1151,22 @@ export function WorktreesList(props: {
   );
   useEffect(
     () => () => {
-      // The Worktrees view is going away (Settings closed, section switched, or
-      // host swapped). Keep an in-progress foreground delete alive in the
-      // background (the store no-ops if it is already terminal), and drop this
-      // host's settled successes the now-unmounted list can no longer prune -
-      // otherwise they linger in the app-wide progress toast.
+      // Keep an in-progress foreground delete alive in the background (the store no-ops if it is already terminal),
+      // and drop this host's settled successes the now-unmounted list can no longer prune.
       backgroundForegroundWorktreeDeleteForHost(hostId);
       clearSettledWorktreeDeleteSuccessesForHostIfQuiescent(hostId);
     },
     [hostId],
   );
 
-  // Row-prop handlers go through `useStableRowCallback`: their dependencies
-  // (`selectablePathSet`, the delete-gating readers) get fresh identities on
-  // every enrichment pass, and a churning handler prop would re-render EVERY
-  // memoized row for one row's data change. The wrapper pins the prop
-  // identity while always invoking the latest closure.
+  // Row-prop handlers go through `useStableRowCallback`: their dependencies (`selectablePathSet`, the
+  // delete-gating readers) get fresh identities on every enrichment pass.
   const toggleSelection = useStableRowCallback((worktreePath: string) => {
     if (!selectablePathSet.has(worktreePath)) return;
     setSelectedPaths((prev) => withMemberToggled(prev, worktreePath));
   });
-  // Standard global tri-state select-all: acts on the CURRENTLY-VISIBLE,
-  // selectable rows (post-filter + post-search, across all repo groups). When
-  // every visible selectable row is already selected it deselects them;
-  // otherwise it selects them all. Hidden (filtered-out) selections are left
-  // untouched - the header + count reflect visible rows, and the confirm-time
-  // re-resolution + honest dialog still govern what is deleted.
+  // Hidden (filtered-out) selections are left untouched - the header + count reflect visible rows, and the
+  // confirm-time re-resolution + honest dialog still govern what is deleted.
   const allVisibleSelected =
     selectAllWorktreePaths.length > 0 &&
     selectAllWorktreePaths.every((path) => selectedPaths.has(path));
@@ -1423,10 +1243,7 @@ export function WorktreesList(props: {
 
   const handleConfirm = (): void => {
     if (pendingResolution === null || pendingDeleteTargets === null) return;
-    // `pendingResolution` already re-resolved each pending path to its freshest
-    // entry and split kept vs. dropped (gone from the list, mid-delete, or
-    // regressed to Checking). Start the run on the FRESHEST kept entries, and
-    // name the drops.
+    // `pendingResolution` already re-resolved each pending path to its freshest entry and split kept vs.
     const { kept, dropped } = pendingResolution;
     if (dropped.length > 0) {
       toast.message(
@@ -1446,19 +1263,13 @@ export function WorktreesList(props: {
     } else if (kept.length > 1) {
       startBatchBackgrounded(kept, reviewedScriptsByPath);
     }
-    // Prune the ENTIRE confirmed cohort - kept AND dropped - from the selection
-    // bookkeeping (even in the all-dropped case), so a dropped row can't linger
-    // as stale selected state / counts when selection mode is re-entered.
+    // Prune the entire confirmed cohort - kept and dropped.
     clearSelectionForTargets(pendingDeleteTargets);
   };
 
   const handleCloseModal = (): void => {
-    // While the delete is still running, "Run in background" keeps the stream
-    // alive and lets the row carry progress. Once terminal - success OR failure
-    // - "Close" tears it down for good. Gate on the live run status, NOT
-    // `worktreeRowDeleteStatus` (which reports a just-deleted complete run as
-    // still "deleting"): otherwise clicking "Close" on a finished delete would
-    // background it and fire a spurious progress toast instead of dismissing.
+    // Gate on the live run status, not `worktreeRowDeleteStatus` (which reports a just-deleted complete run as
+    // still "deleting").
     if (run !== null && (run.status === "queued" || run.status === "running")) {
       background();
       return;
@@ -1477,11 +1288,8 @@ export function WorktreesList(props: {
     reviewedScriptsByPathRef.current = next;
   };
 
-  // Flatten the grouped tree into one stream and window it: only the on-screen
-  // items mount, so a host with hundreds of worktrees paints as cheaply as one
-  // with a handful. Row heights vary (an optional facts line, wrapping Task
-  // chips), so each item is measured after mount - the estimates only seed the
-  // window before the first measure.
+  // Row heights vary (an optional facts line, wrapping Task chips), so each item is measured after mount - the
+  // estimates only seed the window before the first measure.
   const flatItems = useMemo(
     () => buildWorktreeFlatItems(groups, collapsedRepoKeys),
     [groups, collapsedRepoKeys],
@@ -1524,10 +1332,8 @@ export function WorktreesList(props: {
     },
     [stickyHeaderIndexes],
   );
-  // `useVirtualizer` returns fresh function identities each render; the React
-  // Compiler already skips memoizing this component for it, and this component
-  // memoizes its own derived data with `useMemo`, so the compat warning is noise.
   // eslint-disable-next-line react-hooks/incompatible-library
+  // `useVirtualizer` returns fresh function identities each render; the React
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement,
@@ -1538,9 +1344,7 @@ export function WorktreesList(props: {
   });
   const virtualItems = virtualizer.getVirtualItems();
   const isVirtualizerScrolling = virtualizer.isScrolling;
-  // The worktree paths actually on screen right now - the driver of per-viewport
-  // enrichment. Repo-header items carry no path. Keyed by the joined string so the
-  // report fires only when the on-screen SET changes, not on every scroll tick
+  // Keyed by the joined string so the report fires only when the on-screen set changes, not on every scroll tick
   // that leaves the same rows mounted.
   const onScreenPaths = useMemo(
     () =>
@@ -1550,9 +1354,7 @@ export function WorktreesList(props: {
       }),
     [virtualItems, flatItems],
   );
-  // Report only when the on-screen SET actually changes. `onScreenPaths` gets a
-  // fresh identity on every scroll tick (a new `virtualItems`), so guard on the
-  // joined value to avoid re-reporting an unchanged set; the owner also debounces.
+  // Report only when the on-screen set actually changes.
   const onScreenPathsKey = onScreenPaths.join("\n");
   const lastReportedPathsRef = useRef<string | null>(null);
   useEffect(() => {
@@ -1637,14 +1439,8 @@ export function WorktreesList(props: {
           </div>
         ) : null}
 
-        {/*
-         * Relatively-positioned wrapper so the contextual selection bar can be
-         * anchored to the bottom of the list as an ABSOLUTELY-positioned
-         * overlay. Being out of flow means its mount/unmount when a selection
-         * starts or clears never shifts the scroll region or the rows inside
-         * it - the "no inserted top bar" product rule holds regardless of
-         * selection state.
-         */}
+        {/* Being out of flow means its mount/unmount when a selection starts or clears never shifts the scroll region
+           or the rows inside it - the "no inserted top bar" product rule holds regardless of selection state. */}
         <div className="relative min-h-0 flex-1">
           <div
             ref={scrollParentRef}
@@ -1657,12 +1453,7 @@ export function WorktreesList(props: {
             }
           >
             {groups.length === 0 ? (
-              /**
-               * A strict tier filter can legitimately have no proven matches
-               * while first-time probes are outstanding. Distinguish that from
-               * the settled no-match state; the status strip above accounts for
-               * failed first classifications without an endless spinner.
-               */
+              /** A strict tier filter can legitimately have no proven matches while first-time probes are outstanding. */
               <WorktreesStateMessage
                 tone="muted"
                 spinner={searchStillCheckingCount > 0}
@@ -1838,11 +1629,8 @@ function WorktreeDeleteForegroundSurface(props: {
       />
     );
   }
-  // Gutter padding rather than an inset box, so the child centres inside
-  // the safe region while the backdrop below still covers the whole screen
-  // - a dim over the status bar is a dim, not a surface. Each gutter is
-  // the layout's own 1rem or the device inset, whichever is larger, so
-  // nothing doubles up.
+  // Gutter padding rather than an inset box, so the child centres inside the safe region while the backdrop
+  // below still covers the whole screen - a dim over the status bar is a dim, not a surface.
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center pt-safe-top-gutter pr-safe-right-gutter pb-safe-bottom-gutter pl-safe-left-gutter">
       <div
@@ -1865,9 +1653,8 @@ function WorktreeDeleteProgressStrip(props: {
   readonly onDismiss: () => void;
 }): ReactNode {
   if (props.summary.total === 0) return null;
-  // Once nothing is in flight, a batch that ended with failures stays put so the
-  // user notices; offer an explicit Dismiss to clear it (and the app-wide toast)
-  // rather than leaving it stuck forever.
+  // Once nothing is in flight, a batch that ended with failures stays put so the user notices; offer an explicit
+  // Dismiss to clear it (and the app-wide toast) rather than leaving it stuck forever.
   const showDismiss = props.summary.active === 0 && props.summary.failed > 0;
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 bg-foreground/3 px-5 py-2">
@@ -1894,19 +1681,8 @@ function WorktreeDeleteProgressStrip(props: {
   );
 }
 
-/**
- * Contextual action bar content - present ONLY while a selection is active
- * (empty = absent, so the page has no permanent selection chrome). The caller
- * (`WorktreesList`) wraps this in the absolutely-positioned overlay div that
- * floats over the BOTTOM of the list (out of flow, so mounting/unmounting
- * while selecting/clearing never shifts row positions) and owns the ref that
- * measures that wrapper's real height - see `useObservedHeight` and
- * `WORKTREE_ACTION_BAR_GAP_PX`. Shows the count, a destructive "Delete N…"
- * primary action, and a "Clear". While one or more selected rows are still
- * `Checking` their tier isn't known yet, so bulk delete is disabled and a
- * notice names how many are still pending - the same "pending status is not
- * safe" rule the single-row delete button enforces.
- */
+/** The caller (`WorktreesList`) wraps this in the absolutely-positioned overlay div that floats over the bottom
+ * of the list (out of flow. */
 function WorktreeSelectionActionBar(props: {
   readonly selectedCount: number;
   readonly checkingCount: number;
@@ -1995,9 +1771,8 @@ function mergeStaleActivityOntoBase(
   base: WorktreeHostEntryV14,
   enriched: WorktreeHostEntryV14,
 ): WorktreeHostEntryV14 {
-  // A v1.4 unresolved base row is a schema-safe sentinel, not fresh truth.
-  // Preserve the last resolved entry wholesale until the base becomes
-  // authoritative; otherwise its null branch/owners would destabilize tiers.
+  // A v1.4 unresolved base row is a schema-safe sentinel, not fresh truth. Preserve the last resolved entry
+  // wholesale until the base becomes authoritative; otherwise its null branch/owners would destabilize tiers.
   if (base.resolvedAt === null) return enriched;
   let byEnriched = STALE_CLASSIFICATION_ENTRY_CACHE.get(base);
   if (byEnriched === undefined) {
@@ -2026,10 +1801,8 @@ function hasMatchingActivityIdentity(
   base: WorktreeHostEntryV14,
   enriched: WorktreeHostEntryV14,
 ): boolean {
-  // Even an unresolved row can carry reliable cheap identity facts. Use every
-  // fact it actually knows to reject stale evidence from a branch switch or a
-  // deleted/recreated directory at the same deterministic path; ignore only
-  // sentinel-null facts that cannot prove a mismatch.
+  // Use every fact it actually knows to reject stale evidence from a branch switch or a deleted/recreated
+  // directory at the same deterministic path; ignore only sentinel-null facts that cannot prove a mismatch.
   if (
     base.createdAt !== null &&
     enriched.createdAt !== null &&
@@ -2087,12 +1860,8 @@ function shouldShowWorktreeFilterResolutionStatus(
   return tierFilters.size > 0 && (checkingCount > 0 || unavailableCount > 0);
 }
 
-/**
- * Bulk-delete confirmation: aggregate-by-class summary, dirty loss naming, a
- * neutral caveat for the unverified cohort, named exclusions, and the full
- * (path-addressed) target list. Reuses the shared confirm button test ids so
- * the flow stays interchangeable with the single-target dialog.
- */
+/** Bulk-delete confirmation: aggregate-by-class summary, dirty loss naming, a neutral caveat for the unverified
+ * cohort, named exclusions, and the full (path-addressed) target list. */
 function WorktreeBulkDeleteDialog(props: {
   readonly summary: WorktreeBulkDeleteSummary | null;
   readonly onOpenChange: (open: boolean) => void;
@@ -2251,15 +2020,8 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
   );
 });
 
-/**
- * Why a row's delete affordance is disabled, if at all. `checking` (a
- * `Checking` row's tier isn't known yet, so its delete confirmation can't be
- * trusted). In-use rows are deletable: the busy refusal with typed holders
- * opens the force-delete confirm. An `Unknown` row (settled enrichment error)
- * is NOT disabled here - it is still deletable, just through the unknown-risk
- * confirmation instead of the generic one, even when the host never stamped
- * `resolvedAt`.
- */
+/** An `Unknown` row (settled enrichment error) is not disabled here - it is still deletable, just through the
+ * unknown-risk confirmation instead of the generic one, even when the host never stamped `resolvedAt`. */
 function worktreeDeleteDisabledReason(
   entry: WorktreeHostEntryV14,
   enrichment: WorktreeEnrichmentState,
@@ -2272,13 +2034,10 @@ function worktreeDeleteDisabledReason(
 interface WorktreeRowProps {
   readonly entry: WorktreeHostEntryV14;
   readonly classificationEntry: WorktreeHostEntryV14 | null;
-  // This row's activity-enrichment state, driving the tier pill: `pending` (still
-  // in flight → "Checking…"), `unknown` (settled to error → non-animated fallback),
-  // or `ready` (enriched → real tier). Base fields paint regardless.
+  // Base fields paint regardless.
   readonly enrichment: WorktreeEnrichmentState;
-  // The DELETE-scoped variant: identical except a snapshot-seeded row reads
-  // "pending" until its live probe lands, so the delete affordance stays
-  // disabled while the pill still shows the restored tier.
+  // The DELETE-scoped variant: identical except a snapshot-seeded row reads "pending" until its live probe
+  // lands, so the delete affordance stays disabled while the pill still shows the restored tier.
   readonly deleteEnrichment: WorktreeEnrichmentState;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
@@ -2290,16 +2049,7 @@ interface WorktreeRowProps {
   readonly onDelete: (target: WorktreeHostEntryV14) => void;
 }
 
-/**
- * Custom memo comparator: the task title/rollup maps are rebuilt wholesale on
- * every listing/enrichment pass, so comparing them by identity would re-render
- * EVERY row whenever ANY row's data changed (during a convergence pass that is
- * a full-list re-render per probe - the panel's 100-450ms main-thread blocks).
- * A row only reads its own Tasks' slices of those maps, so compare exactly
- * those by value; everything else compares by identity/value as usual - both
- * enrichment states included, so a seeded row's delete affordance re-enables
- * the moment its live probe lands.
- */
+/** Custom memo comparator: the task title/rollup maps are rebuilt wholesale on every listing/enrichment pass. */
 function worktreeRowPropsEqual(
   prev: WorktreeRowProps,
   next: WorktreeRowProps,
@@ -2354,9 +2104,8 @@ const WorktreeRow = memo(function WorktreeRow(
     entry,
     deleteEnrichment,
   );
-  // An unresolved row carries schema-safe placeholders only. Do not classify
-  // those placeholders: the isGitRepo/dirty-count cliff makes an unresolved
-  // row look clean enough to delete when it is actually still unknown.
+  // Do not classify those placeholders: the isGitRepo/dirty-count cliff makes an unresolved row look clean
+  // enough to delete when it is actually still unknown.
   const classification =
     entry.resolvedAt === null ? null : classifyWorktree(entry);
   const tierClassification =
@@ -2474,21 +2223,14 @@ const WorktreeRow = memo(function WorktreeRow(
   );
 }, worktreeRowPropsEqual);
 
-/**
- * Evidence-tier pill. Leads every row with a TEXT label (never color-only, for
- * accessibility). Green is reserved for the three proven tiers: `merged`
- * (strongest), `at-base-commit`, and `unreferenced` (quietest); `review` is
- * amber; `orphaned` and `in-use` stay neutral.
- */
+/** Leads every row with a text label (never color-only, for accessibility). */
 function WorktreeTierPill(props: {
   readonly entry: WorktreeHostEntryV14;
   readonly tier: WorktreeTier;
   readonly state: WorktreeEnrichmentState;
 }): ReactNode {
-  // While the activity probe is still in flight the tier isn't known yet. A
-  // dashed border + full-contrast text (never the muted/faded treatment a
-  // resolved-safe pill would use) reads as "still resolving", not "quiet and
-  // fine" - pending status is not safe, so it must not look neutral-safe.
+  // A dashed border + full-contrast text (never the muted/faded treatment a resolved-safe pill would use) reads
+  // as "still resolving", not "quiet and fine" - pending status is not safe, so it must not look neutral-safe.
   if (props.state === "pending") {
     return (
       <TooltipWrapper
@@ -2513,13 +2255,8 @@ function WorktreeTierPill(props: {
       </TooltipWrapper>
     );
   }
-  // The probe SETTLED to an error (host unreachable, gh/git probe timed out). The
-  // tier stays unknowable, so read a static "Unknown" - NEVER an infinite spinner.
-  // Like a pending row, this row is excluded from the green / tier-filtered cohorts
-  // upstream; a refresh or scrolling it back into view retries the probe. Styled in
-  // the same caution family the unknown-risk delete confirmation already uses
-  // (amber), but with a dashed border and a distinct icon/label so it never reads
-  // as the proven "Review" tier - this is unresolved, not a confirmed risk finding.
+  // Styled in the same caution family the unknown-risk delete confirmation already uses (amber), but with a
+  // dashed border and a distinct icon/label so it never reads as the proven "Review" tier.
   if (props.state === "unknown") {
     return (
       <TooltipWrapper
@@ -2740,9 +2477,8 @@ function submoduleUnmergedChip(
   }
   const count = submodule.unmergedCommitCount ?? null;
   const subjects = submodule.unmergedCommitSubjects ?? null;
-  // Subjects are display-only and NOT unique ("wip", "Merge branch …" repeat),
-  // so key each by its occurrence ordinal - unique without leaning on the
-  // array index (react/no-array-index-key).
+  // Subjects are display-only and not unique ("wip", "Merge branch …" repeat), so key each by its occurrence
+  // ordinal - unique without leaning on the array index (react/no-array-index-key).
   const occurrences = new Map<string, number>();
   const subjectItems = (subjects ?? []).map((subject) => {
     const ordinal = (occurrences.get(subject) ?? 0) + 1;
@@ -2897,15 +2633,7 @@ function WorktreePrAnchor(props: {
   );
 }
 
-/**
- * Task association resolved from `owners[].epicId`. Owners in the same epic
- * collapse to one entry. An epic with a resolved title renders a chip; an epic
- * whose title is unknown (deleted / not cached / other user) is DEMOTED to muted
- * "Owner unresolved" text rather than a prominent chip - but it is still a
- * reference, so the classifier keeps such a row out of the green tiers. No owners
- * at all means nothing in Traycer references this worktree - deliberately NOT the
- * "Orphaned" tier, which means `gitRemovable: false`.
- */
+/** Unknown epic titles demote to muted text but still keep the row out of green tiers. No owners is not the Orphaned tier (`gitRemovable: false`). */
 function WorktreeTaskAssociation(props: {
   readonly owners: WorktreeHostEntryV14["owners"];
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
@@ -2969,21 +2697,7 @@ function WorktreeTaskAssociation(props: {
   );
 }
 
-/**
- * True-AND Task merge rollup - a QUIET caption beside a resolved Task chip, never
- * a colored Badge: the row's own worktree tier pill is the row's one loud signal,
- * and this rollup speaks to the Task's aggregate progress across every worktree it
- * owns, a different scope that must not compete with or be mistaken for that pill
- * (it previously reused the tier pill's exact green/GitMerge treatment for
- * `merged`, which read as a second worktree-tier signal). Plain muted text, no
- * icon, no border/background, and a "Task" prefix carries the distinction instead.
- * `Merged` means every owned branch - the superproject binding branch and each
- * owned submodule - has a HEAD-validated merged PR; `Merged N/M` is the honest
- * partial when some but not all have landed (the classic "submodule PR merged,
- * superproject gitlink bump still open" case). Renders nothing when there's no
- * merged progress to claim (no PR anywhere, or a pre-M4 host with no submodule/PR
- * facts) - the chip then shows just the Task title.
- */
+/** Quiet caption, never a colored badge - must not compete with the row's worktree-tier pill. Renders nothing when there is no merged progress to claim. */
 function TaskMergeRollupBadge(props: {
   readonly rollup: TaskMergeRollup | null;
 }): ReactNode {
@@ -3012,10 +2726,7 @@ function TaskMergeRollupBadge(props: {
   );
 }
 
-/**
- * "Last active" label from the derived v1.1 `lastActivityAt`. Rendered inline in
- * the secondary facts line only when a timestamp is present.
- */
+/** Rendered inline in the secondary facts line only when a timestamp is present. */
 function WorktreeLastActiveLabel(props: {
   readonly lastActivityAt: number;
 }): ReactNode {
@@ -3076,11 +2787,7 @@ function WorktreeSelectionControl(props: {
   readonly selectDisabledReason: "checking" | null;
   readonly onToggleSelection: () => void;
 }): ReactNode {
-  // NO default reason. A row can also be unselectable because a backgrounded
-  // delete is already running it, and that carries no `selectDisabledReason` -
-  // it is neither in-use nor checking. Defaulting would announce "In use by an
-  // active agent" to assistive tech for a row nobody is using. Absent reason =>
-  // no description and no tooltip; the row's own "Deleting…" status says why.
+  // Defaulting would announce "In use by an active agent" to assistive tech for a row nobody is using.
   const selectDisabledReason = props.selectDisabledReason;
   const checkbox = (
     <button
@@ -3129,11 +2836,7 @@ function WorktreeSelectionControl(props: {
   );
 }
 
-/**
- * Persistent row-end actions: one quiet overflow trigger at rest. Utilities and
- * destructive delete live together inside the compact menu; delete stays visually
- * destructive and still carries branch-specific accessible copy.
- */
+/** Persistent row-end actions: one quiet overflow trigger at rest. */
 function WorktreeRowActions(props: {
   readonly deleteDisabledReason: "checking" | null;
   readonly onCopyPath: () => void;
@@ -3191,9 +2894,8 @@ function WorktreeRowActions(props: {
             sideOffset={undefined}
             align={undefined}
           >
-            {/* `flex w-full`, not `inline-flex`: the guard becomes the menu
-                content's layout child, and a shrink-to-fit one would narrow the
-                row to its text. */}
+            {/* `flex w-full`, not `inline-flex`: the guard becomes the menu content's layout child, and a shrink-to-fit one
+               would narrow the row to its text. */}
             <span className="flex w-full">
               <DropdownMenuItem
                 data-testid="worktree-row-delete"
@@ -3331,13 +3033,8 @@ function collapsedRepoKeysReducer(
   return state.size === 0 ? state : EMPTY_REPO_KEY_SET;
 }
 
-/**
- * Groups worktrees by repo for display, keyed on the resolved identifier when
- * present (real `owner/repo`) and otherwise on the display label (local repos
- * and orphans). Rows WITHIN each repo group are ordered by creation time -
- * "Newest" (default, most recently created first) or "Oldest". A `null`
- * `createdAt` sorts last in both directions.
- */
+/** Rows within each repo group are ordered by creation time - "Newest" (default, most recently created first)
+ * or "Oldest". */
 function groupByRepo(
   worktrees: readonly WorktreeHostEntryV14[],
   sortMode: WorktreeSortMode,
@@ -3376,16 +3073,8 @@ function compareByCreatedAt(
   return sortMode === "newest" ? bAt - aAt : aAt - bAt;
 }
 
-/**
- * Client-side text filter over the fields the tab searches: repo label, branch,
- * worktree path, each owning Task's resolved title, and the row's PR numbers.
- * Whitespace-only queries pass everything through. Pure renderer work - the full
- * list is already in memory.
- *
- * Two haystacks, because they resolve on different clocks (see
- * {@link buildWorktreePrHaystackByPath}). A hit in either matches, so a query is
- * never made narrower by the PR leg being cold.
- */
+/** Whitespace-only queries pass everything through. A hit in either matches, so a query is never made narrower
+ * by the PR leg being cold. */
 function filterWorktrees(
   worktrees: readonly WorktreeHostEntryV14[],
   searchText: string,
@@ -3432,24 +3121,8 @@ function worktreeSearchHaystack(
     .toLowerCase();
 }
 
-/**
- * PR numbers get their OWN index because they live on a different clock to the
- * base fields: the host pins `prNumber: null` on every base row and only the
- * per-path activity probe fills it in. Folding them into the text haystack would
- * rekey that memo on the enriched list, rebuilding every row's joined string on
- * each enrichment chunk; kept apart, repo / branch / path / Task search stays
- * churn-free and instant, and only this cheap `#N` map rebuilds as probes land.
- *
- * The cost of that split is honest and visible: a PR-number query is eventually
- * consistent - a row joins the result set when its probe lands, which is why an
- * empty result set with probes outstanding reads "still checking" rather than
- * "no matches" (see `WorktreesList`).
- *
- * Both the superproject PR and each owned submodule's PR are indexed, matching
- * the two kinds of `#N` pill the row renders. The `#` is kept in the token so
- * that `4360` and `#4360` both hit under the same plain substring rule the other
- * fields use.
- */
+/** PR numbers get their own index because they live on a different clock to the base fields: the host pins
+ * `prNumber: null` on every base row and only the per-path activity probe fills it in. */
 function buildWorktreePrHaystackByPath(
   worktrees: readonly WorktreeHostEntryV14[],
 ): ReadonlyMap<string, string> {
@@ -3496,10 +3169,8 @@ function deleteDialogCopy(entry: WorktreeHostEntryV14): {
       actionLabel: "Delete worktree",
     };
   }
-  // Never-pushed and not contained in the default branch (no upstream, so the
-  // commit count is unknown). Removing the worktree keeps the branch ref — the
-  // commits survive on the branch — but they were never pushed anywhere, so
-  // this machine is the only copy. Honest, not overstated as unrecoverable.
+  // Removing the worktree keeps the branch ref - the commits survive on the branch - but they were never pushed
+  // anywhere, so this machine is the only copy.
   if (
     status !== null &&
     status.ahead === null &&
@@ -3519,15 +3190,7 @@ function deleteDialogCopy(entry: WorktreeHostEntryV14): {
   };
 }
 
-/**
- * Confirmation copy for an `Unknown` row - its enrichment settled to an error,
- * so none of the honest-loss facts `deleteDialogCopy` relies on (ahead/behind,
- * merge state) were ever proven. Names that explicitly instead of falling back
- * to the generic "clean" copy, which would understate the risk. `uncommittedCount`
- * is a cheap base-listing field available even when activity enrichment failed,
- * so a dirty Unknown row still leads with the known, stronger dirty-loss
- * warning - the unknown-risk caveat is ADDED, never substituted for it.
- */
+/** Names that explicitly instead of falling back to the generic "clean" copy, which would understate the risk. */
 function unknownRiskDeleteDialogCopy(entry: WorktreeHostEntryV14): {
   readonly title: string;
   readonly description: string;
@@ -3550,14 +3213,7 @@ function unknownRiskDeleteDialogCopy(entry: WorktreeHostEntryV14): {
   };
 }
 
-/**
- * The delete-confirmation dialogs derived from a pending-delete resolution:
- * exactly one kept target opens the single confirmation (its copy resolved
- * against the DELETE-scoped enrichment state), several open the bulk one, and
- * zero opens neither (the stale-intent effect clears the pending state). The
- * single dialog's fields are pre-defaulted so the render site reads them
- * unconditionally.
- */
+/** The single dialog's fields are pre-defaulted so the render site reads them unconditionally. */
 function deriveWorktreeDeleteDialogs(
   resolution: {
     readonly kept: readonly WorktreeHostEntryV14[];
@@ -3596,12 +3252,8 @@ function deriveWorktreeDeleteDialogs(
   };
 }
 
-/**
- * Single-row delete confirmation copy. An `Unknown` row (settled enrichment
- * error) is deletable, but only through explicit unknown-risk copy - never the
- * generic confirmation, which would understate that its branch/activity
- * status was never proven.
- */
+/** An `Unknown` row (settled enrichment error) is deletable, but only through explicit unknown-risk copy -
+ * never the generic confirmation, which would understate that its branch/activity status was never proven. */
 function singleWorktreeDeleteDialogCopy(
   entry: WorktreeHostEntryV14,
   enrichment: WorktreeEnrichmentState,
@@ -3616,15 +3268,8 @@ function singleWorktreeDeleteDialogCopy(
   return deleteDialogCopy(entry);
 }
 
-/**
- * Toast copy when confirm-time re-check drops rows that stopped qualifying,
- * class-summarized to stay consistent with the confirmation's exclusion line.
- * A row that regressed to `Checking` (a refresh/retry re-armed its enrichment
- * between dialog-open and confirm) is named separately - `worktreeDeleteClass`
- * only sees the base, un-enriched fields for such a row and would otherwise
- * mislabel it (e.g. "unreferenced (branch status unverified)") instead of
- * naming the real reason it was dropped.
- */
+/** A row that regressed to `Checking` (a refresh/retry re-armed its enrichment between dialog-open and confirm)
+ * is named separately. */
 function worktreeDropMessage(
   dropped: readonly WorktreeHostEntryV14[],
   isChecking: (worktreePath: string) => boolean,
@@ -3676,41 +3321,28 @@ type WorktreeDeleteClass =
 
 function worktreeDeleteClass(entry: WorktreeHostEntryV14): WorktreeDeleteClass {
   if (entry.inUse) return "in-use";
-  // Derive the tier-level bucket from the ONE shared classifier so the bulk copy
-  // and the row pill can never disagree (no parallel precedence ladder). The
-  // green tiers and orphaned map 1:1; in-use is a lock reason, so it is named as
-  // such when a row is excluded or dropped rather than bucketed by its git facts.
-  // Only the amber `review` tier fans out into finer would-be-lost sub-classes
-  // for honest loss copy.
+  // Derive the tier-level bucket from the one shared classifier so the bulk copy and the row pill can never
+  // disagree (no parallel precedence ladder).
   const tier = classifyWorktreeTier(entry);
   if (tier === "merged") return "merged";
   if (tier === "at-base-commit") return "at-base";
   if (tier === "unreferenced") return "clean";
   if (tier === "orphaned") return "orphaned";
-  // An unreadable row reaches `review` through the classifier's own
-  // gitUnreadable rule, but its git facts are FABRICATED (the host reports
-  // `branch: null` and `uncommittedCount: 0` for a worktree it could not read).
-  // Handing it to the loss sub-classifier would bucket it as `detached` and the
-  // confirmation would report a git state nobody observed - the exact
-  // false-precision this row exists to avoid. Name the unknown instead.
+  // Handing it to the loss sub-classifier would bucket it as `detached` and the confirmation would report a git
+  // state nobody observed - the exact false-precision this row exists to avoid.
   if (gitUnreadableOf(entry)) return "unreadable";
   return worktreeReviewLossClass(entry);
 }
 
-/**
- * Sub-classifies a non-green, non-orphaned row into its would-be-lost bucket for
- * the delete copy - cautionary signals first. Called only for the `review` tier
- * now that green, orphaned, and in-use cases are already handled above.
- */
+/** Called only for the `review` tier now that green, orphaned, and in-use cases are already handled above. */
 function worktreeReviewLossClass(
   entry: WorktreeHostEntryV14,
 ): WorktreeDeleteClass {
   const status = entry.branchStatus;
   if (entry.uncommittedCount > 0) return "dirty";
   if (entry.branch === null) return "detached";
-  // Not proven at the upstream tip: real local-only commits (`ahead > 0`) OR a
-  // never-pushed branch with no upstream to prove them absent (`ahead === null`).
-  // Both are would-be-lost; only the PROVEN `ahead === 0` below is "clean".
+  // Not proven at the upstream tip: real local-only commits (`ahead > 0`) OR a never-pushed branch with no
+  // upstream to prove them absent (`ahead === null`).
   if (status !== null && (status.ahead === null || status.ahead > 0)) {
     return "unmerged";
   }
@@ -3777,17 +3409,8 @@ function countWorktreeClasses(
     .join(", ");
 }
 
-/**
- * Confirmation copy for a multi-worktree delete. Aggregates the SELECTED targets
- * by class (never 38 stacked warnings), names concrete loss for dirty rows, and
- * — for the null-status cohort — uses deliberately NEUTRAL caveat wording (never
- * "safe" / "loss-free"). Separately, `unknownPaths` (rows whose enrichment
- * settled to an error - the pill reads "Unknown") get their own unknown-risk
- * caveat: unlike the unverified-branch-status cohort, these rows carry NO
- * proven facts at all, not even a classified tier. Also names what was left
- * out of the selection so the exclusion is transparent. Full paths are carried
- * for the expandable list; delete is path-addressed.
- */
+/** Aggregates the selected targets by class (never 38 stacked warnings), names concrete loss for dirty rows,
+ * and - for the null-status cohort - uses deliberately neutral caveat wording (never "safe" / "loss-free"). */
 function summarizeBulkWorktreeDelete(
   targets: ReadonlyArray<WorktreeHostEntryV14>,
   visible: readonly WorktreeHostEntryV14[],
@@ -3894,8 +3517,8 @@ function removeSelectedWorktrees(
   return next ?? selectedPaths;
 }
 
-// Checkboxes are ALWAYS rendered (no selection mode) - subtle by default, full
-// once the row is hovered/focused or the box is checked. Standard list pattern.
+// Checkboxes are always rendered (no selection mode) - subtle by default, full once the row is hovered/focused
+// or the box is checked. Standard list pattern.
 function worktreeSelectionCheckboxVisibility(args: {
   readonly isSelected: boolean;
   readonly canSelect: boolean;
@@ -3945,10 +3568,8 @@ function invalidateWorktreeDeleteCaches(
   // Listing ("active", sweep-aware) + binding-backed pickers ("all") - the
   // shared post-delete slice; see the helper for the refetchType rationale.
   invalidateWorktreeListingAndBindingCaches(queryClient, hostId);
-  // A deleted worktree's directory is gone, so its cached `git.getCapabilities`
-  // (5-min staleTime) would otherwise keep reporting the stale `available: true`
-  // and strand the git panel. Force a re-probe so the gate sees the repo is
-  // gone and the panel routes selection to a healthy worktree.
+  // A deleted worktree's directory is gone, so its cached `git.getCapabilities` (5-min staleTime) would
+  // otherwise keep reporting the stale `available: true` and strand the git panel.
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(hostId, "git.getCapabilities"),
   });

@@ -29,9 +29,8 @@ const mocks = vi.hoisted(() => ({
   >(),
   supportsMethod: { current: true },
   isPending: { current: false },
-  // Controls the mutation's simulated RPC response - `false` reproduces the
-  // host's non-git / vanished-checkout no-op (`{ updated: false }`), which
-  // must NOT be treated as a persisted save.
+  // Controls the mutation's simulated RPC response - `false` reproduces the host's non-git / vanished-checkout
+  // no-op (`{ updated: false }`), which must not be treated as a persisted save.
   updated: { current: true },
 }));
 
@@ -72,13 +71,7 @@ const WORKSPACE = "/tmp/repo";
 const REPO_ID = { owner: "anur4ag", repo: "tailmark" };
 const PREVIEW_SUFFIX = "soft-wombat";
 
-/**
- * Local composition stand-in for the production `composeCandidateBranch`
- * path: resolves the effective prefix (so invalid present values fall back
- * the same way bulk generation does), then single-repo = prefix+suffix or
- * multi-repo inserts a fixed slug. Dialog-level multi-repo coverage lives in
- * `worktree-scripts-dialog.test.tsx`.
- */
+/** Local composition stand-in for the production `composeCandidateBranch` path. */
 function makeComposeCandidateBranch(options: {
   readonly multiRepoSlug: string | null;
   readonly workspacePath: string;
@@ -104,9 +97,8 @@ type RenderOptions = {
   } | null;
   readonly workspacePath: string;
   readonly currentProposedBranchName: string | null;
-  // Non-null while the dialog's post-save regeneration offer is up: must win
-  // over `currentProposedBranchName` so Effective branch matches what the
-  // offer would stage (item 5 of the layered-settings review findings).
+  // Non-null while the dialog's post-save regeneration offer is up: must win over `currentProposedBranchName` so
+  // Effective branch matches what the offer would stage (item 5 of the layered-settings review findings).
   readonly activeRegenerateCandidate: string | null;
   readonly multiRepoSlug: string | null;
   readonly onEditingCancelAvailable: (cancel: (() => void) | null) => void;
@@ -669,11 +661,7 @@ describe("<RepoBranchPrefixSection />", () => {
 
   describe("radio keyboard navigation", () => {
     it("moves checked state between global and override with arrow keys", async () => {
-      // user-event fires keyup immediately after keydown; Radix only auto-selects
-      // the newly-focused radio while the arrow key is still considered pressed
-      // (document keydown sets a flag, keyup clears it, and focus moves via
-      // setTimeout). Drive keydown without keyup so the flag stays true through
-      // the async focus move - then flush the timer.
+      // Drive keydown without keyup so the flag stays true through the async focus move - then flush the timer.
       renderSection({ status: "absent" }, noop, null);
 
       const globalRadio = screen.getByRole("radio", {

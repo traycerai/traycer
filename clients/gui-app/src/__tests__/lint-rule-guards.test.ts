@@ -79,18 +79,7 @@ const lintRuleModuleUrl = pathToFileURL(
 const importedLintRuleModule: unknown = await import(lintRuleModuleUrl);
 const lintRuleModule = readLintRuleModule(importedLintRuleModule);
 
-/**
- * D12/F2 host-selection layer (`eslint/traycer-host-selection-layer-rules.mjs`).
- * Unlike the nested-focus module above, these six families are plain exported
- * arrays/lists, not factories - `selectByIdRestrictions` and
- * `selectionAuthorityRestrictions` need no allowlist parameter because
- * `selectByIdRestrictions` has NO allowlist at all (the write-path allowlist
- * was deleted on purpose - see the module's own doc comment at :84-98) and
- * `selectionAuthorityRestrictions` is gated by file location
- * (`selectionAuthorityWriteAllowlist`), not by a runtime parameter. So this
- * gets its own small reader instead of being forced through
- * `readRestrictionFactory`.
- */
+/** Host-selection families are exported arrays, not factories: selectById has no allowlist; authority writes are gated by file location. */
 type SelectionLayerRuleModule = {
   readonly selectByIdRestrictions: readonly RestrictedSyntaxRestriction[];
   readonly selectionAuthorityRestrictions: readonly RestrictedSyntaxRestriction[];
@@ -371,11 +360,7 @@ describe("tabNavigationStoreActionRestrictions", () => {
 });
 
 /**
- * D12 write path, lower half: `selectById` has NO allowlist (see the rules
- * module's doc comment at :84-98) - every shape must flag with zero
- * conditions, unlike `nestedFocusBoundaryRestrictions`/
- * `tabNavigationStoreActionRestrictions` above, which both take an allowlist
- * parameter.
+ * selectById has no allowlist; every shape must flag with zero conditions.
  */
 describe("selectByIdRestrictions", () => {
   const restrictions = selectionLayerRuleModule.selectByIdRestrictions;
@@ -418,10 +403,8 @@ describe("selectByIdRestrictions", () => {
   });
 
   it("does not flag near-miss shapes with a different property name", () => {
-    // Negative control for a receiver-agnostic total ban: since none of the
-    // selectors above check the receiver (there is no allowlist to gate on),
-    // the meaningful false-positive risk is substring/name confusion, not an
-    // unrelated receiver. This proves exact-name matching, not prefix/suffix.
+    // Exact-name matching, not prefix/suffix. No allowlist; false-positive
+    // risk is substring confusion.
     expect(
       lint(
         `
@@ -439,11 +422,7 @@ describe("selectByIdRestrictions", () => {
   });
 });
 
-/**
- * D12 write path, upper half: `selectionAuthority` is banned except for the
- * two files in `selectionAuthorityWriteAllowlist`, enforced at the config
- * layer (below), not by a runtime allowlist parameter here.
- */
+/** selectionAuthority is banned except selectionAuthorityWriteAllowlist, at the config layer, not a runtime parameter. */
 describe("selectionAuthorityRestrictions", () => {
   const restrictions = selectionLayerRuleModule.selectionAuthorityRestrictions;
 
@@ -491,11 +470,7 @@ describe("selectionAuthorityRestrictions", () => {
   });
 });
 
-/**
- * Cold review #10: production flat-config overrides that rewrite
- * `no-restricted-syntax` must keep raw `tabActivate` restricted except for
- * the sole allowed activation module (`src/lib/tab-navigation.ts`).
- */
+/** no-restricted-syntax rewrites must keep raw tabActivate banned except src/lib/tab-navigation.ts. */
 describe("eslint config retains raw tabActivate restriction", () => {
   const guiAppRoot = path.resolve(process.cwd());
 
@@ -554,10 +529,8 @@ describe("eslint config retains raw tabActivate restriction", () => {
   });
 
   it("keeps the raw tabActivate restriction in test files", async () => {
-    // Cold review #10: the test override previously dropped the whole
-    // restriction, so a raw tabActivate import lint clean in a test. Tests may
-    // seed setActiveTab/setActiveDraft, but must still route activation through
-    // activateTabIntent - so the tabActivate restriction stays.
+    // Tests may seed setActiveTab/setActiveDraft but must still go through
+    // activateTabIntent. Keep the tabActivate restriction.
     expect(
       await fileHasTabActivateRestriction(
         "src/lib/tab-navigation/__tests__/navigation-envelope.test.ts",
@@ -566,22 +539,11 @@ describe("eslint config retains raw tabActivate restriction", () => {
   });
 });
 
-/**
- * F10: the config-mention tests above only prove the config MENTIONS
- * tabActivate for a given file path. These probe the bypass forms THROUGH
- * THE REAL flat config end-to-end via `ESLint#lintText`, which actually
- * parses and runs every configured rule (not just `no-restricted-syntax`)
- * against the exact production `eslint.config.mjs` - for both a production
- * file path and a test file path - so a caught violation here proves the
- * real config catches the bypass, not just that a matching selector object
- * exists somewhere in the rule array.
- */
+/** Config-mention tests only prove a selector exists. These lintText the real eslint.config.mjs so a caught bypass is the production rule. */
 describe("eslint config actually catches tabActivate bypass forms (lintText)", () => {
   const guiAppRoot = path.resolve(process.cwd());
-  // Real on-disk files. `lintText`'s `code` argument - not the file's actual
-  // disk content - is what gets linted, but typed linting
-  // (`parserOptions.projectService`) requires the path to resolve to an
-  // actual project-tracked file, so these must be real paths that exist.
+  // lintText lints the `code` arg, but projectService requires a real
+  // project-tracked path.
   const PRODUCTION_FILE_PATH = "src/lib/routes.ts";
   const TEST_FILE_PATH = "src/lib/__tests__/analytics.test.ts";
 
@@ -685,18 +647,7 @@ describe("eslint config actually catches tabActivate bypass forms (lintText)", (
 });
 
 /**
- * D12/F2 host-selection layer, Layer 2: the config-mention sweep. This is the
- * layer that catches the hazard documented at `eslint.config.mjs:30-48` -
- * flat config REPLACES a rule's options rather than merging them, so the LAST
- * block matching a file supplies that file's entire `no-restricted-syntax`
- * value, and a from-scratch appended block silently switches every earlier
- * restriction off. Measured on this tree: one appended block dropped
- * `no-restricted-syntax` from 71 entries (including `selectById`) to 1.
- *
- * `eslint.config.mjs` has thirteen blocks that assign `no-restricted-syntax`.
- * One row below per block, each anchored to a real on-disk file that block
- * actually matches - breadth across override blocks is the point, since that
- * is where the hazard lives, not depth on any one file.
+ * Config-mention sweep: flat config replaces a rule's options. One row per `no-restricted-syntax` block, anchored to a file that block matches.
  */
 const guiAppRoot = path.resolve(process.cwd());
 
@@ -781,12 +732,7 @@ async function fileHasReadPathImportRestriction(
   );
 }
 
-/**
- * The derived-host read joined the `readPath` dimension in PR #1243; a file
- * that carries the dimension carries all of it. Checked by its OWN name so a
- * regression that drops only this pattern (the dimension is a hand-written
- * list) reads as a red here, not as green-by-neighbour.
- */
+/** Check the derived-host read by its own name; dropping only this pattern from the hand-written list must go red here. */
 async function fileHasEffectiveHostReadRestriction(
   relativePath: string,
 ): Promise<boolean> {
@@ -798,14 +744,8 @@ async function fileHasEffectiveHostReadRestriction(
 }
 
 describe("eslint config retains selectById across every no-restricted-syntax override block", () => {
-  // One real file per block that rewrites `no-restricted-syntax`
-  // (`eslint.config.mjs`, grep the rule name): the general base block, both
-  // `selectionAuthorityWriteAllowlist` files, `markdown-anchor.tsx`,
-  // `tab-navigation.ts` (see the fix at :429-457 - this row is what would
-  // have caught that gap), `tab-command-coordinator.ts`, the two tab `kinds/`
-  // descriptors, `epic-tab-route-components.tsx`, and the four
-  // nested-focus-boundary overrides. The test-files block is deliberately
-  // NOT in this table - see the characterization describe below.
+  // One production file per no-restricted-syntax rewrite. Test-files block is
+  // characterized below, not in this table.
   const overrideBlockAnchors = [
     "src/lib/registries/epic-session-registry.ts",
     "src/components/settings/host-scope/use-host-scope.ts",
@@ -858,10 +798,8 @@ describe("eslint config gates selectionAuthority to its write allowlist", () => 
   it.each(WRITE_ALLOWLIST_FILES.map((file) => ({ file })))(
     "POSITIVE: $file still carries selectById, proving the lift is selective, not a wholesale drop",
     async ({ file }) => {
-      // Without this pairing, a block that dropped ALL selection-layer
-      // restrictions for these two files (not just selectionAuthority) would
-      // still pass the "absent" assertion above - the exemption working would
-      // be indistinguishable from the whole guard being disabled here.
+      // Pair with a still-banned selector. Dropping all selection-layer
+      // restrictions would still pass the "absent" assertion.
       expect(await fileHasSelectByIdRestriction(file)).toBe(true);
     },
   );
@@ -925,17 +863,7 @@ describe("eslint config gates the read-path import restriction to its allowlist"
   });
 });
 
-/**
- * PR #1243: the Epic canvas subtree and `src/hooks/epic/**` were carved OUT
- * of the read-path allowlist as "app chrome" - the two-role model the redesign
- * replaced with three (D15). Those surfaces read the Epic SESSION's host, and
- * exempting the directories let ~40 app-wide reads accumulate there and
- * surface as one review finding per push, three rounds running. These anchors
- * pin that the subtree now carries `readPath`, that the reasoned exceptions
- * are lifted per FILE and only `readPath` is lifted (the file still carries
- * `kernel`, proving the lift is selective), and that the real config flags the
- * import at a sidebar path by rule name - the positive control for "clean".
- */
+/** Epic canvas and hooks/epic carry readPath; exceptions lift per file and only readPath (kernel still applies). */
 describe("eslint config fences the Epic canvas subtree and hooks/epic behind readPath (PR #1243)", () => {
   const SIDEBAR_FILE = "src/components/epic-canvas/sidebar/epic-sidebar.tsx";
   const SHARING_PANEL_FILE =
@@ -952,10 +880,8 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
   // covered it; a file list does not.
   const SIBLING_OF_EXEMPT_HOOK =
     "src/hooks/epic/use-epic-tui-agent-mutations.ts";
-  // The selector surface over the Epic session's handle: allowlisted as
-  // "canvas-serving, not tab-pinned" (the two-role premise) until round 6,
-  // where its one app-wide read stamped every projected record with the
-  // wrong host during a re-point. The census had excluded `src/lib/`.
+  // Epic-session handle reads carry readPath. An app-wide read here stamped
+  // projected records with the wrong host during a re-point.
   const EPIC_SELECTORS_FILE = "src/lib/epic-selectors.ts";
 
   it.each([
@@ -1001,10 +927,8 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
     },
   );
 
-  // The hook-INDIRECTION half (round 6): `readPath` only ever sees a file's
-  // own imports, so a wrapper hook that resolved `useHostClient()` on behalf
-  // of an Epic surface laundered the read past the fence. Those directories
-  // now take the caller's client and carry `readPath` themselves.
+  // Wrapper hooks that resolved useHostClient() for an Epic surface now take
+  // the caller's client and carry readPath themselves.
   const REPOINTED_HOOK_FILE = "src/hooks/comments/use-epic-comment-threads.ts";
   const REPOINTED_HOOK_SIBLING =
     "src/hooks/snapshots/use-snapshot-diff-query.ts";
@@ -1073,50 +997,12 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
   });
 });
 
-/**
- * The test-files override block (`files: testFileGlobs`) does NOT restate
- * `selectById`/`selectionAuthority`. This is a DELIBERATE, reasoned exemption,
- * not an oversight like the `tab-navigation.ts` gap fixed above - confirmed
- * with the coordinator. The AST selectors are pure property-name matches with
- * no call-site distinction, so `expect(mocks.selectById).not.toHaveBeenCalled()`
- * (which PROVES the invariant) is indistinguishable from an actual violation
- * to the selector. At least 15 test files assert `selectById` is never
- * called; restoring the ban here would redden those correct assertions and
- * pressure someone into deleting the very tests that enforce this rule.
- *
- * This file - `lint-rule-guards.test.ts` itself - matches `testFileGlobs`
- * too, so the guard suite you are reading runs under the exemption it
- * documents here.
- *
- * The residual risk this leaves open: a test could call the real
- * `selectById`/`selectionAuthority` and lint clean. That risk is accepted,
- * not eliminated - this describe makes it visible instead of silent.
- *
- * A narrower selector that could eventually let tests carry the ban -
- * `CallExpression[callee.property.name='selectById']` - would separate the
- * assertion from the violation: a bare `mocks.selectById` reference (the
- * assertion) is not a callee, so it would stop matching, while
- * `mocks.selectById(hostId)` (the violation) still would. It is NOT
- * sufficient on its own, though: it misses the indirection
- * `const f = x.selectById; f();`, where the call site never names
- * `selectById` at all. Recorded here so the next person doesn't re-derive
- * this and stop at the first, incomplete version.
- *
- * The pairing below is what keeps this test honest: asserting ONLY that
- * `selectById` is absent would still pass if some future block wiped every
- * restriction for test files (not just the two selection ones) - `tabActivate`
- * staying present is independent proof the block still composes at all.
- */
+/** Tests lift `selectById`/`selectionAuthority`: property-name selectors cannot distinguish `expect(mocks.selectById).not.toHaveBeenCalled()` from a violation. Pair absence with `tabActivate` still present so a wiped test-file block cannot pass as correct. */
 describe("eslint config: test-files block deliberately exempts selectById (characterization, not a regression)", () => {
   const TEST_FILE = "src/__tests__/lint-rule-guards.test.ts";
 
-  // This anchor is load-bearing, not a courtesy check, and the rename that
-  // produced this comment is the proof: `calculateConfigForFile` resolves a
-  // path by GLOB, so it answers happily for a file that does not exist. With
-  // the file renamed and this constant left stale, the two arms below both
-  // PASSED - they were characterizing a phantom - and this assertion was the
-  // only one that failed. Delete it as redundant and those two go vacuous
-  // silently.
+  // calculateConfigForFile answers for a missing path by glob. Keep this
+  // existence assertion or the arms below characterize a phantom.
   it("anchors on this file, which must exist on disk", () => {
     expect(existsSync(path.join(guiAppRoot, TEST_FILE))).toBe(true);
   });
@@ -1132,11 +1018,8 @@ describe("eslint config: test-files block deliberately exempts selectById (chara
     ).toBe(true);
   });
 
-  // Two families that were in the exemption list only as collateral from
-  // rebuilding the array by hand, not as decisions. Measured across all 1392
-  // test files with the bans restored: ZERO violations either way. Closed, and
-  // pinned here so the closure cannot quietly come undone the way the original
-  // drop did - which nothing noticed because nothing asserted it.
+  // These two families were collateral exemptions, not decisions. Restoring
+  // the bans found zero violations; pin so they cannot quietly return.
   it.each([
     { family: "jsxKey", needle: "nullish-coalescing fallbacks" },
     { family: "epicTabRoute", needle: "epicTabRoute" },
@@ -1151,14 +1034,7 @@ describe("eslint config: test-files block deliberately exempts selectById (chara
   );
 });
 
-/**
- * Layer 2, end-to-end: the config-mention tests above only prove a matching
- * selector object exists somewhere in the array for a given file.
- * `ESLint#lintText` against the real `eslint.config.mjs` proves the rule
- * actually FIRES. Production paths only - the test-files exemption above
- * means a `selectById` bypass in a test path legitimately lints clean today,
- * so asserting it gets caught there would be asserting something false.
- */
+/** lintText the real config. Production paths only: a selectById bypass in a test path legitimately lints clean. */
 describe("eslint config actually catches selectById bypass forms (lintText)", () => {
   const SELECTION_PRODUCTION_FILE_PATH = "src/lib/routes.ts";
 
@@ -1231,12 +1107,8 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
     },
   );
 
-  // App chrome inside `hostSelectionReadAllowlist`: the one place a control
-  // for "a legitimate effective-host read is not flagged" can stand, now that
-  // the derived-host read is part of the `readPath` ban (PR #1243). It used to
-  // stand at `SELECTION_PRODUCTION_FILE_PATH`, outside the allowlist, which
-  // encoded the premise that `useEffectiveHostId` was not an app-wide read
-  // for lint purposes - the premise the ban retires; see the anchor below it.
+  // Legitimate effective-host read must sit in hostSelectionReadAllowlist;
+  // derived-host reads are part of the readPath ban.
   const READ_ALLOWLISTED_PRODUCTION_FILE_PATH =
     "src/components/layout/host-ready-gate.tsx";
 

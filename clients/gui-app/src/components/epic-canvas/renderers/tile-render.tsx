@@ -1,11 +1,6 @@
 /**
  * Canvas tile-kind render registry.
- *
- * Maps every `TileKindId` to a renderer typed against that kind's own ref
- * (`{ [K in TileKindId]: TileRenderer<TileKindToRefMap[K]> }`), so a
- * missing kind fails the build and each renderer receives a correctly
- * narrowed `node`. `renderTile` is the single dispatch point - there is
- * no per-kind branching outside this table.
+ * Maps every `TileKindId` to a renderer typed against that kind's own ref (`{ [K in TileKindId]: TileRenderer<TileKindToRefMap[K]> }`), so a missing kind fails the build and each renderer receives a correctly narrowed `node`.
  */
 import type { ReactNode } from "react";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -139,15 +134,12 @@ const TILE_RENDERERS: TileRendererRegistry = {
       epicId={epicId}
     />
   ),
-  // Epic-scoped, not host-scoped: the tile fans a subscription out per host.
-  // The surrounding `TabHostProvider` carries the ref's inert placeholder host
-  // and this body never reads it.
+  // The surrounding `TabHostProvider` carries the ref's inert placeholder host and this body never reads it.
   "comm-graph": ({ node, viewTabId }) => (
     <CommGraphTile node={node} viewTabId={viewTabId} />
   ),
-  // The ordinary chat surface fed from a published copy - see the tile's own
-  // note. Bound, like every tile, to the tab's host: that host SERVES the cloud
-  // read, and the chat's owning host is metadata the locked composer names.
+  // The ordinary chat surface fed from a published copy - see the tile's own note.
+  // Bound, like every tile, to the tab's host: that host SERVES the cloud read, and the chat's owning host is metadata the locked composer names.
   "published-chat": ({ node, epicId, viewTabId, tileId, isActive }) => (
     <PublishedChatTile
       node={node}
@@ -173,9 +165,8 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
-  // A blank tab's body IS the inline opener; picking content replaces it in
-  // place (via openTileInPane). `tileId` is the group id; `isActive` drives
-  // the opener's autofocus.
+  // A blank tab's body IS the inline opener; picking content replaces it in place (via openTileInPane).
+  // `tileId` is the group id; `isActive` drives the opener's autofocus.
   blank: ({ viewTabId, tileId, epicId, isActive }) => (
     <PaneOpener
       epicId={epicId}
@@ -193,24 +184,8 @@ function tileRenderer<K extends TileKindId>(
 }
 
 /**
- * Render any canvas tile. Wraps the kind-specific body in
- * `<TabHostProvider>` so every tile reads its bound host via
- * `useTabHostId()`, in `<LinkTargetProvider>` so an in-app link opens on this
- * tile's own canvas tab, and in `<BrowserSessionsHostBoundary>` so everything
- * inside the tile - link opening, terminal OSC-8 links, the browser tile
- * itself - reads the sessions stream of the TILE's host rather than the
- * canvas host's. Without it a tile on a remote host sees the canvas host's
- * stream, and every consumer that compares the two has to fall back; the
- * boundary makes that mismatch impossible instead of handled per surface.
- * It is a no-op when the tile is on the canvas host, and coordinators are
- * refcounted, so N tiles on one host share one stream.
- *
- * Accepted cost: the coordinator is acquired EAGERLY while the tile is
- * mounted - a lazy one would not be live at click time, so the first link
- * click would still fall out to the OS browser. A tile on a host that is
- * asleep therefore holds a capped-backoff (1s→30s) reconnect loop, one socket
- * per host per epic. Gating on reachability was rejected: stale or pending
- * reachability reintroduces exactly the first-click failure this closes.
+ * Wraps the kind-specific body in `<TabHostProvider>` so every tile reads its bound host via `useTabHostId()`, in `<LinkTargetProvider>` so an in-app link opens on this tile's own canvas tab, and in `<BrowserSessionsHostBoundary>` so everything inside the tile - link opening, terminal OSC-8 links, the browser tile itself - reads the sessions stream of the TILE's host rather than the canvas host's.
+ * Without it a tile on a remote host sees the canvas host's stream, and every consumer that compares the two has to fall back; the boundary makes that mismatch impossible instead of handled per surface.
  */
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (

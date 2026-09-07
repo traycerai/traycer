@@ -25,18 +25,8 @@ import {
 } from "@traycer-clients/shared/host-update";
 import { commitExecutorAttemptMutation } from "@traycer-clients/shared/host-update/contender";
 
-// The CLI's rollout fence (`decideUpdateExecutorCohort`) is intentionally
-// static release policy with NO shipped enable seam (see
-// `update-executor-cohort.test.ts`). To exercise the real
-// `dispatchAttemptExecutor`/`runAttemptExecutorSegment` control flow past
-// that gate, this file mocks the cohort module at ITS OWN test-file
-// boundary only - never a shipped setter, never an exported `__internal`
-// bypass on the production module itself. The mock defaults to the REAL
-// `decideUpdateExecutorCohort` (always shadow) so a dedicated,
-// deliberately-unmocked-in-spirit describe block below can still assert the
-// production default with zero side effects; individual tests override to
-// `eligible` with `mockReturnValueOnce`/`mockImplementation` only where they
-// need to reach past the gate.
+// The CLI's rollout fence (`decideUpdateExecutorCohort`) is intentionally static release policy with NO shipped enable seam (see `update-executor-cohort.test.ts`).
+// To exercise the real `dispatchAttemptExecutor`/`runAttemptExecutorSegment` control flow past that gate, this file mocks the cohort module at ITS OWN test-file boundary only - never a shipped setter, never an exported `__internal` bypass on the production module itself.
 const cohortMock = vi.hoisted(() => ({ decide: vi.fn() }));
 vi.mock("../update-executor-cohort", async () => {
   const actual = await vi.importActual<
@@ -46,16 +36,8 @@ vi.mock("../update-executor-cohort", async () => {
   return { ...actual, decideUpdateExecutorCohort: cohortMock.decide };
 });
 
-// The module-private terminal verifier (behind `completeLocalAttemptExecutorSegment`)
-// calls the REAL `observeAttemptRecoveryEvidence`, which itself calls the
-// real `store/paths.hostHomeDir` to enforce its foreign-home guard. Every
-// OTHER test in this file passes an explicit `contender.hostHomeDir` and
-// never reaches that guard, so this sandboxing is scoped to just the
-// terminal-write tests below - same convention as
-// `update-recovery-evidence.test.ts`, but pinned directly to each test's own
-// `freshHome()` result (via `currentHome`) rather than derived from
-// `os.homedir()`, since this file's fixture directories are ordinary tmpdirs
-// with no fixed relationship to the real home.
+// The module-private terminal verifier (behind `completeLocalAttemptExecutorSegment`) calls the REAL `observeAttemptRecoveryEvidence`, which itself calls the real `store/paths.hostHomeDir` to enforce its foreign-home guard.
+// Every OTHER test in this file passes an explicit `contender.hostHomeDir` and never reaches that guard, so this sandboxing is scoped to just the terminal-write tests below - same convention as `update-recovery-evidence.test.ts`, but pinned directly to each test's own `freshHome()` result (via `currentHome`) rather than derived from `os.homedir()`, since this file's fixture directories are ordinary tmpdirs with no fixed relationship to the real home.
 const currentHome = { value: "" };
 vi.mock("../../store/paths", async () => {
   const actual =
@@ -80,20 +62,7 @@ vi.mock("../../store/paths", async () => {
     hostStagedRecordPath: () => join(hostHomeFor(), "staged", "staged.json"),
     hostPidMetadataPath: () => join(hostHomeFor(), "pid.json"),
     // The terminal-completion path takes the INNER CLI lock with `waitMs: 0`.
-    // Left real, that is `~/.traycer/cli/.lock` - the operator's actual
-    // product lock. The cold review hit exactly that: the suite failed
-    // `CLI_LOCK_BUSY` against a live local `host-update-verify` holder, and
-    // while it ran it blocked the user's own CLI.
-    //
-    // Sandboxing it is not merely de-flaking. A test that takes real machine
-    // state can BREAK the machine - the same class as the stale suite that
-    // once wrote under the operator's real host install path.
-    //
-    // Self-sufficient on purpose: most tests in this file never set
-    // `currentHome`, so a naive `join(hostHomeFor(), ...)` yields the RELATIVE
-    // path `cli/.lock` and fails ENOENT. The fallback root keeps every test
-    // isolated whether or not it staged a home, and the directory is created
-    // on demand because the lock opens with `wx` and will not mkdir for us.
+    // Left real, that is `~/.traycer/cli/.lock` - the operator's actual product lock.
     cliLockPath: (): string => {
       const root =
         currentHome.value === ""
@@ -147,18 +116,12 @@ async function freshHome(): Promise<string> {
 function observation(
   evidence: AttemptRecoveryEvidence,
 ): AttemptRecoveryEvidenceObservation {
-  // A test-only surrogate fingerprint: it only needs to be a pure function
-  // of the evidence content so `sameAttemptRecoveryEvidenceObservation`
-  // (real fingerprint string equality) reacts correctly to a changed vs.
-  // unchanged evidence object between two injected reads.
+  // A test-only surrogate fingerprint: it only needs to be a pure function of the evidence content so `sameAttemptRecoveryEvidenceObservation` (real fingerprint string equality) reacts correctly to a changed vs. unchanged evidence object between two injected reads.
   return { evidence, fingerprint: JSON.stringify(evidence) };
 }
 
 beforeEach(async () => {
-  // Reset the cohort mock back to the REAL implementation before every
-  // test, not just clear call history - `mockClear()` alone would leak a
-  // prior test's `mockCohortEligible("linux")` override forward, since that uses
-  // `mockImplementation`, which `mockClear()` does not touch.
+  // Reset the cohort mock back to the REAL implementation before every test, not just clear call history - `mockClear()` alone would leak a prior test's `mockCohortEligible("linux")` override forward, since that uses `mockImplementation`, which `mockClear()` does not touch.
   const actualCohort = await vi.importActual<
     typeof import("../update-executor-cohort")
   >("../update-executor-cohort");
@@ -183,13 +146,8 @@ function mockCohortEligible(platform: "linux" | "win32"): void {
   );
 }
 
-// ---- dispatchAttemptExecutor -------------------------------------------------
-//
-// The parent/child dispatch boundary: the parent reports "accepted" only
-// after a private nonce-matched acknowledgement of the child's DURABLE claim.
-// Every ambiguous outcome (spawn failure, missing ACK, wrong nonce, exit,
-// timeout) reconciles canonical state exactly once and never spawns a
-// second child.
+// ---- dispatchAttemptExecutor ------------------------------------------------- The parent/child dispatch boundary: the parent reports "accepted" only after a private nonce-matched acknowledgement of the child's DURABLE claim.
+// Every ambiguous outcome (spawn failure, missing ACK, wrong nonce, exit, timeout) reconciles canonical state exactly once and never spawns a second child.
 
 function neverSettles<T>(): Promise<T> {
   return new Promise<T>(() => {});
@@ -275,12 +233,8 @@ describe("dispatchAttemptExecutor - cohort gate is derived internally, never cal
   });
 
   it("does not accept a caller-supplied eligibility object - only a HostInstallPlatform string", () => {
-    // `DispatchAttemptExecutorOptions.platform` is typed as
-    // `HostInstallPlatform`, not `UpdateExecutorCohortVerdict`: a caller
-    // cannot hand in a pre-built `{ kind: "eligible", ... }` verdict to opt
-    // around the internal `decideUpdateExecutorCohort` gate. Pinned as a
-    // compile error rather than a runtime check, since there is no runtime
-    // value to assert against once the parameter type disallows it.
+    // `DispatchAttemptExecutorOptions.platform` is typed as `HostInstallPlatform`, not `UpdateExecutorCohortVerdict`: a caller cannot hand in a pre-built `{ kind: "eligible", ... }` verdict to opt around the internal `decideUpdateExecutorCohort` gate.
+    // Pinned as a compile error rather than a runtime check, since there is no runtime value to assert against once the parameter type disallows it.
     const attemptSelfIssuedEligibility = (): DispatchAttemptExecutorOptions =>
       dispatchOptions({
         // @ts-expect-error platform must be a HostInstallPlatform, not a verdict object
@@ -461,9 +415,7 @@ describe("dispatchAttemptExecutor - reconciles exactly once, never double-spawns
 
     expect(outcome).toEqual({ kind: "indeterminate", canonical });
     expect(spawnCalls).toBe(1);
-    // The fault fires before the child is ever asked to wait for its ACK -
-    // the point is that a post-spawn crash reconciles rather than blocking
-    // on (or trusting) a channel it never actually opened.
+    // The fault fires before the child is ever asked to wait for its ACK - the point is that a post-spawn crash reconciles rather than blocking on (or trusting) a channel it never actually opened.
     expect(waitForAckCalls).toBe(0);
     expect(reconcileCalls).toBe(1);
   });
@@ -647,15 +599,8 @@ describe("dispatchAttemptExecutor - a positively matched private ACK is trusted 
   });
 });
 
-// ---- runAttemptExecutorSegment - private ACK ordering ------------------------
-//
-// The only API that hands a capability to execution work. `acknowledge` is
-// the private positive-ACK boundary and MUST run only after the claim has
-// durably committed, and `execute` must never run before `acknowledge` has
-// completed. There is deliberately no claim-only exported API: the two
-// removed functions below no longer exist, so any exported path that could
-// hand back a "claimed" identity without also having run `acknowledge`
-// synchronously inside this same held capability is gone at compile time.
+// ---- runAttemptExecutorSegment - private ACK ordering ------------------------ The only API that hands a capability to execution work.
+// `acknowledge` is the private positive-ACK boundary and MUST run only after the claim has durably committed, and `execute` must never run before `acknowledge` has completed.
 
 describe("runAttemptExecutorSegment - no exported claim-only path exists; ACK cannot outlive the capability", () => {
   it("the removed runAttemptExecutorClaim/runLocalAttemptExecutorClaim exports are absent from the module - compile-time proof, not a runtime check", async () => {
@@ -663,11 +608,8 @@ describe("runAttemptExecutorSegment - no exported claim-only path exists; ACK ca
       await import("../update-executor");
     expect("runAttemptExecutorClaim" in moduleExports).toBe(false);
     expect("runLocalAttemptExecutorClaim" in moduleExports).toBe(false);
-    // The raw terminal writer is also module-private. There is no exported
-    // free function that performs a terminal write at all anymore - the
-    // ONLY way to reach one is the zero-argument `complete` closure handed
-    // to `execute()` inside `runAttemptExecutorSegment`/
-    // `runLocalAttemptExecutorSegment` themselves.
+    // The raw terminal writer is also module-private.
+    // There is no exported free function that performs a terminal write at all anymore - the ONLY way to reach one is the zero-argument `complete` closure handed to `execute()` inside `runAttemptExecutorSegment`/ `runLocalAttemptExecutorSegment` themselves.
     expect("completeAttemptExecutorSegment" in moduleExports).toBe(false);
     expect("completeLocalAttemptExecutorSegment" in moduleExports).toBe(false);
     expect("completeCliVerifiedExecutorSegment" in moduleExports).toBe(false);
@@ -893,10 +835,8 @@ describe("runAttemptExecutorSegment - acknowledge runs before execute, and only 
       ),
     ).rejects.toThrow("injected post-ack fault");
 
-    // Unlike the pre-ack fault above, acknowledge DID durably run here - the
-    // claim was already committed and privately acknowledged. Only the
-    // execute action itself is what a crash at this exact point must not
-    // have started.
+    // Unlike the pre-ack fault above, acknowledge DID durably run here - the claim was already committed and privately acknowledged.
+    // Only the execute action itself is what a crash at this exact point must not have started.
     expect(acknowledgeCalls).toBe(1);
     expect(executeCalls).toBe(0);
   });
@@ -924,15 +864,8 @@ describe("runAttemptExecutorSegment - acknowledge runs before execute, and only 
 });
 
 describe("runAttemptExecutorSegment - the dispatch ACK is stamped AFTER the claim is durable (Ticket 07 §5.2.8)", () => {
-  // The ordering IS the contract. An ACK written before the claim attests an
-  // attempt that a crash one instant later un-makes, leaving the resolver
-  // reporting `accepted` for something that never existed - a fabricated
-  // identity, which is the precise failure the arm was introduced to remove.
-  //
-  // The seam is the executor's own `acknowledge` callback, which it documents
-  // as "the private positive acknowledgement boundary" and invokes immediately
-  // after the claim commits. Using it rather than a new call site is what makes
-  // the ordering structural instead of a convention.
+  // The ordering IS the contract.
+  // An ACK written before the claim attests an attempt that a crash one instant later un-makes, leaving the resolver reporting `accepted` for something that never existed - a fabricated identity, which is the precise failure the arm was introduced to remove.
 
   it("the attempt record is already on disk when the ACK stamp runs", async () => {
     mockCohortEligible("linux");
@@ -978,10 +911,7 @@ describe("runAttemptExecutorSegment - the dispatch ACK is stamped AFTER the clai
 });
 
 describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ticket 07 Finding 2)", () => {
-  /**
-   * A record parked at `waiting-to-activate` carrying `activate`: an ADOPTED
-   * continuation, committed and then released so nothing holds the lock.
-   */
+  /** A record parked at `waiting-to-activate` carrying `activate`: an ADOPTED continuation, committed and then released so nothing holds the lock. */
   async function seedAdoptedActivationContinuation(
     hostHomeDir: string,
   ): Promise<HostUpdateAttemptIdentity> {
@@ -1042,11 +972,8 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
     return parked.identity;
   }
 
-  // The TRACE half. This gate is production-reachable today: Desktop dispatches
-  // `host update-verify` after every packaged-mac restart, and that command
-  // runs `runLocalAttemptExecutorSegment` -> here. Refusing an already-adopted
-  // continuation on that path abandons the attempt the verification exists to
-  // conclude - the Finding-2 stranding, on the verify route.
+  // The TRACE half.
+  // This gate is production-reachable today: Desktop dispatches `host update-verify` after every packaged-mac restart, and that command runs `runLocalAttemptExecutorSegment` -> here.
   it("does NOT reject an ADOPTED continuation under the shipped shadow cohort", async () => {
     const hostHomeDir = await freshHome();
     const identity = await seedAdoptedActivationContinuation(hostHomeDir);
@@ -1066,9 +993,8 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
       async () => "ran",
     );
 
-    // The specific negative: whatever the segment goes on to do, it must not
-    // be refused BY THE GATE. Asserting a concrete success shape would couple
-    // this to claim/drain details and fail for unrelated reasons.
+    // The specific negative: whatever the segment goes on to do, it must not be refused BY THE GATE.
+    // Asserting a concrete success shape would couple this to claim/drain details and fail for unrelated reasons.
     expect(outcome).not.toEqual({
       kind: "rejected",
       reason: "cohort-disabled",
@@ -1076,22 +1002,15 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
     });
   });
 
-  // The CONTROL half already exists above - "never calls acknowledge or
-  // execute when the cohort is shadow (the production default)" runs against a
-  // `freshHome()` with NOTHING adopted, and still expects
-  // `{rejected, cohort-disabled}`. Named here so the pair is discoverable
-  // together: that test is what stops "skip the gate whenever a record exists"
-  // - or deleting the gate - from satisfying the trace above.
+  // The CONTROL half already exists above - "never calls acknowledge or execute when the cohort is shadow (the production default)" runs against a `freshHome()` with NOTHING adopted, and still expects `{rejected, cohort-disabled}`.
+  // Named here so the pair is discoverable together: that test is what stops "skip the gate whenever a record exists" - or deleting the gate - from satisfying the trace above.
 });
 
 describe("runAttemptExecutorSegment - recovery path runs the injected reader under the real capability/CLI-lock ordering", () => {
   async function seedInterruptedActiveRecord(
     hostHomeDir: string,
   ): Promise<void> {
-    // Simulates a segment that died mid-execution: commit an active record,
-    // then release the lock WITHOUT parking or terminalizing it, leaving
-    // exactly the "active, unheld" evidence `decideAttemptClaim` refuses as
-    // `requires-recovery`.
+    // Simulates a segment that died mid-execution: commit an active record, then release the lock WITHOUT parking or terminalizing it, leaving exactly the "active, unheld" evidence `decideAttemptClaim` refuses as `requires-recovery`.
     await mkdir(hostHomeDir, { recursive: true });
     const acquired = await acquireUpdateAttemptLock({
       hostHomeDir,
@@ -1142,12 +1061,8 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
 
     const outcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        // Evidence offers only an `activate` continuation - only `activate`
-        // may resume it (§ actionMayResume).
-        // `action: "start"` can never resume - only terminalize/supersede
-        // (`actionMayResume` never authorizes "start"). Reaching
-        // `resume-new-generation` needs an identity-bound resume-class
-        // request, matching the seeded record's identity.
+        // Evidence offers only an `activate` continuation - only `activate` may resume it (§ actionMayResume).
+        // `action: "start"` can never resume - only terminalize/supersede (`actionMayResume` never authorizes "start").
         request: {
           targetVersion: "1.2.3",
           trigger: "manual",
@@ -1172,11 +1087,7 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
       },
     );
 
-    // `recoverInterruptedAttempt` reads once for the advisory initial
-    // observation and a SECOND time for the final observation compared
-    // against it under the write lock (the flap-detection boundary) - both
-    // reads run strictly before acknowledge/execute, since recovery is part
-    // of establishing the claim, not part of the execution segment.
+    // `recoverInterruptedAttempt` reads once for the advisory initial observation and a SECOND time for the final observation compared against it under the write lock (the flap-detection boundary) - both reads run strictly before acknowledge/execute, since recovery is part of establishing the claim, not part of the execution segment.
     expect(readRecoveryEvidenceCalls).toBe(2);
     expect(calls).toEqual([
       "read-recovery-evidence",
@@ -1186,18 +1097,8 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
     ]);
     expect(outcome.kind).toBe("executed");
     if (outcome.kind !== "executed") return;
-    // RETARGETED by the Ticket 07 orphan-recovery ruling. The assertion's
-    // meaning is preserved - installed-verified-only evidence still resumes the
-    // `activate` continuation at a bumped generation, via the recovery arm's
-    // `resume-new-generation` path - but the POST-STATE is now stronger.
-    //
-    // Recovery used to leave the record ACTIVE at `preparing/activate` and then
-    // release, which is the orphaned shape `decideAttemptClaim` refuses as
-    // `requires-recovery`; the next recovery would land the same state again,
-    // a stranding LOOP rather than a resolution. The segment now performs the
-    // already-legal `preparing/activate -> waiting-to-activate` re-park BEFORE
-    // releasing, so what it hands back is a record an ordinary claim can
-    // resume with no recovery evidence of its own.
+    // RETARGETED by the Ticket 07 orphan-recovery ruling.
+    // The assertion's meaning is preserved - installed-verified-only evidence still resumes the `activate` continuation at a bumped generation, via the recovery arm's `resume-new-generation` path - but the POST-STATE is now stronger.
     expect(outcome.claim.record.phase).toBe("waiting-to-activate");
     expect(outcome.claim.record.continuation).toBe("activate");
     // The generation bump is recovery's, and the re-park rides the same
@@ -1235,9 +1136,7 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
       },
     );
 
-    // A terminalized outcome is not a `claimed` one - the private
-    // acknowledgement and execution callbacks are for a claimed segment
-    // only, and must not run for an attempt that recovery already ended.
+    // A terminalized outcome is not a `claimed` one - the private acknowledgement and execution callbacks are for a claimed segment only, and must not run for an attempt that recovery already ended.
     expect(outcome.kind).toBe("terminalized");
     if (outcome.kind === "terminalized") {
       expect(outcome.outcome).toBe("complete");
@@ -1260,11 +1159,7 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
       running: { kind: "absent" },
     };
     const flappedEvidence: AttemptRecoveryEvidence = {
-      // Same continuation-worthy shape but a different concrete evidence
-      // object - `recoverInterruptedAttempt` compares by fingerprint, not by
-      // recomputed continuation, so even a still-plausible-looking second
-      // read must refuse rather than silently trusting whichever read is
-      // more convenient.
+      // Same continuation-worthy shape but a different concrete evidence object - `recoverInterruptedAttempt` compares by fingerprint, not by recomputed continuation, so even a still-plausible-looking second read must refuse rather than silently trusting whichever read is more convenient.
       installed: { kind: "verified", version: "1.2.3" },
       staged: { kind: "verified", version: "1.2.3" },
       running: { kind: "absent" },
@@ -1319,10 +1214,8 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
 
     const outcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        // `action: "start"` can never resume - only terminalize/supersede
-        // (`actionMayResume` never authorizes "start"). Reaching
-        // `resume-new-generation` needs an identity-bound resume-class
-        // request, matching the seeded record's identity.
+        // `action: "start"` can never resume - only terminalize/supersede (`actionMayResume` never authorizes "start").
+        // Reaching `resume-new-generation` needs an identity-bound resume-class request, matching the seeded record's identity.
         request: {
           targetVersion: "1.2.3",
           trigger: "manual",
@@ -1438,9 +1331,7 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
       ),
     ).rejects.toThrow("injected after-recovery-evidence-before-write fault");
 
-    // Only the initial (advisory) read ran - the fault fired before the
-    // final re-read under the write lock, so the flap-comparison read and
-    // the recovery write itself never happened.
+    // Only the initial (advisory) read ran - the fault fired before the final re-read under the write lock, so the flap-comparison read and the recovery write itself never happened.
     expect(readCalls).toBe(1);
     expect(acknowledgeCalls).toBe(0);
     expect(executeCalls).toBe(0);
@@ -1506,11 +1397,7 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
     expect(afterFault.value.phase).toBe("complete");
     expect(afterFault.value.execution).toBe("terminal");
 
-    // A retry against the now-terminal record must not repeat the recovery
-    // arm: `decideAttemptClaim` only enters `requires-recovery` for an
-    // active, unheld record, so a second segment over the same home takes
-    // the ordinary create path for a NEW attempt identity and never writes a
-    // second terminal transition onto attempt-1.
+    // A retry against the now-terminal record must not repeat the recovery arm: `decideAttemptClaim` only enters `requires-recovery` for an active, unheld record, so a second segment over the same home takes the ordinary create path for a NEW attempt identity and never writes a second terminal transition onto attempt-1.
     let retryAcknowledgeCalls = 0;
     let retryExecuteCalls = 0;
     const retryOutcome = await runAttemptExecutorSegment(
@@ -1569,14 +1456,7 @@ function contenderOptionsFor(
 }
 
 describe("execute()'s complete() closure - fault points around the terminal write, driven through the real live observation path", () => {
-  /**
-   * Advances the just-claimed attempt through to `verifying` under the SAME
-   * capability `execute()` was handed - the real sequence of record
-   * mutations a genuine executor performs before it ever calls `complete()`.
-   * There is no standalone "jump straight to verifying" writer to call
-   * instead: reaching `complete()` at all requires going through
-   * `runLocalAttemptExecutorSegment`'s claim + `execute()` callback.
-   */
+  /** Advances the just-claimed attempt through to `verifying` under the SAME capability `execute()` was handed - the real sequence of record mutations a genuine executor performs before it ever calls `complete()`. There is no standalone "jump straight to verifying" writer to call instead: reaching `complete()` at all requires going through `runLocalAttemptExecutorSegment`'s claim + `execute()` callback. */
   async function advanceToVerifying(
     capability: UpdateMutationCapability,
     claim: Extract<ExecutorClaimOutcome, { kind: "claimed" }>,
@@ -1635,16 +1515,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     );
   }
 
-  /**
-   * The private terminal writer behind `completeLocalAttemptExecutorSegment`
-   * takes no testimonial evidence object - it calls the REAL
-   * `observeAttemptRecoveryEvidence` itself. To reach the write at all, this
-   * sets up a genuine installed-executable fixture and a genuine healthy
-   * pid/RPC snapshot at the exact target version, through the same
-   * sandboxed `store/paths` + process-identity + host-rpc module-boundary
-   * mocks `update-recovery-evidence.test.ts` uses - not a hand-built proof
-   * object passed into the function under test.
-   */
+  /** The private terminal writer behind `completeLocalAttemptExecutorSegment` takes no testimonial evidence object - it calls the REAL `observeAttemptRecoveryEvidence` itself. To reach the write at all, this sets up a genuine installed-executable fixture and a genuine healthy pid/RPC snapshot at the exact target version, through the same sandboxed `store/paths` + process-identity + host-rpc module-boundary mocks `update-recovery-evidence.test.ts` uses - not a hand-built proof object passed into the function under test. */
   async function seedGenuineVerifiedProofAt(
     hostHomeDir: string,
     version: string,
@@ -1663,10 +1534,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       installedAt: "2026-01-01T00:00:00.000Z",
       source: { kind: "registry", value: version },
       archiveSha256: "a".repeat(64),
-      // Ties this genuine fixture's install record to the exact bytes
-      // written above, mirroring the real materialization attestation
-      // `observeAttemptRecoveryEvidence` now requires before it will call
-      // the installed leg `verified`.
+      // Ties this genuine fixture's install record to the exact bytes written above, mirroring the real materialization attestation `observeAttemptRecoveryEvidence` now requires before it will call the installed leg `verified`.
       executableSha256: createHash("sha256")
         .update("binary-bytes")
         .digest("hex"),
@@ -1745,9 +1613,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       },
     );
 
-    // The four legal advances (preparing/applying/restarting/verifying) each
-    // bump sequence once past the claim's sequence 1 - proving this test
-    // actually exercises drift, not an accidental no-op.
+    // The four legal advances (preparing/applying/restarting/verifying) each bump sequence once past the claim's sequence 1 - proving this test actually exercises drift, not an accidental no-op.
     expect(claimed.identity).not.toBeNull();
     expect(claimed.identity?.sequence).toBe(1);
     expect(verifyingBeforeComplete.sequence).toBe(5);
@@ -1757,9 +1623,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     expect(outcome.result.kind).toBe("committed");
     if (outcome.result.kind === "committed") {
       expect(outcome.result.record.phase).toBe("complete");
-      // Same generation as the claim, but a newer sequence than both the
-      // claim AND the pre-complete verifying read - the terminal write is
-      // its own additional commit on top of the drifted identity.
+      // Same generation as the claim, but a newer sequence than both the claim AND the pre-complete verifying read - the terminal write is its own additional commit on top of the drifted identity.
       expect(outcome.result.identity.generation).toBe(
         claimed.identity?.generation,
       );
@@ -1787,11 +1651,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
           hostHomeDir,
           "complete-wrong-generation",
         );
-        // Simulate a different generation having been recorded out from
-        // under this held capability (e.g. a concurrent recovery/supersede)
-        // between the last advance and complete() - written directly to
-        // disk since driving a genuine competing generation from inside the
-        // same held capability/lock isn't reachable in-process.
+        // Simulate a different generation having been recorded out from under this held capability (e.g. a concurrent recovery/supersede) between the last advance and complete() - written directly to disk since driving a genuine competing generation from inside the same held capability/lock isn't reachable in-process.
         const recordPath = updateAttemptRecordPath(hostHomeDir);
         const onDisk = JSON.parse(readFileSync(recordPath, "utf8")) as {
           readonly generation: number;
@@ -1883,10 +1743,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     const onDisk = await readUpdateAttemptRecord(hostHomeDir);
     expect(onDisk.kind).toBe("valid");
     if (onDisk.kind === "valid") {
-      // The fault fires strictly after the exact-version evidence was
-      // observed and validated, but strictly before the proof is ever
-      // sealed - a crash here must leave the record exactly as it was, not
-      // a half-sealed or half-committed completion.
+      // The fault fires strictly after the exact-version evidence was observed and validated, but strictly before the proof is ever sealed - a crash here must leave the record exactly as it was, not a half-sealed or half-committed completion.
       expect(onDisk.value.phase).toBe("verifying");
       expect(onDisk.value.execution).toBe("active");
     }
@@ -1918,10 +1775,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     }
   });
 
-  // Named separately from `CompleteExecutorSegment` (the real, zero-argument
-  // production type) so the test below can express "a caller that ignores
-  // the real signature and passes an evidence-shaped argument anyway"
-  // without a cast.
+  // Named separately from `CompleteExecutorSegment` (the real, zero-argument production type) so the test below can express "a caller that ignores the real signature and passes an evidence-shaped argument anyway" without a cast.
   type CompleteWithIgnoredEvidence = (evidence: {
     readonly expected: HostUpdateAttemptIdentity;
     readonly targetVersion: string;
@@ -1932,10 +1786,8 @@ describe("execute()'s complete() closure - fault points around the terminal writ
 
   it("passing extra caller-supplied arguments to complete() has no effect - it is a zero-argument closure, so a matching literal cannot be smuggled in even under a type-erasing cast", async () => {
     const hostHomeDir = await freshHome();
-    // Deliberately NOT seeding a genuine installed/running fixture - if
-    // caller testimony could reach the write, this literal would make it
-    // succeed. Since it cannot, the real (absent) live observation must
-    // reject it instead.
+    // Deliberately NOT seeding a genuine installed/running fixture - if caller testimony could reach the write, this literal would make it succeed.
+    // Since it cannot, the real (absent) live observation must reject it instead.
     mockCohortEligible("linux");
 
     const outcome = await runLocalAttemptExecutorSegment(
@@ -1955,11 +1807,8 @@ describe("execute()'s complete() closure - fault points around the terminal writ
           runningOwner: "host-home-bound" as const,
           nowIso: "2026-01-01T00:06:00.000Z",
         };
-        // A niladic function is a valid substitute wherever a one-argument
-        // function is expected - TS accepts the assignment directly, no cast
-        // needed. This models a caller that ignores `complete`'s real
-        // (zero-argument) type and smuggles an evidence-shaped argument in
-        // anyway; the closure itself still ignores it at runtime.
+        // A niladic function is a valid substitute wherever a one-argument function is expected - TS accepts the assignment directly, no cast needed.
+        // This models a caller that ignores `complete`'s real (zero-argument) type and smuggles an evidence-shaped argument in anyway; the closure itself still ignores it at runtime.
         const completeIgnoringArgument: CompleteWithIgnoredEvidence = complete;
         return completeIgnoringArgument(fakeEvidence);
       },
@@ -1989,9 +1838,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
           hostHomeDir,
           "complete-detached-child",
         );
-        // Not awaited: schedules a macrotask from inside the still-live
-        // callback, then returns immediately - the same shape as the prior
-        // AsyncLocalStorage escape, but through an ordinary closure now.
+        // Not awaited: schedules a macrotask from inside the still-live callback, then returns immediately - the same shape as the prior AsyncLocalStorage escape, but through an ordinary closure now.
         detached.promise = new Promise((resolve) => {
           setImmediate(() => {
             resolve(complete().catch((err: unknown) => err));
@@ -2049,40 +1896,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
   });
 });
 
-// ---- Shadow-fence provenance walker -------------------------------------
-//
-// Baseline attribution: the T3 author, whose ruling amended this gate. The
-// original assertion demanded ZERO production importers; the author has since
-// clarified that the empty set was "a rollout snapshot, not an invariant
-// stronger than 'only the dedicated host-layer executor owner may import it;
-// no released/legacy command may reach it.'" Ticket 05 introduces exactly one
-// such owner - `host/update-verify.ts`, the post-restart verification claim -
-// so the authorized set is now an exact singleton rather than empty.
-//
-// Three invariants, deliberately three separate loud failures:
-//
-//   1. `host/update-verify.ts` is the ONLY module that may import the executor
-//      directly. Against every other module this is exactly as strong as the
-//      empty set was.
-//   2. No command surface may REACH it, even transitively, except the thin
-//      dispatch caller `commands/host-update-verify.ts`. In particular the
-//      released `commands/host-update.ts` must have no path - that is the case
-//      this fence exists to stop.
-//   3. Rollout eligibility is NOT this gate's business. It belongs exclusively
-//      to `decideUpdateExecutorCohort` and Ticket 07's cutover. An authorized
-//      importer is reachable-but-INERT until then, because
-//      `runLocalAttemptExecutorSegment` refuses with `cohort-disabled` before
-//      performing any work. Do not re-encode rollout policy here.
-//
-// Mechanics are the shared architecture gate's, reused rather than reinvented:
-// a stat-based walker that deliberately follows repo-committed symlinks, and
-// specifier matching folded over static imports, `export *` / named
-// re-exports, `import("...")` type nodes, `require(...)` and DYNAMIC `import()`
-// calls. Specifiers are RESOLVED to real paths rather than substring-matched,
-// so `update-executor-cohort.ts` no longer needs an exclusion to avoid being a
-// false positive. A dynamic specifier that is not a plain literal cannot be
-// proven safe, so it is itself a violation (#3 below) - that is what closes
-// the split-string/template bypass rather than merely documenting it.
+// Shadow-fence provenance walker: a new attempt must not abandon an adopted continuation.
 
 const CLI_SRC_ROOT = join(__dirname, "..", "..");
 const FENCE_SOURCE_EXTENSIONS = new Set([".ts", ".js", ".cjs", ".mjs"]);
@@ -2114,9 +1928,8 @@ async function fenceSourceFiles(
     entries.map(async (entry) => {
       if (entry.name === "node_modules") return [];
       const path = join(root, entry.name);
-      // Follow symlinks deliberately: a repo-committed symlinked source file
-      // stays in coverage. Broken links and special files are skipped, and
-      // realpath-based ancestry prevents symlink cycles.
+      // Follow symlinks deliberately: a repo-committed symlinked source file stays in coverage.
+      // Broken links and special files are skipped, and realpath-based ancestry prevents symlink cycles.
       const info = await stat(path).catch(() => null);
       if (info === null) return [];
       if (info.isDirectory()) return fenceSourceFiles(path, ancestry);
@@ -2194,21 +2007,7 @@ function resolveLocalSpecifier(
   return null;
 }
 
-/**
- * Every absolute path a module specifier could actually name.
- *
- * The `.js` remap is not a nicety - it closes a live bypass. TypeScript's own
- * guidance is to write `import "./update-executor.js"` for an
- * `update-executor.ts` source, and Bun resolves that happily. This resolver
- * previously tried only the literal path, `+ ".ts"`, and `/index.ts`, so a
- * `.js` specifier produced `update-executor.js.ts` - a file that does not
- * exist - and the edge was silently dropped. The protected module executed
- * while this fence stayed green. Appending four characters was enough to walk
- * past it.
- *
- * Fail-closed: this over-generates candidates on purpose. A false positive is
- * a loud test failure; a false negative is an executable route past the gate.
- */
+/** Every absolute path a module specifier could actually name. The `.js` remap is not a nicety - it closes a live bypass. */
 function specifierCandidatePaths(base: string): readonly string[] {
   const candidates: string[] = [base];
   const remaps: ReadonlyArray<readonly [string, readonly string[]]> = [
@@ -2238,15 +2037,7 @@ async function executorProvenance(): Promise<ExecutorProvenance> {
     (file) => !file.split(sep).includes("__tests__"),
   );
   // ---- CANONICALIZE before comparing anything.
-  //
-  // The walker deliberately FOLLOWS symlinks but recorded LEXICAL paths, and
-  // every comparison below - resolver and reverse-reachability alike - matched
-  // those lexical strings against a lexical `EXECUTOR_MODULE`. So a committed
-  // alias (`host/executor-alias.ts -> update-executor.ts`) imported as
-  // `../host/executor-alias.js` executed the protected module while the fence
-  // recorded a different module and stayed green. Following symlinks without
-  // canonicalizing is strictly worse than not following them: it puts the
-  // alias in coverage and then fails to recognize it.
+  // The walker deliberately FOLLOWS symlinks but recorded LEXICAL paths, and every comparison below - resolver and reverse-reachability alike - matched those lexical strings against a lexical `EXECUTOR_MODULE`.
   const canonical = new Map<string, string>();
   for (const file of production) {
     canonical.set(file, await realpath(file).catch(() => file));
@@ -2332,12 +2123,7 @@ describe("update-executor.ts - shadow fence source boundary (structural)", () =>
   });
 
   // F9: the specifier-extension bypass, pinned per written form.
-  //
-  // TypeScript's own guidance is to write `./x.js` for an `x.ts` source, and
-  // Bun resolves it. The old resolver tried only the literal path, `+ ".ts"`
-  // and `/index.ts`, so `./update-executor.js` became
-  // `update-executor.js.ts` - nonexistent - and the dependency edge was
-  // dropped while the protected module still executed.
+  // TypeScript's own guidance is to write `./x.js` for an `x.ts` source, and Bun resolves it.
   it.each([
     ["./update-executor.js", "update-executor.ts"],
     ["./update-executor.jsx", "update-executor.tsx"],

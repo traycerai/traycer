@@ -33,11 +33,8 @@ export function RootComponent() {
   const isOnboardingRoute = useRouterState({
     select: (state) => state.location.pathname === "/onboarding",
   });
-  // The ONE routing-aware computation the window narrator consumes, so the
-  // modal itself stays router-free (and mountable in host-lifecycle trees that
-  // have no router). Same prefix the readiness gate bypasses on: `/settings`
-  // works without a running host, and the narrator's own "Open settings"
-  // action is what sends people there.
+  // Router-free narrator: /settings works without a host. Compute the prefix
+  // here so the modal can mount in host-lifecycle trees with no router.
   const isHostIndependentRoute = useRouterState({
     select: (state) =>
       state.location.pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
@@ -51,56 +48,21 @@ export function RootComponent() {
 
   return (
     <>
-      {/* Host-independent chrome: these are the ONLY surfaces pulled outside
-          HostReadyGate so they keep working while the page is gated on host
-          readiness (the "Setting up Traycer Host…" screen). The menu command
-          listener routes native menu items; the dialog host renders
-          host-independent About/Logs dialogs; notification emission drains
-          app-local persisted rows; the wake-retry bridge revives
-          terminally-closed warm chat sessions (it must live OUTSIDE the gate:
-          a wake pulse arriving while the gate shows its fallback would
-          otherwise find no listener and never be replayed, leaving the warm
-          session dead after the host comes back). Always-mounted shell
-          bridges like these remain available while any individual surface
-          projects its own readiness fallback. All only depend on the
-          runner host + auth + local stores/registries, which are available
-          without a ready host. */}
+      {/* Host-independent chrome outside HostReadyGate: menu, dialogs, notification emission, wake-retry. Wake-retry must live here or a pulse during fallback is never replayed. */}
       <MenuCommandListener />
       <HostTrayCommandListener />
       <DesktopDialogHost />
       <NotificationEmissionController />
-      {/* This is the permanent route -> layout authority. It must observe
-          commits while HostReadyGate swaps its children; only materialization
-          is hydration-gated inside the controller.
-
-          It does NOT exist during the first boot surface (`HostRuntimeProvider`
-          renders its fallback above `RouterProvider`), so it cannot observe a
-          navigation made there - the boot card's `Open settings` escape hatch
-          is exactly that. That navigation survives anyway because it DECLARES
-          itself in history state and this bridge reads the marker off the
-          CURRENT location at hydration; see `startup-navigation-intent.ts`.
-          Mounting this earlier is not the fix and was measured to cost more
-          than it buys: from up there it also sees the transient `/` that a cold
-          launch redirects ITSELF to (`requireSignedIn` fires while stored
-          tokens are still validating), which is not user intent. */}
+      {/* Permanent route-to-layout authority. Boot-card navigations survive via history-state markers; mounting this earlier would also see a transient `/`. */}
       {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
-      {/* The window narrator (D10). It MUST be outside HostReadyGate: the gate
-          replaces its children during cold start, so a modal mounted inside it
-          could never narrate the cold start it exists for. Signed-in only -
-          which is also what resets its "this window has been served" latch,
-          since signing out unmounts it. */}
+      {/* Narrator outside HostReadyGate: the gate replaces children during cold
+          start. Signed-in only; sign-out unmounts and resets the served latch. */}
       {authStatus === "signed-in" ? (
         <WindowHostModalHost bypassed={isHostIndependentRoute} />
       ) : null}
       <ChatSessionWakeRetryController />
-      {/* Everything host-dependent stays BEHIND the gate, preserving the exact
-          mount timing it had when the gate wrapped the whole RouterProvider -
-          these bridges + the page only mount once the host is reachable (or the
-          route is a /settings bypass). One controller (`HostScopeReady`) now
-          owns readiness subscriptions for the bridges below: the shell and
-          top-level host are always mounted, and host-dependent bridges opt
-          into their declared default-host scope rather than each creating its
-          own route gate. */}
+      {/* Host-dependent bridges mount only once the host is reachable (or /settings).
+          HostScopeReady owns readiness; the shell stays mounted. */}
       <HostReadyGate>
         <HostScopeReady scope="default-host">
           <PreventSleepController />
@@ -133,24 +95,14 @@ function RootSurface(props: {
   if (!props.isStandalone) {
     return (
       <AppShell>
-        {/*
-         * Mounted HERE and not inside AppShell or RootDndProvider, on purpose.
-         * It owns the tear-off flow, which reaches `useRouterState` and so
-         * throws without a router. This is a route component - it renders under
-         * `<Outlet />` and cannot exist outside `RouterProvider` - which makes
-         * the router requirement structural rather than a runtime check.
-         * Rendered by the provider instead, it would mount wherever the
-         * provider mounts, which is the provider-light case the move fixes.
-         */}
+        {/* Tear-off uses useRouterState; this route sits under RouterProvider. */}
         <TabDetachOwner />
         <Outlet />
       </AppShell>
     );
   }
-  // Sign-in and the onboarding tour render without AppShell, so they lose the
-  // frameless Windows title bar the app header provides. Give them the same
-  // full-width band - menu strip, drag region, native window controls in one
-  // strip - instead of floating a chip over the artwork.
+  // Sign-in and onboarding have no AppShell. Give them the same full-width
+  // Windows title-bar band.
   return (
     <StandaloneShell>
       {props.showOnboarding ? <OnboardingPage replay={false} /> : <Outlet />}
@@ -162,22 +114,7 @@ function RootSurface(props: {
 // `app-header.tsx`). The band itself drags; the menu strip inside opts out.
 const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
 
-// Owns the viewport for standalone surfaces, which size themselves with
-// h-full/min-h-full: on the Windows desktop shell a title-bar band takes the
-// top and the content gets the rest; elsewhere the band collapses and the
-// content keeps the full height.
-//
-// `fixed inset-0` is the app's ONE sanctioned full-bleed surface, and the only
-// thing that opts out of `#root`'s safe-area reservation. Sign-in and the tour
-// are edge-to-edge artwork, and artwork stopping below the status bar reads as
-// a mismatched band rather than as respect for the bar. Taking the viewport
-// directly is what reaches it: `fixed` resolves against the viewport and not
-// against `#root`'s padding box, so there is no reservation to cancel and no
-// second copy of the inset to keep in sync.
-//
-// The exception is the BACKGROUND only. Content on these surfaces still starts
-// below the bar, applied by each surface to its own content layer - artwork and
-// content are siblings there, so the shell cannot inset one without the other.
+// `fixed inset-0` is the one sanctioned full-bleed surface; it opts out of `#root`'s safe-area reservation. Content still starts below the bar.
 function StandaloneShell(props: { readonly children: ReactNode }) {
   const menuBarActive = useWindowsMenuBarActive();
   return (

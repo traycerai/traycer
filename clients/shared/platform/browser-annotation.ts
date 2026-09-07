@@ -85,12 +85,6 @@ export type BrowserAnnotationStartResult =
       readonly reason: BrowserAnnotationStartFailureReason;
     };
 
-/**
- * `attachRequested` is deliberately absent: it carries marks captured by the
- * CDP-injected guest overlay and never crosses into this forwarded IPC event
- * (`desktop`'s `BrowserAnnotationSessionEvent` adds it back for the
- * desktop-main-only path).
- */
 export type BrowserAnnotationForwardedSessionEvent =
   | {
       readonly type: "stateChanged";

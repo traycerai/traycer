@@ -33,12 +33,8 @@ function PickerStateRow(props: PickerStateRowProps) {
   const { label, icon, action } = props;
   return (
     <div className="flex items-center justify-between gap-2 rounded-lg p-2 text-ui-sm text-muted-foreground">
-      {/* The action (when present) must stay OUTSIDE the option element: an
-          `option` role's descendants are flattened/treated as disabled by
-          assistive tech, which would make a nested Report issue button
-          unreachable. Keeping the row's flex layout on the outer div and the
-          option semantics on this inner span preserves the visual row while
-          leaving the action independently focusable/announced. */}
+      {/* The action (when present) must stay outside the option element: an `option` role's descendants are
+         flattened/treated as disabled by assistive tech, which would make a nested Report issue button unreachable. */}
       <span
         role="option"
         aria-selected="false"
@@ -64,9 +60,7 @@ interface ModelRowsStateProps {
   readonly activeProviderState: ProviderCliState | null;
   readonly rowsCount: number;
   readonly onOpenProviderSettings: () => void;
-  /** Where a provider's setup terminal lands - see the type's doc. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
-  /** The picker's run-target host, which that terminal is minted on. */
   readonly runTargetHostId: string | null;
   /** Closes the picker without opening anything else. */
   readonly onClosePicker: () => void;
@@ -128,9 +122,8 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
     );
   }
 
-  // A provider that can't list models (unavailable / missing API key / load
-  // error) surfaces its own state or CTA even while a query is present - the
-  // query is moot if the provider has nothing to search.
+  // A provider that can't list models (unavailable / missing API key / load error) surfaces its own state or cta
+  // even while a query is present - the query is moot if the provider has nothing to search.
   if (activeProvider?.available === false) {
     return unavailableProviderState(activeProvider, onOpenProviderSettings);
   }
@@ -146,11 +139,8 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   if (activeProvider !== null && activeProvider.modelsError !== null) {
-    // A signed-out verdict for a provider whose sign-in runs in a terminal
-    // gets the action that fixes it, in the space the model rows would occupy
-    // - the host's "signed out, reconnect" sentence is true but names no
-    // action, and the report-issue icon beside it invites a bug report for a
-    // missing key.
+    // A signed-out verdict for a provider whose sign-in runs in a terminal gets the action that fixes it, in the
+    // space the model rows would occupy.
     const setup = providerSetupCta(activeProvider, activeProviderState);
     if (setup !== null) {
       return (
@@ -164,9 +154,8 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
         />
       );
     }
-    // Surface the host's specific reason for API-key providers and packaged SDK
-    // failures instead of a generic catch-all. Fall back when the message is
-    // empty.
+    // Surface the host's specific reason for API-key providers and packaged SDK failures instead of a generic
+    // catch-all.
     const reason = activeProvider.modelsError.message.trim();
     return (
       <PickerStateRow
@@ -201,9 +190,7 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   return null;
 }
 
-// Scope-aware empty copy. A query that matches nothing names the harness it
-// searched ("No Claude models match"); an empty harness with no query keeps the
-// generic "No models available".
+// Scope-aware empty copy.
 function noModelsLabel(
   hasQuery: boolean,
   activeProvider: GuiHarnessCatalogEntry | null,
@@ -213,9 +200,8 @@ function noModelsLabel(
   return `No ${activeProvider.label} models match`;
 }
 
-// The state row shown when the active provider is unavailable. API-key
-// providers stay visible in the picker so they can surface a CTA that walks the
-// user to Settings → Providers instead of a dead-end "unavailable" row.
+// API-key providers stay visible in the picker so they can surface a cta that walks the user to Settings →
+// Providers instead of a dead-end "unavailable" row.
 function unavailableProviderState(
   provider: GuiHarnessCatalogEntry,
   onOpenProviderSettings: () => void,
@@ -238,12 +224,8 @@ function unavailableProviderState(
   );
 }
 
-// The setup guidance to show in place of the model list, when the list failed
-// with the host's signed-out verdict AND the host says this provider signs in
-// from a terminal (Copilot's device code; Reasonix's credential wizard). Any
-// other failure keeps the host's own reason below. The `providers.list` row
-// may lag the catalog error by a fetch; until it lands this is `null` and the
-// generic reason row shows, then re-resolves.
+// The setup guidance to show in place of the model list, when the list failed with the host's signed-out
+// verdict and the host says this provider signs in from a terminal (Copilot's device code.
 function providerSetupCta(
   provider: GuiHarnessCatalogEntry,
   state: ProviderCliState | null,
@@ -260,14 +242,8 @@ function providerSetupCta(
     : null;
 }
 
-// Shown in place of the model list when a provider that signs in from a
-// terminal is signed out. Same shape as the API-key CTA below, but the action
-// is the provider's terminal flow: Traycer cannot complete it itself. The
-// button asks the host to open that flow in a terminal on the surface this
-// picker is drawn on (an epic's canvas, or the landing terminal panel); on a
-// surface with neither (a fork dialog) the steps say where the button lives.
-// No Settings button, deliberately - Settings has no terminal sign-in for
-// such a provider, so it would be a dead end.
+// Same shape as the API-key cta below, but the action is the provider's terminal flow: Traycer cannot complete
+// it itself.
 function ProviderSetupCta(props: {
   readonly providerId: ProviderId;
   readonly label: string;
@@ -332,9 +308,7 @@ function ProviderSetupCta(props: {
   );
 }
 
-// Shown in place of the model list when an API-key provider has no key
-// configured. A friendly prompt + a one-click path to Settings → Providers where
-// the key is entered.
+// Shown in place of the model list when an API-key provider has no key configured.
 function ProviderApiKeyCta(props: {
   readonly harnessId: GuiHarnessCatalogEntry["id"];
   readonly label: string;

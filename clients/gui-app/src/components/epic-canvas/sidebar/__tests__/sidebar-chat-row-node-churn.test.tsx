@@ -1,57 +1,3 @@
-/**
- * A chat row must not re-render because a DIFFERENT chat's record moved.
- *
- * ## Why the chat panel needs its own pin
- *
- * `sidebar-panel-path-memo-churn.test.tsx` pins the equivalent for the ARTIFACT
- * panel and is green. The chat panel is a second component with a second copy of
- * the row, and against the same stimulus it re-rendered 40 of 40 rows with that
- * fix in place. The class is not a code shape that could be grepped for - it is
- * an ARM behaviour: on every full projection `projectTreeSlice` stamps each
- * node's `updatedAt` from its record, so anything a row subscribes to that
- * carries or is derived from records re-mints on activity the row does not
- * display. Every panel over this tree is exposed, so every panel needs a pin.
- *
- * Three separate subscriptions carried it here, none of them the row's tree-node
- * read and none reachable through props:
- *
- *   1. `useEpicTreeNode` - the whole `TreeNode`, `updatedAt` included. Narrowed
- *      to `{type, title}` (`useChatRowNode`).
- *   2. `useEpicArtifactRecords()` for the cascade-delete counts - the whole
- *      record list, re-minted by any record change. Now a `useShallow` selector
- *      over the tree walk, subscribed to the counts themselves.
- *   3. `useChatWriteRoute` -> `useChatsById()` - the whole `chats.byId` map,
- *      two modules away from the row that paid for it, and the one that
- *      dominated: with (1) and (2) fixed the count was still 40 of 40. Its
- *      verdict is derived inside `getSnapshot` now.
- *
- * `memo` stops none of these. It blocks a re-render pushed down by a parent, and
- * these are the row's OWN subscriptions - measured: across the stimulus the memo
- * comparator ran 80 times and found every prop equal every time, while all forty
- * rows re-rendered anyway.
- *
- * ## Which door this comes in by
- *
- * The STRUCTURAL door, and it has to. `CHAT_TREE_KEYS` is
- * `{parentId, title, createdAt}` - no `updatedAt` - so on the doc arm's
- * incremental path a bare timestamp write never sets `structuralTreeDirty`, the
- * tree is never rebuilt, and the node keeps a lagging value. A pin built on that
- * write would read zero renders with OR without the fixes. `bumpTimestamps`
- * below replaces each entry instead, which re-sets the structural keys and
- * forces the rebuild that carries the new timestamps in.
- *
- * The lane arm reaches the same state by a different route (a full projection
- * per update, no structural gate at all). This suite does not exercise that
- * route and does not claim to.
- *
- * ## What must still re-render
- *
- * A chat row DISPLAYS last-activity time, which an artifact row does not - so
- * unlike its twin this file cannot assert a flat zero. The twelve stamped rows
- * must re-render, and the second case requires it; the third requires a title
- * change to still reach the row. A fix that simply stopped subscribing passes
- * the first case and fails both of those.
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render } from "@testing-library/react";
@@ -70,15 +16,8 @@ import {
 const rowRenders = vi.hoisted(() => new Map<string, number>());
 
 /**
- * The faked boundary, and only it: this suite stands up no host, so the two
- * host-RPC seams the chat panel reaches through answer "no host".
- *
- * `useHostClientForHostId` returns `HostClient | null` in production and both
- * consumers here - the panel's indicator layer and a row's worktree tooltip -
- * already handle `null`, so `null` is a value the tree is built for rather than
- * a shape invented for the test. It also cannot generate traffic: a null client
- * disables the queries beneath it, so no fetch, retry or settle can add a render
- * this suite would then count as churn.
+ * The faked boundary, and only it: this suite stands up no host, so the two host-RPC seams the chat panel reaches through answer "no host".
+ * `useHostClientForHostId` returns `HostClient | null` in production and both consumers here - the panel's indicator layer and a row's worktree tooltip - already handle `null`, so `null` is a value the tree is built for rather than a shape invented for the test.
  */
 vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
   const actual =
@@ -89,20 +28,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
 });
 
 /**
- * A row's worktree tooltip reads owner PR associations, and that hook reaches
- * THREE provider-backed seams (`useHostDirectoryEntryForHostId`,
- * `useStreamAuthRevalidator`, `useStreamMethodSupportFor`) - each of which
- * throws outside a `<HostRuntimeProvider>`, which this suite deliberately does
- * not stand up. Stubbed at the hook rather than seam by seam, which is both
- * where its own suite stubs it (`worktree-owner-metadata-error-plumbing`) and
- * the only boundary that does not move again when it grows a fourth read.
- *
- * HOISTED and frozen for the same reason as the indicator query below: a result
- * object minted per render would be a fresh prop on every row and
- * indistinguishable from the churn this suite counts. The empty membership is
- * the honest answer for a suite with no host - `ownerPrReferences` over an
- * empty list returns exactly this - so no row renders a PR affordance it would
- * not render in production against the same absence.
+ * Stubbed at the hook rather than seam by seam, which is both where its own suite stubs it (`worktree-owner-metadata-error-plumbing`) and the only boundary that does not move again when it grows a fourth read.
+ * HOISTED and frozen for the same reason as the indicator query below: a result object minted per render would be a fresh prop on every row and indistinguishable from the churn this suite counts.
  */
 const OWNER_PR_REFERENCES = vi.hoisted(() =>
   Object.freeze({
@@ -116,12 +43,6 @@ vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
   useOwnerListPrReferences: () => OWNER_PR_REFERENCES,
 }));
 
-/**
- * The indicator query beneath it, replaced by a HOISTED constant -
- * identity-stable across renders, because an object minted per render would push
- * a fresh provider value onto every row and be indistinguishable from the churn
- * under test. Everything outside these two seams is real.
- */
 vi.mock(
   "@/hooks/notifications/use-host-notification-indicators-query",
   async (importOriginal) => {
@@ -290,19 +211,8 @@ describe("a chat row's tree-node subscription", () => {
   }
 
   /**
-   * Move twelve rows' `updatedAt` and nothing else a row displays.
-   *
-   * Each entry is REPLACED by an identical one with a new timestamp, which is
-   * what makes the stamp reach the tree at all: `CHAT_TREE_KEYS` is
-   * `{parentId, title, createdAt}`, so a bare `entry.set("updatedAt", …)` never
-   * sets `structuralTreeDirty` and the node would keep its old value - a pin
-   * built on that write would read zero renders whether or not the row is
-   * narrowed. Replacing the entry re-sets the structural keys, the tree is
-   * rebuilt, and `projectTreeSlice` stamps each node from its record. The
-   * assertions below check that actually happened rather than assuming it.
-   *
-   * Same door and same shape as the artifact panel's `updatedAt`-only case in
-   * `sidebar-panel-path-memo-churn.test.tsx`, deliberately.
+   * Each entry is REPLACED by an identical one with a new timestamp, which is what makes the stamp reach the tree at all: `CHAT_TREE_KEYS` is `{parentId, title, createdAt}`, so a bare `entry.set("updatedAt", …)` never sets `structuralTreeDirty` and the node would keep its old value - a pin built on that write would read zero renders whether or not the row is narrowed.
+   * The assertions below check that actually happened rather than assuming it.
    */
   function bumpTimestamps(session: OpenedSession, base: number): void {
     act(() => {
@@ -332,10 +242,7 @@ describe("a chat row's tree-node subscription", () => {
       BUMPED_IDS.map((_unused, index) => 500 + index),
     );
 
-    // THE PIN. Twenty-eight rows had nothing about them change, in the tree or
-    // in the records. Before these fixes all forty re-rendered - the twelve
-    // legitimately, the twenty-eight through three separate whole-slice
-    // subscriptions that no prop and no `memo` could stop.
+    // Before these fixes all forty re-rendered - the twelve legitimately, the twenty-eight through three separate whole-slice subscriptions that no prop and no `memo` could stop.
     const rerendered = ROW_IDS.filter(
       (id) =>
         !BUMPED_IDS.includes(id) &&
@@ -347,19 +254,8 @@ describe("a chat row's tree-node subscription", () => {
   });
 
   it("holds a row still when its OWN node re-mints with nothing it renders changed", () => {
-    // The case that discriminates the tree-node NARROWING specifically, and the
-    // reason it exists as its own case: ablating `useChatRowNode` back to
-    // `useEpicTreeNode` leaves the first case GREEN. Under an `updatedAt` bump
-    // only the twelve stamped nodes re-mint, and those twelve re-render anyway
-    // through the last-activity time - so the whole-node read is masked on the
-    // rows that move and irrelevant on the rows that do not. A pin that cannot
-    // fail for a defect does not cover it.
-    //
-    // `createdAt` is the stimulus that separates them: it is a `CHAT_TREE_KEYS`
-    // member, so it re-mints the node exactly as `updatedAt` does, but nothing
-    // reads it - not the row, not `useEpicNodeUpdatedAt`, and not the recency
-    // comparator, so the order does not move either. A row reading the whole
-    // node re-renders; a row reading `{type, title}` does not.
+    // Under an `updatedAt` bump only the twelve stamped nodes re-mint, and those twelve re-render anyway through the last-activity time - so the whole-node read is masked on the rows that move and irrelevant on the rows that do not.
+    // A pin that cannot fail for a defect does not cover it.
     const session = renderPanel();
     const before = new Map(rowRenders);
     const nodesBefore = BUMPED_IDS.map(
@@ -377,9 +273,8 @@ describe("a chat row's tree-node subscription", () => {
       });
     });
 
-    // Non-vacuity, and it is the whole premise: these nodes must really have
-    // re-minted, while `updatedAt` - the one field the row DOES render off the
-    // records - stayed put. Without this the case could pass by doing nothing.
+    // Non-vacuity, and it is the whole premise: these nodes must really have re-minted, while `updatedAt` - the one field the row DOES render off the records - stayed put.
+    // Without this the case could pass by doing nothing.
     const nodesAfter = BUMPED_IDS.map(
       (id) => session.handle.store.getState().tree.nodeById[id],
     );
@@ -401,12 +296,8 @@ describe("a chat row's tree-node subscription", () => {
   });
 
   it("still re-renders the twelve rows whose displayed TIME moved", () => {
-    // The counterpart, and the reason the case above excludes them rather than
-    // asserting a flat zero as the artifact panel's twin does. An artifact row
-    // shows no timestamp; a chat row shows last activity, off
-    // `useEpicNodeUpdatedAt`. These twelve MUST re-render - a fix that stopped
-    // them would be showing stale times - and a flat zero would have demanded
-    // exactly that regression.
+    // The counterpart, and the reason the case above excludes them rather than asserting a flat zero as the artifact panel's twin does.
+    // These twelve MUST re-render - a fix that stopped them would be showing stale times - and a flat zero would have demanded exactly that regression.
     const session = renderPanel();
     const before = new Map(rowRenders);
 

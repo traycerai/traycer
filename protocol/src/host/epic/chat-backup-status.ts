@@ -1,13 +1,6 @@
 import { z } from "zod";
 
-/**
- * Local publication health for one epic.
- *
- * This is deliberately a host-only read. The host compares its durable chat
- * store with the publication receipt it already owns and the client renders
- * that answer on the same machine. Nothing is reported to the cloud and an
- * older host degrades by omitting the indicator entirely.
- */
+/** Local publication health for one epic. */
 export const chatBackupStatusRequestSchema = z.object({
   epicId: z.string().min(1),
 });

@@ -16,12 +16,7 @@ const TONE_LABEL_CLASS: Record<SegmentPanelProps["tone"], string> = {
   destructive: "text-destructive",
 };
 
-/**
- * Stacked panel inside an expanded segment card. Shows a small label header
- * + body, and surfaces a hover-revealed copy button when `copyValue` is set.
- * Caps the body height with internal scroll so long outputs do not blow up
- * the chat row.
- */
+/** Caps the body height with internal scroll so long outputs do not blow up the chat row. */
 export function SegmentPanel(props: SegmentPanelProps) {
   const { label, copyValue, className, tone, bodyChrome, children } = props;
   return (

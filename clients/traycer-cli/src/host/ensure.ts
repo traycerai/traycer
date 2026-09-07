@@ -13,40 +13,7 @@ import {
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
 
-// `host ensure` - the desktop's post-auth provisioning call, and now the
-// CLI's ONLY convergent install/register/start path. A thin source-resolving
-// wrapper over the shared `provisionHost` core (host/provision.ts).
-//
-// It used to share that core with `maybeAutoBootstrap`, which ran the same
-// pipeline implicitly off `traycer host status`. That was removed (audit
-// finding CLI-001): a status read must not install software. Anything that
-// wants a host to exist asks for it here, or via `host install` /
-// `host service install`.
-//
-// ONE SEMANTIC DIFFERENCE FROM AUTO-BOOTSTRAP IS DELIBERATE, and is the point
-// rather than an oversight. When bytes were already installed but the OS
-// service registration was missing, auto-bootstrap forced `satisfaction:
-// presence` so a registration repair could never replace the installed host.
-// `ensureHost` does NOT: it derives satisfaction from the resolved source, so
-// bytes that differ from this CLI's expected version are reinstalled even
-// when the only visible gap was the registration.
-//
-// That asymmetry tracks implicit vs explicit. Auto-bootstrap ran off a READ,
-// where swapping a user's host bytes as a side effect is indefensible;
-// `ensure` is a convergence verb someone typed, and converging to the
-// expected version is what it promises (Desktop's post-auth call depends on
-// exactly that). Do not "restore" presence-only semantics here to match the
-// deleted module - it would break that contract. A caller that wants
-// registration repaired WITHOUT touching bytes wants `host service install`,
-// which is the narrower tool and still has that behaviour.
-//
-// Source resolution order (offline-capable, self-contained when the host
-// ships beside the CLI):
-//   1. explicit `--from <path>`
-//   2. explicit `--release <semver>`
-//   3. packaged host archive next to the CLI binary
-//   4. build-stamped `config.supportedHostVersion`
-//   5. registry `latest` (dev/manual fallback)
+// Idempotent post-auth provision. Pre-flight runs only when this call will actually start a host.
 
 // Result shape is identical to the shared core; re-exported under the
 // command-facing name.
@@ -67,9 +34,8 @@ export interface EnsureHostOptions {
   // desktop "Force restart"). Threaded into `provisionHost`.
   readonly force: boolean;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
-  // Forwarded to `provisionHost`: runs only once this call has committed to
-  // installing, registering or starting a host, never on the no-op fast
-  // path. `host ensure` hangs its sign-in pre-flight here.
+  // Forwarded to `provisionHost`: runs only once this call has committed to installing, registering or starting a host, never on the no-op fast path.
+  // `host ensure` hangs its sign-in pre-flight here.
   readonly beforeMutate: (() => Promise<void>) | null;
   /** See `ProvisionHostOptions.adoption`. Forwarded verbatim. */
   readonly adoption: UpdateMutationCapabilityAdoption | undefined;
@@ -95,13 +61,8 @@ export async function ensureHost(
     noServiceRegister: opts.noServiceRegister,
     force: opts.force,
   });
-  // Resolve the source up front (a cheap path probe - no network/download)
-  // so we can key idempotency on it. Our own bundled host resolves to a
-  // local-file; it shares this build's `config.version`, so we stamp that as
-  // both the target and the recorded version. A rebuilt host (new stamp,
-  // same channel) then differs from the install record and is reinstalled,
-  // while an unchanged build is a no-op. An explicit `--release <semver>`
-  // resolves to a registry source and keeps the real semver as its target.
+  // Resolve the source up front (a cheap path probe - no network/download) so we can key idempotency on it.
+  // Our own bundled host resolves to a local-file; it shares this build's `config.version`, so we stamp that as both the target and the recorded version.
   const source = await resolveEnsureSource(opts);
   opts.runtime.logger.debug("Host ensure source resolved", {
     environment: opts.runtime.environment,

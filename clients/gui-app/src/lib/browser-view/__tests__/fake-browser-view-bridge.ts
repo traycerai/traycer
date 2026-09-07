@@ -28,19 +28,13 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 
 /**
- * Shared test double for `BrowserViewBridge`. It lives outside any one suite
- * because several need it now, and duplicating ~40 stubbed members is how two
- * copies drift into disagreeing about the same bridge. Not named `*.test.ts`,
- * so the runner does not collect it.
+ * Shared test double for `BrowserViewBridge`.
+ * It lives outside any one suite because several need it now, and duplicating ~40 stubbed members is how two copies drift into disagreeing about the same bridge.
  */
 export class FakeBrowserViewBridge implements BrowserViewBridge {
   private saveLoginsValue: boolean;
   /**
-   * A FACTORY, not a promise: a rejected promise handed in at arrange time is
-   * already rejected while the test renders and waits, which surfaces as an
-   * unhandled rejection well before the code under test ever attaches a
-   * handler. Built inside `setSaveLogins`, it is rejected only once someone is
-   * there to catch it.
+   * A FACTORY, not a promise: a rejected promise handed in at arrange time is already rejected while the test renders and waits, which surfaces as an unhandled rejection well before the code under test ever attaches a handler.
    */
   private nextSetSaveLoginsResult: (() => Promise<boolean>) | null = null;
 
@@ -135,11 +129,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     const forced = this.nextSetSaveLoginsResult;
     if (forced !== null) {
       this.nextSetSaveLoginsResult = null;
-      // A forced RESOLUTION is a settled write like any other, so the fake's
-      // own state has to follow it - otherwise a later `getSaveLogins()`
-      // answers with a value this bridge never settled on, and a remount or
-      // refetch reads a state that never existed. A rejection settles nothing
-      // and is left alone.
+      // A forced RESOLUTION is a settled write like any other, so the fake's own state has to follow it - otherwise a later `getSaveLogins()` answers with a value this bridge never settled on, and a remount or refetch reads a state that never existed.
       return forced().then((settled) => {
         this.saveLoginsValue = settled;
         return settled;
@@ -149,9 +139,10 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve(enabled);
   }
 
-  /** Forces the NEXT `setSaveLogins` call to settle with what this returns
-   * instead - a rejection, or a resolution that disagrees with what was
-   * requested. Called at that moment, not now. */
+  /**
+   * Forces the NEXT `setSaveLogins` call to settle with what this returns instead - a rejection, or a resolution that disagrees with what was requested.
+   * Called at that moment, not now.
+   */
   setNextSetSaveLoginsResult(result: () => Promise<boolean>): void {
     this.nextSetSaveLoginsResult = result;
   }

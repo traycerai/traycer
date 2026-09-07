@@ -19,19 +19,6 @@ import {
   type EncodeMuxFrameInput,
 } from "../mux";
 
-/**
- * The Noise-ciphertext size budget: a mux frame encoded at exactly
- * {@link MAX_MUX_FRAME_PLAINTEXT_BYTES} must, once sealed through a real
- * `NoiseSession.encrypt` AND wrapped in the host uplink's
- * `[sid:u32][ciphertext]` demux framing, fit inside the relay's cap
- * (`workers/relay-do`'s `MAX_FRAME_BYTES`, mirrored here as
- * {@link MAX_MUX_FRAME_BYTES}) — the relay measures the WHOLE WebSocket
- * message before stripping the prefix, and a larger frame closes the whole
- * session. `assertMuxFrameFits`/`encodeMuxFrame` are the sender-side
- * enforcement of that plaintext budget; this suite pins that the budget is
- * actually sized correctly against Noise overhead + the host-leg prefix, and
- * that one byte over is rejected before any Noise involvement at all.
- */
 
 const EMPTY_ASSOCIATED_DATA = new Uint8Array(0);
 const enc = new TextEncoder();
@@ -91,10 +78,7 @@ function frameAtExactSize(targetBytes: number): EncodeMuxFrameInput {
 }
 
 /**
- * The host uplink's demux framing (`[sid:u32 BE][ciphertext]`), mirrored
- * from `session-fan-out`'s host-leg framing / the relay's `encodeHostFrame`.
- * The relay checks its 1 MiB cap against THIS whole message, not the bare
- * ciphertext.
+ * The host uplink's demux framing (`[sid:u32 BE][ciphertext]`), mirrored from `session-fan-out`'s host-leg framing / the relay's `encodeHostFrame`.
  */
 function encodeHostLegFrame(sid: number, ciphertext: Uint8Array): Uint8Array {
   const framed = new Uint8Array(

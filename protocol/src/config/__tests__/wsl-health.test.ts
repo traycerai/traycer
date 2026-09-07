@@ -1,6 +1,4 @@
-// The probe's contract is exit-code + line-count classification, never message
-// text - wsl.exe output is localised and (on older builds and the installer
-// stub) UTF-16LE. Tests inject a fake runner, so no test ever spawns wsl.exe.
+// The probe's contract is exit-code + line-count classification, never message text - wsl.exe output is localised and (on older builds and the installer stub) UTF-16LE.
 import { describe, expect, it } from "vitest";
 import type { DetectedShell } from "../schema";
 import {
@@ -76,9 +74,6 @@ describe("annotateWslHealth", () => {
   }
 
   it("probes each distinct wsl.exe path rather than one for the basename", async () => {
-    // An added row can point at a DIFFERENT wsl.exe than System32's, with its
-    // own health - answering for one with the other's verdict would flag a
-    // working shell or clear a broken one.
     const asked: string[] = [];
     const rows = [
       row("C:\\Windows\\System32\\wsl.exe", "WSL"),

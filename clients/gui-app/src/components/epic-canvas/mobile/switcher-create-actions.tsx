@@ -33,16 +33,7 @@ interface SwitcherCreateProps {
 }
 
 /**
- * "New chat" affordance for the Agents category: the same header "+" the
- * Artifacts category carries, so both tabs put creating in one place rather
- * than each teaching its own.
- *
- * Opens the shared New Conversation modal through the desktop funnel (force
- * chat mode, then request the modal with no explicit placement, so the
- * conversation tile-placement setting decides); the modal's
- * Chat/Terminal interface switcher covers both a GUI chat and a TUI
- * terminal-agent, so one control serves the whole category. The modal replaces
- * the sheet, so the sheet closes as it opens.
+ * "New chat" affordance for the Agents category: the same header "+" the Artifacts category carries, so both tabs put creating in one place rather than each teaching its own.
  */
 export function SwitcherNewChatAction(props: SwitcherCreateProps) {
   const { epicId, tabId, onClose } = props;
@@ -73,10 +64,8 @@ export function SwitcherNewChatAction(props: SwitcherCreateProps) {
 }
 
 /**
- * "New terminal" row for the Terminals category. The host + folder picker needs
- * a surface of its own, and a row inside a bottom sheet is no anchor for the
- * desktop popover, so the row opens the picker as a dialog. Launching closes
- * the sheet, landing the new terminal as the visible tile.
+ * "New terminal" row for the Terminals category.
+ * The host + folder picker needs a surface of its own, and a row inside a bottom sheet is no anchor for the desktop popover, so the row opens the picker as a dialog.
  */
 export function SwitcherNewTerminalRow(props: SwitcherCreateProps) {
   const { epicId, tabId, onClose } = props;
@@ -100,13 +89,7 @@ export function SwitcherNewTerminalRow(props: SwitcherCreateProps) {
 }
 
 /**
- * "New artifact" affordance for the Artifacts category: a curated kind menu
- * (spec / ticket / story / review) that fires the exact desktop create path
- * (`useEpicCreateArtifact` + open-when-projected). The artifact tile is not an
- * embed kind, so the sheet's watcher won't close on it; instead the create hook
- * closes the sheet (via `onClose`) the moment the tile opens, landing it as the
- * visible tile. `AddNodeDropdown` can't be filtered to artifact kinds, so the
- * menu is bespoke but the create function is shared.
+ * `AddNodeDropdown` can't be filtered to artifact kinds, so the menu is bespoke but the create function is shared.
  */
 export function SwitcherNewArtifactMenu(props: {
   readonly epicId: string;

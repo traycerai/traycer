@@ -10,10 +10,8 @@ function at(hours: number, minutes: number): number {
 const QUARTER = Math.PI / 2;
 
 /**
- * The hands are the one part of the wall clock that can be subtly wrong and
- * still draw: a quarter-turn out, or an hour hand that snaps between hours
- * instead of creeping. A test that only asserted "nothing threw" would pass
- * through every one of those.
+ * The hands are the one part of the wall clock that can be subtly wrong and still draw: a quarter-turn out, or an hour hand that snaps between hours instead of creeping.
+ * A test that only asserted "nothing threw" would pass through every one of those.
  */
 describe("officeClockAngles", () => {
   it("puts twelve o'clock at zero", () => {

@@ -13,11 +13,7 @@ import {
 } from "@traycer/protocol/host/restart/schemas";
 
 /**
- * `blockers: null` is the deliberate upgrade answer, NOT a fabricated
- * all-false: a v1.0 host never stated which deny signals refused the claim,
- * so the client must not put an affirmative "nothing is blocking" in a v1.0
- * host's mouth. See `hostRestartUpgradeV10ToV11`'s own comment for the
- * distinction this test pins.
+ * `blockers: null` is the deliberate upgrade answer, NOT a fabricated all-false: a v1.0 host never stated which deny signals refused the claim, so the client must not put an affirmative "nothing is blocking" in a v1.0.
  */
 describe("hostRestartUpgradeV10ToV11.upgradeResponse", () => {
   it("maps a v1.0 busy response to blockers: null, leaving the count untouched", () => {
@@ -47,9 +43,7 @@ describe("hostRestartUpgradeV10ToV11.upgradeResponse", () => {
 });
 
 /**
- * `busyBreakdown: null` is the deliberate upgrade answer, NOT a fabricated
- * zero object: a v1.1 host never stated how the total splits, so the client
- * must not put an affirmative "idle by every kind" in a v1.1 host's mouth.
+ * `busyBreakdown: null` is the deliberate upgrade answer, NOT a fabricated zero object: a v1.1 host never stated how the total splits, so the client must not put an affirmative "idle by every kind" in a v1.1 host's mouth.
  */
 describe("hostRestartUpgradeV11ToV12.upgradeResponse", () => {
   it("maps a v1.1 busy response to busyBreakdown: null, leaving count and blockers untouched", () => {

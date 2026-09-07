@@ -59,13 +59,8 @@ const reconnectEngine = createHostReconnectEngine();
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
-/**
- * `createRequesterForHostId` is not optional decoration: production resolves
- * the app-wide host through the spine's id-pinned requester (redesign P4.2),
- * so a stub without it takes the subject down at first render rather than
- * failing an assertion. One host per fixture means the requester IS the
- * client, which is what makes the self-return honest here.
- */
+/** `createRequesterForHostId` is not optional decoration: production resolves the app-wide host through the
+ * spine's id-pinned requester. */
 interface StubHostClient {
   readonly request: typeof hostRequestMock;
   readonly getActiveHostId: () => string | null;
@@ -1190,8 +1185,8 @@ describe("NotificationsPopover feed controls (T05)", () => {
           useHostNotificationsStore.getState().unreadRecentCursor,
         ).toBeNull();
       });
-      // Exhausted: canLoadMoreUnreadRecent is false — footer gone entirely
-      // (not merely swapped into the error/retry chrome).
+      // Exhausted: canLoadMoreUnreadRecent is false - footer gone entirely (not merely swapped into the error/retry
+      // chrome).
       await waitFor(() => {
         expect(screen.queryByTestId("notifications-load-older")).toBeNull();
         expect(
@@ -1397,9 +1392,8 @@ describe("NotificationsPopover feed controls (T05)", () => {
     });
 
     it("counts a same-feedId host recurrence via applyUpsertFrame as 1 new", async () => {
-      // Closure-review P0: store replaces byId[id] in place, so the prior
-      // occurrence key never survives. A scrolled user must still see N-new
-      // for a genuine recurrence (stable id, newer updatedAt).
+      // Closure-review P0: store replaces byId[id] in place, so the prior occurrence key never survives. A scrolled
+      // user must still see N-new for a genuine recurrence (stable id, newer updatedAt).
       applyHostSnapshot({
         entries: [hostDone("approval-1", 100, null)],
         summary: { unreadCount: 1, attentionCount: 0 },
@@ -1788,11 +1782,8 @@ describe("NotificationsPopover feed controls (T05)", () => {
     });
 
     it("emits no page_loaded success when an ordinary live frame crosses the request (same epoch)", async () => {
-      // An ordinary live upsert bumps liveLifecycleRevision without touching
-      // snapshotEpoch, so host/epoch equality alone would wrongly treat the
-      // crossed response as current. The store's merge already rejects it;
-      // this proves the analytics tracker uses the identical revision guard
-      // rather than a looser one.
+      // An ordinary live upsert bumps liveLifecycleRevision without touching snapshotEpoch, so host/epoch equality
+      // alone would wrongly treat the crossed response as current.
       const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
       bindHostClient();
       const cursor = chronologicalCursor(90, "task-unread");
@@ -1857,10 +1848,8 @@ describe("NotificationsPopover feed controls (T05)", () => {
     });
 
     it("keeps stale Load-older rows out of the feed DOM after a live upsert crosses the request", async () => {
-      // Complement to the analytics-only same-epoch race above: assert the
-      // rendered feed never shows the discarded page's rows, the Load older
-      // control recovers to a usable idle state, and a subsequent real load
-      // still uses the unchanged cursor.
+      // Complement to the analytics-only same-epoch race above: assert the rendered feed never shows the discarded
+      // page's rows, the Load older control recovers to a usable idle state.
       bindHostClient();
       const cursor = chronologicalCursor(90, "task-unread");
       applyHostSnapshot({

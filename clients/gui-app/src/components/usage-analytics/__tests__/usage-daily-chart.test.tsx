@@ -27,7 +27,6 @@ afterEach(() => {
   cleanup();
 });
 
-/** The option the mocked chart instance most recently received. */
 function latestChartOption(): UsageChartOption {
   const instance = getEChartsMockInstances().at(-1);
   const option = instance?.options.at(-1);
@@ -111,18 +110,16 @@ describe("<UsageDailyChart /> legend filter", () => {
         .getByRole("button", { name: "claude" })
         .getAttribute("aria-pressed"),
     ).toBe("true");
-    // The chip updating is not enough - the chart must actually receive an
-    // option with the hidden series zeroed (still PRESENT, so the slot and
-    // color never shift) and the other series untouched.
+    // The chip updating is not enough - the chart must actually receive an option with the hidden series zeroed
+    // (still present, so the slot and color never shift) and the other series untouched.
     const option = latestChartOption();
     expect(seriesByName(option, "codex").data).toEqual([0]);
     expect(seriesByName(option, "claude").data).toEqual([3]);
   });
 
   it("keeps the legend reachable when a refetch narrows the window to the hidden series", () => {
-    // `hiddenSeries` outlives a prop change, so a response that drops every
-    // other harness would otherwise leave a chart of zeroed bars with no
-    // control to un-hide the one series left.
+    // `hiddenSeries` outlives a prop change, so a response that drops every other harness would otherwise leave a
+    // chart of zeroed bars with no control to un-hide the one series left.
     const { rerender } = render(
       <UsageDailyChart
         columns={columns}
@@ -149,9 +146,8 @@ describe("<UsageDailyChart /> legend filter", () => {
       />,
     );
 
-    // Every bar is zeroed right now, so the chip is the only way back - it
-    // has to still be on screen even though one series alone would normally
-    // suppress the legend.
+    // Every bar is zeroed right now, so the chip is the only way back - it has to still be on screen even though
+    // one series alone would normally suppress the legend.
     const chip = screen.getByRole("button", { name: "codex" });
     expect(chip.getAttribute("aria-pressed")).toBe("false");
 
@@ -163,10 +159,8 @@ describe("<UsageDailyChart /> legend filter", () => {
   });
 
   it("exposes every plotted value without a pointer, via a screen-reader table", () => {
-    // The bar version made each day a focusable button; ECharts draws one
-    // opaque graphic whose values live only in a pointer-triggered tooltip.
-    // In the epic dialog the companion table is grouped by CHAT, so this is
-    // the only non-pointer path to the per-day numbers there.
+    // The bar version made each day a focusable button; ECharts draws one opaque graphic whose values live only in
+    // a pointer-triggered tooltip.
     render(
       <UsageDailyChart
         columns={columns}

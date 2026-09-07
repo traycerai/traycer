@@ -1,22 +1,5 @@
 /**
- * `parseAttemptLockHolder`'s `supervisedProcessGroupId` tolerance.
- *
- * Production change: the threshold moved from `> 0` to `> 1`, to match the
- * canonical writer-side parser in
- * `@traycer-clients/shared/host-lock/cross-process-lock.ts`. Probing group 1
- * asks `kill(-1, 0)` - "is there ANY signalable process on this machine" -
- * which is true on every live system and therefore proves nothing about the
- * SPECIFIC supervised actuator this lock recorded. A record carrying `1`
- * must read as carrying no group at all (`null`), exactly like a record that
- * omits the field, or this reader and the shared lock module's own reader
- * would disagree about the same lock file's liveness - the drift the module
- * doc comment calls out as already having caused one misdiagnosis.
- *
- * `holder-conformance.test.ts` in `clients/shared/host-update/__tests__/`
- * drives this same parser through the real writer end to end, but every
- * supervised-group id it exercises is `process.pid` - never exactly `1` -
- * so it does not pin this threshold. This file is the direct unit coverage
- * for the parser itself.
+ * `supervisedProcessGroupId` of `1` must parse as `null`. `kill(-1, 0)` is not a liveness probe for this lock's actuator.
  */
 import { describe, expect, it } from "vitest";
 import { parseAttemptLockHolder } from "../host-update-attempt-liveness";

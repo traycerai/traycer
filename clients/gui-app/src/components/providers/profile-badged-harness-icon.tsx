@@ -5,11 +5,8 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import type { ProfileAccentDotInput } from "@/components/providers/provider-profile-model";
 import { cn } from "@/lib/utils";
 
-/**
- * Shared harness/profile identity mark for persisted runs. It keeps the
- * composer's compact bottom-right profile badge while letting each surface
- * supply the harness-icon size it already uses.
- */
+/** It keeps the composer's compact bottom-right profile badge while letting each surface supply the
+ * harness-icon size it already uses. */
 export function ProfileBadgedHarnessIcon(props: {
   readonly harnessId: ProviderId;
   readonly harnessName: string;

@@ -37,20 +37,12 @@ import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 const registry = new ChatSessionRegistry({
   idleTtlMs: DEFAULT_CHAT_IDLE_TTL_MS,
-  // The shell's retention profile (desktop: `DEFAULT_MAX_WARM_CHAT_SESSIONS`),
-  // read on every cap walk so the phone's smaller pool applies whenever its
-  // bootstrap selected it.
+  // The shell's retention profile (desktop: `DEFAULT_MAX_WARM_CHAT_SESSIONS`), read on every cap walk so the phone's smaller pool applies whenever its bootstrap selected it.
   maxWarmSessions: () => getRetentionProfile().maxWarmChatSessions,
 });
 
 /**
- * Coalesce streamed `blockDelta` events onto the animation frame so a fast
- * turn renders at the display refresh rate instead of once per token - the
- * fix for the renderer heap sawtooth during streaming. One process-wide
- * coordinator serves every chat store: N concurrently-streaming chats share a
- * single rAF tick, a 500ms timeout fallback keeps draining buffers while the
- * window is hidden/minimized (rAF is starved there), and chats whose surfaces
- * are all hidden flush at the slow tier instead of every frame.
+ * Coalesce streamed `blockDelta` events onto the animation frame so a fast turn renders at the display refresh rate instead of once per token - the fix for the renderer heap sawtooth during streaming.
  */
 const STREAM_FLUSH_COORDINATOR = createStreamFlushCoordinator(
   BROWSER_STREAM_FLUSH_TIMERS,
@@ -72,9 +64,8 @@ export function __getChatSessionRegistryForTests(): ChatSessionRegistry {
 }
 
 /**
- * The process-wide chat session registry for this window. Used by the
- * agent-activity monitor to aggregate run state across every live chat
- * session.
+ * The process-wide chat session registry for this window.
+ * Used by the agent-activity monitor to aggregate run state across every live chat session.
  */
 export function getChatSessionRegistry(): ChatSessionRegistry {
   return registry;
@@ -97,12 +88,7 @@ export function useChatSessionHandle(
 ): ChatSessionStoreHandle | null {
   const epicId = useOpenEpicId();
   const hostEntry = useHostDirectoryEntry(hostId);
-  // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
-  // session store for the session's warm lifetime, NOT by this tile, so closing
-  // the tab (tile unmount) no longer `.close()`s the socket and strands the warm
-  // session with a dead transport (the "send disabled after reopen" bug). The
-  // opener wires the shared "durable stream = auth + wake" recovery; the returned
-  // handle's `close()` tears it all down when the session disposes.
+  // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the session store for the session's warm lifetime, NOT by this tile, so closing the tab (tile unmount) no longer `.close()`s the socket and strands the warm session with a dead transport.
   const globalClient = useHostClient();
   const authService = useAuthService();
   const authServiceRef = useRef(authService);
@@ -110,22 +96,13 @@ export function useChatSessionHandle(
   const openTransport = useDurableStreamTransportFactory();
   const queryClient = useQueryClient();
 
-  // Transport identity for the scope key + readiness gate. The test seam is a
-  // clearly separate top-level branch; the production identity is derived by the
-  // shared `authenticatedHostStreamKey` ONLY when the factory is not
-  // overridden, so tests drive the stream through the override and never touch
-  // the real request context.
+  // Transport identity for the scope key + readiness gate.
+  // The test seam is a clearly separate top-level branch; the production identity is derived by the shared `authenticatedHostStreamKey` ONLY when the factory is not overridden, so tests drive the stream through the override and never touch the real request.
   const transportKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedHostStreamKey(globalClient, hostEntry);
-  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
-  // remote host's public key (dialability, not identity), so a same-host
-  // remote public-key rotation would otherwise leave this session pinned to
-  // a `ChatStreamClient` built against the stale key. Folded into the scope
-  // key alongside `transportKey`, not in place of it, so every existing
-  // rebuild trigger (host swap, user switch, endpoint dialability) is
-  // preserved unchanged.
+  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a remote host's public key (dialability, not identity), so a same-host remote public-key rotation would otherwise leave this session pinned to a `ChatStreamClient` built against the.
   const ownerIdentityKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
@@ -144,19 +121,14 @@ export function useChatSessionHandle(
   }, [authService]);
 
   useEffect(() => {
-    // Gate the subscribe on the caller's readiness (e.g. the chat record exists
-    // in the epic projection). Until then we do not `registry.acquire`, so the
-    // `ChatStreamClient` - and its eager `chat.subscribe` - is never constructed
-    // and cannot open the epic before the create has seeded it.
+    // Gate the subscribe on the caller's readiness (e.g. the chat record exists in the epic projection).
+    // Until then we do not `registry.acquire`, so the `ChatStreamClient` - and its eager `chat.subscribe` - is never constructed and cannot open the epic before the create has seeded it.
     if (!enabled) {
       setHandle(null);
       return;
     }
-    // `transportKey` is null until there is an authenticated request context and
-    // a dialable host endpoint (or "test-..." when the factory is overridden).
-    // `ownerIdentityKey` is null under that same gate (both derive from the
-    // same `globalClient` + `hostEntry`), so this never masks a ready session
-    // behind a not-yet-known identity.
+    // `transportKey` is null until there is an authenticated request context and a dialable host endpoint (or "test-..." when the factory is overridden).
+    // `ownerIdentityKey` is null under that same gate (both derive from the same `globalClient` + `hostEntry`), so this never masks a ready session behind a not-yet-known identity.
     if (transportKey === null || ownerIdentityKey === null) {
       setHandle(null);
       return;
@@ -170,12 +142,8 @@ export function useChatSessionHandle(
       ownerIdentityKey,
     });
 
-    // The session OWNS its transport: the factory builds it (socket + auth +
-    // wake), and the returned handle's `close()` tears all of it down. Because
-    // the registry only closes the handle when it DISPOSES the session (not on
-    // tile unmount), the socket stays alive across close -> warm -> reopen, so a
-    // revived session is never handed a dead transport. `retry()` re-invokes
-    // this factory, rebuilding the transport with live deps.
+    // The session OWNS its transport: the factory builds it (socket + auth + wake), and the returned handle's `close()` tears all of it down.
+    // Because the registry only closes the handle when it DISPOSES the session (not on tile unmount), the socket stays alive across close -> warm -> reopen, so a revived session is never handed a dead transport.
     let acquiredHandle: ChatSessionStoreHandle | null = null;
     const factory: ChatStreamClientFactory = (
       factoryEpicId,
@@ -189,10 +157,7 @@ export function useChatSessionHandle(
           callbacks,
         );
       }
-      // `openOwnedDurableStreamClient` owns the transport for the typed
-      // client's lifetime: `result.close` tears down both, and a synchronous
-      // throw in `new ChatStreamClient` (it subscribes on the socket) closes
-      // the half-built transport so its socket and wake listeners never leak.
+      // `openOwnedDurableStreamClient` owns the transport for the typed client's lifetime: `result.close` tears down both, and a synchronous throw in `new ChatStreamClient` (it subscribes on the socket) closes the half-built transport so its socket and wake.
       const result = openOwnedDurableStreamClient(
         openTransport,
         hostId,
@@ -222,11 +187,8 @@ export function useChatSessionHandle(
       void authServiceRef.current.revalidateCurrentContext();
     };
 
-    // A `code: "auth"` error frame means the tab's provider CLI signed out. The
-    // host has already poisoned its auth cache, so a PLAIN invalidate (not a
-    // `forceAuthRefresh`, which would re-run the flaky probe) makes
-    // `providers.list` refetch and read that poisoned `unauthenticated`. Scoped
-    // to this chat's host - the host the turn runs on.
+    // A `code: "auth"` error frame means the tab's provider CLI signed out.
+    // The host has already poisoned its auth cache, so a PLAIN invalidate (not a `forceAuthRefresh`, which would re-run the flaky probe) makes `providers.list` refetch and read that poisoned `unauthenticated`.
     const onProviderAuthError = (): void => {
       void queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope(hostId, "providers.list"),
@@ -255,13 +217,7 @@ export function useChatSessionHandle(
     return () => {
       registry.releaseHandle(epicId, chatId, hostId, next);
     };
-    // `openTransport` is referentially stable and reads its deps (auth, runner
-    // host, credential source, directory) live, so the recovery wiring is never
-    // a stale-capture risk and does not belong in this array. `transportKey`
-    // already encodes user + host + endpoint identity; `ownerIdentityKey`
-    // additionally discriminates a remote host's public-key rotation (R-1).
-    // `queryClient` is the stable TanStack client used by the
-    // provider-reauth invalidation.
+    // `openTransport` is referentially stable and reads its deps (auth, runner host, credential source, directory) live, so the recovery wiring is never a stale-capture risk and does not belong in this array.
   }, [
     chatId,
     hostId,
@@ -277,18 +233,7 @@ export function useChatSessionHandle(
   return handle;
 }
 
-/**
- * Peek an already-open session WITHOUT taking a lease.
- *
- * `hostId` is part of the session's identity (see `ChatSessionRegistry`), so
- * every caller has to name the host it means rather than inheriting whichever
- * host happens to be active: a tab-scoped surface passes its bound
- * `useTabHostId()`, a row-scoped surface passes the row's own owner host.
- * `null` means "this surface has no host for that chat yet" (an epic-projection
- * row that predates the field, or an id that resolves to nothing) and reads as
- * no session - never as "look it up on some other host", which is exactly the
- * substitution that would hand back a different machine's transcript.
- */
+/** Peek an already-open session WITHOUT taking a lease. */
 export function useExistingChatSessionHandle(
   epicId: string,
   chatId: string,
@@ -306,16 +251,7 @@ export function useExistingChatSessionHandle(
 }
 
 /**
- * Peeks an already-open session's `fatalClose`, for a caller (the canvas-
- * altitude published-copy fallback, `tab-group-view.tsx`) that is NOT itself
- * the one holding the handle - `chat-tile.tsx`'s own `useChatSessionHandle`
- * is. Composed from `useExistingChatSessionHandle` (registry-membership
- * reactivity: re-renders when a session for this pair is created/destroyed)
- * plus a second `useSyncExternalStore` over the handle's own store (state-
- * reactivity: re-renders when `fatalClose` itself flips within an existing
- * session) - the registry's own subscription does not fire on that inner
- * state change, only on membership changes, so one subscription alone would
- * miss the transition this hook exists to observe.
+ * Peeks an already-open session's `fatalClose`, for a caller (the canvas- altitude published-copy fallback, `tab-group-view.tsx`) that is NOT itself the one holding the handle - `chat-tile.tsx`'s own `useChatSessionHandle` is.
  */
 export function useExistingChatSessionFatalClose(
   epicId: string,

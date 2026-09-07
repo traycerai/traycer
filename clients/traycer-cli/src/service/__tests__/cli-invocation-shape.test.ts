@@ -4,16 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isSelfNamingCliInvocation } from "../cli-invocation-shape";
 
-// `isSelfNamingCliInvocation` recognizes the pre-fix packaged fallback's
-// broken vector - `<SEA> traycer host start`, `<SEA> /usr/local/bin/traycer
-// host start`, `<SEA> ./traycer host start` - so callers that would
-// otherwise preserve an existing registration verbatim can re-resolve
-// instead. See the doc comment on the function under test for the full
-// rationale; these cases pin the shape it must (and must not) recognize.
-//
-// Several cases need REAL files: the predicate preserves only what it can
-// positively verify is an interpreter registration, which means comparing
-// filesystem identity rather than path strings.
+// `isSelfNamingCliInvocation` recognizes the pre-fix packaged fallback's broken vector - `<SEA> traycer host start`, `<SEA> /usr/local/bin/traycer host start`, `<SEA> ./traycer host start` - so callers that would otherwise preserve an existing registration verbatim can re-resolve instead.
+// See the doc comment on the function under test for the full rationale; these cases pin the shape it must (and must not) recognize.
 let work: string;
 
 beforeEach(() => {
@@ -52,15 +44,8 @@ describe("isSelfNamingCliInvocation", () => {
     ).resolves.toBe(true);
   });
 
-  // The symlink-alias cohort: `process.execPath` reports the RESOLVED
-  // binary while `argv[1]` keeps the raw spelling, so a CLI reached through
-  // a differently named symlink registers a pair that is neither
-  // path-equal nor basename-equal. Only filesystem identity catches it.
-  // Skipped on Windows, where creating a symlink needs Developer Mode or an
-  // elevated prompt: `symlinkSync` would throw before the predicate under
-  // test ever ran, so a Windows developer would see a failure that says
-  // nothing about `isSelfNamingCliInvocation`. Same guard the sibling
-  // well-known-cli suite uses for its POSIX-mode cases.
+  // The symlink-alias cohort: `process.execPath` reports the RESOLVED binary while `argv[1]` keeps the raw spelling, so a CLI reached through a differently named symlink registers a pair that is neither path-equal nor basename-equal.
+  // Only filesystem identity catches it.
   it.skipIf(process.platform === "win32")(
     "is true when the leading arg is a differently named symlink to the command",
     async () => {
@@ -75,9 +60,7 @@ describe("isSelfNamingCliInvocation", () => {
     },
   );
 
-  // A leading argument that is not a file under any interpretation cannot
-  // be the entry script a real interpreter registration would name, so the
-  // registration is not preservable regardless of which failure it is.
+  // A leading argument that is not a file under any interpretation cannot be the entry script a real interpreter registration would name, so the registration is not preservable regardless of which failure it is.
   it("is true when the leading arg does not exist on disk at all", async () => {
     await expect(
       isSelfNamingCliInvocation({

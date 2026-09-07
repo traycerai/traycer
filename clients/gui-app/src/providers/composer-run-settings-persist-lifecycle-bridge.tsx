@@ -38,10 +38,8 @@ export function ComposerRunSettingsPersistLifecycleBridge(
         });
         return;
       }
-      // signedOut: wipe the current user's bucket and reset to anonymous. Unlike
-      // the Epic canvas (which the desktop windows bridge projects per-window),
-      // composer run-settings have no desktop-side owner, so this localStorage
-      // bridge owns the per-user bucket on every platform - including desktop.
+      // signedOut: wipe the bucket. Composer run-settings have no desktop-side
+      // owner, so this bridge owns the per-user bucket on every platform.
       clearAndResetPersistedStore({
         store: useComposerRunSettingsStore,
         anonymousName: composerRunSettingsKey(null),

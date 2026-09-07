@@ -23,47 +23,18 @@ import type {
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 
 /**
- * Notice code for a send whose text the CLIENT is the last holder of - the
- * message body is inlined in `ChatErrorNotice.message` because nothing else
- * holds it any more. The toast layer reads this twice: to REPLAY such a notice
- * when a pane focuses (the reconnect-while-away case is exactly when one
- * arrives, and an unreplayed one is a destroyed draft), and to keep it on
- * screen until dismissed. A notice carrying the only copy of someone's text
- * must neither be skipped nor expire on a timer.
- *
- * Both reconcile passes emit it, because both make the same promise: this
- * send is settled, its row is gone, and the text is right here.
+ * Notice code for a send whose text the CLIENT is the last holder of - the message body is inlined
+ * in `ChatErrorNotice.message` because nothing else holds it any more.
  */
 export const SEND_NOT_RECORDED_NOTICE_CODE = "SEND_NOT_RECORDED";
 
 /**
- * Notice code for the send that WON the restoration slot: its text is safely
- * back in the composer, and this carries the account of why it came back and
- * what changed underneath it.
- *
- * The qualifications were being written to `failedSendRestoration.reason` and
- * read by nobody. `nextHandoffTransition` is that field's only consumer, and
- * both of its branches are dead ends for it - `markFailedByAction` routes it
- * to `InitialChatHandoff.failureReason`, which no component renders, and
- * `restoreAndAckFailed` drops it. So the composer surface those statements
- * were written for did not exist; this is it.
- *
- * NOT a last-copy notice. {@link noticeCarriesOnlyCopy} means "the message
- * body IS the draft", which buys never-evict and never-expire; here the draft
- * is in the composer where the user can see it, and claiming otherwise would
- * pin a permanent toast over text that is not at risk.
+ * Notice code for the send that WON the restoration slot: its text is safely back in the composer,
+ * and this carries the account of why it came back and what changed underneath it.
  */
 export const SEND_RESTORED_NOTICE_CODE = "SEND_RESTORED";
 
-/**
- * Whether a notice must survive the pane being unfocused when it arrived.
- *
- * `ChatTileErrorNoticeToasts` replays `error` severity on mount and skips
- * `warning` as stale noise. Both of these are warnings that are NOT noise: one
- * carries the only copy of a draft, the other says what a resend sitting in
- * the composer will now do differently. A reconnect - the moment both fire -
- * is exactly when the user is likely to be looking somewhere else.
- */
+/** Whether a notice must survive the pane being unfocused when it arrived. */
 export function noticeMustSurviveUnfocus(notice: ChatErrorNotice): boolean {
   return (
     noticeCarriesOnlyCopy(notice) || notice.code === SEND_RESTORED_NOTICE_CODE
@@ -71,23 +42,16 @@ export function noticeMustSurviveUnfocus(notice: ChatErrorNotice): boolean {
 }
 
 /**
- * Whether this notice inlines content nothing else holds any more. Both passes
- * settle the send and drop its row, so the message body in the notice IS the
- * draft - not a pointer to one.
- *
- * That makes it data rather than notice history, and it inherits every
- * durability obligation the row had: the store never evicts it from the
- * capped ring, and the toast layer both replays it on focus and refuses to
- * expire it. One definition, because all three would otherwise drift apart.
+ * Whether this notice inlines content nothing else holds any more. Both passes settle the send and
+ * drop its row, so the message body in the notice IS the draft - not a pointer to one.
  */
 export function noticeCarriesOnlyCopy(notice: ChatErrorNotice): boolean {
   return notice.code === SEND_NOT_RECORDED_NOTICE_CODE;
 }
 
 /**
- * Input for queue reconciliation. Contains the immutable state slices needed
- * to determine which pending actions have been queued and should transition
- * to accepted actions.
+ * Input for queue reconciliation. Contains the immutable state slices needed to determine which
+ * pending actions have been queued and should transition to accepted actions.
  */
 export type ReconcileQueueInput = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
@@ -110,9 +74,8 @@ export type ReconcileQueuePatch = {
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   /**
-   * Already-accepted records this frame CONFIRMED - see
-   * {@link AcceptedChatAction.confirmedByHost}. Merged by the caller over its
-   * own map, like the snapshot pass's channel of the same shape.
+   * Already-accepted records this frame CONFIRMED - see {@link AcceptedChatAction.confirmedByHost}.
+   * Merged by the caller over its own map, like the snapshot pass's channel of the same shape.
    */
   readonly confirmedAcceptedActions: Readonly<
     Record<string, AcceptedChatAction>
@@ -129,13 +92,7 @@ export type ReconcileSnapshotInput = {
   readonly messages: ReadonlyArray<Message>;
   readonly queue: ChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
-  /**
-   * The connection this snapshot arrived on. Absence from a snapshot is only
-   * EVIDENCE for an action dispatched on an earlier connection, whose ack died
-   * with it; a same-connection dispatch can be missing simply because the host
-   * built the snapshot before the frame reached it. See
-   * {@link reconcileSnapshotChange}.
-   */
+  /** The connection this snapshot arrived on. */
   readonly connectionEpoch: number;
   /** The chat's settings as of this snapshot - see {@link settingsDriftClause}. */
   readonly currentSettings: ChatRunSettings | null;
@@ -143,25 +100,14 @@ export type ReconcileSnapshotInput = {
   readonly currentAccountContext: AccountContext | null;
   /** See {@link WorktreePartitionFn}. */
   readonly worktreePartition: WorktreePartitionFn;
-  /**
-   * Accepted records, because an ACCEPTED send can die too. A send dispatched
-   * while a turn is running renders as a queued item rather than a
-   * `pendingUserMessage`, so once its accepted ack moves it out of
-   * `pendingActions` this record is the only place its draft lives. See the
-   * second pass in {@link reconcileSnapshotChange}.
-   */
+  /** Accepted records, because an ACCEPTED send can die too. */
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly nowMs: number;
 };
 
 /**
- * Which of this intent's folders a sweep removed while its dispatch was in
- * flight, and which survived.
- *
- * Injected rather than read, because the answer lives in the staging store and
- * both reconcile passes are pure. It returns a PARTITION rather than a
- * yes/no: the passes NAME the folders they describe, so an any-match boolean
- * made them call surviving bindings deleted.
+ * Which of this intent's folders a sweep removed while its dispatch was in flight, and which
+ * survived.
  */
 export type WorktreePartitionFn = (intent: WorktreeIntent) => {
   readonly survivors: WorktreeIntent | null;
@@ -180,15 +126,8 @@ export function worktreeSweepFor(
 }
 
 /**
- * Output patch for snapshot reconciliation. Contains updated state slices
- * to apply to the store, including the failedSendRestoration field.
- *
- * `appendedErrorNotices` is a DELTA - only the notices this pass produced, in
- * order - not the store's ring. The caller appends them onto its own
- * `errorNotices` (that is where the FIFO cap lives), so an empty delta writes
- * nothing. Named so it cannot collide with the `errorNotices` STATE key: the
- * settled patch below is applied by spreading it into the state update, and a
- * colliding name would silently replace the ring with the delta.
+ * Output patch for snapshot reconciliation. Contains updated state slices to apply to the store,
+ * including the failedSendRestoration field.
  */
 export type ReconcileSnapshotPatch = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
@@ -196,11 +135,7 @@ export type ReconcileSnapshotPatch = {
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
-  /**
-   * Accepted sends this pass declared dead. The caller REMOVES these from its
-   * `acceptedActions` - `acceptedActions` above is an additive delta, so
-   * removal needs its own channel rather than being expressible as one.
-   */
+  /** Accepted sends this pass declared dead. */
   readonly settledAcceptedActionIds: ReadonlySet<string>;
   /**
    * Accepted records this pass STAMPED as confirmed. Merged by the caller over
@@ -210,78 +145,13 @@ export type ReconcileSnapshotPatch = {
     Record<string, AcceptedChatAction>
   >;
   /**
-   * The staged worktree choice belonging to the send whose prompt just claimed
-   * the restoration slot, for the caller to re-stage under the revision guard.
-   * A prompt handed back WITHOUT its binding is the silent-local-run hazard:
-   * the resubmit looks identical and runs somewhere else. `null` when this
-   * pass restored nothing, or when the restored send carried no staged choice.
+   * The staged worktree choice belonging to the send whose prompt just claimed the restoration slot,
+   * for the caller to re-stage under the revision guard.
    */
   readonly restoredWorktreeIntent: StagedWorktreeIntentSource | null;
 };
 
-/**
- * The statement for a dead send that could not claim the single
- * `failedSendRestoration` slot.
- *
- * The slot is deliberately first-writer-wins - the earlier send has waited
- * longest, and last-wins would bury it - so a displacement is expected. What
- * must not happen is a displaced send going quiet: the rejection ack path
- * already pairs the same rule with an `errorNotice`, and this is that
- * statement for both reconcile passes.
- *
- * It INLINES the message body, because by the time this fires the client is
- * the last holder of that text. Both passes settle the send outright - row
- * dropped, action dropped - so there is no surviving row to point at. That is
- * deliberate on both: a row that will never confirm keeps edit/delete gated
- * off and renders a user message the host never recorded, and (on the
- * reconnect path) an action left restoration-eligible re-states itself on
- * every later snapshot and pushes stale text back into the composer after the
- * user has already resent it.
- *
- * What survives the trip is TEXT, and {@link classifyContentRecovery} decides
- * what that costs. The criterion there is whether a loss is INVISIBLE in the
- * projected text and so unretypeable - attachment bytes, a mention's binding,
- * a quote's provenance - not whether the projection is byte-identical.
- * Markdown structure is visible in its absence and would only add noise.
- *
- * The classification is total and fails CLOSED, so a node kind nobody has
- * classified earns a generic qualification rather than passing as complete.
- * This defect shipped three times running - attachments, then mentions, then
- * sourced quotes - because each was fixed as itself; driving the clauses off
- * one classification is what makes a fourth a test failure instead.
- */
-/**
- * The one sentence that says a prompt came back WITHOUT the worktree it was
- * staged for, because a sweep removed that worktree while the dispatch was in
- * flight.
- *
- * Four surfaces owe it - the snapshot pass, the settled-turn pass, a
- * rejection's own notice, and a rejection DISPLACED into the statement
- * builder - and they reach it three different ways: two append it to
- * `failedSendRestoration.reason` (the composer says it), one appends it to
- * the rejection's `errorNotice` (its own surface already speaks there), and
- * the fourth needs {@link UnrecoverableSend.worktreeGone} instead, because a
- * statement names the branch and must not name it as re-pickable.
- *
- * It is a CONSTANT rather than three literals because it was three literals:
- * the fourth surface was missed twice running, and each miss was found only
- * after shipping. Nothing here can enforce that a new surface asks the
- * question, but nothing should be able to ask it and then phrase the answer
- * differently.
- */
-/**
- * The OTHER reason a prompt can come back unbound, and a different fact from
- * the sweep clause {@link worktreeAccountClause} builds - superseded, not
- * swept - so deliberately not the same sentence.
- *
- * Silence is right when the user can SEE why: a pick they made themselves
- * stands in the slot, and narrating their own action back at them is noise.
- * That premise fails when a LATER dispatch took the slot instead. The pick is
- * gone, nothing stands in its place, and every continuation of that later
- * dispatch leaves the slot empty - it either ran with the binding, or was
- * displaced and had its own hand-back refused. So the prompt returns with an
- * empty slot and no account of it, which is the one shape that misleads.
- */
+/** Superseded, not swept: a different fact from {@link worktreeAccountClause}, so deliberately not the same sentence. */
 export const WORKTREE_SUPERSEDED_STATEMENT =
   "Its staged worktree was taken by a later message and was not restored, so a resend runs against this chat's current worktree unless you pick one.";
 
@@ -290,29 +160,13 @@ export interface UnrecoverableSend {
   readonly content: JsonContent;
   /** How this send died, phrased to open the statement. */
   readonly circumstance: string;
-  /**
-   * Everything said after the content losses. REQUIRED and not defaulted: the
-   * clauses it renders name folders to go re-pick and settings that moved, and
-   * a caller that cannot answer it is a caller that would have said nothing.
-   */
+  /** Everything said after the content losses. */
   readonly account: DeadSendAccount;
 }
 
 /**
- * Everything a dead send's statement says about its CONTENT - the headline and
- * the loss clauses, in canonical order.
- *
- * Shared because both statements are the last accounting of the same thing.
- * The displaced-restoration notice originally carried only the quoted text, so
- * an attachment-only prompt produced a notice with no body AND no mention that
- * anything had existed - the row was already gone, so nothing else was ever
- * going to say it.
- *
- * Deliberately does NOT include the account tail (worktree, delivery, drift).
- * The two callers get that from different places and only one of them may add
- * it: `unrecoverableSendNotice` renders the account itself, while a displaced
- * restoration's `reason` already has those clauses baked in by whichever pass
- * built the slot. Rendering it here would say the account twice in one notice.
+ * Everything a dead send's statement says about its CONTENT - the headline and the loss clauses,
+ * in canonical order. Shared because both statements are the last accounting of the same thing.
  */
 function contentLossStatement(content: JsonContent, preamble: string): string {
   const text = recoveryTextFromContent(content);
@@ -394,21 +248,8 @@ export function unrecoverableSendNotice(
 }
 
 /**
- * The statement for a restored prompt the composer could NOT take, because the
- * user has already typed something else there.
- *
- * Every restoration path ends at one unconditional `replaceDraftContent`, so
- * any of them could overwrite a newer unsent draft - and the accepted-send
- * pass makes that typical rather than rare, since queueing a send and carrying
- * on typing is the ordinary way to use a queue. Whichever text loses, one of
- * them must not simply vanish.
- *
- * The NEWER draft wins the composer: it is what the user is looking at and
- * still editing. The older prompt becomes a last-copy notice, which is exactly
- * the durability it needs - `SEND_NOT_RECORDED` is never evicted from the
- * ring, survives an unfocused pane, and inlines the text verbatim. The account
- * already composed for the restoration rides along, so nothing that was going
- * to be said about the resend is lost with the slot.
+ * The statement for a restored prompt the composer could NOT take, because the user has already
+ * typed something else there.
  */
 export function displacedRestorationNotice(
   clientActionId: string,
@@ -418,9 +259,8 @@ export function displacedRestorationNotice(
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
     message: statementQuoting(
-      // `reason` already carries the account clauses, baked in by whichever
-      // pass built the restoration slot - so this path must not render them a
-      // second time. The shared builder deliberately stops at the losses.
+      // `reason` already carries the account clauses, baked in by whichever pass built the restoration
+      // slot - so this path must not render them a second time.
       contentLossStatement(
         content,
         `${reason} It was not put back in the composer, because you have started another message there.`,
@@ -433,19 +273,8 @@ export function displacedRestorationNotice(
 }
 
 /**
- * The one place the quoted draft is separated from everything said about it.
- *
- * The draft goes LAST and runs to the end of the notice. Every clause is said
- * ahead of it, because the draft is the single part of this statement whose
- * extent the statement does not control: it is verbatim user text of any
- * shape, and the toast renders the notice pre-wrapped, so a clause after a
- * multi-line draft reads as one more line of the user's own message. Ending
- * at the draft makes "from the marker to the end" an exact description of
- * what to copy - which is the gesture the notice is asking for.
- *
- * Fences would read better and cannot be used: the draft is VERBATIM and may
- * carry a fence line of its own, and a delimiter the payload can forge is not
- * a delimiter. Position cannot be forged.
+ * The one place the quoted draft is separated from everything said about it. The draft goes LAST
+ * and runs to the end of the notice.
  */
 function statementQuoting(said: string, draft: string | null): string {
   if (draft === null) return said;
@@ -476,9 +305,8 @@ function attachmentClause(attachmentCount: number, hasText: boolean): string {
 }
 
 /**
- * A PARTIAL loss, and worth its own sentence: the projected text above is real
- * and pasteable, but it pastes as prose. Only re-picking restores the binding
- * the agent actually reads.
+ * A PARTIAL loss, and worth its own sentence: the projected text above is real and pasteable, but
+ * it pastes as prose. Only re-picking restores the binding the agent actually reads.
  */
 interface CountedLossClause {
   readonly count: number;
@@ -490,26 +318,8 @@ interface CountedLossClause {
   readonly tail: string;
 }
 
-/**
- * The staged worktree a STATED send was going to run in.
- *
- * Unlike the restored send's, this binding cannot be handed back: the staging
- * slot is single and per chat, and the send that won the restoration slot
- * rightfully holds it. So this is a statement obligation rather than a restore
- * one - the same rule as the text itself. Naming the branch makes it
- * actionable: re-picking blind is how the resubmit silently runs somewhere
- * else, which is exactly what the restore path exists to prevent.
- */
-/**
- * What the send was queued to WAIT for, when it was not the default.
- *
- * Delivery is dispatched per send and dies with the action, so a resend takes
- * whatever the composer's submit gesture implies now: a message deliberately
- * queued to land after the running turn's safe point can come back and
- * interrupt instead. Stated only when non-default, on the same rule the
- * settings drift follows - naming `auto` every time would bury the case that
- * matters.
- */
+/** The staged worktree a STATED send was going to run in. */
+/** What the send was queued to WAIT for, when it was not the default. */
 function deliveryClause(policy: ChatQueueDeliveryPolicy | null): string {
   if (policy === null || policy === "auto") return "";
   const described =
@@ -519,25 +329,11 @@ function deliveryClause(policy: ChatQueueDeliveryPolicy | null): string {
   return ` It was queued to be delivered ${described}; a resend goes by whatever you choose then.`;
 }
 
-/**
- * What a mid-dispatch sweep did to a send's staged binding, per ENTRY.
- *
- * A `WorktreeIntent` holds one binding per workspace folder and those are
- * independent, so a sweep routinely takes some and leaves others. Every
- * boolean this replaced answered "was anything swept", which is the wrong
- * granularity for a sentence that NAMES folders: survivors got described as
- * deleted, and the user was told to pick something else for bindings that were
- * still there.
- */
+/** What a mid-dispatch sweep did to a send's staged binding, per ENTRY. */
 export interface WorktreeSweepAccount {
   readonly survivors: WorktreeIntent | null;
   readonly swept: WorktreeIntent | null;
-  /**
-   * The slot was refused because the USER made a newer pick, not because
-   * anything was deleted. Worth its own statement and never conflated with a
-   * sweep - telling someone their worktree was deleted when they re-picked
-   * would be a lie.
-   */
+  /** The slot was refused because the USER made a newer pick, not because anything was deleted. */
   readonly superseded: boolean;
 }
 
@@ -557,16 +353,7 @@ export const NO_WORKTREE_SWEEP: WorktreeSweepAccount = {
   superseded: false,
 };
 
-/**
- * Every fact a dead send's account is composed from.
- *
- * ONE record, because the alternative was what this replaced: four speakers
- * (the rejection notice, the displaced statement, the ack's `SEND_RESTORED`,
- * and each reconcile pass's restoration reason) each assembling the same
- * clauses from the same facts behind their own gating conditions. They drifted
- * in granularity and in clause ORDER, and every reviewer round found another
- * cell of that cross-product. There is nowhere left for them to disagree.
- */
+/** Every fact a dead send's account is composed from. */
 export interface DeadSendAccount {
   readonly worktree: WorktreeSweepAccount;
   readonly sentSettings: ChatRunSettings | null;
@@ -577,15 +364,8 @@ export interface DeadSendAccount {
 }
 
 /**
- * THE account, in the canonical clause order: what it was going to RUN IN,
- * then what changed underneath it. The commit history already declared that
- * order (the rejection path's); this is the only place that knows it.
- *
- * `handedBack` is the single axis on which the speakers differ, and it is a
- * fact about the send rather than about the surface: a restored prompt's
- * surviving binding travelled back with it and needs no re-picking, a stated
- * one's did not. Everything else - which folders, what drifted, in what order
- * - is identical, which is exactly why it lives here once.
+ * THE account, in the canonical clause order: what it was going to RUN IN, then what changed
+ * underneath it.
  */
 export function deadSendAccountClauses(
   account: DeadSendAccount,
@@ -605,20 +385,15 @@ export function deadSendAccountClauses(
 }
 
 /**
- * Removed and surviving folders, named SEPARATELY.
- *
- * A swept folder is not re-pickable, so the clause must not ask for it; a
- * surviving one is, so it must not be described as gone. Saying both in one
- * sentence about "its staged worktree" is what made the only recovery notice
- * unable to tell the user which folders they could actually pick again.
+ * Removed and surviving folders, named SEPARATELY. A swept folder is not re-pickable, so the
+ * clause must not ask for it; a surviving one is, so it must not be described as gone.
  */
 function worktreeAccountClause(
   sweep: WorktreeSweepAccount,
   handedBack: boolean,
 ): string {
-  // Qualified against the WHOLE staging, not each half: whether a folder needs
-  // naming by workspace is a fact about how many were staged, and splitting
-  // the list must not change how its members read.
+  // Qualified against the WHOLE staging, not each half: whether a folder needs naming by workspace
+  // is a fact about how many were staged, and splitting the list must not change how its members
   const total =
     (sweep.survivors?.entries.length ?? 0) + (sweep.swept?.entries.length ?? 0);
   const survivors = intentLabels(sweep.survivors, total > 1);
@@ -643,11 +418,8 @@ function worktreeAccountClause(
 }
 
 /**
- * `WorktreeIntent` permits one entry per workspace folder, so a multi-repo
- * staging read as "branch a, branch b" with no way to tell which repo each
- * belonged to - unre-pickable. Qualified only when more than one folder was
- * staged: with a single workspace the association is unambiguous and naming it
- * would be noise in the common case.
+ * `WorktreeIntent` permits one entry per workspace folder, so a multi-repo staging read as "branch
+ * a, branch b" with no way to tell which repo each belonged to - unre-pickable.
  */
 function intentLabels(
   intent: WorktreeIntent | null,
@@ -663,16 +435,7 @@ function intentLabels(
   });
 }
 
-/**
- * How to NAME a staged entry so the user can re-pick it deliberately.
- *
- * Every kind gets one. "No branch to re-pick" is not "nothing to state": a
- * `local` entry is a decision to run against a particular workspace checkout
- * and an `import` adopts a particular on-disk worktree, so a send staged to
- * switch to either and then settled silently resends against the previous
- * binding - the same silent-wrong-worktree hazard the branch case covers.
- * Returns `null` only when the entry names nothing usable.
- */
+/** How to NAME a staged entry so the user can re-pick it deliberately. Every kind gets one. */
 function worktreeEntryLabel(
   entry: WorktreeIntent["entries"][number],
 ): string | null {
@@ -688,24 +451,13 @@ function worktreeEntryLabel(
         ? `the workspace checkout ${entry.workspacePath}`
         : null;
     default:
-      // A new entry kind must be NAMED here, not absorbed by an else-branch
-      // that labels it "the workspace checkout" and quietly misdescribes what
-      // the send was staged to do. Same fail-closed rule the content
-      // classification follows, enforced at compile time.
+      // A new entry kind must be NAMED here, not absorbed by an else-branch that labels it "the
+      // workspace checkout" and quietly misdescribes what the send was staged to do.
       return assertNeverEntry(entry);
   }
 }
 
-/**
- * What the send was going to RUN under, when that differs from what a resend
- * would use now.
- *
- * The dead send's `settings` die with it, so resending picks up the chat's
- * current pick - a different model, profile or permission mode changes what
- * the agent does, silently. Only the DIFFERING fields are named: stating the
- * full tuple every time is noise that buries the one field that moved, and a
- * send whose settings still match needs no clause at all.
- */
+/** What the send was going to RUN under, when that differs from what a resend would use now. */
 const DRIFT_LABELS: Record<keyof ChatRunSettings | "accountContext", string> = {
   harnessId: "harness",
   model: "model",
@@ -723,13 +475,7 @@ function settingsDriftClause(
   sentAccount: AccountContext | null,
   currentAccount: AccountContext | null,
 ): string {
-  // Two comparisons with DIFFERENT preconditions, which is why they are no
-  // longer behind one gate. Billing is not a run setting - the drift record's
-  // key type says so explicitly - and a chat that has never run has
-  // `chat.settings === null` until its first turn. Sharing the run-settings
-  // gate meant an initial send displaced while the user switched Personal ->
-  // Team said nothing about which account the resend would charge, even though
-  // both account contexts were present and comparable the whole time.
+  // Two comparisons with DIFFERENT preconditions, which is why they are no longer behind one gate.
   const named = [
     ...runSettingsDrift(sent, current),
     ...accountDrift(sentAccount, currentAccount),
@@ -744,12 +490,7 @@ function runSettingsDrift(
   current: ChatRunSettings | null,
 ): ReadonlyArray<string> {
   if (sent === null || current === null) return [];
-  // Keyed by `keyof ChatRunSettings`, NOT `Record<string, ...>`. The earlier
-  // shape validated value TYPES only - it never required every field - so the
-  // comment claiming a new setting would be forced into the comparison was
-  // false, and a new field would have gone uncompared in silence. This shape
-  // fails to COMPILE when one is missing, which is what that claim was
-  // supposed to buy.
+  // Keyed by `keyof ChatRunSettings`, NOT `Record<string, ...>`.
   const values: Record<
     keyof ChatRunSettings,
     readonly [string | null, string | null]
@@ -767,13 +508,7 @@ function runSettingsDrift(
   return namedDrift(values);
 }
 
-/**
- * Billing, compared on its OWN terms.
- *
- * It rides alongside the run settings rather than inside them, and it is the
- * one drift with a money consequence - which account a resend charges - so it
- * is exactly the field that must not be silenced by an unrelated absence.
- */
+/** Billing, compared on its OWN terms. */
 function accountDrift(
   sentAccount: AccountContext | null,
   currentAccount: AccountContext | null,
@@ -820,12 +555,8 @@ type StagedBranchSelection = Extract<
 >["branch"];
 
 /**
- * A `worktree` entry is more than its branch name - a fork source, carried
- * uncommitted changes, setup/teardown overrides. The label cannot carry all of
- * that legibly, and the obligation is HONESTY rather than completeness: name
- * what is compactly nameable, and say plainly when the rest has to be
- * re-configured. Naming only the branch invites a re-pick that behaves
- * differently from what the send was actually staged to do.
+ * A `worktree` entry is more than its branch name - a fork source, carried uncommitted changes,
+ * setup/teardown overrides.
  */
 function worktreeBranchLabel(
   branch: StagedBranchSelection,
@@ -855,10 +586,8 @@ function countedClause(clause: CountedLossClause): string {
 }
 
 /**
- * Reconcile pending actions when the queue changes. Transitions pending
- * actions that are now in the queue to accepted actions.
- *
- * Pure function - all timing inputs must be passed explicitly.
+ * Reconcile pending actions when the queue changes. Transitions pending actions that are now in
+ * the queue to accepted actions.
  */
 export function reconcileQueueChange(
   input: ReconcileQueueInput,
@@ -908,21 +637,8 @@ export function reconcileQueueChange(
 }
 
 /**
- * Stamp accepted sends this live queue frame CONFIRMS.
- *
- * The fourth confirmation door, and the one the pending walk above cannot
- * reach. Whether the accepted ack or the `queueChanged` broadcast arrives
- * first is a race between an RPC settling and a broadcast landing: when the
- * queue frame wins, the send is still pending and the walk above transitions
- * it (confirmed on the way through); when the ACK wins, the record has already
- * left `pendingActions`, this pass was a no-op, and nothing ever marked it
- * confirmed. The design has no clear-on-cancel by choice - cancel-safety rests
- * entirely on confirmation - so an unstamped record here is a canceled prompt
- * waiting to be resurrected by the next reconnect.
- *
- * STAMP ONLY. There is deliberately no absence arm: an item leaving a live
- * queue means dispatched or canceled, and nothing here can tell those apart.
- * Only the snapshot pass, which has the epoch bar, may conclude from absence.
+ * Stamp accepted sends this live queue frame CONFIRMS. The fourth confirmation door, and the one
+ * the pending walk above cannot reach.
  */
 function confirmAcceptedSendsInQueue(
   input: ReconcileQueueInput,
@@ -955,38 +671,8 @@ function confirmAcceptedSendsInQueue(
 }
 
 /**
- * Stamp the accepted send a `messageAccepted` frame CONFIRMS.
- *
- * The fifth confirmation door, and the one that closes the set. The other four
- * all run off the queue or a snapshot, so a send that never parks in the queue
- * - an immediate send on an idle chat, which materializes straight into the
- * transcript - reaches none of them when its ack wins the race: the record
- * leaves `pendingActions` at the ack, the queue passes never see it, and the
- * frame that DOES confirm it is this one.
- *
- * Stamping here is true to the fact, not a convenience: the frame reports the
- * message in the host's transcript, which is the same evidence a snapshot's
- * `messages` carries and a strictly earlier sighting of it.
- *
- * It matters because an accepted message can legitimately VANISH again.
- * `editUserMessage` rewrites history from the edited message onward, so a
- * message this frame appended is gone from every later snapshot - and an
- * unstamped record reads that absence as death and pushes a deliberately
- * removed prompt back at the user, the same resurrection `-MPLI` fixed for
- * cancel. Absence stops being evidence once presence has been seen, whichever
- * door saw it.
- *
- * STAMP ONLY, like the queue door: this frame says nothing about a send it
- * does not name, so there is no absence arm. Returns the input untouched when
- * nothing matches, so an unrelated `messageAccepted` does not churn the store.
- *
- * This door covers only the ack-first ORDER of its race. The frame can also
- * legitimately arrive before the ack (`takeSetupFailedRestoration` slot 2
- * documents that order), in which case the send is still pending, there is no
- * accepted record here to stamp, and finding nothing is correct - the ack
- * door carries the sighting instead, by birthing the record with what the
- * transcript already holds (see the `addAcceptedAction` call in
- * `onActionAck`). The two halves close the race together.
+ * Stamp the accepted send a `messageAccepted` frame CONFIRMS. The fifth confirmation door, and the
+ * one that closes the set.
  */
 export function confirmAcceptedSendByMessageId(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
@@ -1010,25 +696,8 @@ export function confirmAcceptedSendByMessageId(
 }
 
 /**
- * Reconcile pending actions against a snapshot. Clears pending actions whose
- * messages have been confirmed in the snapshot or are in the queue.
- *
- * Two kinds of conclusion live here and they have different evidence bars.
- * PRESENCE - the message is in `messages` or the queue - is authoritative
- * whatever connection dispatched it. ABSENCE is not: it settles a send only
- * when that send was dispatched on an EARLIER connection, matching the bar
- * {@link sweepStalePendingActions} applies to every other action kind. A
- * same-connection dispatch missing from a snapshot has simply outrun it.
- *
- * That is not a rare race. The host broadcasts snapshots on a LIVE connection
- * for many unrelated reasons - `finishActiveTurn` pushes one at every turn
- * end, the pump-backlog backfill pushes another - and one built before the
- * host processed the send frame naturally lacks the message without that send
- * being lost. Its ack (or `messageAccepted`) is still coming; if the
- * connection drops first the epoch bumps and the next snapshot settles it
- * truthfully.
- *
- * Pure function - all timing inputs must be passed explicitly.
+ * Reconcile pending actions against a snapshot. Clears pending actions whose messages have been
+ * confirmed in the snapshot or are in the queue.
  */
 export function reconcileSnapshotChange(
   input: ReconcileSnapshotInput,
@@ -1090,25 +759,12 @@ export function reconcileSnapshotChange(
       if (pending.restore === null) {
         return next;
       }
-      // Everything below settles on ABSENCE, and absence is only evidence for
-      // a dispatch from a dead connection. A send issued after this connection
-      // reached `open` - the composer gate reopens there, before the initial
-      // snapshot lands - is legitimately missing from a snapshot the host
-      // built first, and its accepted ack is still on its way. Settling it
-      // would restore or state text that is about to materialize anyway: the
-      // same manufactured duplicate this pass exists to prevent, one side over.
-      // Its ack, or the next connection's snapshot, settles it truthfully.
+      // Everything below settles on ABSENCE, and absence is only evidence for a dispatch from a dead
+      // connection.
       if (pending.connectionEpoch >= input.connectionEpoch) {
         return next;
       }
-      // The slot is taken by a longer-waiting send. Keep first-writer-wins,
-      // but SETTLE this one rather than leaving it parked: its ack died with
-      // the connection and this snapshot is authoritative, so it can never
-      // confirm. Leaving it eligible re-stated it on every later snapshot
-      // (polluting the notice ring until it evicted unrelated entries) and
-      // let the slot re-claim it once freed, pushing stale text into the
-      // composer after the user had followed the advice and resent it. The
-      // statement carries the text, since nothing holds it once the row goes.
+      // The slot is taken by a longer-waiting send.
       if (next.failedSendRestoration !== null) {
         return {
           ...next,
@@ -1191,43 +847,14 @@ export function reconcileSnapshotChange(
 
 const NO_SETTLED_ACCEPTED_IDS: ReadonlySet<string> = new Set();
 
-/**
- * Settle ACCEPTED sends the snapshot cannot account for.
- *
- * A send dispatched while a turn is running (or with anything already queued)
- * is rendered as a QUEUED item, not a `pendingUserMessage` - so
- * `shouldRenderSendAsPendingUserMessage` is false and its recovery fields live
- * only on the pending action. The accepted ack then moves that record to
- * `acceptedActions`, and until this pass existed that was a one-way door: the
- * snapshot pass above walks `pendingActions`, {@link reconcileTurnSettled}
- * walks `pendingUserMessages`, and nothing walked here. A connection dying
- * between the accepted ack and the host's `queueChanged`/`messageAccepted`
- * took the only copy of that draft with it - a dead send with no account, in
- * the one surface built to guarantee every dead send leaves one.
- *
- * The evidence bar is the pending pass's, unchanged, and for the same reasons.
- * PRESENCE - the message is in `messages` or the queue - is authoritative
- * whatever connection dispatched it, and settles the record with nothing owed.
- * ABSENCE settles it only when it was dispatched on an EARLIER connection: a
- * same-connection refresh snapshot built before the host processed the send
- * has simply outrun it, and its `queueChanged` is still coming.
- *
- * Death then goes through exactly the machinery the pending pass uses - the
- * single-slot `failedSendRestoration` on first-writer-wins, the shared
- * {@link deadSendAccountClauses} account, `unrecoverableSendNotice` for
- * whoever loses the slot. No new dialect for a fourth speaker.
- */
+/** Settle ACCEPTED sends the snapshot cannot account for. */
 function reconcileAcceptedSends(
   patch: ReconcileSnapshotPatch,
   input: ReconcileSnapshotInput,
   acceptedMessageIds: ReadonlySet<string>,
 ): ReconcileSnapshotPatch {
-  // A send that still has an optimistic user-message row belongs to
-  // {@link reconcileTurnSettled}, which walks exactly those and states them as
-  // "not recorded before the turn stopped". Claiming it here would be a second
-  // pass settling one send - the slot is single and first-writer-wins, so the
-  // two would race and the account would depend on pass order. The gap this
-  // pass exists for is the send with NO row: queued, so never optimistic.
+  // A send that still has an optimistic user-message row belongs to {@link reconcileTurnSettled},
+  // which walks exactly those and states them as "not recorded before the turn stopped".
   const optimisticRowIds = new Set(
     input.pendingUserMessages.map((message) => message.clientActionId),
   );
@@ -1241,11 +868,8 @@ function reconcileAcceptedSends(
       ) {
         return next;
       }
-      // Presence is authoritative whatever dispatched it - and it is worth
-      // RECORDING, not just returning on. A send confirmed once can later go
-      // absent because the user canceled it or the agent consumed it, and
-      // both are absences this pass must stay quiet about. The record is kept
-      // rather than dropped: `takeSetupFailedRestoration` still needs it.
+      // Presence is authoritative whatever dispatched it - and it is worth RECORDING, not just returning
+      // on.
       if (
         acceptedMessageIds.has(accepted.messageId) ||
         queueContainsPendingSend(input.queue, accepted.messageId, undefined)
@@ -1289,9 +913,8 @@ function reconcileAcceptedSends(
         currentAccountContext: input.currentAccountContext,
         sentDeliveryPolicy: accepted.deliveryPolicy,
       };
-      // First-writer-wins, shared with the pending pass: whoever has waited
-      // longest keeps the composer, and everyone else is STATED with their
-      // text inlined.
+      // First-writer-wins, shared with the pending pass: whoever has waited longest keeps the composer,
+      // and everyone else is STATED with their text inlined.
       if (next.failedSendRestoration !== null) {
         return {
           ...next,
@@ -1362,25 +985,10 @@ export type ReconcileTurnSettledPatch = {
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
   /** See {@link ReconcileSnapshotPatch.restoredWorktreeIntent}. */
   readonly restoredWorktreeIntent: StagedWorktreeIntentSource | null;
-  /**
-   * Accepted records whose ROW this pass just settled.
-   *
-   * The two passes divide one send between them: the accepted pass skips a
-   * send that still has an optimistic row, because this pass owns the row -
-   * but nothing retired the RECORD, so the next snapshot found it
-   * never-confirmed, absent and from an earlier epoch, and settled the same
-   * send a second time. One recovery, two statements. A record is retired by
-   * whichever pass recovers its send, and that is this one.
-   */
+  /** Accepted records whose ROW this pass just settled. */
   readonly settledAcceptedActionIds: ReadonlySet<string>;
 };
 
-/**
- * Whether a `turnStateChanged` frame or `chat.subscribe` snapshot reports the
- * turn settled: the host's own `turnInProgress` when present, with the
- * `runStatus` idle read as the fallback for an older host that predates the
- * field. A settled report is the trigger for {@link reconcileTurnSettled}.
- */
 export function turnSettledFromStatus(
   turnInProgress: boolean | undefined,
   runStatus: ChatRunStatus,
@@ -1388,46 +996,7 @@ export function turnSettledFromStatus(
   return turnInProgress === undefined ? runStatus === "idle" : !turnInProgress;
 }
 
-/**
- * Drop stranded optimistic user messages when the turn settles.
- *
- * An accepted send ack deliberately keeps its `pendingUserMessages` entry
- * alive - the durable `messageAccepted` frame is what normally clears it. A
- * stop during turn activation can abort the send after the accepted ack but
- * before the host appends the message, in which case neither
- * `messageAccepted` nor a rejected ack ever arrives and the entry would
- * survive indefinitely - keeping edit/delete gated off and rendering a user
- * message the host never recorded. A settled report is the authoritative
- * "this send will never materialize" signal. It arrives two ways, and this
- * runs on both: a live `turnStateChanged` frame, and a re-subscribe snapshot
- * (`reconcileSnapshotChange` only settles sends still in `pendingActions`,
- * so an already-acked entry needs this pass on reconnect too).
- *
- * An entry survives while a path to materialization remains open: its ack is
- * still in flight (`pendingActions`) or it was parked in the queue (a later
- * `queueChanged`/`messageAccepted` settles it, and the mutation gate stays
- * closed on the queue anyway). An entry whose message already reached the
- * transcript is stale bookkeeping - dropped without restoration. Truly dead
- * entries are dropped and the first one's content is restored to the
- * composer via the `failedSendRestoration` slot (single-slot; an occupied
- * slot is never overwritten).
- *
- * Every OTHER truly-dead entry - the ones the single slot cannot take - is
- * stated via {@link unrecoverableSendNotice}, which inlines the message body.
- * Dropping the row is correct here but it takes the last copy of that text
- * with it, so the statement has to carry the text or the send is simply gone.
- * An entry already in the transcript needs no notice: dropping it loses
- * nothing.
- *
- * The invariant both passes now share: a dead send is either RESTORED to the
- * composer (it won the slot) or STATED with its text inlined (it did not).
- * Never both - which is what made the reconnect path manufacture duplicate
- * sends - and never neither.
- *
- * Pure function - all state is passed explicitly. `settled` is
- * {@link turnSettledFromStatus}'s answer for the triggering frame/snapshot; a
- * non-settled report returns the input slices unchanged.
- */
+/** Drop stranded optimistic user messages when the turn settles. */
 export function reconcileTurnSettled(
   settled: boolean,
   input: ReconcileTurnSettledInput,
@@ -1478,18 +1047,15 @@ export function reconcileTurnSettled(
           currentAccountContext: input.currentAccountContext,
           sentDeliveryPolicy: restorable.deliveryPolicy,
         };
-  // Who actually gets the composer back: `restorable` only claims the slot
-  // when it is free, because the slot is first-writer-wins. Everyone else
-  // whose message never reached the transcript is losing their only copy, so
-  // each of them is stated with their text inlined - not just the first.
+  // Who actually gets the composer back: `restorable` only claims the slot when it is free, because
+  // the slot is first-writer-wins.
   const slotClaimantActionId =
     input.failedSendRestoration === null && restorable !== undefined
       ? restorable.clientActionId
       : null;
   return {
-    // Every stranded row this pass settled - restored or stated - takes its
-    // accepted record with it, so no later pass can find the same send
-    // unaccounted for and recover it twice.
+    // Every stranded row this pass settled - restored or stated - takes its accepted record with it,
+    // so no later pass can find the same send unaccounted for and recover it twice.
     settledAcceptedActionIds: new Set(
       [...strandedActionIds].filter((clientActionId) =>
         Object.hasOwn(input.acceptedActions, clientActionId),
@@ -1556,24 +1122,7 @@ export interface StalePendingActionsSweep {
 
 const NO_SWEPT_ACTION_IDS: ReadonlySet<string> = new Set();
 
-/**
- * Drop pending actions dispatched on an earlier connection than the
- * snapshot's. Their `actionAck` died with the dropped stream (frames and
- * acks are fire-and-forget per connection), so keeping them would leave
- * their controls (Stop, restore/revert, message edit, plan approval, queue
- * edits) disabled forever. The arriving snapshot is the authority on what
- * actually happened; dropping the pending re-enables the control so the user
- * can re-issue against that state. Only `send` is excluded -
- * `reconcileSnapshotChange` settles sends by messageId, restoring an
- * unconfirmed send's content to the composer, a path no other kind has
- * (a stale APPLIED `editUserMessage` shows in the snapshot's messages
- * either way; only its accepted-action bookkeeping entry is skipped).
- *
- * Pure function; only ever driven by an authoritative snapshot, never by a
- * connection-status event (a transient wobble must not cancel anything).
- * Returns the swept ids so the caller can settle sibling records keyed by
- * the same `clientActionId` (background stops) without re-deriving them.
- */
+/** Drop pending actions dispatched on an earlier connection than the snapshot's. */
 export function sweepStalePendingActions(
   pendingActions: Readonly<Record<string, PendingChatAction>>,
   connectionEpoch: number,
@@ -1599,9 +1148,8 @@ export function sweepStalePendingActions(
 }
 
 /**
- * Find all pending action ids that correspond to messages already in the queue.
- * Used during queue reconciliation to identify which pending actions to promote
- * to accepted.
+ * Find all pending action ids that correspond to messages already in the queue. Used during queue
+ * reconciliation to identify which pending actions to promote to accepted.
  */
 function pendingActionIdsForQueuedMessages(
   pendingActions: Readonly<Record<string, PendingChatAction>>,
@@ -1657,14 +1205,7 @@ function pendingUserMessageFromPendingAction(
     action.restore === null ||
     action.sender === null ||
     action.settings === null ||
-    // Joined the guard rather than being defaulted. A synthesized
-    // `{ type: "PERSONAL" }` is a CLAIM about which account a send was
-    // dispatched under, and this module turns that claim into a drift
-    // statement about which account a resend would charge - so inventing one
-    // is how the notice comes to name an account the send never used.
-    // `sendSeededUserMessage` was changed for exactly this reason; this is the
-    // same rule at the site that reconstructs rather than the one that seeds.
-    // A send always carries both fields, so nothing real is excluded here.
+    // Joined the guard rather than being defaulted.
     action.accountContext === null
   ) {
     return undefined;
@@ -1684,11 +1225,7 @@ function pendingUserMessageFromPendingAction(
   };
 }
 
-/**
- * Check if a queue contains a send matching the given pending message id
- * or content. Matches by message id first, then falls back to content
- * equality for pending messages not yet assigned an id by the host.
- */
+/** Check if a queue contains a send matching the given pending message id or content. */
 function queueContainsPendingSend(
   queue: ChatQueueState,
   pendingMessageId: string,
@@ -1746,18 +1283,7 @@ export function withoutPendingAction(
 }
 
 export interface AcceptedActionConfirmation {
-  /**
-   * Whether host state in hand at this transition CONFIRMS the send. Explicit
-   * at every call site, because the answer differs per door and a default
-   * would silently give the wrong one to whichever door forgot: the queue and
-   * snapshot passes transition BECAUSE the host reported the message, so they
-   * pass `true`; the accepted ack - which says only that the frame arrived -
-   * passes what the TRANSCRIPT already holds at birth, because a
-   * `messageAccepted` that outran the ack fired door 5 before there was a
-   * record to stamp, and the birth is the only chance to carry that sighting.
-   * Getting this wrong resurrects a canceled prompt - see
-   * {@link AcceptedChatAction.confirmedByHost}.
-   */
+  /** Whether host state in hand at this transition CONFIRMS the send. */
   readonly confirmedByHost: boolean;
   /** Whether transcript confirmation makes the display overlay obsolete. */
   readonly messageConfirmedByHost: boolean;
@@ -1785,18 +1311,15 @@ export function addAcceptedAction(
         messageId: pending.messageId,
         acceptedAt: now,
         restore: pending.restore,
-        // The recovery tuple travels with the record now - see
-        // `AcceptedChatAction`. A queued send's ONLY copy lives here between
-        // its accepted ack and the host's durable confirmation.
+        // The recovery tuple travels with the record now - see `AcceptedChatAction`. A queued send's ONLY
+        // copy lives here between its accepted ack and the host's durable confirmation.
         sender: pending.sender,
         settings: pending.settings,
         accountContext: pending.accountContext,
         deliveryPolicy: pending.deliveryPolicy,
         restoreWorktreeIntent: pending.restoreWorktreeIntent,
-        // Queue confirmation deliberately keeps this display copy: queued
-        // sends are accepted before their deferred worktree setup begins.
-        // Transcript confirmation (or an edit ack, which follows setup)
-        // retires it while leaving the recovery tuple intact.
+        // Queue confirmation deliberately keeps this display copy: queued sends are accepted before their
+        // deferred worktree setup begins.
         displayWorktreeIntent:
           pending.action === "editUserMessage" ||
           confirmation.messageConfirmedByHost
@@ -1811,21 +1334,8 @@ export function addAcceptedAction(
 }
 
 /**
- * Prune accepted actions to enforce retention time limit (5 minutes) and
- * record cap (64 records). Prioritizes send/editUserMessage actions and
- * recent entries. Returns the same object if no pruning is needed.
- *
- * An accepted-but-unresolved interview action (`interviewBlockId !== null`),
- * delivery retry (`interviewDeliveryRetry !== null`), or queue cancellation
- * (`queueItemId !== null`) is a lifecycle lock,
- * not generic action history. Its duplicate-dispatch guard must survive until
- * the corresponding authoritative host transition retires it. A cancellation
- * also carries the UI projection that keeps its queue row hidden between an
- * accepted ack and the durable queue update.
- * Exempt it from the retention window and record cap below, or a
- * slow-to-resolve interview (or enough unrelated traffic to evict it from the
- * cap) would silently un-gate a duplicate submission before the host
- * responds.
+ * Prune accepted actions to enforce retention time limit (5 minutes) and record cap (64 records).
+ * Prioritizes send/editUserMessage actions and recent entries.
  */
 export function pruneAcceptedActions(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
@@ -1860,9 +1370,8 @@ export function pruneAcceptedActions(
 }
 
 /**
- * Retire accepted queue cancellations once an authoritative queue no longer
- * contains their target. Until then the record carries the optimistic
- * projection across the ack-to-queue-update gap.
+ * Retire accepted queue cancellations once an authoritative queue no longer contains their target.
+ * Until then the record carries the optimistic projection across the ack-to-queue-update gap.
  */
 export function withoutResolvedAcceptedQueueCancellations(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,

@@ -1,18 +1,5 @@
 /**
- * The `comm-graph` tile body: the per-epic communication graph CANVAS.
- *
- * Unlike every other tile, this one is NOT bound to a host - it opens one
- * `epic.communicationGraph.subscribe` per host the epic's agents live on and
- * merges the frames, so it must never read `useTabHostId()`.
- *
- * CANVAS PLUS TRANSPORT. The graph fills the tile and a media-player bar is
- * docked under it: play/pause, speed, and a scrubber whose track carries one
- * marker per captured event. The bar gets the FULL merged array while the canvas
- * gets the as-of-cursor prefix - the track spans everything captured, the graph
- * shows everything up to the playhead.
- *
- * The cursor itself is per-epic shared state, so closing and reopening the tile
- * does not rewind the epic's playback position.
+ * Unlike every other tile, this one is NOT bound to a host - it opens one `epic.communicationGraph.subscribe` per host the epic's agents live on and merges the frames, so it must never read `useTabHostId()`.
  */
 import { useCallback, useMemo } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -103,11 +90,8 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // Pressing the mode you are already in is not a mode change, and the
       // reset below would throw away a framing the person chose by hand.
       if (mode === node.view.mode) return;
-      // The viewport is RESET, not carried over: the two modes measure it in
-      // different units (flow units against sprite pixels), so a framing chosen
-      // in one is meaningless in the other and would land the incoming mode
-      // off-screen with nothing to say it had. The neutral viewport is what
-      // each renderer reads as "fit yourself".
+      // The viewport is RESET, not carried over: the two modes measure it in different units (flow units against sprite pixels), so a framing chosen in one is meaningless in the other and would land the incoming mode off-screen with nothing to say it had.
+      // The neutral viewport is what each renderer reads as "fit yourself".
       updateView(viewTabId, node.id, { ...DEFAULT_COMM_GRAPH_VIEW, mode });
     },
     [node.id, node.view.mode, updateView, viewTabId],
@@ -117,14 +101,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
     return <EmptyCommGraph tileInstanceId={node.instanceId} />;
   }
 
-  // ONE props object for both renderings: they are two drawings of the same
-  // projection, so anything that reached only one of them would be a way for
-  // them to disagree about what happened.
+  // ONE props object for both renderings: they are two drawings of the same projection, so anything that reached only one of them would be a way for them to disagree about what happened.
   const canvasProps = {
     epicId: node.epicId,
-    // Find is registered per tile INSTANCE, by whichever renderer is mounted:
-    // both speak the same adapter contract, so switching mode re-registers
-    // rather than leaving the tile without a find surface.
+    // Find is registered per tile INSTANCE, by whichever renderer is mounted: both speak the same adapter contract, so switching mode re-registers rather than leaving the tile without a find surface.
     tileInstanceId: node.instanceId,
     agents,
     agentIds: projection.visibleAgentIds,
@@ -134,9 +114,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     playing: projection.playing,
     pulse: projection.pulse,
     pulseKey: projection.pulseEventKey,
-    // Owned here (the view state is written here) but POSITIONED by the
-    // renderer, which is the only thing that knows where its canvas ends and a
-    // detail panel begins.
+    // Owned here (the view state is written here) but POSITIONED by the renderer, which is the only thing that knows where its canvas ends and a detail panel begins.
     modeToggle: (
       <CommGraphViewModeToggle
         mode={node.view.mode}

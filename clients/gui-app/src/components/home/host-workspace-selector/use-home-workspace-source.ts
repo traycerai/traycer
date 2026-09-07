@@ -30,10 +30,8 @@ import { restampWorktreeIntentPrimary } from "./worktree-intent-merge";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface PrimaryRemovalTransition {
-  // Whether removing the folder demoted-and-reassigned primary to a
-  // different remaining folder (the removed folder WAS primary, and at
-  // least one folder remains). `false` for a secondary removal, or a
-  // removal that empties the workspace.
+  // Whether removing the folder demoted-and-reassigned primary to a different remaining folder (the removed
+  // folder was primary, and at least one folder remains).
   readonly primaryChanged: boolean;
   readonly newPrimaryName: string | null;
 }
@@ -41,14 +39,10 @@ export interface PrimaryRemovalTransition {
 export interface HomeWorkspaceSource {
   readonly source: LandingDraftWorkspaceSnapshot | null;
   readonly capturedIntent: WorktreeIntent | null;
-  /** Current folders from the active draft/modal/seed/global representation. */
   readonly folders: ReadonlyArray<string>;
-  // Raw stored value for the active workspace representation (draft / modal
-  // / seeded / global) - membership-unvalidated. Callers resolve the
-  // EFFECTIVE primary via `resolvePrimaryPath(folders, primaryPath)`, the
-  // single resolver every consumer (rows, chip, launch) shares.
+  // Raw stored value for the active workspace representation (draft / modal / seeded / global) -
+  // membership-unvalidated.
   readonly primaryPath: string | null;
-  /** Membership-validated primary folder for launch consumers. */
   readonly primaryWorkspacePath: string | null;
   readonly addResolvedFolders: (
     folders: ReadonlyArray<WorkspaceFolderInfo>,
@@ -58,16 +52,8 @@ export interface HomeWorkspaceSource {
   readonly stageEntry: (entry: WorktreeFolderIntent) => void;
 }
 
-/**
- * The single mutation/read seam for every not-yet-created picker's workspace
- * representation (landing draft / new-conversation modal / seeded fork /
- * global), routing each action to the store(s) that own the active
- * representation. Lives in its own module (not `host-workspace-selector.tsx`)
- * so hook-level wiring tests can `renderHook` it directly - it has no
- * host/React-context dependencies of its own (zustand stores only; the
- * caller resolves and passes `hostId`, the host whose per-host folder bucket
- * the "global" representation reads and writes).
- */
+/** The single mutation/read seam for every not-yet-created picker's workspace representation (landing draft /
+ * new-conversation modal / seeded fork / global). */
 export function useHomeWorkspaceSource(
   stagingKey: WorktreeStagingKey,
   workspaceSeed: LandingDraftWorkspaceSnapshot | null,
@@ -162,22 +148,15 @@ export function useHomeWorkspaceSource(
   );
   const usingSeededWorkspace =
     modalEpicId === null && draftWorkspace === null && seededWorkspace !== null;
-  // `source` already carries `primaryPath` for every representation except
-  // the implicit "no draft, no modal, no seed" case, where the picker reads
-  // the global store directly (mirrors `useResolvedWorkspaceFolders`'s own
-  // `source === null` fallback) - so the raw primary must fall back the same
-  // way, or the two would disagree about which folder is primary.
+  // `source` already carries `primaryPath` for every representation except the implicit "no draft, no modal, no
+  // seed" case.
   const primaryPath = source !== null ? source.primaryPath : globalPrimaryPath;
   const folders = source !== null ? source.folders : globalFolders;
   const primaryWorkspacePath = resolvePrimaryPath(folders, primaryPath);
   const sourceFolderInfoByPath =
     source !== null ? source.folderInfoByPath : globalFolderInfoByPath;
-  // Mirror the seeded workspace into an externally-readable slot so a
-  // seeded picker's submit handler (outside this hook/component tree) can
-  // read the LIVE folders + primary at launch, instead of only the static
-  // `workspaceSeed` prop it was opened with. See `seeded-workspace-snapshot-
-  // store.ts` for why this external sync is needed (a true external-store
-  // sync, not derivable render-time state).
+  // Mirror the seeded workspace into an externally-readable slot so a seeded picker's submit handler (outside
+  // this hook/component tree) can read the live folders + primary at launch.
   useEffect(() => {
     // `usingSeededWorkspace` implies `seededWorkspace !== null` (it is one
     // of its conjuncts), so this one guard covers both.
@@ -194,13 +173,8 @@ export function useHomeWorkspaceSource(
       primaryPath,
       primaryWorkspacePath,
       addResolvedFolders: (folders) => {
-        // The 50-folder cap can evict a SECONDARY folder as a side effect of
-        // an add; an evicted folder disappears from rows/persistence but its
-        // staged intent entry (if any) would otherwise survive and still
-        // reach launch. Cleanup must follow the ACTIVE representation's
-        // eviction set: the global cache and an active draft can legitimately
-        // diverge, so a cache-only eviction must not erase surviving draft
-        // branch/scripts state.
+        // Cleanup must follow the active representation's eviction set: the global cache and an active draft can
+        // legitimately diverge, so a cache-only eviction must not erase surviving draft branch/scripts state.
         if (modalEpicId !== null) {
           const evicted = addModalResolvedFolders(
             modalEpicId,
@@ -286,9 +260,8 @@ export function useHomeWorkspaceSource(
         };
       },
       setPrimaryFolder: (folderPath) => {
-        // Suppress only the duplicate EVENT on a same-primary re-selection;
-        // the state writes below must still run so a staged worktree intent's
-        // stale isPrimary bit is restamped before launch consumers read it.
+        // Suppress only the duplicate event on a same-primary re-selection; the state writes below must still run so a
+        // staged worktree intent's stale isPrimary bit is restamped before launch consumers read it.
         if (folderPath !== primaryPath) {
           Analytics.getInstance().track(
             AnalyticsEvent.WorkspacePrimaryChanged,
@@ -317,9 +290,8 @@ export function useHomeWorkspaceSource(
             }));
           }
         }
-        // Restamp staged intent entries in place (never remove/unstage) so a
-        // switch never leaves a stale `isPrimary` bit for another consumer
-        // to read before the next launch-boundary canonicalization.
+        // Restamp staged intent entries in place (never remove/unstage) so a switch never leaves a stale `isPrimary`
+        // bit for another consumer to read before the next launch-boundary canonicalization.
         const restamped = restampWorktreeIntentPrimary(
           capturedIntent,
           folderPath,
@@ -363,9 +335,8 @@ export function useHomeWorkspaceSource(
   );
 }
 
-// The narrated reassignment name for `removeFolder`'s
-// `PrimaryRemovalTransition` - `null` unless removal actually demoted-and-
-// reassigned primary to a different remaining folder.
+// The narrated reassignment name for `removeFolder`'s `PrimaryRemovalTransition` - `null` unless removal
+// actually demoted-and- reassigned primary to a different remaining folder.
 function primaryRemovalNewName(
   primaryChanged: boolean,
   afterPrimary: string | null,

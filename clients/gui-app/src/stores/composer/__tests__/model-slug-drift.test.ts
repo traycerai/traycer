@@ -93,9 +93,8 @@ describe("composer toolbar model slug drift", () => {
     ];
     store.getState().setCatalog(catalog(models));
 
-    // The pre-fix failure was healing to Default. The fix is NOT to heal to the
-    // decorated row instead: the read resolves it, so the stored slug is left
-    // exactly as the user pinned it.
+    // The pre-fix failure was healing to Default. The fix is NOT to heal to the decorated row instead:
+    // the read resolves it, so the stored slug is left exactly as the user pinned it.
     expect(store.getState().selection.modelSlug).toBe("claude-fable-5");
     expect(store.getState().values.selection.modelSlug).toBe("claude-fable-5");
     expect(store.getState().selection.modelSlug).not.toBe("default");
@@ -107,10 +106,7 @@ describe("composer toolbar model slug drift", () => {
 
   it("never converts a version pin into the floating row slug that aliases it", () => {
     const emitted: string[] = [];
-    // `sonnet` publishes `claude-sonnet-5`, so the pin alias-matches exactly one
-    // row. Persisting that row's slug would swap a pinned version for a pointer
-    // that follows the account to the next Sonnet — the same floating-pointer
-    // harm as the ambiguous case, arriving through the unambiguous door.
+    // `sonnet` publishes `claude-sonnet-5`, so the pin alias-matches exactly one row.
     const store = createStore("claude-sonnet-5", (modelSlug) => {
       emitted.push(modelSlug);
     });
@@ -130,9 +126,7 @@ describe("composer toolbar model slug drift", () => {
   });
 
   it("confirms a held alias against the catalog so settings are still recorded", () => {
-    // Coverage and write-permission are different questions. Holding the slug
-    // must not leave the selection in the same unconfirmed state as a dead one,
-    // or every downstream memory write for it is silently skipped.
+    // Coverage and write-permission are different questions.
     const store = createStore("claude-opus-5[1m]", null);
     store
       .getState()
@@ -202,13 +196,7 @@ describe("composer toolbar model slug drift", () => {
   });
 
   it("keeps a remembered slug while the catalog is loading", () => {
-    // The catalog deliberately does NOT carry the remembered slug. With it
-    // present, coverage returns first and the `catalogLoadedForHarness` guard
-    // this test is named for never executes - it would pass with the guard
-    // deleted. An unresolvable slug is held ONLY because the catalog is still
-    // loading; "heals a genuinely delisted slug" below feeds an equally
-    // unresolvable slug to a loaded catalog and gets Default, so the two pin
-    // opposite directions of the same guard.
+    // The catalog deliberately does NOT carry the remembered slug.
     const emitted: string[] = [];
     const store = createStore("remembered-slug", (modelSlug) => {
       emitted.push(modelSlug);

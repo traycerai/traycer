@@ -25,14 +25,7 @@ const MONTH_ABBR = [
 ];
 
 /**
- * `day` is an already-bucketed `YYYY-MM-DD` string - split it directly
- * rather than parsing through `Date`, which would silently re-interpret the
- * calendar date through the BROWSER's local zone (not the viewer zone the
- * request/response already agreed on) and can shift the label by a day.
- * `.at()` (not bracket indexing) so a malformed string degrades to the raw
- * value instead of throwing - `Array#at` is typed `T | undefined`
- * regardless of `noUncheckedIndexedAccess`, so the fallback is real, not a
- * lint-only formality.
+ * `day` is an already-bucketed `YYYY-MM-DD` string - split it directly rather than parsing through `Date`, which would silently re-interpret the calendar date through the BROWSER's local zone (not the viewer zone the request/response already agreed on) and.
  */
 export function formatDayLabel(day: string): string {
   const parts = day.split("-");
@@ -45,16 +38,8 @@ export function formatDayLabel(day: string): string {
 }
 
 /**
- * The window picker's companion label - "Aug 1 – Aug 10, 2026" for the days
- * currently on the x-axis. Reads the year off the bucketed `YYYY-MM-DD`
- * strings directly (same reasoning as {@link formatDayLabel}: never through
- * `Date`, which would re-interpret the calendar date in the browser's local
- * zone). `days` is assumed non-empty and oldest-first, matching
- * `lastNCalendarDays`'s contract; an empty list renders nothing.
- *
- * Both endpoints carry their own year when they differ - a 30- or 90-day
- * window routinely straddles New Year, and reading the year off the last
- * day alone stamped the WRONG one on the first ("Dec 31 – Jan 1, 2026").
+ * The window picker's companion label - "Aug 1 - Aug 10, 2026" for the days currently on the x-axis.
+ * Reads the year off the bucketed `YYYY-MM-DD` strings directly (same reasoning as {@link formatDayLabel}: never through `Date`, which would re-interpret the calendar date in the browser's local zone).
  */
 export function formatDateRangeLabel(days: readonly string[]): string {
   const first = days.at(0);

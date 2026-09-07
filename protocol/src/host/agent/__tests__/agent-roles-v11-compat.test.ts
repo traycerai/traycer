@@ -1,14 +1,4 @@
-/**
- * Compatibility surface for the additive Agent Roles v1.1 awareness contract
- * (`deferredToPrompt`). Two directions matter:
- *
- * - The released v1.0 shapes are frozen: no new field, no relaxed
- *   validation, so an old peer's understanding of the wire never silently
- *   changes underneath it.
- * - A v1.1 delivery down-projects to a valid v1.0 delivery by folding
- *   `deferredToPrompt` into `unreachable` - the only failure reasons a v1.0
- *   consumer can ever see are the ones it already shipped with.
- */
+/** Compatibility surface for the additive Agent Roles v1.1 awareness contract (`deferredToPrompt`). */
 import { describe, expect, it } from "vitest";
 import {
   claimAgentRoleResponseSchema,

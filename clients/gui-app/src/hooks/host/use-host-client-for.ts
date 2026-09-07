@@ -9,26 +9,7 @@ import {
 } from "@/lib/host/transport-key";
 import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 
-/**
- * Builds a stateless `HostRequester` facade that issues RPCs against `target`
- * without disturbing app-wide host state. This once meant "without `bind()`-ing
- * it as the active host", which would have reloaded the Epic list and swapped
- * app-wide state; P4.2 deleted the slot, so addressing a host is no longer
- * capable of moving anything app-wide - which is what this facade wanted all
- * along.
- *
- * The facade retains only `target`. Each request returns to `globalClient`,
- * which revalidates the target against the directory and captures the shared
- * binding/request authority plus its provider-lifetime coordinator.
- *
- * Returns `null` when the canonical transport predicate says `target` cannot
- * be dialed, or there is no authenticated request context / bound user on
- * `globalClient`. Plain
- * function (no hooks) so imperative call sites - a callback or `mutationFn`
- * invoked once per differing `hostId` - can resolve a routed client without
- * violating the rules of hooks; `useHostClientFor` below is the memoized
- * wrapper for render-time single-target consumers.
- */
+/** Stateless requester for target; does not move app-wide host state. Returns null if undialable or unauthenticated. Plain function for mutationFn. */
 export function buildDialableHostClient(
   globalClient: HostClient<HostRpcRegistry>,
   target: HostDirectoryEntry,
@@ -56,22 +37,11 @@ function buildDialableHostClientFor(
   return globalClient.createRequester(target);
 }
 
-/**
- * Memoized render-time wrapper over `buildDialableHostClient` for a single,
- * referentially-stable `target`. Settings ▸ Worktrees uses it to list /
- * delete worktrees on whichever host the user selects.
- *
- * Memoized on the target entry + auth identity so the same selection yields a
- * stable client across renders; callers should pass a referentially stable
- * `target` (e.g. memoized by host id).
- */
+/** Memoized render-time wrapper over `buildDialableHostClient` for a single, referentially-stable `target`. */
 export function useHostClientFor(
   target: HostDirectoryEntry | null,
 ): HostClient<HostRpcRegistry> | null {
-  // The SPINE, not the app-wide client: this builds a requester for an
-  // explicitly named host, so taking the effective host's requester here
-  // would make the memo churn on every activation and would resolve one host
-  // through another host's routing view.
+  // The SPINE, not the app-wide client: this builds a requester for an explicitly named host, so taking the effective host's requester here would make the memo churn on every activation and would resolve one host through another host's routing view.
   const globalClient = useHostRuntimeClient();
   const requestContext = globalClient.getRequestContext();
   const userId = globalClient.getRequestContextUserId();

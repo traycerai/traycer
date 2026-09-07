@@ -9,14 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
 
-// The guard's pure decision functions (`interactionStartedOnOverlay` +
-// `dialogContentInertToPointer`) are unit-tested in `dialog-outside-guard.test.ts`.
-// jsdom does not drive Radix's `DismissableLayer` pointer-down-outside path (no
-// pointer-events hit-testing, no deferred dismissable-surface click sequencing),
-// so the real "click out of the open dropdown closes the whole modal" flow can't
-// be reproduced here by dispatching a `pointerdown` - a bare unguarded dialog
-// does NOT dismiss on `fireEvent.pointerDown` in jsdom either. This file only
-// exercises the wiring via Escape, which jsdom DOES drive end-to-end.
+// jsdom does not drive Radix's `DismissableLayer` pointer-down-outside path (no pointer-events hit-testing, no
+// deferred dismissable-surface click sequencing).
 
 describe("PromotableModalFrame", () => {
   afterEach(() => {

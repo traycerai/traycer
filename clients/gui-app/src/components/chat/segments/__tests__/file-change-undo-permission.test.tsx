@@ -1,6 +1,5 @@
-// Pins undo gating's independence from permission mode by structure:
-// `FileChangeGroupSegment` takes no permission-mode prop. Paired with
-// `permission-diff-undo-e2e.test.ts` which covers diff emission.
+// Pins undo gating's independence from permission mode by structure: `FileChangeGroupSegment` takes no permission-mode prop.
+// Paired with `permission-diff-undo-e2e.test.ts` which covers diff emission.
 import { describe, expect, it, vi } from "vitest";
 import { render, cleanup, screen } from "@testing-library/react";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";

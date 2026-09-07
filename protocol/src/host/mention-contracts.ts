@@ -7,11 +7,7 @@ import {
   mentionGithubSearchResponseSchema,
 } from "./mention-schemas";
 
-/**
- * `mention.githubCatalog@1.0` - stale-first catalog read plus an explicitly
- * requested cache refresh. `hostId` is deliberately absent: the active host
- * connection is the only host this request can target.
- */
+/** `mention.githubCatalog@1.0` - stale-first catalog read plus an explicitly requested cache refresh. */
 export const mentionGithubCatalogV10 = defineRpcContract({
   method: "mention.githubCatalog",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -20,9 +16,7 @@ export const mentionGithubCatalogV10 = defineRpcContract({
 });
 
 /**
- * `mention.githubSearch@1.0` - scoped GitHub search, also used for a
- * non-default filter with an empty query. `hostId` is derived from the
- * connection, as it is for every `pr.*` method.
+ * `mention.githubSearch@1.0` - scoped GitHub search, also used for a non-default filter with an empty query.
  */
 export const mentionGithubSearchV10 = defineRpcContract({
   method: "mention.githubSearch",

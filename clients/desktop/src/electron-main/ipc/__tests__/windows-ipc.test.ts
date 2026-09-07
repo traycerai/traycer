@@ -54,16 +54,6 @@ describe("shouldPreserveClosedWindowSnapshot", () => {
   });
 });
 
-/**
- * `openDraftInNewWindow` (`RunnerHostInvoke.windowsRequestOpenDraftInNewWindow`)
- * coverage. Harness style copied verbatim from `runner-ipc.test.ts`'s Epic
- * open-in-new-window suite (`FakeWindowRegistry`, `buildWindow`, `sender`,
- * `FakeHost`/`FakeHostController` doubles, the `electron` module mock) - that
- * is the established pattern for driving `RunnerIpcBridge.install()` handlers
- * without a real Electron runtime, and the draft move is structurally the
- * same handler shape (source snapshot read, `windowRegistry.create` with a
- * `beforeLoad` seed, source patch, rollback-on-throw).
- */
 
 type InvokeHandler = (
   event: unknown,
@@ -213,10 +203,6 @@ function buildWindow(): CapturingWindow {
   };
 }
 
-/** Mirrors `runner-ipc.test.ts`'s `FakeWindowRegistry`, including the
- * `createFailure` knob the destination-throw test needs: `create()` always
- * runs `beforeLoad` (matching the real registry seeding the destination
- * BEFORE the window finishes loading) and only rejects afterward. */
 class FakeWindowRegistry implements IpcWindowRegistry {
   private readonly recordsByWindowId = new Map<string, IpcWindowRecord>();
   private readonly windowIdByWebContentsId = new Map<number, string>();
@@ -227,11 +213,6 @@ class FakeWindowRegistry implements IpcWindowRegistry {
   forceCloseRequests: string[] = [];
   initialRoutes: Array<string | null> = [];
   createFailure: Error | null = null;
-  /**
-   * Runs inside `create`, after `beforeLoad` - the stand-in for whatever the
-   * SOURCE window does while the destination is still loading, which the real
-   * `create` awaits.
-   */
   duringCreate: (() => void) | null = null;
 
   add(windowId: string, webContentsId: number, window: IpcManagedWindow): void {
@@ -565,10 +546,7 @@ describe("openDraftInNewWindow (windowsRequestOpenDraftInNewWindow)", () => {
       Promise.resolve(draftOpenHandler()(sender(101), "draft-a")),
     ).rejects.toThrow("load failed");
 
-    // The destination was seeded during `beforeLoad` (before the create
-    // promise rejected), so it must be explicitly unwound: cleared and
-    // force-closed, never left as an orphaned window record or a leftover
-    // per-window snapshot.
+    // The destination was seeded during `beforeLoad` (before the create promise rejected), so it must be explicitly unwound: cleared and force-closed, never left as an orphaned window.
     expect(registry.closeRequests).toEqual([]);
     expect(registry.forceCloseRequests).toEqual(["created-1"]);
     expect(registry.getRecordById("created-1")).toBeNull();

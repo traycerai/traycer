@@ -14,35 +14,13 @@ import {
   type ResourcesStoreHandle,
 } from "@/stores/resources/resources-store";
 
-/**
- * Module-scoped registry of live `resources.subscribe` stores, keyed by
- * `epicId`. The `ResourcesStreamMount` inside each epic pane acquires an entry
- * (lease-counted, so two panes on the same epic share one stream) and releases
- * it on unmount; app-level surfaces (the terminal / chat sidebars, the epic
- * status row) read the entry by `epicId` without needing to sit inside that
- * pane's React subtree.
- *
- * `clientToken` guards a host swap: the `WsStreamClient` identity is carried
- * alongside each entry, and an acquire whose token differs from the live entry
- * rebuilds the underlying store against the fresh client (keeping the lease
- * count) so a stale transport is never reused.
- */
+/** Module-scoped registry of live `resources.subscribe` stores, keyed by `epicId`. */
 interface RegistryEntry {
   handle: ResourcesStoreHandle;
   clientToken: unknown;
   /**
-   * The host whose transport this entry's stream is open against, taken by its
-   * mount from the stream binding itself (`StreamRuntimeBinding.hostId`), or
-   * `null` when that binding could not name one.
-   *
-   * It exists because this projection is a module singleton that outlives any
-   * one transport, so a reader printing a host's name above this data needs to
-   * PROVE the data came from that machine rather than assume it. Three ways it
-   * would otherwise be wrong: a scoped surface reading a global entry that is
-   * still the previous host's (a swap in flight), the per-epic fallback on a
-   * host too old for a global stream, and — the one that has nothing to do with
-   * the picker — an ambient host swap, where every other reader's idea of "the
-   * active host" moves a commit before the transport does.
+   * The host whose transport this entry's stream is open against, taken by its mount from the stream
+   * binding itself (`StreamRuntimeBinding.hostId`), or `null` when that binding could not name one.
    */
   hostId: string | null;
   leases: number;
@@ -62,10 +40,8 @@ export interface GlobalResourceEpicEntry {
 
 export interface GlobalResourceProjection {
   /**
-   * The host this snapshot came from, or `null` when it came from the per-epic
-   * fallback (pre-v1.1 hosts, which have no global stream) or from no stream at
-   * all. A surface that names a host must check this before rendering — see
-   * `RegistryEntry.hostId`.
+   * The host this snapshot came from, or `null` when it came from the per-epic fallback (pre-v1.1
+   * hosts, which have no global stream) or from no stream at all.
    */
   readonly hostId: string | null;
   readonly sampledAt: number | null;
@@ -77,7 +53,7 @@ export interface GlobalResourceProjection {
   readonly entries: readonly GlobalResourceEpicEntry[];
 }
 
-/** Nothing tracked, from nowhere — a stand-in when no stream may be read. */
+/** Nothing tracked, from nowhere - a stand-in when no stream may be read. */
 export const EMPTY_GLOBAL_RESOURCE_PROJECTION: GlobalResourceProjection = {
   hostId: null,
   sampledAt: null,
@@ -143,9 +119,7 @@ class ResourcesRegistry {
     }
     const attribution = hostAttribution([...this.entries.values()]);
     if (attribution.kind === "mixed") {
-      // Entries opened against different machines. Summing them would produce
-      // totals no computer ever had, so the fallback publishes nothing at all
-      // rather than a blend that merely declines to name itself.
+      // Entries opened against different machines.
       this.globalProjectionCache = {
         version: this.globalVersion,
         projection: EMPTY_GLOBAL_RESOURCE_PROJECTION,
@@ -176,18 +150,14 @@ class ResourcesRegistry {
       ...entries.map((entry) => entry.sampledAt ?? 0),
     );
     const projection = {
-      // The fallback aggregates entries opened by the epic panes, which all ride
-      // one transport and so agree on a host. A disagreeing set never reaches
-      // here — it returned empty above.
+      // The fallback aggregates entries opened by the epic panes, which all ride one transport and so
+      // agree on a host. A disagreeing set never reaches here - it returned empty above.
       hostId: attribution.hostId,
       sampledAt: sampledAt > 0 ? sampledAt : null,
       app,
       hostTree,
       other,
-      // A per-epic restricted aggregate means "outside this epic". Combining
-      // one of those with the fallback's already-combined visible owners would
-      // count the same trees twice and relabel them Restricted. Only a real
-      // global stream can supply the global unauthorized-only aggregate.
+      // A per-epic restricted aggregate means "outside this epic".
       restricted: null,
       owners,
       entries,
@@ -200,21 +170,8 @@ class ResourcesRegistry {
   }
 
   /**
-   * The global entry, or `null` when its own stream has reported that this host
-   * cannot serve a global subscribe.
-   *
-   * An `@1.0` host accepts the downgraded global probe and answers with one
-   * empty projection for an epic named `__global__` that does not exist. That
-   * entry outranks the per-epic fallback below purely by existing, so without
-   * this the surface publishes emptiness from a stream that will never carry
-   * anything, while the per-epic streams on the very same transport are holding
-   * that host's real numbers. Following the active host — where nothing on
-   * screen names a machine and so no incompatible notice is shown — that read
-   * as "Waiting for resource data." forever.
-   *
-   * Only `"unsupported"` disqualifies it. `"unknown"` is the ordinary state
-   * before a negotiation settles, and treating it as a verdict would drop every
-   * global projection for the whole handshake window.
+   * The global entry, or `null` when its own stream has reported that this host cannot serve a
+   * global subscribe.
    */
   private usableGlobalEntry(): RegistryEntry | null {
     const entry = this.globalEntry;
@@ -284,26 +241,8 @@ class ResourcesRegistry {
   }
 
   /**
-   * The live global stream's verdict on whether it can serve a global subscribe
-   * — but only when that stream was opened against `claimedHostId`, the machine
-   * the asking surface is NAMING.
-   *
-   * The attribution is not optional, and it is the strict, positive-proof kind
-   * (`hostId` must be non-null and must match), for the same reason
-   * `attributedProjection` demands it of the data: this entry is a module
-   * singleton that outlives any one transport, so it routinely describes a
-   * machine the current reading was not opened against — a host swap in flight,
-   * where the entry is named at acquire time, one commit before the replacement
-   * binding reaches context. Unchecked, picking an up-to-date host while the
-   * previous (old) one's entry is still live would print "cannot report its
-   * processes" under the NEW host's name. A verdict is an accusation about a
-   * specific machine; it may only be repeated for the machine it was made about.
-   *
-   * No entry — and any mismatch — reads as `"unknown"`, never `"unsupported"`.
-   * The mount declines to acquire for a host the client-wide pre-check already
-   * convicted, so that absence is the pre-check's answer being acted on, not a
-   * second independent one; reporting it as a verdict here would make every
-   * pre-mount frame, the whole hydration gap, claim the host is too old.
+   * The live global stream's verdict on whether it can serve a global subscribe - but only when that
+   * stream was opened against `claimedHostId`, the machine the asking surface is NAMING.
    */
   getGlobalScopeSupport(claimedHostId: string | null): ResourcesScopeSupport {
     const entry = this.globalEntry;
@@ -355,16 +294,8 @@ class ResourcesRegistry {
   }
 
   /**
-   * `hostId` is the host the caller opened `clientToken` against — the claim
-   * the projection republishes so a host-scoped reader can verify it. A caller
-   * that cannot name one passes `null`, which reads as "do not attribute this
-   * to any host" rather than as the active one.
-   *
-   * It is NOT part of the entry's identity: two lease holders sharing a
-   * transport are by construction describing one machine, so a second acquire
-   * keeps the name the first declared. A caller whose OWN host id changes must
-   * release and re-acquire — which is what re-running an effect that names it
-   * does.
+   * `hostId` is the host the caller opened `clientToken` against - the claim the projection
+   * republishes so a host-scoped reader can verify it.
    */
   acquireGlobal(
     clientToken: unknown,
@@ -440,15 +371,7 @@ class ResourcesRegistry {
   }
 }
 
-/**
- * The one host every entry was opened against, or `mixed` when they disagree.
- *
- * The distinction matters to the reader, which treats an unnamed projection as
- * "a single source that could not name itself" and shows it when nothing is
- * being claimed about a host. A BLEND of two machines is a different thing and
- * must not borrow that leniency, so it is reported separately rather than
- * collapsed into the same `null`.
- */
+/** The one host every entry was opened against, or `mixed` when they disagree. */
 function hostAttribution(
   entries: readonly RegistryEntry[],
 ):
@@ -472,10 +395,8 @@ function latestAppSnapshot(
   return latest;
 }
 
-// Both selectors compare the ENTRY-level `sampledAt`, not the nested
-// snapshot's: identity-stable merges intentionally keep the previous nested
-// object (with its old timestamp) when display values are unchanged, so the
-// nested `sampledAt` can lag the frame that actually delivered it.
+// Both selectors compare the ENTRY-level `sampledAt`, not the nested snapshot's: identity-stable
+// merges intentionally keep the previous nested object (with its old timestamp) when display
 function latestHostTreeSnapshot(
   entries: readonly GlobalResourceEpicEntry[],
 ): HostTreeResourceUsage | null {
@@ -567,16 +488,7 @@ export function useEpicResourceUsage(epicId: string): EpicResourceUsage | null {
   return useStore(store, (state) => state.epic);
 }
 
-/**
- * Reactive `ResourcesRegistry.getGlobalScopeSupport` for the host the caller is
- * naming. Rides the same global listener set as the projection, which every
- * entry's store change already notifies, so a verdict published mid-stream
- * reaches the panel on the frame it lands rather than on whatever unrelated
- * render happens next.
- *
- * Returns a primitive rather than the projection, so a caller can watch the
- * verdict without re-rendering on every resource tick.
- */
+/** Reactive `ResourcesRegistry.getGlobalScopeSupport` for the host the caller is naming. */
 export function useGlobalResourcesScopeSupport(
   claimedHostId: string | null,
 ): ResourcesScopeSupport {

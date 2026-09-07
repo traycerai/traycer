@@ -58,9 +58,8 @@ export type CommGraphCloudSubscriptionOpener = (
 ) => CommGraphCloudSubscriptionHandle;
 
 /**
- * One retained cloud-authoritative feed per epic. Relay hosts are transport
- * choices only: changing one never changes the graph authority, event set, or
- * compound cursor.
+ * One retained cloud-authoritative feed per epic.
+ * Relay hosts are transport choices only: changing one never changes the graph authority, event set, or compound cursor.
  */
 export class CommGraphCloudSubscriptionManager {
   private readonly epicId: string;
@@ -135,9 +134,8 @@ export class CommGraphCloudSubscriptionManager {
   }
 
   /**
-   * Clears retained dial verdicts when the directory changes the transport
-   * identity of a relay without changing its host ID. This lets a host that
-   * published late, restarted, or upgraded get another cloud-feed attempt.
+   * Clears retained dial verdicts when the directory changes the transport identity of a relay without changing its host ID.
+   * This lets a host that published late, restarted, or upgraded get another cloud-feed attempt.
    */
   setRelayReadinessKeys(readinessKeys: ReadonlyMap<string, string>): void {
     if (this.disposed) return;
@@ -157,11 +155,8 @@ export class CommGraphCloudSubscriptionManager {
       this.rejectedRelayHostIds.delete(hostId);
       this.unsupportedRelayHostIds.delete(hostId);
     }
-    // A re-enrollment can keep the same host ID while rotating the relay's
-    // transport identity. Reopen an active stream as well as retrying failed
-    // candidates so it renegotiates with the new key rather than retaining a
-    // stale authenticated channel. An unrelated host's directory update must
-    // not interrupt a healthy relay.
+    // A re-enrollment can keep the same host ID while rotating the relay's transport identity.
+    // Reopen an active stream as well as retrying failed candidates so it renegotiates with the new key rather than retaining a stale authenticated channel.
     if (this.relayHostId !== null && changedHostIds.has(this.relayHostId)) {
       this.closeCurrent();
       this.openNextRelay();
@@ -190,9 +185,8 @@ export class CommGraphCloudSubscriptionManager {
   attach(): void {
     if (this.disposed || this.attached) return;
     this.attached = true;
-    // Unsupported and failed are verdicts for a single retained dial cycle,
-    // not permanent facts about a host. A close/reopen must retry the current
-    // set so a restarted or upgraded host can become the cloud relay.
+    // Unsupported and failed are verdicts for a single retained dial cycle, not permanent facts about a host.
+    // A close/reopen must retry the current set so a restarted or upgraded host can become the cloud relay.
     this.rejectedRelayHostIds.clear();
     this.unsupportedRelayHostIds.clear();
     this.openNextRelay();
@@ -202,9 +196,8 @@ export class CommGraphCloudSubscriptionManager {
     if (!this.attached) return;
     this.attached = false;
     this.closeCurrent();
-    // A later attach opens a new stream whose first snapshot is backlog learned
-    // while this surface was absent. Retain rows/cursor, but start a fresh
-    // arrival boundary so that backlog cannot pulse as live activity.
+    // A later attach opens a new stream whose first snapshot is backlog learned while this surface was absent.
+    // Retain rows/cursor, but start a fresh arrival boundary so that backlog cannot pulse as live activity.
     this.historyBoundary = null;
     this.historyBoundaryInitialized = false;
     this.historyCaughtUp = false;
@@ -312,9 +305,8 @@ export class CommGraphCloudSubscriptionManager {
           },
         },
       });
-      // A LogicalStream can replay a terminal status while the opener is
-      // still returning. That status may synchronously fail over to another
-      // relay, whose handle must not be overwritten by this stale one.
+      // A LogicalStream can replay a terminal status while the opener is still returning.
+      // That status may synchronously fail over to another relay, whose handle must not be overwritten by this stale one.
       if (isCurrent()) {
         this.handle = handle;
       } else {
@@ -322,10 +314,8 @@ export class CommGraphCloudSubscriptionManager {
       }
     } catch (cause) {
       this.relayStatus = "failed";
-      // A synchronous dial failure has no handle to emit an `unreachable`
-      // status. Reject this candidate ourselves before continuing through the
-      // remaining scoped relays; otherwise the unchanged relay set would keep
-      // the manager wedged on this null-handle host indefinitely.
+      // A synchronous dial failure has no handle to emit an `unreachable` status.
+      // Reject this candidate ourselves before continuing through the remaining scoped relays; otherwise the unchanged relay set would keep the manager wedged on this null-handle host indefinitely.
       this.rejectedRelayHostIds.add(hostId);
       this.relayHostId = null;
       appLogger.error(
@@ -485,12 +475,8 @@ export class CommGraphCloudSubscriptionManager {
       }
       this.rejectedRelayHostIds.add(hostId);
       this.closeCurrent();
-      // Once every candidate in this dial cycle has timed out, begin another
-      // bounded cycle. Earlier reconnecting/unreachable relays may have
-      // recovered while the later candidates were being tried; retaining all
-      // rejection marks would otherwise leave the cloud-authoritative graph
-      // stale forever. An explicit `unsupported` verdict remains sticky for
-      // this attachment and is never retried by the timeout cycle.
+      // Once every candidate in this dial cycle has timed out, begin another bounded cycle.
+      // Earlier reconnecting/unreachable relays may have recovered while the later candidates were being tried; retaining all rejection marks would otherwise leave the cloud-authoritative graph stale forever.
       if (
         this.relayHostIds.every((candidate) =>
           this.rejectedRelayHostIds.has(candidate),

@@ -50,9 +50,7 @@ describe("useRevealRowControls", () => {
 
 describe("nodePadRightClass", () => {
   it("reserves the control pad at rest when the controls never wait for hover", () => {
-    // The point of the revealed branch: no `group-hover` qualifier survives, or
-    // the row would sit at `pr-2` with the controls already painted over its
-    // trailing content.
+    // The point of the revealed branch: no `group-hover` qualifier survives, or the row would sit at `pr-2` with the controls already painted over its trailing content.
     const revealed = nodePadRightClass(true, false, true);
     expect(revealed).toBe("pr-8");
     expect(revealed).not.toContain("group-hover");

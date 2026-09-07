@@ -4,10 +4,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-// Two DISTINGUISHABLE sentinels, so a regression to the ambient host fails on
-// the value rather than on an absence: a build that reads `useHostClient()`
-// again gets a real object back and would satisfy any "a client was passed"
-// assertion.
+// Two DISTINGUISHABLE sentinels, so a regression to the ambient host fails on the value rather than on an absence: a build that reads `useHostClient()` again gets a real object back and would satisfy any "a client was passed" assertion.
 const clients = vi.hoisted(() => ({
   ambient: { label: "ambient-client" },
   session: { label: "session-client" },
@@ -37,10 +34,7 @@ const commandFixture = await vi.hoisted(async () => {
     enqueueWriteCommand: vi.fn<(intent: unknown) => string | null>(),
     waitForWriteCommand: vi.fn<(commandId: string) => Promise<unknown>>(),
   };
-  // A real vanilla store, not a callable stub: since the hook-order fix the
-  // hooks subscribe through `useStore(handle.store, selector)`, so the fixture
-  // must carry `subscribe` as well as `getState` or every render throws
-  // "subscribe is not a function" from the passive-effect commit.
+  // A real vanilla store, not a callable stub: since the hook-order fix the hooks subscribe through `useStore(handle.store, selector)`, so the fixture must carry `subscribe` as well as `getState` or every render throws "subscribe is not a function" from the passive-effect commit.
   const store = createStore<typeof state>(() => state);
   return { state, handle: { store } };
 });
@@ -272,16 +266,7 @@ describe("useEpicRenameArtifact", () => {
 });
 
 /**
- * An artifact is a row IN an Epic, and an Epic is projected from exactly one
- * machine - so every write here must address the SESSION's host, never the
- * app-wide effective one.
- *
- * The window where those differ is not theoretical: `EpicSessionProvider`
- * keeps the previous handle rendered while a re-point establishes and after
- * one fails, and only the CANVAS is made inert for it (`epic-shell.tsx` passes
- * `readOnly` to the tile subtree alone). The sidebar that issues these
- * mutations stays live, so a Delete clicked on a row projected from host A was
- * sent to host B.
+ * Artifact writes address the session host, never the app-wide effective one. The sidebar stays live while a re-point keeps the previous handle rendered.
  */
 describe("epic node mutations address the Epic session's host", () => {
   it("keeps the legacy create mutation on the session client", () => {
@@ -322,21 +307,7 @@ describe("epic node mutations address the Epic session's host", () => {
 });
 
 /**
- * The status and rename hooks' `mutate` wrappers
- * both do `void mutateAsync(v)` - `mutateAsync` toasts AND rethrows on a
- * refused write, so every refused status change / rename raises an
- * unhandled rejection nobody consumes. `useEpicDeleteArtifact`'s own `mutate`
- * (above) already attaches both a success and an error handler; these two do
- * not.
- *
- * Checked through Node's `process` event, not
- * `window.addEventListener("unhandledrejection")`: that listener does not
- * reliably fire under this repo's jsdom/vitest setup, and `vitest.config.ts`
- * sets `dangerouslyIgnoreUnhandledErrors: true` while
- * `__tests__/test-browser-apis.ts` registers its own process-level swallow -
- * so only an IN-BAND `process` listener is an honest observable here, not an
- * empty array that could just as well mean "nothing fired" as "nothing
- * rejected".
+ * Observe refused-write rejections via an in-band `process` listener; jsdom/vitest swallows `unhandledrejection`.
  */
 interface NodeProcessLike {
   on(event: string, listener: (value: unknown) => void): void;
@@ -381,7 +352,6 @@ describe("mutate consumes the mutateAsync rejection instead of leaving it unhand
     expect(toast.error).toHaveBeenCalledWith("Couldn't update status.", {
       description: "write denied",
     });
-    // THE REDDENING ONE.
     expect(rejections).toEqual([]);
   });
 
@@ -417,24 +387,12 @@ describe("mutate consumes the mutateAsync rejection instead of leaving it unhand
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename artifact.", {
       description: "write denied",
     });
-    // THE REDDENING ONE.
     expect(rejections).toEqual([]);
   });
 });
 
 /**
- * `isPending` on all three command-backed hooks matched ANY pending command of
- * that KIND, with no regard for which artifact it named - so one artifact's
- * in-flight status change disabled and spun EVERY status pill in the epic, and
- * an offline-retained command held every pill for as long as it was retained.
- *
- * Each hook now takes the artifact it speaks for. `null` means "this caller
- * speaks for no single artifact" - the sidebar's bulk-delete controller and
- * BOTH rename commit hooks, `useSwitcherRename` and its desktop twin
- * `useRenameCanvasTab`, whose node id arrives as an argument to the returned
- * callback rather than as a value at hook-call time. Three of the nine
- * production callers; none of them reads `isPending`, and `null` reports
- * `false` rather than "any".
+ * `isPending` is per artifact. `null` means the caller names no artifact and reports `false`, not "any pending of this kind".
  */
 describe("isPending is scoped to the artifact the hook speaks for", () => {
   it("useEpicUpdateArtifactStatus: a pending command for X does not spin Y", () => {

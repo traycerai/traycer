@@ -4,9 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import devDesktop from "../dev-desktop.js";
 
-// `dev-desktop.js` lives at <repo>/scripts/dev-desktop.js; resolve repo
-// root once so the assertions can pin absolute paths inside the dev
-// orchestrator's CLI argv without having to spawn anything.
+// `dev-desktop.js` lives at <repo>/scripts/dev-desktop.js; resolve repo root once so the assertions can pin absolute paths inside the dev orchestrator's CLI argv without having to spawn anything.
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",

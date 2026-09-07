@@ -1,18 +1,11 @@
 /**
- * Escape-sequence encoding for the mobile terminal key bar. Phones have no
- * Esc/Tab/Ctrl/arrow keys, so the bar injects the byte sequences a physical
- * keyboard would produce; the host PTY cannot tell the difference. This is the
- * bar's own encoding layer, deliberately separate from xterm's keyboard
- * handler: bar taps never produce `KeyboardEvent`s, so they never pass through
- * `attachCustomKeyEventHandler` or xterm's encoder.
+ * Escape-sequence encoding for the mobile terminal key bar.
+ * Phones have no Esc/Tab/Ctrl/arrow keys, so the bar injects the byte sequences a physical keyboard would produce; the host PTY cannot tell the difference.
  */
 
 /**
- * DECCKM cursor-keys mode of the running program. Full-screen TUIs switch to
- * "application" (`SS3 A`-style arrows); plain shells stay "normal"
- * (`CSI A`-style). Read live from `term.modes.applicationCursorKeysMode` per
- * press - encoding one dialect unconditionally breaks arrows in the other
- * mode's programs.
+ * DECCKM cursor-keys mode of the running program.
+ * Full-screen TUIs switch to "application" (`SS3 A`-style arrows); plain shells stay "normal" (`CSI A`-style).
  */
 export type TerminalCursorKeyMode = "normal" | "application";
 
@@ -105,9 +98,8 @@ function encodeEditingKey(
 }
 
 /**
- * xterm's modified-arrow form (`CSI 1;<mod> <final>`), where the modifier
- * parameter is 1 + shift(1) + alt(2) + ctrl(4). Modified arrows use the CSI
- * form in both cursor-key modes; only unmodified arrows switch to SS3.
+ * xterm's modified-arrow form (`CSI 1;<mod> <final>`), where the modifier parameter is 1 + shift(1) + alt(2) + ctrl(4).
+ * Modified arrows use the CSI form in both cursor-key modes; only unmodified arrows switch to SS3.
  */
 function encodeArrow(
   finalByte: string,
@@ -126,11 +118,8 @@ function encodeArrow(
 }
 
 /**
- * Apply latched Ctrl/Alt to a character typed on the phone's own keyboard
- * (latched Ctrl + typed `c` -> `\x03`). Shift is bar-key-only: capitals come
- * from the phone keyboard's own shift, so a shift latch leaves text unchanged.
- * Returns null when the character has no control mapping under a Ctrl latch,
- * so the caller can decide to pass the input through untransformed.
+ * Apply latched Ctrl/Alt to a character typed on the phone's own keyboard (latched Ctrl + typed `c` -> `\x03`).
+ * Shift is bar-key-only: capitals come from the phone keyboard's own shift, so a shift latch leaves text unchanged.
  */
 export function applyModifiersToTypedCharacter(
   character: string,
@@ -153,9 +142,8 @@ function applyAltPrefix(
 }
 
 /**
- * The classic Ctrl mapping: clear bits 6-7 of the ASCII code. Covers `a`-`z`,
- * `@ A-Z [ \ ] ^ _`, plus the two conventional extras (space -> NUL,
- * `?` -> DEL). Anything else has no control form.
+ * The classic Ctrl mapping: clear bits 6-7 of the ASCII code.
+ * Covers `a`-`z`, `@ A-Z [ \ ] ^ _`, plus the two conventional extras (space -> NUL, `?` -> DEL).
  */
 function controlByteFor(character: string): string | null {
   if (character === " ") return "\x00";

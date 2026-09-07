@@ -1,20 +1,5 @@
 /**
- * Fuzzy title matching for the Epic sidebar's agent (chat) panel search.
- *
- * Deliberately UNLIKE artifact search, which is a host RPC that greps the
- * on-disk artifact mirror and returns ranked hits with content snippets. An
- * agent's searchable text is its title and nothing else - the sidebar already
- * holds every title it renders - so this is a local Fuse pass with no request,
- * no loading state, and no way to fail.
- *
- * The output is a visible-id SET, not a result list: matches feed the same
- * `SidebarFilterVisibilityContext` the interface/ownership filters use, so the
- * tree itself narrows and every row keeps its live chrome (progress icon,
- * notification indicators, archive/share menus, drag-drop). See
- * `epic-sidebar-filter.ts` for that plumbing.
- *
- * Lives apart from `epic-sidebar-chat-search.tsx` so the component file keeps
- * exporting only components (Fast Refresh).
+ * Lives apart from `epic-sidebar-chat-search.tsx` so the component file keeps exporting only components (Fast Refresh).
  */
 import Fuse, { type IFuseOptions } from "fuse.js";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -29,9 +14,7 @@ interface ChatSearchRow {
 }
 
 /**
- * Tuned for short, human-written agent titles rather than prose:
- * `ignoreLocation` so a match late in a long title scores like an early one,
- * and a threshold loose enough to survive a typo without matching everything.
+ * Tuned for short, human-written agent titles rather than prose: `ignoreLocation` so a match late in a long title scores like an early one, and a threshold loose enough to survive a typo without matching everything.
  */
 const CHAT_SEARCH_FUSE_OPTIONS: IFuseOptions<ChatSearchRow> = {
   includeScore: false,
@@ -41,14 +24,11 @@ const CHAT_SEARCH_FUSE_OPTIONS: IFuseOptions<ChatSearchRow> = {
   keys: [{ name: "title", weight: 1 }],
 };
 
-/** The title text a row is searched by - the same string the row renders. */
 export function chatSearchTitle(node: {
   readonly title: string;
   readonly type: string;
 }): string {
-  // A node whose type the display map does not know still has to answer with
-  // SOMETHING searchable, and its raw title is the honest answer - falling back
-  // to a kind label would invent text the row never renders.
+  // A node whose type the display map does not know still has to answer with SOMETHING searchable, and its raw title is the honest answer - falling back to a kind label would invent text the row never renders.
   return isEpicNodeKind(node.type)
     ? displayTitle(node.title, node.type)
     : node.title;
@@ -66,11 +46,8 @@ function matchRows(
 }
 
 /**
- * Local tree ids whose title matches `query` - the raw matches, with no
- * ancestor expansion.
- *
- * `null` means "no active search" - the caller passes that straight through as
- * the no-narrowing value, exactly like an inactive filter.
+ * Local tree ids whose title matches `query` - the raw matches, with no ancestor expansion.
+ * `null` means "no active search" - the caller passes that straight through as the no-narrowing value, exactly like an inactive filter.
  */
 export function chatSearchMatchIds(args: {
   readonly query: string;
@@ -88,9 +65,8 @@ export function chatSearchMatchIds(args: {
 }
 
 /**
- * Cloud-only rows that match `query`. They are not in the tree, so they cannot
- * be narrowed by an id set and are filtered as a list instead - the same split
- * the interface/ownership filters already make for these rows.
+ * Cloud-only rows that match `query`.
+ * They are not in the tree, so they cannot be narrowed by an id set and are filtered as a list instead - the same split the interface/ownership filters already make for these rows.
  */
 export function filterCloudChatsBySearch(
   chats: ReadonlyArray<CloudChatSummary>,
@@ -101,7 +77,6 @@ export function filterCloudChatsBySearch(
     matchRows(
       chats.map((chat) => ({
         id: chat.identity.chatId,
-        // The literal `EpicSidebarCloudChatRow` renders: a cloud row's title is
         // nullable on the wire and falls back to the same "Untitled chat".
         title: displayTitle(chat.title ?? "", "chat"),
       })),
@@ -112,16 +87,8 @@ export function filterCloudChatsBySearch(
 }
 
 /**
- * Intersect the filter's MATCHES with the search's. Either side may be `null`
- * ("not narrowing"), and two nulls stay null so the tree renders unnarrowed.
- *
- * Both inputs must be raw matches, never ancestor-expanded sets. Expanding
- * first and intersecting after lets a row that matched NEITHER predicate
- * survive: given a terminal-agent parent with a GUI-chat child, a GUI-only
- * filter expands to {child, parent} and a search for the parent's title expands
- * to {parent}, whose intersection is {parent} - a terminal agent rendered under
- * a GUI-only filter, with the child that actually matched the filter dropped.
- * Intersecting the matches first correctly yields nothing.
+ * Both inputs must be raw matches, never ancestor-expanded sets.
+ * Expanding first and intersecting after lets a row that matched NEITHER predicate survive: given a terminal-agent parent with a GUI-chat child, a GUI-only filter expands to {child, parent} and a search for the parent's title expands to {parent}, whose intersection is {parent} - a terminal agent rendered under a GUI-only filter, with the child that actually matched the filter dropped.
  */
 export function intersectMatchIds(
   filterMatchIds: ReadonlySet<string> | null,
@@ -137,9 +104,8 @@ export function intersectMatchIds(
 }
 
 /**
- * Ancestor-expand a combined match set so a nested match stays reachable under
- * parents that did not themselves match. Call this ONCE, after every narrowing
- * has been intersected.
+ * Ancestor-expand a combined match set so a nested match stays reachable under parents that did not themselves match.
+ * Call this ONCE, after every narrowing has been intersected.
  */
 export function expandMatchesToVisibleIds(
   matchIds: ReadonlySet<string> | null,

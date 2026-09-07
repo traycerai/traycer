@@ -191,10 +191,8 @@ describe("detailed rate-limit formatting", () => {
   });
 
   it("keeps Cursor's known spend when the included limit was not reported", () => {
-    // The money fields are independently nullable (proto3 omits zero-valued
-    // fields), so a payload can carry spend without a limit. A missing
-    // denominator must not hide the spend that IS known - the same spend-only
-    // fallback the Hugging Face arm uses.
+    // The money fields are independently nullable (proto3 omits zero-valued fields), so a payload can carry spend without a limit.
+    // A missing denominator must not hide the spend that IS known - the same spend-only fallback the Hugging Face arm uses.
     const response: AgentGetProviderProfileRateLimitsResponse = {
       rateLimits: {
         provider: "cursor",

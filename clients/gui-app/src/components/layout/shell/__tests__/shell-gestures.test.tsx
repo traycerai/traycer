@@ -17,25 +17,15 @@ import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-
 import { setMobileApp } from "@/lib/mobile-app";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 
-/**
- * jsdom implements `TouchEvent` but ships no working `Touch` constructor, so a
- * touch here is a plain `Event` wearing the one shape the production
- * listeners read off it: a `touches` list of `{ clientX, clientY }` points, a
- * `target`, and a `timeStamp`. Dispatched straight at `document` - where every
- * recognizer under test listens in the capture phase - with `target`
- * overridden via `defineProperty` so a single call site can stand in for a
- * touch that landed on any element, not just `document` itself.
- */
+/** jsdom implements `TouchEvent` but ships no working `Touch` constructor, so a touch here is a plain `Event`
+ * wearing the one shape the production listeners read off it: a `touches` list of `{ clientX. */
 interface FakeTouchPoint {
   readonly clientX: number;
   readonly clientY: number;
 }
 
-/**
- * The production listeners read `touches` through both index access and
- * `.item()` (the real `TouchList` shape) - a bare array only covers the
- * first, so `.item()` is bolted on to match.
- */
+/** The production listeners read `touches` through both index access and `.item` (the real `TouchList` shape) -
+ * a bare array only covers the first, so `.item` is bolted on to match. */
 function makeTouchList(
   points: ReadonlyArray<FakeTouchPoint>,
 ): ReadonlyArray<FakeTouchPoint> & {
@@ -70,11 +60,8 @@ function dispatchTouch(
   document.dispatchEvent(event);
 }
 
-/**
- * `touchend`/`touchcancel` carry no per-touch data either listener under test
- * reads (both handlers take no event parameter), so this only needs a
- * `timeStamp` for callers that care about ordering.
- */
+/** `touchend`/`touchcancel` carry no per-touch data either listener under test reads (both handlers take no
+ * event parameter), so this only needs a `timeStamp` for callers that care about ordering. */
 function dispatchTouchEnd(
   type: "touchend" | "touchcancel",
   timeStamp: number,
@@ -87,13 +74,8 @@ function dispatchTouchEnd(
   document.dispatchEvent(event);
 }
 
-/**
- * The drawer's close recognizer reads POINTER events, because the drag engine
- * it hands the gesture to is pointer-only. jsdom has no usable `PointerEvent`
- * constructor either, so the same trick as above: a plain `Event` wearing the
- * fields the recognizer actually reads - a coordinate pair, an identity, a
- * primary flag, a target and a timestamp.
- */
+/** jsdom has no usable `PointerEvent` constructor either, so the same trick as above: a plain `Event` wearing
+ * the fields the recognizer actually reads. */
 function dispatchPointer(
   type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
   options: {
@@ -186,15 +168,9 @@ interface ClosePullActivation {
   readonly clientX: number;
 }
 
-/** The predicate for a screen with no drawer panel on it. */
 const NOTHING_CLAIMED = (): boolean => false;
 
-/**
- * The recognizer reports activations rather than moving the drawer itself, so a
- * probe records them. Deciding where the panel ends up belongs to the release
- * rule (`resolvesToOpen`), not here - all this hook settles is whether a
- * pointer on the panel is a close pull at all.
- */
+/** The recognizer reports activations rather than moving the drawer itself, so a probe records them. */
 function mountPull(options: {
   readonly withinPanel: (target: EventTarget | null) => boolean;
 }): ReadonlyArray<ClosePullActivation> {
@@ -231,9 +207,8 @@ afterEach(() => {
   document.body.innerHTML = "";
   document.documentElement.style.removeProperty("--safe-area-inset-left");
   document.documentElement.style.removeProperty("--safe-area-inset-right");
-  // The inset reader caches module-wide and only retires on a viewport event,
-  // so clearing the property is not enough - without this a test that set an
-  // inset would hand its geometry to every test after it.
+  // The inset reader caches module-wide and only retires on a viewport event, so clearing the property is not
+  // enough - without this a test that set an inset would hand its geometry to every test after it.
   window.dispatchEvent(new Event("resize"));
   setMobileApp(false);
   useMobileNavStore.setState({ open: false });
@@ -311,14 +286,8 @@ describe("commitsDirectionalGesture", () => {
   });
 });
 
-/**
- * The panel is a SCROLLING surface, which makes it the hardest place to ask
- * "is this drag mine". A drag engine left to claim on raw travel takes a share
- * of every vertical swipe and drags the drawer sideways underneath a finger
- * that was reading a list - the failure the user sees as the drawer fighting
- * them. These cases pin that the classifier actually arbitrates rather than
- * merely existing.
- */
+/** A drag engine left to claim on raw travel takes a share of every vertical swipe and drags the drawer
+ * sideways underneath a finger that was reading a list. */
 describe("useNavDrawerClosePull - claiming a pull on the panel", () => {
   function panelNode(): HTMLElement {
     const panel = document.createElement("div");
@@ -357,16 +326,14 @@ describe("useNavDrawerClosePull - claiming a pull on the panel", () => {
     });
 
     expect(activations.length).toBe(1);
-    // The travel is reported so the panel can meet the finger where the drag
-    // declared itself rather than 16px behind it, and it is positive along the
-    // pull's OWN direction - leftward.
+    // The travel is reported so the panel can meet the finger where the drag declared itself rather than 16px
+    // behind it, and it is positive along the pull's own direction - leftward.
     expect(activations[0]?.travelPx).toBe(16);
     expect(activations[0]?.clientX).toBe(184);
   });
 
-  // The third state is the point. A two-state recognizer has to decide on the
-  // first pixel, so it either steals scrolls or misses swipes; an ambiguous
-  // drag stays unclaimed until it declares itself.
+  // A two-state recognizer has to decide on the first pixel, so it either steals scrolls or misses swipes; an
+  // ambiguous drag stays unclaimed until it declares itself.
   it("waits through an undeclared move and activates on the one that declares", () => {
     const panel = panelNode();
     const activations = mountOnPanel(panel);
@@ -461,10 +428,7 @@ describe("useNavDrawerClosePull - claiming a pull on the panel", () => {
     expect(activations.length).toBe(0);
   });
 
-  // Rightward on the panel is the counter-direction: a hand pushing an
-  // already-open drawer further open, which is nothing. The gesture stays dead
-  // for the rest of that pointer rather than re-arming if the finger turns
-  // back.
+  // The gesture stays dead for the rest of that pointer rather than re-arming if the finger turns back.
   it("abandons the gesture for good once the finger pushes the other way", () => {
     const panel = panelNode();
     const activations = mountOnPanel(panel);
@@ -619,9 +583,8 @@ describe("useNavDrawerClosePull - claiming a pull on the panel", () => {
     expect(activations.length).toBe(1);
   });
 
-  // Claiming nothing until the classifier is satisfied is what keeps the panel
-  // itself usable: pressing a menu row is a tap, and a tap never reaches 15px
-  // of horizontal travel.
+  // Claiming nothing until the classifier is satisfied is what keeps the panel itself usable: pressing a menu
+  // row is a tap, and a tap never reaches 15px of horizontal travel.
   it("leaves a tap on the panel to the row underneath", () => {
     const panel = panelNode();
     const activations = mountOnPanel(panel);
@@ -647,21 +610,16 @@ describe("useNavDrawerClosePull - claiming a pull on the panel", () => {
   });
 });
 
-/**
- * What the recognizer refuses, and the first case is the load-bearing one:
- * geometry plays NO part in this hook. Landing on the panel is the whole
- * entrance test, so a drag anywhere else - including the screen's leading edge
- * - is somebody else's.
- */
+/** What the recognizer refuses, and the first case is the load-bearing one: geometry plays NO part in this
+ * hook. */
 describe("useNavDrawerClosePull - what it refuses", () => {
   function mountOffPanel(): ReadonlyArray<ClosePullActivation> {
     setMobileApp(true);
     return mountPull({ withinPanel: NOTHING_CLAIMED });
   }
 
-  // The hamburger is the only way into the drawer, so a rightward drag from
-  // the leading edge must reach whatever surface is under it untouched. A
-  // recognizer that kept an edge branch would claim this one.
+  // The hamburger is the only way into the drawer, so a rightward drag from the leading edge must reach whatever
+  // surface is under it untouched. A recognizer that kept an edge branch would claim this one.
   it("never activates for a rightward drag from the screen's leading edge", () => {
     const activations = mountOffPanel();
 
@@ -710,9 +668,8 @@ describe("useNavDrawerClosePull - what it refuses", () => {
     expect(activations.length).toBe(0);
   });
 
-  // The scrim claims its own pointers the instant they land, so a pointer
-  // reaching it is already spoken for. It is on the drawer's layer but not on
-  // the panel, which is exactly the distinction `withinPanel` draws.
+  // The scrim claims its own pointers the instant they land, so a pointer reaching it is already spoken for. It
+  // is on the drawer's layer but not on the panel, which is exactly the distinction `withinPanel` draws.
   it("stands down for a pointer that landed on the scrim", () => {
     const scrim = document.createElement("div");
     document.body.appendChild(scrim);
@@ -769,9 +726,8 @@ describe("useNavDrawerClosePull - what it refuses", () => {
     expect(activations.length).toBe(0);
   });
 
-  // A target that pans horizontally is excluded even when it does not declare
-  // `touch-action: none` outright - a rail mid-scroll is a gesture the user is
-  // already in, so this refuses rather than competes.
+  // A target that pans horizontally is excluded even when it does not declare `touch-action: none` outright - a
+  // rail mid-scroll is a gesture the user is already in, so this refuses rather than competes.
   it("does not activate on a rail inside the panel that already pans sideways", () => {
     setMobileApp(true);
     const panel = document.createElement("div");
@@ -850,9 +806,8 @@ describe("useDragToDismissKeyboard", () => {
       target: outside,
       timeStamp: 0,
     });
-    // Euclidean travel of ~8.49px, over the 8px slop, and primary/cross both
-    // stay under the drag arm's own activate threshold so it never takes over
-    // either.
+    // Euclidean travel of ~8.49px, over the 8px slop, and primary/cross both stay under the drag arm's own
+    // activate threshold so it never takes over either.
     dispatchTouch("touchmove", {
       touches: [{ clientX: 106, clientY: 106 }],
       target: outside,
@@ -1017,9 +972,8 @@ describe("useDragToDismissKeyboard", () => {
     document.body.appendChild(scroller);
     scroller.scrollTop = 100;
 
-    // No touchstart ever ran, so the sampler has no touched node to bind this
-    // scroll to - a fast flick elsewhere in the app must not read as the
-    // user's own gesture just because a text entry happens to be focused.
+    // No touchstart ever ran, so the sampler has no touched node to bind this scroll to - a fast flick elsewhere
+    // in the app must not read as the user's own gesture just because a text entry happens to be focused.
     dispatchScroll(scroller, 1000);
     scroller.scrollTop = 20;
     dispatchScroll(scroller, 1040);
@@ -1115,9 +1069,8 @@ describe("useDragToDismissKeyboard", () => {
       target: outside,
       timeStamp: 0,
     });
-    // A route change or picker autofocusing its own field mid-gesture - the
-    // dismiss is still pinned to the field the gesture started on, not
-    // whichever one happens to hold focus at release.
+    // A route change or picker autofocusing its own field mid-gesture - the dismiss is still pinned to the field
+    // the gesture started on, not whichever one happens to hold focus at release.
     const fieldB = focusInput();
     dispatchTouchEnd("touchend", 10);
 
@@ -1172,20 +1125,12 @@ describe("useDragToDismissKeyboard", () => {
   });
 });
 
-/**
- * The platform navigation swipes. Each edge answers exactly ONE direction -
- * the one travelling inward from it - so the two zones can never both claim a
- * gesture, and a drag off the screen is not a navigation that changed its mind.
- *
- * `window.innerWidth` is pinned rather than assumed: the trailing zone is
- * derived from it, and a suite-wide default that shifted would move the zone
- * without moving the coordinates the cases dispatch at.
- */
+/** Each edge answers exactly one direction - the one travelling inward from it - so the two zones can never
+ * both claim a gesture, and a drag off the screen is not a navigation that changed its mind. */
 describe("useEdgeNavSwipe", () => {
   const VIEWPORT_PX = 400;
 
   interface SwipeProbe {
-    /** Discrete steps - the path taken when nothing follows the finger. */
     readonly navigations: ReadonlyArray<EdgeNavDirection>;
     readonly dragStarts: ReadonlyArray<EdgeNavDirection>;
     readonly dragTravel: ReadonlyArray<number>;
@@ -1194,7 +1139,6 @@ describe("useEdgeNavSwipe", () => {
 
   function mountSwipe(options: {
     readonly edgesClaimed: () => boolean;
-    /** What the transition answers at activation. */
     readonly response: EdgeNavDragResponse;
   }): SwipeProbe {
     const navigations: EdgeNavDirection[] = [];
@@ -1223,17 +1167,13 @@ describe("useEdgeNavSwipe", () => {
     return { navigations, dragStarts, dragTravel, releases };
   }
 
-  /**
-   * The ordinary case: the mobile app, nothing covering the edges, and no
-   * transition able to follow the finger - so activation navigates outright,
-   * which is the shape every case below asserts against.
-   */
+  /** The ordinary case: the mobile app, nothing covering the edges, and no transition able to follow the finger -
+   * so activation navigates outright, which is the shape every case below asserts against. */
   function mountOnBareScreen(): SwipeProbe {
     setMobileApp(true);
     return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response: "instant" });
   }
 
-  /** The same screen, with a transition that takes the drag at activation. */
   function mountWithFollowingTransition(): SwipeProbe {
     setMobileApp(true);
     return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response: "follow" });
@@ -1291,9 +1231,8 @@ describe("useEdgeNavSwipe", () => {
     expect(probe.navigations).toEqual(["forward"]);
   });
 
-  // Outward from the leading edge is the counter-direction there - a swipe off
-  // the screen, not a back. The trailing edge owns leftward and this edge does
-  // not answer it.
+  // Outward from the leading edge is the counter-direction there - a swipe off the screen, not a back. The
+  // trailing edge owns leftward and this edge does not answer it.
   it("ignores a leftward swipe that starts at the leading edge", () => {
     const probe = mountOnBareScreen();
 
@@ -1445,13 +1384,7 @@ describe("useEdgeNavSwipe", () => {
     expect(probe.navigations).toEqual([]);
   });
 
-  /**
-   * A blocking surface can arrive DURING the contact - a migration frame lands,
-   * a dialog opens on something happening elsewhere - so the finger that began
-   * on an ordinary screen is mid-travel over a surface the user has to address.
-   * No amount of care about WHEN a claimant registers covers this; only asking
-   * again does.
-   */
+  /** No amount of care about when a claimant registers covers this; only asking again does. */
   describe("a claim arriving mid-contact", () => {
     function mountWithSwitchableClaim(): {
       readonly probe: SwipeProbe;
@@ -1495,10 +1428,8 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.navigations).toEqual([]);
     });
 
-    // Dropped, not paused. A claim that appears mid-contact does not retract
-    // when the layer closes: the swipe that started under one screen is not
-    // owed to whatever screen follows it, and re-arming a resident tracker
-    // would hand it over.
+    // A claim that appears mid-contact does not retract when the layer closes: the swipe that started under one
+    // screen is not owed to whatever screen follows it, and re-arming a resident tracker would hand it over.
     it("does not re-arm the same contact once the claim lifts", () => {
       const { probe, claim } = mountWithSwitchableClaim();
 
@@ -1582,10 +1513,8 @@ describe("useEdgeNavSwipe", () => {
     expect(probe.navigations).toEqual([]);
   });
 
-  // The composer spans the full width, so its own leading edge sits inside the
-  // zone. A horizontal drag there is the caret being dragged through the text,
-  // and it belongs to the field whether or not the field held focus when the
-  // finger came down.
+  // A horizontal drag there is the caret being dragged through the text, and it belongs to the field whether or
+  // not the field held focus when the finger came down.
   it("does not navigate on a drag inside a text entry", () => {
     const probe = mountOnBareScreen();
     const composer = document.createElement("textarea");
@@ -1609,11 +1538,7 @@ describe("useEdgeNavSwipe", () => {
     expect(probe.navigations).toEqual([]);
   });
 
-  // The shape a rich editor's node views take: a non-editable atom - a mention
-  // chip, a slash-command result, an attached image - inside an editable root.
-  // There is no caret in one to drag, so the nearest declaration wins and the
-  // swipe is the shell's. Walking past it to the editable root would refuse a
-  // gesture over every atom in the document.
+  // Walking past it to the editable root would refuse a gesture over every atom in the document.
   it("navigates on a drag over a non-editable atom inside an editor", () => {
     const probe = mountOnBareScreen();
     const editable = document.createElement("div");
@@ -1630,9 +1555,8 @@ describe("useEdgeNavSwipe", () => {
     expect(probe.navigations).toEqual(["back"]);
   });
 
-  // The carve-out is about the caret, not about ownership of every descendant:
-  // a real field nested inside a non-editable atom is still a field, and the
-  // tag is checked at every level on the way up.
+  // The carve-out is about the caret, not about ownership of every descendant: a real field nested inside a
+  // non-editable atom is still a field, and the tag is checked at every level on the way up.
   it("does not navigate on a field nested inside a non-editable atom", () => {
     const probe = mountOnBareScreen();
     const editable = document.createElement("div");
@@ -1649,15 +1573,7 @@ describe("useEdgeNavSwipe", () => {
     expect(probe.navigations).toEqual([]);
   });
 
-  /**
-   * The touch layer, whose only job is to stop the browser taking the drag
-   * before the recognizer can read it. What jsdom can honestly pin is the
-   * DECISION - which touches are cancelled, which are let go, and when the
-   * per-move listener exists at all. Whether cancelling is enough to keep a
-   * real web view's scroll view off the gesture is a device question and is
-   * stated as one; no simulator reproduces it either, since synthesized
-   * touches drive no such arbitration.
-   */
+  /** The touch layer, whose only job is to stop the browser taking the drag before the recognizer can read it. */
   describe("reserving the gesture from the browser", () => {
     interface TouchPoint {
       readonly clientX: number;
@@ -1672,10 +1588,7 @@ describe("useEdgeNavSwipe", () => {
       });
     }
 
-    /**
-     * Dispatches and hands the event back, so a case can read whether the
-     * browser's own handling was cancelled.
-     */
+    /** Dispatches and hands the event back, so a case can read whether the browser's own handling was cancelled. */
     function fireTouch(
       type: "touchstart" | "touchmove" | "touchend",
       options: {
@@ -1716,9 +1629,8 @@ describe("useEdgeNavSwipe", () => {
       const later = touchTo({ clientX: 60, clientY: 300 }, document.body);
 
       expect(first.cancelled).toBe(true);
-      // Every move after the decision, not only the one that made it: handing
-      // the drag back mid-gesture would let the page start scrolling under a
-      // finger the recognizer is still reading.
+      // Every move after the decision, not only the one that made it: handing the drag back mid-gesture would let
+      // the page start scrolling under a finger the recognizer is still reading.
       expect(later.cancelled).toBe(true);
     });
 
@@ -1734,9 +1646,7 @@ describe("useEdgeNavSwipe", () => {
       expect(move.cancelled).toBe(true);
     });
 
-    // The constraint that makes this safe to install app-wide: a scroll that
-    // begins in the strip is a scroll. Nothing is cancelled, so it does not
-    // even start late.
+    // Nothing is cancelled, so it does not even start late.
     it("leaves a vertical drag from the edge to the page", () => {
       mountOnBareScreen();
 
@@ -1758,9 +1668,8 @@ describe("useEdgeNavSwipe", () => {
       expect(later.cancelled).toBe(false);
     });
 
-    // Outward from the edge is a swipe off the screen, which this recognizer
-    // never answers - so cancelling it would take a gesture from the page and
-    // give it to nobody.
+    // Outward from the edge is a swipe off the screen, which this recognizer never answers - so cancelling it
+    // would take a gesture from the page and give it to nobody.
     it("leaves an outward drag from the leading edge to the page", () => {
       mountOnBareScreen();
 
@@ -1779,9 +1688,8 @@ describe("useEdgeNavSwipe", () => {
       expect(move.cancelled).toBe(false);
     });
 
-    // The reservation applies the recognizer's own entrance test, so the two
-    // can never disagree about whose gesture this is - taking a drag the
-    // recognizer would refuse would cancel a scroll for nothing.
+    // The reservation applies the recognizer's own entrance test, so the two can never disagree about whose
+    // gesture this is - taking a drag the recognizer would refuse would cancel a scroll for nothing.
     it("leaves a drag inside a text entry to the page", () => {
       mountOnBareScreen();
       const composer = document.createElement("textarea");
@@ -1818,19 +1726,11 @@ describe("useEdgeNavSwipe", () => {
       expect(move.cancelled).toBe(false);
     });
 
-    /**
-     * A document-level non-passive `touchmove` is the one listener that
-     * genuinely costs something: the browser must wait for it before moving the
-     * page on every frame of every scroll in the app. So its LIFETIME is the
-     * contract, not merely its behaviour - it may exist between a qualifying
-     * touch-down and that touch ending, and at no other time.
-     */
+    /** A document-level non-passive `touchmove` is the one listener that genuinely costs something: the browser
+     * must wait for it before moving the page on every frame of every scroll in the app. */
     describe("the cost of the per-move listener", () => {
-      /**
-       * Whether a registration asked for the passive slot, read off the
-       * recorded argument rather than from a type: what matters is what the
-       * browser was actually told.
-       */
+      /** Whether a registration asked for the passive slot, read off the recorded argument rather than from a type:
+       * what matters is what the browser was actually told. */
       function askedForPassive(options: unknown): boolean {
         if (typeof options !== "object" || options === null) return false;
         return "passive" in options && options.passive === true;
@@ -1864,9 +1764,8 @@ describe("useEdgeNavSwipe", () => {
         expect(passiveFlagsFor(addSpy.mock.calls, "touchmove")).toEqual([]);
       });
 
-      // Non-passive is the whole point: a listener that cannot cancel reserves
-      // nothing, and a browser that knows nothing can cancel hands the drag
-      // straight to its scroller.
+      // Non-passive is the whole point: a listener that cannot cancel reserves nothing, and a browser that knows
+      // nothing can cancel hands the drag straight to its scroller.
       it("registers a cancellable per-move listener once a touch qualifies", () => {
         mountOnBareScreen();
         const addSpy = vi.spyOn(document, "addEventListener");
@@ -1901,14 +1800,8 @@ describe("useEdgeNavSwipe", () => {
     });
   });
 
-  /**
-   * The zones are 32px of APP SURFACE, not of screen. In landscape the sensor
-   * housing's inset can be wider than a zone itself, so a recognizer measuring
-   * from raw viewport coordinates puts the whole strip inside the cutout -
-   * reachable by nothing, on the orientation where a navigation gesture is most
-   * useful. These pin the shape of the correction: the inset moves where a zone
-   * begins and does NOT stretch how wide it is.
-   */
+  /** In landscape the sensor housing's inset can be wider than a zone itself, so a recognizer measuring from raw
+   * viewport coordinates puts the whole strip inside the cutout. */
   describe("the zones start where the app surface does", () => {
     const INSET_PX = 60;
 
@@ -1946,8 +1839,7 @@ describe("useEdgeNavSwipe", () => {
     it("keeps the leading zone 32px wide rather than widening it by the inset", () => {
       const probe = withInsets();
 
-      // Past 60 + 32. A recognizer that added the inset to the WIDTH instead of
-      // the origin would claim this touch.
+      // Past 60 + 32. A recognizer that added the inset to the width instead of the origin would claim this touch.
       swipe({ from: INSET_PX + 40, to: 200, target: document.body, dropY: 0 });
 
       expect(probe.navigations).toEqual([]);
@@ -1980,12 +1872,7 @@ describe("useEdgeNavSwipe", () => {
     });
   });
 
-  /**
-   * What activation leads to. The recognizer asks whether anything can follow
-   * the finger and spends the rest of the pointer accordingly - carrying a
-   * drag to its release, or making the step there and then. Both answers come
-   * out of the same activation, so the cases live together.
-   */
+  /** What activation leads to. */
   describe("a drag something can follow", () => {
     function press(clientX: number, timeStamp: number): void {
       dispatchPointer("pointerdown", {
@@ -2034,9 +1921,7 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.dragTravel).toEqual([52]);
     });
 
-    // The step is made at activation only because nothing could carry it. The
-    // recognizer asks first either way, which is what keeps one activation
-    // rule behind both outcomes.
+    // The step is made at activation only because nothing could carry it.
     it("makes the step at activation when nothing can follow it", () => {
       const probe = mountOnBareScreen();
 
@@ -2048,10 +1933,7 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.dragTravel).toEqual([]);
     });
 
-    // The third answer. A declined gesture is CONSUMED - no follow, and no
-    // instant step either: the decliner is a navigation already in flight,
-    // and falling back to a discrete step would fire a second navigation
-    // under layers still showing the first.
+    // A declined gesture is consumed - no follow, and no instant step either.
     it("consumes the gesture entirely when the transition declines it", () => {
       setMobileApp(true);
       const probe = mountSwipe({
@@ -2082,11 +1964,8 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.dragStarts).toEqual(["back"]);
     });
 
-    // The trailing edge, exercised end to end. The followed-drag path inverts
-    // travel for a forward swipe in two places, and a block that only ever
-    // presses at the leading edge would pass with a sign error in either -
-    // one direction covered and the other assumed is the exact shape of the
-    // defect this feature shipped with.
+    // The followed-drag path inverts travel for a forward swipe in two places, and a block that only ever presses
+    // at the leading edge would pass with a sign error in either.
     it("follows a forward drag from the trailing edge, travel inward-positive", () => {
       const probe = mountWithFollowingTransition();
 
@@ -2113,11 +1992,8 @@ describe("useEdgeNavSwipe", () => {
       ]);
     });
 
-    // DIRECTION LOCK, the axis half: past activation the classifier is never
-    // consulted again, so a drag that curves sharply downward afterwards is
-    // still this gesture's - a thumb arcing across a phone does not travel a
-    // straight line, and re-classifying mid-drag would drop the screen it is
-    // carrying.
+    // Direction lock, the axis half: past activation the classifier is never consulted again, so a drag that
+    // curves sharply downward afterwards is still this gesture's.
     it("keeps a followed drag that curves off-axis after activation", () => {
       const probe = mountWithFollowingTransition();
 
@@ -2139,17 +2015,13 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.releases).toHaveLength(1);
     });
 
-    // A release is judged on what the hand was doing when it let go, so the
-    // speed comes from the last move rather than from the gesture's average -
-    // the difference between a long slow drag finished with a flick and the
-    // drag it mostly was.
+    // A release is judged on what the hand was doing when it let go, so the speed comes from the last move rather
+    // than from the gesture's average.
     it("releases with the speed of the last move", () => {
       const probe = mountWithFollowingTransition();
 
       press(8, 0);
-      // Activation, then 200ms crawling 20px, then 100ms covering 80. The
-      // average over the followed drag is 333 px/s; the flick it ended on is
-      // 800, and 800 is what a release means.
+      // Activation, then 200ms crawling 20px, then 100ms covering 80.
       move(60, 100);
       move(80, 300);
       move(160, 400);
@@ -2160,10 +2032,8 @@ describe("useEdgeNavSwipe", () => {
       ]);
     });
 
-    // Precision-clamped event clocks hand samples dispatched together the
-    // SAME timestamp. Ground covered is ground covered regardless: the up's
-    // travel must count even at a tied clock, while the speed - underivable
-    // over zero elapsed - stands at the last real sample.
+    // Ground covered is ground covered regardless: the up's travel must count even at a tied clock, while the
+    // speed - underivable over zero elapsed - stands at the last real sample.
     it("counts the up's travel even when its timestamp ties the last move", () => {
       const probe = mountWithFollowingTransition();
 
@@ -2185,10 +2055,7 @@ describe("useEdgeNavSwipe", () => {
       ]);
     });
 
-    // The hand does not stop moving when it leaves the glass: a fast swipe
-    // covers real ground between the last delivered move and the up, and a
-    // release judged on the move's numbers alone would refuse a flick that
-    // crossed the threshold on its way out.
+    // The hand does not stop moving when it leaves the glass.
     it("judges the release on the ground the up itself covered", () => {
       const probe = mountWithFollowingTransition();
 
@@ -2216,17 +2083,13 @@ describe("useEdgeNavSwipe", () => {
       lift("pointercancel", 200);
 
       // 520 is the activation seed - 52px over the 100ms it took to activate.
-      // It is reported faithfully even here; cancellation beats velocity in
-      // the release rule, so nothing downstream may read it as intent.
       expect(probe.releases).toEqual([
         { travelPx: 52, velocityPxPerS: 520, cancelled: true },
       ]);
     });
 
-    // A flick fast enough to activate on its only move and release in place
-    // has exactly one speed sample: the ground covered reaching activation.
-    // Judged at zero it would spring back - punishing precisely the quickest
-    // gestures.
+    // A flick fast enough to activate on its only move and release in place has exactly one speed sample: the
+    // ground covered reaching activation.
     it("commits a flick whose only sample is the activating move", () => {
       const probe = mountWithFollowingTransition();
 
@@ -2248,9 +2111,8 @@ describe("useEdgeNavSwipe", () => {
       ]);
     });
 
-    // DIRECTION LOCK. A surface arriving mid-flight takes the edges from the
-    // NEXT gesture; it cannot take a screen out from under a finger already
-    // carrying one, which would strand the transition with nothing to move it.
+    // Direction lock. A surface arriving mid-flight takes the edges from the next gesture; it cannot take a screen
+    // out from under a finger already carrying one, which would strand the transition with nothing to move it.
     it("keeps a followed drag when a blocking surface arrives mid-flight", () => {
       setMobileApp(true);
       let claimed = false;
@@ -2271,9 +2133,8 @@ describe("useEdgeNavSwipe", () => {
       ]);
     });
 
-    // A second finger is a pinch or a two-finger pan, and the tracked pointer's
-    // coordinates stop describing the gesture. The drag did not choose to end,
-    // so it ends the way the system ending it would.
+    // A second finger is a pinch or a two-finger pan, and the tracked pointer's coordinates stop describing the
+    // gesture.
     it("cancels a followed drag when a second pointer lands", () => {
       const probe = mountWithFollowingTransition();
 

@@ -75,12 +75,8 @@ function hostHasRequestNew(host: IRunnerHost): host is HostWithRequestNew {
   );
 }
 
-/**
- * Routes native menu commands to renderer-owned actions. Mounted at the router
- * root (`RootComponent`), OUTSIDE the page's `HostReadyGate`, so menu commands
- * keep working while the host is still being set up (the gate replaces only the
- * page, not the root-route bridges).
- */
+/** Mounted at the router root (`RootComponent`), outside the page's `HostReadyGate`, so menu commands keep
+ * working while the host is still being set up (the gate replaces only the page, not the root-route bridges). */
 export function MenuCommandListener() {
   const runnerHost = useRunnerHost();
   const authService = useAuthService();
@@ -198,11 +194,8 @@ export function MenuCommandListener() {
     if (menu === null) {
       return;
     }
-    // "Update to X" gates on `updateReady`/activation debt (see
-    // `deriveHostUpdateMenuVersion` in the main-process menu state), and a
-    // ready update always supersedes debt - so the click here follows the
-    // same priority without needing the command payload to carry which one
-    // it was.
+    // "Update to X" gates on `updateReady`/activation debt (see `deriveHostUpdateMenuVersion` in the main-process
+    // menu state), and a ready update always supersedes debt.
     const installHostUpdate = (): void => {
       if (status?.updateReady === true) {
         runApply(false);
@@ -382,9 +375,7 @@ function handleMenuCommand(
   if (payload.command === "app.reportIssue") {
     Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
       source: "native_menu",
-      // No in-app surface: the menu IS the entry point, and the report it
-      // opens has no context to name one. `null` means "there was none", not
-      // "we did not look".
+      // No in-app surface: the menu IS the entry point, and the report it opens has no context to name one.
       surface: null,
     });
     handlers.reportIssue();

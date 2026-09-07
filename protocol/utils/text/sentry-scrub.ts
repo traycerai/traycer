@@ -1,35 +1,14 @@
 /**
- * The deep walker every Sentry scrubber in both repos runs over an
- * attacker-influenced or user-private payload (`extra`, `logentry.params`,
- * breadcrumb `data`, request `data`).
- *
- * Detection is `./redaction`; the Sentry *policy* - which event fields get
- * walked, whether a breadcrumb is scrubbed at record time - stays with each
- * consumer. What is shared is the structural walk and its bounds, so a bound
- * one side tightens cannot silently be looser on the other.
- *
- * The per-string treatment is the caller's: the services cap length on top of
- * redacting (`extra.args` is whatever someone passed `logger.error`), the
- * desktop only redacts. That is the `scrubText` parameter.
+ * The deep walker every Sentry scrubber in both repos runs over an attacker-influenced or user-private payload (`extra`, `logentry.params`, breadcrumb `data`, request `data`).
+ * What is shared is the structural walk and its bounds, so a bound one side tightens cannot silently be looser on the other.
  */
 
 import { SENSITIVE_KEY_PATTERN } from "./redaction";
 
-/**
- * Fails closed at the depth bound: past it the container is replaced outright
- * rather than passed through, because returning it would ship every
- * unscrubbed string below it. The array/key bounds are what stop one
- * caller-supplied payload of a whole dataset from riding out.
- */
 export const MAX_SCRUB_DEPTH = 6;
 export const MAX_SCRUB_ARRAY_ITEMS = 100;
 export const MAX_SCRUB_OBJECT_KEYS = 100;
 
-/**
- * What a container that hit the array/object bound carries in place of the
- * entries it dropped, so a reader can tell a bounded payload from a complete
- * one instead of reading a truncated list as the whole story.
- */
 export const TRUNCATED_SENTINEL = "<truncated>";
 
 export function isPlainRecord(
@@ -85,8 +64,6 @@ function scrubValueAtDepth(
     return scrubRecordAtDepth(value, depth, scrubText);
   }
   // Everything the branches above did not claim: bigints, functions, symbols.
-  // One fallback for all of them - hand the SDK's own normalizer a bounded,
-  // scrubbed string instead of the live value.
   return scrubText(String(value));
 }
 

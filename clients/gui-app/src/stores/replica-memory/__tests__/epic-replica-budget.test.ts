@@ -1,7 +1,6 @@
 /**
- * Epic-replicas plane: host-scoped + runtime-token keys so a cross-host
- * re-point's loser cannot release the winner; the hook reports the root as
- * `required` and reclaims nothing.
+ * Epic-replicas plane: host-scoped + runtime-token keys so a cross-host re-point's loser cannot
+ * release the winner; the hook reports the root as `required` and reclaims nothing.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime";

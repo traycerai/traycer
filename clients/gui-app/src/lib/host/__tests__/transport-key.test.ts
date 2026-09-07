@@ -6,11 +6,8 @@ import {
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 
-// `hostTransportKey`/`dialableHostEndpoint` ask this for live-session
-// evidence. Stubbed at the module boundary - the single rule under test is
-// "a ready live session keeps the transport alive under ANY verdict", and
-// only a real module swap can prove the gate actually consults it, rather
-// than merely having a `hostId` that happens to answer false.
+// `hostTransportKey`/`dialableHostEndpoint` ask this for live-session evidence.
+// Stubbed at the module boundary - the single rule under test is "a ready live session keeps the transport alive under ANY verdict", and only a real module swap can prove the gate actually consults it, rather than merely having a `hostId` that happens to.
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
 vi.mock(
   "@traycer-clients/shared/host-transport/remote/index",
@@ -34,9 +31,8 @@ import {
 } from "@/lib/host/transport-key";
 
 /**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry` stamps it onto every entry at projection time.
+ * These fixtures describe an entitled account unless a case says otherwise.
  */
 const PLAN_ALLOWS_REMOTE = true;
 
@@ -82,13 +78,7 @@ function remoteEntry(
   };
 }
 
-/**
- * A remote entry whose relay verdict is the only thing that varies.
- *
- * `transportDialability` is derived exactly as the mapper derives it, so these
- * fixtures are the shapes production actually produces rather than shapes that
- * merely satisfy the type.
- */
+/** A remote entry whose relay verdict is the only thing that varies. */
 function remoteWithConnectivity(
   connectivity: "connectable" | "unknown" | "offline",
 ): RemoteHostDirectoryEntry {
@@ -106,14 +96,7 @@ function remoteWithConnectivity(
   });
 }
 
-/**
- * The same fixture for an account whose plan has no remote hosts.
- *
- * The wire says nothing about the plan any more — it carries pure liveness —
- * so the account fact is stamped on the entry at projection time and the mapper
- * derives dialability from BOTH. Nothing is dialable on this plan, whatever the
- * host is doing.
- */
+/** The same fixture for an account whose plan has no remote hosts. */
 function planGatedRemote(
   connectivity: "connectable" | "unknown" | "offline",
 ): RemoteHostDirectoryEntry {
@@ -159,16 +142,7 @@ describe("dialableHostEndpoint", () => {
   });
 });
 
-/**
- * The gate both halves of the transport share: WHICH not-dialable reasons
- * actually refuse a dial.
- *
- * This is the layer the round-2 repair got wrong. Refusing everything the
- * directory did not call `available` folded in `indeterminate` — a failed
- * liveness read on the cloud side — and the null key made the session
- * registries release a live handle, so one degraded Redis read replaced an
- * active chat with a tile that loads forever.
- */
+/** The gate both halves of the transport share: WHICH not-dialable reasons actually refuse a dial. */
 describe("the transport's refusal gate", () => {
   it("dials a host whose liveness read came back blind (`unknown` ⇒ indeterminate)", () => {
     const blind = remoteWithConnectivity("unknown");
@@ -183,19 +157,15 @@ describe("the transport's refusal gate", () => {
   });
 
   it("refuses a plan-restricted host — the attach grant would 403 the dial", () => {
-    // Correct to refuse, and NOT the same as offline: the machine is running
-    // (`connectable` on the wire). Saying so is `useHostReachability`'s reason
-    // field, not this layer's job.
+    // Correct to refuse, and NOT the same as offline: the machine is running (`connectable` on the wire).
+    // Saying so is `useHostReachability`'s reason field, not this layer's job.
     const planGated = planGatedRemote("connectable");
     expect(hostTransportKey(planGated)).toBeNull();
     expect(dialableHostEndpoint(planGated)).toBeNull();
   });
 
   it("refuses a plan-restricted host whose liveness read came back blind, unlike the paid one", () => {
-    // The one asymmetry the split introduces at this layer: `unknown` is dialed
-    // for an entitled account (a blind read is not a refusal) and refused for a
-    // gated one (the refusal is deterministic — the grant 403s whatever the
-    // read would have said).
+    // The one asymmetry the split introduces at this layer: `unknown` is dialed for an entitled account (a blind read is not a refusal) and refused for a gated one (the refusal is deterministic - the grant 403s whatever the read would have said).
     const gatedBlind = planGatedRemote("unknown");
     expect(hostTransportKey(gatedBlind)).toBeNull();
     expect(dialableHostEndpoint(gatedBlind)).toBeNull();
@@ -203,11 +173,7 @@ describe("the transport's refusal gate", () => {
   });
 
   it("keeps the key UNCHANGED across a dialable → indeterminate flip", () => {
-    // The anti-churn property, and the one without which the P0 survives the
-    // rest of this suite: every caller memoizes its client on this key, so a
-    // key that merely CHANGES tears the socket down just as surely as a key
-    // that goes null. The verdict is a gate, not an identity — the host's
-    // address did not move.
+    // The anti-churn property, and the one without which the P0 survives the rest of this suite: every caller memoizes its client on this key, so a key that merely CHANGES tears the socket down just as surely as a key that goes null.
     const before = hostTransportKey(remoteWithConnectivity("connectable"));
     const after = hostTransportKey(remoteWithConnectivity("unknown"));
     expect(before).not.toBeNull();
@@ -251,9 +217,7 @@ describe("remoteAwareOwnerIdentityKey", () => {
   });
 
   it("(the R-1 discriminator) treats a remote host's public-key rotation as a distinct identity, isolated from every other field", () => {
-    // hostId / websocketUrl / version / status all held stable - the case
-    // `hostTransportKey` cannot distinguish, since every remote host shares
-    // one fixed relay attach URL.
+    // hostId / websocketUrl / version / status all held stable - the case `hostTransportKey` cannot distinguish, since every remote host shares one fixed relay attach URL.
     const keyA = remoteAwareOwnerIdentityKey(
       remoteEntry({ publicKey: "pubkey-a" }),
       "user-1",
@@ -297,12 +261,7 @@ describe("remoteAwareOwnerIdentityKey", () => {
   });
 });
 
-// F7 fuse-vs-lease reconciliation: a recovery dial must still be ATTEMPTED for
-// an `offline` entry the relay's host-leg fuse is still plausibly holding
-// (recent `lastSeenAt`), and refused only once the fuse cap has passed.
-// Built through the real `hostListItemToDirectoryEntry` constructor rather
-// than a synthetic literal, matching the "real mapped connectivity" style
-// elsewhere in this suite (see `host-directory-service.test.ts`).
+// F7 fuse-vs-lease reconciliation: a recovery dial must still be ATTEMPTED for an `offline` entry the relay's host-leg fuse is still plausibly holding (recent `lastSeenAt`), and refused only once the fuse cap has passed.
 function offlineHostListItem(lastSeenAt: string): HostListItem {
   return {
     hostId: "fuse-host",

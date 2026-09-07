@@ -1,11 +1,6 @@
 import type { ReactNode } from "react";
 
-/**
- * The plain elements an `ImportLoginsFlow` step's chrome renders as on a
- * surface with no dialog: a heading, a paragraph and a right-aligned row.
- * Assembled into a frame by `PLAIN_IMPORT_LOGINS_FRAME`; this file exports
- * components only (fast refresh).
- */
+/** Assembled into a frame by `PLAIN_IMPORT_LOGINS_FRAME`; this file exports components only (fast refresh). */
 
 export function PlainImportLoginsHeader(props: {
   readonly children: ReactNode;

@@ -3,27 +3,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 /**
- * Hard-enforces the `_internal/` privacy boundary for `@traycer/protocol`.
- *
- * Files under `protocol/<domain>/_internal/` host the raw Zod values for
- * registered records (e.g. `epicSchema`, `permissionRoleSchema`,
- * `userSchema`, `roomMetadataSchema`). Importing them directly bypasses
- * the registry's version stamp, which is exactly the drift this
- * framework was built to prevent.
- *
- * The rule is intentionally strict: **no file is allowed to import from
- * a `_internal/` path** except:
- *
- * - The owning registry - `protocol/<domain>/registry.ts` - which is
- *   the canonical entry that wraps records into versioned contracts.
- * - Other modules that already live under `_internal/` themselves.
- *
- * Everything else (including other modules inside `protocol/`) reaches
- * record schemas through `getRecordSchema(<registry>, "<record-name>")`.
- *
- * This test scans every `.ts`/`.tsx` file in the monorepo and fails on
- * any import path matching `@traycer/protocol/.../_internal/...` from a
- * file that is not an authorized importer.
+ * `_internal/` imports are forbidden except the owning `registry.ts` and other `_internal/` modules.
+ * Reach record schemas through `getRecordSchema`. Even type-only imports leak.
  */
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -44,20 +25,12 @@ const SKIP_DIRS = new Set([
   ".codex",
 ]);
 
-// Matches any import (runtime or type-only) referencing a path under
-// `@traycer/protocol/.../_internal/...`. The privacy boundary is
-// total: even type-only imports leak structural detail across the
-// boundary. Recursive types that require a `z.ZodType<...>`
-// annotation must be co-located with the owning registry, not
-// imported from `_internal/`.
+// Matches any import (runtime or type-only) referencing a path under `@traycer/protocol/.../_internal/...`.
+// The privacy boundary is total: even type-only imports leak structural detail across the boundary.
 const FORBIDDEN_IMPORT_PATTERN =
   /["']@traycer\/protocol\/[^"']*\/_internal\/[^"']*["']/g;
 
-/**
- * Files allowed to import from `_internal/`. Update the list below when
- * a new versioned-record domain is added - the registry file for that
- * domain is the single approved entry point.
- */
+/** Files allowed to import from `_internal/`. */
 const AUTHORIZED_IMPORTERS = new Set<string>([
   path.join(REPO_ROOT, "protocol", "src", "auth", "registry.ts"),
   path.join(REPO_ROOT, "protocol", "src", "common", "registry.ts"),

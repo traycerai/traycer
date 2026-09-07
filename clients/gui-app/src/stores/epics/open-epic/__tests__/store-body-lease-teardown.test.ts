@@ -1,24 +1,6 @@
 /**
- * `acquireResidentArtifactBodyLease`'s `resident` promise, against a REAL
- * store (`openStoreForTest`) rather than a fake `acquireResidentArtifactBodyLease`
- * - the round-2 pins all faked that member, which is why none of this class of
- * defect was caught.
- *
- * Two independent teardown windows the doc at `store.ts:207-209` claims
- * `resident` rejects for, and one of them cannot today:
- *
- *  - **release() after an `awaiting-seed` grant, before residency lands**
- *    (`store.ts:1149-1163`, `waitForBodyResidency`): `release()` only flips a
- *    local `released` flag; the `isReleased()` check lives INSIDE the
- *    `api.subscribe` callback, so it only fires on a LATER store notification
- *    - and releasing drops the demand, which is exactly when no seed and
- *    therefore no notification ever comes. This is the case that actually
- *    hangs.
- *  - **store `dispose()` while `awaiting-seed`**: nothing in `dispose()`
- *    rejects a pending residency waiter either.
- *
- * `release()` BEFORE the grant resolves is a DIFFERENT, already-correct case
- * (`store.ts:1185-1188`) - pinned here as a control, not as the fix.
+ * `acquireResidentArtifactBodyLease`'s `resident` promise, against a REAL store
+ * (`openStoreForTest`) rather than a fake `acquireResidentArtifactBodyLease`
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -92,11 +74,7 @@ interface LaneRig {
   subscribeCount(): number;
 }
 
-/**
- * Copied from `lane-body-awaiting-seed.test.ts` per this suite's own guidance
- * - the construction that reaches an `"awaiting-seed"` grant, not a fresh
- * invention of one.
- */
+/** Copied from `lane-body-awaiting-seed.test.ts` per this suite's own guidance */
 function createLaneRig(epicId: string): LaneRig {
   let statusCallbacks: EpicStatusStreamCallbacks | null = null;
   let bodyCallbacks: ArtifactStreamCallbacks | null = null;
@@ -260,16 +238,14 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
     const lease = rig.handle.store
       .getState()
       .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
-    // Let the acquisition settle into "awaiting-seed" before releasing -
-    // otherwise this collapses into pin 3's already-correct
-    // release-before-grant case.
+    // Let the acquisition settle into "awaiting-seed" before releasing - otherwise this collapses into
+    // pin 3's already-correct release-before-grant case.
     await rig.handle.flush();
     lease.release();
 
     const outcome = await raceAgainstHang(lease.resident);
-    // Red today: the `isReleased()` check only fires from a LATER store
-    // notification, and releasing drops the demand - so no notification, and
-    // no notification, ever comes. This races out at "hung".
+    // Red today: the `isReleased()` check only fires from a LATER store notification, and releasing
+    // drops the demand - so no notification, and no notification, ever comes.
     expect(outcome).toBeInstanceOf(ArtifactBodyUnavailableError);
   });
 
@@ -297,18 +273,12 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
     const lease = rig.handle.store
       .getState()
       .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
-    // NOT flushed, deliberately - this is the one window pins 1 and 2 cannot
-    // reach. They both let the acquire settle into `awaiting-seed` first; here
-    // `body/materialize` is still on the wire when the bridge goes away, so
-    // `acquire()` REJECTS rather than answering a grant.
+    // NOT flushed, deliberately - this is the one window pins 1 and 2 cannot reach.
     rig.handle.dispose();
 
     const outcome = await raceAgainstHang(lease.resident);
-    // Red before the mapping as `expected BridgeDisposedError to be an instance
-    // of ArtifactBodyUnavailableError`. It is not cosmetic: this rejection is
-    // what `holdArtifactBody` propagates to the export mutation, so unconverted
-    // the toast read "The runtime worker bridge was disposed with calls in
-    // flight." instead of "'X' is still loading."
+    // Red before the mapping as `expected BridgeDisposedError to be an instance of
+    // ArtifactBodyUnavailableError`.
     expect(outcome).toBeInstanceOf(ArtifactBodyUnavailableError);
   });
 
@@ -318,11 +288,6 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
     const lease = rig.handle.store
       .getState()
       .acquireResidentArtifactBodyLease(ARTIFACT, "linger");
-    // Released in the SAME tick, before `acquire()`'s bridge round trip can
-    // possibly answer - the `released` flag this rejects on is checked
-    // synchronously inside the `.then` that runs when the grant lands, which
-    // is a DIFFERENT code path from pins 1/2 above. A green result here
-    // proves nothing about the fix; it is the case that already worked.
     lease.release();
 
     await expect(lease.resident).rejects.toBeInstanceOf(
@@ -342,10 +307,6 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
     await statusReady;
     await rig.handle.flush();
 
-    // "Two acquires would be two demands" - `bodyLeases.acquire`'s own
-    // coalescing (`artifact-body-lease-bridge.ts`) is what this pins: only
-    // ONE `artifact.subscribe` reaches the lane, regardless of how many
-    // holders joined the same in-flight acquire.
     expect(rig.subscribeCount()).toBe(1);
 
     lease.release();
@@ -362,9 +323,8 @@ describe("acquireResidentArtifactBodyLease teardown", () => {
 
     await rig.seed();
 
-    // This is what keeps pin 1 honest: without a case where `resident`
-    // actually resolves, "rejects on release" and "rejects always" are
-    // indistinguishable.
+    // This is what keeps pin 1 honest: without a case where `resident` actually resolves, "rejects on
+    // release" and "rejects always" are indistinguishable.
     await expect(lease.resident).resolves.toBeUndefined();
     expect(
       rig.handle.store.getState().getArtifactFragment(ARTIFACT),

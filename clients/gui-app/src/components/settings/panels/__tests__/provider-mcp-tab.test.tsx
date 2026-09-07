@@ -18,16 +18,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 
-/**
- * Mirrors what `useProvidersMcpList` really returns — in particular `data` is
- * genuinely `undefined` before the first response, and returns there whenever a
- * scope/workspace switch swaps the query key. Inferring the shape from a loaded
- * literal instead made that window unrepresentable, which is how a bug living
- * entirely inside it stayed invisible to this suite.
- *
- * Declared as a return type rather than an `as` on the literal so `lint --fix`
- * cannot quietly narrow it back.
- */
+/** Declared as a return type rather than an `as` on the literal so `lint --fix` cannot quietly narrow it back. */
 function emptyListQueryMock(): {
   data: { servers: ProviderMcpServer[] } | undefined;
   isPending: boolean;
@@ -77,13 +68,8 @@ const worktreeMocks = vi.hoisted(() => ({
     }>;
     scripts: null;
   }>,
-  // TWO independent flags, mirroring the two the real query exposes, rather
-  // than one tri-state: `data` is undefined until a fetch SUCCEEDS - while
-  // pending and after a failure alike - and `isPending` is what separates
-  // those. Keeping them separate is what lets a case say "not loaded, NOT
-  // pending", which is the failed lookup, and the one a pending-based gate
-  // waves through. A mock that always handed back a `data` object could not
-  // fail either way.
+  // Two independent flags, mirroring the two the real query exposes, rather than one tri-state: `data` is
+  // undefined until a fetch succeeds - while pending and after a failure alike.
   loaded: true,
   pending: false,
 }));
@@ -103,9 +89,7 @@ const folderActionMocks = vi.hoisted(() => ({
   isPreparing: false,
 }));
 
-// A rejected browse has no inline surface to land on - the popover is the only
-// thing on screen - so the failure is reported as a toast. Captured here
-// because the real helper reaches a sonner instance this suite does not mount.
+// Captured here because the real helper reaches a sonner instance this suite does not mount.
 const toastMocks = vi.hoisted(() => ({ errors: [] as string[] }));
 
 vi.mock("@/lib/reportable-error-toast", () => ({
@@ -138,12 +122,8 @@ vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   }),
 }));
 
-// The picker can now ADD a workspace, which is what makes an empty list
-// recoverable. The real hook reaches a runner host and two host mutations; only
-// the pick-and-prepare seam matters here, so the rest stays mocked like every
-// other host call in this file. `preparedWorkspaceFolderToWorkspaceFolderInfo`
-// is re-implemented rather than re-exported so the mock cannot drift into
-// depending on the module it replaces.
+// `preparedWorkspaceFolderToWorkspaceFolderInfo` is re-implemented rather than re-exported so the mock cannot
+// drift into depending on the module it replaces.
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
   useWorkspaceFolderActionsForClient: () => ({
     isPreparing: folderActionMocks.isPreparing,
@@ -163,10 +143,8 @@ vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
   }),
 }));
 
-// The scope picker lists a repo's worktrees as first-class destinations, so
-// this suite has to be able to say what the host reports for them. Mocked (like
-// every other host read here) rather than wrapped in a QueryClientProvider,
-// which is the convention the rest of this file already follows.
+// Mocked (like every other host read here) rather than wrapped in a QueryClientProvider, which is the
+// convention the rest of this file already follows.
 vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
   useWorktreeListByWorkspacePathsForClient: () => ({
     data: worktreeMocks.loaded
@@ -284,12 +262,7 @@ const KIMI_CAPS: ProviderMcpCapabilities = {
   },
 };
 
-/**
- * A provider that can ONLY list project-scoped configs - no Global to fall
- * back to. Codex-like providers all advertise both, which is why this case
- * went unnoticed: it is the one shape where the picker is the sole route to a
- * usable state, so it is also the one where disabling the picker is fatal.
- */
+/** A provider that can only list project-scoped configs - no Global to fall back to. */
 const PROJECT_ONLY_CAPS: ProviderMcpCapabilities = {
   ...FULL_CAPS,
   actionScopes: {
@@ -363,11 +336,8 @@ function renderTabWithCliBinary(
   );
 }
 
-/**
- * The ordinary case: the host resolved a CLI binary, so nothing is gated away
- * and the tab renders its full affordances. Cases about the binary-absent gate
- * call {@link renderTabWithCliBinary} directly.
- */
+/** The ordinary case: the host resolved a CLI binary, so nothing is gated away and the tab renders its full
+ * affordances. Cases about the binary-absent gate call renderTabWithCliBinary directly. */
 function renderTab(
   caps: ProviderMcpCapabilities,
   providerId: "codex" | "cursor" | "kimi",
@@ -375,17 +345,9 @@ function renderTab(
   return renderTabWithCliBinary(caps, providerId, true);
 }
 
-/**
- * The scope control is ONE picker over Global plus every workspace/worktree,
- * not a chip pair beside a separate folder select - so a test drives it by
- * naming the destination it wants, exactly as a user does.
- */
-/**
- * Matched by PREFIX, not exact string: the trigger's accessible name carries
- * the current destination after the static label ("MCP config location:
- * Global"), so a screen-reader user hears which config the control points at.
- * An exact match would break every time the selection changes.
- */
+/** The scope control is one picker over Global plus every workspace/worktree, not a chip pair beside a separate
+ * folder select - so a test drives it by naming the destination it wants, exactly as a user does. */
+/** An exact match would break every time the selection changes. */
 function scopeTrigger(): HTMLElement {
   return screen.getByRole("button", { name: /^MCP config location/ });
 }
@@ -480,14 +442,12 @@ describe("<ProviderMcpTab />", () => {
         c.workspaceRoot === "/Users/dev/app",
     );
     expect(projectCall).toBeDefined();
-    // The trigger NAMES the destination once chosen - the whole point of
-    // folding the scope chips and the folder select into one control.
+    // The trigger names the destination once chosen - the whole point of folding the scope chips and the folder
+    // select into one control.
     expect(scopeTriggerText()).toContain("app");
 
-    // And it still opens. Only the project trigger is wrapped in a
-    // `TooltipWrapper` (Global's path tooltip would just repeat its inline
-    // subtitle), so this is the composition the Global-scope cases never
-    // exercise: Radix's tooltip trigger cloning onto the popover trigger.
+    // Only the project trigger is wrapped in a `TooltipWrapper` (Global's path tooltip would just repeat its
+    // inline subtitle), so this is the composition the Global-scope cases never exercise.
     openScopePicker();
     expect(screen.getByRole("option", { name: /Global/ })).toBeDefined();
   });
@@ -495,8 +455,6 @@ describe("<ProviderMcpTab />", () => {
   it("names the destination in the trigger before anything is chosen", () => {
     renderTab(FULL_CAPS, "codex");
 
-    // Global is a destination too, and used to be the one state that named
-    // nothing at all.
     expect(scopeTriggerText()).toContain("Global");
     expect(scopeTriggerText()).toContain("Every workspace on this host");
   });
@@ -530,11 +488,8 @@ describe("<ProviderMcpTab />", () => {
     renderTab(FULL_CAPS, "codex");
 
     openScopePicker();
-    // Emission ORDER is the grouping, and it is the reason the list ships with
-    // no group headers: a workspace is immediately followed by its own
-    // worktrees, which is the only thing saying which repo a worktree belongs
-    // to. Reordering the `targets` loop would otherwise pass every other
-    // assertion here while making two repos' worktrees indistinguishable.
+    // Reordering the `targets` loop would otherwise pass every other assertion here while making two repos'
+    // worktrees indistinguishable.
     const optionNames = screen
       .getAllByRole("option")
       .map((option) => option.textContent);
@@ -626,8 +581,8 @@ describe("<ProviderMcpTab />", () => {
     expect(
       screen.getByText("No workspaces added on this host yet."),
     ).toBeDefined();
-    // `enabled` matters: the shadow-badge read is MOUNTED in Global scope and
-    // only gated off by that flag, so it lands in `listCalls` either way.
+    // `enabled` matters: the shadow-badge read is mounted in Global scope and only gated off by that flag, so it
+    // lands in `listCalls` either way.
     expect(
       mcpMocks.listCalls.some((c) => c.scope === "project" && c.enabled),
     ).toBe(false);
@@ -649,9 +604,8 @@ describe("<ProviderMcpTab />", () => {
     });
     renderTab(FULL_CAPS, "codex");
 
-    // The state the old control had no answer for: no folders opened on this
-    // host, so Global was the only reachable destination and a project config
-    // could not be managed from here at all.
+    // The state the old control had no answer for: no folders opened on this host, so Global was the only
+    // reachable destination and a project config could not be managed from here at all.
     openScopePicker();
     fireEvent.click(
       screen.getByRole("option", { name: /Add a workspace folder/ }),
@@ -676,11 +630,8 @@ describe("<ProviderMcpTab />", () => {
   });
 
   it("keeps the picker reachable for a PROJECT-ONLY provider with no workspaces", () => {
-    // The dead end this guards: project-only provider, no folders opened on
-    // this host. There is no Global to fall back to, and the only way out -
-    // "Add a workspace folder…" - lives INSIDE the popover. Disabling the
-    // trigger in that state sealed the user in with no route to a usable
-    // config, which is the exact hole the add action was introduced to close.
+    // The dead end this guards: project-only provider, no folders opened on this host. There is no Global to fall
+    // back to, and the only way out - "Add a workspace folder…" - lives inside the popover.
     useWorkspaceFoldersStore.setState({
       byHost: {
         "host-1": { folders: [], folderInfoByPath: {}, primaryPath: null },
@@ -701,9 +652,8 @@ describe("<ProviderMcpTab />", () => {
   });
 
   it("names the current destination in the trigger's accessible name", () => {
-    // `aria-label` REPLACES the visible text in the accessible name, so a bare
-    // static label would tell a screen-reader user what the control is for
-    // while withholding the only thing it displays - where the config goes.
+    // `aria-label` replaces the visible text in the accessible name, so a bare static label would tell a
+    // screen-reader user what the control is for while withholding the only thing it displays.
     renderTab(FULL_CAPS, "codex");
 
     expect(scopeTrigger().getAttribute("aria-label")).toBe(
@@ -711,21 +661,16 @@ describe("<ProviderMcpTab />", () => {
     );
   });
 
-  // Parameterised over the two ways worktree metadata can be missing, because
-  // they are indistinguishable to the tab and only one of them is intuitive.
-  // A gate written against `isPending` passes the first row and fails the
-  // second: a failed lookup ALSO leaves `targets` worktree-less, but leaves
-  // `isPending` false, so the stored worktree reads as invalid and the
-  // single-workspace default silently takes over.
+  // Parameterised over the two ways worktree metadata can be missing, because they are indistinguishable to the
+  // tab and only one of them is intuitive.
   it.each([
     ["is still in flight", true],
     ["has FAILED", false],
   ])(
     "does not fall back to the workspace root while the worktree lookup %s",
     (_label, stillPending) => {
-      // Falling back to the single workspace in that window points the list -
-      // and any add or remove - at the PARENT repo's `.mcp.json`, a different
-      // file in a different repo.
+      // Falling back to the single workspace in that window points the list - and any add or remove - at the parent
+      // repo's `.mcp.json`, a different file in a different repo.
       useWorkspaceFoldersStore.setState({
         byHost: {
           "host-1": {
@@ -764,9 +709,8 @@ describe("<ProviderMcpTab />", () => {
   );
 
   it("reports a browse that REJECTS instead of failing silently", async () => {
-    // `pickAndPrepareFolders` guards only its prepare step; the pickers ahead
-    // of it are awaited bare, so a failure rejects out of `browseForWorkspace`.
-    // Unhandled, that is a silent no-op the user reads as a missed click.
+    // `pickAndPrepareFolders` guards only its prepare step; the pickers ahead of it are awaited bare, so a failure
+    // rejects out of `browseForWorkspace`.
     folderActionMocks.pickAndPrepareFolders.mockRejectedValue(
       new Error("picker exploded"),
     );
@@ -785,13 +729,8 @@ describe("<ProviderMcpTab />", () => {
   });
 
   it("files an added folder under the DISPATCH host, not the active one", async () => {
-    // The race this guards: `pickAndPrepareFolders` captures the host at
-    // dispatch and re-validates it across every await, and `browseForWorkspace`
-    // must stamp the folder with THAT id rather than re-reading the client
-    // after the picker returns. Discriminating only because the mocked result
-    // names a different host than the active one ("host-1" everywhere in this
-    // file) - with both the same, a re-read would produce an identical store
-    // and the assertion would hold for the wrong reason.
+    // The race this guards: `pickAndPrepareFolders` captures the host at dispatch and re-validates it across every
+    // await.
     useWorkspaceFoldersStore.setState({
       byHost: {
         "host-1": { folders: [], folderInfoByPath: {}, primaryPath: null },
@@ -875,15 +814,14 @@ describe("<ProviderMcpTab />", () => {
     });
     renderTab(FULL_CAPS, "codex");
 
-    // No silent auto-pick with more than one candidate: the pane stays on
-    // Global rather than quietly adopting `folders[0]`, and BOTH workspaces
-    // are offered by name.
+    // No silent auto-pick with more than one candidate: the pane stays on Global rather than quietly adopting
+    // `folders[0]`, and both workspaces are offered by name.
     expect(scopeTriggerText()).toContain("Global");
     openScopePicker();
     expect(screen.getByRole("option", { name: /app/ })).toBeDefined();
     expect(screen.getByRole("option", { name: /other/ })).toBeDefined();
-    // `enabled` matters: the shadow-badge read is MOUNTED in Global scope and
-    // only gated off by that flag, so it lands in `listCalls` either way.
+    // `enabled` matters: the shadow-badge read is mounted in Global scope and only gated off by that flag, so it
+    // lands in `listCalls` either way.
     expect(
       mcpMocks.listCalls.some((c) => c.scope === "project" && c.enabled),
     ).toBe(false);
@@ -990,11 +928,8 @@ describe("<ProviderMcpTab />", () => {
 
   it("locks kimi to Global (no scope switch)", () => {
     renderTab(KIMI_CAPS, "kimi");
-    // A single-scope provider gets a statement, not a picker holding one dead
-    // option - and the statement matches the Global row's own wording.
-    // The PREFIX regex matters on this negative assertion: the trigger's name
-    // now ends with the selected destination, so an exact-string query would
-    // match nothing whether or not the picker rendered.
+    // The prefix regex matters on this negative assertion: the trigger's name now ends with the selected
+    // destination, so an exact-string query would match nothing whether or not the picker rendered.
     expect(
       screen.queryByRole("button", { name: /^MCP config location/ }),
     ).toBeNull();
@@ -1003,19 +938,15 @@ describe("<ProviderMcpTab />", () => {
     ).toBeDefined();
   });
 
-  // F4: every production contract sets updateServer: "none" and update: [].
-  // The pencil/edit path was maintained dead code; it is removed rather than
-  // wired. When a provider implements update, restore the affordance and this
-  // assertion (see provider-mcp-tab canUpdate comment).
+  // The pencil/edit path was maintained dead code; it is removed rather than wired.
   it("does not render Edit even when a test double advertises update scopes", () => {
     mcpMocks.listResult.data = { servers: [connectedServer({})] };
     renderTab(FULL_CAPS, "codex");
     expect(screen.queryByRole("button", { name: /Edit context7/ })).toBeNull();
   });
 
-  // F4: realistic multi-row list — Edit must stay gone on every server name,
-  // not only the single-server double above. Delete/Add remain the live
-  // affordances.
+  // : realistic multi-row list - Edit must stay gone on every server name, not only the single-server double
+  // above.
   it("does not render Edit on any realistic server row while Add and Delete stay", () => {
     mcpMocks.listResult.data = {
       servers: [
@@ -1066,10 +997,7 @@ describe("<ProviderMcpTab />", () => {
   });
 
   it("hides Add/Delete/auth/discover on Project when actionScopes only allow them for Global", () => {
-    // Codex/Droid/Copilot-style: list both scopes, but CRUD/auth/discover
-    // only global. Populate project list so Project scope has a real row
-    // (including needs_auth) — empty project list would make row-level
-    // assertions pass vacuously.
+    // Codex/Droid/Copilot-style: list both scopes, but CRUD/auth/discover only global.
     const codexCaps: ProviderMcpCapabilities = {
       ...FULL_CAPS,
       actionScopes: {
@@ -1332,17 +1260,8 @@ describe("<ProviderMcpTab />", () => {
   });
 
   it("keeps resumed auth polling alive before the first list response", () => {
-    // The sibling resume test hands the component list data synchronously, so
-    // it never sees the window a real mount goes through: the query starts with
-    // `data === undefined`, and `servers` falls back to empty there.
-    //
-    // That window is reachable, not hypothetical. `useResumeOauthPolling` runs
-    // during render, so the resumed name is in `authAwaitingNames` by the end of
-    // the first pass — and the second pass prunes it against the empty
-    // fallback, reading "no such server" as "settled". Polling would then be
-    // switched off before the list that decides it ever arrives, and it is the
-    // only thing that would notice the OAuth completing: `needs_auth` on its
-    // own does not drive the poll cadence.
+    // Polling would then be switched off before the list that decides it ever arrives, and it is the only thing
+    // that would notice the OAuth completing: `needs_auth` on its own does not drive the poll cadence.
     useMcpPendingAuthStore.getState().upsert({
       key: {
         providerId: "codex",
@@ -1375,13 +1294,7 @@ describe("<ProviderMcpTab />", () => {
   });
 
   it("drops the pending-auth store entry once the server settles", () => {
-    // The prune that retires a settled name happens during render, but the
-    // store write it triggers is deferred to an effect. That split is easy to
-    // get wrong in a way nothing else here would catch: the render-phase
-    // `setAuthAwaitingNames` re-renders immediately with an empty diff, so an
-    // implementation that recomputes the settled names for the effect instead
-    // of carrying them in state flushes an empty list and leaks the entry
-    // forever. This asserts the entry is actually gone.
+    // That split is easy to get wrong in a way nothing else here would catch.
     const key = {
       providerId: "codex",
       scope: "global",
@@ -1441,13 +1354,8 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.getByText(/<redacted>/)).toBeDefined();
   });
 
-  /*
-   * The caveat rides the bulk-toggle controls now, not a banner over the whole
-   * tab - so it only exists once a server is expanded, and its text lives in a
-   * tooltip. Asserting the trigger's accessible name rather than opening the
-   * tooltip keeps this a placement test; Radix renders the content into a
-   * portal only while open.
-   */
+  /* Asserting the trigger's accessible name rather than opening the tooltip keeps this a placement test; Radix
+     renders the content into a portal only while open. */
   it("offers the Traycer-sessions-only caveat beside the bulk tool toggles", () => {
     mcpMocks.listResult.data = { servers: [connectedServer({})] };
     renderTab(
@@ -1542,13 +1450,8 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.getByRole("status").textContent).toBe("1 server shown.");
   });
 
-  /**
-   * The shape `applyBinaryAbsentGate` hands the client when it could not
-   * resolve a CLI: the write verbs' scope lists are emptied while the ROUTING
-   * fields (`addServer`/`removeServer`) keep saying "cli" - which is the only
-   * evidence the client has that something was subtracted rather than never
-   * offered.
-   */
+  /** The shape `applyBinaryAbsentGate` hands the client when it could not resolve a CLI: the write verbs' scope
+   * lists are emptied while the routing fields (`addServer`/`removeServer`) keep saying "cli". */
   const BINARY_ABSENT_CAPS: ProviderMcpCapabilities = {
     ...FULL_CAPS,
     authActions: [],
@@ -1584,10 +1487,8 @@ describe("<ProviderMcpTab />", () => {
     });
 
     it("does not accuse a provider whose write verbs were never CLI-routed", () => {
-      // Cursor patches its config file, so an absent binary takes nothing this
-      // notice can prove. Claiming otherwise would be a guess, and the empty
-      // `authActions` it DOES leave behind is indistinguishable from a contract
-      // that never had auth actions at all.
+      // Claiming otherwise would be a guess, and the empty `authActions` it does leave behind is indistinguishable
+      // from a contract that never had auth actions at all.
       mcpMocks.listResult.data = { servers: [connectedServer({})] };
       renderTabWithCliBinary(
         { ...CURSOR_CAPS, addServer: "patch", removeServer: "patch" },

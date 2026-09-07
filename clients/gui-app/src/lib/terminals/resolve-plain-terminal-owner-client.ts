@@ -5,9 +5,8 @@ import { useHostRuntimeClient } from "@/lib/host";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 
 /**
- * Resolves the authenticated, dialable client for a terminal's immutable
- * owner host. Presence/Awareness metadata is never consulted, and the serving
- * host is never used as a fallback when the owner is missing or unreachable.
+ * Resolves the authenticated, dialable client for a terminal's immutable owner host.
+ * Presence/Awareness metadata is never consulted, and the serving host is never used as a fallback when the owner is missing or unreachable.
  */
 export function resolvePlainTerminalOwnerHostClient(args: {
   readonly runtimeClient: HostClient<HostRpcRegistry>;

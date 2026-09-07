@@ -2,9 +2,8 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { setEnvOverride } from "../store/config-store";
 
-// Runner-aware `traycer config env unset --key KEY`. Records an explicit
-// removal of a host-process env var, distinct from `delete` which removes
-// the config row entirely.
+// Runner-aware `traycer config env unset --key KEY`.
+// Records an explicit removal of a host-process env var, distinct from `delete` which removes the config row entirely.
 export interface ConfigEnvUnsetArgs {
   readonly key: string;
 }

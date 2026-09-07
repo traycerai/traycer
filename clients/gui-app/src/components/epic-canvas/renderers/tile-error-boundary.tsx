@@ -8,12 +8,8 @@ interface TileErrorBoundaryProps {
   /** Tile identity - keys the log line and clears a stuck error on re-point. */
   readonly instanceId: string;
   /**
-   * Any value whose identity change means "this tile was replaced" (the tile
-   * node's instance id): a crash that belonged to the previous tile is
-   * cleared and the body retried, so opening different content in the pane is
-   * itself a recovery. Keep it to a value that changes on replacement ONLY - a
-   * key that churns on ordinary re-renders would retry (and re-capture) a
-   * deterministic crash on every one of them.
+   * Any value whose identity change means "this tile was replaced" (the tile node's instance id): a crash that belonged to the previous tile is cleared and the body retried, so opening different content in the pane is itself a recovery.
+   * Keep it to a value that changes on replacement ONLY - a key that churns on ordinary re-renders would retry (and re-capture) a deterministic crash on every one of them.
    */
   readonly resetKey: unknown;
   readonly children: ReactNode;
@@ -26,17 +22,7 @@ interface TileErrorBoundaryState {
 const CLEARED: TileErrorBoundaryState = { error: null };
 
 /**
- * Per-tile error boundary wrapping the kind-specific body in `renderTile`. A
- * throw inside any tile (a browser guest, a diff, a spec) previously bubbled
- * to the route boundary and then `RootErrorBoundary`, blanking the whole
- * window and unmounting every sibling tile. This catches it at the tile so
- * only the one tile is replaced by a compact, tile-sized fallback; every other
- * tile stays alive.
- *
- * Hosted (chat/terminal) tiles already render under `HostedTileBodyBoundary`
- * at the surface-host seam; this boundary sits inside the tile providers, so it
- * catches a body throw first and finer, while that outer boundary still covers
- * a throw from the provider wrappers above it.
+ * This catches it at the tile so only the one tile is replaced by a compact, tile-sized fallback; every other tile stays alive.
  */
 export class TileErrorBoundary extends Component<
   TileErrorBoundaryProps,

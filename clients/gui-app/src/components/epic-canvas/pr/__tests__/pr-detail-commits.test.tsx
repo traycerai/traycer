@@ -18,12 +18,7 @@ const writeText = vi.hoisted(() =>
   vi.fn((_value: string) => Promise.resolve()),
 );
 
-// Define the ONE property under test on the real `navigator` rather than
-// swapping the object out. jsdom puts `userAgent`, `language` and the rest on
-// `Navigator.prototype`, and a spread copies own enumerable properties only -
-// so a replacement object silently loses them, and the first assertion that
-// reaches for one (anything driven by `user-event`, say) fails somewhere far
-// from here.
+// Define the ONE property under test on the real `navigator` rather than swapping the object out. jsdom puts `userAgent`, `language` and the rest on `Navigator.prototype`, and a spread copies own enumerable properties only - so a replacement object silently loses them, and the first assertion that reaches for one (anything driven by `user-event`, say) fails somewhere far from here.
 Object.defineProperty(globalThis.navigator, "clipboard", {
   value: { writeText },
   configurable: true,
@@ -99,9 +94,8 @@ afterEach(() => {
 
 describe("PrDetailCommits", () => {
   it("copies the FULL sha while showing the short one", async () => {
-    // The short form is what a reader recognizes; the full form is what
-    // `git show` wants. Abbreviating on the clipboard would make the button
-    // quietly useless for the thing it exists for.
+    // The short form is what a reader recognizes; the full form is what `git show` wants.
+    // Abbreviating on the clipboard would make the button quietly useless for the thing it exists for.
     renderCommits(() => undefined);
 
     const chip = screen.getByTestId("pr-detail-commit-copy-sha");
@@ -114,7 +108,6 @@ describe("PrDetailCommits", () => {
   });
 
   it("does not open GitHub when the sha is copied", async () => {
-    // The chip used to be a second route to where the row already goes.
     const opened: string[] = [];
     renderCommits((url) => opened.push(url));
 

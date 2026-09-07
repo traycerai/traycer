@@ -134,14 +134,7 @@ function hasBubbleAt(
   );
 }
 
-/**
- * The layouts these helpers measure against, computed ONCE.
- *
- * `layoutOffice` walks every agent, room and tile, and these helpers are
- * called inside tick loops that run them hundreds of times per test. The
- * layout is a pure function of its agents, so recomputing it per call answered
- * the same question at a cost that dominated the suite.
- */
+/** The layouts these helpers measure against, computed ONCE. */
 const AGENTS_LAYOUT: OfficeLayout = layoutOffice(AGENTS);
 
 function seatedHead(agentId: string): OfficePoint {
@@ -271,9 +264,7 @@ function standingByTile(scene: OfficeScene): ReadonlyMap<string, string> {
 }
 
 /**
- * Two agents standing on NEIGHBOURING cafeteria spots - the only arrangement
- * the layout produces that can only mean a conversation, so a test can tell one
- * apart from two people who happen to be near each other.
+ * Two agents standing on NEIGHBOURING cafeteria spots - the only arrangement the layout produces that can only mean a conversation, so a test can tell one apart from two people who happen to be near each other.
  */
 function chatPairAt(scene: OfficeScene): ReadonlyArray<string> | null {
   const floor = scene.layout().floors[0];
@@ -295,10 +286,8 @@ function chatPairAt(scene: OfficeScene): ReadonlyArray<string> | null {
 }
 
 /**
- * Every WALLED amenity's doorway on the plan. The door is not painted from a
- * field: it is the one tile of the room's ring the grid still says is walkable,
- * which is exactly what the scene reads. The garden is left out - its boundary
- * is a hedge, so its way in is a gap with nothing drawn in it at all.
+ * Every WALLED amenity's doorway on the plan.
+ * The door is not painted from a field: it is the one tile of the room's ring the grid still says is walkable, which is exactly what the scene reads.
  */
 function amenityDoorKeys(layout: OfficeLayout): ReadonlyArray<string> {
   const keys: string[] = [];
@@ -366,9 +355,8 @@ function headOfRegion(scene: OfficeScene, agentId: string): OfficePoint | null {
 }
 
 /**
- * A layout offering ONLY these errand kinds. Weights decide between the options
- * a floor has, so pinning the options is the only way to test one activity
- * without testing the draw that leads to it.
+ * A layout offering ONLY these errand kinds.
+ * Weights decide between the options a floor has, so pinning the options is the only way to test one activity without testing the draw that leads to it.
  */
 function onlyKinds(
   kinds: ReadonlyArray<string>,
@@ -548,8 +536,7 @@ describe("OfficeScene", () => {
     expect(envelopes(scene.frame())).toHaveLength(1);
 
     // Same pulse key as before, so nothing replays - only the flag flips.
-    // What is already in flight has to be told, not just what starts from
-    // here on.
+    // What is already in flight has to be told, not just what starts from here on.
     scene.sync(sceneInput({ ...withPulse, reducedMotion: true }));
 
     const settled = scene.frame();
@@ -557,9 +544,7 @@ describe("OfficeScene", () => {
     expect(hasBubbleAt(settled, "bubble-hello", seatedHead("beta"))).toBe(true);
     expect(scene.isAnimating()).toBe(true);
 
-    // The delivered bubble is transient like any other; once it times out
-    // there is nothing left for the cut-short motion to keep the floor busy
-    // with.
+    // The delivered bubble is transient like any other; once it times out there is nothing left for the cut-short motion to keep the floor busy with.
     scene.tick(800);
     expect(scene.isAnimating()).toBe(false);
 
@@ -601,9 +586,8 @@ describe("OfficeScene", () => {
     scene.tick(50);
     expect(envelopes(scene.frame())).toHaveLength(1);
 
-    // Same pulse key, so nothing replays - only the cursor moves, from live
-    // into a historical moment. Whatever was mid-flight has not happened on
-    // this prefix, so it is dropped rather than delivered.
+    // Same pulse key, so nothing replays - only the cursor moves, from live into a historical moment.
+    // Whatever was mid-flight has not happened on this prefix, so it is dropped rather than delivered.
     scene.sync({ ...withPulse, cursorMs: 5 });
 
     const rewound = scene.frame();
@@ -613,9 +597,7 @@ describe("OfficeScene", () => {
     );
     expect(stacks(rewound)).toHaveLength(0);
 
-    // Contrast: a forward move within history must not touch what is in
-    // flight - only a REWIND (a null-to-history landing, or a seek backward)
-    // does.
+    // Contrast: a forward move within history must not touch what is in flight - only a REWIND (a null-to-history landing, or a seek backward) does.
     const forwardScene = new OfficeScene(layoutOffice);
     forwardScene.sync(
       sceneInput({ agents: AGENTS, visibleAgentIds: BOTH, cursorMs: 5 }),
@@ -676,9 +658,7 @@ describe("OfficeScene", () => {
       crewSeatedRect(awayId),
     );
 
-    // A historical cursor lands mid-errand: the character is recalled on this
-    // very sync - reduced motion is what makes the recall instant rather than
-    // a walk back across the floor, which is what keeps this assertion cheap.
+    // A historical cursor lands mid-errand: the character is recalled on this very sync - reduced motion is what makes the recall instant rather than a walk back across the floor, which is what keeps this assertion cheap.
     liveScene.sync(
       sceneInput({
         agents: IDLE_CREW,
@@ -726,9 +706,7 @@ describe("OfficeScene", () => {
       sceneInput({
         agents: AGENTS,
         visibleAgentIds: BOTH,
-        // Reduced motion on the very first sync, so nobody walks in - the
-        // only thing left that could keep the floor animating is the
-        // awaiting bubble itself.
+        // Reduced motion on the very first sync, so nobody walks in - the only thing left that could keep the floor animating is the awaiting bubble itself.
         reducedMotion: true,
         statusById: new Map<string, OfficeAgentStatus>([["alpha", "awaiting"]]),
       }),
@@ -741,9 +719,7 @@ describe("OfficeScene", () => {
     expect(hasBubbleAt(frame, "bubble-awaiting", seatedHead("alpha"))).toBe(
       true,
     );
-    // A request can sit open for hours; unlike the attention bubble, the
-    // awaiting one does not bob, so a seated agent wearing it is not a
-    // reason to keep redrawing.
+    // A request can sit open for hours; unlike the attention bubble, the awaiting one does not bob, so a seated agent wearing it is not a reason to keep redrawing.
     expect(scene.isAnimating()).toBe(false);
   });
 
@@ -1245,17 +1221,13 @@ describe("OfficeScene", () => {
       mostAtOnce = Math.max(mostAtOnce, away.length);
     }
 
-    // Stillness is the trigger, so an errand that starts on the first frame
-    // would be reporting something the floor has not earned yet. The threshold
-    // is short on purpose: the complaint this exists to answer is that agents
-    // between turns looked dead.
+    // Stillness is the trigger, so an errand that starts on the first frame would be reporting something the floor has not earned yet.
+    // The threshold is short on purpose: the complaint this exists to answer is that agents between turns looked dead.
     expect(firstBreakMs).not.toBeNull();
     expect(firstBreakMs).toBeGreaterThanOrEqual(5_000);
     expect(firstBreakMs).toBeLessThanOrEqual(10_000);
-    // ...and then EVERYBODY goes. There is no cap: an idle agent is never at
-    // its desk, so a floor of four idle agents is a floor with four of them
-    // out. The old half-the-floor limit is what left the other half sitting
-    // perfectly still, which is the thing this is for.
+    // ...and then EVERYBODY goes.
+    // There is no cap: an idle agent is never at its desk, so a floor of four idle agents is a floor with four of them out.
     expect(mostAtOnce).toBe(IDLE_CREW.length);
   });
 
@@ -1263,10 +1235,8 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
-    // Past the threshold plus the widest stagger, nobody has any business in a
-    // chair. Sampled across a full minute rather than at one instant, because
-    // the failure this catches is an agent that goes back between errands - and
-    // that reads as a single frame of somebody seated, not as a floor at rest.
+    // Past the threshold plus the widest stagger, nobody has any business in a chair.
+    // Sampled across a full minute rather than at one instant, because the failure this catches is an agent that goes back between errands - and that reads as a single frame of somebody seated, not as a floor at rest.
     for (let step = 0; step < 90; step += 1) scene.tick(100);
     let seatedFrames = 0;
     for (let step = 0; step < 600; step += 1) {
@@ -1309,9 +1279,8 @@ describe("OfficeScene", () => {
     }
 
     expect(kinds.length).toBeGreaterThan(3);
-    // Twice the same thing running is the animation being stuck rather than an
-    // agent with somewhere to be. A stroll's own legs are all `corridor`, but
-    // they are ONE errand - the kind that may not repeat is the errand's.
+    // Twice the same thing running is the animation being stuck rather than an agent with somewhere to be.
+    // A stroll's own legs are all `corridor`, but they are ONE errand - the kind that may not repeat is the errand's.
     for (let index = 1; index < kinds.length; index += 1) {
       if (kinds[index] === "corridor" && kinds[index - 1] === "corridor") {
         continue;
@@ -1403,9 +1372,7 @@ describe("OfficeScene", () => {
     }
 
     expect(visited.length).toBeGreaterThan(3);
-    // Somewhere different each time it gets up: the same window twice running
-    // reads as the animation being stuck rather than as an agent with somewhere
-    // to be.
+    // Somewhere different each time it gets up: the same window twice running reads as the animation being stuck rather than as an agent with somewhere to be.
     for (let index = 1; index < visited.length; index += 1) {
       expect(visited[index], `errand ${index}`).not.toBe(visited[index - 1]);
     }
@@ -1431,11 +1398,8 @@ describe("OfficeScene", () => {
         if (desk === undefined) continue;
         const key = `${region.rect.x},${region.rect.y}`;
         here.set(region.agentId, key);
-        // Two people in the same chair is impossible; two people on the same
-        // errand SPOT is what the claim exists to prevent. Two people crossing
-        // the same corridor tile on the same tick is neither - a floor where
-        // everybody is out has walkers passing each other constantly, and they
-        // are told apart from standers by having moved since the last frame.
+        // Two people in the same chair is impossible; two people on the same errand SPOT is what the claim exists to prevent.
+        // Two people crossing the same corridor tile on the same tick is neither - a floor where everybody is out has walkers passing each other constantly, and they are told apart from standers by having moved since the last frame.
         if (region.rect.x === desk.chairTile.col * OFFICE_TILE) continue;
         if (previous.get(region.agentId) !== key) continue;
         const holder = occupied.get(key);
@@ -1467,12 +1431,8 @@ describe("OfficeScene", () => {
       scene.tick(100);
       const balls = paperBalls(scene.frame());
       if (balls.length > previous.length) thrown += balls.length;
-      // Read only from frames holding exactly ONE ball, in both this frame and
-      // the last. Drawables carry no identity, so with several in play a ball
-      // landing while another is thrown is indistinguishable from a ball
-      // moving - and the two matched-axis comparisons this replaced were worse
-      // still: they missed a DIAGONAL step entirely (neither axis held) and
-      // read one ball's position against another's as motion.
+      // Read only from frames holding exactly ONE ball, in both this frame and the last.
+      // Drawables carry no identity, so with several in play a ball landing while another is thrown is indistinguishable from a ball moving - and the two matched-axis comparisons this replaced were worse still: they missed a DIAGONAL step entirely (neither axis.
       if (balls.length === 1 && previous.length === 1) {
         const ball = balls[0];
         const before = previous[0];
@@ -1489,9 +1449,7 @@ describe("OfficeScene", () => {
 
     expect(thrown).toBeGreaterThan(0);
     expect(flew).toBe(true);
-    // A missed ball rests for three seconds - thirty frames at this tick - so
-    // any resting at all is a miss, and it is the miss that proves the throw
-    // was not simply drawn at its destination.
+    // A missed ball rests for three seconds - thirty frames at this tick - so any resting at all is a miss, and it is the miss that proves the throw was not simply drawn at its destination.
     expect(rested).toBeGreaterThan(0);
 
     // ...and the tosses end. A bin errand that never finished would leave a
@@ -1569,9 +1527,8 @@ describe("OfficeScene", () => {
   });
 
   it("answers a waiting player rather than leaving the table to the odds", () => {
-    // A FULL floor, every kind of spot available. The table is two spots out of
-    // twenty-odd, so a rally happening here is not the weights being generous -
-    // it is the open end outranking them while somebody is stood at the other.
+    // A FULL floor, every kind of spot available.
+    // The table is two spots out of twenty-odd, so a rally happening here is not the weights being generous - it is the open end outranking them while somebody is stood at the other.
     const crowd = [1, 2, 3, 4, 5, 6].map((index) =>
       agent({ id: `agent-${index}`, createdAt: index }),
     );
@@ -1608,12 +1565,7 @@ describe("OfficeScene", () => {
     }
 
     expect(rallies).toBeGreaterThan(0);
-    // TIME IN PLAY is the measure, not games started: two agents will
-    // occasionally roll the table at the same moment on their own, so a test
-    // that only asked whether a rally ever happened would pass with the bias
-    // deleted. Over four minutes this floor plays ~386 ticks with the open end
-    // outranking the draw and ~224 without it, so the threshold sits between
-    // the two rather than at a number that merely looked round.
+    // TIME IN PLAY is the measure, not games started: two agents will occasionally roll the table at the same moment on their own, so a test that only asked whether a rally ever happened would pass with the bias deleted.
     expect(ralliedTicks).toBeGreaterThan(300);
   });
 
@@ -1810,9 +1762,8 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
 
-    // A conversation is ONE bubble at a time, changing hands. Two at once reads
-    // as two people waiting near each other; none at all reads as two people
-    // ignoring each other across a table.
+    // A conversation is ONE bubble at a time, changing hands.
+    // Two at once reads as two people waiting near each other; none at all reads as two people ignoring each other across a table.
     let sawPair = false;
     let sawAlternation = false;
     let sawBoth = false;
@@ -1869,9 +1820,7 @@ describe("OfficeScene", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
-    // A sofa, a sleeping bag, an armchair, a console seat and a garden bench
-    // are the places off a desk where SITTING is the activity, so they are the
-    // ones where `sit` does not mean a filler leaked onto the floor.
+    // A sofa, a sleeping bag, an armchair, a console seat and a garden bench are the places off a desk where SITTING is the activity, so they are the ones where `sit` does not mean a filler leaked onto the floor.
     const seatedKinds = new Set(["sofa", "nap", "read", "console", "garden"]);
     const seatKeys = new Set(
       scene
@@ -1909,9 +1858,8 @@ describe("OfficeScene", () => {
       agent({ id: "b2", parentId: "root-b", createdAt: 6 }),
     ];
     const ids = new Set(families.map((person) => person.id));
-    // A floor plan with no errand spots at all, so a visit is the ONLY errand
-    // left to take. Otherwise this would be a test of how often the weighted
-    // roll happens to land on one rather than of who it lands on.
+    // A floor plan with no errand spots at all, so a visit is the ONLY errand left to take.
+    // Otherwise this would be a test of how often the weighted roll happens to land on one rather than of who it lands on.
     const spotless = (input: ReadonlyArray<OfficeAgentInput>): OfficeLayout => {
       const base = layoutOffice(input);
       return {
@@ -1986,11 +1934,8 @@ describe("OfficeScene", () => {
     let previousRect = characterRect(scene.frame(), lingering);
     expect(previousRect).not.toEqual(parked);
 
-    // The hurry is a LATCH held until the chair, not a window that closes when
-    // the envelope lands. The flight is 600ms here, so every tick from the
-    // eighth on is after it - and a stroll would cover 4.8px in one of them
-    // against the hurry's 22.4px. A single step wider than a tile is therefore
-    // only possible if the speed never dropped.
+    // The hurry is a LATCH held until the chair, not a window that closes when the envelope lands.
+    // The flight is 600ms here, so every tick from the eighth on is after it - and a stroll would cover 4.8px in one of them against the hurry's 22.4px.
     let home = 0;
     let fastestAfterLanding = 0;
     for (let step = 2; step <= 30 && home === 0; step += 1) {
@@ -2011,8 +1956,7 @@ describe("OfficeScene", () => {
   });
 
   it("renders the identical frames from the identical ticks", () => {
-    // Everything added for idle life - which spot, how long, which filler,
-    // whose turn to talk - is seeded from the agent id and the scene clock.
+    // Everything added for idle life - which spot, how long, which filler, whose turn to talk - is seeded from the agent id and the scene clock.
     // A single `Math.random` anywhere in it would make playback unscrubbable.
     const run = (): ReadonlyArray<string> => {
       const scene = new OfficeScene(layoutOffice);
@@ -2078,9 +2022,7 @@ describe("OfficeScene", () => {
   });
 
   it("draws floor under every walkable tile that is not a doorway", () => {
-    // Three cabins over two bands: a corridor between the bands, a corridor
-    // between the two cabins sharing the lower one, and the building's own
-    // aisle down either side.
+    // Three cabins over two bands: a corridor between the bands, a corridor between the two cabins sharing the lower one, and the building's own aisle down either side.
     const crowd = [
       agent({ id: "root-a", createdAt: 1 }),
       agent({ id: "a1", parentId: "root-a", createdAt: 2 }),
@@ -2103,9 +2045,8 @@ describe("OfficeScene", () => {
     const layout = scene.layout();
     expect(layout.rooms).toHaveLength(3);
 
-    // The floor layer is painted in order, so the LAST tile-aligned sprite at
-    // a position is the one a viewer actually sees. (The rug is centred on its
-    // tile, so it is not tile-aligned and never masks the floor under it.)
+    // The floor layer is painted in order, so the LAST tile-aligned sprite at a position is the one a viewer actually sees.
+    // (The rug is centred on its tile, so it is not tile-aligned and never masks the floor under it.)
     const painted = new Map<string, OfficeSpriteName>();
     for (const drawable of scene.frame().floor) {
       if (drawable.kind !== "sprite") continue;
@@ -2134,10 +2075,8 @@ describe("OfficeScene", () => {
           expect(painted.get(key), key).toBe("door");
           continue;
         }
-        // Somewhere a character can stand must look like somewhere a character
-        // can stand - a corridor painted as brick reads as a sealed room. A pod
-        // floor counts, and so does the garden's grass: both are the same
-        // floor in another surface.
+        // Somewhere a character can stand must look like somewhere a character can stand - a corridor painted as brick reads as a sealed room.
+        // A pod floor counts, and so does the garden's grass: both are the same floor in another surface.
         expect(painted.get(key), key).toMatch(
           /^(floor-[ab]|floor-pod-(warm-)?[ab]|floor-grass-[ab])$/,
         );
@@ -2371,9 +2310,7 @@ describe("OfficeScene", () => {
     );
 
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
-    // They WALK back, so the seat is reached after some tiles rather than on
-    // the sync that released them - and once seated they are free to go on an
-    // errand again, which is why this stops at the first frame both are home.
+    // They WALK back, so the seat is reached after some tiles rather than on the sync that released them - and once seated they are free to go on an errand again, which is why this stops at the first frame both are home.
     let homeAfter: number | null = null;
     for (let step = 1; step <= 120 && homeAfter === null; step += 1) {
       scene.tick(100);
@@ -2464,9 +2401,8 @@ describe("OfficeScene", () => {
     expect(characterRect(returning, "alpha").y).toBe(
       scene.layout().floors[0].doorTile.row * OFFICE_TILE - 4,
     );
-    // The walk in ends at the chair. It does not STAY there - an idle agent is
-    // never at its desk for long - so what is asserted is that the return
-    // completes, not where the character is a dozen seconds later.
+    // The walk in ends at the chair.
+    // It does not STAY there - an idle agent is never at its desk for long - so what is asserted is that the return completes, not where the character is a dozen seconds later.
     let arrived = false;
     for (let step = 0; step < 120 && !arrived; step += 1) {
       scene.tick(100);
@@ -2538,8 +2474,7 @@ describe("OfficeScene", () => {
     expect(launched.x).toBe(seatedHead("alpha").x);
 
     // ...and the next message to it does NOT jerk it into the chair to receive.
-    // Snapping a walking sprite to a tile reads as a rendering fault; the
-    // envelope simply lands on the desk and waits.
+    // Snapping a walking sprite to a tile reads as a rendering fault; the envelope simply lands on the desk and waits.
     const walking = characterRect(scene.frame(), "beta");
     scene.sync(
       sceneInput({
@@ -2553,9 +2488,8 @@ describe("OfficeScene", () => {
   });
 
   it("hurries an agent with a message waiting, and greets it once seated", () => {
-    // Two identical walks in from the same door to the same chair. The only
-    // difference is a message in the air, so the difference in how long the
-    // walk takes IS the hurry.
+    // Two identical walks in from the same door to the same chair.
+    // The only difference is a message in the air, so the difference in how long the walk takes IS the hurry.
     const walkInMs = (withMessage: boolean): number => {
       const scene = new OfficeScene(layoutOffice);
       scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
@@ -2616,9 +2550,7 @@ describe("OfficeScene", () => {
     for (let step = 0; step < 80; step += 1) scene.tick(100);
     expect(stacks(scene.frame())).toHaveLength(0);
 
-    // The request is open from the row it lands on, and the as-of count is
-    // what says so; the landed message itself only carries the greeting, or
-    // the one envelope would be drawn as two.
+    // The request is open from the row it lands on, and the as-of count is what says so; the landed message itself only carries the greeting, or the one envelope would be drawn as two.
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -2644,10 +2576,8 @@ describe("OfficeScene", () => {
       false,
     );
 
-    // Once the person has been, beta walks back - and the greeting fires as it
-    // SITS, which is when the message is actually picked up. The seated pose is
-    // what says so: a walk can land on the chair's own tile with a step still
-    // owed, and the pile is still on the desk until the sitting down happens.
+    // Once the person has been, beta walks back - and the greeting fires as it SITS, which is when the message is actually picked up.
+    // The seated pose is what says so: a walk can land on the chair's own tile with a step still owed, and the pile is still on the desk until the sitting down happens.
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     for (let step = 0; step < 120; step += 1) {
       scene.tick(100);
@@ -2869,19 +2799,14 @@ describe("OfficeScene", () => {
       if (desk === undefined || character === undefined) {
         throw new Error(`missing a region for ${id}`);
       }
-      // A renderer that takes the LAST match under a point resolves a
-      // character standing on somebody else's desk, not the furniture under
-      // its feet - which only holds if every desk sorts before every
-      // character.
+      // A renderer that takes the LAST match under a point resolves a character standing on somebody else's desk, not the furniture under its feet - which only holds if every desk sorts before every character.
       expect(character).toBeGreaterThan(desk);
     }
   });
 
   it("does not double count a landed request the open-request map already holds", () => {
     const scene = new OfficeScene(layoutOffice);
-    // Attention sends beta to reception, needing a person - a stable "away
-    // from its desk" that a hurry never pulls it out of (pulling it out of
-    // line would drop its place), unlike a walk that could finish mid-test.
+    // Attention sends beta to reception, needing a person - a stable "away from its desk" that a hurry never pulls it out of (pulling it out of line would drop its place), unlike a walk that could finish mid-test.
     const statusById = new Map<string, OfficeAgentStatus>([
       ["beta", "attention"],
     ]);
@@ -2944,9 +2869,7 @@ describe("OfficeScene", () => {
     ];
     const scene = new OfficeScene(layoutOffice);
 
-    // Nobody visible yet: the walls and the pod's own outline still stand for
-    // everyone, but neither name has anybody the cursor has revealed to
-    // belong to it.
+    // Nobody visible yet: the walls and the pod's own outline still stand for everyone, but neither name has anybody the cursor has revealed to belong to it.
     scene.sync(
       sceneInput({ agents: family, visibleAgentIds: new Set<string>() }),
     );
@@ -3001,8 +2924,7 @@ describe("OfficeScene", () => {
 });
 
 /**
- * A floor big enough to have earned every amenity: a nap room, a library, a
- * garden, a gym, and a game room with all four of its tables.
+ * A floor big enough to have earned every amenity: a nap room, a library, a garden, a gym, and a game room with all four of its tables.
  */
 const BIG_CREW: ReadonlyArray<OfficeAgentInput> = Array.from(
   { length: 12 },
@@ -3396,9 +3318,7 @@ describe("OfficeScene amenities", () => {
           continue;
         }
         if (layout.walkable[row][col]) {
-          // The way in is a gap in the hedge, so nothing is drawn in it - a
-          // garden is bounded rather than built, and a door hanging in a hedge
-          // would say otherwise.
+          // The way in is a gap in the hedge, so nothing is drawn in it - a garden is bounded rather than built, and a door hanging in a hedge would say otherwise.
           openings += 1;
           expect(painted.get(key), key).not.toBe("door");
           expect(painted.get(key), key).not.toBe("planter");
@@ -3428,8 +3348,7 @@ describe("OfficeScene amenities", () => {
         const kind = named.get(key);
         if (kind === undefined) continue;
         // Standing on a named spot is fine - it means that errand was chosen.
-        // What must never happen is a CORRIDOR spot landing on one, which is
-        // what the reserved set in `corridorTilesFor` prevents.
+        // What must never happen is a CORRIDOR spot landing on one, which is what the reserved set in `corridorTilesFor` prevents.
         expect(
           floor.errandSpots.some(
             (spot) =>

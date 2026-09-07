@@ -4,14 +4,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /**
- * One level of the host filesystem for the remote folder picker
- * (`workspace.browseFolders`). `directoryPath: null` lists the host's browse
- * roots (the user's home directory). Each level is its own cache entry, so
- * drilling back up re-renders instantly from cache.
- *
- * The client is the REQUESTER's (tab-bound where the pick started in a tab) -
- * this hook must not resolve the app-wide active host itself, or the picker
- * could browse a different machine than the one the picked path is sent to.
+ * Client is the requester's. Do not resolve the app-wide active host or the picker can browse a different machine than the one the picked path is sent to.
  */
 export function useWorkspaceBrowseFolders(args: {
   readonly client: HostClient<HostRpcRegistry> | null;

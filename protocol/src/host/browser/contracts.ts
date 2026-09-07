@@ -1,11 +1,5 @@
 /**
- * `browser.sessions@1.0` and `browser.screencast@1.0` - browser V1 stream
- * contracts between the GUI and host-owned headless browser sessions.
- *
- * These are intentionally stream-only additions. Until their first release,
- * the browser contracts extend the 1.0 baseline in place. After release,
- * additive changes use negotiated minors with version-gated emission;
- * breaking semantics require a separately served major.
+ * `browser.sessions@1.0` and `browser.screencast@1.0` - browser V1 stream contracts between the GUI and host-owned headless browser sessions.
  */
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
@@ -16,9 +10,6 @@ import {
   browserCdpTargetSchema,
 } from "@traycer/protocol/host/browser/cdp-contracts";
 
-// The curated CDP vocabulary lives in its own module (it is addressed
-// independently of either stream contract) but stays part of this module's
-// public surface, so every consumer keeps one import path.
 export * from "@traycer/protocol/host/browser/cdp-contracts";
 
 const textFrameFields = {
@@ -134,30 +125,8 @@ export type BrowserSessionsOpenRequest = z.infer<
 >;
 
 /**
- * Deliberately NOT `.strict()`: Chrome emits cookie fields the contract does
- * not model (`_crHasCrossSiteAncestor`, …) and they change between Chromium
- * majors. Unknown keys are stripped, not rejected - a strict parse here failed
- * every capture and materialized native tabs logged out.
- *
- * `partitionKey` IS modelled, because dropping it silently merges a partitioned
- * cookie into the unpartitioned jar on restore. It is the storage-state STRING
- * form; a producer holding CDP's `{topLevelSite, hasCrossSiteAncestor}` object
- * must flatten it before it reaches this schema, and Electron's cookies API has
- * no partition key at all, so its producers send `null`.
- *
- * Known fidelity limit of that string form: Playwright flattens CDP's
- * `CookiePartitionKey` to `topLevelSite` and drops `hasCrossSiteAncestor`
- * (which arrives as one of the stripped `_cr*` extras). A cookie partitioned
- * with a cross-site ancestor therefore re-seeds into the neighbouring
- * `hasCrossSiteAncestor: false` partition - still partitioned, so not a
- * cross-site leak, just fidelity loss the wire's declared string form cannot
- * express.
- *
- * It defaults rather than being required: a peer built before CHIPS identity
- * existed omits the field entirely, and requiring it would fail the whole frame
- * parse. Frame drops are silent on both sides, so a required field here turned
- * a version skew into an inert "+ Add browser" button. Absent means
- * unpartitioned - the same thing those producers meant by sending `null`.
+ * Deliberately NOT `.strict()`: Chrome emits cookie fields the contract does not model (`_crHasCrossSiteAncestor`, …) and they change between Chromium majors.
+ * `partitionKey` IS modelled, because dropping it silently merges a partitioned cookie into the unpartitioned jar on restore.
  */
 export const browserStorageCookieSchema = z.object({
   name: z.string(),
@@ -209,21 +178,7 @@ export const browserCookieKeySchema = z
 export type BrowserCookieKey = z.infer<typeof browserCookieKeySchema>;
 
 /**
- * One coalescing window's worth of cookie change for a single registrable
- * domain (`registrable-domain.ts` derives it on both ends). The two lists
- * answer two different questions and neither can stand in for the other.
- *
- * `cookies` is the **complete** picture of the domain after the window (every
- * cookie its subtree holds), not just the ones that changed. It is what lets
- * the host *reconcile* its cache by absence - the store converging on the
- * desktop's jar.
- *
- * `removedKeys` names what the sender watched **disappear from its own jar**
- * during the window. That is the only logout evidence on this frame:
- * reconciliation buries cookies for all sorts of innocent reasons (a headless
- * context contributed a cookie this desktop never had), so the host propagates
- * a sign-out to live sessions from `removedKeys` alone and never from what a
- * merge happened to tombstone.
+ * One coalescing window's worth of cookie change for a single registrable domain (`registrable-domain.ts` derives it on both ends).
  */
 export const browserPrimaryProfileDeltaSchema = z
   .object({
@@ -239,124 +194,25 @@ export type BrowserPrimaryProfileDelta = z.infer<
 >;
 
 /*
- * Wire bounds for the carry-over path. Both ends import these, so the
- * producer clamps against exactly the number the receiver enforces.
- *
- * They are exported constants rather than `.max()` on the schemas below, and
- * that is deliberate. A schema bound turns an over-bound frame into a silent
- * parse failure inside the stream transport: the receiver never sees the
- * frame, so it can neither WARN (keyed by `instance=`) nor emit the
- * `over-bound` reject trace these paths are diagnosed by, and these bugs were
- * found by trace forensics. The receiver counts and rejects instead.
- *
- * The two frames overflow in OPPOSITE directions, so they get two policies and
- * these must not be unified into one:
- *
- * - `primaryProfileObserved` over-bound: reject the WHOLE frame, apply none of
- *   it. Dropping an observation costs a re-login; applying an attacker-chosen
- *   prefix of one writes into the master jar. Failing closed is safe here.
- * - `primaryProfileForgetLedger` over-bound: apply EVERYTHING the digest
- *   carries, then WARN and trace the overflow. Never drop it. Rejecting a
- *   forget digest leaves every login it names alive on the host - a silent
- *   resurrection of exactly the sessions the user asked to be gone - so on
- *   this frame a whole-frame reject is the fail-OPEN direction and is
- *   forbidden.
+ * Wire bounds for the carry-over path.
+ * The two frames overflow in OPPOSITE directions, so they get two policies and these must not be unified into one
  */
 
-/**
- * Cookies one `primaryProfileObserved` frame may carry for its single
- * registrable domain. Chromium's own per-host cap is 180, so this leaves room
- * for a domain whose subtree spans several hostnames while still bounding what
- * one compromised host can write into the user's jar in a single frame - a
- * real sign-in is tens of cookies, not hundreds.
- */
+/** Cookies one `primaryProfileObserved` frame may carry for its single registrable domain. */
 export const BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES = 512;
 
 /**
- * `primaryProfileObserved` frames one host may deliver in a single burst - the
- * attach replay, which is the only place a host has a whole SET of domains to
- * offer at once rather than the one domain a capture just changed.
- *
- * It is ONE number because it is a two-sided contract whose ends fail in
- * opposite directions when they disagree. The host paces its replay to stay at
- * or under it; the desktop's rate limiter must admit a burst of exactly this
- * size before it begins refusing. A limiter set
- * lower silently truncates a legitimate reconnect - the user stays signed out
- * on the very machine that asked for the replay, with nothing on either end
- * saying why - and a host pacing higher reaches the same outcome from the
- * other side.
- *
- * A host holding more marked domains than this sends the first burst and
- * leaves the rest for the next attach. That is safe precisely because the
- * replay is stateless and idempotent: a domain that did not fit is not lost,
- * only later.
- *
- * 64 is far above a realistic replay - a user's agents sign into a handful of
- * sites, not dozens - and far below what would read as a flood to a desktop
- * applying each frame through Chromium's own `cookies.set`.
+ * `primaryProfileObserved` frames one host may deliver in a single burst - the attach replay, which is the only place a host has a whole SET of domains to offer at once rather than the one domain a capture just changed.
+ * That is safe precisely because the replay is stateless and idempotent: a domain that did not fit is not lost, only later.
  */
 export const BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_BURST = 64;
 
-/**
- * Per-domain entries one `primaryProfileForgetLedger` digest may carry. The
- * digest is a whole-ledger replacement rather than a delta, so the desktop
- * trims to this bound by first dropping the entries `forgetAllAt` already
- * covers (a domain forgotten before the last forget-all adds nothing to it)
- * and then the oldest remaining timestamps.
- *
- * That trim order has a cost worth naming: the oldest entries are exactly the
- * domains a long-disconnected host is most likely to still be holding, and a
- * trimmed digest is indistinguishable from a complete one on the wire - the
- * receiving host cannot tell that a forget it never heard about was dropped
- * on the way. The bound is set far above any real ledger so this stays
- * theoretical; if it ever starts biting, the fix is a bigger bound or a
- * lower-water compaction on the desktop, not a smarter host.
- */
+/** Per-domain entries one `primaryProfileForgetLedger` digest may carry. */
 export const BROWSER_FORGET_LEDGER_MAX_DOMAINS = 1_024;
 
 /**
- * One headless-observed sign-in for a single registrable domain
- * (`registrable-domain.ts` derives it on both ends).
- *
- * Direction: host -> jar-authorized desktops. It is the first host->jar WRITE
- * direction the contract has ever had, so the desktop treats it as UNTRUSTED
- * input: it re-derives every cookie's registrable domain itself, drops the
- * frame when any cookie disagrees with `domain`, bounds it by
- * {@link BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES}, and applies what
- * survives through Chromium's own `cookies.set` validation.
- *
- * COOKIES ONLY - no `origins`/localStorage, and none may be added later.
- * localStorage has no per-key merge: the only
- * way to apply it is clear-and-reseed a whole origin, which is a second
- * implicit sign-out channel, and an unapplied `origins` array would just ship
- * every SPA's bearer tokens across the wire for nothing. localStorage
- * carry-over is future work, not a field this frame is missing.
- *
- * TRUST POSTURE - the absence of a removals field closes the EXPLICIT
- * sign-out channel, and that is all it closes. Do not read it as "this frame
- * cannot assert a logout": ONE IMPLICIT CHANNEL REMAINS. Chromium treats
- * setting an already-expired cookie as a DELETE of the matching one, and
- * `expires` here has no floor - the desktop's seed path passes any
- * non-negative value straight through to `cookies.set` as `expirationDate`.
- * So a cookie carrying `expires` at or before receive time is a removal
- * wearing a write's clothing.
- *
- * EXPIRED-COOKIE REJECTION (reason `expired-cookie`): the applier
- * MUST drop, per cookie, any cookie whose `expires >= 0 && expires <= now`
- * (seconds since epoch, the field's own unit; a NEGATIVE `expires` is the
- * session-cookie sentinel - the capture path writes `-1` - and is always
- * allowed through). The comparison is against RECEIVE time, so a parse-time
- * schema bound cannot decide it and this stays the applier's obligation. Drop
- * the cookie, not the frame: the rest of the observation is still a
- * legitimate sign-in.
- *
- * No contributor id: provenance is the sending host's identity on this
- * authenticated stream, which the desktop already knows and which a frame
- * field could only forge. No ordering field either, by design - there is no
- * sequence number, watermark or issue timestamp to compare, so protection
- * against a host replaying a stale contribution over a fresher jar is
- * entirely the REPLAY ORDERING's obligation, never a check the applier can
- * make from the frame's own contents.
+ * One headless-observed sign-in for a single registrable domain (`registrable-domain.ts` derives it on both ends).
+ * Do not read it as "this frame cannot assert a logout": ONE IMPLICIT CHANNEL REMAINS.
  */
 export const browserPrimaryProfileObservedSchema = z
   .object({
@@ -382,51 +238,16 @@ export type BrowserForgetLedgerDomain = z.infer<
 >;
 
 /**
- * The desktop's durable forget ledger, projected for ONE host: a set of
- * INSTRUCTIONS ("this site is gone", "everything before this was gone"), never
- * clock values for the receiver to reason about.
- *
- * Every timestamp on it comes from ONE clock - the authoring desktop's - and is
- * read only by that desktop. A host compares none of them: not against its own
- * clock, not against another desktop's ledger, and not against each other. It
- * clears what the digest names and answers with
- * `primaryProfileForgetLedgerAck`.
- *
- * WHAT `revision` IS FOR, and why this is not simply the whole ledger every
- * time. The ledger is monotonic and never
- * shrinks, so re-asserting all of it on every push would re-clear a site the
- * user has since signed back into - on every later forget action, forever. The
- * desktop therefore records what each host has ACKED and sends only the
- * entries above it, while `revision` always carries the ledger's current top:
- * the ack means "pruned through here", not "pruned what was in that frame". A
- * host that missed a push, or never acked one, is simply sent those entries
- * again on the next push, so the digest stays idempotent and needs no
- * host-side watermark.
- *
- * `forgetAllAt` is null both when the user has never forgotten everything AND
- * when this host has already acked the revision that carried it - the two are
- * the same instruction-set fact, "no forget-all for you in this digest". It is
- * required and explicitly nullable rather than defaulted: the frame is new on
- * an unreleased contract, so no peer can omit it, and a default would quietly
- * absorb a producer bug into "nothing was ever forgotten" - the one wrong
- * direction for this field. `domains` is bounded by
- * {@link BROWSER_FORGET_LEDGER_MAX_DOMAINS}.
+ * The desktop's durable forget ledger, projected for ONE host: a set of INSTRUCTIONS ("this site is gone", "everything before this was gone"), never clock values for the receiver to reason about.
+ * A host that missed a push, or never acked one, is simply sent those entries again on the next push, so the digest stays idempotent and needs no host-side watermark.
  */
 export const browserForgetLedgerSchema = z
   .object({
     forgetAllAt: z.number().nullable(),
     domains: z.array(browserForgetLedgerDomainSchema),
     /**
-     * The authoring desktop's monotonic forget counter, bumped by every
-     * forget-all and every clear-site. Desktop-local and never compared across
-     * machines: a host only ever echoes it back on the ack.
-     *
-     * Bounded at the SCHEMA, unlike the payload bounds above, and for the
-     * opposite reason. Those bound volume, where a silent parse failure would
-     * cost the receiver its `over-bound` trace. This is a COUNTER the far end
-     * stores and compares: a fractional or negative one is not a big frame to
-     * refuse loudly, it is a value that poisons a watermark, and there is
-     * nothing a peer could usefully do with it but drop the frame.
+     * The authoring desktop's monotonic forget counter, bumped by every forget-all and every clear-site.
+     * Desktop-local and never compared across machines: a host only ever echoes it back on the ack.
      */
     revision: z.number().int().nonnegative(),
   })
@@ -476,24 +297,17 @@ export type ElectronTabCreateFailureCode = z.infer<
   typeof electronTabCreateFailureCodeSchema
 >;
 
-// Reserved evolution room, not yet added:
-// - A `downloadEvent` server frame for file downloads/uploads (deferred); the
-//   honest unsupported toast stays until then.
+// Reserved evolution room, not yet added: - A `downloadEvent` server frame for file downloads/uploads (deferred); the honest unsupported toast stays until then.
 /**
- * The host's verdict on one `captureTabPreview`. Snapshot-only cross-host
- * context: a still, a url and a title, never a drive
- * handle. `ok: false` is an ordinary answer carrying `reason` and nothing else
- * - notably a dormant tab, which is reported rather than woken.
+ * The host's verdict on one `captureTabPreview`.
+ * Snapshot-only cross-host context: a still, a url and a title, never a drive handle.
  */
 export const browserTabPreviewSchema = z
   .object({
     ok: z.boolean(),
     /** Base64 JPEG, capped host-side to the wire bound below. */
     screenshotBase64: z.string().max(2_097_152).nullable(),
-    // Deliberately uncapped: a real `data:`/`blob:` url or a long title would
-    // otherwise fail the whole frame's parse and the picker would just wait
-    // out its timeout. Only the screenshot is bounded, and the host clamps
-    // that at the producer.
+    // Deliberately uncapped: a real `data:`/`blob:` url or a long title would otherwise fail the whole frame's parse and the picker would just wait out its timeout.
     url: z.string().nullable(),
     title: z.string().nullable(),
     reason: z.string().nullable(),
@@ -583,9 +397,7 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Answers one `primaryProfileCaptured`: the host has DURABLY stored (or
-      // rejected) that jar. The desktop's quit flush waits on this rather than
-      // on a socket write completing.
+      // Answers one `primaryProfileCaptured`: the host has DURABLY stored (or rejected) that jar.
       kind: z.literal("primaryProfileCaptureAck"),
       ...requestFrameFields,
     })
@@ -601,9 +413,8 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // starts it only after the host accepts the provisioned incarnation.
       requestedUrl: z.string(),
       reason: electronTabCreateReasonSchema,
-      // Which jar the guest gets. `isolated` picks a per-session in-memory
-      // partition on the desktop and is never seeded, so the desktop cannot
-      // infer it from `seedStorageState` being null.
+      // Which jar the guest gets.
+      // `isolated` picks a per-session in-memory partition on the desktop and is never seeded, so the desktop cannot infer it from `seedStorageState` being null.
       profile: browserSessionProfileKindSchema,
       seedStorageState: browserStorageStateSchema.nullable(),
     })
@@ -628,33 +439,19 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Refreshes the host's durable primary-profile snapshot after a committed
-      // Electron navigation. Headless activation reads that snapshot; it never
-      // opens a second, opportunistic renderer request path during placement.
+      // Refreshes the host's durable primary-profile snapshot after a committed Electron navigation.
+      // Headless activation reads that snapshot; it never opens a second, opportunistic renderer request path during placement.
       kind: z.literal("capturePrimaryProfile"),
       ...requestFrameFields,
-      // A STANDING request: capture nothing now, keep this `requestId`, and
-      // use it on the one capture the host
-      // cannot ask for - the flush the desktop pushes as it quits. Every
-      // `primaryProfileCaptured` the host stores is thereby solicited: the
-      // ordinary answer matches the outstanding request, the quit flush matches
-      // the standing one, and anything else is acked and dropped. Issued once
-      // per connection, at the point the host both knows the desktop holds the
-      // master jar and can read the slice it speaks for.
+      // A STANDING request: capture nothing now, keep this `requestId`, and use it on the one capture the host cannot ask for - the flush the desktop pushes as it quits.
       standing: z.boolean().default(false),
     })
     .strict(),
   z
     .object({
-      // Store-key handshake. The host mints the per-user store key and asks
-      // a JAR-AUTHORIZED desktop (one whose
-      // `desktopIdentityAttest` this host enrolled) to wrap it with that
-      // machine's OS keystore; the host keeps the raw bytes in memory only.
+      // Store-key handshake.
       kind: z.literal("storeKeyWrapRequest"),
       ...requestFrameFields,
-      // A store key is 32 bytes and a wrapped blob a few hundred; the cap is
-      // slack, not a size contract, and it exists so neither side can be made
-      // to buffer or `safeStorage`-process an unbounded string.
       rawKey: z.base64().max(4096),
     })
     .strict(),
@@ -668,12 +465,8 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // "Prove you are a desktop this host hands the cookie jar to". Issued
-      // once per connection, on receipt of `electronTabLifecycleReady`. The
-      // nonce is 32 random bytes the host
-      // holds on the challenged subscriber and deletes on the first answer, so
-      // a captured signature replays onto nothing and a second connection's
-      // answer never settles this one.
+      // "Prove you are a desktop this host hands the cookie jar to".
+      // The nonce is 32 random bytes the host holds on the challenged subscriber and deletes on the first answer, so a captured signature replays onto nothing and a second connection's answer never settles this one.
       kind: z.literal("desktopIdentityChallenge"),
       ...requestFrameFields,
       nonce: z.base64().max(64),
@@ -681,17 +474,8 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // A sign-in this host witnessed inside a headless session, offered to
-      // the desktops that hold the master jar. Emitted from headless capture
-      // events only - never echoed back
-      // from a desktop's own `primaryProfileDelta`, which is what terminates
-      // the loop - and from primary-profile-backed sessions only, so ephemeral
-      // ones stay isolated. Replayed for the host's headless-contributed
-      // domains on every jar-authorized desktop attach, which is what lets the
-      // path carry no watermark and no ack: the merge is idempotent, so
-      // redundancy is free and a crash costs nothing. Sent to every
-      // jar-authorized desktop of the user. No `userId`: the identity is the
-      // stream's authenticated user.
+      // A sign-in this host witnessed inside a headless session, offered to the desktops that hold the master jar.
+      // Emitted from headless capture events only - never echoed back from a desktop's own `primaryProfileDelta`, which is what terminates the loop - and from primary-profile-backed sessions only, so ephemeral ones stay.
       kind: z.literal("primaryProfileObserved"),
       ...textFrameFields,
       ...browserPrimaryProfileObservedSchema.shape,
@@ -699,32 +483,7 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // This host has finished pruning everything the desktop's ledger named
-      // through `revision` - the stored slice, the headless-contributed
-      // markers, and the live headless contexts. Sent only to the desktop
-      // whose digest it answers.
-      //
-      // It is the HAPPENS-BEFORE the carry-over path has no clock for. A host
-      // that has acked revision N pruned everything through N before it sent
-      // this, so every `primaryProfileObserved` it emits afterwards is a
-      // post-prune capture; one emitted before the prune is exactly the frame
-      // whose connection has not acked yet, and the desktop drops it on that
-      // fact rather than on an estimate of flight time. Until a connection's
-      // first ack, every observation for a ledger-covered domain drops.
-      //
-      // `revision` is the desktop's own counter, echoed back verbatim. This
-      // host neither mints nor compares it - it is an opaque token here, which
-      // is what keeps two machines' clocks out of the ordering.
-      //
-      // Shaped like the ledger's own `revision` (integer, non-negative) so a
-      // malformed one is refused at the parse rather than stored. The desktop
-      // additionally CLAMPS what it accepts to its own current revision: an
-      // ack is an echo, so a host cannot advance a watermark past what it was
-      // told, and an inflated one would otherwise disable the desktop's
-      // no-resurrection gate permanently.
-      //
-      // This arm replaced `primaryProfileForgotten`, whose one-shot fan-out the
-      // ledger absorbed. Do not reintroduce a second forget channel.
+      // This host has finished pruning everything the desktop's ledger named through `revision` - the stored slice, the headless-contributed markers, and the live headless contexts.
       kind: z.literal("primaryProfileForgetLedgerAck"),
       ...textFrameFields,
       revision: z.number().int().nonnegative(),
@@ -767,26 +526,14 @@ export type BrowserSessionsServerFrame = z.infer<
 >;
 
 /**
- * Domain-separation tag for the desktop identity attestation. Versioned
- * so a future payload shape cannot be confused with this one, and product-tagged
- * so a signature minted here can never be replayed as any other Ed25519
- * signature the same key might one day produce.
+ * Domain-separation tag for the desktop identity attestation.
+ * Versioned so a future payload shape cannot be confused with this one, and product-tagged so a signature minted here can never be replayed as any other Ed25519 signature the same key might one day produce.
  */
 const DESKTOP_IDENTITY_ATTEST_DOMAIN = "traycer-desktop-identity-attest-v1";
 
 /**
  * The exact bytes `desktopIdentityAttest.signature` commits to.
- *
- * Deterministic by construction - fixed key order, string leaves only - so the
- * desktop that signs and the host that verifies serialise identical bytes with
- * no canonical-JSON dependency. Exported from the contract itself so the two
- * sides cannot drift.
- *
- * `hostId` is committed so a signature produced for one host cannot be relayed
- * into another host's challenge by a hostile host or relay. `publicKey` is
- * committed so the key cannot be swapped under a captured signature. No
- * `userId`: identity comes from the stream's authenticated owner, and an
- * account id must not be added to a value that travels and gets logged.
+ * Exported from the contract itself so the two sides cannot drift.
  */
 export function canonicalDesktopIdentityAttestBytes(input: {
   readonly hostId: string;
@@ -826,10 +573,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Snapshot-only preview of one tab, for a chat pinned to ANOTHER host
-      // that can never drive it. No `sessionId`: the tab
-      // is resolved by the owning host inside this stream's epic scope, which
-      // is the only authorization there is.
+      // Snapshot-only preview of one tab, for a chat pinned to ANOTHER host that can never drive it.
       kind: z.literal("captureTabPreview"),
       ...requestFrameFields,
       tabId: z.string(),
@@ -844,10 +588,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // One settlement for one host-minted birth. Receipt means only that the
-      // native guest exists, its durable identity is installed, and CDP can be
-      // routed through this subscriber. Navigation and presentation begin only
-      // after `electronTabAccepted` commits ownership.
+      // One settlement for one host-minted birth.
       kind: z.literal("electronTabProvisioned"),
       ...requestFrameFields,
       sessionId: z.string(),
@@ -871,18 +612,10 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // capture seam. The desktop preload exposes this as one capability.
       kind: z.literal("electronTabLifecycleReady"),
       ...textFrameFields,
-      // The GUI's declared co-located hostId. Null means "I have a native
-      // browserView but I am not co-located with any host I can name". The
-      // host compares this against its own id and must never elect a
-      // subscriber whose declared id differs as Electron lifecycle owner:
-      // Electron placement is a same-machine optimization, and this field is
-      // the sole locality signal it is gated on.
+      // The GUI's declared co-located hostId.
+      // The host compares this against its own id and must never elect a subscriber whose declared id differs as Electron lifecycle owner: Electron placement is a same-machine optimization, and this field is the sole locality.
       coLocatedHostId: z.string().nullable(),
-      // There was a `desktopWindowId` here. It is gone: the host's last
-      // reader was retired (lifecycle hand-over now happens only through
-      // `detachBrowserSessionsSubscriber`), and with the jar plane in the
-      // desktop's main process the window a stream belongs to is a fact that
-      // process already holds - it never needed to travel.
+      // There was a `desktopWindowId` here.
     })
     .strict(),
   z
@@ -900,11 +633,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // The answer to a `capturePrimaryProfile` this host issued. No `userId`
-      // - the identity is the stream's authenticated user; the frame is
-      // matched to an in-flight (or standing) request BY `requestId` AND
-      // subscriber id, so it is heard only from the connection that was
-      // asked. Lifecycle election gates nothing here.
+      // The answer to a `capturePrimaryProfile` this host issued.
       kind: z.literal("primaryProfileCaptured"),
       ...requestFrameFields,
       storageState: browserStorageStateSchema.nullable(),
@@ -914,14 +643,6 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Unsolicited: the client's persistent `primary` jar reported cookie
-      // changes for one registrable domain and coalesced them into a window
-      // (keychain refactor ticket 06). There is no request to answer and no
-      // `userId` - the identity is the stream's authenticated user, and the
-      // host hears the frame only from a JAR-AUTHORIZED subscriber: one that
-      // answered `desktopIdentityChallenge` with a signature this host has
-      // enrolled (browser-security-hardening H09). Lifecycle election is a
-      // different question and gates nothing here.
       kind: z.literal("primaryProfileDelta"),
       ...textFrameFields,
       ...browserPrimaryProfileDeltaSchema.shape,
@@ -929,34 +650,18 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // The desktop's answer to `desktopIdentityChallenge`
-      // (browser-security-hardening H09): an Ed25519 signature over
-      // {@link canonicalDesktopIdentityAttestBytes}, made in the desktop's
-      // MAIN process with a key `safeStorage` holds. It is the whole basis of
-      // jar authorization - it replaced the `storeKeyOffer` frame, which was a
-      // declaration with nothing behind it. No `userId`: the identity is the
-      // stream's authenticated user, and the signed bytes commit to the hostId
-      // instead, so a signature cannot be relayed into another host's
-      // challenge.
+      // The desktop's answer to `desktopIdentityChallenge` (browser-security-hardening H09): an Ed25519 signature over {@link canonicalDesktopIdentityAttestBytes}, made in the desktop's MAIN process with a key `safeStorage`.
+      // No `userId`: the identity is the stream's authenticated user, and the signed bytes commit to the hostId instead, so a signature cannot be relayed into another host's challenge.
       kind: z.literal("desktopIdentityAttest"),
       // Echoes the challenge's `requestId`.
       ...requestFrameFields,
       // Ed25519 SPKI DER.
       publicKey: z.base64().max(128),
-      // Which keystore on this machine holds the private half. A slot label
-      // only - it is deliberately OUTSIDE the signature, because it is used
-      // only to replace an entry during a `local-ws` enrollment, and that lane
-      // already requires a socket on the host's own machine.
+      // Which keystore on this machine holds the private half.
       keystoreId: z.string().max(64),
       signature: z.base64().max(128),
-      // Whether this desktop's keystore can actually hold the host's store
-      // key. A machine whose OS keystore cannot encrypt (Linux with no secret
-      // service) still mints a durable keypair and attests, so it keeps native
-      // tab placement, and declares `false` so the host never hands it a jar it
-      // could not protect. Client-declared, and safe as one: it can only
-      // downgrade the declarer. REQUIRED rather than defaulted - a desktop
-      // that does not answer it is one whose keystore story this host has no
-      // reason to guess at.
+      // Whether this desktop's keystore can actually hold the host's store key.
+      // A machine whose OS keystore cannot encrypt (Linux with no secret service) still mints a durable keypair and attests, so it keeps native tab placement, and declares `false` so the host never hands it a jar it could not.
       jarEligible: z.boolean(),
     })
     .strict(),
@@ -970,9 +675,8 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // `safeStorage.decryptString(wrappedKey)`. `null` means this desktop
-      // cannot open the blob (keystore item ACL changed, different machine);
-      // the host then stays sealed and never re-mints over a live blob.
+      // `safeStorage.decryptString(wrappedKey)`.
+      // `null` means this desktop cannot open the blob (keystore item ACL changed, different machine); the host then stays sealed and never re-mints over a live blob.
       kind: z.literal("storeKeyUnwrapped"),
       ...requestFrameFields,
       rawKey: z.base64().max(4096).nullable(),
@@ -981,14 +685,6 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
       // "Clear" on one row of Settings > Browser > Sites with saved logins.
-      // Unsolicited and unacknowledged: the host tombstones that registrable
-      // domain in the user's slice and evicts it from its own live headless
-      // contexts. It fans NOTHING back: the host->desktop removal frame was
-      // retired, which left the desktop's write channel add-only. No
-      // `userId` - the identity is the stream's authenticated
-      // user, and the host hears the frame only from a JAR-AUTHORIZED
-      // subscriber - see `primaryProfileDelta`. Lifecycle election gates
-      // nothing here.
       kind: z.literal("clearSite"),
       ...textFrameFields,
       domain: z.string(),
@@ -996,31 +692,15 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // "Forget all browser logins". Unsolicited and unacknowledged: the host
-      // answers by shredding this user's key and slice. It fans NOTHING back
-      // - the desktop that asked clears its own partition itself and records
-      // the forget in its ledger, and the hosts that were not connected to
-      // hear this frame learn it from that ledger instead. No `userId`
-      // - the identity is the stream's authenticated user, and the host hears
-      // the frame only from a JAR-AUTHORIZED subscriber - see
-      // `primaryProfileDelta`. Lifecycle election gates nothing here.
+      // "Forget all browser logins".
       kind: z.literal("forgetLogins"),
       ...textFrameFields,
     })
     .strict(),
   z
     .object({
-      // The desktop's forget ledger, pushed on every forget action and once
-      // at attach BEFORE any observed replay - so
-      // a host can never re-offer, in the replay, a login the user forgot while
-      // that host was disconnected. Answered with
-      // `primaryProfileForgetLedgerAck` once the prune has finished, which is
-      // what orders the desktop's applier against this host's observations;
-      // re-sending it is always safe, because the prune is idempotent.
-      // Supersedes the `primaryProfileForgotten` fan-out, which is gone. No
-      // `userId` - the identity is the stream's authenticated user, and the
-      // host hears the frame only from a JAR-AUTHORIZED subscriber - see
-      // `primaryProfileDelta`. Lifecycle election gates nothing here.
+      // The desktop's forget ledger, pushed on every forget action and once at attach BEFORE any observed replay - so a host can never re-offer, in the replay, a login the user forgot while that host was disconnected.
+      // Answered with `primaryProfileForgetLedgerAck` once the prune has finished, which is what orders the desktop's applier against this host's observations; re-sending it is always safe, because the prune is idempotent.
       kind: z.literal("primaryProfileForgetLedger"),
       ...textFrameFields,
       ...browserForgetLedgerSchema.shape,
@@ -1033,13 +713,7 @@ export type BrowserSessionsClientFrame = z.infer<
 
 /**
  * The `browser.sessions` server frames a desktop RENDERER may see.
- *
- * The jar plane lives in the desktop main process, so every frame that
- * carries cookies, a storage state, key material or a signing challenge is
- * consumed there and never projected outward. This type is the compile-time
- * half of that rule: the projection is typed as this, so a new jar frame that
- * is not named in the exclusion below is a type error at the projection
- * instead of a cookie array arriving in a renderer.
+ * The jar plane lives in the desktop main process, so every frame that carries cookies, a storage state, key material or a signing challenge is consumed there and never projected outward.
  */
 export const BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS = [
   "createElectronTab",
@@ -1067,11 +741,6 @@ export type BrowserSessionsUxServerFrame = Exclude<
   BrowserSessionsJarServerFrame
 >;
 
-/**
- * The one runtime reading of that set, so the three places that used to spell
- * the eleven kinds out - this type, main's dispatch switch and the direct
- * session's drop - each test membership instead of keeping a copy in step.
- */
 export function isBrowserSessionsJarServerFrame(
   frame: BrowserSessionsServerFrame,
 ): frame is BrowserSessionsJarServerFrame {
@@ -1083,16 +752,7 @@ const JAR_SERVER_FRAME_KINDS: ReadonlySet<string> = new Set(
 );
 
 /**
- * The second half of the same rule, and the one the exclusion list cannot
- * state: whatever the union is named, no renderer-reachable frame may carry a
- * cookie array, a storage state or key material as a TOP-LEVEL field. A
- * protocol addition that grows one of those fields on a UX frame fails the
- * build here rather than at review.
- *
- * Top-level is the whole reach of an `Extract` over a field name, and the same
- * material nested one object deeper would pass. That half is the desktop's
- * `renderer-reachable-ipc-invariant` suite, which walks each UX frame's SCHEMA
- * to any depth.
+ * The second half of the same rule, and the one the exclusion list cannot state: whatever the union is named, no renderer-reachable frame may carry a cookie array, a storage state or key material as a TOP-LEVEL field.
  */
 type BrowserSessionsUxFrameCarryingJarMaterial = Extract<
   BrowserSessionsUxServerFrame,
@@ -1101,9 +761,7 @@ type BrowserSessionsUxFrameCarryingJarMaterial = Extract<
   | { readonly rawKey: unknown }
   | { readonly wrappedKey: unknown }
   | { readonly seedStorageState: unknown }
-  // The doc above says "or a signing challenge", and these are the two fields
-  // that carry one. Without them a future UX server frame that grew a `nonce`
-  // or a `signature` would compile straight through the guard.
+  // The doc above says "or a signing challenge", and these are the two fields that carry one.
   | { readonly nonce: unknown }
   | { readonly signature: unknown }
 >;
@@ -1112,19 +770,7 @@ const noJarMaterialReachesARenderer: BrowserSessionsUxFrameCarryingJarMaterial e
   : never = true;
 void noJarMaterialReachesARenderer;
 
-/**
- * The client frames a renderer may ASK for: the three user-initiated tab
- * requests, and nothing else.
- *
- * `forgetLogins` and `clearSite` are deliberately NOT here even though a
- * renderer button starts both. They shred every connected host's slice of the
- * user's logins, so they are produced in main behind its own confirmation,
- * triggered by an action invoke rather than by a frame a renderer could mint
- * on its own (a per-site residual left exactly this hole open, one domain at
- * a time). Everything else on this stream - the tab lifecycle, the jar plane,
- * the forget-ledger digest and the readiness burst - is produced in main from
- * state the renderer does not hold.
- */
+/** The client frames a renderer may ASK for: the three user-initiated tab requests, and nothing else. */
 export const BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS = [
   "openTab",
   "closeTab",
@@ -1155,18 +801,7 @@ export const browserSavedLoginSiteSchema = z
     /** Newest observation of any live cookie under that domain, host clock. */
     lastSeen: z.number(),
     /**
-     * Which host contributed this login, when it was a HEADLESS session on the
-     * answering host rather than the user's own desktop jar. `null` means
-     * "nothing to attribute": the desktop's own
-     * browsing put it here, so there is no other machine to name.
-     *
-     * It is a `hostId` - the canonical host identity, which the GUI resolves to
-     * a display name through the host directory - and the answering host stamps
-     * its OWN id from its persisted identity. Nothing a client sends can name a
-     * host here.
-     *
-     * `.default(null)` so a host that predates this field still parses, exactly
-     * as the pre-epic slices it reads do.
+     * Which host contributed this login, when it was a HEADLESS session on the answering host rather than the user's own desktop jar.
      */
     contributedByHostId: z.string().nullable().default(null),
   })
@@ -1177,11 +812,7 @@ export type BrowserSavedLoginSite = z.infer<typeof browserSavedLoginSiteSchema>;
 export const browserSavedLoginSitesRequestSchema = z.object({}).strict();
 
 /**
- * `sealed` is not "no sites": it is "this host holds no key for you yet", and
- * the two must never render the same way - one is an empty jar, the other is a
- * jar nobody here can open (spec section 6.2). Keeping them separate arms is
- * what lets Settings offer "Connect this desktop to unlock saved logins"
- * instead of claiming the user has no saved logins at all.
+ * `sealed` is not "no sites": it is "this host holds no key for you yet", and the two must never render the same way - one is an empty jar, the other is a jar nobody here can open (spec section 6.2).
  */
 export const browserSavedLoginSitesResponseSchema = z.discriminatedUnion(
   "kind",
@@ -1200,10 +831,8 @@ export type BrowserSavedLoginSitesResponse = z.infer<
 >;
 
 /**
- * Names only, never values (spec section 7.3). The host projects
- * the registrable domains of the live cookie keys in the caller's own slice;
- * the cookies themselves never leave the host on this path, so a compromised
- * renderer learns which sites the user is signed into and nothing more.
+ * Names only, never values (spec section 7.3).
+ * The host projects the registrable domains of the live cookie keys in the caller's own slice; the cookies themselves never leave the host on this path, so a compromised renderer learns which sites the user is signed.
  */
 export const browserSavedLoginSitesV10 = defineRpcContract({
   method: "browser.savedLoginSites",
@@ -1219,23 +848,7 @@ export type BrowserScreencastFormat = z.infer<
 
 /**
  * The subscription's control tier.
- *
- * A tile drives the tab; `"pip"` and `"viewer"` are read-only, routed to the
- * host's restricted client-frame handler, so an `arm` or an input frame from
- * either is refused and traced rather than dispatched. They differ only in
- * what else they cost the host - a `"pip"` mirrors a tile that is already
- * streaming and is never offered its own video round, while a `"viewer"` is a
- * first-class watcher of the tab (viewed state, its own WebRTC round) that
- * simply has no input rights.
- *
- * NOT AN AUTHORIZATION. The tier is declared by the client and the host
- * applies it verbatim: a modified client sends `"tile"` and drives. Nothing
- * here can be made unforgeable - `transportVantage` is a placement fact (a
- * desktop GUI on a remote host is relay too) and `clientKind` is client text.
- * Input by tier was never the boundary: a client authenticated as this user
- * already drives the tab through the browser MCP and agent RPCs. User
- * authentication is the boundary; this field bounds a cooperating client and
- * denies nothing.
+ * Input by tier was never the boundary: a client authenticated as this user already drives the tab through the browser MCP and agent RPCs.
  */
 const browserScreencastViewerRoleSchema = z.enum(["tile", "pip", "viewer"]);
 export type BrowserScreencastViewerRole = z.infer<
@@ -1306,23 +919,7 @@ export const browserNavStateSchema = z
 export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
 
 /**
- * WebRTC video-plane signaling, ridden on `browser.screencast@1.0` as new
- * frame kinds: no third stream method, no minor bump - the contract is
- * pre-release.
- *
- * The host's capture helper page is the offerer: it owns the
- * `RTCPeerConnection` and only creates it once `getDisplayMedia` has a live
- * track, so it - not the client - knows when negotiation can start. The
- * client is therefore always the answerer. `negotiationId` correlates one
- * offer/answer/candidate round; a fallback-and-retry starts a new one, so
- * late candidates from an abandoned round are ignored rather than
- * mis-applied to the next attempt.
- */
-/**
- * The candidate fields shared by the per-candidate `iceCandidate` trickle
- * frame and the batch riding `sdpAnswer.candidates` - everything but
- * `negotiationId`, which only the standalone frame needs (the batch's own
- * frame already carries one for the whole array).
+ * WebRTC video-plane signaling, ridden on `browser.screencast@1.0` as new frame kinds: no third stream method, no minor bump - the contract is pre-release.
  */
 const browserScreencastIceCandidateBaseFields = {
   candidate: z.string().max(16_384),
@@ -1344,11 +941,7 @@ export type BrowserScreencastBatchedIceCandidate = z.infer<
 >;
 
 /**
- * One ICE server the client should configure its `RTCPeerConnection` with,
- * mirroring the browser's `RTCIceServer`. The host mints these (short-TTL
- * TURN credentials) and stamps them on the offer, so both ends of a round
- * negotiate against the SAME set. Additive with a `[]` default: an older host
- * sends nothing and the client keeps its STUN-only fallback.
+ * One ICE server the client should configure its `RTCPeerConnection` with, mirroring the browser's `RTCIceServer`.
  */
 export const browserScreencastIceServerSchema = z
   .object({
@@ -1362,10 +955,8 @@ export type BrowserScreencastIceServer = z.infer<
 >;
 
 /**
- * The STUN-only fallback both ends use when no TURN set was minted - a public
- * server, so it is a literal rather than configuration. One constant because
- * host and viewer must fall back to the SAME server or they gather against
- * different pools.
+ * The STUN-only fallback both ends use when no TURN set was minted - a public server, so it is a literal rather than configuration.
+ * One constant because host and viewer must fall back to the SAME server or they gather against different pools.
  */
 export const BROWSER_SCREENCAST_STUN_URL = "stun:stun.l.google.com:19302";
 
@@ -1379,11 +970,7 @@ export type BrowserScreencastCaptureMode = z.infer<
   typeof browserScreencastCaptureModeSchema
 >;
 
-/**
- * Why a viewer gave up on a video-plane round. Closed, because the host reads
- * these to decide whether to turn the JPEG pump back on and traces them as a
- * fixed vocabulary; anything variable rides `videoPlaneState.detail`.
- */
+/** Why a viewer gave up on a video-plane round. */
 export const browserVideoPlaneFailureReasonSchema = z.enum([
   "no-first-frame",
   "frames-stopped",
@@ -1443,27 +1030,14 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Answer to every `ping` on this contract, whichever transport carried
-      // it. There is no plain `pong` arm: the stream transport answers a mux
-      // `ping` itself, before any resolver sees the frame, and client-side it
-      // delivers a pong upward only for an application `ping` it queued - so a
-      // `pong` from here could never reach the sender. Carries no correlation
-      // id because the prober keeps one ping in flight at a time.
+      // Answer to every `ping` on this contract, whichever transport carried it.
       kind: z.literal("inputPong"),
       ...textFrameFields,
     })
     .strict(),
   z
     .object({
-      // Control-plane RTT probe. Its own frame pair rather than
-      // the `ping`/`pong` above, which neither end can use for this: the
-      // stream transport answers a client `ping` before any resolver sees it,
-      // and the pong it sends back is credited to the transport's own ping
-      // queue - so a host-side prober can never observe its reply, and on this
-      // contract nobody can both initiate a round trip and observe it. The viewer answers with `rttProbeAck` carrying the same
-      // `probeId`, and reads `controlPlaneRttMs` - the host's smoothed
-      // estimate at send time, null before the first completed probe - to size
-      // its own deadlines off the same measurement.
+      // Control-plane RTT probe.
       kind: z.literal("rttProbe"),
       ...textFrameFields,
       probeId: z.number().int().nonnegative(),
@@ -1482,20 +1056,14 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("revoked"),
       ...textFrameFields,
       armEpoch: z.number().int().nonnegative(),
-      // `denied` answers a `preArm` the host refused because another viewer
-      // holds control. Only a viewer that sent one can ever receive it, which
-      // is why adding it to this enum cannot break an older client.
+      // `denied` answers a `preArm` the host refused because another viewer holds control.
+      // Only a viewer that sent one can ever receive it, which is why adding it to this enum cannot break an older client.
       cause: z.enum(["disarmed", "stolen", "denied"]),
     })
     .strict(),
   z
     .object({
-      // How far the host has consumed this arm epoch's input sequence. Sent
-      // only for input that arrived over the MUX, coalesced, so it exists
-      // exactly during the window where the client is waiting to
-      // promote its pending DataChannel transport: once `lastSeq` covers the
-      // last frame the client put on the mux, nothing can reorder against the
-      // channel and the client promotes mid-arm.
+      // How far the host has consumed this arm epoch's input sequence.
       kind: z.literal("inputAck"),
       ...textFrameFields,
       armEpoch: z.number().int().nonnegative(),
@@ -1551,13 +1119,7 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // The video plane's hit-testing token. A JPEG-plane tile correlates
-      // input against the frame it painted (`castSequence`); a video-plane
-      // tile has no such frame, so the host mints a viewport epoch from
-      // `Page.getLayoutMetrics` and re-announces it whenever that geometry
-      // changes. Input carrying a stale (or no) epoch is rejected, exactly
-      // as input naming an unpresented frame is. Same counter as
-      // `agentCursor.epoch`.
+      // The video plane's hit-testing token.
       kind: z.literal("viewportEpoch"),
       ...textFrameFields,
       epoch: z.number().int().nonnegative(),
@@ -1579,12 +1141,6 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Which capture is running for this subscriber, and so what its input
-      // correlates against: `jpeg` = frames are being pumped, correlate on the
-      // presented frame; `video` = the JPEG cast is stopped for the video
-      // plane, correlate on the viewport epoch. `video` is sent when the
-      // attempt STARTS, not when a track goes live - the client shows its
-      // connecting loader for that window and paints no stale frame.
       kind: z.literal("captureMode"),
       ...textFrameFields,
       mode: browserScreencastCaptureModeSchema,
@@ -1660,12 +1216,7 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // A speculative claim raised on hover, so the host has the
-      // dispatcher live before the click that needs it. Its own kind rather
-      // than a flag on `arm` because the AUTHORIZATION differs: this one is
-      // refused (`revoked`, cause `denied`) when another viewer holds control,
-      // where `arm` steals. Same epoch counter, same ordering, same
-      // registry - only the steal is withheld.
+      // A speculative claim raised on hover, so the host has the dispatcher live before the click that needs it.
       kind: z.literal("preArm"),
       ...textFrameFields,
       armEpoch: z.number().int().nonnegative(),
@@ -1684,10 +1235,6 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       ...textFrameFields,
       ...browserScreencastControlIdentitySchema,
       type: browserScreencastPointerTypeSchema,
-      // Exactly one correlation token is set, per display plane: JPEG tiles
-      // name the painted frame, video tiles name the host's viewport epoch
-      // (see the `viewportEpoch` server frame). Neither set is unmappable
-      // and the host rejects it.
       castSequence: z.number().int().nonnegative().nullable().default(null),
       viewportEpoch: z.number().int().nonnegative().nullable().default(null),
       normalizedX: z.number(),
@@ -1767,10 +1314,7 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       ...textFrameFields,
       negotiationId: z.number().int().nonnegative(),
       sdp: z.string().max(1_048_576),
-      // Local candidates gathered before the answer shipped, batched here
-      // instead of one `iceCandidate` frame each. `.default([])` - additive,
-      // and `browser.screencast` is not in the released baseline - so an
-      // older client that sends none still parses.
+      // Local candidates gathered before the answer shipped, batched here instead of one `iceCandidate` frame each.
       candidates: z
         .array(browserScreencastBatchedIceCandidateSchema)
         .max(256)
@@ -1794,10 +1338,8 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       // "live" = first decoded video frame; "failed" = track death/timeout.
       state: z.enum(["live", "failed"]),
       reason: browserVideoPlaneFailureReasonSchema.nullable(),
-      // Free-form context for the one code that has any (`answer-failed`
-      // carries the SDP error's text). Never parsed - it exists so the closed
-      // vocabulary above does not cost the host its diagnostics.
-      // `.default(null)` so an older client's frame still parses.
+      // Free-form context for the one code that has any (`answer-failed` carries the SDP error's text).
+      // Never parsed - it exists so the closed vocabulary above does not cost the host its diagnostics.
       detail: z.string().max(256).nullable().default(null),
     })
     .strict(),
@@ -1813,39 +1355,19 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       packetsLost: z.number().int().nonnegative(),
       jitterMs: z.number().nonnegative(),
       roundTripTimeMs: z.number().nonnegative(),
-      // True capture-to-paint, median over the sampling window: WebRTC's
-      // Absolute Capture Time extension puts the SENDER's capture instant on
-      // the frame, and `requestVideoFrameCallback` metadata surfaces it as
-      // `captureTime` in the receiver's own clock domain, so
-      // `expectedDisplayTime - captureTime` needs no host stamp of its own.
-      // Null whenever the extension was not negotiated (it is a default, not
-      // a guarantee) or the WebView has no per-frame callback at all.
       glassToGlassMs: z.number().nonnegative().nullable(),
-      // The same measurement's tail, and its two halves - `receiveTime` splits
-      // capture-to-paint into "how long the network held the frame" and "how
-      // long this client took to decode and composite it", which is the whole
-      // difference between a path problem and a client problem. Additive:
-      // `.default(null)` so an older client's frame still parses.
       glassToGlassP95Ms: z.number().nonnegative().nullable().default(null),
       networkPlusJitterMs: z.number().nonnegative().nullable().default(null),
       decodeCompositeMs: z.number().nonnegative().nullable().default(null),
-      // Round trip of one `ping` sent on the `input-reliable` DataChannel: up
-      // the DataChannel, back over the mux as `inputPong`. Deliberately
-      // asymmetric - that IS the human input path's shape, and the uplink
-      // half is the leg deadlines are derived from. Null until a ping has
-      // completed.
+      // Round trip of one `ping` sent on the `input-reliable` DataChannel: up the DataChannel, back over the mux as `inputPong`.
       dataChannelRttMs: z.number().nonnegative().nullable().default(null),
-      // getStats() candidate-pair `candidateType` of the active receive
-      // path (only observable receiver-side) - the "ICE path taken" metric.
-      // Closed vocabulary: telemetry carries no free text.
+      // getStats() candidate-pair `candidateType` of the active receive path (only observable receiver-side) - the "ICE path taken" metric.
       iceCandidatePairType: browserScreencastIcePairTypeSchema.catch("unknown"),
     })
     .strict(),
   z
     .object({
       // Reply to the host's `rttProbe`, sent as soon as the viewer sees it.
-      // Carries nothing of its own: the host times the round trip and the
-      // probe frame carries the result back.
       kind: z.literal("rttProbeAck"),
       ...textFrameFields,
       probeId: z.number().int().nonnegative(),

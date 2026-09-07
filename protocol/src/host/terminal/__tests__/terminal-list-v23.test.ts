@@ -1,10 +1,4 @@
-/**
- * `terminal.list@2.3` schema + negotiation coverage.
- *
- * Additive `lifecycleOwner` on every session. A v2.2 host fills `registry`
- * so a capable client fail-closes missing origin. Major downgrade strips the
- * field with `currentCwd`.
- */
+/** `terminal.list@2.3` schema + negotiation coverage. */
 import { describe, expect, it } from "vitest";
 import {
   downgradeResponseAcrossMajors,

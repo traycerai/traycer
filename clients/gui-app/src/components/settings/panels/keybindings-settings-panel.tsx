@@ -47,10 +47,8 @@ export function KeybindingsSettingsPanel() {
     (id) => !SUB_LEADER_ACTION_SET.has(id),
   );
 
-  // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to
-  // defaults" button below can share the exact same in-flight mutation - one
-  // request at a time, and the row's pending-disable (R3) also covers a
-  // reset triggered from here.
+  // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to defaults" button below can share the
+  // exact same in-flight mutation.
   const { bridge: summonBridge, status: summonStatus } = useSummonHotkey();
   const summonMutation: SummonHotkeyMutation = useMutation({
     mutationKey: runnerMutationKeys.globalShortcutsSet("summon"),
@@ -233,11 +231,8 @@ interface GlobalShortcutsSectionProps {
   readonly mutation: SummonHotkeyMutation;
 }
 
-/**
- * Desktop-only: global (OS-level) shortcuts, backed by the main process
- * rather than `useKeybindingStore`/localStorage. The caller only renders this
- * when the desktop global-shortcuts bridge is present.
- */
+/** Desktop-only: global (OS-level) shortcuts, backed by the main process rather than
+ * `useKeybindingStore`/localStorage. */
 function GlobalShortcutsSection(props: GlobalShortcutsSectionProps) {
   return (
     <div className="mt-8">
@@ -286,9 +281,8 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
   }
 
   // The OS refused registration, either just now (this row's own rebind
-  // attempt) or already at launch (`mutation.data` is only set by an attempt
-  // from this row) - either way it's not actually live, so show it rather
-  // than let the failure live only in logs.
+  // attempt) or already at launch (`mutation.data` is only set by an attempt from this row) - either way it's
+  // not actually live, so show it rather than let the failure live only in logs.
   const rejected =
     mutation.data?.status === "rejected" || status.status === "rejected";
   const statusMessage =
@@ -319,11 +313,8 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
             disabled={mutation.isPending}
             onCheckedChange={(checked) => {
               if (checked) {
-                // Enabling makes `status.effectiveChord` live again - a
-                // renderer action may have claimed it while summon was off
-                // (it isn't reserved while disabled), so this is the one
-                // transition-to-live path `ChordCaptureCore`'s own
-                // capture-time check never sees.
+                // Enabling makes `status.effectiveChord` live again - a renderer action may have claimed it while summon was
+                // off (it isn't reserved while disabled).
                 const conflict = findConflict(
                   bindings,
                   null,

@@ -1,14 +1,4 @@
-/**
- * Projects `workspace.searchPaths` results into the file tree's inputs.
- *
- * Host results are ranked NAME matches anywhere under the workspace root, so
- * unlike a listing they carry no structure: the tree adapter derives directory
- * rows from the path strings, and every ancestor of a match has to be open for
- * that match to be visible at all. Folder results arrive WITHOUT a trailing
- * slash (`workspaceSearchPathResultSchema`), so they are re-canonicalized to
- * the trailing-slash directory token the rest of the file-tree code - and the
- * tree adapter - treats as "this row is a directory".
- */
+/** Projects `workspace.searchPaths` results into the file tree's inputs. */
 import type { WorkspaceSearchPathResult } from "@traycer/protocol/host/workspace/unary-schemas";
 import { ancestorDirectoryPathsOf } from "@/lib/workspace/workspace-file-list-tree";
 

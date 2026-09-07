@@ -21,15 +21,8 @@ function participantSpy(): ParticipantSpy {
 }
 
 /**
- * This module holds global singleton state (the participant registry, and
- * the single "currently active interaction" slot). A test whose assertion
- * throws before reaching its own manual `stop()`/`unregister()` calls would
- * otherwise leak a registered participant AND an unfinished interaction into
- * every later test in this file - track every `unregister`/`stop` returned
- * during a test and sweep them unconditionally in `afterEach`, regardless of
- * how the test body exits. Calling an already-unregistered `unregister` or
- * an already-stopped `stop` a second time is a documented no-op on both, so
- * this sweep is safe even for tests that already did their own cleanup.
+ * This module holds global singleton state (the participant registry, and the single "currently active interaction" slot).
+ * A test whose assertion throws before reaching its own manual `stop()`/`unregister()` calls would otherwise leak a registered participant AND an unfinished interaction into every later test in this file - track every `unregister`/`stop` returned during a.
  */
 let pendingUnregisters: Array<() => void> = [];
 let pendingStops: Array<() => void> = [];
@@ -104,11 +97,8 @@ describe("panel-resizing-class participant registry", () => {
     expect(spy.capture).toHaveBeenCalledTimes(1);
     expect(spy.clear).not.toHaveBeenCalled();
 
-    // The mechanism has no per-pointermove hook at all - there is nothing
-    // here that COULD re-invoke capture no matter how long/eventful the drag
-    // is. This asserts the call count stays flat across the drag's own
-    // begin->stop lifecycle, matching the "no per-scroll subscription"
-    // constraint.
+    // The mechanism has no per-pointermove hook at all - there is nothing here that COULD re-invoke capture no matter how long/eventful the drag is.
+    // This asserts the call count stays flat across the drag's own begin->stop lifecycle, matching the "no per-scroll subscription" constraint.
     stop();
     expect(spy.capture).toHaveBeenCalledTimes(1);
     expect(spy.clear).toHaveBeenCalledTimes(1);
@@ -249,9 +239,7 @@ describe("panel-resizing-class participant registry", () => {
       ).toBe(true);
       expect(spy.clear).not.toHaveBeenCalled();
 
-      // Prove the interaction is still genuinely live (not just "afterEach
-      // will clean it up regardless") by stopping it with the MATCHING
-      // pointerId and observing the real transition.
+      // Prove the interaction is still genuinely live (not just "afterEach will clean it up regardless") by stopping it with the MATCHING pointerId and observing the real transition.
       window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 5 }));
       expect(
         document.documentElement.classList.contains(PANEL_RESIZING_CLASS),
@@ -264,14 +252,7 @@ describe("panel-resizing-class participant registry", () => {
       const hookListener = (): void => {
         order.push("hook");
       };
-      // Registered BEFORE beginPanelResizeInteraction - models
-      // use-pointer-drag-commit.ts's own window-level pointerup listener
-      // (registered at pointerdown time, ahead of this module's, per the
-      // row-1 drag fix under parallel review). DOM listeners for the same
-      // target/event type fire in registration order, so the hook's own
-      // commit/cancel resolves before this module's `stop()` - which is
-      // exactly what makes `stop()`'s idempotent guard safe to rely on here
-      // rather than a source of double-invocation bugs.
+      // Registered BEFORE beginPanelResizeInteraction - models use-pointer-drag-commit.ts's own window-level pointerup listener (registered at pointerdown time, ahead of this module's, per the row-1 drag fix under parallel review).
       window.addEventListener("pointerup", hookListener);
 
       trackedRegister({

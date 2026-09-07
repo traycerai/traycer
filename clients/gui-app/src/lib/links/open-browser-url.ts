@@ -38,23 +38,9 @@ interface MatchedTab {
   readonly url: string;
 }
 
-/**
- * Opens a URL in a browser tile on this epic's host (A4, B1, B4).
- *
- * A tab already showing the same page is focused instead of opening a second
- * one - that is what keeps repeated link clicks from stacking tabs and splits
- * (P2). Middle-click bypasses the match on purpose: it means "another one, in
- * the background" (B4).
- *
- * A failure NEVER falls out to the OS browser on its own (A5). The user gets
- * the reason and an explicit "Open in browser" action, because silently
- * sending a link somewhere else is indistinguishable from the setting not
- * working.
- */
+/** Opens a URL in a browser tile on this epic's host (A4, B1, B4). */
 export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
-  // Read at CLICK time, not subscribed: this hook is mounted by every link
-  // surface in the app and the sessions context is a fresh object per stream
-  // frame (C8).
+  // Read at CLICK time, not subscribed: this hook is mounted by every link surface in the app and the sessions context is a fresh object per stream frame (C8).
   const snapshot = useMaybeBrowserSessionsSnapshot();
   const { openTile } = useEpicTileNavigation();
   const { mutateAsync: openExternal } = useOpenExternalLink();
@@ -92,9 +78,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
             hostId,
             sessionId: tab.sessionId,
             tabId: tab.tabId,
-            // Resolved HERE rather than before the `openTab` await: the header
-            // tab can close while the open is in flight, and opening into a
-            // closed tab id mutates a canvas with no route (R8).
+            // Resolved HERE rather than before the `openTab` await: the header tab can close while the open is in flight, and opening into a closed tab id mutates a canvas with no route (R8).
             target: currentTarget(input),
             modifiers: input.modifiers,
           }),
@@ -106,10 +90,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
         : findSamePageTab(hostId, sessions.items, input.url);
       if (match !== null) {
         open(match);
-        // Move the reused tab when the requested page differs by fragment, or
-        // when it is the secure upgrade of an insecure tab {@link samePageKey}
-        // matched across schemes - otherwise focusing an open `http://` tab
-        // would strand a `https://` request on the insecure page.
+        // Move the reused tab when the requested page differs by fragment, or when it is the secure upgrade of an insecure tab {@link samePageKey} matched across schemes - otherwise focusing an open `http://` tab would strand a `https://` request on the insecure page.
         if (
           hashOf(match.url) !== hashOf(input.url) ||
           isSecurityUpgrade(match.url, input.url)
@@ -133,15 +114,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
   );
 }
 
-/**
- * `openTab` requests that have not settled yet, keyed by host + page (B4).
- *
- * The snapshot only learns about a new tab when the session frame lands, so
- * two clicks on the same link inside that window would each see no match and
- * mint their own host tab - and, holding different tab ids, defeat the tile
- * dedupe as well. Joining the outstanding request makes the second click
- * focus what the first one opened.
- */
+/** `openTab` requests that have not settled yet, keyed by host + page (B4). */
 const openTabsInFlight = new Map<
   string,
   Promise<{ readonly sessionId: string; readonly tabId: string }>
@@ -173,11 +146,8 @@ function openTabOnce(
 }
 
 /**
- * Deref through a plain function, not inline: React Compiler reads a
- * `.current` access inside a `useCallback` as a ref dependency and then
- * refuses to preserve the manual memo. Passing the ref object to a function
- * keeps the callback's dependency the (stable) snapshot itself, which is the
- * whole point of reading sessions at click time (C8).
+ * Deref through a plain function, not inline: React Compiler reads a `.current` access inside a `useCallback` as a ref dependency and then refuses to preserve the manual memo.
+ * Passing the ref object to a function keeps the callback's dependency the (stable) snapshot itself, which is the whole point of reading sessions at click time (C8).
  */
 function sessionsOf(
   snapshot: BrowserSessionsSnapshot | null,
@@ -186,8 +156,7 @@ function sessionsOf(
 }
 
 /**
- * The click's own canvas tab while it still exists, else the epic - which lets
- * the resolver pick (or create) a live tab instead.
+ * The click's own canvas tab while it still exists, else the epic - which lets the resolver pick (or create) a live tab instead.
  */
 function currentTarget(input: OpenBrowserUrlInput): TileOpenTarget {
   const tabs = useEpicCanvasStore.getState().tabsById;
@@ -210,9 +179,7 @@ function browserTileIntent(args: {
       tabId: args.tabId,
     }),
     target: args.target,
-    // A link click is one click, so it previews like every other single click
-    // (C4/C11); `middle` in the modifiers is what turns it into a background
-    // open.
+    // A link click is one click, so it previews like every other single click (C4/C11); `middle` in the modifiers is what turns it into a background open.
     gesture: "single",
     modifiers: args.modifiers,
     placement: null,
@@ -234,12 +201,7 @@ function findSamePageTab(
     for (const tab of session.tabs) {
       if (tab.status === "closing" || tab.status === "crashed") continue;
       if (samePageKey(tab.url) !== key) continue;
-      // Same page, but reaching the requested URL needs a navigation this tab
-      // cannot perform - a different fragment, or the secure upgrade of an
-      // insecure tab - and it has no way to move there: focusing it would land
-      // the user on the anchor (or the insecure page) they came FROM, so let
-      // the click open a fresh tab at what it asked for instead (see
-      // {@link navigateTab} for which tabs can be moved).
+      // Same page, but reaching the requested URL needs a navigation this tab cannot perform - a different fragment, or the secure upgrade of an insecure tab - and it has no way to move there: focusing it would land the user on the anchor (or the insecure page).
       if (
         (hashOf(tab.url) !== hash || isSecurityUpgrade(tab.url, url)) &&
         electronTabBinding(hostId, session.sessionId, tab.tabId) === null
@@ -253,15 +215,7 @@ function findSamePageTab(
 }
 
 /**
- * Same page, different fragment: move the tab we just focused rather than
- * leaving the user on the anchor they came from (B4).
- *
- * ponytail: Electron tabs only - a headless tab is navigated through the
- * screencast control stream, which needs an armed control session on a
- * mounted tile. A headless tab on another fragment is therefore not matched
- * at all ({@link findSamePageTab}) and the click opens a fresh tab; the
- * upgrade path is a `navigateTab` frame on `browser.sessions`, after which
- * that tab can be reused like an Electron one.
+ * Same page, different fragment: move the tab we just focused rather than leaving the user on the anchor they came from (B4).
  */
 function navigateTab(hostId: string, tab: MatchedTab, url: string): void {
   const binding = electronTabBinding(hostId, tab.sessionId, tab.tabId);

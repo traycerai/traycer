@@ -23,19 +23,7 @@ export interface RetrySetupMutationContext {
 }
 
 /**
- * Retries worktree setup on an EXPLICIT host client rather than the app-wide
- * active host. The client must already be bound to its host (built via
- * `useHostClientFor` / `useTabHostClient`); its `getActiveHostId()` is
- * captured in `onMutate` so the post-success binding invalidations land on that
- * host's scope even if the app-wide host swaps mid-flight.
- *
- * A `null` client (directory not resolved / signed out) makes the mutation a
- * rejecting no-op - callers gate the affordance on a resolved client, matching
- * `useTerminalKillFor`'s behavior.
- *
- * Unlike `useTerminalKillFor` (one `terminal.list` scope), retry touches the
- * worktree binding caches, so it invalidates every method in
- * `WORKTREE_BINDING_INVALIDATIONS` on the captured host scope.
+ * Retry on the explicit bound client. Capture `getActiveHostId()` in `onMutate` so binding invalidations survive an app-wide host swap. Null client is a rejecting no-op.
  */
 export function useWorktreeRetrySetupFor(
   client: HostClient<HostRpcRegistry> | null,

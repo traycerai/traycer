@@ -23,11 +23,6 @@ export interface SessionImportProviderFailure {
   readonly detail: string;
 }
 
-/**
- * Typed handlers for a `sessionImport.scan@1.0` session. Frames flow
- * server → client only (apart from the heartbeat `WsStreamClient` owns), so
- * there is no upstream API on the wrapper.
- */
 export interface SessionImportScanCallbacks {
   readonly onStarted: (providers: ReadonlyArray<GuiHarnessId>) => void;
   readonly onGroup: (group: SessionImportGroup) => void;
@@ -49,14 +44,6 @@ export interface SessionImportScanClientOptions {
   readonly callbacks: SessionImportScanCallbacks;
 }
 
-/**
- * Typed wrapper over `WsStreamClient` for `sessionImport.scan@1.0`.
- *
- * Subscribing is what makes the host read the vendors' session directories -
- * there is no background scanning - so the wizard opens one of these when it
- * opens and closes it when it closes. Unlike the import run, a scan is
- * connection-scoped: nothing is lost by dropping it.
- */
 export class SessionImportScanClient {
   private readonly session: IStreamSession;
   private readonly callbacks: SessionImportScanCallbacks;

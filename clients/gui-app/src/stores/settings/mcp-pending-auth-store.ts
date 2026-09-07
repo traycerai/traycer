@@ -3,12 +3,8 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
 
 /**
- * Navigate-safe MCP OAuth pending-auth store.
- *
- * Key matches the host registry tuple from R02:
+ * Navigate-safe MCP OAuth pending-auth store. Key matches the host registry tuple from R02:
  * `(providerId, scope, workspaceRoot, serverName)`.
- * Re-issuing awaitLogin/cancelLogin with the same tuple resumes the same
- * host-side attempt after a settings navigation.
  */
 export type McpPendingAuthKey = {
   readonly providerId: ProviderId;

@@ -1,10 +1,6 @@
 /**
- * Guards the #1 field bug of every comparable pdf.js integration: a broken
- * worker URL does not error - pdf.js silently falls back to parsing on the
- * MAIN thread, which "works" in every casual test while janking the app on
- * real documents. Importing the component module must leave
- * `GlobalWorkerOptions.workerSrc` pointing at a real emitted asset, not
- * empty and not a bare module specifier that only a bundler could resolve.
+ * Guards the #1 field bug of every comparable pdf.js integration: a broken worker URL does not error - pdf.js silently falls back to parsing on the MAIN thread, which "works" in every casual test while janking the app on real documents.
+ * Importing the component module must leave `GlobalWorkerOptions.workerSrc` pointing at a real emitted asset, not empty and not a bare module specifier that only a bundler could resolve.
  */
 import { describe, expect, it, vi } from "vitest";
 

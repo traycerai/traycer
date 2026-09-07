@@ -49,11 +49,8 @@ function InteractionProbe(props: {
 }
 
 describe("top-level surface activation", () => {
-  // The focus-restore BOUNCE (a background pane's portal unmounting on defocus,
-  // whose Radix close-autofocus refocuses its trigger and re-fires this path) is
-  // killed at its source by `usePaneCloseAutoFocusGuard` — proven in a real
-  // browser (jsdom + `isTrusted` cannot model it). This path just activates a
-  // background pane on a deliberate pointer/keyboard interaction.
+  // The focus-restore bounce (a background pane's portal unmounting on defocus, whose Radix close-autofocus
+  // refocuses its trigger and re-fires this path) is killed at its source by `usePaneCloseAutoFocusGuard`.
   it("activates a deliberate pointer or focus interaction, never hover or wheel", () => {
     const activate = vi.fn();
     const { getByTestId } = render(

@@ -32,7 +32,7 @@ import { tabSourceRefs } from "@/stores/tabs/source-refs";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
 const DEBOUNCE_MS = 100;
-/** The second copy of `store.ts`'s list — see the note there before editing. */
+/** The second copy of `store.ts`'s list - see the note there before editing. */
 const SETTINGS_PATHS = new Set([
   "agents",
   "app-diagnostics",
@@ -100,9 +100,7 @@ export function hydrateDesktopTabs(
   compatible: boolean,
   legacyHistoryRoute: string | null,
 ): DesktopTabsHydration {
-  // Desktop always chooses a per-window snapshot layout or per-window legacy
-  // reconstruction. A browser-local v1 marker is never allowed to select
-  // focus after either desktop authority path wins.
+  // Desktop always chooses a per-window snapshot layout or per-window legacy reconstruction.
   discardLegacyTabsSourceActiveSelection();
   const layout =
     compatible && hasPersistedV2Layout(snapshot.tabStripLayout)
@@ -152,26 +150,14 @@ export function flushDesktopTabsPersistence(): Promise<DesktopPerWindowStateUpda
   return activeController.flush();
 }
 
-/**
- * True only when a controller is installed AND currently holds an
- * unflushed, debounced write - i.e. exactly the condition under which a
- * `flushDesktopTabsPersistence()` rejection reflects a genuine write
- * failure (the update IPC rejecting, an unrecognizable acknowledgement, or
- * a stale revision) rather than "there was nothing to wait on." Callers
- * that only care about racing a specific mutation through to durability
- * (e.g. the T10 move barrier) should skip the flush/abort dance entirely
- * when this is false: an absent controller, or one with nothing pending,
- * has nothing that could echo a stale snapshot back over that mutation.
- */
+/** True only when a controller is installed AND currently holds an unflushed, debounced write - i.e. */
 export function hasPendingDesktopTabsWrite(): boolean {
   return activeController?.hasPending() ?? false;
 }
 
 /**
- * Best-effort lifecycle drain. Unlike the T10 move barrier above, an absent
- * controller means this renderer never negotiated tabs authority, so teardown
- * has nothing to wait for. A live controller still exposes its real failure to
- * the caller after it has drained its pending debounce.
+ * Best-effort lifecycle drain. Unlike the T10 move barrier above, an absent controller means this
+ * renderer never negotiated tabs authority, so teardown has nothing to wait for.
  */
 export function drainDesktopTabsPersistence(): Promise<void> {
   if (activeController === null) return Promise.resolve();
@@ -198,9 +184,8 @@ function createDesktopTabsPersistenceController(
   let activeRoute: string | null = null;
   let latestSequence = 0;
   let acknowledgedSequence = 0;
-  // One floor spans negotiated handshake revisions, durable local write acks,
-  // and main snapshots actually applied to the local layout. The public move
-  // barrier only accepts an acknowledgement strictly above this floor.
+  // One floor spans negotiated handshake revisions, durable local write acks, and main snapshots
+  // actually applied to the local layout.
   let revisionFloor = initialRevision;
   let pending = false;
   let timer: Parameters<typeof clearTimeout>[0] | null = null;

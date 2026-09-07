@@ -17,9 +17,7 @@ import {
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { PickerProviderAuthLine } from "../harness-model-picker-auth-line";
 
-// The terminal action mounts a real mutation, so every render gets a client.
-// Fresh per render: a mutation cached across cases would carry its pending
-// state into the next one.
+// Fresh per render: a mutation cached across cases would carry its pending state into the next one.
 function renderAuthLine(ui: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -29,11 +27,7 @@ function renderAuthLine(ui: ReactNode) {
   );
 }
 
-// The HOST CLIENT is the only thing faked here - the external boundary. The
-// real `useLandingProviderStartTerminalLogin` runs, so this file covers the
-// wiring from the resolved setup through the button to the RPC, which a mock
-// of that hook would hide. Its own response handling (which tab opens, which
-// panel) is covered in `use-landing-provider-terminal-login.test.tsx`.
+// The host client is the only thing faked here - the external boundary.
 const HOST_ID = "host-1";
 
 const mocks = vi.hoisted(() => ({
@@ -97,10 +91,6 @@ function disabledProviderState(providerId: ProviderId): ProviderCliState {
   return { ...baseProviderState(providerId), enabled: false };
 }
 
-// Overrides `loginCapability` with a terminal-login-capable shape - this is
-// what `resolveProviderTerminalSetup` now gates the "setup" verdict on, so a
-// test asserting the full guidance row must supply it explicitly rather than
-// relying on the guidance table alone.
 function withTerminalLoginCapability(
   state: ProviderCliState,
 ): ProviderCliState {
@@ -221,11 +211,8 @@ describe("<PickerProviderAuthLine />", () => {
       />,
     );
 
-    // No `providers.list` row and no copy-table override for this provider,
-    // so `resolveProviderTerminalSetup` has nothing to preserve and this
-    // stays the compact line rather than the full "Setup required" note.
-    // (Reasonix is the one exception - see the capability-absent test below,
-    // which covers exactly that provider on this same state:null path.)
+    // No `providers.list` row and no copy-table override for this provider, so `resolveProviderTerminalSetup` has
+    // nothing to preserve and this stays the compact line rather than the full "Setup required" note.
     expect(screen.queryByRole("note", { name: "Setup required" })).toBeNull();
     expect(screen.getByText("Not authenticated")).toBeDefined();
   });
@@ -353,23 +340,20 @@ describe("<PickerProviderAuthLine />", () => {
       />,
     );
 
-    // Identical props to the test above; only the host's negotiated major
-    // differs. `@1.0` cannot carry the independent scope, so the request is
-    // refused as `DOWNGRADE_UNSUPPORTED` - the button could only ever fail.
+    // Identical props to the test above; only the host's negotiated major differs. `@1.0` cannot carry the
+    // independent scope, so the request is refused as `DOWNGRADE_UNSUPPORTED` - the button could only ever fail.
     expect(
       screen.queryByRole("button", { name: /Set up in terminal/ }),
     ).toBeNull();
-    // And not the "it's on another surface" copy either: that sentence names
-    // the start page as a place the button exists, which on this host it does
-    // not.
+    // And not the "it's on another surface" copy either: that sentence names the start page as a place the button
+    // exists, which on this host it does not.
     expect(
       screen.queryByText(
         "Choose \u201CSet up in terminal\u201D from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
       ),
     ).toBeNull();
-    // The steps lead with the route this host DOES have - `@1.0` opens the
-    // terminal from a chat natively - rather than "finish in that terminal"
-    // when nothing here opened one.
+    // The steps lead with the route this host does have - `@1.0` opens the terminal from a chat natively - rather
+    // than "finish in that terminal" when nothing here opened one.
     const note = screen.getByRole("note", { name: "Setup required" });
     const items = within(note).getAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
@@ -392,10 +376,8 @@ describe("<PickerProviderAuthLine />", () => {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
         }}
-        // The \u2205 case: nothing usable to create on. The picker is also drawn
-        // inside Epic tabs, so the gate must not fill this from an app-wide
-        // host authority - it reads as unsupported, the same as an unknown
-        // host.
+        // The picker is also drawn inside Epic tabs, so the gate must not fill this from an app-wide host authority -
+        // it reads as unsupported, the same as an unknown host.
         runTargetHostId={null}
         onClosePicker={() => undefined}
       />,
@@ -405,10 +387,8 @@ describe("<PickerProviderAuthLine />", () => {
       screen.queryByRole("button", { name: /Set up in terminal/ }),
     ).toBeNull();
     const note = screen.getByRole("note", { name: "Setup required" });
-    // And no claim about the machine either: "this host's version can open
-    // the setup wizard from a chat" is only true of a RECORDED pre-scope
-    // manifest, and there is no host here to have recorded one. The
-    // claim-free copy leads with the manual route.
+    // And no claim about the machine either: "this host's version can open the setup wizard from a chat" is only
+    // true of a recorded pre-scope manifest, and there is no host here to have recorded one.
     const items = within(note).getAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
       "Paste your provider API key when asked (DeepSeek by default).",

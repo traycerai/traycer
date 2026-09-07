@@ -19,14 +19,7 @@ import {
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
 
-/**
- * What the reader SHOWS when a chat does not render.
- *
- * The tampered-part case is driven through the real read rather than by
- * hand-building an outcome, because the claim under test is end to end: a
- * substituted part must reach the user as a refusal with a message, not as a
- * silently shorter transcript and not as a raw digest.
- */
+/** What the reader SHOWS when a chat does not render. */
 
 describe("a tampered part", () => {
   it("refuses to render and surfaces a message carrying no coordinates", async () => {

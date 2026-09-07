@@ -47,9 +47,7 @@ describe("orderProvidersByEnablement", () => {
 
   it("puts the enabled group first, each group keeping ORDERED_PROVIDERS' relative order", () => {
     const enabledIds: ReadonlySet<ProviderId> = new Set([
-      // Deliberately NOT the first two entries of ORDERED_PROVIDERS, and out
-      // of relative order in the input set, so a pass here can't be
-      // explained by the set already matching ORDERED_PROVIDERS' order.
+      // Deliberately NOT the first two entries of ORDERED_PROVIDERS, and out of relative order in the input set, so a pass here can't be explained by the set already matching ORDERED_PROVIDERS' order.
       "grok",
       "codex",
     ]);
@@ -66,10 +64,8 @@ describe("orderProvidersByEnablement", () => {
       ...enabledGroup,
       ...disabledGroup,
     ]);
-    // `result[0]` proves nothing on its own - codex is already index 0 of
-    // ORDERED_PROVIDERS, so it leads whether or not the partition ran. `grok`
-    // is the real evidence: it sits at index 9 and only reaches position 1 if
-    // the partition - not the original order - decided position.
+    // `result[0]` proves nothing on its own - codex is already index 0 of ORDERED_PROVIDERS, so it leads whether or not the partition ran.
+    // `grok` is the real evidence: it sits at index 9 and only reaches position 1 if the partition - not the original order - decided position.
     expect(result[0]?.providerId).toBe("codex");
     expect(result[1]?.providerId).toBe("grok");
   });

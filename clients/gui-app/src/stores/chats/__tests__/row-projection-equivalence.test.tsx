@@ -15,29 +15,8 @@ import {
 } from "@/stores/chats/rendered-messages";
 
 /**
- * # The acceptance bar for the row projection
- *
- * The host numbers a row's ORDINAL as its index in
- * `projectTranscriptRows(...)`. The renderer draws rows from
- * `useRenderedMessages(...)`. If those two enumerations ever disagree by one
- * row, the client renders bodies under the wrong rows for the rest of the
- * transcript - and nothing about that failure is loud. It looks like a chat
- * whose messages are subtly shuffled.
- *
- * So this is the test that actually pins the claim: every other test in this
- * feature checks a RULE, and only this one checks that the two implementations
- * of all the rules together land on the same list. It drives the real hook -
- * no re-implementation, no shared fixture builder that could be wrong in the
- * same direction twice.
- *
- * ## Why the comparison filters
- *
- * The projection enumerates DURABLE rows. Three of the renderer's sources are
- * client-only (the optimistic pending echo, the live assistant row, the
- * pre-turn indicator) and carry no ordinal, because all three sort into the
- * pinned-hydrated tail. Fixtures here therefore leave those inputs empty, so
- * the comparison is exact rather than filtered - with one deliberate exception
- * documented on the active-turn case.
+ * The host numbers a row's ORDINAL as its index in `projectTranscriptRows(...)`. The renderer
+ * draws rows from `useRenderedMessages(...)`.
  */
 
 const CONTENT: JsonContent = {
@@ -507,10 +486,8 @@ describe("row projection / renderer equivalence", () => {
     });
     const messages = [userMessage("u-1", 1000)];
 
-    // The renderer buckets ALL fork links before ALL notification anchors, so
-    // the tie resolves the same way whichever order the event log holds them
-    // in. A projection that preserved event order would disagree with one of
-    // these two.
+    // The renderer buckets ALL fork links before ALL notification anchors, so the tie resolves the
+    // same way whichever order the event log holds them in.
     expectSameRows({ messages, events: [fork, anchor] });
     expectSameRows({ messages, events: [anchor, fork] });
   });
@@ -630,9 +607,8 @@ describe("row projection / renderer equivalence", () => {
 
 describe("an ACTIVE turn - the one place the two deliberately differ", () => {
   it("projects a PREFIX of the rendered rows, missing only the live indicator", () => {
-    // The projection models `runState` as absent, so a live turn's trailing
-    // indicator row is the renderer's alone. It is a client-only row in the
-    // pinned-hydrated tail and carries no ordinal - see the module doc.
+    // The projection models `runState` as absent, so a live turn's trailing indicator row is the
+    // renderer's alone.
     const { rendered, projected } = bothEnumerations({
       messages: [
         userMessage("u-1", 1000),
@@ -649,14 +625,7 @@ describe("an ACTIVE turn - the one place the two deliberately differ", () => {
     });
 
     expect(rendered.slice(0, projected.length)).toEqual(projected);
-    // Exactly one extra row, and it belongs to the active turn. Named
-    // EXACTLY, not by `toContain`: `assistant:turn-1` is a prefix of
-    // `assistant:turn-1:part:1`, so a substring match cannot tell the pre-turn
-    // indicator (`renderPendingRunIndicator`) from the trailing synthesized
-    // slice (`attachRunStateToTrailingAssistantSlice`) - two different
-    // client-only row sources, in a suite whose whole point is exact
-    // enumeration agreement. This fixture ends on a steer with a live run
-    // state, so the extra row is the trailing slice.
+    // Exactly one extra row, and it belongs to the active turn.
     expect(rendered).toHaveLength(projected.length + 1);
     expect(rendered.at(-1)).toBe("assistant:turn-1:part:1");
   });

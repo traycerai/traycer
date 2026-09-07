@@ -10,11 +10,7 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-// G4: the retained-phase copy. `describeUpdateOperation` is the one place a
-// `lastKnownKind` becomes the "Last seen: …" sentence, and
-// `needsQualifiedMarker` must be false for it — the sentence already carries
-// the qualification, and a caller appending its own "(last known)" would say
-// the same thing twice.
+// `describeUpdateOperation` is the one place a `lastKnownKind` becomes the "Last seen.
 
 function retainedView(overrides: Partial<FleetUpdateView>): FleetUpdateView {
   return {
@@ -88,10 +84,8 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
   });
 });
 
-// The coarse `updateProgress` marker's own view kind. `updating` is the
-// marker's whole vocabulary for "in flight, phase unknown" — the legacy
-// `traycer host update` path names no finer phase, so the sentence must not
-// pretend to one either.
+// `updating` is the marker's whole vocabulary for "in flight, phase unknown" - the legacy `traycer host
+// update` path names no finer phase, so the sentence must not pretend to one either.
 describe("describeUpdateOperation — the coarse 'updating' kind", () => {
   it('with no target version, reads "Updating host"', () => {
     const copy = describeUpdateOperation({
@@ -131,8 +125,8 @@ describe("describeUpdateOperation — the coarse 'updating' kind", () => {
   });
 });
 
-// G5: measured byte progress must render independently of percentage — both
-// bytes-only and percent+bytes — and never on the `none` arm.
+// G5: measured byte progress must render independently of percentage - both bytes-only and percent+bytes - and
+// never on the `none` arm.
 describe("operationProgressBytes / operationProgressPercent", () => {
   it("bytes-only (percent absent): operationProgressBytes renders, operationProgressPercent is null", () => {
     const view: FleetUpdateView = {
@@ -183,12 +177,8 @@ describe("operationProgressBytes / operationProgressPercent", () => {
   });
 });
 
-// showsProgressBar: shared by the banner and the Overview card. A live
-// operation draws the bar; a RETAINED phase ("Last seen: …") must not — an
-// animated indeterminate bar is a present-tense claim no amount of qualifying
-// copy beside it withdraws. The measured numbers still render regardless
-// (that is `operationProgressBytes`/`operationProgressPercent`, unaffected by
-// this predicate).
+// A live operation draws the bar; a retained phase ("Last seen: …") must not - an animated indeterminate bar
+// is a present-tense claim no amount of qualifying copy beside it withdraws.
 describe("showsProgressBar", () => {
   it("a LIVE indeterminate operation shows the bar", () => {
     const view: FleetUpdateView = {

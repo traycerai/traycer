@@ -4,7 +4,6 @@ import type { ComponentType } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 
-/** The glyph's own path data, which is what actually identifies a lucide icon. */
 function glyphOf(node: React.ReactElement): string {
   const { container } = render(node);
   const svg = container.querySelector("svg");
@@ -43,9 +42,8 @@ describe("<ManagedCommandMonitorIcon />", () => {
   });
 
   it("swaps the glyph when the flag flips under a mounted row", () => {
-    // `monitoring` is live-tunable, so the same row can stop being a watcher
-    // without remounting. The swap is the depiction of that, which a glyph
-    // chosen once at mount would swallow.
+    // `monitoring` is live-tunable, so the same row can stop being a watcher without remounting. The swap is the
+    // depiction of that, which a glyph chosen once at mount would swallow.
     const { container, rerender } = render(
       <ManagedCommandMonitorIcon monitoring decorative className={undefined} />,
     );

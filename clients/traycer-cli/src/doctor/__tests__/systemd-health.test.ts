@@ -6,14 +6,7 @@ import {
   type SystemdProbeRunner,
 } from "../systemd-health";
 
-/**
- * The Linux doctor probes, fixture-driven. Until this module existed doctor
- * had ZERO Linux probes while `service/platforms/linux.ts` claimed "Doctor
- * surfaces the missing linger as a warning" - and `service status`
- * deliberately keys liveness off pid metadata, so a failed / restart-looping
- * unit read as plain "stopped" with nowhere that told the truth. Each row
- * here is one of those dead ends.
- */
+/** The Linux doctor probes, fixture-driven. Until this module existed doctor had ZERO Linux probes while `service/platforms/linux.ts` claimed "Doctor surfaces the missing linger as a warning" - and `service status` deliberately keys liveness off pid metadata, so a failed / restart-looping unit read as plain "stopped" with nowhere that told the truth. */
 
 const LABEL_ID = "ai.traycer.host";
 const UNIT = `${LABEL_ID}.service`;
@@ -139,10 +132,8 @@ describe("probeLinuxSystemdHealth", () => {
   });
 
   it("names systemctl itself as missing on a genuinely non-systemd distro, not WSL/headless-login", async () => {
-    // `spawnFailed` (ENOENT/EACCES launching `systemctl`) is a different
-    // machine than a systemd box that cannot reach its user manager - e.g.
-    // Alpine/OpenRC, Void. The WSL/headless-login guidance would misdirect
-    // a user here, since neither applies.
+    // `spawnFailed` (ENOENT/EACCES launching `systemctl`) is a different machine than a systemd box that cannot reach its user manager - e.g.
+    // Alpine/OpenRC, Void.
     const { runner } = runnerWith((probe) =>
       probe.args[1] === "show-environment" ? spawnFailure() : ok(""),
     );
@@ -235,12 +226,8 @@ describe("probeLinuxSystemdHealth", () => {
   });
 
   it("stays silent on the not-loaded and never-started property DEFAULTS, which include ConditionResult=no", async () => {
-    // Verified live on systemd 255: `systemctl show` of a NOT-LOADED unit
-    // exits 0 reporting property defaults - ConditionResult=no among them -
-    // and a loaded unit that never attempted a start reports the same
-    // default with ConditionTimestampMonotonic=0. Without the
-    // positive-evidence guard this probe would cry "CLI binary missing" on
-    // every such machine.
+    // Verified live on systemd 255: `systemctl show` of a NOT-LOADED unit exits 0 reporting property defaults - ConditionResult=no among them - and a loaded unit that never attempted a start reports the same default with ConditionTimestampMonotonic=0.
+    // Without the positive-evidence guard this probe would cry "CLI binary missing" on every such machine.
     const { runner } = runnerWith((probe) => {
       if (probe.args[1] === "show")
         return ok(

@@ -79,49 +79,24 @@ import {
 const SWEEP_WORKTREES_REFRESH_TIMEOUT_MS = 20_000;
 
 interface SweepWorktreesDialogProps {
-  /**
-   * The Tasks being swept. `null` (or empty) keeps the dialog closed and its
-   * query off. More than one comes from History's multi-select, and the extra
-   * members are load-bearing rather than cosmetic: a worktree shared between
-   * two selected Tasks stops counting as "shared".
-   */
+  /** More than one comes from History's multi-select, and the extra members are load-bearing rather than
+   * cosmetic: a worktree shared between two selected Tasks stops counting as "shared". */
   readonly epicIds: ReadonlyArray<string> | null;
-  /**
-   * The host whose worktrees are proven and swept. Worktrees are per HOST, and
-   * the sweep's host id is frozen from this client's proof: the Epics list
-   * (app chrome) passes the app-wide client; a caller INSIDE an Epic session
-   * passes the session's client, so an Epic projected from host A is never
-   * offered - or swept of - host B's worktrees during a re-point.
-   */
+  /** Worktrees are per host, and the sweep's host id is frozen from this client's proof: the Epics list (app
+   * chrome) passes the app-wide client. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  /** Title for a single-Task sweep; `null` for bulk or unknown. */
   readonly taskTitle: string | null;
-  /**
-   * The host decision this dialog CARRIES, or `null` when there is none to
-   * carry - one usable host in the fleet, which is every single-host install.
-   *
-   * `null` is the byte-identical path on purpose: no chip, no nudge, no fleet
-   * list mounted, and the same empty-state sentence Sweep has always shown.
-   * Everything the choice adds is inside this one branch.
-   */
+  /** `null` is the byte-identical path on purpose: no chip, no nudge, no fleet list mounted, and the same
+   * empty-state sentence Sweep has always shown. */
   readonly hostChoice: SweepHostChoice | null;
-  /**
-   * The fleet has not been described yet, so nothing about the host has been
-   * decided — not even whether there is a choice to make.
-   *
-   * Distinct from `hostChoice === null`, which is the settled answer "this
-   * account has one usable host". A dialog that conflated them would show a
-   * single-host install's empty-census sentence for the length of a directory
-   * query, claiming a disk nobody has walked.
-   */
+  /** A dialog that conflated them would show a single-host install's empty-census sentence for the length of a
+   * directory query, claiming a disk nobody has walked. */
   readonly fleetPending: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
 
-/**
- * Same visual family as the Settings ▸ Worktrees tier pills: greens for the
- * proven-safe tiers, amber for Review, muted for the neutral states.
- */
+/** Same visual family as the Settings ▸ Worktrees tier pills: greens for the proven-safe tiers, amber for
+ * Review, muted for the neutral states. */
 const TIER_PILL_CLASS: Record<WorktreeTier, string> = {
   merged:
     "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300",
@@ -142,30 +117,12 @@ const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
   "not-landed": "Not proven landed — work here may be lost",
 };
 
-/**
- * The Sweep confirmation. EVERY worktree owned by the selected Task(s) is
- * listed once with Settings-grade detail (branch, tier pill, PR chips, path);
- * only the proven-safe rows (Landed / At base commit, exclusively owned by the
- * selection, not busy) start checked. Unproven, shared, or in-use rows are
- * unchecked but deliberately checkable — sweeping them is the user's conscious
- * call — while still-checking rows are disabled. Selecting an in-use row
- * surfaces the shared holder disclosure; confirm carries stopOwners for those
- * paths.
- *
- * Self-contained: the History row, History's bulk selection, and the Epic
- * status row all render it with just a list of epic ids.
- */
+/** Every worktree owned by the selected Task(s) is listed once with Settings-grade detail (branch, tier pill,
+ * PR chips, path). */
 export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const { epicIds, taskTitle, onOpenChange } = props;
-  // Read before the session key, because the key needs it: an OPEN dialog with
-  // no host is a session in its own right, not the gap between two.
-  //
-  // Asked of the whole dialog rather than of `hostChoice`'s shape, which is
-  // the generalisation both hostless states needed. There are two ways to be
-  // open without a host and they arrive differently - the fleet has not been
-  // described (`fleetPending`, which carries NO `hostChoice` at all), or it has
-  // and nobody has picked yet (`hostChoice.hostId === null`) - so a rule
-  // written against one of those shapes silently missed the other.
+  // Read before the session key, because the key needs it: an open dialog with no host is a session in its own
+  // right, not the gap between two.
   const hostUnchosen =
     props.hostChoice !== null && props.hostChoice.hostId === null;
   const hostlessSession = props.fleetPending || hostUnchosen;
@@ -230,10 +187,8 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const [previousInUseByPath, setPreviousInUseByPath] = useState<
     ReadonlyMap<string, boolean>
   >(() => new Map());
-  // Closing disables the candidates query, which temporarily makes the key
-  // null. Keep the session parked across that gap so reopening Sweep resumes
-  // the same selection, review receipt, and in-flight progress. A genuinely
-  // different non-null target still starts a fresh session.
+  // Keep the session parked across that gap so reopening Sweep resumes the same selection, review receipt, and
+  // in-flight progress. A genuinely different non-null target still starts a fresh session.
   const selectionRetargeted =
     selectionKey !== null && selectionKey !== previousSelectionKey;
   applySelectionRetarget({
@@ -318,9 +273,8 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   );
   const kickoff = (targets: ReadonlyArray<EpicSweepWorktreeRow>): void => {
     const kickoffSessionKey = selectionKey;
-    // A confirmed batch is now represented by the per-row shared mutation
-    // state. Park the session on Choose before closing so reopening shows the
-    // live rows, rather than a spent confirmation receipt.
+    // Park the session on Choose before closing so reopening shows the live rows, rather than a spent confirmation
+    // receipt.
     setStep("choose");
     setInventoryChanged(false);
     startSweepKickoff({
@@ -374,19 +328,13 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   };
 
   const { hostChoice } = props;
-  // The host this dialog is pointed at is LATCHED, and its client either
-  // resolves or does not. `null` here means the machine the chip names has
-  // stopped answering under an open confirmation - which is a thing to say,
-  // not a reason to point the dialog somewhere else.
+  // `null` here means the machine the chip names has stopped answering under an open confirmation - which is a
+  // thing to say, not a reason to point the dialog somewhere else.
   const hostUnreachable =
     hostChoice !== null &&
     hostChoice.hostId !== null &&
     props.hostClient === null;
-  // A Review is a receipt for ONE machine's proof, so it may not be shown
-  // without one. `startSweepPrimary` already refuses to ENTER review with no
-  // host; this is the other half - a review PARKED from a previous session
-  // must not paint over a dialog that has since lost its host, which is a
-  // destructive confirmation naming a machine it is no longer pointed at.
+  // `startSweepPrimary` already refuses to enter review with no host; this is the other half.
   const reviewable =
     step === "review" && reviewSnapshot !== null && hostId !== null;
   const renderBody = (host: SweepHostChoiceView | null): ReactNode =>
@@ -457,9 +405,8 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         }
         onCancel={() => onOpenChange(false)}
         onPrimary={() => handlePrimary(host?.hostName ?? null)}
-        // NOT disabled by a refresh or an unsettled proof: the click itself
-        // proves before anything destructive, joining whatever is in flight.
-        // Only a click already being answered for this session locks it.
+        // Not disabled by a refresh or an unsettled proof: the click itself proves before anything destructive,
+        // joining whatever is in flight. Only a click already being answered for this session locks it.
         primaryDisabled={hostId === null || proving || checkedRows.length === 0}
         elevated={!selectionIsSafeOnly(checkedRows)}
         activeSweepCount={activeSweepCount}
@@ -484,10 +431,8 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             selectedEpicIds={selectedEpicIds}
             currentHostCount={censusedHostCount({ hostId, isError, rows })}
             unavailableHostId={hostChoice.unavailableHostId}
-            // Review has no chip at all - it renders the frozen host read-only
-            // and Back is the route to change it - so the review case is
-            // structural rather than a disabled control. What is left is the
-            // census being unsettled underneath a chip that IS on screen.
+            // Review has no chip at all - it renders the frozen host read-only and Back is the route to change it - so the
+            // review case is structural rather than a disabled control.
             disabled={refresh.refreshing || activeSweepCount > 0}
             hasSelectionOverrides={checkOverrides.size > 0}
             onSwitch={hostChoice.onSwitch}
@@ -499,16 +444,8 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   );
 }
 
-/**
- * The flow never holds the user: a Remove click's proof runs as a plain
- * promise chain that outlives the dialog, and the session store is where it
- * leaves its answer. This is the dialog's side of that contract. It says when
- * a dialog is on screen for a session (so the chain knows whether to toast
- * instead of relying on a screen nobody is looking at), reports whether a
- * click is still being answered (so Remove cannot be clicked twice), and
- * hands over a review the chain parked - whether the chain settled while the
- * dialog was open, or after it was closed and reopened on the same session.
- */
+/** It says when a dialog is on screen for a session (so the chain knows whether to toast instead of relying on
+ * a screen nobody is looking at). */
 function useSweepSessionParking(input: {
   readonly selectionKey: string | null;
   readonly onParkedReview: (review: ParkedSweepReview) => void;
@@ -540,11 +477,7 @@ function useSweepSessionParking(input: {
   return proving;
 }
 
-/**
- * The censused host's count for its own popover row: every owned worktree
- * this dialog's walk found, the same attribution the popover asks the OTHER
- * hosts for. Not re-asked, and not claimed while there is no walk to count.
- */
+/** Not re-asked, and not claimed while there is no walk to count. */
 function censusedHostCount(input: {
   readonly hostId: string | null;
   readonly isError: boolean;
@@ -554,40 +487,16 @@ function censusedHostCount(input: {
   return input.rows.length;
 }
 
-/**
- * Which host a dialog session is about: one this proof ran against, or none at
- * all.
- *
- * A union rather than a sentinel string, so no host id can ever be mistaken
- * for the hostless case. The distinction is load-bearing: "no host" and "not
- * open" are both absences, and sharing one key made a hostless re-open look
- * like the gap between two opens - the previous host's parked step and Review
- * snapshot survived it, and a person was shown a destructive confirmation for
- * a machine the dialog was no longer pointed at, whose Sweep button silently
- * did nothing.
- *
- * ONE hostless arm covers both ways of getting there - waiting on the fleet,
- * and waiting on a person - because for SESSION purposes they are the same
- * state: no host, no census, and nothing yet to preserve or discard. The copy
- * differs because the reason differs; the identity does not, because the
- * content does not. Splitting them would only add a retarget between two
- * states that have nothing to retarget.
- */
+/** The distinction is load-bearing: "no host" and "not open" are both absences, and sharing one key made a
+ * hostless re-open look like the gap between two opens. */
 type SweepSessionHost =
   | { readonly kind: "host"; readonly hostId: string | null }
   | { readonly kind: "hostless" };
 
 const HOSTLESS_SESSION: SweepSessionHost = { kind: "hostless" };
 
-/**
- * Dialog-session identity. Matches the candidates query key
- * (`hostQueryKeys.sweepWorktreeCandidates(hostId, epicKey)`): a host
- * change with the same Task set is a retarget, so host A's uncertain/
- * failed map cannot attach to host B's identically named path.
- *
- * `null` means CLOSED — no session at all. An open dialog always has one,
- * including one that has yet to be pointed at a machine.
- */
+/** Matches the candidates query key (`hostQueryKeys.sweepWorktreeCandidates(hostId, epicKey)`): a host change
+ * with the same Task set is a retarget. */
 function sweepSessionKey(
   host: SweepSessionHost,
   epicIds: ReadonlyArray<string> | null,
@@ -649,21 +558,8 @@ function applyInUseConsentDrop(input: {
   );
 }
 
-/**
- * What a Remove click does: record the intent, prove, then either remove or
- * ask - without ever holding the person in the dialog for it.
- *
- * Every click re-proves, the safe-looking selection included. Cached
- * classifications are never the basis for deletion; the proof joins a refresh
- * already in flight or starts a forced one. And the chain is a plain promise,
- * not a per-call mutation callback, so it keeps running if the dialog is
- * closed or the surface it sits on is left (TanStack drops `mutate(vars,
- * { onSuccess })` callbacks on unmount; a `.then` is nobody's to drop). What
- * it decides lands in the session store: a safe selection starts the
- * background removal wherever the person is; one that needs consent is
- * PARKED for the session, and toasted when no dialog is open to show it.
- * Consent is never inferred - a parked review removes nothing until confirmed.
- */
+/** Cached classifications are never the basis for deletion; the proof joins a refresh already in flight or
+ * starts a forced one. Consent is never inferred - a parked review removes nothing until confirmed. */
 function startSweepPrimary(input: {
   readonly sessionKey: string | null;
   readonly hostId: string | null;
@@ -703,9 +599,8 @@ function startSweepPrimary(input: {
         freshRows,
       );
       input.setSessionOutcomes(nextOutcomes);
-      // Reconciled by PATH - the row's identity - so a stale target is never
-      // deleted: a row that vanished, turned uncertain, or newly became in
-      // use since the click drops out of the intent.
+      // Reconciled by PATH - the row's identity - so a stale target is never deleted: a row that vanished, turned
+      // uncertain, or newly became in use since the click drops out of the intent.
       const selected = freshRows.filter((row) => {
         if (!selectedPaths.has(row.entry.worktreePath) || row.disabled) {
           return false;
@@ -783,9 +678,8 @@ function startSweepKickoff(input: {
       },
     },
   );
-  // The mutation cache owns the run after kickoff. Do not hold the user in a
-  // modal while the host streams cleanup; reopening reads that shared pending
-  // state and resumes this dialog session.
+  // The mutation cache owns the run after kickoff. Do not hold the user in a modal while the host streams
+  // cleanup; reopening reads that shared pending state and resumes this dialog session.
   input.onClose();
 }
 
@@ -858,13 +752,9 @@ function identityByPathFromRows(
 function SweepWorktreesChoose(props: {
   readonly taskCount: number;
   readonly taskTitle: string | null;
-  /** The host decision, name-resolved; `null` on a single-host fleet. */
   readonly host: SweepHostChoiceView | null;
-  /** The fleet has not answered; nothing about the host is decided yet. */
   readonly fleetPending: boolean;
-  /** Nobody has named a host yet; the dialog is asking. */
   readonly hostUnchosen: boolean;
-  /** The latched host has stopped answering; there is no census to show. */
   readonly hostUnreachable: boolean;
   readonly hostId: string | null;
   readonly isPending: boolean;
@@ -998,11 +888,7 @@ function SweepWorktreesChoose(props: {
   );
 }
 
-/**
- * What is being swept, and on which machine. The chip is the route to any
- * other machine; its popover says how many of these Tasks' worktrees each
- * one holds.
- */
+/** What is being swept, and on which machine. */
 function SweepChooseHeader(props: {
   readonly taskCount: number;
   readonly taskTitle: string | null;
@@ -1126,11 +1012,8 @@ function takeInUseFalseToTrueTransition(input: {
   readonly nextInUseByPath: ReadonlyMap<string, boolean>;
   readonly droppedForcePaths: readonly string[];
 } | null {
-  // Skip in-flight empty snapshots so a later inUse false→true still
-  // compares against the last proven idle value, not "path unseen".
-  // Completed empty/error results are real: merge (absent paths keep
-  // their last proven inUse) and drop overrides for vanished paths so
-  // a reappearance is a new object, not inherited consent.
+  // Completed empty/error results are real: merge (absent paths keep their last proven inUse) and drop overrides
+  // for vanished paths so a reappearance is a new object, not inherited consent.
   if (input.selectionRetargeted || input.isPending) return null;
   const seenInUseByPath = inUseByPathFromRows(input.rows);
   const nextInUseByPath = new Map(input.previousInUseByPath);
@@ -1181,11 +1064,8 @@ function uncheckNonResubmittableOverrides(
   return next;
 }
 
-/**
- * Names what is being swept. A single Task uses its title when we have one;
- * a bulk sweep names the count instead, because listing titles would push the
- * worktree list (the thing being confirmed) below the fold.
- */
+/** A single Task uses its title when we have one; a bulk sweep names the count instead, because listing titles
+ * would push the worktree list (the thing being confirmed) below the fold. */
 function sweepDialogTitle(taskCount: number, taskTitle: string | null): string {
   if (taskCount > 1) return `Sweep worktrees for ${taskCount} tasks?`;
   return taskTitle === null
@@ -1209,12 +1089,8 @@ function SweepRowList(props: {
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
   readonly onToggle: (worktreePath: string, checked: boolean) => void;
 }) {
-  // Both of these are asked BEFORE the pending and empty branches, because
-  // neither of those is true of a census that has not run. The candidates
-  // query gates on readiness, so with no client it never fetches and never
-  // reports pending - it simply hands back nothing, which the empty branch
-  // would read as "this machine's disk is clean". That is a claim about a disk
-  // nobody walked, and here nobody even said which disk.
+  // The candidates query gates on readiness, so with no client it never fetches and never reports pending - it
+  // simply hands back nothing, which the empty branch would read as "this machine's disk is clean".
   if (props.fleetPending) {
     return (
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
@@ -1292,14 +1168,8 @@ function SweepRowList(props: {
   );
 }
 
-/**
- * What a dialog says when the machine it is pointed at stops answering.
- *
- * Not "no worktrees", which is what an unguarded null client would have
- * produced, and not a retarget either: the host was chosen and is still the
- * one this session is about. The chip stays live, so the way out is the same
- * gesture that got here.
- */
+/** Not "no worktrees", which is what an unguarded null client would have produced, and not a retarget either:
+ * the host was chosen and is still the one this session is about. */
 function unreachableHostCopy(hostName: string | null): string {
   if (hostName === null) {
     return `Can't reach this host right now, so its worktrees aren't shown.`;
@@ -1307,12 +1177,7 @@ function unreachableHostCopy(hostName: string | null): string {
   return `Can't reach ${hostName} right now, so its worktrees aren't shown. Pick another host, or try again once it is back.`;
 }
 
-/**
- * The census came back empty - the honest end of the walk for THIS machine.
- * On a single-host install it is the whole answer. With a fleet, the chip
- * above is the route to the others, and its popover says which of them hold
- * anything for these Tasks.
- */
+/** The census came back empty - the honest end of the walk for this machine. */
 function SweepEmptyCensus(props: {
   readonly host: SweepHostChoiceView | null;
   readonly taskCount: number;
@@ -1357,14 +1222,11 @@ function SweepWorktreeRowItem(props: {
   // Not disabled by a refresh in flight: rows stay selectable while facts are
   // re-checked, because the Remove click re-proves before acting anyway.
   const disabled = row.disabled || isSweeping || uncertainLocked;
-  // Derived from `useId`, never from the path: a worktree path can contain
-  // spaces (routine on Windows, e.g. `C:\\Users\\John Doe\\wt`), which makes an
-  // invalid HTML id and silently breaks the `htmlFor` association below - the
-  // branch text would stop toggling the row.
+  // Derived from `useId`, never from the path: a worktree path can contain spaces (routine on Windows, e.g.
+  // `C:\\Users\\John Doe\\wt`).
   const checkboxId = useId();
-  // The PR pills render external links, so they must NOT sit inside the
-  // <label>: clicking one would toggle the checkbox (and nesting interactive
-  // content in a label is invalid). Only the text half is label-wrapped.
+  // The PR pills render external links, so they must not sit inside the <label>: clicking one would toggle the
+  // checkbox (and nesting interactive content in a label is invalid). Only the text half is label-wrapped.
   return (
     <li
       className={cn(
@@ -1470,11 +1332,8 @@ function SweepTierPill(props: { readonly row: EpicSweepWorktreeRow }) {
   );
 }
 
-/**
- * The per-row caution line: the row's note, plus the classifier's specific
- * Review blockers (uncommitted counts, unmerged commits, submodule branches)
- * so an unchecked row names exactly what checking it would lose.
- */
+/** The per-row caution line: the row's note, plus the classifier's specific Review blockers (uncommitted
+ * counts, unmerged commits, submodule branches) so an unchecked row names exactly what checking it would lose. */
 function sessionOutcomeHint(
   outcome: SweepSessionOutcome | undefined,
 ): ReactNode {

@@ -6,10 +6,6 @@ import {
   sanitizeDevDesktopSlot,
 } from "../dev-desktop-slot";
 
-// Canonical vectors for the CLI, Desktop, and `scripts/dev-desktop.js` slot
-// sanitizers, which must all agree byte-for-byte on how a slot name is
-// normalized - a mismatch means the CLI and Desktop resolve different
-// install/runtime paths for what a developer thinks is one run.
 export const SLOT_SANITIZE_VECTORS: ReadonlyArray<
   readonly [raw: string, expected: string]
 > = [

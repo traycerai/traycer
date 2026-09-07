@@ -1,55 +1,14 @@
-/**
- * Ships pdf.js's on-demand data files alongside the renderer bundle.
- *
- * pdf.js keeps the bulky, rarely-needed parts of a PDF renderer out of its
- * worker and fetches them per document: the predefined Adobe CMaps, the
- * standard-14 font data, the wasm image codecs and the CMYK ICC profile.
- * Every one of those URLs
- * defaults to `null`, and a missing one does not fail loudly - the document
- * renders WRONG. A CID font naming a predefined CMap (the CJK case) loses its
- * glyphs AND its text extraction, so selection and search go with them; a
- * scanned page loses its JBIG2 images with nothing but a console warning,
- * because the wasm fetch and its JS fallback both resolve against `null`.
- *
- * The files are copied rather than imported so they stay out of the JS graph:
- * nothing here enters a chunk, and each file is fetched only by a document
- * that actually needs it. Both apps that bundle gui-app (the Electron
- * renderer and the Capacitor web build) add this plugin, and both serve the
- * result same-origin - so `connect-src 'self'` already covers the fetches and
- * `script-src 'wasm-unsafe-eval'` already covers the codecs.
- */
+/** Copy pdf.js on-demand data files next to the renderer. Missing URLs default to `null` and the document renders wrong, not loudly. Copied rather than imported so they stay out of the JS graph. */
 import { cpSync, createReadStream, existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Connect, Plugin } from "vite";
 
-/**
- * Output directory the data files are copied into, relative to the page.
- *
- * `pdf-asset-urls.ts` resolves the same segment against `document.baseURI`;
- * `pdf-asset-urls.test.ts` holds the two together.
- */
+/** Output dir relative to the page. pdf-asset-urls.ts resolves the same segment against document.baseURI. */
 export const PDFJS_ASSET_DIR = "pdfjs";
 
 /**
- * The pdf.js data directories worth shipping, and why:
- *
- * - `cmaps` - predefined Adobe CMaps for CID fonts. Only `Identity-H`/`-V`
- *   are built into the worker, which is why Western documents render fine
- *   without these and CJK ones do not.
- * - `standard_fonts` - the standard-14 font data. Mostly redundant, since
- *   `useSystemFonts` defaults on in a browser and substitutes local fonts,
- *   but `Symbol` and `ZapfDingbats` are excluded from that substitution and
- *   have no source but these files.
- * - `wasm` - the JBIG2, JPEG 2000 and ICC decoders. JBIG2 is the codec
- *   scanners reach for, so this is the directory an ordinary user is most
- *   likely to need.
- * - `iccs` - the CMYK profile for ICC-based colour spaces. pdf.js reads it
- *   with a SYNCHRONOUS fetch that exists only on its worker-fetch path, and
- *   that path opens only when every data URL is http(s): true of the
- *   packaged Capacitor app (served from `http://localhost`) and of the dev
- *   server, false of the packaged desktop's `app://renderer`, where pdf.js
- *   falls back to its own colour conversion.
+ * `cmaps` for CJK CID fonts; `standard_fonts` for Symbol/ZapfDingbats; `wasm` for JBIG2/JPEG2000/ICC; `iccs` for CMYK (sync worker fetch, http(s) only).
  */
 const PDFJS_ASSET_DIRECTORIES = [
   "cmaps",
@@ -58,12 +17,7 @@ const PDFJS_ASSET_DIRECTORIES = [
   "iccs",
 ] as const;
 
-/**
- * QuickJS is the wasm directory's odd one out: it evaluates the JavaScript
- * embedded in AcroForm documents, which pdf.js only runs under
- * `enableScripting` - an option the viewer never sets. Half a megabyte for a
- * code path that cannot execute.
- */
+/** Skip QuickJS wasm: pdf.js only runs it under enableScripting, which the viewer never sets. */
 function isShippedAsset(sourcePath: string): boolean {
   return !/(^|[\\/])quickjs-eval\./.test(sourcePath);
 }
@@ -84,12 +38,7 @@ function contentTypeFor(filePath: string): string {
   return "application/octet-stream";
 }
 
-/**
- * Resolves a dev-server request path to a file inside one of the shipped
- * directories, or `null` if it names anything else. The `relative` check
- * rejects traversal; the directory check keeps the rest of the package -
- * sources, licences, the legacy builds - unserved.
- */
+/** Map a dev-server path to a shipped file, else null. relative rejects traversal; directory check leaves the rest of the package unserved. */
 function resolveServableFile(requestPath: string): string | null {
   const absolutePath = resolve(pdfjsDistRoot, `.${requestPath}`);
   const withinPackage = relative(pdfjsDistRoot, absolutePath);

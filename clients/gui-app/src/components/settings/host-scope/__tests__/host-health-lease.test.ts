@@ -6,20 +6,7 @@ import type {
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { deriveHostHealth } from "@/components/settings/host-scope/host-health";
 
-/**
- * The lease step of `deriveHostHealth`'s precedence — the half this pass added,
- * and the half whose failure modes are asymmetric.
- *
- * Getting it wrong in the OPTIMISTIC direction costs a stale word on a row.
- * Getting it wrong in the PESSIMISTIC direction empties the fleet: every host
- * has a null lease before this window's kernel attaches, and every host reads
- * `connecting` while evidence producers warm up, so a derivation that treats
- * either as failure renders the whole account dead on every cold start — and,
- * because these same rows are the pickers a person would use to do something
- * about it, suppresses the surfaces that could clear it. That is the
- * fail-closed-gate class: the gate suppresses the producer that would reopen
- * it. Hence the first two tests.
- */
+/** That is the fail-closed-gate class: the gate suppresses the producer that would reopen it. */
 
 const NOW_MS = 3 * 60 * 60 * 1000;
 
@@ -43,12 +30,7 @@ function registryItem(connectivity: HostConnectivity): HostListItem {
   };
 }
 
-/**
- * A REMOTE row whose cloud lease says `connectable`. Chosen as the base on
- * purpose: it is the arm that, absent a lease, answers `reported-reachable` —
- * so every test below can tell "the lease decided this" from "the DTO decided
- * this" by the answer alone, with no mocking and no ambiguity.
- */
+/** A remote row whose cloud lease says `connectable`. */
 const BASE = {
   item: registryItem("connectable"),
   isLocalMachine: false,
@@ -65,20 +47,11 @@ function lease(
 }
 
 describe("deriveHostHealth — absence of evidence is not death", () => {
-  /**
-   * Seeded with a lease PRESENT and `attached: false`, deliberately.
-   *
-   * The obvious way to write this — `lease: null, authorityAttached: false` —
-   * cannot fail for the reason it is named after: with no lease there is
-   * nothing for the attach flag to gate, so the test passes identically
-   * whether `authorityAttached` is consulted or ignored entirely. It would be
-   * an assertion about an input the code never reaches, which is the same
-   * vacuity that let sealed probe P12 survive. A ready lease that must NOT be
-   * believed is what makes the flag load-bearing.
-   */
+  /** It would be an assertion about an input the code never reaches, which is the same vacuity that let sealed
+   * probe P12 survive. A ready lease that must not be believed is what makes the flag load-bearing. */
   it("ignores even a READY lease until the authority has attached", () => {
-    // The bridge mounts in a parent effect and React runs child effects first,
-    // so EVERY consumer renders at least once in this state.
+    // The bridge mounts in a parent effect and React runs child effects first, so every consumer renders at least
+    // once in this state.
     const health = deriveHostHealth({
       ...BASE,
       lease: lease("ready"),
@@ -102,10 +75,8 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
   });
 
   it("falls through to the DTO for a connecting lease, rather than calling it dead", () => {
-    // `connecting` is the contract's non-committal state — neither usable nor
-    // dead — and it is also what an unknown `status` parses to at the raw
-    // boundary. Reading it as failure turns "we have not found out yet" into
-    // "it is broken", for the whole fleet at once.
+    // `connecting` is the contract's non-committal state - neither usable nor dead - and it is also what an
+    // unknown `status` parses to at the raw boundary.
     const health = deriveHostHealth({
       ...BASE,
       lease: lease("connecting"),
@@ -140,12 +111,7 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
     expect(health.live).toBe(true);
   });
 
-  /**
-   * The direction the DTO can never produce. The cloud still holds a
-   * `connectable` lease — it has up to 15 minutes to notice — while this app's
-   * own transports have concluded the host is gone. F26's window, narrowed by
-   * evidence instead of waited out.
-   */
+  /** The direction the DTO can never produce. window, narrowed by evidence instead of waited out. */
   it("says Offline for a dead lease even while the cloud still reports connectable", () => {
     const health = deriveHostHealth({
       ...BASE,
@@ -158,12 +124,8 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
     expect(health.live).toBe(false);
   });
 
-  /**
-   * `degraded` is a live SERVING state, not a demotion (P3.2's disambiguation:
-   * `HostCompatibility.degraded` died as user-facing, `HostLeaseSnapshot`'s
-   * `degraded` is a lease that still works). Rendering it as a failure would
-   * put a fault on a host that is answering.
-   */
+  /** `degraded` is a live serving state, not a demotion. Rendering it as a failure would put a fault on a host
+   * that is answering. */
   it("keeps a degraded lease Online, with the impairment as nuance", () => {
     const health = deriveHostHealth({
       ...BASE,
@@ -192,13 +154,8 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
 });
 
 describe("deriveHostHealth — every dead reason gets its own answer", () => {
-  /**
-   * THE regression this file exists for. Rendering `plan-restricted` as
-   * "offline" is the months-long defect that sent free-tier users to debug a
-   * network fault they did not have, while the one remedy that works — an
-   * upgrade — went unmentioned. The two arms must differ in REMEDY, not just
-   * in wording, which is why the detail is asserted and not only the state.
-   */
+  /** The two arms must differ in remedy, not just in wording, which is why the detail is asserted and not only
+   * the state. */
   it("says Local only for plan-restricted — never Offline — and names the upgrade", () => {
     const health = deriveHostHealth({
       ...BASE,
@@ -249,11 +206,8 @@ describe("deriveHostHealth — every dead reason gets its own answer", () => {
     expect(health.label).toBe("Removed");
   });
 
-  /**
-   * An incompatible host ANSWERED — it is up, and it disagreed. It must not
-   * read as an outage: the remedy is an update, not a wait, and this is the
-   * row that carries the update affordance.
-   */
+  /** It must not read as an outage: the remedy is an update, not a wait, and this is the row that carries the
+   * update affordance. */
   it("says Update required for an incompatible host, not Offline", () => {
     const health = deriveHostHealth({
       ...BASE,
@@ -280,15 +234,7 @@ describe("deriveHostHealth — every dead reason gets its own answer", () => {
     expect(health.tone).toBe("warn");
   });
 
-  /**
-   * Totality, asserted as behaviour to back up the type-level guarantee.
-   *
-   * `DEAD_HEALTH` is keyed on `HostLeaseDeadState["reason"]`, so a fifth reason
-   * added to the contract fails to COMPILE here rather than routing silently to
-   * a generic arm — the same construction as `tile-host-load-copy.ts`. This
-   * test adds the runtime half: no two reasons may collapse onto one answer,
-   * which a compiler cannot see.
-   */
+  /** This test adds the runtime half: no two reasons may collapse onto one answer, which a compiler cannot see. */
   it("gives the four dead reasons four distinct states", () => {
     const deadStates = (
       [

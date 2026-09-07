@@ -3,11 +3,7 @@ import {
   type NotificationEvent,
 } from "./notification-entry";
 
-/**
- * Formats a notification event into a human-readable string.
- * Pass `epicTitle: undefined` for the generic copy; a non-empty string
- * produces title-aware copy.
- */
+/** Formats a notification event into a human-readable string. */
 export function formatNotification(
   event: NotificationEvent,
   epicTitle: string | undefined,

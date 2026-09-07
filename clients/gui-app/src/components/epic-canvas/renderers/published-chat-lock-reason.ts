@@ -1,51 +1,20 @@
 /**
  * The locked-composer reason sentences for the two read-only chat copies.
- *
- * Their own module so `published-chat-tile.tsx` exports only its component: a
- * file that exports both components and non-components breaks fast refresh for
- * everything importing it. Pure string builders.
+ * Their own module so `published-chat-tile.tsx` exports only its component: a file that exports both components and non-components breaks fast refresh for everything importing it.
  */
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
- * The locked composer's reason, in one sentence a reader can act on.
- *
- * It names three things because a reader needs all three to know what to do:
- * WHICH host owns the chat (so they know which machine to wake), that the host
- * is unreachable (so they do not read the lock as a permission problem), and
- * that this is the last published copy (so they do not assume they are seeing
- * a turn that finished after the host went away).
- *
- * The copy's AGE follows, when the row carries it: "Published <date>." is
- * passive and unconditional - it never alarms, and it is the one fact about
- * freshness this tile can state without cross-checking anything. It is
- * deliberately NOT paired with a "behind"/"current" verdict: proving staleness
- * would mean comparing a publication watermark against a record head that
- * arrives by a different route, and this tile does not hold both in one unit.
- * A date the reader can weigh for themselves is what the evidence supports.
- *
- * A fidelity gap is appended rather than shown as a separate banner: it is the
- * same sentence's subject - what you are looking at - and a second notice
- * stacked above the composer would push the transcript around for something
- * that is not an error.
+ * It names three things because a reader needs all three to know what to do: WHICH host owns the chat (so they know which machine to wake), that the host is unreachable (so they do not read the lock as a permission problem), and that this is the last published copy (so they do not assume they are seeing a turn that finished after the host went away).
+ * The copy's AGE follows, when the row carries it: "Published <date>." is passive and unconditional - it never alarms, and it is the one fact about freshness this tile can state without cross-checking anything.
  */
 export function publishedChatLockReason(input: {
-  /** Whether something answers to the owning host id at all. */
   readonly ownerIsReachable: boolean;
-  /**
-   * Whether the owning host IS the host serving this read - i.e. this
-   * device. See the same-host sentence below for why it cannot share the
-   * cross-host one.
-   */
+  /** See the same-host sentence below for why it cannot share the cross-host one. */
   readonly ownerIsThisHost: boolean;
   /**
-   * Whether the chat belongs to the signed-in viewer. `false` is a
-   * collaborator's shared chat, and it outranks both reachability arms: the
-   * owner's machine can never appear in this account's host directory, so
-   * "which is offline" asserts liveness this device cannot observe,
-   * `ownerLabel` has fallen back to a raw host id, and "sending resumes"
-   * promises a composer this viewer does not get. `true` when the owner is
-   * unknown - only a positive mismatch may flip the sentence.
+   * `false` is a collaborator's shared chat, and it outranks both reachability arms: the owner's machine can never appear in this account's host directory, so "which is offline" asserts liveness this device cannot observe, `ownerLabel` has fallen back to a raw host id, and "sending resumes" promises a composer this viewer does not get.
+   * `true` when the owner is unknown - only a positive mismatch may flip the sentence.
    */
   readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
@@ -69,16 +38,7 @@ export function publishedChatLockReason(input: {
 }
 
 /**
- * The doc-replica branch's composer lock reason.
- *
- * Branches on live reachability the same way `publishedChatLockReason` does,
- * for the same reason: the cloud read staying `unpublished` is NOT proof the
- * owner is still away. `unpublished` also covers a legacy chat that will
- * never get a row, and a server declining to serve this viewer the row - in
- * both cases the owner can come back online while this tile keeps rendering
- * the replica branch, because nothing here re-checks the cloud read once it
- * has settled. A fixed "which is offline" sentence would then render false
- * mid-session, not just after some future edit.
+ * `unpublished` also covers a legacy chat that will never get a row, and a server declining to serve this viewer the row - in both cases the owner can come back online while this tile keeps rendering the replica branch, because nothing here re-checks the cloud read once it has settled.
  */
 export function replicaChatLockReason(input: {
   readonly ownerIsReachable: boolean;
@@ -97,29 +57,8 @@ export function replicaChatLockReason(input: {
 }
 
 /**
- * Which copy the published branch is showing, and where its live counterpart
- * is - the sentence the tails above are appended to.
- *
- * Reachability comes first, because that half stops being true mid-session:
- * saying "which is offline" under a banner announcing that same host is back
- * reads as a bug in whichever line the user believes second, and the useful
- * instruction changes with it (there is nothing to wait for once the host is
- * back, only a live tab to open). A host that ANSWERS and still does not hold
- * this chat is its own state, neither "offline" nor openable - telling that
- * reader to wait would be false, and pointing them at a live tab would send
- * them at a button that can do nothing.
- *
- * The reachable arm splits again on WHOSE host the owner is. "lives on <label> ...
- * not available live from this device" describes one machine holding the chat
- * and a second one reading it, so when the owner IS the host serving this
- * read every clause of it turns false at once: it prints the reader's own
- * machine as elsewhere and tells them the thing in front of them is somewhere
- * they are not. What is true there is narrower and says nothing about
- * devices - this host no longer has the live chat.
- *
- * The unreachable arm stays one sentence for both, because nothing answered:
- * there is no "the host said it isn't here" to report, only a host to wait
- * for, and that is as true of this machine's own host as of anyone else's.
+ * Reachability comes first, because that half stops being true mid-session: saying "which is offline" under a banner announcing that same host is back reads as a bug in whichever line the user believes second, and the useful instruction changes with it (there is nothing to wait for once the host is back, only a live tab to open).
+ * The unreachable arm stays one sentence for both, because nothing answered: there is no "the host said it isn't here" to report, only a host to wait for, and that is as true of this machine's own host as of anyone else's.
  */
 function publishedCopySentence(input: {
   readonly ownerIsReachable: boolean;
@@ -127,11 +66,7 @@ function publishedCopySentence(input: {
   readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
 }): string {
-  // A collaborator's chat, checked before either reachability arm: every
-  // clause below it is written for the viewer's own fleet (see the
-  // `ownedByViewer` doc above) and turns false for a machine this account
-  // cannot observe. Aligned with the dead-tile banner's foreign-owner
-  // sentence, which sits directly above this footer.
+  // A collaborator's chat, checked before either reachability arm: every clause below it is written for the viewer's own fleet (see the `ownedByViewer` doc above) and turns false for a machine this account cannot observe.
   if (!input.ownedByViewer) {
     return `This agent belongs to another collaborator — showing the last published copy. It isn't available live from here.`;
   }
@@ -166,11 +101,7 @@ function replicaCopySentence(input: {
 
 /**
  * "1 item needs..." / "2 items need...".
- *
- * Both halves of the agreement, in one place: the noun was already pluralized
- * per count and the verb was not, so a single unreadable block read as
- * "1 item need a newer version of Traycer". Shared by the published and
- * doc-replica builders, which say the same sentence.
+ * Both halves of the agreement, in one place: the noun was already pluralized per count and the verb was not, so a single unreadable block read as "1 item need a newer version of Traycer".
  */
 function unreadableItemsSentence(count: number): string {
   return count === 1

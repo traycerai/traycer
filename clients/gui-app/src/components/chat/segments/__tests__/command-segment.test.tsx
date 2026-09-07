@@ -34,10 +34,8 @@ describe("<CommandSegment /> elapsed placement", () => {
     vi.useRealTimers();
   });
 
-  // The counter used to live in the streaming footer, pinned to the right of a
-  // second line under the header. A command reports no progress, so that line
-  // held nothing but the number - one activity rendered as two rows, with the
-  // duration detached from the command it belonged to.
+  // The counter used to live in the streaming footer, pinned to the right of a second line under the header.
+  // A command reports no progress, so that line held nothing but the number - one activity rendered as two rows, with the duration detached from the command it belonged to.
   it("keeps the running counter on the header row, not a line of its own", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -66,8 +64,7 @@ describe("<CommandSegment /> elapsed placement", () => {
   });
 
   // Ephemeral chrome the find projection never indexes - it indexes the command.
-  // Inside the anchor without this, a query on the digits paints a highlight in
-  // a unit that counted no match.
+  // Inside the anchor without this, a query on the digits paints a highlight in a unit that counted no match.
   it("excludes the counter from find highlighting", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -79,10 +76,8 @@ describe("<CommandSegment /> elapsed placement", () => {
     ).toBeNull();
   });
 
-  // Unchanged, not newly dropped: the counter only ever existed while the
-  // command ran. A density call for a list of finished rows - NOT a deferral to
-  // the group header, whose summary counts commands and files and carries a
-  // duration for thinking alone.
+  // Unchanged, not newly dropped: the counter only ever existed while the command ran.
+  // A density call for a list of finished rows - NOT a deferral to the group header, whose summary counts commands and files and carries a duration for thinking alone.
   it("shows no counter once the command has exited", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);

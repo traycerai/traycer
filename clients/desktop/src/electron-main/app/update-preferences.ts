@@ -65,12 +65,7 @@ function getStore() {
   return store;
 }
 
-/**
- * Loads the machine-local update preference before launch-time host and
- * desktop probes run. The synchronous reader below deliberately remains
- * default-off until this resolves so an unreadable or legacy store can never
- * opt a user into prereleases.
- */
+/** The synchronous reader below deliberately remains default-off until this resolves so an unreadable or legacy store can never opt a user into prereleases. */
 export function hydrateUpdatePreferences(): Promise<UpdatePreferences> {
   if (hydration !== null) return hydration;
   hydration = getStore()
@@ -86,11 +81,7 @@ export function prereleaseUpdatesEnabled(): boolean {
   return preferences.allowPrerelease;
 }
 
-/**
- * Captures the update channel and its process-local epoch. The epoch advances
- * only after a durable, actual channel transition, so A → B → A cannot make
- * work captured under the first A look current again.
- */
+/** The epoch advances only after a durable, actual channel transition, so A → B → A cannot make work captured under the first A look current again. */
 export function getUpdateChannelSnapshot(): UpdateChannelSnapshot {
   return {
     allowPrerelease: preferences.allowPrerelease,

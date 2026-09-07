@@ -10,17 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 
-// Native-packaging ticket - `resolveTraycerCliInvocation` in packaged
-// mode must use the CLI discovery model (Tech Plan Decision 6):
-//   1. CLI manifest (~/.traycer/cli/manifest.json)
-//   2. PATH fallback (`traycer` / `traycer.exe`)
-//   3. Bundled CLI in extraResources, arch-scoped first, flat fallback
-// It must NOT hardcode `<resourcesPath>/cli/traycer` - that broke
-// Windows (`.exe`) packaging and ignored package-manager / PATH installs.
-//
-// The tests below stub the user home + electron resourcesPath onto a
-// throwaway directory so we can stage manifests / bundled binaries and
-// observe which one `resolveTraycerCliInvocation` picks.
+// Native-packaging ticket - `resolveTraycerCliInvocation` in packaged mode must use the CLI discovery model (Tech Plan Decision 6): 1. CLI manifest (~/.traycer/cli/manifest.json) 2..
 
 let work: string;
 let homeDir: string;
@@ -89,10 +79,6 @@ vi.mock("electron", () => ({
   },
 }));
 
-// CLI discovery is environment-scoped (`config.environment`). These cases
-// cover the shipped resolution order on the production slot, where the CLI
-// home has no suffix (`~/.traycer/cli/...`), matching the manifest/bundled
-// paths the helpers below stage.
 vi.mock("../../../config", async (importActual) => {
   const actual = await importActual<typeof import("../../../config")>();
   return {
@@ -214,8 +200,3 @@ describe("resolveTraycerCliInvocation (shipped / non-dev) - CLI discovery model"
   });
 });
 
-// The dev-slot path (resolveBundledCliPath → the dev CLI wrapper at the
-// cli/dev-wrapper-paths.json layout) is covered by
-// `resolve-cli-invocation-dev.test.ts` (which pins `isDevBuild` true) and
-// end-to-end via `make dev-desktop`; the mock here is shipped
-// (`isDevBuild === false`).

@@ -8,12 +8,7 @@ export interface SnapshotBundleSectionEntry extends SnapshotUnifiedPatchEntry {
 }
 
 /**
- * Per-file section headers for a bundle tile, taken from the accumulated-change
- * ROWS rather than from the content-bearing changes.
- *
- * Only `operation` and `reason` are read, and both are metadata every line
- * carries - so this works unchanged on the windowed line, where the contents
- * these used to travel with do not arrive.
+ * Per-file section headers for a bundle tile, taken from the accumulated-change ROWS rather than from the content-bearing changes.
  */
 export function snapshotBundleSectionEntries(
   resolved: ReadonlyArray<ResolvedSnapshotDiff>,

@@ -2,21 +2,7 @@ import type { JsonSchemaFingerprint } from "@traycer/protocol/framework/json-sch
 import type { HostNotificationKnownPayloadKind } from "@traycer/protocol/host/notifications/payloads";
 
 /**
- * Committed structural baseline for the Lane-B payload evolution rule in
- * `payloads.ts` ("additive-only: never rename or retype an existing field;
- * a new shape is a NEW payload kind"). `payload-additivity.test.ts` diffs
- * the live schemas against this file with the framework's fingerprint
- * engine, turning the doc-comment convention into a machine-enforced check.
- *
- * When the test fails:
- *  - a `removed` finding means a field/enum-value was dropped or renamed —
- *    that is forbidden; fix the schema, never this file;
- *  - a `schema-changed` finding on a field you extended additively (e.g. a
- *    new optional key inside a nested object) is the one legitimate reason
- *    to refresh that entry — paste the current fingerprint printed in the
- *    failure output, and let review see the diff;
- *  - a new payload kind must add its fingerprint here (the coverage test
- *    prints it).
+ * Committed structural baseline for the Lane-B payload evolution rule in `payloads.ts` ("additive-only: never rename or retype an existing field; a new shape is a NEW payload kind").
  */
 export const PAYLOAD_FINGERPRINT_BASELINE = {
   chat: {

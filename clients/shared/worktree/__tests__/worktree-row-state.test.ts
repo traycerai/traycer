@@ -18,9 +18,8 @@ import {
 } from "../worktree-row-state";
 
 /**
- * A row that is ready by every rung: no reason, setup finished, git facts
- * resolved. Every case below states only what it changes, so a case that stops
- * exercising the rung it names is visible as a case that changed nothing.
+ * A row that is ready by every rung: no reason, setup finished, git facts resolved.
+ * Every case below states only what it changes, so a case that stops exercising the rung it names is visible as a case that changed nothing.
  */
 function row(overrides: Partial<WorktreeRowStateInput>): WorktreeRowStateInput {
   return {
@@ -33,13 +32,7 @@ function row(overrides: Partial<WorktreeRowStateInput>): WorktreeRowStateInput {
   };
 }
 
-/**
- * The full input domain, enumerated rather than sampled. `worktreeRowState`
- * reads exactly these five fields (that is what `WorktreeRowStateInput` says),
- * and `mode`/`isGitRepo`/`isGitResolvePending` are booleans-or-pairs, so the
- * product is small enough to walk whole - which is the only way to be sure the
- * ladder's rungs are ordered as documented rather than merely reachable.
- */
+/** The full input domain, enumerated rather than sampled. */
 const DISABLED_REASONS: ReadonlyArray<WorktreeBindingSelectorDisabledReason | null> =
   [
     null,
@@ -84,11 +77,8 @@ function everyInput(): ReadonlyArray<WorktreeRowStateInput> {
 }
 
 /**
- * The lists above are hand-written, and TypeScript only catches a value that
- * was REMOVED from a protocol enum or misspelled - it says nothing about one
- * that was ADDED. Without this, a new `setupState` or disabled reason would
- * quietly shrink "the entire input domain" to a subset, and every exhaustive
- * claim below would keep passing while covering less. Pin them to the schemas.
+ * The lists above are hand-written, and TypeScript only catches a value that was removed from a protocol enum or misspelled - it says nothing about one that was added.
+ * Without this, a new `setupState` or disabled reason would quietly shrink "the entire input domain" to a subset, and every exhaustive claim below would keep passing while covering less.
  */
 describe("the enumerated domain", () => {
   it("covers every value the protocol enums declare", () => {
@@ -193,9 +183,7 @@ describe("worktreeRowState", () => {
   });
 
   it("reports a blocked row whose git facts are unresolved as checking", () => {
-    // The regression this rung exists for: the host derives
-    // `missing_worktree_path` from an `isGitRepo` it has not verified, so
-    // calling the row missing asserts something the next sweep may retract.
+    // The regression this rung exists for: the host derives `missing_worktree_path` from an `isGitRepo` it has not verified, so calling the row missing asserts something the next sweep may retract.
     expect(
       worktreeRowState(
         row({
@@ -234,9 +222,7 @@ describe("worktreeRowState", () => {
   ] as const)(
     "maps a legacy host's %s reason to %s",
     (disabledReason, expected) => {
-      // An old host reports the lifecycle as a reason and leaves `setupState`
-      // at its default; the row must still read as that setup state, and must
-      // not be blocked (the worktree demonstrably exists).
+      // An old host reports the lifecycle as a reason and leaves `setupState` at its default; the row must still read as that setup state, and must not be blocked (the worktree demonstrably exists).
       expect(
         worktreeRowState(
           row({ disabledReason, setupState: "not_required", isGitRepo: true }),
@@ -246,10 +232,7 @@ describe("worktreeRowState", () => {
   );
 
   it("reports a failed setup that only setupState knows about", () => {
-    // The exact CLI defect this consolidation locks down: the current host
-    // leaves a failed-setup row selectable with `disabledReason: null` and
-    // reports the failure solely in `setupState`. Keying on the reason alone
-    // printed `ready` over a worktree whose setup script had failed.
+    // The exact CLI defect this consolidation locks down: the current host leaves a failed-setup row selectable with `disabledReason: null` and reports the failure solely in `setupState`.
     expect(
       worktreeRowState(row({ disabledReason: null, setupState: "failed" })),
     ).toBe("setup-failed");

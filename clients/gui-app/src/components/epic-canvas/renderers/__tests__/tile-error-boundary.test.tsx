@@ -37,9 +37,7 @@ vi.mock("@/lib/logger", async (importOriginal) => ({
 
 afterEach(() => {
   cleanup();
-  // restoreAllMocks() puts back console.error (and any other spyOn target)
-  // even when an assertion threw before a per-test restore could run; the
-  // module mocks still need their call history cleared explicitly.
+  // restoreAllMocks() puts back console.error (and any other spyOn target) even when an assertion threw before a per-test restore could run; the module mocks still need their call history cleared explicitly.
   vi.restoreAllMocks();
   captureReportIssueError.mockClear();
   errorSummary.mockClear();

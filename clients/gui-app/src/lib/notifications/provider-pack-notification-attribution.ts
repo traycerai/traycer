@@ -1,21 +1,4 @@
-/**
- * D7 render-side half of host-attributed provider-pack notifications.
- *
- * Host mints `host.operation.finished` rows with open payload arms:
- * `provider_pack_update_available`, `provider_pack_security_floor`,
- * `provider_pack_pin_lifecycle` — each carrying `hostId` + `hostLabel`.
- * The origin store always replicates; this module is what keeps a laptop
- * feed from treating another machine's pack store as local.
- *
- * "This machine" for comparison is the **local host directory entry**
- * (`useReactiveLocalHostEntry`), not the ambient active host — notifications
- * are machine-scoped (G8), and the active host can be a remote peer.
- *
- * Locality context distinguishes three shells (finding 3):
- * - `resolved` — desktop with a known local hostId
- * - `pending` — desktop shell has a local-host concept, entry not yet known
- * - `no-local-host` — browser/mobile: never has a local pack store
- */
+/** D7 render-side half of host-attributed provider-pack notifications. */
 
 export type ProviderPackNotificationPayloadKind =
   | "provider_pack_update_available"
@@ -28,13 +11,7 @@ export type ProviderPackNotificationAttribution = {
   readonly hostLabel: string;
 };
 
-/**
- * How this client relates to a local pack store for D7 classification.
- *
- * - `resolved` — desktop (or any shell) with a known local host id
- * - `pending` — shell has a local-host concept, but the entry is not ready yet
- * - `no-local-host` — browser/mobile: no local pack store ever
- */
+/** How this client relates to a local pack store for D7 classification. */
 export type ProviderPackViewingLocalityContext =
   | { readonly kind: "resolved"; readonly hostId: string }
   | { readonly kind: "pending" }
@@ -42,8 +19,7 @@ export type ProviderPackViewingLocalityContext =
 
 /**
  * Build locality context from the shell capability + live local entry.
- * `hasLocalHost` comes from `IRunnerHost.hasLocalHost`; `localHostId` from
- * `useReactiveLocalHostEntry()?.hostId`.
+ * `hasLocalHost` comes from `IRunnerHost.hasLocalHost`; `localHostId` from `useReactiveLocalHostEntry()?.hostId`.
  */
 export function providerPackViewingLocalityFromShell(options: {
   readonly hasLocalHost: boolean;
@@ -74,16 +50,7 @@ export function parseProviderPackNotificationAttribution(
   return { kind, hostId, hostLabel };
 }
 
-/**
- * Classify locality for an attributed pack notification.
- *
- * - Never present as **local** unless we positively know the viewing host
- *   matches the payload hostId.
- * - Shells with **no local host** (browser/mobile) always classify attributed
- *   pack events as **remote** — there is no local pack store to act on.
- * - Desktop **pending** resolve is **unknown**: neither local nor remote
- *   presentation (brief window only).
- */
+/** Classify locality for an attributed pack notification. */
 export function classifyProviderPackNotificationLocality(options: {
   readonly attribution: ProviderPackNotificationAttribution | null;
   readonly viewing: ProviderPackViewingLocalityContext;
@@ -96,9 +63,8 @@ export function classifyProviderPackNotificationLocality(options: {
 }
 
 /**
- * True when the entry describes a pack store on a machine other than the one
- * this client is running on. Browser/mobile (`no-local-host`) always remote
- * for attributed rows. Pending desktop resolve is not remote.
+ * True when the entry describes a pack store on a machine other than the one this client is running on.
+ * Browser/mobile (`no-local-host`) always remote for attributed rows.
  */
 export function isProviderPackNotificationRemote(options: {
   readonly attribution: ProviderPackNotificationAttribution | null;
@@ -109,11 +75,7 @@ export function isProviderPackNotificationRemote(options: {
 
 /**
  * Local: no machine caption (strip host-composed "on &lt;label&gt;" if present).
- * Remote / unknown: ensure a machine caption early in the body so one-line
- * truncation still shows which machine (finding 6).
- *
- * Never drops the row — security-floor and pin-lifecycle stay visible with
- * attribution (de-emphasis is a separate visual decision).
+ * Remote / unknown: ensure a machine caption early in the body so one-line truncation still shows which machine (finding 6).
  */
 export function presentProviderPackNotificationBody(options: {
   readonly body: string;
@@ -130,8 +92,8 @@ export function presentProviderPackNotificationBody(options: {
 }
 
 /**
- * Only positively-local rows may look locally actionable. Remote and unknown
- * (cannot establish local) forbid inventing a local deep-link action.
+ * Only positively-local rows may look locally actionable.
+ * Remote and unknown (cannot establish local) forbid inventing a local deep-link action.
  */
 export function providerPackNotificationAllowsLocalAction(
   locality: ProviderPackNotificationLocality,
@@ -172,8 +134,8 @@ export function compareProviderPackLocalFirst(
 }
 
 /**
- * Visible prefix used by tests for truncation safety. Matches the rough
- * one-line body budget in the notification popover.
+ * Visible prefix used by tests for truncation safety.
+ * Matches the rough one-line body budget in the notification popover.
  */
 export const PROVIDER_PACK_BODY_VISIBLE_PREFIX_CHARS = 72;
 
@@ -204,9 +166,8 @@ function stripOnHostLabel(body: string, hostLabel: string): string {
 }
 
 /**
- * Place the machine name at the **start** of the body so one-line CSS
- * truncation keeps it visible. Prefer rewriting existing mid/end "on X"
- * captions into the leading form.
+ * Place the machine name at the **start** of the body so one-line CSS truncation keeps it visible.
+ * Prefer rewriting existing mid/end "on X" captions into the leading form.
  */
 function ensureOnHostLabelEarly(body: string, hostLabel: string): string {
   const leading = new RegExp(`^On\\s+${escapeRegExp(hostLabel)}:\\s*`, "u");

@@ -1,21 +1,5 @@
 /**
- * Generic, content-agnostic split-container renderer for the N-ary tile
- * tree (see `stores/epics/canvas/tile-tree.ts`).
- *
- * The engine knows NOTHING about tile kinds: panes render through the
- * injected `renderPane`, so the layout layer can be tested in isolation and
- * reused for any pane content. Groups render as plain nested flex
- * containers - each child wrapper gets `flexGrow: fraction` - and resizing
- * is handled by `SplitResizeHandle` via direct DOM mutation (zero React
- * renders during a drag, one store commit on release).
- *
- * Identity rules that prevent remounts:
- * - every child is keyed by its node id (stable across reorder/resize),
- * - groups never store sizes (a resize commit changes only
- *   `sizesByGroupId`, so `root` and every node in it keep identity),
- * - `SplitNodeView` is memoized, so a structural change re-renders only the
- *   path from the root to the touched node (untouched siblings bail out on
- *   identity-equal props).
+ * Identity rules that prevent remounts: - every child is keyed by its node id (stable across reorder/resize), - groups never store sizes (a resize commit changes only `sizesByGroupId`, so `root` and every node in it keep identity), - `SplitNodeView` is memoized, so a structural change re-renders only the path from the root to the touched node (untouched siblings bail out on identity-equal props).
  */
 import { Fragment, memo, type ComponentType } from "react";
 import type {

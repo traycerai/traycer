@@ -5,14 +5,7 @@ import { jsonContentToMarkdown } from "../json-content-serializer";
 
 /**
  * Regression tests for inline mark serialization at text-node boundaries.
- *
- * A continuous mark that contains a nested mark splits into several
- * ProseMirror text nodes (`**bold `code` bold**` is three nodes). The
- * serializer used to wrap each node independently, emitting
- * `**bold **` + `` **`code`** `` + `** bold**` - the doubled `****` runs
- * re-parse as literal asterisks and corrupt every artifact whose content
- * nests marks. Delimiters must open and close only where the mark set
- * actually changes.
+ * Delimiters must open and close only where the mark set actually changes.
  */
 
 function text(
@@ -69,9 +62,6 @@ describe("inline mark serialization across text-node boundaries", () => {
   });
 
   it("handles deep nesting where mark order shifts with schema rank", () => {
-    // ProseMirror sorts marks by schema rank, so the italic span's nodes
-    // carry [italic], [bold, italic], [bold, code, italic] - the italic
-    // mark changes position but the span is continuous.
     const doc = paragraphDoc([
       text("a ", [{ type: "italic" }]),
       text("b ", [{ type: "bold" }, { type: "italic" }]),
@@ -84,9 +74,7 @@ describe("inline mark serialization across text-node boundaries", () => {
   });
 
   it("keeps an inner mark open when an outer mark ends before it", () => {
-    // `_**b** i_`: bold ends after "b" but italic continues. Continuation
-    // ordering opens italic outermost, so bold closes without forcing an
-    // italic close/reopen (which would double the delimiters).
+    // `_**b** i_`: bold ends after "b" but italic continues.
     const doc = paragraphDoc([
       text("b", [{ type: "bold" }, { type: "italic" }]),
       text(" i", [{ type: "italic" }]),

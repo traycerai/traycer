@@ -1,7 +1,4 @@
-/**
- * GUI artifact document authority: image node markdown round-trip and
- * schema acceptance of collaboration-only attachmentHash.
- */
+/** GUI artifact document authority: image node markdown round-trip and schema acceptance of collaboration-only attachmentHash. */
 import { describe, expect, it } from "vitest";
 import { prosemirrorJSONToYXmlFragment } from "@tiptap/y-tiptap";
 import * as Y from "yjs";

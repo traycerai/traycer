@@ -20,9 +20,8 @@ interface ResolveAnnotationRouteInput {
 }
 
 /**
- * Lists every reachable composer and chooses a default without binding the
- * annotation to the browser tile's layout. The most recent agent associated
- * with this browser wins, followed by the user's last-focused composer.
+ * Lists every reachable composer and chooses a default without binding the annotation to the browser tile's layout.
+ * The most recent agent associated with this browser wins, followed by the user's last-focused composer.
  */
 export function resolveAnnotationRoute(
   input: ResolveAnnotationRouteInput,

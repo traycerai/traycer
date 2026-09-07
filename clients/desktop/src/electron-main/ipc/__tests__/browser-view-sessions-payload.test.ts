@@ -2,16 +2,6 @@ import { describe, expect, it } from "vitest";
 import { BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS } from "@traycer/protocol/host/browser/contracts";
 import { browserViewIpcPayload } from "../browser-view-ipc-payload";
 
-/**
- * WHICH client frames a renderer may put on the jar plane's stream (H10).
- *
- * The parse is the protocol's own client-frame schema, so it is not the gate;
- * the narrowing behind it is. `forgetLogins` and `clearSite` shred every
- * connected host's slice of the user's logins and are produced in main behind
- * its own confirmation, and the rest of the union is main's half of the
- * handshake - a renderer that could mint `primaryProfileCaptured` or
- * `storeKeyUnwrapped` would be speaking for the jar it no longer holds.
- */
 
 const KEY = {
   epicId: "epic-1",
@@ -26,11 +16,6 @@ function parse(frame: Record<string, unknown>): boolean {
   }).success;
 }
 
-/**
- * One well-formed frame per kind a renderer may send. Keyed by kind, so the
- * gate below is compared against the PROTOCOL's own list rather than a second
- * list written here that could quietly drift from it.
- */
 const RENDERER_FRAMES: Record<string, Record<string, unknown>> = {
   openTab: {
     kind: "openTab",
@@ -112,15 +97,7 @@ describe("a renderer may only ask for the three tab requests", () => {
   });
 });
 
-/**
- * WHAT a saved-login row may name.
- *
- * The value is interpolated into the body of the native confirmation the user
- * answers, and it is the blast radius of the clear that confirmation
- * authorises. A caller that could name anything else could write the sentence
- * the user is agreeing to, so anything that does not collapse to itself is
- * refused rather than narrowed - narrowing would clear a scope nobody named.
- */
+/** A caller that could name anything else could write the sentence the user is agreeing to, so anything that does not collapse to itself is refused rather than narrowed. */
 describe("a saved-login site is a registrable domain", () => {
   function acceptsSite(domain: string): boolean {
     return browserViewIpcPayload.savedLoginSite.safeParse({ domain }).success;

@@ -20,9 +20,7 @@ const mocks = vi.hoisted(() => ({
   bound: true,
 }));
 
-// The Epic SESSION's host, not the app-wide one: the indicator asks
-// `epic.chatBackupStatus` about this Epic's publisher, so a retained tab bound
-// to one host must not poll another.
+// The Epic SESSION's host, not the app-wide one: the indicator asks `epic.chatBackupStatus` about this Epic's publisher, so a retained tab bound to one host must not poll another.
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => (mocks.bound ? "host-session" : null),
 }));
@@ -199,9 +197,7 @@ describe("useEpicChatBackupStatus", () => {
   // ── behind is not one state ──────────────────────────────────────────────
 
   it("reads a streaming chat's lag as ordinary backup work, not a gap", () => {
-    // The live defect: the publisher waits for a chat to quiesce, so a chat the
-    // user is watching an agent write is `behind` for the whole turn. That must
-    // not present as "not backed up".
+    // That must not present as "not backed up".
     mocks.data = { chats: [statusRow({ chatId: "chat-live" })] };
     publishAgentActivity([
       {
@@ -221,9 +217,7 @@ describe("useEpicChatBackupStatus", () => {
   });
 
   it("keeps quiet for a chat that only just stopped, with no live session", () => {
-    // After a window reopens there is no working set to read, so the projection
-    // timestamp is the only thing separating "quiet for a minute" from "quiet
-    // for a day". A minute of quiet is still inside the publisher's debounce.
+    // After a window reopens there is no working set to read, so the projection timestamp is the only thing separating "quiet for a minute" from "quiet for a day".
     registerEpicSession([
       chatProjection("chat-recent", Date.now() - 2 * MINUTE_MS),
     ]);
@@ -308,9 +302,8 @@ describe("useEpicChatBackupStatus", () => {
   });
 
   it("says an oversized halted chat is stopped rather than failing", () => {
-    // `too-large` is a BEHIND outcome on the host now - it publishes a bounded
-    // prefix. Reaching a halt with this cause means the host could not read the
-    // chat's owner from any prefix either, which no retry fixes.
+    // `too-large` is a BEHIND outcome on the host now - it publishes a bounded prefix.
+    // Reaching a halt with this cause means the host could not read the chat's owner from any prefix either, which no retry fixes.
     mocks.data = {
       chats: [
         statusRow({
@@ -336,21 +329,11 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-/**
- * A live epic projection holding `chats`. This is where the indicator reads
- * per-chat last-activity from, so a test that wants a chat to look recently
- * (or anciently) written registers one of these.
- */
 function registerEpicSession(chats: readonly ChatProjection[]): void {
   const handle = __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
     openStoreForTest({
       epicId: EPIC_ID,
       userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
       factories: {
         streamClientFactory: noopStreamClientFactory,
         laneSelection: null,

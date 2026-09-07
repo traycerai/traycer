@@ -14,10 +14,8 @@ const MINT_FAILURE_MESSAGES: Record<LinkLoginMintFailureKind, string> = {
 };
 
 /**
- * A mint refusal with its wire meaning intact: surfaces switch on `kind`
- * rather than parsing the human message. `claim-pending` in particular is a
- * STATE to render (a claim awaits the user's decision, possibly on another
- * surface), never an error card with a stale QR behind it.
+ * A mint refusal with its wire meaning intact: surfaces switch on `kind` rather than parsing the human message.
+ * `claim-pending` in particular is a STATE to render (a claim awaits the user's decision, possibly on another surface), never an error card with a stale QR behind it.
  */
 export class LinkLoginMintError extends Error {
   readonly kind: LinkLoginMintFailureKind;

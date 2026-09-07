@@ -1,9 +1,4 @@
-/**
- * HIGH-1: the deferred streaming path must not stringify the live set
- * per delta. `recordByteLength` is uncached `JSON.stringify`; a spy on
- * it is the pin that the previous chargedWindowBytes-on-deferred path
- * would fail.
- */
+/** HIGH-1: the deferred streaming path must not stringify the live set per delta. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
@@ -102,11 +97,8 @@ describe("deferred streaming charge", () => {
 });
 
 /**
- * The live term of `hydratedBytes` is maintained at exactly one site
- * (`rewriteWindowMessage`) rather than derived, so it is the one place the
- * merged definition can silently go stale. Upstream's incremental adjustment
- * covers only records the LEDGER holds; these pin the half that covers the
- * live-only ones.
+ * The live term of `hydratedBytes` is maintained at exactly one site (`rewriteWindowMessage`)
+ * rather than derived, so it is the one place the merged definition can silently go stale.
  */
 describe("the live term of hydratedBytes", () => {
   it("MOVES when a `now` charge rewrites a LIVE-only record", () => {
@@ -118,10 +110,7 @@ describe("the live term of hydratedBytes", () => {
     const before = window.hydratedBytes;
     const grown = messageWithText(original, "x".repeat(4096));
 
-    // A live-only record has no ledger entry, so it skips the fresh-term
-    // adjustment entirely. Without the live-term delta this figure would go on
-    // describing the pre-rewrite body - the case `updateWindowMessage`'s own
-    // contract ("live or hydrated") reaches on an image resolving.
+    // A live-only record has no ledger entry, so it skips the fresh-term adjustment entirely.
     const next = updateWindowMessage(window, "live", () => grown, null).window;
 
     expect(next.hydratedBytes).toBe(
@@ -144,9 +133,8 @@ describe("the live term of hydratedBytes", () => {
       null,
     ).window;
 
-    // `evictWindowAfterInPlaceGrowth` is gated on this figure alone and is
-    // affordable only because a streaming row cannot move it. Charging the
-    // live term here would put `settleWindowBytes` back on the per-token path.
+    // `evictWindowAfterInPlaceGrowth` is gated on this figure alone and is affordable only because a
+    // streaming row cannot move it.
     expect(next.hydratedBytes).toBe(before);
   });
 });

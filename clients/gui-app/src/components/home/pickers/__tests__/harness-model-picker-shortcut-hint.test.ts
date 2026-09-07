@@ -36,9 +36,7 @@ describe("pickerProfileShortcutHintForIndex", () => {
         String(index + 1),
       );
     }
-    // Index 9 - the 10th row - dispatches on physical "0"
-    // (`model.profile.byDigit` maps `digit === 0 ? 9 : digit - 1`), so its
-    // hint must advertise "0", not the untypable "10".
+    // 9: digit - 1`), so its hint must advertise "0", not the untypable "10".
     expect(pickerProfileShortcutHintForIndex(9)?.digit).toBe("0");
   });
 

@@ -50,9 +50,8 @@ function readPersisted(windowId: string): PersistedSnapshot | null {
 }
 
 /**
- * Builds a stack on a fresh window via real navigation. The shell override seeds
- * the first entry; each `push` appends one. Returns the branded history with the
- * cursor at the last entry.
+ * Builds a stack on a fresh window via real navigation.
+ * The shell override seeds the first entry; each `push` appends one.
  */
 function seedStack(
   windowId: string,
@@ -223,11 +222,7 @@ describe("createPersistentMemoryHistory", () => {
   });
 
   it("preserves the full remembered stack and cursor on a cold restore whose shell override matches the current entry", () => {
-    // Simulates the Bug 2 cold restore: a full quit wiped sessionStorage (so the
-    // consumed-marker is absent and the override applies), and main derives the
-    // initial route from the SAME snapshot the stack was persisted under - so the
-    // override equals the persisted current entry. The deep back/forward history
-    // must survive rather than collapse to a single entry.
+    // Simulates the Bug 2 cold restore: a full quit wiped sessionStorage (so the consumed-marker is absent and the override applies), and main derives the initial route from the SAME snapshot the stack was persisted under - so the override equals the persisted.
     const entries = [
       "/epics/epic-a/tab-a",
       "/epics/epic-b/tab-b",
@@ -255,10 +250,8 @@ describe("createPersistentMemoryHistory", () => {
   });
 
   it("appends the shell override and truncates forward history when it differs from the current entry", () => {
-    // Cursor sits back-deep in the stack; the override is a route not equal to
-    // the current entry. It is treated like a fresh navigation: forward entries
-    // are dropped, the override is appended, and back history up to the previous
-    // current entry survives.
+    // Cursor sits back-deep in the stack; the override is a route not equal to the current entry.
+    // It is treated like a fresh navigation: forward entries are dropped, the override is appended, and back history up to the previous current entry survives.
     window.localStorage.setItem(
       storageKey("window-a"),
       JSON.stringify({
@@ -286,8 +279,7 @@ describe("createPersistentMemoryHistory", () => {
 
   it("caps an oversized remembered stack around the cursor when the override matches the current entry", () => {
     // A legacy/oversized persisted stack (200 entries) whose cursor is the tail.
-    // The matching override keeps the full stack, then `capStackInPlace` bounds
-    // it to MAX_ENTRIES around the cursor without dropping the current entry.
+    // The matching override keeps the full stack, then `capStackInPlace` bounds it to MAX_ENTRIES around the cursor without dropping the current entry.
     const oversized = Array.from(
       { length: 200 },
       (_unused, i) => `/epics/epic-${i}/tab-${i}`,
@@ -317,10 +309,8 @@ describe("createPersistentMemoryHistory", () => {
     expect(controller.getIndex()).toBe(0);
   });
 
-  // The mobile app's whole persistence contract, stated as behavior rather than
-  // as trust in the two null-window early returns that implement it. A refusal
-  // is easy to relax by accident - a default window id, a "harmless" per-install
-  // key - and nothing else in this file would notice.
+  // The mobile app's whole persistence contract, stated as behavior rather than as trust in the two null-window early returns that implement it.
+  // A refusal is easy to relax by accident - a default window id, a "harmless" per-install key - and nothing else in this file would notice.
   describe("a null window is the session-scoped mobile stack", () => {
     it("writes nothing while the session navigates", () => {
       const history = createPersistentMemoryHistory(null, null);
@@ -349,10 +339,8 @@ describe("createPersistentMemoryHistory", () => {
       first.push("/settings/general");
       expect(controllerOf(first).getIndex()).toBe(2);
 
-      // A cold launch: the shell builds a second history from the same
-      // arguments. It must not inherit the first one's stack - a restored one
-      // would hand the launch's first back swipe a surface from the last
-      // sitting.
+      // A cold launch: the shell builds a second history from the same arguments.
+      // It must not inherit the first one's stack - a restored one would hand the launch's first back swipe a surface from the last sitting.
       const next = createPersistentMemoryHistory(null, null);
       const controller = controllerOf(next);
 
@@ -443,10 +431,8 @@ describe("PersistentHistoryController", () => {
     expect(changed).toBe(true);
     expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
     expect(controller.getIndex()).toBe(0);
-    // The prune is load-free, so the router's cached location keeps carrying
-    // the CURRENT entry's key. The collapsed survivor must carry the same one
-    // - a survivor wearing the earlier duplicate's key would strand everything
-    // filed against the cached identity.
+    // The prune is load-free, so the router's cached location keeps carrying the CURRENT entry's key.
+    // The collapsed survivor must carry the same one
     expect(controller.getEntryKeys()).toEqual([currentKey]);
   });
 
@@ -522,12 +508,8 @@ describe("PersistentHistoryController", () => {
     ]);
     expect(controller.getIndex()).toBe(2);
 
-    // `prune` is load-free, so it does not refresh the history's cached
-    // `location` (only a real `notify` does). The re-stamped, contiguous
-    // `__TSR_index` lives in the internal states array and surfaces through
-    // `getLocation()` on the next real navigation - exactly what a later
-    // `go(n)` relies on. Walking the stack proves each position is re-stamped
-    // to its array index.
+    // `prune` is load-free, so it does not refresh the history's cached `location` (only a real `notify` does).
+    // The re-stamped, contiguous `__TSR_index` lives in the internal states array and surfaces through `getLocation()` on the next real navigation - exactly what a later `go(n)` relies on.
     history.back();
     expect(controller.getIndex()).toBe(1);
     expect(history.location.pathname).toBe("/epics/epic-b/tab-b");
@@ -558,9 +540,8 @@ describe("PersistentHistoryController", () => {
     expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
     expect(controller.getIndex()).toBe(0);
 
-    // Push WITHOUT an intervening real navigation. TanStack derives the pushed
-    // `__TSR_index` from the stale cached location (1) → would stamp 2; the
-    // restamp-on-push corrects it to the true tail index (1).
+    // Push WITHOUT an intervening real navigation.
+    // TanStack derives the pushed `__TSR_index` from the stale cached location (1) → would stamp 2; the restamp-on-push corrects it to the true tail index (1).
     history.push("/epics/epic-b/tab-b");
     expect(controller.getIndex()).toBe(1);
     expect(history.location.pathname).toBe("/epics/epic-b/tab-b");
@@ -659,10 +640,7 @@ describe("PersistentHistoryController", () => {
   });
 
   it("collapses an adjacent duplicate created by an in-place replace (no dead back step)", () => {
-    // Mirrors the overlay bug: an overlay entry is PUSHED onto the same path it
-    // sits over, then its search flag is cleared via `replace`, leaving an entry
-    // byte-identical to the one behind it. Cursor sits on that entry, with a
-    // forward entry ahead.
+    // Mirrors the overlay bug: an overlay entry is PUSHED onto the same path it sits over, then its search flag is cleared via `replace`, leaving an entry byte-identical to the one behind it.
     const history = seedStack("window-a", [
       "/epics/epic-a/tab-a",
       "/epics/epic-b/tab-b",
@@ -700,10 +678,7 @@ describe("PersistentHistoryController", () => {
   });
 
   it("collapses an adjacent duplicate AHEAD created by an in-place replace (no dead forward step)", () => {
-    // Mirrors a cold-load redirect: the current entry is replaced with a path
-    // that already sits ONE STEP AHEAD in the stack (e.g. the guard
-    // replacing a restored overlay entry with the tab route it redirects to,
-    // when that tab route was already the next persisted entry).
+    // Mirrors a cold-load redirect: the current entry is replaced with a path that already sits ONE STEP AHEAD in the stack (e.g. the guard replacing a restored overlay entry with the tab route it redirects to, when that tab route was already the next persisted.
     const history = seedStack("window-a", [
       "/epics/epic-a/tab-a",
       "/epics/epic-b/tab-b?settingsOverlay=true",
@@ -726,9 +701,7 @@ describe("PersistentHistoryController", () => {
     expect(controller.canGoForward()).toBe(false);
     expect(history.location.pathname).toBe("/settings/general");
 
-    // Proof the dead step is gone: canGoForward is false, so a `go(1)` at the
-    // boundary is a guarded no-op in the app's `goForward` helper - but the
-    // controller-level state itself must already reflect no forward entry.
+    // Proof the dead step is gone: canGoForward is false, so a `go(1)` at the boundary is a guarded no-op in the app's `goForward` helper - but the controller-level state itself must already reflect no forward entry.
     expect(controller.getEntries().length).toBe(2);
   });
 
@@ -748,9 +721,7 @@ describe("PersistentHistoryController", () => {
 
     history.replace("/epics/epic-b/tab-b");
 
-    // The neighbour was dropped and the just-replaced entry survived: the
-    // surviving location carries the state THIS replace minted, not the old
-    // neighbour's - matching the location TanStack caches after a replace.
+    // The neighbour was dropped and the just-replaced entry survived: the surviving location carries the state THIS replace minted, not the old neighbour's - matching the location TanStack caches after a replace.
     expect(controller.getEntries()).toEqual([
       "/epics/epic-a/tab-a",
       "/epics/epic-b/tab-b",
@@ -897,10 +868,8 @@ describe("PersistentHistoryController", () => {
   });
 
   it("persists the ACTUAL current entry when the stack overflows and the cursor is back-deep", () => {
-    // Regression for the persist-cap mismatch: the in-memory stack is now
-    // bounded at push time, so the cursor can never sit outside the retained
-    // window. Walking to the oldest retained entry must persist THAT entry, not
-    // a tail-anchored slice that silently dropped the user's location.
+    // Regression for the persist-cap mismatch: the in-memory stack is now bounded at push time, so the cursor can never sit outside the retained window.
+    // Walking to the oldest retained entry must persist THAT entry, not a tail-anchored slice that silently dropped the user's location.
     const history = createPersistentMemoryHistory(
       "/epics/epic-0/tab-0",
       "window-a",
@@ -933,9 +902,7 @@ describe("PersistentHistoryController", () => {
       const history = seedStack("window-a", [focusedTab, splitPane]);
       const controller = controllerOf(history);
 
-      // Closing that pane re-derives the same fallback focus as the original
-      // tab, so its push lands on an href byte-identical to `focusedTab` -
-      // but it is not yet ADJACENT to it (the pane-only entry sits between).
+      // Closing that pane re-derives the same fallback focus as the original tab, so its push lands on an href byte-identical to `focusedTab` - but it is not yet ADJACENT to it (the pane-only entry sits between).
       history.push(focusedTab);
       expect(controller.getEntries()).toEqual([
         focusedTab,
@@ -1039,9 +1006,7 @@ describe("PersistentHistoryController", () => {
     });
 
     it("returns true for a collapse-only prune when no entry is dead but the stack already has adjacent duplicates", () => {
-      // Simulates a legacy persisted stack seeded directly (bypassing the
-      // push/replace collapse guards), already carrying an adjacent
-      // duplicate pair unrelated to any dead entry.
+      // Simulates a legacy persisted stack seeded directly (bypassing the push/replace collapse guards), already carrying an adjacent duplicate pair unrelated to any dead entry.
       window.localStorage.setItem(
         storageKey("window-a"),
         JSON.stringify({
@@ -1164,9 +1129,7 @@ describe("PersistentHistoryController", () => {
       ]);
       const controller = controllerOf(history);
 
-      // Walk back to the middle entry, then push its own href again - the
-      // forward entry gets truncated as usual, and the push must land on the
-      // (now-tail) existing entry rather than duplicating it.
+      // Walk back to the middle entry, then push its own href again - the forward entry gets truncated as usual, and the push must land on the (now-tail) existing entry rather than duplicating it.
       history.back();
       expect(controller.getIndex()).toBe(1);
 

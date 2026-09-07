@@ -1,9 +1,7 @@
 import type { ResourcesStreamClientFactory } from "@/stores/resources/resources-store";
 
 /**
- * Test / production seam for `ResourcesStreamMount`. Production leaves this
- * `null` and the mount builds a real `ResourcesStreamClient`; tests install a
- * stub factory so the mount can run in jsdom without a live host socket.
+ * Production null builds ResourcesStreamClient. Tests install a stub for jsdom.
  */
 let streamClientFactoryOverride: ResourcesStreamClientFactory | null = null;
 

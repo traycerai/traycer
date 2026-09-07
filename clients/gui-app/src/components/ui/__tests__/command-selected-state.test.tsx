@@ -13,12 +13,8 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 
-/**
- * The selected-state utilities every cmdk row in the app relies on. All four
- * of a row's channels - fill, border, shadow and icon tint - are driven by
- * this one variant, which is why getting it wrong looked like a theme rather
- * than a bug.
- */
+/** All four of a row's channels - fill, border, shadow and icon tint - are driven by this one variant, which is
+ * why getting it wrong looked like a theme rather than a bug. */
 const SELECTED_UTILITIES = [
   "data-[selected=true]:bg-primary/12",
   "data-[selected=true]:border-primary/35",
@@ -28,24 +24,16 @@ const SELECTED_UTILITIES = [
   "group-data-[selected=true]/command-item:text-foreground",
 ] as const;
 
-/**
- * The selectors Tailwind ACTUALLY emits, rather than ones the test invents.
- * The whole defect this file guards was a mismatch between the class an author
- * wrote and the selector Tailwind produced from it, so reconstructing the
- * selector here would reproduce the blind spot instead of closing it.
- */
+/** The whole defect this file guards was a mismatch between the class an author wrote and the selector Tailwind
+ * produced from it, so reconstructing the selector here would reproduce the blind spot instead of closing it. */
 async function emittedSelectors(
   candidates: ReadonlyArray<string>,
 ): Promise<ReadonlyMap<string, string>> {
   const entry = createRequire(join(process.cwd(), "package.json")).resolve(
     "tailwindcss/index.css",
   );
-  // The app's own palette tokens, declared inline rather than by compiling
-  // `src/index.css` (which pulls in `@plugin` and a nested `@import`). Only the
-  // SELECTORS matter here - a `bg-primary` that cannot resolve its color emits
-  // no rule at all, which would read as "the variant does not apply" - so
-  // stand-in values are sufficient and keep the fixture independent of a
-  // palette edit.
+  // Only the selectors matter here - a `bg-primary` that cannot resolve its color emits no rule at all, which
+  // would read as "the variant does not apply".
   const source = [
     '@import "tailwindcss";',
     "@theme { --color-primary: #7c3aed; --color-foreground: #111111; }",
@@ -53,12 +41,8 @@ async function emittedSelectors(
   const compiler = await compile(source, {
     base: process.cwd(),
     loadStylesheet: async (id: string, base: string) => {
-      // Called exactly once, for the `@import` above: 4.3.3's `index.css`
-      // INLINES its theme/base/utilities layers rather than `@import`ing the
-      // sibling `theme.css` / `preflight.css` / `utilities.css` of those names.
-      // Refuse any other id by name - a version that splits the entry again
-      // should fail here saying which import went unresolved, rather than
-      // further down as "the utility compiled to nothing".
+      // Called exactly once, for the `@import` above: 4.3.3's `index.css` inlines its theme/base/utilities layers
+      // rather than `@import`ing the sibling `theme.css` / `preflight.css` / `utilities.css` of those names.
       if (id !== "tailwindcss") {
         throw new Error(`Unexpected stylesheet import ${id} from ${base}`);
       }
@@ -70,12 +54,8 @@ async function emittedSelectors(
     },
   });
   const css = compiler.build([...candidates]);
-  // Tailwind emits ONE FLAT selector per candidate - the condition is appended
-  // to the class itself (`.data-\[selected\=true\]\:bg-primary\/12[data-selected="true"]`,
-  // `:is(.…[data-selected="true"] > *):is(svg)`), never a nested `&` rule - so
-  // the line carrying the escaped class IS the whole discriminating selector.
-  // The only nesting in the output is the `@supports (color: color-mix(…))`
-  // fallback inside a declaration block, which is what the `@` filter drops.
+  // The only nesting in the output is the `@supports (color: color-mix(…))` fallback inside a declaration block,
+  // which is what the `@` filter drops.
   const rules = css
     .split("\n")
     .flatMap((line) => {
@@ -123,11 +103,8 @@ describe("cmdk selected-state styling", () => {
   afterEach(cleanup);
 
   it("marks unselected rows with the attribute rather than omitting it", () => {
-    // The premise of the whole file. cmdk renders `"data-selected": !!selected`
-    // and React stringifies `false`, so the attribute is PRESENT on every row -
-    // which is what makes a presence-matching selector useless here. If cmdk
-    // ever starts omitting it, the bare form would become correct and this
-    // guard should be revisited rather than worked around.
+    // If cmdk ever starts omitting it, the bare form would become correct and this guard should be revisited
+    // rather than worked around.
     const rows = renderRows();
     expect(rows).toHaveLength(2);
     expect(rows[0].getAttribute("data-selected")).toBe("true");

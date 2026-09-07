@@ -1,17 +1,6 @@
 /**
- * Click-through for one AGENT: everything this epic captured that the agent took
- * part in, interleaved chronologically - messages it sent AND received, and
- * notices about its threads.
- *
- * A PURE FILTER over the merged array (`sender OR receiver`), not a new
- * aggregation: the pair panel folds by pair because the canvas draws pairs, but
- * an agent's activity is just its slice of the same raw record, in the same
- * order.
- *
- * "ACTIVITY", NOT "everything it did". The log holds communications only - not
- * tool calls, not file edits, not reasoning, not shell commands.
- * The copy says what is actually here, because a panel that claims completeness
- * it does not have is worse than one that shows less.
+ * Click-through for one AGENT: everything this epic captured that the agent took part in, interleaved chronologically - messages it sent AND received, and notices about its threads.
+ * A PURE FILTER over the merged array (`sender OR receiver`), not a new aggregation: the pair panel folds by pair because the canvas draws pairs, but an agent's activity is just its slice of the same raw record, in the same order. "ACTIVITY", NOT "everything it did".
  */
 import { ExternalLinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";

@@ -16,10 +16,7 @@ function TestRouterRoot(): ReactNode {
 }
 
 /**
- * Wraps `children` in a minimal in-memory TanStack Router so components
- * that read router state (for example modal action hooks via the model
- * picker's provider-settings gear) can render in unit tests without the full app
- * route tree. The root route simply renders the passed subtree.
+ * Minimal in-memory TanStack Router; the root route renders children.
  */
 export function TestRouterProvider({
   children,

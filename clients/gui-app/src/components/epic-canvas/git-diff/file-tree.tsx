@@ -116,10 +116,7 @@ export function FileTree(props: FileTreeProps): ReactNode {
 }
 
 /**
- * Pierre's renderer is always virtualized and therefore needs a definite host
- * height. Module-group bodies deliberately use the outer panel as their scroll
- * owner, so size that mode to its currently visible rows instead of inheriting
- * `height: 100%` from an auto-height section body (which resolves to zero).
+ * Module-group bodies deliberately use the outer panel as their scroll owner, so size that mode to its currently visible rows instead of inheriting `height: 100%` from an auto-height section body (which resolves to zero).
  */
 function gitTreeStyle(
   itemHeight: number,
@@ -177,10 +174,7 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
   );
   const visibleRowCount = useFileTreeSelector(model, selectVisibleRowCount);
 
-  // Mirror the canvas's focused diff tile into Pierre's selection, expanding
-  // ancestor folders and scrolling the row into view. Runs on focus changes
-  // and once on mount; `scrollToPath` with "nearest" is a no-op for rows
-  // already visible, so self-clicks never shift the tree.
+  // Runs on focus changes and once on mount; `scrollToPath` with "nearest" is a no-op for rows already visible, so self-clicks never shift the tree.
   const activeFilePath = props.activeFilePath;
   useEffect(() => {
     for (const selectedPath of model.getSelectedPaths()) {
@@ -200,9 +194,8 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     model.scrollToPath(activeFilePath, { offset: "nearest" });
   }, [activeFilePath, model]);
 
-  // Single source of truth for "tree row path -> diff tile". Reused by the
-  // click/double-click open handlers and the drag bridge so a row absent from
-  // the change list (a synthesized directory row) is non-openable everywhere.
+  // Single source of truth for "tree row path -> diff tile".
+  // Reused by the click/double-click open handlers and the drag bridge so a row absent from the change list (a synthesized directory row) is non-openable everywhere.
   const tileForTreePath = useCallback(
     (treePath: string): GitDiffTileRef | null => {
       const file = fileByPath.get(treePath);
@@ -261,9 +254,7 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     [openFileFromTreeRow],
   );
 
-  // Bridge Pierre's shadow-DOM rows into the canvas dnd-kit drag flow. The row
-  // under the activating pointer is recovered via the same `data-item-path`
-  // scrape used for open.
+  // Bridge Pierre's shadow-DOM rows into the canvas dnd-kit drag flow.
   const epicId = props.epicId;
   const viewTabId = props.viewTabId;
   const resolveDragSourceData = useCallback(
@@ -284,13 +275,8 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
   const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
-    // `data-vaul-no-drag` for the same reason as the workspace file tree: this
-    // tree's scroller is inside a shadow root, so vaul's parentElement climb
-    // from the retargeted touch target cannot find it and would claim the
-    // gesture as a drawer dismiss. `touchShieldRef` for the same reason as
-    // there too: the sheet's modal scroll lock would otherwise keep the
-    // shadow-rooted scroller from touch-scrolling (see
-    // `useShadowScrollerTouchShield`). Both inert outside the mobile sheet.
+    // `data-vaul-no-drag` for the same reason as the workspace file tree: this tree's scroller is inside a shadow root, so vaul's parentElement climb from the retargeted touch target cannot find it and would claim the gesture as a drawer dismiss.
+    // `touchShieldRef` for the same reason as there too: the sheet's modal scroll lock would otherwise keep the shadow-rooted scroller from touch-scrolling (see `useShadowScrollerTouchShield`).
     <div
       {...bridge.wrapperProps}
       ref={touchShieldRef}

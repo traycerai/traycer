@@ -22,15 +22,7 @@ const draftSurfaceProvider = lazy(() =>
   })),
 );
 
-/**
- * Module for `kind: "draft"` tabs. Each draft has its own
- * deep-linkable URL (`/draft/{draftId}`), so active highlighting
- * comes from URL matching - no `activeDraftId` cross-store read
- * needed at the strip level. The display `name` is derived at build
- * time from the draft content's first line (cheap - content is
- * hash-only, no base64); empty derived text (e.g. image-only draft)
- * → fallback label "Start Page".
- */
+/** Module for `kind: "draft"` tabs. */
 export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
   kind: "draft",
   build: (source) => ({

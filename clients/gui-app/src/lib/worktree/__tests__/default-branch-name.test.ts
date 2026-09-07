@@ -157,11 +157,8 @@ describe("buildDefaultBranchByPath", () => {
     });
   });
 
-  // A max-length (40-char) prefix + a max-length (40-char) repo slug can
-  // together exceed 80, so the cutoff can land in the repo-slug material, not
-  // just the random suffix. That is still safe: both the repo slug
-  // (slugify-branch-seed) and the suffix (random-friendly-name) are
-  // ASCII-sanitized to [a-z0-9-], so slice(0, 80) never ends on / or .
+  // A max-length (40-char) prefix + a max-length (40-char) repo slug can together exceed 80, so the cutoff can land in the repo-slug material, not just the random suffix.
+  // That is still safe: both the repo slug (slugify-branch-seed) and the suffix (random-friendly-name) are ASCII-sanitized to [a-z0-9-], so slice(0, 80) never ends on / or .
   it("keeps multi-workspace truncation safe under a max-length prefix", () => {
     const prefix = "p".repeat(40);
     const result = buildDefaultBranchByPath(
@@ -282,9 +279,7 @@ describe("buildDefaultBranchByPath", () => {
       "/repos/app": "app-prefix/app-swift-otter",
       // Absent inherits the global fallback.
       "/repos/api": "global/api-swift-otter",
-      // Malformed also falls through resolveEffectiveBranchPrefix to global,
-      // then the invalid-global composition path only fires when the *global*
-      // itself is invalid - here global is fine so the name uses it.
+      // Malformed also falls through resolveEffectiveBranchPrefix to global, then the invalid-global composition path only fires when the *global* itself is invalid - here global is fine so the name uses it.
       "/repos/lib": "global/lib-swift-otter",
     });
   });
@@ -345,11 +340,7 @@ describe("regenerateSingleWorkspaceBranchName", () => {
   });
 
   it("uses the freshly-passed prefix, ignoring the matching workspace's own (possibly stale) repoBranchPrefix", () => {
-    // Simulates the picker's cached summary BEFORE the invalidation triggered
-    // by a repo-prefix save has refetched - `repoBranchPrefix` here is still
-    // "absent" even though the user just saved "team/". A caller that read
-    // THIS field would regenerate with the OLD (global) prefix; this
-    // function must not.
+    // Simulates the picker's cached summary BEFORE the invalidation triggered by a repo-prefix save has refetched - `repoBranchPrefix` here is still "absent" even though the user just saved "team/".
     const staleWorkspaces = [
       summary({ repoBranchPrefix: { status: "absent" } }),
     ];
@@ -449,9 +440,7 @@ describe("buildDefaultBranchByPath random suffix", () => {
   });
 
   it("picks a fresh random suffix per call (bulk generation still invokes pickFriendlyBranchSuffix)", () => {
-    // Regression: bulk generation must keep picking inside buildDefaultBranchByPath
-    // rather than accepting a caller-supplied fixed suffix (that API is only for
-    // regenerateSingleWorkspaceBranchName / the Environment preview path).
+    // Regression: bulk generation must keep picking inside buildDefaultBranchByPath rather than accepting a caller-supplied fixed suffix (that API is only for regenerateSingleWorkspaceBranchName / the Environment preview path).
     randomMocks.pickFriendlyBranchSuffix
       .mockReturnValueOnce("alpha-one")
       .mockReturnValueOnce("beta-two");

@@ -36,14 +36,8 @@ import {
   sessionImportGroupKey,
 } from "@/components/session-import/session-import-model";
 
-/**
- * Captures the callbacks the REAL `useSessionImportScan` hook hands to
- * `SessionImportScanClient`, so a test can play server frames straight into
- * the reducer via `onGroup` / `onProviderFailed` / `onComplete` - the same
- * seam `migration-run-controller.test.tsx` uses for the migration stream.
- * Mocking one level up (the hook itself) would skip the reducer entirely,
- * which is the thing this suite is meant to cover.
- */
+/** Mocking one level up (the hook itself) would skip the reducer entirely, which is the thing this suite is
+ * meant to cover. */
 interface ScanClientHarness {
   callbacks: SessionImportScanCallbacks | null;
   updatedAfter: number | null | undefined;
@@ -82,19 +76,8 @@ vi.mock(
   }),
 );
 
-/**
- * Stands in for the app-wide stream binding. A non-null client is all
- * `useSessionImportScan` needs to proceed past its null-guard; the fake
- * `SessionImportScanClient` above never touches it. Its identity must be
- * STABLE: the real `useWsStreamClient` is a `useSyncExternalStore` read that
- * returns the same client across renders, and the scan effect keys its
- * subscription on that identity - a stub minted per render would re-subscribe
- * forever.
- *
- * Client and host live in one mutable value because the real binding carries
- * them that way, which is what lets a test replace the transport while naming
- * the same machine (a reconnect) or a different one (a host switch).
- */
+/** A non-null client is all `useSessionImportScan` needs to proceed past its null-guard; the fake
+ * `SessionImportScanClient` above never touches it. */
 interface StreamBindingHarness {
   client: object;
   hostId: string | null;
@@ -133,14 +116,8 @@ import {
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
 
-/**
- * Stands in for the two real callers (`SessionImportDialog`,
- * `OnboardingPage`): both start their own `useSessionImportScan` and hand the
- * handle down as a prop, gated on the run store being idle exactly like the
- * dialog does. Routing through this keeps every test's scan-client mock
- * (`scanClient.callbacks`) working unchanged - only the wizard's own prop
- * shape moved.
- */
+/** Routing through this keeps every test's scan-client mock (`scanClient.callbacks`) working unchanged - only
+ * the wizard's own prop shape moved. */
 function TestWizard(props: {
   readonly surface: SessionImportSurface;
   readonly onImportStarted: () => void;
@@ -276,11 +253,8 @@ function findProviderPill(harness: GuiHarnessId): HTMLElement {
   return pill;
 }
 
-/**
- * Replays what the stream runtime does when its client is replaced: publishes
- * a new client (and whichever machine it now dials) and lets the wizard
- * re-render, which is the only thing that re-runs the scan effect.
- */
+/** Replays what the stream runtime does when its client is replaced: publishes a new client (and whichever
+ * machine it now dials) and lets the wizard re-render, which is the only thing that re-runs the scan effect. */
 function replaceStreamClient(
   rerender: RenderResult["rerender"],
   hostId: string,
@@ -526,9 +500,7 @@ describe("<SessionImportWizard />", () => {
     fireEvent.click(screen.getByTestId("session-import-group-toggle"));
 
     const row = screen.getByRole("checkbox", { name: "Broken session" });
-    // A DOM-disabled button emits no pointer events in a real browser, which
-    // is exactly what used to silence this tooltip. jsdom dispatches to
-    // disabled nodes anyway, so the absent attribute is the honest proxy.
+    // jsdom dispatches to disabled nodes anyway, so the absent attribute is the honest proxy.
     expect(row.hasAttribute("disabled")).toBe(false);
     expect(row.getAttribute("aria-disabled")).toBe("true");
 
@@ -861,9 +833,8 @@ describe("<SessionImportWizard />", () => {
     replaceStreamClient(rerender, "host-a");
 
     expect(screen.getAllByTestId("session-import-group")).toHaveLength(1);
-    // The deliberate untick is the point: a reconnect that re-delivered the
-    // group and re-applied the pre-select-on-arrival rule would silently put
-    // "Session two" back.
+    // The deliberate untick is the point: a reconnect that re-delivered the group and re-applied the
+    // pre-select-on-arrival rule would silently put "Session two" back.
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
       "Import 1 session",
     );
@@ -888,9 +859,8 @@ describe("<SessionImportWizard />", () => {
 
     replaceStreamClient(rerender, "host-b");
 
-    // Host B has never heard of `claude:s1`, and its own `/repo/a` - if it has
-    // one at all - is a different directory. Carrying either across would
-    // submit one machine's sessions to another.
+    // Host B has never heard of `claude:s1`, and its own `/repo/a` - if it has one at all - is a different
+    // directory. Carrying either across would submit one machine's sessions to another.
     expect(screen.queryAllByTestId("session-import-group")).toHaveLength(0);
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
       "Import 0 sessions",
@@ -922,10 +892,8 @@ describe("<SessionImportWizard />", () => {
     fireEvent.click(findProviderPill("codex"));
     expect(screen.getAllByTestId("session-import-group")).toHaveLength(1);
 
-    // A fresh scan (a host switch) keeps disabledHarnesses and nothing else,
-    // so this one lands with codex still switched out and no codex session in
-    // sight - yet the pill has to survive with no group left to read a count
-    // off, because it is the only way back to turning codex on again.
+    // A fresh scan (a host switch) keeps disabledHarnesses and nothing else, so this one lands with codex still
+    // switched out and no codex session in sight.
     replaceStreamClient(rerender, "host-b");
     const rescanned = requireCallbacks();
     act(() => {
@@ -942,8 +910,8 @@ describe("<SessionImportWizard />", () => {
 
     const codexPillAfterRescan = findProviderPill("codex");
     expect(codexPillAfterRescan.getAttribute("aria-checked")).toBe("false");
-    // The scan settled with nothing for codex, so the pill says 0 plainly -
-    // the old "—" placeholder read as a minus control.
+    // The scan settled with nothing for codex, so the pill says 0 plainly - the old "-" placeholder read as a
+    // minus control.
     expect(codexPillAfterRescan.textContent).toContain("0");
 
     fireEvent.click(codexPillAfterRescan);
@@ -1110,9 +1078,6 @@ describe("<SessionImportWizard />", () => {
       );
     });
 
-    // Both surfaces submit through the wizard's own button now - the tour used
-    // to submit through its Continue instead, which imported the default
-    // selection without an explicit ask.
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
     ).toBe("1 of 1 selected");

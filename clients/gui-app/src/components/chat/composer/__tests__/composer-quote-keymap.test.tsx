@@ -116,9 +116,7 @@ describe("composer blockquote schema", () => {
   it("does not toggle a blockquote on Cmd-Shift-B", () => {
     const { editor } = makeFixture(emptyDoc());
     typeText(editor, "text");
-    // `keyboardShortcut()` always resolves `true` (it only reports that the
-    // simulated keydown was dispatched, not that a handler matched) - assert
-    // on the resulting doc instead of the return value.
+    // `keyboardShortcut()` always resolves `true` (it only reports that the simulated keydown was dispatched, not that a handler matched) - assert on the resulting doc instead of the return value.
     editor.commands.keyboardShortcut("Mod-Shift-b");
     expect(topLevelTypes(editor)).toEqual(["paragraph"]);
   });
@@ -208,9 +206,7 @@ describe("composer quote keymap", () => {
   });
 
   it("falls through to ordinary splitBlock when the quote's only line is already empty", () => {
-    // A single-empty-paragraph blockquote has no earlier quoted content to
-    // leave behind, so the childCount<=1 guard bails and this reaches the
-    // ordinary splitBlock fallback instead of lifting/exiting.
+    // A single-empty-paragraph blockquote has no earlier quoted content to leave behind, so the childCount<=1 guard bails and this reaches the ordinary splitBlock fallback instead of lifting/exiting.
     const { editor } = makeFixture({
       type: "doc",
       content: [
@@ -295,9 +291,7 @@ describe("composer quote keymap with nested block structures", () => {
     const { editor } = makeFixture(quoteWithListDoc());
     setCaretAtTextStart(editor, "item");
 
-    // handleQuoteBackspaceUnwrap bails immediately: the node one level above
-    // the caret's paragraph is `listItem`, not `blockquote` - list-keymap's
-    // own Backspace handling owns this instead.
+    // handleQuoteBackspaceUnwrap bails immediately: the node one level above the caret's paragraph is `listItem`, not `blockquote` - list-keymap's own Backspace handling owns this instead.
     editor.commands.keyboardShortcut("Backspace");
 
     expect(topLevelTypes(editor)).toEqual(["blockquote", "paragraph"]);
@@ -325,11 +319,7 @@ describe("composer quote keymap with nested block structures", () => {
     const { editor } = makeFixture(quoteWithCodeBlockDoc());
     setCaretAtTextStart(editor, "code");
 
-    // The first line here is a codeBlock, not a paragraph, so
-    // handleQuoteBackspaceUnwrap deliberately consumes the keystroke instead
-    // of falling through - otherwise ProseMirror's default
-    // Backspace-at-start-of-sole-child behavior would silently lift the code
-    // block out of the quote via a different mechanism.
+    // The first line here is a codeBlock, not a paragraph, so handleQuoteBackspaceUnwrap deliberately consumes the keystroke instead of falling through - otherwise ProseMirror's default Backspace-at-start-of-sole-child behavior would silently lift the code block out of the quote via a different mechanism.
     editor.commands.keyboardShortcut("Backspace");
 
     expect(topLevelTypes(editor)).toEqual(["blockquote", "paragraph"]);

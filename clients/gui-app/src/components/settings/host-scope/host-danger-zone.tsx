@@ -30,32 +30,15 @@ interface ClearLocalSnapshotsMutationContext {
   readonly userId: string | null;
 }
 
-/**
- * Destructive actions that belong to a MACHINE.
- *
- * These used to sit in General → Danger Zone, in one red box with "Clear local
- * app state" — three rows at three different scopes, one of which carried its
- * own host dropdown so that a destructive button took its target from a
- * control styled like a form field. Splitting by scope is the fix: what
- * belongs to a host lives on that host's page, where the page title
- * already names the target; "Clear local app state" is genuinely app-global
- * and stays behind in General.
- */
+/** Splitting by scope is the fix: what belongs to a host lives on that host's page, where the page title
+ * already names the target; "Clear local app state" is genuinely app-global and stays behind in General. */
 export function HostDangerZone(props: {
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
   if (scope.host === null) return null;
-  // The two rows sit on DIFFERENT capability planes, and one gate around both
-  // was the last place this branch still confused them.
-  //
-  // Clearing snapshots is host RPC and needs a live route, so it stays behind
-  // the gate — which also keeps the gate's explanation of WHY it is missing.
-  // Removing Traycer is the local CLI bridge (`hostManagement.uninstallTraycer()`)
-  // and needs no route at all; the moment someone reaches for it is precisely
-  // the moment there isn't one, on a host that is stopped, broken or wedged.
-  // Gating it too took the only way to remove a broken install out of the app
-  // that installed it, in the one state anyone wants it.
+  // Gating it too took the only way to remove a broken install out of the app that installed it, in the one
+  // state anyone wants it.
   return (
     <SettingsGroup
       title="Danger zone"
@@ -69,34 +52,21 @@ export function HostDangerZone(props: {
       >
         <ClearFileEditSnapshotsRow scope={scope} />
       </HostScopeGate>
-      {/* The remote counterpart sits on a THIRD capability plane: not host RPC
-          and not the local CLI bridge, but an account write. So it is outside
-          the gate for the same reason "Remove Traycer" is — it needs no route,
-          and a host you cannot reach is a common reason to want it gone. */}
+      {/* So it is outside the gate for the same reason "Remove Traycer" is - it needs no route, and a host you cannot
+         reach is a common reason to want it gone. */}
       <HostRemovalRow host={scope.host} />
     </SettingsGroup>
   );
 }
 
-/**
- * Whichever removal verb this host actually has.
- *
- * They are not two versions of one action. "Remove Traycer" uninstalls
- * components from THIS computer over the CLI bridge; "Remove from account" ends
- * a host's membership of the account and changes nothing on its machine.
- * Offering both would put two destructive buttons side by side whose difference
- * only becomes visible afterwards.
- *
- * Account removal is registered-only: a directory-only host has no membership to
- * end, so the row would be a destructive control with nothing behind it.
- */
+/** Offering both would put two destructive buttons side by side whose difference only becomes visible
+ * afterwards. */
 function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
   const { host } = props;
   if (host.isLocalMachine) return <RemoveTraycerRow />;
   if (!host.registered) return null;
-  // Keyed by host id so a scope change REMOUNTS the row. Passing the new id
-  // into the same instance would leave an already-open confirmation - and the
-  // mutation's own `isPending` - pointing at whichever host the page moved to.
+  // Passing the new id into the same instance would leave an already-open confirmation - and the mutation's own
+  // `isPending` - pointing at whichever host the page moved to.
   return (
     <RemoveFromAccountRow
       key={host.hostId}
@@ -106,45 +76,16 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
   );
 }
 
-/**
- * "Remove from account" — the remote danger-zone verb.
- *
- * NEVER the word "deregister" in copy, and the collision is not hypothetical:
- * this app already says "Deregister" for OS-SERVICE deregistration in the
- * Advanced disclosure one card away, which is a machine-local repair operation
- * with nothing in common with this one.
- *
- * The copy is written against what `POST /api/v3/hosts/:hostId/deregister`
- * actually does. It stamps `deregisteredAt` and clears the presence lease; it
- * does not revoke, does not touch the machine, and keeps the `hostId`.
- *
- * What happens to a host that is STILL RUNNING was got wrong once here, in the
- * optimistic direction, so it is traced rather than assumed. Its next heartbeat
- * 404s and it reads that as `not-registered`, which drops it to unprovisioned
- * and re-runs `reconcile()` — but reconcile finds the on-box device credential
- * still present and still matching this host id, so it takes
- * `adoptActiveCredential()` and RETURNS, before either enrollment source. It
- * never calls `registerHost()`, which is the only thing that would clear
- * `deregisteredAt`. The host therefore loops (adopt → beat → 404 → adopt) and
- * does not rejoin on its own.
- *
- * Signing in again on that machine does not help either, and the copy must not
- * suggest it: the interactive login path sits BELOW the same early return, so a
- * fresh `traycer login` is never consulted while a matching credential file
- * exists. Coming back requires the host to be set up again on that machine —
- * and because the row is deregistered rather than revoked, a re-enrollment
- * re-adopts the SAME id with its policy preserved.
- */
+/** Signing in again on that machine does not help either, and the copy must not suggest it: the interactive
+ * login path sits below the same early return. */
 function RemoveFromAccountRow(props: {
   readonly hostId: string;
   readonly hostName: string;
 }): ReactNode {
   const { hostId, hostName } = props;
   const [confirmOpen, setConfirmOpen] = useState(false);
-  // Closing over `hostId` is NOT by itself what stops a scope change from
-  // retargeting an open confirmation - a re-render with a new prop rebuilds
-  // these closures around the new id while `confirmOpen` survives. The remount
-  // key at this component's one call site is what makes that safe.
+  // Closing over `hostId` is not by itself what stops a scope change from retargeting an open confirmation - a
+  // re-render with a new prop rebuilds these closures around the new id while `confirmOpen` survives.
   const removeFromAccount = useDeregisterHostFromAccount(hostId);
 
   return (
@@ -198,10 +139,7 @@ function ClearFileEditSnapshotsRow(props: {
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
-  // The scope moving to another host underneath this open dialog is handled
-  // at the boundary, not here: `HostScopeGate` keys this subtree by host, so
-  // a host switch unmounts the dialog with everything else. A confirmation
-  // armed against one machine cannot survive to be retargeted at another.
+  // A confirmation armed against one machine cannot survive to be retargeted at another.
   const [confirmOpen, setConfirmOpen] = useState(false);
   const queryClient = useQueryClient();
   const currentUserId = useAuthStore(
@@ -316,18 +254,8 @@ function ClearFileEditSnapshotsRow(props: {
   );
 }
 
-/**
- * The empty-account recovery variant: no host ROW exists, but installed
- * components can — an install that completed while sign-in did not leaves
- * exactly that state, and this page is the only uninstall surface (General's
- * was deliberately removed). "No host row" therefore must not be read as
- * "nothing to remove": enrollment and installation are different facts, and
- * removal runs over the local CLI bridge, which needs no row. Renders the
- * local row alone — with no host there is no RPC row to gate — and returns
- * nothing without the bridge so the danger group never renders empty. The
- * caller decides whether anything is actually installed; this component
- * cannot know.
- */
+/** "No host row" therefore must not be read as "nothing to remove": enrollment and installation are different
+ * facts, and removal runs over the local CLI bridge, which needs no row. */
 export function LocalRecoveryDangerZone(): ReactNode {
   const { hostManagement } = useRunnerHost();
   if (hostManagement === null) return null;
@@ -343,11 +271,8 @@ export function LocalRecoveryDangerZone(): ReactNode {
   );
 }
 
-/**
- * Uninstalling the host is the most host-scoped action there is, so it lives
- * on the host's own page rather than beside app-global resets in General.
- * Local host only — there is no remote uninstall verb.
- */
+/** Uninstalling the host is the most host-scoped action there is, so it lives on the host's own page rather
+ * than beside app-global resets in General. Local host only - there is no remote uninstall verb. */
 function RemoveTraycerRow(): ReactNode {
   const { hostManagement } = useRunnerHost();
   const [confirmOpen, setConfirmOpen] = useState(false);

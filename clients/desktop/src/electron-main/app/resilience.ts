@@ -8,13 +8,6 @@ export interface AccessibilityThemeSnapshot {
   readonly shouldUseInvertedColorScheme: boolean;
 }
 
-/**
- * Subscribes to OS-level theme/accessibility changes. The renderer already
- * follows `prefers-color-scheme` via CSS, but `prefersReducedTransparency`
- * (macOS Reduce Transparency, Windows Transparency Effects) and
- * `shouldUseHighContrastColors` aren't exposed to CSS - we surface them
- * here so the renderer can opt out of vibrancy/blur and bump contrast.
- */
 export function installAccessibilityThemeForwarder(
   onUpdate: (snapshot: AccessibilityThemeSnapshot) => void,
 ): void {
@@ -53,12 +46,6 @@ export function readAccessibilityTheme(): AccessibilityThemeSnapshot {
   };
 }
 
-/**
- * Logs every download initiated by any session. `autoUpdater` already
- * self-reports its progress; this catches everything else (drag-dropped
- * URLs, runaway `<a download>` from a renderer bug, etc.). Logged at
- * info level - flip to warn if it becomes noisy.
- */
 export function installDownloadObserver(): void {
   session.defaultSession.on("will-download", (_event, item, webContents) => {
     log.info("[downloads] will-download", {

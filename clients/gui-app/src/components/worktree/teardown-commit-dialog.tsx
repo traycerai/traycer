@@ -13,11 +13,7 @@ import { useTeardownAgentNames } from "@/lib/worktree/teardown-agent-names";
 
 export type TeardownCommitChoice = "commit" | "submit" | "blocked" | "remove";
 
-/**
- * Gesture-time confirm for a worktree commit that would tear holders down.
- * `immediate` is "stop and switch now"; `defer` is "apply on next message";
- * `blocked` is the legacy-host WORKTREE_REBIND_BLOCKED pivot (defer only).
- */
+/** Gesture-time confirm for a worktree commit that would tear holders down. */
 export function TeardownCommitDialog(props: {
   readonly open: boolean;
   readonly choice: TeardownCommitChoice | null;

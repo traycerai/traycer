@@ -1,10 +1,3 @@
-/**
- * The status lane's control events in the `@1` replica's vocabulary.
- *
- * Three arms are renames and are pinned once each. The two that are not - the
- * permission role and the aggregate dirty bit - are where a translation can be
- * wrong in a way nothing downstream would notice, and they get the detail.
- */
 import { describe, expect, it } from "vitest";
 import { isWritablePermissionRole } from "@traycer-clients/shared/epic/permission-role";
 import type { ControlEvent } from "@traycer-clients/shared/replica-runtime";
@@ -40,10 +33,7 @@ describe("permission role: the seam widened it, so the translation narrows it ba
   });
 
   it("narrows an UNRECOGNISED role to null, and null is unwritable", () => {
-    // The direction that matters. The `@1` replica recomputes writability from
-    // the role, and `canWrite` is DROPPED by this translation - so if an
-    // unrecognised role narrowed onto a writable one, the client would grant
-    // write access the adapter had already refused fail-closed.
+    // The direction that matters.
     const translated = legacyControlEventOf(
       permissionChanged("some-role-a-newer-host-invented"),
     );
@@ -52,10 +42,8 @@ describe("permission role: the seam widened it, so the translation narrows it ba
   });
 
   it("agrees with the adapter's fail-closed canWrite on every input", () => {
-    // The invariant behind the drop: whatever the adapter decided about
-    // writability, recomputing it from the narrowed role must land in the same
-    // place. If these ever disagreed, one of two things would be true on the
-    // wire and the client would believe the wrong one.
+    // The invariant behind the drop: whatever the adapter decided about writability, recomputing it
+    // from the narrowed role must land in the same place.
     for (const role of [
       "owner",
       "editor",
@@ -64,9 +52,8 @@ describe("permission role: the seam widened it, so the translation narrows it ba
       null,
     ]) {
       const event = permissionChanged(role);
-      // Narrowed on the way IN as well as out: `canWrite` lives on the
-      // permission member alone, and reading it off the union would be reading
-      // a field four of the five arms do not have.
+      // Narrowed on the way IN as well as out: `canWrite` lives on the permission member alone, and
+      // reading it off the union would be reading a field four of the five arms do not have.
       if (event.kind !== "permission-changed") {
         throw new Error("the builder returns a permission event");
       }
@@ -88,12 +75,8 @@ describe("permission role: the seam widened it, so the translation narrows it ba
 
 describe("aggregate dirty: ONE boolean, and it ESTABLISHES", () => {
   it("maps onto the ATOMIC snapshot arm, with an empty room list", () => {
-    // Not the `root-dirty` delta arm. On `@1` only the atomic `dirtySnapshot`
-    // may establish dirtiness for sync-pill purposes, because a delta cannot
-    // prove the subscription has seen every room. The lane's boolean is the
-    // authority's complete answer - root OR any room - so it establishes, and
-    // its empty room list is a true statement about a wire that carries no
-    // per-room detail rather than a stub.
+    // Not the `root-dirty` delta arm. On `@1` only the atomic `dirtySnapshot` may establish dirtiness
+    // for sync-pill purposes, because a delta cannot prove the subscription has seen every room.
     expect(
       legacyControlEventOf({ kind: "aggregate-dirty", dirty: true }),
     ).toEqual({ kind: "dirty-snapshot", rootDirty: true, rooms: [] });
@@ -138,10 +121,8 @@ describe("migration and deletion are renames, and the words differ on purpose", 
       }),
     ).toEqual({ kind: "migration", migration: { phase: "started" } });
 
-    // The seam calls the STAGE `stage` and the wire calls it `phase`; the seam
-    // calls the LIFECYCLE `status` and the wire calls that `phase` too. This is
-    // the boundary where that collision is resolved rather than allowed to give
-    // one word two meanings.
+    // The seam calls the STAGE `stage` and the wire calls it `phase`; the seam calls the LIFECYCLE
+    // `status` and the wire calls that `phase` too.
     expect(
       legacyControlEventOf({
         kind: "migration",
@@ -181,10 +162,8 @@ describe("migration and deletion are renames, and the words differ on purpose", 
   });
 
   it("carries deletion attribution, including when the authority has none", () => {
-    // Carried rather than dropped: it is what the renderer says when it
-    // force-closes the tab - "deleted by Alice" against "it vanished" - and
-    // both fields are nullable because the authority may know the epic is gone
-    // without knowing who removed it.
+    // Carried rather than dropped: it is what the renderer says when it force-closes the tab -
+    // "deleted by Alice" against "it vanished" - and both fields are nullable because the authority
     expect(
       legacyControlEventOf({
         kind: "epic-deleted",

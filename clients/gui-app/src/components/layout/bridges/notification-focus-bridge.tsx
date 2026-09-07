@@ -27,28 +27,8 @@ import {
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 
-/**
- * Mounted consumer of `useNotificationEventsStore.notificationEvent` - the
- * native-notification click sink surfaced by `IRunnerHost`.
- *
- * A click payload is parsed as, in order: the versioned V1 activation
- * envelope (route + feed correlation + nullable origin host), a legacy raw
- * route payload (no feed identity), or unknown.
- *
- * - V1 with a non-null `originHostId` that no longer matches the EFFECTIVE
- *   host: never routes or acknowledges - the center opens once in the
- *   origin-unavailable state instead. It does not move the app either
- *   (redesign P1.2): a notification click is not the user answering "which
- *   host do you work on", and this bridge has no write path to the selection
- *   authority at all.
- * - V1 (origin-valid or host-less) or legacy, and the route actually goes
- *   somewhere (`isNotificationPayloadRoutable`): activate directly through
- *   the shared success-only path and leave the center closed. A V1 click
- *   acknowledges its correlated row on success; a legacy click has no feed
- *   identity to acknowledge.
- * - Anything left (unknown payload, or a known payload with nowhere to
- *   route) opens the center so the user can inspect it there instead.
- */
+/** V1 with a non-null `originHostId` that no longer matches the effective host: never routes or acknowledges -
+ * the center opens once in the origin-unavailable state instead. */
 export function NotificationFocusBridge(): null {
   const notificationEvent = useNotificationEventsStore(
     (state) => state.notificationEvent,
@@ -69,21 +49,14 @@ export function NotificationFocusBridge(): null {
   const candidateOriginHostId =
     parsed?.kind === "v1" ? parsed.envelope.originHostId : null;
   const originHostEntry = useHostDirectoryEntry(candidateOriginHostId ?? "");
-  // Same top-level-read pattern as `originHostEntry` above, for the
-  // activation-completed analytics call in the V1 branch below - a legacy
-  // click carries no feed identity and is intentionally left unanalyzed.
+  // Same top-level-read pattern as `originHostEntry` above, for the activation-completed analytics call in the
+  // V1 branch below - a legacy click carries no feed identity and is intentionally left unanalyzed.
   const candidateFeedId =
     parsed?.kind === "v1" ? feedIdFromEnvelopeFeed(parsed.envelope.feed) : null;
   const candidateRow = useMergedNotificationRow(candidateFeedId ?? "");
 
-  // `activate`'s identity is not guaranteed stable across renders (it closes
-  // over the host client/navigate function), and `notificationEvent` stays
-  // resident in the store rather than being cleared after dispatch - so this
-  // effect legitimately reruns on a dependency change alone, with the SAME
-  // stored click still present. Track
-  // which event object this bridge has already dispatched so a rerun can
-  // never redispatch it; only a genuinely new `recordClick()` produces a new
-  // `notificationEvent` reference and clears this guard.
+  // Track which event object this bridge has already dispatched so a rerun can never redispatch it; only a
+  // genuinely new `recordClick` produces a new `notificationEvent` reference and clears this guard.
   const processedEventRef = useRef<NotificationClickEvent | null>(null);
 
   useEffect(() => {
@@ -165,18 +138,7 @@ export function NotificationFocusBridge(): null {
   return null;
 }
 
-/**
- * DERIVATION, not the coarse bit. A `true` here reroutes a click that was
- * already made into the "originating host is unavailable" centre instead of
- * opening what the person asked for, so it must not fire on the cloud merely
- * failing to read liveness — that turned a healthy approval prompt into a dead
- * end for as long as one degraded Redis read persisted.
- *
- * Routable therefore means "the transport would attempt this", which is exactly
- * `dialableHostEndpoint`: `indeterminate` dials, a CONFIRMED refusal
- * (`offline` / `plan-restricted`) does not, and a directory-absent host has
- * nothing to dial at all.
- */
+/** Derivation, not the coarse bit. */
 function isOriginHostRoutable(entry: HostDirectoryEntry | null): boolean {
   return dialableHostEndpoint(entry) !== null;
 }
@@ -201,11 +163,6 @@ function isOriginUnavailable(input: {
   ) {
     return false;
   }
-  // A foreign-origin route lands on the origin-unavailable center rather
-  // than moving the app (redesign P1.2, D7's second limb). The app-wide
-  // selection has exactly one writer - Settings ▸ Activate, through the
-  // authority - and a notification click is not it. What used to happen here
-  // was a "transient" switch whose only way back was the restore machinery
-  // this phase deletes, so keeping it would have made the move PERMANENT.
+  // A foreign-origin route lands on the origin-unavailable center rather than moving the app.
   return true;
 }

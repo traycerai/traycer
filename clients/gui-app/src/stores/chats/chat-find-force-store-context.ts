@@ -190,11 +190,7 @@ export function useClearChatFindActiveTarget(): (
   return store.getState().clearActiveTarget;
 }
 
-/**
- * The controller owns CSS Highlight ranges and find snapshots. A card emits
- * this tile-local epoch only for a user dismissal of its current target, so
- * the controller can clear those resources without closing the query.
- */
+/** The controller owns CSS Highlight ranges and find snapshots. */
 export function useChatFindActiveTargetClearEpoch(): number {
   const store = useChatFindForceStoreFromContext();
   return useStore(store, (state) => state.activeTargetClearEpoch);

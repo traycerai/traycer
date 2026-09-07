@@ -102,10 +102,7 @@ export function TerminalTile(props: TerminalTileProps) {
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
   const reachability = useHostReachability(hostId);
-  // Invariant 6: the pre-bootstrap wait is bounded and it says which host it
-  // is waiting on. This tile used to render a wordless skeleton for both
-  // `checking` and `host-starting` (audit S5) - indistinguishable from a
-  // terminal that was about to appear, and it never ended.
+  // This tile used to render a wordless skeleton for both `checking` and `host-starting` (audit S5) - indistinguishable from a terminal that was about to appear, and it never ended.
   const hostLoad = useBoundedHostLoad({
     hostId,
     hostLabel: resolvedHostLabel(reachability),
@@ -191,25 +188,12 @@ export function TerminalTile(props: TerminalTileProps) {
     beginTerminalLoad(sessionId, "terminal");
   }, [sessionId]);
   // Directory loss/revocation is the only pre-bootstrap dead-tile gate here.
-  // Recoverable transport/session loss is handled by TerminalTileLive's
-  // lifecycle overlays so a reattachable remote session never becomes a
-  // permanent dead tile because its presence lease changed.
+  // Recoverable transport/session loss is handled by TerminalTileLive's lifecycle overlays so a reattachable remote session never becomes a permanent dead tile because its presence lease changed.
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // The reason gates the notification, not just the copy. "Terminal closed"
-    // is a claim that a session ENDED, and for `plan-restricted` that is very
-    // likely false: the host is running and the PTY with it, this client simply
-    // has no remote route to it on this plan. Firing it here put a permanent,
-    // persisted "closed" entry in the feed for a terminal an upgrade would hand
-    // straight back.
+    // The reason gates the notification, not just the copy. "Terminal closed" is a claim that a session ENDED, and for `plan-restricted` that is very likely false: the host is running and the PTY with it, this client simply has no remote route to it on this plan.
     if (reachability.unavailability === "plan-restricted") return;
-    // So does the BASIS, for the same reason one level up. Since F4 this
-    // verdict also arrives from a starting host that overran its budget, and
-    // that is the UI's patience expiring, not proof the PTY died - the tile
-    // stops waiting (it must), but writing "permanently closed" into the feed
-    // off a timer would persist a claim about a machine that is very likely
-    // still running. Presentation falls; the death event needs directory
-    // evidence.
+    // Since F4 this verdict also arrives from a starting host that overran its budget, and that is the UI's patience expiring, not proof the PTY died - the tile stops waiting (it must), but writing "permanently closed" into the feed off a timer would persist a claim about a machine that is very likely still running.
     if (reachability.basis !== "directory") return;
     if (epicId === null) return;
     emitTerminalClosedNotification({
@@ -249,13 +233,7 @@ export function TerminalTile(props: TerminalTileProps) {
       />
     );
   }
-  // "host-starting" = the directory is empty because the local host hasn't
-  // published yet (boot/ensure/wake). Rendering the dead banner there showed
-  // "permanently closed" for terminals that were seconds from reconnecting -
-  // so this stays a non-destructive wait, but a wait WITH WORDS and an end.
-  // Past its budget the reachability hook itself falls to `unreachable` (F4),
-  // which the arm above answers; `timed-out` here covers the directory that
-  // never resolved at all.
+  // Past its budget the reachability hook itself falls to `unreachable` (F4), which the arm above answers; `timed-out` here covers the directory that never resolved at all.
   if (hostLoad.kind !== "ready") {
     return (
       <TileHostLoadState
@@ -348,11 +326,8 @@ function LegacyTerminalTileLive(
       }),
     [cwd],
   );
-  // A sign-in terminal is the HOST's session, not this tile's. Re-creating
-  // the id here would spawn a bare shell with none of the provider's spawn env
-  // - a prompt that looks like the sign-in terminal but cannot sign anyone in,
-  // and no error saying so. The tile attaches when the session is live and
-  // offers a restart when it is not; it never creates.
+  // Re-creating the id here would spawn a bare shell with none of the provider's spawn env - a prompt that looks like the sign-in terminal but cannot sign anyone in, and no error saying so.
+  // The tile attaches when the session is live and offers a restart when it is not; it never creates.
   const signInProviderId =
     props.node.origin === "provider-login"
       ? (props.node.originProviderId ?? null)
@@ -366,13 +341,8 @@ function LegacyTerminalTileLive(
     instanceId,
     sessionKind: "terminal",
     preparePayload,
-    // `adoptOnly`, not `enabled: false`: the create must never fire, but the
-    // measure-grid wait still has to arm or a probe that never reports (a
-    // stalled xterm chunk, a zero-sized container) strands the tile on
-    // "Starting terminal session…" with no bounded fallback.
-    // Manager-owned list rows stay on the live session even without
-    // setup/provider origin enrichment; missing enrichment fails closed
-    // rather than recreating a bare shell.
+    // `adoptOnly`, not `enabled: false`: the create must never fire, but the measure-grid wait still has to arm or a probe that never reports (a stalled xterm chunk, a zero-sized container) strands the tile on "Starting terminal session…" with no bounded fallback.
+    // Manager-owned list rows stay on the live session even without setup/provider origin enrichment; missing enrichment fails closed rather than recreating a bare shell.
     adoptOnly: isSignInTerminal || managerOwned,
   });
   const closeExitedTile = useCloseCanvasTileWithNestedFocus(
@@ -381,22 +351,8 @@ function LegacyTerminalTileLive(
     instanceId,
   );
 
-  // The host keeps listing a PTY it saw exit for its ~60s grace window, and the
-  // bootstrap refuses to respawn under that id. A tile opened onto such a
-  // session therefore has nothing to attach to and no create in flight: left
-  // alone it sits on "Starting terminal session…" until the grace lapses, and
-  // then - the session now absent rather than exited - quietly spawns a fresh
-  // shell in its place. Close it instead, as the landing panel drops the tab.
-  //
-  // Gated on a null handle so this only ever fires for a tile that never
-  // attached. A tile that DID attach owns its own exit down in `TerminalLive`,
-  // which deliberately keeps a *crashed* terminal on screen.
-  //
-  // A sign-in terminal is exempt: closing it would silently retract the only
-  // surface that can restart the sign-in, leaving the user with a vanished tab
-  // and no explanation. It shows the restart affordance below instead. The
-  // attached path in `TerminalLive` carries the same exemption, so the rule
-  // holds however the login shell ends.
+  // A tile opened onto such a session therefore has nothing to attach to and no create in flight: left alone it sits on "Starting terminal session…" until the grace lapses, and then - the session now absent rather than exited - quietly spawns a fresh shell in its place.
+  // Gated on a null handle so this only ever fires for a tile that never attached.
   const exitedBeforeAttach =
     bootstrap.hostSessionExited &&
     bootstrap.handle === null &&
@@ -406,10 +362,7 @@ function LegacyTerminalTileLive(
     closeExitedTile();
   }, [exitedBeforeAttach, closeExitedTile]);
 
-  // The host has settled on "this session is gone" (absent, or exited and
-  // never attached). For an ordinary tile the bootstrap would now spawn a
-  // replacement; for this one there is nothing to attach to and nothing this
-  // tile may create.
+  // The host has settled on "this session is gone" (absent, or exited and never attached).
   const signInSessionGone =
     isSignInTerminal &&
     bootstrap.handle === null &&
@@ -463,10 +416,7 @@ function LegacyTerminalTileLive(
   }
 
   if (bootstrap.handle === null) {
-    // The starting state occupies the SAME layout box the live terminal will
-    // (outer column + relative flex-1), so the measurement probe underneath
-    // measures the real grid before the create/subscribe are dispatched -
-    // see `TerminalGridMeasureProbe`. The status text overlays it.
+    // The starting state occupies the SAME layout box the live terminal will (outer column + relative flex-1), so the measurement probe underneath measures the real grid before the create/subscribe are dispatched - see `TerminalGridMeasureProbe`.
     return (
       <div
         className="flex h-full w-full min-h-0 flex-col bg-canvas"
@@ -626,9 +576,7 @@ function HostTerminalTileLive(
     kind: "terminal",
     enabled: gridReady && (runtimeRunning || lifecycle.requestSettled),
   });
-  // Centered session-ended Close is presentation-only, matching tab X and
-  // the directory-offline dead banner. Explicit lifetime deletion stays on
-  // the sidebar/named overlay actions, never this surface.
+  // Explicit lifetime deletion stays on the sidebar/named overlay actions, never this surface.
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,
@@ -743,17 +691,8 @@ interface TerminalLiveProps {
   readonly closeOnExit: boolean;
   readonly onClose: () => void;
   /**
-   * Non-null only for a `provider-login` tile. Carries the ended-panel props
-   * rather than a bare boolean, because this component owns the ONLY prompt
-   * read of the login shell's death.
-   *
-   * `signInSessionGone` in the parent cannot cover the attached case: it is
-   * derived from `terminal.list`, which has a 60s `staleTime` and never polls,
-   * so between the shell exiting and the next invalidation the parent still
-   * believes the session is live. The store status below is stream-driven and
-   * immediate. Without this the tile would sit on a dead, torn-down xterm with
-   * no explanation and no way to restart - exactly what the exit-effect
-   * exemption was written to prevent.
+   * Non-null only for a `provider-login` tile.
+   * Carries the ended-panel props rather than a bare boolean, because this component owns the ONLY prompt read of the login shell's death.
    */
   readonly signInTile: {
     readonly providerId: ProviderId | null;
@@ -765,9 +704,8 @@ interface TerminalLiveProps {
 
 function TerminalLive(props: TerminalLiveProps) {
   const { handle } = props;
-  // The live xterm engine, published by the host once it has one. The quote
-  // control reads xterm's own selection and buffer coordinates, which the
-  // session store does not carry.
+  // The live xterm engine, published by the host once it has one.
+  // The quote control reads xterm's own selection and buffer coordinates, which the session store does not carry.
   const [term, setTerm] = useState<Terminal | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
   const hostId = useTabHostId();
@@ -801,10 +739,7 @@ function TerminalLive(props: TerminalLiveProps) {
 
   const { onSessionLost, onSessionHealthy } = props.recovery;
   // Drive automatic recovery off a handle that can no longer address its PTY.
-  // `reaped` is definitive for this handle, not for the durable terminal: the
-  // host may already have recreated that logical id. The owner force-releases
-  // and remounts the bootstrap to reattach or respawn it. "running" refills the
-  // auto-recovery budget.
+  // `reaped` is definitive for this handle, not for the durable terminal: the host may already have recreated that logical id.
   useEffect(() => {
     if (status === "lost" || status === "reaped") onSessionLost();
   }, [status, onSessionLost]);
@@ -812,17 +747,8 @@ function TerminalLive(props: TerminalLiveProps) {
     if (status === "running") onSessionHealthy();
   }, [status, onSessionHealthy]);
 
-  // A crash remains visible in its tile so its unread failure indicator has a
-  // tab to attach to. Clean and lifecycle exits retain the existing close
-  // behavior. Reuse the notification predicate so emit/close cannot drift.
-  //
-  // A sign-in terminal is exempt from ALL of it. The tile is the only surface
-  // that can restart the sign-in, and a login shell exits on both outcomes -
-  // the user typing `exit` after signing in, and the CLI giving up. Closing on
-  // the clean exit would retract the restart affordance in exactly the case
-  // the user still needs it, and would take the CLI's last words off screen
-  // with no explanation. The tile shows the ended panel instead; the user
-  // closes the tab themselves.
+  // Reuse the notification predicate so emit/close cannot drift.
+  // The tile is the only surface that can restart the sign-in, and a login shell exits on both outcomes - the user typing `exit` after signing in, and the CLI giving up.
   const isSignInTerminal = props.signInTile !== null;
   const { closeOnExit, onClose } = props;
   useEffect(() => {
@@ -839,9 +765,7 @@ function TerminalLive(props: TerminalLiveProps) {
     ) {
       return;
     }
-    // `closeCanvasTab` resolves the tile by its pane tab *instance* id
-    // (`pane.tabInstanceIds`), not the content/session id. Passing
-    // `handle.sessionId` silently no-ops, leaving the tab open after exit.
+    // Passing `handle.sessionId` silently no-ops, leaving the tab open after exit.
     onClose();
   }, [status, exitCode, exitReason, isSignInTerminal, closeOnExit, onClose]);
 
@@ -871,10 +795,8 @@ function TerminalLive(props: TerminalLiveProps) {
     [handle],
   );
 
-  // The attached login shell has ended. Swap the (now torn-down) xterm for the
-  // same panel the never-attached path renders, so "Start again" is reachable
-  // however the shell died - the user typing `exit` after a successful sign-in,
-  // or the CLI giving up. Placed after every hook so the hook order is stable.
+  // The attached login shell has ended.
+  // Swap the (now torn-down) xterm for the same panel the never-attached path renders, so "Start again" is reachable however the shell died - the user typing `exit` after a successful sign-in, or the CLI giving up.
   const signInTile = props.signInTile;
   if (signInTile !== null && status === "exited") {
     return (
@@ -894,10 +816,7 @@ function TerminalLive(props: TerminalLiveProps) {
       className="flex h-full w-full min-h-0 flex-col bg-canvas"
       data-testid={`terminal-tile-${props.tileId}`}
     >
-      {/* `relative` is the anchor for the absolutely-positioned xterm host;
-          combined with `flex-1 min-h-0` it gets a definite box from the
-          flex column ancestor without forcing children to chase a fragile
-          percentage-height chain. */}
+      {/* `relative` is the anchor for the absolutely-positioned xterm host; combined with `flex-1 min-h-0` it gets a definite box from the flex column ancestor without forcing children to chase a fragile percentage-height chain. */}
       <div ref={paneRef} className="relative min-h-0 flex-1">
         <Suspense fallback={<TerminalLoadingSkeleton />}>
           <TerminalXtermHost
@@ -918,14 +837,7 @@ function TerminalLive(props: TerminalLiveProps) {
                 ? `terminal:${props.viewTabId}:${props.tileId}:${handle.sessionId}`
                 : null
             }
-            // Mirrors the registry's linger rule: a running plain terminal's
-            // handle now outlives this unmount (its stream stays subscribed for
-            // the linger window so tab switches reattach instantly), and the
-            // store's writer keeps pointing at this engine - dispose the engine
-            // and the reattach would be blank, since the host snapshot was
-            // already consumed. The registry follower disposes the engine when
-            // the lingering handle is finally evicted; only an exited session
-            // tears down eagerly.
+            // The registry follower disposes the engine when the lingering handle is finally evicted; only an exited session tears down eagerly.
             keepAlive={status !== "exited"}
             onTerminalReady={setTerm}
           />
@@ -958,16 +870,7 @@ function TerminalLive(props: TerminalLiveProps) {
 }
 
 /**
- * Shown when a sign-in terminal's session is gone. The interactive shell
- * outlives the sign-in, so reaching this state means the user (or a host
- * restart) closed it - there is no session to reattach to and, unlike an
- * ordinary terminal tile, nothing here may create one.
- *
- * The button restarts the sign-in through the same RPC the composer banner
- * uses, which kills nothing (there is nothing left) and hands back a fresh
- * terminal. `providerId` can be absent on a ref written before it was
- * recorded; the copy then points at the composer banner rather than offering a
- * button that cannot know which provider to restart.
+ * `providerId` can be absent on a ref written before it was recorded; the copy then points at the composer banner rather than offering a button that cannot know which provider to restart.
  */
 function SignInTerminalEndedPanel(props: {
   readonly tileId: string;
@@ -1016,9 +919,7 @@ function SignInRestartButton(props: {
     providerId: props.providerId,
     epicId: props.epicId,
     viewTabId: props.viewTabId,
-    // After a host restart the coordinator has no pointer, so it reports
-    // `replacedSessionId: null` and nothing else would ever close this dead
-    // panel - it would accumulate one stale tile per press.
+    // After a host restart the coordinator has no pointer, so it reports `replacedSessionId: null` and nothing else would ever close this dead panel - it would accumulate one stale tile per press.
     launchedFromTile: {
       sessionId: props.sessionId,
       close: props.closeSelf,
@@ -1033,10 +934,7 @@ function SignInRestartButton(props: {
       onClick={terminalLogin.start}
     >
       Start again
-      {/* Same pending treatment as the banner's "Sign in from a terminal":
-          unchanged label, disabled, inline spinner. Starting a sign-in kills
-          and respawns a PTY host-side, so a press with no feedback reads as a
-          dead button and invites a second one. */}
+      {/* Same pending treatment as the banner's "Sign in from a terminal": unchanged label, disabled, inline spinner. Starting a sign-in kills and respawns a PTY host-side, so a press with no feedback reads as a dead button and invites a second one. */}
       {terminalLogin.isPending ? <MutedAgentSpinner /> : null}
     </Button>
   );

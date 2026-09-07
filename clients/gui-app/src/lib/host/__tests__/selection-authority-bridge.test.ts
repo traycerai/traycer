@@ -44,10 +44,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 /**
- * Records every `applyKernelSnapshot` push into the store (P4.2: the bridge's
- * only remaining write path, now that `directory.selectById` is gone), the
- * same way the deleted `RecordingDirectory` fixture recorded every
- * `selectById` call - one entry per `apply`, in order.
+ * Records every `applyKernelSnapshot` push into the store (P4.2: the bridge's only remaining write path, now that `directory.selectById` is gone), the same way the deleted `RecordingDirectory` fixture recorded every `selectById` call - one entry per `apply`.
  */
 function subscribeEffectiveHostIdPushes(): {
   readonly calls: Array<string | null>;
@@ -96,14 +93,8 @@ function buildAuthority(input: {
   const engine = new SelectionAuthorityEngineImpl({
     fleet,
     identity,
-    // A PROVISIONABLE local host. The `unavailable` port models a machine
-    // whose host cannot be started, and since P1.3's F3(b)/(c) rulings such a
-    // host honestly reads `dead` as soon as the engine's own ensure comes back
-    // unavailable (registry §5's ∅ definition made real). Every test below is
-    // about what the BRIDGE does with a derivation, so leaving that port in
-    // place would silently rewrite the derivation under each of them - the
-    // window lands on ∅ or on the remote, and the bridge assertions end up
-    // measuring the local host's provisionability instead of the seam.
+    // A PROVISIONABLE local host.
+    // The `unavailable` port models a machine whose host cannot be started, and since P1.3's F3(b)/(c) rulings such a host honestly reads `dead` as soon as the engine's own ensure comes back unavailable (registry §5's ∅ definition made real).
     localHostEnsure: { ensureReady: () => Promise.resolve({ ok: true }) },
     localOutage: inertLocalHostOutageSignal,
     preferredStore,
@@ -236,12 +227,8 @@ describe("mountSelectionAuthorityBridge", () => {
   });
 
   it("(b) the attach's OWN snapshot carries an already-settled preference - no subsequent change event is needed", async () => {
-    // The preference is seeded into the store BEFORE the engine is
-    // constructed, the way a restart finds it already on disk (G1). Nothing
-    // in this test ever calls `activate` or otherwise emits a NEW
-    // selectionChanged event - the only thing that can move the store is
-    // the bridge's own initial `apply(kernel.snapshot())` /
-    // `kernel.start()` installing the attach's snapshot.
+    // The preference is seeded into the store BEFORE the engine is constructed, the way a restart finds it already on disk (G1).
+    // Nothing in this test ever calls `activate` or otherwise emits a NEW selectionChanged event - the only thing that can move the store is the bridge's own initial `apply(kernel.snapshot())` / `kernel.start()` installing the attach's snapshot.
     const authority = buildAuthority({
       localHostId: "L",
       hosts: [
@@ -302,9 +289,7 @@ describe("mountSelectionAuthorityBridge", () => {
     // cause: activate - moves effective from L to P. Neither analytics event
     // fires for it, but the G4 hook does (it fires on ANY effective change).
     const seqA = authority.engine.allocateAttachSeq("this-window-probe");
-    // Use the bridge's OWN attached window to activate rather than a second
-    // one, matching how Settings ▸ Activate really calls it: through the
-    // SAME client this bridge wraps.
+    // Use the bridge's OWN attached window to activate rather than a second one, matching how Settings ▸ Activate really calls it: through the SAME client this bridge wraps.
     void seqA; // not used directly; activate goes through the client below.
     expect(await authority.client.activate("P")).toEqual({ ok: true });
     await flushMicrotasks();
@@ -322,9 +307,7 @@ describe("mountSelectionAuthorityBridge", () => {
       null,
     );
 
-    // cause: failover - P (preferred, target) dies; effective moves off it
-    // to L, which is NOT the target, so the engine's own resolveCause names
-    // this "failover".
+    // cause: failover - P (preferred, target) dies; effective moves off it to L, which is NOT the target, so the engine's own resolveCause names this "failover".
     killHost(authority.engine, "P");
     await flushMicrotasks();
     expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe("L");
@@ -355,9 +338,8 @@ describe("mountSelectionAuthorityBridge", () => {
       null,
     );
 
-    // cause: fleet-shift - a new, unrelated host joins the fleet. Effective
-    // stays P throughout, so NEITHER analytics event fires and the G4 hook
-    // gets no new entry.
+    // cause: fleet-shift - a new, unrelated host joins the fleet.
+    // Effective stays P throughout, so NEITHER analytics event fires and the G4 hook gets no new entry.
     trackSpy.mockClear();
     const g4CountBeforeFleetShift = g4Events.length;
     authority.fleet.publish(0, "L", [
@@ -377,20 +359,7 @@ describe("mountSelectionAuthorityBridge", () => {
   });
 
   it("(d1) Suite D - F7: a G4 subscriber reading the store during its notification observes the NEW revision, and narration actually fires", async () => {
-    // The mutation this pins: `applySelection` publishing a STALE
-    // `selectionRevision` (the kernel's OWN pre-fixed value rather than the
-    // incoming `revision`) makes `pending.revision > applied` permanently
-    // true - narration would never flush AT ALL, silently, forever. A test
-    // that only asserts "if narration fired, the state it saw was fresh"
-    // passes vacuously against that mutation, because narration never fires
-    // and the conditional body never runs. So this test asserts BOTH halves:
-    // narration FIRED, and what it observed was already fresh.
-    //
-    // This used to also read `directory.calls.at(-1)` from inside the
-    // notification, proving the store and the directory agreed. P4.2 deleted
-    // the directory's write path - the store is now the only seam, so there
-    // is nothing left to cross-check it against; the surviving claim is
-    // narrower (store freshness alone).
+    // The mutation this pins: `applySelection` publishing a STALE `selectionRevision` (the kernel's OWN pre-fixed value rather than the incoming `revision`) makes `pending.revision > applied` permanently true - narration would never flush AT ALL, silently, forever.
     const authority = buildAuthority({
       localHostId: "L",
       hosts: [
@@ -407,9 +376,7 @@ describe("mountSelectionAuthorityBridge", () => {
     await flushMicrotasks();
     expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe("L");
 
-    // Land on P first (M5: no preference yet means target=local), the same
-    // way test (c) does, so P is actually the target/preferred and killing
-    // it is a real failover rather than a no-op on an unselected host.
+    // Land on P first (M5: no preference yet means target=local), the same way test (c) does, so P is actually the target/preferred and killing it is a real failover rather than a no-op on an unselected host.
     expect(await authority.client.activate("P")).toEqual({ ok: true });
     await flushMicrotasks();
     expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe("P");
@@ -420,9 +387,7 @@ describe("mountSelectionAuthorityBridge", () => {
     }> = [];
     const unsubscribeG4 = subscribeFollowingSurfaceReset(() => {
       g4FireCount += 1;
-      // Read the seam from INSIDE the notification, the way a real G4
-      // subscriber (following-surface reset) would - it must see the new
-      // host, not a store that is still one tick behind.
+      // Read the seam from INSIDE the notification, the way a real G4 subscriber (following-surface reset) would - it must see the new host, not a store that is still one tick behind.
       observedAtNotification.push({
         storeEffectiveHostId:
           useSelectionAuthorityStore.getState().effectiveHostId,
@@ -448,16 +413,7 @@ describe("mountSelectionAuthorityBridge", () => {
   });
 
   it("(d) an event whose effectiveHostId equals its previousEffectiveHostId narrates nothing, even when its cause is failover/recovery", async () => {
-    // A REAL engine cannot currently produce this shape: on every path that
-    // tags a commit "failover" (ingestEvidence/attach/detach/local-outage/
-    // the deadline timer), `effectiveHostId` is the only field of the
-    // selection tuple those paths can move, so `selectionEquals` guarantees
-    // any event they emit has ALREADY changed it - `stage()` never queues an
-    // event otherwise. The CONTRACT still allows the shape (`SelectionChange`
-    // has no invariant tying `cause` to whether `effectiveHostId` moved), and
-    // this guard is what makes that legal-but-inert shape a no-op rather than
-    // a misfired `HostFailover`/`HostRecovered`. Isolated at the same fake
-    // `SelectionAuthorityClient` boundary as (e), for the same reason.
+    // A REAL engine cannot currently produce this shape: on every path that tags a commit "failover" (ingestEvidence/attach/detach/local-outage/ the deadline timer), `effectiveHostId` is the only field of the selection tuple those paths can move, so.
     const selectionListeners: Array<
       (event: SelectionRevisioned<SelectionChange>) => void
     > = [];
@@ -535,13 +491,7 @@ describe("mountSelectionAuthorityBridge", () => {
   });
 
   it("(e) a replayed/stale revision narrates at most once", async () => {
-    // Isolated at the SelectionAuthorityClient contract boundary: a real
-    // engine never redelivers a revision, so the guard this pins
-    // (`subscribeNarration`'s own monotonic high-water mark) can only be
-    // exercised with a controllable fake transport. The bridge registers
-    // TWO independent `onSelectionChanged` subscribers (the kernel itself,
-    // and `subscribeNarration`), so every listener must be tracked and
-    // invoked - narration's is not necessarily the last one registered.
+    // Isolated at the SelectionAuthorityClient contract boundary: a real engine never redelivers a revision, so the guard this pins (`subscribeNarration`'s own monotonic high-water mark) can only be exercised with a controllable fake transport.
     const selectionListeners: Array<
       (event: SelectionRevisioned<SelectionChange>) => void
     > = [];

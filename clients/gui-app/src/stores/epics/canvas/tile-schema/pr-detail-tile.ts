@@ -1,8 +1,4 @@
-/**
- * Schema for the PR full-view tile. Pure ref (`isRecordBacked: false`) - the
- * heavy PR fact lives on the host and is fetched live over
- * `pr.subscribeDetail`; only the GitHub base coordinates persist here.
- */
+/** Schema for the PR full-view tile. */
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import { TILE_KIND_PR_DETAIL } from "../tile-kinds";

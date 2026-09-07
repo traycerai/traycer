@@ -6,23 +6,7 @@ import { subscribeChatTurnCompletions } from "@/lib/chats/chat-turn-completions"
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { queryKeys } from "@/lib/query-keys";
 
-/**
- * While mounted, invalidates the default host's artifact rate-limit usage query
- * whenever a Traycer-harness chat turn completes - the same
- * `subscribeChatTurnCompletions` trigger the credit refresh uses, so the
- * usage bar moves in step with credits.
- *
- * Invalidates the exact `{ accountContext }` params key
- * (`useHostRateLimitUsageQuery`'s own key), not the whole
- * `host.getRateLimitUsage` method scope: a method-scope invalidation would
- * also refetch any actively-observed provider-pull query on this host (see
- * `useRefreshProviderRateLimitsOnTurn`), spawning a CLI subprocess on every
- * Traycer turn even though a Traycer turn can't have changed a Codex/Claude
- * account's rate limits.
- *
- * Mounted by each `RateLimitView` (rate-limit tiers only) with its explicit
- * account context, mirroring `useRefreshCreditsOnTraycerTurn`.
- */
+/** Invalidate the { accountContext } key, not the whole host.getRateLimitUsage method scope. */
 export function useRefreshRateLimitUsageOnTraycerTurn(
   accountContext: AccountContext,
 ): void {

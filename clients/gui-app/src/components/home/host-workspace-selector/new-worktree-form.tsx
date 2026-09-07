@@ -50,11 +50,9 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type RepoIdentifier = WorktreeFolderIntent["repoIdentifier"];
 
 const WORKTREE_AUTOSAVE_DELAY_MS = 500;
-/** One-line row block size: `leading-5` plus `py-1.5`, scalable with root text. */
 const SOURCE_ROW_BLOCK_SIZE_REM = 2;
 /** Virtuoso startup estimate only; rendered rows are measured after mount. */
 const SOURCE_ROW_HEIGHT_ESTIMATE_PX = 32;
-/** Shared viewport-aware limits for loaded and placeholder source lists. */
 const SOURCE_LIST_HEIGHT_LIMITS = "40vh, 12rem";
 const SOURCE_LIST_HEIGHT_CAP = `min(${SOURCE_LIST_HEIGHT_LIMITS})`;
 
@@ -66,20 +64,11 @@ export interface NewWorktreeFormProps {
   readonly summary: WorktreeWorkspaceSummary;
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly defaultNewBranchName: string;
-  /** Emits exactly one worktree intent for this workspace. */
   readonly onEmit: (intent: WorktreeFolderIntent) => void;
 }
 
-/**
- * The new-branch → worktree form, hosted inside the Branch chip's popover. The
- * Source selector is an inline {@link SourceBranchList} (search + scrollable
- * list, no nested dropdown) so the whole picker reads as one cohesive panel; the
- * model is built from {@link buildUnifiedPickerModel} and the emitted intent
- * comes from {@link newWorktreeIntent}.
- *
- * The branch name is always required: New worktree always creates a new branch
- * from the selected source, never a direct checkout of the source branch.
- */
+/** The branch name is always required: New worktree always creates a new branch from the selected source, never
+ * a direct checkout of the source branch. */
 export function NewWorktreeForm(props: NewWorktreeFormProps) {
   const branchesQuery = useHostQuery<HostRpcRegistry, "worktree.listBranches">({
     cacheKeyIdentity: undefined,
@@ -249,11 +238,7 @@ export interface ImportedWorktreeBranchFormProps {
   readonly currentBranchName: string;
 }
 
-/**
- * Read-only branch metadata for an adopted on-disk worktree. A definition list
- * keeps the detected/fallback source and current branch inspectable without
- * presenting either value as a selectable option or editable field.
- */
+/** Read-only branch metadata for an adopted on-disk worktree. */
 export function ImportedWorktreeBranchForm(
   props: ImportedWorktreeBranchFormProps,
 ) {
@@ -362,10 +347,8 @@ function useNewWorktreeAutosave(input: {
     const mountCycle = mountCycleRef.current + 1;
     mountCycleRef.current = mountCycle;
     return () => {
-      // Closing the popover must flush its latest valid draft, but React
-      // StrictMode also runs a synthetic setup → cleanup → setup mount cycle.
-      // Deferring one microtask lets the second setup supersede that synthetic
-      // cleanup without weakening a real click-away / Escape unmount.
+      // Closing the popover must flush its latest valid draft, but React StrictMode also runs a synthetic setup →
+      // cleanup → setup mount cycle.
       queueMicrotask(() => {
         if (mountCycleRef.current === mountCycle) emitPending();
       });
@@ -402,19 +385,12 @@ function sourceActiveIndex(
   return selected === -1 ? 0 : selected;
 }
 
-/**
- * The inline source-branch picker: a search box (autofocused) over a scrollable
- * list of fork sources, rendered directly in the form — no nested
- * dropdown, so the whole picker reads as one panel. It is a combobox: the
- * options are arrow-navigated and Enter selects the active row, so Tab moves on
- * to the New branch name field. Reuses {@link PickerOptionButton} for the row
- * styling / selected check / full-name tooltip, and the shared branch search
- * index for filtering.
- */
+/** The inline source-branch picker: a search box (autofocused) over a scrollable list of fork sources, rendered
+ * directly in the form - no nested dropdown, so the whole picker reads as one panel. */
 const SourceBranchList = memo(function SourceBranchList(props: {
   readonly rows: ReadonlyArray<WorktreeBranchPickerRow>;
   readonly promoteRowId: string | null;
-  /** Branches are still being fetched — show a spinner instead of the list. */
+  /** Branches are still being fetched - show a spinner instead of the list. */
   readonly isLoading: boolean;
   readonly emptyLabel: string;
   readonly onSelect: (value: string) => void;
@@ -424,31 +400,21 @@ const SourceBranchList = memo(function SourceBranchList(props: {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<VirtuosoHandle | null>(null);
   const [query, setQuery] = useState("");
-  // Promotion is an open-time affordance. Parent autosave echoes can update the
-  // staged source while this form is mounted, but must not reorder the list
-  // underneath the user. A fresh popover mount adopts the newly staged source.
+  // Promotion is an open-time affordance. Parent autosave echoes can update the staged source while this form is
+  // mounted, but must not reorder the list underneath the user.
   const [initialPromoteRowId] = useState(() => props.promoteRowId);
   const rows = useMemo(
     () => promotePickerRow(props.rows, initialPromoteRowId),
     [props.rows, initialPromoteRowId],
   );
-  // The active (arrow-highlighted) row is tracked by its stable id, not a raw
-  // index, so it survives re-filtering. `sourceActiveIndex` re-derives the
-  // position and falls back to the selected source (or top) when the highlight
-  // leaves the filtered set — no state-syncing effect needed.
+  // The active (arrow-highlighted) row is tracked by its stable id, not a raw index, so it survives
+  // re-filtering.
   const [activeId, setActiveId] = useState<string | null>(null);
   const searchIndex = useMemo(
     () => createWorktreeBranchSearchIndex(rows),
     [rows],
   );
-  // Filtering on the deferred query keeps the input echo (and key-repeat
-  // backspace) off the search's critical path: the list catches up in a
-  // deferred render instead of blocking each keystroke. Load-bearing even
-  // though the substring fast path makes most keystrokes sub-ms: a short query
-  // with no substring hit still pays the Fuse typo-tolerance fallback
-  // (50–260ms over ~1k branches), and this hook is the only thing keeping that
-  // off the keystroke. Not provable in jsdom — `act` drains transition work,
-  // so tests pass with or without it.
+  // Not provable in jsdom - `act` drains transition work, so tests pass with or without it.
   const deferredQuery = useDeferredValue(query);
   const filtered = useMemo(
     () => filterWorktreeBranchRows(rows, searchIndex, deferredQuery),
@@ -456,18 +422,13 @@ const SourceBranchList = memo(function SourceBranchList(props: {
   );
   const activeIndex = sourceActiveIndex(filtered, activeId);
   const activeRow = activeIndex === -1 ? undefined : filtered[activeIndex];
-  // Filtered identity/order only — never fold selection into a Virtuoso key.
-  // Selection used to remount the scroller (focus → body → spurious flush);
-  // filter keystrokes used to rebuild it every character. Let Virtuoso diff
-  // `data` and scroll the active option into view imperatively.
+  // Filtered identity/order only - never fold selection into a Virtuoso key.
   const filteredOrderKey = useMemo(
     () => filtered.map((row) => row.id).join("\u0000"),
     [filtered],
   );
   const listHeight = `min(${Math.max(filtered.length, 1) * SOURCE_ROW_BLOCK_SIZE_REM}rem, ${SOURCE_LIST_HEIGHT_LIMITS})`;
   // Pure render: aria-activedescendant tracks the current active row id.
-  // During virtualized scroll it may briefly name an off-window option — an
-  // accepted ARIA limitation vs mounted-gating state/effects that failed lint.
   const comboboxAriaActiveDescendant =
     props.isLoading || activeRow === undefined
       ? undefined
@@ -483,12 +444,7 @@ const SourceBranchList = memo(function SourceBranchList(props: {
     [activeIndex, idPrefix, props.onSelect],
   );
 
-  // Autofocus the search on mount, for the pointer that can type without
-  // costing screen space. On a touch pointer the software keyboard covers the
-  // branch list this combobox was expanded to show, and it is an inline
-  // combobox rather than a Radix layer - nothing was ever going to be focused
-  // on its behalf, so skipping the call leaves focus exactly where the tap
-  // that expanded it left it.
+  // Autofocus the search on mount, for the pointer that can type without costing screen space.
   const coarsePointer = useCoarsePointer();
   useEffect(() => {
     if (coarsePointer) return;
@@ -496,8 +452,8 @@ const SourceBranchList = memo(function SourceBranchList(props: {
     return () => window.cancelAnimationFrame(frame);
   }, [coarsePointer]);
 
-  // Keep the active option scrolled into the virtual window after filter
-  // changes and Home/End jumps. External scroller sync only — no React state.
+  // Keep the active option scrolled into the virtual window after filter changes and Home/End jumps. External
+  // scroller sync only - no React state.
   useEffect(() => {
     if (activeIndex < 0) return;
     listRef.current?.scrollIntoView({
@@ -516,8 +472,8 @@ const SourceBranchList = memo(function SourceBranchList(props: {
 
   let sourceList: ReactNode;
   if (props.isLoading) {
-    // Branches are still being fetched — the popover is already open, so show a
-    // spinner inside instead of an empty / sparse list.
+    // Branches are still being fetched - the popover is already open, so show a spinner inside instead of an empty
+    // / sparse list.
     sourceList = (
       <div
         id={listboxId}
@@ -579,9 +535,8 @@ const SourceBranchList = memo(function SourceBranchList(props: {
     );
   }
 
-  // A combobox: focus stays on the search box, the options are arrow-navigated
-  // (tabIndex -1 + aria-activedescendant), and Tab moves on to the New branch
-  // name field instead of stepping through every branch.
+  // A combobox: focus stays on the search box, the options are arrow-navigated (tabIndex -1 +
+  // aria-activedescendant).
   return (
     <div className="flex flex-col gap-1.5">
       <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
@@ -744,12 +699,8 @@ function selectedSourceNameState(input: {
   };
 }
 
-/**
- * Resolves the selected source + the branch-name prefill. The
- * "edited" flag lives in state (not a ref) so an explicit source selection can
- * re-derive an untouched name while preserving a user-edited name. The render
- * adjustment handles source-option hydration and keeps a staged name intact.
- */
+/** The "edited" flag lives in state (not a ref) so an explicit source selection can re-derive an untouched name
+ * while preserving a user-edited name. */
 function useNewWorktreeFormState(
   model: UnifiedPickerModel,
   currentIntent: WorktreeFolderIntent | null,
@@ -866,11 +817,7 @@ function newBranchIntentKey(
   ]);
 }
 
-/** The Source dropdown rows, mapped 1:1 from the model's ordered source list
- * (working-tree carry → clean current-branch fork → branches), reusing the
- * shared branch-picker row shape. The carry row carries the uncommitted-count
- * badge; remote refs carry a "remote" badge. `value` is the source `id` so the
- * carry and clean current-branch rows (same branch name) stay distinct. */
+/** `value` is the source `id` so the carry and clean current-branch rows (same branch name) stay distinct. */
 function buildSourceRows(
   model: UnifiedPickerModel,
   selectedSourceId: string | null,
@@ -912,10 +859,8 @@ function sourceRowBadges(
   return option.isRemote ? ["remote"] : [];
 }
 
-/**
- * The prefilled name. A staged new-branch worktree shows its staged name;
- * otherwise the selected source's generated default is used.
- */
+/** A staged new-branch worktree shows its staged name; otherwise the selected source's generated default is
+ * used. */
 function initialNewBranchName(
   intent: WorktreeFolderIntent | null,
   source: UnifiedPickerSourceOption | null,

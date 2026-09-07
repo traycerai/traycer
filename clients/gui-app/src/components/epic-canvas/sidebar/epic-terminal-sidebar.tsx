@@ -1,20 +1,7 @@
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
- * Host-driven raw-terminal list rendered as a left-panel rail entry. Durable
- * rows come from the authoritative `terminal.plain.list` collection stream;
- * `terminal.list` supplies compatibility rows such as setup/provider-login
- * shells (terminals do not live in the Y.Doc). Click a row to open or focus
- * that session as a canvas tab; the "+" action opens a fresh terminal whose
- * tile creates the underlying PTY on mount.
- *
- * Rows, states and per-row mutations all come from `useEpicTerminalsPanel` /
- * `useEpicTerminalRowActions`, which the phone switcher's Terminals category
- * mounts too; this file owns only the desktop chrome around them (drag to a
- * pane, hover "…", context menu, inline rename).
- *
- * Exports `TerminalsPanelBody` and `TerminalsPanelActions` consumed by
- * `epic-sidebar.tsx`'s `PANEL_COMPONENTS["terminals"]`. Agent terminals
- * (`terminal-agent` artifacts) live in the Agents panel instead.
+ * Durable rows come from the authoritative `terminal.plain.list` collection stream; `terminal.list` supplies compatibility rows such as setup/provider-login shells (terminals do not live in the Y.Doc).
+ * Rows, states and per-row mutations all come from `useEpicTerminalsPanel` / `useEpicTerminalRowActions`, which the phone switcher's Terminals category mounts too; this file owns only the desktop chrome around them (drag to a pane, hover "…", context menu, inline rename).
  */
 import {
   useCallback,
@@ -105,9 +92,8 @@ const TERMINALS_PANEL_SKELETON = <TerminalsPanelSkeleton />;
 const TERMINALS_TEST_ID_PREFIX = "epic-terminal-sidebar";
 
 /**
- * Body for the "terminals" left-panel rail entry. Lists raw host
- * terminals only; the chats panel keeps agent terminals (terminal-agent
- * artifacts) alongside chat rows.
+ * Body for the "terminals" left-panel rail entry.
+ * Lists raw host terminals only; the chats panel keeps agent terminals (terminal-agent artifacts) alongside chat rows.
  */
 export function TerminalsPanelBody(props: LeftPanelSlotProps) {
   // Live body is split out so `useTerminalList` (a host RPC) is only
@@ -135,9 +121,7 @@ function TerminalsPanelBodyLive(props: {
       openTile({
         node: tile,
         target: { tabId },
-        // Explicit, not `single`: double-click on a terminal row is RENAME, so
-        // no gesture would ever promote a previewed terminal tile and clicking
-        // row A then row B would evict A.
+        // Explicit, not `single`: double-click on a terminal row is RENAME, so no gesture would ever promote a previewed terminal tile and clicking row A then row B would evict A.
         gesture: "explicit",
         modifiers: modifiersFromMouseEvent(event),
         placement: null,
@@ -165,11 +149,7 @@ function TerminalsPanelBodyLive(props: {
 }
 
 /**
- * Header "+" action for the "terminals" left panel - opens the host +
- * folder picker; selecting a folder opens a fresh raw terminal tab in
- * that directory. Subscribes only to the open-action (no terminal-list
- * subscription) so a collapsed Terminals section doesn't re-render on
- * every host list update.
+ * Subscribes only to the open-action (no terminal-list subscription) so a collapsed Terminals section doesn't re-render on every host list update.
  */
 export function TerminalsPanelActions(props: LeftPanelSlotProps) {
   const collapsed = useLeftPanelSectionCollapsed("terminals");
@@ -361,20 +341,8 @@ function TerminalRow(props: TerminalRowProps) {
   };
 
   const commitRename = () => {
-    // Settle the editor on COMMIT, not on the ack - the same contract as the
-    // two epic sidebar trees and `useInlineRename`. The optimistic cache patch
-    // is the feedback. Waiting to be called back held this editor open for the
-    // whole round trip, and open FOREVER on a failure or a refusal, neither of
-    // which called anything back.
-    //
-    // But a REFUSAL still has to hold the editor open, or the typed title is
-    // gone with nothing sent: rename can go unavailable while this editor is
-    // up (the host stops being mutable, or another row's rename is in flight -
-    // that pending flag is panel-wide). This reads a synchronous return, not a
-    // `mutate`-scoped callback, so it keeps the settle on the gesture.
-    // `onBlur` routes here too, and holding the editor through a blur is the
-    // point: the text survives until the rename can actually be sent, and
-    // Escape still discards it.
+    // Settle the editor on COMMIT, not on the ack - the same contract as the two epic sidebar trees and `useInlineRename`.
+    // The optimistic cache patch is the feedback.
     if (actions.submitRename(renameValue)) setIsRenaming(false);
   };
 

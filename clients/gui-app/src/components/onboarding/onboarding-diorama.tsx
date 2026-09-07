@@ -57,7 +57,6 @@ import { cn } from "@/lib/utils";
 interface OnboardingDioramaProps {
   readonly actId: DesktopOnboardingActId;
   readonly agentGuide: OnboardingAgentGuideState;
-  /** Carried for the guide's own title bar - see `AgentGuideModal`. */
   readonly hostPicker: OnboardingHostPicker;
 }
 
@@ -70,9 +69,8 @@ type NodeKind =
   | "file"
   | "diff";
 
-// What this desktop miniature can draw. One scene per DESKTOP act id, and a
-// separate name on purpose: the act union carries mobile members this diorama
-// never renders, and the page's platform branch keeps them away from here.
+// One scene per desktop act id, and a separate name on purpose: the act union carries mobile members this
+// diorama never renders, and the page's platform branch keeps them away from here.
 type SceneId =
   | "task-tabs"
   | "navigation"
@@ -156,9 +154,7 @@ const NAV_DROP_AGENTS = [
   readonly startTop: string;
 }>;
 
-// Screen 3: a scripted agent-to-agent story. Anchors are centers of each pane
-// within the workbench (left half = Codex GUI chat, stacked right halves =
-// Claude Code + OpenCode terminals). Pills travel between them on handoffs.
+// Screen 3: a scripted agent-to-agent story.
 const MESH_ANCHORS: Record<
   MeshAgentId,
   { readonly x: string; readonly y: string }
@@ -167,9 +163,7 @@ const MESH_ANCHORS: Record<
   claude: { x: "76%", y: "27%" },
   opencode: { x: "76%", y: "73%" },
 };
-// The two right-pane terminal-agent run names. These must match the sidebar
-// list rows so an open tab always corresponds to a list item. Claude's run name
-// is per-task (taskScene.terminal); OpenCode's is fixed.
+// These must match the sidebar list rows so an open tab always corresponds to a list item.
 const OPENCODE_RUN_LABEL = "verification run";
 const PANE_ACCENT_CLASS: Record<MeshAgentId, string> = {
   gui: "border-primary/45 text-primary",
@@ -211,14 +205,8 @@ const THEME_DOCK_SWATCHES = [
   ["#0b0e14", "#e6b450", "Ayu"],
 ] as const;
 
-/**
- * `null` is an act that shows no mini-app at all (session import, whose stage
- * is the live wizard; login import, whose stage is the live import flow). The
- * page does not render the diorama for them, and this map is where that fact
- * is stated: defaulting to a scene instead would mount the command-theme
- * mini-app - animations and all - behind an act that deliberately hides the
- * diorama.
- */
+/** The page does not render the diorama for them, and this map is where that fact is stated: defaulting to a
+ * scene instead would mount the command-theme mini-app - animations and all. */
 const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
   {
     "task-tabs": "task-tabs",
@@ -325,16 +313,13 @@ function DioramaScene(props: {
         )}
       >
         {scene === "agent-guide" ? (
-          // The window's title is the host picker on this act: the guide is
-          // stored on a host, and the card floating below already says what
-          // it is. `z-30` lifts the bar above the modal's scrim (`z-20`), or
-          // the one control that changes the host would sit under a dimmer.
+          // `z-30` lifts the bar above the modal's scrim (`z-20`), or the one control that changes the host would sit
+          // under a dimmer.
           <OnboardingHostPickerBar
             picker={hostPicker}
             trafficLights
-            // Above the modal's own full-window container (`z-30`), which is
-            // a later sibling and would otherwise paint over this bar and
-            // take its clicks.
+            // Above the modal's own full-window container (`z-30`), which is a later sibling and would otherwise paint
+            // over this bar and take its clicks.
             className="z-40"
           />
         ) : (
@@ -1071,8 +1056,8 @@ function ProvidersFocusScene() {
         transition={{ duration: 0.25, ease: EASE }}
         className="absolute inset-0 z-20 bg-black/55 supports-backdrop-filter:backdrop-blur-xs"
       />
-      {/* Anchored at the chat composer (bottom-left of the left pane), not a
-          centered modal — the dropdown reads as the input box's own picker. */}
+      {/* Anchored at the chat composer (bottom-left of the left pane), not a centered modal - the dropdown reads as
+         the input box's own picker. */}
       <m.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -1378,8 +1363,8 @@ function OpencodeStoryBody(props: {
   );
 }
 
-// Screen 5: the Agents guide as a centered modal over a dimmed app — just the
-// guide content, no settings nav chrome.
+// Screen 5: the Agents guide as a centered modal over a dimmed app - just the guide content, no settings nav
+// chrome.
 function AgentGuideModal(props: {
   readonly agentGuide: OnboardingAgentGuideState;
   readonly hostPicker: OnboardingHostPicker;

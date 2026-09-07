@@ -28,10 +28,7 @@ const storeMocks = vi.hoisted(() => ({
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
-/**
- * Optional delayed materialize for destination-race tests. When `impl` is set,
- * restore uses it instead of the real blob-read path.
- */
+/** When `impl` is set, restore uses it instead of the real blob-read path. */
 const materializeMocks = vi.hoisted(() => ({
   impl: null as null | ((entry: PromptStashEntry) => Promise<JsonContent>),
 }));
@@ -200,10 +197,7 @@ describe("usePromptStash command/menu state", () => {
     expect(storeMocks.save).not.toHaveBeenCalled();
   });
   it("modal Cmd+S stays registered while disabled (terminal mode) and never falls through to the underlying composer", async () => {
-    // Mirrors NewConversationModalBody over an open chat/landing composer:
-    // modal stays `active: true` for its whole open lifetime (so it owns the
-    // stack top), and folds terminal-mode into `disabled` so Cmd+S is a
-    // genuine no-op rather than releasing the slot to the composer beneath.
+    // Mirrors NewConversationModalBody over an open chat/landing composer: modal stays `active: true` for its whole open lifetime (so it owns the stack top), and folds terminal-mode into `disabled` so Cmd+S is a genuine no-op rather than releasing the slot to the composer beneath.
     const underlyingEditor = makeEditor({
       content: textDoc("underlying draft"),
     });

@@ -117,10 +117,6 @@ import {
   releaseAttachmentGrant,
 } from "../browser-view/webview-guest-birth";
 
-/**
- * The whole-jar capture reads the one shared `primary` identity, so its
- * session lookup carries no per-tab session id.
- */
 const PRIMARY_PROFILE_REQUEST: BrowserSessionProfileRequest = {
   profile: "primary",
   sessionId: "primary",
@@ -140,10 +136,7 @@ export function registerBrowserViewIpc(
   const observedConnections = new BrowserObservedConnectionGovernor(() =>
     Date.now(),
   );
-  // Everything that writes or empties the `primary` jar queues here, keyed by
-  // registrable domain. It is what makes the applier's clear-in-progress check
-  // an ordering fact instead of a read that a clear can invalidate before the
-  // merge it authorised runs.
+  // It is what makes the applier's clear-in-progress check an ordering fact instead of a read that a clear can invalidate before the merge it authorised runs.
   const jarSerializer = new BrowserJarSerializer();
   const primaryProfileSnapshots = new BrowserPrimaryProfileSnapshotCoordinator(
     (origins) =>
@@ -153,27 +146,8 @@ export function registerBrowserViewIpc(
       }),
     captureBrowserOriginLocalStorage,
   );
-  // The origins a clear can name are the coordinator's: localStorage is not
-  // enumerable from the session, so the origins this process has actually
-  // visited are the only ones a site clear can reach - including one whose
-  // read is still in flight, since the tile that read is from is live there.
   const rememberedClearSiteOrigins = (): readonly string[] =>
     primaryProfileSnapshots.clearableOrigins();
-  /**
-   * Every jar a `primary` login can be sitting in right now, durable one first.
-   *
-   * The durable `persist:` jar is always in the list, for the same reason
-   * "forget all" used to open it explicitly: it survives the saved-logins pref,
-   * so a clear taken while saving is OFF would leave the login on disk and
-   * turning the pref back on would restore what the user deleted. When saving
-   * is off the live guests are on the EPHEMERAL jar instead, which is not
-   * `persist:` but does outlive the toggle for the whole process run - so
-   * leaving it out signs nobody out until the app restarts.
-   *
-   * Sessions are memoised per partition, so the two entries are the very same
-   * object whenever the pref leaves `primary` guests on the durable jar, and
-   * identity is what collapses the list back to one.
-   */
   const primaryProfileJars = (): readonly Session[] => {
     const durableSession = ensureBrowserViewSessionForPartition(
       BROWSER_VIEW_PARTITION,
@@ -183,23 +157,7 @@ export function registerBrowserViewIpc(
       ? [durableSession]
       : [durableSession, activeSession];
   };
-  /**
-   * One site gone from every one of those jars, and from the localStorage this
-   * process remembers for it.
-   *
-   * EVERY jar is attempted, whatever the ones before it did: they hold
-   * independent copies of the same login, so abandoning the loop on the durable
-   * jar's failure would leave the open tile still signed in. The first failure
-   * is re-thrown once the loop is done, so the IPC caller still learns the site
-   * was not fully cleared.
-   *
-   * The prune runs last, and ONLY when every jar succeeded. Last, because each
-   * clear reads the same remembered origins and pruning first would starve the
-   * ones after it. All-or-nothing, because those remembered origins are the
-   * only record of which localStorage a clear can name - dropping them while a
-   * jar still holds the site would make that site's localStorage unreachable
-   * for the rest of the run, retry included.
-   */
+  /** The first failure is re-thrown once the loop is done, so the IPC caller still learns the site was not fully cleared. */
   const clearBrowserSiteEverywhere = async (domain: string): Promise<void> => {
     // Boxed, so a falsy thrown value still counts as a failure.
     let failure: { readonly error: unknown } | null = null;
@@ -222,29 +180,14 @@ export function registerBrowserViewIpc(
     primaryProfileSnapshots.forgetOriginsUnder(domain);
   };
   /**
-   * "Forget all browser logins", the jar half only - the ledger write is the
-   * caller's, because a boot reconciliation re-runs this without recording
-   * anything new.
-   *
-   * Everything runs with the cookie-delta observer muted for every domain:
-   * `clearStorageData` fires a removal for each cookie, and those deltas would
-   * re-create the entries just deleted.
-   *
-   * The order is the rest of the correctness argument: the localStorage
-   * coordinator is reset before the tiles come back, so a recreated tile
-   * cannot be re-seeded from an origin remembered pre-forget, and the tiles
-   * are recreated last, at their current URLs. Throws if any jar refused, so
-   * the caller does not record a clear that did not happen.
+   * The order is the rest of the correctness argument: the localStorage coordinator is reset before the tiles come back, so a recreated tile cannot be re-seeded from an origin.
+   * Throws if any jar refused, so the caller does not record a clear that did not happen.
    */
   const forgetEveryBrowserLogin = async (): Promise<void> => {
     // Opened here, outside the suppression: the durable jar must be cleared
     // even with saved logins off or no tile opened this run, and opening it is
     // what installs the observer the suppression mutes.
     const jars = primaryProfileJars();
-    // A forget names no site, so it takes the serializer's barrier over every
-    // one of them: an observed merge for ANY domain that is mid-flight
-    // finishes first, and one that arrives during the forget waits until the
-    // jar is empty rather than writing into a clear.
     await jarSerializer.runOnEveryDomain(
       async () =>
         suppressAllBrowserPrimaryProfileDeltas(async () => {
@@ -262,11 +205,6 @@ export function registerBrowserViewIpc(
               });
             }
           }
-          // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for
-          // the reason that prune is conditional: a whole-jar clear names no
-          // origins, so dropping this memory starves no retry - while KEEPING it
-          // after a failed clear would let the next capture upload to the host
-          // the very localStorage it just shredded its slice for.
           primaryProfileSnapshots.reset();
           await manager.recreateNativeTabsOnCurrentPartition();
           // Surfaced only once the tiles are back, and surfaced at all so the
@@ -277,16 +215,6 @@ export function registerBrowserViewIpc(
     );
     log.info("[browser-view] forgot the saved browser logins");
   };
-  /**
-   * The ONE validated write path a host reaches this jar through.
-   *
-   * Both doors - the `primaryProfileObserved` frame and the
-   * `createElectronTab` storage seed - land here with the same dependencies,
-   * so there is exactly one place that decides what a host may write and one
-   * set of traces to read afterwards. Only the jar the write targets differs,
-   * which is why it is the argument: the observed frame always means the
-   * shared `primary` jar, while a seed means the guest's own.
-   */
   const applyHostContributedCookies = async (
     observed: BrowserObservedProfile,
     getTargetJar: () => BrowserObservedProfileTarget,
@@ -295,13 +223,6 @@ export function registerBrowserViewIpc(
       now: () => Date.now(),
       isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
       isHeadlessOriginKey: isHeadlessOriginCookieKey,
-      // The observer first, then the durable record: the observer is what
-      // stops this applier's own inserts from handing the keys straight back
-      // to the desktop, and the record is what lets the sending host update
-      // them again later.
-      //
-      // The applier calls neither for a write bound for the ephemeral jar,
-      // which is why both may write the durable ledger unconditionally.
       claimHeadlessOriginKeys: async (keys) => {
         noteBrowserPrimaryProfileAppliedKeys(keys);
         await recordHeadlessOriginCookieKeys(keys);
@@ -364,39 +285,21 @@ export function registerBrowserViewIpc(
     },
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
-      // The renderer's tab bindings die with it, so the host-side rebind is
-      // inevitable; keeping the streams warm would need a snapshot replay into
-      // the fresh renderer and new state every forget path must keep in step.
-      // This reproduces what a renderer-owned socket did.
       sessions.closeWindow(windowId);
     },
     send: (windowId, channel, payload) =>
       bridge.safeSendToWindow(windowId, channel, payload),
     seedStorageState: async (input, webContents) => {
       if (input.seedStorageState === null) return null;
-      // The seed's CLAIM. An observed frame names the domain it speaks for and
-      // is checked against it; a seed names nothing, so the tab it is being
-      // handed to is the claim - the one fact about this write that no sender
-      // chose. A tab with no registrable site (`about:blank`, a bare IP form
-      // the list cannot place) has no scope to seed into.
+      // A tab with no registrable site (`about:blank`, a bare IP form the list cannot place) has no scope to seed into.
       const scope = registrableDomainForUrl(input.requestedUrl);
       if (scope === null) return null;
-      // The localStorage half takes the SAME scope, and needs it more than the
-      // cookies do: the seed script does `localStorage.clear()` on any origin
-      // it matches, so an unfiltered seed hands one tab the authority to wipe
-      // and rewrite local state for every site in the host's snapshot.
       const origins = input.seedStorageState.origins.filter(
         (origin) => registrableDomainForUrl(origin.origin) === scope,
       );
       const result = await applyHostContributedCookies(
         {
           source: "seed",
-          // The STREAM's connection, same provenance an observed frame
-          // carries, because both watermarks the applier reads are keyed by
-          // it: the forget ledger's per-connection ack (a synthetic id has
-          // acked nothing, so one forget would refuse every later seed
-          // forever) and the observed replay budget. Off-connection there is
-          // no ack to find, and the gate refusing is the safe direction.
           connectionId:
             input.connectionId ?? `seed:${input.hostId}:${input.sessionId}`,
           hostId: input.hostId,
@@ -413,44 +316,13 @@ export function registerBrowserViewIpc(
             ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
         }),
       );
-      // One verdict for the whole seed. The frame-level refusals are the ones
-      // that mean "this write may not land at all" - above all `ledger-unacked`,
-      // where the user forgot this site and the sending connection has not
-      // acked pruning it. Seeding the localStorage of a site whose cookies were
-      // just refused would restore by another door exactly what the forget
-      // removed.
       if (result.outcome !== "applied") return null;
-      // The localStorage half has no per-key merge: installing it runs
-      // `clear()` and rewrites the whole origin, which is a DESTRUCTIVE write
-      // however add-only the cookie half was. Two shapes therefore refuse it,
-      // and both are about what the desktop already owns rather than about
-      // what happened to land:
-      //
-      //  - Any cookie of this seed was refused as `owned-by-desktop`. That
-      //    names a site the user's own browsing signed into on this machine,
-      //    so its localStorage is the desktop's too - and one unrelated cookie
-      //    landing beside the refusal does not buy the right to clear it.
-      //  - Nothing landed at all, a seed carrying no cookies included. Then
-      //    nothing establishes that this host has anything to say about the
-      //    origin, and a clear-and-rewrite would be an arbitrary overwrite of
-      //    whatever the desktop holds - the same resurrection by another door
-      //    the ledger gate exists to stop.
-      //
-      // The cost is a localStorage-only login on a cookie-less site never
-      // carrying over, which is the fail-closed half of a channel that is
-      // add-only by construction (universal-sign-in decision 8).
+      // The cost is a localStorage-only login on a cookie-less site never carrying over, which is the fail-closed half of a channel that is add-only by construction (universal-sign-in.
       if (result.ownedByDesktopCookies > 0 || result.appliedCookies === 0) {
         return null;
       }
-      // Retained only for a seed that LANDED, and after the verdict rather
-      // than before it. These origins are what a quit capture reads
-      // localStorage from and ships to the host, so retaining them for a
-      // refused seed hands the forgotten site straight back by the capture
-      // door - the one door the ledger gate cannot see. What it costs is
-      // nothing: a refused seed wrote no localStorage for the capture to find.
-      //
-      // Isolated guests are never seeded (the host forces `seedStorageState`
-      // to null at the placement seam), so nothing throwaway enters here.
+      // Retained only for a seed that LANDED, and after the verdict rather than before it.
+      // These origins are what a quit capture reads localStorage from and ships to the host, so retaining them for a refused seed hands the forgotten site straight back by the capture.
       primaryProfileSnapshots.retainSeededOrigins({ cookies: [], origins });
       return { cookies: [], origins };
     },
@@ -475,19 +347,8 @@ export function registerBrowserViewIpc(
   });
 
   /**
-   * Forgets this machine recorded but never finished clearing, re-run at
-   * startup.
-   *
-   * The ledger is written BEFORE the jar is touched, deliberately - that is
-   * what refuses an in-flight observation for a site the user just deleted -
-   * so a crash in between leaves the ledger claiming a login is gone while the
-   * jar still serves it. The jar is the master, so the next whole-jar capture
-   * would teach every host the login back, and no host-side prune undoes that.
-   *
-   * Idempotent by construction: emptying a site twice is emptying it. It runs
-   * through the same jar serializer as every other clear, so nothing this
-   * process does later can slip underneath it, and the whole-jar capture waits
-   * on it explicitly - that is the one jar read that does not queue here.
+   * Forgets this machine recorded but never finished clearing, re-run at startup.
+   * The ledger is written BEFORE the jar is touched, deliberately - that is what refuses an in-flight observation for a site the user just deleted.
    */
   const forgetLedgerReconciled = (async (): Promise<void> => {
     const pending = browserForgetLedgerPendingClears();
@@ -502,10 +363,7 @@ export function registerBrowserViewIpc(
         await forgetEveryBrowserLogin();
         await markBrowserForgetLedgerCleared(forgetAll.revision);
       }
-      // Each entry marked with ITS OWN revision, as it completes. Marking the
-      // ledger's top instead added a number no completion could ever produce,
-      // and the contiguous drain then never advanced past the gap - so every
-      // launch re-ran the same forget, forever.
+      // Marking the ledger's top instead added a number no completion could ever produce, and the contiguous drain then never advanced past the gap.
       for (const entry of pending.domains) {
         await jarSerializer.runOnDomain(entry.domain, () =>
           clearBrowserSiteEverywhere(entry.domain),
@@ -522,31 +380,11 @@ export function registerBrowserViewIpc(
   })();
 
   /**
-   * Every whole-jar capture, read as the ledger says the jar WILL be: a site
-   * whose forget is recorded but whose clear has not run yet is left out,
-   * and an uncleared forget-all empties it. The boot reconciliation above
-   * closes the gap a crash leaves; this closes the one a queue leaves, which
-   * the reconciliation cannot reach: the clear a forget queued behind a
-   * login import's barrier runs after the import's own push, and that push
-   * reads from inside the barrier. See `withoutUnclearedForgets`.
-   *
-   * The reconciliation itself is NOT awaited in here, and the two lanes
-   * below await it before calling this. The behind-barrier lane holds the
-   * serializer's read lease for as long as its callback runs, and the
-   * reconciliation drives its own clears through that serializer: a lease
-   * parked on the reconciliation would have a forget-all requested
-   * meanwhile wait on the read, the read wait on the reconciliation, and
-   * the reconciliation's `runOnDomain` wait on the forget-all's gate - a
-   * cycle only the barrier timer would break.
+   * The boot reconciliation above closes the gap a crash leaves.
+   * The behind-barrier lane holds the serializer's read lease for as long as its callback runs, and the reconciliation drives its own clears through that serializer: a lease parked on.
    */
   const captureLedgeredPrimaryProfile =
     async (): Promise<BrowserPrimaryProfileCaptureResult> => {
-      // Bracketing the read, which does not queue on the serializer: a site
-      // clear that records, clears and marks itself while the cookies are
-      // being read would be in neither a mask taken before (not recorded
-      // yet) nor one taken after (already cleared), while the read still
-      // holds the cookie it removed. The bracket accumulates every forget
-      // recorded while it is open, apart from the ledger's trimmed rows.
       const bracket = bracketUnclearedForgets();
       try {
         const captured = await primaryProfileSnapshots.capture();
@@ -557,24 +395,7 @@ export function registerBrowserViewIpc(
       }
     };
 
-  /**
-   * The jar plane's own streams. Everything cookie-bearing on
-   * `browser.sessions` is produced and consumed right here, beside the jar it
-   * is about; the renderer says which streams should exist and sees a
-   * cookie-free projection of them.
-   */
-  /**
-   * The jar plane's principal, and the ONE reading of it.
-   *
-   * A signed-in session whose bearer main VERIFIED itself, never one a renderer
-   * merely declared. `authSessionSet` is shape-checked and reachable from any
-   * code running in a renderer, so an XSS could push an attacker's token and
-   * profile and this process would dial the attacker's host and answer a
-   * capture with the user's whole jar. Everything the plane speaks for - the
-   * dial, the relay attach grant, the store-key wrap, the forget ledger's
-   * per-user match - reads from here, so an unverified session is not a
-   * degraded principal but no principal at all.
-   */
+  /** A signed-in session whose bearer main VERIFIED itself, never one a renderer merely declared. */
   const jarPlanePrincipal = (): {
     readonly token: string;
     readonly userId: string;
@@ -619,35 +440,12 @@ export function registerBrowserViewIpc(
         appVersion: app.getVersion(),
       }),
     jar: {
-      // Behind the boot reconciliation, and it is the ONE jar read that has
-      // to be: every write queues on the jar serializer, but a whole-jar
-      // capture does not, and a capture taken before an unfinished forget
-      // was re-run would upload to the host exactly the logins the user
-      // deleted. The same hole exists at runtime for a forget recorded
-      // while its clear is still queued (behind a login import's barrier,
-      // typically), and the reconciliation cannot close that one - the
-      // import's own push reads from inside the barrier the clear waits
-      // on - so the capture is read as the ledger says the jar will be:
-      // `captureLedgeredPrimaryProfile`.
+      // The same hole exists at runtime for a forget recorded while its clear is still queued (behind a login import's barrier, typically), and the reconciliation cannot close that one.
       capturePrimaryProfile: async () => {
         await forgetLedgerReconciled;
         return await captureLedgeredPrimaryProfile();
       },
-      // A HOST-issued whole-jar read - and the final capture at a window's
-      // close or quit - runs behind any whole-jar barrier, holding the
-      // serializer's read lease through the read so no barrier can open
-      // under it: taken while the login import writes site by site, it
-      // would carry some sites imported and some not, and the host would
-      // hold that hybrid until the next capture. The import's own push,
-      // inside its barrier, goes straight to the jar.
-      //
-      // The reconciliation is awaited BEFORE the lease, never under it: it
-      // re-runs unfinished forgets through this same serializer, and a
-      // lease held across it is a cycle with any barrier requested
-      // meanwhile (see `captureLedgeredPrimaryProfile`). `waitMs` bounds
-      // the barrier wait alone; the reconciliation is boot work that is
-      // over long before a close or a host's ask, and a quit that lands
-      // during it waits for it, which is the shell's own budget's to bound.
+      // The reconciliation is awaited BEFORE the lease, never under it: it re-runs unfinished forgets through this same serializer, and a lease held across it is a cycle with any barrier.
       capturePrimaryProfileBehindBarrier: async (waitMs) => {
         await forgetLedgerReconciled;
         const read = await jarSerializer.readBehindBarrier(
@@ -685,15 +483,6 @@ export function registerBrowserViewIpc(
         bridge.options.host.off("change", listener);
       };
     },
-    // Every bearer this process is handed. The renderer refreshes the
-    // credential and pushes the result here (`authSessionSet`), which is the
-    // only rotation signal main gets - and the only thing that reopens a jar
-    // stream the host closed at the old token's expiry.
-    //
-    // It fires on a change to an UNVERIFIED session too, which is what makes
-    // one read as a sign-out here: `userId()` answers null, so the streams
-    // tear down rather than carrying on under a principal main cannot vouch
-    // for.
     subscribeBearerRotation: (listener) => {
       const onChange = (): void => {
         listener();
@@ -830,10 +619,7 @@ export function registerBrowserViewIpc(
       if (pending === null) {
         throw new Error("Browser certificate error is no longer pending");
       }
-      // Trusting a certificate durably widens what this machine accepts as
-      // that hostname, so main asks rather than taking the renderer's word for
-      // it. The hostname is the pending record's, not the caller's - the
-      // caller named an error id.
+      // The hostname is the pending record's, not the caller's - the caller named an error id.
       if (
         !(await confirmDestructiveInMain({
           title: "Trust this certificate?",
@@ -874,33 +660,9 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // "Clear cookies for this site" (spec §6.5). The manager derives the site
-  // from the tile's own current URL; the jars are the shared `primary` ones,
-  // which are the only jars a tile menu may reach. A tile with no site to name
-  // - a private session, or a non-http(s) page - has nothing to clear.
-  //
-  // No suppression here: the removals fire the durable jar's own change events,
-  // which coalesce into the single delta that tells the host the slice is empty.
   /**
-   * "Sign me out of this site", whichever door asked for it: the tile menu and
-   * one row of Settings > Browser. THREE steps, in this order, and the order is
-   * the correctness argument.
-   *
-   * The LEDGER first, before the jar is touched and before the clear is even
-   * queued: the revision it bumps is what refuses observations for this site
-   * from every host that has not yet acked pruning it, so bumping after the
-   * clear would leave exactly the window a stale in-flight observation walks
-   * through. Then the local jar, queued on the site like every other write to
-   * it, so an observed sign-in for the same domain cannot land in the middle of
-   * the clear and put back what it is removing. Only then is the clear marked
-   * complete.
-   *
-   * No host frame goes out from here, and none is needed: the ledger write
-   * fires the change that pushes a fresh digest onto every live stream, which
-   * reaches the hosts that are attached AND the ones that come back later. The
-   * Settings row used to send `clearSite` to the attached hosts and do none of
-   * these three, so it cleared other machines while this one's jar kept the
-   * cookies and the next capture taught them all back.
+   * The LEDGER first, before the jar is touched and before the clear is even queued: the revision it bumps is what refuses observations for this site from every host that has not yet.
+   * Then the local jar, queued on the site like every other write to it, so an observed sign-in for the same domain cannot land in the middle of the clear and put back what it is.
    */
   const clearOneSavedLoginSite = async (domain: string): Promise<void> => {
     const revision = await recordForgottenBrowserSite(domain);
@@ -920,11 +682,6 @@ export function registerBrowserViewIpc(
         browserViewIpcPayload.tileKey.parse(payload),
       );
       if (domain === null) return;
-      // Confirmed for the same reason its two siblings are, and it was the one
-      // that was not: a compromised renderer could navigate a tile it owns to
-      // any site and then call this, signing the user out of it on every
-      // machine with nothing on screen. The tile names the tile; MAIN names the
-      // domain in the copy, from the tile's own current URL.
       if (!(await confirmDestructiveInMain(clearSiteConfirmation(domain)))) {
         log.info("[browser-view] clearing one site was not confirmed");
         return;
@@ -981,21 +738,11 @@ export function registerBrowserViewIpc(
     isBrowserSavedLoginsEnabled(),
   );
 
-  // Toggling just switches which jar `primary` guests are born into and brings
-  // the live tiles back on it at the same URL. Nothing is copied either way:
-  // turning saving off leaves the `persist:` jar on disk untouched (that is
-  // what "Forget all" is for), and turning it back on drops the in-memory one.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSaveLoginsSet,
     async (_event, payload): Promise<boolean> => {
       const enabled = browserViewIpcPayload.saveLogins.parse(payload);
-      // The pref flip takes the whole-jar barrier: the login import writes
-      // the durable jar only while saving is ON and re-reads the pref inside
-      // its own barrier, so a toggle can no longer slip between that read and
-      // the write. The pref only - the tab recreation below runs outside, as
-      // it must not queue jar work behind a gate it is itself holding. A
-      // toggle confirmed while an import holds the barrier waits its budget
-      // and then fails, and is retried after.
+      // The pref only - the tab recreation below runs outside, as it must not queue jar work behind a gate it is itself holding.
       const settled = await jarSerializer.runOnEveryDomain(
         () => setBrowserSavedLoginsEnabled(enabled),
         BARRIER_ACTION_TIMEOUT_MS,
@@ -1008,30 +755,12 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // The desktop half of "forget all browser logins" (spec §6.5). Driven by
-  // Settings, alongside the `forgetLogins` frame each connected host answers by
-  // shredding its own slice - and no longer by a fan-out from the host, which
-  // was retired because it could only ever reach the hosts that happened to be
-  // attached. See {@link forgetEveryBrowserLogin} for the delta-observer
-  // suppression this runs under.
-  //
-  // The order is the whole correctness argument. The LEDGER is written first,
-  // before a single cookie goes: its revision is what refuses in-flight
-  // observations for every site at once, and it is what a host that was
-  // disconnected here prunes from when it comes back. Then the localStorage
-  // coordinator is reset before the tiles come back, so a recreated tile cannot
-  // be re-seeded from an origin remembered pre-forget, and the tiles are
-  // recreated last, at their current URLs.
+  // Then the localStorage coordinator is reset before the tiles come back, so a recreated tile cannot be re-seeded from an origin remembered pre-forget, and the tiles are recreated.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewForgetLogins,
     async (): Promise<boolean> => {
-      // Main decides, not the renderer: this is the single most destructive
-      // action the browser surface has, and it was reachable from any code
-      // running in a renderer. The
-      // renderer may ASK; a native dialog the renderer cannot draw over or
-      // dismiss is what turns the ask into a decision. Before the ledger
-      // write, because that is the first irreversible step - it tells every
-      // host to prune.
+      // The renderer may ASK; a native dialog the renderer cannot draw over or dismiss is what turns the ask into a decision.
+      // Before the ledger write, because that is the first irreversible step - it tells every host to prune.
       if (!(await confirmDestructiveInMain(FORGET_ALL_LOGINS_CONFIRMATION))) {
         log.info("[browser-view] forget-all was not confirmed");
         return false;
@@ -1042,21 +771,13 @@ export function registerBrowserViewIpc(
       // the forget, so a crash in between leaves the clear pending and the
       // next launch re-runs it.
       await markBrowserForgetLedgerCleared(revision);
-      // The host frames go out from HERE, not from a renderer: the
-      // stream is main's, and a `forgetLogins` frame shreds the sending
-      // account's whole slice on that host. A cancelled dialog therefore
-      // cannot reach a host at all, rather than relying on a renderer to
-      // honour the verdict it was told.
+      // A cancelled dialog therefore cannot reach a host at all, rather than relying on a renderer to honour the verdict it was told.
       const hosts = sessions.forgetLoginsOnEveryHost();
       log.info("[browser-view] told the connected hosts to forget", { hosts });
       return true;
     },
   );
 
-  // "Clear" on one row of Settings > Browser. Confirmed here for the same
-  // reason forget-all is: a renderer looping the saved-sites list used to
-  // reproduce forget-all one domain at a time with no dialog at all. The
-  // frame is main's now, so the loop has nothing to send.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewClearSavedLoginSite,
     async (_event, payload): Promise<boolean> => {
@@ -1069,26 +790,14 @@ export function registerBrowserViewIpc(
       return true;
     },
   );
-  // Import logins from another browser. Every handler answers a result value
-  // and never rejects: a rejected invoke's message is logged at WARN and
-  // forwarded to Sentry, and nothing on this path - a profile path, a
-  // keychain's answer, a cookie - may travel that way. The service holds the
-  // paths; the renderer sees opaque ids and registrable domains only.
-  // The import's jar write takes the same barrier forget-all does: it
-  // touches many sites at once, and a forget confirmed while it runs must
-  // wait for it rather than be marked complete under a write that then puts
-  // the logins back.
+  // Every handler answers a result value and never rejects: a rejected invoke's message is logged at WARN and forwarded to Sentry, and nothing on this path.
+  // The import's jar write takes the same barrier forget-all does: it touches many sites at once, and a forget confirmed while it runs must wait for it rather than be marked complete.
   const loginImport = createLoginImportService({
     serializeJarWrite: (action) =>
       jarSerializer.runOnEveryDomain(
         action,
         LOGIN_IMPORT_JAR_BARRIER_TIMEOUT_MS,
       ),
-    // The localStorage half of a site clear, on the durable jar the import
-    // writes, followed by the same coordinator prune the site clear does -
-    // without it the next capture ships the origins just emptied back to
-    // the host. The durable jar only: the import refuses when saving is
-    // off, and with it on the durable jar IS the jar the tiles are on.
     clearSiteLocalStorage: async (site, signal) => {
       await clearBrowserSiteLocalStorage(
         site,
@@ -1098,17 +807,8 @@ export function registerBrowserViewIpc(
       );
       primaryProfileSnapshots.forgetOriginsUnder(site);
     },
-    // The push is main's, exactly like forget-all's frames: a renderer may
-    // not mint a jar frame at all. It is needed at all because the import
-    // writes with the delta observer muted - the coalesced deltas that carry
-    // an ordinary sign-in never fire for it, so without this capture the
-    // hosts would not see the imported logins until something else asked
-    // for one. Made by the import INSIDE its barrier, so a saved-logins
-    // toggle queued behind the import cannot move the capture's jar first.
-    // Never rejects: a stream whose capture threw must not turn a committed
-    // import into a rejected invoke that the user retries and Sentry
-    // records. Zero hosts is an honest answer here - the next capture
-    // carries the logins.
+    // It is needed at all because the import writes with the delta observer muted.
+    // Made by the import INSIDE its barrier, so a saved-logins toggle queued behind the import cannot move the capture's jar first.
     pushJarToHosts: async () => {
       try {
         return await sessions.capturePrimaryProfileOnEveryHost();
@@ -1126,10 +826,8 @@ export function registerBrowserViewIpc(
     (): Promise<readonly LoginImportSource[]> => loginImport.listSources(),
   );
 
-  // The native file dialog runs in main so the renderer never names a path;
-  // the picked file is registered under an opaque id like every other source.
-  // A dialog that cannot be shown answers like a cancelled one: there is no
-  // file, and the OS's reason is not for the renderer or the log.
+  // The native file dialog runs in main so the renderer never names a path; the picked file is registered under an opaque id like every other source.
+  // A dialog that cannot be shown answers like a cancelled one: there is no file, and the OS's reason is not for the renderer or the log.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewLoginImportPickFile,
     async (event): Promise<LoginImportSource | null> => {
@@ -1246,22 +944,13 @@ export function requestRendererGuestRelease(
   );
 }
 
-// Chrome-only: the popup ADOPTS the contents Chromium pre-created (see
-// createBrowserPopupWindow), and passing `webPreferences` alongside an adopted
-// `webContents` is rejected by Electron - the adopted contents already carry
-// the opener's hardened prefs, partition and session. That inheritance is the
-// fix: it is what preserves `window.opener` and the login the popup's OAuth/SSO
-// flow relays through.
 function createBrowserPopupWindowOptions(): BrowserWindowConstructorOptions {
   return {
     show: true,
     width: 900,
     height: 700,
     backgroundColor: "#0b0b0d",
-    // A native child of a fullscreen BrowserWindow inherits macOS's
-    // fullscreen space. Closing that child can leave the owning window's
-    // compositor black, so arbitrary web popups must remain top-level native
-    // windows. Chromium still retains the original window.opener relationship.
+    // Closing that child can leave the owning window's compositor black, so arbitrary web popups must remain top-level native windows.
     fullscreen: false,
     fullscreenable: false,
     modal: false,
@@ -1269,11 +958,6 @@ function createBrowserPopupWindowOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// Adopts `createWindowOptions.webContents` - the popup contents Chromium
-// already created - instead of letting `new BrowserWindow` mint fresh ones.
-// Adopting is what carries `window.opener` and the inherited session into the
-// popup, so a nested OAuth "add account" popup still has the channel it relays
-// its params through.
 function createBrowserPopupWindow(input: {
   readonly windowOptions: BrowserWindowConstructorOptions;
   readonly createWindowOptions: BrowserViewPopupCreateWindowOptions;

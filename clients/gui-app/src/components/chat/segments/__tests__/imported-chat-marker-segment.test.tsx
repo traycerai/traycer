@@ -54,9 +54,7 @@ describe("<ImportedChatMarkerSegment />", () => {
       />,
     );
 
-    // The tooltip is the only place the source directory appears, so a trigger
-    // that cannot take focus hides it from keyboard users entirely, and one
-    // that has to be opened to say anything hides it from a screen reader.
+    // The tooltip is the only place the source directory appears, so a trigger that cannot take focus hides it from keyboard users entirely, and one that has to be opened to say anything hides it from a screen reader.
     const trigger = within(screen.getByRole("note")).getByRole("button", {
       name: `Imported from Claude Code · ${formatAbsoluteDateTime(importedAt)}. Source directory /repo/work`,
     });

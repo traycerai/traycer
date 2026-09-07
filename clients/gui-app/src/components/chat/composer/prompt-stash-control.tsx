@@ -285,10 +285,7 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
         if (keydownTargetsDeleteButton(event)) return;
         event.preventDefault();
         event.stopPropagation();
-        // Unavailable rows have no Insert action, but the event is still
-        // consumed here (not just no-restored) - the popover intentionally
-        // keeps editor focus, so an uncaught Enter would fall through to the
-        // still-focused editor and could submit it.
+        // Unavailable rows have no Insert action, but the event is still consumed here (not just no-restored) - the popover intentionally keeps editor focus, so an uncaught Enter would fall through to the still-focused editor and could submit it.
         if (highlighted.kind === "entry") {
           void restore(highlighted.entry);
         }
@@ -490,14 +487,7 @@ function PromptStashRowActions(props: { readonly children: ReactNode }) {
   );
 }
 
-/**
- * A row whose entry failed validation (malformed shape) or whose blob(s)
- * are missing/damaged - see `PromptStashUnavailableRow`. Never restorable:
- * no Insert affordance. Offers explicit delete (always) and a best-effort
- * copy-text affordance (only when the record's own content still parsed
- * enough to extract text from) - the row stays visible and actionable
- * rather than disappearing or silently trying to insert broken content.
- */
+/** Never restorable: no Insert affordance. Offers explicit delete (always) and a best-effort copy-text affordance (only when the record's own content still parsed enough to extract text from) - the row stays visible and actionable rather than disappearing or silently trying to insert broken content. */
 function PromptStashUnavailableRowView(props: {
   readonly id: string;
   readonly createdAt: number;

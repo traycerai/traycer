@@ -1,7 +1,3 @@
-/**
- * Epic sidebar header row - contains title, collapse/expand actions, and
- * section-specific Action components.
- */
 import { useDraggable } from "@dnd-kit/core";
 import {
   getLeftPanelSectionDragId,
@@ -32,10 +28,7 @@ interface PanelGroupSectionHeaderProps {
 }
 
 /**
- * Portal target for an opted-in panel's search input. Rendered INSTEAD of the
- * standard header row (same `h-9`, so the body below never shifts), and left
- * empty here: the owning panel portals its own input in, keeping that input's
- * state, refs, and combobox ARIA wiring in a single component.
+ * Rendered INSTEAD of the standard header row (same `h-9`, so the body below never shifts), and left empty here: the owning panel portals its own input in, keeping that input's state, refs, and combobox ARIA wiring in a single component.
  */
 function PanelHeaderSearchRow(props: {
   readonly epicId: string;
@@ -132,13 +125,8 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
       </div>
     );
   }
-  // Search mode takes the whole row rather than adding one below it, so the
-  // list keeps its vertical position and the panel spends no resting space on
-  // a mode that is off most of the time.
-  //
-  // Never while collapsed: the body - and with it the component that portals
-  // the input in - is unmounted, so swapping would leave an empty row with no
-  // input, no chevron, and no way back out.
+  // Search mode takes the whole row rather than adding one below it, so the list keeps its vertical position and the panel spends no resting space on a mode that is off most of the time.
+  // Never while collapsed: the body - and with it the component that portals the input in - is unmounted, so swapping would leave an empty row with no input, no chevron, and no way back out.
   if (props.panel.supportsHeaderSearch && searchOpen && !collapsed) {
     return (
       <PanelHeaderSearchRow
@@ -164,7 +152,6 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
         aria-expanded={!collapsed}
         aria-label={`${collapsed ? "Expand" : "Collapse"} ${props.panel.title}`}
         // muted-fill-ok: canvas-scoped sidebar chrome, and hover also swings
-        // the icon to text-foreground
         className="-ml-1 size-5 text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground hover:bg-muted hover:text-foreground"
         onClick={(event) => {
           event.stopPropagation();

@@ -274,11 +274,7 @@ function StaticOptionRow(props: {
   );
 }
 
-/**
- * Read-only option rows deliberately use list/static semantics. The only
- * buttons inside are the keyboard-reachable detail affordances; historical
- * rows never expose checked, pressed, or disabled form controls.
- */
+/** Read-only option rows deliberately use list/static semantics. The only buttons inside are the keyboard-reachable detail affordances; historical rows never expose checked, pressed, or disabled form controls. */
 export function StaticInterviewOptions(props: {
   readonly question: InterviewQuestion;
   readonly selectedOptionIndices: ReadonlyArray<number>;

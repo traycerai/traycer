@@ -1,10 +1,6 @@
-/** Host-local notification contracts.
- *
- * `host.notifications.list@1.0` and `host.notifications.subscribe@1.0`
- * shipped in host v1.1.7 and are frozen below. The partitioned feed is a
- * breaking projection cutover: unary list rides a bridged v2 major, while the
- * stream uses the successor method `host.notifications.feed.subscribe@1.0`
- * because the stream framework deliberately has no cross-major bridges.
+/**
+ * `host.notifications.list@1.0` - Host-local notification contracts.
+ * `host.notifications.list@1.0` and `host.notifications.subscribe@1.0` shipped in host v1.1.7 and are frozen below.
  */
 import { z } from "zod";
 import {
@@ -25,15 +21,7 @@ export type HostNotificationFilterV10 = z.infer<
   typeof hostNotificationFilterSchemaV10
 >;
 
-/**
- * Every notification kind this build knows, released and unreleased alike.
- *
- * NOT a wire schema - no contract references it. It is the closed TypeScript
- * vocabulary shared by the host's persistence/enrichment layers and the
- * payload/presentation parsers, which is why adding a kind here is safe while
- * adding an arm to a released ENTRY union is not (see
- * `hostNotificationEntrySchema` below).
- */
+/** Every notification kind this build knows, released and unreleased alike. */
 export const hostNotificationKindSchema = z.enum([
   "agent.stopped",
   "agent.stalled",
@@ -92,24 +80,14 @@ const hostNotificationEntryBaseFields = {
   sourceRef: z.string().nullable(),
   severity: hostNotificationSeveritySchema,
   /**
-   * The entity this notification addresses, sourced from the row's durable
-   * columns - NOT from the payload. This is the single contract for
-   * presence matching, indicator invalidation, and focus consumption: a row
-   * whose payload fails the semantic parse still addresses its entity, and
-   * a payload cannot claim an entity its row does not have.
+   * The entity this notification addresses, sourced from the row's durable columns - NOT from the payload.
+   * This is the single contract for presence matching, indicator invalidation, and focus consumption: a row whose payload fails the semantic parse still addresses its entity, and a payload cannot claim an entity its row.
    */
   epicId: z.string().min(1).nullable(),
   chatId: z.string().min(1).nullable(),
 } as const;
 
-/**
- * The five arms host v1.1.7 shipped. Held as a shared tuple so the released
- * union below and the successor union that adds `host.operation.finished`
- * are literally the same objects for these arms - a released client and a
- * `@2.1`/`@1.1` client can never disagree about an arm they both know.
- *
- * FROZEN. Editing an arm here edits every released contract that carries it.
- */
+/** The five arms host v1.1.7 shipped. */
 const releasedHostNotificationEntryArms = [
   z.object({
     ...hostNotificationEntryBaseFields,
@@ -146,18 +124,8 @@ const releasedHostNotificationEntryArms = [
 ] as const;
 
 /**
- * The RELEASED entry union, shared verbatim by list `@1.0`, list `@2.0`,
- * legacy subscribe `@1.0`, and feed subscribe `@1.0`.
- *
- * This union is CLOSED and frozen. Zod's within-minor downgrade strips
- * unknown *fields*; it cannot strip an unknown *arm*, so one new-kind row
- * reaching a released parser is a hard failure, not a cosmetic one: the unary
- * handler re-parses its downgraded result against the caller's contract and
- * returns 500, and the GUI feed treats a failed frame parse as connection
- * corruption and reconnects into a snapshot that replays the same row.
- * Adding an arm therefore requires a new contract version plus a host-side
- * projection that keeps the arm out of every older version's rows, summaries,
- * cursors, and frames - never a post-query filter.
+ * The RELEASED entry union, shared verbatim by list `@1.0`, list `@2.0`, legacy subscribe `@1.0`, and feed subscribe `@1.0`.
+ * Adding an arm therefore requires a new contract version plus a host-side projection that keeps the arm out of every older version's rows, summaries, cursors, and frames - never a post-query filter.
  */
 export const hostNotificationEntrySchema = z.discriminatedUnion(
   "kind",
@@ -166,22 +134,7 @@ export const hostNotificationEntrySchema = z.discriminatedUnion(
 export type HostNotificationEntry = z.infer<typeof hostNotificationEntrySchema>;
 
 /**
- * Terminal completion of one host-owned operation, addressed to the user
- * rather than to an epic/chat entity.
- *
- * Deliberately minimal, because it is frozen the day it ships: base fields, an
- * open `outcome`, and the same open payload record every other arm uses. No
- * operation names, structured details, actions, destinations, progress states,
- * `resolvedAt`, or per-operation preferences live here - operation-specific
- * data belongs in the additive payload tier (see `payloads.ts`), which is what
- * lets a future operation ship without another outer-kind bump.
- *
- * Producers use `done`/`completed` or `failure`/`errored`; blocked-on-input
- * stays in the approval/interview domains. Existing released
- * `workspace.operation.failed` producers stay on that frozen chat-scoped kind;
- * every NEW operation-completion producer - including new failure producers -
- * uses this one, so the two generic-looking kinds never become arbitrary
- * alternatives.
+ * Terminal completion of one host-owned operation, addressed to the user rather than to an epic/chat entity.
  */
 const hostOperationFinishedEntryArm = z.object({
   ...hostNotificationEntryBaseFields,
@@ -200,14 +153,7 @@ export type HostNotificationEntryV21 = z.infer<
 >;
 
 /**
- * An agent's browser session hit a step only a person can complete - a login
- * wall, CAPTCHA, MFA challenge, or payment confirmation. The session parks
- * instead of failing, this row deep-links to its tile, and the agent resumes
- * once the human is done.
- *
- * Shaped exactly like the released `needs_action` arms (`outcome: null` plus a
- * `resolvedAt` lifecycle) so the host transport's generic prompt branch already
- * carries it and resuming resolves it - no arm-specific projection anywhere.
+ * An agent's browser session hit a step only a person can complete - a login wall, CAPTCHA, MFA challenge, or payment confirmation.
  */
 const browserHumanNeededEntryArm = z.object({
   ...hostNotificationEntryBaseFields,
@@ -218,16 +164,8 @@ const browserHumanNeededEntryArm = z.object({
 });
 
 /**
- * `@2.1`'s arms plus `browser.human.needed`; list `@2.2` / feed `@1.2` /
- * cloudFeed `@1.1`.
- *
- * A NEW minor rather than a widening of `@2.1`/`@1.1`, because those two lines
- * have shipped: a released client strict-decodes the frame, and zod's
- * within-minor downgrade strips unknown FIELDS but cannot strip an unknown ARM.
- * The `host.operation.finished` arm could join `@2.1` only because `@2.1` was
- * itself the new minor at the time. `released-baseline-compat.test.ts` is what
- * catches the difference; the cloud feed's `@1.1` grows in place because it has
- * not shipped.
+ * `@2.1`'s arms plus `browser.human.needed`; list `@2.2` / feed `@1.2` / cloudFeed `@1.1`.
+ * A NEW minor rather than a widening of `@2.1`/`@1.1`, because those two lines have shipped: a released client strict-decodes the frame, and zod's within-minor downgrade strips unknown FIELDS but cannot strip an unknown.
  */
 export const hostNotificationEntrySchemaV22 = z.discriminatedUnion("kind", [
   ...releasedHostNotificationEntryArms,
@@ -238,13 +176,7 @@ export type HostNotificationEntryV22 = z.infer<
   typeof hostNotificationEntrySchemaV22
 >;
 
-/**
- * Narrows a `@2.2` entry to the released union. Derived from
- * {@link RELEASED_HOST_NOTIFICATION_KINDS} rather than listing the exclusions:
- * this predicate is the downgrade bridge's last guard against an
- * unrepresentable arm reaching a released client, so a new arm has to be
- * excluded by DEFAULT, not by remembering to name it here.
- */
+/** Narrows a `@2.2` entry to the released union. */
 export function isReleasedHostNotificationEntry(
   entry: HostNotificationEntryV22,
 ): entry is HostNotificationEntry {
@@ -252,13 +184,7 @@ export function isReleasedHostNotificationEntry(
 }
 
 /**
- * Kinds that light the pending-prompt glyph (epic sidebar row / chat
- * indicator / cloud SQL projection) while `resolvedAt` is still `null`. The
- * GUI's `indicatorContribution` consumes this tuple directly; the host's
- * `hostNotificationsGetIndicatorState` SQL consumes its own local mirror
- * (`PENDING_PROMPT_HOST_NOTIFICATION_KINDS`, same pattern as
- * `ALL_PERSISTED_HOST_NOTIFICATION_KINDS`) - keep both lists in sync when a
- * kind is added here.
+ * Kinds that light the pending-prompt glyph (epic sidebar row / chat indicator / cloud SQL projection) while `resolvedAt` is still `null`.
  */
 export const HOST_NOTIFICATION_PENDING_PROMPT_KINDS: readonly HostNotificationKind[] =
   ["approval.requested", "interview.requested", "browser.human.needed"];
@@ -285,17 +211,7 @@ export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   "browser.human.needed",
 ];
 
-/**
- * The one negotiated-version → visible-kinds projection.
- *
- * Every read path that serves a specific connection - unary pages, stream
- * snapshots, live frames, cursors, and summaries - derives its filter from
- * here rather than re-deriving "is this caller new enough". A caller that
- * negotiated an older version must never observe a kind its parser cannot
- * represent, and the exclusion has to happen INSIDE the query: filtering
- * after the fact yields short pages, cursors that skip rows, and counts that
- * disagree with the page they summarize.
- */
+/** The one negotiated-version → visible-kinds projection. */
 export type HostNotificationsSurface =
   | { readonly method: "host.notifications.list" }
   | { readonly method: "host.notifications.feed.subscribe" }
@@ -304,15 +220,7 @@ export type HostNotificationsSurface =
 
 /**
  * Enumerated per SUPPORTED major, never `major > N`.
- *
- * A major bump is breaking by definition: a future `list@3.0` could close its
- * entry union around a different set of arms, so treating "newer than the
- * majors I know" as "carries everything I know" would hand it kinds it may not
- * be able to represent. An unknown major therefore falls through to the
- * released set - the only set every contract in this family has ever carried -
- * which fails in the safe direction (a row is withheld, never leaked). When a
- * real major 3 ships it adds its own case here and the fallthrough stops
- * applying to it.
+ * An unknown major therefore falls through to the released set - the only set every contract in this family has ever carried - which fails in the safe direction (a row is withheld, never leaked).
  */
 export function visibleHostNotificationKinds(
   surface: HostNotificationsSurface,
@@ -339,10 +247,6 @@ export function visibleHostNotificationKinds(
     // The frozen host-v1.1.7 stream has no successor minor and never will.
     case "host.notifications.subscribe":
       return RELEASED_HOST_NOTIFICATION_KINDS;
-    // The cloud relay serves every subscriber from one shared replica, so this
-    // projection is what keeps a `@1.0` subscriber's rows AND summary closed
-    // over the arms its parser can represent - the relay derives its
-    // compatibility buckets from here rather than re-deciding `minor >= 1`.
     case "host.notifications.cloudFeed.subscribe":
       if (schemaVersion.major === 1) {
         return schemaVersion.minor >= 1
@@ -355,13 +259,7 @@ export function visibleHostNotificationKinds(
 
 /**
  * Whether the negotiated stream contract declares a `channelEmission` frame.
- *
- * Enumerated per supported (method, major) for the same reason the visibility
- * projection is: an unknown line gets `false`, so a future version that drops
- * the frame - or that this build simply does not know - cannot be sent one.
- * This answers only "does the frame exist on this wire"; WHICH rows may appear
- * in it is the separate question `visibleHostNotificationKinds` answers, and
- * both gates apply.
+ * Enumerated per supported (method, major) for the same reason the visibility projection is: an unknown line gets `false`, so a future version that drops the frame - or that this build simply does not know - cannot be.
  */
 export function streamCarriesChannelEmissionFrame(
   surface: HostNotificationsSurface,
@@ -383,12 +281,7 @@ export function streamCarriesChannelEmissionFrame(
   }
 }
 
-/**
- * The complement of {@link visibleHostNotificationKinds}. Read paths filter on
- * this rather than on the visible set so a fully-capable caller produces an
- * EMPTY exclusion - and therefore byte-identical SQL to before this projection
- * existed, which is what keeps the attention/recent partial indexes selected.
- */
+/** The complement of {@link visibleHostNotificationKinds}. */
 export function hiddenHostNotificationKinds(
   surface: HostNotificationsSurface,
   schemaVersion: { readonly major: number; readonly minor: number },
@@ -532,9 +425,8 @@ export type HostNotificationsEntityRef = z.infer<
 >;
 
 /**
- * The entity branch is an atomic view-consumption request. `{ epicId }`
- * consumes Task-level (`chatId IS NULL`) rows only. `{ epicId, chatId }`
- * consumes those Task-level rows plus the named child, never sibling chats.
+ * The entity branch is an atomic view-consumption request.
+ * `{ epicId, chatId }` consumes those Task-level rows plus the named child, never sibling chats.
  */
 export const hostNotificationsMarkReadRequestSchema = z.discriminatedUnion(
   "kind",
@@ -559,24 +451,8 @@ export type HostNotificationsMarkReadResponse = z.infer<
 >;
 
 /**
- * Explicit dismiss of unresolved `needs_action` rows (the blocking Attention
- * tier - approvals/interviews). Unlike `markRead`, this stamps `resolvedAt`,
- * which is the only thing that removes a `needs_action` row from Attention
- * (its membership is keyed on `resolvedAt`, not `readAt`). The underlying
- * interview/approval question is left open on the agent side; the host only
- * clears the row from the user's Attention view. Rows already resolved (or
- * that were never `needs_action`) are a no-op.
- *
- * Each target is an immutable OCCURRENCE token `(id, updatedAt, sourceRef)`,
- * not a bare id. Approval/interview row ids are stable per chat
- * (`approval.requested:<chatId>`), so a bare id would let an in-flight dismiss
- * of an old prompt resolve a NEWER prompt that reopened the same row. The host
- * guards the write on all three fields and no-ops when the occurrence has moved
- * on. `sourceRef` (the approval/interview id) is required alongside `updatedAt`
- * because prompt timestamps are millisecond `Date.now()` and a later occurrence
- * can reopen the row with an EQUAL `updatedAt` but a different `sourceRef`;
- * `updatedAt` alone would still match. `sourceRef` is nullable and matched
- * NULL-safely (a null token only matches a null-sourceRef row).
+ * Explicit dismiss of unresolved `needs_action` rows (the blocking Attention tier - approvals/interviews).
+ * Rows already resolved (or that were never `needs_action`) are a no-op.
  */
 export const hostNotificationsResolveRequestSchema = z.object({
   occurrences: z
@@ -733,9 +609,7 @@ export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
       summary: hostNotificationsSummarySchema,
     }),
     z.object({
-      // Removal-only lifecycle frame: emitted when a mutation prunes rows
-      // and no changed row survives retention, so there is no upsert/
-      // read-state payload to carry.
+      // Removal-only lifecycle frame: emitted when a mutation prunes rows and no changed row survives retention, so there is no upsert/ read-state payload to carry.
       kind: z.literal("removed"),
       ...textFrameFields,
       removedIds: nonDuplicateIdArraySchema(1),
@@ -768,13 +642,8 @@ export type HostNotificationsSubscribeServerFrame = z.infer<
 >;
 
 /**
- * Feed `@1.1` server frames: the released `@1.0` union with every entry-
- * carrying slot widened to `hostNotificationEntrySchemaV21`.
- *
- * Written out in full rather than derived from the `@1.0` union. The released
- * shape above must stay byte-identical forever, and a shared builder would let
- * a future edit here silently rewrite it - the same reason `@1.0`'s own frames
- * are spelled out separately from the legacy `V10` union.
+ * Feed `@1.1` server frames: the released `@1.0` union with every entry- carrying slot widened to `hostNotificationEntrySchemaV21`.
+ * The released shape above must stay byte-identical forever, and a shared builder would let a future edit here silently rewrite it - the same reason `@1.0`'s own frames are spelled out separately from the legacy `V10`.
  */
 export const hostNotificationsSubscribeServerFrameSchemaV11 =
   z.discriminatedUnion("kind", [
@@ -840,12 +709,8 @@ export type HostNotificationsSubscribeServerFrameV11 = z.infer<
 >;
 
 /**
- * Feed `@1.2` server frames: the `@1.1` union with every entry-carrying slot
- * widened to `hostNotificationEntrySchemaV22`.
- *
- * Written out in full for the same reason `@1.1` is: `@1.1` has now shipped and
- * must stay byte-identical forever, so it cannot be a base a later edit
- * silently rewrites.
+ * Feed `@1.2` server frames: the `@1.1` union with every entry-carrying slot widened to `hostNotificationEntrySchemaV22`.
+ * Written out in full for the same reason `@1.1` is: `@1.1` has now shipped and must stay byte-identical forever, so it cannot be a base a later edit silently rewrites.
  */
 export const hostNotificationsSubscribeServerFrameSchemaV12 =
   z.discriminatedUnion("kind", [
@@ -1157,12 +1022,8 @@ export const hostNotificationsListDowngradeV22ToV10 = defineDowngradePath<
       },
     };
   },
-  // `entries` is narrowed rather than passed through. A major-1 caller's rows
-  // are already excluded inside SQL - the projection, not this bridge, is what
-  // keeps pages, cursors, and summaries consistent - so this filter is dead
-  // code in practice. It exists because the bridge must be TOTAL over its
-  // declared input: if a future read path ever forgets the projection, a
-  // short page beats an unrepresentable arm reaching a v1.1.7 client.
+  // `entries` is narrowed rather than passed through.
+  // It exists because the bridge must be TOTAL over its declared input: if a future read path ever forgets the projection, a short page beats an unrepresentable arm reaching a v1.1.7 client.
   downgradeResponse: (response) => ({
     ok: true,
     value: {
@@ -1223,18 +1084,8 @@ export const hostNotificationsFeedSubscribeV10 = defineStreamRpcContract({
 });
 
 /**
- * Cloud-backed feed. This is deliberately a distinct optional method rather
- * than a new major of the frozen local-feed stream: a stream has no
- * cross-major bridge, so publishing it as a v2 major would reject deployed
- * v1 clients before they could choose their compatible local projection.
- *
- * The cloud model is IMMUTABLE OCCURRENCE ENTRIES plus monotonic markers, and
- * the wire follows from that. A row's identity is its `entryId`: a reopened
- * approval is a DIFFERENT entry, never an edit of the one it replaces, so
- * there is no occurrence token to guard a mutation with and no idempotency key
- * to protect a set-once marker write. Nothing on this surface is ordered or
- * incremental either - the relay only ever sends whole snapshots, so there are
- * no `changes`/`removals` frames a client could apply out of order.
+ * Cloud-backed feed.
+ * A row's identity is its `entryId`: a reopened approval is a DIFFERENT entry, never an edit of the one it replaces, so there is no occurrence token to guard a mutation with and no idempotency key to protect a set-once.
  */
 export const hostNotificationsCloudFeedRowSchema = z.object({
   /**
@@ -1243,20 +1094,12 @@ export const hostNotificationsCloudFeedRowSchema = z.object({
    */
   entryId: z.string().min(1).max(191),
   /**
-   * Which machine this happened on. DISPLAY AND NAVIGATION metadata only -
-   * mutations address the entry, never the host, so a row from an offline or
-   * retired host is still fully actionable in the feed.
+   * Which machine this happened on.
+   * DISPLAY AND NAVIGATION metadata only - mutations address the entry, never the host, so a row from an offline or retired host is still fully actionable in the feed.
    */
   originHostId: z.string().min(1),
-  /**
-   * The grouping key (the former semantic id, `approval.requested:<chatId>`),
-   * demoted from identity. Two entries sharing it are two occurrences of the
-   * same thing; only the newest is ever visible.
-   */
+  /** The grouping key (the former semantic id, `approval.requested:<chatId>`), demoted from identity. */
   coalesceKey: z.string().min(1).max(191),
-  /** The v1-shaped projection of the entry, so every existing renderer
-   * formatter, lifecycle classifier and payload parser reads a cloud row and a
-   * local row through one type. `id` carries the `entryId`. */
   entry: hostNotificationEntrySchema,
   /** Snapshotted by the producing host at creation. Accepted staleness: a
    * later rename does not rewrite an immutable entry. */
@@ -1286,14 +1129,8 @@ export type HostNotificationsCloudFeedSubscribeOpenRequestV10 = z.infer<
 >;
 
 /**
- * SNAPSHOT-ONLY. Every `snapshot` frame is the complete visible feed at one
- * `version`, so a client never reconstructs state from a sequence of deltas
- * and a dropped or duplicated frame costs nothing. A user's feed is tens of
- * rows; the bandwidth this trades away buys the absence of an entire class of
- * ordering bug.
- *
- * `version` is the cloud's per-user change sequence. The client's only use for
- * it is to name the feed it is LOOKING AT when it issues a `clearAll`.
+ * SNAPSHOT-ONLY.
+ * Every `snapshot` frame is the complete visible feed at one `version`, so a client never reconstructs state from a sequence of deltas and a dropped or duplicated frame costs nothing.
  */
 export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV10 =
   z.discriminatedUnion("kind", [
@@ -1336,17 +1173,8 @@ export const hostNotificationsCloudFeedSubscribeV10 = defineStreamRpcContract({
 });
 
 /**
- * Additive minor of the cloud feed row: identical envelope, entry slot widened
- * to the widest union (`@2.2`) so a `host.operation.finished` or parked-browser
- * occurrence is representable. It grows in place rather than taking a `@1.2` of
- * its own because this minor has not shipped - `released-baseline-compat` is
- * the authority on which lines are frozen. V10 stays frozen - its closed union is a released parser's
- * contract, and one new arm reaching it is treated as connection corruption
- * (see `hostNotificationEntrySchema`'s doc), never a cosmetic failure.
- *
- * A V11 frame is a strict superset of a V10 frame, so one client-side parser
- * (the V11 one) reads both minors; which ROWS it receives is decided
- * host-side by `visibleHostNotificationKinds` for the negotiated version.
+ * Additive minor of the cloud feed row: identical envelope, entry slot widened to the widest union (`@2.2`) so a `host.operation.finished` or parked-browser occurrence is representable.
+ * It grows in place rather than taking a `@1.2` of its own because this minor has not shipped - `released-baseline-compat` is the authority on which lines are frozen.
  */
 export const hostNotificationsCloudFeedRowSchemaV11 = z.object({
   ...hostNotificationsCloudFeedRowSchema.shape,
@@ -1391,14 +1219,7 @@ export const hostNotificationsCloudFeedSubscribeV11 = defineStreamRpcContract({
 
 /**
  * The whole of a per-entry mutation: WHICH entry.
- *
- * A marker is set once and merged by "first time it happened", so the write is
- * idempotent by construction - retry it, duplicate it, race it, and the result
- * is the same. And because a reopen mints a NEW `entryId`, a stale command can
- * only ever name an occurrence that has already been superseded, where a no-op
- * is exactly the right outcome. That is what retires both the occurrence token
- * (which existed to stop a stale command hitting a reopened row) and the
- * idempotency key (which existed to stop a retry double-applying).
+ * A marker is set once and merged by "first time it happened", so the write is idempotent by construction - retry it, duplicate it, race it, and the result is the same.
  */
 export const hostNotificationsCloudFeedEntryRequestSchema = z.object({
   entryId: z.string().min(1).max(191),
@@ -1407,17 +1228,7 @@ export type HostNotificationsCloudFeedEntryRequest = z.infer<
   typeof hostNotificationsCloudFeedEntryRequestSchema
 >;
 
-/**
- * Clear everything the user was LOOKING AT.
- *
- * `observedVersion` names the snapshot the click was made against, and the
- * cloud fans the clear out over exactly the entries visible at that version.
- * Membership, not a timestamp threshold: an entry that arrives afterwards - or
- * arrives late from a lagging host with an older clock - is simply not in the
- * set, so it survives no matter how many times a lost-response retry replays
- * this request. `null` means "whatever is visible now", the only honest
- * reading of a clear-all issued without a snapshot to point at.
- */
+/** Clear everything the user was LOOKING AT. */
 export const hostNotificationsCloudFeedClearAllRequestSchema = z.object({
   observedVersion: z.number().int().nonnegative().nullable(),
 });
@@ -1425,22 +1236,13 @@ export type HostNotificationsCloudFeedClearAllRequest = z.infer<
   typeof hostNotificationsCloudFeedClearAllRequestSchema
 >;
 
-/**
- * Mark every notification read in the cloud snapshot the user was looking at.
- * The shape matches clear-all because both operations are bounded by observed
- * feed membership rather than a host timestamp.
- */
+/** Mark every notification read in the cloud snapshot the user was looking at. */
 export const hostNotificationsCloudFeedMarkAllReadRequestSchema =
   hostNotificationsCloudFeedClearAllRequestSchema;
 export type HostNotificationsCloudFeedMarkAllReadRequest = z.infer<
   typeof hostNotificationsCloudFeedMarkAllReadRequestSchema
 >;
 
-/**
- * `unavailable` means the relay could not reach the cloud, and NOTHING was
- * changed anywhere - the host deliberately keeps no local shadow of the cloud
- * feed to mutate optimistically. Neither is an applied mutation.
- */
 export const hostNotificationsCloudFeedMutationResponseSchema = z
   .object({
     status: z.enum(["applied", "unavailable"]),
@@ -1459,11 +1261,7 @@ export type HostNotificationsCloudFeedMutationResponse = z.infer<
   typeof hostNotificationsCloudFeedMutationResponseSchema
 >;
 
-/**
- * The atomic bulk operation is additive. `unsupported` means an older cloud
- * server accepted its envelope but could not acknowledge this new operation;
- * the client may then use the released per-entry compatibility path.
- */
+/** The atomic bulk operation is additive. */
 export const hostNotificationsCloudFeedMarkAllReadResponseSchema = z
   .object({
     status: z.enum(["applied", "unavailable", "unsupported"]),
@@ -1563,11 +1361,7 @@ export const hostNotificationsIndicatorState = defineRpcContract({
   responseSchema: hostNotificationsIndicatorStateResponseSchema,
 });
 
-/**
- * A v1.0 peer predates fork indicators. Default the new pending-class flag to
- * false so a newer renderer keeps its sidebar fully functional against an
- * older host rather than treating field absence as a malformed response.
- */
+/** A v1.0 peer predates fork indicators. */
 export const hostNotificationsIndicatorStateUpgradeV10ToV11 = defineUpgradePath<
   typeof hostNotificationsIndicatorStateV10,
   typeof hostNotificationsIndicatorState
@@ -1593,16 +1387,8 @@ function addPendingForkDefault(
 }
 
 /**
- * `host.notificationHooks.*@1.0` - status, test, and whole-file save surface
- * for the host's notification hooks. The host's `notification-hooks.json`
- * stays the single source of truth and remains hand-editable; `save` rewrites
- * that file from the client's full hook list (last write wins - the form and
- * hand-edits are two equal editors over one file).
- *
- * `configPath` is the one deliberate filesystem-path disclosure on this
- * surface: it is the user's own hand-editable config file location, not a
- * diagnostic leak. Header VALUES never appear here - only hook identity,
- * filters, and a redacted last-result summary.
+ * `host.notificationHooks.*@1.0` - status, test, and whole-file save surface for the host's notification hooks.
+ * Header VALUES never appear here - only hook identity, filters, and a redacted last-result summary.
  */
 export const notificationHookLastResultSchema = z
   .object({
@@ -1616,21 +1402,8 @@ export type NotificationHookLastResult = z.infer<
 >;
 
 /**
- * One hook exactly as the config file holds it. The same shape is read back
- * on `status` and written on `save`, so the settings form is a plain editor
- * over the file rather than a second source of truth.
- *
- * Hooks filter on SEVERITY only - the same vocabulary the in-app
- * interruptions matrix uses. Severity already groups the event kinds
- * (`needs_action` = approvals/interviews, `failure` = stalls and errored
- * agents, `done` = completed or stopped agents), so a second event-kind
- * filter would be a parallel way to say the same thing. The delivered
- * payload still names the exact `event`, so a receiver that wants finer
- * granularity can branch on it.
- *
- * `headers` carries the file's own header TEMPLATES (`Bearer $TOKEN`) - the
- * variable names, never the resolved values. Env values are read only on the
- * host at delivery time and never cross this wire.
+ * One hook exactly as the config file holds it.
+ * Env values are read only on the host at delivery time and never cross this wire.
  */
 export const notificationHookConfigSchema = z
   .object({
@@ -1724,12 +1497,7 @@ export const hostNotificationHooksTest = defineRpcContract({
   responseSchema: notificationHooksTestResponseSchema,
 });
 
-/**
- * Rewrites the whole hooks file from the given list and returns the fresh
- * status. Last write wins: the file is the single source of truth and the
- * form is one of two equal editors over it, so a save made against a stale
- * read replaces whatever is on disk.
- */
+/** Rewrites the whole hooks file from the given list and returns the fresh status. */
 export const hostNotificationHooksSave = defineRpcContract({
   method: "host.notificationHooks.save",
   schemaVersion: { major: 1, minor: 0 } as const,

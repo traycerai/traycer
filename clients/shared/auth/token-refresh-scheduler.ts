@@ -1,49 +1,14 @@
 /**
- * Proactive access-token refresh scheduler shared by the Desktop renderer and
- * the CLI/monitor.
- *
- * Both clients already refresh *reactively* - on a host `UNAUTHORIZED` the
- * `auth-aware-messenger` (unary RPC) and `StreamAuthRevalidator` (stream) call
- * `revalidateCurrentContext()`, which refreshes, rotates the bearer lease, and
- * persists. What neither does today is refresh *before* the ~4h token TTL, so a
- * session left open overnight carries a dead bearer into the next live cloud
- * call (e.g. the host's `/api/v3/user` lookup on an A2A send) and 401s.
- *
- * This scheduler closes that gap: it decodes the access token's `exp` and arms
- * a timer to invoke the SAME single-flight `revalidate` shortly before expiry,
- * then re-arms off whichever token the refresh settled on. It never owns the
- * refresh mechanics - only the timing - so the reactive paths and this proactive
- * one share one rotation primitive and can't drift.
- *
- * The delay is measured from the wall-clock `exp`, but `setTimeout` counts down
- * in MONOTONIC time, frozen while the OS sleeps - so a session that sleeps
- * through the TTL wakes with a dead bearer and a stale timer. `notifyResumed()`
- * is the wake hook: it re-evaluates against the wall clock at once.
- *
- * The scheduler is timer- and clock-injected so it is environment-agnostic
- * (`window.setTimeout` in the renderer, `setTimeout` in the CLI) and
- * deterministically testable.
+ * Proactive access-token refresh scheduler shared by the Desktop renderer and the CLI/monitor.
+ * This scheduler closes that gap: it decodes the access token's `exp` and arms a timer to invoke the same single-flight `revalidate` shortly before expiry, then re-arms off whichever token the refresh settled on.
  */
 import { readAccessTokenExpiryMs } from "./jwt-exp";
 
 /** Refresh this long before the token's `exp`. */
 export const DEFAULT_REFRESH_LEAD_MS = 10 * 60_000;
 
-/**
- * Floor for the scheduled delay. Doubles as the retry cadence: when a refresh
- * leaves the bearer unchanged (network error) or the token is already inside
- * the lead window at arm time, the next attempt is scheduled this far out
- * rather than immediately, so a persistent outage can't spin the timer.
- */
 export const DEFAULT_REFRESH_MIN_DELAY_MS = 60_000;
 
-/**
- * Cap for a scheduled delay. `setTimeout`/`setInterval` coerce the delay to a
- * 32-bit signed int; anything above 2^31-1 ms (~24.8 days) overflows and the
- * timer fires almost immediately. A far-future (or malformed-but-huge) `exp`
- * could produce such a delay, so we clamp: the timer fires at the cap, re-arms,
- * and converges once the token is actually inside the lead window.
- */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export interface ProactiveRefreshScheduler {
@@ -52,9 +17,7 @@ export interface ProactiveRefreshScheduler {
   /** Cancel any pending refresh and stop re-arming. */
   stop(): void;
   /**
-   * Re-evaluate now (drop the sleep-frozen timer, refresh if inside the lead
-   * window, else re-arm) - call on device wake. No-op while stopped, so it is
-   * safe to call on every wake regardless of auth state.
+   * Re-evaluate now (drop the sleep-frozen timer, refresh if inside the lead window, else re-arm) - call on device wake.
    */
   notifyResumed(): void;
 }
@@ -62,12 +25,7 @@ export interface ProactiveRefreshScheduler {
 export interface ProactiveRefreshSchedulerOptions<THandle> {
   /** Current access token, or `null` when signed out (disarms the scheduler). */
   readonly getToken: () => string | null;
-  /**
-   * Single-flight refresh that rotates + persists the bearer. Its return value
-   * is ignored - the scheduler re-reads `getToken()` afterwards to re-arm - so
-   * the renderer's `ValidationOutcome | null` and the CLI's `RevalidateOutcome`
-   * both satisfy this shape.
-   */
+  /** Single-flight refresh that rotates + persists the bearer. */
   readonly revalidate: () => Promise<unknown>;
   readonly now: () => number;
   readonly setTimer: (handler: () => void, ms: number) => THandle;
@@ -129,9 +87,8 @@ export function createProactiveRefreshScheduler<THandle>(
     if (expMs === null) {
       return;
     }
-    // Another path (reactive 401 refresh, cross-window rotation) may have
-    // already refreshed the bearer, pushing `exp` past the lead window. Re-arm
-    // off the newer token instead of burning a single-use refresh token.
+    // Another path (reactive 401 refresh, cross-window rotation) may have already refreshed the bearer, pushing `exp` past the lead window.
+    // Re-arm off the newer token instead of burning a single-use refresh token.
     if (expMs - options.now() > options.leadMs) {
       arm();
       return;
@@ -140,9 +97,7 @@ export function createProactiveRefreshScheduler<THandle>(
     try {
       await options.revalidate();
     } catch {
-      // `revalidate` is a boundary that maps failures to outcomes rather than
-      // throwing; guard anyway so a rejection can never escape the background
-      // timer as an unhandled rejection. The re-arm below retries on the floor.
+      // `revalidate` is a boundary that maps failures to outcomes rather than throwing; guard anyway so a rejection can never escape the background timer as an unhandled rejection.
     }
     if (stopped) {
       return;

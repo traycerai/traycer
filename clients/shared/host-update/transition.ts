@@ -18,16 +18,10 @@ import {
   type HostUpdateTrigger,
 } from "./record";
 
-// The pure transition core (§1.1 "chooses exactly one legal action", §1.4
-// write-ahead ordering, §1.5 park semantics).
-//
-// Every function here is total, synchronous, and clock-free: the caller
-// passes `nowIso` and a freshly-minted attempt id. Nothing writes. The
-// separation is the point - the decision about what a contender is allowed
-// to do is exhaustively testable without a filesystem, and the code that
-// moves bytes cannot reach a state this module never produced.
+// The pure transition core (§1.1 "chooses exactly one legal action", §1.4 write-ahead ordering, §1.5 park semantics).
+// The separation is the point - the decision about what a contender is allowed to do is exhaustively testable without a filesystem, and the code that moves bytes cannot reach a state this module never produced.
 
-/** Phases an attempt may be CREATED in - never a park, never a terminal. */
+/** Phases an attempt may be created in - never a park, never a terminal. */
 export type ActiveHostUpdateAttemptPhase = Exclude<
   HostUpdateAttemptPhase,
   | "waiting-for-work"
@@ -38,11 +32,8 @@ export type ActiveHostUpdateAttemptPhase = Exclude<
 >;
 
 /**
- * The operation an update request authorizes.  This is deliberately not a
- * UI label: it is part of the request's authority tuple alongside the exact
- * attempt identity and target.  In particular, an authorization to resume
- * bytes that have not been promoted cannot be replayed as an activation (or
- * vice versa) after the durable record changes.
+ * The operation an update request authorizes.
+ * This is deliberately not a UI label: it is part of the request's authority tuple alongside the exact attempt identity and target.
  */
 export type AttemptClaimAction =
   | "start"
@@ -57,19 +48,12 @@ export interface AttemptClaimRequest {
   /** The exact operation this request may perform. */
   readonly action: AttemptClaimAction;
   /**
-   * The attempt identity this contender was authorized against, when it is
-   * acting on a request minted earlier (Force, Defer, Activate - §1.3: "each
-   * request must carry `attemptId` plus expected generation/sequence and be
-   * consumed under the attempt lock").
-   *
-   * `null` for a contender deciding from what it just read under the lock,
-   * which has nothing stale to guard against.
+   * `null` for a contender deciding from what it just read under the lock, which has nothing stale to guard against.
    */
   readonly expected: HostUpdateAttemptIdentity | null;
   /**
    * A freshly minted id, used only if the decision turns out to be `create`.
-   * Passed in rather than generated here so this module stays pure - and so
-   * the executor, which §1.2 makes the sole minter, is visibly the minter.
+   * Passed in rather than generated here so this module stays pure - and so the executor, which §1.2 makes the sole minter, is visibly the minter.
    */
   readonly newAttemptId: string;
   /** The phase a newly created attempt commits before its first side effect. */
@@ -83,13 +67,7 @@ export interface AttemptClaimContext {
   readonly request: AttemptClaimRequest;
   /**
    * The result of acquisition plus a holder probe, not a lossy boolean.
-   *
-   * `holder-live` is the only loser state that permits attach, and only for
-   * an active record of the same target.  A busy-but-unparseable lock is not
-   * evidence that an executor has durably adopted anything; a parked record
-   * intentionally has no holder at all.  Collapsing those cases into
-   * `lockHeld: false` used to acknowledge requests against a generation that
-   * was about to be replaced by the real resumer.
+   * `holder-live` is the only loser state that permits attach, and only for an active record of the same target.
    */
   readonly holder: AttemptClaimHolderDisposition;
 }
@@ -106,24 +84,16 @@ export type AttemptClaimHolderDisposition =
 
 export type AttemptRefusalReason =
   // Corrupt, unreadable, or a schema version this build cannot act on.
-  // §1.4: fail closed, preserve diagnostics, expose a repair action - never
-  // silently replace with a new attempt.
+  // §1.4: fail closed, preserve diagnostics, expose a repair action - never silently replace with a new attempt.
   | "record-fail-closed"
-  // The authorization this contender carries names an attempt identity the
-  // record has already moved past. The request is stale; consuming it would
-  // act on a superseded target (risk review P2).
+  // The authorization this contender carries names an attempt identity the record has already moved past.
+  // The request is stale; consuming it would act on a superseded target (risk review P2).
   | "stale-expectation"
-  // A non-parked, non-terminal record with the lock free. Either the
-  // executing segment died, or it ended by design (a `restarting` segment
-  // restarts the host and does not come back - §1.6). Both need durable
-  // system evidence reconciled before the next transition, which is the
-  // executor-adoption ticket's job, so the pure core refuses rather than
-  // guessing a continuation from the phase alone.
+  // A non-parked, non-terminal record with the lock free.
+  // Both need durable system evidence reconciled before the next transition, which is the executor-adoption ticket's job, so the pure core refuses rather than guessing a continuation from the phase alone.
   | "requires-recovery"
-  // An identity-bound request whose attempt has already ended. Distinct from
-  // `stale-expectation` (which names an identity that never matched) so a
-  // caller can report "that update already finished" rather than "your
-  // request was stale".
+  // An identity-bound request whose attempt has already ended.
+  // Distinct from `stale-expectation` (which names an identity that never matched) so a caller can report "that update already finished" rather than "your request was stale".
   | "attempt-already-terminal"
   // Another target is already in flight and this contender does not hold the
   // lock, so it cannot legally supersede it.
@@ -131,19 +101,14 @@ export type AttemptRefusalReason =
   // The action needs the lock and this contender does not hold it.
   | "lock-unavailable"
   // The request's target or action does not authorize the state it named.
-  // These are distinct from a stale identity: the identity did match, so
-  // callers can surface an authorization mismatch rather than claiming the
-  // request was merely delayed.
+  // These are distinct from a stale identity: the identity did match, so callers can surface an authorization mismatch rather than claiming the request was merely delayed.
   | "request-target-mismatch"
   | "request-action-mismatch"
-  // A create over retained terminal evidence must mint a different logical
-  // attempt. Reusing the old id would make two distinct attempts
-  // incomparable only by untrusted timestamps and undermine late-write
-  // rejection at the persistence boundary.
+  // A create over retained terminal evidence must mint a different logical attempt.
+  // Reusing the old id would make two distinct attempts incomparable only by untrusted timestamps and undermine late-write rejection at the persistence boundary.
   | "new-attempt-id-reused"
-  // `generation`/`sequence` can no longer be incremented safely. Only
-  // reachable from a record carrying counters at the safe-integer ceiling,
-  // which this code never writes.
+  // `generation`/`sequence` can no longer be incremented safely.
+  // Only reachable from a record carrying counters at the safe-integer ceiling, which this code never writes.
   | "counter-exhausted";
 
 export type AttemptClaimDecision =
@@ -156,11 +121,8 @@ export type AttemptClaimDecision =
       readonly record: HostUpdateAttemptRecord;
       readonly continuation: Exclude<HostUpdateAttemptContinuation, null>;
     }
-  // Terminalize the in-flight attempt for the OLD target. Write `record`,
-  // then decide again: the record is terminal at that point and the next
-  // decision is `create` for the new target. Two explicit steps, because
-  // superseding and creating are two durable facts and a crash between them
-  // must leave the first one recorded.
+  // Terminalize the in-flight attempt for the old target.
+  // Two explicit steps, because superseding and creating are two durable facts and a crash between them must leave the first one recorded.
   | {
       readonly kind: "supersede";
       readonly record: HostUpdateAttemptRecord;
@@ -175,13 +137,8 @@ export type AttemptClaimDecision =
       readonly observed: HostUpdateAttemptRecord | null;
     };
 
-// ---- Interrupted active-segment recovery ----------------------------------
-//
-// An active record without a live holder is intentionally not resumed by
-// `decideAttemptClaim`: phase alone cannot say whether bytes moved before the
-// process died. This is the single sanctioned extension point. The caller
-// gathers typed install/stage/running evidence *while it holds the canonical
-// lock*, and this pure algebra turns only that evidence into one legal record.
+    // This is the single sanctioned extension point.
+// The caller gathers typed install/stage/running evidence *while it holds the canonical lock*, and this pure algebra turns only that evidence into one legal record.
 
 export type AttemptRecoveryArtifactEvidence =
   | { readonly kind: "absent" }
@@ -218,9 +175,8 @@ export interface AttemptRecoveryRequest {
 
 export type AttemptRecoveryHolderDisposition =
   /**
-   * The canonical acquisition succeeded for this actor. Acquisition itself
-   * proved no live predecessor: an indeterminate holder never yields a
-   * handle, so recovery cannot reinterpret it as stale.
+   * The canonical acquisition succeeded for this actor.
+   * Acquisition itself proved no live predecessor: an indeterminate holder never yields a handle, so recovery cannot reinterpret it as stale.
    */
   | { readonly kind: "recovery-lock-held" }
   | { readonly kind: "holder-live" }
@@ -262,15 +218,7 @@ export interface AttemptRecoveryContext {
   readonly holder: AttemptRecoveryHolderDisposition;
 }
 
-/**
- * Decide recovery from lock-scoped facts, never from phase alone.
- *
- * `terminalize-complete` intentionally bypasses the normal `verifying ->
- * complete` edge only when it has the same substantive proof: exact target
- * bytes recorded in the install tree *and* an exact running host positively
- * bound to this home. An installed-but-not-restarted target instead resumes
- * the activation continuation through `preparing`.
- */
+/** Decide recovery from lock-scoped facts, never from phase alone. */
 export function decideAttemptRecovery(
   context: AttemptRecoveryContext,
 ): AttemptRecoveryDecision {
@@ -335,10 +283,7 @@ export function decideAttemptRecovery(
       : { kind: "terminalize-failed", record };
   }
 
-  // An exact, independently verified old target is completed above. For any
-  // other reconciled active segment a new desired target may safely follow
-  // the core's ordinary two-write protocol: this write terminalizes only the
-  // old attempt; its caller separately invokes the existing `create` intent.
+  // An exact, independently verified old target is completed above.
   if (request.requestedTargetVersion !== current.targetVersion) {
     const record = supersededRecord(current, request.nowIso, {
       recoveredBy: "attempt-executor",
@@ -372,10 +317,8 @@ export function decideAttemptRecovery(
       ? { kind: "refuse", reason: "counter-exhausted" }
       : { kind: "terminalize-failed", record };
   }
-  // Recovery never upgrades a request's action. Physical evidence determines
-  // which continuation is safe *to offer*; the request still decides whether
-  // this actor is authorized to claim that continuation. In particular a
-  // defer request can reconcile to a terminal fact but can never start work.
+  // Recovery never upgrades a request's action.
+  // Physical evidence determines which continuation is safe *to offer*; the request still decides whether this actor is authorized to claim that continuation.
   if (!actionMayResume(request.action, continuation)) {
     return { kind: "refuse", reason: "request-action-mismatch" };
   }
@@ -443,9 +386,8 @@ function recoveryContinuation(
   current: HostUpdateAttemptRecord,
   evidence: AttemptRecoveryEvidence,
 ): Exclude<HostUpdateAttemptContinuation, null> | null {
-  // Verified installed bytes without the positive running leg are the
-  // post-placement/pre-restart state. This MUST go through activation,
-  // starting at preparing, so it can never fabricate waiting-to-activate.
+  // Verified installed bytes without the positive running leg are the post-placement/pre-restart state.
+  // This must go through activation, starting at preparing, so it can never fabricate waiting-to-activate.
   if (artifactMatches(evidence.installed, current.targetVersion)) {
     return "activate";
   }
@@ -535,9 +477,8 @@ export function decideAttemptClaim(
     return { kind: "refuse", reason: "record-fail-closed", observed: null };
   }
 
-  // `start` is the sole unbound operation. Every other request is bound to a
-  // concrete record; otherwise a force/defer/activation token could be
-  // replayed as a fresh update after retention cleanup.
+  // `start` is the sole unbound operation.
+  // Every other request is bound to a concrete record; otherwise a force/defer/activation token could be replayed as a fresh update after retention cleanup.
   if (request.action !== "start" && request.expected === null) {
     return { kind: "refuse", reason: "stale-expectation", observed: null };
   }
@@ -549,16 +490,8 @@ export function decideAttemptClaim(
     };
   }
 
-  // ---- Identity-bound requests are checked FIRST, before any create path.
-  //
-  // A Force / Activate / Defer request names an attempt that was live when
-  // it was authorized. If that attempt is gone - cleaned up, or already
-  // terminal - the request has nothing left to act on, and the one thing it
-  // must NOT do is mint a fresh attempt out of its own `targetVersion` and
-  // `initialPhase`. That is a delayed request replaying as a brand-new
-  // update, days later, against a target the user may have long since
-  // changed. Running this ahead of the absent/terminal create branches is
-  // what makes that unreachable rather than merely unlikely.
+  // ---- Identity-bound requests are checked first, before any create path.
+  // If that attempt is gone - cleaned up, or already terminal - the request has nothing left to act on, and the one thing it must not do is mint a fresh attempt out of its own `targetVersion` and `initialPhase`.
   if (request.expected !== null) {
     if (current.kind === "absent") {
       return { kind: "refuse", reason: "stale-expectation", observed: null };
@@ -598,10 +531,7 @@ export function decideAttemptClaim(
   const record = current.value;
 
   if (!lockHeld) {
-    // Attach is an acknowledgement of another executor's *durably active*
-    // segment, not a generic response to contention.  A park is expected to
-    // be holder-free; a busy/unparseable observation says nothing useful; and
-    // neither can safely acknowledge the pre-adoption identity.
+    // Attach is an acknowledgement of another executor's *durably active* segment, not a generic response to contention.
     if (
       holder.kind === "holder-live" &&
       record.execution === "active" &&
@@ -616,10 +546,8 @@ export function decideAttemptClaim(
     return { kind: "refuse", reason: "lock-unavailable", observed: record };
   }
 
-  // A terminal record is retained evidence, not an obstacle: a newer attempt
-  // replaces it (§1.5, "replacing it only when a newer attempt is durably
-  // claimed"). Unreachable for an identity-bound request, which was already
-  // refused above.
+  // A terminal record is retained evidence, not an obstacle: a newer attempt replaces it (§1.5, "replacing it only when a newer attempt is durably claimed").
+  // Unreachable for an identity-bound request, which was already refused above.
   if (record.execution === "terminal") {
     if (request.newAttemptId === record.attemptId) {
       return {
@@ -631,17 +559,8 @@ export function decideAttemptClaim(
     return { kind: "create", record: createdRecord(request) };
   }
 
-  // ---- Recovery outranks supersession, for EVERY active record.
-  //
+  // ---- Recovery outranks supersession, for every active record.
   // Checked before the target comparison, and that order is the whole point.
-  // An executor that died after promoting the install tree but before its
-  // write-after record leaves a record still reading `applying`. Letting a
-  // request for a DIFFERENT target terminalize that record would mint a
-  // fresh attempt without ever reconciling `install.json`, the staged
-  // artifacts, or the filesystem generation - which is exactly the
-  // reconciliation §1.4 requires before choosing resume, supersede, or fail.
-  // The recovery layer may still decide to supersede; it just may not be
-  // skipped on the way there.
   if (record.execution === "active") {
     return { kind: "refuse", reason: "requires-recovery", observed: record };
   }
@@ -662,10 +581,8 @@ export function decideAttemptClaim(
 
   const continuation = record.continuation;
   if (continuation === null) {
-    // Unreachable through `decodeHostUpdateAttempt`, which rejects a park
-    // with no continuation as corrupt. Kept as a refusal rather than a
-    // throw so a record that reached memory some other way still fails
-    // closed instead of resuming with no idea what it is resuming.
+    // Unreachable through `decodeHostUpdateAttempt`, which rejects a park with no continuation as corrupt.
+    // Kept as a refusal rather than a throw so a record that reached memory some other way still fails closed instead of resuming with no idea what it is resuming.
     return { kind: "refuse", reason: "record-fail-closed", observed: record };
   }
   if (!actionMayResume(request.action, continuation)) {
@@ -684,13 +601,7 @@ export function decideAttemptClaim(
 
 /**
  * Exactly which authorization can adopt each parked continuation.
- *
- * `force` is a request to proceed through the pre-apply busy gate, so it
- * may resume only `resume-apply`. Activation has its own action because
- * `waiting-to-activate` says promotion is already complete. `defer` is a
- * future in-segment parking action, not a claim action, and therefore cannot
- * accidentally turn into a resume while the durable-core API has no request
- * journal to consume it from.
+ * `force` is a request to proceed through the pre-apply busy gate, so it may resume only `resume-apply`.
  */
 function actionMayResume(
   action: AttemptClaimAction,
@@ -721,19 +632,13 @@ function createdRecord(request: AttemptClaimRequest): HostUpdateAttemptRecord {
   };
 }
 
-// `null` when either counter can no longer be incremented in a way that
-// provably advances - see `nextAttemptCounter`. Refusing the transition is
-// the only safe answer: a "bump" that returns the same number would leave
-// the old segment's writes indistinguishable from the new one's.
+// `null` when either counter can no longer be incremented in a way that provably advances - see `nextAttemptCounter`.
+// Refusing the transition is the only safe answer: a "bump" that returns the same number would leave the old segment's writes indistinguishable from the new one's.
 function supersededRecord(
   record: HostUpdateAttemptRecord,
   nowIso: string,
   recovery: HostUpdateAttemptRecovery | undefined,
 ): HostUpdateAttemptRecord | null {
-  // The generation bump is what disarms the old segment: a process still
-  // holding generation N is provably no longer the owner once N+1 is on
-  // disk, so its late write is rejected rather than resurrecting a target
-  // that has been explicitly abandoned.
   const generation = nextAttemptCounter(record.generation);
   const sequence = nextAttemptCounter(record.sequence);
   if (generation === null || sequence === null) return null;
@@ -762,45 +667,25 @@ function resumedRecord(
     ...record,
     generation,
     sequence,
-    // `preparing`, for BOTH continuations, and never the phase that does the
-    // work:
-    //
-    //  - `resume-apply` must re-verify stage evidence before `applying` is
-    //    committed (§1.4 adoption checks). Landing in `applying` would
-    //    durably claim a promotion this segment has not re-validated.
-    //  - `activate` must run the final drain / force check BEFORE
-    //    `restarting` is written, because §4 forbids any deferrable gate
-    //    after that phase. Landing in `restarting` would put the drain check
-    //    on the wrong side of the promise of immediate bootout.
+    // `preparing`, for both continuations, and never the phase that does the work: - `resume-apply` must re-verify stage evidence before `applying` is committed (§1.4 adoption checks).
+    // Landing in `applying` would durably claim a promotion this segment has not re-validated.
     phase: "preparing",
     execution: "active",
-    // Deliberately RETAINED through the active segment. It is what still
-    // says "bytes are already placed, do not re-apply" if this segment dies
-    // before it reaches its next write.
+    // Deliberately retained through the active segment.
+    // It is what still says "bytes are already placed, do not re-apply" if this segment dies before it reaches its next write.
     continuation,
-    // The creating trigger is the attempt's provenance and does not change
-    // when someone else resumes it. Force authorization travels in the
-    // request (§1.3), never by rewriting the record's trigger - that is what
-    // stops an automatic attempt from inventing force permission for itself.
+    // The creating trigger is the attempt's provenance and does not change when someone else resumes it.
+    // Force authorization travels in the request (§1.3), never by rewriting the record's trigger - that is what stops an automatic attempt from inventing force permission for itself.
     trigger: record.trigger,
     updatedAt: nowIso,
   };
 }
 
-// ---- In-segment advance -----------------------------------------------------
+ // ---- In-segment advance -----------------------------------------------------
 
 /**
  * Which phases may legally follow which, within a segment.
- *
- * Two entries carry the plan's load-bearing prohibitions and are not
- * housekeeping:
- *
- *  - `waiting-to-activate` has NO edge to `applying`. Bytes are already
- *    placed at that park; re-applying is not a retry, it is a corruption
- *    (§1.5).
- *  - nothing reaches `complete` except `verifying`. §1.4: completion is
- *    never inferred from phase alone - it requires a healthy host answering
- *    with the exact target version.
+ * Bytes are already placed at that park; re-applying is not a retry, it is a corruption (§1.5).
  */
 const LEGAL_SUCCESSORS: ReadonlyMap<
   HostUpdateAttemptPhase,
@@ -880,15 +765,8 @@ export function isLegalPhaseTransition(
 }
 
 /**
- * Phases an in-flight continuation forbids, whatever the generic successor
- * table says.
- *
- * `activate` means the bytes for this target are ALREADY PLACED. Applying
- * again is not a retry, it is a second promotion of an install tree that is
- * already promoted; downloading again re-fetches an artifact that is already
- * on disk and staged. The generic table cannot express this because it is
- * keyed on phase alone, and the resume path deliberately lands `activate` in
- * `preparing` - whose ordinary successors include `applying`.
+ * Phases an in-flight continuation forbids, whatever the generic successor table says.
+ * Applying again is not a retry, it is a second promotion of an install tree that is already promoted; downloading again re-fetches an artifact that is already on disk and staged.
  */
 const CONTINUATION_FORBIDDEN_PHASES: ReadonlyMap<
   Exclude<HostUpdateAttemptContinuation, null>,
@@ -901,13 +779,7 @@ const CONTINUATION_FORBIDDEN_PHASES: ReadonlyMap<
 
 export interface AttemptAdvance {
   readonly phase: HostUpdateAttemptPhase;
-  /**
-   * Stated explicitly rather than derived, so an inconsistency is a loud
-   * rejection instead of a silent correction - and, more importantly, so
-   * that erasing or swapping an in-flight continuation is something the
-   * caller must ask for and be refused, rather than something it can do by
-   * omission. See `continuationRejection`.
-   */
+  /** See `continuationRejection`. */
   readonly continuation: HostUpdateAttemptContinuation;
   readonly progress: HostUpdateAttemptProgress;
   readonly error: HostUpdateAttemptError;
@@ -923,16 +795,14 @@ export type AttemptAdvanceRejection =
   // writes, so this means the holder's own view is stale.
   | "sequence-stale"
   | "terminal"
-  // The current record is PARKED. Leaving a park is a claim, not an advance.
+  // The current record is parked. Leaving a park is a claim, not an advance.
   | "not-active"
   | "illegal-phase"
   | "illegal-continuation"
   // The in-flight continuation forbids the requested phase - `activate`
   // reaching for `applying` or `downloading`.
   | "continuation-forbids-phase"
-  // The continuation's durable phase provenance does not authorize this
-  // next state: a resumed apply has not written `applying` yet, or an
-  // activation segment has skipped its restart boundary.
+  // The continuation's durable phase provenance does not authorize this next state: a resumed apply has not written `applying` yet, or an activation segment has skipped its restart boundary.
   | "continuation-phase-order"
   | "counter-exhausted";
 
@@ -940,20 +810,10 @@ export type AttemptAdvanceOutcome =
   | { readonly kind: "advanced"; readonly record: HostUpdateAttemptRecord }
   | { readonly kind: "rejected"; readonly reason: AttemptAdvanceRejection };
 
-/**
- * Advance the attempt one write, WITHIN a segment.
- *
- * `current` must be the record as it is on disk right now (re-read under the
- * lock); `held` is the identity this segment last committed.
- *
- * This function can never leave a park, and that restriction is load-bearing
- * rather than tidiness. Leaving a park is an adoption: it bumps `generation`
- * and must pass `decideAttemptClaim`'s expected-identity check. An advance
- * bumps only `sequence`. Allowing `waiting-to-activate -> restarting` here
- * would let a holder walk straight out of a park with no generation bump at
- * all, silently disarming the very check that rejects a stale
- * Force/Activate request.
- */
+  /**
+   * Advance the attempt one write, within a segment.
+   * `current` must be the record as it is on disk right now (re-read under the lock); `held` is the identity this segment last committed.
+   */
 export function advanceAttempt(
   current: HostUpdateAttemptRecord,
   held: HostUpdateAttemptIdentity,
@@ -1010,27 +870,16 @@ export function advanceAttempt(
       progress: advance.progress,
       error: advance.error,
       updatedAt: advance.nowIso,
-      // Stamped once, when the attempt actually ends. Timestamps are display
-      // and staleness inputs only (§1.3) - never ordering - so this is the
-      // one place a terminal record's age comes from.
+      // Stamped once, when the attempt actually ends.
+      // Timestamps are display and staleness inputs only (§1.3) - never ordering - so this is the one place a terminal record's age comes from.
       completedAt: execution === "terminal" ? advance.nowIso : null,
     },
   };
 }
 
 /**
- * The generic phase graph intentionally cannot answer these questions: the
- * same `preparing` phase means different things before byte placement, while
- * re-applying after an activation park is corruption. The continuation is the
- * durable provenance that disambiguates those states.
- *
- * `waiting-to-activate` is evidence that packaged-Mac bytes were placed, so
- * it may be BORN only by an `applying` write. An already-resumed `activate`
- * segment may re-park from `preparing` when its final drain defers; that is
- * not a new placement claim. A resumed `resume-apply` segment carries its
- * continuation unchanged until it has itself committed `applying`, and only
- * then may reach restart, verification, or the activation park. Finally an
- * `activate` segment has exactly its final-drain -> restart -> verify route.
+ * The generic phase graph intentionally cannot answer these questions: the same `preparing` phase means different things before byte placement, while re-applying after an activation park is corruption.
+ * `waiting-to-activate` is evidence that packaged-Mac bytes were placed, so it may be born only by an `applying` write.
  */
 function continuationPhaseOrderRejected(
   current: HostUpdateAttemptRecord,
@@ -1079,34 +928,14 @@ function continuationPhaseOrderRejected(
   }
   if (current.phase === "verifying") return false;
 
-  // An `activate` continuation in any other active phase is impossible for
-  // records this core writes. Refuse rather than allowing a corrupt history
-  // to re-enter the activation route from a byte-placement phase.
+  // An `activate` continuation in any other active phase is impossible for records this core writes.
+  // Refuse rather than allowing a corrupt history to re-enter the activation route from a byte-placement phase.
   return true;
 }
 
 /**
  * Whether the requested continuation is illegal for this advance.
- *
- * Three rules, each closing a different way to lose the "bytes are already
- * placed" fact:
- *
- *  - **terminal target** - must be `null`. The attempt is over; there is
- *    nothing left to continue.
- *  - **parked target** - must be that park's own continuation AND, if one is
- *    already in flight, the same one. One deliberate handoff exists:
- *    `resume-apply` may become `activate` only at
- *    `applying -> waiting-to-activate`, where the latter is the durable
- *    evidence that byte placement completed. So an `activate` segment may
- *    only ever re-park at `waiting-to-activate`; it cannot park as
- *    `waiting-for-work` and come back believing it still has an apply to do.
- *  - **active target** - must be EXACTLY what is already in flight. This is
- *    the erase-and-swap gate: a caller cannot quietly pass `null` and drop
- *    the continuation on the floor, nor swap `activate` for `resume-apply`
- *    and re-apply placed bytes one phase later.
- *
- * A continuation is therefore born at a park and dies at a terminal, and in
- * between it can only be carried unchanged.
+ * Three rules, each closing a different way to lose the "bytes are already placed" fact: - **terminal target** - must be `null`.
  */
 function continuationRejection(
   current: HostUpdateAttemptRecord,

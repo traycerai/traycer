@@ -4,25 +4,8 @@ import { PLAIN_IMPORT_LOGINS_FRAME } from "@/components/settings/import-logins-f
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 
-/**
- * The login-import act's stage: the real import flow - pick a browser, choose
- * sites, import - dressed as the same mini-app window the session-import act
- * uses, for the same reason: there is no mock-up to show, the panel IS the
- * live app reading the user's own machine, and a site checklist is
- * unreadable squeezed into the copy rail. The copy rail keeps the tour's
- * Continue and Skip; the flow's Done step shows its counts in place and has
- * no Close of its own here.
- *
- * Showing this act is the announcement: the feature id is consumed on mount
- * so the release toast never follows for a user who has seen the act, whether
- * or not they imported anything. A user who leaves the tour BEFORE reaching
- * it is covered by the tour's own finish (`OnboardingPage`), which consumes
- * the id whenever the tour ends, whether or not this act was ever in it.
- * The act is only ever in the tour when the
- * import is available (`onboardingActsFor`), so the bridge is expected; the
- * null branch is for the render between a bridge going away and the act list
- * following it.
- */
+/** Showing this act is the announcement: the feature id is consumed on mount so the release toast never follows
+ * for a user who has seen the act, whether or not they imported anything. */
 export function OnboardingLoginImportStage(): ReactNode {
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
   const consume = useFeatureAnnouncementsStore((state) => state.consume);

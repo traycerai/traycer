@@ -6,13 +6,8 @@ interface StatusRowChromeBoundaryState {
 }
 
 /**
- * Renders nothing when its child throws. Shared by every optional, host-backed
- * affordance in the Epic status row (originally private to
- * `epic-sweep-action.tsx`) - the honest fallback for decorative chrome is its
- * absence, not a broken-widget placeholder, and callers must only mount one
- * where the host runtime and the Epic session exist (host hooks throw when
- * either is absent or incomplete). The throw is still logged once so a real
- * regression is visible in the log rather than silently swallowed.
+ * Shared by every optional, host-backed affordance in the Epic status row (originally private to `epic-sweep-action.tsx`) - the honest fallback for decorative chrome is its absence, not a broken-widget placeholder, and callers must only mount one where the host runtime and the Epic session exist (host hooks throw when either is absent or incomplete).
+ * The throw is still logged once so a real regression is visible in the log rather than silently swallowed.
  */
 export class StatusRowChromeBoundary extends Component<
   { readonly label: string; readonly children: ReactNode },

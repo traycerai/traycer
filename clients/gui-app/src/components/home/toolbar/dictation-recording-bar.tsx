@@ -8,9 +8,8 @@ import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
-// The chord rides inside the tooltip label rather than as a separate chip, so
-// it is dropped from the string where shortcut hints are suppressed. The
-// button's own `aria-label` is what names the action either way.
+// The chord rides inside the tooltip label rather than as a separate chip, so it is dropped from the string
+// where shortcut hints are suppressed.
 function cancelDictationLabel(): string {
   if (!shortcutHintsVisible()) return "Cancel";
   return "Cancel (Esc)";
@@ -22,12 +21,7 @@ interface DictationRecordingBarProps {
   readonly onCancel: () => void;
 }
 
-/**
- * Inline recording strip that occupies the composer's bottom toolbar row
- * (Codex-style): a live scrolling waveform + elapsed timer + cancel/stop that
- * replaces the normal toolbar controls while dictation is active. The text
- * editor above stays visible - this never covers the composer.
- */
+/** The text editor above stays visible - this never covers the composer. */
 export function DictationRecordingBar(
   props: DictationRecordingBarProps,
 ): ReactNode {
@@ -113,10 +107,8 @@ function RecordingControls({
   );
 }
 
-// Counts up from mount. The controls mount exactly when recording starts, so the
-// elapsed value is the recording duration. State is set only from async ticks
-// (never synchronously in the effect body) to avoid cascading renders; a 0ms
-// first tick shows 0:00 immediately.
+// State is set only from async ticks (never synchronously in the effect body) to avoid cascading renders; a
+// 0ms first tick shows 0:00 immediately.
 function useElapsedSeconds(): number {
   const [elapsed, setElapsed] = useState(0);
   const startedAtRef = useRef(0);

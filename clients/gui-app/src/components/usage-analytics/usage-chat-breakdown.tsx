@@ -10,16 +10,7 @@ export interface UsageChatBreakdownProps {
   readonly rows: readonly UsageChatBucket[];
 }
 
-/**
- * By-chat/agent breakdown for the epic-scoped panel, as a real table
- * (2026-08-11 feedback round) with the same column styling as
- * `UsageBreakdownTable`. Titles are joined CLIENT-SIDE from the open epic's
- * own tree projection (`useEpicTreeNode`) - the summary only carries
- * `chatId`, and this is the one place in the app that already knows every
- * node's title, chat or A2A child agent alike (an A2A child agent is its
- * own chat, so this list doubles as the by-agent view with no separate wire
- * shape).
- */
+/** Titles are joined client-side from the open epic's own tree projection (`useEpicTreeNode`). */
 export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
   if (props.rows.length === 0) {
     return (
@@ -73,10 +64,7 @@ function UsageChatBreakdownRow(props: {
       className="border-b border-border/40 last:border-b-0"
       data-testid={`usage-chat-breakdown-row-${row.chatId}`}
     >
-      {/* `wrap-anywhere`, matching the other breakdown tables' identifier
-          cells: a fallback chatId (or a long unbroken title) must not set
-          the auto-layout table's minimum width and push Tokens/Cost out of
-          the dialog, and truncating would hide the identifier instead. */}
+      {/* `wrap-anywhere`, matching the other breakdown tables' identifier cells. */}
       <td className="py-1.5 pr-3 wrap-anywhere text-foreground">{title}</td>
       <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground">
         {tokens.toLocaleString()}

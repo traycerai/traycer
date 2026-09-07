@@ -11,14 +11,8 @@ interface PackageManagerUpgradeHintProps {
   >;
 }
 
-/**
- * The remediation for a package-manager-owned CLI that is older than the
- * bundled one. Desktop deliberately never overwrites a Homebrew/npm/winget
- * binary; it records the source-specific upgrade command instead, and this is
- * the surface that renders it. A Desktop-local fact by construction — the
- * producer writes it into this machine's reconcile state, never the host-side
- * manifest — so it renders only where the local bridge answers.
- */
+/** A Desktop-local fact by construction - the producer writes it into this machine's reconcile state, never the
+ * host-side manifest - so it renders only where the local bridge answers. */
 export function PackageManagerUpgradeHint(
   props: PackageManagerUpgradeHintProps,
 ) {
@@ -45,12 +39,8 @@ export function PackageManagerUpgradeHint(
   );
 }
 
-/**
- * The hint wired to its only possible source: this machine's CLI manifest over
- * the local management bridge. Renders nothing while there is no bridge, no
- * manifest, or no hint — which is every machine whose CLI Desktop already
- * keeps current — so the caller mounts it unconditionally on the local path.
- */
+/** Renders nothing while there is no bridge, no manifest, or no hint - which is every machine whose CLI Desktop
+ * already keeps current - so the caller mounts it unconditionally on the local path. */
 export function LocalPackageManagerUpgradeHint(): ReactNode {
   const management = useRunnerHost().hostManagement;
   const manifest = useQuery(

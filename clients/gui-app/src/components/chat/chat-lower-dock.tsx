@@ -29,18 +29,9 @@ export interface ChatLowerDockProps {
   readonly restore: ChatRestoreContextValue;
   readonly queue: ChatSessionState["queue"];
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
-  /**
-   * This chat's running managed commands, counted by the parent because the
-   * surfaces around the dock size themselves from the same number - see
-   * `chatBackgroundSectionVisible`.
-   */
+  /** This chat's running managed commands, counted by the parent because the surfaces around the dock size themselves from the same number - see `chatBackgroundSectionVisible`. */
   readonly runningManagedCommandCount: number;
-  /**
-   * This chat's held shells, counted by the parent for the same reason - and
-   * counted separately because the hold a human has to clear sits on a shell
-   * that has FINISHED, which the running count above will never see. A chat
-   * whose only background state is a hold opens the section on this alone.
-   */
+  /** This chat's held shells, counted by the parent for the same reason - and counted separately because the hold a human has to clear sits on a shell that has FINISHED, which the running count above will never see. A chat whose only background state is a hold opens the section on this alone. */
   readonly heldManagedCommandCount: number;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;

@@ -9,11 +9,7 @@ import {
 } from "../normalize";
 import type { ImportCookieRow } from "../cookie-rows";
 
-/**
- * `nowSeconds` fixed rather than `Date.now()`-derived, so an expiry pinned a
- * minute in the past or future never drifts into a flake based on when the
- * suite happens to run.
- */
+/** `nowSeconds` fixed rather than `Date.now()`-derived, so an expiry pinned a minute in the past or future never drifts into a flake based on when the suite happens to run. */
 const NOW_SECONDS = 1_800_000_000;
 
 function row(overrides: Partial<ImportCookieRow>): ImportCookieRow {

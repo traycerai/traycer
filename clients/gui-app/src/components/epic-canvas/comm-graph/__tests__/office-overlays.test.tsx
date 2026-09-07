@@ -8,18 +8,7 @@ afterEach(() => {
 });
 
 /**
- * Both overlays are React, not canvas, and are tested here rather than through
- * the office canvas for one reason: jsdom has no 2d context, so the floor never
- * produces a frame and therefore never produces a hit region to hover. What
- * they SAY is the part that can go wrong silently, and it is asserted directly.
- */
-/**
- * The office no longer draws its own agent card: the hover is
- * `AgentHoverTooltip`, the same component the sidebar and the graph use. What
- * is left here is the FLOOR's own addition under it - the posture it drew and
- * the size class it drew the desk at. Harness and model are deliberately
- * absent: the shared card resolves those from the host, and a second-hand copy
- * beside it is how the two would come to disagree.
+ * Both overlays are React, not canvas, and are tested here rather than through the office canvas for one reason: jsdom has no 2d context, so the floor never produces a frame and therefore never produces a hit region to hover.
  */
 describe("OfficeHoverSupplement", () => {
   it("names the posture and the model size the desk was drawn at", () => {
@@ -53,9 +42,7 @@ describe("OfficeHoverSupplement", () => {
     const text = screen.getByTestId(
       "comm-graph-office-hover-supplement",
     ).textContent;
-    // The office reads a chat's model from the epic doc, which the host's own
-    // run settings supersede; printing it here would put a stale value beside
-    // the authoritative one.
+    // The office reads a chat's model from the epic doc, which the host's own run settings supersede; printing it here would put a stale value beside the authoritative one.
     expect(text).not.toContain("claude");
     expect(text).not.toContain("opus");
   });
@@ -79,9 +66,7 @@ describe("OfficeLegend", () => {
     fireEvent.click(screen.getByTestId("comm-graph-office-legend-toggle"));
 
     const card = screen.getByTestId("comm-graph-office-legend-card");
-    // Grouped by where you look, and complete: a key that documents only the
-    // newest additions leaves the reader unable to tell which of the things in
-    // front of them it covers.
+    // Grouped by where you look, and complete: a key that documents only the newest additions leaves the reader unable to tell which of the things in front of them it covers.
     for (const section of ["People", "Desks", "Room"]) {
       expect(card.textContent).toContain(section);
     }

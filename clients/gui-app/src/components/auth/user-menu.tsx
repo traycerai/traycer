@@ -30,12 +30,8 @@ export interface UserMenuProps {
   readonly showAppSettings: boolean;
 }
 
-/**
- * Avatar-triggered identity menu. Controlled open state is intentional:
- * jsdom doesn't implement the full PointerEvent path Radix drives, so
- * without the explicit `open` the Radix trigger wouldn't fire under
- * tests. Outside-click + Escape dismissal still come from Radix.
- */
+/** Controlled open state is intentional: jsdom doesn't implement the full PointerEvent path Radix drives, so
+ * without the explicit `open` the Radix trigger wouldn't fire under tests. */
 export function UserMenu(props: UserMenuProps) {
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
@@ -129,9 +125,7 @@ export function UserMenu(props: UserMenuProps) {
             data-testid="user-menu-manage-subscription"
             onSelect={() => {
               setOpen(false);
-              // Tracked on the RESOLVED open only: a failed OS handoff is not
-              // a subscription-management visit (R11). The failure toast is
-              // the link seam's, so the rejection is ignored here.
+              // Tracked on the resolved open only: a failed OS handoff is not a subscription-management visit.
               void openLink(manageSubscriptionUrl, "account", null).then(
                 () =>
                   Analytics.getInstance().track(

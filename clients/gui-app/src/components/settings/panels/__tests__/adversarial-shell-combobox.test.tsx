@@ -132,9 +132,8 @@ describe("adversarial: Add-a-shell race conditions", () => {
     fireEvent.change(input, { target: { value: "/usr/local/bin/nu" } });
     await screen.findByText("✓ found · executable");
 
-    // Quickly switch to B and press Enter before B's probe resolves. The guard
-    // `debounced === trimmedInput` makes `probe` undefined for the new value, so
-    // neither A (no longer in the input) nor B (unproven) may be added.
+    // Quickly switch to B and press Enter before B's probe resolves. The guard `debounced === trimmedInput` makes
+    // `probe` undefined for the new value, so neither A (no longer in the input) nor B (unproven) may be added.
     fireEvent.change(input, { target: { value: "/etc/hosts" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onAdd).not.toHaveBeenCalled();

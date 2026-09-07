@@ -113,13 +113,7 @@ describe("PrPanelActions staleness hint", () => {
   };
 
   beforeEach(() => {
-    // `usePrListSubscription` keeps its sessions in a MODULE-level registry,
-    // which outlives both the canvas store and the query client this suite
-    // already resets. Every test here happens to build a fresh
-    // `MockWsStreamClient`, so no key collides today - but nothing in the
-    // suite states that, and the first test that reuses a client would
-    // silently inherit a live entry. Same reason
-    // `pr-detail-body.test.tsx` resets its own registry on both hooks.
+    // Every test here happens to build a fresh `MockWsStreamClient`, so no key collides today - but nothing in the suite states that, and the first test that reuses a client would silently inherit a live entry.
     __resetPrListSubscriptionsForTesting();
     resetCanvas();
     queryClient = new QueryClient({

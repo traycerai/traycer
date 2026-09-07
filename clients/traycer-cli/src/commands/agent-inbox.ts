@@ -9,19 +9,7 @@ import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
 import type { CommandFn } from "../runner/runner";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 
-/**
- * `traycer agent inbox` - print the calling agent's recently-delivered
- * inbox messages in full (`agent.inbox.read`).
- *
- * The `traycer monitor` stream surfaces each inbound message through a
- * harness background-output notification, which the harness truncates for
- * large payloads. This command re-reads one durable inbox page over a plain
- * RPC, so its stdout carries the complete body without allocating a complete
- * backlog - the recovery path when a monitored message arrived clipped.
- *
- * `--agent-id` defaults to `$TRAYCER_AGENT_ID`; the epic is always read from
- * `$TRAYCER_EPIC_ID`, so an agent normally runs it with no flags.
- */
+/** `traycer agent inbox` - print the calling agent's recently-delivered inbox messages in full (`agent.inbox.read`). The `traycer monitor` stream surfaces each inbound message through a harness background-output notification, which the harness truncates for large payloads. */
 export function buildAgentInboxCommand(opts: {
   readonly epicId: string | null;
   readonly agentId: string | null;

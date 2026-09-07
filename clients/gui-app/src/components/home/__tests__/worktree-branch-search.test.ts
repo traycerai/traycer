@@ -87,9 +87,8 @@ describe("worktree branch search", () => {
       searchRow("branch", "hotfix/urgent-patch", "/repo/worktrees/alpha"),
       searchRow("path", "misc", "/repo/worktrees/urgent-workdir"),
     ];
-    // Index over zero rows: Fuse can never produce a hit from it, so a
-    // non-empty, correctly ordered result proves the substring tiers were
-    // used exclusively rather than falling through to fuzzy search.
+    // Index over zero rows: Fuse can never produce a hit from it, so a non-empty, correctly ordered result proves
+    // the substring tiers were used exclusively rather than falling through to fuzzy search.
     const emptyIndex = createWorktreeBranchSearchIndex<(typeof rows)[number]>(
       [],
     );
@@ -115,9 +114,8 @@ describe("worktree branch search", () => {
   });
 
   it("ranks a prefix match above mere containment within the same tier, shorter prefix first", () => {
-    // "dev-tools" and "development-notes" both start with "dev" (prefix
-    // matches); "middev" only contains "dev" mid-string. Among the two
-    // prefix matches, the shorter field ("dev-tools") ranks first.
+    // "dev-tools" and "development-notes" both start with "dev" (prefix matches); "middev" only contains "dev"
+    // mid-string.
     const rows = [
       searchRow(
         "development",
@@ -161,17 +159,15 @@ describe("worktree branch search", () => {
       filterWorktreeBranchRows(rows, index, longBranch).map((row) => row.id),
     ).toEqual(["one"]);
 
-    // A one-character typo of the same long query breaks the substring match;
-    // Fuse would typically typo-tolerate it, but the length gate skips Fuse
-    // entirely, so the result must be empty.
+    // A one-character typo of the same long query breaks the substring match; Fuse would typically typo-tolerate
+    // it, but the length gate skips Fuse entirely, so the result must be empty.
     const typoQuery = "feature-integration-with-paymentz-flow-long";
     expect(typoQuery.length).toBeGreaterThan(32);
     expect(filterWorktreeBranchRows(rows, index, typoQuery)).toEqual([]);
     expect(search).not.toHaveBeenCalled();
 
-    // Control: the same spy DOES record a call once the query is short enough
-    // to earn the fuzzy fallback, so the zero-call assertion above is evidence
-    // of the length gate rather than of a spy that can never fire.
+    // Control: the same spy does record a call once the query is short enough to earn the fuzzy fallback, so the
+    // zero-call assertion above is evidence of the length gate rather than of a spy that can never fire.
     const shortTypo = "paymentz";
     expect(shortTypo.length).toBeLessThanOrEqual(32);
     filterWorktreeBranchRows(rows, index, shortTypo);

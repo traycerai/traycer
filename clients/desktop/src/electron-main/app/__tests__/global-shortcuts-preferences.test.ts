@@ -112,12 +112,6 @@ describe("global shortcut preferences", () => {
     });
   });
 
-  // Amended decision 3: structural validation (the zod schema) only confirms
-  // `chord` is a string or null - it says nothing about whether that string
-  // is a canonical chord. `sanitizeChord` resolves an invalid chord to `null`
-  // ("use the definition's default") while keeping the rest of the intent
-  // (`enabled`) exactly as persisted - it must NOT fall back to the full
-  // `DEFAULT_INTENT` (which would also silently flip `enabled` back to true).
   it("coerces an invalid persisted chord string to null while preserving the persisted enabled flag", async () => {
     writeFileSync(
       storePath(),

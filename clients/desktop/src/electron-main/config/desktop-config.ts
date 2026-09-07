@@ -2,14 +2,6 @@ import { join } from "node:path";
 import { config, isDevBuild } from "../../config";
 import type { Environment } from "../host/host-paths";
 
-// Single, typed read of the boot-time deployment + layout for the desktop.
-// Everything downstream consumes `DesktopConfig` rather than re-deriving.
-//
-// Backend endpoints come from the source-controlled `config` (packaged apps
-// have no shell env). Dev-vs-shipped wiring is derived from
-// `config.environment` (via `isDevBuild`) - `environment` is the single
-// discriminator, so no env var can flip a shipped app into dev mode and
-// behaviour is identical for a given slot whether or not it is packaged.
 
 export interface DesktopConfig {
   // The build's deploy slot (`dev` / `staging` / `production`).

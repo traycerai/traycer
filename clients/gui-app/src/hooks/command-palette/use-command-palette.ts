@@ -1,9 +1,4 @@
-/**
- * React bridge between the `app.palette.open` keybinding action and
- * the palette store. Mirrors the pattern used by the sidebar-toggle
- * bridge in `sidebar-keybinding-bridge.tsx`: mount an effect that
- * registers a dynamic handler, and return the dispose fn.
- */
+/** React bridge between the `app.palette.open` keybinding action and the palette store. */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
@@ -33,13 +28,7 @@ function useCommandPaletteController(): CommandPaletteController {
   return useMemo(() => ({ open, close, toggle }), [open, close, toggle]);
 }
 
-/**
- * Registers the `app.palette.open` action's handler while mounted.
- * The live toggle fn is parked in a ref (written inside an effect
- * so React's strict compiler doesn't flag a write-during-render) and
- * read through the ref in the dispatcher closure so identity churn
- * on the controller doesn't thrash the registry.
- */
+/** Registers the `app.palette.open` action's handler while mounted. */
 export function usePaletteKeybindingBridge(): void {
   const { toggle } = useCommandPaletteController();
   const toggleRef = useRef<() => void>(toggle);

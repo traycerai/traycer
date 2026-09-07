@@ -3,34 +3,8 @@ import {
   SENSITIVE_KEY_PATTERN,
 } from "@traycer/protocol/utils/text/redaction";
 
-/**
- * The support-specific scrubber (ticket 09 / tech-plan T6): applied at
- * serialization to every private string, log tail, local diagnostic bundle,
- * and derived title before any of it can leave the machine (Sentry, the
- * local diagnostic bundle file, or the public GitHub draft).
- *
- * Deliberately does NOT reuse `logger.ts`'s `redactLogText`: that helper caps
- * output at 1,000 chars, which would silently truncate exactly the 500-line /
- * 512 KB log tails and multi-KB stack traces this scrubber exists to protect.
- * It reuses the same detection leaf
- * (`@traycer/protocol/utils/text/redaction`) so detection never drifts
- * between the two call sites, then adds a pass `redactLogText` has never had: absolute-path pseudonymization.
- * `host.log` is written with zero redaction at source
- * (`traycer-host/src/bootstrap/host-logger.ts`), so this module is its only
- * line of defense, and paths - workspace directories, usernames, install
- * locations - are the dominant leak vector in that file and in stack traces.
- */
+/** It reuses the same detection leaf (`@traycer/protocol/utils/text/redaction`) so detection never drifts between the two call sites, then adds a pass `redactLogText` has never had. */
 
-// Recognized filesystem roots for POSIX absolute paths. Anchoring on these
-// (rather than matching "any /a/b/c-shaped token") is deliberate: log lines
-// routinely carry API-route-looking text ("GET /api/v1/host/status 200")
-// that is not a filesystem path and is useful un-redacted, while every real
-// leak this scrubber has to stop - workspace/project directories, install
-// paths, home directories, external volumes - lives under one of these roots
-// on a real machine. Code review (ticket 09, finding #2) widened this list
-// after `/workspace` and `/Volumes` were found passing through unredacted;
-// at this boundary a missed root is a privacy leak, so err on including more
-// rather than fewer plausible top-level directories.
 const POSIX_PATH_ROOT_NAMES = [
   "Users",
   "home",
@@ -53,41 +27,11 @@ const POSIX_PATH_ROOT_NAMES = [
   "Volumes",
 ] as const;
 
-// One character of path-component content: anything except a hard
-// terminator (whitespace incl. newlines, quotes, backtick, angle brackets,
-// pipe, the bracket/brace/paren punctuation stack traces commonly wrap a
-// path in, and field separators comma/semicolon). Slash and backslash are
-// EXCLUDED here even though they're not "terminators" in the usual sense -
-// they are the explicit separators the surrounding patterns supply between
-// components, not component content, so the outer repetition (below) does
-// real per-directory-level work instead of one greedy run silently
-// consuming several real path levels as if they were "one segment".
 const PATH_COMPONENT_CHAR =
   String.raw`[^\s\/\\"'` + "`" + String.raw`<>|()[\]{},;]`;
 
-// One path component, tolerating embedded whitespace runs only when the
-// word after each one looks like a name continuation - starts with an
-// uppercase letter, as in a macOS full-name home directory
-// ("/Users/John Doe/...", "/Users/Mary Jane Watson/..."). This is
-// deliberately narrow: code review (finding #2) first caught spaces
-// terminating the match early and leaking the path's tail
-// (`/Users/John Doe/...` -> `<path-1> Doe/...`); the first fix allowed ANY
-// embedded space, which over-corrected into swallowing unbounded trailing
-// prose whenever a path had no trailing quote/paren/EOL. Requiring each
-// continuation word to be capitalized catches the real multi-word-name case
-// (any number of them - a single optional continuation missed "Watson" in
-// three-word names, and a single literal space missed runs of 2+ spaces)
-// while leaving an ordinary lowercase sentence-continuation word
-// ("...x.ts then") outside the match.
 const PATH_COMPONENT = String.raw`${PATH_COMPONENT_CHAR}+(?: +[A-Z]${PATH_COMPONENT_CHAR}*)*`;
 
-// Windows/UNC separators can be `\` or `/`; POSIX roots only ever use `/`.
-// `+` (one-or-more), not exactly one: a JSON-stringified Windows path doubles
-// every backslash ("C:\\Users\\...", i.e. two literal backslash characters
-// between each level), and matching exactly one separator left the second
-// backslash of each pair unconsumed for a LATER pattern (UNC) to grab
-// instead, fragmenting one path into several pseudonyms with a bare
-// directory name ("Users") leaking through in between.
 const WINDOWS_PATH_SEPARATOR = String.raw`[\\/]+`;
 
 const POSIX_ABSOLUTE_PATH_PATTERN = new RegExp(
@@ -97,23 +41,12 @@ const POSIX_ABSOLUTE_PATH_PATTERN = new RegExp(
   "g",
 );
 
-// `~/...` home-relative paths (code review, finding #2 - passed through
-// unredacted entirely before this). Bare `~` with no following `/` is left
-// alone: on its own it names "the user's home directory" as a concept, not a
-// path to a specific file or project. `+` (not `*`) requires at least one
-// `/component` so a bare trailing `~` never matches.
+// `+` (not `*`) requires at least one `/component` so a bare trailing `~` never matches.
 const TILDE_HOME_PATH_PATTERN = new RegExp(
   String.raw`~(?:\/${PATH_COMPONENT})+`,
   "g",
 );
 
-// `C:\Users\...` or `C:/Users/...`. Windows drive letters are not a useful
-// anchor set the way POSIX root names are (any letter is valid), so this
-// anchors on the drive-letter-colon-separator shape instead. The negative
-// lookbehind is load-bearing: without it, the tail of an ordinary
-// `https://...` URL ("s" followed by ":" and "/") false-positives as drive
-// "S:/" - the lookbehind requires the letter not be preceded by another
-// letter/digit, which a real single-letter drive designation never is.
 const WINDOWS_ABSOLUTE_PATH_PATTERN = new RegExp(
   String.raw`(?<![A-Za-z0-9])[A-Za-z]:${WINDOWS_PATH_SEPARATOR}(?:${PATH_COMPONENT}(?:${WINDOWS_PATH_SEPARATOR}${PATH_COMPONENT})*)?`,
   "g",
@@ -125,14 +58,7 @@ const UNC_PATH_PATTERN = new RegExp(
   "g",
 );
 
-/**
- * Scrubs one line of free text: token/secret/bearer/api-key redaction (same
- * patterns as `redactLogText`), then absolute-path pseudonymization. No
- * length cap - callers enforce their own field bounds AFTER calling this,
- * never before, so a byte/char budget always measures the scrubbed text that
- * will actually ship (see `support.ts`'s log-tail capture and
- * `support-public-draft.ts`'s URL budget).
- */
+/** No length cap - callers enforce their own field bounds AFTER calling this, never before, so a byte/char budget always measures the scrubbed text that will actually ship (see. */
 export function scrubSupportText(text: string): string {
   const pathPseudonyms = new Map<string, string>();
   return scrubSupportTextWithPseudonyms(text, pathPseudonyms);
@@ -142,11 +68,6 @@ function scrubSupportTextWithPseudonyms(
   text: string,
   pathPseudonyms: Map<string, string>,
 ): string {
-  // Split-map-join per line rather than one global replace over the whole
-  // blob: the ticket calls this out explicitly ("applied line-wise") because
-  // a multi-hundred-KB log tail is exactly the input `redactLogText`'s
-  // whole-string cap was breaking on, and per-line application keeps the
-  // regexes working against bounded input regardless of overall tail size.
   return text
     .split("\n")
     .map((line) => scrubLine(line, pathPseudonyms))
@@ -157,15 +78,7 @@ function scrubLine(line: string, pathPseudonyms: Map<string, string>): string {
   return pseudonymizeAbsolutePaths(redactSensitiveText(line), pathPseudonyms);
 }
 
-/**
- * Replaces every absolute path with an opaque `<path-N>` pseudonym, stable
- * per unique path within one `scrubSupportText` call (the same file
- * appearing in two stack frames collapses to the same token, which keeps
- * "same file in both frames" legible to a maintainer without the path text
- * itself ever surviving). Never keeps the basename: a workspace path's most
- * sensitive segment is routinely the project/client directory name, not just
- * the leading username, so partial retention does not make this safe.
- */
+/** Never keeps the basename: a workspace path's most sensitive segment is routinely the project/client directory name, not just the leading username, so partial retention does not. */
 function pseudonymizeAbsolutePaths(
   text: string,
   pathPseudonyms: Map<string, string>,
@@ -177,14 +90,7 @@ function pseudonymizeAbsolutePaths(
     pathPseudonyms.set(match, pseudonym);
     return pseudonym;
   };
-  // Windows MUST run before UNC (code review, finding #2): a JSON-escaped
-  // Windows path doubles every backslash ("C:\\Users\\...", i.e. two literal
-  // backslash characters after the drive letter), which is indistinguishable
-  // from a genuine UNC prefix to a regex that isn't anchored on what precedes
-  // it. Running UNC first let it claim everything from the doubled backslash
-  // onward as its own match, leaving the bare drive letter ("C:") behind,
-  // unredacted. Windows running first consumes the whole thing starting at
-  // the drive letter, so there is nothing left for UNC's pattern to find.
+  // Windows MUST run before UNC (code review, finding #2): a JSON-escaped Windows path doubles every backslash ("C:\\Users\\...", i.e. two literal backslash characters after the drive.
   return text
     .replace(WINDOWS_ABSOLUTE_PATH_PATTERN, replace)
     .replace(UNC_PATH_PATTERN, replace)
@@ -196,22 +102,6 @@ const MAX_DEEP_SCRUB_DEPTH = 6;
 const MAX_DEEP_SCRUB_ARRAY_ITEMS = 200;
 const MAX_DEEP_SCRUB_OBJECT_KEYS = 100;
 
-/**
- * Recursively scrubs every string value in an arbitrary JSON-like structure -
- * the mechanism behind "every private string and context", not just the flat
- * log-tail text `scrubSupportText` handles alone. Used on the Sentry
- * `contexts` record and the local diagnostic bundle, both of which nest
- * error causes, layer0 records, and process metrics several levels deep.
- *
- * Structural bounds (depth/array/key count) guard against a pathological
- * input, not against a legitimate one - every type this runs over
- * (`SupportPrivateDiagnosticsCause`, layer0 snapshots, process metrics) is
- * flat and small by contract, so these limits are a backstop, never a
- * expected-to-trigger truncation. This is deliberately unlike
- * `sanitizeLogValue`: there is no per-string length cap here, ever - a
- * `deepScrubSupportValue` string leaf can be arbitrarily long (a full stack
- * trace) and stays whole.
- */
 export function deepScrubSupportValue<T>(value: T): T {
   return scrubValueAtDepth(value, 0, new Map<string, string>()) as T;
 }

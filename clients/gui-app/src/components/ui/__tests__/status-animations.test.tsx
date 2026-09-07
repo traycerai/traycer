@@ -8,10 +8,7 @@ import { PingRing } from "@/components/ui/ping-ring";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { HostPresenceDot } from "@/components/settings/host-scope/host-glyph";
 
-/**
- * The global test shim answers every media query with `matches: false`. This
- * narrows the reduced-motion query alone; the clock reads only `matches`.
- */
+/** This narrows the reduced-motion query alone; the clock reads only `matches`. */
 function stubReducedMotion(reduced: boolean): void {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: reduced && query === "(prefers-reduced-motion: reduce)",
@@ -24,17 +21,12 @@ function stubReducedMotion(reduced: boolean): void {
 }
 
 interface ReducedMotionListenerStub {
-  /** Flips what the stubbed MediaQueryList reports as `matches`. */
   readonly setMatches: (matches: boolean) => void;
-  /** Invokes every `change` listener the clock registered on the stub. */
   readonly fireChange: () => void;
 }
 
-/**
- * Like `stubReducedMotion`, but the returned MediaQueryList actually records
- * `change` listeners and reports a mutable `matches`, so a test can flip the
- * preference mid-run and drive the clock's own `handleReducedMotionChange`.
- */
+/** Like `stubReducedMotion`, but the returned MediaQueryList actually records `change` listeners and reports a
+ * mutable `matches`. */
 function stubReducedMotionWithListener(
   initialMatches: boolean,
 ): ReducedMotionListenerStub {
@@ -123,9 +115,8 @@ describe("AgentSpinningDots typing variant (WorkingDots)", () => {
   });
 
   it("clears every dot's inline opacity and transform when reduced motion turns on mid-run", () => {
-    // Install the listener-recording stub BEFORE the first render: the
-    // module attaches its change listener only once, on the first
-    // subscribe/render after a reset.
+    // Install the listener-recording stub before the first render: the module attaches its change listener only
+    // once, on the first subscribe/render after a reset.
     const stub = stubReducedMotionWithListener(false);
     render(
       <AgentSpinningDots
@@ -327,9 +318,8 @@ describe("PingRing", () => {
   });
 
   it("restores the peak opacity and drops the transform when reduced motion turns on mid-run", () => {
-    // Install the listener-recording stub BEFORE the first render: the
-    // module attaches its change listener only once, on the first
-    // subscribe/render after a reset.
+    // Install the listener-recording stub before the first render: the module attaches its change listener only
+    // once, on the first subscribe/render after a reset.
     const stub = stubReducedMotionWithListener(false);
     render(<PingRing toneClass="bg-emerald-500" peakOpacity={0.6} />);
     const ring = queryStatusPing();

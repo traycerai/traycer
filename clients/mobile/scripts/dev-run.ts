@@ -1,14 +1,6 @@
 /**
  * Shared plumbing for the native dev launchers (`dev-ios.ts`, `dev-android.ts`).
- *
- * Both loops do the same four things - resolve the slot, read that slot's
- * `run.json`, wait for the GUI App dev server, and hand Capacitor a
- * live-reload target - and differ only in how a device is named and what has
- * to happen before the WebView can reach loopback. Keeping the common part
- * here means the Android loop cannot drift away from the iOS one it mirrors.
- *
- * This module never starts a stack: `make dev-gui-app` (or `make dev-desktop`)
- * in the internal repository owns that, and the launchers only consume it.
+ * Keeping the common part here means the Android loop cannot drift away from the iOS one it mirrors.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -26,13 +18,8 @@ export interface DevRunUrls {
 export interface DevRun {
   readonly urls: DevRunUrls;
   /**
-   * The loopback TCP ports recorded in `run.json`. The iOS Simulator shares
-   * the Mac's loopback and ignores this; the Android emulator does not, and
-   * tunnels each one back with `adb reverse`.
-   *
-   * NOT the live host RPC port - `run.json` only records the one that was
-   * current when the stack came up. `readHostRpcPort` is the live source, and
-   * has an ordering requirement this does not.
+   * The loopback TCP ports recorded in `run.json`.
+   * Not the live host RPC port - `run.json` only records the one that was current when the stack came up.
    */
   readonly ports: readonly number[];
 }
@@ -63,7 +50,6 @@ export function requiredValue(
   return value.trim();
 }
 
-/** `--slot`/`DEV_DESKTOP_SLOT`, sanitized the same way the orchestrator does. */
 export function requireSlot(args: readonly string[]): string {
   const slot = sanitizeDevDesktopSlot(
     requiredValue(args, "--slot", "DEV_DESKTOP_SLOT"),
@@ -85,20 +71,8 @@ function portOf(rawUrl: string): number | null {
 }
 
 /**
- * The host's LIVE RPC port, read from `pid.json` rather than `run.json`: the
- * host reallocates it on every restart, and `run.json` records only the port
- * of the run that was current when the stack came up.
- *
- * CALL THIS AFTER `waitForGuiApp`, never before. `vite.config.ts` awaits
- * `pid.json` for up to 30s before its server starts listening, so a GUI App
- * that answers is proof the file exists - whereas at launcher startup it
- * routinely does not yet, and this would return `null` for a stack that is
- * merely still coming up.
- *
- * Best-effort by design: a missing or half-written file costs one tunnel, not
- * the whole loop. Callers must SAY SO when this returns `null`, because the
- * symptom otherwise is an app that paints and then silently never reaches a
- * host.
+ * The host's live RPC port, read from `pid.json` rather than `run.json`: the host reallocates it on every restart, and `run.json` records only the port of the run that was current when the stack came up.
+ * Call this after `waitForGuiApp`, never before.
  */
 export function readHostRpcPort(slot: string): number | null {
   const pidPath = join(devRunDir(slot), "pid.json");
@@ -214,10 +188,6 @@ export function ensureWebAssets(slot: string, urls: DevRunUrls): void {
   }
 }
 
-/**
- * Hands the platform to Capacitor with live reload pointed at the shared Vite
- * server, and resolves with its exit code once it stops.
- */
 export async function runCapacitorLiveReload(
   platform: "ios" | "android",
   target: string,

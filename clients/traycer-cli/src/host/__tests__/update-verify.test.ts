@@ -9,23 +9,8 @@ import {
   commitAttemptMutation,
 } from "@traycer-clients/shared/host-update";
 
-// This file drives `verifyHostUpdateAttempt`/`reportFor` (host/update-verify.ts)
-// indirectly through the REAL `runLocalAttemptExecutorSegment` machinery -
-// same shape as `update-executor.test.ts`, which this file borrows its
-// mocking conventions from verbatim, because `verifyHostUpdateAttempt` sits
-// directly on top of that same executor with no seam of its own.
-//
-// THE SEAM WARNING (see the ticket): a mock that looks right can silently
-// fail to intercept the code path production actually calls. The dedicated
-// "SEAM PROOF" test below forces the cohort mock to a distinctive verdict
-// and confirms the OBSERVABLE outcome changes from the real shipped
-// shadow-disabled default (`cohort-disabled`) to something only reachable
-// past the gate (`stale-expectation`) - proving this mock is the exact thing
-// `runLocalAttemptExecutorSegment` calls, not a look-alike at the wrong
-// specifier. Every test here also runs against a REAL temp-dir
-// `hostHomeDir` (never the operator's real `~/.traycer`), confirmed via
-// `currentHome.value` below - never a real installed host, never a
-// subprocess.
+// This file drives `verifyHostUpdateAttempt`/`reportFor` (host/update-verify.ts) indirectly through the REAL `runLocalAttemptExecutorSegment` machinery - same shape as `update-executor.test.ts`, which this file borrows its mocking conventions from verbatim, because `verifyHostUpdateAttempt` sits directly on top of that same executor with no seam of its own.
+// THE SEAM WARNING (see the ticket): a mock that looks right can silently fail to intercept the code path production actually calls.
 const cohortMock = vi.hoisted(() => ({ decide: vi.fn() }));
 vi.mock("../update-executor-cohort", async () => {
   const actual = await vi.importActual<
@@ -35,11 +20,7 @@ vi.mock("../update-executor-cohort", async () => {
   return { ...actual, decideUpdateExecutorCohort: cohortMock.decide };
 });
 
-// Same sandboxing convention as `update-executor.test.ts`: every test pins
-// `currentHome.value` to its own fresh tmpdir before touching the module
-// under test, so `observeAttemptRecoveryEvidence`'s foreign-home guard
-// (`resolve(hostHomeDir(environment)) !== resolve(canonicalHostHomeDir)`)
-// always sees the SAME sandboxed home on both sides.
+// Same sandboxing convention as `update-executor.test.ts`: every test pins `currentHome.value` to its own fresh tmpdir before touching the module under test, so `observeAttemptRecoveryEvidence`'s foreign-home guard (`resolve(hostHomeDir(environment)) !== resolve(canonicalHostHomeDir)`) always sees the SAME sandboxed home on both sides.
 const currentHome = { value: "" };
 vi.mock("../../store/paths", async () => {
   const actual =
@@ -101,21 +82,12 @@ afterEach(async () => {
   );
 });
 
-// Unlike `update-executor.test.ts`'s `mockCohortEligible`, this suite never
-// asserts platform-selective behaviour - `verifyHostUpdateAttempt` derives
-// `platform` from the real `currentInstallPlatform()` (whatever OS the test
-// runs on), so the mock here is unconditionally eligible.
+// Unlike `update-executor.test.ts`'s `mockCohortEligible`, this suite never asserts platform-selective behaviour - `verifyHostUpdateAttempt` derives `platform` from the real `currentInstallPlatform()` (whatever OS the test runs on), so the mock here is unconditionally eligible.
 function mockCohortEligible(): void {
   cohortMock.decide.mockReturnValue({ kind: "eligible", platform: "linux" });
 }
 
-/**
- * Seeds an "active, restarting, unheld" attempt record - exactly the shape
- * `update-verify.ts`'s own module comment describes as what a Desktop-owned
- * packaged-macOS activation leaves behind after the bootout: the record is
- * `restarting`, active, and has no live holder. `attemptId`/`generation`/
- * `sequence` land at "attempt-1"/1/1, matching every test's `args` below.
- */
+/** Seeds an "active, restarting, unheld" attempt record - exactly the shape `update-verify.ts`'s own module comment describes as what a Desktop-owned packaged-macOS activation leaves behind after the bootout: the record is `restarting`, active, and has no live holder. `attemptId`/`generation`/ `sequence` land at "attempt-1"/1/1, matching every test's `args` below. */
 async function seedRestartingActiveRecord(
   hostHomeDir: string,
   targetVersion: string,
@@ -155,11 +127,7 @@ async function seedRestartingActiveRecord(
   await acquired.handle.release();
 }
 
-/**
- * Writes a genuine (attested, hash-checked) installed-artifact fixture at
- * `installedVersion`, WITHOUT any running-host evidence at all (no
- * `pid.json`) - the "bytes placed, host not yet running them" shape.
- */
+/** Writes a genuine (attested, hash-checked) installed-artifact fixture at `installedVersion`, WITHOUT any running-host evidence at all (no `pid.json`) - the "bytes placed, host not yet running them" shape. */
 async function seedInstallOnly(
   hostHomeDir: string,
   installedVersion: string,
@@ -186,13 +154,7 @@ async function seedInstallOnly(
   });
 }
 
-/**
- * Writes genuine installed AND running-host fixtures, independently
- * versioned, through the SAME sandboxed `store/paths` + process-identity +
- * host-rpc module boundaries `update-executor.test.ts` uses. Neither leg is
- * a caller-supplied testimonial object - both are real fs/RPC observations
- * `observeAttemptRecoveryEvidence` derives itself.
- */
+/** Writes genuine installed AND running-host fixtures, independently versioned, through the SAME sandboxed `store/paths` + process-identity + host-rpc module boundaries `update-executor.test.ts` uses. Neither leg is a caller-supplied testimonial object - both are real fs/RPC observations `observeAttemptRecoveryEvidence` derives itself. */
 async function seedInstallAndRunning(
   hostHomeDir: string,
   installedVersion: string,
@@ -248,12 +210,8 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
       reason: "cohort-disabled",
     });
 
-    // Force a distinctive verdict this exact test controls. If this mock
-    // were NOT the module `runLocalAttemptExecutorSegment` actually
-    // imports, the outcome would stay `cohort-disabled` above. Instead it
-    // must change to a verdict only reachable past the gate -
-    // `decideAttemptClaim`'s `stale-expectation` refusal for a
-    // non-null `expected` against an absent record.
+    // Force a distinctive verdict this exact test controls.
+    // If this mock were NOT the module `runLocalAttemptExecutorSegment` actually imports, the outcome would stay `cohort-disabled` above.
     cohortMock.decide.mockReturnValue({ kind: "eligible", platform: "linux" });
     const withMockedCohort = await verifyHostUpdateAttempt(
       "production",
@@ -304,9 +262,7 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
     await mkdir(installDir, { recursive: true });
     const executablePath = join(installDir, "traycer-host");
     writeFileSync(executablePath, "binary-bytes");
-    // Deliberately WRONG executableSha256 - the real bytes on disk hash to
-    // something else, so `readInstalledObservation` returns `unreadable`
-    // rather than `verified` or `missing`.
+    // Deliberately WRONG executableSha256 - the real bytes on disk hash to something else, so `readInstalledObservation` returns `unreadable` rather than `verified` or `missing`.
     await writeHostInstallRecord("production", {
       installId: "install-1",
       version: "1.2.3",
@@ -344,14 +300,8 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
       "production",
       argsFor("1.2.3"),
     );
-    // RETARGETED by the Ticket 07 orphan-recovery ruling. The arm is the same;
-    // it now carries the identity of the record as recovery PARKED it.
-    //
-    // The generation is the load-bearing part. `argsFor` invokes with
-    // generation 1; recovery resumes at a bumped generation, and the re-park
-    // rides that same generation. So a caller that reused its OWN `expected`
-    // to resume would present a stale expectation and be refused - which is
-    // exactly why the arm has to report an identity rather than none.
+    // RETARGETED by the Ticket 07 orphan-recovery ruling.
+    // The arm is the same; it now carries the identity of the record as recovery PARKED it.
     expect(report).toEqual({
       outcome: "resumed",
       continuation: "activate",
@@ -385,11 +335,7 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
     const hostHomeDir = await freshHome();
     currentHome.value = hostHomeDir;
     await seedRestartingActiveRecord(hostHomeDir, "1.2.3");
-    // Running is genuinely verified AT the target, but installed is
-    // genuinely verified at a DIFFERENT version - the exact contradiction
-    // `recoveryEvidenceContradicts` detects (a host-home-bound process
-    // cannot truthfully run the target while its own install record proves
-    // a different placed target).
+    // Running is genuinely verified AT the target, but installed is genuinely verified at a DIFFERENT version - the exact contradiction `recoveryEvidenceContradicts` detects (a host-home-bound process cannot truthfully run the target while its own install record proves a different placed target).
     await seedInstallAndRunning(hostHomeDir, "9.9.9", "1.2.3");
 
     const report = await verifyHostUpdateAttempt(

@@ -228,9 +228,7 @@ const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
   prepare();
 
 /**
- * A canvas whose `group-a` already holds `TERMINAL_TILE`, so a drop of the
- * same ref onto another pane must MOVE the open tab (R2) rather than dedupe
- * into focus-existing.
+ * A canvas whose `group-a` already holds `TERMINAL_TILE`, so a drop of the same ref onto another pane must MOVE the open tab (R2) rather than dedupe into focus-existing.
  */
 function seedCanvasWithTerminalTile(): void {
   testState.canvasStore.canvasByTabId = {
@@ -975,9 +973,7 @@ describe("root dnd commits - header strip", () => {
       1,
     );
 
-    // Atomic open: the single store write carries the insert index; no
-    // follow-up moveOpenTab (which exposed a transient appended order to the
-    // tab-sync subscriber).
+    // Atomic open: the single store write carries the insert index; no follow-up moveOpenTab (which exposed a transient appended order to the tab-sync subscriber).
     expect(testState.canvasStore.openTileInNewTab).toHaveBeenCalledWith(
       EPIC_ID,
       GIT_DIFF_TILE,

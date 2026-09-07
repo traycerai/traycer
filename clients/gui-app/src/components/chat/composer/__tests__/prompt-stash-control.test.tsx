@@ -867,11 +867,8 @@ describe("PromptStashControl", () => {
   });
 
   it("Enter on a highlighted unavailable row is consumed (defaultPrevented) and never reaches the focused editor", async () => {
-    // The popover keeps the underlying editor focused while open
-    // (`onOpenAutoFocus` preventDefault). Enter on an unavailable row must
-    // therefore be defaultPrevented + stopPropagated in the capture-phase
-    // window listener - not merely no-restore - or the focused editor would
-    // submit the draft.
+    // The popover keeps the underlying editor focused while open (`onOpenAutoFocus` preventDefault).
+    // Enter on an unavailable row must therefore be defaultPrevented + stopPropagated in the capture-phase window listener - not merely no-restore - or the focused editor would submit the draft.
     const restore = vi.fn(() => Promise.resolve(true));
     const submitOnEnter = vi.fn();
     const rows = [
@@ -918,9 +915,8 @@ describe("PromptStashControl", () => {
     fakeEditor.focus();
     expect(document.activeElement).toBe(fakeEditor);
 
-    // Dispatch on the focused element (not window). PromptStashControl's
-    // capture-phase window listener still sees the event first; preventDefault
-    // there makes dispatchEvent / fireEvent.keyDown return false.
+    // Dispatch on the focused element (not window).
+    // PromptStashControl's capture-phase window listener still sees the event first; preventDefault there makes dispatchEvent / fireEvent.keyDown return false.
     const notCanceled = fireEvent.keyDown(fakeEditor, {
       key: "Enter",
       bubbles: true,

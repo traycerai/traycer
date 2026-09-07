@@ -22,11 +22,7 @@ export type McpMutateVariables = {
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
   readonly mutation: ProvidersMcpMutateAction;
-  /**
-   * When true, the hook skips the global toast so the caller can render a
-   * row-local native error. Default toast still fires for non-native errors
-   * and when this flag is omitted/false.
-   */
+  /** When true, the hook skips the global toast so the caller can render a row-local native error. */
   readonly suppressToast: boolean | undefined;
 };
 
@@ -40,13 +36,7 @@ interface McpMutateContext {
   };
 }
 
-/**
- * Mutates MCP config via `providers.nativeMutate` and writes the
- * returned full server list into the semantic mcp list cache. Response-equals-
- * state: the host always returns the post-mutation list for the scope tuple.
- * Typed native errors (`ok: false`) surface as ProviderNativeRpcError so
- * callers can render row-local error codes.
- */
+/** Mutates MCP config via `providers.nativeMutate` and writes the returned full server list into the semantic mcp list cache. */
 export function useProvidersMcpMutate(): UseMutationResult<
   McpMutateData,
   HostRpcError,

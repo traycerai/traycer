@@ -7,11 +7,8 @@ export interface CommGraphOriginHostLookup {
 }
 
 /**
- * Cloud rows stay readable when their origin is offline; only source jumps
- * gate. Parametric over the ready-session answer because the jump hook that
- * consumes this is a render path: it subscribes to session readiness and
- * threads the current answer through, rather than letting the ambient
- * cache read freeze inside its memoized snapshot.
+ * Cloud rows stay readable when their origin is offline; only source jumps gate.
+ * Parametric over the ready-session answer because the jump hook that consumes this is a render path: it subscribes to session readiness and threads the current answer through, rather than letting the ambient cache read freeze inside its memoized snapshot.
  */
 export function isCommGraphOriginAvailable(
   directory: CommGraphOriginHostLookup,

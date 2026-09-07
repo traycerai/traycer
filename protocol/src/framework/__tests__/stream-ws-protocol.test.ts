@@ -11,14 +11,7 @@ import {
 
 /**
  * Cross-version compatibility contract for the `/stream` control frames.
- *
- * Clients and the host ship independently, so the `openAck` capabilities
- * mechanism and the `credentialUpdate` frame MUST degrade gracefully across a
- * version skew. The frames are framework-level (not per-method version
- * negotiated), so that safety rests entirely on Zod tolerance + the client's
- * capability gate. These tests pin that behaviour so a future edit can't
- * silently make a schema `.strict()` (which would make an older client reject a
- * newer host's `openAck` and drop the connection).
+ * Clients and the host ship independently, so the `openAck` capabilities mechanism and the `credentialUpdate` frame MUST degrade gracefully across a version skew.
  */
 describe("stream-ws-protocol cross-version compatibility", () => {
   const manifest = { "epic.subscribe": { major: 1, minor: 0 } };
@@ -42,7 +35,7 @@ describe("stream-ws-protocol cross-version compatibility", () => {
   describe("hostStreamOpenAckFrame (host -> client)", () => {
     it("strips unknown keys instead of rejecting (older client tolerates a newer host's additive fields)", () => {
       // A future host adds a field this version's client has never heard of.
-      // The schema MUST strip it, not reject — otherwise the connection drops.
+      // The schema MUST strip it, not reject - otherwise the connection drops.
       const parsed = hostStreamOpenAckFrameSchema.safeParse({
         kind: "openAck",
         manifest,
@@ -103,7 +96,7 @@ describe("stream-ws-protocol cross-version compatibility", () => {
 
     it("defaults hostCredentialState to null when an older host omits it", () => {
       // Pre-delegated-credential hosts send neither the capability nor the
-      // state field. null means "did not report" — never trigger a mint.
+      // state field. null means "did not report" - never trigger a mint.
       const parsed = hostStreamOpenAckFrameSchema.safeParse({
         kind: "openAck",
         manifest,
@@ -213,11 +206,7 @@ describe("stream-ws-protocol cross-version compatibility", () => {
       ).toBe(false);
     });
 
-    // `Date.parse` accepts all four of the following, so a permissive
-    // `refine(!Number.isNaN(Date.parse(value)))` schema would let them
-    // through. `isoMillisecondTimestampSchema` requires an offset and
-    // millisecond precision instead, so this is what actually pins the
-    // tightening rather than re-testing what the old schema already rejected.
+    // `Date.parse` accepts all four of the following, so a permissive `refine(!Number.isNaN(Date.parse(value)))` schema would let them through.
     it("rejects date-only, human-readable, and non-millisecond-precision provisionedAt", () => {
       expect(
         clientStreamHostCredentialProvisionFrameSchema.safeParse({

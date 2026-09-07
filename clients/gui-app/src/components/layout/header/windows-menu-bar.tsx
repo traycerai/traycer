@@ -26,14 +26,7 @@ const WINDOWS_MENU_ITEMS: ReadonlyArray<{
   { id: "help", label: "Help", mnemonic: "H" },
 ];
 
-/**
- * Visible top-level menus for the Windows frameless shell. The dropdowns are
- * still native Electron Menu instances, so command behavior, enabled state,
- * roles, and accelerators have one source of truth in main.
- *
- * Alt+<letter> opens the matching menu and holding Alt underlines each access
- * key, reproducing the native Windows menu bar this frameless window replaces.
- */
+/** Visible top-level menus for the Windows frameless shell. */
 export function WindowsMenuBar(): ReactNode {
   const active = useWindowsMenuBarActive();
   const buttonsRef = useRef<Map<DesktopTopLevelMenuId, HTMLButtonElement>>(
@@ -109,11 +102,7 @@ export function WindowsMenuBar(): ReactNode {
           }}
           aria-keyshortcuts={`Alt+${item.mnemonic}`}
           className="h-full rounded-none px-2 text-ui-xs text-canvas-foreground outline-none select-none hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          // Keep the editor/input focused so the native Edit menu's roles
-          // (Cut/Copy/Paste/Undo/Select All) act on the real target: a click
-          // would otherwise move focus to this button before the popup opens,
-          // leaving those commands with nothing to act on. The Alt access-key
-          // path never moves focus, so it stays correct without this.
+          // The Alt access-key path never moves focus, so it stays correct without this.
           onMouseDown={(event) => event.preventDefault()}
           onClick={(event) => {
             const anchor = event.currentTarget.getBoundingClientRect();

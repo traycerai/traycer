@@ -16,21 +16,7 @@ import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-reg
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
- * THE OWNERSHIP WIRING, against the REAL container (cold-review P3).
- *
- * The banner unit tests inject `ownedByViewer` / `cloneAllowed` directly and
- * the published tile's suite stubs this container, so before this file a
- * regression in the container's own resolution - the auth-store identity
- * read, the owner comparison, the role gate, the fail-open default - would
- * leave every touched suite green. Here the real
- * `ChatDeadTileBannerContainer` resolves everything itself: the source owner
- * from the epic doc's chat record (the same local tier
- * `useCloneSourceOwnerUserId` consults first), the viewer from the auth
- * store, and the role from the epic session snapshot.
- *
- * The host-hook mock set mirrors `bounded-loading-catalog.test.tsx`, which
- * already mounts this container the same way: the clone offer's host-runtime
- * and mutation edges are severed, everything the file is about stays real.
+ * The banner unit tests inject `ownedByViewer` / `cloneAllowed` directly and the published tile's suite stubs this container, so before this file a regression in the container's own resolution - the auth-store identity read, the owner comparison, the role gate, the fail-open default - would leave every touched suite green.
  */
 
 const MOCK_HOST_CLIENT = {
@@ -122,24 +108,14 @@ function seedChatOwnedBy(ownerUserId: string): (doc: Y.Doc) => void {
   };
 }
 
-// One epic id (and harness) PER TEST: the session registry retains the most
-// recent session per epic id across acquires (the R-1 rotation), so a second
-// test reusing the id can be handed the previous test's session - whose
-// snapshot generation has moved on - and its installed role never lands.
-// Distinct ids make every test's session its own.
+// One epic id (and harness) PER TEST: the session registry retains the most recent session per epic id across acquires (the R-1 rotation), so a second test reusing the id can be handed the previous test's session - whose snapshot generation has moved on - and its installed role never lands.
 let epicSeq = 0;
 let activeHarness: TestEpicHarness | null = null;
 
 function renderContainer(input: {
   readonly ownerUserId: string;
   /**
-   * The owner the mounting surface carries, mirroring the real foreign
-   * mounts: the published tile threads its ref's `ownerUserId` and the
-   * canvas substitution threads the fallback ref's. A collaborator's chat
-   * has no other local source - the epic projection filters out records
-   * that are not visible to the signed-in user, so the container's local
-   * tier can never resolve a foreign owner from the doc. The own-chat case
-   * passes `undefined` and exercises exactly that local tier.
+   * A collaborator's chat has no other local source - the epic projection filters out records that are not visible to the signed-in user, so the container's local tier can never resolve a foreign owner from the doc.
    */
   readonly providedOwnerUserId: string | undefined;
   readonly permissionRole: PermissionRole | null;
@@ -243,9 +219,7 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     });
     await settleEpicSession();
 
-    // `waitFor`, not a fixed settle: the role lands with the harness's
-    // snapshot, whose delivery timing varies under load, and this is the one
-    // assertion in the file that cannot pass until it has.
+    // `waitFor`, not a fixed settle: the role lands with the harness's snapshot, whose delivery timing varies under load, and this is the one assertion in the file that cannot pass until it has.
     await waitFor(() => {
       expect(screen.getByTestId("banner-under-test").textContent).toContain(
         "view-only access",

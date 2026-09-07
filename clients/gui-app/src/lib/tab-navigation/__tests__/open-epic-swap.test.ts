@@ -1,11 +1,6 @@
 /**
- * F2 destructive-swap-in-a-split + compat-projection coverage for the
- * navigation controller. Drives the controller directly via
- * `activateTabIntent` - no production edits, no full AppShell. Fakes only the
- * navigate promise boundary, mirroring the harness patterns established in
- * `navigation-envelope.test.ts` (deferred navigate mock, resetStores,
- * installTabSyncCoordinator, seedCommittedLayout) - duplicated locally here
- * (not imported) so this file has no coupling to that one.
+ * F2 destructive-swap-in-a-split + compat-projection coverage for the navigation controller.
+ * Drives the controller directly via `activateTabIntent` - no production edits, no full AppShell.
  */
 import type {
   NavigateOptions,
@@ -182,13 +177,7 @@ function makeDeferredNavigate(): DeferredNavigate {
 let commitKeySequence = 0;
 
 /**
- * Simulates the router committing the pending navigate's history entry - the
- * real signal (`TabNavigationRouteBridge` -> `observeLocation`) that
- * acknowledges a pending token and runs any deferred swap. Merely resolving
- * the navigate promise is NOT enough on its own: without a matching committed
- * location, `settle()` has nothing to acknowledge against and just retires
- * the token unacknowledged (mirrors `navigation-envelope.test.ts`'s
- * `commitInternal` helper).
+ * Simulates the router committing the pending navigate's history entry - the real signal (`TabNavigationRouteBridge` -> `observeLocation`) that acknowledges a pending token and runs any deferred swap.
  */
 function commitInternal(
   navigate: UseNavigateResult<string>,
@@ -314,9 +303,7 @@ describe("F2: destructive empty-draft -> epic swap in a split", () => {
 
     await nav.reject(0);
 
-    // Rejection never ran the deferred swap: the draft is still open and the
-    // split is exactly as it was before - the pre-swap layout is fully
-    // reconstructable because the draft was never closed.
+    // Rejection never ran the deferred swap: the draft is still open and the split is exactly as it was before - the pre-swap layout is fully reconstructable because the draft was never closed.
     expect(
       useLandingDraftStore.getState().drafts.some((d) => d.id === draftId),
     ).toBe(true);
@@ -354,9 +341,7 @@ describe("F2: destructive empty-draft -> epic swap in a split", () => {
     const swapTabId = envelope.destination.refKey.slice("epic:".length);
     const swapRef: TabRef = { kind: "epic", id: swapTabId };
 
-    // Simulate the router committing the exact entry the controller
-    // requested - the real signal that acknowledges the pending token and
-    // runs the deferred swap.
+    // Simulate the router committing the exact entry the controller requested - the real signal that acknowledges the pending token and runs the deferred swap.
     commitInternal(
       nav.asNavigate,
       epicPathname({ epicId: "epic-to-swap-in", tabId: swapTabId }),

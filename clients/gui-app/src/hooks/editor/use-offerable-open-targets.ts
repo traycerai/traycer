@@ -6,13 +6,7 @@ import {
   type OpenTargetEntry,
 } from "@/lib/editor/editor-menu-catalog";
 
-/**
- * Everything `hostId` may be offered as an open target - its offerable editors
- * plus Finder when that host passes the Finder gate.
- *
- * The one place the two catalogs are joined, so a surface cannot list Finder
- * on a host that would reject it, or resolve a stored Finder default on one.
- */
+/** The one place the two catalogs are joined, so a surface cannot list Finder on a host that would reject it, or resolve a stored Finder default on one. */
 export function useOfferableOpenTargets(
   hostId: string | null,
 ): ReadonlyArray<OpenTargetEntry> {

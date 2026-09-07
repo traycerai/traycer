@@ -14,12 +14,7 @@ export function BrowserFavicon(props: {
     <span
       className={cn(
         // `inline-block` so the sizing classes in `props.className` (e.g.
-        // `size-4`) apply even when this span isn't itself a flex item - a
-        // plain `<span>` ignores width/height while `display: inline`, which
-        // is what collapsed this icon inside `MentionMenuItem`'s nested
-        // `<span className="shrink-0">` wrapper. A flex-item consumer
-        // (tab-strip, sidebar row) already blockifies the child regardless
-        // of its own `display`, so this is a no-op there.
+        // `size-4`) apply even when this span isn't itself a flex item - a plain `<span>` ignores width/height while `display: inline`, which is what collapsed this icon inside `MentionMenuItem`'s nested `<span className="shrink-0">` wrapper.
         "relative inline-block shrink-0",
         props.className,
         props.isolated && "rounded-sm ring-1 ring-amber-500/80",

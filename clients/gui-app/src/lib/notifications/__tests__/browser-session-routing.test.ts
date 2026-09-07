@@ -49,17 +49,11 @@ function seedCanvasWithTile(tile: EpicCanvasTileRef, hostId: string): void {
     canvasByTabId: { "view-tab-1": canvas },
     openTabOrder: ["view-tab-1"],
   });
-  // The tile's own host, restated at the seed: the two cases below differ only
-  // in which host the seeded tile is on, and a helper that never asserted it
-  // would let a builder change silently make both cases the same case.
+  // The tile's own host, restated at the seed: the two cases below differ only in which host the seeded tile is on, and a helper that never asserted it would let a builder change silently make both cases the same case.
   expect(tile.hostId).toBe(hostId);
 }
 
-/**
- * Ticket 11: a parked browser session's notification deep-links to the tile
- * showing that session, on the host the session lives on. It is the terminal
- * row's shape - an exact tile addressed by id - not a chat row's.
- */
+/** It is the terminal row's shape - an exact tile addressed by id - not a chat row's. */
 describe("parked browser session notification routing", () => {
   beforeEach(async () => {
     __resetTabNavigationControllerForTesting();
@@ -139,9 +133,8 @@ describe("parked browser session notification routing", () => {
     seedCanvasWithTile(tile, "host-b");
     const navigate = vi.fn();
 
-    // The session lives on host-a for life; a host-b tile with a colliding id
-    // must not consume the activation. Navigation still happens (opening the
-    // epic is useful), but it is reported as NOT origin-bound.
+    // The session lives on host-a for life; a host-b tile with a colliding id must not consume the activation.
+    // Navigation still happens (opening the epic is useful), but it is reported as NOT origin-bound.
     const routed = routeNotificationForHost(
       navigate,
       {

@@ -1,12 +1,5 @@
 /**
- * The viewer's toolbar, in three tiers keyed on the TOOLBAR's own width (a
- * container query - a narrow split pane on a desktop has exactly the phone's
- * problem, so the viewport is the wrong thing to ask). Wide: every control
- * inline. Narrow (under `@lg`, 32rem): fit-width, rotate, outline and search
- * move into one "More actions" menu with the same labels. Narrowest (under
- * `@sm`, 24rem - a tile pane can be dragged to 240px): zoom folds into the
- * menu too, leaving page nav and the surface's own actions (Open Externally)
- * inline - the escape hatch must never fold away.
+ * Narrowest (under `@sm`, 24rem - a tile pane can be dragged to 240px): zoom folds into the menu too, leaving page nav and the surface's own actions (Open Externally) inline - the escape hatch must never fold away.
  */
 import { useRef, type ReactNode } from "react";
 import {
@@ -259,20 +252,12 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
 }
 
 /**
- * The narrow tiers' home for the folded controls. Always mounted (its
- * trigger is what the container query shows or hides) so the wide and
- * narrow tiers never drift - they render from the same props. Zoom is
- * listed unconditionally rather than only under the narrowest tier: the
- * menu content is portalled out of the toolbar, so no container query can
- * reach it, and a duplicate zoom entry in the 24-32rem band is harmless.
+ * Always mounted (its trigger is what the container query shows or hides) so the wide and narrow tiers never drift - they render from the same props.
+ * Zoom is listed unconditionally rather than only under the narrowest tier: the menu content is portalled out of the toolbar, so no container query can reach it, and a duplicate zoom entry in the 24-32rem band is harmless.
  */
 function PdfPreviewOverflowMenu(props: PdfPreviewToolbarProps): ReactNode {
   // Picking Search opens a row whose input takes focus in the same commit.
-  // Two Radix behaviors would steal it back: the close-time return of focus
-  // to the trigger (prevented below), and - verified live - a MODAL menu's
-  // focus trap, which stays armed through the close animation and yanks
-  // focus back into the menu, leaving it on <body> once the menu unmounts.
-  // Non-modal: no trap, and a toolbar menu needs no pointer lockdown.
+  // Two Radix behaviors would steal it back: the close-time return of focus to the trigger (prevented below), and - verified live - a MODAL menu's focus trap, which stays armed through the close animation and yanks focus back into the menu, leaving it on <body> once the menu unmounts.
   const keepFocusAwayRef = useRef(false);
   return (
     <DropdownMenu modal={false}>

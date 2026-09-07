@@ -131,9 +131,7 @@ describe("snapshot diff tile factories", () => {
   });
 
   it("keeps distinct artifact-hash tile ids by file path when both hashes are null", () => {
-    // Degenerate (UI-unreachable) case: with no hashes, the id falls back to the
-    // file path so two different artifacts don't collide into one `hash:<chat>::`
-    // tile.
+    // Degenerate (UI-unreachable) case: with no hashes, the id falls back to the file path so two different artifacts don't collide into one `hash:<chat>::` tile.
     const a = makeSnapshotHashDiffTile({
       hostId: HOST,
       chatId: "c1",
@@ -209,9 +207,7 @@ describe("snapshot diff tile schema round-trip", () => {
       chatId: "chat-1",
       sourceBlockIds: ["blk-1"],
       filePath: "src/app.ts",
-      // The captured endpoints are the whole reason a persisted segment tile
-      // still resolves once its row leaves the window, so the round trip has
-      // to carry them rather than a pair of nulls.
+      // The captured endpoints are the whole reason a persisted segment tile still resolves once its row leaves the window, so the round trip has to carry them rather than a pair of nulls.
       beforeHash: "sha256:before",
       afterHash: "sha256:after",
     });
@@ -274,10 +270,8 @@ describe("snapshot diff tile schema round-trip", () => {
       beforeHash: null,
       afterHash: null,
     });
-    // A persisted tile that carried a stale (random-uuid) id must re-derive
-    // the deterministic id from its payload on rehydrate. This one also
-    // predates the captured endpoints, so its `diff` carries neither - the
-    // shape every segment tile on disk has today.
+    // A persisted tile that carried a stale (random-uuid) id must re-derive the deterministic id from its payload on rehydrate.
+    // This one also predates the captured endpoints, so its `diff` carries neither - the shape every segment tile on disk has today.
     const parsed = parseTileRef({
       id: "stale-uuid",
       type: "snapshot-diff",

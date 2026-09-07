@@ -13,24 +13,11 @@ export const TILE_KIND_SNAPSHOT_DIFF = "snapshot-diff";
 // A read-only window on one shell's log timeline. Renderer-local like
 // `terminal`: the tile points at a shell the host owns, it does not carry one.
 export const TILE_KIND_MANAGED_COMMAND_OUTPUT = "managed-command-output";
-/**
- * The per-epic communication graph. Epic-scoped rather than host-scoped: the
- * tile itself fans in one `epic.communicationGraph.subscribe` per host the
- * epic's agents live on, so it carries no host binding (see
- * `CommGraphTileRef`).
- */
+/** The per-epic communication graph. */
 export const TILE_KIND_COMM_GRAPH = "comm-graph";
 /**
- * A chat this device can only READ: its owning host is out of reach, so the
- * tile renders the last copy that host published to the cloud.
- *
- * A kind of its own rather than a flag on the chat tile, because the ref names
- * WHICH THING is open - a published copy or a live session - and those are two
- * different things that can carry the SAME chat id. A fork leaves exactly that
- * geometry behind: two lineages under one id, one live here and one owned by
- * another machine. Keeping the kinds distinct also survives the owning host
- * coming back, where the same row becomes openable live and both must be
- * addressable at once.
+ * A chat this device can only READ: its owning host is out of reach, so the tile renders the last
+ * copy that host published to the cloud.
  */
 export const TILE_KIND_PUBLISHED_CHAT = "published-chat";
 export const TILE_KIND_PR_DETAIL = "pr-detail";

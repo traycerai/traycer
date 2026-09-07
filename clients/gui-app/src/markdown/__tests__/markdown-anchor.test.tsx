@@ -31,10 +31,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
-/**
- * Every link surface below reaches the external-link bridge mutation, which
- * needs a `QueryClientProvider` above it.
- */
+/** Every link surface below reaches the external-link bridge mutation, which needs a `QueryClientProvider` above it. */
 function render(ui: ReactNode): RenderResult {
   return renderUi(ui, { wrapper: WithTestQueryClient });
 }
@@ -427,11 +424,8 @@ describe("MarkdownAnchor", () => {
   });
 
   it("routes a Windows drive link through the surface policy end to end", () => {
-    // Full render path: `markdownUrlTransform` normalizes the drive href to a
-    // `file:` URL, `rehype-sanitize` keeps it via the `file` allow-list, and the
-    // rendered anchor's click classifies it back to a native drive path with the
-    // trailing location intact. Guards CL-4 against the sanitize layer silently
-    // emptying the href (the click would otherwise be a no-op).
+    // Full path: transform to file:, sanitize keeps it, click classifies back
+    // with location intact. Sanitize emptying the href would make click a no-op.
     const host = createRunnerHost();
     const openFileLink = vi.fn(() => true);
     render(
@@ -471,14 +465,8 @@ describe("MarkdownAnchor", () => {
   });
 
   it("routes a NATIVE backslash Windows link through the surface policy end to end", () => {
-    // The shape a Windows agent actually writes: backslash separators, and the
-    // destination wrapped in `<>` because the home directory has a space in it.
-    // This must go through the real markdown parser, not `markdownUrlTransform`
-    // alone - remark percent-encodes the destination (`\` -> `%5C`, ` ` ->
-    // `%20`) BEFORE the transform runs, so the drive-letter bypass has to match
-    // the encoded separator and the anchor has to decode it back to a native
-    // path. Feeding a raw backslash href straight to the transform (see
-    // `classifyRenderedHref` below) skips that encoding entirely and hides this.
+    // Windows <> href: remark percent-encodes before the transform, so the
+    // drive bypass must match %5C/%20 and the anchor must decode back.
     const host = createRunnerHost();
     const openFileLink = vi.fn(() => true);
     const { container } = render(
@@ -504,10 +492,8 @@ describe("MarkdownAnchor", () => {
     // Queried as an element, not by role: a dropped href strips the anchor of
     // its `link` role, and this assertion is about the href itself.
     const link = requireAnchor(container);
-    // A blank href is the crash: it resolves to the current document, so the
-    // click performs a real navigation and unloads the SPA. Asserted against
-    // the drive prefix - "not empty" alone would pass on the dropped-attribute
-    // form the anchor falls back to when the transform empties an href.
+    // Blank href unloads the SPA. Assert the drive prefix; "not empty" would
+    // pass on a dropped attribute.
     expect(link.getAttribute("href")).toMatch(/^C:(%5C|\\)Users/i);
 
     // `fireEvent.click` returns false when the handler called `preventDefault`.
@@ -524,16 +510,8 @@ describe("MarkdownAnchor", () => {
   });
 
   it("never renders an emptied href the browser could navigate", () => {
-    // `defaultUrlTransform` empties any href it deems unsafe, and an empty href
-    // is not inert: it points at the current document, so a click navigates for
-    // real and the whole renderer reloads. The anchor must drop the attribute
-    // rather than render a navigable blank. This is the general guard behind
-    // the Windows-path case above.
-    //
-    // `z:notapath` is emptied because the two layers disagree: the sanitize
-    // schema allows every single-letter scheme (drive letters), but the drive
-    // bypass in `markdownUrlTransform` only applies to an actual path, so this
-    // falls through to `defaultUrlTransform` and is emptied there.
+    // Empty href is the current document; drop the attribute. z:notapath is emptied:
+    // sanitize allows single-letter schemes, drive bypass only applies to a real path.
     const host = createRunnerHost();
     const openFileLink = vi.fn(() => true);
     const { container } = render(
@@ -564,11 +542,7 @@ describe("MarkdownAnchor", () => {
   });
 });
 
-/**
- * The rendered anchor, addressed as an element. `getByRole("link")` is the
- * usual query, but an anchor whose href the transform emptied loses its `link`
- * role - and that anchor is exactly what the reload cases assert against.
- */
+/** getByRole("link") misses an emptied href (no link role). Query the element for reload cases. */
 function requireAnchor(container: HTMLElement): HTMLAnchorElement {
   const anchor = container.querySelector("a");
   if (anchor === null) throw new Error("Expected a rendered anchor.");
@@ -583,11 +557,8 @@ function readNeutralToastOptions(): ExternalToast {
   return call[1];
 }
 
-// The real render order: react-markdown runs `markdownUrlTransform` on the
-// href first, then the anchor classifies the result. Driving the drive-letter
-// cases through this composition (not `classifyHref` alone) keeps the Windows
-// branch honest: `defaultUrlTransform` would empty `C:` as an unsafe scheme, so
-// a regression in the transform bypass surfaces here instead of passing green.
+// Drive-letter cases go through transform then classify, not classifyHref
+// alone. defaultUrlTransform would empty C: as an unsafe scheme.
 function classifyRenderedHref(rawHref: string) {
   return classifyHref(markdownUrlTransform(rawHref, "href"));
 }
@@ -704,10 +675,8 @@ describe("classifyHref", () => {
   });
 
   it("decodes reserved characters in a filename without reading them as syntax", () => {
-    // `#` and `:` are reserved, so `decodeURI` would leave them encoded and hand
-    // the surface policy a path no filesystem has. Splitting the fragment and
-    // the `:line[:col]` suffix off the ENCODED href is what keeps the decoded
-    // `%23` from being taken as a fragment and the decoded `%3A` as a location.
+    // Split fragment and :line[:col] off the encoded href so decoded %23 is
+    // not a fragment and %3A is not a location.
     expect(classifyHref("/notes/release%231%3A2.md")).toEqual({
       kind: "file",
       path: "/notes/release#1:2.md",

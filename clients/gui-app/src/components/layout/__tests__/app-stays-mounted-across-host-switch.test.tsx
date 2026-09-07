@@ -23,25 +23,8 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
-/**
- * WHY THIS FILE EXISTS. The acceptance line "the app stays mounted across a
- * host switch" had no proving suite. `host-switch-keeps-app-mounted.test.tsx`
- * was proven vacuous in both directions: it hand-supplies
- * `HostReadinessControllerContext` from a hand-made `controllerFor(...)`, so
- * the readiness controller never mounts and a host move has no path to the
- * subject (see that file's own retitled description). It is left exactly as
- * it is - its sentinel pattern (an uncontrolled input + a mount counter, the
- * only way to tell "never unmounted" from "unmounted and rebuilt
- * identically") is reused here, borrowed rather than imported.
- *
- * This is the only suite in the tree that mounts the REAL
- * `HostReadinessControllerProvider` + `DefaultHostReadyGate`, in the
- * production chain and production order (see `traycer-app.tsx`):
- * `RunnerHostProvider` -> `QueryClientProvider` -> `HostRuntimeProvider` ->
- * `HostCompatibilityProvider` -> `HostReadinessControllerProvider` ->
- * `DefaultHostReadyGate` -> app body. Both other readiness suites hand-supply
- * the context instead.
- */
+/** It is left exactly as it is - its sentinel pattern (an uncontrolled input + a mount counter, the only way to
+ * tell "never unmounted" from "unmounted and rebuilt identically") is reused here. */
 
 const LOCAL_HOST_ID = "desktop-pid-1";
 const REMOTE_HOST_ID = "remote-host-b";
@@ -87,14 +70,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   return { ...actual, useRouterState: () => "/" };
 });
 
-/**
- * Presence assertions cannot tell "never unmounted" from "unmounted and
- * rebuilt identically" - borrowed from
- * `host-switch-keeps-app-mounted.test.tsx:91-120`. State React does not own
- * (an uncontrolled input written directly into the DOM) plus an independent
- * mount counter: a remount replaces the node and drops the value, a rebuilt
- * DOM node is a NEW node even if it looks identical.
- */
+/** Presence assertions cannot tell "never unmounted" from "unmounted and rebuilt identically" - borrowed from
+ * `host-switch-keeps-app-mounted.test.tsx:91-120`. */
 const sentinelMounts = { count: 0 };
 
 function AppSentinel(): ReactNode {
@@ -116,16 +93,8 @@ function typeIntoScratch(text: string): void {
   screen.getByTestId<HTMLInputElement>("app-scratch").value = text;
 }
 
-/**
- * REQUIREMENT (ii): a readout derived from the REAL mounted controller that
- * CHANGES across the switch - proof the move actually reached the subject,
- * not just the store. `defaultHostPresentation.targetKind` is the
- * controller's own per-render classification of what the default-host
- * surface is currently pointed at (`resolveHostTargetKind`, keyed off the
- * requester's resolved directory entry), so it genuinely differs between a
- * local host and a remote one - unlike the store fields, which this file does
- * not merely reread.
- */
+/** `defaultHostPresentation.targetKind` is the controller's own per-render classification of what the
+ * default-host surface is currently pointed at (`resolveHostTargetKind`. */
 function TargetKindReadout(): ReactNode {
   const controller = useHostReadinessController();
   return (
@@ -150,11 +119,8 @@ function messengerFactory(): MessengerFactory<HostRpcRegistry> {
     });
 }
 
-/**
- * The runtime hydrates the signed-in user before it publishes a binding; an
- * unanswered `/api/v3/user` leaves the whole chain on its loading fallback,
- * which would make every assertion below vacuous.
- */
+/** The runtime hydrates the signed-in user before it publishes a binding; an unanswered `/api/v3/user` leaves
+ * the whole chain on its loading fallback, which would make every assertion below vacuous. */
 function installAuthFetch(): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
   Object.defineProperty(globalThis, "fetch", {
@@ -217,13 +183,8 @@ function installAuthFetch(): () => void {
   };
 }
 
-/**
- * Moves the app-wide pointer the way the real selection-authority bridge
- * would land it (`host-compatibility-provider.test.tsx:812-848`): writing a
- * fresh kernel snapshot directly into the store `useHostClient()` /
- * `useEffectiveHostId()` derive from. That file proves the real bridge - fully
- * mounted here too, via `HostRuntimeProvider` - does not stomp this write.
- */
+/** That file proves the real bridge - fully mounted here too, via `HostRuntimeProvider` - does not stomp this
+ * write. */
 function setEffectiveHost(hostId: string, revision: number): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,
@@ -289,11 +250,7 @@ describe("the app stays mounted across an effective-host switch", () => {
             messengerFactory={messengerFactory()}
             invalidator={null}
             requestId={null}
-            // B is a real directory row from the start: `findHostById`
-            // (what `createRequesterForHostId` resolves through) is wired
-            // straight to `directory.findById`, so a switch to an id the
-            // directory has never listed resolves to an unbound requester
-            // rather than "B".
+            // B is a real directory row from the start.
             remoteFetcher={() =>
               Promise.resolve({ kind: "hosts", entries: [remoteHostB] })
             }
@@ -315,7 +272,7 @@ describe("the app stays mounted across an effective-host switch", () => {
       </RunnerHostProvider>,
     );
 
-    // Reach `ready` for the LOCAL host A first (cold-start latch).
+    // Reach `ready` for the local host A first (cold-start latch).
     await waitFor(() => {
       expect(screen.getByTestId("app-shell")).toBeTruthy();
     });
@@ -337,26 +294,14 @@ describe("the app stays mounted across an effective-host switch", () => {
       );
     });
 
-    // (ii) IS ASSERTED FIRST, and the order is load-bearing rather than
-    // stylistic. A readout derived from the REAL mounted controller must have
-    // CHANGED across the switch - proof the move reached the subject, not just
-    // the store this file wrote to directly. `targetKind` is the controller's
-    // own classification of the resolved target entry, and B is a directory
-    // row of `kind: "remote"`.
-    //
-    // Waiting for it BEFORE the no-remount assertions is what makes those
-    // assertions mean "did not remount" rather than "has not remounted YET":
-    // the store moving is not evidence the controller has re-rendered off it,
-    // so a remount scheduled a tick later would land after a check made on the
-    // store alone. This suite exists because the previous one asserted against
-    // a subject the move never reached; asserting stillness before the subject
-    // has provably moved is the same mistake in a smaller window.
+    // Waiting for it before the no-remount assertions is what makes those assertions mean "did not remount" rather
+    // than "has not remounted yet".
     await waitFor(() => {
       expect(readTargetKind()).toBe("remote");
     });
 
-    // (i) MANDATORY - same app DOM node across the switch, the typed-in
-    // scratch value preserved, mount count still 1, no full-screen gate.
+    // (i) mandatory - same app DOM node across the switch, the typed-in scratch value preserved, mount count still
+    // 1, no full-screen gate.
     expect(screen.getByTestId("app-shell")).toBe(shellBefore);
     expect(readScratch()).toBe("work-in-progress");
     expect(sentinelMounts.count).toBe(1);

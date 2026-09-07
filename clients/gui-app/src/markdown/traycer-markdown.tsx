@@ -41,10 +41,8 @@ import { getTraycerStreamingHighlighter } from "./traycer-streaming-highlighter"
 
 const TRAYCER_STREAMING_HIGHLIGHTER = getTraycerStreamingHighlighter();
 
-// Product rehype plugins only. Tailmark already runs rehype-raw, sanitize, and
-// its marker policy; do not re-register GFM / disable-indented-code (built-in).
-// Intentionally no Tailmark `repairs` for next-steps - custom repairs force the
-// full-document repair path, and TextSegment peels next-steps before render.
+// Product rehype only. No Tailmark repairs for next-steps: custom repairs
+// force the full-document path, and TextSegment peels them first.
 const PRODUCT_REHYPE_PLUGINS: PluggableList = [
   rehypeCustomMermaid,
   rehypeTraycerChat,
@@ -90,11 +88,7 @@ export interface TraycerMarkdownProps {
   remarkPlugins: PluggableList | null;
   rehypePlugins: PluggableList | null;
   quotable: boolean;
-  /**
-   * Whether `children` is still growing (a streaming turn). Forwarded to
-   * Tailmark's `StreamingMarkdown`, which drives open-tail memo and the
-   * streaming code-highlight path via `useIsMarkdownStreaming`.
-   */
+  /** Streaming turn. Forwarded to StreamingMarkdown for open-tail memo and streaming highlight. */
   isStreaming: boolean;
 }
 

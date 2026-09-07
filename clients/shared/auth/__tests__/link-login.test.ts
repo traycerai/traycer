@@ -1,9 +1,3 @@
-/**
- * The QR payload contract: whatever the desktop encodes, the phone's parser
- * must recover in NORMALIZED form — and pasted prose, foreign QRs, and
- * malformed codes must all come back `null` rather than being sent to the
- * claim endpoint.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildLinkLoginQrPayload,
@@ -62,9 +56,7 @@ describe("QR payload build/parse", () => {
 
   it("rejects text that carries no plausible code", () => {
     expect(parseLinkLoginInput("")).toBeNull();
-    // NB: ten-letter prose CAN normalize into code shape ("hello world" →
-    // HE110W0R1D via the visual folds) — that matches the device approval
-    // page's typing contract, and the server uniform-rejects unknown codes.
+    // NB: ten-letter prose can normalize into code shape ("hello world" → HE110W0R1D via the visual folds) - that matches the device approval page's typing contract, and the server uniform-rejects unknown codes.
     expect(parseLinkLoginInput("clearly not a code")).toBeNull();
     expect(parseLinkLoginInput("ABCDE-FGHJ")).toBeNull(); // 9 chars
     expect(parseLinkLoginInput("ABCDE-FGHJKM")).toBeNull(); // 11 chars
@@ -89,11 +81,8 @@ describe("QR payload build/parse", () => {
   });
 
   /**
-   * The https form matches on PATH, not on host, so a `/link?code=` URL from
-   * anywhere parses. That is the designed behavior, not a gap: extraction is
-   * all this does, and the claim goes to the shell's own `authnBaseUrl`
-   * regardless of what host printed the QR. Asserted so the property is
-   * deliberate rather than incidental.
+   * The https form matches on path, not on host, so a `/link?code=` URL from anywhere parses.
+   * That is the designed behavior, not a gap: extraction is all this does, and the claim goes to the shell's own `authnBaseUrl` regardless of what host printed the QR.
    */
   it("extracts from any host's /link, because the claim's target is not taken from the URL", () => {
     expect(parseLinkLoginInput(`https://evil.test/link?code=${CODE}`)).toBe(
@@ -111,10 +100,8 @@ describe("QR payload build/parse", () => {
 });
 
 /**
- * The poll loop reads `retryAfterSeconds` to decide how long to sleep, and
- * `null` is what makes it fall back to the interval its claim advertised. A
- * numeric zero is not the same answer: it instructs an immediate retry, so a
- * 429 that carries no header at all must never parse into one.
+ * The poll loop reads `retryAfterSeconds` to decide how long to sleep, and `null` is what makes it fall back to the interval its claim advertised.
+ * A numeric zero is not the same answer: it instructs an immediate retry, so a 429 that carries no header at all must never parse into one.
  */
 describe("token poll: 429 back-off directive", () => {
   const AUTHN_BASE_URL = "https://authn.example.test";
@@ -164,11 +151,7 @@ describe("token poll: 429 back-off directive", () => {
 });
 
 /**
- * The match code is OPT-IN on the wire: the server sends it only to a request
- * that declared it understands the field, because these response schemas are
- * strict and an older client would otherwise fail to parse today's flow. So
- * this client must (a) always ask, (b) read the code when it comes, and (c)
- * keep working against a server that predates it and sends nothing.
+ * So this client must (a) always ask, (b) read the code when it comes, and (c) keep working against a server that predates it and sends nothing.
  */
 describe("match code on the wire", () => {
   const AUTHN_BASE_URL = "https://authn.example.test";
@@ -237,7 +220,7 @@ describe("match code on the wire", () => {
   });
 
   it("claim refuses a code that is not two digits", async () => {
-    // A contract drift, not a display nit: the human is asked to COMPARE
+  // A contract drift, not a display nit: the human is asked to compare
     // this against the desktop, so an unreadable value must not be shown.
     installFetch({
       status: "claimed",
@@ -347,12 +330,6 @@ describe("match code on the wire", () => {
   });
 
   it("status keeps an explicit null as its own property — the phone presented no code", async () => {
-    // The strict parser must let the server's explicit null THROUGH, as an
-    // own property distinct from absence: null is what the approver renders
-    // as the loud "no code shown" warning, and a schema that only tolerated
-    // absence would turn it into a parse failure — the warning could never
-    // appear, and the downgrade it exists to expose would read as a network
-    // error instead.
     installFetch({
       status: "claimed",
       claimant: {
@@ -378,11 +355,7 @@ describe("match code on the wire", () => {
   });
 });
 
-/**
- * The approve prompt reads "Approve sign-in from ___?", so the label owns its
- * own article. Every surface that renders the prompt calls this, which is the
- * point of it living here.
- */
+/** The approve prompt reads "Approve sign-in from ___?", so the label owns its own article. */
 describe("claimant device label", () => {
   it("gives a bare family its article", () => {
     // What iOS reports about itself, and the case that would otherwise fall
@@ -440,9 +413,8 @@ describe("claimant device label", () => {
   });
 
   it("treats an inherited property name as a proper name, not a kind", () => {
-    // The claim is unauthenticated: a phone can call itself anything. A name
-    // that is also an Object.prototype key must not read the prototype's
-    // function as its article.
+    // The claim is unauthenticated: a phone can call itself anything.
+    // A name that is also an Object.prototype key must not read the prototype's function as its article.
     for (const name of [
       "constructor",
       "toString",

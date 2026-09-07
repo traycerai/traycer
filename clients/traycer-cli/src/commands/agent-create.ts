@@ -15,31 +15,7 @@ import { parseCreateProfileSelection } from "../internal/profile-selection";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
-/**
- * `traycer agent create` - mint a child agent (`agent.create`). The new
- * agent's `parentId` is the sender.
- *
- * Surface selection:
- *   - `--surface gui|tui` (+ `--harness`, optional `--model` for gui)
- *     pins the child's surface + harness explicitly.
- *   - `--harness` without `--surface`: the host infers the surface from
- *     the sender and requested harness.
- *   - neither: the child inherits the sender's surface + harness.
- *
- * Profile selection (`--profile`, see `internal/profile-selection.ts`):
- * omission sends `last_used`, `ambient` sends the ambient login, anything
- * else sends that managed profile. Against a host too old to speak
- * `agent.create@2.0`, the `last_used` and `ambient` selections have no
- * representable v1.0 wire value and the transport's downgrade fails the call
- * with upgrade guidance rather than silently falling back to the sender's
- * profile.
- *
- * GUI permission selection (`--permission-mode`) defaults to `full_access`.
- * Callers pass a more restrictive mode only when the user's agent selection
- * guide explicitly directs them to do so. The choice is carried by
- * `agent.create@3.0`; transport downgrade to released v1/v2 hosts fails with
- * upgrade guidance rather than discarding it.
- */
+/** Mint a child agent. The new agent id is host-assigned; do not echo client-supplied ids as created. */
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
   readonly senderAgentId: string | null;
@@ -59,9 +35,7 @@ export function buildAgentCreateCommand(opts: {
     const epicId = resolveEpicId(opts.epicId);
     const senderAgentId = resolveSenderAgentId(opts.senderAgentId);
 
-    // Validate the full request locally so a bad --surface / --harness
-    // fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness
-    // values) instead of round-tripping or leaking a raw ZodError stack.
+    // Validate the full request locally so a bad --surface / --harness fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness values) instead of round-tripping or leaking a raw ZodError stack.
     const request = parseUserInput(createAgentRequestSchemaV30, {
       senderAgentId,
       epicId,
@@ -113,9 +87,7 @@ export function parseAgentCreateWorkspace(input: {
     seenPaths.add(entry.path);
     return true;
   });
-  // The host derives mode / repoIdentifier from the paths and treats the
-  // first entry as primary, so the CLI only forwards `path` (+ source
-  // `workspacePath` for an exact binding).
+  // The host derives mode / repoIdentifier from the paths and treats the first entry as primary, so the CLI only forwards `path` (+ source `workspacePath` for an exact binding).
   return { entries: deduped };
 }
 

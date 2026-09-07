@@ -208,10 +208,7 @@ describe("home-page history helpers", () => {
       "epic-a",
       "epic-b",
     ]);
-    // Owned-submodule branches are NOT matched on this path: callers feed it
-    // the cheap host index, whose `submodules` is contractually `[]`, so a
-    // fixture that populates them (as this one does) cannot occur in
-    // production. Those branches reach search via `worktreeBranches` instead.
+    // Owned-submodule branches are not matched on this path.
     expect(historyWorktreeSearchEpicIds("submodule-0", worktrees)).toEqual([]);
     // Worktree leaf directory name ("/worktrees/none" -> "none").
     expect(historyWorktreeSearchEpicIds("none", worktrees)).toEqual([
@@ -319,9 +316,8 @@ describe("home-page history helpers", () => {
           workspaces: [],
           roomInfo: null,
         },
-        // A phase can never legitimately be pinned - the raw task carries
-        // `pinned: true` here to prove the projection ignores it rather
-        // than merely happening to see `false`.
+        // A phase can never legitimately be pinned - the raw task carries `pinned: true` here to prove the projection
+        // ignores it rather than merely happening to see `false`.
         pinned: true,
       },
     ];
@@ -396,11 +392,8 @@ describe("home-page history helpers", () => {
     });
 
     it("excludes a row that cannot report its hosts", () => {
-      // "d" reaches this predicate only from a source the server never
-      // filtered - an id-fetched worktree/PR match, or a cached row mid
-      // request. Keeping it would render an unfiltered row as a filtered one.
-      // A peer too old to report the field never gets this far: the version
-      // gate withholds the whole list with an explicit explanation.
+      // "d" reaches this predicate only from a source the server never filtered - an id-fetched worktree/PR match,
+      // or a cached row mid request.
       expect(filterByHosts(["host-9"], "any")).toEqual([]);
     });
 

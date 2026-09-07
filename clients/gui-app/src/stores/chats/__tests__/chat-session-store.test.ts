@@ -304,11 +304,7 @@ class ProtocolMockStreamSession implements IStreamSession {
     // Protocol-chain tests only need status + schema version, not outbound frames.
   }
 
-  /**
-   * The version THIS session negotiated - what `ChatStreamClient` reads to gate
-   * steering. Set by the owning mock client; every chat tab is its own session,
-   * so the gate must not be answerable from a client-wide value.
-   */
+  /** The version THIS session negotiated - what `ChatStreamClient` reads to gate steering. */
   negotiatedSchemaVersion: SchemaVersion | null = null;
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
@@ -446,9 +442,8 @@ function createProtocolChainHarness(
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
-        // Delegated rather than stubbed: this harness drives a REAL
-        // `ChatStreamClient` over a mock socket, so the reads have to reach it
-        // for a test to observe what was put on the wire.
+        // Delegated rather than stubbed: this harness drives a REAL `ChatStreamClient` over a mock socket,
+        // so the reads have to reach it for a test to observe what was put on the wire.
         requestTranscriptRange: (request) => {
           client.requestTranscriptRange(request);
         },
@@ -622,9 +617,8 @@ interface SnapshotFrameInput {
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
   readonly heldUpdates?: ReadonlyArray<HeldManagedCommandUpdate>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
-  // Default to the idle/no-turn snapshot every existing caller relies on;
-  // the session-stop reconnect tests need a snapshot that reports a live
-  // turn instead.
+  // Default to the idle/no-turn snapshot every existing caller relies on; the session-stop reconnect
+  // tests need a snapshot that reports a live turn instead.
   readonly runStatus?: ChatRunStatus;
   readonly activeTurn?: ChatActiveTurn | null;
   readonly turnInProgress?: boolean;
@@ -685,11 +679,6 @@ function emitSnapshotWithQueuedSend(
   });
 }
 
-/**
- * Returns the raw `chat` record it just sent, so a caller can hold a
- * reference to the exact object the snapshot carried - the aliasing test
- * mutates it after the fact to prove the store copied rather than aliased it.
- */
 function emitSnapshotFrame(input: SnapshotFrameInput): Chat {
   input.callbacks.onConnectionStatus("open", null);
   const chat: Chat = {
@@ -963,15 +952,12 @@ function persistedInterviewMessage(
 }
 
 describe("createChatSessionStore", () => {
-  // The worktree intent staging store is a module-global Zustand store; a test
-  // that leaves a staged (or restored-on-reject) intent behind would make later
-  // tests order-dependent. Reset it after every test so each starts clean.
-  // Interview drafts share the same module-global risk across lifecycle tests.
+  // The worktree intent staging store is a module-global Zustand store; a test that leaves a staged
+  // (or restored-on-reject) intent behind would make later tests order-dependent.
   afterEach(() => {
     useWorktreeIntentStagingStore.getState().resetForTests();
-    // In-memory zustand state, so `localStorage.clear()` below does not touch
-    // it - a TEAM context set by a billing-drift test would otherwise leak
-    // into every case after it.
+    // In-memory zustand state, so `localStorage.clear()` below does not touch it - a TEAM context set
+    // by a billing-drift test would otherwise leak into every case after it.
     useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     useInterviewDraftStore.setState({ draftsByChat: {} });
     __resetAppLocalNotificationsStoreForTests();
@@ -1237,10 +1223,8 @@ describe("createChatSessionStore", () => {
     const state = harness.handle.store.getState();
     if (state.chat === null) throw new Error("Expected chat");
 
-    // The regression guard: a future `{...snapshot.chat}` spread would
-    // silently reintroduce the duplicate, and this is the only check that
-    // would catch it - the type-level guarantee disappears the moment
-    // someone widens `ChatSessionRecord` back to `Chat`.
+    // The regression guard: a future `{...snapshot.chat}` spread would silently reintroduce the
+    // duplicate, and this is the only check that would catch it - the type-level guarantee disappears
     expect(Object.keys(state.chat)).not.toContain("messages");
     expect(Object.keys(state.chat)).not.toContain("events");
 
@@ -1326,10 +1310,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("threads steerProtocolSupported through real ChatStreamClient from negotiated chat.subscribe 1.4 (F1 protocol chain)", () => {
-    // Transport → store → resolver: getMethodSchemaVersion(chat.subscribe)=1.4
-    // → ChatStreamClient.sameTurnSteeringProtocolSupported()=false → store
-    // onConnectionStatus("open") sets steerProtocolSupported=false →
-    // resolveSubmitDeliveryPolicy returns "auto" (never after_safe_point).
+    // Transport → store → resolver: getMethodSchemaVersion(chat.subscribe)=1.4 →
+    // ChatStreamClient.sameTurnSteeringProtocolSupported()=false → store onConnectionStatus("open")
     const harness = createProtocolChainHarness({ major: 1, minor: 4 });
     expect(harness.chatStreamClient.sameTurnSteeringProtocolSupported()).toBe(
       false,
@@ -1469,9 +1451,8 @@ describe("createChatSessionStore", () => {
       generation: 0,
     };
     const snapshot = (): void => {
-      // Block body: this branch's `emitSnapshotFrame` returns the chat record
-      // it emitted (the windowed adapter needs it), so a concise arrow would
-      // return it out of a `: void` annotation.
+      // Block body: this branch's `emitSnapshotFrame` returns the chat record it emitted (the windowed
+      // adapter needs it), so a concise arrow would return it out of a `: void` annotation.
       emitSnapshotFrame({
         callbacks,
         access: "owner",
@@ -1570,15 +1551,8 @@ describe("createChatSessionStore", () => {
     });
   });
 
-  // ─── The pre-restart runtime disposal is not an answer failure ───────────
-  //
-  // A Claude runtime torn down under a pending question leaves a coded `error`
-  // block in the SAME row as the interview. The host retires exactly that block
-  // when the answer settles, because the answer resumes on a fresh runtime. The
-  // fold below mirrors that projection so a client which already hydrated this
-  // (arbitrarily old) row sees it immediately, instead of keeping a red card
-  // under the answered question until some later frame happens to resend the
-  // row - which, on the windowed line, a bounded snapshot may never do.
+  // ─── The pre-restart runtime disposal is not an answer failure ─────────── A Claude runtime torn
+  // down under a pending question leaves a coded `error` block in the SAME row as the interview.
   function disposedInterviewRow(): Extract<Message, { role: "assistant" }> {
     const persisted = persistedInterviewMessage({
       deliveryId: "delivery-1",
@@ -1673,9 +1647,8 @@ describe("createChatSessionStore", () => {
           selection: null,
         },
       ],
-      // Strictly after the disposal at 5: on this path the runtime died while
-      // the question was outstanding and the user answered afterwards, which is
-      // the chronology retirement requires.
+      // Strictly after the disposal at 5: on this path the runtime died while the question was
+      // outstanding and the user answered afterwards, which is the chronology retirement requires.
       resolvedAt: 10,
       settlementId: "settlement-1",
       settlementSource: "gui",
@@ -1740,15 +1713,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("keeps a disposal that followed later work when the row's only interview settled before it", () => {
-    // Answering does not end the turn: the continuation streams more text into
-    // the same row, and only then is the runtime disposed. Position cannot tell
-    // this row from the one retirement is for - A is the nearest preceding
-    // interview either way - so the fold also compares chronology. A settled
-    // BEFORE the disposal, so the disposal is not about A.
-    //
-    // A stale or duplicate exact-settlement frame for A is the reachable
-    // trigger on this side: the effective block stays answered, so the fold
-    // re-runs on every one.
+    // Answering does not end the turn: the continuation streams more text into the same row, and only
+    // then is the runtime disposed.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     const persisted = persistedInterviewMessage({
@@ -1766,13 +1732,7 @@ describe("createChatSessionStore", () => {
         {
           ...persisted,
           blocks: [
-            // Accepted at 5 - but the block's own stamp has since DRIFTED to 9,
-            // past the disposal at 7. That is not corruption: the reducer
-            // advances the stamp on every contributing settlement, so a late
-            // losing cleanup or a delivery-generation bump moves it without
-            // touching the outcome. A stamp-based guard would read 9 > 7 and
-            // delete a truthful error; the canonical acceptance is what the
-            // frame carries as `resolvedAt`.
+            // Accepted at 5 - but the block's own stamp has since DRIFTED to 9, past the disposal at 7.
             {
               ...template,
               blockId: "interview-a",
@@ -1840,12 +1800,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("keeps the disposal when a legacy lifecycle frame settles the block without settlement authority", () => {
-    // `settlementId` is nullable on the wire: a peer on the pre-settlement
-    // line sends a legacy tuple, and the fold's legacy branch settles the block
-    // to answered WITHOUT installing any authority. There is then nothing to
-    // confirm the frame's `resolvedAt` is this block's canonical acceptance, so
-    // the fold retains and waits for the host's authoritative row - the host
-    // has already made the durable decision either way.
+    // `settlementId` is nullable on the wire: a peer on the pre-settlement line sends a legacy tuple,
+    // and the fold's legacy branch settles the block to answered WITHOUT installing any authority.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     const persisted = persistedInterviewMessage({
@@ -1928,10 +1884,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("correlates the disposal to the nearest preceding interview when a row holds two", () => {
-    // The row is not an interview boundary: a provider turn can ask twice, and
-    // the accumulator appends both interview blocks to the same row. Here A is
-    // already answered, B is still streaming, and the disposal follows B - so
-    // it explains B, and an exact lifecycle frame for A must leave it alone.
+    // The row is not an interview boundary: a provider turn can ask twice, and the accumulator appends
+    // both interview blocks to the same row.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     const persisted = persistedInterviewMessage({
@@ -2198,9 +2152,8 @@ describe("createChatSessionStore", () => {
       pendingFileEditApprovals: [],
     });
 
-    // An unchanged update for the older exact settlement must still count as
-    // routed; it must not fall through and install old authority on the newer
-    // unresolved row that happens to reuse the block id.
+    // An unchanged update for the older exact settlement must still count as routed; it must not fall
+    // through and install old authority on the newer unresolved row that happens to reuse the block
     callbacks.onInterviewAnswered({
       kind: "interviewAnswered",
       hasBinaryPayload: false,
@@ -2698,12 +2651,8 @@ describe("createChatSessionStore", () => {
       useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, "host-a"),
     ).not.toBeNull();
     expect(harness.handle.store.getState().missingWorktreePaths).toEqual([]);
-    // A worktree-creating send IS echoed optimistically (like every other
-    // mid-chat send) so the user message paints INSTANTLY - the host persists
-    // it only after the slow `git worktree add`. The earlier optimistic-vs-
-    // persisted reorder is avoided NOT by suppressing the echo but by anchoring
-    // the setup card to this message's id (rendered-messages.ts). The echo must
-    // carry the same `messageId` the card's `triggeringMessageId` will reference.
+    // A worktree-creating send IS echoed optimistically (like every other mid-chat send) so the user
+    // message paints INSTANTLY - the host persists it only after the slow `git worktree add`.
     const pendingEchoes = harness.handle.store.getState().pendingUserMessages;
     expect(pendingEchoes).toHaveLength(1);
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
@@ -2758,14 +2707,10 @@ describe("createChatSessionStore", () => {
         sessionAnchor: null,
       },
     });
-    // Host ordering guarantees the replacement binding was published before
-    // the message entered the transcript, so retained action bookkeeping must
-    // no longer override it.
+    // Host ordering guarantees the replacement binding was published before the message entered the
+    // transcript, so retained action bookkeeping must no longer override it.
     expect(displayIntent()).toBeNull();
-    // Windowed transcript eviction must not resurrect the overlay. Accepted
-    // action records intentionally outlive hydrated rows for recovery, so the
-    // display lifetime is recorded on the action rather than re-derived from
-    // the current transcript window.
+    // Windowed transcript eviction must not resurrect the overlay.
     harness.handle.store.setState({ messages: [] });
     expect(displayIntent()).toBeNull();
   });
@@ -2973,10 +2918,6 @@ describe("createChatSessionStore", () => {
       ],
     ).toBeUndefined();
 
-    // Connection drops before the ack (epoch bumps), then a fresh snapshot
-    // arrives with the edit still un-acked: the stale pending is swept, and the
-    // sweep restores its staged intent instead of leaving the slot cleared for
-    // the next resend to run against the prior binding.
     callbacks.onConnectionStatus("reconnecting", null);
     emitSnapshotFrame({
       callbacks,
@@ -2993,13 +2934,6 @@ describe("createChatSessionStore", () => {
     ).toEqual(intent);
   });
 
-  // R14 `-CKjC`: the sweep's fallback is a PICK hand-back for one specific
-  // action, so it inherits the rejection path's ownership rule - a swept
-  // action hands its pick back only when the outstanding consumption is ITS
-  // OWN. Here it is not: a later send consumed the slot and was ACCEPTED, so
-  // the mark names the send. Staging the swept edit's pick on top of that
-  // overwrites a binding an accepted send already ran against, and the next
-  // resend looks right while running somewhere else.
   it("refuses a swept edit's hand-back when an accepted send owns the slot", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -3082,9 +3016,7 @@ describe("createChatSessionStore", () => {
       backgroundStopTaskIds: [],
     });
 
-    // The reconnect sweeps the still-pending edit. The accepted send IS in the
-    // transcript, so it is not restored - this is the sweep's own fallback
-    // deciding alone, with no prompt hand-back to defer to.
+    // The reconnect sweeps the still-pending edit.
     callbacks.onConnectionStatus("reconnecting", null);
     emitSnapshotFrame({
       callbacks,
@@ -3106,15 +3038,8 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // `consumeForDispatch` is UNCONDITIONAL - a dispatch is the slot's current
-  // state whether or not it took a pick - so its rollback has to be too. A
-  // send refused locally (intent-free, racing a disconnection) never reached
-  // the wire, so the slot must come back exactly as it was found.
-  //
-  // Left marked, the mark names an action that never became pending: no ack,
-  // sweep or restoration can ever resolve it, so it stands until some
-  // unrelated user mutation clears it, and every owner-matched hand-back in
-  // the meantime is refused against a phantom owner.
+  // `consumeForDispatch` is UNCONDITIONAL - a dispatch is the slot's current state whether or not it
+  // took a pick - so its rollback has to be too.
   it("leaves no consumption mark when a refused intent-free send found none", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3149,12 +3074,8 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // The other half of "exactly as it was found": when the slot was empty
-  // because an EARLIER dispatch took it, the rollback restores THAT mark.
-  //
-  // A send that never left the client supersedes nothing, so clearing the slot
-  // clean would be the opposite lie from the phantom - it reports "empty by
-  // user choice" and strands the earlier dispatch's pick just as surely.
+  // The other half of "exactly as it was found": when the slot was empty because an EARLIER dispatch
+  // took it, the rollback restores THAT mark.
   it("hands a superseded dispatch its slot back when the next send is refused locally", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3182,9 +3103,8 @@ describe("createChatSessionStore", () => {
       }),
     ).not.toBeNull();
 
-    // A send then finds the slot empty (the edit took the pick) and is refused
-    // locally. It never reached the host, so the edit is still the last
-    // dispatch that actually took this slot.
+    // A send then finds the slot empty (the edit took the pick) and is refused locally. It never
+    // reached the host, so the edit is still the last dispatch that actually took this slot.
     callbacks.onConnectionStatus("reconnecting", null);
     expect(
       sendTestMessage(
@@ -3195,9 +3115,8 @@ describe("createChatSessionStore", () => {
       ),
     ).toBeNull();
 
-    // The reconnect sweeps the still-pending edit. No prompt is handed back,
-    // so the sweep's own fallback decides - and it may, because the edit still
-    // owns the consumption.
+    // The reconnect sweeps the still-pending edit. No prompt is handed back, so the sweep's own
+    // fallback decides - and it may, because the edit still owns the consumption.
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -3213,16 +3132,8 @@ describe("createChatSessionStore", () => {
     ).toEqual(editIntent);
   });
 
-  // The suspended paths are displaced by the consume too, and losing them
-  // fails the dispatch gate OPEN rather than merely losing a pick.
-  //
-  // `stagedWorktreeIntentIsSuspended` only refuses when the suspended set
-  // INTERSECTS the staged intent, so a slot routinely carries suspended paths
-  // the gate ignores - the workspace selector records every folder whose
-  // metadata has not resolved, staged or not. Here `/other-repo` is suspended
-  // while the pick names `/repo`: the send is allowed through, and if the
-  // refusal takes the suspended set with it, the retry of the very draft still
-  // sitting in the composer meets a gate with nothing left to test.
+  // The suspended paths are displaced by the consume too, and losing them fails the dispatch gate
+  // OPEN rather than merely losing a pick.
   it("restores suspended workspace paths a refused send displaced", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3261,12 +3172,8 @@ describe("createChatSessionStore", () => {
     ).toEqual(["/other-repo"]);
   });
 
-  // The restore path deliberately does NOT match on owner - a prompt and the
-  // worktree it was written for travel together, whichever dispatch consumed
-  // last. So the rollback must leave the slot still reporting what it truly
-  // is: empty BECAUSE a dispatch took it. Clearing it clean would report
-  // "empty by user choice" and send the prompt back unbound, which is the
-  // silent-local-run this whole path exists to prevent.
+  // The restore path deliberately does NOT match on owner - a prompt and the worktree it was written
+  // for travel together, whichever dispatch consumed last.
   it("still returns a restored prompt's binding after a refused intent-free send", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3314,15 +3221,8 @@ describe("createChatSessionStore", () => {
     ).toEqual(intent);
   });
 
-  // `-H9e2`: the two slots have to move TOGETHER.
-  //
-  // Two sends in flight, A then B, B's pick consumed last so the mark is B's.
-  // A's rejection lands first: it wins the prompt slot, but its worktree
-  // hand-back is refused because the mark is not its own - correct on its own
-  // terms. B's rejection lands second: it DOES own the mark, so it staged B's
-  // pick, while B's prompt was displaced into a statement. Net effect, from
-  // two individually-correct decisions: the composer holds A's prompt paired
-  // with B's worktree, and resending runs A's text in B's checkout.
+  // `-H9e2`: the two slots have to move TOGETHER. Two sends in flight, A then B, B's pick consumed
+  // last so the mark is B's.
   it("never pairs one rejection's prompt with another's worktree", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3399,12 +3299,8 @@ describe("createChatSessionStore", () => {
     );
   });
 
-  // `-IfOZ`, at the seam that matters. A `WorktreeIntent` is one binding PER
-  // WORKSPACE FOLDER, and those are independent - so a sweep that takes one
-  // folder's worktree must not forfeit the others. The all-or-nothing refusal
-  // handed the prompt back with NO binding at all and said "its staged
-  // worktree no longer exists", and the surviving folders then resent against
-  // whatever the chat is bound to now.
+  // `-IfOZ`, at the seam that matters. A `WorktreeIntent` is one binding PER WORKSPACE FOLDER, and
+  // those are independent - so a sweep that takes one folder's worktree must not forfeit the others.
   it("restores the folders a partial sweep left alone", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3462,27 +3358,18 @@ describe("createChatSessionStore", () => {
         worktreeStagingKeyString(key)
       ],
     ).toEqual({ entries: [survivor] });
-    // And the sentence matches what actually happened. "It was not restored"
-    // would now be false in front of a folder that WAS - which is exactly the
-    // kind of confidently-wrong statement this family exists to avoid.
+    // And the sentence matches what actually happened.
     const sent = harness.sent[0];
     if (sent.kind !== "send") throw new Error("Expected a send frame");
     const notice = noticeFor(harness, sent.clientActionId);
-    // The partial sentence NAMES the folder that went and says the rest came
-    // back. An unnamed "its staged worktree no longer exists" could not tell
-    // the user which of two bindings they still have - which is the whole of
-    // `-Jy8x`.
+    // The partial sentence NAMES the folder that went and says the rest came back.
     expect(notice.message).toContain("feat/doomed");
     expect(notice.message).toContain("the rest of its staging came back");
     expect(notice.message).not.toContain("so it was not restored");
   });
 
-  // `-LJlY`: a send dispatched while a turn is running renders as a QUEUED
-  // item, not a `pendingUserMessage`, so its recovery fields live only on the
-  // pending action - and the accepted ack moves that record to
-  // `acceptedActions`, which nothing walked. A connection dying between the
-  // ack and the host's durable confirmation took the only copy of the draft
-  // with it: a dead send with no account at all.
+  // `-LJlY`: a send dispatched while a turn is running renders as a QUEUED item, not a
+  // `pendingUserMessage`, so its recovery fields live only on the pending action - and the accepted
   it("restores a queued send whose accepted ack died with the connection", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3528,11 +3415,8 @@ describe("createChatSessionStore", () => {
     ).toBe(false);
   });
 
-  // `-MPLN`, the durability half. When the composer is busy the prompt cannot
-  // go there, so it becomes a LAST-COPY notice: never evicted, survives an
-  // unfocused pane, text inlined. Anything less and the displaced prompt is
-  // simply destroyed by the newer draft, which is the loss this whole surface
-  // exists to prevent - just arriving from the composer's side.
+  // `-MPLN`, the durability half. When the composer is busy the prompt cannot go there, so it
+  // becomes a LAST-COPY notice: never evicted, survives an unfocused pane, text inlined.
   it("states a displaced restoration as a last-copy notice", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3557,9 +3441,8 @@ describe("createChatSessionStore", () => {
 
     const state = harness.handle.store.getState();
     expect(state.failedSendRestoration).toBeNull();
-    // BY CODE: the rejection already left an `ACTION_REJECTED` notice under
-    // this same action id, and `noticeFor` would hand back whichever came
-    // first. One action, two speakers - the same fact the tracker key learned.
+    // BY CODE: the rejection already left an `ACTION_REJECTED` notice under this same action id, and
+    // `noticeFor` would hand back whichever came first.
     const stated = state.errorNotices.find(
       (notice) =>
         notice.clientActionId === rejected &&
@@ -3576,11 +3459,8 @@ describe("createChatSessionStore", () => {
     expect(stated.message).toContain("Hello");
   });
 
-  // `-NRic`: the two passes divide one send between them - the accepted pass
-  // skips a send that still has an optimistic row because the settled pass
-  // owns the row - but nothing retired the RECORD. The next snapshot then
-  // found it never-confirmed, absent and from an earlier epoch, and recovered
-  // the same send a second time.
+  // `-NRic`: the two passes divide one send between them - the accepted pass skips a send that still
+  // has an optimistic row because the settled pass owns the row - but nothing retired the RECORD.
   it("recovers a stranded send once, not again on the next snapshot", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3629,15 +3509,7 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // `P42f`: the same divide, at the LIVE site. `-NRic` fixed the record
-  // retirement where the settled pass runs inside a snapshot; the settled
-  // pass also runs on a live `turnStateChanged` frame, and THAT caller
-  // applied every field of the patch except the retirement. So a send
-  // settled live - prompt restored, row dropped - left its unconfirmed
-  // record behind, and the next snapshot found it absent, from an earlier
-  // epoch, never confirmed, and recovered the same send a second time. The
-  // reconciler's own docblock promises "no later pass can find the same send
-  // unaccounted for"; this held it at one of the two call sites.
+  // `P42f`: the same divide, at the LIVE site.
   it("recovers a live-settled stranded send once, not again on the next snapshot", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3693,10 +3565,7 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // `-N1x4`: the displaced path used to leave the older send's re-staged
-  // binding attached to the NEWER draft, so submitting that draft ran in a
-  // checkout the user never picked for it. "Visible in the picker" does not
-  // survive that - it is a silent wrong-checkout submit.
+  // "Visible in the picker" does not survive that - it is a silent wrong-checkout submit.
   it("releases the binding when the prompt is displaced to a notice", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3744,9 +3613,8 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // Per SITE, because the capture ordering is per site: the rejection version
-  // above passes on an ordering the two reconcile paths did not share. This is
-  // the SNAPSHOT path.
+  // Per SITE, because the capture ordering is per site: the rejection version above passes on an
+  // ordering the two reconcile paths did not share. This is the SNAPSHOT path.
   it("releases the binding when a snapshot-restored prompt is displaced", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3862,9 +3730,8 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // ...and the notice then has to ASK for the re-pick, because nothing else
-  // will. With `handedBack: true` the clauses report a binding that came back,
-  // which is now false.
+  // ...and the notice then has to ASK for the re-pick, because nothing else will. With `handedBack:
+  // true` the clauses report a binding that came back, which is now false.
   it("asks for a re-pick in a displaced notice", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3910,11 +3777,7 @@ describe("createChatSessionStore", () => {
     expect(stated?.message ?? "").toContain("re-pick");
   });
 
-  // The refusal branch. `restoreStagedWorktreeIntent` has three doors that
-  // refuse BEFORE its write, and a refusal bumps no revision - so a capture
-  // taken unconditionally still matches at displacement and the release
-  // deletes whatever is standing at the key. Here that is the user's own
-  // unconsumed pick: nothing was handed back, so nothing may be taken back.
+  // The refusal branch.
   it("leaves a standing pick alone when the hand-back was refused", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -3949,9 +3812,8 @@ describe("createChatSessionStore", () => {
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected a send frame");
 
-    // The user then stages a NEW pick. That write clears the dispatch mark, so
-    // the slot is no longer awaiting any dispatch's outcome and the hand-back
-    // below is REFUSED - their pick wins, correctly.
+    // The user then stages a NEW pick. That write clears the dispatch mark, so the slot is no longer
+    // awaiting any dispatch's outcome and the hand-back below is REFUSED - their pick wins, correctly.
     const standingPick: WorktreeIntent["entries"][number] = {
       kind: "local",
       workspacePath: "/users-own-pick",
@@ -3988,9 +3850,6 @@ describe("createChatSessionStore", () => {
     ).toEqual({ entries: [standingPick] });
   });
 
-  // The blind-clear concern that motivated the old call, as a TEST: the unwind
-  // is scoped by the staging revision the hand-back left, so anything that has
-  // touched the slot since - a user pick, a newer dispatch - makes it a no-op.
   it("leaves a pick made after the hand-back alone", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4043,10 +3902,8 @@ describe("createChatSessionStore", () => {
     ).toEqual({ entries: [ownPick] });
   });
 
-  // `-NRii`: this notice is the LAST accounting - the optimistic row is gone -
-  // so it owes the same content clauses the displaced statement gives. An
-  // attachment-only prompt produced a notice with no body AND no hint that
-  // anything had existed.
+  // `-NRii`: this notice is the LAST accounting - the optimistic row is gone - so it owes the same
+  // content clauses the displaced statement gives.
   it("names attachment losses in a displaced restoration", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4077,14 +3934,8 @@ describe("createChatSessionStore", () => {
     expect(occurrences).toBe(1);
   });
 
-  // Door 4: the ACK-FIRST ordering. Whether the accepted ack or the
-  // `queueChanged` broadcast wins is a race between an RPC settling and a
-  // broadcast landing. When the queue frame wins, the send is still pending
-  // and the queue pass transitions it - confirmed on the way through. When the
-  // ACK wins, the record has already left `pendingActions`, that pass is a
-  // no-op, and nothing ever marked it confirmed. Cancel-safety rests entirely
-  // on confirmation, so an unstamped record here is a canceled prompt waiting
-  // for the next reconnect to resurrect it.
+  // Door 4: the ACK-FIRST ordering. Whether the accepted ack or the `queueChanged` broadcast wins is
+  // a race between an RPC settling and a broadcast landing.
   it("stays quiet when the ack beat the queue frame and the user canceled", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4169,20 +4020,7 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // Door 5: `messageAccepted`, and the one that closes the set. Every other
-  // door reads the queue or a snapshot, so an IMMEDIATE send - one that
-  // materializes straight into the transcript instead of parking - reaches
-  // none of them when its ack wins the race: the record leaves
-  // `pendingActions` at the ack, the two queue passes never see it, and this
-  // frame is the only thing that ever confirms it. Note the absence of
-  // `startTurn` below; that is the whole point of the shape.
-  //
-  // It matters because an accepted message can legitimately go away again.
-  // `editUserMessage` rewrites history from the edited message onward, so a
-  // message this frame appended is gone from every later snapshot - and an
-  // unstamped record reads that absence as death and pushes a deliberately
-  // removed prompt back at the user, the `-MPLI` resurrection through a fifth
-  // door.
+  // Door 5: `messageAccepted`, and the one that closes the set.
   it("stays quiet when messageAccepted confirmed the send and an edit then removed it", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4249,15 +4087,6 @@ describe("createChatSessionStore", () => {
   });
 
   // The MIRROR order of door 5's race, which the stamp alone cannot reach.
-  // `messageAccepted` legitimately arrives before the ack - the
-  // `takeSetupFailedRestoration` docblock names this order as its slot 2 - and
-  // in that order door 5 fires while the send is still PENDING: no accepted
-  // record exists, the stamp finds nothing, and that is correct. The ack then
-  // births the record, and a hardcoded `false` at that birth threw away the
-  // sighting: the message sat host-authoritative in `state.messages` while its
-  // record said unconfirmed, so an `editUserMessage` removing it plus a
-  // reconnect resurrected it through the other arm of the same race. Birth
-  // must carry what the transcript already holds.
   it("stays quiet when messageAccepted outran the ack and an edit then removed it", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4330,10 +4159,6 @@ describe("createChatSessionStore", () => {
   });
 
   // The negative at the same birth: the ack itself still confirms NOTHING.
-  // With no transcript sighting the record must be born unconfirmed, or every
-  // acked-then-dropped send would die silently - the dangerous direction.
-  // Stated as its own test so the claim survives independently of the door
-  // tests that assert it mid-flight.
   it("births the ack record unconfirmed when the transcript lacks the message", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4357,13 +4182,8 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({ confirmedByHost: false });
   });
 
-  // The other half of door 5, and the half a stamp door fails at quietly: it
-  // must confirm the record the frame NAMES, not merely some unconfirmed send.
-  // A door that stamps the first record it finds silences a send the host
-  // never confirmed - the exact failure the stamp exists to prevent, inverted
-  // onto a different prompt. So the frame here names the SECOND send while the
-  // first is still unconfirmed, which is the only ordering that can tell the
-  // two apart.
+  // The other half of door 5, and the half a stamp door fails at quietly: it must confirm the record
+  // the frame NAMES, not merely some unconfirmed send.
   it("confirms only the send messageAccepted names, and reports the other", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4423,22 +4243,14 @@ describe("createChatSessionStore", () => {
         (notice) => notice.clientActionId === second.clientActionId,
       ),
     ).toEqual([]);
-    // Not named: nothing ever confirmed it, it is gone, and it keeps its
-    // account. Asserted on the CONTENT, because a door that stamped the wrong
-    // record would still leave a restoration here - just the wrong prompt in
-    // it.
+    // Not named: nothing ever confirmed it, it is gone, and it keeps its account.
     expect(state.failedSendRestoration?.clientActionId).toBe(
       first.clientActionId,
     );
     expect(state.failedSendRestoration?.content).toEqual(CONTENT);
   });
 
-  // `-MPLI` through the COMMON door. Confirmation arrives three ways and only
-  // one is a snapshot: a live `queueChanged` fires promptly on the dispatching
-  // connection and is how most queued sends are confirmed. That transition
-  // happens BECAUSE the host's queue reports the message, so it confirms - and
-  // a record left unstamped there resurrects a canceled prompt on the next
-  // reconnect exactly as an unstamped snapshot would.
+  // `-MPLI` through the COMMON door.
   it("stays quiet about a send confirmed by queueChanged and then canceled", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4513,10 +4325,8 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // Door 2: a send still PENDING when a snapshot shows it queued transitions
-  // to accepted BECAUSE of that sighting, so it is confirmed on the way
-  // through. Same rule, third door - and the one an unstamped `false` would
-  // hide behind the other two passing.
+  // Door 2: a send still PENDING when a snapshot shows it queued transitions to accepted BECAUSE of
+  // that sighting, so it is confirmed on the way through.
   it("stays quiet about a send a snapshot confirmed while still pending", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4556,12 +4366,7 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // `-MPLI`: absence stops being evidence once presence has been SEEN. A
-  // queued send the user then cancels is absent from every later snapshot, and
-  // reading that as death pushed the deliberately-discarded prompt back at
-  // them - on top of the copy the cancel UX already put in the composer. The
-  // host queue is durable across restarts, so for an observed send a later
-  // absence can only be a cancel or a consumption; neither is ours to narrate.
+  // `-MPLI`: absence stops being evidence once presence has been SEEN.
   it("stays quiet about a queued send it once saw and the user then canceled", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4664,12 +4469,8 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // `-Jy83`: a `SEND_RESTORED` notice is replayable ON PURPOSE - it can arrive
-  // while the pane is unfocused, and the ring is its ONLY replay source. The
-  // ordinary 32-record cap deleted it before the pane ever came back, so the
-  // qualifications vanished while the restored prompt sat in the composer
-  // ready to resend. It is NOT last-copy (the draft is safe, so no permanent
-  // pin); the axis is different - survive EVICTION until DELIVERED.
+  // `-Jy83`: a `SEND_RESTORED` notice is replayable ON PURPOSE - it can arrive while the pane is
+  // unfocused, and the ring is its ONLY replay source.
   it("keeps a restored-send notice through the cap until the pane sees it", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4721,20 +4522,14 @@ describe("createChatSessionStore", () => {
     flood(0);
     expect(restoredNotice()).toBeDefined();
 
-    // Once the pane has actually shown it, it is ordinary history again and
-    // ages out like anything else - the exemption is a delivery guarantee,
-    // not a permanent pin.
+    // Once the pane has actually shown it, it is ordinary history again and ages out like anything
+    // else - the exemption is a delivery guarantee, not a permanent pin.
     harness.handle.store.getState().markNoticeDelivered(frame.clientActionId);
     flood(1000);
     expect(restoredNotice()).toBeUndefined();
   });
 
-  // `-IfOo`: the qualifications were written to `failedSendRestoration.reason`
-  // and read by NOBODY. `nextHandoffTransition` is that field's only consumer
-  // and both branches are dead ends - `markFailedByAction` routes it to
-  // `InitialChatHandoff.failureReason`, which no component renders, and
-  // `restoreAndAckFailed` drops it. The ack is where the draft lands in the
-  // composer, and the one moment both branches share, so it speaks there.
+  // `-IfOo`: the qualifications were written to `failedSendRestoration.reason` and read by NOBODY.
   it("states why a restored prompt came back when the composer takes it", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4781,10 +4576,7 @@ describe("createChatSessionStore", () => {
     expect(stated[0].severity).toBe("warning");
   });
 
-  // Spoken exactly ONCE - when the rejection's own notice actually REACHED the
-  // user. `-LV77`: deferring to a notice that was merely appended left the
-  // prompt in the composer with silently changed semantics whenever the pane
-  // was unfocused, so the ack now asks the delivery axis rather than assuming.
+  // Spoken exactly ONCE - when the rejection's own notice actually REACHED the user.
   it("does not repeat a rejection's account the user has already seen", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4818,10 +4610,8 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // ...and the other half of `-LV77`: the pane was NOT active, so nothing
-  // showed the rejection notice. Its qualifications must still reach the user,
-  // because the prompt is sitting in the composer ready to resend under a
-  // different model / account / delivery than it was written for.
+  // ...and the other half of `-LV77`: the pane was NOT active, so nothing showed the rejection
+  // notice.
   it("says a rejection's account the user never saw when the draft returns", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4850,9 +4640,8 @@ describe("createChatSessionStore", () => {
     expect(spoken[0].message).toContain("model");
   });
 
-  // The flood case: the rejection notice can be EVICTED before the pane comes
-  // back, so it is not merely unseen but gone. The ack is the backstop either
-  // way, because it asks about delivery rather than about the ring.
+  // The flood case: the rejection notice can be EVICTED before the pane comes back, so it is not
+  // merely unseen but gone.
   it("says the account when the rejection notice was evicted before refocus", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4899,9 +4688,7 @@ describe("createChatSessionStore", () => {
     expect(spoken[0].message).toContain("model");
   });
 
-  // The silence rule's premise is "the user can see why". It holds when their
-  // own pick stands in the slot, so a statement would narrate their own action
-  // back at them - and this is the case that must NOT start speaking.
+  // The silence rule's premise is "the user can see why".
   it("says nothing about a worktree the user re-picked themselves", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4937,10 +4724,7 @@ describe("createChatSessionStore", () => {
     expect(reason).not.toContain("taken by a later message");
     expect(reason).not.toContain("no longer exists");
   });
-  // The same pairing rule, reached through the OTHER door. The sweep's
-  // fallback defers to a prompt handed back by its own pass - but a prompt
-  // handed back by an EARLIER pass is still sitting in the slot, and staging a
-  // swept action's binding under it is the identical mismatch.
+  // The same pairing rule, reached through the OTHER door.
   it("never pairs an earlier restored prompt with a swept action's worktree", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -4982,9 +4766,7 @@ describe("createChatSessionStore", () => {
       }),
     ).not.toBeNull();
 
-    // The reconnect sweeps the edit. No prompt is handed back by THIS pass, so
-    // the sweep's fallback would otherwise stage the edit's pick - underneath
-    // the send's prompt that is still waiting in the slot.
+    // The reconnect sweeps the edit.
     callbacks.onConnectionStatus("reconnecting", null);
     emitSnapshotFrame({
       callbacks,
@@ -5181,12 +4963,7 @@ describe("createChatSessionStore", () => {
     });
   });
 
-  // The restoration slot is a single slot, first-writer-wins. A send that
-  // loses it is DEAD - its ack died with the connection and this snapshot is
-  // authoritative - so it is settled here and now rather than left pending.
-  // Leaving it eligible is what made the same statement re-fire on every later
-  // snapshot, and what let its stale text walk back into the composer after
-  // the user had already resent it.
+  // The restoration slot is a single slot, first-writer-wins.
   it("settles and states a displaced send once, without re-presenting it", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5242,20 +5019,14 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingActions).toEqual({});
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
 
-    // THREAD 1: a second snapshot must not restate it. The action is gone, so
-    // there is nothing left to re-present - the ring keeps one statement
-    // rather than one per snapshot until it evicts unrelated notices.
+    // THREAD 1: a second snapshot must not restate it.
     emitSnapshot(callbacks, "owner");
     emitSnapshot(callbacks, "owner");
 
     expect(noticesFor(second.clientActionId)).toHaveLength(1);
   });
 
-  // Once the row is dropped the notice IS the data, so it inherits the row's
-  // durability. The ring is a capped FIFO built for notice HISTORY, where
-  // eviction lost a pointer and the text survived on screen. Now eviction
-  // would destroy the draft outright - so a last-copy statement is not
-  // evictable history, it is the last copy.
+  // Once the row is dropped the notice IS the data, so it inherits the row's durability.
   it("keeps a last-copy statement when the notice ring overflows", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5318,10 +5089,8 @@ describe("createChatSessionStore", () => {
     ).toBeLessThanOrEqual(MAX_ERROR_NOTICE_RECORDS);
   });
 
-  // The exemption above is only safe because a last-copy record cannot pile
-  // up: one per settled send. Dedupe on insert is what guarantees that, and
-  // it is also the answer to a re-emitting path appending the same statement
-  // forever - the hazard the ring's append-only shape used to carry.
+  // The exemption above is only safe because a last-copy record cannot pile up: one per settled
+  // send.
   it("keeps one last-copy record per send however often it is appended", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5352,10 +5121,8 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(1);
   });
 
-  // R11 `-ApT-`: a multi-workspace intent labelled as "branch a, branch b"
-  // with no workspace association, so a multi-repo staging could not actually
-  // be re-picked. A SINGLE-workspace intent stays unqualified - the workspace
-  // is unambiguous there and naming it would be noise.
+  // R11 `-ApT-`: a multi-workspace intent labelled as "branch a, branch b" with no workspace
+  // association, so a multi-repo staging could not actually be re-picked.
   it("associates each staged branch with its workspace when several are staged", () => {
     const notice = statedNoticeWithIntent({
       entries: [
@@ -5386,11 +5153,8 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("/repo/frontend");
     expect(notice.message).toContain("/repo/backend");
   });
-  // R12 `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
-  // dispatched with no worktree still decides the slot - it just decides it is
-  // empty. Skipping a null claim let a stale edit's binding attach itself to a
-  // prompt that was sent without one: the same wrong-binding hazard as round
-  // 10, reached through the gap in the precedence rule.
+  // R12 `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately dispatched with no
+  // worktree still decides the slot - it just decides it is empty.
   it("leaves the slot empty when the winning prompt carried no worktree", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5449,11 +5213,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
-  // WHICH one. With a dead edit and a dead send both wanting their intent
-  // back, the sweep runs first and the older EDIT claimed the mark - so the
-  // send's recovered prompt landed in the composer bound to the edit's
-  // worktree. Wrong binding is worse than none: the resend looks right.
+  // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not WHICH one.
   it("re-stages the intent belonging to the prompt it handed back", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5516,11 +5276,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
-  // R13 `-BtWD`: the consume-site mirror of round 12's terminal-claim rule. An
-  // intent-FREE send skipped `consumeForDispatch` entirely, so the mark stayed
-  // owned by an earlier edit - and that edit's rejection handed E back even
-  // though a later send had superseded it. A dispatch's state is authoritative
-  // whether or not it took a pick.
+  // R13 `-BtWD`: the consume-site mirror of round 12's terminal-claim rule.
   it("supersedes an outstanding mark even when the send took no pick", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5583,11 +5339,8 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R13 `-BmQF`: the sweep tested the LAST consumption's entries, but a
-  // restoration hands back its OWN action's intent. Send 1 took A; the user
-  // then staged B and send 2 took that, so the mark describes B. A sweep that
-  // removes A leaves the mark untouched - and send 1's prompt comes back with
-  // a worktree that no longer exists.
+  // R13 `-BmQF`: the sweep tested the LAST consumption's entries, but a restoration hands back its
+  // OWN action's intent.
   it("refuses a hand-back whose own worktree was swept, not the last one's", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5618,9 +5371,8 @@ describe("createChatSessionStore", () => {
       { type: "user", userId: OWNER_ID },
       { settings: SETTINGS, deliveryPolicy: "auto" },
     );
-    // A newer pick, consumed by a second send: the mark now describes THIS
-    // one, and the RESTORATION path is deliberately ownerless - so it stages
-    // send 1's own intent while the mark's entries belong to send 2.
+    // A newer pick, consumed by a second send: the mark now describes THIS one, and the RESTORATION
+    // path is deliberately ownerless - so it stages send 1's own intent while the mark's entries
     useWorktreeIntentStagingStore.getState().setIntent(key, {
       entries: [
         {
@@ -5670,11 +5422,8 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R12 `-BZH4`: a third arrival order the claimant rules never saw. The edit
-  // consumed E; the user then staged S and a send consumed THAT, so the slot's
-  // mark now belongs to the send's dispatch. If the edit's rejection lands
-  // first and hands E back, it takes a slot the send still needs AND
-  // overrides a newer pick the user actually made.
+  // R12 `-BZH4`: a third arrival order the claimant rules never saw. The edit consumed E; the user
+  // then staged S and a send consumed THAT, so the slot's mark now belongs to the send's dispatch.
   it("refuses a rejected action's pick when a later dispatch owns the slot", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5743,10 +5492,8 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R12 `-BQcb`: the rejection path refuses the hand-back like the reconnect
-  // paths do, but states things through its own errorNotice rather than
-  // `failedSendRestoration.reason` - so the refusal was silent here while
-  // being spoken everywhere else.
+  // R12 `-BQcb`: the rejection path refuses the hand-back like the reconnect paths do, but states
+  // things through its own errorNotice rather than `failedSendRestoration.reason` - so the refusal
   it("says the worktree is gone on the rejection path too", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5784,12 +5531,8 @@ describe("createChatSessionStore", () => {
     );
   });
 
-  // `-CbBM`: the FOURTH surface. The send is accepted, its worktree is swept,
-  // and a LIVE `turnStateChanged` settles the turn before `messageAccepted`.
-  // The re-stage refuses correctly, but this path reached the refusal through
-  // `restoreStagedWorktreeIntent` directly - never computing the flag - so the
-  // prompt came back unbound with a reason that said only that it was not
-  // recorded. Same rule, fourth surface.
+  // `-CbBM`: the FOURTH surface. The send is accepted, its worktree is swept, and a LIVE
+  // `turnStateChanged` settles the turn before `messageAccepted`.
   it("says the worktree is gone when a live turn settles the send", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -5849,11 +5592,7 @@ describe("createChatSessionStore", () => {
     );
   });
 
-  // `-HVoV`: the displaced-rejection branch. Another rejected send already
-  // holds the restoration slot, so this one is STATED rather than restored -
-  // and the early return into the shared statement builder bypassed the only
-  // branch that reported `worktreeGone`. The statement then told the user to
-  // re-pick a worktree that had been deleted underneath them.
+  // `-HVoV`: the displaced-rejection branch.
   it("does not tell a displaced rejection to re-pick a deleted worktree", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
@@ -5903,11 +5642,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("re-pick that before resending");
   });
 
-  // R13 `-B5UX`: the founding invariant's last uncovered surface. Two sends
-  // rejected together - the first claims the restoration slot, the second's
-  // optimistic row is dropped, and the rejection path appended only the host's
-  // REASON. A dead send neither restored nor stated, on the one path that
-  // never learned the obligation the settle passes learned in rounds 1-4.
+  // R13 `-B5UX`: the founding invariant's last uncovered surface.
   it("states a rejection-displaced send's text, not just the host's reason", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -5966,10 +5701,8 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("Host refused the send");
   });
 
-  // R13 `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
-  // on its pendings while the frame carried the real context - so a
-  // Team-billed first message that stranded would report it was going to bill
-  // personal. A drift statement lying about the very thing it warns about.
+  // R13 `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL on its pendings while
+  // the frame carried the real context - so a Team-billed first message that stranded would report
   it("keeps a seeded send's real billing context", () => {
     useAccountContextStore.setState({
       accountContext: { type: "TEAM", teamId: "team-7" },
@@ -6015,9 +5748,8 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("billing team team-7");
   });
 
-  // R13 `-BmQJ`: delivery is dispatched per send and dies with the action, so
-  // a resend takes whatever the submit gesture implies then - a message queued
-  // to land after a safe point can come back and interrupt instead.
+  // R13 `-BmQJ`: delivery is dispatched per send and dies with the action, so a resend takes
+  // whatever the submit gesture implies then - a message queued to land after a safe point can come
   it("states a non-default delivery the send was queued with", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6061,16 +5793,14 @@ describe("createChatSessionStore", () => {
     );
   });
 
-  // R12 `-A8bF`: billing context is stamped at dispatch and dies with the
-  // action, so a resend bills whatever the picker holds now. Unlike a model
-  // change it leaves no trace in the conversation.
+  // R12 `-A8bF`: billing context is stamped at dispatch and dies with the action, so a resend bills
+  // whatever the picker holds now. Unlike a model change it leaves no trace in the conversation.
   it("states that a resend would bill a different account", () => {
     useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    // Settings must be seeded: the drift clause needs BOTH tuples, and a
-    // snapshot with `settings: null` short-circuits it before billing is
-    // ever compared.
+    // Settings must be seeded: the drift clause needs BOTH tuples, and a snapshot with `settings:
+    // null` short-circuits it before billing is ever compared.
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -6103,11 +5833,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("different settings now");
   });
 
-  // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
-  // the user changes settings and a `turnStateChanged` settles the send before
-  // another snapshot lands, the live composer already holds the new tuple - so
-  // the clause was omitted exactly when the change most worth warning about
-  // had just been made.
+  // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings.
   it("compares drift against the live composer, not the last snapshot", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6155,10 +5881,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("gpt-5-codex");
   });
 
-  // R9 `-AQUm`: `null` is a VALUE - "use the default" - not an absence. A send
-  // dispatched under default effort and settled after the user picked an
-  // explicit one drifts, and dropping the field because its sent value was
-  // null hid exactly that.
+  // R9 `-AQUm`: `null` is a VALUE - "use the default" - not an absence.
   it("states drift from a default to an explicit value", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6189,9 +5912,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("service tier default");
   });
 
-  // R9 `-AQUo`: the exemption's cost must not be paid by ordinary history. The
-  // cap counted TOTAL length, so retained records crowded the ordinary window
-  // down to nothing and an ordinary notice was evicted before it was ever seen.
+  // R9 `-AQUo`: the exemption's cost must not be paid by ordinary history.
   it("keeps the ordinary notice window intact alongside retained records", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6237,9 +5958,8 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(4);
   });
 
-  // R8 `-6Te`: the dead send's run settings die with it, so a resend picks up
-  // whatever the chat uses NOW. A different model changes what the agent does,
-  // silently - same statement-obligation class as the worktree.
+  // R8 `-6Te`: the dead send's run settings die with it, so a resend picks up whatever the chat uses
+  // NOW.
   it("names run settings that moved between dispatch and settle", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6270,10 +5990,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("gpt-5-codex");
     expect(notice.message).toContain("model");
   });
-  // R7 `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
-  // to switch to a LOCAL checkout or to IMPORT an existing worktree settles
-  // with no statement at all today, so the resend runs against the previous
-  // binding - the same silent-wrong-worktree class, two entry kinds over.
+  // R7 `-oRb`: "no branch to re-pick" is not "nothing to state".
   it("names a local workspace a stated send was staged to switch to", () => {
     const notice = statedNoticeWithIntent({
       entries: [
@@ -6288,10 +6005,8 @@ describe("createChatSessionStore", () => {
 
     expect(notice.message).toContain("/repo/service-a");
   });
-  // R7 `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
-  // implemented as "a newer REVISION wins". A second send consuming its own
-  // staged pick advances the revision and then leaves the slot EMPTY - so
-  // nothing live is at risk, yet the winner's binding was suppressed.
+  // R7 `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was implemented as "a newer
+  // REVISION wins".
   it("re-stages the winner's intent when later picks were consumed too", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6350,10 +6065,8 @@ describe("createChatSessionStore", () => {
     ).toEqual(first);
   });
 
-  // R6 `-cbH`: a diagram-only send used to be told it had "no recoverable
-  // content" while its source was deleted. The block is an ATOM - the source
-  // is in `attrs.code`, not in children - so the projection saw nothing, and
-  // classifying it text-complete on top of that was the defect.
+  // The block is an ATOM - the source is in `attrs.code`, not in children - so the projection saw
+  // nothing, and classifying it text-complete on top of that was the defect.
   it("hands back the source of a diagram-only send", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6371,11 +6084,8 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("no recoverable content");
   });
 
-  // R5 `-LSI`: the slot LOSER's worktree. Round 4 gave the winner its binding
-  // back; a send that loses the race is STATED, and its intent dies with the
-  // row. The staging slot is single and the winner holds it, so this cannot be
-  // a restore - it is a statement obligation, and the branch name is the part
-  // worth naming so the user can re-pick it deliberately.
+  // R5 `-LSI`: the slot LOSER's worktree. Round 4 gave the winner its binding back; a send that
+  // loses the race is STATED, and its intent dies with the row.
   it("names the worktree a stated send was going to run in", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6429,9 +6139,6 @@ describe("createChatSessionStore", () => {
   });
 
   // R5 `-LSS`: the quoted draft must be the user's text, not a mangling of it.
-  // `plainTextFromNode` joins a list's children with "", so `foo`/`bar` come
-  // back as `foobar` - the statement tells them to copy something they never
-  // wrote, which is worse than saying nothing.
   it("keeps list-item boundaries in the text it tells the user to copy", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6450,9 +6157,8 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("- foo\n- bar");
   });
 
-  // R5 `-KNQ`: the settled patch is spread into the state object, so its
-  // non-state keys land in the store. They are reconcile plumbing, not state,
-  // and every `useShallow` subscriber compares them forever after.
+  // R5 `-KNQ`: the settled patch is spread into the state object, so its non-state keys land in the
+  // store.
   it("keeps reconcile-only patch keys out of the store state", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6472,10 +6178,6 @@ describe("createChatSessionStore", () => {
     expect(stateKeys).not.toContain("restoredWorktreeIntent");
   });
 
-  // R4-2: a terminal/artifact quote projects through the blockquote branch to
-  // plain quoted text, dropping sourceType/sourceId/sourceEpicId - the
-  // provenance `serializeSourcedQuote` sends to the agent. Second member of
-  // the mention class: projection-loses-invisible-structure.
   it("qualifies a statement whose quoted source loses its provenance", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6492,9 +6194,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("quote");
   });
 
-  // The classification must be TOTAL. A node kind nobody has classified is
-  // exactly the third member of this class, and it has to fail CLOSED - a
-  // generic qualification - rather than pass silently as text-complete.
+  // The classification must be TOTAL.
   it("fails closed on an unrecognized node kind", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6531,13 +6231,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("re-pick");
   });
 
-  // R4-1: a staged worktree/branch choice rides the send, and dispatch clears
-  // the slot. The ACCEPTED ack drops the pending action - `acceptedActions`
-  // does not retain `restoreWorktreeIntent` - so a stop before
-  // `messageAccepted` leaves this pass restoring the prompt with no binding.
-  // Resubmitting would then run against the chat's PREVIOUS worktree: the
-  // silent-local-run `restoreStagedWorktreeIntentForPending` exists to stop,
-  // reached by a third caller that skipped it.
+  // R4-1: a staged worktree/branch choice rides the send, and dispatch clears the slot.
   it("re-stages the worktree intent when a stranded send is restored", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6679,11 +6373,8 @@ describe("createChatSessionStore", () => {
     ).toEqual(newer);
   });
 
-  // R3-1: absence from a snapshot is only evidence for a send dispatched on an
-  // EARLIER connection, where the ack is definitively dead. A send dispatched
-  // after this connection reached `open` can be missing simply because the
-  // snapshot was generated before it arrived - settling on that would tell the
-  // user to resend a message whose accepted ack is still on its way.
+  // R3-1: absence from a snapshot is only evidence for a send dispatched on an EARLIER connection,
+  // where the ack is definitively dead.
   it("keeps a live-epoch send pending when the snapshot predates it", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6759,10 +6450,8 @@ describe("createChatSessionStore", () => {
     expect(noticesForLive()).toEqual([]);
   });
 
-  // R3-2: a mention chip projects to plain `@path`, so the quoted text LOOKS
-  // complete - but the workspace, host and entity binding behind the chip do
-  // not survive, and pasting the text back does not rebuild it. A partial loss
-  // presented as a whole recovery is the same silence one content class over.
+  // R3-2: a mention chip projects to plain `@path`, so the quoted text LOOKS complete - but the
+  // workspace, host and entity binding behind the chip do not survive, and pasting the text back
   it("qualifies a statement whose mention chips lose their binding", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6800,10 +6489,8 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("mention");
   });
 
-  // Attachment loss was detected by text-EMPTINESS, which is a proxy for
-  // "had attachments" and fails on the mixed case: text plus an image quotes
-  // the text and says nothing, so following the advice resends an incomplete
-  // request. Detection has to be structural.
+  // Attachment loss was detected by text-EMPTINESS, which is a proxy for "had attachments" and fails
+  // on the mixed case: text plus an image quotes the text and says nothing, so following the advice
   it("warns about attachments a mixed-content statement cannot carry", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6840,10 +6527,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("attachment");
   });
 
-  // THREAD 3: the statement tells the user to resend. If the displaced action
-  // were still restoration-eligible, freeing the slot would push its stale
-  // text back into the composer AFTER the resend - the notice's own advice
-  // manufacturing a duplicate send.
+  // THREAD 3: the statement tells the user to resend.
   it("does not push a stated send back into the composer once the slot frees", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6931,12 +6615,6 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
   });
 
-  // The settled-turn pass shares the single-slot rule - and unlike the
-  // snapshot path it DROPS the stranded rows, deliberately: an entry that
-  // survives keeps edit/delete gated off and renders a user message the host
-  // never recorded, which is the bug that pass exists to fix. So the row
-  // cannot hold the text here, and the statement has to carry it instead, or
-  // a stranded send that loses the slot is gone with nothing left to recover.
   it("carries the text of every stranded send that loses the slot when the turn settles", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -6953,9 +6631,8 @@ describe("createChatSessionStore", () => {
     // Occupy the slot first, so BOTH stranded sends below lose it.
     send(CONTENT);
     const occupant = rejectLastAction(harness, "Host refused the send.");
-    // Two sends whose accepted ack landed - so they leave `pendingActions`
-    // and only the optimistic row remains - but whose message the host never
-    // appended. Nothing else holds this text.
+    // Two sends whose accepted ack landed - so they leave `pendingActions` and only the optimistic row
+    // remains - but whose message the host never appended. Nothing else holds this text.
     send(SECOND_CONTENT);
     const strandedA = acceptLastAction(harness);
     send(THIRD_CONTENT);
@@ -6991,10 +6668,8 @@ describe("createChatSessionStore", () => {
     expect(noticeFor(strandedB)[0].message).toContain("Third draft");
   });
 
-  // The settled pass has TWO callers - the reconnect snapshot above and the
-  // live `turnStateChanged` frame here - and the live one applies the patch by
-  // SPREADING it. A delta field cannot reach the `errorNotices` state key that
-  // way, so that caller needs its own append and its own coverage.
+  // The settled pass has TWO callers - the reconnect snapshot above and the live `turnStateChanged`
+  // frame here - and the live one applies the patch by SPREADING it.
   it("carries the stranded send's text when a live turnStateChanged settles the turn", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -7040,11 +6715,8 @@ describe("createChatSessionStore", () => {
     ).toBe(true);
   });
   it("keeps an in-flight send pending when a same-connection refresh snapshot omits it", () => {
-    // The host broadcasts snapshots on a live connection for unrelated
-    // reasons (a turn finishing, a pump-backlog backfill). One built before
-    // the host processed this send naturally lacks the message - that is not
-    // evidence the send was lost, and restoring it would re-fill the composer
-    // with a prompt that then lands in the transcript anyway.
+    // The host broadcasts snapshots on a live connection for unrelated reasons (a turn finishing, a
+    // pump-backlog backfill).
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
@@ -9359,9 +9031,8 @@ describe("createChatSessionStore", () => {
       throw new Error("Expected stop frame");
     }
 
-    // The turn-stop ack lands and is accepted - the slot survives, still
-    // awaiting the settled frame, and its clientActionId is no longer a
-    // pending action (so a later reconnect sweep can't clear it that way).
+    // The turn-stop ack lands and is accepted - the slot survives, still awaiting the settled frame,
+    // and its clientActionId is no longer a pending action (so a later reconnect sweep can't clear it
     callbacks.onActionAck({
       kind: "actionAck",
       hasBinaryPayload: false,
@@ -9382,9 +9053,8 @@ describe("createChatSessionStore", () => {
       turnId: "turn-1",
     });
 
-    // The connection drops before `turnStateChanged` reports the turn
-    // settled; the reconnect snapshot is the only signal that arrives, and
-    // it must advance the deferred stop on its own.
+    // The connection drops before `turnStateChanged` reports the turn settled; the reconnect snapshot
+    // is the only signal that arrives, and it must advance the deferred stop on its own.
     callbacks.onConnectionStatus("reconnecting", null);
     emitSnapshotFrame({
       callbacks,
@@ -9508,9 +9178,8 @@ describe("createChatSessionStore", () => {
       throw new Error("Expected stop frame");
     }
 
-    // The turn ends naturally before the turn-stop's rejected ack arrives -
-    // `onTurnStateChanged`'s state-based dispatch already advances to phase
-    // two here, ahead of the ack.
+    // The turn ends naturally before the turn-stop's rejected ack arrives - `onTurnStateChanged`'s
+    // state-based dispatch already advances to phase two here, ahead of the ack.
     callbacks.onTurnStateChanged({
       kind: "turnStateChanged",
       hasBinaryPayload: false,
@@ -9642,9 +9311,8 @@ describe("createChatSessionStore", () => {
       backgroundItems: [ungatedCommand, wakeup],
     });
 
-    // No process-kill frame - the reason for one is gone. The confirmed
-    // "stop my background work" is honored via per-item stops that leave
-    // the wakeup scheduled, matching the confirmation's count.
+    // No process-kill frame - the reason for one is gone. The confirmed "stop my background work" is
+    // honored via per-item stops that leave the wakeup scheduled, matching the confirmation's count.
     expect(
       harness.sent.some((frame) => frame.kind === "stopBackgroundSession"),
     ).toBe(false);
@@ -9703,9 +9371,8 @@ describe("createChatSessionStore", () => {
       turnId: "turn-1",
     });
 
-    // A different turn is now running - a queued send started while the
-    // escalation was in flight. Firing at ITS end would stop work the user
-    // never confirmed stopping.
+    // A different turn is now running - a queued send started while the escalation was in flight.
+    // Firing at ITS end would stop work the user never confirmed stopping.
     const turnTwo: ChatActiveTurn = {
       ...turnOne,
       turnId: "turn-2",
@@ -9849,10 +9516,8 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
-  // The codex analogue of the detached tool_call terminal above: codex
-  // backgrounds a plain `command` block, and its terminal lands as
-  // `command.completed` minutes after the row settled (live-repro: the card
-  // ticked forever and only "cleared" when the next send re-derived state).
+  // The codex analogue of the detached tool_call terminal above: codex backgrounds a plain `command`
+  // block, and its terminal lands as `command.completed` minutes after the row settled (live-repro:
   it("routes a detached background command's terminal to the settled row that owns it", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -9955,15 +9620,6 @@ describe("createChatSessionStore", () => {
     ]);
   });
   // The live turn's OWN cards, which the detached drop must never eat.
-  //
-  // "No message owns this block" is the detached test, and it is satisfied by
-  // two opposite situations: an evicted owner (drop) and a block that does not
-  // exist YET because this very event creates it (keep). The active turn's row
-  // is `liveAssistantMessage` until it materializes, and that is not in
-  // `state.messages` at all - so on a live turn the ownership scan finds
-  // nothing for either one, and reading that as "detached" drops the card at
-  // its birth. Everything after it then has no owner either, so nothing about
-  // the subagent ever renders.
   it("creates the active turn's own subagent card from its first subagent.started", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -10041,11 +9697,8 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
-  // The widest arm of the same seam: a nested event names its owner through
-  // `parentBlockId`, and that owner is MANDATORY - it never falls through. So
-  // for a subagent's own tool activity the live row is the only place its
-  // parent can be found, and not looking there strands every child of a card
-  // the active turn is still building.
+  // The widest arm of the same seam: a nested event names its owner through `parentBlockId`, and
+  // that owner is MANDATORY - it never falls through.
   it("nests a live subagent's own tool call under it", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -10096,11 +9749,8 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
-  // A foreground tool call is the same shape one step over: `tool_call.started`
-  // creates the block on the live row, and its terminal names that block by its
-  // own id with no `parentBlockId`. If the terminal is read as detached the
-  // call spins forever, which is the same defect as the subagent card and not a
-  // separate one.
+  // A foreground tool call is the same shape one step over: `tool_call.started` creates the block on
+  // the live row, and its terminal names that block by its own id with no `parentBlockId`.
   it("completes the active turn's own foreground tool call", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -10141,11 +9791,8 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
-  // The other half of the seam: an update naming a card that genuinely is not
-  // here must still be dropped rather than synthesized under whatever turn is
-  // running. `subagent.progress` and `subagent.completed` both BUILD a card
-  // when none exists (see the accumulator), which is exactly what makes the
-  // fall-through dangerous for them and harmless for `started`.
+  // The other half of the seam: an update naming a card that genuinely is not here must still be
+  // dropped rather than synthesized under whatever turn is running.
   it.each([
     [
       "progress",
@@ -10178,14 +9825,7 @@ describe("createChatSessionStore", () => {
     },
   );
 
-  // The door the opens-its-own-card exemption leaves open, and both sides of
-  // it. The accumulator deliberately accepts a `subagent.started` re-emitted
-  // AFTER its turn completed - Codex resolves the agent nickname
-  // asynchronously and re-emits when it lands - so "no row owns this block" can
-  // mean an evicted row rather than a new card. Nothing on the wire separates
-  // the two: a `blockDelta` carries no turn identity, and the re-emit is the
-  // same event shape as the start. Only the session's memory of what it has
-  // already opened can, so that is what decides it.
+  // The door the opens-its-own-card exemption leaves open, and both sides of it.
   it.each([
     ["subagent", "subagent.started", "subagent.progress"],
     ["workflow", "workflow.started", "workflow.progress"],
@@ -10243,9 +9883,7 @@ describe("createChatSessionStore", () => {
   );
 
   it("still opens a card for a DIFFERENT run started on the later turn", () => {
-    // The direction the memory must not break. A start whose block id this
-    // session has never seen is a first start no matter how many turns have
-    // been and gone, so the later turn's own subagent still gets its card.
+    // The direction the memory must not break.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     startRunningTurn(callbacks);
@@ -10546,13 +10184,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("routes a steer-split carryover block's events to the frozen pre-split row (completes in place, no duplicate)", () => {
-    // A steer delivered mid-thinking splits the turn into two assistant rows
-    // sharing one turnId, with the reasoning block still STREAMING in the
-    // frozen pre-split row. Its remaining deltas + completion must apply to
-    // that row (the block finishes in place above the steer bubble); only a
-    // genuinely NEW block belongs to the continuation row. Without ownership
-    // routing the delta re-materialized the block as a duplicate in the
-    // continuation row while the original froze mid-sentence.
+    // A steer delivered mid-thinking splits the turn into two assistant rows sharing one turnId, with
+    // the reasoning block still STREAMING in the frozen pre-split row.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     const agentSender: Extract<Message, { role: "assistant" }>["sender"] = {
@@ -10859,10 +10492,8 @@ describe("createChatSessionStore", () => {
       60_000,
     );
 
-    // turn.completed CARRIES the final usage forward (instead of
-    // clearing) so the chip doesn't briefly fall back to the prior
-    // turn's persisted usage during the post-completion snapshot gap.
-    // It will be cleared on the next turn.started or snapshot ingest.
+    // turn.completed CARRIES the final usage forward (instead of clearing) so the chip doesn't briefly
+    // fall back to the prior turn's persisted usage during the post-completion snapshot gap.
     callbacks.onBlockDelta({
       kind: "blockDelta",
       hasBinaryPayload: false,
@@ -10992,9 +10623,8 @@ describe("createChatSessionStore", () => {
       "/repo",
     ]);
 
-    // The chat tile's on-focus `worktree.getBinding` recompute finds the folder
-    // restored and syncs the cleared set in — this is what lifts the send
-    // disable without a send or reload.
+    // The chat tile's on-focus `worktree.getBinding` recompute finds the folder restored and syncs the
+    // cleared set in - this is what lifts the send disable without a send or reload.
     harness.handle.store.getState().refreshMissingWorktreePaths([]);
     expect(harness.handle.store.getState().missingWorktreePaths).toEqual([]);
 
@@ -11075,13 +10705,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("takeSetupFailedRestoration recovers content from acceptedActions after messageAccepted clears pendingUserMessages", () => {
-    // Bug guard for the worktree-setup gating restore path. The host
-    // accepts the send (`actionAck` + `messageAccepted`) before
-    // `startProviderTurn` awaits setup. `messageAccepted` clears
-    // `pendingUserMessages`, so the later setup-gating `setup.failed` would
-    // otherwise find nothing to restore. The accepted-action record retains the
-    // original `restore` slot so the composer can still recover the
-    // triggering prompt exactly once.
+    // Bug guard for the worktree-setup gating restore path. The host accepts the send (`actionAck` +
+    // `messageAccepted`) before `startProviderTurn` awaits setup.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
@@ -11144,9 +10769,8 @@ describe("createChatSessionStore", () => {
         .takeSetupFailedRestoration(sent.messageId),
     ).toEqual(CONTENT);
 
-    // The accepted-action record stays in place (so other reconciliation
-    // continues to work) but the restore slot is cleared so a
-    // duplicate setup.failed cannot double-restore.
+    // The accepted-action record stays in place (so other reconciliation continues to work) but the
+    // restore slot is cleared so a duplicate setup.failed cannot double-restore.
     expect(
       harness.handle.store.getState().acceptedActions[sent.clientActionId],
     ).toMatchObject({
@@ -11162,11 +10786,7 @@ describe("createChatSessionStore", () => {
   });
 
   it("takeSetupFailedRestoration recovers content from pendingActions when messageAccepted lands before actionAck", () => {
-    // Race coverage: the host may publish `messageAccepted` ahead of
-    // the `actionAck`. `messageAccepted` clears `pendingUserMessages`
-    // but the still-pending action retains the original
-    // `restore` slot, so a setup-gating `setup.failed` arriving in
-    // this in-between window must still recover the prompt.
+    // Race coverage: the host may publish `messageAccepted` ahead of the `actionAck`.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
@@ -11258,11 +10878,8 @@ describe("createChatSessionStore", () => {
       });
     });
 
-    // The store retains the worktree-aware events in append order; the
-    // in-transcript setup card derives its own view-model from this stream
-    // (covered in setup-card-rows tests). Missing-worktree send-gating no longer
-    // reads this stream — it reads the host-computed `missingWorktreePaths`
-    // field (carried on the snapshot + `worktreeStateChanged`).
+    // The store retains the worktree-aware events in append order; the in-transcript setup card
+    // derives its own view-model from this stream (covered in setup-card-rows tests).
     expect(
       harness.handle.store.getState().events.map((event) => event.eventId),
     ).toEqual([
@@ -11274,13 +10891,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("selectRestorableSetupInterruption surfaces the gating failure even when a transition-only setup.failed lands later", () => {
-    // Bug guard for the setup-failure restore ordering bug: the gating
-    // path emits `setup.failed` with the queued message id, then the
-    // binding-change observer emits a transition-only `setup.failed`
-    // (`messageId: null`) for the same `running → failed` step. Walking
-    // strictly the latest `setup.failed` would shadow the gating event
-    // and break composer restore. The restorable selector keeps the
-    // gating event visible regardless of arrival order.
+    // Bug guard for the setup-failure restore ordering bug: the gating path emits `setup.failed` with
+    // the queued message id, then the binding-change observer emits a transition-only `setup.failed`
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshotWithWorktree(callbacks, [], null);
@@ -11337,9 +10949,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("selectRestorableSetupInterruption returns null when no setup interruption carries a messageId", () => {
-    // A bare binding-transition `setup.failed` (e.g. setup blew up while
-    // no message was queued) carries `messageId: null`. There is nothing
-    // to restore in that case - the restorable selector must report null.
+    // A bare binding-transition `setup.failed` (e.g. setup blew up while no message was queued)
+    // carries `messageId: null`.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshotWithWorktree(callbacks, [], null);
@@ -11362,11 +10973,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("selectRestorableSetupInterruption clears once a retry transitions setup back to running", () => {
-    // A `setup.running` for the same workspace means the user (or the
-    // orchestrator) has retried setup; the prior gating failure is no
-    // longer the active recovery path so the restorable selector must
-    // drop it. A fresh gating failure later in the chain re-arms the
-    // selector.
+    // A `setup.running` for the same workspace means the user (or the orchestrator) has retried setup;
+    // the prior gating failure is no longer the active recovery path so the restorable selector must
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshotWithWorktree(callbacks, [], null);
@@ -11431,9 +11039,8 @@ describe("createChatSessionStore", () => {
   });
 
   it("selectRestorableSetupInterruption clears a failed setup once setup is cancelled for the same workspace", () => {
-    // Cancellation supersedes the gating failure - the message is back
-    // on the queue (per `handleSetupGatingError`), so composer restore
-    // must not retrigger when a cancel arrives between snapshots.
+    // Cancellation supersedes the gating failure - the message is back on the queue (per
+    // `handleSetupGatingError`), so composer restore must not retrigger when a cancel arrives between
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshotWithWorktree(callbacks, [], null);
@@ -11557,14 +11164,8 @@ describe("createChatSessionStore", () => {
     });
   });
 
-  // ─── On the windowed line the host has already answered ─────────────────
-  //
-  // The one consumer in the `state.messages` sweep with NO client-side repair.
-  // The event this comes from occupies no ordinal, so it is in no row's record
-  // set: `sliceTranscriptTail` never carries it and `loadRange` - addressed by
-  // ordinal - cannot ask for it. `state.events` never receives it however much
-  // the client hydrates, so the scan above is not "degraded over a window", it
-  // is permanently blind. It rides the snapshot instead.
+  // ─── On the windowed line the host has already answered ───────────────── The one consumer in the
+  // `state.messages` sweep with NO client-side repair.
 
   it("takes the host's derived interruption when the events array cannot hold it", () => {
     expect(
@@ -11597,11 +11198,7 @@ describe("createChatSessionStore", () => {
   });
 
   it("reports the host's null rather than re-running the scan over a window", () => {
-    // Not a `??` chain. `restorableSetupInterruption: null` inside a derived
-    // payload is an ANSWER - "nothing to restore", the ordinary case - so a
-    // stray hydrated event must not override the party that read the whole
-    // event log. Falling through here would restore a draft the user never
-    // lost, which is the failure this whole selector exists to avoid.
+    // Not a `??` chain.
     expect(
       selectRestorableSetupInterruption({
         events: [
@@ -11631,14 +11228,8 @@ describe("createChatSessionStore", () => {
     ).toBeNull();
   });
 
-  // ─── ... but the host's answer is a snapshot, not a subscription ─────────
-  //
-  // The derived value states the answer as of the frame it rode in on. A setup
-  // failure that happens NEXT reaches this client as an `eventAppended` with no
-  // snapshot behind it - `appendLiveRecords` seats a record with no ordinal in
-  // `window.liveEvents`, which is exactly the "later than the baseline" set.
-  // Without the fold the composer stops restoring drafts for every mid-session
-  // failure until something unrelated forces a resnapshot.
+  // ─── ... but the host's answer is a snapshot, not a subscription ───────── The derived value
+  // states the answer as of the frame it rode in on.
 
   function derivedWith(
     restorableSetupInterruption: RestorableSetupInterruption | null,
@@ -11743,9 +11334,8 @@ interface ManualCoordinator {
 }
 
 /**
- * Deterministic stand-in for the production coordinator: nothing flushes
- * until `runAll()` (one manual "tick"), mirroring how a single armed frame
- * serves every buffered store.
+ * Deterministic stand-in for the production coordinator: nothing flushes until `runAll()` (one
+ * manual "tick"), mirroring how a single armed frame serves every buffered store.
  */
 function createManualCoordinator(): ManualCoordinator {
   const registrations = new Set<StreamFlushRegistrationInput>();
@@ -11869,15 +11459,8 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
 }
 
 /**
- * Settle turn 1 into a row, EVICT that row, and start turn 2.
- *
- * Both halves matter and neither can be skipped. Seating the settled row is
- * what releases `liveAssistantMessage` (`liveAssistantCoveredByMessages`
- * matches it by `turnId`); without it the live row is re-stamped onto the new
- * turn and carries its blocks along, so the old card is still owned and the
- * detached path is never reached. Dropping the row on the next snapshot is
- * eviction as this reducer sees it: `state.messages` is what is HYDRATED, and a
- * row outside the retained window is simply not in it.
+ * Settle turn 1 into a row, EVICT that row, and start turn 2. Both halves matter and neither can
+ * be skipped.
  */
 function settleTurnAndEvictItsRow(callbacks: ChatStreamCallbacks): void {
   const settled: Extract<Message, { role: "assistant" }> = {
@@ -12115,12 +11698,8 @@ describe("blockDelta coalescing", () => {
   });
 
   it("publishes a pending interview only once its streaming block is observable", () => {
-    // The host emits the interview's `blockDelta` before the
-    // `interviewRequested` frame, but the delta sits in the coalescing buffer
-    // until the next tick. If the pending id lands first, a host-pending
-    // interview is briefly visible with no `streaming` segment - which
-    // `findUnanswerableInterviews` reads as permanently stuck and offers to
-    // dismiss, cancelling a live question mid-Q&A.
+    // The host emits the interview's `blockDelta` before the `interviewRequested` frame, but the delta
+    // sits in the coalescing buffer until the next tick.
     const harness = createCoalesceHarness();
     const callbacks = harness.callbacks();
     startRunningTurn(callbacks);
@@ -12342,9 +11921,8 @@ describe("in-flight block finalization on stop / steer", () => {
     startToolCall(callbacks);
     expect(liveToolStatus(harness)).toBe("streaming");
 
-    // Turn settles to no active turn WITHOUT a terminal blockDelta - the drop
-    // this fix guards against. Materializing the live row must finalize the
-    // tool so it never freezes "in progress".
+    // Turn settles to no active turn WITHOUT a terminal blockDelta - the drop this fix guards against.
+    // Materializing the live row must finalize the tool so it never freezes "in progress".
     callbacks.onTurnStateChanged({
       kind: "turnStateChanged",
       hasBinaryPayload: false,
@@ -12413,11 +11991,8 @@ describe("in-flight block finalization on stop / steer", () => {
   });
 });
 
-// Non-message pendings (stop / approvalDecision / restoreCheckpoint /
-// background stops) are cleared only by their actionAck - which dies with a
-// dropped connection. The authoritative post-reconnect snapshot must settle
-// them so their controls re-enable and the action can be re-issued; the
-// disconnect event itself must settle nothing.
+// Non-message pendings (stop / approvalDecision / restoreCheckpoint / background stops) are
+// cleared only by their actionAck - which dies with a dropped connection.
 describe("non-message pendings across a missed-ack reconnect", () => {
   function pendingActionKinds(harness: Harness): string[] {
     return Object.values(harness.handle.store.getState().pendingActions).map(
@@ -12467,9 +12042,6 @@ describe("non-message pendings across a missed-ack reconnect", () => {
     emitSnapshot(harness.callbacks(), "owner");
     const store = harness.handle.store;
 
-    // An edit's fresh messageId only appears in the snapshot if the host
-    // applied it, and it has no composer-restoration path - so a lost frame
-    // would previously wedge the edit affordances forever.
     expect(
       store.getState().editUserMessage({
         targetMessageId: "msg-1",
@@ -12710,9 +12282,8 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     ]);
     expect(harness.nudgeCount()).toBe(1);
 
-    // A second headless failure lands during a disconnect; the reconnect
-    // snapshot is its only signal, so the store must nudge again - a
-    // store-lifetime latch would leave the provider gate stale here.
+    // A second headless failure lands during a disconnect; the reconnect snapshot is its only signal,
+    // so the store must nudge again - a store-lifetime latch would leave the provider gate stale here.
     harness.callbacks().onConnectionStatus("reconnecting", null);
     emitMessagesSnapshot(harness.callbacks(), [
       authErroredAssistantMessage("assistant-auth-1", "auth"),
@@ -12782,9 +12353,8 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     });
     expect(harness.nudgeCount()).toBe(1);
 
-    // The turn's own persisted row (same turnId) then arrives via snapshot -
-    // a reconnect, or the same connection catching up. It must NOT re-nudge:
-    // it is the SAME failure the live path already reported.
+    // The turn's own persisted row (same turnId) then arrives via snapshot - a reconnect, or the same
+    // connection catching up.
     emitMessagesSnapshot(callbacks, [
       {
         role: "assistant",
@@ -12996,9 +12566,8 @@ describe("turn-settled stranded-send reconciliation", () => {
     acceptLastAction(harness);
     callbacks.onConnectionStatus("reconnecting", null);
 
-    // The send did land host-side; the lost frame was `messageAccepted`, not
-    // the message itself. The persisted row is authoritative - no composer
-    // restoration.
+    // The send did land host-side; the lost frame was `messageAccepted`, not the message itself. The
+    // persisted row is authoritative - no composer restoration.
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -13085,9 +12654,8 @@ describe("the chat's managed commands", () => {
   });
 
   it("fills in from a frame after a snapshot that arrived empty", () => {
-    // The host's boot window: the subsystem has not enumerated yet, so the
-    // snapshot honestly carries nothing and the frame follows. Both are plain
-    // assignments - neither needs to know about the other.
+    // The host's boot window: the subsystem has not enumerated yet, so the snapshot honestly carries
+    // nothing and the frame follows.
     const harness = seededHarness([]);
     expect(harness.handle.store.getState().managedCommands).toEqual([]);
 
@@ -13222,21 +12790,16 @@ describe("the chat's held updates", () => {
     harness.handle.dispose();
   });
 
-  // The chat and epic guards above both pass for a frame from the RIGHT chat
-  // on a stream this store has already replaced, which is the one a retry
-  // produces: the old client is torn down but its in-flight frames still land.
-  // A hold is durable state a human acts on, so a stale set installing rows
-  // here would offer a Deliver for holds the new stream never named - or, on a
-  // stale empty frame, quietly take a live one off screen.
+  // A hold is durable state a human acts on, so a stale set installing rows here would offer a
+  // Deliver for holds the new stream never named - or, on a stale empty frame, quietly take a live
   it("ignores a held-updates frame from a superseded stream", () => {
     const harness = seededHarness([held({ commandId: "cmd-1" })]);
     const staleCallbacks = harness.callbacks();
 
     harness.handle.store.getState().retry();
 
-    // The empty frame is the sharp one: a retry cancels nothing, so the hold
-    // is still standing, and honouring a stale "nothing is held" would take
-    // the Deliver affordance off screen while the hold outlived the socket.
+    // The empty frame is the sharp one: a retry cancels nothing, so the hold is still standing, and
+    // honouring a stale "nothing is held" would take the Deliver affordance off screen while the hold
     staleCallbacks.onHeldUpdatesChanged({
       kind: "heldUpdatesChanged",
       hasBinaryPayload: false,

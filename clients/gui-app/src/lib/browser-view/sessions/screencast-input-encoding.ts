@@ -10,9 +10,8 @@ const POINTER_CLICK_COUNT_WINDOW_MS = 500;
 const POINTER_CLICK_COUNT_MAX = 8;
 
 /**
- * The input half of the `browser.screencast` client protocol: DOM events in,
- * unsequenced client frames out. `armEpoch` / `seq` are stamped by the
- * session that owns the arm handshake, so nothing here is stateful.
+ * The input half of the `browser.screencast` client protocol: DOM events in, unsequenced client frames out.
+ * `armEpoch` / `seq` are stamped by the session that owns the arm handshake, so nothing here is stateful.
  */
 export type ScreencastPointerInput = Omit<
   Extract<BrowserScreencastClientFrame, { readonly kind: "pointer" }>,
@@ -54,11 +53,8 @@ export interface ScreencastFrameSize {
 }
 
 /**
- * Where the agent driving a tab last pointed. Lives beside
- * {@link ScreencastFrameSize} because the two are read together: the overlay
- * maps this through that geometry, the exact inverse of the pointer path
- * below. Every screencast surface produces one - the tile from its session,
- * PiP from its own subscription - so it cannot belong to either.
+ * Where the agent driving a tab last pointed.
+ * Lives beside {@link ScreencastFrameSize} because the two are read together: the overlay maps this through that geometry, the exact inverse of the pointer path below.
  */
 export interface AgentCursorPosition {
   readonly type: BrowserScreencastAgentCursorType;
@@ -71,9 +67,8 @@ export interface AgentCursorPosition {
 }
 
 /**
- * The pointer shape the encoder reads. Named and exported because a translated
- * gesture - a finger drag re-expressed as a wheel - has no DOM event that
- * carries the right `button` / `buttons`, and must supply them itself.
+ * The pointer shape the encoder reads.
+ * Named and exported because a translated gesture - a finger drag re-expressed as a wheel - has no DOM event that carries the right `button` / `buttons`, and must supply them itself.
  */
 export interface PointerLike {
   readonly clientX: number;
@@ -102,17 +97,15 @@ interface ScreencastPointerFrameRequest {
   readonly deltaY: number;
   readonly clickCount: number;
   /**
-   * The surface the coordinates were taken against, as one number the host
-   * compares back: the painted frame's sequence on the JPEG plane, the host's
-   * viewport epoch on the video plane. `null` means the tile has nothing
-   * correlatable to click on yet, so no frame is built at all.
+   * The surface the coordinates were taken against, as one number the host compares back: the painted frame's sequence on the JPEG plane, the host's viewport epoch on the video plane.
+   * `null` means the tile has nothing correlatable to click on yet, so no frame is built at all.
    */
   readonly correlationToken: number | null;
   /** Which plane's token {@link correlationToken} is, for the wire's two fields. */
   readonly captureMode: BrowserScreencastCaptureMode;
   /**
-   * The element the plane paints into - `<img>` on the JPEG plane, `<video>`
-   * on the video plane. Only its box is read, so the union stays `HTMLElement`.
+   * The element the plane paints into - `<img>` on the JPEG plane, `<video>` on the video plane.
+   * Only its box is read, so the union stays `HTMLElement`.
    */
   readonly surface: HTMLElement | null;
   readonly frameSize: ScreencastFrameSize | null;
@@ -147,9 +140,8 @@ export function buildScreencastPointerFrame(
 }
 
 /**
- * Multi-click accumulation. A press continues the previous one only while it
- * shares the button and stays inside the arm buffer's click slop, so a drag
- * never reads as a double click.
+ * Multi-click accumulation.
+ * A press continues the previous one only while it shares the button and stays inside the arm buffer's click slop, so a drag never reads as a double click.
  */
 export function nextPointerClickCount(
   previous: PointerClickCount | null,
@@ -213,13 +205,7 @@ export function isScreencastModChord(
 }
 
 /**
- * The box a frame actually paints inside a surface of `box`, under the
- * `object-contain` letterboxing both display planes use - null when the
- * surface has no area yet.
- *
- * Shared by the two directions this mapping runs in: pointer input out
- * (below) and the agent ghost cursor back in (`agent-cursor-overlay.tsx`).
- * They must stay exact inverses, so they read the same box.
+ * The box a frame actually paints inside a surface of `box`, under the `object-contain` letterboxing both display planes use - null when the surface has no area yet.
  */
 function containFit(
   box: { readonly width: number; readonly height: number },

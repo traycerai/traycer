@@ -7,11 +7,7 @@ import type { Reachability } from "./reachability";
 
 /**
  * pid.json identity fields the probe cares about.
- *
- * `startedAt` is readiness publication time (existing field).
- * `processStartTimeMs` is the OS process start time (D1 / Windows annex §1.5
- * creation-time reader). Records written by shipped versions lack it —
- * absence is `null`, never a decode failure.
+ * Records written by shipped versions lack it - absence is `null`, never a decode failure.
  */
 export type HostPidMetadata = {
   readonly pid: number;
@@ -22,17 +18,15 @@ export type HostPidMetadata = {
   /** Milliseconds since epoch; null when the field is absent (legacy). */
   readonly processStartTimeMs: number | null;
   /**
-   * The kernel's own creation stamp for the publishing process, immune to
-   * wall-clock adjustment. Null when absent (legacy) or malformed, which
-   * means "cannot compare identity" and never "different process".
+   * The kernel's own creation stamp for the publishing process, immune to wall-clock adjustment.
+   * Null when absent (legacy) or malformed, which means "cannot compare identity" and never "different process".
    */
   readonly processStartIdentity: ProcessStartIdentity | null;
 };
 
 /**
- * Platform-shared host process evidence. `pidMetadata` uses Evidence so
- * corrupt / unreadable bytes never become "absent" for the planner.
- * (Cause is a free string here; platform wrappers rebind as needed.)
+ * Platform-shared host process evidence.
+ * `pidMetadata` uses Evidence so corrupt / unreadable bytes never become "absent" for the planner.
  */
 export type HostProcessEvidence = {
   readonly pidMetadata: Evidence<HostPidMetadata>;
@@ -43,7 +37,7 @@ export type HostProcessEvidence = {
 
 /**
  * Attempt-scoped readiness rungs (plan F10). T3 only carries the evidence
- * shape — rung acceptance policy is the readiness oracle (later tickets).
+ * shape - rung acceptance policy is the readiness oracle (later tickets).
  */
 export type AttemptReadiness =
   | { readonly kind: "no-attempt" }
@@ -73,13 +67,8 @@ export type ReadinessRung =
   | "pid-metadata"
   | "endpoint";
 
-/** Closed causes for pid.json decode — mapped to platform unions at probe edge. */
 export type PidMetadataDecodeCause = "corrupt" | "malformed" | "unreadable";
 
-/**
- * Pure decode of pid.json text → Evidence. Does not throw; corrupt JSON
- * becomes indeterminate("corrupt"), missing fields indeterminate.
- */
 export function decodeHostPidMetadata(
   text: string | null,
   readError: string | null,
@@ -110,7 +99,7 @@ export function decodeHostPidMetadata(
     return { kind: "indeterminate", cause: "malformed" };
   }
   // processStartTimeMs is additive (D1). Missing or non-number → null so
-  // the creation-time reader is simply unavailable — never corrupt/malformed.
+  // the creation-time reader is simply unavailable - never corrupt/malformed.
   const processStartTimeMs =
     typeof obj.processStartTimeMs === "number" &&
     Number.isFinite(obj.processStartTimeMs)
@@ -132,7 +121,6 @@ export function decodeHostPidMetadata(
   };
 }
 
-/** Map shared pid decode causes onto a platform indeterminate union arm. */
 export function mapPidMetadataEvidence<Cause extends string>(
   evidence: Evidence<HostPidMetadata, PidMetadataDecodeCause>,
   mapCause: (cause: PidMetadataDecodeCause) => Cause,

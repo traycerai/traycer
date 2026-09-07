@@ -13,10 +13,7 @@ import {
   type BuildArtifactExtensionsParams,
 } from "../extensions/build-artifact-extensions";
 
-/**
- * `AnyExtension.options` is `any`; read the one option under test through a
- * narrowing so the assertions compare real values rather than `any`.
- */
+/** `AnyExtension.options` is `any`; read the one option under test through a narrowing so the assertions compare real values rather than `any`. */
 function markedOptionOf(extension: AnyExtension): unknown {
   const options: unknown = extension.options;
   if (typeof options !== "object" || options === null) return undefined;

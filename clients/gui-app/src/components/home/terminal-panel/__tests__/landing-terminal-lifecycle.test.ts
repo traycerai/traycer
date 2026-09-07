@@ -511,9 +511,8 @@ describe("landing terminal lifecycle", () => {
     // Adoption folds straight into `tabs` too - there was nothing to merge
     // against.
     expect(result.tabs).toEqual(result.adoptedTabs);
-    // Not the cwd-derived default title a plain adoption of this identical
-    // session produces below - the marker name replaces it entirely rather
-    // than decorating it.
+    // Not the cwd-derived default title a plain adoption of this identical session produces below - the marker
+    // name replaces it entirely rather than decorating it.
     expect(result.adoptedTabs[0]?.name).not.toBe("project · New Terminal");
   });
 
@@ -545,9 +544,8 @@ describe("landing terminal lifecycle", () => {
       providerLoginProviderFor: () => null,
     });
 
-    // Same session as the sign-in test above; only providerLoginProviderFor's
-    // answer differs, and behaviour is exactly the pre-existing adoption path:
-    // cwd-derived default title, no origin/originProviderId.
+    // Same session as the sign-in test above; only providerLoginProviderFor's answer differs, and behaviour is
+    // exactly the pre-existing adoption path: cwd-derived default title, no origin/originProviderId.
     expect(result.adoptedTabs).toEqual([
       {
         ...tab({
@@ -561,10 +559,8 @@ describe("landing terminal lifecycle", () => {
   });
 
   it("reclassifies an already-MATCHED ordinary tab once its sign-in provenance arrives", () => {
-    // The tab this window adopted BEFORE it was told what the session is: the
-    // peer's `storage` write had not landed yet, so the first pass adopted it
-    // plain. From then on the session is matched, so the adoption branch never
-    // sees it again - only the matched arm can recover it.
+    // From then on the session is matched, so the adoption branch never sees it again - only the matched arm can
+    // recover it.
     const result = reconcileLandingTerminalTabs({
       tabs: [
         tab({
@@ -646,10 +642,8 @@ describe("landing terminal lifecycle", () => {
       ],
       activeInstanceId: "already-adopted",
       activeHostId: HOST_A,
-      // Exited, which for an ordinary tab means "drop it". The exit check has
-      // to read the CLASSIFIED tab, not the raw one, or the sign-in tab is
-      // retracted on the very pass that identified it - taking its "Start
-      // again" button with it.
+      // The exit check has to read the classified tab, not the raw one, or the sign-in tab is retracted on the very
+      // pass that identified it - taking its "Start again" button with it.
       sessions: [session({ sessionId: "signin-session", status: "exited" })],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "unused-instance",
@@ -679,8 +673,8 @@ describe("landing terminal lifecycle", () => {
       sessions: [session({ sessionId: "signin-session", status: "running" })],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "adopted-instance",
-      // Deliberately answers for every id: the classifier is only ever asked
-      // about the ACTIVE host's sessions, and the hook binds it to that host.
+      // Deliberately answers for every id: the classifier is only ever asked about the active host's sessions, and
+      // the hook binds it to that host.
       providerLoginProviderFor: () => "reasonix",
     });
 
@@ -732,12 +726,8 @@ describe("landing terminal lifecycle", () => {
       providerLoginProviderFor: () => null,
     });
 
-    // The persisted record above carries no provenance, so this also pins the
-    // back-compat reading, which is conservative in opposite directions per
-    // field: unacknowledged, withholding the clear-on-absent-projection
-    // shortcut rather than granting it; and possibly mid-create, so a
-    // `killed: false` answer cannot retire it before the bounded reprieve is
-    // spent.
+    // The persisted record above carries no provenance, so this also pins the back-compat reading, which is
+    // conservative in opposite directions per field.
     expect(restored.pendingKills).toEqual([
       {
         hostId: HOST_A,
@@ -773,9 +763,8 @@ describe("landing terminal lifecycle", () => {
         sessionId: "ended-signin",
         hostId: HOST_A,
       }),
-      // Real sign-in tabs are always titleSource "manual" (see
-      // `openLandingSignInTerminal`), which also isolates this test from the
-      // default-title rename path exercised elsewhere in this file.
+      // Real sign-in tabs are always titleSource "manual" (see `openLandingSignInTerminal`), which also isolates
+      // this test from the default-title rename path exercised elsewhere in this file.
       titleSource: "manual",
       origin: "provider-login",
       originProviderId: "reasonix",
@@ -787,9 +776,8 @@ describe("landing terminal lifecycle", () => {
       sessions: [session({ sessionId: "ended-signin", status: "exited" })],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "unused",
-      // This session is already matched to `signInTab` above, so adoption's
-      // `providerLoginProviderFor` is never consulted for it - this test is
-      // about the exited-tab survival rule, not adoption.
+      // This session is already matched to `signInTab` above, so adoption's `providerLoginProviderFor` is never
+      // consulted for it - this test is about the exited-tab survival rule, not adoption.
       providerLoginProviderFor: () => null,
     });
 
@@ -984,9 +972,8 @@ describe("adoptListedProviderLoginSessions", () => {
       providerLoginProviderFor,
     });
 
-    // The ordinary session is left alone: on a capable host the plain
-    // projection is the authority over it, and adopting it from the list
-    // would race that arm with a second, unacknowledged tab.
+    // The ordinary session is left alone: on a capable host the plain projection is the authority over it, and
+    // adopting it from the list would race that arm with a second, unacknowledged tab.
     expect(adopted).toEqual([
       {
         instanceId: "adopted-signin-instance",
@@ -1017,8 +1004,7 @@ describe("adoptListedProviderLoginSessions", () => {
       providerLoginProviderFor,
     });
 
-    // Reclassifying that tab is the reconciliation pass's job
-    // (`classifyLandingTab`); this only fills an ABSENCE.
+    // Reclassifying that tab is the reconciliation pass's job (`classifyLandingTab`); this only fills an absence.
     expect(adopted).toEqual([]);
   });
 
@@ -1038,11 +1024,8 @@ describe("adoptListedProviderLoginSessions", () => {
   });
 
   it("never adopts an EXITED session, even a registry-claimed one - an ended tab belongs to the window that had it", () => {
-    // The host lists an exited sign-in through a grace window and evicts it
-    // on `terminal.kill`, so which exited retry is "the one" changes with
-    // every close; every rule built on that resurrected some retry. The
-    // window that opened the sign-in keeps its ended tab through the exit
-    // (the matched arm); any other window starts fresh from the picker.
+    // The host lists an exited sign-in through a grace window and evicts it on `terminal.kill`, so which exited
+    // retry is "the one" changes with every close; every rule built on that resurrected some retry.
     const adopted = adoptListedProviderLoginSessions({
       tabs: [],
       activeHostId: HOST_A,
@@ -1205,9 +1188,8 @@ describe("retiredProviderLoginPredecessors", () => {
           sessionId: "signin-live",
           providerId: "reasonix",
         }),
-        // Aged out of the grace listing entirely, and nothing newer listed
-        // for its provider: the ended tab stays, it is still the restart
-        // surface.
+        // Aged out of the grace listing entirely, and nothing newer listed for its provider: the ended tab stays, it
+        // is still the restart surface.
         signInTab({
           instanceId: "copilot-absent",
           sessionId: "copilot-gone",
@@ -1250,12 +1232,8 @@ describe("retiredProviderLoginPredecessors", () => {
   });
 
   it("a tombstoned RUNNING successor still retires its predecessor, and retiring the last tab collapses the panel", () => {
-    // The user closed the running successor here; its kill is in flight and
-    // the host still lists it running. The exited predecessor stays retired
-    // (it is not coming back), nothing is adopted (the successor is
-    // tombstoned), and the pass ends with no tabs - which must collapse the
-    // panel, or the settlement's empty-panel path spawns a plain shell right
-    // after the user closed the sign-in.
+    // The exited predecessor stays retired (it is not coming back), nothing is adopted (the successor is
+    // tombstoned), and the pass ends with no tabs.
     const sessions = [
       session({ sessionId: "signin-old", status: "exited" }),
       session({ sessionId: "signin-new", status: "running" }),
@@ -1414,9 +1392,8 @@ describe("adoptHostTerminal", () => {
       },
     });
 
-    // Matched on instanceId + hostId only: importLegacy's canonical winner may
-    // carry a different terminalId than the legacy evidence sent, and this is
-    // exactly the pointer swap `adoptHostTerminal` must still perform.
+    // Matched on instanceId + hostId only: importLegacy's canonical winner may carry a different terminalId than
+    // the legacy evidence sent, and this is exactly the pointer swap `adoptHostTerminal` must still perform.
     useLandingTerminalStore.getState().adoptHostTerminal("local", canonical);
 
     expect(useLandingTerminalStore.getState().tabs).toEqual([
@@ -1493,9 +1470,8 @@ describe("reconcileHostAuthoritativeLandingTerminalTabs identity reuse", () => {
       providerLoginProviderFor: () => null,
     });
 
-    // Stream frames bump `projectionSequence` constantly, so an object
-    // rebuilt on every pass would re-render every tab consumer for data that
-    // never actually changed.
+    // Stream frames bump `projectionSequence` constantly, so an object rebuilt on every pass would re-render every
+    // tab consumer for data that never actually changed.
     expect(second.tabs[0]).toBe(first);
 
     const renamed = plainTerminal({
@@ -1524,12 +1500,8 @@ describe("reconcileHostAuthoritativeLandingTerminalTabs identity reuse", () => {
   });
 });
 
-/**
- * The tombstone's provenance is what lets the drain tell an absent plain
- * projection apart from a dead session. These pin the mapping itself, so the
- * shape assertions in the drain suites are reading a spec rather than a
- * tautology.
- */
+/** These pin the mapping itself, so the shape assertions in the drain suites are reading a spec rather than a
+ * tautology. */
 describe("close tombstone provenance", () => {
   // Tombstones are durable by design, so they survive into the next test unless
   // the store is reset - and a leaked one reads as this test having written two.
@@ -1565,8 +1537,8 @@ describe("close tombstone provenance", () => {
 
     store.closeTab("draft-a", "new");
 
-    // The session id is the one the CLIENT handed `terminal.plain.create`, so
-    // the terminal that lands after this close is exactly the one named here.
+    // The session id is the one the client handed `terminal.plain.create`, so the terminal that lands after this
+    // close is exactly the one named here.
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       {
         hostId: HOST_A,
@@ -1596,19 +1568,8 @@ describe("close tombstone provenance", () => {
   });
 
   it("parses a tombstone written before provenance existed conservatively on BOTH fields", () => {
-    // The conservative reading on purpose - and the two fields are conservative
-    // in OPPOSITE directions.
-    //
-    // Acknowledgement defaults to `false`: defaulting it to `true` would hand
-    // every pre-existing tombstone the clear-on-absent-projection shortcut this
-    // change exists to withdraw.
-    //
-    // `pendingCreate` defaults to TRUE, because it is what buys the reprieve on
-    // a `killed: false` answer. At `false`, a record persisted by an older build
-    // while its `terminal.plain.create` was still in flight would be cleared by
-    // the first "already gone" answer after the update, and the create landing
-    // afterwards leaves a live PTY with nothing owed against it. Only ABSENCE
-    // means unknown; an explicit `false` is believed.
+    // Acknowledgement defaults to `false`: defaulting it to `true` would hand every pre-existing tombstone the
+    // clear-on-absent-projection shortcut this change exists to withdraw.
     const restored = parsePersistedLandingTerminalState({
       tabs: [],
       activeInstanceId: null,

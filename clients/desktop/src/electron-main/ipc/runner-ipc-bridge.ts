@@ -116,10 +116,6 @@ import type {
   UninstallOk,
 } from "../host/host-controller-types";
 
-/**
- * Minimal window surface the bridge needs. Declaring it structurally lets
- * unit tests pass a plain double without constructing a `BrowserWindow`.
- */
 export interface IpcManagedWindow {
   isDestroyed(): boolean;
   isFocused(): boolean;
@@ -197,12 +193,6 @@ export interface IpcPerWindowState {
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
 }
 
-/**
- * Read-only view of the shell's quit lifecycle. The concrete `ShellQuitState`
- * (main-process startup) structurally satisfies this. The windows registry-change
- * listener consults it so a `closed` event that is part of a quit does not prune
- * the per-window restore snapshot.
- */
 export interface IpcShellQuitState {
   isQuitting(): boolean;
 }
@@ -214,21 +204,11 @@ type IpcAuthSessionChangeListener = (
 export interface IpcDesktopAuthSession {
   get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
-  /**
-   * Adopts a session whose bearer main verified itself. Only the auth IPC,
-   * which runs the verification, calls it.
-   */
   setVerified(snapshot: DesktopAuthSessionSnapshot): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }
 
-/**
- * Minimal main-process token-store surface the auth IPC drives (tech plan §3).
- * The concrete `FileTokenStore` structurally satisfies it. `subscribe` returns
- * an unsubscribe thunk (registered on `disposeFns`); `dispose` tears down the
- * underlying credentials mutation store.
- */
 export interface IpcAuthTokenStore {
   get(): Promise<StoredCredentials | null>;
   signIn(
@@ -261,10 +241,6 @@ export interface IpcZoomController {
 export interface IpcSupportService {
   getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
-  // `frozenEvidenceKey` is composed in the IPC layer (support-ipc.ts) from
-  // the sender's webContents id + the renderer-local draftId - a draftId
-  // alone is only unique within one renderer realm, and this service is one
-  // process-wide map shared by every window.
   submitReport(
     form: SupportSubmitReportRequest,
     frozenEvidenceKey: string,
@@ -309,91 +285,24 @@ export interface QuitDecisionWaiter {
   readonly serviceTimer: NodeJS.Timeout;
 }
 
-/**
- * Minimal host-lifecycle surface the bridge needs. The real
- * `HostLifecycle` structurally satisfies this interface.
- *
- * The legacy service-control passthroughs (install / uninstall / start / stop
- * / restart / upgrade / enableLinger) have been removed in favor of the
- * `traycer-cli`-driven host-management IPC handlers; only the metadata-first
- * status read and the log tail used by Doctor/support remain.
- */
 export interface IpcHostLifecycle {
   getSnapshot(): DesktopPublishedHostSnapshot | null;
   on(event: "change", listener: HostChangeListener): void;
   off(event: "change", listener: HostChangeListener): void;
-  /**
-   * Used by `HostController`'s packaged-macOS activation cycle to mark the
-   * host as "down" from the renderer's perspective before driving the
-   * SMAppService re-register cycle, without going through a full mutation
-   * round-trip first.
-   */
   notifyRespawning(): void;
-  /**
-   * Absolute path of the pid-metadata file the lifecycle's watcher is
-   * bound to. Exposed so the SMAppService respawn handler polls the same
-   * source of truth.
-   */
   readonly pidMetadataFile: string;
-  /**
-   * The host's durable enrollment record. `pid.json` is unlinked on graceful
-   * shutdown, so this is the only path that still identifies this machine's
-   * host while it is stopped.
-   */
   readonly identityEnrollmentFile: string;
-  /**
-   * Whether the lifecycle has been torn down. The respawn handler reads
-   * this between awaits so it doesn't drive SMAppService mutations
-   * against a disposed instance during shutdown.
-   */
   readonly isDisposed: boolean;
-  /**
-   * Force a fresh pid.json read + emit. The SMAppService respawn
-   * handler calls this after `waitForHostReady` resolves so the
-   * renderer's host snapshot is guaranteed populated on return -
-   * fs.watch coalescing on macOS occasionally drops the create event
-   * after a pid.json replacement. Returns the snapshot THIS read derived, so
-   * the host-busy surfacing can judge off the reload's own result rather than
-   * a `getSnapshot()` a concurrent reload may not have assigned yet. `null`
-   * means no compatible host metadata is on disk (or the host it names is
-   * confirmed dead) - NOT that the host is unreachable: a live-but-silent
-   * host still answers non-null, with a `busy` availability and its real
-   * endpoint intact (see `HostLifecycle.toPublishedSnapshot`).
-   */
   reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null>;
-  /**
-   * Out-of-band evidence that the published endpoint just answered a probe
-   * this lifecycle did not run. Repairs a degraded (`busy`) verdict without
-   * waiting for the retry ladder; a no-op once the verdict is `available`.
-   * See `HostLifecycle.noteEndpointAnswered`.
-   */
   noteEndpointAnswered(): void;
-  /**
-   * Idempotent (re-)install of the pid-metadata watcher. The respawn
-   * handler calls this to recover from a watcher that was silently
-   * torn down by an FSEvents stream reset earlier in the session.
-   */
   ensureWatcherInstalled(): void;
   getRecentLogTail(maxLines: number): Promise<string | null>;
 }
 
-/**
- * Structural surface of `HostController` (Host Update Layer Redesign Tech
- * Plan, "Desktop main: HostController") that IPC handlers and background
- * monitors depend on. Declared here - not imported from `host-controller.ts`
- * - so tests can pass a lightweight double instead of constructing the real
- * class, the same pattern `IpcHostLifecycle` already uses for `HostLifecycle`.
- * The real `HostController` satisfies this structurally; no explicit
- * `implements` needed.
- */
 export interface IpcHostController {
   /**
-   * The lifecycle admission verdict sampled synchronously, for a handler that
-   * must test it and submit in one stretch. `getStatus()` carries the lane
-   * half but only after awaiting disk reads, which is already too late to
-   * decide whether submitting would QUEUE behind a running intent — and it
-   * cannot see the pending-login-item revision cycle at all, which this
-   * includes. Deliberately the ONLY admission surface exposed here.
+   * The lifecycle admission verdict sampled synchronously, for a handler that must test it and submit in one stretch.
+   * `getStatus()` carries the lane half but only after awaiting disk reads, which is already too late to decide whether submitting would QUEUE behind a running intent.
    */
   readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
   getStatus(): Promise<HostControllerStatus>;
@@ -474,22 +383,10 @@ export type RunnerIpcBridgeOptions =
 interface FreshSnapshotWaiter {
   readonly windowId: string;
   readonly resolve: (snapshot: UnsyncedEditsSnapshot) => void;
-  /**
-   * Settles the same promise as "did not answer" - the shape
-   * `requestFreshUnsyncedSnapshotForWindow`'s own timeout branch produces
-   * (cached ambient snapshot, `fresh: false`). `resolve` above always means
-   * the renderer actually replied, so dispose()/`pruneClosedWindowState()`
-   * cannot reuse it without lying about freshness; they call this instead.
-   */
+  /** `resolve` above always means the renderer actually replied, so dispose()/`pruneClosedWindowState()` cannot reuse it without lying about freshness; they call this instead. */
   readonly resolveStale: () => void;
 }
 
-/**
- * Installs `ipcMain.handle` endpoints that back the preload `contextBridge`
- * surface. Each handler mirrors the shape of `IRunnerHost` from
- * `@traycer-clients/shared/platform/runner-host` - the bridge does not re-type
- * the interface, it only passes serializable payloads.
- */
 export class RunnerIpcBridge {
   readonly options: RunnerIpcBridgeOptions;
   readonly windowRegistry: IpcWindowRegistry;
@@ -511,17 +408,9 @@ export class RunnerIpcBridge {
   pendingAuthReturnSignal = false;
   readonly appLifecycleReadyWindowIds = new Set<string>();
   readonly unsyncedEditsSnapshots = new Map<string, UnsyncedEditsSnapshot>();
-  /**
-   * Pending quit-decision resolvers. Each quit request carries a requestId so
-   * late acknowledgements or decisions from a previous attempt cannot service
-   * a newer retry.
-   */
+  /** Each quit request carries a requestId so late acknowledgements or decisions from a previous attempt cannot service a newer retry. */
   readonly quitDecisionWaiters: QuitDecisionWaiter[] = [];
-  /**
-   * In-flight fresh-snapshot waiters keyed by `requestId`. Only the response
-   * whose id matches resolves the corresponding promise - ambient
-   * `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these.
-   */
+  /** Only the response whose id matches resolves the corresponding promise - ambient `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these. */
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
   private browserViewManager: BrowserViewManager | null = null;
   private browserSessions: BrowserSessionsRegistry | null = null;
@@ -583,23 +472,10 @@ export class RunnerIpcBridge {
     registerPowerIpc(this);
   }
 
-  /**
-   * Broadcasts a host-scoped tray command to every renderer window. Wired
-   * to the tray controller's host submenu so a tray click deep-links into
-   * Settings / Doctor without main reaching across the renderer surface.
-   */
   dispatchHostTrayCommand(command: HostTrayCommand): void {
     this.fanOut(RunnerHostEvent.hostTrayCommand, command);
   }
 
-  /**
-   * Handles a browser-return deep link: focuses the MRU renderer (so the user
-   * lands back in the app) and forwards the payload-free return signal so the
-   * renderer nudges its in-flight device poll. Targets the MRU window because
-   * the signal is process-global, not Epic-scoped. If no window exists yet, the
-   * signal is coalesced into a pending flag and drained on the next registry
-   * change. It carries no token - that always arrives over the device poll.
-   */
   deliverAuthReturnSignal(): void {
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
@@ -616,12 +492,6 @@ export class RunnerIpcBridge {
     );
   }
 
-  /**
-   * Resolves the live window already holding a notification click's exact
-   * target - chat/terminal-agent/terminal tile (`chatId`), terminal tab
-   * (`tabId`), or artifact tile (`artifactId`) - or null when there is no
-   * epicId or no such target is open anywhere.
-   */
   private resolveNotificationOpenWindowId(
     target: NotificationClickTarget,
   ): string | null {
@@ -655,14 +525,6 @@ export class RunnerIpcBridge {
     return null;
   }
 
-  /**
-   * Routes a native-notification click. When the click carries a chat/
-   * terminal-agent target, a terminal-route tab target, or an artifact
-   * target, that is already open in some live window, focuses that exact
-   * window - `NotificationFocusBridge` there brings the tile to the
-   * foreground itself. Otherwise falls back to owned-or-MRU delivery, as for
-   * any other epic-scoped event.
-   */
   deliverNotificationClick(payload: unknown): void {
     const target = parseNotificationClickTarget(payload);
     const openWindowId = this.resolveNotificationOpenWindowId(target);
@@ -681,11 +543,6 @@ export class RunnerIpcBridge {
     );
   }
 
-  /**
-   * Relays a renderer-owned notification to the focused renderer when the
-   * emitter lives in another window. The originating renderer already drew
-   * its own toast, so same-window focus needs no duplicate delivery.
-   */
   deliverForegroundNotificationDisplay(
     senderWebContentsId: number | null,
     display: DesktopNotificationForegroundDisplay,
@@ -706,12 +563,6 @@ export class RunnerIpcBridge {
     return delivered;
   }
 
-  /**
-   * Forwards a tray epic-click epicId to the renderer so the mounted
-   * `gui-app` can open the selected epic. Routes to the window that already
-   * owns the epic when there is one, else the MRU window. Called by the tray
-   * controller through the handler installed in `install()`.
-   */
   deliverTrayEpicSelected(epicId: string): void {
     this.deliverToOwnedOrMru(epicId, RunnerHostEvent.trayEpicSelected, epicId);
   }
@@ -730,13 +581,6 @@ export class RunnerIpcBridge {
     } satisfies MenuCommandPayload);
   }
 
-  /**
-   * Synchronous check used by the main `before-quit` handler to decide
-   * whether to intercept the quit. Returns true iff at least one entry in
-   * the most-recent snapshot is flagged `isDirty`. The `isDirty` flag is
-   * authoritative - an Epic may have `queueSize === 0` yet still be dirty
-   * (awaiting a flush) or `queueSize > 0` yet not dirty (already synced).
-   */
   hasUnsyncedEdits(): boolean {
     for (const entry of this.getUnsyncedEditsSnapshot()) {
       if (entry.isDirty === true) {
@@ -746,27 +590,12 @@ export class RunnerIpcBridge {
     return false;
   }
 
-  /**
-   * Current snapshot of unsynced edits as most recently pushed by the
-   * renderer. The `before-quit` path forwards this to the renderer verbatim
-   * so the "Saving - please wait" dialog can display the exact Epics that
-   * were dirty at the moment the intercept fired.
-   */
   getUnsyncedEditsSnapshot(): UnsyncedEditsSnapshot {
     return aggregateUnsyncedSnapshots(
       Array.from(this.unsyncedEditsSnapshots.values()),
     );
   }
 
-  /**
-   * Mints a `requestId`, asks the renderer for a fresh registry snapshot via
-   * `getFreshUnsyncedSnapshot`, and resolves with the matching
-   * `freshUnsyncedSnapshotResponse`. On timeout the cached ambient snapshot
-   * (most-recent `setUnsyncedEditsSnapshot` push) is returned as a fallback
-   * and the cache is left untouched. On a fresh reply the cache is replaced
-   * so follow-up `hasUnsyncedEdits()` / `getUnsyncedEditsSnapshot()` reads
-   * see the authoritative state.
-   */
   requestFreshUnsyncedSnapshot(
     timeoutMs: number,
   ): Promise<UnsyncedEditsSnapshot> {
@@ -776,35 +605,14 @@ export class RunnerIpcBridge {
   }
 
   /**
-   * `requestFreshUnsyncedSnapshot` plus the one fact it discards: whether
-   * EVERY window actually answered.
-   *
-   * The fan-out above resolves a non-answering window with its cached ambient
-   * row, which is the right default for the quit path - that path is racing an
-   * OS shutdown and a stale row is strictly better than blocking on a wedged
-   * renderer. It is the wrong default for a caller that has to decide whether
-   * destroying work is authorized, because a silent fallback is
-   * indistinguishable from a window that genuinely holds nothing, and the two
-   * lead to opposite decisions.
-   *
-   * So the fallback is reported rather than hidden, and the caller decides
-   * what it means. `installUpdate()` treats it as unknown-and-therefore-ask;
-   * see `unsyncableWorkAcrossWindows`.
+   * It is the wrong default for a caller that has to decide whether destroying work is authorized, because a silent fallback is indistinguishable from a window that genuinely holds.
+   * So the fallback is reported rather than hidden, and the caller decides what it means.
    */
   requestFreshUnsyncedSnapshotWithFidelity(timeoutMs: number): Promise<{
     readonly snapshot: UnsyncedEditsSnapshot;
     readonly anyWindowStale: boolean;
   }> {
-    // Only windows that have MOUNTED the lifecycle bridge are asked - the same
-    // gate `requestQuitDecision` applies. A window that never pushed a
-    // snapshot (the readiness gate is blocking it, or it is on the sign-in
-    // route) has no `AppShell`, so no Epic canvas and no session to hold
-    // unsynced work; asking it anyway made it time out on EVERY install click
-    // for the rest of the session and report `otherWindowsUnknown` for a
-    // window that structurally could not hold anything - fail-closed in the
-    // wrong direction. Once ready, a window stays in the set until it closes,
-    // so a window that mounted and later blanks is still asked (and times
-    // out honestly).
+    // A window that never pushed a snapshot (the readiness gate is blocking it, or it is on the sign-in route) has no `AppShell`, so no Epic canvas and no session to hold unsynced work.
     const requests = this.windowRegistry
       .records()
       .filter((record) => this.appLifecycleReadyWindowIds.has(record.windowId))
@@ -817,15 +625,7 @@ export class RunnerIpcBridge {
     }));
   }
 
-  /**
-   * One last primary-profile capture per live `browser.sessions` stream this
-   * process holds, before the desktop routes go away.
-   *
-   * Main holds both the jar and the sockets now (H10), so this completes with
-   * no renderer involved - which is what makes a window closing mid-capture
-   * safe: the old path asked a renderer to capture and awaited an ack across a
-   * process that was being torn down.
-   */
+  /** One last primary-profile capture per live `browser.sessions` stream this process holds, before the desktop routes go away. */
   async captureFinalBrowserState(): Promise<void> {
     await this.browserSessions?.captureFinalPrimaryProfiles(null);
   }
@@ -864,14 +664,7 @@ export class RunnerIpcBridge {
     );
   }
 
-  /**
-   * Sends a `quitRequested` event to the renderer and resolves with the
-   * renderer's decision. Used by the `before-quit` handler to coordinate the
-   * "Saving - please wait" modal with the Electron shutdown sequence. The
-   * caller provides the already-aggregated snapshot; this method only targets
-   * the MRU renderer and fails closed when that renderer is not ready, cannot
-   * receive the event, or never acknowledges that it has started servicing it.
-   */
+  /** The caller provides the already-aggregated snapshot. */
   requestQuitDecision(snapshot: UnsyncedEditsSnapshot): Promise<QuitDecision> {
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
@@ -947,10 +740,6 @@ export class RunnerIpcBridge {
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
     );
-    // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
-    // armed past dispose() would either fire its setTimeout against a bridge
-    // that no longer owns any IPC handlers, or hang the awaiting caller
-    // forever if the timer is cleared without settling the promise.
     this.settleFreshSnapshotWaitersAsStale(() => true);
   }
 
@@ -989,15 +778,7 @@ export class RunnerIpcBridge {
     });
   }
 
-  /**
-   * Defense-in-depth: rejects IPC invokes from webContents not registered
-   * in `WindowRegistry` - devtools extensions, hostile pages reached via
-   * a compromised renderer navigation, etc. Top-frame-only check pairs
-   * with the CSP `frame-src 'none'` policy. Enforced uniformly across
-   * packaged and unpackaged builds - tests must supply a `senderFrame`
-   * shape and a `sender.id` registered with the configured window
-   * registry.
-   */
+  /** Enforced uniformly across packaged and unpackaged builds - tests must supply a `senderFrame` shape and a `sender.id` registered with the configured window registry. */
   private isTrustedIpcSender(
     event: IpcMainInvokeEvent | IpcMainEvent,
   ): boolean {
@@ -1046,11 +827,6 @@ export class RunnerIpcBridge {
     return records.length === 1 ? records[0].windowId : null;
   }
 
-  /**
-   * `fresh` distinguishes "this window answered" from "this window did not,
-   * and the cached ambient row stood in for it". Both resolve with a usable
-   * snapshot; only the first is evidence about the window's CURRENT state.
-   */
   requestFreshUnsyncedSnapshotForWindow(
     record: IpcWindowRecord,
     timeoutMs: number,
@@ -1281,10 +1057,6 @@ export class RunnerIpcBridge {
       (waiter) => !liveWindowIds.has(waiter.windowId),
       new Error("Quit interception window closed before resolving"),
     );
-    // A fresh-snapshot request targets one window; if that window closed
-    // before answering, no reply is ever coming and the waiter would
-    // otherwise sit armed until its own timeout - same gap the line above
-    // closes for quit-decision waiters.
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => !liveWindowIds.has(waiter.windowId),
     );
@@ -1337,15 +1109,6 @@ export class RunnerIpcBridge {
     this.quitDecisionWaiters.push(...retained);
   }
 
-  /**
-   * `rejectQuitDecisionWaiters`'s counterpart for fresh-snapshot requests.
-   * `resolveStale()` (not `reject`) because a fresh-snapshot request has a
-   * well-defined "did not answer" value - the cached ambient snapshot - so
-   * there is no error to propagate, only a freshness fact to report.
-   * Snapshotted to an array first since `resolveStale()` deletes its own
-   * entry from `freshSnapshotWaiters`, which would otherwise mutate the Map
-   * mid-iteration.
-   */
   private settleFreshSnapshotWaitersAsStale(
     predicate: (waiter: FreshSnapshotWaiter) => boolean,
   ): void {
@@ -1440,10 +1203,7 @@ class SingleWindowRegistry implements IpcWindowRegistry {
   ): void {}
 }
 
-// Default quit-state for the single-window `window:` bridge variant (and any
-// registry-mode caller that omits `quitState`): the shell is never quitting, so
-// the registry-change listener falls back to the "last remaining window"
-// heuristic alone.
+// Default quit-state for the single-window `window:` bridge variant (and any registry-mode caller that omits `quitState`): the shell is never quitting, so the registry-change.
 class NeverQuittingShellState implements IpcShellQuitState {
   isQuitting(): boolean {
     return false;
@@ -1480,7 +1240,7 @@ class NullAuthTokenStore implements IpcAuthTokenStore {
 
   migrateLegacyCredentials(): Promise<CredentialsMigrationOutcome> {
     // No file backing (test caller omitted a store): there is nothing to
-    // migrate onto, so decline — the caller wipes the legacy remnant.
+    // migrate onto, so decline  -  the caller wipes the legacy remnant.
     return Promise.resolve("identity-unknown");
   }
 

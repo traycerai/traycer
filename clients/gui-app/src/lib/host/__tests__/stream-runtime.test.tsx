@@ -64,13 +64,7 @@ const runnerHostRef = vi.hoisted(() => {
 });
 
 const streamFactorySpy = vi.hoisted(() => ({
-  // Typed so the recorded build target reads back as concrete values, not
-  // `any` - the assertions that compare them against the published name and
-  // against the identity handed to the pacer depend on it. The public key is
-  // recorded alongside the host id because a same-host ROTATION is the only
-  // build-target move this provider can still observe under a host-pinned
-  // requester (see `remoteAwareOwnerIdentity`), so the host id alone can no
-  // longer discriminate which row a client was built from.
+  // Typed so the recorded build target reads back as concrete values, not `any` - the assertions that compare them against the published name and against the identity handed to the pacer depend on it.
   build: vi.fn<(hostId: string, publicKey: string | null) => void>(),
 }));
 
@@ -83,13 +77,8 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => runnerHostRef.host,
 }));
 
-// `createRemoteHostTransport` is the network boundary a remote-kind target
-// crosses (Noise-NK handshake + relay socket) - out of scope for a React
-// stream-lifecycle test. Every other named export of this barrel (notably
-// `RemoteHostMessenger` / `RemoteStreamClient`) stays REAL, and the mock
-// implementation below drives the REAL `acquireRemoteSession` cache, so the
-// test exercises the actual production ref-counting/rotation behavior, not a
-// hand-rolled substitute (mirrors `use-host-client-for-strict-mode.test.tsx`).
+// `createRemoteHostTransport` is the network boundary a remote-kind target crosses (Noise-NK handshake + relay socket) - out of scope for a React stream-lifecycle test.
+// Every other named export of this barrel (notably `RemoteHostMessenger` / `RemoteStreamClient`) stays REAL, and the mock implementation below drives the REAL `acquireRemoteSession` cache, so the test exercises the actual production ref-counting/rotation.
 const mocks = vi.hoisted(() => ({
   createRemoteHostTransport: vi.fn(),
 }));
@@ -129,11 +118,7 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => {
   };
 });
 
-// Records the transport identity the provider hands the shared backoff, while
-// the REAL pacing runs underneath - the streak semantics themselves (what a
-// changed identity does to a running streak) are owned by
-// the reconnect engine's own suite. What is only observable here is the input:
-// which endpoint the provider claims it just built for.
+// Records the transport identity the provider hands the shared backoff, while the REAL pacing runs underneath - the streak semantics themselves (what a changed identity does to a running streak) are owned by the reconnect engine's own suite.
 const backoffSpy = vi.hoisted(() => ({
   markBuilt: vi.fn<(transportIdentity: string | null) => void>(),
 }));
@@ -147,11 +132,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      // The provider gets its pacer off the PROCESS-scoped engine
-      // (`processReconnectEngine().createRebuildPacer()`), not a module-level
-      // export - `createRebuildPacer` was never a named export of this module,
-      // even before the consolidation. Wrap the engine singleton instead so the
-      // spy sees the same calls production makes.
+      // The provider gets its pacer off the PROCESS-scoped engine (`processReconnectEngine().createRebuildPacer()`), not a module-level export - `createRebuildPacer` was never a named export of this module, even before the consolidation.
       processReconnectEngine: () => {
         const real = actual.processReconnectEngine();
         return {
@@ -189,31 +170,7 @@ import {
 } from "@/components/layout/host-readiness-controller-context";
 
 /**
- * HOW THIS SUITE POINTS THE PROVIDER AT A HOST, and why it never calls
- * `HostClient.bind()` (redesign P4.1 Leg D).
- *
- * P4.2 deletes `bind()` and the active slot. Every case below therefore drives
- * the provider the way production will after that deletion: the window holds a
- * requester pinned to the EFFECTIVE host id (`createRequesterForHostId`), which
- * re-reads its directory row on every property access, and the thing that tells
- * a React consumer to look again is the connection registry's row-changed
- * signal - not a slot event.
- *
- * That gives the two spellings this file uses, and they are not
- * interchangeable:
- *
- *  - **A row move** (endpoint change, public-key rotation, the row landing or
- *    leaving) is a fact about ONE host: mutate the directory and emit. The
- *    pinned requester is untouched; the registry's coarse arm wakes the
- *    provider's three reactive projections and they re-read.
- *  - **A host SWAP** is not a row move at all post-slot - it is the effective
- *    host id changing, which re-points the window at a DIFFERENT requester.
- *    Spelled here as a new `bindingRef` value plus a `rerender()`, because
- *    `useHostBinding` is the reactive read that delivers it in production.
- *
- * Conflating the two is how a post-slot suite goes quietly vacuous: a "swap"
- * written as a row mutation under a pinned requester cannot change the host id
- * the provider resolves, so it would assert nothing.
+ * HOW THIS SUITE POINTS THE PROVIDER AT A HOST, and why it never calls `HostClient.bind()` (redesign P4.1 Leg D).
  */
 
 /** The window's directory. Rows move; the requester pinned to an id does not. */
@@ -223,9 +180,8 @@ class TestHostDirectory {
 
   findById(hostId: string): HostDirectoryEntry | null {
     const found = this.rows.find((row) => row.hostId === hostId);
-    // A FRESH object per read, like production: the local row is rebuilt per
-    // snapshot and crosses the IPC bridge as a new object. A registry that
-    // compared by reference would report a change on every emit.
+    // A FRESH object per read, like production: the local row is rebuilt per snapshot and crosses the IPC bridge as a new object.
+    // A registry that compared by reference would report a change on every emit.
     return found === undefined ? null : { ...found };
   }
 
@@ -241,10 +197,7 @@ class TestHostDirectory {
   }
 
   /**
-   * Moves the directory WITHOUT announcing it, for the commit-to-effect window:
-   * the live row has already changed and nothing has been told yet, which is
-   * exactly the gap between a render's snapshot and the passive effect's live
-   * read. Never use this to model an ordinary directory update.
+   * Moves the directory WITHOUT announcing it, for the commit-to-effect window: the live row has already changed and nothing has been told yet, which is exactly the gap between a render's snapshot and the passive effect's live read.
    */
   publishUnannounced(rows: readonly HostDirectoryEntry[]): void {
     this.rows = rows;
@@ -286,22 +239,14 @@ function installDirectory(directory: TestHostDirectory): void {
 /**
  * Points the window at `hostId` - the post-slot replacement for `bind(entry)`.
  * `null` is ∅ ("no host is effective"), the replacement for `bind(null)`.
- *
- * Creates a NEW requester each call on purpose: re-pointing the window is a
- * change of binding, and the provider's build effect depends on the binding
- * identity. Callers that are not swapping hosts must call this exactly once.
  */
 function pointWindowAt(
   client: HostClient<HostRpcRegistry>,
   hostId: string | null,
 ): void {
   bindingRef.value = { hostClient: client.createRequesterForHostId(hostId) };
-  // The POINTER moves too, and both halves are load-bearing. The binding is
-  // what production's `useHostBinding()` delivers; the store is what the
-  // provider resolves its own requester from (`createRequesterForHostId(
-  // effectiveHostId)`), because in production `binding.hostClient` is the
-  // SPINE and names no host of its own. Seeding only the binding would leave
-  // the provider resolving ∅ and every case asserting against no host at all.
+  // The POINTER moves too, and both halves are load-bearing.
+  // The binding is what production's `useHostBinding()` delivers; the store is what the provider resolves its own requester from (`createRequesterForHostId( effectiveHostId)`), because in production `binding.hostClient` is the SPINE and names no host of its own.
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,
     preferredHostId: hostId,
@@ -370,11 +315,7 @@ interface FakeRemoteSession extends IRemoteSession<
   readonly closeCalls: number;
 }
 
-// A plain `closeCalls` counter - not a `vi.fn()` reference - so assertions
-// read `session.closeCalls` instead of the bare method (`@typescript-eslint/
-// unbound-method` flags referencing an interface method, since `close(): void`
-// is method-shorthand syntax). Mirrors `active-remote-sessions.test.ts`'s
-// `fakeSession()`.
+// A plain `closeCalls` counter - not a `vi.fn()` reference - so assertions read `session.closeCalls` instead of the bare method (`@typescript-eslint/ unbound-method` flags referencing an interface method, since `close(): void` is method-shorthand syntax).
 function fakeRemoteSession(): FakeRemoteSession {
   let closeCalls = 0;
   const session: FakeRemoteSession = {
@@ -428,8 +369,7 @@ function remoteIdentity(publicKey: string): RemoteSessionIdentity {
 }
 
 /**
- * Drives the REAL `acquireRemoteSession` cache from the mocked transport
- * boundary, handing out one fake session per public key.
+ * Drives the REAL `acquireRemoteSession` cache from the mocked transport boundary, handing out one fake session per public key.
  */
 function installRemoteTransport(sessionsByKey: {
   readonly [publicKey: string]: FakeRemoteSession;
@@ -503,9 +443,7 @@ describe("HostStreamProvider", () => {
     bindingRef.value = null;
     useSelectionAuthorityStore.getState().reset();
     runnerHostRef.handlers.clear();
-    // Cleared together with the handler set: the sweep is a module-level
-    // singleton, so leaving it believed-installed would hand every later test
-    // one fewer registration than production has.
+    // Cleared together with the handler set: the sweep is a module-level singleton, so leaving it believed-installed would hand every later test one fewer registration than production has.
     resetRemoteResumeSweepForTest();
     mocks.createRemoteHostTransport.mockReset();
     streamFactorySpy.build.mockReset();
@@ -523,12 +461,8 @@ describe("HostStreamProvider", () => {
 
     const { result } = renderHook(() => useWsStreamClient(), { wrapper });
     expect(result.current).toBeInstanceOf(WsStreamClient);
-    // TWO registrants, and they answer different questions. One is this
-    // client's own wake subscription, which re-dials the client that owns it.
-    // The other is the process-wide remote-session resume sweep, installed
-    // once on the first subscription, which reaches every held remote session
-    // - including ones no stream client speaks for. Neither subsumes the
-    // other, so this is 2, not 1.
+    // TWO registrants, and they answer different questions.
+    // One is this client's own wake subscription, which re-dials the client that owns it.
     expect(runnerHostRef.handlers.size).toBe(2);
 
     act(() => {
@@ -537,9 +471,7 @@ describe("HostStreamProvider", () => {
       }
     });
 
-    // A wake PROBES rather than force-dropping: the socket that survived a
-    // lid-open on the same network is kept, so waking does not re-run every
-    // stream's open against a machine whose Wi-Fi is still re-associating.
+    // A wake PROBES rather than force-dropping: the socket that survived a lid-open on the same network is kept, so waking does not re-run every stream's open against a machine whose Wi-Fi is still re-associating.
     expect(reconnectSpy).toHaveBeenCalledWith("wake-resume", {
       probeFirst: true,
       wakeProbe: null,
@@ -555,11 +487,8 @@ describe("HostStreamProvider", () => {
     const first = result.current;
     expect(first).toBeInstanceOf(WsStreamClient);
 
-    // A host restart keeps the same hostId but moves to a new websocketUrl. The
-    // client is keyed on host IDENTITY, so the same instance survives - it is
-    // neither rebuilt nor closed - and the live `endpoint()` re-dials the new
-    // address. The endpoint move nudges an immediate re-dial instead of waiting
-    // out the reconnect backoff.
+    // A host restart keeps the same hostId but moves to a new websocketUrl.
+    // The client is keyed on host IDENTITY, so the same instance survives - it is neither rebuilt nor closed - and the live `endpoint()` re-dials the new address.
     act(() => {
       directory.publish([
         {
@@ -572,9 +501,8 @@ describe("HostStreamProvider", () => {
 
     expect(result.current).toBe(first);
     expect(closeSpy).not.toHaveBeenCalled();
-    // The inverse of the wake case: this socket points at an address that no
-    // longer serves the host, so it is dropped whether or not it still
-    // answers. Probing here would keep a socket to nowhere alive.
+    // The inverse of the wake case: this socket points at an address that no longer serves the host, so it is dropped whether or not it still answers.
+    // Probing here would keep a socket to nowhere alive.
     expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
       probeFirst: false,
       wakeProbe: null,
@@ -592,10 +520,8 @@ describe("HostStreamProvider", () => {
     const first = result.current;
     expect(first).toBeInstanceOf(WsStreamClient);
 
-    // A DIFFERENT hostId is a genuine identity change (host swap): the old
-    // client is replaced and closed, a fresh one built for the new host.
-    // Post-slot that is the window re-pointing at another host's requester,
-    // not a row moving under the one it holds.
+    // A DIFFERENT hostId is a genuine identity change (host swap): the old client is replaced and closed, a fresh one built for the new host.
+    // Post-slot that is the window re-pointing at another host's requester, not a row moving under the one it holds.
     pointWindowAt(client, OTHER_HOST_ID);
     rerender();
 
@@ -635,10 +561,8 @@ describe("HostStreamProvider", () => {
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
-  // Steady state only: `act()` flushes render and effects together, so this
-  // cannot observe the commit-to-effect window (the test below does that).
-  // Read TOGETHER on purpose - the interesting failure is not "the name is
-  // wrong" but "the name and the client disagree".
+  // Steady state only: `act()` flushes render and effects together, so this cannot observe the commit-to-effect window (the test below does that).
+  // Read TOGETHER on purpose - the interesting failure is not "the name is wrong" but "the name and the client disagree".
   it("serves a client and a host name that agree once a swap settles", () => {
     const { directory, client } = mountLocalHost();
     directory.publishUnannounced([mockLocalHostEntry, OTHER_HOST]);
@@ -661,46 +585,10 @@ describe("HostStreamProvider", () => {
     expect(result.current.hostId).toBe(OTHER_HOST_ID);
   });
 
-  // WHERE THE OLD "publishes the host its client was built for, not the
-  // render's" CASE WENT (redesign P4.1 Leg D).
-  //
-  // That case drove a `bind()` to a DIFFERENT hostId from a child's layout
-  // effect, so the render's `readiness.hostId` and the effect's live
-  // `getActiveHost()` named two machines, and publishing the render-time name
-  // would have shipped `{ client for B, hostId: A }`.
-  //
-  // Post-slot that divergence is structurally unreachable, and the reason is
-  // worth stating rather than leaving the case to rot green. The window holds a
-  // requester PINNED to one host id: `getActiveHostId()` answers either that id
-  // or `null` (row unresolved), and `getActiveHost()` answers either that host's
-  // row or `null`. Both are read from the same requester in the same render, so
-  // they move together - and the `null` arm cannot reach the publish at all,
-  // because `identityKey === null` returns from the build effect before `target`
-  // is ever read. The published pair therefore cannot disagree on the host id no
-  // matter what lands between commit and effect.
-  //
-  // The DISCIPLINE that case protected - read `target` inside the effect, never
-  // the render's value - is still reachable on the identity dimension (a remote
-  // row's public key is part of the owner identity and is not part of the host
-  // id), and that is what the case below now measures. Deleted with reason
-  // rather than kept green: a case that can no longer fail is not coverage.
-  //
-  // The `hostId: target.hostId` publish itself is deliberately LEFT IN PLACE in
-  // `stream-runtime.tsx`. It is correct, it is free, and P4.2 re-points this
-  // provider next - a guard removed because today's binding shape cannot
-  // exercise it is a guard missing when the shape changes again.
+  // WHERE THE OLD "publishes the host its client was built for, not the render's" CASE WENT (redesign P4.1 Leg D).
 
-  // The commit-to-effect window, on the dimension that still moves under a
-  // host-pinned requester. A child's LAYOUT effect rotates the row after the
-  // render that fixed `identityKey` but before the passive effect that builds
-  // the client - and it rotates it WITHOUT announcing, because "the live row
-  // already moved and nobody has been told" is precisely the gap.
-  //
-  // The backoff decides whether a streak CARRIES by comparing the identity it is
-  // handed against the previous build's, so a render-time value here names the
-  // PREVIOUS key for a client dialed with the new one: the two look equal, the
-  // streak survives the rotation, and a terminal-class close on the new session
-  // gets paced by the old key's failures instead of rebuilding at once.
+  // The commit-to-effect window, on the dimension that still moves under a host-pinned requester.
+  // A child's LAYOUT effect rotates the row after the render that fixed `identityKey` but before the passive effect that builds the client - and it rotates it WITHOUT announcing, because "the live row already moved and nobody has been told" is precisely the gap.
   it("keys the rebuild streak on the identity its client was built for", () => {
     const directory = new TestHostDirectory();
     directory.publishUnannounced([remoteTarget("pubkey-a")]);
@@ -766,10 +654,7 @@ describe("HostStreamProvider", () => {
     const first = result.current;
     expect(first).toBeInstanceOf(WsStreamClient);
 
-    // Nothing legitimate closes the served client without also replacing it;
-    // if it happens anyway (the closed-client-in-context wedge), the liveness
-    // guard must mint a fresh client instead of serving the dead one until a
-    // window reload.
+    // Nothing legitimate closes the served client without also replacing it; if it happens anyway (the closed-client-in-context wedge), the liveness guard must mint a fresh client instead of serving the dead one until a window reload.
     act(() => {
       first?.close("test-external-close");
     });
@@ -781,11 +666,7 @@ describe("HostStreamProvider", () => {
   });
 
   it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {
-    // A terminal-class close (incompatible protocol, plan restriction) would
-    // otherwise loop: rebuild -> fresh dial (grant mint included) -> same
-    // fatal -> onClosed -> rebuild, one full mint/dial cycle per round trip.
-    // The first quick close still rebuilds immediately (the wedge-recovery
-    // case above); the SECOND consecutive quick close must wait.
+    // A terminal-class close (incompatible protocol, plan restriction) would otherwise loop: rebuild -> fresh dial (grant mint included) -> same fatal -> onClosed -> rebuild, one full mint/dial cycle per round trip.
     vi.useFakeTimers();
     try {
       mountLocalHost();
@@ -802,9 +683,8 @@ describe("HostStreamProvider", () => {
       expect(second).not.toBe(first);
       expect(second?.isClosed()).toBe(false);
 
-      // Quick close #2: the rebuild is DEFERRED. `useWsStreamClient` hides
-      // the dead instance during the handoff, so consumers see null - what
-      // must NOT happen is an instant fresh client (= a fresh mint+dial).
+      // Quick close #2: the rebuild is DEFERRED.
+      // `useWsStreamClient` hides the dead instance during the handoff, so consumers see null - what must NOT happen is an instant fresh client (= a fresh mint+dial).
       act(() => {
         second?.close("test-terminal-close");
       });
@@ -825,10 +705,8 @@ describe("HostStreamProvider", () => {
     const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
     const { directory } = mountLocalHost();
 
-    // StrictMode runs each effect setup -> cleanup -> setup on mount. The
-    // ref-based dedup in `useReconnectStreamOnEndpointChange` must absorb the
-    // double-invoke: a stable mount fires NO nudge, and a later same-host
-    // endpoint change fires EXACTLY one - never a spurious or doubled re-dial.
+    // StrictMode runs each effect setup -> cleanup -> setup on mount.
+    // The ref-based dedup in `useReconnectStreamOnEndpointChange` must absorb the double-invoke: a stable mount fires NO nudge, and a later same-host endpoint change fires EXACTLY one - never a spurious or doubled re-dial.
     const strictWrapper = (props: {
       readonly children: ReactNode;
     }): ReactNode => (
@@ -861,23 +739,10 @@ describe("HostStreamProvider", () => {
     });
   });
 
-  // R-1: the owner-layer discriminator the S1 cache test cannot provide (see
-  // `active-remote-sessions.test.ts` "review finding #2" for the cache-layer
-  // half). Drives the REAL production chain end to end - the directory row
-  // move, the registry's row-changed signal, this provider's
-  // `remoteAwareOwnerIdentity` `identityKey`, and the shared
-  // `acquireRemoteSession` cache - so a regression in any one of those layers
-  // fails this test.
-  //
-  // The rotation is the one row move that NOTHING else in this provider
-  // observes: `hostTransportKey` is `(hostId, kind, version, websocketUrl)` and
-  // a rotation leaves all four byte-identical, so the transport-key projection
-  // cannot wake anyone. The registry's coarse arm is the only carrier, which is
-  // exactly why it is compared field-wise including the public key.
+  // R-1: the owner-layer discriminator the S1 cache test cannot provide (see `active-remote-sessions.test.ts` "review finding #2" for the cache-layer half).
+  // Drives the REAL production chain end to end - the directory row move, the registry's row-changed signal, this provider's `remoteAwareOwnerIdentity` `identityKey`, and the shared `acquireRemoteSession` cache - so a regression in any one of those layers.
   it("rebuilds and closes the client on a same-host remote public-key rotation, isolated from every other field", () => {
-    // Fake timers so the cache's keep-warm linger can be driven to expiry -
-    // a released stale-key session now closes when the window ends, not
-    // synchronously in the release.
+    // Fake timers so the cache's keep-warm linger can be driven to expiry - a released stale-key session now closes when the window ends, not synchronously in the release.
     vi.useFakeTimers();
     const sessionForKeyA = fakeRemoteSession();
     const sessionForKeyB = fakeRemoteSession();
@@ -898,9 +763,8 @@ describe("HostStreamProvider", () => {
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-a"))).toBe(1);
     expect(sessionForKeyA.closeCalls).toBe(0);
 
-    // hostId / kind / websocketUrl / version / status all held stable - ONLY
-    // the public key rotates (re-enrollment / corruption recovery). A
-    // coincident URL/version move would mask the gap this test targets.
+    // hostId / kind / websocketUrl / version / status all held stable - ONLY the public key rotates (re-enrollment / corruption recovery).
+    // A coincident URL/version move would mask the gap this test targets.
     act(() => {
       directory.publish([remoteTarget("pubkey-b")]);
     });
@@ -913,12 +777,7 @@ describe("HostStreamProvider", () => {
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-b"))).toBe(1);
 
     // The stale-key session is closed AT the rotation, not left to linger.
-    // Keep-warm exists so a prompt re-acquire of the SAME identity is free,
-    // and this identity can never be re-acquired - its cache key embeds the
-    // old public key. Lingering would only hold an obsolete authenticated
-    // relay socket open and, because `hasReadyRemoteSession` matches on
-    // `hostId` alone, report live-session evidence for a host whose real
-    // session is still dialing.
+    // Keep-warm exists so a prompt re-acquire of the SAME identity is free, and this identity can never be re-acquired - its cache key embeds the old public key.
     expect(sessionForKeyA.closeCalls).toBe(1);
     expect(sessionForKeyB.closeCalls).toBe(0);
 
@@ -932,13 +791,8 @@ describe("HostStreamProvider", () => {
   });
 
   it("stops stream work when the window points at no host and recreates it only on re-point", () => {
-    // The client is keyed on the resolved host identity (D5.3), not on
-    // default-host surface readiness. Pointing the window at ∅ drops the
-    // client; pointing it back mints a fresh one. Same-id endpoint loss
-    // (websocketUrl null) is not an identity change for a local host - the
-    // client survives and re-dials via the live endpoint() callback, which is
-    // the whole point of holding the client across a restart so availability
-    // recovery can fire.
+    // The client is keyed on the resolved host identity (D5.3), not on default-host surface readiness.
+    // Pointing the window at ∅ drops the client; pointing it back mints a fresh one.
     const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
     const { client } = mountLocalHost();
 
@@ -965,12 +819,8 @@ describe("HostStreamProvider", () => {
   });
 
   it("builds the stream client from the resolved host identity even while default-host readiness is non-ready", () => {
-    // D5.3: availability recovery (notifyRecoveredForNamedHost) is the only
-    // designed un-strand signal for host-scoped queries. Gating the stream
-    // client on default-host readiness inverted that dependency - the
-    // mechanism that restores readiness was disabled for exactly as long as
-    // readiness was broken. The client is built from the resolved host
-    // identity; surface readiness must not withhold it.
+    // D5.3: availability recovery (notifyRecoveredForNamedHost) is the only designed un-strand signal for host-scoped queries.
+    // Gating the stream client on default-host readiness inverted that dependency - the mechanism that restores readiness was disabled for exactly as long as readiness was broken.
     mountLocalHost();
     const controller = streamController(false);
     const readinessWrapper = (props: {

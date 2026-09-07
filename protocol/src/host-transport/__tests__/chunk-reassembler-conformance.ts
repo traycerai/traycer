@@ -14,14 +14,7 @@ import {
   type ReassembledMessage,
 } from "../chunking";
 
-/**
- * Structural shape of the reassembler under test. The implementation now
- * lives HERE in `@traycer/protocol` (the two hand-mirrored transport copies
- * were collapsed after they diverged once already), but the spec stays
- * factory-shaped so each consumer's own test file can keep running it against
- * whatever it actually imports — the "guard for the guard" (Architecture §4
- * fix #1 / S3).
- */
+/** Structural shape of the reassembler under test. */
 export interface ChunkReassemblerLike {
   accept(frame: MuxFrame): ReassembledMessage | null;
   reset(): void;
@@ -55,12 +48,7 @@ function bodyChunks(body: Uint8Array, chunkSize: number): Uint8Array[] {
   return chunks;
 }
 
-/**
- * Runs the shared conformance cases against any `ChunkReassemblerLike`.
- * Whole-body semantics: every frame's payload is body bytes
- * (`[bodyFlags][jsonLen][json][binary]`), frames carry no json section, and
- * `CHUNK_FIRST` — not an in-band envelope — marks a sequence start.
- */
+/** Runs the shared conformance cases against any `ChunkReassemblerLike`. */
 export function runChunkReassemblerConformanceSpec(
   createReassembler: () => ChunkReassemblerLike,
   ChunkReassemblyErrorCtor: new (message: string) => Error,
@@ -320,9 +308,7 @@ export function runChunkReassemblerConformanceSpec(
         ),
       ).toBeNull();
       reassembler.reset();
-      // Re-submitting the same starting frame must begin a fresh accumulator
-      // (returns null again) rather than throwing "sequence already in
-      // flight" - proving reset() actually cleared the prior state.
+      // Re-submitting the same starting frame must begin a fresh accumulator (returns null again) rather than throwing "sequence already in flight" - proving reset() actually cleared the prior state.
       expect(
         reassembler.accept(
           frame({

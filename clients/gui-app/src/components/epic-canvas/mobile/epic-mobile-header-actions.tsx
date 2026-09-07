@@ -25,15 +25,8 @@ import {
 } from "@/lib/epic-title-write-settlement";
 
 /**
- * Fills the mobile-header right-actions slot on the epic route with the tab
- * switcher trigger. Tapping it opens the switcher sheet, which the epic tile
- * view mounts - the two halves talk through `useMobileSwitcherStore` because
- * this trigger renders from the app provider stack, OUTSIDE the epic session
- * tree.
- *
- * Ungated by permission: switching tabs reads, it does not mutate, so a viewer
- * gets the same trigger. The create actions inside the sheet carry their own
- * editor gate.
+ * Fills the mobile-header right-actions slot on the epic route with the tab switcher trigger.
+ * Tapping it opens the switcher sheet, which the epic tile view mounts - the two halves talk through `useMobileSwitcherStore` because this trigger renders from the app provider stack, OUTSIDE the epic session tree.
  */
 export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
   const { tabId } = props;
@@ -54,17 +47,7 @@ export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
 }
 
 /**
- * The epic's name in the mobile header, renamed in place: tapping it turns the
- * title into its own field, and the committed value goes through the canonical
- * epic-rename mutation. The committed name reaches this control back through
- * the same live session the header resolved it from, so no separate tab-name
- * write is needed - and it must be that session, because the tab record's copy
- * is only refreshed by the epic route's active-session effects, which the
- * restore this control has to work under never mounts.
- *
- * Renaming is editor-only (the same role predicate the sidebar uses, read
- * through the header-safe registry accessor because this renders outside the
- * epic session tree); a viewer sees plain text.
+ * The committed name reaches this control back through the same live session the header resolved it from, so no separate tab-name write is needed - and it must be that session, because the tab record's copy is only refreshed by the epic route's active-session effects, which the restore this control has to work under never mounts.
  */
 export function MobileEpicHeaderTitle(props: {
   readonly epicId: string;
@@ -76,35 +59,10 @@ export function MobileEpicHeaderTitle(props: {
   const queryClient = useQueryClient();
   const handleCommit = useCallback(
     async (next: string) => {
-      // Optimistic overlay, so this control behaves identically to the wide
-      // viewport's tab strip. Both were RPC-only here until 1.1, which meant
-      // the SAME user on the SAME device got different feedback either side of
-      // a 768px window drag - `useIsMobileViewport()` is a media query, not a
-      // platform. Reached through the registry rather than `useOpenEpicHandle`
-      // because this renders outside the epic session tree, exactly as the
-      // permission-role read above does.
+      // Both were RPC-only here until 1.1, which meant the SAME user on the SAME device got different feedback either side of a 768px window drag - `useIsMobileViewport()` is a media query, not a platform.
       const handle = getOpenEpicRegistry().peek(epicId);
-      // HOST-SCOPED where a live session exists - but by CONSTRUCTION now,
-      // not by a comparison here.
-      //
-      // This used to compare the session's host against the app-wide client's
-      // and refuse the rename when they differed (the swap Codex reported: an
-      // app-wide ack marking a session-stamped overlay as landed for a rename
-      // its host never saw). That check is gone, and its absence is not an
-      // oversight - the crossing it guarded cannot occur any more.
-      //
-      // A registered session's write commands are sent by its OWN queue, whose
-      // `commandRequester` is `useHostClientForHostId(session.hostId)`, bound
-      // when `epic-session-provider` constructs the store. So a rename issued
-      // against a live handle reaches that session's host and can never reach
-      // the app-wide client. The app-wide mutation below is reachable only for
-      // `handle === null`, where there is no session to mismatch with and no
-      // overlay to strand.
-      //
-      // Restoring the comparison would add a test that can only ever answer
-      // one way. What replaces it is a positive property, pinned by test: a
-      // registered session's rename is dispatched on the session's requester
-      // and never on the app-wide one.
+      // That check is gone, and its absence is not an oversight - the crossing it guarded cannot occur any more.
+      // So a rename issued against a live handle reaches that session's host and can never reach the app-wide client.
       if (handle !== null) {
         const sessionClient = getEpicSessionHandleHostClient(handle);
         const hostId = sessionClient?.getActiveHostId() ?? null;
@@ -153,9 +111,7 @@ export function MobileEpicHeaderTitle(props: {
     <InlineTitleField
       value={title}
       editable={canEdit}
-      // Wrapped: the prop is declared void-returning and the commit is a
-      // round trip now. `void` states the fire-and-forget the caller already
-      // assumed, instead of leaking a promise into a void slot.
+      // `void` states the fire-and-forget the caller already assumed, instead of leaking a promise into a void slot.
       onCommit={(next: string) => {
         settleDetachedEpicTitleCommit(handleCommit(next), "Epic mobile header");
       }}
@@ -167,18 +123,7 @@ export function MobileEpicHeaderTitle(props: {
 }
 
 /**
- * Registers this epic tab's header actions (the tab switcher trigger) while
- * the pane is mounted - focused or merely retained - self-gated on
- * `useIsMobileViewport()`. Whether they appear is the header's resolution from
- * the presented surface, not this binder's concern; registering while retained
- * is what lets a focus switch onto this tab resolve its trigger in the same
- * commit. The registry stores a `ReactNode` element: this is safe
- * because the element is a self-contained component keyed only on the stable
- * tab id - it re-reads volatile state from its own hooks each header render,
- * so nothing goes stale. A render-fn entry would be isomorphic (a fn returning
- * the same element) but a larger store change; a baked-in control that closed
- * over epic-session handlers WOULD go stale, which is exactly what this shape
- * avoids.
+ * The registry stores a `ReactNode` element: this is safe because the element is a self-contained component keyed only on the stable tab id - it re-reads volatile state from its own hooks each header render, so nothing goes stale.
  */
 export function MobileEpicHeaderActionsBinder(props: {
   readonly tabId: string;

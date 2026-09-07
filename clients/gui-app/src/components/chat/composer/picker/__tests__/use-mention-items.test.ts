@@ -721,11 +721,8 @@ describe("mentionNoMatchDismissVerdict", () => {
   });
 
   it("holds the menu open when a requested GitHub catalog read failed", () => {
-    // A rejected cache-only read carries no rows and no scope, so zero
-    // matches proves nothing - the PR/issue source never answered. Before the
-    // GitHub error was folded in beside the other sources', retries
-    // exhausting flipped `loading` false and the picker dismissed over rows
-    // it never saw.
+    // A rejected cache-only read carries no rows and no scope, so zero matches proves nothing - the PR/issue source never answered.
+    // Before the GitHub error was folded in beside the other sources', retries exhausting flipped `loading` false and the picker dismissed over rows it never saw.
     expect(
       mentionNoMatchDismissVerdict({
         ...settledNoMatch,
@@ -734,9 +731,7 @@ describe("mentionNoMatchDismissVerdict", () => {
     ).toBe(false);
   });
 
-  // Without this the whole `referenceQuery` input can be deleted from the
-  // verdict call and every other case in this suite stays green - the fixture
-  // only ever sets it false, so nothing measures the exemption it exists for.
+  // Without this the whole `referenceQuery` input can be deleted from the verdict call and every other case in this suite stays green - the fixture only ever sets it false, so nothing measures the exemption it exists for.
   it("holds the menu open for a reference-shaped query that matched nothing", () => {
     expect(
       mentionNoMatchDismissVerdict({
@@ -856,11 +851,8 @@ function browserSessionsState(
 }
 
 describe("browserTabMentionEntriesFromSessions", () => {
-  // The picker used to see exactly ONE coordinator (the canvas host's) and
-  // dropped its rows whenever that host was not the chat's - so a tab on
-  // another host vanished from the menu entirely. Cross-host mentions (spec
-  // decision #10) invert that: every host's tabs surface, and the chat's OWN
-  // host is the only one whose tabs come back drivable.
+  // The picker used to see exactly ONE coordinator (the canvas host's) and dropped its rows whenever that host was not the chat's - so a tab on another host vanished from the menu entirely.
+  // Cross-host mentions (spec decision #10) invert that: every host's tabs surface, and the chat's OWN host is the only one whose tabs come back drivable.
   it("marks tabs on the chat's own host as drivable (contextOnly: false)", () => {
     const sessions = browserSessionsState({
       hostId: "chat-host",
@@ -878,11 +870,8 @@ describe("browserTabMentionEntriesFromSessions", () => {
   });
 
   it("resolves each coordinator's host label once, tolerating an unresolved host", () => {
-    // The picker's label lookup is a real directory read; the tests around it
-    // hand `hostLabel` in pre-resolved, so nothing else pins the mapping.
-    // Mutation: labelling by the coordinator KEY instead of `state.hostId`, or
-    // dropping the null-host arm and calling the resolver with `""` - both
-    // hand every row the wrong host's name.
+    // The picker's label lookup is a real directory read; the tests around it hand `hostLabel` in pre-resolved, so nothing else pins the mapping.
+    // Mutation: labelling by the coordinator KEY instead of `state.hostId`, or dropping the null-host arm and calling the resolver with `""` - both hand every row the wrong host's name.
     const named = browserSessionsState({
       hostId: "canvas-host",
       items: [browserSession({ sessionId: "s1", hostId: "canvas-host" })],
@@ -908,11 +897,7 @@ describe("browserTabMentionEntriesFromSessions", () => {
     expect(asked).toEqual(["canvas-host"]);
   });
 
-  // A tab on a host that is not the chat's own no longer disappears - it
-  // comes back marked `contextOnly: true`, carrying the owning host's label,
-  // because it can only ever be attached as snapshot context (url, title,
-  // screenshot), never a `browser-tab:` drive token the agent could attach to
-  // (spec decision #10).
+  // A tab on a host that is not the chat's own no longer disappears - it comes back marked `contextOnly: true`, carrying the owning host's label, because it can only ever be attached as snapshot context (url, title, screenshot), never a `browser-tab:` drive token the agent could attach to (spec decision #10).
   it("marks tabs on a different host as contextOnly instead of dropping them, and carries the host's label", () => {
     const sessions = browserSessionsState({
       hostId: "canvas-host",
@@ -930,9 +915,7 @@ describe("browserTabMentionEntriesFromSessions", () => {
     expect(entries[0]?.hostLabel).toBe("Canvas Host");
   });
 
-  // A null chat host is "readiness has not resolved yet", not "this chat has
-  // no host": comparing against it would mark the chat's OWN tabs contextOnly
-  // for as long as that lasts, quietly downgrading them to snapshots.
+  // A null chat host is "readiness has not resolved yet", not "this chat has no host": comparing against it would mark the chat's OWN tabs contextOnly for as long as that lasts, quietly downgrading them to snapshots.
   it("returns no entries while the chat's host is unresolved", () => {
     const sessions = browserSessionsState({
       hostId: "chat-host",
@@ -987,11 +970,7 @@ describe("browserTabMentionEntriesFromSessions", () => {
     expect(entryA.id).not.toBe(entryB.id);
   });
 
-  // `page.attachTab` auto-wakes a dormant session before leasing it (see
-  // `SessionReplTabSource.attach` -> `ensureTabAttached` ->
-  // `runDormantActivation`, ahead of the lease), so a dormant session's tabs
-  // are fully attachable and must stay listed - excluding them would hide a
-  // reference the agent can actually resolve.
+  // `page.attachTab` auto-wakes a dormant session before leasing it (see `SessionReplTabSource.attach` -> `ensureTabAttached` -> `runDormantActivation`, ahead of the lease), so a dormant session's tabs are fully attachable and must stay listed - excluding them would hide a reference the agent can actually resolve.
   it("lists a dormant session's tabs and marks them dormant", () => {
     const sessions = browserSessionsState({
       hostId: "chat-host",
@@ -1039,10 +1018,7 @@ describe("browserTabMentionEntriesFromSessions", () => {
 });
 
 describe("createBrowserTabMentionEntriesSnapshotCache", () => {
-  // The bug this cache exists to fix: the host bumps `lastActivityAt` (and
-  // mints a fresh sessions object) on essentially every frame, which used to
-  // re-run the whole mention pipeline at frame rate even when no tab's
-  // mention-relevant fields actually changed.
+  // The bug this cache exists to fix: the host bumps `lastActivityAt` (and mints a fresh sessions object) on essentially every frame, which used to re-run the whole mention pipeline at frame rate even when no tab's mention-relevant fields actually changed.
   it("returns the SAME array reference across snapshots whose sessions are content-identical for mention purposes", () => {
     const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
     const sourcesAt = (lastActivityAt: number) => [
@@ -1122,11 +1098,7 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
     expect(second[0]?.url).toBe("https://example.com/other");
   });
 
-  // The dormancy flag comes from `tab.status`, which is not part of the old
-  // key shape (title/url/viewed) - if `status` were left out of the content
-  // key, a session waking (dormant -> headless) with an otherwise-identical
-  // tab would keep serving the stale cached array, including its stale
-  // `dormant: true` entry, until some unrelated field also changed.
+  // The dormancy flag comes from `tab.status`, which is not part of the old key shape (title/url/viewed) - if `status` were left out of the content key, a session waking (dormant -> headless) with an otherwise-identical tab would keep serving the stale cached array, including its stale `dormant: true` entry, until some unrelated field also changed.
   it("rebuilds with a new array identity when a session's runtime wakes and its tab's status flips", () => {
     const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
     const dormantTab = {
@@ -1204,10 +1176,7 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
     expect(closed).toEqual([]);
   });
 
-  // The host label rides the content key (not just the tab fields): it is
-  // carried into the attached text line for a contextOnly entry, so a
-  // renamed host must not keep serving the OLD label out of the cache even
-  // though every tab field is unchanged.
+  // The host label rides the content key (not just the tab fields): it is carried into the attached text line for a contextOnly entry, so a renamed host must not keep serving the OLD label out of the cache even though every tab field is unchanged.
   it("rebuilds when only the label a different host resolves to changes", () => {
     const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
     const sourcesWithLabel = (hostLabel: string | null) => [

@@ -3,18 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonContent } from "../registry";
 import { ContextType, jsonContentToMarkdown } from "../json-content-serializer";
 
-/**
- * Regression tests for Agent mention serialization across both interfaces.
- *
- * An Agent is the durable referenceable entity; Chat and Terminal are the
- * interfaces used to interact with one. `ContextType.TerminalAgent` was added
- * after `Chat`, and before it existed a Terminal-interface Agent mention fell
- * through the serializer's `default:` arm and reached the coding agent as a
- * bare title - no `@agent:` marker and, critically, no `agentId`, so the
- * runtime had nothing to pass to `traycer_send_message` /
- * `traycer_get_transcript`. Referring to an Agent has to mean the same thing
- * regardless of interface (Core Flows, Flow 3).
- */
+/** Regression tests for Agent mention serialization across both interfaces. */
 
 function mentionDoc(attrs: Record<string, unknown>): JsonContent {
   return {

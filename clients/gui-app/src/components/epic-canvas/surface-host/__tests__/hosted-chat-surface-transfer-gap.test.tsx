@@ -1,16 +1,5 @@
 /**
- * Ticket 21 slice 4 fix round, finding 1 (BLOCKER): a header tear-off must
- * not unmount/remount the hosted chat body. Reproduces the reviewer's exact
- * transfer-gap discriminator - a REAL tear-off action moves the tile's
- * canvas entry to a destination tab in one synchronous `EpicCanvasStore`
- * write, while the environment passed to the bridge deliberately stays the
- * SOURCE environment (no destination `TileSurfaceSlot` is rendered here to
- * republish a fresh one - that's the gap).
- *
- * `renderTile` is swapped for a STABLE, module-level mount-tracking probe -
- * defined ONCE, not recreated per call - so a false remount reading can't be
- * an artifact of the mock itself; only `HostedChatSurfaceBody`'s own node
- * resolution can cause one.
+ * `renderTile` is swapped for a STABLE, module-level mount-tracking probe - defined ONCE, not recreated per call - so a false remount reading can't be an artifact of the mock itself; only `HostedChatSurfaceBody`'s own node resolution can cause one.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -135,11 +124,6 @@ describe("HostedChatSurfaceContextBridge transfer-gap continuity (finding 1)", (
     expect(probeEvents.filter((e) => e.kind === "mount")).toHaveLength(1);
     expect(probeEvents.filter((e) => e.kind === "unmount")).toHaveLength(0);
 
-    // Real tear-off: the `EpicCanvasStore` write lands synchronously inside
-    // the coordinator transaction; `useTabsStore`'s header ref lands moments
-    // later in the SAME transaction. The bridge keeps the SAME (now-stale)
-    // source environment throughout - no destination `TileSurfaceSlot`
-    // exists in this test to republish a fresh one, reproducing the gap.
     let destinationTabId: string | null = null;
     act(() => {
       tabCommandCoordinator.createSourceRefAtStripIndex(0, () => {

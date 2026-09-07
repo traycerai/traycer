@@ -1,11 +1,6 @@
 import { cn } from "@/lib/utils";
 
-/**
- * A stable, one-line branch relationship. The branch being created is the
- * primary value; its source remains visible as lower-emphasis provenance.
- * A short target keeps its natural width so the source sits beside it; a long
- * target caps at 60%, leaving the remaining width for source provenance.
- */
+/** A stable, one-line branch relationship. */
 export function WorkspaceBranchLabel(props: {
   readonly target: string;
   readonly source: string | null;

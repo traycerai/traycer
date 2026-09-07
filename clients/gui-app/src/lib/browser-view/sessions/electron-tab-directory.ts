@@ -8,21 +8,7 @@ import type {
 import { compositeKey } from "../tiles/browser-view-keys";
 import { ignoreError } from "../ignore-error";
 
-/**
- * Renderer-global registry of published Electron tab bindings.
- *
- * The LIFECYCLE is not here, and is no longer in this process at all: main
- * owns the `browser.sessions` stream, creates the native tab from the host's
- * `createElectronTab` frame (seed included) and tells this renderer only that
- * a tab exists, by identity (H10). What is left is the tile's half - the
- * directory a tile looks a binding up in, the control action, and the surface
- * attach/detach chain, none of which carries jar material.
- *
- * Bindings outlive any single stream incarnation, so every entry records the
- * `owner` symbol of the coordinator that published it and every mutation is
- * owner-filtered: a reconnecting stream must never retire a live successor's
- * bindings.
- */
+/** Renderer-global registry of published Electron tab bindings. */
 
 type ElectronTabSurfaceBinding = Omit<
   BrowserViewAttachSurface,
@@ -55,21 +41,7 @@ interface ElectronTabSurfaceState {
 const directory = new Map<string, ElectronTabDirectoryEntry>();
 const directoryListeners = new Set<() => void>();
 /**
- * The attach/detach chain, keyed by TAB rather than held per published
- * binding: a second `tabBound` for the same tab republishes it without a
- * removal in between, and two chains for one tab can interleave the old
- * lease's detach with the new one's attach - which main refuses, leaving the
- * tile blank.
- *
- * It therefore outlives a STREAM retirement, and only a genuine
- * `tabReleased` drops it. Those are not the same event: retiring this
- * renderer's bindings on a non-live transition tells main nothing, so main
- * still holds the tab with the old `bindingId` attached and refuses the
- * republished tile's attach while it does. Keeping the chain is what makes
- * the republish detach the old surface first, in order, on the one chain -
- * whereas dropping it started a second chain that attached against a surface
- * main had not released, and the tile stayed blank. A release, by contrast,
- * has already taken main's entry with it, so there is nothing left to detach.
+ * The attach/detach chain, keyed by TAB rather than held per published binding: a second `tabBound` for the same tab republishes it without a removal in between, and two chains for one tab can interleave the old lease's detach with the new one's attach -.
  */
 const surfaceStates = new Map<string, ElectronTabSurfaceState>();
 
@@ -106,10 +78,8 @@ export function useElectronTabBindingOnHost(
 }
 
 /**
- * Non-reactive lookup of a published Electron tab binding, for callers that
- * act on a tab once (navigating a deduped link's tab to a new hash) rather
- * than rendering it. Returns `null` for a tab this renderer does not own -
- * a headless session, or a tab living on another machine's shell.
+ * Non-reactive lookup of a published Electron tab binding, for callers that act on a tab once (navigating a deduped link's tab to a new hash) rather than rendering it.
+ * Returns `null` for a tab this renderer does not own - a headless session, or a tab living on another machine's shell.
  */
 export function electronTabBinding(
   hostId: string,
@@ -130,17 +100,7 @@ function notifyDirectoryListeners(): void {
   for (const listener of directoryListeners) listener();
 }
 
-/**
- * Publishes the tile-facing half of one native tab main just bound.
- *
- * The attach/detach chain is serialized PER TAB (see {@link surfaceStates}),
- * because a rebind is two calls (detach the old surface, then attach the new)
- * and they must not interleave with another rebind of the same tab: main
- * refuses an attach while a different binding id is still live, so an
- * unordered pair leaves the tile blank. The old surface stays recorded until
- * its detach actually resolves, so a failed rebind leaves a retry able to
- * detach it again.
- */
+/** Publishes the tile-facing half of one native tab main just bound. */
 export function publishElectronTabBinding(
   owner: symbol,
   native: BrowserViewBridge,
@@ -218,22 +178,12 @@ export function removeOwnedElectronTabBinding(
     return;
   }
   directory.delete(key);
-  // A genuine release: main has already dropped the native entry, so the
-  // recorded surface names something that no longer exists and the next
-  // incarnation of this tab must start from a clean chain.
+  // A genuine release: main has already dropped the native entry, so the recorded surface names something that no longer exists and the next incarnation of this tab must start from a clean chain.
   surfaceStates.delete(key);
   notifyDirectoryListeners();
 }
 
-/**
- * Retires every binding this coordinator published - a stream that stopped
- * being live, or a restart.
- *
- * The surface chains SURVIVE (see {@link surfaceStates}): main keeps the
- * native tabs across a stream incarnation, still holding whatever
- * `bindingId` this renderer last attached, and the republish has to detach
- * that one before its own attach can be accepted.
- */
+/** Retires every binding this coordinator published - a stream that stopped being live, or a restart. */
 export function removeOwnedElectronTabBindings(owner: symbol): void {
   let removed = false;
   for (const [key, entry] of directory) {

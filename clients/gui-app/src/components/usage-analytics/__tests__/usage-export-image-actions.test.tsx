@@ -1,9 +1,5 @@
-/**
- * The export controls both usage surfaces render. What is asserted here is the
- * part that is the same wherever they are mounted: which buttons exist for a
- * given set of shell capabilities, what they are called, and how one running
- * export gates all of them.
- */
+/** What is asserted here is the part that is the same wherever they are mounted: which buttons exist for a
+ * given set of shell capabilities, what they are called, and how one running export gates all of them. */
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,24 +18,16 @@ interface Overrides {
   readonly variant: "icon" | "labelled";
 }
 
-/** The shell shape where `saveFile` IS the download: desktop, browser tab. */
 function ownDownloadShell(): Pick<Overrides, "copyImage" | "shareImage"> {
   return { copyImage: () => undefined, shareImage: null };
 }
 
-/**
- * A shell with an OS chooser AND a working image clipboard - the iOS install.
- * The two capabilities are independent, so this is the shape that carries all
- * three controls at once.
- */
+/** A shell with an OS chooser and a working image clipboard - the iOS install. */
 function shareAndCopyShell(): Pick<Overrides, "copyImage" | "shareImage"> {
   return { copyImage: () => undefined, shareImage: () => undefined };
 }
 
-/**
- * A shell with an OS chooser whose WebView cannot reach the image clipboard -
- * the Android install.
- */
+/** A shell with an OS chooser whose WebView cannot reach the image clipboard - the Android install. */
 function shareOnlyShell(): Pick<Overrides, "copyImage" | "shareImage"> {
   return { copyImage: null, shareImage: () => undefined };
 }
@@ -61,7 +49,6 @@ function renderActions(overrides: Overrides): void {
   );
 }
 
-/** Every export button on screen, in render order. */
 function buttonTestIds(): readonly string[] {
   return screen
     .getAllByRole("button")

@@ -2,11 +2,7 @@ import { posix, win32 } from "node:path";
 
 export interface HostMaintenanceLeaseTarget {
   readonly hostHomeDir: string;
-  /**
-   * The GUI domain on macOS. Windows has no GUI-uid namespace, so callers
-   * carry the stable sentinel zero there; the macOS controller ignores it
-   * outside its Darwin scope.
-   */
+  /** The GUI domain on macOS. Windows has no GUI-uid namespace, so callers carry the stable sentinel zero there; the macOS controller ignores it outside its Darwin scope. */
   readonly serviceUid: number;
 }
 
@@ -29,12 +25,7 @@ export function parseHostMaintenanceLeaseTarget(
   return { hostHomeDir, serviceUid: parsedUid };
 }
 
-/**
- * The maintenance protocol crosses platform boundaries: Windows package
- * operations legitimately name `C:\\Users\\…\\.traycer\\host`, while a POSIX
- * executor must never accept a relative or drive-shaped path. Keep the
- * validation parameterized so tests can execute both contracts on any host.
- */
+/** The maintenance protocol crosses platform boundaries: Windows package operations legitimately name `C:\\Users\\…\\.traycer\\host`, while a POSIX executor must never accept a relative or drive-shaped path. Keep the validation parameterized so tests can execute both contracts on any host. */
 export function isHostMaintenanceTargetPath(
   value: string,
   platform: NodeJS.Platform,

@@ -47,10 +47,6 @@ describe("optimistic-queue managed-command items", () => {
   });
 
   it("never retains a managed-command item as an optimistic local send", () => {
-    // The chip is given an optimistic-shaped id and a retained action id so
-    // every check downstream of the kind narrowing would wave it through - the
-    // host authors these ids, so this state is unreachable in practice and the
-    // kind check is the only thing that keeps it that way.
     const clientActionId = "action-1";
     const current: ChatQueueState = {
       status: "running",

@@ -14,12 +14,8 @@ const WINDOW_OPTIONS: ReadonlyArray<{
 export interface UsageWindowPickerProps {
   readonly windowDays: UsageSummaryWindowDays;
   readonly onChange: (windowDays: UsageSummaryWindowDays) => void;
-  /**
-   * Extra classes merged onto each trigger - the styling seam the Tabs
-   * primitive doesn't otherwise expose (its list hardcodes `h-8`), used by
-   * the usage dialogs for coarse-pointer touch-target bumps. `undefined`
-   * keeps the primitive's sizing (Settings).
-   */
+  /** Extra classes merged onto each trigger - the styling seam the Tabs primitive doesn't otherwise expose (its
+   * list hardcodes `h-8`), used by the usage dialogs for coarse-pointer touch-target bumps. */
   readonly triggerClassName: string | undefined;
 }
 

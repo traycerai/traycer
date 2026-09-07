@@ -10,11 +10,7 @@ import { ImageAttachmentChip } from "./image-attachment-chip";
 export interface AttachmentStripProps {
   content: JsonContent;
   onRemoveImage: (id: string) => void;
-  /**
-   * Byte source for hash-only chips (epic doc for chat, IndexedDB for landing),
-   * bundled with the subject its bytes are authorized against - the blob cache
-   * keys on both, so a bare function is deliberately not accepted here.
-   */
+  /** Byte source for hash-only chips (epic doc for chat, IndexedDB for landing), bundled with the subject its bytes are authorized against - the blob cache keys on both, so a bare function is deliberately not accepted here. */
   fetcher: ScopedImageBytesFetcher;
   /** Same-session synchronous object-URL lookup; chat passes a no-op. */
   sessionObjectUrl: (hash: string) => string | null;

@@ -250,11 +250,6 @@ describe("reconcileRepositorySelection", () => {
   });
 
   it("normalizes a selection that has become the whole scope", () => {
-    // The popover only renders the Repository group for a multi-repository
-    // scope, so a scope shrinking onto the selected repository would strand a
-    // lit funnel dot no visible control can clear - and the stored selection
-    // would start excluding rows again the moment another repository is
-    // attached.
     const repository = {
       githubHost: "github.com",
       owner: "traycerai",
@@ -285,12 +280,8 @@ describe("reconcileRepositorySelection", () => {
   });
 
   it("normalizes the returned repository to the scope's own entry when casing differs", () => {
-    // The stored selection and the scope's entry can be spelled with
-    // different casing for the same repository - a persisted selection may
-    // predate a remote being re-spelled. Matched case-insensitively, but the
-    // returned repository must be the scope's OWN entry object, not a
-    // rebuild of the stored one, so every downstream identity comparison
-    // (the popover's radio, the row filter's key) agrees on one spelling.
+    // The stored selection and the scope's entry can be spelled with different casing for the same
+    // repository - a persisted selection may predate a remote being re-spelled.
     const scopeEntry = {
       githubHost: "github.com",
       owner: "TraycerAI",
@@ -327,10 +318,8 @@ describe("restoreUnrepresentedRepositorySelection", () => {
   });
 
   it("returns next unchanged when the stored repository is still represented, matched case-insensitively", () => {
-    // Represented means the reconciled projection's decision stands: this
-    // function only restores a selection reconcile had to DROP, and a
-    // case-only spelling difference between the stored selection and the
-    // scope's own entry is not a drop.
+    // Represented means the reconciled projection's decision stands: this function only restores a
+    // selection reconcile had to DROP, and a case-only spelling difference between the stored
     const stored = {
       githubHost: "github.com",
       owner: "TraycerAI",
@@ -345,10 +334,8 @@ describe("restoreUnrepresentedRepositorySelection", () => {
   });
 
   it("restores the stored repository onto next when the scope no longer represents it", () => {
-    // The scope shrank or the folder detached, and `next` (the edit made
-    // through the reconciled projection) carries no repository - so the
-    // State/Involvement change must not also silently delete the stored
-    // selection reconcile was only hiding as a display fallback.
+    // The scope shrank or the folder detached, and `next` (the edit made through the reconciled
+    // projection) carries no repository - so the State/Involvement change must not also silently
     const stored = {
       githubHost: "github.com",
       owner: "traycerai",

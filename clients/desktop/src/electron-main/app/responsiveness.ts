@@ -1,12 +1,6 @@
 import { log } from "./logger";
 
-/**
- * Renderer responsiveness probe. Chromium fires "unresponsive" after the
- * renderer fails to ack pings for ~30 seconds - usually a long synchronous
- * task or a deadlock. Pair "responsive" to know if/when it recovers. The
- * window-factory wires this per-window. Lives in its own file so the
- * window-factory test doesn't have to pull in the Sentry SDK transitively.
- */
+/** Chromium fires "unresponsive" after the renderer fails to ack pings for ~30 seconds - usually a long synchronous task or a deadlock. */
 export function installResponsivenessListeners(
   webContents: Electron.WebContents,
 ): void {

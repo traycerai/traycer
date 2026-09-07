@@ -73,9 +73,7 @@ describe("markdownToPlainText", () => {
 });
 
 /**
- * The lexer leaves character references encoded in `text` tokens, but the
- * expanded body decodes them downstream - so without this a row's preview and
- * its own expansion disagree about what the message says.
+ * The lexer leaves character references encoded in `text` tokens, but the expanded body decodes them downstream - so without this a row's preview and its own expansion disagree about what the message says.
  */
 describe("markdownToPlainText character references", () => {
   it("decodes the named references that actually show up in prose", () => {

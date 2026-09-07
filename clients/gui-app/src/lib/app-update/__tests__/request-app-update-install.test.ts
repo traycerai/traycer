@@ -13,17 +13,7 @@ import {
   type UpdateUnsyncedConfirmation,
 } from "@/stores/dialogs/desktop-dialog-store";
 
-/**
- * `confirmAppUpdateInstall` - the confirmation's Confirm.
- *
- * The claim under test: Confirm installs off a FRESH app-wide check, not off
- * the rows captured when the dialog opened. Between open and Confirm another
- * window can retain a new Epic; the update quit bypasses the unsynced-edits
- * interception, so a Confirm that installed off the stale list destroyed a
- * buffer the user was never shown. The cross-window answer is stubbed at the
- * same seam the module reads it from (`window.runnerHost.appLifecycle`), so
- * these arms drive the real desktop path, not the single-window fallback.
- */
+/** `confirmAppUpdateInstall` - the confirmation's Confirm. */
 
 const SNAPSHOT: DesktopAppUpdateSnapshot = {
   sequence: 0,
@@ -164,9 +154,8 @@ describe("confirmAppUpdateInstall", () => {
   });
 
   it("does NOT install when the other windows became UNKNOWN since the dialog opened", async () => {
-    // The dialog said "other windows checked, only 'a' is at risk"; by Confirm
-    // main can no longer vouch for them. Whatever the user consented to, it
-    // was not "and anything in the windows we could not check".
+    // The dialog said "other windows checked, only 'a' is at risk"; by Confirm main can no longer vouch for them.
+    // Whatever the user consented to, it was not "and anything in the windows we could not check".
     const bridge = new FakeBridge();
     mainAnswers({ epics: [entry("a")], otherWindowsUnknown: true });
     openDialogWith(shownA);

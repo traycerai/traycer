@@ -11,13 +11,8 @@ import type { ConfigLogLevelScope } from "@traycer/protocol/host/config/index";
 import type { DiagnosticsLogTarget } from "@traycer/protocol/host/diagnostics/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
-/**
- * Every method the config-RPC track added, grouped the way the panels gate on
- * them ("has this host handshaked WITH the shell family" / "...the log-level
- * family" / "...the diagnostics-log family"). `recordNegotiatedHostMethods`
- * expects a flat method list per host, so tests compose these per scenario
- * instead of writing the strings out by hand each time.
- */
+/** `recordNegotiatedHostMethods` expects a flat method list per host, so tests compose these per scenario
+ * instead of writing the strings out by hand each time. */
 export const CONFIG_SHELL_METHODS = [
   "config.shell.get",
   "config.shell.set",
@@ -68,36 +63,20 @@ export interface ConfigHostFixture {
     cliLogLevel: LogLevel;
     hostLogLevel: LogLevel;
   };
-  /**
-   * How many times `host.status` was answered by this fixture's client -
-   * `useHostCapabilityProbe`'s target, and a RELEASED-FLOOR method so even a
-   * host whose config family is unsupported still answers it. Tests assert
-   * this to prove the probe actually dispatched, not merely that the panel
-   * changed state for some other reason.
-   */
+  /** How many times `host.status` was answered by this fixture's client - `useHostCapabilityProbe`'s target, and
+   * a released-floor method so even a host whose config family is unsupported still answers it. */
   readonly hostStatusCalls: () => number;
 }
 
-/**
- * A real `HostClient` wired to an in-memory messenger whose handlers delegate
- * to a `MockTraycerCli` for the shell/env family - mirroring how the host
- * resolver delegates to the same `@traycer/protocol/config/store` functions
- * the CLI uses, so RPC-path tests exercise the same canonicalisation
- * (family-default flags, `synthesised`, entry upserts) the bridge tests always
- * relied on instead of re-deriving it by hand.
- */
+/** A real `HostClient` wired to an in-memory messenger whose handlers delegate to a `MockTraycerCli` for the
+ * shell/env family. */
 export function buildConfigHostFixture(options: {
   readonly hostId: string;
   readonly isLocalMachine: boolean;
   readonly cli?: MockTraycerCli;
   readonly logLevels?: { cliLogLevel: LogLevel; hostLogLevel: LogLevel };
   readonly diagnosticsLogs?: readonly DiagnosticsLogFixtureEntry[];
-  /**
-   * Replaces (rather than merges into) individual method handlers after the
-   * defaults are built - for the rare test that needs a pending/erroring RPC
-   * (e.g. a `diagnostics.logs.list` that never resolves) instead of the
-   * fixture's normal in-memory behaviour.
-   */
+  /** Replaces (rather than merges into) individual method handlers after the defaults are built. */
   readonly overrideHandlers?: MockHandlerMap<HostRpcRegistry>;
 }): ConfigHostFixture {
   const cli = options.cli ?? new MockTraycerCli();
@@ -206,12 +185,8 @@ export function buildConfigHostFixture(options: {
       if (entry === undefined) {
         return {
           status: "unavailable" as const,
-          // `cli`, not `req.target`, because the WIRE TYPE says so:
-          // `diagnosticsLogsTailUnavailableResponseSchema` pins this arm to
-          // `z.literal("cli")`. A missing host log is reported as an
-          // `available` tail with no lines - the host is running, its file
-          // just has not been written yet - so `unavailable` is a CLI-only
-          // outcome and echoing the request here would not type-check.
+          // A missing host log is reported as an `available` tail with no lines - the host is running, its file just has
+          // not been written yet.
           target: "cli" as const,
           reason: "missing" as const,
         };

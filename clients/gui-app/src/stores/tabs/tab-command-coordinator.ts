@@ -215,9 +215,7 @@ function currentLayout(): PersistedTabStripLayout {
       (ref, index) => tabRefKey(ref) === tabRefKey(state.stripOrder[index]),
     );
   if (transactionDepth > 0 || matchesProjection) return layout;
-  // Existing tests and unconverted flat callers can still seed `stripOrder`
-  // directly. Outside a coordinator transaction, treat that as the T1
-  // compatibility write it is and rebuild the authoritative flat layout.
+  // Existing tests and unconverted flat callers can still seed `stripOrder` directly.
   return state.stripOrder.reduce(createLayoutItem, {
     version: 2,
     items: [],
@@ -470,11 +468,7 @@ function replaceLostEpicRefs(
   return { ...layout, items, activeItemId };
 }
 
-/**
- * Owns every synchronous layout/source transaction. Async callers prepare
- * their work outside this boundary and invoke one of these commands only when
- * they have an exact, current source mutation to apply.
- */
+/** Owns every synchronous layout/source transaction. */
 export class TabCommandCoordinator {
   private installed = false;
   private ready = true;
@@ -539,9 +533,7 @@ export class TabCommandCoordinator {
     const layout = currentLayoutForFillableSplit(command);
     if (!sourceHasRef(command.ref)) return false;
     const existing = findStripItemForRef(layout, command.ref);
-    // A chooser may reuse an already-open, unpaired source. Remove its one
-    // ordinary frame first, then fill the requested side inside the SAME
-    // transaction so source ownership never changes and the view stays keyed.
+    // A chooser may reuse an already-open, unpaired source.
     const withoutUngroupedSource =
       existing?.kind === "tab" ? removeLayoutRef(layout, command.ref) : layout;
     const next = replaceFillableSide(
@@ -622,12 +614,7 @@ export class TabCommandCoordinator {
     return true;
   }
 
-  /**
-   * Places a source-owned ref at a top-level strip-item index. Canvas tear-off
-   * creates the source tab first; this command then makes its placement
-   * explicit in the authoritative split layout instead of relying on legacy
-   * flat-order reconciliation, which can only append a newly discovered ref.
-   */
+  /** Places a source-owned ref at a top-level strip-item index. */
   placeSourceRefAtStripIndex(
     command: PlaceSourceRefAtStripIndexCommand,
   ): boolean {
@@ -658,13 +645,6 @@ export class TabCommandCoordinator {
     return true;
   }
 
-  /**
-   * Creates a source-owned ref and places it in one suppressed transaction.
-   * The source callback runs only after reconciliation is suppressed; its
-   * freshly minted ref is then inserted into the authoritative layout before
-   * the transaction is finalized. This is the canvas tear-off path, where the
-   * source store owns id creation and cannot reserve the ref ahead of time.
-   */
   createSourceRefAtStripIndex(
     targetIndex: number,
     createSource: () => TabRef | null,
@@ -679,13 +659,8 @@ export class TabCommandCoordinator {
         const withRef = createLayoutItem(layout, createdRef);
         const item = findStripItemForRef(withRef, createdRef);
         if (item?.kind !== "tab") {
-          // Placement failed - the created ref is not part of the
-          // authoritative layout, so it must not be reported as placed.
-          // createSource() already minted it in the source store, so undo
-          // that here (before finalize's reconciliation runs) or it gets
-          // re-adopted as an orphaned, active tab on the next pass. Only
-          // roll back refs this call actually minted - a ref that already
-          // existed before createSource() ran must not be closed here.
+          // Placement failed - the created ref is not part of the authoritative layout, so it must not be
+          // reported as placed.
           if (!knownBeforeCreate.has(tabRefKey(createdRef))) {
             this.removeSourceRef(createdRef);
           }
@@ -906,12 +881,7 @@ export class TabCommandCoordinator {
     return ref;
   }
 
-  /**
-   * Reservation-first activation boundary for ordinary top-level navigation.
-   * Resolution is read-only until `execute` installs the ledger; a ref absent
-   * from the prior layout is always present in `reservedAdditions` before its
-   * source is created/reopened and before the layout can expose it.
-   */
+  /** Reservation-first activation boundary for ordinary top-level navigation. */
   activateTab(
     target: CoordinatedTabActivationTarget,
   ): CoordinatedTabActivation | null {
@@ -1017,9 +987,8 @@ export class TabCommandCoordinator {
     target: Extract<CoordinatedTabActivationTarget, { kind: "draft" }>,
     layout: PersistedTabStripLayout,
   ): ResolvedCoordinatedActivation | null {
-    // The installed mobile app has ONE stable composer (no tab strip to close
-    // a second draft tab), so an id-less create lands on the newest existing
-    // draft instead of minting - mirroring `createDraft`'s product-flag gate.
+    // The installed mobile app has ONE stable composer (no tab strip to close a second draft tab), so
+    // an id-less create lands on the newest existing draft instead of minting - mirroring
     const mobileStableDraftId =
       target.draftId === null && target.create && isMobileApp()
         ? newestLandingDraftId()
@@ -1086,18 +1055,8 @@ export class TabCommandCoordinator {
     const ref: TabRef = { kind: "epic", id: target.tabId };
     return this.activationForRef(layout, ref, () => {
       resolveTabEpicIdentity(target.tabId, target.sourceEpicId, target.epicId);
-      // The gate below keeps a failed resolution write-free (no
-      // openTabOrder/activeTabId change), and the read-back after it catches
-      // a listener that raced this same resolution to a different epicId
-      // during `execute`'s synchronous `notify()` (which runs before
-      // `applySources` - see `execute` below): this closure can't return a
-      // value (`resolveMigratedEpicActivation` already returned the
-      // `ResolvedCoordinatedActivation` object bundling it), so a mismatch
-      // throws instead, riding `execute`'s existing catch/record/rethrow
-      // path (the same one a `replaceLayoutForTransaction` failure takes) to
-      // carry the failure out through `activateTab` - before
-      // `replaceLayoutForTransaction` ever runs, so layout/focus stay
-      // untouched.
+      // The gate below keeps a failed resolution write-free (no openTabOrder/activeTabId change), and
+      // the read-back after it catches a listener that raced this same resolution to a different epicId
       useEpicCanvasStore.setState((state) => {
         const current = state.tabsById[target.tabId];
         if (current === undefined || current.epicId !== target.epicId) {
@@ -1223,9 +1182,8 @@ export class TabCommandCoordinator {
   }
 
   /**
-   * Converts the exact persisted migration ref without touching its layout
-   * item, split side, ratio, or focused partner. Route ownership is decided by
-   * the slot-local migration bridge after this source transaction commits.
+   * Converts the exact persisted migration ref without touching its layout item, split side, ratio,
+   * or focused partner.
    */
   completePhaseMigration(command: CompletePhaseMigrationCommand): boolean {
     const ref: TabRef = { kind: "epic", id: command.tabId };
@@ -1252,10 +1210,8 @@ export class TabCommandCoordinator {
           );
           useEpicCanvasStore.setState((state) => {
             const current = state.tabsById[command.tabId];
-            // Gated on the epicId resolution having ACTUALLY landed (whether
-            // from the call above or a prior one) rather than only on
-            // surfaceMode - keeps the two updates sequenced instead of
-            // trusting they always land together.
+            // Gated on the epicId resolution having ACTUALLY landed (whether from the call above or a prior
+            // one) rather than only on surfaceMode - keeps the two updates sequenced instead of trusting they
             if (
               current === undefined ||
               current.epicId !== command.epicId ||
@@ -1278,14 +1234,8 @@ export class TabCommandCoordinator {
       },
       applyRemovals: () => undefined,
     });
-    // Derived from OBSERVED final state, not a claim recorded mid-commit: a
-    // synchronous subscriber re-entering `resolveTabEpicIdentity` during
-    // `execute`'s `notify()` can move this same tab's epicId again before
-    // this frame regains control, which makes any flag captured at write
-    // time stale. A `false` return routes into
-    // `PhaseMigrationController.succeed()`'s existing rejection branch
-    // (status -> "error"), which its `retry()` path already knows how to
-    // resume from.
+    // Derived from OBSERVED final state, not a claim recorded mid-commit: a synchronous subscriber
+    // re-entering `resolveTabEpicIdentity` during `execute`'s `notify()` can move this same tab's
     const final = useEpicCanvasStore.getState().tabsById[command.tabId];
     return (
       final !== undefined &&
@@ -1318,18 +1268,8 @@ export class TabCommandCoordinator {
   handleEpicAccessLoss(epicIds: ReadonlyArray<string>): void {
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
-    // Ticket 15 (decision #29): drop every durable chat-key entry under
-    // these epics across all seven per-tab registries - independent of
-    // whether any tab for them is currently open (a chat can leave a
-    // durable entry behind long after its own tab closed).
-    //
-    // Ticket 15 review round 5 (item 2): ONE batched call, not a `forEach`
-    // of the singular per-epic evict - the canvas close sweep below writes
-    // durable state back for whichever of these epics still had open tiles,
-    // so every epic in this access-loss batch must still be fenced by the
-    // time that sweep runs. A `forEach` of independent per-epic tombstones
-    // could FIFO-evict epic 0's fresh fence to make room for epic 500's,
-    // inside this same batch, before the sweep ever reaches epic 0.
+    // drop every durable chat-key entry under these epics across all seven
+    // per-tab registries - independent of whether any tab for them is currently open (a chat can leave
     evictChatTabPersistenceForEpics(epicIds);
     const canvas = useEpicCanvasStore.getState();
     const affected = flattenLayoutRefs(currentLayout()).flatMap<TabRef>(
@@ -1351,9 +1291,8 @@ export class TabCommandCoordinator {
         this.applyExpectedSourceMutation(() => {
           useEpicCanvasStore.getState().closeTabsForEpics(epicIds);
         });
-        // Not point-free: `forEach` would hand the ARRAY INDEX to the
-        // retention argument. `"discard"` preserves this path's existing
-        // behaviour and is not a fresh adjudication of it.
+        // Not point-free: `forEach` would hand the ARRAY INDEX to the retention argument. `"discard"`
+        // preserves this path's existing behaviour and is not a fresh adjudication of it.
         epicIds.forEach((epicId) =>
           // `null` for the same reason as `"discard"`: the user answered for
           // these edits, live handle included.
@@ -1416,21 +1355,15 @@ export class TabCommandCoordinator {
       layout: next,
       reservedAdditions: additions,
       pendingRemovals: removals,
-      // Direct legacy source writers still own their active-id compatibility
-      // fields until every activation entry point uses the coordinator.
-      // Hydration and external source reconciliation therefore repair layout only; they
-      // must not echo a source snapshot back through desktop persistence.
+      // Direct legacy source writers still own their active-id compatibility fields until every
+      // activation entry point uses the coordinator.
       projectSourceCompatibility: false,
       applySources: () => undefined,
       applyRemovals: () => undefined,
     });
   }
 
-  /**
-   * Hydration-only layout installation. Source snapshots have already landed;
-   * this command reserves every ref newly placed into the authoritative layout
-   * before the normal transaction finalizer projects compatibility state.
-   */
+  /** Hydration-only layout installation. */
   restoreHydratedLayout(layout: PersistedTabStripLayout): void {
     const sourceKeys = new Set(tabSourceRefs().map(tabRefKey));
     const current = currentLayout();

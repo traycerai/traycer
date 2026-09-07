@@ -15,32 +15,10 @@ import type {
 } from "@/lib/windows/types";
 import type { DesktopJsHeapBreakdown } from "@/lib/resources/desktop-app-resource-usage";
 
-/**
- * Fixtures shared by the two Diagnostics suites.
- *
- * Diagnostics is one feature rendered by two panels — the app's own logging and
- * heap under Application, the selected host's under the host picker — and both
- * are driven by the same desktop bridges. Every helper here belongs to BOTH, so
- * a change to what the bridge returns cannot land in one suite's copy only.
- *
- * Deliberately not extended with panel-specific scaffolding: the host suite's
- * `HostScope` / `HostClient` wiring depends on module mocks that must be hoisted
- * inside the suite that uses them, and pulling it here would make the app suite
- * import a host-RPC harness it has no host in.
- */
+/** Every helper here belongs to both, so a change to what the bridge returns cannot land in one suite's copy
+ * only. */
 
-/**
- * The two independent bridges the app page reads off `globalThis.runnerHost`.
- *
- * They are separate slots on ONE object, which is why every installer here
- * merges rather than assigns: `getLogLevelsBridge` and
- * `getDesktopHeapSnapshotBridge` each reach into `platform` for their own key,
- * so a helper that replaced the whole object would silently uninstall the other
- * page half. That is not hypothetical — the heap capture went uncovered for
- * exactly this reason, since installing the log-levels bridge blanked
- * `platform.diagnostics` and the Memory group fell back to its unavailable
- * branch under a test that only ever checked the heading.
- */
+/** They are separate slots on one object, which is why every installer here merges rather than assigns. */
 interface TestHeapSnapshotBridge {
   readonly takeHeapSnapshot: (() => Promise<string | null>) | undefined;
   readonly measureJsHeaps:
@@ -68,7 +46,7 @@ function mergePlatform(patch: Partial<TestRunnerPlatform>): void {
   };
 }
 
-/** The heap-capture half — `platform.diagnostics`, not `platform.logLevels`. */
+/** The heap-capture half - `platform.diagnostics`, not `platform.logLevels`. */
 export function installHeapSnapshotBridge(
   takeHeapSnapshot: () => Promise<string | null>,
 ): void {
@@ -82,12 +60,8 @@ export function installHeapSnapshotBridge(
   });
 }
 
-/**
- * The JS-heap-breakdown half of `platform.diagnostics` — merged alongside
- * `takeHeapSnapshot`, never in place of it, for the same reason the doc
- * comment above states: replacing the whole `diagnostics` slot would
- * silently uninstall whichever of the two bridges this call did not name.
- */
+/** The JS-heap-breakdown half of `platform.diagnostics` - merged alongside `takeHeapSnapshot`, never in place
+ * of it, for the same reason the doc comment above states. */
 export function installJsHeapBridge(
   measureJsHeaps: () => Promise<DesktopJsHeapBreakdown | null>,
 ): void {
@@ -133,11 +107,8 @@ export interface HeldLogLevelsBridgeMocks extends LogLevelsBridgeMocks {
   readonly flushNextSet: () => void;
 }
 
-/**
- * One installer builds BOTH fixtures, so they cannot drift: the suites depend
- * on the two answering identically apart from WHEN a set() settles, and that
- * one difference is exactly the `settle` parameter.
- */
+/** One installer builds both fixtures, so they cannot drift: the suites depend on the two answering identically
+ * apart from when a set settles, and that one difference is exactly the `settle` parameter. */
 function installLogLevelsBridgeSettling(
   initial: LogLevelsSnapshot,
   settle: "immediately" | "on-flush",
@@ -190,40 +161,26 @@ export function installLogLevelsBridge(
   return installLogLevelsBridgeSettling(initial, "immediately");
 }
 
-/**
- * Same as installLogLevelsBridge, but each set() stays pending until
- * flushNextSet() so callers can assert in-flight disable state during reset.
- */
+/** Same as installLogLevelsBridge, but each set stays pending until flushNextSet so callers can assert
+ * in-flight disable state during reset. */
 export function installHeldLogLevelsBridge(
   initial: LogLevelsSnapshot,
 ): HeldLogLevelsBridgeMocks {
   return installLogLevelsBridgeSettling(initial, "on-flush");
 }
 
-/** Installs an arbitrary log-levels bridge — for the failure-shaped cases. */
 export function installCustomLogLevelsBridge(bridge: LogLevelsBridge): void {
   mergePlatform({ logLevels: bridge });
 }
 
-/**
- * Drops the WHOLE `runnerHost` — every installed bridge half, not only
- * `logLevels`. The doc block above names replacing the whole object as how a
- * heap capture went silently uncovered, so the name states the blast radius
- * rather than hiding it behind the one slot most callers think about.
- */
+/** The doc block above names replacing the whole object as how a heap capture went silently uncovered, so the
+ * name states the blast radius rather than hiding it behind the one slot most callers think about. */
 export function clearRunnerHostBridges(): void {
   globalWithRunnerHost.runnerHost = undefined;
 }
 
-/**
- * Both entries the real bridge answers with — see `support.ts`'s `getSnapshot`,
- * which builds `desktop` and `host` unconditionally.
- *
- * Carrying both matters now that the two pages split the list: the app page
- * takes `desktop` and the host page's bridge fallback takes everything else. A
- * fixture with only `desktop` would let the host page's filter look correct
- * while it silently dropped the one entry that page is supposed to show.
- */
+/** A fixture with only `desktop` would let the host page's filter look correct while it silently dropped the
+ * one entry that page is supposed to show. */
 export function readySupportSnapshot(): DesktopSupportSnapshot {
   return {
     appName: "Traycer",

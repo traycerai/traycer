@@ -27,20 +27,14 @@ function ContextMenuContent({
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
-  // A modal context menu drives `hideOthers` + scroll-lock while open, so a
-  // background split pane un-presents it by unmounting. That unmount runs Radix
-  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  // A modal context menu drives `hideOthers` + scroll-lock while open, so a background split pane un-presents it
+  // by unmounting.
   const { paneFocused, handleCloseAutoFocus } =
     usePaneAwareContentGuard(onCloseAutoFocus);
   // Concealed region (see `portal-concealment-context`): un-present with the
   // region, exactly like the pane case above.
   const concealed = usePortalConcealed();
   // Read above the early returns so hook order does not depend on presentation.
-  // A context menu is pointer-anchored, so its origin can be any pixel the
-  // user can touch - including one right against a reserved edge. The insets
-  // are the DEFAULT collision padding and `max-w-safe-dvw` the default width
-  // cap; both are displaceable by a caller (see
-  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
   if (!paneFocused || concealed) return null;
   return (

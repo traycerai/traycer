@@ -7,35 +7,9 @@ import {
 } from "@pierre/diffs";
 import { Editor } from "@pierre/diffs/edit";
 
-/**
- * Real, unmocked `@pierre/diffs@1.3.1` proof for the empty-origin activation
- * affordance's Git-diff generalization.
- *
- * An empty untracked file's diff has zero hunks (nothing to show for an
- * empty new file), so `<FileDiff>` in read mode paints no clickable
- * line/token, matching the same `splitFileContents`-driven gap
- * `workspace-empty-file-edit.test.ts` proves for the workspace-file source
- * surface. Unlike the workspace case, `<FileDiff>`/`Editor` also never
- * *attaches* for this input (proven below) - the library's render-sync
- * completion logic looks for a `codeElement`/`contentEl` in the DOM and
- * silently gives up when a zero-hunk diff renders neither, permanently
- * stranding the editor. `DiffContentPrimitive` therefore renders a plain
- * `<File>` instead of `<FileDiff>` once editing starts for a confirmed-empty
- * file (see `emptyFileEditSession` in `diff-content-primitive.tsx`) - there
- * is genuinely nothing to diff for a brand-new empty file anyway. This suite
- * proves both halves: `FileDiff` cannot attach for this input, and `File`
- * can, using the exact `FileContents` shape `DiffContentPrimitive` passes as
- * `emptyFileEditSession.newFile`.
- */
-// Both patches are restored in `afterAll`: an unrestored `window.postMessage`
-// override leaks into every other test file Vitest schedules onto the same
-// worker for the rest of the run (React's scheduler falls back to
-// `postMessage` for task scheduling in jsdom, so a forced-origin wrapper left
-// in place silently corrupts an unrelated test's retry/scheduling timing -
-// see `workspace-empty-file-edit.test.ts` for the incident this traced back
-// to).
-// Captured as a descriptor (not a direct `.getContext` value reference) so
-// restoring it later never reads as an unbound method extraction.
+/** Unlike the workspace case, `<FileDiff>`/`Editor` also never *attaches* for this input (proven below). */
+// Captured as a descriptor (not a direct `.getContext` value reference) so restoring it later never reads as
+// an unbound method extraction.
 const originalGetContextDescriptor = Object.getOwnPropertyDescriptor(
   HTMLCanvasElement.prototype,
   "getContext",

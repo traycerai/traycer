@@ -1,24 +1,10 @@
 /**
- * The renderer's local divergence arithmetic: has the host seen everything this
- * replica has written?
- *
- * Re-homed verbatim from the open-epic closure. It is pure state-vector
- * comparison over base64 payloads and has no dependency on a store, a socket
- * or React - it only ever lived beside them.
- *
- * Read direction matters and is the reason nothing here rounds: coverage
- * decides whether local work is durable, so over-reporting dirty work costs a
- * redundant reconcile while under-reporting it would claim unsynced edits are
- * safe. Every ambiguous case in this file resolves toward "still dirty".
+ * The renderer's local divergence arithmetic: has the host seen everything this replica has
+ * written?
  */
 import * as Y from "yjs";
 
-/**
- * A Yjs update carrying no operations. `Y.encodeStateAsUpdate(doc, sv)`
- * against a state vector the doc is already covered by still returns a
- * two-byte envelope, so length is what separates "nothing to send" from a real
- * delta.
- */
+/** A Yjs update carrying no operations. */
 const EMPTY_Y_UPDATE_BYTES = 2;
 
 export function encodeBase64(bytes: Uint8Array): string {
@@ -37,14 +23,7 @@ export function isNonTrivialYUpdate(updateBytes: Uint8Array): boolean {
   return updateBytes.length > EMPTY_Y_UPDATE_BYTES;
 }
 
-/**
- * The renderer-local divergence triple, published by the records plane.
- *
- * Structurally the `isDirty` / `dirtyWatermarkStateVectorBase64` /
- * `latestHostStateVectorBase64` fields of the records projection; named here
- * because this module is what computes them and nothing above it should be
- * spelling the shape out again.
- */
+/** The renderer-local divergence triple, published by the records plane. */
 export interface DivergenceState {
   readonly isDirty: boolean;
   readonly dirtyWatermarkStateVectorBase64: string | null;

@@ -10,10 +10,8 @@ import {
   type ShellOutputPanelAvailability,
 } from "@/lib/managed-commands/shell-output-availability";
 
-/**
- * Every non-`available` state, so a caller can only ever ask this component to
- * say something - "the log is fine" is not a notice.
- */
+/** Every non-`available` state, so a caller can only ever ask this component to say something - "the log is
+ * fine" is not a notice. */
 export type ShellOutputNoticeAvailability = Exclude<
   ShellOutputAvailability,
   { kind: "available" }
@@ -21,37 +19,16 @@ export type ShellOutputNoticeAvailability = Exclude<
 
 export interface ShellOutputAvailabilityNoticeProps {
   readonly availability: ShellOutputNoticeAvailability;
-  /**
-   * Closes the surface's own tab - the way out every terminal state offers.
-   * `null` on a surface with no tab of its own, which only ever shows the
-   * connection strip anyway.
-   */
+  /** `null` on a surface with no tab of its own, which only ever shows the connection strip anyway. */
   readonly onClose: (() => void) | null;
-  /**
-   * Tears the output stream down and reopens it from a fresh tail - the way
-   * back from a stream failure. `null` where no stream session exists yet to
-   * reopen (the host gate, before a session is created).
-   */
+  /** `null` where no stream session exists yet to reopen (the host gate, before a session is created). */
   readonly onReopen: (() => void) | null;
   readonly className: string | undefined;
   readonly testId: string;
 }
 
-/**
- * The one place the output window's fallback states get their words, tone and
- * action. Callers hand over the semantic state; nothing about the copy is
- * decided at a call site, which is how the same "gone" ended up spelled two
- * ways and shown for three unrelated failures.
- *
- * Three shapes, decided by the state rather than by the caller:
- *
- *   - a full-panel replacement, centred, for the states under which there is
- *     no timeline to show;
- *   - a strip that sits above a timeline the reader can still scroll, for the
- *     states the stream can come back from;
- *   - a placeholder inside the log itself, for the one state that IS a
- *     timeline - just an empty one.
- */
+/** Three shapes, decided by the state rather than by the caller: - a full-panel replacement, centred, for the
+ * states under which there is no timeline to show. */
 export function ShellOutputAvailabilityNotice(
   props: ShellOutputAvailabilityNoticeProps,
 ): ReactNode {
@@ -90,12 +67,8 @@ export function ShellOutputAvailabilityNotice(
   );
 }
 
-/**
- * Says what happened in one sentence and, where the reader can do anything
- * about it, offers the one thing. Muted throughout: none of these is urgent -
- * the shell is gone, or the host is old, or the machinery is still starting -
- * and shouting would only make a person look for a fire that is not there.
- */
+/** Muted throughout: none of these is urgent - the shell is gone, or the host is old, or the machinery is still
+ * starting - and shouting would only make a person look for a fire that is not there. */
 function PanelNotice(props: {
   readonly availability: ShellOutputPanelAvailability;
   readonly onClose: (() => void) | null;
@@ -168,12 +141,8 @@ function panelSentence(availability: ShellOutputPanelAvailability): ReactNode {
   }
 }
 
-/**
- * The three spinners used to be one anonymous set of dots. A word under them
- * says which wait this is - the directory, the host process, or the stream -
- * because they end for different reasons and a person staring at one deserves
- * to know which machinery they are waiting on.
- */
+/** A word under them says which wait this is - the directory, the host process, or the stream - because they
+ * end for different reasons and a person staring at one deserves to know which machinery they are waiting on. */
 function bootstrappingPhrase(
   phase: Extract<ShellOutputAvailability, { kind: "bootstrapping" }>["phase"],
 ): string {
@@ -191,10 +160,8 @@ function bootstrappingPhrase(
   }
 }
 
-/**
- * The states with nowhere to go but out. A bootstrapping panel clears on its
- * own; an old host is not the tab's fault - the tab strip closes it as ever.
- */
+/** A bootstrapping panel clears on its own; an old host is not the tab's fault - the tab strip closes it as
+ * ever. */
 function offersClose(availability: ShellOutputPanelAvailability): boolean {
   switch (availability.kind) {
     case "unreachable-host":
@@ -207,13 +174,7 @@ function offersClose(availability: ShellOutputPanelAvailability): boolean {
   }
 }
 
-/**
- * The strip over a timeline that stays readable. Two voices: the quiet one
- * with spinning dots for a stream that is on its way (or on its way back), and
- * the warning-toned one for a stream the host closed for good - which is
- * about the stream, so the shell's own status and verbs stay in reach beside
- * it, and Retry reopens from a fresh tail.
- */
+/** The strip over a timeline that stays readable. */
 function BannerNotice(props: {
   readonly availability: ShellOutputBannerAvailability;
   readonly onReopen: (() => void) | null;
@@ -255,9 +216,8 @@ function BannerNotice(props: {
       <TriangleAlert aria-hidden className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 wrap-anywhere">
         The output stream failed.{" "}
-        {/* The host's own account of why, dimmed rather than hidden: it is
-            what a person pastes into a report, not what they read first, but
-            a truncated reason is no reason at all. */}
+        {/* The host's own account of why, dimmed rather than hidden: it is what a person pastes into a report, not what
+           they read first, but a truncated reason is no reason at all. */}
         <span
           className="text-warning-foreground/70"
           data-testid={`${props.testId}-reason`}

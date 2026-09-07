@@ -24,24 +24,6 @@ import {
   type SidecarState,
 } from "./credentials-wal";
 
-/**
- * The cross-process credentials mutation store (credentials-file token-store
- * tech plan, §2) - the stateful core shared by the desktop main process, the
- * CLI, and migration. It ties the lock, the WAL sidecar, and the file
- * primitives into the intents and typed outcomes the callers act on.
- *
- * Governing rule: **any operation that can spend a single-use refresh token runs
- * inside the lock, with every guard evaluated before the spend, immediately
- * followed by the commit** - so at most one process ever spends a given refresh
- * token. The HTTP refresh itself is injected (`RefreshFn`) so this module stays
- * dependency-light; the desktop/CLI supply the one-shot abortable helper.
- *
- * Every locked operation runs the same preamble under the lock: WAL recovery of
- * any interrupted mutation, then resolution of this process's own outstanding
- * commit-failed continuation (the R9 first-gate rule - a rotate that skipped
- * this would raw-CAS against its own spent base and adopt it back), then the
- * intent against the freshly-read state.
- */
 export interface CredentialsMutationPaths {
   readonly credentialsPath: string;
   readonly metaPath: string;
@@ -49,16 +31,8 @@ export interface CredentialsMutationPaths {
 }
 
 /**
- * Injected single-attempt refresh. Mirrors the shared `AuthTokenRefreshResult`
- * shape; never throws (every failure maps to a kind). The store calls it as the
- * last fallible-remote step under the lock, honoring the abort signal.
- *
- * The refresh ENDPOINT is deliberately absent from these args: the store knows
- * only the file, and the file carries no authn URL — the injected fn must close
- * over the caller's own configured authn base URL. That inversion is what keeps
- * a pair minted by one dev-desktop slot refreshable from every other slot (each
- * refreshes against its own live local authn), instead of every process chasing
- * whichever stack happened to sign in last.
+ * Injected single-attempt refresh.
+ * Mirrors the shared `AuthTokenRefreshResult` shape; never throws (every failure maps to a kind).
  */
 export type RefreshResult =
   | {
@@ -87,34 +61,12 @@ export type MutationOutcome =
   | "refresh-network"
   | "commit-failed";
 
-/**
- * The typed result of a mutation. `credentials` carries:
- *   - `applied`       -> the newly-committed pair;
- *   - `superseded`    -> the file pair the caller should adopt instead;
- *   - `user-mismatch` -> the foreign file pair (for the reconcile worker);
- *   - `commit-failed` -> the minted pair the caller keeps active in memory;
- * and is `null` for `deleted`/`tombstoned`/`lock-busy`/`spend-pending`/
- * `refresh-rejected`/`refresh-network`.
- *
- * `spend-pending` is transient, exactly like `lock-busy`: a SIBLING process
- * spent the on-disk refresh token but has not landed the successor pair yet
- * (its local commit failed; its in-process continuation is retrying). Spending
- * the same base again would be a server-side reuse - with rotation-replay
- * controls live that reads as credential theft and can kill the whole refresh
- * family - so the intent defers instead. The caller retries later; by then the
- * sibling has landed (adopt via `superseded`) or its marker has aged out.
- */
 export interface MutationResult {
   readonly outcome: MutationOutcome;
   readonly credentials: StoredCredentials | null;
 }
 
-/**
- * Ceiling for the quarantine drain's backoff. The drain has to complete
- * eventually - a pending conditional delete left undone means a dead
- * credential pair can be rehydrated on a later launch - so the growth stops
- * here rather than running away.
- */
+/** Ceiling for the quarantine drain's backoff. */
 const QUARANTINE_RETRY_MAX_MS = 30_000;
 
 export interface CredentialsMutationStoreOptions {
@@ -129,9 +81,7 @@ export interface CredentialsMutationStoreOptions {
 
 export interface CredentialsMutationStore {
   /**
-   * Current credentials with a process-local overlay: while a commit-failed
-   * continuation is outstanding, this process never sees its own spent base on
-   * disk - it sees the minted pair it is still trying to land. Never locks.
+   * Current credentials with a process-local overlay: while a commit-failed continuation is outstanding, this process never sees its own spent base on disk - it sees the minted pair it is still trying to land.
    */
   read(): Promise<StoredCredentials | null>;
   /** Locked adopt-or-refresh+commit. `refreshTokenOverride` lets migration spend a candidate refresh token. */
@@ -141,14 +91,7 @@ export interface CredentialsMutationStore {
     readonly refreshTokenOverride: string | null;
     readonly signal: AbortSignal | null;
   }): Promise<MutationResult>;
-  /**
-   * Interactive create/replace; clears the tombstone. Unconditional except for
-   * the refresh token: when `credentials.refreshToken` is blank AND
-   * `preserveRefreshTokenIfBlank` is true, the on-disk refresh token (read
-   * fresh under this same lock) is carried over instead of being clobbered to
-   * "" - closing the TOCTOU a caller would otherwise have if it read the
-   * current file before acquiring the lock to build `credentials`.
-   */
+  /** Interactive create/replace; clears the tombstone. */
   signIn(
     credentials: StoredCredentials,
     preserveRefreshTokenIfBlank: boolean,
@@ -156,26 +99,10 @@ export interface CredentialsMutationStore {
   ): Promise<MutationResult>;
   /** Delete under the lock (ENOENT-tolerant); always advances the tombstone. */
   signOut(signal: AbortSignal | null): Promise<MutationResult>;
-  /**
-   * Conditional delete: removes the file ONLY if it still holds exactly
-   * `expectedToken`, with the comparison and the delete inside the same
-   * file-lock acquisition — a concurrent writer (another window's sign-in, an
-   * external CLI) serializes wholly before the comparison (→ `superseded`,
-   * its pair kept) or wholly after the landed delete; no interleave can make
-   * a stale comparison govern the delete. `deleted` when removed;
-   * `superseded` when the file was absent or held a different pair (kept).
-   */
   signOutIfToken(
     expectedToken: string,
     signal: AbortSignal | null,
   ): Promise<MutationResult>;
-  /**
-   * Completes any pending quarantined conditional deletes (see
-   * {@link quarantinePath}): if the durable pair is quarantined, delete it;
-   * residue digests whose pair is no longer durable are dropped. `true`
-   * means the quarantine is empty afterwards. Run at startup before serving
-   * reads, and retried on the store's own cadence after a failure.
-   */
   drainQuarantine(signal: AbortSignal | null): Promise<boolean>;
   /** CAS'd merge of the `user` block only; tokens untouched. */
   updateProfile(args: {
@@ -184,9 +111,7 @@ export interface CredentialsMutationStore {
     readonly signal: AbortSignal | null;
   }): Promise<MutationResult>;
   /**
-   * Migration first-write of a known pair (§6 step 4 continuation shape): guarded
-   * by the file snapshot + tombstone/epoch, so a sign-out or newer state wins. On
-   * commit-failure the pair is retained and retried under a fresh lock.
+   * Migration first-write of a known pair (§6 step 4 continuation shape): guarded by the file snapshot + tombstone/epoch, so a sign-out or newer state wins.
    */
   guardedSignIn(args: {
     readonly credentials: StoredCredentials;
@@ -194,14 +119,7 @@ export interface CredentialsMutationStore {
     readonly signal: AbortSignal | null;
   }): Promise<MutationResult>;
   /**
-   * Migration first-write that must SPEND a candidate refresh token first (§6
-   * step 4, F absent/invalid). Guards before the spend (tombstone / file
-   * snapshot / spent-base marker - a sibling slot migrating the same legacy
-   * pair defers with `spend-pending`), then spends `candidate.refreshToken`
-   * under its own armed marker and commits the refreshed pair stamped with the
-   * pre-validated `identity`. `refresh-rejected` → caller maps to
-   * terminal-dead; commit failure arms the same first-write continuation
-   * `guardedSignIn` uses, with the marker held until it lands or drops.
+   * Migration first-write that must SPEND a candidate refresh token first (§6 step 4, F absent/invalid).
    */
   migrateFirstWrite(args: {
     readonly candidate: {
@@ -226,10 +144,7 @@ export class CredentialsStoreUnavailableError extends Error {
   }
 }
 
-// Process-local commit-failed continuation - the only in-memory persisted
-// authority, never written to disk (that on-disk overlay was the condemned
-// round-4 design). Set only by rotate (a spent base exists) and guardedSignIn
-// (migration first-write); interactive signIn/signOut surface the error instead.
+// Process-local commit-failed continuation - the only in-memory persisted authority, never written to disk (that on-disk overlay was the condemned round-4 design).
 type PendingContinuation =
   | {
       readonly kind: "pair";
@@ -241,58 +156,12 @@ type PendingContinuation =
       readonly credentials: StoredCredentials;
       readonly expectedDigest: string | null;
       readonly tombstoneEpoch: number;
-      /**
-       * Access token keying the on-disk spent-base marker this continuation is
-       * still guarding: the migration candidate whose refresh token was spent
-       * (`migrateFirstWrite`), or `null` when nothing was spent
-       * (`guardedSignIn`). Cleared with the continuation on land or drop.
-       */
       readonly spentBaseToken: string | null;
     };
 
 /**
- * The spent-base marker - the cross-PROCESS complement of the in-memory
- * commit-failed continuation. The continuation (below) is deliberately never
- * written to disk, so without a marker a SIBLING process reading a spent base
- * off disk would pass the CAS guard and spend the same refresh token a second
- * time - server-side reuse, which rotation-replay controls read as credential
- * theft (and can kill the whole refresh family).
- *
- * Lifecycle: armed under the lock IMMEDIATELY BEFORE the refresh spend (an
- * intent record, so a crash at ANY point between spend and commit still
- * leaves the base guarded), and cleared on every locally-settled outcome - a
- * landed commit, an explicit `rejected` (the base is dead anyway), a landed
- * or abandoned continuation, or a landed sign-in/sign-out. It deliberately
- * SURVIVES a `network-error` refresh: whether that request spent the base
- * server-side is unknowable, so siblings stay deferred while the owner (who
- * recognizes its own marker) retries.
- *
- * The record carries ONLY a sha256 digest of the base's access token plus the
- * owner's pid + start-time fingerprint - no secret material, nothing
- * replayable. It lives in its own file (not a new `credentials.meta.json`
- * key) because older builds' strict sidecar parsers would read an unknown key
- * as malformed and fail automatic mutations closed; an extra sibling file is
- * invisible to them.
- *
- * Unblocking mirrors the lock's holder-liveness rules exactly: a marker whose
- * owner is provably dead (pid gone, or start-time fingerprint mismatch) is
- * reclaimed immediately. `SPENT_BASE_MARKER_TTL_MS` then bounds EVERY other
- * hold - including one whose owner is positively confirmed alive. That is
- * deliberate, not an oversight: a live owner can stop retrying without ever
- * releasing its marker (`dispose()` drops the continuation retry timer and
- * leaves the file behind; a dropped continuation does the same), so a hold
- * that liveness alone could extend would block every sibling of a still-running
- * process forever - the permanent sticky signed-out this store exists to kill.
- * Reclaiming risks at most one server-side replay/reject of an already-spent
- * base - strictly better than both the unconditional sibling re-spend it
- * replaces and an unbounded wait on an owner that may never come back.
- *
- * Known residual (client-side bound): after a network-AMBIGUOUS refresh the
- * OWNER's own retry re-presents the base - the only client-side recovery
- * (refusing forever guarantees the forced re-login the retry merely risks).
- * Within authn's replay grace that re-present adopts the already-minted
- * successor; past it, prod replay controls may kill the family. Fully closing
- * this needs a server-side durable per-base successor, not more client state.
+ * The spent-base marker - the cross-PROCESS complement of the in-memory commit-failed continuation.
+ * Reclaiming risks at most one server-side replay/reject of an already-spent base - strictly better than both the unconditional sibling re-spend it replaces and an unbounded wait on an owner that may never come back.
  */
 interface SpentBaseMarker {
   readonly spentTokenDigest: string;
@@ -303,23 +172,13 @@ interface SpentBaseMarker {
 
 const SPENT_BASE_MARKER_TTL_MS = 60_000;
 
-/**
- * Exported so tests assert against the path production actually writes. A test
- * that rebuilds this suffix locally keeps passing if the suffix ever changes -
- * every "the marker was cleared" assertion would then hold vacuously against a
- * path nothing ever wrote.
- */
+/** Exported so tests assert against the path production actually writes. */
 export function spentBaseMarkerPath(credentialsPath: string): string {
   return `${credentialsPath}.pending-spend.json`;
 }
 
 /**
- * Sidecar recording token digests whose conditional delete has been REQUESTED
- * but has not provably landed (the quarantine). Written BEFORE the delete is
- * attempted, inside the same lock — so a crash, a failed commit, or a whole
- * app relaunch leaves the intent durable: no read serves a quarantined
- * credential, and a fresh store instance drains the delete before anything
- * can adopt the pair. Digests, never raw tokens.
+ * Sidecar recording token digests whose conditional delete has been REQUESTED but has not provably landed (the quarantine).
  */
 export function quarantinePath(credentialsPath: string): string {
   return `${credentialsPath}.quarantine.json`;
@@ -330,10 +189,8 @@ function digestToken(token: string): string {
 }
 
 /**
- * Absent reads as empty. Malformed also reads as empty: the record is written
- * atomically BEFORE the delete attempt, so a torn/garbled file cannot hide a
- * still-pending delete — a genuinely pending one has a well-formed record. An
- * I/O fault propagates: the caller decides its fail direction.
+ * Absent reads as empty.
+ * Malformed also reads as empty: the record is written atomically BEFORE the delete attempt, so a torn/garbled file cannot hide a still-pending delete - a genuinely pending one has a well-formed record.
  */
 async function readQuarantinedDigests(qPath: string): Promise<Set<string>> {
   let raw: string;
@@ -352,7 +209,7 @@ async function readQuarantinedDigests(qPath: string): Promise<Set<string>> {
       );
     }
   } catch {
-    // Malformed — treated as empty per the contract above.
+    // Malformed - treated as empty per the contract above.
   }
   return new Set();
 }
@@ -373,11 +230,7 @@ async function writeQuarantinedDigests(
 }
 
 /**
- * Absent and malformed both read as "no marker": the marker is written BEFORE
- * the refresh spend, so a torn record (crash mid-write) proves the spend never
- * happened - there is nothing left to guard. An I/O fault (EACCES/EIO/...)
- * proves nothing about the marker's content, so it fails CLOSED - spending
- * past an unreadable marker could re-spend a sibling's in-flight base.
+ * Absent and malformed both read as "no marker": the marker is written BEFORE the refresh spend, so a torn record (crash mid-write) proves the spend never happened - there is nothing left to guard.
  */
 async function readSpentBaseMarker(
   credentialsPath: string,
@@ -419,18 +272,10 @@ async function readSpentBaseMarker(
 function markerIsFresh(marker: SpentBaseMarker, nowMs: number): boolean {
   const atMs = Date.parse(marker.at);
   if (Number.isNaN(atMs)) return false;
-  // Liveness dominates freshness: a future `at` (a backward clock step landed
-  // between the owner's write and this read) clamps to age 0 - fully fresh -
-  // rather than reading as stale. Stale would reclaim a marker whose owner may
-  // be alive MID-SPEND and re-spend its base. The extra block a clamp can add
-  // is bounded by the step size plus the TTL, and a dead owner is still
-  // reclaimed immediately by the liveness probe regardless of age.
   return Math.max(0, nowMs - atMs) < SPENT_BASE_MARKER_TTL_MS;
 }
 
-/** This process armed the marker. A live pid is unique, so a pid match while
- *  we are running means us; the fingerprint only tightens the recycled-pid
- *  case (where a mismatch is ALSO caught by the provably-dead probe). */
+/** This process armed the marker. */
 function isOwnSpentBaseMarker(marker: SpentBaseMarker): boolean {
   if (marker.ownerPid !== process.pid) return false;
   const own = ownPidStartFingerprint();
@@ -452,20 +297,8 @@ function markerOwnerProvablyDead(marker: SpentBaseMarker): boolean {
 }
 
 /**
- * Fail-closed arm, run BEFORE the spend. The marker lives beside the
- * credentials file, so a failed write here is the cheapest proof that the
- * post-spend credentials commit would likely fail too - which is exactly the
- * commit-failed double-spend window the marker exists to close. Refusing to
- * spend (a store-unavailable the caller retries) is strictly safer than
- * spending unguarded into a store that cannot record the spend.
- *
- * ATOMIC (temp + rename), and it overwrites in place rather than being
- * preceded by an unlink. Both matter for the same reason: a marker that is
- * momentarily absent or torn reads as "no marker", and a sibling that acquires
- * the lock in that state re-spends the base. An in-place truncating write
- * leaves a torn record if the process dies mid-write; an unlink-then-write
- * leaves NO record at all in the gap. The rename makes replacement a single
- * step - readers see either the old marker or the new one, never neither.
+ * Fail-closed arm, run BEFORE the spend.
+ * The rename makes replacement a single step - readers see either the old marker or the new one, never neither.
  */
 async function writeSpentBaseMarker(
   credentialsPath: string,
@@ -511,21 +344,13 @@ export function createCredentialsMutationStore(
   let pending: PendingContinuation | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
   let quarantineRetryTimer: NodeJS.Timeout | null = null;
-  /**
-   * Consecutive failed drains, which is what the delay grows from. A drain
-   * fails when the file is locked or the disk is refusing writes, and neither
-   * clears any faster for being asked every `continuationRetryMs` forever -
-   * an unattended app would spend the rest of its run retrying at a fixed
-   * cadence. Reset the moment a drain comes back clean.
-   */
+  /** Consecutive failed drains, which is what the delay grows from. */
   let quarantineRetryAttempts = 0;
   let disposed = false;
   const qPath = quarantinePath(paths.credentialsPath);
 
   function quarantineRetryDelayMs(): number {
-    // Doubling from the base, capped: the cap is what keeps a long-running
-    // process still checking - the quarantined delete must eventually land, so
-    // backing off without a ceiling would trade one problem for a worse one.
+    // Doubling from the base, capped: the cap is what keeps a long-running process still checking - the quarantined delete must eventually land, so backing off without a ceiling would trade one problem for a worse one.
     return Math.min(
       QUARANTINE_RETRY_MAX_MS,
       options.continuationRetryMs * 2 ** quarantineRetryAttempts,
@@ -555,9 +380,7 @@ export function createCredentialsMutationStore(
 
   /**
    * Clear the spent-base marker ONLY if it still names `spentToken`'s digest.
-   * Runs under the lock. Guarded so a process resolving a long-abandoned
-   * continuation can never clobber a NEWER marker a sibling wrote for a later
-   * base (that marker still protects a live pending spend).
+   * Guarded so a process resolving a long-abandoned continuation can never clobber a NEWER marker a sibling wrote for a later base (that marker still protects a live pending spend).
    */
   async function clearOwnSpentBaseMarker(spentToken: string): Promise<void> {
     const marker = await readSpentBaseMarker(paths.credentialsPath);
@@ -594,9 +417,7 @@ export function createCredentialsMutationStore(
     return read.state;
   }
 
-  // Drive the outstanding commit-failed continuation to resolution. Runs under
-  // the lock, as the FIRST gate of every locked operation, so a subsequent
-  // intent proceeds against committed state instead of the spent base.
+  // Drive the outstanding commit-failed continuation to resolution.
   async function resolveContinuationLocked(
     state: SidecarState,
   ): Promise<SidecarState> {
@@ -605,10 +426,7 @@ export function createCredentialsMutationStore(
     const file = await readCredentialsFile(paths.credentialsPath);
 
     if (p.kind === "pair") {
-      // Sign-out won, a sibling rotated, or the account switched -> drop the
-      // pending pair and defer to disk (adopt on the next read). The marker
-      // for OUR spent base is released with it: the base it guarded is no
-      // longer on disk, so there is nothing left to protect.
+      // Sign-out won, a sibling rotated, or the account switched -> drop the pending pair and defer to disk (adopt on the next read).
       if (
         file === null ||
         file.user.id !== p.pair.user.id ||
@@ -632,11 +450,7 @@ export function createCredentialsMutationStore(
       return state; // still failing -> keep pending, retry later
     }
 
-    // firstWrite: a sign-out (committed or pending) or any newer state wins. The
-    // snapshot guard is a full-file digest, not just the token, so a same-token
-    // content change (e.g. a sibling profile merge) is also treated as newer.
-    // Land or drop, the marker guarding a spent migration candidate (if any)
-    // is released with the continuation - mirroring the pair branch above.
+    // firstWrite: a sign-out (committed or pending) or any newer state wins.
     const snapshotMatches =
       p.expectedDigest === null
         ? file === null
@@ -695,39 +509,17 @@ export function createCredentialsMutationStore(
         },
       );
     } catch {
-      // Best-effort background retry: a transient fault (or a disposed store /
-      // vanished file during shutdown) must never surface as an unhandled
-      // rejection. The next scheduled attempt re-drives it.
+      // Best-effort background retry: a transient fault (or a disposed store / vanished file during shutdown) must never surface as an unhandled rejection.
     }
     if (pending !== null && !disposed) scheduleContinuationRetry();
   }
 
-  // Every mutating intent runs under the lock with the same preamble: WAL
-  // recovery, then resolution of this process's own outstanding commit-failed
-  // continuation. If that continuation is STILL unresolved afterwards, the disk
-  // holds a spent base (or a stale first-write snapshot) - running the intent
-  // would guard/CAS against it, re-adopting the spent base or re-spending its
-  // refresh family (the R9 first-gate). So the intent is refused with
-  // commit-failed, carrying the pair the store is still trying to land, until
-  // the continuation clears.
-  //
-  // CALLER CONTRACT: that carried pair is this store's *process-wide* pending
-  // continuation. In a shared main-process store (multiple renderer windows over
-  // one file) it may belong to a DIFFERENT user than the current caller, and
-  // this generic gate cannot know the caller's identity without short-circuiting
-  // the per-intent user-mismatch guard. A caller binding a `commit-failed` pair
-  // to a live session MUST first check `pair.user.id` against its own expected
-  // identity (enforced renderer-side in AuthService.applyLiveRotateOutcome).
+  // Every mutating intent runs under the lock with the same preamble: WAL recovery, then resolution of this process's own outstanding commit-failed continuation.
+  // A caller binding a `commit-failed` pair to a live session MUST first check `pair.user.id` against its own expected identity (enforced renderer-side in AuthService.applyLiveRotateOutcome).
   async function runMutation(
     signal: AbortSignal | null,
     interactive: boolean,
-    // Whether the body may observe a QUARANTINED current pair. Only the two
-    // operations that HEAL the quarantine (the conditional delete and the
-    // drain) see it; every other mutation is served the same filtered view
-    // `read()` gives — so no mutation outcome can ever return, spend, or
-    // CAS against a pair whose delete is pending. Without this gate, a
-    // rotate could hand the quarantined pair out as `superseded`, or
-    // refresh it into a successor the quarantine no longer names.
+    // Whether the body may observe a QUARANTINED current pair.
     servesQuarantined: boolean,
     body: (ctx: {
       state: SidecarState;
@@ -769,10 +561,7 @@ export function createCredentialsMutationStore(
   async function read(): Promise<StoredCredentials | null> {
     const result = await readWithOverlay();
     if (result === null) return null;
-    // Quarantine suppression: a pair whose conditional delete was requested
-    // but has not provably landed is NEVER served — to this process or,
-    // because every renderer read routes here, to any window. The delete
-    // itself is completed by drainQuarantine (startup + retry cadence).
+    // Quarantine suppression: a pair whose conditional delete was requested but has not provably landed is NEVER served - to this process or, because every renderer read routes here, to any window.
     const quarantined = await readQuarantinedDigests(qPath);
     if (quarantined.has(digestToken(result.token))) return null;
     return result;
@@ -787,10 +576,7 @@ export function createCredentialsMutationStore(
       // sibling sign-out (file null) or rotation (token changed) self-corrects.
       return file !== null && file.token === p.expectedToken ? p.pair : file;
     }
-    // firstWrite: overlay the minted pair only while the guarded snapshot still
-    // holds AND no sign-out / newer epoch has landed since. `file === null`
-    // collides with a sibling sign-out, so a lock-free sidecar read gates the
-    // overlay - otherwise a logged-out session could be ghosted back in.
+    // firstWrite: overlay the minted pair only while the guarded snapshot still holds AND no sign-out / newer epoch has landed since.
     const snapshotHolds =
       p.expectedDigest === null
         ? file === null
@@ -830,12 +616,6 @@ export function createCredentialsMutationStore(
           // A sibling already rotated: adopt the file's pair, spend nothing.
           return { outcome: "superseded", credentials: file };
         }
-        // Cross-process spent-base gate (before the spend, like every other
-        // guard): a live sibling armed a marker for THIS base - it spent (or
-        // may have spent) the refresh token and has not landed the successor
-        // yet. Spending it again would be a server-side reuse, so defer. Our
-        // own residue, an orphan for a superseded base, a provably-dead
-        // owner's marker, or an aged-out one is reclaimed instead.
         const marker = await readSpentBaseMarker(paths.credentialsPath);
         if (marker !== null) {
           const blocked =
@@ -846,24 +626,8 @@ export function createCredentialsMutationStore(
           if (blocked) {
             return { outcome: "spend-pending", credentials: null };
           }
-          // Reclaimable - but do NOT unlink it here. The arm below replaces it
-          // atomically, and unlinking first would leave the base momentarily
-          // unguarded: if this process dies in that gap - and the marker we are
-          // reclaiming is OUR OWN residue from a network-ambiguous attempt, so
-          // the base may already be spent - a sibling takes the lock, sees no
-          // marker, and spends it again.
+          // Reclaimable - but do NOT unlink it here.
         }
-        // Arm the marker BEFORE the spend (an intent record): a crash at any
-        // point past the refresh call leaves the base guarded on disk, a
-        // network-ambiguous refresh (below) keeps it armed on purpose, and a
-        // failed arm throws store-unavailable with nothing yet spent.
-        //
-        // Keyed by the BASE PAIR's access token - not the token handed to
-        // `refresh` - because that is the one value a deferring sibling can
-        // compare against its own read of the file (the gate above). In the
-        // migration-override case the spend still replaces THIS base pair, so
-        // the gate serializes every competitor either way; keying on the
-        // override token would make siblings read the marker as an orphan.
         await writeSpentBaseMarker(paths.credentialsPath, file.token);
         const refreshToken = args.refreshTokenOverride ?? file.refreshToken;
         const refreshed = await refresh({
@@ -872,9 +636,6 @@ export function createCredentialsMutationStore(
           signal: args.signal,
         });
         if (refreshed.kind === "network-error") {
-          // Whether the request spent the base server-side is unknowable, so
-          // the marker deliberately stays armed: siblings defer while this
-          // process (which recognizes its own marker) retries.
           return { outcome: "refresh-network", credentials: null };
         }
         if (refreshed.kind === "rejected") {
@@ -899,10 +660,7 @@ export function createCredentialsMutationStore(
           await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "applied", credentials: next };
         }
-        // Post-spend local-commit failure: keep the minted pair active in
-        // memory and land it under a fresh lock later. The armed marker is
-        // what stops a SIBLING process from re-spending the base this
-        // process just burned.
+        // Post-spend local-commit failure: keep the minted pair active in memory and land it under a fresh lock later.
         pending = { kind: "pair", expectedToken: file.token, pair: next };
         scheduleContinuationRetry();
         return { outcome: "commit-failed", credentials: next };
@@ -920,12 +678,7 @@ export function createCredentialsMutationStore(
       true,
       false,
       async ({ state, file }): Promise<MutationResult> => {
-        // Resolved under the same lock that performs the write: a caller that
-        // built `credentials` from a pre-lock read (or omits the refresh token
-        // entirely) never races a concurrent rotate for this decision. Only
-        // preserve across a SAME-user re-seed - the on-disk pair may belong to
-        // a different account than the one just validated, and pairing a
-        // foreign refresh token with this identity would corrupt later rotation.
+        // Resolved under the same lock that performs the write: a caller that built `credentials` from a pre-lock read (or omits the refresh token entirely) never races a concurrent rotate for this decision.
         const resolved: StoredCredentials =
           credentials.refreshToken.length > 0 ||
           !preserveRefreshTokenIfBlank ||
@@ -939,11 +692,6 @@ export function createCredentialsMutationStore(
           target: { kind: "write", credentials: resolved },
           currentState: state,
         });
-        // Interactive intent: on a persistent local failure the caller surfaces
-        // the error and the user retries - the device-flow pair is re-obtainable,
-        // so no background continuation is armed. A landed sign-in replaces the
-        // session wholesale, so any spent-base marker is an orphan - clear it
-        // rather than leave it to lazy cleanup.
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "applied", credentials: resolved };
@@ -965,9 +713,7 @@ export function createCredentialsMutationStore(
           target: { kind: "delete" },
           currentState: state,
         });
-        // A failed explicit sign-out must surface and stay signed in (§5), never
-        // claim signed-out without the delete landing. A landed sign-out deletes
-        // the file the marker was guarding - remove the marker with it.
+        // A failed explicit sign-out must surface and stay signed in (§5), never claim signed-out without the delete landing.
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "deleted", credentials: null };
@@ -985,22 +731,16 @@ export function createCredentialsMutationStore(
       signal,
       true,
       // The quarantine blocks SERVING and SPENDING, never the delete that
-      // heals it — this op must see the quarantined pair to remove it.
+      // heals it - this op must see the quarantined pair to remove it.
       true,
       async ({ state, file }): Promise<MutationResult> => {
-        // QUARANTINE FIRST, inside this same lock, before any attempt: from
-        // this write on, no read anywhere serves the pair, a crash leaves
-        // the intent durable for the next launch's drain, and a failed
-        // commit below leaves it armed for the retry cadence.
         const digest = digestToken(expectedToken);
         const quarantined = await readQuarantinedDigests(qPath);
         if (!quarantined.has(digest)) {
           quarantined.add(digest);
           await writeQuarantinedDigests(qPath, quarantined);
         }
-        // The comparison lives under the same lock as the delete below: a
-        // sign-in that landed since the caller captured `expectedToken` is
-        // observed here and kept, never destroyed by the stale undo.
+        // The comparison lives under the same lock as the delete below: a sign-in that landed since the caller captured `expectedToken` is observed here and kept, never destroyed by the stale undo.
         if (file === null || file.token !== expectedToken) {
           quarantined.delete(digest);
           await writeQuarantinedDigests(qPath, quarantined);
@@ -1012,10 +752,7 @@ export function createCredentialsMutationStore(
           target: { kind: "delete" },
           currentState: state,
         });
-        // Same interactive-intent contract as `signOut`: a failed conditional
-        // delete surfaces (the stale pair is still durable and the caller must
-        // know — though the quarantine already stops every read from serving
-        // it), and a landed one removes the file the marker was guarding.
+        // Same interactive-intent contract as `signOut`: a failed conditional delete surfaces (the stale pair is still durable and the caller must know - though the quarantine already stops every read from serving it), and a.
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
           quarantined.delete(digest);
@@ -1043,7 +780,7 @@ export function createCredentialsMutationStore(
           return { outcome: "deleted", credentials: null };
         }
         if (file === null || !quarantined.has(digestToken(file.token))) {
-          // Nothing quarantined is durable any more — every entry is
+          // Nothing quarantined is durable any more - every entry is
           // residue of a pair that was already replaced or removed.
           await writeQuarantinedDigests(qPath, new Set());
           return { outcome: "deleted", credentials: null };
@@ -1115,9 +852,7 @@ export function createCredentialsMutationStore(
       false,
       false,
       async ({ state, file }): Promise<MutationResult> => {
-        // Never resurrect a signed-out session, and never overwrite a newer
-        // state. The snapshot guard is a full-file digest, so a same-token
-        // content change (e.g. a sibling profile merge) still supersedes.
+        // Never resurrect a signed-out session, and never overwrite a newer state.
         if (hasTombstone(state)) {
           return { outcome: "tombstoned", credentials: null };
         }
@@ -1181,13 +916,6 @@ export function createCredentialsMutationStore(
         if (!snapshotMatches) {
           return { outcome: "superseded", credentials: file };
         }
-        // Cross-process spent-base gate + arm, mirroring `rotate`: on upgrade
-        // every slot migrates the SAME legacy pair, and the first-write
-        // continuation is process-local - it proves nothing to a sibling. The
-        // migration marker is keyed by the CANDIDATE's access token (the one
-        // value every competing migrator derives from the same legacy source);
-        // a marker for the file's base pair also defers us, letting the
-        // sibling's in-flight rotate land before the snapshot guard re-judges.
         const candidateDigest = digestToken(args.candidate.token);
         const marker = await readSpentBaseMarker(paths.credentialsPath);
         if (marker !== null) {
@@ -1203,19 +931,10 @@ export function createCredentialsMutationStore(
           if (blocked) {
             return { outcome: "spend-pending", credentials: null };
           }
-          // Reclaimable - but do NOT unlink it here. The arm below replaces it
-          // atomically, and unlinking first would leave the base momentarily
-          // unguarded: if this process dies in that gap - and the marker we are
-          // reclaiming is OUR OWN residue from a network-ambiguous attempt, so
-          // the base may already be spent - a sibling takes the lock, sees no
-          // marker, and spends it again.
+          // Reclaimable - but do NOT unlink it here.
         }
         await writeSpentBaseMarker(paths.credentialsPath, args.candidate.token);
-        // The sole remote call of the hold - every guard above has passed. A
-        // rejected candidate is the migration's `terminal-dead` signal. A
-        // network failure is AMBIGUOUS - a lost response may have consumed the
-        // candidate server-side - so the marker stays armed while the caller
-        // re-enters, keeping sibling migrators deferred.
+        // The sole remote call of the hold - every guard above has passed.
         const refreshed = await refresh({
           token: args.candidate.token,
           refreshToken: args.candidate.refreshToken,
@@ -1229,9 +948,7 @@ export function createCredentialsMutationStore(
           await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "refresh-rejected", credentials: null };
         }
-        // Identity comes from the caller's pre-lock non-spending `/user` probe
-        // (invariant 2): the refresh response carries only the pair, so it cannot
-        // supply identity.
+        // Identity comes from the caller's pre-lock non-spending `/user` probe (invariant 2): the refresh response carries only the pair, so it cannot supply identity.
         const next: StoredCredentials = {
           token: refreshed.token,
           refreshToken: refreshed.refreshToken,
@@ -1248,11 +965,7 @@ export function createCredentialsMutationStore(
           await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "applied", credentials: next };
         }
-        // Post-spend local-commit failure: keep the minted pair and land it under
-        // a fresh lock later - the same first-write continuation guardedSignIn
-        // arms (a rotate-shaped retry cannot land against an absent F, R8-C2).
-        // The armed marker keeps sibling migrators off the spent candidate
-        // until the continuation lands or drops.
+        // Post-spend local-commit failure: keep the minted pair and land it under a fresh lock later - the same first-write continuation guardedSignIn arms (a rotate-shaped retry cannot land against an absent F, R8-C2).
         pending = {
           kind: "firstWrite",
           credentials: next,

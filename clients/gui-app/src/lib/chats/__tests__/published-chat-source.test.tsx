@@ -17,25 +17,7 @@ import {
 } from "@/lib/chats/published-chat-source";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 
-/**
- * The seam's load-bearing property, pinned the deliberately-green way.
- *
- * The claim worth testing is NOT "a live chat still renders" - that would pass
- * whether or not the cloud path leaked into it. It is the stronger, negative
- * one: on a live surface the cloud payload reader is **never consulted**. So
- * the reader is a spy, and the live assertions are about the calls it did not
- * receive.
- *
- * Without that, a seam that quietly enabled itself everywhere would look
- * healthy in every test here while doubling every live chat's requests and
- * addressing them at a chat the reading host has no publication for.
- *
- * The live assertion drives the REAL segment (`FileChangeSegment`), not a local
- * stand-in for it. A harness that re-implements the dispatch can only prove the
- * harness dispatches correctly; the property belongs to the component that
- * ships, and mounting it with no provider is what pins that the null default
- * reaches production code.
- */
+/** The seam's load-bearing property, pinned the deliberately-green way. */
 
 /** The content address a payload read is issued against. */
 interface PayloadRef {
@@ -44,8 +26,7 @@ interface PayloadRef {
 }
 
 /**
- * Typed rather than a bare `vi.fn()`: the assertions below read `.kind` off
- * recorded calls, and an untyped spy makes every one of those an `any` hop.
+ * Typed rather than a bare `vi.fn()`: the assertions below read `.kind` off recorded calls, and an untyped spy makes every one of those an `any` hop.
  */
 const readPayload = vi.fn<(ref: PayloadRef | null) => void>();
 /** What the mocked reader answers; `undefined` models a query still in flight. */
@@ -61,10 +42,8 @@ const payloadAnswer: {
 } = { current: undefined };
 
 /**
- * The hashes whose reads FAILED - a query that exhausted its retries, not a
- * payload that answered "unavailable". The two are the same `data: undefined`
- * to a naive reader, which is exactly the confusion under test, so the mock
- * keeps them as separate controls rather than one "no content" switch.
+ * The hashes whose reads FAILED - a query that exhausted its retries, not a payload that answered "unavailable".
+ * The two are the same `data: undefined` to a naive reader, which is exactly the confusion under test, so the mock keeps them as separate controls rather than one "no content" switch.
  */
 const failedHashes = new Set<string>();
 /** Which side a retry re-issued, so "only the failed one" is checkable. */
@@ -100,18 +79,9 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   },
 }));
 
-/**
- * The LIVE data source, stubbed - not the thing under test here.
- *
- * Mounting the real segment on the live path otherwise needs the whole host
- * runtime, which is itself the point: the live arm depends on the host and the
- * published arm does not. Stubbing it keeps the REAL dispatcher in the test
- * while removing a dependency the assertion does not concern.
- */
-// The transcript renders inside a chat TILE, so its file-change rows resolve
-// the snapshot store on the TAB's host (D15). The query itself is mocked just
-// below, so `null` is enough here - what matters is that the seam exists and is
-// this one, not the app-wide read it replaced.
+/** The LIVE data source, stubbed - not the thing under test here. */
+// The transcript renders inside a chat TILE, so its file-change rows resolve the snapshot store on the TAB's host (D15).
+// The query itself is mocked just below, so `null` is enough here - what matters is that the seam exists and is this one, not the app-wide read it replaced.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -157,9 +127,8 @@ const FILE_SEGMENT = {
 } satisfies FileChangeSegmentModel;
 
 function Diff(props: { readonly published: boolean }): ReactNode {
-  // The real diff body reads the resolved theme, so the real provider comes
-  // with it. Wrapping is cheaper than mocking the diff primitive, which is the
-  // very component whose banner slot carries the notice under test.
+  // The real diff body reads the resolved theme, so the real provider comes with it.
+  // Wrapping is cheaper than mocking the diff primitive, which is the very component whose banner slot carries the notice under test.
   const segment = (
     <ThemeProvider>
       <FileChangeSegment
@@ -216,10 +185,8 @@ describe("published chat source", () => {
   });
 
   it("reports a hash the cloud cannot serve as a missing blob", () => {
-    // The same fact the local store reports when a blob is gone, so the segment
-    // draws the banner it already has instead of a new vocabulary.
-    // A SETTLED unavailable answer, not an in-flight one - the distinction the
-    // hook itself draws, and the reason the loading arm exists.
+    // The same fact the local store reports when a blob is gone, so the segment draws the banner it already has instead of a new vocabulary.
+    // A SETTLED unavailable answer, not an in-flight one - the distinction the hook itself draws, and the reason the loading arm exists.
     payloadAnswer.current = { kind: "unavailable" };
 
     const { result } = renderHook(() =>
@@ -238,9 +205,8 @@ describe("published chat source", () => {
   });
 
   it("reports a truncated payload as a prefix, with its real byte length", () => {
-    // The reviewer's witness: a 65,547-byte payload served as a 65,536-byte
-    // prefix. Dropping `isTruncated` made the surface present the prefix as the
-    // whole file - worse than the viewer this ticket demolished, which said so.
+    // The reviewer's witness: a 65,547-byte payload served as a 65,536-byte prefix.
+    // Dropping `isTruncated` made the surface present the prefix as the whole file - worse than the viewer this ticket demolished, which said so.
     payloadAnswer.current = {
       kind: "text",
       text: "x",
@@ -306,10 +272,8 @@ describe("published chat source", () => {
   });
 
   it("renders the truncation notice on the real segment, not just in the hook", () => {
-    // The ablation that caught this: dropping `truncation` at the segment left
-    // every hook assertion green while the surface silently presented a prefix
-    // as a whole file. The finding was about what RENDERS, so this asserts the
-    // rendered marker.
+    // The ablation that caught this: dropping `truncation` at the segment left every hook assertion green while the surface silently presented a prefix as a whole file.
+    // The finding was about what RENDERS, so this asserts the rendered marker.
     payloadAnswer.current = {
       kind: "text",
       text: "x",
@@ -333,10 +297,7 @@ describe("published chat source", () => {
   });
 
   it("reports an exhausted read as a failure, not as a missing blob", () => {
-    // The defect: an errored query's `data` is `undefined`, `payloadText` reads
-    // that as `null`, and the diff reported `blob_missing` - a permanent
-    // verdict about the owner's upload for a fault that is one request away
-    // from clearing.
+    // The defect: an errored query's `data` is `undefined`, `payloadText` reads that as `null`, and the diff reported `blob_missing` - a permanent verdict about the owner's upload for a fault that is one request away from clearing.
     failedHashes.add(BEFORE_HASH);
 
     const { result } = renderHook(() =>
@@ -444,10 +405,8 @@ describe("published chat source", () => {
   });
 
   it("offers a working retry on the real segment, in place of the reason copy", () => {
-    // The rendered half of the finding: the hook can distinguish the two facts
-    // and the surface still print "blob missing" over it. This drives the REAL
-    // segment, and the click asserts the mechanism - the retry reaches the
-    // reader - rather than that a handler prop was passed.
+    // The rendered half of the finding: the hook can distinguish the two facts and the surface still print "blob missing" over it.
+    // This drives the REAL segment, and the click asserts the mechanism - the retry reaches the reader - rather than that a handler prop was passed.
     payloadAnswer.current = { kind: "text", text: "x", isTruncated: false };
     failedHashes.add(BEFORE_HASH);
 

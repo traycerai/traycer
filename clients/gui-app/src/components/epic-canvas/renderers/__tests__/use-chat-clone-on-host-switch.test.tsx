@@ -62,14 +62,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 /**
- * S6 - the refusal at `use-chat-clone-on-host-switch.ts:73-81`: when the
- * active host the Clone button would target IS the agent's own bound host,
- * there is nowhere to clone to. Before this refusal existed, clicking Clone
- * in that state silently did nothing - which reads as a broken button, not a
- * deliberate no-op. Already closed; this is a PIN, not a fix, and the assert
- * is on the refusal TOAST's presence, not merely on "no clone happened" -
- * that weaker assertion is also true when the button is unwired entirely, so
- * it would not tell the two states apart.
+ * Before this refusal existed, clicking Clone in that state silently did nothing - which reads as a broken button, not a deliberate no-op.
  */
 describe("useChatCloneOnHostSwitch - S6 same-host refusal", () => {
   it("toasts a refusal and never starts a clone when the active host equals the agent's own bound host", () => {

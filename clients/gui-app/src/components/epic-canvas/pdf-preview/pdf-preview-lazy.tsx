@@ -1,16 +1,6 @@
 /**
- * The only sanctioned entry to `PdfPreview`: pdf.js is a ~1-2 MB dependency
- * that stays out of the main bundle (the pdfmake artifact-export treatment)
- * and loads on the first PDF actually opened. The loading fallback matches
- * the asset hook's own presentation so the tile shows one continuous
- * spinner from stream-open to first page paint.
- *
- * Also where "this device cannot run the viewer" surfaces. The chunk load
- * failing (`pdf-preview-loader.ts` explains why that IS the support check)
- * or the viewer throwing while it mounts both report `onUnavailable`, and
- * the host surface swaps in its placeholder with
- * `PDF_VIEWER_UNAVAILABLE_REASON`. The file bytes are fine in both cases -
- * this is not the `onRenderFailure` path, which discards them.
+ * The only sanctioned entry to `PdfPreview`: pdf.js is a ~1-2 MB dependency that stays out of the main bundle (the pdfmake artifact-export treatment) and loads on the first PDF actually opened.
+ * Also where "this device cannot run the viewer" surfaces.
  */
 import {
   Component,
@@ -93,10 +83,8 @@ interface PdfPreviewErrorBoundaryState {
 }
 
 /**
- * Catches the viewer throwing during render or its setup effects (a pdf.js
- * API missing at construction time, past the module-scope failures the
- * loader already sees). Renders nothing once failed: the parent has been
- * told and replaces this subtree with its placeholder.
+ * Catches the viewer throwing during render or its setup effects (a pdf.js API missing at construction time, past the module-scope failures the loader already sees).
+ * Renders nothing once failed: the parent has been told and replaces this subtree with its placeholder.
  */
 class PdfPreviewErrorBoundary extends Component<
   PdfPreviewErrorBoundaryProps,

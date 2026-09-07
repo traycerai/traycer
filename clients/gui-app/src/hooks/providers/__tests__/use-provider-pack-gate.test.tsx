@@ -9,11 +9,7 @@ import type {
 
 const testState = vi.hoisted(() => ({
   providers: undefined as ReadonlyArray<ProviderCliState> | undefined,
-  // The activity options the client-scoped gate asked its query for. Captured
-  // rather than asserted through behaviour because the whole point of the
-  // `active` parameter is that it changes NOTHING about the gate's answer -
-  // only whether a subscription is held - so a behavioural assertion could not
-  // tell the two wirings apart.
+  // Captured rather than asserted through behaviour because the whole point of the `active` parameter is that it changes NOTHING about the gate's answer - only whether a subscription is held - so a behavioural assertion could not tell the two wirings apart.
   lastClientActivity: null as {
     enabled: boolean;
     subscribed: boolean;
@@ -42,10 +38,7 @@ import {
   useProviderPackGateForClient,
 } from "@/hooks/providers/use-provider-pack-gate";
 
-// `candidates: []` is the load-bearing default here: no bundled binary, no
-// PATH install, nothing to fall back to. Every "blocks" assertion below depends
-// on it, because the gate's question is "can this provider run", not "is a
-// download in flight" - see `runnableProviderState` for the other half.
+// `candidates: []` is the load-bearing default here: no bundled binary, no PATH install, nothing to fall back to.
 function providerState(
   providerId: ProviderCliState["providerId"],
   managedInstallState: ProviderManagedInstallState | null,
@@ -114,10 +107,8 @@ afterEach(() => {
 });
 
 describe("useProviderPackGate", () => {
-  // The gate is UX; the host resolver is the authoritative backstop and refuses
-  // independently. So an unknown answer must never block - a gate that failed
-  // CLOSED here would lock the composer for the entire first `providers.list`
-  // round trip on every app start.
+  // The gate is UX; the host resolver is the authoritative backstop and refuses independently.
+  // So an unknown answer must never block - a gate that failed CLOSED here would lock the composer for the entire first `providers.list` round trip on every app start.
   it("does not block while providers.list has not loaded", () => {
     const { result } = renderHook(() => useProviderPackGate("claude"), {
       wrapper,
@@ -187,11 +178,7 @@ describe("useProviderPackGate", () => {
     expect(result.current.blocked).toBe(false);
   });
 
-  // The regression this gate was rewritten for. Boot convergence enqueues EVERY
-  // enabled pack, so `downloading 0%` is the ordinary first-boot state of every
-  // provider on the machine - while their bundled binaries sit right there,
-  // runnable. Gating on the pack alone dimmed the whole picker and took away
-  // the only send button that would have promoted a pack up the install queue.
+  // The regression this gate was rewritten for.
   it("does not block a download standing behind a runnable binary", () => {
     testState.providers = [
       runnableProviderState("claude-code", {
@@ -253,11 +240,7 @@ describe("useProviderPackGateForClient", () => {
     testState.lastClientActivity = null;
   });
 
-  // Only the focused top-level surface owns its catalog subscriptions - the
-  // rule the chat composer already applies to the reauth gate and the
-  // rate-limit prompt beside this one. An unfocused split partner renders its
-  // body but cannot send, so a live `providers.list` stream there is a
-  // per-host cost with no reader.
+  // An unfocused split partner renders its body but cannot send, so a live `providers.list` stream there is a per-host cost with no reader.
   it("holds the providers.list subscription only while active", () => {
     testState.providers = [providerState("claude-code", null)];
     const { rerender } = renderHook(
@@ -276,10 +259,7 @@ describe("useProviderPackGateForClient", () => {
     });
   });
 
-  // Dropping the subscription must not turn into a gate that blocks. An
-  // unfocused tile reading a cache no query is refreshing lands on the same
-  // fail-open the loading state does, and the host resolver's typed
-  // `preparing` outcome stays the authoritative backstop either way.
+  // Dropping the subscription must not turn into a gate that blocks.
   it("still answers from cached providers while inactive", () => {
     testState.providers = [
       providerState("claude-code", { status: "downloading", percent: 5 }),

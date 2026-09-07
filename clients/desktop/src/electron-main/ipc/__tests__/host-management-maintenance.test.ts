@@ -107,7 +107,7 @@ describe("classifyCliShellError", () => {
 });
 
 // Enumerated independently of the switch so a new MutationKind fails here
-// instead of silently inheriting a default (there is none — the switch is
+// instead of silently inheriting a default (there is none  -  the switch is
 // exhaustive, and this list is the second fence).
 const ALL_MUTATION_KINDS: readonly MutationKind[] = [
   "ensure",
@@ -383,10 +383,7 @@ describe("maintenanceUpdateCheck IPC", () => {
           },
         ],
       },
-      // Reconstructed from the REQUEST, because this fixture's CLI envelope
-      // carries no inclusion metadata — the fail-closed path for a CLI that
-      // predates the fields. It never claims `installed-rc`, which asserts a
-      // derivation only a reporting CLI can have performed.
+      // It never claims `installed-rc`, which asserts a derivation only a reporting CLI can have performed.
       effectiveIncludePreReleases: false,
       includePreReleasesSource: "explicit-exclude",
     });
@@ -449,10 +446,6 @@ describe("maintenanceUpdateCheck IPC", () => {
   });
 
   it("shells the NEGATIVE flag when the override is explicitly false", async () => {
-    // Not omission. Omission now means "derive from the installed host", and
-    // on a host running a release candidate that DERIVES inclusion — so an
-    // unchecked filter that sent nothing would keep returning the RC rows it
-    // was just asked to hide.
     installFakeCli(resolveWith(realShapedAvailablePayload()));
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
@@ -535,13 +528,7 @@ describe("maintenanceUpdateCheck IPC", () => {
   });
 
   it("classifies E_HOST_VERIFY_FAILED as cli-failed — the host never synthesises a manifest", async () => {
-    // The host's own `host.update.check` resolver returns
-    // `{outcome: result.kind}` for any non-ok CLI result and never
-    // synthesises a manifest. A protocol manifest with `latest: ""`
-    // renders "v is available, but <host> can't install it." whenever the
-    // installed version is unknown. This lane answers that same wire
-    // contract, so every failure — including a build without trusted
-    // registry keys — classifies through `classifyCliShellError`.
+    // The host's own `host.update.check` resolver returns `{outcome: result.kind}` for any non-ok CLI result and never synthesises a manifest.
     installFakeCli((_args, CliError) =>
       Promise.reject(
         new CliError(
@@ -576,10 +563,7 @@ describe("maintenanceUpdateCheck IPC", () => {
   });
 
   it("E_HOST_VERIFY_FAILED classifies on the maintenance lane while traycerHostAvailable still returns an empty snapshot", async () => {
-    // Deliberate divergence: `traycerHostAvailable`'s consumer reads an
-    // empty snapshot as "nothing to install". The maintenance wire
-    // contract must not synthesise that same empty `latest`. This test
-    // is red if the maintenance handler starts normalising again.
+    // The maintenance wire contract must not synthesise that same empty `latest`.
     installFakeCli((_args, CliError) =>
       Promise.reject(
         new CliError(
@@ -806,11 +790,6 @@ describe("maintenanceInstallationInfo IPC", () => {
         signatureKeyId: "key-1",
         sizeBytes: 2048,
         executablePath: "/tmp/traycer/1.1.11/host",
-        // Ticket 03 added an executable digest to the shared installation
-        // schema and normalises a MISSING one to `null` for legacy records.
-        // The fixture above deliberately omits it - that is the legacy-read
-        // path this case exercises - so the decoded record carries the
-        // explicit `null` rather than dropping the key.
         executableSha256: null,
       },
       stagedRecord: {
@@ -893,22 +872,8 @@ describe("maintenanceInstallVersion IPC", () => {
   });
 
   it("classifies every version-moving lane as update work, and only those", async () => {
-    // This bit never admits anything - the install is already refused - it
-    // only chooses between `already-updating` (which ARMS the caller's
-    // accepted-update latch) and a retryable refusal. On a pre-1.2.0 host
-    // nothing releases that latch before the full 60s timer (these hosts
-    // never publish `host.status.updateProgress`), so `true` is reserved
-    // for lanes whose work can OUTLAST the latch: the minutes-long
-    // version movers. `activate` is deliberately `false` - the lane kind
-    // cannot separate the genuine update tail from the legacy
-    // `activationUnknown` stamp-repair, and both are seconds-long either
-    // way.
-    //
-    // Compile-time exhaustive: `satisfies Record<MutationKind, boolean>`
-    // makes a NEW MutationKind a type error here until it gets an explicit
-    // decision, and the sorted-census equality below pins the runtime loop
-    // to the same set - `readonly MutationKind[]` alone would permit a
-    // subset, letting a new kind compile without ever entering the loop.
+    // This bit never admits anything - the install is already refused.
+    // On a pre-1.2.0 host nothing releases that latch before the full 60s timer (these hosts never publish `host.status.updateProgress`), so `true` is reserved for lanes whose work can.
     const updateWorkByKind = {
       install: true,
       apply: true,
@@ -945,13 +910,7 @@ describe("maintenanceInstallVersion IPC", () => {
   });
 
   it("counts an ensure lane as update work only on numeric progress evidence", async () => {
-    // The evidence must be a NUMBER, not mere progress presence: `host
-    // ensure`'s service branches (register, start, the repair retry)
-    // narrate through the same null-metric `host-provision` events without
-    // touching the version, so presence alone would lock the caller's
-    // update controls for a minute over a service repair. Only the
-    // version-moving path reports numerics - the staging download's
-    // `bytes`/`totalBytes`/`percent`, the extract's `workUnits`.
+    // The evidence must be a NUMBER, not mere progress presence: `host ensure`'s service branches (register, start, the repair retry) narrate through the same null-metric.
     const bridge = makeBridge();
     const handler = await registerInstallHandler(bridge);
     const cases = [
@@ -1043,11 +1002,7 @@ describe("maintenanceInstallVersion IPC", () => {
   });
 
   it("re-probes the registry after a successful dispatch even when the cache is fresh", async () => {
-    // Discriminator: the pre-install cache is minutes old and reachable, so
-    // an UNFORCED refresh (or none at all) would serve it and never shell
-    // the probe - the tray and Updates row would keep advertising the
-    // version this dispatch just installed for the rest of the 24h TTL.
-    // Only the forced post-install re-probe fires `host available` here.
+    // Discriminator: the pre-install cache is minutes old and reachable, so an UNFORCED refresh (or none at all) would serve it and never shell the probe.
     const cacheDir = join(workHome, ".traycer", "desktop");
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(
@@ -1105,10 +1060,6 @@ describe("maintenanceInstallVersion IPC", () => {
   });
 
   it("reads admission before submitting — occupying the lane inside installVersion still dispatches", async () => {
-    // Discriminator: if the handler checked the lane AFTER awaiting
-    // installVersion, occupying it inside the submit would flip the
-    // answer to lane-busy. Reading first, with no await in between,
-    // still dispatches.
     const bridge = makeBridge();
     const occupied: { current: MutationLaneStatus | null } = {
       current: null,
@@ -1461,7 +1412,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
   it("refuses when the enrollment record exists but is unreadable, without calling installVersion", async () => {
     // Discriminator: the old fence treated unusable enrollment as "no
     // change" and submitted. A pid file naming another host must not leak
-    // through either — that would refuse with the *changed* message.
+    // through either  -  that would refuse with the *changed* message.
     writeMalformedEnrollment();
     writePid(OTHER_HOST_ID);
     const invoke = RunnerHostInvoke;
@@ -1933,12 +1884,6 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     expect(freePortAndRestart).toHaveBeenCalledTimes(1);
   });
   it("queued converge-ready hands the controller a user-repair intent", async () => {
-    // The sentinel clear and the identity re-ask BOTH moved into the
-    // controller (`admitReprovision`), because this route queues: doing
-    // either one here would prove something about a moment minutes before
-    // the mutation runs. What the HANDLER still owes is a correctly built
-    // intent, so that is what this pins — and, below, that its guard really
-    // answers the identity question rather than being a stub.
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
     const bridge = makeBridge();
@@ -1988,10 +1933,6 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
   });
 
   it("queued restart hands the controller a user-repair intent", async () => {
-    // The third sibling. A restart queues exactly like converge/register, so
-    // a pre-enqueue check alone proves nothing about the host a zero-argument
-    // respawn would eventually force-restart — the identity question has to
-    // ride the intent to the head of the lane.
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
     const bridge = makeBridge();
@@ -2022,10 +1963,6 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
   });
 
   it("the watched restart passes a user-repair intent and reports a late refusal as declined", async () => {
-    // `traycerHostRestartIfIdle` is admitted only against an empty lane, but
-    // admission-to-execution still crosses a microtask boundary, so the
-    // guard re-asks the identity question at the head of the lane and its
-    // refusal renders as the same `declined` the pre-submit check resolves.
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
     const bridge = makeBridge();
@@ -2054,10 +1991,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
   });
 
   it("watched repair hands the controller a user-repair intent too", async () => {
-    // The twin. `traycerDoctorRepairIfIdle` cannot clear the sentinel itself
-    // without putting an await between its lane test and its submit, so it
-    // routes the same intent — which is what stops the two arms from drifting
-    // apart again.
+    // `traycerDoctorRepairIfIdle` cannot clear the sentinel itself without putting an await between its lane test and its submit, so it routes the same intent.
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
     const bridge = makeBridge();
@@ -2283,12 +2217,6 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
   });
 });
 
-/**
- * `traycerHostAvailable` resolves the DISCOVERED manifest/PATH CLI, which —
- * unlike the bundled, version-matched CLI the maintenance projections use —
- * can be older than the app driving it. Sending it a flag it does not have
- * turned "untick Include release candidates" into a hard error.
- */
 describe("traycerHostAvailable old-CLI compatibility", () => {
   beforeEach(beginSandbox);
   afterEach(endSandbox);

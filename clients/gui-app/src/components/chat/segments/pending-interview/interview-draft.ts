@@ -168,10 +168,8 @@ export function draftsFromStoredAnswers(
     if (currentIdentityCounts.get(identity) === 1 && matches.length === 1) {
       return draftFromStoredAnswer(matches[0], question);
     }
-    // A repeated request can enrich a question with a stable ID (or remove an
-    // ID) without changing its unique prompt. Preserve the draft content in
-    // that one-to-one case, while draftFromStoredAnswer deliberately
-    // downgrades the changed full identity to inexact option evidence.
+    // A repeated request can enrich a question with a stable ID (or remove an ID) without changing its unique prompt.
+    // Preserve the draft content in that one-to-one case, while draftFromStoredAnswer deliberately downgrades the changed full identity to inexact option evidence.
     const promptIdentity = questionPromptIdentity(question);
     const promptMatches =
       promptIdentity === null ? [] : (storedByPrompt.get(promptIdentity) ?? []);
@@ -225,10 +223,7 @@ export function draftFromStoredAnswer(
     return matching.length === 0 ? [] : [matching[0]];
   });
   const selected = exactIndices ?? [...new Set(legacyIndices)];
-  // Enforce single-select mutual exclusivity on restore: a stored answer can
-  // carry both `selected` and `otherSelected: true` (e.g. hand-edited
-  // localStorage, or an older draft written before this invariant existed),
-  // and restoring both would violate single-select semantics.
+  // Enforce single-select mutual exclusivity on restore: a stored answer can carry both `selected` and `otherSelected: true` (e.g. hand-edited localStorage, or an older draft written before this invariant existed), and restoring both would violate single-select semantics.
   const normalizedSelected =
     !question.multiSelect && stored.otherSelected ? [] : selected;
   return {

@@ -1,13 +1,5 @@
 /**
- * Terminal-interface half of the opener's unified **Agents** sub-page (see
- * `agents-subpage.ts`): the "New agent (Terminal)" creation leaf - harness /
- * model / args are chosen inside the modal's terminal panel, and the agent
- * places into this pane's target group on launch - plus the Task's existing
- * terminal-interface Agents from the live projection.
- *
- * Returns the creation leaf SEPARATELY from the records; see the chat half for
- * why. The `open:tui:*` leaf ids map to the `open_terminal` analytics command
- * and are preserved verbatim across the category merge.
+ * Terminal-interface half of the opener's unified **Agents** sub-page (see `agents-subpage.ts`): the "New agent (Terminal)" creation leaf - harness / model / args are chosen inside the modal's terminal panel, and the agent places into this pane's target.
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -57,9 +49,7 @@ export function useTuiOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
           name: displayTitle(agent.title, "agent"),
           hostId: agent.hostId,
         },
-        // TUI agents carry a real hostId and can be host-mismatched too, but
-        // badging them is outside T22's scope (chats/terminals/artifacts
-        // only) - flagged back as a follow-up.
+        // TUI agents carry a real hostId and can be host-mismatched too, but badging them is outside T22's scope (chats/terminals/artifacts only) - flagged back as a follow-up.
         null,
       );
     });

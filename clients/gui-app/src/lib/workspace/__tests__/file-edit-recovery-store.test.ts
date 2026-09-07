@@ -27,9 +27,8 @@ import {
 import type { FileEditRecoveryEntry } from "@/lib/workspace/file-edit-runtime";
 
 /**
- * Minimal BroadcastChannel stand-in (mirrors the one in
- * prompt-stash-store.test.ts). Same-name channels share a peer set; the
- * sender does not receive its own postMessage, matching real browsers.
+ * Minimal BroadcastChannel stand-in (mirrors the one in prompt-stash-store.test.ts).
+ * Same-name channels share a peer set; the sender does not receive its own postMessage, matching real browsers.
  */
 class FakeBroadcastChannel {
   static readonly channels = new Map<string, Set<FakeBroadcastChannel>>();
@@ -168,11 +167,7 @@ describe("file-edit-recovery-store", () => {
     const original = fileEditRecoveryPartition();
     expect(original).not.toBe("default");
 
-    // A duplicated tab (Cmd+T "duplicate tab", or a browser restoring a
-    // closed one) inherits the exact same sessionStorage entry, then
-    // independently claims it over the shared channel - simulated here by a
-    // peer broadcasting the id this "original" tab is already using,
-    // without touching this tab's own sessionStorage/module state at all.
+    // A duplicated tab (Cmd+T "duplicate tab", or a browser restoring a closed one) inherits the exact same sessionStorage entry, then independently claims it over the shared channel - simulated here by a peer broadcasting the id this "original" tab is already.
     const duplicatePeer = new FakeBroadcastChannel(
       "traycer-gui-app:file-edit-recovery-tab-claim:v1",
     );

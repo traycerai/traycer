@@ -105,9 +105,8 @@ describe("promoteQueuedMessageToFront", () => {
   });
 
   it("waits for the authoritative item before reordering", () => {
-    // The optimistic row carries a synthetic id the host has never seen, so
-    // reordering against it would target nothing. This is the whole reason the
-    // promotion cannot be issued inline with the send.
+    // The optimistic row carries a synthetic id the host has never seen, so reordering against it would target nothing.
+    // This is the whole reason the promotion cannot be issued inline with the send.
     const store = makeStore(
       queue([
         queuedItem("q-existing", "m-existing"),
@@ -168,9 +167,8 @@ describe("promoteQueuedMessageToFront", () => {
   });
 
   it("never aims at another send's optimistic row", () => {
-    // A concurrent send's optimistic row sits ahead of ours. Using it as
-    // `beforeQueueItemId` would be rejected host-side, so it is skipped and
-    // the first authoritative row is targeted instead.
+    // A concurrent send's optimistic row sits ahead of ours.
+    // Using it as `beforeQueueItemId` would be rejected host-side, so it is skipped and the first authoritative row is targeted instead.
     const store = makeStore(
       queue([
         queuedItem(optimisticQueuedItemId("other"), "m-other"),
@@ -200,10 +198,8 @@ describe("promoteQueuedMessageToFront", () => {
   });
 
   it("does not re-filter the queue when the reference is unchanged", () => {
-    // The watch fires on every store notification, including the rAF-cadence
-    // stream-flush delta while a turn runs - none of which touch `queue`.
-    // This pins the reference-equality gate that keeps those from re-running
-    // attempt()'s filter+scan.
+    // The watch fires on every store notification, including the rAF-cadence stream-flush delta while a turn runs - none of which touch `queue`.
+    // This pins the reference-equality gate that keeps those from re-running attempt()'s filter+scan.
     const items = [queuedItem(optimisticQueuedItemId("a"), "m-compact")];
     const filterSpy = vi.spyOn(items, "filter");
     const q: ChatQueueState = { status: "running", items };

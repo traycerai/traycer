@@ -6,15 +6,7 @@ import type {
   RepoScriptsValue,
 } from "@/components/workspaces/repo-scripts-form";
 
-/**
- * Controlled per-OS setup/teardown field group. Hosts own persistence - this
- * carries no save button or mutation. Pure helpers/types live in
- * `repo-scripts-form.ts`.
- *
- * Each script is authored across per-OS tabs (Default / macOS / Linux /
- * Windows); the host runs the platform-specific command and falls back to
- * Default when the active platform's field is blank (`resolveOsCommand`).
- */
+/** Controlled per-OS setup/teardown field group. */
 export function RepoScriptsFields(props: {
   readonly value: RepoScriptsValue;
   readonly onChange: (next: RepoScriptsValue) => void;
@@ -63,9 +55,7 @@ function ScriptField(props: {
   readonly onChange: (next: OsForm) => void;
 }) {
   const { label, type, description, form, onChange } = props;
-  // Tab selection is view-only state; the value lives in `form`. A plain
-  // string avoids narrowing `onValueChange` - the typed `keyof OsForm` binding
-  // comes from the `OS_TABS` entry inside each panel.
+  // Tab selection is view-only state; the value lives in `form`.
   const [activeOs, setActiveOs] = useState<string>("default");
   return (
     <div className="space-y-2">

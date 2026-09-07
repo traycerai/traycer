@@ -47,13 +47,6 @@ export interface MigrationCompletePayload {
   readonly counts: MigrationCompleteCounts;
 }
 
-/**
- * Typed handlers for a `migration.run@1.0` session.
- *
- * Symmetric to `NotificationsStreamCallbacks` - frames flow server → client
- * only (apart from the heartbeat handled by `WsStreamClient`), so there is
- * no upstream API on the wrapper.
- */
 export interface MigrationStreamCallbacks {
   readonly onStarted: (payload: MigrationStartedPayload) => void;
   readonly onTaskChainProgress: (payload: TaskChainProgressPayload) => void;
@@ -75,15 +68,6 @@ export interface MigrationStreamClientOptions {
   readonly callbacks: MigrationStreamCallbacks;
 }
 
-/**
- * Typed wrapper over `WsStreamClient` for `migration.run@1.0`.
- *
- * Subscribing kicks off the host-side migration run. The wrapper Zod-
- * parses each inbound envelope and dispatches to the typed callback for
- * its `kind`. There are no upstream application frames; closing the
- * underlying session aborts the host-side run via the connection-scoped
- * `RequestContext` abort, leaving any unmigrated entities retryable.
- */
 export class MigrationStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: MigrationStreamCallbacks;

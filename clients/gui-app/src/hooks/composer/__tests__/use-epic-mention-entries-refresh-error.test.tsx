@@ -6,14 +6,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries";
 
 /**
- * The Artifacts refresh button reports a rejected round-trip.
- *
- * `refetch()` RESOLVES with a failed result rather than rejecting, so the
- * `Promise.all` behind the button settles either way and the spinner stops
- * identically on success and on failure. The picker has no inline surface to
- * say it in either - `useMentionItems` publishes `loadFailed: false` outright -
- * so a refresh that never reached the host would otherwise be presented as one
- * that simply found nothing new.
+ * `refetch()` resolves failed rather than rejecting. Without a reported error the picker presents a failed refresh as "nothing new".
  */
 
 const toastFromHostError = vi.fn();
@@ -75,14 +68,8 @@ function settling(
   return errors.map((error) => () => Promise.resolve({ error }));
 }
 
-/**
- * A refetch whose failure the test controls, so the host can be rebound
- * BETWEEN the request being issued and its rejection settling. `issued` must
- * be awaited before rebinding - `refetch()` does not reach the returned
- * promise's executor synchronously - and `settle` THROWS if the request never
- * arrived, so a mis-ordered harness fails as itself rather than as a wrong
- * verdict.
- */
+/** A refetch whose failure the test controls, so the host can be rebound BETWEEN the request being issued and its rejection settling.
+ * `issued` must be awaited before rebinding - `refetch()` does not reach the returned promise's executor synchronously - and `settle` THROWS if the request never arrived, so a mis-ordered harness fails as itself rather than as a wrong verdict. */
 function pendingRefetch(): {
   readonly issued: Promise<void>;
   readonly settle: (error: HostRpcError | null) => void;
@@ -112,11 +99,7 @@ function pendingRefetch(): {
 }
 
 function renderEntries() {
-  // `@/hooks/host/use-reactive-host-readiness` and `@/hooks/host/use-host-queries`
-  // are mocked wholesale above and ignore their arguments entirely, so `client`
-  // is never actually read by anything this suite exercises - `null` is enough
-  // (this file's whole point is the refetch/host-swap toast logic downstream
-  // of those two hooks, not client resolution itself).
+  // `@/hooks/host/use-reactive-host-readiness` and `@/hooks/host/use-host-queries` are mocked wholesale above and ignore their arguments entirely, so `client` is never actually read by anything this suite exercises - `null` is enough (this file's whole point is the refetch/host-swap toast logic downstream of those two hooks, not client resolution itself).
   return renderHook(() =>
     useEpicMentionEntries({ requests: [], client: null }),
   );
@@ -183,10 +166,7 @@ describe("useEpicMentionEntries refresh reporting", () => {
       await pending.issued;
     });
 
-    // The composer rebinds to another host while the round-trip is still
-    // open. Rerendering is what makes the effect re-sync `boundHostIdRef` -
-    // the ref the settling `.then` compares against, not this render's
-    // `readiness.hostId` closure.
+    // The composer rebinds to another host while the round-trip is still open.
     readiness.hostId = "host-2";
     rerender();
 

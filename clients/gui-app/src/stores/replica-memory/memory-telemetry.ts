@@ -8,12 +8,8 @@ import type { EpicReplicaProjectionCounts } from "@/stores/replica-memory/epic-r
 import type { ProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 
 /**
- * Exit-criteria telemetry for putting a plane under the accountant: docs
- * resident, bytes decoded, projection row counts, eviction effectiveness,
- * per-plane budget pressure.
- *
- * This is an INPUT the sync pill (or a memory-pressure affordance) may read.
- * It does not say how to render — T2 left pill presentation UI-owned.
+ * Exit-criteria telemetry for putting a plane under the accountant: docs resident, bytes decoded,
+ * projection row counts, eviction effectiveness, per-plane budget pressure.
  */
 export interface ReplicaMemoryTelemetry {
   readonly accountant: AccountantSnapshot;
@@ -24,11 +20,7 @@ export interface ReplicaMemoryTelemetry {
     readonly evictionsRequested: number;
     readonly bytesReclaimed: number;
     readonly evictionsRefused: number;
-    /**
-     * Requests a tier DISPATCHED rather than declined. Mutually exclusive with
-     * `evictionsRefused` by construction, so reading one without the other
-     * turns "freeing is in flight" into "freeing was refused".
-     */
+    /** Requests a tier DISPATCHED rather than declined. */
     readonly evictionsDeferred: number;
   };
   readonly pressureByPlane: Readonly<Record<BudgetPlaneId, BudgetPressure>>;

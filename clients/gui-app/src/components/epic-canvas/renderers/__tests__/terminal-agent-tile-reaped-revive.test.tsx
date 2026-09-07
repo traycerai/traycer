@@ -5,12 +5,7 @@ import { create } from "zustand";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-// A `reaped` exit is the host's idle-reap of an unwatched terminal-agent -
-// lifecycle, not a crash. The tile must NOT close the tab and NOT raise the
-// crash toast; it revives the session in place instead (bootstrap retry →
-// `terminal.create` under the same id → `prepareLaunch` resumes the
-// conversation). This test pins that contract; the sibling
-// `terminal-agent-tile-exit-close` test pins the genuine-exit close path.
+// The tile must NOT close the tab and NOT raise the crash toast; it revives the session in place instead (bootstrap retry → `terminal.create` under the same id → `prepareLaunch` resumes the conversation).
 
 const closeCanvasTab = vi.fn();
 const bootstrapRetry = vi.fn();

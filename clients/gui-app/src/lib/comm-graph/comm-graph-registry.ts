@@ -1,57 +1,19 @@
 /**
- * ONE `epic.communicationGraph.subscribe` fan-in per epic, shared by however
- * many surfaces are looking at it.
- *
- * The Communication sidebar panel and the graph tile are independently mounted:
- * either can be open alone, both at once, or neither. A manager owned by one of
- * them would mean the other silently has no data (or, worse, a second set of
- * sockets pulling the same log twice and two event arrays that can disagree).
- * So the manager lives here and the surfaces CLAIM it:
- *
- *   first claim:      `attach` (open the sockets)
- *   second claim:     nothing - it reads the same snapshot
- *   last release:     `detach`
- *
- * A CLAIM CARRIES ITS OWN OPENER, and the manager dials through whichever claim
- * is still live. That is not bookkeeping for its own sake:
- * `useDurableStreamTransportFactory` reads its dependencies (host directory,
- * runner host, auth revalidator, credentials) through a ref that the CREATING
- * COMPONENT's effect refreshes. The moment that component unmounts the ref
- * stops being updated and freezes - so an opener retained from a dead surface
- * redials into a disposed runtime. Pinning "the first opener wins", or even
- * "the last acquirer wins", both leave that hole: the surface whose opener is
- * pinned can be the one that went away. Keying openers by claim closes it by
- * construction - a released opener is gone, so a dial can only ever pick one
- * belonging to a mounted surface.
- *
- * Detach, NOT dispose, on the last release. The manager's detach deliberately
- * keeps the accumulated events and per-host cursors, so closing the panel and
- * reopening it resumes from the cursor instead of re-pulling the log - and, just
- * as importantly, the per-host snapshot boundaries survive, so reopening does
- * not re-flash the history as if it had just arrived.
- *
- * RETENTION: detached managers are kept in a bounded MRU. Each one holds that
- * epic's whole log - uncapped `messageText`, up to 50k rows per host - so
- * keeping every epic ever visited would grow without limit until reload. The
- * newest {@link DETACHED_MANAGER_LIMIT} are retained (which is what preserves
- * the close/reopen resume for the epics a user is actually moving between);
- * older ones are disposed. A disposed epic simply re-pulls from `sinceCursor:
- * null` next time, which is correct, just not free.
+ * One `epic.communicationGraph.subscribe` fan-in per epic.
+ * A claim carries its own opener; last release detaches (keeps cursors).
  */
 import { CommGraphSubscriptionManager } from "@/lib/comm-graph/comm-graph-subscription";
 import type { CommGraphSubscriptionOpener } from "@/lib/comm-graph/comm-graph-subscription";
 
 /**
- * How many DETACHED epics keep their manager (and therefore their log and
- * cursors). Small on purpose: the point is to make flipping between the handful
- * of epics in a session's working set free, not to cache history.
+ * How many DETACHED epics keep their manager (and therefore their log and cursors).
+ * Small on purpose: the point is to make flipping between the handful of epics in a session's working set free, not to cache history.
  */
 export const DETACHED_MANAGER_LIMIT = 3;
 
 /**
- * Identity for one surface's claim. The surface supplies a stable per-instance
- * object, so two surfaces are two claims even when a test override hands them
- * the same opener function.
+ * Identity for one surface's claim.
+ * The surface supplies a stable per-instance object, so two surfaces are two claims even when a test override hands them the same opener function.
  */
 export type CommGraphSubscriptionClaim = object;
 
@@ -62,25 +24,9 @@ interface CommGraphRegistryEntry {
     CommGraphSubscriptionClaim,
     CommGraphSubscriptionOpener
   >;
-  /**
-   * Which claim's opener produced the transport currently OPEN for each host.
-   *
-   * Claim-carried openers only decide FUTURE dials; a socket already open keeps
-   * reading the refs of whichever surface opened it. This is the map that makes
-   * those live transports recoverable when their surface leaves.
-   */
+  /** Which claim's opener produced the transport currently OPEN for each host. */
   readonly claimByHostId: Map<string, CommGraphSubscriptionClaim>;
-  /**
-   * READ-ONLY watchers, which hold no opener and never dial.
-   *
-   * The Epic header's feed-health dot reads this epic's host statuses without
-   * opening anything, so it cannot use a claim - and without a claim it can
-   * never reach `releaseCommGraphSubscription`, which is the only path into the
-   * detached MRU and therefore the only thing that ever removes an entry. A
-   * header that merely resolved a manager would leave one behind for every epic
-   * the user visited, forever. Observers give those entries an owner: see
-   * {@link releaseCommGraphObserver}.
-   */
+  /** READ-ONLY watchers, which hold no opener and never dial. */
   readonly observers: Set<object>;
 }
 
@@ -96,9 +42,8 @@ function newestLiveClaim(
   // transport refs are certain to still be refreshing.
   const claim = Array.from(entry.openersByClaim.keys()).at(-1);
   if (claim === undefined) {
-    // Unreachable by construction - the manager only dials while attached, and
-    // it is attached only while a claim is held. Loud rather than silent,
-    // because the silent version is a dial into a dead runtime.
+    // Unreachable by construction - the manager only dials while attached, and it is attached only while a claim is held.
+    // Loud rather than silent, because the silent version is a dial into a dead runtime.
     throw new Error(
       `comm-graph subscription for "${epicId}" dialed with no live claim`,
     );
@@ -107,13 +52,8 @@ function newestLiveClaim(
 }
 
 /**
- * The epic's manager, created on first ask. IDEMPOTENT and claim-free, so it is
- * safe to call while resolving a render (a `useMemo`) - which is where a
- * consumer needs it, because `useSyncExternalStore` subscribes during render.
- *
- * Takes no opener: the manager dials through whichever claim is live at the
- * time, and at construction there are none yet (nothing dials until `attach`,
- * which only happens once a claim exists).
+ * The epic's manager, created on first ask.
+ * IDEMPOTENT and claim-free, so it is safe to call while resolving a render (a `useMemo`) - which is where a consumer needs it, because `useSyncExternalStore` subscribes during render.
  */
 export function getCommGraphSubscriptionManager(
   epicId: string,
@@ -142,13 +82,7 @@ export function getCommGraphSubscriptionManager(
   return entry.manager;
 }
 
-/**
- * Registers a claim-free READER of this epic's manager and returns it.
- *
- * Paired with {@link releaseCommGraphObserver} in an effect. An observer never
- * supplies an opener and never dials; it only needs the entry to stay alive
- * (and reachable by identity) while something is watching it.
- */
+/** Registers a claim-free READER of this epic's manager and returns it. */
 export function observeCommGraphSubscription(
   epicId: string,
   observer: object,
@@ -158,21 +92,7 @@ export function observeCommGraphSubscription(
   return manager;
 }
 
-/**
- * Drops a read-only watcher, disposing the entry when it was ONLY ever watched.
- *
- * The three early returns are the whole contract:
- *
- * - another observer is still reading it - keep it;
- * - a surface holds a claim - that surface owns the lifecycle, and its release
- *   is what will retire the entry;
- * - the epic is already in the detached MRU - it was genuinely subscribed once,
- *   so its events and cursors are worth the retention slot they were given.
- *
- * What is left is an entry that never opened a socket and holds nothing. It is
- * disposed outright rather than pushed into the MRU, because handing a
- * retention slot to an empty manager would evict a real one.
- */
+/** Drops a read-only watcher, disposing the entry when it was ONLY ever watched. */
 export function releaseCommGraphObserver(
   epicId: string,
   observer: object,
@@ -187,19 +107,7 @@ export function releaseCommGraphObserver(
   entriesByEpicId.delete(epicId);
 }
 
-/**
- * Registers one surface's claim and attaches.
- *
- * `hostIds` is taken HERE rather than left to a separate effect so the host set
- * is current BEFORE the sockets open. A retained manager still holds the
- * previous surface's desired set, and attaching first would dial that stale set
- * for one beat - generation gating keeps those frames from being applied, but
- * the dial itself is wrong and wasteful.
- *
- * Paired with {@link releaseCommGraphSubscription} in an EFFECT, never in
- * render: a StrictMode double-invoke runs the cleanup too, so the claims
- * balance.
- */
+/** Registers one surface's claim and attaches. */
 export function acquireCommGraphSubscription(
   epicId: string,
   claim: CommGraphSubscriptionClaim,
@@ -208,16 +116,8 @@ export function acquireCommGraphSubscription(
 ): void {
   const entry = entriesByEpicId.get(epicId);
   if (entry === undefined) return;
-  // TRANSACTIONAL, for CLAIM AND ATTACH BOOKKEEPING. If anything throws after
-  // the claim is inserted, React never runs the cleanup that would release it -
-  // so the claim would be held forever by a component that never mounted,
-  // keeping the epic's sockets and history out of both detach and the MRU. On
-  // failure this rolls back to exactly the pre-acquire state and rethrows.
-  //
-  // DIAL failures do not reach here: the manager contains them per host and
-  // degrades to `failed` + a bounded retry, because `setHostIds` is also called
-  // from a plain effect where an escaping throw would have no owner. So this
-  // guards the bookkeeping around the dial, not the dial itself.
+  // TRANSACTIONAL, for CLAIM AND ATTACH BOOKKEEPING.
+  // If anything throws after the claim is inserted, React never runs the cleanup that would release it - so the claim would be held forever by a component that never mounted, keeping the epic's sockets and history out of both detach and the MRU.
   const hadClaim = entry.openersByClaim.has(claim);
   const previousOpener = entry.openersByClaim.get(claim);
   const wasAttached = entry.openersByClaim.size > 0;
@@ -263,30 +163,15 @@ export function releaseCommGraphSubscription(
     if (evictedEpicId === undefined) break;
     const evicted = entriesByEpicId.get(evictedEpicId);
     if (evicted === undefined) continue;
-    // An OBSERVED entry is still live. Disposing it here would strand the
-    // header's feed-health dot on a dead manager: the entry would be gone, so
-    // the tile's next open would build a second one, and the dot would keep
-    // reading the corpse forever. It has already left the MRU, so the observer's
-    // own release is what retires it.
+    // An OBSERVED entry is still live.
+    // Disposing it here would strand the header's feed-health dot on a dead manager: the entry would be gone, so the tile's next open would build a second one, and the dot would keep reading the corpse forever.
     if (evicted.observers.size > 0) continue;
     evicted.manager.dispose();
     entriesByEpicId.delete(evictedEpicId);
   }
 }
 
-/**
- * Replaces the transports the departing claim opened, when other surfaces are
- * still watching.
- *
- * A live socket keeps reading the refs of the surface that opened it, and those
- * stop being refreshed the moment that surface unmounts - so a host left on the
- * departing claim's transport is one runtime change away from talking to a
- * disposed runtime. Redialing through a live claim is lossless (each host
- * resumes from its own cursor), so the safe move is simply to replace them.
- *
- * Hosts opened through a SURVIVING claim are untouched: nothing is wrong with
- * them, and needlessly cycling a healthy socket would drop frames for no reason.
- */
+/** Replaces the transports the departing claim opened, when other surfaces are still watching. */
 function redialOrphanedHosts(
   entry: CommGraphRegistryEntry,
   departingClaim: CommGraphSubscriptionClaim,
@@ -315,8 +200,8 @@ export function __commGraphSubscriptionRetainedForTests(
 }
 
 /**
- * Drops every entry. Tests only - a leaked manager would carry one test's
- * events and boundaries into the next.
+ * Drops every entry.
+ * Tests only - a leaked manager would carry one test's events and boundaries into the next.
  */
 export function __resetCommGraphRegistryForTests(): void {
   for (const entry of entriesByEpicId.values()) entry.manager.dispose();

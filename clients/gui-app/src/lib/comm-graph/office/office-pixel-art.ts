@@ -1,19 +1,4 @@
-/**
- * Rasterizes the office's ASCII pixel maps and draws them.
- *
- * A map is art; this module is the only place that turns one into pixels. Two
- * halves, deliberately separable:
- *
- * - `rasterizeSpriteMap` is pure and DOM-free, so the art can be asserted on
- *   without a canvas implementation.
- * - `drawOfficeSprite` caches one offscreen surface per distinct rasterization
- *   and does nothing but `drawImage` per call, so a floor of forty characters
- *   costs forty blits per frame and no per-pixel work at all.
- *
- * The cache key spans every input that changes a pixel - name, facing, pose,
- * the agent's appearance, the tint and the theme - because a stale entry would
- * silently render one agent in another's colors.
- */
+/** Rasterizes the office's ASCII pixel maps and draws them. */
 import type {
   OfficePoint,
   OfficeSize,
@@ -115,9 +100,8 @@ export interface RasterizedSprite {
 }
 
 /**
- * The theme-dependent half of the art's color space. Character colors are NOT
- * here: an agent looks the same in both themes, which is what makes an agent
- * recognizable to someone who switches theme mid-session.
+ * The theme-dependent half of the art's color space.
+ * Character colors are NOT here: an agent looks the same in both themes, which is what makes an agent recognizable to someone who switches theme mid-session.
  */
 export interface OfficePalette {
   readonly floorBase: string;
@@ -413,23 +397,12 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   sparkle: SPARKLE_MAP,
 };
 
-/**
- * Narrows a key of {@link PROP_MAPS} back to its own key type.
- *
- * `Object.keys` erases to `string[]`, and a cast to put the type back would
- * re-introduce exactly the drift the derivation below exists to remove.
- */
+/** Narrows a key of {@link PROP_MAPS} back to its own key type. */
 function isPropSpriteName(name: string): name is OfficeSpriteName {
   return Object.hasOwn(PROP_MAPS, name);
 }
 
-/**
- * Every name that has a single authored map, i.e. everything but `character`.
- *
- * DERIVED from the maps rather than listed beside them. The art-shape test
- * reads this list, so a hand-written copy meant a new sprite could be authored,
- * drawn, shipped and never once checked - the test would pass by not looking.
- */
+/** Every name that has a single authored map, i.e. everything but `character`. */
 const PROP_SPRITE_NAMES: ReadonlyArray<OfficeSpriteName> = Object.keys(
   PROP_MAPS,
 )
@@ -509,8 +482,8 @@ function toHex(channel: number): string {
 }
 
 /**
- * The shade of a color, used for every `s` / `h` / `t` pixel. Derived rather
- * than picked so a new shirt color never needs a matching shadow entry.
+ * The shade of a color, used for every `s` / `h` / `t` pixel.
+ * Derived rather than picked so a new shirt color never needs a matching shadow entry.
  */
 function shade(value: string, amount: number): string {
   const rgba = parseHexColor(value);
@@ -519,9 +492,8 @@ function shade(value: string, amount: number): string {
 }
 
 /**
- * The full letter-to-color map for one draw. Unknown letters are simply absent,
- * which rasterizes as transparent: a typo in the art must fail the art test,
- * not throw inside an animation frame.
+ * The full letter-to-color map for one draw.
+ * Unknown letters are simply absent, which rasterizes as transparent: a typo in the art must fail the art test, not throw inside an animation frame.
  */
 export function officeSpriteColors(
   ref: OfficeSpriteRef,
@@ -614,8 +586,7 @@ interface SelectedMap {
 }
 
 /**
- * `left` is never authored: it is `right` mirrored, which is both half the art
- * to keep consistent and the only way the two stay in sync when one is edited.
+ * `left` is never authored: it is `right` mirrored, which is both half the art to keep consistent and the only way the two stay in sync when one is edited.
  */
 function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
   const appearance = ref.appearance;
@@ -656,16 +627,7 @@ export type SpriteSurface = HTMLCanvasElement | OffscreenCanvas;
 /** `null` records a surface that could not be created, so we try exactly once. */
 const surfaceCache = new Map<string, SpriteSurface | null>();
 
-/**
- * How many rasterized surfaces to keep.
- *
- * The cache is keyed partly by an agent's APPEARANCE, which is generated per
- * agent id - so without a cap it holds one entry per pose per agent the person
- * has ever opened an office on, in any epic, for as long as the tab lives.
- * A floor draws a few hundred distinct sprites at once, so this is roomy
- * enough that a live floor never evicts something it is still using, and
- * bounded enough that a long session cannot grow without limit.
- */
+/** How many rasterized surfaces to keep. */
 export const OFFICE_SPRITE_CACHE_LIMIT = 1024;
 
 export function clearOfficeSpriteCache(): void {
@@ -677,15 +639,7 @@ export function officeSpriteCacheSize(): number {
   return surfaceCache.size;
 }
 
-/**
- * Reads a cached surface, refreshing its recency.
- *
- * `undefined` means "not cached"; `null` means "cached as unbuildable". A `Map`
- * iterates in INSERTION order, so deleting and re-inserting a hit is what moves
- * it to the young end and makes the eviction below least-recently-used rather
- * than first-in-first-out - the difference between evicting the sprite nobody
- * has asked for in ten minutes and evicting the floor tile every frame draws.
- */
+/** Reads a cached surface, refreshing its recency. */
 function readCachedSurface(key: string): SpriteSurface | null | undefined {
   if (!surfaceCache.has(key)) return undefined;
   const surface = surfaceCache.get(key) ?? null;
@@ -704,8 +658,8 @@ function writeCachedSurface(key: string, surface: SpriteSurface | null): void {
 }
 
 /**
- * The cached surface for one sprite, rasterizing it on the first ask. `null`
- * where the host has no 2D context to paint on.
+ * The cached surface for one sprite, rasterizing it on the first ask.
+ * `null` where the host has no 2D context to paint on.
  */
 export function officeSpriteSurface(
   ref: OfficeSpriteRef,
@@ -732,10 +686,7 @@ function cacheKey(ref: OfficeSpriteRef, theme: OfficeTheme): string {
 }
 
 /**
- * Paints a raster onto a fresh offscreen surface, or reports that this host has
- * no 2D context to paint on. jsdom and any canvas-less host take the `null`
- * path: drawing is decoration, and refusing to render must never take the
- * caller down with it.
+ * Paints a raster onto a fresh offscreen surface, or reports that this host has no 2D context to paint on. jsdom and any canvas-less host take the `null` path: drawing is decoration, and refusing to render must never take the caller down with it.
  */
 function paintSurface(raster: RasterizedSprite): SpriteSurface | null {
   const { width, height, pixels } = raster;
@@ -783,11 +734,8 @@ function buildSurface(
 }
 
 /**
- * Draws one sprite with its TOP-LEFT at the sprite-space point `at`. Anchoring
- * anywhere else is the caller's arithmetic: the layers of a frame anchor
- * differently and only the caller knows which layer it is drawing.
- *
- * The caller's transform is the camera and is left exactly as found.
+ * Draws one sprite with its TOP-LEFT at the sprite-space point `at`.
+ * Anchoring anywhere else is the caller's arithmetic: the layers of a frame anchor differently and only the caller knows which layer it is drawing.
  */
 export function drawOfficeSprite(
   ctx: CanvasRenderingContext2D,

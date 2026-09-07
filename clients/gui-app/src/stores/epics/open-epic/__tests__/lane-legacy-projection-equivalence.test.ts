@@ -1,41 +1,3 @@
-/**
- * The ticket's exit line, made executable at the HEAD level: identical epic
- * content, driven through both heads into the same composition, compared as
- * WHOLE projected values.
- *
- * ## What this test is, and what it is not
- *
- * The exit criterion is projection-level - "indistinguishable to the projection
- * layer from the legacy adapter on identical epic content" - and the contract
- * test for it drives real adapters end to end. This is the DIAGNOSTIC beneath
- * that one: it removes the transport, the adapters and the runtime, leaves only
- * the two heads and the one composition they share, and so answers a different
- * question. The end-to-end test says whether the property holds; this one says
- * WHICH head is wrong when it does not.
- *
- * Both are wanted. A single end-to-end test that fails tells you the epic looks
- * different, not that (say) the lane's tombstone decode dropped a status.
- *
- * ## Why this can be a strict whole-value comparison
- *
- * Because the tail is not duplicated. `composeEpicProjection` owns the unions,
- * the dead-mutation sweep, the role-claim visibility filter, the optimistic
- * overlay and the tree, and BOTH heads feed it. So the only thing two adapters
- * can differ on is what they put in - which is exactly what is compared here.
- * If someone later gives the lane path its own projector, this test keeps
- * passing right up until the two implementations drift, which is why the
- * structural property matters more than the assertion.
- *
- * ## The one field that is NOT equal, stated rather than hidden
- *
- * `artifactRoomId`. `epicArtifactRecordSchema` OMITS it from every arm, because
- * room routing is not the lane's addressing model: a body is attached by
- * ARTIFACT ID over `artifact.subscribe`, under an authority epoch, and there is
- * no room name to carry. Synthesising one would be a fabricated authority-side
- * fact. So the comparison normalises that single field and then asserts, on the
- * legacy side, that it was genuinely populated - otherwise the normalisation
- * would be silently absorbing any future divergence as well as this one.
- */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
@@ -75,11 +37,7 @@ import {
 const EPOCH = "epoch-equiv";
 const VIEWER = "user-a";
 
-/**
- * The adapter host's environment. Inert on purpose: the records adapter reads
- * nothing off it on the snapshot path, and a real clock or scheduler here would
- * be a nondeterminism this comparison has no use for.
- */
+/** The adapter host's environment. */
 const TEST_ENVIRONMENT: RuntimeEnvironment = {
   clock: { now: () => 0 },
   scheduler: {
@@ -95,11 +53,6 @@ const TEST_ENVIRONMENT: RuntimeEnvironment = {
   },
 };
 
-/**
- * ONE description of an epic's content. Both heads are materialised from this
- * and nothing else, so "identical epic content" is a property of the fixture
- * rather than of two hand-kept-in-sync literals.
- */
 interface EpicContent {
   readonly title: string;
   readonly updatedAt: number;
@@ -156,9 +109,8 @@ const CONTENT: EpicContent = {
       assignee: "someone",
     },
     {
-      // An orphan: its parent does not exist, so the tree must promote it to a
-      // root. The promotion happens in the SHARED tail, so both heads must
-      // agree on it for free - which is the point.
+      // An orphan: its parent does not exist, so the tree must promote it to a root. The promotion
+      // happens in the SHARED tail, so both heads must agree on it for free - which is the point.
       id: "spec-orphan",
       kind: "spec",
       title: "Orphan spec",
@@ -229,14 +181,7 @@ function seedLegacyDoc(content: EpicContent): Y.Doc {
 
 // ─── Head B: `epic.state.subscribe@1.0` rows ──────────────────────────────
 
-/**
- * The same content as a real snapshot frame, parsed by the real schema.
- *
- * Built as ONE frame rather than row by row so the wire's own completeness
- * rules apply: a snapshot that forgot the claim set or the metadata would fail
- * construction here rather than produce a half-populated head that happened to
- * compare equal on the fields the fixture bothered to set.
- */
+/** The same content as a real snapshot frame, parsed by the real schema. */
 function snapshotFrame(
   content: EpicContent,
 ): Extract<EpicStateSubscribeServerFrameV10, { kind: "snapshot" }> {
@@ -339,14 +284,7 @@ function laneSnapshotRows(
 
 // ─── The comparison ───────────────────────────────────────────────────────
 
-/**
- * The composition inputs, identical for both heads.
- *
- * `RECORD_PLANE_COVERS_BOTH` is the post-cutover configuration and the only one
- * in which the comparison means anything: with the doc arms live, head A would
- * carry chats and terminal agents head B structurally cannot have, and the
- * difference would be the configuration rather than the decode.
- */
+/** The composition inputs, identical for both heads. */
 const INPUTS: ProjectionInputs = {
   chatRecords: EMPTY_CHATS_SLICE,
   tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
@@ -401,22 +339,7 @@ function laneProjection(): EpicProjectedSlices {
 
 // ─── The contract half: through the REAL adapter ──────────────────────────
 
-/**
- * Drive the same content through the REAL `epic.state.subscribe@1.0` adapter.
- *
- * The head test above hands `RecordRow`s straight to the replica, which is what
- * makes it a diagnostic - it isolates the replica and the composition. This one
- * adds the piece that test deliberately skips: the adapter's own decode, which
- * is where the snapshot's four populations become rows, where the role-claim and
- * metadata singletons are synthesised onto every snapshot, and where a
- * tombstone's two key spaces are minted. A defect in any of those is invisible
- * to the head test and visible here.
- *
- * The stream client is a fake, and only the stream client: the adapter, the
- * replica, the composition and the frame schema are all real, and the frame is
- * the one `laneSnapshotRows` already parsed - so both halves of this file are
- * driven from one description of one epic.
- */
+/** Drive the same content through the REAL `epic.state.subscribe@1.0` adapter. */
 function laneProjectionThroughAdapter(): EpicProjectedSlices {
   const replica = createEpicLaneStateReplica({
     getCurrentUserId: () => VIEWER,
@@ -470,9 +393,8 @@ describe("the exit line, end to end: identical content through BOTH adapters", (
   });
 
   it("the adapter really ran - the replica holds the watermark the frame carried", () => {
-    // Anti-vacuity: without this, a factory that never invoked `onSnapshot`
-    // would leave both sides empty and the equality above would pass on two
-    // empty projections.
+    // Anti-vacuity: without this, a factory that never invoked `onSnapshot` would leave both sides
+    // empty and the equality above would pass on two empty projections.
     const projection = laneProjectionThroughAdapter();
     expect(projection.artifacts.allIds.slice().sort()).toEqual([
       "spec-orphan",
@@ -491,9 +413,8 @@ describe("lane and legacy heads are indistinguishable to the projection layer", 
     const legacy = legacyProjection();
     const lane = laneProjection();
 
-    // The whole value, not a field-by-field walk: a comparison that enumerated
-    // fields would pass over a slice someone adds later, which is the failure
-    // mode a projection-level exit criterion exists to catch.
+    // The whole value, not a field-by-field walk: a comparison that enumerated fields would pass over
+    // a slice someone adds later, which is the failure mode a projection-level exit criterion exists
     expect(normalized(lane)).toEqual(normalized(legacy));
   });
 
@@ -537,9 +458,7 @@ describe("lane and legacy heads are indistinguishable to the projection layer", 
   });
 
   it("catches a divergence rather than absorbing it", () => {
-    // The guard on the guard: perturb ONE field on one head and the whole-value
-    // comparison must fail. Without this, a normalisation that quietly widened
-    // would leave the suite green over a real difference.
+    // The guard on the guard: perturb ONE field on one head and the whole-value comparison must fail.
     const legacy = legacyProjection();
     const lane = laneProjection();
     const perturbed: EpicProjectedSlices = {

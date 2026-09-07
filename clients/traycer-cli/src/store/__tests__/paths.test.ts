@@ -38,12 +38,7 @@ import {
 } from "../paths";
 import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
-/**
- * Named `import { open }` in `paths.ts` does not see `vi.spyOn(fsPromises,
- * "open")`. The mock rebinds the export so a Windows-branch test that still
- * takes the POSIX descriptor path fails instead of going false-green on
- * macOS, where `open(directory)` succeeds.
- */
+/** Named `import { open }` in `paths.ts` does not see `vi.spyOn(fsPromises, "open")`. The mock rebinds the export so a Windows-branch test that still takes the POSIX descriptor path fails instead of going false-green on macOS, where `open(directory)` succeeds. */
 const windowsStateDir = vi.hoisted(() => ({
   rejectOpen: false,
   lstatOverride: null as

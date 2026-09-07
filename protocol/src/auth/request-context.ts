@@ -1,34 +1,5 @@
 /**
- * Shared-core request context for auth identity and token propagation.
- *
- * This module is platform-neutral: it is consumed by host RPC/stream
- * resolvers, renderer/extension single-user flows, and tests. Host and
- * renderer adapters are responsible for constructing a context at their
- * boundary; shared-core services accept this context as their explicit
- * first argument instead of reading singleton auth state.
- *
- * Lives in `protocol/` so that future open-source clients (which won't
- * depend on the internal shared package) can share the same auth
- * identity/lease abstractions used inside the host. The module does carry runtime
- * behavior - classes, a WeakMap identity cache, and abort/cancel wiring
- * - alongside the declarative wire-shape contracts the package owns.
- *
- * Invariants enforced here (and asserted by characterization tests):
- *
- *   - The authenticated identity (`userId`, `username`, `providerHandle`)
- *     is an immutable snapshot for the lifetime of the context - it holds
- *     only locally-verifiable primitives, so mutating the caller's
- *     `AuthenticatedUser` afterwards has no effect on `ctx.identity`. There
- *     is no mid-operation identity switch. Team membership is deliberately
- *     NOT snapshotted here (it is a property of the user, not the
- *     connection, and is resolved from the single per-user
- *     `AuthenticatedUserProvider` source instead).
- *   - The credential lease may rotate bearer material only for the same
- *     `userId`; a cross-user rotation throws `IdentityMismatchError`.
- *   - `release()` clears retained bearer material so the host does not
- *     hold credentials beyond an active context/lease lifetime.
- *   - `abort()` releases credentials AND signals the abort signal so
- *     downstream cleanup can fail closed for old-user work.
+ * Shared-core request context. Identity is an immutable snapshot; lease rotation must stay on the same `userId`; `abort()` releases credentials and signals abort.
  */
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 
@@ -39,20 +10,14 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 export type RequestContextOrigin =
   | "host-rpc"
   | "host-stream"
-  // Minted by the host for its own background work, with no client request or
-  // stream behind it (e.g. the host-owner authority read from the machine-local
-  // credentials file to drive queue-native managed-command deliveries into cold
-  // chats). Distinguishes "the host acted on its own" from "the host acted for
-  // a caller", which the two `host-*` origins above both imply.
   | "host-background"
   | "renderer"
   | "extension"
   | "test";
 
 /**
- * Immutable identity snapshot. `userId` and `username` are pre-resolved
- * convenience fields so cache-keying, persistence ownership, and
- * presence/migration writes do not need to re-derive them per call.
+ * Immutable identity snapshot.
+ * `userId` and `username` are pre-resolved convenience fields so cache-keying, persistence ownership, and presence/migration writes do not need to re-derive them per call.
  */
 export interface AuthenticatedIdentity {
   readonly userId: string;
@@ -61,10 +26,7 @@ export interface AuthenticatedIdentity {
 }
 
 /**
- * Thrown when shared-core code requests a bearer from a context whose
- * lease has been released or whose context has been aborted. Callers at
- * resolver/cleanup boundaries translate this into their boundary-specific
- * unauthorized error or persist pending state for retry.
+ * Thrown when shared-core code requests a bearer from a context whose lease has been released or whose context has been aborted.
  */
 export class CredentialLeaseReleasedError extends Error {
   constructor(message: string | undefined) {
@@ -74,10 +36,7 @@ export class CredentialLeaseReleasedError extends Error {
 }
 
 /**
- * Thrown when a credential rotation tries to swap in a bearer for a
- * different `userId` than the immutable identity. This is the test
- * boundary that makes "no identity switch on credential rotation"
- * executable.
+ * Thrown when a credential rotation tries to swap in a bearer for a different `userId` than the immutable identity.
  */
 export class IdentityMismatchError extends Error {
   constructor(message: string) {
@@ -86,12 +45,6 @@ export class IdentityMismatchError extends Error {
   }
 }
 
-/**
- * Context-bound credential lease. The lease owns the retained bearer
- * for the duration of an operation (or a long-lived Tiptap/notification
- * session) and is the only place credentials may rotate. Identity is
- * fixed at construction; rotation is same-user-only.
- */
 export interface CredentialLease {
   readonly identity: AuthenticatedIdentity;
   readonly isReleased: boolean;
@@ -100,12 +53,7 @@ export interface CredentialLease {
    * when the lease has been released (directly or via context abort).
    */
   getBearerToken(): string;
-  /**
-   * Replaces retained bearer material for the SAME authenticated user.
-   * Throws `IdentityMismatchError` if `userId` does not match the
-   * lease identity, and `CredentialLeaseReleasedError` if the lease has
-   * already been released.
-   */
+  /** Replaces retained bearer material for the SAME authenticated user. */
   rotateBearerToken(args: { userId: string; bearerToken: string }): void;
   /**
    * Idempotent. Clears retained bearer material so cleanup paths can
@@ -115,12 +63,8 @@ export interface CredentialLease {
 }
 
 /**
- * Per-operation request context threaded as the explicit first argument
- * to identity/token-sensitive shared-core methods.
- *
- * Construction happens at process boundaries (host WS open frames,
- * renderer/extension auth boundaries, test fixtures). Shared-core code never
- * constructs its own context.
+ * Per-operation request context threaded as the explicit first argument to identity/token-sensitive shared-core methods.
+ * Shared-core code never constructs its own context.
  */
 export interface RequestContext {
   readonly identity: AuthenticatedIdentity;
@@ -135,11 +79,7 @@ export interface RequestContext {
    * lease so any retained bearer material is cleared. Idempotent.
    */
   abort(reason: string | undefined): void;
-  /**
-   * Releases the credential lease without firing the abort signal. Used
-   * when a resolver completes normally and no follow-up cloud work is
-   * outstanding. Idempotent.
-   */
+  /** Releases the credential lease without firing the abort signal. */
   release(): void;
 }
 
@@ -150,20 +90,12 @@ export interface CreateRequestContextOptions {
   readonly connectionId: string | undefined;
   readonly operationId: string | undefined;
   /**
-   * Optional external abort signal (e.g. a stream's connection-close
-   * signal or an auth-transition signal). When it fires, the context
-   * aborts itself - releasing credentials and forwarding through
-   * `abortSignal`.
+   * Optional external abort signal (e.g. a stream's connection-close signal or an auth-transition signal).
    */
   readonly externalAbortSignal: AbortSignal | undefined;
 }
 
-/**
- * Display username for an `AuthenticatedUser`. Falls back to
- * `providerHandle` when `user.name` is null - `providerHandle` is required
- * upstream so this is the canonical resolution for presence/migration
- * writes and is shared across host, renderer, and persistence callers.
- */
+/** Display username for an `AuthenticatedUser`. */
 export function usernameFromAuthenticatedUser(user: AuthenticatedUser): string {
   return user.user.name ?? user.user.providerHandle;
 }
@@ -172,14 +104,7 @@ const identityCache = new WeakMap<AuthenticatedUser, AuthenticatedIdentity>();
 
 /**
  * Builds an `AuthenticatedIdentity` from an `AuthenticatedUser`.
- *
- * The identity holds only locally-derivable primitives (`userId`,
- * `username`, `providerHandle`) copied by value, so subsequent mutation of
- * the caller's object cannot leak into `ctx.identity`. Identities are
- * memoized per source `AuthenticatedUser` reference, so repeated context
- * creation for the same signed-in user reuses one frozen identity. Team
- * membership is intentionally not derived here - it is resolved from the
- * single per-user `AuthenticatedUserProvider` source where it is needed.
+ * Identities are memoized per source `AuthenticatedUser` reference, so repeated context creation for the same signed-in user reuses one frozen identity.
  */
 export function identityFromAuthenticatedUser(
   user: AuthenticatedUser,
@@ -198,11 +123,7 @@ export function identityFromAuthenticatedUser(
 }
 
 /**
- * Builds an `AuthenticatedIdentity` from verified token claims, with no full
- * `AuthenticatedUser` in hand. This is the local-JWT connect path (host RPC
- * and stream) after token verification. Team-backed role checks resolve
- * memberships from the cached `AuthenticatedUserProvider` - the single source
- * of truth - rather than from the identity.
+ * Builds an `AuthenticatedIdentity` from verified token claims, with no full `AuthenticatedUser` in hand.
  */
 export function identityFromClaims(claims: {
   readonly userId: string;
@@ -320,11 +241,7 @@ class RequestContextImpl implements RequestContext {
   }
 }
 
-/**
- * Builds a `RequestContext`. The returned context is the immutable
- * authority for `identity` for its lifetime; rotation is allowed only
- * through the credential lease for the same `userId`.
- */
+/** Builds a `RequestContext`. */
 export function createRequestContext(
   options: CreateRequestContextOptions,
 ): RequestContext {
@@ -332,10 +249,8 @@ export function createRequestContext(
 }
 
 /**
- * Resolves the bearer for a `RequestContext` and returns ready-to-send
- * `Authorization: Bearer <token>` headers. Centralised so host, renderer,
- * and shared-core call sites all fail closed identically when the lease is
- * released or aborted - the only per-caller variation is the error class.
+ * Resolves the bearer for a `RequestContext` and returns ready-to-send `Authorization: Bearer <token>` headers.
+ * Centralised so host, renderer, and shared-core call sites all fail closed identically when the lease is released or aborted - the only per-caller variation is the error class.
  */
 export function buildBearerHeadersFromContext(
   ctx: RequestContext,

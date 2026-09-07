@@ -6,13 +6,8 @@ import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/termin
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 
-// A sign-in terminal reopened from the sidebar (no existing canvas tab for
-// it) must open with `origin: "provider-login"` / `originProviderId` set, so
-// the freshly-opened tile's bootstrap adopts instead of re-creating the PTY.
-// `terminal.list` carries no origin at all - the renderer's own
-// `provider-login-terminals` registry is what supplies it, keyed by host +
-// session id. An ordinary session (no registry entry) must come through
-// unchanged.
+// A sign-in terminal reopened from the sidebar (no existing canvas tab for it) must open with `origin: "provider-login"` / `originProviderId` set, so the freshly-opened tile's bootstrap adopts instead of re-creating the PTY.
+// An ordinary session (no registry entry) must come through unchanged.
 
 const SESSION_ID = "term-signin";
 const OTHER_SESSION_ID = "term-plain";
@@ -23,9 +18,7 @@ const terminalSessions = vi.hoisted<{
   value: ReadonlyArray<CanonicalTerminalSessionInfo>;
 }>(() => ({ value: [] }));
 
-// The sidebar is outside every tile `TabHostProvider`, so its client and its
-// ref host both come from the Epic SESSION - not from the app-wide effective
-// host, which this panel deliberately no longer reads.
+// The sidebar is outside every tile `TabHostProvider`, so its client and its ref host both come from the Epic SESSION - not from the app-wide effective host, which this panel deliberately no longer reads.
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
@@ -167,11 +160,7 @@ function seedTab(): void {
 describe("terminal sidebar reopen carries provider-login origin", () => {
   beforeEach(() => {
     seedTab();
-    // The registry is a module-level singleton that persists, so a recorded
-    // entry outlives the test that wrote it. Today's two tests use distinct
-    // session ids and cannot collide, but the next test added here would
-    // silently inherit whatever `recordProviderLoginTerminal` left behind.
-    // Same reset `open-subpages.test.tsx` does.
+    // Today's two tests use distinct session ids and cannot collide, but the next test added here would silently inherit whatever `recordProviderLoginTerminal` left behind.
     useProviderLoginTerminalsStore.setState(
       useProviderLoginTerminalsStore.getInitialState(),
       true,

@@ -4,13 +4,7 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
-/**
- * Opens the macOS Privacy → Full Disk Access pane through its own RunnerHost
- * method. Not `useRunnerOpenExternalLink` with the pane's URL: that path is
- * gated to http(s) in the desktop's main process, and the gate refuses an
- * `x-apple.systempreferences:` link by answering `false` - which the invoke
- * drops, so the mutation would report success while nothing opened.
- */
+/** Not `useRunnerOpenExternalLink` with the pane's URL: that path is gated to http(s) in the desktop's main process, and the gate refuses an `x-apple.systempreferences:` link by answering `false` - which the invoke drops, so the mutation would report success while nothing opened. */
 export function useRunnerOpenFullDiskAccessSettings(): UseMutationResult<
   void,
   Error,

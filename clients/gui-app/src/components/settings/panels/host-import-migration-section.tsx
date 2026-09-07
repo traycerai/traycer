@@ -26,27 +26,8 @@ import {
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 
-/**
- * The two rows that move ONE MACHINE'S local data - an import of the sessions
- * lying on its disk, and the migration of its SQLite tasks and epics to cloud.
- *
- * They used to sit in General, which is app-wide, so both spoke for whichever
- * host the window happened to be pointed at while naming none. Here the page
- * title already names the machine, and the sidebar's host picker is how you
- * choose a different one.
- *
- * Both ride the STREAM transport, so this section is only honest beneath the
- * Overview's re-provided `StreamRuntimeContext` - which is why the binding is
- * checked against the host this page NAMES before anything renders. Under an
- * explicit pick the scoped transport takes a commit or two to resolve, and
- * until it does the ambient stream is still dialing the effective host: running
- * an import or a migration through it would move the wrong machine's data under
- * this machine's name.
- *
- * The whole group is withheld rather than emptied. An empty `SettingsGroup` is a
- * titled, bordered box with nothing in it, which reads as a page that failed to
- * load rather than one with nothing to offer.
- */
+/** Both ride the stream transport, so this section is only honest beneath the Overview's re-provided
+ * `StreamRuntimeContext`. */
 export function HostImportMigrationSection(props: {
   /** The host this page names; the stream must agree before rows appear. */
   readonly hostId: string | null;
@@ -68,25 +49,15 @@ export function HostImportMigrationSection(props: {
   );
 }
 
-/**
- * The single "Import your work" entry (spec §5): one row for every provider,
- * not one per provider and not in the Providers panel. Hidden entirely on a host
- * that predates the feature - it is deliberately de-emphasised, so there is
- * nothing worth explaining in its absence.
- *
- * Live progress comes from the run store, which is only populated for a run
- * this window started or is attached to; `sessionImport.status` covers the
- * colder questions - a run left going by a quit, and the last run's summary -
- * and is asked on mount rather than polled (see the host method policy).
- */
+/** Live progress comes from the run store, which is only populated for a run this window started or is attached
+ * to; `sessionImport.status` covers the colder questions. */
 function SessionImportRow(props: {
   readonly binding: StreamRuntimeBinding;
   readonly hostId: string;
 }): ReactNode {
   const [importOpen, setImportOpen] = useState(false);
-  // Availability is read off the SAME client the import will run on, not off
-  // whatever `StreamRuntimeContext` resolves separately: a row that offers an
-  // import because host A negotiated the method would submit it to host B.
+  // Availability is read off the same client the import will run on, not off whatever `StreamRuntimeContext`
+  // resolves separately.
   const available = useSessionImportAvailableFor(props.binding.wsStreamClient);
   const statusQuery = useSessionImportStatus(available);
   const run = useSessionImportRun(props.hostId);
@@ -100,11 +71,7 @@ function SessionImportRow(props: {
   let description =
     "Bring work you already started in Claude Code, Codex, or OpenCode into Traycer as tasks.";
   if (active !== null) {
-    // A run is active from the moment it is submitted, but its size is the
-    // host's answer to that submission - so between the two there is a real
-    // run with nothing yet to count, and "Importing 0 of 0…" would be the row
-    // reporting a number it does not have. The spinner keeps turning either
-    // way: `active` is what drives it, and this only changes what is said.
+    // The spinner keeps turning either way: `active` is what drives it, and this only changes what is said.
     description =
       active.total === 0
         ? "Starting import…"
@@ -152,9 +119,8 @@ function DataMigrationRow(props: {
   readonly hostId: string;
 }): ReactNode {
   const migrationState = useMigrationRun(props.hostId);
-  // Not per host, and deliberately: it comes from the desktop's cross-window
-  // IPC, which carries one running bit and no host. Another window migrating
-  // anything is still a reason not to start a second run from here.
+  // Not per host, and deliberately: it comes from the desktop's cross-window IPC, which carries one running bit
+  // and no host.
   const remoteRunning = useMigrationRunStore((s) => s.remoteRunning);
   const progressLabel = formatMigrationProgress(migrationState);
   const running = migrationState.status === "running" || remoteRunning;

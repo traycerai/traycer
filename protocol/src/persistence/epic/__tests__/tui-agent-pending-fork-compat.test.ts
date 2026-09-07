@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 import { tuiAgentSchema } from "@traycer/protocol/persistence/epic/tui-agents";
 
 /**
- * `pendingForkSourceHarnessSessionId` back-compat guard on
- * `baseTuiAgentFields`, shared by all TUI agent variants. Records persisted
- * before durable native-fork provenance existed must still parse, defaulting
- * to null (no pending fork). When set, the field round-trips so a pre-launch
- * A2A fork's source session id survives across hosts/releases.
+ * `pendingForkSourceHarnessSessionId` back-compat guard on `baseTuiAgentFields`, shared by all TUI agent variants.
+ * Records persisted before durable native-fork provenance existed must still parse, defaulting to null (no pending fork).
  */
 
 function baseFields() {

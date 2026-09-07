@@ -1,15 +1,6 @@
 /**
  * Characterization tests for the shared `RequestContext` foundation.
- *
- * These tests pin the auth/identity invariants documented in
- * spec:97ca9f6a / spec:aca3ac84 (§4) BEFORE production services are
- * converted to accept context as their explicit first argument:
- *
- *   1. immutable identity snapshots
- *   2. same-user credential rotation through the credential lease
- *   3. context abort
- *   4. clearing retained bearer material on release/abort
- *   5. no identity switch when credentials rotate
+ * These tests pin the auth/identity invariants documented in spec:97ca9f6a / spec:aca3ac84 (§4) before production services are converted to accept context as their explicit first argument: 1.
  */
 import { describe, expect, it } from "vitest";
 import {

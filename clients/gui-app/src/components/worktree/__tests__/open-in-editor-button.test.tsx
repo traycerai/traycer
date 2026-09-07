@@ -18,9 +18,6 @@ import type { EditorEntry, EditorId } from "@traycer/protocol/host";
 import { OpenInEditorButton } from "../open-in-editor-button";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
-// Mirrors the live `EDITORS` registry's shape (id/label/urlScheme) without
-// importing it, so the fixture stays a self-contained value the test owns
-// rather than a runtime dependency on the protocol package's current catalog.
 const EDITOR_CATALOG: ReadonlyArray<EditorEntry> = vi.hoisted(
   (): ReadonlyArray<EditorEntry> => [
     { id: "vscode", label: "VS Code", urlScheme: "vscode" },
@@ -38,21 +35,13 @@ interface EditorButtonTestState {
   isPending: boolean;
   availability: string[];
   hasLocalHost: boolean;
-  // Keyed by hostId, not by any "active"/"effective" concept - the button
-  // dispatches on the caller's OWN `hostClient` now (Y6) and gates purely on
-  // whether the OPEN TARGET's own host is local, so the fixture below answers
-  // per hostId rather than off one ambient "the active host" value.
+  // Keyed by hostId, not by any "active"/"effective" concept.
   hostKindByHostId: Record<string, string>;
-  // Finder's own gate (`useFinderOpenAvailability`) - independent of the host
-  // directory lookup above, which the button also consults for its editor
-  // gate; this fixture answers it directly rather than reconstructing the
-  // negotiated-version stack the real hook is built on.
+  // Finder's own gate (`useFinderOpenAvailability`) - independent of the host directory lookup above, which the
+  // button also consults for its editor gate.
   finderAvailable: boolean;
-  // What `useOfferableEditors` returns, expressed as the ids to keep from
-  // `EDITOR_CATALOG` - the host-accepts gate, independent of `availability`
-  // (the installed-on-this-machine probe). Defaults to the full catalog so
-  // the pre-existing tests below see the same unrestricted menu they did
-  // before this gate existed.
+  // What `useOfferableEditors` returns, expressed as the ids to keep from `EDITOR_CATALOG` - the host-accepts
+  // gate, independent of `availability` (the installed-on-this-machine probe).
   offerableEditorIds: EditorId[];
 }
 
@@ -87,9 +76,8 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
-// The gate reads ONLY the open target's own host directory entry (Y6) - no
-// "effective"/"active" host hook is mocked at all, which is itself part of
-// the regression proof: the component no longer imports one.
+// The gate reads only the open target's own host directory entry (Y6) - no "effective"/"active" host hook is
+// mocked at all, which is itself part of the regression proof: the component no longer imports one.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string) => {
     directoryEntryCalls.push(hostId);
@@ -98,9 +86,8 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   },
 }));
 
-// Mocked at the hook boundary rather than reconstructed from the negotiated
-// version + host directory stack it is built on - the component only cares
-// about the boolean these hooks resolve to.
+// Mocked at the hook boundary rather than reconstructed from the negotiated version + host directory stack it
+// is built on - the component only cares about the boolean these hooks resolve to.
 vi.mock("@/hooks/editor/use-finder-open-availability", () => ({
   useFinderOpenAvailability: () => editorState.finderAvailable,
 }));
@@ -215,14 +202,8 @@ describe("<OpenInEditorButton />", () => {
     expect(editorState.mutate).not.toHaveBeenCalled();
   });
 
-  // Y6 regression: the panel's own surface pin can be local while the
-  // app-wide EFFECTIVE host is remote (a git-diff / file-tree panel pinned to
-  // a different machine than the window is showing). The old gate compared
-  // `openTarget.hostId` against the app-wide effective host and hid the
-  // button for the very machine that has the editor; the new gate asks only
-  // about the target's OWN host, so it renders enabled here - and the
-  // directory lookup is proven to be keyed on the target's host id alone
-  // (never on a stand-in "effective" id this fixture also knows about).
+  // The old gate compared `openTarget.hostId` against the app-wide effective host and hid the button for the
+  // very machine that has the editor.
   it("renders enabled when the target host is local, independent of any other host's state", () => {
     editorState.hostKindByHostId = {
       "host-1": "local",
@@ -283,9 +264,8 @@ describe("<OpenInEditorButton />", () => {
     });
   });
 
-  // The chevron itself disables while a launch is in flight, so the menu is
-  // opened first and the pending state applied on a re-render - the same
-  // sequence a user sees when an open starts from an already-open menu.
+  // The chevron itself disables while a launch is in flight, so the menu is opened first and the pending state
+  // applied on a re-render - the same sequence a user sees when an open starts from an already-open menu.
   it("swaps each launching item's icon for the spinner while opening, labels unchanged", () => {
     editorState.finderAvailable = true;
     const view = render(
@@ -446,9 +426,8 @@ describe("<OpenInEditorButton />", () => {
   });
 
   it("gates the vscodium menu item on the offer list, not merely on install detection", () => {
-    // The install probe reports vscodium as available, but the host has not
-    // negotiated the minor that lets the client tell it about that id - the
-    // offer gate, not the probe, must be what keeps the item off the menu.
+    // The install probe reports vscodium as available, but the host has not negotiated the minor that lets the
+    // client tell it about that id - the offer gate, not the probe, must be what keeps the item off the menu.
     editorState.availability = [
       "vscode",
       "cursor",
@@ -505,9 +484,8 @@ describe("<OpenInEditorButton />", () => {
   });
 
   it("falls the primary button back off a stored vscodium default the host no longer offers", () => {
-    // `defaultEditor` was persisted from before, or from a host that still
-    // offers vscodium; this host's offer list has since narrowed and must
-    // not be told to open an id it never advertised.
+    // `defaultEditor` was persisted from before, or from a host that still offers vscodium; this host's offer list
+    // has since narrowed and must not be told to open an id it never advertised.
     useSettingsStore.setState({ defaultEditor: "vscodium" });
     editorState.availability = [
       "vscode",

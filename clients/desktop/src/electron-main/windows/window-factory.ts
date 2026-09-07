@@ -44,16 +44,6 @@ export interface MainWindowOptions {
   readonly placement: WindowGeometryPlacement;
 }
 
-/**
- * Creates the single top-level `BrowserWindow`.
- *
- * Loading strategy is configuration-driven (derived from `config.isDevBuild`):
- *   - On the dev slot, load the Vite dev server at the loopback
- *     `TRAYCER_DESKTOP_DEV_URL` so HMR-enabled renderer assets are served.
- *   - Otherwise, load the renderer through the privileged `app://` scheme
- *     registered in `app-protocol.ts`. The protocol handler serves files
- *     from `<process.resourcesPath>/renderer` (packaged builds).
- */
 export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   const isMac = process.platform === "darwin";
   const isWindows = process.platform === "win32";
@@ -82,17 +72,8 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     // Background-paint color before the renderer paints - eliminates the
     // white flash on launch. Matches the renderer's dark surface color.
     backgroundColor: "#0b0b0d",
-    // macOS: traffic lights overlay the renderer so the header acts as the
-    // title bar (matches VS Code / Linear). Windows: native min/max/close
-    // controls in an overlay so the renderer can claim the rest of the
-    // title-bar surface as a drag region. Linux: default OS chrome.
     titleBarStyle: isMac ? "hiddenInset" : isWindows ? "hidden" : "default",
     trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
-    // `titleBarOverlay: true` on mac activates Chromium's Window Controls
-    // Overlay API so the renderer can read native control geometry via
-    // `navigator.windowControlsOverlay` + the `env(titlebar-area-*)` CSS
-    // env vars. Mac ignores the color/height options but the truthy value
-    // is what flips WCO emission on.
     titleBarOverlay: isWindows
       ? {
           color: "#0b0b0d",
@@ -114,26 +95,13 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // an inspector for dogfood debugging. Production is the only slot where
       // Electron DevTools are disabled at the BrowserWindow level.
       devTools: canOpenDevTools,
-      // Renderer + preload run inside Chromium's OS sandbox. Defense in
-      // depth: a renderer compromise (V8 zero-day, contextIsolation bypass)
-      // can no longer reach the filesystem, spawn processes, or open raw
-      // sockets. Preload is already Node-free (only `electron` imports +
-      // `process.argv`), so the flip is mechanical. All OS-touching work
-      // already lives in main behind IPC.
+      // Defense in depth: a renderer compromise (V8 zero-day, contextIsolation bypass) can no longer reach the filesystem, spawn processes, or open raw sockets.
       sandbox: true,
       // Trusted-renderer guest birth (webview migration stage 1). Only this
       // window may create `<webview>` tags; attach is fail-closed in
       // `installWebviewAttachGuards` before the renderer loads.
       webviewTag: true,
-      // An occluded window's timers are throttled to ~1/min by default, which
-      // collapses the WebRTC receiver's own reporting and stops
-      // `requestVideoFrameCallback` entirely. The browser tile's sender reads
-      // that silence as a path that cannot carry frames and ratchets its
-      // capture rate down for the rest of the session; the GUI must keep
-      // compositing and reporting while it is not being looked at. The cost
-      // is accepted and whole-renderer: an occluded window keeps its timers,
-      // rAF and compositing running, so it goes on spending CPU (and battery)
-      // in the background rather than idling.
+      // The browser tile's sender reads that silence as a path that cannot carry frames and ratchets its capture rate down for the rest of the session.
       backgroundThrottling: false,
       zoomFactor: options.zoomFactor,
     },
@@ -191,21 +159,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     });
   });
 
-  // Pipe the renderer (web) console into the desktop log. The renderer console
-  // is otherwise captured nowhere - the visibility gap that left earlier
-  // sleep/wake investigations guessing about what the renderer actually did on
-  // resume. Keeps the wake-recovery trace (wake trigger -> reconnect ->
-  // revalidate -> online) observable in one log file on a real device.
-  //
-  // Forward renderer console output into the app log so renderer-side failures
-  // (e.g. a sign-in that fails after the OAuth callback) are diagnosable from
-  // the shipped log file - production gates DevTools off, so without this the
-  // renderer's own errors are captured nowhere.
-  //
-  // dev/staging (DevTools-enabled dogfood builds) mirror EVERY level - the full
-  // firehose is wanted there. Production stays lean: only `warning`/`error` are
-  // forwarded (at the matching log level) so a chatty renderer can't inflate the
-  // shipped log, while real failures are still recorded.
+  // Forward renderer console output into the app log so renderer-side failures (e.g. a sign-in that fails after the OAuth callback) are diagnosable from the shipped log file.
   window.webContents.on(
     "console-message",
     (details: Event<WebContentsConsoleMessageEventParams>) => {
@@ -251,10 +205,6 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 export async function loadMainWindow(
   window: MainWindowLoadTarget,
 ): Promise<void> {
-  // The dev slot (the `make dev-desktop` orchestrator) loads the Vite dev
-  // server with HMR. DevTools are NOT auto-opened - use the View menu's
-  // "Toggle Developer Tools" when policy exposes it. Shipped builds fall
-  // through to the privileged `app://` scheme below.
   if (isDevBuild && !shouldUseBuiltRendererForResolutionTest(process.env)) {
     const devRendererUrl = devRendererUrlFromEnv(process.env);
     log.info("[window] loading dev renderer", { devUrl: devRendererUrl });
@@ -266,10 +216,6 @@ export async function loadMainWindow(
     }
   }
 
-  // Default load path: the privileged `app://` scheme registered in
-  // `app/app-protocol.ts`. `app://` is `standard: true, secure: true` so
-  // the renderer gets a real web origin, enabling service workers and
-  // tightening the CSP `default-src 'self'` posture.
   const rendererUrl = buildAppUrl();
   log.info("[window] loading renderer from", { rendererUrl });
   await window.loadURL(rendererUrl);
@@ -320,14 +266,7 @@ function sanitizeRendererFields(
   return sanitizeLogFields(fields);
 }
 
-/**
- * Perf fields are `number | string | boolean | null` only (never a nested
- * object/array), so this stays narrower than `sanitizeLogFields`: only string
- * values need scrubbing through the same `redactLogText` used on every other
- * renderer log path, so a future call site that passes a user-derived string
- * (error message, file path) as a field can't land unredacted in the perf
- * NDJSON sink.
- */
+/** Perf fields are `number | string | boolean | null` only (never a nested object/array), so this stays narrower than `sanitizeLogFields`: only string values need scrubbing through. */
 function redactPerfFields(
   fields: Readonly<Record<string, PerfFieldValue>>,
 ): Record<string, PerfFieldValue> {

@@ -7,11 +7,7 @@ import {
 
 const CANONICAL = `${HOST_V8_FLAGS} ${HOST_DIAGNOSTIC_REPORT_FLAGS}`;
 
-/**
- * A malformed NODE_OPTIONS means the host never starts: Node rejects the
- * whole string on an unrecognized bare token. Every result of
- * withHostNodeOptions must therefore be only `--flag` / `--flag=value` tokens.
- */
+/** A malformed NODE_OPTIONS means the host never starts: Node rejects the whole string on an unrecognized bare token. Every result of withHostNodeOptions must therefore be only `--flag` / `--flag=value` tokens. */
 function assertOnlyFlagTokens(result: string): void {
   for (const token of result.split(/\s+/).filter((t) => t.length > 0)) {
     expect(token.startsWith("--")).toBe(true);

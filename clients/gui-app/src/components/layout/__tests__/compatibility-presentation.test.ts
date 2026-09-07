@@ -3,32 +3,8 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { compatibilityPresentation } from "@/components/layout/host-compatibility-presentation";
 import type { HostCompatibility } from "@/lib/host/compatibility-state";
 
-/**
- * The FIRST coverage `compatibilityPresentation` has ever had.
- *
- * The function lives in its own module (`host-compatibility-presentation.ts`)
- * rather than beside the readiness controller, because a non-component export
- * alongside that file's three components trips
- * `react-refresh/only-export-components`. Testability was the reason to reach
- * for the seam; the lint rule decided its shape.
- *
- * It is here because of how its absence was discovered, and that story is the
- * reason these tests assert what they assert. Sealed probe R6 (redesign P3.2)
- * mutated this function and SURVIVED. The lane added the demanded pin, re-fired,
- * and it survived a SECOND time — because the pin asserted on
- * `describeCompatHealth`, one layer downstream, while the probe mutated this
- * function. Two different functions; the re-fire measured the same hole twice
- * instead of closing it. The residual travelled to P4.3 as a named rider.
- *
- * So the discipline here is: assert THIS function's output, field by field, for
- * every arm of `HostCompatibility`. A test that reaches for the report line
- * would reproduce exactly the mistake being corrected.
- *
- * What the mapping is FOR: a pre-filled failure report (D13, P3.2). The verdict
- * reaches the user through the lease's `incompatible` arm — this shape exists so
- * triage can tell an unreachable probe from a rejected handshake, and a held
- * verdict from a fresh one.
- */
+/** The lane added the demanded pin, re-fired, and it survived a second time - because the pin asserted on
+ * `describeCompatHealth`, one layer downstream, while the probe mutated this function. */
 
 function rpcError(message: string): HostRpcError {
   return new HostRpcError({
@@ -67,13 +43,7 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
     });
   });
 
-  /**
-   * `degraded` is the whole reason the compatible arm is not a constant: a
-   * verdict HELD from an earlier probe whose refetch failed must read
-   * "compatible (degraded)" in a report, because triage needs to know the
-   * answer was retained rather than freshly given. Collapsing it to `false`
-   * would make a host that stopped answering look like one that just did.
-   */
+  /** `degraded` is the whole reason the compatible arm is not a constant. */
   it("preserves a HELD compatible verdict rather than flattening it", () => {
     const compatibility: HostCompatibility = {
       status: "compatible",
@@ -93,12 +63,7 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
     expect(presentation.degraded).toBe(true);
   });
 
-  /**
-   * The `unreachable` bit is kept apart from the verdict for a specific
-   * historical reason recorded at the field: calling an unreachable host
-   * "incompatible" is what made an offline host (traycer#858) and a
-   * load-stalled host (traycer#860) both read as version problems.
-   */
+  /** The `unreachable` bit is kept apart from the verdict for a specific historical reason recorded at the field. */
   it("keeps a failed probe's unreachable bit — a missed host is not a version fault", () => {
     const compatibility: HostCompatibility = {
       status: "failed",
@@ -131,12 +96,8 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
     expect(presentation.unreachable).toBe(false);
   });
 
-  /**
-   * An `incompatible` host answered — it is up, and it disagreed. So
-   * `unreachable` must be false, and this is the arm where getting that
-   * backwards is most costly: it is the one verdict that routes a user to
-   * "update the host" rather than "check the connection".
-   */
+  /** So `unreachable` must be false, and this is the arm where getting that backwards is most costly: it is the
+   * one verdict that routes a user to "update the host" rather than "check the connection". */
   it("reports incompatible as reached-and-rejected, never as unreachable", () => {
     const compatibility: HostCompatibility = {
       status: "incompatible",
@@ -166,14 +127,7 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
     });
   });
 
-  /**
-   * The status word is carried through UNCHANGED for all four arms.
-   *
-   * This is the assertion R6 was aimed at, stated as its own case rather than
-   * left implicit in the four above: the probe's mutation was to the mapping
-   * from verdict to presented status, and a suite that only ever checked one
-   * arm's other fields could pass with every status collapsed to a constant.
-   */
+  /** This is the assertion was aimed at, stated as its own case rather than left implicit in the four above. */
   it.each([
     ["checking"],
     ["compatible"],
@@ -210,11 +164,8 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
     expect(compatibilityPresentation(byStatus[status]).status).toBe(status);
   });
 
-  /**
-   * `hostStatus` exists ONLY on a compatible verdict, because only a
-   * compatible verdict ever heard one. A non-null answer on any other arm
-   * would be a fabricated reading of a host that never replied.
-   */
+  /** `hostStatus` exists only on a compatible verdict, because only a compatible verdict ever heard one. A
+   * non-null answer on any other arm would be a fabricated reading of a host that never replied. */
   it("never invents a host answer for a verdict that heard none", () => {
     const withoutAnswer: readonly HostCompatibility[] = [
       { status: "checking", retry: () => undefined },

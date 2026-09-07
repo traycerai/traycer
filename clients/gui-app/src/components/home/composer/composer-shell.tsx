@@ -108,13 +108,9 @@ interface ComposerShellProps {
   readonly onDragEnter: DragEventHandler<HTMLElement>;
   readonly onDragLeave: DragEventHandler<HTMLElement>;
   readonly dragOverlayVariant: FileTransferDragOverlayVariant | null;
-  /** Compact composer chrome anchored outside document flow. */
   readonly utilityRail: ReactNode;
-  /** Slot rendered just above the editor (e.g. image-attachment chips). */
   readonly attachmentsStrip: ReactNode;
-  /** Slot for the editor surface. */
   readonly editor: ReactNode;
-  /** Slot for the bottom toolbar (model/reasoning/permission/send). */
   readonly toolbar: ReactNode;
 }
 

@@ -73,19 +73,13 @@ export interface LandingTerminalTileProps {
   readonly authorityEntry: LandingTerminalAuthorityEntry | null;
 }
 
-/** One permanent, host-bound terminal tile in the landing panel stack. */
 export function LandingTerminalTile(
   props: LandingTerminalTileProps,
 ): ReactNode {
-  // Compose with the hosting surface's visibility rather than replacing it: the
-  // panel now stays mounted while its start page is merely retained, so the
-  // ACTIVE tile of a backgrounded page would otherwise report itself visible
-  // (and, through `usePaneFocused`, focused) while its whole pane sits under
-  // `display:none`. Both halves have to be true for this tile to be on screen.
+  // Compose with the hosting surface's visibility rather than replacing it: the panel now stays mounted while
+  // its start page is merely retained.
   const surfaceVisible = usePaneVisible();
-  // Computed here rather than inline in the JSX: `jsx-no-leaked-render`
-  // rewrites an inline `&&` into `? … : null`, which is right for children and
-  // wrong for a boolean prop.
+  // Computed here rather than inline in the JSX: `jsx-no-leaked-render` rewrites an inline `&&` into `?
   const tileVisible = props.active && surfaceVisible;
   return (
     <TabHostProvider hostId={props.tab.hostId}>
@@ -97,10 +91,8 @@ export function LandingTerminalTile(
 }
 
 function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
-  // Before the capability switch, whatever the host's authority says: the
-  // session is the host's (manager-owned, provider spawn env), so neither
-  // bootstrap below may run - the durable one would `terminal.plain.create`
-  // a bare shell under its id, the legacy one would `terminal.create` one.
+  // Before the capability switch, whatever the host's authority says: the session is the host's (manager-owned,
+  // provider spawn env), so neither bootstrap below may run.
   if (isProviderLoginLandingTab(props.tab)) {
     return <LandingSignInTerminalTile key={props.tab.sessionId} {...props} />;
   }
@@ -127,12 +119,7 @@ export function LandingTerminalLegacyBootstrap(
 ): ReactNode {
   const handleExitedTab = useRemoveExitedLandingTab(props.landingPageId);
   const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
-  // Derivation, not a coarse read. This gate replaces the tile with an explicit
-  // "is offline" state, which is a claim about a machine — so it asks the one
-  // hook that knows the difference between the cloud saying a host is gone and
-  // the cloud failing to answer, and that lets a live E2E session outrank
-  // either. It used to read the coarse bit, so a single degraded liveness read
-  // told someone their working terminal's host was off.
+  // Derivation, not a coarse read.
   const reachability = useHostReachability(props.tab.hostId);
   // Bounded, worded wait - the same one the canvas terminal tiles use, so the
   // landing panel and the canvas cannot describe one host two ways.
@@ -183,11 +170,8 @@ export function LandingTerminalLegacyBootstrap(
     );
   }
   if (hostLoad.kind !== "ready") {
-    // The directory has not answered yet, or is empty because this machine's
-    // own host has not published. Neither is evidence about the bound host, and
-    // this tile used to render the dead state for both. It is still not a dead
-    // state - but it now says which host it is waiting on, and it ends
-    // (invariant 6; audit S5's wordless skeleton).
+    // It is still not a dead state - but it now says which host it is waiting on, and it ends (invariant 6; audit
+    // S5's wordless skeleton).
     return (
       <TileHostLoadState
         load={hostLoad}
@@ -211,9 +195,8 @@ export function LandingTerminalLegacyBootstrap(
     );
   }
   if (bootstrap.handle === null) {
-    // Same layout box as the live tile below (relative flex-1 column) so the
-    // measurement probe underneath measures the real grid before the
-    // create/subscribe are dispatched - see `TerminalGridMeasureProbe`.
+    // Same layout box as the live tile below (relative flex-1 column) so the measurement probe underneath measures
+    // the real grid before the create/subscribe are dispatched - see `TerminalGridMeasureProbe`.
     return (
       <div className="relative flex h-full min-h-0 w-full flex-col bg-canvas">
         <div className="relative min-h-0 flex-1">
@@ -283,12 +266,7 @@ function LandingTerminalDurableBootstrap(
       rows: TERMINAL_DEFAULT_ROWS,
     };
   const runtimeRunning = projection?.runtime.status === "running";
-  // Memoized because `useLandingTerminalDurableLifecycle` lists both in its
-  // effect deps: fresh identities every render re-run that effect on every
-  // render, leaving its dispatched-episode ref as the only thing standing
-  // between a re-render and a duplicate create. `mutateAsync` is referentially
-  // stable (the authority fleet already depends on it that way), so the real
-  // inputs are the request fields.
+  // Memoized because `useLandingTerminalDurableLifecycle` lists both in its effect deps.
   const createTerminal = entry.mutations.create.mutateAsync;
   const ensureTerminalRunning = entry.mutations.ensureRunning.mutateAsync;
   const dispatch = useCallback(
@@ -412,13 +390,7 @@ function LandingTerminalDurableState(props: {
     );
   }
   if (props.handle === null) {
-    // `canMutate` tracks LIST-STREAM freshness, not terminal liveness - the
-    // authority hook drops it on every `reconnecting` status and restores it
-    // only once a fresh snapshot lands. Gating the whole tile on it swapped a
-    // running terminal (and the input focus in it) for a skeleton on each
-    // reconnect, which the legacy branch never does. It only means "cannot
-    // dispatch a mutation yet", so it belongs here, where there is nothing to
-    // tear down.
+    // It only means "cannot dispatch a mutation yet", so it belongs here, where there is nothing to tear down.
     if (!props.canMutate) return <LandingTerminalWaiting />;
     return (
       <div className="relative flex h-full min-h-0 w-full flex-col bg-canvas">
@@ -450,12 +422,7 @@ function LandingTerminalDurableState(props: {
   );
 }
 
-/**
- * How soon after tile mount an exit still reads as "the shell never started"
- * rather than "the session ended". Generous on purpose: a slow machine can
- * take a couple of seconds to spawn, and a real interactive session ending
- * this fast is rare enough that a one-line toast is harmless.
- */
+/** How soon after tile mount an exit still reads as "the shell never started" rather than "the session ended". */
 const FAST_EXIT_NOTICE_WINDOW_MS = 5_000;
 
 export function LandingTerminalTileLive(props: {
@@ -504,14 +471,7 @@ export function LandingTerminalTileLive(props: {
     tab.instanceId,
   ]);
 
-  // Backstop for a shell that dies at spawn (wrong path, stale flags, the
-  // Windows wsl.exe installer stub): the exit path below silently retires the
-  // tab, so without this the user experiences "terminals don't start at all"
-  // with no evidence. Only a LIVE run→exit transition observed shortly after
-  // this tile mounted qualifies - a tab adopted already-exited mounts in its
-  // terminal state and never transitions, and a real session that ends later
-  // falls outside the window. Fixed toast id: repeated attempts replace the
-  // notice in place instead of stacking.
+  // Backstop for a shell that dies at spawn (wrong path, stale flags, the Windows wsl.exe installer stub).
   const mountedAtRef = useRef<number | null>(null);
   const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
@@ -577,21 +537,13 @@ export function LandingTerminalTileLive(props: {
             onUserInput={handleInput}
             onContainerResize={handleResize}
             onWriterReady={handleWriter}
-            // Landing tiles stay mounted while the panel is collapsed, so a
-            // visibility-driven focus grab would fire on every landing-page
-            // mount (new tab, tab switch back) and steal the composer's focus.
-            // Focus moves here only through explicit gestures, routed via the
-            // terminal-focus registry by the panel.
+            // Landing tiles stay mounted while the panel is collapsed, so a visibility-driven focus grab would fire on
+            // every landing-page mount (new tab, tab switch back) and steal the composer's focus.
             shouldFocusOnActivePane={false}
             registerImperativeFocus
             findTargetId={null}
-            // Mirrors the registry's linger rule: while the session is live its
-            // handle outlives this unmount (tab switch away from the landing
-            // page), and the store's writer keeps pointing at this engine - so
-            // the engine must survive too, or a return within the linger
-            // window would reattach a blank terminal (the host snapshot was
-            // already consumed). The registry follower disposes the engine
-            // when the lingering handle is finally evicted.
+            // Mirrors the registry's linger rule: while the session is live its handle outlives this unmount (tab switch
+            // away from the landing page), and the store's writer keeps pointing at this engine.
             keepAlive={status !== "exited"}
             onTerminalReady={null}
           />
@@ -601,11 +553,8 @@ export function LandingTerminalTileLive(props: {
   );
 }
 
-/**
- * The tile replaced by a failed start and its retry. Shared by the legacy and
- * durable branches so the two failures stay one visual state - only the
- * message source differs.
- */
+/** Shared by the legacy and durable branches so the two failures stay one visual state - only the message
+ * source differs. */
 export function LandingTerminalErrorState(props: {
   readonly message: string;
   readonly isPending: boolean;
@@ -642,19 +591,7 @@ function LandingTerminalWaiting(): ReactNode {
   );
 }
 
-/**
- * The tile replaced by an explanation of why its host cannot be reached.
- *
- * `plan-restricted` gets its own sentence rather than the offline one, because
- * "is offline" is false for it in a way that costs the reader real time: the
- * machine is running and healthy, it simply has no remote route on this
- * account's plan. Telling them it is off sends them to restart it, and hides
- * the only thing that would actually help.
- *
- * `indeterminate` never reaches here — `useHostReachability` reports it as
- * reachable, so the live path runs and the dial either succeeds or fails on its
- * own evidence.
- */
+/** The tile replaced by an explanation of why its host cannot be reached. */
 export function TerminalDeadState(props: {
   readonly hostLabel: string;
   readonly unavailability: HostUnavailability | null;

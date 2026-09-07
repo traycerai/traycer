@@ -9,17 +9,7 @@ type UpdateChatRunSettingsMutateAsync = (
   params: UpdateChatRunSettingsRequest,
 ) => Promise<UpdateChatRunSettingsResponse>;
 
-// Module-scoped (not per-component) so every writer of a given chat's
-// durable settings - the chat's own composer AND a sibling task-wide switch -
-// funnels through the SAME per-chatId chain. `WsRpcClient.request()` opens a
-// fresh connection per call with no ordering guarantee across concurrent
-// requests, so independent fire-and-forget writes for the same chat could
-// let an older write's response land after a newer one and pin the chat to
-// stale settings.
-//
-// Each chatId's entry is removed once its chain settles (see the cleanup in
-// `enqueuePersistChatRunSettings`) - otherwise every chat ever touched over
-// the app's lifetime would accumulate here with no bound.
+// Module-scoped (not per-component) so every writer of a given chat's durable settings - the chat's own composer AND a sibling task-wide switch - funnels through the SAME per-chatId chain.
 const chains = new Map<string, Promise<void>>();
 const pending = new Map<string, UpdateChatRunSettingsRequest>();
 
@@ -30,16 +20,7 @@ export function __chainCountForTests(): number {
 }
 
 /**
- * Enqueues a durable `epic.updateChatRunSettings` write for `chatId`,
- * serialized behind any write already in flight for that chat (never two
- * requests for the same chat at once) and collapsed to the latest settings
- * if further calls land while one is pending - a rapid burst of composer
- * changes only ends up sending the final value.
- *
- * Best-effort: an old host rejects the optional method with
- * `E_HOST_UNSUPPORTED`, which callers treat as "legacy behavior: settings
- * persist on next send" and is swallowed silently. Any other failure is
- * logged at this transport boundary instead of vanishing.
+ * Enqueues a durable `epic.updateChatRunSettings` write for `chatId`, serialized behind any write already in flight for that chat (never two requests for the same chat at once) and collapsed to the latest settings if further calls land while one is pending -.
  */
 export function enqueuePersistChatRunSettings(
   mutateAsync: UpdateChatRunSettingsMutateAsync,
@@ -51,10 +32,7 @@ export function enqueuePersistChatRunSettings(
   const next: Promise<void> = prior
     .then(() => runPendingWrite(mutateAsync, chatId))
     .then(() => {
-      // Only this chatId's OWN (latest) link may clear the entry - if a
-      // newer write was already enqueued (and so already replaced this
-      // entry with its own chain) before this link finished, deleting here
-      // would drop that newer, still-pending chain instead of an idle one.
+      // Only this chatId's OWN (latest) link may clear the entry - if a newer write was already enqueued (and so already replaced this entry with its own chain) before this link finished, deleting here would drop that newer, still-pending chain instead of an idle one.
       if (chains.get(chatId) === next) {
         chains.delete(chatId);
       }
@@ -63,11 +41,7 @@ export function enqueuePersistChatRunSettings(
 }
 
 /**
- * Never rejects: a rejected link in a chat's chain would permanently starve
- * every future write queued behind it (`.then()` on a rejected promise skips
- * its handler and just re-throws), so every failure mode - `mutateAsync`
- * rejecting OR throwing synchronously, or even `appLogger.error` itself
- * throwing - is contained here rather than escaping to `chains`.
+ * Never rejects: a rejected link in a chat's chain would permanently starve every future write queued behind it (`.then()` on a rejected promise skips its handler and just re-throws), so every failure mode - `mutateAsync` rejecting OR throwing synchronously.
  */
 async function runPendingWrite(
   mutateAsync: UpdateChatRunSettingsMutateAsync,

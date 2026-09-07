@@ -1,11 +1,5 @@
-/**
- * What the Link mobile app panel SHOWS for each state the watch reports: the
- * countdown text counts down to the next code on a local clock, a rotation
- * mounts a fresh tile, and every terminal state states plainly what happened
- * and what the user can do next. The watch itself is faked here — its
- * behaviour is covered by link-phone-panel.test.tsx, and duplicating it would
- * only pin the same logic twice.
- */
+/** The watch itself is faked here - its behaviour is covered by link-phone-panel.test.tsx, and duplicating it
+ * would only pin the same logic twice. */
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,11 +29,8 @@ vi.mock("@/stores/auth/auth-store", () => ({
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
-  // The panel encodes the QR against the shell's own platform origin, taken
-  // from `signInUrl`. Without one the tile draws a placeholder instead of a
-  // symbol - deliberately, so a build that cannot name its deployment never
-  // puts a live code in front of a camera - which is not the state these
-  // tests are about.
+  // Without one the tile draws a placeholder instead of a symbol - deliberately, so a build that cannot name its
+  // deployment never puts a live code in front of a camera - which is not the state these tests are about.
   useRunnerHost: () => ({ signInUrl: "https://platform.test/sign-in" }),
 }));
 
@@ -154,8 +145,6 @@ describe("LinkPhonePanel presentation", () => {
       rows: rows(),
     };
 
-    // The evicting restart drops the mint data, which is the moment the panel
-    // used to collapse to a bare skeleton and resize the modal around it.
     mocks.useLinkLoginWatch.mockReturnValue({
       claim: null,
       deadKind: null,
@@ -213,7 +202,7 @@ describe("LinkPhonePanel presentation", () => {
       "192.168.29.87 · Bengaluru, IN · just now",
     );
     expect(confirm.textContent).toContain("These details are approximate");
-    // No tile behind the decision — the code being decided is not on offer.
+    // No tile behind the decision - the code being decided is not on offer.
     expect(screen.queryByTestId("link-phone-qr")).toBeNull();
   });
 
@@ -231,9 +220,8 @@ describe("LinkPhonePanel presentation", () => {
       deadKind: null,
       code: codeQuery({ data: null, isError: false, error: null }),
     });
-    // A reject round-trip in flight: Reject carries the spinner, Approve is
-    // only disabled. Putting the spinner on Approve would read as though the
-    // sign-in were being granted.
+    // A reject round-trip in flight: Reject carries the spinner, Approve is only disabled. Putting the spinner on
+    // Approve would read as though the sign-in were being granted.
     mocks.useRespondLinkLoginMutation.mockReturnValue({
       isPending: true,
       variables: { code: "ABCDE-FGHJK", approve: false },
@@ -337,8 +325,8 @@ describe("LinkPhonePanel presentation", () => {
       code: codeQuery({ data: null, isError: false, error: null }),
     });
     render(<LinkPhonePanel />);
-    // Metadata the server never observed is left out rather than confessed —
-    // "just now" is the one part always true, and it anchors the line alone.
+    // Metadata the server never observed is left out rather than confessed - "just now" is the one part always
+    // true, and it anchors the line alone.
     expect(screen.getByTestId("link-phone-claimant").textContent).toBe(
       "just now",
     );

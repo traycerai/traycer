@@ -51,12 +51,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
-// `EpicSessionProvider` opens its own durable transport via this factory, and
-// UNCONDITIONALLY now: the stream-factory override that used to short-circuit
-// before `openTransport` ran is gone, so a stub that threw here - which was
-// this file's shape, safe only because it was never reached - would now fail
-// every test. The fake supplies "no socket in tests" at the opener instead.
-// What this suite drives the session's stream with is the WORKER factory.
+// `EpicSessionProvider` opens its own durable transport via this factory, and UNCONDITIONALLY now: the stream-factory override that used to short-circuit before `openTransport` ran is gone, so a stub that threw here - which was this file's shape, safe only because it was never reached - would now fail every test.
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");
@@ -74,9 +69,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-// The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// The Epic session resolves its host through the selection authority's derived pointer (selection model §1), not the active-host projection above - seed the decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
@@ -123,30 +116,17 @@ function emptySnapshot(): Uint8Array {
 }
 
 /**
- * What was installed before this suite's worker, so `afterEach` can put it
- * back. NEVER `null`: the jsdom setup file installs a coreless worker for every
- * suite, and `null` means "use the production constructor" - the one form
- * (`new Worker(new URL(...))`) jsdom cannot execute.
+ * What was installed before this suite's worker, so `afterEach` can put it back.
+ * NEVER `null`: the jsdom setup file installs a coreless worker for every suite, and `null` means "use the production constructor" - the one form (`new Worker(new URL(...))`) jsdom cannot execute.
  */
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 
 /**
- * The suite's stream, one seam over.
- *
- * The factory itself is unchanged - the same callbacks, the same `closeCount`.
- * What changed is where it is installed: a stream factory built on MAIN cannot
- * cross `postMessage` to a runtime that lives in the worker, so it is supplied
- * to the worker's own composition instead, through the shared in-process helper
- * `openStoreForTest` also uses.
+ * What changed is where it is installed: a stream factory built on MAIN cannot cross `postMessage` to a runtime that lives in the worker, so it is supplied to the worker's own composition instead, through the shared in-process helper `openStoreForTest` also uses.
  */
 function installControlledFactory(): ReadonlyArray<ControlledStream> {
   const streams: ControlledStream[] = [];
   previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
-  // A FRESH helper per spawn. One instance owns one bridge pair and one
-  // composition, so a shared one would hand two sessions the same runtime -
-  // and would hand a re-acquired session a pipe its predecessor's
-  // `terminate()` already severed. Constructing per call is also what the
-  // deleted stream override did: the provider called it once per session.
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
       streamClientFactory: (_epicId, callbacks) => {
@@ -245,18 +225,9 @@ describe("<EpicConnectionToasts />", () => {
       expect(handle.store.getState().permissionRole).toBe("owner");
     });
 
-    // The replica REPLACEMENT is observed through `bindingVersion`, not by
-    // comparing `Y.Doc` references: the doc lives on the worker thread now and
-    // main has no reference to compare. `bindingVersion` IS the binding epoch
-    // the runtime advances when it swaps a replica, and it is what production
-    // consumers remount on - so this asserts the same event through the
-    // channel that still carries it.
     const originalBinding = handle.store.getState().bindingVersion;
 
-    // A real local edit, through the root-state port. `applyLocalUpdate` is
-    // gone; `applyRootUpdate(update, /* asLocalEdit */ true)` is the member
-    // that puts local bytes into the replica, and it needs real update bytes
-    // rather than a placeholder because it actually applies them.
+    // `applyLocalUpdate` is gone; `applyRootUpdate(update, /* asLocalEdit */ true)` is the member that puts local bytes into the replica, and it needs real update bytes rather than a placeholder because it actually applies them.
     const donor = new Y.Doc();
     donor.getMap("epic").set("unsynced", "edit");
     await act(async () => {
@@ -294,8 +265,7 @@ describe("<EpicConnectionToasts />", () => {
       expect(handle.store.getState().permissionRole).toBe("owner");
     });
 
-    // Establish the connection so the drop below is a genuine reconnect, not
-    // first-time bootstrap (which reads as "connecting" and fires no toast).
+    // Establish the connection so the drop below is a genuine reconnect, not first-time bootstrap (which reads as "connecting" and fires no toast).
     // Transport open + cloud caught up is what latches "connected once".
     act(() => {
       streams[0].callbacks.onConnectionStatus("open", null);

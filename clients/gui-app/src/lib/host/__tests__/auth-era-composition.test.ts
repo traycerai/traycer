@@ -1,21 +1,4 @@
-/**
- * The auth-era composition, asserted at the TRANSPORT boundary.
- *
- * Everything here is production wiring: a real `AuthService`, the real
- * `createAuthBoundHostDirectory` (so the accessors and the default fetcher are
- * the ones the provider installs), and a real `HostRuntime` subscribing to the
- * real `RequestContextProvider`. The only seams are the shell (`MockRunnerHost`
- * calls the shared HTTP helpers directly) and `fetch` itself.
- *
- * WHY it is written this way. Four consecutive rounds of fixes to these two
- * defects shipped green, because each round's tests supplied the very thing
- * under question: a fake directory that modelled the lagging identity but not
- * the lagging bearer, and a fence driven by a counter the test incremented by
- * hand. Every assertion below is therefore on the `Authorization` header that
- * reached `fetch` — the credential ACTUALLY USED — and on the production
- * generation accessor moving across a real rotation. A stamp can be right
- * while the request underneath it is wrong; that is precisely the bug.
- */
+/** The auth-era composition, asserted at the TRANSPORT boundary. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -45,15 +28,7 @@ const ACCOUNT_BY_BEARER = new Map<string, string>([
   [TOKEN_B, "user-b"],
 ]);
 
-/**
- * The plan each account is on, as `/api/v3/user` reports it.
- *
- * The second axis of the host projection: `connectivity` on the wire is pure
- * liveness, and whether a route may be used is that AND the account's
- * entitlement, read at fetch time from the same `AuthService` that owns the
- * bearer. A is on the free plan, B is paid - so the SAME `connectable` registry
- * row projects differently for each.
- */
+/** The plan each account is on, as `/api/v3/user` reports it. */
 const SUBSCRIPTION_BY_ACCOUNT = new Map<string, string>([
   ["user-a", "FREE"],
   ["user-b", "PRO_V3"],
@@ -170,13 +145,7 @@ function requestUrl(input: unknown): string {
 }
 
 /**
- * Records every bearer that reached `GET /api/v3/hosts`, and answers with the
- * hosts of whichever account that bearer belongs to.
- *
- * The mapping is the load-bearing part: a fetcher that returned the same rows
- * for every bearer could not tell "asked as B" apart from "asked as A and
- * stamped B", which is the exact substitution that let this bug through
- * before.
+ * Records every bearer that reached `GET /api/v3/hosts`, and answers with the hosts of whichever account that bearer belongs to.
  */
 interface HostsEndpoint {
   readonly bearers: string[];
@@ -184,9 +153,7 @@ interface HostsEndpoint {
   readonly hold: (bearer: string) => void;
   readonly release: (bearer: string, response: Response) => void;
   /**
-   * Bearers the HOSTS endpoint 401s even though they are otherwise valid -
-   * the transient mid-rotation refusal (`/api/v3/user` keeps answering, so
-   * nothing signs the session out).
+   * Bearers the HOSTS endpoint 401s even though they are otherwise valid - the transient mid-rotation refusal (`/api/v3/user` keeps answering, so nothing signs the session out).
    */
   readonly deny: (bearer: string) => void;
   readonly handler: FetchHandler;
@@ -252,10 +219,8 @@ interface Composition {
 const built: Composition[] = [];
 
 /**
- * The production composition, minus React. `createAuthBoundHostDirectory` is
- * the same call `HostRuntimeProvider` makes, so the identity accessor, the
- * credential-generation accessor and the default remote fetcher under test
- * here are the ones the app runs.
+ * The production composition, minus React.
+ * `createAuthBoundHostDirectory` is the same call `HostRuntimeProvider` makes, so the identity accessor, the credential-generation accessor and the default remote fetcher under test here are the ones the app runs.
  */
 function buildComposition(): Composition {
   const runnerHost = new MockRunnerHost({
@@ -324,11 +289,8 @@ async function directoryHostIds(
 }
 
 /**
- * Bringing the composition up issues its own reads under the signed-in
- * account (the directory's initial refresh, and the local-host subscription
- * firing on subscribe). Those are the OTHER cadence - unrelated to what this
- * suite is about - so every probe takes a mark after startup and asserts on
- * exactly the requests issued after it.
+ * Bringing the composition up issues its own reads under the signed-in account (the directory's initial refresh, and the local-host subscription firing on subscribe).
+ * Those are the OTHER cadence - unrelated to what this suite is about - so every probe takes a mark after startup and asserts on exactly the requests issued after it.
  */
 function bearersSince(endpoint: HostsEndpoint, mark: number): string[] {
   return endpoint.bearers.slice(mark);
@@ -366,10 +328,7 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     });
     const mark = endpoint.bearers.length;
 
-    // The user signs into B in the same app lifetime: the shared credentials
-    // file changes, the §4 watcher reconciles it, and the cross-user branch
-    // runs the full signed-in projection - emitting the new RequestContext,
-    // inside which the runtime issues the mandatory refresh.
+    // The user signs into B in the same app lifetime: the shared credentials file changes, the §4 watcher reconciles it, and the cross-user branch runs the full signed-in projection - emitting the new RequestContext, inside which the runtime issues the mandatory.
     await composition.runnerHost.tokenStore.signIn(
       { token: TOKEN_B, refreshToken: `${TOKEN_B}-refresh` },
       { id: "user-b", email: "user-b@example.com", name: "User user-b" },
@@ -381,12 +340,8 @@ describe("auth-era composition — the credential a refresh actually uses", () =
       ]);
     });
 
-    // THE ASSERTION THIS TICKET EXISTS FOR. Not "the refresh was stamped B" -
-    // it was, in the version that shipped this bug - but which credential the
-    // request carried. B's refresh must go out under B's bearer; issuing it
-    // under A's returns A's machine names, ids and platforms, and the identity
-    // guard then waves them through because by the time they land the ambient
-    // profile really is B.
+    // THE ASSERTION THIS TICKET EXISTS FOR.
+    // Not "the refresh was stamped B" - it was, in the version that shipped this bug - but which credential the request carried.
     expect(bearersSince(endpoint, mark)).toEqual([TOKEN_B]);
   });
 
@@ -409,13 +364,8 @@ describe("auth-era composition — the credential a refresh actually uses", () =
       expect(await directoryHostIds(composition.directory)).toEqual([]);
     });
 
-    // The sign-out variant of the same defect, and the reason it is nastier:
-    // A's bearer here is not expired. Had the signed-out refresh gone out
-    // under it, the registry would have answered 200 with A's hosts, and a
-    // 401 - the thing the whole `signed-out` outcome path is written around -
-    // would never have arrived to save it. So the requirement is not "the
-    // request failed", it is that no request was made on a signed-out
-    // session at all.
+    // The sign-out variant of the same defect, and the reason it is nastier: A's bearer here is not expired.
+    // Had the signed-out refresh gone out under it, the registry would have answered 200 with A's hosts, and a 401 - the thing the whole `signed-out` outcome path is written around - would never have arrived to save it.
     expect(bearersSince(endpoint, mark)).toEqual([]);
   });
 
@@ -433,9 +383,8 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     const identityBefore = composition.auth.getIdentityGeneration();
     const credentialBefore = composition.auth.getCredentialGeneration();
 
-    // A background rotation: same account, new token, adopted through the
-    // reconcile path. No sign-in, no sign-out - which is exactly why the
-    // identity counter cannot see it.
+    // A background rotation: same account, new token, adopted through the reconcile path.
+    // No sign-in, no sign-out - which is exactly why the identity counter cannot see it.
     await composition.runnerHost.tokenStore.signIn(
       { token: TOKEN_A_ROTATED, refreshToken: `${TOKEN_A_ROTATED}-refresh` },
       { id: "user-a", email: "user-a@example.com", name: "User user-a" },
@@ -446,10 +395,8 @@ describe("auth-era composition — the credential a refresh actually uses", () =
       );
     });
 
-    // The production accessor the directory's fence is wired to - not a local
-    // counter standing in for it. This is the assertion the previous round's
-    // test could not make, and its absence is why an identity-transition
-    // counter sat in that slot through a full review.
+    // The production accessor the directory's fence is wired to - not a local counter standing in for it.
+    // This is the assertion the previous round's test could not make, and its absence is why an identity-transition counter sat in that slot through a full review.
     expect(composition.auth.getCredentialGeneration()).toBe(
       credentialBefore + 1,
     );
@@ -467,9 +414,7 @@ describe("auth-era composition — the credential a refresh actually uses", () =
       ]);
     });
 
-    // Drain startup before marking: a refresh still in flight would be JOINED
-    // rather than re-issued (that coalescing is deliberate), and this probe
-    // needs a request of its own to hold open.
+    // Drain startup before marking: a refresh still in flight would be JOINED rather than re-issued (that coalescing is deliberate), and this probe needs a request of its own to hold open.
     await composition.directory.refresh();
     const mark = endpoint.bearers.length;
 
@@ -492,19 +437,16 @@ describe("auth-era composition — the credential a refresh actually uses", () =
       );
     });
 
-    // The new credential refreshes and legitimately fills the directory. A
-    // FRESH request, not a join onto the held one: the era changed, so the
-    // memo cannot answer for it.
+    // The new credential refreshes and legitimately fills the directory.
+    // A FRESH request, not a join onto the held one: the era changed, so the memo cannot answer for it.
     await composition.directory.refresh();
     expect(bearersSince(endpoint, mark)).toEqual([TOKEN_A, TOKEN_A_ROTATED]);
     expect(await directoryHostIds(composition.directory)).toEqual([
       "account-a-host",
     ]);
 
-    // NOW the held request comes back 401, as an expired bearer's request
-    // does. `unauthorized` becomes a `signed-out` outcome, the user id still
-    // matches on both sides, and only the credential generation can tell that
-    // this 401 was earned by a token that is no longer in use.
+    // NOW the held request comes back 401, as an expired bearer's request does.
+    // `unauthorized` becomes a `signed-out` outcome, the user id still matches on both sides, and only the credential generation can tell that this 401 was earned by a token that is no longer in use.
     endpoint.release(TOKEN_A, new Response(null, { status: 401 }));
     await heldPoll;
 
@@ -514,13 +456,8 @@ describe("auth-era composition — the credential a refresh actually uses", () =
   });
 
   it("retains the directory when the registry 401s a STILL-CURRENT bearer", async () => {
-    // This used to also assert the bound remote SELECTION survived the 401
-    // (`directory.selectById` / `.getSelected()`). P4.2 deleted selection
-    // from `HostDirectoryService` entirely - it now lives in the selection
-    // authority store, a subsystem this composition test doesn't construct -
-    // so that half of the claim has no post-slot equivalent to migrate to
-    // and is dropped. What survives is the directory's own retention
-    // contract, already covered below by the `directoryHostIds` assertions.
+    // This used to also assert the bound remote SELECTION survived the 401 (`directory.selectById` / `.getSelected()`).
+    // P4.2 deleted selection from `HostDirectoryService` entirely - it now lives in the selection authority store, a subsystem this composition test doesn't construct - so that half of the claim has no post-slot equivalent to migrate to and is dropped.
     const endpoint = hostsEndpoint();
     restoreFetch = installFetch(endpoint.handler);
     const composition = buildComposition();
@@ -531,27 +468,15 @@ describe("auth-era composition — the credential a refresh actually uses", () =
       ]);
     });
 
-    // Drain startup before marking: a refresh still in flight would be
-    // JOINED rather than re-issued (that coalescing is deliberate), and this
-    // probe needs the DENIED answer to be the one its refresh consumes.
+    // Drain startup before marking: a refresh still in flight would be JOINED rather than re-issued (that coalescing is deliberate), and this probe needs the DENIED answer to be the one its refresh consumes.
     await composition.directory.refresh();
     const mark = endpoint.bearers.length;
 
-    // The registry rejects the CURRENT bearer - proactive rotation has not
-    // landed yet, so no era transition exists for the generation fence to
-    // catch: the same credential that filled the directory observes this
-    // 401. `AuthService.fetchRegisteredHosts` deliberately does not sign out
-    // on it (a background list poll must never force a sign-out), and the
-    // directory must be no more destructive than the auth layer: retain the
-    // last-known entries, recover on the next poll. Mapping it to
-    // `signed-out` cleared every remote entry mid-session on a transient
-    // credential blip.
+    // The registry rejects the CURRENT bearer - proactive rotation has not landed yet, so no era transition exists for the generation fence to catch: the same credential that filled the directory observes this
     endpoint.deny(TOKEN_A);
     await composition.directory.refresh();
 
-    // The refusal really went out (and went out under the current bearer) -
-    // without this, a refresh that silently joined an older in-flight read
-    // would make the retention assertion below pass vacuously.
+    // The refusal really went out (and went out under the current bearer) - without this, a refresh that silently joined an older in-flight read would make the retention assertion below pass vacuously.
     expect(bearersSince(endpoint, mark)).toEqual([TOKEN_A]);
     expect(await directoryHostIds(composition.directory)).toEqual([
       "account-a-host",
@@ -559,17 +484,7 @@ describe("auth-era composition — the credential a refresh actually uses", () =
   });
 });
 
-/**
- * The PLAN half of the same composition.
- *
- * `connectivity` on the wire is pure liveness; whether a client may use the
- * route is that fact AND the account's entitlement. The projection reads the
- * entitlement from `AuthService` - the same object that owns the bearer and the
- * era the fetch was issued for - rather than from the UI store, so the two can
- * never describe different accounts. Asserted through the real
- * `buildDefaultRemoteFetcher`, on entries the production wiring actually
- * produced, for exactly that reason.
- */
+/** The PLAN half of the same composition. */
 describe("auth-era composition — remote hosts are available on every plan", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -643,15 +558,7 @@ describe("auth-era composition — remote hosts are available on every plan", ()
   });
 });
 
-/**
- * The reorder trap for the commit-before-emit contract.
- *
- * Separate from the probes above because it fails for a different reason: it
- * does not ask what the refresh did, it asks what any listener would have seen
- * at the instant the transition was announced. If an assignment is ever moved
- * back after its emission, this fails immediately and points at the ordering,
- * rather than surfacing later as a confusing directory-contents mismatch.
- */
+/** The reorder trap for the commit-before-emit contract. */
 describe("auth-era composition — auth state is committed before the transition is announced", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -687,9 +594,8 @@ describe("auth-era composition — auth state is committed before the transition
     const unsubscribe = composition.auth
       .getRequestContextProvider()
       .onChange((ctx) => {
-        // Deliberately the AMBIENT reads, not the era. A listener is allowed
-        // to make them - the whole point of committing first is that they are
-        // true by the time anyone can look.
+        // Deliberately the AMBIENT reads, not the era.
+        // A listener is allowed to make them - the whole point of committing first is that they are true by the time anyone can look.
         const snapshot = composition.auth.getCurrentSessionSnapshot();
         observed.push({
           emitted: ctx?.identity.userId ?? null,

@@ -1,8 +1,6 @@
 /**
- * Opener "Artifacts" sub-page: existing spec / ticket / story / review
- * artifacts only (no "new" - artifacts are agent-created). Each opens a fresh
- * instance into the target group. Artifact projections carry no hostId, so
- * they bind to the default host (matching the sidebar's fallback).
+ * Opener "Artifacts" sub-page: existing spec / ticket / story / review artifacts only (no "new" - artifacts are agent-created).
+ * Each opens a fresh instance into the target group.
  */
 import { v4 as uuidv4 } from "uuid";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";

@@ -5,7 +5,6 @@ import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { TopLevelSurfaceActivationContext } from "./top-level-surface-activation-context";
 
-/** Bridges a deliberate split-slot interaction into the canonical tab command. */
 export function TopLevelSurfaceActivationProvider(props: {
   readonly children: ReactNode;
 }): ReactNode {

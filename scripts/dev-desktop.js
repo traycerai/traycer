@@ -1,43 +1,6 @@
 #!/usr/bin/env bun
-// Dev orchestrator for `make dev-desktop` (OSS).
-//
-// Mirrors the internal `make dev-desktop` flow, but the Traycer host is
-// DOWNLOADED from GitHub Releases instead of built from source — the
-// Traycer Host and cloud backend are not part of this repo. The desktop runs
-// against PRODUCTION: its baked config points at the real cloud, and the CLI
-// provisions the real signed host release.
-//
-// Multi-run: each invocation gets its own dev slot, derived deterministically
-// from the repo root (override via `--slot <name>` / `DEV_DESKTOP_SLOT`), so
-// separate worktrees — or a second run from the same worktree with an
-// explicit `--slot` — never collide. The slot is set once on `process.env`
-// and everything downstream reads it from there: the CLI's own install/lock
-// paths (`clients/traycer-cli/src/store/paths.ts`), its OS service label
-// (`clients/traycer-cli/src/service/label.ts`, `ai.traycer.host.dev.<slot>`),
-// and the Desktop's CLI discovery + userData/single-instance identity
-// (`clients/desktop/src/electron-main/cli/cli-discovery.ts`) all branch on it.
-//
-//   - Stages a dev CLI wrapper at this run's slot-scoped bin path
-//     (`~/.traycer/cli/dev-runs/<slot>/bin/traycer`) that exec's
-//     `bun <repo>/clients/traycer-cli/src/index.ts "$@"`, so the OS service
-//     plist resolves to a stable executable path (launchd's PATH is minimal,
-//     so absolute paths are baked into the wrapper).
-//   - Invokes `traycer host install [--release <version>]
-//     --allow-self-invocation`. The CLI runs from source
-//     (`config.environment === "dev"`), so it targets the dev slot
-//     automatically: it downloads + verifies the released host, swaps this
-//     run's dev install dir, writes
-//     `~/.traycer/host/dev-runs/<slot>/install/install.json`, registers the
-//     slot-specific dev OS service label, and starts the host. With no
-//     `--release`, the CLI installs `latest`.
-//   - Runs the HMR Electron shell (on a hash-derived, availability-checked
-//     renderer port — a fixed port would make every worktree but the first
-//     fail outright) + tails `~/.traycer/host/dev-runs/<slot>/host.log` under
-//     `concurrently`.
-//   - On Ctrl-C, runs `traycer host uninstall --all` so this run's dev
-//     install + service are gone. `~/.traycer/` user data is preserved (no
-//     --purge); any production host/CLI state in the prod slot, and any other
-//     run's dev-runs/<slot>, are never touched.
+// Dev orchestrator for `make dev-desktop` (oss).
+// Mirrors the internal `make dev-desktop` flow, but the Traycer host is downloaded from GitHub Releases instead of built from source - the Traycer Host and cloud backend are not part of this repo.
 
 "use strict";
 
@@ -59,24 +22,12 @@ const CLI_ENTRY = path.join(
 );
 const DESKTOP_WORKSPACE = path.join(REPO_ROOT, "clients", "desktop");
 const TRAYCER_HOME = path.join(os.homedir(), ".traycer");
-// Local, version-keyed cache of downloaded host archives so repeated
-// `make dev-desktop` runs (the Ctrl-C teardown uninstalls the dev host) don't
-// re-download the same release. Outside the repo tree, so `git clean` never
-// nukes it and it's shared across worktrees. Each archive is installed via
-// `host install --from`, which re-checks its sha256.
+// Local, version-keyed cache of downloaded host archives so repeated `make dev-desktop` runs (the Ctrl-C teardown uninstalls the dev host) don't re-download the same release.
+// Outside the repo tree, so `git clean` never nukes it and it's shared across worktrees.
 const HOST_ARCHIVE_CACHE_DIR = path.join(TRAYCER_HOME, "dev-host-cache");
 
-// Multi-run: each worktree's `make dev-desktop` gets its own dev slot, derived
-// deterministically from the repo root (or overridden via `--slot` /
-// `DEV_DESKTOP_SLOT`). Everything downstream - the CLI's own install/lock
-// paths (clients/traycer-cli/src/store/paths.ts), its service label
-// (clients/traycer-cli/src/service/label.ts), and the Desktop's CLI discovery
-// + userData/single-instance identity (electron-main/cli/cli-discovery.ts,
-// electron-main/dev-desktop-runtime.ts) - already branches on
-// `DEV_DESKTOP_SLOT` being set. This script is the one piece that never set
-// it, so every `make dev-desktop` run on a machine collided on one shared
-// dev CLI wrapper, one shared dev host install/service, and one fixed
-// renderer port (5173, `strictPort`).
+// Multi-run: each worktree's `make dev-desktop` gets its own dev slot, derived deterministically from the repo root (or overridden via `--slot` / `DEV_DESKTOP_SLOT`).
+// This script is the one piece that never set it, so every `make dev-desktop` run on a machine collided on one shared dev CLI wrapper, one shared dev host install/service, and one fixed renderer port (5173, `strictPort`).
 const DEV_PORT_RANGE_START = 19000;
 const DEV_PORT_RANGE_SIZE = 4000;
 const DEV_PORT_SCAN_LIMIT = 50;
@@ -100,20 +51,13 @@ function parseSlotArg(argv) {
   return null;
 }
 
-// Sourced from the canonical `@traycer-clients/shared` module (this script
-// lives in the same Bun workspace, unlike the internal repo's orchestrator,
-// which keeps its own copy in lockstep by convention because it sits outside
-// this submodule entirely) so Desktop, the CLI, and this script can never
-// resolve a slot to different sanitized values.
 async function loadDevDesktopSlotModule() {
   return import(
     path.join(REPO_ROOT, "clients", "shared", "platform", "dev-desktop-slot.ts")
   );
 }
 
-// `--slot` / `DEV_DESKTOP_SLOT` win when present; otherwise derive
-// deterministically from the repo root so the same worktree always resolves
-// to the same slot (and a different worktree never collides with it).
+// `--slot` / `DEV_DESKTOP_SLOT` win when present; otherwise derive deterministically from the repo root so the same worktree always resolves to the same slot (and a different worktree never collides with it).
 async function resolveDevDesktopSlot(argv, env) {
   const { sanitizeDevDesktopSlot, DEV_DESKTOP_SLOT_ENV } =
     await loadDevDesktopSlotModule();
@@ -134,13 +78,7 @@ async function resolveDevDesktopSlot(argv, env) {
   return slot;
 }
 
-// Single dynamically-allocated port for the Electron renderer's Vite dev
-// server (`vite.renderer.config.ts` sets `strictPort: true`, so a fixed 5173
-// would make every worktree but the first fail outright). Hash-derived
-// preferred port + forward-scan for availability - same tradeoff as the
-// internal repo's port allocator: the hash-spread preferred range keeps
-// collisions between concurrent runs rare, and a real collision fails loudly
-// (`strictPort`/EADDRINUSE) rather than silently.
+// Single dynamically-allocated port for the Electron renderer's Vite dev server (`vite.renderer.config.ts` sets `strictPort: true`, so a fixed 5173 would make every worktree but the first fail outright).
 function preferredPortForSlot(slot) {
   const availableBaseSpan = DEV_PORT_RANGE_SIZE - DEV_PORT_SCAN_LIMIT;
   const hash = parseInt(stableHash(slot).slice(0, 8), 16);
@@ -174,11 +112,8 @@ async function findAvailablePort(preferredPort) {
   );
 }
 
-// Shared dev wrapper layout — also consumed by the desktop's CLI discovery
-// (`src/electron-main/cli/cli-discovery.ts`) + host-management IPC, so both
-// sides stay in lockstep on where the staged wrapper lives. Defensive parse so
-// a corrupt edit produces a clear error instead of an opaque `undefined.join`
-// failure downstream.
+// Shared dev wrapper layout - also consumed by the desktop's CLI discovery (`src/electron-main/cli/cli-discovery.ts`) + host-management IPC, so both sides stay in lockstep on where the staged wrapper lives.
+// Defensive parse so a corrupt edit produces a clear error instead of an opaque `undefined.join` failure downstream.
 const DEV_WRAPPER_PATHS_FILE = path.join(
   DESKTOP_WORKSPACE,
   "src",
@@ -234,10 +169,7 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-// Cross-platform pid-liveness probe (mirrors the CLI's own `store/cli-lock.ts`
-// probe and the internal orchestrator's copy). `process.kill(pid, 0)` sends no
-// signal, just checks deliverability; EPERM means the process exists but is
-// owned by another user - still alive.
+// Cross-platform pid-liveness probe (mirrors the CLI's own `store/cli-lock.ts` probe and the internal orchestrator's copy).
 function isProcessAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -248,11 +180,8 @@ function isProcessAlive(pid) {
   }
 }
 
-// The host's own pid metadata (written by the running host process itself,
-// not by this script) in this run's host home dir - the authoritative "is a
-// host actually alive for this slot" signal. Returns null (no guard, safe to
-// proceed) for any missing/malformed file rather than throwing, so a stale or
-// half-written pid.json never blocks a legitimate run.
+// The host's own pid metadata (written by the running host process itself, not by this script) in this run's host home dir - the authoritative "is a host actually alive for this slot" signal.
+// Returns null (no guard, safe to proceed) for any missing/malformed file rather than throwing, so a stale or half-written pid.json never blocks a legitimate run.
 function readHostPidMetadata(hostHome) {
   let raw;
   try {
@@ -276,15 +205,8 @@ function readHostPidMetadata(hostHome) {
   return parsed;
 }
 
-// Realistic collision this guards against: a second `make dev-desktop` run in
-// the SAME worktree, without an explicit `--slot`, derives the identical
-// default slot as an already-running instance. Without this check, the second
-// run's install races the first's, and its Ctrl-C teardown then runs
-// `host uninstall --all` for that slot - deregistering the FIRST run's host,
-// not its own. This is a best-effort advisory check (pid liveness against the
-// host's own pid.json), not an OS-level lock - proportionate for a dev tool,
-// and simpler than the internal orchestrator's worktree lock, which exists
-// to guard config-file stamping this script never does.
+// Realistic collision this guards against: a second `make dev-desktop` run in the same worktree, without an explicit `--slot`, derives the identical default slot as an already-running instance.
+// Without this check, the second run's install races the first's, and its Ctrl-C teardown then runs `host uninstall --all` for that slot - deregistering the first run's host, not its own.
 function assertSlotNotActive(slot, hostHome) {
   const existing = readHostPidMetadata(hostHome);
   if (existing !== null && isProcessAlive(existing.pid)) {
@@ -294,10 +216,8 @@ function assertSlotNotActive(slot, hostHome) {
   }
 }
 
-// Resolve a tool's shell-PATH binary to an absolute path. launchd's PATH is
-// minimal (`/usr/bin:/bin:/usr/sbin:/sbin`), so anything Homebrew / nvm-managed
-// must be resolved up front and baked into the wrapper we hand the service
-// manager.
+// Resolve a tool's shell-path binary to an absolute path.
+// launchd's path is minimal (`/usr/bin:/bin:/usr/sbin:/sbin`), so anything Homebrew / nvm-managed must be resolved up front and baked into the wrapper we hand the service manager.
 function resolveBinary(tool) {
   const cmd = process.platform === "win32" ? "where" : "which";
   const result = spawnSync(cmd, [tool], { encoding: "utf8" });
@@ -309,15 +229,7 @@ function resolveBinary(tool) {
   return first ?? tool;
 }
 
-// Stage the dev CLI wrapper the OS service invokes as `traycer host start`
-// (dev slot, baked from the source `config.environment`). Points at the
-// source-tree CLI entry via bun so the dev loop needs no SEA build; baked
-// absolute paths survive launchd's minimal PATH. Also exports `TRAYCER_CLI`
-// (its own absolute path) so a host-spawned agent session resolves
-// `${TRAYCER_CLI} monitor` absolutely instead of relying on a bare-`traycer`
-// PATH lookup, and `DEV_DESKTOP_SLOT` so the service - launched by launchd
-// with a minimal, non-inherited environment - still resolves its own
-// per-slot install/log paths when it execs the CLI entry.
+// Stage the dev CLI wrapper the OS service invokes as `traycer host start` (dev slot, baked from the source `config.environment`).
 async function stageDevCliWrapper(cliBinDir, slot) {
   await fsp.mkdir(cliBinDir, { recursive: true });
   const bunBin = resolveBinary("bun");
@@ -427,14 +339,7 @@ function findCachedArchive(version) {
   return archive === undefined ? null : path.join(dir, archive);
 }
 
-// Resolve a verified host archive for the target version from the local cache,
-// downloading + caching it first on a miss. Reuses the CLI's registry client
-// (bun imports the TS directly) so a freshly downloaded archive goes through the
-// exact same sha256 + minisign verification as the normal `host install
-// <version>` path - the cache only avoids re-downloading. Returns the archive
-// path, or null to fall back to the plain network install (offline + uncached,
-// an unknown version, or any resolution error - the cache must never break the
-// dev flow).
+// Resolve a verified host archive from the local cache (same sha256 + minisign as `host install`). Null falls back to network install; the cache must never break the dev flow.
 async function resolveCachedHostArchive(release) {
   try {
     // Offline fast path: a pinned --release that's already cached needs no

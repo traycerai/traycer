@@ -33,11 +33,8 @@ beforeEach(() => {
 
 describe("model provider pending-auth store", () => {
   it("keeps the same row on two hosts apart", () => {
-    // The HOST keys its registry by (providerId, modelProviderId) because it
-    // only ever speaks for itself. This store spans every host Settings can be
-    // pointed at, so without `hostId` a sign-in started on host B would
-    // overwrite host A's record - and A's panel would then resume against an
-    // attemptId that names nothing on A.
+    // The HOST keys its registry by (providerId, modelProviderId) because it only ever speaks for
+    // itself.
     const store = useModelProviderPendingAuthStore.getState();
     store.upsert(attempt({ attemptId: "a-1" }));
     store.upsert(attempt({ key: { hostId: "host-b" }, attemptId: "b-1" }));
@@ -59,10 +56,8 @@ describe("model provider pending-auth store", () => {
   });
 
   it("resumes the NEWEST of two live attempts on one host", () => {
-    // Single-flight is per (providerId, modelProviderId), so two different
-    // upstream providers can each hold a live attempt at once. Returning "the
-    // first row in the map" made which one resumed an accident of insertion
-    // order.
+    // Single-flight is per (providerId, modelProviderId), so two different upstream providers can each
+    // hold a live attempt at once.
     const store = useModelProviderPendingAuthStore.getState();
     store.upsert(attempt({ attemptId: "older", startedAt: 1_000 }));
     store.upsert(
@@ -103,10 +98,8 @@ describe("model provider pending-auth store", () => {
   });
 
   it("does NOT let a late teardown delete a newer attempt's record", () => {
-    // The concrete race: Stop waiting on attempt A, the form comes back, the
-    // user starts attempt B for the same row - and only then does A's cancel
-    // land. An unconditional remove would take B's only resume record with it,
-    // leaving a host attempt holding a server lease that no surface can reach.
+    // The concrete race: Stop waiting on attempt A, the form comes back, the user starts attempt B for
+    // the same row - and only then does A's cancel land.
     const store = useModelProviderPendingAuthStore.getState();
     store.upsert(attempt({ attemptId: "a", startedAt: 1_000 }));
     store.upsert(attempt({ attemptId: "b", startedAt: 2_000 }));

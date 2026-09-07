@@ -48,11 +48,8 @@ function tooltipProps(): Record<string, unknown> {
 }
 
 /**
- * The claim under test is REUSE, not appearance: the office must hand the
- * hovered agent to the SAME component the sidebar and the graph use, with the
- * props resolved from the node id the same way. What that component then
- * renders - worktree, branch, the harness/model header - is covered by its own
- * suites, and re-asserting it here would only pin a copy of them.
+ * The claim under test is REUSE, not appearance: the office must hand the hovered agent to the SAME component the sidebar and the graph use, with the props resolved from the node id the same way.
+ * What that component then renders - worktree, branch, the harness/model header - is covered by its own suites, and re-asserting it here would only pin a copy of them.
  */
 afterEach(() => {
   cleanup();

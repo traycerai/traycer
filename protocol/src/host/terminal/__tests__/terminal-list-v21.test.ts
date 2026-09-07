@@ -1,12 +1,4 @@
-/**
- * `terminal.list@2.1` schema + negotiation coverage.
- *
- * Additive `homeCwd` on the major-2 response: non-empty string from a current
- * host, `null` only as the v2.0 → v2.1 upgrade fill (older hosts have no
- * authoritative home path). Request shape is identical to `@2.0`. The major
- * downgrade projects sessions only (strips `homeCwd`) and keeps the
- * independent-scope failure gate from v2.0.
- */
+/** `terminal.list@2.1` schema + negotiation coverage. */
 import { describe, expect, it } from "vitest";
 import {
   downgradeResponseAcrossMajors,

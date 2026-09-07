@@ -86,9 +86,7 @@ function createTestList(
   );
 }
 
-/** `ChatTimeline`'s own maintain configuration, on a bare list. The transcript
- *  never passes the library's `maintainScrollAtEnd` (it owns bottom-follow
- *  itself), so the only maintain behavior under test is MVCP. */
+/** `ChatTimeline`'s own maintain configuration, on a bare list. The transcript never passes the library's `maintainScrollAtEnd` (it owns bottom-follow itself), so the only maintain behavior under test is MVCP. */
 function createTranscriptList(
   data: readonly Row[],
   listRef: React.RefObject<LegendListRef | null>,
@@ -109,9 +107,7 @@ function createTranscriptList(
   );
 }
 
-/** Every row starts exactly where the previous one ends. A row whose offset
- *  was computed from a size a sibling has already invalidated paints on top of
- *  that sibling. */
+/** Every row starts exactly where the previous one ends. A row whose offset was computed from a size a sibling has already invalidated paints on top of that sibling. */
 function positionGapsAndSizes(list: LegendListRef): {
   readonly gaps: number[];
   readonly sizes: number[];
@@ -159,17 +155,13 @@ describe("LegendList estimate recovery", () => {
       dataChangedEstimates.push(position - list.getState().positionAtIndex(50));
     };
 
-    // Thresholds are expressed against the settled measurement rather than
-    // pixel constants, so the assertions describe the ratio the guard keys
-    // on (a cached estimate more than 2x off the live average is stale) and
-    // not the harness's row height.
+    // Thresholds are expressed against the settled measurement rather than pixel constants, so the assertions describe the ratio the guard keys on (a cached estimate more than 2x off the live average is stale) and not the harness's row height.
     const measuredSize = list.getState().getAverageItemSizes()
       .assistant.average;
     const grosslyOff = measuredSize * 10;
 
-    // An offscreen row reports a grossly oversized measurement - the shape a
-    // hidden/collapsed pane produces. Nothing re-measures it while it stays
-    // outside the render window, so the live type average keeps that value.
+    // An offscreen row reports a grossly oversized measurement - the shape a hidden/collapsed pane produces.
+    // Nothing re-measures it while it stays outside the render window, so the live type average keeps that value.
     act(() => {
       list.setItemSize("row-45", { height: measuredSize * 1_000, width: 800 });
     });
@@ -258,15 +250,7 @@ describe("LegendList estimate recovery", () => {
     }
   });
 
-  /**
-   * Every row has to start exactly where the previous one ends: a position
-   * computed from a size that a sibling's later measurement has already
-   * invalidated paints two rows on top of each other. This holds the
-   * invariant when several rows remeasure in the same frame, the shape a
-   * streaming transcript produces. It is a guard, not a reproduction - jsdom
-   * applies these measurements deterministically, so it stays green on a
-   * library build that overlaps rows in a real browser.
-   */
+  /** It is a guard, not a reproduction - jsdom applies these measurements deterministically, so it stays green on a library build that overlaps rows in a real browser. */
   it("keeps row positions contiguous when several rows grow in one frame", async () => {
     const listRef = createRef<LegendListRef | null>();
     render(createTestList(rows(12), listRef));
@@ -290,22 +274,7 @@ describe("LegendList estimate recovery", () => {
     expect(gaps).toEqual(sizes);
   });
 
-  /**
-   * A streaming reply hands the list a structurally-changed array on every
-   * token while the row it is appending to keeps growing. Both halves land in
-   * the same commit, so the offsets of the rows after the growing one have to
-   * be rewritten before the browser paints - the browser has already laid that
-   * row out at its new height, and any row still carrying its previous offset
-   * paints inside the grown row's band.
-   *
-   * The two cases below are the same sequence under the two MVCP
-   * configurations. They pin the channel the transcript selects for a
-   * same-key token and, in the second case, hold the reproduction that made
-   * it necessary - so this stays a regression suite rather than a description
-   * of current behavior. The parked-anchor describe that follows pins the
-   * other arm, and the two together are why the channel is chosen per commit
-   * instead of being turned off outright.
-   */
+  /** They pin the channel the transcript selects for a same-key token and, in the second case, hold the reproduction that made it necessary - so this stays a regression suite rather than a description of current behavior. */
   describe("streaming growth after a data change", () => {
     async function streamTokenThenGrowRow(
       maintainVisibleContentPosition: MaintainVisibleContentPositionConfig<Row>,
@@ -322,9 +291,8 @@ describe("LegendList estimate recovery", () => {
       const measuredSize = list.getState().getAverageItemSizes()
         .assistant.average;
 
-      // One token: same keys, fresh row objects. With no `itemsAreEqual` the
-      // library reads that as a structural data change, exactly as a live
-      // transcript does on every token.
+      // One token: same keys, fresh row objects.
+      // With no `itemsAreEqual` the library reads that as a structural data change, exactly as a live transcript does on every token.
       rerender(
         createTranscriptList(rows(12), listRef, maintainVisibleContentPosition),
       );
@@ -344,10 +312,8 @@ describe("LegendList estimate recovery", () => {
     it("leaves positions a frame stale once the data channel arms the MVCP anchor lock", async () => {
       const list = await streamTokenThenGrowRow({ data: true, size: true });
 
-      // The lock is armed by the data change and holds for 300ms, re-armed by
-      // every further token. While it is held the library stops recalculating
-      // positions inline and defers the pass to an animation frame, so the row
-      // after the grown one still carries its previous offset.
+      // The lock is armed by the data change and holds for 300ms, re-armed by every further token.
+      // While it is held the library stops recalculating positions inline and defers the pass to an animation frame, so the row after the grown one still carries its previous offset.
       const stale = positionGapsAndSizes(list);
       expect(stale.gaps).not.toEqual(stale.sizes);
 
@@ -358,15 +324,7 @@ describe("LegendList estimate recovery", () => {
     });
   });
 
-  /**
-   * The other half of the contract. A transcript is not append-only: rows are
-   * removed when a settled turn's last segment is suppressed, moved when a
-   * setup card reaches its anchor, and dropped when a steer nests into its
-   * assistant turn or a branch edit lands. A reader parked below one of those
-   * has nothing else holding their place - the scroller sets
-   * `overflow-anchor: none`, so the browser's own anchoring is off - which is
-   * what the data channel is for, and why it is selected rather than removed.
-   */
+  /** A transcript is not append-only: rows are removed when a settled turn's last segment is suppressed, moved when a setup card reaches its anchor, and dropped when a steer nests into its assistant turn or a branch edit lands. A reader parked below one of those has nothing else holding their place - the scroller sets `overflow-anchor: none`, so the browser's own anchoring is off - which is what the data channel is for, and why it is selected rather than removed. */
   describe("a row removed above a parked reader", () => {
     const ANCHOR_KEY = "row-22";
 
@@ -383,9 +341,8 @@ describe("LegendList estimate recovery", () => {
       const list = listRef.current;
       if (list === null) throw new Error("LegendList ref did not mount");
 
-      // Park the reader well down the list, detached from both edges. The
-      // scroll promise settles on the virtual clock, so it is fired here and
-      // awaited by the settle below rather than directly.
+      // Park the reader well down the list, detached from both edges.
+      // The scroll promise settles on the virtual clock, so it is fired here and awaited by the settle below rather than directly.
       act(() => {
         void list.scrollToIndex({ animated: false, index: 20 });
       });

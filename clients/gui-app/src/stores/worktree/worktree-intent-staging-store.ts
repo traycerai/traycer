@@ -19,41 +19,8 @@ import {
 } from "@/lib/worktree/removed-worktree-refs";
 
 /**
- * The *current, not-yet-created* worktree intent for a surface - the pending
- * layer that sits above the host binding (`stagedEntry ?? binding`), so a
- * mid-setup "create worktree" shows before it is materialized at send.
- *
- * Persisted to localStorage (bucketed by the signed-in user's email) so a
- * pending pick survives a mid-setup reload before send - otherwise the row would
- * revert to the binding's mode. Cleared on send (the binding then owns it). The
- * transient launcher / fork scratch slots are NOT persisted: they back one-shot
- * dialogs that are closed on reload, so a restored stale pick there would be
- * confusing - they re-seed fresh on reopen. Client-local only; intent carries
- * local paths and never enters the cloud-synced Chat Y.Doc.
- *
- * Every slot carries the HOST it stages for. A staged intent is a list of
- * host-local `workspacePath`s and branch names, and the surfaces that own the
- * non-owner slots switch hosts in place - the landing composer follows the
- * app-wide host its picker rebinds, and the modal / launcher / fork slots are
- * keyed by epic plus a fixed scratch id. Without the host coordinate those
- * slots are shared across machines, so a pick made on host A shows on host B
- * for any path the two happen to have in common, and one host's worktree
- * removal purges the other's staged pick.
- *
- * `null` is the unresolved-host bucket, not a wildcard: it never collides with
- * a real host's slot. It is effectively unreachable for a folder pick (with no
- * host there are no resolved folders to pick), and exists so a surface can key
- * a slot before its host settles.
- *
- * MOST `owner` slots' `ownerId` implies one host for life, so their host
- * segment is redundant for isolation - it is carried anyway so the purge can
- * scope by host without asking each slot's owner which host it belongs to.
- *
- * The fork-chat scratch slot is the exception, and the reason this is worded as
- * "most" rather than "every": the fork dialog lets the user retarget another
- * machine while it is open, so that slot's host is a live choice rather than a
- * property of its owner, and the segment is its ONLY isolation. Treat a new
- * scratch slot as this case unless its owner id is minted per host.
+ * The *current, not-yet-created* worktree intent for a surface - the pending layer that sits above
+ * the host binding (`stagedEntry ??
  */
 export type WorktreeStagingKey =
   | {
@@ -65,10 +32,8 @@ export type WorktreeStagingKey =
       readonly surface: "new-conversation";
       readonly hostId: string | null;
       readonly epicId: string;
-      // `null` for a top-level conversation; the parent conversation id when the
-      // modal is adding a CHILD. Scoping the scratch slot by parent keeps a
-      // stale top-level (or other-parent) staged intent from leaking into a
-      // child, where it would override the parent's inherited worktree.
+      // `null` for a top-level conversation; the parent conversation id when the modal is adding a
+      // CHILD.
       readonly parentId: string | null;
     }
   | {
@@ -85,21 +50,13 @@ export const WORKTREE_INTENT_STAGING_CAP = 100;
 
 const PENDING_TERMINAL_AGENT_OWNER_ID = "__pending_terminal_agent__";
 const PENDING_FORK_CHAT_OWNER_ID = "__pending_fork_chat__";
-// Per-parent child-launcher owner-id prefix. Each chat / terminal-agent row's
-// "+" submenu stages under `<prefix><parentId>` so concurrent rows never share
-// the single `__pending_terminal_agent__` slot (nor the panel-header root
-// create). The serialized owner segment carries the prefix, so the
-// scratch-slot persistence guard matches on it the same way it matches the two
-// fixed scratch ids above.
+// Per-parent child-launcher owner-id prefix.
 const PENDING_CHILD_TERMINAL_AGENT_OWNER_PREFIX =
   "__pending_child_terminal_agent__:";
 const PENDING_FORK_TERMINAL_AGENT_OWNER_ID = "__pending_fork_terminal_agent__";
 
-// The host segment sits right after the surface tag and is percent-encoded, so
-// a `:` inside a host id can never split the key (the rule
-// `lib/persist/keys.ts` applies to its own id segments). An EMPTY segment is
-// the unresolved-host bucket - `encodeURIComponent` of a non-empty id is
-// non-empty, so the two can never be confused.
+// The host segment sits right after the surface tag and is percent-encoded, so a `:` inside a host
+// id can never split the key (the rule `lib/persist/keys.ts` applies to its own id segments).
 function stagingKeyHostSegment(hostId: string | null): string {
   return hostId === null ? "" : encodeURIComponent(hostId);
 }
@@ -115,10 +72,8 @@ export function worktreeStagingKeyString(key: WorktreeStagingKey): string {
   return `owner:${host}:${key.epicId}:${key.ownerKind}:${key.ownerId}`;
 }
 
-// One slot's identity with the host stripped, so every host's copy of the same
-// landing draft / modal / owner slot compares equal. Blanking the segment
-// rather than dropping it keeps the segment COUNT stable, so this can never
-// conflate two different surfaces' keys.
+// One slot's identity with the host stripped, so every host's copy of the same landing draft /
+// modal / owner slot compares equal.
 function hostAgnosticStagingId(serializedKey: string): string {
   const parts = serializedKey.split(":");
   if (parts.length < 2) return serializedKey;
@@ -134,21 +89,13 @@ function withStagingHostOf(template: string, serializedKey: string): string {
   return parts.join(":");
 }
 
-// Compared in ENCODED form so no serialized key is ever decoded - a
-// hand-edited payload could carry a malformed escape, and `decodeURIComponent`
-// throws on one.
+// Compared in ENCODED form so no serialized key is ever decoded - a hand-edited payload could
+// carry a malformed escape, and `decodeURIComponent` throws on one.
 function serializedStagingKeyHostSegment(serializedKey: string): string {
   return serializedKey.split(":")[1] ?? "";
 }
 
-/**
- * Scratch slot for the in-epic new conversation modal. It is scoped to an epic
- * AND the parent being added to (`null` for a top-level create), and paired with
- * `useNewConversationModalStore`; it persists while the modal is being
- * configured in-session, then clears on send. Scoping by parent keeps a stale
- * top-level / other-parent staged intent from overriding a child's inherited
- * worktree when the same modal reopens in a different context.
- */
+/** Scratch slot for the in-epic new conversation modal. */
 export function newConversationModalStagingKey(
   hostId: string | null,
   epicId: string,
@@ -157,13 +104,7 @@ export function newConversationModalStagingKey(
   return { surface: "new-conversation", hostId, epicId, parentId };
 }
 
-/**
- * Scratch slot for the pre-create terminal-agent launcher dropdown. The
- * launcher has no owner id yet (the agent does not exist until launch), so the
- * key is scoped by the epic it launches into - opening the launcher in epic A
- * then epic B must not bleed A's seeded picks into B. Only one launcher is open
- * at a time per epic, so the epic id alone disambiguates.
- */
+/** Scratch slot for the pre-create terminal-agent launcher dropdown. */
 export function pendingTerminalAgentStagingKey(
   hostId: string | null,
   epicId: string,
@@ -178,13 +119,8 @@ export function pendingTerminalAgentStagingKey(
 }
 
 /**
- * Scratch slot for a chat / terminal-agent ROW's "+" terminal-agent submenu,
- * scoped to the spawning PARENT (`parentId`) on top of the epic. A per-parent
- * key (distinct owner id from the shared `__pending_terminal_agent__` launcher
- * and the fork slot) keeps two rows' open submenus from clobbering each other's
- * staged folder picks, and is seeded from the parent's `workspaceFolders` so the
- * picker defaults to the parent's workspace. Transient like the launcher slot:
- * never persisted (see `isPersistableStagingKey`).
+ * Scratch slot for a chat / terminal-agent ROW's "+" terminal-agent submenu, scoped to the
+ * spawning PARENT (`parentId`) on top of the epic.
  */
 export function pendingChildTerminalAgentStagingKey(
   hostId: string | null,
@@ -201,16 +137,8 @@ export function pendingChildTerminalAgentStagingKey(
 }
 
 /**
- * Scratch slot for the fork-chat dialog, which configures a worktree for a chat
- * that does not exist yet (its id is minted on submit). Scoped by the epic the
- * fork lands in for the same cross-epic isolation reason as the launcher above.
- *
- * This is the one `owner` slot whose host segment is NOT redundant. The type's
- * own doc notes that an `ownerId` usually implies one host for life — true of
- * every other owner slot, and false here: the fork dialog lets the user retarget
- * another machine while it is open, so this slot's host is a live choice rather
- * than a property of its owner. The host coordinate is what keeps folders staged
- * against one machine out of a submit against another.
+ * Scratch slot for the fork-chat dialog, which configures a worktree for a chat that does not
+ * exist yet (its id is minted on submit).
  */
 export function pendingForkChatStagingKey(
   hostId: string | null,
@@ -226,19 +154,8 @@ export function pendingForkChatStagingKey(
 }
 
 /**
- * Every fork-chat scratch slot in this epic, whatever host each was staged
- * against — what a caller needs to start (or finish) a fork dialog clean
- * without knowing which hosts the last one visited.
- *
- * Because the dialog can retarget, "clear the fork scratch state" is not a
- * single key a caller can name: an opener that cleared only its own tab's host
- * would leave a previous dialog's other-machine folders staged for the next
- * open.
- *
- * `extraSerializedKeyIds` folds in the key space of a SIBLING store keyed by the
- * same `WorktreeStagingKey` (the seeded-workspace snapshot store), so a slot
- * holding a snapshot but no staged intent is still found. Key serialization
- * stays here rather than leaking to those callers.
+ * Every fork-chat scratch slot in this epic, whatever host each was staged against - what a caller
+ * needs to start (or finish) a fork dialog clean without knowing which hosts the last one visited.
  */
 export function forkChatStagingKeysForEpic(
   epicId: string,
@@ -252,9 +169,8 @@ export function forkChatStagingKeysForEpic(
   ]);
   const hostIds = new Set<string | null>();
   for (const serializedKey of serializedKeys) {
-    // Parsed against `owner:<host>:<epic>:<ownerKind>:<ownerId>` - the same
-    // segment layout the persistability filter and the purge count from, so a
-    // new segment moves all three together.
+    // Parsed against `owner:<host>:<epic>:<ownerKind>:<ownerId>` - the same segment layout the
+    // persistability filter and the purge count from, so a new segment moves all three together.
     const parts = serializedKey.split(":");
     if (parts.length !== 5) continue;
     if (parts[0] !== "owner" || parts[2] !== epicId) continue;
@@ -265,13 +181,7 @@ export function forkChatStagingKeysForEpic(
       hostIds.add(null);
       continue;
     }
-    // The only decode in this file. Everywhere else compares in ENCODED form to
-    // stay safe against a malformed escape in a hand-edited payload; here the
-    // hostId has to come back out to rebuild a typed key. These slots are
-    // transient and never persisted, so the only writer is
-    // `worktreeStagingKeyString` itself and the round trip is lossless - but a
-    // malformed segment is skipped rather than thrown, since a caller clearing
-    // scratch state must not be taken down by one unparseable key.
+    // The only decode in this file.
     try {
       hostIds.add(decodeURIComponent(hostSegment));
     } catch {
@@ -304,44 +214,15 @@ interface WorktreeIntentStagingStore {
     Record<string, readonly string[] | undefined>
   >;
   /**
-   * Monotonic local edit sequence for each staging slot. It is deliberately
-   * not persisted: it only distinguishes edits made while an action is in
-   * flight in this renderer session.
+   * Monotonic local edit sequence for each staging slot. It is deliberately not persisted: it only
+   * distinguishes edits made while an action is in flight in this renderer session.
    */
   readonly revisionByKey: Readonly<Record<string, number | undefined>>;
-  /**
-   * Whether this slot is empty *because a dispatch consumed it*, with nothing
-   * touching it since.
-   *
-   * A send takes the staged pick at dispatch and may need to hand it back
-   * (rejected ack, or a restored prompt after a reconnect). "Can I hand it
-   * back?" is not answerable from the revision counter: a SECOND send staging
-   * and consuming its own pick advances the counter twice and leaves the slot
-   * empty, which is indistinguishable from the user deliberately clearing it -
-   * yet the first case has nothing to protect and the second is a choice that
-   * must be respected. Every user mutation below clears this flag; only
-   * {@link WorktreeIntentStagingState.consumeForDispatch} sets it.
-   */
+  /** Whether this slot is empty *because a dispatch consumed it*, with nothing touching it since. */
   readonly consumedForDispatchByKey: Readonly<
     Record<string, DispatchConsumptionMark | undefined>
   >;
-  /**
-   * Worktree refs swept while a consumption was outstanding, accumulated per
-   * slot.
-   *
-   * The sweep cannot test the right entries by itself: a hand-back stages the
-   * ACTION'S OWN pick, and several dispatches can have taken different picks
-   * from this slot over time, so the mark's entries describe only the latest.
-   * Testing those would clear a mark whose survivor is irrelevant, or spare
-   * one whose own worktree is gone. So the sweep records WHAT was removed and
-   * each hand-back tests its own intent against it - the restore is the moment
-   * the correct entries are in hand, the same move the mark itself uses one
-   * level down.
-   *
-   * LIFETIME: dropped exactly when the mark is, by every mutation that
-   * resolves the slot. No outstanding consumption means nothing left to refuse,
-   * so a key cannot accrete sweep history.
-   */
+  /** Worktree refs swept while a consumption was outstanding, accumulated per slot. */
   readonly sweptRefsByKey: Readonly<
     Record<string, RemovedWorktreeRefs | undefined>
   >;
@@ -351,39 +232,8 @@ interface WorktreeIntentStagingStore {
     clientActionId: string,
   ) => void;
   /**
-   * Put this slot back exactly as a dispatch that never left the client found
-   * it: its pick, and everything its consume DISPLACED.
-   *
-   * {@link WorktreeIntentStagingState.consumeForDispatch} is unconditional - a
-   * dispatch is the slot's current state whether or not it took a pick - so
-   * its rollback has to be unconditional too. Restoring only the PICK leaves
-   * the intent-free case marked for an action that never became pending, and
-   * nothing can ever resolve such a mark: no ack, sweep or restoration names
-   * it. It stands until some unrelated user mutation, refusing every
-   * owner-matched hand-back in the meantime against a phantom owner.
-   *
-   * `mark` is what the consume displaced, NOT a clear. A send that never
-   * reached the host supersedes nothing, so an earlier dispatch that really
-   * did take this slot is still its owner. Dropping the mark instead would be
-   * the opposite lie from the phantom - it reports the slot as "empty because
-   * the user chose to send without a pick", which both strands that
-   * dispatch's own hand-back and sends a restored prompt back UNBOUND, since
-   * {@link stagedWorktreeIntentAwaitsDispatchOutcome} is the gate the
-   * prompt-restore path checks.
-   *
-   * The SUSPENDED PATHS ride along for the same reason, and their loss fails
-   * OPEN rather than merely losing a pick. `consumeForDispatch` drops them
-   * too, but `stagedWorktreeIntentIsSuspended` - the gate that refuses to
-   * dispatch a staged create against a workspace whose metadata never
-   * resolved - only bites when the suspended set INTERSECTS the staged
-   * intent. So a slot routinely carries suspended paths the gate ignores (the
-   * workspace selector records every unresolved folder, staged or not), the
-   * refused dispatch takes them with it, and the retry of the very draft left
-   * in the composer sails past a gate that has nothing left to test.
-   *
-   * {@link WorktreeIntentStagingState.setIntent} cannot serve here: it drops
-   * the mark only on its non-empty branch, and a `null` intent takes the
-   * delete-and-bump path that leaves the mark exactly where it was.
+   * Put this slot back exactly as a dispatch that never left the client found it: its pick, and
+   * everything its consume DISPLACED.
    */
   readonly rollBackDispatch: (
     key: WorktreeStagingKey,
@@ -407,34 +257,8 @@ interface WorktreeIntentStagingStore {
     key: WorktreeStagingKey,
     intent: WorktreeIntent | null,
   ) => void;
-  /**
-   * Stage a pick handed back by a DEAD dispatch, rather than chosen by the
-   * user.
-   *
-   * The difference is what it may clear. {@link setIntent} drops the dispatch
-   * mark and the swept-refs record with the write, because a fresh user pick
-   * supersedes whatever a dispatch left behind - "one lifetime, one drop".
-   * A hand-back supersedes nothing: the gate it passes
-   * ({@link stagedWorktreeIntentAwaitsDispatchOutcome}) is deliberately
-   * ownership-blind, so the mark it would clear routinely belongs to a
-   * DIFFERENT, still-pending dispatch. Clearing that dispatch's swept-refs
-   * destroys the evidence its own rejection needs, and the rejection then
-   * names a deleted worktree as re-pickable or drops the warning entirely.
-   *
-   * So this clears the mark and swept refs only when they are `clientActionId`'s
-   * own, and otherwise leaves the other dispatch's records standing.
-   */
-  /**
-   * Take back a pick this dispatch's hand-back staged, when its prompt could
-   * not reach the composer after all.
-   *
-   * Scoped by REVISION rather than by a blanket clear: every mutation of this
-   * slot bumps `revisionByKey`, so an expectation that still matches proves
-   * nothing has touched the slot since the hand-back wrote it - not the user,
-   * not a newer dispatch's consume, not a purge. Anything else and this is a
-   * no-op, which is the fail-closed direction. A blind clear here would
-   * destroy a pick that another dispatch legitimately owns.
-   */
+  /** Stage a pick handed back by a dead dispatch rather than chosen by the user; the difference is what it may clear. */
+  /** Take back a pick this dispatch's hand-back staged, when its prompt could not reach the composer. */
   readonly releaseIntentForDispatch: (
     key: WorktreeStagingKey,
     expectedRevision: number,
@@ -450,32 +274,16 @@ interface WorktreeIntentStagingStore {
     workspacePath: string,
   ) => void;
   /**
-   * Move `fromKey`'s staged intent (and its suspended-paths metadata) onto
-   * `toKey`, for a slot whose identity changes out from under it - e.g. the
-   * landing composer's `draftId` flipping `null` -> a minted uuid mid-setup,
-   * which changes `{surface:"landing", draftId}`'s serialized key. Without
-   * this the destination key reads as freshly empty until the seed effect
-   * re-derives a default for it, and anything reading `resolved.kind` off
-   * that gap (the Environment dialog's `key={seedKey}`) sees a transient
-   * "nothing staged" and remounts. No-op when `fromKey` has nothing staged,
-   * or when `toKey` already has its own staged intent (never clobber a real
-   * pick the destination slot already made).
-   *
-   * Moves EVERY host's copy of the slot, each onto its own host's destination.
-   * What changes here is the draft id, not the host: a landing page the user
-   * staged on host A and then switched away from still owns A's slot, and
-   * moving only the currently-active host's copy would both lose that pick and
-   * strand it under the null-draft key - where the next brand-new landing page
-   * on A would inherit it.
+   * Move `fromKey`'s staged intent (and its suspended-paths metadata) onto `toKey`, for a slot whose
+   * identity changes out from under it - e.g.
    */
   readonly migrateKeyForAllHosts: (
     fromKey: WorktreeStagingKey,
     toKey: WorktreeStagingKey,
   ) => void;
   /**
-   * Set the `scripts` override on the staged `worktree` entry for
-   * `workspacePath`, preserving its branch. No-op when the folder has no staged
-   * `worktree` entry (the Environment override only rides a worktree intent).
+   * Set the `scripts` override on the staged `worktree` entry for `workspacePath`, preserving its
+   * branch.
    */
   readonly stageScripts: (
     key: WorktreeStagingKey,
@@ -483,12 +291,8 @@ interface WorktreeIntentStagingStore {
     scripts: WorktreeEntryScripts | null,
   ) => void;
   /**
-   * Replaces the `name` of the staged `worktree` entry's `type: "new"`
-   * branch selection for `workspacePath`, preserving everything else.
-   * No-op when the folder has no staged `worktree` entry with a `"new"`
-   * branch. Used by the Environment dialog's repository-defaults section to
-   * offer regenerating one picker's proposed branch name after a repo
-   * prefix save.
+   * Replaces the `name` of the staged `worktree` entry's `type: "new"` branch selection for
+   * `workspacePath`, preserving everything else.
    */
   readonly stageBranchName: (
     key: WorktreeStagingKey,
@@ -502,29 +306,13 @@ interface WorktreeIntentStagingStore {
   ) => void;
   readonly clear: (key: WorktreeStagingKey) => void;
   /**
-   * `clear` for every host's copy of one slot identity - what CONSUMING a slot
-   * means on a surface whose host can change under it (the landing composer,
-   * the new-conversation modal). A send/create consumes the whole session, not
-   * just the host that happened to be selected at submit: leaving the other
-   * hosts' copies alive lets a reopened surface apply a stale pick from an
-   * already-consumed session over its fresh seed. Surfaces pinned to one host
-   * for life, and scratch slots that already clear per key on a host switch
-   * (the terminal-agent launcher), use plain `clear`.
+   * `clear` for every host's copy of one slot identity - what CONSUMING a slot means on a surface
+   * whose host can change under it (the landing composer, the new-conversation modal).
    */
   readonly clearForAllHosts: (key: WorktreeStagingKey) => void;
   /**
-   * Drops staged entries that reference just-removed worktrees across every
-   * staging slot BELONGING TO `hostId`. Staged picks are deliberately never
-   * re-validated by the seeding tiers ("a folder the user already touched is
-   * never overwritten"), so without this a pick staged before a worktree was
-   * swept keeps offering the deleted worktree verbatim. A slot left empty is
-   * cleared like `setIntent(null)`.
-   *
-   * A removal happens on one machine. Another host's slot can name the same
-   * path or branch and still materialize there, so it is left alone; the
-   * unresolved-host bucket cannot be shown to belong elsewhere and is purged
-   * with the swept host, matching `worktree-intent-memory-store`'s handling of
-   * its host-unattributed legacy tier.
+   * Drops staged entries that reference just-removed worktrees across every staging slot BELONGING
+   * TO `hostId`.
    */
   readonly purgeRemovedWorktreeIntents: (
     hostId: string,
@@ -533,67 +321,13 @@ interface WorktreeIntentStagingStore {
   readonly resetForTests: () => void;
 }
 
-/**
- * Why a consumed slot is in the state it is in.
- *
- * `"awaiting"` - a dispatch took the pick and may hand it back.
- * `"purged"` - a worktree sweep ran while that dispatch was in flight, so the
- * pick may name a worktree that no longer exists. The hand-back refuses, and
- * unlike a user's own newer choice this one is worth SAYING: the prompt comes
- * back unbound through no decision of theirs.
- */
-/**
- * The one outstanding dispatch for a slot: which action took it.
- *
- * THE STATE MACHINE, in full, because three defects came from parts of it
- * living in different heads:
- *
- *  - A dispatch RECORDS a mark, whether or not it took a pick. An intent-free
- *    send is still this slot's current state, and skipping it left an earlier
- *    action's mark standing so that action could hand back a choice the user
- *    had already superseded. (Same rule as a restored prompt's terminal claim:
- *    having nothing to give back is a state, not an absence of one.)
- *  - Any USER mutation drops the mark - and the swept refs with it, one
- *    lifetime. A new pick, a clear, an unstage: all of them make whatever a
- *    dead dispatch was holding irrelevant.
- *  - A REJECTION may hand its pick back only if the mark is still ITS OWN: the
- *    pick has an owner. A RESTORATION may not match on owner - it hands back a
- *    prompt, and the action whose prompt returns is not necessarily the one
- *    that consumed last.
- *  - Whether the pick is still VALID is not the mark's business: sweeps record
- *    what they removed (`sweptRefsByKey`) and each hand-back tests its own
- *    intent, because the mark describes only the latest consumption.
- */
+/** Why a consumed slot is in the state it is in. `"awaiting"` means a dispatch took the pick and may hand it back. */
+/** The one outstanding dispatch for a slot: which action took it. */
 export interface DispatchConsumptionMark {
   readonly clientActionId: string;
 }
 
-/**
- * Record WHAT a sweep removed, per consumed slot, for the hand-backs that have
- * not happened yet.
- *
- * Slots CONSUMED by an in-flight dispatch are invisible to the intent loop -
- * they hold no intent to filter, because the dispatch took it. And this store
- * cannot do the intersection test itself: the pick lives on the pending
- * action, and several dispatches may have taken DIFFERENT picks from one slot
- * over time, so the mark describes only the latest. What it can record is that
- * a sweep happened while a dispatch was out. So every host-matching consumed
- * slot accumulates the removed refs, and each hand-back tests its OWN intent
- * against them later ({@link partitionSweptIntent}) - the moment
- * the correct entries are actually in hand.
- *
- * No filtering here, and no "purged" state on the mark: an earlier design
- * decided at PURGE time and either refused a hand-back whose worktree
- * survived, or spared one whose worktree was gone. Deciding at hand-back time
- * is what makes the refusal - and the statement that now accompanies it -
- * true of the intent it is about.
- *
- * A slot whose host segment is EMPTY is the unresolved-host bucket, which no
- * host can claim and any host's sweep may concern, so it accumulates from
- * every sweep rather than being skipped.
- *
- * Extracted so the purge updater stays under its complexity budget.
- */
+/** Record WHAT a sweep removed, per consumed slot, for the hand-backs that have not happened yet. */
 function accumulateSweptRefs(
   swept: Readonly<Record<string, RemovedWorktreeRefs | undefined>>,
   marks: Readonly<Record<string, DispatchConsumptionMark | undefined>>,
@@ -619,25 +353,7 @@ function accumulateSweptRefs(
   return changed ? next : swept;
 }
 
-/**
- * Split a hand-back into what a mid-dispatch sweep took and what it left.
- *
- * `WorktreeIntent` permits one entry PER WORKSPACE FOLDER, so a multi-repo
- * staging is several independent bindings that happen to travel together.
- * Answering "was this swept" for the whole intent - an any-match boolean, as
- * this once was - made one removed worktree forfeit every surviving folder's
- * binding, and then told the user "its staged worktree no longer exists" as
- * though there had been one. Every caller NAMES folders, so no caller can use
- * the coarser answer; the boolean is gone rather than left as a second way to
- * ask. The ordinary purge loop has always filtered
- * per entry; this is the same granularity for the hand-back.
- *
- * Both halves are returned because the founding invariant is now per ENTRY:
- * each binding is either restored or stated, and a partial sweep produces one
- * of each from a single intent. `null` on either side means that half is
- * empty - a `WorktreeIntent` with no entries is not a thing the rest of the
- * system expects.
- */
+/** Split a hand-back into what a mid-dispatch sweep took and what it left. */
 export interface SweptIntentPartition {
   readonly survivors: WorktreeIntent | null;
   readonly swept: WorktreeIntent | null;
@@ -677,15 +393,8 @@ function withoutDispatchMark<T>(
 }
 
 /**
- * Whether the slot is empty because THIS action's dispatch took it and nothing
- * has touched it since - the only state in which it may hand its pick back.
- *
- * It deliberately does NOT record which action consumed the slot. The last
- * consumer is not the one owed a hand-back: two sends can each consume a pick
- * and die, and the one whose PROMPT comes back to the composer is the one
- * whose binding must come with it, whichever consumed last. Precedence between
- * several dead claimants is decided by the caller (see the snapshot handler),
- * not by ownership of the mark.
+ * Whether the slot is empty because THIS action's dispatch took it and nothing has touched it
+ * since - the only state in which it may hand its pick back.
  */
 export function stagedWorktreeIntentAwaitsDispatchOutcome(
   key: WorktreeStagingKey,
@@ -698,30 +407,16 @@ export function stagedWorktreeIntentAwaitsDispatchOutcome(
   );
 }
 
-/**
- * Whether a hand-back is being refused because a sweep removed worktrees while
- * the dispatch was in flight, rather than because the user made a newer
- * choice. Only the former is worth stating - telling someone their worktree
- * was deleted when they simply re-picked would be a lie.
- */
-/**
- * The slot state a consume DISPLACES rather than reads - everything
- * {@link WorktreeIntentStagingState.consumeForDispatch} drops that the pick
- * itself does not carry.
- *
- * Captured as one value so the rollback cannot restore a proper subset of it:
- * the first version of this restored the mark alone and left the suspended
- * paths behind, which fails the dispatch gate open.
- */
+/** True when a hand-back is refused because a sweep removed worktrees in flight, not because the user made a newer choice. */
+/** Slot state a consume displaces rather than reads - everything {@link WorktreeIntentStagingState.consumeForDispatch} drops that the pick itself does not carry. */
 export interface DisplacedDispatchState {
   readonly mark: DispatchConsumptionMark | undefined;
   readonly suspendedWorkspacePaths: readonly string[] | undefined;
 }
 
 /**
- * What a dispatch is about to displace, captured so a dispatch that never
- * leaves the client can put it back. See
- * {@link WorktreeIntentStagingState.rollBackDispatch}.
+ * What a dispatch is about to displace, captured so a dispatch that never leaves the client can
+ * put it back. See {@link WorktreeIntentStagingState.rollBackDispatch}.
  */
 export function stagedDispatchDisplacement(
   key: WorktreeStagingKey,
@@ -822,9 +517,8 @@ export const useWorktreeIntentStagingStore =
         restoreIntentForDispatch: (key, intent, clientActionId) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
-            // Only this dispatch's own records go with the write. Another
-            // dispatch's mark - and, critically, its accumulated swept refs -
-            // outlive a hand-back that was never about it.
+            // Only this dispatch's own records go with the write. Another dispatch's mark - and, critically,
+            // its accumulated swept refs - outlive a hand-back that was never about it.
             const ownsMark =
               state.consumedForDispatchByKey[id]?.clientActionId ===
               clientActionId;
@@ -1027,9 +721,7 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: next,
               suspendedWorkspacePathsByKey,
-              // An explicit clear after a send consumes the slot is still a
-              // newer user choice. Record it so a rejected send cannot put the
-              // old selection back.
+              // An explicit clear after a send consumes the slot is still a newer user choice.
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
               consumedForDispatchByKey: withoutDispatchMark(
                 state.consumedForDispatchByKey,
@@ -1091,10 +783,8 @@ export const useWorktreeIntentStagingStore =
               intentByKey,
               consumedForDispatchByKey,
               suspendedWorkspacePathsByKey,
-              // The dispatch is undone, but the counter is monotonic by
-              // construction and nothing compares it - the mark is the only
-              // discriminator. Bumping keeps that invariant rather than
-              // pretending the attempt never touched the slot.
+              // The dispatch is undone, but the counter is monotonic by construction and nothing compares it -
+              // the mark is the only discriminator.
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
@@ -1147,10 +837,8 @@ export const useWorktreeIntentStagingStore =
                 delete suspendedWorkspacePathsByKey[id];
               } else {
                 intentByKey[id] = { entries };
-                // Drop suspended metadata for the entries that just went away,
-                // exactly as `unstageEntry` does. Left behind, a stale
-                // fail-closed path would block a later restage of the same
-                // workspace.
+                // Drop suspended metadata for the entries that just went away, exactly as `unstageEntry` does.
+                // Left behind, a stale fail-closed path would block a later restage of the same workspace.
                 const suspended = suspendedWorkspacePathsByKey[id];
                 if (suspended !== undefined) {
                   const surviving = new Set(
@@ -1170,16 +858,8 @@ export const useWorktreeIntentStagingStore =
               // action can't restore the just-purged selection.
               revisionByKey = incrementStagingRevision(revisionByKey, id);
             }
-            // Slots CONSUMED by an in-flight dispatch are invisible to the
-            // loop above - they hold no intent to filter, because the dispatch
-            // took it. Their pick lives on the pending action, so this store
-            // cannot tell whether it names a removed worktree; what it CAN
-            // tell is that a sweep happened while that dispatch was out. So it
-            // records WHAT was removed against each such slot, and the
-            // hand-back tests its own intent against that record - refusing
-            // only when the pick it is actually holding was swept, and giving
-            // the refusal something true to STATE instead of the prompt coming
-            // back silently unbound.
+            // Slots CONSUMED by an in-flight dispatch are invisible to the loop above - they hold no intent to
+            // filter, because the dispatch took it.
             const sweptRefsByKey = accumulateSweptRefs(
               state.sweptRefsByKey,
               state.consumedForDispatchByKey,
@@ -1212,13 +892,7 @@ export const useWorktreeIntentStagingStore =
         partialize: (state) => ({
           intentByKey: persistableStagingEntries(state.intentByKey),
         }),
-        // v1 -> v2 added the host segment to every serialized key. A v1 key
-        // cannot be attributed to a host (that is the defect), and keeping one
-        // would leave a slot no live key can ever address while the purge read
-        // its draft/epic id as a host. Dropped instead: these are pending,
-        // not-yet-sent picks, so the cost is one mid-setup selection reverting
-        // to the binding's mode on the upgrade, and the picker re-seeds a
-        // default immediately.
+        // v1 -> v2 added the host segment to every serialized key.
         migrate: () => ({ intentByKey: {} }),
       },
     ),
@@ -1236,15 +910,8 @@ export function readStagedWorktreeIntent(
 }
 
 /**
- * Whether ANY host's copy of this slot holds a staged intent - the read that
- * matches `clearForAllHosts`'s reach.
- *
- * A caller that clears every bucket must ask about every bucket: the same slot
- * can hold an intent staged while the surface was pinned to another host, and
- * a check scoped to the currently resolved bucket would report "nothing
- * staged" while the clear deletes it. Pair the two by breadth - a single-bucket
- * `clear` goes with {@link readStagedWorktreeIntent}, and this goes with
- * `clearForAllHosts`.
+ * Whether ANY host's copy of this slot holds a staged intent - the read that matches
+ * `clearForAllHosts`'s reach.
  */
 export function anyHostHasStagedWorktreeIntent(
   key: WorktreeStagingKey,
@@ -1286,10 +953,8 @@ export function stagedWorktreeIntentIsSuspended(
   );
 }
 
-// Single source of truth for "this owner id backs a one-shot scratch dialog and
-// must never persist": the two fixed launcher/fork ids (exact) plus any
-// per-parent child slot (prefix). Checked against the structured owner id, not
-// by sniffing the full serialized key.
+// Single source of truth for "this owner id backs a one-shot scratch dialog and must never
+// persist": the two fixed launcher/fork ids (exact) plus any per-parent child slot (prefix).
 function isTransientStagingOwnerId(ownerId: string): boolean {
   return (
     ownerId === PENDING_TERMINAL_AGENT_OWNER_ID ||
@@ -1302,10 +967,6 @@ function isTransientStagingOwnerId(ownerId: string): boolean {
 function isPersistableStagingKey(serializedKey: string): boolean {
   if (serializedKey.startsWith("new-conversation:")) return false;
   // Only `owner:` keys carry an owner id (`landing:` keys always persist).
-  // `worktreeStagingKeyString` serializes them as
-  // `owner:<host>:<epicId>:<ownerKind>:<ownerId>`; the host segment is
-  // percent-encoded and epicId (uuid) and ownerKind never contain ':', so the
-  // owner id is everything after the fourth segment.
   const parts = serializedKey.split(":");
   if (parts[0] !== "owner") return true;
   return !isTransientStagingOwnerId(parts.slice(4).join(":"));

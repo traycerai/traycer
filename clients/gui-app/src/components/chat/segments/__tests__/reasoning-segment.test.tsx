@@ -13,10 +13,7 @@ import { SegmentRow } from "@/components/chat/segments/segment-row";
 import type { ReactNode } from "react";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
-/**
- * Every link surface below reaches the external-link bridge mutation, which
- * needs a `QueryClientProvider` above it.
- */
+/** Every link surface below reaches the external-link bridge mutation, which needs a `QueryClientProvider` above it. */
 function render(ui: ReactNode): RenderResult {
   return renderUi(ui, { wrapper: WithTestQueryClient });
 }
@@ -271,18 +268,13 @@ describe("<ReasoningSegment />", () => {
         durationMs={3000}
         bodyBoundedByParent={false}
         headerless
-        // FALSE, and load-bearing. With `initiallyExpanded` the body shows
-        // through `expanded` alone and the `headerless` term of `bodyShown` is
-        // never exercised - the assertion below would pass with the coupling
-        // deleted. Completed, unbounded and unopened is the one combination
-        // where `headerless` is the only thing rendering anything at all.
+        // With `initiallyExpanded` the body shows through `expanded` alone and the `headerless` term of `bodyShown` is never exercised - the assertion below would pass with the coupling deleted.
         initiallyExpanded={false}
       />,
     );
 
-    // The group header above already says "Thought for 3s"; repeating it here
-    // is the duplicate this mode exists to remove. No promote and no tail to
-    // reveal either, so there is no hidden control to keep.
+    // The group header above already says "Thought for 3s"; repeating it here is the duplicate this mode exists to remove.
+    // No promote and no tail to reveal either, so there is no hidden control to keep.
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByText("Thought for 3s")).toBeNull();
     expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
@@ -307,11 +299,8 @@ describe("<ReasoningSegment />", () => {
   });
 
   it("collapses an unopened headerless trace once it gains a header", () => {
-    // A headerless block shows its trace because there is nowhere else to put
-    // it, NOT because the reader asked. When a second reasoning block joins the
-    // run and this one gains a header, it must collapse like every other
-    // completed block - carrying the body across left the first thought of
-    // every run permanently expanded.
+    // A headerless block shows its trace because there is nowhere else to put it, NOT because the reader asked.
+    // When a second reasoning block joins the run and this one gains a header, it must collapse like every other completed block - carrying the body across left the first thought of every run permanently expanded.
     const { rerender } = render(
       <ReasoningSegment
         findUnitId={null}
@@ -378,11 +367,8 @@ describe("<ReasoningSegment />", () => {
     expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
   });
 
-  // jsdom has no layout, so this is the structural half of the alignment: a
-  // thinking row and a tool row must agree on where the caret goes and on their
-  // horizontal padding, or their icons start in different columns and the group
-  // reads as two mis-indented lists. The rendered pixels are only checkable in
-  // a browser.
+  // jsdom has no layout, so this is the structural half of the alignment: a thinking row and a tool row must agree on where the caret goes and on their horizontal padding, or their icons start in different columns and the group reads as two mis-indented lists.
+  // The rendered pixels are only checkable in a browser.
   it("carries the caret trailing and hover-gated, exactly like a tool row", () => {
     render(
       <>
@@ -418,9 +404,7 @@ describe("<ReasoningSegment />", () => {
     ];
     for (const row of rows) {
       expect(row.className).toContain("px-1");
-      // Queried by marker, not by `lastElementChild`: the contract under test
-      // is "the caret trails and is hover-gated", and walking the child list
-      // fails the moment either row grows a wrapper the caret still trails.
+      // Queried by marker, not by `lastElementChild`: the contract under test is "the caret trails and is hover-gated", and walking the child list fails the moment either row grows a wrapper the caret still trails.
       const caret = row.querySelector("[data-row-caret]");
       expect(caret).not.toBeNull();
       expect(caret?.getAttribute("aria-hidden")).toBe("true");
@@ -435,12 +419,8 @@ describe("<ReasoningSegment />", () => {
     }
   });
 
-  // A headerless streaming block inside an OPEN group has no promote, but it
-  // does have a bounded tail hiding the rest of the trace - so it keeps a
-  // hidden control. Expanding is what removes the tail, so gating the control
-  // on the tail alone made it destroy itself on activation: the button unmounted
-  // under the caret, focus fell to the body, the `aria-expanded="true"` it had
-  // just earned was never announced, and there was no way back to the preview.
+  // A headerless streaming block inside an OPEN group has no promote, but it does have a bounded tail hiding the rest of the trace - so it keeps a hidden control.
+  // Expanding is what removes the tail, so gating the control on the tail alone made it destroy itself on activation: the button unmounted under the caret, focus fell to the body, the `aria-expanded="true"` it had just earned was never announced, and there was no way back to the preview.
   it("keeps its hidden control alive through its own disclosure", () => {
     render(
       <ReasoningSegment
@@ -475,11 +455,8 @@ describe("<ReasoningSegment />", () => {
     expect(screen.getByTestId("reasoning-tail")).toBeTruthy();
   });
 
-  // Surviving its own disclosure is not the same as being worth pressing. Once
-  // the block completes there is no tail to collapse back to and a headerless
-  // body shows in full either way, so a retained control announced
-  // `aria-expanded="true"`, changed no pixels when pressed, and then deleted
-  // itself - dropping the caret to the top of the transcript on the way out.
+  // Surviving its own disclosure is not the same as being worth pressing.
+  // Once the block completes there is no tail to collapse back to and a headerless body shows in full either way, so a retained control announced `aria-expanded="true"`, changed no pixels when pressed, and then deleted itself - dropping the caret to the top of the transcript on the way out.
   it("drops its hidden control once completion makes it meaningless, handing focus to the trace", () => {
     const props = {
       findUnitId: null,
@@ -513,15 +490,7 @@ describe("<ReasoningSegment />", () => {
     ).toBe(true);
   });
 
-  // The handoff must fire ONLY when the control actually goes away. A HEADED
-  // block keeps its button through the same completion transition, so moving
-  // focus out of it takes away the reader's Space/Enter route and relocates
-  // them for no visible reason - the button is still sitting right there.
-  //
-  // Two guards stop this and either one is sufficient: `headerless &&` on the
-  // effect, and the `activeElement === body` check inside it. So a mutation of
-  // just one SURVIVES this test - that is redundancy, not a gap. Removing both
-  // fails it. Do not read a surviving single-guard mutant as untested.
+  // The handoff must fire ONLY when the control actually goes away. Do not read a surviving single-guard mutant as untested.
   it("leaves focus alone when the header survives completion", () => {
     const props = {
       findUnitId: null,
@@ -546,12 +515,7 @@ describe("<ReasoningSegment />", () => {
     expect(document.activeElement).toBe(header);
   });
 
-  // The reader moved the caret somewhere deliberately between the commit and
-  // the effect. An effect that fires regardless would yank them back.
-  //
-  // Same redundancy as above: the blur handler clearing the latch (on a blur
-  // that names where focus went) and the `activeElement === body` check each
-  // stop this alone, so only removing both fails this test.
+  // An effect that fires regardless would yank them back.
   it("does not reclaim focus the reader has moved elsewhere", () => {
     const props = {
       findUnitId: null,
@@ -569,9 +533,8 @@ describe("<ReasoningSegment />", () => {
       const control = screen.getByRole("button", { name: /Thinking/ });
       fireEvent.click(control);
       control.focus();
-      // Moving on before the stream ends must clear the latch. `relatedTarget`
-      // is the element receiving focus - that is what makes this a reader who
-      // left, as opposed to a control that was taken away.
+      // Moving on before the stream ends must clear the latch.
+      // `relatedTarget` is the element receiving focus - that is what makes this a reader who left, as opposed to a control that was taken away.
       fireEvent.blur(control, { relatedTarget: elsewhere });
       elsewhere.focus();
 
@@ -585,18 +548,7 @@ describe("<ReasoningSegment />", () => {
     }
   });
 
-  // The other half of the ambiguous blur. A click on a non-focusable transcript
-  // surface ALSO blurs with no `relatedTarget` and leaves focus on the body, and
-  // it is a deliberate departure - so completion must not pull the reader back
-  // into the trace. Indistinguishable from a removal blur at dispatch time,
-  // which is why the layout effect re-reads real focus ownership every commit
-  // and corrects the latch while the control still exists.
-  // NO intervening render between the click-away and the completion that
-  // removes the control. The first version of this test put a streaming rerender
-  // in between, which is what the then-current fix needed to observe the blur -
-  // so the test passed for a reason the product could not rely on, and the bug
-  // it claimed to cover still reproduced without that extra commit. The latch is
-  // now settled off the event itself, not off the next render.
+  // A click on a non-focusable transcript surface ALSO blurs with no `relatedTarget` and leaves focus on the body, and it is a deliberate departure - so completion must not pull the reader back into the trace.
   it("does not reclaim focus after the reader clicks away to nothing", async () => {
     const props = {
       findUnitId: null,
@@ -631,11 +583,8 @@ describe("<ReasoningSegment />", () => {
     expect(document.activeElement).toBe(document.body);
   });
 
-  // The click-to-toggle listener spans the whole body, and reasoning markdown
-  // renders real controls into it - a code block's copy button, links, reference
-  // chips. Without a guard the control's own click ALSO promotes: the copy runs,
-  // and then the group opens, scrolls and takes focus for a gesture that asked
-  // for none of it.
+  // The click-to-toggle listener spans the whole body, and reasoning markdown renders real controls into it - a code block's copy button, links, reference chips.
+  // Without a guard the control's own click ALSO promotes: the copy runs, and then the group opens, scrolls and takes focus for a gesture that asked for none of it.
   it("does not promote when an interactive element inside the trace is clicked", () => {
     const promote = vi.fn();
     render(
@@ -662,12 +611,8 @@ describe("<ReasoningSegment />", () => {
     expect(promote).toHaveBeenCalledTimes(1);
   });
 
-  // `<summary>` is the interactive element that looks least like one: no ARIA
-  // role, not focusable by default, styled as prose. But `<details>` is
-  // supported end to end - `MERGEABLE_HTML_CONTAINERS` exists precisely to keep
-  // a blank-line-split disclosure in a single block - so a trace can ship one,
-  // and its summary is a real control the reader clicks to open the nested
-  // section, not to fold the reasoning around it.
+  // `<summary>` is the interactive element that looks least like one: no ARIA role, not focusable by default, styled as prose.
+  // But `<details>` is supported end to end - `MERGEABLE_HTML_CONTAINERS` exists precisely to keep a blank-line-split disclosure in a single block - so a trace can ship one, and its summary is a real control the reader clicks to open the nested section, not to fold the reasoning around it.
   const DETAILS_TRACE = [
     "Before the disclosure.",
     "",
@@ -735,10 +680,6 @@ describe("<ReasoningSegment />", () => {
     expect(promote).toHaveBeenCalledTimes(1);
   });
 
-  // The companion to "keeps a trace the reader opened when the header appears".
-  // That pin is deliberate, but on a COMPLETED headerless block the gesture is
-  // invisible - the body is already fully shown - so a second click un-pinning
-  // it means two identical, equally invisible gestures produce opposite results.
   // Where the click cannot be seen it only ever pins.
   it("does not un-pin a completed headerless trace on a second invisible click", () => {
     const props = {
@@ -768,25 +709,8 @@ describe("<ReasoningSegment />", () => {
     expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
   });
 
-  // jsdom dispatches NO blur when a focused element is removed; Chromium - the
-  // engine this actually ships in - does. So a blur handler that cleared the
-  // latch unconditionally made the handoff a no-op in the real product while
-  // every test here stayed green. `relatedTarget` separates the two cases:
-  // removal hands focus to nothing.
-  //
-  // This test simulates the browser jsdom is not, so it fails only for the code
-  // under test and not for the environment.
-  //
-  // KNOWN UNTESTABLE HERE: the `control.isConnected` check inside the blur's
-  // microtask. Removing it leaves every test in this file green, and that is the
-  // environment, not a gap. In Chromium the removal blur fires during the
-  // commit, the microtask flushes before React's passive effects, and the
-  // control is already detached - so the check preserves the latch and the
-  // handoff below runs. Clearing unconditionally would put the latch at false
-  // before the effect reads it and silently kill the handoff again. jsdom
-  // dispatches no removal blur at all, so that ordering never occurs here and no
-  // assertion can reach it. Do not delete the check on the strength of a
-  // surviving mutant.
+  // Clearing unconditionally would put the latch at false before the effect reads it and silently kill the handoff again. jsdom dispatches no removal blur at all, so that ordering never occurs here and no assertion can reach it.
+  // Do not delete the check on the strength of a surviving mutant.
   it("still hands off when removal itself blurs the control", () => {
     const props = {
       findUnitId: null,
@@ -821,9 +745,8 @@ describe("<ReasoningSegment />", () => {
     ).toBe(true);
   });
 
-  // It toggles, so its name has to say what pressing it does NOW. Reporting
-  // `aria-expanded="true"` under the label "show the full reasoning" described
-  // the opposite of the action.
+  // It toggles, so its name has to say what pressing it does NOW.
+  // Reporting `aria-expanded="true"` under the label "show the full reasoning" described the opposite of the action.
   it("names the hidden control for the action it will perform", () => {
     render(
       <ReasoningSegment
@@ -866,16 +789,10 @@ describe("<ReasoningSegment />", () => {
     );
 
     const header = screen.getByRole("button", { name: "Thinking" });
-    // Nothing here discloses, so the button must not report a disclosure state
-    // at all - the same call `PromotingSegmentRow` makes with
-    // `rotateWhenOpen={false}`. Reporting `aria-expanded="false"` told a screen
-    // reader this control opens something in place, which it does not.
+    // Nothing here discloses, so the button must not report a disclosure state at all - the same call `PromotingSegmentRow` makes with `rotateWhenOpen={false}`.
+    // Reporting `aria-expanded="false"` told a screen reader this control opens something in place, which it does not.
     expect(header.getAttribute("aria-expanded")).toBeNull();
-    // And `aria-controls` goes with it. Naming a body as this button's
-    // disclosure target while declining to report that body's state is half a
-    // claim: it points assistive tech at an element whose visibility the button
-    // does not own. The streaming body IS rendered here, so `controlsId` is
-    // non-null and this asserts the promotion branch, not an empty one.
+    // Naming a body as this button's disclosure target while declining to report that body's state is half a claim: it points assistive tech at an element whose visibility the button does not own.
     expect(header.getAttribute("aria-controls")).toBeNull();
     expect(screen.getByText("Detailed chain of thought")).toBeTruthy();
 

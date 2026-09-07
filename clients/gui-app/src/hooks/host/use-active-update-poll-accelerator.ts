@@ -7,69 +7,13 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-/**
- * While — and only while — a host reports a genuinely running operation,
- * refresh its `host.status` at the active cadence.
- *
- * WHY THIS IS NOT IN THE SHARED POLL TABLE, since that is the obvious place and
- * the wrong one. `host.status`'s table entry is `{kind:"fixed", intervalMs:
- * 10_000}`, and a condition policy — the table's mechanism for "poll faster
- * while X holds" — classifies to a lane OR to `false`, where `false` means no
- * polling at all. Converting the entry would therefore delete the 10s baseline
- * for every other consumer whenever no update is running, and that baseline is
- * load-bearing elsewhere: the Overview's drain affordance sets `staleTime` to
- * 30s specifically so a healthy 10s poll keeps `isStale` false, and demotes the
- * count it destroys work with to `null` when it does not. Trading that for a
- * banner's frame rate would be a regression in the one place this codebase most
- * wants a live number.
- *
- * So the accelerator is additive and scoped. It is bounded by construction
- * rather than by a timer budget: {@link warrantsFastPoll} refuses every parked,
- * terminal and qualified view, so the fast cadence exists only during an
- * operation that is actually moving — which is finite, user-visible, and
- * exactly when everyone reading this key wants fresher data.
- *
- * Invalidating the shared key (rather than holding a private fast query) is
- * deliberate: one key, one answer, and the acceleration benefits every surface
- * reading that host identically.
- *
- * ⚠ IT IS ALSO WHAT KEEPS FRESHNESS HONEST, which is why it moved out of the
- * landing banner's hook and became shared. An observation's staleness deadline
- * is derived from the cadence its view earns — about five seconds for an active
- * operation. A surface that projects freshness properly but polls `host.status`
- * at the 10s baseline would therefore mark its own data stale between every
- * pair of polls and blink "(last known)" onto a perfectly live download twice a
- * cadence. The selected-host Overview had exactly that shape the moment its
- * synthetic infinite freshness was removed, so it now runs this too: the
- * deadline and the poll that is supposed to beat it come from one place.
- */
+/** Not a condition policy: that would drop the 10s baseline for other consumers. Invalidate the shared key so every surface reading that host accelerates together. */
 interface AcceleratorEntry {
   count: number;
   readonly timer: ReturnType<typeof setInterval>;
 }
 
-/**
- * One timer per (query client, host) — NOT per mounted consumer.
- *
- * The acceleration is a property of the HOST's operation, but the hook runs
- * once per surface observing it, and this hook has more than one caller by
- * design (see the note above about the Overview adopting it). With a timer per
- * instance, the landing page mounted behind the Settings modal and an Overview
- * scoped to the same host each invalidated the same `host.status` key on
- * independently-phased intervals, roughly doubling the RPC cadence for the
- * whole length of a download — and it scaled with the number of surfaces, so
- * adding a third observer would have made it worse with no code change.
- *
- * Ref-counted rather than last-one-wins: consumers mount and unmount
- * independently, so the timer must survive any one of them leaving and stop
- * only when the last does. Same shape as the borrow accounting in
- * `active-remote-sessions.ts`, for the same reason.
- *
- * Keyed by the query client FIRST, so a second client (a test, a re-provided
- * provider) never adopts a timer holding a closure over a different client's
- * cache. A `WeakMap` means a discarded client's bucket is collectable rather
- * than a leak keyed by an object nobody holds anymore.
- */
+/** One refcounted timer per (query client, host), not per mounted consumer. */
 const acceleratorsByClient = new WeakMap<
   QueryClient,
   Map<string, AcceleratorEntry>
@@ -92,14 +36,7 @@ function acquireAccelerator(
     hosts.set(hostId, {
       count: 1,
       timer: setInterval(() => {
-        // Non-canceling, or the cadence eats its own reads: `invalidateQueries`
-        // refetches active observers with TanStack's default
-        // `cancelRefetch: true`, so each tick would abort the round trip the
-        // previous tick started. On a link whose `host.status` RTT exceeds
-        // this cadence that is not "slightly stale" — it is a poll that NEVER
-        // completes, every request dying at the next tick while the wire
-        // churns. Leaving the in-flight read to finish still marks the key
-        // stale, so the next tick refetches: coalescing, not skipping.
+        // On a link whose `host.status` RTT exceeds this cadence that is not "slightly stale" - it is a poll that NEVER completes, every request dying at the next tick while the wire churns.
         void queryClient.invalidateQueries(
           { queryKey: hostQueryKeys.methodScope(hostId, "host.status") },
           { cancelRefetch: false },

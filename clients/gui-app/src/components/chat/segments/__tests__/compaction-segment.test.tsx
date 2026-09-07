@@ -26,9 +26,7 @@ describe("<CompactionSegment />", () => {
     expect(screen.getByText(/→ .* tokens · 1m 25s/)).toBeDefined();
   });
 
-  // The failure this guards: a compaction that died mid-flight (provider 529,
-  // for instance) used to render the success bar, so the transcript claimed the
-  // context had been folded when it had not.
+  // The failure this guards: a compaction that died mid-flight (provider 529, for instance) used to render the success bar, so the transcript claimed the context had been folded when it had not.
   it("says a failed compaction failed instead of claiming success", () => {
     render(
       <CompactionSegment

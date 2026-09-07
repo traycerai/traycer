@@ -135,25 +135,14 @@ export type EpicsListPanelVariant = "page" | "embedded" | "picker";
 interface EpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
   readonly className: string | undefined;
-  /**
-   * Called immediately before normal row navigation. The system-tab modal
-   * uses this to close its overlay in the same interaction.
-   */
+  /** Called immediately before normal row navigation. */
   readonly onSelectEpic: ((epicId: string) => void) | null;
-  /**
-   * Replaces the row's normal navigation when this panel is embedded in a
-   * destination picker. The complete item is provided so callers can preserve
-   * the distinct Epic and legacy Phase activation paths.
-   */
+  /** The complete item is provided so callers can preserve the distinct Epic and legacy Phase activation paths. */
   readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly routeSearch: HistorySearchState | null;
   readonly historyNowMs: number | null;
-  /**
-   * Focus the search input once on mount. Set by the history modal so
-   * opening it drops the caret straight into search; left off for the
-   * `/epics` route and the embedded home list where a full-page focus
-   * grab would be unwelcome.
-   */
+  /** Set by the history modal so opening it drops the caret straight into search; left off for the `/epics` route
+   * and the embedded home list where a full-page focus grab would be unwelcome. */
   readonly autoFocusSearch: boolean;
 }
 
@@ -186,17 +175,8 @@ interface EpicsListPanelBodyProps {
   readonly autoFocusSearch: boolean;
 }
 
-/**
- * Unified task-list panel rendered both inline on the home page
- * (`variant="embedded"`) and on the `/epics` route (`variant="page"`).
- *
- * Both variants share the same data source (`useHistoryQuery` →
- * `useCloudEpicTasksQuery`), filter / sort chrome, row visuals, and
- * "Show more" pagination. The page variant additionally renders the
- * route header (title + count) and the search input; the embedded
- * variant trims those to keep the landing page focused on the
- * composer.
- */
+/** The page variant additionally renders the route header (title + count) and the search input; the embedded
+ * variant trims those to keep the landing page focused on the composer. */
 export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
   if (props.routeSearch === null) {
     return (
@@ -255,13 +235,7 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
 
 function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const { variant, onSelectEpic, onOpenItem, historySearch } = props;
-  // Destructure the stable `update`/`clear` functions (the hook returns a fresh
-  // wrapper object each render, so closing over `historySearch.update` would
-  // give the compiler an unstable dependency and re-create every handler each
-  // render -> the whole chrome re-renders on each list update). Holding the
-  // stable functions directly lets the compiler memoize the handlers, so
-  // PanelChromeBar / PanelSearchInput / EpicsSortMenu bail unless their own
-  // data actually changes.
+  // Destructure the stable `update`/`clear` functions (the hook returns a fresh wrapper object each render.
   const { search, update: updateSearch, clear: clearSearch } = historySearch;
   const openInNewWindowFlow = useHistoryOpenInNewWindowFlow();
   const openEpicIds = useEpicCanvasStore(
@@ -289,9 +263,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     nowMs: props.historyNowMs,
   });
 
-  // Read at gesture time so pull-to-refresh can install its listeners once,
-  // rather than re-attaching a non-passive touch handler whenever the query
-  // hands back a fresh `refetch`.
+  // Read at gesture time so pull-to-refresh can install its listeners once, rather than re-attaching a
+  // non-passive touch handler whenever the query hands back a fresh `refetch`.
   const refetchRef = useRef(refetch);
   useEffect(() => {
     refetchRef.current = refetch;
@@ -324,11 +297,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const [selectionMode, setSelectionMode] = useState(false);
   const [pendingDeleteIds, setPendingDeleteIds] =
     useState<ReadonlyArray<string> | null>(null);
-  // Explicit user overrides of the per-worktree checkbox. Absent entries fall
-  // back to the default: only PROVEN-removable candidates (clean + a non-null
-  // branch status that is merged or has no local-only commits) start checked;
-  // unproven (null status) and dirty rows start unchecked. Cleared when the
-  // dialog closes so a reopened dialog starts from defaults again.
+  // Absent entries fall back to the default: only proven-removable candidates (clean + a non-null branch status
+  // that is merged or has no local-only commits) start checked.
   const [worktreeCheckOverrides, setWorktreeCheckOverrides] = useState<
     ReadonlyMap<string, boolean>
   >(() => new Map());
@@ -380,16 +350,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setWorktreeCheckOverrides(new Map());
   }, []);
 
-  // `variant="picker"` embeds this panel as a read-only destination browser
-  // (the split chooser's History section) - it must never expose the
-  // select/delete/sweep flow, so every entry point into it is gated here
-  // rather than in the chrome that merely renders it.
+  // `variant="picker"` embeds this panel as a read-only destination browser (the split chooser's History
+  // section).
   const selectionEnabled = variant !== "picker";
 
-  // A sweep target is a SET: one id from a row action, the whole selection
-  // from the bulk action. The set is load-bearing - a worktree shared between
-  // two SELECTED tasks is no longer "shared" and becomes an ordinary
-  // candidate.
+  // A sweep target is a set: one id from a row action, the whole selection from the bulk action.
   const [sweepEpicIds, setSweepEpicIds] =
     useState<ReadonlyArray<string> | null>(null);
   const sweepHostClient = useHostClientForHostId(null);
@@ -442,16 +407,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     return Array.from(selectedIds).filter((id) => selectableIdSet.has(id));
   }, [selectableIdSet, selectedIds]);
   const selectedCount = visibleSelectedIds.length;
-  // Delete-eligible and sweepable are different questions: a selection can be
-  // entirely tasks that own no worktrees, and opening Sweep on those shows a
-  // dialog with nothing to sweep. The row control already gates on this
-  // (`useHistoryRowSweep`); the bulk button has to ask the same question, of
-  // the SELECTION rather than of one task, so a mixed selection still sweeps.
-  //
-  // "Owns worktrees" is asked of THIS host - the only reliable per-host
-  // worktree oracle - so the second clause is what keeps the affordance live
-  // for a Task whose agents ran elsewhere. Without it the picker behind this
-  // button is unreachable for exactly the multi-host selections it exists for.
+  // The row control already gates on this (`useHistoryRowSweep`); the bulk button has to ask the same question,
+  // of the selection rather than of one task, so a mixed selection still sweeps.
   const canSweepSelected = useMemo(
     () =>
       visibleSelectedIds.some((id) => {
@@ -485,12 +442,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   }, []);
 
   const handleConfirmDelete = () => {
-    // The host-wide census is asynchronous. Confirming before it settles lets
-    // the Task deletion start with zero approved worktrees; its rows can then
-    // arrive during the mutation and flash briefly before success closes the
-    // dialog. Hold confirmation until the choices the person is approving are
-    // stable. A disabled query (host unavailable) is not fetching, so cleanup
-    // remains additive and never blocks Task deletion indefinitely.
+    // A disabled query (host unavailable) is not fetching, so cleanup remains additive and never blocks Task
+    // deletion indefinitely.
     if (pendingDeleteIds === null || worktreeCandidatesFetching) return;
     const ids = pendingDeleteIds;
     const approvedWorktrees = worktreeCandidates
@@ -537,9 +490,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const showPageSearch = variant === "page";
   const showToolbarSearch = variant === "picker";
 
-  // ArrowDown out of the search box walks the results; ArrowUp off the first
-  // row lands back in the query. At most one of the two search placements is
-  // ever mounted, so a single ref covers whichever one is live.
+  // ArrowDown out of the search box walks the results; ArrowUp off the first row lands back in the query.
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const keyboardNav = useHistoryListKeyboardNav(searchInputRef, listRef);
@@ -604,8 +555,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                     requestDelete(visibleSelectedIds);
                   },
                   onSweepSelected: () => {
-                    // The whole selection goes in as ONE set so a worktree
-                    // shared between two selected tasks is judged against the
+                    // The whole selection goes in as one set so a worktree shared between two selected tasks is judged against the
                     // selection, not one task, and stops reading as "shared".
                     if (!canSweepSelected) return;
                     setSweepEpicIds(visibleSelectedIds);
@@ -679,18 +629,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       />
       <SweepWorktreesFlow
         epicIds={sweepEpicIds}
-        // The Epics list is app chrome: its sweep proves and sweeps the
-        // app-wide host's worktrees (the following client - `null` resolves
-        // to the effective host's requester, the same seam the landing
-        // composer's following state uses). On a fleet with more than one
-        // dialable host the flow asks WHICH first and resolves that pick
-        // instead; at one host this is byte-for-byte the previous wiring.
+        // The Epics list is app chrome: its sweep proves and sweeps the app-wide host's worktrees (the following
+        // client.
         surfaceHostClient={sweepHostClient}
-        // The host this panel is ALREADY reading from, so the picker opens
-        // marked where Sweep used to go without a second app-wide read. It is
-        // the same client family: the list's `hostId` is what the app-wide
-        // client currently addresses, which is what `useHostClientForHostId(null)`
-        // follows.
+        // It is the same client family: the list's `hostId` is what the app-wide client currently addresses, which is
+        // what `useHostClientForHostId(null)` follows.
         surfaceHostId={hostId}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
@@ -702,17 +645,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   );
 }
 
-/**
- * The two chat-host gate answers the panel needs, kept together because they
- * are two faces of one decision: whether to OFFER the filter, and whether the
- * rows in hand were withheld because it could not be applied.
- *
- * "unknown" (no handshake yet) stays OFFERABLE. The manifest fills in on the
- * first RPC to the host, and hiding the section until then would make it
- * flicker in on every cold open. A filter actually issued against a host that
- * turns out to be too old is caught by the fail-closed arm in
- * `useHistoryQuery`, which withholds rows rather than showing them unfiltered.
- */
+/** A filter actually issued against a host that turns out to be too old is caught by the fail-closed arm in
+ * `useHistoryQuery`, which withholds rows rather than showing them unfiltered. */
 function useChatHostFilterGate(
   hostId: string | null,
   data: HistoryFetchResult | undefined,
@@ -748,10 +682,8 @@ interface PanelSearchInputProps {
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
   const { inputRef } = props;
-  // Defer the focus to the next frame so it lands after Radix Dialog's
-  // own mount focus-trap runs (the modal host wraps this surface). A
-  // synchronous focus here would be clobbered by the dialog's
-  // ancestor-level focus scope; the rAF wins the race.
+  // A synchronous focus here would be clobbered by the dialog's ancestor-level focus scope; the rAF wins the
+  // race.
   const { focusOnMount } = props;
   useEffect(() => {
     if (!focusOnMount) return;
@@ -827,7 +759,6 @@ type PanelSelectionControls =
       readonly selectedCount: number;
       readonly allVisibleSelected: boolean;
       readonly isDeletePending: boolean;
-      /** At least one selected task owns a worktree the dialog could list. */
       readonly canSweepSelected: boolean;
       readonly onSelectAll: () => void;
       readonly onDeselectAll: () => void;
@@ -872,23 +803,14 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
   });
 
   return (
-    // Wraps instead of clipping when the bar is narrower than its controls
-    // (sub-340px phones, or the Clear button appearing beside the cluster).
-    // The button cluster `grow`s so it renders identically while everything
-    // fits on one line (buttons flush right, as justify-between alone would
-    // place them) and spans the full row - still right-aligned - when it
-    // wraps below the Clear button.
+    // Wraps instead of clipping when the bar is narrower than its controls (sub-340px phones, or the Clear button
+    // appearing beside the cluster).
     <div
       className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2"
       data-testid="panel-chrome-bar"
     >
-      {/* `flex-1` stretches the toolbar search when leading carries it, but
-          deliberately NO `min-w-0`: the shrink permit let this box collapse
-          under the button cluster while the Clear button inside could not
-          shrink with it, overlapping "Clear" onto the sort menu on narrow
-          phones. Without it the cluster's min-width is the Clear button, so
-          the row's flex-wrap fires instead. The search input keeps its own
-          `min-w-0`, so it still yields space before any wrap. */}
+      {/* Without it the cluster's min-width is the Clear button, so the row's flex-wrap fires instead. The search
+         input keeps its own `min-w-0`, so it still yields space before any wrap. */}
       <div className="flex flex-1 items-center gap-2">
         {props.leading}
         {props.filters.active ? (
@@ -960,9 +882,7 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
             </Button>
           </>
         ) : (
-          // Paired sub-groups so a wrap breaks between pairs instead of
-          // orphaning a lone icon on its own line. Intra- and inter-group
-          // gaps are both gap-1, so the one-line rendering is unchanged.
+          // Paired sub-groups so a wrap breaks between pairs instead of orphaning a lone icon on its own line.
           <>
             <div className="flex shrink-0 items-center gap-1">
               <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
@@ -1017,9 +937,7 @@ function describeDeleteTitle(
   if (ids.length > 1) return `Delete ${ids.length} epics?`;
   const match = items.find((item) => item.epicId === ids[0]);
   if (match === undefined) return "Delete 1 epic?";
-  // `match.title` is RAW; apply the source-aware "Untitled task" fallback (prompt
-  // slice, else literal) for the rendered confirmation. Phases already carry
-  // their own baked fallback.
+  // Phases already carry their own baked fallback.
   const matchTitle =
     match.taskType === "phase"
       ? match.title
@@ -1035,19 +953,8 @@ interface HistoryListBodyProps extends EpicsListBodyProps {
   readonly onRefresh: () => Promise<unknown>;
 }
 
-/**
- * Picks the list body the form factor calls for, and owns nothing else.
- *
- * FORM FACTOR, not product: the phone list is a layout, and a desktop window
- * narrowed past the breakpoint gets it for the same reason it gets the
- * hamburger and the single-tile canvas. `variant="picker"` is excluded because
- * it is a read-only destination browser - its rows have no actions for a tray
- * to hold and no selection for a hold to enter.
- *
- * Separate from the panel so the choice, the mobile-only activation hook and
- * the desktop scroller travel together instead of adding three more branches
- * to a body that already carries the panel's whole selection and delete flow.
- */
+/** `variant="picker"` is excluded because it is a read-only destination browser - its rows have no actions for
+ * a tray to hold and no selection for a hold to enter. */
 function HistoryListBody(props: HistoryListBodyProps): ReactNode {
   const isMobileViewport = useIsMobileViewport();
   const openHistoryItem = useHistoryOpenItem({
@@ -1140,14 +1047,9 @@ interface EpicsListBodyProps {
     string,
     readonly WorktreeHostEntryV12[]
   >;
-  /**
-   * The host this list is reading from - the one whose worktree listing
-   * `worktreesByEpicId` is. A row compares its own provenance against it to
-   * decide whether the Task reaches past this machine.
-   */
+  /** The host this list is reading from - the one whose worktree listing `worktreesByEpicId` is. */
   readonly surfaceHostId: string | null;
   readonly openEpicIds: ReadonlySet<string>;
-  /** Anchors the arrow-key traversal: DOM order inside it is row order. */
   readonly listRef: RefObject<HTMLUListElement | null>;
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
@@ -1189,8 +1091,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (isPending) {
     return <EpicsListLoading />;
   }
-  // Ahead of every other empty state: the rows were WITHHELD, not absent, and
-  // "No tasks yet" would be an outright false statement about the account.
+  // Ahead of every other empty state: the rows were withheld, not absent, and "No tasks yet" would be an
+  // outright false statement about the account.
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
@@ -1260,10 +1162,8 @@ interface EpicsListRowProps {
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
-  /** See `EpicsListBodyProps.surfaceHostId`. */
   readonly surfaceHostId: string | null;
   readonly isOpen: boolean;
-  /** Arrow-key traversal, bound to whichever control covers the whole card. */
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
 
@@ -1275,11 +1175,7 @@ function HistoryRowTrailingMetadata(props: {
 }): ReactNode {
   const hasPrPills =
     !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
-  // Desktop (md+): label and pills share one grid cell and swap on
-  // hover/focus. Below md there is no hover, so the cell flattens into a
-  // flex line - label and pills sit side by side, pills persistently
-  // visible and tappable - on the row's wrapped second line (`pl-6` aligns
-  // it under the title, past the leading icon).
+  // Desktop (md+): label and pills share one grid cell and swap on hover/focus.
   return (
     <span className="grid shrink-0 items-center justify-items-end text-ui-xs max-md:flex max-md:min-w-0 max-md:gap-2 max-md:pl-6">
       <span
@@ -1544,10 +1440,8 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       })}
     >
       {rowInteractionLayer}
-      {/* Below md the row wraps to two lines - title spans the full first
-          line (`basis-full` beats flex-1's 0% basis inside the media query)
-          and the metadata drops underneath - otherwise the shrink-0
-          "updated ..." label squeezes the title to nothing at phone width. */}
+      {/* Below md the row wraps to two lines - title spans the full first line (`basis-full` beats flex-1's 0% basis
+         inside the media query) and the metadata drops underneath. */}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
           <HistoryRowLeadingIcon item={item} />
@@ -1582,10 +1476,8 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       {deleteControl}
     </div>
   );
-  // Phases have no background-open: a phase only opens through its migration
-  // route (migrationSource=phase), which a plain canvas tab can't carry, so it
-  // would activate into the wrong (non-migration) surface. New Window stays
-  // available - it goes through the route.
+  // Phases have no background-open: a phase only opens through its migration route (migrationSource=phase),
+  // which a plain canvas tab can't carry, so it would activate into the wrong (non-migration) surface.
   const backgroundMenuItem = isPhase ? null : (
     <ContextMenuItem
       onSelect={openInBackground}
@@ -1613,12 +1505,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       <div className="flex w-5 shrink-0 items-center justify-center">
         {selectionControl}
       </div>
-      {/* Skip the context menu entirely when no action qualifies (e.g. a phase
-          row in the browser build with no windows bridge) so right-click never
-          opens an empty popover. */}
-      {/* `canSweep` never holds when both are null: sweep requires a
-          non-phase row, and epic rows always qualify for background-open, so
-          the sweep menu item can never be the lone reason to mount a menu. */}
+      {/* Skip the context menu entirely when no action qualifies (e.g. a phase row in the browser build with no
+         windows bridge) so right-click never opens an empty popover. */}
+      {/* `canSweep` never holds when both are null: sweep requires a non-phase row, and epic rows always qualify for
+         background-open, so the sweep menu item can never be the lone reason to mount a menu. */}
       {backgroundMenuItem === null && newWindowMenuItem === null ? (
         rowCard
       ) : (
@@ -1669,9 +1559,8 @@ function HistoryPinControl(props: {
             props.onSetPinned(props.item.epicId, !props.item.isPinned);
           }}
         >
-          {/* The pin state is optimistic - it flips at click time - so the
-              icon always shows the row's current state; the brief disabled
-              window only serializes rapid re-toggles, with no spinner. */}
+          {/* The pin state is optimistic - it flips at click time - so the icon always shows the row's current state; the
+             brief disabled window only serializes rapid re-toggles, with no spinner. */}
           <Pin
             className={cn("size-3.5", props.item.isPinned && "fill-current")}
           />
@@ -1710,32 +1599,15 @@ function historySelectedForDelete(args: {
 }
 
 interface HistoryRowSweepState {
-  /** The control renders at all (hidden for phases / during selection). */
   readonly isVisible: boolean;
-  /** There is something to open the dialog for. */
   readonly canSweep: boolean;
   readonly requestSweep: () => void;
 }
 
-/**
- * Sweep is offered whenever the task owns worktrees on this host, eligible or
- * not: the dialog lists every worktree with its proof state and pre-checks
- * only the safe ones, so the affordance no longer pre-judges eligibility.
- * Cheap and reactive - derived from the same enriched listing the PR pills
- * already join, with no extra host call to render the affordance.
- *
- * ...OR the Task's own provenance names a machine other than this one. That
- * second clause is the multi-host half, and it is not a nicety: the listing
- * above is THIS host's, so without it the host picker behind this control is
- * unreachable for precisely the Tasks it exists for. Still zero-RPC -
- * `chatHostIds` is already on the row - and still a hint, with the dialog's
- * own act-time proof as the judge. See `namesHostOutsideSurface` for what the
- * hint under- and over-claims.
- */
+/** Sweep is offered whenever the task owns worktrees on this host, eligible or not. */
 function useHistoryRowSweep(args: {
   readonly item: HistoryItem;
   readonly worktrees: readonly WorktreeHostEntryV12[];
-  /** The host `worktrees` was listed from — see `EpicsListBodyProps`. */
   readonly surfaceHostId: string | null;
   readonly selectionMode: boolean;
   readonly selectionEnabled: boolean;
@@ -1752,13 +1624,8 @@ function useHistoryRowSweep(args: {
   const requestSweep = useCallback(() => {
     onRequestSweep(item.epicId);
   }, [item.epicId, onRequestSweep]);
-  // Visible-but-disabled when the Task owns no worktrees, matching how the
-  // delete control and the bulk Sweep button behave: the affordance keeps its
-  // place in the row instead of appearing and disappearing per row. Phases are
-  // still skipped entirely - they never have worktrees, so a permanently dead
-  // control there would be noise rather than consistency. The read-only picker
-  // embed (`selectionEnabled=false`) uses the same disabled treatment rather
-  // than a live-looking button whose click is silently neutered upstream.
+  // Phases are still skipped entirely - they never have worktrees, so a permanently dead control there would be
+  // noise rather than consistency.
   const hasSweepTarget =
     worktrees.length > 0 ||
     namesHostOutsideSurface({ hostIds: item.chatHostIds, surfaceHostId });

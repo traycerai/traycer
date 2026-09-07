@@ -27,21 +27,7 @@ import {
 import type { CloudChatReadPort } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 
 /**
- * A published chat as a CLIENT meets it: a head DOCUMENT (record plus the
- * server's `parts` envelope), the shard bytes it names, and a port that serves
- * them while counting every call.
- *
- * Two properties of this fixture are load-bearing for the suites that use it:
- *
- * 1. **Bytes are produced by the real encoders.** Shards go through
- *    `serializeChatShard` and the head through `encodeChatHead`, so a content
- *    address here is the same address a publisher would mint. A fixture that
- *    hand-rolled its JSON would let the reader's digest checks pass against
- *    bytes no publisher can produce.
- * 2. **Cohorts are addressed by content, so an append moves exactly one.**
- *    `publishCloudChat` takes the cohorts explicitly, which is what lets a test
- *    publish a chat, add one message to the tail cohort, and republish - and
- *    then assert that only the tail shard's digest changed.
+ * A published chat as a client meets it: a head document (record plus the server's `parts` envelope), the shard bytes it names, and a port that serves them while counting every call.
  */
 
 const chatHeadSchema = getRecordSchema(
@@ -79,7 +65,6 @@ export function textBlock(id: string, text: string): JsonObject {
   };
 }
 
-/** Both diff sides live as blobs on the ORIGIN host - the payload-ref case. */
 export const fileChangeBlock: JsonObject = {
   blockId: "b-file",
   status: "completed",
@@ -96,13 +81,6 @@ export const fileChangeBlock: JsonObject = {
   parentBlockId: null,
 };
 
-/**
- * A block type no shipped reader knows, carrying a nested subtree.
- *
- * The subtree is deliberately awkward - a mixed array with a null and a number -
- * because the passthrough's promise is that the WHOLE value survives, not that
- * its scalar leaves do.
- */
 export const unknownBlock: JsonObject = {
   blockId: "b-future",
   status: "completed",
@@ -170,7 +148,6 @@ export const persistedHostPrivate: JsonObject = {
   },
 };
 
-/** The cohorts a plain fixture chat publishes: two, so order can go wrong. */
 export const FIRST_COHORT: readonly JsonObject[] = [
   userMessage("m-user"),
   assistantMessage("m-assistant", [
@@ -207,14 +184,7 @@ export type PublishedPart = {
 
 /**
  * Shard bytes and the address that names them.
- *
- * At this contract's own minor the wire object goes through the REGISTERED
- * writer schema first, so the fixture cannot mint bytes a real publisher could
- * not. A FUTURE minor cannot: the writer schema pins the version literal by
- * design, which is the anti-forgery property that makes `schemaVersion`
- * trustworthy. Those are canonicalized directly - the same bypass 02's own
- * suite uses to forge shapes a writer must not produce but a reader must still
- * refuse or tolerate correctly.
+ * At this contract's own minor the wire object goes through the registered writer schema first, so the fixture cannot mint bytes a real publisher could not.
  */
 function publishShard(wire: JsonObject, minor: number): Promise<PublishedPart> {
   const text =
@@ -230,7 +200,7 @@ function publishShard(wire: JsonObject, minor: number): Promise<PublishedPart> {
 
 export type PublishedCloudChat = {
   readonly head: ChatHeadRecord;
-  /** The bytes stored on the row: the record PLUS the `parts` envelope. */
+  /** The bytes stored on the row: the record plus the `parts` envelope. */
   readonly headDocument: string;
   readonly headSha256: string;
   readonly parts: readonly PublishedPart[];
@@ -241,12 +211,8 @@ export type PublishedCloudChat = {
 export type PublishOptions = {
   readonly cohorts: readonly (readonly JsonObject[])[];
   /**
-   * The minor this publication claims, on the head AND on every shard.
-   *
-   * `CHAT_SYNC_SCHEMA_VERSION.minor` is this build's own contract. Anything
-   * higher publishes as a FUTURE writer - which is the only way to reach the
-   * passthrough end to end, and the only way to state a `minReaderVersion`
-   * ahead of this contract.
+   * The minor this publication claims, on the head and on every shard.
+   * Anything higher publishes as a future writer - which is the only way to reach the passthrough end to end, and the only way to state a `minReaderVersion` ahead of this contract.
    */
   readonly payloadMinor: number;
   /** The reader minimum the head states, or `null` for the ordinary case. */
@@ -255,28 +221,12 @@ export type PublishOptions = {
     readonly minor: number;
   } | null;
   readonly parentHeadSha256: string | null;
-  /**
-   * Adds an unmodeled key at EVERY captured residual level of the head.
-   *
-   * What a newer writer's extra FIELDS look like on the wire. Capture works at
-   * this contract's own minor too - `withResidualCapture` sweeps unmodeled keys
-   * regardless of the version claimed - so this is orthogonal to
-   * `payloadMinor`, and keeping them separate is what lets a clone test assert
-   * on residuals without also having to forge a version.
-   */
+  /** Adds an unmodeled key at every captured residual level of the head. */
   readonly withFutureFields: boolean;
   /** Lifecycle the source publishes with - a deleted source has no clone. */
   readonly lifecycleState: "active" | "archived" | "deleted";
 };
 
-/** The unmodeled key each captured level carries when `withFutureFields`. */
-/**
- * Keyed by residual LEVEL, and typed as its own literal map rather than a
- * `Record<string, string>`: an index signature answers `string` for a level
- * that does not exist, so a mistyped level would mint the key `"undefined"` and
- * the head would still parse - leaving the passthrough tests below green over a
- * future field that was never planted where they think it was.
- */
 export const FUTURE_FIELDS = {
   head: "futureHeadField",
   core: "futureCoreField",
@@ -287,7 +237,6 @@ export const FUTURE_FIELDS = {
 
 export type FutureFieldLevel = keyof typeof FUTURE_FIELDS;
 
-/** Settings that parse, so `core.settings` is non-null and can carry a bag. */
 const RUN_SETTINGS: JsonObject = {
   harnessId: "starfleet-cli",
   model: "warp-9",
@@ -301,10 +250,7 @@ const RUN_SETTINGS: JsonObject = {
 export const DEFAULT_PUBLISH: PublishOptions = {
   cohorts: [FIRST_COHORT, SECOND_COHORT],
   payloadMinor: CHAT_SYNC_SCHEMA_VERSION.minor,
-  // What a correct publisher stamps: the floor is reserved for a change an
-  // older reader cannot safely INTERPRET, and the 1.1 reshape is additive and
-  // read-safe. A non-null floor is the deliberate exception - the refusal case
-  // below states one explicitly.
+  // What a correct publisher stamps: the floor is reserved for a change an older reader cannot safely interpret, and the 1.1 reshape is additive and read-safe.
   minReaderVersion: null,
   parentHeadSha256: null,
   withFutureFields: false,
@@ -359,9 +305,7 @@ export async function publishCloudChat(
         : null,
       ...future("core", "core-level"),
     },
-    // Membership stamps derived from the ACTUAL cohorts: assembly now
-    // cross-checks these claims against the parsed shard, so a fixture that
-    // stamped placeholders would refuse its own publication.
+    // Membership stamps derived from the actual cohorts: assembly now cross-checks these claims against the parsed shard, so a fixture that stamped placeholders would refuse its own publication.
     messageShards: parts.map((part, index) => {
       const cohort = options.cohorts[index] ?? [];
       const first = cohort[0];
@@ -392,17 +336,12 @@ export async function publishCloudChat(
     hostPrivateShard: null,
   };
 
-  // Same split as the shards: this build's own minor goes through the
-  // registered writer schema, a future one through the reader schema, because
-  // the writer's version literal is pinned on purpose.
+  // Same split as the shards: this build's own minor goes through the registered writer schema, a future one through the reader schema, because the writer's version literal is pinned on purpose.
   const head: ChatHeadRecord =
     payloadMinor === CHAT_SYNC_SCHEMA_VERSION.minor
       ? chatHeadSchema.parse(wireHead)
       : chatHeadReaderSchema.parse(wireHead);
-  // The protocol's own document codec, always - including for a future-minor
-  // publication. The document is the digest identity, and a fixture that
-  // serialized it any other way would be testing the reader against bytes no
-  // publisher produces.
+  // The protocol's own document codec, always - including for a future-minor publication.
   const headDocument = serializeChatHeadDocument(head);
   const headSha256 = await webCryptoSha256Hex(utf8Bytes(headDocument));
 
@@ -418,13 +357,6 @@ export async function publishCloudChat(
   };
 }
 
-/**
- * A head document whose envelope disagrees with the shard lists it carries.
- *
- * Forged at the byte level on purpose: `encodeChatHeadDocument` DERIVES the
- * envelope from the record, so no encoder in this build can produce one - which
- * is exactly why the decoder's cross-check needs a test that bypasses it.
- */
 export function withForgedPartsEnvelope(
   document: string,
   parts: readonly ChatHeadPart[],
@@ -472,9 +404,7 @@ export type RecordingPort = CloudChatReadPort & {
 export type PortBehaviour = {
   readonly resolve: () => ResolveCloudChatHeadResponse;
   /**
-   * May return a promise, so a test can make one part settle after another and
-   * drive completion order apart from head order - the only way to witness that
-   * assembly really is ordered by the head.
+   * May return a promise, so a test can make one part settle after another and drive completion order apart from head order - the only way to witness that assembly really is ordered by the head.
    */
   readonly part: (
     sha256: string,
@@ -483,11 +413,7 @@ export type PortBehaviour = {
 
 /**
  * A port that records what it was asked for.
- *
- * The request COUNT is the observable these suites assert on - not what
- * rendered, and not whether a cache method was called. A cache that quietly
- * missed and refetched still renders the right transcript, so only the call log
- * can tell the incremental read from the whole one.
+ * A cache that quietly missed and refetched still renders the right transcript, so only the call log can tell the incremental read from the whole one.
  */
 export function recordingPort(behaviour: PortBehaviour): RecordingPort {
   const resolveCalls: CloudChatIdentity[] = [];
@@ -507,7 +433,6 @@ export function recordingPort(behaviour: PortBehaviour): RecordingPort {
   };
 }
 
-/** The ordinary healthy behaviour: serve the published chat. */
 export function servingBehaviour(published: PublishedCloudChat): PortBehaviour {
   return {
     resolve: () => ({

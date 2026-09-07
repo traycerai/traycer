@@ -1,40 +1,6 @@
 /**
- * The office simulation: who is where, who is walking, what is bubbling, and
- * which envelopes are in the air at this instant.
- *
- * PURE AND DETERMINISTIC BY CONSTRUCTION. Nothing here reads a clock, a random
- * source, the DOM or a canvas. Time enters only through `tick(dtMs)` and
- * per-agent variety only through a hash of the agent id, so two scenes fed the
- * same sync/tick sequence produce identical frames. That is what makes
- * playback scrubbable, replayable and testable - a scene that sampled
- * `Date.now()` would render a different floor every time the same cursor was
- * revisited.
- *
- * ANCHORS the canvas must honour - a frame is coordinates and nothing else:
- *
- * - `floor`, `props` and `actors` sprites are TOP-LEFT anchored at `(x, y)`.
- * - A character sits at `(col * OFFICE_TILE, row * OFFICE_TILE - 4)`: its feet
- *   land on its tile and its head rises above it.
- * - `overlay` sprites (bubbles, sparkles) are BOTTOM-CENTER anchored - `x` is
- *   the character's horizontal centre, `y` its top minus two.
- * - `envelope` drawables are CENTER anchored. Their `y` ALREADY includes the
- *   flight arc, and `progress` is the EASED parameter, so a ground shadow must
- *   be derived from that same value or it will slide out from under the
- *   envelope.
- * - `clock` drawables are CENTER anchored on the clock FACE, so the hands are
- *   drawn outward from `(x, y)`.
- * - A `label` is centered on `x` with its baseline above `y`, per the shared
- *   type.
- *
- * A DESK IS ONLY DRAWN FOR AN AGENT THAT EXISTS AS OF THE CURSOR. The floor
- * plan covers every agent in the epic so positions never shift as playback
- * reveals people, but rendering an empty desk for someone who has not been
- * created yet would leak the future into a historical view.
- *
- * MESSAGES FLY BETWEEN SEATS, never between bodies. An envelope aimed at
- * wherever a character happens to be standing lands in an empty chair the
- * moment that character is walking in or away at reception, so both endpoints
- * are the agents' DESKS and anyone an envelope touches is seated first.
+ * Pure deterministic office sim (time via `tick`, variety via hashed agent id).
+ * Messages fly between desks; draw a desk only for an agent that exists as of the cursor.
  */
 import type {
   CommGraphPulse,
@@ -81,22 +47,17 @@ export type OfficeLayoutFn = (
 
 const WALK_TILES_PER_SECOND = 3;
 /**
- * An arrival is not a stroll. A newcomer's first message lands within a step of
- * its creation, so the walk from the door has to be over by then or the
- * envelope arrives at an empty chair.
+ * An arrival is not a stroll.
+ * A newcomer's first message lands within a step of its creation, so the walk from the door has to be over by then or the envelope arrives at an empty chair.
  */
 const ARRIVAL_TILES_PER_SECOND = 8;
 /**
- * A message is waiting: whoever it is to or from RUNS. This is what replaced
- * snapping an agent into its chair the instant a pulse touched it - a character
- * teleporting mid-stride reads as a rendering glitch, while the same character
- * sprinting back reads as the office noticing.
+ * A message is waiting: whoever it is to or from RUNS.
+ * This is what replaced snapping an agent into its chair the instant a pulse touched it - a character teleporting mid-stride reads as a rendering glitch, while the same character sprinting back reads as the office noticing.
  */
 const HURRY_TILES_PER_SECOND = 14;
 /**
- * Below this step length playback is running fast enough that a walk-in would
- * still be in progress when the next row is drawn, so arrivals are announced
- * with a sparkle at the desk instead.
+ * Below this step length playback is running fast enough that a walk-in would still be in progress when the next row is drawn, so arrivals are announced with a sparkle at the desk instead.
  */
 const FAST_PLAYBACK_STEP_MS = 600;
 const WALK_FRAME_MS = 120;
@@ -109,15 +70,13 @@ const ENVELOPE_STEP_FRACTION = 0.75;
 const ENVELOPE_MIN_MS = 350;
 const ENVELOPE_MAX_MS = 900;
 /**
- * Peak height of an envelope's flight, in sprite pixels. Exported because the
- * renderer has to undo it: the drawable's `y` already has this lift folded in,
- * and adding it back is what recovers the ground line the shadow sits on.
+ * Peak height of an envelope's flight, in sprite pixels.
+ * Exported because the renderer has to undo it: the drawable's `y` already has this lift folded in, and adding it back is what recovers the ground line the shadow sits on.
  */
 export const ENVELOPE_ARC_LIFT = 14;
 /**
- * A burst of traffic in one step must not turn the floor into confetti, and an
- * unbounded list would grow without limit while scrubbing. Oldest is dropped
- * because the newest rows are the ones the cursor is actually about.
+ * A burst of traffic in one step must not turn the floor into confetti, and an unbounded list would grow without limit while scrubbing.
+ * Oldest is dropped because the newest rows are the ones the cursor is actually about.
  */
 const MAX_LIVE_ENVELOPES = 24;
 /** Even with motion off an arrival has to be on screen long enough to see. */
@@ -133,9 +92,8 @@ const MAX_POD_LABEL_CHARS = 10;
 /** Baseline of the pod name, measured down from the plate sprite's own top. */
 const POD_PLATE_LABEL_BASELINE = 11;
 /**
- * How each pod style draws its outline. The vertical piece takes the corners
- * too: a corner belongs to the side that carries the run, and a horizontal
- * piece turned on its end reads as a mistake.
+ * How each pod style draws its outline.
+ * The vertical piece takes the corners too: a corner belongs to the side that carries the run, and a horizontal piece turned on its end reads as a mistake.
  */
 interface OfficePodOutlineArt {
   readonly vertical: OfficeSpriteName;
@@ -150,9 +108,8 @@ const POD_OUTLINE_ART: Readonly<Record<OfficePodStyle, OfficePodOutlineArt>> = {
 };
 
 /**
- * The tinted floor inside a pod, as a checker. Depth swaps which variant lands
- * on an even tile, so a pod nested inside another never lines up with its
- * parent's floor even where the two share a tint.
+ * The tinted floor inside a pod, as a checker.
+ * Depth swaps which variant lands on an even tile, so a pod nested inside another never lines up with its parent's floor even where the two share a tint.
  */
 const POD_FLOOR_ART: Readonly<
   Record<"cool" | "warm", readonly [OfficeSpriteName, OfficeSpriteName]>
@@ -164,8 +121,7 @@ const POD_FLOOR_ART: Readonly<
 const SIGN_LABEL_BASELINE = 11;
 const SIGN_WIDTH_TILES = 2;
 /**
- * A lit screen is never still: two frames alternate while an agent is in a
- * turn, and far more slowly while it is only working in the background.
+ * A lit screen is never still: two frames alternate while an agent is in a turn, and far more slowly while it is only working in the background.
  */
 const MONITOR_WORKING_FRAME_MS = 260;
 const MONITOR_BACKGROUND_FRAME_MS = 700;
@@ -175,23 +131,8 @@ const LOGO_Y_OFFSET = 1;
 /** Slack around an envelope's box, so a moving 10x8 target stays clickable. */
 const ENVELOPE_HIT_PADDING = 2;
 /**
- * Errands. Only a LIVE floor runs them - playback makes every agent idle
- * between its own rows, so a break during it would fire constantly - and only
- * after a stretch of nothing long enough that the stillness is the point. The
- * stagger is what keeps a quiet epic from standing up in unison.
- *
- * The threshold is DELIBERATELY short. An office where nobody moves for half a
- * minute reads as a screenshot, and the whole reason this exists is that agents
- * between turns looked dead.
- *
- * AN IDLE AGENT IS NEVER AT ITS DESK. Past the threshold everyone gets up, and
- * errands CHAIN - one finishes, the next begins from where the last one ended -
- * so the only things that put somebody back in a chair are the things that
- * actually happened to them: a status that stopped being idle, a message, a
- * summons to reception, an archival, playback starting, going invisible. There
- * is deliberately no cap on how many are away and no cooldown after one: both
- * existed to keep the floor looking populated, and a floor of people sitting
- * perfectly still is the thing this is for.
+ * Errands.
+ * Only a LIVE floor runs them - playback makes every agent idle between its own rows, so a break during it would fire constantly - and only after a stretch of nothing long enough that the stillness is the point.
  */
 const IDLE_ERRAND_MS = 5_000;
 const ERRAND_STAGGER_SPREAD_MS = 4_000;
@@ -216,13 +157,8 @@ const ARCADE_LINGER_MIN_MS = 5_000;
 const ARCADE_LINGER_SPREAD_MS = 4_000;
 const ARCADE_SPARKLE_GAP_MS = 2_000;
 /**
- * The two-player games: ping-pong, foosball and chess. They are the errands
- * that need somebody OPPOSITE, so the first to arrive holds their side open for
- * a while and gives up if nobody comes - a character standing alone at a table
- * forever reads as a hang, not as a wait.
- *
- * All three share one clock and one pairing rule. What differs is only what is
- * drawn: a ball shuttling across the table, or two people thinking.
+ * The two-player games: ping-pong, foosball and chess.
+ * They are the errands that need somebody OPPOSITE, so the first to arrive holds their side open for a while and gives up if nobody comes - a character standing alone at a table forever reads as a hang, not as a wait.
  */
 const GAME_ALONE_MS = 6_000;
 const GAME_PLAY_MIN_MS = 8_000;
@@ -249,8 +185,8 @@ const NAP_LINGER_MIN_MS = 10_000;
 const NAP_LINGER_SPREAD_MS = 8_000;
 const NAP_SETTLE_MS = 2_000;
 /**
- * Reading in the library. The thought bubble comes and goes on its own beat -
- * a page turned - rather than standing for the whole sit like a status would.
+ * Reading in the library.
+ * The thought bubble comes and goes on its own beat - a page turned - rather than standing for the whole sit like a status would.
  */
 const READ_LINGER_MIN_MS = 8_000;
 const READ_LINGER_SPREAD_MS = 6_000;
@@ -263,13 +199,8 @@ const TREADMILL_FRAME_MS = 200;
 /** Tending a plant: the can is out for the whole beat, the sparkle ends it. */
 const WATER_PLANT_MS = 3_000;
 /**
- * A paper toss: a beat to line the shot up, then two or three throws a beat
- * apart. The gap is longer than the flight so the ball is seen to land before
- * the next one leaves.
- *
- * DARTS is the same throw against a different target, so it runs on the same
- * clock. It takes a fixed three, and none of them miss: a dart is aimed, and a
- * board full of floor-bound darts would read as the arc being broken.
+ * A paper toss: a beat to line the shot up, then two or three throws a beat apart.
+ * The gap is longer than the flight so the ball is seen to land before the next one leaves.
  */
 const BIN_STAND_MS = 1_000;
 const BIN_THROW_GAP_MS = 800;
@@ -289,14 +220,7 @@ const WATERING_CAN_Y_OFFSET = 14;
 /** How often two agents in one conversation swap who is talking. */
 const CHAT_ALTERNATE_MS = 900;
 /**
- * How often a seated idle agent does something small at its own desk, and the
- * spread over which that gap varies per agent.
- *
- * SHORTER THAN THE ERRAND THRESHOLD, deliberately. A desk filler used to be
- * what the floor did while the two agents allowed out at once were away; now
- * everybody leaves, so the only time an idle agent is in its chair at all is
- * the few seconds between falling idle and standing up. A gap longer than that
- * window is a feature that never fires.
+ * How often a seated idle agent does something small at its own desk, and the spread over which that gap varies per agent.
  */
 const FILLER_GAP_MIN_MS = 1_500;
 const FILLER_GAP_SPREAD_MS = 2_000;
@@ -312,14 +236,12 @@ const FILLER_SPIN_FACINGS: ReadonlyArray<OfficeFacing> = [
   "right",
 ];
 /**
- * How badly the errand kinds are wanted. The cafeteria outweighs the rest
- * because it is where two agents can end up in the same place; standing at a
- * window is scenery, and a floor of scenery is the problem this solves.
+ * How badly the errand kinds are wanted.
+ * The cafeteria outweighs the rest because it is where two agents can end up in the same place; standing at a window is scenery, and a floor of scenery is the problem this solves.
  */
 const ERRAND_WEIGHTS: Readonly<Record<OfficeErrandTargetKind, number>> = {
-  // The rooms that only appear once a floor is big enough. A kind with no spot
-  // on THIS floor can never be drawn whatever its weight, so these only ever
-  // compete where the room they belong to actually exists.
+  // The rooms that only appear once a floor is big enough.
+  // A kind with no spot on THIS floor can never be drawn whatever its weight, so these only ever compete where the room they belong to actually exists.
   foosball: 3,
   darts: 2,
   chess: 2,
@@ -356,8 +278,7 @@ const DESK_HIT_ROWS = 2;
 const PHASE_SPREAD_MS = 1000;
 /**
  * The unanswered-request pile, indexed by how many are waiting (1, 2, 3+).
- * Every height shares one BASE line on the desk, so the pile grows upward as
- * it deepens instead of floating off the furniture.
+ * Every height shares one BASE line on the desk, so the pile grows upward as it deepens instead of floating off the furniture.
  */
 interface OfficeEnvelopeStack {
   readonly sprite: OfficeSpriteName;
@@ -372,19 +293,8 @@ const ENVELOPE_STACKS: ReadonlyArray<OfficeEnvelopeStack> = [
 ];
 
 /**
- * The screen on a desk, by the coarse size class of the agent's model: a
- * laptop, a single monitor, or dual wide displays. `onB` is the second lit
- * frame, and a tier that has none simply does not animate.
- *
- * Offsets sit the screen on the desk's back edge, aligned to where the desk
- * sprite draws its keyboard rather than to the desk's own centre - the screen
- * belongs behind the keys, not behind the middle of the furniture. The crash
- * map is one 16x12 for every tier, so it carries its OWN offset rather than
- * borrowing a wide screen's.
- *
- * The plate moves with the screen for the same reason: a wide display reaches
- * across the desk's right half, so a large tier sets its own plate and badge
- * columns instead of overlapping them.
+ * The screen on a desk, by the coarse size class of the agent's model: a laptop, a single monitor, or dual wide displays.
+ * `onB` is the second lit frame, and a tier that has none simply does not animate.
  */
 interface OfficeScreenArt {
   readonly on: OfficeSpriteName;
@@ -440,21 +350,8 @@ interface TransientBubble {
 }
 
 /**
- * What a character is away from its desk FOR. One field rather than several
- * flags, because every one of these drives the same path and only one of them
- * can be true at a time.
- *
- * - `arriving` - walking in from its floor's door to take a seat.
- * - `errand-out` / `errand-wait` / `errand-return` - a break somewhere on the
- *   floor: the cafeteria, a window, a colleague's desk.
- * - `queue-out` / `queue-stand` - waiting at reception for a person.
- * - `leaving` - archived; walking to the door to disappear.
- * - `returning` - walking back to its own chair from anything else.
- *
- * An errand keeps its own return state rather than folding into `returning`,
- * because the cap on how many people are away at once has to count the walk
- * back: release the slot the moment the linger ends and the next bored agent
- * stands up while the last one is still crossing the floor.
+ * What a character is away from its desk FOR.
+ * One field rather than several flags, because every one of these drives the same path and only one of them can be true at a time.
  */
 type OfficeErrand =
   | "none"
@@ -468,10 +365,8 @@ type OfficeErrand =
   | "returning";
 
 /**
- * `visit` is the one errand with no tile in the floor plan: it is paid to a
- * COLLEAGUE, whose desk moves whenever the agent set does. The layout could not
- * carry it without turning the plan into a function of who is idle, so the
- * scene derives it and the other kinds are read straight off the floor.
+ * `visit` is the one errand with no tile in the floor plan: it is paid to a COLLEAGUE, whose desk moves whenever the agent set does.
+ * The layout could not carry it without turning the plan into a function of who is idle, so the scene derives it and the other kinds are read straight off the floor.
  */
 type OfficeErrandTargetKind = OfficeErrandKind | "visit";
 
@@ -484,9 +379,8 @@ interface OfficeErrandTarget {
 }
 
 /**
- * Something small a seated idle agent does at its own desk. Errands move two
- * people at a time and the rest of the floor would sit perfectly still without
- * these - which is the exact complaint that started all of this.
+ * Something small a seated idle agent does at its own desk.
+ * Errands move two people at a time and the rest of the floor would sit perfectly still without these - which is the exact complaint that started all of this.
  */
 type OfficeFillerKind = "look" | "stretch" | "spin";
 
@@ -501,9 +395,7 @@ interface PendingItem {
   readonly bubble: OfficeSpriteName;
   readonly sparkle: boolean;
   /**
-   * Whether the pile on the desk already counts this message: an unanswered
-   * request is in the as-of open-request count from the moment it lands, so
-   * adding it here as well would draw one message as two.
+   * Whether the pile on the desk already counts this message: an unanswered request is in the as-of open-request count from the moment it lands, so adding it here as well would draw one message as two.
    */
   readonly inOpenCount: boolean;
 }
@@ -566,9 +458,8 @@ interface OfficeEnvelope {
 }
 
 /**
- * A crumpled page on its way to a bin. Flies the same arc an envelope does -
- * the shape is what makes a thrown thing read as thrown - and a miss then lies
- * on the floor beside the bin for a few seconds instead of blinking out.
+ * A crumpled page on its way to a bin.
+ * Flies the same arc an envelope does - the shape is what makes a thrown thing read as thrown - and a miss then lies on the floor beside the bin for a few seconds instead of blinking out.
  */
 interface OfficePaperBall {
   readonly from: OfficePoint;
@@ -601,9 +492,8 @@ function hashAgentId(agentId: string): number {
 }
 
 /**
- * A per-agent phase offset, so a room of typists does not hammer its keyboards
- * in lockstep. Seeded from the id rather than from arrival order, which would
- * make the animation depend on how the timeline was scrubbed.
+ * A per-agent phase offset, so a room of typists does not hammer its keyboards in lockstep.
+ * Seeded from the id rather than from arrival order, which would make the animation depend on how the timeline was scrubbed.
  */
 function phaseOffsetMs(agentId: string): number {
   return hashAgentId(agentId) % PHASE_SPREAD_MS;
@@ -611,20 +501,15 @@ function phaseOffsetMs(agentId: string): number {
 
 /**
  * How much longer than the threshold THIS agent sits still before getting up.
- * Derived from the id for the same reason the typing phase is: a floor where
- * everyone stands at once is an animation, not an office.
+ * Derived from the id for the same reason the typing phase is: a floor where everyone stands at once is an animation, not an office.
  */
 function errandStaggerMs(agentId: string): number {
   return hashAgentId(agentId) % ERRAND_STAGGER_SPREAD_MS;
 }
 
 /**
- * Folds a second number into an agent's hash. Every per-agent CHOICE - which
- * spot, how long to linger, which filler comes next - is drawn from one of
- * these rather than from a random source, so the same tick sequence replays
- * frame for frame. Two seeds that differ by one must not land on neighbouring
- * values either, or a per-second reseed would walk an agent along the spot list
- * instead of moving it around the floor.
+ * Folds a second number into an agent's hash.
+ * Every per-agent CHOICE - which spot, how long to linger, which filler comes next - is drawn from one of these rather than from a random source, so the same tick sequence replays frame for frame.
  */
 function mixSeed(seed: number, salt: number): number {
   let hash = (seed ^ Math.imul(salt + 0x9e3779b9, 0x85ebca6b)) >>> 0;
@@ -637,10 +522,8 @@ function tileKeyOf(tile: OfficeTilePos): string {
 }
 
 /**
- * Which way a character ends up turned once it reaches its spot. A spot's own
- * facing looks AT the thing it names, which is what somebody walking up to it
- * does - the sofa is the exception, because you approach one facing it and then
- * turn round, so the room is what you end up looking at.
+ * Which way a character ends up turned once it reaches its spot.
+ * A spot's own facing looks AT the thing it names, which is what somebody walking up to it does - the sofa is the exception, because you approach one facing it and then turn round, so the room is what you end up looking at.
  */
 function arrivalFacingOf(target: OfficeErrandTarget | null): OfficeFacing {
   if (target === null) return "up";
@@ -653,13 +536,8 @@ function isTwoPlayerKind(kind: OfficeErrandTargetKind): boolean {
 }
 
 /**
- * An errand taken SITTING DOWN. The spot's tile is the furniture itself for
- * three of these - a sleeping bag, an armchair, a bench - and the sofa's is the
- * aisle in front of it, but the character reads the same way in all of them:
- * off its feet, and off its own chair.
- *
- * `seated` is deliberately still false throughout. It means "in its own chair",
- * which is what every errand, delivery and hurry rule keys on.
+ * An errand taken SITTING DOWN.
+ * The spot's tile is the furniture itself for three of these - a sleeping bag, an armchair, a bench - and the sofa's is the aisle in front of it, but the character reads the same way in all of them: off its feet, and off its own chair.
  */
 function isSeatedErrandKind(kind: OfficeErrandTargetKind): boolean {
   return (
@@ -673,8 +551,7 @@ function isSeatedErrandKind(kind: OfficeErrandTargetKind): boolean {
 
 /**
  * What a thrower is aiming at, or `null` for an errand that throws nothing.
- * A dart and a crumpled page fly the same arc at the same cadence; only the
- * target prop and whether a shot can miss differ.
+ * A dart and a crumpled page fly the same arc at the same cadence; only the target prop and whether a shot can miss differ.
  */
 function throwTargetSpriteOf(
   kind: OfficeErrandTargetKind,
@@ -685,11 +562,8 @@ function throwTargetSpriteOf(
 }
 
 /**
- * Errands whose length is part of what they ARE - a two-second glance through a
- * doorway, three seconds of watering - or `null` for the ones a per-agent seed
- * decides. A game's beat is fixed for a third reason: it is not how long the
- * game lasts but how long this agent will WAIT for somebody to take the other
- * side, and play sets its own clock the moment one does.
+ * Errands whose length is part of what they ARE - a two-second glance through a doorway, three seconds of watering - or `null` for the ones a per-agent seed decides.
+ * A game's beat is fixed for a third reason: it is not how long the game lasts but how long this agent will WAIT for somebody to take the other side, and play sets its own clock the moment one does.
  */
 function fixedLingerMsFor(kind: OfficeErrandTargetKind): number | null {
   if (kind === "corridor") return STROLL_PAUSE_MS;
@@ -706,9 +580,8 @@ interface LingerRange {
 }
 
 /**
- * How long a seeded stint runs. A nap outlasts a coffee for the same reason a
- * sofa outlasts a window: what the errand is worth is how long somebody would
- * actually stay.
+ * How long a seeded stint runs.
+ * A nap outlasts a coffee for the same reason a sofa outlasts a window: what the errand is worth is how long somebody would actually stay.
  */
 function seededLingerRangeOf(kind: OfficeErrandTargetKind): LingerRange {
   if (kind === "arcade") {
@@ -781,9 +654,8 @@ function fillerPoseOf(filler: OfficeFiller): {
 }
 
 /**
- * Everything the floor plan depends on. Names and archive flags are
- * deliberately absent: a rename must not restack the office. The HOST is not,
- * because it decides which storey the agent lives on.
+ * Everything the floor plan depends on.
+ * Names and archive flags are deliberately absent: a rename must not restack the office.
  */
 function agentSetSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
   return agents
@@ -804,9 +676,8 @@ function agentNameSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
 }
 
 /**
- * The same floor plan with every cabin sign and pod plate re-lettered from
- * the current agent names. Geometry is untouched, so nothing that was placed
- * moves.
+ * The same floor plan with every cabin sign and pod plate re-lettered from the current agent names.
+ * Geometry is untouched, so nothing that was placed moves.
  */
 function withRefreshedNames(
   layout: OfficeLayout,
@@ -825,14 +696,7 @@ function withRefreshedNames(
   };
 }
 
-/**
- * Where a prop's sprite is drawn, given that props are TOP-LEFT anchored.
- *
- * A prop taller than its tile would otherwise spill DOWN over whatever sits
- * on the row below - a plant over its own chair, a rug over the doorway.
- * Lifting by the overhang puts the sprite's FOOT on its tile, which is where
- * a standing object actually stands; a one-tile prop is unaffected.
- */
+/** Where a prop's sprite is drawn, given that props are TOP-LEFT anchored. */
 function spriteFootY(sprite: OfficeSpriteRef, tileRow: number): number {
   return (
     tileRow * OFFICE_TILE - (officeSpriteSize(sprite).height - OFFICE_TILE)
@@ -865,8 +729,7 @@ function sameTile(
 }
 
 /**
- * An in-flight envelope's clickable box: its sprite, padded, so a target that
- * is both small and moving can still be hit.
+ * An in-flight envelope's clickable box: its sprite, padded, so a target that is both small and moving can still be hit.
  */
 function envelopeHitRegionsOf(
   overlay: ReadonlyArray<OfficeDrawable>,
@@ -912,8 +775,7 @@ function pulseSenderId(pulse: CommGraphPulse | null): string | null {
 }
 
 /**
- * The fields every character starts with however it arrives, so a walk-in and a
- * silently seated agent cannot drift apart as fields are added.
+ * The fields every character starts with however it arrives, so a walk-in and a silently seated agent cannot drift apart as fields are added.
  */
 function blankCharacter(agentId: string): OfficeCharacter {
   return {
@@ -998,30 +860,15 @@ export class OfficeScene {
   /** Agents needing a person, in the order they were first seen needing one. */
   private queueOrder: string[] = [];
 
-  /**
-   * Bumped on every layout replacement, and on nothing else.
-   *
-   * It is the renderer's cache key for the floor, so it has to move whenever
-   * `buildFloor` would produce something different and stay put otherwise -
-   * which is exactly the lifetime of `currentLayout`, the only thing that
-   * function reads.
-   */
+  /** Bumped on every layout replacement, and on nothing else. */
   private layoutVersion = 0;
-  /**
-   * Bumped whenever a character is ADDED or REMOVED, and on nothing else.
-   *
-   * `orderedByAgentId` sorts by identity alone, so movement cannot reorder it
-   * - only membership can. That matters because the partner lookups call it
-   * once per character per tick, which without a cache is a sort per character
-   * per tick to answer a question whose answer did not change.
-   */
+  /** Bumped whenever a character is ADDED or REMOVED, and on nothing else. */
   private membershipVersion = 0;
   private byAgentIdCache: ReadonlyArray<OfficeCharacter> | null = null;
   private byAgentIdVersion = -1;
   /**
-   * Cleared around every mutation, since draw order depends on POSITION and
-   * every character moves. Within one `frame()` nothing mutates, so the three
-   * passes that need it share one sort.
+   * Cleared around every mutation, since draw order depends on POSITION and every character moves.
+   * Within one `frame()` nothing mutates, so the three passes that need it share one sort.
    */
   private orderedCache: ReadonlyArray<OfficeCharacter> | null = null;
   private cachedFloor: ReadonlyArray<OfficeDrawable> | null = null;
@@ -1056,10 +903,8 @@ export class OfficeScene {
     this.pulse = input.pulse;
     this.agentById = new Map(input.agents.map((agent) => [agent.id, agent]));
     if (!firstSync) {
-      // The flag governs what STARTS; what is already in flight has to be
-      // told. A person who just asked for less motion should not watch the
-      // envelope and the walk they asked to skip play out for another few
-      // seconds.
+      // The flag governs what STARTS; what is already in flight has to be told.
+      // A person who just asked for less motion should not watch the envelope and the walk they asked to skip play out for another few seconds.
       if (motionJustReduced) this.settleMotion();
       if (rewound) this.dropTransientMotion();
     }
@@ -1088,9 +933,7 @@ export class OfficeScene {
 
   tick(dtMs: number): void {
     if (dtMs <= 0) return;
-    // Cleared on the way IN as well as out: the errand logic below reads the
-    // ordering while it is moving characters, so a cache built before the tick
-    // would be handed to it stale.
+    // Cleared on the way IN as well as out: the errand logic below reads the ordering while it is moving characters, so a cache built before the tick would be handed to it stale.
     this.orderedCache = null;
     this.nowMs += dtMs;
     for (const character of this.characters.values()) {
@@ -1152,9 +995,7 @@ export class OfficeScene {
   }
 
   /**
-   * The pair edge of the envelope under the point, topmost first - a message
-   * is a more specific target than the floor it happens to be flying over, so
-   * the canvas asks this BEFORE `hitTest`.
+   * The pair edge of the envelope under the point, topmost first - a message is a more specific target than the floor it happens to be flying over, so the canvas asks this BEFORE `hitTest`.
    */
   hitTestEnvelope(point: OfficePoint): string | null {
     const regions = envelopeHitRegionsOf(this.buildOverlay());
@@ -1168,17 +1009,14 @@ export class OfficeScene {
   // ---- Population ---------------------------------------------------- //
 
   /**
-   * Archived AS OF THE CURSOR, which is the only reading a scrubbable floor
-   * can use: `archivedAt` is a moment on the same timeline the cursor sits on,
-   * so a record archived after the cursor is still at its desk in that view.
+   * Archived AS OF THE CURSOR, which is the only reading a scrubbable floor can use: `archivedAt` is a moment on the same timeline the cursor sits on, so a record archived after the cursor is still at its desk in that view.
    */
   private isArchivedAsOf(agent: OfficeAgentInput): boolean {
     return officeArchivedAsOf(agent.archivedAt, this.cursorMs);
   }
 
   /**
-   * Archiving is a DEPARTURE, not a state flip: the character stands, walks to
-   * its floor's door and is gone, and only then does the desk get its sheet.
+   * Archiving is a DEPARTURE, not a state flip: the character stands, walks to its floor's door and is gone, and only then does the desk get its sheet.
    * Scrubbing back un-archives, and the same person walks in again.
    */
   private applyArchivalTransitions(
@@ -1189,15 +1027,11 @@ export class OfficeScene {
     for (const agent of input.agents) {
       if (this.isArchivedAsOf(agent)) archived.add(agent.id);
     }
-    // No walk on the first sync or with motion reduced: the floor is being
-    // MATERIALIZED as of the cursor, and a departure nobody saw begin is just
-    // an empty desk.
+    // No walk on the first sync or with motion reduced: the floor is being MATERIALIZED as of the cursor, and a departure nobody saw begin is just an empty desk.
     const instant = firstSync || input.reducedMotion;
     this.sendArchivedHome(input, archived, instant);
     this.readmitUnarchived(input, archived, instant);
-    // A character mid-departure whose agent is no longer archived turns
-    // around: the cursor moved back before the archival, so the walk it was
-    // performing never happened.
+    // A character mid-departure whose agent is no longer archived turns around: the cursor moved back before the archival, so the walk it was performing never happened.
     for (const character of this.characters.values()) {
       if (character.errand !== "leaving") continue;
       if (archived.has(character.agentId)) continue;
@@ -1262,11 +1096,8 @@ export class OfficeScene {
       if (this.departedIds.has(agent.id)) continue;
       const desk = this.currentLayout.desks.get(agent.id);
       if (desk === undefined) continue;
-      // Walking in is what a REVEAL looks like: playback advancing, the cursor
-      // resting on the very row that created this agent, or a scrub back past
-      // its archival. A hand-scrubbed jump and a live arrival while paused are
-      // not reveals - they are the floor being restated - so those seat
-      // silently.
+      // Walking in is what a REVEAL looks like: playback advancing, the cursor resting on the very row that created this agent, or a scrub back past its archival.
+      // A hand-scrubbed jump and a live arrival while paused are not reveals - they are the floor being restated - so those seat silently.
       const revealed =
         this.returningIds.has(agent.id) ||
         input.playing ||
@@ -1310,13 +1141,8 @@ export class OfficeScene {
   }
 
   /**
-   * After a re-layout, everyone whose desk MOVED walks to the new one; everyone
-   * whose desk stayed put keeps their exact position. Comparing destinations
-   * rather than current positions is what keeps a walker that is already headed
-   * to the right chair from being restarted every re-layout.
-   *
-   * A departure and a reception queue are left alone: those are not headed for
-   * a chair at all, and their own updaters re-target them on this same sync.
+   * After a re-layout, everyone whose desk MOVED walks to the new one; everyone whose desk stayed put keeps their exact position.
+   * Comparing destinations rather than current positions is what keeps a walker that is already headed to the right chair from being restarted every re-layout.
    */
   private rehomeCharacters(): void {
     for (const character of this.characters.values()) {
@@ -1392,9 +1218,7 @@ export class OfficeScene {
   }
 
   /**
-   * Everything that has to be true the instant a character is back in its seat,
-   * wherever it came from: the errand released and any message that landed
-   * while it was away finally acknowledged.
+   * Everything that has to be true the instant a character is back in its seat, wherever it came from: the errand released and any message that landed while it was away finally acknowledged.
    */
   private settleInChair(character: OfficeCharacter): void {
     character.facing = "up";
@@ -1458,15 +1282,8 @@ export class OfficeScene {
   }
 
   /**
-   * Whoever needs a person queues at their own floor's reception, in the order
-   * they started needing one. Arrival order is kept as a list rather than
-   * re-derived, because "who got here first" is not recoverable from the
-   * statuses alone; newcomers within one sync break their tie by id so the
-   * queue is still a function of the data.
-   *
-   * A floor with more people needing help than it has standing room leaves the
-   * overflow at their desks, bubble and all - a queue that grew past the lobby
-   * would read as a crowd, and there is nowhere to put them anyway.
+   * Whoever needs a person queues at their own floor's reception, in the order they started needing one.
+   * Arrival order is kept as a list rather than re-derived, because "who got here first" is not recoverable from the statuses alone; newcomers within one sync break their tie by id so the queue is still a function of the data.
    */
   private updateReceptionQueue(): void {
     const needy = new Set<string>();
@@ -1580,10 +1397,8 @@ export class OfficeScene {
     }
     if (!this.characters.has(pulse.fromAgentId)) return;
     if (!this.characters.has(pulse.toAgentId)) return;
-    // The DESK sends and the desk receives, so an agent caught mid-floor does
-    // not have to be anywhere for the flight to be correct. What it does is
-    // HURRY: cancel whatever it was doing and run for its chair. Snapping it
-    // there instead - which this replaced - read as the sprite teleporting.
+    // The DESK sends and the desk receives, so an agent caught mid-floor does not have to be anywhere for the flight to be correct.
+    // What it does is HURRY: cancel whatever it was doing and run for its chair.
     this.startHurry(pulse.fromAgentId);
     this.startHurry(pulse.toAgentId);
     if (this.reducedMotion) {
@@ -1606,12 +1421,8 @@ export class OfficeScene {
   }
 
   /**
-   * The envelope has landed on the receiver's DESK. If its owner is in the
-   * chair, that is an acknowledgement now; if not, the message sits on the desk
-   * as one more item on the pile and is acknowledged the moment they sit.
-   *
-   * Which is what a message actually is - waiting work, not a thing that can
-   * only exist while someone is looking at it.
+   * The envelope has landed on the receiver's DESK.
+   * If its owner is in the chair, that is an acknowledgement now; if not, the message sits on the desk as one more item on the pile and is acknowledged the moment they sit.
    */
   private deliver(agentId: string, pulseKind: CommGraphPulseKind): void {
     const character = this.characters.get(agentId);
@@ -1639,12 +1450,7 @@ export class OfficeScene {
   }
 
   /**
-   * An agent with a message in the air, or one waiting on its desk, is in a
-   * hurry: whatever it was doing is over and it is running for its chair.
-   *
-   * A character at reception is the one exception. It is standing there because
-   * a PERSON is needed, which no envelope resolves; pulling it out of the queue
-   * to collect a message would drop its place in line.
+   * An agent with a message in the air, or one waiting on its desk, is in a hurry: whatever it was doing is over and it is running for its chair.
    */
   private startHurry(agentId: string): void {
     const character = this.characters.get(agentId);
@@ -1653,9 +1459,8 @@ export class OfficeScene {
     if (this.inReceptionQueue(character)) return;
     character.filler = null;
     if (character.seated) return;
-    // A LATCH, not a window: the hurry lasts until the chair is reached, not
-    // until the envelope lands. Dropping back to a stroll partway across the
-    // floor - which is what tying it to the flight did - reads as a stutter.
+    // A LATCH, not a window: the hurry lasts until the chair is reached, not until the envelope lands.
+    // Dropping back to a stroll partway across the floor - which is what tying it to the flight did - reads as a stutter.
     character.hurrying = true;
     // Already headed for the chair: a re-path would only restart the walk.
     if (character.errand === "arriving") return;
@@ -1665,9 +1470,7 @@ export class OfficeScene {
   }
 
   /**
-   * Whether this agent is running for its chair: latched while it walks, and
-   * true for a seated one that still has a message in the air or on the desk,
-   * which is what keeps it from wandering off in the middle of a delivery.
+   * Whether this agent is running for its chair: latched while it walks, and true for a seated one that still has a message in the air or on the desk, which is what keeps it from wandering off in the middle of a delivery.
    */
   private isHurrying(agentId: string): boolean {
     const character = this.characters.get(agentId);
@@ -1691,16 +1494,8 @@ export class OfficeScene {
   }
 
   /**
-   * Whether this input's cursor sits BEFORE the one last synced - a seek, a
-   * step back, or leaving live for history. That lands on a prefix in which
-   * whatever was mid-flight has not happened yet: an envelope from a later row
-   * must not keep flying over the earlier floor, let alone land there.
-   *
-   * Two rows can share a millisecond, and a step between them moves the cursor
-   * without moving `cursorMs`. The pulse key names the row, so a key change at
-   * an equal time is a move too - taken as a rewind either way, because
-   * dropping a flight the next row would restart costs nothing and keeping one
-   * from a later row costs the truth of the earlier prefix.
+   * Whether this input's cursor sits BEFORE the one last synced - a seek, a step back, or leaving live for history.
+   * That lands on a prefix in which whatever was mid-flight has not happened yet: an envelope from a later row must not keep flying over the earlier floor, let alone land there.
    */
   private cursorRewoundBy(input: OfficeSceneInput): boolean {
     if (input.cursorMs === null) return false;
@@ -1711,16 +1506,7 @@ export class OfficeScene {
     );
   }
 
-  /**
-   * Re-plans the floor when the agent SET changed, and only re-letters it
-   * when only names did.
-   *
-   * A rename is the one agent change that does NOT restack the floor - a
-   * re-layout sends every errand-goer back to its chair - but the cabin signs
-   * and pod plates carry names copied at layout time, so they are rewritten
-   * in place and the floor's version moves, which is what makes the cached
-   * floor and the static layer pick the new lettering up.
-   */
+  /** Re-plans the floor when the agent SET changed, and only re-letters it when only names did. */
   private adoptLayout(agents: ReadonlyArray<OfficeAgentInput>): void {
     const signature = agentSetSignature(agents);
     const layoutChanged = signature !== this.agentSignature;
@@ -1743,11 +1529,7 @@ export class OfficeScene {
   }
 
   /**
-   * Ends every motion in flight the way it would have ended: each envelope is
-   * delivered, each walk lands on its last tile and does what arriving there
-   * does (sit, stand at the spot, leave), and every thrown ball is gone. The
-   * floor is left in the state a full playthrough would have reached, so
-   * nothing downstream has to know the motion was cut short.
+   * Ends every motion in flight the way it would have ended: each envelope is delivered, each walk lands on its last tile and does what arriving there does (sit, stand at the spot, leave), and every thrown ball is gone.
    */
   private settleMotion(): void {
     for (const envelope of this.envelopes) {
@@ -1767,11 +1549,8 @@ export class OfficeScene {
   }
 
   /**
-   * Forgets every timeline-derived transient: envelopes in flight, messages
-   * waiting on desks, the bubbles and sparkles they raised. Unlike
-   * `settleMotion` nothing is delivered, because on the prefix the cursor now
-   * shows those messages have not been sent. Walks are left alone - a
-   * character's position is not a fact about the timeline.
+   * Forgets every timeline-derived transient: envelopes in flight, messages waiting on desks, the bubbles and sparkles they raised.
+   * Unlike `settleMotion` nothing is delivered, because on the prefix the cursor now shows those messages have not been sent.
    */
   private dropTransientMotion(): void {
     this.envelopes = [];
@@ -1844,9 +1623,7 @@ export class OfficeScene {
 
   /**
    * The agent on the OTHER side of this one's table, if somebody has taken it.
-   * A game's two spots are laid on the same ROW a couple of tiles apart, so the
-   * table they belong to is the one they share a row with - and the kind has to
-   * match, because a floor with a foosball table has a ping-pong one beside it.
+   * A game's two spots are laid on the same ROW a couple of tiles apart, so the table they belong to is the one they share a row with - and the kind has to match, because a floor with a foosball table has a ping-pong one beside it.
    */
   private rallyPartnerOf(character: OfficeCharacter): OfficeCharacter | null {
     const target = character.errandTarget;
@@ -1864,10 +1641,8 @@ export class OfficeScene {
   }
 
   /**
-   * Play starts the moment the second side is taken, and both players get the
-   * SAME clock - a rally where one of them wandered off mid-point would read as
-   * the other hitting to nobody. Only the lower id starts it, so which of the
-   * two the tick happens to reach first cannot change the game's length.
+   * Play starts the moment the second side is taken, and both players get the SAME clock - a rally where one of them wandered off mid-point would read as the other hitting to nobody.
+   * Only the lower id starts it, so which of the two the tick happens to reach first cannot change the game's length.
    */
   private advanceRally(character: OfficeCharacter): void {
     if (character.rallying) return;
@@ -1887,13 +1662,8 @@ export class OfficeScene {
   }
 
   /**
-   * The ball, mid-rally: one stroke across the table and one back, on a clock
-   * shared by both players so they are always hitting the same ball. Derived
-   * from the scene time rather than stored, which is what keeps it identical on
-   * two machines replaying the same ticks.
-   *
-   * Ping-pong and foosball both have one; chess is played with the two players
-   * thinking at each other instead - see `errandBubbleFor`.
+   * The ball, mid-rally: one stroke across the table and one back, on a clock shared by both players so they are always hitting the same ball.
+   * Derived from the scene time rather than stored, which is what keeps it identical on two machines replaying the same ticks.
    */
   private pushRallyBall(
     overlay: OfficeDrawable[],
@@ -1918,10 +1688,8 @@ export class OfficeScene {
   // ---- Paper tosses ---------------------------------------------------- //
 
   /**
-   * The throws of a toss errand, while its owner stands at the line. Driven off
-   * the same wait clock the linger runs on, so the errand can never end with a
-   * throw still owed. A bin and a dartboard are the same errand aimed at
-   * different furniture.
+   * The throws of a toss errand, while its owner stands at the line.
+   * Driven off the same wait clock the linger runs on, so the errand can never end with a throw still owed.
    */
   private advanceThrows(character: OfficeCharacter, dtMs: number): void {
     if (character.throwsLeft <= 0) return;
@@ -1935,15 +1703,8 @@ export class OfficeScene {
   }
 
   /**
-   * One ball, from the thrower's head to what it is aimed at, and a missed
-   * paper toss lands beside the bin rather than in it. A DART never misses:
-   * darts on the floor around a board read as the arc being broken rather than
-   * as somebody's aim.
-   *
-   * The target is LOOKED UP in the plan rather than derived from the spot by a
-   * fixed offset: how far back the throwing line stands is the layout's
-   * business, and a scene that hard-coded that distance would sail balls into
-   * empty floor the day the plan moved the line.
+   * One ball, from the thrower's head to what it is aimed at, and a missed paper toss lands beside the bin rather than in it.
+   * A DART never misses: darts on the floor around a board read as the arc being broken rather than as somebody's aim.
    */
   private throwPaperBall(
     character: OfficeCharacter,
@@ -1975,10 +1736,8 @@ export class OfficeScene {
   }
 
   /**
-   * The nearest prop of this name standing above a spot, in the spot's own
-   * column. Every spot that acts ON something is laid out looking up at it, so
-   * this is how the scene asks the plan what a spot is FOR without knowing how
-   * the plan spaced the two apart.
+   * The nearest prop of this name standing above a spot, in the spot's own column.
+   * Every spot that acts ON something is laid out looking up at it, so this is how the scene asks the plan what a spot is FOR without knowing how the plan spaced the two apart.
    */
   private propTileAbove(
     tile: OfficeTilePos,
@@ -2025,10 +1784,8 @@ export class OfficeScene {
   // ---- Desk fillers --------------------------------------------------- //
 
   /**
-   * The small things a seated idle agent does between errands. Only ONE cap is
-   * needed here, unlike errands: a filler moves nobody across the floor, so a
-   * room where everyone stretches at once is a room that looks alive rather
-   * than a room being evacuated.
+   * The small things a seated idle agent does between errands.
+   * Only ONE cap is needed here, unlike errands: a filler moves nobody across the floor, so a room where everyone stretches at once is a room that looks alive rather than a room being evacuated.
    */
   private advanceFiller(character: OfficeCharacter, dtMs: number): void {
     if (this.playing || this.cursorMs !== null || this.reducedMotion) {
@@ -2082,13 +1839,7 @@ export class OfficeScene {
   }
 
   /**
-   * Settled somewhere the character is OFF ITS FEET: a sofa, a sleeping bag, an
-   * armchair, a console seat, a garden bench.
-   *
-   * The garden is the one kind that is both. Its bench seats and its stroll
-   * spots are the same errand kind, so the layout is asked which this tile is by
-   * looking for the bench that would be standing over it - the same question
-   * the bin and the plant already put to it.
+   * Settled somewhere the character is OFF ITS FEET: a sofa, a sleeping bag, an armchair, a console seat, a garden bench.
    */
   private onSeatedErrand(character: OfficeCharacter): boolean {
     const target = character.errandTarget;
@@ -2098,15 +1849,7 @@ export class OfficeScene {
     return this.propTileAbove(target.tile, "bench") !== null;
   }
 
-  /**
-   * Whether this stint on the sofa has turned into a doze: only a LONG sit
-   * does, and only in its second half.
-   *
-   * Keyed on the stint rather than on the agent, which is the difference
-   * between a floor where anyone might nod off and a floor with one designated
-   * narcoleptic - the sofa linger is already seeded per stint, so reading its
-   * length costs nothing and varies the way a person does.
-   */
+  /** Whether this stint on the sofa has turned into a doze: only a LONG sit does, and only in its second half. */
   private dozingOnSofa(character: OfficeCharacter): boolean {
     const longSit = SOFA_LINGER_MIN_MS + SOFA_LINGER_SPREAD_MS / 2;
     if (character.lingerTotalMs < longSit) return false;
@@ -2122,9 +1865,8 @@ export class OfficeScene {
   }
 
   /**
-   * An errand belongs to a LIVE floor and to an agent that is still idle, still
-   * on it, and still nothing is happening to it. Playback makes every agent
-   * idle between its own rows, so an errand during it would fire constantly.
+   * An errand belongs to a LIVE floor and to an agent that is still idle, still on it, and still nothing is happening to it.
+   * Playback makes every agent idle between its own rows, so an errand during it would fire constantly.
    */
   private errandMustEnd(agentId: string): boolean {
     if (this.playing) return true;
@@ -2148,10 +1890,8 @@ export class OfficeScene {
   }
 
   /**
-   * EVERY idle agent past its threshold gets up - there is no cap, so this is a
-   * plain sweep rather than a budget being spent. Canonical order still decides
-   * who claims a contested spot first, which is what keeps that a fact about
-   * their ids rather than about map insertion order.
+   * EVERY idle agent past its threshold gets up - there is no cap, so this is a plain sweep rather than a budget being spent.
+   * Canonical order still decides who claims a contested spot first, which is what keeps that a fact about their ids rather than about map insertion order.
    */
   private updateErrandStarts(): void {
     if (this.playing || this.cursorMs !== null || this.reducedMotion) return;
@@ -2174,16 +1914,7 @@ export class OfficeScene {
     return character.idleMs >= threshold;
   }
 
-  /**
-   * Somewhere to be next: a free spot if the floor has one, and a corridor tile
-   * to stroll between if it does not.
-   *
-   * The fallback is the whole reason an agent never has to go back to its desk.
-   * A floor with more idle agents than spots used to put the surplus back in
-   * their chairs, which is exactly the still office this replaced; now they walk
-   * the corridors instead, and a corridor tile is claimed like any spot so two
-   * of them never stand in the same place.
-   */
+  /** Somewhere to be next: a free spot if the floor has one, and a corridor tile to stroll between if it does not. */
   private nextErrandFor(
     character: OfficeCharacter,
     claimed: ReadonlySet<string>,
@@ -2194,10 +1925,8 @@ export class OfficeScene {
   }
 
   /**
-   * Where this agent goes next. The seed folds the clock in at one-second
-   * resolution so the same agent does not walk the same loop forever, and the
-   * last destination is excluded outright - twice to the same window reads as
-   * the animation being stuck rather than as a habit.
+   * Where this agent goes next.
+   * The seed folds the clock in at one-second resolution so the same agent does not walk the same loop forever, and the last destination is excluded outright - twice to the same window reads as the animation being stuck rather than as a habit.
    */
   private pickErrandTarget(
     character: OfficeCharacter,
@@ -2208,9 +1937,8 @@ export class OfficeScene {
       Math.floor(this.nowMs / 1000),
     );
     const options = this.errandOptionsFor(character, claimed, seed);
-    // Somebody is holding a side of a table open. Taking the other one beats
-    // any roll: a game needs two, and leaving it to the weights means the
-    // waiter usually gives up before a second player happens to choose it.
+    // Somebody is holding a side of a table open.
+    // Taking the other one beats any roll: a game needs two, and leaving it to the weights means the waiter usually gives up before a second player happens to choose it.
     for (const kind of TWO_PLAYER_KINDS) {
       const table = options.find((option) => option.kind === kind);
       if (table !== undefined && this.someoneWaitingToPlay(kind)) return table;
@@ -2219,15 +1947,7 @@ export class OfficeScene {
   }
 
   /**
-   * Somebody has a side of THIS game's table, or is on their way to one, with
-   * nobody opposite - an open invitation.
-   *
-   * EN ROUTE counts, and has to. The game room is across the floor from the
-   * desks, so a player spends far longer walking to the table than the few
-   * seconds it will then wait at it: a bias that only answered an agent already
-   * standing there would send the second player off a moment before the first
-   * gave up, and no game would ever happen on a floor big enough to have a game
-   * room.
+   * Somebody has a side of THIS game's table, or is on their way to one, with nobody opposite - an open invitation.
    */
   private someoneWaitingToPlay(kind: OfficeErrandTargetKind): boolean {
     for (const character of this.characters.values()) {
@@ -2267,15 +1987,8 @@ export class OfficeScene {
   }
 
   /**
-   * Whether this spot is one THIS agent has any business at. Three kinds are
-   * about whose room you are in rather than about what is on the floor:
-   *
-   * - a bin and a plant belong to the cabin they stand in, and walking into
-   *   somebody else's room to throw paper away is not a break, it is trespass;
-   * - a peek is the exact opposite - the point of it is another team's door.
-   *
-   * A deskless agent has no cabin, so it is refused all three rather than being
-   * given the run of every room on the floor.
+   * Whether this spot is one THIS agent has any business at.
+   * Three kinds are about whose room you are in rather than about what is on the floor:
    */
   private spotSuitsAgent(
     character: OfficeCharacter,
@@ -2298,10 +2011,8 @@ export class OfficeScene {
   }
 
   /**
-   * A corridor tile to stand on when every spot is taken. Any walkable tile
-   * that is not inside a room, the break room, the lobby row or the reception
-   * queue - the floor's own corridors, which is where somebody with nowhere to
-   * be would actually be.
+   * A corridor tile to stand on when every spot is taken.
+   * Any walkable tile that is not inside a room, the break room, the lobby row or the reception queue - the floor's own corridors, which is where somebody with nowhere to be would actually be.
    */
   private strollTargetFor(
     character: OfficeCharacter,
@@ -2331,9 +2042,7 @@ export class OfficeScene {
       tileKeyOf(floor.doorTile),
       tileKeyOf(floor.lobbyTile),
       ...floor.receptionQueueTiles.map(tileKeyOf),
-      // A tile the plan already named is that errand's, not somewhere to
-      // stand about: a stroll that stopped on the peek spot outside a door
-      // would be paying somebody a visit it never chose.
+      // A tile the plan already named is that errand's, not somewhere to stand about: a stroll that stopped on the peek spot outside a door would be paying somebody a visit it never chose.
       ...floor.errandSpots.map((spot) => tileKeyOf(spot.tile)),
     ]);
     const first = floor.bounds.row + 2;
@@ -2377,14 +2086,8 @@ export class OfficeScene {
   }
 
   /**
-   * A call on somebody in the SAME cabin: the aisle tile under their desk,
-   * facing them. Same cabin because a visit is meant to read as two people who
-   * work together talking, and because the aisle under a desk in another room
-   * is a corridor the visitor has no business standing in.
-   *
-   * The colleague has to be at their desk and either idle or working - there is
-   * no point calling on somebody who is themselves out, and an agent that needs
-   * a person has a queue to stand in.
+   * A call on somebody in the SAME cabin: the aisle tile under their desk, facing them.
+   * Same cabin because a visit is meant to read as two people who work together talking, and because the aisle under a desk in another room is a corridor the visitor has no business standing in.
    */
   private visitTargetFor(
     character: OfficeCharacter,
@@ -2457,8 +2160,8 @@ export class OfficeScene {
   }
 
   /**
-   * How many corridor spots this stroll takes in. Only a corridor errand reads
-   * it; standing in one corridor and turning round is not a stroll.
+   * How many corridor spots this stroll takes in.
+   * Only a corridor errand reads it; standing in one corridor and turning round is not a stroll.
    */
   private strollLegsFor(character: OfficeCharacter): number {
     const seed = mixSeed(
@@ -2486,10 +2189,8 @@ export class OfficeScene {
   }
 
   /**
-   * How long this character stands where it has arrived. Three answers, in
-   * order: a beat whose length is part of what the activity IS, a toss that
-   * lasts exactly as long as the throws it owes, or a seeded stint so a pair at
-   * the cooler do not finish in lockstep.
+   * How long this character stands where it has arrived.
+   * Three answers, in order: a beat whose length is part of what the activity IS, a toss that lasts exactly as long as the throws it owes, or a seeded stint so a pair at the cooler do not finish in lockstep.
    */
   private lingerMsFor(
     character: OfficeCharacter,
@@ -2509,9 +2210,8 @@ export class OfficeScene {
   }
 
   /**
-   * A toss is as long as the throws it holds: a beat to line up, then one per
-   * throw. Arming the counters here rather than in the walk is what keeps the
-   * linger and the throws from ever disagreeing about how many are coming.
+   * A toss is as long as the throws it holds: a beat to line up, then one per throw.
+   * Arming the counters here rather than in the walk is what keeps the linger and the throws from ever disagreeing about how many are coming.
    */
   private armThrows(
     character: OfficeCharacter,
@@ -2530,14 +2230,8 @@ export class OfficeScene {
   }
 
   /**
-   * The linger is over, so the NEXT errand begins - from here, not from the
-   * desk. Chaining is the rule: an idle agent has nothing to go back for, and a
-   * walk home between every two errands was what made the floor look like it
-   * was commuting rather than living.
-   *
-   * A stroll is the one errand with several legs, because standing in one
-   * corridor and turning round is not a stroll. Only a floor with nowhere left
-   * to go at all puts somebody back in a chair.
+   * The linger is over, so the NEXT errand begins - from here, not from the desk.
+   * Chaining is the rule: an idle agent has nothing to go back for, and a walk home between every two errands was what made the floor look like it was commuting rather than living.
    */
   private finishLinger(character: OfficeCharacter): void {
     const target = character.errandTarget;
@@ -2585,10 +2279,8 @@ export class OfficeScene {
   // ---- Conversations -------------------------------------------------- //
 
   /**
-   * Who this character is talking to, if anyone. Two agents lingering on
-   * NEIGHBOURING spots of the same kind are together - which is exactly what
-   * the two cooler spots and each table's two seats were laid out to produce -
-   * and a visitor is together with the colleague it called on.
+   * Who this character is talking to, if anyone.
+   * Two agents lingering on NEIGHBOURING spots of the same kind are together - which is exactly what the two cooler spots and each table's two seats were laid out to produce - and a visitor is together with the colleague it called on.
    */
   private chatPartnerOf(character: OfficeCharacter): OfficeCharacter | null {
     const target = character.errandTarget;
@@ -2638,9 +2330,8 @@ export class OfficeScene {
   }
 
   /**
-   * Whose turn it is to talk. One bubble at a time, swapping on a shared clock:
-   * two bubbles at once reads as two people waiting rather than as two people
-   * in a conversation.
+   * Whose turn it is to talk.
+   * One bubble at a time, swapping on a shared clock: two bubbles at once reads as two people waiting rather than as two people in a conversation.
    */
   private chatBubbleFor(character: OfficeCharacter): OfficeSpriteName | null {
     const partner = this.chatPartnerOf(character);
@@ -2653,10 +2344,8 @@ export class OfficeScene {
   // ---- Walking -------------------------------------------------------- //
 
   /**
-   * A walk in from the door outruns a stroll, and a walk with a message waiting
-   * outruns both. The arrival speed exists because a newcomer's first message
-   * lands within a step; the hurry speed exists because that message can arrive
-   * for anyone, at any point on the floor.
+   * A walk in from the door outruns a stroll, and a walk with a message waiting outruns both.
+   * The arrival speed exists because a newcomer's first message lands within a step; the hurry speed exists because that message can arrive for anyone, at any point on the floor.
    */
   private walkSpeedOf(character: OfficeCharacter): number {
     if (this.isHurrying(character.agentId)) return HURRY_TILES_PER_SECOND;
@@ -2727,10 +2416,8 @@ export class OfficeScene {
   }
 
   /**
-   * How a character is drawn this frame. Pose and facing come back together
-   * because a desk filler changes BOTH - the seated sprite ignores facing
-   * entirely, so "look left" is only visible on a standing body, and a filler
-   * that set facing alone would animate nothing at all.
+   * How a character is drawn this frame.
+   * Pose and facing come back together because a desk filler changes BOTH - the seated sprite ignores facing entirely, so "look left" is only visible on a standing body, and a filler that set facing alone would animate nothing at all.
    */
   private renderStateOf(character: OfficeCharacter): {
     readonly pose: OfficeCharacterPose;
@@ -2743,9 +2430,8 @@ export class OfficeScene {
 
   private poseFor(character: OfficeCharacter): OfficeCharacterPose {
     if (!character.seated) {
-      // Off a desk and off its feet: a sofa, a sleeping bag, an armchair, a
-      // bench. `sit` without being `seated` - seated means "in its own chair",
-      // which is what every errand and delivery rule keys on.
+      // Off a desk and off its feet: a sofa, a sleeping bag, an armchair, a bench.
+      // `sit` without being `seated` - seated means "in its own chair", which is what every errand and delivery rule keys on.
       if (this.onSeatedErrand(character)) return "sit";
       // On a treadmill: walking, and going nowhere. The belt is the whole
       // point, so the frames alternate even though the tile never changes.
@@ -2775,9 +2461,8 @@ export class OfficeScene {
   }
 
   /**
-   * The walking frames for a character that is not going anywhere. Phased off
-   * the scene clock rather than off `walkPhaseMs`, which only advances while a
-   * path is being walked and would leave a treadmill runner frozen mid-stride.
+   * The walking frames for a character that is not going anywhere.
+   * Phased off the scene clock rather than off `walkPhaseMs`, which only advances while a path is being walked and would leave a treadmill runner frozen mid-stride.
    */
   private walkingPose(agentId: string, frameMs: number): OfficeCharacterPose {
     const phase = this.nowMs + phaseOffsetMs(agentId);
@@ -2794,8 +2479,8 @@ export class OfficeScene {
   // ---- Frame assembly ------------------------------------------------ //
 
   /**
-   * A cabin's own walls. They sit ON the floor tiles and UNDER the lobby rug:
-   * the building's inner structure, not furniture standing on it.
+   * A cabin's own walls.
+   * They sit ON the floor tiles and UNDER the lobby rug: the building's inner structure, not furniture standing on it.
    */
   private pushCabinWalls(floor: OfficeDrawable[], room: OfficeRoom): void {
     const { col, row, cols, rows } = room.bounds;
@@ -2828,12 +2513,7 @@ export class OfficeScene {
   }
 
   /**
-   * A pod's tinted carpet, on TOP of the cabin's own floor and under
-   * everything that stands on it - a tinted region is a different bit of
-   * carpet, not a thing in the room.
-   *
-   * Deepest LAST, so a nested pod's tint wins over its parent's on the tiles
-   * the two share.
+   * A pod's tinted carpet, on TOP of the cabin's own floor and under everything that stands on it - a tinted region is a different bit of carpet, not a thing in the room.
    */
   private pushPodFloors(floor: OfficeDrawable[], room: OfficeRoom): void {
     for (const pod of [...room.pods].sort((a, b) => a.depth - b.depth)) {
@@ -2854,18 +2534,7 @@ export class OfficeScene {
     }
   }
 
-  /**
-   * Whether anything on the floor is MOVING right now.
-   *
-   * A renderer that draws sixty identical frames a second is spending a
-   * laptop's battery to redraw a still life, and a floor of seated agents
-   * between turns is exactly that. This is the cheap test for "is another
-   * frame going to differ from this one": something in flight, someone off
-   * their chair, a bubble or sparkle up, or a screen mid-alternation.
-   *
-   * Deliberately CONSERVATIVE. Anything it is unsure about counts as animating,
-   * because a false "no" freezes the floor and a false "yes" costs one frame.
-   */
+  /** Whether anything on the floor is MOVING right now. */
   isAnimating(): boolean {
     if (this.envelopes.length > 0) return true;
     if (this.paperBalls.length > 0) return true;
@@ -2879,20 +2548,13 @@ export class OfficeScene {
       const status = this.statusOf(character.agentId);
       if (status === "working" || status === "background") return true;
       // The attention bubble bobs, so a flagged agent animates even seated.
-      // The awaiting bubble does not: a seated agent waiting on a reply is a
-      // still frame, and a request can stay open for hours.
+      // The awaiting bubble does not: a seated agent waiting on a reply is a still frame, and a request can stay open for hours.
       if (status === "attention" || status === "failure") return true;
     }
     return false;
   }
 
-  /**
-   * The floor, built once per layout.
-   *
-   * A floor is one sprite per TILE - thousands of them on a large office - and
-   * rebuilding that array sixty, or even thirty, times a second to produce the
-   * identical thing was the single largest source of garbage the office made.
-   */
+  /** The floor, built once per layout. */
   private floorDrawables(): ReadonlyArray<OfficeDrawable> {
     if (
       this.cachedFloor !== null &&
@@ -2921,10 +2583,8 @@ export class OfficeScene {
     }
     for (const room of layout.rooms) this.pushCabinWalls(floor, room);
     for (const room of layout.rooms) this.pushPodFloors(floor, room);
-    // Every amenity's ring is drawn with the cabins' own two sprites, and the
-    // garden's with a hedge instead. Their doors are not carried in the plan
-    // and do not need to be: a ring tile the grid still says is walkable IS
-    // the door, by construction.
+    // Every amenity's ring is drawn with the cabins' own two sprites, and the garden's with a hedge instead.
+    // Their doors are not carried in the plan and do not need to be: a ring tile the grid still says is walkable IS the door, by construction.
     for (const floorPlan of layout.floors) {
       for (const room of floorPlan.amenities) {
         this.pushRoomRing(floor, room.bounds, room.kind === "garden");
@@ -2944,9 +2604,7 @@ export class OfficeScene {
     }
     for (const prop of layout.props) {
       if (prop.sprite.name !== "rug") continue;
-      // Centred on its tile as well as lifted onto it: the rug is wider than
-      // one tile and the door sits directly below the lobby, so a top-left
-      // draw would carpet over the way in.
+      // Centred on its tile as well as lifted onto it: the rug is wider than one tile and the door sits directly below the lobby, so a top-left draw would carpet over the way in.
       const overhang = officeSpriteSize(prop.sprite).width - OFFICE_TILE;
       floor.push({
         kind: "sprite",
@@ -2958,14 +2616,7 @@ export class OfficeScene {
     return floor;
   }
 
-  /**
-   * One amenity's ring: cap, wall face, sides, and its own doorway.
-   *
-   * A HEDGE is the same ring in a different material - a garden is bounded, not
-   * built - so the two share every tile and differ only in the sprite. Its
-   * opening is still the one ring tile the grid says is walkable, exactly as a
-   * walled room's door is.
-   */
+  /** One amenity's ring: cap, wall face, sides, and its own doorway. */
   private pushRoomRing(
     floor: OfficeDrawable[],
     room: OfficeTileRect,
@@ -3004,9 +2655,8 @@ export class OfficeScene {
   }
 
   /**
-   * One tile of a room's boundary: its cap row, or the wall below and around
-   * it. `null` means draw nothing, which is what a gap in a hedge is - a garden
-   * is bounded rather than built, so its way in has no door hanging in it.
+   * One tile of a room's boundary: its cap row, or the wall below and around it.
+   * `null` means draw nothing, which is what a gap in a hedge is - a garden is bounded rather than built, so its way in has no door hanging in it.
    */
   private ringSpriteAt(
     col: number,
@@ -3045,9 +2695,8 @@ export class OfficeScene {
   }
 
   /**
-   * Inside a garden's hedge, the hedge itself excluded. The boundary is two
-   * rows deep at the top exactly as a wall is - the cap and the face under it -
-   * because it is the same ring in another material.
+   * Inside a garden's hedge, the hedge itself excluded.
+   * The boundary is two rows deep at the top exactly as a wall is - the cap and the face under it - because it is the same ring in another material.
    */
   private inGarden(col: number, row: number): boolean {
     for (const floor of this.currentLayout.floors) {
@@ -3148,10 +2797,8 @@ export class OfficeScene {
         });
       }
     }
-    // The walls and outlines stand for every agent the epic has, because a
-    // floor that restacks as the cursor moves cannot be read. The LETTERING
-    // does not: a sign or a plate names an agent, and one that does not exist
-    // yet at this cursor has no name to show.
+    // The walls and outlines stand for every agent the epic has, because a floor that restacks as the cursor moves cannot be read.
+    // The LETTERING does not: a sign or a plate names an agent, and one that does not exist yet at this cursor has no name to show.
     for (const room of this.currentLayout.rooms) {
       if (this.visibleAgentIds.has(room.rootAgentId)) {
         this.pushSign(sorted, room.signTile, room.name);
@@ -3179,9 +2826,7 @@ export class OfficeScene {
           x: prop.tile.col * OFFICE_TILE,
           y: propDrawY(prop),
         },
-        // Keyed by the prop's TILE, never by its lifted draw position: a tall
-        // prop still belongs to the row it occupies, and sorting on the lift
-        // would file it behind the row above.
+        // Keyed by the prop's TILE, never by its lifted draw position: a tall prop still belongs to the row it occupies, and sorting on the lift would file it behind the row above.
         sortY: prop.tile.row * OFFICE_TILE,
       });
     }
@@ -3191,14 +2836,7 @@ export class OfficeScene {
   }
 
   /**
-   * A pod's boundary: its outline, drawn in the style the plan gave it, and the
-   * plate carrying the sub-team's name.
-   *
-   * The OPENING is the ring tile the grid still says is walkable, exactly as a
-   * room's door is - the scene never has to be told twice where a way in is.
-   * The plate's own tile carries the plate instead of a length of outline,
-   * which is what makes the name look mounted on the boundary rather than
-   * floating beside it.
+   * A pod's boundary: its outline, drawn in the style the plan gave it, and the plate carrying the sub-team's name.
    */
   private pushPodOutline(sorted: SortedProp[], pod: OfficePod): void {
     const { col, row, cols, rows } = pod.bounds;
@@ -3224,10 +2862,7 @@ export class OfficeScene {
   }
 
   /**
-   * Which piece of a pod's outline stands on one tile, or `null` where none
-   * does: off the ring, on the plate's own tile, or on a tile the grid says is
-   * WALKABLE - which is how the single opening stays open. A corner takes the
-   * vertical piece, so the two runs meet rather than butting end to end.
+   * Which piece of a pod's outline stands on one tile, or `null` where none does: off the ring, on the plate's own tile, or on a tile the grid says is WALKABLE - which is how the single opening stays open.
    */
   private podOutlineSpriteAt(
     pod: OfficePod,
@@ -3251,9 +2886,8 @@ export class OfficeScene {
   }
 
   /**
-   * The pod's name plate, and its name written across it. On the outline's
-   * corner, so a nested pod's plate cannot land on a tile its parent's outline
-   * already owns.
+   * The pod's name plate, and its name written across it.
+   * On the outline's corner, so a nested pod's plate cannot land on a tile its parent's outline already owns.
    */
   private pushPodPlate(sorted: SortedProp[], pod: OfficePod): void {
     const plateX = pod.plateTile.col * OFFICE_TILE;
@@ -3288,9 +2922,8 @@ export class OfficeScene {
   }
 
   /**
-   * A two-tile wall sign with its name written across it. Every named region on
-   * the floor - a cabin, the break room, the game room - is signed the same way,
-   * so one of them cannot drift into looking like a different kind of place.
+   * A two-tile wall sign with its name written across it.
+   * Every named region on the floor - a cabin, the break room, the game room - is signed the same way, so one of them cannot drift into looking like a different kind of place.
    */
   private pushSign(
     sorted: SortedProp[],
@@ -3323,10 +2956,8 @@ export class OfficeScene {
   }
 
   /**
-   * An archived agent's desk, once its character has left: sheeted over, its
-   * chair holding a packed box, no screen and no plate. The name stays, muted,
-   * because a nameless sheeted desk is a hole in the floor plan rather than a
-   * record of who used to sit there.
+   * An archived agent's desk, once its character has left: sheeted over, its chair holding a packed box, no screen and no plate.
+   * The name stays, muted, because a nameless sheeted desk is a hole in the floor plan rather than a record of who used to sit there.
    */
   private pushSheetedDesk(sorted: SortedProp[], desk: OfficeDesk): void {
     const deskX = desk.deskTile.col * OFFICE_TILE;
@@ -3351,9 +2982,7 @@ export class OfficeScene {
       },
       sortY: chairY,
     });
-    // Under the desk's RIGHT half - the chair is under its left, and a packed
-    // box standing in the seat would read as furniture rather than as moving
-    // out.
+    // Under the desk's RIGHT half - the chair is under its left, and a packed box standing in the seat would read as furniture rather than as moving out.
     const boxTile: OfficeTilePos = {
       col: desk.deskTile.col + 1,
       row: desk.deskTile.row + 1,
@@ -3390,10 +3019,8 @@ export class OfficeScene {
 
   private envelopeStackFor(agentId: string): OfficeEnvelopeStack | null {
     const character = this.characters.get(agentId);
-    // A message that landed while its owner was away is on the desk in exactly
-    // the sense the pile already draws: waiting, unanswered, in front of them.
-    // Except one that the open-request count already holds - that is the same
-    // envelope seen from two sides, not two envelopes.
+    // A message that landed while its owner was away is on the desk in exactly the sense the pile already draws: waiting, unanswered, in front of them.
+    // Except one that the open-request count already holds - that is the same envelope seen from two sides, not two envelopes.
     const waiting =
       character === undefined
         ? 0
@@ -3563,12 +3190,8 @@ export class OfficeScene {
   }
 
   /**
-   * The can in the waterer's hand, and the sparkle on the plant that ends the
-   * job. The can hangs beside the body rather than over the head: it is held,
-   * not thought, and every other overlay sprite is a bubble.
-   *
-   * The sparkle lands on the PLANT, one tile up from where the character
-   * stands, so what reads as watered is the plant and not the person.
+   * The can in the waterer's hand, and the sparkle on the plant that ends the job.
+   * The can hangs beside the body rather than over the head: it is held, not thought, and every other overlay sprite is a bubble.
    */
   private pushWateringDrawables(
     overlay: OfficeDrawable[],
@@ -3597,13 +3220,8 @@ export class OfficeScene {
   }
 
   /**
-   * A screen flashing every couple of seconds while somebody is at it: the
-   * arcade cabinet, and the television over the console sofa. On the SCREEN
-   * rather than over the player's head - what is happening is on the screen,
-   * and the player is only sitting or standing there.
-   *
-   * The screen is looked up above the spot rather than offset from it, so how
-   * far back the sofa stands stays the layout's business.
+   * A screen flashing every couple of seconds while somebody is at it: the arcade cabinet, and the television over the console sofa.
+   * On the SCREEN rather than over the player's head - what is happening is on the screen, and the player is only sitting or standing there.
    */
   private pushScreenSparkle(
     overlay: OfficeDrawable[],
@@ -3630,9 +3248,8 @@ export class OfficeScene {
   }
 
   /**
-   * A transient acknowledgement outranks a standing state: it lasts under a
-   * second and reports the row the cursor is on, which is what the viewer is
-   * looking at. The standing bubble is still there when it expires.
+   * A transient acknowledgement outranks a standing state: it lasts under a second and reports the row the cursor is on, which is what the viewer is looking at.
+   * The standing bubble is still there when it expires.
    */
   private bubbleFor(character: OfficeCharacter): OfficeSpriteName | null {
     const transient = character.bubble;
@@ -3644,8 +3261,7 @@ export class OfficeScene {
       return "bubble-attention";
     }
     if (status === "awaiting") return "bubble-awaiting";
-    // Standing at the board is thinking out loud; talking to somebody is the
-    // same bubble, alternating so only one of the pair holds it at a time.
+    // Standing at the board is thinking out loud; talking to somebody is the same bubble, alternating so only one of the pair holds it at a time.
     // Looking in at somebody else's door is the same shape of thought.
     const errandBubble = this.errandBubbleFor(character);
     if (errandBubble !== null) return errandBubble;
@@ -3653,10 +3269,8 @@ export class OfficeScene {
   }
 
   /**
-   * The bubble an agent wears because of WHERE it is, not because of what its
-   * agent record says. Standing at the board is thinking out loud; talking to
-   * somebody is the same bubble; looking in at somebody else's door is the
-   * same shape of thought.
+   * The bubble an agent wears because of WHERE it is, not because of what its agent record says.
+   * Standing at the board is thinking out loud; talking to somebody is the same bubble; looking in at somebody else's door is the same shape of thought.
    */
   private errandBubbleFor(character: OfficeCharacter): OfficeSpriteName | null {
     const target = character.errandTarget;
@@ -3664,16 +3278,14 @@ export class OfficeScene {
     if (target.kind === "whiteboard" || target.kind === "peek") {
       return "bubble-awaiting";
     }
-    // Holding a side of a table open. Once somebody takes the other one the
-    // game itself is what says the two are together, so the bubble goes - for
-    // chess, which has no ball, the thinking bubble takes over instead.
+    // Holding a side of a table open.
+    // Once somebody takes the other one the game itself is what says the two are together, so the bubble goes - for chess, which has no ball, the thinking bubble takes over instead.
     if (isTwoPlayerKind(target.kind) && !character.rallying) {
       return "bubble-awaiting";
     }
     if (target.kind === "chess") return this.chessThoughtFor(character);
-    // A sofa is where an agent dozes off, on the long sits and in their second
-    // half - see `dozingOnSofa`. A bag is where one is asleep outright, once it
-    // has had a moment to settle onto it.
+    // A sofa is where an agent dozes off, on the long sits and in their second half - see `dozingOnSofa`.
+    // A bag is where one is asleep outright, once it has had a moment to settle onto it.
     if (target.kind === "sofa" && this.dozingOnSofa(character)) {
       return "bubble-sleep";
     }
@@ -3693,10 +3305,8 @@ export class OfficeScene {
   }
 
   /**
-   * Whose turn it is to think at the chess table. One bubble at a time, passed
-   * between the two players on a shared clock - the same shape as a
-   * conversation, because that is what a game without a ball looks like from
-   * above.
+   * Whose turn it is to think at the chess table.
+   * One bubble at a time, passed between the two players on a shared clock - the same shape as a conversation, because that is what a game without a ball looks like from above.
    */
   private chessThoughtFor(character: OfficeCharacter): OfficeSpriteName | null {
     if (!character.rallying) return null;
@@ -3708,10 +3318,7 @@ export class OfficeScene {
   }
 
   /**
-   * In DRAW order, because the renderer's hover test takes the last match:
-   * desks first, then the characters in the order they are painted, so a
-   * character walking across somebody else's desk is what the pointer is
-   * over - the same precedence `hitTest` gives a click.
+   * In DRAW order, because the renderer's hover test takes the last match: desks first, then the characters in the order they are painted, so a character walking across somebody else's desk is what the pointer is over - the same precedence `hitTest` gives a click.
    */
   private buildHitRegions(): ReadonlyArray<OfficeHitRegion> {
     const regions: OfficeHitRegion[] = [];
@@ -3760,9 +3367,8 @@ export class OfficeScene {
   }
 
   /**
-   * Canonical order by id. Every decision that has to break a tie between two
-   * equally eligible agents reads this, so WHO gets up, WHO speaks first and
-   * WHO is visited are facts about their ids rather than about insertion order.
+   * Canonical order by id.
+   * Every decision that has to break a tie between two equally eligible agents reads this, so WHO gets up, WHO speaks first and WHO is visited are facts about their ids rather than about insertion order.
    */
   private orderedByAgentId(): ReadonlyArray<OfficeCharacter> {
     if (
@@ -3819,8 +3425,7 @@ export class OfficeScene {
 
   /**
    * Where an agent's head is WHEN SEATED - the endpoint every envelope uses.
-   * A flight aimed at a live position lands in an empty chair the moment its
-   * owner is walking in or standing at reception.
+   * A flight aimed at a live position lands in an empty chair the moment its owner is walking in or standing at reception.
    */
   private seatPointOf(agentId: string): OfficePoint | null {
     const desk = this.currentLayout.desks.get(agentId);

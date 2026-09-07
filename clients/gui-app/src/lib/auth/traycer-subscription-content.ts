@@ -1,12 +1,5 @@
 /**
- * Host/query-free logic for the signed-in user's Traycer subscription + credits,
- * shared by the Settings › Providers › Traycer card
- * (`traycer-subscription-section.tsx`) and the header rate-limit popover's
- * "Traycer" tab (`rate-limit-popover.tsx`) - mirroring how
- * `provider-rate-limit-content.ts` serves both the Settings card and the popover
- * for the host-RPC providers. Pure functions only: the subscription itself comes
- * from `useAuthUser`, and the selected account from `useAccountContextStore`, in
- * the callers.
+ * Host/query-free logic for the signed-in user's Traycer subscription + credits, shared by the Settings › Providers › Traycer card (`traycer-subscription-section.tsx`) and the header rate-limit popover's "Traycer" tab (`rate-limit-popover.tsx`) - mirroring.
  */
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type {
@@ -29,10 +22,8 @@ export function isPaid(status: SubscriptionStatus): boolean {
   return status !== "FREE" && status !== "PENDING";
 }
 
-// V3 plans bill against credits; every other (legacy / v2) plan is rate-limit
-// based. Ported from an internal shared package's `isCreditBasedPricing`
-// (clients can't import that package). Credit plans → credit breakdown; the
-// rest → rate limit.
+// V3 plans bill against credits; every other (legacy / v2) plan is rate-limit based.
+// Ported from an internal shared package's `isCreditBasedPricing` (clients can't import that package).
 const CREDIT_BASED_STATUSES: ReadonlySet<SubscriptionStatus> = new Set([
   "FREE",
   "LITE_V3",
@@ -49,20 +40,11 @@ export function isCreditBasedPricing(status: SubscriptionStatus): boolean {
   return CREDIT_BASED_STATUSES.has(status);
 }
 
-// A trailing `_V2`/`_V3` is an internal pricing-generation tag, not part of
-// the plan's own identity - Cloud UI's own Settings pages never show it
-// (billing-overview.tsx renders the Stripe product's bare name, e.g. "Ultra",
-// never "Ultra V3"). Stripped before title-casing so `ULTRA_5X_V3` reads as
-// "Ultra 5x", not "Ultra 5x V3". `_LEGACY` isn't stripped - unlike `_V2`/`_V3`,
-// it isn't a pricing-generation tag on an otherwise-equivalent tier.
+// A trailing `_V2`/`_V3` is an internal pricing-generation tag, not part of the plan's own identity - Cloud UI's own Settings pages never show it (billing-overview.tsx renders the Stripe product's bare name, e.g.
 const VERSION_SUFFIX_PATTERN = /_V\d+$/;
 
-// Every `SubscriptionStatus` this client's protocol version knows about maps
-// to an exact label here. `Partial` (not a bare `Record`) so a status a
-// *newer* backend added that this older client build doesn't know about yet
-// (the protocol is versioned and runtime-negotiated - clients and the host
-// ship independently) still falls through to `subscriptionPlanLabel`'s
-// `titleCaseFromToken` fallback instead of a missing-key crash.
+// Every `SubscriptionStatus` this client's protocol version knows about maps to an exact label here.
+// `Partial` (not a bare `Record`) so a status a *newer* backend added that this older client build doesn't know about yet (the protocol is versioned and runtime-negotiated - clients and the host ship independently) still falls through to.
 const PLAN_LABELS: Partial<Record<SubscriptionStatus, string>> = {
   FREE: "BYOA",
   PENDING: "BYOA",
@@ -84,10 +66,7 @@ const PLAN_LABELS: Partial<Record<SubscriptionStatus, string>> = {
 };
 
 /**
- * The Traycer plan/tier label for the selected account (Core Flows parity
- * with Codex/Claude: "shown where the provider reports one") - the header
- * popover's "Traycer" tab shows this as a chip next to the name, same as
- * `resolveProviderPlanLabel` does for the host-RPC providers.
+ * The Traycer plan/tier label for the selected account (Core Flows parity with Codex/Claude: "shown where the provider reports one") - the header popover's "Traycer" tab shows this as a chip next to the name, same as `resolveProviderPlanLabel` does for the.
  */
 export function subscriptionPlanLabel(status: SubscriptionStatus): string {
   return (
@@ -97,9 +76,8 @@ export function subscriptionPlanLabel(status: SubscriptionStatus): string {
 }
 
 /**
- * Whether the Traycer rail tab should appear at all: the resolved account is on
- * a paid plan, or holds an active credit bundle. Free/pending accounts with no
- * bundle have nothing worth a dedicated tab.
+ * Whether the Traycer rail tab should appear at all: the resolved account is on a paid plan, or holds an active credit bundle.
+ * Free/pending accounts with no bundle have nothing worth a dedicated tab.
  */
 export function isTraycerEligible(subscription: TraycerSubscription): boolean {
   return (
@@ -157,10 +135,8 @@ export function formatCredits(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-// Local mirror of the extension's `getCreditBreakdown` (the helper lives in
-// an internal shared package, which clients can't import). Three buckets -
-// Plan, Bonus, Bundle - tracked as consumed/total, matching the extension's
-// wording.
+// Local mirror of the extension's `getCreditBreakdown` (the helper lives in an internal shared package, which clients can't import).
+// Three buckets - Plan, Bonus, Bundle - tracked as consumed/total, matching the extension's wording.
 export interface CreditBreakdown {
   readonly planTotal: number;
   readonly planConsumed: number;
@@ -200,20 +176,7 @@ export function creditBreakdown(
 }
 
 /**
- * The popover Traycer block's display state - the same cold/error/degraded shape
- * the host-RPC providers use (`resolvePopoverProviderRateLimitState`), but keyed
- * off the identity query (`useAuthUser`) rather than a per-provider host pull:
- *
- * - `cold`: no user loaded yet and no failure -> skeleton.
- * - `error`: no user loaded and the fetch failed -> retry message.
- * - `empty`: the user loaded but the selected account has no subscription.
- * - `ready`: a subscription is present. `degraded` is true when the latest
- *   refetch failed while a last-known-good reading is still shown (dimmed).
- *
- * The aperture usage query (`useHostRateLimitUsageQuery`) is deliberately NOT an
- * input here: it's best-effort supplementary data for rate-limit-based plans
- * only, and its own failure surfaces inline as "usage unavailable" rather than
- * blocking the whole tab.
+ * The popover Traycer block's display state - the same cold/error/degraded shape the host-RPC providers use (`resolvePopoverProviderRateLimitState`), but keyed off the identity query (`useAuthUser`) rather than a per-provider host pull:
  */
 export type TraycerSubscriptionState =
   | { readonly kind: "cold" }

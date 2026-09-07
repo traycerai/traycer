@@ -1,35 +1,4 @@
-/**
- * `migration.run@1.0` - versioned streaming-RPC contract for the
- * pre-cloud → cloud migration run.
- *
- * Subscribing kicks off `PreCloudMigrationService.migrateLocalToCloud()`
- * on the host. The host emits per-entity progress frames and a terminal
- * `complete` frame when the run finishes (successfully or not).
- * Cancellation is implicit: closing the WS aborts the connection-
- * scoped `RequestContext`, which the migration loop's
- * `assertRequestContextUsable(ctx)` guard observes on the next iteration.
- * Pending state is left in `PendingUpdateStore` for the next retry.
- *
- * `userId` is inferred from the host authentication context, so the
- * open request carries no parameters.
- *
- * Server frames:
- *
- * - `started`           - emitted once at the start; carries totals.
- * - `taskChainProgress` - emitted once per task chain after the per-
- *                         chain migration completes.
- * - `epicProgress`      - emitted once per local epic after the per-
- *                         epic migration completes.
- * - `replayProgress`    - emitted once per pending-replay attempt
- *                         (chain or epic).
- * - `complete`          - terminal frame; carries the aggregate
- *                         success flag and per-bucket counts.
- * - `pong`              - heartbeat response.
- *
- * Client frames:
- *
- * - `ping` - heartbeat. No application client frames.
- */
+/** `migration.run@1.0` - versioned streaming-RPC contract for the pre-cloud → cloud migration run. */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 

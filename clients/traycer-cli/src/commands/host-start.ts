@@ -85,27 +85,7 @@ import {
 } from "@traycer-clients/shared/host-update";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 
-// `traycer host start` is the long-running supervisor invoked by the OS
-// service manager (launchd, systemd-user, or Windows Scheduled Task). The
-// slot is baked into the CLI build via `config.environment`; no slot flag
-// is passed. It is the only place that translates the
-// environment's `HostInstallRecord` into an actual `spawn()` of the
-// installed host executable.
-//
-// Single launch path (no dev/prod conditional in runtime code):
-//   1. Read ~/.traycer/host[/dev]/install/install.json.
-//   2. Refuse to start when the record is missing or its executablePath
-//      is empty / non-existent - emits stable machine-readable CLI
-//      errors so Doctor / Desktop can recover.
-//   3. Spawn `record.executablePath` directly. In production this is the
-//      SEA host binary; in dev (`make dev-desktop`) the installer
-//      stages a tiny wrapper script under `~/.traycer/host/dev/` that
-//      internally exec's `node <bundle>` - the supervisor doesn't know
-//      or care which it is.
-//   4. Redirect stdout/stderr to the environment's host log so the
-//      bootstrap markers and host output land in one cohesive file.
-//   5. Forward SIGTERM / SIGINT / SIGHUP to the host child.
-//   6. Exit with the host's final status (signal → 128+N, code → code).
+// Long-running supervisor invoked by the OS service manager. Headless; no device-flow prompt.
 
 export type HostStartProbeOptions = {
   readonly transitionId: string;
@@ -141,119 +121,38 @@ export interface HostStartTarget {
   readonly record: HostInstallRecord;
 }
 
-/**
- * Child descriptor carrying the framed Layer-0 status record, named to the
- * host by `--layer0-status-fd`. Three is the first descriptor past
- * stdin/stdout/stderr and is the normal protocol; the flag exists so the host
- * never has to infer the transport from the descriptor's type.
- */
+/** Child descriptor carrying the framed Layer-0 status record, named to the host by `--layer0-status-fd`. Three is the first descriptor past stdin/stdout/stderr and is the normal protocol; the flag exists so the host never has to infer the transport from the descriptor's type. */
 export const LAYER0_STATUS_FD = 3;
 
-/**
- * Crash-relaunch budget (int #4826, from OSS #916).
- *
- * A host that crashes while the desktop app is CLOSED had no guardian: the
- * desktop health monitor is not running, launch converge needs a launch, and on
- * Windows the Scheduled Task's `RestartOnFailure` demonstrably did not relaunch
- * a task whose action exited `0xC0000409`. macOS (`KeepAlive{SuccessfulExit:
- * false}`) and Linux (`Restart=on-failure`) already do this; the supervisor now
- * does it itself so all three behave the same and Windows stops being the odd
- * one out.
- *
- * This layer sits UNDER those service managers, never replacing them: once the
- * budget is spent the supervisor exits with the child's own code, so launchd,
- * systemd, and the next Windows logon remain the outer backstop.
- */
+/** Crash-relaunch budget (int #4826, from OSS #916). A host that crashes while the desktop app is CLOSED had no guardian: the desktop health monitor is not running, launch converge needs a launch, and on Windows the Scheduled Task's `RestartOnFailure` demonstrably did not relaunch a task whose action exited `0xC0000409`. macOS (`KeepAlive{SuccessfulExit: false}`) and Linux (`Restart=on-failure`) already do this; the supervisor now does it itself so all three behave the same and Windows stops being the odd one out. */
 export const MAX_CONSECUTIVE_RELAUNCHES = 5;
 
-/**
- * Spacing before each relaunch, indexed by how many have already been made; the
- * last entry repeats. Deliberately faster off the mark than the desktop
- * governor's `[0, 60_000, 300_000]`: that one arbitrates while a user is
- * present and other recovery exists, whereas here the host is provably dead and
- * nothing else is watching. Caps at a minute so a machine that cannot start a
- * host is not hammered.
- */
+/** Spacing before each relaunch, indexed by how many have already been made; the last entry repeats. Deliberately faster off the mark than the desktop governor's `[0, 60_000, 300_000]`: that one arbitrates while a user is present and other recovery exists, whereas here the host is provably dead and nothing else is watching. */
 export const RELAUNCH_BACKOFF_MS: readonly number[] = [
   1_000, 5_000, 15_000, 30_000, 60_000,
 ];
 
-/**
- * How long a child must have RUN before its death is forgiven and the attempt
- * counter resets.
- *
- * Mirrors `SUSTAINED_HEALTH_MS` in the desktop's recovery governor, and for the
- * same hard-won reason recorded there: a single "it started" observation must
- * not re-arm the budget, because a host that dies 20s into boot every time
- * would then relaunch forever. Only real uptime counts.
- */
+/** How long a child must have RUN before its death is forgiven and the attempt counter resets. Mirrors `SUSTAINED_HEALTH_MS` in the desktop's recovery governor, and for the same hard-won reason recorded there: a single "it started" observation must not re-arm the budget, because a host that dies 20s into boot every time would then relaunch forever. */
 export const SUSTAINED_UPTIME_RESET_MS = 300_000;
 
-/**
- * How briefly a child must have run for its REQUESTED restart to count as
- * pathological rather than operator intent.
- *
- * An intentional restart deliberately skips the crash budget and the backoff -
- * it is a hand-off, not a failure - but "skips the budget" cannot mean
- * "unbounded". A host whose restart handshake fires during startup (a config
- * it rejects, a migration that re-triggers `host.restart`) would otherwise
- * spawn, exit 87, and respawn with no delay for the life of the supervisor.
- *
- * Deliberately far shorter than `SUSTAINED_UPTIME_RESET_MS`: a real operator
- * restart follows a host that at least finished starting, so this floor bounds
- * the pathological case without spending an allowance on ordinary use.
- */
+/** How briefly a child must have run for its REQUESTED restart to count as pathological rather than operator intent. An intentional restart deliberately skips the crash budget and the backoff - it is a hand-off, not a failure - but "skips the budget" cannot mean "unbounded". */
 export const IMMEDIATE_RESTART_FLOOR_MS = 10_000;
 
 /** How many restarts inside {@link IMMEDIATE_RESTART_FLOOR_MS} end the loop. */
 export const MAX_IMMEDIATE_RESTARTS = 5;
 
-/**
- * How long a child gets to honour a raced deliberate SIGTERM before the
- * supervisor escalates to SIGKILL.
- *
- * DERIVED from the shared constants rather than hand-tuned, and the derivation
- * is the safety property: a functioning host arms its own force-exit watchdog
- * at `SHUTDOWN_FORCE_EXIT_MS`, so a shorter grace would SIGKILL hosts that were
- * moments from completing the exact shutdown we asked for. Same rule, same
- * derivation, as `STOP_EXIT_TIMEOUT_MS` on the stop side - raising the watchdog
- * cannot silently leave this too short.
- *
- * What this covers is therefore only what that watchdog cannot: a child that
- * never armed it. That is a narrow case, and it is the one where waiting is
- * unbounded, which is the only reason this exists at all.
- */
+/** How long a child gets to honour a raced deliberate SIGTERM before the supervisor escalates to SIGKILL. DERIVED from the shared constants rather than hand-tuned, and the derivation is the safety property: a functioning host arms its own force-exit watchdog at `SHUTDOWN_FORCE_EXIT_MS`, so a shorter grace would SIGKILL hosts that were moments from completing the exact shutdown we asked for. */
 export const RACED_STOP_KILL_GRACE_MS =
   SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
 
-/**
- * The signals a deliberate stop reaches this supervisor as, and which it
- * forwards to its child.
- *
- * This list decides which handlers get installed and NOTHING ELSE. It is
- * deliberately not used to classify a child's death: the same signal can
- * arrive from a service manager stopping us or from an operator killing the
- * child directly, and the name cannot tell those apart. Only the
- * `shuttingDown` latch and the stop-intent sentinel carry that evidence.
- */
+/** The signals a deliberate stop reaches this supervisor as, and which it forwards to its child. This list decides which handlers get installed and NOTHING ELSE. */
 const FORWARDED_SHUTDOWN_SIGNALS = [
   "SIGTERM",
   "SIGINT",
   "SIGHUP",
 ] as const satisfies readonly NodeJS.Signals[];
 
-/**
- * Exit code for a SERVICE launch refused because another update execution
- * segment owns the restart boundary. See the `retryableServiceRefusal` branch
- * for why this arm alone must not exit 0.
- *
- * The value only has to be non-zero and unambiguous: launchd assigns no meaning
- * to particular codes, and with `KeepAlive.SuccessfulExit = false` any non-zero
- * exit is what triggers the relaunch. Distinct from the codes already in use
- * (notably 75, `EXIT_RESTART_INTO_REFRESHED_SLOT`) so a log or a crash report
- * can tell "deferred, retry me" apart from every other way this supervisor
- * ends.
- */
+/** Exit code for a SERVICE launch refused because another update execution segment owns the restart boundary. See the `retryableServiceRefusal` branch for why this arm alone must not exit 0. */
 const SERVICE_RELAUNCH_BUSY_EXIT_CODE = 76;
 
 export interface ResolveHostStartTargetDeps {
@@ -272,15 +171,7 @@ const defaultDeps: ResolveHostStartTargetDeps = {
     ),
 };
 
-// Pure helper - throws CliError for the three failure modes the
-// supervisor must surface as stable codes:
-//   - HOST_NOT_INSTALLED            (no install record for the environment)
-//   - HOST_INSTALL_RECORD_INVALID   (record present but executablePath empty)
-//   - HOST_NOT_INSTALLED            (record points at a file that doesn't exist)
-//
-// Tests exercise this directly; `runHostStart` calls it once on entry
-// and converts a CliError throw into a `failed-to-spawn` marker +
-// process.exit with the error's exit code.
+// Pure helper - throws CliError for the three failure modes the supervisor must surface as stable codes: - HOST_NOT_INSTALLED (no install record for the environment) - HOST_INSTALL_RECORD_INVALID (record present but executablePath empty) - HOST_NOT_INSTALLED (record points at a file that doesn't exist) Tests exercise this directly; `runHostStart` calls it once on entry and converts a CliError throw into a `failed-to-spawn` marker + process.exit with the error's exit code.
 export const defaultResolveHostStartTargetDeps: ResolveHostStartTargetDeps =
   defaultDeps;
 
@@ -318,21 +209,8 @@ export async function resolveHostStartTarget(
     });
   }
 
-  // Tell the host which slot to write its runtime files (pid.json) into,
-  // resolved from THIS CLI build's environment. The CLI owns slot resolution
-  // (it installed into this dir), so a host binary baked for a different slot -
-  // notably a downloaded *production* host under `make dev-desktop` - still
-  // publishes pid.json where this environment's desktop watches, instead of
-  // self-resolving to its own baked slot. PATH-ONLY: this never selects the
-  // host's cloud/auth target, which stays baked into the host binary.
-  // The host home dir, NOT the executable's own directory: on Windows a
-  // process's CWD is an open handle on that directory, and children the
-  // host spawns without an explicit cwd inherit it. With the CWD inside
-  // `install/`, any such child that outlives the pre-update kill blocks
-  // the install-dir swap rename with EBUSY - and the slot scan cannot see
-  // a process whose only tie to the install is its CWD. The host itself
-  // resolves nothing cwd-relative (SEA module loads anchor at
-  // `import.meta.url`; data paths come from `--host-data-dir`).
+  // Tell the host which slot to write its runtime files (pid.json) into, resolved from THIS CLI build's environment.
+  // The CLI owns slot resolution (it installed into this dir), so a host binary baked for a different slot - notably a downloaded *production* host under `make dev-desktop` - still publishes pid.json where this environment's desktop watches, instead of self-resolving to its own baked slot.
   return {
     executable: record.executablePath,
     args: ["--host-data-dir", hostHomeDir(opts.environment)],
@@ -347,11 +225,7 @@ export type SpawnImpl = (
   options: SpawnOptions,
 ) => ChildProcess;
 
-/**
- * The last boundary before this supervisor turns `install.json` into an OS
- * process. It intentionally owns the callback: an admission check followed by
- * a later spawn would recreate the release-gap this module exists to close.
- */
+/** The last boundary before this supervisor turns `install.json` into an OS process. It intentionally owns the callback: an admission check followed by a later spawn would recreate the release-gap this module exists to close. */
 export type AdmitHostStartSpawn = (
   options: RunHostStartOptions,
   run: () => Promise<ChildProcess>,
@@ -382,10 +256,8 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     environment: Environment | undefined,
   ) => Promise<IncumbentHost | null>;
   readonly openLogFd: (environment: Environment) => Promise<number>;
-  // Closes the supervisor's OWN copy of the log descriptor once an attempt is
-  // over. The child received a duplicate at spawn time, so this never disturbs
-  // a running host - it only stops descriptors accumulating one per attempt in
-  // a supervisor that can now outlive many of them.
+  // Closes the supervisor's OWN copy of the log descriptor once an attempt is over.
+  // The child received a duplicate at spawn time, so this never disturbs a running host - it only stops descriptors accumulating one per attempt in a supervisor that can now outlive many of them.
   readonly closeLogFd: (fd: number) => Promise<void>;
   readonly rotateLog: (
     environment: Environment,
@@ -393,10 +265,8 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly readEnvOverrides: () => Promise<Record<string, EnvOverrideValue>>;
   readonly writeMarker: typeof writeBootstrapMarker;
   readonly writeTerminalMarker: typeof writeBootstrapTerminalMarker;
-  // `process.exit` itself returns `never`, but the dependency is typed
-  // `void` so test stubs can record the requested exit code without
-  // throwing from inside event-handler callbacks. Real callers should
-  // not depend on the function returning.
+  // `process.exit` itself returns `never`, but the dependency is typed `void` so test stubs can record the requested exit code without throwing from inside event-handler callbacks.
+  // Real callers should not depend on the function returning.
   readonly exit: (code: number) => void;
   readonly onError: (message: string) => void;
   readonly logger: ILogger | null;
@@ -423,9 +293,8 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     environment: Environment,
     marker: ProbeMarker,
   ) => Promise<void>;
-  // Crash-diagnostics operations. Injected so tests never touch the real
-  // host data dir: the defaults create/prune/scan real directories and tee
-  // real bytes into host.log.
+  // Crash-diagnostics operations.
+  // Injected so tests never touch the real host data dir: the defaults create/prune/scan real directories and tee real bytes into host.log.
   readonly prepareCrashReportsDir: (dir: string) => Promise<readonly string[]>;
   readonly findCrashReport: (
     dir: string,
@@ -433,20 +302,14 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     excludeNames: ReadonlySet<string>,
   ) => Promise<CrashReportMatch | null>;
   readonly createStderrTee: (environment: Environment) => StderrTee;
-  // Relaunch-loop seams. `sleep` keeps the backoff out of wall-clock time in
-  // tests (a five-attempt run would otherwise cost ~110s and make the suite
-  // load-sensitive); `hasStopIntent` is the "was this death asked for?" check.
+  // Relaunch-loop seams.
+  // `sleep` keeps the backoff out of wall-clock time in tests (a five-attempt run would otherwise cost ~110s and make the suite load-sensitive); `hasStopIntent` is the "was this death asked for?" check.
   readonly sleep: (ms: number) => Promise<void>;
-  // Escalation timer for a raced deliberate stop. Injected for the same reason
-  // as `sleep` - a 30s wait would make the suite load-sensitive - and returns
-  // its own canceller so the caller never has to hold a timer handle.
+  // Escalation timer for a raced deliberate stop.
+  // Injected for the same reason as `sleep` - a 30s wait would make the suite load-sensitive - and returns its own canceller so the caller never has to hold a timer handle.
   readonly escalateAfter: (ms: number, run: () => void) => () => void;
-  // `ignoreRequestedBeforeMs` is this supervisor's invocation time: intent
-  // older than that was served by our own start. Filtering rather than
-  // deleting is what lets attempt one be guarded without a logon-started
-  // supervisor refusing to start. See `host/stop-intent.ts`.
-  // `servedAtStartup` is the clock-independent half: the record that existed
-  // when this supervisor started, which it therefore has already answered.
+  // `ignoreRequestedBeforeMs` is this supervisor's invocation time: intent older than that was served by our own start.
+  // Filtering rather than deleting is what lets attempt one be guarded without a logon-started supervisor refusing to start.
   readonly hasStopIntent: (
     environment: Environment,
     nowMs: number,
@@ -455,32 +318,19 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly readStopIntentIdentity: (
     environment: Environment,
   ) => Promise<StopIntentIdentity | null>;
-  // Consecutive relaunches allowed before the supervisor gives up and hands
-  // the machine back to launchd / systemd / the next logon. A dependency
-  // rather than a bare constant so a test can state which behaviour it is
-  // exercising: `0` pins a single attempt (the terminal-marker and
-  // crash-diagnostics tests), a small number exercises exhaustion without
-  // paying for five.
+  // Consecutive relaunches allowed before the supervisor gives up and hands the machine back to launchd / systemd / the next logon.
+  // A dependency rather than a bare constant so a test can state which behaviour it is exercising: `0` pins a single attempt (the terminal-marker and crash-diagnostics tests), a small number exercises exhaustion without paying for five.
   readonly maxRelaunches: number;
-  // Fleet telemetry for a crash (nonzero exit or fatal signal): the same fact
-  // the `phase=crashed` marker records, sent to Sentry keyed by host id so
-  // silent Windows fast-fails are countable across hosts. Injected so tests
-  // assert the payload without a Sentry client, and so the default's bounded
-  // pid.json read never touches a real host home. Best-effort: the marker is
-  // written first and the relaunch does not wait on the network.
+  // Fleet telemetry for a crash (nonzero exit or fatal signal): the same fact the `phase=crashed` marker records, sent to Sentry keyed by host id so silent Windows fast-fails are countable across hosts.
+  // Injected so tests assert the payload without a Sentry client, and so the default's bounded pid.json read never touches a real host home.
   readonly reportHostCrash: (telemetry: HostCrashTelemetry) => Promise<void>;
 }
 
 const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
   admitHostStartSpawn: async (options, run) => {
-    // A service controller that already owns the outer attempt capability
-    // publishes a one-shot, target-home-bound adoption proof immediately
-    // before asking the OS manager to launch this supervisor. Reacquiring
-    // here would make Windows wait-for-spawn and POSIX kickstart compose
-    // into a parent-lock/child-lock cycle. The proof is consumed once and
-    // revalidates the live parent holder; every standalone/crash relaunch
-    // falls through to the normal canonical admission below.
+    // A service controller that already owns the outer attempt capability publishes a one-shot, target-home-bound adoption proof immediately before asking the OS manager to launch this supervisor.
+    // Reacquiring here would make Windows wait-for-spawn and POSIX kickstart compose into a parent-lock/child-lock cycle.
     const serviceLabel =
       "serviceLabel" in options ? options.serviceLabel : null;
     const adoptionNonce =
@@ -552,24 +402,14 @@ const defaultRunDeps: RunHostStartDeps = {
     prepareCrashReportsDir(dir, MAX_KEPT_CRASH_REPORTS),
   findCrashReport: findCrashReportSince,
   createStderrTee: (environment) => new StderrLogTee(environment),
-  // NOT `unref()`ed, and that is load-bearing. During a backoff the child is
-  // dead, its stderr is closed, and this supervisor has already released the
-  // log descriptor - signal listeners do not ref the loop, and neither does an
-  // awaited promise. An unref'd timer would be the only handle left, so Node
-  // would drain and exit 0 in the middle of the wait and the relaunch this
-  // whole feature exists for would silently never happen. Tests inject their
-  // own `sleep`, so no test built on the harness can observe this; the
-  // production-defaults suite asserts the timer stays referenced.
+  // NOT `unref()`ed, and that is load-bearing.
+  // During a backoff the child is dead, its stderr is closed, and this supervisor has already released the log descriptor - signal listeners do not ref the loop, and neither does an awaited promise.
   sleep: (ms) =>
     new Promise((resolve) => {
       setTimeout(resolve, ms);
     }),
-  // Referenced, like `sleep`, and for a related reason: this timer is the only
-  // thing that ends an otherwise unbounded wait on a child that will not honour
-  // SIGTERM. Unref'ing it would let Node decide the supervisor had nothing left
-  // to do and exit while the host it was told to stop kept serving - the exact
-  // shape of the `sleep` defect, one path over. Cancelled as soon as the child
-  // ends, so the reference costs nothing on the ordinary path.
+  // Referenced, like `sleep`, and for a related reason: this timer is the only thing that ends an otherwise unbounded wait on a child that will not honour SIGTERM.
+  // Unref'ing it would let Node decide the supervisor had nothing left to do and exit while the host it was told to stop kept serving - the exact shape of the `sleep` defect, one path over.
   escalateAfter: (ms, run) => {
     const timer = setTimeout(run, ms);
     return () => {
@@ -582,33 +422,11 @@ const defaultRunDeps: RunHostStartDeps = {
   reportHostCrash: reportHostCrashToSentry,
 };
 
-// Long-running entrypoint invoked by the OS service manager. Resolves
-// the spawn target, kicks off the child, and only returns when the
-// process exits via `deps.exit(...)`. Dependency-injected so tests can
-// exercise the resolve / signal / spawn-failure branches without
-// touching the real filesystem or process.
+// Long-running entrypoint invoked by the OS service manager.
+// Resolves the spawn target, kicks off the child, and only returns when the process exits via `deps.exit(...)`.
 export const defaultRunHostStartDeps: RunHostStartDeps = defaultRunDeps;
 
-/**
- * Every bootstrap-marker write in the supervisor goes through here, because a
- * marker is EVIDENCE and must never be control flow.
- *
- * `writeBootstrapMarker` is an `ensureHostHomeDir` plus an `appendFile`, and
- * both can reject for reasons that have nothing to do with whether the host
- * can run - a momentarily locked file on Windows, a transient EACCES, a full
- * disk. Awaited bare, that rejection escapes the relaunch loop entirely: the
- * entrypoint turns it into exit 1, and on the platform this ticket exists for
- * the Scheduled Task does not answer exit 1 with a fresh supervisor. A failed
- * diagnostic write would have left the machine hostless - the exact outcome
- * the loop was added to prevent, reached through the code that was supposed to
- * explain it.
- *
- * This is the rule the rest of the file already follows for diagnostics (the
- * stderr tee swallows, the probe observation is pre-caught, the terminal
- * marker write is wrapped); the loop's own marker writes were the sites that
- * had not been brought under it. Losing a marker costs a line of evidence.
- * Losing the supervisor costs the host.
- */
+/** Every bootstrap-marker write goes through here so a host log line cannot collide with `writer=supervisor`. */
 async function writeMarkerBestEffort(
   deps: Pick<RunHostStartDeps, "writeMarker">,
   logger: ILogger,
@@ -634,23 +452,11 @@ export async function runHostStart(
 ): Promise<void> {
   const deps: RunHostStartDeps = { ...defaultRunDeps, ...injected };
   const logger = deps.logger ?? createCliLogger(opts.environment);
-  // One attempt id for every marker this supervisor invocation writes so
-  // readers can correlate starting → terminal pairs without relying only
-  // on a pre-action log baseline (Finding F evidence identity).
+  // One attempt id for every marker this supervisor invocation writes so readers can correlate starting → terminal pairs without relying only on a pre-action log baseline (Finding F evidence identity).
   const attemptId = randomUUID();
   const supervisorPid = process.pid;
-  // Read before any other await, because it defines what "already served" means
-  // for this whole invocation: whatever record is on disk NOW is one our own
-  // existence answers - something asked for a start after asking for a stop, and
-  // the start is the newer instruction. Every record that appears afterwards is
-  // aimed at us.
-  //
-  // Deliberately NOT a timestamp comparison against our start. That was a proxy
-  // for this same question, and it read a clock that moves: a backward step
-  // makes a live stop look older than us (we relaunch a host the user stopped)
-  // and simultaneously makes an already-answered record look future-dated (we
-  // decline to spawn and exit 0, which no service manager answers). See
-  // `hasActionableStopIntent`.
+  // Read before any other await, because it defines what "already served" means for this whole invocation: whatever record is on disk NOW is one our own existence answers - something asked for a start after asking for a stop, and the start is the newer instruction.
+  // Every record that appears afterwards is aimed at us.
   const servedStopIntentAtStartup = await deps.readStopIntentIdentity(
     opts.environment,
   );
@@ -675,29 +481,7 @@ export async function runHostStart(
       ? probeRead.context
       : null;
 
-  // Was this supervisor started BY the service manager (launchd / systemd /
-  // the Windows Scheduled Task), rather than by a person or by Desktop running
-  // `traycer host start` and waiting on the result?
-  //
-  // It decides who gets to spend the relaunch budget on a FIRST-attempt target
-  // or spawn failure. A service start has no caller listening: exiting hands
-  // the machine back to the very restart mechanism this loop exists because it
-  // cannot be trusted, which on Windows means the host stays down until the
-  // next logon. An interactive or Desktop-driven start does have a caller, and
-  // making it wait out the full ladder before reporting a genuinely broken
-  // install would be a regression in a path that works today.
-  //
-  // Derived AFTER `probeContext`, and that placement is the substance rather
-  // than style: a probe is a ONE-SHOT verdict owned by the install/restart
-  // lifecycle and must never retry. Testing `serviceLabel` alone reads as
-  // service-started for a LABEL-DERIVED probe too - a `--service-label` start
-  // that picks up authority from a live transition journal - and would turn
-  // its single honest answer into a retry loop.
-  //
-  // KNOWN LIMIT: the Windows launcher falls back to an UNLABELLED `host start`
-  // if it cannot even ask the CLI whether it understands `--service-label`
-  // (see `buildHiddenHostLauncher`). A start arriving through that degraded
-  // path is indistinguishable from an interactive one and does not retry.
+  // True when started by the service manager. A raw `traycer host start` is not.
   const serviceStarted = serviceLabel !== null && probeContext === null;
 
   logger.info("Host supervisor starting", {
@@ -706,10 +490,8 @@ export async function runHostStart(
     attemptId,
     supervisorPid,
     probe: probeContext !== null,
-    // Carried so a machine that never enters probe mode says WHY. All three
-    // non-authorised arms are equally safe (no incumbent bypass), but a
-    // journal at a schema version this build cannot read is a very different
-    // situation from one whose deadline elapsed, and neither is "no journal".
+    // Carried so a machine that never enters probe mode says WHY.
+    // All three non-authorised arms are equally safe (no incumbent bypass), but a journal at a schema version this build cannot read is a very different situation from one whose deadline elapsed, and neither is "no journal".
     probeAuthority:
       probeRead === null
         ? "not-requested"
@@ -720,9 +502,8 @@ export async function runHostStart(
             : `indeterminate: ${probeRead.cause}`,
   });
 
-  // A stale/malformed probe invocation has no authority to bypass the normal
-  // incumbent guard. Exit cleanly without a marker so the reconciler treats it
-  // as ambiguity, never as wedge evidence or permission to evict raw.
+  // A stale/malformed probe invocation has no authority to bypass the normal incumbent guard.
+  // Exit cleanly without a marker so the reconciler treats it as ambiguity, never as wedge evidence or permission to evict raw.
   if (requestedProbe !== null && probeContext === null) {
     logger.warn("Host probe declined: no matching live transition journal", {
       environment: opts.environment,
@@ -734,58 +515,7 @@ export async function runHostStart(
     return deps.exit(0);
   }
 
-  // Best-effort backstop against stacking a second host on a live one.
-  // BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT COVER.
-  //
-  // Runs BEFORE `resolveHostStartTarget` on purpose. Another host already
-  // owning this data dir settles what this invocation should do regardless
-  // of whether THIS label can resolve its own install target, and the two
-  // exit codes disagree: a resolution failure exits 69 / 1, which
-  // `KeepAlive.SuccessfulExit = false` treats as restartable, so launchd
-  // relaunches this job into a throttled crash loop while a perfectly
-  // healthy host is serving. Probing first turns that into a quiet exit 0.
-  // The record can be missing or invalid while a host is live - an
-  // uninstall, a failed install, or the window where `host install` has
-  // swapped `install/` aside - so this is reachable, not theoretical. With
-  // no incumbent the resolution error still surfaces exactly as before.
-  //
-  // Covered (deterministic): any STAGGERED start where a host is already
-  // publishing - a raw `traycer host start` against a running host, one
-  // launchd label starting while the other's host is up, a crash-restart of
-  // one label mid-session. That is the shape of the field bug: an install
-  // bootstrapping the CLI label beside Desktop's already-running agent.
-  //
-  // NOT covered: two supervisors starting SIMULTANEOUSLY, which is what a
-  // cold login does when a machine carries both the CLI label
-  // (`ai.traycer.host`) and Desktop's SMAppService label
-  // (`ai.traycer.host.agent`), since both set `RunAtLoad`. pid.json does not
-  // exist yet - the host unlinks it on graceful shutdown and publishes only
-  // after `listen()` succeeds - so both callers observe no incumbent and
-  // both spawn. This check is a read-only observation with no reservation
-  // behind it; it cannot serialise that. The host binds an ephemeral port
-  // (`listenPort: 0`), so there is no OS-level collision to fall back on
-  // either.
-  //
-  // That residual is contained elsewhere, not here: `installService`'s
-  // ownership refusals stop a dual registration from being CREATED at all,
-  // and Desktop's `retireLegacyLabelRegistrations` deletes the legacy plist
-  // and boots out the stale label - killing a duplicate mid-session, not
-  // only at next login. Real mutual exclusion belongs in the host process
-  // as a single-instance lock held for its lifetime, which is tracked
-  // separately.
-  //
-  // Declining is the whole policy: never evict the incumbent. Intentional
-  // version replacement belongs to the install lifecycle (`beforeSwap`
-  // stops the running host before the swap), which knows it is an upgrade;
-  // this supervisor cannot tell an upgrade from an accidental second job.
-  // Evicting would also flap against KeepAlive - a signal-killed supervisor
-  // exits 128+N, which `SuccessfulExit: false` treats as restartable, so
-  // the victim comes back and evicts us in turn.
-  //
-  // Exit 0 specifically: `KeepAlive.SuccessfulExit = false` leaves a
-  // cleanly-exited job down until the next login instead of relaunching it
-  // in a loop. No bootstrap marker is written - declining is not a spawn
-  // attempt, and the existing phases all describe one.
+  // Probe for a live incumbent before resolving the start target so a resolution failure cannot relaunch into a crash loop beside a healthy host. Does not serialize simultaneous RunAtLoad starts.
   const incumbent =
     probeContext === null
       ? await deps.findIncumbentHost(opts.environment)
@@ -805,11 +535,8 @@ export async function runHostStart(
     return deps.exit(0);
   }
 
-  // ---- Relaunch loop ------------------------------------------------------
-  //
-  // Everything above this point is a GATE and runs exactly once: probe
-  // authority, and the incumbent check that decides whether this supervisor
-  // should exist at all. Everything below is per-attempt.
+  // ---- Relaunch loop ------------------------------------------------------ Everything above this point is a GATE and runs exactly once: probe authority, and the incumbent check that decides whether this supervisor should exist at all.
+  // Everything below is per-attempt.
   let attemptNumber = 0;
   let consecutiveRelaunches = 0;
   // Separate from the crash budget on purpose: a requested restart is not a
@@ -817,35 +544,15 @@ export async function runHostStart(
   let consecutiveImmediateRestarts = 0;
   let shuttingDown = false;
   let currentChild: ChildProcess | null = null;
-  // Resolves the first time a shutdown signal arrives, so a backoff can be
-  // ABANDONED rather than merely re-checked once it finishes.
-  //
-  // Waiting out a 60s backoff before noticing a stop is not just slow, it can
-  // defeat the stop entirely. On a CLI-owned macOS host, `host restart` sends
-  // `launchctl kill TERM`, then `stopService` waits only on the (already dead)
-  // host pid and proceeds to `kickstart` - which no-ops while launchd still
-  // considers this supervisor running (see `platforms/macos.ts`). By the time
-  // the sleep ends and the latch is read, the restart has already no-op'd and
-  // the machine is left hostless.
+  // Resolves the first time a shutdown signal arrives, so a backoff can be ABANDONED rather than merely re-checked once it finishes.
+  // Waiting out a 60s backoff before noticing a stop is not just slow, it can defeat the stop entirely.
   let markShutdownRequested: () => void = () => undefined;
   const shutdownRequested = new Promise<void>((resolve) => {
     markShutdownRequested = resolve;
   });
 
-  // Registered ONCE for the supervisor's whole life. Five relaunches must not
-  // install five listener sets, so the handler reads a mutable reference to
-  // whichever child is current rather than closing over the first one.
-  //
-  // `shuttingDown` latches BEFORE the forward, and that ordering is the point:
-  // `launchctl bootout` and `systemctl stop` stop the host by signalling THIS
-  // process, which then kills its child - so without the latch that child's
-  // death is indistinguishable from a crash and the loop would relaunch a host
-  // in the middle of its own teardown. Setting the flag after forwarding would
-  // leave a window where the exit is processed while it is still false.
-  //
-  // This is the POSIX half of the deliberate-stop guard. Windows needs the
-  // other half (`host/stop-intent.ts`): there the supervisor is an orphaned
-  // grandchild that `schtasks /End` never signals at all.
+  // Registered ONCE for the supervisor's whole life.
+  // Five relaunches must not install five listener sets, so the handler reads a mutable reference to whichever child is current rather than closing over the first one.
   const shutdownHandlers = FORWARDED_SHUTDOWN_SIGNALS.map((sig) => {
     const handler = (): void => {
       shuttingDown = true;
@@ -874,15 +581,7 @@ export async function runHostStart(
     return { sig, handler };
   });
 
-  /**
-   * Leave through here, not `deps.exit`, from anywhere below this point.
-   *
-   * The handlers above are registered for the loop's whole life. In production
-   * `deps.exit` is `process.exit`, so they die with the process and removing
-   * them is moot - but `runHostStart` is exported and an injected `exit` is
-   * explicitly allowed to RETURN (that is why the dependency is typed `void`),
-   * and every such call leaves three listeners on `process` behind.
-   */
+  /** Leave through here, not `deps.exit`, from anywhere below this point. The handlers above are registered for the loop's whole life. */
   const releaseShutdownHandlers = (): void => {
     for (const { sig, handler } of shutdownHandlers) {
       process.off(sig, handler);
@@ -896,28 +595,15 @@ export async function runHostStart(
   for (;;) {
     attemptNumber += 1;
     const isFirstAttempt = attemptNumber === 1;
-    // D5: a fresh id per attempt. `spawn-evidence.ts` pairs a post-baseline
-    // `starting` marker with its terminal marker, so a relaunch has to read as
-    // a genuinely new attempt rather than a second ending for the first one.
+    // D5: a fresh id per attempt.
+    // `spawn-evidence.ts` pairs a post-baseline `starting` marker with its terminal marker, so a relaunch has to read as a genuinely new attempt rather than a second ending for the first one.
     const attemptId = randomUUID();
-    // Probe authority is a ONE-SHOT verdict about a specific transition, owned
-    // by the install/restart lifecycle. The first exit answers it honestly;
-    // later relaunches are availability work and must never re-arm or
-    // resurrect it.
+    // Probe authority is a ONE-SHOT verdict about a specific transition, owned by the install/restart lifecycle.
+    // The first exit answers it honestly; later relaunches are availability work and must never re-arm or resurrect it.
     const attemptProbeContext = isFirstAttempt ? probeContext : null;
 
     // Re-ask the incumbent question before every RELAUNCH, not just at the top.
-    //
-    // The gate above answered it once, for a supervisor that used to die with
-    // its child. This loop instead holds a claim on the data dir across a
-    // backoff - seconds to minutes during which nothing is serving - which
-    // materially widens the double-spawn window that gate's own comment
-    // describes as only partly covered. `traycer host ensure` can legitimately
-    // bring a host up in exactly that window (Desktop's launch converge does
-    // this), and stacking a second one on top is the outcome the whole
-    // incumbent policy exists to prevent.
-    //
-    // Declining is still never eviction: exit 0 and leave the winner alone.
+    // The gate above answered it once, for a supervisor that used to die with its child.
     if (!isFirstAttempt && attemptProbeContext === null) {
       const relaunchIncumbent = await deps.findIncumbentHost(opts.environment);
       if (relaunchIncumbent !== null) {
@@ -935,29 +621,16 @@ export async function runHostStart(
       }
     }
 
-    // D5: re-resolved EVERY attempt, never cached. An install swap renames
-    // `install/` aside mid-life, and a supervisor that held the first attempt's
-    // path would relaunch a binary that has moved or vanished - today a fresh
-    // launchd/systemd-spawned supervisor re-resolves, and the loop has to keep
-    // that property.
+    // D5: re-resolved EVERY attempt, never cached.
+    // An install swap renames `install/` aside mid-life, and a supervisor that held the first attempt's path would relaunch a binary that has moved or vanished - today a fresh launchd/systemd-spawned supervisor re-resolves, and the loop has to keep that property.
     let target: HostStartTarget;
     try {
       target = await resolveHostStartTarget(opts, deps);
     } catch (err) {
-      // Usually transient - mid-swap, or a still-settling install - so it
-      // costs an attempt from the budget and retries.
-      //
-      // The first attempt retries only when nothing is waiting on the answer
-      // (`serviceStarted`). A person or Desktop running `traycer host start`
-      // against a genuinely broken install must still get the error now rather
-      // than after the full ladder; a Scheduled Task action that exits here
-      // instead leaves the machine hostless until the next logon, which is the
-      // exact failure this loop exists to end.
+      // Usually transient - mid-swap, or a still-settling install - so it costs an attempt from the budget and retries.
+      // The first attempt retries only when nothing is waiting on the answer (`serviceStarted`).
       if (!isFirstAttempt || serviceStarted) {
-        // Evidence first: a relaunch that could not resolve its target used to
-        // retry silently, leaving `host.log` with a `starting` marker for an
-        // attempt that never spawned and nothing to say why. int #4839 reads
-        // exactly these markers to explain a failed start.
+        // Evidence first: a relaunch that could not resolve its target used to retry silently, leaving `host.log` with a `starting` marker for an attempt that never spawned and nothing to say why. int #4839 reads exactly these markers to explain a failed start.
         await writeMarkerBestEffort(
           deps,
           logger,
@@ -994,10 +667,8 @@ export async function runHostStart(
           consecutiveRelaunches = decision.consecutiveRelaunches;
           continue;
         }
-        // A stop outranks the error that happened to be in flight when it
-        // arrived. Reporting 69 here would be launchd's cue to start another
-        // supervisor, which would resume this very retry - see
-        // `RelaunchStopCause`.
+        // A stop outranks the error that happened to be in flight when it arrived.
+        // Reporting 69 here would be launchd's cue to start another supervisor, which would resume this very retry - see `RelaunchStopCause`.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
         return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
       }
@@ -1057,9 +728,8 @@ export async function runHostStart(
         deps,
         environment: opts.environment,
       });
-      // Leaving by `throw` is still leaving. A caller that catches this keeps
-      // a stale handler set, and every stale handler goes on mutating the
-      // `shuttingDown` of the run that installed it.
+      // Leaving by `throw` is still leaving.
+      // A caller that catches this keeps a stale handler set, and every stale handler goes on mutating the `shuttingDown` of the run that installed it.
       releaseShutdownHandlers();
       throw err;
     }
@@ -1072,21 +742,7 @@ export async function runHostStart(
     });
 
     // Per-attempt setup, guarded as a UNIT.
-    //
-    // Every await below can fail for reasons that say nothing about whether the
-    // host can run: `readEnvOverrides` and `rotateLog` touch files another
-    // process may hold open, and `openLogFd` is an `fs.open` a Windows scanner
-    // or a momentary EACCES can refuse. Awaited unguarded, any of them rejected
-    // straight out of the relaunch loop; the entrypoint turned that into exit 1,
-    // and exit 1 is what the Scheduled Task does NOT answer with a fresh
-    // supervisor. A transient filesystem error could leave the machine hostless
-    // - the outcome this loop exists to prevent.
-    //
-    // These are not diagnostics, so the best-effort treatment the marker writes
-    // get would be wrong here: the attempt genuinely cannot proceed without
-    // them. What they need is the policy target resolution and spawn already
-    // have - spend an attempt from the bounded budget and retry, while a first
-    // attempt with someone waiting on the answer still reports immediately.
+    // Every await below can fail for reasons that say nothing about whether the host can run: `readEnvOverrides` and `rotateLog` touch files another process may hold open, and `openLogFd` is an `fs.open` a Windows scanner or a momentary EACCES can refuse.
     let env: NodeJS.ProcessEnv;
     let crashReportsDirPath: string;
     let preexistingReportNames: Set<string>;
@@ -1102,33 +758,21 @@ export async function runHostStart(
         TERM_PROGRAM: "traycer",
       };
       // Cap the host's V8 young generation at creation time on EVERY platform.
-      // This is the single cross-platform host launch path, so applying it here
-      // gives Linux (systemd) and Windows (schtasks, which cannot set env vars in
-      // its task XML) the same cap macOS gets from its LaunchAgent plist. The helper
-      // dedups when the inherited env already carries it (the macOS plist case).
+      // This is the single cross-platform host launch path, so applying it here gives Linux (systemd) and Windows (schtasks, which cannot set env vars in its task XML) the same cap macOS gets from its LaunchAgent plist.
       env.NODE_OPTIONS = withHostNodeOptions(env.NODE_OPTIONS);
-      // The host resolves its slot from its own `config.environment` (baked
-      // per build) - the supervisor passes no environment arg or env. It also
-      // computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the
-      // bundled `traycer` is symlinked) and puts it on PATH, so no `traycer` path
-      // needs to be handed down here.
+      // The host resolves its slot from its own `config.environment` (baked per build) - the supervisor passes no environment arg or env.
+      // It also computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the bundled `traycer` is symlinked) and puts it on PATH, so no `traycer` path needs to be handed down here.
 
-      // Bound the log before anything appends to this run. Nothing truncates
-      // `host.log` - every writer appends - so a start is the only safe moment to
-      // roll it: the fd opened below lives for the child's whole lifetime and would
-      // follow the file across a rename, splitting one session across two files.
-      // Under the cap this is a no-op, so consecutive starts still share one log.
+      // Bound the log before anything appends to this run.
+      // Nothing truncates `host.log` - every writer appends - so a start is the only safe moment to roll it: the fd opened below lives for the child's whole lifetime and would follow the file across a rename, splitting one session across two files.
       const rotation = await deps.rotateLog(opts.environment);
       logger.debug("Host supervisor checked log rotation", {
         environment: opts.environment,
         rotation,
       });
 
-      // The report directory is prepared in the admitted callback below,
-      // together with the fresh install-record read that chooses the child's
-      // cwd. Preparing it here would mutate an old slot before the contender
-      // can reject an active/parked attempt that has already selected newer
-      // bytes.
+      // The report directory is prepared in the admitted callback below, together with the fresh install-record read that chooses the child's cwd.
+      // Preparing it here would mutate an old slot before the contender can reject an active/parked attempt that has already selected newer bytes.
       crashReportsDirPath = crashReportsDirFor(target.cwd);
       preexistingReportNames = new Set();
 
@@ -1161,10 +805,8 @@ export async function runHostStart(
         errorName: failure.name,
         errorMessage: failure.message,
       });
-      // Evidence first, for the same reason the target-resolution path writes
-      // one: this attempt may already have written `starting`, and
-      // `spawn-evidence.ts` pairs that against a terminal marker. An attempt
-      // that died in setup must not read as one still in progress.
+      // Evidence first, for the same reason the target-resolution path writes one: this attempt may already have written `starting`, and `spawn-evidence.ts` pairs that against a terminal marker.
+      // An attempt that died in setup must not read as one still in progress.
       await writeMarkerBestEffort(
         deps,
         logger,
@@ -1224,54 +866,10 @@ export async function runHostStart(
       );
       return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
     }
-    // `--layer0-status-fd` is the AUTHORIZATION for the framed Layer-0 status
-    // transport, not a hint about it: the host writes a status frame only when
-    // this supervisor names the descriptor, and is a hard no-op otherwise. It
-    // is therefore passed if and only if the `stdio` vector below actually
-    // opens the pipe (probe mode). Passing it speculatively would re-create the
-    // defect it exists to close - the host used to sniff fd 3's type, and
-    // Node's own IPC channel is a Unix-domain socket on fd 3, so unrelated IPC
-    // received raw frames. Version skew is safe both ways: an N-1 host scans
-    // argv and ignores the unknown flag, and a current host that is not given
-    // the flag simply writes nothing.
-    // The install record is re-read and the OS invocation is derived inside
-    // the attempt-admission callback below. A check outside that callback
-    // would let an active/parked attempt swap `install.json` between this
-    // supervisor's initial diagnostic read and its eventual spawn.
+    // `--layer0-status-fd` is the AUTHORIZATION for the framed Layer-0 status transport, not a hint about it: the host writes a status frame only when this supervisor names the descriptor, and is a hard no-op otherwise.
+    // It is therefore passed if and only if the `stdio` vector below actually opens the pipe (probe mode).
 
-    // Last look before committing to a child. BOTH halves of the
-    // deliberate-stop guard are asked here, on EVERY attempt including the
-    // first, because the two platforms deliver a stop by different channels
-    // and this is the only point that dominates all of them.
-    //
-    // POSIX (`shuttingDown`): registering the signal handlers up front (once,
-    // for the loop's whole life) SUPPRESSES Node's default "die on SIGTERM"
-    // behaviour, which the single-shot supervisor used to rely on - it
-    // installed its handler only after spawning, so a signal during setup
-    // simply killed the process.
-    //
-    // Windows (stop intent): `schtasks /End` never signals this process at
-    // all, so `shuttingDown` is ALWAYS false there. A latch-only check would
-    // therefore be inert on the single platform this whole feature exists for.
-    // `decideRelaunch` reads intent around the backoff, but per-attempt setup
-    // is a chain of awaits AFTER that read - incumbent probe, target
-    // resolution, env overrides, log rotation, crash-report pruning, marker
-    // write, fd open - and `host stop` can complete inside it, having found no
-    // child to kill because none exists yet.
-    //
-    // The intent read is sequenced BEFORE the latch, and that order is the
-    // guard, not a style choice. `||` short-circuits, so asking `shuttingDown`
-    // first would capture it as of BEFORE this await. A POSIX stop arriving
-    // DURING the read - `launchctl bootout`, `systemctl stop`, or a CLI stop
-    // whose best-effort intent write failed, i.e. every case with no file to
-    // find - latches `shuttingDown` while `currentChild` is still null, so the
-    // handler forwards the signal to nothing. A false intent answer then let
-    // the spawn proceed, and the post-spawn guard could not catch it either:
-    // that one is gated on `!shuttingDown`, which is true by then. The result
-    // was a child created after a stop, never signalled, still serving.
-    // Reading the latch AFTER the await is what closes it; from here to
-    // `currentChild = child` is unbroken synchronous code, so no signal can
-    // land in between.
+    // Last look before spawn: both the incumbent probe and the start-target resolution must agree, or exit 0 beside a live host.
     const stopAnnounced = await deps.hasStopIntent(
       opts.environment,
       Date.now(),
@@ -1284,11 +882,8 @@ export async function runHostStart(
         attemptNumber,
         viaSignal: shuttingDown,
       });
-      // This attempt already wrote its `starting` marker above. Returning
-      // without a terminal one leaves `spawn-evidence.ts` pairing a
-      // post-baseline `starting` against nothing, so a cleanly stopped host
-      // reads as an attempt still in progress - the same unpaired-marker
-      // defect a relaunch that could not resolve its target used to have.
+      // This attempt already wrote its `starting` marker above.
+      // Returning without a terminal one leaves `spawn-evidence.ts` pairing a post-baseline `starting` against nothing, so a cleanly stopped host reads as an attempt still in progress - the same unpaired-marker defect a relaunch that could not resolve its target used to have.
       await writeMarkerBestEffort(
         deps,
         logger,
@@ -1312,24 +907,14 @@ export async function runHostStart(
       return exitSupervisor(0);
     }
 
-    // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
-    // report before any post-spawn statement runs, and the report scan treats
-    // this as its lower bound (with additional slack for mtime granularity).
+    // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic report before any post-spawn statement runs, and the report scan treats this as its lower bound (with additional slack for mtime granularity).
     let childSpawnedAtMs = 0;
     let child: ChildProcess;
     const spawnedWhileAdmitting: { child: ChildProcess | null } = {
       child: null,
     };
-    // The child's ending, recorded from the instant of spawn rather than
-    // observed by listeners attached later. Between the `spawn()` inside the
-    // admission callback and the `childEnding` construction below sit real
-    // awaits — the adoption grant's `acknowledgeSpawn()` and
-    // `withUpdateContender`'s post-callback capability verification — and
-    // child events are emitted once, never replayed. An ENOENT `error`
-    // emitted in that window was an uncaught event that took the supervisor
-    // down instead of settling as a spawn failure; an early `exit` was
-    // emitted into no listener, leaving `await childEnding` pending forever.
-    // First evidence wins, mirroring `childFinalized` below.
+    // The child's ending, recorded from the instant of spawn rather than observed by listeners attached later.
+    // Between the `spawn()` inside the admission callback and the `childEnding` construction below sit real awaits - the adoption grant's `acknowledgeSpawn()` and `withUpdateContender`'s post-callback capability verification - and child events are emitted once, never replayed.
     let recordedEnding: ChildEnding | null = null;
     let onRecordedEnding: (() => void) | null = null;
     const recordEnding = (value: ChildEnding): void => {
@@ -1337,20 +922,13 @@ export async function runHostStart(
       recordedEnding = value;
       onRecordedEnding?.();
     };
-    // The stderr pipe is its own emitter with the same once-only, throw-when-
-    // unhandled `error` semantics — the tee below marks its listener
-    // MANDATORY for exactly that reason, and attaching it only after
-    // admission left the same await window open for an early EIO. Recorded
-    // rather than merely swallowed: an `error`-then-`close` that both fired
-    // before the tee's listeners exist would leave its end-wait to the
-    // fallback timeout, and the recorded state lets the tee settle it
-    // immediately for a stream that is already dead.
+    // The stderr pipe is its own emitter with the same once-only, throw-when- unhandled `error` semantics - the tee below marks its listener MANDATORY for exactly that reason, and attaching it only after admission left the same await window open for an early EIO.
+    // Recorded rather than merely swallowed: an `error`-then-`close` that both fired before the tee's listeners exist would leave its end-wait to the fallback timeout, and the recorded state lets the tee settle it immediately for a stream that is already dead.
     let stderrErroredEarly = false;
     try {
       const admission = await deps.admitHostStartSpawn(opts, async () => {
         // Re-resolve the install record under the outer attempt boundary.
-        // This makes every initial, crash, and exit-87 relaunch choose its
-        // executable from a state the same contender just admitted.
+        // This makes every initial, crash, and exit-87 relaunch choose its executable from a state the same contender just admitted.
         target = await resolveHostStartTarget(opts, deps);
         crashReportsDirPath = crashReportsDirFor(target.cwd);
         preexistingReportNames = new Set(
@@ -1364,9 +942,8 @@ export async function runHostStart(
             ? []
             : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
         ] as const;
-        // The `make dev-desktop` host runtime is a `.cmd` wrapper. Resolve
-        // it only after the admitted install-record re-read so a Windows
-        // path with spaces and a just-promoted target stay one invocation.
+        // The `make dev-desktop` host runtime is a `.cmd` wrapper.
+        // Resolve it only after the admitted install-record re-read so a Windows path with spaces and a just-promoted target stay one invocation.
         const launch = resolveSpawnInvocation(target.executable, hostArgs);
         childSpawnedAtMs = Date.now();
         spawnedWhileAdmitting.child = deps.spawn(launch.command, launch.args, {
@@ -1381,9 +958,7 @@ export async function runHostStart(
             ? { windowsVerbatimArguments: true }
             : {}),
         });
-        // Attached SYNCHRONOUSLY, before this callback returns into
-        // admission's remaining awaits — see `recordEnding`'s doc for what an
-        // ending emitted during those awaits used to do.
+        // Attached SYNCHRONOUSLY, before this callback returns into admission's remaining awaits - see `recordEnding`'s doc for what an ending emitted during those awaits used to do.
         spawnedWhileAdmitting.child.once("error", (cause: Error) =>
           recordEnding({ kind: "spawn-error", cause }),
         );
@@ -1393,16 +968,8 @@ export async function runHostStart(
         spawnedWhileAdmitting.child.stderr?.on("error", () => {
           stderrErroredEarly = true;
         });
-        // The layer0 probe pipe (fd 3, present when this attempt runs
-        // probed) is one more separate emitter with the same unhandled-
-        // `error`-is-a-crash semantics, and its consumer
-        // (`observeProbeStatus`) also attaches only after admission. Inert
-        // rather than recorded: an errored pipe simply never yields a frame,
-        // and `readLayer0Frame` is already bounded, so the observation
-        // degrades to `{ marker: null }` on its own.
-        // `Array.isArray` first: injected test doubles are partial
-        // `ChildProcess` shapes without a `stdio` array, and the type cannot
-        // see that.
+        // The layer0 probe pipe (fd 3, present when this attempt runs probed) is one more separate emitter with the same unhandled- `error`-is-a-crash semantics, and its consumer (`observeProbeStatus`) also attaches only after admission.
+        // Inert rather than recorded: an errored pipe simply never yields a frame, and `readLayer0Frame` is already bounded, so the observation degrades to `{ marker: null }` on its own.
         const stdioStreams = spawnedWhileAdmitting.child.stdio;
         const layer0Status = Array.isArray(stdioStreams)
           ? stdioStreams[LAYER0_STATUS_FD]
@@ -1413,10 +980,8 @@ export async function runHostStart(
         return spawnedWhileAdmitting.child;
       });
       if (admission.kind !== "ran") {
-        // `withUpdateContender` performs a post-callback ownership check. If
-        // it detects a loss after `spawn()` synchronously returned, terminate
-        // that unadmitted child rather than letting it serve bytes selected
-        // from a record we can no longer prove authority over.
+        // `withUpdateContender` performs a post-callback ownership check.
+        // If it detects a loss after `spawn()` synchronously returned, terminate that unadmitted child rather than letting it serve bytes selected from a record we can no longer prove authority over.
         try {
           spawnedWhileAdmitting.child?.kill("SIGTERM");
         } catch {
@@ -1449,34 +1014,7 @@ export async function runHostStart(
           ),
         );
         await deps.closeLogFd(logFd);
-        // A SERVICE launch refused as `busy` is the one arm here that must not
-        // exit 0, and the reason is entirely about who is listening.
-        //
-        // `host download` holds the update-attempt execution segment across its
-        // whole transfer (documented in CONTENDER_INVENTORY.md; the inner
-        // cli-lock is already narrow). If the host child crashes during that
-        // window, the supervisor's relaunch takes `waitMs: 0` and is refused
-        // `busy` - mutual exclusion on the attempt lock is unconditional on
-        // admission, decided before `dispositionFor` is ever consulted. Exiting
-        // 0 then tells the service manager the job finished successfully, and
-        // the shipped LaunchAgent sets `KeepAlive.SuccessfulExit = false`
-        // (inject-host-launch-agent.cjs), which means launchd relaunches on a
-        // NON-zero exit and deliberately does not on a clean one. So a clean
-        // exit here is not "we gave up politely" - it is the host staying down
-        // with nothing left to bring it back, because `host download` only
-        // promotes staged bytes and never restarts the service.
-        //
-        // Scoped to exactly this branch on purpose. `serviceStarted` (not a
-        // bare `serviceLabel` test - see its derivation) names the case with no
-        // caller listening; an interactive or Desktop-driven start keeps exit 0
-        // because its caller sees the refusal and can decide for itself. And
-        // only `busy` retries: `held-in-process`, `nonterminal-attempt`,
-        // `record-fail-closed` and `lock-not-live` are all states a relaunch
-        // cannot clear, so retrying them would be a crash-loop, not a recovery.
-        //
-        // This bounds the outage to the transfer's length rather than removing
-        // it; `ThrottleInterval: 10` in the same plist paces the retries. The
-        // permanent wedge is what this fixes.
+        // A service launch refused as busy must not leave a parked supervisor; exit 0 so KeepAlive does not restart it.
         const retryableServiceRefusal =
           serviceStarted && admission.kind === "busy";
         if (retryableServiceRefusal) {
@@ -1491,10 +1029,8 @@ export async function runHostStart(
       }
       child = admission.result;
     } catch (cause) {
-      // The fresh record resolution happens inside admission. Preserve the
-      // supervisor's existing target-resolution contract if it fails there:
-      // a missing/invalid record is not a generic OS spawn failure, and its
-      // durable marker must retain the actionable CLI code.
+      // The fresh record resolution happens inside admission.
+      // Preserve the supervisor's existing target-resolution contract if it fails there: a missing/invalid record is not a generic OS spawn failure, and its durable marker must retain the actionable CLI code.
       if (cause instanceof CliError) {
         await writeMarkerBestEffort(
           deps,
@@ -1581,15 +1117,8 @@ export async function runHostStart(
         `traycer host start: ${CLI_ERROR_CODES.HOST_SPAWN_FAILED}: ${message}`,
       );
       await deps.closeLogFd(logFd);
-      // Identical policy to the ASYNCHRONOUS spawn failure below - whether
-      // `spawn()` throws or reports through the `error` event is a platform
-      // detail, not a difference in what the machine needs. Leaving the two
-      // paths to disagree is how a transient EBUSY mid-swap could still exit a
-      // supervisor that had budget left and nothing else watching.
-      //
-      // "Nothing else watching" is exactly what `serviceStarted` names, which
-      // is why it also lifts the first-attempt exception here: gating on
-      // attempt number alone reintroduced the same hole one attempt earlier.
+      // Identical policy to the ASYNCHRONOUS spawn failure below - whether `spawn()` throws or reports through the `error` event is a platform detail, not a difference in what the machine needs.
+      // Leaving the two paths to disagree is how a transient EBUSY mid-swap could still exit a supervisor that had budget left and nothing else watching.
       if (!isFirstAttempt || serviceStarted) {
         const decision = await decideRelaunch({
           deps,
@@ -1612,15 +1141,11 @@ export async function runHostStart(
       return exitSupervisor(66);
     }
 
-    // Stderr tee (see the stdio comment above): bounded path-addressed mirror
-    // into host.log plus the head+tail capture for the crash marker. Failures
-    // are swallowed - a diagnostics write must never take the supervisor down.
+    // Stderr tee (see the stdio comment above): bounded path-addressed mirror into host.log plus the head+tail capture for the crash marker.
+    // Failures are swallowed - a diagnostics write must never take the supervisor down.
     const stderrTee = deps.createStderrTee(opts.environment);
-    // Resolves when the stderr stream ends (or errors). `exit` fires when the
-    // process dies, NOT when its pipes have drained, so the finalize path waits
-    // on THIS (bounded) before writing the marker - otherwise the fatal text can
-    // still be unread in the pipe and the capture comes out empty in exactly the
-    // abnormal-death case this feature exists for.
+    // Resolves when the stderr stream ends (or errors).
+    // `exit` fires when the process dies, NOT when its pipes have drained, so the finalize path waits on THIS (bounded) before writing the marker - otherwise the fatal text can still be unread in the pipe and the capture comes out empty in exactly the abnormal-death case this feature exists for.
     let resolveStderrEnded: () => void = () => undefined;
     const stderrEnded = new Promise<void>((resolve) => {
       resolveStderrEnded = resolve;
@@ -1632,13 +1157,8 @@ export async function runHostStart(
       stderr.on("data", (chunk: Buffer) => {
         stderrTee.append(chunk);
       });
-      // MANDATORY, not defensive: the stream is a live `Readable` this process
-      // owns, and Node rethrows an unhandled stream `error` as an uncaught
-      // exception. A read error on this pipe (EIO, or EPIPE after an abnormal
-      // child death - i.e. precisely the crash case) would kill the supervisor
-      // BEFORE it writes the terminal marker Desktop reads. Swallow it and
-      // settle the wait: whatever bytes arrived are still worth recording, and
-      // `error` may arrive instead of `end`.
+      // MANDATORY, not defensive: the stream is a live `Readable` this process owns, and Node rethrows an unhandled stream `error` as an uncaught exception.
+      // A read error on this pipe (EIO, or EPIPE after an abnormal child death - i.e. precisely the crash case) would kill the supervisor BEFORE it writes the terminal marker Desktop reads.
       stderr.on("error", () => {
         resolveStderrEnded();
       });
@@ -1648,9 +1168,7 @@ export async function runHostStart(
       stderr.on("close", () => {
         resolveStderrEnded();
       });
-      // The spawn-site recorder may have observed the stream's one `error`
-      // before any of the listeners above existed; a dead stream emits
-      // nothing further, so settle the wait from the recorded state.
+      // The spawn-site recorder may have observed the stream's one `error` before any of the listeners above existed; a dead stream emits nothing further, so settle the wait from the recorded state.
       if (stderrErroredEarly) resolveStderrEnded();
     }
 
@@ -1665,39 +1183,16 @@ export async function runHostStart(
             deps,
             environment: opts.environment,
           });
-    // `persistChildExit` awaits this inside a try/catch, but ONLY on the `exit`
-    // path. If the child fails asynchronously (`child.once("error", …)`, e.g.
-    // ENOENT) or simply never exits, nothing is ever attached - so a rejected
-    // `writeProbeMarker` (disk full, EACCES on the marker path) surfaces as an
-    // unhandled rejection and can take the supervisor down. Killing the
-    // supervisor because a diagnostic marker could not be written is a strictly
-    // worse outcome than not writing it.
-    //
-    // Marking it handled here rather than replacing the promise: `.catch()`
-    // returns a NEW promise and leaves `probeObservation` itself rejected but
-    // acknowledged, so `persistChildExit` still observes the failure and still
-    // logs it with its own context. Swallowing it into a resolved
-    // `{ marker: null }` would trade the crash for silence.
+    // `persistChildExit` awaits this inside a try/catch, but ONLY on the `exit` path.
+    // If the child fails asynchronously (`child.once("error", …)`, e.g.
     void probeObservation?.catch(() => undefined);
 
-    // `spawn()` may report a failure asynchronously (notably ENOENT on some
-    // platforms).  It is an EventEmitter error, not an exception from spawn,
-    // so it needs the same terminal evidence path as a synchronous failure.
-    // Guard both listeners: some child implementations subsequently emit exit.
-    // The attempt's ending, AWAITED rather than fired-and-forgotten: the loop
-    // cannot decide whether to bring the host back without knowing how it
-    // died. `childFinalized` still guards the two listeners against
-    // double-settling - it is now per-attempt state, which is what makes it
-    // genuinely reusable rather than a one-shot latch on a process that was
-    // about to exit anyway.
+    // `spawn()` may report a failure asynchronously (notably ENOENT on some platforms).
+    // It is an EventEmitter error, not an exception from spawn, so it needs the same terminal evidence path as a synchronous failure.
     currentChild = child;
     let childFinalized = false;
-    // Constructed SYNCHRONOUSLY, and fed by `recordEnding` — whose listeners
-    // were attached inside the admission callback, at the spawn itself —
-    // rather than by listeners of its own. The recorder is what closes the
-    // admission-await window; this promise only has to consume an ending
-    // that may already have been recorded (the reconcile call below) or may
-    // arrive later (the callback assignment).
+    // Constructed SYNCHRONOUSLY, and fed by `recordEnding` - whose listeners were attached inside the admission callback, at the spawn itself - rather than by listeners of its own.
+    // The recorder is what closes the admission-await window; this promise only has to consume an ending that may already have been recorded (the reconcile call below) or may arrive later (the callback assignment).
     const childEnding = new Promise<ChildEnding>((resolve) => {
       const settle = (value: ChildEnding): void => {
         if (childFinalized) return;
@@ -1710,17 +1205,8 @@ export async function runHostStart(
       if (recordedEnding !== null) settle(recordedEnding);
     });
 
-    // The pre-spawn guard closes the window it can see, but not a CROSS-PROCESS
-    // one: `host stop` can write its intent just after that read returned
-    // false, scan for a host while this child does not exist yet, find nothing
-    // to kill, and return successfully - leaving a host running that the
-    // stopper never saw. The stopper cannot fix this from its side, because it
-    // has no way to wait for a process that has not been created.
-    //
-    // So the supervisor closes it from ours: having created the child, ask
-    // once more, and undo the spawn if the answer changed. Latching
-    // `shuttingDown` is what makes the death that follows read as requested
-    // rather than as a crash to be recovered.
+    // The pre-spawn guard closes the window it can see, but not a CROSS-PROCESS one: `host stop` can write its intent just after that read returned false, scan for a host while this child does not exist yet, find nothing to kill, and return successfully - leaving a host running that the stopper never saw.
+    // The stopper cannot fix this from its side, because it has no way to wait for a process that has not been created.
     if (
       !shuttingDown &&
       (await deps.hasStopIntent(
@@ -1741,21 +1227,8 @@ export async function runHostStart(
       } catch {
         // Already gone - the ending below still settles.
       }
-      // Bounded, because on THIS path nothing else escalates. The forwarded
-      // path is signalled by launchd/systemd, which follow up with SIGKILL
-      // against the job; here the stop announced itself on disk, `host stop`
-      // has already returned, and no one is watching this supervisor. A child
-      // that never handles SIGTERM would leave `await childEnding` below
-      // waiting forever, holding the job slot open while the host it was told
-      // to stop keeps serving.
-      //
-      // The grace is DERIVED, not chosen: a functioning host arms its own
-      // force-exit watchdog at `SHUTDOWN_FORCE_EXIT_MS`, so anything shorter
-      // would SIGKILL hosts that were about to complete the very shutdown we
-      // asked for - destroying a clean exit to save a few seconds. Same
-      // reasoning, and the same derivation, as `STOP_EXIT_TIMEOUT_MS`. What is
-      // left is the case that watchdog cannot cover: a child that never armed
-      // it.
+      // Bounded, because on THIS path nothing else escalates.
+      // The forwarded path is signalled by launchd/systemd, which follow up with SIGKILL against the job; here the stop announced itself on disk, `host stop` has already returned, and no one is watching this supervisor.
       const escalation = deps.escalateAfter(RACED_STOP_KILL_GRACE_MS, () => {
         logger.warn("Host supervisor escalating a raced stop to SIGKILL", {
           environment: opts.environment,
@@ -1773,12 +1246,7 @@ export async function runHostStart(
 
     const ending = await childEnding;
     // Stamped HERE, at the child's death, not where uptime is finally compared.
-    // Everything between the two is diagnostics - the stderr end wait (2s), the
-    // tee flush (1s) and the bounded crash-report scan (2s) - so reading the
-    // clock later credits a dead child with up to five seconds it did not run.
-    // That is enough to carry a host that died just short of
-    // `SUSTAINED_UPTIME_RESET_MS` over the line and reset the budget, which is
-    // the governor's own re-arming bug in a narrower window.
+    // Everything between the two is diagnostics - the stderr end wait (2s), the tee flush (1s) and the bounded crash-report scan (2s) - so reading the clock later credits a dead child with up to five seconds it did not run.
     const childEndedAtMs = Date.now();
     currentChild = null;
 
@@ -1794,9 +1262,7 @@ export async function runHostStart(
         bundle: target.executable,
         probeContext: attemptProbeContext,
       });
-      // Same reasoning as a failed re-resolve: usually transient, so it spends
-      // budget and retries, and a first attempt does so only when nothing is
-      // waiting on the answer.
+      // Same reasoning as a failed re-resolve: usually transient, so it spends budget and retries, and a first attempt does so only when nothing is waiting on the answer.
       if (!isFirstAttempt || serviceStarted) {
         const decision = await decideRelaunch({
           deps,
@@ -1819,26 +1285,15 @@ export async function runHostStart(
       return exitSupervisor(66);
     }
 
-    // The child is gone, so the supervisor's own copy of the log descriptor has
-    // no further use. Released HERE rather than at process exit because this
-    // process now outlives many attempts: a sustained-uptime reset can extend
-    // the loop indefinitely, which would otherwise leak one descriptor per
-    // relaunch for the life of the machine.
+    // The child is gone, so the supervisor's own copy of the log descriptor has no further use.
+    // Released HERE rather than at process exit because this process now outlives many attempts: a sustained-uptime reset can extend the loop indefinitely, which would otherwise leak one descriptor per relaunch for the life of the machine.
     await deps.closeLogFd(logFd);
 
-    // `host.restart` is a deliberate process hand-off, not a crash. Its
-    // non-zero code tells outer service supervisors to relaunch if this CLI
-    // supervisor itself dies, while THIS supervisor replaces its child
-    // immediately. Do this before terminal-marker persistence: crash markers
-    // are diagnostic evidence and recording one here would make the doctor's
-    // recent-crash signal lie about an operator-requested restart.
+    // `host.restart` is a deliberate process hand-off, not a crash.
+    // Its non-zero code tells outer service supervisors to relaunch if this CLI supervisor itself dies, while THIS supervisor replaces its child immediately.
     if (ending.signal === null && ending.code === RESTART_EXIT_CODE) {
       // This is not crash persistence, but it is still the end of an attempt.
-      // In particular, an adapter/grandchild can retain the old stderr pipe
-      // after the host exits. Carrying its data listener into the replacement
-      // would bleed old bytes into the new attempt's tee and retain one stream
-      // graph per requested restart. Finalize the bounded diagnostic resources
-      // and one-shot probe without writing crash evidence before relaunching.
+      // In particular, an adapter/grandchild can retain the old stderr pipe after the host exits.
       await finalizeIntentionalRestartAttempt({
         code: ending.code,
         signal: ending.signal,
@@ -1850,22 +1305,14 @@ export async function runHostStart(
         stderrEnded,
       });
       disposeAttemptStderr(child.stderr);
-      // Same forgiveness rule the abnormal path applies below, and it has to be
-      // applied HERE too because this branch never reaches it. A host that
-      // consumed part of the budget, then ran past `SUSTAINED_UPTIME_RESET_MS`,
-      // then was restarted on purpose would otherwise hand its replacement the
-      // stale crash history that the sustained run had already earned off - so
-      // an operator-requested restart would silently shorten the next real
-      // crash allowance. Only real uptime forgives; the restart itself is not a
-      // crash and neither consumes nor forgives anything on its own.
+      // Same forgiveness rule the abnormal path applies below, and it has to be applied HERE too because this branch never reaches it.
+      // A host that consumed part of the budget, then ran past `SUSTAINED_UPTIME_RESET_MS`, then was restarted on purpose would otherwise hand its replacement the stale crash history that the sustained run had already earned off - so an operator-requested restart would silently shorten the next real crash allowance.
       const restartRanForMs = childEndedAtMs - childSpawnedAtMs;
       if (restartRanForMs >= SUSTAINED_UPTIME_RESET_MS) {
         consecutiveRelaunches = 0;
       }
-      // The bound this branch would otherwise lack. Exiting with the child's
-      // own 87 hands the decision to the service supervisor, which relaunches
-      // under ITS throttle - the same shape as the crash budget exiting with
-      // the child's code, and the only layer here that can space the attempts.
+      // The bound this branch would otherwise lack.
+      // Exiting with the child's own 87 hands the decision to the service supervisor, which relaunches under ITS throttle - the same shape as the crash budget exiting with the child's code, and the only layer here that can space the attempts.
       if (restartRanForMs >= IMMEDIATE_RESTART_FLOOR_MS) {
         consecutiveImmediateRestarts = 0;
       } else {
@@ -1883,15 +1330,8 @@ export async function runHostStart(
           return exitSupervisor(RESTART_EXIT_CODE);
         }
       }
-      // SHUTDOWN WINS over a requested restart, and this check has to be here
-      // because the `continue` below never reaches `decideRelaunch`, which is
-      // the only other place that consults the latch.
-      //
-      // The race is narrow but its consequence is not: a SIGTERM (or a raced
-      // stop intent) can land while the child is already exiting 87 for a
-      // `host.restart` it accepted moments earlier. Relaunching then starts a
-      // replacement that the one-shot signal has already been spent on, so an
-      // explicit stop leaves the service running.
+      // SHUTDOWN WINS over a requested restart, and this check has to be here because the `continue` below never reaches `decideRelaunch`, which is the only other place that consults the latch.
+      // The race is narrow but its consequence is not: a SIGTERM (or a raced stop intent) can land while the child is already exiting 87 for a `host.restart` it accepted moments earlier.
       if (shuttingDown) {
         logger.info("Ignoring a requested restart during shutdown", {
           environment: opts.environment,
@@ -1928,40 +1368,23 @@ export async function runHostStart(
       preexistingReportNames,
     });
 
-    // The diagnostic wait above is bounded precisely BECAUSE a grandchild can
-    // inherit the dead host's stderr and hold the pipe open indefinitely. When
-    // that bound expires the stream is still live, still has a `data` listener
-    // feeding this attempt's tee, and still holds a libuv handle - so a
-    // supervisor that goes on to relaunch keeps every one of them, per attempt,
-    // for as long as it lives. The five-relaunch budget does not bound that: a
-    // child surviving the sustained-uptime window resets the counter, so spaced
-    // crash cycles accumulate without limit. Same argument as the log fd.
-    //
-    // Best-effort and deliberately last: the marker and the capture have both
-    // already been written from this stream by the time we get here.
+    // The diagnostic wait above is bounded precisely BECAUSE a grandchild can inherit the dead host's stderr and hold the pipe open indefinitely.
+    // When that bound expires the stream is still live, still has a `data` listener feeding this attempt's tee, and still holds a libuv handle - so a supervisor that goes on to relaunch keeps every one of them, per attempt, for as long as it lives.
     disposeAttemptStderr(child.stderr);
 
     // A clean exit is the host standing down on purpose - never relaunch it.
-    // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
-    // restated, which is the point: one semantic on all three platforms.
+    // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure` restated, which is the point: one semantic on all three platforms.
     if (!outcome.abnormal) {
       return exitSupervisor(outcome.exitCode);
     }
 
-    // D7: only real uptime forgives the budget. The desktop recovery governor
-    // records why a weaker rule is wrong - a host that dies shortly after boot
-    // every time answers "it started" every time, and treating that as recovery
-    // is what let the original respawn loop re-arm itself forever.
+    // D7: only real uptime forgives the budget.
+    // The desktop recovery governor records why a weaker rule is wrong - a host that dies shortly after boot every time answers "it started" every time, and treating that as recovery is what let the original respawn loop re-arm itself forever.
     const ranForMs = childEndedAtMs - childSpawnedAtMs;
     if (ranForMs >= SUSTAINED_UPTIME_RESET_MS) {
       consecutiveRelaunches = 0;
-      // The immediate-restart budget is forgiven by the same evidence, and by
-      // the same argument: a run that lasted this long PROVED the restart
-      // storm ended, whatever it eventually died of. Resetting only the crash
-      // counter here let a stale `consecutiveImmediateRestarts` survive a
-      // healthy run and then terminate the supervisor on the FIRST short
-      // requested restart afterwards - punishing a new episode with an old
-      // one's history.
+      // The immediate-restart budget is forgiven by the same evidence, and by the same argument: a run that lasted this long PROVED the restart storm ended, whatever it eventually died of.
+      // Resetting only the crash counter here let a stale `consecutiveImmediateRestarts` survive a healthy run and then terminate the supervisor on the FIRST short requested restart afterwards - punishing a new episode with an old one's history.
       consecutiveImmediateRestarts = 0;
     }
 
@@ -1976,12 +1399,8 @@ export async function runHostStart(
       shutdownRequested,
     });
     if (decision.kind !== "relaunch") {
-      // The load-bearing one. A stop landing during the backoff is the case
-      // `refused("after")` exists for, and the child it interrupts died
-      // abnormally by definition - so `outcome.exitCode` is nonzero, and
-      // reporting it would have launchd start a replacement supervisor that
-      // reads the intent as already served and brings the host back. The
-      // refusal and the exit code have to agree. See `RelaunchStopCause`.
+      // The load-bearing one.
+      // A stop landing during the backoff is the case `refused("after")` exists for, and the child it interrupts died abnormally by definition - so `outcome.exitCode` is nonzero, and reporting it would have launchd start a replacement supervisor that reads the intent as already served and brings the host back.
       return exitSupervisor(
         decision.cause === "stop-requested" ? 0 : outcome.exitCode,
       );
@@ -2002,51 +1421,10 @@ type RelaunchDecision =
   | { readonly kind: "relaunch"; readonly consecutiveRelaunches: number }
   | { readonly kind: "stop"; readonly cause: RelaunchStopCause };
 
-/**
- * WHY the loop stopped, because the two answers need opposite exit codes.
- *
- * `stop-requested` must exit 0. Nothing else in the exit path can express "do
- * not bring this back": `KeepAlive{SuccessfulExit:false}`, `Restart=on-failure`
- * and the Scheduled Task's `RestartOnFailure` all read a nonzero exit as a crash
- * and start a fresh supervisor - which then reads the stop intent as older than
- * its own invocation, treats it as already served, and starts the host. The
- * refusal would hold for one process and be undone by the next.
- *
- * `budget-exhausted` keeps the child's own nonzero code, deliberately: after
- * five relaunches this supervisor stops guessing and hands the machine back to
- * the platform, whose throttling is the outer bound on the loop.
- */
+/** `stop-requested` must exit 0. Nothing else in the exit path can express "do not bring this back": `KeepAlive{SuccessfulExit:false}`, `Restart=on-failure` and the Scheduled Task's `RestartOnFailure` all read a nonzero exit as a crash and start a fresh supervisor - which then reads the stop intent as older than its own invocation, treats it as already served, and starts the host. */
 type RelaunchStopCause = "stop-requested" | "budget-exhausted";
 
-/**
- * The single place that answers "may this dead child be brought back?".
- *
- * Three refusals:
- *
- *  1. **Shutting down.** The POSIX stop path signals this supervisor, which
- *     forwards to the child; relaunching there fights our own teardown.
- *  2. **Budget.** Exhaustion exits with the child's own code, handing the
- *     machine back to launchd / systemd / the next logon rather than spinning.
- *  3. **Stop intent.** The Windows stop path never signals this process at all
- *     (`schtasks /End` kills only the task's root `wscript.exe`), so a stop
- *     announces itself on disk instead.
- *
- * ### The refusals are re-evaluated AFTER the backoff, not only before it
- *
- * This is the whole correctness of the guard, and an earlier revision got it
- * wrong: it sampled both signals once and then slept for up to a minute, so a
- * `traycer host stop` or a `launchctl bootout` arriving DURING that backoff was
- * decided against before it happened, and the supervisor spawned a replacement
- * for a host the user had just stopped. The backoff window is precisely when a
- * stop is most likely to land, because the host is already down and that is
- * when a person or an installer acts.
- *
- * `isShuttingDown` is therefore a getter, not a boolean: a snapshot taken
- * before an await cannot observe a signal that arrives during it.
- *
- * A relaunch that survives all three still has to get past the incumbent
- * re-check at the top of the next iteration.
- */
+/** May this dead child be brought back? Stop-intent and crash budget both bind here. */
 async function decideRelaunch(input: {
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
@@ -2115,10 +1493,8 @@ async function decideRelaunch(input: {
     maxAttempts: deps.maxRelaunches,
     backoffMs,
   });
-  // Whichever comes first. A shutdown signal ENDS the wait rather than being
-  // noticed after it - see the note on `shutdownRequested`. The Windows
-  // sentinel has no such edge to race against, so it is still caught by the
-  // re-read below; there the cost of waiting is latency, not a defeated stop.
+  // Whichever comes first.
+  // A shutdown signal ENDS the wait rather than being noticed after it - see the note on `shutdownRequested`.
   await Promise.race([deps.sleep(backoffMs), input.shutdownRequested]);
   // The load-bearing one: a stop that landed while we slept.
   if (await refused("after")) return { kind: "stop", cause: "stop-requested" };
@@ -2176,17 +1552,7 @@ async function persistAsyncChildSpawnFailure(input: {
   );
 }
 
-/**
- * Finalizes the non-crash state of an intentional host replacement.
- *
- * Exit 87 deliberately skips crash classification and crash markers, but it
- * cannot skip attempt cleanup: the supervisor keeps running and may otherwise
- * retain a grandchild-held stderr pipe and an unresolved first-attempt probe
- * across every requested restart. The stderr waits are bounded by the same
- * limits as the crash path, while the probe's framed read owns its own 3s
- * bound. A restart therefore remains intentional without leaking per-attempt
- * resources or abandoning an attested probe verdict.
- */
+/** Finalizes the non-crash state of an intentional host replacement. Exit 87 deliberately skips crash classification and crash markers, but it cannot skip attempt cleanup: the supervisor keeps running and may otherwise retain a grandchild-held stderr pipe and an unresolved first-attempt probe across every requested restart. */
 async function finalizeIntentionalRestartAttempt(input: {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -2246,11 +1612,7 @@ async function finalizeAttemptProbe(input: {
   }
 }
 
-/**
- * Wait for the child pipe and its path-addressed tee exactly once per attempt.
- * Both calls are bounded: an inherited stderr descriptor must not make a
- * restart (or a crash exit) wait forever.
- */
+/** Wait for the child pipe and its path-addressed tee exactly once per attempt. Both calls are bounded: an inherited stderr descriptor must not make a restart (or a crash exit) wait forever. */
 async function flushAttemptStderr(input: {
   readonly stderrEnded: Promise<void>;
   readonly stderrTee: StderrTee;
@@ -2259,11 +1621,7 @@ async function flushAttemptStderr(input: {
   await input.stderrTee.flush(STDERR_FLUSH_TIMEOUT_MS);
 }
 
-/**
- * Detaches the tee callback before destroying the attempt's pipe. Other
- * listeners settle the already-awaited end wait; removing `data` is what
- * releases this attempt's tee/capture from a grandchild-held pipe.
- */
+/** Detaches the tee callback before destroying the attempt's pipe. Other listeners settle the already-awaited end wait; removing `data` is what releases this attempt's tee/capture from a grandchild-held pipe. */
 function disposeAttemptStderr(
   attemptStderr: Readable | null | undefined,
 ): void {
@@ -2285,19 +1643,15 @@ async function persistChildExit(input: {
   readonly attemptId: string;
   readonly supervisorPid: number;
   readonly bundle: string;
-  // The child's pid as spawned (`null` only if the spawn yielded none); the
-  // crash telemetry uses it to decide whether the pid.json on disk is this
-  // child's before attributing its published version to the crash.
+  // The child's pid as spawned (`null` only if the spawn yielded none); the crash telemetry uses it to decide whether the pid.json on disk is this child's before attributing its published version to the crash.
   readonly childPid: number | null;
   // Version from the install record the child was spawned from; the crash
   // telemetry tags it so a fleet count can be split by host version.
   readonly hostVersion: string;
   readonly probeObservation: Promise<ProbeObservation> | null;
   readonly childSpawnedAtMs: number;
-  // When the child's exit event fired. The telemetry's uptime is spawn to
-  // exit, and everything this function awaits before reporting (probe
-  // finalization, the stderr drain, the report scan) would otherwise be
-  // counted as time the child ran.
+  // When the child's exit event fired.
+  // The telemetry's uptime is spawn to exit, and everything this function awaits before reporting (probe finalization, the stderr drain, the report scan) would otherwise be counted as time the child ran.
   readonly childEndedAtMs: number;
   readonly stderrTee: StderrTee;
   readonly stderrEnded: Promise<void>;
@@ -2327,14 +1681,11 @@ async function persistChildExit(input: {
     stderrEnded: input.stderrEnded,
     stderrTee: input.stderrTee,
   });
-  // `process.exit()` is synchronous. Terminal markers are therefore written
-  // synchronously before exit rather than scheduling an append that the
-  // process could abandon. Desktop uses these as fail-now readiness evidence.
+  // `process.exit()` is synchronous.
+  // Terminal markers are therefore written synchronously before exit rather than scheduling an append that the process could abandon.
   if (signal !== null) {
-    // A fatal signal is a CRASH, not a shutdown: a Node fatal abort surfaces
-    // on macOS/Linux as `code=null, signal=SIGABRT`, and routing it through
-    // the bare killed path would discard the report and stderr evidence
-    // exactly where it matters most. Forwarded shutdown signals stay bare.
+    // A fatal signal is a CRASH, not a shutdown: a Node fatal abort surfaces on macOS/Linux as `code=null, signal=SIGABRT`, and routing it through the bare killed path would discard the report and stderr evidence exactly where it matters most.
+    // Forwarded shutdown signals stay bare.
     const fatalMeaning = describeFatalSignal(signal);
     const crashReport =
       fatalMeaning === null ? null : await boundedCrashReportScan(input);
@@ -2345,9 +1696,7 @@ async function persistChildExit(input: {
       attemptId,
     });
     if (fatalMeaning !== null) {
-      // Same support-log line as the nonzero-exit crash branch: a POSIX
-      // fatal is the same event wearing a signal, and cli.log is where a
-      // support pull reads the OOM-vs-native answer.
+      // Same support-log line as the nonzero-exit crash branch: a POSIX fatal is the same event wearing a signal, and cli.log is where a support pull reads the OOM-vs-native answer.
       logger.error(
         "Host crash diagnostics",
         {
@@ -2387,31 +1736,12 @@ async function persistChildExit(input: {
             },
       ),
       exitCode: 128 + signalNumber(signal),
-      // EVERY signal death is abnormal here, and the deliberate-stop question
-      // is answered where it is actually known - `decideRelaunch`, which reads
-      // the `shuttingDown` latch and the stop-intent file.
-      //
-      // Two earlier shapes of this line were both wrong, in the same way:
-      // they answered "was this death asked for" with a proxy.
-      //
-      //   1. `fatalMeaning !== null` used `describeFatalSignal`, which answers
-      //      "can this be explained in a support log" - a narrow whitelist of
-      //      native-crash signals that deliberately omits SIGKILL. An
-      //      OOM-killed host, the likeliest signal death on Linux, was never
-      //      relaunched.
-      //   2. `!isForwardedShutdownSignal(signal)` used the signal NAME. But a
-      //      name only says the signal COULD have been forwarded, not that it
-      //      was: an operator or watchdog signalling the child directly leaves
-      //      the latch false and no intent on disk, and the host stayed down.
-      //
-      // The signal carries no evidence about intent. Only the latch and the
-      // sentinel do, and both are already consulted downstream.
+      // EVERY signal death is abnormal here, and the deliberate-stop question is answered where it is actually known - `decideRelaunch`, which reads the `shuttingDown` latch and the stop-intent file.
+      // Two earlier shapes of this line were both wrong, in the same way: they answered "was this death asked for" with a proxy. 1.
       abnormal: true,
     });
-    // Same gate as the "Host crash diagnostics" line above: a decodable fatal
-    // signal is a crash; a forwarded shutdown signal is not, and a bare
-    // SIGKILL cannot be told from an operator's kill here. Not awaited: the
-    // relaunch backoff must start now, not after the reporter's bound.
+    // Same gate as the "Host crash diagnostics" line above: a decodable fatal signal is a crash; a forwarded shutdown signal is not, and a bare SIGKILL cannot be told from an operator's kill here.
+    // Not awaited: the relaunch backoff must start now, not after the reporter's bound.
     if (fatalMeaning !== null) {
       void boundedCrashTelemetry(input, {
         environment,
@@ -2465,11 +1795,8 @@ async function persistChildExit(input: {
     },
     null,
   );
-  // Crash enrichment: decode the exit status, reference the diagnostic
-  // report this child wrote (if any), and attach the stderr capture - the
-  // fatal-error text that used to be stranded in a rotated-away log
-  // generation. All best-effort and time-bounded; the marker must be
-  // written regardless.
+  // Crash enrichment: decode the exit status, reference the diagnostic report this child wrote (if any), and attach the stderr capture - the fatal-error text that used to be stranded in a rotated-away log generation.
+  // All best-effort and time-bounded; the marker must be written regardless.
   const exitMeaning = describeExitCode(code) ?? undefined;
   const crashReport = await boundedCrashReportScan(input);
   if (exitMeaning !== undefined || crashReport !== null) {
@@ -2512,11 +1839,8 @@ async function persistChildExit(input: {
     exitCode: code,
     abnormal: true,
   });
-  // After the marker, never before it: the marker is readiness authority and
-  // a telemetry stall must not delay it. Not awaited either: the relaunch
-  // decision and its backoff start now, and a stalled reporter is bounded
-  // and discarded on its own. Every nonzero exit is reported, not only the
-  // decodable ones - an undecoded code is still a crash to count.
+  // After the marker, never before it: the marker is readiness authority and a telemetry stall must not delay it.
+  // Not awaited either: the relaunch decision and its backoff start now, and a stalled reporter is bounded and discarded on its own.
   void boundedCrashTelemetry(input, {
     environment,
     attemptId,
@@ -2532,14 +1856,7 @@ async function persistChildExit(input: {
   return outcome;
 }
 
-/**
- * Crash telemetry bounded by {@link HOST_CRASH_REPORT_TIMEOUT_MS} and never
- * rejecting. Callers fire it without awaiting, so the bound is not about the
- * relaunch's latency (that is already unblocked) but about the pending
- * promise: a reporter that never settles must not keep a rejection path or a
- * timer alive per attempt in a supervisor that outlives many attempts, which
- * is why the timer is unref'd and the race resolves either way.
- */
+/** Crash telemetry bounded by {@link HOST_CRASH_REPORT_TIMEOUT_MS} and never rejecting. Callers fire it without awaiting, so the bound is not about the relaunch's latency (that is already unblocked) but about the pending promise: a reporter that never settles must not keep a rejection path or a timer alive per attempt in a supervisor that outlives many attempts, which is why the timer is unref'd and the race resolves either way. */
 function boundedCrashTelemetry(
   input: { readonly deps: RunHostStartDeps },
   telemetry: HostCrashTelemetry,
@@ -2555,13 +1872,7 @@ function boundedCrashTelemetry(
   ]);
 }
 
-/**
- * Report scan bounded by {@link CRASH_REPORT_SCAN_TIMEOUT_MS}: the terminal
- * marker is readiness authority and must not be lost to a slow disk - past
- * the budget the marker goes out without a `report=` field. The lower bound
- * gets {@link CRASH_REPORT_SPAWN_SLACK_MS} of slack for loader-phase crashes
- * and mtime granularity.
- */
+/** Report scan bounded by {@link CRASH_REPORT_SCAN_TIMEOUT_MS}: the terminal marker is readiness authority and must not be lost to a slow disk - past the budget the marker goes out without a `report=` field. The lower bound gets {@link CRASH_REPORT_SPAWN_SLACK_MS} of slack for loader-phase crashes and mtime granularity. */
 function boundedCrashReportScan(input: {
   readonly deps: RunHostStartDeps;
   readonly crashReportsDirPath: string;
@@ -2569,12 +1880,8 @@ function boundedCrashReportScan(input: {
   readonly preexistingReportNames: ReadonlySet<string>;
 }): Promise<CrashReportMatch | null> {
   return Promise.race([
-    // `.catch` is load-bearing, not decoration. `persistChildExit` is invoked
-    // as `void persistChildExit(...)`, so a rejection here would skip the
-    // terminal marker AND `deps.exit` - leaving the supervisor alive with no
-    // evidence written, which is strictly worse than having no `report=`
-    // field. The default implementation swallows its own I/O errors, but the
-    // INJECTED dependency contract makes no such promise.
+    // `.catch` is load-bearing, not decoration.
+    // `persistChildExit` is invoked as `void persistChildExit(...)`, so a rejection here would skip the terminal marker AND `deps.exit` - leaving the supervisor alive with no evidence written, which is strictly worse than having no `report=` field.
     input.deps
       .findCrashReport(
         input.crashReportsDirPath,
@@ -2592,11 +1899,7 @@ function boundedCrashReportScan(input: {
   ]);
 }
 
-/**
- * Resolves when `promise` settles or `timeoutMs` elapses, whichever is first.
- * Never rejects: every caller here is on the exit path, where the only
- * acceptable outcome is "continue and write the marker".
- */
+/** Resolves when `promise` settles or `timeoutMs` elapses, whichever is first. Never rejects: every caller here is on the exit path, where the only acceptable outcome is "continue and write the marker". */
 function withDeadline(
   promise: Promise<void>,
   timeoutMs: number,
@@ -2613,11 +1916,7 @@ function withDeadline(
   ]);
 }
 
-/**
- * Failure markers are meaningful only when the live launchd job can attest
- * itself.  An unattested failure deliberately remains ambiguity: it may
- * defer a reclaim, but can never authorise raw-host eviction.
- */
+/** Failure markers are meaningful only when the live launchd job can attest itself. An unattested failure deliberately remains ambiguity: it may defer a reclaim, but can never authorise raw-host eviction. */
 async function writeProbeTerminalIfAttested(input: {
   readonly context: LiveProbeContext | null;
   readonly attemptId: string;
@@ -2686,15 +1985,7 @@ function isReadable(value: unknown): value is Readable {
   );
 }
 
-/**
- * Writes the attempt's terminal marker and reports how the child died.
- *
- * Deliberately no longer exits the process. The marker is per-ATTEMPT evidence
- * (Desktop's readiness authority reads it, and `spawn-evidence.ts` pairs it
- * with that attempt's `starting` marker), whereas exiting is a decision about
- * the SUPERVISOR - which now outlives individual attempts. Collapsing the two
- * is what made a crash necessarily fatal to the supervisor.
- */
+/** Writes the attempt's terminal marker and reports how the child died. Deliberately no longer exits the process. */
 function persistTerminalMarker(options: {
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
@@ -2728,15 +2019,13 @@ function persistTerminalMarker(options: {
 
 export interface ChildExitOutcome {
   readonly exitCode: number;
-  // Whether this is the kind of death the relaunch loop exists for. A clean
-  // exit (including the incumbent-declined path) and a forwarded shutdown
-  // signal are NOT abnormal; a nonzero exit and a fatal signal are.
+  // Whether this is the kind of death the relaunch loop exists for.
+  // A clean exit (including the incumbent-declined path) and a forwarded shutdown signal are NOT abnormal; a nonzero exit and a fatal signal are.
   readonly abnormal: boolean;
 }
 
-// Stamp every marker with the attempt's identity fields. Diagnostics stay
-// caller-supplied so write sites remain explicit about which payload they
-// attach (project style: no optional/default parameters).
+// Stamp every marker with the attempt's identity fields.
+// Diagnostics stay caller-supplied so write sites remain explicit about which payload they attach (project style: no optional/default parameters).
 function markerFields(
   attemptId: string,
   supervisorPid: number,
@@ -2772,12 +2061,8 @@ function markerFields(
 }
 
 function signalNumber(signal: NodeJS.Signals): number {
-  // The platform's own table first: the newly crash-classified fatal signals
-  // (SIGABRT, SIGSEGV, ...) must map to their real numbers - reporting
-  // SIGABRT as the generic 15 fallback (exit 143 instead of 134) misfiles
-  // the crash for every consumer of the supervisor's exit code. Some numbers
-  // are platform-dependent (SIGBUS is 7 on Linux, 10 on macOS), which is why
-  // this is a lookup, not a table.
+  // The platform's own table first: the newly crash-classified fatal signals (SIGABRT, SIGSEGV, ...) must map to their real numbers - reporting SIGABRT as the generic 15 fallback (exit 143 instead of 134) misfiles the crash for every consumer of the supervisor's exit code.
+  // Some numbers are platform-dependent (SIGBUS is 7 on Linux, 10 on macOS), which is why this is a lookup, not a table.
   const known = osConstants.signals[signal];
   if (typeof known === "number") {
     return known;
@@ -2795,13 +2080,8 @@ export interface SpawnInvocation {
   readonly windowsVerbatimArguments: boolean;
 }
 
-// Wrap a Windows `.cmd`/`.bat` host wrapper (the dev-desktop runtime) in an
-// explicit, fully-quoted `cmd.exe /d /s /c "..."` invocation so a wrapper path
-// containing spaces survives - bun/Node otherwise hand the spaced path to
-// cmd.exe unquoted and it fails with "'C:\Users\Traycer' is not recognized".
-// `/s /c "<line>"` makes cmd strip only the OUTERMOST quote pair and run
-// `<line>` verbatim, so each token stays individually quoted. Non-Windows and
-// real `.exe` hosts (production SEA) spawn directly. Exported for unit tests.
+// Wrap a Windows `.cmd`/`.bat` host wrapper (the dev-desktop runtime) in an explicit, fully-quoted `cmd.exe /d /s /c "..."` invocation so a wrapper path containing spaces survives - bun/Node otherwise hand the spaced path to cmd.exe unquoted and it fails with "'C:\Users\Traycer' is not recognized".
+// `/s /c "<line>"` makes cmd strip only the OUTERMOST quote pair and run `<line>` verbatim, so each token stays individually quoted.
 export function resolveSpawnInvocation(
   executable: string,
   args: readonly string[],

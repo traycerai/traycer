@@ -11,14 +11,7 @@ import {
 /** The scope every case here shares unless it is specifically about scoping. */
 const TEST_SCOPE = "test-scope";
 
-/**
- * Wrap a bare byte source as a scoped one.
- *
- * `acquire` takes a {@link ScopedImageBytesFetcher} rather than a bare
- * function precisely so a byte source cannot reach the cache without saying
- * what it authorizes against - see `scopeFor` below for the cases that vary
- * it.
- */
+/** Wrap a bare byte source as a scoped one. */
 function scoped(fetch: ImageBytesFetcher): ScopedImageBytesFetcher {
   return { scopeKey: TEST_SCOPE, fetch };
 }
@@ -63,12 +56,8 @@ describe("image-blob-cache", () => {
   });
 
   it("asks the byte source for the SUBJECT, not for the cache identity", async () => {
-    // The scoped key and the fetch argument are two different values that were
-    // one parameter. A caller passing the scoped identity for the key thereby
-    // asked its RPC for `["scope","h1"]`, every request missed, and no
-    // persisted image ever resolved. Nothing asserted this because the cache's
-    // own suite still handed `acquire` a bare function - the type that made
-    // scoping mandatory at the hooks never reached here.
+    // The scoped key and the fetch argument are two different values that were one parameter.
+    // A caller passing the scoped identity for the key thereby asked its RPC for `["scope","h1"]`, every request missed, and no persisted image ever resolved.
     const seen: string[] = [];
     const fetcher = vi.fn((subject: string) => {
       seen.push(subject);
@@ -86,10 +75,7 @@ describe("image-blob-cache", () => {
   });
 
   it("keeps two scopes on separate entries for the same subject", async () => {
-    // The round-27 property, asserted at the cache rather than at the hook:
-    // `acquire` serves a resolved entry WITHOUT running the second acquirer's
-    // fetcher, so sharing across scopes would let one subject's authorization
-    // stand in for another's. Both fetchers must run and two URLs must exist.
+    // The round-27 property, asserted at the cache rather than at the hook: `acquire` serves a resolved entry WITHOUT running the second acquirer's fetcher, so sharing across scopes would let one subject's authorization stand in for another's.
     const first = vi.fn(() =>
       Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
     );
@@ -136,12 +122,8 @@ describe("image-blob-cache", () => {
   });
 
   it("types the blob from the fetcher's verdict, not the caller's claim", async () => {
-    // The caller's `mediaType` is a claim about bytes it has not seen - for a
-    // chat image it is whatever the composer stored on the message. A byte
-    // source that sniffed the delivered bytes (the host, per
-    // `epic.readChatAttachment`) outranks it, or SVG bytes filed as
-    // `image/png` would be handed to the renderer as a PNG and skip the SVG
-    // sanitizer entirely.
+    // The caller's `mediaType` is a claim about bytes it has not seen - for a chat image it is whatever the composer stored on the message.
+    // A byte source that sniffed the delivered bytes (the host, per `epic.readChatAttachment`) outranks it, or SVG bytes filed as `image/png` would be handed to the renderer as a PNG and skip the SVG sanitizer entirely.
     const fetcher = vi.fn(() =>
       Promise.resolve({
         bytes: new Uint8Array([1]),

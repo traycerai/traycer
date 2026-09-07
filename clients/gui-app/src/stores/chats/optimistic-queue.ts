@@ -81,9 +81,8 @@ function shouldRetainOptimisticQueuedItem(
   authoritativeQueue: ChatQueueState,
   retainedClientActionIds: ReadonlySet<string>,
 ): boolean {
-  // Only an optimistic user send can be retained across a snapshot swap; the
-  // host is the sole author of managed-command items, so there is never a
-  // local one to hold onto.
+  // Only an optimistic user send can be retained across a snapshot swap; the host is the sole author
+  // of managed-command items, so there is never a local one to hold onto.
   if (item.kind !== "prompt") return false;
   const clientActionId = optimisticQueuedItemClientActionId(item.queueItemId);
   if (clientActionId === null) return false;

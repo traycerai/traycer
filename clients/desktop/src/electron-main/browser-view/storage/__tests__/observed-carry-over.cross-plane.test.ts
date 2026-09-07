@@ -44,23 +44,6 @@ import {
 import { cookieKeyId } from "../browser-storage-state";
 import { FakeCookieJar } from "./cookie-jar-fixture";
 
-/**
- * The DESKTOP half of the universal-sign-in carry-over loop, driven from the
- * frames a host actually sends (ticket 07).
- *
- * The loop crosses a repo boundary, so this file and its host-side twin
- * (`observed-carry-over.cross-plane.test.ts` in `traycer-host`) meet at
- * `observed-carry-over-fixture.ts` in `@traycer/protocol`. Every observation
- * here comes out of that fixture already parsed by the real server-frame union
- * and is then put through the real IPC payload schema, so both narrowing layers
- * a frame crosses on this machine run before the applier sees it - and the
- * ECHO this file measures is pinned back against the shared fixture, which is
- * what the host suite consumes to prove the loop terminates.
- *
- * Ticket 03's applier suite and ticket 04's ledger suite own the unit-level
- * semantics - counts, partial application, trace sampling, digest projection,
- * watermark monotonicity - and are not repeated here.
- */
 
 vi.mock("electron", () => ({
   app: { getPath: () => tmpdir() },
@@ -75,11 +58,6 @@ vi.mock("../../../app/logger", () => ({
 const HOST_ID = "host-1";
 const CONNECTION_ID = "connection-1";
 
-/**
- * The frames only THIS side has a use for: nothing produces them, and no host
- * assertion consumes them, so they are built here out of the shared
- * {@link observedFrame} rather than carried in the cross-repo fixture.
- */
 function cookie(input: {
   readonly name: string;
   readonly domain: string;
@@ -122,10 +100,6 @@ function overBoundFrame(): ObservedServerFrame {
   });
 }
 
-/**
- * A live sign-in carrying one already-expired cookie - a removal wearing a
- * write's clothing, dropped per cookie while the rest of the frame applies.
- */
 function expiredCookieFrame(expiredAt: number): ObservedServerFrame {
   return observedFrame({
     domain: CARRY_OVER_DOMAIN,
@@ -136,22 +110,9 @@ function expiredCookieFrame(expiredAt: number): ObservedServerFrame {
   });
 }
 
-/**
- * One desktop's receive path for an observed frame, wired exactly as
- * `browser-sessions-owner.ts` wires it (H10: the jar plane moved into main,
- * so the frame reaches the applier straight off the stream client's own
- * server-frame narrowing - there is no second, renderer-facing IPC schema
- * left to cross): the real applier, the real per-connection governor, the
- * real jar serializer, and the real forget ledger as the no-resurrection
- * gate.
- */
 class DesktopReceiveHarness {
   readonly jar = new FakeCookieJar();
-  /**
-   * The desktop's own cookie observer, when a case wires one. `browser-
-   * session.ts` hands the applier's claims to it exactly like this, and it is
-   * the half `ObservedApplyHarness` cannot exercise.
-   */
+  /** `browser- session.ts` hands the applier's claims to it exactly like this, and it is the half `ObservedApplyHarness` cannot exercise. */
   observer: BrowserCookieChangeObserver | null = null;
   private readonly serializer = new BrowserJarSerializer();
   private readonly governor = new BrowserObservedConnectionGovernor(() =>
@@ -242,12 +203,6 @@ describe("carry-over loop, desktop side of the wire", () => {
 
     await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
 
-    // THE PIN. The host suite feeds `carryOverEchoCookies()` into the real
-    // store and asserts the next headless capture learns nothing from it - the
-    // loop's only terminator. That argument is only as good as this equality:
-    // if Chromium's round trip ever spells a field differently from what the
-    // host stored, it fails HERE rather than as an unbounded emit/apply/echo
-    // cycle in production.
     expect(deltas).toHaveLength(1);
     expect(deltas[0]?.domain).toBe(CARRY_OVER_DOMAIN);
     expect(deltas[0]?.removedKeys).toEqual([]);
@@ -269,17 +224,8 @@ describe("carry-over loop, desktop side of the wire", () => {
   });
 
   it("keeps the custody it claimed over its own writes, and loses it to the desktop's", async () => {
-    // The ORDER pin, and the one that needs a real observer: the applier
-    // claims the keys before it writes them, because its own `cookies.set`
-    // fires the same insert event the desktop's browsing does. Claim after the
-    // write and the observer sees an insert it cannot attribute, releases the
-    // key, and the sending host loses the right to refresh the session it just
-    // established. `ObservedApplyHarness` cannot see this - it wires no
-    // observer - so the case lives here, with the real one.
-    // The observer's callback is fire-and-forget in production, so the
-    // ledger write it starts is collected here instead of raced: without
-    // this the assertion below reads the custody set before the release has
-    // landed, which passes only while the machine is idle.
+    // Claim after the write and the observer sees an insert it cannot attribute, releases the key, and the sending host loses the right to refresh the session it just established.
+    // `ObservedApplyHarness` cannot see this - it wires no observer - so the case lives here, with the real one.
     const releases: Promise<void>[] = [];
     const observer = new BrowserCookieChangeObserver({
       cookies: harness.jar,

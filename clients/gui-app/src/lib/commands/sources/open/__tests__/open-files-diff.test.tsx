@@ -628,9 +628,8 @@ describe("Files opener sub-page (Artifacts step)", () => {
   });
 
   it("fails closed on an ambiguous logical path - no row, no open", () => {
-    // Two live artifacts claim the same folder chain "dup" (a malformed
-    // projection). The shared fail-closed index resolves it to no identity, so
-    // the result row is dropped and clicking opens nothing.
+    // Two live artifacts claim the same folder chain "dup" (a malformed projection).
+    // The shared fail-closed index resolves it to no identity, so the result row is dropped and clicking opens nothing.
     state.projection = projectionOf([
       { id: "a", folderName: "dup", title: "A", parentId: null },
       { id: "b", folderName: "dup", title: "B", parentId: null },

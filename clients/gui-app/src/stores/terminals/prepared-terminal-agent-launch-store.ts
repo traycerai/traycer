@@ -19,14 +19,7 @@ export function stashPreparedTerminalAgentLaunch(
   });
 }
 
-/**
- * Non-destructive read. The first tile mount uses this so a FAILED
- * `terminal.create` (the PTY never started, so the fork command never ran) can
- * be retried against the SAME fork-prepared args - a destructive read would lose
- * them on retry and silently fall back to a fresh, non-forked launch. The entry
- * is cleared via {@link clearPreparedTerminalAgentLaunch} once `terminal.create`
- * succeeds (the PTY is live; later reopens resume the now-persisted session).
- */
+/** Non-destructive read. */
 export function peekPreparedTerminalAgentLaunch(
   terminalAgentId: string,
 ): PreparedTerminalAgentLaunch | null {

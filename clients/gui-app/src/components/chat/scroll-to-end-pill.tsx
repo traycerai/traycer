@@ -25,14 +25,7 @@ interface ScrollToEndPillProps {
   readonly bottomOffsetPx: number;
 }
 
-/**
- * Floating "scroll to end" pill. Sibling of the scroll container, absolute-
- * positioned bottom-center so its geometry is decoupled from the scroller's
- * content. It fades in/out via opacity + pointer-events so it never traps
- * focus or clicks while hidden. The accessible name stays fixed to the pill's
- * action across every state; the visible label communicates live work or a
- * completed reply.
- */
+/** It fades in/out via opacity + pointer-events so it never traps focus or clicks while hidden. */
 export function ScrollToEndPill({
   state,
   onClick,

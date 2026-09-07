@@ -27,12 +27,7 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 
 /**
- * Minimal shape this fixture needs - not the full `GuiHarnessCatalogEntry`,
- * which requires fields (`modes`, `requiresApiKey`, `enabled`, …) this
- * suite's mocked `useGuiHarnessCatalog` never reads. `authStatus` is
- * explicit and optional here so a test can add a signed-out row without
- * TS inferring the array's element type from the first literal alone (which
- * would then reject a later literal that adds the field).
+ * Minimal shape this fixture needs - not the full `GuiHarnessCatalogEntry`, which requires fields (`modes`, `requiresApiKey`, `enabled`, …) this suite's mocked `useGuiHarnessCatalog` never reads.
  */
 interface ComposerCatalogHarnessFixture {
   readonly id: string;
@@ -96,9 +91,7 @@ const catalogMock: { harnesses: ComposerCatalogHarnessFixture[] } = vi.hoisted(
 );
 
 /**
- * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient`
- * need: only object identity matters to the assertions below (which host's
- * catalog the subpages asked for), never any real RPC behavior.
+ * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient` need: only object identity matters to the assertions below (which host's catalog the subpages asked for), never any real RPC behavior.
  */
 interface FakeCatalogHostClient {
   readonly getActiveHostId: () => string | null;
@@ -113,18 +106,11 @@ const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   seed: null as { readonly intent: WorktreeIntent | null } | null,
 }));
 
-// The app-wide client the palette falls back to with no focused composer. It
-// used to come from this file's `use-gui-harness-catalog` mock, as
-// `useDefaultHostClient`; that export was deleted once a binding could name its
-// own host, and the source resolves a client from the BINDING now - so the
-// fixture moves to where the question is actually asked. Spread rather than
-// replaced: `@/lib/host` has many other exports this graph pulls in.
+// The app-wide client the palette falls back to with no focused composer.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => ({
-    // A binding that NAMES a host, so `resolveSubtreeHostClient` hands back
-    // this client verbatim instead of rebuilding a requester off it - which a
-    // fake with no `createRequesterForHostId` could not survive.
+    // A binding that NAMES a host, so `resolveSubtreeHostClient` hands back this client verbatim instead of rebuilding a requester off it - which a fake with no `createRequesterForHostId` could not survive.
     hostClient: focusedComposerCatalogMock.defaultClient,
     hostId: "default-host",
   }),
@@ -137,11 +123,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     harnessesError: null,
     modelsLoading: false,
   }),
-  // Records the `client` each call was invoked with, so tests can assert the
-  // composer subpages resolve the FOCUSED composer's host client (not the
-  // default host's) - regardless of which client was passed, this returns
-  // the same fixture catalog `useGuiHarnessCatalog` above does, since none of
-  // this file's cases need per-host catalog content, only per-host routing.
+  // Records the `client` each call was invoked with, so tests can assert the composer subpages resolve the FOCUSED composer's host client (not the default host's) - regardless of which client was passed, this returns the same fixture catalog.
   useGuiHarnessCatalogForClient: (client: FakeCatalogHostClient | null) => {
     focusedComposerCatalogMock.clientCalls.push(client);
     return {
@@ -201,11 +183,8 @@ function captureItems(
 }
 
 /**
- * Same idea as `renderSubpageItems`, but returns the collected items instead
- * of discarding them. Takes `subpage` as a plain (non-nullable) parameter so
- * the caller's own narrowing of an `x | undefined` lookup carries through -
- * a nested `Probe` closure capturing the outer optional directly does not
- * narrow across that boundary.
+ * Same idea as `renderSubpageItems`, but returns the collected items instead of discarding them.
+ * Takes `subpage` as a plain (non-nullable) parameter so the caller's own narrowing of an `x | undefined` lookup carries through - a nested `Probe` closure capturing the outer optional directly does not narrow across that boundary.
  */
 function collectSubpageItems(
   subpage: CommandSubpage,
@@ -243,11 +222,7 @@ function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
 }
 
 /**
- * A real, distinct `HostClient` instance (never a cast) so identity
- * assertions on `FocusedComposerEntry.hostClient` compare the exact object a
- * test registered, not some other host's client. Never actually dispatched -
- * `registerFocusedComposerControls`'s consumers here only read it back
- * (nothing in this file issues a real RPC through it).
+ * A real, distinct `HostClient` instance (never a cast) so identity assertions on `FocusedComposerEntry.hostClient` compare the exact object a test registered, not some other host's client.
  */
 function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = {
@@ -271,11 +246,7 @@ function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
   return spine.createRequester(entry);
 }
 
-// The host client every pre-existing test in this file registers a focused
-// composer with - non-null, so the composer subpages list a resolved host's
-// catalog exactly as they did before `hostClient` became part of the entry.
-// Its identity is irrelevant to those tests; only the tests that assert
-// per-host routing below construct their own distinct clients.
+// The host client every pre-existing test in this file registers a focused composer with - non-null, so the composer subpages list a resolved host's catalog exactly as they did before `hostClient` became part of the entry.
 const TEST_HOST_CLIENT = buildTestHostClient("test-host");
 
 function resetCanvasStore(): void {
@@ -546,8 +517,7 @@ describe("composerSource", () => {
     expect(subItems.length).toBeGreaterThan(0);
     if (subItems.length === 0) return;
     void subItems[0].run(ctx(null, "landing"));
-    // Switch-provider funnels through `switchHarness` (restores the harness's
-    // remembered model/effort/tier), never the old `setSelection(firstModel…)`.
+    // Switch-provider funnels through `switchHarness` (restores the harness's remembered model/effort/tier), never the old `setSelection(firstModel…)`.
     // (`setSelection` is no longer part of `ComposerControls` at all.)
     expect(switches).toEqual(["codex"]);
   });
@@ -631,10 +601,8 @@ describe("composerSource", () => {
 
       const providerItems = collectSubpageItems(providerSubpage, "landing");
       const providerIds = providerItems.map((item) => item.id);
-      // Still listed. The row's `authStatus` is the provider's AMBIENT
-      // verdict; a composer pinned to a signed-in managed profile runs turns
-      // on this provider perfectly well, and the send gate - which has the
-      // profile in hand and this palette does not - is what decides.
+      // Still listed.
+      // The row's `authStatus` is the provider's AMBIENT verdict; a composer pinned to a signed-in managed profile runs turns on this provider perfectly well, and the send gate - which has the profile in hand and this palette does not - is what decides.
       expect(providerIds).toContain("composer:provider:claude");
       // codex (from the base fixture, no authStatus) still lists, and sorts
       // ahead of the signed-out row.
@@ -715,9 +683,8 @@ describe("composerSource", () => {
   });
 
   it("with a host that reports no authStatus at all, both subpages list exactly what they list today", () => {
-    // The base fixture's `codex` entry already has no `authStatus` key - an
-    // old host below agent.gui.listHarnesses@7.1. Confirms the predicate is
-    // false for every row on such a host rather than excluding everything.
+    // The base fixture's `codex` entry already has no `authStatus` key - an old host below agent.gui.listHarnesses@7.1.
+    // Confirms the predicate is false for every row on such a host rather than excluding everything.
     expect(catalogMock.harnesses[0]).not.toHaveProperty("authStatus");
     registerFocusedComposerControls(
       "landing",
@@ -738,10 +705,7 @@ describe("composerSource", () => {
   });
 
   it("with no focused composer registered, the provider subpage resolves the default host's client", () => {
-    // `ctx.focusedComposerKind` (below) only decides which top-level items
-    // render; `useFocusedComposerCatalog` reads the REGISTRY instead - never
-    // populated in this test - to decide "focused or not". This models a
-    // palette rendered while no composer has registered itself as focused.
+    // `ctx.focusedComposerKind` (below) only decides which top-level items render; `useFocusedComposerCatalog` reads the REGISTRY instead - never populated in this test - to decide "focused or not".
     const items = captureItems(null, "landing");
     const providerSubpage = items.find(
       (i) => i.id === "composer:switch-provider",

@@ -2,27 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRemovalState } from "../../../ipc-contracts/host-management-types";
 
 /**
- * **The initial load must never overwrite a completed mutation** (the
- * remove-vs-preflight cache race).
- *
- * `isHostRemovedByUser()` lazily loads the sentinel from disk on first call.
- * That load is async, and `markHostRemovedByUser()` /
- * `clearHostRemovedByUser()` can start AND fully complete while it is still
- * in flight - `removeTraycer` and the launch-time converge preflight run
- * concurrently by design, so this is a real interleaving, not a theoretical
- * one. The load's result is then a PRE-mutation snapshot of the file; caching
- * it unconditionally overwrites the value the mutation just confirmed to
- * disk, and every subsequent gate (`convergeReady`, `respawn`,
- * `recoverIfDown`, `applyStaged`) reads the stale answer from cache until the
- * process restarts. For `mark` that means the app can silently reinstall the
- * host the user just removed - exactly what the sentinel exists to prevent.
- *
- * The store is faked HERE (unlike the sibling sentinel-contract suite, which
- * deliberately uses the real writer): disk-load timing is the
- * nondeterministic boundary under test, and only a controllable load can hold
- * the initial read open while a mutation completes. The fake preserves the
- * real store's contract - `load()` never rejects, `save()` mutates the
- * backing value, mark's readback load sees the post-save value.
+ * The initial load must never overwrite a completed mutation (the remove-vs-preflight cache race).
+ * The fake preserves the real store's contract - `load()` never rejects, `save()` mutates the backing value, mark's readback load sees the post-save value.
  */
 
 type Deferred = {

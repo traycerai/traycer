@@ -1,13 +1,5 @@
 /**
- * {@link resolveChatWriteRoute} - the pure resolver behind
- * `use-chat-write-route.ts`.
- *
- * The predicate answers two facts in order: does THIS host serve a chat
- * record plane at all (the negotiated-manifest registry, ambient module
- * state), and only if it does, what did the plane say about THIS row
- * (`chatsById`, a plain record so this suite needs no store). See
- * `chat-write-routing.ts`'s module doc for the reasoning; this file pins the
- * resolver's behaviour at the seam that combines the two facts.
+ * Pins `resolveChatWriteRoute` at the seam that combines host record-plane support with the row's `chatsById` fact.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -123,10 +115,8 @@ describe("resolveChatWriteRoute", () => {
   });
 
   it("a non-chat row is always registry-rpc, even on a record-plane host with no matching row", () => {
-    // The sidebar row component is polymorphic; an ungated call would find no
-    // chat row for a terminal agent or artifact id and disable its affordance
-    // on any host with a record plane. `isChatRow: false` must short-circuit
-    // before the row lookup even runs.
+    // `isChatRow: false` must short-circuit before the row lookup even runs.
+    // The sidebar row component is polymorphic; an ungated call would find no chat row for a terminal agent or artifact id and disable its affordance on any host with a record plane.
     recordNegotiatedHostMethods(RECORD_PLANE_HOST, ["epic.listChatRecords"]);
 
     const route = resolveChatWriteRoute({
@@ -153,14 +143,7 @@ describe("resolveChatWriteRoute", () => {
   });
 
   it("sessionHostId: null -> registry-rpc for a chat (readEpicDocRecordArms(null) is DOC_IS_THE_ONLY_RECORD_SOURCE, the same fact-one-satisfied outcome as an unrecorded handshake)", () => {
-    // The brief for this pin predicted "unavailable", reasoning that an
-    // unbound session should fail closed the same direction as an unrecorded
-    // handshake. `readEpicDocRecordArms(null)` DOES fail closed that same
-    // direction - but "doc is still a source" is fact ONE (`docArm.chats`),
-    // which short-circuits `routeChatWrite` to "registry-rpc" before the row's
-    // own `docResident` is ever consulted - exactly like the floor-era-host
-    // pin above. So this asserts what the code does, not the brief's guess;
-    // flagged back to the assigning agent per its own instruction to do so.
+    // The brief for this pin predicted "unavailable", reasoning that an unbound session should fail closed the same direction as an unrecorded handshake.
     const chatsById = { "chat-1": chat("chat-1", false) };
 
     const route = resolveChatWriteRoute({

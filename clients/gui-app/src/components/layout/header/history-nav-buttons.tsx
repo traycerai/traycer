@@ -15,17 +15,8 @@ import { useBindingForAction } from "@/stores/settings/keybinding-store";
 // opts out of title-bar drag so the arrows stay clickable on frameless desktop.
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
-/**
- * In-app back/forward arrows for the desktop title bar. Walk the global
- * TanStack Router history via the shared `goBack`/`goForward` actions on the
- * CURRENT router. Enabled state comes from the load-free controller signal
- * (`useHistoryNavState`), so the arrows reflect liveness without forcing a
- * route load. Self-gates on `useHistoryNavAvailable()` (false under
- * browser/memory history), so it renders nothing outside Electron. Mounted by
- * `app-header.tsx` only in the `app` variant — that header lives inside the
- * router tree, where `useRouter()` is non-null; the `host-loading` header
- * renders above the router and never mounts these arrows.
- */
+/** Mounted by `app-header.tsx` only in the `app` variant - that header lives inside the router tree, where
+ * `useRouter` is non-null; the `host-loading` header renders above the router and never mounts these arrows. */
 export function HistoryNavButtons() {
   const available = useHistoryNavAvailable();
   if (!available) {
@@ -34,14 +25,8 @@ export function HistoryNavButtons() {
   return <HistoryNavArrows />;
 }
 
-/**
- * Split from the gate above so the state subscription mounts ONLY where the
- * arrows do. Read inside one component, `useHistoryNavState` would run before
- * the availability check could return - subscribing, and re-rendering on every
- * navigation, in a shell that renders nothing at all. Availability never flips
- * for the life of a router (it is a property of the history that router was
- * built with), so this boundary is stable and costs no remount.
- */
+/** Availability never flips for the life of a router (it is a property of the history that router was built
+ * with), so this boundary is stable and costs no remount. */
 function HistoryNavArrows() {
   const router = useRouter();
   const { canGoBack, canGoForward } = useHistoryNavState();
@@ -57,10 +42,8 @@ function HistoryNavArrows() {
       : `Go forward (${formatChordForDisplay(forwardChord)})`;
   return (
     <div className="flex shrink-0 items-center" style={NO_DRAG_STYLE}>
-      {/* Tooltip trigger is the wrapping <span>, not the Button: a disabled
-          Button receives no pointer events, so a tooltip attached directly to it
-          would vanish exactly when the arrow is disabled - the moment a user most
-          needs the label to know what the greyed control does. */}
+      {/* Tooltip trigger is the wrapping <span>, not the Button: a disabled Button receives no pointer events, so a
+         tooltip attached directly to it would vanish exactly when the arrow is disabled. */}
       <TooltipWrapper
         label={backTooltip}
         side="top"

@@ -148,11 +148,7 @@ describe("useEpicExportArtifacts", () => {
         archiveTitle: null,
       }),
     ).rejects.toThrow("“Second” is still loading.");
-    // THE REDDENING ONE. The first body must be RELEASED before the second is
-    // materialized: a lease is what keeps a room resident, so retaining every
-    // hold until the build made the whole selection hot at once - unbounded,
-    // because the sidebar does not bound the selection. Sequential
-    // materialization was never the property that mattered.
+    // The first body must be RELEASED before the second is materialized: a lease is what keeps a room resident, so retaining every hold until the build made the whole selection hot at once - unbounded, because the sidebar does not bound the selection.
     expect(events).toEqual([
       "acquire:artifact-a",
       "fragment:artifact-a",

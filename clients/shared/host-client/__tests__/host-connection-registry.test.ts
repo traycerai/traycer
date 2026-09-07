@@ -16,18 +16,7 @@ import {
   subscribeHostRowChanged,
 } from "../host-connection-registry";
 
-// `installHostConnectionRegistrySource` replaces the previous wiring rather
-// than merging with it, so every test builds and installs its own stub
-// source.
-//
-// `resetHostConnectionRegistry()` is the PRODUCTION reset (`HostRuntime.
-// dispose()`) and deliberately keeps subscribers alive across it - a
-// StrictMode double-invoke disposes and rebuilds the runtime while every
-// consumer stays mounted, so clearing listeners there would leave them
-// subscribed to nothing forever. `resetHostConnectionRegistryForTest()` is
-// the full clear (subscribers included), and is what `afterEach` uses below:
-// suites share this module, so a suite that left a listener behind would
-// fire it into the next suite's assertions.
+// `installHostConnectionRegistrySource` replaces the previous wiring rather than merging with it, so every test builds and installs its own stub source.
 
 interface StubDirectory {
   readonly source: {
@@ -36,9 +25,9 @@ interface StubDirectory {
   };
   setEntry(hostId: string, entry: HostDirectoryEntry): void;
   removeEntry(hostId: string): void;
-  /** Fires the list-wide change event WITHOUT necessarily changing any row -
-   * this is what `findById` returning a fresh object on every read models: a
-   * directory refresh that rebuilt every row, whether or not the fields moved. */
+  /**
+   * Fires the list-wide change event without necessarily changing any row - this is what `findById` returning a fresh object on every read models: a directory refresh that rebuilt every row, whether or not the fields moved.
+   */
   emitChanged(): void;
 }
 
@@ -47,9 +36,7 @@ function stubDirectory(): StubDirectory {
   const listeners = new Set<() => void>();
   return {
     source: {
-      // Fresh object per call, exactly like production `findById` (the local
-      // row is rebuilt per snapshot / crosses IPC as a new object) - the
-      // suppression logic under test exists entirely because of this.
+      // Fresh object per call, exactly like production `findById` (the local row is rebuilt per snapshot / crosses IPC as a new object) - the suppression logic under test exists entirely because of this.
       findById: (hostId) => {
         const row = rows.get(hostId);
         return row === undefined ? null : { ...row };
@@ -206,10 +193,6 @@ describe("subscribeHostRowChanged — per-host precision", () => {
     const coarseListener = vi.fn();
     subscribeAnyHostRowChanged(coarseListener);
 
-    // A host with no subscriber and no record arrives; the per-host arm has
-    // nothing to compare, but the coarse arm must still fire, or a consumer
-    // that resolves its own host id at read time (and so cannot name it at
-    // subscribe time) is never woken.
     directory.setEntry(freshHostId(), localEntry(freshHostId(), {}));
     directory.emitChanged();
 
@@ -239,12 +222,7 @@ describe("subscribeHostRowChanged — per-host precision", () => {
   });
 
   it("notifies a per-host subscriber when that host's row ARRIVES for the first time (null -> present)", () => {
-    // The arrival path: a consumer subscribed before the directory ever had
-    // this host's row (the ordinary case for a freshly-booted local host that
-    // has not published yet). This is the half `useHostDirectoryEntry` is
-    // built to replace after P4.2 deletes the old slot event, and it is
-    // structurally distinct from every "row already present, then changes"
-    // case above - `record.entry` starts at `null`, not at some prior row.
+    // The arrival path: a consumer subscribed before the directory ever had this host's row (the ordinary case for a freshly-booted local host that has not published yet).
     const directory = stubDirectory();
     const hostId = freshHostId();
     // Deliberately no `directory.setEntry(hostId, ...)` yet - `findById`
@@ -263,18 +241,14 @@ describe("subscribeHostRowChanged — per-host precision", () => {
     directory.setEntry(hostId, localEntry(hostId, {}));
     directory.emitChanged();
 
-    // The PER-HOST listener specifically, not the (unconditional) coarse
-    // one - a mutation that suppresses `null`-cached records would leave the
-    // coarse arm firing while this exact assertion is what catches it.
+    // The per-host listener specifically, not the (unconditional) coarse one - a mutation that suppresses `null`-cached records would leave the coarse arm firing while this exact assertion is what catches it.
     expect(perHostListener).toHaveBeenCalledTimes(1);
     expect(coarseListener).toHaveBeenCalledTimes(1);
   });
 
   it("notifies a per-host subscriber when that host's row DEPARTS (present -> null, a deregistration)", () => {
-    // The mirror direction: a host that existed and then stops being
-    // reported by the directory (deregistered, or the shell's snapshot
-    // dropped it). `record.entry` goes from a real row to `null`, which is
-    // still a genuine change and must still notify.
+    // The mirror direction: a host that existed and then stops being reported by the directory (deregistered, or the shell's snapshot dropped it).
+    // `record.entry` goes from a real row to `null`, which is still a genuine change and must still notify.
     const directory = stubDirectory();
     const hostId = freshHostId();
     directory.setEntry(hostId, localEntry(hostId, {}));
@@ -335,10 +309,8 @@ describe("hostDirectoryEntryEquals — each field is load-bearing", () => {
 
   it("breaks on the derived hostUnavailability verdict (not the coarse transportDialability bit alone)", () => {
     const hostId = freshHostId();
-    // Two remote entries both `not-dialable`, so the coarse bit is identical
-    // on both sides - only the connectivity-derived reason differs
-    // (indeterminate vs offline). `hostDirectoryEntryEquals` must still catch
-    // this, per its own documented reasoning.
+    // Two remote entries both `not-dialable`, so the coarse bit is identical on both sides - only the connectivity-derived reason differs (indeterminate vs offline).
+    // `hostDirectoryEntryEquals` must still catch this, per its own documented reasoning.
     const indeterminate = remoteEntry(hostId, {
       remoteStatus: {
         connectivity: "unknown",
@@ -387,7 +359,6 @@ describe("hostDirectoryEntryEquals — each field is load-bearing", () => {
   });
 });
 
-/** Local helper mirroring the module's own derivation, for the assertion's own sanity check. */
 function hostUnavailabilityDiffers(
   a: RemoteHostDirectoryEntry,
   b: RemoteHostDirectoryEntry,
@@ -430,9 +401,7 @@ describe("hostLeaseSnapshotEquals", () => {
     expect(hostLeaseSnapshotEquals(offline, planRestricted)).toBe(false);
   });
 
-  // `HostLeaseDeadState` is a discriminated union, and only the
-  // `incompatible` arm carries `detail` - so every lease below is built as a
-  // full literal on that arm rather than spread through a narrower type.
+  // `HostLeaseDeadState` is a discriminated union, and only the `incompatible` arm carries `detail` - so every lease below is built as a full literal on that arm rather than spread through a narrower type.
   const BASE_INCOMPATIBLE_DETAIL = {
     code: "host-too-old",
     hostVersion: "1.0.0",
@@ -569,10 +538,7 @@ describe("acquireHostConnection — ref-count and keep-warm linger", () => {
     unsubscribe();
 
     vi.advanceTimersByTime(1);
-    // Past the window: a fresh acquire re-reads the source rather than
-    // reusing bookkeeping that should have been dropped. There is no direct
-    // "record exists" accessor, so this is asserted indirectly through
-    // ref-count starting over at a clean 1 with no stale listeners.
+    // Past the window: a fresh acquire re-reads the source rather than reusing bookkeeping that should have been dropped.
     const reacquired = acquireHostConnection(hostId);
     expect(hostConnectionRefCountForTest(hostId)).toBe(1);
     reacquired.release();
@@ -623,22 +589,7 @@ describe("acquireHostConnection — ref-count and keep-warm linger", () => {
 describe("resetHostConnectionRegistry — production StrictMode-remount semantics", () => {
   it("keeps a subscribed listener alive across reset + reinstall (StrictMode double-invoke) — a genuine row change under the NEW source still reaches it", () => {
     // Models React's setup-cleanup-setup double-invoke: `HostRuntime.
-    // dispose()` (this reset) then a fresh `start()` (a new source, same
-    // rendered consumer) - the consumer never unmounted, so its subscription
-    // must survive. If the reset instead dropped listeners (the bug being
-    // fixed), this would see zero calls no matter what the new source says.
-    //
-    // The NOTE that stood here recorded the OLD install behaviour - a silent
-    // adopt loop that overwrote every cached answer with no equality check and
-    // no notification - and concluded the cache half of reset's contract was
-    // not observable through this path. That silence was itself the defect
-    // (Codex #1243 T-59): a subscriber surviving the remount, which is exactly
-    // what this test establishes, holds its pre-reset snapshot forever when
-    // the new source's answer differs and no later change happens to arrive.
-    // `installHostConnectionRegistrySource` now reconciles like any other
-    // change event, so the install IS observable, and this test asserts both
-    // halves: the adopt notifies for a row that moved, and the subscription
-    // still receives an ordinary later change.
+    // dispose()` (this reset) then a fresh `start()` (a new source, same rendered consumer) - the consumer never unmounted, so its subscription must survive.
     const hostId = freshHostId();
     const oldDirectory = stubDirectory();
     oldDirectory.setEntry(hostId, localEntry(hostId, {}));
@@ -660,10 +611,8 @@ describe("resetHostConnectionRegistry — production StrictMode-remount semantic
       directory: newDirectory.source,
       leases: null,
     });
-    // The install itself now reports: `resetHostConnectionRegistry` nulled the
-    // cached answer and the new source has a row, so this record's answer
-    // genuinely moved and a survivor has to hear about it. This is the arm
-    // that was silent before the fix.
+    // The install itself now reports: `resetHostConnectionRegistry` nulled the cached answer and the new source has a row, so this record's answer genuinely moved and a survivor has to hear about it.
+    // This is the arm that was silent before the fix.
     expect(listener).toHaveBeenCalledTimes(1);
 
     // ...and the subscription is still attached for ordinary later changes,
@@ -689,9 +638,7 @@ describe("resetHostConnectionRegistry — production StrictMode-remount semantic
     acquireHostConnection(hostId).release();
     resetHostConnectionRegistry();
 
-    // Nothing kept this record alive (no subscriber, no holder), so it was
-    // dropped - a fresh acquire starts a clean ref-count rather than
-    // inheriting stale bookkeeping.
+    // Nothing kept this record alive (no subscriber, no holder), so it was dropped - a fresh acquire starts a clean ref-count rather than inheriting stale bookkeeping.
     installHostConnectionRegistrySource({
       directory: directory.source,
       leases: null,
@@ -718,9 +665,7 @@ describe("resetHostConnectionRegistry — production StrictMode-remount semantic
       directory: directory.source,
       leases: null,
     });
-    // If the old timer were still armed it would delete a record that
-    // doesn't exist under the new registration - advancing time must not
-    // throw or corrupt a fresh acquire made in the meantime.
+    // If the old timer were still armed it would delete a record that doesn't exist under the new registration - advancing time must not throw or corrupt a fresh acquire made in the meantime.
     const lease = acquireHostConnection(hostId);
     vi.advanceTimersByTime(HOST_CONNECTION_LINGER_MS * 2);
     expect(hostConnectionRefCountForTest(hostId)).toBe(1);
@@ -747,10 +692,6 @@ describe("resetHostConnectionRegistryForTest — full clear (test-only)", () => 
     resetHostConnectionRegistryForTest();
     expect(hostConnectionRefCountForTest(hostId)).toBe(0);
 
-    // Reinstall a fresh source and fire it: neither old listener should ever
-    // fire again, because the test reset dropped the subscription to the OLD
-    // source too (`disposeSourceSubscriptions`) as well as the listener sets
-    // themselves - unlike the production reset above.
     const freshDirectory = stubDirectory();
     freshDirectory.setEntry(hostId, localEntry(hostId, { label: "changed" }));
     installHostConnectionRegistrySource({

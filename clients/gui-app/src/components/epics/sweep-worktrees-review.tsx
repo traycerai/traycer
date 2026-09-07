@@ -22,15 +22,7 @@ export function SweepWorktreesReview(props: {
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly taskTitles: ReadonlyMap<string, string>;
-  /**
-   * The host this review's snapshot was proven on, or `null` when the fleet
-   * gave the person no choice to make (and so nothing to be told about).
-   *
-   * READ-ONLY here, deliberately. The snapshot below is one machine's disk at
-   * one moment, and the typed-nothing-changed contract of a review step is
-   * that the thing being confirmed is the thing that was proven. Back is the
-   * route to another host, and it discards this snapshot on the way.
-   */
+  /** Read-only here, deliberately. */
   readonly hostName: string | null;
   readonly inventoryChanged: boolean;
   readonly activeSweepCount: number;

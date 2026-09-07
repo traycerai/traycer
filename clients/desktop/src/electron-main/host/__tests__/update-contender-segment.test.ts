@@ -21,12 +21,6 @@ import {
   type WithDesktopUpdateSegmentOptions,
 } from "../update-contender";
 
-// New segment primitives for the packaged-macOS executor (design §3.1): the
-// outer attempt-lock-only segment, the forced attempt-executor admission,
-// and the inner short cli-lock mutation window. `withDesktopUpdateContender`
-// (the existing whole-callback wrapper) already has its own suite; these
-// cover the additions that make a minute-long segment safe to hold without
-// nesting `cli-lock` inside it for the whole duration.
 
 const roots: string[] = [];
 const heldLocks: DesktopCliLockHandle[] = [];

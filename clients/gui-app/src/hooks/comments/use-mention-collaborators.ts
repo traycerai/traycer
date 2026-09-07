@@ -3,13 +3,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * Mention-picker view over the existing `epic.listCollaborators` query.
- * Returns the flat per-user rows the Tiptap mention extension's suggestion
- * source needs. Re-uses the Sharing-panel query so the picker shares the
- * same host-scoped cache entry - no extra RPC traffic when both views are
- * mounted.
- */
+/** Mention-picker view over the existing `epic.listCollaborators` query. */
 export interface MentionCollaborator {
   readonly userId: string;
   readonly displayName: string;
@@ -20,12 +14,7 @@ export function useMentionCollaboratorsForClient(
   client: HostClient<HostRpcRegistry> | null,
   epicId: string,
 ): ReadonlyArray<MentionCollaborator> {
-  // The COMPOSER's host, passed down by whichever surface mounted it: the
-  // collab tile's floating draft (tab client) or the Epic sidebar's reply/edit
-  // composers (session client). It used to read the app-active host "matching
-  // the Sharing panel this cache entry is shared with" - but the composer that
-  // posts the comment is Epic-scoped, so during an A→B re-point the picker
-  // offered B's collaborator list for a thread being written to A (D15).
+  // The COMPOSER's host, passed down by whichever surface mounted it: the collab tile's floating draft (tab client) or the Epic sidebar's reply/edit composers (session client).
   const { data } = useEpicCollaboratorsQuery(epicId, {
     client,
     poll: false,

@@ -49,11 +49,7 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 
-/**
- * Light up the desktop "Open in New Window" path: both the renderer context
- * bridge (gates the menu item via `useWindowsBridge`) and the module-level
- * ownership bridge (gates `useEpicOpenInNewWindowFlow.isAvailable`) must be set.
- */
+/** Light up the desktop "Open in New Window" path. */
 function enableDesktopBridge(): void {
   const bridge = stubWindowsBridge();
   testState.bridge = bridge;
@@ -375,9 +371,7 @@ describe("<EpicsListPanel />", () => {
     testState.fetchNextPage.mockReset();
     testState.activityByEpicId.clear();
     queryClient.clear();
-    // This fixture renders the panel without the application root bridge. The
-    // bridge releases the controller's hydration gate in production, so make
-    // that production precondition explicit here before exercising a row-open.
+    // This fixture renders the panel without the application root bridge.
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
@@ -403,9 +397,8 @@ describe("<EpicsListPanel />", () => {
     expect(
       screen.queryByRole("button", { name: "Select history items" }),
     ).toBeNull();
-    // The per-row delete affordance stays rendered (matches the disabled
-    // hover-reveal treatment used elsewhere) but must be inert: clicking it
-    // must not open the destructive delete-confirmation flow.
+    // The per-row delete affordance stays rendered (matches the disabled hover-reveal treatment used elsewhere)
+    // but must be inert: clicking it must not open the destructive delete-confirmation flow.
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     expect(screen.queryByText("This action cannot be undone.")).toBeNull();
   });
@@ -418,9 +411,8 @@ describe("<EpicsListPanel />", () => {
 
     await screen.findByRole("link", { name: "Open task Open from landing" });
 
-    // A worktree-owning task normally renders the LIVE sweep button (not the
-    // aria-disabled variant) - confirm the picker still shows the disabled
-    // treatment instead of a live-looking control whose click is neutered.
+    // A worktree-owning task normally renders the live sweep button (not the aria-disabled variant) - confirm the
+    // picker still shows the disabled treatment instead of a live-looking control whose click is neutered.
     expect(screen.queryByTestId("epics-list-row-sweep")).toBeNull();
     expect(
       screen
@@ -511,9 +503,8 @@ describe("<EpicsListPanel />", () => {
       epicId: "epic-from-history",
       pinned: true,
     });
-    // The pin control sits alongside - not inside - the row's absolute <Link>
-    // overlay. A regression that nested it inside the link, or dropped the
-    // sibling stacking, would fire navigation on the same click.
+    // The pin control sits alongside - not inside - the row's absolute <Link> overlay. A regression that nested it
+    // inside the link, or dropped the sibling stacking, would fire navigation on the same click.
     expect(router.state.location.pathname).toBe("/");
     expect(screen.queryByTestId("epic-tab-route")).toBeNull();
   });
@@ -532,11 +523,8 @@ describe("<EpicsListPanel />", () => {
         title: "Third history item",
       }),
     ];
-    // Simulates two rows having each fired their own `epic.setPinned` call
-    // concurrently: both must read as pending off the shared mutation
-    // cache, independent of which one was clicked most recently. The pin
-    // state itself is optimistic, so the icon keeps showing each row's
-    // current state - pending only disables re-toggling, with no spinner.
+    // Simulates two rows having each fired their own `epic.setPinned` call concurrently: both must read as pending
+    // off the shared mutation cache, independent of which one was clicked most recently.
     testState.pendingSetPinnedEpicIds = new Set([
       "epic-from-history",
       "epic-two",
@@ -569,10 +557,8 @@ describe("<EpicsListPanel />", () => {
         epicId: "phase-pinned",
         taskType: "phase",
         title: "Phase somehow pinned",
-        // A phase can never legitimately be pinned - the data layer always
-        // projects `isPinned: false` for phases - but the row control must
-        // stay defensive even if a stale/bad projection carried `true`
-        // through.
+        // A phase can never legitimately be pinned - the data layer always projects `isPinned: false` for phases - but
+        // the row control must stay defensive even if a stale/bad projection carried `true` through.
         isPinned: true,
       }),
     ];
@@ -582,9 +568,8 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
   });
 
-  // The Sweep control keeps its slot in every task row rather than appearing
-  // and disappearing per row: enabled when the task owns worktrees, faded and
-  // non-actionable when it does not.
+  // The Sweep control keeps its slot in every task row rather than appearing and disappearing per row: enabled
+  // when the task owns worktrees, faded and non-actionable when it does not.
   it("renders the row Sweep action when the task owns worktrees", async () => {
     testState.worktreesByEpicId = new Map([
       ["epic-from-history", [historyWorktree()]],
@@ -617,9 +602,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("keeps the row Sweep action live when the task's chats ran on another host", async () => {
-    // `worktreesByEpicId` is THIS host's listing, so it is silent about a Task
-    // whose agents ran elsewhere. Gating on it alone made the host picker
-    // unreachable for exactly the multi-host Tasks it exists for.
+    // `worktreesByEpicId` is this host's listing, so it is silent about a Task whose agents ran elsewhere.
     testState.worktreesByEpicId = new Map();
     testState.items = [historyItem({ chatHostIds: ["host-elsewhere"] })];
     renderPanel("embedded", "/");
@@ -634,9 +617,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("keeps the row Sweep action faded when the row cannot answer at all", async () => {
-    // `null` is a serving peer that predates `chatHostIds` - silence, not
-    // evidence of another machine. It must not enable the affordance on its
-    // own, or every row on an older peer would claim a multi-host Task.
+    // It must not enable the affordance on its own, or every row on an older peer would claim a multi-host Task.
     testState.worktreesByEpicId = new Map();
     testState.items = [historyItem({ chatHostIds: null })];
     renderPanel("embedded", "/");
@@ -745,9 +726,8 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("hides Open in Background for phase rows, keeping Open in New Window", async () => {
-    // A phase only opens through its migration route (migrationSource=phase),
-    // which a plain background canvas tab can't carry - so background-open is
-    // suppressed while the route-based New Window action stays available.
+    // A phase only opens through its migration route (migrationSource=phase), which a plain background canvas tab
+    // can't carry - so background-open is suppressed while the route-based New Window action stays available.
     enableDesktopBridge();
     testState.items = [
       historyItem({
@@ -770,10 +750,8 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("mounts no context menu for a phase row in browser mode (no windows bridge)", async () => {
-    // Browser build: no windows bridge, so Open in New Window is unavailable and
-    // the phase row already suppresses Open in Background. With no action left,
-    // the row must not wrap itself in a context menu - right-click must never
-    // pop an empty menu.
+    // With no action left, the row must not wrap itself in a context menu - right-click must never pop an empty
+    // menu.
     testState.items = [
       historyItem({
         id: "history-phase-web",
@@ -890,9 +868,8 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("opens bulk Sweep when a selected task's chats ran on another host", async () => {
-    // The same multi-host clause as the row control, asked of the SELECTION:
-    // nothing in this selection owns a worktree HERE, and the picker behind
-    // the button is the only way to reach the machine that does.
+    // The same multi-host clause as the row control, asked of the selection: nothing in this selection owns a
+    // worktree here, and the picker behind the button is the only way to reach the machine that does.
     testState.items = [
       historyItem({ chatHostIds: ["host-test"] }),
       historyItem({
@@ -1127,7 +1104,7 @@ describe("<EpicsListPanel />", () => {
         provenRemovable: true,
       },
       {
-        // Clean but branch status unavailable (null) -> UNPROVEN -> unchecked.
+        // Clean but branch status unavailable (null) -> unproven -> unchecked.
         worktreePath: "/wt/unproven",
         repoLabel: "owner/repo",
         branch: "feat/unproven",
@@ -1217,9 +1194,8 @@ describe("<EpicsListPanel />", () => {
         repoLabel: "owner/repo",
         branch: "feat/never-pushed",
         uncommittedCount: 0,
-        // No upstream (ahead null) and not contained in the default branch:
-        // must stay unchecked and carry the honest local-only hint, not the
-        // generic "unverified" note.
+        // No upstream (ahead null) and not contained in the default branch: must stay unchecked and carry the honest
+        // local-only hint, not the generic "unverified" note.
         branchStatus: { ahead: null, behind: null, mergedIntoDefault: false },
         ownerEpicIds: ["epic-from-history"],
         provenRemovable: false,
@@ -1273,9 +1249,8 @@ describe("<EpicsListPanel />", () => {
       {
         worktreePath: "/wt/detached",
         repoLabel: "owner/repo",
-        // Detached HEAD (no branch ref) can still carry a probed branchStatus
-        // (e.g. against the workspace's default branch) - the detached hint
-        // must win regardless, since removal can orphan the commit.
+        // Detached HEAD (no branch ref) can still carry a probed branchStatus (e.g. against the workspace's default
+        // branch) - the detached hint must win regardless, since removal can orphan the commit.
         branch: null,
         uncommittedCount: 0,
         branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
@@ -1461,11 +1436,7 @@ describe("<EpicsListPanel />", () => {
     const input = await screen.findByRole("searchbox", {
       name: "Search tasks",
     });
-    // Picker mode puts the search inside the chrome bar rather than as a
-    // page-level block above it. Assert against the bar itself instead of
-    // walking parentElement hops from the filter button - the bar's internal
-    // wrapper nesting is layout detail (it changes when the row gains
-    // responsive wrapping) and not what this test is about.
+    // Picker mode puts the search inside the chrome bar rather than as a page-level block above it.
     const toolbar = screen.getByTestId("panel-chrome-bar");
 
     expect(toolbar.contains(input)).toBe(true);

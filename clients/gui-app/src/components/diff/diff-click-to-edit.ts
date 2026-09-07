@@ -99,11 +99,8 @@ export function resolveTokenCaretCharacter(input: {
   return Math.min(lineCharStart + characterOffset, lineCharEnd);
 }
 
-/**
- * Diffs emits a line callback without token metadata while its first
- * highlighted AST is still being prepared. Measure the rendered text nodes so
- * that path still restores the clicked UTF-16 character instead of column 0.
- */
+/** Measure the rendered text nodes so that path still restores the clicked UTF-16 character instead of column
+ * 0. */
 export function resolveLineCaretCharacter(input: {
   readonly lineElement: HTMLElement;
   readonly clientX: number;
@@ -130,11 +127,7 @@ export function resolveLineCaretCharacter(input: {
   return character;
 }
 
-// Measures the whole node before walking it one UTF-16 code unit at a time -
-// a long line (a minified bundle, say) can carry thousands of characters
-// across many highlighted-token text nodes, and most of them sit entirely
-// left of the click. Skip those in one measurement instead of one Range +
-// getBoundingClientRect per character.
+// Measures the whole node before walking it one UTF-16 code unit at a time.
 function isNodeEntirelyLeftOfClick(
   range: Range,
   textNode: Node,

@@ -17,11 +17,7 @@ type StartLoginMutationResult = UseMutationResult<
   { readonly hostId: string | null }
 >;
 
-// Spawns the provider CLI's browser-OAuth login on the (local) host. The CLI
-// self-completes via a localhost loopback, so there's nothing to invalidate
-// here - the re-auth card awaits the honest completion edge via
-// `providers.awaitLogin` (the host blocks until the login child closes, then
-// re-probes), not by polling `providers.list`.
+// The CLI self-completes via a localhost loopback, so there's nothing to invalidate here - the re-auth card awaits the honest completion edge via `providers.awaitLogin` (the host blocks until the login child closes, then re-probes), not by polling `providers.list`.
 export function useProvidersStartLogin(): StartLoginMutationResult {
   return useProvidersStartLoginForClient(useHostClient());
 }

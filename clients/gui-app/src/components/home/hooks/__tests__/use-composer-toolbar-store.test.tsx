@@ -18,10 +18,8 @@ const harnessesData: {
     | undefined;
 } = { value: undefined };
 const modelsData: {
-  // `undefined` models the models query still LOADING (no data yet); a `models`
-  // object models it RESOLVED. The store now distinguishes the two via the
-  // explicit `modelsLoaded` status, so tests drive the loading window by leaving
-  // this undefined and the loaded window by assigning a `{ models }` object.
+  // The store now distinguishes the two via the explicit `modelsLoaded` status, so tests drive the loading
+  // window by leaving this undefined and the loaded window by assigning a `{ models }` object.
   value:
     | {
         models: ReadonlyArray<{
@@ -59,28 +57,18 @@ const modelQueryCalls: Array<{
   readonly enabled: boolean;
   readonly subscribed: boolean;
 }> = [];
-// Records the `client` argument each `…ForClient` call was invoked with, so
-// tests can assert the store forwards the EXACT catalog scope it was given -
-// never a fallback to the app-wide default host - and forwards `null`
-// verbatim rather than substituting a default when the composer's host isn't
-// resolved yet.
+// Records the `client` argument each `…ForClient` call was invoked with, so tests can assert the store
+// forwards the exact catalog scope it was given - never a fallback to the app-wide default host.
 const harnessClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
 const modelClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
 const registeredComposerKinds: Array<FocusedComposerKind | null> = [];
-// Records the `hostClient` each registration was made with, so a test can
-// assert the store registers the palette's composer subpages against the
-// SAME client its own catalog reads through (`catalog.hostClient`), and
-// re-registers (a new call, not a mutation of the old one) when it changes.
+// Records the `hostClient` each registration was made with, so a test can assert the store registers the
+// palette's composer subpages against the same client its own catalog reads through (`catalog.hostClient`).
 const registeredComposerHostClients: Array<HostClient<HostRpcRegistry> | null> =
   [];
 
-// `data` is returned regardless of `enabled`, because that is what TanStack
-// does: `enabled:false` stops FETCHING, it does not evict the cache, and a
-// focused split partner observing the same key keeps it warm. Modelling it as
-// "inactive means no data" would let a consumer that blanks its own catalog on
-// blur look correct here. A `null` client, however, DOES model "no data" -
-// that is what disables the underlying query for real, so a composer whose
-// host hasn't resolved yet must never render another host's cached catalog.
+// A `null` client, however, does model "no data" - that is what disables the underlying query for real, so a
+// composer whose host hasn't resolved yet must never render another host's cached catalog.
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: (
     client: HostClient<HostRpcRegistry> | null,
@@ -121,10 +109,8 @@ vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   },
 }));
 
-// None of this file's cases exercise the seeded-profile host-liveness check
-// (that's `profile-durability-*` coverage) - a plain pass-through here mirrors
-// exactly what the real hook does for `client: null` (every test below passes
-// `null`): hold the profileId verbatim, no `providers.list` query attempted.
+// None of this file's cases exercise the seeded-profile host-liveness check (that's `profile-durability-*`
+// coverage).
 vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
   useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
     profileId,
@@ -144,13 +130,8 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { FocusedComposerKind } from "@/lib/commands/types";
 
-/**
- * A real, distinct `HostClient` instance (never a cast) so `hostClient` args
- * threaded through `ComposerToolbarCatalogScope` compare by identity - the
- * mocked catalog hooks above record exactly which client they were called
- * with, so a test can assert the store forwards THIS object, not some other
- * host's client or a fallback default.
- */
+/** A real, distinct `HostClient` instance (never a cast) so `hostClient` args threaded through
+ * `ComposerToolbarCatalogScope` compare by identity. */
 function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = {
     hostId,
@@ -164,9 +145,8 @@ function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     findHostById: (id) => (id === entry.hostId ? entry : null),
-    // Never actually dispatched - the catalog hooks are mocked wholesale
-    // above, so this messenger exists only to satisfy `HostClient`'s
-    // constructor.
+    // Never actually dispatched - the catalog hooks are mocked wholesale above, so this messenger exists only to
+    // satisfy `HostClient`'s constructor.
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `req-${hostId}`,
@@ -176,9 +156,7 @@ function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
   return spine.createRequester(entry);
 }
 
-// The catalog scope every test in this file used before `hostClient` became
-// part of it - a fixed, non-null client so the mocked catalog hooks keep
-// returning `harnessesData.value` / `modelsData.value` exactly as before.
+// The catalog scope every test in this file used before `hostClient` became part of it - a fixed.
 const DEFAULT_TEST_HOST_CLIENT = buildTestHostClient("default-host");
 // The host id every test in this file commits selections/memory writes
 // under, once `catalog.hostId` became a required per-host memory key.
@@ -240,8 +218,8 @@ function inactiveWrapper(props: { children: ReactNode }) {
 describe("useComposerToolbarStore selection reconciliation", () => {
   beforeEach(() => {
     harnessesData.value = undefined;
-    // Default to the LOADING window (no model data yet); tests that need a
-    // resolved catalog assign `modelsData.value = { models: [...] }` explicitly.
+    // Default to the loading window (no model data yet); tests that need a resolved catalog assign
+    // `modelsData.value = { models: [...] }` explicitly.
     modelsData.value = undefined;
     harnessQueryCalls.length = 0;
     modelQueryCalls.length = 0;
@@ -292,10 +270,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("seeds an imported chat's source provider rather than the user's default", async () => {
-    // The chat's own `ChatRunSettings` never resolved, so the composer is
-    // seeded from the fallback the chat tile builds - and for an imported chat
-    // that fallback is the provider it was imported FROM, not the Claude pair
-    // this user last ran.
+    // The chat's own `ChatRunSettings` never resolved, so the composer is seeded from the fallback the chat tile
+    // builds.
     seedDefault("claude");
     harnessesData.value = {
       harnesses: [
@@ -410,10 +386,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("reroutes a GUI-only selection off the terminal surface", async () => {
-    // `traycer` is selectable in chat but can't back a terminal agent. On the
-    // terminal surface (`tuiOnly`) it must reroute to the first available
-    // TUI-capable harness in provider order instead of being carried forward
-    // un-launchable.
+    // On the terminal surface (`tuiOnly`) it must reroute to the first available TUI-capable harness in provider
+    // order instead of being carried forward un-launchable.
     seedDefault("traycer");
     harnessesData.value = {
       harnesses: [
@@ -458,10 +432,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("never persists the rerouted harness when editing on the terminal surface", async () => {
-    // GUI-only `traycer` is rerouted to `codex` on the terminal surface. The
-    // reroute is display/launch-only: an edit there must NOT emit (and thus
-    // persist) `codex`, or switching back to chat would lose the sticky
-    // `traycer`. The edit is held until the derived harness matches the raw one.
+    // The reroute is display/launch-only: an edit there must not emit (and thus persist) `codex`, or switching
+    // back to chat would lose the sticky `traycer`.
     seedDefault("traycer");
     harnessesData.value = {
       harnesses: [
@@ -596,11 +568,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("clamps the permission to one the selected harness honors", async () => {
-    // A chat seeded straight onto Cursor (advertises only `full_access`) keeps
-    // the default `supervised` sticky - raw values are never clamped. The
-    // derived `permission` must surface the harness-honored mode so the picker
-    // label and the sent settings agree, instead of sending `supervised` and
-    // being rejected.
+    // A chat seeded straight onto Cursor (advertises only `full_access`) keeps the default `supervised` sticky -
+    // raw values are never clamped.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "cursor",
@@ -788,9 +757,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("commits a (harness,model) selection in a single emit", async () => {
-    // The combined action must patch selection + reasoning + tier in one
-    // `update()`, so a commit emits exactly once - never the multiple emits a
-    // sequenced setSelection/setReasoning/setServiceTier would produce.
+    // The combined action must patch selection + reasoning + tier in one `update`, so a commit emits exactly once
+    // - never the multiple emits a sequenced setSelection/setReasoning/setServiceTier would produce.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -904,10 +872,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("drops sticky effort and tier to the model's defaults via the no-carry levers", async () => {
-    // A commit through the combined action sets effort/tier from the SUPPLIED
-    // values, so passing "" resolves to the selected model's own default
-    // (effort) and drops the tier - even when the model would support the
-    // sticky values. This is the per-(harness,model) "no carry" behavior.
+    // A commit through the combined action sets effort/tier from the supplied values, so passing "" resolves to
+    // the selected model's own default (effort) and drops the tier.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -982,10 +948,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("resolves a stale/delisted remembered slug to the first model and emits the resolved slug", async () => {
-    // A remembered slug comes from memory, not a loaded list, so it can be
-    // delisted. Once THIS harness's catalog loads WITHOUT it, the derive falls
-    // back to the first model + its default effort, and the RESOLVED slug - not
-    // the dead one - is what emits (so the memory write self-heals next time).
+    // Once this harness's catalog loads without it, the derive falls back to the first model + its default effort,
+    // and the resolved slug - not the dead one - is what emits (so the memory write self-heals next time).
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -1038,9 +1002,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().reasoning).toBe("medium");
     expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
 
-    // A commit that still carries the dead remembered slug (as Ticket 4's entry
-    // points will, reading it from memory) emits the RESOLVED slug, not the
-    // dead one.
+    // A commit that still carries the dead remembered slug (as Ticket 4's entry points will, reading it from
+    // memory) emits the resolved slug, not the dead one.
     act(() => {
       result.current.getState().applyComposerSelection({
         selection: {
@@ -1059,12 +1022,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("emits immediately for a non-empty unvalidated slug but reports it not catalog-confirmed until validated", async () => {
-    // Under the "gate only the write" decision the surface emit is NOT held: a
-    // held non-empty remembered slug still propagates to live-settings the moment
-    // it is edited. The `selectionCatalogConfirmed` flag - which Ticket 4's record
-    // wrapper gates the MEMORY write on - is what stays false until the catalog
-    // validates the slug, so an unvalidated slug reaches live-settings but is
-    // never recorded.
+    // The `selectionCatalogConfirmed` flag - which Ticket 4's record wrapper gates the memory write on - is what
+    // stays false until the catalog validates the slug.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -1136,10 +1095,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("emits the resolved first-model slug when a delisted remembered slug self-heals on catalog load", async () => {
-    // INV3: when a remembered slug is absent on load and resolves X -> Y, the
-    // catalog load itself must propagate an emit carrying Y - so live-settings
-    // updates AND Ticket 4 later records Y (not the dead slug). No user action is
-    // required; the catalog resolution alone drives the emit.
+    // INV3: when a remembered slug is absent on load and resolves X -> Y, the catalog load itself must propagate
+    // an emit carrying Y - so live-settings updates and Ticket 4 later records Y (not the dead slug).
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -1170,9 +1127,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
     expect(onSettingsChange).not.toHaveBeenCalled();
 
-    // The catalog loads WITHOUT the remembered slug -> resolves to the first
-    // model AND emits it (the self-heal), carrying that model's own default
-    // effort - never the dead slug.
+    // The catalog loads without the remembered slug -> resolves to the first model and emits it (the self-heal),
+    // carrying that model's own default effort - never the dead slug.
     modelsData.value = {
       models: [
         {
@@ -1210,12 +1166,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("does not re-emit a stale slug when the catalog unloads after a delisting self-heal", async () => {
-    // Regression (cold-review repro): a delisted slug self-heals X -> Y on load and
-    // emits Y. If the surface later goes inactive / the query detaches
-    // (`modelsLoaded:false`), the derive falls back to holding a raw slug - the
-    // self-heal detector must NOT fire in that UNLOAD direction (it would emit the
-    // dead slug). The catalog-confirmed gate on the detector prevents it; the raw
-    // heal additionally aligns the sticky slug so there is no transition at all.
+    // If the surface later goes inactive / the query detaches (`modelsLoaded:false`), the derive falls back to
+    // holding a raw slug.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -1238,7 +1190,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ),
     );
 
-    // Load WITHOUT the remembered slug -> self-heals to the first model, emits it.
+    // Load without the remembered slug -> self-heals to the first model, emits it.
     modelsData.value = {
       models: [
         {
@@ -1280,10 +1232,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("holds a valid remembered slug through the loading window without resetting it", async () => {
-    // The inverse guard: while THIS harness's catalog is still loading, a valid
-    // remembered slug must be HELD for display, not reset to the first model -
-    // so the normal cross-harness loading window never blows away a good
-    // selection. It is only reset once the catalog is actually loaded-without-it.
+    // The inverse guard: while this harness's catalog is still loading, a valid remembered slug must be held for
+    // display, not reset to the first model.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -1373,21 +1323,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("ticket 07 round 2: converges the store's committed profileId when the resolved seed clears a stale pin, closing the fork-dialog transition window", () => {
-    // Models a fork dialog's seed transitioning from a stale non-null
-    // profileId (persisted seed) to null - exactly what
-    // `resolveSeededProfileId` now produces once `providers.list` settles
-    // empty (round 1's fix). The production fix uses `useLayoutEffect`
-    // (not a passive `useEffect`) for the re-seed, since only a layout
-    // effect is guaranteed by React to complete before the next paint - the
     // real-world window a submit-on-click could otherwise land in. NOTE:
-    // this synchronous `rerender()` + immediate assertion (no `waitFor`)
-    // does NOT distinguish `useLayoutEffect` from `useEffect` here -
-    // Testing Library's `act()` flushes both effect types before
-    // `rerender()` returns in this harness (verified empirically), so this
-    // test is a regression guard on the OUTCOME (the store converges to the
-    // resolved seed), not a proof of the specific scheduling mechanism; the
-    // `useLayoutEffect` choice itself rests on React's documented layout-
-    // effect/paint ordering guarantee, not on this test.
     const seeds: { current: ChatRunSettings } = {
       current: {
         harnessId: "claude",
@@ -1473,9 +1409,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("does not record memory while the surface reroutes the harness", async () => {
-    // GUI-only `traycer` is rerouted to `codex` on the terminal surface. The edit
-    // is suppressed (rerouted), so the catalog-confirmed write must record
-    // nothing - not under the rerouted harness, not under the raw one.
+    // GUI-only `traycer` is rerouted to `codex` on the terminal surface. The edit is suppressed (rerouted), so the
+    // catalog-confirmed write must record nothing - not under the rerouted harness, not under the raw one.
     seedDefault("traycer");
     harnessesData.value = {
       harnesses: [
@@ -1551,12 +1486,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   });
 
   it("keeps the resolved catalog while inactive so a background split pane's toolbar stays intact", () => {
-    // Both members of a split are VISIBLE; only one is focused. Detaching the
-    // query observers is right, but discarding the cached catalog with them left
-    // the unfocused pane deriving `selectedModel: null` - which silently blanked
-    // its own reasoning-effort and fast-mode chips, because both labels are
-    // derived from the selected model's advertised options. The user sees the
-    // composer's settings vanish just by clicking the other pane.
+    // Both members of a split are visible; only one is focused.
     seedDefault("codex");
     useSettingsStore.setState({ defaultReasoning: "high" });
     harnessesData.value = {
@@ -1630,9 +1560,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
 
     await waitFor(() => expect(harnessClientCalls.length).toBeGreaterThan(0));
-    // The exact object identity of the passed client, not merely "some
-    // client" - a regression that quietly substituted the app-wide default
-    // host's client would still pass an identity-blind assertion here.
+    // The exact object identity of the passed client, not merely "some client" - a regression that quietly
+    // substituted the app-wide default host's client would still pass an identity-blind assertion here.
     expect(harnessClientCalls.at(-1)).toBe(hostBClient);
     expect(harnessClientCalls.at(-1)).not.toBe(DEFAULT_TEST_HOST_CLIENT);
     expect(modelClientCalls.at(-1)).toBe(hostBClient);
@@ -1650,15 +1579,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
 
     await Promise.resolve();
-    // `null` reaches the query hooks unchanged - never silently swapped for
-    // the default-host client the OTHER tests in this file use.
+    // `null` reaches the query hooks unchanged - never silently swapped for the default-host client the other
+    // tests in this file use.
     expect(harnessClientCalls.at(-1)).toBeNull();
     expect(modelClientCalls.at(-1)).toBeNull();
-    // The mocked hooks model a `null` client as a disabled query (`data:
-    // undefined`), exactly like the real `…ForClient` hooks do - so nothing
-    // renders for this composer, even though `harnessesData.value` /
-    // `modelsData.value` are the SAME module-level fixtures every other test
-    // in this file populates and reads through the default client.
+    // The mocked hooks model a `null` client as a disabled query (`data: undefined`), exactly like the real
+    // `…ForClient` hooks do.
     expect(result.current.getState().catalog.harnesses).toBeUndefined();
     expect(result.current.getState().selectedModel).toBeNull();
   });
@@ -1685,8 +1611,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
 
     expect(registeredComposerKinds.at(-1)).toBe("landing");
     expect(registeredComposerHostClients.at(-1)).toBe(hostBClient);
-    // A genuine re-registration - a SECOND recorded call, not the first call's
-    // argument silently mutating in place.
+    // A genuine re-registration - a second recorded call, not the first call's argument silently mutating in
+    // place.
     expect(registeredComposerHostClients).toEqual([hostAClient, hostBClient]);
   });
 });

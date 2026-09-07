@@ -6,15 +6,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 
-/**
- * Real-hook coverage for `useAmbientDriftGate` (use-ambient-drift-gate.ts).
- *
- * `profile-durability-d2-d3-rate-limit-switch.test.tsx`'s
- * `ComposerBannerPrecedenceHarness` fakes the ambient-drift gate inline (its
- * own local `useState` pair) rather than exercising the real hook - this file
- * drives the real implementation directly, including the durable-ack mutation
- * it now fires on Continue/Dismiss.
- */
+/** Real-hook coverage for `useAmbientDriftGate` (use-ambient-drift-gate.ts). `profile-durability-d2-d3-rate-limit-switch.test.tsx`'s `ComposerBannerPrecedenceHarness` fakes the ambient-drift gate inline (its own local `useState` pair) rather than exercising the real hook - this file drives the real implementation directly, including the durable-ack mutation it now fires on Continue/Dismiss. */
 
 const mocks = vi.hoisted(() => ({
   acknowledgeMutate: vi.fn(),
@@ -159,10 +151,7 @@ describe("useAmbientDriftGate", () => {
     });
     expect(result.current.pendingNotice).toBeNull();
 
-    // A `providers.list` refetch that lands a freshly-constructed but
-    // identity-equal state object (same `changedAt`) - the dead-ack-wiring
-    // bug this hardens against reset acknowledgment on ANY re-render, not
-    // just a remount.
+    // A `providers.list` refetch that lands a freshly-constructed but identity-equal state object (same `changedAt`) - the dead-ack-wiring bug this hardens against reset acknowledgment on ANY re-render, not just a remount.
     const refetchedSameNotice = claudeState([ambientProfile(NOTICE_A)]);
     rerender({ providerState: refetchedSameNotice });
 

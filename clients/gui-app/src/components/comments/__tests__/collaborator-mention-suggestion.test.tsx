@@ -15,11 +15,7 @@ async function flush(): Promise<void> {
 }
 
 describe("MentionSuggestionList portal routing (HIGH3)", () => {
-  // The mention list is nested inside the (otherwise fixed) comment composer but
-  // escaped to `document.body`; hiding the parent portal host did not hide it.
-  // It must render into the pane portal host so it is hidden + inert with a
-  // background split pane. `thread-anchor-hover-popover.tsx` uses the identical
-  // `usePanePortalContainer()` routing.
+  // It must render into the pane portal host so it is hidden + inert with a background split pane.
   it("renders into the pane portal host, not document.body", () => {
     render(
       <SurfacePresentationBoundary visible focused>
@@ -37,11 +33,8 @@ describe("MentionSuggestionList portal routing (HIGH3)", () => {
 
 describe("MentionSuggestionList", () => {
   it("renders the empty state instead of crashing when items is empty", async () => {
-    // Regression: the scroll-into-view effect indexed itemRefs with a
-    // `=== null` guard, but an empty `items` array never populates any
-    // itemRefs slot, so the ref there is `undefined` - `undefined` !==
-    // `null`, so the guard didn't catch it and `undefined.scrollIntoView`
-    // threw during commit, crashing before the empty state could render.
+    // Regression: the scroll-into-view effect indexed itemRefs with a `=== null` guard, but an empty `items` array
+    // never populates any itemRefs slot, so the ref there is `undefined`.
     render(
       <MentionSuggestionList
         items={[]}

@@ -118,13 +118,6 @@ describe("<TraycerApp /> mobile cardinality behavior", () => {
     expect(screen.queryByTestId("host-picker")).toBeNull();
   });
 
-  // The previous "auto-binds the single remote entry" and "auto-opens the
-  // picker and defers binding until the user picks" cases asserted the
-  // binding via the `Host status` footer's `data-bound-host-id`
-  // attribute. That footer was removed in favor of the composer chip (see
-  // `app-shell-lifecycle-bridges.test.tsx`), and there is no equivalent
-  // DOM-level surface in this minimal app harness to assert binding state
-  // against. Cardinality routing itself is covered by sibling tests that
-  // exercise the picker and the no-host guidance; the cases removed
-  // here only tested the deleted footer's attribute mirror.
+  // Binding used to be asserted on the deleted Host-status footer; cardinality
+  // routing is covered by sibling picker / no-host tests.
 });

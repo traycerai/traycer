@@ -1,22 +1,11 @@
-/**
- * Host-keyed context published by a settled landing-terminal reconciliation
- * generation. `homeCwd` is the process-account home from the fresh
- * `terminal.list@2.1` response (`null` when an older host bridged the field).
- *
- * Auto-spawn receives this object directly from the generation that produced
- * it. Manual create paths may use the last published context only when its
- * `hostId` still equals the active host.
- */
+/** Manual create paths may use the last published context only when its `hostId` still equals the active host. */
 export interface LandingTerminalHostContext {
   readonly hostId: string;
   readonly homeCwd: string | null;
 }
 
-/**
- * Launch cwd for a new landing terminal: primary workspace folder when set,
- * otherwise the reconciled active host's home. Never returns a home path whose
- * context host does not match `activeHostId`.
- */
+/** Launch cwd for a new landing terminal: primary workspace folder when set, otherwise the reconciled active
+ * host's home. Never returns a home path whose context host does not match `activeHostId`. */
 export function resolveLandingTerminalLaunchCwd(
   primaryWorkspacePath: string | null,
   hostContext: LandingTerminalHostContext | null,

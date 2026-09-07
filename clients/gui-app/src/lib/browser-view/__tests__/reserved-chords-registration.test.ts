@@ -11,9 +11,8 @@ function commandFor(token: string): string | null | undefined {
 }
 
 /**
- * The guest-focused input policy is ONE table. These pin what each disposition
- * means and that `conflicts.ts` derives from the same rows, so deleting a row
- * cannot quietly change behaviour on one side only.
+ * The guest-focused input policy is ONE table.
+ * These pin what each disposition means and that `conflicts.ts` derives from the same rows, so deleting a row cannot quietly change behaviour on one side only.
  */
 describe("reserved browser chords", () => {
   it("scopes the browser's own chords to the focused tile", () => {
@@ -48,11 +47,8 @@ describe("reserved browser chords", () => {
   });
 
   it("matches CANONICAL tokens only", () => {
-    // Documented assumption: a chord reaching this table has round-tripped
-    // through `parseChordString`/`formatChord`, so `mod+w` is the only
-    // spelling of Cmd+W. A raw `meta+w` is not canonical and gets no warning.
-    // If a caller ever holds unnormalized input, normalize at that caller
-    // rather than teaching this table more spellings.
+    // Documented assumption: a chord reaching this table has round-tripped through `parseChordString`/`formatChord`, so `mod+w` is the only spelling of Cmd+W.
+    // A raw `meta+w` is not canonical and gets no warning.
     expect(browserScopedChordLabel("meta+w")).toBeNull();
     expect(browserScopedChordLabel("Mod+W")).toBeNull();
   });

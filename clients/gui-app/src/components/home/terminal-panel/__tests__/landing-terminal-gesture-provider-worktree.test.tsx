@@ -17,14 +17,8 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 
-/**
- * `LandingTerminalGestureProvider`'s launch directory follows a staged
- * existing-worktree IMPORT intent instead of always launching in the
- * checkout root - `primaryWorkspacePath`/`workspacePaths` stay the raw
- * workspace-identity values every other consumer (rows, chip) reads. Only
- * the provider's own host/client/probe seams are mocked; `useHomeWorkspaceSource`
- * and the zustand stores it reads are real.
- */
+/** `LandingTerminalGestureProvider`'s launch directory follows a staged existing-worktree import intent instead
+ * of always launching in the checkout root. */
 
 const HOST_A = "host-a";
 const HOST_B = "host-b";

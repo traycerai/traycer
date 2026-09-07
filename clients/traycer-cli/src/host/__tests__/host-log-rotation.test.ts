@@ -33,10 +33,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-// `hostLogPath` resolves under the real `homedir()`, so redirect both paths into
-// a temp dir and let the rotation run against a real filesystem - the `rename` /
-// `rm` sequencing is the whole behavior under test and a mocked fs would prove
-// nothing about it.
+// `hostLogPath` resolves under the real `homedir()`, so redirect both paths into a temp dir and let the rotation run against a real filesystem - the `rename` / `rm` sequencing is the whole behavior under test and a mocked fs would prove nothing about it.
 let logDir = "";
 
 vi.mock("../../store/paths", () => ({
@@ -131,10 +128,8 @@ describe("rotateHostLogIfOversized (host start)", () => {
   });
 
   it("refuses to rotate under a LIVE host, however big the log has grown", async () => {
-    // The live host holds the append fd the supervisor handed it. An fd follows
-    // the inode across a rename, so rotating here would send that host's stdout
-    // into host.log.1 while fresh markers went to host.log - one session torn
-    // across two files. Growing past the cap is the lesser evil.
+    // The live host holds the append fd the supervisor handed it.
+    // An fd follows the inode across a rename, so rotating here would send that host's stdout into host.log.1 while fresh markers went to host.log - one session torn across two files.
     livePid = process.pid;
     await writeFile(LOG(), "z".repeat(MAX_HOST_LOG_BYTES + 1));
 
@@ -157,9 +152,8 @@ describe("rotateHostLogIfOversized (host start)", () => {
   });
 
   it("keeps the previous generation when the rotation itself cannot happen", async () => {
-    // Rename-before-remove: a rotation that fails must not have already
-    // destroyed the evidence it was supposed to preserve. Point the backup at a
-    // DIRECTORY so `rename` onto it fails on every platform.
+    // Rename-before-remove: a rotation that fails must not have already destroyed the evidence it was supposed to preserve.
+    // Point the backup at a DIRECTORY so `rename` onto it fails on every platform.
     await mkdir(BACKUP(), { recursive: true });
     await writeFile(join(BACKUP(), "prior-evidence.txt"), "keep me");
     await writeFile(LOG(), "v".repeat(MAX_HOST_LOG_BYTES + 1));
@@ -177,9 +171,8 @@ describe("rotateHostLogIfOversized (host start)", () => {
     await writeFile(BACKUP(), "prior evidence");
     await writeFile(LOG(), "n".repeat(MAX_HOST_LOG_BYTES + 1));
 
-    // Simulate Windows refusing the initial replace because host.log.1 exists,
-    // then an unrelated failure promoting host.log after the prior backup has
-    // been moved aside. The fourth rename is the rollback.
+    // Simulate Windows refusing the initial replace because host.log.1 exists, then an unrelated failure promoting host.log after the prior backup has been moved aside.
+    // The fourth rename is the rollback.
     renameFaults.codes.push("EPERM", null, "EACCES", null);
 
     expect(await rotateHostLogIfOversized("dev")).toBe("skipped");
@@ -225,9 +218,7 @@ describe("rotateHostLogForPurge (host uninstall --all / dev teardown)", () => {
   });
 
   it("preserves the session in host.log.1 instead of deleting it", async () => {
-    // The regression this closes: `make dev-desktop` runs `host uninstall --all`
-    // on every Ctrl-C, which used to `rm` this file - so the session you wanted
-    // to investigate was routinely gone before you could read it.
+    // The regression this closes: `make dev-desktop` runs `host uninstall --all` on every Ctrl-C, which used to `rm` this file - so the session you wanted to investigate was routinely gone before you could read it.
     await writeFile(LOG(), "the session worth investigating\n");
 
     expect(await rotateHostLogForPurge("dev")).toBe("rotated");

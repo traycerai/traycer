@@ -8,33 +8,8 @@ import {
 } from "@traycer/protocol/host/browser/contracts";
 
 /**
- * NO COOKIE, STORAGE STATE OR KEY MATERIAL CROSSES TO A RENDERER.
- *
- * The primary enforcement of this is the type system: main projects
- * `BrowserSessionsUxServerFrame`, which the protocol defines as an `Exclude`
- * over every jar-bearing frame plus a `never` assertion over `cookies` /
- * `storageState` / `rawKey` / `wrappedKey` / `seedStorageState`, so a new jar
- * frame that is not excluded fails the build at the projection.
- *
  * Two things that gate cannot decide, and this file covers both.
- *
- * A NEW CHANNEL. A type only speaks for the payloads someone declared; a fresh
- * `browserViewSomethingWithCookies` handler would type-check perfectly. So the
- * three files that together decide what a renderer can reach are scanned for
- * the vocabulary of jar material: the channel list, the payload schemas main
- * parses, and the shared bridge INTERFACE the preload implements. The scan
- * reads that interface, not the preload's implementation of it - a channel the
- * renderer can call has to be declared there to be callable at all.
- *
- * NESTED JAR MATERIAL. The protocol's `never` assertion is an `Extract` over a
- * field name, which reaches top-level fields only; the same cookie array one
- * object deeper would pass it. So every UX server frame's SCHEMA is walked to
- * any depth here.
- *
- * The stated limit of the source scan half, as in
- * `traycer-host/src/__tests__/no-account-identifiers-in-logs.test.ts`: it
- * decides a syntactic question, and cannot see a cookie that arrives inside an
- * opaque `unknown`.
+ * The stated limit of the source scan half, as in `traycer-host/src/__tests__/no-account-identifiers-in-logs.test.ts`: it decides a syntactic question, and cannot see a cookie that.
  */
 
 /** The desktop package root, which is vitest's working directory here. */
@@ -56,11 +31,6 @@ const RENDERER_REACHABLE_SOURCES = [
   },
 ] as const;
 
-/**
- * The vocabulary of jar material. Names rather than shapes, because a scan can
- * only decide names - and every one of these is the exact identifier the
- * deleted channels used, so a re-introduction spells itself.
- */
 const FORBIDDEN = [
   "browserStorageStateSchema",
   "browserStorageCookieSchema",
@@ -114,11 +84,7 @@ describe("no UX server frame carries jar material at any depth", () => {
     });
   }
 
-  // The walk is only worth its assertions if it can actually SEE jar material,
-  // and see it BELOW the top level - a walk that answered nothing, or that only
-  // read the frame's own fields, would turn every case above green. The probe
-  // is `createElectronTab`, whose cookies live inside `seedStorageState`, which
-  // is exactly the depth the protocol's own `never` assertion cannot reach.
+  // The probe is `createElectronTab`, whose cookies live inside `seedStorageState`, which is exactly the depth the protocol's own `never` assertion cannot reach.
   it("finds jar material nested below a frame's own fields", () => {
     const create = browserSessionsServerFrameSchema.options.find(
       (option) => frameKindOf(option) === "createElectronTab",
@@ -145,13 +111,7 @@ function frameKindOf(option: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/**
- * Every jar-vocabulary field name reachable from a schema, at any depth.
- *
- * `seen` breaks the cycle a self-referential schema would otherwise walk
- * forever; the frame union has none today, and a future one must not turn this
- * tripwire into a hang.
- */
+/** `seen` breaks the cycle a self-referential schema would otherwise walk forever; the frame union has none today, and a future one must not turn this tripwire into a hang. */
 function jarFieldsIn(schema: unknown, seen: Set<unknown>): readonly string[] {
   if (seen.has(schema)) return [];
   seen.add(schema);

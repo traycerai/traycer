@@ -12,11 +12,6 @@ interface AccentColorSwatchGridProps {
   readonly onSelectColor: (color: ProviderProfileAccentColor) => void;
 }
 
-/**
- * The full accent-color palette as a row of selectable swatches, shared by
- * the add-profile dialog's details step and the profile card's editor - both
- * rendered the identical markup independently before this extraction.
- */
 export function AccentColorSwatchGrid(
   props: AccentColorSwatchGridProps,
 ): ReactNode {

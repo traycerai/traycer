@@ -273,10 +273,8 @@ describe("worktree intent merge", () => {
         "/workspace/first",
       );
 
-      // No entry's flag actually changes (first is already primary, second
-      // already isn't), so the whole intent - and every entry - is the SAME
-      // reference. This is the invariant `setPrimaryFolder` relies on to skip
-      // a redundant staged-intent write.
+      // No entry's flag actually changes (first is already primary, second already isn't), so the whole intent - and
+      // every entry - is the same reference.
       expect(result?.entries[0]).toBe(first);
       expect(result?.entries[1]).toBe(second);
     });

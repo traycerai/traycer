@@ -11,11 +11,8 @@ import {
 } from "@traycer/protocol/host/index";
 
 /**
- * `worktree.getBinding` is an additive read RPC used by non-chat surfaces
- * (terminal-agent toolbar) because they do not receive `chat.subscribe`
- * snapshots. The contract must be exported from `protocol/host/index`
- * alongside other worktree V10 contracts so consumers can import it through
- * the public module entry point.
+ * `worktree.getBinding` is an additive read RPC used by non-chat surfaces (terminal-agent toolbar) because they do not receive `chat.subscribe` snapshots.
+ * The contract must be exported from `protocol/host/index` alongside other worktree V10 contracts so consumers can import it through the public module entry point.
  */
 describe("worktree.getBinding export surface", () => {
   it("re-exports the worktreeGetBindingV10 contract from the host index barrel", () => {

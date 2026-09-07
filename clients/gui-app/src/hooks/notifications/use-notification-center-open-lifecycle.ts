@@ -13,36 +13,12 @@ export interface NotificationCenterOpenLifecycle {
   readonly onContentOpenAutoFocus: (event: Event) => void;
   readonly onContentEscapeKeyDown: () => void;
   readonly onContentCloseAutoFocus: (event: Event) => void;
-  /**
-   * Marks the close that is about to happen as keyboard-driven, so focus
-   * returns to the trigger exactly as it does for Escape. Called by the
-   * keybinding chord when it toggles a center closed whose own surface
-   * currently holds focus - without it that focus would be destroyed with
-   * the popover and land on `<body>`.
-   */
+  /** Called by the keybinding chord when it toggles a center closed whose own surface currently holds focus - without it that focus would be destroyed with the popover and land on `<body>`. */
   readonly markKeyboardDismiss: () => void;
 }
 
-/**
- * Owns the T04 focus/modality contract for the bell-anchored popover:
- * keyboard and programmatic opens move focus to the surface's heading;
- * pointer opens do not steal focus. Escape restores focus to the trigger;
- * every other close reason (successful activation, settings navigation,
- * outside click) leaves focus wherever the resulting action put it.
- *
- * The trigger/heading refs are owned by the caller (created via `useRef`
- * directly in the rendering component) and passed in - this hook only
- * returns event-handler callbacks, never refs, so the DOM nodes stay
- * directly traceable to their `useRef()` call sites.
- *
- * Trigger modality is captured on the trigger element itself (`pointerdown`
- * fires before `click`; a keyboard activation's `keydown` fires before the
- * synthesized click too), so it is always current by the time Radix's
- * `onOpenAutoFocus` reads it - then reset to the "programmatic" default so a
- * later open triggered from outside the trigger (e.g. a native-notification
- * bridge calling the store directly) is not attributed to a stale pointer/
- * keyboard flag from a previous open.
- */
+/** Capture modality on the trigger; reset to programmatic after so a later non-trigger open is not a stale pointer open.
+ * Keyboard/programmatic open focuses the heading; pointer open does not steal focus. */
 export function useNotificationCenterOpenLifecycle(
   input: NotificationCenterOpenLifecycleInput,
 ): NotificationCenterOpenLifecycle {

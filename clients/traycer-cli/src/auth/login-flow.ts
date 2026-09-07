@@ -30,15 +30,8 @@ interface LoginSuccess {
   readonly authnBaseUrl: string;
 }
 
-// `traycer login` (no `--token`) authenticates via the OAuth 2.0 Device
-// Authorization Grant (RFC 8628). The loopback browser-redirect login was
-// retired: the CLI can run on a headless box (remote/SSH host) with no
-// co-located browser, so there is nowhere to redirect to. Instead the CLI
-// prints a short `user_code` + verification URL the human opens on ANY
-// device, then polls the authn service until the request is approved. The
-// resulting `{ token, refreshToken }` is persisted via the locked mutation
-// store (`store.signIn`, §7) in the exact `StoredCredentials` shape the host
-// reads - byte-compatible with every other login producer.
+// `traycer login` (no `--token`) authenticates via the OAuth 2.0 Device Authorization Grant (RFC 8628).
+// The loopback browser-redirect login was retired: the CLI can run on a headless box (remote/SSH host) with no co-located browser, so there is nowhere to redirect to.
 export async function runDeviceAuthFlow(
   ctx: CommandContext,
 ): Promise<LoginSuccess> {
@@ -73,10 +66,8 @@ export async function runDeviceAuthFlow(
     intervalSeconds,
   } = authorization;
 
-  // Always print the code + URL. `humanRequired` survives `--quiet` (the prompt
-  // is load-bearing - the user can't proceed without it) and is a no-op in JSON
-  // mode so the NDJSON stream stays clean; the structured `progress` event below
-  // carries the same instruction for JSON consumers.
+  // Always print the code + URL.
+  // `humanRequired` survives `--quiet` (the prompt is load-bearing - the user can't proceed without it) and is a no-op in JSON mode so the NDJSON stream stays clean; the structured `progress` event below carries the same instruction for JSON consumers.
   ctx.output.humanRequired(
     `To sign in, open this URL in a browser on any device:\n` +
       `  ${verificationUri}\n` +
@@ -94,9 +85,8 @@ export async function runDeviceAuthFlow(
     workUnits: null,
   });
 
-  // Best-effort: open the one-click link locally. On a headless box the spawn
-  // simply fails and is swallowed - the printed code + URL above is the
-  // guaranteed path, so there is no fallback notice to print here.
+  // Best-effort: open the one-click link locally.
+  // On a headless box the spawn simply fails and is swallowed - the printed code + URL above is the guaranteed path, so there is no fallback notice to print here.
   openInBrowser(verificationUriComplete);
 
   const schedule = createPollSchedule({
@@ -106,10 +96,8 @@ export async function runDeviceAuthFlow(
   });
   const tokens = await pollUntilAuthorized(authnBaseUrl, deviceCode, schedule);
 
-  // The device flow just minted a FRESH pair, so an access-only `/user` probe
-  // validates it without ever spending the refresh token (§3/§7). No
-  // stale-access fallback-refresh belongs here: a freshly-minted token that
-  // fails to validate is a genuine rejection, not an expiry to refresh past.
+  // The device flow just minted a FRESH pair, so an access-only `/user` probe validates it without ever spending the refresh token (§3/§7).
+  // No stale-access fallback-refresh belongs here: a freshly-minted token that fails to validate is a genuine rejection, not an expiry to refresh past.
   const validation = await validateAuthTokenIdentityAccessOnly(
     authnBaseUrl,
     tokens.token,
@@ -139,9 +127,8 @@ export async function runDeviceAuthFlow(
     savedAt: new Date().toISOString(),
     user,
   };
-  // Persist through the locked mutation store (§7) so the CLI shares one write
-  // path with the desktop app. `signIn` is unconditional and clears any
-  // tombstone - exactly the semantics an interactive sign-in needs.
+  // Persist through the locked mutation store (§7) so the CLI shares one write path with the desktop app.
+  // `signIn` is unconditional and clears any tombstone - exactly the semantics an interactive sign-in needs.
   const persisted = await runWithCliStore((store) =>
     withCommitRetry(() => store.signIn(credentials, false, null), null),
   );
@@ -157,20 +144,15 @@ export async function runDeviceAuthFlow(
   return { token: tokens.token, user, authnBaseUrl };
 }
 
-// Drives the `/device/token` poll loop until the request is approved, denied,
-// or the `device_code` expires. Honors the server-supplied `interval`, backs
-// off on `slow_down`, tolerates transient `network-error`s (keeps polling until
-// expiry), and stops cleanly at `expires_in` instead of looping forever. Every
-// one of the client's 7 poll variants is handled here.
+// Drives the `/device/token` poll loop until the request is approved, denied, or the `device_code` expires.
+// Honors the server-supplied `interval`, backs off on `slow_down`, tolerates transient `network-error`s (keeps polling until expiry), and stops cleanly at `expires_in` instead of looping forever.
 async function pollUntilAuthorized(
   authnBaseUrl: string,
   deviceCode: string,
   initialSchedule: DevicePollSchedule,
 ): Promise<{ token: string; refreshToken: string }> {
   let schedule = initialSchedule;
-  // Aborts any in-flight `/device/token` request once the device_code TTL
-  // elapses, so a request stuck on a black-holed socket can't keep the expiry
-  // check from ever running (it sits behind the awaited poll otherwise).
+  // Aborts any in-flight `/device/token` request once the device_code TTL elapses, so a request stuck on a black-holed socket can't keep the expiry check from ever running (it sits behind the awaited poll otherwise).
   const expiryController = new AbortController();
   const expiryTimer = setTimeout(
     () => expiryController.abort(),
@@ -178,9 +160,7 @@ async function pollUntilAuthorized(
   );
   try {
     for (;;) {
-      // Wait the (possibly backed-off) interval before each poll, then bail if
-      // the device_code has expired so a never-approved request can't poll past
-      // its TTL.
+      // Wait the (possibly backed-off) interval before each poll, then bail if the device_code has expired so a never-approved request can't poll past its TTL.
       await sleep(schedule.intervalMs);
       if (isDeviceExpired(schedule, Date.now())) {
         throw cliError({
@@ -248,17 +228,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Best-effort open of a URL in the platform browser. Errors (e.g. a headless
-// box with no `xdg-open`) are swallowed: the device-flow prompt always prints
-// the code + URL, so opening the browser is purely a convenience.
+// Best-effort open of a URL in the platform browser.
+// Errors (e.g. a headless box with no `xdg-open`) are swallowed: the device-flow prompt always prints the code + URL, so opening the browser is purely a convenience.
 function openInBrowser(url: string): void {
   const plat = osPlatform();
-  // None of these openers route the URL through a shell: `open` / `xdg-open`
-  // receive it as a plain argv entry, and on Windows `rundll32
-  // url.dll,FileProtocolHandler` hands the URL to the protocol handler directly.
-  // The earlier `cmd /c start <url>` form let `cmd.exe` re-parse the URL, so a
-  // server-supplied value containing shell metacharacters (`&`, `|`, `^`) was a
-  // command-injection sink even though the scheme is validated to http(s).
+  // None of these openers route the URL through a shell: `open` / `xdg-open` receive it as a plain argv entry, and on Windows `rundll32 url.dll,FileProtocolHandler` hands the URL to the protocol handler directly.
+  // The earlier `cmd /c start <url>` form let `cmd.exe` re-parse the URL, so a server-supplied value containing shell metacharacters (`&`, `|`, `^`) was a command-injection sink even though the scheme is validated to http(s).
   const { cmd, args } =
     plat === "darwin"
       ? { cmd: "open", args: [url] }

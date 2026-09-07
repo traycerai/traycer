@@ -1,13 +1,11 @@
 import type { AttemptReadiness, ReadinessRung } from "../shared/host-process";
 import type { TransitionGovernor } from "../durable/records";
 
-/** The two durable macOS substrate changes. */
 export type SubstrateTransitionKind = "fallback" | "reclaim";
 
 /**
- * A phase is committed before the mutation it names.  Terminal phases retain
- * the governor delta in the same journal snapshot; they are not a second
- * mutable governor file.
+ * A phase is committed before the mutation it names.
+ * Terminal phases retain the governor delta in the same journal snapshot; they are not a second mutable governor file.
  */
 export type TransitionPhase =
   | "fallback-journaled"
@@ -26,16 +24,10 @@ export type TransitionPhase =
   | "failed"
   | "compensated";
 
-/**
- * Every `TransitionPhase`, as a table rather than a list.
- *
- * `satisfies Record<TransitionPhase, true>` is the load-bearing part: adding a
- * member to the union without adding it here is a COMPILE error. That is what
- * makes phase handling fail loudly instead of silently, which matters because
- * the failure mode it replaces was invisible - Ticket 05 classified unknown
- * phases as in-flight and permanently vetoed packaged-mac ownership, with
- * nothing failing at compile time or in a table-driven test.
- */
+  /**
+   * Every `TransitionPhase`, as a table rather than a list.
+   * `satisfies Record<TransitionPhase, true>` is the load-bearing part: adding a member to the union without adding it here is a compile error.
+   */
 export const TRANSITION_PHASE_TABLE = {
   "fallback-journaled": true,
   "fallback-attesting-slot": true,
@@ -84,9 +76,8 @@ export type LifecycleTransitionJournal = {
   readonly compensation: "reprovision-fallback" | null;
   readonly startedAt: string;
   /**
-   * Bound an ambiguous spawn-probe result.  It is set in the same write that
-   * records `reclaim-awaiting-probe`, so a crash cannot turn marker absence
-   * into an unbounded relaunch loop.
+   * Bound an ambiguous spawn-probe result.
+   * It is set in the same write that records `reclaim-awaiting-probe`, so a crash cannot turn marker absence into an unbounded relaunch loop.
    */
   readonly probeDeadlineAt: string | null;
   /** Always present on writes made by the transition machinery. */
@@ -126,12 +117,7 @@ export type TransitionJournalRead =
   | { readonly kind: "valid"; readonly journal: LifecycleTransitionJournal }
   | { readonly kind: "invalid"; readonly reason: string };
 
-/**
- * Persistence remains injected so this package never reaches into a platform
- * service controller.  The concrete CLI adapter uses write-temp + rename for
- * each call; the reconciler uses one journal write for every phase/governor
- * transition.
- */
+  /** Persistence remains injected so this package never reaches into a platform service controller. */
 export type TransitionJournalStore = {
   readJournal(): Promise<TransitionJournalRead>;
   writeJournal(journal: LifecycleTransitionJournal): Promise<void>;
@@ -153,7 +139,6 @@ export type ReclaimShutdownResult =
   | { readonly kind: "stale" }
   | { readonly kind: "not-exited" };
 
-/** Platform-specific mutations consumed by the shared reconciler. */
 export type TransitionActuators = {
   attestFallbackSlot(): Promise<FallbackSlotAttestation>;
   provisionFallback(): Promise<void>;

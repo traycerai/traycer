@@ -1,27 +1,4 @@
-// The boot-family GALLERY: renders every face a launch can show, screenshots
-// each one, and reads the card's box so "one geometry across the launch" is a
-// measured claim rather than a described one.
-//
-// Manual instrument, not a CI gate. Run it when touching the boot-card family:
-//
-//   bun scripts/host-boot-family-gallery-browser.mjs [--out DIR] [--dark] [--viewport WxH]
-//
-// It writes `<face>.png` (and `<face>.dark.png` with --dark) into DIR (default:
-// a fresh temp dir, printed), then prints one row per face: the card's left,
-// top, width and height in CSS px at deviceScaleFactor 1, and whether the face
-// is drawn through the shared `HostBootCard`. The rows a reader should expect:
-//
-//  - every family face has the SAME width (the shared card's `max-w-sm`) and
-//    the SAME left edge - the card does not change shape as the launch hands
-//    off between surfaces;
-//  - the WAIT faces (runtime, attach, restoring, narrator-idle) additionally
-//    share the same top and height - the card does not MOVE between them;
-//  - the `dialog` face is the CONTROL: a different, wider box on purpose. A
-//    run in which it matches the family is a run from an instrument that
-//    cannot see width, and its table means nothing.
-//
-// Structure copied from `window-host-modal-alignment-browser.mjs` (vite +
-// headless Chrome over CDP).
+// Manual boot-family gallery: screenshot each face and read the card box. Family faces share width/left; wait faces also share top/height. `dialog` is the control that must measure a different width.
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -47,14 +24,7 @@ const FACES = [
   "gate-removed",
   "dialog",
 ];
-/**
- * The faces that must not MOVE relative to one another (same top + height):
- * every healthy wait, INCLUDING the narrator with a lane reporting at 42% -
- * a launch crosses all five and the bar is on every one of them, so a lane
- * starting to report changes the sentence and the fill, not the box.
- * `narrator-slow` is deliberately not here: it grows a Retry action row,
- * which is a real state change on its own clock, not a hand-off.
- */
+/** Healthy-wait faces share top+height. narrator-slow is excluded: Retry grows the box on its own clock. */
 const WAIT_FACES = new Set([
   "runtime",
   "attach",
@@ -210,26 +180,11 @@ try {
           const band = document.querySelector('[data-gallery-header-band]');
           const r = card.getBoundingClientRect();
           const round = (n) => Number(n.toFixed(1));
-          // CAN THE USER GET TO ALL OF IT? A tall card is only a problem when
-          // some of it cannot be brought into view, and which of those it is
-          // depends entirely on what encloses it: a card in a column that GROWS
-          // just makes the page scroll, the same card under a clipping or
-          // fixed ancestor loses whatever falls outside. That is the whole
-          // question behind \`viewportCapped\`, and it was argued rather than
-          // measured until this.
-          //
-          // A \`fixed\` ancestor pins the card to the viewport, so the viewport
-          // IS the bound (the narrator's layer - hence its cap). Otherwise the
-          // bound is the document's scrollable height, narrowed by any
-          // ancestor that CLIPS. \`auto\`/\`scroll\` ancestors do not narrow it:
-          // the user can scroll those.
+          // viewportCapped: a fixed ancestor uses the viewport; otherwise document
+          // scroll height, narrowed only by clipping (not auto/scroll) ancestors.
           const reach = (() => {
-            // The card can also hide its OWN content: capped height plus
-            // \`overflow-y: hidden\` clips the controls while the card's
-            // rectangle still sits comfortably inside every ancestor, so a
-            // check that only compares rectangles reports ok on a card whose
-            // buttons are gone. \`auto\`/\`scroll\` is the capped card's actual
-            // spelling and stays reachable - the user scrolls inside it.
+            // overflow-y:hidden plus capped height can clip controls while the
+            // card rect still fits. auto/scroll stays reachable.
             const own = getComputedStyle(card).overflowY;
             const cutInside =
               (own === 'hidden' || own === 'clip') &&
@@ -476,10 +431,7 @@ function connectCdp(url) {
       () => reject(new Error("CDP connect timed out")),
       15_000,
     );
-    // A socket that dies mid-run must FAIL the run, not hang it: every
-    // in-flight request is rejected on close/error, and a send on a socket
-    // that is not open rejects immediately, so a Chrome crash surfaces as an
-    // error with a message rather than as a driver that never exits.
+    // A dead socket must fail the run, not hang: in-flight and send reject.
     const failAll = (reason) => {
       for (const [id, request] of pending) {
         pending.delete(id);

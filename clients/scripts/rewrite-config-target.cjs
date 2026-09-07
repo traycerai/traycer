@@ -3,41 +3,15 @@
 
 /**
  * Shared rewriter for the per-module flat deploy config (`src/config.ts`).
- *
- * Owned by the clients tree so each client's `set-deploy-target.cjs` wrapper
- * resolves it within this workspace, with no dependency outside the clients
- * boundary.
- *
- * Each module keeps a flat config object whose source holds the committed
- * production endpoints (+ host trust root) and the `dev` environment/version.
- * A production build rewrites the `environment` field + the literal values that
- * genuinely vary per release in place, runs the build, then `--restore`s back
- * to the committed source. There is NO runtime env lookup; this build-time
- * rewrite is the only place such values are selected.
- *
- * Per-module scripts call `runConfigTargetCli({ sourcePath, stringFields,
- * nullableStringFields, arrayFields })`:
- *   - stringFields: { field: { dev, production } } - string literals.
- *   - nullableStringFields: same shape, but values may be null and source
- *     fields must be declared as `value: null as string | null` or
- *     `value: "..." as string | null`.
- *   - arrayFields:  { field: { dev, production } } - string[] literals.
- *
- * Usage (per-module wrapper):
- *   bun scripts/set-deploy-target.cjs --target=production
- *   bun scripts/set-deploy-target.cjs --restore        # → dev
+ * There is NO runtime env lookup; this build-time rewrite is the only place such values are selected.
  */
 
 const fs = require("node:fs");
 
 const VALID_TARGETS = ["dev", "production"];
 const PREFIX = "[set-deploy-target]";
-// The source default + the value `--restore` writes back. Must match the
-// `version` literal committed in each module's `config.ts` so a build's
-// restore leaves the working tree clean. Builds stamp a concrete per-build
-// id over this via `--version` (see desktop-install-cloud.js#setDeployTarget);
-// detecting `version !== this sentinel` is how a shipped build knows it is
-// not the dev source tree.
+// The source default + the value `--restore` writes back.
+// Must match the `version` literal committed in each module's `config.ts` so a build's restore leaves the working tree clean.
 const DEV_VERSION_SENTINEL = "0.0.0-dev";
 
 function rewriteEnvironment(source, target, sourcePath) {
@@ -88,11 +62,8 @@ function rewriteArrayField(source, field, values, sourcePath) {
   return source.replace(re, `$1[${rendered}]`);
 }
 
-// Stamp the per-build `version` literal. Presence-conditional: a module whose
-// config has no `version` field (e.g. mobile) is left untouched rather than
-// erroring, so this generic field can be added incrementally. `version` is
-// null when a target build is run without `--version` (the field keeps its
-// committed value).
+// Stamp the per-build `version` literal.
+// Presence-conditional: a module whose config has no `version` field (e.g. mobile) is left untouched rather than erroring, so this generic field can be added incrementally.
 function rewriteVersionFieldIfPresent(source, version, sourcePath) {
   if (version === null) return source;
   const re = /(\bversion:\s*")[^"]*(")/;

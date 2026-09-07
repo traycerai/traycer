@@ -2,15 +2,6 @@ import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { errnoCode } from "./errno-code";
 
-/**
- * The most bytes one login-import file read buffers in main.
- *
- * A cookie export or a Safari jar is kilobytes to a few megabytes; a
- * browser's `Local State` or `profiles.ini` smaller still. The picker offers
- * "All files", so the path can name anything on the disk: a bigger regular
- * file is refused by SIZE and a FIFO, a device or a directory by KIND, before
- * `readFile` would block on the one or buffer the other into the process.
- */
 export const MAX_LOGIN_IMPORT_FILE_BYTES = 64 * 1024 * 1024;
 
 export type BoundedFileRead =
@@ -20,19 +11,6 @@ export type BoundedFileRead =
       readonly reason: "not-a-file" | "too-large" | "denied" | "unreadable";
     };
 
-/**
- * Reads a regular file of at most `maxBytes`, or says why not.
- *
- * Every check is made on the OPEN handle, never on the path beforehand: a
- * path checked and then opened is two different files if anything moves in
- * between. The open is non-blocking so that a FIFO - which an ordinary
- * read-only open waits on until a writer appears - opens at once and is then
- * refused by kind, like a device or a directory; the flag changes nothing
- * about a regular file. The read itself is capped at one byte past the
- * handle's size and must fill exactly that size, with the handle's size and
- * mtime unchanged after it, so a file that grows, shrinks or is rewritten
- * while it is read is refused rather than returned in part.
- */
 export async function readBoundedFile(
   path: string,
   maxBytes: number,
@@ -61,11 +39,6 @@ export async function readBoundedFile(
       if (bytesRead === 0) break;
       filled += bytesRead;
     }
-    // Exactly the bytes the handle promised, and the handle still describing
-    // the same file afterwards: a read that overran grew under us, one that
-    // came up short was truncated or rewritten under us - and a complete
-    // PREFIX of a cookie export is still a valid export, one whose missing
-    // tail the import would read as cookies the source does not carry.
     if (filled !== info.size) return { ok: false, reason: "unreadable" };
     const after = await handle.stat();
     if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) {
@@ -79,10 +52,6 @@ export async function readBoundedFile(
   }
 }
 
-/**
- * A directory refuses the open itself on Windows (`EISDIR`), where POSIX
- * opens it and the handle's kind refuses it; the two agree on the reason.
- */
 function refusedFor(error: unknown): "not-a-file" | "denied" | "unreadable" {
   const code = errnoCode(error);
   if (code === "EISDIR") return "not-a-file";

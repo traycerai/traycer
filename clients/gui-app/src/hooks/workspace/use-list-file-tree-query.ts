@@ -4,23 +4,10 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 const WORKSPACE_FILE_TREE_MAX_FILES = 25_000;
 
 /**
- * @deprecated Recursive 25k-file snapshot with a poll. Its ONLY remaining
- * caller is the file-tree panel's fallback for hosts that predate
- * `workspace.subscribeFileList` (the command palette moved to
- * `workspace.searchPaths`) - hence the explicit `enabled` gate. Do not add new
- * consumers: live trees use the `workspace.subscribeFileList` stream
- * (`use-workspace-file-list-subscription`), path search uses
- * `use-workspace-search-paths-query`. Delete this hook when the old-host
- * fallback is retired.
+ * @deprecated Recursive 25k-file snapshot with a poll. Only remaining caller is the file-tree fallback for hosts that predate `workspace.subscribeFileList`. Do not add consumers.
  */
 export function useWorkspaceListFileTree(args: {
-  /**
-   * The host whose filesystem this lists. Its ONE caller is a host-pinned
-   * surface, and this used to be absent entirely - the query took the app-wide
-   * client while the panel around it was pinned elsewhere, so the fallback tree
-   * listed the wrong machine's files under the pinned host's name and stamped
-   * that host onto every ref opened from it.
-   */
+  /** The host whose filesystem this lists. */
   readonly hostId: string | null;
   readonly workspacePath: string | null;
   readonly enabled: boolean;

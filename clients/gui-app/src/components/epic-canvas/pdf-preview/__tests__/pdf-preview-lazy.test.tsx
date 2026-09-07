@@ -1,11 +1,5 @@
 /**
- * `PdfPreviewLazy`'s two failure surfaces (pdf-preview-lazy.tsx): the chunk
- * load itself rejecting, and the resolved viewer throwing while it mounts.
- * Both must report `onUnavailable` exactly once and leave nothing but the
- * loading spinner or an empty subtree behind - never a half-mounted viewer.
- * `../pdf-preview-loader` is mocked directly so this stays independent of
- * pdf.js and the real chunk-load contract that `pdf-preview-loader.test.ts`
- * already covers.
+ * Both must report `onUnavailable` exactly once and leave nothing but the loading spinner or an empty subtree behind - never a half-mounted viewer.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";

@@ -15,32 +15,13 @@ interface RevertOnEditDialogProps {
   readonly onOpenChange: (open: boolean) => void;
   readonly onRevert: (revertArtifacts: boolean) => void;
   readonly onDontRevert: () => void;
-  /**
-   * `null` when the transcript below the edit point is not fully hydrated and
-   * the artifacts in scope therefore cannot be counted from this side. The
-   * opt-out still renders, without a number.
-   */
+  /** `null` when the transcript below the edit point is not fully hydrated and the artifacts in scope therefore cannot be counted from this side. The opt-out still renders, without a number. */
   readonly artifactCount: number | null;
-  /**
-   * Items parked in the message queue. The edit neither clears them nor
-   * changes when they run, so the dialog names them to avoid surprise. The
-   * copy deliberately says "when the queue next runs" rather than "after this
-   * turn": a queue paused by an errored turn holds its items individually
-   * paused, which blocks the host's auto-resume, so those messages wait for
-   * the user to resume rather than following the replacement turn.
-   */
+  /** The copy deliberately says "when the queue next runs" rather than "after this turn": a queue paused by an errored turn holds its items individually paused, which blocks the host's auto-resume, so those messages wait for the user to resume rather than following the replacement turn. */
   readonly queuedCount: number;
 }
 
-/**
- * Shown when the owner submits an edit to a previous message that has file
- * edits below it. Revert restores those files to before the edited message
- * (and clears later messages); Don't revert keeps the files as-is. Enter
- * confirms Revert, Shift+Enter confirms Don't revert, Esc cancels - matching
- * the keyboard hints in the footer. Each action closes the dialog
- * synchronously (the composer/message list reflects the result), so there is
- * no in-dialog pending state.
- */
+/** Revert restores those files to before the edited message (and clears later messages); Don't revert keeps the files as-is. Enter confirms Revert, Shift+Enter confirms Don't revert, Esc cancels - matching the keyboard hints in the footer. */
 export function RevertOnEditDialog(props: RevertOnEditDialogProps) {
   return (
     <RevertOnEditDialogContent

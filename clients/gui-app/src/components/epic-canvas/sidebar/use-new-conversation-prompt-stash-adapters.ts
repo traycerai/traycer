@@ -15,10 +15,7 @@ import {
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 
 /**
- * New-conversation modal prompt-stash source: reads/clears the modal's own
- * per-epic draft patch. Clearing prefers the live editor (keeps Tiptap's own
- * document in sync via its `onUpdate`); the store fallback resets only
- * content + selection, leaving settings/composerMode/workspace intact.
+ * Clearing prefers the live editor (keeps Tiptap's own document in sync via its `onUpdate`); the store fallback resets only content + selection, leaving settings/composerMode/workspace intact.
  */
 export function useNewConversationPromptStashSource(args: {
   readonly epicId: string;
@@ -67,11 +64,8 @@ export function useNewConversationPromptStashSource(args: {
 }
 
 /**
- * New-conversation modal prompt-stash destination: restore requires the
- * exact ready editor incarnation captured at restore start, and appends
- * against the modal draft's latest content at insertion time. Materialization
- * is owned by the restore hook's default inline-base64 path. Selection is
- * reset so the next edit starts after the inserted prompt.
+ * New-conversation modal prompt-stash destination: restore requires the exact ready editor incarnation captured at restore start, and appends against the modal draft's latest content at insertion time.
+ * Materialization is owned by the restore hook's default inline-base64 path.
  */
 export function useNewConversationPromptStashDestination(args: {
   readonly epicId: string;

@@ -58,14 +58,7 @@ export interface PrDetailSubscriptionResult {
   readonly isPending: boolean;
   /** Sends the envelope-conformant `{kind:"refresh"}` client frame on this hook's own session. No-op while disabled or before the session exists. */
   readonly sendRefresh: () => void;
-  /**
-   * Whether the tile's BOUND host advertises `pr.subscribeDetail`. Read from
-   * the same internally-resolved client the subscription itself uses (not
-   * `useStreamMethodSupport`, which reads the app-wide DEFAULT host's client
-   * - wrong client for a non-default-host tile). `null` while capability
-   * negotiation hasn't completed yet; treated as supported until proven
-   * otherwise, same as the panel's gate.
-   */
+  /** Whether the tile's BOUND host advertises `pr.subscribeDetail`. */
   readonly methodSupported: boolean;
 }
 
@@ -81,13 +74,7 @@ interface ActiveDetailSubscriptionArgs {
 type SharedDetailSubscription =
   SharedStreamSubscription<PrSubscribeDetailServerFrame>;
 
-/**
- * Module-level ref-counted subscriptions, keyed by the owning client
- * instance + the full authorization-relevant identity (`epicId` included -
- * the resolver authorizes the epic on EVERY subscribe open, so two tiles for
- * the same PR opened from different epics cannot share one session even
- * though the underlying host poller consolidates by PR key alone).
- */
+/** Module-level ref-counted subscriptions, keyed by the owning client instance + the full authorization-relevant identity (`epicId` included - the resolver authorizes the epic on EVERY subscribe open, so two tiles for the same PR opened from different epics cannot share one session even though the underlying host poller consolidates by PR key alone). */
 const subscriptions: SharedStreamSubscriptionRegistry<PrSubscribeDetailServerFrame> =
   new Map();
 
@@ -111,11 +98,7 @@ export function __resetPrDetailSubscriptionsForTesting(): void {
 }
 
 /**
- * Detail subscription for the PR full-view tile. Transport is resolved
- * INTERNALLY from `useTabHostId()` -> `useHostStreamClientFor` (with auth
- * revalidation), NOT from the app-wide default-host client: a tile bound to
- * a non-default host must subscribe through that host's own client, per
- * CLAUDE.md's tab-scoped host rule.
+ * PR full-view subscription on the tab's host (`useTabHostId()`), not the app-wide default.
  */
 export function usePrDetailSubscription(args: {
   readonly epicId: string;
@@ -334,12 +317,7 @@ function createSharedSubscription(
 }
 
 function describeStreamClose(reason: StreamCloseReason | null): string | null {
-  // A RETRYABLE close is the transport reconnecting, not a failure the user
-  // has to see: the client re-subscribes on its own backoff and the next
-  // snapshot repopulates this surface. Returning `null` keeps the panel in
-  // its pending state - "visibly retrying" - instead of flashing an error
-  // that resolves itself, which is what an overnight sleep used to do to
-  // every open panel at once.
+  // A RETRYABLE close is the transport reconnecting, not a failure the user has to see: the client re-subscribes on its own backoff and the next snapshot repopulates this surface.
   if (
     reason !== null &&
     reason.kind === "fatalError" &&
@@ -370,10 +348,7 @@ function toSubscriptionData(
 }
 
 /**
- * Writes subscription frames into the TanStack Query cache. Authorization:
- * CLAUDE.md "Optimistic setQueryData is reserved for response-equals-state
- * cases" - the host's `snapshot`/`updated` frames ARE the authoritative PR
- * detail state at the moment they are emitted.
+ * Host `snapshot`/`updated` frames are the PR detail; write them into the query cache.
  */
 function writeIntoCache(
   queryClient: QueryClient,
@@ -393,11 +368,7 @@ function writeIntoCache(
   );
 }
 
-/**
- * Re-applies a shared session's cached last frame to the query cache when a
- * NEW consumer joins an already-live session - see the list hook's identical
- * rationale.
- */
+/** Re-applies a shared session's cached last frame to the query cache when a NEW consumer joins an already-live session - see the list hook's identical rationale. */
 function replayLastEventIntoCache(
   queryClient: QueryClient,
   args: ActiveDetailSubscriptionArgs,

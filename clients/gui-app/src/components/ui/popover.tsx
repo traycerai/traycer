@@ -38,20 +38,14 @@ function PopoverContent({
   onCloseAutoFocus,
   ...props
 }: PopoverContentProps) {
-  // Keep a pane's controlled root open state intact while its document portal is
-  // not allowed to present over the focused split partner: un-present by
-  // unmounting the portal (leaving the root open, so it re-presents on refocus).
-  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  // Keep a pane's controlled root open state intact while its document portal is not allowed to present over the
+  // focused split partner.
   const { paneFocused, handleCloseAutoFocus } =
     usePaneAwareContentGuard(onCloseAutoFocus);
-  // Concealed region (see `portal-concealment-context`): the portal's DOM
-  // escapes the region's own concealment, so it un-presents here and
-  // re-presents intact when the region returns.
+  // Concealed region (see `portal-concealment-context`): the portal's DOM escapes the region's own concealment,
+  // so it un-presents here and re-presents intact when the region returns.
   const concealed = usePortalConcealed();
   // Read above the early returns so hook order does not depend on presentation.
-  // The insets are the DEFAULT collision padding and `max-w-safe-dvw` the
-  // default width cap; both are displaceable by a caller (see
-  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
   if (!paneFocused || concealed) return null;
   return (

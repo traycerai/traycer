@@ -35,18 +35,14 @@ export const useSubagentOpenStore = create<SubagentOpenState>((set) => ({
     }),
 }));
 
-// Ticket 15 (decision #29): durable chat-key mirror of each tab's open
-// subagent segment ids - survives the tab-key entries being reset on close,
-// so a reopened chat's expanded subagent cards come back.
+// Durable chat-key mirror of open subagent ids; survives tab-key reset on close.
 export const subagentOpenDurableCache =
   createChatDurableCache<ReadonlySet<string>>(200);
 
-// Ticket 15 review round 3: see `toolOpenInitializedScopes`'s twin comment
-// in tool-open-store.ts.
+// Same seed/touch tracking as `toolOpenInitializedScopes` in tool-open-store.ts.
 export const subagentOpenInitializedScopes = new Set<string>();
 
-/** Ticket 15 review round 3: see `promoteToolOpenToDurable`'s twin comment
- *  in tool-open-store.ts. */
+/** Same promotion rule as `promoteToolOpenToDurable` in tool-open-store.ts. */
 export function promoteSubagentOpenToDurable(
   identity: ChatTabPersistenceIdentity,
 ): void {

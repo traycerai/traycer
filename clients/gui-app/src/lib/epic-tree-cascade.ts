@@ -11,12 +11,8 @@ export interface DescendantCounts {
 }
 
 /**
- * BFS over the flat EpicTreeRecord list to count all descendants of
- * `rootId` by type. The unified record list covers both artifacts and
- * chats, so one pass handles all cascade-delete scenarios.
- *
- * Returns zero counts when `rootId` has no children. The root node
- * itself is NOT counted - only its descendants.
+ * BFS over the flat EpicTreeRecord list to count all descendants of `rootId` by type.
+ * The unified record list covers both artifacts and chats, so one pass handles all cascade-delete scenarios.
  */
 export function computeDescendantCounts(
   records: ReadonlyArray<EpicTreeRecord>,
@@ -44,14 +40,8 @@ export function computeDescendantCounts(
 }
 
 /**
- * Tree-structure variant of `computeDescendantCounts`. Walks the canonical
- * parent -> children index instead of the flat record list, so a caller does
- * NOT have to subscribe to the churning artifact-records projection (which the
- * sidebar nodes re-render against on every chat-stream token). The tree's
- * `parentId`/`type` are the normalised,
- * authoritative structure the sidebar already renders, so the counts match what
- * the user sees. `TreeNode.type` is `EpicTreeNodeType`, which is exactly
- * `keyof DescendantCounts`, so the indexing is total.
+ * Tree-structure variant of `computeDescendantCounts`.
+ * Walks the canonical parent -> children index instead of the flat record list, so a caller does NOT have to subscribe to the churning artifact-records projection (which the sidebar nodes re-render against on every chat-stream token).
  */
 export function computeDescendantCountsFromTree(
   tree: TreeSlice,
@@ -87,14 +77,7 @@ export function computeDescendantCountsFromTree(
 
 /**
  * Build a human-readable cascade summary string from counts, e.g.
- * "3 specs, 2 tickets, and 1 agent". Returns null when there are no
- * descendants (the confirm dialog omits the cascade line).
- *
- * Chat and terminal-agent descendants aggregate into a single **agent** bucket:
- * Agent is the durable entity and Chat/Terminal are only the interfaces used to
- * interact with it, so a mixed selection reads "2 agents" rather than the
- * entity-splitting "1 chat and 1 terminal agent". Each entry therefore names a
- * SET of node kinds rather than one.
+ * "3 specs, 2 tickets, and 1 agent".
  */
 const CASCADE_LABELS: ReadonlyArray<{
   readonly keys: ReadonlyArray<keyof DescendantCounts>;

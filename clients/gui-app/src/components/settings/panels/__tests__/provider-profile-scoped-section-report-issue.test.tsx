@@ -11,20 +11,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
-// `ProviderProfileScopedSection` always mounts `ProfileEditDialog`, whose
-// mutation hooks call `useHostClient()` unconditionally regardless of the
-// dialog's `open` state. Mock the mutation/host hooks it and its refresh
-// button pull in so this test only needs a QueryClient, not a bound host.
+// Mock the mutation/host hooks it and its refresh button pull in so this test only needs a QueryClient, not a
+// bound host.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
 });
-// The stub above is not sufficient on its own: it replaces `@/lib/host`, but
-// the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
-// which that stub does not intercept - so the real hook throws its "must be
-// used inside a <HostRuntimeProvider>" error. The refresh button reaches that
-// chain via `useProviderRateLimitRefresh` -> `useRateLimitQueueScope`. Stub the
-// one resolution they share, the way the host-less panel suites already do.
+// The stub above is not sufficient on its own: it replaces `@/lib/host`, but the pinned-client chain also
+// reads `useHostClient` from `@/lib/host/runtime`, which that stub does not intercept.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -78,9 +72,8 @@ function ambientProfile(): ProviderCliState["profiles"][number] {
   };
 }
 
-// `opencode` is not in the rate-limit-capable provider set, so the embedded
-// usage card and refresh button take their no-query branch - no additional
-// host-query mocking needed for this section-level test.
+// `opencode` is not in the rate-limit-capable provider set, so the embedded usage card and refresh button take
+// their no-query branch - no additional host-query mocking needed for this section-level test.
 function opencodeState(): ProviderCliState {
   return {
     providerId: "opencode",

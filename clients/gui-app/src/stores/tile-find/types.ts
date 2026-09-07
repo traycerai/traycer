@@ -37,10 +37,8 @@ export interface TileReplaceInput extends TileFindInput {
   readonly replaceText: string;
 }
 
-// Replacement is its own boundary so find-only adapters (terminal, diff, chat,
-// workspace-file, unavailable) don't have to carry fake no-op replace methods.
-// An adapter exposes `replace` only when the surface can actually mutate
-// content; the store refuses replace commands when it is null.
+// Replacement is its own boundary so find-only adapters (terminal, diff, chat, workspace-file,
+// unavailable) don't have to carry fake no-op replace methods.
 export interface TileFindReplace {
   replaceCurrent(input: TileReplaceInput): void | Promise<void>;
   replaceAll(input: TileReplaceInput): void | Promise<void>;

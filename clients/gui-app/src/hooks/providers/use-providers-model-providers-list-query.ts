@@ -7,14 +7,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /**
- * The upstream LLM provider catalog for one Traycer provider.
- *
- * A cold read can START the managed OpenCode server (the host leases it lazily),
- * so this query is deliberately quiet: no polling policy in the method table,
- * and a stale window long enough that re-opening the tab inside it reuses the
- * cache. The catalog only changes as a result of an auth mutation on this same
- * surface, and those invalidate this key directly - there is nothing for a timer
- * to discover.
+ * Quiet on purpose: a cold read can start the managed OpenCode server. Auth mutations invalidate this key; there is nothing for a timer to discover.
  */
 const MODEL_PROVIDERS_LIST_STALE_MS = 60_000;
 

@@ -668,11 +668,8 @@ describe("stream bridging mirrors the shipped stream checker", () => {
   });
 
   it("refuses a shared major that is neither side's canonical", () => {
-    // Mine installs {1,2} (canonical 2), theirs installs {1,3} (canonical
-    // 3): the only shared line is 1, and a manifest entry names a concrete
-    // minor only for its canonical major - so neither side can verify what
-    // would be spoken on line 1. `canBridgeStream` must refuse, not
-    // green-light the pairing and let subscribe-time selection guess.
+    // Mine installs {1,2} (canonical 2), theirs installs {1,3} (canonical 3): the only shared line is 1, and a manifest entry names a concrete minor only for its canonical major - so neither side can verify what would be.
+    // `canBridgeStream` must refuse, not green-light the pairing and let subscribe-time selection guess.
     const majorOne = streamRegistryAt(1)["demo.subscribe"][1];
     const majorTwo = streamRegistryAt(2)["demo.subscribe"][2];
     const majorThree = streamRegistryAt(3)["demo.subscribe"][3];
@@ -758,10 +755,8 @@ describe("same-version wire-schema evolution rules", () => {
   });
 
   it("rejects a tolerated (.catch()/optional) property added at a released version on a host→client slot - the providers.list #258 class", () => {
-    // Mirrors the historical miss: a `.catch()`-tolerant field lands on an
-    // already-released response shape without a version bump. Schema-level
-    // parsing still succeeds (that's the whole point of `.catch()`), but the
-    // released peer's wire payload never carries the key.
+    // Mirrors the historical miss: a `.catch()`-tolerant field lands on an already-released response shape without a version bump.
+    // Schema-level parsing still succeeds (that's the whole point of `.catch()`), but the released peer's wire payload never carries the key.
     const mine = defineVersionedRpcRegistry({
       "host.echo": unaryV10(
         baseRequest,

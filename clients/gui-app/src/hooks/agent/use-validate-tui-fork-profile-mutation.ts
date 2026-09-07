@@ -11,19 +11,7 @@ import { agentMutationKeys } from "@/lib/query-keys";
 import { VALIDATE_TUI_FORK_PROFILE_METHOD } from "@/hooks/agent/use-tui-fork-profile-support";
 
 /**
- * Read-only cross-profile fork-admission preflight - the optional
- * (non-floor) `agent.tui.validateForkProfile` RPC (tech plan governing
- * mechanism 2). Callers MUST gate on
- * `useHostSupportsMethod(hostId, "agent.tui.validateForkProfile")` before
- * invoking this - an old host that lacks the method rejects the call with
- * `E_HOST_UNSUPPORTED` rather than silently degrading. Its negotiated
- * presence IS the capability signal; there is no separate flag.
- *
- * Advisory only: `agent.tui.prepareLaunch` re-runs the same guard
- * authoritatively at the top of its own resolver (TOCTOU-safe). No `onError`
- * toast here - this is consumed inline by the fork flow
- * (`use-create-tui-agent.ts`), which surfaces its own rejection messaging
- * rather than a generic host-error toast.
+ * Callers must gate on `useHostSupportsMethod` for `agent.tui.validateForkProfile`; an old host rejects rather than degrading. Advisory: `prepareLaunch` re-runs the guard; no toast here.
  */
 export function useValidateTuiForkProfile(
   client: HostClient<HostRpcRegistry> | null,

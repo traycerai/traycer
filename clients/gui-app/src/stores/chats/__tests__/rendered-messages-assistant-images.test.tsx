@@ -732,20 +732,8 @@ describe("useRenderedMessages image resolution stable-row identity", () => {
 });
 
 /**
- * An assistant record persisted before `imageResolutions` existed, shaped the
- * way one actually reaches this projection at runtime.
- *
- * A snapshot delivered on the live schema line takes `ChatStreamClient`'s
- * SHALLOW parse path, which validates `chat.messages` with
- * `z.custom<Message>(isStructuralRecord)` - a structural check that runs none of
- * the zod defaults, so `imageResolutions: z.array(...).default([])` never fills.
- * (The DEEP path does fill it, which is why only the live line is exposed; both
- * halves of that contract are pinned in `chat-stream-client.test.ts`.) The value
- * arrives typed as present and genuinely `undefined`.
- *
- * The single assertion below is how a test states that: the declared type says
- * the field is always there, and the whole point of this fixture is a runtime
- * value that disagrees.
+ * An assistant record persisted before `imageResolutions` existed, shaped the way one actually
+ * reaches this projection at runtime.
  */
 function assistantMessageWithoutImageResolutions(
   turnId: string,
@@ -782,10 +770,7 @@ describe("useRenderedMessages pre-image assistant records", () => {
     );
 
     // Before the fix this threw "Invalid value used as weak map key" out of
-    // `imageResolutionsIdentityToken` - `WeakMap.set(undefined, …)` - and the
-    // chat tile came down through its error boundary. Rendering at all is the
-    // regression guard; the assertions pin that it degrades to "no resolutions"
-    // rather than to a row that silently drops its prose.
+    // `imageResolutionsIdentityToken` - `WeakMap.set(undefined, …)` - and the chat tile came down
     const { result } = renderRenderedMessages({ messages: [assistant] });
 
     expect(result.current).toHaveLength(1);
@@ -796,11 +781,8 @@ describe("useRenderedMessages pre-image assistant records", () => {
   });
 
   it("keeps a stable memo signature across re-renders when the field is absent", () => {
-    // `imageResolutionsIdentityToken` keys a WeakMap to build the memo
-    // signature, so the absent case has to resolve to ONE shared array. A fresh
-    // `[]` per read would mint a new identity on every projection, changing the
-    // signature each time and defeating the cache - a silent re-render loop
-    // rather than a crash, which is why it gets its own assertion.
+    // `imageResolutionsIdentityToken` keys a WeakMap to build the memo signature, so the absent case
+    // has to resolve to ONE shared array.
     const assistant = assistantMessageWithoutImageResolutions(
       "turn-stable",
       2000,

@@ -247,9 +247,7 @@ export async function loadHarness(): Promise<Harness> {
 
   await promptStashStore.usePromptStashStore.getState().hydrate();
 
-  // Register cleanup as soon as the module-level resources exist so a failed
-  // assertion cannot leak runtimes, reservations, modal drafts, or mounts into
-  // the next ownership-transfer case.
+  // Register cleanup as soon as the module-level resources exist so a failed assertion cannot leak runtimes, reservations, modal drafts, or mounts into the next ownership-transfer case.
   onTestFinished(() => {
     testing.cleanup();
     modalStore.useNewConversationModalStore.getState().resetForTests();

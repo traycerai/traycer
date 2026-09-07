@@ -1,22 +1,4 @@
-/**
- * ONE time cursor per epic, read by the graph canvas and driven by the
- * on-canvas transport.
- *
- * It outlived the sidebar panel that used to own it, and deliberately: keeping
- * the cursor here rather than inside the tile means closing and reopening the
- * graph does not silently rewind the epic's playback position, and any future
- * second reader of "where is the cursor" gets the same answer as the canvas.
- * Keyed by epic id.
- *
- * SESSION-ONLY, deliberately not persisted. A cursor is a reading position into
- * an event log that is itself not persisted client-side: restoring "paused at
- * 14:02:41" against a log this client has not re-pulled would point at nothing.
- * A fresh load starts live, which is also the product default.
- *
- * Playback TIMING is not here. This store holds where the cursor is, not who is
- * moving it: the on-canvas transport owns the tick (it owns the controls), so
- * `playing` is an intent any reader can observe while exactly one advances it.
- */
+/** ONE time cursor per epic, read by the graph canvas and driven by the on-canvas transport. */
 import { create } from "zustand";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import {
@@ -108,9 +90,8 @@ export const useCommGraphTimelineStore = create<CommGraphTimelineStore>(
 );
 
 /**
- * Per-field selectors, not a whole-slice one: `readEpicState` spreads a fresh
- * object on every call, so selecting the slice would re-render both surfaces on
- * every unrelated store write.
+ * Per-field selectors, not a whole-slice one: `readEpicState` spreads a fresh object on every
+ * call, so selecting the slice would re-render both surfaces on every unrelated store write.
  */
 export function useCommGraphCursor(epicId: string): CommGraphTimeCursor | null {
   return useCommGraphTimelineStore((s) => readEpicState(s, epicId).cursor);
@@ -131,12 +112,7 @@ export function readCommGraphTimelineEpicState(
   return readEpicState(useCommGraphTimelineStore.getState(), epicId);
 }
 
-/**
- * Rebinds a held host-local cursor when cloud history becomes authoritative.
- * Equivalent rows keep their timeline position but gain the cloud eventId
- * tiebreaker; if cloud has no equivalent row, the cursor returns to live so a
- * local-only sort key cannot project an empty prefix over the cloud feed.
- */
+/** Rebinds a held host-local cursor when cloud history becomes authoritative. */
 export function reconcileCommGraphCloudAuthorityCursor(
   epicId: string,
   cloudEvents: ReadonlyArray<CommGraphEvent>,
@@ -160,7 +136,6 @@ export function reconcileCommGraphCloudAuthorityCursor(
   }
 }
 
-/** Returns a pruned playback cursor to live and stops its stale play intent. */
 export function reconcilePrunedCommGraphTimelineRows(
   epicId: string,
   rowKeys: ReadonlySet<string>,

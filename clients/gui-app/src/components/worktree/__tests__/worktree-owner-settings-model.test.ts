@@ -164,9 +164,8 @@ describe("deriveOwnerSettingsHeader", () => {
     { permissionMode: "auto_accept_edits" as const },
     { permissionMode: "full_access" as const },
   ])("passes permissionMode %j through verbatim", ({ permissionMode }) => {
-    // The mode, not a label: the header resolves BOTH its label and its icon
-    // from `findPermissionOption`, which is what stops "Full access" from
-    // rendering behind a closed padlock again.
+    // The mode, not a label: the header resolves both its label and its icon from `findPermissionOption`, which is
+    // what stops "Full access" from rendering behind a closed padlock again.
     const view = deriveOwnerSettingsHeader(
       baseInput({
         chatSettings: { ...BASE_CHAT_SETTINGS, permissionMode },
@@ -177,8 +176,8 @@ describe("deriveOwnerSettingsHeader", () => {
   });
 
   it("badges the ambient profile when the provider has two or more", () => {
-    // `profileId: null` is AMBIENT, not "no profile" - it resolves against the
-    // ambient row's `profileCommitId()` of null and earns its own mark.
+    // `profileId: null` is ambient, not "no profile" - it resolves against the ambient row's `profileCommitId` of
+    // null and earns its own mark.
     const view = deriveOwnerSettingsHeader(
       baseInput({
         chatSettings: { ...BASE_CHAT_SETTINGS, profileId: null },

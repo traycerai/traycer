@@ -72,10 +72,7 @@ describe("chatBottomOverlayClampedRect", () => {
       toJSON: () => ({}),
     });
 
-    // Inset (500) far exceeds the rect's own height (100): `bottom` must
-    // clamp to `top` (0), not go negative - a rect with `bottom` below `top`
-    // is internally inconsistent even though `height` is separately
-    // clamped to 0.
+    // Inset (500) far exceeds the rect's own height (100): `bottom` must clamp to `top` (0), not go negative - a rect with `bottom` below `top` is internally inconsistent even though `height` is separately clamped to 0.
     const clamped = chatBottomOverlayClampedRect(el, 500);
     expect(clamped.height).toBe(0);
     expect(clamped.bottom).toBe(0);

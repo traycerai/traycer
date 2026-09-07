@@ -17,16 +17,7 @@ type SubmitLoginCodeMutationResult = UseMutationResult<
 >;
 
 /**
- * Relays a pasted authorization code to an in-flight `providers.startLogin`
- * child's stdin (code-paste decision log's "Mechanism" row). No cache
- * invalidation - the exchange outcome surfaces later via
- * `providers.awaitLogin`'s `codeRejected` flag, not this response.
- *
- * `onError` is intentionally omitted: a submit that fails at the RPC layer
- * is a normal step in the code-paste waiting UI, not a host problem, so the
- * paste field renders `mutation.error?.message` inline instead of a toast -
- * same "surfaces that must stay inline-only" exception `TokenReauthForm`
- * uses for its own paste field.
+ * No cache invalidation; the exchange outcome arrives on `providers.awaitLogin`. No `onError` toast: the paste field renders `mutation.error` inline.
  */
 export function useProvidersSubmitLoginCode(): SubmitLoginCodeMutationResult {
   return useProvidersSubmitLoginCodeForClient(useHostClient());

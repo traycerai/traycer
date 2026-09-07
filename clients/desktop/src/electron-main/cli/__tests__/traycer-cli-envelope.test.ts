@@ -1,30 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Native-packaging follow-up bug: previously the Desktop CLI bridge
-// passed `runTraycerCliJson`'s parsed-JSON return straight to the
-// host-management projector functions, but the shared runner in
-// `traycer-cli/src/runner/output.ts` wraps every terminal payload in a
-// `{ type: "result", status: "ok", data: ... }` envelope (with an
-// `{ type: "result", status: "error", error: { code, message, details } }`
-// shape on failure). The renderer's Doctor card therefore read
-// envelope keys instead of the issue list, and the Doctor
-// `CLI_UPGRADE_PENDING` issue was unreachable from the Pending CLI
-// Upgrade IPC projector.
-//
-// These tests pin the unwrap contract:
-//   - successful envelopes resolve to the inner `data` payload
-//   - the `CLI_UPGRADE_PENDING` issue code survives projection
-//   - error envelopes reject with `TraycerCliError` carrying the
-//     stable CLI error code, message, details, and stderr tail
-//   - long-running streaming commands fan progress events and still
-//     get JSON mode injected when the caller forgot `--json`
 
-// `resolveTraycerCliInvocation` always runs through `discoverCli` +
-// `resolveBundledCliPath`, regardless of packaging state. We satisfy
-// the discovery chain by setting `TRAYCER_CLI_BUNDLED_BIN` to a known
-// path - the actual binary isn't executed in this test (spawn is
-// stubbed), so the path just needs to be on disk and executable.
 vi.mock("electron", () => ({
   app: {
     getAppPath: (): string => "/tmp/traycer-test/desktop",
@@ -49,13 +26,7 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// `resolveTraycerCliInvocation` walks the real discovery chain (manifest →
-// PATH → bundled), which depends on the host machine's filesystem +
-// `isDevBuild`. Mock the discovery layer here so these tests pin the
-// `runTraycerCli*` envelope/error contract without coupling to the dev
-// CLI wrapper being staged at `~/.traycer/cli/dev/bin/traycer`. The
-// returned path is never actually exec'd - `node:child_process` is
-// stubbed below.
+// The returned path is never actually exec'd - `node:child_process` is stubbed below.
 vi.mock("../cli-discovery", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cli-discovery")>();
   return {
@@ -207,11 +178,6 @@ function configureExecFile(args: ExecFileSetupArgs): {
       callback(null, args.stdout, args.stderr);
       return;
     }
-    // execFile decorates its callback Error with stdout/stderr buffers
-    // and a numeric exit code in `code`. The @types/node ErrnoException
-    // types `code` as `string`, but at runtime non-zero exits assign a
-    // number - the wrapper's `toNumberOrNull(err.code)` covers that
-    // case. We attach the fields via a typed extension on Error.
     class ExecFileError extends Error {
       stdout = "";
       stderr = "";
@@ -312,14 +278,7 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
   });
 
   it("extracts the error envelope even when execFile rejects with an Error that lacks .stdout/.stderr (Electron/Node decoration gap)", async () => {
-    // Regression: the dev-wrapper / dev-mode invocation path was surfacing
-    // "Command failed: <cmd>" toasts because the Error reaching
-    // runTraycerCliJson's catch had no .stdout / .stderr attached, so
-    // envelope extraction read empty strings and fell through to the
-    // bare-error branch. The CLI's real `E_HOST_VERIFY_FAILED` message
-    // never made it to the user. `runTraycerCli` now (re-)attaches both
-    // buffers from the callback args before rejecting; this test pins
-    // that contract by simulating a callback Error that arrives bare.
+    // The CLI's real `E_HOST_VERIFY_FAILED` message never made it to the user.
     const envelope = {
       type: "result",
       status: "error",
@@ -355,13 +314,7 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
   });
 
   it("ignores progress events before the terminal result line", async () => {
-    // Fixup D2: a progress line trails the result line here, deliberately -
-    // if the loop just took whatever line came last (rather than genuinely
-    // skipping progress-typed events), it would wrongly select this
-    // trailing progress event instead of the result. Positioning every
-    // progress line before the result (the old fixture) made this
-    // indistinguishable from "last line wins", since both implementations
-    // would land on the same line.
+    // Positioning every progress line before the result (the old fixture) made this indistinguishable from "last line wins", since both implementations would land on the same line.
     const lines = [
       JSON.stringify({
         type: "progress",
@@ -534,16 +487,6 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
   });
 });
 
-// int#4840. The win32 SEA aborted in libuv teardown AFTER completing its work
-// (`src\win\async.c:76`), so the child emitted a full terminal `ok` line and
-// then exited non-zero. The streaming wrapper tested the exit code BEFORE
-// `sawTerminalOk`, so it threw away a payload it had already parsed - turning
-// a finished `host install` / `host ensure` into a reported failure.
-//
-// `runTraycerCliJson*` has always made the opposite call on the non-streaming
-// path (`host doctor` deliberately pairs an ok envelope with exitCode 1);
-// these pin the streaming path to the same contract, and pin the boundary so
-// the fix cannot widen into "ignore exit codes".
 describe("streamTraycerCliJson trusts a completed terminal result over the exit code", () => {
   it("resolves with the payload when a successful envelope is followed by a non-zero exit", async () => {
     const terminalLine = JSON.stringify({
@@ -603,12 +546,7 @@ describe("streamTraycerCliJson trusts a completed terminal result over the exit 
   });
 });
 
-// Fixup C4: `streamBundledTraycerCliJson`'s only cancellable caller
-// (`runDownloadLane`'s `AbortController`) used to abort a signal nothing
-// downstream ever read - the spawned subprocess ran to completion
-// regardless, so `removeTraycer`'s "abort the in-flight download" claim was
-// cosmetic. The subprocess must actually be killed the moment the signal
-// fires, and the awaited call must reject rather than hang.
+// The subprocess must actually be killed the moment the signal fires, and the awaited call must reject rather than hang.
 describe("streamTraycerCliJson kills the subprocess when its signal aborts", () => {
   it("kills the still-running child but waits for close before rejecting", async () => {
     const child = new HangingFakeChild();
@@ -680,11 +618,7 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
   });
 });
 
-// A kill this process never asked for - systemd stopping the unit, the OOM
-// killer, an operator's `kill` - leaves `code` null on `close`. That used to
-// fall through to the "emitted no terminal result" branch, which reads as a
-// CLI that ran fine and stayed silent, and is why flaky `host install`
-// failures could not be told apart from a genuinely silent CLI.
+// A kill this process never asked for - systemd stopping the unit, the OOM killer, an operator's `kill` - leaves `code` null on `close`.
 describe("streamTraycerCliJson reports an external kill by its signal", () => {
   it("names the signal instead of reporting a missing terminal result", async () => {
     const child = new HangingFakeChild();
@@ -752,10 +686,7 @@ describe("streamTraycerCliJson timeout waits for the child close", () => {
     }
   });
 
-  // traycer#585/#589: this budget is inactivity, not wall-clock. A 700MB
-  // host download on a throttled link runs far past any fixed ceiling we
-  // would be willing to set, but it never stops reporting - the CLI emits a
-  // progress event per chunk and heartbeats while a transfer is stalled.
+  // A 700MB host download on a throttled link runs far past any fixed ceiling we would be willing to set, but it never stops reporting.
   it("re-arms the idle budget on every event, and only kills a child that goes quiet", async () => {
     vi.useFakeTimers();
     try {
@@ -805,11 +736,6 @@ describe("streamTraycerCliJson timeout waits for the child close", () => {
 
 describe("runTraycerCliPlainJson preserves legacy plain-JSON output", () => {
   it("parses a single plain JSON document (no NDJSON envelope) for `host status --json`", async () => {
-    // `host status --json` predates the shared NDJSON runner - it
-    // emits a single pretty-printed JSON document on stdout. Routing
-    // it through `runTraycerCliJson` (envelope-only) would reject with
-    // "emitted no terminal result line"; `runTraycerCliPlainJson`
-    // returns the parsed object verbatim instead.
     const plain = {
       running: true,
       pidMetadata: {
@@ -915,12 +841,7 @@ describe("runTraycerCliPlainJson preserves legacy plain-JSON output", () => {
 });
 
 describe("runTraycerCliJson preserves successful envelopes on non-zero exit", () => {
-  // `traycer host doctor --json` emits a fully-formed
-  // `{type:"result", status:"ok", data:{issues:[...]}}` envelope and
-  // sets `exitCode=1` whenever any issue's severity is `error` or
-  // `fatal`. Desktop must render those issues - the helper must NOT
-  // discard the unwrapped success payload just because execFile
-  // surfaces the non-zero exit as a rejection.
+  // Desktop must render those issues - the helper must NOT discard the unwrapped success payload just because execFile surfaces the non-zero exit as a rejection.
   it("resolves with unwrapped data when stdout has a success envelope but exit code is non-zero (Doctor case)", async () => {
     const issues = [
       {
@@ -1030,14 +951,6 @@ describe("runTraycerCliJson preserves successful envelopes on non-zero exit", ()
 
 describe("runTraycerCliJson timeout must exceed the CLI's own lock wait (fixup A8)", () => {
   it("passes execFile a timeout that exceeds the CLI's 30s cli-lock wait, not merely matches or falls short of it", async () => {
-    // Every lock-taking CLI command this helper backs (`host service
-    // install/uninstall`, `host stamp-runtime`, `host free-port`, `host
-    // uninstall [--all]`) waits up to `waitMs: 30_000` internally on the
-    // shared cli-lock before terminally throwing `E_CLI_LOCK_BUSY`. A
-    // desktop subprocess timeout at or below that window SIGKILLs the CLI
-    // before it can ever emit that classification - and, worse, can kill
-    // it the instant after it wins the lock and enters its critical
-    // section (a torn install/staged/pid record).
     let capturedTimeout: number | null = null;
     execFileImpl = (_cmd, _args, opts, callback) => {
       capturedTimeout = (opts as { readonly timeout: number }).timeout;
@@ -1060,13 +973,7 @@ describe("runTraycerCliJson timeout must exceed the CLI's own lock wait (fixup A
 
 describe("CLI_UPGRADE_PENDING preservation through Desktop projection", () => {
   it("survives projectDoctorReport after envelope unwrapping", async () => {
-    // The bug we're guarding against: before this fix, the Doctor IPC
-    // handler called `projectDoctorReport(raw)` where `raw` was the
-    // envelope `{type:"result", status:"ok", data:{issues:[...]}}`,
-    // so `raw.issues` was `undefined` and the issue list - including
-    // the CLI_UPGRADE_PENDING card the Pending CLI Upgrade flow
-    // depends on - was silently lost. The fix routes raw through
-    // `runTraycerCliJson` which unwraps `data` first.
+    // The fix routes raw through `runTraycerCliJson` which unwraps `data` first.
     const pendingIssue = {
       code: "CLI_UPGRADE_PENDING",
       severity: "warning" as const,
@@ -1091,11 +998,6 @@ describe("CLI_UPGRADE_PENDING preservation through Desktop projection", () => {
     const data = await runTraycerCliJson<{
       issues: ReadonlyArray<typeof pendingIssue>;
     }>(["host", "doctor"]);
-    // Fixup D2: call the real projector instead of re-implementing its
-    // field reads inline - the earlier version manually mirrored the
-    // mapping logic, so a regression inside `projectDoctorReport` itself
-    // (e.g. silently dropping `fixAction`/`terminalCommand`) would not
-    // have been caught here.
     const { projectDoctorReport } =
       await import("../../ipc/host-management-ipc");
     const report = projectDoctorReport(data);
@@ -1106,12 +1008,7 @@ describe("CLI_UPGRADE_PENDING preservation through Desktop projection", () => {
   });
 });
 
-// Fixup A: `killError` (renamed from `timeoutError`) is only ever set when
-// NEITHER a terminal ok nor a terminal error envelope has been parsed yet.
-// A child that already delivered its outcome and then wedges in teardown
-// must settle on THAT outcome when the idle timer kills it - never the
-// generic "produced no output" message, which would degrade a preserved
-// `E_CLI_LOCK_BUSY` (or a completed ok!) into a contentless timeout.
+// A child that already delivered its outcome and then wedges in teardown must settle on THAT outcome when the idle timer kills it.
 describe("idle-kill salvages a terminal envelope already parsed (fixup A)", () => {
   it("resolves with the parsed data when the idle timer kills a child that already emitted a terminal ok line", async () => {
     vi.useFakeTimers();
@@ -1141,10 +1038,6 @@ describe("idle-kill salvages a terminal envelope already parsed (fixup A)", () =
       await Promise.resolve();
       child.stdout.emit("data", `${terminalLine}\n`);
 
-      // The ok line re-arms the idle timer (armIdleTimer runs on every
-      // parsed event); the child then wedges in teardown and produces
-      // nothing further, so the full budget elapses again before this
-      // wrapper kills it.
       await vi.advanceTimersByTimeAsync(5_000);
       expect(child.killed).toBe(true);
       expect(child.killSignal).toBe("SIGKILL");
@@ -1233,13 +1126,8 @@ describe("idle-kill salvages a terminal envelope already parsed (fixup A)", () =
   });
 });
 
-// Fixup B: `sawTerminalOk` is now checked BEFORE the `signal !== null`
-// branch in the `close` handler - a terminal ok followed by the process
-// dying to ANY signal (this wrapper's own kill or an external one) resolves
-// with the parsed data instead of rejecting as "killed by <signal>". The
-// no-envelope case (a signal with nothing parsed) is already pinned by
-// "streamTraycerCliJson reports an external kill by its signal" above; this
-// covers the salvage arm the reorder exists for.
+// Fixup B: `sawTerminalOk` is now checked BEFORE the `signal !== null` branch in the `close` handler.
+// The no-envelope case (a signal with nothing parsed) is already pinned by "streamTraycerCliJson reports an external kill by its signal" above.
 describe("close-handler ordering: a completed terminal ok wins over ANY signal (fixup B)", () => {
   it("resolves with the parsed data when an external signal (not this wrapper's own kill) arrives after a terminal ok line", async () => {
     const child = new HangingFakeChild();
@@ -1275,10 +1163,6 @@ describe("close-handler ordering: a completed terminal ok wins over ANY signal (
   });
 });
 
-// Fixup C: parity with the run path's 1 MiB `maxBuffer` anti-runaway guard.
-// An unterminated stdout "line" past `STREAM_LINE_CAP_BYTES` (1 MiB) is a
-// defective child - SIGKILLed rather than accumulated forever, since
-// unparsed bytes never re-arm the idle timer.
 describe("unterminated-line cap kills a runaway child (fixup C)", () => {
   it("SIGKILLs the child and rejects with 'unterminated' when stdout floods past the 1 MiB cap without a newline", async () => {
     const child = new HangingFakeChild();
@@ -1339,12 +1223,6 @@ describe("unterminated-line cap kills a runaway child (fixup C)", () => {
   });
 });
 
-// Fixup D: the rejections for (i) a non-zero exit without an envelope, (ii)
-// an external-signal kill without an envelope, (iii) exit 0 with no
-// terminal line, and (iv) the idle-kill message now append the LAST
-// non-empty stderr line via `appendStderrSummary`, so the message carries
-// the child's actual failure (e.g. "dyld: missing library") instead of
-// just the args.
 describe("stderr excerpt appended to every no-envelope rejection (fixup D)", () => {
   it("appends the last non-empty stderr line to the non-zero-exit rejection", async () => {
     spawnImpl = () =>

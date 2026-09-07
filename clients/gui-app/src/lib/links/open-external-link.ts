@@ -5,13 +5,7 @@ import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
 /**
- * The desktop bridge - the only door out of the app (A2, A5, A6).
- *
- * A RunnerHost request, so it is a TanStack Query mutation like every other
- * one (gui-app AGENTS.md, "Backend calls -> TanStack Query"): the key lives in
- * `runnerMutationKeys`, the failure toast is `onError`, and `isPending` is
- * what a link surface disables on while an OS handoff is outstanding - the job
- * the hand-rolled `useLinkOpenInFlight` guard used to do.
+ * Desktop bridge for opening an external URL via a TanStack Query mutation.
  */
 export function useOpenExternalLink(): UseMutationResult<void, Error, string> {
   const runnerHost = use(RunnerHostContext);

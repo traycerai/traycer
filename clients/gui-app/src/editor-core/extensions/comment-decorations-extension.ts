@@ -5,22 +5,7 @@ import type { EditorState, Transaction } from "@tiptap/pm/state";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 
 /**
- * Snapshot describing UI-only thread state the decorations layer needs to
- * paint over `threadAnchor` marks. Layered as ProseMirror inline decorations
- * (not stored on the mark) so the persisted Y.Doc never carries presentation
- * data.
- *
- * `resolvedThreadIds` removes anchors from the editor interaction surface.
- * The persisted mark remains in the document for history/round-trip parity,
- * but resolved threads should not paint active/hover/flash affordances.
- * `liveThreadIds` is the set of thread ids currently known to the comment
- * thread store. When non-null, anchors whose `threadId` is absent from this
- * set are treated as orphans (deleted thread, mark not yet stripped) and
- * suppressed from rendering. Pass `null` to disable filtering (e.g. before
- * the thread list has loaded - fall back to painting every mark so users
- * never lose visibility on slow networks).
- * `draftRange` is the editor doc range backing the floating draft popover;
- * absent when no draft is open.
+ * UI-only thread state as ProseMirror decorations, never stored on the mark. `liveThreadIds: null` paints every mark until the thread list loads.
  */
 export interface CommentDecorationSnapshot {
   readonly activeThreadId: string | null;
@@ -144,13 +129,7 @@ function readSnapshotFromMeta(
   return candidate[SNAPSHOT_META_KEY] as CommentDecorationSnapshot;
 }
 
-/**
- * Tiptap extension that paints thread-anchor visual state via ProseMirror
- * inline decorations. The React layer drives state by calling
- * `applyCommentDecorationSnapshot(editor, snapshot)` whenever the Zustand
- * comments store fires. The plugin recomputes decorations on every doc
- * change so newly-typed text inside an anchored range stays highlighted.
- */
+/** Inline decorations from applyCommentDecorationSnapshot. Recompute on every doc change so typed text inside an anchored range stays highlighted. */
 export const CommentDecorationsExtension = Extension.create({
   name: "commentDecorations",
 
@@ -194,9 +173,7 @@ export const CommentDecorationsExtension = Extension.create({
 });
 
 /**
- * Push a new presentation snapshot into the decorations plugin. Implemented
- * as a free helper (not a Tiptap `addCommands` augmentation) so we don't
- * need to merge into Tiptap's `Commands<ReturnType>` interface.
+ * Free helper, not addCommands, so we do not merge Tiptap's Commands interface.
  */
 export function applyCommentDecorationSnapshot(
   editor: Editor,

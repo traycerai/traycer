@@ -89,14 +89,9 @@ const LONG_PRESS_CONTEXT_MENU_MS = 500;
 interface TabItemProps {
   readonly tab: HeaderTab;
   readonly index: number;
-  /** `null` makes this a member control inside a group-level reorder frame. */
   readonly dnd: HeaderTabDndConfig | null;
-  /**
-   * `"own"` draws the tab's own chrome silhouette. `"member"` is for the halves
-   * of a split group: the group draws one shared silhouette around both, so a
-   * member drawing its own would nest a second outline inside it. Members get a
-   * flat focus wash and tighter padding instead.
-   */
+  /** `"member"` is for the halves of a split group: the group draws one shared silhouette around both, so a
+   * member drawing its own would nest a second outline inside it. */
   readonly chrome: "own" | "member";
   readonly includeMotionFrame: boolean;
   readonly offsetX: number;
@@ -126,21 +121,7 @@ export interface HeaderTabDndConfig {
   readonly isDropSlot: boolean;
 }
 
-/**
- * The client an epic rename should be sent on.
- *
- * `null` host - no live session for that epic - keeps the app-wide client,
- * which is what this surface used before tabs carried a host at all. A NAMED
- * host resolves that host's own requester, and returning `null` when it cannot
- * be built is deliberate: the caller reports a failure rather than falling
- * back, because "rename the epic on the machine that holds it" and "rename it
- * on whichever machine this window happens to be pointed at" are different
- * requests, and silently substituting the second is how a rename lands against
- * a host that never had the epic.
- *
- * Built through `buildDialableHostClient` - the same builder every other
- * explicit-host consumer uses - rather than a second construction path.
- */
+/** A named host resolves that host's own requester, and returning `null` when it cannot be built is deliberate. */
 function epicRenameClient(
   hostId: string | null,
 ): HostClient<HostRpcRegistry> | null {
@@ -234,21 +215,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
-      // The header strip is app-global and not guaranteed to sit inside a
-      // HostRuntimeProvider, so reach the host client through the snapshot
-      // rather than a render-time hook. It is the app-wide client, already
-      // pinned to the effective host: this rename used to be issued on the
-      // SPINE, which answered from the active slot, so the call landed on
-      // whichever host was bound at the instant it was dispatched. Post-P4.2
-      // the client addresses the host it resolved, and `hostId` below is that
-      // same resolution rather than a second, independently-timed read.
-      //
-      // HOST-SCOPED where the tab knows its host. An epic served by a session
-      // on host B was renamed through the app-wide client - host A - purely
-      // because the strip had no way to know about B. `tab.hostId` is that
-      // session's own answer projected onto the tab, so the rename now goes
-      // where the epic actually lives. `null` (no live session) keeps the
-      // app-wide client, which is all this surface ever had.
+      // The header strip is app-global and not guaranteed to sit inside a HostRuntimeProvider, so reach the host
+      // client through the snapshot rather than a render-time hook.
       const client = epicRenameClient(tabHostId);
       if (handle !== null) {
         const hostId = client?.getActiveHostId() ?? null;
@@ -289,11 +257,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       }
       const hostId = client.getActiveHostId();
       const userId = client.getRequestContextUserId();
-      // RETURNED, not voided: a two-arm `.then` does not catch what its own
-      // handlers throw, so the cache update below - and the toast helper in the
-      // other arm - had no terminal handler at all. Returning the chain routes
-      // that into this callback's own promise, which the commit site now
-      // settles.
+      // Returned, not voided: a two-arm `.then` does not catch what its own handlers throw, so the cache update
+      // below - and the toast helper in the other arm - had no terminal handler at all.
       return client
         .request("epic.updateTitle", {
           epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
@@ -322,9 +287,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           },
         );
     },
-    // `resolvedTabName` is gone from here with the capture/rollback pair that
-    // read it - the overlay reveals the authoritative title on failure rather
-    // than restoring a captured one, so this callback no longer depends on it.
+    // `resolvedTabName` is gone from here with the capture/rollback pair that read it - the overlay reveals the
+    // authoritative title on failure rather than restoring a captured one.
     [queryClient, tab],
   );
   const rename = useInlineRename({
@@ -332,10 +296,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     // "Untitled task" fallback into the input and persist it as a real title.
     value: resolvedTabName,
     canEdit: canEditTitle,
-    // Wrapped: the property is declared void-returning and the commit is a
-    // round trip now. Fire-and-forget, but SETTLED - the enqueue inside can
-    // reject on a real bridge fault, and unhandled that is a rename which
-    // silently did nothing.
+    // Fire-and-forget, but settled - the enqueue inside can reject on a real bridge fault, and unhandled that is a
+    // rename which silently did nothing.
     onCommit: (next: string) => {
       settleDetachedEpicTitleCommit(commitEpicTitle(next), "Epic tabs");
     },
@@ -345,10 +307,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     if (rename.isEditing) return;
     navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
   }, [navigate, rename.isEditing, tab]);
-  // Chrome selects a tab the moment a drag picks it up, not on release - the
-  // tab travelling under the pointer must be the active one. Click activation
-  // cannot cover this: a completed drag suppresses the click. Runs only on the
-  // false→true edge (isActive flips right after, ending the effect's work).
+  // Chrome selects a tab the moment a drag picks it up, not on release - the tab travelling under the pointer
+  // must be the active one. Click activation cannot cover this: a completed drag suppresses the click.
   useEffect(() => {
     if (!isDragging || isActive) return;
     activateTab();
@@ -422,9 +382,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           onTouchStart={handleTouchStart}
           className={cn(
             TAB_CLASS_BASE,
-            // A split half shares the group's silhouette and only has half the
-            // width, so it trades the tab's generous side padding for enough
-            // room to still show an icon plus a readable title.
+            // A split half shares the group's silhouette and only has half the width, so it trades the tab's generous side
+            // padding for enough room to still show an icon plus a readable title.
             chrome === "member" && cn("gap-1", isActive ? "px-5" : "px-1.5"),
             tabStateClass(isActive),
             NO_DRAG_CLASS,
@@ -517,7 +476,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   );
 });
 
-// Re-export for backwards compatibility with tests
 TabItem.displayName = "TabItem";
 
 interface UseHeaderTabDndReturn {
@@ -541,10 +499,8 @@ function useHeaderTabDnd(
     }),
     [config, tabId, tabKind],
   );
-  // A `tab:` strip item is already unique per tab, so it keys on the tab id
-  // alone. A split member shares its tab id with nothing but must stay distinct
-  // per half, so it keys on `<splitId>:<tabId>`; an unconfigured (undraggable)
-  // item falls back to the same shape under `member`.
+  // A split member shares its tab id with nothing but must stay distinct per half, so it keys on
+  // `<splitId>:<tabId>`; an unconfigured (undraggable) item falls back to the same shape under `member`.
   const stripItemId = config?.stripItemId ?? "member";
   const dragKey = stripItemId.startsWith("tab:")
     ? tabId
@@ -573,10 +529,8 @@ function useHeaderTabDnd(
       `${config?.stripItemId ?? "member"}:${tabId}`,
     ),
     data: dropData,
-    // The source stays mounted as a full-width layout placeholder while the
-    // overlay follows the pointer. It must not remain a collision target: once
-    // provisional order moves that placeholder under the pointer it would
-    // steal `over` from the neighbour whose center actually opened the slot.
+    // It must not remain a collision target: once provisional order moves that placeholder under the pointer it
+    // would steal `over` from the neighbour whose center actually opened the slot.
     disabled: config === null || !config.isDropSlot || isDragging,
   });
   const ref = useMemo(
@@ -590,10 +544,7 @@ function HeaderTabDropIndicator(props: {
   readonly visible: boolean;
   readonly side: "left" | "right";
 }) {
-  // No AnimatePresence: its exit animation keeps the OLD indicator mounted
-  // while the new one enters, so the strip shows two landing positions at once
-  // for the length of the exit (~110ms measured). A drop indicator states one
-  // destination, so it unmounts immediately and only its entry animates.
+  // A drop indicator states one destination, so it unmounts immediately and only its entry animates.
   if (!props.visible) return null;
   return (
     <m.span
@@ -661,7 +612,6 @@ function TabLeadingIcon(props: {
 function HeaderTabMotionFrame(props: {
   readonly isDragging: boolean;
   readonly offsetX: number;
-  /** Drag config; its `stripItemId` is the drag model's measurement anchor. */
   readonly dnd: HeaderTabDndConfig | null;
   readonly children: React.ReactNode;
 }) {
@@ -679,14 +629,8 @@ function HeaderTabMotionFrame(props: {
       initial={false}
       animate={{ opacity: props.isDragging ? 0 : 1 }}
       style={{ x }}
-      // Explicit x from the drag model - deliberately NOT `layout="position"`
-      // plus CSS `order`. That pairing strands a translateX when the item set
-      // changes under an in-flight projection; binding x to state makes the
-      // class unrepresentable rather than merely currently unreachable.
-      //
-      // Position springs, opacity does not: the dragged tab's source frame must
-      // become invisible on the same frame the overlay is painted, or the strip
-      // briefly shows two copies of one tab.
+      // Position springs, opacity does not: the dragged tab's source frame must become invisible on the same frame
+      // the overlay is painted, or the strip briefly shows two copies of one tab.
       transition={transition}
       data-strip-item-id={props.dnd?.stripItemId}
       data-strip-item-mergeable="true"
@@ -720,18 +664,8 @@ interface TabTrailingSlotProps {
   disabled: boolean;
 }
 
-/**
- * Inline trailing slot that defaults to zero width so compact tabs stay
- * icon-first. A container query reveals the close button only after the tab is
- * wide enough to spare the room, and only when one of:
- * - the user hovers a non-compact tab
- * - keyboard focus enters a non-compact tab
- * - the leader modifier is held (renders the digit badge)
- *
- * The collapsed close button stays mounted (just zero-width and
- * hidden) so the same `<Button>` keeps its focus + click behavior
- * across the hover transition.
- */
+/** A container query reveals the close button only after the tab is wide enough to spare the room, and only
+ * when one of: - the user hovers a non-compact tab - keyboard focus enters a non-compact tab. */
 function TabTrailingSlot(props: TabTrailingSlotProps) {
   const { label, testId, onClose, leaderBadge, active, disabled } = props;
   const showLeader = leaderBadge !== null;
@@ -780,11 +714,8 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
   );
 }
 
-/**
- * The hairline between two adjacent, non-active strip items. Exported because a
- * split group is a strip item too and needs the identical rule at its own right
- * edge - see `SplitTabItem`.
- */
+/** Exported because a split group is a strip item too and needs the identical rule at its own right edge - see
+ * `SplitTabItem`. */
 export function HeaderTabSeparator(props: { readonly visible: boolean }) {
   if (!props.visible) return null;
   return (
@@ -818,14 +749,7 @@ export function TabChrome(props: { readonly isActive: boolean }) {
   );
 }
 
-/**
- * Shown on the tab a pair-into-split drop would combine with, the moment the
- * pointer is on its approach half. The highlight covers ONLY the half the
- * DRAGGED tab will take - the side it approaches from, the same side the
- * commit writes. A full-tab ring reads inverted mid-drag: the opaque drag
- * overlay sits over the approach half, so the only visible part of a whole-tab
- * highlight is the OPPOSITE half.
- */
+/** Shown on the tab a pair-into-split drop would combine with, the moment the pointer is on its approach half. */
 function StripPairPreview(props: {
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
@@ -845,11 +769,7 @@ function StripPairPreview(props: {
   );
 }
 
-/**
- * Selection treatment for one member of a split group. The focused member uses
- * the same raised silhouette as an ordinary selected tab; group membership is
- * communicated independently by the split group's accent underline.
- */
+/** Selection treatment for one member of a split group. */
 export function SplitMemberChrome(props: { readonly focused: boolean }) {
   if (props.focused) {
     return (
@@ -919,10 +839,7 @@ function TabCap({
     side === "left"
       ? "M 20 0 L 15 0 C 10.6 0 8 2.8 8 7 L 8 32 C 8 36.8 4.8 40 0 40 L 20 40 Z"
       : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 40 20 40 L 0 40 Z";
-  // SVG strokes are centered on their path. Inset the top edge by half the
-  // stroke width so it occupies the same inside pixel row as the center's CSS
-  // border; placing it at y=0 clips the outer half and makes the center look
-  // like a second line at display scaling.
+  // SVG strokes are centered on their path.
   const outline =
     side === "left"
       ? "M -2 39.5 L 0 39.5 C 4.8 39.5 8 36.8 8 32 L 8 7 C 8 2.8 10.6 0.5 15 0.5 L 20 0.5"

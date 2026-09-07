@@ -1,15 +1,6 @@
 /**
- * A recording {@link EpicRuntimeAccountingPort}, for the suites that drive the
- * accounting seam without T5's real books.
- *
- * One site for the same reason `INERT_ROOT_STATE_PORT` is one: the port is a
- * type that fixtures MIRROR by hand, so every member added to it is a compile
- * error at each of them. It records rather than merely absorbing because the
- * seam's whole claim is about WHICH call a push turns into - a port that
- * swallowed everything would let a settle routed to the wrong member pass.
- *
- * `registerBooks` keeps the source, which is what lets a test call back into
- * the runtime's four inbound members the way the accountant does.
+ * A recording {@link EpicRuntimeAccountingPort}, for the suites that drive the accounting seam
+ * without T5's real books.
  */
 import type {
   EpicRuntimeAccountingPort,

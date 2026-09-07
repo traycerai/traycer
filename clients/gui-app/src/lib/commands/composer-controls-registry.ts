@@ -1,17 +1,6 @@
 /**
- * Imperative registry for the currently-focused composer's control
- * setters. Mirrors the `registerDynamicActionHandler` pattern in
- * `../keybindings/dispatch.ts`: a composer that matches the focused
- * kind (landing / chat-tile active) registers its setters on mount,
- * disposes on unmount or when it loses focus. The palette reads the
- * registry to dispatch model / provider / permission / reasoning
- * updates against whichever composer the user is actually editing.
- *
- * Single slot - at most one composer holds focus at a time. Last
- * registration wins; disposing the winner clears the slot even if
- * a loser is still registered. See `useRegisterFocusedComposerControls`
- * for the React entry point that enforces these semantics correctly
- * under mount / unmount / focus-change sequences.
+ * Imperative registry for the currently-focused composer's control setters.
+ * Mirrors the `registerDynamicActionHandler` pattern in `../keybindings/dispatch.ts`: a composer that matches the focused kind (landing / chat-tile active) registers its setters on mount, disposes on unmount or when it loses focus.
  */
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -28,15 +17,13 @@ export interface ComposerControls {
   readonly setServiceTier: (tier: ServiceTier) => void;
   readonly setPermission: (mode: PermissionMode) => void;
   /**
-   * Memory-aware harness SWITCH: restore that harness's last model + effort/tier
-   * (or its defaults). The palette "Switch provider" leaf and the picker rail
-   * funnel through this instead of `setSelection`.
+   * Memory-aware harness SWITCH: restore that harness's last model + effort/tier (or its defaults).
+   * The palette "Switch provider" leaf and the picker rail funnel through this instead of `setSelection`.
    */
   readonly switchHarness: (harnessId: ProviderId) => void;
   /**
-   * Memory-aware model PICK: keep the slug, restore that `(harness, model)`
-   * pair's effort/tier (or its defaults). The palette "Switch model" leaf and
-   * the picker's model rows funnel through this instead of `setSelection`.
+   * Memory-aware model PICK: keep the slug, restore that `(harness, model)` pair's effort/tier (or its defaults).
+   * The palette "Switch model" leaf and the picker's model rows funnel through this instead of `setSelection`.
    */
   readonly selectModel: (harnessId: ProviderId, modelSlug: string) => void;
 }
@@ -45,13 +32,8 @@ export interface FocusedComposerEntry {
   readonly kind: FocusedComposerKind;
   readonly controls: ComposerControls;
   /**
-   * The focused composer's target host - the client its own toolbar store
-   * reads the harness/model catalog through. The palette's "Pick provider" /
-   * "Pick model" subpages list THIS host's catalog, so what they offer is
-   * what `switchHarness` / `selectModel` can actually commit against; listing
-   * the app-wide default host's would offer a chat tab bound to another host
-   * providers it does not have. `null` while that host's client is still
-   * resolving (the subpages then list nothing rather than another host's).
+   * The focused composer's target host - the client its own toolbar store reads the harness/model catalog through.
+   * The palette's "Pick provider" / "Pick model" subpages list THIS host's catalog, so what they offer is what `switchHarness` / `selectModel` can actually commit against; listing the app-wide default host's would offer a chat tab bound to another host.
    */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
 }
@@ -93,8 +75,8 @@ function notify(): void {
 }
 
 /**
- * Test-only: wipe the registry so tests don't leak state between
- * each other. Call from `beforeEach` / `afterEach`.
+ * Test-only: wipe the registry so tests don't leak state between each other.
+ * Call from `beforeEach` / `afterEach`.
  */
 export function resetFocusedComposerControlsForTests(): void {
   registered = null;

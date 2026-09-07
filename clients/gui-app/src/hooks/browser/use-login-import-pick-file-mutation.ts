@@ -10,13 +10,7 @@ import type {
 import { browserMutationKeys, browserQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
-/**
- * "Import from a file…": the native picker runs in the desktop's main
- * process, so this renderer never sees a path - only the opaque source the
- * desktop registered for it, which is appended to the listing so the Pick
- * step can show it beside the discovered browsers. `null` is a cancelled
- * picker and changes nothing.
- */
+/** "Import from a file…": the native picker runs in the desktop's main process, so this renderer never sees a path - only the opaque source the desktop registered for it, which is appended to the listing so the Pick step can show it beside the discovered browsers. */
 export function useLoginImportPickFile(
   browserView: BrowserViewBridge | null,
 ): UseMutationResult<LoginImportSource | null, Error, void> {

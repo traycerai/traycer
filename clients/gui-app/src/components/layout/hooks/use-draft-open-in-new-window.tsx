@@ -29,21 +29,11 @@ export interface DraftNewWindowFlow {
   readonly requestOpenInNewWindow: (request: DraftNewWindowRequest) => void;
 }
 
-/**
- * A pasted image reaches the store as a hash roughly a debounce after
- * `putImage` settles, so the barrier is bounded by that plus the write itself,
- * not by anything a user waits on. The cap only exists so a node that never
- * resolves (a store failure whose reclaim already dropped it) cannot wedge the
- * gesture forever.
- */
+/** The cap only exists so a node that never resolves (a store failure whose reclaim already dropped it) cannot
+ * wedge the gesture forever. */
 const INGEST_SETTLE_TIMEOUT_MS = 5_000;
 
-/**
- * Resolve once the draft has no still-ingesting attachment, or `false` when the
- * budget runs out. A draft that has since disappeared counts as settled - the
- * move's own liveness check refuses it a moment later, and that refusal states
- * the real reason.
- */
+/** Resolve once the draft has no still-ingesting attachment, or `false` when the budget runs out. */
 function whenDraftImagesSettled(draftId: string): Promise<boolean> {
   const settled = (): boolean => {
     const draft = useLandingDraftStore
@@ -67,19 +57,8 @@ function whenDraftImagesSettled(draftId: string): Promise<boolean> {
   });
 }
 
-/**
- * Move a landing DRAFT into its own window - the epic move flow minus what a
- * draft does not have (no ownership registry, no cloud sync, so no
- * unsynced-edits dialog). A draft's substance is per-window local state, so
- * the move is: flush that state so the main process's snapshot is current,
- * wait out any attachment mid-ingest, stage the image bytes for
- * cross-partition handoff, relocate the per-window record via the move IPC,
- * then remove the local copy.
- *
- * `requestOpenDraftInNewWindow` is capability-probed: an older desktop shell
- * without the IPC silently no-ops, the same degradation contract as
- * `perWindowState.clear`.
- */
+/** `requestOpenDraftInNewWindow` is capability-probed: an older desktop shell without the IPC silently no-ops,
+ * the same degradation contract as `perWindowState.clear`. */
 export function useDraftOpenInNewWindowFlow(
   bridge: DesktopWindowsBridge | null,
 ): DraftNewWindowFlow {
@@ -94,10 +73,8 @@ export function useDraftOpenInNewWindowFlow(
       if (bridge === null || requestMove === undefined) return;
       const draftId = request.draftId;
       const ref: TabRef = { kind: "draft", id: draftId };
-      // Set the instant the move is confirmed, so the failure handler can tell
-      // "the bytes are still ours to clean up" from "the destination owns them
-      // now" - a throw AFTER the move (the local close, a navigation) must not
-      // delete a handoff the new window has not adopted yet.
+      // Set the instant the move is confirmed, so the failure handler can tell "the bytes are still ours to clean
+      // up" from "the destination owns them now".
       let moveConfirmed = false;
       void (async () => {
         // Step 1: drain the live editor's debounced writer so the content the
@@ -106,13 +83,10 @@ export function useDraftOpenInNewWindowFlow(
         // Step 2: wait out any attachment still ingesting. Before the tab is
         // separated, so a barrier that times out leaves the strip untouched.
         if (!(await whenDraftImagesSettled(draftId))) return;
-        // Step 3: a grouped draft cannot be handed over still paired -
-        // separate first, and let step 5's revalidation catch a refused
-        // separation, exactly as the epic move does.
+        // Step 3: a grouped draft cannot be handed over still paired - separate first, and let step 5's revalidation
+        // catch a refused separation, exactly as the epic move does.
         tabCommandCoordinator.separateBeforeMove(ref);
-        // Step 4: the durability barriers. Tab-strip separation first, then
-        // the per-window projection (which carries the draft's content) so the
-        // main process's source snapshot is current when the IPC reads it.
+        // Step 4: the durability barriers.
         if (hasPendingDesktopTabsWrite()) {
           const flushed = await flushDesktopTabsPersistence().then(
             () => true,
@@ -124,8 +98,8 @@ export function useDraftOpenInNewWindowFlow(
           .getState()
           .drafts.find((candidate) => candidate.id === draftId);
         if (draft === undefined) return;
-        // Stage bytes BEFORE the IPC: the destination adopts on its first
-        // projection, which can run the moment the window exists.
+        // Stage bytes before the IPC: the destination adopts on its first projection, which can run the moment the
+        // window exists.
         const hashes = draftImageHashes(draft.content);
         await stageDraftImageHandoff(draftId, hashes);
         const projected = await flushActiveDesktopPerWindowProjection().then(
@@ -156,13 +130,8 @@ export function useDraftOpenInNewWindowFlow(
           return;
         }
         moveConfirmed = true;
-        // Step 7: remove the local copy. The coordinator routes the removal
-        // through the same source mutation an ordinary close uses (layout
-        // entry + draft record + runtime teardown + image GC), with its echo
-        // suppression around it. Active-ness is read NOW, not captured before
-        // the awaits: the user may have navigated elsewhere mid-flow, and
-        // yanking them back to the landing page over a stale capture is worse
-        // than leaving them where they are.
+        // Active-ness is read now, not captured before the awaits: the user may have navigated elsewhere mid-flow, and
+        // yanking them back to the landing page over a stale capture is worse than leaving them where they are.
         const wasActive =
           router.state.location.pathname === draftPathname(draftId);
         tabCommandCoordinator.closeRefAfterConfirmed(ref);
@@ -174,9 +143,8 @@ export function useDraftOpenInNewWindowFlow(
           draftId,
           error: describeLogError(error),
         });
-        // The refusal returns above each clean up their own staging; a THROW
-        // is the one path that would otherwise strand the staged bytes in a
-        // handoff DB no window will ever adopt or delete.
+        // The refusal returns above each clean up their own staging; a throw is the one path that would otherwise
+        // strand the staged bytes in a handoff DB no window will ever adopt or delete.
         if (moveConfirmed) return;
         void discardDraftImageHandoff(draftId).catch(
           (cleanupError: unknown) => {

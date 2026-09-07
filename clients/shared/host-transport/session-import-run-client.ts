@@ -37,7 +37,6 @@ export interface SessionImportRunCompletePayload {
   readonly counts: SessionImportRunCounts;
 }
 
-/** Typed handlers for a `sessionImport.run@1.0` session. */
 export interface SessionImportRunCallbacks {
   readonly onStarted: (payload: SessionImportRunStartedPayload) => void;
   readonly onProgress: (payload: SessionImportRunProgressPayload) => void;
@@ -59,11 +58,7 @@ export interface SessionImportRunClientOptions {
 
 /**
  * Typed wrapper over `WsStreamClient` for `sessionImport.run@1.0`.
- *
- * Closing this does NOT abort the host-side run - that is the contract's whole
- * point, since the user is told to walk away while the tour continues. Closing
- * only stops this client hearing about it, which is why the run's progress is
- * folded into a module-level store rather than a component's state.
+ * Closing only stops this client hearing about it, which is why the run's progress is folded into a module-level store rather than a component's state.
  */
 export class SessionImportRunClient {
   private readonly session: IStreamSession;

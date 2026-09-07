@@ -1,13 +1,6 @@
 /**
  * `epic.subscribe@1.3` delta-seeded reattach - `EpicStreamClient` side.
- *
- * Covers the two OSS client contracts the ticket calls out:
- *
- *   - `subscribeWithParamsProvider` params carry `seedOffer` only when the
- *     provider returns non-null, and the no-offer case OMITS the key rather
- *     than sending `seedOffer: undefined`.
- *   - The provider is read live at every wire subscribe (including a
- *     reconnect's re-declare), never captured once at construction.
+ * - The provider is read live at every wire subscribe (including a reconnect's re-declare), never captured once at construction.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -143,7 +136,6 @@ function parseText(raw: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/** Every callback the contract requires, as no-ops - none are exercised here. */
 function noopCallbacks(): EpicStreamCallbacks {
   return {
     onSnapshot: () => {},

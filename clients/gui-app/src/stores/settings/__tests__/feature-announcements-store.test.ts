@@ -150,9 +150,8 @@ describe("useFeatureAnnouncementsStore", () => {
   });
 
   it("claim() loses to another window's record already in localStorage, and adopts it", () => {
-    // The other window's write, straight into storage - exactly what a
-    // second renderer's own `consume()`/`claim()` would have produced,
-    // without going through THIS window's store at all.
+    // The other window's write, straight into storage - exactly what a second renderer's own
+    // `consume()`/`claim()` would have produced, without going through THIS window's store at all.
     window.localStorage.setItem(
       PERSIST_KEY,
       JSON.stringify({

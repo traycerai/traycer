@@ -5,36 +5,11 @@
 import type { ComposerPromptSegment } from "./types";
 
 export const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
-// `terminal-agent` and `terminal` can be listed in either order: the pattern is
-// anchored at both ends, so a `terminal:` match on a `@terminal-agent:…` token
-// leaves `-agent` unconsumed, fails the anchor, and backtracks into the longer
-// arm. What the anchors buy is exactly that - no partial prefix can be
-// mistaken for a whole token.
-// `github-pr` / `github-issue` are listed ahead of the shorter prefixes for
-// readability only - the alternation is anchored at both ends, so no prefix can
-// swallow another's token.
-// `browser-tab:<title>` carries no `/epicId` segment (a browser tab is not
-// epic-entity-shaped the way `chat:`/`terminal:` are), so it gets its own
-// bare alternative rather than joining the `type:epicId/id` group.
+// `terminal-agent` and `terminal` can be listed in either order: the pattern is anchored at both ends, so a `terminal:` match on a `@terminal-agent:…` token leaves `-agent` unconsumed, fails the anchor, and backtracks into the longer arm.
 const COMPLETE_ENTITY_TOKEN_REGEX =
   /^(epic:[^/\s]+|browser-tab:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal|github-pr|github-issue):[^/\s]+\/[^\s]+)$/u;
 
-/**
- * A GitHub entity token ends at its reference, and nothing after it belongs.
- *
- * `MENTION_TOKEN_REGEX` captures a whole non-space run, and the entity pattern
- * accepts any non-space tail - so `@github-pr:acme/widgets#123,` carried the
- * comma INTO the path. The sent-message renderer then looks the attachment up
- * by that comma-suffixed path, misses the real one, and falls back to a generic
- * chip with the punctuation swallowed into its label. Typing a comma after a
- * mention is ordinary, so this is the common case rather than the exotic one.
- *
- * Trimmed only for GitHub tokens, and only because their grammar states where
- * they END: the reference is `#` followed by digits, so anything after the
- * final digit run provably is not part of the token. The other entity kinds
- * have no such terminator - trimming them would be guesswork about which
- * trailing characters are meaningful, and their behaviour here is unchanged.
- */
+/** A GitHub entity token ends at its reference, and nothing after it belongs. */
 const GITHUB_ENTITY_TOKEN_REGEX = /^(?:github-pr|github-issue):[^\s]*#\d+/u;
 
 /** The token itself, with any trailing non-reference characters returned to the text. */

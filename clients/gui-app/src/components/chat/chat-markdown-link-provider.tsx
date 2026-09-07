@@ -21,15 +21,7 @@ interface ChatMarkdownLinkProviderProps {
   readonly children: ReactNode;
 }
 
-/**
- * Wires the chat's file-link handler into context. The link-resolution policy
- * itself lives in `buildChatLinkPolicy` (a pure builder, unit-testable without a
- * React tree); this component owns only the React lifecycle the policy needs:
- * the projection-wait cancel handle and the disposed flag, plus the unmount
- * effect that tears down an in-flight wait. Those are exposed to the builder as
- * accessor deps so a superseding click or an unmount can cancel a wait without
- * the builder owning hooks. See `buildChatLinkPolicy` for the link semantics.
- */
+/** Wires the chat's file-link handler into context. The link-resolution policy itself lives in `buildChatLinkPolicy` (a pure builder, unit-testable without a React tree); this component owns only the React lifecycle the policy needs: the projection-wait cancel handle and the disposed flag, plus the unmount effect that tears down an in-flight wait. */
 export function ChatMarkdownLinkProvider({
   tabId,
   workspaceRoots,
@@ -43,12 +35,7 @@ export function ChatMarkdownLinkProvider({
   const openEpicId = useOpenEpicId();
   const epicHandle = useOpenEpicHandle();
 
-  // The same-epic open kicks off a projection wait (`store.subscribe` + a 30s
-  // timeout) that settles asynchronously. Retain its cancel handle so a
-  // superseding click or an unmount tears it down — otherwise it can fire into
-  // a torn-down tab. `disposedRef` additionally suppresses the deferred opens
-  // (the resolve `.then` and the wait's `onUnavailable`) once unmounted, since
-  // cancelling the wait itself drives `onUnavailable` → the file preview.
+  // Retain its cancel handle so a superseding click or an unmount tears it down - otherwise it can fire into a torn-down tab.
   const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   // Monotonic supersession token: each click bumps it so a slow earlier RPC
@@ -101,11 +88,8 @@ export function ChatMarkdownLinkProvider({
   const linkPolicy = useMemo<MarkdownLinkPolicy>(
     () => ({
       supersedePendingFileLink,
-      // The lifecycle accessors are built HERE, inside the click handler, so
-      // reading the refs' `.current` happens at click / wait-settle time (an
-      // event context) — never during render. That keeps `buildChatLinkPolicy`
-      // a pure, hookless function while the cancel handle + disposed flag stay
-      // owned by this component's refs and unmount effect.
+      // The lifecycle accessors are built HERE, inside the click handler, so reading the refs' `.current` happens at click / wait-settle time (an event context) - never during render.
+      // That keeps `buildChatLinkPolicy` a pure, hookless function while the cancel handle + disposed flag stay owned by this component's refs and unmount effect.
       openFileLink: (link) => {
         if (runChatLink === null) {
           toast("Couldn't open link");

@@ -35,10 +35,7 @@ interface UseBrowserAnnotationSessionArgs {
   readonly fallbackChatId: string | null;
 }
 
-/**
- * Starts/cancels the native annotation overlay, routes attach payloads into
- * the selected composer, and pushes live target choices while a session is open.
- */
+/** Starts/cancels the native annotation overlay, routes attach payloads into the selected composer, and pushes live target choices while a session is open. */
 export function useBrowserAnnotationSession(
   args: UseBrowserAnnotationSessionArgs,
 ): BrowserAnnotationSessionController {

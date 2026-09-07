@@ -60,36 +60,19 @@ export interface DiffContentPrimitiveProps {
   readonly editAdapter?: DiffClickToEditAdapter;
   readonly editSession?: {
     readonly editorOptions: EditorOptions<undefined>;
-    /**
-     * Full baseline file contents, already fetched before this prop is ever
-     * set. Hydrated into the parsed diff synchronously (see
-     * `hydrateFileDiffForEdit`) so `<FileDiff>` never receives a partial
-     * `FileDiffMetadata` while `edit` is true - `@pierre/diffs` treats a
-     * fresh partial object for the same file as an unrelated render model
-     * and never re-attempts hydration for it (see FileDiffMetadata.isPartial
-     * in @pierre/diffs' types), which otherwise permanently strands the
-     * editor without ever attaching a contentEditable surface.
-     */
+    /** Hydrated into the parsed diff synchronously (see `hydrateFileDiffForEdit`) so `<FileDiff>` never receives a
+     * partial `FileDiffMetadata` while `edit` is true. */
     readonly oldFile: FileContents | null;
     readonly newFile: FileContents;
   };
-  /**
-   * Host metadata hint that the target file has zero bytes on disk. The
-   * renderer always verifies this against the parsed diff before exposing
-   * the empty-origin path: a stale or placeholder size must never replace a
-   * real `<FileDiff>` with the whole-file `<File>` editor.
-   */
+  /** The renderer always verifies this against the parsed diff before exposing the empty-origin path: a stale or
+   * placeholder size must never replace a real `<FileDiff>` with the whole-file `<File>` editor. */
   readonly isEmptyFile: boolean;
 }
 
 export interface DiffContentFrameFileIdentity {
-  /** Repo/workspace-relative path this host renders - `data-diff-find-file`. */
   readonly findFilePath: string;
-  /**
-   * Disambiguates same-path hosts (e.g. staged vs. unstaged) -
-   * `data-bundle-diff-file-id`. Reuse a shared builder (e.g.
-   * `gitBundleDiffFindFileId`) rather than hand-formatting this per surface.
-   */
+  /** Reuse a shared builder (e.g. `gitBundleDiffFindFileId`) rather than hand-formatting this per surface. */
   readonly bundleFindFileId: string;
 }
 
@@ -103,16 +86,8 @@ export interface DiffContentFrameProps {
   readonly onKeyDownCapture?: (event: KeyboardEvent<HTMLDivElement>) => void;
   readonly onPointerDownCapture?: (event: PointerEvent<HTMLDivElement>) => void;
   readonly editorBoundary?: boolean;
-  /**
-   * Stable file identity for cross-surface find/navigation and exact-host
-   * resolution (parity with `DiffBundleFileSectionFrame`, which stamps the
-   * same attributes on its own outer wrapper for the aggregate view). `null`
-   * while this host's file isn't resolvable yet. Every caller of this frame
-   * should supply one instead of leaving single-file/workspace hosts with
-   * only the generic `data-diffs-host` marker - see ADR on Diffs host
-   * identity for why an ambiguous host is unsafe for both automation and the
-   * app's own find/focus/ownership logic.
-   */
+  /** Every caller of this frame should supply one instead of leaving single-file/workspace hosts with only the
+   * generic `data-diffs-host` marker. */
   readonly fileIdentity: DiffContentFrameFileIdentity | null;
   readonly children: ReactNode;
 }
@@ -150,12 +125,8 @@ export function DiffContentFrame(props: DiffContentFrameProps): ReactNode {
   );
 }
 
-/**
- * Source-agnostic diff renderer. Owns the `@pierre/diffs` pipeline
- * (`parsePatchFiles` -> `<FileDiff>`) so live Git diffs, chat snapshot tiles,
- * and inline file-change blocks share rendering, theming, and view options
- * without coupling callers to the epic-canvas package.
- */
+/** Owns the `@pierre/diffs` pipeline (`parsePatchFiles` -> `<FileDiff>`) so live Git diffs, chat snapshot
+ * tiles, and inline file-change blocks share rendering, theming. */
 export function DiffContentPrimitive(
   props: DiffContentPrimitiveProps,
 ): ReactNode {
@@ -196,29 +167,14 @@ export function DiffContentPrimitive(
   const pierreOverflow = resolvePierreOverflow(props.wordWrap);
   const confirmedEmptyNewFile =
     props.isEmptyFile && isConfirmedEmptyNewFileDiff(fileDiffs);
-  // An empty file's `FileDiffMetadata` carries zero hunks, so it never
-  // renders a clickable line/token - `emptyOriginAdapter` is the adapter to
-  // activate through when that's true, or `null` when the affordance
-  // shouldn't show (not empty, no adapter, or a real editor already
-  // attached). Narrowing this way (rather than a separate boolean) lets
-  // TypeScript track that the adapter is defined everywhere it's used below.
+  // An empty file's `FileDiffMetadata` carries zero hunks, so it never renders a clickable line/token.
   const emptyOriginAdapter =
     confirmedEmptyNewFile &&
     props.editAdapter !== undefined &&
     !props.editAdapter.attached
       ? props.editAdapter
       : null;
-  // A diff with zero hunks (an empty new/untracked file) never renders a
-  // content element at all in `<FileDiff>` - the library's own edit-attach
-  // completion logic needs to find one in the DOM and gives up silently
-  // when it can't, permanently stranding the editor without ever attaching
-  // (proven against the real, unmocked library in
-  // `git-diff-empty-file-edit.test.ts`; `<File>` has no such gap, since it
-  // falls back to a single empty row instead of rendering nothing). There is
-  // genuinely nothing to diff for a brand-new empty file anyway, so once
-  // editing starts for one, render the plain single-file editor instead of
-  // the diff pipeline - same editor session, same activation adapter, same
-  // autosave path, just a different `@pierre/diffs` component underneath.
+  // A diff with zero hunks (an empty new/untracked file) never renders a content element at all in `<FileDiff>`.
   const emptyFileEditSession =
     confirmedEmptyNewFile && props.editSession !== undefined
       ? props.editSession
@@ -253,12 +209,8 @@ function resolvePierreOverflow(wordWrap: boolean): "wrap" | "scroll" {
   return wordWrap ? "wrap" : "scroll";
 }
 
-/**
- * The plain `<File>` fallback exists only for a genuinely empty, newly-added
- * file: `@pierre/diffs` renders that zero-hunk model with no attachable line.
- * Treat the host's byte-size field as a hint and require the parsed/hydrated
- * model to agree, preserving in-place `<FileDiff edit>` for every real diff.
- */
+/** The plain `<File>` fallback exists only for a genuinely empty, newly-added file: `@pierre/diffs` renders
+ * that zero-hunk model with no attachable line. */
 function isConfirmedEmptyNewFileDiff(
   fileDiffs: ReadonlyArray<FileDiffMetadata>,
 ): boolean {
@@ -272,7 +224,6 @@ function isConfirmedEmptyNewFileDiff(
   );
 }
 
-/** Extracted to avoid a nested ternary across the empty-file/diff/loading three-way branch. */
 function renderDiffContentBody(args: {
   readonly emptyFileEditSession: NonNullable<
     DiffContentPrimitiveProps["editSession"]
@@ -286,19 +237,13 @@ function renderDiffContentBody(args: {
   readonly resolvedTheme: ResolvedTheme;
 }): ReactNode {
   const { emptyFileEditSession, props } = args;
-  // Changing this inert comment when the edit cache becomes ready makes
-  // @pierre/diffs force one render of the hydrated model before its sibling
-  // edit-attach layout effect runs. The host node stays mounted; only the
-  // library's internal render cache is refreshed.
+  // Changing this inert comment when the edit cache becomes ready makes @pierre/diffs force one render of the
+  // hydrated model before its sibling edit-attach layout effect runs.
   const diffUnsafeCSS = args.nonEmptyEditorReady
     ? `${DIFF_PANEL_WITH_FIND_UNSAFE_CSS}\n/* traycer-edit-cache-ready */`
     : DIFF_PANEL_WITH_FIND_UNSAFE_CSS;
-  // Ahead of every branch below, including the empty-file editor: the gate is
-  // what holds a `@pierre/diffs` component back until the worker pool is in
-  // context, and a component that mounts without one highlights on the main
-  // thread for the rest of its life (see `use-diff-highlight-ready.ts`). An
-  // empty new file is the one surface where that lifetime is spent growing -
-  // the person is typing into it - so it is the last place to skip the wait.
+  // An empty new file is the one surface where that lifetime is spent growing - the person is typing into it -
+  // so it is the last place to skip the wait.
   if (!args.highlightReady) {
     return <DiffHighlightLoading testId="diff-highlighting" />;
   }
@@ -324,13 +269,8 @@ function renderDiffContentBody(args: {
     <FileDiff
       key={fileDiff.name}
       fileDiff={fileDiff}
-      // `hydrateFileDiffForEdit` can leave a file still partial (a
-      // legitimately missing required side for change/rename-changed).
-      // `@pierre/diffs` never re-attempts hydration for a partial diff once
-      // `edit` flips true, so claiming a working editor here would silently
-      // strand it the same way an unhydrated diff always did - render
-      // read-only instead and let the caller's own validation (see
-      // `validateGitEditContents`) surface the unavailable state.
+      // `@pierre/diffs` never re-attempts hydration for a partial diff once `edit` flips true, so claiming a working
+      // editor here would silently strand it the same way an unhydrated diff always did.
       edit={args.nonEmptyEditorReady ? !fileDiff.isPartial : false}
       editorOptions={
         !args.nonEmptyEditorReady || fileDiff.isPartial
@@ -357,21 +297,7 @@ function renderDiffContentBody(args: {
   ));
 }
 
-/**
- * Synchronously upgrades a patch-parsed (always partial) `FileDiffMetadata`
- * to a fully loaded one before it ever reaches `<FileDiff edit={true}>`.
- *
- * `@pierre/diffs` only attempts to hydrate a partial diff once, at the
- * moment an editor first attaches to it (`FileDiff.attachEditor` ->
- * `loadFilesIfNecessary`), and only for `change`/`rename-changed`/
- * `rename-pure` types. A later render that hands it a *different* partial
- * `FileDiffMetadata` object for the same file - which is exactly what a
- * fresh `parsePatchFiles()` call produces - is "treated as a new partial
- * render model" per the library's own `FileDiffMetadata.isPartial` docs,
- * permanently stranding the editor without a hydration attempt. Doing the
- * hydration ourselves, before `edit` ever flips true, sidesteps that
- * async race entirely.
- */
+/** Doing the hydration ourselves, before `edit` ever flips true, sidesteps that async race entirely. */
 function hydrateFileDiffForEdit(
   fileDiff: FileDiffMetadata,
   oldFile: FileContents | null,
@@ -385,8 +311,7 @@ function hydrateFileDiffForEdit(
     if (oldFile === null) return fileDiff;
     return hydratePartialDiff("clone", fileDiff, { oldFile, newFile });
   }
-  // "new" / "deleted": hydratePartialDiff has no case for these (they carry
-  // their full content in the patch already) - build a full, non-partial
-  // diff straight from file contents instead.
+  // "new" / "deleted": hydratePartialDiff has no case for these (they carry their full content in the patch
+  // already) - build a full, non-partial diff straight from file contents instead.
   return parseDiffFromFile(oldFile, newFile);
 }

@@ -10,12 +10,7 @@ export type FolderPickerIntent =
 
 interface RemoteFolderPickerState {
   readonly open: boolean;
-  /**
-   * Client of the surface that requested the pick. Tabs are bound to a host
-   * for life, so every browse level AND the eventual path use exactly this
-   * client - the globally mounted dialog must not fall back to the app-wide
-   * active host, which can be a different machine.
-   */
+  /** Client of the surface that requested the pick. */
   readonly client: HostClient<HostRpcRegistry> | null;
   /** Monotonic per-request id; keys the dialog body so its state resets. */
   readonly requestId: number;
@@ -24,9 +19,8 @@ interface RemoteFolderPickerState {
   /** Pending requester's resolver; settled exactly once per request. */
   readonly resolvePick: ((intent: FolderPickerIntent | null) => void) | null;
   /**
-   * Open the picker on the requester's client and resolve with the chosen
-   * host operation, or null on cancel/dismiss. A second request while one is
-   * open cancels the first (resolves it null) rather than stacking dialogs.
+   * Open the picker on the requester's client and resolve with the chosen host operation, or null on
+   * cancel/dismiss.
    */
   readonly requestPick: (
     client: HostClient<HostRpcRegistry>,
@@ -36,10 +30,8 @@ interface RemoteFolderPickerState {
 }
 
 /**
- * Promise-based bridge between `pickAndPrepareFolders` (an imperative flow
- * that awaits a folder choice) and the globally mounted picker. Local and
- * remote hosts share this path so pasted paths, navigation and recents behave
- * identically on every client shell.
+ * Promise-based bridge between `pickAndPrepareFolders` (an imperative flow that awaits a folder
+ * choice) and the globally mounted picker.
  */
 const FOLDER_PICKER_PERSIST_KEY = persistKey(
   STORE_KEYS.folderPickerPreferences,

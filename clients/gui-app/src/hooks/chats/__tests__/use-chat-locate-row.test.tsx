@@ -4,17 +4,7 @@ import type { ChatLocateRowResponse } from "@traycer/protocol/host/agent/gui/sub
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 
 /**
- * `chat.locateRow` answers with an ORDINAL, and an ordinal means nothing
- * without the coordinate space it was numbered in. This is a unary RPC on a
- * different connection from the stream, so a restore or a compaction between
- * the host numbering the row and this hook returning the number leaves the
- * client holding a position in a space it has left - in range, fetchable, and
- * pointing at a plausible wrong row, which nothing downstream can detect.
- *
- * These pin both halves of the guard: the epoch is part of the cache key, so a
- * re-base re-asks rather than being served the previous space's answer; and the
- * answer is compared before use, so one already in flight when the re-base
- * happened is discarded rather than jumped to.
+ * `chat.locateRow` ordinals are epoch-keyed. A re-base re-asks; an in-flight answer from the previous space is discarded.
  */
 interface CapturedHostQuery {
   readonly client: object | null;

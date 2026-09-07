@@ -32,25 +32,12 @@ export const HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT = 50;
 export const HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT = 50;
 
 /**
- * The host expires presence records after a short TTL (15s at the time of
- * writing) so a dead window can't suppress deliveries forever. A change-driven
- * presence send alone therefore goes stale whenever the user simply stays on
- * one tab — exactly the case suppression exists for — so the stream re-sends
- * the current presence on this cadence, comfortably inside that TTL.
+ * The host expires presence records after a short TTL (15s at the time of writing) so a dead
+ * window can't suppress deliveries forever.
  */
 export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 
-/**
- * The feed parses against the NEWEST frame union (`@1.2`), not a released one.
- * Stream versions negotiate to `min(client, host)` per method, so a GUI built
- * from this protocol tree lands on `@1.2` against a host built from it too -
- * and parsing those frames with an older schema would reject any
- * `host.operation.finished` or `browser.human.needed` row, which this store
- * treats as connection corruption and answers with a reconnect into a snapshot
- * carrying the same row. Against an older host the negotiated version drops
- * back to `@1.1`/`@1.0`, whose frames are strict subsets of this union and
- * still parse.
- */
+/** The feed parses against the NEWEST frame union (`@1.2`), not a released one. */
 export type HostNotificationFeedEntry = HostNotificationEntryV22;
 
 export type HostNotificationsFeedFrame = Extract<
@@ -68,10 +55,10 @@ export type HostNotificationsPageStatus = "idle" | "loading" | "error";
 
 interface PageMergeExpectation<Cursor> {
   readonly snapshotEpoch: number;
-  /** Captured `liveLifecycleRevision` at request start. A page response can
-   * merge rows / advance its cursor only while this still matches - any live
-   * frame landing after the request began (e.g. an exact removal) must
-   * discard the whole response rather than risk resurrecting a pruned row. */
+  /**
+   * Captured `liveLifecycleRevision` at request start. A page response can merge rows / advance its
+   * cursor only while this still matches - any live frame landing after the request began (e.g.
+   */
   readonly liveLifecycleRevision: number;
   readonly cursor: Cursor | null;
 }
@@ -84,20 +71,20 @@ interface HostNotificationsState {
   readonly attentionCursor: HostNotificationsAttentionCursor | null;
   readonly recentCursor: HostNotificationsChronologicalCursor | null;
   readonly unreadRecentCursor: HostNotificationsChronologicalCursor | null;
-  /** Unlike the other two tracks, a `null` `unreadRecentCursor` is ambiguous
-   * between "never loaded" and "exhausted". This disambiguates it: `true`
-   * once any `unreadRecent` page has successfully merged, so `null` + `true`
-   * means genuinely exhausted. Resets alongside the cursor on every snapshot
-   * (host reconnect/switch/identity change). */
+  /**
+   * Unlike the other two tracks, a `null` `unreadRecentCursor` is ambiguous between "never loaded"
+   * and "exhausted".
+   */
   readonly unreadRecentHasLoadedOnce: boolean;
   readonly attentionStatus: HostNotificationsPageStatus;
   readonly recentStatus: HostNotificationsPageStatus;
   readonly unreadRecentStatus: HostNotificationsPageStatus;
   readonly connectionStatus: StreamConnectionStatus;
   readonly snapshotEpoch: number;
-  /** Monotonic counter bumped on every live server-pushed lifecycle frame
-   * (upsert/read-state/removal). Page requests capture it; a response whose
-   * captured value no longer matches is discarded outright. */
+  /**
+   * Monotonic counter bumped on every live server-pushed lifecycle frame
+   * (upsert/read-state/removal).
+   */
   readonly liveLifecycleRevision: number;
 
   applySnapshot: (snapshot: {
@@ -404,10 +391,8 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
 
     mergeAttentionPage: (entries, nextCursor, expected) => {
       set((state) => {
-        // Every expected token must match before ANY row merges or the
-        // cursor advances - a stale epoch/cursor is rejected outright rather
-        // than partially enriching `byId`, or a crossed reset/snapshot could
-        // still smuggle a prior identity's rows into the live replica.
+        // Every expected token must match before ANY row merges or the cursor advances - a stale
+        // epoch/cursor is rejected outright rather than partially enriching `byId`, or a crossed
         const stale =
           state.liveLifecycleRevision !== expected.liveLifecycleRevision ||
           state.snapshotEpoch !== expected.snapshotEpoch ||
@@ -460,17 +445,6 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
       );
     },
 
-    // `snapshotEpoch`/`liveLifecycleRevision` are ADVANCED here, never
-    // restored to zero AND never merely preserved: an in-flight request
-    // captures one of these tokens before this fires, and preserving them
-    // unchanged would leave the exact captured pair still matching for the
-    // whole cleared pre-snapshot interval - until a replacement snapshot
-    // finally bumps the epoch - letting that stale, prior-identity response
-    // merge into the now-empty replica. Bumping both immediately, right here,
-    // closes that window entirely: no captured token can match again from the
-    // instant reset runs. Both counters only ever increase for the store's
-    // entire lifetime, across every reset, so a captured token can never
-    // match again once superseded.
     reset: () =>
       set((state) => ({
         ...initialState(),
@@ -482,12 +456,8 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
 
 export function openHostNotificationsStream(
   /**
-   * THE reconnect policy for this stream's host (redesign P4.1 /
-   * connection-registry §6), acquired from the connection registry by the one
-   * place that opens these streams. This store no longer constructs its own
-   * scheduler: the constants, the terminal-close classification and the
-   * backoff shape live once, in the engine, and each stream still gets its
-   * own independent lane so a sibling stream's refusal cannot pace it.
+   * THE reconnect policy for this stream's host (redesign P4.1 / connection-registry §6), acquired
+   * from the connection registry by the one place that opens these streams.
    */
   reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
@@ -509,11 +479,8 @@ export function openHostNotificationsStream(
   let lastSentPresenceKey: string | null = null;
   let lastNotifiedPresenceKey: string | null = null;
 
-  // A terminal close ("closed" + fatalError) DISPOSES the transport session:
-  // `requestReconnect` and wake-time `forceReconnect` are both no-ops on it,
-  // so without this reopen a single bad window (e.g. the host briefly unable
-  // to validate bearers) leaves notifications dead until app restart while
-  // the rest of the app self-heals through per-interaction re-subscribes.
+  // A terminal close ("closed" + fatalError) DISPOSES the transport session: `requestReconnect` and
+  // wake-time `forceReconnect` are both no-ops on it, so without this reopen a single bad window
   const reopenScheduler = reconnectEngine.openReopenLane(() => {
     currentSession?.close();
     currentSession = null;
@@ -521,12 +488,6 @@ export function openHostNotificationsStream(
   }, isReopenableNotificationsStreamClose);
 
   // Presence has two consumers with deliberately independent gates:
-  //  - `onPresenceChanged` (local): drives entity read-consumption over the
-  //    unary RPC channel, so focusing a tab clears its indicators even while
-  //    this stream is down. Deduplicated by content only.
-  //  - the stream send (host): refreshes the host's TTL'd presence record
-  //    for delivery suppression, and is only possible while subscribed.
-  //    `forceSend` bypasses the content dedupe for the heartbeat/open cases.
   const emitPresence = (input: {
     readonly forceSend: boolean;
     readonly forceNotify: boolean;
@@ -562,10 +523,8 @@ export function openHostNotificationsStream(
     emitPresence({ forceSend: true, forceNotify: false });
   }, HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
 
-  // A stream frame that fails the contract-specific schema is a
-  // connection-integrity failure: the exact summary can no longer be
-  // trusted, so the store degrades to unknown and the session redials for a
-  // fresh atomic snapshot. Already-rendered rows are left untouched.
+  // A stream frame that fails the contract-specific schema is a connection-integrity failure: the
+  // exact summary can no longer be trusted, so the store degrades to unknown and the session redials
   const reconnect = (): void => {
     if (disposed) return;
     useHostNotificationsStore.getState().markSummaryUnknown();
@@ -586,9 +545,8 @@ export function openHostNotificationsStream(
       // A superseded session (replaced by a reopen) must not touch the
       // replica or the status projection its successor now owns.
       if (currentSession !== session) return;
-      // Notification frames are contractually text-only; an unexpected
-      // binary payload is the same connection-integrity failure as a
-      // malformed text envelope, not a silently ignorable frame.
+      // Notification frames are contractually text-only; an unexpected binary payload is the same
+      // connection-integrity failure as a malformed text envelope, not a silently ignorable frame.
       if (binaryPayload !== null) {
         reconnect();
         return;
@@ -603,11 +561,6 @@ export function openHostNotificationsStream(
       switch (frame.kind) {
         case "snapshot":
           useHostNotificationsStore.getState().applySnapshot(frame);
-          // A schema-valid snapshot — not the raw transport `open` — is the
-          // proof the stream is actually usable; the host resolver's async
-          // init can still terminate the session after `open`, and resetting
-          // there would pin the reopen backoff at its floor through an
-          // init-failure loop.
           reopenScheduler.resetBackoff();
           options.onFeedFrame(frame);
           return;
@@ -658,9 +611,8 @@ export function openHostNotificationsStream(
         streamOpen = true;
         lastSentPresenceKey = null;
         options.onStreamOpened();
-        // `forceNotify`: `onStreamOpened` just reset the consumer's active
-        // entity, so the focused entity must be re-consumed even though its
-        // content key is unchanged.
+        // `forceNotify`: `onStreamOpened` just reset the consumer's active entity, so the focused entity
+        // must be re-consumed even though its content key is unchanged.
         emitPresence({ forceSend: true, forceNotify: true });
       } else {
         streamOpen = false;
@@ -750,9 +702,8 @@ export function makeSelectHostNotificationById(id: string) {
 }
 
 export function useHostNotificationIds(): ReadonlyArray<string> {
-  // `selectHostNotificationIds` always allocates a fresh array; shallow-
-  // compare the contents so subscribers don't re-render in a loop when
-  // `byId` is stable.
+  // `selectHostNotificationIds` always allocates a fresh array; shallow- compare the contents so
+  // subscribers don't re-render in a loop when `byId` is stable.
   return useHostNotificationsStore(useShallow(selectHostNotificationIds));
 }
 
@@ -767,10 +718,6 @@ export function useHostNotificationById(
   return useHostNotificationsStore(selector);
 }
 
-// Bypasses the production `reset()` action deliberately: production reset
-// preserves `snapshotEpoch`/`liveLifecycleRevision` so they stay monotonic
-// (see `reset()`'s own comment), but test isolation between cases wants a
-// true zero-state so fixtures can assert on small absolute token values.
 export function __resetHostNotificationsStoreForTests(): void {
   useHostNotificationsStore.setState(initialState());
 }

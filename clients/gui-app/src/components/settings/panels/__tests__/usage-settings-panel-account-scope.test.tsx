@@ -39,9 +39,7 @@ liveHostClientSpine.setRequestContext(
 );
 const liveHostClient = liveHostClientSpine.createRequester(mockLocalHostEntry);
 
-// The Host-group pick is unreachable, so the scope carries NO client and a
-// non-`following` status - exactly the shape `HostScopeGate` used to refuse to
-// render behind. This section must not consult any of it for transport.
+// This section must not consult any of it for transport.
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => ({
     hosts: [
@@ -169,11 +167,8 @@ function renderPanel(): void {
 
 describe("<UsageSettingsPanel /> account-group scoping", () => {
   it("reads through the active host even when the sidebar's host pick is dead", async () => {
-    // Ticket 13 moved this section from the Host group to Account, but it kept
-    // resolving transport and gating through the Host-group picker's REMEMBERED
-    // scope. Picking a host that had gone away therefore hid an account-level
-    // dashboard whose own default is "All hosts", behind a notice about a host
-    // it never needed.
+    // Picking a host that had gone away therefore hid an account-level dashboard whose own default is "All hosts",
+    // behind a notice about a host it never needed.
     recordNegotiatedHostMethods(ACTIVE_HOST_ID, ["host.usage.summary"]);
     renderPanel();
 
@@ -200,10 +195,8 @@ describe("<UsageSettingsPanel /> account-group scoping", () => {
   });
 
   it("gives a terminal answer with no active host, rather than spinning forever", async () => {
-    // With no active host there is nothing to hand shake with, so the support
-    // signal stays `null` permanently - the pending branch could never
-    // resolve. This section is reachable for any scope, so a fresh install
-    // reaches exactly this state.
+    // With no active host there is nothing to hand shake with, so the support signal stays `null` permanently -
+    // the pending branch could never resolve.
     activeHostIdHolder.current = null;
     renderPanel();
 
@@ -217,7 +210,7 @@ describe("<UsageSettingsPanel /> account-group scoping", () => {
     renderPanel();
 
     const notice = await screen.findByTestId("usage-unsupported-notice");
-    // Named from the ACTIVE host, since that is the one that fell short.
+    // Named from the active host, since that is the one that fell short.
     expect(notice.textContent).toContain("This machine");
     expect(screen.queryByTestId("usage-support-pending")).toBeNull();
   });

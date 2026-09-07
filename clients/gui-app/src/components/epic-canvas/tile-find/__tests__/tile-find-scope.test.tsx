@@ -38,9 +38,8 @@ describe("<TileFindScope />", () => {
       </PaneVisibilityContext.Provider>,
     );
 
-    // A previously selected epic tab stays mounted (keep-alive) with its pane
-    // hidden. It re-registers its active tile after the visible tab, so its
-    // `registeredAt` outranks the visible tile's - the bug's exact trigger.
+    // A previously selected epic tab stays mounted (keep-alive) with its pane hidden.
+    // It re-registers its active tile after the visible tab, so its `registeredAt` outranks the visible tile's - the bug's exact trigger.
     const hidden = render(
       <PaneVisibilityContext.Provider value={false}>
         <TileFindScope

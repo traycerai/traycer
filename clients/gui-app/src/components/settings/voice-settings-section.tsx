@@ -14,9 +14,8 @@ export function VoiceSettingsSection(): ReactNode {
     })),
   );
 
-  // `useDictationAvailability` refuses dictation outright in the mobile app, so
-  // this row would be a toggle for something the build will not do - and the
-  // description below makes a promise that build cannot keep. Hide it there.
+  // `useDictationAvailability` refuses dictation outright in the mobile app, so this row would be a toggle for
+  // something the build will not do - and the description below makes a promise that build cannot keep.
   if (isMobileApp()) return null;
 
   return (

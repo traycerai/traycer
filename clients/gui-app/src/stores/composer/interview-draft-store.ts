@@ -7,10 +7,8 @@ import {
 import { interviewDraftKey, interviewDraftKeyPrefix } from "@/lib/persist";
 
 export interface StoredInterviewDraftAnswer {
-  // Stable identity of the question that owned the interaction-time indices.
-  // This full framing snapshot proves whether option indices remain exact.
-  // Missing on legacy rows, which may restore labels visibly but cannot prove
-  // exact selection.
+  // Stable identity of the question that owned the interaction-time indices. This full framing
+  // snapshot proves whether option indices remain exact.
   readonly questionIdentity?: string;
   // Legacy label snapshot, retained only so pre-index local rows can restore
   // their visible choices. It is never enough to manufacture exact evidence.
@@ -100,13 +98,8 @@ function parseStoredDraft(value: unknown): StoredInterviewDraft | null {
   };
 }
 
-// ── Prototype-safe map access ──────────────────────────────────────────────
-// chatId/blockId are arbitrary strings (a malicious or accidental
-// `"__proto__"`, `"constructor"`, …). All READS go through own-property checks
-// so a special key can never resolve to an inherited value, and all WRITES
-// rebuild via object-literal computed keys / `Object.fromEntries`, which create
-// OWN properties (never invoke the `__proto__` setter), so no update can
-// pollute `Object.prototype`.
+// ── Prototype-safe map access ────────────────────────────────────────────── chatId/blockId are
+// arbitrary strings (a malicious or accidental `"__proto__"`, `"constructor"`, …).
 
 function ownValue<T>(
   record: Readonly<Partial<Record<string, T>>>,
@@ -125,16 +118,11 @@ export function selectInterviewDraft(
   return ownValue(chatDrafts, blockId) ?? null;
 }
 
-// ── Per-(chat, block) localStorage persistence ─────────────────────────────
-// Each draft is its own key so a write from one window never rewrites the whole
-// map and erases another window's unrelated draft. The reactive `draftsByChat`
-// map below mirrors these keys for in-memory reads and cross-pane subscription.
+// ── Per-(chat, block) localStorage persistence ───────────────────────────── Each draft is its
+// own key so a write from one window never rewrites the whole map and erases another window's
 
 function parseStoredDraftJson(raw: string): StoredInterviewDraft | null {
-  // Boundary: raw storage bytes are untrusted and can be malformed JSON. A
-  // JSON.parse SyntaxError can echo a fragment of the offending input, and
-  // that input is the user's own persisted interview answer text - use the
-  // content-free summary (name + message length only), never the raw error.
+  // Boundary: raw storage bytes are untrusted and can be malformed JSON.
   try {
     return parseStoredDraft(JSON.parse(raw));
   } catch (error) {
@@ -165,11 +153,8 @@ function storageKeys(): ReadonlyArray<string> {
 
 function readAllStoredDrafts(): StoredInterviewDraftsByChat {
   if (typeof window === "undefined") return {};
-  // Boundary: a disabled or inaccessible store (hardened embed, revoked
-  // storage permission, private-mode quirks, ...) can throw on enumeration.
-  // This runs at store construction (module init) and on every cross-window
-  // storage event, so an uncaught throw here would crash the app before the
-  // empty-state fallback below is ever reached.
+  // Boundary: a disabled or inaccessible store (hardened embed, revoked storage permission,
+  // private-mode quirks, ...) can throw on enumeration.
   try {
     return readAllStoredDraftsUnguarded();
   } catch (error) {
@@ -181,10 +166,8 @@ function readAllStoredDrafts(): StoredInterviewDraftsByChat {
   }
 }
 
-// The block IDs actually persisted for `chatId`, read directly from
-// localStorage rather than the in-memory mirror: a cross-window write can
-// land in storage before its `storage` event reaches this window's map, so a
-// prune driven only by the mirror can miss it (see `pruneChatDrafts`).
+// The block IDs actually persisted for `chatId`, read directly from localStorage rather than the
+// in-memory mirror: a cross-window write can land in storage before its `storage` event reaches
 function persistedBlockIdsForChat(chatId: string): ReadonlyArray<string> {
   if (typeof window === "undefined") return [];
   try {
@@ -305,12 +288,8 @@ export const useInterviewDraftStore = create<InterviewDraftStore>()((set) => ({
     });
   },
   pruneChatDrafts: (chatId, keepBlockIds) => {
-    // Prune every PERSISTED key for this chat, not just the in-memory
-    // mirror: a cross-window write can exist in localStorage before its
-    // storage event updates `draftsByChat`, and this authoritative snapshot
-    // must still be able to remove it - otherwise the delayed event later
-    // rehydrates a draft for an interview that already resolved. This runs
-    // even when the chat has no in-memory entry yet.
+    // Prune every PERSISTED key for this chat, not just the in-memory mirror: a cross-window write can
+    // exist in localStorage before its storage event updates `draftsByChat`, and this authoritative
     persistedBlockIdsForChat(chatId)
       .filter((blockId) => !keepBlockIds.has(blockId))
       .forEach((blockId) => removeStoredDraft(chatId, blockId));
@@ -343,11 +322,6 @@ export function rehydrateInterviewDraftsFromStorage(): void {
   useInterviewDraftStore.setState({ draftsByChat: readAllStoredDrafts() });
 }
 
-// Cross-window synchronized authority: another window's write/clear (or a
-// `localStorage.clear()`, which fires with `key === null`) reconciles this
-// window's map so a duplicate live card stays in lockstep and can never
-// re-persist a draft the other window just resolved. Same-window writes do not
-// fire this event, so there is no self-trigger loop.
 function handleInterviewDraftStorageEvent(event: StorageEvent): void {
   if (event.key !== null && !event.key.startsWith(interviewDraftKeyPrefix())) {
     return;

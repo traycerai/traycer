@@ -141,9 +141,8 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
     case "extension":
       return <Smartphone className={className} />;
     case "mobile":
-      // Deliberately NOT `Smartphone`: the extension already owns that glyph,
-      // and two client kinds sharing one icon in the same list is worse than
-      // either choice on its own.
+      // Deliberately not `Smartphone`: the extension already owns that glyph, and two client kinds sharing one icon
+      // in the same list is worse than either choice on its own.
       return <TabletSmartphone className={className} />;
     case "host":
       return <Server className={className} />;

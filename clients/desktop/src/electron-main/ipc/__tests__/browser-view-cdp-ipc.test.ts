@@ -30,10 +30,6 @@ interface AuthSnapshot {
   readonly status: string;
   readonly token: string | null;
   readonly profile: { readonly userId: string } | null;
-  /**
-   * Whether main itself checked the bearer against authn's signing keys. The
-   * renderer hands main the token; only a verified one is a principal.
-   */
   readonly verified: boolean;
 }
 
@@ -110,10 +106,6 @@ vi.mock("electron", () => {
   };
 });
 
-/**
- * The dial itself, over the registry's own fake stream client - so the stream
- * really opens, and a torn-down one really closes.
- */
 vi.mock("../../browser-sessions/browser-sessions-transport", async () => {
   const { FakeStreamClient, LOCAL_HOST_ENTRY } =
     await import("../../browser-sessions/__tests__/browser-sessions-stream-fixture");
@@ -270,10 +262,6 @@ function makeBridge() {
     safeSendToWindow: vi.fn(),
     fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
-    // The jar-plane registry is built during registration (H10), so a bridge
-    // double now has to answer for the host snapshot it subscribes to and the
-    // auth session its bearer comes from. Nothing here dials: no stream is
-    // opened unless a renderer asks for one.
     options: {
       authnBaseUrl: "https://authn.test",
       host: {
@@ -326,11 +314,7 @@ const STREAM_KEY = {
   identityKey: "identity-1",
 };
 
-/**
- * One renderer asking main to hold a jar-plane stream open, driven to the
- * point where the dial either happened or did not. The directory read is one
- * await wide, so the queue is drained before the answer is read.
- */
+/** The directory read is one await wide, so the queue is drained before the answer is read. */
 async function openSessionsStream(): Promise<void> {
   const { registerBrowserViewIpc } = await import("../browser-view-ipc");
   const { RunnerHostInvoke } =
@@ -406,14 +390,6 @@ describe("native browser tab IPC", () => {
     expect(captured.webPreferencesRequests).toEqual([]);
   });
 
-  // The renderer-facing CDP dispatch and ensure-tab invoke channels
-  // (`browserViewElectronTabCdpDispatch`, `browserViewEnsureTab`) were
-  // deleted under H10 - the jar/CDP plane moved into main's own
-  // `browser-sessions` owner, which calls the manager directly rather than
-  // crossing IPC. What is left to pin here is that `BrowserViewManager`
-  // still exposes `dispatchElectronTabCdp` / `ensureTab` with the same
-  // signatures, so it drives them directly instead of through a deleted
-  // sender-scoped handler.
   it("dispatches a curated command with its logical frame target", async () => {
     const { BrowserViewManager } =
       await import("../../browser-view/browser-view-manager");
@@ -501,12 +477,6 @@ describe("native browser tab IPC", () => {
     ]);
   });
 
-  // The jar plane's principal is a VERIFIED session, not merely a signed-in
-  // one. Main is handed its bearer by the renderer, so a session it has not
-  // checked against authn's signing keys is not a degraded principal - it is
-  // no principal at all, and everything on the plane (the dial, the relay
-  // grant, the store-key wrap, the ledger's per-user match) reads the same
-  // answer.
   it("opens no jar-plane stream for a signed-in session main has not verified", async () => {
     captured.authSnapshot = {
       status: "signed-in",
@@ -532,10 +502,6 @@ describe("native browser tab IPC", () => {
 
     expect(captured.transportOpens).toEqual(["user-1"]);
 
-    // The same edge a sign-out takes: the account this stream speaks for is
-    // read fresh, answers null, and no longer matches the one it was opened
-    // for - so the socket goes rather than carrying a credential main can no
-    // longer vouch for.
     captured.authSnapshot = {
       status: "signed-in",
       token: "bearer-1",

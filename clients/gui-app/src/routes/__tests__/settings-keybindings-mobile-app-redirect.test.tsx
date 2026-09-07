@@ -1,10 +1,4 @@
-/**
- * `/settings/keybindings` keeps its route on every build, because a URL
- * outlives the build that produced it - a bookmark, a remembered tab path, or
- * a settings entry point handed a stored section id all navigate here. Where
- * the section is not offered, the route lands on General instead of rendering
- * a panel the navigation beside it has no row for.
- */
+/** Route stays on every build. Where the section is not offered, land on General rather than a panel with no nav row. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createMemoryHistory,
@@ -19,12 +13,8 @@ afterEach(() => {
   setMobileApp(false);
 });
 
-// The route's own `beforeLoad`, mounted into a throwaway route tree rather
-// than invoked directly: a redirect is only worth anything if the ROUTER
-// honors it, so matching, redirect handling and history replacement all have
-// to run. TanStack parameterizes the callback on the full file-route context
-// and this one reads none of it, so a permissive sentinel keeps the fixture
-// decoupled from that type.
+// Mount beforeLoad in a throwaway tree so the router honors the redirect.
+// Permissive sentinel: this callback reads none of the file-route context.
 const keybindingsBeforeLoad = KeybindingsRoute.options.beforeLoad as (args: {
   context: object;
 }) => void;

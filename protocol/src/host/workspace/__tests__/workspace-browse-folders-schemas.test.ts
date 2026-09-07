@@ -7,13 +7,7 @@ import {
 } from "../unary-schemas";
 import { workspaceBrowseFoldersUpgradeV10ToV11 } from "../../registry";
 
-/**
- * `workspace.browseFolders` carries HOST-native absolute paths in both
- * directions. The wire contract enforces that rather than trusting the
- * endpoints: a relative request resolves against the host service's working
- * directory, and a relative response path can be submitted straight to
- * `workspace.prepareFolders` without passing the picker's typed-path check.
- */
+/** `workspace.browseFolders` carries HOST-native absolute paths in both directions. */
 describe("workspace.browseFolders absolute-path contract", () => {
   const ABSOLUTE = [
     "/",

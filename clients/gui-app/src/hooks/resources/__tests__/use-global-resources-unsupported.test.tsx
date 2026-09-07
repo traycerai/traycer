@@ -25,11 +25,7 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
   };
 });
 
-/**
- * Exactly what `RemoteStreamClient` reports for every method, by design:
- * `"unknown"` support and no client-wide schema version. This is the shape that
- * makes the pre-check unable to answer.
- */
+/** Exactly what `RemoteStreamClient` reports for every method, by design: `"unknown"` support and no client-wide schema version. */
 function pretendRemoteHost(): void {
   streamMock.support = "unknown";
   streamMock.version = null;

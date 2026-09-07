@@ -440,10 +440,6 @@ describe("terminal sidebar source reconciliation", () => {
   });
 
   it("holds the loading state rather than flashing the empty state while catalog hydration recovers within the grace", async () => {
-    // A partial fleet with no serving-host rows is, for the first 750ms, most
-    // likely a catalog still hydrating. Claiming "No terminals yet." in that
-    // window would be wrong the moment the remote rows arrive, so the body
-    // keeps loading until the grace elapses or coverage recovers.
     vi.useFakeTimers();
     durableCollection.value = partialFleet(HOST_A, []);
     const view = render(

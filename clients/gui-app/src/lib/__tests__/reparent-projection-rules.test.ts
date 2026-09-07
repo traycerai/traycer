@@ -1,27 +1,5 @@
 /**
- * Direct unit coverage for `@/lib/reparent-projection-rules` - the projected
- * `TreeSlice` evaluator that is now the SOLE authority for every reparent
- * decision in the app (DnD preview, DnD commit, and the store's write-path
- * validation). It has none of its own until this file: it has only ever been
- * reached indirectly through the store or the DnD commit helper.
- *
- * These fixtures build a `TreeSlice` by hand - no Y.Doc, no store, no
- * `createOpenEpicStore`. `evaluateProjectedReparent` and
- * `projectedReparentRejectionError` only ever read `tree.nodeById`, so a
- * `TreeSlice` can be constructed directly without going through the
- * projector. This also means these fixtures don't (and structurally
- * cannot) distinguish a doc-backed node from a registry-backed one - which
- * is exactly the point: the projected tree treats every node uniformly
- * regardless of where it came from, and that uniformity is why it can judge
- * a drop for every node the doc-based evaluator (`@/lib/reparent-rules`)
- * could not see.
- *
- * The matrix in section 1 was ported case-for-case from the doc evaluator's
- * own suite (`epic-y-mutations-reparent.test.ts`), which was written first and
- * ran green alongside this file before that evaluator was deleted - so the two
- * agreed on every cell at the moment the authority moved. That suite is gone
- * with the code it covered; this is now the only matrix, and `git log` for the
- * deleted file is where the parallel-proof history lives.
+ * Direct unit coverage for `@/lib/reparent-projection-rules` - the projected `TreeSlice` evaluator that is now the SOLE authority for every reparent decision in the app (DnD preview, DnD commit, and the store's write-path validation).
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -270,11 +248,7 @@ describe("projectedReparentRejectionError blames the side the projection actuall
   });
 
   it("blames the PARENT when the node exists but the named parent does not", () => {
-    // This is the exact bug the doc-based `reparentRejectionError` had for a
-    // registry-backed row: its `missingRole` probe asks the DOC, which has
-    // no entry for a registry-backed node, so it would blame the node even
-    // when the real complaint is the parent. `projectedReparentRejectionError`
-    // probes the TREE instead, so a node present there is never misblamed.
+    // This is the exact bug the doc-based `reparentRejectionError` had for a registry-backed row: its `missingRole` probe asks the DOC, which has no entry for a registry-backed node, so it would blame the node even when the real complaint is the parent.
     const t = tree([node("spec-a", "spec", null)]);
     const evaluation = evaluateProjectedReparent(t, "spec-a", "ghost-parent");
     expect(evaluation).toEqual({ ok: false, reason: "missing-node" });
@@ -290,12 +264,8 @@ describe("projectedReparentRejectionError blames the side the projection actuall
   });
 
   it("blames the node correctly even when it is registry-backed (no doc entry to consult)", () => {
-    // A registry-backed row is, from the projected tree's point of view, a
-    // node like any other - there is nothing in a `TreeSlice` that marks
-    // provenance. This is the case that motivated writing
-    // `projectedReparentRejectionError` at all: the doc-based version would
-    // always answer "node" here, because its doc-probe finds no entry for a
-    // registry-backed id regardless of which side is actually missing.
+    // A registry-backed row is, from the projected tree's point of view, a node like any other - there is nothing in a `TreeSlice` that marks provenance.
+    // This is the case that motivated writing `projectedReparentRejectionError` at all: the doc-based version would always answer "node" here, because its doc-probe finds no entry for a registry-backed id regardless of which side is actually missing.
     const t = tree([node("chat-registry", "chat", null)]);
     const error = projectedReparentRejectionError(
       t,
@@ -329,11 +299,8 @@ describe("isProjectedDescendantOf (via evaluateProjectedReparent) terminates on 
       node("c", "ticket", "a"),
       node("l", "ticket", null),
     ]);
-    // Moving l under c walks c -> a -> b -> a (revisit) without ever
-    // reaching l, so it must be allowed - the chain looping is not l's
-    // descendant. If the `visited` guard were missing, this call would hang
-    // instead of returning - and this test would fail on the suite's
-    // default timeout rather than silently pass.
+    // Moving l under c walks c -> a -> b -> a (revisit) without ever reaching l, so it must be allowed - the chain looping is not l's descendant.
+    // If the `visited` guard were missing, this call would hang instead of returning - and this test would fail on the suite's default timeout rather than silently pass.
     expect(decision(evaluateProjectedReparent(t, "l", "c"))).toEqual({
       ok: true,
     });
@@ -377,12 +344,7 @@ describe("pre-short-circuit ordering", () => {
 });
 
 describe("nodeFamilyOf", () => {
-  // A `Record` over every `EpicTreeNodeType` member: adding a new node type
-  // without updating this map is a compile error (a missing property), so a
-  // new type cannot silently fall through `nodeFamilyOf`'s default branch
-  // unnoticed. Vitest does not type-check (see AGENTS.md), so this
-  // exhaustiveness guarantee is enforced by `bun run compile`, not by this
-  // test run - the test itself only pins the current mapping.
+  // Exhaustive over `EpicTreeNodeType`; `bun run compile` enforces it (Vitest does not type-check).
   const ALL_NODE_TYPES: Record<EpicTreeNodeType, true> = {
     chat: true,
     "terminal-agent": true,
@@ -403,14 +365,8 @@ describe("nodeFamilyOf", () => {
 
 describe("cases the doc-based evaluator could not express", () => {
   it("validates a move where both node and parent exist ONLY as tree rows (no doc-arm concept at this layer)", () => {
-    // At the projected-tree layer there is no such thing as "doc-backed" vs
-    // "registry-backed" - every node is just a row in `nodeById`. That
-    // uniformity is the whole fix: the doc evaluator special-cased which of
-    // its three Y.Doc maps a node lived in, so a node living in NONE of them
-    // (a registry record) was invisible to it. Store-level coverage in
-    // `stores/epics/open-epic/__tests__/reparent-artifact-projected-validation.test.ts`
-    // exercises the real doc/registry split; this proves the pure evaluator
-    // underneath has no such split to trip over in the first place.
+    // At the projected-tree layer there is no such thing as "doc-backed" vs "registry-backed" - every node is just a row in `nodeById`.
+    // That uniformity is the whole fix: the doc evaluator special-cased which of its three Y.Doc maps a node lived in, so a node living in NONE of them (a registry record) was invisible to it.
     const t = tree([
       node("agent-1", "terminal-agent", null),
       node("chat-registry", "chat", null),
@@ -421,11 +377,8 @@ describe("cases the doc-based evaluator could not express", () => {
   });
 
   it("catches a cycle spanning nodes that would sit in different doc arms", () => {
-    // chat-registry (would be record-only) is the ancestor; chat-doc (would
-    // be doc-backed) is its descendant. The doc evaluator's walk resolves
-    // nodes out of `artifacts`/`chats`/`tuiAgents` Y.Maps directly and would
-    // never find a record-only ancestor at all, so this cycle was
-    // structurally undetectable before 4.3.
+    // chat-registry (would be record-only) is the ancestor; chat-doc (would be doc-backed) is its descendant.
+    // The doc evaluator's walk resolves nodes out of `artifacts`/`chats`/`tuiAgents` Y.Maps directly and would never find a record-only ancestor at all, so this cycle was structurally undetectable before 4.3.
     const t = tree([
       node("chat-registry", "chat", null),
       node("chat-doc", "chat", "chat-registry"),

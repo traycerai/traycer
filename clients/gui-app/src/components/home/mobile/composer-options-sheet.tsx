@@ -21,27 +21,16 @@ interface ComposerOptionsSheetProps {
   readonly onOpenChange: (open: boolean) => void;
   readonly permission: PermissionMode;
   readonly onPermissionChange: (next: PermissionMode) => void;
-  /** See `PermissionsPicker`: `null` (or empty) means "no harness scope". */
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
   readonly harnessLabel: string | null;
   readonly settingsLocked: boolean;
 }
 
-/**
- * Phone-width picker for agent mode and permissions, opened from the toolbar's
- * permission pill. Everything else the desktop toolbar shows stays inline on
- * the row; only these two need more width than a ~21rem row can give.
- *
- * A flat one-level list, deliberately NOT the desktop dropdowns: those hide
- * their labels under `@max-lg`, and nesting a Radix dropdown inside a vaul
- * drawer is the layering that made the terminal Launch button inert on this
- * branch. Rows read the same option registries the desktop pickers do, so the
- * copy and the supported-mode gating stay in one place.
- */
+/** Everything else the desktop toolbar shows stays inline on the row; only these two need more width than a
+ * ~21rem row can give. */
 export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
-  // Drawer content portals to <body>; re-assert the resolved theme so
-  // `--popover` / `--background` resolve inside the portal instead of falling
-  // back to the light `:root` (same treatment as `TabSwitcherSheet`).
+  // Drawer content portals to <body>; re-assert the resolved theme so `--popover` / `--background` resolve
+  // inside the portal instead of falling back to the light `:root` (same treatment as `TabSwitcherSheet`).
   const { resolvedTheme, themePreset } = useResolvedTheme();
   // Mirror the desktop picker: display the mode the harness will actually run,
   // never a stale sticky the active harness doesn't honor.
@@ -72,9 +61,8 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
             <OptionsSectionLabel>Permissions</OptionsSectionLabel>
             {PERMISSION_OPTIONS.map((option) => {
               const Icon = option.icon;
-              // Inlined rather than hoisted into a boolean alias: TypeScript
-              // narrows `supported` to non-null only through the check itself.
-              // Empty is treated as `null` - see `normalizePermissionMode`.
+              // Inlined rather than hoisted into a boolean alias: TypeScript narrows `supported` to non-null only through
+              // the check itself.
               const isSupported =
                 supported === null ||
                 supported.length === 0 ||
@@ -95,8 +83,7 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                   disabled={props.settingsLocked || !isSupported}
                   testId={`composer-options-permission-${option.id}`}
                   onSelect={() => {
-                    // Defense-in-depth, mirroring `PermissionsPicker`: the
-                    // disabled attribute already blocks activation, but a
+                    // Defense-in-depth, mirroring `PermissionsPicker`: the disabled attribute already blocks activation, but a
                     // programmatic dispatch must not escalate permissions.
                     if (props.settingsLocked) return;
                     if (!isSupported) return;

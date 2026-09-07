@@ -21,13 +21,7 @@ const ELIGIBLE_POLICY: RemoteSessionAcquirePolicy = {
   proactiveWakeEligible: true,
 };
 
-// `subscribeRemoteSessionReadiness` (redesign P4.1 / connection-registry §6):
-// the cache now reports its own transitions instead of being polled. This
-// suite pins WHICH transitions notify and the two properties of the delivery
-// mechanism itself - coalescing and deferral onto a microtask - using a fake
-// `IRemoteSession` whose readiness/close listeners the test can fire
-// directly, the same test-double strategy `active-remote-sessions.test.ts`
-// uses for the cache's ref-count/linger lifecycle.
+// `subscribeRemoteSessionReadiness` (redesign P4.1 / connection-registry §6): the cache now reports its own transitions instead of being polled.
 
 interface FakeSession extends IRemoteSession<
   VersionedRpcRegistry,
@@ -38,13 +32,9 @@ interface FakeSession extends IRemoteSession<
   closedUnderneath: boolean;
   /** Simulates the session reaching its ready boundary (clean open or recovery). */
   fireAvailabilityRecovered(): void;
-  /**
-   * Simulates the DOWN edge - a relay `host_detached` or a drop into
-   * `reconnecting`. Flips `ready` false as the real session does, so a test
-   * asserting the published snapshot sees what a subscriber would.
-   */
+  /** Simulates the down edge - a relay `host_detached` or a drop into `reconnecting`. */
   fireReadinessLost(): void;
-  /** Simulates a session-level fatal closing the session IN PLACE. */
+  /** Simulates a session-level fatal closing the session IN place. */
   fireClosedUnderneath(): void;
 }
 
@@ -152,19 +142,15 @@ describe("subscribeRemoteSessionReadiness — which transitions notify", () => {
   });
 
   it("fires when a READY session loses readiness without closing (the down edge)", async () => {
-    // The transition the poll-to-event migration dropped. `host_detached` and
-    // a drop into `reconnecting` both flip `isReady()` false while the session
-    // stays alive, so neither of the other two edges fires - `onClosed` is for
-    // a session that DIED, and `subscribeAvailabilityRecovered` is the way up.
+    // The transition the poll-to-event migration dropped.
     const identity = freshIdentity();
     const session = fakeSession();
     const listener = vi.fn();
     subscribeRemoteSessionReadiness(listener);
 
     const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
-    // Premise, positively: the host really is ready and really is being
-    // reported as such. Without this the assertion below is satisfied by a
-    // host that was never ready, which is the state a broken wiring produces.
+    // Premise, positively: the host really is ready and really is being reported as such.
+    // Without this the assertion below is satisfied by a host that was never ready, which is the state a broken wiring produces.
     session.ready = true;
     session.fireAvailabilityRecovered();
     await Promise.resolve();
@@ -175,10 +161,8 @@ describe("subscribeRemoteSessionReadiness — which transitions notify", () => {
     session.fireReadinessLost();
     await Promise.resolve();
 
-    // The notification, and the value it makes readable. Asserting only the
-    // second would pass on the unfixed tree: `hasReadyRemoteSession` reads
-    // `isReady()` live, so it was ALREADY correct - what was missing is that
-    // nobody was told to re-read it.
+    // The notification, and the value it makes readable.
+    // Asserting only the second would pass on the unfixed tree: `hasReadyRemoteSession` reads `isReady()` live, so it was already correct - what was missing is that nobody was told to re-read it.
     expect(listener).toHaveBeenCalledTimes(1);
     expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
     expect(session.isClosed()).toBe(false);
@@ -291,13 +275,8 @@ describe("delivery mechanics — coalescing and deferral", () => {
   });
 
   it("is NOT invoked synchronously inside the cache mutation that triggered it — the mutation completes first, delivery follows on a later microtask turn", async () => {
-    // This is the load-bearing property, not a cosmetic detail: `close()`
-    // fires `onClosed` listeners synchronously from inside the cache's own
-    // mutation paths, and a synchronous notify would re-enter the cache
-    // mid-mutation. The eviction-on-reacquire path exercises exactly that:
-    // the whole eviction (dispose wiring, delete the old entry, notify,
-    // build the fresh session, insert it) must finish BEFORE any readiness
-    // listener runs.
+    // This is the load-bearing property, not a cosmetic detail: `close()` fires `onClosed` listeners synchronously from inside the cache's own mutation paths, and a synchronous notify would re-enter the cache mid-mutation.
+    // The eviction-on-reacquire path exercises exactly that: the whole eviction (dispose wiring, delete the old entry, notify, build the fresh session, insert it) must finish before any readiness listener runs.
     const identity = freshIdentity();
     const dead = fakeSession();
     acquireRemoteSession(identity, ELIGIBLE_POLICY, () => dead);
@@ -312,10 +291,7 @@ describe("delivery mechanics — coalescing and deferral", () => {
     );
     order.push("after-reacquire");
 
-    // The reacquire's full mutation (eviction + fresh construction) ran to
-    // completion, ordering "after-reacquire" right behind it, with no
-    // "notified" spliced in between - proof the listener did not fire from
-    // inside that call.
+    // The reacquire's full mutation (eviction + fresh construction) ran to completion, ordering "after-reacquire" right behind it, with no "notified" spliced in between - proof the listener did not fire from inside that call.
     expect(order).toEqual(["before-reacquire", "after-reacquire"]);
     expect(rebuilt.isClosed()).toBe(false);
 
@@ -332,14 +308,8 @@ describe("delivery mechanics — coalescing and deferral", () => {
 });
 
 describe("subscribeRemoteSessionReadiness — the BORROWABILITY edges (Ticket 06)", () => {
-  // `hasBorrowableRemoteSession` answers a DIFFERENT question from every
-  // pre-existing wiring above: who holds the entry, not whether the session
-  // itself is ready. Two notify() calls exist for exactly that reason - one
-  // on the 0->1 consumer transition (acquire), one on the 1->0 transition
-  // that arms the keep-warm linger (release) - and without them a subscriber
-  // holds a stale borrowable answer across the one transition it exists to
-  // observe, silently. Nothing throws, nothing fails a type check: the only
-  // way to catch a regression here is to witness the wake.
+  // `hasBorrowableRemoteSession` answers a different question from every pre-existing wiring above: who holds the entry, not whether the session itself is ready.
+  // Nothing throws, nothing fails a type check: the only way to catch a regression here is to witness the wake.
 
   it("fires on the 0 -> 1 consumer transition (acquire), positively witnessed by ALSO firing on a pre-existing edge (a session closing underneath)", async () => {
     const identity = freshIdentity();
@@ -352,9 +322,7 @@ describe("subscribeRemoteSessionReadiness — the BORROWABILITY edges (Ticket 06
     await Promise.resolve();
     expect(listener).toHaveBeenCalledTimes(1);
 
-    // Positive control, epic-standard: the SAME subscriber must also wake on
-    // an edge that already worked before this ticket, so "it fired" is known
-    // to mean something in this harness rather than a listener nobody wired.
+    // Positive control, epic-standard: the same subscriber must also wake on an edge that already worked before this ticket, so "it fired" is known to mean something in this harness rather than a listener nobody wired.
     listener.mockClear();
     session.fireClosedUnderneath();
     await Promise.resolve();
@@ -368,11 +336,7 @@ describe("subscribeRemoteSessionReadiness — the BORROWABILITY edges (Ticket 06
     const session = fakeSession();
     const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
     view.close(); // now lingering at refCount 0
-    // Drain the release's OWN notify (a different edge, already covered
-    // below) before subscribing - otherwise it is still pending on the
-    // microtask queue and the flush after the reacquire would deliver THAT
-    // one to the listener, making the assertion below pass regardless of
-    // whether the reacquire's own notify fires at all.
+    // Drain the release's own notify before subscribing, or the flush after reacquire delivers that pending edge instead.
     await Promise.resolve();
 
     const listener = vi.fn();
@@ -391,18 +355,12 @@ describe("subscribeRemoteSessionReadiness — the BORROWABILITY edges (Ticket 06
     const identity = freshIdentity();
     const session = fakeSession();
     const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
-    // Drain the ACQUIRE's own notify (the 0 -> 1 edge, covered above) before
-    // subscribing - otherwise it is still pending on the microtask queue and
-    // the flush below would deliver THAT one, making the assertion pass
-    // regardless of whether the release's own notify fires at all.
     await Promise.resolve();
 
     const listener = vi.fn();
     subscribeRemoteSessionReadiness(listener);
 
-    // Edge under test: the release that brings refCount to zero and arms the
-    // linger timer (not the linger's later expiry - that edge is already
-    // covered above by "fires when the keep-warm linger expires").
+    // Edge under test: the release that brings refCount to zero and arms the linger timer (not the linger's later expiry - that edge is already covered above by "fires when the keep-warm linger expires").
     view.close();
     await Promise.resolve();
     expect(listener).toHaveBeenCalledTimes(1);
@@ -416,18 +374,12 @@ describe("subscribeRemoteSessionReadiness — the BORROWABILITY edges (Ticket 06
   });
 
   it("the borrowable predicate is reactive across both edges - a poller subscribed once observes both the gain and the loss of a borrowable session", async () => {
-    // Not an ablation target on its own (that is the two tests below); this
-    // pins the OBSERVABLE property the two notify() calls exist to produce -
-    // a subscriber's next read of `tryAcquireReadyRemoteSession` reflects
-    // reality on both sides of the borrow window, not just one.
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
     const readings: boolean[] = [];
     subscribeRemoteSessionReadiness(() => {
-      // Capture and release the borrow rather than discarding the handle: a
-      // leaked borrow would inflate `borrowCount` for every other test that
-      // shares this module's `entriesByKey` map.
+      // Capture and release the borrow rather than discarding the handle: a leaked borrow would inflate `borrowCount` for every other test that shares this module's `entriesByKey` map.
       const borrow = tryAcquireReadyRemoteSession(identity.hostId);
       readings.push(borrow !== null);
       borrow?.release();

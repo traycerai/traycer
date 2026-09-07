@@ -20,18 +20,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
- * `epic.createChat@1.1` carries the `sourceOwnerUserId` fork-owner hint on its
- * PRECISE-boundary variant, not a separate `1.2`.
- *
- * The hint originally landed as a `1.2`, on the stated premise that
- * "`epic.createChat@1.1` is already in released hosts". That premise was
- * false: the newest released baseline (`host-v1.1.11`, commit c785d864)
- * reports `epic.createChat` at `latestMinor: 0` - confirmed against the tag's
- * own `registry.ts`, not just its published surface asset. Only `1.0` ever
- * shipped, so `1.1` was still free to grow and the extra minor bought nothing.
- *
- * `1.0` IS released, so the split between `createChatForkSourceSchema` (1.0's
- * untagged shape) and the tagged union below is real and stays.
+ * `epic.createChat@1.1` carries the `sourceOwnerUserId` fork-owner hint on its PRECISE-boundary variant, not a separate `1.2`.
  */
 
 const manifestV10: ConnectionManifest = {

@@ -457,11 +457,8 @@ function card(): HTMLElement {
   return screen.getByTestId("interview-card");
 }
 
-// The proceed (Next/Submit) action button, identified by its exact accessible
-// name - distinct from the pager's "Next question" / "Previous question"
-// buttons. `PrimaryActionShortcutHint` marks its chord `aria-hidden`, so the
-// name carries no "↵"; the anchored regex is what rules out "Next question"
-// matching "Next".
+// The proceed (Next/Submit) action button, identified by its exact accessible name - distinct from the pager's "Next question" / "Previous question" buttons.
+// `PrimaryActionShortcutHint` marks its chord `aria-hidden`, so the name carries no "↵"; the anchored regex is what rules out "Next question" matching "Next".
 function proceedButton(): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", {
     name: /^(Submit|Next)$/,
@@ -697,9 +694,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
       });
       screen.getByLabelText<HTMLTextAreaElement>("Interview answer").blur();
 
-      // Rejected ack clears busy; the field must regain focus so the user
-      // can retype without an extra click - a disabled field cannot take
-      // focus, so this only works if the ref re-runs once busy clears.
+      // Rejected ack clears busy; the field must regain focus so the user can retype without an extra click - a disabled field cannot take focus, so this only works if the ref re-runs once busy clears.
       view.rerender(
         <TooltipProvider>
           {cardElement({
@@ -725,10 +720,8 @@ describe("PendingInterviewCard keyboard navigation", () => {
     }
   });
 
-  // A free-text question renders its field the moment the card mounts. Taking
-  // focus there is a gift on desktop and an ambush on a phone, where it raises
-  // the software keyboard over the question the user has not read yet: a phone
-  // keyboard must be summoned by a tap.
+  // A free-text question renders its field the moment the card mounts.
+  // Taking focus there is a gift on desktop and an ambush on a phone, where it raises the software keyboard over the question the user has not read yet: a phone keyboard must be summoned by a tap.
   it("focuses a free-text answer field on mount off the mobile app", () => {
     vi.useFakeTimers();
     try {
@@ -845,9 +838,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
       screen.getByRole<HTMLButtonElement>("button", { name: "A/B Fork" })
         .disabled,
     ).toBe(true);
-    // Option and Other affordances must be natively disabled too, not just
-    // rejected in the callback, so they are neither focusable nor exposed as
-    // actionable to assistive tech while busy.
+    // Option and Other affordances must be natively disabled too, not just rejected in the callback, so they are neither focusable nor exposed as actionable to assistive tech while busy.
     expect(
       screen.getByRole<HTMLButtonElement>("button", { name: "2. Beta" })
         .disabled,
@@ -1131,10 +1122,8 @@ describe("PendingInterviewCard keyboard navigation", () => {
       );
 
       fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
-      // Another live view's Submit/Skip is accepted before this timer fires:
-      // the parent flips isBusy for the block. The scheduling-time
-      // `submitDrafts` closure captured `isBusy: false` and would otherwise
-      // still fire.
+      // Another live view's Submit/Skip is accepted before this timer fires: the parent flips isBusy for the block.
+      // The scheduling-time `submitDrafts` closure captured `isBusy: false` and would otherwise still fire.
       view.rerender(
         <TooltipProvider>
           {cardElement({
@@ -1193,9 +1182,8 @@ describe("PendingInterviewCard keyboard navigation", () => {
       const cardA = within(cards[0]);
       const cardB = within(cards[1]);
 
-      // The page index is canonical, so advancing in A moves both views to the
-      // last question. A then picks a single-select there, arming its submit
-      // timer; B explicitly navigates back before it fires.
+      // The page index is canonical, so advancing in A moves both views to the last question.
+      // A then picks a single-select there, arming its submit timer; B explicitly navigates back before it fires.
       fireEvent.click(cardA.getByRole("button", { name: "Next question" }));
       fireEvent.click(cardA.getByRole("button", { name: "1. Gamma" }));
       fireEvent.click(cardB.getByRole("button", { name: "Previous question" }));

@@ -9,10 +9,7 @@ type ProvidersListResponse = ResponseOfMethod<
   "providers.list"
 >;
 
-/**
- * Commits the one authoritative providers snapshot only after cancelling the
- * ordinary list observer that could otherwise publish an older raw response.
- */
+/** Commits the one authoritative providers snapshot only after cancelling the ordinary list observer that could otherwise publish an older raw response. */
 export async function commitAuthoritativeProvidersList(args: {
   readonly queryClient: QueryClient;
   readonly hostId: string;
@@ -23,10 +20,7 @@ export async function commitAuthoritativeProvidersList(args: {
   const queryKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
     args.hostId,
     "providers.list",
-    // The classic (non-native) poll is keyed `{ native: null }` - see
-    // `use-providers-list-query`. The authoritative commit must target that
-    // exact entry; native-targeted queries are separate cache entries and
-    // carry no classic rows.
+    // The authoritative commit must target that exact entry; native-targeted queries are separate cache entries and carry no classic rows.
     { native: null },
   );
   await args.queryClient.cancelQueries({ queryKey, exact: true });

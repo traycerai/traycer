@@ -1,20 +1,4 @@
-/**
- * Wire-compat pins for `editor.openPaths` 1.0 -> 1.1. The minor is a pure
- * request-enum widening, so the guarantees that keep mixed-version pairs safe
- * are:
- *
- * - every 1.0-era request still parses under 1.1 (old client + new host);
- * - a 1.0 host hard-rejects every target the widening added - which proves the
- *   client's negotiated-version emission gate is load-bearing, not
- *   belt-and-braces;
- * - adding an id to the live `EDITORS` registry does not widen the frozen 1.0
- *   request schema;
- * - the upgrade transformer is the identity on both request and response;
- * - the registry advertises the minor;
- * - 1.1's target enum is exactly the known set. Unlike 1.0 it is built from
- *   the LIVE `EDITORS` registry, so appending an editor widens it in place -
- *   the pin below is what turns that into a deliberate decision.
- */
+/** Wire-compat pins for `editor.openPaths` 1.0 -> 1.1. */
 import { describe, expect, it } from "vitest";
 import {
   editorOpenPathsUpgradeV10ToV11,
@@ -56,10 +40,8 @@ describe("editor.openPaths 1.0 -> 1.1 compatibility", () => {
   });
 
   it("rejects every added target under the frozen 1.0 schema", () => {
-    // A 1.0 host fails these exact parses - the client-side negotiated version
-    // gate is what keeps them off 1.0 connections. `"vscodium"` is the
-    // registry half of that promise: adding an editor to `EDITORS` must not
-    // widen a frozen minor.
+    // A 1.0 host fails these exact parses - the client-side negotiated version gate is what keeps them off 1.0 connections.
+    // `"vscodium"` is the registry half of that promise: adding an editor to `EDITORS` must not widen a frozen minor.
     for (const editorId of V11_ONLY_TARGETS) {
       const result = editorOpenPathsV10.requestSchema.safeParse({
         ...V10_REQUEST,
@@ -77,12 +59,8 @@ describe("editor.openPaths 1.0 -> 1.1 compatibility", () => {
   });
 
   it("pins 1.1's target enum to exactly the known set", () => {
-    // 1.1's `editorId` is derived from the live `EDITORS` registry, so an
-    // appended editor is accepted by 1.1 the moment it is added - silently
-    // changing what a host advertising 1.1 must accept. Adding an editor is
-    // therefore a WIRE decision, not a registry edit: freeze the current ids
-    // into 1.1 the way 1.0 is frozen, mint 1.2 for the new one, and update
-    // this list. Widening this expectation alone is the wrong fix.
+    // 1.1's `editorId` is derived from the live `EDITORS` registry, so an appended editor is accepted by 1.1 the moment it is added - silently changing what a host advertising 1.1 must accept.
+    // Adding an editor is therefore a WIRE decision, not a registry edit: freeze the current ids into 1.1 the way 1.0 is frozen, mint 1.2 for the new one, and update this list.
     expect(EDITORS.map((editor) => editor.id)).toEqual([
       "vscode",
       "cursor",

@@ -25,13 +25,8 @@ const SKIPPED_HIGHLIGHT_ANCESTOR_SELECTOR = [
 ].join(",");
 const INCLUDED_BUTTON_HIGHLIGHT_SELECTOR = "button[data-find-include='true']";
 
-// Resolve a mounted find-unit anchor by scanning `[data-chat-find-unit]`
-// descendants and comparing the parsed dataset value, rather than interpolating
-// the unit id into a `[data-chat-find-unit="..."]` selector. Unit ids embed
-// persisted message/segment ids behind a plain `string` boundary, so a quote,
-// backslash, or bracket in an otherwise valid id would break (or mis-target) a
-// raw attribute-selector lookup in the virtualized list. `dataset` comparison is
-// selector-safe and avoids `CSS.escape`, which jsdom does not implement.
+// Resolve a mounted find-unit anchor by scanning `[data-chat-find-unit]` descendants and comparing the parsed dataset value, rather than interpolating the unit id into a `[data-chat-find-unit="..."]` selector.
+// `dataset` comparison is selector-safe and avoids `CSS.escape`, which jsdom does not implement.
 export function queryMountedChatFindUnit(
   messageRoot: ParentNode,
   unitId: string,
@@ -85,12 +80,7 @@ export class ChatFindHighlighter {
       highlights.delete(this.names.match);
     }
     highlights.set(this.names.active, new Highlight(active));
-    // The active match may sit below the fold of a card's own height-capped
-    // scroll container (subagent/A2A bodies use `max-h` + `overflow-auto`).
-    // Scrolling the match's element walks every scroll ancestor, so the inner
-    // container reveals the match in addition to the chat row scroll the reveal
-    // controller already did. Only the navigation paint passes this; passive
-    // streaming/sync repaints must never yank the scroll position.
+    // Only the navigation paint passes this; passive streaming/sync repaints must never yank the scroll position.
     if (input.scrollActiveIntoView) {
       active.startContainer.parentElement?.scrollIntoView({
         block: "nearest",

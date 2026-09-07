@@ -2,12 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { errnoCode } from "../errno-code";
 
 /**
- * The one process-spawning seam the secret providers share. Injected into
- * every provider so the suites drive a fake and never the real `security`,
- * `secret-tool`, or `powershell`.
- *
- * `stdin` exists because a DPAPI blob must never travel on argv, where every
- * process on the machine can read it from the process table.
+ * Injected into every provider so the suites drive a fake and never the real `security`, `secret-tool`, or `powershell`.
+ * `stdin` exists because a DPAPI blob must never travel on argv, where every process on the machine can read it from the process table.
  */
 export interface CommandRequest {
   readonly file: string;

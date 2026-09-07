@@ -1,12 +1,6 @@
 /**
- * Zustand store for the command palette. `open` + `query` are
- * session-only; `recentIds` + `pinnedIds` persist. Scope is derived
- * live from the leading prefix character of `query` - see
- * `src/lib/commands/scopes.ts` - and therefore does not live in
- * the store.
- *
- * Schema breaks bump the persist `version` (no `migrate`), which makes
- * zustand discard the old blob and reboot from initial state.
+ * Zustand store for the command palette. `open` + `query` are session-only; `recentIds` +
+ * `pinnedIds` persist.
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";

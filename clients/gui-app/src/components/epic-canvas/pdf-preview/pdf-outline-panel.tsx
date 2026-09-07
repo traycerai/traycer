@@ -1,9 +1,5 @@
 /**
- * Document-outline sidebar for `PdfPreview` (the navigation pane every
- * serious PDF reader grows): renders the tree `PDFDocumentProxy.getOutline`
- * returns, and delegates navigation back to the viewer through a callback
- * so this component stays pure - no pdf.js import, which keeps it testable
- * outside the lazy chunk.
+ * Document-outline sidebar for `PdfPreview` (the navigation pane every serious PDF reader grows): renders the tree `PDFDocumentProxy.getOutline` returns, and delegates navigation back to the viewer through a callback so this component stays pure - no pdf.js import, which keeps it testable outside the lazy chunk.
  */
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -11,9 +7,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * Structural subset of pdf.js's outline nodes (`getOutline()` items) - the
- * fields navigation needs. `dest` is an internal destination for
- * `PDFLinkService.goToDestination`; `url` marks an external link instead.
+ * Structural subset of pdf.js's outline nodes (`getOutline()` items) - the fields navigation needs.
+ * `dest` is an internal destination for `PDFLinkService.goToDestination`; `url` marks an external link instead.
  */
 export interface PdfOutlineEntry {
   readonly title: string;
@@ -23,9 +18,7 @@ export interface PdfOutlineEntry {
 }
 
 /**
- * An outline never reorders within one document, so a tree-path key is
- * stable for the document's lifetime - titles alone cannot key the rows
- * (real outlines repeat titles like "Summary" per chapter).
+ * An outline never reorders within one document, so a tree-path key is stable for the document's lifetime - titles alone cannot key the rows (real outlines repeat titles like "Summary" per chapter).
  */
 interface KeyedOutlineNode {
   readonly key: string;

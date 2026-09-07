@@ -37,9 +37,8 @@ export interface GitFileSectionStackProps {
 }
 
 /**
- * Shared stage-section hierarchy for the flat and tree layouts. In the live
- * module composition, the outer module list owns scrolling so both the module
- * header and its nested stage headers participate in the same sticky context.
+ * Shared stage-section hierarchy for the flat and tree layouts.
+ * In the live module composition, the outer module list owns scrolling so both the module header and its nested stage headers participate in the same sticky context.
  */
 export function GitFileSectionStack(
   props: GitFileSectionStackProps,

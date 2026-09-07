@@ -186,11 +186,6 @@ describe("candidateWorkspaceFileRefsForRelativeLinkPath", () => {
       "../sibling/app.ts",
     );
 
-    // The direct file, then its own index.md fallback, both resolved
-    // client-side into an absolute path whose OWN directory becomes the
-    // synthesized workspacePath - never `{ workspacePath: "/repo", filePath:
-    // "../sibling/app.ts" }`, which `workspace.readFile`'s containment guard
-    // would always reject.
     expect(refs).toHaveLength(2);
     expect(refs?.[0]).toMatchObject({
       workspacePath: "/sibling",
@@ -223,9 +218,7 @@ describe("candidateWorkspaceFileRefsForRelativeLinkPath", () => {
       "../app.ts/",
     );
 
-    // Each root resolves the SAME escaping href to a different absolute
-    // target, in ROOT order - root 0's candidate always precedes root 1's,
-    // regardless of where either one lands.
+    // Each root resolves the SAME escaping href to a different absolute target, in ROOT order - root 0's candidate always precedes root 1's, regardless of where either one lands.
     expect(refs).toHaveLength(2);
     expect(refs?.[0]?.workspacePath).toBe("/app.ts");
     expect(refs?.[1]?.workspacePath).toBe("/repo-a/app.ts");

@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Detection is pure filesystem + env inspection, so the tests drive it against
-// a virtual filesystem and a chosen platform rather than the host's real one.
-// `os.platform()` is mocked so win32 detection can be exercised from a POSIX
-// runner; `fs/promises` access/stat/realpath/readFile are mocked to a
-// controllable world. Everything else (real file writes, etc.) is untouched.
+// Detection is pure filesystem + env inspection, so the tests drive it against a virtual filesystem and a chosen platform rather than the host's real one.
 const world = vi.hoisted(() => ({
   platform: "linux" as NodeJS.Platform,
   // path -> executable? A missing entry means "not found".
@@ -24,9 +20,6 @@ vi.mock("node:os", async (importActual) => {
   return {
     ...actual,
     platform: () => world.platform,
-    // Neutralise the passwd lookup so the POSIX default shell is driven purely
-    // by the `$SHELL` each test sets, independent of the host's real passwd
-    // entry (which would otherwise leak into detection here).
     userInfo: () => {
       throw new Error("no passwd entry in detection test");
     },
@@ -39,9 +32,7 @@ vi.mock("node:fs/promises", async (importActual) => {
     ...actual,
     stat: async (path: string) => {
       if (!world.files.has(path)) throw enoent();
-      // Everything in the world is a regular file; the directory-vs-file
-      // probe gate is exercised against the real filesystem in the CLI
-      // adversarial suite.
+      // Everything in the world is a regular file; the directory-vs-file probe gate is exercised against the real filesystem in the CLI adversarial suite.
       return { isFile: () => true };
     },
     access: async (path: string, mode: number) => {
@@ -153,7 +144,6 @@ describe("detectShells - Windows (simulated)", () => {
     expect(names(detected)).toContain("WSL");
     expect(names(detected)).toContain("Git Bash");
     expect(names(detected)).toContain("pwsh.exe");
-    // Default (cmd.exe) is present and marked.
     const cmd = detected.find((shell) => shell.path === process.env.COMSPEC);
     expect(cmd?.isDefault).toBe(true);
   });

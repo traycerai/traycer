@@ -78,9 +78,8 @@ function sendCipherOf(session: NoiseSession): CipherState {
 }
 
 /**
- * Regression coverage for T8-F1: a single E2E session multiplexes N mux streams
- * (architecture §3), so `encrypt`/`decrypt` are called concurrently on a shared
- * session. Counter allocation must be atomic and nonces must never be reused.
+ * Regression coverage for T8-F1: a single E2E session multiplexes N mux streams (architecture §3), so `encrypt`/`decrypt` are called concurrently on a shared session.
+ * Counter allocation must be atomic and nonces must never be reused.
  */
 describe("NoiseSession concurrency safety (T8-F1)", () => {
   it("round-trips transport frames with strictly increasing wire counters", async () => {
@@ -152,7 +151,7 @@ describe("NoiseSession concurrency safety (T8-F1)", () => {
     expect(new Set([counterA, counterB])).toEqual(new Set([0n, 1n]));
     expect(client.currentSendCounter()).toBe(2n);
 
-    // Both frames must authenticate on the peer — proof the two seals used
+    // Both frames must authenticate on the peer - proof the two seals used
     // different (key, nonce) pairs and neither was clobbered.
     const [first, second] =
       counterA < counterB ? [frameA, frameB] : [frameB, frameA];

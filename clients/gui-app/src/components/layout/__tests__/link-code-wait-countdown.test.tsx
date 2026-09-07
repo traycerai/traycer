@@ -1,14 +1,4 @@
-/**
- * The approval wait's countdown across a CHANGE OF TARGET.
- *
- * The poll loop republishes `nextPollAtMs` after every poll, on the server's
- * cadence, while this component stays mounted. `useRemainingSeconds` samples
- * the clock when it mounts and then only on its own one-second tick, so a new
- * target arriving between ticks would be subtracted from an outdated instant
- * and could render one second more than the service advertised. The wait line
- * is keyed on the target so each one gets a freshly sampled clock; this is
- * what holds that key in place.
- */
+/** `useRemainingSeconds` samples the clock when it mounts and then only on its own one-second tick. */
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkLoginProgress } from "@/lib/auth/auth-service";
@@ -52,9 +42,8 @@ describe("link-login approval countdown", () => {
     const view = render(<LinkCodeWaitStatus />);
     expect(statusText()).toBe("Checking again in 3s");
 
-    // Mid-tick: under a second of interval has elapsed, so nothing has
-    // resampled the clock when the next 3-second target is published. The
-    // component stays MOUNTED across this — that is the whole scenario.
+    // Mid-tick: under a second of interval has elapsed, so nothing has resampled the clock when the next 3-second
+    // target is published.
     act(() => {
       vi.advanceTimersByTime(800);
     });
@@ -70,9 +59,7 @@ describe("link-login approval countdown", () => {
   });
 
   it("shows the claim's match code large, for the whole wait", () => {
-    // The desktop asks "Does your phone show NN?"; this is the NN. It has
-    // to be there from the first countdown to the finalizing beat — the
-    // human may still be walking over to the desktop.
+    // The desktop asks "Does your phone show NN?"; this is the NN.
     progressHolder.current = {
       nextPollAtMs: START_MS + 3_000,
       phase: "waiting",
@@ -83,9 +70,8 @@ describe("link-login approval countdown", () => {
       "Your code: 47",
     );
     expect(screen.getByRole("status").textContent).toContain("47");
-    // The standing instruction does not depend on the approver showing a
-    // code: an older desktop or CLI asks nothing about it, and "approve only
-    // if it matches" would have the user refuse a prompt that has no code.
+    // The standing instruction does not depend on the approver showing a code: an older desktop or CLI asks
+    // nothing about it, and "approve only if it matches" would have the user refuse a prompt that has no code.
     const waiting = screen.getByTestId("link-code-signin-waiting").textContent;
     expect(waiting).toContain("Waiting for approval on your computer…");
     expect(waiting).toContain(

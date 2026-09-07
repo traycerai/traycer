@@ -15,21 +15,13 @@ import type {
 import type { NativeBrowserViewLifecycle } from "./native-browser-view-lifecycle";
 import type { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 
-/**
- * The single renderer-notification seam every subsystem writes through
- * (`RunnerIpcBridge.safeSendToWindow`); the boolean reports delivery.
- */
 export type BrowserViewSend = (
   windowId: string,
   channel: (typeof RunnerHostEvent)[keyof typeof RunnerHostEvent],
   payload: unknown,
 ) => boolean;
 
-/**
- * Every `webContents.on(...)` registration for one guest, keyed by event name.
- * Attach and teardown both iterate this map, so the two cannot drift. The
- * handler type is the emitter's own so both loops type-check against it.
- */
+/** Attach and teardown both iterate this map, so the two cannot drift. */
 export type BrowserViewListenerMap = Readonly<
   Record<string, Parameters<NodeJS.EventEmitter["on"]>[1]>
 >;
@@ -39,11 +31,6 @@ export interface BrowserViewEntry {
   surfaceBindingId: string | null;
   readonly guestKey: string;
   readonly identity: BrowserViewNativeIdentity;
-  /**
-   * The jar this guest was born into, kept on the entry because teardown is
-   * the only thing that can tell an isolated session's partition it may go:
-   * by then the host frame that named the profile is long gone.
-   */
   readonly profile: BrowserSessionProfile;
   /** The guest itself. Capability code talks only to this. */
   readonly webContents: BrowserViewWebContents;
@@ -59,11 +46,7 @@ export interface BrowserViewEntry {
   debugSession: BrowserDebugSession | null;
   annotationSession: BrowserAnnotationSession | null;
   devToolsWindow: BrowserViewDevToolsWindow | null;
-  /**
-   * Set when the host window's own renderer starts a fresh main-frame
-   * navigation or crashes, before the new renderer has re-upserted this
-   * entry. Cleared when the surface is rebound.
-   */
+  /** Set when the host window's own renderer starts a fresh main-frame navigation or crashes, before the new renderer has re-upserted this entry. */
   rendererResetPending: boolean;
   internalNavigation: boolean;
   /** One teardown shared by every close trigger for this guest. */

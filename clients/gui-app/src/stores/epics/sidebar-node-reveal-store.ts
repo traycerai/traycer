@@ -1,11 +1,8 @@
 import { create } from "zustand";
 
 /**
- * A transient request to bring one projected Epic node into view in the
- * sidebar panel rendered for a specific Epic view tab.
- *
- * The nonce makes repeated reveals of the same node observable after the user
- * scrolls away, and lets a consumer clear only the request it actually served.
+ * A transient request to bring one projected Epic node into view in the sidebar panel rendered for
+ * a specific Epic view tab.
  */
 export interface SidebarNodeRevealRequest {
   readonly nodeId: string;

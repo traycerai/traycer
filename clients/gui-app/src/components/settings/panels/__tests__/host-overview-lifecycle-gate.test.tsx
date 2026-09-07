@@ -1,7 +1,5 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -67,22 +65,7 @@ import {
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
-/**
- * G1 — the selected-Overview lifecycle-gate matrix. This is the independent
- * cold review's finding 1 (HIGH): the Overview used to build its update
- * projection with `freshUntilMs: Infinity` / `nowMs: dataUpdatedAt` /
- * `connected: true` — three ways of asserting a retained read is current — so
- * a host that reported `downloading` and then went unreachable stayed
- * `downloading` FOREVER: `holdsLifecycleGate` never released, an open restart
- * confirmation closed itself, and the Doctor bridge's restart route stayed
- * refused, on a host whose only way back was the restart being blocked.
- *
- * The fix (`observationFromCanonicalRead`, exercised directly in
- * `canonical-status-observation.test.ts`) makes the deadline DERIVED from the
- * read's own health. This file is the integration proof at the seam the
- * review asked for: the real `HostOverviewPanel`, mounted, reading a real
- * `HostClient`.
- */
+/** G1 - the selected-Overview lifecycle-gate matrix. */
 
 const ALL_OVERVIEW_METHODS = [
   "host.status",
@@ -140,21 +123,14 @@ function renderPanel(): void {
   );
 }
 
-// Same as `renderPanel`, but keeps the `QueryClient` reachable across a
-// `rerender` so a later mutation of `scopeOverrides.current` (an unusable
-// scope, say) is observed against the SAME cache — the retained-response
-// path this file's (c)/(c2) tests exist to prove can only fire if the query's
-// cached data survives the scope change instead of being torn down with it.
+// Same as `renderPanel`, but keeps the `QueryClient` reachable across a `rerender` so a later mutation of
+// `scopeOverrides.current` (an unusable scope, say) is observed against the same cache.
 function renderPanelPersistent(): { rerender: () => void } {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   const runnerHost = makeRunnerHost();
-  // A fresh element on every call, not a captured/reused one: React bails out
-  // of re-rendering a subtree entirely when the SAME element reference is
-  // passed to `rerender` twice (`current.memoizedProps === pendingProps`), so
-  // reusing one `tree` value here would silently stop `useHostScope()` (and
-  // therefore `scopeOverrides.current`) from ever being re-read.
+  // A fresh element on every call, not a captured/reused one.
   const buildTree = (): ReactNode => (
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
@@ -295,8 +271,8 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
 
-      // Let the initial read settle before asserting the negative — otherwise
-      // a false "not disabled" could just mean the query has not resolved yet.
+      // Let the initial read settle before asserting the negative - otherwise a false "not disabled" could just mean
+      // the query has not resolved yet.
       await screen.findByTestId("host-overview-edit-name");
       await waitFor(async () => {
         expect(await editNameDisabled()).toBe(false);
@@ -349,74 +325,44 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // The first, healthy read: active, gate HOLDS. Restart is refused, so it
-    // cannot yet be opened — proving the eventual open below is caused by the
-    // read going unhealthy, not by some other path.
+    // The first, healthy read: active, gate holds. Restart is refused, so it cannot yet be opened - proving the
+    // eventual open below is caused by the read going unhealthy, not by some other path.
     await waitFor(async () => {
       expect(await editNameDisabled()).toBe(true);
     });
     expect(await restartMenuAriaDisabled()).toBe("true");
-    // Close the menu before advancing time — leaving a Radix dropdown open
-    // across an unrelated state change is not part of what this test proves.
+    // Close the menu before advancing time - leaving a Radix dropdown open across an unrelated state change is not
+    // part of what this test proves.
     fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-restart")).toBeNull();
     });
 
-    // `host.status` polls every 10s (`host-method-policy-table.ts`). Advance
-    // past it so the SAME query refetches and fails, retaining the last
-    // (active) response as TanStack does on a background refetch error.
+    // `host.status` polls every 10s (`host-method-policy-table.ts`).
     await vi.advanceTimersByTimeAsync(11_000);
 
-    // THE FIX: the read is now unhealthy (isError), so
-    // `observationFromCanonicalRead` stamps an already-expired deadline and
-    // `projectFleetUpdateView` demotes to `unknown` — `holdsLifecycleGate`
-    // releases even though the retained payload still says "downloading".
+    // The fix: the read is now unhealthy (isError), so `observationFromCanonicalRead` stamps an already-expired
+    // deadline and `projectFleetUpdateView` demotes to `unknown`.
     await waitFor(async () => {
       expect(await editNameDisabled()).toBe(false);
     });
     expect(await restartMenuAriaDisabled()).not.toBe("true");
 
-    // Open the restart confirmation NOW THAT the gate has released, and prove
-    // it STAYS open — the render-time close at `anyPending && !ownDispatch`
-    // must not re-fire once the gate is genuinely released. The menu from
-    // the check above is still open; click its Restart item directly.
+    // Open the restart confirmation now that the gate has released, and prove it stays open - the render-time
+    // close at `anyPending && !ownDispatch` must not re-fire once the gate is genuinely released.
     fireEvent.click(screen.getByTestId("host-overview-restart"));
     await screen.findByTestId("confirm-destructive-dialog");
 
-    // Advance more polling ticks (all of which keep failing) to prove this is
-    // a STABLE release, not a one-tick flicker that the next failed poll
-    // would re-lock and re-close.
+    // Advance more polling ticks (all of which keep failing) to prove this is a stable release, not a one-tick
+    // flicker that the next failed poll would re-lock and re-close.
     await vi.advanceTimersByTimeAsync(11_000);
     await vi.advanceTimersByTimeAsync(11_000);
     expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
   });
 
   it("(c2) THE DEFECT ITSELF, unusable-scope leg — a retained active status whose SCOPE turns unusable must demote the SAME way an unhealthy read does", async () => {
-    // A DELIBERATE DEVIATION from (c)'s shape, recorded here rather than left
-    // implicit: `usable` gates the whole header-actions cluster on its own
-    // (`host-overview-panel.tsx`, `nameAction = !usable ? null : …` and
-    // `headerActions` a few lines below it) — a rule that predates this
-    // ticket and is correct on its own terms, a host this page cannot reach
-    // should not offer to rename or restart it. So once the scope goes
-    // unusable, `host-overview-edit-name` and `host-overview-restart` do not
-    // become ENABLED, they disappear entirely, and there is no control left to
-    // click to reopen a restart confirmation with. (c)'s "already open dialog
-    // stays open" shape does not carry over to this leg for that reason: there
-    // is no surface here that is gated by `holdsLifecycleGate` alone without
-    // also being gated by `usable`.
-    //
-    // What DOES stay reachable independent of `usable` is
-    // `HostOverviewOperationCard` (`host-overview-panel.tsx:920`,
-    // `operationView === null ? null : (<HostOverviewOperationCard .../>)`) —
-    // gated only on the retained data existing at all, never on the scope's
-    // usability. Its phase sentence is exactly `holdsLifecycleGate`'s input
-    // wired through `describeUpdateOperation`, so this is the assertion that
-    // isolates the wiring gap the coordinator flagged: if `hasLiveSource`
-    // were hard-coded `true` at the `observationFromCanonicalRead` call site
-    // instead of carrying `usable`, this card would go on reading "Downloading
-    // update to v2.1.0" (LIVE) forever, on a host the scope has already
-    // given up on.
+    // null: (<HostOverviewOperationCard.../>)`) - gated only on the retained data existing at all, never on the
+    // scope's usability.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -430,8 +376,8 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
-    // Healthy AND usable: gate holds, exactly like (a)/(c), and the card
-    // reads the LIVE sentence — no "Last seen:" prefix.
+    // Healthy and usable: gate holds, exactly like (a)/(c), and the card reads the live sentence - no "Last seen:"
+    // prefix.
     await waitFor(async () => {
       expect(await editNameDisabled()).toBe(true);
     });
@@ -444,20 +390,16 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       (await screen.findByTestId("host-overview-operation-phase")).textContent,
     ).toBe("Downloading update to v2.1.0");
 
-    // Nothing about the READ changes — same handler, same cached response, no
-    // new error. Only the SCOPE stops being usable, the way a negotiated
-    // `@1.3` peer going unreachable would leave it: `client` unchanged so the
-    // query key is unchanged and the retained data survives, but
-    // `isHostScopeUsable(scope.status)` now reads false.
+    // Only the scope stops being usable, the way a negotiated `@1.3` peer going unreachable would leave it:
+    // `client` unchanged so the query key is unchanged and the retained data survives.
     scopeOverrides.current = {
       ...scopeFrom("host-a", fixture),
       status: "unreachable",
     };
     panel.rerender();
 
-    // THE FIX: the retained attempt demotes to "last known" the moment the
-    // scope stops being usable, exactly as it does when the READ itself turns
-    // unhealthy in (c) — same predicate, different input.
+    // The fix: the retained attempt demotes to "last known" the moment the scope stops being usable, exactly as it
+    // does when the read itself turns unhealthy in (c) - same predicate, different input.
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-phase").textContent,

@@ -11,23 +11,10 @@ import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
 const TRAY_EPIC_LIMIT = 20;
 
 /**
- * Sources the tray's recent-epic list from the same history store that backs
- * the in-app epic list. `useHistoryQuery` already returns items sorted
- * most-recent-first; we project the leading epics into the tray-projection
- * store, which `RunnerHostBridges` forwards to the native tray over IPC.
- *
- * Mounted in `RunnerHostBridges` (inside the host + query providers, above
- * the router) so the tray stays populated regardless of the active route.
- * When signed out or the host is not ready the underlying query is disabled
- * and the list is empty - the tray then shows its "No recent epics"
- * placeholder.
+ * Mount in `RunnerHostBridges` so the tray stays populated off-route. Signed out or host not ready leaves the list empty.
  */
 export function useTrayEpicsSource(): void {
-  // Re-derive "now" on a coarse interval so the relative-time subtitles
-  // ("2 hours ago") stay accurate. With a frozen `nowMs` they would be pinned
-  // to the value computed when this hook first mounted (it lives for the whole
-  // app session) and never refresh. The projection store dedupes by content,
-  // so a tick that doesn't change any label is a no-op and fires no IPC.
+  // With a frozen `nowMs` they would be pinned to the value computed when this hook first mounted (it lives for the whole app session) and never refresh.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 60_000);

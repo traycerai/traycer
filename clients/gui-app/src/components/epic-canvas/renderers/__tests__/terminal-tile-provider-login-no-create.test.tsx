@@ -14,13 +14,8 @@ import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 
-// Same fixture-and-mock shape as `terminal-tile-close-navigation.test.tsx`
-// (nested-focus boundary, host reachability, open-epic id, recovery, perf,
-// analytics) EXCEPT `use-terminal-tile-bootstrap` is left REAL here - the
-// whole point of this file is proving the bootstrap's `enabled` wiring
-// (`TerminalTile`'s `!isSignInTerminal` derivation), which a canned-object
-// mock of that hook cannot observe. Only ITS RPC-boundary dependencies are
-// stubbed, mirroring `use-terminal-tile-bootstrap-no-respawn.test.tsx`.
+// Same fixture-and-mock shape as `terminal-tile-close-navigation.test.tsx` (nested-focus boundary, host reachability, open-epic id, recovery, perf, analytics) EXCEPT `use-terminal-tile-bootstrap` is left REAL here - the whole point of this file is proving the bootstrap's `enabled` wiring (`TerminalTile`'s `!isSignInTerminal` derivation), which a canned-object mock of that hook cannot observe.
+// Only ITS RPC-boundary dependencies are stubbed, mirroring `use-terminal-tile-bootstrap-no-respawn.test.tsx`.
 
 let mockList: {
   data: { sessions: ReadonlyArray<Record<string, unknown>> } | undefined;
@@ -94,9 +89,7 @@ vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
   }),
 }));
 
-// Stands in for the real measure-before-subscribe probe (which mounts the
-// heavy xterm engine): reports a fixed grid immediately so the bootstrap's
-// gated create is free to fire in the "no host record" scenario below.
+// Stands in for the real measure-before-subscribe probe (which mounts the heavy xterm engine): reports a fixed grid immediately so the bootstrap's gated create is free to fire in the "no host record" scenario below.
 vi.mock(
   "@/components/epic-canvas/renderers/terminal-grid-measure-probe",
   () => ({
@@ -216,13 +209,8 @@ describe("<TerminalTile /> provider-login origin never dispatches terminal.creat
     cleanup();
   });
 
-  // Row 7's discriminating case: the host has NO record of the session, so an
-  // ordinary shell tile's bootstrap WOULD dispatch `terminal.create` the
-  // instant its grid is measured. A `provider-login` tile must not, however
-  // long it waits - the host created this PTY, and a client-side create would
-  // spawn a bare, provider-less shell in its place. Probed: swapping this
-  // fixture's `origin` to `"shell"` makes `mockCreate.mutate` fire and the
-  // "Sign-in terminal ended." text never render - confirmed and reverted.
+  // A `provider-login` tile must not, however long it waits - the host created this PTY, and a client-side create would spawn a bare, provider-less shell in its place.
+  // Probed: swapping this fixture's `origin` to `"shell"` makes `mockCreate.mutate` fire and the "Sign-in terminal ended." text never render - confirmed and reverted.
   it("shows the retry affordance and never creates when the host has no record of the session", async () => {
     renderTile(signInNode("term-signin", "inst-term-signin"));
 

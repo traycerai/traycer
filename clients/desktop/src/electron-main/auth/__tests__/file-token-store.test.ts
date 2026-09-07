@@ -1,10 +1,3 @@
-/**
- * End-to-end FileTokenStore tests against a real temp-dir credentials file
- * (lock + WAL via `createCredentialsMutationStore`). Fetch is the only faked
- * boundary — the locked rotate spend hits a stubbed authn refresh endpoint.
- *
- * Spec: credentials-file token-store tech plan §2 / §3 / §4.
- */
 import {
   chmodSync,
   existsSync,
@@ -37,28 +30,10 @@ const IDENTITY = {
   name: "Ada",
 } as const;
 
-/**
- * Waits that cross a REAL `fs.watch` need a regression-scale bound, not the
- * implicit 1000 ms `vi.waitFor` default. OS event delivery is unbounded, and
- * the store's own 50 ms debounce only starts once the watcher callback runs,
- * so the default is a wall-clock bet on a loaded machine - and it loses. CI
- * observed `external write fires subscribe...` failing at 1017 ms, and 12
- * parallel local copies of this file reproduce it.
- *
- * A watcher that genuinely never delivers still fails here in seconds, while
- * ordinary scheduler latency no longer does. Only real-delivery waits use
- * this; mock-driven waits elsewhere keep the default deliberately.
- */
+/** A watcher that genuinely never delivers still fails here in seconds, while ordinary scheduler latency no longer does. */
 const WATCHER_DELIVERY_TIMEOUT_MS = 10_000;
 
-/**
- * Per-test timeouts below are `N * WATCHER_DELIVERY_TIMEOUT_MS +
- * TEST_TIMEOUT_BUFFER_MS`, not a bare sum: the enclosing Vitest timer starts
- * before the `signIn`/`rotate`/write calls that precede each `vi.waitFor`,
- * so a sum-only budget leaves zero room for those calls, their assertions,
- * or (for the debounce test) the extra 120 ms post-wait sleep. Sized well
- * above that fixed overhead rather than tuned to the minimum that passes.
- */
+/** Per-test timeouts below are `N * WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS`, not a bare sum: the enclosing Vitest timer starts before the `signIn`/`rotate`/write calls. */
 const TEST_TIMEOUT_BUFFER_MS = 5_000;
 
 vi.mock("electron", () => ({
@@ -212,14 +187,10 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       }),
     );
     // The "relaunch": a fresh store over the same files. Its first read
-    // waits on the recovery gate, whose drain completes the delete — the
+    // waits on the recovery gate, whose drain completes the delete  -  the
     // zombie is never served and does not survive the launch.
     const relaunched = makeStore();
     expect(await relaunched.get()).toBeNull();
-    // BOTH files inside the wait: the drain removes the pair and clears its
-    // sidecar as one recovery, and the sidecar is not guaranteed gone at the
-    // instant the pair is. Asserting it outside passes on timing rather than
-    // on the invariant.
     await vi.waitFor(() => {
       expect(existsSync(credentialsPath())).toBe(false);
       expect(existsSync(`${credentialsPath()}.quarantine.json`)).toBe(false);
@@ -371,7 +342,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const isRoot =
       typeof process.getuid === "function" && process.getuid() === 0;
     if (isWindows || isRoot) {
-      // chmod bits are ignored on Windows / as root — skip the negative path.
+      // chmod bits are ignored on Windows / as root  -  skip the negative path.
       return;
     }
 
@@ -380,10 +351,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const parent = dirname(credentialsPath());
     chmodSync(parent, 0o500);
     try {
-      // Freezing the parent blocks lock acquisition / WAL writes. The surface
-      // contract is "delete rejects" (so AuthService stays signed in) — the
-      // failure may surface as a typed non-deleted outcome or as an EACCES
-      // throw from the lock/WAL path; either way the file must remain.
       await expect(store.delete()).rejects.toThrow();
       expect(existsSync(credentialsPath())).toBe(true);
     } finally {
@@ -422,23 +389,8 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
   });
 
   /**
-   * Replaces a test that asserted `subscribe` "never fires". It does fire:
-   * the watcher is installed in the constructor and deliberately notifies on
-   * SELF-writes as well as external ones (see the contract note on
-   * `FileTokenStore` and on `subscribe` itself), so the old assertion only
-   * held while the 50 ms debounce had not yet elapsed - i.e. it was a race
-   * that a fast machine won. CI lost it: `expected 1 to be +0`. The suite
-   * already knew better one screen down, where a sibling test drains "the
-   * self-write emit from signIn" before asserting on a delete.
-   *
-   * What is actually worth pinning is the unsubscribe contract, and it is
-   * pinned without any sleep: a SECOND live listener acts as a positive
-   * acknowledgement that a post-unsubscribe write travelled the whole real
-   * path (fs.watch delivery -> debounce -> read -> fan-out). Once the probe
-   * has observed that event, the unsubscribed listener demonstrably had its
-   * chance and did not fire. Sleeping past 50 ms instead would not work:
-   * `fs.watch` delivery itself has no upper bound, and the debounce only
-   * starts once the watcher callback runs.
+   * Replaces a test that asserted `subscribe` "never fires".
+   * What is actually worth pinning is the unsubscribe contract, and it is pinned without any sleep: a SECOND live listener acts as a positive acknowledgement that a post-unsubscribe.
    */
   it(
     "unsubscribing stops delivery while the watcher keeps notifying others",
@@ -463,11 +415,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       unsubscribeFirst();
       const countAtUnsubscribe = firstCount;
 
-      // The second mutation is a delete, not another rotate: its
-      // `present: false` payload cannot be satisfied by a notification the
-      // first (still in-flight) signIn write already queued, which the probe
-      // subscribing after unsubscribeFirst could otherwise observe and
-      // mistake for acknowledgement of this mutation.
+      // The second mutation is a delete, not another rotate: its `present: false` payload cannot be satisfied by a notification the first (still in-flight) signIn write already queued.
       const probeChanges: TokenStoreChange[] = [];
       const unsubscribeProbe = store.subscribe((change) => {
         probeChanges.push(change);

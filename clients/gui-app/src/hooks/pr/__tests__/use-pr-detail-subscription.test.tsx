@@ -23,28 +23,7 @@ import {
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
-/**
- * Test (a) - non-default-host subscription.
- *
- * `usePrDetailSubscription` resolves its transport from `useTabHostId()` ->
- * `useHostStreamClientFor`, NEVER from `useAddressableHostId()` /
- * `StreamRuntimeContext` (the app-wide default-host client) - unlike
- * `GitDiffTile`, which gates on `tabHostId === activeHostId`. This file
- * mocks `useTabHostId` directly (no `<TabHostProvider>` needed for a
- * `renderHook`-only test) and mocks `useHostStreamClientFor` to hand back a
- * fake `WsStreamClient` unconditionally - there is no "active host" mock
- * anywhere in this file, which is itself part of the proof: the hook has no
- * code path that could even read one.
- *
- * `usePrDetailSubscription` also calls `useHostDirectoryEntry` and
- * `useStreamAuthRevalidator` directly (not just `useHostStreamClientFor`
- * internally) - both read `@/lib/host`'s `useHostDirectory` /
- * `useAuthService`, which need a `HostRuntimeContext` provider in
- * production. Mocking `@/lib/host` sidesteps that requirement, mirroring
- * `chat-tile.test.tsx`'s barrel-mock convention. Their return values are
- * discarded anyway since `useHostStreamClientFor` itself is mocked to
- * ignore its `target`/`auth` arguments.
- */
+/** Transport from useTabHostId -> useHostStreamClientFor, never the app-wide stream. */
 
 const tabHostIdRef = vi.hoisted(() => ({ value: "host1" }));
 
@@ -77,11 +56,6 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
-/**
- * Mock stream session for `pr.subscribeDetail`. Frame fields ride directly
- * on the envelope (no `.value` wrapping), same convention as the sibling
- * list-hook mock in `use-pr-list-subscription.test.tsx`.
- */
 class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
@@ -269,11 +243,7 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
   });
 
   it("subscribes through whatever client useTabHostId resolves to, for a bound host that is NOT any app-wide 'active host', with exact open-request params, and tears down on unmount", async () => {
-    // "host2" stands in for a tab bound to a host that differs from whatever
-    // the app's default/active host happens to be. The hook has no
-    // `useAddressableHostId` (or any comparable) input to compare
-    // against - this file never even imports/mocks that concept - so a
-    // successful subscribe here is a direct proof of its absence.
+    // The hook has no `useAddressableHostId` (or any comparable) input to compare against - this file never even imports/mocks that concept - so a successful subscribe here is a direct proof of its absence.
     tabHostIdRef.value = "host2";
 
     const args = {
@@ -380,10 +350,7 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
     });
     expect(firstSession).toBeDefined();
     if (firstSession === undefined) return;
-    // The mock keys sessions by (method, params), so a retry's `subscribe`
-    // call for the SAME params returns this SAME object - `close` call
-    // counts are how this test observes distinct teardown lifecycles despite
-    // that.
+    // The mock keys sessions by (method, params), so a retry's `subscribe` call for the SAME params returns this SAME object - `close` call counts are how this test observes distinct teardown lifecycles despite that.
     const closeSpy = vi.spyOn(firstSession, "close");
 
     // A fatal transport close marks the shared session terminal - both

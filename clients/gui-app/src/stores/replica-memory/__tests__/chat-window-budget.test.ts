@@ -273,15 +273,8 @@ describe("evictChatWindowForAccountant", () => {
 });
 
 /**
- * The feature's own motivating case, end to end: a huge IN-FLIGHT turn has to
- * evict the cold scrollback it is competing with.
- *
- * The chain has three links and each one is load-bearing. The turn's deltas
- * are `deferred`, so they deliberately leave `hydratedBytes` unmoved. The mark
- * they leave in `unsettledByteMessageIds` is what carries the growth forward.
- * `evictTranscriptWindowToBudget` settles FIRST and only then reads its gate,
- * which is the moment the growth becomes a figure at all. Break any link and
- * the window reads as under budget while holding a turn's worth of bytes.
+ * The feature's own motivating case, end to end: a huge IN-FLIGHT turn has to evict the cold
+ * scrollback it is competing with. The chain has three links and each one is load-bearing.
  */
 describe("an in-flight turn's growth reaches the eviction gate", () => {
   it("evicts cold spans once a STREAMING row grows past the budget", () => {

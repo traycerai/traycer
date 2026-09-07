@@ -11,15 +11,8 @@ import {
 } from "@/stores/chats/transcript-window";
 
 /**
- * Which cross-tile jump targets this client can place, and which it must ask
- * the host about.
- *
- * The case these exist for is a `message` target naming an ASSISTANT record.
- * Its rows are turn-keyed (`assistant:<turnKey>`), so the durable id is not a
- * row id and the skeleton read misses; the rendered model carries it as
- * `persistentMessageId`, which a COLD row does not have. Both client reads
- * therefore miss on exactly the rows a jump is most likely to land on in a long
- * chat, and without a host answer the jump parks until its TTL drops it.
+ * Which cross-tile jump targets this client can place, and which it must ask the host about.
+ * Both client reads therefore miss on exactly the rows a jump is most likely to land on in a long chat, and without a host answer the jump parks until its TTL drops it.
  */
 
 function skeletonEntry(rowId: string, ordinal: number): RowSkeletonEntry {
@@ -123,9 +116,7 @@ describe("coldJumpOrdinal: a `message` target", () => {
   const window = windowNaming(["m-1", "assistant:turn-1", "m-2"]);
 
   it("falls through to the host's answer when the skeleton does not name the id", () => {
-    // Without the fallback this is `null` forever: the record is an assistant
-    // one, so no skeleton entry will ever carry its id however long the jump
-    // waits.
+    // Without the fallback this is `null` forever: the record is an assistant one, so no skeleton entry will ever carry its id however long the jump waits.
     expect(
       coldJumpOrdinal(window, { kind: "message", messageId: "m-turn" }, 1),
     ).toBe(1);

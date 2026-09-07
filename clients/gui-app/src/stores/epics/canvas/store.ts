@@ -1,11 +1,5 @@
-// This file owns the store interface, the zustand store creation (header-tab
-// + canvas actions), and the persistence/desktop-bridge wiring. The
-// supporting layers live in sibling modules:
-//
-// - `canvas-persistence.ts`  persisted-state sanitization
-// - `canvas-desktop-projection.ts`  desktop snapshot/patch builders
-// - `canvas-title-timers.ts`  title-pending timers + visibility predicates
-// - `canvas-selectors.ts`  the selector/hook layer (re-exported below)
+// This file owns the store interface, the zustand store creation (header-tab + canvas actions),
+// and the persistence/desktop-bridge wiring. The supporting layers live in sibling modules:
 import { create } from "zustand";
 import {
   createJSONStorage,
@@ -161,11 +155,7 @@ import {
 import type { PaneTileOpenOptions } from "@/lib/canvas/tile-open/intent";
 export { parseEpicNodeRef as parseArtifactRef } from "@/stores/epics/canvas/tile-schema/artifact-tile";
 
-/**
- * `<kind>Opened` analytics for a tile that just entered the canvas. Exported
- * for `execute-tile-open.ts`, whose split path is the one prepare* action with
- * no `FromSource` variant of its own.
- */
+/** `<kind>Opened` analytics for a tile that just entered the canvas. */
 export function trackOpenedCanvasTile(
   node: EpicCanvasTileRef,
   source: AnalyticsSource,
@@ -209,11 +199,8 @@ export function trackOpenedCanvasTile(
 }
 
 /**
- * Emits `tab_closed` for every tile a close GESTURE actually removed, by
- * diffing the tab canvas' tile registry around the update (every close path
- * prunes `tilesByInstanceId`, including last-tab pane collapse). Only the
- * user-facing close actions call this, so programmatic tile removal - e.g. a
- * cross-tab move, which routes through different actions - never counts.
+ * Emits `tab_closed` for every tile a close GESTURE actually removed, by diffing the tab canvas'
+ * tile registry around the update (every close path prunes `tilesByInstanceId`, including last-tab
  */
 function trackClosedCanvasTiles(
   before: EpicCanvasState | undefined,
@@ -289,22 +276,13 @@ export interface EpicCanvasStore {
    */
   readonly tabsById: Readonly<Record<string, EpicViewTab | undefined>>;
   /**
-   * Per-tab canvas snapshot, keyed by `tabId`, kept PARALLEL to `tabsById`
-   * rather than embedded in the tab record. Canvas mutations (tile open,
-   * active-tab switch, split, resize) touch only this map, so the `tabsById`
-   * record identity stays stable for tab-metadata consumers (header strip,
-   * command palette). Every entry is created/cloned/removed in lockstep with
-   * its `tabsById` entry.
+   * Per-tab canvas snapshot, keyed by `tabId`, kept PARALLEL to `tabsById` rather than embedded in
+   * the tab record.
    */
   readonly canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>;
   /**
-   * Payloads of tiles closed out of a tab's canvas, keyed by `tabId` then by
-   * the closed tile's (now-defunct) `instanceId`. Lets back/forward reopen a
-   * closed sub-tab as a preview (`openTilePreviewInTab`) even though
-   * `tilesByInstanceId` itself discards the payload on close - the href/search
-   * params alone don't carry enough to reconstruct a tile node. Session-only
-   * (not in `partialize`) and bounded per tab (`captureClosedTilePayloads`),
-   * so a stale miss just falls back to the existing stale-route restore.
+   * Payloads of tiles closed out of a tab's canvas, keyed by `tabId` then by the closed tile's
+   * (now-defunct) `instanceId`.
    */
   readonly closedTilePayloadsByTabId: Readonly<
     Record<
@@ -313,9 +291,8 @@ export interface EpicCanvasStore {
     >
   >;
   /**
-   * Header-strip order for tabs currently visible in this window. Removing an
-   * id from this list closes the visible tab without necessarily discarding its
-   * stored canvas state.
+   * Header-strip order for tabs currently visible in this window. Removing an id from this list
+   * closes the visible tab without necessarily discarding its stored canvas state.
    */
   readonly openTabOrder: ReadonlyArray<string>;
   readonly activeTabId: string | null;
@@ -332,10 +309,8 @@ export interface EpicCanvasStore {
   readonly selfDeletedArtifactIds: ReadonlySet<string>;
   readonly pendingCreateArtifactIds: ReadonlySet<string>;
   /**
-   * Terminal pending-create identities, keyed by canonical
-   * `plainTerminalFleetIdentityKey` (`JSON.stringify([hostId, terminalId])`).
-   * Separate from `pendingCreateArtifactIds` so a chat/artifact id cannot be
-   * claimed as a terminal marker. Not persisted.
+   * Terminal pending-create identities, keyed by canonical `plainTerminalFleetIdentityKey`
+   * (`JSON.stringify([hostId, terminalId])`).
    */
   readonly pendingCreateTerminalIdentities: ReadonlySet<string>;
   readonly preAckRootCreatesByEpic: Readonly<
@@ -369,18 +344,13 @@ export interface EpicCanvasStore {
     name: string | undefined,
   ) => string;
   /**
-   * Open an epic tab in the header strip WITHOUT activating it - the active
-   * tab and current route are left untouched. Reuses an existing tab for the
-   * epic when one is already open (returns its id, makes no change). Used by
-   * the history "Open in Background" action so a row can be opened behind the
-   * current surface (e.g. without dismissing the History overlay).
+   * Open an epic tab in the header strip WITHOUT activating it - the active tab and current route
+   * are left untouched.
    */
   openEpicTabInBackground: (epicId: string, name: string | undefined) => string;
   /**
-   * Close the tab as a user-visible header action: remove it from
-   * `openTabOrder`, update active/recent pointers, and keep `tabsById[tabId]`
-   * available for reopen. Use `discardTabState` when the tab record must be
-   * permanently deleted.
+   * Close the tab as a user-visible header action: remove it from `openTabOrder`, update
+   * active/recent pointers, and keep `tabsById[tabId]` available for reopen.
    */
   closeTab: (tabId: string) => void;
   /**
@@ -396,10 +366,8 @@ export interface EpicCanvasStore {
   moveOpenTab: (tabId: string, targetIndex: number) => void;
   duplicateTab: (tabId: string) => string | null;
   /**
-   * Open `node` as the sole tile of a fresh header tab for `epicId`,
-   * inserted at `insertIndex` in the header strip (`null` appends). The new
-   * tab becomes active. Single store write - callers must not follow up with
-   * a `moveOpenTab` to position it.
+   * Open `node` as the sole tile of a fresh header tab for `epicId`, inserted at `insertIndex` in
+   * the header strip (`null` appends). The new tab becomes active.
    */
   openTileInNewTab: (
     epicId: string,
@@ -419,9 +387,8 @@ export interface EpicCanvasStore {
   setActiveTab: (tabId: string) => void;
   renameTab: (tabId: string, name: string) => void;
   /**
-   * Permanently delete a tab record and its canvas state. This is for true
-   * discard flows such as moving a tab to another desktop window or rejecting
-   * a duplicate desktop ownership claim.
+   * Permanently delete a tab record and its canvas state. This is for true discard flows such as
+   * moving a tab to another desktop window or rejecting a duplicate desktop ownership claim.
    */
   discardTabState: (tabId: string) => DesktopPerWindowStatePatch | null;
   /**
@@ -436,10 +403,8 @@ export interface EpicCanvasStore {
   resolveTabIdForEpic: (epicId: string) => string | null;
 
   /**
-   * Open a tile in `tabId`'s canvas as a permanent tab (dedup-aware: focuses
-   * the tab if the content is already open anywhere). All tile kinds -
-   * artifacts, terminals, workspace files, git/snapshot diffs - flow through
-   * this one action.
+   * Open a tile in `tabId`'s canvas as a permanent tab (dedup-aware: focuses the tab if the content
+   * is already open anywhere).
    */
   openTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
   prepareOpenTileInTabFocusTarget: (
@@ -462,35 +427,19 @@ export interface EpicCanvasStore {
     source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
-   * Reopens a preserved `closedTilePayloadsByTabId` entry as a preview,
-   * preferring `preferredPaneId` (the history entry's original pane) when it
-   * still exists and falling back to the active pane otherwise. `node` keeps
-   * its ORIGINAL `instanceId` (not a fresh one) so a landing history href
-   * addressing that exact instanceId resolves directly after the reopen.
-   * Evicts the now-live entry from `closedTilePayloadsByTabId` - a later
-   * close re-captures it - and restores its pending-create marker while the
-   * optimistic record is still projecting. Back/forward's preview-reopen path
-   * (`history-navigation.ts`) is the only caller.
+   * Reopens a preserved `closedTilePayloadsByTabId` entry as a preview, preferring `preferredPaneId`
+   * (the history entry's original pane) when it still exists and falling back to the active pane
    */
   restoreClosedTilePreview: (
     tabId: string,
     preferredPaneId: string | null,
     node: EpicCanvasTileRef,
   ) => void;
-  /**
-   * Drops one entry from `closedTilePayloadsByTabId` without reopening it.
-   * Back/forward's preview-reopen path calls this when a preserved payload's
-   * backing record has since been permanently deleted (checked via
-   * `isTileRefRecordLive`) - the entry is unusable, so it's discarded and the
-   * landing treats it as a cache miss (existing stale-target fallback takes
-   * over) rather than resurrecting a tile the record-sync effect would
-   * immediately close again.
-   */
+  /** Drops one entry from `closedTilePayloadsByTabId` without reopening it. */
   discardClosedTilePayload: (tabId: string, instanceId: string) => void;
   /**
-   * Add `node` as a tab in the active pane without changing the active
-   * tab/pane (persists a server-created terminal as a saved tab without
-   * stealing focus). Idempotent.
+   * Add `node` as a tab in the active pane without changing the active tab/pane (persists a
+   * server-created terminal as a saved tab without stealing focus). Idempotent.
    */
   openTileInBackgroundTab: (tabId: string, node: EpicCanvasTileRef) => void;
   prepareOpenTileInBackgroundTabFocusTargetFromSource: (
@@ -499,11 +448,8 @@ export interface EpicCanvasStore {
     source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
-   * Opener-only path: open `ref` into the explicit `paneId` as a fresh tab
-   * instance, bypassing dedup. A second view of an already-open content id is
-   * allowed (distinct `instanceId`). `mode` picks pinned / preview /
-   * membership-only semantics and `index` the strip position (`null`
-   * appends). See {@link openTileInPaneCanvas}.
+   * Opener-only path: open `ref` into the explicit `paneId` as a fresh tab instance, bypassing
+   * dedup. A second view of an already-open content id is allowed (distinct `instanceId`).
    */
   openTileInPane: (
     tabId: string,
@@ -518,9 +464,8 @@ export interface EpicCanvasStore {
     options: PaneTileOpenOptionsFromSource,
   ) => NestedFocusTarget | null;
   /**
-   * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank:
-   * a no-op-ish focus when the pane's active tab is already blank.
-   * See {@link openBlankTabInPaneCanvas}.
+   * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank: a no-op-ish focus
+   * when the pane's active tab is already blank.
    */
   openBlankTabInPane: (tabId: string, paneId: string) => void;
   prepareOpenBlankTabInPaneFocusTarget: (
@@ -537,12 +482,7 @@ export interface EpicCanvasStore {
     tileId: string,
     view: GitDiffTileViewState,
   ) => void;
-  /**
-   * Rewrite a snapshot-diff tile's payload. Today's one caller refreshes a
-   * segment tile's captured endpoints once the edit behind it settles, so a
-   * tile opened mid-stream does not keep a half-written capture as its durable
-   * fallback. See `updateSnapshotDiffTilePayload`.
-   */
+  /** Rewrite a snapshot-diff tile's payload. */
   updateSnapshotDiffTilePayloadInTab: (
     tabId: string,
     tileId: string,
@@ -628,9 +568,8 @@ export interface EpicCanvasStore {
     args: TabSplitArgs,
   ) => NestedFocusTarget | null;
   /**
-   * Split into a trailing empty pane. Returns the new empty pane's id (which
-   * `splitPaneEmpty` makes active) so callers can bind the opener to it, or
-   * `null` when the split was a no-op.
+   * Split into a trailing empty pane. Returns the new empty pane's id (which `splitPaneEmpty` makes
+   * active) so callers can bind the opener to it, or `null` when the split was a no-op.
    */
   splitPaneEmptyInTab: (
     tabId: string,
@@ -642,7 +581,6 @@ export interface EpicCanvasStore {
     targetPaneId: string,
     direction: SplitDirection,
   ) => NestedFocusTarget | null;
-  /** Convenience for the explicit far-right split button (horizontal). */
   splitPaneEmptyRightInTab: (
     tabId: string,
     targetPaneId: string,
@@ -705,10 +643,8 @@ export interface EpicCanvasStore {
     name: string,
   ) => void;
   /**
-   * Refresh the persisted fallback `name` of every terminal tile bound to
-   * (hostId, sessionId) across ALL view tabs after a successful host rename.
-   * Durable-snapshot fan-out only - live titles render from the host's
-   * `terminal.list` rows.
+   * Refresh the persisted fallback `name` of every terminal tile bound to (hostId, sessionId) across
+   * ALL view tabs after a successful host rename.
    */
   updateTerminalNameSnapshots: (
     hostId: string,
@@ -881,13 +817,6 @@ function createEpicViewTab(
   return { tabId: uuidv4(), epicId, name: name ?? UNTITLED_EPIC_TITLE };
 }
 
-/**
- * Shared `set()` payload for appending a freshly-created epic tab to the strip:
- * registers the tab + an empty canvas, pushes it onto `openTabOrder`, points
- * the epic's most-recent pointer at it, and seeds an empty artifact tree if the
- * epic has none. Activation is layered on by the caller (`openEpicTab` makes it
- * active; `openEpicTabInBackground` leaves `activeTabId` untouched).
- */
 function appendedEpicTabState(state: EpicCanvasStore, tab: EpicViewTab) {
   const { tabId, epicId } = tab;
   return {
@@ -946,13 +875,7 @@ function withoutClosedTilePayloadsByTabIds(
   );
 }
 
-/**
- * Per-tab cap on preserved closed-tile payloads. Bounds
- * `closedTilePayloadsByTabId` memory growth across a long session of
- * open/close churn; a payload evicted before its history entry is just a
- * cache miss - the preview-reopen lookup falls back to the existing
- * stale-route restore.
- */
+/** Per-tab cap on preserved closed-tile payloads. */
 const MAX_CLOSED_TILE_PAYLOADS_PER_TAB = 20;
 
 /** Adds `ref` to a tab's closed-tile payload map, FIFO-evicting the oldest
@@ -1017,14 +940,6 @@ function withoutDeletedTerminalPayloads(
     : record;
 }
 
-/**
- * Diffs a tab's `tilesByInstanceId` before/after a canvas update and folds
- * every removed tile's payload into `closedTilePayloadsByTabId`, so a later
- * back/forward navigation can reopen it as a preview
- * (`openTilePreviewInTab`). Returns the SAME map reference when nothing was
- * removed, matching the no-op-skips-the-write convention `updateTabCanvas`
- * relies on.
- */
 function pendingCreateForClosedRef(
   state: EpicCanvasStore,
   ref: EpicCanvasTileRef,
@@ -1192,9 +1107,8 @@ function updateTabCanvas(
   tabId: string,
   updater: (canvas: EpicCanvasState) => EpicCanvasState,
 ): Partial<EpicCanvasStore> {
-  // No-ops return `state` itself: zustand's set() short-circuits on
-  // Object.is, so listeners (selectors, the desktop projection subscriber)
-  // never fire. Returning `{}` would still create a fresh state object.
+  // No-ops return `state` itself: zustand's set() short-circuits on Object.is, so listeners
+  // (selectors, the desktop projection subscriber) never fire.
   if (state.tabsById[tabId] === undefined) return state;
   const current = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
   const next = updater(current);
@@ -1326,26 +1240,15 @@ function appendArtifactRecord(args: AppendArtifactRecordArgs): {
   };
 }
 
-/**
- * Options for `guardCanvasMutation`. This guard is always strict: the sole
- * sanctioned epicId resolution (`resolveTabEpicIdentity`) does not call it at
- * all - it commits through the module-private raw setter directly, so
- * provenance is enforced by module privacy rather than a parameter every
- * ingress has to thread and every caller of this function has to reason
- * about.
- */
+/** Options for `guardCanvasMutation`. */
 interface CanvasMutationGuardOptions {
   readonly ingressContext: string;
   readonly throwOnViolation: boolean;
 }
 
 /**
- * Shared identity guard for every canvas-mutation ingress: the closure-local
- * `set` below (which delegates to the guarded public `setState` wrapper) and
- * persisted hydration. `epicId` lives on `tabsById`, not `canvasByTabId`, so
- * a candidate must be checked whenever EITHER map changes - a
- * `tabsById`-only patch can repoint every tile in a tab without ever
- * touching `canvasByTabId`.
+ * Shared identity guard for every canvas-mutation ingress: the closure-local `set` below (which
+ * delegates to the guarded public `setState` wrapper) and persisted hydration.
  */
 function guardCanvasMutation(
   state: EpicCanvasStore,
@@ -1378,14 +1281,8 @@ function guardCanvasMutation(
 export const useEpicCanvasStore = create<EpicCanvasStore>()(
   persist(
     (_rawSet, get) => {
-      // Single choke point for every internal canvas mutation (all ~60 call
-      // sites below funnel through this closure's `set`, including the ones
-      // that write `canvasByTabId` directly rather than via `updateTabCanvas`
-      // - e.g. `tearOffTabIntoNewHeaderTab`, `duplicateTab`). Delegates to
-      // the guarded public `setState` wrapper (defined after this store is
-      // created) rather than duplicating its guard logic - persisted
-      // hydration is the only other ingress point, since it runs through the
-      // `merge` option below instead of this closure.
+      // Single choke point for every internal canvas mutation (all ~60 call sites below funnel through
+      // this closure's `set`, including the ones that write `canvasByTabId` directly rather than via
       const set = (
         partial:
           | Partial<EpicCanvasStore>
@@ -1429,12 +1326,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         openEpicTabWithId: (tabId, epicId, name) => {
-          // `closeTab` preserves the record in `tabsById` so the tab can be
-          // reopened, which means an existing record is NOT the same thing as an
-          // open tab. Returning the id without revealing it hands the caller a
-          // ref that `tabSourceRefs()` does not back, and strip reconciliation
-          // then deletes the layout item the caller just placed. `setActiveTab`
-          // re-pushes onto `openTabOrder` and no-ops when already open + active.
+          // `closeTab` preserves the record in `tabsById` so the tab can be reopened, which means an
+          // existing record is NOT the same thing as an open tab.
           if (get().tabsById[tabId] !== undefined) {
             get().setActiveTab(tabId);
             return tabId;
@@ -1475,10 +1368,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         openEpicTabInBackground: (epicId, name) => {
           const existing = resolveTabIdForEpic(get(), epicId);
           if (existing !== null) {
-            // Reveal a preserved-but-hidden tab in the strip without activating
-            // it; an already-visible tab is left exactly where it is. The
-            // functional updater is the single guard - it no-ops (returns the
-            // same state, which Zustand bails on) when the tab is already shown.
+            // Reveal a preserved-but-hidden tab in the strip without activating it; an already-visible tab is
+            // left exactly where it is.
             set((current) =>
               current.openTabOrder.includes(existing)
                 ? current
@@ -1730,14 +1621,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               ? (sourceCanvas.tilesByInstanceId[args.sourceTileTabId] ?? null)
               : null;
           if (pane === null || node === null) return null;
-          // Ticket 20: the torn-off tile always remounts - it moves from the
-          // source header tab's canvas root into a brand-new header tab's
-          // canvas root, a completely different React parent chain (MOVE
-          // semantics, same instanceId - see the corrected comment at
-          // `commitHeaderStripDrop`'s call site). When it was its source
-          // pane's only tab, `closeTileTab` below falls through to
-          // `closePane`, which can also dissolve that pane's parent group and
-          // remount a sibling. Flush both before `set()` commits the move.
+          // the torn-off tile always remounts - it moves from the source header tab's canvas root
+          // into a brand-new header tab's canvas root, a completely different React parent chain (MOVE
           flushChatTabViewportHandoff([
             args.sourceTileTabId,
             ...(pane.tabInstanceIds.length === 1
@@ -1804,9 +1689,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             if (tab === undefined) return state;
             const isOpen = state.openTabOrder.includes(tabId);
             if (state.activeTabId === tabId && isOpen) return state;
-            // Activation only moves order/active/recent pointers; the tab record
-            // stays stable so header-strip / command-palette consumers (which read
-            // tab metadata) don't re-render on every tab switch.
+            // Activation only moves order/active/recent pointers; the tab record stays stable so header-strip
+            // / command-palette consumers (which read tab metadata) don't re-render on every tab switch.
             return {
               openTabOrder: isOpen
                 ? state.openTabOrder
@@ -1880,9 +1764,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }
             return existing;
           }
-          // Caller-supplied name comes from the row the user clicked on
-          // (history list, command palette, deep link). Falls back to
-          // "Untitled task" only when the caller has no title in hand.
+          // Caller-supplied name comes from the row the user clicked on (history list, command palette, deep
+          // link). Falls back to "Untitled task" only when the caller has no title in hand.
           return state.openEpicTab(epicId, name ?? UNTITLED_EPIC_TITLE);
         },
 
@@ -1953,11 +1836,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
                     node.id,
                   )
                 : state.pendingCreateTerminalIdentities;
-            // Strip the entry being restored BEFORE the canvas update runs its
-            // own eviction-capture: capturing against a map that still counts
-            // the restored entry can push a same-transaction preview eviction
-            // (e.g. the destination pane's prior preview) past the per-tab FIFO
-            // cap and needlessly evict an unrelated payload.
+            // Strip the entry being restored BEFORE the canvas update runs its own eviction-capture: capturing
+            // against a map that still counts the restored entry can push a same-transaction preview eviction
             const baseState = {
               ...state,
               closedTilePayloadsByTabId: withoutRestored,
@@ -2212,12 +2092,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         insertNodeOnTabStrip: (tabId, targetPaneId, targetIndex, node) => {
-          // Ticket 20: mirrors `dropOnTabStrip`'s own node-kind resolution -
-          // dropping a node already open in a DIFFERENT pane routes through
-          // `moveTabAcrossPanes` there, remounting that pane's painted tile
-          // exactly like an explicit cross-pane drag (and, if it empties its
-          // source pane, can also dissolve a sibling's parent group). Flush
-          // both before `set()` commits the move.
+          // mirrors `dropOnTabStrip`'s own node-kind resolution - dropping a node already open in
+          // a DIFFERENT pane routes through `moveTabAcrossPanes` there, remounting that pane's painted tile
           const before = canvasForExistingTab(get(), tabId);
           if (before !== null) {
             const existing = findPaneTabForRef(before, node);
@@ -2248,12 +2124,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         moveTabOnTabStrip: (tabId, args) => {
           const before = canvasForExistingTab(get(), tabId);
           const node = before?.tilesByInstanceId[args.tabId];
-          // Ticket 20: a cross-pane move remounts the dragged tab's painted
-          // chat (the keyed layer moves from the source `TabGroupView` to the
-          // target one - `moveTabAcrossPanes`). When the dragged tab was its
-          // source pane's only tab, that pane also closes and can dissolve its
-          // parent group, remounting a SIBLING pane too. Flush both before
-          // `set()` commits. A same-pane reorder never remounts anything.
+          // a cross-pane move remounts the dragged tab's painted chat (the keyed layer moves from
+          // the source `TabGroupView` to the target one - `moveTabAcrossPanes`).
           if (before !== null && args.sourcePaneId !== args.targetPaneId) {
             const sourcePane = findPaneById(before.root, args.sourcePaneId);
             flushChatTabViewportHandoff([
@@ -2314,27 +2186,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         splitPaneWithNode: (tabId, targetPaneId, position, node) => {
           const before = canvasForExistingTab(get(), tabId);
-          // Ticket 20 (review round 1, finding 1): when the target pane's
-          // parent group runs perpendicular to `position` (or the target is
-          // the bare root pane), inserting beside it WRAPS the target instead
-          // of a flat insertion (`insertPaneAtEdge`) - the target's own
-          // painted chat remounts even though this call never touches its
-          // content. Flushing its active tab's viewport unconditionally is
-          // cheap and correct either way (a flat, non-wrapping insertion
-          // leaves it mounted, and the flush is simply harmless there).
-          //
-          // Separately: `splitPaneAtEdge` (actions.ts) resolves a `node`
-          // source whose content is ALREADY OPEN somewhere into a `tab`-kind
-          // move BEFORE doing anything else - the same "already open"
-          // resolution `insertNodeOnTabStrip`/`dropOnTabStrip` perform, but
-          // this call creates a BRAND NEW pane for the moved tab unconditionally
-          // (`createPaneWithTab`), regardless of whether the existing tab's
-          // source pane is the same as `targetPaneId` - so the moved instance
-          // always remounts, not just on a genuine cross-pane move. When its
-          // source pane empties (and isn't the target itself - the
-          // `splitsIntoItself` case deliberately keeps that pane alive as the
-          // split's other half instead of dissolving it), flush the promoted
-          // dissolve survivors too.
+          // Flushing its active tab's viewport unconditionally is cheap and correct either way (a flat,
+          // non-wrapping insertion leaves it mounted, and the flush is simply harmless there).
           if (before !== null) {
             const targetPane = findPaneById(before.root, targetPaneId);
             const targetInstanceId =
@@ -2391,13 +2244,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         splitPaneWithTab: (tabId, args) => {
           const before = canvasForExistingTab(get(), tabId);
           const node = before?.tilesByInstanceId[args.tabId];
-          // Ticket 20: the dragged tab always lands in a brand-new pane
-          // (`createPaneWithTab` inside `splitPaneAtEdge`) - it remounts
-          // unconditionally, unlike a same-pane/same-axis flat split of a
-          // DIFFERENT tab. The target pane can also wrap (see
-          // `splitPaneWithNode`'s comment) and, when the drag emptied its
-          // source pane, that pane's own close can dissolve a THIRD pane's
-          // parent. Flush all three defensively before `set()`.
           if (before !== null) {
             const targetPane = findPaneById(before.root, args.targetPaneId);
             const targetInstanceId =
@@ -2456,9 +2302,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         splitPaneEmptyInTab: (tabId, targetPaneId, direction) => {
           let newPaneId: string | null = null;
-          // Ticket 20: an empty placeholder pane can still WRAP the target
-          // (same `insertPaneAtEdge` mechanism as `splitPaneWithNode`), even
-          // though this action opens no content of its own.
+          // an empty placeholder pane can still WRAP the target (same `insertPaneAtEdge`
+          // mechanism as `splitPaneWithNode`), even though this action opens no content of its own.
           const before = canvasForExistingTab(get(), tabId);
           if (before !== null) {
             const targetPane = findPaneById(before.root, targetPaneId);
@@ -2506,10 +2351,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         closeCanvasTab: (tabId, paneId, tileTabId) => {
           const beforeCanvas = get().canvasByTabId[tabId];
-          // Ticket 20: closing a pane's LAST tab removes the pane itself
-          // (`closeTab` falls through to `closePane`), which can dissolve its
-          // parent group and remount a sibling's painted chat. Predict this
-          // BEFORE `set()`, from the state as it stands right now.
+          // closing a pane's LAST tab removes the pane itself (`closeTab` falls through to
+          // `closePane`), which can dissolve its parent group and remount a sibling's painted chat.
           if (beforeCanvas !== undefined) {
             const pane = findPaneById(beforeCanvas.root, paneId);
             if (pane !== null && pane.tabInstanceIds.length === 1) {
@@ -2544,10 +2387,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         closeConfirmedDeletedChatTiles: (epicId, chatId, hostId) => {
-          // Snapshot every matching instance before closing any of them: a
-          // close can dissolve its pane and rewrite the surrounding tree.
-          // The host is part of chat identity, so a same-id peer on another
-          // machine must remain open.
+          // Snapshot every matching instance before closing any of them: a close can dissolve its pane and
+          // rewrite the surrounding tree.
           const targets: Array<{
             readonly tabId: string;
             readonly paneId: string;
@@ -2643,7 +2484,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         closeAllCanvasTabs: (tabId, paneId) => {
           const beforeCanvas = get().canvasByTabId[tabId];
-          // Ticket 20: `closeAllTabs` always falls through to `closePane` for
+          // `closeAllTabs` always falls through to `closePane` for
           // a non-empty pane - same dissolve risk as `closeCanvasTab`.
           if (beforeCanvas !== undefined) {
             const pane = findPaneById(beforeCanvas.root, paneId);
@@ -2678,7 +2519,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         closeCanvasPane: (tabId, paneId) => {
           const beforeCanvas = get().canvasByTabId[tabId];
-          // Ticket 20: same dissolve risk as `closeCanvasTab`/`closeAllCanvasTabs`
+          // same dissolve risk as `closeCanvasTab`/`closeAllCanvasTabs`
           // - `closePane` always removes the whole pane.
           if (beforeCanvas !== undefined) {
             flushChatTabViewportHandoff(
@@ -2880,9 +2721,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         createEpicFromPrompt: (prompt) => {
           const epicId = uuidv4();
-          // `createEpicName` yields "" for an empty/whitespace prompt; this create
-          // path bakes a non-empty stored tab name, so apply the "Untitled task"
-          // fallback here.
+          // `createEpicName` yields "" for an empty/whitespace prompt; this create path bakes a non-empty
+          // stored tab name, so apply the "Untitled task" fallback here.
           const name = createEpicName(prompt) || UNTITLED_EPIC_TITLE;
           const tabId = uuidv4();
           const tab: EpicViewTab = {
@@ -2954,9 +2794,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         markArtifactSelfDeleted: (artifactId) => {
-          // Pending-title map is id-keyed so a stale spinner anchor would
-          // orphan the 30s backstop timer until it fires as a no-op.
-          // `clearScheduledTitlePending` is a no-op when the id isn't present.
+          // Pending-title map is id-keyed so a stale spinner anchor would orphan the 30s backstop timer
+          // until it fires as a no-op. `clearScheduledTitlePending` is a no-op when the id isn't present.
           clearScheduledTitlePending(chatTitleTimers, artifactId);
           set((s) => {
             const next = withId(s.selfDeletedArtifactIds, artifactId);
@@ -3173,13 +3012,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       }),
       merge: (persistedState, currentState) => {
         const sanitized = sanitizePersistedCanvasState(persistedState);
-        // Never throw here, even in dev/test: zustand's `hydrate()` swallows
-        // a `merge()` throw internally and never rethrows, which also skips
-        // `set(stateFromStorage, true)` - so `hasHydrated`/`onFinishHydration`
-        // never fire and consumers waiting on hydration (history-prune-
-        // provider.tsx, epic-tab-existence-reconciler.tsx) hang forever. Fail
-        // closed by rejecting the candidate and returning normally instead;
-        // the diagnostic below is the surfaced signal in every mode.
+        // Never throw here, even in dev/test: zustand's `hydrate()` swallows a `merge()` throw internally
+        // and never rethrows, which also skips `set(stateFromStorage, true)` - so
         const accepted = guardCanvasMutation(currentState, sanitized, {
           ingressContext: "persisted-migration",
           throwOnViolation: false,
@@ -3195,17 +3029,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 );
 
 const rawPublicSetState = useEpicCanvasStore.setState.bind(useEpicCanvasStore);
-/**
- * Guards every PUBLIC-API canvas mutation. The closure-local `set` above
- * delegates here; anything else reaching the store through the public API -
- * `applyEpicCanvasDesktopProjection`, or a future caller - goes through this
- * wrapper too. Reassigning `setState` itself - rather than adding a guard at
- * each known call site - means a caller added later is covered too. This
- * path is always strict: `resolveTabEpicIdentity` below is the one function
- * that changes a tab's epicId, and it bypasses this wrapper entirely,
- * committing straight through `rawPublicSetState` - provenance is enforced
- * by that module privacy, not by a parameter threaded through this guard.
- */
+/** Guards every PUBLIC-API canvas mutation. */
 useEpicCanvasStore.setState = (
   partial:
     | EpicCanvasStore
@@ -3225,55 +3049,15 @@ useEpicCanvasStore.setState = (
     return;
   }
   if (replace === true) {
-    // `replace: true` callers (store resets in tests) pass a full state by
-    // contract; the union param type above can't express that correlation to
-    // zustand's overloaded signature without this cast.
+    // `replace: true` callers (store resets in tests) pass a full state by contract; the union param
+    // type above can't express that correlation to zustand's overloaded signature without this cast.
     rawPublicSetState(resolved as EpicCanvasStore, true);
   } else {
     rawPublicSetState(resolved);
   }
 };
 
-/**
- * The ONLY function authorized to change a tab's `epicId` for an
- * already-live tile set. It bypasses the guarded public `setState` wrapper
- * above (which is always strict) and commits through `rawPublicSetState`
- * directly - provenance is enforced by this function being the sole caller
- * of that module-private raw setter, not by a parameter every guarded
- * ingress has to understand. `tab-command-coordinator.ts`'s
- * `resolveMigratedEpicActivation` and `completePhaseMigration` are its only
- * two callers; both publish success from a POST-commit `getState()`
- * read-back rather than trusting this function's return, because a
- * synchronous subscriber can re-enter and move the same tab's epicId again
- * before the outer caller regains control (see their own doc comments) - so
- * this function reports nothing about outcome.
- *
- * Also owns the `mostRecentTabIdByEpicId` reindex (move the entry from the
- * prior epicId to the resolved one) - both call sites needed the exact same
- * bookkeeping, so it lives here once instead of twice.
- *
- * Preconditions, enforced here rather than trusted from the caller:
- * - the tab exists;
- * - `resolvedEpicId` actually differs from the tab's current epicId (a
- *   same-value call is a silent no-op, not an error - safe for an
- *   idempotent retry);
- * - the tab's CURRENT epicId equals `expectedCurrentEpicId`. This is the
- *   strongest precondition genuinely available to BOTH real callers today:
- *   `resolveMigratedEpicActivation` already checks the tab's epicId against
- *   `target.sourceEpicId` before calling, and `completePhaseMigration`
- *   already checks it against `command.phaseId` (via `surfaceMode.phaseId`).
- *   A tab-level `surfaceMode.kind === "phase-migration"` check was
- *   considered and REJECTED as a UNIVERSAL precondition here:
- *   `resolveMigratedEpicActivation`'s own existing check never examines
- *   `surfaceMode` at all (its target is a more general "migrated-epic"
- *   activation, not necessarily a phase-migration tab), so requiring it
- *   would incorrectly narrow this action to serve only
- *   `completePhaseMigration`. Each coordinator call site keeps its own
- *   additional, shape-specific precondition (surfaceMode+phaseId, or
- *   sourceEpicId-or-already-resolved) before ever calling this action - this
- *   action's `expectedCurrentEpicId` check is a second, independent layer
- *   against a stale/racing caller, not a replacement for those.
- */
+/** The ONLY function authorized to change a tab's `epicId` for an already-live tile set. */
 export function resolveTabEpicIdentity(
   tabId: string,
   expectedCurrentEpicId: string,
@@ -3317,16 +3101,12 @@ export function applyEpicCanvasDesktopProjection(
 ): void {
   applyingDesktopProjection = true;
   try {
-    // The guarded public `setState` wrapper validates this patch itself -
-    // no separate guard call needed here, it would just re-check the
-    // identical patch a second time.
+    // The guarded public `setState` wrapper validates this patch itself - no separate guard call
+    // needed here, it would just re-check the identical patch a second time.
     useEpicCanvasStore.setState((state) =>
       buildDesktopProjectionPatch(state, snapshot),
     );
   } finally {
-    // Always release the suppression flag, even when the dev/test guard
-    // throws mid-`setState` - otherwise every later outbound projection is
-    // silently dropped by the subscriber below for the module's lifetime.
     applyingDesktopProjection = false;
   }
 }
@@ -3341,15 +3121,8 @@ useEpicCanvasStore.subscribe((state) => {
 });
 
 /**
- * Ticket 15 review round 3: resolves the `(epicId, chatId)` identity a
- * removed tile HAD, using the canvas/tab snapshots as they stood just
- * BEFORE this update - `tilesByInstanceId` lives on `canvasByTabId`, but
- * `epicId` lives on the PARALLEL `tabsById` map (`tabsById[tabId].epicId`),
- * and a whole-tab close/delete can clear both together in the SAME update,
- * so a removed tile's tab record can already be gone from the CURRENT
- * state by the time this runs - both snapshots must be the prior ones.
- * `null` for a non-chat tile (diff/terminal/workspace-file tiles have no
- * dual-key persistence family) or if either snapshot is missing the entry.
+ * resolves the `(epicId, chatId)` identity a removed tile HAD, using the canvas/tab snapshots as
+ * they stood just BEFORE this update - `tilesByInstanceId` lives on `canvasByTabId`, but `epicId`
  */
 function resolveClosedChatIdentity(
   priorCanvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
@@ -3374,9 +3147,6 @@ function resolveClosedChatIdentity(
 }
 
 // Evict session scroll anchors for tile instanceIds removed from the canvas.
-// `useScrollRestoration` also checks tile liveness before unmount persistence,
-// so a close cannot clear an anchor here and then have the unmount cleanup
-// re-save it.
 let previousTileInstanceIds: ReadonlySet<string> = new Set<string>();
 let previousCanvasByTabId: Readonly<
   Record<string, EpicCanvasState | undefined>
@@ -3384,12 +3154,7 @@ let previousCanvasByTabId: Readonly<
 let previousTabsById: Readonly<Record<string, EpicViewTab | undefined>> | null =
   null;
 useEpicCanvasStore.subscribe((state) => {
-  // Ticket 15 review round 3: `tabsById` (epicId) and `canvasByTabId` (the
-  // tile tree) can update in SEPARATE `set()` calls (e.g. `openEpicTab`
-  // creates the tab record before any tile is opened into it) - tracking
-  // this UNCONDITIONALLY, not gated behind the `canvasByTabId` equality
-  // check below, is what keeps it from going stale relative to whichever
-  // `canvasByTabId` snapshot this sweep ends up diffing against.
+  // `tabsById` (epicId) and `canvasByTabId` (the tile tree) can update in SEPARATE `set()` calls (e.g.
   const priorTabsById = previousTabsById;
   previousTabsById = state.tabsById;
   // Tile membership only changes when the canvas map itself changes; skip the
@@ -3403,12 +3168,6 @@ useEpicCanvasStore.subscribe((state) => {
   );
   previousTileInstanceIds = current;
   if (removed.length > 0) {
-    // Ticket 15 review round 3 (the ONE close-commit choke point): promote
-    // each removed chat tile's live tab-side state to durable BEFORE any
-    // of the eviction calls below run - this is the only place that can
-    // commit for an INACTIVE (never-mounted) view's close, since it reads
-    // store state directly rather than depending on a component's own
-    // unmount lifecycle firing (which, for an inactive tab, never does).
     if (priorCanvasByTabId !== null && priorTabsById !== null) {
       for (const instanceId of removed) {
         const identity = resolveClosedChatIdentity(
@@ -3419,27 +3178,20 @@ useEpicCanvasStore.subscribe((state) => {
         if (identity !== null) promoteChatTabPersistenceToDurable(identity);
       }
     }
-    // Ticket 5: chat-tile-only per-tab persistence, evicted the same way -
-    // proactively on a permanent close, not just LRU/registry-capped. The
-    // reading-position cache and the collapse-state registries key by the
-    // exact same tile instanceId, so one `removed` list covers all of them;
-    // tool/subagent are global stores namespaced by that id via `reset`.
+    // chat-tile-only per-tab persistence, evicted the same way - proactively on a permanent
+    // close, not just LRU/registry-capped.
     evictChatTabState(removed);
     evictPendingHydrationRestores(removed);
     evictActivityGroupOpenStores(removed);
     evictA2AOpenStores(removed);
-    // F4 (ticket 5 review): tile-find serves every tile kind, not just chat -
-    // a tile whose adapter unregistered while still live (switched-away, not
-    // closed) is skipped by scheduleUiReclaim's own liveness check and never
-    // revisited if it is later closed without remounting. This sweep is that
-    // revisit.
+    // F4 (ticket 5 review): tile-find serves every tile kind, not just chat - a tile whose adapter
+    // unregistered while still live (switched-away, not closed) is skipped by scheduleUiReclaim's own
     evictTileFindUi(removed);
     removed.forEach((instanceId) => {
       useToolOpenStore.getState().reset(instanceId);
       useSubagentOpenStore.getState().reset(instanceId);
-      // Ticket 15 review round 3: bounds the initialized-scope markers -
-      // this tileInstanceId can never be seen again (a reopen always mints
-      // a fresh one), so nothing else will ever need this entry.
+      // bounds the initialized-scope markers - this tileInstanceId can never be seen again (a reopen
+      // always mints a fresh one), so nothing else will ever need this entry.
       toolOpenInitializedScopes.delete(instanceId);
       subagentOpenInitializedScopes.delete(instanceId);
     });

@@ -1,14 +1,5 @@
-/**
- * `useDraftOpenInNewWindowFlow` - the draft-move sibling of
- * `use-epic-open-in-new-window-t10-adapter.test.tsx`, driven the same way
- * (a real `useTabsStore`/`useLandingDraftStore`, a controllable
- * `DesktopWindowsBridge`, the real hook rendered via `RouterProvider`), but
- * without the epic flow's ownership/split-adapter machinery - a draft has no
- * ownership registry and no unsynced-edits gate. `landing-image-move.ts` is
- * mocked (`vi.mock`) so this suite never touches IndexedDB; that module's
- * own contract is covered separately in
- * `src/lib/composer/__tests__/landing-image-move.test.ts`.
- */
+/** `landing-image-move.ts` is mocked (`vi.mock`) so this suite never touches IndexedDB; that module's own
+ * contract is covered separately in `src/lib/composer/__tests__/landing-image-move.test.ts`. */
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -59,8 +50,7 @@ function emptySnapshot(): DesktopPerWindowSnapshot {
 }
 
 /** Base bridge surface the draft flow never reads (ownership/perWindowState/
- * authSession/requestOpenEpicInNewWindow) - present only to satisfy the
- * `DesktopWindowsBridge` type. */
+ * authSession/requestOpenEpicInNewWindow) - present only to satisfy the `DesktopWindowsBridge` type. */
 function baseBridgeFields(): Omit<
   DesktopWindowsBridge,
   "windowId" | "requestOpenDraftInNewWindow"
@@ -128,10 +118,7 @@ function buildControllableDraftMoveBridge(): ControllableDraftMoveBridge {
   };
 }
 
-/** Seeds a real draft (landing-draft store) that is also present as an
- * ordinary tab-strip item (tabs store) - the tab strip presence is what lets
- * `tabCommandCoordinator.closeRefAfterConfirmed` actually remove it; a ref
- * absent from the strip is a no-op close. */
+/** Seeds a real draft (landing-draft store) that is also present as an ordinary tab-strip item (tabs store). */
 function seedDraftTab(draftId: string): void {
   useLandingDraftStore.getState().createDraftWithId(draftId, null);
   const ref: TabRef = { kind: "draft", id: draftId };
@@ -294,9 +281,8 @@ describe("useDraftOpenInNewWindowFlow", () => {
     });
     await flush();
 
-    // A pasted image whose `putImage` has not landed yet has no hash to stage
-    // and is stripped from the projection, so a move started here would carry
-    // the draft over without it and then close the only copy that had it.
+    // A pasted image whose `putImage` has not landed yet has no hash to stage and is stripped from the projection,
+    // so a move started here would carry the draft over without it and then close the only copy that had it.
     expect(vi.mocked(stageDraftImageHandoff)).not.toHaveBeenCalled();
     expect(windows.requestedDraftIds).toEqual([]);
 

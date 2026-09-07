@@ -10,12 +10,8 @@ import {
 } from "@/stores/agent-activity-store";
 
 /**
- * `agentActivityPlaneAnswers` / `subscribeAgentActivityPlaneHealth` in
- * isolation - the epic session registry's cap-eviction guard
- * (`epicIsBusy`/`session-registry.ts`) is the consumer these exist for, and
- * that file's own suite exercises them through the registry. This file pins
- * the predicate's truth table and the health subscription's edge-triggering
- * directly, without a registry in the loop.
+ * `agentActivityPlaneAnswers` / `subscribeAgentActivityPlaneHealth` in isolation - the epic
+ * session registry's cap-eviction guard (`epicIsBusy`/`session-registry.ts`) is the consumer these
  */
 
 afterEach(() => {
@@ -35,10 +31,7 @@ describe("agentActivityPlaneAnswers", () => {
   });
 
   it("is false while the stream is open but has not delivered a state frame of its OWN", () => {
-    // `servedBy` non-null is deliberately part of the fixture: it is what a
-    // replacement epoch inherits from the one it replaced, so a predicate
-    // reading it would vouch here while the union on record is the old
-    // epoch's. Only the frame marker separates the two.
+    // Only the frame marker separates the two.
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "cloud",
@@ -128,9 +121,7 @@ describe("subscribeAgentActivityPlaneHealth", () => {
     });
     expect(callCount).toBe(1);
 
-    // Narrow -> fleet-wide, with the answer unchanged at true. The cap's busy
-    // gate reads both predicates, so a consumer not woken here would sit on
-    // "cannot speak for this session" until an unrelated write.
+    // Narrow -> fleet-wide, with the answer unchanged at true.
     useAgentActivityStore.setState({ cloudSyncStatus: "connected" });
     expect(callCount).toBe(2);
 
@@ -151,10 +142,8 @@ describe("subscribeAgentActivityPlaneHealth", () => {
 
 describe("agentActivityPlaneSpansFleet", () => {
   it("is false for a cloud-served frame that carries no stamp", () => {
-    // `agent.activity.subscribe@1.0` predates `cloudSyncStatus`, so a host on
-    // that minor sends `servedBy: "cloud"` with an absent stamp whether or
-    // not its cloud link is up - reading `servedBy` as fleet-wide would trust
-    // exactly the frame that cannot report the loss.
+    // `agent.activity.subscribe@1.0` predates `cloudSyncStatus`, so a host on that minor sends
+    // `servedBy: "cloud"` with an absent stamp whether or not its cloud link is up - reading
     useAgentActivityStore.setState({
       servedBy: "cloud",
       cloudSyncStatus: null,
@@ -218,9 +207,8 @@ describe("agentActivityPlaneCoversHost", () => {
   });
 
   it("covers no host once the serving connection has fully closed", () => {
-    // Driven through the real setter, not hand-set to the post-close shape:
-    // a future `closed` branch that stopped clearing `servingHostId` would
-    // still pass a fixture that assumes the clearing already happened.
+    // Driven through the real setter, not hand-set to the post-close shape: a future `closed` branch
+    // that stopped clearing `servingHostId` would still pass a fixture that assumes the clearing
     useAgentActivityStore.setState({
       servedBy: "local",
       cloudSyncStatus: null,

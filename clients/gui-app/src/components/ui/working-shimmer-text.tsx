@@ -6,17 +6,10 @@ import {
 import { cn } from "@/lib/utils";
 
 const SWEEP_MS = 2200;
-/** `background-position` sweeps from 150% to -50%: off one side to off the other. */
 const SWEEP_START_PERCENT = 150;
 const SWEEP_SPAN_PERCENT = 200;
 
-/**
- * In-progress verb text with a foreground highlight sweeping across it
- * ("Pondering", "Refreshing"). The gradient, clip and reduced-motion fallback
- * are the `.working-text-shimmer` rules in index.css; the sweep is written as
- * an inline `background-position` from the shared status animation clock (see
- * `status-animation-clock.ts` for why it is not a CSS animation).
- */
+/** The gradient, clip and reduced-motion fallback are the `.working-text-shimmer` rules in index.css. */
 export function WorkingShimmerText(props: {
   readonly children: string;
   readonly className: string | undefined;

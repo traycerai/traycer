@@ -1,33 +1,3 @@
-/**
- * A write command enqueued on the worker actually REACHES main.
- *
- * ## Why this suite exists
- *
- * The relocation put the write-command queue in the worker and left the
- * requester on main, so a command now travels: store -> worker queue -> the
- * queue's send gate -> `main/write-command` -> the dispatcher. The gate reads
- * `writeCommandSender.currentHostId()` and refuses with
- * `EpicWriteCommandTransportUnavailableError` when it is null, BEFORE calling
- * `send`.
- *
- * The worker's sender answered `null` unconditionally, so the gate refused
- * every command and `send` was never reached. Every write a worker-hosted
- * runtime enqueued - rename, delete, reparent, epic title - sat in `queued`
- * forever. That is the whole app's write path, and it survived a green tree.
- *
- * ## Why a green tree missed it
- *
- * Every existing suite asserted the ENQUEUE outcome - that a command id is
- * minted, that the record appears, that the projection carries the optimistic
- * overlay - and the queue answers all of that locally, before the gate. **No
- * suite anywhere asserted DELIVERY**: that the gate was passed, that `send`
- * ran, that main's handler received the command. A defect living strictly
- * between "enqueued" and "delivered" was therefore invisible to the entire
- * population, and the suites that did fail (rename hooks, sidebar commits)
- * read as async-conversion premise drift rather than as one broken seam.
- *
- * That gap is what this suite closes: it asserts the leg nothing else watched.
- */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -100,9 +70,7 @@ function openRig(): DeliveryRig {
     epicId: EPIC_ID,
     userId: null,
     factories: { streamClientFactory: factory, laneSelection: null },
-    // MAIN's half of the leg under test. Recording rather than dispatching:
-    // this suite is about whether the command arrives, not about what the
-    // dispatcher maps it to - that mapping has its own coverage.
+    // MAIN's half of the leg under test.
     writeCommand: (commandId, intent) => {
       received.push({ commandId, intent });
       return Promise.resolve({ hostId: ANSWERING_HOST });
@@ -110,20 +78,15 @@ function openRig(): DeliveryRig {
   });
   if (captured.value === null) throw new Error("factory not invoked");
   // Transport open BEFORE the snapshot: the control replica clears
-  // `hasFreshRootSnapshotForOpenCycle` on every transport-status transition,
-  // so opening after would wipe the freshness the snapshot set and the send
-  // gate's OTHER arm would hold the command - which would make this suite pass
-  // or fail for a reason that is not the one it is about.
+  // `hasFreshRootSnapshotForOpenCycle` on every transport-status transition, so opening after would
   captured.value.onConnectionStatus("open", null);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return { handle, received };
 }
 
 async function settle(handle: OpenedStoreForTest): Promise<void> {
-  // Three drains rather than one: the command crosses the pipe to the queue,
-  // the queue's send crosses BACK for `main/write-command`, and the answer
-  // crosses again to resolve the record. Named as three hops rather than
-  // looped, so a change in the hop count is visible here.
+  // Three drains rather than one: the command crosses the pipe to the queue, the queue's send
+  // crosses BACK for `main/write-command`, and the answer crosses again to resolve the record.
   await handle.flush();
   await handle.flush();
   await handle.flush();
@@ -156,10 +119,6 @@ describe("a write command enqueued on the worker reaches main", () => {
       title: "Delivered title",
     });
 
-    // 2. The command LEAVES `queued`. Asserted separately from delivery
-    // because they failed together and can be fixed apart: a send that runs
-    // but whose answer never resolves the record leaves the queue holding a
-    // command main has already acted on, which is the worse of the two.
     const record = rig.handle.store
       .getState()
       .writeCommands.find((candidate) => candidate.commandId === commandId);
@@ -185,21 +144,13 @@ describe("a write command enqueued on the worker reaches main", () => {
     });
     await settle(rig.handle);
 
-    // The gate does two things with the host id and only one of them is the
-    // refusal: it also records `attemptedHostByCommandId`, which is what a
-    // retry reads to know where the previous attempt went. `ANSWERING_HOST` is
-    // deliberately NOT the harness's bootstrap `"test-host"`, so an
-    // implementation that echoed the gate's own value instead of the answer
-    // main returned would read as equal here and does not.
+    // The gate does two things with the host id and only one of them is the refusal: it also records
+    // `attemptedHostByCommandId`, which is what a retry reads to know where the previous attempt went.
     const record = rig.handle.store
       .getState()
       .writeCommands.find((candidate) => candidate.commandId === commandId);
     if (record === undefined) throw new Error("the command record vanished");
     expect(record.state).toBe("committed");
-    // NARROWED on the union rather than reached through it: `hostId` exists
-    // only on the `committed` arm, so `resolution?.hostId` does not compile -
-    // and the throw states which arm was expected, which a non-null assertion
-    // would not.
     const resolution = record.resolution;
     if (resolution === null || resolution.kind !== "committed") {
       throw new Error(
@@ -208,11 +159,8 @@ describe("a write command enqueued on the worker reaches main", () => {
     }
     expect(resolution.hostId).toBe(ANSWERING_HOST);
 
-    // On the absence case there is deliberately no runtime pin: `hostId` is a
-    // REQUIRED field of `RuntimeWorkerBootstrap`, so "the worker has no host
-    // id" is not a state this suite can construct. The type is the pin for it,
-    // and that is the stronger of the two - a runtime assertion would only
-    // catch a null that the compiler now refuses to produce.
+    // On the absence case there is deliberately no runtime pin: `hostId` is a REQUIRED field of
+    // `RuntimeWorkerBootstrap`, so "the worker has no host id" is not a state this suite can
     rig.handle.dispose();
   });
 });

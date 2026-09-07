@@ -58,13 +58,8 @@ import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-s
 
 export type ChatMessageRole = "user" | "assistant" | "system";
 
-// Terminal outcome for an action segment whose turn ended before its own
-// completion event arrived: `interrupted` (the user hit Stop) or `superseded`
-// (a steer-restart replaced the turn). Null for the normal lifecycle
-// (streaming / completed / errored) - in those cases `isStreaming` and `error`
-// already carry the state. Derived from the persisted block-status enum (via
-// Extract) so it stays in lockstep with it - a renamed/removed status fails to
-// compile here rather than silently dropping a badge.
+// Terminal outcome for an action segment whose turn ended before its own completion event arrived:
+// `interrupted` (the user hit Stop) or `superseded` (a steer-restart replaced the turn).
 export type SegmentEndState = Extract<
   ContentBlock["status"],
   "interrupted" | "superseded"
@@ -125,38 +120,28 @@ export interface ToolSegment {
   id: string;
   kind: "tool";
   toolName: string;
-  // Precomputed display data (the raw harness input is no longer persisted): the
-  // ≤80-char header line + the optional expand body. `taskTodoItems` is the call
-  // parsed into todo item(s) for the pinned-todo stack (null for non-task tools).
+  // Precomputed display data (the raw harness input is no longer persisted): the ≤80-char header
+  // line + the optional expand body.
   inputSummary: string | null;
   inputDetail: ToolInputDetail | null;
   taskTodoItems: ReadonlyArray<ParsedTaskTodo> | null;
   error: string | null;
   agentMessageSend: AgentMessageSend | null;
-  // The shell a `traycer_run_shell` call created, stamped on the block at
-  // completion. Null for every other tool call; also null on a run_shell block
-  // written before the host carried this, which the start card reads as "no
-  // live status to show" rather than as a deleted shell.
+  // The shell a `traycer_run_shell` call created, stamped on the block at completion.
   managedCommand: ToolCallManagedCommand | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
-  // True when `status === "errored"` was an explicit stop (deadline-killed
-  // Monitor, user-stopped command) rather than a genuine failure. Drives a
-  // neutral "stopped" badge in place of the destructive error treatment.
+  // True when `status === "errored"` was an explicit stop (deadline-killed Monitor, user-stopped
+  // command) rather than a genuine failure.
   stopped: boolean;
   // Latest intermediate progress line for an in-flight call (replace-latest;
   // null when the harness reports none). Shown only while streaming.
   progress: string | null;
   // Capped terminal output from a backgrounded command/monitor once it settles.
   backgroundOutput: BackgroundTaskOutput | null;
-  // Persistent: true for a backgrounded command/Monitor (Bash run_in_background
-  // or the Monitor tool). Drives standalone-card promotion across the whole
-  // lifecycle - running -> completed/stopped/errored -> reload - so it never
-  // collapses back into the generic activity group. `null` means "not yet
-  // known" (mid-stream, before the classifier has seen enough input) -
-  // consumers treat it like `false` (no promotion) without treating it as a
-  // confirmed negative.
+  // Persistent: true for a backgrounded command/Monitor (Bash run_in_background or the Monitor
+  // tool).
   backgroundTask: boolean | null;
   // Wall-clock start of the call. Drives the elapsed heartbeat while running.
   startedAt: number;
@@ -170,12 +155,8 @@ export interface ToolSegment {
   imageResults: ReadonlyArray<ImageGenerationResult>;
 }
 
-// Recursive: a subagent's own children can themselves be nested subagent
-// cards (any spawn depth), not just their tool/file_change/command activity.
-// Unlike tool/file_change/command (which only ride along for spawn-tool-call
-// suppression bookkeeping), a nested `ProviderNoticeSegment` DOES render as a
-// visible row inside the owning card - see `SubagentChildProviderNotices` in
-// `subagent-segment.tsx`.
+// Recursive: a subagent's own children can themselves be nested subagent cards (any spawn depth),
+// not just their tool/file_change/command activity.
 export type SubagentChildSegment =
   | ToolSegment
   | FileChangeSegment
@@ -183,11 +164,8 @@ export type SubagentChildSegment =
   | SubagentSegment
   | ProviderNoticeSegment;
 
-// A durable provider-generated notice (Codex model reroute / safety
-// verification / buffering, and future harness equivalents), projected from a
-// `text` content block whose `providerNotice` enrichment is set. Renders as a
-// compact row - see `ProviderNoticeSegment` in
-// `components/chat/segments/provider-notice-segment.tsx`.
+// A durable provider-generated notice (Codex model reroute / safety verification / buffering, and
+// future harness equivalents), projected from a `text` content block whose `providerNotice`
 export interface ProviderNoticeSegment {
   id: string;
   kind: "provider_notice";
@@ -220,23 +198,17 @@ export interface CommandSegment {
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
-  // Latest intermediate progress line, mirroring `ToolSegment.progress` so the
-  // streaming footer is one shared component. Commands carry no progress signal
-  // today (always null); kept for symmetry and a future `command.progress`.
+  // Latest intermediate progress line, mirroring `ToolSegment.progress` so the streaming footer is
+  // one shared component.
   progress: string | null;
   // Wall-clock start of the command (block timestamp; stays anchored while
   // streaming). Drives the elapsed heartbeat shown while it runs.
   startedAt: number;
-  // Persistent: true once the harness promoted this command to a backgrounded
-  // one (Codex yields a long-running exec to the background at the parent
-  // turn's end). Drives standalone-card promotion across the whole lifecycle -
-  // running -> completed/stopped -> reload - exactly like
-  // `ToolSegment.backgroundTask`. `null` means "not yet known" and is treated
-  // like `false` without being a confirmed negative.
+  // Persistent: true once the harness promoted this command to a backgrounded one (Codex yields a
+  // long-running exec to the background at the parent turn's end).
   backgroundTask: boolean | null;
-  // True when the terminal outcome was an explicit stop (the host terminated
-  // the backgrounded command) rather than a real non-zero exit. Drives a
-  // neutral "Stopped" badge in place of the destructive exit-code treatment.
+  // True when the terminal outcome was an explicit stop (the host terminated the backgrounded
+  // command) rather than a real non-zero exit.
   stopped: boolean;
   // Owning subagent block id when this command was run by a subagent (nests
   // under that subagent block). Null for top-level / main-agent commands.
@@ -254,34 +226,26 @@ export interface SubagentSegment {
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
-  // True when `status === "errored"` was an explicit stop rather than a
-  // genuine failure - mirrors ToolSegment.stopped. Drives a neutral "stopped"
-  // badge in place of the destructive error treatment.
+  // True when `status === "errored"` was an explicit stop rather than a genuine failure - mirrors
+  // ToolSegment.stopped.
   stopped: boolean;
   // Immutable spawn time, driving the live elapsed heartbeat on the card while
   // running. Null for blocks persisted before this field existed.
   startedAt: number | null;
-  // Total run duration once finished (spawn -> completion); null while streaming
-  // or when `startedAt` is unknown. Drives the static "Ns" label, mirroring
-  // reasoning's "Thought for Xs".
+  // Total run duration once finished (spawn -> completion); null while streaming or when `startedAt`
+  // is unknown. Drives the static "Ns" label, mirroring reasoning's "Thought for Xs".
   durationMs: number | null;
-  // The spawning tool_call block id (Claude's Task/Agent tool). The timeline
-  // builder drops the matching top-level tool segment so the card is the sole
-  // representation. Null for harnesses that emit no separate spawn tool call.
+  // The spawning tool_call block id (Claude's Task/Agent tool). The timeline builder drops the
+  // matching top-level tool segment so the card is the sole representation.
   spawnToolCallId: string | null;
-  // Owning subagent block id when this agent was itself spawned by another
-  // agent (nests under that parent's card, any depth). Null for a top-level
-  // agent.
+  // Owning subagent block id when this agent was itself spawned by another agent (nests under that
+  // parent's card, any depth). Null for a top-level agent.
   parentId: string | null;
-  // Present iff this card is a workflow run's dual-written card - the rich
-  // fleet data (intent, activity timeline, fleet counts, tokens) an old reader
-  // can't render. Null for an ordinary agent card.
+  // Present iff this card is a workflow run's dual-written card - the rich fleet data (intent,
+  // activity timeline, fleet counts, tokens) an old reader can't render.
   workflowMeta: WorkflowMeta | null;
-  // The subagent's own activity nested under this block, keyed off each child
-  // segment's `parentId === this.id` - tool calls, file changes, commands, AND
-  // nested agent cards (any depth). Only the `subagent`-kind entries render
-  // (the "Sub-agents" section); the rest ride along for spawn-tool-call
-  // suppression.
+  // The subagent's own activity nested under this block, keyed off each child segment's `parentId
+  // === this.id` - tool calls, file changes, commands, AND nested agent cards (any depth).
   children: ReadonlyArray<SubagentChildSegment>;
 }
 
@@ -315,19 +279,10 @@ export interface PlanSegmentModel {
   contentIdentity: string;
 }
 
+/** A semantic artifact create / update / delete card. */
 /**
- * A semantic artifact create / update / delete card. The card resolves the live
- * title / ticket status / deletion tombstone reactively from the open-epic
- * projection by `artifactId`; `title` is only a fallback for the short delete
- * window before the tombstone projection arrives. `kind` is the segment
- * discriminant, so the artifact's own kind is named `artifactKind`.
- */
-/**
- * The merged file change behind an artifact card (first-before → last-after
- * across any coalesced edits), carried on the `artifact_operation` block itself
- * so it's available the moment the edit completes - no wait for turn-end
- * checkpoint capture. Null when no snapshot was captured (bash delete / post-hoc
- * edit). The card lazy-fetches the before/after by hash on expand.
+ * The merged file change behind an artifact card (first-before → last-after across any coalesced
+ * edits), carried on the `artifact_operation` block itself so it's available the moment the edit
  */
 export interface ArtifactSegmentChange {
   beforeHash: string | null;
@@ -345,10 +300,8 @@ export interface ArtifactOperationSegment {
 }
 
 /**
- * One artifact row inside a "Changes" group / accumulated panel, derived from a
- * checkpoint manifest entry's artifact tag. Title/kind are fallbacks; the live
- * title is re-resolved from the open-epic projection by `artifactId`. The hashes
- * back a click → merged-diff open.
+ * One artifact row inside a "Changes" group / accumulated panel, derived from a checkpoint
+ * manifest entry's artifact tag.
  */
 export interface ArtifactChangeRow {
   artifactId: string | null;
@@ -438,33 +391,14 @@ export type MessageSegment =
   | {
       id: string;
       kind: "setup-card";
-      /**
-       * Consolidated worktree-setup view-model (T2 deriver output). The segment
-       * is synthesized in `rendered-messages` for a `role: "system"` row and is
-       * never persisted, so it carries the tab-scoped `viewTabId` the card needs
-       * for its focus-terminal path rather than threading a per-row prop.
-       */
+      /** Consolidated worktree-setup view-model (T2 deriver output). */
       model: SetupCardViewModel;
       viewTabId: string;
       /**
-       * Ticket 13 (decision #28): the raw triggering message id this card is
-       * associated with (`SetupCardRow.triggeringMessageId`) - `null` only
-       * for the genesis card or a defensive creating-event-without-id shape.
-       * A card whose trigger never became (or no longer is) an anchor
-       * target - queued/steered/branched/deleted - keeps this id but FLOATS
-       * by `createdAt` instead of interleaving (`rendered-messages.ts`'s
-       * `floatingCards`), so it can land directly above a completely
-       * unrelated row by coincidence. Anchor-target substitution must
-       * verify this identity against the row it's evaluating, not just
-       * array adjacency, which a floating card can satisfy by chance.
+       * the raw triggering message id this card is associated with
+       * (`SetupCardRow.triggeringMessageId`) - `null` only for the genesis card or a defensive
        */
       anchorMessageId: string | null;
-      /**
-       * Ticket 13 (decision #28): true only for the pinned genesis card
-       * (the chat's back-filled initial worktree, unconditionally unshifted
-       * to row index 0 - it has no triggering send to match against, so it
-       * substitutes for whatever the chat's first row is).
-       */
       isGenesisPin: boolean;
     };
 
@@ -482,44 +416,28 @@ export interface InterviewSegment {
   error: string | null;
   delivery: InterviewDeliveryProjection | null;
   /**
-   * True when this question was carried into a Cross Question fork without
-   * being answered (the host settles the copied block with a
-   * `forkedWithoutAnswer` marker). Rendered as inline reference — expanded,
-   * with carried-from-the-original copy — instead of a misleading
-   * "Answered 0 of N" summary.
+   * True when this question was carried into a Cross Question fork without being answered (the host
+   * settles the copied block with a `forkedWithoutAnswer` marker).
    */
   forkedWithoutAnswer: boolean;
 }
 
 /**
- * Inter-agent provenance attached to a `role: "user"` message whose
- * sender was another agent (via `agent.sendMessage`). `null` for
- * human-authored user messages and for assistant turns. The receiver
- * GUI renders an agent-sourced row with distinct styling and a footer
- * that surfaces the sender id and (when `expectReply` is true)
- * instructions for replying via the CLI.
+ * Inter-agent provenance attached to a `role: "user"` message whose sender was another agent (via
+ * `agent.sendMessage`). `null` for human-authored user messages and for assistant turns.
  */
 export interface AgentSenderInfo {
   readonly agentId: string;
   /**
-   * Sender's chat/agent title captured when the message was delivered.
-   * Used as the display name fallback when the sender is no longer in the
-   * live epic projection (e.g. cross-host) so we still show a name rather
-   * than a raw id.
+   * Sender's chat/agent title captured when the message was delivered. Used as the display name fallback
+   * when the sender is no longer in the live epic projection (e.g.
    */
   readonly senderTitle: string | null;
   readonly expectReply: boolean;
   readonly responseId: string | null;
 }
 
-/**
- * In-progress run state of the assistant turn this row renders. Mirrors the
- * host-owned chat `runStatus` (minus `idle`) and is only non-null for the
- * single active turn, so the response row can show a "Working…" indicator
- * for the whole turn (first message and every multi-turn send) and flip to
- * "Stopping…" the moment a stop is requested. Always `null` for user rows
- * and completed assistant turns.
- */
+/** In-progress run state of the assistant turn this row renders. */
 export type ChatMessageRunState = "running" | "stopping";
 
 export interface ChatMessageSteerBadge {
@@ -528,11 +446,8 @@ export interface ChatMessageSteerBadge {
 }
 
 /**
- * Per-turn agent run metadata for an assistant row, surfaced in the elapsed
- * footer's info tooltip (provider, profile, model, reasoning effort, fast
- * mode). Only
- * set on assistant rows; `null` for user/system rows and assistant turns that
- * predate the persisted `reasoningEffort` / `serviceTier` fields.
+ * Per-turn agent run metadata for an assistant row, surfaced in the elapsed footer's info tooltip
+ * (provider, profile, model, reasoning effort, fast mode).
  */
 export interface AssistantTurnMeta {
   /** Raw harness id, used to pick the provider's mono icon for the footer. */
@@ -541,20 +456,8 @@ export interface AssistantTurnMeta {
   /** Profile label snapshotted when the turn's provider session was minted. */
   readonly profileLabel: string | null;
   /**
-   * NAME of the environment variable whose credential actually authenticated
-   * this turn, recorded by the host at spawn time; `null` when the turn ran on
-   * the profile named by `profileLabel`.
-   *
-   * The two fields answer different questions and can disagree - that
-   * disagreement is the whole point. `profileLabel` is the account the user
-   * SELECTED; this is the credential the provider CLI actually USED, and a CLI
-   * prefers an env key/token over its own signed-in store. When this is
-   * non-null the tooltip annotates the profile row, because "Terminal account"
-   * on its own would otherwise be a confident, wrong answer to "what ran this?"
-   *
-   * Read, never derived: the host stamps it on the turn record from the spawn
-   * env. Recomputing it here would describe today's environment rather than
-   * this turn's.
+   * NAME of the environment variable whose credential actually authenticated this turn, recorded by
+   * the host at spawn time; `null` when the turn ran on the profile named by `profileLabel`.
    */
   readonly envCredentialVar: string | null;
   readonly modelLabel: string | null;
@@ -563,52 +466,23 @@ export interface AssistantTurnMeta {
   /** Picker-style label resolved from the selected model's reasoning options. */
   readonly reasoningEffortLabel: string | null;
   readonly serviceTier: string | null;
-  /**
-   * Cumulative billed cost for the turn in USD, from the turn's final usage.
-   * `null` for harnesses that don't price the turn (Codex/Cursor) and for live/
-   * pending turns whose cost isn't known until completion.
-   */
+  /** Cumulative billed cost for the turn in USD, from the turn's final usage. */
   readonly costUsd: number | null;
 }
 
 /**
- * Present when the user (or a cascaded `agent.stop`) ended this turn via the
- * persisted `turn.stopped` chat event, rather than the turn finishing
- * naturally. Drives the "Stopped · Nm Xs" elapsed-footer variant and its
- * tooltip detail. Stamped only on the completed turn's last assistant row
- * (mirrors `completedAt`); `null` for every other terminal outcome - a
- * natural completion (`turn.completed`) or an interruption (`turn.interrupted`,
- * e.g. a steer-restart). Determined solely by which event landed, not by the
- * turn's segment content: a stopped turn whose last segment happens to be an
- * `error` block still gets this stamped (a mid-turn failure doesn't change
- * why the turn actually ended).
+ * Present when the user (or a cascaded `agent.stop`) ended this turn via the persisted
+ * `turn.stopped` chat event, rather than the turn finishing naturally.
  */
 export interface ChatMessageStoppedInfo {
   readonly stoppedAt: number;
   readonly reason: string | null;
   /**
-   * Whether the TURN (not necessarily this specific row) produced response
-   * output before it was stopped. An `autonomous_resume` divider is a turn
-   * boundary, not a response. A split turn's stamped row is sometimes a
-   * content-less boundary marker synthesized after a trailing steer bubble -
-   * its own `segments` are empty even though an earlier row in the same turn
-   * has real content. `false` drives "Stopped before responding"; `true`
-   * drives the full "Stopped · Nm Xs" footer even on a row with no segments
-   * of its own.
+   * Whether the TURN (not necessarily this specific row) produced response output before it was
+   * stopped. An `autonomous_resume` divider is a turn boundary, not a response.
    */
   readonly turnHadOutput: boolean;
-  /**
-   * Every assistant segment in the turn, in order and BY REFERENCE. A
-   * content-less boundary row's own segments can never supply copyable text,
-   * so the elapsed footer's copy button reads these instead of the row-local
-   * ones whenever the row itself is empty - see `AssistantMessageBody`, which
-   * runs `collectAssistantReplyText` over them at render time.
-   *
-   * Deliberately not the joined string: materializing it here kept a second
-   * full copy of the turn's prose alive for every stopped turn in the
-   * transcript, for the sake of a copy button that needs it only when the row
-   * it belongs to is on screen. The pointer array costs a word per segment.
-   */
+  /** Every assistant segment in the turn, in order and BY REFERENCE. */
   readonly turnReplySegments: ReadonlyArray<MessageSegment>;
 }
 
@@ -622,39 +496,22 @@ export interface ChatMessage {
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   settings: ChatRunSettings | null;
   createdAt: number;
-  /**
-   * Wall-clock start used by the assistant elapsed timer. Defaults to
-   * `createdAt`; differs when a persisted notification is adopted by a later
-   * provider run but must keep its original transcript position.
-   */
+  /** Wall-clock start used by the assistant elapsed timer. */
   elapsedStartedAt?: number;
   /**
-   * Whether every assistant segment in this completed turn is an
-   * `autonomous_resume` divider. Stamped only on the turn's final assistant
-   * row; `undefined` on live and non-final rows.
+   * Whether every assistant segment in this completed turn is an `autonomous_resume` divider.
+   * Stamped only on the turn's final assistant row; `undefined` on live and non-final rows.
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
-  /**
-   * Whether this completed row should render the elapsed footer. `false` for
-   * a background-completion notification that no provider turn adopted; its
-   * non-null `completedAt` still records terminal state for transcript
-   * consumers.
-   */
+  /** Whether this completed row should render the elapsed footer. */
   showCompletionFooter?: boolean;
-  /**
-   * Wall-clock time the assistant turn finished, in ms. Non-null only for
-   * completed assistant rows. It records terminal state; the optional
-   * `showCompletionFooter` flag controls whether that state also renders a
-   * "Worked for Nm Xs" footer. Always `null` for user rows, pending rows, and
-   * in-progress assistant turns.
-   */
+  /** Wall-clock time the assistant turn finished, in ms. Non-null only for completed assistant rows. */
   completedAt: number | null;
   /** See `ChatMessageStoppedInfo`. */
   stopped: ChatMessageStoppedInfo | null;
   /**
-   * User-wait time already accumulated during this assistant turn. The
-   * assistant timer subtracts this so it measures agent work rather than time
-   * blocked on approvals or questions.
+   * User-wait time already accumulated during this assistant turn. The assistant timer subtracts
+   * this so it measures agent work rather than time blocked on approvals or questions.
    */
   pausedDurationMs?: number;
   /**

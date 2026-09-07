@@ -1,16 +1,5 @@
 /**
- * `useEpicArtifactBodySubscribeAnswered` pinned against a REAL open-epic
- * store - not a hand-rolled `OpenEpicState` object - because the fact it
- * reports (has the body plane said ANYTHING about this artifact yet) is a
- * property of the real replica's bookkeeping, not just the projected field:
- * `dropAllOnViewerDowngrade()` only clears the map when the rooms replica's
- * OWN internal ledger (`availabilityByRoom`) is non-empty, so a state faked
- * by `store.setState(...)` alone would not exercise the drop this test's
- * third assertion depends on.
- *
- * Same rig shape as `replica-runtime-behavior-identity.test.ts`'s
- * viewer-downgrade pin (`applyRootSnapshot`'s `rooms.dropAllOnViewerDowngrade()`
- * call) - reused here through the actual hook rather than the bare store.
+ * `useEpicArtifactBodySubscribeAnswered` pinned against a REAL open-epic store - not a hand-rolled `OpenEpicState` object - because the fact it reports (has the body plane said ANYTHING about this artifact yet) is a property of the real replica's.
  */
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -181,11 +170,8 @@ describe("useEpicArtifactBodySubscribeAnswered", () => {
     expect(result.current).toBe(true);
 
     act(() => {
-      // A reconnect snapshot that downgrades the role to viewer. Per
-      // `applyRootSnapshot`, an unwritable role fails closed:
-      // `rooms.dropAllOnViewerDowngrade()` clears every room's availability
-      // entry - this artifact goes back to "not answered", not to a
-      // host-refusal verdict.
+      // A reconnect snapshot that downgrades the role to viewer.
+      // Per `applyRootSnapshot`, an unwritable role fails closed: `rooms.dropAllOnViewerDowngrade()` clears every room's availability entry - this artifact goes back to "not answered", not to a host-refusal verdict.
       streamHandle().callbacks.onSnapshot(
         buildMeta("viewer", donor),
         Y.encodeStateAsUpdate(donor),

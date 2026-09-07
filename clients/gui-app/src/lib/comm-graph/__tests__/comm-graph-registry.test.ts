@@ -31,9 +31,8 @@ interface RecordedOpener {
 }
 
 /**
- * A surface's opener. In production each one closes over a ref that only THAT
- * surface's effect refreshes, which is why a released one must never be dialed
- * again; these tests tell them apart by which recorder saw the dial.
+ * A surface's opener.
+ * In production each one closes over a ref that only THAT surface's effect refreshes, which is why a released one must never be dialed again; these tests tell them apart by which recorder saw the dial.
  */
 function recordedOpener(): RecordedOpener {
   const dials: CommGraphSubscriptionRequest[] = [];
@@ -87,9 +86,7 @@ afterEach(() => {
 
 describe("comm-graph subscription registry", () => {
   it("dials through the opener of a surface that is still mounted", () => {
-    // The defect this pins: pinning the FIRST opener (or the last acquirer's)
-    // leaves the pinned surface free to unmount, after which its transport refs
-    // stop being refreshed and every later dial goes into a disposed runtime.
+    // The defect this pins: pinning the FIRST opener (or the last acquirer's) leaves the pinned surface free to unmount, after which its transport refs stop being refreshed and every later dial goes into a disposed runtime.
     const first = recordedOpener();
     const second = recordedOpener();
     const claimA = {};
@@ -127,9 +124,8 @@ describe("comm-graph subscription registry", () => {
     releaseCommGraphSubscription("epic-1", tileClaim);
     expect(__commGraphSubscriptionRefCountForTests("epic-1")).toBe(1);
 
-    // Still attached (the panel holds it), and a new host dials through the
-    // panel's opener - the only one still live. The departed tile's opener is
-    // never reached, which is the whole point.
+    // Still attached (the panel holds it), and a new host dials through the panel's opener - the only one still live.
+    // The departed tile's opener is never reached, which is the whole point.
     getCommGraphSubscriptionManager("epic-1").setHostIds(["host-a", "host-b"]);
     expect(panel.dials.at(-1)?.hostId).toBe("host-b");
     expect(tile.dials).toHaveLength(0);
@@ -249,9 +245,8 @@ describe("comm-graph subscription registry", () => {
 });
 
 /**
- * A transport that is ALREADY OPEN keeps reading the refs of whichever surface
- * opened it - claim-carried openers only decide future dials. These pin the
- * handover for the live ones.
+ * A transport that is ALREADY OPEN keeps reading the refs of whichever surface opened it - claim-carried openers only decide future dials.
+ * These pin the handover for the live ones.
  */
 describe("comm-graph registry orphaned transports", () => {
   it("redials a departing claim's host through a surviving claim, resuming its cursor", () => {
@@ -331,9 +326,8 @@ describe("comm-graph registry orphaned transports", () => {
 
 describe("comm-graph registry acquire with a broken host", () => {
   it("degrades the broken host and still dials the good one", () => {
-    // A dial failure is NOT an acquire failure. One host that cannot build a
-    // transport must not stop a surface from mounting, nor block the other
-    // hosts in the same reconcile pass.
+    // A dial failure is NOT an acquire failure.
+    // One host that cannot build a transport must not stop a surface from mounting, nor block the other hosts in the same reconcile pass.
     const dials: string[] = [];
     const partlyBroken = (request: CommGraphSubscriptionRequest) => {
       dials.push(request.hostId);
@@ -484,9 +478,8 @@ describe("comm-graph registry redial containment", () => {
 });
 
 /**
- * `setHostIds` is reached from a PLAIN effect as well as from the transactional
- * acquire, so no caller can be relied on to own a dial failure. These pin the
- * consequences of containing it universally.
+ * `setHostIds` is reached from a PLAIN effect as well as from the transactional acquire, so no caller can be relied on to own a dial failure.
+ * These pin the consequences of containing it universally.
  */
 describe("comm-graph host-set reconcile with a failed host", () => {
   it("dials a newly added host and re-schedules the failed one's recovery", async () => {
@@ -535,11 +528,8 @@ describe("comm-graph host-set reconcile with a failed host", () => {
 });
 
 /**
- * Claim-free OBSERVERS (`observeCommGraphSubscription` /
- * `releaseCommGraphObserver`), which back the Epic header's feed-health dot.
- * An observer never dials, so its own release is the only thing that can
- * ever retire an entry that was never claimed - see the ownership contract
- * documented on `releaseCommGraphObserver`.
+ * Claim-free OBSERVERS (`observeCommGraphSubscription` / `releaseCommGraphObserver`), which back the Epic header's feed-health dot.
+ * An observer never dials, so its own release is the only thing that can ever retire an entry that was never claimed - see the ownership contract documented on `releaseCommGraphObserver`.
  */
 describe("comm-graph registry claim-free observers", () => {
   it("disposes and removes an epic that was only ever observed once its last observer releases", () => {
@@ -604,9 +594,7 @@ describe("comm-graph registry claim-free observers", () => {
     observeCommGraphSubscription(epicId, observer);
     releaseCommGraphObserver(epicId, observer);
 
-    // Still in the MRU, still the same manager, and its retained events and
-    // cursor are untouched - a detached entry is a genuinely subscribed one
-    // and the observer release must not evict it early.
+    // Still in the MRU, still the same manager, and its retained events and cursor are untouched - a detached entry is a genuinely subscribed one and the observer release must not evict it early.
     expect(__commGraphSubscriptionRetainedForTests(epicId)).toBe(true);
     expect(manager.isDisposed()).toBe(false);
     expect(getCommGraphSubscriptionManager(epicId)).toBe(manager);

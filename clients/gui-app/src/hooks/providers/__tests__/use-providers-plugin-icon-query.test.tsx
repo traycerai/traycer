@@ -8,11 +8,7 @@ import {
 } from "@/providers/use-resolved-theme";
 import { DEFAULT_THEME_PRESET } from "@/lib/theme-presets";
 
-/**
- * Captures the params the hook hands the transport. The theme decision is the
- * whole point of this hook and it is invisible from the plugins tab, which
- * mocks the hook wholesale.
- */
+/** Captures the params the hook hands the transport. */
 const queryMocks = vi.hoisted(() => ({
   params: [] as Array<{ native: { theme: string; pluginId: string } }>,
   cacheKeys: [] as Array<ReadonlyArray<unknown>>,
@@ -103,10 +99,7 @@ describe("useProvidersPluginIcon theme selection", () => {
   });
 
   it("pins a plugin with no dark asset to `light` even in dark mode", () => {
-    // This is the cache-key rule, not a rendering preference: the request is
-    // the query key, so varying it by theme for the ~10 of 13 plugins that
-    // ship one asset would miss on every row at theme-flip and re-fetch the
-    // whole ~900 KB set to receive byte-identical images.
+    // This is the cache-key rule, not a rendering preference: the request is the query key, so varying it by theme for the ~10 of 13 plugins that ship one asset would miss on every row at theme-flip and re-fetch the whole ~900 KB set to receive byte-identical images.
     expect(run({ hasDarkIcon: false, wrapper: themed("dark") })).toBe("light");
   });
 
@@ -133,11 +126,7 @@ describe("useProvidersPluginIcon cache identity", () => {
   });
 
   it("varies the cache identity by installed version", () => {
-    // `staleTime: Infinity` + `poll: false` means this query is never refetched
-    // on its own, and the WIRE request carries no version (the host serves the
-    // newest install). So the version has to reach the cache key, or a plugin
-    // upgraded outside the app would keep serving the previous artwork for the
-    // rest of the session.
+    // `staleTime: Infinity` + `poll: false` means this query is never refetched on its own, and the WIRE request carries no version (the host serves the newest install).
     expect(cacheKey("1.0.0")).not.toEqual(cacheKey("2.0.0"));
   });
 

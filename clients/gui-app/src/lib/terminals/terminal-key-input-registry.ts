@@ -2,15 +2,7 @@ import type { TerminalCursorKeyMode } from "@/lib/terminals/terminal-key-sequenc
 
 /**
  * Imperative input bridge for mounted xterm hosts, keyed by tile instance id.
- * Mirrors `terminal-focus-registry`: the mobile key bar lives outside the tile
- * tree, so it reaches the engine through this registry instead of threading
- * callbacks through props. Injection uses `term.input(data, true)` - the same
- * primitive as the desktop line-edit chords - so bar keys flow through the
- * ordinary `onData -> writeInput` path.
- *
- * Unlike the focus registry there is no parked-request handling: a tap while
- * the engine is still bootstrapping has no meaningful later fulfilment
- * (replaying a stale keypress would be wrong), so it simply no-ops.
+ * Mirrors `terminal-focus-registry`: the mobile key bar lives outside the tile tree, so it reaches the engine through this registry instead of threading callbacks through props.
  */
 export interface TerminalKeyInputTarget {
   readonly input: (data: string) => void;

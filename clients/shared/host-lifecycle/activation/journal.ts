@@ -28,7 +28,6 @@ export function createActivationJournal(input: {
   };
 }
 
-/** The same write-ahead convention used by the transition journal. */
 export function advanceActivationJournal(input: {
   readonly journal: LifecycleActivationJournal;
   readonly phase: ActivationPhase;

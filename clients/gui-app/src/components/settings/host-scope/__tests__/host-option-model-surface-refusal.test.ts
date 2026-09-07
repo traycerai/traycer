@@ -53,9 +53,8 @@ describe("hostOptionStatusWord surfaceState", () => {
       hostId: "host-down",
       connectable: false,
       planRestricted: false,
-      // The word comes from the lease-derived health state now (the merged
-      // vocabulary): an undialable host presents as offline, and that
-      // status word still outranks the surface refusal.
+      // The word comes from the lease-derived health state now (the merged vocabulary): an undialable host presents
+      // as offline, and that status word still outranks the surface refusal.
       health: {
         state: "offline",
         label: "Offline",

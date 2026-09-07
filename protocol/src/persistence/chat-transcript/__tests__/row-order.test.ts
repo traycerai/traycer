@@ -13,10 +13,7 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
 
 /**
- * `row-order.ts` is the one definition the host (numbering rows) and the
- * renderer (drawing them) both trust. If it drifts, bodies render under the
- * wrong rows - see the module doc. These tests pin the properties that
- * matter, not the code shape.
+ * `row-order.ts` is the one definition the host (numbering rows) and the renderer (drawing them) both trust.
  */
 
 function makeChatEvent(fields: {
@@ -57,9 +54,7 @@ describe("compareCanonicalRowOrder", () => {
   });
 
   it("keeps input order for ties, even when a plausible id tiebreak would reverse it", () => {
-    // Every row shares createdAt=5. Ids are chosen so that sorting by id
-    // ascending would produce the REVERSE of input order - if someone
-    // "improves" the comparator with an id tiebreak, this assertion flips.
+    // Every row shares createdAt=5.
     const rows: Array<CanonicalRowOrderKey & { readonly id: string }> = [
       { id: "c", createdAt: 5 },
       { id: "b", createdAt: 5 },
@@ -167,11 +162,8 @@ describe("eventMaterializesTranscriptRow", () => {
   });
 
   it("returns false for chat.forked with an EMPTY-STRING sourceChatId", () => {
-    // `renderableMetadataString` rejects `""` specifically, and the module doc
-    // names `sourceChatId: ""` as the drift that put bodies under the wrong
-    // rows. The suite covered missing keys and non-string values but never the
-    // empty string, so the rule that exists for the documented failure was the
-    // one rule with no test behind it.
+    // `renderableMetadataString` rejects `""` specifically, and the module doc names `sourceChatId: ""` as the drift that put bodies under the wrong rows.
+    // The suite covered missing keys and non-string values but never the empty string, so the rule that exists for the documented failure was the one rule with no test behind it.
     const event = makeChatEvent({
       eventId: "e-empty-chat",
       type: "chat.forked",
@@ -196,9 +188,8 @@ describe("eventMaterializesTranscriptRow", () => {
   });
 
   it("normalizes an EMPTY-STRING send.failed code to null", () => {
-    // The same empty-string rule on the other path it governs. Here `code` is
-    // optional, so `""` does not withhold the row - it must simply not survive
-    // as an empty code the renderer would draw a blank chip for.
+    // The same empty-string rule on the other path it governs.
+    // Here `code` is optional, so `""` does not withhold the row - it must simply not survive as an empty code the renderer would draw a blank chip for.
     const event = makeChatEvent({
       eventId: "e-empty-code",
       type: "send.failed",

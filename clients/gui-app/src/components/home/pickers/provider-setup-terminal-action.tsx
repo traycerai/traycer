@@ -10,25 +10,15 @@ import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-term
 interface ProviderSetupTerminalActionProps {
   readonly providerId: ProviderId;
   readonly guidance: ProviderSetupGuidance;
-  /** Where the terminal lands; `null` renders nothing (no surface to open into). */
   readonly surface: ProviderTerminalLoginSurface | null;
-  /** The picker's run-target host - the host the terminal is minted on. */
   readonly runTargetHostId: string | null;
-  /**
-   * Runs before the request is sent. The picker passes its close: the
-   * terminal opens BEHIND the popover otherwise, and the open itself hangs
-   * off the mutation, so closing first loses nothing.
-   */
+  /** Runs before the request is sent. The picker passes its close: the terminal opens behind the popover
+   * otherwise, and the open itself hangs off the mutation, so closing first loses nothing. */
   readonly onBeforeStart: () => void;
 }
 
-/**
- * The picker's "Set up in terminal" button for a provider with setup
- * guidance, on the surface the picker is drawn on. One component per surface
- * kind, because each kind is a different hook with different context needs
- * (the epic one is tab-bound); the switch lives here so every setup CTA in
- * the picker renders the button the same way.
- */
+/** One component per surface kind, because each kind is a different hook with different context needs (the epic
+ * one is tab-bound); the switch lives here so every setup cta in the picker renders the button the same way. */
 export function ProviderSetupTerminalAction(
   props: ProviderSetupTerminalActionProps,
 ): ReactNode {
@@ -95,9 +85,8 @@ function LandingSetupTerminalButton(props: {
       guidance={props.guidance}
       isPending={login.isPending}
       onStart={() => {
-        // Binds the start page BEFORE the request: the panel this terminal
-        // opens into is mounted per bound draft, so resolving after the host
-        // answered would open it into a page that does not exist yet.
+        // Binds the start page before the request: the panel this terminal opens into is mounted per bound draft, so
+        // resolving after the host answered would open it into a page that does not exist yet.
         const landingPageId = props.resolveLandingPageId();
         props.onBeforeStart();
         login.start(landingPageId);
@@ -106,10 +95,7 @@ function LandingSetupTerminalButton(props: {
   );
 }
 
-// Same pending treatment as the composer banner's terminal action: unchanged
-// label, disabled, inline spinner. Starting a sign-in kills and respawns a PTY
-// host-side, so a press with no feedback reads as a dead button and invites a
-// second one.
+// Same pending treatment as the composer banner's terminal action: unchanged label, disabled, inline spinner.
 function SetupTerminalButton(props: {
   readonly guidance: ProviderSetupGuidance;
   readonly isPending: boolean;

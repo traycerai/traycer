@@ -1,23 +1,10 @@
 import { useEffect, useState } from "react";
 
-/**
- * The scripted agent-to-agent collaboration both onboarding dioramas replay.
- *
- * The desktop miniature (`onboarding-diorama.tsx`) plays it across three panes;
- * the phone frame (`onboarding-phone-diorama.tsx`) plays the same beats down one
- * column. The lesson is the story, so the two platforms must not fork it — the
- * beats, the display names and the cadence live here and are imported by both.
- *
- * This is deliberately NOT in `onboarding-diorama-shared.ts`: that module is two
- * pure constants with a doc comment forbidding growth, and the script is a
- * different kind of thing — scripted content plus the hook that steps through
- * it.
- */
+/** The lesson is the story, so the two platforms must not fork it - the beats, the display names and the
+ * cadence live here and are imported by both. */
 
-/** The three participants: the GUI chat agent and the two terminal agents. */
 export type MeshAgentId = "gui" | "claude" | "opencode";
 
-/** Conversational display names (used in story messages + pills). */
 export const PANE_LABEL: Record<MeshAgentId, string> = {
   gui: "Codex",
   claude: "Claude Code",
@@ -34,9 +21,8 @@ export type StoryKind =
   | "msg"
   | "decision";
 
-// The rate-limits collaboration: Codex initiates, Claude gets blocked and asks
-// OpenCode, OpenCode answers, Codex records the decision, Claude resumes. Each
-// step reveals one message in its pane (`to` drives the directional pill).
+// The rate-limits collaboration: Codex initiates, Claude gets blocked and asks OpenCode, OpenCode answers,
+// Codex records the decision, Claude resumes.
 export const STORY_STEPS = [
   {
     pane: "gui",
@@ -133,7 +119,6 @@ export const STORY_STEPS = [
   readonly to: MeshAgentId | null;
 }>;
 
-/** One beat of the script. */
 export type StoryBeat = (typeof STORY_STEPS)[number];
 
 // Hold longer on the final beat before looping, and longer on message-passing
@@ -144,13 +129,8 @@ export function storyStepDuration(step: number, last: number): number {
   return 1900;
 }
 
-/**
- * Drives the scripted story: one extra message revealed per beat, looping.
- * Reduced motion shows the finished conversation immediately.
- *
- * `active` is the caller's "my story scene is on screen" — a boolean rather
- * than a scene id, because the two dioramas name their scenes differently.
- */
+/** `active` is the caller's "my story scene is on screen" - a boolean rather than a scene id, because the two
+ * dioramas name their scenes differently. */
 export function useStoryStep(active: boolean, reducedMotion: boolean): number {
   const [step, setStep] = useState(0);
   const last = STORY_STEPS.length - 1;

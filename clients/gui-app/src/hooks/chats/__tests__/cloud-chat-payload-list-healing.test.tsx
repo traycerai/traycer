@@ -28,24 +28,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useCloudChatPayloadList } from "@/hooks/chats/use-cloud-chat-queries";
 
-/**
- * What actually heals a SHORT payload list, pinned as request counts.
- *
- * The publisher commits a chat's head first and uploads its heavy content
- * afterwards, so a reader who opens a chat inside that window is answered
- * truthfully and short. `useCloudChatPayloadList`'s doc comment records the
- * decision NOT to close that window with a client-side poll, and states three
- * facts about what the surface does today instead. Those facts are the whole
- * basis of the decision, and none of them is asserted anywhere else - a poll
- * added by accident (or `staleTime` drifting off zero, which is what makes the
- * reopen refetch) would change the surface's behavior with nothing going red.
- *
- * The QueryClient here is `createAppQueryClient()` rather than a bare
- * `new QueryClient()` on purpose: two of the three facts are properties of the
- * app's own defaults (`refetchOnWindowFocus: false`,
- * `refetchOnReconnect: false`), and a test-local client would quietly assert
- * something the app does not do.
- */
+/** Heal on remount only. Use createAppQueryClient so focus/reconnect defaults are the app's. */
 
 const IDENTITY: CloudChatIdentity = {
   taskId: "task-1",
@@ -53,11 +36,7 @@ const IDENTITY: CloudChatIdentity = {
   ownerUserId: "owner-1",
 };
 
-/**
- * What one mount of the hook under test renders to. Spelled out rather than
- * read off the hook, so a change to its declared result type surfaces here as
- * a type error instead of being absorbed silently.
- */
+/** Spelled out rather than read off the hook, so a change to its declared result type surfaces here as a type error instead of being absorbed silently. */
 type PayloadListRender = RenderHookResult<
   UseQueryResult<
     ResponseOfMethod<HostRpcRegistry, "epic.listCloudChatPayloads">,
@@ -77,11 +56,7 @@ type Fixture = {
   readonly requests: { value: number };
 };
 
-/**
- * A host whose FIRST answer is the racing short one and whose every later
- * answer is the converged list. Any heal is therefore visible twice over - as
- * a second request, and as refs the transcript can fetch.
- */
+/** A host whose FIRST answer is the racing short one and whose every later answer is the converged list. */
 function createFixture(): Fixture {
   const requests = { value: 0 };
   const queryClient = createAppQueryClient();
@@ -198,10 +173,7 @@ describe("useCloudChatPayloadList healing", () => {
     });
     opened.unmount();
 
-    // The cache entry survives the close (gcTime is the app default here, not
-    // the head read's instant eviction), so this proves the REFETCH rather
-    // than a cache miss: `staleTime: 0` is what makes the served entry stale
-    // on arrival and sends the new observer to the host.
+    // The cache entry survives the close (gcTime is the app default here, not the head read's instant eviction), so this proves the REFETCH rather than a cache miss: `staleTime: 0` is what makes the served entry stale on arrival and sends the new observer to the host.
     const reopened = renderPayloadList();
     await waitFor(() => {
       expect(reopened.result.current.data?.outcome).toEqual({

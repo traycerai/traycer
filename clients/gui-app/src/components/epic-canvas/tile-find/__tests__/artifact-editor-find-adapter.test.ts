@@ -286,16 +286,13 @@ describe("createArtifactEditorFindAdapter", () => {
     expect(getArtifactFindState(editor).matches.length).toBe(2);
     scrollIntoView.mockClear();
 
-    // A passive document edit (e.g. a streamed / collaborative Y.Doc change)
-    // dispatches a docChanged transaction with no find meta, triggering the
-    // debounced rescan.
+    // A passive document edit (e.g. a streamed / collaborative Y.Doc change) dispatches a docChanged transaction with no find meta, triggering the debounced rescan.
     editor.view.dispatch(editor.state.tr.insertText("z", 1));
     vi.runOnlyPendingTimers();
     frames.flushFrames();
 
-    // Highlights are recomputed (current decoration still present) but the
-    // viewport is NOT yanked. Reintroducing scheduleCurrentScroll() in the
-    // rescan path makes this assertion fail.
+    // Highlights are recomputed (current decoration still present) but the viewport is NOT yanked.
+    // Reintroducing scheduleCurrentScroll() in the rescan path makes this assertion fail.
     expect(getArtifactFindState(editor).matches.length).toBe(2);
     expect(
       editor.view.dom.querySelector("[data-artifact-find-current]"),
@@ -428,9 +425,8 @@ function installAnimationFrameQueue(): {
       callbacks.delete(handle);
       callback(0);
     },
-    // Drain every pending frame, including frames re-scheduled while draining
-    // (e.g. the scroll retry loop), so a test can assert that NO scroll frame
-    // ever ran. Guarded against runaway re-scheduling.
+    // Drain every pending frame, including frames re-scheduled while draining (e.g. the scroll retry loop), so a test can assert that NO scroll frame ever ran.
+    // Guarded against runaway re-scheduling.
     flushFrames: () => {
       let guard = 0;
       while (callbacks.size > 0) {

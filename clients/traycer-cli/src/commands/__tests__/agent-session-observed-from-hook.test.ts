@@ -212,9 +212,7 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
   });
 
   it("noops (host-too-old) when the request cannot project onto an older host", async () => {
-    // A newer CLI negotiated recordActivity@1.1, but the running host only
-    // speaks @1.0, whose event enum has no "resync": the transport fails to
-    // project the request locally (before sending) and raises this RPC_ERROR.
+    // A newer CLI negotiated recordActivity@1.1, but the running host only speaks @1.0, whose event enum has no "resync": the transport fails to project the request locally (before sending) and raises this RPC_ERROR.
     const stderrSpy = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);

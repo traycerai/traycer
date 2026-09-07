@@ -1,23 +1,4 @@
-/**
- * W3C Window Controls Overlay → `.wco` class on `<html>`.
- *
- * Imperative module-load installer (mirrors `theme-applier.ts`).
- * Subscribes to `navigator.windowControlsOverlay.geometrychange` at
- * module load - outside React - so the DOM cascade flips before any
- * render reads `env(titlebar-area-*)` values.
- *
- * Why a class toggle is required: CSS `env(name, fallback)` resolves
- * to `fallback` when the var is **unset** (browser shell) BUT also
- * when the OS hides the controls (mac fullscreen autohide → WCO
- * reports `visible: false` and clears the env vars). Without this
- * bridge, a frameless-desktop renderer keeps drawing the leading
- * inset in fullscreen because the fallback fires. The `.wco` class
- * lets components scope inset styles to `visible === true` cases.
- *
- * Tailwind variant: `@custom-variant wco (&:is(.wco, .wco *));` in
- * `index.css`. Use `wco:pl-[env(titlebar-area-x,82px)]` to apply the
- * inset only while controls are visible.
- */
+/** W3C Window Controls Overlay → `.wco` class on `<html>`. */
 
 const WCO_CLASS_NAME = "wco";
 

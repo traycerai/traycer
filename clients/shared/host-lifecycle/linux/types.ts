@@ -5,7 +5,6 @@ import type { TraycerIdentityAttestation } from "../identity";
 import type { HostPidMetadata } from "../shared/host-process";
 import type { Reachability } from "../shared/reachability";
 
-/** Linux annex cause set — platform-local. No `externally-managed`. */
 export type LinuxIndeterminateCause =
   | "systemctl-failed"
   | "systemctl-timeout"
@@ -51,16 +50,10 @@ export type UserBusAvailability =
         | "user-bus-unavailable";
     };
 
-/**
- * systemd user-manager state (annex §1.4).
- *
- * `health` is required on the active arm: `systemctl --user is-system-running`
- * exits **non-zero** while printing `degraded`, which means the manager is
- * running with at least one failed unit somewhere. That is not rare — one
- * failed pipewire unit or user timer produces it — and it is diagnostic
- * evidence `doctor-report` must carry (§2.1.4), so it is a field rather than a
- * discarded distinction.
- */
+    /**
+     * systemd user-manager state (annex §1.4).
+     * That is not rare - one failed pipewire unit or user timer produces it - and it is diagnostic evidence `doctor-report` must carry (§2.1.4), so it is a field rather than a discarded distinction.
+     */
 export type UserManagerState =
   | {
       readonly kind: "observed";
@@ -83,17 +76,10 @@ export type UnitLoadState =
   | { readonly kind: "absent" }
   | { readonly kind: "indeterminate"; readonly cause: LinuxIndeterminateCause };
 
-/**
- * `systemctl --user is-enabled` state words for the supported systemd range
- * (annex §1.4, "Enablement states must cover what systemd actually emits").
- *
- * `linked`, `linked-runtime`, `alias`, `generated` and `transient` were
- * missing, so a healthy machine emitting any of them landed on
- * `indeterminate("parse-error")` and demoted for no reason. `masked-runtime`
- * and `bad` are in the same documented set and are recognised for the same
- * reason. `not-found` deliberately stays indeterminate — enablement is not a
- * property of a unit that does not exist.
- */
+  /**
+   * `systemctl --user is-enabled` state words for the supported systemd range (annex §1.4, "Enablement states must cover what systemd actually emits").
+   * `not-found` deliberately stays indeterminate - enablement is not a property of a unit that does not exist.
+   */
 export type UnitEnablementState =
   | "enabled"
   | "enabled-runtime"
@@ -150,23 +136,10 @@ export type LingerState =
       readonly cause: "loginctl-failed" | "parse-error";
     };
 
-/**
- * logind sessions (annex §1.6, "Every field of `observed` must be observed").
- *
- * `active`, `type`, `remote` and `graphicalActive` are `| null` because the
- * probe's reader — `loginctl list-sessions --no-legend` — does not reliably
- * carry them: the column set changed across the supported systemd range, so a
- * positional parse for STATE/CLASS/TTY is a guess this repo cannot verify
- * without a real box. The previous implementation stamped every session
- * `active: true, type: null, remote: false` with `graphicalActive` hard-coded
- * `false`, which fabricated three facts and made any consumer of
- * `graphicalActive` read a constant.
- *
- * `null` means "not read", and it is the honest value until a richer reader
- * (`loginctl show-session <id> -p State -p Type -p Remote`, or an injected
- * probe via `LinuxProbeDeps.logind`) supplies it. `observed` is a claim about
- * the world; a field that was not read is not part of that claim.
- */
+    /**
+     * logind sessions (annex §1.6, "Every field of `observed` must be observed").
+     * `observed` is a claim about the world; a field that was not read is not part of that claim.
+     */
 export type LogindSession = {
   readonly id: string;
   readonly active: boolean | null;
@@ -182,10 +155,10 @@ export type LogindSessionState =
     }
   | { readonly kind: "indeterminate"; readonly cause: LinuxIndeterminateCause };
 
-/**
- * Linux world snapshot. Intentionally does **not** include
- * `externally-managed` — that is a macOS-only concept (annex closing note).
- */
+  /**
+   * Linux world snapshot. Intentionally does **not** include
+   * `externally-managed` - that is a macOS-only concept (annex closing note).
+   */
 export type LinuxWorld = {
   readonly bus: UserBusAvailability;
   readonly userManager: UserManagerState;

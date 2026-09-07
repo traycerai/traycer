@@ -22,15 +22,7 @@ const directoryEntries = vi.hoisted(() => ({
   current: [] as ReadonlyArray<HostDirectoryEntry>,
 }));
 
-// ONE hoisted spy, not `() => vi.fn()`.
-//
-// The old form minted a NEW spy on every render, which is worse than merely
-// unstable: it is unassertable by construction, because any expectation would
-// be reading a spy the component had already replaced. Nothing here asserts on
-// it today, which is the only reason that read as harmless. Stability also
-// matters for its own sake — the real hook returns one opener for a
-// component's life, and effects depend on it; see
-// `lib/registries/__tests__/chat-session-registry.test.ts`.
+// Nothing here asserts on it today, which is the only reason that read as harmless.
 const openTransportStub = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => openTransportStub,

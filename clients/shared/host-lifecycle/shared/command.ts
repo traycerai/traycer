@@ -1,6 +1,5 @@
-// Injectable command runner for the *read-only* probe. Deliberately
-// narrower than the CLI's ProcessRunner so this module never depends on
-// traycer-cli (and cannot import install/uninstall actuators).
+// Injectable command runner for the *read-only* probe.
+// Deliberately narrower than the CLI's ProcessRunner so this module never depends on traycer-cli (and cannot import install/uninstall actuators).
 
 export type ProbeCommandResult = {
   readonly exitCode: number;
@@ -8,7 +7,7 @@ export type ProbeCommandResult = {
   readonly stderr: string;
   /** True when the runner killed the child for exceeding timeoutMs. */
   readonly timedOut: boolean;
-  /** True when the binary could not be spawned (ENOENT, EACCES on exec, …). */
+  /** True when the binary could not be spawned (enoent, eacces on exec, …). */
   readonly spawnFailed: boolean;
   readonly signal: string | null;
 };

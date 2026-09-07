@@ -39,9 +39,7 @@ async function descendant() {
       ).then(() => process.exit(0));
     });
   } else {
-    // The supervisor must escalate a real, TERM-resistant descendant to
-    // SIGKILL and still keep the C envelope published until the reap. There
-    // is deliberately no release-barrier exit path in this mode.
+    // The supervisor must escalate a real, term-resistant descendant to sigkill and still keep the C envelope published until the reap.
     process.once("SIGTERM", () => {
       void writeFile(
         join(barrierDir, "descendant-term-received"),
@@ -134,10 +132,6 @@ async function supervisor() {
         }
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      // Boolean liveness probe rather than throw-inside-try with a
-      // self-filtering catch (which matched its OWN thrown error back out by
-      // message string - fragile, and easy to accidentally swallow a
-      // genuinely different failure that happens to share wording).
       let groupStillLive = false;
       try {
         process.kill(-wrapper.pid, 0);
@@ -166,10 +160,8 @@ async function supervisor() {
       process.exit(0);
       return;
     }
-    // If D died before C received SIGTERM, its group leader no longer exists
-    // for a reliable negative-PID signal on every POSIX runtime. The release
-    // barrier gives E's signal-safe fixture path a deterministic final exit;
-    // C still waits for that exit before publishing supervisor-exited.
+    // If D died before C received sigterm, its group leader no longer exists for a reliable negative-PID signal on every posix runtime.
+    // The release barrier gives E's signal-safe fixture path a deterministic final exit; C still waits for that exit before publishing supervisor-exited.
     await writeFile(join(barrierDir, "descendant-release"), "");
     await waitFor(join(barrierDir, "descendant-exited"));
     if (wrapper.exitCode === null) {
@@ -196,10 +188,8 @@ async function supervisor() {
             return;
           }
           descendantPid = message.pid;
-          // Awaited BEFORE the stdout publish below: the consumer waits for
-          // the "bind-actuator" stdout line and then immediately reads this
-          // file. Publishing first raced the write - the reader could
-          // observe the stdout line before the file existed.
+          // Awaited before the stdout publish below: the consumer waits for the "bind-actuator" stdout line and then immediately reads this file.
+          // Publishing first raced the write - the reader could observe the stdout line before the file existed.
           await writeFile(
             join(barrierDir, "wrapper-bind"),
             JSON.stringify({ wrapperPid: wrapper.pid, descendantPid }),

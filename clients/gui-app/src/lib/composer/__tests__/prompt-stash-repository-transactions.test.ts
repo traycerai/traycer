@@ -360,10 +360,8 @@ describe("prompt-stash-repository transactions", () => {
       db.close();
     }
 
-    // Incoming 11 bytes: if metadata (1) were trusted, kept+incoming = 12
-    // would fit; using real bytes (BUDGET-10)+11 exceeds the budget.
-    // Hash only needs to be canonical for the rejected snapshot shape;
-    // save fails on capacity before any durable write.
+    // Incoming 11 bytes: if metadata (1) were trusted, kept+incoming = 12 would fit; using real bytes (BUDGET-10)+11 exceeds the budget.
+    // Hash only needs to be canonical for the rejected snapshot shape; save fails on capacity before any durable write.
     const incomingHash =
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const incoming = new Uint8Array(11);

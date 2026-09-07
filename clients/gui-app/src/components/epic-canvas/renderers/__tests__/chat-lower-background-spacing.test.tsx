@@ -8,13 +8,7 @@ import type {
 import type { ChatLowerSurfaceTopSpacing } from "@/components/chat/chat-pinned-stack";
 
 /**
- * The dock's frame is drawn flush against whatever follows it (`-mb-px`, no
- * bottom border), so the surfaces below have to agree with the dock about
- * whether the Background section is there at all. A chat whose only background
- * work is a managed command is the case where the two used to disagree: the
- * dock joined the epic's command list, the composer only ever looked at the
- * harness's own background items, and the result was an open-bottomed box with
- * a gap under it.
+ * A chat whose only background work is a managed command is the case where the two used to disagree: the dock joined the epic's command list, the composer only ever looked at the harness's own background items, and the result was an open-bottomed box with a gap under it.
  */
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
@@ -42,9 +36,6 @@ vi.mock(
   }),
 );
 
-// The composer's own spacing is one class off its `topSpacing` prop
-// (`pt-4` for "normal", `pt-0` for "connected"), so the stub records the
-// decision and spares the test the composer's whole provider stack.
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: (props: {
     readonly topSpacing: ChatLowerSurfaceTopSpacing;
@@ -239,11 +230,6 @@ beforeEach(() => {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
     factories: {
       streamClientFactory: noopStreamClientFactory,
       laneSelection: null,
@@ -277,8 +263,6 @@ describe("background section and composer spacing", () => {
 
     expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
     expect(screen.getByTestId("background-items-panel")).not.toBeNull();
-    // "connected" is `pt-0`: the dock's frame has no bottom edge of its own, so
-    // any gap here shows as an open box.
     expect(composerTopSpacing()).toBe("connected");
   });
 
@@ -293,16 +277,8 @@ describe("background section and composer spacing", () => {
     expect(composerTopSpacing()).toBe("normal");
   });
 
-  // The case the whole Deliver affordance exists for, and the one the gate used
-  // to close: one shell ran, finished, and a committed Stop fence is holding
-  // its last output. The harness reports no background work, and a hold lingers
-  // only on a shell that has FINISHED - so both counts the gate used to read
-  // are zero, the dock returned null, and the only button that clears a hold
-  // was off screen while the hold itself survived restarts.
-  //
-  // Asserted from here rather than against the panel directly because every
-  // panel suite mounts `BackgroundItemsPanel` itself and so never crosses the
-  // gate, which is exactly why nothing caught this.
+  // The harness reports no background work, and a hold lingers only on a shell that has FINISHED - so both counts the gate used to read are zero, the dock returned null, and the only button that clears a hold was off screen while the hold itself survived restarts.
+  // Asserted from here rather than against the panel directly because every panel suite mounts `BackgroundItemsPanel` itself and so never crosses the gate, which is exactly why nothing caught this.
   it("opens the Background section for a hold with nothing running at all", () => {
     renderSurfaces();
 

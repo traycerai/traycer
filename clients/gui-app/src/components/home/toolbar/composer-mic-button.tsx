@@ -10,13 +10,8 @@ import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-av
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-/**
- * Presentation-only control bundle the composer hands to the toolbar so the mic
- * button stays a dumb view over the dictation hook's state. The recording timer
- * + waveform live in the inline recording bar (`DictationRecordingBar`), which
- * replaces the toolbar row while recording, so the button itself only needs to
- * start dictation (and reflect state for a11y).
- */
+/** The recording timer + waveform live in the inline recording bar (`DictationRecordingBar`), which replaces
+ * the toolbar row while recording. */
 export interface ComposerDictationControl {
   readonly state: VoiceDictationState;
   readonly onToggle: () => void;
@@ -49,9 +44,8 @@ export function ComposerMicButton({
   const isBusy = state === "requesting" || state === "transcribing";
   const isRecording = state === "recording";
   const label = labelFor(state);
-  // Surface the (live, rebindable) shortcut in the tooltip when idle so it's
-  // discoverable; omit it where the action is unbound, or where shortcut hints
-  // are suppressed - the tooltip then carries the plain action label.
+  // Surface the (live, rebindable) shortcut in the tooltip when idle so it's discoverable; omit it where the
+  // action is unbound, or where shortcut hints are suppressed - the tooltip then carries the plain action label.
   const boundChord = useBindingForAction(DICTATION_ACTION_ID);
   const hint =
     boundChord === null || !shortcutHintsVisible()
@@ -103,8 +97,7 @@ function preparingLabel(status: DictationPreparingStatus): string {
   return "Preparing voice input…";
 }
 
-// Mic icon wrapped in a circular progress ring. Determinate while downloading
-// with known progress (the ring fills); indeterminate (a spinning arc) when the
+// Determinate while downloading with known progress (the ring fills); indeterminate (a spinning arc) when the
 // model is absent / progress is unknown / errored.
 function MicProgressRing({ progress }: { readonly progress: number | null }) {
   const radius = 8.5;
@@ -147,12 +140,8 @@ function MicProgressRing({ progress }: { readonly progress: number | null }) {
   );
 }
 
-/**
- * Disabled placeholder shown in the mic's slot while the on-device model is
- * still being readied, so the control doesn't silently vanish on first run: a
- * dimmed mic with a circular progress ring (fills as the model downloads).
- * Tooltip surfaces the live percentage.
- */
+/** Disabled placeholder shown in the mic's slot while the on-device model is still being readied, so the
+ * control doesn't silently vanish on first run. */
 export function ComposerMicPreparing({
   status,
 }: {
@@ -161,9 +150,7 @@ export function ComposerMicPreparing({
   const label = preparingLabel(status);
   const progress =
     status.downloadState === "downloading" ? status.progress : null;
-  // A native `title` on a `disabled` button doesn't show on hover (the button
-  // gets no pointer events). Put the tooltip on a wrapping span and make the
-  // button `pointer-events-none` so the hover lands on the span.
+  // Put the tooltip on a wrapping span and make the button `pointer-events-none` so the hover lands on the span.
   return (
     <TooltipWrapper
       label={label}

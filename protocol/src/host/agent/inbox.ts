@@ -1,33 +1,6 @@
 /**
- * `agent.inbox.subscribe@1.0` - streaming-RPC contract used by the
- * `traycer monitor` background command (spawned inside a Claude Code TUI
- * session) to receive inbox messages addressed to a single agent id.
- *
- * Delivery model:
- *
- *   - `agent.sendMessage` from another agent enqueues a `MailboxEnvelope`
- *     on the broker's per-receiver inbox queue (RAM-only).
- *   - On every enqueue the broker fires `onInboxChange`; the stream
- *     resolver drains the queue and pushes each envelope to the subscribed
- *     monitor as a `message` frame.
- *   - If no monitor is subscribed when a message lands, it queues until
- *     one connects and the resolver replays the backlog on open. The
- *     inactivity sweep in the broker is the safety net: a sender on
- *     `expectReply=true` gets a stalled-receiver notice if no progress
- *     happens within the window.
- *
- * Monitor presence: the resolver does NOT register the agent with the host's
- * `AgentActivityTracker` - epic-activity ownership belongs to the
- * `TerminalSessionManager` that owns the PTY, and a second registrar would
- * race it. (An earlier version of this comment claimed otherwise; it was
- * wrong, and the claim is load-bearing enough that it is worth correcting.)
- *
- * What the resolver DOES own is the ROLE-AWARENESS SINK registry: on a
- * successful open it registers its connection as a live sink (keyed by
- * connectionId, and only when the negotiated version is >= 1.1), and
- * unregisters that same connection on close. Awareness is delivered only to a
- * sink that is connected at that moment - it is never queued, so a
- * reconnecting monitor never replays a stale broadcast.
+ * `agent.inbox.subscribe@1.0` - streaming-RPC contract used by the `traycer monitor` background command (spawned inside a Claude Code TUI session) to receive inbox messages addressed to a single agent id.
+ * Awareness is delivered only to a sink that is connected at that moment - it is never queued, so a reconnecting monitor never replays a stale broadcast.
  */
 import {
   defineDowngradePath,
@@ -44,11 +17,7 @@ const textFrameFields = {
 
 export const agentInboxSubscribeOpenRequestSchema = z.object({
   agentId: z.string(),
-  /**
-   * Epic the agent belongs to. The resolver uses this to open the
-   * caller's epic lease and look up the agent record so it can verify
-   * the agent belongs to the calling user.
-   */
+  /** Epic the agent belongs to. */
   epicId: z.string(),
 });
 export type AgentInboxSubscribeOpenRequest = z.infer<
@@ -74,11 +43,7 @@ export const agentInboxMessageSchema = z.object({
     }),
   ]),
   fromAgentId: z.string(),
-  /**
-   * Sender's display title (chat title or TUI agent title). Null when the
-   * sender record didn't expose one — receivers should fall back to
-   * `fromAgentId` in that case.
-   */
+  /** Sender's display title (chat title or TUI agent title). */
   senderTitle: z.string().nullable(),
   /**
    * Sender's harness id (claude/codex/cursor/opencode). Null for senders
@@ -93,13 +58,7 @@ export const agentInboxMessageSchema = z.object({
 export type AgentInboxMessage = z.infer<typeof agentInboxMessageSchema>;
 
 /**
- * `@1.2` message shape: adds `eventId`, the durable inbox row's key, so the
- * monitor can acknowledge it via `agent.inbox.ack` once it has been safely
- * surfaced to the agent. A NEW schema object (not a mutation of
- * `agentInboxMessageSchema`) per the frozen-per-minor-tree rule: `@1.0`/`@1.1`
- * connections keep parsing the old shape and silently ignore the extra field
- * a `@1.2`-built server frame carries (zod objects are non-strict), so this
- * is safe to send unconditionally regardless of negotiated minor.
+ * `@1.2` message shape: adds `eventId`, the durable inbox row's key, so the monitor can acknowledge it via `agent.inbox.ack` once it has been safely surfaced to the agent.
  */
 export const agentInboxMessageSchemaV12 = agentInboxMessageSchema.extend({
   /** Durable inbox row key - see `agent.inbox.ack`. */
@@ -108,20 +67,12 @@ export const agentInboxMessageSchemaV12 = agentInboxMessageSchema.extend({
 export type AgentInboxMessageV12 = z.infer<typeof agentInboxMessageSchemaV12>;
 
 /**
- * Out-of-band notice the broker emits when a receiver the calling agent
- * had outstanding requests to has gone idle without replying. Surfaced to
- * the monitor as a distinct frame kind so the agent sees a clearly-marked
- * system signal rather than something that looks like a peer message.
+ * Out-of-band notice the broker emits when a receiver the calling agent had outstanding requests to has gone idle without replying.
  */
 export const agentInboxNoticeSchema = z.object({
   kind: z.literal("inactivity"),
   /**
-   * The agent the notice is addressed to — the original sender that asked
-   * for a reply and is being told its counterparty went silent. Stream
-   * subscribers are already scoped to a single agent id, so this is
-   * redundant with the subscription target; it's on the wire so the
-   * receiving agent (or any future fan-out path) can see "this notice is
-   * for me" without consulting subscription metadata.
+   * The agent the notice is addressed to - the original sender that asked for a reply and is being told its counterparty went silent.
    */
   senderAgentId: z.string(),
   /** The thread id the original sender owns. */
@@ -130,30 +81,11 @@ export const agentInboxNoticeSchema = z.object({
   receiverAgentId: z.string(),
   /** Receiver's display title at notice time, when known. */
   receiverTitle: z.string().nullable(),
-  /** Receiver's harness id at notice time, when known. */
   receiverHarnessId: z.string().nullable(),
   epicId: z.string(),
   /**
-   * Why the notice fired, so the monitor can render accurate copy and the
-   * sender knows how much to trust it and how to proceed:
-   *   - `turn-ended`     - receiver's turn ended (Stop hook) with no reply.
-   *     Accurate, primary signal.
-   *   - `exited`         - receiver's process exited without replying.
-   *     Definitive for this run.
-   *   - `quiet`          - watchdog backstop: long PTY silence. Advisory -
-   *     the receiver may still be mid-turn; check its transcript.
-   *   - `user-stopped`   - the receiver's turn was stopped by the user. It
-   *     will not resume on its own.
-   *   - `errored`        - the receiver's turn ended on an error (e.g. an
-   *     API usage/rate limit). The raw text is in `detail`.
-   *   - `awaiting-input` - the receiver is mid-turn but blocked on a human
-   *     (asked a question / requested approval); it will not reply until a
-   *     person responds. The prompt summary is in `detail`.
-   *   - `receiver-cancelled` - an authenticated user or agent stopped the
-   *     receiver agent outright, so this message was dropped undelivered and
-   *     the thread is closed. Informational only: the sender must not re-send
-   *     or spawn a replacement (contrast `user-stopped`, where the thread
-   *     stays open).
+   * Why the notice fired, so the monitor can render accurate copy and the sender knows how much to trust it and how to proceed: - `turn-ended` - receiver's turn ended (Stop hook) with no reply.
+   * Informational only: the sender must not re-send or spawn a replacement (contrast `user-stopped`, where the thread stays open).
    */
   reason: z.enum([
     "turn-ended",
@@ -165,18 +97,9 @@ export const agentInboxNoticeSchema = z.object({
     "receiver-cancelled",
   ]),
   /**
-   * Raw, human-readable detail behind `reason` (the error text for
-   * `errored`, a prompt summary for `awaiting-input`), or null when the
-   * reason needs no elaboration.
+   * Raw, human-readable detail behind `reason` (the error text for `errored`, a prompt summary for `awaiting-input`), or null when the reason needs no elaboration.
    */
   detail: z.string().nullable(),
-  /**
-   * For `receiver-cancelled` only: every (receiver, responseId) thread of
-   * this sender that the same `agent.stop` dropped, so the monitor can list
-   * them in a single notice when the sender was waiting on more than one
-   * stopped agent. `receiverAgentId`/`responseId` above mirror the first
-   * entry. Null for every other reason.
-   */
   droppedReceivers: z
     .array(
       z.object({
@@ -201,9 +124,8 @@ export const agentStopInitiatorSchema = z.discriminatedUnion("type", [
 ]);
 
 /**
- * `@1.3` notice shape: adds structured stop provenance. A distinct schema
- * preserves the frozen @1.0-@1.2 trees; older monitors ignore the additive
- * field while current renderers can name the responsible agent.
+ * `@1.3` notice shape: adds structured stop provenance.
+ * A distinct schema preserves the frozen @1.0-@1.2 trees; older monitors ignore the additive field while current renderers can name the responsible agent.
  */
 export const agentInboxNoticeSchemaV13 = agentInboxNoticeSchema.extend({
   /** Non-null only for `receiver-cancelled`. */
@@ -212,11 +134,6 @@ export const agentInboxNoticeSchemaV13 = agentInboxNoticeSchema.extend({
 export type AgentInboxNotice = z.infer<typeof agentInboxNoticeSchemaV13>;
 
 // ─── Frozen agent.inbox.subscribe@1.0 shape (as shipped) ──────────────────
-//
-// IMMUTABLE. A monitor that negotiated @1.0 agreed to exactly these three
-// frame kinds, so this union must never learn a new one - sending a peer a
-// frame it did not negotiate is the host breaking the contract, not a
-// "graceful" degrade the peer happens to drop.
 export const agentInboxSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
   "kind",
   [
@@ -238,16 +155,7 @@ export const agentInboxSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
 );
 
 // ─── agent.inbox.subscribe@1.1 - additive: role awareness ─────────────────
-//
-// Adds the `role-awareness` frame: a peer in this Task claimed or relinquished
-// a role. Typed and NOT reply-bearing - it carries no responseId and no
-// `expectsReply`, so it cannot create a pending A2A thread. It is also never
-// queued: awareness is delivered only to a monitor that is connected AT THAT
-// MOMENT, so a reconnecting monitor never replays a stale broadcast (it reads
-// current roles from its prompt instead).
-//
-// Eligibility is gated on the NEGOTIATED minor: a @1.0 monitor is `unreachable`
-// for awareness and is never sent this frame.
+// Typed and NOT reply-bearing - it carries no responseId and no `expectsReply`, so it cannot create a pending A2A thread.
 export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
   "kind",
   [
@@ -274,18 +182,7 @@ export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
 );
 
 // ─── agent.inbox.subscribe@1.2 - additive: durable inbox eventId ──────────
-//
-// The "message" item gains `eventId` (see `agentInboxMessageSchemaV12`) so a
-// durable-inbox-aware monitor can acknowledge delivery via `agent.inbox.ack`.
-// A `@1.0`/`@1.1` monitor negotiates one of the older, frozen frame trees
-// above - which have no `eventId` field at all - and can never call
-// `agent.inbox.ack`. Rather than leave the durable row queued forever for an
-// ack that structurally cannot arrive, the resolver applies a SERVER-SIDE
-// compatibility ack: immediately after successfully sending a "message"
-// frame to a connection negotiated below `@1.2`, it retires that row itself.
-// This mirrors the pre-durable-inbox at-most-once behavior those older
-// monitors were always built against - no regression for them - while a
-// `@1.2`+ monitor keeps the stronger at-least-once guarantee via its own ack.
+// A `@1.0`/`@1.1` monitor negotiates one of the older, frozen frame trees above - which have no `eventId` field at all - and can never call `agent.inbox.ack`.
 export const agentInboxSubscribeServerFrameSchemaV12 = z.discriminatedUnion(
   "kind",
   [
@@ -391,16 +288,7 @@ export const agentInboxSubscribeV13 = defineStreamRpcContract({
 });
 
 // ─── `agent.inbox.read@1.0` - unary recent-inbox read ─────────────────────
-//
-// Lets a TUI agent re-read its recently-delivered inbox messages IN FULL,
-// page by page.
-// The `traycer monitor` stream surfaces each message to the agent through a
-// harness background-output notification, which the harness truncates for
-// large payloads. This unary read returns the durable inbox's full bodies,
-// oldest first, through a direct `traycer agent inbox` call, whose stdout is
-// not subject to that notification cap. GUI agents have no truncation problem
-// and never route through the durable TUI inbox, so this is a TUI-only
-// recovery path.
+// GUI agents have no truncation problem and never route through the durable TUI inbox, so this is a TUI-only recovery path.
 
 export const agentInboxReadRequestSchema = z.object({
   epicId: z.string(),
@@ -425,11 +313,7 @@ export const agentInboxReadV10 = defineRpcContract({
 });
 
 // ─── `agent.inbox.read@2.0` - bounded durable-inbox page ─────────────────
-//
-// A durable inbox can contain many full 16 MiB prompts while a monitor is
-// disconnected. Keep @1.0 frozen for existing clients, but make the canonical
-// read a single-row cursor page so a recovery read never allocates an entire
-// backlog in the host RPC process.
+// Keep @1.0 frozen for existing clients, but make the canonical read a single-row cursor page so a recovery read never allocates an entire backlog in the host RPC process.
 export const agentInboxReadCursorSchema = z.object({
   createdAt: z.number().int(),
   eventId: z.string(),
@@ -512,13 +396,6 @@ export const agentInboxReadDowngradeV20ToV10 = defineDowngradePath<
 });
 
 // ─── `agent.inbox.ack@1.0` - unary durable-inbox acknowledgement ──────────
-//
-// Retires the given durable inbox rows (by `eventId`, from `@1.2`'s
-// `agentInboxMessageSchemaV12.eventId`) for the calling agent. The durable
-// inbox is the source of truth for `agent.inbox.subscribe`: an unacknowledged
-// row survives a host restart or monitor reconnect and is replayed exactly
-// once more, so a monitor should ack promptly after it has safely surfaced a
-// message to the agent (e.g. after printing it).
 
 export const agentInboxAckRequestSchema = z.object({
   epicId: z.string(),

@@ -1,19 +1,6 @@
 /**
  * Tests for the client `RequestContextProvider` boundary contract.
- *
- * Pins the invariants documented in spec aca3ac84 §1.10 / §3.4 / §4
- * BEFORE GUI auth-store/runtime consumers are migrated:
- *
- *   1. Boundary mint helper preserves full `AuthenticatedUser` identity.
- *   2. Same-user refresh rotates the current context's credential lease
- *      and keeps the same context alive (no new emission, no userId
- *      change, abort signal stays unfired).
- *   3. Cross-user transition aborts/releases the previous context and
- *      emits the new (non-null) context.
- *   4. Sign-out aborts/releases the current context and emits null.
- *   5. Provider contract surface does NOT include raw-token APIs
- *      (`getToken()`, `onTokenChange(...)`); enforced via a static
- *      type-level assertion plus a runtime prototype scan.
+ * Pins the invariants documented in spec aca3ac84 §1.10 / §3.4 / §4 before gui auth-store/runtime consumers are migrated: 1.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -62,16 +49,7 @@ describe("DefaultRequestContextProvider - initial state", () => {
   });
 });
 
-/**
- * The counter a destructive fence can safely be built on, and the era every
- * emission carries.
- *
- * The distinction these pin is the whole reason this counter exists next to
- * the identity-transition one the auth service already had: that one moves on
- * sign-in / sign-out / dispose, so the case a credential fence is FOR - a
- * same-user rotation, where the user id is identical and only the token
- * changed - never moves it at all.
- */
+/** The counter a destructive fence can safely be built on, and the era every emission carries. */
 describe("DefaultRequestContextProvider - credential generation and emitted era", () => {
   function signIn(
     provider: DefaultRequestContextProvider,
@@ -99,8 +77,7 @@ describe("DefaultRequestContextProvider - credential generation and emitted era"
     });
 
     // Same identity, no emission - and that is exactly why this has to move.
-    // A 401 earned by `bearer-1` arriving after this point is not evidence
-    // about `bearer-2`, and the only thing that can tell them apart is this.
+    // A 401 earned by `bearer-1` arriving after this point is not evidence about `bearer-2`, and the only thing that can tell them apart is this.
     expect(provider.current()?.identity.userId).toBe("user-1");
     expect(provider.getCredentialGeneration()).toBe(afterSignIn + 1);
   });
@@ -139,9 +116,7 @@ describe("DefaultRequestContextProvider - credential generation and emitted era"
     });
 
     signIn(provider, "user-1", "bearer-1");
-    // Silent on `onChange` (the context reference is unchanged), so it
-    // contributes no era - but it still consumes a generation, which is what
-    // makes the NEXT era's number differ from a naive emission count.
+    // Silent on `onChange` (the context reference is unchanged), so it contributes no era - but it still consumes a generation, which is what makes the next era's number differ from a naive emission count.
     provider.rotateCurrentBearer({
       userId: "user-1",
       bearerToken: "bearer-2",
@@ -162,10 +137,8 @@ describe("DefaultRequestContextProvider - credential generation and emitted era"
     const provider = createProvider();
     const observed: Array<{ era: AuthEra; live: number }> = [];
     provider.onChange((_ctx, era) => {
-      // The reorder trap at this layer: a listener reading the accessor
-      // directly, mid-emission, must see the same generation the era names.
-      // If a future edit bumps the counter after the emission instead of
-      // before it, these two disagree here and this fails.
+      // The reorder trap at this layer: a listener reading the accessor directly, mid-emission, must see the same generation the era names.
+      // If a future edit bumps the counter after the emission instead of before it, these two disagree here and this fails.
       observed.push({ era, live: provider.getCredentialGeneration() });
     });
 

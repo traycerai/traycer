@@ -1,14 +1,5 @@
 /**
- * Per-pane body drop zone for the root DndContext. Mounts its droppable
- * ONLY while a canvas-openable drag is active (paseo's split-drop-zone
- * pattern): idle panes carry zero droppable registrations and re-render
- * exactly twice per drag gesture (mount/unmount). The split/center preview
- * subscribes to this pane's slice of the drag store, so preview ticks
- * re-render only the hovered pane.
- *
- * The zone is a pointer-events-none overlay - dnd-kit hit-tests against the
- * measured rect, not DOM events, so the pane's content stays interactive
- * until a drop actually commits.
+ * The split/center preview subscribes to this pane's slice of the drag store, so preview ticks re-render only the hovered pane.
  */
 import { useMemo } from "react";
 import { useDroppable } from "@dnd-kit/core";

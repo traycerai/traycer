@@ -69,12 +69,8 @@ describe("extractPlainTextFromComposerJSONContent blockquote handling", () => {
   });
 });
 
-// The slash picker classifies a command as "leading" by asking what the
-// provider's parser will see, not by where the chip sits in the document. That
-// only holds while an attachment-only block contributes nothing to the prompt -
-// if it ever serialized to a blank line instead of being dropped, a native
-// command below it would stop being leading and the picker would silently
-// offer commands the provider then refuses.
+// The slash picker classifies a command as "leading" by asking what the provider's parser will see, not by where the chip sits in the document.
+// That only holds while an attachment-only block contributes nothing to the prompt - if it ever serialized to a blank line instead of being dropped, a native command below it would stop being leading and the picker would silently offer commands the provider.
 describe("extractPlainTextFromComposerJSONContent attachment blocks", () => {
   it("drops an attachment-only block so a following command stays leading", () => {
     const content: JsonContent = {
@@ -99,10 +95,7 @@ describe("extractPlainTextFromComposerJSONContent attachment blocks", () => {
     );
   });
 
-  // The mirror of the case above, and the reason a blockquote can never be
-  // skipped the way an attachment block is: `quotePrefixLines` emits a bare `>`
-  // for a blank line, so even a visually empty quote puts a character in front
-  // of the command and the provider stops seeing a leading slash.
+  // The mirror of the case above, and the reason a blockquote can never be skipped the way an attachment block is: `quotePrefixLines` emits a bare `>` for a blank line, so even a visually empty quote puts a character in front of the command and the provider.
   it("keeps a '>' for a blank quote so a following command is not leading", () => {
     const content: JsonContent = {
       type: "doc",
@@ -124,17 +117,8 @@ describe("extractPlainTextFromComposerJSONContent attachment blocks", () => {
   });
 });
 
-// Raw text reaches this converter from paths that never touch the editor - a
-// next-step click, a "compact" action, an inline-edit resubmit. Both picker
-// triggers have to chip here, because the host resolves an invocation either
-// structurally (off a `slashCommand` node's `kind`) or off a leading `/name` in
-// the prompt text. A `$name` left as prose is neither, so the skill would
-// silently never run.
-//
-// The catalog is what separates a real command from prose. `$` leads ordinary
-// English constantly, so it chips ONLY on a hit; `/` keeps its older ungated
-// lexical fallback, since a message opening with `/word` is a command by
-// convention and the provider parses it that way regardless.
+// Raw text reaches this converter from paths that never touch the editor - a next-step click, a "compact" action, an inline-edit resubmit.
+// Both picker triggers have to chip here, because the host resolves an invocation either structurally (off a `slashCommand` node's `kind`) or off a leading `/name` in the prompt text.
 describe("buildSubmittedChatJSONContent leading trigger", () => {
   const SKILL: SlashCommand = {
     harnessId: "claude",
@@ -242,9 +226,8 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
-  // The regression this gate exists for: `$` opens ordinary prose all the time,
-  // and every one of these bodies fits the command-name grammar. Chipping them
-  // would rewrite the user's own words into `/20 ...` on the wire.
+  // The regression this gate exists for: `$` opens ordinary prose all the time, and every one of these bodies fits the command-name grammar.
+  // Chipping them would rewrite the user's own words into `/20 ...` on the wire.
   it.each([
     ["$20 for the migration", "a price"],
     ["$100k of ARR", "a larger price"],
@@ -296,9 +279,7 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
   });
 
   it("chips a $skill written after leading spaces, keeping the indent", () => {
-    // The editor treats a command after leading spaces as leading and the host
-    // trims the prompt, so this is a real command - it just must not silently
-    // lose the user's whitespace on the way to becoming a chip.
+    // The editor treats a command after leading spaces as leading and the host trims the prompt, so this is a real command - it just must not silently lose the user's whitespace on the way to becoming a chip.
     expect(
       submittedParagraph("   $frontend-design polish this", CATALOG),
     ).toEqual([
@@ -319,11 +300,8 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
-  // Formatting splits a run into separate text nodes, so a token can look
-  // complete at a node boundary while the prompt reads `/frontend-designer`.
-  // Chipping the prefix would be WORSE than not converting: the structural node
-  // says `frontend-design` and the wrong skill runs, where prose would have let
-  // the host resolve the full name.
+  // Formatting splits a run into separate text nodes, so a token can look complete at a node boundary while the prompt reads `/frontend-designer`.
+  // Chipping the prefix would be WORSE than not converting: the structural node says `frontend-design` and the wrong skill runs, where prose would have let the host resolve the full name.
   it("does not chip a leading token that an adjacent text node continues", () => {
     const doc = buildSubmittedChatJSONContent(
       {
@@ -351,9 +329,8 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
-  // The mirror of the case above: a split run whose FIRST node is only the
-  // indent. The editor and the host both treat those spaces as transparent, so
-  // the trigger in the next node is still leading and must still be examined.
+  // The mirror of the case above: a split run whose FIRST node is only the indent.
+  // The editor and the host both treat those spaces as transparent, so the trigger in the next node is still leading and must still be examined.
   it("looks past a whitespace-only node to the trigger that follows", () => {
     const doc = buildSubmittedChatJSONContent(
       {
@@ -416,11 +393,8 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
-  // `$frontend-design.` is prose in a single node - the regex demands
-  // whitespace or end after the name, and `.` is neither. Splitting the run must
-  // not change that answer: the serialized prompt still reads
-  // `/frontend-design.`, which the host's parser also refuses, so a structural
-  // chip here would invoke a skill the user's own text never asked for.
+  // `$frontend-design.` is prose in a single node - the regex demands whitespace or end after the name, and `.` is neither.
+  // Splitting the run must not change that answer: the serialized prompt still reads `/frontend-design.`, which the host's parser also refuses, so a structural chip here would invoke a skill the user's own text never asked for.
   it("does not chip a leading token an adjacent node ends with punctuation", () => {
     const doc = buildSubmittedChatJSONContent(
       {
@@ -448,9 +422,8 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
-  // The discriminator for the guard above: a split run whose next node DOES open
-  // with whitespace is a real command and still has to chip. Without this the
-  // boundary check could pass by refusing every cross-node token.
+  // The discriminator for the guard above: a split run whose next node DOES open with whitespace is a real command and still has to chip.
+  // Without this the boundary check could pass by refusing every cross-node token.
   it("chips a leading token when the adjacent node opens with whitespace", () => {
     const doc = buildSubmittedChatJSONContent(
       {
@@ -489,10 +462,8 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
     ]);
   });
 
-  // An attachment atom serializes to `""` and `plainTextFromNodes` drops empties
-  // before joining, so this prompt still reads `/frontend-design polish this`.
-  // The boundary lives past the atom; refusing on "not a text node" would strip
-  // the chip's kind/path for no reason other than an image sitting next to it.
+  // An attachment atom serializes to `""` and `plainTextFromNodes` drops empties before joining, so this prompt still reads `/frontend-design polish this`.
+  // The boundary lives past the atom; refusing on "not a text node" would strip the chip's kind/path for no reason other than an image sitting next to it.
   it("looks past a textless attachment to the boundary after it", () => {
     const doc = buildSubmittedChatJSONContent(
       {
@@ -573,11 +544,8 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
 });
 
 /**
- * The chip is the only mention attribute that is genuinely numeric, and
- * `dataAttributeMap` parses every attribute back with `getAttribute`, which
- * only ever returns a string. So the same chip arrives as a `number` from the
- * picker or from persisted ProseMirror JSON, and as `"123"` after the editor's
- * ordinary copy/paste round-trip through HTML.
+ * The chip is the only mention attribute that is genuinely numeric, and `dataAttributeMap` parses every attribute back with `getAttribute`, which only ever returns a string.
+ * So the same chip arrives as a `number` from the picker or from persisted ProseMirror JSON, and as `"123"` after the editor's ordinary copy/paste round-trip through HTML.
  */
 describe("GitHub mention attachments across an HTML round-trip", () => {
   function githubDoc(issueNumber: unknown): JsonContent {
@@ -618,9 +586,7 @@ describe("GitHub mention attachments across an HTML round-trip", () => {
   // The pasted chip used to be dropped entirely here: no attachment, a blank
   // node view, and silent omission from the submitted context.
   it("builds the same attachment when issueNumber came back from HTML as a string", () => {
-    // Pinned non-empty first: the equality alone would hold just as well if
-    // BOTH forms went back to producing nothing, which is the exact regression
-    // this test exists to catch.
+    // Pinned non-empty first: the equality alone would hold just as well if BOTH forms went back to producing nothing, which is the exact regression this test exists to catch.
     const fromString = buildAttachmentsFromJSONContent(githubDoc("123"));
     expect(fromString).toHaveLength(1);
     expect(fromString).toEqual(buildAttachmentsFromJSONContent(githubDoc(123)));
@@ -635,10 +601,7 @@ describe("GitHub mention attachments across an HTML round-trip", () => {
     },
   );
 
-  // The wire schema requires a POSITIVE integer, and this reconstruction path
-  // reaches an attachment without passing the query parser's `referenceNumber`
-  // - so `#0` and `#-4` were buildable here even though no catalog or search
-  // response can ever contain them.
+  // The wire schema requires a POSITIVE integer, and this reconstruction path reaches an attachment without passing the query parser's `referenceNumber`
   it.each([[0], [-4], [1.5], ["0"]])(
     "rejects the non-positive or fractional issueNumber %j",
     (issueNumber) => {
@@ -657,11 +620,7 @@ describe("GitHub mention attachments across an HTML round-trip", () => {
 });
 
 /**
- * The fallback `path` a node without its own `path` attribute rebuilds is
- * built through the SAME folded builder a live picker row uses
- * (`githubMentionTokenReference`), not a hand-restated copy of the rule. A
- * hand-written second copy is exactly what let the rebuild diverge from the
- * row it is supposed to reproduce.
+ * The fallback `path` a node without its own `path` attribute rebuilds is built through the SAME folded builder a live picker row uses (`githubMentionTokenReference`), not a hand-restated copy of the rule.
  */
 describe("GitHub mention attachment path rebuild delegates to the shared token builder", () => {
   function githubMentionNode(attrs: Record<string, unknown>): JsonContent {

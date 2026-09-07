@@ -17,11 +17,7 @@ export interface LandingTerminalPersistLifecycleBridgeProps {
   readonly children: ReactNode;
 }
 
-/**
- * Retargets landing-terminal references with auth identity. Independent PTYs
- * are owned by one user, so a global/local anonymous bucket would otherwise
- * let a later sign-in adopt another user's sessions.
- */
+/** Identity-scope landing-terminal refs. An anonymous bucket would let the next sign-in adopt another user's PTYs. */
 export function LandingTerminalPersistLifecycleBridge(
   props: LandingTerminalPersistLifecycleBridgeProps,
 ): ReactNode {

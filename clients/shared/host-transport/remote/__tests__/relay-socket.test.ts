@@ -20,17 +20,7 @@ import {
 } from "../config";
 import { InsecureRelaySchemeError } from "@traycer/protocol/host-transport/relay-attach-url";
 import { RelaySocket, type RelaySocketHandlers } from "../relay-socket";
-// `RelaySocket.pokeKeepalive` runs the keepalive's staleness check off the
-// 25s interval schedule - the whole reason `RemoteSession.wake` can detect a
-// socket the runtime's frozen interval never got the chance to notice was
-// already dead (an OS sleep, a WebView suspended on app switch) - AND, for a
-// socket that only LOOKS alive, holds the ping it just sent to a much
-// shorter deadline than the scheduled keepalive allows, so a drop that
-// happened silently during a short app switch is not mistaken for a live
-// connection for the rest of a full minute. These drive the socket directly
-// rather than through the full mux/Noise harness in remote-session.test.ts,
-// which cannot be run under fake timers without fighting its async
-// handshake dance.
+// These drive the socket directly rather than through the full mux/Noise harness in remote-session.test.ts, which cannot be run under fake timers without fighting its async handshake dance.
 
 class FakeSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -125,9 +115,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       });
       socket.onopen?.({ type: "open" });
 
-      // Past the pong deadline with no pong received in between - a socket
-      // whose keepalive interval was frozen (device sleep, a suspended
-      // WebView) and never got the chance to notice the drop on its own.
+      // Past the pong deadline with no pong received in between - a socket whose keepalive interval was frozen (device sleep, a suspended WebView) and never got the chance to notice the drop on its own.
       vi.setSystemTime(RELAY_PONG_TIMEOUT_MS + 1);
       relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
 
@@ -258,14 +246,12 @@ describe("RelaySocket.pokeKeepalive", () => {
       relaySocket.pokeKeepalive(5_000, false);
       expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
 
-      // The stale capture of A's deadline fires anyway - a runtime is free to
-      // deliver it however late. Manual invocation (not timer advancement) is
-      // the point: `clearTimeout` would hide a broken token guard.
+      // The stale capture of A's deadline fires anyway - a runtime is free to deliver it however late.
       armADeadline();
       expect(handlers.closeEvents).toEqual([]);
       expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
 
-      // B still runs to ITS OWN deadline, producing exactly one close.
+      // B still runs to ITS own deadline, producing exactly one close.
       vi.advanceTimersByTime(4_999);
       expect(handlers.closeEvents).toEqual([]);
       vi.advanceTimersByTime(2);
@@ -295,11 +281,8 @@ describe("RelaySocket.pokeKeepalive", () => {
       relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       socket.onmessage?.({ type: "text", data: "relay-pong" });
 
-      // A second wake INSIDE the first probe's original window - an app
-      // switched away and back twice in quick succession. The socket died in
-      // between, so nothing answers this one. It must arm a probe of its own
-      // rather than being swallowed by the answered window, and the earlier
-      // pong must not count as its answer.
+      // A second wake inside the first probe's original window - an app switched away and back twice in quick succession.
+      // It must arm a probe of its own rather than being swallowed by the answered window, and the earlier pong must not count as its answer.
       vi.advanceTimersByTime(RELAY_WAKE_PROBE_TIMEOUT_MS / 2);
       relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       expect(handlers.closeEvents).toEqual([]);
@@ -328,8 +311,6 @@ describe("RelaySocket.pokeKeepalive", () => {
       socket.onopen?.({ type: "open" });
 
       // A burst of pokes - one per subscriber on a single visibility edge.
-      // The outstanding probe is already asking this question, so the later
-      // pokes send nothing at all: one ping on the wire, not one per caller.
       relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
@@ -376,9 +357,8 @@ describe("RelaySocket.pokeKeepalive", () => {
 });
 
 /**
- * A `StreamWebSocketLike` double that opens synchronously and records every
- * outbound frame. `emitPong`/`emitBinary` let a test hand-drive inbound
- * traffic without a real relay.
+ * A `StreamWebSocketLike` double that opens synchronously and records every outbound frame.
+ * `emitPong`/`emitBinary` let a test hand-drive inbound traffic without a real relay.
  */
 class FakeStreamSocket implements StreamWebSocketLike {
   onopen: ((event: { readonly type: "open" }) => void) | null = null;
@@ -453,7 +433,6 @@ function makeFactory(): {
   };
 }
 
-/** Opens a fresh `RelaySocket` against a fake transport, past the dial handshake. */
 function openSocket(handlers: RelaySocketHandlers): {
   readonly socket: RelaySocket;
   readonly stream: FakeStreamSocket;
@@ -505,9 +484,8 @@ describe("RelaySocket adaptive half-open detection", () => {
     vi.advanceTimersByTime(1);
     socket.sendData(new Uint8Array([1, 2, 3]));
 
-    // Comfortably before the fast deadline: not failed yet. The deadline is
-    // only re-evaluated on the RELAY_PING_TICK_MS tick, so leave margin
-    // under it rather than asserting to the exact millisecond.
+    // Comfortably before the fast deadline: not failed yet.
+    // The deadline is only re-evaluated on the RELAY_PING_TICK_MS tick, so leave margin under it rather than asserting to the exact millisecond.
     vi.advanceTimersByTime(RELAY_AWAITING_PONG_TIMEOUT_MS - RELAY_PING_TICK_MS);
     expect(handlers.onClose).not.toHaveBeenCalled();
 
@@ -535,11 +513,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("a healthy idle socket whose last inbound was a ~25s-old pong does not fail the instant application traffic is sent", () => {
-    // This is the regression the whole design exists to prevent: the fast
-    // deadline must run from `awaitingSince`, never from `lastInboundAt`.
-    // A stale-but-healthy `lastInboundAt` would otherwise make a brand-new
-    // send look like it has already been silent for the fast deadline's
-    // full duration.
+    // This is the regression the whole design exists to prevent: the fast deadline must run from `awaitingSince`, never from `lastInboundAt`.
     const handlers = makeHandlers({});
     const { socket, stream } = openSocket(handlers);
 
@@ -553,15 +527,12 @@ describe("RelaySocket adaptive half-open detection", () => {
     vi.advanceTimersByTime(1);
     socket.sendData(new Uint8Array([9]));
 
-    // If the fast deadline were measured from `lastInboundAt`, the socket
-    // would already look "silent" for RELAY_AWAITING_PONG_TIMEOUT_MS + 5s
-    // and fail on the very next tick. It must not.
+    // If the fast deadline were measured from `lastInboundAt`, the socket would already look "silent" for RELAY_AWAITING_PONG_TIMEOUT_MS + 5s and fail on the very next tick.
+    // It must not.
     vi.advanceTimersByTime(RELAY_PING_TICK_MS);
     expect(handlers.onClose).not.toHaveBeenCalled();
 
-    // It only fails once the fast deadline has genuinely elapsed from the
-    // moment the send opened the unanswered run - comfortably before that,
-    // it must still be healthy.
+    // It only fails once the fast deadline has genuinely elapsed from the moment the send opened the unanswered run - comfortably before that, it must still be healthy.
     vi.advanceTimersByTime(
       RELAY_AWAITING_PONG_TIMEOUT_MS - 2 * RELAY_PING_TICK_MS,
     );
@@ -590,13 +561,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("a send in the SAME millisecond as the last inbound frame is still awaiting a reply", () => {
-    // The commonest shape there is: a stream frame arrives and its handler
-    // synchronously issues the next request, so the send and the inbound land
-    // on one `Date.now()` reading. A strict timestamp comparison calls that
-    // "not awaiting" and parks a half-open socket on the 60s idle deadline
-    // rather than the 12s detection one - the tie has to resolve in favour of
-    // the unanswered send, because a send with nothing after it is exactly
-    // what "awaiting" means.
+    // The commonest shape there is: a stream frame arrives and its handler synchronously issues the next request, so the send and the inbound land on one `Date.now()` reading.
     const handlers = makeHandlers({});
     const { socket, stream } = openSocket(handlers);
 
@@ -618,10 +583,6 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("regression floor: an unmeasured path fails at exactly the old fixed RELAY_PONG_TIMEOUT_MS constant, not before", () => {
-    // No pong is ever answered here, so the path estimator never gets a
-    // sample and `path.deadlineMs` returns its floor argument unchanged
-    // (ticket 24, A8) - the socket must behave EXACTLY as the fixed
-    // constant did before the estimator existed.
     const handlers = makeHandlers({});
     openSocket(handlers);
 
@@ -636,13 +597,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("the path estimator only times a ping it actually sent - an orphaned pong leaves the deadline at the floor", () => {
-    // A `relay-pong` that arrives with no outstanding ping (immediately
-    // after open, before the keepalive's first tick has sent one) must not
-    // produce a round-trip sample. Proven behaviourally: if it wrongly fed a
-    // sample, the derived deadline would move off the exact
-    // RELAY_PONG_TIMEOUT_MS floor asserted below - it would either fail
-    // early (a spuriously short sample) or survive well past it (Date.now()
-    // minus a null/garbage baseline clamped to MAX_RELAY_PATH_RTT_MS).
+    // A `relay-pong` that arrives with no outstanding ping (immediately after open, before the keepalive's first tick has sent one) must not produce a round-trip sample.
     const handlers = makeHandlers({});
     const { stream } = openSocket(handlers);
 
@@ -660,11 +615,6 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("derived lengthening: slow round trips push the missed-pong deadline past the old fixed constant", () => {
-    // The keepalive's own ping/pong drives `path.notePingSent` /
-    // `path.notePongReceived` (the estimator times the round trip; there is no
-    // `noteRoundTrip` on its surface for a caller to feed), so a SLOW
-    // but genuinely live path measures its own headroom and stops reading
-    // its propagation delay as backlog (F11's false-positive teardowns).
     const handlers = makeHandlers({});
     const { stream } = openSocket(handlers);
 
@@ -677,12 +627,7 @@ describe("RelaySocket adaptive half-open detection", () => {
     vi.advanceTimersByTime(SLOW_ROUND_TRIP_MS);
     stream.emitPong();
 
-    // relay-liveness.ts: first sample seeds srtt=sample, rttvar=sample/2, so
-    // srtt=8000, rttvar=4000. deadlineMs(floor, roundTrips) =
-    // max(floor, round(roundTrips * (srtt + 4 * rttvar))) =
-    // max(60_000, round(3 * (8_000 + 4 * 4_000))) = max(60_000, 72_000) =
-    // 72_000 - strictly larger than the RELAY_PONG_TIMEOUT_MS floor it
-    // replaces.
+    // relay-liveness.ts: first sample seeds srtt=sample, rttvar=sample/2, so srtt=8000, rttvar=4000.
     const DERIVED_DEADLINE_MS = 72_000;
 
     // Silence past the OLD fixed constant (60s) since this last inbound
@@ -690,7 +635,7 @@ describe("RelaySocket adaptive half-open detection", () => {
     vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS + 1_000);
     expect(handlers.onClose).not.toHaveBeenCalled();
 
-    // Only silence past the DERIVED deadline does.
+    // Only silence past the derived deadline does.
     const remainingToDerivedDeadline =
       DERIVED_DEADLINE_MS - (RELAY_PONG_TIMEOUT_MS + 1_000);
     vi.advanceTimersByTime(remainingToDerivedDeadline + 1_000);
@@ -701,9 +646,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("Karn (RFC 6298 §3): an ambiguous run - a second ping sent before the first is answered - records no sample", () => {
-    // Two idle-cadence pings go out with neither answered before the
-    // second, so the run is ambiguous; the one slow pong that eventually
-    // lands must not be credited to either ping.
+    // Two idle-cadence pings go out with neither answered before the second, so the run is ambiguous; the one slow pong that eventually lands must not be credited to either ping.
     const handlers = makeHandlers({});
     const { stream } = openSocket(handlers);
 
@@ -716,9 +659,7 @@ describe("RelaySocket adaptive half-open detection", () => {
     // A single slow pong answers the ambiguous run.
     stream.emitPong();
 
-    // With no sample recorded, the idle deadline still floors at
-    // RELAY_PONG_TIMEOUT_MS - measured from THIS pong (the last inbound
-    // frame), not lengthened by the run it just closed.
+    // With no sample recorded, the idle deadline still floors at RELAY_PONG_TIMEOUT_MS - measured from this pong (the last inbound frame), not lengthened by the run it just closed.
     vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - RELAY_PING_TICK_MS);
     expect(handlers.onClose).not.toHaveBeenCalled();
 
@@ -733,10 +674,6 @@ describe("RelaySocket adaptive half-open detection", () => {
     const handlers = makeHandlers({});
     const { socket, stream } = openSocket(handlers);
 
-    // One slow-but-UNAMBIGUOUS idle round trip, fed before any application
-    // traffic, is enough on its own to push the estimator's uncapped
-    // computation past the cap: first-sample seed srtt=4_500, rttvar=2_250,
-    // so round(3 * (4_500 + 4 * 2_250)) = 40_500ms - above the cap below.
     vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
     expect(stream.pingsSent).toBe(1);
     const SLOW_ROUND_TRIP_MS = 4_500;
@@ -774,29 +711,13 @@ describe("RelaySocket adaptive half-open detection", () => {
     vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
     expect(stream.pingsSent).toBe(1);
 
-    // The runtime freezes: the clock jumps but NO timer callback runs across
-    // the gap (unlike `advanceTimersByTime`, which would fire every
-    // intervening tick) - the exact condition `pokeKeepalive` exists to
-    // catch, per its own doc comment. Kept short enough that the raw elapsed
-    // time alone does not already exceed the still-unmeasured floor
-    // (RELAY_PONG_TIMEOUT_MS), so the poke's own staleness check does not
-    // fail the socket before the retirement behaviour under test runs.
     const SUSPEND_GAP_MS = 30_000;
     vi.setSystemTime(Date.now() + SUSPEND_GAP_MS);
 
-    // On wake, `runKeepaliveTick` retires the pre-suspend ping
-    // (`pingSentAt = null; pingAmbiguous = true`) and force-sends its own
-    // ping, deliberately excluded from measurement - its round trip would
-    // otherwise carry the whole suspend gap as "path latency".
     socket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
     expect(stream.pingsSent).toBe(2);
 
-    // The pong that eventually lands answers both the retired ping and the
-    // wake ping indistinguishably. If the retirement did not happen, this
-    // pong would be timed against the PRE-SUSPEND ping - a ~30s round trip,
-    // clamped to MAX_RELAY_PATH_RTT_MS but still ballooning the deadline
-    // (round(3 * (10_000 + 4 * 5_000)) = 90_000ms) well past the floor
-    // asserted below.
+    // The pong that eventually lands answers both the retired ping and the wake ping indistinguishably.
     vi.advanceTimersByTime(1);
     stream.emitPong();
 
@@ -814,16 +735,12 @@ describe("RelaySocket adaptive half-open detection", () => {
     const handlers = makeHandlers({});
     const { stream } = openSocket(handlers);
 
-    // Drive the idle keepalive: a ping goes out around 25s with nothing
-    // outbound from the application. That must not switch the cadence to
-    // the 5s/12s fast pair - only application traffic (`sendData`) does.
+    // Drive the idle keepalive: a ping goes out around 25s with nothing outbound from the application.
+    // That must not switch the cadence to the 5s/12s fast pair - only application traffic (`sendData`) does.
     vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
     expect(stream.pingsSent).toBeGreaterThanOrEqual(1);
 
-    // Still on the idle cadence: surviving comfortably past the fast
-    // deadline (12s), with margin for tick granularity, with no reply is
-    // expected and must not fail the socket, since only the idle 60s
-    // deadline governs here.
+    // Still on the idle cadence: surviving comfortably past the fast deadline (12s), with margin for tick granularity, with no reply is expected and must not fail the socket, since only the idle 60s deadline governs here.
     vi.advanceTimersByTime(
       RELAY_AWAITING_PONG_TIMEOUT_MS + 2 * RELAY_PING_TICK_MS,
     );
@@ -833,9 +750,7 @@ describe("RelaySocket adaptive half-open detection", () => {
 
 /**
  * The sibling of the host leg's own gate (browser-security-hardening H11).
- * Both legs build the same grant-in-query URL from the same configured base,
- * so both refuse the same schemes - the shared assertion lives in
- * `@traycer/protocol/host-transport/relay-attach-url`.
+ * Both legs build the same grant-in-query URL from the same configured base, so both refuse the same schemes - the shared assertion lives in `@traycer/protocol/host-transport/relay-attach-url`.
  */
 describe("RelaySocket (client leg) attach-URL scheme gate", () => {
   it("refuses a remote cleartext dial before any socket is created", () => {

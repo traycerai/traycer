@@ -38,16 +38,6 @@ import {
 } from "../browser-storage-state";
 import { matchesDomainFilter } from "./cookie-jar-fixture";
 
-/**
- * The desktop's forget ledger (universal-sign-in ticket 04): the durable record
- * of what the user asked to be gone, the digest each host is still owed, and
- * the acked-revision gate that decides which observations may touch the jar.
- *
- * The gate is the interesting half, so the last describe drives it through the
- * REAL applier rather than asserting the predicate on its own: what the ticket
- * promises is that a frame captured before a host pruned does not reach the
- * cookie jar, and only the applier can be asked that question.
- */
 
 vi.mock("electron", () => ({
   app: { getPath: () => tmpdir() },
@@ -181,11 +171,8 @@ describe("forget ledger durability", () => {
   });
 
   it("reads well-formed JSON of the wrong shape as an empty ledger too", async () => {
-    // A different branch from a file that will not parse at all: the store
-    // catches a `JSON.parse` throw before the validator is reached, so only
-    // readable JSON that fails the schema exercises this one. Loaded after a
-    // real ledger so the empty answer is the fallback being applied, not the
-    // module's initial value never having moved.
+    // A different branch from a file that will not parse at all: the store catches a `JSON.parse` throw before the validator is reached, so only readable JSON that fails the schema.
+    // Loaded after a real ledger so the empty answer is the fallback being applied, not the module's initial value never having moved.
     const real = pathIn("real.json");
     await initBrowserForgetLedger(real);
     await recordForgottenBrowserSite("example.com");
@@ -458,10 +445,7 @@ describe("forget ledger batch forgets", () => {
 
     const revision = await recordForgottenBrowserSites(["not a domain"]);
 
-    // Nothing was left to record, so nothing was recorded: the ledger's own
-    // revision is unchanged, and the caller is told `null` rather than a
-    // revision it could go on to mark as cleared - one that would actually
-    // belong to whatever the ledger's top happens to be.
+    // Nothing was left to record, so nothing was recorded: the ledger's own revision is unchanged, and the caller is told `null` rather than a revision it could go on to mark as cleared.
     expect(revision).toBeNull();
     const digest = browserForgetLedgerDigestForHost(HOST);
     expect(digest.revision).toBe(previous);
@@ -505,10 +489,7 @@ describe("forget ledger digests", () => {
   });
 
   it("never re-asserts a forget a host has acked, so a re-login is not re-cleared", async () => {
-    // The whole reason the digest is filtered rather than sent whole. The user
-    // forgets a site, the host prunes it, the user signs back in, and then
-    // clears something else entirely - which must not take the fresh login
-    // with it.
+    // The user forgets a site, the host prunes it, the user signs back in, and then clears something else entirely - which must not take the fresh login with it.
     await recordForgottenBrowserSite("example.com");
     await recordForgetLedgerAck({
       hostId: HOST,
@@ -568,12 +549,6 @@ describe("forget ledger ack bounds", () => {
   beforeEach(loadEmptyLedger);
 
   it("clamps an ack to this machine's own revision", async () => {
-    // The revision is minted HERE and merely echoed by the host, so an ack
-    // above the current one is meaningless by construction. Taken at face
-    // value it is a permanent poison: recorded as "pruned through here" for a
-    // ledger that does not exist yet, it makes every future entry compare
-    // below the watermark - the gate never refuses again and every future
-    // digest to that host is empty.
     await recordForgottenBrowserSite("example.com");
     await recordForgetLedgerAck({
       hostId: HOST,
@@ -607,10 +582,6 @@ describe("forget ledger ack bounds", () => {
   });
 
   it("declines an ack no digest earned, on both watermarks", async () => {
-    // The frame is unsolicited: nothing in it names a digest, so a host can
-    // send one the instant the stream opens. Before ticket 09 that one frame
-    // opened this connection's gate for good AND recorded the host as caught
-    // up, which emptied every digest it would ever be sent.
     await recordForgottenBrowserSite("example.com");
 
     await recordForgetLedgerAck({
@@ -638,10 +609,7 @@ describe("forget ledger ack bounds", () => {
   });
 
   it("clamps an ack to what this connection was actually sent", async () => {
-    // Two forgets, one digest. The host acks past what it was told, which is
-    // the same overreach as the ledger-top clamp but one the ledger's own top
-    // cannot catch - revision 2 exists here, it just never reached this
-    // connection.
+    // The host acks past what it was told, which is the same overreach as the ledger-top clamp but one the ledger's own top cannot catch.
     await recordForgottenBrowserSite("first.test");
     await recordForgottenBrowserSite("second.test");
 
@@ -699,11 +667,7 @@ describe("forget ledger clear reconciliation", () => {
   beforeEach(loadEmptyLedger);
 
   it("reports a recorded forget whose jar clear never completed", async () => {
-    // The ledger is written BEFORE the jar is touched - that is what refuses
-    // an in-flight observation - so a crash in between leaves the ledger
-    // claiming a login is gone while the jar still serves it. The jar is the
-    // master, so the next whole-jar capture would teach every host the login
-    // back.
+    // The ledger is written BEFORE the jar is touched - that is what refuses an in-flight observation.
     await recordForgottenBrowserSite("example.com");
 
     expect(browserForgetLedgerPendingClears()).toEqual({
@@ -723,10 +687,6 @@ describe("forget ledger clear reconciliation", () => {
     await recordForgottenBrowserSite("second.test");
     await markBrowserForgetLedgerCleared(2);
 
-    // The watermark does not advance across the gap, so the site whose clear
-    // failed is still pending - and the one that succeeded is re-run with it,
-    // which is free: emptying a site twice is emptying it. Recording 2 alone
-    // is what would lose `first.test` for good.
     expect(browserForgetLedgerPendingClears().domains).toEqual([
       { domain: "first.test", revision: 1 },
       { domain: "second.test", revision: 2 },
@@ -782,12 +742,8 @@ describe("forget ledger clear reconciliation", () => {
   });
 
   it("drains past a revision whose row a re-forget of the same site replaced", async () => {
-    // RULE: the contiguous watermark must step over a revision the ledger no
-    // longer represents. Forgetting the same site twice before the first jar
-    // clear finishes replaces revision 1's row with revision 2's, so nothing
-    // can ever complete revision 1 - and a watermark that waits for it leaves
-    // the surviving row pending at every launch, re-clearing the site and
-    // deleting whatever login the user created in between.
+    // RULE: the contiguous watermark must step over a revision the ledger no longer represents.
+    // Forgetting the same site twice before the first jar clear finishes replaces revision 1's row with revision 2's, so nothing can ever complete revision 1.
     await recordForgottenBrowserSite("example.com");
     await recordForgottenBrowserSite("example.com");
 
@@ -809,12 +765,7 @@ describe("forget ledger clear reconciliation", () => {
   });
 
   it("V-1: carries clearedThrough across the gap a forget-all's own deletes create", async () => {
-    // RULE: recordForgetAllBrowserLogins must set clearedThrough to
-    // revision - 1, not leave it below a gap made by rows it just deleted -
-    // otherwise the CONTIGUOUS drain in markBrowserForgetLedgerCleared can
-    // never advance past that gap, and browserForgetLedgerPendingClears
-    // reports the forget-all as pending forever, even after it is marked
-    // cleared.
+    // RULE: recordForgetAllBrowserLogins must set clearedThrough to revision - 1, not leave it below a gap made by rows it just deleted.
     const path = pathIn("wedge.json");
     await initBrowserForgetLedger(path);
 
@@ -847,12 +798,7 @@ describe("forget ledger clear reconciliation", () => {
   });
 
   it("R3-11: drains a SPARSE ledger without walking the gap to its top revision", async () => {
-    // RULE: the watermark is derived from the rows the ledger holds, never
-    // scanned one revision at a time toward `ledger.revision`. The gap
-    // between them is unbounded - the revision counter outlives the rows,
-    // and a restored file can name any number at all - and a per-revision
-    // scan runs that many iterations on the Electron MAIN thread, freezing
-    // the whole app on an operation whose real work is one row.
+    // RULE: the watermark is derived from the rows the ledger holds, never scanned one revision at a time toward `ledger.revision`.
     const path = pathIn("sparse.json");
     await writeFile(
       path,
@@ -1137,10 +1083,7 @@ describe("forget ledger uncleared forgets", () => {
 
     await markBrowserForgetLedgerCleared(revisionB);
 
-    // The in-memory completion set already knows B's clear finished, even
-    // though the CONTIGUOUS watermark cannot step past A yet - this is
-    // exactly what distinguishes this function from the durable,
-    // boot-time-only read below.
+    // The in-memory completion set already knows B's clear finished, even though the CONTIGUOUS watermark cannot step past A yet.
     const uncleared = browserForgetLedgerUnclearedForgets();
     expect(uncleared.domains.has("b.test")).toBe(false);
     expect(uncleared.domains.has("a.test")).toBe(true);
@@ -1225,11 +1168,6 @@ describe("bracketUnclearedForgets", () => {
     expect(bracket.close().forgetAll).toBe(true);
   });
 
-  // CodeRabbit regression: the ledger's own domains list is bounded to
-  // BROWSER_FORGET_LEDGER_MAX_DOMAINS for the wire, but the bracket's
-  // accumulator is not - it exists precisely so a burst of forgets during a
-  // read cannot lose one to that bound. Recorded one at a time, the shape a
-  // real caller (a login import) actually forgets in.
   it("holds every site recorded while open past the ledger's own MAX_DOMAINS bound, is idempotent, and stops accumulating once closed", async () => {
     const bracket = bracketUnclearedForgets();
     const total = BROWSER_FORGET_LEDGER_MAX_DOMAINS + 5;
@@ -1367,14 +1305,6 @@ describe("withoutUnclearedForgets", () => {
   });
 });
 
-/**
- * The in-flight scenario the ticket names, end to end through the real applier:
- * a host captures a sign-in, the user clears that site locally while the frame
- * is travelling, and the frame arrives after the clear finished.
- *
- * Nothing in the frame says when it was captured, and no timer can tell -
- * which is why the ack, not a window, is what decides.
- */
 describe("in-flight observation across a local clear", () => {
   it("drops the frame on an unacked revision, and applies the SAME frame once the ack lands", async () => {
     await loadEmptyLedger();

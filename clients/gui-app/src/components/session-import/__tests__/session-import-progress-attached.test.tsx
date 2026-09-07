@@ -15,13 +15,8 @@ import {
 
 const HOST = "host-a";
 
-/**
- * The two things the progress view has to get right about WHOSE run it is
- * showing and WHERE the tasks will appear - both invisible to the wizard
- * tests, which never see an attached run or the onboarding ground. Also
- * covers the complete-run summary's failure grouping, which lives here rather
- * than in the model suite because the toggle is DOM behaviour.
- */
+/** The two things the progress view has to get right about whose run it is showing and where the tasks will
+ * appear - both invisible to the wizard tests, which never see an attached run or the onboarding ground. */
 describe("SessionImportProgress", () => {
   beforeEach(() => {
     useSessionImportRunStore.setState({ runs: new Map() });

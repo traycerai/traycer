@@ -75,9 +75,7 @@ const {
 
 const EMPTY_EXCLUDE: ReadonlySet<string> = new Set();
 
-// ---------------------------------------------------------------------------
-// StderrCaptureBuffer
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- StderrCaptureBuffer ---------------------------------------------------------------------------
 
 describe("StderrCaptureBuffer", () => {
   it("keeps first head bytes, elides the middle, and keeps last tail bytes (no fatal)", () => {
@@ -109,7 +107,7 @@ describe("StderrCaptureBuffer", () => {
 
   it("escapedForMarker escapes LF and U+2028/U+2029 as \\\\n", () => {
     const buf = new StderrCaptureBuffer(2048, 2048);
-    // U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR — raw in a quoted
+    // U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR - raw in a quoted
     // marker value silently discard the whole marker line (parser is line-based).
     buf.append(Buffer.from("a\nb\u2028c\u2029d\r\ne"));
     expect(buf.escapedForMarker()).toBe("a\\nb\\nc\\nd\\ne");
@@ -157,9 +155,8 @@ describe("StderrCaptureBuffer", () => {
 
   describe("FATAL-anchored window", () => {
     it("keeps FATAL ERROR after ~3KB of prior noise + a multi-KB fatal block", () => {
-      // Round-3 repro: process-lifetime head fills with ordinary warnings, so
-      // head+tail alone loses the headline that sits near the START of a
-      // multi-KB OOM block. The fatal window latches at the needle.
+      // Round-3 repro: process-lifetime head fills with ordinary warnings, so head+tail alone loses the headline that sits near the START of a multi-KB OOM block.
+      // The fatal window latches at the needle.
       const buf = new StderrCaptureBuffer(2048, 2048);
       const prior = Buffer.from("warning: something noisy\n".repeat(150)); // ~3.6KB
       expect(prior.length).toBeGreaterThan(3000);
@@ -235,9 +232,7 @@ describe("StderrCaptureBuffer", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// StderrLogTee (mocked path so it never touches ~/.traycer)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- StderrLogTee (mocked path so it never touches ~/.traycer) ---------------------------------------------------------------------------
 
 describe("StderrLogTee", () => {
   let root: string;
@@ -298,9 +293,7 @@ describe("StderrLogTee", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Exit / signal decoding
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Exit / signal decoding ---------------------------------------------------------------------------
 
 describe("describeExitCode", () => {
   it("decodes 3221226505 as 0xC0000409 STATUS_STACK_BUFFER_OVERRUN", () => {
@@ -348,9 +341,7 @@ describe("isFatalSignal / describeFatalSignal", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// crash-reports directory helpers
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- crash-reports directory helpers ---------------------------------------------------------------------------
 
 describe("crashReportsDirFor", () => {
   it("anchors crash-reports under the child cwd", () => {

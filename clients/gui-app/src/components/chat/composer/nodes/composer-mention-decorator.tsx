@@ -116,19 +116,7 @@ export function ComposerMentionDecorator({
   return <StaticMentionDecorator density={density} mention={mention} />;
 }
 
-/**
- * The browser-tab chip resolves LIVE against every open browser-sessions
- * coordinator rather than trusting the attachment's captured title/favicon: a
- * tab's title (and even its url) changes as it navigates, so a static chip
- * would go stale the moment the page did. When the tab no longer exists in
- * that live set - closed, or the session gone - the chip falls back to the
- * attachment's captured label and dims, mirroring how `BrowserReferenceChips`
- * degrades a reference whose target is gone rather than erroring.
- *
- * Not the surrounding `BrowserSessionsContext`: inside a chat tile that is
- * bound to a remote host, that context is the TILE host's stream, and the
- * picker legitimately offers tabs from every host with a coordinator.
- */
+/** The browser-tab chip resolves LIVE against every open browser-sessions coordinator rather than trusting the attachment's captured title/favicon: a tab's title (and even its url) changes as it navigates, so a static chip would go stale the moment the page did. When the tab no longer exists in that live set - closed, or the session gone - the chip falls back to the attachment's captured label and dims, mirroring how `BrowserReferenceChips` degrades a reference whose target is gone rather than erroring. */
 function BrowserTabMentionDecorator({
   density,
   mention,

@@ -60,11 +60,6 @@ afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
-// Persist-failure policy: one immediate retry, then surface the terminal
-// failure to the caller. A renderer revision may only acknowledge after a
-// durable write; `flush()` reports the same failure while a later write still
-// starts from a healthy recovery chain. The tmp+rename swap keeps the previous
-// on-disk payload intact through any failure.
 describe("DesktopStateStore persist-failure policy", () => {
   it("retries a failed persist once and succeeds without escalating", async () => {
     const store = new DesktopStateStore({ filePath, logger });

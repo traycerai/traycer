@@ -10,14 +10,7 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * Captures the enablement decision `useGithubMentionSearch` hands to
- * `useHostQuery`, and stands in for the underlying query's own `isError` /
- * `isFetching` - the two flags `errored` and `isSearching` are gated on
- * `wanted` and read straight off of. A fixed stand-in rather than a real
- * `QueryClient` because these cases are about that gating, not about
- * TanStack's retry mechanics - `useGithubMentionSearch errored` below sets
- * `isError` directly to stand for "retries against a rejected
- * `mention.githubSearch` are exhausted".
+ * Capture enablement and stand in for `isError`/`isFetching`. These cases are the `wanted` gate, not TanStack retry mechanics.
  */
 const captured = vi.hoisted(() => ({
   enabled: null as boolean | null,
@@ -36,12 +29,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
-// The hook reads readiness directly, to build the placeholder lane out of the
-// same host id `useHostQuery` keys the cache by. Mocking `useHostQuery` alone
-// no longer covers that read, and this suite's client is a bare stand-in with
-// no `getActiveHostId`. The lane is not what these cases are about - it has
-// its own suite in `use-github-mention-search-scope.test.tsx`, which drives
-// the real readiness path.
+// The hook reads readiness directly, to build the placeholder lane out of the same host id `useHostQuery` keys the cache by.
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
     hostId: "host-1",

@@ -279,9 +279,7 @@ describe("openBrowserSessionsSession on a shell with no browserView bridge", () 
     );
     expect(frames).toEqual([SNAPSHOT_FRAME]);
 
-    // This shell has no keystore to hold a jar, so a jar frame - the host
-    // should never send one here, but if it somehow did - has to be dropped
-    // rather than handed to the coordinator.
+    // This shell has no keystore to hold a jar, so a jar frame - the host should never send one here, but if it somehow did - has to be dropped rather than handed to the coordinator.
     fake.emit(
       {
         kind: "primaryProfileObserved",

@@ -6,9 +6,7 @@ import { Button } from "@/components/ui/button";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { contrastRatio } from "../../../../__tests__/contrast";
 
-// A representative call site: the mod+Enter chip shared by every primary
-// action button (Submit, Next, Start, ...). Proves the gate reaches a real
-// rendered button, and that hiding the chip never empties the button's label.
+// Proves the gate reaches a real rendered button, and that hiding the chip never empties the button's label.
 function renderSubmitButton() {
   return render(
     <Button type="button">
@@ -26,9 +24,8 @@ describe("<PrimaryActionShortcutHint /> inside a labelled button", () => {
 
   it("shows the mod+Enter chip alongside the label outside the mobile app", () => {
     renderSubmitButton();
-    // The chip is `aria-hidden` (it duplicates the visible label rather than
-    // adding information), so the accessible name stays exactly "Submit"
-    // even while the glyphs are on screen.
+    // The chip is `aria-hidden` (it duplicates the visible label rather than adding information), so the
+    // accessible name stays exactly "Submit" even while the glyphs are on screen.
     const button = screen.getByRole("button", { name: "Submit" });
     expect(button.textContent).toContain(modLabel());
     expect(button.textContent).toContain("↵");
@@ -44,9 +41,8 @@ describe("<PrimaryActionShortcutHint /> inside a labelled button", () => {
   });
 });
 
-// Main's contrast contract, kept alongside the mobile-gate cases: the keycaps
-// inherit the button's own colors, so they stay legible on every preset's
-// primary action fill.
+// Main's contrast contract, kept alongside the mobile-gate cases: the keycaps inherit the button's own colors,
+// so they stay legible on every preset's primary action fill.
 const PRIMARY_ACTION_PRESETS = [
   ["amoled light", "#171717", "#ffffff"],
   ["amoled dark", "#ededed", "#000000"],

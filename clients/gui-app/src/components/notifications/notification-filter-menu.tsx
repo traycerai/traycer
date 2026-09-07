@@ -16,9 +16,8 @@ import {
   type NotificationCategory,
 } from "@/lib/notifications/notification-category";
 
-// A `Record` gives every category exactly one label, and TypeScript rejects
-// the object if a category is ever added without one - unlike a hand-listed
-// options array, which would silently omit it instead of failing to compile.
+// A `Record` gives every category exactly one label, and TypeScript rejects the object if a category is ever
+// added without one.
 const CATEGORY_LABEL: Readonly<Record<NotificationCategory, string>> = {
   task: "Task activity",
   collaboration: "Collaboration",
@@ -30,11 +29,8 @@ interface NotificationFilterMenuProps {
   readonly categories: ReadonlySet<NotificationCategory>;
   readonly onUnreadOnlyChange: (next: boolean) => void;
   readonly onToggleCategory: (category: NotificationCategory) => void;
-  /** Fires on every Radix-driven open/close transition, including the menu's
-   * own outside-pointerdown self-dismissal - never on a call the ancestor
-   * Popover's guard makes itself. Lets that guard read live open state via a
-   * ref instead of re-deriving it, without controlling `open` here (see
-   * below). */
+  /** Fires on every Radix-driven open/close transition, including the menu's own outside-pointerdown
+   * self-dismissal - never on a call the ancestor Popover's guard makes itself. */
   readonly onOpenChange: (open: boolean) => void;
   /** Reports the physical pointer location before the modal menu releases
    * its body lock, while the ancestor popover is still pointer-disabled. */
@@ -44,23 +40,8 @@ interface NotificationFilterMenuProps {
   }) => void;
 }
 
-/**
- * Recent-activity-only filter menu: an independent Unread-only toggle plus
- * multi-select source categories. Never affects Attention. Checkbox items
- * suppress their default select-to-close behavior so multiple filters can be
- * toggled in one open. Stays modal (default) and uncontrolled: an earlier
- * attempt to control `open` from the ancestor Popover left Radix's exit
- * animation permanently stuck at `data-state="closed"` + `opacity:1` (even
- * for Escape) - a real Presence bug under controlled mode in this Radix
- * version, verified live. `onOpenChange` is observation-only (no `open` prop
- * passed back in), so Radix still owns `open` internally and that Presence
- * bug does not reappear. The ancestor Popover's onFocusOutside guard (in
- * notifications-bell.tsx) is what stops this menu's modality from
- * dismissing the whole flyout when this menu opens; its onPointerDownOutside
- * guard reads this callback's ref to decide whether a synthetic Escape is
- * still needed to close this menu through Radix's own uncontrolled Escape
- * path, or whether the menu already dismissed itself first.
- */
+/** Recent-activity-only filter menu: an independent Unread-only toggle plus multi-select source categories.
+ * Never affects Attention. */
 export function NotificationFilterMenu(
   props: NotificationFilterMenuProps,
 ): ReactNode {

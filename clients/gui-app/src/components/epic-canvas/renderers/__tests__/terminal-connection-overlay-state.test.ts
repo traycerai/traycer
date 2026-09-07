@@ -43,11 +43,7 @@ describe("resolveTerminalOverlayState", () => {
   });
 
   it("returns 'recovering' for a 'reaped' session before auto-recovery is exhausted, same as 'lost'", () => {
-    // "Reaped" is definitive for THIS handle (the host confirmed via
-    // TERMINAL_NOT_FOUND), but not for the durable terminal identity - the
-    // host may already have restored it under the same logical id - so it
-    // follows the same bounded recovery path as "lost" rather than an
-    // immediate dead end.
+    // "Reaped" is definitive for THIS handle (the host confirmed via TERMINAL_NOT_FOUND), but not for the durable terminal identity - the host may already have restored it under the same logical id - so it follows the same bounded recovery path as "lost" rather than an immediate dead end.
     expect(
       resolveTerminalOverlayState({
         status: "reaped",

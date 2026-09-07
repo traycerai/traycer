@@ -4,26 +4,11 @@ import type { UncheckedVersionedStreamRpcRegistry } from "@traycer/protocol/fram
 
 /**
  * Protocol-surface serialization for the released-peer compatibility gate.
- *
- * A "surface" is a registry reduced to plain JSON: per method, the canonical
- * `{ major, minor }` a peer advertises at the handshake, the installed
- * version/bridge graph the compatibility checkers walk, and a canonicalized
- * JSON Schema per installed version for wire-shape diffing. CI dumps this
- * from an immutable released tag and compares the working tree against it -
- * the baseline never lives in the PR-editable tree, so a red check cannot be
- * silenced by editing a fixture (the failure mode that let `terminal.defaultCwd`
- * ship handshake-incompatible in #227).
- *
- * BACKFILL CONSTRAINT: this module (and the `dump-protocol-surface.ts` CLI
- * that wraps it) is copied verbatim into checkouts of already-released tags
- * that predate it. Its runtime imports must therefore stay limited to `zod`;
- * type-only imports are erased before execution and are safe. Do not import
- * other framework modules at runtime.
+ * Do not import other framework modules at runtime.
  */
 
 export const SURFACE_FORMAT_VERSION = 2;
 
-/** Version key inside a surface: `"<major>.<minor>"`. */
 export function surfaceVersionKey(major: number, minor: number): string {
   return `${major}.${minor}`;
 }
@@ -41,11 +26,8 @@ export type SurfaceMajorLine = {
 };
 
 /**
- * One method's surface. `schemas` maps `"M.m"` to a record of payload slots
- * (`request`/`response` for unary; `openRequest`/`serverFrame`/`clientFrame`
- * for streams), each a canonicalized JSON Schema. When the dumping tree's zod
- * cannot serialize a schema, the slot holds `{ "$unavailable": <reason> }` and
- * schema-level diffing is skipped for it.
+ * One method's surface.
+ * When the dumping tree's zod cannot serialize a schema, the slot holds `{ "$unavailable": <reason> }` and schema-level diffing is skipped for it.
  */
 export type SurfaceMethod = {
   readonly canonical: SurfaceVersion;
@@ -94,10 +76,8 @@ function sortKeysDeep(value: unknown): unknown {
 }
 
 /**
- * Canonicalized JSON Schema for one zod schema, or an `$unavailable` sentinel
- * when the tree's zod cannot represent it (old zod without `toJSONSchema`, or
- * a schema kind the converter rejects). The sentinel keeps Layer-1 handshake
- * checking fully functional against trees whose schemas cannot be dumped.
+ * Canonicalized JSON Schema for one zod schema, or an `$unavailable` sentinel when the tree's zod cannot represent it (old zod without `toJSONSchema`, or a schema kind the converter rejects).
+ * The sentinel keeps Layer-1 handshake checking fully functional against trees whose schemas cannot be dumped.
  */
 function serializeSchema(schema: z.ZodType): unknown {
   // Property read (not a call) so trees whose zod predates `toJSONSchema`
@@ -224,11 +204,7 @@ function buildDegradeSurface(
   };
 }
 
-/**
- * Reduces the live unary + stream registries to a plain-JSON protocol
- * surface. Accepts the unchecked structural registry shapes so both the
- * validated branded registries and raw literals (tests) can be passed.
- */
+/** Reduces the live unary + stream registries to a plain-JSON protocol surface. */
 export function buildProtocolSurface(args: {
   readonly unary: UncheckedVersionedRpcRegistry;
   readonly unaryFloorMethodNames: readonly string[];

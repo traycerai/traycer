@@ -28,11 +28,7 @@ vi.mock("@/lib/host", () => {
   const client = {
     request: () => new Promise(() => {}),
     getActiveHostId: () => "host-test",
-    // `useTabHostClient` resolves through `useHostClientForHostId`, which
-    // asks the SPINE for the tab's entry (live directory first, then the
-    // active entry) before handing it to `useHostClientFor` - mocked below to
-    // return the same stub client for any entry. Spine and app-wide client
-    // are separate exports since redesign P2.1; one stub serves both here.
+    // `useTabHostClient` resolves through `useHostClientForHostId`, which asks the SPINE for the tab's entry (live directory first, then the active entry) before handing it to `useHostClientFor` - mocked below to return the same stub client for any entry.
     resolveHostById: () => entry,
     getActiveHost: () => entry,
     getRequestContextUserId: () => "user-test",
@@ -95,9 +91,7 @@ vi.mock(
   }),
 );
 
-// The tile header's agent-controls subsystem has its own tests; stub it so
-// these binding-chip tests don't pull in the epic-tree selectors + agent.list
-// query it depends on.
+// The tile header's agent-controls subsystem has its own tests; stub it so these binding-chip tests don't pull in the epic-tree selectors + agent.list query it depends on.
 vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
   useAgentStopControls: () => ({ self: null, descendants: [] }),
 }));
@@ -515,11 +509,6 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
   });
 
   it("the chip renders the bound branch even after a re-bind would replace it", () => {
-    // Re-bind path: the chip starts with a worktree binding (so the
-    // selector treats Create/Import as Re-bind) and the branch string
-    // matches what `worktree.getBinding` returned. This guards against
-    // the previous regression where the toolbar passed `binding={null}`
-    // and the chip always rendered "Worktree: not selected" pre-launch.
     mockBinding = {
       entries: [
         {

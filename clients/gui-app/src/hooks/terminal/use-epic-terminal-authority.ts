@@ -34,15 +34,7 @@ type LegacyMigrationEvidence = Pick<
 >;
 
 /**
- * The evidence one import is made from, with an identity that changes only
- * when that evidence does. The import effect is keyed on this value and on
- * the capability STATUS - never on the `capability` or `node` objects. The
- * authority hook rebuilds `capability` every render and a canvas write may
- * rebuild the tile ref, so an effect keyed on either re-fired on every
- * re-render; a failed import re-renders (error state, mutation state), which
- * re-fired the import, which failed again: one `importLegacy` RPC and one
- * toast per round trip until the tile unmounted. `null` means there is
- * nothing to import (not a legacy ref, or import-exempt).
+ * Effect keys on this evidence identity and capability status, never `capability` or `node` objects. Those rebuild every render and re-fired a failed import until unmount.
  */
 function useLegacyMigrationEvidence(
   node: EpicTerminalRef,
@@ -90,11 +82,7 @@ export interface EpicTerminalAuthorityController {
   readonly close: PlainTerminalMutations["close"];
 }
 
-/**
- * Bridges one local canvas presentation ref to the lifetime-bound host
- * authority. No local semantic field is rewritten until the capable host
- * acknowledges its canonical winner.
- */
+/** Bridges one local canvas presentation ref to the lifetime-bound host authority. */
 export function useEpicTerminalAuthority(args: {
   readonly epicId: string;
   readonly node: EpicTerminalRef;
@@ -151,18 +139,7 @@ export function useEpicTerminalAuthority(args: {
         },
       )
       .then((outcome) => {
-        // A later automatic re-run that reaches a conclusion retires the
-        // earlier failure, so the tile does not keep rendering a resolved
-        // error until the user presses Retry. A `preserved` outcome made no
-        // attempt, so it leaves the previous error standing.
-        //
-        // Deliberately NOT gated on `disposed`: adoption rewrites the canvas
-        // ref to host authority, which empties the evidence and runs this
-        // effect's cleanup BEFORE this continuation - so a success that
-        // checked `disposed` would leave a prior failure on screen until the
-        // user pressed Retry (which then has nothing left to import). A
-        // superseding run shares this outcome through the coordinator's
-        // in-flight dedup, and a setState after unmount is a no-op.
+        // A later automatic re-run that concludes retires the earlier failure. Do not gate on `disposed`: adoption empties evidence and runs cleanup before this continuation.
         if (outcome.status === "preserved") return;
         setMigrationError(null);
       })

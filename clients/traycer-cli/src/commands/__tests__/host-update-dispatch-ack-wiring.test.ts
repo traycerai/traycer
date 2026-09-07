@@ -1,16 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Ticket 07 §5.2.8 — `buildHostUpdateCommand` installs the dispatch-ack
-// stamper via `installDispatchAckStamper(hostHomeDir(environment),
-// args.ackNonce)` as its first action. `host-update-dispatch-ack-guard.test.ts`
-// proves the REAL validator refuses an illegal nonce before anything is
-// written; this suite proves the WIRING itself — that the command actually
-// calls the installer, with the nonce it was given (or `null` when it was
-// not) — with the module mocked so the assertion is on the call, not on the
-// validator's own behaviour.
-//
-// Must go RED if the call to `installDispatchAckStamper` is removed from
-// `buildHostUpdateCommand`.
+// Ticket 07 §5.2.8 - `buildHostUpdateCommand` installs the dispatch-ack stamper via `installDispatchAckStamper(hostHomeDir(environment), args.ackNonce)` as its first action.
+// `host-update-dispatch-ack-guard.test.ts` proves the REAL validator refuses an illegal nonce before anything is written; this suite proves the WIRING itself - that the command actually calls the installer, with the nonce it was given (or `null` when it was not) - with the module mocked so the assertion is on the call, not on the validator's own behaviour.
 
 const mocks = vi.hoisted(() => ({
   downloadAndStageHostMock: vi.fn(),
@@ -25,10 +16,8 @@ vi.mock("../../host/update-dispatch-ack", () => ({
   installDispatchAckStamper: mocks.installDispatchAckStamperMock,
 }));
 
-// SAFETY: `buildHostUpdateCommand` now probes the REAL `~/.traycer/host/
-// pid.json` for activation debt, and an unmocked read on a developer machine
-// could classify the developer's live host as debt and restart it. Every test
-// that invokes the command mocks the probe to "no running host".
+// SAFETY: `buildHostUpdateCommand` now probes the REAL `~/.traycer/host/ pid.json` for activation debt, and an unmocked read on a developer machine could classify the developer's live host as debt and restart it.
+// Every test that invokes the command mocks the probe to "no running host".
 vi.mock("../../host/pid-metadata", () => ({
   readHostPidMetadata: vi.fn(async () => null),
 }));
@@ -90,10 +79,7 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
     );
   });
 
-  // Negative control, load-bearing rather than decorative: a command hard-
-  // coded to always pass some fixed nonce (or to never forward `null`) would
-  // satisfy the assertion above while breaking every ordinary un-dispatched
-  // run.
+  // Negative control, load-bearing rather than decorative: a command hard- coded to always pass some fixed nonce (or to never forward `null`) would satisfy the assertion above while breaking every ordinary un-dispatched run.
   it("is called with null when no nonce was passed", async () => {
     mocks.installDispatchAckStamperMock.mockReturnValue(null);
     mocks.downloadAndStageHostMock.mockRejectedValue(

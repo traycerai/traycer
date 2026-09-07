@@ -15,13 +15,7 @@ export interface SwitcherCreateArtifact {
 }
 
 /**
- * One-shot artifact creation from the switcher, reusing the exact desktop
- * `addRoot` functions: `useEpicCreateArtifact` then the shared
- * `openProjectedSidebarNodeInTabWhenAvailable` seam, which opens the artifact
- * once it projects. That open lands it as the visible mobile tile, which trips
- * the sheet's active-tile watcher to close. The desktop's inline
- * pending-create staging (a left-panel-only UI) is intentionally omitted; the
- * create + open functions are identical.
+ * The desktop's inline pending-create staging (a left-panel-only UI) is intentionally omitted; the create + open functions are identical.
  */
 export function useSwitcherCreateArtifact(
   epicId: string,
@@ -54,9 +48,7 @@ export function useSwitcherCreateArtifact(
                 );
               },
               onBeforeOpen: null,
-              // The artifact tile is not embed-originated, so the sheet's
-              // watcher won't close on it; close here when it actually opens so
-              // the new artifact lands as the visible tile.
+              // The artifact tile is not embed-originated, so the sheet's watcher won't close on it; close here when it actually opens so the new artifact lands as the visible tile.
               onOpened,
               onUnavailable: () => undefined,
               onCleanup: null,

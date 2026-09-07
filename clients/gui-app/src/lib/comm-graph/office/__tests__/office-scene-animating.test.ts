@@ -58,9 +58,7 @@ function settledScene(): OfficeScene {
 }
 
 /**
- * The renderer skips a frame entirely when this says nothing is moving, so a
- * false NEGATIVE freezes the floor - which is why the predicate is deliberately
- * conservative and why both directions are pinned here.
+ * The renderer skips a frame entirely when this says nothing is moving, so a false NEGATIVE freezes the floor - which is why the predicate is deliberately conservative and why both directions are pinned here.
  */
 describe("OfficeScene.isAnimating", () => {
   it("is false once every character is seated and idle", () => {
@@ -110,9 +108,7 @@ describe("OfficeScene.isAnimating", () => {
 });
 
 /**
- * The renderer caches an entire painted floor against this number, so a
- * version that moves when the floor did not costs a full repaint, and one that
- * stays put when the floor changed leaves the old floor on screen.
+ * The renderer caches an entire painted floor against this number, so a version that moves when the floor did not costs a full repaint, and one that stays put when the floor changed leaves the old floor on screen.
  */
 describe("OfficeScene frame().staticVersion", () => {
   it("holds still across ticks while nothing about the floor changes", () => {

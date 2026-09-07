@@ -26,12 +26,8 @@ type ButtonVariant =
   | "ghost"
   | "link";
 
-// The three utilities `Kbd` must ship for a button that paints an opaque fill.
-// Spelled out rather than scraped off the element: the source assertion below
-// pins these EXACT strings as literals present in `kbd.tsx`, which is the half
-// a scraping test could never check - hoisting them into a shared const and
-// interpolating would leave the class attribute intact on every keycap while
-// Tailwind's content scan emitted no rule at all.
+// Spelled out rather than scraped off the element: the source assertion below pins these exact strings as
+// literals present in `kbd.tsx`, which is the half a scraping test could never check.
 const FILLED_SURFACE_UTILITIES = [
   "in-[[data-slot=button]:is([data-variant=default],[data-variant=secondary])]:border-current",
   "in-[[data-slot=button]:is([data-variant=default],[data-variant=secondary])]:bg-transparent",
@@ -40,17 +36,11 @@ const FILLED_SURFACE_UTILITIES = [
 
 interface FilledVariant {
   readonly variant: ButtonVariant;
-  /** The opaque fill the keycap sits on. */
   readonly fill: string;
-  /** The foreground the button's own label uses on that fill. */
   readonly label: string;
 }
 
-/**
- * The variants painting an opaque fill. `destructive` is deliberately absent -
- * it paints `bg-destructive/10` over the ambient surface, so it belongs with
- * the ambient set below.
- */
+/** The variants painting an opaque fill. */
 const FILLED_VARIANTS: ReadonlyArray<FilledVariant> = [
   { variant: "default", fill: "--primary", label: "--primary-foreground" },
   {
@@ -60,7 +50,6 @@ const FILLED_VARIANTS: ReadonlyArray<FilledVariant> = [
   },
 ];
 
-/** Variants on the ambient surface, where the quieter default is correct. */
 const AMBIENT_VARIANTS: ReadonlyArray<ButtonVariant> = [
   "outline",
   "ghost",
@@ -70,13 +59,7 @@ const AMBIENT_VARIANTS: ReadonlyArray<ButtonVariant> = [
 
 const MODES: ReadonlyArray<ResolvedThemeMode> = ["light", "dark"];
 
-/**
- * `kbd.tsx`'s source. Tailwind's content scan is a plain-text extractor, so a
- * candidate only produces CSS while it appears in the file verbatim - reading
- * the source is exactly the property that matters, and needs no dependency
- * beyond `node:fs`. (`@tailwindcss/oxide` would scan it properly, but it is
- * not a declared dependency of the OSS repo.)
- */
+/** (`@tailwindcss/oxide` would scan it properly, but it is not a declared dependency of the oss repo.) */
 function kbdSource(): string {
   return readFileSync(
     join(process.cwd(), "src", "components", "ui", "kbd.tsx"),
@@ -84,13 +67,8 @@ function kbdSource(): string {
   );
 }
 
-/**
- * The selectors Tailwind ACTUALLY emits for the given candidates, read out of
- * compiled CSS rather than reconstructed by hand. A candidate that produces no
- * rule yields no entry, which is what lets the assertions below tell "the rule
- * applies" apart from "nothing was generated" - jsdom loads no stylesheet, so
- * a `matches()` against a selector the test invented cannot.
- */
+/** A candidate that produces no rule yields no entry, which is what lets the assertions below tell "the rule
+ * applies" apart from "nothing was generated". */
 async function emittedSelectors(
   candidates: ReadonlyArray<string>,
 ): Promise<ReadonlyMap<string, string>> {
@@ -100,12 +78,8 @@ async function emittedSelectors(
   const compiler = await compile('@import "tailwindcss";', {
     base: process.cwd(),
     loadStylesheet: async (id: string, base: string) => {
-      // Called exactly once, for the `@import` above: 4.3.3's `index.css`
-      // INLINES its theme/base/utilities layers rather than `@import`ing the
-      // sibling `theme.css` / `preflight.css` / `utilities.css` of those names.
-      // Refuse any other id by name - a version that splits the entry again
-      // should fail here saying which import went unresolved, rather than
-      // further down as "the utility compiled to nothing".
+      // Called exactly once, for the `@import` above: 4.3.3's `index.css` inlines its theme/base/utilities layers
+      // rather than `@import`ing the sibling `theme.css` / `preflight.css` / `utilities.css` of those names.
       if (id !== "tailwindcss") {
         throw new Error(`Unexpected stylesheet import ${id} from ${base}`);
       }
@@ -118,11 +92,7 @@ async function emittedSelectors(
   });
   const css = compiler.build([...candidates]);
   const selectors = new Map<string, string>();
-  // Tailwind emits ONE FLAT selector per candidate - the ancestor condition is
-  // a prefix on the same line (`:where(:is([data-slot=button]:is(…))) .in-\[…\]`),
-  // never a nested `&` rule - so the line carrying the escaped class IS the
-  // whole discriminating selector. The only nesting in the output is the
-  // `@supports (color: color-mix(…))` fallback inside a declaration block,
+  // The only nesting in the output is the `@supports (color: color-mix(…))` fallback inside a declaration block,
   // which is what the `@` filter drops.
   const rules = css
     .split("\n")
@@ -172,11 +142,8 @@ describe("Kbd on a button surface", () => {
   });
 
   it("scopes every button-keyed rule it ships to the two filled variants", () => {
-    // Derived from the source rather than the constant above, so a FOURTH
-    // button-scoped rule - `destructive`, say, where `text-current` measures
-    // WORSE (nord dark 5.96 -> 2.79) - is caught even though it leaves all
-    // three constants intact and would slip past every assertion keyed on
-    // them.
+    // Derived from the source rather than the constant above, so a fourth button-scoped rule - `destructive`, say,
+    // where `text-current` measures worse (nord dark 5.96 -> 2.79).
     const shipped = kbdSource().match(/in-\[\[data-slot=button\][^"`]*/g) ?? [];
     expect(shipped.length).toBe(FILLED_SURFACE_UTILITIES.length);
     for (const candidate of shipped) {
@@ -217,9 +184,8 @@ describe("Kbd on a button surface", () => {
           `${variant} / ${selector}`,
         ).toBe(false);
       }
-      // Exact tokens, not `toContain` on the joined string: a substring check
-      // passes for `bg-foreground/80` and `text-muted-foreground/70`, i.e. for
-      // the very alpha drift that would quietly dim the ambient keycap.
+      // Exact tokens, not `toContain` on the joined string: a substring check passes for `bg-foreground/80` and
+      // `text-muted-foreground/70`, i.e. for the very alpha drift that would quietly dim the ambient keycap.
       const tokens = keycap.className.split(" ");
       expect(tokens, variant).toContain("bg-foreground/8");
       expect(tokens, variant).toContain("text-muted-foreground");
@@ -241,9 +207,8 @@ describe("Kbd on a button surface", () => {
   });
 });
 
-// Swept over every preset `src/index.css` defines, in both modes. The preset
-// set is pinned to the app's `THEME_PRESETS` registry inside `contrast.ts`, so
-// a preset the parser fails to see is a loud error rather than a smaller sweep.
+// The preset set is pinned to the app's `THEME_PRESETS` registry inside `contrast.ts`, so a preset the parser
+// fails to see is a loud error rather than a smaller sweep.
 describe("Kbd contrast on a filled button, per theme", () => {
   const presets = themePresets();
 
@@ -271,11 +236,6 @@ describe("Kbd contrast on a filled button, per theme", () => {
   });
 
   it("clears 4.5:1 on a primary button in every full-palette preset", () => {
-    // Accent-only presets (rose/blue/…) are excluded on purpose: their
-    // `--primary` / `--primary-foreground` pair is what the button LABEL
-    // already renders at, so a keycap matching it inherits the preset's own
-    // choice rather than a contrast introduced here. `kbd.tsx` records where
-    // that leaves them.
     const failures: string[] = [];
     for (const theme of presets) {
       for (const mode of MODES) {

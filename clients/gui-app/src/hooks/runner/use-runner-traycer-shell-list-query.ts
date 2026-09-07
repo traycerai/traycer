@@ -23,21 +23,13 @@ function traycerShellListQueryOptions(traycerCli: ITraycerCli | null) {
       return traycerCli.shellListDetected();
     },
     enabled: traycerCli !== null,
-    // Installed shells change rarely; cache for the session. The combobox
-    // always accepts a typed custom path, so a stale or empty list is benign.
-    // Refetch per mount anyway: the WSL health annotation on the list CAN flip
-    // mid-session (user installs WSL, reopens Settings) and must not be pinned
-    // to the first answer of the app's lifetime.
+    // Refetch per mount anyway: the WSL health annotation on the list CAN flip mid-session (user installs WSL, reopens Settings) and must not be pinned to the first answer of the app's lifetime.
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnMount: "always",
   });
 }
 
-/**
- * Lists shells detected on this machine (`traycer config shell list`) to
- * populate the Settings → Shell quick-picks. Disabled when
- * `traycerCli === null` (mobile/web hosts).
- */
+/** Lists shells detected on this machine (`traycer config shell list`) to populate the Settings → Shell quick-picks. */
 export function useRunnerTraycerShellListQuery(): UseQueryResult<
   readonly TraycerDetectedShell[]
 > {

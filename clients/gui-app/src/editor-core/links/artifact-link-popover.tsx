@@ -70,11 +70,7 @@ export interface ArtifactLinkPopoverProps {
   readonly editor: Editor;
   readonly editable: boolean;
   readonly scrollContainer: HTMLElement | null;
-  /**
-   * The activating event travels with the link: `ctrl`/`meta` forces the OS
-   * browser and `alt` inverts the configured mode, and both are decided by
-   * the link seam, not here (A3, R7).
-   */
+  /** ctrl/meta forces the OS browser; alt inverts the mode. Decided by the link seam, not here. */
   readonly openLink: (
     link: OpenableArtifactLink,
     event: LinkClickEvent,
@@ -91,17 +87,7 @@ interface LinkTargetBase {
   readonly anchor: VirtualElement;
   readonly yBookmark: YRangeBookmark | null;
   /**
-   * Document position this target visually anchors to - the caret's own
-   * position for a caret trigger, or wherever `posAtCoords` resolved the
-   * pointer for a hover trigger (clamped into `range`). `rangeAnchor` re-reads
-   * `coordsAtPos` of THIS position live on every floating-ui reposition
-   * (`autoUpdate`, which fires on scroll/resize), so the anchor never goes
-   * stale - unlike a frozen viewport pixel point, a ProseMirror document
-   * position is scroll-independent and always resolves to wherever that
-   * character currently renders. Re-mapped through each transaction (locally
-   * via `transaction.mapping`, or across remote edits via `yBookmark`) so it
-   * keeps tracking the SAME character rather than resetting to the link's
-   * start.
+   * Document position this target visually anchors to. Re-read live via `coordsAtPos`; remapped through each transaction so it tracks the same character.
    */
   readonly anchorDocPosition: number;
 }
@@ -109,14 +95,7 @@ interface LinkTargetBase {
 interface EditLinkTarget extends LinkTargetBase {
   readonly mode: "edit";
   readonly trigger: "hover" | "caret";
-  /**
-   * Display substate for an already-open edit-mode target: `false` is the
-   * default READ state (text + URL shown read-only, with Open/Copy/Edit
-   * actions); `true` is the editable state (URL/text fields, Apply/Remove)
-   * reached via the card's Edit action. Both hover-open and caret-open start
-   * `false` - only `beginEditing` flips it to `true`, and reverting via
-   * Escape flips it back without closing the card.
-   */
+  /** false is read-only (hover/caret start here). beginEditing flips true; Escape reverts without closing. */
   readonly editing: boolean;
 }
 
@@ -161,15 +140,7 @@ function linkElementAtRange(editor: Editor, range: Range): HTMLElement {
   return element?.closest<HTMLElement>("a[data-link-href]") ?? editor.view.dom;
 }
 
-/**
- * Resolves the ProseMirror document position under viewport coordinates
- * (`event.clientX`/`clientY`), falling back to `fallback` when the point
- * doesn't land inside the document (rare - e.g. a coordinate right at a
- * scrollbar edge). Called ONCE at hover-entry: the returned position is a
- * STABLE document identity, unlike the raw pixel coordinates, so capturing it
- * early and re-resolving its on-screen rect later (via `coordsAtPos` in
- * `rangeAnchor`) never goes stale across a scroll.
- */
+/** Capture document position once at hover-entry; pixels go stale across scroll. Re-resolve via coordsAtPos in rangeAnchor. */
 function pointerDocPosition(
   editor: Editor,
   event: PointerEvent,
@@ -186,36 +157,13 @@ function clampToRange(position: number, range: Range): number {
   return Math.min(Math.max(position, range.from), range.to);
 }
 
-/**
- * The `coordsAtPos` side to resolve `position` on: `range.to` is the
- * end-EXCLUSIVE boundary of the mark, so the default positive side (biased
- * toward the character AFTER the position) would report coordinates for
- * whatever follows the link - at a line-wrap boundary, that's the start of
- * the NEXT visual line, landing the card a line low. Every other position
- * (including `range.from`, the boundary BEFORE the mark's first character)
- * wants the default positive side.
- */
+/** range.to is end-exclusive; the default positive side would place the card on the next visual line. Other positions keep the default side. */
 function anchorSide(position: number, range: Range): number {
   return position === range.to ? -1 : 1;
 }
 
 /**
- * Builds the floating-ui reference for a link target, anchored to a single
- * ProseMirror document position re-resolved LIVE on every call via
- * `coordsAtPos`.
- *
- * Anchoring must resolve to a SINGLE visual line, never a box spanning
- * several: a link (or a create-mode selection) that wraps across lines, or
- * sits inside a table cell, exposes multiple client rects. Unioning
- * `coordsAtPos(range.from)`/`coordsAtPos(range.to)` - an earlier approach -
- * builds a box enclosing every fragment, so `placement: "top-start"` lands
- * the card above the topmost line at the leftmost edge, which can be far from
- * the line the pointer is actually over. Because `coordsAtPos` is invoked
- * FRESH every time floating-ui's `autoUpdate` calls this (scroll, resize,
- * mutation), the anchor also can't go stale the way a frozen viewport pixel
- * point could - there's no cached rect to invalidate. `side` carries the
- * endpoint bias from `anchorSide` so a boundary position resolves to the
- * correct side of the wrap.
+ * Floating-ui reference for one ProseMirror position, re-resolved live via `coordsAtPos`. Anchor a single visual line, never a union box of wrapped fragments.
  */
 function rangeAnchor(
   editor: Editor,
@@ -488,13 +436,7 @@ function refreshMappedTarget(
   return refreshEditTarget(editor, target, mappedRange, mappedAnchor);
 }
 
-/**
- * Moves the anchor to `position` (the caret's new spot, still within
- * `target.range`) without touching `href`/`text`/`identityText` or any of
- * the dirty-edit-field bookkeeping the caller owns - unlike `open`, this
- * must not reset an in-progress edit just because the caret moved to a
- * different visual fragment of the same wrapped link.
- */
+/** Move the anchor without resetting in-progress edit fields; a wrap fragment is the same link. */
 function refreshCaretAnchor(
   editor: Editor,
   target: EditLinkTarget,
@@ -675,16 +617,7 @@ function LinkPreview(props: LinkPreviewProps) {
   );
 }
 
-/**
- * One trigger-aware floating surface for authored ProseMirror links.
- *
- * Viewer links participate in Tab order and activate with Enter. Editable
- * links deliberately use caret ownership instead: a plain or Cmd/Ctrl click
- * navigates (matching a viewer click) without moving the caret, so this card
- * only opens via hover or arrow-key caret entry - always starting in a
- * read-only state with an Edit action that promotes it to the editable
- * fields.
- */
+/** Viewer links are in Tab order. Editable links open on hover or caret entry, not click (click navigates without moving caret). */
 export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const { editor, editable, scrollContainer, openLink, onOpenChange } = props;
   const [target, setTargetState] = useState<LinkTarget | null>(null);
@@ -692,22 +625,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const [displayText, setDisplayText] = useState("");
   const targetRef = useRef<LinkTarget | null>(null);
   const hrefDirtyRef = useRef(false);
-  // Render into the pane's portal host so this kept-mounted link editor (its
-  // typed URL/title survive focus changes) hides with the pane instead of
-  // covering a focused split partner. `null` outside a pane → `document.body`.
-  // Declared here (before the positioning effects) so those effects can depend
-  // on it and rebind to the live node once the host ref settles.
+  // Portal into the pane so a kept-mounted editor hides with it. null outside
+  // a pane is document.body. Declared before positioning effects that depend on it.
   const paneContainer = usePanePortalContainer();
   const textDirtyRef = useRef(false);
   const expectedCaretPositionRef = useRef<number | null>(null);
   const focusEditUrlRef = useRef(false);
-  // The trigger the current edit promotion started from, captured by
-  // `beginEditing` so Escape can revert the card to a read state that keeps
-  // its original ownership: a hover-opened card must return to
-  // `trigger: "hover"` (so `scheduleHoverHide` still closes it on pointer
-  // leave) even though editing itself runs under caret ownership. `null`
-  // means the open editor was not promoted from a read card (create mode or
-  // Cmd+K on an existing link), so Escape dismisses instead of reverting.
+  // beginEditing's original trigger: Escape reverts hover to trigger hover so
+  // pointer-leave still hides. null (create/Cmd+K) means Escape dismisses.
   const revertTriggerRef = useRef<"hover" | "caret" | null>(null);
   // Tracks whether the pointer is over the open card or a document link so
   // hover-hide re-arm after Escape can decide without relying on CSS :hover
@@ -814,11 +739,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     revertTriggerRef.current = null;
     setLiveTarget({ ...current, trigger, editing: false });
     if (trigger !== "hover") return;
-    // Editing ran under caret ownership, so a pointer leave during the
-    // edit did not arm hide. After restoring hover ownership, re-arm the
-    // normal hide path when the pointer is already outside the card/link.
-    // Defer so the compact-card commit can drop edit-field focus that would
-    // otherwise suppress scheduleHoverHide via the activeElement gate.
+    // Edit ran under caret ownership so pointer-leave did not hide. After
+    // restoring hover, re-arm hide if the pointer is already outside.
     queueMicrotask(() => {
       const live = targetRef.current;
       if (
@@ -863,11 +785,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     if (anchor === null) return;
     cancelShow();
     const fallbackPosition = anchorPosition(editor, anchor);
-    // Captured at hover-entry so the card anchors to the character the
-    // pointer actually entered through, even if the link itself spans
-    // several visual lines (a wrapped link) by the time the show delay
-    // elapses - a document position stays valid across that delay, unlike a
-    // frozen viewport pixel point.
+    // Capture doc position at hover-entry; pixels go stale across the show
+    // delay on a wrapped link.
     const anchorDocPosition = pointerDocPosition(
       editor,
       event,
@@ -901,11 +820,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   });
 
   const dismissCardAfterRoutedClick = useEffectEvent((): void => {
-    // Drop any open card / pending hover-show after a handled click. If an
-    // editable form is open, mousedown suppression also prevented field blur,
-    // so commit the live draft first (blur-parity) rather than silently
-    // discarding via close(). Create mode always has a form; edit mode only
-    // when `editing`.
+    // After a handled click, commit a live draft first (mousedown blocked blur)
+    // then drop the card. Create always has a form; edit only when editing.
     const current = targetRef.current;
     if (current !== null && (current.mode !== "edit" || current.editing)) {
       commitRef.current();
@@ -934,15 +850,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         anchorPosition(editor, anchor),
       );
       if (rawHref === null) return;
-      // Plain and modifier clicks route identically now: a navigable href
-      // (external/file) always drives the opener via `routeHref` below; a
-      // hash or empty href falls through as "default" and, outside the
-      // editable+modifier+hash carve-out just below, does nothing - letting
-      // ProseMirror's own mousedown handling (unblocked by `handleMouseDown`
-      // for those hrefs) place the caret. An `ignore`-classified href
-      // (unrecognized scheme) is deliberately suppressed instead: clicks
-      // neither navigate nor move the caret, and the link stays reachable
-      // for editing through the hover card.
+      // Navigable href always opens. Hash/empty lets ProseMirror place the caret.
+      // ignore (unrecognized scheme) neither navigates nor moves caret.
       const result = routeHref(rawHref, event);
       if (result === "default") {
         const normalizedHref = rawHref.trim();
@@ -979,11 +888,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const primaryClick = event.button === 0;
     const modifierPrimary = primaryClick && (event.metaKey || event.ctrlKey);
     const middleClick = event.button === 1;
-    // A plain (unmodified) primary click on an editable link now navigates
-    // just like a Cmd/Ctrl click, so it needs the SAME capture-phase
-    // caret-preservation: block ProseMirror's own bubble-phase mousedown
-    // handler from placing the caret before `routeAnchor` decides to open
-    // the link on `click`. Shift+click is excluded so selection can extend.
+    // Plain click navigates like Cmd/Ctrl; block ProseMirror mousedown so the
+    // caret does not move. Shift+click is excluded so selection can extend.
     const plainEditableClick =
       editable && primaryClick && !modifierPrimary && !event.shiftKey;
     if (!modifierPrimary && !middleClick && !plainEditableClick) return;
@@ -1084,11 +990,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       }
       const position = editor.state.selection.from;
       if (current !== null && rangeContainsPosition(current.range, position)) {
-        // The caret moved to a different visual fragment of the SAME
-        // wrapped link (still inside current.range): keep the open target
-        // (don't reset href/text/dirty-edit state via `open`), but refresh
-        // where it anchors so the card follows the caret across the wrap
-        // instead of staying pinned to the position it first opened at.
+        // Same wrapped link, different fragment: keep the open target, refresh
+        // the anchor so the card follows the caret.
         if (position !== current.anchorDocPosition) {
           setLiveTarget(refreshCaretAnchor(editor, current, position));
         }
@@ -1321,10 +1224,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       card.removeEventListener("pointerleave", handleCardPointerLeave);
       card.removeEventListener("keydown", handleCardKeyDown);
     };
-    // `paneContainer` dep for the same reason as the positioning effect above:
-    // this reads `cardRef.current` under identical conditions, so without it
-    // the hover-hide and keyboard handlers stay bound to the pre-remount node
-    // while the card the user sees has none.
+    // paneContainer dep: without it hover-hide/keyboard stay bound to the
+    // pre-remount node.
   }, [cancelHide, scheduleHoverHide, target, paneContainer]);
 
   useLayoutEffect(() => {

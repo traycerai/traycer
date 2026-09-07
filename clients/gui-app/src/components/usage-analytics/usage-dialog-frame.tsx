@@ -7,16 +7,8 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-/**
- * Phone tier (viewport < 28rem): the centered dialog becomes a bottom
- * sheet. Viewport-keyed (`max-[28rem]:`) deliberately, unlike the content
- * folds inside the body, which key on the dialog's own container width -
- * whether the frame is a sheet is a property of the screen, not of the
- * dialog's width. Tailwind emits variant rules after base utilities, so
- * these override the primitive's centered positioning without
- * `!important`. Heights stay dialog-owned: the epic dialog adds
- * `max-[28rem]:h-[94dvh]`; the chat dialog keeps its shorter fixed height.
- */
+/** Tailwind emits variant rules after base utilities, so these override the primitive's centered positioning
+ * without `!important`. */
 export const USAGE_DIALOG_SHEET_CLASSES =
   "max-[28rem]:top-auto max-[28rem]:bottom-0 max-[28rem]:left-0 max-[28rem]:translate-x-0 max-[28rem]:translate-y-0 max-[28rem]:w-safe-dvw max-[28rem]:max-w-none max-[28rem]:rounded-b-none";
 
@@ -30,18 +22,8 @@ export interface UsageDialogFrameProps {
   readonly children: ReactNode;
 }
 
-/**
- * The usage dialogs' shared fixed-frame scaffold, mounted inside a
- * fixed-`h` `DialogContent`: pinned header row (icon ring + title +
- * trailing controls), scrollable body, optional pinned footer. The frame
- * renders unconditionally around every body state - loading, error, empty,
- * loaded - which is the whole "no jump" guarantee: states swap inside a
- * constant frame instead of resizing it.
- *
- * The body is the `@container` the content folds key on, and it reserves a
- * stable scrollbar gutter so a classic (non-overlay) scrollbar can't
- * shrink the container's inline size and fire a fold early.
- */
+/** The frame renders unconditionally around every body state - loading, error, empty, loaded - which is the
+ * whole "no jump" guarantee: states swap inside a constant frame instead of resizing it. */
 export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
   return (
     <>
@@ -71,12 +53,8 @@ export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
       <div
         className={cn(
           "min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] @container",
-          // The footer normally absorbs the home-indicator inset for the
-          // whole sheet. Without one (the chat dialog) the body is what
-          // reaches `bottom-0`, so it has to absorb it instead - otherwise
-          // an expanded turn drilldown scrolls its last rows under the
-          // indicator. Additive on top of the content's own padding, and
-          // exactly `0` wherever the inset is.
+          // Without one (the chat dialog) the body is what reaches `bottom-0`, so it has to absorb it instead -
+          // otherwise an expanded turn drilldown scrolls its last rows under the indicator.
           props.footer === null && "max-[28rem]:pb-safe-bottom",
         )}
         data-testid="usage-dialog-body"

@@ -17,15 +17,7 @@ type TouchLoginMutationResult = UseMutationResult<
 >;
 
 /**
- * Keepalive for an in-flight `providers.startLogin` child (code-paste
- * decision log's "Timeouts" row): resets the host's rolling kill timer
- * without submitting a code. Fired throttled from the paste field while the
- * user is still away in the browser.
- *
- * `onError` is intentionally omitted - this is a best-effort background
- * ping; a failure just means the next touch (or the eventual
- * `providers.awaitLogin` resolution) carries the real signal, so surfacing a
- * toast per missed keepalive would be noise.
+ * Best-effort keepalive; no `onError` toast. The next touch or `awaitLogin` carries the real signal.
  */
 export function useProvidersTouchLogin(): TouchLoginMutationResult {
   return useProvidersTouchLoginForClient(useHostClient());

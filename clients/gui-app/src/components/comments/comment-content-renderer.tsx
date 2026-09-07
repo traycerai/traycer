@@ -3,20 +3,8 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { numberValue } from "@/lib/composer/tiptap-json-content";
 import { cn } from "@/lib/utils";
 
-/**
- * Read-only renderer for the Tiptap `JSONContent` payload returned by the
- * comment-thread RPC. We intentionally don't mount a second Tiptap editor
- * per comment - the sidebar can render dozens of threads, and an editor
- * instance per card would be wasteful. Instead we walk the doc shape and
- * emit a small set of React elements matching the composer's grammar:
- *
- *   block: paragraph, bulletList, orderedList, listItem
- *   inline: text (with bold / italic / code marks), mention, hardBreak
- *
- * Anything outside that vocabulary degrades to plain text from the node's
- * `text` field (or to a Fragment for unknown blocks). Cross-product safe:
- * Views authors stay within the same grammar.
- */
+/** We intentionally don't mount a second Tiptap editor per comment - the sidebar can render dozens of threads,
+ * and an editor instance per card would be wasteful. */
 export interface CommentContentProps {
   readonly content: JsonContent;
   readonly className: string | undefined;
@@ -39,9 +27,7 @@ export function CommentContent({ content, className }: CommentContentProps) {
 function CommentNodeList(props: {
   readonly nodes: ReadonlyArray<JsonContent>;
 }): ReactNode {
-  // The JSONContent payload is immutable input, so positional keys are safe
-  // (no reorder, no insertion). Use a path-style key that mixes the node
-  // type with its position so siblings of the same type still differ.
+  // The JSONContent payload is immutable input, so positional keys are safe (no reorder, no insertion).
   return (
     <>
       {props.nodes.map((node, position) => (

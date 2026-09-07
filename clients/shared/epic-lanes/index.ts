@@ -1,14 +1,5 @@
-// The lane adapters that replace `epic.subscribe` — one per data CLASS.
-//
-// `epic.state.subscribe` (server-arbitrated rows), `epic.status.subscribe`
-// (session control) and `artifact.subscribe` (co-edited bodies), each decoding
-// its own wire contract into the shared replica-runtime seam's envelopes. They
-// implement the same `LaneAdapter` interface the `@1` legacy arm does, which is
-// what makes the mixed fleet a configuration rather than a fork.
-//
-// Nothing here projects, stores, or renders. An adapter decodes and emits; the
-// replicas decide what may be applied and the runtime sequences them across
-// planes.
+// The lane adapters that replace `epic.subscribe` - one per data class.
+// They implement the same `LaneAdapter` interface the `@1` legacy arm does, which is what makes the mixed fleet a configuration rather than a fork.
 
 export type {
   EpicStateLaneAdapter,

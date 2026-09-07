@@ -1,9 +1,6 @@
 /**
  * Shared last-safe-point gate for lifecycle mutations.
- *
- * A planner decision is only evidence from one instant.  The caller must run
- * the supplied probe again while it owns the client-side serialization lock;
- * no mutator receives control until that comparison succeeds.
+ * A planner decision is only evidence from one instant.
  */
 export type SerializedSection = <T>(work: () => Promise<T>) => Promise<T>;
 
@@ -24,10 +21,8 @@ export type MutationResult =
     }
   | {
       /**
-       * The world did not change under us, but this operation is not
-       * permitted against this target in it. Distinct from
-       * `stale-precondition`: re-probing will not make it true, so the
-       * planner must re-decide rather than retry.
+       * The world did not change under us, but this operation is not permitted against this target in it.
+       * Distinct from `stale-precondition`: re-probing will not make it true, so the planner must re-decide rather than retry.
        */
       readonly kind: "refused";
       readonly operation: string;
@@ -39,12 +34,10 @@ export type MutationResult =
       readonly cause: string;
     };
 
-/**
- * The outcome of binding an operation to a concrete target in the *re-probed*
- * world. `target` is what the mutator acts on — it is selected here, from
- * observed state, never supplied by the caller alongside an unrelated
- * operation name.
- */
+    /**
+     * The outcome of binding an operation to a concrete target in the *re-probed* world.
+     * `target` is what the mutator acts on - it is selected here, from observed state, never supplied by the caller alongside an unrelated operation name.
+     */
 export type MutationAuthorization<Target> =
   | { readonly kind: "authorized"; readonly target: Target }
   | { readonly kind: "refused"; readonly reason: string };
@@ -56,16 +49,8 @@ export function capturePreconditions<World>(
 }
 
 /**
- * Re-probes in the serialized section and invokes `mutate` only if (1) every
- * captured observed field still has the same value and (2) `authorize` binds
- * the operation to a target in that re-probed world.
- *
- * Both halves are load-bearing and they answer different questions. The
- * fingerprint answers "did anything move under us"; it is content-blind, so it
- * cannot tell an eviction of the competing CLI registration from a bootout of
- * the healthy agent — the world is identical in both. `authorize` answers "is
- * this operation legal here, and against what". It *returns* the target, so a
- * mutator cannot be handed one operation's authority and another's object.
+ * Re-probes in the serialized section and invokes `mutate` only if (1) every captured observed field still has the same value and (2) `authorize` binds the operation to a target in that re-probed world.
+ * The fingerprint answers "did anything move under us"; it is content-blind, so it cannot tell an eviction of the competing CLI registration from a bootout of the healthy agent - the world is identical in both.
  */
 export async function runConditionalMutation<World, Target>(input: {
   readonly serialized: SerializedSection;
@@ -109,11 +94,6 @@ export async function runConditionalMutation<World, Target>(input: {
   });
 }
 
-/**
- * Stable over object-key order and preserves Maps/Sets, which matter for a
- * parsed launchctl print. JSON.stringify alone silently turns a Map into
- * `{}`, allowing a changed supervisor observation to evade revalidation.
- */
 export function canonicalFingerprint(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "string") return `string:${JSON.stringify(value)}`;

@@ -15,11 +15,7 @@ export const editorOpenPathsV10 = defineRpcContract({
   responseSchema: openPathsResponseSchema,
 });
 
-/**
- * 1.1 widens the request's `editorId` enum with `"system"` (OS default
- * application). Response unchanged. See `openPathsTargetSchema` for the
- * emission-gating contract on the new literal.
- */
+/** 1.1 widens the request's `editorId` enum with `"system"` (OS default application). */
 export const editorOpenPathsV11 = defineRpcContract({
   method: "editor.openPaths",
   schemaVersion: { major: 1, minor: 1 } as const,

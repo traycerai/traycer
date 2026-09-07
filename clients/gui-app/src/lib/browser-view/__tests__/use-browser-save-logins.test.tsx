@@ -37,9 +37,7 @@ function ReadOnlyProbe(props: { readonly bridge: BrowserViewBridge }) {
 }
 
 /**
- * ONE client per test, shared by every mount inside it: the remount cases are
- * about what a warm cache does, and a fresh client per mount would prove
- * nothing about it.
+ * ONE client per test, shared by every mount inside it: the remount cases are about what a warm cache does, and a fresh client per mount would prove nothing about it.
  */
 function makeProbe(bridge: BrowserViewBridge): () => ReactNode {
   const client = new QueryClient();
@@ -60,9 +58,8 @@ describe("useBrowserSaveLogins", () => {
     });
     first.unmount();
 
-    // Another window turned saving off. Nothing pushes that here, so only a
-    // fresh read on the next mount can show it - the cached `true` is what the
-    // remount has to refuse to settle for.
+    // Another window turned saving off.
+    // Nothing pushes that here, so only a fresh read on the next mount can show it - the cached `true` is what the remount has to refuse to settle for.
     await bridge.setSaveLogins(false);
 
     render(probe());
@@ -109,9 +106,7 @@ describe("useBrowserSaveLogins", () => {
   });
 
   it("refetches on window focus even though the app's default client turns that off", async () => {
-    // Mirrors the app's own QueryClient (`lib/query-client.ts`), which sets
-    // `refetchOnWindowFocus: false` globally - so a fetch on refocus here can
-    // only be this query's own per-query override taking effect.
+    // Mirrors the app's own QueryClient (`lib/query-client.ts`), which sets `refetchOnWindowFocus: false` globally - so a fetch on refocus here can only be this query's own per-query override taking effect.
     const client = new QueryClient({
       defaultOptions: { queries: { refetchOnWindowFocus: false } },
     });
@@ -128,10 +123,7 @@ describe("useBrowserSaveLogins", () => {
     });
     expect(getSaveLoginsSpy).toHaveBeenCalledTimes(1);
 
-    // Leaving the window and coming back - TanStack's focus manager listens
-    // to `visibilitychange` on `document` in a real browser; driving it
-    // through `focusManager` directly is the same signal without depending on
-    // jsdom's `document.visibilityState`.
+    // Leaving the window and coming back - TanStack's focus manager listens to `visibilitychange` on `document` in a real browser; driving it through `focusManager` directly is the same signal without depending on jsdom's `document.visibilityState`.
     await act(async () => {
       focusManager.setFocused(false);
       focusManager.setFocused(true);
@@ -160,9 +152,7 @@ describe("useBrowserSaveLogins", () => {
     });
     first.unmount();
 
-    // The bridge is the machine here, and a settled write is state it KEPT -
-    // asserted on the read directly, because a remount would show the cached
-    // value first and pass before its own refetch could contradict it.
+    // The bridge is the machine here, and a settled write is state it KEPT - asserted on the read directly, because a remount would show the cached value first and pass before its own refetch could contradict it.
     expect(await bridge.getSaveLogins()).toBe(false);
 
     render(probe());

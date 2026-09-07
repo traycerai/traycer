@@ -1,11 +1,7 @@
 #!/usr/bin/env bun
 
 /**
- * Drive the development-only canvas fixture bridge over CDP.
- *
- * This script intentionally has no package dependencies. Run it with Bun while
- * the desktop development stack is listening on its remote-debugging port.
- * See ../src/dev/README.md for commands, mutations, and cleanup guarantees.
+ * Drive the canvas fixture bridge over CDP with no package deps. See ../src/dev/README.md.
  */
 
 const cdpPort = Number(process.env.CDP_PORT ?? 37723);

@@ -165,10 +165,8 @@ async function applyInspect(
     return;
   }
   const only = data.candidates[0];
-  // An uninstalled singleton is unambiguous and safe to land immediately.
-  // An installed singleton is an overwrite - send it through the picker so
-  // the badge and the "this replaces what is on disk" copy are visible
-  // before Install commits.
+  // An installed singleton is an overwrite - send it through the picker so the badge and the "this replaces what
+  // is on disk" copy are visible before Install commits.
   if (
     inspectMode === "fresh" &&
     data.candidates.length === 1 &&

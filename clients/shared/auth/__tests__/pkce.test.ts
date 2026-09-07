@@ -18,9 +18,7 @@ describe("pkce", () => {
   });
 
   it("derives the S256 challenge to the RFC 7636 test vector", async () => {
-    // RFC 7636 Appendix B. This also pins base64url(SHA-256(verifier)) to the
-    // exact bytes authn's `createHash("sha256").digest("base64url")` produces,
-    // so the shell's challenge matches the server's verification.
+    // Rfc 7636 Appendix B.
     const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     expect(await deriveCodeChallenge(verifier)).toBe(
       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",

@@ -3,16 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-// Integration counterpart to the fake-child unit tests in
-// `traycer-cli-envelope.test.ts`: a REAL subprocess, REAL pipes and REAL
-// timers, so this proves the wiring end to end rather than the timer
-// arithmetic in isolation.
-//
-// The regression it guards is traycer#585/#589: `CLI_STREAM_TIMEOUT_MS` was
-// an absolute ceiling, so Desktop SIGKILLed the CLI 10 minutes into a host
-// download that was still transferring - which is why a 700MB+ archive
-// could never install on a slow link. The budget is now inactivity, and a
-// child that keeps reporting must survive past it.
+// The regression it guards is traycer#585/#589: `CLI_STREAM_TIMEOUT_MS` was an absolute ceiling, so Desktop SIGKILLed the CLI 10 minutes into a host download that was still.
+// The budget is now inactivity, and a child that keeps reporting must survive past it.
 
 const scriptDir = mkdtempSync(join(tmpdir(), "traycer-cli-idle-itest-"));
 
@@ -99,10 +91,6 @@ afterAll(() => {
 
 describe("streamTraycerCliJson idle budget against a real subprocess", () => {
   it("keeps a child alive far past the budget while it keeps reporting", async () => {
-    // 15 ticks x 200ms = 3s of runtime under a 1.2s budget. Under the old
-    // absolute-ceiling semantics this child would have been SIGKILLed at
-    // 1.2s with progress still flowing - the exact shape of the reported
-    // failure, just compressed in time.
     writeFakeCli({
       tickMs: 200,
       ticks: 15,
@@ -137,12 +125,6 @@ describe("streamTraycerCliJson idle budget against a real subprocess", () => {
       exitAfterSilence: false,
     });
     const idleBudgetMs = 700;
-    // `armIdleTimer()` runs immediately BEFORE `onEvent` (see `traycer-cli.ts`),
-    // so this stamp is a hair LATER than the arming point the timer actually
-    // counts from. The tolerance covers that ordering and clock granularity -
-    // sub-millisecond in practice - and nothing else. It is not slack for a
-    // slow machine: the measurement below is deliberately independent of how
-    // fast the machine is.
     const armStampToleranceMs = 50;
     let lastEventAt: number | null = null;
     const started = Date.now();
@@ -159,29 +141,8 @@ describe("streamTraycerCliJson idle budget against a real subprocess", () => {
     ).rejects.toThrow(`produced no output for ${idleBudgetMs}ms`);
     const killedAt = Date.now();
 
-    // Killed only after the last SIGNAL plus the budget, never before - which
-    // is what the budget being an INACTIVITY budget actually means.
-    //
-    // Measured from the last observed event rather than from spawn, and that
-    // is the whole point of this shape. The previous form asserted
-    // `Date.now() - started >= 900`, which silently presumed the three 100ms
-    // ticks had landed before the budget could expire - i.e. it presumed the
-    // child had STARTED promptly. On a loaded machine where node takes longer
-    // than the budget to produce its first byte, the kill is correct, the
-    // rejection is correct, and only the presumption fails: measured 712ms and
-    // 704ms against a floor of 900 in a deterministic slow-spawn probe. Timing
-    // out a process is exactly what should happen there, so the test must not
-    // read it as a regression.
-    //
-    // The spawn-relative floor is gone rather than widened, because widening it
-    // would keep the same presumption and merely make it rarer.
-    //
-    // NOT asserted here, deliberately: that any event was observed at all.
-    // "Events refresh the budget" is the property of the sibling case above,
-    // which drives 15 of them under a budget a third of its runtime. Asserting
-    // it here as well would re-introduce the presumption this shape exists to
-    // remove. When nothing was observed, the budget legitimately runs from
-    // spawn, and `started` is the correct reference point.
+    // Killed only after the last SIGNAL plus the budget, never before - which is what the budget being an INACTIVITY budget actually means.
+    // The previous form asserted `Date.now() - started >= 900`, which silently presumed the three 100ms ticks had landed before the budget could expire.
     const lastSignalAt = lastEventAt ?? started;
     expect(killedAt - lastSignalAt).toBeGreaterThanOrEqual(
       idleBudgetMs - armStampToleranceMs,

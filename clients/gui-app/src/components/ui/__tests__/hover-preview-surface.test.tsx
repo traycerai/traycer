@@ -32,9 +32,8 @@ describe("hover-preview surface", () => {
     );
     if (content === null) throw new Error("Hover card content did not render");
     const tokens = content.className.split(/\s+/);
-    // The workspace and chat/owner hover previews must read as the same card
-    // as the composer's @mention preview panel - one shared surface, so the
-    // hover-card styles cannot drift apart from it again.
+    // The workspace and chat/owner hover previews must read as the same card as the composer's @mention preview
+    // panel - one shared surface, so the hover-card styles cannot drift apart from it again.
     HOVER_PREVIEW_SURFACE_CLASS.split(/\s+/).forEach((expected) => {
       expect(tokens).toContain(expected);
     });
@@ -56,9 +55,8 @@ describe("hover-preview surface", () => {
         </HoverCardContent>
       </HoverCard>,
     );
-    // A Radix Tooltip mounts a hidden a11y clone of its children (two copies);
-    // HoverCard does not - the single copy is why a copy-path button lives
-    // safely on this surface but not on a Tooltip.
+    // A Radix Tooltip mounts a hidden a11y clone of its children (two copies); HoverCard does not - the single
+    // copy is why a copy-path button lives safely on this surface but not on a Tooltip.
     expect(screen.getAllByTestId("hover-action")).toHaveLength(1);
   });
 

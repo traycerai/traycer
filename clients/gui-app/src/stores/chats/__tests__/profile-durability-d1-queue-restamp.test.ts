@@ -15,18 +15,8 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * D1 (durability audit): "Profile switch while messages are QUEUED - do
- * queued sends restamp to the new profileId or keep the old? ... no
- * split-brain sessions."
- *
- * This probes the actual restamp funnel wired to a composer settings change:
- * `handleComposerSettingsChange` (use-chat-queue-actions.ts) always calls
- * `chatActions.restampQueuedItemSettings(settings, excludeQueueItemId)` on
- * every settings emit, including a pure profile switch. The store action
- * gates the whole restamp on `chatRunSettingsEqual`, which now compares
- * `profileId` too (previously it didn't, so a same-harness/same-model
- * profile switch was invisible to this gate - see the fix in
- * chat-session-store.ts).
+ * D1 (durability audit): "Profile switch while messages are QUEUED - do queued sends restamp to
+ * the new profileId or keep the old? ...
  */
 
 const EPIC_ID = "epic-1";
@@ -49,8 +39,6 @@ const PROFILE_A_SETTINGS: ChatRunSettings = {
 };
 
 // Same harness/model/permission/reasoning/tier/agentMode as PROFILE_A_SETTINGS
-// - only `profileId` differs. This is the common "switch to another
-// subscription on the same harness" case a rate-limit switch prompt drives.
 const PROFILE_B_SETTINGS: ChatRunSettings = {
   ...PROFILE_A_SETTINGS,
   profileId: "profile-b",
@@ -197,10 +185,8 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
       },
     });
 
-    // The user switches to profile B via the rate-limit switch banner /
-    // rail (same harness, same model - only profileId changes). This is
-    // exactly what `handleComposerSettingsChange` forwards on every
-    // toolbar commit.
+    // The user switches to profile B via the rate-limit switch banner / rail (same harness, same model
+    // - only profileId changes).
     harness.handle.store
       .getState()
       .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
@@ -285,9 +271,8 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
       .getState()
       .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
 
-    // A managed-command chip carries no settings stamp - it dispatches on the
-    // chat's settings at delivery time - so a profile switch has nothing to
-    // restamp and must not wake the wire.
+    // A managed-command chip carries no settings stamp - it dispatches on the chat's settings at
+    // delivery time - so a profile switch has nothing to restamp and must not wake the wire.
     expect(harness.sent).toHaveLength(0);
   });
 
@@ -352,12 +337,8 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
       .getState()
       .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
 
-    // One frame is sent (the action fires at most once, not once per
-    // differing item) and it carries the full new settings with no
-    // per-item scoping beyond `excludeQueueItemId` - the GUI never
-    // distinguishes "restamp only queue A" from "restamp only queue B",
-    // it is all-or-nothing per exclude id. This structural characteristic
-    // of the wire contract is unaffected by the profileId fix above.
+    // One frame is sent (the action fires at most once, not once per differing item) and it carries
+    // the full new settings with no per-item scoping beyond `excludeQueueItemId` - the GUI never
     expect(harness.sent).toHaveLength(1);
     const frame = harness.sent[0];
     if (frame.kind !== "queueSettingsRestamp") {

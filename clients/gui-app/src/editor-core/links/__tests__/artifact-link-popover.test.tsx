@@ -566,11 +566,8 @@ describe("ArtifactLinkPopover", () => {
   it("anchors a wrapped link's hover card to the specific visual line the pointer resolves to, not a box spanning both lines", async () => {
     vi.useFakeTimers();
     const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
-    // JSDOM has no real layout engine, so a genuine line-wrap can't be
-    // rendered; this pins two divergent coordsAtPos rects for positions
-    // within the SAME link the way a real wrapped line would, so the test
-    // still exercises the position-resolution codepath (posAtCoords ->
-    // coordsAtPos) rather than an array-matching shortcut.
+    // jsdom has no wrap. Pin two coordsAtPos rects for positions in the same
+    // link so the test hits posAtCoords -> coordsAtPos.
     vi.spyOn(editor.view, "coordsAtPos").mockImplementation((position) => ({
       left: position < 5 ? position * 10 : (position - 5) * 10,
       right: position < 5 ? position * 10 + 5 : (position - 5) * 10 + 5,
@@ -709,10 +706,8 @@ describe("ArtifactLinkPopover", () => {
 
   it("anchors a caret parked exactly at the link's end to the preceding side, not the following line", async () => {
     const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
-    // "Example" spans positions 1-8, so range.to = 8 - the end-EXCLUSIVE
-    // boundary. coordsAtPos's default (positive) side there reports
-    // whatever follows the mark, which at a wrap boundary is the next
-    // visual line; the preceding side (-1) must be requested instead.
+    // range.to is end-exclusive. Default coordsAtPos side would land on the
+    // next visual line; request the preceding side.
     vi.spyOn(editor.view, "coordsAtPos").mockImplementation(
       (position, side) => ({
         left: position * 10,

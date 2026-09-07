@@ -1,16 +1,6 @@
 /**
- * PDF viewer for the asset-stream surfaces, built on pdf.js's own viewer
- * components (`pdfjs-dist/web/pdf_viewer`) rather than hand-rolled canvases
- * (PDF preview design, Q2): `PDFViewer` brings page virtualization (render
- * visible pages ± buffer - the memory requirement mobile makes mandatory),
- * the text layer (selection), and `PDFFindController` (document search),
- * so the hand-written part is only this React shell and its toolbar.
- *
- * Loaded exclusively through `pdf-preview-lazy.tsx`: pdf.js is a ~1-2 MB
- * chunk that must never enter the main bundle (same treatment as pdfmake's
- * artifact export). Everything here is CSP-clean by construction - script +
- * same-origin worker + canvas, no frames, no plugins - which is the whole
- * reason pdf.js was chosen over Chromium's built-in viewer.
+ * PDF viewer for the asset-stream surfaces, built on pdf.js's own viewer components (`pdfjs-dist/web/pdf_viewer`) rather than hand-rolled canvases (PDF preview design, Q2): `PDFViewer` brings page virtualization (render visible pages ± buffer - the memory requirement mobile makes mandatory), the text layer (selection), and `PDFFindController` (document search), so the hand-written part is only this React shell and its toolbar.
+ * Loaded exclusively through `pdf-preview-lazy.tsx`: pdf.js is a ~1-2 MB chunk that must never enter the main bundle (same treatment as pdfmake's artifact export).
  */
 import {
   useCallback,
@@ -43,20 +33,12 @@ import { pdfDataFileUrls } from "./pdf-asset-urls";
 import { PdfOutlinePanel, type PdfOutlineEntry } from "./pdf-outline-panel";
 import { PdfPreviewToolbar } from "./pdf-preview-toolbar";
 
-// Same-origin worker chunk emitted by Vite - `script-src 'self'` already
-// covers it. Assigned at module scope so a second mount never races the
-// first document load. If this ever fails to load, pdf.js silently parses
-// on the MAIN thread instead of erroring - the recurring field bug of every
-// comparable integration - which `pdf-preview.test.tsx` guards against.
+// Assigned at module scope so a second mount never races the first document load.
+// If this ever fails to load, pdf.js silently parses on the MAIN thread instead of erroring - the recurring field bug of every comparable integration - which `pdf-preview.test.tsx` guards against.
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 /**
- * Per-page canvas pixel budget. pdf.js's default (2^25) is tuned for
- * desktop; iOS WKWebView blanks canvases well before that under total
- * canvas-memory pressure, and this component ships to the Capacitor app in
- * the same bundle with no opt-out (mobile is wholesale gui-app reuse). One
- * conservative budget everywhere beats a platform fork: 2^24 still allows
- * a full A4 page at ~3x device pixel ratio.
+ * Per-page canvas pixel budget. pdf.js's default (2^25) is tuned for desktop; iOS WKWebView blanks canvases well before that under total canvas-memory pressure, and this component ships to the Capacitor app in the same bundle with no opt-out (mobile is wholesale gui-app reuse).
  */
 const MAX_CANVAS_PIXELS = 2 ** 24;
 
@@ -77,10 +59,7 @@ export interface PdfPreviewProps {
    */
   readonly toolbarActions: ReactNode;
   /**
-   * Bytes reached a blob URL but pdf.js could not parse them as a PDF -
-   * the exact counterpart of `ImagePreview`'s `onDecodeError`: the caller
-   * (the hook's `reportDecodeFailure`) discards the cache entry and flips
-   * the tile to the uniform fallback.
+   * Bytes reached a blob URL but pdf.js could not parse them as a PDF - the exact counterpart of `ImagePreview`'s `onDecodeError`: the caller (the hook's `reportDecodeFailure`) discards the cache entry and flips the tile to the uniform fallback.
    */
   readonly onRenderFailure: () => void;
 }
@@ -110,11 +89,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     readonly total: number;
   } | null>(null);
 
-  // Which automatic scale mode is in force: `"page-width"` until the user
-  // zooms manually, then `null`. A resize observer re-applies the mode so
-  // fit-to-width survives tile resizes AND a mount whose container had no
-  // laid-out width yet when `pagesinit` fired (where pdf.js silently falls
-  // back to 100%).
+  // A resize observer re-applies the mode so fit-to-width survives tile resizes AND a mount whose container had no laid-out width yet when `pagesinit` fired (where pdf.js silently falls back to 100%).
   const scaleModeRef = useRef<"page-width" | null>("page-width");
 
   const onRenderFailureRef = useRef(props.onRenderFailure);
@@ -141,9 +116,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     const container = containerRef.current;
     if (container === null) return;
     let cancelled = false;
-    // Read through a call so control-flow analysis never "proves" the flag
-    // still false after an await - cleanup flips it from outside this
-    // closure.
+    // Read through a call so control-flow analysis never "proves" the flag still false after an await - cleanup flips it from outside this closure.
     const isCancelled = (): boolean => cancelled;
     let binding: ViewerBinding | null = null;
     let loadingTask: PDFDocumentLoadingTask | null = null;
@@ -157,23 +130,17 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     setScalePercent(null);
     setOutline([]);
     setMatchState(null);
-    // Search state is per-document too: leaving the bar open with the old
-    // query would show a counter and highlights that never ran against the
-    // new document (no find is dispatched on load).
+    // Search state is per-document too: leaving the bar open with the old query would show a counter and highlights that never ran against the new document (no find is dispatched on load).
     setSearchOpen(false);
     setQuery("");
 
     const open = async (): Promise<void> => {
-      // `connect-src blob:` is already in the CSP (the lightbox depends on
-      // it), and handing pdf.js raw bytes keeps its worker off the network
-      // path entirely.
+      // `connect-src blob:` is already in the CSP (the lightbox depends on it), and handing pdf.js raw bytes keeps its worker off the network path entirely.
       const response = await fetch(props.url);
       const bytes = await response.arrayBuffer();
       if (isCancelled()) return;
 
-      // Bytes come from us; the data files come from the bundle. Both halves
-      // are needed - without the second, CID fonts and scanned images fail
-      // silently (see `pdf-asset-urls.ts`).
+      // Both halves are needed - without the second, CID fonts and scanned images fail silently (see `pdf-asset-urls.ts`).
       loadingTask = getDocument({ data: bytes, ...pdfDataFileUrls() });
       const pdfDocument = await loadingTask.promise;
       if (isCancelled()) {
@@ -184,9 +151,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       const eventBus = new EventBus();
       const linkService = new PDFLinkService({
         eventBus,
-        // LinkTarget.BLANK - external links leave through window.open, which
-        // the desktop shell's security handlers already govern; internal
-        // destinations navigate within the viewer.
+        // LinkTarget.BLANK - external links leave through window.open, which the desktop shell's security handlers already govern; internal destinations navigate within the viewer.
         externalLinkTarget: 2,
       });
       const findController = new PDFFindController({
@@ -200,21 +165,14 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
         linkService,
         findController,
         maxCanvasPixels: MAX_CANVAS_PIXELS,
-        // pdfjs-dist 5.7's PDFPageDetailView (the sharp overlay canvas for
-        // deep zoom on restricted-scale pages) defines no `resume()`, yet
-        // the render queue calls `view.resume()` whenever a paused detail
-        // view regains priority - an uncaught TypeError on every zoom /
-        // page-nav interaction on multi-page documents (found by live
-        // testing). Disable the detail path: within our 2^24 canvas budget
-        // the base canvas already covers a full page at ~3x DPR.
+        // pdfjs-dist 5.7's PDFPageDetailView (the sharp overlay canvas for deep zoom on restricted-scale pages) defines no `resume()`, yet the render queue calls `view.resume()` whenever a paused detail view regains priority - an uncaught TypeError on every zoom / page-nav interaction on multi-page documents (found by live testing).
+        // Disable the detail path: within our 2^24 canvas budget the base canvas already covers a full page at ~3x DPR.
         enableDetailCanvas: false,
       });
       linkService.setViewer(viewer);
 
       eventBus.on("pagesinit", () => {
-        // Fit-to-width initial view (design Q8): in a preview tile the
-        // first question is "what does this say", and page-fit renders
-        // text too small in a height-constrained tile.
+        // Fit-to-width initial view (design Q8): in a preview tile the first question is "what does this say", and page-fit renders text too small in a height-constrained tile.
         viewer.currentScaleValue = "page-width";
         setDocumentReady(true);
       });
@@ -252,18 +210,11 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       linkService.setDocument(pdfDocument, null);
       setPageCount(pdfDocument.numPages);
 
-      // Bind the controls BEFORE anything else is awaited: `pagesinit`
-      // (which enables the toolbar) fires on its own schedule after
-      // `setDocument`, and an outline fetch that lost that race left every
-      // handler no-op'ing against a null binding - a page or search typed in
-      // that window was silently dropped.
+      // Bind the controls BEFORE anything else is awaited: `pagesinit` (which enables the toolbar) fires on its own schedule after `setDocument`, and an outline fetch that lost that race left every handler no-op'ing against a null binding - a page or search typed in that window was silently dropped.
       binding = { viewer, eventBus, linkService, document: pdfDocument };
       bindingRef.current = binding;
 
-      // Keep the automatic fit in force across container resizes (tile
-      // resize, outline pane toggle, first layout after a zero-width
-      // mount). Re-applying an unchanged computed scale is a no-op inside
-      // pdf.js, so this never fights a manual zoom (which clears the mode).
+      // Re-applying an unchanged computed scale is a no-op inside pdf.js, so this never fights a manual zoom (which clears the mode).
       resizeObserver = new ResizeObserver(() => {
         if (scaleModeRef.current !== null && bindingRef.current !== null) {
           bindingRef.current.viewer.currentScaleValue = scaleModeRef.current;
@@ -271,9 +222,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       });
       resizeObserver.observe(container);
 
-      // pdf.js types promise an array, but a document without an outline
-      // resolves `null` at runtime. Cancellation past this point is the
-      // cleanup's business - `binding` is set, so it destroys the document.
+      // pdf.js types promise an array, but a document without an outline resolves `null` at runtime.
       const outlineItems: readonly PdfOutlineEntry[] | null = await pdfDocument
         .getOutline()
         .catch((): null => null);
@@ -294,9 +243,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       bindingRef.current = null;
       resizeObserver?.disconnect();
       if (binding !== null) {
-        // Destroying the document tears down the viewer's render loop; the
-        // container's DOM goes with this component's unmount. (5.x types
-        // no longer accept `setDocument(null)` as an explicit detach.)
+        // Destroying the document tears down the viewer's render loop; the container's DOM goes with this component's unmount. (5.x types no longer accept `setDocument(null)` as an explicit detach.)
         void binding.document.destroy();
       } else {
         void loadingTask?.destroy();
@@ -318,9 +265,8 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       return;
     }
     goToPage(parsed);
-    // `goToPage` clamps, and when the clamped page IS the current page pdf.js
-    // emits no `pagechanging` - so the field would keep the typed
-    // out-of-range value ("99" on a 5-page doc). Resync it here.
+    // `goToPage` clamps, and when the clamped page IS the current page pdf.js emits no `pagechanging` - so the field would keep the typed out-of-range value ("99" on a 5-page doc).
+    // Resync it here.
     const binding = bindingRef.current;
     if (binding !== null) {
       setPageInput(
@@ -362,11 +308,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
         return;
       }
       if (entry.url !== null) {
-        // A link inside a rendered document, so it answers to the same
-        // "Open links" setting as the other document surfaces - and to the
-        // modifiers that override it per click, which is why the row hands
-        // the event up rather than swallowing it. `window.open` is a no-op in
-        // the Electron renderer and would bypass the setting outright.
+        // A link inside a rendered document, so it answers to the same "Open links" setting as the other document surfaces - and to the modifiers that override it per click, which is why the row hands the event up rather than swallowing it.
         void openLink(entry.url, "markdown", event);
       }
     },
@@ -391,11 +333,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     [query],
   );
 
-  // Live search: dispatch a fresh find as the query changes (debounced), the
-  // way every findbar behaves - live testing showed Enter-only search reads
-  // as broken (a standing "0 results" while typing, nothing until Enter).
-  // An emptied query dispatches too: pdf.js treats it as "clear highlights".
-  // Enter stays "next match" via `dispatchFind("again", ...)`.
+  // Live search: dispatch a fresh find as the query changes (debounced), the way every findbar behaves - live testing showed Enter-only search reads as broken (a standing "0 results" while typing, nothing until Enter).
   useEffect(() => {
     if (!searchOpen) return;
     const timer = setTimeout(() => {
@@ -434,11 +372,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     });
   }, []);
 
-  // Desktop zoom affordance beyond the buttons; touch pinch is the mobile
-  // verification pass's follow-up, not silently assumed working. A NATIVE
-  // non-passive listener, because React registers `wheel` passively - its
-  // preventDefault is a no-op there, letting the browser's own ctrl+wheel
-  // page zoom run alongside the viewer's.
+  // Desktop zoom affordance beyond the buttons; touch pinch is the mobile verification pass's follow-up, not silently assumed working.
   const wheelZoneRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const zone = wheelZoneRef.current;
@@ -557,9 +491,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
           ref={wheelZoneRef}
           className="relative min-h-0 min-w-0 flex-1 bg-canvas"
         >
-          {/* PDFViewer requires an absolutely-positioned scroll container with
-              a `pdfViewer`-classed child it owns wholesale. Pages keep their
-              own white paper background in dark mode by design (Q5). */}
+          {/* PDFViewer requires an absolutely-positioned scroll container with a `pdfViewer`-classed child it owns wholesale. Pages keep their own white paper background in dark mode by design (Q5). */}
           <div
             ref={containerRef}
             className="absolute inset-0 overflow-auto"

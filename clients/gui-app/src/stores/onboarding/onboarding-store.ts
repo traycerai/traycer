@@ -3,10 +3,8 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 /**
- * The tour's length is a per-host fact - an act whose capability the bound host
- * lacks is dropped from the list (`onboardingActsFor`) - so the store cannot
- * derive its own bounds from the act catalog. Every caller passes the count of
- * the act list it is actually showing.
+ * The tour's length is a per-host fact - an act whose capability the bound host lacks is dropped
+ * from the list (`onboardingActsFor`) - so the store cannot derive its own bounds from the act
  */
 const lastStepOf = (actCount: number): number => Math.max(0, actCount - 1);
 
@@ -17,13 +15,7 @@ export const clampOnboardingStep = (step: number, actCount: number): number =>
 export const isLastOnboardingStep = (step: number, actCount: number): boolean =>
   clampOnboardingStep(step, actCount) >= lastStepOf(actCount);
 
-/**
- * First-launch onboarding state, persisted locally so the tour runs once per
- * machine. `completedAt` is set when the tour is finished or skipped; `step`
- * is intentionally session-local so a closed or replayed tour starts from the
- * first act instead of resuming from the last viewed page. The store owns step
- * movement and bounds - callers just invoke the actions.
- */
+/** First-launch onboarding state, persisted locally so the tour runs once per machine. */
 interface OnboardingState {
   readonly completedAt: number | null;
   readonly step: number;
@@ -36,9 +28,8 @@ interface OnboardingState {
   /** Return to the first act without changing completion state. */
   readonly restart: () => void;
   /**
-   * Put the position on `step` directly: the page's re-seat when the act
-   * list changes under the user and the act they were on now sits at another
-   * index. Not a navigation, so it records nothing and completes nothing.
+   * Put the position on `step` directly: the page's re-seat when the act list changes under the user
+   * and the act they were on now sits at another index.
    */
   readonly reseat: (step: number) => void;
   /** Clear completion and return to the first act. */
@@ -69,9 +60,8 @@ export const useOnboardingStore = create<OnboardingState>()(
         }
         set({ step: step + 1 });
       },
-      // Clamped from the same place the page reads: when the act list shrinks
-      // under a user who is past its new end, Back must leave the act they can
-      // see rather than step down to the same clamped one.
+      // Clamped from the same place the page reads: when the act list shrinks under a user who is past
+      // its new end, Back must leave the act they can see rather than step down to the same clamped one.
       retreat: (actCount) =>
         set({
           step: Math.max(0, clampOnboardingStep(get().step, actCount) - 1),

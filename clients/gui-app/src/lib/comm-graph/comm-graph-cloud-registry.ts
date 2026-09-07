@@ -139,9 +139,7 @@ export function releaseCommGraphCloudSubscription(
       }
       pendingEvictionsByEpicId.delete(evictedEpicId);
       const evicted = entriesByEpicId.get(evictedEpicId);
-      // An observed entry is live even with no claim: the header's feed-health
-      // dot is reading it, and disposing underneath that reader would strand it
-      // on a dead manager.
+      // An observed entry is live even with no claim: the header's feed-health dot is reading it, and disposing underneath that reader would strand it on a dead manager.
       if (
         evicted === undefined ||
         evicted.openersByClaim.size > 0 ||

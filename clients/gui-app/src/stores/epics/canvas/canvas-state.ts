@@ -1,10 +1,4 @@
-/**
- * Neutral `EpicCanvasState` construction + invariant repair.
- *
- * Lives between `tile-tree.ts` (pure tree) and `actions.ts` (runtime
- * mutations) so the parse layer (`migrate-canvas.ts`) can rebuild state
- * without importing the action layer.
- */
+/** Neutral `EpicCanvasState` construction + invariant repair. */
 import type { EpicCanvasState } from "./types";
 import type { TileLayoutNode } from "./tile-tree";
 import {
@@ -53,10 +47,8 @@ export function isTileInstanceLive(
 }
 
 /**
- * Re-establish the tiles/tree invariant after parsing untrusted input:
- * drops payloads with no tree entry, drops tree tabs with no payload, and
- * prunes orphaned sizes. Used by the persistence layer, not by runtime
- * actions (which maintain the invariant incrementally).
+ * Re-establish the tiles/tree invariant after parsing untrusted input: drops payloads with no tree
+ * entry, drops tree tabs with no payload, and prunes orphaned sizes.
  */
 export function reconcileCanvasInvariants(
   state: EpicCanvasState,

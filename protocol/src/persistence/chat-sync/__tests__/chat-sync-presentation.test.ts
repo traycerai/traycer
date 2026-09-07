@@ -21,15 +21,7 @@ import {
 
 /**
  * What a reader SHOWS for a chat it only partly understands.
- *
- * The failure this suite exists to prevent is the quiet one: an unknown block
- * silently dropped, or a file_change card rendered with no diff because its
- * blobs live on another machine. Both look like a working renderer and both
- * misrepresent the chat, so every unreadable thing has to arrive at the UI
- * flagged rather than absent.
- *
- * Driven from a real ASSEMBLY rather than a hand-built value, so the presenter
- * and the reader cannot drift into agreeing about a chat neither could produce.
+ * Driven from a real ASSEMBLY rather than a hand-built value, so the presenter and the reader cannot drift into agreeing about a chat neither could produce.
  */
 
 const everythingResolvable: ChatPayloadResolver = () => "resolvable";

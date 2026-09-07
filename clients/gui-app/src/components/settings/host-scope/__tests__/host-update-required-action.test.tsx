@@ -11,20 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SelectionIncompatibility } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 
-/**
- * Rider 1's affordance, and specifically the cases where it must NOT appear.
- *
- * "Settings rows render dead(incompatible) with the update affordance" reads
- * unconditional; it cannot be. Updating the host cannot fix an app that is
- * itself the outdated leg, and there is no update this app can perform against
- * a machine on someone else's desk. A button offered in either case could only
- * ever fail — the F8 "Retry now" class this epic deleted — so both are
- * withheld, and the row still carries the word `update required` either way.
- *
- * The gates are not restated here: they are the same `hostUpdateActionApplies`
- * and the same `canManageHost` reduction the window modal's `resolveUpdateHost`
- * uses, called rather than copied, so the two surfaces cannot drift.
- */
+/** Rider 1's affordance, and specifically the cases where it must not appear. "Settings rows render
+ * dead(incompatible) with the update affordance" reads unconditional; it cannot be. */
 
 afterEach(() => {
   cleanup();
@@ -65,11 +53,7 @@ describe("<HostUpdateRequiredAction />", () => {
     expect(button.textContent).toBe("Update host");
   });
 
-  /**
-   * THE withheld case that matters most. The host is not the problem: this app
-   * is older than it, and updating the host would move it further away. The
-   * modal withholds it here for the same reason, from the same predicate.
-   */
+  /** The host is not the problem: this app is older than it, and updating the host would move it further away. */
   it("withholds the update when THIS APP is the outdated leg", () => {
     appVersion.current = "1.0.0";
     renderAction({ hostVersion: "9.9.9", canManageHost: true });
@@ -77,11 +61,8 @@ describe("<HostUpdateRequiredAction />", () => {
     expect(screen.queryByTestId("host-scope-update-host")).toBeNull();
   });
 
-  /**
-   * A remote machine. Force-provisioning is the bundled host's lifecycle on
-   * THIS computer, so there is no action to offer — naming the problem without
-   * offering a control you cannot reach is the honest half.
-   */
+  /** Force-provisioning is the bundled host's lifecycle on this computer, so there is no action to offer - naming
+   * the problem without offering a control you cannot reach is the honest half. */
   it("withholds the update for a host this app does not manage", () => {
     appVersion.current = "1.5.0";
     renderAction({ hostVersion: "1.1.4", canManageHost: false });
@@ -114,13 +95,8 @@ describe("<HostUpdateRequiredAction />", () => {
     expect(onUpdateHost).not.toHaveBeenCalled();
   });
 
-  /**
-   * An unparsable pair does not single out a leg, and the shared helper
-   * defaults that to host-outdated rather than silently withholding. Pinned so
-   * the default stays deliberate: a host that reported no version at all is
-   * still one this app can try to update, and refusing would leave the user
-   * with a named problem and nothing to press.
-   */
+  /** An unparsable pair does not single out a leg, and the shared helper defaults that to host-outdated rather
+   * than silently withholding. */
   it("still offers the update when neither version can be compared", () => {
     appVersion.current = null;
     renderAction({ hostVersion: null, canManageHost: true });

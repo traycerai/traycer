@@ -78,9 +78,7 @@ describe("cross-host browser tab preview insertion", () => {
     expect(imageIds(editor)).toEqual(["img-preview"]);
   });
 
-  // The regression this guard exists for: the editor SURVIVES a send, so
-  // `isDestroyed` is false and a capture still in flight at submit time used
-  // to drop its screenshot into the next, empty draft.
+  // The regression this guard exists for: the editor SURVIVES a send, so `isDestroyed` is false and a capture still in flight at submit time used to drop its screenshot into the next, empty draft.
   it("drops a screenshot that arrives after the draft was sent", async () => {
     const editor = makeEditor();
 

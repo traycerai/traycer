@@ -412,9 +412,8 @@ describe("GeneralSettingsPanel", () => {
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
   });
 
-  // Link and agent-tab controls moved to Settings > Opening behavior; the
-  // Browser group here is dev origins and saved logins only, and its card is
-  // dropped entirely when nothing was detected.
+  // Link and agent-tab controls moved to Settings > Opening behavior; the Browser group here is dev origins and
+  // saved logins only, and its card is dropped entirely when nothing was detected.
   it("renders removable dev origins", () => {
     useSettingsStore.setState({
       browserDevOrigins: ["http://localhost:5173"],
@@ -465,10 +464,8 @@ describe("GeneralSettingsPanel", () => {
     expect(useOnboardingStore.getState().step).toBe(0);
   });
 
-  // The Danger Zone used to mix three scopes in one red box: one machine's
-  // snapshots, this device's installation, and this app's state. Only the last
-  // is app-global, so it is the only one that stays; the other two live on the
-  // machine's own page, where the title already names the target.
+  // Only the last is app-global, so it is the only one that stays; the other two live on the machine's own page,
+  // where the title already names the target.
   it("keeps only the app-global destructive action", () => {
     renderPanel();
 
@@ -612,9 +609,7 @@ describe("GeneralSettingsPanel", () => {
   it("renders named sections as h2 headings outside separate bordered cards", () => {
     renderPanel();
 
-    // SettingsGroup renders real <h2> labels, not row-shaped bands inside a
-    // single shared card. Each group is its own <section>; the h2 and the
-    // bordered rows-container are siblings.
+    // SettingsGroup renders real <h2> labels, not row-shaped bands inside a single shared card.
     const sectionTitles = [
       "Chat & composer",
       "Running agents",
@@ -725,10 +720,7 @@ describe("GeneralSettingsPanel", () => {
   it("renders the Worktree branch prefix editor (moved from Worktrees)", () => {
     renderPanel();
 
-    // The global default now lives on General (the Worktrees page is
-    // inventory-only). Assert the actual editor mounted, not just its label
-    // text, so a regression that drops `WorktreeBranchPrefixSection` fails
-    // loudly here.
+    // The global default now lives on General (the Worktrees page is inventory-only).
     screen.getByRole("textbox", { name: "Branch prefix" });
     screen.getByText("Default branch prefix");
   });

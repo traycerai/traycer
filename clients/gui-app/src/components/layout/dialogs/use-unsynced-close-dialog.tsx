@@ -10,12 +10,7 @@ interface PendingClose {
 }
 
 export interface UnsyncedCloseDialogController {
-  /**
-   * When `tabRequiresCloseConfirm(tab)` is true: stash `onConfirm` and open
-   * the confirmation dialog. Returns `true` so the orchestrator knows to
-   * defer the close. Otherwise returns `false` - the orchestrator finalizes
-   * the close itself without prompting.
-   */
+  /** Otherwise returns `false` - the orchestrator finalizes the close itself without prompting. */
   readonly promptOrConfirm: (tab: HeaderTab, onConfirm: () => void) => boolean;
   readonly dialog: ReactNode;
 }
@@ -63,9 +58,8 @@ export function useUnsyncedCloseDialog(): UnsyncedCloseDialogController {
     [pending, handleDiscard, handleWait],
   );
 
-  // Memoize the controller so `useCloseTabFlow`'s `requestCloseTab` (which
-  // depends on it) keeps a stable identity - a fresh object here churned the
-  // header TabItem `onClose` prop on every strip re-render.
+  // Memoize the controller so `useCloseTabFlow`'s `requestCloseTab` (which depends on it) keeps a stable
+  // identity - a fresh object here churned the header TabItem `onClose` prop on every strip re-render.
   return useMemo(
     () => ({ promptOrConfirm, dialog }),
     [promptOrConfirm, dialog],

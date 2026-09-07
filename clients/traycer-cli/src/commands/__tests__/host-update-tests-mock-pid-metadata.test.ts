@@ -2,22 +2,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// `TRAYCER_HOME` is `homedir()`-derived and nothing redirects it under vitest
-// (no `setupFiles`, no env override), so a test that executes
-// `buildHostUpdateCommand` unmocked reads the developer's REAL
-// `~/.traycer/host/pid.json`. Since the activation-debt half landed, that
-// read is not merely a leak: an install record ahead of the live version
-// classifies the developer's own host as debt and the command RESTARTS it -
-// from a unit test. CI never sees the hazard (`~/.traycer` does not exist
-// there), so a green CI run proves nothing about it.
-//
-// This gate is the enforceable half of that discipline. It does not install a
-// default mock from a setup file on purpose: a suite-wide mock of
-// `host/pid-metadata` would replace the module under test for its own three
-// suites and relocate the invariant to a file no reader of the command test
-// ever opens. The mock belongs beside the command it protects, and this test
-// asserts it is there - across the whole `src` tree, not only this directory,
-// because a caller one directory over is exactly the one a local grep misses.
+// `TRAYCER_HOME` is `homedir()`-derived and nothing redirects it under vitest (no `setupFiles`, no env override), so a test that executes `buildHostUpdateCommand` unmocked reads the developer's REAL `~/.traycer/host/pid.json`.
+// Since the activation-debt half landed, that read is not merely a leak: an install record ahead of the live version classifies the developer's own host as debt and the command RESTARTS it - from a unit test.
 
 const SRC_ROOT = resolve(__dirname, "..", "..");
 

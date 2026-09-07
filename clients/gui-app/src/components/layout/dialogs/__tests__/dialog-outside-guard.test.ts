@@ -4,17 +4,7 @@ import {
   interactionStartedOnOverlay,
 } from "@/components/layout/dialogs/dialog-outside-guard";
 
-// NOTE ON REPRODUCTION: jsdom does not drive Radix's `DismissableLayer`
-// pointer-down-outside path (no pointer-events hit-testing, no deferred
-// dismissable-surface click sequencing), so the real "click out of the open
-// dropdown closes the whole modal" flow can't be reproduced by dispatching a
-// `pointerdown` here - a bare unguarded dialog does NOT dismiss on
-// `fireEvent.pointerDown` in jsdom either. The pointer-down contract is therefore
-// pinned on the guard's pure decision functions (`interactionStartedOnOverlay` +
-// `dialogContentInertToPointer` - the modal may only close when the gesture
-// started on the overlay AND the content was not inert at pointerdown); the
-// wiring is exercised end-to-end in `promotable-modal-frame.test.tsx` via
-// Escape, which jsdom DOES drive.
+// NOTE ON reproduction: jsdom does not drive Radix's `DismissableLayer`
 
 describe("interactionStartedOnOverlay (backdrop-only close decision)", () => {
   function eventWithTarget(target: EventTarget | null): Event {
@@ -63,11 +53,8 @@ describe("interactionStartedOnOverlay (backdrop-only close decision)", () => {
 });
 
 describe("dialogContentInertToPointer (nested-layer-open detection)", () => {
-  // Radix DismissableLayer puts inline `pointer-events: none` on the dialog
-  // Content exactly while a nested layer with outside-pointer-events disabled
-  // (a modal DropdownMenu) sits above it. That is the moment when the overlay is
-  // the hit-target for every click-out, so overlay-origin alone would wrongly
-  // read "backdrop click" - this probe is what keeps the modal open then.
+  // Radix DismissableLayer puts inline `pointer-events: none` on the dialog Content exactly while a nested layer
+  // with outside-pointer-events disabled (a modal DropdownMenu) sits above it.
 
   it("returns true while Radix has made the content inert (nested dropdown open)", () => {
     const content = document.createElement("div");

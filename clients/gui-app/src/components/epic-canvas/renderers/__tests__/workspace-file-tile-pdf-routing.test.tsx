@@ -1,15 +1,6 @@
 /**
- * PDF routing in the workspace file tile (PDF preview design):
- *
- * - Every `.pdf` routes to the pdf.js viewer tile, streaming over
- *   `useFileAsset`, never the text path - there is no host-version gate on
- *   this routing decision. The STREAM's own negotiation is the sole
- *   authority: an old host's refusal degrades inside `useFileAsset` to the
- *   shared fallback placeholder, rather than the router trying to guess the
- *   host's age up front.
- * - Fallback statuses render the shared `BinaryPlaceholder` with the
- *   PDF-specific copy the hook supplies (e.g. the 20 MiB cap message).
- * - Image routing is unaffected by the PDF branch.
+ * PDF routing in the workspace file tile (PDF preview design): - Every `.pdf` routes to the pdf.js viewer tile, streaming over `useFileAsset`, never the text path - there is no host-version gate on this routing decision.
+ * The STREAM's own negotiation is the sole authority: an old host's refusal degrades inside `useFileAsset` to the shared fallback placeholder, rather than the router trying to guess the host's age up front. - Fallback statuses render the shared `BinaryPlaceholder` with the PDF-specific copy the hook supplies (e.g. the 20 MiB cap message). - Image routing is unaffected by the PDF branch.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
@@ -53,10 +44,7 @@ const state = vi.hoisted((): PdfRoutingTestState => ({
   viewerUnavailable: false,
 }));
 
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
+// These tiles resolve the user's default open target, which asks whether the tile's host is the LOCAL one before it may offer Finder.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -68,15 +56,7 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
   },
 }));
 
-// `workspace-file-tile.tsx` itself no longer imports
-// `useHostMethodSchemaVersion` - the PDF *route* has no host-version gate
-// left. But `WorkspacePdfFileTile` still calls `usePdfOpenExternallyTarget`
-// (`use-pdf-open-target.ts`) for its Open Externally target, and THAT hook
-// still reads `editor.openPaths`'s negotiated version - an unrelated,
-// still-live gate this suite does not assert on, so a fixed "supported"
-// version keeps it out of the way. `useHostSupportsMethod` remains a live
-// seam too (the writeFile-support check in `WorkspaceFileTileLive`, which
-// the PDF tile never mounts).
+// `useHostSupportsMethod` remains a live seam too (the writeFile-support check in `WorkspaceFileTileLive`, which the PDF tile never mounts).
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => false,
   useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),
@@ -217,17 +197,9 @@ vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
   ),
 }));
 
-// The real module imports pdf.js (worker URL, viewer CSS) - none of which
-// belongs in this routing test's jsdom. The routing contract is only "the
-// ready state mounts the lazy viewer with the blob URL".
-// Mirrors the real `PdfPreview`'s own accessible landmark (`role="toolbar"`,
-// `aria-label="PDF preview controls"` - pdf-preview.tsx) rather than a bare
-// test id, so "the viewer mounted" is asserted through the same accessible
-// contract a screen reader (or Testing Library's role queries) would see.
+// Mirrors the real `PdfPreview`'s own accessible landmark (`role="toolbar"`, `aria-label="PDF preview controls"` - pdf-preview.tsx) rather than a bare test id, so "the viewer mounted" is asserted through the same accessible contract a screen reader (or Testing Library's role queries) would see.
 vi.mock("@/components/epic-canvas/pdf-preview/pdf-preview-lazy", () => ({
-  // The real string, not a re-export via `vi.importActual` - that would drag
-  // pdf.js (worker URL, viewer CSS) into this routing test's jsdom, the same
-  // reason the whole module is mocked below.
+  // The real string, not a re-export via `vi.importActual` - that would drag pdf.js (worker URL, viewer CSS) into this routing test's jsdom, the same reason the whole module is mocked below.
   PDF_VIEWER_UNAVAILABLE_REASON:
     "The PDF viewer could not be loaded on this device.",
   PdfPreviewLazy: (props: {
@@ -287,10 +259,6 @@ describe("workspace file tile PDF routing", () => {
     vi.clearAllMocks();
   });
 
-  // No host-version gate remains on this route: every `.pdf` streams
-  // through the viewer regardless of handshake state, so this single test
-  // now covers what used to be split across a known-1.1, an unknown-
-  // handshake, and a known-1.0 case.
   it("routes every .pdf to the viewer, streaming instead of reading text", () => {
     renderTile(nodeFor("docs/report.pdf"));
 
@@ -335,18 +303,11 @@ describe("workspace file tile PDF routing", () => {
     state.viewerUnavailable = true;
     renderTile(nodeFor("docs/report.pdf"));
 
-    // The bytes are fine (asset status stays "ready") - only the viewer
-    // could not load or start, so the tile falls back to the same fallback
-    // layout a stream fallback uses, with the viewer-specific copy.
+    // The bytes are fine (asset status stays "ready") - only the viewer could not load or start, so the tile falls back to the same fallback layout a stream fallback uses, with the viewer-specific copy.
     expect(
       screen.getByText("The PDF viewer could not be loaded on this device."),
     ).toBeTruthy();
     expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
-    // The fallback layout's own Open Externally affordance lives on
-    // `BinaryPlaceholder` (workspace-file-tile.tsx passes `openExternally:
-    // null` to the toolbar here), so the button's text is that component's
-    // plain "Open Externally" copy, not the toolbar icon button's
-    // "Open externally" aria-label.
     expect(
       screen.getByRole("button", { name: "Open Externally" }),
     ).toBeTruthy();

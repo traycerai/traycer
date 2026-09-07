@@ -128,10 +128,7 @@ let originalScrollIntoView: PropertyDescriptor | undefined;
 beforeEach(() => {
   useWorkspaceFileRevealStore.setState({ targetsByKey: {} }, true);
   state.reachability = { status: "reachable", hostLabel: "Host A" };
-  // jsdom does not implement scrollIntoView; install a spy so the reveal effect
-  // can run and be observed. Capture the original property descriptor (read by
-  // string key, so it doesn't trip the unbound-method lint) so teardown
-  // restores it and the spy does not leak into later suites.
+  // jsdom does not implement scrollIntoView; install a spy so the reveal effect can run and be observed.
   originalScrollIntoView = Object.getOwnPropertyDescriptor(
     Element.prototype,
     "scrollIntoView",
@@ -224,11 +221,7 @@ describe("<WorkspaceFileTile /> line reveal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     expect(screen.getByRole("heading", { name: "Heading" })).toBeTruthy();
 
-    // A line link arrives: source is forced (G5) so the code view mounts and the
-    // row scrolls; the one-shot target is then consumed (G4). With the target
-    // gone the view returns to the user's rendered preview - acceptable for the
-    // rare markdown+preview+line case; code files (the common line target) only
-    // ever have a source view.
+    // With the target gone the view returns to the user's rendered preview - acceptable for the rare markdown+preview+line case; code files (the common line target) only ever have a source view.
     act(() => {
       setWorkspaceFileRevealTarget(TAB_1, MARKDOWN_NODE.id, 3, null);
     });

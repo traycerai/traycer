@@ -1,21 +1,5 @@
 /**
- * Per-tile host binding context.
- *
- * Chat / terminal artifacts are bound to a host for life
- * (`src/hooks/host/AGENTS.md`). The renderer addresses **two host scopes**
- * simultaneously:
- *
- *   - **Default host** - machine-local host for app-wide features
- *     (Epic list, opening artifacts, host-status footer). Read with
- *     `useEffectiveHostId()` / `useHostClient()`.
- *   - **Tab-scoped host** - per-tile binding from the artifact schema
- *     (`EpicNodeRef.hostId`). Read with `useTabHostId()` (from
- *     `./use-tab-host-id`); never with `useAddressableHostId()`.
- *
- * The renderer registry wraps every tile in
- * `<TabHostProvider hostId={node.hostId}>` so consumers inside a
- * tile body always read the binding their tile was opened with - even
- * after the user swaps the global default host.
+ * Per-tile host binding. Consumers under this provider read `useTabHostId()`.
  */
 import { type ReactNode } from "react";
 import { TabHostContext } from "./hooks/use-tab-host-id";

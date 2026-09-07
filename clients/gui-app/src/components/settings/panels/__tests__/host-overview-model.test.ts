@@ -71,10 +71,7 @@ describe("customNameFromIdentityDraft", () => {
   });
 
   it("does NOT clear when the draft equals the host's systemName", () => {
-    // Unlike the bridge rule (`customNameFromDraft`), typing the machine's own
-    // name is not special here: a provisioned host's label can differ from its
-    // systemName, so clearing on a systemName match would silently swap the
-    // typed name for the label.
+    // Unlike the bridge rule (`customNameFromDraft`), typing the machine's own name is not special here.
     expect(customNameFromIdentityDraft("hardiks-macbook")).toBe(
       "hardiks-macbook",
     );

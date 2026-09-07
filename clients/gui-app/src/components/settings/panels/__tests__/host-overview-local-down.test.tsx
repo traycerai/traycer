@@ -1,18 +1,11 @@
-// The Overview re-provides a scoped STREAM binding beside its unary one (for
-// the Data & migration group), and the real hook reads `useAuthService` -
-// which this suite deliberately does not stand up. `null` keeps the panel on
-// the ambient stream, the arrangement every assertion below already assumed.
+// The Overview re-provides a scoped stream binding beside its unary one (for the Data & migration group), and
+// the real hook reads `useAuthService` - which this suite deliberately does not stand up.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
 
-// `LocalHostDownActions` is the header cluster `HostOverviewPanel` renders
-// for THIS machine's own host when it is unreachable and the shell has a CLI
-// bridge. There is no Start verb (decision 2026-08-19): the local host's
-// lifecycle is automatic and target-independent, so all that remains is a
-// "Run doctor" button (disabled while this machine's lifecycle lane is busy)
-// and, only after the user has removed Traycer, a "Reinstall Traycer" escape
-// hatch that clears the removal sentinel and converges.
+// There is no Start verb (decision 2026-08-19): the local host's lifecycle is automatic and
+// target-independent.
 
 // Same boundary as the sibling Overview suites: mock `useHostScope` and
 // `@/lib/host`'s `useHostBinding` rather than standing up a host runtime.
@@ -77,13 +70,7 @@ afterEach(() => {
   hostBindingMock.current = null;
 });
 
-/**
- * Renders `HostSettingsPanel` scoped to THIS machine's own host, affirmatively
- * down: `status: "unreachable"`, a local-machine host fixture with no live
- * client, and a CLI bridge (`hostManagement`) so `LocalHostDownActions` is the
- * header cluster that mounts. `localHost: null` on the mock runner host mirrors
- * the down process — no live snapshot to answer with.
- */
+/** Renders `HostSettingsPanel` scoped to this machine's own host, affirmatively down: `status. */
 function renderLocalDown(options: {
   readonly settingUp: boolean;
   readonly management: IHostManagement;
@@ -107,8 +94,7 @@ function renderLocalDown(options: {
   const runnerHost: IRunnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
-    // No live snapshot — this machine's host is down, which is the whole
-    // scenario under test.
+    // No live snapshot - this machine's host is down, which is the whole scenario under test.
     localHost: null,
     hosts: [],
     workspaceFolderPickerPaths: undefined,
@@ -142,8 +128,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     expect(doctorButton.disabled).toBe(false);
     expect(screen.queryByTestId("host-overview-start-local")).toBeNull();
     expect(screen.queryByTestId("host-overview-reinstall-local")).toBeNull();
-    // No Start verb anywhere on the page — not merely absent under its old
-    // test id.
+    // No Start verb anywhere on the page - not merely absent under its old test id.
     expect(screen.queryByText("Start host")).toBeNull();
   });
 
@@ -160,9 +145,8 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
   });
 
   it("a removed host gets Reinstall Traycer, which clears the sentinel and converges", async () => {
-    // Captures the ORDER the two bridge calls actually land in, not merely
-    // that both happened — `reinstall()` chains `convergeReady` off
-    // `clearRemoval`'s resolution, and that is the behaviour worth pinning.
+    // Captures the order the two bridge calls actually land in, not merely that both happened - `reinstall` chains
+    // `convergeReady` off `clearRemoval`'s resolution, and that is the behaviour worth pinning.
     const callOrder: string[] = [];
     const clearRemoval = vi.fn((): Promise<void> =>
       Promise.resolve().then(() => {
@@ -212,9 +196,8 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     renderLocalDown({ settingUp: false, management, name: "This Mac" });
 
     await screen.findByRole("button", { name: "Run doctor" });
-    // Let the removal-state query actually settle before trusting the
-    // absence below — otherwise a still-pending query would pass this
-    // assertion for the wrong reason.
+    // Let the removal-state query actually settle before trusting the absence below - otherwise a still-pending
+    // query would pass this assertion for the wrong reason.
     await waitFor(() => {
       expect(getRemovalState).toHaveBeenCalled();
     });
@@ -224,24 +207,8 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
   });
 
   it("a reinstall whose converge fails keeps the verb, because the sentinel is already cleared", async () => {
-    // `useRunnerReinstallTraycer` clears the removal sentinel FIRST and only
-    // THEN converges (`use-runner-reinstall-traycer-mutation.ts`). A converge
-    // that RESOLVES non-ok is turned into a REJECTION by the mutation itself
-    // (`throw new Error(outcome.message)`), but the sentinel clear already
-    // landed - and `onSettled` refetches the removal-state query regardless
-    // of the mutation's outcome. Before the fix, `removalRepairable` gated on
-    // `removed` alone, so that refetch (now `removedByUser: false`) dropped
-    // the only affordance a machine with no host had left. The cluster now
-    // also renders on `reinstall.isError`, so the verb survives its own
-    // failure.
-    //
-    // The fixture models the real persisted sentinel across that refetch: the
-    // FIRST `getRemovalState` read (the down state that shows the button in
-    // the first place) says `removedByUser: true`; every read after
-    // (`clearRemoval` having actually run) says `false`.
-    // No initial implementation: what call 1 vs. call 2+ answer is owned
-    // entirely by the two lines below, not by a constructor default that
-    // would be shadowed by them anyway.
+    // Before the fix, `removalRepairable` gated on `removed` alone, so that refetch (now `removedByUser: false`)
+    // dropped the only affordance a machine with no host had left.
     const getRemovalState =
       vi.fn<() => Promise<{ readonly removedByUser: boolean }>>();
     getRemovalState.mockResolvedValueOnce({ removedByUser: true });
@@ -268,10 +235,8 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     });
     fireEvent.click(reinstallButton);
 
-    // Premise: the converge really ran and really came back non-ok - which is
-    // what turns the mutation into a rejection and raises the error toast
-    // below, rather than the success path the earlier test in this file
-    // pins.
+    // Premise: the converge really ran and really came back non-ok - which is what turns the mutation into a
+    // rejection and raises the error toast below, rather than the success path the earlier test in this file pins.
     await waitFor(() => {
       expect(convergeReady).toHaveBeenCalledWith(false);
     });
@@ -284,9 +249,8 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       );
     });
 
-    // The refetch actually happened - not merely that the button never left,
-    // which would pass just as happily against a query that stayed disabled
-    // and never re-read the sentinel at all.
+    // The refetch actually happened - not merely that the button never left, which would pass just as happily
+    // against a query that stayed disabled and never re-read the sentinel at all.
     await waitFor(() => {
       expect(getRemovalState.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
@@ -300,30 +264,16 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
   });
 
   it("a second reinstall attempt keeps the button mounted while it is in flight", async () => {
-    // `removalRepairable` used to read `removed || reinstall.isError` alone.
-    // The FIRST attempt never exposes the missing `isPending` term: `removed`
-    // stays true until the removal-state refetch lands, so the button
-    // survives on that alone regardless of `isError`. It takes a SECOND click
-    // to expose the hole - by then the refetch has landed (`removed: false`),
-    // and starting a new attempt resets `reinstall.isError` back to false the
-    // instant it goes pending. With `isPending` missing from the disjunction,
-    // every term is false and the whole cluster - the Button, its testid, its
-    // own inline spinner - unmounts for the length of the retry. The fix
-    // (`host-overview-panel.tsx`'s `removalRepairable`) adds
-    // `reinstall.isPending` back into the disjunction; without it, the
-    // `getByRole` lookup below the second click finds no button at all.
+    // The first attempt never exposes the missing `isPending` term: `removed` stays true until the removal-state
+    // refetch lands, so the button survives on that alone regardless of `isError`.
     const getRemovalState =
       vi.fn<() => Promise<{ readonly removedByUser: boolean }>>();
     getRemovalState.mockResolvedValueOnce({ removedByUser: true });
     getRemovalState.mockResolvedValue({ removedByUser: false });
     const clearRemoval = vi.fn((): Promise<void> => Promise.resolve());
 
-    // The SECOND convergeReady call is parked on this gate so the test can
-    // assert the retry is provably still in flight before letting it finish -
-    // the same manually-released-promise idiom
-    // `host-overview-mutations.test.tsx` uses for its arm-time-capture suite.
-    // The first call resolves immediately to a failure, exactly like the
-    // sibling test above.
+    // The second convergeReady call is parked on this gate so the test can assert the retry is provably still in
+    // flight before letting it finish.
     let releaseSecondConverge: (() => void) | null = null;
     const secondConvergeGate = new Promise<void>((resolve) => {
       releaseSecondConverge = resolve;
@@ -380,10 +330,8 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     await waitFor(() => {
       expect(convergeReady).toHaveBeenCalledTimes(2);
     });
-    // The retry is provably still in flight - parked on the gate above, not
-    // merely fast enough to have already finished - and the button must
-    // still be in the DOM, disabled by `busy` (which includes
-    // `reinstall.isPending`).
+    // The retry is provably still in flight - parked on the gate above, not merely fast enough to have already
+    // finished.
     await waitFor(() => {
       const stillMounted = screen.getByRole<HTMLButtonElement>("button", {
         name: "Reinstall Traycer",

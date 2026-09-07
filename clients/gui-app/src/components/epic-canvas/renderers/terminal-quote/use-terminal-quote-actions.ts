@@ -31,11 +31,7 @@ export interface TerminalQuoteActions {
   readonly quoteToNewChat: (text: string) => void;
 }
 
-/**
- * Sends a terminal selection into a chat's composer draft and puts that chat in
- * front of the user. Never submits - the quote is a starting point for a
- * message the user still writes.
- */
+/** Never submits - the quote is a starting point for a message the user still writes. */
 export function useTerminalQuoteActions(
   args: UseTerminalQuoteActionsArgs,
 ): TerminalQuoteActions {
@@ -74,9 +70,7 @@ export function useTerminalQuoteActions(
 
   const quoteToChat = useCallback(
     (chatId: string, text: string) => {
-      // Draft first: a composer that is not mounted yet reads this as its
-      // initial content, and one that is already mounted syncs and focuses on
-      // the store bump. Either way the quote is there before the tile lands.
+      // Either way the quote is there before the tile lands.
       appendTerminalQuoteToDraft(chatId, {
         epicId,
         terminalId,
@@ -105,9 +99,7 @@ export function useTerminalQuoteActions(
         tabId: viewTabId,
         placement: null,
         parentId: null,
-        // This tile is bound to `tabHostId` for life and the quote points at a
-        // terminal that only exists on that host, so the chat has to be created
-        // there - not on whichever host happens to be active app-wide.
+        // This tile is bound to `tabHostId` for life and the quote points at a terminal that only exists on that host, so the chat has to be created there - not on whichever host happens to be active app-wide.
         hostId: tabHostId,
       });
     },

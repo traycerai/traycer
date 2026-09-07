@@ -3,10 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Redirect `~/.traycer/cli/config.json` to a per-test temp home by mocking
-// `os.homedir()` (the protocol config paths derive from it). Everything else
-// (fs probes of real temp files) stays real, so the executable gate is
-// exercised honestly.
+// Redirect `~/.traycer/cli/config.json` to a per-test temp home by mocking `os.homedir()` (the protocol config paths derive from it).
+// Everything else (fs probes of real temp files) stays real, so the executable gate is exercised honestly.
 const h = vi.hoisted(() => ({ home: "" }));
 vi.mock("node:os", async (importActual) => {
   const actual = await importActual<typeof import("node:os")>();
@@ -18,10 +16,8 @@ import { buildConfigShellRemoveCommand } from "../config-shell-remove";
 import { readCliConfig, setShell } from "../../store/config-store";
 import { makeCtx } from "./hook-test-helpers";
 
-// `fs.access(X_OK)` collapses to a plain existence check on Windows, so a
-// non-executable fixture reads as executable there. Only the case that hinges on
-// that distinction is skipped; the rest (path validation, remove semantics) is
-// platform-independent and stays enabled everywhere.
+// `fs.access(X_OK)` collapses to a plain existence check on Windows, so a non-executable fixture reads as executable there.
+// Only the case that hinges on that distinction is skipped; the rest (path validation, remove semantics) is platform-independent and stays enabled everywhere.
 const skipOnWindows = process.platform === "win32";
 
 let workdir = "";

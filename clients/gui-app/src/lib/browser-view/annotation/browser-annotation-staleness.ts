@@ -10,10 +10,8 @@ export const ANNOTATION_STALENESS_COPY = {
 } as const;
 
 /**
- * Cosmetic composer hint. "closed" is reserved for a tab the live session
- * list positively still names and whose status says it is gone. A missing
- * session, an unregistered tabId on a real session, or no sessions feed
- * makes no claim - those are UNKNOWN, not closed.
+ * Cosmetic composer hint.
+ * "closed" is reserved for a tab the live session list positively still names and whose status says it is gone.
  */
 export function annotationStalenessHint(
   record: BrowserAnnotationRecord,

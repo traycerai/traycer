@@ -10,8 +10,7 @@ export interface SettledTabIdentity {
 }
 
 /**
- * Every browser-tab reference surface (sidebar rows, chat chips) resolves the
- * same title-fallback chain, so it lives here once instead of drifting.
+ * Every browser-tab reference surface (sidebar rows, chat chips) resolves the same title-fallback chain, so it lives here once instead of drifting.
  */
 export function resolveTabTitle(tab: BrowserTabInfo): string {
   const title = documentTitle(tab.title);
@@ -92,9 +91,7 @@ export interface BrowserTabLabelRow {
 const TAB_ID_SUFFIX_LENGTH = 4;
 
 /**
- * Sidebar secondary text: the hostname, and - only when two rows would read
- * identically (same title, same hostname) - the last few characters of the tab
- * id to tell them apart.
+ * Sidebar secondary text: the hostname, and - only when two rows would read identically (same title, same hostname) - the last few characters of the tab id to tell them apart.
  */
 export function disambiguateSecondaryLabels(
   rows: readonly BrowserTabLabelRow[],
@@ -182,9 +179,7 @@ function parseBrowserUrl(url: string): URL | null {
 }
 
 /**
- * The one http(s) URL parser for the browser feature - link routing and
- * context attachments consume it too, so a URL that fails to parse has one
- * failure convention (`null`) everywhere.
+ * The one http(s) URL parser for the browser feature - link routing and context attachments consume it too, so a URL that fails to parse has one failure convention (`null`) everywhere.
  */
 export function parseHttpUrl(url: string): URL | null {
   const parsed = parseBrowserUrl(url);
@@ -194,17 +189,13 @@ export function parseHttpUrl(url: string): URL | null {
 }
 
 /**
- * What the address bar does with what the user typed: a bare local address
- * gets `http://`, anything else with no scheme gets `https://`, an explicit
- * scheme is left alone, and an empty box means the blank page.
+ * What the address bar does with what the user typed: a bare local address gets `http://`, anything else with no scheme gets `https://`, an explicit scheme is left alone, and an empty box means the blank page.
  */
 export function normalizeBrowserAddressInput(input: string): string {
   const trimmed = input.trim();
   if (trimmed.length === 0) return "about:blank";
-  // Scheme FIRST: `https://app.localhost:3000` already says what it is, and
-  // the local-address heuristic below would otherwise prefix a second scheme
-  // onto it (C7). The negative lookahead is what keeps `localhost:3000` out of
-  // this branch - a colon followed by digits is a port, not a scheme.
+  // Scheme FIRST: `https://app.localhost:3000` already says what it is, and the local-address heuristic below would otherwise prefix a second scheme onto it (C7).
+  // The negative lookahead is what keeps `localhost:3000` out of this branch - a colon followed by digits is a port, not a scheme.
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)/.test(trimmed)) return trimmed;
   if (looksLikeLocalHttpAddressWithoutScheme(trimmed)) {
     return `http://${trimmed}`;
@@ -214,9 +205,7 @@ export function normalizeBrowserAddressInput(input: string): string {
 
 function looksLikeLocalHttpAddressWithoutScheme(value: string): boolean {
   const lower = value.toLowerCase();
-  // Test the hostname, not the whole string: `app.localhost/path` is as local
-  // as `app.localhost`, and guessing https for it fails against a plain HTTP
-  // dev server.
+  // Test the hostname, not the whole string: `app.localhost/path` is as local as `app.localhost`, and guessing https for it fails against a plain HTTP dev server.
   const authority = lower.split(/[/?#]/, 1)[0] ?? "";
   const hostname = authority.replace(/:\d+$/, "");
   return (

@@ -1,43 +1,13 @@
 "use strict";
 
 // Generate package-manager manifest updates for a published CLI release.
-//
-// This script is invoked from the cross-platform `update-cli-package-
-// managers` workflow after all per-platform CLI release workflows have
-// finished publishing the signed binaries to the cli-v* GitHub Release
-// on RELEASE_REPO. It does not push to upstream taps/repos directly -
-// instead it:
-//
-//   1. Reads the per-platform descriptors emitted by sign-cli-binary.cjs.
-//   2. Renders ready-to-commit manifests for Homebrew, winget, scoop,
-//      a debian/rpm template metadata file, a Desktop Homebrew cask, and a generated install
-//      manifest hint (so package-manager install hooks can call
-//      `traycer cli mark-source` with the correct source identifier).
-//   3. Writes the rendered manifests under a staging directory the
-//      workflow then commits/pushes to the external taps using a
-//      configured PAT secret.
-//
-// External repository assumptions (configured via secrets in workflows):
-//   - Homebrew tap:   traycerai/homebrew-traycer   (Formula/traycer.rb, Casks/traycer-desktop.rb)
-//   - winget:        microsoft/winget-pkgs forks   (manifests/t/Traycer/CLI)
-//   - scoop:         traycerai/scoop-traycer        (bucket/traycer-cli.json)
-//   - deb/rpm:       traycerai/traycer-apt-rpm     (versions.json)
-//
-// Required secrets (used by the calling workflow, not this script):
-//   TRAYCER_TAP_PUSH_TOKEN   PAT with `repo` scope on the tap repos.
-//
-// Output: writes files under --staging <dir>, prints a JSON summary
-// (paths + manifest snippets) on stdout.
 
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
-// Canonical public-facing repo URL used for auto-generated release-notes
-// links in Homebrew/winget/Scoop/deb-rpm manifests. The build-time repo
-// (`traycerai/traycer-development`) is private; auto-generated download
-// pages must point at the public mirror. Override per-invocation via
-// `--release-notes-url <url>` when cutting a release out of a fork.
+// Canonical public-facing repo URL used for auto-generated release-notes links in Homebrew/winget/Scoop/deb-rpm manifests.
+// The build-time repo (`traycerai/traycer-development`) is private; auto-generated download pages must point at the public mirror.
 const DEFAULT_RELEASE_NOTES_REPO = "traycerai/traycer";
 
 function parseArgs(argv) {
@@ -136,12 +106,8 @@ function requirePlatform(byPlatform, key) {
       `Missing descriptor for platform '${key}'; cannot render package-manager manifest`,
     );
   }
-  // A descriptor with `available: false` is legitimate per the fixture
-  // schema but has empty url/sha256/signatureUrl fields. Rendering one
-  // into a Homebrew/winget/Scoop/deb-rpm manifest would commit `url ""`
-  // / `sha256 ""` to the public tap. Fail loudly here so the publisher
-  // never produces a broken tap commit; release engineers must either
-  // republish the platform asset or drop the platform from the matrix.
+  // A descriptor with `available: false` is legitimate per the fixture schema but has empty url/sha256/signatureUrl fields.
+  // Fail loudly here so the publisher never produces a broken tap commit; release engineers must either republish the platform asset or drop the platform from the matrix.
   if (d.available !== true) {
     const reason =
       typeof d.unavailableReason === "string" && d.unavailableReason.length > 0
@@ -157,10 +123,7 @@ function requirePlatform(byPlatform, key) {
 function maybePlatform(byPlatform, key) {
   const d = byPlatform[key];
   if (d === undefined) return null;
-  // Treat available=false the same as a missing descriptor for optional
-  // platforms - the renderer's conditional `linuxBlock` / arm64 winget /
-  // arm64 scoop branches must omit the platform entirely rather than
-  // emit empty fields. The strict counterpart is requirePlatform.
+  // Treat available=false the same as a missing descriptor for optional platforms - the renderer's conditional `linuxBlock` / arm64 winget / arm64 scoop branches must omit the platform entirely rather than emit empty fields.
   if (d.available !== true) return null;
   return d;
 }
@@ -228,9 +191,7 @@ function requireHomebrewLinuxCaskSupport(targetHomebrewVersion) {
   }
 }
 
-// Homebrew formula - single ruby file that downloads the SEA binary
-// directly. Two-arch macOS support via on_macos/on_arm/on_intel; Linux
-// support is included so `brew install` works on Linuxbrew too.
+// Homebrew formula - single ruby file that downloads the SEA binary directly.
 function renderHomebrewFormula({
   version,
   className,
@@ -375,10 +336,8 @@ end
 `;
 }
 
-// winget manifest - three YAML files per package version (version,
-// installer, locale). The installer file pins the platform-specific
-// sha256 + URL so winget's downloader verifies the bytes before
-// running the SEA executable as a portable.
+// winget manifest - three YAML files per package version (version, installer, locale).
+// The installer file pins the platform-specific sha256 + URL so winget's downloader verifies the bytes before running the SEA executable as a portable.
 function renderWingetManifests({
   version,
   byPlatform,
@@ -453,14 +412,7 @@ ManifestVersion: 1.6.0
 }
 
 // Scoop manifest - single JSON describing per-arch SEA binaries.
-//
-// Per-architecture `bin` uses the `[[source, alias]]` form so the
-// downloaded asset (`traycer-cli-windows-x64.exe` /
-// `traycer-cli-windows-arm64.exe`)
-// is exposed on PATH as `traycer.exe` (and as the alias `traycer`).
-// Without the alias mapping `scoop install` would shim the long
-// asset name and `traycer ...` would not resolve from the user's
-// shell.
+// Without the alias mapping `scoop install` would shim the long asset name and `traycer ...` would not resolve from the user's shell.
 function renderScoopManifest({
   version,
   byPlatform,
@@ -495,26 +447,17 @@ function renderScoopManifest({
     architecture,
     notes: `Release notes: ${releaseNotesUrl}`,
     post_install: [
-      // Locate the alias shim Scoop created from the [[source, alias]]
-      // mapping above. Falls back to the raw asset if a future Scoop
-      // version stops generating the alias.
+      // Locate the alias shim Scoop created from the [[source, alias]] mapping above.
+      // Falls back to the raw asset if a future Scoop version stops generating the alias.
       "$traycerExe = Join-Path $dir 'traycer.exe'",
       "if (-not (Test-Path $traycerExe)) {",
       "  $candidate = Get-ChildItem -Path $dir -Filter 'traycer-cli-windows-*.exe' | Select-Object -First 1",
       "  if ($candidate) { $traycerExe = $candidate.FullName }",
       "}",
-      // Scoop install runs `post_install` synchronously and blocks the
-      // user's shell prompt until every entry returns. `& $traycer ...`
-      // therefore stretches install time by however long `mark-source`
-      // takes. Start the helper detached (`-Wait:$false`) and hide its
-      // window so the source-attribution write is best-effort and never
-      // visible to the user - errors are still silenced with `2>$null`.
+      // Scoop install runs `post_install` synchronously and blocks the user's shell prompt until every entry returns.
+      // Start the helper detached (`-Wait:$false`) and hide its window so the source-attribution write is best-effort and never visible to the user - errors are still silenced with `2>$null`.
       "Start-Process -FilePath $traycerExe -ArgumentList @('cli','mark-source','--source','scoop','--binary-path',$traycerExe,'--installed-version',$version) -NoNewWindow -Wait:$false 2>$null",
     ],
-    // checkver reads `latest` from the rolling `cli-manifest` GitHub
-    // Release asset on RELEASE_REPO (the same versions.json the CLI
-    // self-update consumes); autoupdate templates the per-arch asset
-    // URLs on the cli-v<version> Release.
     checkver: {
       url: `https://github.com/${releaseRepo}/releases/download/cli-manifest/versions.json`,
       jsonpath: "$.latest",
@@ -546,11 +489,8 @@ function basenameFromUrl(urlString) {
   return "traycer.exe";
 }
 
-// Per-package postRemove script. Only removes the marker for the
-// package being uninstalled (`apt` for .deb, `rpm` for .rpm) so the
-// other package manager's marker - if a user has both installed - is
-// left intact. Only `rmdir /var/lib/traycer` if the directory is now
-// empty (other markers might still be present).
+// Per-package postRemove script.
+// Only removes the marker for the package being uninstalled (`apt` for .deb, `rpm` for .rpm) so the other package manager's marker - if a user has both installed - is left intact.
 function renderPostRemoveScript(pkgKind) {
   if (pkgKind !== "deb" && pkgKind !== "rpm") {
     throw new Error(`renderPostRemoveScript: invalid pkgKind '${pkgKind}'`);
@@ -564,12 +504,7 @@ function renderPostRemoveScript(pkgKind) {
   ].join("\n");
 }
 
-// Debian/RPM metadata - package-manager-agnostic JSON consumed by our
-// apt/rpm repo build pipeline. The pipeline downloads the binary,
-// builds a .deb / .rpm with post-install hooks that call
-// `traycer cli mark-source --source apt|rpm` and removes only the
-// installed binary on uninstall (post-remove does NOT touch ~/.traycer
-// or the host install directory).
+// Debian/rpm metadata - package-manager-agnostic JSON consumed by our apt/rpm repo build pipeline.
 function renderDebRpmMetadata({
   version,
   byPlatform,
@@ -602,13 +537,7 @@ function renderDebRpmMetadata({
     releaseNotesUrl,
     architectures,
     postInstall: {
-      // Write a system-wide install-source marker that any subsequent
-      // `traycer cli upgrade` invocation reads (see
-      // traycer-clients/traycer-cli/src/manifest/cli-manifest.ts ::
-      // readSystemSourceMarker). The marker is preferred over the
-      // legacy `cli mark-source` invocation because it works for
-      // unattended installs where SUDO_USER is unset and for
-      // multi-user systems where no single $HOME is "the user".
+      // Write a system-wide install-source marker that any subsequent `traycer cli upgrade` invocation reads (see traycer-clients/traycer-cli/src/manifest/cli-manifest.ts :: readSystemSourceMarker).
       script: [
         "#!/bin/sh",
         "set -e",
@@ -621,22 +550,13 @@ function renderDebRpmMetadata({
         "exit 0",
       ].join("\n"),
     },
-    // Pre-remove must NEVER touch ~/.traycer/, the host install dir,
-    // or the OS service registration. Package-manager uninstall removes
-    // ONLY the CLI binary (handled implicitly by dpkg/rpm). The script
-    // is a no-op placeholder so the build pipeline can include the hook
-    // file without conditional logic.
+    // Pre-remove must never touch ~/.traycer/, the host install dir, or the OS service registration.
+    // Package-manager uninstall removes only the CLI binary (handled implicitly by dpkg/rpm).
     preRemove: {
       script: ["#!/bin/sh", "exit 0"].join("\n"),
     },
     postRemove: {
-      // Clean up only the system-wide install-source marker for the
-      // package being uninstalled (deb or rpm) so a subsequent
-      // re-install through the same package manager cleanly re-records
-      // it, and a coexisting install through the *other* manager keeps
-      // its marker untouched. Never touches ~/.traycer/, host install
-      // dir, or service registration. The build pipeline reads the
-      // per-kind variant matching the artifact it's emitting.
+      // Never touches ~/.traycer/, host install dir, or service registration.
       deb: { script: renderPostRemoveScript("deb") },
       rpm: { script: renderPostRemoveScript("rpm") },
     },
@@ -656,10 +576,7 @@ function main() {
   const args = parseArgs(process.argv);
   const version = requiredArg(args, "version");
   const staging = requiredArg(args, "staging");
-  // RELEASE_REPO coordinate (the OSS distribution surface). Drives both
-  // the auto-generated release-notes links and the GitHub-Releases-hosted
-  // scoop checkver/autoupdate URLs. Override per-invocation via
-  // `--release-repo`; defaults to the public mirror.
+  // RELEASE_REPO coordinate (the oss distribution surface).
   const releaseRepo = args.releaseRepo || DEFAULT_RELEASE_NOTES_REPO;
   const releaseNotesUrl =
     args.releaseNotesUrl ||

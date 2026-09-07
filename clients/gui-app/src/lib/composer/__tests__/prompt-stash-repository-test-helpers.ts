@@ -224,9 +224,7 @@ export function objectStoreNamesOf(db: IDBDatabase): string[] {
 }
 
 /**
- * fake-indexeddb structured-clones TypedArrays across its own realm, so
- * `instanceof Uint8Array` and vitest's deep-equal can fail even when the value
- * is a genuine Uint8Array view with the right bytes. Assert by shape + content.
+ * fake-indexeddb structured-clones TypedArrays across its own realm, so `instanceof Uint8Array` and vitest's deep-equal can fail even when the value is a genuine Uint8Array view with the right bytes.
  */
 export function expectUint8ArrayBytes(
   value: unknown,

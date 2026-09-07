@@ -21,12 +21,7 @@ function unusedCanvasEvent(): IEvent<HTMLCanvasElement> {
   return subscribe;
 }
 
-/**
- * jsdom has no canvas backend here, so this is not `@xterm/addon-canvas`.
- * When `container` is provided it models xterm's `BaseRenderLayer` DOM
- * contract: `_container.appendChild(this._canvas)` on construct,
- * `this._canvas.remove()` on dispose.
- */
+/** jsdom has no canvas backend here, so this is not `@xterm/addon-canvas`. */
 function createFakeCanvasAddon(container: HTMLElement | null): {
   readonly addon: CanvasAddon;
   readonly dispose: Mock<() => void>;
@@ -209,10 +204,7 @@ describe("createXtermRendererController", () => {
     vi.advanceTimersByTime(XTERM_CANVAS_DISPOSE_DELAY_MS);
     expect(entry.rendererController.currentCanvas()).toBe(canvasBefore);
 
-    // The first release must have dropped exactly one presented mount: a
-    // remaining unpresent is what finally arms disposal. If the release was a
-    // no-op, this unpresent would leave the count at 1 and the canvas would
-    // still be live after the grace.
+    // The first release must have dropped exactly one presented mount: a remaining unpresent is what finally arms disposal.
     entry.rendererController.unpresent();
     expect(entry.rendererController.currentCanvas()).toBe(canvasBefore);
     vi.advanceTimersByTime(XTERM_CANVAS_DISPOSE_DELAY_MS);
@@ -254,10 +246,7 @@ describe("createXtermRendererController", () => {
   });
 
   it("loads the addon before refreshing, and refreshes only after it is installed", () => {
-    // Invariant 1, the ordering half. Final call counts cannot tell
-    // load-then-refresh from refresh-then-load; only the callback ORDER can,
-    // and only reading the controller from inside the refresh callback shows
-    // that the addon was already installed when the repaint was asked for.
+    // Final call counts cannot tell load-then-refresh from refresh-then-load; only the callback ORDER can, and only reading the controller from inside the refresh callback shows that the addon was already installed when the repaint was asked for.
     const calls: string[] = [];
     let canvasDuringRefresh: CanvasAddon | null | "not-called" = "not-called";
     let controller: XtermRendererController | null = null;
@@ -284,9 +273,6 @@ describe("createXtermRendererController", () => {
   });
 
   it("reports the renderer as unsettled only between disposal and the next present", () => {
-    // Finding 1's gate at the controller boundary: `isRendererSettled()` is
-    // what stops a grid measured through the temporary DOM renderer reaching
-    // the host.
     vi.useFakeTimers();
     const { controller } = createTrackedController(null);
 
@@ -328,11 +314,7 @@ describe("createXtermRendererController", () => {
     expect(loadCanvasAddon).toHaveBeenCalledTimes(1);
     expect(controller.currentCanvas()).toBeNull();
     expect(refreshAllRows).toHaveBeenCalledTimes(0);
-    // A permanently DOM-rendered engine is SETTLED: nothing will swap under it,
-    // so its grid measurements stay self-consistent and may still be reported.
-    // (The rollback the loader owes before returning null is production's job
-    // and is pinned against the real catch in
-    // terminal-xterm-host-presentation.test.tsx.)
+    // A permanently DOM-rendered engine is SETTLED: nothing will swap under it, so its grid measurements stay self-consistent and may still be reported. (The rollback the loader owes before returning null is production's job and is pinned against the real catch in terminal-xterm-host-presentation.test.tsx.)
     expect(controller.isRendererSettled()).toBe(true);
   });
 });

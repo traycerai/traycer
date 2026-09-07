@@ -7,10 +7,6 @@ import {
   type CliInstallManifest,
 } from "../cli-discovery";
 
-// Launch-time CLI reconciliation contract (Core Flow 2). The
-// reconciler is pure with respect to its injected dependencies, so the
-// suite exercises every branch without touching the real filesystem
-// or running an Electron process.
 
 function makeDeps(overrides: {
   manifest?: CliInstallManifest | null;
@@ -18,10 +14,6 @@ function makeDeps(overrides: {
   bundledVersion?: string;
   discovery?: CliDiscoveryResult;
   probeCliVersion?: (binaryPath: string) => string | null;
-  // Returns the published path, as most cases here care only about that, or
-  // the full result when a case is specifically about a DEFERRED publish
-  // (`published: false`, the CLI lock held by another writer). The harness
-  // adapts the former into the latter.
   installBundledCli?: (opts: {
     bundledCliPath: string;
     version: string;
@@ -48,10 +40,6 @@ function makeDeps(overrides: {
   cliBinariesDiffer?: (installedPath: string, bundledPath: string) => boolean;
   now?: () => Date;
 }) {
-  // Typed to the OVERRIDE's union rather than to the deps contract, so the
-  // adapter below is forced to narrow `string` results into the full
-  // `BundledCliInstallResult` - a cast here would let the two drift apart
-  // silently.
   const install = vi.fn<
     (opts: {
       bundledCliPath: string;
@@ -228,16 +216,7 @@ describe("reconcileCli - newest-wins", () => {
     }
   });
 
-  // A publish that DEFERRED behind the CLI lock wrote nothing, so reporting
-  // `upgraded` would record a version this machine is not running - and
-  // because the reported version is what the next comparison trusts, that
-  // wrong record would suppress the retry rather than schedule it.
-  //
-  // Routed to the same `binary-locked` outcome a Windows running-image lock
-  // produces, because it needs the same thing from the user: the existing CLI
-  // still works, the upgrade still needs finishing, and there is already a
-  // "restart to finalize" recovery attached to that reason. A deferral must
-  // land in a state the user can act on, never in a silent dead end.
+  // A deferral must land in a state the user can act on, never in a silent dead end.
   it("reports a deferred publish as upgrade-blocked, not as an upgrade", async () => {
     const { deps, install } = makeDeps({
       manifest: {
@@ -475,13 +454,7 @@ describe("reconcileCli - newest-wins", () => {
   });
 
   it("re-stages the bundled CLI over a desktop-owned slot binary that fails the version probe", async () => {
-    // v1.1.9-rc.3 field incident: the slot binary was overwritten with a
-    // non-executable file while the manifest kept claiming 2.0.0. The
-    // version compare then read "newer than bundled" on every launch and
-    // trusted a binary that could not even print `--version` - a
-    // permanently dead CLI with no self-heal short of reinstalling the
-    // app. A failed probe on the desktop-owned slot must route through
-    // the upgrade path, never the trust branch.
+    // A failed probe on the desktop-owned slot must route through the upgrade path, never the trust branch.
     const { deps, install } = makeDeps({
       manifest: {
         version: "2.0.0",
@@ -588,12 +561,8 @@ describe("reconcileCli - newest-wins", () => {
   });
 
   it("stages the bundled CLI when the PATH `traycer` fails the version probe (oss #872: name squatted by a desktop-app launcher)", async () => {
-    // Field case: an AppImage manager exposed the DESKTOP APP as `traycer`
-    // on PATH. Trusting it skipped bundled staging, so the slot binary +
-    // manifest never existed, service install threw
-    // SERVICE_CLI_PATH_UNRESOLVED, and every status query relaunched the
-    // desktop into its single-instance lock. A probe-failed PATH candidate
-    // must route to fresh-install staging, not the trust branch.
+    // Trusting it skipped bundled staging, so the slot binary + manifest never existed, service install threw SERVICE_CLI_PATH_UNRESOLVED, and every status query relaunched the desktop.
+    // A probe-failed PATH candidate must route to fresh-install staging, not the trust branch.
     const { deps, install } = makeDeps({
       manifest: null,
       bundledPath: "/bundled/traycer",
@@ -800,12 +769,6 @@ describe("reconcileCli - newest-wins", () => {
     expect(isNpmCliPackagePath("/usr/local/bin/traycer")).toBe(false);
   });
 
-  // POSIX counterpart to the Windows EBUSY test: on Linux/macOS,
-  // EACCES/EPERM are real permission problems, NOT transient locks, so
-  // the reconciler must surface them as `manifest-rewrite-failed` (a
-  // real error the operator has to resolve) and never the
-  // `binary-locked` recovery path. Skipped on win32, where the platform-
-  // gated lock detection deliberately treats those codes as locks.
   it.skipIf(process.platform === "win32")(
     "routes POSIX EACCES to manifest-rewrite-failed (not binary-locked)",
     async () => {
@@ -943,10 +906,7 @@ describe("reconcileCli - newest-wins", () => {
   });
 
   it("re-stages the bundled CLI when the manifest points at a missing slot symlink (heals after uninstall)", async () => {
-    // An uninstall removed `~/.traycer/cli/<slot>/bin/traycer` but left a
-    // stale manifest behind (same version as bundled, so the version compare
-    // would short-circuit to trusted-equal at a dead path). The reconciler
-    // must notice the slot symlink is gone and recreate it.
+    // The reconciler must notice the slot symlink is gone and recreate it.
     const { deps, install } = makeDeps({
       manifest: {
         version: "1.4.2",
@@ -1214,11 +1174,8 @@ describe("reconcileCli - newest-wins", () => {
   });
 });
 
-// Launch-time gate around reconcileCli. Dev / unpackaged Desktop
-// (`make dev-desktop`, unpackaged Electron) must not read, write,
-// clear, or stage state under `~/.traycer/cli/` at boot - the dev
-// orchestrator stages its own dev CLI wrapper. Production packaged
-// Desktop must continue to reconcile against production state.
+// Dev / unpackaged Desktop (`make dev-desktop`, unpackaged Electron) must not read, write, clear, or stage state under `~/.traycer/cli/` at boot.
+// Production packaged Desktop must continue to reconcile against production state.
 describe("runLaunchTimeCliReconciliation - dev isolation", () => {
   // Production-mode args: the reconciler is allowed to touch production
   // state, so we plant a desktop-owned older manifest and observe writes.

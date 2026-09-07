@@ -17,42 +17,11 @@ import {
   ticketStatusSchema,
 } from "@traycer/protocol/common/_internal/schemas";
 
-/**
- * Shared-vocabulary record registry.
- *
- * Each entry wraps a leaf schema that's referenced from multiple
- * higher-level records (persistence epic, auth response envelopes, RPC
- * frame payloads). Versioning the vocabulary independently means a
- * change to `permissionRoleSchema` is one bump, even when 50+ embedders
- * reference it.
- *
- * Non-recursive schemas live in `protocol/common/_internal/schemas.ts`;
- * this file is the only one outside `_internal/` allowed to import
- * them directly. The recursive `jsonContentSchema` and its
- * `JsonContent` type alias are co-located here because `z.lazy()`
- * requires an explicit `z.ZodType<JsonContent>` annotation, and
- * keeping the alias in `_internal/` would force a type leak across
- * the privacy boundary.
- */
+/** Shared-vocabulary record registry. */
 
 // ---- Recursive `json-content` schema (kept here, not in _internal/) -- //
 
-/**
- * The recursive shape of a TipTap / ProseMirror JSON node.
- *
- * Declared here (not in `_internal/schemas.ts`) because `z.lazy()`'s
- * required `z.ZodType<JsonContent>` annotation needs a named alias,
- * and exporting that alias from `_internal/` would force a type leak
- * across the privacy boundary. Co-locating both the type alias and the
- * schema with the registry keeps `_internal/` opaque while still
- * letting the schema validate the recursive shape.
- *
- * This is the only record shape declared as a plain TS type - every
- * other record type is derived from its registered Zod schema via
- * `RecordValue<>` below. The recursive case is unavoidable: TS can't
- * derive a recursive type purely from `z.infer<>` of a `z.lazy()`
- * schema without an explicit annotation.
- */
+/** The recursive shape of a TipTap / ProseMirror JSON node. */
 export type JsonContent = {
   type?: string;
   attrs?: Record<string, unknown>;
@@ -247,9 +216,6 @@ export const commonRecordRegistry = defineVersionedRecordRegistry({
 export type CommonRecordRegistry = typeof commonRecordRegistry;
 
 // Types via `RecordValue<>` so runtime + type stay in lock-step.
-// `JsonContent` is declared above (recursive z.lazy() needs a named
-// annotation); structurally identical to
-// `RecordValue<CommonRecordRegistry, "json-content">`.
 export type AttachmentMentionAttrs = RecordValue<
   CommonRecordRegistry,
   "attachment-mention-attrs"

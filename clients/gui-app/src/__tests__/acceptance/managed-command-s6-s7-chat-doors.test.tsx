@@ -1,19 +1,5 @@
 /**
- * Independent acceptance suite — seams S6 and S7: the chat-side surfaces.
- *
- * S6 is the chat's running work: the running subset of the set the chat's own
- * stream carries (`UI.md` §5, §9a) — running commands owned by THIS chat
- * appear as rows of the chat's Background panel, leave as soon as a later set
- * stops naming them as running, and click through to the output window. S7 is
- * the doors: the
- * queued-delivery chip and the resume divider open or focus the shell's
- * output window, the divider's terminal copy names the Shell entity (a
- * kind-only "monitor" trigger is the harness's own tool and keeps that name),
- * and one shell never has two windows (`UI.md` §9).
- *
- * Expected behavior derives from the records only. Real stores, registry,
- * stream mount and canvas store; frames and triggers are authored through the
- * wire/persistence schemas so every fixture is one a host could have sent.
+ * Acceptance for chat-side managed-command surfaces (running Background rows, queued-delivery chip, resume divider). One shell never has two windows.
  */
 import {
   act,
@@ -98,11 +84,7 @@ const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
 
 let epicHandle: OpenedStoreForTest | null = null;
 
-/**
- * One live chat session per chat under test: the commands ride each chat's own
- * `chat.subscribe` stream now, so "another chat's monitor" is a fact about a
- * different stream rather than a field this one filters on.
- */
+/** One live chat.subscribe per chat. Another chat's monitor is a different stream, not a field this one filters on. */
 const chatSessions = new Map<string, ManagedCommandChatSessionStub>();
 
 function chatSession(chatId: string): ManagedCommandChatSessionStub {
@@ -134,11 +116,7 @@ function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   });
 }
 
-/**
- * A chat's whole set, authored through the wire schema so each fixture is
- * exactly what the host would deliver. There is no per-command delta on this
- * stream: every change re-sends the set.
- */
+/** Whole-set wire fixture. This stream has no per-command delta; every change re-sends the set. */
 function emitCommands(
   commands: readonly ManagedCommand[],
   chatId: string,
@@ -159,9 +137,7 @@ function emitCommands(
 }
 
 /**
- * Triggers are persisted chat state: authoring them through the persistence
- * schema means each fixture is exactly what a chat replay would hand the
- * renderer — including the defaulted keys an old host would have stripped.
+ * Persistence-schema triggers, including keys an old host would have stripped.
  */
 function makeTrigger(
   over: Partial<AutonomousResumeTrigger>,
@@ -180,11 +156,8 @@ function renderInChatContext(children: React.ReactNode): void {
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: null,
-    // The factories go to the COMPOSITION now, not the store:
-    // `createOpenEpicStore` stopped constructing a runtime, so a
-    // suite that used to hand it a `streamClientFactory` has nothing
-    // to hand it. `handle.doc` still resolves because this harness
-    // builds the runtime in THIS thread.
+    // Factories go to the composition; createOpenEpicStore no longer builds a
+    // runtime. handle.doc still resolves because this harness builds it here.
     factories: {
       streamClientFactory: noopEpicStreamClientFactory,
       laneSelection: null,
@@ -202,12 +175,7 @@ function renderInChatContext(children: React.ReactNode): void {
   );
 }
 
-/**
- * The chat's Background panel, which is where a running monitor or shell shows
- * up now. It is a drawer that starts closed, so opening it is part of reaching
- * the rows under test; `items` stays empty because every S6 assertion is about
- * the managed rows the panel joins in, not the harness work beside them.
- */
+/** Background drawer starts closed. items stays empty: S6 asserts managed rows, not harness work. */
 function renderBackgroundPanelInChat(alongside: React.ReactNode): void {
   renderInChatContext(
     <>
@@ -236,10 +204,7 @@ function renderBackgroundPanelInChat(alongside: React.ReactNode): void {
 }
 
 /** Panes across the whole canvas currently holding this command's window. */
-/**
- * The instance id the pane is currently holding as its PREVIEW tab, if any -
- * the one an italic tab title and the next preview's eviction both read.
- */
+/** The instance id the pane is currently holding as its PREVIEW tab, if any - the one an italic tab title and the next preview's eviction both read. */
 function previewInstanceIdFor(tabId: string, paneId: string): string | null {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
   if (canvas === undefined) return null;

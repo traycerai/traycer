@@ -99,11 +99,7 @@ function RefOwnedToolbarHarness({
   );
 }
 
-/**
- * `BubbleMenu` only mounts its children when the editor has a non-empty
- * selection. Seed a paragraph, select it, and wait for the popover to
- * attach before asserting on toolbar contents.
- */
+/** BubbleMenu mounts children only with a non-empty selection. Seed, select, then wait for the popover. */
 async function revealBubbleMenu(editor: Editor): Promise<void> {
   editor.commands.setContent("hello world");
   editor.commands.selectAll();

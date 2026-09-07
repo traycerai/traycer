@@ -1,8 +1,3 @@
-/**
- * The outline sidebar's contract: top level expanded / deeper levels
- * collapsed by default, expand-on-demand, and every row click handed back
- * to the viewer via `onNavigate` with the exact entry (dest or url intact).
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PdfOutlinePanel, type PdfOutlineEntry } from "../pdf-outline-panel";
@@ -40,10 +35,6 @@ describe("PdfOutlinePanel", () => {
   it("expands the top level by default and collapses deeper levels", () => {
     render(<PdfOutlinePanel items={OUTLINE} onNavigate={vi.fn()} />);
 
-    // Each row's title renders as a `<button>` (pdf-outline-panel.tsx) whose
-    // accessible name IS its text content - querying by role/name here
-    // asserts the same contract a screen reader's rotor would see, not just
-    // that the text happens to be somewhere in the DOM.
     expect(screen.getByRole("button", { name: "Chapter 1" })).toBeTruthy();
     // Depth 1 is visible because its PARENT (depth 0) defaults to expanded.
     expect(screen.getByRole("button", { name: "Reliability" })).toBeTruthy();

@@ -93,9 +93,8 @@ describe("<HarnessModelTrigger />", () => {
     expect(trigger.textContent).not.toContain("Work");
   });
 
-  // jsdom applies no CSS, so the container-query contract is asserted on the
-  // class itself: "responsive" opts the label into the narrow-collapse, and
-  // "always" (the phone toolbar, which has room) must not.
+  // jsdom applies no CSS, so the container-query contract is asserted on the class itself: "responsive" opts the
+  // label into the narrow-collapse, and "always" (the phone toolbar, which has room) must not.
   it("collapses the label in a narrow container only when responsive", () => {
     render(
       <HarnessModelTrigger
